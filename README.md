@@ -1,18 +1,90 @@
 # NTVDMEX
 
-New Technology Virtual Dos Manager Extended
+**New Technology Virtual DOS Manager, Extended** — a from-scratch, drop-in replacement for
+`ntvdm.exe` on **Windows XP SP3 (32-bit)** that runs legacy 16-bit DOS and Win16 software on
+the **real CPU**, not a software emulator.
 
-I want to build a full replacement for NTVDM in Windows XP SP3 (32-bit only). I do not want CPU emulation — code must actually execute on the CPU, with caveats for things like sound, graphics, networking, peripherals, etc. For all of these things, we just make calls to the host.
+> **Status:** 🟡 Feasibility (M0). The architecture is decided on paper; the one make-or-break
+> assumption is not yet proven in practice. See [`docs/STATE.md`](docs/STATE.md) for live status.
 
-### Requirements
+## What it is
 
--   Actual CPU execution (no CPU emulation)
--   Emulation of devices such as mouse, keyboard, sound, graphics
--   Graphics is special case — if we can directly access VGA/VESA, then bare metal over emulation
--   Must fit the Windows XP Luna theme
--   Pluggable so that other developers can hook their own drivers into it
--   Actual replacement for NTVDM (not a right-click > "Run with NTVDMX", and not a separate DosBox experience)
+When Windows XP launches a 16-bit program, it hands the image to a support process called
+NTVDM. NTVDMEX replaces that process with our own implementation. The defining choice is
+**execution, not emulation**: 16-bit real-mode code runs in the CPU's **Virtual-8086 (V86)
+mode** on real silicon — the same mechanism the original NTVDM uses on 32-bit x86. Software
+CPU emulators (DOSBox, ReactOS's Fast486) are explicitly *not* what this project is.
 
-### Research
+Hardware that DOS/Win16 code expects (video, sound, input, timers, networking) is
+**virtualized** and serviced by calls to the host, through a **pluggable device model** so
+third parties can supply their own backends.
 
-ReactOS, NTVDM64, DosBox, PCEm, PC86, Vogons, etc.
+## Goals
+
+- **Real CPU execution** of 16-bit code via V86 — no CPU emulation.
+- A **true replacement** for NTVDM: every 16-bit launch routes to us automatically, not via a
+  right-click "run with…" and not as a separate DOSBox-style app.
+- **DOS *and* Win16** support (Win16/WOW sequenced after the DOS core is working).
+- **Virtualized devices** (mouse, keyboard, sound, graphics) backed by host calls.
+- **Pluggable**: a documented driver/VDD interface so others can hook in their own devices.
+- Windows that **fit the XP Luna theme**.
+- Runs both on **XP-era bare metal** and in **XP-32 virtual machines**.
+
+## How it works (intended architecture)
+
+| Concern | Approach |
+|---------|----------|
+| Becoming the system NTVDM | **Repoint the WOW registry keys** (`…\Control\WOW\cmdline` / `wowcmdline`) at our binary — no signed-file replacement, so Windows File Protection is never triggered. |
+| Executing 16-bit code | Enter **V86 mode** by reusing XP's kernel VDM machinery via the undocumented `NtVdmControl` syscall (custom kernel driver held as a fallback). |
+| DOS environment | Re-implemented DOS kernel: INT 21h, PSP/FCB, memory (MCBs), loaders, DPMI/XMS/EMS. |
+| Win16 | A WOW layer (`krnl386`/`user`/`gdi` hosting + 16↔32 thunking) built on the same foundation. |
+| Devices | Trap-and-service model exposed as **pluggable VDDs**; video blitted into a Luna-themed window. |
+
+### Is this even possible?
+
+Yes — and code signing is not the obstacle it appears to be. XP-32 does not verify user-mode
+EXE signatures, and kernel driver signature enforcement is a Vista-x64+ feature. We don't even
+replace the signed `ntvdm.exe`; we redirect to ours via the registry. The genuine open risk is
+narrower: whether a *third-party* binary can drive XP's kernel VDM into V86 via `NtVdmControl`
+— something no open-source project demonstrates (ReactOS sidesteps it with emulation). Proving
+that is the project's first spike. Full reasoning in
+[`docs/research/signing-and-wfp.md`](docs/research/signing-and-wfp.md).
+
+### Reality check: graphics
+
+The original aim of accessing VGA/VESA "bare metal over emulation" is constrained by the fact
+that the XP GUI owns the display. The realistic path — like windowed NTVDM — is to
+**virtualize video and blit into a themed window**; true bare-metal full-screen is a later,
+cooperative path, not direct hardware access. Tracked as risk **R2** in
+[`docs/risks.md`](docs/risks.md).
+
+## Scope & platform
+
+- **Target:** Windows XP SP3, **32-bit only** (V86 exists only in 32-bit mode).
+- **Environments:** real hardware **and** VMs (VM-first for development).
+- **In scope:** DOS, then Win16/WOW, virtualized devices, pluggable drivers, Luna theming.
+- **Out of scope (for now):** 64-bit Windows, VT-x hypervisor execution, true bare-metal GPU
+  access while the GUI is running.
+
+## Documentation
+
+`docs/` is the single source of truth (this is a private, free-plan repo with no Wiki). Start
+with **[`docs/STATE.md`](docs/STATE.md)** to see where things stand, then:
+
+- [`docs/ROADMAP.md`](docs/ROADMAP.md) — milestones M0–M8
+- [`docs/decisions/`](docs/decisions/) — Architecture Decision Records (the *why*)
+- [`docs/research/`](docs/research/) — findings, tagged by confidence
+- [`docs/spikes/`](docs/spikes/) — time-boxed experiments (Spike-001 is the keystone test)
+- [`docs/risks.md`](docs/risks.md) — risk register
+- [`docs/GLOSSARY.md`](docs/GLOSSARY.md) — NTVDM/V86/WOW terminology
+
+## References
+
+ReactOS (DOS/VDD/WOW logic), Linux `dosemu` (the closest V86-via-kernel analog), DOSBox /
+86Box (device behaviour), and disassembly of the shipping XP binaries (the only ground truth
+for the `NtVdmControl` contract). See
+[`docs/research/reference-projects.md`](docs/research/reference-projects.md).
+
+## License
+
+[MIT](LICENSE) © 2026 Matthew Layton.
