@@ -114,6 +114,7 @@ case "$mode" in
         stage="$(mktemp -d)"
         trap 'rm -rf "$stage"' EXIT
         cp "$ROOT/build/ntvdmex.exe" "$ROOT/build/wowprobe.exe" "$stage"/
+        [ -f "$ROOT/build/vdmhost.exe" ] && cp "$ROOT/build/vdmhost.exe" "$stage"/
         cp "$ROOT/tools/wowprobe/dosstub.com" "$stage"/
         [ -f "$ROOT/tools/wowprobe/dosstub.exe" ] && cp "$ROOT/tools/wowprobe/dosstub.exe" "$stage"/
         cat > "$stage/spike002-setup.cmd" <<'CMD'
@@ -137,6 +138,23 @@ echo NEW value (must show C:\ntvdmex\wowprobe.exe):
 reg query "HKLM\SYSTEM\CurrentControlSet\Control\WOW" /v cmdline
 echo.
 echo Done. Now REBOOT, then run  C:\ntvdmex\dosstub.com
+echo Restore later with:  reg import C:\ntvdmex\wow-backup.reg
+pause
+CMD
+        cat > "$stage/spike001-setup.cmd" <<'CMD'
+@echo off
+echo === NTVDMEX Spike-001 setup: repoint cmdline at vdmhost.exe (admin) ===
+if not exist C:\ntvdmex md C:\ntvdmex
+copy /y "%~dp0vdmhost.exe" C:\ntvdmex\ >nul
+copy /y "%~dp0dosstub.com" C:\ntvdmex\ >nul
+copy /y "%~dp0dosstub.exe" C:\ntvdmex\ >nul
+if exist C:\ntvdmex\wow-backup.reg del /q C:\ntvdmex\wow-backup.reg
+reg export "HKLM\SYSTEM\CurrentControlSet\Control\WOW" C:\ntvdmex\wow-backup.reg
+reg add "HKLM\SYSTEM\CurrentControlSet\Control\WOW" /v cmdline /t REG_EXPAND_SZ /d "C:\ntvdmex\vdmhost.exe" /f
+reg query "HKLM\SYSTEM\CurrentControlSet\Control\WOW" /v cmdline
+echo.
+echo Done. Now REBOOT, then run a 16-bit program: C:\ntvdmex\dosstub.com (or .exe)
+echo vdmhost will call GetNextVDMCommand and write C:\ntvdmex\vdmhost.log
 echo Restore later with:  reg import C:\ntvdmex\wow-backup.reg
 pause
 CMD

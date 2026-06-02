@@ -79,6 +79,14 @@ program arrives via the CSRSS channel, not the command line. Our host's startup 
 therefore: register with CSRSS (the support-process handshake) → `NtVdmControl(VdmInitialize)` →
 `GetNextVDMCommand` to get the program → load it into low memory → `NtVdmControl(VdmStartExecution)`.
 
+`[FACT]` `BOOL WINAPI GetNextVDMCommand(PVDM_COMMAND_INFO)` — `ntvdm` builds a ~0xA0-byte
+`VDM_COMMAND_INFO` on the stack and passes `&struct` (clean 1-arg call at `0xf04ed86`). Struct
+(ReactOS `subsys/win/vdm.h`, matches): `TaskId, CreationFlags, ExitCode, CodePage, Std{In,Out,Err},
+CmdLine, AppName, PifFile, CurDirectory, Env, EnvLen, STARTUPINFOA, Desktop+Len, Title+Len,
+Reserved+Len, {Cmd,App,Pif,CurDirectory}Len, VDMState, CurrentDrive, ComingFromBat`. Caller supplies
+the string buffers + their `*Len` sizes; flags go in `VDMState` (`VDM_GET_FIRST_COMMAND=0x100`,
+`VDM_GET_ENVIRONMENT=0x400`). Exercised by `tools/vdmhost/` (Spike-001 step 1).
+
 ### `VdmInitialize` ServiceData — partial (2026-06-02)
 `[FACT]` The `VdmInitialize` function (`ntvdm.exe` `0xf00e668`) builds a small `ServiceData`
 struct on the stack and passes `&struct`; the struct's second field points to a **table of 9

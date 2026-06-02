@@ -77,3 +77,11 @@ add_executable(wowprobe WIN32
     src/runtime.c)
 ntvdmex_configure_xp_target(wowprobe)
 target_link_libraries(wowprobe PRIVATE kernel32 user32 gcc)
+
+# --- vdmhost.exe: Spike-001 step 1 -- pull the DOS command from CSRSS ----------
+# Launched as the VDM host, calls kernel32!GetNextVDMCommand and logs the result.
+add_executable(vdmhost WIN32
+    tools/vdmhost/vdmhost.c
+    src/runtime.c)
+ntvdmex_configure_xp_target(vdmhost)
+target_link_libraries(vdmhost PRIVATE kernel32 user32 gcc)
