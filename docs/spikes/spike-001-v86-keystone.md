@@ -1,6 +1,18 @@
 # Spike-001: V86 keystone via `NtVdmControl`
 
-- **Status:** ⬜ Not started
+- **Status:** 🟡 In progress (2026-06-02). **Contract recovery well underway** (details in
+  [research/ntvdmcontrol-and-v86.md](../research/ntvdmcontrol-and-v86.md)):
+  - `NtVdmControl` = syscall **0x10C**, 2 args.
+  - `VDMSERVICECLASS` enum recovered from `ntvdm.exe`; **VdmInitialize=3** confirmed,
+    **VdmStartExecution=0** strongly inferred.
+  - The DOS program reaches the host via **`GetNextVDMCommand`** (kernel32 → CSRSS VDM queue) —
+    answers Spike-002's no-argv finding. Host sequence: CSRSS register → VdmInitialize →
+    GetNextVDMCommand → load → VdmStartExecution.
+  - Decompressed targets (`ntvdm/ntoskrnl/basesrv/csrsrv`) cached in gitignored `reverse/`
+    (`.XX_` are MSCF cabs → `cabextract`).
+  - **Still to recover:** `VDM_TIB` layout (+ TEB offset), the `ServiceData` structs for
+    Initialize/StartExecution, the low-memory reservation, and the CSRSS support-process
+    registration handshake. Then build the minimal host and run it.
 - **Risk addressed:** The make-or-break premise of ADR-0004 — that a non-Microsoft binary can
   drive *real XP SP3* `ntoskrnl`'s VDM into V86. No open-source project proves this.
 - **Time box:** keep it minimal (~a few hundred lines + a tiny real-mode stub).

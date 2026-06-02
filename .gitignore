@@ -15,6 +15,10 @@
 /tools/wowprobe/dosstub.com
 /tools/wowprobe/dosstub.exe
 
+# Reverse-engineering scratch: extracted Microsoft XP binaries — NEVER commit
+# (copyrighted). Findings/offsets go in docs/research/, not the binaries.
+/reverse/
+
 # Editor / OS cruft
 .DS_Store
 *.swp
