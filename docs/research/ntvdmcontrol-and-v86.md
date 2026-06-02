@@ -169,15 +169,32 @@ mis-attributed.)
 `C:\ntvdmex\...`). Recovering the genuine default `cmdline` (fresh XP image, or how `csrss`/`basesrv`
 builds the launch line) is the leading suspect for why our host never executes.
 
-**Next (in priority order):**
-1. Recover the genuine default DOS `cmdline` (mount a clean XP hive, or read the CSRSS
-   `BaseSrvCheckVDM` launch-line construction). Repoint preserving its exact format, just swapping
-   the exe path — then re-test for `STAGE0`.
-2. Re-validate the premise: repoint at the Spike-002 `wowprobe` with the same STAGE0-first
-   instrumentation; does `wowprobe` write `STAGE0` as a VDM host? If no, Spike-002's "launch as VDM
-   host" needs reinterpreting (its evidence may have been a standalone run).
-3. Check whether CSRSS creates the host **suspended** and kills it before our entry point if an
-   early pre-`main` CSRSS handshake is missing (real `ntvdm` does CSRSS setup very early).
+#### Baseline control + PE-match attempt (2026-06-02, second push)
+- `[FACT]` **Control passes:** with `cmdline` restored to `%SystemRoot%\system32\ntvdm.exe`, the
+  interactive trigger runs `dosstub.com` **and** `dosstub.exe` cleanly — `COM-errorlevel=0`,
+  `EXE-errorlevel=0`, `DONE`. So the VM's DOS VDM works and both triggers are valid 16-bit programs.
+  The failure is **specific to substituting our binary**.
+- `[FACT]` **PE-shape match did NOT help.** Rebuilt `vdmhost` to match real `ntvdm` exactly:
+  ImageBase `0x0F000000` (low memory kept free for the V86/DOS space — the obvious suspect), CUI
+  subsystem v4.0, `DllCharacteristics=0` (no ASLR/NX). It runs fine standalone (STAGE0/1/2, now with
+  a real `ConsoleWindow`) but **still no STAGE0 as the VDM host**. So it is *not* a PE-characteristic
+  issue.
+- `[FACT]` **Failed substitution wedges the kernel:** after our binary fails as the host, the next
+  `shutdown -r` **hung ~21 min** (the real ntvdm baseline shut down in ~4). Forcing a QMP
+  `system_reset` recovers but dirty-boots, and **loses un-flushed registry writes** (silently
+  reverted a `cmdline` change once — wait ~2 min after a `reg add` before any reset).
+
+**The decisive open test (running):** repoint `cmdline` at a **copy of the real ntvdm at a
+non-system32 path** (`C:\ntvdmex\realntvdm.exe`) and trigger `dosstub`.
+- If it **runs** → the substitution mechanism is path-independent → our binary is rejected for a
+  specific (findable) reason → approach still viable.
+- If it **fails** → XP requires the host to be `system32\ntvdm.exe` (path/identity locked) → simple
+  `cmdline`-repoint to an arbitrary binary is a **dead end**; options become (a) replace
+  `system32\ntvdm.exe` itself (the WFP fight ADR-0002 hoped to avoid) or (b) a different hook
+  (e.g. a debugger/Image-File-Execution-Options shim, or replacing `ntvdm` and fighting WFP).
+
+Spike-002's "interception confirmed" is now most likely a **standalone run of `wowprobe`**
+mis-read as a VDM-host launch (its `GetCommandLineA` = bare path is identical either way).
 
 ### `VdmInitialize` ServiceData — partial (2026-06-02)
 `[FACT]` The `VdmInitialize` function (`ntvdm.exe` `0xf00e668`) builds a small `ServiceData`

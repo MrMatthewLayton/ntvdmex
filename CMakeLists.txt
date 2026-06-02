@@ -81,13 +81,20 @@ target_link_libraries(wowprobe PRIVATE kernel32 user32 gcc)
 # --- vdmhost.exe: Spike-001 step 1 -- pull the DOS command from CSRSS ----------
 # Launched as the VDM host, calls kernel32!GetNextVDMCommand and logs the result.
 #
-# GUI (WIN32) subsystem -- like the Spike-002 wowprobe that DID run as the VDM
-# host. A console build (subsystem 3) with our no-CRT entry never reached even the
-# first instruction of WinMain when launched as a VDM host (no STAGE0 log), i.e.
-# the console image doesn't survive CSRSS's VDM-host launch; GUI does. The real
-# VDM-host GetNextVDMCommand result therefore comes from this GUI build.
-add_executable(vdmhost WIN32
+# Match the REAL ntvdm.exe PE shape so XP will accept us as the DOS VDM host.
+# The baseline control proved real ntvdm runs dosstub fine on this VM; our binary
+# was rejected ("not a valid Win32 application") and never even reached STAGE0.
+# The decisive difference is ImageBase: ntvdm is based at 0x0F000000 so the whole
+# low ~240MB stays free for the V86/DOS address space the VDM maps. Our default
+# 0x00400000 sits *inside* that region -> VDM setup can't proceed. We also match
+# its CUI/4.0 subsystem and clear ASLR/NX (ntvdm DllCharacteristics=0).
+add_executable(vdmhost
     tools/vdmhost/vdmhost.c
     src/runtime.c)
 ntvdmex_configure_xp_target(vdmhost)
+target_link_options(vdmhost PRIVATE
+    -Wl,--image-base,0x0f000000
+    -Wl,--subsystem,console -Wl,--entry,_WinMainCRTStartup
+    -Wl,--major-subsystem-version,4 -Wl,--minor-subsystem-version,0
+    -Wl,--disable-nxcompat -Wl,--disable-dynamicbase)
 target_link_libraries(vdmhost PRIVATE kernel32 user32 gcc)
