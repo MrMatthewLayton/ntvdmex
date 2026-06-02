@@ -52,10 +52,18 @@ If a specific title needs it, `-cpu` can be pinned (e.g. `Penryn`) at the price 
 - **Host control via QMP.** The launcher exposes `vm/qmp.sock`, so the host can drive the running
   VM — take live snapshots (`savevm`), hot-swap the transfer CD without rebooting, send keys —
   rather than only controlling it from the GUI.
-- **v2 (later, if the loop drags) — bidirectional / hands-off.** Either `brew install samba` +
-  point QEMU's `smb=` at the brew `smbd` for a read-write shared folder, or enable XP's built-in
-  **Telnet service** on the forwarded port (`localhost:2323`) so registry edits / triggers /
-  reboots run from the host shell. Port forwards are already wired; nothing listens yet.
+- **v2 — Telnet control (set up).** XP's built-in Telnet server, reached over the forwarded port
+  (`localhost:2323`). One-time enable in the guest: run `D:\enable-telnet.cmd` (creates an
+  `ntvdmex`/`ntvdmex` admin account, starts `TlntSvr` auto, disables NTLM so password auth works,
+  sets stream mode). Then drive XP from the host with **`scripts/xp.py`** (a minimal telnet client,
+  since macOS has no `telnet` and Python 3.14 dropped `telnetlib`):
+  ```
+  ./scripts/xp.py "reg query \"HKLM\\SYSTEM\\CurrentControlSet\\Control\\WOW\" /v cmdline"
+  ./scripts/xp.py "type C:\\ntvdmex\\vdmhost.log"
+  ```
+  This closes the loop: I can check the registry, read logs, set values, trigger programs, and
+  `shutdown -r` (then reconnect after the auto-started service comes back) — no more
+  screenshot-the-file round-trips.
 
 ## Not in git
 The **ISO** (`ms-windows-xp-professional-x86.iso`) and the **disk image** (`vm/`) are gitignored

@@ -158,6 +158,20 @@ echo vdmhost will call GetNextVDMCommand and write C:\ntvdmex\vdmhost.log
 echo Restore later with:  reg import C:\ntvdmex\wow-backup.reg
 pause
 CMD
+        cat > "$stage/enable-telnet.cmd" <<'CMD'
+@echo off
+echo === NTVDMEX: enable Telnet so the host can drive this VM (run as admin) ===
+net user ntvdmex ntvdmex /add
+net localgroup Administrators ntvdmex /add
+sc config TlntSvr start= auto
+net start TlntSvr
+net localgroup TelnetClients ntvdmex /add
+tlntadmn config sec = -NTLM
+tlntadmn config mode = stream
+echo.
+echo Done. Host connects on port 2323 as ntvdmex/ntvdmex; auto-starts on boot.
+pause
+CMD
         cat > "$stage/README.txt" <<'TXT'
 NTVDMEX transfer disc
   spike002-setup.cmd : copies binaries to C:\ntvdmex, backs up + repoints the WOW
