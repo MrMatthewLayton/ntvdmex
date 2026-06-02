@@ -108,10 +108,47 @@ Refined findings (automated via telnet+TFTP):
 - Mitigation: enable **auto-logon** (`Winlogon\AutoAdminLogon=1` + `DefaultUserName`/`Password`)
   so XP always boots to a desktop — reproducible interactive session for VDM-host tests.
 
-**Next:** with auto-logon up, re-run the VDM-host test (interactive trigger, e.g. Startup-folder
-launch of `dosstub`) and capture the *real* VDM-context `GetNextVDMCommand` result + `*Len`. Then
-find what registration/init real `ntvdm` does **before** its first `GetNextVDMCommand` (the likely
-reason for `0x57` even as the VDM host) — probably a CSRSS/console-VDM registration step.
+#### Server side: where `0x57` actually comes from (basesrv disasm, 2026-06-02)
+Traced the CSRSS end of the call. `basesrv.dll` (`ImageBase 0x75b50000`) registers its API dispatch
+table in `ServerDllInitialization`: table at **`0x75b5d080`, 32 entries**. BaseSrv API **index 7 =
+`GetNextVDMCommand` handler = `0x75b5702e`** (`BaseSrvGetNextVDMCommand`). Its logic:
+
+- `[FACT]` First it calls a gate at **`0x75b55208`**: `CsrLockProcessByClientId(callerPid, &proc)`
+  then `*out = proc->[+0x34]` (the **per-process VDM data pointer** CSRSS attaches to a process it
+  created as a VDM). The gate returns `STATUS_INVALID_PARAMETER (0xC000000D → Win32 0x57)` only if
+  the *process lookup* fails — but everything downstream dereferences `proc->[0x34]`.
+- `[FACT]` Then each client buffer (`CmdLine/AppName/PifFile/CurDir/...` at `msg+0x28+{0x24,0x28,
+  0x2c,0x30,0x48,0x50,0x44,0x3c}`, lengths at `+0x5a..`) is checked by **`CsrValidateMessageBuffer`**
+  (`ds:0x75b51014`); any pointer not inside the CSR capture region → `0xC000000D`.
+- `[FACT]` `VDMState` is read at payload `+0x62`; the handler tests bits `0x800`, `0x2`, `0x10`,
+  `0x40`, and sign(`0x8000`) to branch between "fetch first command" vs ack/notify variants.
+
+So `0x57` means **either** the caller isn't a CSRSS-created VDM (its `proc->[0x34]` VDM record is
+absent) **or** the buffer pointers fail capture-region validation. Standalone, it's the former.
+The fix path is to be launched *as* a real VDM by CSRSS (the WOW `cmdline` repoint) **and** in a
+context where CSRSS actually builds the VDM record.
+
+#### Subsystem mismatch — a concrete difference (2026-06-02)
+`[FACT]` Real `ntvdm.exe` is **Subsystem 3 (Console/CUI), SubsystemVersion 4.0**. Our `vdmhost`
+was built **Subsystem 2 (GUI)**. CSRSS associates a VDM with a *console*; a GUI process has none.
+Rebuilt `vdmhost` as a console image (drop `WIN32`, `-Wl,--subsystem,console` +
+`-Wl,--entry,_WinMainCRTStartup`) and made it **log-only** (no `MessageBox`, so it never blocks in a
+non-interactive station). Confirmed Subsystem→3. (Whether this alone clears `0x57` in real VDM-host
+context is the pending experiment below.)
+
+#### Interactive-trigger harness (2026-06-02)
+`[FACT]` Confirmed empirically: a 16-bit launch from the **telnet/service window station** (or an
+`at`/SYSTEM job) does **not** fire the WOW/VDM host path — `dosstub` returns silently, no host, no
+log. A QMP screendump showed the box sitting at the XP splash with **no interactive user** (the
+`ntvdmex` telnet account had flipped XP off auto-logon). Harness now: **auto-logon** set
+(`Winlogon\AutoAdminLogon=1`, `DefaultUserName`/`DefaultPassword=ntvdmex`), plus a **Run-key trigger**
+(`HKLM\...\CurrentVersion\Run\vdmtrig` → `C:\ntvdmex\vdmtrig.bat`) that runs `dosstub` at logon from
+the real interactive station and writes `vdmhost.log`. Reboot → auto-logon → trigger fires → read log.
+
+**Next:** capture the console-build VDM-host result. If still `0x57`, the missing step is what real
+`ntvdm` does *before* its first `GetNextVDMCommand` to make CSRSS build the `proc->[0x34]` VDM record
+— candidates: `NtVdmControl(VdmInitialize)`, or a `RegisterConsoleVDM`/`BaseSrvRegisterConsoleVDM`
+console-VDM registration (`ntvdm` calls `RegisterConsoleVDM` at `0xf014078`, `0xf036600`, `0xf03be1d`).
 
 ### `VdmInitialize` ServiceData — partial (2026-06-02)
 `[FACT]` The `VdmInitialize` function (`ntvdm.exe` `0xf00e668`) builds a small `ServiceData`

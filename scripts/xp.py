@@ -44,50 +44,90 @@ def _filter_iac(sock, data, out):
     if resp:
         sock.sendall(bytes(resp))
 
-def read_quiet(sock, quiet=1.5, hard=40.0, until=None):
-    """Read until a `quiet`s gap (or `until` substring appears, or `hard` cap)."""
+def read_quiet(sock, quiet=2.0, hard=40.0, until=None):
+    """Read until a `quiet`s gap (or `until` substring appears, or `hard` cap).
+
+    When `until` is given we keep reading through quiet gaps until it shows up
+    (or `hard` elapses): the XP telnet prompts can lag by several seconds under
+    load, and returning early on the first gap desyncs the login handshake."""
     out = bytearray(); start = time.time()
     sock.settimeout(quiet)
     while time.time() - start < hard:
         try:
             data = sock.recv(4096)
         except socket.timeout:
+            if until:            # keep waiting for the prompt, don't give up on a gap
+                continue
             break
         if not data:
             break
         _filter_iac(sock, data, out)
-        if until and until in bytes(out).decode("latin1", "replace"):
+        if until and until in bytes(out).decode("latin1", "replace").lower():
             break
     return bytes(out).decode("latin1", "replace")
 
-def run(sock, cmd, quiet=1.5, hard=60.0):
+def run(sock, cmd, prompt=None, quiet=2.0, hard=60.0):
+    """Send a command and read its output. If `prompt` (the shell's 'C:\\..>'
+    string) is known we read until it reappears -- reliable even when output
+    pauses; otherwise we fall back to a quiet-gap heuristic."""
     sock.sendall((cmd + "\r\n").encode("latin1", "replace"))
-    return read_quiet(sock, quiet=quiet, hard=hard)
+    return read_quiet(sock, quiet=quiet, hard=hard, until=prompt)
+
+def login_once(cmds):
+    """One connect+login+run attempt. Returns (ok, output_str)."""
+    try:
+        s = socket.create_connection((HOST, PORT), timeout=10)
+    except OSError as e:
+        return False, f"connect {HOST}:{PORT} failed: {e}"
+    try:
+        l1 = read_quiet(s, until="login:", hard=25)
+        s.sendall((USER + "\r\n").encode()); l2 = read_quiet(s, until="password:", hard=20)
+        # Wait for the shell's command prompt ('...>'), not a quiet gap: after auth
+        # XP may send a burst of IAC (filtered to nothing) before the prompt, and a
+        # gap-based read returns empty too early.
+        s.sendall((PASS + "\r\n").encode()); banner = read_quiet(s, until=">", hard=20)
+        if os.environ.get("XP_DEBUG"):
+            sys.stderr.write(f"[login {len(l1)}B]={l1!r}\n[pwprompt {len(l2)}B]={l2!r}\n")
+        bl = banner.lower()
+        # Empty/login/incorrect => server refused or auth failed; retry.
+        if not banner.strip() or "login:" in bl or "incorrect" in bl:
+            return False, "login failed (empty/refused -- session limit?):\n" + banner
+        # Extract the prompt (e.g. 'C:\\Documents and Settings\\ntvdmex>') and use it
+        # as the end-marker for each command's output.
+        prompt = banner.rstrip().splitlines()[-1].strip() if banner.rstrip() else ""
+        if not prompt.endswith(">"):
+            prompt = None
+        if os.environ.get("XP_DEBUG"):
+            sys.stderr.write(f"[banner {len(banner)}B]: {banner!r}\n[prompt]={prompt!r}\n")
+        out = []
+        for c in cmds:
+            r = run(s, c, prompt=prompt)
+            if os.environ.get("XP_DEBUG"):
+                sys.stderr.write(f"[cmd {c!r} -> {len(r)}B]: {r!r}\n")
+            out.append(r)
+        try:
+            s.sendall(b"exit\r\n")
+        except OSError:
+            pass
+        return True, "".join(out)
+    finally:
+        try: s.close()
+        except OSError: pass
 
 def main():
     cmds = [sys.argv[1]] if len(sys.argv) > 1 else \
            [l for l in sys.stdin.read().splitlines() if l.strip()]
     if not cmds:
         print("usage: xp.py \"<cmd>\"  |  echo cmds | xp.py", file=sys.stderr); return 2
-    try:
-        s = socket.create_connection((HOST, PORT), timeout=10)
-    except OSError as e:
-        print(f"connect {HOST}:{PORT} failed: {e}\n"
-              f"(is the VM up and telnet enabled? run D:\\enable-telnet.cmd)", file=sys.stderr)
-        return 1
-    read_quiet(s, until="login:", hard=20)
-    s.sendall((USER + "\r\n").encode()); read_quiet(s, until="password:", hard=15)
-    s.sendall((PASS + "\r\n").encode()); banner = read_quiet(s, hard=15)
-    if "login:" in banner.lower() or "incorrect" in banner.lower():
-        print("login failed:\n" + banner, file=sys.stderr); return 1
-    for c in cmds:
-        sys.stdout.write(run(s, c))
-        sys.stdout.flush()
-    try:
-        s.sendall(b"exit\r\n"); s.close()
-    except OSError:
-        pass
-    return 0
+    last = ""
+    for attempt in range(3):
+        ok, out = login_once(cmds)
+        if ok:
+            sys.stdout.write(out); sys.stdout.flush(); return 0
+        last = out
+        time.sleep(1.5 * (attempt + 1))       # back off; XP telnet can refuse rapid reconnects
+    print(last + "\n(is the VM up and telnet enabled? run D:\\enable-telnet.cmd)", file=sys.stderr)
+    return 1
 
 if __name__ == "__main__":
     sys.exit(main())

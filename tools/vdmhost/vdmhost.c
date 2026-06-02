@@ -71,7 +71,12 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     g_ci.StartupInfo.cb = sizeof(STARTUPINFOA);
     g_ci.VDMState     = VDM_GET_FIRST_COMMAND | VDM_GET_ENVIRONMENT;
 
-    p = zput(p, "NTVDMEX vdmhost -- calling kernel32!GetNextVDMCommand\r\n\r\n");
+    p = zput(p, "NTVDMEX vdmhost -- calling kernel32!GetNextVDMCommand\r\n");
+    /* Do we actually have a console? (the console-subsystem hypothesis) */
+    p = zput(p, "ConsoleWindow=0x"); p = zhex(p, (unsigned)(ULONG_PTR)GetConsoleWindow());
+    p = zput(p, "  StdIn=0x");  p = zhex(p, (unsigned)(ULONG_PTR)GetStdHandle(STD_INPUT_HANDLE));
+    p = zput(p, "  StdOut=0x"); p = zhex(p, (unsigned)(ULONG_PTR)GetStdHandle(STD_OUTPUT_HANDLE));
+    p = zput(p, "  CmdLine=["); p = zput(p, GetCommandLineA()); p = zput(p, "]\r\n\r\n");
 
     pfn = (PFN_GetNextVDMCommand)GetProcAddress(
               GetModuleHandleA("kernel32.dll"), "GetNextVDMCommand");
@@ -115,7 +120,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             CloseHandle(h);
         }
     }
-    MessageBoxA(NULL, report, "NTVDMEX vdmhost -- GetNextVDMCommand",
-                MB_OK | MB_ICONINFORMATION);
+    /* Log-only: no MessageBox. When launched as the VDM host from a non-interactive
+       (telnet/service) session there may be no visible desktop, and a modal box would
+       just block the process. The log file is the result channel. */
     return 0;
 }
