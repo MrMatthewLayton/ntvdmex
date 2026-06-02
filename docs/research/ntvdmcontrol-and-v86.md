@@ -196,6 +196,30 @@ non-system32 path** (`C:\ntvdmex\realntvdm.exe`) and trigger `dosstub`.
 Spike-002's "interception confirmed" is now most likely a **standalone run of `wowprobe`**
 mis-read as a VDM-host launch (its `GetCommandLineA` = bare path is identical either way).
 
+#### Host-substitution constraint table (2026-06-03) — the core feasibility result
+Each row: set `cmdline`/file as shown, reboot, trigger `dosstub` interactively, observe.
+
+| host binary | location | `dosstub` runs? | our STAGE0? |
+|---|---|---|---|
+| real `ntvdm.exe` | `system32\ntvdm.exe` (canonical) | **YES** (errorlevel 0, DONE) | n/a |
+| real `ntvdm.exe` (byte copy) | `C:\ntvdmex\realntvdm.exe` | **NO** (blocks, no DONE) | n/a |
+| our `vdmhost.exe` | `C:\ntvdmex\vdmhost.exe` | NO | **no** |
+| our `vdmhost.exe` | `C:\WINDOWS\system32\vdmhost.exe` | NO | **no** |
+| our `vdmhost.exe` → `ntvdm.exe` | `system32\ntvdm.exe` (replace) | *running* | *running* |
+
+`[FACT]` The **genuine ntvdm fails from a non-system32 path**, and **our binary fails from every
+path tried (including system32)** — never executing a single instruction. So XP's DOS-VDM launch is
+**not** a transparent "point `cmdline` at any exe" substitution: the host must be the canonical
+`C:\WINDOWS\system32\ntvdm.exe`. This **directly contradicts ADR-0002's premise** (repoint `cmdline`
+→ our host, no signed-file replacement, no WFP fight). The last row (in progress) tests whether
+our binary works when it physically **replaces** `system32\ntvdm.exe` (WFP defeated by also
+overwriting `dllcache\ntvdm.exe` — verified it is not auto-restored).
+
+`[FACT]` WFP note: overwriting both `system32\ntvdm.exe` and `system32\dllcache\ntvdm.exe` leaves
+our binary in place (no auto-restore within seconds). So file replacement is achievable on XP;
+the open question is whether the *launch* accepts our image content once it sits at the canonical
+path/name, or validates it further.
+
 ### `VdmInitialize` ServiceData — partial (2026-06-02)
 `[FACT]` The `VdmInitialize` function (`ntvdm.exe` `0xf00e668`) builds a small `ServiceData`
 struct on the stack and passes `&struct`; the struct's second field points to a **table of 9
