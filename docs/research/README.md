@@ -16,3 +16,5 @@ is part of the engineering discipline.
 | [ntvdmcontrol-and-v86.md](ntvdmcontrol-and-v86.md) | The V86 / `NtVdmControl` execution contract |
 | [signing-and-wfp.md](signing-and-wfp.md) | Why signing isn't the blocker; WFP is; how to avoid it |
 | [reference-projects.md](reference-projects.md) | ReactOS, dosemu, DOSBox, etc. — what each is good for |
+| [build-toolchain.md](build-toolchain.md) | mingw-w64 cross-build, no-CRT link, and the XP-compatibility traps |
+| [xp-test-vm.md](xp-test-vm.md) | The XP-on-QEMU test bench: period-correct hardware choices and rationale |

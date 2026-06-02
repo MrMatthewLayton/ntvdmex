@@ -1,0 +1,22 @@
+# Build output
+/build/
+*.o
+*.obj
+*.exe
+
+# VM: disk images, install media — NEVER commit these (large + licensed media)
+/vm/
+*.iso
+*.qcow2
+*.vmdk
+*.img
+
+# Generated DOS test stubs (reproducible via tools/wowprobe/make-*.sh)
+/tools/wowprobe/dosstub.com
+/tools/wowprobe/dosstub.exe
+
+# Editor / OS cruft
+.DS_Store
+*.swp
+.vscode/
+.idea/

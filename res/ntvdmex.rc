@@ -1,0 +1,50 @@
+#include <winver.h>
+
+/*
+ * CREATEPROCESS_MANIFEST_RESOURCE_ID (1) / RT_MANIFEST (24): embeds the
+ * application manifest so the loader applies it without a side-by-side
+ * .exe.manifest file. The manifest's lone dependency on Common-Controls 6.0 is
+ * what opts the process into the XP visual-styles engine (uxtheme), giving the
+ * standard window frame its Luna title bar and border on a themed XP machine.
+ *
+ * Keep ntvdmex.manifest MINIMAL and comment-free. Windows XP's side-by-side
+ * parser (sxs.dll) is stricter than Vista+/7: a manifest with an XML comment in
+ * the prolog (between <?xml?> and <assembly>) makes XP fail activation with
+ * "The application configuration is incorrect", even though later Windows
+ * tolerates it. So explanatory prose lives here in the .rc (these /-comments are
+ * stripped by windres and never embedded), not inside the manifest itself.
+ *
+ * Define NTVDMEX_NO_MANIFEST (CMake: -DNTVDMEX_EMBED_MANIFEST=OFF) to omit the
+ * manifest entirely -- a diagnostic build to confirm whether a load failure is
+ * the SxS manifest or something else.
+ */
+#ifndef NTVDMEX_NO_MANIFEST
+1 24 "ntvdmex.manifest"
+#endif
+
+/* Version information block. */
+1 VERSIONINFO
+FILEVERSION     0,1,0,0
+PRODUCTVERSION  0,1,0,0
+FILEOS          VOS_NT_WINDOWS32
+FILETYPE        VFT_APP
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904b0"   /* US English, Unicode codepage */
+        BEGIN
+            VALUE "CompanyName",      "Matthew Layton"
+            VALUE "FileDescription",  "NTVDMEX - New Technology Virtual DOS Manager, Extended"
+            VALUE "FileVersion",      "0.1.0.0"
+            VALUE "InternalName",     "ntvdmex"
+            VALUE "LegalCopyright",   "(C) 2026 Matthew Layton. MIT License."
+            VALUE "OriginalFilename", "ntvdmex.exe"
+            VALUE "ProductName",      "NTVDMEX"
+            VALUE "ProductVersion",   "0.1.0.0"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x409, 0x04B0
+    END
+END

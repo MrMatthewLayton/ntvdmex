@@ -12,6 +12,7 @@ ADRs are **immutable once Accepted** — to revisit one, write a new ADR that su
 | [0003](0003-scope-dos-and-win16.md) | Scope = DOS + Win16/WOW; Win16 deferred behind a seam | Accepted |
 | [0004](0004-reuse-kernel-vdm-ntvdmcontrol.md) | Reuse kernel VDM via `NtVdmControl` | Proposed |
 | [0005](0005-target-vm-and-bare-metal.md) | Target XP in VM and bare metal; VM-first dev loop | Accepted |
+| [0006](0006-build-toolchain-mingw-no-crt.md) | Build with mingw-w64 (i686) cross-compiler, no C runtime | Accepted |
 
 ## Template
 

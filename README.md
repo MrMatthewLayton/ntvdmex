@@ -4,8 +4,10 @@
 `ntvdm.exe` on **Windows XP SP3 (32-bit)** that runs legacy 16-bit DOS and Win16 software on
 the **real CPU**, not a software emulator.
 
-> **Status:** 🟡 Feasibility (M0). The architecture is decided on paper; the one make-or-break
-> assumption is not yet proven in practice. See [`docs/STATE.md`](docs/STATE.md) for live status.
+> **Status:** 🟡 Feasibility (M0). Architecture decided on paper; the build system is up and the
+> first runnable artifact — a Luna-themed shell preview — builds clean (see [Building](#building)).
+> The one make-or-break assumption (V86 via `NtVdmControl`) is not yet proven in practice. See
+> [`docs/STATE.md`](docs/STATE.md) for live status.
 
 ## What it is
 
@@ -65,6 +67,37 @@ cooperative path, not direct hardware access. Tracked as risk **R2** in
 - **In scope:** DOS, then Win16/WOW, virtualized devices, pluggable drivers, Luna theming.
 - **Out of scope (for now):** 64-bit Windows, VT-x hypervisor execution, true bare-metal GPU
   access while the GUI is running.
+
+## Building
+
+The first runnable artifact exists: a **Luna-themed shell preview** — a fixed 80×25 DOS-style
+text console in an XP-themed window, with a deliberately **non-functional** command line. It
+locks down the toolchain and the window/console shell ahead of the V86 work.
+
+Built with a **mingw-w64 (i686) cross-compiler driven by CMake**, linked with **no C runtime**
+so the binary depends only on the Win32 DLLs that ship with XP (see
+[ADR-0006](docs/decisions/0006-build-toolchain-mingw-no-crt.md)).
+
+```sh
+# prerequisites (macOS): brew install mingw-w64 cmake
+./scripts/build.sh
+#   → build/ntvdmex.exe   (PE32, ~20 KB, standalone; copy to an XP SP3 VM to run)
+```
+
+The window is a Windows GUI app, so it can only be *seen* on Windows; the cross-build verifies
+correctness (valid PE32, XP-only imports, 5.01 version stamps, embedded manifest) but not the
+visual result. Full toolchain notes and the XP-compatibility traps:
+[`docs/research/build-toolchain.md`](docs/research/build-toolchain.md).
+
+### Repository layout
+
+| Path | What |
+|------|------|
+| `src/` | Shell-preview sources: `main.c` (window/loop), `console.c/.h` (text-grid model + GDI render), `runtime.c` (no-CRT entry + `mem*`) |
+| `res/` | `ntvdmex.rc` + `ntvdmex.manifest` (version info; Common-Controls 6.0 → Luna visual style) |
+| `cmake/` | `toolchain-xp32-mingw.cmake` — the XP-32 cross toolchain |
+| `scripts/` | `build.sh` convenience wrapper |
+| `docs/` | The canonical knowledge base (see below) |
 
 ## Documentation
 

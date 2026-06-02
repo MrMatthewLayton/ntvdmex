@@ -9,8 +9,17 @@ same V86 + DOS foundation as everything before it.
 ## M0 — Feasibility 🟡
 Prove the premise before writing real code.
 - [ ] **Spike-001:** V86 keystone via `NtVdmControl` (the make-or-break test) — see spikes/
-- [ ] Confirm WOW registry repoint launches our binary as the VDM support process
-- [ ] Confirm we can build XP-targeted usermode + kernel binaries (toolchain decision)
+- [x] Confirm WOW registry repoint launches our binary as the VDM support process —
+  **done** ([Spike-002](spikes/spike-002-wow-repoint.md)): repointing `cmdline` launches our
+  binary as the DOS VDM host (takes effect after reboot — boot-cached). Learned the target
+  program is delivered via the CSRSS/VDM channel, not argv.
+- [x] Confirm we can build XP-targeted **usermode** binaries (toolchain decision) — mingw-w64
+  i686 cross + no-CRT link, see [ADR-0006](decisions/0006-build-toolchain-mingw-no-crt.md) /
+  [research/build-toolchain.md](research/build-toolchain.md). (Kernel-driver toolchain deferred
+  to the ADR-0004 fallback path.)
+- [x] **Shell preview:** standalone Luna-themed window with a DOS-style, non-functional
+  command-line (the project's first runnable artifact; `src/`). Visual confirmation pending on
+  an XP VM.
 - **Exit criteria:** one real-mode instruction executed in V86 under our host, fault reflected to us.
 
 ## M1 — Minimal V86 host ⬜

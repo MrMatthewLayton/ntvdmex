@@ -29,3 +29,4 @@ Suggested entry shape:
 
 ## Entries
 - [2026-06-01](2026-06-01.md) — project kickoff: feasibility, scoping decisions, docs scaffold
+- [2026-06-02](2026-06-02.md) — build system (mingw-w64, no-CRT) + Luna-themed shell preview
