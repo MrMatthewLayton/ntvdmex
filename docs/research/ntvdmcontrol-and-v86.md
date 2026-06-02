@@ -128,27 +128,49 @@ absent) **or** the buffer pointers fail capture-region validation. Standalone, i
 The fix path is to be launched *as* a real VDM by CSRSS (the WOW `cmdline` repoint) **and** in a
 context where CSRSS actually builds the VDM record.
 
-#### Subsystem mismatch — a concrete difference (2026-06-02)
-`[FACT]` Real `ntvdm.exe` is **Subsystem 3 (Console/CUI), SubsystemVersion 4.0**. Our `vdmhost`
-was built **Subsystem 2 (GUI)**. CSRSS associates a VDM with a *console*; a GUI process has none.
-Rebuilt `vdmhost` as a console image (drop `WIN32`, `-Wl,--subsystem,console` +
-`-Wl,--entry,_WinMainCRTStartup`) and made it **log-only** (no `MessageBox`, so it never blocks in a
-non-interactive station). Confirmed Subsystem→3. (Whether this alone clears `0x57` in real VDM-host
-context is the pending experiment below.)
+Subsystem note: real `ntvdm.exe` is **Subsystem 3 (Console/CUI), SubsystemVersion 4.0**; our
+`vdmhost` was GUI (2). We tried a console build — it made no positive difference (see the STAGE
+finding) and is **not** the cause of `0x57`. `vdmhost` is back to GUI (matching the Spike-002
+`wowprobe`), now **log-only** (no `MessageBox`) so it can't block in any window station.
 
 #### Interactive-trigger harness (2026-06-02)
-`[FACT]` Confirmed empirically: a 16-bit launch from the **telnet/service window station** (or an
-`at`/SYSTEM job) does **not** fire the WOW/VDM host path — `dosstub` returns silently, no host, no
-log. A QMP screendump showed the box sitting at the XP splash with **no interactive user** (the
-`ntvdmex` telnet account had flipped XP off auto-logon). Harness now: **auto-logon** set
-(`Winlogon\AutoAdminLogon=1`, `DefaultUserName`/`DefaultPassword=ntvdmex`), plus a **Run-key trigger**
-(`HKLM\...\CurrentVersion\Run\vdmtrig` → `C:\ntvdmex\vdmtrig.bat`) that runs `dosstub` at logon from
-the real interactive station and writes `vdmhost.log`. Reboot → auto-logon → trigger fires → read log.
+`[FACT]` A 16-bit launch from the **telnet/service window station** (or an `at`/SYSTEM job) does
+**not** fire the WOW/VDM host path — `dosstub` returns silently, no host. The VDM host only launches
+from a real **interactive** session. Harness now: **auto-logon** (`Winlogon\AutoAdminLogon=1`,
+`DefaultUserName`/`DefaultPassword=ntvdmex`) + a **Run-key trigger**
+(`HKLM\...\CurrentVersion\Run\vdmtrig` → `C:\ntvdmex\vdmtrig.bat`, runs `dosstub` at logon). Reboot →
+auto-logon → trigger fires. Verified working via QMP screendump (desktop + the trigger's `cmd` box).
 
-**Next:** capture the console-build VDM-host result. If still `0x57`, the missing step is what real
-`ntvdm` does *before* its first `GetNextVDMCommand` to make CSRSS build the `proc->[0x34]` VDM record
-— candidates: `NtVdmControl(VdmInitialize)`, or a `RegisterConsoleVDM`/`BaseSrvRegisterConsoleVDM`
-console-VDM registration (`ntvdm` calls `RegisterConsoleVDM` at `0xf014078`, `0xf036600`, `0xf03be1d`).
+#### ⚠️ STAGE finding — our binary does NOT execute as the VDM host (2026-06-02)
+`[FACT]` Instrumented `vdmhost` to write `C:\ntvdmex\vdmhost.log` as its **very first instruction**
+(`STAGE0`, before any other API call), then again before/after `GetNextVDMCommand` (`STAGE1`/`STAGE2`).
+When `dosstub.com` is run interactively (Run-key trigger, desktop confirmed up):
+- **No `vdmhost.log` at all — not even `STAGE0`.** Tried both GUI and console builds.
+- `tasklist` shows **no `vdmhost.exe` and no `ntvdm.exe`** process while the launch is blocked.
+- The `start /wait dosstub.com` blocks on a **"C:\ntvdmex\dosstub.com is not a valid Win32
+  application"** dialog; dismissing it lets the batch finish.
+
+So XP raises "not a valid Win32 application" **without ever running our repointed binary**. This
+**overturns the earlier reading** that that dialog was the "success signature" (our host launching
+but not completing the handshake). It is unclear our binary is being launched as the VDM host at all.
+
+`[FACT]` **`cmdline` format is a launch template with parameters, not a bare path.** The sibling
+`wowcmdline` (Win16 host) default is `%SystemRoot%\system32\ntvdm.exe -a %SystemRoot%\system32\krnl386`
+— note the `-a <krnl386>` parameters. The DOS `cmdline` default (which we overwrote with a bare
+`C:\ntvdmex\vdmhost.exe`) almost certainly had its own template/params. The true default is **lost**
+(the Spike-002 `wow-backup.reg` was captured *after* an earlier repoint, so it already reads
+`C:\ntvdmex\...`). Recovering the genuine default `cmdline` (fresh XP image, or how `csrss`/`basesrv`
+builds the launch line) is the leading suspect for why our host never executes.
+
+**Next (in priority order):**
+1. Recover the genuine default DOS `cmdline` (mount a clean XP hive, or read the CSRSS
+   `BaseSrvCheckVDM` launch-line construction). Repoint preserving its exact format, just swapping
+   the exe path — then re-test for `STAGE0`.
+2. Re-validate the premise: repoint at the Spike-002 `wowprobe` with the same STAGE0-first
+   instrumentation; does `wowprobe` write `STAGE0` as a VDM host? If no, Spike-002's "launch as VDM
+   host" needs reinterpreting (its evidence may have been a standalone run).
+3. Check whether CSRSS creates the host **suspended** and kills it before our entry point if an
+   early pre-`main` CSRSS handshake is missing (real `ntvdm` does CSRSS setup very early).
 
 ### `VdmInitialize` ServiceData — partial (2026-06-02)
 `[FACT]` The `VdmInitialize` function (`ntvdm.exe` `0xf00e668`) builds a small `ServiceData`

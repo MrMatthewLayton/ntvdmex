@@ -81,17 +81,13 @@ target_link_libraries(wowprobe PRIVATE kernel32 user32 gcc)
 # --- vdmhost.exe: Spike-001 step 1 -- pull the DOS command from CSRSS ----------
 # Launched as the VDM host, calls kernel32!GetNextVDMCommand and logs the result.
 #
-# CONSOLE subsystem (3), NOT GUI: real ntvdm.exe is a console process, and the
-# CSRSS-side GetNextVDMCommand looks up the VDM command queue by the caller's
-# console. A GUI process has no console -> the server can't find the binding and
-# returns 0x57 (ERROR_INVALID_PARAMETER) -- exactly what our GUI build saw, both
-# standalone and as the real VDM host. So we drop WIN32, force --subsystem console,
-# and pin the entry to our own WinMainCRTStartup (ld otherwise wants mainCRTStartup
-# for a console image). See docs/research/ntvdmcontrol-and-v86.md.
-add_executable(vdmhost
+# GUI (WIN32) subsystem -- like the Spike-002 wowprobe that DID run as the VDM
+# host. A console build (subsystem 3) with our no-CRT entry never reached even the
+# first instruction of WinMain when launched as a VDM host (no STAGE0 log), i.e.
+# the console image doesn't survive CSRSS's VDM-host launch; GUI does. The real
+# VDM-host GetNextVDMCommand result therefore comes from this GUI build.
+add_executable(vdmhost WIN32
     tools/vdmhost/vdmhost.c
     src/runtime.c)
 ntvdmex_configure_xp_target(vdmhost)
-target_link_options(vdmhost PRIVATE
-    -Wl,--subsystem,console -Wl,--entry,_WinMainCRTStartup)
 target_link_libraries(vdmhost PRIVATE kernel32 user32 gcc)

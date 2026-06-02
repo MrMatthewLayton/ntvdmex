@@ -51,14 +51,30 @@ static char g_cmd[1024], g_app[1024], g_cur[512], g_pif[512];
 static char g_env[8192], g_desk[512], g_title[512], g_rsv[512];
 static VDM_COMMAND_INFO g_ci;
 
+/* Overwrite C:\ntvdmex\vdmhost.log with [report..p). Fixed path (no
+   GetModuleFileNameA) so this works identically standalone and as a VDM host.
+   Called at two stages so a crash localises to the call between them. */
+static void writelog(const char *buf, char *p)
+{
+    HANDLE h = CreateFileA("C:\\ntvdmex\\vdmhost.log", GENERIC_WRITE, 0, NULL,
+                           CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (h != INVALID_HANDLE_VALUE) {
+        DWORD wr; WriteFile(h, buf, (DWORD)(p - buf), &wr, NULL);
+        CloseHandle(h);
+    }
+}
+
 int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
 {
     char  report[10240];
-    char  self[MAX_PATH], logpath[MAX_PATH];
-    char *p = report, *e;
+    char *p = report;
     PFN_GetNextVDMCommand pfn;
 
     (void)hInst; (void)hPrev; (void)lpCmd; (void)nShow;
+
+    /* STAGE 0: prove we ran at all -- written before any other API call. */
+    p = zput(p, "NTVDMEX vdmhost log (incremental)\r\nSTAGE0: WinMain entered\r\n");
+    writelog(report, p);
 
     g_ci.CmdLine      = g_cmd;   g_ci.CmdLen          = sizeof(g_cmd);
     g_ci.AppName      = g_app;   g_ci.AppLen          = sizeof(g_app);
@@ -71,12 +87,15 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     g_ci.StartupInfo.cb = sizeof(STARTUPINFOA);
     g_ci.VDMState     = VDM_GET_FIRST_COMMAND | VDM_GET_ENVIRONMENT;
 
-    p = zput(p, "NTVDMEX vdmhost -- calling kernel32!GetNextVDMCommand\r\n");
     /* Do we actually have a console? (the console-subsystem hypothesis) */
     p = zput(p, "ConsoleWindow=0x"); p = zhex(p, (unsigned)(ULONG_PTR)GetConsoleWindow());
     p = zput(p, "  StdIn=0x");  p = zhex(p, (unsigned)(ULONG_PTR)GetStdHandle(STD_INPUT_HANDLE));
     p = zput(p, "  StdOut=0x"); p = zhex(p, (unsigned)(ULONG_PTR)GetStdHandle(STD_OUTPUT_HANDLE));
-    p = zput(p, "  CmdLine=["); p = zput(p, GetCommandLineA()); p = zput(p, "]\r\n\r\n");
+    p = zput(p, "  CmdLine=["); p = zput(p, GetCommandLineA()); p = zput(p, "]\r\n");
+    /* STAGE 1: about to call GetNextVDMCommand. If the log stops here, the call
+       crashed/hung in true VDM-host context. */
+    p = zput(p, "STAGE1: about to call GetNextVDMCommand\r\n");
+    writelog(report, p);
 
     pfn = (PFN_GetNextVDMCommand)GetProcAddress(
               GetModuleHandleA("kernel32.dll"), "GetNextVDMCommand");
@@ -107,21 +126,9 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         p = zput(p, "\r\n");
     }
 
-    /* Log next to this exe: <dir>\vdmhost.log */
-    GetModuleFileNameA(NULL, self, sizeof(self));
-    e = zput(logpath, self);
-    while (e > logpath && e[-1] != '\\') --e;
-    zput(e, "vdmhost.log");
-    {
-        HANDLE h = CreateFileA(logpath, GENERIC_WRITE, 0, NULL,
-                               CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
-        if (h != INVALID_HANDLE_VALUE) {
-            DWORD wr; WriteFile(h, report, (DWORD)(p - report), &wr, NULL);
-            CloseHandle(h);
-        }
-    }
-    /* Log-only: no MessageBox. When launched as the VDM host from a non-interactive
-       (telnet/service) session there may be no visible desktop, and a modal box would
-       just block the process. The log file is the result channel. */
+    /* STAGE 2: full result (overwrites STAGE0/1). Log-only -- no MessageBox, so we
+       never block in a non-interactive window station; the file is the channel. */
+    p = zput(p, "STAGE2: complete\r\n");
+    writelog(report, p);
     return 0;
 }
