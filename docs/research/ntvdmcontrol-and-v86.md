@@ -79,10 +79,29 @@ program arrives via the CSRSS channel, not the command line. Our host's startup 
 therefore: register with CSRSS (the support-process handshake) → `NtVdmControl(VdmInitialize)` →
 `GetNextVDMCommand` to get the program → load it into low memory → `NtVdmControl(VdmStartExecution)`.
 
-### Still to recover
-The `VDM_TIB` layout and where its pointer lives (TEB offset); the exact `ServiceData` structs for
-`VdmInitialize`/`VdmStartExecution`; the low-memory reservation `VdmInitialize` expects; and the
-CSRSS support-process registration handshake `GetNextVDMCommand` depends on.
+### `VdmInitialize` ServiceData — partial (2026-06-02)
+`[FACT]` The `VdmInitialize` function (`ntvdm.exe` `0xf00e668`) builds a small `ServiceData`
+struct on the stack and passes `&struct`; the struct's second field points to a **table of 9
+pointers** into ntvdm's own code/data (`0xf09b6e0, 0xf079f20, 0xf079f54, 0xf0639b8, 0xf06b870,
+0xf06b874, 0xf06b878, 0xf06b87c, 0xf0639bc`) — ntvdm's interrupt/I-O/fault handler & table
+addresses. This is the `VDM_INITIALIZE_DATA` shape: the host hands the kernel pointers to the
+tables it will service traps from. (Field-by-field semantics not yet decoded.)
+
+`[FACT]` TEB access in ntvdm is overwhelmingly `fs:[0x18]` (TEB self-ptr, 310×); the `VDM_TIB`
+pointer is reached as `[TEB + VdmOffset]` after loading the self-ptr — the exact `TEB.Vdm` offset
+not yet pinned.
+
+### Still to recover — and the efficient way to do it
+Remaining: full `VDM_TIB` layout (+ `TEB.Vdm` offset), per-field `VDM_INITIALIZE_DATA` semantics,
+the low-memory reservation, and the CSRSS support-process registration handshake.
+
+These are large undocumented **structures**, exactly the thing ReactOS has already clean-roomed
+into public headers (`VDM_TIB`, `VDM_INITIALIZE_DATA`, `VDMSERVICECLASS` in its `ndk`/`vdm` headers).
+Per [reference-projects.md](reference-projects.md), the plan is: take ReactOS's struct definitions
+as the scaffold, then **verify the offsets/values we depend on against the XP SP3 binaries** (we
+already independently confirmed `VdmInitialize=3` and the service set, which lets us trust the
+cross-reference). Pure byte-by-byte reconstruction of hundred-byte structs from disassembly is the
+slow path and unnecessary when a clean-room source exists to validate against.
 
 ## Action
 Remaining `[VERIFY]` items above are the explicit objectives of
