@@ -154,6 +154,13 @@ So XP raises "not a valid Win32 application" **without ever running our repointe
 **overturns the earlier reading** that that dialog was the "success signature" (our host launching
 but not completing the handshake). It is unclear our binary is being launched as the VDM host at all.
 
+`[FACT]` The instrumentation is **proven sound**: the same `vdmhost.exe` run *standalone* writes all
+three stages — `STAGE0` / console diag (`ConsoleWindow=0`, valid `StdIn`/`StdOut`) / `STAGE1` /
+`returned FALSE GetLastError=0x57` / `STAGE2`. So "no `STAGE0` as VDM host" is a real negative, not a
+logging artifact. (This contradicts the Spike-002 note that `wowprobe` logged its bare cmdline *as*
+the VDM host — hence priority #2 below: re-check `wowprobe` the same way; one of the two reads is
+mis-attributed.)
+
 `[FACT]` **`cmdline` format is a launch template with parameters, not a bare path.** The sibling
 `wowcmdline` (Win16 host) default is `%SystemRoot%\system32\ntvdm.exe -a %SystemRoot%\system32\krnl386`
 — note the `-a <krnl386>` parameters. The DOS `cmdline` default (which we overwrote with a bare
