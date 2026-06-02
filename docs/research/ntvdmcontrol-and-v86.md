@@ -87,6 +87,16 @@ Reserved+Len, {Cmd,App,Pif,CurDirectory}Len, VDMState, CurrentDrive, ComingFromB
 the string buffers + their `*Len` sizes; flags go in `VDMState` (`VDM_GET_FIRST_COMMAND=0x100`,
 `VDM_GET_ENVIRONMENT=0x400`). Exercised by `tools/vdmhost/` (Spike-001 step 1).
 
+`[FACT]` **Test result (2026-06-02, automated via telnet):** with our ReactOS-derived struct,
+`GetNextVDMCommand` returns **FALSE / 0x57 (ERROR_INVALID_PARAMETER)** — *both* standalone *and*
+when XP launches `vdmhost` as the real VDM host (after the `cmdline` repoint + reboot). So it isn't
+a "not really the VDM host" problem. The struct **size matches** XP exactly (`ntvdm` uses a 160-byte
+/ `0xa0` `VDM_COMMAND_INFO` at `ebp-0xa0`, same as ours), so the layout is close; the failure is a
+wrong field *value/flag*. `ntvdm` populates the struct inside a helper (`0xf04d3af`) and only
+conditionally sets `[struct+8]=8` — the exact first-call flag setup (its `VDM_GET_FIRST_COMMAND`
+path, likely `0xf00e126`) is the next thing to replicate. **Next:** trace that helper, fix the
+struct setup in `vdmhost`, push via TFTP (`tftp -i 10.0.2.2 GET ...`), re-test over telnet.
+
 ### `VdmInitialize` ServiceData — partial (2026-06-02)
 `[FACT]` The `VdmInitialize` function (`ntvdm.exe` `0xf00e668`) builds a small `ServiceData`
 struct on the stack and passes `&struct`; the struct's second field points to a **table of 9

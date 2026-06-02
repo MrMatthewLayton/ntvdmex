@@ -68,7 +68,9 @@ build_args() {
 
         # --- network: Realtek RTL8139, ubiquitous in the era, built-in XP driver;
         #     user-mode NAT with host port forwards for later automation. -------
-        -netdev "user,id=net0,$HOSTFWD"
+        # tftp= serves build/ to the guest so the host can push fresh binaries:
+        #   (guest)  tftp -i 10.0.2.2 GET vdmhost.exe C:\ntvdmex\vdmhost.exe
+        -netdev "user,id=net0,$HOSTFWD,tftp=$ROOT/build"
         -device rtl8139,netdev=net0
 
         -display cocoa
@@ -168,6 +170,7 @@ net start TlntSvr
 net localgroup TelnetClients ntvdmex /add
 tlntadmn config sec = -NTLM
 tlntadmn config mode = stream
+netsh firewall add portopening TCP 23 Telnet ENABLE ALL
 echo.
 echo Done. Host connects on port 2323 as ntvdmex/ntvdmex; auto-starts on boot.
 pause
