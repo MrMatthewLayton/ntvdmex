@@ -90,6 +90,15 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         p = zput(p, "  CurrentDrive="); p = zhex(p, g_ci.CurrentDrive);
         p = zput(p, "  TaskId=0x");     p = zhex(p, g_ci.TaskId);
         p = zput(p, "  ExitCode=0x");   p = zhex(p, g_ci.ExitCode);
+        p = zput(p, "\r\npost-call *Len (req'd sizes if too-small): ");
+        p = zput(p, "Cmd=0x");    p = zhex(p, g_ci.CmdLen);
+        p = zput(p, " App=0x");   p = zhex(p, g_ci.AppLen);
+        p = zput(p, " Pif=0x");   p = zhex(p, g_ci.PifLen);
+        p = zput(p, " CurDir=0x");p = zhex(p, g_ci.CurDirectoryLen);
+        p = zput(p, " Env=0x");   p = zhex(p, g_ci.EnvLen);
+        p = zput(p, " Desk=0x");  p = zhex(p, g_ci.DesktopLen);
+        p = zput(p, " Title=0x"); p = zhex(p, g_ci.TitleLen);
+        p = zput(p, " Rsv=0x");   p = zhex(p, g_ci.ReservedLen);
         p = zput(p, "\r\n");
     }
 

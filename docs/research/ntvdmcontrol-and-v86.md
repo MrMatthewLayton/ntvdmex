@@ -92,10 +92,26 @@ the string buffers + their `*Len` sizes; flags go in `VDMState` (`VDM_GET_FIRST_
 when XP launches `vdmhost` as the real VDM host (after the `cmdline` repoint + reboot). So it isn't
 a "not really the VDM host" problem. The struct **size matches** XP exactly (`ntvdm` uses a 160-byte
 / `0xa0` `VDM_COMMAND_INFO` at `ebp-0xa0`, same as ours), so the layout is close; the failure is a
-wrong field *value/flag*. `ntvdm` populates the struct inside a helper (`0xf04d3af`) and only
-conditionally sets `[struct+8]=8` — the exact first-call flag setup (its `VDM_GET_FIRST_COMMAND`
-path, likely `0xf00e126`) is the next thing to replicate. **Next:** trace that helper, fix the
-struct setup in `vdmhost`, push via TFTP (`tftp -i 10.0.2.2 GET ...`), re-test over telnet.
+wrong field *value/flag*. `ntvdm` populates the struct inside a helper (`0xf04d3af`); `0xf00e126` turned out to be
+`GetNextVDMCommand(NULL)` (an ack/cleanup variant), not the fetch.
+
+Refined findings (automated via telnet+TFTP):
+- `[FACT]` Standalone `0x57` is **"not a VDM process"**, not a buffer-size negotiation: the
+  post-call `*Len` fields are **unchanged** (ReactOS shows `STATUS_INVALID_PARAMETER` *would*
+  update them to required sizes if a buffer were too small — it didn't).
+- `[FACT]` **VDM-host launches need an interactive logon session.** Creating the `ntvdmex` telnet
+  account flipped XP from auto-logon to the account-picker, so after a plain reboot *no one is
+  logged in*. Telnet (a service) still works — `reg`, file ops, TFTP, and *standalone* `vdmhost`
+  all run — but triggering a 16-bit app (`dosstub`) does **not** bring up the VDM host with no
+  interactive desktop, which is why the VDM-host logs came back empty. The earlier successful
+  VDM-host run was while a user was logged in.
+- Mitigation: enable **auto-logon** (`Winlogon\AutoAdminLogon=1` + `DefaultUserName`/`Password`)
+  so XP always boots to a desktop — reproducible interactive session for VDM-host tests.
+
+**Next:** with auto-logon up, re-run the VDM-host test (interactive trigger, e.g. Startup-folder
+launch of `dosstub`) and capture the *real* VDM-context `GetNextVDMCommand` result + `*Len`. Then
+find what registration/init real `ntvdm` does **before** its first `GetNextVDMCommand` (the likely
+reason for `0x57` even as the VDM host) — probably a CSRSS/console-VDM registration step.
 
 ### `VdmInitialize` ServiceData — partial (2026-06-02)
 `[FACT]` The `VdmInitialize` function (`ntvdm.exe` `0xf00e668`) builds a small `ServiceData`
