@@ -91,17 +91,40 @@ tables it will service traps from. (Field-by-field semantics not yet decoded.)
 pointer is reached as `[TEB + VdmOffset]` after loading the self-ptr — the exact `TEB.Vdm` offset
 not yet pinned.
 
-### Still to recover — and the efficient way to do it
-Remaining: full `VDM_TIB` layout (+ `TEB.Vdm` offset), per-field `VDM_INITIALIZE_DATA` semantics,
-the low-memory reservation, and the CSRSS support-process registration handshake.
+### Cross-validated against ReactOS (2026-06-02)
+ReactOS's `sdk/include/ndk/ketypes.h` defines these, and they **match our XP SP3 disassembly
+exactly** — two independent sources agreeing:
 
-These are large undocumented **structures**, exactly the thing ReactOS has already clean-roomed
-into public headers (`VDM_TIB`, `VDM_INITIALIZE_DATA`, `VDMSERVICECLASS` in its `ndk`/`vdm` headers).
-Per [reference-projects.md](reference-projects.md), the plan is: take ReactOS's struct definitions
-as the scaffold, then **verify the offsets/values we depend on against the XP SP3 binaries** (we
-already independently confirmed `VdmInitialize=3` and the service set, which lets us trust the
-cross-reference). Pure byte-by-byte reconstruction of hundred-byte structs from disassembly is the
-slow path and unnecessary when a clean-room source exists to validate against.
+- `[FACT]` **`VDMSERVICECLASS`** (ReactOS == our recovered values):
+  `0 VdmStartExecution · 1 VdmQueueInterrupt · 2 VdmDelayInterrupt · 3 VdmInitialize ·
+  4 VdmFeatures · 5 VdmSetInt21Handler · 6 VdmQueryDir · 7 VdmPrinterDirectIoOpen ·
+  8 VdmPrinterDirectIoClose · 9 VdmPrinterInitialize · 10 VdmSetLdtEntries ·
+  11 VdmSetProcessLdtInfo · 12 VdmAdlibEmulation · 13 VdmPMCliControl · 14 VdmQueryVdmProcess`.
+- `[FACT]` **`VDM_INITIALIZE_DATA`** = `{ PVOID TrapcHandler; PVDMICAUSERDATA IcaUserData; }`.
+  Confirmed by the `ntvdm` disasm: `ServiceData = &{TrapcHandler=0xf044820, IcaUserData=&table}`.
+- `[FACT]` **`VDMICAUSERDATA`** = pointers `{ pIcaLock, pIcaMaster, pIcaSlave, pDelayIrq,
+  pUndelayIrq, pDelayIret, pIretHooked, pAddrIretBopTable, ... }` (ReactOS lists 11; XP SP3's
+  `ntvdm` fills **9** — the trailing WOW/idle fields are newer). The 9 pointers ntvdm passes are
+  its own ICA (interrupt-controller) lock + master/slave PIC state + delay/iret hook tables.
+
+### `VDM_TIB` — the genuinely-undocumented piece (XP-only ground truth)
+`[FACT]` **`TEB.Vdm` is at offset `0xF18`** (32-bit). Confirmed in `ntvdm.exe`: the VDM_TIB pointer
+is fetched as `mov eax, fs:[0x18]` (TEB self) → `mov reg, [eax+0xF18]` (≈30 sites).
+`[FACT]` A VDM_TIB field is accessed at **`+0x2D8`** (`add esi, 0x2d8` after the load).
+`[FACT]` **ReactOS does NOT define `VDM_TIB`** — it uses Fast486 emulation, never the real V86 TIB.
+This is precisely the gap the project identified: ReactOS validates DOS/VDD logic but *not* the
+V86/`NtVdmControl` path. So the VDM_TIB byte layout must come from the XP `ntvdm`/`ntoskrnl`
+disassembly alone (it holds the `CONTEXT VdmContext` we set before `VdmStartExecution`, plus fault
+info). Next increment: map the fields ntvdm reads/writes off `[TEB+0xF18]` — especially the
+`VdmContext` (CONTEXT) offset, since that carries the V86 CS:IP/registers.
+
+### Still to recover
+`VDM_TIB` field map (VdmContext offset, fault info); the low-memory reservation `VdmInitialize`
+expects; and the CSRSS support-process registration handshake (`csrsrv`/`basesrv` side) that must
+precede `GetNextVDMCommand`.
+
+Sources for the cross-reference: ReactOS `ndk/ketypes.h` (VDMSERVICECLASS, VDM_INITIALIZE_DATA,
+VDMICAUSERDATA); TEB.Vdm offset 0xF18 from public TEB documentation.
 
 ## Action
 Remaining `[VERIFY]` items above are the explicit objectives of
