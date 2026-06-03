@@ -385,10 +385,25 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             (void)st;
             /* Load the REAL program from disk: the resolved CurDir\Title. */
             if (g_cur[0] && g_title[0]) {
-                char path[768]; char *pp = path; HANDLE hf;
+                char path[768]; char *pe; HANDLE hf; const char *t; int has_dot = 0;
+                char *pp = path;
                 pp = zput(pp, g_cur); pp = zput(pp, "\\"); pp = zput(pp, g_title);
+                pe = pp;                                   /* end of CurDir\Title */
+                for (t = g_title; *t; ++t) if (*t == '.') has_dot = 1;
+                /* Title is the program name as typed; if it carries no extension
+                   resolve it like a shell would -- try .COM then .EXE. */
                 hf = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL,
                                  OPEN_EXISTING, 0, NULL);
+                if (hf == INVALID_HANDLE_VALUE && !has_dot) {
+                    zput(pe, ".COM");
+                    hf = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL,
+                                     OPEN_EXISTING, 0, NULL);
+                    if (hf == INVALID_HANDLE_VALUE) {
+                        zput(pe, ".EXE");
+                        hf = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL,
+                                         OPEN_EXISTING, 0, NULL);
+                    }
+                }
                 if (hf != INVALID_HANDLE_VALUE) {
                     static BYTE filebuf[4096];
                     if (ReadFile(hf, filebuf, sizeof(filebuf), &nread, NULL) && nread) {
