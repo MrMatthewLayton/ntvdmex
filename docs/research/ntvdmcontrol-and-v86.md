@@ -404,3 +404,54 @@ VDMICAUSERDATA); TEB.Vdm offset 0xF18 from public TEB documentation.
 Remaining `[VERIFY]` items above are the explicit objectives of
 [Spike-001](../spikes/spike-001-v86-keystone.md). Extracted MS binaries live in the gitignored
 `reverse/` dir (`cabextract` from the install CD's `I386\`).
+
+## 2026-06-03 — `GetNextVDMCommand` returns TRUE (the `0x57` wall was a harness artifact)
+
+The CSRSS handshake "still to recover" above is now recovered from the **server side**
+(`reverse/basesrv.dll`, base `0x75b50000`, via radare2). The dispatch table is at `0x75b5d080`:
+idx 5 = `BaseSrvCheckVDM` (`0x75b58410`), idx 6 = `BaseSrvUpdateVDMEntry` (`0x75b584fe`),
+idx 7 = `BaseSrvGetNextVDMCommand` (`0x75b5702e`).
+
+### How `GetNextVDMCommand` finds the queued command — and what `0x57` actually means
+`BaseSrvGetNextVDMCommand` (`0x75b5702e`):
+1. `CsrLockProcessByClientId([msg+8])` — locates the **calling** process by the LPC ClientId. Found
+   for us fine (so the prior "process binding"/`proc->[0x34]` theory was a red herring).
+2. `CsrValidateMessageBuffer` over each buffer pointer in the request Data (at `msg+0x28`).
+3. Branch on `Data+0` (TaskId) for the first command (`VDMState & 0x100`):
+   - **TaskId != 0** → `0x75b55602`: walk global list `[0x75b5d2ec]`, match `node+0x20 == TaskId`
+     **only where `node+4 == 0`** (console not yet bound).
+   - **TaskId == 0** → `0x75b555cd`: walk `[0x75b5d2ec]`, match `node+4 == Data+4` (the **console handle**).
+4. With the record in hand: `edi = [record+0x30]` (the queued DOS command). For a first command,
+   **`if ([record+0x30] == 0) → STATUS_INVALID_PARAMETER (0xC000000D → Win32 0x57)`**.
+
+So `0x57` never meant "not registered as a VDM". It means **the lookup landed on a record with no
+queued command** — i.e. the wrong console (or none). `BaseSrvCheckVDM`'s worker (`0x75b5796e`) is
+what creates the record and stores the command at `record+0x30`, the assigned task id at
+`record+0x20`, and (via the external console-record callback `[0x75b5d2e8]`) the console handle at
+`record+4`; it returns that task id to kernel32 as the `-i<n>` on the ntvdm cmdline.
+
+### The fix: trigger in the launcher's console (no code change was even required)
+The earlier `0x57` runs all used the **reboot / Run-key interactive trigger**, which launches the
+16-bit app in a *different console* than our IFEO host inherits → console-key miss → empty record →
+`0x57`. Launching the 16-bit stub **directly in the telnet session** (launcher and our IFEO host
+share one console) makes the console-key match, and:
+
+```
+CmdLine=[C:\ntvdmex\vdmhost.exe "C:\WINDOWS\system32\ntvdm.exe" -f]   (note: NO -i, TaskId stays 0)
+STAGE1m  NtCreateSection=0  map0=0  map1=0
+STAGE1   NtVdmControl(VdmInitialize) NTSTATUS=0  (OK)
+STAGE1r  RegisterConsoleVDM TRUE
+GetNextVDMCommand  returned TRUE     <-- 0x57 GONE
+  CurDir : C:\ntvdmex   (CurDirLen 0x0b)   <-- real, launcher-specific; varied with the launcher CWD
+```
+
+Reproducible; `CurDirectory` correctly tracked the launcher's working directory across runs, proving
+a genuine command fetch (not an empty TRUE). `vdmhost.c` now also parses `-i<n>` → `g_ci.TaskId` to
+take the task-id path when present, but under IFEO the cmdline we receive has **no `-i`**, so the
+console path is the one that fires.
+
+### Open for the load/execute phase (not a blocker)
+The fetch fills `CurDir`/`Title`/`PifLen` but leaves `CmdLine`/`AppName`/`Env` lengths at our input
+sizes with non-ASCII buffer content — decode why (VDM_COMMAND_INFO field/handle layout, or whether the
+program path arrives on a follow-up call) to recover the image path. Then: load the image into the
+mapped low memory → populate `VDM_TIB.VdmContext` (CS:IP/regs) → `NtVdmControl(VdmStartExecution)`.

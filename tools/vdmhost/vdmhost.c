@@ -149,6 +149,37 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     p = zput(p, "  StdOut=0x"); p = zhex(p, (unsigned)(ULONG_PTR)GetStdHandle(STD_OUTPUT_HANDLE));
     p = zput(p, "  CmdLine=["); p = zput(p, GetCommandLineA()); p = zput(p, "]\r\n");
 
+    /* TaskId: route GetNextVDMCommand's server-side lookup to the *task-id* path.
+       Recovered from basesrv!BaseSrvGetNextVDMCommand (0x75b57221): for the first
+       command (VDMState&0x100), if Data+0 (TaskId) != 0 it keys the lookup on the
+       task id (0x75b55602: walk the VDM list, match node+0x20==TaskId where node+4==0)
+       instead of the console handle (0x75b555cd). Under IFEO our console handle differs
+       from the launcher's, so the console path misses -> 0x57. CheckVDM assigned this
+       VDM the task id it passed us as "-i<n>" (hex), so feeding it back finds the
+       queued command regardless of which console we landed in. */
+    {
+        const char *q = GetCommandLineA();
+        ULONG tid = 0;
+        while (*q) {
+            if (q[0] == '-' && (q[1] == 'i' || q[1] == 'I')) {
+                const char *r = q + 2;
+                tid = 0;
+                while (*r == ' ') ++r;
+                for (;;) {
+                    char c = *r;
+                    if (c >= '0' && c <= '9')              tid = tid * 16 + (ULONG)(c - '0');
+                    else if ((c | 0x20) >= 'a' && (c | 0x20) <= 'f')
+                                                           tid = tid * 16 + (ULONG)((c | 0x20) - 'a' + 10);
+                    else break;
+                    ++r;
+                }
+            }
+            ++q;
+        }
+        g_ci.TaskId = tid;          /* take the last -i<n> on the line */
+        p = zput(p, "Parsed TaskId=0x"); p = zhex(p, tid); p = zput(p, "\r\n");
+    }
+
     /* STAGE 1m: lay down the V86 low-memory address space (ntvdm 0xf00ea75) before
        VdmInitialize, else VdmInitialize AV's (0xC0000005). */
     {
