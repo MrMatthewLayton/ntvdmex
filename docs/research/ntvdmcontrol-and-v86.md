@@ -287,9 +287,20 @@ NULL)` → `NtFreeVirtualMemory(-1, 0→0x9FFFF, RELEASE)` + `(0x100000→0x1000
 the same at `0x100000`.
 
 `[FACT]` **`GetNextVDMCommand` is still `0x57` even with `VdmInitialize` done.** So the program fetch
-is gated by a **CSRSS-side** registration, *not* the kernel `VdmInitialize` (consistent with the
-basesrv gate analysis above). Next: `RegisterConsoleVDM` (ntvdm `0xf014078`, flag 1) — the
-console-VDM registration with CSRSS — plus confirm its order vs the first `GetNextVDMCommand`.
+is gated by a **CSRSS-side** registration, *not* the kernel `VdmInitialize`.
+
+`[FACT]` Disassembled **`kernel32!GetNextVDMCommand`** (`0x7c867f23`, extracted KERNEL32.DLL from the
+XP ISO). It does **no client-side VDM check** — reads `VDMState` at struct `+0x98` (our `0x500` →
+the "fetch" branch at `0x7c8680ac`), allocates a CSR capture buffer from the `*Len` fields, and
+calls `CsrClientCallServer`. So the `0x57` is purely **server-side** (basesrv
+`BaseSrvGetNextVDMCommand`), from either:
+  (a) the gate `CsrLockProcessByClientId(callerPid)` (`basesrv 0x75b55208` → csrsrv import confirmed)
+      — fails if CSRSS doesn't have our process associated with the VDM, **or**
+  (b) one of the `CsrValidateMessageBuffer` calls on the captured buffers.
+Both return `0xC000000D` (→ Win32 `0x57`). Distinguishing them needs a kernel debugger on the VM or
+iterative tests. The fix is the **CSRSS VDM↔host-process association** — most likely
+`RegisterConsoleVDM` (ntvdm `0xf014078`, flag 1; needs hardware-event handles + a video-state
+buffer), which is the next ntvdm init step. This is a substantial, somewhat uncertain build.
 
 Remaining to a running DOS program: CSRSS registration → `GetNextVDMCommand` (program path) → load
 it into the mapped low memory → set `VDM_TIB.VdmContext` (CS:IP/regs) → `NtVdmControl(VdmStartExecution)`.
