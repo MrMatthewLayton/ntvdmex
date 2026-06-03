@@ -60,6 +60,24 @@ typedef struct {            /* VDM_INITIALIZE_DATA */
 
 typedef LONG (WINAPI *PFN_NtVdmControl)(ULONG Service, PVOID ServiceData);
 
+/* --- V86 low-memory setup (ntvdm fn 0xf00ea75, runs right before VdmInitialize).
+ * Lay down the V86 address space so VdmInitialize stops AV'ing: create a section,
+ * release the default low reservations, map the section X-RW into low memory. */
+typedef struct {                /* OBJECT_ATTRIBUTES (24 bytes) */
+    ULONG Length; PVOID RootDirectory, ObjectName; ULONG Attributes;
+    PVOID SecurityDescriptor, SecurityQOS;
+} OBJ_ATTR;
+
+typedef LONG (WINAPI *PFN_NtCreateSection)(PHANDLE, ULONG, OBJ_ATTR *,
+            LARGE_INTEGER *, ULONG, ULONG, HANDLE);
+typedef LONG (WINAPI *PFN_NtFreeVirtualMemory)(HANDLE, PVOID *, SIZE_T *, ULONG);
+typedef LONG (WINAPI *PFN_NtMapViewOfSection)(HANDLE, HANDLE, PVOID *, ULONG,
+            SIZE_T, LARGE_INTEGER *, SIZE_T *, ULONG, ULONG, ULONG);
+
+#define MEM_RELEASE_NT  0x8000
+#define SEC_RESERVE_NT  0x04000000
+#define VDM_MAP_FLAG    0x40000000   /* ntvdm's AllocationType for the V86 map */
+
 /* Static ICA-state backing store (zero-init). Generous sizes so the kernel's
    probes/stores land in valid writable memory. */
 static BYTE g_ica_lock[256], g_ica_master[256], g_ica_slave[256], g_ica_bop[1024];
@@ -124,6 +142,39 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     p = zput(p, "  StdIn=0x");  p = zhex(p, (unsigned)(ULONG_PTR)GetStdHandle(STD_INPUT_HANDLE));
     p = zput(p, "  StdOut=0x"); p = zhex(p, (unsigned)(ULONG_PTR)GetStdHandle(STD_OUTPUT_HANDLE));
     p = zput(p, "  CmdLine=["); p = zput(p, GetCommandLineA()); p = zput(p, "]\r\n");
+
+    /* STAGE 1m: lay down the V86 low-memory address space (ntvdm 0xf00ea75) before
+       VdmInitialize, else VdmInitialize AV's (0xC0000005). */
+    {
+        HANDLE hntdll = GetModuleHandleA("ntdll.dll");
+        PFN_NtCreateSection     NtCreateSection =
+            (PFN_NtCreateSection)GetProcAddress(hntdll, "NtCreateSection");
+        PFN_NtFreeVirtualMemory NtFreeVirtualMemory =
+            (PFN_NtFreeVirtualMemory)GetProcAddress(hntdll, "NtFreeVirtualMemory");
+        PFN_NtMapViewOfSection  NtMapViewOfSection =
+            (PFN_NtMapViewOfSection)GetProcAddress(hntdll, "NtMapViewOfSection");
+        HANDLE hSec = NULL;
+        OBJ_ATTR oa; LARGE_INTEGER maxsize, off;
+        PVOID base; SIZE_T sz; LONG st;
+        unsigned i; char *q = (char *)&oa;
+        for (i = 0; i < sizeof(oa); ++i) q[i] = 0;
+        oa.Length = 0x18;
+        maxsize.QuadPart = 0xB0000;
+        st = NtCreateSection(&hSec, 0xA, &oa, &maxsize, PAGE_EXECUTE_READWRITE,
+                             SEC_RESERVE_NT, NULL);
+        p = zput(p, "STAGE1m: NtCreateSection=0x"); p = zhex(p, (unsigned)st);
+        base = (PVOID)1;        sz = 0x9FFFF;  NtFreeVirtualMemory((HANDLE)-1, &base, &sz, MEM_RELEASE_NT);
+        base = (PVOID)0x100000; sz = 0x10000;  NtFreeVirtualMemory((HANDLE)-1, &base, &sz, MEM_RELEASE_NT);
+        base = (PVOID)1;        sz = 0xFFFF;  off.QuadPart = 0;
+        st = NtMapViewOfSection(hSec, (HANDLE)-1, &base, 0, 0xFFFF, &off, &sz, 2,
+                                VDM_MAP_FLAG, PAGE_EXECUTE_READWRITE);
+        p = zput(p, " map0=0x"); p = zhex(p, (unsigned)st);
+        base = (PVOID)0x100000; sz = 0x10000; off.QuadPart = 0;
+        st = NtMapViewOfSection(hSec, (HANDLE)-1, &base, 0, 0x10000, &off, &sz, 2,
+                                VDM_MAP_FLAG, PAGE_EXECUTE_READWRITE);
+        p = zput(p, " map1=0x"); p = zhex(p, (unsigned)st); p = zput(p, "\r\n");
+        writelog(report, p);
+    }
 
     /* STAGE 1a: NtVdmControl(VdmInitialize) -- register as a VDM with the kernel so
        kernel32!GetNextVDMCommand stops returning 0x57. Build VDM_INITIALIZE_DATA

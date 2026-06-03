@@ -272,6 +272,28 @@ before the `VdmInitialize` call at `0xf01abb6`). It builds the V86 RAM:
 So the order is: **lay down V86 low memory (section + free + map) → `VdmInitialize` → … →
 `VdmStartExecution`**. The `0xC0000005` is expected until step 1–3 are done.
 
+#### ✅✅ VdmInitialize SUCCEEDS after V86 memory setup (2026-06-03)
+`[FACT]` Implemented ntvdm's V86 memory setup in our IFEO binary and re-ran. Result:
+```
+STAGE1m: NtCreateSection=0x00000000 map0=0x00000000 map1=0x00000000
+STAGE1: NtVdmControl(VdmInitialize)... NTSTATUS=0x00000000 (OK)
+returned FALSE   GetLastError=0x00000057   <- GetNextVDMCommand
+```
+All three memory calls and **`VdmInitialize` succeed**. The kernel has now set up **V86 mode** for our
+(IFEO-launched) process — we are a real, kernel-registered VDM with the low address space mapped.
+The exact replicated sequence: `NtCreateSection(&h, 0xA, oa{len 0x18}, max=0xB0000, X-RW, SEC_RESERVE,
+NULL)` → `NtFreeVirtualMemory(-1, 0→0x9FFFF, RELEASE)` + `(0x100000→0x10000)` →
+`NtMapViewOfSection(h, -1, base→0, 0, 0xFFFF, off 0, view 0xFFFF, ViewUnmap=2, 0x40000000, X-RW)` +
+the same at `0x100000`.
+
+`[FACT]` **`GetNextVDMCommand` is still `0x57` even with `VdmInitialize` done.** So the program fetch
+is gated by a **CSRSS-side** registration, *not* the kernel `VdmInitialize` (consistent with the
+basesrv gate analysis above). Next: `RegisterConsoleVDM` (ntvdm `0xf014078`, flag 1) — the
+console-VDM registration with CSRSS — plus confirm its order vs the first `GetNextVDMCommand`.
+
+Remaining to a running DOS program: CSRSS registration → `GetNextVDMCommand` (program path) → load
+it into the mapped low memory → set `VDM_TIB.VdmContext` (CS:IP/regs) → `NtVdmControl(VdmStartExecution)`.
+
 #### ➡️ PIVOT — transparent host via IFEO + NtVdmControl (the goal is reachable)
 The project goal (DOS/Win16 on real V86) does **not** require *becoming* ntvdm transparently. The
 WOW-host hijack was one architecture (ADR-0002), now disproven. The viable architecture:
