@@ -298,9 +298,25 @@ calls `CsrClientCallServer`. So the `0x57` is purely **server-side** (basesrv
       — fails if CSRSS doesn't have our process associated with the VDM, **or**
   (b) one of the `CsrValidateMessageBuffer` calls on the captured buffers.
 Both return `0xC000000D` (→ Win32 `0x57`). Distinguishing them needs a kernel debugger on the VM or
-iterative tests. The fix is the **CSRSS VDM↔host-process association** — most likely
-`RegisterConsoleVDM` (ntvdm `0xf014078`, flag 1; needs hardware-event handles + a video-state
-buffer), which is the next ntvdm init step. This is a substantial, somewhat uncertain build.
+iterative tests. The fix is the **CSRSS VDM↔host-process association**.
+
+`[FACT]` **`RegisterConsoleVDM(1,…)` implemented and returns TRUE — but `GetNextVDMCommand` is STILL
+`0x57`.** (ntvdm's DOS call passes video-buffer/size = 0, so a minimal call works: flag 1, three
+`CreateEvent` handles, scratch OUT ptrs.) Because that CSRSS call *succeeded*, CSRSS **can** lock our
+process — so the `0x57` is **not** the `CsrLockProcessByClientId` gate. The basesrv command-fetch
+path (after the gate) walks a **command list** under crit-sects `0x75b5d5e0`/`0x75b5d600`, keyed by
+our process's VDM record `proc->[0x34]`. So `0x57` = **no command queued/bound to our process**.
+
+`[HYPOTHESIS]` The VDM↔host binding (CSRSS `proc->[0x34]` + the queued command) is normally set when
+kernel32, *after* creating ntvdm, calls back into CSRSS (`BaseSrvUpdateVDMEntry`) to register the new
+host PID. The **IFEO `Debugger` redirect** may break this: kernel32 thinks it launched `ntvdm.exe`
+but the process is our debugger, so the command may be bound to a phantom/none. If so, IFEO can *run*
+our code but cannot fetch the program via `GetNextVDMCommand` — we'd need the program another way.
+**Next:** TCG + gdb-stub kernel debug (HVF blocks the stub) to inspect `proc->[0x34]` and the queue
+for our process at the `BaseSrvGetNextVDMCommand` breakpoint — ground-truth whether the binding exists.
+
+Stages reached by our IFEO binary (all logged): `STAGE0` → V86 memory (`NtCreateSection`/2×map all 0)
+→ `VdmInitialize` NTSTATUS 0 → `RegisterConsoleVDM` TRUE → `GetNextVDMCommand` still `0x57`.
 
 Remaining to a running DOS program: CSRSS registration → `GetNextVDMCommand` (program path) → load
 it into the mapped low memory → set `VDM_TIB.VdmContext` (CS:IP/regs) → `NtVdmControl(VdmStartExecution)`.

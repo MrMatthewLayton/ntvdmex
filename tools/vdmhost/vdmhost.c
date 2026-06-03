@@ -60,6 +60,12 @@ typedef struct {            /* VDM_INITIALIZE_DATA */
 
 typedef LONG (WINAPI *PFN_NtVdmControl)(ULONG Service, PVOID ServiceData);
 
+/* RegisterConsoleVDM (kernel32) -- registers us as the console VDM with CSRSS.
+   11 args, matching ntvdm's call at 0xf014078; DOS uses flag 1 and 0 for the
+   video-state buffer/size (args 8,9). */
+typedef BOOL (WINAPI *PFN_RegisterConsoleVDM)(DWORD, HANDLE, HANDLE, HANDLE,
+            DWORD, PVOID, PVOID, PVOID, DWORD, PVOID, PVOID);
+
 /* --- V86 low-memory setup (ntvdm fn 0xf00ea75, runs right before VdmInitialize).
  * Lay down the V86 address space so VdmInitialize stops AV'ing: create a section,
  * release the default low reservations, map the section X-RW into low memory. */
@@ -199,6 +205,32 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         p = zput(p, (st >= 0) ? " (OK)\r\n" : " (FAIL)\r\n");
     }
     writelog(report, p);
+
+    /* STAGE 1r: RegisterConsoleVDM(1,...) -- register as the console VDM with CSRSS.
+       Likely the missing CSRSS-side association that makes GetNextVDMCommand return
+       a command instead of 0x57. 3 hardware events + scratch OUT pointers; video
+       buffer/size = 0 like ntvdm's DOS path. */
+    {
+        PFN_RegisterConsoleVDM RegisterConsoleVDM =
+            (PFN_RegisterConsoleVDM)GetProcAddress(
+                GetModuleHandleA("kernel32.dll"), "RegisterConsoleVDM");
+        HANDLE hStart = CreateEventA(NULL, TRUE, FALSE, NULL);
+        HANDLE hEnd   = CreateEventA(NULL, TRUE, FALSE, NULL);
+        HANDLE hErr   = CreateEventA(NULL, TRUE, FALSE, NULL);
+        static DWORD out6, out10; static PVOID out7, out11;
+        p = zput(p, "STAGE1r: RegisterConsoleVDM... ");
+        writelog(report, p);
+        if (!RegisterConsoleVDM) {
+            p = zput(p, "NOT exported.\r\n");
+        } else {
+            BOOL ok = RegisterConsoleVDM(1, hStart, hEnd, hErr, 0,
+                          &out6, &out7, 0, 0, &out10, &out11);
+            DWORD e = GetLastError();
+            p = zput(p, ok ? "TRUE" : "FALSE");
+            p = zput(p, " err=0x"); p = zhex(p, e); p = zput(p, "\r\n");
+        }
+        writelog(report, p);
+    }
 
     pfn = (PFN_GetNextVDMCommand)GetProcAddress(
               GetModuleHandleA("kernel32.dll"), "GetNextVDMCommand");
