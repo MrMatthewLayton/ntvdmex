@@ -368,11 +368,42 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         }
         writelog(report, p);
         if (tib) {
-            static const BYTE prog[] = { 0xB8,0xEF,0xBE, 0xA3,0x80,0x00, 0xF4 };
-            volatile BYTE *code = (volatile BYTE *)0x2000;   /* 0x200:0 */
-            unsigned i; LONG st;
-            for (i = 0; i < sizeof(prog); ++i) code[i] = prog[i];
-            *(volatile WORD *)0x2080 = 0;                    /* clear marker */
+            /* The real dosstub.com opcodes: B4 4C (mov ah,0x4C); CD 21 (int 21h).
+               INT 21h with IOPL<3 is a sensitive instruction -> traps to the V86
+               monitor. Per the event table, a software INT surfaces as event 4 with
+               the vector number at VDM_TIB+0x5b0; AH=0x4C is DOS "terminate". */
+            static const BYTE prog[] = { 0xB4,0x4C, 0xCD,0x21 };
+            /* INT 21h reflects to the real-mode IVT. Point IVT[0x21] (linear 0x84)
+               at a handler at 0x200:0x10 that executes a BOP (C4 C4 nn) -- the NTVDM
+               callback opcode. The kernel should return a BOP event to the host. */
+            static const BYTE bop[] = { 0xC4,0xC4,0x20, 0xCF };  /* BOP 0x20 ; iret */
+            volatile BYTE *code = (volatile BYTE *)0x2000;   /* 0x200:0   */
+            volatile BYTE *hdlr = (volatile BYTE *)0x2010;   /* 0x200:0x10 */
+            unsigned i; LONG st; DWORD ev, iv; DWORD nread = 0;
+            /* Load the REAL program from disk: the resolved CurDir\Title. */
+            if (g_cur[0] && g_title[0]) {
+                char path[768]; char *pp = path; HANDLE hf;
+                pp = zput(pp, g_cur); pp = zput(pp, "\\"); pp = zput(pp, g_title);
+                hf = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL,
+                                 OPEN_EXISTING, 0, NULL);
+                if (hf != INVALID_HANDLE_VALUE) {
+                    static BYTE filebuf[4096];
+                    if (ReadFile(hf, filebuf, sizeof(filebuf), &nread, NULL) && nread) {
+                        DWORD n = nread > 0x1000 ? 0x1000 : nread;
+                        for (i = 0; i < n; ++i) code[i] = filebuf[i];
+                    }
+                    CloseHandle(hf);
+                }
+                p = zput(p, "STAGE3: loaded "); p = zhex(p, nread);
+                p = zput(p, " bytes from "); p = zput(p, path); p = zput(p, "\r\n");
+            }
+            if (!nread) {                          /* fallback to embedded opcodes */
+                for (i = 0; i < sizeof(prog); ++i) code[i] = prog[i];
+                p = zput(p, "STAGE3: using embedded program bytes\r\n");
+            }
+            for (i = 0; i < sizeof(bop);  ++i) hdlr[i] = bop[i];
+            *(volatile WORD *)0x84 = 0x0010;                 /* IVT[0x21].offset  */
+            *(volatile WORD *)0x86 = 0x0200;                 /* IVT[0x21].segment */
             #define TF(off) (*(volatile DWORD *)(tib + (off)))
             TF(0x2D8) = 0x10007;                            /* ContextFlags */
             TF(0x364) = 0x200; TF(0x368) = 0x200; TF(0x36C) = 0x200; TF(0x370) = 0x200;
@@ -380,21 +411,31 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             TF(0x384) = 0; TF(0x388) = 0; TF(0x38C) = 0;
             TF(0x390) = 0x0000;                             /* Eip */
             TF(0x394) = 0x0200;                             /* SegCs */
-            TF(0x398) = 0x20202;                            /* EFlags: VM | IF | reserved (ntvdm 0x202|VM) */
+            TF(0x398) = 0x20002;                            /* EFlags: VM + reserved, IOPL=0 (INT traps) */
             TF(0x39C) = 0x1000;                             /* Esp */
             TF(0x3A0) = 0x0200;                             /* SegSs */
-            p = zput(p, "STAGE3: pre-exec, calling NtVdmControl(0,NULL)...\r\n");
+            p = zput(p, "STAGE3: pre-exec (mov ah,4Ch; int 21h), NtVdmControl(0)...\r\n");
             writelog(report, p);
             st = ntvdmctl(0, NULL);
+            ev = *(volatile DWORD *)(tib + 0x5a8);
+            iv = *(volatile DWORD *)(tib + 0x5b0);
             p = zput(p, "STAGE3: returned NTSTATUS=0x"); p = zhex(p, (unsigned)st);
             p = zput(p, "\r\n  EAX=0x");        p = zhex(p, TF(0x388));
             p = zput(p, " EIP=0x");             p = zhex(p, TF(0x390));
             p = zput(p, " CS=0x");              p = zhex(p, TF(0x394));
             p = zput(p, " EFL=0x");             p = zhex(p, TF(0x398));
-            p = zput(p, "\r\n  event[0x5a8]=0x"); p = zhex(p, *(volatile DWORD *)(tib + 0x5a8));
-            p = zput(p, " ilen[0x5ac]=0x");      p = zhex(p, *(volatile DWORD *)(tib + 0x5ac));
-            p = zput(p, "\r\n  mem[0x2080]=0x");  p = zhex(p, *(volatile WORD *)0x2080);
+            p = zput(p, "\r\n  event[0x5a8]=0x"); p = zhex(p, ev);
+            p = zput(p, " intvec[0x5b0]=0x");    p = zhex(p, iv);
+            p = zput(p, " [0x5b2]=0x");          p = zhex(p, *(volatile WORD *)(tib + 0x5b2));
+            p = zput(p, " [0x5b4]=0x");          p = zhex(p, *(volatile DWORD *)(tib + 0x5b4));
             p = zput(p, "\r\n");
+            /* INT 21h reflected into our BOP handler. event 4 = BOP/INT dispatch;
+               with AH=0x4C this is the DOS "terminate" call -> clean exit. */
+            if (ev == 4 && ((TF(0x388) >> 8) & 0xFF) == 0x4C) {
+                p = zput(p, "  ==> CLEAN DOS EXIT via INT 21h->BOP 0x"); p = zhex(p, iv);
+                p = zput(p, ", AH=4Ch, exit code AL=0x");
+                p = zhex(p, TF(0x388) & 0xFF); p = zput(p, "\r\n");
+            }
             #undef TF
         }
         writelog(report, p);

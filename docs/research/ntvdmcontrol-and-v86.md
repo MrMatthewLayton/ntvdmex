@@ -513,3 +513,29 @@ the next refinement.)
 binaries. Remaining for a usable DOS host: a clean BOP/INT-driven exit protocol, the DOS
 environment (IVT, PSP, real-mode IRET interrupt handlers), and loading the actual program image
 (`CurDir\Title`) instead of a hand-assembled stub.
+
+## 2026-06-03 (cont.) — MILESTONE: real DOS program from disk runs to a clean exit
+
+Full pipeline, end-to-end from the transparent IFEO host, no MS VDM binaries:
+1. `GetNextVDMCommand` resolves the program (`CurDir\Title` = `C:\ntvdmex\dosstub.com`).
+2. vdmhost reads the **real file from disk** (4 bytes) into V86 low memory at `0x200:0`.
+3. `NtVdmControl(0)` runs it on the real CPU in V86:
+   - `B4 4C` (`mov ah,0x4C`) executes -> `EAX=0x00004c00`.
+   - `CD 21` (`int 21h`) is a sensitive instruction (IOPL=0) -> the V86 monitor **reflects
+     it through the real-mode IVT**. We pre-seeded `IVT[0x21]` (linear `0x84`) =
+     `0x200:0x10`, where we placed a **BOP** (`C4 C4 20`).
+   - the BOP returns to the host as **event 4** (`VDM_TIB+0x5a8`=4) with the BOP number in
+     `VDM_TIB+0x5b0` (=`0x20`); `EIP` stops exactly at the BOP (`0x200:0x10`) -- a clean,
+     controlled exit (vs the earlier "wander into zeroed memory" when the IVT was empty).
+4. The host decodes event 4 + AH=`0x4C` as DOS **terminate**, exit code AL.
+
+### Event taxonomy (kernel -> host, dispatch table `0xf064a60`, index = `VDM_TIB+0x5a8`)
+- 0 `0xf0088df`, 1 `0xf0440d1`, **2 `0xf0439e2` = GP fault/error** (fault addr in `+0x5b0`),
+  3 `0xf007a99`, **4 `0xf004f59` = BOP/software dispatch** (number in `+0x5b0`, 256-entry table
+  `0xf065580`), 5 `0xf04399f` = terminate, 6 `0xf0439c1` = hardware IRQ; event >=7 exits the loop.
+
+The NTVDM execution architecture is now reproduced from our own host: **V86 execution + real-mode
+IVT reflection + BOP host-callback + DOS INT 21h interpretation**. Remaining for a general DOS host:
+a proper PSP + 64KB+ conventional-memory map (we map only 64KB today), a real BOP/INT-service
+dispatch loop (re-enter `NtVdmControl(0)` after each non-terminating BOP), and stdout (INT 21h
+AH=09/02) so programs can print.
