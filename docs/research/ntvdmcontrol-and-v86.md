@@ -220,6 +220,36 @@ our binary in place (no auto-restore within seconds). So file replacement is ach
 the open question is whether the *launch* accepts our image content once it sits at the canonical
 path/name, or validates it further.
 
+#### ⛔ CONCLUSION — host substitution is NOT possible (2026-06-03)
+`[FACT]` **Definitive:** our binary was placed AT `C:\WINDOWS\system32\ntvdm.exe` (replacing the
+genuine ntvdm; WFP defeated, confirmed 17,507-byte file in place), `cmdline` at the default. Trigger
+`dosstub` → **`NO-VDMHOST-LOG`, no `STAGE0`** — our binary still never executes; `dosstub` → "not a
+valid Win32 application". So **XP refuses to launch our image as the DOS VDM host under *every*
+substitution tried**: `cmdline` repoint to any path, and physical replacement of `system32\ntvdm.exe`
+itself. Combined with "the genuine ntvdm only hosts from its canonical system32 path", the DOS-VDM
+host launch **validates the host image** — it accepts only the real ntvdm. **ADR-0002's transparent
+WOW-host interception is not viable.** (The genuine ntvdm.exe has since been restored on the VM.)
+
+#### ➡️ PIVOT — standalone host via NtVdmControl (the goal is still reachable)
+The project goal (DOS/Win16 on real V86) does **not** require *becoming* ntvdm transparently. The
+WOW-host hijack was one architecture (ADR-0002), now disproven. The viable architecture:
+
+- `[PLAN]` **NTVDMEX as a standalone host.** The user invokes `ntvdmex.exe <dosprog>` directly (or
+  we register as the handler for `.COM/.EXE/.PIF`/App Paths). We get the program from **our own
+  argv** — *not* CSRSS's `GetNextVDMCommand` — and create the V86 environment **directly** via
+  `NtVdmControl(VdmInitialize)` → load program into low memory → `NtVdmControl(VdmStartExecution)`,
+  using the recovered contract ([[spike-001 NtVdmControl]] facts above + the `VDM_TIB`/`VdmContext`
+  map still to finish).
+- This **moots the `GetNextVDMCommand 0x57` blocker** entirely — we never need to be a
+  CSRSS-registered VDM. We control the whole launch.
+- Our binary already **runs standalone** (STAGE0/1/2 confirmed), so there is no launch obstacle on
+  this path. The keystone work is purely the `NtVdmControl` V86 entry (Spike-001), independent of
+  the dead WOW-interception route.
+
+**Next:** finish the `VDM_TIB`/`VdmContext` (CONTEXT) byte map and the low-memory reservation
+`VdmInitialize` expects, then attempt a minimal V86 entry from a standalone `ntvdmex.exe` — no WOW
+repoint, no CSRSS handshake.
+
 ### `VdmInitialize` ServiceData — partial (2026-06-02)
 `[FACT]` The `VdmInitialize` function (`ntvdm.exe` `0xf00e668`) builds a small `ServiceData`
 struct on the stack and passes `&struct`; the struct's second field points to a **table of 9
