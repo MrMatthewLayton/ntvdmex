@@ -368,18 +368,21 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         }
         writelog(report, p);
         if (tib) {
-            /* The real dosstub.com opcodes: B4 4C (mov ah,0x4C); CD 21 (int 21h).
-               INT 21h with IOPL<3 is a sensitive instruction -> traps to the V86
-               monitor. Per the event table, a software INT surfaces as event 4 with
-               the vector number at VDM_TIB+0x5b0; AH=0x4C is DOS "terminate". */
-            static const BYTE prog[] = { 0xB4,0x4C, 0xCD,0x21 };
-            /* INT 21h reflects to the real-mode IVT. Point IVT[0x21] (linear 0x84)
-               at a handler at 0x200:0x10 that executes a BOP (C4 C4 nn) -- the NTVDM
-               callback opcode. The kernel should return a BOP event to the host. */
-            static const BYTE bop[] = { 0xC4,0xC4,0x20, 0xCF };  /* BOP 0x20 ; iret */
-            volatile BYTE *code = (volatile BYTE *)0x2000;   /* 0x200:0   */
-            volatile BYTE *hdlr = (volatile BYTE *)0x2010;   /* 0x200:0x10 */
-            unsigned i; LONG st; DWORD ev, iv; DWORD nread = 0;
+            /* Run a real DOS .COM with an INT 21h service loop. INT 21h (IOPL=0,
+               sensitive) reflects through IVT[0x21] -> a BOP handler at 0x100:0;
+               the BOP returns event 4 to the host. We service AH=09h (print
+               $-string at DS:DX), AH=02h (print DL), AH=4Ch (terminate), advance
+               EIP past the 3-byte BOP, and re-enter NtVdmControl(0) so the handler's
+               IRET resumes the program. */
+            static const BYTE prog[] = { 0xB4,0x4C, 0xCD,0x21 };   /* fallback: exit */
+            static const BYTE bop[]  = { 0xC4,0xC4,0x20, 0xCF };   /* BOP 0x20 ; iret */
+            volatile BYTE *code = (volatile BYTE *)0x2000;         /* 0x200:0  program */
+            volatile BYTE *hdlr = (volatile BYTE *)0x1000;         /* 0x100:0  int21 handler */
+            HANDLE hcon = CreateFileA("CONOUT$", GENERIC_WRITE, FILE_SHARE_WRITE, NULL,
+                                      OPEN_EXISTING, 0, NULL);
+            char dosout[1024]; char *op = dosout;                  /* captured DOS output */
+            unsigned i; LONG st; DWORD ev, ah, nread = 0; int guard;
+            (void)st;
             /* Load the REAL program from disk: the resolved CurDir\Title. */
             if (g_cur[0] && g_title[0]) {
                 char path[768]; char *pp = path; HANDLE hf;
@@ -402,8 +405,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                 p = zput(p, "STAGE3: using embedded program bytes\r\n");
             }
             for (i = 0; i < sizeof(bop);  ++i) hdlr[i] = bop[i];
-            *(volatile WORD *)0x84 = 0x0010;                 /* IVT[0x21].offset  */
-            *(volatile WORD *)0x86 = 0x0200;                 /* IVT[0x21].segment */
+            *(volatile WORD *)0x84 = 0x0000;                 /* IVT[0x21] = 0x100:0 */
+            *(volatile WORD *)0x86 = 0x0100;
             #define TF(off) (*(volatile DWORD *)(tib + (off)))
             TF(0x2D8) = 0x10007;                            /* ContextFlags */
             TF(0x364) = 0x200; TF(0x368) = 0x200; TF(0x36C) = 0x200; TF(0x370) = 0x200;
@@ -411,31 +414,47 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             TF(0x384) = 0; TF(0x388) = 0; TF(0x38C) = 0;
             TF(0x390) = 0x0000;                             /* Eip */
             TF(0x394) = 0x0200;                             /* SegCs */
-            TF(0x398) = 0x20002;                            /* EFlags: VM + reserved, IOPL=0 (INT traps) */
+            TF(0x398) = 0x20002;                            /* EFlags: VM + reserved, IOPL=0 */
             TF(0x39C) = 0x1000;                             /* Esp */
             TF(0x3A0) = 0x0200;                             /* SegSs */
-            p = zput(p, "STAGE3: pre-exec (mov ah,4Ch; int 21h), NtVdmControl(0)...\r\n");
+            p = zput(p, "STAGE3: running V86 DOS program (INT 21h service loop)...\r\n");
             writelog(report, p);
-            st = ntvdmctl(0, NULL);
-            ev = *(volatile DWORD *)(tib + 0x5a8);
-            iv = *(volatile DWORD *)(tib + 0x5b0);
-            p = zput(p, "STAGE3: returned NTSTATUS=0x"); p = zhex(p, (unsigned)st);
-            p = zput(p, "\r\n  EAX=0x");        p = zhex(p, TF(0x388));
-            p = zput(p, " EIP=0x");             p = zhex(p, TF(0x390));
-            p = zput(p, " CS=0x");              p = zhex(p, TF(0x394));
-            p = zput(p, " EFL=0x");             p = zhex(p, TF(0x398));
-            p = zput(p, "\r\n  event[0x5a8]=0x"); p = zhex(p, ev);
-            p = zput(p, " intvec[0x5b0]=0x");    p = zhex(p, iv);
-            p = zput(p, " [0x5b2]=0x");          p = zhex(p, *(volatile WORD *)(tib + 0x5b2));
-            p = zput(p, " [0x5b4]=0x");          p = zhex(p, *(volatile DWORD *)(tib + 0x5b4));
-            p = zput(p, "\r\n");
-            /* INT 21h reflected into our BOP handler. event 4 = BOP/INT dispatch;
-               with AH=0x4C this is the DOS "terminate" call -> clean exit. */
-            if (ev == 4 && ((TF(0x388) >> 8) & 0xFF) == 0x4C) {
-                p = zput(p, "  ==> CLEAN DOS EXIT via INT 21h->BOP 0x"); p = zhex(p, iv);
-                p = zput(p, ", AH=4Ch, exit code AL=0x");
-                p = zhex(p, TF(0x388) & 0xFF); p = zput(p, "\r\n");
+
+            for (guard = 0; guard < 1000; ++guard) {
+                st = ntvdmctl(0, NULL);
+                ev = TF(0x5a8);
+                if (ev != 4) {                  /* fault / other -> stop */
+                    p = zput(p, "STAGE3: stop, event=0x"); p = zhex(p, ev);
+                    p = zput(p, " CS:IP=0x"); p = zhex(p, TF(0x394));
+                    p = zput(p, ":0x"); p = zhex(p, TF(0x390));
+                    p = zput(p, " info[0x5b0]=0x"); p = zhex(p, TF(0x5b0));
+                    p = zput(p, "\r\n"); break;
+                }
+                ah = (TF(0x388) >> 8) & 0xFF;
+                if (ah == 0x4C) {               /* INT 21h/4Ch: terminate */
+                    p = zput(p, "  ==> DOS terminate (AH=4Ch), exit code AL=0x");
+                    p = zhex(p, TF(0x388) & 0xFF); p = zput(p, "\r\n");
+                    break;
+                } else if (ah == 0x09) {        /* INT 21h/09h: print $-string at DS:DX */
+                    DWORD seg = TF(0x370) & 0xFFFF, off = TF(0x380) & 0xFFFF;
+                    const volatile BYTE *s = (const volatile BYTE *)((seg << 4) + off);
+                    int k;
+                    for (k = 0; k < 512 && *s != '$'; ++k, ++s)
+                        if (op < dosout + sizeof(dosout) - 1) *op++ = (char)*s;
+                } else if (ah == 0x02) {        /* INT 21h/02h: print char DL */
+                    if (op < dosout + sizeof(dosout) - 1) *op++ = (char)(TF(0x380) & 0xFF);
+                }
+                /* else: unhandled service -- skip and continue */
+                TF(0x390) += 3;                 /* advance past the 3-byte BOP -> IRET */
             }
+            *op = 0;
+            if (op != dosout) {
+                DWORD wr;
+                if (hcon != INVALID_HANDLE_VALUE)
+                    WriteFile(hcon, dosout, (DWORD)(op - dosout), &wr, NULL);
+                p = zput(p, "  ==> DOS OUTPUT: ["); p = zput(p, dosout); p = zput(p, "]\r\n");
+            }
+            if (hcon != INVALID_HANDLE_VALUE) CloseHandle(hcon);
             #undef TF
         }
         writelog(report, p);

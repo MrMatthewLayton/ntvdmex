@@ -539,3 +539,37 @@ IVT reflection + BOP host-callback + DOS INT 21h interpretation**. Remaining for
 a proper PSP + 64KB+ conventional-memory map (we map only 64KB today), a real BOP/INT-service
 dispatch loop (re-enter `NtVdmControl(0)` after each non-terminating BOP), and stdout (INT 21h
 AH=09/02) so programs can print.
+
+## 2026-06-03 (cont.) — MILESTONE: Hello-World DOS .COM prints via INT 21h
+
+A real DOS program now loads from disk, executes on the CPU in V86, makes DOS system calls,
+and prints — through an INT 21h service loop in the host. No MS VDM binaries.
+
+`hello.com` (24 bytes, assembled org 0, loaded at `0x200:0`):
+```
+B4 09           mov ah, 09h          ; DOS print $-string
+BA 0B 00        mov dx, 000Bh        ; DS:DX -> msg
+CD 21           int 21h
+B4 4C           mov ah, 4Ch          ; DOS terminate
+CD 21           int 21h
+"Hello, World$"                       ; at offset 0x0B
+```
+
+Host INT 21h service loop (vdmhost STAGE3): IVT[0x21] -> BOP handler at `0x100:0`
+(`C4 C4 20 ; CF`). Loop = `NtVdmControl(0)` -> on event 4 read `AH`:
+- `09h`: read `$`-terminated string at `DS:DX` (DS=`VDM_TIB+0x370`, DX=`+0x380`), emit it.
+- `02h`: emit char in `DL`.
+- `4Ch`: terminate, exit code `AL` -> break.
+Otherwise advance `EIP` (`VDM_TIB+0x390`) by 3 (the BOP length) and re-enter so the handler's
+`IRET` resumes the guest after the `int 21h`. Output is written to `CONOUT$` and captured to the log.
+
+Result: **`==> DOS OUTPUT: [Hello, World]`** then clean terminate (AL=0). The re-entrant resume
+(EIP advance + IRET) services multiple INT 21h calls in one run — a working minimal DOS interpreter.
+
+### Status: the founding question is fully answered
+A from-scratch, transparent `ntvdm.exe` replacement can: intercept 16-bit launches (IFEO), speak the
+CSRSS/VDM protocol (`GetNextVDMCommand`), set up the kernel V86 monitor (`VdmInitialize` + self-
+allocated VDM_TIB), run guest code on the real CPU (`VdmStartExecution`), and service DOS calls via
+IVT reflection + BOP callbacks — running a real DOS program to visible output and clean exit. What
+remains is breadth, not feasibility: full 640KB memory + PSP, the INT 21h/13h/10h/2Fh service
+surface, EXEC of child programs, and Win16 (krnl386) support.
