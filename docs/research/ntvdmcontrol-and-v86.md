@@ -481,3 +481,35 @@ size-probe + grow + refetch for the environment block. The actual command line i
 after the call). So the full AppName/CmdLine/args arrive through that multi-call/env-block protocol,
 which is the execution-phase work to replicate. For identifying the initial program, `CurDir\Title`
 is sufficient.
+
+## 2026-06-03 (cont.) — MILESTONE: 16-bit code executes in V86 on the real CPU
+
+The full execution path now works end-to-end from the transparent IFEO host. Map recovered
+from ntvdm:
+
+- **`VdmStartExecution` = `NtVdmControl(0, NULL)`** (ntvdm CPU loop `0xf005350`: sets
+  `VDM_TIB+0x2d8`=ContextFlags `0x10007`, `+0x398` |= `0x20000` (VM), `push 0;push 0;call`).
+- **VDM_TIB is self-allocated by ntvdm**, not the kernel. `0xf044460` allocates `0x684` bytes,
+  VDM_TIB at `+0x10` (so VDM_TIB size `0x674`), zeroes it, inits via `0xf044374`, and
+  `0xf044517` stores the pointer into the target thread's `TEB+0xF18` (found via
+  `NtQueryInformationThread`/ThreadBasicInformation). Our process had `TEB+0xF18`=NULL, which is
+  why the first attempt read VDM_TIB=0 — fixed by allocating + registering our own.
+- **VDM_TIB init (`0xf044374`)**: `Size@+0x00=0x674`, `Eip@+0x390=0xfff0`, `EFlags@+0x398=0x202`,
+  selectors `+0x98=0,+0x9c=0x3b,+0xa0=0x23,+0xa4=0x23`, `+0x66c=0xffffffff`, bytes
+  `+0x5e4/5/6=1`, `+0x670=0`, dispatch ptrs `+0x4/+0x8` (ntvdm-internal; left NULL for us).
+- **CONTEXT (VdmContext) at VDM_TIB+0x2d8** (standard x86 CONTEXT): ContextFlags `+0x2d8`,
+  Gs/Fs/Es/Ds `+0x364/68/6c/70`, Edi/Esi/Ebx/Edx/Ecx/Eax/Ebp `+0x374..0x38c`, Eip `+0x390`,
+  SegCs `+0x394`, EFlags `+0x398` (VM=`0x20000`), Esp `+0x39c`, SegSs `+0x3a0`.
+
+Test: program `B8 EF BE A3 80 00 F4` (`mov ax,0xBEEF; mov [0x80],ax; hlt`) at `0x200:0`
+(host-linear `0x2000`, in our mapped low memory), CS=DS=SS=`0x200`, EFlags=`0x20202`,
+`NtVdmControl(0,NULL)`. Result: **`EAX=0xBEEF`** and **`mem[0x2080]=0xBEEF`** — the real CPU
+executed both instructions in V86 mode. (`hlt` was reflected/continued, so EIP ran on through
+zeroed memory to the `0x10000` mapping edge → fault event 2; controlled-exit via a proper BOP is
+the next refinement.)
+
+**This proves the project's core thesis**: a transparent `ntvdm.exe` replacement (IFEO) can run
+16-bit code on the real CPU via Virtual-8086 mode through `NtVdmControl`, with no Microsoft VDM
+binaries. Remaining for a usable DOS host: a clean BOP/INT-driven exit protocol, the DOS
+environment (IVT, PSP, real-mode IRET interrupt handlers), and loading the actual program image
+(`CurDir\Title`) instead of a hand-assembled stub.

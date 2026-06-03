@@ -100,6 +100,9 @@ static char *zhex(char *p, unsigned v) {
     for (i = 7; i >= 0; --i) { t[i] = "0123456789abcdef"[v & 0xf]; v >>= 4; }
     return zput(p, t);
 }
+/* TEB self-pointer (fs:[0x18]) without the CRT/winternl. */
+static void *get_teb(void) { void *t; __asm__ volatile("movl %%fs:0x18,%0" : "=r"(t)); return t; }
+
 /* Raw hex dump of n bytes at b, space-separated, for inspecting struct fields. */
 static char *zdump(char *p, const void *b, unsigned n) {
     const unsigned char *q = (const unsigned char *)b; unsigned i;
@@ -115,6 +118,9 @@ static char *zdump(char *p, const void *b, unsigned n) {
 static char g_cmd[1024], g_app[1024], g_cur[512], g_pif[512];
 static char g_env[8192], g_desk[512], g_title[512], g_rsv[512];
 static VDM_COMMAND_INFO g_ci;
+/* Our own VDM_TIB (the kernel never sets TEB->Vdm; ntvdm self-allocates one). 0x674
+   bytes per ntvdm's 0xf044374; round up for safety. 16-aligned. */
+static BYTE g_vdmtib[0x700] __attribute__((aligned(16)));
 
 /* Overwrite C:\ntvdmex\vdmhost.log with [report..p). Fixed path (no
    GetModuleFileNameA) so this works identically standalone and as a VDM host.
@@ -325,6 +331,73 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             p = zput(p, g_cur); p = zput(p, "\\"); p = zput(p, g_title);
             p = zput(p, "\r\n");
         }
+    }
+
+    /* STAGE 3: attempt REAL V86 execution. VdmStartExecution = NtVdmControl(0, NULL)
+       (recovered from ntvdm's CPU loop 0xf005350). The kernel runs the CONTEXT stored
+       at VDM_TIB+0x2D8 in V86 mode until a fault/event, then returns. Field offsets in
+       VDM_TIB (= *(PVOID*)(TEB+0xF18)), from ntvdm's getXX accessors + standard x86
+       CONTEXT: ContextFlags 0x2D8, Gs/Fs/Es/Ds 0x364/68/6C/70, Edi/Esi/Ebx/Edx/Ecx/Eax/Ebp
+       0x374..0x38C, Eip 0x390, SegCs 0x394, EFlags 0x398 (VM=0x20000), Esp 0x39C, SegSs 0x3A0.
+       Tiny V86 program at 0x200:0 (host-linear 0x2000, inside our mapped low memory):
+         B8 EF BE  mov ax,0xBEEF
+         A3 80 00  mov [0x0080],ax     ; -> 0x200:0x80 = linear 0x2080
+         F4        hlt                 ; privileged in V86 -> #GP -> back to host
+       If the real CPU executed it, EAX low word = 0xBEEF on return and 0xBEEF lands at
+       host-linear 0x2080. */
+    if (ntvdmctl) {
+        BYTE *teb = (BYTE *)get_teb();
+        BYTE *tib = *(BYTE **)(teb + 0xF18);
+        p = zput(p, "STAGE3: existing VDM_TIB=0x"); p = zhex(p, (unsigned)(ULONG_PTR)tib);
+        p = zput(p, "\r\n");
+        /* The kernel does NOT set TEB->Vdm; ntvdm allocates the VDM_TIB itself and
+           registers the pointer (0xf044517: TEB[0xF18] = &tib), then inits it
+           (0xf044374). Replicate that minimally into our own static buffer. */
+        if (!tib) {
+            tib = g_vdmtib;
+            *(DWORD *)(tib + 0x000) = 0x674;          /* VDM_TIB.Size */
+            *(DWORD *)(tib + 0x098) = 0;
+            *(DWORD *)(tib + 0x09c) = 0x3b;
+            *(DWORD *)(tib + 0x0a0) = 0x23;
+            *(DWORD *)(tib + 0x0a4) = 0x23;
+            *(DWORD *)(tib + 0x66c) = 0xffffffff;
+            tib[0x5e4] = 1; tib[0x5e5] = 1; tib[0x5e6] = 1; tib[0x670] = 0;
+            *(BYTE **)(teb + 0xF18) = tib;            /* register with our TEB */
+            p = zput(p, "STAGE3: allocated+registered VDM_TIB=0x");
+            p = zhex(p, (unsigned)(ULONG_PTR)tib); p = zput(p, "\r\n");
+        }
+        writelog(report, p);
+        if (tib) {
+            static const BYTE prog[] = { 0xB8,0xEF,0xBE, 0xA3,0x80,0x00, 0xF4 };
+            volatile BYTE *code = (volatile BYTE *)0x2000;   /* 0x200:0 */
+            unsigned i; LONG st;
+            for (i = 0; i < sizeof(prog); ++i) code[i] = prog[i];
+            *(volatile WORD *)0x2080 = 0;                    /* clear marker */
+            #define TF(off) (*(volatile DWORD *)(tib + (off)))
+            TF(0x2D8) = 0x10007;                            /* ContextFlags */
+            TF(0x364) = 0x200; TF(0x368) = 0x200; TF(0x36C) = 0x200; TF(0x370) = 0x200;
+            TF(0x374) = 0; TF(0x378) = 0; TF(0x37C) = 0; TF(0x380) = 0;
+            TF(0x384) = 0; TF(0x388) = 0; TF(0x38C) = 0;
+            TF(0x390) = 0x0000;                             /* Eip */
+            TF(0x394) = 0x0200;                             /* SegCs */
+            TF(0x398) = 0x20202;                            /* EFlags: VM | IF | reserved (ntvdm 0x202|VM) */
+            TF(0x39C) = 0x1000;                             /* Esp */
+            TF(0x3A0) = 0x0200;                             /* SegSs */
+            p = zput(p, "STAGE3: pre-exec, calling NtVdmControl(0,NULL)...\r\n");
+            writelog(report, p);
+            st = ntvdmctl(0, NULL);
+            p = zput(p, "STAGE3: returned NTSTATUS=0x"); p = zhex(p, (unsigned)st);
+            p = zput(p, "\r\n  EAX=0x");        p = zhex(p, TF(0x388));
+            p = zput(p, " EIP=0x");             p = zhex(p, TF(0x390));
+            p = zput(p, " CS=0x");              p = zhex(p, TF(0x394));
+            p = zput(p, " EFL=0x");             p = zhex(p, TF(0x398));
+            p = zput(p, "\r\n  event[0x5a8]=0x"); p = zhex(p, *(volatile DWORD *)(tib + 0x5a8));
+            p = zput(p, " ilen[0x5ac]=0x");      p = zhex(p, *(volatile DWORD *)(tib + 0x5ac));
+            p = zput(p, "\r\n  mem[0x2080]=0x");  p = zhex(p, *(volatile WORD *)0x2080);
+            p = zput(p, "\r\n");
+            #undef TF
+        }
+        writelog(report, p);
     }
 
     /* STAGE 2: full result (overwrites STAGE0/1). Log-only -- no MessageBox, so we
