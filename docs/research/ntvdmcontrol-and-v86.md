@@ -312,8 +312,20 @@ kernel32, *after* creating ntvdm, calls back into CSRSS (`BaseSrvUpdateVDMEntry`
 host PID. The **IFEO `Debugger` redirect** may break this: kernel32 thinks it launched `ntvdm.exe`
 but the process is our debugger, so the command may be bound to a phantom/none. If so, IFEO can *run*
 our code but cannot fetch the program via `GetNextVDMCommand` — we'd need the program another way.
-**Next:** TCG + gdb-stub kernel debug (HVF blocks the stub) to inspect `proc->[0x34]` and the queue
-for our process at the `BaseSrvGetNextVDMCommand` breakpoint — ground-truth whether the binding exists.
+**Next (chosen: re-establish the binding from our process, on fast HVF):** call CSRSS
+**`BaseSrvUpdateVDMEntry`** ourselves to bind the queued command to our process, then
+`GetNextVDMCommand`.
+- `[FACT]` It is **not exported** — replicate as a raw `CsrClientCallServer` (ntdll `0x7c912d71`,
+  exported). kernel32's wrapper `BaseUpdateVDMEntry` (`0x7c868a2a`) does:
+  `CsrClientCallServer(&msg, captureBuf, ApiNumber=0x10006, DataLen=0x18)`. API `0x10006` =
+  basesrv(1) api 6. The 0x18-byte API payload (at `msg+0x28`) fields: `+0x00,+0x04,+0x08,+0x0c`
+  (DWORDs), `+0x10` (out), `+0x14,+0x16` (WORDs). The wrapper takes 2 args (`[ebp+0x8]`,`[ebp+0xc]`)
+  sourced from kernel32's `CreateProcess` VDM state (VDM task id, host info).
+- `[OPEN]` The exact payload field values (esp. the VDM **task id** — likely the `-i1` we get = 1 —
+  and host PID/handle) need one more trace of a caller (`0x7c842ea7` / `0x7c868e07`) before
+  implementing. Server side: `BaseSrvUpdateVDMEntry` = dispatch idx 6 = `0x75b584fe`.
+- Fallback if this proves intractable: TCG + gdb-stub to inspect `proc->[0x34]`/the queue at the
+  `BaseSrvGetNextVDMCommand` breakpoint.
 
 Stages reached by our IFEO binary (all logged): `STAGE0` → V86 memory (`NtCreateSection`/2×map all 0)
 → `VdmInitialize` NTSTATUS 0 → `RegisterConsoleVDM` TRUE → `GetNextVDMCommand` still `0x57`.
