@@ -1,8 +1,17 @@
 # ADR-0002: Intercept via WOW registry repoint, not binary replacement
 
-- **Status:** Accepted
+- **Status:** SUPERSEDED by [ADR-0007](0007-intercept-via-ifeo-debugger.md) (2026-06-03)
 - **Date:** 2026-06-01
 - **Deciders:** Matthew
+
+> **Superseded — this approach does not work.** Empirically disproven on XP SP3 (2026-06-03):
+> the DOS-VDM host launch **validates the host image** and accepts only the genuine
+> `system32\ntvdm.exe`. Repointing `cmdline` at our binary (any path) — and even physically
+> replacing `system32\ntvdm.exe` after defeating WFP — results in our binary **never executing
+> a single instruction**; the 16-bit launch fails "not a valid Win32 application". The genuine
+> ntvdm also only hosts from its canonical `system32` path. See the constraint table in
+> `docs/research/ntvdmcontrol-and-v86.md`. Replaced by an **IFEO `Debugger` redirect** (ADR-0007),
+> which *does* run our code transparently. Original text kept below for the record.
 
 ## Context
 We must become the system's handler for 16-bit images (a true replacement, not a right-click

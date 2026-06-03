@@ -230,7 +230,29 @@ itself. Combined with "the genuine ntvdm only hosts from its canonical system32 
 host launch **validates the host image** — it accepts only the real ntvdm. **ADR-0002's transparent
 WOW-host interception is not viable.** (The genuine ntvdm.exe has since been restored on the VM.)
 
-#### ➡️ PIVOT — standalone host via NtVdmControl (the goal is still reachable)
+#### ✅ BREAKTHROUGH — IFEO Debugger redirect runs our code transparently (2026-06-03)
+`[FACT]` Setting `HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution
+Options\ntvdm.exe` → `Debugger = C:\ntvdmex\vdmhost.exe` makes XP launch **our binary in ntvdm's
+place** whenever the DOS VDM host would start. A 16-bit launch fired our binary and it ran to
+completion (`STAGE0/1/2/DONE`) **in the real host context**: live `ConsoleWindow=0x000100ba`,
+`StdIn=3 StdOut=7`, and ntvdm's actual command line:
+```
+C:\ntvdmex\vdmhost.exe "C:\WINDOWS\system32\ntvdm.exe" -f -i1
+```
+Because IFEO launches us as a *debugger* (a normal process), the host-image validation that blocks
+substitution never applies. This is the transparent, registry-only, WFP-free interception
+([[ADR-0007]]). It also disproves Spike-002's "no argv": the real DOS host is `ntvdm -f -i1`.
+
+`[FACT]` **ntvdm arg parser** (`0xf01a44a` loop): `-f` stores its arg index at `[ebp-0x4]` and is
+**required** (absent → `ExitProcess(0)` via `ds:0xf001034`). `-i<n>` parses `n` as **hex** (call
+`0xf00b8af`, base `0x10`) into an instance global. `-w[sm]` = WOW flags; `-o` clears a flag.
+`[FACT]` Pre-`GetNextVDMCommand` registration ntvdm performs (what we must replicate so `0x57`
+clears): **`NtVdmControl(VdmInitialize)`** (fn `0xf00e668`, called from `0xf01abb6`) and
+**`RegisterConsoleVDM(1,…)`** (`0xf014078`; flag = 1 DOS / 2 WOW, plus hardware-event handles +
+video-state buffers), bracketed by console-mode setup. This is a large init, not a one-liner — best
+built incrementally from the IFEO foothold.
+
+#### ➡️ PIVOT — transparent host via IFEO + NtVdmControl (the goal is reachable)
 The project goal (DOS/Win16 on real V86) does **not** require *becoming* ntvdm transparently. The
 WOW-host hijack was one architecture (ADR-0002), now disproven. The viable architecture:
 
