@@ -100,6 +100,16 @@ static char *zhex(char *p, unsigned v) {
     for (i = 7; i >= 0; --i) { t[i] = "0123456789abcdef"[v & 0xf]; v >>= 4; }
     return zput(p, t);
 }
+/* Raw hex dump of n bytes at b, space-separated, for inspecting struct fields. */
+static char *zdump(char *p, const void *b, unsigned n) {
+    const unsigned char *q = (const unsigned char *)b; unsigned i;
+    for (i = 0; i < n; ++i) {
+        *p++ = "0123456789abcdef"[q[i] >> 4];
+        *p++ = "0123456789abcdef"[q[i] & 0xf];
+        *p++ = ((i & 0xf) == 0xf) ? '\n' : ' ';
+    }
+    *p = 0; return p;
+}
 
 /* Static (zero-initialised) receive buffers -- no CRT heap. */
 static char g_cmd[1024], g_app[1024], g_cur[512], g_pif[512];
@@ -141,7 +151,17 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     g_ci.Title        = g_title; g_ci.TitleLen        = sizeof(g_title);
     g_ci.Reserved     = g_rsv;   g_ci.ReservedLen     = sizeof(g_rsv);
     g_ci.StartupInfo.cb = sizeof(STARTUPINFOA);
-    g_ci.VDMState     = VDM_GET_FIRST_COMMAND | VDM_GET_ENVIRONMENT;
+    /* VDMState for the first command fetch. Ground truth (hexdump of g_ci after the
+       call + server disasm): with the receive buffers we provide, the server fills
+       Title = the program name ("dosstub.com") and CurDirectory = the working dir
+       ("C:\ntvdmex") -- together they identify the program (CurDir\Title). It does NOT
+       populate AppName/CmdLine here (their *Len stay at our input sizes); the real
+       ntvdm fetches the full command line via a separate multi-call protocol -- its
+       env fetch uses VDMState 0x404 then 0x40c with a realloc-retry and NULL string
+       buffers (call site 0xf00acfa/0xad99), and the exec-BOP path (0xf04ed86) checks
+       CmdLen afterwards. Replicating that is the execution-phase task. 0x100 alone and
+       0x500 both yield the same Title+CurDir, so we keep the simple first-command flag. */
+    g_ci.VDMState     = VDM_GET_FIRST_COMMAND;
 
     /* Do we actually have a console? (the console-subsystem hypothesis) */
     p = zput(p, "ConsoleWindow=0x"); p = zhex(p, (unsigned)(ULONG_PTR)GetConsoleWindow());
@@ -290,6 +310,21 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         p = zput(p, " Title=0x"); p = zhex(p, g_ci.TitleLen);
         p = zput(p, " Rsv=0x");   p = zhex(p, g_ci.ReservedLen);
         p = zput(p, "\r\n");
+        /* Ground-truth: what did the server actually write, and where? Dump the
+           whole VDM_COMMAND_INFO (0xA0) + the head of each receive buffer. */
+        p = zput(p, "g_ci raw (off 0x00):\r\n"); p = zdump(p, &g_ci, 0xA0);
+        p = zput(p, "\r\ng_app:\r\n");   p = zdump(p, g_app, 80);
+        p = zput(p, "\r\ng_cmd:\r\n");   p = zdump(p, g_cmd, 48);
+        p = zput(p, "\r\ng_cur:\r\n");   p = zdump(p, g_cur, 32);
+        p = zput(p, "\r\ng_pif:\r\n");   p = zdump(p, g_pif, 48);
+        p = zput(p, "\r\ng_title:\r\n"); p = zdump(p, g_title, 48);
+        p = zput(p, "\r\n");
+        /* The decoded program: CurDirectory + "\" + Title. */
+        if (g_cur[0] && g_title[0]) {
+            p = zput(p, "==> RESOLVED PROGRAM: ");
+            p = zput(p, g_cur); p = zput(p, "\\"); p = zput(p, g_title);
+            p = zput(p, "\r\n");
+        }
     }
 
     /* STAGE 2: full result (overwrites STAGE0/1). Log-only -- no MessageBox, so we

@@ -455,3 +455,29 @@ The fetch fills `CurDir`/`Title`/`PifLen` but leaves `CmdLine`/`AppName`/`Env` l
 sizes with non-ASCII buffer content — decode why (VDM_COMMAND_INFO field/handle layout, or whether the
 program path arrives on a follow-up call) to recover the image path. Then: load the image into the
 mapped low memory → populate `VDM_TIB.VdmContext` (CS:IP/regs) → `NtVdmControl(VdmStartExecution)`.
+
+## 2026-06-03 (cont.) — decoding the fetched command: the program path
+
+Hex-dumping the whole `VDM_COMMAND_INFO` after a successful `GetNextVDMCommand` (vdmhost
+`zdump`) gives the ground-truth field map and the program identity:
+
+- Our `VDM_COMMAND_INFO` offsets are confirmed correct: string pointers at `0x1c` CmdLine,
+  `0x20` AppName, `0x24` PifFile, `0x28` CurDirectory, `0x2c` Env; `0x30` EnvLen; `0x34`
+  STARTUPINFOA; `0x78/0x7c` Desktop/len; `0x80/0x84` Title/len; `0x90..0x9a` the USHORT
+  CmdLen/AppLen/PifLen/CurDirectoryLen/VDMState/CurrentDrive.
+- For the first command the server fills, into the buffers we pass:
+  **`Title` = the program name (`"dosstub.com"`, TitleLen `0xc`)** and
+  **`CurDirectory` = the working dir (`"C:\ntvdmex"`)**. Together: **`CurDir\Title` =
+  `C:\ntvdmex\dosstub.com`** (vdmhost now logs `==> RESOLVED PROGRAM: ...`).
+- `AppName`/`CmdLine` are **not** populated on this call (`AppLen`/`CmdLen` stay at our input
+  sizes; the buffers hold kernel32 CSR capture-buffer scaffolding — heap ptrs + a wide copy of
+  the CWD). Toggling `VDM_GET_ENVIRONMENT` (`0x500` vs `0x100`) made no difference.
+
+Why: the real `ntvdm` doesn't fetch the command with simple string buffers at all. Its struct is
+a zeroed stack local; it sets only the **Env pointer + EnvLen** and **VDMState = `0x404`** (first)
+→ **`0x40c`** (retry), then runs a **realloc-retry** loop (call site `0xf00acfa`/`0xad99`) — a
+size-probe + grow + refetch for the environment block. The actual command line is consumed in the
+**exec-BOP path** (`0xf04ed86`, which reads V86 regs via `getAL/getBX/getCX` and checks `CmdLen`
+after the call). So the full AppName/CmdLine/args arrive through that multi-call/env-block protocol,
+which is the execution-phase work to replicate. For identifying the initial program, `CurDir\Title`
+is sufficient.
