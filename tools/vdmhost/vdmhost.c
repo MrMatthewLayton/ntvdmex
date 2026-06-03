@@ -39,6 +39,37 @@ typedef struct {
 
 typedef BOOL (WINAPI *PFN_GetNextVDMCommand)(VDM_COMMAND_INFO *);
 
+/* --- NtVdmControl(VdmInitialize) contract, recovered from ntvdm 0xf00e668 -------
+ * NtVdmControl(3, &VDM_INITIALIZE_DATA). The kernel registers this process as a
+ * VDM (sets TEB.Vdm, trap/ICA handlers) -- the step kernel32!GetNextVDMCommand
+ * needs done before it will return a command (else 0x57). ntvdm passes its real
+ * trap handler + 9 ICA-state pointers; we pass a trap-handler stub + our own
+ * static ICA buffers (the kernel stores/probes these; the stub is only *called*
+ * later on a V86 fault, which we don't trigger here). */
+#define VDM_SVC_VdmInitialize  3
+
+typedef struct {            /* VDMICAUSERDATA -- 9 pointers (XP ntvdm fills 9) */
+    PVOID pIcaLock, pIcaMaster, pIcaSlave, pDelayIrq, pUndelayIrq,
+          pDelayIret, pIretHooked, pAddrIretBopTable, p9;
+} VDMICAUSERDATA;
+
+typedef struct {            /* VDM_INITIALIZE_DATA */
+    PVOID TrapcHandler;
+    VDMICAUSERDATA *IcaUserData;
+} VDM_INITIALIZE_DATA;
+
+typedef LONG (WINAPI *PFN_NtVdmControl)(ULONG Service, PVOID ServiceData);
+
+/* Static ICA-state backing store (zero-init). Generous sizes so the kernel's
+   probes/stores land in valid writable memory. */
+static BYTE g_ica_lock[256], g_ica_master[256], g_ica_slave[256], g_ica_bop[1024];
+static DWORD g_delayirq, g_undelayirq, g_delayiret, g_irethooked, g_p9;
+static VDMICAUSERDATA g_ica;
+static VDM_INITIALIZE_DATA g_initdata;
+
+/* Trap handler stub -- stored by the kernel, only invoked on a V86 fault. */
+static void __stdcall TrapcStub(void) { }
+
 static char *zput(char *p, const char *s) { while (*s) *p++ = *s++; *p = 0; return p; }
 static char *zhex(char *p, unsigned v) {
     int i; char t[9]; t[8] = 0;
@@ -69,6 +100,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     char  report[10240];
     char *p = report;
     PFN_GetNextVDMCommand pfn;
+    PFN_NtVdmControl      ntvdmctl;
 
     (void)hInst; (void)hPrev; (void)lpCmd; (void)nShow;
 
@@ -92,9 +124,29 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     p = zput(p, "  StdIn=0x");  p = zhex(p, (unsigned)(ULONG_PTR)GetStdHandle(STD_INPUT_HANDLE));
     p = zput(p, "  StdOut=0x"); p = zhex(p, (unsigned)(ULONG_PTR)GetStdHandle(STD_OUTPUT_HANDLE));
     p = zput(p, "  CmdLine=["); p = zput(p, GetCommandLineA()); p = zput(p, "]\r\n");
-    /* STAGE 1: about to call GetNextVDMCommand. If the log stops here, the call
-       crashed/hung in true VDM-host context. */
-    p = zput(p, "STAGE1: about to call GetNextVDMCommand\r\n");
+
+    /* STAGE 1a: NtVdmControl(VdmInitialize) -- register as a VDM with the kernel so
+       kernel32!GetNextVDMCommand stops returning 0x57. Build VDM_INITIALIZE_DATA
+       with our own ICA buffers + trap stub. Log the NTSTATUS. (If this faults/hangs,
+       the log stops here -> that call is the problem.) */
+    g_ica.pIcaLock = g_ica_lock; g_ica.pIcaMaster = g_ica_master;
+    g_ica.pIcaSlave = g_ica_slave; g_ica.pDelayIrq = &g_delayirq;
+    g_ica.pUndelayIrq = &g_undelayirq; g_ica.pDelayIret = &g_delayiret;
+    g_ica.pIretHooked = &g_irethooked; g_ica.pAddrIretBopTable = g_ica_bop;
+    g_ica.p9 = &g_p9;
+    g_initdata.TrapcHandler = (PVOID)&TrapcStub;
+    g_initdata.IcaUserData  = &g_ica;
+    p = zput(p, "STAGE1: NtVdmControl(VdmInitialize)... ");
+    writelog(report, p);
+    ntvdmctl = (PFN_NtVdmControl)GetProcAddress(
+                   GetModuleHandleA("ntdll.dll"), "NtVdmControl");
+    if (!ntvdmctl) {
+        p = zput(p, "NtVdmControl NOT exported.\r\n");
+    } else {
+        LONG st = ntvdmctl(VDM_SVC_VdmInitialize, &g_initdata);
+        p = zput(p, "NTSTATUS=0x"); p = zhex(p, (unsigned)st);
+        p = zput(p, (st >= 0) ? " (OK)\r\n" : " (FAIL)\r\n");
+    }
     writelog(report, p);
 
     pfn = (PFN_GetNextVDMCommand)GetProcAddress(

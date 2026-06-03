@@ -252,6 +252,26 @@ clears): **`NtVdmControl(VdmInitialize)`** (fn `0xf00e668`, called from `0xf01ab
 video-state buffers), bracketed by console-mode setup. This is a large init, not a one-liner — best
 built incrementally from the IFEO foothold.
 
+#### VdmInitialize first attempt + the V86 memory prerequisite (2026-06-03)
+`[FACT]` Implemented `NtVdmControl(VdmInitialize)` in the IFEO-launched binary with the exact
+recovered struct (`VDM_INITIALIZE_DATA{TrapcHandler, IcaUserData}`, `IcaUserData` = 9 ptrs to our
+own ICA buffers; trap stub). Result via IFEO: **`NTSTATUS=0xC0000005` (STATUS_ACCESS_VIOLATION)** —
+`NtVdmControl` returns the status (doesn't crash us; we continued to STAGE2). Not a permission error
+(`0xC0000022`) — a *memory* fault: the kernel sets up V86 mode against the **low address space**,
+which we haven't laid down.
+
+`[FACT]` **The pre-`VdmInitialize` V86 memory setup is `ntvdm` fn `0xf00ea75`** (called immediately
+before the `VdmInitialize` call at `0xf01abb6`). It builds the V86 RAM:
+1. **`NtCreateSection`** (`ds:0xf0014c8`) — section for V86 memory (size arg `0x04000000`, etc.).
+2. **`NtFreeVirtualMemory`** (`ds:0xf0014d0`, `MEM_RELEASE 0x8000`) — release the default low
+   reservations: base `→0` size `0x9FFFF` (640 KB conventional), then base `0x100000` size
+   `0x10000` (HMA).
+3. **`NtMapViewOfSection`** (`ds:0xf0014c0`, prot `0x40` = X-RW) — map the section into the freed low
+   addresses, base `[ebp-0x10]=0xB0000`. This *is* the V86 address space.
+
+So the order is: **lay down V86 low memory (section + free + map) → `VdmInitialize` → … →
+`VdmStartExecution`**. The `0xC0000005` is expected until step 1–3 are done.
+
 #### ➡️ PIVOT — transparent host via IFEO + NtVdmControl (the goal is reachable)
 The project goal (DOS/Win16 on real V86) does **not** require *becoming* ntvdm transparently. The
 WOW-host hijack was one architecture (ADR-0002), now disproven. The viable architecture:
