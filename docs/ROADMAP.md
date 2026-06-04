@@ -1,43 +1,95 @@
 # Roadmap
 
-Milestones are ordered by **risk and dependency**, not by feature glamour. Each milestone
-should end in something runnable/observable. Win16 is intentionally late: it is built on the
-same V86 + DOS foundation as everything before it.
+Milestones are ordered by **risk and dependency**, not by feature glamour. Each milestone ends in
+something runnable/observable. Win16 is intentionally late: it is built on the same V86 + DOS
+foundation as everything before it.
 
-> Status legend: ⬜ not started · 🟡 in progress · ✅ done · ⛔ blocked
+## How each step is tracked
 
-## M0 — Feasibility 🟡
+Every milestone/step moves through five stages:
+
+> **Research → Spike → Impl → Test → Done**
+
+- **Research** — recover the contract: disassemble XP `ntvdm` / `basesrv` / `ntoskrnl`, read
+  ReactOS for logic & structures; findings land in [`research/`](research/).
+- **Spike** — a minimal, throwaway proof in the experiment harness ([`tools/vdmhost/`](../tools/vdmhost/)):
+  does it work *at all*? Driven and logged from the XP VM.
+- **Impl** — the real, clean implementation promoted into the host (`src/`).
+- **Test** — verified on the XP SP3 VM (the canonical bench, `scripts/xp-vm.sh`).
+- **Done** — exit criterion met, committed, this file + [`STATE.md`](STATE.md) updated.
+
+**Research and Spike are risk-scaled.** For undocumented territory (most V86/VDM work) they are
+essential. For documented, low-risk work (e.g. parsing an MZ header) they compress toward
+Research → Impl → Test — *don't spike what's already known.*
+
+> Stage status: ⬜ not started · 🟡 in progress · ✅ done · `–` not applicable
+
+**Honest caveat:** nearly everything proven so far lives in the **vdmhost spike**. The clean-host
+**Impl** (`src/`, today just the Luna shell preview) is largely unstarted — hence the rows below
+with ✅ Spike / ⬜ Impl. Promoting the proven DOS core from `vdmhost` into `src/` is itself a major
+piece of M2.
+
+---
+
+## M0 — Feasibility ✅ DONE
 Prove the premise before writing real code.
-- [ ] **Spike-001:** V86 keystone via `NtVdmControl` (the make-or-break test) — see spikes/
-- [x] Confirm WOW registry repoint launches our binary as the VDM support process —
-  **done** ([Spike-002](spikes/spike-002-wow-repoint.md)): repointing `cmdline` launches our
-  binary as the DOS VDM host (takes effect after reboot — boot-cached). Learned the target
-  program is delivered via the CSRSS/VDM channel, not argv.
-- [x] Confirm we can build XP-targeted **usermode** binaries (toolchain decision) — mingw-w64
-  i686 cross + no-CRT link, see [ADR-0006](decisions/0006-build-toolchain-mingw-no-crt.md) /
-  [research/build-toolchain.md](research/build-toolchain.md). (Kernel-driver toolchain deferred
-  to the ADR-0004 fallback path.)
-- [x] **Shell preview:** standalone Luna-themed window with a DOS-style, non-functional
-  command-line (the project's first runnable artifact; `src/`). Visual confirmation pending on
-  an XP VM.
-- **Exit criteria:** one real-mode instruction executed in V86 under our host, fault reflected to us.
+**Exit:** one real-mode instruction executed in V86 under our host, fault reflected to us. ✅
 
-## M1 — Minimal V86 host ⬜
-- [ ] Process bootstrap: reserve low 1MB+ at vaddr 0, set up VDM_TIB
-- [ ] Enter V86, run a hand-written real-mode COM stub
-- [ ] I/O-port trap + interrupt reflection plumbing (no devices yet — just route to stubs)
-- **Exit:** a real-mode program that does INT 21h AH=09h prints a string to our console.
+| Step | Res | Spike | Impl | Test | Done |
+|------|:--:|:--:|:--:|:--:|:--:|
+| Interception — our binary runs as the VDM host | ✅ | ✅ | ✅ | ✅ | ✅ |
+| V86 keystone — `NtVdmControl` runs one real-mode instr, fault reflects to us | ✅ | ✅ | – | ✅ | ✅ |
+| XP-targeted no-CRT build toolchain | ✅ | ✅ | ✅ | ✅ | ✅ |
 
-## M2 — DOS kernel ⬜
-- [ ] INT 21h dispatcher, PSP, FCB/handle file I/O mapped to host (Win32) calls
-- [ ] DOS memory management (MCBs, allocate/free/resize)
-- [ ] COMMAND.COM-equivalent shell + .COM/.EXE (MZ) loader
-- **Exit:** run a real-world DOS .EXE that does file + console I/O.
+- Interception **pivoted** from the WOW `cmdline` repoint to the **IFEO `Debugger`** on `ntvdm.exe`
+  ([ADR-0007](decisions/0007-intercept-via-ifeo-debugger.md)) — the repoint was disproven (XP
+  validates the host image), see [ADR-0002 superseded](decisions/0002-intercept-via-wow-registry.md).
+- V86 keystone proven: `NtVdmControl(VdmStartExecution)` ran `mov ax,0xBEEF; mov [0x80],ax` on the
+  real CPU; GP/BOP faults reflect back to us. **[ADR-0004](decisions/0004-reuse-kernel-vdm-ntvdmcontrol.md)
+  is now Accepted.** Full contract: [research/ntvdmcontrol-and-v86.md](research/ntvdmcontrol-and-v86.md).
+
+## M1 — Minimal V86 host ✅ DONE (proven as spike)
+**Exit:** a real-mode program that does INT 21h AH=09h prints a string to our console.
+✅ — "Hello, World" from a real `.COM` loaded off disk.
+
+| Step | Res | Spike | Impl | Test | Done |
+|------|:--:|:--:|:--:|:--:|:--:|
+| Low-memory map + self-allocated VDM_TIB + `VdmInitialize` | ✅ | ✅ | ⬜ | ✅ | ✅ |
+| Fetch the program from CSRSS (`GetNextVDMCommand`) | ✅ | ✅ | ⬜ | ✅ | ✅ |
+| Enter V86, run a hand-written real-mode stub | ✅ | ✅ | ⬜ | ✅ | ✅ |
+| Interrupt reflection (real-mode IVT) + BOP host-callback loop | ✅ | ✅ | ⬜ | ✅ | ✅ |
+| INT 21h AH=09h prints to our console | ✅ | ✅ | ⬜ | ✅ | ✅ |
+
+I/O-port (`IN`/`OUT`) trapping is **not** done yet (deferred to M3 device work); interrupt
+reflection — the harder half — is. **Impl ⬜:** all of M1 still lives in the `vdmhost` spike.
+
+## M2 — DOS kernel 🟡 IN PROGRESS
+**Exit:** run a real-world DOS `.EXE` that does file + console I/O, transparently.
+
+| Step | Res | Spike | Impl | Test | Done |
+|------|:--:|:--:|:--:|:--:|:--:|
+| **M2.1** Real DOS process setup (≥640KB map, PSP, IVT seed, `.COM` at `PSP:0x100`) | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ |
+| **M2.2** INT 21h service surface (console + Win32-backed file I/O + misc) | 🟡 | 🟡 | ⬜ | 🟡 | ⬜ |
+| **M2.3** MZ (`.EXE`) loader (header, relocations, segment setup) | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ |
+| **M2.4** DOS memory management (MCB chain, AH=48/49/4A) | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ |
+| **M2.5** Process plumbing (PSP command tail, env block, errorlevel) | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ |
+| **M2.6** Promote the DOS core from `vdmhost` spike → clean `src/` host | ⬜ | – | ⬜ | ⬜ | ⬜ |
+
+Per-step exit criteria:
+- **M2.1** — a `.COM` launches with a valid PSP and full conventional memory; a program that reads
+  its PSP command tail sees the right bytes.
+- **M2.2** — a program that opens/reads/writes a file (handles 3C/3D/3E/3F/40/42) and prints works;
+  we have 3 of ~40 functions today (AH=09/02/4Ch + `.COM`/`.EXE` name resolution).
+- **M2.3** — a real MZ `.EXE` (not just flat `.COM`) loads and runs.
+- **M2.4** — a program that allocates/frees DOS memory runs.
+- **M2.5** — exit codes propagate to the launching shell; args + environment are visible to the guest.
+- **M2.6** — the clean host (not the spike) runs Hello World, gated by an import-allowlist check.
 
 ## M3 — Device model + video/input ⬜
 - [ ] Pluggable **VDD** interface (the third-party hook point, requirement #13)
 - [ ] Video: trap text/VGA memory + INT 10h, render into a **Luna-themed window**
 - [ ] Keyboard + mouse (INT 16h / INT 33h) from host events
+- [ ] I/O-port (`IN`/`OUT`) trapping carried over from M1
 - **Exit:** a DOS app with text-mode UI runs in a themed window.
 
 ## M4 — Memory extensions ⬜

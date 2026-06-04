@@ -4,10 +4,12 @@
 `ntvdm.exe` on **Windows XP SP3 (32-bit)** that runs legacy 16-bit DOS and Win16 software on
 the **real CPU**, not a software emulator.
 
-> **Status:** 🟡 Feasibility (M0). Architecture decided on paper; the build system is up and the
-> first runnable artifact — a Luna-themed shell preview — builds clean (see [Building](#building)).
-> The one make-or-break assumption (V86 via `NtVdmControl`) is not yet proven in practice. See
-> [`docs/STATE.md`](docs/STATE.md) for live status.
+> **Status:** 🟢 V86 proven — into **M2 (DOS kernel)**. The make-or-break assumption holds: a real
+> DOS `.COM`, loaded off disk, runs on the real CPU in **Virtual-8086 mode** via `NtVdmControl` and
+> prints "Hello, World" through our own INT 21h handler — launched transparently when XP starts a
+> 16-bit program. **M0** (feasibility) and **M1** (minimal V86 host) are done; the work so far lives
+> in the `tools/vdmhost` spike. See [`docs/STATE.md`](docs/STATE.md) and [`docs/ROADMAP.md`](docs/ROADMAP.md)
+> for live status.
 
 ## What it is
 
@@ -36,7 +38,7 @@ third parties can supply their own backends.
 
 | Concern | Approach |
 |---------|----------|
-| Becoming the system NTVDM | **Repoint the WOW registry keys** (`…\Control\WOW\cmdline` / `wowcmdline`) at our binary — no signed-file replacement, so Windows File Protection is never triggered. |
+| Becoming the system NTVDM | **IFEO `Debugger` redirect** on `ntvdm.exe` (`…\Image File Execution Options\ntvdm.exe\Debugger` → our binary) — registry-only, no signed-file replacement, so Windows File Protection is never triggered. (The original WOW `cmdline` repoint was disproven — XP validates the host image; see [ADR-0007](docs/decisions/0007-intercept-via-ifeo-debugger.md).) |
 | Executing 16-bit code | Enter **V86 mode** by reusing XP's kernel VDM machinery via the undocumented `NtVdmControl` syscall (custom kernel driver held as a fallback). |
 | DOS environment | Re-implemented DOS kernel: INT 21h, PSP/FCB, memory (MCBs), loaders, DPMI/XMS/EMS. |
 | Win16 | A WOW layer (`krnl386`/`user`/`gdi` hosting + 16↔32 thunking) built on the same foundation. |

@@ -2,85 +2,86 @@
 
 > **This is the canonical resume point.** Update it at the end of every working session.
 
-- **Last updated:** 2026-06-02
-- **Phase:** M0 — Feasibility
-- **Overall status:** 🟢 Two of the three M0 risks down: the shell preview **runs on XP SP3**,
-  and **interception is proven** (Spike-002 — repointing the WOW `cmdline` launches our binary as
-  the DOS VDM host). Remaining keystone: the V86 path via `NtVdmControl` (Spike-001).
+- **Last updated:** 2026-06-04
+- **Phase:** M2 — DOS kernel (M0 + M1 done)
+- **Overall status:** 🟢 **The keystone is proven.** A real DOS `.COM`, loaded off disk, runs on the
+  real CPU in **Virtual-8086 mode** via `NtVdmControl` and prints "Hello, World" through our own INT
+  21h handler — launched transparently when XP starts a 16-bit program (IFEO redirect). The whole
+  pipeline runs end-to-end from a from-scratch host, with **no Microsoft VDM binaries**.
 
 ## One-paragraph summary
 
-We are building a drop-in replacement for Windows XP SP3 (32-bit) `ntvdm.exe` that runs
-16-bit DOS and Win16 code on the **real CPU in V86 mode** by driving XP's existing kernel
-VDM machinery through the undocumented `NtVdmControl` syscall. Interception is done by
-**repointing the WOW registry keys** at our binary, so no signed system file is replaced.
-Devices (video, sound, input, net) are virtualized and serviced by host calls through a
-pluggable VDD model; video is blitted into a Luna-themed window.
+We are building a drop-in replacement for Windows XP SP3 (32-bit) `ntvdm.exe` that runs 16-bit DOS
+and Win16 code on the **real CPU in V86 mode** by driving XP's existing kernel VDM machinery through
+the undocumented `NtVdmControl` syscall. Interception is the **IFEO `Debugger` redirect** on
+`ntvdm.exe` (registry-only, no signed system file replaced). Devices (video, sound, input, net) are
+virtualized and serviced by host calls through a pluggable VDD model; video is blitted into a
+Luna-themed window. Work is tracked per step through **Research → Spike → Impl → Test → Done** (see
+[ROADMAP.md](ROADMAP.md)).
+
+## Proven pipeline (the M0+M1 result)
+
+From `tools/vdmhost/vdmhost.c` (the spike), in one process:
+
+1. **Intercept** — IFEO `Debugger` on `ntvdm.exe` → our binary runs in ntvdm's place (ADR-0007).
+2. **CSRSS handshake** — `RegisterConsoleVDM` + `GetNextVDMCommand` → resolves the program to run
+   (`CurDir\Title`). (The `0x57` that blocked this for ages was a console-key harness artifact, not
+   a real binding problem — the lookup is keyed on the console handle.)
+3. **Kernel V86 monitor** — V86 low-memory map + `NtVdmControl(VdmInitialize)` + a **self-allocated
+   VDM_TIB** registered at `TEB+0xF18` (the kernel does *not* allocate it — ntvdm does).
+4. **Execute** — `NtVdmControl(VdmStartExecution)` runs the guest on the CPU; CONTEXT lives at
+   `VDM_TIB+0x2D8`.
+5. **DOS services** — `INT 21h` reflects through the real-mode **IVT** to a **BOP** (`C4 C4 nn`)
+   handler that returns to the host (event 4); host services `AH=09/02/4Ch`, advances EIP past the
+   BOP, and re-enters so the handler's `IRET` resumes the guest. Multiple syscalls per run.
+
+Full contract, addresses and event taxonomy: [research/ntvdmcontrol-and-v86.md](research/ntvdmcontrol-and-v86.md).
 
 ## What is decided (see [decisions/](decisions/))
 
 - **ADR-0001** — No CPU emulation; execute real-mode code in V86. *Accepted.*
-- **ADR-0002** — Intercept via WOW registry repoint, not binary replacement (avoids WFP). *Accepted.*
+- **ADR-0002** — Intercept via WOW registry repoint. **Superseded by ADR-0007** (repoint disproven).
 - **ADR-0003** — Scope = DOS **+** Win16/WOW; Win16 deferred to M5 behind a clean seam. *Accepted.*
-- **ADR-0004** — Reuse kernel VDM via `NtVdmControl` rather than a custom V86 driver. *Proposed — contingent on Spike-001.*
+- **ADR-0004** — Reuse kernel VDM via `NtVdmControl` rather than a custom V86 driver.
+  **Accepted** (the V86 keystone is proven; no custom driver needed).
 - **ADR-0005** — Target XP in a VM **and** bare metal; VM-first for the dev loop. *Accepted.*
 - **ADR-0006** — Build with mingw-w64 (i686) cross-compiler, no C runtime. *Accepted.*
+- **ADR-0007** — Intercept via the IFEO `Debugger` redirect on `ntvdm.exe`. *Accepted.*
 
 ## What is built
 
-- **Build system:** CMake + mingw-w64 cross toolchain (`cmake/toolchain-xp32-mingw.cmake`).
-  `./scripts/build.sh` → `build/ntvdmex.exe`. Produces a ~20 KB standalone PE32 that imports
-  only stock-XP DLLs (kernel32/user32/gdi32/comctl32), PE version stamped 5.01.
-- **Shell preview (`src/`):** a fixed 80×25 DOS-style text console (light-gray on black, OEM
-  raster font, blinking cursor) in a Luna-themed window. **Non-interactive on purpose** — it
-  shows a prompt but processes no input. This is the shell the V86/DOS core will later feed.
-  - `src/main.c` — window, message loop, blink timer.
-  - `src/console.c/.h` — the text-grid model + GDI rendering (future sink for INT 10h / B800
-    text writes).
-  - `src/runtime.c` — freestanding entry point + `mem*` (no CRT; see ADR-0006).
-  - ✅ **Confirmed running on XP SP3** (after fixing an SxS manifest trap — XP rejects a prolog
-    XML comment; the manifest is now minimal/comment-free).
-- **Spike-002 harness (`tools/wowprobe/`):** `wowprobe.exe` (logs how XP invokes the VDM host)
-  + `dosstub.com` (4-byte 16-bit trigger). Built and XP-clean; **awaiting the VM run**.
+- **`tools/vdmhost/` — the spike that proves M0+M1 (and part of M2).** The full pipeline above:
+  IFEO host → CSRSS handshake → V86 → INT 21h/BOP service loop → "Hello, World". Resolves a program
+  name to `.COM`/`.EXE`. This is throwaway-grade experiment code, *not* the clean host.
+- **Shell preview (`src/`):** a fixed 80×25 DOS-style Luna-themed console (GDI text grid), the future
+  sink for INT 10h / B800 text writes. Confirmed running on XP SP3. **Still non-interactive** — the
+  DOS core has not yet been promoted into it (that's M2.6).
+- **Build system:** CMake + mingw-w64 i686 cross, no-CRT (`cmake/toolchain-xp32-mingw.cmake`).
+- **Dev bench:** QEMU XP SP3 VM (HVF = real V86) via `scripts/xp-vm.sh`; QMP socket for
+  `screendump`/`send-key`; telnet (`scripts/xp.py`) drives the guest; TFTP pushes binaries
+  (host→guest). Reverse-engineering inputs (extracted MS binaries) in gitignored `reverse/`.
 
-## What is open / unresolved
+## What is open / next
 
-- ✅ **Interception — proven** (Spike-002): repointing `Control\WOW\cmdline` launches our binary
-  as the DOS VDM host (after reboot — boot-cached). Learned the target program is **not** on the
-  command line; it comes via the CSRSS/VDM channel + `NtVdmControl` — which is the next thing to
-  recover (Spike-001).
+**Phase M2 (DOS kernel).** Trackable sub-steps with exit criteria are in [ROADMAP.md](ROADMAP.md):
+M2.1 process setup (PSP + ≥640KB map), M2.2 INT 21h surface (file I/O via Win32 + console),
+M2.3 MZ `.EXE` loader, M2.4 DOS memory management, M2.5 process plumbing, M2.6 promote spike → `src/`.
 
-- **THE keystone question:** Can a *non-Microsoft* binary fully drive *real XP SP3*
-  `ntoskrnl`'s VDM via `NtVdmControl`, conforming to the undocumented VDM_TIB / address-space
-  layout it expects? No open-source project proves this (ReactOS uses CPU emulation, not V86).
-  → tracked as **[Spike-001](spikes/spike-001-v86-keystone.md)**.
-- Reference posture: lean on ReactOS for DOS/VDD/WOW *logic & structures*; use disassembly
-  of the shipping XP `ntvdm.exe`/`ntoskrnl` for the V86/`NtVdmControl` contract; use Linux
-  `dosemu` as the conceptual analog. (See [research/reference-projects.md](research/reference-projects.md).)
+The big structural reality the stage model exposes: **almost everything is at ✅ Spike / ⬜ Impl.**
+We've *proven* the DOS core in `vdmhost`; the clean `src/` implementation is essentially unwritten.
 
 ## Single next action
 
-**Spike-002 is done (interception proven).** The next keystone is **Spike-001 — the V86 path via
-`NtVdmControl`**. Spike-002 sharpened its target: the VDM support process is launched with *no*
-useful argv, so a real host must (a) get the program-to-run + VDM state from the CSRSS/VDM LPC
-channel and (b) drive V86 via `NtVdmControl`. First sub-steps: capture the default `cmdline`
-format (from `wow-backup.reg`), and recover how `ntvdm` queries CSRSS for its DOS program
-(disassemble `kernel32!BaseCheckVDM` + `basesrv.dll` VDM path) alongside the `NtVdmControl`/
-`VDM_TIB` contract. Dev-loop aids to stand up first: a host↔guest file bridge (so results come
-back automatically) and the import-allowlist build check.
-
-**Then the keystone — Run Spike-001** (V86): a ~200-line usermode host that registers via the WOW
-repoint, reserves the low address space, calls `NtVdmControl(VdmInitialize)` →
-`VdmStartExecution`, and executes one trivial real-mode program under real V86 with the
-GP-fault reflection landing in our handler. If it works → promote ADR-0004 to Accepted and
-proceed to M1. If it fails → pivot to the custom-driver path (new ADR).
+**M2.1 — Real DOS process setup.** Research: how ntvdm lays out the PSP and conventional memory
+(disassemble its loader + the PSP it builds; cross-ref ReactOS DOS structs). Spike (in `vdmhost`):
+map the full ≥640KB at linear 0, build a PSP at the load segment, load the `.COM` at `PSP:0x100`
+with correct CS=DS=ES=SS / SP conventions, and seed the IVT. **Exit:** a `.COM` that reads its PSP
+command tail sees the right bytes, still printing via INT 21h.
 
 ## Environment notes
 
-- Git repo initialised; remote is the private GitHub repo (no Wiki — `docs/` is canonical).
-- Build host: macOS with Homebrew `mingw-w64` (i686, UCRT-default → we link no-CRT) + CMake.
-- Dev target: XP SP3 32-bit guest in a VM first; validate on bare metal before M1 exit.
-- **XP test bench:** local QEMU VM, HVF-accelerated (real V86), launched via `scripts/xp-vm.sh`
-  (period-correct hardware; see `research/xp-test-vm.md`). ISO + `vm/` disk are gitignored.
-- **No Wine on the build host**, so Windows GUI output can't be rendered on macOS — visual
-  checks happen on the XP VM.
+- Git repo on `main`; remote is the private GitHub repo (no Wiki — `docs/` is canonical).
+- Build host: macOS with Homebrew `mingw-w64` (i686, UCRT-default → we link no-CRT) + CMake + r2.
+- **Never commit:** the XP ISO, `vm/`, `*.qcow2`, or `reverse/` (extracted MS binaries) — gitignored.
+- The Bash tool is sometimes sandboxed (process/socket checks can read false-negative); use
+  `dangerouslyDisableSandbox` for QEMU/QMP/`lsof` operations.
