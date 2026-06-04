@@ -402,9 +402,12 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             HANDLE hcon = CreateFileA("CONOUT$", GENERIC_WRITE, FILE_SHARE_WRITE, NULL,
                                       OPEN_EXISTING, 0, NULL);
             char dosout[1024]; char *op = dosout;                  /* captured DOS output */
+            static BYTE filebuf[0x20000];          /* host copy of the program image */
             unsigned i; LONG st; DWORD ev, ah, nread = 0; int guard;
+            WORD ecs = PSP_SEG, eip = 0x100, ess = PSP_SEG, esp = 0xFFFE; /* entry CS:IP/SS:SP */
+            int is_exe = 0;
             (void)st;
-            /* Load the program from disk (resolved CurDir\Title; .COM/.EXE) at PSP:0x100. */
+            /* Read the program from disk (resolved CurDir\Title; .COM/.EXE) into a host buffer. */
             if (g_cur[0] && g_title[0]) {
                 char path[768]; char *pe; HANDLE hf; const char *t; int has_dot = 0;
                 char *pp = path;
@@ -424,19 +427,50 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                     }
                 }
                 if (hf != INVALID_HANDLE_VALUE) {
-                    static BYTE filebuf[0xFE00];
-                    if (ReadFile(hf, filebuf, sizeof(filebuf), &nread, NULL) && nread) {
-                        DWORD n = nread > 0xFE00 ? 0xFE00 : nread;   /* fits below SP */
-                        for (i = 0; i < n; ++i) code[i] = filebuf[i];
-                    }
+                    ReadFile(hf, filebuf, sizeof(filebuf), &nread, NULL);
                     CloseHandle(hf);
                 }
                 p = zput(p, "STAGE3: loaded "); p = zhex(p, nread);
                 p = zput(p, " bytes from "); p = zput(p, path); p = zput(p, "\r\n");
             }
             if (!nread) {                          /* fallback to embedded opcodes */
-                for (i = 0; i < sizeof(prog); ++i) code[i] = prog[i];
+                for (i = 0; i < sizeof(prog); ++i) filebuf[i] = prog[i];
+                nread = sizeof(prog);
                 p = zput(p, "STAGE3: using embedded program bytes\r\n");
+            }
+
+            /* Place the image: MZ .EXE (header + relocations + CS:IP/SS:SP) or flat .COM. */
+            if (nread >= 0x1C && filebuf[0] == 'M' && filebuf[1] == 'Z') {
+                const WORD *h = (const WORD *)filebuf;
+                DWORD hdrsize  = (DWORD)h[4] * 16;            /* e_cparhdr paragraphs   */
+                DWORD e_crlc   = h[3];                        /* relocation count       */
+                DWORD e_lfarlc = h[12];                       /* reloc table offset     */
+                DWORD load_seg = PSP_SEG + 0x10;             /* image loads after PSP  */
+                volatile BYTE *img = (volatile BYTE *)((DWORD)load_seg << 4); /* 0x1100 */
+                DWORD totalused = h[2] ? ((DWORD)(h[2]-1)*512 + (h[1] ? h[1] : 512)) : nread;
+                DWORD imgsize;
+                if (totalused > nread) totalused = nread;
+                imgsize = totalused > hdrsize ? totalused - hdrsize : 0;
+                for (i = 0; i < imgsize; ++i) img[i] = filebuf[hdrsize + i];
+                for (i = 0; i < e_crlc; ++i) {               /* apply relocations      */
+                    DWORD ro = *(const WORD *)(filebuf + e_lfarlc + i*4);
+                    DWORD rs = *(const WORD *)(filebuf + e_lfarlc + i*4 + 2);
+                    volatile WORD *loc = (volatile WORD *)((((DWORD)load_seg + rs) << 4) + ro);
+                    *loc = (WORD)(*loc + load_seg);
+                }
+                ecs = (WORD)(load_seg + h[11]); eip = h[10]; /* e_cs/e_ip */
+                ess = (WORD)(load_seg + h[7]);  esp = h[8];  /* e_ss/e_sp */
+                is_exe = 1;
+                p = zput(p, "  MZ .EXE: hdr=0x"); p = zhex(p, hdrsize);
+                p = zput(p, " img=0x"); p = zhex(p, imgsize);
+                p = zput(p, " relocs=0x"); p = zhex(p, e_crlc);
+                p = zput(p, " CS:IP=0x"); p = zhex(p, ecs); p = zput(p, ":0x"); p = zhex(p, eip);
+                p = zput(p, " SS:SP=0x"); p = zhex(p, ess); p = zput(p, ":0x"); p = zhex(p, esp);
+                p = zput(p, "\r\n");
+            } else {                                         /* flat .COM at PSP:0x100 */
+                DWORD n = nread > 0xFE00 ? 0xFE00 : nread;
+                for (i = 0; i < n; ++i) code[i] = filebuf[i];
+                ecs = PSP_SEG; eip = 0x100; ess = PSP_SEG; esp = 0xFFFE;
             }
 
             /* INT 21h handler stub (BOP) + IVT vector. */
@@ -466,20 +500,23 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
               for (i = 0; i < n; ++i) psp[0x81 + i] = (BYTE)tail[i];
               psp[0x81 + n] = 0x0D; }
 
-            /* Entry context: CS=DS=ES=SS=PSP_SEG, IP=0x100, SP=0xFFFE, AX=0 (drives valid). */
+            /* Entry context. DS=ES=PSP_SEG (point at the PSP); CS:IP/SS:SP from the loader
+               (.COM: PSP_SEG / 0x100 / 0xFFFE; .EXE: from the MZ header). AX=0 (drives valid). */
             #define TF(off) (*(volatile DWORD *)(tib + (off)))
             TF(0x2D8) = 0x10007;
             TF(0x364) = PSP_SEG; TF(0x368) = PSP_SEG; TF(0x36C) = PSP_SEG; TF(0x370) = PSP_SEG;
             TF(0x374) = 0; TF(0x378) = 0; TF(0x37C) = 0; TF(0x380) = 0;
             TF(0x384) = 0; TF(0x388) = 0; TF(0x38C) = 0;
-            TF(0x390) = 0x0100;                             /* Eip */
-            TF(0x394) = PSP_SEG;                            /* SegCs */
+            TF(0x390) = eip;                                /* Eip   */
+            TF(0x394) = ecs;                                /* SegCs */
             TF(0x398) = 0x20002;                            /* EFlags: VM + reserved, IOPL=0 */
-            TF(0x39C) = 0xFFFE;                             /* Esp */
-            TF(0x3A0) = PSP_SEG;                            /* SegSs */
-            *(volatile WORD *)((PSP_SEG << 4) + 0xFFFE) = 0;/* push 0 -> near RET hits PSP:0 */
-            p = zput(p, "STAGE3: running DOS .COM (PSP 0x");
-            p = zhex(p, PSP_SEG << 4); p = zput(p, ", entry PSP:0x100, SP=0xFFFE)...\r\n");
+            TF(0x39C) = esp;                                /* Esp   */
+            TF(0x3A0) = ess;                                /* SegSs */
+            if (!is_exe)                                    /* .COM: push 0 -> near RET hits PSP:0 */
+                *(volatile WORD *)(((DWORD)PSP_SEG << 4) + 0xFFFE) = 0;
+            p = zput(p, is_exe ? "STAGE3: running DOS .EXE (entry 0x"
+                               : "STAGE3: running DOS .COM (entry 0x");
+            p = zhex(p, ecs); p = zput(p, ":0x"); p = zhex(p, eip); p = zput(p, ")...\r\n");
             writelog(report, p);
 
             SetCurrentDirectoryA(g_cur);   /* DOS relative paths resolve against CurDir */
