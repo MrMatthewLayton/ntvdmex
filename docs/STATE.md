@@ -72,15 +72,18 @@ We've *proven* the DOS core in `vdmhost`; the clean `src/` implementation is ess
 
 ## Single next action
 
-**M2.1 is done** (spike `testps.com`: full 640KB map via Map 3 + PSP at `0x1000` + `.COM` at
-`PSP:0x100` → printed `args=[ HELLO]` from its command tail and `himem=Y` from `0x90000`). Next:
+**M2.1–M2.3 done** (all proven as spikes on the VM): full 640KB map + PSP + `.COM` at `PSP:0x100`
+(M2.1); INT 21h file I/O backed by Win32 — a program created/wrote/read a real file (M2.2); MZ `.EXE`
+loader with relocations + `CS:IP`/`SS:SP` from the header (M2.3). Both `.COM` and `.EXE` run.
 
-**M2.2 — INT 21h service surface.** Research is light (the DOS API is documented); build out the
-BOP-dispatched function table beyond AH=09/02/4Ch: console (01/06/08/0A) and especially
-**Win32-backed file I/O** (handles 3C/3D/3E/3F/40/42) + date/time/version. **Exit:** a program that
-opens/reads/writes a file and prints works. *Open item to schedule alongside:* recover the real
-**command line** (`CmdLine`/args) — `GetNextVDMCommand` doesn't populate it, so the PSP command tail
-is a placeholder today (feeds M2.5).
+Next, pick one:
+- **M2.4 — DOS memory management** (MCB chain + AH=48/49/4A alloc/free/resize): many real programs
+  allocate memory. Documented; Impl-heavy.
+- **M2.5 thread — command-line recovery**: `GetNextVDMCommand` never populated `CmdLine`, so the PSP
+  command tail is a fixed placeholder. Recovering real args is its own Research dive (how ntvdm gets
+  the command line — likely a second VDM call / the env-block protocol we partly mapped).
+- **Validate on a real-world DOS `.EXE`** (not hand-built) to drive priorities empirically — would
+  surface which INT 21h functions / memory calls real software actually needs.
 
 ## Environment notes
 
