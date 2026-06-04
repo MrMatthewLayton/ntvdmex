@@ -68,7 +68,7 @@ reflection — the harder half — is. **Impl ⬜:** all of M1 still lives in th
 
 | Step | Res | Spike | Impl | Test | Done |
 |------|:--:|:--:|:--:|:--:|:--:|
-| **M2.1** Real DOS process setup (≥640KB map, PSP, IVT seed, `.COM` at `PSP:0x100`) | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ |
+| **M2.1** Real DOS process setup (≥640KB map, PSP, IVT seed, `.COM` at `PSP:0x100`) | ✅ | ⬜ | ⬜ | ⬜ | ⬜ |
 | **M2.2** INT 21h service surface (console + Win32-backed file I/O + misc) | 🟡 | 🟡 | ⬜ | 🟡 | ⬜ |
 | **M2.3** MZ (`.EXE`) loader (header, relocations, segment setup) | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ |
 | **M2.4** DOS memory management (MCB chain, AH=48/49/4A) | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ |
