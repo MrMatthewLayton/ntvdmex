@@ -69,7 +69,7 @@ reflection — the harder half — is. **Impl ⬜:** all of M1 still lives in th
 | Step | Res | Spike | Impl | Test | Done |
 |------|:--:|:--:|:--:|:--:|:--:|
 | **M2.1** Real DOS process setup (≥640KB map, PSP, IVT seed, `.COM` at `PSP:0x100`) | ✅ | ✅ | ⬜ | ✅ | ✅ |
-| **M2.2** INT 21h service surface (console + Win32-backed file I/O + misc) | 🟡 | 🟡 | ⬜ | 🟡 | ⬜ |
+| **M2.2** INT 21h service surface (console + Win32-backed file I/O + misc) | ✅ | ✅ | ⬜ | ✅ | ✅ |
 | **M2.3** MZ (`.EXE`) loader (header, relocations, segment setup) | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ |
 | **M2.4** DOS memory management (MCB chain, AH=48/49/4A) | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ |
 | **M2.5** Process plumbing (PSP command tail, env block, errorlevel) | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ |
@@ -81,8 +81,12 @@ Per-step exit criteria:
   from `DS:0x80`, and `himem=Y` proving a write/read at `0x90000` no longer faults). *Caveat:* the
   command tail is a fixed placeholder — real args need `CmdLine`, which `GetNextVDMCommand` does not
   populate yet (deferred to M2.5; the recovery of the real command line is the open item).
-- **M2.2** — a program that opens/reads/writes a file (handles 3C/3D/3E/3F/40/42) and prints works;
-  we have 3 of ~40 functions today (AH=09/02/4Ch + `.COM`/`.EXE` name resolution).
+- **M2.2** — a program that opens/reads/writes a file (handles 3C/3D/3E/3F/40/42) and prints works.
+  ✅ **met** (spike `filewr.com`: created `C:\ntvdmex\FILEIO.TXT` on disk, wrote/closed/reopened/read
+  it back, printed `read back: Hello from DOS file I/O!`). Implemented: AH=02/06?/09 console,
+  40 write, 3C/3D/3E/3F/42 file I/O (→ Win32 `CreateFile`/`ReadFile`/`WriteFile`/`SetFilePointer`),
+  30 version; CF returned via the pushed FLAGS on the V86 stack. The rest of the ~40-function surface
+  (input 01/08/0A, FindFirst/Next, get/set-attr, FCB calls, …) is added on demand as programs need it.
 - **M2.3** — a real MZ `.EXE` (not just flat `.COM`) loads and runs.
 - **M2.4** — a program that allocates/frees DOS memory runs.
 - **M2.5** — exit codes propagate to the launching shell; args + environment are visible to the guest.

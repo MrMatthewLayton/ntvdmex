@@ -114,6 +114,18 @@ static char *zdump(char *p, const void *b, unsigned n) {
     *p = 0; return p;
 }
 
+/* DOS file-handle table: DOS handle (small int) -> Win32 HANDLE. 0/1/2 are the
+   console (handled specially); files use slots 5+. Zero-initialised. */
+static HANDLE g_fh[24];
+
+/* Copy an ASCIIZ string out of V86 memory (seg:off) into a host buffer. */
+static void v86_str(DWORD seg, DWORD off, char *dst, int max) {
+    const volatile BYTE *s = (const volatile BYTE *)((seg << 4) + (off & 0xFFFF));
+    int i;
+    for (i = 0; i < max - 1 && s[i]; ++i) dst[i] = (char)s[i];
+    dst[i] = 0;
+}
+
 /* Static (zero-initialised) receive buffers -- no CRT heap. */
 static char g_cmd[1024], g_app[1024], g_cur[512], g_pif[512];
 static char g_env[8192], g_desk[512], g_title[512], g_rsv[512];
@@ -470,7 +482,21 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             p = zhex(p, PSP_SEG << 4); p = zput(p, ", entry PSP:0x100, SP=0xFFFE)...\r\n");
             writelog(report, p);
 
-            for (guard = 0; guard < 1000; ++guard) {
+            SetCurrentDirectoryA(g_cur);   /* DOS relative paths resolve against CurDir */
+            #define R_AX TF(0x388)
+            #define R_BX TF(0x37C)
+            #define R_CX TF(0x384)
+            #define R_DX TF(0x380)
+            #define R_DS TF(0x370)
+            #define OUTC(c)  do { if (op < dosout + sizeof(dosout) - 1) *op++ = (char)(c); } while (0)
+            #define SETAX(v) (R_AX = (R_AX & 0xFFFF0000u) | ((DWORD)(v) & 0xFFFF))
+            /* CF is returned via the FLAGS the INT pushed on the V86 stack (SS:SP+4),
+               because the handler's IRET restores FLAGS from there -- the live EFlags
+               we'd set in the context get clobbered. AX et al. persist normally. */
+            #define OKCF()   (*pfl &= (WORD)~1)
+            #define ERRCF()  (*pfl |= 1)
+            for (guard = 0; guard < 4000; ++guard) {
+                volatile WORD *pfl;
                 st = ntvdmctl(0, NULL);
                 ev = TF(0x5a8);
                 if (ev != 4) {                  /* fault / other -> stop */
@@ -480,23 +506,81 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                     p = zput(p, " info[0x5b0]=0x"); p = zhex(p, TF(0x5b0));
                     p = zput(p, "\r\n"); break;
                 }
-                ah = (TF(0x388) >> 8) & 0xFF;
-                if (ah == 0x4C) {               /* INT 21h/4Ch: terminate */
+                pfl = (volatile WORD *)(((TF(0x3A0) & 0xFFFF) << 4)
+                                        + (((TF(0x39C) & 0xFFFF) + 4) & 0xFFFF));
+                ah = (R_AX >> 8) & 0xFF;
+                if (ah == 0x4C) {                       /* terminate */
                     p = zput(p, "  ==> DOS terminate (AH=4Ch), exit code AL=0x");
-                    p = zhex(p, TF(0x388) & 0xFF); p = zput(p, "\r\n");
+                    p = zhex(p, R_AX & 0xFF); p = zput(p, "\r\n");
                     break;
-                } else if (ah == 0x09) {        /* INT 21h/09h: print $-string at DS:DX */
-                    DWORD seg = TF(0x370) & 0xFFFF, off = TF(0x380) & 0xFFFF;
-                    const volatile BYTE *s = (const volatile BYTE *)((seg << 4) + off);
-                    int k;
-                    for (k = 0; k < 512 && *s != '$'; ++k, ++s)
-                        if (op < dosout + sizeof(dosout) - 1) *op++ = (char)*s;
-                } else if (ah == 0x02) {        /* INT 21h/02h: print char DL */
-                    if (op < dosout + sizeof(dosout) - 1) *op++ = (char)(TF(0x380) & 0xFF);
+                } else if (ah == 0x02) {                /* print char DL */
+                    OUTC(R_DX & 0xFF); OKCF();
+                } else if (ah == 0x09) {                /* print $-string DS:DX */
+                    const volatile BYTE *s = (const volatile BYTE *)((R_DS << 4) + (R_DX & 0xFFFF));
+                    int k; for (k = 0; k < 1024 && *s != '$'; ++k, ++s) OUTC(*s);
+                    OKCF();
+                } else if (ah == 0x40) {                /* write: BX=handle CX=cnt DS:DX=buf */
+                    DWORD h = R_BX & 0xFFFF, cnt = R_CX & 0xFFFF;
+                    const char *b = (const char *)((R_DS << 4) + (R_DX & 0xFFFF));
+                    if (h == 1 || h == 2) { DWORD k; for (k = 0; k < cnt; ++k) OUTC(b[k]); SETAX(cnt); OKCF(); }
+                    else if (h < 24 && g_fh[h]) { DWORD w = 0; WriteFile(g_fh[h], b, cnt, &w, NULL); SETAX(w); OKCF(); }
+                    else { SETAX(6); ERRCF(); }
+                } else if (ah == 0x3C || ah == 0x3D) {  /* create / open: DS:DX=ASCIIZ name */
+                    char fn[300]; DWORD slot; HANDLE f;
+                    v86_str(R_DS, R_DX, fn, sizeof(fn));
+                    if (ah == 0x3C)
+                        f = CreateFileA(fn, GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ,
+                                        NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+                    else {
+                        DWORD m = R_AX & 3;
+                        DWORD acc = (m == 1) ? GENERIC_WRITE
+                                  : (m == 2) ? (GENERIC_READ | GENERIC_WRITE) : GENERIC_READ;
+                        f = CreateFileA(fn, acc, FILE_SHARE_READ, NULL, OPEN_EXISTING,
+                                        FILE_ATTRIBUTE_NORMAL, NULL);
+                    }
+                    if (f != INVALID_HANDLE_VALUE) {
+                        for (slot = 5; slot < 24 && g_fh[slot]; ++slot) {}
+                        if (slot < 24) { g_fh[slot] = f; SETAX(slot); OKCF(); }
+                        else { CloseHandle(f); SETAX(4); ERRCF(); }
+                    } else { SETAX(2); ERRCF(); }
+                    p = zput(p, "  INT21 AH=0x"); p = zhex(p, ah);
+                    p = zput(p, " ["); p = zput(p, fn); p = zput(p, "] -> AX=0x");
+                    p = zhex(p, R_AX & 0xFFFF); p = zput(p, (*pfl & 1) ? " (err)\r\n" : "\r\n");
+                } else if (ah == 0x3E) {                /* close: BX=handle */
+                    DWORD h = R_BX & 0xFFFF;
+                    if (h >= 5 && h < 24 && g_fh[h]) { CloseHandle(g_fh[h]); g_fh[h] = 0; }
+                    OKCF();
+                } else if (ah == 0x3F) {                /* read: BX=handle CX=cnt ->DS:DX */
+                    DWORD h = R_BX & 0xFFFF, cnt = R_CX & 0xFFFF, rd = 0;
+                    void *b = (void *)((R_DS << 4) + (R_DX & 0xFFFF));
+                    if (h >= 5 && h < 24 && g_fh[h]) { ReadFile(g_fh[h], b, cnt, &rd, NULL); SETAX(rd); OKCF(); }
+                    else if (h == 0) { SETAX(0); OKCF(); }   /* stdin: EOF for now */
+                    else { SETAX(6); ERRCF(); }
+                } else if (ah == 0x42) {                /* lseek: AL=org BX=h CX:DX=off */
+                    DWORD h = R_BX & 0xFFFF, meth = R_AX & 0xFF;
+                    LONG dist = (LONG)(((R_CX & 0xFFFF) << 16) | (R_DX & 0xFFFF));
+                    if (h >= 5 && h < 24 && g_fh[h]) {
+                        DWORD np = SetFilePointer(g_fh[h], dist, NULL, meth);
+                        SETAX(np & 0xFFFF);
+                        R_DX = (R_DX & 0xFFFF0000u) | ((np >> 16) & 0xFFFF); OKCF();
+                    } else { SETAX(6); ERRCF(); }
+                } else if (ah == 0x30) {                /* get DOS version -> 5.0 */
+                    SETAX(0x0005); OKCF();
+                } else {                                /* unhandled service */
+                    p = zput(p, "  INT21 AH=0x"); p = zhex(p, ah); p = zput(p, " unhandled\r\n");
+                    ERRCF();
                 }
-                /* else: unhandled service -- skip and continue */
-                TF(0x390) += 3;                 /* advance past the 3-byte BOP -> IRET */
+                TF(0x390) += 3;                         /* advance past the 3-byte BOP -> IRET */
             }
+            #undef R_AX
+            #undef R_BX
+            #undef R_CX
+            #undef R_DX
+            #undef R_DS
+            #undef OUTC
+            #undef SETAX
+            #undef OKCF
+            #undef ERRCF
             *op = 0;
             if (op != dosout) {
                 DWORD wr;
