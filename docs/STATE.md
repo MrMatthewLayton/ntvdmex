@@ -72,11 +72,15 @@ We've *proven* the DOS core in `vdmhost`; the clean `src/` implementation is ess
 
 ## Single next action
 
-**M2.1 — Real DOS process setup.** Research: how ntvdm lays out the PSP and conventional memory
-(disassemble its loader + the PSP it builds; cross-ref ReactOS DOS structs). Spike (in `vdmhost`):
-map the full ≥640KB at linear 0, build a PSP at the load segment, load the `.COM` at `PSP:0x100`
-with correct CS=DS=ES=SS / SP conventions, and seed the IVT. **Exit:** a `.COM` that reads its PSP
-command tail sees the right bytes, still printing via INT 21h.
+**M2.1 is done** (spike `testps.com`: full 640KB map via Map 3 + PSP at `0x1000` + `.COM` at
+`PSP:0x100` → printed `args=[ HELLO]` from its command tail and `himem=Y` from `0x90000`). Next:
+
+**M2.2 — INT 21h service surface.** Research is light (the DOS API is documented); build out the
+BOP-dispatched function table beyond AH=09/02/4Ch: console (01/06/08/0A) and especially
+**Win32-backed file I/O** (handles 3C/3D/3E/3F/40/42) + date/time/version. **Exit:** a program that
+opens/reads/writes a file and prints works. *Open item to schedule alongside:* recover the real
+**command line** (`CmdLine`/args) — `GetNextVDMCommand` doesn't populate it, so the PSP command tail
+is a placeholder today (feeds M2.5).
 
 ## Environment notes
 

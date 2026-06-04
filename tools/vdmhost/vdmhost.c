@@ -235,7 +235,14 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         base = (PVOID)0x100000; sz = 0x10000; off.QuadPart = 0;
         st = NtMapViewOfSection(hSec, (HANDLE)-1, &base, 0, 0x10000, &off, &sz, 2,
                                 VDM_MAP_FLAG, PAGE_EXECUTE_READWRITE);
-        p = zput(p, " map1=0x"); p = zhex(p, (unsigned)st); p = zput(p, "\r\n");
+        p = zput(p, " map1=0x"); p = zhex(p, (unsigned)st);
+        /* M2.1 Map 3 (ntvdm 0xf00ea75): the REST of conventional memory --
+           section[0x10000..] -> linear 0x10000, size 0x90000 (covers 0x10000-0x9FFFF).
+           Without this the guest faults the moment it touches memory above 64KB. */
+        base = (PVOID)0x10000; sz = 0x90000; off.QuadPart = 0x10000;
+        st = NtMapViewOfSection(hSec, (HANDLE)-1, &base, 0, 0x90000, &off, &sz, 2,
+                                VDM_MAP_FLAG, PAGE_EXECUTE_READWRITE);
+        p = zput(p, " map2c=0x"); p = zhex(p, (unsigned)st); p = zput(p, "\r\n");
         writelog(report, p);
     }
 
@@ -368,30 +375,30 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         }
         writelog(report, p);
         if (tib) {
-            /* Run a real DOS .COM with an INT 21h service loop. INT 21h (IOPL=0,
-               sensitive) reflects through IVT[0x21] -> a BOP handler at 0x100:0;
-               the BOP returns event 4 to the host. We service AH=09h (print
-               $-string at DS:DX), AH=02h (print DL), AH=4Ch (terminate), advance
-               EIP past the 3-byte BOP, and re-enter NtVdmControl(0) so the handler's
-               IRET resumes the program. */
+            /* M2.1: a real DOS process. PSP at PSP_SEG:0, program loaded at PSP_SEG:0x100,
+               CS=DS=ES=SS=PSP_SEG, SP=0xFFFE. INT 21h (IOPL=0, sensitive) reflects through
+               IVT[0x21] -> a BOP handler at HDLR_SEG:0; the BOP returns event 4; we service
+               AH=09h/02h/4Ch, advance EIP past the 3-byte BOP, and re-enter so the handler's
+               IRET resumes the program. Memory map (incl. M2.1 Map 3) gives the full 640KB. */
+            enum { PSP_SEG = 0x0100, HDLR_SEG = 0x0050, ENV_SEG = 0x0060 };
             static const BYTE prog[] = { 0xB4,0x4C, 0xCD,0x21 };   /* fallback: exit */
             static const BYTE bop[]  = { 0xC4,0xC4,0x20, 0xCF };   /* BOP 0x20 ; iret */
-            volatile BYTE *code = (volatile BYTE *)0x2000;         /* 0x200:0  program */
-            volatile BYTE *hdlr = (volatile BYTE *)0x1000;         /* 0x100:0  int21 handler */
+            volatile BYTE *psp  = (volatile BYTE *)(PSP_SEG  << 4);          /* 0x1000 */
+            volatile BYTE *code = (volatile BYTE *)((PSP_SEG << 4) + 0x100); /* 0x1100 */
+            volatile BYTE *hdlr = (volatile BYTE *)(HDLR_SEG << 4);          /* 0x0500 */
+            volatile BYTE *env  = (volatile BYTE *)(ENV_SEG  << 4);          /* 0x0600 */
             HANDLE hcon = CreateFileA("CONOUT$", GENERIC_WRITE, FILE_SHARE_WRITE, NULL,
                                       OPEN_EXISTING, 0, NULL);
             char dosout[1024]; char *op = dosout;                  /* captured DOS output */
             unsigned i; LONG st; DWORD ev, ah, nread = 0; int guard;
             (void)st;
-            /* Load the REAL program from disk: the resolved CurDir\Title. */
+            /* Load the program from disk (resolved CurDir\Title; .COM/.EXE) at PSP:0x100. */
             if (g_cur[0] && g_title[0]) {
                 char path[768]; char *pe; HANDLE hf; const char *t; int has_dot = 0;
                 char *pp = path;
                 pp = zput(pp, g_cur); pp = zput(pp, "\\"); pp = zput(pp, g_title);
                 pe = pp;                                   /* end of CurDir\Title */
                 for (t = g_title; *t; ++t) if (*t == '.') has_dot = 1;
-                /* Title is the program name as typed; if it carries no extension
-                   resolve it like a shell would -- try .COM then .EXE. */
                 hf = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL,
                                  OPEN_EXISTING, 0, NULL);
                 if (hf == INVALID_HANDLE_VALUE && !has_dot) {
@@ -405,9 +412,9 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                     }
                 }
                 if (hf != INVALID_HANDLE_VALUE) {
-                    static BYTE filebuf[4096];
+                    static BYTE filebuf[0xFE00];
                     if (ReadFile(hf, filebuf, sizeof(filebuf), &nread, NULL) && nread) {
-                        DWORD n = nread > 0x1000 ? 0x1000 : nread;
+                        DWORD n = nread > 0xFE00 ? 0xFE00 : nread;   /* fits below SP */
                         for (i = 0; i < n; ++i) code[i] = filebuf[i];
                     }
                     CloseHandle(hf);
@@ -419,20 +426,48 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                 for (i = 0; i < sizeof(prog); ++i) code[i] = prog[i];
                 p = zput(p, "STAGE3: using embedded program bytes\r\n");
             }
-            for (i = 0; i < sizeof(bop);  ++i) hdlr[i] = bop[i];
-            *(volatile WORD *)0x84 = 0x0000;                 /* IVT[0x21] = 0x100:0 */
-            *(volatile WORD *)0x86 = 0x0100;
+
+            /* INT 21h handler stub (BOP) + IVT vector. */
+            for (i = 0; i < sizeof(bop); ++i) hdlr[i] = bop[i];
+            *(volatile WORD *)0x84 = 0x0000;                /* IVT[0x21].offset  */
+            *(volatile WORD *)0x86 = HDLR_SEG;              /* IVT[0x21].segment */
+
+            /* Minimal (empty) environment block. */
+            env[0] = 0; env[1] = 0; env[2] = 0;
+
+            /* Program Segment Prefix. */
+            for (i = 0; i < 0x100; ++i) psp[i] = 0;
+            psp[0x00] = 0xCD; psp[0x01] = 0x20;                    /* INT 20h          */
+            *(volatile WORD *)(psp + 0x02) = 0xA000;               /* top-of-mem seg   */
+            psp[0x18]=1; psp[0x19]=1; psp[0x1A]=1; psp[0x1B]=0; psp[0x1C]=2; /* JFT     */
+            for (i = 0x1D; i < 0x2C; ++i) psp[i] = 0xFF;
+            *(volatile WORD *)(psp + 0x2C) = ENV_SEG;              /* env segment      */
+            *(volatile WORD *)(psp + 0x32) = 0x14;                 /* JFT size         */
+            *(volatile WORD *)(psp + 0x34) = 0x18;                 /* JFT ptr off      */
+            *(volatile WORD *)(psp + 0x36) = PSP_SEG;              /* JFT ptr seg      */
+            *(volatile DWORD *)(psp + 0x38) = 0xFFFFFFFF;          /* prev PSP         */
+            psp[0x50] = 0xCD; psp[0x51] = 0x21; psp[0x52] = 0xCB;  /* INT 21h ; RETF   */
+            /* Command tail: fixed " HELLO" until real args are wired (CmdLine isn't yet
+               populated by GetNextVDMCommand). Proves the PSP tail is built + readable. */
+            { static const char tail[] = " HELLO"; unsigned n = 6;
+              psp[0x80] = (BYTE)n;
+              for (i = 0; i < n; ++i) psp[0x81 + i] = (BYTE)tail[i];
+              psp[0x81 + n] = 0x0D; }
+
+            /* Entry context: CS=DS=ES=SS=PSP_SEG, IP=0x100, SP=0xFFFE, AX=0 (drives valid). */
             #define TF(off) (*(volatile DWORD *)(tib + (off)))
-            TF(0x2D8) = 0x10007;                            /* ContextFlags */
-            TF(0x364) = 0x200; TF(0x368) = 0x200; TF(0x36C) = 0x200; TF(0x370) = 0x200;
+            TF(0x2D8) = 0x10007;
+            TF(0x364) = PSP_SEG; TF(0x368) = PSP_SEG; TF(0x36C) = PSP_SEG; TF(0x370) = PSP_SEG;
             TF(0x374) = 0; TF(0x378) = 0; TF(0x37C) = 0; TF(0x380) = 0;
             TF(0x384) = 0; TF(0x388) = 0; TF(0x38C) = 0;
-            TF(0x390) = 0x0000;                             /* Eip */
-            TF(0x394) = 0x0200;                             /* SegCs */
+            TF(0x390) = 0x0100;                             /* Eip */
+            TF(0x394) = PSP_SEG;                            /* SegCs */
             TF(0x398) = 0x20002;                            /* EFlags: VM + reserved, IOPL=0 */
-            TF(0x39C) = 0x1000;                             /* Esp */
-            TF(0x3A0) = 0x0200;                             /* SegSs */
-            p = zput(p, "STAGE3: running V86 DOS program (INT 21h service loop)...\r\n");
+            TF(0x39C) = 0xFFFE;                             /* Esp */
+            TF(0x3A0) = PSP_SEG;                            /* SegSs */
+            *(volatile WORD *)((PSP_SEG << 4) + 0xFFFE) = 0;/* push 0 -> near RET hits PSP:0 */
+            p = zput(p, "STAGE3: running DOS .COM (PSP 0x");
+            p = zhex(p, PSP_SEG << 4); p = zput(p, ", entry PSP:0x100, SP=0xFFFE)...\r\n");
             writelog(report, p);
 
             for (guard = 0; guard < 1000; ++guard) {
