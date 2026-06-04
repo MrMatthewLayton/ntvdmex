@@ -19,23 +19,34 @@ virtualized and serviced by host calls through a pluggable VDD model; video is b
 Luna-themed window. Work is tracked per step through **Research → Spike → Impl → Test → Done** (see
 [ROADMAP.md](ROADMAP.md)).
 
-## Proven pipeline (the M0+M1 result)
+## Proven pipeline (M0 → M2.3)
 
-From `tools/vdmhost/vdmhost.c` (the spike), in one process:
+From `tools/vdmhost/vdmhost.c` (the spike), in one process — real `.COM` and `.EXE` programs run,
+with file I/O:
 
 1. **Intercept** — IFEO `Debugger` on `ntvdm.exe` → our binary runs in ntvdm's place (ADR-0007).
 2. **CSRSS handshake** — `RegisterConsoleVDM` + `GetNextVDMCommand` → resolves the program to run
    (`CurDir\Title`). (The `0x57` that blocked this for ages was a console-key harness artifact, not
    a real binding problem — the lookup is keyed on the console handle.)
-3. **Kernel V86 monitor** — V86 low-memory map + `NtVdmControl(VdmInitialize)` + a **self-allocated
+3. **Kernel V86 monitor** — V86 memory map + `NtVdmControl(VdmInitialize)` + a **self-allocated
    VDM_TIB** registered at `TEB+0xF18` (the kernel does *not* allocate it — ntvdm does).
 4. **Execute** — `NtVdmControl(VdmStartExecution)` runs the guest on the CPU; CONTEXT lives at
    `VDM_TIB+0x2D8`.
 5. **DOS services** — `INT 21h` reflects through the real-mode **IVT** to a **BOP** (`C4 C4 nn`)
-   handler that returns to the host (event 4); host services `AH=09/02/4Ch`, advances EIP past the
-   BOP, and re-enters so the handler's `IRET` resumes the guest. Multiple syscalls per run.
+   handler that returns to the host (event 4); host services it, advances EIP past the BOP, and
+   re-enters so the handler's `IRET` resumes the guest. Multiple syscalls per run.
+6. **DOS process model (M2.1–M2.3)** — the V86 memory map now covers the **full 640KB** (ntvdm builds
+   FOUR section maps; we were missing Map 3 `section[0x10000..]→0x10000 size 0x90000`, which is why
+   guests faulted at `0x10000`). A real **PSP** is built at `PSP_SEG:0` (`0x1000`); `.COM` loads at
+   `PSP:0x100`, `.EXE` (MZ) is parsed → load module at `PSP_SEG+0x10`, relocations applied,
+   `CS:IP`/`SS:SP` from the header. **INT 21h surface:** `02/09` console, `40` write, `3C/3D/3E/3F/42`
+   file I/O → Win32 handles (table `g_fh[]`, slots 5+), `30` version. **CF is returned on the pushed
+   FLAGS at `SS:SP+4`** (the handler's `IRET` restores FLAGS, so the live `EFlags` would be clobbered);
+   `AX` etc. persist via the context.
 
-Full contract, addresses and event taxonomy: [research/ntvdmcontrol-and-v86.md](research/ntvdmcontrol-and-v86.md).
+Full contract, addresses, event taxonomy, memory map + PSP layout:
+[research/ntvdmcontrol-and-v86.md](research/ntvdmcontrol-and-v86.md) and
+[research/dos-process-model.md](research/dos-process-model.md).
 
 ## What is decided (see [decisions/](decisions/))
 
@@ -50,9 +61,11 @@ Full contract, addresses and event taxonomy: [research/ntvdmcontrol-and-v86.md](
 
 ## What is built
 
-- **`tools/vdmhost/` — the spike that proves M0+M1 (and part of M2).** The full pipeline above:
-  IFEO host → CSRSS handshake → V86 → INT 21h/BOP service loop → "Hello, World". Resolves a program
-  name to `.COM`/`.EXE`. This is throwaway-grade experiment code, *not* the clean host.
+- **`tools/vdmhost/` — the spike that proves M0+M1+M2.1–M2.3.** The full pipeline above: IFEO host →
+  CSRSS handshake → V86 → DOS process (PSP, 640KB, `.COM`/`.EXE` loader) → INT 21h/BOP service loop
+  (console + Win32-backed file I/O). Tested on the VM: `hello.com`/`testps.com` (`.COM` + PSP command
+  tail), `filewr.com` (creates/writes/reads a real disk file), `helloexe.exe` (MZ with a relocation).
+  This is throwaway-grade experiment code, *not* the clean host.
 - **Shell preview (`src/`):** a fixed 80×25 DOS-style Luna-themed console (GDI text grid), the future
   sink for INT 10h / B800 text writes. Confirmed running on XP SP3. **Still non-interactive** — the
   DOS core has not yet been promoted into it (that's M2.6).
