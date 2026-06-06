@@ -19,6 +19,10 @@
 # (copyrighted). Findings/offsets go in docs/research/, not the binaries.
 /reverse/
 
+# Python bytecode cache (scripts/xp.py etc.)
+__pycache__/
+*.pyc
+
 # Editor / OS cruft
 .DS_Store
 *.swp

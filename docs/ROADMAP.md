@@ -71,7 +71,7 @@ reflection — the harder half — is. **Impl ⬜:** all of M1 still lives in th
 | **M2.1** Real DOS process setup (≥640KB map, PSP, IVT seed, `.COM` at `PSP:0x100`) | ✅ | ✅ | ⬜ | ✅ | ✅ |
 | **M2.2** INT 21h service surface (console + Win32-backed file I/O + misc) | ✅ | ✅ | ⬜ | ✅ | ✅ |
 | **M2.3** MZ (`.EXE`) loader (header, relocations, segment setup) | ✅ | ✅ | ⬜ | ✅ | ✅ |
-| **M2.4** DOS memory management (MCB chain, AH=48/49/4A) | ✅ | ✅ | ⬜ | 🟡 | ⬜ |
+| **M2.4** DOS memory management (MCB chain, AH=48/49/4A) | ✅ | ✅ | ⬜ | ✅ | ✅ |
 | **M2.5** Process plumbing (PSP command tail, env block, errorlevel) | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ |
 | **M2.6** Promote the DOS core from `vdmhost` spike → clean `src/` host | ⬜ | – | ⬜ | ⬜ | ⬜ |
 
@@ -90,11 +90,11 @@ Per-step exit criteria:
 - **M2.3** — a real MZ `.EXE` (not just flat `.COM`) loads and runs. ✅ **met** (spike `helloexe.exe`:
   MZ header parsed, load module placed at `PSP_SEG+0x10`, the one relocation fixed up `mov ax,<seg>`
   to the load segment, `CS:IP`/`SS:SP` taken from the header → printed `Hello from a real .EXE!`).
-- **M2.4** — a program that allocates/frees DOS memory runs. 🟡 Allocator committed (`4aa6f44`);
-  **off-VM unit battery green, 30/30** ([`tools/dostest/`](../tools/dostest/)) covering split /
-  forward-coalesce / grow / fail-returns-largest / chain integrity. Real `mem.exe` AH=4Ah resize
-  succeeded on the VM. Pending: in-guest self-checking `memtest.com`, a clean real-`.EXE` pass, and
-  a `merge-on-alloc` fix (known gap pinned by test T9).
+- **M2.4** — a program that allocates/frees DOS memory runs. ✅ **met:** the self-checking
+  `memtest.com` ran through `vdmhost` in **V86 on the real CPU** → `MEMTEST PASS`, exit 0
+  (AH=4A shrink / AH=48 alloc / AH=4A resize / AH=49 free / AH=48 oversized-fails). Off-VM battery
+  green 30/30 ([`tools/dostest/`](../tools/dostest/)) and verified under dosbox-x. Open follow-up:
+  `merge-on-alloc` (gap pinned by test T9); Impl ⬜ = the M2.6 `src/` promotion.
 - **M2.5** — exit codes propagate to the launching shell; args + environment are visible to the guest.
 - **M2.6** — the clean host (not the spike) runs Hello World, gated by an import-allowlist check.
 

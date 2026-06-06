@@ -3,7 +3,7 @@
 > **This is the canonical resume point.** Update it at the end of every working session.
 
 - **Last updated:** 2026-06-06
-- **Phase:** M2 — DOS kernel (M0 + M1 done); **M2.4 in progress — committed WIP + off-VM test harness**
+- **Phase:** M2 — DOS kernel (M0 + M1 done); **M2.4 DONE — allocator validated end-to-end (off-VM battery + live V86 `memtest.com` PASS)**
 - **Overall status:** 🟢 **The keystone is proven.** A real DOS `.COM`, loaded off disk, runs on the
   real CPU in **Virtual-8086 mode** via `NtVdmControl` and prints "Hello, World" through our own INT
   21h handler — launched transparently when XP starts a 16-bit program (IFEO redirect). The whole
@@ -83,7 +83,7 @@ M2.3 MZ `.EXE` loader, M2.4 DOS memory management, M2.5 process plumbing, M2.6 p
 The big structural reality the stage model exposes: **almost everything is at ✅ Spike / ⬜ Impl.**
 We've *proven* the DOS core in `vdmhost`; the clean `src/` implementation is essentially unwritten.
 
-## M2.4 — DOS memory management (IN PROGRESS — committed WIP + test harness, 2026-06-06)
+## M2.4 — DOS memory management (DONE — validated end-to-end, 2026-06-06)
 
 **Committed (`4aa6f44`):** `tools/vdmhost/vdmhost.c` — MCB chain over conventional memory + `INT 21h`
 `AH=48/49/4A` (alloc/free/resize, with block split + forward coalesce), plus supporting services
@@ -102,28 +102,34 @@ adopts the shared module instead of its inline copy).
 adjacent free blocks — real MS-DOS merges during the alloc walk, so two adjacent free blocks can't
 jointly satisfy a request real DOS would. A **`merge-on-alloc`** fix is the next M2.4 correctness item.
 
-**Real-code evidence (partial, on the VM):** a real `C:\WINDOWS\system32\mem.exe` parsed by our MZ
-loader and `AH=4Ah` **resize succeeded** (`seg=0x100 -> 0x174e`, no CF). **Not yet re-run** against
-the binary that also handles `44h`/`63h`; mem.exe ends in `Parse Error 1` (suspect missing INT 21h
-surface / env block, ties into M2.5). See [log/2026-06-05.md](log/2026-06-05.md),
-[log/2026-06-06.md](log/2026-06-06.md).
+**Validated end-to-end on real hardware (2026-06-06):** the self-checking `memtest.com` (Layer 2,
+[`tools/dostest/`](../tools/dostest/)) ran through `vdmhost` in **V86 on the real CPU** and returned
+`MEMTEST PASS`, exit code `AL=0` — exercising AH=4A shrink / AH=48 alloc / AH=4A resize / AH=49 free /
+AH=48 oversized-must-fail, with segment/size values matching the off-VM battery and dosbox-x exactly
+(e.g. the post-free coalesce restoring `max=0x8eff`). **This meets the M2.4 exit criterion.** Also: a
+real `C:\WINDOWS\system32\mem.exe` parsed by our MZ loader and `AH=4Ah` resize succeeded; it still
+ends in `Parse Error 1` (missing INT 21h surface / env block → M2.5). See
+[log/2026-06-05.md](log/2026-06-05.md), [log/2026-06-06.md](log/2026-06-06.md).
 
 ## Single next action
 
-1. ✅ **Done:** M2.4 committed (`4aa6f44`); off-VM Layer-1 test harness green, 30/30 (`bf3defe`).
-2. **Fix the dev loop** before more VM rounds — it's the bottleneck. One long-lived telnet session,
-   or a guest-side batch that does push→trigger→collect into one result file, or a QMP/file-drop
-   channel (see Environment notes).
-3. **Layer 2 — self-checking `memtest.com`** (in-guest): a hand-assembled `.COM` that runs the
-   alloc/resize/free sequence, checks `CF`/`AX` itself, prints PASS/FAIL and sets errorlevel = #fails.
-   Pairs with the batch loop (the verdict reduces to one byte + an errorlevel). Generator under
-   [`tools/dostest/`](../tools/dostest/).
-4. **Re-run mem.exe** (now handles 44h/63h); chase `Parse Error 1` (likely missing INT 21h surface /
-   env block → M2.5). Consider a simpler real `.EXE` as the cleaner first end-to-end M2.4 target.
-5. **M2.4 correctness:** add `merge-on-alloc` (the known gap pinned by test T9), then re-green the battery.
+**M2.4 is done** (allocator validated end-to-end). **Testing strategy (decided 2026-06-06):**
 
-Deferred: **M2.5 cmdline recovery** (`GetNextVDMCommand` never populated `CmdLine`; PSP tail is empty
-for now); **M2.6 promote spike → `src/`** (adopt `tools/dostest/dos_mcb.h` as the shared allocator).
+1. **Off-VM is the primary loop** — `tools/dostest/run.sh` (30-case `dos_mcb.h` battery) and
+   `tools/dostest/verify-memtest.sh` (dosbox-x) validate allocator logic + the test program
+   instantly and reliably, no VM. Use this for routine work.
+2. **The XP VM is a manual integration gate** — for real-V86 confidence, run
+   `tools/dostest/gate.bat` *inside the VM* (interactive desktop) and read/paste the verdict.
+   Reliable + observable, no telnet. (`scripts/dostest.sh` + the logon agent are an optional
+   automated telnet path that passed a live round, but it's slow and reads as a hang — not default.)
+
+Next work:
+3. **M2.4 correctness:** add `merge-on-alloc` (the known gap pinned by test T9), re-green the battery
+   off-VM, then one `gate.bat` confirmation.
+4. **Re-run mem.exe** (now handles 44h/63h); chase `Parse Error 1` (missing INT 21h surface / env
+   block → M2.5).
+5. **M2.5 cmdline recovery** (`GetNextVDMCommand` never populated `CmdLine`; PSP tail is empty);
+   **M2.6 promote spike → `src/`** (adopt `tools/dostest/dos_mcb.h` as the shared allocator).
 
 ## Environment notes
 
@@ -132,11 +138,11 @@ for now); **M2.6 promote spike → `src/`** (adopt `tools/dostest/dos_mcb.h` as 
 - **Never commit:** the XP ISO, `vm/`, `*.qcow2`, or `reverse/` (extracted MS binaries) — gitignored.
 - The Bash tool is sometimes sandboxed (process/socket checks can read false-negative); use
   `dangerouslyDisableSandbox` for QEMU/QMP/`lsof` operations.
-- **⚠️ The VM dev loop is flaky/slow and is now the bottleneck (2026-06-05).** QEMU's host-port
-  forward `localhost:2323` accepts the TCP connect the instant QEMU starts — *before* the guest
-  telnet service is up — so `nc -z 2323` is a false "ready"; only a real `xp.py` login proves the
-  guest is alive. `xp.py` logins are increasingly slow and intermittently hang (multi-minute stall,
-  0 bytes, then everything arrives at once on kill) — XP telnet allows few concurrent sessions and
-  refuses rapid reconnects. **Before more test rounds, fix the loop:** one long-lived telnet session
-  rather than reconnect-per-command, or a guest-side batch that runs push→trigger→collect and writes
-  one result file, or a QMP/file-drop channel instead of telnet.
+- **VM testing (resolved 2026-06-06): off-VM is primary; the VM is a manual gate.** The telnet loop
+  *works* (a `memtest.com` round passed end-to-end in V86), but each round is ~1–2 min of silent
+  flag-polling and slirp (user-mode NAT) can wobble (`Slirp: Failed to send packet`), so it reads as
+  a hang — **not** the default. For real-V86 checks: boot (`scripts/xp-vm.sh run`), run
+  `tools/dostest/gate.bat` in the interactive desktop, paste the verdict, power down via QMP
+  (`system_powerdown`). `xp.py --wait` does a real login probe (the forwarded port accepts before
+  telnet is up, so `nc -z 2323` is a false ready). Most allocator/DOS-logic work needs no VM at all —
+  use `tools/dostest/run.sh` + `verify-memtest.sh`.
