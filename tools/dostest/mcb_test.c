@@ -12,6 +12,8 @@
  */
 #include <stdio.h>
 #include "dos_mcb.h"
+#include "dos_loader.h"
+#include "dos_psp.h"
 
 static uint8_t mem[0x100000];          /* 1MB flat "conventional memory" buffer */
 
@@ -139,6 +141,55 @@ int main(void) {
               "merge-on-alloc: free tail = M / free / 0x1F");
         CHECK(dos_mcb_check(g, 0x0300, 0x0353) == 0,
               "merge-on-alloc: mini-chain consistent");
+    }
+
+    /* T10: PSP builder (src/dos/dos_psp.h) --------------------------------- */
+    {
+        static uint8_t pm[0x20000];
+        volatile uint8_t *psp = pm + ((uint32_t)0x0100 << 4);
+        dos_psp_build(pm, 0x0100, 0x0060, 0xA000);
+        CHECK(psp[0] == 0xCD && psp[1] == 0x20, "psp: INT 20h at offset 0");
+        CHECK(mcb_rd16(psp + 0x02) == 0xA000, "psp: top-of-mem segment = 0xA000");
+        CHECK(mcb_rd16(psp + 0x2C) == 0x0060, "psp: environment segment = 0x60");
+        CHECK(psp[0x50] == 0xCD && psp[0x51] == 0x21 && psp[0x52] == 0xCB,
+              "psp: INT 21h;RETF dispatch stub at 0x50");
+        CHECK(psp[0x80] == 0 && psp[0x81] == 0x0D, "psp: empty command tail + 0x0D");
+    }
+
+    /* T11: flat .COM loader (src/dos/dos_loader.h) ------------------------- */
+    {
+        static uint8_t cm[0x20000];
+        static const uint8_t com[] = { 0xB4, 0x09, 0xCD, 0x21, 0xC3 };
+        volatile uint8_t *code = cm + ((uint32_t)0x0100 << 4) + 0x100;
+        dos_image_t e = dos_load(cm, com, (uint32_t)sizeof(com), 0x0100);
+        CHECK(!e.is_exe && e.cs == 0x0100 && e.ip == 0x0100
+              && e.ss == 0x0100 && e.sp == 0xFFFE,
+              ".COM: entry CS=SS=0x100, IP=0x100, SP=0xFFFE");
+        CHECK(code[0] == 0xB4 && code[1] == 0x09 && code[4] == 0xC3
+              && e.img_size == sizeof(com),
+              ".COM: image placed at PSP:0x100");
+    }
+
+    /* T12: MZ .EXE loader + one relocation --------------------------------- */
+    {
+        static uint8_t xm[0x20000];
+        /* 34-byte MZ: 32-byte header (e_cparhdr=2, e_crlc=1, reloc tbl @0x1C,
+         * e_ip=5, e_sp=0x100), one reloc -> image word at offset 0, 2-byte image
+         * = 0x0000 (to be fixed up to the load segment). */
+        static const uint8_t mz[] = {
+            'M','Z',   0x22,0x00, 0x01,0x00, 0x01,0x00, 0x02,0x00, 0x00,0x00, 0xFF,0xFF,
+            0x00,0x00, 0x00,0x01, 0x00,0x00, 0x05,0x00, 0x00,0x00, 0x1C,0x00, 0x00,0x00,
+            0x00,0x00, 0x00,0x00,          /* reloc[0] = offset 0, segment 0 */
+            0x00,0x00                      /* image[0..1] = 0x0000           */
+        };
+        uint16_t load_seg = (uint16_t)(0x0100 + 0x10);          /* 0x110 */
+        volatile uint8_t *img = xm + ((uint32_t)load_seg << 4);
+        dos_image_t e = dos_load(xm, mz, (uint32_t)sizeof(mz), 0x0100);
+        CHECK(e.is_exe && e.cs == load_seg && e.ip == 0x0005
+              && e.ss == load_seg && e.sp == 0x0100,
+              ".EXE: CS:IP/SS:SP from header, biased by the load segment");
+        CHECK(e.img_size == 2 && mcb_rd16(img) == load_seg,
+              ".EXE: relocation fixed the image word to the load segment");
     }
 
     dump_chain(first);

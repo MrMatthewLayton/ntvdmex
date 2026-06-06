@@ -722,7 +722,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                         if (own == 0) {                 /* free block */
                             /* merge-on-alloc: coalesce following free blocks before
                                sizing, so adjacent free blocks jointly satisfy a request
-                               (as real MS-DOS does). Mirrors tools/dostest/dos_mcb.h. */
+                               (as real MS-DOS does). Mirrors src/dos/dos_mcb.h. */
                             while (sig == 'M') {
                                 volatile BYTE *nm =
                                     (volatile BYTE *)(((DWORD)m + 1 + sz) << 4);

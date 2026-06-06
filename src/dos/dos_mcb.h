@@ -1,15 +1,14 @@
 /* dos_mcb.h -- DOS conventional-memory allocator (MCB chain), host-testable.
  *
- * This is a FAITHFUL PORT of the M2.4 INT 21h AH=48/49/4A handlers in
- * tools/vdmhost/vdmhost.c (committed at 4aa6f44). The spike accesses V86 guest
- * RAM at absolute linear addresses (paragraph<<4); here the same logic operates
- * on a caller-supplied `base` pointer + paragraph offsets, so it can be exercised
- * off-VM against a plain byte buffer (see mcb_test.c). Pass base=NULL to get the
- * spike's absolute-addressing behaviour verbatim.
+ * The canonical DOS-memory allocator for the clean host (M2.6). The same logic
+ * runs in V86 (absolute paragraph<<4 addressing) and off-VM against a plain byte
+ * buffer: every routine takes a caller-supplied `base` pointer + paragraph offsets
+ * (pass base=NULL for the host's absolute V86 addressing, a buffer for tests).
+ * Verified off-VM by tools/dostest/mcb_test.c.
  *
- * SYNC: vdmhost.c keeps its own inline copy for now. When the DOS core is
- * promoted out of the spike (roadmap M2.6), vdmhost should #include this module
- * and the inline copy deleted, so there is a single tested implementation.
+ * SYNC: the tools/vdmhost spike still carries an inline copy of AH=48/49/4A (kept
+ * in step by hand) until it is retired in favour of this module; the clean host
+ * (src/) uses this file directly. Originated as a port of the spike at 4aa6f44.
  *
  * MCB layout (16 bytes, immediately preceding the block it owns):
  *   [0]    signature: 'M' (member) or 'Z' (last block in the chain)
