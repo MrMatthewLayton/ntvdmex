@@ -93,8 +93,8 @@ Per-step exit criteria:
 - **M2.4** — a program that allocates/frees DOS memory runs. ✅ **met:** the self-checking
   `memtest.com` ran through `vdmhost` in **V86 on the real CPU** → `MEMTEST PASS`, exit 0
   (AH=4A shrink / AH=48 alloc / AH=4A resize / AH=49 free / AH=48 oversized-fails). Off-VM battery
-  green 30/30 ([`tools/dostest/`](../tools/dostest/)) and verified under dosbox-x. Open follow-up:
-  `merge-on-alloc` (gap pinned by test T9); Impl ⬜ = the M2.6 `src/` promotion.
+  green 33/33 ([`tools/dostest/`](../tools/dostest/)) and verified under dosbox-x; `merge-on-alloc`
+  now implemented (test T9). Impl ⬜ = the M2.6 `src/` promotion.
 - **M2.5** — exit codes propagate to the launching shell; args + environment are visible to the guest.
 - **M2.6** — the clean host (not the spike) runs Hello World, gated by an import-allowlist check.
 

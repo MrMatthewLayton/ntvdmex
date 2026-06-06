@@ -98,9 +98,10 @@ invalid-block, and full chain integrity after every op. **All green (30/30), no 
 This is **Layer 1** of the test plan and the clean basis for the M2.6 promotion (where `vdmhost`
 adopts the shared module instead of its inline copy).
 
-**Known gap (pinned by test T9):** `free()` coalesces *forward only* and `alloc()` never merges
-adjacent free blocks — real MS-DOS merges during the alloc walk, so two adjacent free blocks can't
-jointly satisfy a request real DOS would. A **`merge-on-alloc`** fix is the next M2.4 correctness item.
+**Gap closed (`8d84af4`, 2026-06-06):** `merge-on-alloc` is implemented — `alloc()` coalesces
+adjacent free blocks during the walk (battery test T9), matching real MS-DOS, in both
+`tools/dostest/dos_mcb.h` and the `vdmhost` spike. Battery green **33/33** off-VM; spike
+cross-compiles clean.
 
 **Validated end-to-end on real hardware (2026-06-06):** the self-checking `memtest.com` (Layer 2,
 [`tools/dostest/`](../tools/dostest/)) ran through `vdmhost` in **V86 on the real CPU** and returned
@@ -124,12 +125,13 @@ ends in `Parse Error 1` (missing INT 21h surface / env block → M2.5). See
    automated telnet path that passed a live round, but it's slow and reads as a hang — not default.)
 
 Next work:
-3. **M2.4 correctness:** add `merge-on-alloc` (the known gap pinned by test T9), re-green the battery
-   off-VM, then one `gate.bat` confirmation.
+3. ✅ **Done (`8d84af4`):** `merge-on-alloc` — battery green 33/33 off-VM, spike mirrored + compiles.
+   Optional: one `gate.bat` confirmation in the VM.
 4. **Re-run mem.exe** (now handles 44h/63h); chase `Parse Error 1` (missing INT 21h surface / env
-   block → M2.5).
+   block → M2.5). *Needs a VM gate — investigate via `gate.bat` with mem.exe as the target.*
 5. **M2.5 cmdline recovery** (`GetNextVDMCommand` never populated `CmdLine`; PSP tail is empty);
-   **M2.6 promote spike → `src/`** (adopt `tools/dostest/dos_mcb.h` as the shared allocator).
+   **M2.6 promote spike → `src/`** (adopt `tools/dostest/dos_mcb.h` as the shared allocator, deleting
+   the spike's now-duplicated inline copy).
 
 ## Environment notes
 
