@@ -73,7 +73,7 @@ reflection — the harder half — is. **Impl ⬜:** all of M1 still lives in th
 | **M2.3** MZ (`.EXE`) loader (header, relocations, segment setup) | ✅ | ✅ | ⬜ | ✅ | ✅ |
 | **M2.4** DOS memory management (MCB chain, AH=48/49/4A) | ✅ | ✅ | ⬜ | ✅ | ✅ |
 | **M2.5** Process plumbing (PSP command tail, env block, errorlevel) | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ |
-| **M2.6** Promote the DOS core from `vdmhost` spike → clean `src/` host | ⬜ | – | ⬜ | ⬜ | ⬜ |
+| **M2.6** Promote the DOS core from `vdmhost` spike → clean `src/` host | ✅ | – | 🟡 | ⬜ | ⬜ |
 
 Per-step exit criteria:
 - **M2.1** — a `.COM` launches with a valid PSP and full conventional memory; a program that reads
@@ -97,6 +97,9 @@ Per-step exit criteria:
   now implemented (test T9). Impl ⬜ = the M2.6 `src/` promotion.
 - **M2.5** — exit codes propagate to the launching shell; args + environment are visible to the guest.
 - **M2.6** — the clean host (not the spike) runs Hello World, gated by an import-allowlist check.
+  🟡 In progress: `src/dos/` pure core (allocator/loader/PSP, off-VM battery 42/42) + `src/vdm/ntvdm.h`
+  contract + `src/host/log.h` done (slices 1–2a, all cross-compile clean). Next: the V86/CSRSS glue +
+  CMake console target (compiles+links), then the INT 21h surface + allowlist, then a `gate.bat` run.
 
 ## M3 — Device model + video/input ⬜
 - [ ] Pluggable **VDD** interface (the third-party hook point, requirement #13)

@@ -3,7 +3,7 @@
 > **This is the canonical resume point.** Update it at the end of every working session.
 
 - **Last updated:** 2026-06-06
-- **Phase:** M2 — DOS kernel (M0 + M1 done); **M2.4 DONE — allocator validated end-to-end (off-VM battery + live V86 `memtest.com` PASS)**
+- **Phase:** M2 — DOS kernel (M0 + M1 done); **M2.4 DONE**; **M2.6 IN PROGRESS — promoting spike → clean `src/` (pure DOS core + NT contract done off-VM; V86 glue next)**
 - **Overall status:** 🟢 **The keystone is proven.** A real DOS `.COM`, loaded off disk, runs on the
   real CPU in **Virtual-8086 mode** via `NtVdmControl` and prints "Hello, World" through our own INT
   21h handler — launched transparently when XP starts a 16-bit program (IFEO redirect). The whole
@@ -112,6 +112,30 @@ real `C:\WINDOWS\system32\mem.exe` parsed by our MZ loader and `AH=4Ah` resize s
 ends in `Parse Error 1` (missing INT 21h surface / env block → M2.5). See
 [log/2026-06-05.md](log/2026-06-05.md), [log/2026-06-06.md](log/2026-06-06.md).
 
+## M2.6 — promote spike → clean `src/` host (IN PROGRESS, 2026-06-06)
+
+Promoting the proven DOS core out of the `tools/vdmhost` throwaway spike into a clean, tested `src/`
+tree. **Decision:** build a new clean **console** host (its own target), keeping the spike as a
+reference until parity; merge into the Luna window at M3. Slices (each its own check-in):
+
+- **Slice 1 ✅ (`be8660a`):** `src/dos/` pure DOS core — `dos_mcb.h` (allocator, moved here as the
+  canonical home), `dos_loader.h` (.COM/MZ loader + relocations), `dos_psp.h` (PSP + env). Off-VM
+  battery **42/42** ([`tools/dostest/`](../tools/dostest/)); `merge-on-alloc` lives here now.
+- **Slice 2a ✅:** `src/vdm/ntvdm.h` (`ab1bc92`) — the undocumented NT/CSRSS/V86 contract
+  (VDM_COMMAND_INFO, NtVdmControl/VdmInitialize + ICA, RegisterConsoleVDM, the section syscalls, and
+  the VDM_TIB + CONTEXT field offsets) consolidated from the spike's globals; + `src/host/log.h`
+  (`6a8b26a`). The whole clean `src/` surface cross-compiles clean together with the i686 XP toolchain.
+- **Slice 2b ⬜ (next):** port the V86 glue → `src/vdm/v86.c` (memory map + VdmInitialize +
+  self-allocated VDM_TIB + entry CONTEXT + the VdmStartExecution/BOP service loop) and
+  `src/vdm/csrss.c` (RegisterConsoleVDM + GetNextVDMCommand + TaskId + resolve `CurDir\Title`) +
+  `src/host/main.c` orchestration + a new CMake console target → **the clean host compiles + links**.
+- **Slice 3 ⬜:** the INT 21h surface (`src/dos/dos_int21.*` — console + Win32 file I/O + memory via
+  `dos_mcb.h` + misc) wired into the host; add the **import-allowlist build check** (imports ⊆ XP DLLs).
+- **Slice 4 ⬜:** one `gate.bat` run — the clean host runs Hello World in V86 → **M2.6 exit met**.
+
+The delicate heart is slice 2b (the V86/NT glue): a faithful mechanical port of the spike, verifiable
+off-VM only as far as "compiles + links + passes the allowlist" — runtime correctness needs the gate.
+
 ## Single next action
 
 **M2.4 is done** (allocator validated end-to-end). **Testing strategy (decided 2026-06-06):**
@@ -125,8 +149,9 @@ ends in `Parse Error 1` (missing INT 21h surface / env block → M2.5). See
    automated telnet path that passed a live round, but it's slow and reads as a hang — not default.)
 
 Next work:
-3. ✅ **Done (`8d84af4`):** `merge-on-alloc` — battery green 33/33 off-VM, spike mirrored + compiles.
-   Optional: one `gate.bat` confirmation in the VM.
+3. **M2.6 slice 2b (active):** port the V86/CSRSS glue → `src/vdm/v86.c` + `src/vdm/csrss.c` +
+   `src/host/main.c` + a CMake console target, until the clean host compiles + links (off-VM). See the
+   M2.6 section above. (`merge-on-alloc` ✅ done `8d84af4`, battery 33/33.)
 4. **Re-run mem.exe** (now handles 44h/63h); chase `Parse Error 1` (missing INT 21h surface / env
    block → M2.5). *Needs a VM gate — investigate via `gate.bat` with mem.exe as the target.*
 5. **M2.5 cmdline recovery** (`GetNextVDMCommand` never populated `CmdLine`; PSP tail is empty);
