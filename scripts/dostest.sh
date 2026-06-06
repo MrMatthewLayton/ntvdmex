@@ -28,10 +28,15 @@ echo ">> waiting for the guest to be ready..."
 "$XP" --wait
 
 echo ">> running round for $PROG (no reboot)..."
+# del before each TFTP GET: XP's tftp client errors "can't write to local file"
+# rather than overwriting an existing (read-only) file. runwait.bat is NOT re-pushed
+# here -- it's the batch we're about to execute (a running .bat can't be overwritten)
+# and is installed once via the agent provisioning.
 out=$(printf '%s\n' \
+  "del /f /q C:\\ntvdmex\\vdmhost.exe" \
   "tftp -i 10.0.2.2 GET vdmhost.exe C:\\ntvdmex\\vdmhost.exe" \
+  "del /f /q C:\\ntvdmex\\$PROG" \
   "tftp -i 10.0.2.2 GET $PROG C:\\ntvdmex\\$PROG" \
-  "tftp -i 10.0.2.2 GET runwait.bat C:\\ntvdmex\\runwait.bat" \
   "echo C:\\ntvdmex\\$PROG>C:\\ntvdmex\\target.txt" \
   "C:\\ntvdmex\\runwait.bat" \
   | XP_CMD_TIMEOUT=220 "$XP")
