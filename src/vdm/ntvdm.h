@@ -124,4 +124,15 @@ typedef LONG (WINAPI *PFN_NtMapViewOfSection)(HANDLE, HANDLE, PVOID *, ULONG,
 #define VDM_BOP0 0xC4
 #define VDM_BOP1 0xC4
 
+/* V86 stop/event reporting in the VDM_TIB, read after VdmStartExecution returns. */
+#define VTIB_EVENT       0x5A8       /* event code (VDM_EVENT_BOP = serviceable BOP) */
+#define VTIB_EVENT_INFO  0x5B0       /* extra info for fault events                 */
+#define VDM_EVENT_BOP    4
+
+/* Access a 32-bit guest register/field at VDM_TIB offset `off` (e.g. VTIB_EAX). */
+#define VDM_REG(tib, off)      (*(volatile DWORD *)((volatile BYTE *)(tib) + (off)))
+/* Set the low 16 bits of such a field, preserving the high half. */
+#define VDM_SET16(tib, off, v) (VDM_REG((tib), (off)) = \
+        (VDM_REG((tib), (off)) & 0xFFFF0000u) | ((DWORD)(v) & 0xFFFFu))
+
 #endif /* NTVDM_H */

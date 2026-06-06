@@ -55,7 +55,7 @@ static inline void mcb_lay(volatile uint8_t *base, uint16_t seg,
  *   0x00FF program block-> 'Z' (last), owns ALL remaining memory; .EXEs shrink
  *                          this via AH=4Ah at startup to free the tail.
  * (0x5F+1+0x10=0x70; 0x70+1+0x8E=0xFF; 0xFF+1+0x9F00=0xA000.) */
-static uint16_t dos_mcb_init(volatile uint8_t *base) {
+static inline uint16_t dos_mcb_init(volatile uint8_t *base) {
     mcb_lay(base, 0x005F, 'M', DOS_PSP_SEG, 0x0010);
     mcb_lay(base, 0x0070, 'M', 0x0008,      0x008E);
     mcb_lay(base, 0x00FF, 'Z', DOS_PSP_SEG, 0x9F00);
@@ -65,8 +65,8 @@ static uint16_t dos_mcb_init(volatile uint8_t *base) {
 /* --- AH=48: allocate `want` paragraphs ------------------------------------- *
  * On success returns 0 and *out_seg = segment of the allocated block (data, not
  * MCB). On failure returns 8 and *out_max = largest free block found. */
-static int dos_alloc(volatile uint8_t *base, uint16_t first_mcb, uint16_t want,
-                     uint16_t *out_seg, uint16_t *out_max) {
+static inline int dos_alloc(volatile uint8_t *base, uint16_t first_mcb, uint16_t want,
+                            uint16_t *out_seg, uint16_t *out_max) {
     uint16_t m = first_mcb, biggest = 0, result = 0;
     int done = 0;
     for (;;) {
@@ -114,7 +114,7 @@ static int dos_alloc(volatile uint8_t *base, uint16_t first_mcb, uint16_t want,
 /* --- AH=49: free the block whose data segment is `es_seg` ------------------- *
  * Marks the block free and coalesces forward into any following free blocks.
  * Returns 0 on success, 9 if es_seg-1 is not a valid MCB. */
-static int dos_free(volatile uint8_t *base, uint16_t es_seg) {
+static inline int dos_free(volatile uint8_t *base, uint16_t es_seg) {
     uint16_t m = (uint16_t)(es_seg - 1);
     volatile uint8_t *mc = mcb_at(base, m);
     if (mc[0] != 'M' && mc[0] != 'Z') return 9;
@@ -134,8 +134,8 @@ static int dos_free(volatile uint8_t *base, uint16_t es_seg) {
  * Shrink frees the tail; grow absorbs a following free neighbour (if any).
  * Returns 0 on success; 9 if not a valid block; 8 if it cannot grow, with
  * *out_max = the largest size achievable. */
-static int dos_resize(volatile uint8_t *base, uint16_t es_seg, uint16_t want,
-                      uint16_t *out_max) {
+static inline int dos_resize(volatile uint8_t *base, uint16_t es_seg, uint16_t want,
+                             uint16_t *out_max) {
     uint16_t m = (uint16_t)(es_seg - 1);
     volatile uint8_t *mc = mcb_at(base, m);
     if (mc[0] != 'M' && mc[0] != 'Z') return 9;
@@ -183,7 +183,7 @@ static int dos_resize(volatile uint8_t *base, uint16_t es_seg, uint16_t want,
  * Walk from first_mcb; returns 0 if the chain is well-formed and ends exactly
  * at top_para with a single 'Z', else a nonzero reason code:
  *   1 runaway chain  2 corrupt signature  3 overruns top  4 'Z' misplaced. */
-static int dos_mcb_check(volatile uint8_t *base, uint16_t first_mcb, uint16_t top_para) {
+static inline int dos_mcb_check(volatile uint8_t *base, uint16_t first_mcb, uint16_t top_para) {
     uint16_t m = first_mcb;
     int guard = 0;
     for (;;) {

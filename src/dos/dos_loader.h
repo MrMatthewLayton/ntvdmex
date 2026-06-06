@@ -26,8 +26,8 @@ static inline uint16_t dos_ld_rd16(const uint8_t *p) {
  *    CS:IP/SS:SP from the header (segment fields biased by the load segment).
  *  - flat .COM: copied to psp_seg:0x100; CS=SS=psp_seg, IP=0x100, SP=0xFFFE.
  * Returns the entry context. Mirrors vdmhost.c's M2.3 loader exactly. */
-static dos_image_t dos_load(volatile uint8_t *base, const uint8_t *file,
-                            uint32_t nread, uint16_t psp_seg) {
+static inline dos_image_t dos_load(volatile uint8_t *base, const uint8_t *file,
+                                   uint32_t nread, uint16_t psp_seg) {
     dos_image_t e;
     uint32_t i;
     if (nread >= 0x1C && file[0] == 'M' && file[1] == 'Z') {

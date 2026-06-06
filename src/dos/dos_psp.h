@@ -13,8 +13,8 @@
  * top-of-conventional-memory segment (0xA000 = 640KB). The command tail is empty
  * (length 0) until M2.5 wires real args; psp[0x81] holds the 0x0D the command-tail
  * parser scans for. Mirrors vdmhost.c's PSP setup. */
-static void dos_psp_build(volatile uint8_t *base, uint16_t psp_seg,
-                          uint16_t env_seg, uint16_t top_seg) {
+static inline void dos_psp_build(volatile uint8_t *base, uint16_t psp_seg,
+                                 uint16_t env_seg, uint16_t top_seg) {
     volatile uint8_t *psp = mcb_at(base, psp_seg);
     volatile uint8_t *env = mcb_at(base, env_seg);
     uint32_t i;

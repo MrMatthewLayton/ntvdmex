@@ -98,3 +98,28 @@ target_link_options(vdmhost PRIVATE
     -Wl,--major-subsystem-version,4 -Wl,--minor-subsystem-version,0
     -Wl,--disable-nxcompat -Wl,--disable-dynamicbase)
 target_link_libraries(vdmhost PRIVATE kernel32 user32 gcc)
+
+# --- ntvdmhost.exe: the clean DOS VDM host (M2.6) ------------------------------
+# The promotion target: the proven DOS core, rebuilt from clean src/ modules
+# (src/dos + src/vdm + src/host) instead of the throwaway tools/vdmhost spike.
+# Same PE shape as the spike so XP accepts us as the VDM host: ImageBase
+# 0x0F000000 (leaves the low ~240MB free for the V86/DOS address space the VDM
+# maps), CUI/4.0 subsystem, ASLR/NX cleared. No CRT (src/runtime.c).
+add_executable(ntvdmhost
+    src/host/main.c
+    src/vdm/v86.c
+    src/vdm/csrss.c
+    src/dos/dos_int21.c
+    src/runtime.c)
+target_include_directories(ntvdmhost PRIVATE src/host src/vdm src/dos)
+ntvdmex_configure_xp_target(ntvdmhost)
+# The host deliberately dereferences absolute V86 low-memory addresses (paragraph<<4
+# off a NULL base), which -Warray-bounds flags as "outside array bounds". That's a
+# false positive for direct hardware-address access -- silence it for this target.
+target_compile_options(ntvdmhost PRIVATE -Wno-array-bounds)
+target_link_options(ntvdmhost PRIVATE
+    -Wl,--image-base,0x0f000000
+    -Wl,--subsystem,console -Wl,--entry,_WinMainCRTStartup
+    -Wl,--major-subsystem-version,4 -Wl,--minor-subsystem-version,0
+    -Wl,--disable-nxcompat -Wl,--disable-dynamicbase)
+target_link_libraries(ntvdmhost PRIVATE kernel32 user32 gcc)
