@@ -66,10 +66,16 @@ def read_quiet(sock, quiet=2.0, hard=40.0, until=None):
             break
     return bytes(out).decode("latin1", "replace")
 
-def run(sock, cmd, prompt=None, quiet=2.0, hard=60.0):
+def run(sock, cmd, prompt=None, quiet=2.0, hard=None):
     """Send a command and read its output. If `prompt` (the shell's 'C:\\..>'
     string) is known we read until it reappears -- reliable even when output
-    pauses; otherwise we fall back to a quiet-gap heuristic."""
+    pauses; otherwise we fall back to a quiet-gap heuristic.
+
+    `hard` caps how long we wait for one command; it defaults to XP_CMD_TIMEOUT
+    (60s) so a blocking guest-side command (e.g. runwait.bat polling for the
+    agent) can be given a longer budget without reconnecting."""
+    if hard is None:
+        hard = float(os.environ.get("XP_CMD_TIMEOUT", "60"))
     sock.sendall((cmd + "\r\n").encode("latin1", "replace"))
     return read_quiet(sock, quiet=quiet, hard=hard, until=prompt)
 
@@ -114,11 +120,29 @@ def login_once(cmds):
         try: s.close()
         except OSError: pass
 
+def wait_ready(timeout=240):
+    """Poll a real login until the shell prompt returns -- the only reliable
+    'guest is up' signal. The forwarded TCP port accepts the instant QEMU starts
+    (before the guest telnet service is listening), so a bare port probe gives a
+    false ready; an actual login does not."""
+    start = time.time(); n = 0
+    while time.time() - start < timeout:
+        n += 1
+        ok, _ = login_once(["ver"])
+        if ok:
+            return True
+        time.sleep(min(5.0, 1.5 * n))
+    return False
+
 def main():
+    if len(sys.argv) > 1 and sys.argv[1] == "--wait":
+        if wait_ready():
+            print("guest ready"); return 0
+        print("guest not ready (timeout)", file=sys.stderr); return 1
     cmds = [sys.argv[1]] if len(sys.argv) > 1 else \
            [l for l in sys.stdin.read().splitlines() if l.strip()]
     if not cmds:
-        print("usage: xp.py \"<cmd>\"  |  echo cmds | xp.py", file=sys.stderr); return 2
+        print("usage: xp.py \"<cmd>\"  |  echo cmds | xp.py  |  xp.py --wait", file=sys.stderr); return 2
     last = ""
     for attempt in range(3):
         ok, out = login_once(cmds)
