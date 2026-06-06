@@ -3,7 +3,7 @@
 > **This is the canonical resume point.** Update it at the end of every working session.
 
 - **Last updated:** 2026-06-06
-- **Phase:** M2 — DOS kernel (M0 + M1 done); **M2.4 DONE**; **M2.6 IN PROGRESS — promoting spike → clean `src/` (pure DOS core + NT contract done off-VM; V86 glue next)**
+- **Phase:** M2 — DOS kernel (M0 + M1 done); **M2.4 DONE**; **M2.6 IN PROGRESS — clean `src/` host compiles + links (KERNEL32-only imports); only the VM gate (Hello World) remains**
 - **Overall status:** 🟢 **The keystone is proven.** A real DOS `.COM`, loaded off disk, runs on the
   real CPU in **Virtual-8086 mode** via `NtVdmControl` and prints "Hello, World" through our own INT
   21h handler — launched transparently when XP starts a 16-bit program (IFEO redirect). The whole
@@ -125,16 +125,19 @@ reference until parity; merge into the Luna window at M3. Slices (each its own c
   (VDM_COMMAND_INFO, NtVdmControl/VdmInitialize + ICA, RegisterConsoleVDM, the section syscalls, and
   the VDM_TIB + CONTEXT field offsets) consolidated from the spike's globals; + `src/host/log.h`
   (`6a8b26a`). The whole clean `src/` surface cross-compiles clean together with the i686 XP toolchain.
-- **Slice 2b ⬜ (next):** port the V86 glue → `src/vdm/v86.c` (memory map + VdmInitialize +
-  self-allocated VDM_TIB + entry CONTEXT + the VdmStartExecution/BOP service loop) and
-  `src/vdm/csrss.c` (RegisterConsoleVDM + GetNextVDMCommand + TaskId + resolve `CurDir\Title`) +
-  `src/host/main.c` orchestration + a new CMake console target → **the clean host compiles + links**.
-- **Slice 3 ⬜:** the INT 21h surface (`src/dos/dos_int21.*` — console + Win32 file I/O + memory via
-  `dos_mcb.h` + misc) wired into the host; add the **import-allowlist build check** (imports ⊆ XP DLLs).
-- **Slice 4 ⬜:** one `gate.bat` run — the clean host runs Hello World in V86 → **M2.6 exit met**.
+- **Slice 2b ✅ (`300657f`):** the V86 glue — `src/vdm/v86.c` (memory map + VdmInitialize +
+  self-allocated VDM_TIB + entry CONTEXT + VdmStartExecution/BOP service loop), `src/vdm/csrss.c`
+  (RegisterConsoleVDM + GetNextVDMCommand + TaskId + resolve `CurDir\Title`), `src/host/main.c`
+  orchestration, + the **`ntvdmhost`** CMake console target. **Compiles + links, zero warnings.**
+- **Slice 3 ✅ (`300657f`):** the INT 21h surface (`src/dos/dos_int21.*` — console + Win32 file I/O +
+  misc; AH=48/49/4A delegate to `dos_mcb.h`, no inline copy) wired into the host. Import-allowlist
+  check (`scripts/check-imports.sh`) passes — **`ntvdmhost.exe` imports KERNEL32 only** (no CRT/UCRT).
+- **Slice 4 ⬜ (only thing left):** one `gate.bat` run — the clean host runs Hello World in V86 →
+  **M2.6 exit met**. Needs the VM (runtime correctness of the ported V86 glue proves out only there).
 
-The delicate heart is slice 2b (the V86/NT glue): a faithful mechanical port of the spike, verifiable
-off-VM only as far as "compiles + links + passes the allowlist" — runtime correctness needs the gate.
+The clean host is built and XP-safe; what's unverified is the *runtime* behaviour of the ported V86/NT
+glue. To gate it (slice 4): register `ntvdmhost.exe` as the IFEO `Debugger` on `ntvdm.exe` (in place
+of the spike) and run `gate.bat`; the clean host logs to `C:\ntvdmex\ntvdmhost.log`.
 
 ## Single next action
 
@@ -149,9 +152,9 @@ off-VM only as far as "compiles + links + passes the allowlist" — runtime corr
    automated telnet path that passed a live round, but it's slow and reads as a hang — not default.)
 
 Next work:
-3. **M2.6 slice 2b (active):** port the V86/CSRSS glue → `src/vdm/v86.c` + `src/vdm/csrss.c` +
-   `src/host/main.c` + a CMake console target, until the clean host compiles + links (off-VM). See the
-   M2.6 section above. (`merge-on-alloc` ✅ done `8d84af4`, battery 33/33.)
+3. **M2.6 slice 4 (only remaining):** gate the clean host on the VM — register `ntvdmhost.exe` as the
+   IFEO `Debugger` and run `gate.bat`; confirm Hello World in V86 → M2.6 exit met. Slices 1–3 done:
+   clean host compiles + links, KERNEL32-only imports, off-VM battery 42/42. (See the M2.6 section.)
 4. **Re-run mem.exe** (now handles 44h/63h); chase `Parse Error 1` (missing INT 21h surface / env
    block → M2.5). *Needs a VM gate — investigate via `gate.bat` with mem.exe as the target.*
 5. **M2.5 cmdline recovery** (`GetNextVDMCommand` never populated `CmdLine`; PSP tail is empty);

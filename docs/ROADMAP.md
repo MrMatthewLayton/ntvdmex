@@ -97,9 +97,10 @@ Per-step exit criteria:
   now implemented (test T9). Impl ⬜ = the M2.6 `src/` promotion.
 - **M2.5** — exit codes propagate to the launching shell; args + environment are visible to the guest.
 - **M2.6** — the clean host (not the spike) runs Hello World, gated by an import-allowlist check.
-  🟡 In progress: `src/dos/` pure core (allocator/loader/PSP, off-VM battery 42/42) + `src/vdm/ntvdm.h`
-  contract + `src/host/log.h` done (slices 1–2a, all cross-compile clean). Next: the V86/CSRSS glue +
-  CMake console target (compiles+links), then the INT 21h surface + allowlist, then a `gate.bat` run.
+  🟡 Slices 1–3 done: the **`ntvdmhost`** console target **compiles + links** from clean `src/` modules
+  (`src/dos` core + `src/vdm` V86/CSRSS glue + INT 21h surface + `src/host`), imports **KERNEL32 only**
+  (`scripts/check-imports.sh`), off-VM battery 42/42. Remaining: slice 4 — a `gate.bat` run confirming
+  the clean host runs Hello World in V86.
 
 ## M3 — Device model + video/input ⬜
 - [ ] Pluggable **VDD** interface (the third-party hook point, requirement #13)
