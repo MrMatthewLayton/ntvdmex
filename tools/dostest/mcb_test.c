@@ -115,20 +115,30 @@ int main(void) {
     CHECK(rc == 0 && sz_of(0xFF) == 0x2000, "resize to same size is a no-op success");
     CHECK(dos_mcb_check(mem, first, DOS_MEM_TOP) == 0, "final: chain consistent");
 
-    /* T9 (KNOWN GAP, pinned deliberately): free() coalesces FORWARD only and
-     * alloc() never merges adjacent free blocks, whereas real MS-DOS merges
-     * adjacent free blocks during the allocation walk. So two adjacent free
-     * blocks cannot jointly satisfy a request neither satisfies alone. Pinning
-     * this so a future "merge-on-alloc" fix is a deliberate, visible change. */
+    /* T9: merge-on-alloc. alloc() coalesces adjacent free blocks during the walk
+     * (as real MS-DOS does), so two adjacent free blocks jointly satisfy a request
+     * that neither satisfies alone. (Previously a pinned gap; now closed.) */
     {
         static uint8_t g[0x10000];
         mcb_lay(g, 0x0300, 'M', 0,           0x20);   /* free block #1            */
         mcb_lay(g, 0x0321, 'M', 0,           0x20);   /* free block #2 (adjacent) */
         mcb_lay(g, 0x0342, 'Z', DOS_PSP_SEG, 0x10);   /* owned terminator         */
-        max = 0;
+        seg = max = 0;
         rc = dos_alloc(g, 0x0300, 0x21, &seg, &max);
-        CHECK(rc == 8 && max == 0x20,
-              "KNOWN GAP: adjacent free blocks not merged on alloc (real DOS would satisfy 0x21)");
+        /* merged = 0x20 + 1 + 0x20 = 0x41 paras; alloc 0x21 splits it, leaving a
+         * 0x41 - 0x21 - 1 = 0x1F free tail at paragraph 0x322. */
+        CHECK(rc == 0 && seg == 0x0301,
+              "merge-on-alloc: adjacent free blocks merged to satisfy 0x21");
+        CHECK(g[(uint32_t)0x0300 << 4] == 'M'
+              && mcb_rd16(g + (((uint32_t)0x0300 << 4) + 1)) == DOS_PSP_SEG
+              && mcb_rd16(g + (((uint32_t)0x0300 << 4) + 3)) == 0x21,
+              "merge-on-alloc: allocated block = M / PSP / 0x21");
+        CHECK(g[(uint32_t)0x0322 << 4] == 'M'
+              && mcb_rd16(g + (((uint32_t)0x0322 << 4) + 1)) == 0
+              && mcb_rd16(g + (((uint32_t)0x0322 << 4) + 3)) == 0x1F,
+              "merge-on-alloc: free tail = M / free / 0x1F");
+        CHECK(dos_mcb_check(g, 0x0300, 0x0353) == 0,
+              "merge-on-alloc: mini-chain consistent");
     }
 
     dump_chain(first);

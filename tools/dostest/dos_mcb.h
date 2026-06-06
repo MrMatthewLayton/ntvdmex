@@ -76,6 +76,18 @@ static int dos_alloc(volatile uint8_t *base, uint16_t first_mcb, uint16_t want,
         uint16_t own = mcb_rd16(mc + 1);
         uint16_t sz  = mcb_rd16(mc + 3);
         if (own == 0) {                                 /* free block */
+            /* merge-on-alloc: coalesce following free blocks before sizing, so two
+               adjacent free blocks jointly satisfy a request neither satisfies alone
+               (this is what real MS-DOS does during the allocation walk). */
+            while (sig == 'M') {
+                volatile uint8_t *nm = mcb_at(base, (uint16_t)(m + 1 + sz));
+                if (mcb_rd16(nm + 1) != 0) break;       /* next block owned    */
+                if (nm[0] != 'M' && nm[0] != 'Z') break;/* next is not an MCB  */
+                sz = (uint16_t)(sz + 1 + mcb_rd16(nm + 3));
+                mcb_wr16(mc + 3, sz);
+                sig = nm[0];                            /* may become 'Z'      */
+                mc[0] = sig;
+            }
             if (sz > biggest) biggest = sz;
             if (sz >= want) {
                 if (sz >= (uint16_t)(want + 1)) {       /* split off a free tail */

@@ -720,6 +720,19 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                         BYTE sig = mc[0]; WORD own = *(volatile WORD *)(mc + 1);
                         WORD sz = *(volatile WORD *)(mc + 3);
                         if (own == 0) {                 /* free block */
+                            /* merge-on-alloc: coalesce following free blocks before
+                               sizing, so adjacent free blocks jointly satisfy a request
+                               (as real MS-DOS does). Mirrors tools/dostest/dos_mcb.h. */
+                            while (sig == 'M') {
+                                volatile BYTE *nm =
+                                    (volatile BYTE *)(((DWORD)m + 1 + sz) << 4);
+                                if (*(volatile WORD *)(nm + 1) != 0) break;
+                                if (nm[0] != 'M' && nm[0] != 'Z') break;
+                                sz = (WORD)(sz + 1 + *(volatile WORD *)(nm + 3));
+                                *(volatile WORD *)(mc + 3) = sz;
+                                sig = nm[0];
+                                mc[0] = sig;
+                            }
                             if (sz > biggest) biggest = sz;
                             if (sz >= want) {
                                 if (sz >= (WORD)(want + 1)) {   /* split off a free tail */
