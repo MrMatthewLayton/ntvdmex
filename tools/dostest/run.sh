@@ -15,3 +15,10 @@ cc -std=c99 -Wall -Wextra -Wno-unused-function -O0 -g \
    -o "$DIR/mcb_test" "$DIR/mcb_test.c"
 
 "$DIR/mcb_test"
+
+# M3 slice-1: the VDD device bus battery (vdd_bus.c + ntvdd.h).
+cc -std=c99 -Wall -Wextra -Wno-unused-function -O0 -g \
+   -I "$DIR/../../src/vdd" \
+   -o "$DIR/vdd_test" "$DIR/vdd_test.c" "$DIR/../../src/vdd/vdd_bus.c"
+
+"$DIR/vdd_test"
