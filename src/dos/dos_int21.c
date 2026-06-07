@@ -25,6 +25,8 @@ void dos_int21_init(dos_machine_t *m, uint16_t first_mcb)
     m->exit_code = 0;
     m->conout = 0;
     m->conctx = 0;
+    m->conin = 0;
+    m->cinctx = 0;
 }
 
 int dos_int21(dos_machine_t *m)
@@ -63,6 +65,25 @@ int dos_int21(dos_machine_t *m)
         cont = 0;
     } else if (ah == 0x02) {                    /* print char DL */
         OUTC(R_DX & 0xFF); OKCF();
+    } else if (ah == 0x01 || ah == 0x07 || ah == 0x08) {   /* read char (01 echoes) */
+        int c = m->conin ? m->conin(m->cinctx) : 0;
+        if (ah == 0x01) OUTC(c);                /* AH=01: echo                     */
+        SETAX((R_AX & 0xFF00) | (c & 0xFF)); OKCF();
+    } else if (ah == 0x0A) {                    /* buffered input DS:DX */
+        volatile BYTE *buf = (volatile BYTE *)((R_DS << 4) + (R_DX & 0xFFFF));
+        int maxn = buf[0], n = 0, c;
+        while (n < maxn - 1) {
+            c = m->conin ? m->conin(m->cinctx) : 0x0D;
+            if (c == 0x0D) break;
+            if (c == 0x08) { if (n > 0) { --n; OUTC(0x08); OUTC(' '); OUTC(0x08); } continue; }
+            buf[2 + n++] = (BYTE)c; OUTC(c);
+        }
+        buf[1] = (BYTE)n; buf[2 + n] = 0x0D;
+        OUTC(0x0D); OUTC(0x0A);
+        OKCF();
+    } else if (ah == 0x0B) {                    /* check input status */
+        SETAX((R_AX & 0xFF00) | 0x00);          /* 0 = no char waiting (simplified) */
+        OKCF();
     } else if (ah == 0x09) {                    /* print $-string DS:DX */
         const volatile BYTE *s = (const volatile BYTE *)((R_DS << 4) + (R_DX & 0xFFFF));
         int k; for (k = 0; k < 1024 && *s != '$'; ++k, ++s) OUTC(*s);

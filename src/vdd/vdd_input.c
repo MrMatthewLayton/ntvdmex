@@ -1,0 +1,67 @@
+/* vdd_input.c -- see vdd_input.h.  Keyboard ring buffer + INT 16h servicer, on
+ * the VDD bus.  Pure C, no <windows.h>; non-blocking (reports empty via ZF). */
+#include "vdd_input.h"
+
+static int next(int i) { return (i + 1) % VDD_KBD_SIZE; }
+
+void vdd_input_push(input_state *st, uint16_t key)
+{
+    int n = next(st->head);
+    if (n == st->tail) st->tail = next(st->tail);  /* full -> drop oldest        */
+    st->buf[st->head] = key;
+    st->head = n;
+}
+
+int vdd_input_pop(input_state *st, uint16_t *key)
+{
+    if (st->head == st->tail) return 0;
+    *key = st->buf[st->tail];
+    st->tail = next(st->tail);
+    return 1;
+}
+
+int vdd_input_peek(input_state *st, uint16_t *key)
+{
+    if (st->head == st->tail) return 0;
+    *key = st->buf[st->tail];
+    return 1;
+}
+
+/* INT 16h -- BIOS keyboard. ZF semantics: AH=01 sets ZF=1 when no key is ready.
+   AH=00 here is non-blocking (the host loops + waits on a key event, re-issuing
+   until ZF=0); it sets ZF=1 + leaves AX when the buffer is empty. */
+static void int16(void *self, ntvdd_regs *r)
+{
+    input_state *st = (input_state *)self;
+    uint16_t key;
+    switch (r_ah(r)) {
+    case 0x00:                              /* read key (host blocks on empty)    */
+        if (vdd_input_pop(st, &key)) { s_ax(r, key); r->zf = 0; }
+        else r->zf = 1;
+        break;
+    case 0x01:                              /* check key (non-blocking)           */
+        if (vdd_input_peek(st, &key)) { s_ax(r, key); r->zf = 0; }
+        else r->zf = 1;
+        break;
+    case 0x02:                              /* shift status -> none for now        */
+        s_al(r, 0); r->zf = 0;
+        break;
+    default:
+        r->zf = 0;
+        break;
+    }
+}
+
+void vdd_input_reset(void *self)
+{
+    input_state *st = (input_state *)self;
+    st->head = st->tail = 0;
+}
+
+int vdd_input_init(vdd_bus *b, void *self)
+{
+    input_state *st = (input_state *)self;
+    st->bus = b;
+    vdd_input_reset(st);
+    return vdd_claim_int(b, 0x16, int16, st);
+}

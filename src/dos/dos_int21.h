@@ -24,6 +24,8 @@ typedef struct {
     int      exit_code;        /* AH=4Ch AL -- DOS errorlevel (read after the loop) */
     void   (*conout)(void *ctx, uint8_t ch);  /* optional sink for console output  */
     void    *conctx;           /* passed to conout (e.g. the video VDD)            */
+    int    (*conin)(void *ctx); /* optional source for console input (blocking)     */
+    void    *cinctx;           /* passed to conin (e.g. the keyboard VDD)          */
 } dos_machine_t;
 
 /* Zero the handle table, set the MCB root, default DTA = PSP:0x80. */

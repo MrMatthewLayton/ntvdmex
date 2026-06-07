@@ -25,6 +25,7 @@
 #include "vdd_bus.h"
 #include "vdd_pit.h"
 #include "vdd_video.h"
+#include "vdd_input.h"
 #include "present_ddraw.h"
 
 #define LOG_PATH    "C:\\ntvdmex\\ntvdmhost.log"
@@ -40,10 +41,13 @@ static BYTE filebuf[0x20000];
 static vdd_bus      g_bus;
 static pit_state    g_pit;       static ntvdd g_pit_dev;
 static video_state  g_vid;       static ntvdd g_vid_dev;
+static input_state  g_in;        static ntvdd g_in_dev;
 static present_ddraw g_pd;
 static int          g_irq_pending = -1;     /* last IRQ a VDD raised (spike obs) */
 static CRITICAL_SECTION g_lock;             /* serialises all bus dispatch       */
 static HWND         g_hwnd;
+static HANDLE       g_key_event;            /* signalled when a key is pushed     */
+static volatile LONG g_running = 1;         /* 0 once the window is closed         */
 
 static void host_irq_sink(void *ctx, uint8_t irq) { (void)ctx; g_irq_pending = irq; }
 
@@ -54,6 +58,32 @@ static void host_conout(void *ctx, uint8_t ch)
     EnterCriticalSection(&g_lock);
     vdd_video_putc(&g_vid, ch);
     LeaveCriticalSection(&g_lock);
+}
+
+/* DOS console input (INT 21h AH=01/07/08/0A) -> the keyboard VDD ring, blocking
+   on the V86 thread until the UI thread pushes a key (or the window closes). */
+static int host_conin(void *ctx)
+{
+    uint16_t k; int got;
+    (void)ctx;
+    for (;;) {
+        EnterCriticalSection(&g_lock);
+        got = vdd_input_pop(&g_in, &k);
+        LeaveCriticalSection(&g_lock);
+        if (got) return k & 0xFF;
+        if (!g_running) return 0x1B;            /* window gone -> unblock as ESC   */
+        WaitForSingleObject(g_key_event, 50);
+    }
+}
+
+/* Reflect CF/ZF a bus interrupt returned onto the FLAGS the INT pushed on the
+   V86 stack (SS:SP+4) -- the handler's IRET restores them. */
+static void host_set_flags(volatile BYTE *tib, uint8_t cf, uint8_t zf)
+{
+    volatile WORD *pfl = (volatile WORD *)(((VDM_REG(tib, VTIB_SS) & 0xFFFF) << 4)
+                         + (((VDM_REG(tib, VTIB_ESP) & 0xFFFF) + 4) & 0xFFFF));
+    if (cf) *pfl |= 0x0001; else *pfl &= (WORD)~0x0001;
+    if (zf) *pfl |= 0x0040; else *pfl &= (WORD)~0x0040;
 }
 
 /* --- the UI thread: window + DirectDraw present + frame timer --------------- */
@@ -71,7 +101,17 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
     case WM_KEYDOWN:
         if (wp == VK_F11) { present_ddraw_set_fullscreen(&g_pd, !g_pd.fullscreen); return 0; }
         break;
-    case WM_DESTROY: PostQuitMessage(0); return 0;
+    case WM_CHAR:                        /* translated ASCII -> keyboard ring     */
+        EnterCriticalSection(&g_lock);
+        vdd_input_push(&g_in, (uint16_t)(wp & 0xFF));
+        LeaveCriticalSection(&g_lock);
+        if (g_key_event) SetEvent(g_key_event);
+        return 0;
+    case WM_DESTROY:
+        InterlockedExchange(&g_running, 0);
+        if (g_key_event) SetEvent(g_key_event);   /* unblock the V86 thread        */
+        PostQuitMessage(0);
+        return 0;
     }
     return DefWindowProcA(h, msg, wp, lp);
 }
@@ -184,6 +224,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     unsigned i; int guard;
     static const BYTE bop[] = { VDM_BOP0, VDM_BOP1, 0x20, 0xCF };  /* BOP 0x20 ; iret */
     static const BYTE bop10[] = { VDM_BOP0, VDM_BOP1, 0x10, 0xCF }; /* BOP 0x10 ; iret */
+    static const BYTE bop16[] = { VDM_BOP0, VDM_BOP1, 0x16, 0xCF }; /* BOP 0x16 ; iret */
     HANDLE ui = NULL;
 
     (void)hInst; (void)hPrev; (void)lpCmd; (void)nShow;
@@ -280,6 +321,9 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     for (i = 0; i < sizeof(bop10); ++i) hdlr[0x20 + i] = bop10[i];  /* INT 10h stub */
     *(volatile WORD *)0x40 = 0x0020;                        /* IVT[0x10].offset    */
     *(volatile WORD *)0x42 = DOS_HDLR_SEG;                  /* IVT[0x10].segment   */
+    for (i = 0; i < sizeof(bop16); ++i) hdlr[0x28 + i] = bop16[i];  /* INT 16h stub */
+    *(volatile WORD *)0x58 = 0x0028;                        /* IVT[0x16].offset    */
+    *(volatile WORD *)0x5A = DOS_HDLR_SEG;                  /* IVT[0x16].segment   */
 
     dos_psp_build(NULL, DOS_PSP_SEG, DOS_ENV_SEG, DOS_MEM_TOP);
     dos_env_build(NULL, DOS_ENV_SEG, progpath[0] ? progpath : "C:\\PROGRAM.COM");  /* M2.5: env */
@@ -298,10 +342,14 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     vdd_bus_add(&g_bus, &g_pit_dev);
     g_vid_dev = vdd_video_device(&g_vid);
     vdd_bus_add(&g_bus, &g_vid_dev);
-    m.conout = host_conout; m.conctx = NULL;    /* DOS console -> video screen   */
+    g_in_dev = vdd_input_device(&g_in);
+    vdd_bus_add(&g_bus, &g_in_dev);             /* keyboard: claims INT 16h      */
+    m.conout = host_conout; m.conctx = NULL;    /* DOS console out -> video      */
+    m.conin  = host_conin;  m.cinctx = NULL;    /* DOS console in  <- keyboard   */
 
     /* Hide the inherited console (CSRSS already bound the VDM); the Luna window
        is now the display. Then start the UI thread that owns it. */
+    g_key_event = CreateEventA(NULL, FALSE, FALSE, NULL);   /* auto-reset        */
     { HWND con = GetConsoleWindow(); if (con) ShowWindow(con, SW_HIDE); }
     ui = CreateThread(NULL, 0, ui_thread, NULL, 0, NULL);
 
@@ -347,13 +395,28 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             log_append(LOG_PATH, base, p); p = base;
             break;
         }
-        /* Route the BOP by its number: 0x10 -> INT 10h (video VDD), else INT 21h. */
+        /* Route the BOP by its number: 0x10 -> INT 10h, 0x16 -> INT 16h (both via
+           the bus), else INT 21h. */
         if ((VDM_REG(tib, VTIB_EVENT_INFO) & 0xFF) == 0x10) {
             ntvdd_regs r; regs_load(&r, tib);
             EnterCriticalSection(&g_lock);
             vdd_bus_deliver_int(&g_bus, 0x10, &r);
             LeaveCriticalSection(&g_lock);
             regs_store(&r, tib);
+            VDM_REG(tib, VTIB_EIP) += 3;
+            continue;
+        }
+        if ((VDM_REG(tib, VTIB_EVENT_INFO) & 0xFF) == 0x16) {
+            ntvdd_regs r; uint8_t ah16; regs_load(&r, tib); ah16 = r_ah(&r);
+            for (;;) {                          /* AH=00 blocks until a key       */
+                EnterCriticalSection(&g_lock);
+                vdd_bus_deliver_int(&g_bus, 0x16, &r);
+                LeaveCriticalSection(&g_lock);
+                if (ah16 != 0x00 || r.zf == 0 || !g_running) break;
+                WaitForSingleObject(g_key_event, 50);
+            }
+            regs_store(&r, tib);
+            host_set_flags(tib, r.cf, r.zf);
             VDM_REG(tib, VTIB_EIP) += 3;
             continue;
         }

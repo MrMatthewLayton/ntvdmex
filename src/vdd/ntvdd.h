@@ -35,6 +35,7 @@ typedef struct ntvdd_regs {
     uint32_t eax, ebx, ecx, edx, esi, edi, ebp;
     uint16_t ds, es;
     uint8_t  cf;            /* carry flag: read+write by the handler            */
+    uint8_t  zf;            /* zero flag: e.g. INT 16h AH=01 "key available"    */
 } ntvdd_regs;
 
 /* 8/16-bit sub-register accessors (keep call sites readable). */

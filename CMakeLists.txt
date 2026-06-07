@@ -93,6 +93,7 @@ add_executable(ntvdmhost
     src/vdd/vdd_bus.c
     src/vdd/vdd_pit.c
     src/vdd/vdd_video.c
+    src/vdd/vdd_input.c
     src/vdd/present_ddraw.c
     src/runtime.c)
 target_include_directories(ntvdmhost PRIVATE src/host src/vdm src/dos src/vdd)

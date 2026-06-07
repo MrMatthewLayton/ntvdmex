@@ -38,3 +38,11 @@ cc -std=c99 -Wall -Wextra -Wno-unused-function -O0 -g \
    "$DIR/../../src/vdd/vdd_video.c" "$DIR/../../src/vdd/vdd_bus.c"
 
 "$DIR/video_test"
+
+# M3 slice-6: the keyboard input VDD battery (vdd_input.c on the bus).
+cc -std=c99 -Wall -Wextra -Wno-unused-function -O0 -g \
+   -I "$DIR/../../src/vdd" \
+   -o "$DIR/input_test" "$DIR/input_test.c" \
+   "$DIR/../../src/vdd/vdd_input.c" "$DIR/../../src/vdd/vdd_bus.c"
+
+"$DIR/input_test"
