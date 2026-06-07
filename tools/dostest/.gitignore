@@ -1,3 +1,5 @@
 /mcb_test
 *.o
 *.dSYM/
+/vdd_test
+/pit_test

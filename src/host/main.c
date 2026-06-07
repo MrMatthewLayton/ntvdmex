@@ -18,6 +18,8 @@
 #include "dos_env.h"
 #include "dos_int21.h"
 #include "dos_layout.h"
+#include "vdd_bus.h"
+#include "vdd_pit.h"
 
 #define LOG_PATH    "C:\\ntvdmex\\ntvdmhost.log"
 #define TARGET_PATH "C:\\ntvdmex\\target.txt"
@@ -27,6 +29,69 @@ static char g_cmd[1024], g_app[1024], g_cur[512], g_pif[512];
 static char g_env[8192], g_desk[512], g_title[512], g_rsv[512];
 static VDM_COMMAND_INFO g_ci;
 static BYTE filebuf[0x20000];
+
+/* M3 slice-1b: the device bus + its VDDs live for the life of the host. */
+static vdd_bus  g_bus;
+static pit_state g_pit;
+static ntvdd     g_pit_dev;
+static int       g_irq_pending = -1;        /* last IRQ a VDD raised (spike obs) */
+
+static void host_irq_sink(void *ctx, uint8_t irq) { (void)ctx; g_irq_pending = irq; }
+
+/* Decode + service a V86 IN/OUT that #GP-faulted (event 2), dispatch it to the
+   bus, and advance EIP past the instruction so the guest resumes. Returns 1 if
+   the faulting instruction was a (supported) I/O op we handled, 0 if it was a
+   genuine GP fault the caller should stop on. Appends a trace line via *tpp. */
+static int host_try_io(volatile BYTE *tib, vdd_bus *bus, char **tpp)
+{
+    DWORD cs = VDM_REG(tib, VTIB_CS)  & 0xFFFF;
+    DWORD ip = VDM_REG(tib, VTIB_EIP) & 0xFFFF;
+    volatile BYTE *code = (volatile BYTE *)((cs << 4) + ip);   /* absolute V86 */
+    char *p = *tpp;
+    int i = 0, opsize = 2, is_in, width, used_dx, len;
+    BYTE op; uint16_t port; uint32_t val, eax;
+
+    while (code[i] == 0x66 || code[i] == 0x67 ||
+           code[i] == 0xF2 || code[i] == 0xF3) {        /* prefixes            */
+        if (code[i] == 0x66) opsize = 4;
+        if (++i > 4) return 0;
+    }
+    op = code[i];
+    switch (op) {
+    case 0xE4: is_in = 1; width = 1;      used_dx = 0; break;  /* IN  AL,ib    */
+    case 0xE5: is_in = 1; width = opsize; used_dx = 0; break;  /* IN  eAX,ib   */
+    case 0xE6: is_in = 0; width = 1;      used_dx = 0; break;  /* OUT ib,AL    */
+    case 0xE7: is_in = 0; width = opsize; used_dx = 0; break;  /* OUT ib,eAX   */
+    case 0xEC: is_in = 1; width = 1;      used_dx = 1; break;  /* IN  AL,DX    */
+    case 0xED: is_in = 1; width = opsize; used_dx = 1; break;  /* IN  eAX,DX   */
+    case 0xEE: is_in = 0; width = 1;      used_dx = 1; break;  /* OUT DX,AL    */
+    case 0xEF: is_in = 0; width = opsize; used_dx = 1; break;  /* OUT DX,eAX   */
+    default:   return 0;                       /* not an I/O op -> real fault  */
+    }
+    if (used_dx) { port = (uint16_t)VDM_REG(tib, VTIB_EDX); len = i + 1; }
+    else         { port = code[i + 1];                      len = i + 2; }
+
+    eax = VDM_REG(tib, VTIB_EAX);
+    if (is_in) {
+        val = 0;
+        vdd_bus_io(bus, port, (uint8_t)width, 1, &val);
+        if (width == 1)      VDM_REG(tib, VTIB_EAX) = (eax & 0xFFFFFF00u) | (val & 0xFF);
+        else if (width == 2) VDM_REG(tib, VTIB_EAX) = (eax & 0xFFFF0000u) | (val & 0xFFFF);
+        else                 VDM_REG(tib, VTIB_EAX) = val;
+        p = zput(p, "  IO in  port=0x"); p = zhex(p, port);
+        p = zput(p, " w="); p = zhex(p, (unsigned)width);
+        p = zput(p, " -> 0x"); p = zhex(p, val); p = zput(p, "\r\n");
+    } else {
+        val = (width == 1) ? (eax & 0xFF) : (width == 2) ? (eax & 0xFFFF) : eax;
+        vdd_bus_io(bus, port, (uint8_t)width, 0, &val);
+        p = zput(p, "  IO out port=0x"); p = zhex(p, port);
+        p = zput(p, " w="); p = zhex(p, (unsigned)width);
+        p = zput(p, " val=0x"); p = zhex(p, val); p = zput(p, "\r\n");
+    }
+    VDM_REG(tib, VTIB_EIP) = (ip + len) & 0xFFFF;          /* step past I/O    */
+    *tpp = p;
+    return 1;
+}
 
 int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
 {
@@ -137,6 +202,15 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     dos_cmdtail_build(NULL, DOS_PSP_SEG, args);                                    /* M2.5: args */
     dos_int21_init(&m, dos_mcb_init(NULL));
 
+    /* M3 slice-1b: stand up the device bus (NULL base => absolute V86 addresses)
+       and add the PIT VDD, which claims ports 0x40-0x43 + INT 08h/1Ah. I/O on
+       those ports now reflects as a #GP (event 2) and dispatches through the bus;
+       the INT/IRQ wiring (IVT BOP stubs + ICA delivery) is the next sub-step. */
+    vdd_bus_init(&g_bus, NULL);
+    vdd_bus_set_sinks(&g_bus, host_irq_sink, NULL, NULL, NULL);
+    g_pit_dev = vdd_pit_device(&g_pit);
+    vdd_bus_add(&g_bus, &g_pit_dev);
+
     v86_set_entry(tib, img.cs, img.ip, img.ss, img.sp, DOS_PSP_SEG);
     if (!img.is_exe)                                        /* .COM near-ret guard */
         *(volatile WORD *)(((DWORD)DOS_PSP_SEG << 4) + 0xFFFE) = 0;
@@ -153,10 +227,25 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     m.tib = tib; m.out = dosout; m.out_cap = sizeof(dosout); m.out_len = 0;
     for (guard = 0; guard < 4000; ++guard) {
         ev = v86_run(tib, &st);
+        /* I/O #GP (event 2): if it's an IN/OUT we can decode, service it via the
+           VDD bus and resume; otherwise it's a genuine fault -> fall through. */
+        if (ev == VDM_EVENT_GPFAULT && host_try_io(tib, &g_bus, &p)) {
+            log_append(LOG_PATH, base, p); p = base;
+            continue;
+        }
         if (ev != VDM_EVENT_BOP) {
+            DWORD csv = VDM_REG(tib, VTIB_CS) & 0xFFFF;
+            DWORD ipv = VDM_REG(tib, VTIB_EIP) & 0xFFFF;
+            volatile BYTE *cp = (volatile BYTE *)((csv << 4) + ipv);
+            BYTE ib[8]; unsigned k;
+            for (k = 0; k < 8; ++k) ib[k] = cp[k];
             p = zput(p, "STAGE2: stop event=0x"); p = zhex(p, ev);
-            p = zput(p, " CS:IP=0x"); p = zhex(p, VDM_REG(tib, VTIB_CS));
-            p = zput(p, ":0x"); p = zhex(p, VDM_REG(tib, VTIB_EIP)); p = zput(p, "\r\n");
+            p = zput(p, " status=0x"); p = zhex(p, (unsigned)st);
+            p = zput(p, " info=0x"); p = zhex(p, VDM_REG(tib, VTIB_EVENT_INFO));
+            p = zput(p, " CS:IP=0x"); p = zhex(p, csv);
+            p = zput(p, ":0x"); p = zhex(p, ipv); p = zput(p, "\r\n");
+            p = zput(p, "  bytes@CS:IP: "); p = zdump(p, ib, 8);
+            p = zput(p, "  VTIB[5A8..]: "); p = zdump(p, (const void *)(tib + 0x5A8), 0x20);
             log_append(LOG_PATH, base, p); p = base;
             break;
         }

@@ -127,7 +127,12 @@ typedef LONG (WINAPI *PFN_NtMapViewOfSection)(HANDLE, HANDLE, PVOID *, ULONG,
 /* V86 stop/event reporting in the VDM_TIB, read after VdmStartExecution returns. */
 #define VTIB_EVENT       0x5A8       /* event code (VDM_EVENT_BOP = serviceable BOP) */
 #define VTIB_EVENT_INFO  0x5B0       /* extra info for fault events                 */
-#define VDM_EVENT_BOP    4
+/* Event taxonomy (kernel -> host, ntvdm dispatch table 0xf064a60, index=VTIB_EVENT):
+   0,1,3 internal; 2 = GP fault (incl. IOPL-0 IN/OUT #GP -- info at VTIB_EVENT_INFO);
+   4 = BOP/software dispatch; 5 = terminate; 6 = hardware IRQ; >=7 exits the loop. */
+#define VDM_EVENT_GPFAULT 2
+#define VDM_EVENT_BOP     4
+#define VDM_EVENT_HWIRQ   6
 
 /* Access a 32-bit guest register/field at VDM_TIB offset `off` (e.g. VTIB_EAX). */
 #define VDM_REG(tib, off)      (*(volatile DWORD *)((volatile BYTE *)(tib) + (off)))

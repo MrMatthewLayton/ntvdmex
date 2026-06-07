@@ -90,8 +90,10 @@ add_executable(ntvdmhost
     src/vdm/v86.c
     src/vdm/csrss.c
     src/dos/dos_int21.c
+    src/vdd/vdd_bus.c
+    src/vdd/vdd_pit.c
     src/runtime.c)
-target_include_directories(ntvdmhost PRIVATE src/host src/vdm src/dos)
+target_include_directories(ntvdmhost PRIVATE src/host src/vdm src/dos src/vdd)
 ntvdmex_configure_xp_target(ntvdmhost)
 # The host deliberately dereferences absolute V86 low-memory addresses (paragraph<<4
 # off a NULL base), which -Warray-bounds flags as "outside array bounds". That's a
