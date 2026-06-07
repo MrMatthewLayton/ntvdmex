@@ -30,3 +30,11 @@ cc -std=c99 -Wall -Wextra -Wno-unused-function -O0 -g \
    "$DIR/../../src/vdd/vdd_pit.c" "$DIR/../../src/vdd/vdd_bus.c"
 
 "$DIR/pit_test"
+
+# M3 slice-4: the text-mode video VDD battery (vdd_video.c on the bus).
+cc -std=c99 -Wall -Wextra -Wno-unused-function -O0 -g \
+   -I "$DIR/../../src/vdd" \
+   -o "$DIR/video_test" "$DIR/video_test.c" \
+   "$DIR/../../src/vdd/vdd_video.c" "$DIR/../../src/vdd/vdd_bus.c"
+
+"$DIR/video_test"
