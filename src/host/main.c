@@ -15,6 +15,7 @@
 #include "dos_mcb.h"
 #include "dos_loader.h"
 #include "dos_psp.h"
+#include "dos_env.h"
 #include "dos_int21.h"
 #include "dos_layout.h"
 
@@ -35,10 +36,12 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     dos_image_t img;
     dos_machine_t m;
     char dosout[1024];
+    char progpath[768]; char args[256];
     unsigned i; int guard;
     static const BYTE bop[] = { VDM_BOP0, VDM_BOP1, 0x20, 0xCF };  /* BOP 0x20 ; iret */
 
     (void)hInst; (void)hPrev; (void)lpCmd; (void)nShow;
+    progpath[0] = 0; args[0] = 0;
 
     p = zput(p, "NTVDMEX clean host\r\nSTAGE0: WinMain entered\r\n");
     log_write(LOG_PATH, report, p);
@@ -83,16 +86,23 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         HANDLE ht = CreateFileA(TARGET_PATH, GENERIC_READ, FILE_SHARE_READ, NULL,
                                 OPEN_EXISTING, 0, NULL);
         if (ht != INVALID_HANDLE_VALUE) {
-            char tpath[512]; DWORD tn = 0; char *q;
+            char tpath[512]; DWORD tn = 0; char *q; char *a = 0;
             ReadFile(ht, tpath, sizeof(tpath) - 1, &tn, NULL); CloseHandle(ht);
             tpath[tn < sizeof(tpath) ? tn : sizeof(tpath) - 1] = 0;
-            for (q = tpath; *q; ++q) if (*q == '\r' || *q == '\n' || *q == ' ') { *q = 0; break; }
+            for (q = tpath; *q; ++q) {                  /* split "path [args]"; stop at CR/LF */
+                if (*q == '\r' || *q == '\n') { *q = 0; break; }
+                if (*q == ' ' && !a) { *q = 0; a = q + 1; }
+            }
             if (tpath[0]) {
                 HANDLE hf = CreateFileA(tpath, GENERIC_READ, FILE_SHARE_READ, NULL,
                                         OPEN_EXISTING, 0, NULL);
                 if (hf != INVALID_HANDLE_VALUE) { ReadFile(hf, filebuf, sizeof(filebuf), &nread, NULL); CloseHandle(hf); }
+                zput(progpath, tpath);                  /* env argv[0] */
+                if (a) zput(args, a);                   /* PSP command tail */
                 p = zput(p, "STAGE2: target.txt loaded 0x"); p = zhex(p, nread);
-                p = zput(p, " from "); p = zput(p, tpath); p = zput(p, "\r\n");
+                p = zput(p, " from "); p = zput(p, tpath);
+                if (a && a[0]) { p = zput(p, " args=["); p = zput(p, a); p = zput(p, "]"); }
+                p = zput(p, "\r\n");
             }
         }
     }
@@ -101,6 +111,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         pp = zput(pp, g_cur); pp = zput(pp, "\\"); pp = zput(pp, g_title);
         hf = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
         if (hf != INVALID_HANDLE_VALUE) { ReadFile(hf, filebuf, sizeof(filebuf), &nread, NULL); CloseHandle(hf); }
+        zput(progpath, path);                       /* env argv[0] */
+        if (g_cmd[0]) zput(args, g_cmd);            /* best-effort: CmdLine if CSRSS populated it */
         p = zput(p, "STAGE2: loaded 0x"); p = zhex(p, nread);
         p = zput(p, " from "); p = zput(p, path); p = zput(p, "\r\n");
     }
@@ -121,6 +133,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     hdlr[DOS_DBCS_OFF] = 0; hdlr[DOS_DBCS_OFF + 1] = 0;     /* empty DBCS table    */
 
     dos_psp_build(NULL, DOS_PSP_SEG, DOS_ENV_SEG, DOS_MEM_TOP);
+    dos_env_build(NULL, DOS_ENV_SEG, progpath[0] ? progpath : "C:\\PROGRAM.COM");  /* M2.5: env */
+    dos_cmdtail_build(NULL, DOS_PSP_SEG, args);                                    /* M2.5: args */
     dos_int21_init(&m, dos_mcb_init(NULL));
 
     v86_set_entry(tib, img.cs, img.ip, img.ss, img.sp, DOS_PSP_SEG);
@@ -156,6 +170,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         VDM_REG(tib, VTIB_EIP) += 3;                /* past the 3-byte BOP -> the IRET */
         log_append(LOG_PATH, base, p); p = base;
     }
+
+    g_ci.ExitCode = (ULONG)m.exit_code;             /* M2.5: errorlevel (shell notify = best-effort TODO) */
 
     /* Flush captured DOS output to the console + the log. */
     {

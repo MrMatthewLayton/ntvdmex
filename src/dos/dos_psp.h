@@ -37,4 +37,19 @@ static inline void dos_psp_build(volatile uint8_t *base, uint16_t psp_seg,
     psp[0x80] = 0; psp[0x81] = 0x0D;                   /* empty command tail + 0x0D  */
 }
 
+/* Set the PSP command tail at psp_seg:0x80 from an args string (no leading space):
+   [0x80] = length, [0x81..] = " <args>", terminated by 0x0D (the parser scans for it).
+   A leading space is the DOS convention. Empty/NULL args -> length 0, 0x0D at 0x81. */
+static inline void dos_cmdtail_build(volatile uint8_t *base, uint16_t psp_seg,
+                                     const char *args) {
+    volatile uint8_t *psp = mcb_at(base, psp_seg);
+    int n = 0, i;
+    if (args && args[0]) {
+        psp[0x81 + n++] = ' ';                         /* conventional leading space */
+        for (i = 0; args[i] && n < 126; ++i) psp[0x81 + n++] = (uint8_t)args[i];
+    }
+    psp[0x80] = (uint8_t)n;
+    psp[0x81 + n] = 0x0D;
+}
+
 #endif /* DOS_PSP_H */

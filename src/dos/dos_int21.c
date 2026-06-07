@@ -22,6 +22,7 @@ void dos_int21_init(dos_machine_t *m, uint16_t first_mcb)
     m->dta_seg = DOS_PSP_SEG;
     m->dta_off = 0x0080;
     m->out_len = 0;
+    m->exit_code = 0;
 }
 
 int dos_int21(dos_machine_t *m)
@@ -52,6 +53,7 @@ int dos_int21(dos_machine_t *m)
     ah = (R_AX >> 8) & 0xFF;
 
     if (ah == 0x4C) {                           /* terminate */
+        m->exit_code = (int)(R_AX & 0xFF);      /* DOS errorlevel */
         tp = zput(tp, "  ==> DOS terminate (AH=4Ch), exit code AL=0x");
         tp = zhex(tp, R_AX & 0xFF); tp = zput(tp, "\r\n");
         cont = 0;

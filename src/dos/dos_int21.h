@@ -21,6 +21,7 @@ typedef struct {
     uint16_t dta_seg, dta_off; /* Disk Transfer Area (AH=1A/2F)                    */
     char    *out; int out_cap; int out_len;  /* captured console output (02/09/40) */
     char    *tp;               /* current trace cursor (caller resets + flushes)   */
+    int      exit_code;        /* AH=4Ch AL -- DOS errorlevel (read after the loop) */
 } dos_machine_t;
 
 /* Zero the handle table, set the MCB root, default DTA = PSP:0x80. */

@@ -7,8 +7,9 @@ rem  only session where launching a 16-bit program fires the IFEO ntvdm.exe
 rem  redirect. Unlike gate.bat (which gates the tools/vdmhost spike), this points
 rem  the IFEO Debugger at the clean src/ host and reads ITS log (ntvdmhost.log).
 rem
-rem  Usage (in the VM):   gate-clean.bat            (tests memtest.com)
-rem                       gate-clean.bat foo.com    (another program staged in build/)
+rem  Usage (in the VM):   gate-clean.bat                 (tests memtest.com)
+rem                       gate-clean.bat foo.com         (another program in build/)
+rem                       gate-clean.bat argtest.com HI  (program + args -> PSP tail)
 rem
 rem  Verdict to look for near the end of ntvdmhost.log:
 rem      ==> DOS OUTPUT: [MEMTEST PASS]       (or "Hello..." for a hello program)
@@ -18,6 +19,14 @@ setlocal
 set N=C:\ntvdmex
 set PROG=%1
 if "%PROG%"=="" set PROG=memtest.com
+shift
+set ARGS=
+:argloop
+if "%1"=="" goto argdone
+set ARGS=%ARGS% %1
+shift
+goto argloop
+:argdone
 if not exist %N% md %N%
 
 echo Pulling ntvdmhost.exe + %PROG% from the host (10.0.2.2) ...
@@ -30,7 +39,7 @@ if not exist %N%\dosstub.com tftp -i 10.0.2.2 GET dosstub.com %N%\dosstub.com
 echo Pointing IFEO Debugger(ntvdm.exe) at the CLEAN host (ntvdmhost.exe) ...
 reg add "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\ntvdm.exe" /v Debugger /t REG_SZ /d "%N%\ntvdmhost.exe" /f
 
-echo %N%\%PROG%>%N%\target.txt
+echo %N%\%PROG%%ARGS%>%N%\target.txt
 if exist %N%\ntvdmhost.log del /f /q %N%\ntvdmhost.log
 
 echo Running %PROG% through the clean host (a brief VDM flash is normal) ...

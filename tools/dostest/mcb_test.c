@@ -14,6 +14,7 @@
 #include "dos_mcb.h"
 #include "dos_loader.h"
 #include "dos_psp.h"
+#include "dos_env.h"
 
 static uint8_t mem[0x100000];          /* 1MB flat "conventional memory" buffer */
 
@@ -190,6 +191,35 @@ int main(void) {
               ".EXE: CS:IP/SS:SP from header, biased by the load segment");
         CHECK(e.img_size == 2 && mcb_rd16(img) == load_seg,
               ".EXE: relocation fixed the image word to the load segment");
+    }
+
+    /* T13: environment block builder (src/dos/dos_env.h) -------------------- */
+    {
+        static uint8_t g[0x1000];
+        const char *path = "C:\\T.COM";
+        int plen = 8, k, okp = 1;                       /* strlen("C:\T.COM") = 8 */
+        uint32_t L = dos_env_build(g, 0x0000, path);
+        CHECK(L > 0 && g[0] == 'C' && g[1] == 'O' && g[2] == 'M' && g[3] == 'S',
+              "env: starts with COMSPEC=");
+        for (k = 0; k < plen; ++k) if (g[L - 1 - plen + k] != (uint8_t)path[k]) okp = 0;
+        CHECK(okp && g[L - 1] == 0, "env: program path is the final ASCIIZ string");
+        CHECK(g[L - 1 - plen - 2] == 0x01 && g[L - 1 - plen - 1] == 0x00,
+              "env: WORD count 0x0001 precedes the program path");
+        CHECK(g[L - 1 - plen - 3] == 0x00, "env: trailing NUL ends the variable list");
+    }
+
+    /* T14: PSP command-tail builder (src/dos/dos_psp.h) --------------------- */
+    {
+        static uint8_t g[0x2000];
+        volatile uint8_t *psp = g + ((uint32_t)0x0100 << 4);
+        dos_cmdtail_build(g, 0x0100, "HELLO");
+        CHECK(psp[0x80] == 6 && psp[0x81] == ' ' && psp[0x82] == 'H'
+              && psp[0x86] == 'O' && psp[0x87] == 0x0D,
+              "cmdtail: \"HELLO\" -> len 6, \" HELLO\", 0x0D");
+        dos_cmdtail_build(g, 0x0100, "");
+        CHECK(psp[0x80] == 0 && psp[0x81] == 0x0D, "cmdtail: empty -> len 0, 0x0D");
+        dos_cmdtail_build(g, 0x0100, (const char *)0);
+        CHECK(psp[0x80] == 0 && psp[0x81] == 0x0D, "cmdtail: NULL -> len 0, 0x0D");
     }
 
     dump_chain(first);
