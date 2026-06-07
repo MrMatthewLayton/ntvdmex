@@ -12,8 +12,6 @@ static int total = 0, fails = 0;
 #define CHECK(c,m) do{ total++; if(c){printf("  PASS  %s\n",(m));} \
     else{printf("  FAIL  %s\n",(m)); fails++;} }while(0)
 
-static int g_present = 0; static ntvdd_frame g_lastframe;
-static void present_sink(void *ctx, const ntvdd_frame *f){ (void)ctx; g_present++; g_lastframe=*f; }
 
 static uint8_t g_flat[0x100000];          /* guest memory for INT 10h ES:BP/ES:DX */
 static uint8_t g_vmem[VID_APERTURE_SIZE]; /* the video aperture (A0000) stand-in   */
@@ -37,7 +35,7 @@ int main(void)
     printf("== M3 video battery (text mode 3 + mode 13h) ==\n");
 
     vdd_bus_init(&bus, g_flat);
-    vdd_bus_set_sinks(&bus, 0, 0, present_sink, 0);
+    vdd_bus_set_sinks(&bus, 0, 0, 0, 0);
 
     /* T0: registers + clean mode-3 screen -------------------------------- */
     CHECK(vdd_bus_add(&bus, &dev) == 0, "add: video init ok");
@@ -74,8 +72,8 @@ int main(void)
       CHECK(mism==0, "render: text cell matches font glyph 'A'"); }
 
     /* T5: text frame is 640x400x8 --------------------------------------- */
-    g_present=0; vid.dirty=1; vdd_bus_frame(&bus);
-    CHECK(g_present==1 && g_lastframe.w==640 && g_lastframe.h==400 && g_lastframe.bpp==8,
+    vid.dirty=1; vdd_bus_frame(&bus);
+    CHECK(vid.frame.w==640 && vid.frame.h==400 && vid.frame.bpp==8,
           "frame(text): 640x400x8 palettised");
 
     /* T6: DAC ports set a palette entry --------------------------------- */
@@ -100,9 +98,9 @@ int main(void)
     memset(&r,0,sizeof r); s_ah(&r,0x0C); s_al(&r,0x20); s_cx(&r,10); s_dx(&r,20);
     vdd_bus_deliver_int(&bus,0x10,&r);
     CHECK(g_vmem[20*VID_G13_W + 10]==0x20, "int10/0C: write pixel (10,20)=0x20");
-    g_present=0; vid.dirty=1; vdd_bus_frame(&bus);
-    CHECK(g_present==1 && g_lastframe.w==320 && g_lastframe.h==200 && g_lastframe.bpp==8
-          && g_lastframe.pixels==g_vmem, "frame(mode13): 320x200x8 from the aperture");
+    vid.dirty=1; vdd_bus_frame(&bus);
+    CHECK(vid.frame.w==320 && vid.frame.h==200 && vid.frame.bpp==8
+          && vid.frame.pixels==g_vmem, "frame(mode13): 320x200x8 from the aperture");
 
     /* T9: VESA 4F00 controller info ------------------------------------- */
     { uint16_t seg=0x3000, off=0x0000; uint8_t *b=&g_flat[(seg<<4)+off]; uint32_t mlp;
@@ -133,8 +131,8 @@ int main(void)
     CHECK(vid.vesa_vram[1*VID_VESA_WIN + 10]==0xCD, "vesa/4F05: bank 1 byte kept in vram");
 
     /* T12: VESA frame is vesa_w x vesa_h x8 ----------------------------- */
-    g_present=0; vid.dirty=1; vdd_bus_frame(&bus);
-    CHECK(g_present==1 && g_lastframe.w==640 && g_lastframe.h==480 && g_lastframe.pixels==vid.vesa_vram,
+    vid.dirty=1; vdd_bus_frame(&bus);
+    CHECK(vid.frame.w==640 && vid.frame.h==480 && vid.frame.pixels==vid.vesa_vram,
           "frame(vesa): 640x480x8 from vesa_vram");
 
     /* T13: mode 12h planar -- set mode, plot a pixel, check planes + render --- */
@@ -147,8 +145,8 @@ int main(void)
       CHECK((vid.plane[1][byte]&bit) && (vid.plane[3][byte]&bit)
             && !(vid.plane[0][byte]&bit) && !(vid.plane[2][byte]&bit),
             "mode12: AH=0C set planes 1+3 for colour 0x0A"); }
-    vid.dirty=1; g_present=0; vdd_bus_frame(&bus);
-    CHECK(g_present==1 && g_lastframe.w==640 && g_lastframe.h==480, "frame(mode12): 640x480x8");
+    vid.dirty=1; vdd_bus_frame(&bus);
+    CHECK(vid.frame.w==640 && vid.frame.h==480, "frame(mode12): 640x480x8");
     CHECK(vid.fb[1*VID_G12_W + 9]==0x0A, "mode12: plane-combine render -> pixel = 0x0A");
 
     printf("\n%d checks, %d failed\n", total, fails);

@@ -95,8 +95,12 @@ add_executable(ntvdmhost
     src/vdd/vdd_video.c
     src/vdd/vdd_input.c
     src/vdd/present_ddraw.c
-    src/runtime.c)
+    src/runtime.c
+    res/ntvdmhost.rc)
 target_include_directories(ntvdmhost PRIVATE src/host src/vdm src/dos src/vdd)
+if(NOT NTVDMEX_EMBED_MANIFEST)
+    target_compile_definitions(ntvdmhost PRIVATE NTVDMEX_NO_MANIFEST)
+endif()
 ntvdmex_configure_xp_target(ntvdmhost)
 # The host deliberately dereferences absolute V86 low-memory addresses (paragraph<<4
 # off a NULL base), which -Warray-bounds flags as "outside array bounds". That's a
@@ -107,7 +111,7 @@ target_link_options(ntvdmhost PRIVATE
     -Wl,--subsystem,console -Wl,--entry,_WinMainCRTStartup
     -Wl,--major-subsystem-version,4 -Wl,--minor-subsystem-version,0
     -Wl,--disable-nxcompat -Wl,--disable-dynamicbase)
-target_link_libraries(ntvdmhost PRIVATE kernel32 user32 gdi32 gcc)
+target_link_libraries(ntvdmhost PRIVATE kernel32 user32 gdi32 comctl32 gcc)
 
 # --- present_demo.exe: standalone DirectDraw presentation exerciser (M3 slice-3)
 # A GUI app that drives src/vdd/present_ddraw.c with an animated test frame, to

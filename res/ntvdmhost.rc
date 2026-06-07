@@ -1,0 +1,9 @@
+/*
+ * ntvdmhost.rc -- embed the shared Common-Controls 6.0 manifest so the VDM host
+ * window gets the XP Luna visual style (themed frame + menu). Reuses the same
+ * XP-strict, comment-free manifest as ntvdmex (res/ntvdmex.manifest). See
+ * res/ntvdmex.rc for the manifest gotchas. Define NTVDMEX_NO_MANIFEST to omit.
+ */
+#ifndef NTVDMEX_NO_MANIFEST
+1 24 "ntvdmex.manifest"
+#endif

@@ -12,6 +12,7 @@
  * stays a CUI subsystem image so the CSRSS VDM handshake still binds.
  */
 #include <windows.h>
+#include <commctrl.h>
 #include "ntvdm.h"
 #include "v86.h"
 #include "csrss.h"
@@ -217,8 +218,9 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
     switch (msg) {
     case WM_TIMER:
         EnterCriticalSection(&g_lock);
-        vdd_bus_frame(&g_bus);          /* tick PIT + render + present each frame   */
+        vdd_bus_frame(&g_bus);          /* tick PIT + render into g_vid.frame       */
         LeaveCriticalSection(&g_lock);
+        present_ddraw_frame(&g_pd, &g_vid.frame);    /* blit OUTSIDE the lock        */
         return 0;
     case WM_ERASEBKGND:
         return 1;                       /* we own the whole client -> no white erase */
@@ -269,7 +271,10 @@ static DWORD WINAPI ui_thread(LPVOID arg)
 {
     WNDCLASSA wc; MSG msg; RECT rc;
     HINSTANCE hi = GetModuleHandleA(NULL);
+    INITCOMMONCONTROLSEX icc;
     (void)arg;
+    icc.dwSize = sizeof icc; icc.dwICC = ICC_WIN95_CLASSES;
+    InitCommonControlsEx(&icc);                  /* activate the Luna (v6) context */
     ZeroMemory(&wc, sizeof wc);
     wc.lpfnWndProc = wnd_proc; wc.hInstance = hi;
     wc.hCursor = LoadCursorA(NULL, IDC_ARROW);

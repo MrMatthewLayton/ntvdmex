@@ -325,20 +325,18 @@ static void render_planar(video_state *st)
     }
 }
 
+/* Render the current mode into st->frame each tick (always, so direct A0000
+   writes show and the client stays refreshed). Does NOT blit -- the host presents
+   st->frame outside the bus lock so the slow blit never starves the V86 thread. */
 static void vid_frame(void *self)
 {
     video_state *st = (video_state *)self;
-    /* Present EVERY tick (not just when dirty): the client must stay refreshed on
-       expose/move, and direct A0000 writes (mode 13h / VESA window) don't set a
-       dirty flag, so we always re-read video memory and blit. */
     if (!st->vmem) return;
     if (st->in_vesa) {                                 /* VESA: sync window -> vram */
         vesa_sync(st);
         st->frame.w = st->vesa_w; st->frame.h = st->vesa_h; st->frame.bpp = 8;
         st->frame.stride = st->vesa_w; st->frame.pixels = st->vesa_vram; st->frame.palette = st->pal;
-        vdd_present(st->bus, &st->frame); st->dirty = 0; return;
-    }
-    if (st->mode == 0x13) {                            /* graphics: vmem is the FB */
+    } else if (st->mode == 0x13) {                     /* graphics: vmem is the FB */
         st->frame.w = VID_G13_W; st->frame.h = VID_G13_H; st->frame.bpp = 8;
         st->frame.stride = VID_G13_W; st->frame.pixels = st->vmem; st->frame.palette = st->pal;
     } else if (st->mode == 0x12) {                     /* planar: combine -> fb    */
@@ -350,7 +348,6 @@ static void vid_frame(void *self)
         st->frame.w = VID_FB_W; st->frame.h = VID_FB_H; st->frame.bpp = 8;
         st->frame.stride = VID_FB_W; st->frame.pixels = st->fb; st->frame.palette = st->pal;
     }
-    vdd_present(st->bus, &st->frame);
     st->dirty = 0;
 }
 

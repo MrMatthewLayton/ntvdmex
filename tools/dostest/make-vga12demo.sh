@@ -17,8 +17,8 @@ out="$(dirname "$0")/vga12.com"
   printf '\x31\xF6'                                           # xor si,si  (y=0)
   printf '\x31\xFF'                                           # yloop: xor di,di (x=0)
   printf '\x89\xF9\x89\xF2\x89\xF8\x31\xF0\x24\x0F\xB4\x0C\xCD\x10'  # xloop: cx=x;dx=y;ax=x^y;al&=0F;AH=0C;int10
-  printf '\x47\x81\xFF\x00\x01\x72\xEB'                       # inc di; cmp di,256; jb xloop
-  printf '\x46\x81\xFE\x00\x01\x72\xE2'                       # inc si; cmp si,256; jb yloop
+  printf '\x47\x81\xFF\x80\x00\x72\xEB'                       # inc di; cmp di,128; jb xloop
+  printf '\x46\x81\xFE\x80\x00\x72\xE2'                       # inc si; cmp si,128; jb yloop
   printf '\xB4\x00\xCD\x16'                                   # wait key
   printf '\xB8\x03\x00\xCD\x10\xB8\x00\x4C\xCD\x21'           # mode 3; exit
 } > "$out"
