@@ -22,3 +22,11 @@ cc -std=c99 -Wall -Wextra -Wno-unused-function -O0 -g \
    -o "$DIR/vdd_test" "$DIR/vdd_test.c" "$DIR/../../src/vdd/vdd_bus.c"
 
 "$DIR/vdd_test"
+
+# M3 slice-2: the PIT timer VDD battery (vdd_pit.c on the bus).
+cc -std=c99 -Wall -Wextra -Wno-unused-function -O0 -g \
+   -I "$DIR/../../src/vdd" \
+   -o "$DIR/pit_test" "$DIR/pit_test.c" \
+   "$DIR/../../src/vdd/vdd_pit.c" "$DIR/../../src/vdd/vdd_bus.c"
+
+"$DIR/pit_test"
