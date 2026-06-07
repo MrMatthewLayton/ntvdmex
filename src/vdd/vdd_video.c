@@ -328,7 +328,10 @@ static void render_planar(video_state *st)
 static void vid_frame(void *self)
 {
     video_state *st = (video_state *)self;
-    if (!st->dirty || !st->vmem) return;
+    /* Present EVERY tick (not just when dirty): the client must stay refreshed on
+       expose/move, and direct A0000 writes (mode 13h / VESA window) don't set a
+       dirty flag, so we always re-read video memory and blit. */
+    if (!st->vmem) return;
     if (st->in_vesa) {                                 /* VESA: sync window -> vram */
         vesa_sync(st);
         st->frame.w = st->vesa_w; st->frame.h = st->vesa_h; st->frame.bpp = 8;

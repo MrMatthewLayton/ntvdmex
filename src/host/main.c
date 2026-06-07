@@ -92,9 +92,18 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
     switch (msg) {
     case WM_TIMER:
         EnterCriticalSection(&g_lock);
-        vdd_bus_frame(&g_bus);          /* tick PIT + render+present video if dirty */
+        vdd_bus_frame(&g_bus);          /* tick PIT + render + present each frame   */
         LeaveCriticalSection(&g_lock);
         return 0;
+    case WM_ERASEBKGND:
+        return 1;                       /* we own the whole client -> no white erase */
+    case WM_PAINT: {                     /* re-blit immediately on expose/move        */
+        PAINTSTRUCT ps; BeginPaint(h, &ps);
+        EnterCriticalSection(&g_lock);
+        present_ddraw_frame(&g_pd, &g_vid.frame);
+        LeaveCriticalSection(&g_lock);
+        EndPaint(h, &ps);
+        return 0; }
     case WM_SYSKEYDOWN:                  /* Alt+Enter -> toggle fullscreen          */
         if (wp == VK_RETURN) { present_ddraw_set_fullscreen(&g_pd, !g_pd.fullscreen); return 0; }
         break;
