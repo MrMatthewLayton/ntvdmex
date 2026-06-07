@@ -137,6 +137,20 @@ int main(void)
     CHECK(g_present==1 && g_lastframe.w==640 && g_lastframe.h==480 && g_lastframe.pixels==vid.vesa_vram,
           "frame(vesa): 640x480x8 from vesa_vram");
 
+    /* T13: mode 12h planar -- set mode, plot a pixel, check planes + render --- */
+    memset(&r,0,sizeof r); s_ah(&r,0x00); s_al(&r,0x12); vdd_bus_deliver_int(&bus,0x10,&r);
+    CHECK(vid.mode==0x12, "int10/00: mode set to 12h");
+    /* plot (x=9,y=1) colour 0x0A (1010b -> planes 1 and 3) */
+    memset(&r,0,sizeof r); s_ah(&r,0x0C); s_al(&r,0x0A); s_cx(&r,9); s_dx(&r,1);
+    vdd_bus_deliver_int(&bus,0x10,&r);
+    { uint32_t byte = 1*(VID_G12_W/8) + (9>>3); uint8_t bit = 0x80>>(9&7);
+      CHECK((vid.plane[1][byte]&bit) && (vid.plane[3][byte]&bit)
+            && !(vid.plane[0][byte]&bit) && !(vid.plane[2][byte]&bit),
+            "mode12: AH=0C set planes 1+3 for colour 0x0A"); }
+    vid.dirty=1; g_present=0; vdd_bus_frame(&bus);
+    CHECK(g_present==1 && g_lastframe.w==640 && g_lastframe.h==480, "frame(mode12): 640x480x8");
+    CHECK(vid.fb[1*VID_G12_W + 9]==0x0A, "mode12: plane-combine render -> pixel = 0x0A");
+
     printf("\n%d checks, %d failed\n", total, fails);
     return fails ? 1 : 0;
 }

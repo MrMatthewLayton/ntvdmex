@@ -28,6 +28,9 @@
 #define VID_FB_H          (VID_ROWS * VID_CELL_H)   /* 400                        */
 #define VID_G13_W         320
 #define VID_G13_H         200
+#define VID_G12_W         640           /* mode 12h: 640x480x16 planar            */
+#define VID_G12_H         480
+#define VID_PLANE_SIZE    (VID_G12_W * VID_G12_H / 8)   /* 38400 bytes/plane      */
 
 /* VESA VBE 2.0 (banked, packed-256). A0000 is the 64KB window onto vesa_vram. */
 #define VID_VESA_WIN      0x10000u      /* 64KB banked window                     */
@@ -50,7 +53,8 @@ typedef struct video_state {
     uint16_t vesa_mode, vesa_w, vesa_h; /* current VESA mode + resolution          */
     uint16_t vesa_bank;                 /* current 64KB window bank (4F05)         */
     uint8_t  vesa_vram[VID_VESA_VRAM];  /* full packed-256 framebuffer             */
-    uint8_t  fb[VID_FB_MAX];            /* text glyph render target                */
+    uint8_t  plane[4][VID_PLANE_SIZE];  /* mode 12h: 4 bit-planes (640x480x16)     */
+    uint8_t  fb[VID_FB_MAX];            /* text glyph / planar render target        */
     int      dirty;
     ntvdd_frame frame;
 } video_state;

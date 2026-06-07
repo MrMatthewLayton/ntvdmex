@@ -176,6 +176,9 @@ static void int10(void *self, ntvdd_regs *r)
         st->cur_row = st->cur_col = 0; st->page = 0;
         if (st->mode == 0x13) {                       /* 320x200x256 graphics    */
             int i; for (i = 0; i < VID_G13_W * VID_G13_H; ++i) st->vmem[i] = 0;
+        } else if (st->mode == 0x12) {                /* 640x480x16 planar       */
+            int p, i;
+            for (p = 0; p < 4; ++p) for (i = 0; i < VID_PLANE_SIZE; ++i) st->plane[p][i] = 0;
         } else {                                      /* text                    */
             st->cols = VID_COLS; st->rows = VID_ROWS; clear_text(st, 0x07);
         }
@@ -203,6 +206,16 @@ static void int10(void *self, ntvdd_regs *r)
         if (st->mode == 0x13) {
             uint32_t x = r_cx(r), y = r_dx(r);
             if (x < VID_G13_W && y < VID_G13_H) st->vmem[y * VID_G13_W + x] = al;
+        } else if (st->mode == 0x12) {                /* planar: set 4-bit colour */
+            uint32_t x = r_cx(r), y = r_dx(r);
+            if (x < VID_G12_W && y < VID_G12_H) {
+                uint32_t byte = y * (VID_G12_W / 8) + (x >> 3);
+                uint8_t  bit = (uint8_t)(0x80 >> (x & 7)), p;
+                for (p = 0; p < 4; ++p) {
+                    if (al & (1 << p)) st->plane[p][byte] |= bit;
+                    else               st->plane[p][byte] &= (uint8_t)~bit;
+                }
+            }
         }
         break;
     case 0x0E: teletype(st, al); break;
@@ -294,6 +307,24 @@ void vdd_video_render(video_state *st)                 /* text glyph render     
     }
 }
 
+/* combine the 4 bit-planes into fb (16-colour indices) -- mode 12h. */
+static void render_planar(video_state *st)
+{
+    int y, xb, b;
+    for (y = 0; y < VID_G12_H; ++y) {
+        uint32_t row = y * (VID_G12_W / 8);
+        uint8_t *out = &st->fb[y * VID_G12_W];
+        for (xb = 0; xb < VID_G12_W / 8; ++xb) {
+            uint8_t p0 = st->plane[0][row+xb], p1 = st->plane[1][row+xb];
+            uint8_t p2 = st->plane[2][row+xb], p3 = st->plane[3][row+xb];
+            for (b = 0; b < 8; ++b) {
+                uint8_t m = (uint8_t)(0x80 >> b);
+                out[xb*8 + b] = (uint8_t)(((p0&m)?1:0) | ((p1&m)?2:0) | ((p2&m)?4:0) | ((p3&m)?8:0));
+            }
+        }
+    }
+}
+
 static void vid_frame(void *self)
 {
     video_state *st = (video_state *)self;
@@ -307,6 +338,10 @@ static void vid_frame(void *self)
     if (st->mode == 0x13) {                            /* graphics: vmem is the FB */
         st->frame.w = VID_G13_W; st->frame.h = VID_G13_H; st->frame.bpp = 8;
         st->frame.stride = VID_G13_W; st->frame.pixels = st->vmem; st->frame.palette = st->pal;
+    } else if (st->mode == 0x12) {                     /* planar: combine -> fb    */
+        render_planar(st);
+        st->frame.w = VID_G12_W; st->frame.h = VID_G12_H; st->frame.bpp = 8;
+        st->frame.stride = VID_G12_W; st->frame.pixels = st->fb; st->frame.palette = st->pal;
     } else {                                           /* text: render glyphs      */
         vdd_video_render(st);
         st->frame.w = VID_FB_W; st->frame.h = VID_FB_H; st->frame.bpp = 8;
