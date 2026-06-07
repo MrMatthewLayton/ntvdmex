@@ -136,7 +136,10 @@ Per-step exit criteria:
   DOS console output (INT 21h) + INT 10h route through the video VDD → DirectDraw. A real DOS program
   (`hello.com`) painted **text in the Luna window** on the real CPU. (Also fixed: present_ddraw now
   packs pixels to the surface's real depth — XP/Cirrus is 16bpp — which removed the vertical striping.)
-- [ ] Keyboard + mouse (INT 16h / INT 09h / INT 33h) from host events → an interactive DOS box.
+- [x] **Keyboard input** (INT 16h VDD + INT 21h AH=01/07/08/0A + UI WM_CHAR capture) — **VM-CONFIRMED**:
+  typed an interactive `keytest.com` in the Luna window (letters, Enter, Backspace, ESC). Also swapped
+  in the **authentic IBM VGA 8×16 ROM font** (CP437). Remaining: extended keys (arrows/F-keys via
+  WM_KEYDOWN scancodes) + mouse (INT 33h).
 - [ ] Video VDD: graphics modes — 13h (linear 320×200×256) + DAC, then VESA VBE 2.0 banked; needs the
   guest video aperture (A0000/B8000) mapped as RAM so direct-framebuffer programs work.
 - [ ] VDD interrupt delivery: install VDD INT handlers as IVT BOP stubs + real IRQ0→INT 8 via the

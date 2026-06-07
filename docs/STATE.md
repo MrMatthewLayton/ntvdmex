@@ -14,8 +14,10 @@
   now a windowed host (UI thread + present_ddraw + frame timer; V86 on the VdmInitialize thread); DOS
   console (INT 21h) + INT 10h route through the video VDD → DirectDraw — `hello.com` painted text in
   the Luna window on the real CPU. (Fixed present_ddraw to pack pixels to the surface's real depth;
-  XP/Cirrus is 16bpp — that was the vertical-striping bug.) Next code-side = **keyboard input**
-  (INT 16h + INT 21h input + UI key capture) → an interactive DOS box.
+  XP/Cirrus is 16bpp — that was the vertical-striping bug.) **Keyboard input DONE + VM-CONFIRMED**
+  (INT 16h VDD + INT 21h AH=01/07/08/0A + UI WM_CHAR; interactive keytest.com typed in the window,
+  Enter/Backspace/ESC); **authentic IBM VGA 8×16 ROM font** now used. Next code-side = extended keys
+  (arrows/F-keys) + mouse, or graphics modes (13h → needs A0000/B8000 mapped as RAM).
   *M2 follow-up (not blocking):* CSRSS transparent-arg recovery + exit-to-shell notify.
 - **Overall status:** 🟢 **The keystone is proven.** A real DOS `.COM`, loaded off disk, runs on the
   real CPU in **Virtual-8086 mode** via `NtVdmControl` and prints "Hello, World" through our own INT
@@ -175,11 +177,13 @@ Next work:
    (confirms IOPL-0 IN/OUT reflects as event 2 and resumes — slice-1b proven; bus+PIT live). If it
    stops with `event=0x...`, paste the `info=`/`bytes@CS:IP`/`VTIB[5A8..]` dump and I'll adjust. Also
    run `present_demo.exe` to eyeball the windowed + fullscreen DirectDraw blit (Alt+Enter / Esc).
-2. **Code-side (VM-independent): the video VDD** — `src/vdd/vdd_video/` text mode 3 first (B8000
-   trap, embedded 8×16 font, INT 10h text subset) feeding `present_ddraw`; then **merge
-   `ntvdmhost`+`ntvdmex`** into one windowed host. Then mode 13h + DAC, then VESA banked.
+   *(All slices 1b/3/4/merge/keyboard are now VM-confirmed; the VM gate is a hot-swapped CD —
+   `vm/test.iso` via QMP — read back with `screendump`; force XP to re-read by re-opening D:.)*
+2. **Next code-side options:** (a) **graphics modes** — map the A0000/B8000 aperture as RAM in
+   `v86_setup_memory` so direct-framebuffer programs work, render mode 13h (320×200×256) + DAC, then
+   VESA banked; (b) **extended keys + mouse** — WM_KEYDOWN→scancode (ascii=0) + INT 33h.
 3. **VDD interrupt/IRQ delivery (needs VM):** install PIT INT 08h/1Ah as IVT BOP stubs (like INT 21h)
-   + real IRQ0→INT 8 via the kernel ICA; then INT 08h's INT 1Ch chain + PIC EOI.
+   + real IRQ0→INT 8 via the kernel ICA; then INT 08h's INT 1Ch chain + PIC EOI (so the PIT ticks live).
 4. *M2 best-effort follow-up (not blocking):* CSRSS multi-call arg recovery + exit-to-shell notify;
    confirm `mem.exe` past `Parse Error 1`. VM gate: `gate-clean.bat argtest.com HELLO` / `mem.exe`.
 
