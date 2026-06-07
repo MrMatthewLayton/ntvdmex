@@ -7,10 +7,11 @@
   clean `src/` host. M3 kickoff **retired the `tools/vdmhost` spike** and decided the **pluggable VDD
   architecture** ([ADR-0008](decisions/0008-pluggable-vdd-model.md) + [research/vdd-architecture.md](research/vdd-architecture.md)):
   clean `ntvdd.h` ABI + bus, built-in VDDs, DirectDraw (windowed + full-screen), VGA + VESA; the two
-  binaries merge into one windowed host. **Slices 1a (bus 22/22) + 2 (PIT 19/19) DONE off-VM;
-  1b (I/O `#GP` trap dispatch) + 3 (DirectDraw present layer + `present_demo.exe`) IMPLEMENTED,
-  build KERNEL32-only — awaiting the manual VM gate** (`gate-clean.bat ioprobe.com`; run
-  `present_demo.exe`). *M2 follow-up (not blocking):* CSRSS transparent-arg recovery + exit-to-shell notify.
+  binaries merge into one windowed host. **Slices 1a (bus 22/22) + 2 (PIT 19/19) off-VM; 1b (I/O
+  trap, event 0) + 3 (DirectDraw) VM-CONFIRMED 2026-06-07** — `ioprobe.com` routed 4×OUT+IN through
+  the real PIT VDD on the CPU (reload→0x1234, IN→0x34, exit 0x34); `present_demo.exe` rendered. Next
+  code-side = **video VDD (text mode 3) → present_ddraw, then merge the two binaries.**
+  *M2 follow-up (not blocking):* CSRSS transparent-arg recovery + exit-to-shell notify.
 - **Overall status:** 🟢 **The keystone is proven.** A real DOS `.COM`, loaded off disk, runs on the
   real CPU in **Virtual-8086 mode** via `NtVdmControl` and prints "Hello, World" through our own INT
   21h handler — launched transparently when XP starts a 16-bit program (IFEO redirect). The whole

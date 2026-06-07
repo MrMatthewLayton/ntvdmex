@@ -118,13 +118,15 @@ Per-step exit criteria:
   present. **Off-VM battery 22/22.** Design: [research/vdd-architecture.md](research/vdd-architecture.md).
 - [x] **Timer VDD** (PIT 8254 + INT 08h/1Ah, IRQ0) — `src/vdd/vdd_pit.c`, the first device on the
   bus. **Off-VM battery 19/19** (8254 ports, clocks→IRQ0 engine, BIOS tick + rollover, time-of-day).
-- [x] **I/O-port (`IN`/`OUT`) trap dispatch wired into `v86_run`** (slice-1b) — IOPL-0 IN/OUT
-  `#GP`-faults reflect as event 2 (taxonomy already recovered from the ntvdm disasm); `host_try_io()`
-  decodes the instruction and dispatches through the bus, then resumes. **Implemented + builds
-  KERNEL32-only; awaiting the manual VM gate** (`gate-clean.bat ioprobe.com`) to confirm on real CPU.
+- [x] **I/O-port (`IN`/`OUT`) trap dispatch wired into `v86_run`** (slice-1b) — **VM-CONFIRMED
+  2026-06-07.** IOPL-0 IN/OUT traps reflect as **event 0** (VM-discovered; the disasm taxonomy never
+  labelled it; port pre-decoded into `VTIB_EVENT_INFO`). `host_try_io()` decodes the instruction and
+  dispatches through the bus, then resumes. `ioprobe.com` ran on the real CPU: 4×`OUT`+`IN` routed to
+  the PIT VDD (reload→0x1234, latched-count `IN`→0x34), guest resumed + exited 0x34. **End-to-end
+  I/O virtualization proven through a real VDD.**
 - [x] **DirectDraw presentation layer** (slice-3) — `src/vdd/present_ddraw.c`: windowed + exclusive
-  fullscreen, one index→ARGB path, lost-surface recovery; `present_demo.exe` is the standalone visual
-  gate. Imports kernel32+user32 only (ddraw bound at runtime).
+  fullscreen, one index→ARGB path, lost-surface recovery; `present_demo.exe` **rendered in the VM**.
+  Imports kernel32+user32 only (ddraw bound at runtime).
 - [ ] **Video VDD:** trap text/VGA/VESA memory + INT 10h, render text mode 3 → 13h → VESA into the
   present_ddraw frame sink. Then **merge `ntvdmhost`+`ntvdmex`** into one windowed host.
 - [ ] VDD interrupt delivery: install VDD INT handlers as IVT BOP stubs + real IRQ0→INT 8 via the
