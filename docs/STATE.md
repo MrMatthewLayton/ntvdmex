@@ -10,9 +10,12 @@
   binaries merge into one windowed host. **Slices 1a (bus 22/22) + 2 (PIT 19/19) off-VM; 1b (I/O
   trap, event 0) + 3 (DirectDraw) VM-CONFIRMED 2026-06-07** — `ioprobe.com` routed 4×OUT+IN through
   the real PIT VDD on the CPU (reload→0x1234, IN→0x34, exit 0x34); `present_demo.exe` rendered.
-  **Video VDD text mode 3 done off-VM** (slice-4: B8000 trap + INT 10h + 8×16-font renderer, battery
-  23/23). Next code-side = **merge ntvdmhost+ntvdmex into one windowed host** (route INT 21h console +
-  INT 10h through the video VDD → present_ddraw so a DOS prompt paints in the Luna window).
+  **Video VDD text mode 3 done off-VM** (slice-4, 23/23). **MERGE DONE + VM-CONFIRMED:** ntvdmhost is
+  now a windowed host (UI thread + present_ddraw + frame timer; V86 on the VdmInitialize thread); DOS
+  console (INT 21h) + INT 10h route through the video VDD → DirectDraw — `hello.com` painted text in
+  the Luna window on the real CPU. (Fixed present_ddraw to pack pixels to the surface's real depth;
+  XP/Cirrus is 16bpp — that was the vertical-striping bug.) Next code-side = **keyboard input**
+  (INT 16h + INT 21h input + UI key capture) → an interactive DOS box.
   *M2 follow-up (not blocking):* CSRSS transparent-arg recovery + exit-to-shell notify.
 - **Overall status:** 🟢 **The keystone is proven.** A real DOS `.COM`, loaded off disk, runs on the
   real CPU in **Virtual-8086 mode** via `NtVdmControl` and prints "Hello, World" through our own INT
