@@ -136,8 +136,11 @@ reference until parity; merge into the Luna window at M3. Slices (each its own c
   **M2.6 exit met**. Needs the VM (runtime correctness of the ported V86 glue proves out only there).
 
 The clean host is built and XP-safe; what's unverified is the *runtime* behaviour of the ported V86/NT
-glue. To gate it (slice 4): register `ntvdmhost.exe` as the IFEO `Debugger` on `ntvdm.exe` (in place
-of the spike) and run `gate.bat`; the clean host logs to `C:\ntvdmex\ntvdmhost.log`.
+glue. **Gate it (slice 4):** on the host run `./scripts/stage-gate.sh` (stages `ntvdmhost.exe` +
+`tools/dostest/gate-clean.bat` + `memtest.com` into the TFTP root), then in the VM desktop TFTP-fetch
+and run `gate-clean.bat` — it points the IFEO `Debugger` at `ntvdmhost.exe`, runs the program in V86,
+and prints `C:\ntvdmex\ntvdmhost.log`. (`gate.bat` + `stage-gate.sh spike` do the same for the spike;
+each gate re-points the IFEO at its own host.)
 
 ## Single next action
 
@@ -152,9 +155,9 @@ of the spike) and run `gate.bat`; the clean host logs to `C:\ntvdmex\ntvdmhost.l
    automated telnet path that passed a live round, but it's slow and reads as a hang — not default.)
 
 Next work:
-3. **M2.6 slice 4 (only remaining):** gate the clean host on the VM — register `ntvdmhost.exe` as the
-   IFEO `Debugger` and run `gate.bat`; confirm Hello World in V86 → M2.6 exit met. Slices 1–3 done:
-   clean host compiles + links, KERNEL32-only imports, off-VM battery 42/42. (See the M2.6 section.)
+3. **M2.6 slice 4 (only remaining):** gate the clean host on the VM — `./scripts/stage-gate.sh`, then
+   run `gate-clean.bat` in the VM desktop; confirm MEMTEST PASS / Hello World in V86 → M2.6 exit met.
+   Slices 1–3 done: clean host compiles + links, KERNEL32-only imports, off-VM battery 42/42.
 4. **Re-run mem.exe** (now handles 44h/63h); chase `Parse Error 1` (missing INT 21h surface / env
    block → M2.5). *Needs a VM gate — investigate via `gate.bat` with mem.exe as the target.*
 5. **M2.5 cmdline recovery** (`GetNextVDMCommand` never populated `CmdLine`; PSP tail is empty);

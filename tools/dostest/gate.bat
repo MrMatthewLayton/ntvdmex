@@ -31,6 +31,9 @@ del /f /q %N%\%PROG% >nul 2>&1
 tftp -i 10.0.2.2 GET %PROG% %N%\%PROG%
 if not exist %N%\dosstub.com tftp -i 10.0.2.2 GET dosstub.com %N%\dosstub.com
 
+echo Pointing IFEO Debugger(ntvdm.exe) at the SPIKE host (vdmhost.exe) ...
+reg add "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\ntvdm.exe" /v Debugger /t REG_SZ /d "%N%\vdmhost.exe" /f
+
 echo %N%\%PROG%>%N%\target.txt
 if exist %N%\vdmhost.log del /f /q %N%\vdmhost.log
 
