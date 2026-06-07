@@ -105,3 +105,15 @@ target_link_options(ntvdmhost PRIVATE
     -Wl,--major-subsystem-version,4 -Wl,--minor-subsystem-version,0
     -Wl,--disable-nxcompat -Wl,--disable-dynamicbase)
 target_link_libraries(ntvdmhost PRIVATE kernel32 user32 gcc)
+
+# --- present_demo.exe: standalone DirectDraw presentation exerciser (M3 slice-3)
+# A GUI app that drives src/vdd/present_ddraw.c with an animated test frame, to
+# eyeball the windowed + fullscreen blit path on real XP before it is wired into
+# the host. ddraw is bound at runtime (GetProcAddress) so there is no ddraw import.
+add_executable(present_demo WIN32
+    tools/present_demo/present_demo.c
+    src/vdd/present_ddraw.c
+    src/runtime.c)
+target_include_directories(present_demo PRIVATE src/vdd)
+ntvdmex_configure_xp_target(present_demo)
+target_link_libraries(present_demo PRIVATE kernel32 user32 gdi32 gcc)
