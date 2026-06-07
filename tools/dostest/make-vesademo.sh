@@ -18,15 +18,17 @@ out="$(dirname "$0")/vesademo.com"
   printf '\x88\xC8\xD0\xE8\x24\x3F\xEE'                       # G
   printf '\x88\xC8\x24\x3F\xB4\x3F\x28\xC4\x88\xE0\xEE'       # B
   printf '\x41\x81\xF9\x00\x01\x72\xE2'                       # inc cx; cmp 256; jb palloop
-  # fill 5 banks of 64KB via 4F05
+  # fill 5 banks of 64KB via 4F05; each bank a solid colour (= bank*0x30) so the
+  # banking shows as 5 clean horizontal colour bands (no bank-boundary shear).
   printf '\x31\xF6'                                           # xor si,si   (bank=0)
   printf '\xB8\x05\x4F\x31\xDB\x89\xF2\xCD\x10'               # bankloop: 4F05 set window=si
+  printf '\x89\xF0\xB4\x30\xF6\xE4\x88\xC3'                   # ax=si; ah=0x30; mul ah; bl=al (colour)
   printf '\xB8\x00\xA0\x8E\xC0\x31\xFF\x31\xC9'               # es=A000; di=0; cx=0(=65536)
-  printf '\x89\xF8\x26\x88\x25\x47\xE2\xF8'                   # fillb: ax=di; [es:di]=ah; di++; loop
-  printf '\x46\x83\xFE\x05\x72\xE0'                           # inc si; cmp si,5; jb bankloop
+  printf '\x26\x88\x1D\x47\xE2\xFA'                           # fillb: [es:di]=bl; di++; loop
+  printf '\x46\x83\xFE\x05\x72\xDA'                           # inc si; cmp si,5; jb bankloop
   printf '\xB4\x00\xCD\x16'                                   # wait key
   printf '\xB8\x03\x00\xCD\x10\xB8\x00\x4C\xCD\x21'           # mode 3; exit
 } > "$out"
 sz=$(wc -c < "$out")
 echo "wrote $out ($sz bytes)"
-[ "$sz" -eq 96 ] || { echo "ERROR: expected 96 bytes, got $sz" >&2; exit 1; }
+[ "$sz" -eq 102 ] || { echo "ERROR: expected 102 bytes, got $sz" >&2; exit 1; }

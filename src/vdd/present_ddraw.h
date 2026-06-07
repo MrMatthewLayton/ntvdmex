@@ -20,6 +20,11 @@
 #include <windows.h>
 #include "ntvdd.h"
 
+/* Windowed mode presents via GDI StretchDIBits (cursor-friendly, expose-correct);
+   exclusive fullscreen uses DirectDraw. The video blits into the client area
+   above a host-drawn status bar PRESENT_STATUS_H pixels tall. */
+#define PRESENT_STATUS_H 22
+
 /* DirectDraw objects are held as void* so this header stays ddraw.h-free. */
 typedef struct present_ddraw {
     HWND  hwnd;

@@ -48,6 +48,7 @@ static CRITICAL_SECTION g_lock;             /* serialises all bus dispatch      
 static HWND         g_hwnd;
 static HANDLE       g_key_event;            /* signalled when a key is pushed     */
 static volatile LONG g_running = 1;         /* 0 once the window is closed         */
+static HMENU        g_savedmenu;            /* stashed menu while hidden           */
 
 static void host_irq_sink(void *ctx, uint8_t irq) { (void)ctx; g_irq_pending = irq; }
 
@@ -86,7 +87,131 @@ static void host_set_flags(volatile BYTE *tib, uint8_t cf, uint8_t zf)
     if (zf) *pfl |= 0x0040; else *pfl &= (WORD)~0x0040;
 }
 
-/* --- the UI thread: window + DirectDraw present + frame timer --------------- */
+/* --- menu + status bar (scaffold; most items are stubs for now) ------------ */
+static char g_progname[64] = "(none)";      /* shown in the status bar          */
+
+enum {                                       /* wired command IDs                */
+    IDM_STUB = 1,                            /* every not-yet-wired item          */
+    IDM_FILE_EXIT, IDM_FILE_CLOSEPROG,
+    IDM_DISP_FULLSCREEN, IDM_DISP_SHOWMENU,
+    IDM_HELP_ABOUT
+};
+
+static void mi (HMENU m, const char *s, UINT id) { AppendMenuA(m, MF_STRING, id, s); }
+static void msep(HMENU m) { AppendMenuA(m, MF_SEPARATOR, 0, NULL); }
+static void msub(HMENU p, const char *s, HMENU c) { AppendMenuA(p, MF_POPUP, (UINT_PTR)c, s); }
+static HMENU mpop(void) { return CreatePopupMenu(); }
+
+/* Build the full menu tree (the structure is the scaffold; only a few items are
+   wired -- the rest carry IDM_STUB and no-op until they're implemented). */
+static HMENU build_menu(void)
+{
+    HMENU bar = CreateMenu(), m, s;
+    m = mpop();                                                   /* File         */
+    mi(m, "Open Executable...\tCtrl+O", IDM_STUB);
+    msub(m, "Open Recent", (s=mpop(), mi(s,"(empty)",IDM_STUB), s));
+    msep(m);
+    msub(m, "Save State", (s=mpop(), mi(s,"Quick-Save\tF5",IDM_STUB), mi(s,"Slot 1...9",IDM_STUB), s));
+    msub(m, "Load State", (s=mpop(), mi(s,"Quick-Load\tF9",IDM_STUB), mi(s,"Slot 1...9",IDM_STUB), s));
+    msep(m);
+    msub(m, "Configuration", (s=mpop(), mi(s,"Edit Config File...",IDM_STUB),
+        mi(s,"Reload Configuration",IDM_STUB), mi(s,"Save Current as Default",IDM_STUB),
+        mi(s,"Open Config Folder",IDM_STUB), mi(s,"Configuration Tool...",IDM_STUB), s));
+    msep(m);
+    mi(m, "Restart Machine", IDM_STUB);
+    mi(m, "Close Program", IDM_FILE_CLOSEPROG);
+    mi(m, "Exit\tAlt+F4", IDM_FILE_EXIT);
+    msub(bar, "File", m);
+
+    m = mpop();                                                   /* Edit         */
+    mi(m,"Mark / Select Region",IDM_STUB); mi(m,"Copy\tCtrl+C",IDM_STUB);
+    mi(m,"Copy Whole Screen",IDM_STUB); mi(m,"Paste\tCtrl+V",IDM_STUB); mi(m,"Select All",IDM_STUB);
+    msub(bar, "Edit", m);
+
+    m = mpop();                                                   /* CPU          */
+    msub(m,"CPU Type",(s=mpop(),mi(s,"8086",IDM_STUB),mi(s,"286",IDM_STUB),mi(s,"386",IDM_STUB),mi(s,"486",IDM_STUB),mi(s,"Pentium",IDM_STUB),s));
+    msub(m,"Core",(s=mpop(),mi(s,"Auto",IDM_STUB),mi(s,"Normal",IDM_STUB),mi(s,"Dynamic",IDM_STUB),mi(s,"Simple",IDM_STUB),s));
+    mi(m,"FPU",IDM_STUB); msep(m);
+    msub(m,"Speed",(s=mpop(),mi(s,"Auto",IDM_STUB),mi(s,"Max",IDM_STUB),mi(s,"Fixed cycles...",IDM_STUB),s));
+    mi(m,"Turbo",IDM_STUB); msep(m);
+    msub(m,"Memory",(s=mpop(),mi(s,"Conventional",IDM_STUB),mi(s,"XMS",IDM_STUB),mi(s,"EMS",IDM_STUB),mi(s,"UMB",IDM_STUB),mi(s,"A20",IDM_STUB),s));
+    msub(bar, "CPU", m);
+
+    m = mpop();                                                   /* Display      */
+    mi(m,"Fullscreen\tAlt+Enter",IDM_DISP_FULLSCREEN);
+    msub(m,"Window Size",(s=mpop(),mi(s,"1x",IDM_STUB),mi(s,"2x",IDM_STUB),mi(s,"3x",IDM_STUB),mi(s,"Custom",IDM_STUB),s));
+    msub(m,"Renderer",(s=mpop(),mi(s,"GDI",IDM_STUB),mi(s,"DirectDraw",IDM_STUB),mi(s,"Direct3D9",IDM_STUB),mi(s,"OpenGL",IDM_STUB),s));
+    msub(m,"Scaler",(s=mpop(),mi(s,"None",IDM_STUB),mi(s,"Scale2x",IDM_STUB),mi(s,"hq2x",IDM_STUB),mi(s,"Scanlines",IDM_STUB),mi(s,"CRT",IDM_STUB),s));
+    msub(m,"Filtering",(s=mpop(),mi(s,"Nearest",IDM_STUB),mi(s,"Bilinear",IDM_STUB),s));
+    mi(m,"Aspect Ratio Correction",IDM_STUB);
+    msub(m,"Frame Skip",(s=mpop(),mi(s,"0",IDM_STUB),mi(s,"1",IDM_STUB),mi(s,"2",IDM_STUB),s));
+    mi(m,"VSync",IDM_STUB); msep(m);
+    mi(m,"Show Menu Bar",IDM_DISP_SHOWMENU);
+    msub(bar, "Display", m);
+
+    m = mpop();                                                   /* Audio        */
+    mi(m,"Master Volume / Mute",IDM_STUB); msep(m);
+    msub(m,"Sound Blaster",(s=mpop(),mi(s,"SB16",IDM_STUB),mi(s,"AWE32",IDM_STUB),mi(s,"Address / IRQ / DMA",IDM_STUB),s));
+    msub(m,"AdLib / OPL",(s=mpop(),mi(s,"OPL2",IDM_STUB),mi(s,"OPL3",IDM_STUB),s));
+    msub(m,"MIDI",(s=mpop(),mi(s,"Host GM",IDM_STUB),mi(s,"MT-32",IDM_STUB),mi(s,"SoundFont...",IDM_STUB),s));
+    mi(m,"PC Speaker",IDM_STUB); msub(m,"Gravis Ultrasound",(s=mpop(),mi(s,"Enable",IDM_STUB),s));
+    msub(m,"Tandy / CMS",(s=mpop(),mi(s,"Enable",IDM_STUB),s)); msep(m);
+    msub(m,"Sample Rate / Buffer",(s=mpop(),mi(s,"22050",IDM_STUB),mi(s,"44100",IDM_STUB),s));
+    msub(bar, "Audio", m);
+
+    m = mpop();                                                   /* Input        */
+    msub(m,"Mouse",(s=mpop(),mi(s,"Capture\tCtrl+F10",IDM_STUB),mi(s,"Seamless",IDM_STUB),mi(s,"Sensitivity",IDM_STUB),s));
+    msub(m,"Keyboard",(s=mpop(),mi(s,"Layout",IDM_STUB),mi(s,"Typematic rate",IDM_STUB),mi(s,"Send Ctrl+Alt+Del",IDM_STUB),s));
+    msub(m,"Joystick",(s=mpop(),mi(s,"Type",IDM_STUB),mi(s,"Map to gamepad",IDM_STUB),mi(s,"Calibrate",IDM_STUB),s));
+    msep(m); mi(m,"Key Mapper...",IDM_STUB);
+    msub(bar, "Input", m);
+
+    m = mpop();                                                   /* Drive        */
+    mi(m,"Mount Folder as Drive...",IDM_STUB); mi(m,"Mount Disk / CD Image...",IDM_STUB);
+    mi(m,"Mount Physical Drive...",IDM_STUB); msub(m,"Unmount",(s=mpop(),mi(s,"(none)",IDM_STUB),s)); msep(m);
+    mi(m,"Boot from Drive / Image...",IDM_STUB); mi(m,"Swap Disk\tCtrl+F4",IDM_STUB); msep(m);
+    mi(m,"Drive Status...",IDM_STUB);
+    msub(bar, "Drive", m);
+
+    m = mpop();                                                   /* Capture      */
+    mi(m,"Take Screenshot\tCtrl+F5",IDM_STUB);
+    msub(m,"Record Video (AVI)",(s=mpop(),mi(s,"Start / Stop",IDM_STUB),s));
+    msub(m,"Record Audio (WAV)",(s=mpop(),mi(s,"Start / Stop",IDM_STUB),s));
+    msub(m,"Record OPL / MIDI",(s=mpop(),mi(s,"Start / Stop",IDM_STUB),s)); msep(m);
+    mi(m,"Open Capture Folder",IDM_STUB); mi(m,"Capture Settings...",IDM_STUB);
+    msub(bar, "Capture", m);
+
+    m = mpop();                                                   /* Debug        */
+    mi(m,"Pause / Resume\tPause",IDM_STUB); mi(m,"Step Instruction",IDM_STUB);
+    mi(m,"Debugger Console...",IDM_STUB); mi(m,"Registers / Memory / Disassembly",IDM_STUB); msep(m);
+    msub(m,"Logging",(s=mpop(),mi(s,"Levels...",IDM_STUB),mi(s,"Log to file",IDM_STUB),s));
+    mi(m,"Performance Overlay",IDM_STUB);
+    msub(bar, "Debug", m);
+
+    m = mpop();                                                   /* Help         */
+    mi(m,"Quick Start",IDM_STUB); mi(m,"Keyboard Shortcuts...",IDM_STUB); msep(m);
+    mi(m,"About",IDM_HELP_ABOUT);
+    msub(bar, "Help", m);
+    return bar;
+}
+
+/* Draw the status bar (a grey strip along the bottom showing the program name). */
+static void draw_status(HWND h, HDC hdc)
+{
+    RECT rc, sr; char line[96]; char *p;
+    GetClientRect(h, &rc);
+    sr = rc; sr.top = rc.bottom - PRESENT_STATUS_H;
+    FillRect(hdc, &sr, (HBRUSH)(COLOR_BTNFACE + 1));
+    { HPEN pen = (HPEN)GetStockObject(WHITE_PEN), old = (HPEN)SelectObject(hdc, pen);
+      MoveToEx(hdc, sr.left, sr.top, NULL); LineTo(hdc, sr.right, sr.top); SelectObject(hdc, old); }
+    p = line; { const char *a = "NTVDMEX  -  "; while (*a) *p++ = *a++; }
+    { const char *a = g_progname; while (*a) *p++ = *a++; } *p = 0;
+    SetBkMode(hdc, TRANSPARENT);
+    sr.left += 6; sr.top += 4;
+    TextOutA(hdc, sr.left, sr.top, line, (int)(p - line));
+}
+
+/* --- the UI thread: window + present + frame timer ------------------------- */
 static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
 {
     switch (msg) {
@@ -102,8 +227,23 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
         EnterCriticalSection(&g_lock);
         present_ddraw_frame(&g_pd, &g_vid.frame);
         LeaveCriticalSection(&g_lock);
+        draw_status(h, ps.hdc);
         EndPaint(h, &ps);
         return 0; }
+    case WM_COMMAND:
+        switch (LOWORD(wp)) {
+        case IDM_FILE_EXIT: DestroyWindow(h); return 0;
+        case IDM_DISP_FULLSCREEN: present_ddraw_set_fullscreen(&g_pd, !g_pd.fullscreen); return 0;
+        case IDM_DISP_SHOWMENU: {
+            HMENU cur = GetMenu(h);
+            if (cur) { g_savedmenu = cur; SetMenu(h, NULL); } else SetMenu(h, g_savedmenu);
+            return 0; }
+        case IDM_HELP_ABOUT:
+            MessageBoxA(h, "NTVDMEX -- New Technology Virtual DOS Manager, Extended\n"
+                          "A from-scratch ntvdm.exe for Windows XP (DOS on the real CPU in V86).",
+                          "About NTVDMEX", MB_OK | MB_ICONINFORMATION); return 0;
+        default: return 0;               /* IDM_STUB / not-yet-wired items: no-op      */
+        }
     case WM_SYSKEYDOWN:                  /* Alt+Enter -> toggle fullscreen          */
         if (wp == VK_RETURN) { present_ddraw_set_fullscreen(&g_pd, !g_pd.fullscreen); return 0; }
         break;
@@ -136,13 +276,14 @@ static DWORD WINAPI ui_thread(LPVOID arg)
     wc.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1);
     wc.lpszClassName = "NtvdmexHostWindow";
     if (!RegisterClassA(&wc)) return 1;
-    rc.left = 0; rc.top = 0; rc.right = VID_FB_W; rc.bottom = VID_FB_H;
-    AdjustWindowRect(&rc, WS_OVERLAPPEDWINDOW, FALSE);
+    rc.left = 0; rc.top = 0; rc.right = VID_FB_W; rc.bottom = VID_FB_H + PRESENT_STATUS_H;
+    AdjustWindowRect(&rc, WS_OVERLAPPEDWINDOW, TRUE);   /* TRUE: window has a menu  */
     g_hwnd = CreateWindowA(wc.lpszClassName, "NTVDMEX", WS_OVERLAPPEDWINDOW,
                            CW_USEDEFAULT, CW_USEDEFAULT, rc.right - rc.left, rc.bottom - rc.top,
                            NULL, NULL, hi, NULL);
     if (!g_hwnd) return 1;
-    present_ddraw_init(&g_pd, g_hwnd);          /* no-op presents if this fails    */
+    SetMenu(g_hwnd, build_menu());
+    present_ddraw_init(&g_pd, g_hwnd);          /* GDI windowed; DDraw for fullscreen */
     ShowWindow(g_hwnd, SW_SHOW); UpdateWindow(g_hwnd);
     SetTimer(g_hwnd, 1, 33, NULL);              /* ~30 Hz present/PIT tick         */
     while (GetMessageA(&msg, NULL, 0, 0) > 0) { TranslateMessage(&msg); DispatchMessageA(&msg); }
@@ -318,6 +459,11 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         nread = sizeof(stub);
         p = zput(p, "STAGE2: embedded fallback\r\n");
     }
+
+    /* status-bar program name = basename of progpath (if any) */
+    { const char *bn = progpath, *q; int k = 0;
+      for (q = progpath; *q; ++q) if (*q == '\\' || *q == '/') bn = q + 1;
+      if (*bn) { while (bn[k] && k < 63) { g_progname[k] = bn[k]; ++k; } g_progname[k] = 0; } }
 
     /* Build the DOS process in conventional memory (base=NULL => absolute V86). */
     img = dos_load(NULL, filebuf, nread, DOS_PSP_SEG);
