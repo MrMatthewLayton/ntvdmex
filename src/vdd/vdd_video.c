@@ -132,6 +132,9 @@ static void int10(void *self, ntvdd_regs *r)
     }
 }
 
+void vdd_video_putc(video_state *st, uint8_t ch)
+{ teletype(st, ch); st->dirty = 1; }
+
 /* B8000 window read/write (direct screen access). */
 static uint8_t vid_rd(void *self, uint32_t off)
 { video_state *st = (video_state *)self; return st->vram[off]; }

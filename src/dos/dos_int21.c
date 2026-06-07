@@ -23,6 +23,8 @@ void dos_int21_init(dos_machine_t *m, uint16_t first_mcb)
     m->dta_off = 0x0080;
     m->out_len = 0;
     m->exit_code = 0;
+    m->conout = 0;
+    m->conctx = 0;
 }
 
 int dos_int21(dos_machine_t *m)
@@ -44,7 +46,9 @@ int dos_int21(dos_machine_t *m)
     #define SET16(r, v) ((r)  = ((r)  & 0xFFFF0000u) | ((DWORD)(v) & 0xFFFF))
     #define OKCF()      (*pfl &= (WORD)~1)
     #define ERRCF()     (*pfl |= 1)
-    #define OUTC(c)     do { if (m->out_len < m->out_cap - 1) m->out[m->out_len++] = (char)(c); } while (0)
+    #define OUTC(c)     do { uint8_t _ch = (uint8_t)(c); \
+        if (m->out_len < m->out_cap - 1) m->out[m->out_len++] = (char)_ch; \
+        if (m->conout) m->conout(m->conctx, _ch); } while (0)
 
     /* CF is returned via the FLAGS the INT pushed on the V86 stack (SS:SP+4): the
        handler's IRET restores FLAGS from there, so the live EFlags get clobbered. */

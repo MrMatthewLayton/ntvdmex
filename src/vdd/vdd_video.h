@@ -46,4 +46,8 @@ static inline ntvdd vdd_video_device(video_state *st)
 /* Render the cell grid into st->fb (exposed for the off-VM battery). */
 void vdd_video_render(video_state *st);
 
+/* Teletype one character to the screen (CR/LF/BS/scroll) -- the sink the DOS
+   INT 21h console output (AH=02/09/40) is routed to in the windowed host. */
+void vdd_video_putc(video_state *st, uint8_t ch);
+
 #endif /* NTVDMEX_VDD_VIDEO_H */

@@ -92,6 +92,8 @@ add_executable(ntvdmhost
     src/dos/dos_int21.c
     src/vdd/vdd_bus.c
     src/vdd/vdd_pit.c
+    src/vdd/vdd_video.c
+    src/vdd/present_ddraw.c
     src/runtime.c)
 target_include_directories(ntvdmhost PRIVATE src/host src/vdm src/dos src/vdd)
 ntvdmex_configure_xp_target(ntvdmhost)
@@ -104,7 +106,7 @@ target_link_options(ntvdmhost PRIVATE
     -Wl,--subsystem,console -Wl,--entry,_WinMainCRTStartup
     -Wl,--major-subsystem-version,4 -Wl,--minor-subsystem-version,0
     -Wl,--disable-nxcompat -Wl,--disable-dynamicbase)
-target_link_libraries(ntvdmhost PRIVATE kernel32 user32 gcc)
+target_link_libraries(ntvdmhost PRIVATE kernel32 user32 gdi32 gcc)
 
 # --- present_demo.exe: standalone DirectDraw presentation exerciser (M3 slice-3)
 # A GUI app that drives src/vdd/present_ddraw.c with an animated test frame, to

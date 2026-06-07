@@ -1,11 +1,15 @@
-/* main.c -- the clean DOS VDM host (console). Orchestrates the pipeline the
+/* main.c -- the clean DOS VDM host (windowed). Orchestrates the pipeline the
  * tools/vdmhost spike proved, now wired through the src/ modules:
  *   log -> CSRSS handshake (csrss) -> V86 bring-up (v86) -> load + build the DOS
- *   process (dos_loader/dos_psp/dos_mcb) -> service INT 21h in V86 (dos_int21).
+ *   process (dos_loader/dos_psp/dos_mcb) -> service INT 21h/10h + I/O in V86,
+ *   routing screen output to the video VDD and presenting via DirectDraw.
  * No CRT (src/runtime.c supplies the entry + mem*); imports only XP system DLLs.
  *
- * Video/GUI is deliberately out of scope here (that is M3, the Luna window); this
- * host writes DOS output to the console and a trace to LOG_PATH.
+ * M3 merge: the host now owns a GUI window on a UI thread (present_ddraw) and the
+ * V86/DOS engine runs on the main thread (the VdmInitialize thread). DOS console
+ * output (INT 21h AH=02/09/40) and INT 10h are routed into the video VDD, whose
+ * 80x25 cell grid is rendered + blitted into the Luna-themed window. The host
+ * stays a CUI subsystem image so the CSRSS VDM handshake still binds.
  */
 #include <windows.h>
 #include "ntvdm.h"
@@ -20,6 +24,8 @@
 #include "dos_layout.h"
 #include "vdd_bus.h"
 #include "vdd_pit.h"
+#include "vdd_video.h"
+#include "present_ddraw.h"
 
 #define LOG_PATH    "C:\\ntvdmex\\ntvdmhost.log"
 #define TARGET_PATH "C:\\ntvdmex\\target.txt"
@@ -30,13 +36,86 @@ static char g_env[8192], g_desk[512], g_title[512], g_rsv[512];
 static VDM_COMMAND_INFO g_ci;
 static BYTE filebuf[0x20000];
 
-/* M3 slice-1b: the device bus + its VDDs live for the life of the host. */
-static vdd_bus  g_bus;
-static pit_state g_pit;
-static ntvdd     g_pit_dev;
-static int       g_irq_pending = -1;        /* last IRQ a VDD raised (spike obs) */
+/* The device bus + its VDDs + the presentation layer live for the host's life. */
+static vdd_bus      g_bus;
+static pit_state    g_pit;       static ntvdd g_pit_dev;
+static video_state  g_vid;       static ntvdd g_vid_dev;
+static present_ddraw g_pd;
+static int          g_irq_pending = -1;     /* last IRQ a VDD raised (spike obs) */
+static CRITICAL_SECTION g_lock;             /* serialises all bus dispatch       */
+static HWND         g_hwnd;
 
 static void host_irq_sink(void *ctx, uint8_t irq) { (void)ctx; g_irq_pending = irq; }
+
+/* DOS console output (INT 21h AH=02/09/40) -> the video VDD teletype. */
+static void host_conout(void *ctx, uint8_t ch)
+{
+    (void)ctx;
+    EnterCriticalSection(&g_lock);
+    vdd_video_putc(&g_vid, ch);
+    LeaveCriticalSection(&g_lock);
+}
+
+/* --- the UI thread: window + DirectDraw present + frame timer --------------- */
+static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
+{
+    switch (msg) {
+    case WM_TIMER:
+        EnterCriticalSection(&g_lock);
+        vdd_bus_frame(&g_bus);          /* tick PIT + render+present video if dirty */
+        LeaveCriticalSection(&g_lock);
+        return 0;
+    case WM_SYSKEYDOWN:                  /* Alt+Enter -> toggle fullscreen          */
+        if (wp == VK_RETURN) { present_ddraw_set_fullscreen(&g_pd, !g_pd.fullscreen); return 0; }
+        break;
+    case WM_KEYDOWN:
+        if (wp == VK_F11) { present_ddraw_set_fullscreen(&g_pd, !g_pd.fullscreen); return 0; }
+        break;
+    case WM_DESTROY: PostQuitMessage(0); return 0;
+    }
+    return DefWindowProcA(h, msg, wp, lp);
+}
+
+static DWORD WINAPI ui_thread(LPVOID arg)
+{
+    WNDCLASSA wc; MSG msg; RECT rc;
+    HINSTANCE hi = GetModuleHandleA(NULL);
+    (void)arg;
+    ZeroMemory(&wc, sizeof wc);
+    wc.lpfnWndProc = wnd_proc; wc.hInstance = hi;
+    wc.hCursor = LoadCursorA(NULL, IDC_ARROW);
+    wc.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1);
+    wc.lpszClassName = "NtvdmexHostWindow";
+    if (!RegisterClassA(&wc)) return 1;
+    rc.left = 0; rc.top = 0; rc.right = VID_FB_W; rc.bottom = VID_FB_H;
+    AdjustWindowRect(&rc, WS_OVERLAPPEDWINDOW, FALSE);
+    g_hwnd = CreateWindowA(wc.lpszClassName, "NTVDMEX", WS_OVERLAPPEDWINDOW,
+                           CW_USEDEFAULT, CW_USEDEFAULT, rc.right - rc.left, rc.bottom - rc.top,
+                           NULL, NULL, hi, NULL);
+    if (!g_hwnd) return 1;
+    present_ddraw_init(&g_pd, g_hwnd);          /* no-op presents if this fails    */
+    ShowWindow(g_hwnd, SW_SHOW); UpdateWindow(g_hwnd);
+    SetTimer(g_hwnd, 1, 33, NULL);              /* ~30 Hz present/PIT tick         */
+    while (GetMessageA(&msg, NULL, 0, 0) > 0) { TranslateMessage(&msg); DispatchMessageA(&msg); }
+    present_ddraw_shutdown(&g_pd);
+    return 0;
+}
+
+/* --- guest register view <-> VDM_TIB CONTEXT (for bus interrupt dispatch) --- */
+static void regs_load(ntvdd_regs *r, volatile BYTE *tib)
+{
+    r->eax = VDM_REG(tib, VTIB_EAX); r->ebx = VDM_REG(tib, VTIB_EBX);
+    r->ecx = VDM_REG(tib, VTIB_ECX); r->edx = VDM_REG(tib, VTIB_EDX);
+    r->esi = VDM_REG(tib, VTIB_ESI); r->edi = VDM_REG(tib, VTIB_EDI);
+    r->ebp = VDM_REG(tib, VTIB_EBP);
+    r->ds = (uint16_t)VDM_REG(tib, VTIB_DS); r->es = (uint16_t)VDM_REG(tib, VTIB_ES);
+    r->cf = 0;
+}
+static void regs_store(ntvdd_regs *r, volatile BYTE *tib)
+{
+    VDM_REG(tib, VTIB_EAX) = r->eax; VDM_REG(tib, VTIB_EBX) = r->ebx;
+    VDM_REG(tib, VTIB_ECX) = r->ecx; VDM_REG(tib, VTIB_EDX) = r->edx;
+}
 
 /* Decode + service a V86 IN/OUT that #GP-faulted (event 2), dispatch it to the
    bus, and advance EIP past the instruction so the guest resumes. Returns 1 if
@@ -104,6 +183,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     char progpath[768]; char args[256];
     unsigned i; int guard;
     static const BYTE bop[] = { VDM_BOP0, VDM_BOP1, 0x20, 0xCF };  /* BOP 0x20 ; iret */
+    static const BYTE bop10[] = { VDM_BOP0, VDM_BOP1, 0x10, 0xCF }; /* BOP 0x10 ; iret */
+    HANDLE ui = NULL;
 
     (void)hInst; (void)hPrev; (void)lpCmd; (void)nShow;
     progpath[0] = 0; args[0] = 0;
@@ -196,20 +277,33 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     *(volatile WORD *)0x84 = 0x0000;                        /* IVT[0x21].offset    */
     *(volatile WORD *)0x86 = DOS_HDLR_SEG;                  /* IVT[0x21].segment   */
     hdlr[DOS_DBCS_OFF] = 0; hdlr[DOS_DBCS_OFF + 1] = 0;     /* empty DBCS table    */
+    for (i = 0; i < sizeof(bop10); ++i) hdlr[0x20 + i] = bop10[i];  /* INT 10h stub */
+    *(volatile WORD *)0x40 = 0x0020;                        /* IVT[0x10].offset    */
+    *(volatile WORD *)0x42 = DOS_HDLR_SEG;                  /* IVT[0x10].segment   */
 
     dos_psp_build(NULL, DOS_PSP_SEG, DOS_ENV_SEG, DOS_MEM_TOP);
     dos_env_build(NULL, DOS_ENV_SEG, progpath[0] ? progpath : "C:\\PROGRAM.COM");  /* M2.5: env */
     dos_cmdtail_build(NULL, DOS_PSP_SEG, args);                                    /* M2.5: args */
     dos_int21_init(&m, dos_mcb_init(NULL));
 
-    /* M3 slice-1b: stand up the device bus (NULL base => absolute V86 addresses)
-       and add the PIT VDD, which claims ports 0x40-0x43 + INT 08h/1Ah. I/O on
-       those ports now reflects as a #GP (event 2) and dispatches through the bus;
-       the INT/IRQ wiring (IVT BOP stubs + ICA delivery) is the next sub-step. */
+    /* Stand up the device bus (NULL base => absolute V86 addresses) with the PIT
+       (ports 0x40-0x43, INT 08h/1Ah) and the video VDD (B8000 + INT 10h text +
+       cell renderer). The present sink is DirectDraw via present_ddraw on the UI
+       thread. I/O on claimed ports reflects as event 0 -> the bus; INT 10h comes
+       in as a BOP routed below; DOS console output is routed via m.conout. */
+    InitializeCriticalSection(&g_lock);
     vdd_bus_init(&g_bus, NULL);
-    vdd_bus_set_sinks(&g_bus, host_irq_sink, NULL, NULL, NULL);
+    vdd_bus_set_sinks(&g_bus, host_irq_sink, NULL, present_ddraw_sink, &g_pd);
     g_pit_dev = vdd_pit_device(&g_pit);
     vdd_bus_add(&g_bus, &g_pit_dev);
+    g_vid_dev = vdd_video_device(&g_vid);
+    vdd_bus_add(&g_bus, &g_vid_dev);
+    m.conout = host_conout; m.conctx = NULL;    /* DOS console -> video screen   */
+
+    /* Hide the inherited console (CSRSS already bound the VDM); the Luna window
+       is now the display. Then start the UI thread that owns it. */
+    { HWND con = GetConsoleWindow(); if (con) ShowWindow(con, SW_HIDE); }
+    ui = CreateThread(NULL, 0, ui_thread, NULL, 0, NULL);
 
     v86_set_entry(tib, img.cs, img.ip, img.ss, img.sp, DOS_PSP_SEG);
     if (!img.is_exe)                                        /* .COM near-ret guard */
@@ -230,10 +324,12 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         /* I/O port trap (event 0; VM-confirmed) or a generic GP fault (event 2):
            if the faulting instruction is an IN/OUT we can decode, service it via
            the VDD bus and resume; otherwise fall through to the stop dump. */
-        if ((ev == VDM_EVENT_IO || ev == VDM_EVENT_GPFAULT) &&
-            host_try_io(tib, &g_bus, &p)) {
-            log_append(LOG_PATH, base, p); p = base;
-            continue;
+        if (ev == VDM_EVENT_IO || ev == VDM_EVENT_GPFAULT) {
+            int handled;
+            EnterCriticalSection(&g_lock);
+            handled = host_try_io(tib, &g_bus, &p);
+            LeaveCriticalSection(&g_lock);
+            if (handled) { log_append(LOG_PATH, base, p); p = base; continue; }
         }
         if (ev != VDM_EVENT_BOP) {
             DWORD csv = VDM_REG(tib, VTIB_CS) & 0xFFFF;
@@ -250,6 +346,16 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             p = zput(p, "  VTIB[5A8..]: "); p = zdump(p, (const void *)(tib + 0x5A8), 0x20);
             log_append(LOG_PATH, base, p); p = base;
             break;
+        }
+        /* Route the BOP by its number: 0x10 -> INT 10h (video VDD), else INT 21h. */
+        if ((VDM_REG(tib, VTIB_EVENT_INFO) & 0xFF) == 0x10) {
+            ntvdd_regs r; regs_load(&r, tib);
+            EnterCriticalSection(&g_lock);
+            vdd_bus_deliver_int(&g_bus, 0x10, &r);
+            LeaveCriticalSection(&g_lock);
+            regs_store(&r, tib);
+            VDM_REG(tib, VTIB_EIP) += 3;
+            continue;
         }
         m.tp = p;
         if (!dos_int21(&m)) {                       /* AH=4Ch -> terminate */
@@ -277,5 +383,9 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     }
     p = zput(p, "STAGE2: complete\r\n");
     log_append(LOG_PATH, base, p);
+
+    /* Keep the Luna window open so the guest's final screen stays visible until
+       the user closes it; then the UI thread's message loop returns. */
+    if (ui) { WaitForSingleObject(ui, INFINITE); CloseHandle(ui); }
     return 0;
 }
