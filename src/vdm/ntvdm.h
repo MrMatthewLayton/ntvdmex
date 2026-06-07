@@ -128,8 +128,12 @@ typedef LONG (WINAPI *PFN_NtMapViewOfSection)(HANDLE, HANDLE, PVOID *, ULONG,
 #define VTIB_EVENT       0x5A8       /* event code (VDM_EVENT_BOP = serviceable BOP) */
 #define VTIB_EVENT_INFO  0x5B0       /* extra info for fault events                 */
 /* Event taxonomy (kernel -> host, ntvdm dispatch table 0xf064a60, index=VTIB_EVENT):
-   0,1,3 internal; 2 = GP fault (incl. IOPL-0 IN/OUT #GP -- info at VTIB_EVENT_INFO);
-   4 = BOP/software dispatch; 5 = terminate; 6 = hardware IRQ; >=7 exits the loop. */
+   0 = I/O port access (IOPL-0 IN/OUT trap); 1,3 internal; 2 = GP fault; 4 = BOP/
+   software dispatch; 5 = terminate; 6 = hardware IRQ; >=7 exits the loop.
+   [VM-confirmed 2026-06-07] An IOPL-0 `OUT 0x43,al` stops with VTIB_EVENT(0x5A8)=0,
+   EIP exactly on the instruction, and VTIB_EVENT_INFO(0x5B0) low word = the port
+   (0x0043). So I/O is event 0, NOT the generic GP fault (event 2). */
+#define VDM_EVENT_IO      0
 #define VDM_EVENT_GPFAULT 2
 #define VDM_EVENT_BOP     4
 #define VDM_EVENT_HWIRQ   6

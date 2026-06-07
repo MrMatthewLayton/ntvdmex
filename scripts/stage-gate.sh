@@ -14,6 +14,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cp "$ROOT/tools/dostest/memtest.com"     "$ROOT/build/"
 cp "$ROOT/tools/dostest/argtest.com"     "$ROOT/build/"
 cp "$ROOT/tools/dostest/ioprobe.com"     "$ROOT/build/"
+cp "$ROOT/tools/dostest/runtest.bat"     "$ROOT/build/"
 cp "$ROOT/tools/wowprobe/dosstub.com"    "$ROOT/build/"
 
 host=ntvdmhost.exe; gate=gate-clean.bat; log='C:\ntvdmex\ntvdmhost.log'

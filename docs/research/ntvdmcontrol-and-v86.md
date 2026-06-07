@@ -534,6 +534,16 @@ Full pipeline, end-to-end from the transparent IFEO host, no MS VDM binaries:
   3 `0xf007a99`, **4 `0xf004f59` = BOP/software dispatch** (number in `+0x5b0`, 256-entry table
   `0xf065580`), 5 `0xf04399f` = terminate, 6 `0xf0439c1` = hardware IRQ; event >=7 exits the loop.
 
+`[FACT]` **Event 0 = I/O port access (IOPL-0 IN/OUT trap)** — confirmed on the VM 2026-06-07 (M3
+slice-1b). Running `ioprobe.com` (`B0 36; E6 43 ...`) in V86 under our clean host stops with
+`VDM_TIB+0x5a8 = 0` (NOT the generic GP-fault event 2), `EIP` sitting **exactly on** the `OUT`
+(`CS:IP=0x100:0x102`, `bytes@CS:IP = e6 43 ...`), and `VDM_TIB+0x5b0` low word = **the port**
+(`info=0x00010043` -> port `0x43`). So I/O reflects as a dedicated event 0 with the port pre-decoded;
+the host decodes the instruction at `CS:IP` (direction/width), dispatches through the VDD bus, and
+advances `EIP` past it to resume — same controlled-resume pattern as the BOP. (Raw `VTIB[5A8..]`:
+`00 00 00 00  02 00 00 00  43 00 01 00 ...`; `+0x5ac`=2 is a secondary subtype, not needed since we
+decode the instruction directly.)
+
 The NTVDM execution architecture is now reproduced from our own host: **V86 execution + real-mode
 IVT reflection + BOP host-callback + DOS INT 21h interpretation**. Remaining for a general DOS host:
 a proper PSP + 64KB+ conventional-memory map (we map only 64KB today), a real BOP/INT-service

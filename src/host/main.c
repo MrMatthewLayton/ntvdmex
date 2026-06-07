@@ -227,9 +227,11 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     m.tib = tib; m.out = dosout; m.out_cap = sizeof(dosout); m.out_len = 0;
     for (guard = 0; guard < 4000; ++guard) {
         ev = v86_run(tib, &st);
-        /* I/O #GP (event 2): if it's an IN/OUT we can decode, service it via the
-           VDD bus and resume; otherwise it's a genuine fault -> fall through. */
-        if (ev == VDM_EVENT_GPFAULT && host_try_io(tib, &g_bus, &p)) {
+        /* I/O port trap (event 0; VM-confirmed) or a generic GP fault (event 2):
+           if the faulting instruction is an IN/OUT we can decode, service it via
+           the VDD bus and resume; otherwise fall through to the stop dump. */
+        if ((ev == VDM_EVENT_IO || ev == VDM_EVENT_GPFAULT) &&
+            host_try_io(tib, &g_bus, &p)) {
             log_append(LOG_PATH, base, p); p = base;
             continue;
         }
