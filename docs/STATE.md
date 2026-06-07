@@ -16,8 +16,10 @@
   the Luna window on the real CPU. (Fixed present_ddraw to pack pixels to the surface's real depth;
   XP/Cirrus is 16bpp — that was the vertical-striping bug.) **Keyboard input DONE + VM-CONFIRMED**
   (INT 16h VDD + INT 21h AH=01/07/08/0A + UI WM_CHAR; interactive keytest.com typed in the window,
-  Enter/Backspace/ESC); **authentic IBM VGA 8×16 ROM font** now used. Next code-side = extended keys
-  (arrows/F-keys) + mouse, or graphics modes (13h → needs A0000/B8000 mapped as RAM).
+  Enter/Backspace/ESC); **authentic IBM VGA 8×16 ROM font** now used. **Graphics mode 13h DONE +
+  VM-CONFIRMED** (320×200×256 + DAC palette + A0000-BFFFF mapped as RAM; `vgademo.com` x^y fractal
+  rendered on the real CPU). Next code-side = **VESA VBE 2.0 (banked)**, or extended keys+mouse, or
+  live PIT IRQ delivery.
   *M2 follow-up (not blocking):* CSRSS transparent-arg recovery + exit-to-shell notify.
 - **Overall status:** 🟢 **The keystone is proven.** A real DOS `.COM`, loaded off disk, runs on the
   real CPU in **Virtual-8086 mode** via `NtVdmControl` and prints "Hello, World" through our own INT

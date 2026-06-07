@@ -140,8 +140,11 @@ Per-step exit criteria:
   typed an interactive `keytest.com` in the Luna window (letters, Enter, Backspace, ESC). Also swapped
   in the **authentic IBM VGA 8×16 ROM font** (CP437). Remaining: extended keys (arrows/F-keys via
   WM_KEYDOWN scancodes) + mouse (INT 33h).
-- [ ] Video VDD: graphics modes — 13h (linear 320×200×256) + DAC, then VESA VBE 2.0 banked; needs the
-  guest video aperture (A0000/B8000) mapped as RAM so direct-framebuffer programs work.
+- [x] **Graphics mode 13h** (320×200×256) + **DAC palette** + the **video aperture A0000-BFFFF mapped
+  as RAM** — **VM-CONFIRMED**: `vgademo.com` drew an `x XOR y` rainbow fractal (correct 2D addressing,
+  direct A0000 writes, DAC palette) in the Luna window on the real CPU.
+- [ ] Video VDD: **VESA VBE 2.0** (banked) — 0x101/0x103/0x111 modes, INT 10h AX=4F00/01/02/05.
+- [ ] Planar mode 12h (640×480×16) — last/optional (latches + write modes).
 - [ ] VDD interrupt delivery: install VDD INT handlers as IVT BOP stubs + real IRQ0→INT 8 via the
   kernel ICA (so the off-VM-proven PIT ticks live; needs the VM).
 - [ ] **Sound VDD** stub (the third device proving the ABI generalises; full audio is M7).
