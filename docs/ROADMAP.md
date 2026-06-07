@@ -113,11 +113,15 @@ Per-step exit criteria:
 
 ## M3 — Device model + video/input 🟡 STARTED
 - [x] **Retire the `tools/vdmhost` spike** (clean host has parity) — done at M3 kickoff.
-- [ ] Pluggable **VDD** interface (the third-party hook point, requirement #13) — the load-bearing
-  M3 decision: a clean in-process plugin ABI (I/O-port + memory-window + INT hooks + a frame sink),
-  with built-in VDDs for video / timer (PIT) / sound. Design: [research/vdd-architecture.md](research/vdd-architecture.md).
-- [ ] I/O-port (`IN`/`OUT`) + memory-window trapping (the VDD dispatch substrate) — carried over from M1.
-- [ ] **Timer VDD** (PIT 8253/8254 + INT 1Ah/INT 8) — the simplest device, validates the VDD seam first.
+- [x] Pluggable **VDD** interface (requirement #13) — clean `src/vdd/ntvdd.h` ABI + device bus
+  (`vdd_bus.c`): claim ports / memory-window / interrupt / frame, services raise-IRQ / map-flat /
+  present. **Off-VM battery 22/22.** Design: [research/vdd-architecture.md](research/vdd-architecture.md).
+- [x] **Timer VDD** (PIT 8254 + INT 08h/1Ah, IRQ0) — `src/vdd/vdd_pit.c`, the first device on the
+  bus. **Off-VM battery 19/19** (8254 ports, clocks→IRQ0 engine, BIOS tick + rollover, time-of-day).
+- [ ] **I/O-port (`IN`/`OUT`) + memory-window trapping wired into `v86_run`** (slice-1b) — the one
+  unproven piece: the guest runs at IOPL=0 so IN/OUT `#GP`-faults; needs a VM spike to learn the
+  reflected event code, then install VDD interrupt handlers as IVT BOP stubs + real IRQ0→INT 8 via
+  the kernel ICA. This lights up the off-VM-proven bus + PIT on the real CPU.
 - [ ] **Video VDD:** trap text/VGA/VESA memory + INT 10h, render via **DirectDraw** into a
   **Luna-themed window**, with **windowed and full-screen** modes; VGA + VESA (VBE) mode support.
 - [ ] Keyboard + mouse (INT 16h / INT 33h) from host events.

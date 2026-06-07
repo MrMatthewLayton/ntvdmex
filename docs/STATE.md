@@ -4,11 +4,12 @@
 
 - **Last updated:** 2026-06-07
 - **Phase:** **M3 — device model + video (STARTED).** M2 (DOS kernel) is closed: M2.1–M2.6 DONE in the
-  clean `src/` host. M3 kickoff **retired the `tools/vdmhost` spike** (clean host has parity) and put
-  the **pluggable VDD architecture** under design ([research/vdd-architecture.md](research/vdd-architecture.md)):
-  a clean in-process plugin ABI, built-in VDDs for timer/video/sound, DirectDraw rendering
-  (windowed + full-screen), VGA + VESA. *M2 follow-up (not blocking):* CSRSS transparent-arg recovery
-  + exit-to-shell notify.
+  clean `src/` host. M3 kickoff **retired the `tools/vdmhost` spike** and decided the **pluggable VDD
+  architecture** ([ADR-0008](decisions/0008-pluggable-vdd-model.md) + [research/vdd-architecture.md](research/vdd-architecture.md)):
+  clean `ntvdd.h` ABI + bus, built-in VDDs, DirectDraw (windowed + full-screen), VGA + VESA; the two
+  binaries merge into one windowed host. **Slices 1a (bus, 22/22) + 2 (PIT timer, 19/19) DONE off-VM.**
+  Next blocker = **slice-1b: wire the bus into `v86_run`** (IOPL-0 IN/OUT `#GP` event reflection —
+  needs a VM spike). *M2 follow-up (not blocking):* CSRSS transparent-arg recovery + exit-to-shell notify.
 - **Overall status:** 🟢 **The keystone is proven.** A real DOS `.COM`, loaded off disk, runs on the
   real CPU in **Virtual-8086 mode** via `NtVdmControl` and prints "Hello, World" through our own INT
   21h handler — launched transparently when XP starts a 16-bit program (IFEO redirect). The whole
@@ -153,27 +154,27 @@ variant to capture `ntvdmhost.log` — the manual `gate-clean.bat` is the reliab
 
 ## Single next action
 
-**M2.4 is done** (allocator validated end-to-end). **Testing strategy (decided 2026-06-06):**
+**M3 is underway.** Slices 1a (VDD bus) + 2 (PIT timer) are done and proven off-VM; the next step is
+**slice-1b — wire the bus into `v86_run`**, which needs a VM spike.
 
-1. **Off-VM is the primary loop** — `tools/dostest/run.sh` (30-case `dos_mcb.h` battery) and
-   `tools/dostest/verify-memtest.sh` (dosbox-x) validate allocator logic + the test program
-   instantly and reliably, no VM. Use this for routine work.
-2. **The XP VM is a manual integration gate** — for real-V86 confidence, run
-   `tools/dostest/gate.bat` *inside the VM* (interactive desktop) and read/paste the verdict.
-   Reliable + observable, no telnet. (`scripts/dostest.sh` + the logon agent are an optional
-   automated telnet path that passed a live round, but it's slow and reads as a hang — not default.)
+**Testing strategy (unchanged, decided 2026-06-06):** off-VM is the primary loop
+(`tools/dostest/run.sh` now runs the MCB **49/49**, VDD bus **22/22**, and PIT **19/19** batteries
+instantly, no VM); the XP VM is a **manual integration gate** via `tools/dostest/gate-clean.bat`
+(interactive desktop, read/paste the verdict — no telnet).
 
 Next work:
-1. ✅ **M2.6 DONE** (2026-06-07) — clean `src/` host ran memtest in V86 (MEMTEST PASS, VM-confirmed).
-2. ✅ **M2.5 guest-visible plumbing DONE** (`67b433b`) — env block (`dos_env.h`), PSP arg tail
-   (`dos_cmdtail_build`), errorlevel (`g_ci.ExitCode`); battery 49/49; `argtest.com` dosbox-verified
-   (echoes its tail, exit = tail length). **M2 closed for M3.** *Best-effort follow-up (not blocking
-   M3):* recover arbitrary real-shell args from CSRSS's undocumented multi-call protocol + the
-   exit-code-to-shell notify; and confirm `mem.exe` past `Parse Error 1` (likely the env block now).
-3. **VM gate for M2.5 (your manual run):** `./scripts/stage-gate.sh`, then in the VM
-   `gate-clean.bat argtest.com HELLO` → expect ` HELLO` echoed + errorlevel 6; and `gate-clean.bat mem.exe`.
-4. **M3 — device model + video:** trap INT 10h / B800 text into the Luna window + I/O-port trapping.
-   First step option: retire the `tools/vdmhost` spike now the clean host has parity.
+1. **Slice-1b (needs the VM): wire the device bus into the V86 loop.** The guest runs at **IOPL=0**,
+   so every `IN`/`OUT` `#GP`-faults. Today only `VDM_EVENT_BOP=4` is mapped (INT 21h). Spike: run one
+   `OUT` in V86 and log the reflected `VTIB_EVENT`/`VTIB_EVENT_INFO` to learn the I/O-fault event code
+   + how the faulting instruction is presented. Then in `main.c`'s service loop: on that event decode
+   port/width/dir from the guest instruction → `vdd_bus_io()` → advance EIP past it → re-enter.
+   Install VDD interrupt handlers (PIT INT 08h/1Ah) as **IVT BOP stubs** like INT 21h, and deliver
+   real **IRQ0→INT 8** via the kernel ICA (then the off-VM-proven PIT ticks on the real CPU).
+2. **Slice-2 finish (with 1b):** INT 08h's INT 1Ch chain + PIC EOI (needs IVT/re-entry).
+3. **Slice-3 (VM/visual): DirectDraw presentation layer** — a GUI host window, windowed + fullscreen,
+   blit a test pattern; then merge `src/console.c`/`src/main.c` in. Independent of 1b.
+4. *M2 best-effort follow-up (not blocking):* CSRSS multi-call arg recovery + exit-to-shell notify;
+   confirm `mem.exe` past `Parse Error 1`. VM gate: `gate-clean.bat argtest.com HELLO` / `mem.exe`.
 
 ## Environment notes
 
