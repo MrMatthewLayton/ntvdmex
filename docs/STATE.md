@@ -9,8 +9,10 @@
   clean `ntvdd.h` ABI + bus, built-in VDDs, DirectDraw (windowed + full-screen), VGA + VESA; the two
   binaries merge into one windowed host. **Slices 1a (bus 22/22) + 2 (PIT 19/19) off-VM; 1b (I/O
   trap, event 0) + 3 (DirectDraw) VM-CONFIRMED 2026-06-07** — `ioprobe.com` routed 4×OUT+IN through
-  the real PIT VDD on the CPU (reload→0x1234, IN→0x34, exit 0x34); `present_demo.exe` rendered. Next
-  code-side = **video VDD (text mode 3) → present_ddraw, then merge the two binaries.**
+  the real PIT VDD on the CPU (reload→0x1234, IN→0x34, exit 0x34); `present_demo.exe` rendered.
+  **Video VDD text mode 3 done off-VM** (slice-4: B8000 trap + INT 10h + 8×16-font renderer, battery
+  23/23). Next code-side = **merge ntvdmhost+ntvdmex into one windowed host** (route INT 21h console +
+  INT 10h through the video VDD → present_ddraw so a DOS prompt paints in the Luna window).
   *M2 follow-up (not blocking):* CSRSS transparent-arg recovery + exit-to-shell notify.
 - **Overall status:** 🟢 **The keystone is proven.** A real DOS `.COM`, loaded off disk, runs on the
   real CPU in **Virtual-8086 mode** via `NtVdmControl` and prints "Hello, World" through our own INT
