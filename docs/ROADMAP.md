@@ -118,12 +118,17 @@ Per-step exit criteria:
   present. **Off-VM battery 22/22.** Design: [research/vdd-architecture.md](research/vdd-architecture.md).
 - [x] **Timer VDD** (PIT 8254 + INT 08h/1Ah, IRQ0) — `src/vdd/vdd_pit.c`, the first device on the
   bus. **Off-VM battery 19/19** (8254 ports, clocks→IRQ0 engine, BIOS tick + rollover, time-of-day).
-- [ ] **I/O-port (`IN`/`OUT`) + memory-window trapping wired into `v86_run`** (slice-1b) — the one
-  unproven piece: the guest runs at IOPL=0 so IN/OUT `#GP`-faults; needs a VM spike to learn the
-  reflected event code, then install VDD interrupt handlers as IVT BOP stubs + real IRQ0→INT 8 via
-  the kernel ICA. This lights up the off-VM-proven bus + PIT on the real CPU.
-- [ ] **Video VDD:** trap text/VGA/VESA memory + INT 10h, render via **DirectDraw** into a
-  **Luna-themed window**, with **windowed and full-screen** modes; VGA + VESA (VBE) mode support.
+- [x] **I/O-port (`IN`/`OUT`) trap dispatch wired into `v86_run`** (slice-1b) — IOPL-0 IN/OUT
+  `#GP`-faults reflect as event 2 (taxonomy already recovered from the ntvdm disasm); `host_try_io()`
+  decodes the instruction and dispatches through the bus, then resumes. **Implemented + builds
+  KERNEL32-only; awaiting the manual VM gate** (`gate-clean.bat ioprobe.com`) to confirm on real CPU.
+- [x] **DirectDraw presentation layer** (slice-3) — `src/vdd/present_ddraw.c`: windowed + exclusive
+  fullscreen, one index→ARGB path, lost-surface recovery; `present_demo.exe` is the standalone visual
+  gate. Imports kernel32+user32 only (ddraw bound at runtime).
+- [ ] **Video VDD:** trap text/VGA/VESA memory + INT 10h, render text mode 3 → 13h → VESA into the
+  present_ddraw frame sink. Then **merge `ntvdmhost`+`ntvdmex`** into one windowed host.
+- [ ] VDD interrupt delivery: install VDD INT handlers as IVT BOP stubs + real IRQ0→INT 8 via the
+  kernel ICA (so the off-VM-proven PIT ticks live; needs the VM).
 - [ ] Keyboard + mouse (INT 16h / INT 33h) from host events.
 - [ ] **Sound VDD** stub (the third device proving the ABI generalises; full audio is M7).
 - **Exit:** a DOS app with a text-mode UI (and a VGA graphics demo) runs in a themed DirectDraw

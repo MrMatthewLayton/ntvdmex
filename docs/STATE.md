@@ -7,9 +7,10 @@
   clean `src/` host. M3 kickoff **retired the `tools/vdmhost` spike** and decided the **pluggable VDD
   architecture** ([ADR-0008](decisions/0008-pluggable-vdd-model.md) + [research/vdd-architecture.md](research/vdd-architecture.md)):
   clean `ntvdd.h` ABI + bus, built-in VDDs, DirectDraw (windowed + full-screen), VGA + VESA; the two
-  binaries merge into one windowed host. **Slices 1a (bus, 22/22) + 2 (PIT timer, 19/19) DONE off-VM.**
-  Next blocker = **slice-1b: wire the bus into `v86_run`** (IOPL-0 IN/OUT `#GP` event reflection —
-  needs a VM spike). *M2 follow-up (not blocking):* CSRSS transparent-arg recovery + exit-to-shell notify.
+  binaries merge into one windowed host. **Slices 1a (bus 22/22) + 2 (PIT 19/19) DONE off-VM;
+  1b (I/O `#GP` trap dispatch) + 3 (DirectDraw present layer + `present_demo.exe`) IMPLEMENTED,
+  build KERNEL32-only — awaiting the manual VM gate** (`gate-clean.bat ioprobe.com`; run
+  `present_demo.exe`). *M2 follow-up (not blocking):* CSRSS transparent-arg recovery + exit-to-shell notify.
 - **Overall status:** 🟢 **The keystone is proven.** A real DOS `.COM`, loaded off disk, runs on the
   real CPU in **Virtual-8086 mode** via `NtVdmControl` and prints "Hello, World" through our own INT
   21h handler — launched transparently when XP starts a 16-bit program (IFEO redirect). The whole
@@ -163,16 +164,16 @@ instantly, no VM); the XP VM is a **manual integration gate** via `tools/dostest
 (interactive desktop, read/paste the verdict — no telnet).
 
 Next work:
-1. **Slice-1b (needs the VM): wire the device bus into the V86 loop.** The guest runs at **IOPL=0**,
-   so every `IN`/`OUT` `#GP`-faults. Today only `VDM_EVENT_BOP=4` is mapped (INT 21h). Spike: run one
-   `OUT` in V86 and log the reflected `VTIB_EVENT`/`VTIB_EVENT_INFO` to learn the I/O-fault event code
-   + how the faulting instruction is presented. Then in `main.c`'s service loop: on that event decode
-   port/width/dir from the guest instruction → `vdd_bus_io()` → advance EIP past it → re-enter.
-   Install VDD interrupt handlers (PIT INT 08h/1Ah) as **IVT BOP stubs** like INT 21h, and deliver
-   real **IRQ0→INT 8** via the kernel ICA (then the off-VM-proven PIT ticks on the real CPU).
-2. **Slice-2 finish (with 1b):** INT 08h's INT 1Ch chain + PIC EOI (needs IVT/re-entry).
-3. **Slice-3 (VM/visual): DirectDraw presentation layer** — a GUI host window, windowed + fullscreen,
-   blit a test pattern; then merge `src/console.c`/`src/main.c` in. Independent of 1b.
+1. **VM GATE (your run, at the interactive desktop):** `./scripts/stage-gate.sh`, then in the VM
+   `gate-clean.bat ioprobe.com` → expect `IO out/in` trace + `STAGE2: complete` errorlevel 0x34
+   (confirms IOPL-0 IN/OUT reflects as event 2 and resumes — slice-1b proven; bus+PIT live). If it
+   stops with `event=0x...`, paste the `info=`/`bytes@CS:IP`/`VTIB[5A8..]` dump and I'll adjust. Also
+   run `present_demo.exe` to eyeball the windowed + fullscreen DirectDraw blit (Alt+Enter / Esc).
+2. **Code-side (VM-independent): the video VDD** — `src/vdd/vdd_video/` text mode 3 first (B8000
+   trap, embedded 8×16 font, INT 10h text subset) feeding `present_ddraw`; then **merge
+   `ntvdmhost`+`ntvdmex`** into one windowed host. Then mode 13h + DAC, then VESA banked.
+3. **VDD interrupt/IRQ delivery (needs VM):** install PIT INT 08h/1Ah as IVT BOP stubs (like INT 21h)
+   + real IRQ0→INT 8 via the kernel ICA; then INT 08h's INT 1Ch chain + PIC EOI.
 4. *M2 best-effort follow-up (not blocking):* CSRSS multi-call arg recovery + exit-to-shell notify;
    confirm `mem.exe` past `Parse Error 1`. VM gate: `gate-clean.bat argtest.com HELLO` / `mem.exe`.
 
