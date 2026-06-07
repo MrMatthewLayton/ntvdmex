@@ -24,10 +24,10 @@ Research → Impl → Test — *don't spike what's already known.*
 
 > Stage status: ⬜ not started · 🟡 in progress · ✅ done · `–` not applicable
 
-**Honest caveat:** nearly everything proven so far lives in the **vdmhost spike**. The clean-host
-**Impl** (`src/`, today just the Luna shell preview) is largely unstarted — hence the rows below
-with ✅ Spike / ⬜ Impl. Promoting the proven DOS core from `vdmhost` into `src/` is itself a major
-piece of M2.
+**History:** M0–M1 and M2.1–M2.4 were first proven in the throwaway **`tools/vdmhost` spike** (hence
+the ✅ Spike / ⬜ Impl rows below). M2.6 promoted that proven DOS core into the clean `src/` host
+(`ntvdmhost.exe`); the spike was then **retired** (removed at the start of M3 — see git history). The
+✅ Spike / ⬜ Impl rows are kept as the historical audit trail; the live implementation is `src/`.
 
 ---
 
@@ -111,12 +111,19 @@ Per-step exit criteria:
   **MEMTEST PASS** (VM-confirmed via `gate-clean.bat`). Imports **KERNEL32 only**
   (`scripts/check-imports.sh`); off-VM battery 42/42. The `tools/vdmhost` spike is now reference-only.
 
-## M3 — Device model + video/input ⬜
-- [ ] Pluggable **VDD** interface (the third-party hook point, requirement #13)
-- [ ] Video: trap text/VGA memory + INT 10h, render into a **Luna-themed window**
-- [ ] Keyboard + mouse (INT 16h / INT 33h) from host events
-- [ ] I/O-port (`IN`/`OUT`) trapping carried over from M1
-- **Exit:** a DOS app with text-mode UI runs in a themed window.
+## M3 — Device model + video/input 🟡 STARTED
+- [x] **Retire the `tools/vdmhost` spike** (clean host has parity) — done at M3 kickoff.
+- [ ] Pluggable **VDD** interface (the third-party hook point, requirement #13) — the load-bearing
+  M3 decision: a clean in-process plugin ABI (I/O-port + memory-window + INT hooks + a frame sink),
+  with built-in VDDs for video / timer (PIT) / sound. Design: [research/vdd-architecture.md](research/vdd-architecture.md).
+- [ ] I/O-port (`IN`/`OUT`) + memory-window trapping (the VDD dispatch substrate) — carried over from M1.
+- [ ] **Timer VDD** (PIT 8253/8254 + INT 1Ah/INT 8) — the simplest device, validates the VDD seam first.
+- [ ] **Video VDD:** trap text/VGA/VESA memory + INT 10h, render via **DirectDraw** into a
+  **Luna-themed window**, with **windowed and full-screen** modes; VGA + VESA (VBE) mode support.
+- [ ] Keyboard + mouse (INT 16h / INT 33h) from host events.
+- [ ] **Sound VDD** stub (the third device proving the ABI generalises; full audio is M7).
+- **Exit:** a DOS app with a text-mode UI (and a VGA graphics demo) runs in a themed DirectDraw
+  window, driven entirely through the pluggable VDD interface.
 
 ## M4 — Memory extensions ⬜
 - [ ] XMS, EMS, and **DPMI** (protected-mode DOS extenders, e.g. DOS/4GW titles)

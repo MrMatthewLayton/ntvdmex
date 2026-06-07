@@ -2,8 +2,13 @@
 
 > **This is the canonical resume point.** Update it at the end of every working session.
 
-- **Last updated:** 2026-06-06
-- **Phase:** M2 — DOS kernel **CLOSING**: M2.1–M2.4 + M2.6 DONE; **M2.5 guest-visible plumbing DONE** (env + arg tail + errorlevel, off-VM-tested). **M2 closed for M3**; CSRSS transparent-arg recovery + exit-to-shell notify are a documented best-effort follow-up. **Next: M3 (device model + video).**
+- **Last updated:** 2026-06-07
+- **Phase:** **M3 — device model + video (STARTED).** M2 (DOS kernel) is closed: M2.1–M2.6 DONE in the
+  clean `src/` host. M3 kickoff **retired the `tools/vdmhost` spike** (clean host has parity) and put
+  the **pluggable VDD architecture** under design ([research/vdd-architecture.md](research/vdd-architecture.md)):
+  a clean in-process plugin ABI, built-in VDDs for timer/video/sound, DirectDraw rendering
+  (windowed + full-screen), VGA + VESA. *M2 follow-up (not blocking):* CSRSS transparent-arg recovery
+  + exit-to-shell notify.
 - **Overall status:** 🟢 **The keystone is proven.** A real DOS `.COM`, loaded off disk, runs on the
   real CPU in **Virtual-8086 mode** via `NtVdmControl` and prints "Hello, World" through our own INT
   21h handler — launched transparently when XP starts a 16-bit program (IFEO redirect). The whole
@@ -58,14 +63,17 @@ Full contract, addresses, event taxonomy, memory map + PSP layout:
 - **ADR-0005** — Target XP in a VM **and** bare metal; VM-first for the dev loop. *Accepted.*
 - **ADR-0006** — Build with mingw-w64 (i686) cross-compiler, no C runtime. *Accepted.*
 - **ADR-0007** — Intercept via the IFEO `Debugger` redirect on `ntvdm.exe`. *Accepted.*
+- **ADR-0008** — Pluggable VDD model: clean internal ABI (`ntvdd.h`) + a deferred `vddsvc.h`
+  binary-compat veneer, over one device bus; video is a built-in VDD; DirectDraw presentation in a
+  host-owned window (windowed + fullscreen); `ntvdmhost`+`ntvdmex` merge. *Accepted (M3).*
 
 ## What is built
 
-- **`tools/vdmhost/` — the spike that proves M0+M1+M2.1–M2.3.** The full pipeline above: IFEO host →
-  CSRSS handshake → V86 → DOS process (PSP, 640KB, `.COM`/`.EXE` loader) → INT 21h/BOP service loop
-  (console + Win32-backed file I/O). Tested on the VM: `hello.com`/`testps.com` (`.COM` + PSP command
-  tail), `filewr.com` (creates/writes/reads a real disk file), `helloexe.exe` (MZ with a relocation).
-  This is throwaway-grade experiment code, *not* the clean host.
+- **`src/` clean host (`ntvdmhost.exe`) — the live implementation of M0–M2.** The full pipeline
+  above, promoted out of the spike into clean modules: `src/dos` (mcb / loader / psp / env / int21 /
+  layout), `src/vdm` (ntvdm.h contract + v86.c + csrss.c), `src/host` (log.h + main.c). KERNEL32-only,
+  off-VM battery 49/49, MEMTEST PASS in V86. **The original `tools/vdmhost` proving spike was retired
+  at the M3 kickoff** (clean host reached parity) — recover it from git history if ever needed.
 - **Shell preview (`src/`):** a fixed 80×25 DOS-style Luna-themed console (GDI text grid), the future
   sink for INT 10h / B800 text writes. Confirmed running on XP SP3. **Still non-interactive** — the
   DOS core has not yet been promoted into it (that's M2.6).

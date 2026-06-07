@@ -78,30 +78,10 @@ add_executable(wowprobe WIN32
 ntvdmex_configure_xp_target(wowprobe)
 target_link_libraries(wowprobe PRIVATE kernel32 user32 gcc)
 
-# --- vdmhost.exe: Spike-001 step 1 -- pull the DOS command from CSRSS ----------
-# Launched as the VDM host, calls kernel32!GetNextVDMCommand and logs the result.
-#
-# Match the REAL ntvdm.exe PE shape so XP will accept us as the DOS VDM host.
-# The baseline control proved real ntvdm runs dosstub fine on this VM; our binary
-# was rejected ("not a valid Win32 application") and never even reached STAGE0.
-# The decisive difference is ImageBase: ntvdm is based at 0x0F000000 so the whole
-# low ~240MB stays free for the V86/DOS address space the VDM maps. Our default
-# 0x00400000 sits *inside* that region -> VDM setup can't proceed. We also match
-# its CUI/4.0 subsystem and clear ASLR/NX (ntvdm DllCharacteristics=0).
-add_executable(vdmhost
-    tools/vdmhost/vdmhost.c
-    src/runtime.c)
-ntvdmex_configure_xp_target(vdmhost)
-target_link_options(vdmhost PRIVATE
-    -Wl,--image-base,0x0f000000
-    -Wl,--subsystem,console -Wl,--entry,_WinMainCRTStartup
-    -Wl,--major-subsystem-version,4 -Wl,--minor-subsystem-version,0
-    -Wl,--disable-nxcompat -Wl,--disable-dynamicbase)
-target_link_libraries(vdmhost PRIVATE kernel32 user32 gcc)
-
-# --- ntvdmhost.exe: the clean DOS VDM host (M2.6) ------------------------------
-# The promotion target: the proven DOS core, rebuilt from clean src/ modules
-# (src/dos + src/vdm + src/host) instead of the throwaway tools/vdmhost spike.
+# --- ntvdmhost.exe: the clean DOS VDM host -------------------------------------
+# The proven DOS core, built from clean src/ modules (src/dos + src/vdm +
+# src/host). This replaced the throwaway tools/vdmhost spike, which was retired
+# once this host reached parity (MEMTEST PASS in V86); see git history for it.
 # Same PE shape as the spike so XP accepts us as the VDM host: ImageBase
 # 0x0F000000 (leaves the low ~240MB free for the V86/DOS address space the VDM
 # maps), CUI/4.0 subsystem, ASLR/NX cleared. No CRT (src/runtime.c).

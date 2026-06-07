@@ -4,13 +4,14 @@
 `ntvdm.exe` on **Windows XP SP3 (32-bit)** that runs legacy 16-bit DOS and Win16 software on
 the **real CPU**, not a software emulator.
 
-> **Status:** 🟢 V86 proven — building the **DOS kernel (M2)**. Real DOS `.COM` **and** `.EXE`
-> programs, loaded off disk, run on the real CPU in **Virtual-8086 mode** via `NtVdmControl` —
-> launched transparently when XP starts a 16-bit program — with INT 21h **file I/O** backed by Win32
-> (a guest program creates/reads/writes a real disk file). **M0** (feasibility), **M1** (minimal V86
-> host), and **M2.1–M2.3** (DOS process setup, INT 21h surface, MZ loader) are done; the work so far
-> lives in the `tools/vdmhost` spike. See [`docs/STATE.md`](docs/STATE.md) and
-> [`docs/ROADMAP.md`](docs/ROADMAP.md) for live status.
+> **Status:** 🟢 V86 proven — **DOS kernel (M2) closed**, starting **device model + video (M3)**.
+> Real DOS `.COM` **and** `.EXE` programs, loaded off disk, run on the real CPU in
+> **Virtual-8086 mode** via `NtVdmControl` — launched transparently when XP starts a 16-bit program —
+> with INT 21h **file I/O** backed by Win32, a DOS memory manager, and process plumbing (PSP/args/env/
+> errorlevel). **M0–M2** are done in the clean `src/` host (`ntvdmhost.exe`); the original
+> `tools/vdmhost` proving spike has been **retired** now the clean host reached parity (see git
+> history). See [`docs/STATE.md`](docs/STATE.md) and [`docs/ROADMAP.md`](docs/ROADMAP.md) for live
+> status.
 
 ## What it is
 

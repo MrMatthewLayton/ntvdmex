@@ -4,8 +4,8 @@ rem  Manual real-V86 gate for the CLEAN host (ntvdmhost.exe) -- M2.6 slice 4.
 rem
 rem  RUN THIS INSIDE THE XP VM, from the desktop (an INTERACTIVE session) -- the
 rem  only session where launching a 16-bit program fires the IFEO ntvdm.exe
-rem  redirect. Unlike gate.bat (which gates the tools/vdmhost spike), this points
-rem  the IFEO Debugger at the clean src/ host and reads ITS log (ntvdmhost.log).
+rem  redirect. It points the IFEO Debugger at the clean src/ host (ntvdmhost.exe)
+rem  and reads ITS log (ntvdmhost.log).
 rem
 rem  Usage (in the VM):   gate-clean.bat                 (tests memtest.com)
 rem                       gate-clean.bat foo.com         (another program in build/)
@@ -51,6 +51,5 @@ type %N%\ntvdmhost.log
 echo ========================================================
 echo.
 echo Copy the "DOS OUTPUT" / "STAGE2:" lines back to the host.
-echo To switch back to the spike, run gate.bat (it re-points the IFEO at vdmhost.exe).
 pause
 endlocal
