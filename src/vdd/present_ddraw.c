@@ -49,24 +49,50 @@ static int ensure_fbsurf(present_ddraw *pd, int w, int h)
     return 0;
 }
 
-/* convert one ntvdd_frame into the locked fbsurf (index->ARGB or ARGB copy). */
+/* trailing-zero shift + bit-count of an RGB channel mask. */
+static void mask_info(DWORD m, int *shift, int *bits)
+{
+    int s = 0, b = 0;
+    if (m) { while (!(m & 1)) { m >>= 1; ++s; } while (m & 1) { m >>= 1; ++b; } }
+    *shift = s; *bits = b;
+}
+
+/* convert one ntvdd_frame into the locked fbsurf, packing each pixel to the
+   surface's ACTUAL pixel format (8bpp index -> ARGB -> 16/24/32bpp via masks).
+   The offscreen surface inherits the desktop depth, which on XP/Cirrus is often
+   16bpp -- writing fixed 32-bit pixels there shreds the row into stripes. */
 static void upload(present_ddraw *pd, const ntvdd_frame *f)
 {
     DDSURFACEDESC2 d; LPDIRECTDRAWSURFACE7 s = SURF(pd->fbsurf);
-    int y, x;
+    DWORD bpp; int rsh, rb, gsh, gb, bsh, bb; int y, x;
     ZeroMemory(&d, sizeof d); d.dwSize = sizeof d;
     if (FAILED(IDirectDrawSurface7_Lock(s, NULL, &d,
                    DDLOCK_WAIT | DDLOCK_SURFACEMEMORYPTR, NULL)))
         return;
+    bpp = d.ddpfPixelFormat.dwRGBBitCount;
+    mask_info(d.ddpfPixelFormat.dwRBitMask, &rsh, &rb);
+    mask_info(d.ddpfPixelFormat.dwGBitMask, &gsh, &gb);
+    mask_info(d.ddpfPixelFormat.dwBBitMask, &bsh, &bb);
     for (y = 0; y < f->h; ++y) {
-        DWORD *dst = (DWORD *)((BYTE *)d.lpSurface + (size_t)y * d.lPitch);
-        if (f->bpp == 8) {
-            const uint8_t *src = f->pixels + (size_t)y * f->stride;
-            if (f->palette) for (x = 0; x < f->w; ++x) dst[x] = f->palette[src[x]];
-            else            for (x = 0; x < f->w; ++x) dst[x] = 0xFF000000u | (src[x] * 0x010101u);
-        } else {
-            const DWORD *src = (const DWORD *)(f->pixels + (size_t)y * f->stride);
-            for (x = 0; x < f->w; ++x) dst[x] = src[x];
+        BYTE *drow = (BYTE *)d.lpSurface + (size_t)y * d.lPitch;
+        const uint8_t  *s8  = f->pixels + (size_t)y * f->stride;
+        const uint32_t *s32 = (const uint32_t *)(f->pixels + (size_t)y * f->stride);
+        for (x = 0; x < f->w; ++x) {
+            uint32_t argb = (f->bpp == 8)
+                ? (f->palette ? f->palette[s8[x]] : (0xFF000000u | (s8[x] * 0x010101u)))
+                : s32[x];
+            uint32_t r = (argb >> 16) & 0xFF, g = (argb >> 8) & 0xFF, b = argb & 0xFF;
+            if (bpp == 32) {
+                ((DWORD *)drow)[x] = argb;
+            } else if (bpp == 16 || bpp == 15) {
+                ((WORD *)drow)[x] = (WORD)(((r >> (8 - rb)) << rsh)
+                                         | ((g >> (8 - gb)) << gsh)
+                                         | ((b >> (8 - bb)) << bsh));
+            } else if (bpp == 24) {
+                BYTE *p = drow + x * 3; p[0] = (BYTE)b; p[1] = (BYTE)g; p[2] = (BYTE)r;
+            } else {                       /* 8bpp desktop: approximate by intensity */
+                drow[x] = (BYTE)((r * 30 + g * 59 + b * 11) / 100);
+            }
         }
     }
     IDirectDrawSurface7_Unlock(s, NULL);
@@ -90,8 +116,9 @@ static int setup_windowed(present_ddraw *pd)
 static int setup_fullscreen(present_ddraw *pd)
 {
     DDSURFACEDESC2 d; DDSCAPS2 caps; LPDIRECTDRAWSURFACE7 pr = 0, bk = 0;
-    if (FAILED(IDirectDraw7_SetDisplayMode(DD, (DWORD)pd->fs_w, (DWORD)pd->fs_h, 32, 0, 0)))
-        return -1;
+    if (FAILED(IDirectDraw7_SetDisplayMode(DD, (DWORD)pd->fs_w, (DWORD)pd->fs_h, 32, 0, 0)) &&
+        FAILED(IDirectDraw7_SetDisplayMode(DD, (DWORD)pd->fs_w, (DWORD)pd->fs_h, 16, 0, 0)))
+        return -1;          /* upload() packs to whatever depth the mode gives  */
     ZeroMemory(&d, sizeof d); d.dwSize = sizeof d;
     d.dwFlags = DDSD_CAPS | DDSD_BACKBUFFERCOUNT; d.dwBackBufferCount = 1;
     d.ddsCaps.dwCaps = DDSCAPS_PRIMARYSURFACE | DDSCAPS_FLIP | DDSCAPS_COMPLEX;
