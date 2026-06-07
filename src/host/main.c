@@ -340,6 +340,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     vdd_bus_set_sinks(&g_bus, host_irq_sink, NULL, present_ddraw_sink, &g_pd);
     g_pit_dev = vdd_pit_device(&g_pit);
     vdd_bus_add(&g_bus, &g_pit_dev);
+    g_vid.vmem = (uint8_t *)VID_APERTURE_BASE;  /* the mapped A0000 aperture (RAM) */
     g_vid_dev = vdd_video_device(&g_vid);
     vdd_bus_add(&g_bus, &g_vid_dev);
     g_in_dev = vdd_input_device(&g_in);

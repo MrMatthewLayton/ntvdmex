@@ -44,7 +44,7 @@ LONG v86_setup_memory(void)
 
     for (i = 0; i < sizeof(oa); ++i) q[i] = 0;
     oa.Length = 0x18;
-    maxsize.QuadPart = 0xB0000;
+    maxsize.QuadPart = 0xC0000;        /* +video aperture A0000-BFFFF (M3 mode 13h) */
     NtCreateSection(&hSec, 0xA, &oa, &maxsize, PAGE_EXECUTE_READWRITE,
                     SEC_RESERVE_NT, NULL);
 
@@ -52,6 +52,7 @@ LONG v86_setup_memory(void)
        X-RW across the full 640KB in the FOUR pieces ntvdm uses (0xf00ea75). */
     base = (PVOID)1;        sz = 0x9FFFF; NtFreeVirtualMemory((HANDLE)-1, &base, &sz, MEM_RELEASE_NT);
     base = (PVOID)0x100000; sz = 0x10000; NtFreeVirtualMemory((HANDLE)-1, &base, &sz, MEM_RELEASE_NT);
+    base = (PVOID)0xA0000;  sz = 0x20000; NtFreeVirtualMemory((HANDLE)-1, &base, &sz, MEM_RELEASE_NT);
 
     base = (PVOID)1;        sz = 0xFFFF;  off.QuadPart = 0;
     NtMapViewOfSection(hSec, (HANDLE)-1, &base, 0, 0xFFFF, &off, &sz, 2,
@@ -64,6 +65,12 @@ LONG v86_setup_memory(void)
     base = (PVOID)0x10000;  sz = 0x90000; off.QuadPart = 0x10000;
     st = NtMapViewOfSection(hSec, (HANDLE)-1, &base, 0, 0x90000, &off, &sz, 2,
                             VDM_MAP_FLAG, PAGE_EXECUTE_READWRITE);
+    /* Map 4 -- the VGA aperture A0000-BFFFF (128KB) as RAM, so direct-framebuffer
+       writes (mode 13h at A0000, text at B8000) just land in memory and the video
+       VDD renders it each frame. */
+    base = (PVOID)0xA0000;  sz = 0x20000; off.QuadPart = 0xA0000;
+    NtMapViewOfSection(hSec, (HANDLE)-1, &base, 0, 0x20000, &off, &sz, 2,
+                       VDM_MAP_FLAG, PAGE_EXECUTE_READWRITE);
     return st;
 }
 
