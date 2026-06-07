@@ -29,6 +29,11 @@
 #define VID_G13_W         320
 #define VID_G13_H         200
 
+/* VESA VBE 2.0 (banked, packed-256). A0000 is the 64KB window onto vesa_vram. */
+#define VID_VESA_WIN      0x10000u      /* 64KB banked window                     */
+#define VID_VESA_VRAM     0x80000u      /* 512KB total emulated VRAM (8 banks)    */
+#define VID_FB_MAX        (640 * 480)   /* largest glyph/planar render target     */
+
 typedef struct video_state {
     vdd_bus *bus;
     uint8_t *vmem;                      /* the 128KB aperture (A0000); caller-set  */
@@ -40,7 +45,12 @@ typedef struct video_state {
     uint32_t pal[256];                  /* ARGB palette ([0..15]=EGA for text)     */
     /* DAC (ports 3C7/3C8/3C9) write/read state */
     uint8_t  dac_widx, dac_ridx, dac_comp, dac_latch[3];
-    uint8_t  fb[VID_FB_W * VID_FB_H];   /* text glyph render target                */
+    /* VESA VBE state */
+    uint8_t  in_vesa;                   /* a VESA mode is active                   */
+    uint16_t vesa_mode, vesa_w, vesa_h; /* current VESA mode + resolution          */
+    uint16_t vesa_bank;                 /* current 64KB window bank (4F05)         */
+    uint8_t  vesa_vram[VID_VESA_VRAM];  /* full packed-256 framebuffer             */
+    uint8_t  fb[VID_FB_MAX];            /* text glyph render target                */
     int      dirty;
     ntvdd_frame frame;
 } video_state;

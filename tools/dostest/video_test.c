@@ -104,6 +104,39 @@ int main(void)
     CHECK(g_present==1 && g_lastframe.w==320 && g_lastframe.h==200 && g_lastframe.bpp==8
           && g_lastframe.pixels==g_vmem, "frame(mode13): 320x200x8 from the aperture");
 
+    /* T9: VESA 4F00 controller info ------------------------------------- */
+    { uint16_t seg=0x3000, off=0x0000; uint8_t *b=&g_flat[(seg<<4)+off]; uint32_t mlp;
+      memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x00); r.es=seg; r.edi=off;
+      vdd_bus_deliver_int(&bus,0x10,&r);
+      CHECK(r_ax(&r)==0x004F && b[0]=='V'&&b[1]=='E'&&b[2]=='S'&&b[3]=='A', "vesa/4F00: 'VESA' signature");
+      mlp = b[14]|(b[15]<<8);                 /* mode-list offset (low word of far ptr) */
+      CHECK((b[(mlp&0xFFFF)]|(b[(mlp&0xFFFF)+1]<<8))==0x100, "vesa/4F00: mode list starts 0x100"); }
+
+    /* T10: VESA 4F01 mode info for 0x101 (640x480x8) -------------------- */
+    { uint16_t seg=0x3100; uint8_t *b=&g_flat[(seg<<4)];
+      memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x01); s_cx(&r,0x101); r.es=seg; r.edi=0;
+      vdd_bus_deliver_int(&bus,0x10,&r);
+      CHECK(r_ax(&r)==0x004F && (b[18]|(b[19]<<8))==640 && (b[20]|(b[21]<<8))==480 && b[25]==8,
+            "vesa/4F01: 0x101 = 640x480x8"); }
+
+    /* T11: VESA 4F02 set mode + 4F05 banking round-trips through vram ---- */
+    memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x02); s_bx(&r,0x101); vdd_bus_deliver_int(&bus,0x10,&r);
+    CHECK(r_ax(&r)==0x004F && vid.in_vesa && vid.vesa_w==640 && vid.vesa_h==480, "vesa/4F02: set 0x101");
+    g_vmem[10] = 0xAB;                          /* write into bank 0 window           */
+    memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x05); s_bx(&r,0); s_dx(&r,1); /* -> bank 1 */
+    vdd_bus_deliver_int(&bus,0x10,&r);
+    CHECK(vid.vesa_bank==1, "vesa/4F05: switched to bank 1");
+    g_vmem[10] = 0xCD;                          /* write into bank 1 window           */
+    memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x05); s_bx(&r,0); s_dx(&r,0); /* back to 0 */
+    vdd_bus_deliver_int(&bus,0x10,&r);
+    CHECK(g_vmem[10]==0xAB, "vesa/4F05: bank 0 window restored from vram");
+    CHECK(vid.vesa_vram[1*VID_VESA_WIN + 10]==0xCD, "vesa/4F05: bank 1 byte kept in vram");
+
+    /* T12: VESA frame is vesa_w x vesa_h x8 ----------------------------- */
+    g_present=0; vid.dirty=1; vdd_bus_frame(&bus);
+    CHECK(g_present==1 && g_lastframe.w==640 && g_lastframe.h==480 && g_lastframe.pixels==vid.vesa_vram,
+          "frame(vesa): 640x480x8 from vesa_vram");
+
     printf("\n%d checks, %d failed\n", total, fails);
     return fails ? 1 : 0;
 }
