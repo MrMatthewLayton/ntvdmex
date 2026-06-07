@@ -73,7 +73,7 @@ reflection — the harder half — is. **Impl ⬜:** all of M1 still lives in th
 | **M2.3** MZ (`.EXE`) loader (header, relocations, segment setup) | ✅ | ✅ | ⬜ | ✅ | ✅ |
 | **M2.4** DOS memory management (MCB chain, AH=48/49/4A) | ✅ | ✅ | ⬜ | ✅ | ✅ |
 | **M2.5** Process plumbing (PSP command tail, env block, errorlevel) | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ |
-| **M2.6** Promote the DOS core from `vdmhost` spike → clean `src/` host | ✅ | – | 🟡 | ⬜ | ⬜ |
+| **M2.6** Promote the DOS core from `vdmhost` spike → clean `src/` host | ✅ | – | ✅ | ✅ | ✅ |
 
 Per-step exit criteria:
 - **M2.1** — a `.COM` launches with a valid PSP and full conventional memory; a program that reads
@@ -97,10 +97,10 @@ Per-step exit criteria:
   now implemented (test T9). Impl ⬜ = the M2.6 `src/` promotion.
 - **M2.5** — exit codes propagate to the launching shell; args + environment are visible to the guest.
 - **M2.6** — the clean host (not the spike) runs Hello World, gated by an import-allowlist check.
-  🟡 Slices 1–3 done: the **`ntvdmhost`** console target **compiles + links** from clean `src/` modules
-  (`src/dos` core + `src/vdm` V86/CSRSS glue + INT 21h surface + `src/host`), imports **KERNEL32 only**
-  (`scripts/check-imports.sh`), off-VM battery 42/42. Remaining: slice 4 — a `gate.bat` run confirming
-  the clean host runs Hello World in V86.
+  ✅ **met (2026-06-07):** `ntvdmhost.exe` — the clean `src/` host (`src/dos` core + `src/vdm`
+  V86/CSRSS glue + INT 21h surface + `src/host`) — ran `memtest.com` in V86 on the real CPU →
+  **MEMTEST PASS** (VM-confirmed via `gate-clean.bat`). Imports **KERNEL32 only**
+  (`scripts/check-imports.sh`); off-VM battery 42/42. The `tools/vdmhost` spike is now reference-only.
 
 ## M3 — Device model + video/input ⬜
 - [ ] Pluggable **VDD** interface (the third-party hook point, requirement #13)

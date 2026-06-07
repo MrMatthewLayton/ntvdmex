@@ -3,7 +3,7 @@
 > **This is the canonical resume point.** Update it at the end of every working session.
 
 - **Last updated:** 2026-06-06
-- **Phase:** M2 — DOS kernel (M0 + M1 done); **M2.4 DONE**; **M2.6 IN PROGRESS — clean `src/` host compiles + links (KERNEL32-only imports); only the VM gate (Hello World) remains**
+- **Phase:** M2 — DOS kernel (M0 + M1 done); **M2.4 DONE**; **M2.6 DONE — clean `src/` host ran `memtest` in V86 (MEMTEST PASS, VM-confirmed 2026-06-07)**. M2.5 (cmdline/env) is the remaining M2 gap.
 - **Overall status:** 🟢 **The keystone is proven.** A real DOS `.COM`, loaded off disk, runs on the
   real CPU in **Virtual-8086 mode** via `NtVdmControl` and prints "Hello, World" through our own INT
   21h handler — launched transparently when XP starts a 16-bit program (IFEO redirect). The whole
@@ -132,15 +132,16 @@ reference until parity; merge into the Luna window at M3. Slices (each its own c
 - **Slice 3 ✅ (`300657f`):** the INT 21h surface (`src/dos/dos_int21.*` — console + Win32 file I/O +
   misc; AH=48/49/4A delegate to `dos_mcb.h`, no inline copy) wired into the host. Import-allowlist
   check (`scripts/check-imports.sh`) passes — **`ntvdmhost.exe` imports KERNEL32 only** (no CRT/UCRT).
-- **Slice 4 ⬜ (only thing left):** one `gate.bat` run — the clean host runs Hello World in V86 →
-  **M2.6 exit met**. Needs the VM (runtime correctness of the ported V86 glue proves out only there).
+- **Slice 4 ✅ (2026-06-07):** the clean host (`ntvdmhost.exe`) ran `memtest.com` in V86 on the real
+  CPU → **MEMTEST PASS**, confirmed via a manual `gate-clean.bat` run on the VM (it sets IFEO→
+  `ntvdmhost.exe` and prints `ntvdmhost.log`). **M2.6 exit met — the clean host works at runtime.**
 
-The clean host is built and XP-safe; what's unverified is the *runtime* behaviour of the ported V86/NT
-glue. **Gate it (slice 4):** on the host run `./scripts/stage-gate.sh` (stages `ntvdmhost.exe` +
-`tools/dostest/gate-clean.bat` + `memtest.com` into the TFTP root), then in the VM desktop TFTP-fetch
-and run `gate-clean.bat` — it points the IFEO `Debugger` at `ntvdmhost.exe`, runs the program in V86,
-and prints `C:\ntvdmex\ntvdmhost.log`. (`gate.bat` + `stage-gate.sh spike` do the same for the spike;
-each gate re-points the IFEO at its own host.)
+**Re-running the gate** (other programs / a saved trace): on the host `./scripts/stage-gate.sh`, then
+in the VM desktop run `gate-clean.bat` — it points the IFEO `Debugger` at `ntvdmhost.exe`, runs the
+program in V86, and prints `C:\ntvdmex\ntvdmhost.log`. (`gate.bat` + `stage-gate.sh spike` gate the
+spike; each re-points the IFEO at its own host.) NOTE: the reboot-free telnet path (`dostest.sh` +
+the logon agent) is for the SPIKE's `vdmhost.log`; it needs `vdmtrig.bat` running and a clean-host
+variant to capture `ntvdmhost.log` — the manual `gate-clean.bat` is the reliable clean-host gate.
 
 ## Single next action
 
@@ -155,14 +156,14 @@ each gate re-points the IFEO at its own host.)
    automated telnet path that passed a live round, but it's slow and reads as a hang — not default.)
 
 Next work:
-3. **M2.6 slice 4 (only remaining):** gate the clean host on the VM — `./scripts/stage-gate.sh`, then
-   run `gate-clean.bat` in the VM desktop; confirm MEMTEST PASS / Hello World in V86 → M2.6 exit met.
-   Slices 1–3 done: clean host compiles + links, KERNEL32-only imports, off-VM battery 42/42.
-4. **Re-run mem.exe** (now handles 44h/63h); chase `Parse Error 1` (missing INT 21h surface / env
-   block → M2.5). *Needs a VM gate — investigate via `gate.bat` with mem.exe as the target.*
-5. **M2.5 cmdline recovery** (`GetNextVDMCommand` never populated `CmdLine`; PSP tail is empty);
-   **M2.6 promote spike → `src/`** (adopt `tools/dostest/dos_mcb.h` as the shared allocator, deleting
-   the spike's now-duplicated inline copy).
+3. ✅ **M2.6 DONE** (2026-06-07) — the clean `src/` host ran memtest in V86 (MEMTEST PASS,
+   VM-confirmed). The DOS core now lives in clean `src/` (`dos` + `vdm` + `host`); the `tools/vdmhost`
+   spike is reference-only and can be retired.
+4. **M2.5 — cmdline/env** (the remaining M2 gap): recover the real command line for the PSP tail and
+   provide an environment block so real `.EXE`s parse args (the `mem.exe` `Parse Error 1`). Investigate
+   with `gate-clean.bat mem.exe` at the VM.
+5. **M3 — device model + video:** trap INT 10h / B800 text into the Luna window + I/O-port trapping.
+   (Or first: retire the `tools/vdmhost` spike now the clean host has parity.)
 
 ## Environment notes
 
