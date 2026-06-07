@@ -63,7 +63,10 @@ Prove the premise before writing real code.
 I/O-port (`IN`/`OUT`) trapping is **not** done yet (deferred to M3 device work); interrupt
 reflection — the harder half — is. **Impl ⬜:** all of M1 still lives in the `vdmhost` spike.
 
-## M2 — DOS kernel 🟡 IN PROGRESS
+## M2 — DOS kernel 🟢 CLOSED (for M3)
+M2.1–M2.6 done; the DOS core runs in V86 from the clean `src/` host. One documented best-effort
+follow-up remains (recovering arbitrary real-shell args from CSRSS's undocumented multi-call protocol
++ the exit-code-to-shell notify) — it does not block M3.
 **Exit:** run a real-world DOS `.EXE` that does file + console I/O, transparently.
 
 | Step | Res | Spike | Impl | Test | Done |
@@ -72,7 +75,7 @@ reflection — the harder half — is. **Impl ⬜:** all of M1 still lives in th
 | **M2.2** INT 21h service surface (console + Win32-backed file I/O + misc) | ✅ | ✅ | ⬜ | ✅ | ✅ |
 | **M2.3** MZ (`.EXE`) loader (header, relocations, segment setup) | ✅ | ✅ | ⬜ | ✅ | ✅ |
 | **M2.4** DOS memory management (MCB chain, AH=48/49/4A) | ✅ | ✅ | ⬜ | ✅ | ✅ |
-| **M2.5** Process plumbing (PSP command tail, env block, errorlevel) | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ |
+| **M2.5** Process plumbing (PSP command tail, env block, errorlevel) | ✅ | – | ✅ | 🟡 | 🟡 |
 | **M2.6** Promote the DOS core from `vdmhost` spike → clean `src/` host | ✅ | – | ✅ | ✅ | ✅ |
 
 Per-step exit criteria:
@@ -96,6 +99,12 @@ Per-step exit criteria:
   green 33/33 ([`tools/dostest/`](../tools/dostest/)) and verified under dosbox-x; `merge-on-alloc`
   now implemented (test T9). Impl ⬜ = the M2.6 `src/` promotion.
 - **M2.5** — exit codes propagate to the launching shell; args + environment are visible to the guest.
+  🟡 **Guest-visible plumbing done + off-VM-tested** (`67b433b`): a real env block (`src/dos/dos_env.h`),
+  PSP command-tail builder (`dos_cmdtail_build`), errorlevel capture (`g_ci.ExitCode`); battery 49/49;
+  `argtest.com` dosbox-verified (echoes its tail, exit = tail length). VM gate pending
+  (`gate-clean.bat argtest.com HELLO`). **Best-effort follow-up (not blocking M3):** recover arbitrary
+  real-shell args from CSRSS's undocumented multi-call `GetNextVDMCommand` protocol + the exit-to-shell
+  notify; confirm `mem.exe` past `Parse Error 1` (likely fixed by the env block).
 - **M2.6** — the clean host (not the spike) runs Hello World, gated by an import-allowlist check.
   ✅ **met (2026-06-07):** `ntvdmhost.exe` — the clean `src/` host (`src/dos` core + `src/vdm`
   V86/CSRSS glue + INT 21h surface + `src/host`) — ran `memtest.com` in V86 on the real CPU →

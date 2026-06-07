@@ -3,7 +3,7 @@
 > **This is the canonical resume point.** Update it at the end of every working session.
 
 - **Last updated:** 2026-06-06
-- **Phase:** M2 — DOS kernel (M0 + M1 done); **M2.4 DONE**; **M2.6 DONE — clean `src/` host ran `memtest` in V86 (MEMTEST PASS, VM-confirmed 2026-06-07)**. M2.5 (cmdline/env) is the remaining M2 gap.
+- **Phase:** M2 — DOS kernel **CLOSING**: M2.1–M2.4 + M2.6 DONE; **M2.5 guest-visible plumbing DONE** (env + arg tail + errorlevel, off-VM-tested). **M2 closed for M3**; CSRSS transparent-arg recovery + exit-to-shell notify are a documented best-effort follow-up. **Next: M3 (device model + video).**
 - **Overall status:** 🟢 **The keystone is proven.** A real DOS `.COM`, loaded off disk, runs on the
   real CPU in **Virtual-8086 mode** via `NtVdmControl` and prints "Hello, World" through our own INT
   21h handler — launched transparently when XP starts a 16-bit program (IFEO redirect). The whole
@@ -156,14 +156,16 @@ variant to capture `ntvdmhost.log` — the manual `gate-clean.bat` is the reliab
    automated telnet path that passed a live round, but it's slow and reads as a hang — not default.)
 
 Next work:
-3. ✅ **M2.6 DONE** (2026-06-07) — the clean `src/` host ran memtest in V86 (MEMTEST PASS,
-   VM-confirmed). The DOS core now lives in clean `src/` (`dos` + `vdm` + `host`); the `tools/vdmhost`
-   spike is reference-only and can be retired.
-4. **M2.5 — cmdline/env** (the remaining M2 gap): recover the real command line for the PSP tail and
-   provide an environment block so real `.EXE`s parse args (the `mem.exe` `Parse Error 1`). Investigate
-   with `gate-clean.bat mem.exe` at the VM.
-5. **M3 — device model + video:** trap INT 10h / B800 text into the Luna window + I/O-port trapping.
-   (Or first: retire the `tools/vdmhost` spike now the clean host has parity.)
+1. ✅ **M2.6 DONE** (2026-06-07) — clean `src/` host ran memtest in V86 (MEMTEST PASS, VM-confirmed).
+2. ✅ **M2.5 guest-visible plumbing DONE** (`67b433b`) — env block (`dos_env.h`), PSP arg tail
+   (`dos_cmdtail_build`), errorlevel (`g_ci.ExitCode`); battery 49/49; `argtest.com` dosbox-verified
+   (echoes its tail, exit = tail length). **M2 closed for M3.** *Best-effort follow-up (not blocking
+   M3):* recover arbitrary real-shell args from CSRSS's undocumented multi-call protocol + the
+   exit-code-to-shell notify; and confirm `mem.exe` past `Parse Error 1` (likely the env block now).
+3. **VM gate for M2.5 (your manual run):** `./scripts/stage-gate.sh`, then in the VM
+   `gate-clean.bat argtest.com HELLO` → expect ` HELLO` echoed + errorlevel 6; and `gate-clean.bat mem.exe`.
+4. **M3 — device model + video:** trap INT 10h / B800 text into the Luna window + I/O-port trapping.
+   First step option: retire the `tools/vdmhost` spike now the clean host has parity.
 
 ## Environment notes
 
