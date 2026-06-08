@@ -222,16 +222,18 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
     case WM_TIMER:
         EnterCriticalSection(&g_lock);
         vdd_bus_frame(&g_bus);          /* tick PIT + render into g_vid.frame       */
+        present_ddraw_snapshot(&g_pd, &g_vid.frame);  /* consistent copy UNDER lock  */
         LeaveCriticalSection(&g_lock);
-        present_ddraw_frame(&g_pd, &g_vid.frame);    /* blit OUTSIDE the lock        */
+        present_ddraw_present(&g_pd);   /* vsync'd blit OUTSIDE the lock             */
         return 0;
     case WM_ERASEBKGND:
         return 1;                       /* we own the whole client -> no white erase */
-    case WM_PAINT: {                     /* re-blit immediately on expose/move        */
+    case WM_SETCURSOR:
+        if (LOWORD(lp) == HTCLIENT) { SetCursor(NULL); return TRUE; }  /* hide over video */
+        break;
+    case WM_PAINT: {                     /* re-blit the last snapshot on expose/move   */
         PAINTSTRUCT ps; BeginPaint(h, &ps);
-        EnterCriticalSection(&g_lock);
-        present_ddraw_frame(&g_pd, &g_vid.frame);
-        LeaveCriticalSection(&g_lock);
+        present_ddraw_present(&g_pd);
         EndPaint(h, &ps);
         return 0; }
     case WM_SIZE:
@@ -550,7 +552,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
        in as a BOP routed below; DOS console output is routed via m.conout. */
     InitializeCriticalSection(&g_lock);
     vdd_bus_init(&g_bus, NULL);
-    vdd_bus_set_sinks(&g_bus, host_irq_sink, NULL, present_ddraw_sink, &g_pd);
+    vdd_bus_set_sinks(&g_bus, host_irq_sink, NULL, NULL, NULL);  /* host presents directly */
     g_pit_dev = vdd_pit_device(&g_pit);
     vdd_bus_add(&g_bus, &g_pit_dev);
     g_vid.vmem = (uint8_t *)VID_APERTURE_BASE;  /* the mapped A0000 aperture (RAM) */

@@ -38,6 +38,12 @@ typedef struct present_ddraw {
     int   fullscreen;
     int   fs_w, fs_h;   /* exclusive-fullscreen mode size (default 640x480)     */
     int   status_h;     /* reserved bottom strip for the status bar (windowed)  */
+    /* double-buffer snapshot: filled under the caller's lock by _snapshot(),
+       blitted (vsync'd) outside it by _present(). Removes the concurrent-write
+       tearing of the live framebuffer. 8bpp + palette (all our frames). */
+    uint8_t  snap[640 * 480];
+    uint32_t snap_pal[256];
+    int   snap_w, snap_h, snap_valid;
 } present_ddraw;
 
 /* Bring up DirectDraw in windowed mode on `hwnd`. 0 = ok, <0 = failed. */
@@ -47,10 +53,15 @@ void present_ddraw_shutdown(present_ddraw *pd);
 /* Toggle exclusive fullscreen (recreates the mode-specific surfaces). */
 int  present_ddraw_set_fullscreen(present_ddraw *pd, int on);
 
-/* Convert + blit one frame to the screen (windowed Blt / fullscreen Flip). */
-void present_ddraw_frame(present_ddraw *pd, const ntvdd_frame *f);
+/* Snapshot a frame into the back-buffer -- call UNDER the bus lock (consistent
+   copy while the V86 thread can't write the framebuffer). */
+void present_ddraw_snapshot(present_ddraw *pd, const ntvdd_frame *f);
 
-/* vdd_bus present-sink adapter: pass `pd` as the present_ctx. */
-void present_ddraw_sink(void *ctx, const ntvdd_frame *f);
+/* Blit the snapshot to the screen, vsync'd -- call OUTSIDE the lock (the slow
+   blit then never starves the V86 thread). */
+void present_ddraw_present(present_ddraw *pd);
+
+/* Snapshot + present in one call (for the standalone present_demo). */
+void present_ddraw_frame(present_ddraw *pd, const ntvdd_frame *f);
 
 #endif /* NTVDMEX_PRESENT_DDRAW_H */

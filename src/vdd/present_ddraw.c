@@ -16,8 +16,14 @@ typedef HRESULT (WINAPI *PFN_DDCREATEEX)(GUID *, LPVOID *, REFIID, IUnknown *);
 #define DD   ((LPDIRECTDRAW7)pd->dd)
 #define SURF(p) ((LPDIRECTDRAWSURFACE7)(p))
 
-/* ---- windowed: GDI StretchDIBits ---------------------------------------- */
-static void gdi_present(present_ddraw *pd, const ntvdd_frame *f)
+/* time a blit near the monitor's vertical blank (reduces tearing). */
+static void wait_vblank(present_ddraw *pd)
+{
+    if (pd->dd) IDirectDraw7_WaitForVerticalBlank(DD, DDWAITVB_BLOCKBEGIN, NULL);
+}
+
+/* ---- windowed: GDI StretchDIBits from the snapshot ---------------------- */
+static void gdi_present(present_ddraw *pd)
 {
     HDC hdc; RECT rc; int cw, ch; unsigned i;
     struct { BITMAPINFOHEADER h; RGBQUAD c[256]; } bi;
@@ -29,18 +35,17 @@ static void gdi_present(present_ddraw *pd, const ntvdd_frame *f)
     if (ch < 1) ch = 1;
     ZeroMemory(&bi, sizeof bi);
     bi.h.biSize = sizeof(BITMAPINFOHEADER);
-    bi.h.biWidth = (LONG)f->w; bi.h.biHeight = -(LONG)f->h;   /* top-down DIB     */
-    bi.h.biPlanes = 1; bi.h.biBitCount = (f->bpp == 8) ? 8 : 32;
-    bi.h.biCompression = BI_RGB;
-    if (f->bpp == 8)
-        for (i = 0; i < 256; ++i) {
-            uint32_t a = f->palette ? f->palette[i] : (0xFF000000u | (i * 0x010101u));
-            bi.c[i].rgbRed = (BYTE)(a >> 16); bi.c[i].rgbGreen = (BYTE)(a >> 8);
-            bi.c[i].rgbBlue = (BYTE)a; bi.c[i].rgbReserved = 0;
-        }
+    bi.h.biWidth = (LONG)pd->snap_w; bi.h.biHeight = -(LONG)pd->snap_h;  /* top-down */
+    bi.h.biPlanes = 1; bi.h.biBitCount = 8; bi.h.biCompression = BI_RGB;
+    for (i = 0; i < 256; ++i) {
+        uint32_t a = pd->snap_pal[i];
+        bi.c[i].rgbRed = (BYTE)(a >> 16); bi.c[i].rgbGreen = (BYTE)(a >> 8);
+        bi.c[i].rgbBlue = (BYTE)a; bi.c[i].rgbReserved = 0;
+    }
+    wait_vblank(pd);
     SetStretchBltMode(hdc, COLORONCOLOR);
-    StretchDIBits(hdc, 0, 0, cw, ch, 0, 0, (int)f->w, (int)f->h,
-                  f->pixels, (BITMAPINFO *)&bi, DIB_RGB_COLORS, SRCCOPY);
+    StretchDIBits(hdc, 0, 0, cw, ch, 0, 0, pd->snap_w, pd->snap_h,
+                  pd->snap, (BITMAPINFO *)&bi, DIB_RGB_COLORS, SRCCOPY);
     ReleaseDC(pd->hwnd, hdc);
 }
 
@@ -75,7 +80,7 @@ static int fs_setup(present_ddraw *pd)
 static void mask_info(DWORD m, int *shift, int *bits)
 { int s=0,b=0; if(m){while(!(m&1)){m>>=1;++s;}while(m&1){m>>=1;++b;}} *shift=s; *bits=b; }
 
-static void fs_present(present_ddraw *pd, const ntvdd_frame *f)
+static void fs_present(present_ddraw *pd)
 {
     DDSURFACEDESC2 d; LPDIRECTDRAWSURFACE7 bk = SURF(pd->back);
     DWORD bpp; int rsh,rb,gsh,gb,bsh,bb; int y, x, dy, dx;
@@ -87,16 +92,14 @@ static void fs_present(present_ddraw *pd, const ntvdd_frame *f)
     mask_info(d.ddpfPixelFormat.dwRBitMask, &rsh, &rb);
     mask_info(d.ddpfPixelFormat.dwGBitMask, &gsh, &gb);
     mask_info(d.ddpfPixelFormat.dwBBitMask, &bsh, &bb);
-    /* nearest-neighbour stretch of f (f->w x f->h) into fs_w x fs_h */
+    /* nearest-neighbour stretch of the snapshot into fs_w x fs_h */
     for (dy = 0; dy < pd->fs_h; ++dy) {
         BYTE *drow = (BYTE *)d.lpSurface + (size_t)dy * d.lPitch;
-        y = dy * f->h / pd->fs_h;
+        y = dy * pd->snap_h / pd->fs_h;
         for (dx = 0; dx < pd->fs_w; ++dx) {
             uint32_t argb, r, g, b;
-            x = dx * f->w / pd->fs_w;
-            argb = (f->bpp == 8) ? (f->palette ? f->palette[f->pixels[(size_t)y*f->stride + x]]
-                                               : 0xFF000000u)
-                                 : ((const uint32_t *)(f->pixels + (size_t)y*f->stride))[x];
+            x = dx * pd->snap_w / pd->fs_w;
+            argb = pd->snap_pal[pd->snap[(size_t)y * pd->snap_w + x]];
             r=(argb>>16)&0xFF; g=(argb>>8)&0xFF; b=argb&0xFF;
             if (bpp == 32) ((DWORD*)drow)[dx] = argb;
             else if (bpp == 16 || bpp == 15)
@@ -152,12 +155,26 @@ int present_ddraw_set_fullscreen(present_ddraw *pd, int on)
     return 0;
 }
 
-void present_ddraw_frame(present_ddraw *pd, const ntvdd_frame *f)
+/* copy the live frame into the back-buffer (call under the bus lock). */
+void present_ddraw_snapshot(present_ddraw *pd, const ntvdd_frame *f)
 {
-    if (!f || !f->w || !f->h || !f->pixels) return;
-    if (pd->fullscreen && pd->dd) fs_present(pd, f);
-    else                          gdi_present(pd, f);
+    int y;
+    if (!f || !f->w || !f->h || !f->pixels || f->bpp != 8 || f->w > 640 || f->h > 480) {
+        pd->snap_valid = 0; return;
+    }
+    for (y = 0; y < (int)f->h; ++y)
+        CopyMemory(pd->snap + (size_t)y * f->w, f->pixels + (size_t)y * f->stride, f->w);
+    if (f->palette) CopyMemory(pd->snap_pal, f->palette, 256 * sizeof(uint32_t));
+    pd->snap_w = f->w; pd->snap_h = f->h; pd->snap_valid = 1;
 }
 
-void present_ddraw_sink(void *ctx, const ntvdd_frame *f)
-{ present_ddraw_frame((present_ddraw *)ctx, f); }
+/* blit the back-buffer to the screen, vsync'd (call outside the lock). */
+void present_ddraw_present(present_ddraw *pd)
+{
+    if (!pd->snap_valid) return;
+    if (pd->fullscreen && pd->dd) fs_present(pd);
+    else                          gdi_present(pd);
+}
+
+void present_ddraw_frame(present_ddraw *pd, const ntvdd_frame *f)
+{ present_ddraw_snapshot(pd, f); present_ddraw_present(pd); }
