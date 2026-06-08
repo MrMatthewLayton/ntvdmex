@@ -34,6 +34,7 @@ if "%CH%"=="9"  set PROG=PALETTE.EXE
 if "%CH%"=="10" set PROG=VS87.EXE
 if "%PROG%"=="" goto menu
 
+copy /y "%~dp0ntvdmhost.exe" %N%\ >nul   rem re-copy host each run (picks up CD swaps)
 echo %N%\%PROG%> %N%\target.txt
 if exist %N%\ntvdmhost.log del /f /q %N%\ntvdmhost.log
 echo Running %PROG% ... close the Luna window, then close Notepad to continue.
