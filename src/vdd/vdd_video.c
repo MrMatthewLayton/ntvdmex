@@ -244,6 +244,44 @@ static void int10(void *self, ntvdd_regs *r)
             advance(st);
         }
         break; }
+    case 0x11:                                         /* character generator     */
+        if (al == 0x30) {                              /* get current font info   */
+            s_cx(r, 16);                               /* bytes per character     */
+            s_dx(r, (uint16_t)(st->rows ? st->rows - 1 : 24));  /* DL = rows-1     */
+        }
+        break;
+    case 0x12: {                                       /* alternate function sel  */
+        uint8_t bl = (uint8_t)(r_bx(r) & 0xFF);
+        if (bl == 0x10) { s_bx(r, 0x0003); s_cx(r, 0x0009); }  /* color / 256K, switches */
+        else            { s_ax(r, (uint16_t)((r_ax(r) & 0xFF00) | 0x12)); } /* supported */
+        break; }
+    case 0x1A:                                         /* get display combination */
+        s_ax(r, (uint16_t)((r_ax(r) & 0xFF00) | 0x1A));/* AL=1A: function present */
+        s_bx(r, 0x0008);                               /* BL=08 active=VGA colour */
+        break;
+    case 0x1B: {                                       /* functionality/state info */
+        uint8_t *b = (uint8_t *)vdd_map_flat(st->bus, r->es, (uint16_t)r->edi);
+        unsigned i;
+        for (i = 0; i < 64; ++i) b[i] = 0;
+        /* static functionality table kept inside the 64-byte block (reserved tail
+           at 0x2E) so we never write past the caller's buffer. */
+        wr32(b + 0, ((uint32_t)r->es << 16) | (((uint16_t)r->edi + 0x2E) & 0xFFFF));
+        b[4] = (uint8_t)st->mode;                      /* current mode            */
+        wr16(b + 5, st->cols);                         /* columns on screen       */
+        b[0x22] = (uint8_t)(st->rows ? st->rows : 25); /* character rows          */
+        wr16(b + 0x23, 16);                            /* bytes per character     */
+        b[0x25] = 0x08;                                /* active DCC = VGA colour */
+        wr16(b + 0x27, 256);                           /* number of colours       */
+        b[0x29] = 8;                                   /* number of pages         */
+        b[0x2A] = 0;                                   /* scan lines (0 = 200)    */
+        b[0x2B] = 0; b[0x2C] = 0; b[0x2D] = 0x21;      /* char blocks / misc      */
+        /* static functionality table (16 bytes) -- modes 0..0x1F all supported   */
+        b[0x2E + 0] = 0xFF; b[0x2E + 1] = 0xFF; b[0x2E + 2] = 0xFF; b[0x2E + 3] = 0xFF;
+        b[0x2E + 7] = 0x07;                            /* scan lines 200/350/400  */
+        b[0x2E + 8] = 8; b[0x2E + 9] = 8;              /* char blocks             */
+        b[0x2E + 0x0A] = 0xFF; b[0x2E + 0x0B] = 0x07;  /* capability bits         */
+        s_ax(r, (uint16_t)((r_ax(r) & 0xFF00) | 0x1B));/* AL=1B: supported        */
+        break; }
     case 0x4F: vesa(st, r); break;                     /* VESA VBE 2.0            */
     default: st->dirty = 0; break;
     }

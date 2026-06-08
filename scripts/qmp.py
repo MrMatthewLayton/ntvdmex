@@ -56,7 +56,7 @@ def main():
                 ks = (ch,)
             do(f, {"execute": "send-key", "arguments":
                    {"keys": [{"type": "qcode", "data": k} for k in ks]}})
-            time.sleep(0.05)
+            time.sleep(0.15)
         print("typed", repr(a[1]))
     elif a[0] == "click":                              # click at native px x y (screen 1024x768)
         W, H = 1024, 768

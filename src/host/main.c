@@ -642,11 +642,15 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         /* Route the BOP by its number: 0x10 -> INT 10h, 0x16 -> INT 16h (both via
            the bus), else INT 21h. */
         if ((VDM_REG(tib, VTIB_EVENT_INFO) & 0xFF) == 0x10) {
-            ntvdd_regs r; regs_load(&r, tib);
+            ntvdd_regs r; uint8_t ah10, al10; regs_load(&r, tib);
+            ah10 = r_ah(&r); al10 = r_al(&r);
             EnterCriticalSection(&g_lock);
             vdd_bus_deliver_int(&g_bus, 0x10, &r);
             LeaveCriticalSection(&g_lock);
             regs_store(&r, tib);
+            p = zput(p, "  INT10 AH=0x"); p = zhex(p, ah10);
+            p = zput(p, " AL=0x"); p = zhex(p, al10); p = zput(p, "\r\n");
+            log_append(LOG_PATH, base, p); p = base;
             a000_protect(vdd_video_planar_active(&g_vid));   /* trap A0000 in mode 12h */
             VDM_REG(tib, VTIB_EIP) += 3;
             continue;
