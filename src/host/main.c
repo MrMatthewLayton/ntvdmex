@@ -196,20 +196,23 @@ static HMENU build_menu(void)
     return bar;
 }
 
-/* Draw the status bar (a grey strip along the bottom showing the program name). */
-static void draw_status(HWND h, HDC hdc)
+static HWND g_status;                        /* the native comctl32 status bar    */
+
+/* Create the native status bar child + set its text; record its height so the
+   video blit reserves that strip. */
+static void make_status(HWND parent, HINSTANCE hi)
 {
-    RECT rc, sr; char line[96]; char *p;
-    GetClientRect(h, &rc);
-    sr = rc; sr.top = rc.bottom - PRESENT_STATUS_H;
-    FillRect(hdc, &sr, (HBRUSH)(COLOR_BTNFACE + 1));
-    { HPEN pen = (HPEN)GetStockObject(WHITE_PEN), old = (HPEN)SelectObject(hdc, pen);
-      MoveToEx(hdc, sr.left, sr.top, NULL); LineTo(hdc, sr.right, sr.top); SelectObject(hdc, old); }
-    p = line; { const char *a = "NTVDMEX  -  "; while (*a) *p++ = *a++; }
-    { const char *a = g_progname; while (*a) *p++ = *a++; } *p = 0;
-    SetBkMode(hdc, TRANSPARENT);
-    sr.left += 6; sr.top += 4;
-    TextOutA(hdc, sr.left, sr.top, line, (int)(p - line));
+    char line[96]; char *p = line; RECT sr;
+    const char *a = "NTVDMEX  -  ";
+    g_status = CreateWindowExA(0, STATUSCLASSNAME, NULL,
+                               WS_CHILD | WS_VISIBLE | SBARS_SIZEGRIP,
+                               0, 0, 0, 0, parent, NULL, hi, NULL);
+    if (!g_status) return;
+    while (*a) *p++ = *a++;
+    { const char *b = g_progname; while (*b) *p++ = *b++; } *p = 0;
+    SendMessageA(g_status, SB_SETTEXTA, 0, (LPARAM)line);
+    GetWindowRect(g_status, &sr);
+    if (sr.bottom > sr.top) g_pd.status_h = sr.bottom - sr.top;
 }
 
 /* --- the UI thread: window + present + frame timer ------------------------- */
@@ -229,9 +232,11 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
         EnterCriticalSection(&g_lock);
         present_ddraw_frame(&g_pd, &g_vid.frame);
         LeaveCriticalSection(&g_lock);
-        draw_status(h, ps.hdc);
         EndPaint(h, &ps);
         return 0; }
+    case WM_SIZE:
+        if (g_status) SendMessageA(g_status, WM_SIZE, 0, 0);  /* let it re-dock     */
+        return 0;
     case WM_COMMAND:
         switch (LOWORD(wp)) {
         case IDM_FILE_EXIT: DestroyWindow(h); return 0;
@@ -283,12 +288,13 @@ static DWORD WINAPI ui_thread(LPVOID arg)
     if (!RegisterClassA(&wc)) return 1;
     rc.left = 0; rc.top = 0; rc.right = VID_FB_W; rc.bottom = VID_FB_H + PRESENT_STATUS_H;
     AdjustWindowRect(&rc, WS_OVERLAPPEDWINDOW, TRUE);   /* TRUE: window has a menu  */
-    g_hwnd = CreateWindowA(wc.lpszClassName, "NTVDMEX", WS_OVERLAPPEDWINDOW,
+    g_hwnd = CreateWindowA(wc.lpszClassName, "NTVDMEX", WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
                            CW_USEDEFAULT, CW_USEDEFAULT, rc.right - rc.left, rc.bottom - rc.top,
                            NULL, NULL, hi, NULL);
     if (!g_hwnd) return 1;
     SetMenu(g_hwnd, build_menu());
     present_ddraw_init(&g_pd, g_hwnd);          /* GDI windowed; DDraw for fullscreen */
+    make_status(g_hwnd, hi);                     /* native themed status bar          */
     ShowWindow(g_hwnd, SW_SHOW); UpdateWindow(g_hwnd);
     SetTimer(g_hwnd, 1, 33, NULL);              /* ~30 Hz present/PIT tick         */
     while (GetMessageA(&msg, NULL, 0, 0) > 0) { TranslateMessage(&msg); DispatchMessageA(&msg); }
@@ -365,6 +371,63 @@ static int host_try_io(volatile BYTE *tib, vdd_bus *bus, char **tpp)
     VDM_REG(tib, VTIB_EIP) = (ip + len) & 0xFFFF;          /* step past I/O    */
     *tpp = p;
     return 1;
+}
+
+/* --- planar mode-12h: trap direct A0000 writes through the VGA write engine -- */
+#define A000_LO 0xA0000u
+#define A000_HI 0xB0000u
+static int g_a000_prot = 0;
+
+/* In mode 12h, mark the A0000 graphics window NOACCESS so direct guest writes
+   fault to us; restore RW otherwise. */
+static void a000_protect(int on)
+{
+    DWORD old;
+    if (on == g_a000_prot) return;
+    if (VirtualProtect((LPVOID)A000_LO, 0x10000,
+                       on ? PAGE_NOACCESS : PAGE_EXECUTE_READWRITE, &old))
+        g_a000_prot = on;
+}
+
+/* Decode a faulting store into the protected A0000 window and run it through the
+   VGA planar write engine, then advance EIP. Handles STOSB/STOSW (incl. REP) --
+   the dominant fast-fill path; other store forms fall through (return 0 -> the
+   stop dump shows them, to grow the decoder later). */
+static int host_try_mem(volatile BYTE *tib, char **tpp)
+{
+    DWORD cs = VDM_REG(tib, VTIB_CS) & 0xFFFF, ip = VDM_REG(tib, VTIB_EIP) & 0xFFFF;
+    volatile BYTE *code = (volatile BYTE *)((cs << 4) + ip);
+    int i = 0, rep = 0; BYTE op; char *p = *tpp;
+    if (!g_a000_prot) return 0;
+    while (i < 4) {                                   /* skip prefixes            */
+        BYTE b = code[i];
+        if (b == 0xF3 || b == 0xF2) { rep = 1; ++i; }
+        else if (b==0x26||b==0x2E||b==0x36||b==0x3E||b==0x64||b==0x65||b==0x66||b==0x67) ++i;
+        else break;
+    }
+    op = code[i];
+    if (op == 0xAA || op == 0xAB) {                   /* STOSB / STOSW (ES:DI)    */
+        DWORD es = VDM_REG(tib, VTIB_ES) & 0xFFFF, di = VDM_REG(tib, VTIB_EDI) & 0xFFFF;
+        DWORD lin = (es << 4) + di, cx = rep ? (VDM_REG(tib, VTIB_ECX) & 0xFFFF) : 1;
+        DWORD eax = VDM_REG(tib, VTIB_EAX), n; int wsz = (op == 0xAB) ? 2 : 1;
+        if (lin < A000_LO || lin >= A000_HI) return 0;
+        EnterCriticalSection(&g_lock);
+        for (n = 0; n < cx; ++n) {
+            DWORD a = lin + n * wsz;
+            if (a >= A000_HI) break;
+            vga_planar_write(&g_vid, a - A000_LO, (BYTE)eax);
+            if (wsz == 2 && a + 1 < A000_HI) vga_planar_write(&g_vid, a + 1 - A000_LO, (BYTE)(eax >> 8));
+        }
+        LeaveCriticalSection(&g_lock);
+        VDM_SET16(tib, VTIB_EDI, (di + cx * wsz) & 0xFFFF);
+        if (rep) VDM_SET16(tib, VTIB_ECX, 0);
+        VDM_REG(tib, VTIB_EIP) = (ip + i + 1) & 0xFFFF;
+        p = zput(p, "  MEM planar stos off=0x"); p = zhex(p, lin - A000_LO);
+        p = zput(p, " n=0x"); p = zhex(p, cx); p = zput(p, "\r\n");
+        *tpp = p;
+        return 1;
+    }
+    return 0;
 }
 
 int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
@@ -539,6 +602,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             handled = host_try_io(tib, &g_bus, &p);
             LeaveCriticalSection(&g_lock);
             if (handled) { log_append(LOG_PATH, base, p); p = base; continue; }
+            /* not I/O -> maybe a direct A0000 planar write (mode 12h trap) */
+            if (host_try_mem(tib, &p)) { log_append(LOG_PATH, base, p); p = base; continue; }
         }
         if (ev != VDM_EVENT_BOP) {
             DWORD csv = VDM_REG(tib, VTIB_CS) & 0xFFFF;
@@ -564,6 +629,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             vdd_bus_deliver_int(&g_bus, 0x10, &r);
             LeaveCriticalSection(&g_lock);
             regs_store(&r, tib);
+            a000_protect(vdd_video_planar_active(&g_vid));   /* trap A0000 in mode 12h */
             VDM_REG(tib, VTIB_EIP) += 3;
             continue;
         }

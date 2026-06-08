@@ -54,6 +54,16 @@ typedef struct video_state {
     uint16_t vesa_bank;                 /* current 64KB window bank (4F05)         */
     uint8_t  vesa_vram[VID_VESA_VRAM];  /* full packed-256 framebuffer             */
     uint8_t  plane[4][VID_PLANE_SIZE];  /* mode 12h: 4 bit-planes (640x480x16)     */
+    /* VGA planar write engine (Sequencer 3C4/3C5 + Graphics Controller 3CE/3CF) */
+    uint8_t  seq_index, gc_index;
+    uint8_t  map_mask;     /* SR2: planes enabled for writes (reset 0x0F)          */
+    uint8_t  set_reset;    /* GR0                                                  */
+    uint8_t  enable_sr;    /* GR1                                                  */
+    uint8_t  func_rotate;  /* GR3: bits0-2 rotate count, bits3-4 ALU               */
+    uint8_t  read_map;     /* GR4: plane read in read-mode 0                       */
+    uint8_t  write_mode;   /* GR5 bits0-1                                          */
+    uint8_t  bit_mask;     /* GR8 (reset 0xFF)                                     */
+    uint8_t  latch[4];     /* per-plane read latches                               */
     uint8_t  fb[VID_FB_MAX];            /* text glyph / planar render target        */
     int      dirty;
     ntvdd_frame frame;
@@ -67,5 +77,12 @@ static inline ntvdd vdd_video_device(video_state *st)
 
 void vdd_video_render(video_state *st);                /* text glyph render        */
 void vdd_video_putc(video_state *st, uint8_t ch);      /* console teletype sink    */
+
+/* Planar A0000 access (mode 12h): the host calls these from the memory-write trap
+   so direct framebuffer writes run through the VGA write-modes into the 4 planes.
+   `off` is the byte offset within the A0000 window. */
+void    vga_planar_write(video_state *st, uint32_t off, uint8_t cpu);
+uint8_t vga_planar_read (video_state *st, uint32_t off);   /* loads latches        */
+int     vdd_video_planar_active(const video_state *st);    /* 1 in mode 12h        */
 
 #endif /* NTVDMEX_VDD_VIDEO_H */

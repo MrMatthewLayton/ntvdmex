@@ -24,7 +24,7 @@ static void gdi_present(present_ddraw *pd, const ntvdd_frame *f)
     hdc = GetDC(pd->hwnd);
     if (!hdc) return;
     GetClientRect(pd->hwnd, &rc);
-    cw = rc.right; ch = rc.bottom - PRESENT_STATUS_H;
+    cw = rc.right; ch = rc.bottom - (pd->status_h ? pd->status_h : PRESENT_STATUS_H);
     if (cw < 1) cw = 1;
     if (ch < 1) ch = 1;
     ZeroMemory(&bi, sizeof bi);
@@ -115,7 +115,7 @@ int present_ddraw_init(present_ddraw *pd, HWND hwnd)
 {
     PFN_DDCREATEEX create; LPDIRECTDRAW7 dd = 0;
     ZeroMemory(pd, sizeof *pd);
-    pd->hwnd = hwnd; pd->fs_w = 640; pd->fs_h = 480;
+    pd->hwnd = hwnd; pd->fs_w = 640; pd->fs_h = 480; pd->status_h = PRESENT_STATUS_H;
     pd->ddmod = LoadLibraryA("ddraw.dll");          /* for fullscreen (optional)   */
     if (pd->ddmod) {
         create = (PFN_DDCREATEEX)GetProcAddress(pd->ddmod, "DirectDrawCreateEx");

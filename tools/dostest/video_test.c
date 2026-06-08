@@ -39,8 +39,8 @@ int main(void)
 
     /* T0: registers + clean mode-3 screen -------------------------------- */
     CHECK(vdd_bus_add(&bus, &dev) == 0, "add: video init ok");
-    CHECK(bus.n_mem == 1 && bus.ints[0x10].svc && bus.n_ports == 1 && bus.n_frame == 1,
-          "add: B8000 + INT10h + DAC ports + frame claimed");
+    CHECK(bus.n_mem == 1 && bus.ints[0x10].svc && bus.n_ports == 3 && bus.n_frame == 1,
+          "add: B8000 + INT10h + Seq/DAC/GC ports + frame claimed");
     CHECK(vid.mode == 3 && vid.cols == 80 && vid.rows == 25, "reset: mode 3, 80x25");
     CHECK(cchar(0,0) == ' ' && cattr(0,0) == 0x07, "reset: text cleared to spaces/0x07");
 
@@ -148,6 +148,33 @@ int main(void)
     vid.dirty=1; vdd_bus_frame(&bus);
     CHECK(vid.frame.w==640 && vid.frame.h==480, "frame(mode12): 640x480x8");
     CHECK(vid.fb[1*VID_G12_W + 9]==0x0A, "mode12: plane-combine render -> pixel = 0x0A");
+
+    /* T14: planar write-mode 0 + Map Mask (the common plane-fill path) -------- */
+    memset(&r,0,sizeof r); s_ah(&r,0x00); s_al(&r,0x12); vdd_bus_deliver_int(&bus,0x10,&r); /* clears planes */
+    { uint32_t v;
+      v=2; vdd_bus_io(&bus,0x3C4,1,0,&v); v=0x0F; vdd_bus_io(&bus,0x3C5,1,0,&v);   /* map mask=0F */
+      v=5; vdd_bus_io(&bus,0x3CE,1,0,&v); v=0;    vdd_bus_io(&bus,0x3CF,1,0,&v);   /* write mode 0 */
+      CHECK(vid.map_mask==0x0F && vid.write_mode==0, "planar: ports set map_mask/write_mode");
+      vga_planar_write(&vid, 0, 0xAA);
+      CHECK(vid.plane[0][0]==0xAA && vid.plane[1][0]==0xAA && vid.plane[2][0]==0xAA && vid.plane[3][0]==0xAA,
+            "planar wm0: byte -> all enabled planes");
+      v=2; vdd_bus_io(&bus,0x3C4,1,0,&v); v=0x05; vdd_bus_io(&bus,0x3C5,1,0,&v);   /* map mask=05 */
+      vga_planar_write(&vid, 1, 0xFF);
+      CHECK(vid.plane[0][1]==0xFF && vid.plane[2][1]==0xFF && vid.plane[1][1]==0 && vid.plane[3][1]==0,
+            "planar wm0: map mask gates planes (0+2 only)"); }
+
+    /* T15: planar write-mode 2 (CPU bit p -> plane p) ------------------------ */
+    { uint32_t v; v=5; vdd_bus_io(&bus,0x3CE,1,0,&v); v=2; vdd_bus_io(&bus,0x3CF,1,0,&v); /* wm2 */
+      v=2; vdd_bus_io(&bus,0x3C4,1,0,&v); v=0x0F; vdd_bus_io(&bus,0x3C5,1,0,&v);          /* mask 0F */
+      vga_planar_write(&vid, 2, 0x0A);   /* colour 1010b -> planes 1 and 3 */
+      CHECK(vid.plane[1][2]==0xFF && vid.plane[3][2]==0xFF && vid.plane[0][2]==0 && vid.plane[2][2]==0,
+            "planar wm2: colour 0x0A -> planes 1+3 (all 8 px)"); }
+
+    /* T16: latch read loads all planes ------------------------------------- */
+    vid.plane[0][3]=0x11; vid.plane[1][3]=0x22; vid.plane[2][3]=0x33; vid.plane[3][3]=0x44;
+    { uint32_t v; v=4; vdd_bus_io(&bus,0x3CE,1,0,&v); v=2; vdd_bus_io(&bus,0x3CF,1,0,&v); } /* read_map=2 */
+    { uint8_t got = vga_planar_read(&vid, 3);
+      CHECK(got==0x33 && vid.latch[0]==0x11 && vid.latch[3]==0x44, "planar read: latches + read_map=2"); }
 
     printf("\n%d checks, %d failed\n", total, fails);
     return fails ? 1 : 0;

@@ -277,6 +277,99 @@ static void dac_in(void *self, uint16_t port, uint8_t w, uint32_t *v)
     if (++st->dac_comp >= 3) st->dac_comp = 0;
 }
 
+/* --- VGA planar write engine (mode 12h: Sequencer 3C4/5 + GC 3CE/F) ------- */
+static uint8_t vga_ror(uint8_t v, uint8_t n)
+{ n &= 7; return n ? (uint8_t)((v >> n) | (v << (8 - n))) : v; }
+static uint8_t vga_alu(uint8_t op, uint8_t v, uint8_t lat)
+{ switch (op & 3) { case 1: return (uint8_t)(v & lat); case 2: return (uint8_t)(v | lat);
+                    case 3: return (uint8_t)(v ^ lat); default: return v; } }
+
+void vga_planar_write(video_state *st, uint32_t off, uint8_t cpu)
+{
+    uint8_t alu = (uint8_t)((st->func_rotate >> 3) & 3), bm = st->bit_mask; int p;
+    if (off >= VID_PLANE_SIZE) return;
+    st->dirty = 1;
+    switch (st->write_mode & 3) {
+    case 1:                                       /* copy latches -> planes        */
+        for (p = 0; p < 4; ++p) if (st->map_mask & (1<<p)) st->plane[p][off] = st->latch[p];
+        return;
+    case 2:                                       /* CPU bit p -> plane p           */
+        for (p = 0; p < 4; ++p) {
+            uint8_t val = (uint8_t)((cpu & (1<<p)) ? 0xFF : 0x00);
+            uint8_t r = vga_alu(alu, val, st->latch[p]);
+            r = (uint8_t)((r & bm) | (st->latch[p] & (uint8_t)~bm));
+            if (st->map_mask & (1<<p)) st->plane[p][off] = r;
+        }
+        return;
+    case 3: {                                     /* set/reset masked by rot(cpu)&bm */
+        uint8_t data = vga_ror(cpu, st->func_rotate), mask = (uint8_t)(data & bm);
+        for (p = 0; p < 4; ++p) {
+            uint8_t val = (uint8_t)((st->set_reset & (1<<p)) ? 0xFF : 0x00);
+            uint8_t r = (uint8_t)((val & mask) | (st->latch[p] & (uint8_t)~mask));
+            if (st->map_mask & (1<<p)) st->plane[p][off] = r;
+        }
+        return; }
+    default: {                                    /* write mode 0                   */
+        uint8_t data = vga_ror(cpu, st->func_rotate);
+        for (p = 0; p < 4; ++p) {
+            uint8_t val = (st->enable_sr & (1<<p)) ? (uint8_t)((st->set_reset & (1<<p)) ? 0xFF : 0x00) : data;
+            uint8_t r = vga_alu(alu, val, st->latch[p]);
+            r = (uint8_t)((r & bm) | (st->latch[p] & (uint8_t)~bm));
+            if (st->map_mask & (1<<p)) st->plane[p][off] = r;
+        }
+        return; }
+    }
+}
+
+uint8_t vga_planar_read(video_state *st, uint32_t off)
+{
+    int p;
+    if (off >= VID_PLANE_SIZE) return 0xFF;
+    for (p = 0; p < 4; ++p) st->latch[p] = st->plane[p][off];   /* load latches    */
+    return st->plane[st->read_map & 3][off];                    /* read mode 0     */
+}
+
+int vdd_video_planar_active(const video_state *st) { return st->mode == 0x12; }
+
+/* Sequencer ports 3C4 (index) / 3C5 (data) -- Map Mask (SR2). */
+static void seq_out(void *self, uint16_t port, uint8_t w, uint32_t v)
+{
+    video_state *st = (video_state *)self; (void)w;
+    if (port == 0x3C4) st->seq_index = (uint8_t)v;
+    else if (st->seq_index == 2) st->map_mask = (uint8_t)(v & 0x0F);
+}
+static void seq_in(void *self, uint16_t port, uint8_t w, uint32_t *v)
+{
+    video_state *st = (video_state *)self; (void)w;
+    *v = (port == 0x3C4) ? st->seq_index : (st->seq_index == 2 ? st->map_mask : 0);
+}
+/* Graphics Controller ports 3CE (index) / 3CF (data). */
+static void gc_out(void *self, uint16_t port, uint8_t w, uint32_t v)
+{
+    video_state *st = (video_state *)self; (void)w;
+    if (port == 0x3CE) { st->gc_index = (uint8_t)v; return; }
+    switch (st->gc_index) {
+    case 0: st->set_reset   = (uint8_t)(v & 0x0F); break;
+    case 1: st->enable_sr   = (uint8_t)(v & 0x0F); break;
+    case 3: st->func_rotate = (uint8_t)(v & 0x1F); break;
+    case 4: st->read_map    = (uint8_t)(v & 3);    break;
+    case 5: st->write_mode  = (uint8_t)(v & 3);    break;
+    case 8: st->bit_mask    = (uint8_t)v;          break;
+    default: break;
+    }
+}
+static void gc_in(void *self, uint16_t port, uint8_t w, uint32_t *v)
+{
+    video_state *st = (video_state *)self; (void)w;
+    if (port == 0x3CE) { *v = st->gc_index; return; }
+    switch (st->gc_index) {
+    case 0: *v = st->set_reset; break;  case 1: *v = st->enable_sr; break;
+    case 3: *v = st->func_rotate; break; case 4: *v = st->read_map; break;
+    case 5: *v = st->write_mode; break; case 8: *v = st->bit_mask; break;
+    default: *v = 0; break;
+    }
+}
+
 /* B8000 window hook (for the off-VM test; the live host maps the aperture RAM
    so direct writes never trap -- the renderer just reads vmem each frame). */
 static uint8_t vid_rd(void *self, uint32_t off)
@@ -360,6 +453,10 @@ void vdd_video_reset(void *self)
     st->mode = 3; st->cols = VID_COLS; st->rows = VID_ROWS;
     st->cur_row = st->cur_col = 0; st->cur_shape = 0x0607; st->page = 0;
     st->dac_widx = st->dac_ridx = st->dac_comp = 0;
+    st->seq_index = st->gc_index = 0;
+    st->map_mask = 0x0F; st->bit_mask = 0xFF; st->write_mode = 0;
+    st->set_reset = st->enable_sr = st->func_rotate = st->read_map = 0;
+    st->latch[0] = st->latch[1] = st->latch[2] = st->latch[3] = 0;
     st->in_vesa = 0; st->vesa_mode = 0; st->vesa_bank = 0;
     for (i = 0; i < 16; ++i)  st->pal[i] = ega16[i];
     for (i = 16; i < 256; ++i) st->pal[i] = 0xFF000000u | (uint32_t)(i * 0x010101u); /* grey ramp */
@@ -374,7 +471,9 @@ int vdd_video_init(vdd_bus *b, void *self)
     vdd_video_reset(st);
     if (vdd_claim_mem(b, VID_TEXT_BASE, 0x8000, vid_rd, vid_wr, st)) return -1;
     if (vdd_claim_int(b, 0x10, int10, st)) return -1;
-    if (vdd_claim_ports(b, 0x3C7, 0x3C9, dac_in, dac_out, st)) return -1;
+    if (vdd_claim_ports(b, 0x3C4, 0x3C5, seq_in, seq_out, st)) return -1;  /* Sequencer */
+    if (vdd_claim_ports(b, 0x3C7, 0x3C9, dac_in, dac_out, st)) return -1;  /* DAC       */
+    if (vdd_claim_ports(b, 0x3CE, 0x3CF, gc_in, gc_out, st)) return -1;    /* Graphics  */
     if (vdd_on_frame(b, vid_frame, st)) return -1;
     return 0;
 }

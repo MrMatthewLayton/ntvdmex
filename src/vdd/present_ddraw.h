@@ -37,6 +37,7 @@ typedef struct present_ddraw {
     int   fb_w, fb_h;   /* current fbsurf size                                  */
     int   fullscreen;
     int   fs_w, fs_h;   /* exclusive-fullscreen mode size (default 640x480)     */
+    int   status_h;     /* reserved bottom strip for the status bar (windowed)  */
 } present_ddraw;
 
 /* Bring up DirectDraw in windowed mode on `hwnd`. 0 = ok, <0 = failed. */
