@@ -18,9 +18,10 @@
   WaitForVerticalBlank + cursor-hide** (XP has no compositor, so fullscreen DirectDraw flip is the
   tear-free path); a **native comctl32 status bar + full menu-bar scaffold** + the **Luna manifest**
   are in. nasm animated demos (`vgademo`/`vga12`/`vesademo`) confirm each mode on the real CPU.
-  **Now:** run real DOS apps — the 10 QuickBASIC `demos/*.EXE` are the driving corpus; they don't run
-  yet (need a fuller DOS layer). Next code-side = **expand INT 21h / x87 FPU init / INT 33h mouse /
-  the mode-12h MOV-store decoder**, driven by the host's "INT21 AH=0x.. unhandled" log.
+  **Now:** running real DOS apps — the first one works: **`PALETTE.EXE` (QuickBASIC 4.5, SCREEN 13)
+  renders in the Luna window**, after adding INT 21h **AH=06** (QB's console path) + INT 10h **VGA
+  capability queries** (AH=1B/1A/12/11, so QB accepts mode 13h). Next code-side = **mode-12h MOV-store
+  decoder** (5 planar demos run but don't paint) + **INT 33h mouse**, then sweep the rest.
   *M2 follow-up (not blocking):* CSRSS transparent-arg recovery + exit-to-shell notify.
 - **Overall status:** 🟢 **The keystone is proven.** A real DOS `.COM`, loaded off disk, runs on the
   real CPU in **Virtual-8086 mode** via `NtVdmControl` and prints "Hello, World" through our own INT
@@ -207,34 +208,41 @@ The device model and the whole graphics/input stack are built and confirmed on t
   user-supplied **`demos/*.EXE`** (10 standalone QuickBASIC 4.5 programs — SCREEN 0/12/13) are the next
   driving corpus and are staged on `vm/test.iso` via `RUNTEST.BAT` (`/tmp/ntvdmex_cd/`).
 
+## Real DOS apps — first QuickBASIC app renders (VM-CONFIRMED, 2026-06-08)
+
+**`PALETTE.EXE` (QuickBASIC 4.5, SCREEN 13) renders its colour ladders in the Luna window on the real
+CPU** — the first real DOS application running end-to-end through NTVDMEX. Two DOS-layer gaps were
+diagnosed (via `ntvdmhost.log`, driving the VM headlessly with `scripts/qmp.py`) and closed:
+1. **INT 21h AH=06 (Direct Console I/O)** (`7bd40a1`) — QB routes all console output + key polling
+   through AH=06; was unhandled → black window. Now: DL=FF → non-blocking read; else → output char.
+   Plus AH=2A/2C date/time, AH=0B status, AH=2B/2D. (Non-blocking `coninnb`/`conpeek` host hooks.)
+2. **INT 10h VGA capability queries** (`8d88339`) — QB's `SCREEN` probes the adapter via AH=1B (state
+   info) / 1A (DCC) / 12 (alt select) / 11/30 (font); all were no-ops → QB rejected mode 13h with
+   "Illegal function call". Now they report a real VGA (AH=1B state block + a static functionality
+   table advertising modes 0..0x1F). The host now logs every INT 10h call (the trace that found this).
+
 ## Single next action
 
-**Graphics milestone is closed and VM-confirmed. Next: make real DOS apps run** — driven by the 10
-QuickBASIC `demos/*.EXE`, which currently fail (they need a fuller DOS layer). The host already logs
-`INT21 AH=0x.. unhandled` (default else in `dos_int21.c`), so one VM run pinpoints the first gaps.
+**Make the rest of the demos render.** Status by class: **SCREEN 13** renders (PALETTE ✓; expect
+CAVE/GFXCOPY); **text** (VS87) should render via AH=06; **SCREEN 12** demos now *run without the QB
+error* but paint nothing — they need the work below.
 
-**Step 1 — diagnose (VM gate, your run at the interactive desktop):** `./scripts/stage-gate.sh` to
-stage the CD, then in the VM run `RUNTEST.BAT` from D:, pick a demo, close the window, and paste
-`C:\ntvdmex\ntvdmhost.log` (it lists each unhandled INT21 AH and any fault). That gives the exact
-missing-service list to work from.
+1. **mode-12h MOV-store decoder** (blocks 5 of 10 demos) — `host_try_mem()` in `src/host/main.c` only
+   decodes STOSB/STOSW (REP); QuickBASIC paints planar mode 12h with **MOV** stores. Extend the
+   faulting-store decoder to MOV/ModRM forms so BLIT/BOUNCEBX/BUBBLES/MATRIX_1/2 paint.
+2. **INT 33h mouse** — `MOUSE.EXE` needs it (reset/show/get-position; UI mouse → INT 33h state).
+3. **Sweep the remaining demos** and fix whatever each log shows (more INT 21h: FindFirst/Next 4E/4F,
+   DTA 1A/2F, free-space 36; x87 FPU only if a demo faults on an FPU opcode — none have so far).
+4. **Live PIT IRQ delivery (needs VM):** PIT INT 08h/1Ah as IVT BOP stubs + real IRQ0→INT 8 via ICA.
 
-**Step 2 — expand the DOS layer (iterate against the demos):**
-1. **INT 21h surface** — likely date/time `AH=2A/2B/2C/2D`, FindFirst/Next `4E/4F`, get/set DTA
-   `1A/2F`, `AH=4B` exec (if any), free-space `36`, etc. — implement whatever the log shows.
-2. **x87 FPU init** — QuickBASIC links the floating runtime; missing FPU setup throws `R6002 - floating
-   point not loaded`. V86 may need the FPU enabled / a no-op `FINIT` path.
-3. **mode-12h MOV-store decoder** — extend `host_try_mem()` beyond STOSB/STOSW to MOV/ModRM stores so
-   QBasic SCREEN 12 (and arbitrary planar programs) paint.
-4. **INT 33h mouse** — the `MOUSE.EXE` demo needs it (UI mouse → INT 33h state).
-
-**Step 3 — live PIT IRQ delivery (needs VM):** install PIT INT 08h/1Ah as IVT BOP stubs + real
-IRQ0→INT 8 via the kernel ICA (so the off-VM-proven PIT ticks drive guests live).
-
-**Testing strategy (unchanged):** off-VM is the primary loop — `tools/dostest/run.sh` runs MCB
-**49/49**, bus **22/22**, PIT **19/19**, input **15/15**, video **33/33** instantly, no VM. The XP VM
-is the **manual integration gate** (hot-swapped `vm/test.iso` via QMP; read back with `screendump`;
-force XP to re-read the CD by re-opening D:). *M2 follow-up (not blocking):* CSRSS multi-call arg
-recovery + exit-to-shell notify; `mem.exe` past `Parse Error 1`.
+**Testing strategy (unchanged):** off-VM is primary — `tools/dostest/run.sh` runs MCB **49/49**, bus
+**22/22**, PIT **19/19**, input **15/15**, video **33/33** instantly, no VM. The XP VM is the manual
+integration gate, now **driven headlessly via `scripts/qmp.py`** (screendump / CD hot-swap / send-key
+/ click / drag); `RUNTEST.BAT` (`tools/dostest/runtest-demos.bat`) is a menu launcher that re-copies
+the host per run and auto-opens `ntvdmhost.log` in Notepad. Reliable VM-driving primitives: taskbar-
+button click to raise/focus a window then Alt+F4; Alt+Space→N to minimise; ≥0.15s key spacing;
+forward-slash paths; wait-loops must use `pgrep -x qemu-system-x86_64` (not `-f`, which self-matches).
+*M2 follow-up (not blocking):* CSRSS multi-call arg recovery + exit-to-shell; `mem.exe` past Parse Error 1.
 
 ## Environment notes
 
