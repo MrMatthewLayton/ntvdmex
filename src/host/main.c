@@ -579,9 +579,12 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
 
     SetCurrentDirectoryA(g_cur);    /* DOS relative paths resolve against CurDir */
 
-    /* Service loop: run V86 until a BOP, dispatch INT 21h, step past the BOP, re-enter. */
+    /* Service loop: run V86 until a BOP, dispatch INT 21h, step past the BOP, re-enter.
+       Runs until the guest terminates, a hard stop, or the window closes (g_running);
+       no iteration cap so interactive/animated programs keep going. */
     m.tib = tib; m.out = dosout; m.out_cap = sizeof(dosout); m.out_len = 0;
-    for (guard = 0; guard < 4000; ++guard) {
+    (void)guard;
+    while (g_running) {
         ev = v86_run(tib, &st);
         /* I/O port trap (event 0; VM-confirmed) or a generic GP fault (event 2):
            if the faulting instruction is an IN/OUT we can decode, service it via
