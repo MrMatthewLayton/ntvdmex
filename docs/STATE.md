@@ -239,16 +239,21 @@ MOV loops.
 
 ## Single next action
 
-**Speed up mode-12h planar writes — the fill-loop fast path.** In `host_try_mem()` (`src/host/main.c`),
-when an A0000 write faults, single-step the guest's inner write loop *in the host* (the store +
-pointer-advance + loop branch) until execution leaves A0000, so a fill costs **one** trap instead of
-one-per-pixel. This is a small fill-loop interpreter (handle MOV/STOS + INC/ADD/DEC + Jcc/LOOP). That
-unblocks BLIT/BOUNCEBX/BUBBLES (and MOUSE's slow paint).
+**Speed up mode-12h — the fill-loop fast path (a small flags-accurate interpreter).** Confirmed by
+instrumenting `host_try_mem()` + running BUBBLES: QB's `PAINT` flood-fill is a **read-scan** — its hot
+loop is `MOV AL,ES:[SI]` (read pixel → faults) / `OR AL,AL` / `JNZ` / `DEC DI` / `JNZ`. So every pixel
+*read* costs a V86 round-trip and a full-screen scan never finishes. Batching writes isn't enough.
+
+**Design:** when an A0000 access faults, run the inner loop *in the host* until it leaves A0000 — a
+bounded interpreter handling loads/stores to A0000 (reuse the existing decode), `OR/AND/XOR/CMP/TEST`
+(reg-reg + reg-imm, **computing ZF/SF/CF/OF/PF**), `INC/DEC/ADD/SUB`, `Jcc`/`JMP short`/`LOOP`, and a
+few MOVs. It MUST stop and return to V86 on any opcode it doesn't fully model (so it can never derail),
+with an iteration cap. Unblocks BLIT/BOUNCEBX/BUBBLES + MOUSE's paint. INT 33h mouse is already in
+(`972259f`); MOUSE will be testable once this lands.
 
 Then:
-1. **INT 33h mouse** — `MOUSE.EXE` (reset/show/hide/get-position/button-state; UI mouse → INT 33h).
-2. **Sweep remaining demos** for any other INT 21h gaps; BLIT/BOUNCEBX source would confirm their fill path.
-3. **Live PIT IRQ delivery (needs VM):** PIT INT 08h/1Ah as IVT BOP stubs + real IRQ0→INT 8 via ICA.
+1. **Sweep remaining demos** for any other INT 21h gaps; BLIT/BOUNCEBX source would confirm their path.
+2. **Live PIT IRQ delivery (needs VM):** PIT INT 08h/1Ah as IVT BOP stubs + real IRQ0→INT 8 via ICA.
 
 **Testing strategy (unchanged):** off-VM is primary — `tools/dostest/run.sh` runs MCB **49/49**, bus
 **22/22**, PIT **19/19**, input **15/15**, video **33/33** instantly, no VM. The XP VM is the manual
