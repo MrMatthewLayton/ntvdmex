@@ -18,10 +18,12 @@
   WaitForVerticalBlank + cursor-hide** (XP has no compositor, so fullscreen DirectDraw flip is the
   tear-free path); a **native comctl32 status bar + full menu-bar scaffold** + the **Luna manifest**
   are in. nasm animated demos (`vgademo`/`vga12`/`vesademo`) confirm each mode on the real CPU.
-  **Now:** running real DOS apps — the first one works: **`PALETTE.EXE` (QuickBASIC 4.5, SCREEN 13)
-  renders in the Luna window**, after adding INT 21h **AH=06** (QB's console path) + INT 10h **VGA
-  capability queries** (AH=1B/1A/12/11, so QB accepts mode 13h). Next code-side = **mode-12h MOV-store
-  decoder** (5 planar demos run but don't paint) + **INT 33h mouse**, then sweep the rest.
+  **Now:** running real DOS apps — **7 of 10 QuickBASIC demos work** (CAVE/GFXCOPY/PALETTE 13h, VS87
+  text, MATRIX_1/2 12h-text), via AH=06 console I/O + INT 10h VGA queries (1A/1B/12) + port-3DA vsync
+  + INT 10h glyph rendering into the mode-12h planes + the MOV-store decoder. The remaining 3 (BLIT,
+  BOUNCEBX, BUBBLES — 12h *pixel* fills) + MOUSE are blocked by **mode-12h trap-per-pixel performance**,
+  not correctness. Next code-side = a **fill-loop fast path** (single-step the inner write loop in the
+  host so a fill is one trap, not one-per-pixel) + **INT 33h mouse**.
   *M2 follow-up (not blocking):* CSRSS transparent-arg recovery + exit-to-shell notify.
 - **Overall status:** 🟢 **The keystone is proven.** A real DOS `.COM`, loaded off disk, runs on the
   real CPU in **Virtual-8086 mode** via `NtVdmControl` and prints "Hello, World" through our own INT
@@ -221,20 +223,32 @@ diagnosed (via `ntvdmhost.log`, driving the VM headlessly with `scripts/qmp.py`)
    "Illegal function call". Now they report a real VGA (AH=1B state block + a static functionality
    table advertising modes 0..0x1F). The host now logs every INT 10h call (the trace that found this).
 
+## Real DOS apps — 7 / 10 QuickBASIC demos run (VM-confirmed, 2026-06-08)
+
+Working: **CAVE, GFXCOPY, PALETTE** (13h), **VS87** (text), **MATRIX_1, MATRIX_2** (12h *text* via the
+graphics-mode glyph renderer). Window caption is **"Virtual MS-DOS Prompt - PROG.EXE"** + the exe and
+title bar carry `MAINICON.ico`. Fixes that got here: AH=06 console I/O, INT 10h VGA queries (1A/1B/12),
+port-3DA vsync (CAVE animates), and INT 10h AH=09/0A/0E glyph rendering into the mode-12h planes.
+
+Not yet working: **BLIT, BOUNCEBX, BUBBLES** (12h *pixel* demos) and **MOUSE**. Root cause is
+**performance, not correctness**: mode 12h traps every A0000 write (`PAGE_NOACCESS`) → a #GP fault +
+full V86 round-trip *per pixel*; QB's `PAINT`/`LINE BF` fill pixel-by-pixel, so a full-screen fill is
+~307K round-trips and the demo never finishes its first paint. The MOV-store decoder is correct (the
+background *does* fill, just slowly). REP STOS is already batched (one trap); the gap is per-pixel
+MOV loops.
+
 ## Single next action
 
-**Make the rest of the demos render.** Status by class: **SCREEN 13** renders — PALETTE ✓, BLIT ✓,
-**CAVE ✓ (animates** after the port-3DA vertical-retrace fix; demos poll 3DA to pace frames). Window
-caption is now **"Virtual MS-DOS Prompt - PROG.EXE"**. **Text** (VS87) should render via AH=06.
-**SCREEN 12** demos run without the QB error but paint nothing — they need the work below.
+**Speed up mode-12h planar writes — the fill-loop fast path.** In `host_try_mem()` (`src/host/main.c`),
+when an A0000 write faults, single-step the guest's inner write loop *in the host* (the store +
+pointer-advance + loop branch) until execution leaves A0000, so a fill costs **one** trap instead of
+one-per-pixel. This is a small fill-loop interpreter (handle MOV/STOS + INC/ADD/DEC + Jcc/LOOP). That
+unblocks BLIT/BOUNCEBX/BUBBLES (and MOUSE's slow paint).
 
-1. **mode-12h MOV-store decoder** (blocks 5 of 10 demos) — `host_try_mem()` in `src/host/main.c` only
-   decodes STOSB/STOSW (REP); QuickBASIC paints planar mode 12h with **MOV** stores. Extend the
-   faulting-store decoder to MOV/ModRM forms so BLIT/BOUNCEBX/BUBBLES/MATRIX_1/2 paint.
-2. **INT 33h mouse** — `MOUSE.EXE` needs it (reset/show/get-position; UI mouse → INT 33h state).
-3. **Sweep the remaining demos** and fix whatever each log shows (more INT 21h: FindFirst/Next 4E/4F,
-   DTA 1A/2F, free-space 36; x87 FPU only if a demo faults on an FPU opcode — none have so far).
-4. **Live PIT IRQ delivery (needs VM):** PIT INT 08h/1Ah as IVT BOP stubs + real IRQ0→INT 8 via ICA.
+Then:
+1. **INT 33h mouse** — `MOUSE.EXE` (reset/show/hide/get-position/button-state; UI mouse → INT 33h).
+2. **Sweep remaining demos** for any other INT 21h gaps; BLIT/BOUNCEBX source would confirm their fill path.
+3. **Live PIT IRQ delivery (needs VM):** PIT INT 08h/1Ah as IVT BOP stubs + real IRQ0→INT 8 via ICA.
 
 **Testing strategy (unchanged):** off-VM is primary — `tools/dostest/run.sh` runs MCB **49/49**, bus
 **22/22**, PIT **19/19**, input **15/15**, video **33/33** instantly, no VM. The XP VM is the manual
