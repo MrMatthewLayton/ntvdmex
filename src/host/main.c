@@ -112,6 +112,7 @@ static void host_set_flags(volatile BYTE *tib, uint8_t cf, uint8_t zf)
 
 /* --- menu + status bar (scaffold; most items are stubs for now) ------------ */
 static char g_progname[64] = "(none)";      /* shown in the status bar          */
+static volatile int g_title_dirty = 1;      /* UI thread re-applies the caption  */
 
 enum {                                       /* wired command IDs                */
     IDM_STUB = 1,                            /* every not-yet-wired item          */
@@ -259,6 +260,7 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
 {
     switch (msg) {
     case WM_TIMER:
+        if (g_title_dirty) { set_window_title(); g_title_dirty = 0; }  /* apply on UI thread */
         EnterCriticalSection(&g_lock);
         vdd_bus_frame(&g_bus);          /* tick PIT + render into g_vid.frame       */
         present_ddraw_snapshot(&g_pd, &g_vid.frame);  /* consistent copy UNDER lock  */
@@ -563,7 +565,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     { const char *bn = progpath, *q; int k = 0;
       for (q = progpath; *q; ++q) if (*q == '\\' || *q == '/') bn = q + 1;
       if (*bn) { while (bn[k] && k < 63) { g_progname[k] = bn[k]; ++k; } g_progname[k] = 0; } }
-    set_window_title();                            /* "Virtual MS-DOS Prompt - PROG.EXE" */
+    g_title_dirty = 1;                             /* UI thread sets the caption + prog name */
 
     /* Build the DOS process in conventional memory (base=NULL => absolute V86). */
     img = dos_load(NULL, filebuf, nread, DOS_PSP_SEG);
