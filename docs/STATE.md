@@ -223,9 +223,10 @@ diagnosed (via `ntvdmhost.log`, driving the VM headlessly with `scripts/qmp.py`)
 
 ## Single next action
 
-**Make the rest of the demos render.** Status by class: **SCREEN 13** renders (PALETTE ✓; expect
-CAVE/GFXCOPY); **text** (VS87) should render via AH=06; **SCREEN 12** demos now *run without the QB
-error* but paint nothing — they need the work below.
+**Make the rest of the demos render.** Status by class: **SCREEN 13** renders — PALETTE ✓, BLIT ✓,
+**CAVE ✓ (animates** after the port-3DA vertical-retrace fix; demos poll 3DA to pace frames). Window
+caption is now **"Virtual MS-DOS Prompt - PROG.EXE"**. **Text** (VS87) should render via AH=06.
+**SCREEN 12** demos run without the QB error but paint nothing — they need the work below.
 
 1. **mode-12h MOV-store decoder** (blocks 5 of 10 demos) — `host_try_mem()` in `src/host/main.c` only
    decodes STOSB/STOSW (REP); QuickBASIC paints planar mode 12h with **MOV** stores. Extend the
