@@ -46,3 +46,9 @@ cc -std=c99 -Wall -Wextra -Wno-unused-function -O0 -g \
    "$DIR/../../src/vdd/vdd_input.c" "$DIR/../../src/vdd/vdd_bus.c"
 
 "$DIR/input_test"
+
+# M3 mode-12h fill-loop interpreter battery (src/host/v86interp.h, flat memory).
+cc -std=c99 -Wall -Wextra -Wno-unused-function -O0 -g \
+   -o "$DIR/interp_test" "$DIR/interp_test.c"
+
+"$DIR/interp_test"
