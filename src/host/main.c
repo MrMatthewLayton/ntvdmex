@@ -78,6 +78,28 @@ static int host_conin(void *ctx)
     }
 }
 
+/* Non-blocking console read (INT 21h AH=06 DL=FF): a key char, or -1 if none. */
+static int host_coninnb(void *ctx)
+{
+    uint16_t k; int got;
+    (void)ctx;
+    EnterCriticalSection(&g_lock);
+    got = vdd_input_pop(&g_in, &k);
+    LeaveCriticalSection(&g_lock);
+    return got ? (k & 0xFF) : -1;
+}
+
+/* Non-blocking console status (INT 21h AH=0B / AH=06 DL=FF peek): 1 if a key is ready. */
+static int host_conpeek(void *ctx)
+{
+    uint16_t k; int got;
+    (void)ctx;
+    EnterCriticalSection(&g_lock);
+    got = vdd_input_peek(&g_in, &k);
+    LeaveCriticalSection(&g_lock);
+    return got;
+}
+
 /* Reflect CF/ZF a bus interrupt returned onto the FLAGS the INT pushed on the
    V86 stack (SS:SP+4) -- the handler's IRET restores them. */
 static void host_set_flags(volatile BYTE *tib, uint8_t cf, uint8_t zf)
@@ -562,6 +584,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     vdd_bus_add(&g_bus, &g_in_dev);             /* keyboard: claims INT 16h      */
     m.conout = host_conout; m.conctx = NULL;    /* DOS console out -> video      */
     m.conin  = host_conin;  m.cinctx = NULL;    /* DOS console in  <- keyboard   */
+    m.coninnb = host_coninnb;                   /* AH=06 DL=FF non-blocking read */
+    m.conpeek = host_conpeek;                   /* AH=0B/06 non-blocking status  */
 
     /* Hide the inherited console (CSRSS already bound the VDM); the Luna window
        is now the display. Then start the UI thread that owns it. */

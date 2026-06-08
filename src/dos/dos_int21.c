@@ -27,6 +27,8 @@ void dos_int21_init(dos_machine_t *m, uint16_t first_mcb)
     m->conctx = 0;
     m->conin = 0;
     m->cinctx = 0;
+    m->coninnb = 0;
+    m->conpeek = 0;
 }
 
 int dos_int21(dos_machine_t *m)
@@ -48,6 +50,8 @@ int dos_int21(dos_machine_t *m)
     #define SET16(r, v) ((r)  = ((r)  & 0xFFFF0000u) | ((DWORD)(v) & 0xFFFF))
     #define OKCF()      (*pfl &= (WORD)~1)
     #define ERRCF()     (*pfl |= 1)
+    #define SETZF()     (*pfl |= 0x40)
+    #define CLRZF()     (*pfl &= (WORD)~0x40)
     #define OUTC(c)     do { uint8_t _ch = (uint8_t)(c); \
         if (m->out_len < m->out_cap - 1) m->out[m->out_len++] = (char)_ch; \
         if (m->conout) m->conout(m->conctx, _ch); } while (0)
@@ -82,7 +86,17 @@ int dos_int21(dos_machine_t *m)
         OUTC(0x0D); OUTC(0x0A);
         OKCF();
     } else if (ah == 0x0B) {                    /* check input status */
-        SETAX((R_AX & 0xFF00) | 0x00);          /* 0 = no char waiting (simplified) */
+        int ready = m->conpeek ? m->conpeek(m->cinctx) : 0;
+        SETAX((R_AX & 0xFF00) | (ready ? 0xFF : 0x00));   /* FFh = char waiting */
+        OKCF();
+    } else if (ah == 0x06) {                    /* direct console I/O (DL=FF -> read) */
+        if ((R_DX & 0xFF) == 0xFF) {            /* input: non-blocking, ZF=1 if none */
+            int c = m->coninnb ? m->coninnb(m->cinctx) : -1;
+            if (c >= 0) { SETAX((R_AX & 0xFF00) | (c & 0xFF)); CLRZF(); }
+            else        { SETAX(R_AX & 0xFF00); SETZF(); }
+        } else {                                /* output: write DL, AL=DL */
+            OUTC(R_DX & 0xFF); SETAX((R_AX & 0xFF00) | (R_DX & 0xFF));
+        }
         OKCF();
     } else if (ah == 0x09) {                    /* print $-string DS:DX */
         const volatile BYTE *s = (const volatile BYTE *)((R_DS << 4) + (R_DX & 0xFFFF));
@@ -195,6 +209,20 @@ int dos_int21(dos_machine_t *m)
     } else if (ah == 0x33) {                    /* get/set Ctrl-Break -> off */
         if ((R_AX & 0xFF) == 0) SET16(R_DX, 0);
         OKCF();
+    } else if (ah == 0x2A) {                    /* get date: CX=yr DH=mon DL=day AL=dow */
+        SYSTEMTIME t; GetLocalTime(&t);
+        SET16(R_CX, t.wYear);
+        SET16(R_DX, ((t.wMonth & 0xFF) << 8) | (t.wDay & 0xFF));
+        SETAX((R_AX & 0xFF00) | (t.wDayOfWeek & 0xFF));
+        OKCF();
+    } else if (ah == 0x2C) {                    /* get time: CH=hr CL=min DH=sec DL=cs */
+        SYSTEMTIME t; GetLocalTime(&t);
+        SET16(R_CX, ((t.wHour & 0xFF) << 8) | (t.wMinute & 0xFF));
+        SET16(R_DX, ((t.wSecond & 0xFF) << 8) | ((t.wMilliseconds / 10) & 0xFF));
+        OKCF();
+    } else if (ah == 0x2B || ah == 0x2D) {      /* set date/time -> report success */
+        SETAX(R_AX & 0xFF00);                   /* AL=0 = ok */
+        OKCF();
     } else {                                    /* unhandled service */
         tp = zput(tp, "  INT21 AH=0x"); tp = zhex(tp, ah); tp = zput(tp, " unhandled\r\n");
         ERRCF();
@@ -212,6 +240,8 @@ int dos_int21(dos_machine_t *m)
     #undef SET16
     #undef OKCF
     #undef ERRCF
+    #undef SETZF
+    #undef CLRZF
     #undef OUTC
     return cont;
 }

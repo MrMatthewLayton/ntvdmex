@@ -26,6 +26,8 @@ typedef struct {
     void    *conctx;           /* passed to conout (e.g. the video VDD)            */
     int    (*conin)(void *ctx); /* optional source for console input (blocking)     */
     void    *cinctx;           /* passed to conin (e.g. the keyboard VDD)          */
+    int    (*coninnb)(void *ctx); /* non-blocking console read: char, or -1 if none */
+    int    (*conpeek)(void *ctx); /* non-blocking status: 1 if a key is ready       */
 } dos_machine_t;
 
 /* Zero the handle table, set the MCB root, default DTA = PSP:0x80. */
