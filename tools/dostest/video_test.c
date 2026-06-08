@@ -39,10 +39,14 @@ int main(void)
 
     /* T0: registers + clean mode-3 screen -------------------------------- */
     CHECK(vdd_bus_add(&bus, &dev) == 0, "add: video init ok");
-    CHECK(bus.n_mem == 1 && bus.ints[0x10].svc && bus.n_ports == 3 && bus.n_frame == 1,
-          "add: B8000 + INT10h + Seq/DAC/GC ports + frame claimed");
+    CHECK(bus.n_mem == 1 && bus.ints[0x10].svc && bus.n_ports == 4 && bus.n_frame == 1,
+          "add: B8000 + INT10h + Seq/DAC/GC/Status ports + frame claimed");
     CHECK(vid.mode == 3 && vid.cols == 80 && vid.rows == 25, "reset: mode 3, 80x25");
     CHECK(cchar(0,0) == ' ' && cattr(0,0) == 0x07, "reset: text cleared to spaces/0x07");
+
+    /* T0b: Input Status 1 (3DA) toggles the retrace bit so vsync polls advance */
+    { uint32_t s1, s2; vdd_bus_io(&bus, 0x3DA, 1, 1, &s1); vdd_bus_io(&bus, 0x3DA, 1, 1, &s2);
+      CHECK(((s1 ^ s2) & 0x08) == 0x08, "3DA: vertical-retrace bit toggles between reads"); }
 
     /* T1: teletype + cursor --------------------------------------------- */
     memset(&r,0,sizeof r); s_ah(&r,0x02); s_dx(&r,0); vdd_bus_deliver_int(&bus,0x10,&r);

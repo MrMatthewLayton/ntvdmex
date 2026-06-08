@@ -222,6 +222,23 @@ static HWND g_status;                        /* the native comctl32 status bar  
 
 /* Create the native status bar child + set its text; record its height so the
    video blit reserves that strip. */
+/* Window caption: "Virtual MS-DOS Prompt" idle, "... - PROG.EXE" while a program
+   runs. Safe to call from the V86 thread (SetWindowText posts WM_SETTEXT). */
+#define VDM_WIN_TITLE "Virtual MS-DOS Prompt"
+static void set_window_title(void)
+{
+    char t[128]; char *p = t; const char *s = VDM_WIN_TITLE;
+    if (!g_hwnd) return;
+    while (*s) *p++ = *s++;
+    if (g_progname[0] && g_progname[0] != '(') {       /* not "(none)" */
+        const char *d = " - ", *b = g_progname;
+        while (*d) *p++ = *d++;
+        while (*b) *p++ = *b++;
+    }
+    *p = 0;
+    SetWindowTextA(g_hwnd, t);
+}
+
 static void make_status(HWND parent, HINSTANCE hi)
 {
     char line[96]; char *p = line; RECT sr;
@@ -312,7 +329,7 @@ static DWORD WINAPI ui_thread(LPVOID arg)
     if (!RegisterClassA(&wc)) return 1;
     rc.left = 0; rc.top = 0; rc.right = VID_FB_W; rc.bottom = VID_FB_H + PRESENT_STATUS_H;
     AdjustWindowRect(&rc, WS_OVERLAPPEDWINDOW, TRUE);   /* TRUE: window has a menu  */
-    g_hwnd = CreateWindowA(wc.lpszClassName, "NTVDMEX", WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
+    g_hwnd = CreateWindowA(wc.lpszClassName, VDM_WIN_TITLE, WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
                            CW_USEDEFAULT, CW_USEDEFAULT, rc.right - rc.left, rc.bottom - rc.top,
                            NULL, NULL, hi, NULL);
     if (!g_hwnd) return 1;
@@ -546,6 +563,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     { const char *bn = progpath, *q; int k = 0;
       for (q = progpath; *q; ++q) if (*q == '\\' || *q == '/') bn = q + 1;
       if (*bn) { while (bn[k] && k < 63) { g_progname[k] = bn[k]; ++k; } g_progname[k] = 0; } }
+    set_window_title();                            /* "Virtual MS-DOS Prompt - PROG.EXE" */
 
     /* Build the DOS process in conventional memory (base=NULL => absolute V86). */
     img = dos_load(NULL, filebuf, nread, DOS_PSP_SEG);

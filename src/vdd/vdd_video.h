@@ -64,6 +64,7 @@ typedef struct video_state {
     uint8_t  write_mode;   /* GR5 bits0-1                                          */
     uint8_t  bit_mask;     /* GR8 (reset 0xFF)                                     */
     uint8_t  latch[4];     /* per-plane read latches                               */
+    uint8_t  retrace;      /* Input Status 1 (3DA): toggled so vsync polls advance  */
     uint8_t  fb[VID_FB_MAX];            /* text glyph / planar render target        */
     int      dirty;
     ntvdd_frame frame;

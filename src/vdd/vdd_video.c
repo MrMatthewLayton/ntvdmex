@@ -408,6 +408,20 @@ static void gc_in(void *self, uint16_t port, uint8_t w, uint32_t *v)
     }
 }
 
+/* Input Status Register 1 (3DA/3BA). Graphics demos pace their animation by
+   polling bit 3 (vertical retrace) and bit 0 (display enable). We have no real
+   CRT timing, so toggle both bits on every read: any "wait until set then wait
+   until clear" retrace loop completes within two reads, so the animation
+   advances (a read of 3DA also resets the attribute-controller flip-flop). */
+static void status_out(void *self, uint16_t port, uint8_t w, uint32_t v)
+{ (void)self; (void)port; (void)w; (void)v; }     /* feature ctrl: ignore */
+static void status_in(void *self, uint16_t port, uint8_t w, uint32_t *v)
+{
+    video_state *st = (video_state *)self; (void)port; (void)w;
+    st->retrace ^= 0x09;                            /* toggle retrace(3) + disp-en(0) */
+    *v = st->retrace;
+}
+
 /* B8000 window hook (for the off-VM test; the live host maps the aperture RAM
    so direct writes never trap -- the renderer just reads vmem each frame). */
 static uint8_t vid_rd(void *self, uint32_t off)
@@ -512,6 +526,7 @@ int vdd_video_init(vdd_bus *b, void *self)
     if (vdd_claim_ports(b, 0x3C4, 0x3C5, seq_in, seq_out, st)) return -1;  /* Sequencer */
     if (vdd_claim_ports(b, 0x3C7, 0x3C9, dac_in, dac_out, st)) return -1;  /* DAC       */
     if (vdd_claim_ports(b, 0x3CE, 0x3CF, gc_in, gc_out, st)) return -1;    /* Graphics  */
+    if (vdd_claim_ports(b, 0x3DA, 0x3DA, status_in, status_out, st)) return -1; /* InpStatus1 */
     if (vdd_on_frame(b, vid_frame, st)) return -1;
     return 0;
 }
