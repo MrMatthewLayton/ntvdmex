@@ -2,24 +2,25 @@
 
 > **This is the canonical resume point.** Update it at the end of every working session.
 
-- **Last updated:** 2026-06-07
-- **Phase:** **M3 — device model + video (STARTED).** M2 (DOS kernel) is closed: M2.1–M2.6 DONE in the
-  clean `src/` host. M3 kickoff **retired the `tools/vdmhost` spike** and decided the **pluggable VDD
-  architecture** ([ADR-0008](decisions/0008-pluggable-vdd-model.md) + [research/vdd-architecture.md](research/vdd-architecture.md)):
-  clean `ntvdd.h` ABI + bus, built-in VDDs, DirectDraw (windowed + full-screen), VGA + VESA; the two
-  binaries merge into one windowed host. **Slices 1a (bus 22/22) + 2 (PIT 19/19) off-VM; 1b (I/O
-  trap, event 0) + 3 (DirectDraw) VM-CONFIRMED 2026-06-07** — `ioprobe.com` routed 4×OUT+IN through
-  the real PIT VDD on the CPU (reload→0x1234, IN→0x34, exit 0x34); `present_demo.exe` rendered.
-  **Video VDD text mode 3 done off-VM** (slice-4, 23/23). **MERGE DONE + VM-CONFIRMED:** ntvdmhost is
-  now a windowed host (UI thread + present_ddraw + frame timer; V86 on the VdmInitialize thread); DOS
-  console (INT 21h) + INT 10h route through the video VDD → DirectDraw — `hello.com` painted text in
-  the Luna window on the real CPU. (Fixed present_ddraw to pack pixels to the surface's real depth;
-  XP/Cirrus is 16bpp — that was the vertical-striping bug.) **Keyboard input DONE + VM-CONFIRMED**
-  (INT 16h VDD + INT 21h AH=01/07/08/0A + UI WM_CHAR; interactive keytest.com typed in the window,
-  Enter/Backspace/ESC); **authentic IBM VGA 8×16 ROM font** now used. **Graphics mode 13h DONE +
-  VM-CONFIRMED** (320×200×256 + DAC palette + A0000-BFFFF mapped as RAM; `vgademo.com` x^y fractal
-  rendered on the real CPU). Next code-side = **VESA VBE 2.0 (banked)**, or extended keys+mouse, or
-  live PIT IRQ delivery.
+- **Last updated:** 2026-06-08
+- **Phase:** **M3 — device model + video (GRAPHICS DONE; now expanding the DOS layer for real apps).**
+  M2 (DOS kernel) is closed. M3 kickoff **retired the `tools/vdmhost` spike** and decided the
+  **pluggable VDD architecture** ([ADR-0008](decisions/0008-pluggable-vdd-model.md) +
+  [research/vdd-architecture.md](research/vdd-architecture.md)): clean `ntvdd.h` ABI + bus, built-in
+  VDDs, DirectDraw (windowed + full-screen), VGA + VESA; the two binaries merged into one windowed
+  host. **All of the M3 graphics/input stack is built and VM-CONFIRMED** — see the *M3 milestone*
+  section below. In short: bus (22/22) + PIT (19/19) + input (15/15) + video (33/33) off-VM batteries;
+  I/O traps reflect as **event 0** (VM-discovered, not the disasm's event 2); the merged windowed host
+  paints DOS text + graphics in a Luna window; **text mode 3** (authentic IBM VGA 8×16 ROM font),
+  **mode 13h** (320×200×256 + DAC), **mode 12h** (640×480×16 **planar** via an A0000 `PAGE_NOACCESS`
+  trap + a VGA write-mode engine), and **VESA VBE 2.0** (banked hi-res) all render; **keyboard** (INT
+  16h + INT 21h + WM_CHAR) works; windowed present is **GDI StretchDIBits + double-buffer snapshot +
+  WaitForVerticalBlank + cursor-hide** (XP has no compositor, so fullscreen DirectDraw flip is the
+  tear-free path); a **native comctl32 status bar + full menu-bar scaffold** + the **Luna manifest**
+  are in. nasm animated demos (`vgademo`/`vga12`/`vesademo`) confirm each mode on the real CPU.
+  **Now:** run real DOS apps — the 10 QuickBASIC `demos/*.EXE` are the driving corpus; they don't run
+  yet (need a fuller DOS layer). Next code-side = **expand INT 21h / x87 FPU init / INT 33h mouse /
+  the mode-12h MOV-store decoder**, driven by the host's "INT21 AH=0x.. unhandled" log.
   *M2 follow-up (not blocking):* CSRSS transparent-arg recovery + exit-to-shell notify.
 - **Overall status:** 🟢 **The keystone is proven.** A real DOS `.COM`, loaded off disk, runs on the
   real CPU in **Virtual-8086 mode** via `NtVdmControl` and prints "Hello, World" through our own INT
@@ -163,31 +164,77 @@ spike; each re-points the IFEO at its own host.) NOTE: the reboot-free telnet pa
 the logon agent) is for the SPIKE's `vdmhost.log`; it needs `vdmtrig.bat` running and a clean-host
 variant to capture `ntvdmhost.log` — the manual `gate-clean.bat` is the reliable clean-host gate.
 
+## M3 milestone — pluggable VDDs + full VGA/VESA video (DONE + VM-CONFIRMED, 2026-06-08)
+
+The device model and the whole graphics/input stack are built and confirmed on the real CPU in the VM.
+
+- **VDD bus + ABI** (`src/vdd/ntvdd.h`, `vdd_bus.c`): devices claim ports / memory-window / interrupt /
+  frame; host injects raise-IRQ / map-flat / present sinks. Off-VM **22/22**.
+- **I/O-port traps reflect as event 0** (VM-discovered; the disasm taxonomy never labelled 0 and we'd
+  guessed event 2). `host_try_io()` decodes IN/OUT and dispatches through the bus. Port pre-decoded
+  into `VTIB_EVENT_INFO` low word. **`ioprobe.com` confirmed** 4×OUT+IN through the PIT VDD.
+- **PIT VDD** (`vdd_pit.c`): 8254 ch0 + INT 08h/1Ah, off-VM **19/19**. (Live IRQ0 delivery still TODO.)
+- **Input VDD** (`vdd_input.c`): keyboard ring + INT 16h (ZF "key ready"), off-VM **15/15**; wired to
+  INT 21h AH=01/07/08/0A and the UI WM_CHAR capture. **Confirmed** typing in the window (Enter/BS/ESC).
+- **Video VDD** (`vdd_video.c`, off-VM **33/33**) — one device, all modes, renders into `st->frame`
+  (the host presents):
+  - **Text mode 3**: B8000 80×25 char/attr grid, **authentic IBM VGA 8×16 ROM font** (CP437, from
+    `tools/IBM_VGA_8x16.bin` via `gen-vgafont.py`), EGA 16-colour attributes, INT 10h teletype subset.
+  - **Mode 13h**: 320×200×256 linear at A0000, DAC palette ports 3C7/8/9 (set in one INT 10h AH=10/12
+    call — the per-OUT palette loop was the "blue for 2–3s" stall). `vgademo.com` x^y fractal.
+  - **Mode 12h**: 640×480×16 **planar** — the hardest piece. A0000 is trapped via
+    `VirtualProtect(PAGE_NOACCESS)` (`a000_protect()` in the host); the faulting store is decoded by
+    `host_try_mem()` and run through `vga_planar_write` (write modes 0–3, Sequencer Map Mask, Graphics
+    Controller set/reset + bit-mask + ALU, 4 latches) into 4 plane buffers; `render_planar` combines
+    them. **NOTE the decoder currently handles only STOSB/STOSW (REP)** — arbitrary MOV/ModRM stores
+    are a known gap (blocks general mode-12h programs incl. QBasic SCREEN 12).
+  - **VESA VBE 2.0** (banked): INT 10h AX=4F00/01/02/03/05, modes 0x100/0x101/0x103; 0x80000 VRAM
+    window + bank select. `vesademo.com` smooth gradient.
+- **Presentation** (`present_ddraw.c`): **windowed = GDI `StretchDIBits`** from a double-buffer
+  *snapshot* (taken under the bus lock by `_snapshot()`, blitted outside it by `_present()`) +
+  `WaitForVerticalBlank` + cursor hidden over the client area. **Fullscreen = DirectDraw 7 flip chain**
+  (the only tear-free path — XP's desktop has no compositor, so windowed GDI can't be fully tear-free).
+  DirectDraw is bound at runtime (no `-lddraw/-ldxguid`); pixels packed to the surface's real depth
+  (XP/Cirrus = 16bpp — that was the vertical-striping bug). Switched windowed off DirectDraw-to-primary
+  because that flickered the cursor.
+- **Host chrome** (`src/host/main.c`): two-thread model (V86 engine on the VdmInitialize thread; UI
+  thread owns window + present + a ~30Hz frame timer; a `CRITICAL_SECTION` serialises bus dispatch).
+  **Full menu-bar scaffold** (File/Edit/CPU/Display/Audio/Input/Drive/Capture/Debug/Help — unwired =
+  `IDM_STUB`; wired Exit/Fullscreen/ShowMenuBar/About), a **native comctl32 status bar**, and the
+  **Common-Controls 6.0 manifest** (`res/ntvdmhost.rc` → `ntvdmex.manifest`) for Luna theming.
+- **Demo corpus:** nasm animated demos `tools/dostest/{demo13,demo12,demovesa}.asm` (→
+  `vgademo`/`vga12`/`vesademo`.com via `make-demos.sh`) confirm each mode animates on the real CPU. The
+  user-supplied **`demos/*.EXE`** (10 standalone QuickBASIC 4.5 programs — SCREEN 0/12/13) are the next
+  driving corpus and are staged on `vm/test.iso` via `RUNTEST.BAT` (`/tmp/ntvdmex_cd/`).
+
 ## Single next action
 
-**M3 is underway.** Slices 1a (VDD bus) + 2 (PIT timer) are done and proven off-VM; the next step is
-**slice-1b — wire the bus into `v86_run`**, which needs a VM spike.
+**Graphics milestone is closed and VM-confirmed. Next: make real DOS apps run** — driven by the 10
+QuickBASIC `demos/*.EXE`, which currently fail (they need a fuller DOS layer). The host already logs
+`INT21 AH=0x.. unhandled` (default else in `dos_int21.c`), so one VM run pinpoints the first gaps.
 
-**Testing strategy (unchanged, decided 2026-06-06):** off-VM is the primary loop
-(`tools/dostest/run.sh` now runs the MCB **49/49**, VDD bus **22/22**, and PIT **19/19** batteries
-instantly, no VM); the XP VM is a **manual integration gate** via `tools/dostest/gate-clean.bat`
-(interactive desktop, read/paste the verdict — no telnet).
+**Step 1 — diagnose (VM gate, your run at the interactive desktop):** `./scripts/stage-gate.sh` to
+stage the CD, then in the VM run `RUNTEST.BAT` from D:, pick a demo, close the window, and paste
+`C:\ntvdmex\ntvdmhost.log` (it lists each unhandled INT21 AH and any fault). That gives the exact
+missing-service list to work from.
 
-Next work:
-1. **VM GATE (your run, at the interactive desktop):** `./scripts/stage-gate.sh`, then in the VM
-   `gate-clean.bat ioprobe.com` → expect `IO out/in` trace + `STAGE2: complete` errorlevel 0x34
-   (confirms IOPL-0 IN/OUT reflects as event 2 and resumes — slice-1b proven; bus+PIT live). If it
-   stops with `event=0x...`, paste the `info=`/`bytes@CS:IP`/`VTIB[5A8..]` dump and I'll adjust. Also
-   run `present_demo.exe` to eyeball the windowed + fullscreen DirectDraw blit (Alt+Enter / Esc).
-   *(All slices 1b/3/4/merge/keyboard are now VM-confirmed; the VM gate is a hot-swapped CD —
-   `vm/test.iso` via QMP — read back with `screendump`; force XP to re-read by re-opening D:.)*
-2. **Next code-side options:** (a) **graphics modes** — map the A0000/B8000 aperture as RAM in
-   `v86_setup_memory` so direct-framebuffer programs work, render mode 13h (320×200×256) + DAC, then
-   VESA banked; (b) **extended keys + mouse** — WM_KEYDOWN→scancode (ascii=0) + INT 33h.
-3. **VDD interrupt/IRQ delivery (needs VM):** install PIT INT 08h/1Ah as IVT BOP stubs (like INT 21h)
-   + real IRQ0→INT 8 via the kernel ICA; then INT 08h's INT 1Ch chain + PIC EOI (so the PIT ticks live).
-4. *M2 best-effort follow-up (not blocking):* CSRSS multi-call arg recovery + exit-to-shell notify;
-   confirm `mem.exe` past `Parse Error 1`. VM gate: `gate-clean.bat argtest.com HELLO` / `mem.exe`.
+**Step 2 — expand the DOS layer (iterate against the demos):**
+1. **INT 21h surface** — likely date/time `AH=2A/2B/2C/2D`, FindFirst/Next `4E/4F`, get/set DTA
+   `1A/2F`, `AH=4B` exec (if any), free-space `36`, etc. — implement whatever the log shows.
+2. **x87 FPU init** — QuickBASIC links the floating runtime; missing FPU setup throws `R6002 - floating
+   point not loaded`. V86 may need the FPU enabled / a no-op `FINIT` path.
+3. **mode-12h MOV-store decoder** — extend `host_try_mem()` beyond STOSB/STOSW to MOV/ModRM stores so
+   QBasic SCREEN 12 (and arbitrary planar programs) paint.
+4. **INT 33h mouse** — the `MOUSE.EXE` demo needs it (UI mouse → INT 33h state).
+
+**Step 3 — live PIT IRQ delivery (needs VM):** install PIT INT 08h/1Ah as IVT BOP stubs + real
+IRQ0→INT 8 via the kernel ICA (so the off-VM-proven PIT ticks drive guests live).
+
+**Testing strategy (unchanged):** off-VM is the primary loop — `tools/dostest/run.sh` runs MCB
+**49/49**, bus **22/22**, PIT **19/19**, input **15/15**, video **33/33** instantly, no VM. The XP VM
+is the **manual integration gate** (hot-swapped `vm/test.iso` via QMP; read back with `screendump`;
+force XP to re-read the CD by re-opening D:). *M2 follow-up (not blocking):* CSRSS multi-call arg
+recovery + exit-to-shell notify; `mem.exe` past `Parse Error 1`.
 
 ## Environment notes
 

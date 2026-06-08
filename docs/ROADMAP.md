@@ -111,7 +111,7 @@ Per-step exit criteria:
   **MEMTEST PASS** (VM-confirmed via `gate-clean.bat`). Imports **KERNEL32 only**
   (`scripts/check-imports.sh`); off-VM battery 42/42. The `tools/vdmhost` spike is now reference-only.
 
-## M3 — Device model + video/input 🟡 STARTED
+## M3 — Device model + video/input 🟡 GRAPHICS DONE (DOS layer for real apps in progress)
 - [x] **Retire the `tools/vdmhost` spike** (clean host has parity) — done at M3 kickoff.
 - [x] Pluggable **VDD** interface (requirement #13) — clean `src/vdd/ntvdd.h` ABI + device bus
   (`vdd_bus.c`): claim ports / memory-window / interrupt / frame, services raise-IRQ / map-flat /
@@ -143,13 +143,28 @@ Per-step exit criteria:
 - [x] **Graphics mode 13h** (320×200×256) + **DAC palette** + the **video aperture A0000-BFFFF mapped
   as RAM** — **VM-CONFIRMED**: `vgademo.com` drew an `x XOR y` rainbow fractal (correct 2D addressing,
   direct A0000 writes, DAC palette) in the Luna window on the real CPU.
-- [ ] Video VDD: **VESA VBE 2.0** (banked) — 0x101/0x103/0x111 modes, INT 10h AX=4F00/01/02/05.
-- [ ] Planar mode 12h (640×480×16) — last/optional (latches + write modes).
+- [x] **Video VDD: VESA VBE 2.0** (banked) — **VM-CONFIRMED**: INT 10h AX=4F00/01/02/03/05, modes
+  0x100/0x101/0x103, 0x80000 VRAM window + bank select; `vesademo.com` drew a smooth scrolling gradient.
+- [x] **Planar mode 12h** (640×480×16) — **VM-CONFIRMED**: A0000 trapped via
+  `VirtualProtect(PAGE_NOACCESS)`; faulting stores decoded by `host_try_mem()` → `vga_planar_write`
+  (write modes 0–3, Map Mask, set/reset + bit-mask + ALU, 4 latches) → 4 plane buffers; `render_planar`
+  combines them. `vga12.com` drew the 16 horizontal colour bands. **Known gap:** the store decoder
+  handles only STOSB/STOSW (REP) — arbitrary MOV/ModRM stores (QBasic SCREEN 12) are TODO.
+- [x] **Presentation: windowed + fullscreen** (`present_ddraw.c`) — windowed GDI `StretchDIBits` from a
+  double-buffer snapshot + `WaitForVerticalBlank` + cursor-hide; fullscreen DirectDraw 7 flip (the
+  tear-free path; XP has no compositor). Pixels packed to the surface's real depth.
+- [x] **Host chrome** — merged windowed host (UI thread + present + 30Hz timer; V86 on the
+  VdmInitialize thread; `CRITICAL_SECTION` bus lock), full menu-bar scaffold + native comctl32 status
+  bar + Common-Controls 6.0 manifest (Luna). nasm animated demos confirm each mode.
 - [ ] VDD interrupt delivery: install VDD INT handlers as IVT BOP stubs + real IRQ0→INT 8 via the
   kernel ICA (so the off-VM-proven PIT ticks live; needs the VM).
+- [ ] **Run real DOS apps** (current focus) — fuller DOS layer driven by the 10 QuickBASIC
+  `demos/*.EXE`: more INT 21h services (date/time, FindFirst/Next, DTA…), x87 FPU init (R6002), the
+  mode-12h MOV-store decoder, INT 33h mouse. The host logs `INT21 AH=0x.. unhandled` to pinpoint gaps.
 - [ ] **Sound VDD** stub (the third device proving the ABI generalises; full audio is M7).
 - **Exit:** a DOS app with a text-mode UI (and a VGA graphics demo) runs in a themed DirectDraw
-  window, driven entirely through the pluggable VDD interface.
+  window, driven entirely through the pluggable VDD interface. *(Graphics path done; real-app DOS layer
+  in progress.)*
 
 ## M4 — Memory extensions ⬜
 - [ ] XMS, EMS, and **DPMI** (protected-mode DOS extenders, e.g. DOS/4GW titles)
