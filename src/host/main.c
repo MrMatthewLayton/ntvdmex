@@ -327,6 +327,7 @@ static DWORD WINAPI ui_thread(LPVOID arg)
     wc.lpfnWndProc = wnd_proc; wc.hInstance = hi;
     wc.hCursor = LoadCursorA(NULL, IDC_ARROW);
     wc.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1);
+    wc.hIcon = LoadIconA(hi, MAKEINTRESOURCEA(101));    /* IDI_MAINICON: title bar + taskbar */
     wc.lpszClassName = "NtvdmexHostWindow";
     if (!RegisterClassA(&wc)) return 1;
     rc.left = 0; rc.top = 0; rc.right = VID_FB_W; rc.bottom = VID_FB_H + PRESENT_STATUS_H;
@@ -425,39 +426,145 @@ static void a000_protect(int on)
         g_a000_prot = on;
 }
 
-/* Decode a faulting store into the protected A0000 window and run it through the
-   VGA planar write engine, then advance EIP. Handles STOSB/STOSW (incl. REP) --
-   the dominant fast-fill path; other store forms fall through (return 0 -> the
-   stop dump shows them, to grow the decoder later). */
+/* CPU-register access by x86 encoding, for the mode-12h memory decoder. */
+static const DWORD k_reg16_off[8] = {
+    VTIB_EAX, VTIB_ECX, VTIB_EDX, VTIB_EBX, VTIB_ESP, VTIB_EBP, VTIB_ESI, VTIB_EDI };
+static const DWORD k_reg8_off[4]  = { VTIB_EAX, VTIB_ECX, VTIB_EDX, VTIB_EBX };
+static uint16_t mt_get16(volatile BYTE *tib, int e) { return (uint16_t)VDM_REG(tib, k_reg16_off[e & 7]); }
+static void     mt_set16(volatile BYTE *tib, int e, uint16_t v) { VDM_SET16(tib, k_reg16_off[e & 7], v); }
+static uint8_t  mt_get8(volatile BYTE *tib, int e)
+{ DWORD v = VDM_REG(tib, k_reg8_off[e & 3]); return (uint8_t)((e < 4) ? v : (v >> 8)); }
+static void     mt_set8(volatile BYTE *tib, int e, uint8_t b)
+{ DWORD o = k_reg8_off[e & 3], v = VDM_REG(tib, o);
+  VDM_REG(tib, o) = (e < 4) ? ((v & 0xFFFFFF00u) | b) : ((v & 0xFFFF00FFu) | ((DWORD)b << 8)); }
+
+static void planar_w(DWORD lin, uint8_t b) { if (lin < A000_HI) vga_planar_write(&g_vid, lin - A000_LO, b); }
+static uint8_t planar_r(DWORD lin) { return (lin < A000_HI) ? vga_planar_read(&g_vid, lin - A000_LO) : 0; }
+
+/* Decode a faulting access to the protected A0000 window and run it through the
+   VGA planar engine, then advance EIP. Covers the forms QuickBASIC (and most DOS
+   graphics code) emits for mode 12h: STOSB/W + MOVSB/W (REP fills/blits), the
+   MOV r/m<->reg + MOV r/m,imm read-modify-write pixel pattern (a load faults too
+   -- it must load the VGA latches), and MOV AL/AX,moffs / moffs,AL/AX. 16-bit
+   addressing only (QB never uses 32-bit addr/operand here -> bail to the dump). */
 static int host_try_mem(volatile BYTE *tib)
 {
     DWORD cs = VDM_REG(tib, VTIB_CS) & 0xFFFF, ip = VDM_REG(tib, VTIB_EIP) & 0xFFFF;
     volatile BYTE *code = (volatile BYTE *)((cs << 4) + ip);
-    int i = 0, rep = 0; BYTE op;
+    int i = 0, rep = 0, segov = -1; BYTE op;
     if (!g_a000_prot) return 0;
-    while (i < 4) {                                   /* skip prefixes            */
+    while (i < 5) {                                   /* prefixes                 */
         BYTE b = code[i];
-        if (b == 0xF3 || b == 0xF2) { rep = 1; ++i; }
-        else if (b==0x26||b==0x2E||b==0x36||b==0x3E||b==0x64||b==0x65||b==0x66||b==0x67) ++i;
+        if      (b == 0xF3 || b == 0xF2) { rep = 1; ++i; }
+        else if (b == 0x26) { segov = VTIB_ES; ++i; }
+        else if (b == 0x2E) { segov = VTIB_CS; ++i; }
+        else if (b == 0x36) { segov = VTIB_SS; ++i; }
+        else if (b == 0x3E) { segov = VTIB_DS; ++i; }
+        else if (b == 0x64) { segov = VTIB_FS; ++i; }
+        else if (b == 0x65) { segov = VTIB_GS; ++i; }
+        else if (b == 0x66 || b == 0x67) return 0;    /* 32-bit op/addr: not from QB */
         else break;
     }
     op = code[i];
-    if (op == 0xAA || op == 0xAB) {                   /* STOSB / STOSW (ES:DI)    */
+
+    /* ---- string ops (no ModRM) -------------------------------------------- */
+    if (op == 0xAA || op == 0xAB) {                   /* STOSB/STOSW -> ES:DI     */
         DWORD es = VDM_REG(tib, VTIB_ES) & 0xFFFF, di = VDM_REG(tib, VTIB_EDI) & 0xFFFF;
         DWORD lin = (es << 4) + di, cx = rep ? (VDM_REG(tib, VTIB_ECX) & 0xFFFF) : 1;
         DWORD eax = VDM_REG(tib, VTIB_EAX), n; int wsz = (op == 0xAB) ? 2 : 1;
         if (lin < A000_LO || lin >= A000_HI) return 0;
         EnterCriticalSection(&g_lock);
         for (n = 0; n < cx; ++n) {
-            DWORD a = lin + n * wsz;
-            if (a >= A000_HI) break;
-            vga_planar_write(&g_vid, a - A000_LO, (BYTE)eax);
-            if (wsz == 2 && a + 1 < A000_HI) vga_planar_write(&g_vid, a + 1 - A000_LO, (BYTE)(eax >> 8));
+            DWORD a = lin + n * wsz; if (a >= A000_HI) break;
+            planar_w(a, (BYTE)eax);
+            if (wsz == 2) planar_w(a + 1, (BYTE)(eax >> 8));
         }
         LeaveCriticalSection(&g_lock);
         VDM_SET16(tib, VTIB_EDI, (di + cx * wsz) & 0xFFFF);
         if (rep) VDM_SET16(tib, VTIB_ECX, 0);
         VDM_REG(tib, VTIB_EIP) = (ip + i + 1) & 0xFFFF;
+        return 1;
+    }
+    if (op == 0xA4 || op == 0xA5) {                   /* MOVSB/MOVSW: src -> ES:DI */
+        DWORD sseg = VDM_REG(tib, (segov >= 0) ? (DWORD)segov : VTIB_DS) & 0xFFFF;
+        DWORD es = VDM_REG(tib, VTIB_ES) & 0xFFFF;
+        DWORD si = VDM_REG(tib, VTIB_ESI) & 0xFFFF, di = VDM_REG(tib, VTIB_EDI) & 0xFFFF;
+        DWORD dlin = (es << 4) + di, cx = rep ? (VDM_REG(tib, VTIB_ECX) & 0xFFFF) : 1, n;
+        int wsz = (op == 0xA5) ? 2 : 1;
+        if (dlin < A000_LO || dlin >= A000_HI) return 0;
+        EnterCriticalSection(&g_lock);
+        for (n = 0; n < cx; ++n) {
+            DWORD s = (sseg << 4) + ((si + n * wsz) & 0xFFFF), d = (es << 4) + ((di + n * wsz) & 0xFFFF);
+            if (d >= A000_HI) break;
+            planar_w(d, *(volatile BYTE *)s);
+            if (wsz == 2) planar_w(d + 1, *(volatile BYTE *)(s + 1));
+        }
+        LeaveCriticalSection(&g_lock);
+        VDM_SET16(tib, VTIB_ESI, (si + cx * wsz) & 0xFFFF);
+        VDM_SET16(tib, VTIB_EDI, (di + cx * wsz) & 0xFFFF);
+        if (rep) VDM_SET16(tib, VTIB_ECX, 0);
+        VDM_REG(tib, VTIB_EIP) = (ip + i + 1) & 0xFFFF;
+        return 1;
+    }
+    if (op >= 0xA0 && op <= 0xA3) {                   /* MOV AL/AX,moffs / moffs,AL/AX */
+        uint16_t off = (uint16_t)(code[i + 1] | (code[i + 2] << 8));
+        DWORD seg = VDM_REG(tib, (segov >= 0) ? (DWORD)segov : VTIB_DS) & 0xFFFF;
+        DWORD lin = (seg << 4) + off; int wide = (op & 1);
+        if (lin < A000_LO || lin >= A000_HI) return 0;
+        EnterCriticalSection(&g_lock);
+        if (op <= 0xA1) {                             /* load AL/AX               */
+            uint8_t b0 = planar_r(lin);
+            if (!wide) mt_set8(tib, 0, b0);
+            else mt_set16(tib, 0, (uint16_t)(b0 | (planar_r(lin + 1) << 8)));
+        } else {                                      /* store AL/AX              */
+            uint16_t ax = mt_get16(tib, 0);
+            planar_w(lin, (uint8_t)ax);
+            if (wide) planar_w(lin + 1, (uint8_t)(ax >> 8));
+        }
+        LeaveCriticalSection(&g_lock);
+        VDM_REG(tib, VTIB_EIP) = (ip + i + 3) & 0xFFFF;
+        return 1;
+    }
+
+    /* ---- ModRM forms: 88/89 store reg, 8A/8B load reg, C6/C7 store imm ----- */
+    if (op == 0x88 || op == 0x89 || op == 0x8A || op == 0x8B || op == 0xC6 || op == 0xC7) {
+        BYTE modrm = code[i + 1];
+        int mod = modrm >> 6, reg = (modrm >> 3) & 7, rm = modrm & 7;
+        int disp_len, wide = (op == 0x89 || op == 0x8B || op == 0xC7), bp_based = 0;
+        uint16_t ea = 0; DWORD seg, lin; int instr_len, imm_off;
+        if (mod == 3) return 0;                        /* register operand, no memory */
+        { uint16_t BX = mt_get16(tib, 3), BP = mt_get16(tib, 5),
+                   SI = mt_get16(tib, 6), DI = mt_get16(tib, 7);
+          switch (rm) {
+          case 0: ea = (uint16_t)(BX + SI); break;  case 1: ea = (uint16_t)(BX + DI); break;
+          case 2: ea = (uint16_t)(BP + SI); bp_based = 1; break;
+          case 3: ea = (uint16_t)(BP + DI); bp_based = 1; break;
+          case 4: ea = SI; break;                   case 5: ea = DI; break;
+          case 6: if (mod == 0) ea = 0; else { ea = BP; bp_based = 1; } break;
+          case 7: ea = BX; break; } }
+        disp_len = (mod == 1) ? 1 : (mod == 2 || (mod == 0 && rm == 6)) ? 2 : 0;
+        if (disp_len == 1) ea = (uint16_t)(ea + (int16_t)(signed char)code[i + 2]);
+        else if (disp_len == 2) ea = (uint16_t)(ea + (code[i + 2] | (code[i + 3] << 8)));
+        seg = VDM_REG(tib, (segov >= 0) ? (DWORD)segov : (bp_based ? VTIB_SS : VTIB_DS)) & 0xFFFF;
+        lin = (seg << 4) + ea;
+        if (lin < A000_LO || lin >= A000_HI) return 0;
+        imm_off = i + 2 + disp_len;
+        instr_len = imm_off + (op == 0xC6 ? 1 : op == 0xC7 ? (wide ? 2 : 1) : 0);
+
+        EnterCriticalSection(&g_lock);
+        if (op == 0x8A || op == 0x8B) {               /* LOAD reg <- planar (latches) */
+            uint8_t b0 = planar_r(lin);
+            if (!wide) mt_set8(tib, reg, b0);
+            else mt_set16(tib, reg, (uint16_t)(b0 | (planar_r(lin + 1) << 8)));
+        } else {                                      /* STORE planar <- reg/imm  */
+            uint16_t src = (op == 0xC6) ? code[imm_off]
+                         : (op == 0xC7) ? (uint16_t)(code[imm_off] | (code[imm_off + 1] << 8))
+                         : wide ? mt_get16(tib, reg) : mt_get8(tib, reg);
+            planar_w(lin, (uint8_t)src);
+            if (wide) planar_w(lin + 1, (uint8_t)(src >> 8));
+        }
+        LeaveCriticalSection(&g_lock);
+        VDM_REG(tib, VTIB_EIP) = (ip + instr_len) & 0xFFFF;
         return 1;
     }
     return 0;
@@ -662,15 +769,11 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         /* Route the BOP by its number: 0x10 -> INT 10h, 0x16 -> INT 16h (both via
            the bus), else INT 21h. */
         if ((VDM_REG(tib, VTIB_EVENT_INFO) & 0xFF) == 0x10) {
-            ntvdd_regs r; uint8_t ah10, al10; regs_load(&r, tib);
-            ah10 = r_ah(&r); al10 = r_al(&r);
+            ntvdd_regs r; regs_load(&r, tib);
             EnterCriticalSection(&g_lock);
             vdd_bus_deliver_int(&g_bus, 0x10, &r);
             LeaveCriticalSection(&g_lock);
             regs_store(&r, tib);
-            p = zput(p, "  INT10 AH=0x"); p = zhex(p, ah10);
-            p = zput(p, " AL=0x"); p = zhex(p, al10); p = zput(p, "\r\n");
-            log_append(LOG_PATH, base, p); p = base;
             a000_protect(vdd_video_planar_active(&g_vid));   /* trap A0000 in mode 12h */
             VDM_REG(tib, VTIB_EIP) += 3;
             continue;

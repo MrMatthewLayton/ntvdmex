@@ -164,6 +164,26 @@ static void vesa(video_state *st, ntvdd_regs *r)
     }
 }
 
+/* Render an 8x16 glyph into the mode-12h bit-planes at text cell (col,row), so
+   BIOS character output (INT 10h AH=09/0A/0E) shows up in graphics mode --
+   QuickBASIC draws SCREEN 12 text exactly this way (LOCATE -> AH=02, then AH=09).
+   fg/bg are 4-bit colour indices; each glyph row maps to one byte per plane. */
+static void glyph_12h(video_state *st, int col, int row, uint8_t ch, uint8_t fg, uint8_t bg)
+{
+    const uint8_t *gl = vga_font_8x16[ch];
+    int gy, p;
+    if (col < 0 || row < 0 || col >= (VID_G12_W / 8) || (row * 16 + 15) >= VID_G12_H) return;
+    for (gy = 0; gy < 16; ++gy) {
+        uint8_t bits = gl[gy];
+        uint32_t off = (uint32_t)(row * 16 + gy) * (VID_G12_W / 8) + (uint32_t)col;
+        for (p = 0; p < 4; ++p) {
+            uint8_t fgb = ((fg >> p) & 1) ? 0xFF : 0x00;
+            uint8_t bgb = ((bg >> p) & 1) ? 0xFF : 0x00;
+            st->plane[p][off] = (uint8_t)((bits & fgb) | ((uint8_t)~bits & bgb));
+        }
+    }
+}
+
 /* INT 10h text + mode + palette services. */
 static void int10(void *self, ntvdd_regs *r)
 {
@@ -179,6 +199,7 @@ static void int10(void *self, ntvdd_regs *r)
         } else if (st->mode == 0x12) {                /* 640x480x16 planar       */
             int p, i;
             for (p = 0; p < 4; ++p) for (i = 0; i < VID_PLANE_SIZE; ++i) st->plane[p][i] = 0;
+            st->cols = 80; st->rows = 30;             /* 80x30 text cells (8x16) */
         } else {                                      /* text                    */
             st->cols = VID_COLS; st->rows = VID_ROWS; clear_text(st, 0x07);
         }
@@ -199,6 +220,8 @@ static void int10(void *self, ntvdd_regs *r)
         int c = st->cur_col, rr = st->cur_row; if (!n) n = 1;
         while (n-- && rr < st->rows) {
             uint8_t *p = cell(st, rr, c); p[0] = al; if (ah == 0x09) p[1] = attr;
+            if (st->mode == 0x12)                     /* draw the glyph as pixels */
+                glyph_12h(st, c, rr, al, (uint8_t)(attr & 0x0F), (uint8_t)((attr >> 4) & 0x0F));
             if (++c >= st->cols) { c = 0; if (++rr >= st->rows) break; }
         }
         break; }
@@ -218,7 +241,12 @@ static void int10(void *self, ntvdd_regs *r)
             }
         }
         break;
-    case 0x0E: teletype(st, al); break;
+    case 0x0E:                                        /* teletype                */
+        if (st->mode == 0x12 && al >= 0x20) {         /* graphics: draw glyph + advance */
+            glyph_12h(st, st->cur_col, st->cur_row, al, (uint8_t)(r_bx(r) & 0x0F), 0);
+            advance(st);
+        } else teletype(st, al);
+        break;
     case 0x0F: s_ax(r, (uint16_t)((st->cols << 8) | st->mode)); s_bx(r, (uint16_t)(st->page << 8)); break;
     case 0x10:                                        /* palette / DAC            */
         if (al == 0x10) {                             /* set one DAC register     */

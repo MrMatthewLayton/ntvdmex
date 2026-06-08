@@ -7,3 +7,9 @@
 #ifndef NTVDMEX_NO_MANIFEST
 1 24 "ntvdmex.manifest"
 #endif
+
+/* Application icon -- shown by the shell on ntvdmhost.exe and (via the window
+   class) in the title bar + taskbar. The lowest-numbered icon is the one the
+   shell uses for the executable. */
+#define IDI_MAINICON 101
+IDI_MAINICON ICON "MAINICON.ico"
