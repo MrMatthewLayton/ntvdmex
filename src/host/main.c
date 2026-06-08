@@ -321,13 +321,13 @@ static void regs_store(ntvdd_regs *r, volatile BYTE *tib)
 /* Decode + service a V86 IN/OUT that #GP-faulted (event 2), dispatch it to the
    bus, and advance EIP past the instruction so the guest resumes. Returns 1 if
    the faulting instruction was a (supported) I/O op we handled, 0 if it was a
-   genuine GP fault the caller should stop on. Appends a trace line via *tpp. */
-static int host_try_io(volatile BYTE *tib, vdd_bus *bus, char **tpp)
+   genuine GP fault the caller should stop on. No per-call logging -- I/O traps
+   are hot (a palette set is ~768 OUTs); flushing the trace file each one stalls. */
+static int host_try_io(volatile BYTE *tib, vdd_bus *bus)
 {
     DWORD cs = VDM_REG(tib, VTIB_CS)  & 0xFFFF;
     DWORD ip = VDM_REG(tib, VTIB_EIP) & 0xFFFF;
     volatile BYTE *code = (volatile BYTE *)((cs << 4) + ip);   /* absolute V86 */
-    char *p = *tpp;
     int i = 0, opsize = 2, is_in, width, used_dx, len;
     BYTE op; uint16_t port; uint32_t val, eax;
 
@@ -358,18 +358,11 @@ static int host_try_io(volatile BYTE *tib, vdd_bus *bus, char **tpp)
         if (width == 1)      VDM_REG(tib, VTIB_EAX) = (eax & 0xFFFFFF00u) | (val & 0xFF);
         else if (width == 2) VDM_REG(tib, VTIB_EAX) = (eax & 0xFFFF0000u) | (val & 0xFFFF);
         else                 VDM_REG(tib, VTIB_EAX) = val;
-        p = zput(p, "  IO in  port=0x"); p = zhex(p, port);
-        p = zput(p, " w="); p = zhex(p, (unsigned)width);
-        p = zput(p, " -> 0x"); p = zhex(p, val); p = zput(p, "\r\n");
     } else {
         val = (width == 1) ? (eax & 0xFF) : (width == 2) ? (eax & 0xFFFF) : eax;
         vdd_bus_io(bus, port, (uint8_t)width, 0, &val);
-        p = zput(p, "  IO out port=0x"); p = zhex(p, port);
-        p = zput(p, " w="); p = zhex(p, (unsigned)width);
-        p = zput(p, " val=0x"); p = zhex(p, val); p = zput(p, "\r\n");
     }
     VDM_REG(tib, VTIB_EIP) = (ip + len) & 0xFFFF;          /* step past I/O    */
-    *tpp = p;
     return 1;
 }
 
@@ -393,11 +386,11 @@ static void a000_protect(int on)
    VGA planar write engine, then advance EIP. Handles STOSB/STOSW (incl. REP) --
    the dominant fast-fill path; other store forms fall through (return 0 -> the
    stop dump shows them, to grow the decoder later). */
-static int host_try_mem(volatile BYTE *tib, char **tpp)
+static int host_try_mem(volatile BYTE *tib)
 {
     DWORD cs = VDM_REG(tib, VTIB_CS) & 0xFFFF, ip = VDM_REG(tib, VTIB_EIP) & 0xFFFF;
     volatile BYTE *code = (volatile BYTE *)((cs << 4) + ip);
-    int i = 0, rep = 0; BYTE op; char *p = *tpp;
+    int i = 0, rep = 0; BYTE op;
     if (!g_a000_prot) return 0;
     while (i < 4) {                                   /* skip prefixes            */
         BYTE b = code[i];
@@ -422,9 +415,6 @@ static int host_try_mem(volatile BYTE *tib, char **tpp)
         VDM_SET16(tib, VTIB_EDI, (di + cx * wsz) & 0xFFFF);
         if (rep) VDM_SET16(tib, VTIB_ECX, 0);
         VDM_REG(tib, VTIB_EIP) = (ip + i + 1) & 0xFFFF;
-        p = zput(p, "  MEM planar stos off=0x"); p = zhex(p, lin - A000_LO);
-        p = zput(p, " n=0x"); p = zhex(p, cx); p = zput(p, "\r\n");
-        *tpp = p;
         return 1;
     }
     return 0;
@@ -599,11 +589,10 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         if (ev == VDM_EVENT_IO || ev == VDM_EVENT_GPFAULT) {
             int handled;
             EnterCriticalSection(&g_lock);
-            handled = host_try_io(tib, &g_bus, &p);
+            handled = host_try_io(tib, &g_bus);     /* no per-call logging (hot path) */
             LeaveCriticalSection(&g_lock);
-            if (handled) { log_append(LOG_PATH, base, p); p = base; continue; }
-            /* not I/O -> maybe a direct A0000 planar write (mode 12h trap) */
-            if (host_try_mem(tib, &p)) { log_append(LOG_PATH, base, p); p = base; continue; }
+            if (handled) continue;
+            if (host_try_mem(tib)) continue;        /* direct A0000 planar write       */
         }
         if (ev != VDM_EVENT_BOP) {
             DWORD csv = VDM_REG(tib, VTIB_CS) & 0xFFFF;
