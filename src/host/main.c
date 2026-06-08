@@ -114,6 +114,47 @@ static void host_set_flags(volatile BYTE *tib, uint8_t cf, uint8_t zf)
 static char g_progname[64] = "(none)";      /* shown in the status bar          */
 static volatile int g_title_dirty = 1;      /* UI thread re-applies the caption  */
 
+/* Mouse state shared UI thread -> V86 thread (INT 33h). Position is in guest
+   pixels (mapped from the window client); buttons: bit0 L, bit1 R, bit2 M. */
+static volatile LONG g_ms_x = 320, g_ms_y = 240, g_ms_btn = 0;
+
+/* INT 33h mouse driver (functions DOS apps actually use). Cursor visibility is
+   tracked but no host cursor is drawn -- apps in graphics mode draw their own. */
+static void mouse_int33(volatile BYTE *tib)
+{
+    static LONG last_x = 320, last_y = 240;             /* for AX=0B motion (V86 thread only) */
+    DWORD ax = VDM_REG(tib, VTIB_EAX) & 0xFFFF;
+    LONG x = g_ms_x, y = g_ms_y, b = g_ms_btn;
+    switch (ax) {
+    case 0x0000:                                        /* reset + get status      */
+        VDM_SET16(tib, VTIB_EAX, 0xFFFF);               /* driver installed        */
+        VDM_SET16(tib, VTIB_EBX, 0x0002);               /* 2 buttons               */
+        break;
+    case 0x0001: case 0x0002: break;                    /* show / hide cursor      */
+    case 0x0003:                                        /* get position + buttons  */
+        VDM_SET16(tib, VTIB_ECX, (WORD)x);
+        VDM_SET16(tib, VTIB_EDX, (WORD)y);
+        VDM_SET16(tib, VTIB_EBX, (WORD)b);
+        break;
+    case 0x0004:                                        /* set cursor position     */
+        InterlockedExchange(&g_ms_x, (LONG)(VDM_REG(tib, VTIB_ECX) & 0xFFFF));
+        InterlockedExchange(&g_ms_y, (LONG)(VDM_REG(tib, VTIB_EDX) & 0xFFFF));
+        break;
+    case 0x0005: case 0x0006:                           /* button press/release info */
+        VDM_SET16(tib, VTIB_EAX, (WORD)b);
+        VDM_SET16(tib, VTIB_EBX, 0);                    /* 0 presses since last call */
+        VDM_SET16(tib, VTIB_ECX, (WORD)x);
+        VDM_SET16(tib, VTIB_EDX, (WORD)y);
+        break;
+    case 0x000B:                                        /* read relative motion    */
+        VDM_SET16(tib, VTIB_ECX, (WORD)((x - last_x) * 8));   /* ~8 mickeys / pixel */
+        VDM_SET16(tib, VTIB_EDX, (WORD)((y - last_y) * 8));
+        last_x = x; last_y = y;
+        break;
+    default: break;                                     /* 07/08 range, 0C handler, ...: accept */
+    }
+}
+
 enum {                                       /* wired command IDs                */
     IDM_STUB = 1,                            /* every not-yet-wired item          */
     IDM_FILE_EXIT, IDM_FILE_CLOSEPROG,
@@ -306,6 +347,28 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
         LeaveCriticalSection(&g_lock);
         if (g_key_event) SetEvent(g_key_event);
         return 0;
+    case WM_MOUSEMOVE:                   /* map client -> guest pixels, + buttons */
+    case WM_LBUTTONDOWN: case WM_LBUTTONUP:
+    case WM_RBUTTONDOWN: case WM_RBUTTONUP:
+    case WM_MBUTTONDOWN: case WM_MBUTTONUP: {
+        RECT rc; int cw, ch, fw, fh; LONG b = 0;
+        fw = g_vid.frame.w ? (int)g_vid.frame.w : 640;
+        fh = g_vid.frame.h ? (int)g_vid.frame.h : 480;
+        GetClientRect(h, &rc);
+        cw = rc.right; ch = rc.bottom - (g_pd.status_h ? g_pd.status_h : PRESENT_STATUS_H);
+        if (cw < 1) cw = 1;
+        if (ch < 1) ch = 1;
+        { int fx = (short)LOWORD(lp) * fw / cw, fy = (short)HIWORD(lp) * fh / ch;
+          if (fx < 0) fx = 0;
+          else if (fx >= fw) fx = fw - 1;
+          if (fy < 0) fy = 0;
+          else if (fy >= fh) fy = fh - 1;
+          InterlockedExchange(&g_ms_x, fx); InterlockedExchange(&g_ms_y, fy); }
+        if (wp & MK_LBUTTON) b |= 1;
+        if (wp & MK_RBUTTON) b |= 2;
+        if (wp & MK_MBUTTON) b |= 4;
+        InterlockedExchange(&g_ms_btn, b);
+        return 0; }
     case WM_DESTROY:
         InterlockedExchange(&g_running, 0);
         if (g_key_event) SetEvent(g_key_event);   /* unblock the V86 thread        */
@@ -583,6 +646,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     static const BYTE bop[] = { VDM_BOP0, VDM_BOP1, 0x20, 0xCF };  /* BOP 0x20 ; iret */
     static const BYTE bop10[] = { VDM_BOP0, VDM_BOP1, 0x10, 0xCF }; /* BOP 0x10 ; iret */
     static const BYTE bop16[] = { VDM_BOP0, VDM_BOP1, 0x16, 0xCF }; /* BOP 0x16 ; iret */
+    static const BYTE bop33[] = { VDM_BOP0, VDM_BOP1, 0x33, 0xCF }; /* BOP 0x33 ; iret */
     HANDLE ui = NULL;
 
     (void)hInst; (void)hPrev; (void)lpCmd; (void)nShow;
@@ -688,6 +752,9 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     for (i = 0; i < sizeof(bop16); ++i) hdlr[0x28 + i] = bop16[i];  /* INT 16h stub */
     *(volatile WORD *)0x58 = 0x0028;                        /* IVT[0x16].offset    */
     *(volatile WORD *)0x5A = DOS_HDLR_SEG;                  /* IVT[0x16].segment   */
+    for (i = 0; i < sizeof(bop33); ++i) hdlr[0x30 + i] = bop33[i];  /* INT 33h stub */
+    *(volatile WORD *)(0x33 * 4)     = 0x0030;              /* IVT[0x33].offset    */
+    *(volatile WORD *)(0x33 * 4 + 2) = DOS_HDLR_SEG;        /* IVT[0x33].segment   */
 
     dos_psp_build(NULL, DOS_PSP_SEG, DOS_ENV_SEG, DOS_MEM_TOP);
     dos_env_build(NULL, DOS_ENV_SEG, progpath[0] ? progpath : "C:\\PROGRAM.COM");  /* M2.5: env */
@@ -789,6 +856,11 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             }
             regs_store(&r, tib);
             host_set_flags(tib, r.cf, r.zf);
+            VDM_REG(tib, VTIB_EIP) += 3;
+            continue;
+        }
+        if ((VDM_REG(tib, VTIB_EVENT_INFO) & 0xFF) == 0x33) {   /* INT 33h mouse  */
+            mouse_int33(tib);
             VDM_REG(tib, VTIB_EIP) += 3;
             continue;
         }

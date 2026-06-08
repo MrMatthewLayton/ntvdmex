@@ -86,6 +86,13 @@ def main():
         do(f, {"execute": "input-send-event", "arguments": {"events": [
             {"type": "btn", "data": {"button": "left", "down": False}}]}})
         print("dragged", (x1, y1), "->", (x2, y2))
+    elif a[0] == "move":                               # move pointer (no click) to native px x y
+        W, H = 1024, 768
+        px, py = int(a[1]), int(a[2])
+        do(f, {"execute": "input-send-event", "arguments": {"events": [
+            {"type": "abs", "data": {"axis": "x", "value": px * 32767 // W}},
+            {"type": "abs", "data": {"axis": "y", "value": py * 32767 // H}}]}})
+        print("moved", px, py)
     elif a[0] == "cmd":
         print(do(f, json.loads(a[1])))
     s.close()
