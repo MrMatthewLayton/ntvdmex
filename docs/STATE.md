@@ -259,8 +259,11 @@ BLIT drew nothing; implemented 10h/11h + made the default report "no key".
 
 Mode-12h pixel-plot speed is a closed question (the wall above) — **do not** keep adding interpreter
 opcodes for it. Open work, in rough priority:
-1. **MOUSE** demo end-to-end (INT 33h is in; it's a 12h pixel demo so expect slow-but-correct — verify
-   it runs and the cursor tracks).
+1. ~~MOUSE end-to-end~~ **DONE (2026-06-09, VM-confirmed).** INT 33h now has a **host-drawn arrow
+   cursor** (overlay in the present path when the hide-count is 0; reset→hidden, AX=1 show / AX=2 hide).
+   `mousetst.com` (menu 13) confirms it: the arrow tracks the host mouse and holding the left button
+   paints pixels (position + buttons via INT 33h AX=03). Note MOUSE.EXE itself only inits+shows+exits
+   (no tracking loop, cursor-draw commented out) — mousetst is the real interactive test.
 2. **Sweep the demos for any remaining INT 21h / INT 10h gaps** unrelated to 12h speed.
 3. ~~Live PIT IRQ delivery~~ **DONE (2026-06-09, VM-confirmed).** PIT raises IRQ0 on real-elapsed-time
    clocking; the service loop synthesises the real-mode INT 08h dispatch (push FLAGS/CS/IP, vector via

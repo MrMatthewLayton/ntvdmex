@@ -142,9 +142,11 @@ static volatile int g_title_dirty = 1;      /* UI thread re-applies the caption 
 /* Mouse state shared UI thread -> V86 thread (INT 33h). Position is in guest
    pixels (mapped from the window client); buttons: bit0 L, bit1 R, bit2 M. */
 static volatile LONG g_ms_x = 320, g_ms_y = 240, g_ms_btn = 0;
+static volatile LONG g_ms_hidden = 1;       /* INT 33h cursor hide-count; 0 => visible */
 
-/* INT 33h mouse driver (functions DOS apps actually use). Cursor visibility is
-   tracked but no host cursor is drawn -- apps in graphics mode draw their own. */
+/* INT 33h mouse driver (functions DOS apps actually use). The host draws the
+   cursor (overlay in the present path) when the hide-count is 0, so apps that
+   rely on the driver cursor (the common case) get a visible pointer. */
 static void mouse_int33(volatile BYTE *tib)
 {
     static LONG last_x = 320, last_y = 240;             /* for AX=0B motion (V86 thread only) */
@@ -154,8 +156,14 @@ static void mouse_int33(volatile BYTE *tib)
     case 0x0000:                                        /* reset + get status      */
         VDM_SET16(tib, VTIB_EAX, 0xFFFF);               /* driver installed        */
         VDM_SET16(tib, VTIB_EBX, 0x0002);               /* 2 buttons               */
+        InterlockedExchange(&g_ms_hidden, 1);           /* hidden until Show       */
         break;
-    case 0x0001: case 0x0002: break;                    /* show / hide cursor      */
+    case 0x0001:                                        /* show cursor (dec count) */
+        if (g_ms_hidden > 0) InterlockedDecrement(&g_ms_hidden);
+        break;
+    case 0x0002:                                        /* hide cursor (inc count) */
+        InterlockedIncrement(&g_ms_hidden);
+        break;
     case 0x0003:                                        /* get position + buttons  */
         VDM_SET16(tib, VTIB_ECX, (WORD)x);
         VDM_SET16(tib, VTIB_EDX, (WORD)y);
@@ -177,6 +185,29 @@ static void mouse_int33(volatile BYTE *tib)
         last_x = x; last_y = y;
         break;
     default: break;                                     /* 07/08 range, 0C handler, ...: accept */
+    }
+}
+
+/* Classic arrow cursor: 'o' = black outline (index 0), 'X' = white fill (15),
+   ' ' = transparent; hotspot at the top-left tip. Drawn into the 8bpp frame each
+   present -- the frame is re-rendered from VRAM every tick, so it leaves no trail. */
+static const char *const MS_CURSOR[16] = {
+    "o",          "oo",         "oXo",        "oXXo",
+    "oXXXo",      "oXXXXo",     "oXXXXXo",    "oXXXXXXo",
+    "oXXXXXXXo",  "oXXXXoooo",  "oXXoXo",     "oXo oXo",
+    "ooo  oXo",   "oo    oXo",  "      oXo",  "       oo",
+};
+static void overlay_cursor(uint8_t *px, int W, int H, int stride, int mx, int my)
+{
+    int row;
+    for (row = 0; row < 16; ++row) {
+        const char *s = MS_CURSOR[row]; int col, y = my + row;
+        if (y < 0 || y >= H) continue;
+        for (col = 0; s[col]; ++col) {
+            int x = mx + col; char c = s[col];
+            if (c == ' ' || x < 0 || x >= W) continue;
+            px[y * stride + x] = (c == 'o') ? 0 : 15;     /* black outline / white fill */
+        }
     }
 }
 
@@ -336,6 +367,9 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
           g_pit.frame_us = dms * 1000u; }
         EnterCriticalSection(&g_lock);
         vdd_bus_frame(&g_bus);          /* tick PIT + render into g_vid.frame       */
+        if (g_ms_hidden == 0 && g_vid.frame.bpp == 8 && g_vid.frame.pixels)
+            overlay_cursor((uint8_t *)g_vid.frame.pixels, g_vid.frame.w, g_vid.frame.h,
+                           (int)g_vid.frame.stride, g_ms_x, g_ms_y);   /* driver mouse cursor */
         present_ddraw_snapshot(&g_pd, &g_vid.frame);  /* consistent copy UNDER lock  */
         LeaveCriticalSection(&g_lock);
         present_ddraw_present(&g_pd);   /* vsync'd blit OUTSIDE the lock             */
