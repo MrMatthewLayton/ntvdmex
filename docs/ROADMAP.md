@@ -156,11 +156,17 @@ Per-step exit criteria:
 - [x] **Host chrome** — merged windowed host (UI thread + present + 30Hz timer; V86 on the
   VdmInitialize thread; `CRITICAL_SECTION` bus lock), full menu-bar scaffold + native comctl32 status
   bar + Common-Controls 6.0 manifest (Luna). nasm animated demos confirm each mode.
-- [ ] VDD interrupt delivery: install VDD INT handlers as IVT BOP stubs + real IRQ0→INT 8 via the
-  kernel ICA (so the off-VM-proven PIT ticks live; needs the VM).
-- [ ] **Run real DOS apps** (current focus) — fuller DOS layer driven by the 10 QuickBASIC
-  `demos/*.EXE`: more INT 21h services (date/time, FindFirst/Next, DTA…), x87 FPU init (R6002), the
-  mode-12h MOV-store decoder, INT 33h mouse. The host logs `INT21 AH=0x.. unhandled` to pinpoint gaps.
+- [x] **VDD interrupt delivery — live PIT timer IRQ** (2026-06-09, **VM-CONFIRMED**). IVT[8] BOP stub
+  (`BOP 08; CD 1C; IRET`) + IVT[1Ch]/[1Ah]; the service loop synthesises the real-mode INT 08h dispatch
+  when the guest's main-line IF is set (read from the pushed stack frame at SS:SP+4, since at our
+  control points the live EFLAGS IF is the in-handler value). `timertst.com` streams a dot per tick at
+  ~18 Hz. (We synthesise the dispatch in user mode rather than going through the kernel ICA delay
+  machinery — simpler and sufficient; documented in `log/2026-06-09.md`.)
+- [x] **Run real DOS apps** — all 10 QuickBASIC `demos/*.EXE` run (**VM-CONFIRMED**): AH=06 console I/O
+  + INT 10h VGA queries + port-3DA vsync + mode-12h glyph render + the MOV/XCHG store decoder + INT 33h
+  mouse (with a host-drawn cursor). Linear modes (13h/VESA/text) are fast; per-pixel 12h plotting is
+  slow by a documented wall (`research/hardware-vga-acceleration.md`). Two correctness fixes: the `XCHG`
+  pixel-store opcode and the INKEY$ enhanced-keyboard (INT 16h AH=10/11) phantom key.
 - [ ] **Sound VDD** stub (the third device proving the ABI generalises; full audio is M7).
 - **Exit:** a DOS app with a text-mode UI (and a VGA graphics demo) runs in a themed DirectDraw
   window, driven entirely through the pluggable VDD interface. *(Graphics path done; real-app DOS layer
