@@ -263,8 +263,15 @@ opcodes for it. Open work, in rough priority:
    it runs and the cursor tracks).
 2. **Sweep the demos for any remaining INT 21h / INT 10h gaps** unrelated to 12h speed.
 3. **Live PIT IRQ delivery (needs VM):** PIT INT 08h/1Ah as IVT BOP stubs + real IRQ0→INT 8 via the ICA.
-4. *(Only if 12h speed ever becomes a priority)* the non-interpreter options are a JIT/optimized hot path
-   or pattern-recognising QB's putpixel and shortcutting it — both bigger and out of scope now.
+4. *(Only if 12h speed ever becomes a priority)* hardware-accelerated VGA — full-screen handoff, or a
+   dedicated headless secondary VGA card as a planar "coprocessor" (window + hardware VGA at once).
+   Captured as future work in [research/hardware-vga-acceleration.md](research/hardware-vga-acceleration.md);
+   not planned. (Also: JIT hot path, or pattern-recognising QB's putpixel — same doc.)
+
+**Empirical basis (2026-06-09):** `tools/dostest/blitfast.asm` (menu option 11) draws the same random
+filled rectangles as QB's BLIT but via the efficient idiom (write-mode 2 + Map Mask + one `REP STOSB`
+per scanline → one fault/scanline). VM-confirmed visibly faster than BLIT — proving the 12h wall is the
+QuickBasic per-pixel method, and real `REP`-based 12h software is already fast on the existing path.
 
 **Testing strategy (unchanged):** off-VM is primary — `tools/dostest/run.sh` runs MCB **49/49**, bus
 **22/22**, PIT **19/19**, input **20/20**, video **34/34**, **interp 63/63** instantly, no VM. The XP VM
