@@ -27,6 +27,7 @@
 #include "vdd_pit.h"
 #include "vdd_video.h"
 #include "vdd_input.h"
+#include "vdd_speaker.h"
 #include "present_ddraw.h"
 
 #define LOG_PATH    "C:\\ntvdmex\\ntvdmhost.log"
@@ -43,6 +44,7 @@ static vdd_bus      g_bus;
 static pit_state    g_pit;       static ntvdd g_pit_dev;
 static video_state  g_vid;       static ntvdd g_vid_dev;
 static input_state  g_in;        static ntvdd g_in_dev;
+static speaker_state g_spk;      static ntvdd g_spk_dev;
 static present_ddraw g_pd;
 static volatile LONG g_irq0_pending = 0;    /* PIT raised IRQ0 (UI thread sets, V86 thread delivers) */
 static CRITICAL_SECTION g_lock;             /* serialises all bus dispatch       */
@@ -800,6 +802,9 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     vdd_bus_add(&g_bus, &g_vid_dev);
     g_in_dev = vdd_input_device(&g_in);
     vdd_bus_add(&g_bus, &g_in_dev);             /* keyboard: claims INT 16h      */
+    g_spk.pit = &g_pit;                         /* speaker tone <- PIT channel 2 */
+    g_spk_dev = vdd_speaker_device(&g_spk);
+    vdd_bus_add(&g_bus, &g_spk_dev);            /* PC speaker: claims port 0x61  */
     m.conout = host_conout; m.conctx = NULL;    /* DOS console out -> video      */
     m.conin  = host_conin;  m.cinctx = NULL;    /* DOS console in  <- keyboard   */
     m.coninnb = host_coninnb;                   /* AH=06 DL=FF non-blocking read */

@@ -111,7 +111,7 @@ Per-step exit criteria:
   **MEMTEST PASS** (VM-confirmed via `gate-clean.bat`). Imports **KERNEL32 only**
   (`scripts/check-imports.sh`); off-VM battery 42/42. The `tools/vdmhost` spike is now reference-only.
 
-## M3 — Device model + video/input 🟡 GRAPHICS DONE (DOS layer for real apps in progress)
+## M3 — Device model + video/input ✅ DONE (2026-06-09)
 - [x] **Retire the `tools/vdmhost` spike** (clean host has parity) — done at M3 kickoff.
 - [x] Pluggable **VDD** interface (requirement #13) — clean `src/vdd/ntvdd.h` ABI + device bus
   (`vdd_bus.c`): claim ports / memory-window / interrupt / frame, services raise-IRQ / map-flat /
@@ -167,10 +167,13 @@ Per-step exit criteria:
   mouse (with a host-drawn cursor). Linear modes (13h/VESA/text) are fast; per-pixel 12h plotting is
   slow by a documented wall (`research/hardware-vga-acceleration.md`). Two correctness fixes: the `XCHG`
   pixel-store opcode and the INKEY$ enhanced-keyboard (INT 16h AH=10/11) phantom key.
-- [ ] **Sound VDD** stub (the third device proving the ABI generalises; full audio is M7).
-- **Exit:** a DOS app with a text-mode UI (and a VGA graphics demo) runs in a themed DirectDraw
-  window, driven entirely through the pluggable VDD interface. *(Graphics path done; real-app DOS layer
-  in progress.)*
+- [x] **Sound VDD stub** (2026-06-09) — `src/vdd/vdd_speaker.c`: PC-speaker control port 0x61 + the tone
+  frequency from PIT channel 2 (channel-2 tracking added to `vdd_pit.c`). The third device *class* on the
+  bus, proving the VDD ABI generalises beyond timer/video/input. Reports active/Hz; **no audio yet — full
+  sound is M7.** Off-VM battery **13/13** (`speaker_test.c`).
+- **Exit:** ✅ **MET.** A DOS app with a text-mode UI (VS87) and VGA graphics demos run in a themed
+  DirectDraw window, driven entirely through the pluggable VDD interface (timer, video, input, speaker),
+  with a live timer IRQ and a working mouse. **M3 DONE.**
 
 ## M4 — Memory extensions ⬜
 - [ ] XMS, EMS, and **DPMI** (protected-mode DOS extenders, e.g. DOS/4GW titles)

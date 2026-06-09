@@ -32,11 +32,18 @@ typedef struct pit_state {
     uint64_t total_clocks;  /* monotonic PIT input clocks (for count reads)     */
     uint64_t accum;         /* clocks not yet turned into IRQ0 pulses           */
     uint32_t frame_us;      /* microseconds per bus frame tick                  */
+    uint16_t ch2_reload;    /* channel-2 reload (the PC-speaker tone divisor)   */
+    uint8_t  ch2_access;    /* channel-2 access mode (1=lo, 2=hi, 3=lo/hi)      */
+    uint8_t  ch2_wr_flip;   /* channel-2 lo/hi write phase                      */
 } pit_state;
 
 /* effective reload (0 means 65536 on the 8254). */
 static inline uint32_t pit_eff_reload(const pit_state *st)
 { return st->reload ? st->reload : 0x10000u; }
+
+/* Channel-2 output frequency in Hz (the PC-speaker tone); 0 if not programmed. */
+static inline uint32_t pit_ch2_hz(const pit_state *st)
+{ uint32_t r = st->ch2_reload ? st->ch2_reload : 0x10000u; return PIT_INPUT_HZ / r; }
 
 /* Build the device descriptor to hand to vdd_bus_add(). */
 int  vdd_pit_init(vdd_bus *b, void *self);

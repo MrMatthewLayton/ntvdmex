@@ -38,7 +38,11 @@ static void pit_out(void *self, uint16_t port, uint8_t w, uint32_t v)
     if (port == 0x43) {                      /* mode/command register           */
         uint8_t ch = (uint8_t)(val >> 6);
         uint8_t acc = (uint8_t)((val >> 4) & 3);
-        if (ch != 0) return;                 /* only channel 0 modelled         */
+        if (ch == 2) {                       /* channel 2 = PC-speaker tone     */
+            if (acc != 0) { st->ch2_access = acc; st->ch2_wr_flip = 0; }
+            return;                          /* (ch2 latch-count not modelled)  */
+        }
+        if (ch != 0) return;                 /* channels 1 (refresh) ignored    */
         if (acc == 0) {                      /* latch count command             */
             st->latch = pit_current_count(st);
             st->latched = 1; st->rd_flip = 0;
@@ -53,8 +57,16 @@ static void pit_out(void *self, uint16_t port, uint8_t w, uint32_t v)
             if (!st->wr_flip) { st->reload = (uint16_t)((st->reload & 0xFF00) | val); st->wr_flip = 1; }
             else { st->reload = (uint16_t)((st->reload & 0x00FF) | ((uint16_t)val << 8)); st->wr_flip = 0; }
         }
+    } else if (port == 0x42) {               /* channel-2 reload (speaker tone) */
+        uint8_t acc = st->ch2_access ? st->ch2_access : 3;
+        if (acc == 1) st->ch2_reload = (uint16_t)((st->ch2_reload & 0xFF00) | val);
+        else if (acc == 2) st->ch2_reload = (uint16_t)((st->ch2_reload & 0x00FF) | ((uint16_t)val << 8));
+        else {                               /* lo then hi                      */
+            if (!st->ch2_wr_flip) { st->ch2_reload = (uint16_t)((st->ch2_reload & 0xFF00) | val); st->ch2_wr_flip = 1; }
+            else { st->ch2_reload = (uint16_t)((st->ch2_reload & 0x00FF) | ((uint16_t)val << 8)); st->ch2_wr_flip = 0; }
+        }
     }
-    /* ports 0x41 (refresh) / 0x42 (speaker) not modelled */
+    /* port 0x41 (DRAM refresh) not modelled */
 }
 
 static void pit_in(void *self, uint16_t port, uint8_t w, uint32_t *val)

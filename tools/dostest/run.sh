@@ -47,6 +47,14 @@ cc -std=c99 -Wall -Wextra -Wno-unused-function -O0 -g \
 
 "$DIR/input_test"
 
+# M3 PC-speaker VDD battery (vdd_speaker.c + vdd_pit.c on the bus).
+cc -std=c99 -Wall -Wextra -Wno-unused-function -O0 -g \
+   -I "$DIR/../../src/vdd" \
+   -o "$DIR/speaker_test" "$DIR/speaker_test.c" \
+   "$DIR/../../src/vdd/vdd_speaker.c" "$DIR/../../src/vdd/vdd_pit.c" "$DIR/../../src/vdd/vdd_bus.c"
+
+"$DIR/speaker_test"
+
 # M3 mode-12h fill-loop interpreter battery (src/host/v86interp.h, flat memory).
 cc -std=c99 -Wall -Wextra -Wno-unused-function -O0 -g \
    -o "$DIR/interp_test" "$DIR/interp_test.c"
