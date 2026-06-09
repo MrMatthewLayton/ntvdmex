@@ -12,6 +12,7 @@ nasm -f bin "$DIR/demo13.asm"   -o "$DIR/vgademo.com"
 nasm -f bin "$DIR/demo12.asm"   -o "$DIR/vga12.com"
 nasm -f bin "$DIR/demovesa.asm" -o "$DIR/vesademo.com"
 nasm -f bin "$DIR/blitfast.asm" -o "$DIR/blitfast.com"   # 12h rects, efficient REP idiom (vs QB BLIT)
-for f in vgademo.com vga12.com vesademo.com blitfast.com; do
+nasm -f bin "$DIR/timertst.asm" -o "$DIR/timertst.com"   # PIT timer-IRQ test (INT 1Ch dots)
+for f in vgademo.com vga12.com vesademo.com blitfast.com timertst.com; do
     echo "  $f  ($(wc -c < "$DIR/$f") bytes)"
 done

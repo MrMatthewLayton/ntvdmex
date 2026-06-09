@@ -44,14 +44,39 @@ static pit_state    g_pit;       static ntvdd g_pit_dev;
 static video_state  g_vid;       static ntvdd g_vid_dev;
 static input_state  g_in;        static ntvdd g_in_dev;
 static present_ddraw g_pd;
-static int          g_irq_pending = -1;     /* last IRQ a VDD raised (spike obs) */
+static volatile LONG g_irq0_pending = 0;    /* PIT raised IRQ0 (UI thread sets, V86 thread delivers) */
 static CRITICAL_SECTION g_lock;             /* serialises all bus dispatch       */
 static HWND         g_hwnd;
 static HANDLE       g_key_event;            /* signalled when a key is pushed     */
 static volatile LONG g_running = 1;         /* 0 once the window is closed         */
 static HMENU        g_savedmenu;            /* stashed menu while hidden           */
 
-static void host_irq_sink(void *ctx, uint8_t irq) { (void)ctx; g_irq_pending = irq; }
+static void host_irq_sink(void *ctx, uint8_t irq) { (void)ctx; if (irq == 0) g_irq0_pending = 1; }
+
+/* Real/synthesised real-mode interrupt dispatch. The guest runs cooperatively
+   (we only regain control at event boundaries), so when a hardware IRQ becomes
+   pending and the guest's IF is set, we do here exactly what the CPU does on a
+   hardware interrupt: push FLAGS/CS/IP, clear IF+TF, and vector CS:IP through the
+   real-mode IVT. The guest's handler IRETs back normally. (`CD nn` software ints
+   still vector natively via VME; this is only for asynchronous IRQ delivery.) */
+static void pokew(DWORD lin, WORD v)
+{ volatile BYTE *m = (volatile BYTE *)0; m[lin] = (BYTE)v; m[lin + 1] = (BYTE)(v >> 8); }
+static WORD peekw(DWORD lin)
+{ const volatile BYTE *m = (const volatile BYTE *)0; return (WORD)(m[lin] | (m[lin + 1] << 8)); }
+
+static void inject_int(volatile BYTE *tib, unsigned vec)
+{
+    WORD ss = (WORD)VDM_REG(tib, VTIB_SS),  sp = (WORD)VDM_REG(tib, VTIB_ESP);
+    WORD cs = (WORD)VDM_REG(tib, VTIB_CS),  ip = (WORD)VDM_REG(tib, VTIB_EIP);
+    WORD fl = (WORD)VDM_REG(tib, VTIB_EFLAGS);     /* push the live frame's FLAGS */
+    sp -= 2; pokew(((DWORD)ss << 4) + sp, fl);     /* push FLAGS */
+    sp -= 2; pokew(((DWORD)ss << 4) + sp, cs);     /* push CS    */
+    sp -= 2; pokew(((DWORD)ss << 4) + sp, ip);     /* push IP    */
+    VDM_SET16(tib, VTIB_ESP, sp);
+    VDM_REG(tib, VTIB_EFLAGS) &= ~0x300u;          /* clear IF + TF (CPU does this) */
+    VDM_SET16(tib, VTIB_EIP, peekw(vec * 4));      /* IVT[vec].offset */
+    VDM_SET16(tib, VTIB_CS,  peekw(vec * 4 + 2));  /* IVT[vec].segment */
+}
 
 /* DOS console output (INT 21h AH=02/09/40) -> the video VDD teletype. */
 static void host_conout(void *ctx, uint8_t ch)
@@ -264,9 +289,9 @@ static HWND g_status;                        /* the native comctl32 status bar  
 
 /* Create the native status bar child + set its text; record its height so the
    video blit reserves that strip. */
-/* Window caption: "Virtual MS-DOS Prompt" idle, "... - PROG.EXE" while a program
-   runs. Safe to call from the V86 thread (SetWindowText posts WM_SETTEXT). */
-#define VDM_WIN_TITLE "Virtual MS-DOS Prompt"
+/* Window caption: "Windows XP Virtual DOS Machine" idle, "... - PROG.EXE" while a
+   program runs. Safe to call from the V86 thread (SetWindowText posts WM_SETTEXT). */
+#define VDM_WIN_TITLE "Windows XP Virtual DOS Machine"
 static void set_window_title(void)
 {
     char t[128]; char *p = t; const char *s = VDM_WIN_TITLE;
@@ -302,6 +327,13 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
     switch (msg) {
     case WM_TIMER:
         if (g_title_dirty) { set_window_title(); g_title_dirty = 0; }  /* apply on UI thread */
+        /* Drive the PIT from REAL elapsed time so the BIOS tick (0040:006C) and
+           INT 1Ah track wall-clock regardless of WM_TIMER jitter; clamp after a
+           stall so we don't flood a catch-up burst of ticks. */
+        { static DWORD last = 0; DWORD now = GetTickCount();
+          DWORD dms = last ? (now - last) : 16; last = now;
+          if (dms > 500) dms = 500;
+          g_pit.frame_us = dms * 1000u; }
         EnterCriticalSection(&g_lock);
         vdd_bus_frame(&g_bus);          /* tick PIT + render into g_vid.frame       */
         present_ddraw_snapshot(&g_pd, &g_vid.frame);  /* consistent copy UNDER lock  */
@@ -590,6 +622,12 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     static const BYTE bop10[] = { VDM_BOP0, VDM_BOP1, 0x10, 0xCF }; /* BOP 0x10 ; iret */
     static const BYTE bop16[] = { VDM_BOP0, VDM_BOP1, 0x16, 0xCF }; /* BOP 0x16 ; iret */
     static const BYTE bop33[] = { VDM_BOP0, VDM_BOP1, 0x33, 0xCF }; /* BOP 0x33 ; iret */
+    /* INT 08h (timer): tick via BOP, then chain INT 1Ch, then iret. INT 1Ch is a
+       bare iret by default (the user-timer hook a program may repoint). INT 1Ah
+       (BIOS time-of-day) is a plain BOP. */
+    static const BYTE bop08[] = { VDM_BOP0, VDM_BOP1, 0x08, 0xCD, 0x1C, 0xCF };
+    static const BYTE bop1c[] = { 0xCF };                           /* iret stub       */
+    static const BYTE bop1a[] = { VDM_BOP0, VDM_BOP1, 0x1A, 0xCF }; /* BOP 0x1A ; iret */
     HANDLE ui = NULL;
 
     (void)hInst; (void)hPrev; (void)lpCmd; (void)nShow;
@@ -698,6 +736,15 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     for (i = 0; i < sizeof(bop33); ++i) hdlr[0x30 + i] = bop33[i];  /* INT 33h stub */
     *(volatile WORD *)(0x33 * 4)     = 0x0030;              /* IVT[0x33].offset    */
     *(volatile WORD *)(0x33 * 4 + 2) = DOS_HDLR_SEG;        /* IVT[0x33].segment   */
+    for (i = 0; i < sizeof(bop08); ++i) hdlr[0x34 + i] = bop08[i];  /* INT 08h stub */
+    *(volatile WORD *)(0x08 * 4)     = 0x0034;              /* IVT[0x08].offset    */
+    *(volatile WORD *)(0x08 * 4 + 2) = DOS_HDLR_SEG;        /* IVT[0x08].segment   */
+    for (i = 0; i < sizeof(bop1c); ++i) hdlr[0x3A + i] = bop1c[i];  /* INT 1Ch iret */
+    *(volatile WORD *)(0x1C * 4)     = 0x003A;              /* IVT[0x1C].offset    */
+    *(volatile WORD *)(0x1C * 4 + 2) = DOS_HDLR_SEG;        /* IVT[0x1C].segment   */
+    for (i = 0; i < sizeof(bop1a); ++i) hdlr[0x3C + i] = bop1a[i];  /* INT 1Ah stub */
+    *(volatile WORD *)(0x1A * 4)     = 0x003C;              /* IVT[0x1A].offset    */
+    *(volatile WORD *)(0x1A * 4 + 2) = DOS_HDLR_SEG;        /* IVT[0x1A].segment   */
 
     dos_psp_build(NULL, DOS_PSP_SEG, DOS_ENV_SEG, DOS_MEM_TOP);
     dos_env_build(NULL, DOS_ENV_SEG, progpath[0] ? progpath : "C:\\PROGRAM.COM");  /* M2.5: env */
@@ -749,6 +796,27 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     (void)guard;
     { static uint32_t s_last_fault = 0; static int s_storm = 0;
     while (g_running) {
+        /* Deliver a pending PIT IRQ0 as INT 08h when the guest's main-line
+           interrupts are enabled. We regain control at event boundaries, almost
+           always inside a BOP stub (CS == DOS_HDLR_SEG) where the LIVE IF is the
+           handler's (cleared by the CD nn that vectored in) -- the guest's real
+           IF is the FLAGS the stub will IRET to, at SS:SP+4. Outside a stub
+           (e.g. an I/O fault from main-line) the live EFLAGS IF applies. Skip if
+           we're inside our own INT 08h stub, to avoid timer re-entrancy. */
+        if (g_irq0_pending) {
+            DWORD cs = VDM_REG(tib, VTIB_CS) & 0xFFFF, ip = VDM_REG(tib, VTIB_EIP) & 0xFFFF;
+            DWORD fl;
+            if (cs == DOS_HDLR_SEG) {
+                DWORD ss = VDM_REG(tib, VTIB_SS) & 0xFFFF, sp = VDM_REG(tib, VTIB_ESP) & 0xFFFF;
+                fl = peekw((ss << 4) + ((sp + 4) & 0xFFFF));   /* main-line FLAGS the stub returns to */
+            } else {
+                fl = VDM_REG(tib, VTIB_EFLAGS);
+            }
+            if ((fl & 0x200) && !(cs == DOS_HDLR_SEG && ip >= 0x34 && ip < 0x3A)) {
+                g_irq0_pending = 0;
+                inject_int(tib, 0x08);
+            }
+        }
         ev = v86_run(tib, &st);
         /* I/O port trap (event 0; VM-confirmed) or a generic GP fault (event 2):
            if the faulting instruction is an IN/OUT we can decode, service it via
@@ -817,6 +885,25 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         }
         if ((VDM_REG(tib, VTIB_EVENT_INFO) & 0xFF) == 0x33) {   /* INT 33h mouse  */
             mouse_int33(tib);
+            VDM_REG(tib, VTIB_EIP) += 3;
+            continue;
+        }
+        if ((VDM_REG(tib, VTIB_EVENT_INFO) & 0xFF) == 0x08) {   /* INT 08h timer tick */
+            ntvdd_regs r; regs_load(&r, tib);
+            EnterCriticalSection(&g_lock);
+            vdd_bus_deliver_int(&g_bus, 0x08, &r);  /* bump BIOS tick at 0040:006C */
+            LeaveCriticalSection(&g_lock);
+            regs_store(&r, tib);
+            VDM_REG(tib, VTIB_EIP) += 3;            /* -> CD 1C (chain user timer) */
+            continue;
+        }
+        if ((VDM_REG(tib, VTIB_EVENT_INFO) & 0xFF) == 0x1A) {   /* INT 1Ah BIOS time */
+            ntvdd_regs r; regs_load(&r, tib);
+            EnterCriticalSection(&g_lock);
+            vdd_bus_deliver_int(&g_bus, 0x1A, &r);
+            LeaveCriticalSection(&g_lock);
+            regs_store(&r, tib);
+            host_set_flags(tib, r.cf, r.zf);
             VDM_REG(tib, VTIB_EIP) += 3;
             continue;
         }

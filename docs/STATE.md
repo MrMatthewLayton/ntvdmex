@@ -262,7 +262,15 @@ opcodes for it. Open work, in rough priority:
 1. **MOUSE** demo end-to-end (INT 33h is in; it's a 12h pixel demo so expect slow-but-correct — verify
    it runs and the cursor tracks).
 2. **Sweep the demos for any remaining INT 21h / INT 10h gaps** unrelated to 12h speed.
-3. **Live PIT IRQ delivery (needs VM):** PIT INT 08h/1Ah as IVT BOP stubs + real IRQ0→INT 8 via the ICA.
+3. ~~Live PIT IRQ delivery~~ **DONE (2026-06-09, VM-confirmed).** PIT raises IRQ0 on real-elapsed-time
+   clocking; the service loop synthesises the real-mode INT 08h dispatch (push FLAGS/CS/IP, vector via
+   IVT[8]) when the guest's main-line IF is set. Key gotcha: at our control points we're almost always
+   *inside a BOP stub* (CS==DOS_HDLR_SEG), so the LIVE EFLAGS IF is the handler's (cleared); the guest's
+   real IF is the FLAGS the stub will IRET to, at **SS:SP+4** — gate on that. IVT[8]=`BOP 08; CD 1C;
+   IRET` (bump 0040:006C, chain user-timer), IVT[1Ch]=`IRET`, IVT[1Ah]=BOP→BIOS time. `timertst.com`
+   (menu 12) streams a dot per tick (~18 Hz). Minor caveat: the PIT clocks on the UI thread's WM_TIMER,
+   so opening the window menu (a modal loop) pauses ticks. Window title is now "Windows XP Virtual DOS
+   Machine - PROG.EXE".
 4. *(Only if 12h speed ever becomes a priority)* hardware-accelerated VGA — full-screen handoff, or a
    dedicated headless secondary VGA card as a planar "coprocessor" (window + hardware VGA at once).
    Captured as future work in [research/hardware-vga-acceleration.md](research/hardware-vga-acceleration.md);
