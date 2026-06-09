@@ -16,6 +16,9 @@
  *   - the fixed-width int types (uint8_t/uint16_t/uint32_t/int8_t/int16_t) + BYTE
  *   - uint8_t imem_r8(uint32_t lin);  void imem_w8(uint32_t lin, uint8_t v);
  *     (guest byte read/write; A0000 reads must load the VGA latches.)
+ *   - uint32_t iio_in(uint16_t port, int width);
+ *     void     iio_out(uint16_t port, int width, uint32_t val);
+ *     (port I/O dispatched to the device bus, for VGA-register-per-pixel loops.)
  * This keeps the interpreter host-agnostic so it can be unit-tested off-VM
  * against a flat memory array (see tools/dostest/interp_test.c).
  */
@@ -228,20 +231,37 @@ static int istep(icpu *c)
         c->ip = (uint16_t)(c->ip + idx); return 1;
     }
 
-    /* ---- INC/DEC r/m (FE/FF reg=0/1); other FF forms bail ----------------- */
+    /* ---- group FE/FF: INC/DEC r/m, and (FF only) near indirect CALL/JMP +
+            PUSH r/m. Far call/jmp (g=3/5) bail. ---------------------------- */
     if (op == 0xFE || op == 0xFF) {
         int w = (op == 0xFE) ? 1 : 2;
         modrm_t m; idx += decode_modrm(c, cb, idx, segov, &m);
-        if (m.g != 0 && m.g != 1) return 0;           /* PUSH/CALL/JMP indirect: bail */
         if (m.is_mem && m.lin >= GUEST_HI) return 0;
-        { uint32_t cf = c->flags & F_CF;
-          uint32_t a = m.is_mem ? rd_mem(m.lin, w) : (w == 1 ? g8(c, m.rm_reg) : g16(c, m.rm_reg));
-          uint32_t res = (m.g == 1) ? do_sub(c, a, 1, 0, w) : do_add(c, a, 1, 0, w);
-          c->flags = (c->flags & ~F_CF) | cf;
-          if (m.is_mem)    wr_mem(m.lin, w, res);
-          else if (w == 1) s8(c, m.rm_reg, (uint8_t)res);
-          else             s16(c, m.rm_reg, (uint16_t)res); }
-        c->ip = (uint16_t)(c->ip + idx); return 1;
+        if (m.g == 0 || m.g == 1) {                   /* INC/DEC r/m */
+            uint32_t cf = c->flags & F_CF;
+            uint32_t a = m.is_mem ? rd_mem(m.lin, w) : (w == 1 ? g8(c, m.rm_reg) : g16(c, m.rm_reg));
+            uint32_t res = (m.g == 1) ? do_sub(c, a, 1, 0, w) : do_add(c, a, 1, 0, w);
+            c->flags = (c->flags & ~F_CF) | cf;
+            if (m.is_mem)    wr_mem(m.lin, w, res);
+            else if (w == 1) s8(c, m.rm_reg, (uint8_t)res);
+            else             s16(c, m.rm_reg, (uint16_t)res);
+            c->ip = (uint16_t)(c->ip + idx); return 1;
+        }
+        if (op != 0xFF) return 0;                      /* FE has no other forms */
+        { uint16_t val = m.is_mem ? (uint16_t)rd_mem(m.lin, 2) : g16(c, m.rm_reg);
+          uint16_t nip = (uint16_t)(c->ip + idx);
+          if (m.g == 2) {                              /* CALL near indirect */
+              uint16_t sp = (uint16_t)(c->r[4] - 2);
+              wr_mem(((uint32_t)c->seg[2] << 4) + sp, 2, nip);
+              c->r[4] = sp; c->ip = val; return 1;
+          }
+          if (m.g == 4) { c->ip = val; return 1; }     /* JMP near indirect */
+          if (m.g == 6) {                              /* PUSH r/m16 */
+              uint16_t sp = (uint16_t)(c->r[4] - 2);
+              wr_mem(((uint32_t)c->seg[2] << 4) + sp, 2, val);
+              c->r[4] = sp; c->ip = nip; return 1;
+          } }
+        return 0;                                      /* g=3/5/7: far/illegal -> bail */
     }
 
     /* ---- TEST r/m,r (84/85); TEST AL/AX,imm (A8/A9) ----------------------- */
@@ -295,6 +315,50 @@ static int istep(icpu *c)
         c->ip = (uint16_t)(c->ip + idx); return 1;
     }
 
+    /* ---- XCHG r/m,r (86/87): swap; an A0000 read loads latches; no flags --- *
+     * QuickBASIC plots mode-12h pixels with `XCHG ES:[DI],AL` (read-modify the *
+     * VGA latches + write in one op), so this is the hot pixel-store path.     */
+    if (op == 0x86 || op == 0x87) {
+        int w = (op == 0x87) ? 2 : 1;
+        modrm_t m; idx += decode_modrm(c, cb, idx, segov, &m);
+        if (m.is_mem && m.lin >= GUEST_HI) return 0;
+        { uint32_t rv = (w == 1) ? g8(c, m.g) : g16(c, m.g);
+          uint32_t ev = m.is_mem ? rd_mem(m.lin, w) : (w == 1 ? g8(c, m.rm_reg) : g16(c, m.rm_reg));
+          if (m.is_mem) wr_mem(m.lin, w, rv);
+          else if (w == 1) s8(c, m.rm_reg, (uint8_t)rv); else s16(c, m.rm_reg, (uint16_t)rv);
+          if (w == 1) s8(c, m.g, (uint8_t)ev); else s16(c, m.g, (uint16_t)ev); }
+        c->ip = (uint16_t)(c->ip + idx); return 1;
+    }
+
+    /* ---- PUSH/POP r16 (50-5F): SS:SP-relative, via imem -------------------- */
+    if (op >= 0x50 && op <= 0x57) {
+        uint16_t sp = (uint16_t)(c->r[4] - 2);
+        wr_mem(((uint32_t)c->seg[2] << 4) + sp, 2, g16(c, op & 7));
+        c->r[4] = sp; c->ip = (uint16_t)(c->ip + idx); return 1;
+    }
+    if (op >= 0x58 && op <= 0x5F) {
+        uint16_t sp = c->r[4];
+        s16(c, op & 7, (uint16_t)rd_mem(((uint32_t)c->seg[2] << 4) + sp, 2));
+        c->r[4] = (uint16_t)(sp + 2); c->ip = (uint16_t)(c->ip + idx); return 1;
+    }
+
+    /* ---- IN/OUT via the device bus (E4-E7, EC-EF) -------------------------- *
+     * Lets the interpreter run VGA-register-per-pixel plot loops in-host (QB    *
+     * reprograms the Graphics Controller bit mask via OUT between pixels).      */
+    if (op == 0xE4 || op == 0xE5 || op == 0xEC || op == 0xED) {          /* IN  */
+        int w = (op & 1) ? 2 : 1;
+        uint16_t port = (op <= 0xE5) ? (uint16_t)CB(idx++) : c->r[2];    /* imm8/DX */
+        uint32_t v = iio_in(port, w);
+        if (w == 1) s8(c, 0, (uint8_t)v); else s16(c, 0, (uint16_t)v);
+        c->ip = (uint16_t)(c->ip + idx); return 1;
+    }
+    if (op == 0xE6 || op == 0xE7 || op == 0xEE || op == 0xEF) {          /* OUT */
+        int w = (op & 1) ? 2 : 1;
+        uint16_t port = (op <= 0xE7) ? (uint16_t)CB(idx++) : c->r[2];    /* imm8/DX */
+        iio_out(port, w, (w == 1) ? g8(c, 0) : g16(c, 0));
+        c->ip = (uint16_t)(c->ip + idx); return 1;
+    }
+
     /* ---- MOV r,imm (B0-BF); MOV AL/AX,moffs / moffs,AL/AX (A0-A3) --------- */
     if (op >= 0xB0 && op <= 0xB7) { s8(c, op & 7, CB(idx)); idx++;
                                     c->ip = (uint16_t)(c->ip + idx); return 1; }
@@ -345,7 +409,9 @@ static int istep(icpu *c)
     }
 
     /* ---- control flow: Jcc (70-7F), JMP short (EB) / near (E9),
-            LOOP/LOOPE/LOOPNE/JCXZ (E0-E3) ------------------------------------ */
+            CALL near (E8) + RET near (C3/C2), LOOP/LOOPE/LOOPNE/JCXZ (E0-E3) -- *
+     * CALL/RET let the interpreter follow QuickBasic's per-pixel runtime call,  *
+     * so a whole scanline batches in one fault instead of ~5 instr per pixel.   */
     if (op >= 0x70 && op <= 0x7F) {
         int8_t rel = (int8_t)CB(idx++); int take = icond(c, op & 0xF);
         c->ip = (uint16_t)(c->ip + idx + (take ? rel : 0)); return 1;
@@ -353,6 +419,19 @@ static int istep(icpu *c)
     if (op == 0xEB) { int8_t rel = (int8_t)CB(idx++); c->ip = (uint16_t)(c->ip + idx + rel); return 1; }
     if (op == 0xE9) { int16_t rel = (int16_t)(CB(idx) | (CB(idx + 1) << 8)); idx += 2;
                       c->ip = (uint16_t)(c->ip + idx + rel); return 1; }
+    if (op == 0xE8) {                                  /* CALL near relative */
+        int16_t rel = (int16_t)(CB(idx) | (CB(idx + 1) << 8)); idx += 2;
+        uint16_t nip = (uint16_t)(c->ip + idx);        /* return address */
+        uint16_t sp = (uint16_t)(c->r[4] - 2);
+        wr_mem(((uint32_t)c->seg[2] << 4) + sp, 2, nip);
+        c->r[4] = sp; c->ip = (uint16_t)(nip + rel); return 1;
+    }
+    if (op == 0xC3 || op == 0xC2) {                    /* RET near (+ imm16 pop) */
+        uint16_t sp = c->r[4];
+        uint16_t ret = (uint16_t)rd_mem(((uint32_t)c->seg[2] << 4) + sp, 2);
+        uint16_t extra = (op == 0xC2) ? (uint16_t)(CB(idx) | (CB(idx + 1) << 8)) : 0;
+        c->r[4] = (uint16_t)(sp + 2 + extra); c->ip = ret; return 1;
+    }
     if (op >= 0xE0 && op <= 0xE3) {
         int8_t rel = (int8_t)CB(idx++); int take;
         if (op == 0xE3) take = (c->r[1] == 0);        /* JCXZ */

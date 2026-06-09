@@ -36,18 +36,21 @@ static void int16(void *self, ntvdd_regs *r)
     uint16_t key;
     switch (r_ah(r)) {
     case 0x00:                              /* read key (host blocks on empty)    */
+    case 0x10:                              /* read key, enhanced (101-key)        */
         if (vdd_input_pop(st, &key)) { s_ax(r, key); r->zf = 0; }
         else r->zf = 1;
         break;
     case 0x01:                              /* check key (non-blocking)           */
+    case 0x11:                              /* check key, enhanced (101-key)       */
         if (vdd_input_peek(st, &key)) { s_ax(r, key); r->zf = 0; }
-        else r->zf = 1;
+        else r->zf = 1;                     /* ZF=1 => no key (QB's INKEY$ -> "") */
         break;
     case 0x02:                              /* shift status -> none for now        */
+    case 0x12:                              /* extended shift status               */
         s_al(r, 0); r->zf = 0;
         break;
-    default:
-        r->zf = 0;
+    default:                                /* unknown fn: report "no key", never  */
+        r->zf = 1;                          /* a phantom keystroke (was a bug)     */
         break;
     }
 }

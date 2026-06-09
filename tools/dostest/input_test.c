@@ -63,6 +63,25 @@ int main(void)
       CHECK(vdd_input_pop(&in, &k) == 1 && k > 0x100, "ring: full -> oldest dropped, newest kept");
     }
 
+    /* T6: enhanced fns AH=10/11 mirror 00/01; unknown fn never phantom-keys *
+     * (regression: QuickBasic INKEY$ uses AH=11h; a default ZF=0 made it     *
+     * read a phantom key and exit -- BLIT.EXE drew nothing.)                 */
+    memset(&in, 0, sizeof in); in.bus = &bus;
+    memset(&r, 0, sizeof r); s_ah(&r, 0x11);            /* enhanced check, empty */
+    vdd_bus_deliver_int(&bus, 0x16, &r);
+    CHECK(r.zf == 1, "int16/11: ZF=1 when no key (INKEY$ -> \"\")");
+    vdd_input_push(&in, 0x1C0D);                        /* Enter */
+    memset(&r, 0, sizeof r); s_ah(&r, 0x11);
+    vdd_bus_deliver_int(&bus, 0x16, &r);
+    CHECK(r.zf == 0 && r_ax(&r) == 0x1C0D, "int16/11: ZF=0 + AX=key when ready");
+    memset(&r, 0, sizeof r); s_ah(&r, 0x10);            /* enhanced read consumes */
+    vdd_bus_deliver_int(&bus, 0x16, &r);
+    CHECK(r.zf == 0 && r_ax(&r) == 0x1C0D, "int16/10: enhanced read returns key");
+    CHECK(vdd_input_pop(&in, &k) == 0, "int16/10: consumed the key");
+    memset(&r, 0xFF, sizeof r); s_ah(&r, 0x55);         /* unknown fn */
+    vdd_bus_deliver_int(&bus, 0x16, &r);
+    CHECK(r.zf == 1, "int16/unknown: ZF=1, never a phantom key");
+
     printf("\n%d checks, %d failed\n", total, fails);
     return fails ? 1 : 0;
 }

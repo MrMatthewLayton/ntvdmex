@@ -519,17 +519,36 @@ static void imem_w8(uint32_t lin, uint8_t v)
 { if (lin >= A000_LO && lin < A000_HI) vga_planar_write(&g_vid, lin - A000_LO, v);
   else *(volatile BYTE *)lin = v; }
 
+/* Port I/O dispatched to the device bus (same path as host_try_io). The
+   interpreter already runs under g_lock, which is what the bus needs. */
+static uint32_t iio_in(uint16_t port, int width)
+{ uint32_t v = 0; vdd_bus_io(&g_bus, port, (uint8_t)width, 1, &v); return v; }
+static void iio_out(uint16_t port, int width, uint32_t val)
+{ uint32_t v = val; vdd_bus_io(&g_bus, port, (uint8_t)width, 0, &v); }
+
 #include "v86interp.h"
 
-/* On an A0000 fault in mode 12h, run the inner loop in the host until it hits an
-   unmodeled opcode or the iteration cap, then write architectural state back so
-   V86 resumes exactly where the interpreter stopped. Returns 1 if it handled at
-   least one instruction (so the caller continues), 0 to fall through to the
-   fault dump (the very first instruction was unmodeled). */
-static int host_try_mem(volatile BYTE *tib)
+/* The mode-12h trap-storm escape hatch. By default V86 runs on the real CPU and
+   each VGA access (memory OR port) is emulated one-at-a-time as a device access
+   -- pure device virtualization. But QuickBasic plots pixels one at a time and
+   reprograms a VGA register via OUT *between* pixels, so a fill is hundreds of
+   thousands of fault round-trips (port faults AND memory faults) and crawls.
+
+   host_interp() is the opt-in batching interpreter: load the V86 register file,
+   run up to `cap` instructions in the host (the inner loop -- planar A0000
+   access, IN/OUT through the bus, ALU, CALL/RET, branches), then write the
+   architectural state back. The caller (the service loop) engages it ONLY on a
+   detected trap-storm (the same tight PC window faulting repeatedly), so it's a
+   measured fallback for proven pathological video loops, not a blanket policy.
+   Returns the number of instructions executed (0 if the faulting instruction
+   itself is unmodeled -> caller falls through). */
+#define STORM_WINDOW   128       /* faults within this PC span count as "the same loop" */
+#define STORM_GATE      8        /* consecutive in-window faults -> escalate to the interpreter */
+#define TIER1_CAP  2000000L      /* interpreter iteration ceiling once escalated        */
+
+static long host_interp(volatile BYTE *tib, long cap)
 {
-    icpu c; long iters; int did = 0;
-    if (!g_a000_prot) return 0;
+    icpu c; long iters;
 
     c.r[0] = (uint16_t)VDM_REG(tib, VTIB_EAX); c.r[1] = (uint16_t)VDM_REG(tib, VTIB_ECX);
     c.r[2] = (uint16_t)VDM_REG(tib, VTIB_EDX); c.r[3] = (uint16_t)VDM_REG(tib, VTIB_EBX);
@@ -541,12 +560,27 @@ static int host_try_mem(volatile BYTE *tib)
     c.ip = (uint16_t)VDM_REG(tib, VTIB_EIP); c.flags = VDM_REG(tib, VTIB_EFLAGS);
 
     EnterCriticalSection(&g_lock);
-    for (iters = 0; iters < 4000000L; ++iters) {
+    for (iters = 0; iters < cap; ++iters)
         if (!istep(&c)) break;
-        did = 1;
-    }
     LeaveCriticalSection(&g_lock);
-    if (!did) return 0;                                /* first opcode unmodeled */
+
+    /* --- TEMP diag: batch factor + bail distribution. --- */
+    { static unsigned long dcalls = 0, dsteps = 0, dmax = 0; static unsigned dhist[256];
+      unsigned bailop = imem_r8(((uint32_t)c.seg[1] << 4) + c.ip);
+      dcalls++; dsteps += (unsigned long)iters; dhist[bailop & 0xFF]++;
+      if ((unsigned long)iters > dmax) dmax = (unsigned long)iters;
+      if ((dcalls % 5000UL) == 0) {
+          char b[256], *q = b; unsigned i, top = 0, topn = 0;
+          for (i = 0; i < 256; ++i) if (dhist[i] > topn) { topn = dhist[i]; top = i; }
+          q = zput(q, "ITP calls=0x"); q = zhex(q, (unsigned)dcalls);
+          q = zput(q, " avg=0x"); q = zhex(q, (unsigned)(dsteps / dcalls));
+          q = zput(q, " max=0x"); q = zhex(q, (unsigned)dmax);
+          q = zput(q, " topbail=0x"); q = zhex(q, top);
+          q = zput(q, " n=0x"); q = zhex(q, topn); q = zput(q, "\r\n");
+          log_append(LOG_PATH, b, q);
+      } }
+
+    if (iters == 0) return 0;                          /* first opcode unmodeled */
 
     VDM_SET16(tib, VTIB_EAX, c.r[0]); VDM_SET16(tib, VTIB_ECX, c.r[1]);
     VDM_SET16(tib, VTIB_EDX, c.r[2]); VDM_SET16(tib, VTIB_EBX, c.r[3]);
@@ -555,7 +589,7 @@ static int host_try_mem(volatile BYTE *tib)
     VDM_SET16(tib, VTIB_EIP, c.ip);
     /* update only the low 16 flag bits (arith + DF); keep VM/IOPL/IF etc. */
     VDM_REG(tib, VTIB_EFLAGS) = (VDM_REG(tib, VTIB_EFLAGS) & 0xFFFF0000u) | (c.flags & 0xFFFFu);
-    return 1;
+    return iters;
 }
 
 int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
@@ -729,6 +763,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
        no iteration cap so interactive/animated programs keep going. */
     m.tib = tib; m.out = dosout; m.out_cap = sizeof(dosout); m.out_len = 0;
     (void)guard;
+    { static uint32_t s_last_fault = 0; static int s_storm = 0;
     while (g_running) {
         ev = v86_run(tib, &st);
         /* I/O port trap (event 0; VM-confirmed) or a generic GP fault (event 2):
@@ -736,11 +771,23 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
            the VDD bus and resume; otherwise fall through to the stop dump. */
         if (ev == VDM_EVENT_IO || ev == VDM_EVENT_GPFAULT) {
             int handled;
+            /* Trap-storm detection over ALL faults (port + A0000 memory): the
+               per-pixel VGA loop faults repeatedly in a tight PC window. Once a
+               storm is established in mode 12h, escalate to the batching
+               interpreter so the whole inner loop (OUTs + pixel writes) runs in
+               one shot; otherwise emulate the single faulting access. */
+            DWORD fcs = VDM_REG(tib, VTIB_CS) & 0xFFFF, fip = VDM_REG(tib, VTIB_EIP) & 0xFFFF;
+            uint32_t cur = (fcs << 4) + fip;
+            uint32_t d = (cur > s_last_fault) ? (cur - s_last_fault) : (s_last_fault - cur);
+            s_storm = (d <= STORM_WINDOW) ? (s_storm + 1) : 0;
+            s_last_fault = cur;
+            if (g_a000_prot && s_storm >= STORM_GATE && host_interp(tib, TIER1_CAP) > 0)
+                continue;                           /* batched the hot loop            */
             EnterCriticalSection(&g_lock);
-            handled = host_try_io(tib, &g_bus);     /* no per-call logging (hot path) */
+            handled = host_try_io(tib, &g_bus);     /* single port op (no logging)     */
             LeaveCriticalSection(&g_lock);
             if (handled) continue;
-            if (host_try_mem(tib)) continue;        /* direct A0000 planar write       */
+            if (g_a000_prot && host_interp(tib, 1) > 0) continue;  /* single A0000 access */
         }
         if (ev != VDM_EVENT_BOP) {
             DWORD csv = VDM_REG(tib, VTIB_CS) & 0xFFFF;
@@ -772,11 +819,11 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         }
         if ((VDM_REG(tib, VTIB_EVENT_INFO) & 0xFF) == 0x16) {
             ntvdd_regs r; uint8_t ah16; regs_load(&r, tib); ah16 = r_ah(&r);
-            for (;;) {                          /* AH=00 blocks until a key       */
+            for (;;) {                          /* AH=00/10 block until a key     */
                 EnterCriticalSection(&g_lock);
                 vdd_bus_deliver_int(&g_bus, 0x16, &r);
                 LeaveCriticalSection(&g_lock);
-                if (ah16 != 0x00 || r.zf == 0 || !g_running) break;
+                if ((ah16 != 0x00 && ah16 != 0x10) || r.zf == 0 || !g_running) break;
                 WaitForSingleObject(g_key_event, 50);
             }
             regs_store(&r, tib);
@@ -799,6 +846,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         VDM_REG(tib, VTIB_EIP) += 3;                /* past the 3-byte BOP -> the IRET */
         log_append(LOG_PATH, base, p); p = base;
     }
+    }   /* storm-state block */
 
     g_ci.ExitCode = (ULONG)m.exit_code;             /* M2.5: errorlevel (shell notify = best-effort TODO) */
 

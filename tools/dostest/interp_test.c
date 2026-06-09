@@ -19,6 +19,12 @@ static BYTE MEM[0x110000];
 static uint8_t imem_r8(uint32_t lin) { return (lin < sizeof MEM) ? MEM[lin] : 0; }
 static void    imem_w8(uint32_t lin, uint8_t v) { if (lin < sizeof MEM) MEM[lin] = v; }
 
+/* Port-I/O hooks: a tiny model so the IN/OUT opcodes are exercised. Port 0x60
+   returns a canned byte; writes to 0x3C5 are recorded for the OUT test. */
+static uint8_t g_port3c5 = 0;
+static uint32_t iio_in(uint16_t port, int width) { (void)width; return (port == 0x60) ? 0xA5 : 0; }
+static void iio_out(uint16_t port, int width, uint32_t val) { (void)width; if (port == 0x3C5) g_port3c5 = (uint8_t)val; }
+
 #include "../../src/host/v86interp.h"
 
 static int total = 0, fails = 0;
@@ -224,6 +230,58 @@ int main(void)
       CHECK((c.r[0] & 0xFF) == 0x77 && c.r[6] == 2 && c.r[7] == 6,
             "scan: stops on nonzero pixel (AL=77, SI=2, DI=6)");
       CHECK(c.ip == 0x0D, "scan: nonzero exit bails on the HLT"); }
+
+    /* ---- T22: XCHG r/m8,r8 with memory (QB pixel plot) ----------------- */
+    { icpu c = mkcpu(); BYTE p[] = { 0x26, 0x86, 0x05 };   /* XCHG ES:[DI],AL */
+      c.seg[0] = 0x7000; c.r[7] = 0x0004; c.r[0] = 0x00C3;     /* ES, DI, AL */
+      MEM[((uint32_t)0x7000 << 4) + 4] = 0x2A;
+      load(&c, 0x1000, 0, p, sizeof p); step1(&c);
+      CHECK(MEM[((uint32_t)0x7000<<4)+4] == 0xC3, "xchg: memory got AL");
+      CHECK((c.r[0] & 0xFF) == 0x2A, "xchg: AL got old memory value"); }
+
+    /* ---- T23: XCHG r16,r16 (reg-reg) ----------------------------------- */
+    { icpu c = mkcpu(); BYTE p[] = { 0x87, 0xD8 };    /* XCHG AX,BX */
+      c.r[0] = 0x1111; c.r[3] = 0x2222; load(&c, 0x1000, 0, p, sizeof p); step1(&c);
+      CHECK(c.r[0] == 0x2222 && c.r[3] == 0x1111, "xchg: AX<->BX"); }
+
+    /* ---- T24: PUSH then POP round-trips through SS:SP ------------------- */
+    { icpu c = mkcpu(); BYTE p[] = { 0x51, 0x5A };    /* PUSH CX ; POP DX */
+      c.seg[2] = 0x8000; c.r[4] = 0x0100; c.r[1] = 0xBEEF;    /* SS, SP, CX */
+      load(&c, 0x1000, 0, p, sizeof p);
+      step1(&c); CHECK(c.r[4] == 0x00FE, "push: SP -= 2");
+      CHECK(MEM[((uint32_t)0x8000<<4)+0xFE]==0xEF && MEM[((uint32_t)0x8000<<4)+0xFF]==0xBE,
+            "push: word written at SS:SP");
+      step1(&c); CHECK(c.r[2] == 0xBEEF && c.r[4] == 0x0100, "pop: DX=CX, SP restored"); }
+
+    /* ---- T25: OUT imm8 + IN DX dispatched to the port hooks ------------- */
+    { icpu c = mkcpu(); BYTE p[] = { 0xE6, 0x3C };    /* OUT 3Ch... no: imm port 0x3C */
+      /* use OUT DX,AL to port 0x3C5, then IN AL,0x60 */
+      BYTE q[] = { 0xEE, 0xE4, 0x60 };                /* OUT DX,AL ; IN AL,60h */
+      (void)p;
+      c.r[2] = 0x3C5; c.r[0] = 0x0042;                /* DX=3C5, AL=0x42 */
+      load(&c, 0x1000, 0, q, sizeof q);
+      step1(&c); CHECK(g_port3c5 == 0x42, "out: DX(3C5) <- AL via bus");
+      step1(&c); CHECK((c.r[0] & 0xFF) == 0xA5, "in: AL <- port 0x60 via bus"); }
+
+    /* ---- T26: CALL near relative + RET round-trip ---------------------- *
+     * 00 MOV AX,1234 / 03 CALL +4 / 06 INC AX / 07 HLT / 0A INC BX / 0B RET */
+    { icpu c = mkcpu();
+      BYTE p[] = { 0xB8,0x34,0x12, 0xE8,0x04,0x00, 0x40, 0xF4, 0x90,0x90, 0x43, 0xC3 };
+      c.seg[2] = 0x9000; c.r[4] = 0x0200;             /* SS, SP */
+      load(&c, 0x1000, 0, p, sizeof p); run(&c);
+      CHECK(c.r[0] == 0x1235, "call/ret: AX=1235 (INC AX after return)");
+      CHECK(c.r[3] == 0x0001, "call/ret: BX=1 (subroutine ran)");
+      CHECK(c.r[4] == 0x0200, "call/ret: SP restored");
+      CHECK(c.ip == 0x07, "call/ret: bailed on HLT after return"); }
+
+    /* ---- T27: CALL near indirect via register (FF /2) ------------------ *
+     * 00 CALL SI(=06) / 02 INC AX / 03 HLT / 06 RET                        */
+    { icpu c = mkcpu();
+      BYTE p[] = { 0xFF,0xD6, 0x40, 0xF4, 0x90,0x90, 0xC3 };
+      c.seg[2] = 0x9000; c.r[4] = 0x0200; c.r[6] = 0x0006;   /* SS, SP, SI */
+      load(&c, 0x1000, 0, p, sizeof p); run(&c);
+      CHECK(c.r[0] == 0x0001 && c.r[4] == 0x0200 && c.ip == 0x03,
+            "call indirect: ran subroutine via SI, SP restored"); }
 
     printf("\n%d checks, %d failed\n", total, fails);
     return fails ? 1 : 0;
