@@ -175,9 +175,24 @@ Per-step exit criteria:
   DirectDraw window, driven entirely through the pluggable VDD interface (timer, video, input, speaker),
   with a live timer IRQ and a working mouse. **M3 DONE.**
 
-## M4 — Memory extensions ⬜
-- [ ] XMS, EMS, and **DPMI** (protected-mode DOS extenders, e.g. DOS/4GW titles)
-- **Exit:** a DPMI/DOS-extender game or tool runs.
+## M4 — Memory extensions 🟡 IN PROGRESS
+- [x] **XMS 3.0** (HIMEM.SYS) — `src/dos/dos_xms.h` + host wiring (`INT 2Fh AX=4300/4310`
+  install/entry, a FAR-CALL API entry BOP, `host_xms()`). Extended memory is host-heap-backed
+  (above the 1 MB V86 map); Move (0Bh) memcpys between an EMB and the conventional window.
+  Off-VM battery **36/36** (`tools/dostest/xms_test.c`). VM gate `xmstest.com` (menu #14) pending.
+- [x] **EMS (LIM 4.0)** (EMM) — `src/dos/dos_ems.h` + host wiring (`INT 67h`, `host_ems()`).
+  64 KB page frame at E000:0 (V86 map extended with Map 5); `ems_map()` does **page-frame
+  shadowing** (write-back + read-in memcpy) so the guest's direct frame accesses need no trap.
+  "EMMXXXX0" device name parked for detection. Off-VM battery **30/30** (`tools/dostest/ems_test.c`).
+  VM gate `emstest.com` (menu #15) pending.
+- [ ] **DPMI** (protected-mode DOS extenders, e.g. DOS/4GW) — **Researched** (feasible by reusing
+  the kernel monitor's PM support: services 10/11 `VdmSetLdtEntries`/`VdmSetProcessLdtInfo`, 13
+  `VdmPMCliControl`; the same VDM runs PM, distinguished by the MSW PE bit — see
+  [research/dpmi-under-ntvdmcontrol.md](research/dpmi-under-ntvdmcontrol.md)). Next is a **16-bit
+  DPMI spike** (the real→PM mode-switch round-trip). DPMI is intentionally **not advertised**
+  (`INT 2Fh AX=1687h` left unhandled) until the switch is proven.
+- **Exit:** a DPMI/DOS-extender game or tool runs. *(XMS/EMS met for their own programs; the
+  DPMI exit awaits the spike.)*
 
 ## M5 — Win16 / WOW foundation ⬜
 - [ ] WOW bootstrap (`wowexec` analog), 16-bit `krnl386`/`user`/`gdi` hosting

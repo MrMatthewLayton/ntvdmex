@@ -3,8 +3,11 @@
 > **This is the canonical resume point.** Update it at the end of every working session.
 
 - **Last updated:** 2026-06-09
-- **Phase:** **M3 — device model + video ✅ DONE (2026-06-09).** Next milestone: **M4 (memory
-  extensions — XMS/EMS/DPMI)** or M5 (Win16). M3 closed: full VGA/VESA video, keyboard, **live PIT
+- **Phase:** **M4 — memory extensions 🟡 IN PROGRESS.** **XMS 3.0 + EMS (LIM 4.0) DONE** (off-VM
+  36/36 + 30/30, host-wired; VM gates pending); **DPMI researched** (feasible via kernel-monitor PM
+  reuse — see [research/dpmi-under-ntvdmcontrol.md](research/dpmi-under-ntvdmcontrol.md) — next is a
+  16-bit mode-switch spike; DPMI not advertised until proven). See the *M4 milestone* section below.
+  **M3 — device model + video ✅ DONE (2026-06-09).** M3 closed: full VGA/VESA video, keyboard, **live PIT
   timer IRQ**, **INT 33h mouse with a host-drawn cursor**, and a **PC-speaker VDD stub** (4 device
   classes on the pluggable bus); all 10 QuickBASIC demos run in the Luna window on the real CPU.**
   M2 (DOS kernel) is closed. M3 kickoff **retired the `tools/vdmhost` spike** and decided the
@@ -170,6 +173,42 @@ spike; each re-points the IFEO at its own host.) NOTE: the reboot-free telnet pa
 the logon agent) is for the SPIKE's `vdmhost.log`; it needs `vdmtrig.bat` running and a clean-host
 variant to capture `ntvdmhost.log` — the manual `gate-clean.bat` is the reliable clean-host gate.
 
+## M4 milestone — memory extensions (XMS + EMS DONE; DPMI researched, 2026-06-09)
+
+The memory-extension layer. Two real-mode thirds are done (off-VM-proven + host-wired); the
+protected-mode third (DPMI) is researched and scoped to a spike.
+
+- **XMS 3.0** (`src/dos/dos_xms.h`, off-VM **36/36** `xms_test.c`): how real-mode programs reach
+  memory above 1 MB without leaving real mode. Detected/entered via `INT 2Fh AX=4300` (install →
+  AL=80) / `AX=4310` (entry → ES:BX); the function goes in AH on a **FAR-CALL** to the entry. The
+  clean part of the architecture: extended memory lives on the **host heap** (above the 1 MB the
+  V86 map covers), so EMBs are `VirtualAlloc` blocks and **Move (0Bh)** memcpys between an EMB and
+  the guest's conventional window — a pure-real-mode client never addresses an EMB directly.
+  Implements version/A20/query-free/alloc/free/realloc/lock/unlock/move + error codes; 16 MB pool.
+  Host: `host_xms()` + BOP 0x2F (INT 2Fh stub, IRET) + BOP 0x43 (XMS entry stub, **RETF** since
+  it's far-called) at `DOS_HDLR_SEG:0x44`. VM gate `xmstest.com` (menu #14) **pending**.
+- **EMS (LIM 4.0)** (`src/dos/dos_ems.h`, off-VM **30/30** `ems_test.c`): a 64 KB page frame at
+  **E000:0** (four 16 KB windows) into which the program maps 16 KB logical pages from a large
+  pool. Runs without a trap via **page-frame shadowing**: `ems_map()` writes the outgoing window
+  back to its logical page then reads the new page in (memcpy), so the guest's direct frame
+  accesses are plain RAM and the backing store stays coherent. Implements counts/alloc/map/
+  dealloc/realloc/handle-pages/handle-count + save/restore page map (47h/48h); 8 MB pool. Host:
+  `host_ems()` + BOP 0x67 (INT 67h); **`v86.c` extended to map 64 KB of RAM at linear 0xE0000**
+  (Map 5, section grown to 1 MB) — *this changes the proven memory map, so the EMS VM gate also
+  re-validates V86 bring-up*. "EMMXXXX0" device name parked at the INT 67h vector segment:000Ah
+  (detection method 2); DBCS table relocated 0x10→0x18 to make room. VM gate `emstest.com`
+  (menu #15) **pending**.
+- **DPMI** (`research/dpmi-under-ntvdmcontrol.md`): the protected-mode third (DOS/4GW etc.).
+  **Key finding from `ntvdm.exe` disasm:** the *same* `NtVdmControl` VDM runs protected mode, not
+  just V86 — `fcn.0f00532e` reads `getMSW`, tests the **PE bit**, and when set drives the client's
+  interrupt flag via **service 13 `VdmPMCliControl`**; LDT install is **services 10/11**
+  (`VdmSetLdtEntries`/`VdmSetProcessLdtInfo`); `INT 2Fh AX=1687h` is ntvdm's own DPMI host. So DPMI
+  is feasible by **reusing the kernel monitor's PM support** (ADR-0004), *not* a from-scratch LDT
+  host. Plan: a **16-bit DPMI spike** (real→PM far-call → confirm PM via MSW → `INT 31h 0000`
+  descriptor + `0300` thunk INT 21h back to real mode → exit) before any INT 31h surface. **DPMI is
+  deliberately not advertised** (`2Fh 1687` left unhandled) until the switch is proven — advertising
+  then failing the switch crashes extenders worse than absence.
+
 ## M3 milestone — pluggable VDDs + full VGA/VESA video (DONE + VM-CONFIRMED, 2026-06-08)
 
 The device model and the whole graphics/input stack are built and confirmed on the real CPU in the VM.
@@ -260,8 +299,20 @@ BLIT drew nothing; implemented 10h/11h + made the default report "no key".
 
 ## Single next action
 
+**M4 is in progress** (see the *M4 milestone* section above). Open work, in rough priority:
+1. **VM-gate XMS + EMS** on the XP VM: stage the new host + `xmstest.com` (menu #14) and
+   `emstest.com` (menu #15) via `RUNTEST.BAT`; expect `XMS PASS` / `EMS PASS`. The EMS gate also
+   re-validates V86 bring-up since `v86.c` grew the section to 1 MB + added the 0xE0000 page-frame
+   map (a regression here would show as an early stop in the existing demos — smoke-test one).
+2. **DPMI 16-bit spike** — the real→protected-mode-switch round-trip via kernel-monitor reuse
+   (services 10/11/13); see [research/dpmi-under-ntvdmcontrol.md](research/dpmi-under-ntvdmcontrol.md).
+   This is the M4 keystone risk; don't advertise `2Fh 1687` until it round-trips.
+3. After DPMI: M5 (Win16/WOW foundation).
+
+### M3 follow-ups (closed, kept for reference)
+
 Mode-12h pixel-plot speed is a closed question (the wall above) — **do not** keep adding interpreter
-opcodes for it. Open work, in rough priority:
+opcodes for it. Prior open work, all resolved:
 1. ~~MOUSE end-to-end~~ **DONE (2026-06-09, VM-confirmed).** INT 33h now has a **host-drawn arrow
    cursor** (overlay in the present path when the hide-count is 0; reset→hidden, AX=1 show / AX=2 hide).
    `mousetst.com` (menu 13) confirms it: the arrow tracks the host mouse and holding the left button
@@ -288,7 +339,8 @@ per scanline → one fault/scanline). VM-confirmed visibly faster than BLIT — 
 QuickBasic per-pixel method, and real `REP`-based 12h software is already fast on the existing path.
 
 **Testing strategy (unchanged):** off-VM is primary — `tools/dostest/run.sh` runs MCB **49/49**, bus
-**22/22**, PIT **19/19**, input **20/20**, video **34/34**, **interp 63/63** instantly, no VM. The XP VM
+**22/22**, PIT **19/19**, input **20/20**, video **34/34**, **interp 63/63**, **XMS 36/36**, **EMS
+30/30** instantly, no VM. The XP VM
 is the manual integration gate, **driven headlessly via `scripts/qmp.py`** (screendump / CD hot-swap /
 send-key / click / drag); `RUNTEST.BAT` re-copies the host per run and auto-opens `ntvdmhost.log` in
 Notepad. **VM gotchas learned:** a program that *loops* (BUBBLES) leaves `ntvdmhost.exe` running and
