@@ -44,7 +44,7 @@ LONG v86_setup_memory(void)
 
     for (i = 0; i < sizeof(oa); ++i) q[i] = 0;
     oa.Length = 0x18;
-    maxsize.QuadPart = 0xC0000;        /* +video aperture A0000-BFFFF (M3 mode 13h) */
+    maxsize.QuadPart = 0x100000;       /* conv + video aperture + UMA (EMS frame, M4) */
     NtCreateSection(&hSec, 0xA, &oa, &maxsize, PAGE_EXECUTE_READWRITE,
                     SEC_RESERVE_NT, NULL);
 
@@ -70,6 +70,14 @@ LONG v86_setup_memory(void)
        VDD renders it each frame. */
     base = (PVOID)0xA0000;  sz = 0x20000; off.QuadPart = 0xA0000;
     NtMapViewOfSection(hSec, (HANDLE)-1, &base, 0, 0x20000, &off, &sz, 2,
+                       VDM_MAP_FLAG, PAGE_EXECUTE_READWRITE);
+    /* Map 5 -- the EMS page frame E000:0000-EFFF:000F (64KB) as RAM (M4). EMS maps
+       16KB logical pages into this window via memcpy (page-frame shadowing), so the
+       guest's direct reads/writes here are plain RAM accesses (no trap). Free the
+       loader's reservation of the region first (harmless no-op if it is already free). */
+    base = (PVOID)0xE0000;  sz = 0x10000; NtFreeVirtualMemory((HANDLE)-1, &base, &sz, MEM_RELEASE_NT);
+    base = (PVOID)0xE0000;  sz = 0x10000; off.QuadPart = 0xE0000;
+    NtMapViewOfSection(hSec, (HANDLE)-1, &base, 0, 0x10000, &off, &sz, 2,
                        VDM_MAP_FLAG, PAGE_EXECUTE_READWRITE);
     return st;
 }

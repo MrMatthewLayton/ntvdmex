@@ -15,6 +15,7 @@ nasm -f bin "$DIR/blitfast.asm" -o "$DIR/blitfast.com"   # 12h rects, efficient 
 nasm -f bin "$DIR/timertst.asm" -o "$DIR/timertst.com"   # PIT timer-IRQ test (INT 1Ch dots)
 nasm -f bin "$DIR/mousetst.asm" -o "$DIR/mousetst.com"   # INT 33h mouse test (draw + cursor)
 nasm -f bin "$DIR/xmstest.asm"  -o "$DIR/xmstest.com"    # M4 XMS end-to-end test (2Fh + Move)
-for f in vgademo.com vga12.com vesademo.com blitfast.com timertst.com mousetst.com xmstest.com; do
+nasm -f bin "$DIR/emstest.asm"  -o "$DIR/emstest.com"    # M4 EMS end-to-end test (67h + shadowing)
+for f in vgademo.com vga12.com vesademo.com blitfast.com timertst.com mousetst.com xmstest.com emstest.com; do
     echo "  $f  ($(wc -c < "$DIR/$f") bytes)"
 done

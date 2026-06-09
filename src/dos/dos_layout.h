@@ -10,6 +10,8 @@
 #define DOS_HDLR_SEG  0x0050  /* INT 21h BOP handler segment (linear 0x0500) */
 #define DOS_ENV_SEG   0x0060  /* environment segment (linear 0x0600)         */
 #define DOS_LOAD_OFF  0x0010  /* .EXE load module = DOS_PSP_SEG + this       */
-#define DOS_DBCS_OFF  0x0010  /* empty DBCS table parked at DOS_HDLR_SEG:this */
+#define DOS_DBCS_OFF  0x0018  /* empty DBCS table parked at DOS_HDLR_SEG:this */
+#define DOS_EMM_NAME_OFF 0x000A /* "EMMXXXX0" device-header name (M4 EMS detect, *
+                                 * INT 67h vector segment : offset 0Ah)        */
 
 #endif /* DOS_LAYOUT_H */

@@ -24,6 +24,7 @@
 #include "dos_int21.h"
 #include "dos_layout.h"
 #include "dos_xms.h"
+#include "dos_ems.h"
 #include "vdd_bus.h"
 #include "vdd_pit.h"
 #include "vdd_video.h"
@@ -39,6 +40,12 @@
    at 0x40). INT 2Fh AX=4310 hands the guest DOS_HDLR_SEG:XMS_ENTRY_OFF to far-call. */
 #define XMS_ENTRY_OFF 0x0044
 
+/* EMS (M4): the LIM page frame is a 64KB RAM window in the UMA mapped by
+   v86_setup_memory (Map 5). 0xE000 is the conventional EMS frame segment. */
+#define EMS_FRAME_SEG  0xE000
+#define EMS_FRAME_LIN  ((DWORD)EMS_FRAME_SEG << 4)   /* linear 0xE0000          */
+#define EMS_POOL_PAGES 512                           /* 512 * 16KB = 8MB of EMS */
+
 /* CSRSS receive buffers + program image (no CRT heap; static = zero-init). */
 static char g_cmd[1024], g_app[1024], g_cur[512], g_pif[512];
 static char g_env[8192], g_desk[512], g_title[512], g_rsv[512];
@@ -53,6 +60,7 @@ static input_state  g_in;        static ntvdd g_in_dev;
 static speaker_state g_spk;      static ntvdd g_spk_dev;
 static present_ddraw g_pd;
 static xms_state    g_xms;       /* M4: XMS extended-memory manager           */
+static ems_state    g_ems;       /* M4: EMS expanded-memory manager           */
 static volatile LONG g_irq0_pending = 0;    /* PIT raised IRQ0 (UI thread sets, V86 thread delivers) */
 static CRITICAL_SECTION g_lock;             /* serialises all bus dispatch       */
 static HWND         g_hwnd;
@@ -241,6 +249,84 @@ static void host_xms(volatile BYTE *tib)
     #undef X_SETBL
     #undef X_SETBH
     #undef X_FAIL
+}
+
+/* --- EMS (M4) -------------------------------------------------------------- *
+ * Expanded memory lives on the host heap (pages * 16KB per handle); the 64KB
+ * page frame at E000:0 is real V86 RAM (v86 Map 5). ems_map memcpys logical
+ * pages in/out of the frame windows (page-frame shadowing). INT 67h carries the
+ * function in AH and returns status in AH (0 = ok). */
+static void *ems_host_alloc(void *ctx, uint32_t pages)
+{
+    (void)ctx;
+    return VirtualAlloc(NULL, (SIZE_T)pages * EMS_PAGE_SIZE, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+}
+static void ems_host_free(void *ctx, void *p, uint32_t pages)
+{
+    (void)ctx; (void)pages;
+    if (p) VirtualFree(p, 0, MEM_RELEASE);
+}
+
+/* Service one INT 67h (EMM) call (function in AH; status back in AH). */
+static void host_ems(volatile BYTE *tib)
+{
+    DWORD ah = (VDM_REG(tib, VTIB_EAX) >> 8) & 0xFF;
+    uint8_t err = EMSERR_UNDEFFUNC;
+    uint16_t handle = 0, p16 = 0, p16b = 0;
+
+    #define E_SETAH(v) VDM_REG(tib, VTIB_EAX) = (VDM_REG(tib, VTIB_EAX) & 0xFFFF00FFu) | (((DWORD)(v) & 0xFF) << 8)
+    #define E_SETAL(v) VDM_REG(tib, VTIB_EAX) = (VDM_REG(tib, VTIB_EAX) & 0xFFFFFF00u) | ((v) & 0xFF)
+    #define E_SETBX(v) VDM_SET16(tib, VTIB_EBX, (v))
+    #define E_SETDX(v) VDM_SET16(tib, VTIB_EDX, (v))
+
+    switch (ah) {
+    case 0x40: E_SETAH(EMS_OK); break;                  /* get manager status   */
+    case 0x41: E_SETBX(g_ems.frame_seg); E_SETAH(EMS_OK); break;  /* page frame seg */
+    case 0x42:                                          /* unallocated/total pages */
+        ems_counts(&g_ems, &p16, &p16b);
+        E_SETBX(p16); E_SETDX(p16b); E_SETAH(EMS_OK);
+        break;
+    case 0x43:                                          /* allocate BX pages -> DX handle */
+        if (ems_alloc(&g_ems, VDM_REG(tib, VTIB_EBX) & 0xFFFF, &handle, &err)) { E_SETDX(handle); E_SETAH(EMS_OK); }
+        else E_SETAH(err);
+        break;
+    case 0x44:                                          /* map: AL=phys BX=logical DX=handle */
+        if (ems_map(&g_ems, (uint8_t)(VDM_REG(tib, VTIB_EAX) & 0xFF),
+                    (uint16_t)(VDM_REG(tib, VTIB_EBX) & 0xFFFF),
+                    (uint16_t)(VDM_REG(tib, VTIB_EDX) & 0xFFFF), &err)) E_SETAH(EMS_OK);
+        else E_SETAH(err);
+        break;
+    case 0x45:                                          /* deallocate DX handle */
+        if (ems_free(&g_ems, (uint16_t)(VDM_REG(tib, VTIB_EDX) & 0xFFFF), &err)) E_SETAH(EMS_OK);
+        else E_SETAH(err);
+        break;
+    case 0x46: E_SETAL(EMS_VERSION); E_SETAH(EMS_OK); break;  /* EMM version 4.0 */
+    case 0x47:                                          /* save page map: DX handle */
+        if (ems_save_map(&g_ems, (uint16_t)(VDM_REG(tib, VTIB_EDX) & 0xFFFF), &err)) E_SETAH(EMS_OK);
+        else E_SETAH(err);
+        break;
+    case 0x48:                                          /* restore page map: DX handle */
+        if (ems_restore_map(&g_ems, (uint16_t)(VDM_REG(tib, VTIB_EDX) & 0xFFFF), &err)) E_SETAH(EMS_OK);
+        else E_SETAH(err);
+        break;
+    case 0x4B: E_SETBX(ems_handle_count(&g_ems)); E_SETAH(EMS_OK); break;  /* # handles */
+    case 0x4C:                                          /* pages owned by DX handle */
+        if (ems_handle_pages(&g_ems, (uint16_t)(VDM_REG(tib, VTIB_EDX) & 0xFFFF), &p16, &err)) { E_SETBX(p16); E_SETAH(EMS_OK); }
+        else E_SETAH(err);
+        break;
+    case 0x51:                                          /* reallocate: BX pages, DX handle */
+        if (ems_realloc(&g_ems, (uint16_t)(VDM_REG(tib, VTIB_EDX) & 0xFFFF),
+                        (uint16_t)(VDM_REG(tib, VTIB_EBX) & 0xFFFF), &err)) {
+            ems_handle_pages(&g_ems, (uint16_t)(VDM_REG(tib, VTIB_EDX) & 0xFFFF), &p16, &err);
+            E_SETBX(p16); E_SETAH(EMS_OK);
+        } else E_SETAH(err);
+        break;
+    default: E_SETAH(EMSERR_UNDEFFUNC); break;
+    }
+    #undef E_SETAH
+    #undef E_SETAL
+    #undef E_SETBX
+    #undef E_SETDX
 }
 
 /* --- menu + status bar (scaffold; most items are stubs for now) ------------ */
@@ -774,6 +860,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     /* XMS API entry: reached by FAR CALL (INT 2Fh AX=4310 hands back ES:BX), so it
        ends in RETF (0xCB), not IRET. */
     static const BYTE bopxms[] = { VDM_BOP0, VDM_BOP1, 0x43, 0xCB };
+    static const BYTE bop67[] = { VDM_BOP0, VDM_BOP1, 0x67, 0xCF }; /* INT 67h ; iret  */
+    static const BYTE emmname[] = { 'E','M','M','X','X','X','X','0' };  /* EMS device header name */
     HANDLE ui = NULL;
 
     (void)hInst; (void)hPrev; (void)lpCmd; (void)nShow;
@@ -895,12 +983,20 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     *(volatile WORD *)(0x2F * 4)     = 0x0040;              /* IVT[0x2F].offset    */
     *(volatile WORD *)(0x2F * 4 + 2) = DOS_HDLR_SEG;        /* IVT[0x2F].segment   */
     for (i = 0; i < sizeof(bopxms); ++i) hdlr[XMS_ENTRY_OFF + i] = bopxms[i];  /* XMS far-call entry */
+    for (i = 0; i < sizeof(bop67); ++i) hdlr[0x48 + i] = bop67[i];  /* INT 67h (EMM) stub */
+    *(volatile WORD *)(0x67 * 4)     = 0x0048;              /* IVT[0x67].offset    */
+    *(volatile WORD *)(0x67 * 4 + 2) = DOS_HDLR_SEG;        /* IVT[0x67].segment   */
+    /* EMS detection method 2: programs read the INT 67h vector's segment:000Ah for
+       the device-driver name "EMMXXXX0". Park it in the handler segment. */
+    for (i = 0; i < sizeof(emmname); ++i) hdlr[DOS_EMM_NAME_OFF + i] = emmname[i];
 
     dos_psp_build(NULL, DOS_PSP_SEG, DOS_ENV_SEG, DOS_MEM_TOP);
     dos_env_build(NULL, DOS_ENV_SEG, progpath[0] ? progpath : "C:\\PROGRAM.COM");  /* M2.5: env */
     dos_cmdtail_build(NULL, DOS_PSP_SEG, args);                                    /* M2.5: args */
     dos_int21_init(&m, dos_mcb_init(NULL));
     xms_init(&g_xms, 16384, xms_host_alloc, xms_host_free, NULL);  /* M4: 16MB XMS pool */
+    ems_init(&g_ems, EMS_FRAME_SEG, EMS_POOL_PAGES, (volatile BYTE *)EMS_FRAME_LIN,
+             ems_host_alloc, ems_host_free, NULL);             /* M4: 8MB EMS pool   */
 
     /* Stand up the device bus (NULL base => absolute V86 addresses) with the PIT
        (ports 0x40-0x43, INT 08h/1Ah) and the video VDD (B8000 + INT 10h text +
@@ -1076,6 +1172,13 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         if ((VDM_REG(tib, VTIB_EVENT_INFO) & 0xFF) == 0x43) {   /* XMS API far-call entry */
             host_xms(tib);
             VDM_REG(tib, VTIB_EIP) += 3;                        /* -> the RETF      */
+            continue;
+        }
+        if ((VDM_REG(tib, VTIB_EVENT_INFO) & 0xFF) == 0x67) {   /* INT 67h EMM (EMS) */
+            EnterCriticalSection(&g_lock);
+            host_ems(tib);
+            LeaveCriticalSection(&g_lock);
+            VDM_REG(tib, VTIB_EIP) += 3;                        /* -> the IRET      */
             continue;
         }
         m.tp = p;

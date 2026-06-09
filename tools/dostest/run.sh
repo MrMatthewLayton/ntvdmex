@@ -67,3 +67,10 @@ cc -std=c99 -Wall -Wextra -Wno-unused-function -O0 -g \
    -o "$DIR/xms_test" "$DIR/xms_test.c"
 
 "$DIR/xms_test"
+
+# M4 slice-2: the EMS core battery (dos_ems.h, page-frame shadowing).
+cc -std=c99 -Wall -Wextra -Wno-unused-function -O0 -g \
+   -I "$DIR/../../src/dos" \
+   -o "$DIR/ems_test" "$DIR/ems_test.c"
+
+"$DIR/ems_test"

@@ -14,6 +14,7 @@ copy /y "%~dp0blitfast.com"  %N%\ >nul
 copy /y "%~dp0timertst.com"  %N%\ >nul
 copy /y "%~dp0mousetst.com"  %N%\ >nul
 copy /y "%~dp0xmstest.com"   %N%\ >nul
+copy /y "%~dp0emstest.com"   %N%\ >nul
 reg add "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\ntvdm.exe" /v Debugger /t REG_SZ /d "%N%\ntvdmhost.exe" /f >nul
 
 :menu
@@ -25,6 +26,7 @@ echo  11 BLITFAST (12h rects, efficient REP idiom -- compare vs 1 BLIT)
 echo  12 TIMERTST (PIT timer-IRQ test -- dots stream at ~18 Hz)
 echo  13 MOUSETST (INT 33h mouse -- arrow tracks; hold left btn to draw)
 echo  14 XMSTEST  (M4 XMS: INT 2Fh 43xx + far-call API + Move round-trip)
+echo  15 EMSTEST  (M4 EMS: INT 67h + page-frame shadowing round-trip)
 echo   Q quit
 set CH=
 set /p CH=Pick a number (or Q):
@@ -44,6 +46,7 @@ if "%CH%"=="11" set PROG=blitfast.com
 if "%CH%"=="12" set PROG=timertst.com
 if "%CH%"=="13" set PROG=mousetst.com
 if "%CH%"=="14" set PROG=xmstest.com
+if "%CH%"=="15" set PROG=emstest.com
 if "%PROG%"=="" goto menu
 
 copy /y "%~dp0ntvdmhost.exe" %N%\ >nul   rem re-copy host each run (picks up CD swaps)
