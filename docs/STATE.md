@@ -2,7 +2,7 @@
 
 > **This is the canonical resume point.** Update it at the end of every working session.
 
-- **Last updated:** 2026-06-08
+- **Last updated:** 2026-06-09
 - **Phase:** **M3 — device model + video (GRAPHICS DONE; now expanding the DOS layer for real apps).**
   M2 (DOS kernel) is closed. M3 kickoff **retired the `tools/vdmhost` spike** and decided the
   **pluggable VDD architecture** ([ADR-0008](decisions/0008-pluggable-vdd-model.md) +
@@ -18,12 +18,12 @@
   WaitForVerticalBlank + cursor-hide** (XP has no compositor, so fullscreen DirectDraw flip is the
   tear-free path); a **native comctl32 status bar + full menu-bar scaffold** + the **Luna manifest**
   are in. nasm animated demos (`vgademo`/`vga12`/`vesademo`) confirm each mode on the real CPU.
-  **Now:** running real DOS apps — **7 of 10 QuickBASIC demos work** (CAVE/GFXCOPY/PALETTE 13h, VS87
-  text, MATRIX_1/2 12h-text), via AH=06 console I/O + INT 10h VGA queries (1A/1B/12) + port-3DA vsync
-  + INT 10h glyph rendering into the mode-12h planes + the MOV-store decoder. The remaining 3 (BLIT,
-  BOUNCEBX, BUBBLES — 12h *pixel* fills) + MOUSE are blocked by **mode-12h trap-per-pixel performance**,
-  not correctness. Next code-side = a **fill-loop fast path** (single-step the inner write loop in the
-  host so a fill is one trap, not one-per-pixel) + **INT 33h mouse**.
+  **Now:** running real DOS apps — **all 10 QuickBASIC demos RUN.** 13h/text/VESA (CAVE/GFXCOPY/PALETTE/
+  VS87/MATRIX) are pure real-CPU and fast; the 12h *pixel* demos (BLIT/BOUNCEBX/BUBBLES) + MOUSE run but
+  are **slow by a fundamental wall** — QB plots ~50 instr + a per-pixel VGA `OUT`, so trap-per-pixel and
+  batched-interpreter cost the same (see *Real DOS apps* below). A **tiered mode-12h interpreter**
+  (`v86interp.h`, opt-in only on detected trap-storms) + fixes for the `XCHG` pixel-store and the INKEY$
+  phantom-key got all 10 running; the opcode climb is intentionally stopped at the wall. INT 33h mouse in.
   *M2 follow-up (not blocking):* CSRSS transparent-arg recovery + exit-to-shell notify.
 - **Overall status:** 🟢 **The keystone is proven.** A real DOS `.COM`, loaded off disk, runs on the
   real CPU in **Virtual-8086 mode** via `NtVdmControl` and prints "Hello, World" through our own INT
@@ -223,46 +223,59 @@ diagnosed (via `ntvdmhost.log`, driving the VM headlessly with `scripts/qmp.py`)
    "Illegal function call". Now they report a real VGA (AH=1B state block + a static functionality
    table advertising modes 0..0x1F). The host now logs every INT 10h call (the trace that found this).
 
-## Real DOS apps — 7 / 10 QuickBASIC demos run (VM-confirmed, 2026-06-08)
+## Real DOS apps — all 10 QuickBASIC demos RUN; mode-12h pixel plotting hits a wall (VM-confirmed, 2026-06-09)
 
-Working: **CAVE, GFXCOPY, PALETTE** (13h), **VS87** (text), **MATRIX_1, MATRIX_2** (12h *text* via the
-graphics-mode glyph renderer). Window caption is **"Virtual MS-DOS Prompt - PROG.EXE"** + the exe and
-title bar carry `MAINICON.ico`. Fixes that got here: AH=06 console I/O, INT 10h VGA queries (1A/1B/12),
-port-3DA vsync (CAVE animates), and INT 10h AH=09/0A/0E glyph rendering into the mode-12h planes.
+**All 10 demos run.** Fast (pure real-CPU): **CAVE, GFXCOPY, PALETTE** (13h), **VS87** (text),
+**MATRIX_1/2** (12h *text* via the glyph renderer). Run but **slow**: **BLIT, BOUNCEBX, BUBBLES** (12h
+*pixel* fills) + MOUSE. Window caption "Virtual MS-DOS Prompt - PROG.EXE" + `MAINICON.ico`.
 
-Not yet working: **BLIT, BOUNCEBX, BUBBLES** (12h *pixel* demos) and **MOUSE**. Root cause is
-**performance, not correctness**: mode 12h traps every A0000 write (`PAGE_NOACCESS`) → a #GP fault +
-full V86 round-trip *per pixel*; QB's `PAINT`/`LINE BF` fill pixel-by-pixel, so a full-screen fill is
-~307K round-trips and the demo never finishes its first paint. The MOV-store decoder is correct (the
-background *does* fill, just slowly). REP STOS is already batched (one trap); the gap is per-pixel
-MOV loops.
+**The mode-12h tiered interpreter** (`src/host/v86interp.h` + `host_interp()` in `main.c`): by default
+V86 runs on the real CPU and each VGA access (port via `host_try_io`, A0000 memory via a single
+interpreter step) is emulated **one-at-a-time as a device access** — pure virtualization, no CPU
+interpretation. **Only** on a detected mode-12h *trap-storm* (the same tight PC window faulting
+repeatedly — storm detection lives in the service loop, covering port + memory faults) does it escalate
+to the **batching interpreter**, which runs the inner pixel loop in the host (planar A0000 via the VGA
+engine, IN/OUT via the bus, ALU/flags, INC/DEC, MOV incl. Sreg, PUSH/POP gp+seg, CALL/RET, Jcc/JMP/LOOP,
+shifts/rotates, LEA, XCHG). Off-VM unit-tested: `interp_test.c` **63 checks**.
+
+**THE WALL (why 12h pixel demos stay slow — fundamental, not a missing opcode):** QuickBasic's runtime
+plots **one pixel at a time**, issuing ~50 instructions **and** reprogramming a VGA register via `OUT`
+*per pixel*. Cost per pixel is the same either way: **real-CPU+trap** = ~50 native instr (fast) **+ 2
+kernel round-trips** (the OUT + the XCHG, ~µs each, dominate); **batched interpreter** = 0 round-trips
+but those ~50 instr/pixel now run *interpreted* (~50–100 ns each ≈ same µs/pixel). Batching just trades
+round-trips for interpretation — roughly equal for QB's fat routine — so a ~307K-pixel fill is ~1 s
+**either way**. Measured: batch factor climbed 5 → 23 → ~50 (peaks 757) as opcodes were added (XCHG →
+CALL/RET → seg push/pop → shifts), with **no speed change** — confirming the wall. More opcodes
+(LES/LDS next) would batch further but cannot break it. **Decision (2026-06-09): stop the opcode climb,
+keep the interpreter** (it fixed real correctness bugs + helps short-loop 12h), accept 12h pixel-plot as
+correct-but-slow. Linear modes (13h/VESA) have none of this — the CPU writes pixels directly, fast.
+
+Two correctness bugs fixed here: **`XCHG ES:[DI],AL`** (QB's pixel-store opcode — was crashing
+BUBBLES/BOUNCEBX with a stop dump), and the **INKEY$ phantom key** — INT 16h enhanced fns AH=10h/11h
+(QB's INKEY$) hit a `ZF=0` default → a phantom keystroke, so `DO WHILE INKEY$ = ""` exited instantly and
+BLIT drew nothing; implemented 10h/11h + made the default report "no key".
 
 ## Single next action
 
-**Speed up mode-12h — the fill-loop fast path (a small flags-accurate interpreter).** Confirmed by
-instrumenting `host_try_mem()` + running BUBBLES: QB's `PAINT` flood-fill is a **read-scan** — its hot
-loop is `MOV AL,ES:[SI]` (read pixel → faults) / `OR AL,AL` / `JNZ` / `DEC DI` / `JNZ`. So every pixel
-*read* costs a V86 round-trip and a full-screen scan never finishes. Batching writes isn't enough.
-
-**Design:** when an A0000 access faults, run the inner loop *in the host* until it leaves A0000 — a
-bounded interpreter handling loads/stores to A0000 (reuse the existing decode), `OR/AND/XOR/CMP/TEST`
-(reg-reg + reg-imm, **computing ZF/SF/CF/OF/PF**), `INC/DEC/ADD/SUB`, `Jcc`/`JMP short`/`LOOP`, and a
-few MOVs. It MUST stop and return to V86 on any opcode it doesn't fully model (so it can never derail),
-with an iteration cap. Unblocks BLIT/BOUNCEBX/BUBBLES + MOUSE's paint. INT 33h mouse is already in
-(`972259f`); MOUSE will be testable once this lands.
-
-Then:
-1. **Sweep remaining demos** for any other INT 21h gaps; BLIT/BOUNCEBX source would confirm their path.
-2. **Live PIT IRQ delivery (needs VM):** PIT INT 08h/1Ah as IVT BOP stubs + real IRQ0→INT 8 via ICA.
+Mode-12h pixel-plot speed is a closed question (the wall above) — **do not** keep adding interpreter
+opcodes for it. Open work, in rough priority:
+1. **MOUSE** demo end-to-end (INT 33h is in; it's a 12h pixel demo so expect slow-but-correct — verify
+   it runs and the cursor tracks).
+2. **Sweep the demos for any remaining INT 21h / INT 10h gaps** unrelated to 12h speed.
+3. **Live PIT IRQ delivery (needs VM):** PIT INT 08h/1Ah as IVT BOP stubs + real IRQ0→INT 8 via the ICA.
+4. *(Only if 12h speed ever becomes a priority)* the non-interpreter options are a JIT/optimized hot path
+   or pattern-recognising QB's putpixel and shortcutting it — both bigger and out of scope now.
 
 **Testing strategy (unchanged):** off-VM is primary — `tools/dostest/run.sh` runs MCB **49/49**, bus
-**22/22**, PIT **19/19**, input **15/15**, video **33/33** instantly, no VM. The XP VM is the manual
-integration gate, now **driven headlessly via `scripts/qmp.py`** (screendump / CD hot-swap / send-key
-/ click / drag); `RUNTEST.BAT` (`tools/dostest/runtest-demos.bat`) is a menu launcher that re-copies
-the host per run and auto-opens `ntvdmhost.log` in Notepad. Reliable VM-driving primitives: taskbar-
-button click to raise/focus a window then Alt+F4; Alt+Space→N to minimise; ≥0.15s key spacing;
-forward-slash paths; wait-loops must use `pgrep -x qemu-system-x86_64` (not `-f`, which self-matches).
-*M2 follow-up (not blocking):* CSRSS multi-call arg recovery + exit-to-shell; `mem.exe` past Parse Error 1.
+**22/22**, PIT **19/19**, input **20/20**, video **34/34**, **interp 63/63** instantly, no VM. The XP VM
+is the manual integration gate, **driven headlessly via `scripts/qmp.py`** (screendump / CD hot-swap /
+send-key / click / drag); `RUNTEST.BAT` re-copies the host per run and auto-opens `ntvdmhost.log` in
+Notepad. **VM gotchas learned:** a program that *loops* (BUBBLES) leaves `ntvdmhost.exe` running and
+**locks the file**, so RUNTEST's next copy fails ("being used by another process") and silently runs the
+*old* host — close the Luna window first, or reset the VM, before re-staging. `system_reset` via QMP
+reboots cleanly (CD stays mounted) but can occasionally drop QEMU — relaunch `scripts/xp-vm.sh run` if
+`pgrep -x qemu-system-x86_64` shows it gone. Closing Luna windows via send-key is flaky; just ask the
+user. *M2 follow-up (not blocking):* CSRSS multi-call arg recovery + exit-to-shell.
 
 ## Environment notes
 

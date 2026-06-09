@@ -110,6 +110,45 @@ static uint32_t do_alu(icpu *c, int aluop, uint32_t a, uint32_t b, int w)
     }
 }
 
+/* Shift/rotate group-2 (sub 0..7 = ROL ROR RCL RCR SHL SHR SAL SAR), done one
+   bit at a time so CF tracks correctly. Rotates touch only CF/OF; shifts also
+   set SF/ZF/PF. OF is defined only for count 1. QuickBasic builds the mode-12h
+   bit-mask with SHR (0x80 >> x) / SHL, so this is on the hot pixel path. */
+static uint32_t do_shrot(icpu *c, int sub, uint32_t v, int cnt, int w)
+{
+    uint32_t m = (w == 1) ? 0xFFu : 0xFFFFu, sb = (w == 1) ? 0x80u : 0x8000u, orig;
+    int cf = (c->flags & F_CF) ? 1 : 0, oldcf, i;
+    cnt &= 0x1F; v &= m; orig = v;
+    if (cnt == 0) return v;                            /* x86: flags unchanged */
+    for (i = 0; i < cnt; ++i) switch (sub) {
+        case 0: cf = (v & sb) ? 1 : 0; v = ((v << 1) | (uint32_t)cf) & m; break;          /* ROL */
+        case 1: cf = v & 1; v = ((v >> 1) | (cf ? sb : 0)) & m; break;                     /* ROR */
+        case 2: oldcf = cf; cf = (v & sb) ? 1 : 0; v = ((v << 1) | (uint32_t)oldcf) & m; break; /* RCL */
+        case 3: oldcf = cf; cf = v & 1; v = ((v >> 1) | (oldcf ? sb : 0)) & m; break;      /* RCR */
+        case 4: case 6: cf = (v & sb) ? 1 : 0; v = (v << 1) & m; break;                    /* SHL/SAL */
+        case 5: cf = v & 1; v = (v >> 1) & m; break;                                       /* SHR */
+        default: cf = v & 1; v = ((v >> 1) | (v & sb)) & m; break;                         /* SAR */
+    }
+    c->flags = (c->flags & ~F_CF) | (cf ? F_CF : 0);
+    if (cnt == 1) {                                    /* OF only defined for count 1 */
+        int of;
+        switch (sub) {
+        case 5:  of = (orig & sb) ? 1 : 0; break;                      /* SHR: MSB of orig */
+        case 7:  of = 0; break;                                        /* SAR */
+        case 1: case 3: of = (((v & sb) ? 1 : 0) ^ ((v & (sb >> 1)) ? 1 : 0)); break; /* ROR/RCR */
+        default: of = (((v & sb) ? 1 : 0) ^ cf); break;                /* ROL/RCL/SHL */
+        }
+        c->flags = (c->flags & ~F_OF) | (of ? F_OF : 0);
+    }
+    if (sub >= 4) {                                    /* shifts set SF/ZF/PF (not rotates) */
+        c->flags &= ~(F_SF | F_ZF | F_PF);
+        if (!v) c->flags |= F_ZF;
+        if (v & sb) c->flags |= F_SF;
+        if (iparity((uint8_t)v)) c->flags |= F_PF;
+    }
+    return v;
+}
+
 static int icond(icpu *c, int t)
 {
     int cf = !!(c->flags & F_CF), zf = !!(c->flags & F_ZF), sf = !!(c->flags & F_SF),
@@ -135,13 +174,13 @@ static int icond(icpu *c, int t)
 
 /* Decode a 16-bit ModRM byte at CB(idx). Fills *o (is_mem + linear addr or rm
    register, plus the reg field g). Returns bytes consumed (ModRM + disp). */
-typedef struct { int is_mem; uint32_t lin; int g; int rm_reg; } modrm_t;
+typedef struct { int is_mem; uint32_t lin; uint16_t ea; int g; int rm_reg; } modrm_t;
 static int decode_modrm(icpu *c, uint32_t cb, int idx, int segov, modrm_t *o)
 {
     BYTE mr = CB(idx); int mod = mr >> 6, rm = mr & 7, len = 1, bp = 0;
     uint16_t ea = 0, BX = c->r[3], BP = c->r[5], SI = c->r[6], DI = c->r[7];
     o->g = (mr >> 3) & 7;
-    if (mod == 3) { o->is_mem = 0; o->rm_reg = rm; return 1; }
+    if (mod == 3) { o->is_mem = 0; o->rm_reg = rm; o->ea = 0; return 1; }
     switch (rm) {
     case 0: ea = (uint16_t)(BX + SI); break;  case 1: ea = (uint16_t)(BX + DI); break;
     case 2: ea = (uint16_t)(BP + SI); bp = 1; break;
@@ -153,7 +192,7 @@ static int decode_modrm(icpu *c, uint32_t cb, int idx, int segov, modrm_t *o)
     }
     if (mod == 1)      { ea = (uint16_t)(ea + (int16_t)(signed char)CB(idx + len)); len += 1; }
     else if (mod == 2) { ea = (uint16_t)(ea + (CB(idx + len) | (CB(idx + len + 1) << 8))); len += 2; }
-    o->is_mem = 1;
+    o->is_mem = 1; o->ea = ea;
     o->lin = ((uint32_t)c->seg[(segov >= 0) ? segov : (bp ? 2 : 3)] << 4) + ea;  /* SS if BP else DS */
     return len;
 }
@@ -340,6 +379,61 @@ static int istep(icpu *c)
         uint16_t sp = c->r[4];
         s16(c, op & 7, (uint16_t)rd_mem(((uint32_t)c->seg[2] << 4) + sp, 2));
         c->r[4] = (uint16_t)(sp + 2); c->ip = (uint16_t)(c->ip + idx); return 1;
+    }
+
+    /* ---- PUSH/POP segment regs (06/0E/16/1E push ES/CS/SS/DS, 07/17/1F pop  *
+     * ES/SS/DS). QB saves/restores ES (and DS) around each pixel -- this was  *
+     * the per-pixel bail that capped batching at ~1 pixel. POP CS (0F) is not *
+     * modeled (it would change the code segment mid-interpret). ------------- */
+    if (op == 0x06 || op == 0x0E || op == 0x16 || op == 0x1E) {        /* PUSH sreg */
+        int sr = (op == 0x06) ? 0 : (op == 0x0E) ? 1 : (op == 0x16) ? 2 : 3;
+        uint16_t sp = (uint16_t)(c->r[4] - 2);
+        wr_mem(((uint32_t)c->seg[2] << 4) + sp, 2, c->seg[sr]);
+        c->r[4] = sp; c->ip = (uint16_t)(c->ip + idx); return 1;
+    }
+    if (op == 0x07 || op == 0x17 || op == 0x1F) {                      /* POP sreg */
+        int sr = (op == 0x07) ? 0 : (op == 0x17) ? 2 : 3;
+        uint16_t sp = c->r[4];
+        c->seg[sr] = (uint16_t)rd_mem(((uint32_t)c->seg[2] << 4) + sp, 2);
+        c->r[4] = (uint16_t)(sp + 2); c->ip = (uint16_t)(c->ip + idx); return 1;
+    }
+
+    /* ---- MOV r/m16,Sreg (8C) / MOV Sreg,r/m16 (8E) ------------------------- */
+    if (op == 0x8C || op == 0x8E) {
+        modrm_t m; idx += decode_modrm(c, cb, idx, segov, &m);
+        if (m.is_mem && m.lin >= GUEST_HI) return 0;
+        if ((m.g & 7) > 5) return 0;
+        if (op == 0x8C) {                              /* store Sreg -> r/m16 */
+            uint16_t v = c->seg[m.g & 7];
+            if (m.is_mem) wr_mem(m.lin, 2, v); else s16(c, m.rm_reg, v);
+        } else {                                       /* load Sreg <- r/m16 */
+            if ((m.g & 7) == 1) return 0;              /* MOV CS,x is illegal */
+            c->seg[m.g & 7] = m.is_mem ? (uint16_t)rd_mem(m.lin, 2) : g16(c, m.rm_reg);
+        }
+        c->ip = (uint16_t)(c->ip + idx); return 1;
+    }
+
+    /* ---- LEA r16, m (8D): load the effective-address offset (not memory) -- */
+    if (op == 0x8D) {
+        modrm_t m; idx += decode_modrm(c, cb, idx, segov, &m);
+        if (!m.is_mem) return 0;                       /* LEA with reg operand is illegal */
+        s16(c, m.g, m.ea);
+        c->ip = (uint16_t)(c->ip + idx); return 1;
+    }
+
+    /* ---- shift/rotate group-2: D0/D1 (by 1), D2/D3 (by CL), C0/C1 (imm8) --- */
+    if (op == 0xD0 || op == 0xD1 || op == 0xD2 || op == 0xD3 || op == 0xC0 || op == 0xC1) {
+        int w = (op & 1) ? 2 : 1, cnt;
+        modrm_t m; idx += decode_modrm(c, cb, idx, segov, &m);
+        if (m.is_mem && m.lin >= GUEST_HI) return 0;
+        if (op == 0xD0 || op == 0xD1) cnt = 1;
+        else if (op == 0xD2 || op == 0xD3) cnt = g8(c, 1);   /* CL */
+        else cnt = CB(idx++);                                /* imm8 */
+        { uint32_t v = m.is_mem ? rd_mem(m.lin, w) : (w == 1 ? g8(c, m.rm_reg) : g16(c, m.rm_reg));
+          uint32_t res = do_shrot(c, m.g, v, cnt, w);
+          if (m.is_mem) wr_mem(m.lin, w, res);
+          else if (w == 1) s8(c, m.rm_reg, (uint8_t)res); else s16(c, m.rm_reg, (uint16_t)res); }
+        c->ip = (uint16_t)(c->ip + idx); return 1;
     }
 
     /* ---- IN/OUT via the device bus (E4-E7, EC-EF) -------------------------- *

@@ -283,6 +283,48 @@ int main(void)
       CHECK(c.r[0] == 0x0001 && c.r[4] == 0x0200 && c.ip == 0x03,
             "call indirect: ran subroutine via SI, SP restored"); }
 
+    /* ---- T28: SHR builds a bit-mask (QB's 0x80 >> x) -------------------- */
+    { icpu c = mkcpu(); BYTE p[] = { 0xD2, 0xE8 };   /* SHR AL, CL */
+      c.r[0] = 0x0080; c.r[1] = 0x0003;              /* AL=0x80, CL=3 */
+      load(&c, 0x1000, 0, p, sizeof p); step1(&c);
+      CHECK((c.r[0] & 0xFF) == 0x10, "shr: 0x80 >> 3 = 0x10"); }
+
+    /* ---- T29: SHL by 1 sets CF from the bit shifted out ----------------- */
+    { icpu c = mkcpu(); BYTE p[] = { 0xD0, 0xE0 };   /* SHL AL, 1 */
+      c.r[0] = 0x00C0; load(&c, 0x1000, 0, p, sizeof p); step1(&c);
+      CHECK((c.r[0] & 0xFF) == 0x80, "shl: 0xC0 << 1 = 0x80");
+      CHECK((c.flags & F_CF) != 0, "shl: CF = bit shifted out"); }
+
+    /* ---- T30: ROR by 1, CF = rotated bit; result wraps ------------------ */
+    { icpu c = mkcpu(); BYTE p[] = { 0xD0, 0xC8 };   /* ROR AL, 1 */
+      c.r[0] = 0x0001; load(&c, 0x1000, 0, p, sizeof p); step1(&c);
+      CHECK((c.r[0] & 0xFF) == 0x80 && (c.flags & F_CF), "ror: 0x01 ror 1 = 0x80, CF=1"); }
+
+    /* ---- T31: SHR imm8 (C0 /5) with flags ------------------------------- */
+    { icpu c = mkcpu(); BYTE p[] = { 0xC0, 0xE8, 0x04 };   /* SHR AL, 4 */
+      c.r[0] = 0x00A5; load(&c, 0x1000, 0, p, sizeof p); step1(&c);
+      CHECK((c.r[0] & 0xFF) == 0x0A, "shr: 0xA5 >> 4 = 0x0A"); }
+
+    /* ---- T32: PUSH/POP ES round-trips (the per-pixel bail) -------------- */
+    { icpu c = mkcpu(); BYTE p[] = { 0x06, 0x1F };   /* PUSH ES ; POP DS */
+      c.seg[2] = 0x9000; c.r[4] = 0x0100; c.seg[0] = 0xA000;  /* SS,SP,ES */
+      load(&c, 0x1000, 0, p, sizeof p);
+      step1(&c); CHECK(c.r[4] == 0x00FE, "push ES: SP -= 2");
+      step1(&c); CHECK(c.seg[3] == 0xA000 && c.r[4] == 0x0100, "pop DS = pushed ES"); }
+
+    /* ---- T33: MOV Sreg,r/m and MOV r/m,Sreg --------------------------- */
+    { icpu c = mkcpu(); BYTE p[] = { 0x8E, 0xC0, 0x8C, 0xC3 };  /* MOV ES,AX ; MOV BX,ES */
+      c.r[0] = 0xB800; load(&c, 0x1000, 0, p, sizeof p);
+      step1(&c); CHECK(c.seg[0] == 0xB800, "mov ES,AX");
+      step1(&c); CHECK(c.r[3] == 0xB800, "mov BX,ES"); }
+
+    /* ---- T34: LEA loads the offset, not the memory contents ------------ */
+    { icpu c = mkcpu(); BYTE p[] = { 0x8D, 0x41, 0x06 };   /* LEA AX,[BX+DI+6] */
+      c.r[3] = 0x0010; c.r[7] = 0x0004;              /* BX, DI */
+      MEM[0x1A] = 0xFF;                              /* would be wrong to load */
+      load(&c, 0x1000, 0, p, sizeof p); step1(&c);
+      CHECK(c.r[0] == 0x001A, "lea: AX = BX+DI+6 = 0x1A (offset, not [0x1A])"); }
+
     printf("\n%d checks, %d failed\n", total, fails);
     return fails ? 1 : 0;
 }

@@ -564,22 +564,6 @@ static long host_interp(volatile BYTE *tib, long cap)
         if (!istep(&c)) break;
     LeaveCriticalSection(&g_lock);
 
-    /* --- TEMP diag: batch factor + bail distribution. --- */
-    { static unsigned long dcalls = 0, dsteps = 0, dmax = 0; static unsigned dhist[256];
-      unsigned bailop = imem_r8(((uint32_t)c.seg[1] << 4) + c.ip);
-      dcalls++; dsteps += (unsigned long)iters; dhist[bailop & 0xFF]++;
-      if ((unsigned long)iters > dmax) dmax = (unsigned long)iters;
-      if ((dcalls % 5000UL) == 0) {
-          char b[256], *q = b; unsigned i, top = 0, topn = 0;
-          for (i = 0; i < 256; ++i) if (dhist[i] > topn) { topn = dhist[i]; top = i; }
-          q = zput(q, "ITP calls=0x"); q = zhex(q, (unsigned)dcalls);
-          q = zput(q, " avg=0x"); q = zhex(q, (unsigned)(dsteps / dcalls));
-          q = zput(q, " max=0x"); q = zhex(q, (unsigned)dmax);
-          q = zput(q, " topbail=0x"); q = zhex(q, top);
-          q = zput(q, " n=0x"); q = zhex(q, topn); q = zput(q, "\r\n");
-          log_append(LOG_PATH, b, q);
-      } }
-
     if (iters == 0) return 0;                          /* first opcode unmodeled */
 
     VDM_SET16(tib, VTIB_EAX, c.r[0]); VDM_SET16(tib, VTIB_ECX, c.r[1]);
