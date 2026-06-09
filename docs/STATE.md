@@ -3,7 +3,10 @@
 > **This is the canonical resume point.** Update it at the end of every working session.
 
 - **Last updated:** 2026-06-09
-- **Phase:** **M3 — device model + video (GRAPHICS DONE; now expanding the DOS layer for real apps).**
+- **Phase:** **M3 — device model + video ✅ DONE (2026-06-09).** Next milestone: **M4 (memory
+  extensions — XMS/EMS/DPMI)** or M5 (Win16). M3 closed: full VGA/VESA video, keyboard, **live PIT
+  timer IRQ**, **INT 33h mouse with a host-drawn cursor**, and a **PC-speaker VDD stub** (4 device
+  classes on the pluggable bus); all 10 QuickBASIC demos run in the Luna window on the real CPU.**
   M2 (DOS kernel) is closed. M3 kickoff **retired the `tools/vdmhost` spike** and decided the
   **pluggable VDD architecture** ([ADR-0008](decisions/0008-pluggable-vdd-model.md) +
   [research/vdd-architecture.md](research/vdd-architecture.md)): clean `ntvdd.h` ABI + bus, built-in
