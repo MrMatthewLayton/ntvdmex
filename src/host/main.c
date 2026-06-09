@@ -23,6 +23,7 @@
 #include "dos_env.h"
 #include "dos_int21.h"
 #include "dos_layout.h"
+#include "dos_xms.h"
 #include "vdd_bus.h"
 #include "vdd_pit.h"
 #include "vdd_video.h"
@@ -32,6 +33,11 @@
 
 #define LOG_PATH    "C:\\ntvdmex\\ntvdmhost.log"
 #define TARGET_PATH "C:\\ntvdmex\\target.txt"
+
+/* Offset, within DOS_HDLR_SEG, of the XMS API far-call entry stub (BOP 0x43; RETF).
+   Lives just past the INT 1Ah stub (which ends at 0x40) and the INT 2Fh stub (4 bytes
+   at 0x40). INT 2Fh AX=4310 hands the guest DOS_HDLR_SEG:XMS_ENTRY_OFF to far-call. */
+#define XMS_ENTRY_OFF 0x0044
 
 /* CSRSS receive buffers + program image (no CRT heap; static = zero-init). */
 static char g_cmd[1024], g_app[1024], g_cur[512], g_pif[512];
@@ -46,6 +52,7 @@ static video_state  g_vid;       static ntvdd g_vid_dev;
 static input_state  g_in;        static ntvdd g_in_dev;
 static speaker_state g_spk;      static ntvdd g_spk_dev;
 static present_ddraw g_pd;
+static xms_state    g_xms;       /* M4: XMS extended-memory manager           */
 static volatile LONG g_irq0_pending = 0;    /* PIT raised IRQ0 (UI thread sets, V86 thread delivers) */
 static CRITICAL_SECTION g_lock;             /* serialises all bus dispatch       */
 static HWND         g_hwnd;
@@ -135,6 +142,105 @@ static void host_set_flags(volatile BYTE *tib, uint8_t cf, uint8_t zf)
                          + (((VDM_REG(tib, VTIB_ESP) & 0xFFFF) + 4) & 0xFFFF));
     if (cf) *pfl |= 0x0001; else *pfl &= (WORD)~0x0001;
     if (zf) *pfl |= 0x0040; else *pfl &= (WORD)~0x0040;
+}
+
+/* --- XMS (M4) -------------------------------------------------------------- *
+ * Extended memory lives on the host heap (above the 1MB the V86 map covers), so
+ * each EMB is a VirtualAlloc block; xms_move() memcpys between it and the guest's
+ * conventional window. The XMS entry point is a BOP stub reached by FAR CALL (so
+ * it ends in RETF, not IRET); INT 2Fh AX=4300/4310 advertise it. */
+static void *xms_host_alloc(void *ctx, uint32_t kb)
+{
+    (void)ctx;
+    return VirtualAlloc(NULL, (SIZE_T)kb * 1024, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+}
+static void xms_host_free(void *ctx, void *p, uint32_t kb)
+{
+    (void)ctx; (void)kb;
+    if (p) VirtualFree(p, 0, MEM_RELEASE);
+}
+
+/* Service one XMS far-call (function in AH). XMS returns AX=1 success / AX=0 fail
+   with BL=error code -- it does NOT use the carry flag, so no pushed-FLAGS edit. */
+static void host_xms(volatile BYTE *tib)
+{
+    DWORD ah = (VDM_REG(tib, VTIB_EAX) >> 8) & 0xFF;
+    uint8_t err = XMSERR_NOTIMPL;
+    uint16_t handle, nh;
+    uint32_t largest, totfree, lin;
+    uint8_t lock, freeh; uint32_t size_kb;
+
+    #define X_SETAX(v) VDM_SET16(tib, VTIB_EAX, (v))
+    #define X_SETBX(v) VDM_SET16(tib, VTIB_EBX, (v))
+    #define X_SETDX(v) VDM_SET16(tib, VTIB_EDX, (v))
+    #define X_SETBL(v) VDM_REG(tib, VTIB_EBX) = (VDM_REG(tib, VTIB_EBX) & 0xFFFFFF00u) | ((v) & 0xFF)
+    #define X_SETBH(v) VDM_REG(tib, VTIB_EBX) = (VDM_REG(tib, VTIB_EBX) & 0xFFFF00FFu) | (((DWORD)(v) & 0xFF) << 8)
+    #define X_FAIL(e)  do { X_SETAX(0); X_SETBL(e); } while (0)
+
+    switch (ah) {
+    case 0x00:                                  /* get version */
+        X_SETAX(XMS_VERSION); X_SETBX(XMS_REVISION); X_SETDX(0);  /* DX=0: no HMA */
+        break;
+    case 0x01: X_FAIL(XMSERR_HMA_NONE);   break; /* request HMA (none provided) */
+    case 0x02: X_FAIL(XMSERR_HMA_NOTALL); break; /* release HMA */
+    case 0x03: case 0x05: g_xms.a20 = 1; X_SETAX(1); break;  /* enable A20 (global/local) */
+    case 0x04: case 0x06: g_xms.a20 = 0; X_SETAX(1); break;  /* disable A20 */
+    case 0x07: X_SETAX(g_xms.a20 ? 1 : 0); X_SETBL(0); break;/* query A20 */
+    case 0x08:                                  /* query free extended memory */
+        xms_query_free(&g_xms, &largest, &totfree);
+        X_SETAX(largest > 0xFFFF ? 0xFFFF : largest);
+        X_SETDX(totfree > 0xFFFF ? 0xFFFF : totfree);
+        X_SETBL(largest ? 0 : XMSERR_NOMEM);
+        break;
+    case 0x09:                                  /* allocate EMB: DX=KB */
+        if (xms_alloc(&g_xms, VDM_REG(tib, VTIB_EDX) & 0xFFFF, &nh, &err)) { X_SETAX(1); X_SETDX(nh); }
+        else X_FAIL(err);
+        break;
+    case 0x0A:                                  /* free EMB: DX=handle */
+        if (xms_free(&g_xms, (uint16_t)(VDM_REG(tib, VTIB_EDX) & 0xFFFF), &err)) X_SETAX(1);
+        else X_FAIL(err);
+        break;
+    case 0x0B: {                                /* move EMB: DS:SI -> move struct */
+        DWORD ds = VDM_REG(tib, VTIB_DS) & 0xFFFF, si = VDM_REG(tib, VTIB_ESI) & 0xFFFF;
+        const volatile BYTE *s = (const volatile BYTE *)((ds << 4) + si);
+        xms_move_t mv;
+        mv.length     = (DWORD)s[0] | ((DWORD)s[1] << 8) | ((DWORD)s[2] << 16) | ((DWORD)s[3] << 24);
+        mv.src_handle = (uint16_t)(s[4] | (s[5] << 8));
+        mv.src_offset = (DWORD)s[6] | ((DWORD)s[7] << 8) | ((DWORD)s[8] << 16) | ((DWORD)s[9] << 24);
+        mv.dst_handle = (uint16_t)(s[10] | (s[11] << 8));
+        mv.dst_offset = (DWORD)s[12] | ((DWORD)s[13] << 8) | ((DWORD)s[14] << 16) | ((DWORD)s[15] << 24);
+        if (xms_move(&g_xms, NULL, &mv, &err)) X_SETAX(1); else X_FAIL(err);
+        break; }
+    case 0x0C:                                  /* lock EMB: DX=handle -> DX:BX linear */
+        handle = (uint16_t)(VDM_REG(tib, VTIB_EDX) & 0xFFFF);
+        if (xms_lock(&g_xms, handle, &lin, &err)) { X_SETAX(1); X_SETDX(lin >> 16); X_SETBX(lin & 0xFFFF); }
+        else X_FAIL(err);
+        break;
+    case 0x0D:                                  /* unlock EMB: DX=handle */
+        if (xms_unlock(&g_xms, (uint16_t)(VDM_REG(tib, VTIB_EDX) & 0xFFFF), &err)) X_SETAX(1);
+        else X_FAIL(err);
+        break;
+    case 0x0E:                                  /* get handle info: DX=handle */
+        handle = (uint16_t)(VDM_REG(tib, VTIB_EDX) & 0xFFFF);
+        if (xms_info(&g_xms, handle, &lock, &freeh, &size_kb, &err)) {
+            X_SETAX(1); X_SETBH(lock); X_SETBL(freeh); X_SETDX(size_kb > 0xFFFF ? 0xFFFF : size_kb);
+        } else X_FAIL(err);
+        break;
+    case 0x0F:                                  /* reallocate EMB: BX=new KB, DX=handle */
+        handle = (uint16_t)(VDM_REG(tib, VTIB_EDX) & 0xFFFF);
+        if (xms_realloc(&g_xms, handle, VDM_REG(tib, VTIB_EBX) & 0xFFFF, &err)) X_SETAX(1);
+        else X_FAIL(err);
+        break;
+    case 0x10: X_SETAX(0); X_SETBL(0xB1); X_SETDX(0); break;  /* request UMB: none */
+    case 0x11: X_FAIL(0xB2); break;                          /* release UMB */
+    default:   X_FAIL(XMSERR_NOTIMPL); break;
+    }
+    #undef X_SETAX
+    #undef X_SETBX
+    #undef X_SETDX
+    #undef X_SETBL
+    #undef X_SETBH
+    #undef X_FAIL
 }
 
 /* --- menu + status bar (scaffold; most items are stubs for now) ------------ */
@@ -664,6 +770,10 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     static const BYTE bop08[] = { VDM_BOP0, VDM_BOP1, 0x08, 0xCD, 0x1C, 0xCF };
     static const BYTE bop1c[] = { 0xCF };                           /* iret stub       */
     static const BYTE bop1a[] = { VDM_BOP0, VDM_BOP1, 0x1A, 0xCF }; /* BOP 0x1A ; iret */
+    static const BYTE bop2f[] = { VDM_BOP0, VDM_BOP1, 0x2F, 0xCF }; /* INT 2Fh ; iret  */
+    /* XMS API entry: reached by FAR CALL (INT 2Fh AX=4310 hands back ES:BX), so it
+       ends in RETF (0xCB), not IRET. */
+    static const BYTE bopxms[] = { VDM_BOP0, VDM_BOP1, 0x43, 0xCB };
     HANDLE ui = NULL;
 
     (void)hInst; (void)hPrev; (void)lpCmd; (void)nShow;
@@ -781,11 +891,16 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     for (i = 0; i < sizeof(bop1a); ++i) hdlr[0x3C + i] = bop1a[i];  /* INT 1Ah stub */
     *(volatile WORD *)(0x1A * 4)     = 0x003C;              /* IVT[0x1A].offset    */
     *(volatile WORD *)(0x1A * 4 + 2) = DOS_HDLR_SEG;        /* IVT[0x1A].segment   */
+    for (i = 0; i < sizeof(bop2f); ++i) hdlr[0x40 + i] = bop2f[i];  /* INT 2Fh stub */
+    *(volatile WORD *)(0x2F * 4)     = 0x0040;              /* IVT[0x2F].offset    */
+    *(volatile WORD *)(0x2F * 4 + 2) = DOS_HDLR_SEG;        /* IVT[0x2F].segment   */
+    for (i = 0; i < sizeof(bopxms); ++i) hdlr[XMS_ENTRY_OFF + i] = bopxms[i];  /* XMS far-call entry */
 
     dos_psp_build(NULL, DOS_PSP_SEG, DOS_ENV_SEG, DOS_MEM_TOP);
     dos_env_build(NULL, DOS_ENV_SEG, progpath[0] ? progpath : "C:\\PROGRAM.COM");  /* M2.5: env */
     dos_cmdtail_build(NULL, DOS_PSP_SEG, args);                                    /* M2.5: args */
     dos_int21_init(&m, dos_mcb_init(NULL));
+    xms_init(&g_xms, 16384, xms_host_alloc, xms_host_free, NULL);  /* M4: 16MB XMS pool */
 
     /* Stand up the device bus (NULL base => absolute V86 addresses) with the PIT
        (ports 0x40-0x43, INT 08h/1Ah) and the video VDD (B8000 + INT 10h text +
@@ -944,6 +1059,23 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             regs_store(&r, tib);
             host_set_flags(tib, r.cf, r.zf);
             VDM_REG(tib, VTIB_EIP) += 3;
+            continue;
+        }
+        if ((VDM_REG(tib, VTIB_EVENT_INFO) & 0xFF) == 0x2F) {   /* INT 2Fh multiplex */
+            DWORD ax = VDM_REG(tib, VTIB_EAX) & 0xFFFF;
+            if (ax == 0x4300) {                                 /* XMS installation check */
+                VDM_SET16(tib, VTIB_EAX, (VDM_REG(tib, VTIB_EAX) & 0xFF00) | 0x80);  /* AL=80h installed */
+            } else if (ax == 0x4310) {                          /* get XMS entry -> ES:BX */
+                VDM_SET16(tib, VTIB_ES, DOS_HDLR_SEG);
+                VDM_SET16(tib, VTIB_EBX, XMS_ENTRY_OFF);
+            }
+            /* other INT 2Fh multiplex functions: left to the guest (no-op pass) */
+            VDM_REG(tib, VTIB_EIP) += 3;                        /* -> the IRET (CF) */
+            continue;
+        }
+        if ((VDM_REG(tib, VTIB_EVENT_INFO) & 0xFF) == 0x43) {   /* XMS API far-call entry */
+            host_xms(tib);
+            VDM_REG(tib, VTIB_EIP) += 3;                        /* -> the RETF      */
             continue;
         }
         m.tp = p;

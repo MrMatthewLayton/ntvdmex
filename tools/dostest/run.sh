@@ -60,3 +60,10 @@ cc -std=c99 -Wall -Wextra -Wno-unused-function -O0 -g \
    -o "$DIR/interp_test" "$DIR/interp_test.c"
 
 "$DIR/interp_test"
+
+# M4 slice-1: the XMS core battery (dos_xms.h, host heap + a conventional buffer).
+cc -std=c99 -Wall -Wextra -Wno-unused-function -O0 -g \
+   -I "$DIR/../../src/dos" \
+   -o "$DIR/xms_test" "$DIR/xms_test.c"
+
+"$DIR/xms_test"
