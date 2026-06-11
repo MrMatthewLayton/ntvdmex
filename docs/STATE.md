@@ -2,9 +2,10 @@
 
 > **This is the canonical resume point.** Update it at the end of every working session.
 
-- **Last updated:** 2026-06-09
+- **Last updated:** 2026-06-11
 - **Phase:** **M4 — memory extensions 🟡 IN PROGRESS.** **XMS 3.0 + EMS (LIM 4.0) DONE** (off-VM
-  36/36 + 30/30, host-wired; VM gates pending); **DPMI researched** (feasible via kernel-monitor PM
+  36/36 + 30/30, host-wired; **VM gate not yet captured clean — see *Testing harness* + *Single next
+  action***); **DPMI researched** (feasible via kernel-monitor PM
   reuse — see [research/dpmi-under-ntvdmcontrol.md](research/dpmi-under-ntvdmcontrol.md) — next is a
   16-bit mode-switch spike; DPMI not advertised until proven). See the *M4 milestone* section below.
   **M3 — device model + video ✅ DONE (2026-06-09).** M3 closed: full VGA/VESA video, keyboard, **live PIT
@@ -299,15 +300,52 @@ BLIT drew nothing; implemented 10h/11h + made the default report "no key".
 
 ## Single next action
 
-**M4 is in progress** (see the *M4 milestone* section above). Open work, in rough priority:
-1. **VM-gate XMS + EMS** on the XP VM: stage the new host + `xmstest.com` (menu #14) and
-   `emstest.com` (menu #15) via `RUNTEST.BAT`; expect `XMS PASS` / `EMS PASS`. The EMS gate also
-   re-validates V86 bring-up since `v86.c` grew the section to 1 MB + added the 0xE0000 page-frame
-   map (a regression here would show as an early stop in the existing demos — smoke-test one).
+**M4 is in progress** (see the *M4 milestone* section above). The XMS+EMS host wiring is committed
+and off-VM-green; **the VM gate has NOT yet captured a clean run** (see the testing-harness note
+below). Open work, in rough priority:
+
+0. **Finish the VM gate via `selftest`** (the new consolidated suite — see below). The flow:
+   `./scripts/build-test-iso.sh` builds `/tmp/ntvdmex-test.iso` (host + `selftest` + all tests +
+   demos, fresh volume label); `./scripts/xp-vm.sh run` boots XP; `python3 scripts/qmp.py cd
+   /tmp/ntvdmex-test.iso` hot-swaps it; then run **`D:\selftest.bat`** in the desktop. Expect a
+   PASS/FAIL line per subsystem ending in `ALL TESTS PASSED`. **This is the first time the XMS/EMS
+   host wiring + the extended V86 map run on the real CPU**, so a `FAIL=nn` (or a hang whose last
+   printed label names the subsystem) is the thing to watch. Fail-code legend: top nibble = test
+   (1 dosmem, 2 fileio, 3 xms, 4 ems, 5 timer, 6 mouse, 7 kbd, 8 video), low nibble = step.
+1. **FIX the graphics→text rendering bug** (see *Known host bugs* below) — needed before any
+   self-test or program can mix a graphics mode with later text output.
 2. **DPMI 16-bit spike** — the real→protected-mode-switch round-trip via kernel-monitor reuse
    (services 10/11/13); see [research/dpmi-under-ntvdmcontrol.md](research/dpmi-under-ntvdmcontrol.md).
    This is the M4 keystone risk; don't advertise `2Fh 1687` until it round-trips.
 3. After DPMI: M5 (Win16/WOW foundation).
+
+## Testing harness — consolidated self-test (2026-06-09→11)
+
+Per user direction, the manual run-one-test-at-a-time VM flow was consolidated into **one
+self-checking program** as the regression gate (committed `bca00f3`):
+- **`tools/dostest/selftest.asm/.com`** — runs every subsystem in a single VDM session and prints a
+  `PASS`/`FAIL=nn` line each (DOS mem, file I/O, XMS, EMS, PIT timer, mouse, keyboard, video). It
+  prints each test's **label before running it**, so a hang/fault leaves the culprit's label as the
+  last visible line. Exit code = number of failures.
+- **`tools/dostest/selftest.bat`** — one-click runner (copy host+selftest, set IFEO, run, dump log).
+- **`scripts/build-test-iso.sh`** — builds the complete test CD (host + selftest + runtest menu +
+  all `.com` tests + the QB demos) with a **unique volume label each build** (XP caches CD contents
+  by label — a stale label silently serves the old disc).
+
+**Status when we paused:** the selftest is committed but **not yet captured running clean on the
+VM** — the QEMU dev VM kept dropping (a `system_reset` killed it; a relaunch also died within ~90s,
+cause not yet diagnosed — was about to read `/tmp/xpvm-boot3.log` when we stopped). The off-VM
+batteries are all still green.
+
+## Known host bugs (open)
+
+- **No text rendering after a graphics→text mode switch.** After `INT 10h` sets mode 13h and then
+  restores text mode 3, the host renders no further text — `INT 21h` console output goes to a dead
+  (black) display. Found while bringing up `selftest`: the first builds switched modes mid-suite and
+  printed their whole report invisibly. `selftest` now avoids switching the visible mode as a
+  workaround, but the underlying bug (video VDD not re-establishing the text-grid renderer on a
+  return to mode 3, and/or the present path staying on the 13h framebuffer) is an **M3 video
+  follow-up to fix** — programs that legitimately switch 13h→text would be blank.
 
 ### M3 follow-ups (closed, kept for reference)
 
