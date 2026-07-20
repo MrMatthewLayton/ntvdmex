@@ -40,11 +40,12 @@
    at 0x40). INT 2Fh AX=4310 hands the guest DOS_HDLR_SEG:XMS_ENTRY_OFF to far-call. */
 #define XMS_ENTRY_OFF 0x0044
 
-/* EMS (M4): the LIM page frame is a 64KB RAM window in the UMA mapped by
-   v86_setup_memory (Map 5). 0xE000 is the conventional EMS frame segment. */
-#define EMS_FRAME_SEG  0xE000
-#define EMS_FRAME_LIN  ((DWORD)EMS_FRAME_SEG << 4)   /* linear 0xE0000          */
+/* EMS (M4): the LIM page frame is a 64KB RAM window in the UMA. v86_map_ems_frame
+   scans the conventional page-frame segments AFTER VdmInitialize for a free 64KB
+   hole and maps it there; g_ems_frame_lin holds the linear base actually chosen
+   (0 => none found, EMS unavailable). The guest learns the segment via AH=41. */
 #define EMS_POOL_PAGES 512                           /* 512 * 16KB = 8MB of EMS */
+static DWORD g_ems_frame_lin;                        /* set by v86_map_ems_frame */
 
 /* CSRSS receive buffers + program image (no CRT heap; static = zero-init). */
 static char g_cmd[1024], g_app[1024], g_cur[512], g_pif[512];
@@ -887,6 +888,10 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     v86_setup_memory();
     st = v86_init();
     p = zput(p, "STAGE1: v86_init NTSTATUS=0x"); p = zhex(p, (unsigned)st); p = zput(p, "\r\n");
+    /* EMS page frame must be mapped AFTER VdmInitialize (see v86_map_ems_frame). */
+    g_ems_frame_lin = v86_map_ems_frame();
+    p = zput(p, "STAGE1: ems_frame lin=0x"); p = zhex(p, g_ems_frame_lin);
+    p = zput(p, " seg=0x"); p = zhex(p, g_ems_frame_lin >> 4); p = zput(p, "\r\n");
 
     /* CSRSS: register as the console VDM, then fetch the program to run. */
     csrss_register_console();
@@ -995,7 +1000,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     dos_cmdtail_build(NULL, DOS_PSP_SEG, args);                                    /* M2.5: args */
     dos_int21_init(&m, dos_mcb_init(NULL));
     xms_init(&g_xms, 16384, xms_host_alloc, xms_host_free, NULL);  /* M4: 16MB XMS pool */
-    ems_init(&g_ems, EMS_FRAME_SEG, EMS_POOL_PAGES, (volatile BYTE *)EMS_FRAME_LIN,
+    ems_init(&g_ems, (uint16_t)(g_ems_frame_lin >> 4), EMS_POOL_PAGES,
+             (volatile BYTE *)g_ems_frame_lin,
              ems_host_alloc, ems_host_free, NULL);             /* M4: 8MB EMS pool   */
 
     /* Stand up the device bus (NULL base => absolute V86 addresses) with the PIT
@@ -1159,6 +1165,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         }
         if ((VDM_REG(tib, VTIB_EVENT_INFO) & 0xFF) == 0x2F) {   /* INT 2Fh multiplex */
             DWORD ax = VDM_REG(tib, VTIB_EAX) & 0xFFFF;
+            p = zput(p, " BOP2F ax=0x"); p = zhex(p, ax); p = zput(p, "\r\n");
+            log_append(LOG_PATH, base, p); p = base;
             if (ax == 0x4300) {                                 /* XMS installation check */
                 VDM_SET16(tib, VTIB_EAX, (VDM_REG(tib, VTIB_EAX) & 0xFF00) | 0x80);  /* AL=80h installed */
             } else if (ax == 0x4310) {                          /* get XMS entry -> ES:BX */
@@ -1170,11 +1178,15 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             continue;
         }
         if ((VDM_REG(tib, VTIB_EVENT_INFO) & 0xFF) == 0x43) {   /* XMS API far-call entry */
+            p = zput(p, " XMS AH=0x"); p = zhex(p, (VDM_REG(tib, VTIB_EAX) >> 8) & 0xFF); p = zput(p, "\r\n");
+            log_append(LOG_PATH, base, p); p = base;
             host_xms(tib);
             VDM_REG(tib, VTIB_EIP) += 3;                        /* -> the RETF      */
             continue;
         }
         if ((VDM_REG(tib, VTIB_EVENT_INFO) & 0xFF) == 0x67) {   /* INT 67h EMM (EMS) */
+            p = zput(p, " EMS AH=0x"); p = zhex(p, (VDM_REG(tib, VTIB_EAX) >> 8) & 0xFF); p = zput(p, "\r\n");
+            log_append(LOG_PATH, base, p); p = base;
             EnterCriticalSection(&g_lock);
             host_ems(tib);
             LeaveCriticalSection(&g_lock);

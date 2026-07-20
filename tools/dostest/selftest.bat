@@ -25,4 +25,7 @@ echo ============ ntvdmhost.log ============
 type %N%\ntvdmhost.log 2>nul
 echo =======================================
 echo Self-test errorlevel (= number of failed tests): %ERRORLEVEL%
+echo.
+echo (leave this window open for the host to screendump the log above)
+pause
 endlocal

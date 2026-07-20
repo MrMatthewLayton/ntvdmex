@@ -25,6 +25,15 @@ LONG v86_setup_memory(void);
    if ntdll!NtVdmControl is unavailable. Caches the entry point for v86_run(). */
 LONG v86_init(void);
 
+/* Find a free 64KB UMA hole and map the EMS page frame there as V86 RAM. Must run
+   AFTER v86_init(): pre-mapping a section view in the UMA makes VdmInitialize fail
+   with STATUS_UNABLE_TO_FREE_VM (it requires that range free during init). After
+   init only part of the UMA is free (e.g. E0000 has just 32KB), so we scan the
+   conventional page-frame segments for a hole big enough. Returns the linear base
+   of the mapped 64KB frame (0 on failure). The guest learns the segment via EMS
+   INT 67h AH=41, so any hole works. */
+DWORD v86_map_ems_frame(void);
+
 /* Return the VDM_TIB (TEB+0xF18). The kernel does not allocate it; if absent we
    allocate our own static TIB, initialise the fields ntvdm sets, and register it.
    Returns NULL only if the TEB is unreadable. */

@@ -82,6 +82,7 @@ typedef LONG (WINAPI *PFN_NtCreateSection)(PHANDLE, ULONG, OBJ_ATTR *,
 typedef LONG (WINAPI *PFN_NtFreeVirtualMemory)(HANDLE, PVOID *, SIZE_T *, ULONG);
 typedef LONG (WINAPI *PFN_NtMapViewOfSection)(HANDLE, HANDLE, PVOID *, ULONG,
             SIZE_T, LARGE_INTEGER *, SIZE_T *, ULONG, ULONG, ULONG);
+typedef LONG (WINAPI *PFN_NtUnmapViewOfSection)(HANDLE, PVOID);
 
 #define MEM_RELEASE_NT  0x8000
 #define SEC_RESERVE_NT  0x04000000

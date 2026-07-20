@@ -17,6 +17,10 @@ static BYTE g_vdmtib[0x700] __attribute__((aligned(16)));
 /* Cached NtVdmControl entry point (set by v86_init, used by v86_run). */
 static PFN_NtVdmControl s_ntvdmctl;
 
+/* The V86 section (0..0xFFFFF); kept so the EMS page frame can be mapped from it
+   AFTER VdmInitialize (see v86_map_ems_frame). */
+static HANDLE s_hSec;
+
 /* Trap handler stub -- stored by the kernel, only invoked on a V86 fault. */
 static void __stdcall trap_stub(void) { }
 
@@ -36,7 +40,6 @@ LONG v86_setup_memory(void)
         (PFN_NtFreeVirtualMemory)GetProcAddress(hntdll, "NtFreeVirtualMemory");
     PFN_NtMapViewOfSection  NtMapViewOfSection =
         (PFN_NtMapViewOfSection)GetProcAddress(hntdll, "NtMapViewOfSection");
-    HANDLE hSec = NULL;
     OBJ_ATTR oa;
     LARGE_INTEGER maxsize, off;
     PVOID base; SIZE_T sz; LONG st;
@@ -45,7 +48,7 @@ LONG v86_setup_memory(void)
     for (i = 0; i < sizeof(oa); ++i) q[i] = 0;
     oa.Length = 0x18;
     maxsize.QuadPart = 0x100000;       /* conv + video aperture + UMA (EMS frame, M4) */
-    NtCreateSection(&hSec, 0xA, &oa, &maxsize, PAGE_EXECUTE_READWRITE,
+    NtCreateSection(&s_hSec, 0xA, &oa, &maxsize, PAGE_EXECUTE_READWRITE,
                     SEC_RESERVE_NT, NULL);
 
     /* Release the default low reservations the loader made, then map the section
@@ -55,31 +58,59 @@ LONG v86_setup_memory(void)
     base = (PVOID)0xA0000;  sz = 0x20000; NtFreeVirtualMemory((HANDLE)-1, &base, &sz, MEM_RELEASE_NT);
 
     base = (PVOID)1;        sz = 0xFFFF;  off.QuadPart = 0;
-    NtMapViewOfSection(hSec, (HANDLE)-1, &base, 0, 0xFFFF, &off, &sz, 2,
+    NtMapViewOfSection(s_hSec, (HANDLE)-1, &base, 0, 0xFFFF, &off, &sz, 2,
                        VDM_MAP_FLAG, PAGE_EXECUTE_READWRITE);
     base = (PVOID)0x100000; sz = 0x10000; off.QuadPart = 0;
-    NtMapViewOfSection(hSec, (HANDLE)-1, &base, 0, 0x10000, &off, &sz, 2,
+    NtMapViewOfSection(s_hSec, (HANDLE)-1, &base, 0, 0x10000, &off, &sz, 2,
                        VDM_MAP_FLAG, PAGE_EXECUTE_READWRITE);
     /* Map 3 (the rest of conventional memory): section[0x10000..] -> linear 0x10000,
        size 0x90000. Without it the guest faults the moment it touches >64KB. */
     base = (PVOID)0x10000;  sz = 0x90000; off.QuadPart = 0x10000;
-    st = NtMapViewOfSection(hSec, (HANDLE)-1, &base, 0, 0x90000, &off, &sz, 2,
+    st = NtMapViewOfSection(s_hSec, (HANDLE)-1, &base, 0, 0x90000, &off, &sz, 2,
                             VDM_MAP_FLAG, PAGE_EXECUTE_READWRITE);
     /* Map 4 -- the VGA aperture A0000-BFFFF (128KB) as RAM, so direct-framebuffer
        writes (mode 13h at A0000, text at B8000) just land in memory and the video
        VDD renders it each frame. */
     base = (PVOID)0xA0000;  sz = 0x20000; off.QuadPart = 0xA0000;
-    NtMapViewOfSection(hSec, (HANDLE)-1, &base, 0, 0x20000, &off, &sz, 2,
+    NtMapViewOfSection(s_hSec, (HANDLE)-1, &base, 0, 0x20000, &off, &sz, 2,
                        VDM_MAP_FLAG, PAGE_EXECUTE_READWRITE);
-    /* Map 5 -- the EMS page frame E000:0000-EFFF:000F (64KB) as RAM (M4). EMS maps
-       16KB logical pages into this window via memcpy (page-frame shadowing), so the
-       guest's direct reads/writes here are plain RAM accesses (no trap). Free the
-       loader's reservation of the region first (harmless no-op if it is already free). */
-    base = (PVOID)0xE0000;  sz = 0x10000; NtFreeVirtualMemory((HANDLE)-1, &base, &sz, MEM_RELEASE_NT);
-    base = (PVOID)0xE0000;  sz = 0x10000; off.QuadPart = 0xE0000;
-    NtMapViewOfSection(hSec, (HANDLE)-1, &base, 0, 0x10000, &off, &sz, 2,
-                       VDM_MAP_FLAG, PAGE_EXECUTE_READWRITE);
+    /* NOTE: the EMS page frame at 0xE0000 is deliberately NOT mapped here. The
+       kernel VDM claims the C0000-FFFFF UMA/ROM range during VdmInitialize, so a
+       section view pre-mapped at 0xE0000 makes VdmInitialize fail with
+       STATUS_UNABLE_TO_FREE_VM (0xC000001A) -- diagnosed via the selftest VM gate.
+       The frame is mapped AFTER init by v86_map_ems_frame(). (The A0000 VGA
+       aperture above is fine pre-init: the kernel leaves it for the display.) */
     return st;
+}
+
+/* Map the EMS 64KB page frame as RAM, from the V86 section -- called AFTER
+   v86_init()/VdmInitialize (see the NOTE in v86_setup_memory). EMS shadows 16KB
+   logical pages into this window via memcpy, so the guest's direct frame accesses
+   are plain RAM (no trap). Post-init only part of the UMA is free (e.g. E0000 has
+   just 32KB), so we scan the conventional page-frame segments for a free 64KB hole
+   and map there. Returns the linear base of the mapped frame (0 if none found). */
+DWORD v86_map_ems_frame(void)
+{
+    HANDLE hntdll = GetModuleHandleA("ntdll.dll");
+    PFN_NtMapViewOfSection NtMapViewOfSection =
+        (PFN_NtMapViewOfSection)GetProcAddress(hntdll, "NtMapViewOfSection");
+    /* Conventional 64KB-aligned EMS page-frame segments, in preference order. E000
+       is tried last: post-init it typically has only 32KB free. */
+    static const DWORD cand[] = { 0xD0000, 0xC0000, 0xE0000 };
+    unsigned i;
+
+    if (!s_hSec) return 0;
+    for (i = 0; i < sizeof(cand) / sizeof(cand[0]); ++i) {
+        MEMORY_BASIC_INFORMATION mbi;
+        LARGE_INTEGER off; PVOID base; SIZE_T sz; LONG st;
+        if (!VirtualQuery((LPCVOID)cand[i], &mbi, sizeof(mbi))) continue;
+        if (mbi.State != MEM_FREE || mbi.RegionSize < 0x10000) continue;  /* need 64KB free */
+        base = (PVOID)cand[i]; sz = 0x10000; off.QuadPart = cand[i];
+        st = NtMapViewOfSection(s_hSec, (HANDLE)-1, &base, 0, 0x10000, &off, &sz, 2,
+                                VDM_MAP_FLAG, PAGE_EXECUTE_READWRITE);
+        if (st >= 0) return cand[i];   /* mapped: linear base of the 64KB frame */
+    }
+    return 0;
 }
 
 LONG v86_init(void)
