@@ -131,7 +131,16 @@ printhexb:
 
 ; --- DOS conventional memory: alloc / resize / free ------------------------
 t_dosmem:
-    mov ah, 0x48
+    ; A freshly-loaded program owns ALL conventional memory (DOS gives a .COM the
+    ; whole largest free block), so AH=48 fails until we shrink our own PSP block
+    ; first with AH=4A -- exactly what a real DOS program / memtest.com does.
+    push cs
+    pop es                      ; ES = our PSP segment (block to resize)
+    mov ah, 0x4A
+    mov bx, 0x1000              ; keep 64KB (PSP+code+stack), free the rest
+    int 0x21
+    jc .f0
+    mov ah, 0x48                ; now there is a free tail to allocate from
     mov bx, 0x40
     int 0x21
     jc .f1
@@ -147,6 +156,8 @@ t_dosmem:
     jc .f3
     xor ax, ax
     ret
+.f0: mov ax, 0x10               ; shrink-own-block failed
+     ret
 .f1: mov ax, 0x11
      ret
 .f2: mov ax, 0x12
@@ -383,7 +394,9 @@ t_timer:
     pop es
     mov ax, [es:0x6C]
     mov [t0], ax
-    xor cx, cx                  ; 65536 polls max
+    mov dx, 32                  ; outer: ~32 * 65536 INT 16h round-trips is well over
+.outer:                        ; one PIT period (~55ms), so a live ~18Hz tick is certain
+    xor cx, cx                 ; to land in the window (a pure spin can finish under 55ms)
 .poll:
     mov ah, 0x01
     int 0x16
@@ -393,6 +406,8 @@ t_timer:
     cmp ax, [t0]
     jne .ok
     loop .poll
+    dec dx
+    jnz .outer
     mov ax, 0x51                ; timed out: timer never fired
     ret
 .ok:

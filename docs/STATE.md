@@ -4,10 +4,9 @@
 
 - **Last updated:** 2026-07-20
 - **Phase:** **M4 — memory extensions 🟡 IN PROGRESS.** **XMS 3.0 + EMS (LIM 4.0) DONE + VM-CONFIRMED
-  (2026-07-20)** — off-VM 36/36 + 30/30 AND both PASS on the real CPU via `selftest` (6/8 subsystems
-  pass; fixed a `VdmInitialize` regression + a dynamic EMS-frame relocation to close the gate — see
-  *M4 VM gate* below; the 2 remaining fails, DOS-mem + PIT-timer, are pre-existing non-M4 bugs);
-  **DPMI researched** (feasible via kernel-monitor PM
+  (2026-07-20)** — off-VM 36/36 + 30/30 AND the `selftest` VM gate is **8/8 ALL TESTS PASSED** on the
+  real CPU (fixed a `VdmInitialize` regression + dynamic EMS-frame relocation + two test-side bugs —
+  see *M4 VM gate* below); **DPMI researched** (feasible via kernel-monitor PM
   reuse — see [research/dpmi-under-ntvdmcontrol.md](research/dpmi-under-ntvdmcontrol.md) — next is a
   16-bit mode-switch spike; DPMI not advertised until proven). See the *M4 milestone* section below.
   **M3 — device model + video ✅ DONE (2026-06-09).** M3 closed: full VGA/VESA video, keyboard, **live PIT
@@ -300,20 +299,20 @@ BUBBLES/BOUNCEBX with a stop dump), and the **INKEY$ phantom key** — INT 16h e
 (QB's INKEY$) hit a `ZF=0` default → a phantom keystroke, so `DO WHILE INKEY$ = ""` exited instantly and
 BLIT drew nothing; implemented 10h/11h + made the default report "no key".
 
-## M4 VM gate — CAPTURED 2026-07-20: 6/8 PASS, XMS + EMS confirmed on real CPU
+## M4 VM gate — GREEN 2026-07-20: 8/8 ALL TESTS PASSED on the real CPU
 
-The `selftest` VM gate finally ran end-to-end on the real CPU. On-screen report:
+The `selftest` VM gate runs end-to-end on the real CPU and every subsystem passes:
 
 ```
-DOS memory......  FAIL=11        File I/O........  PASS
+DOS memory......  PASS           File I/O........  PASS
 XMS 3.0.........  PASS           EMS LIM 4.0.....  PASS
-PIT timer IRQ...  FAIL=51        Mouse INT 33h..   PASS
+PIT timer IRQ...  PASS           Mouse INT 33h..   PASS
 Keyboard INT16..  PASS           Video 13h+A000..  PASS
-==== FAILURES: 02 ====
+==== ALL TESTS PASSED ====
 ```
 
 **Both M4 memory managers (XMS 3.0 + EMS LIM 4.0) PASS on real hardware** — the point of the gate.
-Getting here fixed two real regressions in the V86 bring-up (committed 2026-07-20):
+Getting here fixed two real regressions in the V86 bring-up (committed `562deed`):
 
 - **`VdmInitialize` was failing (`NTSTATUS=0xc000001a` STATUS_UNABLE_TO_FREE_VM) → guest never ran.**
   Cause: the EMS slice pre-mapped a section view at 0xE0000 *inside* `v86_setup_memory` (before
@@ -329,16 +328,18 @@ Getting here fixed two real regressions in the V86 bring-up (committed 2026-07-2
   `AH=41`, so relocation is transparent (D000 gets picked). Also added flushed BOP breadcrumb
   logging (INT 2Fh / XMS-entry / INT 67h) in the service loop — that's what pinpointed the crash.
 
-**Two failures remain (both pre-existing, NOT M4 memory work):**
-- **DOS memory FAIL=11** — `INT 21h AH=48` alloc of 0x40 paras returns CF with `max=0` (the log
-  shows `AH=48 alloc 0x40 -> err max=0x0`): the MCB chain reports **zero** conventional memory free
-  in the real V86 arena. Passes off-VM 49/49, so it's an arena-size/`dos_mcb_init` mismatch exposed
-  only against the actual memory map. **First thing to chase.**
-- **PIT timer FAIL=51** — the BIOS tick at `0040:006C` never advances during the test. The selftest
-  polls 006C in a tight loop with no BOP/INT, so there's no event boundary for IRQ0 injection
-  (`timertst.com` passes because its dot-print `INT 21h`s create boundaries). Either the test must
-  yield (add an `INT 28h`/idle BOP) or IRQ0 delivery needs a tick source independent of guest event
-  boundaries. Decide which.
+**The two initial failures were both TEST-side bugs (the host was correct), now fixed in
+`tools/dostest/selftest.asm` (committed 2026-07-20):**
+- **DOS memory (was FAIL=11)** — `t_dosmem` called `AH=48` without first shrinking its own PSP
+  block. A freshly-loaded `.COM` *owns all* conventional memory (`dos_mcb_init` lays the program
+  block as `'Z'` owner=PSP size 0x9F00), so `AH=48` correctly returns error 8 / `max=0` until the
+  program shrinks itself with `AH=4A` — exactly what `memtest.com` does. **Fix:** `t_dosmem` now
+  `AH=4A`-shrinks to 0x1000 paras first, freeing the tail to allocate from. (Host was right.)
+- **PIT timer (was FAIL=51)** — `t_timer` *does* yield via `INT 16h` each iteration (a valid INT 08h
+  injection point), but its single 65536-poll loop can finish in ~30-65ms — under one PIT period
+  (~55ms) — so a live tick could be missed. **Fix:** wrap it in a 32× outer loop so the window is
+  well over a tick period; a live ~18Hz PIT now reliably lands. (`timertst.com` passed because its
+  dot-prints already made it run for seconds.) IRQ0 delivery itself was fine.
 
 **Operational (this session):** the XP account **password had expired** and blocked boot at a logon
 dialog — that was almost certainly last session's "VM keeps dropping." User reset it to **`ntvdmex1`**
@@ -351,18 +352,16 @@ CD to remount after each `qmp.py cd` (the unique volume label alone isn't enough
 
 ## Single next action
 
-**M4 memory extensions are essentially validated** (XMS + EMS pass on real CPU). Remaining, in order:
+**M4 memory extensions are VALIDATED — the `selftest` VM gate is 8/8 ALL TESTS PASSED on the real
+CPU** (XMS + EMS confirmed; the two test-side fails fixed — see *M4 VM gate* above). Remaining, in
+order:
 
-0. **Fix DOS memory FAIL=11** (MCB reports 0 free in the real arena) then **PIT timer FAIL=51**
-   (tick doesn't advance under a tight poll) — see the VM-gate section just above. Re-run the gate
-   after each: `./scripts/build-test-iso.sh` → `qmp.py cd /tmp/ntvdmex-test.iso` → F5 → double-click
-   `D:\selftest.bat`. Goal: `FAILURES: 00`.
-1. **FIX the graphics→text rendering bug** (see *Known host bugs* below) — needed before any
+0. **FIX the graphics→text rendering bug** (see *Known host bugs* below) — needed before any
    program can mix a graphics mode with later text output. (selftest dodges it; it didn't bite.)
-2. **DPMI 16-bit spike** — the real→protected-mode-switch round-trip via kernel-monitor reuse
+1. **DPMI 16-bit spike** — the real→protected-mode-switch round-trip via kernel-monitor reuse
    (services 10/11/13); see [research/dpmi-under-ntvdmcontrol.md](research/dpmi-under-ntvdmcontrol.md).
    This is the M4 keystone risk; don't advertise `2Fh 1687` until it round-trips.
-3. After DPMI: M5 (Win16/WOW foundation).
+2. After DPMI: M5 (Win16/WOW foundation).
 
 ## Testing harness — consolidated self-test (2026-06-09→11)
 
@@ -377,10 +376,11 @@ self-checking program** as the regression gate (committed `bca00f3`):
   all `.com` tests + the QB demos) with a **unique volume label each build** (XP caches CD contents
   by label — a stale label silently serves the old disc).
 
-**Status when we paused:** the selftest is committed but **not yet captured running clean on the
-VM** — the QEMU dev VM kept dropping (a `system_reset` killed it; a relaunch also died within ~90s,
-cause not yet diagnosed — was about to read `/tmp/xpvm-boot3.log` when we stopped). The off-VM
-batteries are all still green.
+**Status (2026-07-20): GREEN — `selftest` captured 8/8 ALL TESTS PASSED on the VM** (see *M4 VM gate*
+above). The earlier "VM kept dropping" was an **expired XP password** stalling boot at a logon dialog,
+not a QEMU crash (reset to `ntvdmex1`). QEMU does occasionally drop and need a relaunch (`xp-vm.sh
+run`); on reboot the stale-password auto-logon shows a "could not log you on" message — dismiss it and
+the desktop comes up. The off-VM batteries are all still green.
 
 ## Known host bugs (open)
 
