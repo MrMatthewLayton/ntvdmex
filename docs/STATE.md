@@ -352,6 +352,10 @@ CD to remount after each `qmp.py cd` (the unique volume label alone isn't enough
 
 ## Single next action
 
+> **Work items are tracked in [GitHub Issues](https://github.com/MrMatthewLayton/ntvdmex/issues)**
+> (epics = milestones M4–M8; ported 2026-07-20). The list below is the current priority ordering;
+> the Issues tracker is the source of truth for status.
+
 **M4 memory extensions are VALIDATED — the `selftest` VM gate is 8/8 ALL TESTS PASSED on the real
 CPU** (XMS + EMS confirmed; the two test-side fails fixed — see *M4 VM gate* above). Remaining, in
 order:

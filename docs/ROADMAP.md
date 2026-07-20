@@ -4,6 +4,12 @@ Milestones are ordered by **risk and dependency**, not by feature glamour. Each 
 something runnable/observable. Win16 is intentionally late: it is built on the same V86 + DOS
 foundation as everything before it.
 
+> **Open work now lives in [GitHub Issues](https://github.com/MrMatthewLayton/ntvdmex/issues)** —
+> epics are **milestones** (M4–M8), plus unmilestoned bugs/follow-ups. This file is the narrative
+> roadmap + stage-history; the Issues tracker is the source of truth for *what's open*. Re-run
+> [`scripts/gh-bootstrap-issues.sh`](../scripts/gh-bootstrap-issues.sh) to sync newly-added items
+> (idempotent).
+
 ## How each step is tracked
 
 Every milestone/step moves through five stages:
