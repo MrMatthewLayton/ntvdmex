@@ -66,6 +66,11 @@ int dpmi_switch_to_pm(volatile BYTE *tib, int client_is_32bit,
     if (set_st) *set_st = st;
     if (st < 0) return -1;
 
+    /* Mark the client as in protected mode: set the virtual-MSW PE bit the monitor
+       reads via getMSW (word[TIB+0x668]). Without this the monitor still treats the
+       VDM as V86 and won't load our LDT (VM run 5: descriptor correct but base 0). */
+    *(volatile WORD *)(tib + VTIB_MSW) |= MSW_PE_BIT;
+
     /* Rewrite the CONTEXT into protected mode: clear VM, load the LDT selectors,
        resume at the client's return address (same linear addr, now via a selector). */
     VDM_REG(tib, VTIB_EFLAGS) = VTIB_EFLAGS_PM;      /* VM clear -> PM              */

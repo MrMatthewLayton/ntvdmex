@@ -211,6 +211,43 @@ enable sequence (map `ExpLdt` via `VdmMapFlat`, drive the switch trampoline / sv
 *then* PM executes at the right base and INT 31h reflects. Everything up to the
 monitor's PM-mode flag is now proven correct.
 
+### VM run 6 + the architecture correction (2026-08-01) — PM runs in USER MODE via `iretd`, not the kernel monitor `[FACT, disasm]`
+
+Run 6 set the virtual-MSW PE bit (`word[TIB+0x668] |= 1`, what `getMSW` reads) before
+the switch — **no change**, same base-0 fault. That proved the *kernel* monitor's
+LDT-load isn't driven by the user MSW, and forced a closer read of how ntvdm actually
+executes PM.
+
+**The correction (decisive):** `fcn.0f00532e`'s PM branch does **not** call
+`VdmStartExecution` (service 0) — the V86 branch does (`or [eflags],0x20000` then
+`NtVdmControl(0,NULL)`), but the PM branch calls **`0xf04483c`**. And `0xf04483c` ends
+in a bare **`iretd`** (plus a `popfd; pop es/ds/gs/fs; popal; lss esp; iretd` variant):
+it builds an interrupt-return frame from the VDM_TIB register fields
+(`+0x388`..`+0x3a0` = EAX..SS) on the guest's own stack and **returns into the client
+directly, in ntvdm's own ring-3 context. There is no NtVdmControl call on the PM path.**
+
+So the real architecture is:
+- **V86** → run by the **kernel monitor** (`NtVdmControl VdmStartExecution`).
+- **Protected mode** → run **directly in the host process via `iretd`** into the LDT
+  selectors, using the *process's own LDT*. A PM fault / `INT 31h` surfaces as an
+  ordinary **Win32 exception** that ntvdm catches (SEH/VEH) and services, then `iretd`s
+  back. `svc 10/11` install the descriptors into the process LDT that this in-process
+  execution uses; `getMSW`/the MSW is ntvdm's *own* bookkeeping, not a kernel switch.
+
+**Why our spike faulted:** we fed a VM-clear context to `VdmStartExecution`, but the
+kernel monitor doesn't run PM — it mis-ran our context (base 0). **All of our
+descriptor + service-10/11 work is correct and reusable; only the execution mechanism
+was wrong.**
+
+**Increment 3 (redirected):** replace "clear VM + VdmStartExecution" with an
+**in-process user-mode PM engine**: after installing the LDT selectors, save host
+state, load the guest GP + segment registers, and `iretd` into `CS=0x0F:EIP` with
+`SS/DS/ES=0x17`; catch the resulting `INT 31h`/fault as a Win32 exception in the VEH,
+service it, and resume. This is real low-level asm (no-CRT) + an SEH-based PM service
+loop — a substantial engine, and the correct path. The keystone risk (can we run PM at
+all?) is now *lower*, not higher: it's plain user-mode execution, no undocumented
+kernel PM path needed.
+
 ## Open unknowns (what the spike must nail down) `[VERIFY]`
 
 1. **The mode-switch primitive.** Exactly how ntvdm flips the VDM from V86→PM after the client

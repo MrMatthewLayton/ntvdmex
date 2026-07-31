@@ -124,6 +124,11 @@ typedef LONG (WINAPI *PFN_NtUnmapViewOfSection)(HANDLE, PVOID);
 #define VTIB_EFLAGS_V86    0x20002    /* EFlags: VM + reserved bit, IOPL=0        */
 #define VTIB_EFLAGS_PM     0x00202    /* EFlags: IF + reserved bit, VM clear (PM) */
 #define EFLAGS_VM_BIT      0x20000    /* EFLAGS.VM (bit 17): set=V86, clear=PM     */
+/* Virtual MSW (low 16 of the client's CR0) the monitor keeps in the VDM_TIB.
+   getMSW (ntvdm 0xf0041b5) reads word[TIB+0x668]; fcn.0f00532e gates PM-vs-V86 on
+   its PE bit. Setting PE marks the client as in protected mode. */
+#define VTIB_MSW           0x668
+#define MSW_PE_BIT         0x0001     /* CR0.PE                                    */
 
 /* BOP (BIOS Operation): the 3-byte sequence C4 C4 nn is an invalid opcode the
    kernel reflects back to the host as a VDM event, carrying the byte nn. The host
