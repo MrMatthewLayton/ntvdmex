@@ -186,6 +186,31 @@ switch**. That is increment 2's concrete task: recover its ServiceData/LDT-table
 (fcn.0f050140) and call it, then re-run. The VEH stays as permanent PM-fault
 instrumentation.
 
+### VM runs 3–5 (2026-08-01) — LDT registered + descriptor verified; monitor still won't load our LDT `[FACT, real CPU]`
+
+Increment 2 added service 11 (`VdmSetProcessLdtInfo`) registration and per-run
+diagnostics. Three tightly-scoped iterations:
+
+- **Run 3:** `[svc11=0xC0000004 svc10=0x0]` — service 11 rejected with
+  **`STATUS_INFO_LENGTH_MISMATCH`**. The ServiceData length dword must be the *total*
+  `PROCESS_LDT_INFORMATION` byte size (`8 + count*8`), not the descriptor count.
+- **Run 4:** fixed the length → **`svc11=0x0` (success)** — the kernel now accepts our
+  LDT table. But the base-0 fault **persisted**.
+- **Run 5:** logged the descriptor. `retcs=0x100 clo=0x1000ffff chi=0x0000fa00` decodes
+  to **base=0x1000, limit=0xFFFF, access=0xFA** — a *correct* code descriptor
+  (base = retCS<<4). Yet the guest still executes at **linear 0x127 (base 0)**.
+
+**Definitive conclusion:** the descriptor is right, svc 10 + svc 11 both succeed, but
+the monitor **does not load our LDT (LDTR) when it runs the PM context** — so selector
+`0x0F` resolves base 0. Our raw "clear VM + `VdmStartExecution`" bypasses ntvdm's
+**DPMI-mode enable**: the real switch (fcn.0f050a16 → `VdmMapFlat` to build `ExpLdt`,
+then the switch trampoline `0xf044a58` with `&CONTEXT`, plus the service-13
+`VdmPMCliControl` PM path in fcn.0f00532e) is what puts the VDM into protected mode so
+the monitor loads the LDT and reflects PM faults. **Increment 3:** replicate that
+enable sequence (map `ExpLdt` via `VdmMapFlat`, drive the switch trampoline / svc 13),
+*then* PM executes at the right base and INT 31h reflects. Everything up to the
+monitor's PM-mode flag is now proven correct.
+
 ## Open unknowns (what the spike must nail down) `[VERIFY]`
 
 1. **The mode-switch primitive.** Exactly how ntvdm flips the VDM from V86→PM after the client

@@ -3,6 +3,11 @@
 #include "ntvdm.h"
 #include "v86.h"
 
+/* Diagnostic snapshot of the last switch (read by the host log): ret_cs, ret_ip,
+   code descriptor lo, code descriptor hi. Localises base-0 faults (my descriptor
+   vs the monitor not loading the LDT). */
+DWORD g_dpmi_dbg[4] = {0,0,0,0};
+
 /* LDT selector indices we hand the client. A ring-3 Win32 process has no LDT
    entries of its own, so starting at 1 is safe (index 0 would be selector 0x07). */
 #define DPMI_IDX_CODE  1
@@ -42,6 +47,7 @@ int dpmi_switch_to_pm(volatile BYTE *tib, int client_is_32bit,
 
     dpmi_build_desc((DWORD)ret_cs << 4, 0xFFFF, code_access, &clo, &chi);
     dpmi_build_desc((DWORD)ds     << 4, 0xFFFF, data_access, &dlo, &dhi);
+    g_dpmi_dbg[0] = ret_cs; g_dpmi_dbg[1] = ret_ip; g_dpmi_dbg[2] = clo; g_dpmi_dbg[3] = chi;
 
     /* First REGISTER the LDT table (service 11) so the monitor loads LDTR -- without
        this, svc 10's descriptors resolve base 0 (VM run 2 diagnosis). Table covers

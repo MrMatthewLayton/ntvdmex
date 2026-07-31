@@ -1280,6 +1280,9 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             sw = dpmi_switch_to_pm(tib, 0, &reg_st, &set_st);
             p = zput(p, " [svc11=0x"); p = zhex(p, (unsigned)reg_st);
             p = zput(p, " svc10=0x"); p = zhex(p, (unsigned)set_st); p = zput(p, "]");
+            p = zput(p, " retcs=0x"); p = zhex(p, g_dpmi_dbg[0]);
+            p = zput(p, " clo=0x"); p = zhex(p, g_dpmi_dbg[2]);
+            p = zput(p, " chi=0x"); p = zhex(p, g_dpmi_dbg[3]);
             if (sw == 0) {
                 g_dpmi_pm = 1;
                 p = zput(p, " -> PM ok (VM cleared, CS=0x");

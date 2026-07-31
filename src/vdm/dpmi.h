@@ -16,6 +16,9 @@
 
 #include <windows.h>
 
+/* Diagnostic snapshot of the last switch: {ret_cs, ret_ip, code desc lo, hi}. */
+extern DWORD g_dpmi_dbg[4];
+
 /* An LDT selector: (index<<3) | TI(=1,LDT) | RPL(=3, ring-3 client). */
 #define DPMI_SEL(index)  (WORD)(((index) << 3) | 0x4 | 0x3)
 

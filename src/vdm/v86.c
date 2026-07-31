@@ -199,10 +199,15 @@ LONG v86_set_process_ldt_info(WORD start_sel, const DWORD *entries, int count)
     DWORD sd[2];
     int i, nd = count * 2;              /* two dwords per descriptor                 */
     if (nd > (int)(sizeof(buf)/sizeof(buf[0])) - 2) return 1;
+    /* PROCESS_LDT_INFORMATION { ULONG Start; ULONG Length; LDT_ENTRY Entries[] }.
+       Start = byte offset into the LDT; Length = byte count of the entries. */
     buf[0] = start_sel;
-    buf[1] = (DWORD)(count * 8);        /* length in bytes                           */
+    buf[1] = (DWORD)(count * 8);        /* Length: bytes of descriptor entries       */
     for (i = 0; i < nd; ++i) buf[2 + i] = entries[i];
     sd[0] = (DWORD)(ULONG_PTR)buf;
-    sd[1] = (DWORD)count;
+    /* NtSetInformationProcess(ProcessLdtInformation) wants the TOTAL byte size:
+       FIELD_OFFSET(Entries)=8 + Length. Passing the count gave INFO_LENGTH_MISMATCH
+       (0xC0000004) in VM run 3. */
+    sd[1] = (DWORD)(8 + count * 8);
     return v86_vdmcontrol(VDM_SVC_VdmSetProcessLdtInfo, sd);
 }
