@@ -29,7 +29,10 @@ void dpmi_build_desc(DWORD base, DWORD limit, BYTE access, DWORD *lo, DWORD *hi)
    real-mode segments, and rewrites the CONTEXT to PM (VM clear, CS=code sel at the
    return offset, SS/DS/ES=data sel). Returns 0 on success, <0 if an LDT install
    failed. On success the caller must NOT advance EIP -- CS:IP were fully rewritten.
-   `tib` is the VDM_TIB. `client_is_32bit` selects a 32-bit code/data selector. */
-int dpmi_switch_to_pm(volatile BYTE *tib, int client_is_32bit);
+   `tib` is the VDM_TIB. `client_is_32bit` selects a 32-bit code/data selector.
+   *reg_st / *set_st receive the NtVdmControl status of the LDT register (svc 11) and
+   set-entries (svc 10) calls, for logging (pass NULL to ignore). */
+int dpmi_switch_to_pm(volatile BYTE *tib, int client_is_32bit,
+                      LONG *reg_st, LONG *set_st);
 
 #endif /* VDM_DPMI_H */

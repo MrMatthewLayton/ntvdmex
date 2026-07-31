@@ -19,7 +19,8 @@ void dpmi_build_desc(DWORD base, DWORD limit, BYTE access, DWORD *lo, DWORD *hi)
         | (((base >> 24) & 0xFF) << 24);
 }
 
-int dpmi_switch_to_pm(volatile BYTE *tib, int client_is_32bit)
+int dpmi_switch_to_pm(volatile BYTE *tib, int client_is_32bit,
+                      LONG *reg_st, LONG *set_st)
 {
     WORD ss = (WORD)(VDM_REG(tib, VTIB_SS)  & 0xFFFF);
     WORD sp = (WORD)(VDM_REG(tib, VTIB_ESP) & 0xFFFF);
@@ -42,8 +43,21 @@ int dpmi_switch_to_pm(volatile BYTE *tib, int client_is_32bit)
     dpmi_build_desc((DWORD)ret_cs << 4, 0xFFFF, code_access, &clo, &chi);
     dpmi_build_desc((DWORD)ds     << 4, 0xFFFF, data_access, &dlo, &dhi);
 
-    /* Install both selectors (service 10 sets two per call). */
+    /* First REGISTER the LDT table (service 11) so the monitor loads LDTR -- without
+       this, svc 10's descriptors resolve base 0 (VM run 2 diagnosis). Table covers
+       indices 0..2: [0]=null, [1]=code (0x0F), [2]=data (0x17). */
+    {
+        DWORD entries[6];
+        entries[0] = 0; entries[1] = 0;         /* index 0: null descriptor         */
+        entries[2] = clo; entries[3] = chi;     /* index 1: code (selector 0x0F)     */
+        entries[4] = dlo; entries[5] = dhi;     /* index 2: data (selector 0x17)     */
+        st = v86_set_process_ldt_info(0, entries, 3);
+        if (reg_st) *reg_st = st;
+    }
+
+    /* Then set the individual entries too (service 10). */
     st = v86_set_ldt_entries(code_sel, clo, chi, data_sel, dlo, dhi);
+    if (set_st) *set_st = st;
     if (st < 0) return -1;
 
     /* Rewrite the CONTEXT into protected mode: clear VM, load the LDT selectors,

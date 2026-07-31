@@ -190,3 +190,19 @@ LONG v86_set_ldt_entries(WORD sel0, DWORD e0lo, DWORD e0hi,
     data[3] = sel1; data[4] = e1lo; data[5] = e1hi;
     return v86_vdmcontrol(VDM_SVC_VdmSetLdtEntries, data);
 }
+
+LONG v86_set_process_ldt_info(WORD start_sel, const DWORD *entries, int count)
+{
+    /* buf = { StartSel, LengthBytes, entries[count] }; ServiceData = { &buf, count }
+       (recovered from SetShadowDescriptorEntries' svc-11 branch, fcn.0f0500c9). */
+    static DWORD buf[2 + 2 * 64];       /* header + up to 64 descriptors             */
+    DWORD sd[2];
+    int i, nd = count * 2;              /* two dwords per descriptor                 */
+    if (nd > (int)(sizeof(buf)/sizeof(buf[0])) - 2) return 1;
+    buf[0] = start_sel;
+    buf[1] = (DWORD)(count * 8);        /* length in bytes                           */
+    for (i = 0; i < nd; ++i) buf[2 + i] = entries[i];
+    sd[0] = (DWORD)(ULONG_PTR)buf;
+    sd[1] = (DWORD)count;
+    return v86_vdmcontrol(VDM_SVC_VdmSetProcessLdtInfo, sd);
+}

@@ -62,4 +62,12 @@ LONG v86_vdmcontrol(ULONG service, PVOID data);
 LONG v86_set_ldt_entries(WORD sel0, DWORD e0lo, DWORD e0hi,
                          WORD sel1, DWORD e1lo, DWORD e1hi);
 
+/* Register a whole LDT table via NtVdmControl service 11 (VdmSetProcessLdtInfo) --
+   the bulk path ntvdm's SetShadowDescriptorEntries uses (fcn.0f0500c9). ServiceData
+   is {ptr_to_{DWORD StartSel; DWORD LengthBytes; LDT_ENTRY entries[count]}, count}.
+   `entries` is `count` pairs of {low,high} descriptor dwords. This is the step that
+   makes the monitor load LDTR (svc 10 alone leaves PM selectors resolving base 0).
+   Returns NTSTATUS (>= 0 ok). */
+LONG v86_set_process_ldt_info(WORD start_sel, const DWORD *entries, int count);
+
 #endif /* VDM_V86_H */

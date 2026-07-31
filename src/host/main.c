@@ -1275,8 +1275,12 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         }
         if ((VDM_REG(tib, VTIB_EVENT_INFO) & 0xFF) == DPMI_BOP) {  /* DPMI real->PM switch */
             DWORD csv = VDM_REG(tib, VTIB_CS) & 0xFFFF, ipv = VDM_REG(tib, VTIB_EIP) & 0xFFFF;
+            LONG reg_st = 0, set_st = 0; int sw;
             p = zput(p, " DPMI switch @ 0x"); p = zhex(p, csv); p = zput(p, ":0x"); p = zhex(p, ipv);
-            if (dpmi_switch_to_pm(tib, 0) == 0) {
+            sw = dpmi_switch_to_pm(tib, 0, &reg_st, &set_st);
+            p = zput(p, " [svc11=0x"); p = zhex(p, (unsigned)reg_st);
+            p = zput(p, " svc10=0x"); p = zhex(p, (unsigned)set_st); p = zput(p, "]");
+            if (sw == 0) {
                 g_dpmi_pm = 1;
                 p = zput(p, " -> PM ok (VM cleared, CS=0x");
                 p = zhex(p, VDM_REG(tib, VTIB_CS) & 0xFFFF);
