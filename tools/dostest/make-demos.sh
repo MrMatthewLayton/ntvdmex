@@ -18,6 +18,7 @@ nasm -f bin "$DIR/xmstest.asm"  -o "$DIR/xmstest.com"    # M4 XMS end-to-end tes
 nasm -f bin "$DIR/emstest.asm"  -o "$DIR/emstest.com"    # M4 EMS end-to-end test (67h + shadowing)
 nasm -f bin "$DIR/selftest.asm" -o "$DIR/selftest.com"  # one-shot regression suite (all subsystems)
 nasm -f bin "$DIR/modeswitch.asm" -o "$DIR/modeswitch.com" # GH#14: graphics->text mode-switch text visibility
-for f in vgademo.com vga12.com vesademo.com blitfast.com timertst.com mousetst.com xmstest.com emstest.com selftest.com modeswitch.com; do
+nasm -f bin "$DIR/dpmitest.asm" -o "$DIR/dpmitest.com"     # GH#1: DPMI 16-bit real->PM switch spike
+for f in vgademo.com vga12.com vesademo.com blitfast.com timertst.com mousetst.com xmstest.com emstest.com selftest.com modeswitch.com dpmitest.com; do
     echo "  $f  ($(wc -c < "$DIR/$f") bytes)"
 done

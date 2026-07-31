@@ -46,7 +46,20 @@ void v86_set_entry(volatile BYTE *tib, WORD cs, WORD ip, WORD ss, WORD sp,
 
 /* Run the guest (VdmStartExecution) until the next stop; returns the event code
    (VDM_EVENT_BOP for a serviceable BOP). *out_status gets the NtVdmControl status
-   if non-NULL. Requires v86_init() to have cached NtVdmControl. */
+   if non-NULL. Requires v86_init() to have cached NtVdmControl. Runs whichever mode
+   the CONTEXT's EFLAGS.VM bit selects: VM=1 -> V86, VM=0 + LDT selectors -> PM
+   (recovered from ntvdm fcn.0f00532e; see research/dpmi-under-ntvdmcontrol.md). */
 DWORD v86_run(volatile BYTE *tib, LONG *out_status);
+
+/* Raw NtVdmControl passthrough (for DPMI's LDT + PM-cli services). Returns NTSTATUS
+   (>= 0 ok). Requires v86_init() to have cached the entry point. */
+LONG v86_vdmcontrol(ULONG service, PVOID data);
+
+/* Install up to two LDT descriptors via NtVdmControl service 10 (VdmSetLdtEntries),
+   whose ServiceData is exactly the NtSetLdtEntries 6-dword block
+   {Sel0,Entry0Low,Entry0Hi,Sel1,Entry1Low,Entry1Hi} (recovered from fcn.0f050100).
+   Pass sel1=0 to set only one. Returns NTSTATUS (>= 0 ok). */
+LONG v86_set_ldt_entries(WORD sel0, DWORD e0lo, DWORD e0hi,
+                         WORD sel1, DWORD e1lo, DWORD e1hi);
 
 #endif /* VDM_V86_H */

@@ -174,3 +174,19 @@ DWORD v86_run(volatile BYTE *tib, LONG *out_status)
     if (out_status) *out_status = st;
     return (DWORD)VDM_REG(tib, VTIB_EVENT);
 }
+
+LONG v86_vdmcontrol(ULONG service, PVOID data)
+{
+    if (!s_ntvdmctl) return 1;
+    return s_ntvdmctl(service, data);
+}
+
+LONG v86_set_ldt_entries(WORD sel0, DWORD e0lo, DWORD e0hi,
+                         WORD sel1, DWORD e1lo, DWORD e1hi)
+{
+    /* NtSetLdtEntries 6-dword block; see v86.h + fcn.0f050100 in the research. */
+    DWORD data[6];
+    data[0] = sel0; data[1] = e0lo; data[2] = e0hi;
+    data[3] = sel1; data[4] = e1lo; data[5] = e1hi;
+    return v86_vdmcontrol(VDM_SVC_VdmSetLdtEntries, data);
+}

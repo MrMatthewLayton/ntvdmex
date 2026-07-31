@@ -88,6 +88,7 @@ target_link_libraries(wowprobe PRIVATE kernel32 user32 gcc)
 add_executable(ntvdmhost
     src/host/main.c
     src/vdm/v86.c
+    src/vdm/dpmi.c
     src/vdm/csrss.c
     src/dos/dos_int21.c
     src/vdd/vdd_bus.c

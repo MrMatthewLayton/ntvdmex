@@ -48,6 +48,12 @@ typedef BOOL (WINAPI *PFN_GetNextVDMCommand)(VDM_COMMAND_INFO *);
  * ======================================================================== */
 #define VDM_SVC_VdmInitialize     3
 #define VDM_SVC_VdmStartExecution 0   /* NtVdmControl(0, NULL) runs the V86 CONTEXT */
+/* DPMI plumbing services (recovered from the ntvdm call-site scan, 2026-07-31 --
+   see research/dpmi-under-ntvdmcontrol.md). Service 10's ServiceData is the
+   NtSetLdtEntries 6-dword block; service 13 virtualises the PM client interrupt flag. */
+#define VDM_SVC_VdmSetLdtEntries     10
+#define VDM_SVC_VdmSetProcessLdtInfo 11
+#define VDM_SVC_VdmPMCliControl      13
 
 typedef struct {            /* VDMICAUSERDATA -- 9 pointers (XP ntvdm fills 9) */
     PVOID pIcaLock, pIcaMaster, pIcaSlave, pDelayIrq, pUndelayIrq,
@@ -116,6 +122,8 @@ typedef LONG (WINAPI *PFN_NtUnmapViewOfSection)(HANDLE, PVOID);
 #define VTIB_ESP           0x39C
 #define VTIB_SS            0x3A0
 #define VTIB_EFLAGS_V86    0x20002    /* EFlags: VM + reserved bit, IOPL=0        */
+#define VTIB_EFLAGS_PM     0x00202    /* EFlags: IF + reserved bit, VM clear (PM) */
+#define EFLAGS_VM_BIT      0x20000    /* EFLAGS.VM (bit 17): set=V86, clear=PM     */
 
 /* BOP (BIOS Operation): the 3-byte sequence C4 C4 nn is an invalid opcode the
    kernel reflects back to the host as a VDM event, carrying the byte nn. The host

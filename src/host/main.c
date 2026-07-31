@@ -15,6 +15,7 @@
 #include <commctrl.h>
 #include "ntvdm.h"
 #include "v86.h"
+#include "dpmi.h"
 #include "csrss.h"
 #include "log.h"
 #include "dos_mcb.h"
@@ -39,6 +40,14 @@
    Lives just past the INT 1Ah stub (which ends at 0x40) and the INT 2Fh stub (4 bytes
    at 0x40). INT 2Fh AX=4310 hands the guest DOS_HDLR_SEG:XMS_ENTRY_OFF to far-call. */
 #define XMS_ENTRY_OFF 0x0044
+
+/* DPMI (M4 slice 3, spike): the mode-switch entry far-called by a client after it
+   detects DPMI via INT 2Fh AX=1687h. Lives past the INT 67h stub (0x48..0x4B).
+   The stub is `BOP 0x50 ; RETF`: the host services the BOP by switching the VDM to
+   protected mode (rewriting CS:IP), so the RETF only runs if the switch FAILS (it
+   returns to the client in real mode with CF=1). See src/vdm/dpmi.c. */
+#define DPMI_ENTRY_OFF 0x0050
+#define DPMI_BOP       0x50
 
 /* EMS (M4): the LIM page frame is a 64KB RAM window in the UMA. v86_map_ems_frame
    scans the conventional page-frame segments AFTER VdmInitialize for a free 64KB
@@ -67,6 +76,7 @@ static CRITICAL_SECTION g_lock;             /* serialises all bus dispatch      
 static HWND         g_hwnd;
 static HANDLE       g_key_event;            /* signalled when a key is pushed     */
 static volatile LONG g_running = 1;         /* 0 once the window is closed         */
+static int g_dpmi_pm = 0;                   /* set once the guest is switched to PM (spike) */
 static HMENU        g_savedmenu;            /* stashed menu while hidden           */
 
 static void host_irq_sink(void *ctx, uint8_t irq) { (void)ctx; if (irq == 0) g_irq0_pending = 1; }
@@ -991,6 +1001,10 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     for (i = 0; i < sizeof(bop67); ++i) hdlr[0x48 + i] = bop67[i];  /* INT 67h (EMM) stub */
     *(volatile WORD *)(0x67 * 4)     = 0x0048;              /* IVT[0x67].offset    */
     *(volatile WORD *)(0x67 * 4 + 2) = DOS_HDLR_SEG;        /* IVT[0x67].segment   */
+    /* DPMI mode-switch entry (far-called): BOP 0x50 ; RETF. The host services the
+       BOP by switching to PM; the RETF only executes if the switch fails. */
+    hdlr[DPMI_ENTRY_OFF + 0] = VDM_BOP0; hdlr[DPMI_ENTRY_OFF + 1] = VDM_BOP1;
+    hdlr[DPMI_ENTRY_OFF + 2] = DPMI_BOP; hdlr[DPMI_ENTRY_OFF + 3] = 0xCB; /* RETF */
     /* EMS detection method 2: programs read the INT 67h vector's segment:000Ah for
        the device-driver name "EMMXXXX0". Park it in the handler segment. */
     for (i = 0; i < sizeof(emmname); ++i) hdlr[DOS_EMM_NAME_OFF + i] = emmname[i];
@@ -1074,6 +1088,23 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             }
         }
         ev = v86_run(tib, &st);
+        /* SPIKE: once in protected mode, stop at the FIRST PM event and dump the raw
+           taxonomy (event/info/selectors) -- this is how the spike learns how the
+           monitor reflects a PM INT 31h / fault. Later increments replace this with
+           a real INT 31h dispatch. */
+        if (g_dpmi_pm) {
+            DWORD csv = VDM_REG(tib, VTIB_CS) & 0xFFFF, ipv = VDM_REG(tib, VTIB_EIP) & 0xFFFF;
+            p = zput(p, "STAGE3-DPMI: PM stop event=0x"); p = zhex(p, ev);
+            p = zput(p, " status=0x"); p = zhex(p, (unsigned)st);
+            p = zput(p, " info=0x"); p = zhex(p, VDM_REG(tib, VTIB_EVENT_INFO));
+            p = zput(p, " CS:IP=0x"); p = zhex(p, csv); p = zput(p, ":0x"); p = zhex(p, ipv);
+            p = zput(p, " EFL=0x"); p = zhex(p, VDM_REG(tib, VTIB_EFLAGS));
+            p = zput(p, " SS:SP=0x"); p = zhex(p, VDM_REG(tib, VTIB_SS) & 0xFFFF);
+            p = zput(p, ":0x"); p = zhex(p, VDM_REG(tib, VTIB_ESP) & 0xFFFF);
+            p = zput(p, "\r\n  VTIB[5A8..]: "); p = zdump(p, (const void *)(tib + 0x5A8), 0x20);
+            log_append(LOG_PATH, base, p); p = base;
+            break;
+        }
         /* I/O port trap (event 0; VM-confirmed) or a generic GP fault (event 2):
            if the faulting instruction is an IN/OUT we can decode, service it via
            the VDD bus and resume; otherwise fall through to the stop dump. */
@@ -1172,6 +1203,16 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             } else if (ax == 0x4310) {                          /* get XMS entry -> ES:BX */
                 VDM_SET16(tib, VTIB_ES, DOS_HDLR_SEG);
                 VDM_SET16(tib, VTIB_EBX, XMS_ENTRY_OFF);
+            } else if (ax == 0x1687) {                           /* DPMI installation check (SPIKE) */
+                /* AX=0 present; BX=0 (16-bit only for now); CL=3 (386); DX=0.90;
+                   SI=0 private paras; ES:DI = mode-switch entry to FAR-CALL. */
+                VDM_SET16(tib, VTIB_EAX, 0);
+                VDM_SET16(tib, VTIB_EBX, 0);
+                VDM_SET16(tib, VTIB_ECX, (VDM_REG(tib, VTIB_ECX) & 0xFF00) | 0x03);
+                VDM_SET16(tib, VTIB_EDX, 0x005A);               /* DPMI 0.90        */
+                VDM_SET16(tib, VTIB_ESI, 0);
+                VDM_SET16(tib, VTIB_ES,  DOS_HDLR_SEG);
+                VDM_SET16(tib, VTIB_EDI, DPMI_ENTRY_OFF);
             }
             /* other INT 2Fh multiplex functions: left to the guest (no-op pass) */
             VDM_REG(tib, VTIB_EIP) += 3;                        /* -> the IRET (CF) */
@@ -1191,6 +1232,24 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             host_ems(tib);
             LeaveCriticalSection(&g_lock);
             VDM_REG(tib, VTIB_EIP) += 3;                        /* -> the IRET      */
+            continue;
+        }
+        if ((VDM_REG(tib, VTIB_EVENT_INFO) & 0xFF) == DPMI_BOP) {  /* DPMI real->PM switch */
+            DWORD csv = VDM_REG(tib, VTIB_CS) & 0xFFFF, ipv = VDM_REG(tib, VTIB_EIP) & 0xFFFF;
+            p = zput(p, " DPMI switch @ 0x"); p = zhex(p, csv); p = zput(p, ":0x"); p = zhex(p, ipv);
+            if (dpmi_switch_to_pm(tib, 0) == 0) {
+                g_dpmi_pm = 1;
+                p = zput(p, " -> PM ok (VM cleared, CS=0x");
+                p = zhex(p, VDM_REG(tib, VTIB_CS) & 0xFFFF);
+                p = zput(p, " EIP=0x"); p = zhex(p, VDM_REG(tib, VTIB_EIP) & 0xFFFF);
+                p = zput(p, ")\r\n");
+                log_append(LOG_PATH, base, p); p = base;
+                continue;                           /* CS:IP rewritten; do NOT advance EIP */
+            }
+            p = zput(p, " -> SWITCH FAILED (staying real mode, CF=1)\r\n");
+            log_append(LOG_PATH, base, p); p = base;
+            VDM_REG(tib, VTIB_EFLAGS) |= 1;         /* CF=1 signals failure to the client */
+            VDM_REG(tib, VTIB_EIP) += 3;            /* -> the RETF, returns real mode     */
             continue;
         }
         m.tp = p;
