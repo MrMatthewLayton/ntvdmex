@@ -341,9 +341,10 @@ Getting here fixed two real regressions in the V86 bring-up (committed `562deed`
   well over a tick period; a live ~18Hz PIT now reliably lands. (`timertst.com` passed because its
   dot-prints already made it run for seconds.) IRQ0 delivery itself was fine.
 
-**Operational (this session):** the XP account **password had expired** and blocked boot at a logon
-dialog — that was almost certainly last session's "VM keeps dropping." User reset it to **`ntvdmex1`**
-and logged in. QEMU is otherwise stable. **QMP `send-key` is badly laggy/unreliable** on this VM
+**Operational:** the XP `ntvdmex` account **password has been REMOVED** (2026-08-01) — boot now lands
+on the desktop with no logon typing (earlier the expired/`ntvdmex1` password cost many cycles at the
+"could not log you on" dialog; if that dialog ever reappears, just click OK and it proceeds).
+QEMU is otherwise stable. **QMP `send-key` is badly laggy/unreliable** on this VM
 (keys arrive seconds late and interleave; UK keyboard maps qcode `backslash`→`#`, real `\` is
 `less`) — **drive the GUI by mouse instead**: `qmp.py click` (its 1024×768 assumption vs the 800×600
 screen means scale native coords ×1.28), double-click `D:\selftest.bat`, and press F5 to force the
@@ -360,11 +361,16 @@ CD to remount after each `qmp.py cd` (the unique volume label alone isn't enough
 CPU** (XMS + EMS confirmed; the two test-side fails fixed — see *M4 VM gate* above). Remaining, in
 order:
 
-0. ~~FIX the graphics→text rendering bug~~ **FIXED 2026-07-31 (GH #14)** — DAC palette not reloaded
-   on mode set; see *Known host bugs* below. VM re-confirm pending.
-1. **DPMI 16-bit spike** — the real→protected-mode-switch round-trip via kernel-monitor reuse
-   (services 10/11/13); see [research/dpmi-under-ntvdmcontrol.md](research/dpmi-under-ntvdmcontrol.md).
-   This is the M4 keystone risk; don't advertise `2Fh 1687` until it round-trips.
+0. ~~FIX the graphics→text rendering bug~~ **FIXED + VM-CONFIRMED 2026-07-31 (GH #14)** — DAC palette
+   not reloaded on mode set; see *Known host bugs* below.
+1. **DPMI 16-bit spike (GH #1) — IN PROGRESS on branch `spike/dpmi-16bit-switch`.** The recon is done
+   and **the real→PM switch is PROVEN on the real CPU** (VM bit = mode; LDT = NtSetLdtEntries ABI;
+   "PM ok" with our selectors loaded + PM code executing). **Blocker:** PM code runs at *base 0*
+   (LDT descriptor not applied) → faults `STATUS_INVALID_LOCK_SEQUENCE` on IVT garbage. **Next:
+   increment 2 — recover the service-11 `VdmSetProcessLdtInfo` ABI (fcn.0f050140) and register the
+   LDT before the switch** so LDTR loads. A crash-diagnostic VEH is now permanent in the host. Full
+   trace in [research/dpmi-under-ntvdmcontrol.md](research/dpmi-under-ntvdmcontrol.md) ("Spike
+   results"). Don't advertise `2Fh 1687` on `main` until it round-trips (spike branch only).
 2. After DPMI: M5 (Win16/WOW foundation).
 
 ## Testing harness — consolidated self-test (2026-06-09→11)

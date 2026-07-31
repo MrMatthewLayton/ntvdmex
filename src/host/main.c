@@ -77,6 +77,7 @@ static HWND         g_hwnd;
 static HANDLE       g_key_event;            /* signalled when a key is pushed     */
 static volatile LONG g_running = 1;         /* 0 once the window is closed         */
 static int g_dpmi_pm = 0;                   /* set once the guest is switched to PM (spike) */
+static volatile BYTE *g_tib_dbg = 0;        /* VDM_TIB, for the crash VEH to dump guest state */
 static HMENU        g_savedmenu;            /* stashed menu while hidden           */
 
 static void host_irq_sink(void *ctx, uint8_t irq) { (void)ctx; if (irq == 0) g_irq0_pending = 1; }
@@ -847,6 +848,42 @@ static long host_interp(volatile BYTE *tib, long cap)
     return iters;
 }
 
+/* Crash diagnostic (DPMI spike): the PM switch works but VdmStartExecution faults
+   inside the monitor when it runs PM, crashing the host with no info. This VEH
+   catches the fault, dumps the exception (code/addr/params) + the host CONTEXT +
+   the guest PM CONTEXT to the log, then exits CLEANLY (no WER dialog) so the batch
+   still prints the log. Only meaningful once g_dpmi_pm is set. */
+static LONG CALLBACK dpmi_crash_veh(EXCEPTION_POINTERS *ep)
+{
+    static char cb[1024]; char *p = cb;
+    EXCEPTION_RECORD *er = ep->ExceptionRecord;
+    CONTEXT *cx = ep->ContextRecord;
+    if (!g_dpmi_pm) return EXCEPTION_CONTINUE_SEARCH;   /* only diagnose PM faults */
+    p = zput(p, "\r\nDPMI FATAL: exception code=0x"); p = zhex(p, er->ExceptionCode);
+    p = zput(p, " at 0x"); p = zhex(p, (unsigned)(ULONG_PTR)er->ExceptionAddress);
+    if (er->NumberParameters >= 2) {
+        p = zput(p, " acc="); p = zhex(p, (unsigned)er->ExceptionInformation[0]);
+        p = zput(p, " fault-addr=0x"); p = zhex(p, (unsigned)er->ExceptionInformation[1]);
+    }
+    p = zput(p, "\r\n  host: EIP=0x"); p = zhex(p, cx->Eip);
+    p = zput(p, " CS=0x"); p = zhex(p, cx->SegCs);
+    p = zput(p, " EAX=0x"); p = zhex(p, cx->Eax);
+    p = zput(p, " EBX=0x"); p = zhex(p, cx->Ebx);
+    p = zput(p, " ESP=0x"); p = zhex(p, cx->Esp); p = zput(p, "\r\n");
+    if (g_tib_dbg) {
+        volatile BYTE *t = g_tib_dbg;
+        p = zput(p, "  guest PM: CS=0x"); p = zhex(p, VDM_REG(t, VTIB_CS) & 0xFFFF);
+        p = zput(p, " EIP=0x"); p = zhex(p, VDM_REG(t, VTIB_EIP));
+        p = zput(p, " SS=0x"); p = zhex(p, VDM_REG(t, VTIB_SS) & 0xFFFF);
+        p = zput(p, " DS=0x"); p = zhex(p, VDM_REG(t, VTIB_DS) & 0xFFFF);
+        p = zput(p, " EFL=0x"); p = zhex(p, VDM_REG(t, VTIB_EFLAGS));
+        p = zput(p, " event=0x"); p = zhex(p, VDM_REG(t, VTIB_EVENT)); p = zput(p, "\r\n");
+    }
+    log_append(LOG_PATH, cb, p);
+    ExitProcess(0xDE0);                                 /* clean exit; batch dumps the log */
+    return EXCEPTION_CONTINUE_SEARCH;                   /* not reached */
+}
+
 int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
 {
     char report[8192]; char *p = report; char *base;
@@ -880,6 +917,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
 
     p = zput(p, "NTVDMEX clean host\r\nSTAGE0: WinMain entered\r\n");
     log_write(LOG_PATH, report, p);
+    AddVectoredExceptionHandler(1, dpmi_crash_veh);     /* DPMI spike crash diagnostic */
 
     /* CSRSS command-info: receive buffers + first-command state + IFEO task id. */
     g_ci.CmdLine = g_cmd; g_ci.CmdLen = sizeof(g_cmd);
@@ -914,6 +952,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     log_write(LOG_PATH, report, p);
 
     tib = v86_get_tib();
+    g_tib_dbg = tib;                                    /* let the crash VEH dump guest state */
     if (!tib) {
         p = zput(p, "STAGE1: no VDM_TIB -- abort\r\n"); log_append(LOG_PATH, report, p);
         return 1;

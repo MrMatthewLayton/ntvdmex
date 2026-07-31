@@ -159,6 +159,33 @@ ServiceData ABI (the `rep movsb` LDT-table copy at `0xf050169`) and call it (plu
 PM-cli init) before switching. Only then will PM code run and INT 31h reflect (which
 finally answers unknown #3).
 
+### VM run 2 (2026-08-01) — crash diagnosed via a vectored exception handler `[FACT, real CPU]`
+
+Added a VEH (`dpmi_crash_veh` in `main.c`) that catches the PM fault, dumps it, and
+exits cleanly (no WER). The captured fault is decisive:
+
+```
+DPMI switch @ 0x50:0x50 -> PM ok (VM cleared, CS=0x0000000f EIP=0x00000125)
+DPMI FATAL: exception code=0xC000001E at 0x00000127
+  host: EIP=0x00000127 CS=0x0000001b EAX=0 EBX=0 ESP=0x0000fffe
+  guest PM: CS=0x0000000f EIP=0x00000125 SS=0x00000017 DS=0x00000017 EFL=0x00000202 event=0x04
+```
+
+- **`0xC000001E` = `STATUS_INVALID_LOCK_SEQUENCE`** (a `LOCK` prefix on an invalid
+  instruction). The CPU was executing **garbage in the IVT at linear `0x127`**.
+- **PM code genuinely executed**: our selectors loaded (CS=`0x0F` code, SS/DS=`0x17`
+  data), VM clear (EFL `0x202`), and EIP advanced from the far-call return `0x125`
+  to `0x127`.
+- But it ran at **linear `0x127` = base 0 + offset `0x127`**, not
+  `(retCS<<4) + 0x127`. So **our LDT code selector resolved with base 0** — the
+  descriptor is installed (svc 10 succeeded) but **the monitor is not loading our LDT**.
+
+**Conclusion:** service 10 alone is insufficient; the LDT must be *registered* with the
+monitor (LDTR loaded) — i.e. **service 11 `VdmSetProcessLdtInfo` is required before the
+switch**. That is increment 2's concrete task: recover its ServiceData/LDT-table ABI
+(fcn.0f050140) and call it, then re-run. The VEH stays as permanent PM-fault
+instrumentation.
+
 ## Open unknowns (what the spike must nail down) `[VERIFY]`
 
 1. **The mode-switch primitive.** Exactly how ntvdm flips the VDM from V86→PM after the client
