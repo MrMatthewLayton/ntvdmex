@@ -15,6 +15,17 @@ static const uint32_t ega16[16] = {
 static uint32_t dac_pack(uint8_t r, uint8_t g, uint8_t b)
 { return 0xFF000000u | ((uint32_t)(r << 2) << 16) | ((uint32_t)(g << 2) << 8) | (uint32_t)(b << 2); }
 
+/* Load the default DAC palette: 16 EGA colours in 0..15, a 240-entry grey ramp
+   above.  Real VGA reloads this on every INT 10h AH=00 mode set; without it a
+   graphics program that reprogrammed the DAC (e.g. SCREEN 13) leaves later text
+   drawn in *its* palette -- usually near-black, so text mode looks dead. */
+static void load_default_palette(video_state *st)
+{
+    int i;
+    for (i = 0; i < 16; ++i)   st->pal[i] = ega16[i];
+    for (i = 16; i < 256; ++i) st->pal[i] = 0xFF000000u | (uint32_t)(i * 0x010101u);
+}
+
 static uint8_t *cell(video_state *st, int r, int c)   /* -> char byte of (r,c)    */
 { return st->vmem + VID_TEXT_OFF + (r * st->cols + c) * 2; }
 
@@ -194,6 +205,7 @@ static void int10(void *self, ntvdd_regs *r)
     case 0x00:                                        /* set video mode          */
         st->mode = al & 0x7F; st->in_vesa = 0;        /* a standard mode leaves VESA */
         st->cur_row = st->cur_col = 0; st->page = 0;
+        load_default_palette(st);                     /* HW reloads the DAC on mode set */
         if (st->mode == 0x13) {                       /* 320x200x256 graphics    */
             int i; for (i = 0; i < VID_G13_W * VID_G13_H; ++i) st->vmem[i] = 0;
         } else if (st->mode == 0x12) {                /* 640x480x16 planar       */
@@ -529,7 +541,6 @@ void vdd_video_putc(video_state *st, uint8_t ch) { teletype(st, ch); st->dirty =
 void vdd_video_reset(void *self)
 {
     video_state *st = (video_state *)self;
-    int i;
     st->mode = 3; st->cols = VID_COLS; st->rows = VID_ROWS;
     st->cur_row = st->cur_col = 0; st->cur_shape = 0x0607; st->page = 0;
     st->dac_widx = st->dac_ridx = st->dac_comp = 0;
@@ -538,8 +549,7 @@ void vdd_video_reset(void *self)
     st->set_reset = st->enable_sr = st->func_rotate = st->read_map = 0;
     st->latch[0] = st->latch[1] = st->latch[2] = st->latch[3] = 0;
     st->in_vesa = 0; st->vesa_mode = 0; st->vesa_bank = 0;
-    for (i = 0; i < 16; ++i)  st->pal[i] = ega16[i];
-    for (i = 16; i < 256; ++i) st->pal[i] = 0xFF000000u | (uint32_t)(i * 0x010101u); /* grey ramp */
+    load_default_palette(st);
     if (st->vmem) clear_text(st, 0x07);
     st->dirty = 1;
 }

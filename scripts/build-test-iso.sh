@@ -36,6 +36,7 @@ rm -rf "$STAGE"; mkdir -p "$STAGE"
 cp "$BUILD/ntvdmhost.exe" "$STAGE/"
 cp "$BUILD/dosstub.com"   "$STAGE/"
 cp "$DT/selftest.bat" "$DT/selftest.com" "$STAGE/"
+cp "$DT/modeswitch.bat" "$DT/modeswitch.com" "$STAGE/"   # GH#14 mode-switch regression test
 cp "$DT/runtest-demos.bat" "$STAGE/"
 # individual test programs
 cp "$DT/xmstest.com" "$DT/emstest.com" "$DT/timertst.com" \

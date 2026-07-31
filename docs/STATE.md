@@ -2,7 +2,7 @@
 
 > **This is the canonical resume point.** Update it at the end of every working session.
 
-- **Last updated:** 2026-07-20
+- **Last updated:** 2026-07-31
 - **Phase:** **M4 — memory extensions 🟡 IN PROGRESS.** **XMS 3.0 + EMS (LIM 4.0) DONE + VM-CONFIRMED
   (2026-07-20)** — off-VM 36/36 + 30/30 AND the `selftest` VM gate is **8/8 ALL TESTS PASSED** on the
   real CPU (fixed a `VdmInitialize` regression + dynamic EMS-frame relocation + two test-side bugs —
@@ -360,8 +360,8 @@ CD to remount after each `qmp.py cd` (the unique volume label alone isn't enough
 CPU** (XMS + EMS confirmed; the two test-side fails fixed — see *M4 VM gate* above). Remaining, in
 order:
 
-0. **FIX the graphics→text rendering bug** (see *Known host bugs* below) — needed before any
-   program can mix a graphics mode with later text output. (selftest dodges it; it didn't bite.)
+0. ~~FIX the graphics→text rendering bug~~ **FIXED 2026-07-31 (GH #14)** — DAC palette not reloaded
+   on mode set; see *Known host bugs* below. VM re-confirm pending.
 1. **DPMI 16-bit spike** — the real→protected-mode-switch round-trip via kernel-monitor reuse
    (services 10/11/13); see [research/dpmi-under-ntvdmcontrol.md](research/dpmi-under-ntvdmcontrol.md).
    This is the M4 keystone risk; don't advertise `2Fh 1687` until it round-trips.
@@ -386,15 +386,22 @@ not a QEMU crash (reset to `ntvdmex1`). QEMU does occasionally drop and need a r
 run`); on reboot the stale-password auto-logon shows a "could not log you on" message — dismiss it and
 the desktop comes up. The off-VM batteries are all still green.
 
-## Known host bugs (open)
+## Known host bugs
 
-- **No text rendering after a graphics→text mode switch.** After `INT 10h` sets mode 13h and then
-  restores text mode 3, the host renders no further text — `INT 21h` console output goes to a dead
-  (black) display. Found while bringing up `selftest`: the first builds switched modes mid-suite and
-  printed their whole report invisibly. `selftest` now avoids switching the visible mode as a
-  workaround, but the underlying bug (video VDD not re-establishing the text-grid renderer on a
-  return to mode 3, and/or the present path staying on the 13h framebuffer) is an **M3 video
-  follow-up to fix** — programs that legitimately switch 13h→text would be blank.
+- ~~**No text rendering after a graphics→text mode switch.**~~ **FIXED (2026-07-31, GH #14).** The
+  present/render path was never the problem — `vid_frame` re-derives the frame (dims + pixels +
+  palette) from `st->mode` every tick and re-renders the text grid, so a return to mode 3 presents
+  fine. The real cause was the **DAC palette**: text renders palette *indices* (0–15) into the
+  framebuffer and the colours come from `st->pal[]` at present time; a mode-13h program reprograms
+  the DAC with its image palette, and `INT 10h AH=00` set-mode never reloaded the default — so text
+  after the switch was drawn in the leftover graphics palette (near-black → dead display). Real VGA
+  reloads the default palette on every mode set; now `int10` case 0x00 calls `load_default_palette()`
+  (16 EGA colours + grey ramp, factored out and shared with `vdd_video_reset`). Off-VM video battery
+  still 34/34; host cross-compiles clean. **VM-CONFIRMED 2026-07-31** on the real CPU via
+  `tools/dostest/modeswitch.com` (menu/`modeswitch.bat`): a program sets mode 13h, wipes the DAC to
+  black, holds on a keypress, returns to text mode 3 and prints — the message renders clearly
+  readable (pre-fix it was invisible). Test is hang-proof (blocks on `INT 16h` in each mode, no PIT
+  dependency). `selftest`'s no-visible-switch workaround can now be relaxed.
 
 ### M3 follow-ups (closed, kept for reference)
 
