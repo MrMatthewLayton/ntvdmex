@@ -88,3 +88,30 @@ int dpmi_switch_to_pm(volatile BYTE *tib, int client_is_32bit,
     VDM_SET16(tib, VTIB_GS,  data_sel);
     return 0;
 }
+
+/* Run the guest in protected mode DIRECTLY in this host process, the way ntvdm does
+   (0xf04483c iret's into the client -- PM is NOT run by the kernel monitor). We use
+   NtContinue, the documented syscall that loads a full CONTEXT (incl. LDT selectors)
+   and resumes at ring 3 -- the same effect as ntvdm's manual iretd. The guest runs
+   in-process using the process LDT that svc 10/11 populated; its INT 31h / faults
+   surface as Win32 exceptions the VEH catches. NtContinue does not return on success. */
+typedef LONG (WINAPI *PFN_NtContinue)(CONTEXT *, BOOLEAN);
+
+void dpmi_run_pm(volatile BYTE *tib)
+{
+    static CONTEXT c;                    /* static: keep it off the (small) stack     */
+    HMODULE ntdll = GetModuleHandleA("ntdll.dll");
+    PFN_NtContinue NtContinue = (PFN_NtContinue)GetProcAddress(ntdll, "NtContinue");
+    BYTE *z = (BYTE *)&c; unsigned i;
+    for (i = 0; i < sizeof c; ++i) z[i] = 0;
+    c.ContextFlags = VTIB_CTXFLAGS_VAL;  /* CONTEXT_CONTROL|INTEGER|SEGMENTS (0x10007) */
+    c.SegGs = VDM_REG(tib, VTIB_GS) & 0xFFFF;  c.SegFs = VDM_REG(tib, VTIB_FS) & 0xFFFF;
+    c.SegEs = VDM_REG(tib, VTIB_ES) & 0xFFFF;  c.SegDs = VDM_REG(tib, VTIB_DS) & 0xFFFF;
+    c.SegCs = VDM_REG(tib, VTIB_CS) & 0xFFFF;  c.SegSs = VDM_REG(tib, VTIB_SS) & 0xFFFF;
+    c.Edi = VDM_REG(tib, VTIB_EDI); c.Esi = VDM_REG(tib, VTIB_ESI);
+    c.Ebx = VDM_REG(tib, VTIB_EBX); c.Edx = VDM_REG(tib, VTIB_EDX);
+    c.Ecx = VDM_REG(tib, VTIB_ECX); c.Eax = VDM_REG(tib, VTIB_EAX);
+    c.Ebp = VDM_REG(tib, VTIB_EBP); c.Eip = VDM_REG(tib, VTIB_EIP);
+    c.Esp = VDM_REG(tib, VTIB_ESP); c.EFlags = VDM_REG(tib, VTIB_EFLAGS);
+    if (NtContinue) NtContinue(&c, FALSE);
+}

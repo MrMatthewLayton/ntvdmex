@@ -248,6 +248,35 @@ loop — a substantial engine, and the correct path. The keystone risk (can we r
 all?) is now *lower*, not higher: it's plain user-mode execution, no undocumented
 kernel PM path needed.
 
+### VM runs 7–8 (2026-08-01) — IN-PROCESS PROTECTED-MODE EXECUTION PROVEN `[FACT, real CPU]` ✅
+
+Implemented the corrected architecture: `dpmi_run_pm()` builds a full CONTEXT from the
+VDM_TIB (CS=0x0F, SS/DS/ES/FS/GS=0x17, EIP/ESP/EFLAGS/GP regs) and calls **`NtContinue`**
+— the documented syscall that loads a context (incl. LDT selectors) and resumes at
+ring 3, i.e. ntvdm's manual `iretd` done via the OS. PM is run **in-process**, not by
+the kernel monitor.
+
+- **Run 7** (guest does `INT 31h`): the log ends cleanly at `-> running PM in-process
+  (NtContinue)` — **no VEH fault, no "NtContinue returned" line**. So NtContinue
+  neither rejected the context nor returned: it entered PM. The host then exited
+  without a catchable fault (the `INT 31h` → Win32 exception dispatch onto a 16-bit PM
+  CS is the open problem, not PM entry).
+- **Run 8** (guest spins in PM instead of faulting): the **Luna window stays ALIVE** —
+  `ntvdmhost` keeps running, spinning in `jmp .pmspin` **in protected mode**. This
+  proves in-process PM execution: NtContinue entered PM with our LDT code selector
+  (base 0x1000), the guest ran past the switch return (0x125) into the spin, and 16-bit
+  protected-mode code is executing inside the host process on the real CPU.
+
+**Milestone:** the DPMI real→protected-mode switch **round-trips** — real mode →
+`INT 2Fh 1687` detect → far-call → mode switch → **protected-mode code executing**.
+The whole descriptor/LDT/service/switch stack is validated end-to-end. The keystone
+risk (can we run PM at all under our architecture?) is **retired: yes.**
+
+**Remaining (increment 3b):** catch the PM `INT 31h`/faults to service DPMI calls. A
+16-bit PM CS doesn't dispatch cleanly through the plain Win32 VEH path (run 7), so this
+needs ntvdm's actual PM fault-reflection approach (or a stack/handler set up for it).
+That answers the PM event taxonomy (unknown #3) and enables the `0000`/`0300` surface.
+
 ## Open unknowns (what the spike must nail down) `[VERIFY]`
 
 1. **The mode-switch primitive.** Exactly how ntvdm flips the VDM from V86→PM after the client

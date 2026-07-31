@@ -36,15 +36,14 @@ start:
     jc .switchfail
 
     ; --- 4. we are now in PROTECTED MODE ---------------------------------
-    ;     Generate a PM event so the host can read the reflected taxonomy.
-    mov ax, 0x0000              ; DPMI: allocate LDT descriptors
-    mov cx, 1
-    int 0x31
-
-    ; (increment 1: the host stops at the INT 31h PM event above; if it ever
-    ;  returns here we just spin so nothing undefined runs.)
-.hang:
-    jmp .hang
+    ; DIAGNOSTIC (increment 3a): don't fault yet -- just spin with a marker in
+    ; the registers. If the host stays ALIVE spinning here, in-process PM
+    ; execution via NtContinue is proven (the Luna window stays up). A later
+    ; step re-introduces INT 31h once fault-catching is sorted.
+    mov ax, 0xDA1A             ; recognizable PM marker
+    mov bx, 0x5150
+.pmspin:
+    jmp .pmspin
 
 .switchfail:
     mov dx, msg_fail

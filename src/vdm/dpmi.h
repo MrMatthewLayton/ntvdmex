@@ -38,4 +38,10 @@ void dpmi_build_desc(DWORD base, DWORD limit, BYTE access, DWORD *lo, DWORD *hi)
 int dpmi_switch_to_pm(volatile BYTE *tib, int client_is_32bit,
                       LONG *reg_st, LONG *set_st);
 
+/* Run the guest in protected mode directly in this process (via NtContinue), the way
+   ntvdm iret's into the client -- PM is not run by the kernel monitor. Does not return
+   on success; the PM guest's INT 31h / faults surface as Win32 exceptions (the VEH).
+   `tib` is the VDM_TIB holding the PM CONTEXT set up by dpmi_switch_to_pm. */
+void dpmi_run_pm(volatile BYTE *tib);
+
 #endif /* VDM_DPMI_H */

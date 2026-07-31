@@ -1288,9 +1288,13 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                 p = zput(p, " -> PM ok (VM cleared, CS=0x");
                 p = zhex(p, VDM_REG(tib, VTIB_CS) & 0xFFFF);
                 p = zput(p, " EIP=0x"); p = zhex(p, VDM_REG(tib, VTIB_EIP) & 0xFFFF);
-                p = zput(p, ")\r\n");
+                p = zput(p, ") -> running PM in-process (NtContinue)\r\n");
                 log_append(LOG_PATH, base, p); p = base;
-                continue;                           /* CS:IP rewritten; do NOT advance EIP */
+                dpmi_run_pm(tib);                   /* iret into PM; VEH catches INT 31h/fault */
+                /* Only reached if NtContinue failed to enter PM. */
+                p = zput(p, "STAGE3-DPMI: NtContinue returned (PM entry failed)\r\n");
+                log_append(LOG_PATH, base, p); p = base;
+                break;
             }
             p = zput(p, " -> SWITCH FAILED (staying real mode, CF=1)\r\n");
             log_append(LOG_PATH, base, p); p = base;
