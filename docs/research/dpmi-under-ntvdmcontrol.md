@@ -67,6 +67,65 @@ the VDM_TIB CONTEXT into PM (set PE in the saved MSW/CR0, load PM CS:EIP/SS:ESP 
 selectors). This is squarely the "reuse the kernel VDM" bet of ADR-0004 — *not* a custom DPMI
 host built on `NtSetLdtEntries` from scratch. That is the right path and a strong de-risking.
 
+## Recon findings (2026-07-31) — mode-switch + LDT ABI recovered `[FACT, disasm]`
+
+A pass over XP `ntvdm.exe` (r2 on `reverse/`, image base `0x0f000000`) scanning **every**
+`call [NtVdmControl]` site (`ff 15 7c 14 00 0f`, 14 sites) and reading the pushed service number
++ ServiceData recovered the service map and, more importantly, the two keystone mechanisms.
+
+**`NtVdmControl` service map (from the call-site scan):**
+
+| Svc | Name (from enum)        | Site(s)                | ServiceData shape observed |
+|-----|-------------------------|------------------------|----------------------------|
+| 0   | VdmStartExecution       | `0xf0053d2` (+ main)   | `(0, NULL)` — runs the CONTEXT |
+| 2   | VdmDelayInterrupt(?)    | `0xf005f6a`            | small struct |
+| 3   | VdmInitialize           | `0xf00e6c2`            | the big init struct (ICA ptrs + TrapcHandler) — matches our `v86_init` |
+| 4   | VdmFeatures(?)          | `0xf00fdd1`            | `&byte` flag |
+| 5   | —                       | `0xf051111`            | — |
+| 6   | —                       | `0xf045981`            | — |
+| 8   | VdmQueueInterrupt(?)    | `0xf043ff8`            | `&word` |
+| 10  | **VdmSetLdtEntries**    | `0xf05012b`            | **6-dword block, see below** |
+| 11  | **VdmSetProcessLdtInfo**| `0xf05017a`            | struct built after a `rep movsb` (LDT table copy) |
+| 12  | —                       | `0xf0415d3`            | words incl. 0x388/0x389 |
+| 13  | **VdmPMCliControl**     | `0xf0053b6`,`0xf03d9d1`,`0xf03da59` | `{subfn}` where subfn ∈ {0,1,3} |
+
+**Unknown #1 — the mode-switch primitive — RESOLVED.** `fcn.0f00532e` (the per-iteration
+run/dispatch) is decisive: it loads `edi = 0x20000` (**EFLAGS.VM**, bit 17), calls `getMSW`, and
+`test al,1` (the client's *virtual* PE bit). Two paths:
+- **V86 path** (virtual PE == 0), at `0xf0053ca`: `or dword [esi+0x398], edi` — i.e.
+  **`VTIB_EFLAGS(+0x398) |= 0x20000` (set VM)** — then `NtVdmControl(0, NULL)` = VdmStartExecution.
+- **PM path** (virtual PE == 1): does **not** set VM; virtualises the client IF via
+  `VdmPMCliControl(13, {3})`, then runs.
+
+So **the VM bit in `VTIB_EFLAGS` (offset 0x398) is the sole V86-vs-PM selector for the *same*
+VdmStartExecution.** To enter PM: **clear VM**, load `CS/SS/DS/ES` in the CONTEXT with **LDT
+selectors**, set `EIP/ESP`, and call VdmStartExecution — the kernel monitor executes real
+protected-mode code and reflects PM faults/INTs back like V86. (`getMSW` returns a *virtual* MSW
+ntvdm maintains for a real DPMI client; we control the mode directly, so our host doesn't need it.)
+
+**Unknown #2 — the LDT install ABI — RESOLVED.** `fcn.0f050100` builds the service-10 ServiceData
+as **exactly the `NtSetLdtEntries` 6-dword argument block**:
+
+```
+struct VdmSetLdtEntries_Data {   /* NtVdmControl(10, &this) */
+    DWORD Selector0;   /* +0x00 */   DWORD Entry0Low;  /* +0x04 */   DWORD Entry0Hi;  /* +0x08 */
+    DWORD Selector1;   /* +0x0C */   DWORD Entry1Low;  /* +0x10 */   DWORD Entry1Hi;  /* +0x14 */
+};
+```
+
+`Entry{0,1}{Low,Hi}` are the two dwords of a standard x86 LDT descriptor (base/limit/access);
+two selectors can be set per call, or set `Selector1 = 0` for one. So to hand the client a PM
+code/data/stack selector we build a normal descriptor and call `NtVdmControl(10, ...)`.
+Service 11 (`VdmSetProcessLdtInfo`) copies an LDT *table* (`rep movsb`) — the one-time per-process
+"here is the client's LDT base/limit" registration so the monitor loads LDTR.
+
+**Unknown #3 — PM event taxonomy — deferred to the spike (resolve empirically).** The V86 taxonomy
+is known (0=IO, 2=GP, 4=BOP, 6=IRQ; `VTIB_EVENT`=0x5A8). Whether a PM `INT 31h`/`INT 21h` surfaces
+as a BOP (if we vector it through a PM IDT gate to a `C4 C4 nn`), a GP fault (event 2) we decode, or
+a distinct PM event code is not cheap to pin statically — the spike's host loop will **log the raw
+`VTIB_EVENT`/`VTIB_EVENT_INFO` and CS:EIP** on the first PM stop and read it off the VM. This is the
+one unknown the spike is *designed* to answer.
+
 ## Open unknowns (what the spike must nail down) `[VERIFY]`
 
 1. **The mode-switch primitive.** Exactly how ntvdm flips the VDM from V86→PM after the client
