@@ -55,5 +55,11 @@ int dpmi_switch_to_pm(volatile BYTE *tib, int client_is_32bit)
     VDM_REG (tib, VTIB_ESP) = new_sp;
     VDM_SET16(tib, VTIB_DS,  data_sel);
     VDM_SET16(tib, VTIB_ES,  data_sel);
+    /* FS/GS still hold the real-mode segment left by v86_set_entry -- a real-mode
+       segment value is an invalid PM selector, so loading it on the PM context faults
+       (and without PM fault-reflection set up, that crashes the host). Point them at
+       the data selector too. */
+    VDM_SET16(tib, VTIB_FS,  data_sel);
+    VDM_SET16(tib, VTIB_GS,  data_sel);
     return 0;
 }

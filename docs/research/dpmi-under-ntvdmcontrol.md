@@ -126,6 +126,39 @@ a distinct PM event code is not cheap to pin statically — the spike's host loo
 `VTIB_EVENT`/`VTIB_EVENT_INFO` and CS:EIP** on the first PM stop and read it off the VM. This is the
 one unknown the spike is *designed* to answer.
 
+## Spike results — increment 1 (2026-08-01, VM-run) `[FACT, real CPU]`
+
+First VM run of the 16-bit switch spike (`tools/dostest/dpmitest.com` +
+`src/vdm/dpmi.c`). The `ntvdmhost.log` on the real CPU shows the **switch plumbing
+works end-to-end**:
+
+```
+BOP2F ax=0x00001687
+DPMI switch @ 0x50:0x50 -> PM ok (VM cleared, CS=0x0000000f EIP=0x00000125)
+```
+
+i.e. INT 2Fh AX=1687h detected → client far-called the entry → we installed a code
+LDT selector (CS became **0x000F** = our `DPMI_SEL(1)`), cleared VM, and rewrote
+CS:IP to the PM return address (0x0F:0x125). `v86_set_ldt_entries` (service 10)
+returned success. **So the mode-switch CONTEXT rewrite + LDT install are proven.**
+
+**Blocker:** the host then **crashes (access violation) the instant it runs PM** —
+the log ends right after `PM ok`, with no `STAGE3-DPMI: PM stop` line, so
+`VdmStartExecution` faults *inside* the monitor rather than returning an event. The
+PM fault is not being reflected to the host; it propagates as a real exception.
+Setting FS/GS to the data selector (they were left holding the real-mode segment,
+an invalid PM selector) did **not** fix it — necessary but not sufficient.
+
+**Diagnosis / next increment:** the kernel monitor needs **PM-specific
+initialisation before its first PM `VdmStartExecution`** that our V86-only bring-up
+skips. Prime suspects, from the recon: **service 11 `VdmSetProcessLdtInfo`** (register
+the process LDT base/limit so the monitor can load LDTR — without it the PM selectors
+resolve against nothing) and/or the **service-13 `VdmPMCliControl`** PM-cli path that
+`fcn.0f00532e` runs on the PM branch. Increment 2 must recover the service-11
+ServiceData ABI (the `rep movsb` LDT-table copy at `0xf050169`) and call it (plus any
+PM-cli init) before switching. Only then will PM code run and INT 31h reflect (which
+finally answers unknown #3).
+
 ## Open unknowns (what the spike must nail down) `[VERIFY]`
 
 1. **The mode-switch primitive.** Exactly how ntvdm flips the VDM from V86→PM after the client
