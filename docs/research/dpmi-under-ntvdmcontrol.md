@@ -891,6 +891,40 @@ remaining gap is the handler entry + a real handler.
 The mechanism is proven and the TIB plumbing works; this is now bounded assembly/bookkeeping, not RE
 of the unknown.
 
+### VM run 32 (2026-08-01) — PM BOP REFLECTS: the PM→host primitive WORKS `[FACT, real CPU]`
+
+With `VDM_TIB+0x634` populated and the TIB write confirmed (run 31), changed the guest's
+post-switch code to a **raw BOP `C4 C4 58`** (instead of `INT 31h`). Result:
+
+```
+dpmi_enter_pm RETURNED event=0x00000004 CS:EIP=0x0000000f:0x00000125
+```
+
+**A protected-mode BOP executed on the real CPU, the kernel's PM dispatcher `0x565041`
+recognized `C4 C4`, set `VTIB_EVENT=4`, and `dpmi_enter_pm` RETURNED to the host** with the
+guest state — identical to how V86 BOPs surface. This is the observable PM→host mechanism we
+needed, and it **validates the whole reflect strategy**: PM executes (run 28) + a PM BOP bounces
+to the host loop (run 32). We can now iterate WITH observability (a BOP that fires => a visible
+`RETURNED event=4`), ending the blind silent-terminate era.
+
+**Remaining to close §1 (working INT 31h reflect):** the client issues `INT 31h` (`CD 31`), which
+`#GP`s and takes the `0x4f67f8`→`VDM_TIB+0x634` exception-reflect path (NOT the BOP path). That
+path still doesn't complete for us: a single BOP planted at `0x0F:0` was NOT hit (run 20/v20), so
+the reflect either fails inside `0x4f67f8` or resumes at a `CS=0x0F:EIP` we haven't pinned. Two
+threads to finish it, both now observable:
+1. **Pin the handler entry**: `[+0x636]` bit 0 is a 16/32 flag (`0x4f7063 test [edi+2],1`) — our
+   `0x0F` has bit 0 set (RPL3) so the kernel takes the 32-bit frame path, a likely mismatch for our
+   16-bit handler. Find how ntvdm builds `[0xf09c178]` (the `+0x636` value) and the paired handler
+   EIP (search ntvdm for the write to `0xf09c178` / the DPMI PM-handler registration).
+2. **Carpet probe**: revert the guest to `INT 31h`, fill the PSP region (`0x1000..`) with a BOP
+   pattern; if the reflect lands anywhere in it, `dpmi_enter_pm` returns and the returned CS:EIP
+   pins the landing empirically.
+
+Once the reflect lands on a BOP stub, the loop is: guest `INT 31h` → `#GP` → kernel reflect →
+BOP stub → `dpmi_enter_pm` returns `event=4` → host services the DPMI call (guest state at the
+VTIB regs / `+0x63a/+0x63c/+0x640`) → re-enter PM. Mechanism complete; then it's the INT 31h
+service surface (roadmap §2).
+
 ## Open unknowns (what the spike must nail down) `[VERIFY]`
 
 1. **The mode-switch primitive.** Exactly how ntvdm flips the VDM from V86→PM after the client
