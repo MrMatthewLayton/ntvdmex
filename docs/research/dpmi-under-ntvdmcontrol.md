@@ -925,6 +925,31 @@ BOP stub → `dpmi_enter_pm` returns `event=4` → host services the DPMI call (
 VTIB regs / `+0x63a/+0x63c/+0x640`) → re-enter PM. Mechanism complete; then it's the INT 31h
 service surface (roadmap §2).
 
+### VM run 33 (2026-08-01) — +0x636 is a 16/32 FLAG; INT 31h reflect needs the separate handler registration `[FACT, disasm + real CPU]`
+
+Two corrections from ntvdm's DPMI raw-mode-switch registration (`ntvdm 0x0f01a300`):
+- **`VDM_TIB[0x636]` is NOT a CS selector — it is the 16/32-bit FLAG** (`[0xf09c178] =
+  [CONTEXT.Eax+0xb0] & 1`, then copied to `[+0x636]`; `test [0x715],1` set if 32-bit). Our
+  `+0x636=0x0F` wrongly selected the 32-bit reflect frame. Corrected to `0` (16-bit).
+- **The handler CS:EIP is registered in ntvdm GLOBALS** (`[0xf09c15c]=IP, [0xf09c15e]=CS`, from a
+  guest-provided structure via `Sim32pGetVDMPointer`), **not** in the `+0x634` block. So populating
+  `+0x634/636/638` alone cannot supply the reflect target.
+
+Carpet probe (run 33): guest `INT 31h`; host filled linear `0x1000..0x1124` (all below the INT at
+`0x1125`) with BOPs; `+0x636=0`, `+0x638=0x17`, TIB match=YES. **Result: still silent-terminates —
+no BOP hit.** So the `#GP` reflect does not resume anywhere in `0..0x124`. Given `0x4f6f67`'s tail
+does not rewrite the block's CS/EIP (`[esi+0xc]/[esi+0x10]`), the reflect most likely resumes at the
+**fault CS:EIP itself (`0x0F:0x125`)** → re-executes the `INT 31h` → nested → terminate; or it fails
+earlier in `0x4f67f8`.
+
+**Assessment:** the `INT 31h` (`#GP`) exception-reflect is materially more involved than the direct
+BOP path (run 32) — it needs the DPMI PM exception/interrupt **handler registration** ntvdm does at
+init (the `[0xf09c15c/15e]` globals + whatever kernel-side vector table pairs with them), not just
+the `+0x634` stack block. **What's solid and observable: PM executes (28) and a PM BOP round-trips to
+the host (32).** The remaining INT 31h routing is a focused RE of ntvdm's full DPMI-init handler
+registration + the kernel's `0x4f67f8` handler-CS:EIP source — best taken fresh with the run-32
+observability harness (a landed BOP prints `RETURNED event=4`).
+
 ## Open unknowns (what the spike must nail down) `[VERIFY]`
 
 1. **The mode-switch primitive.** Exactly how ntvdm flips the VDM from V86→PM after the client

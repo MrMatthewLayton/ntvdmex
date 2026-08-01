@@ -1009,7 +1009,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     (void)hInst; (void)hPrev; (void)lpCmd; (void)nShow;
     progpath[0] = 0; args[0] = 0;
 
-    p = zput(p, "NTVDMEX clean host\r\nSTAGE0: WinMain entered [build dpmi-harness-v21]\r\n");
+    p = zput(p, "NTVDMEX clean host\r\nSTAGE0: WinMain entered [build dpmi-harness-v22]\r\n");
     log_write(LOG_PATH, report, p);
     serial_init();                                      /* DPMI harness: COM1 log sink */
     serial_out(report, p);
@@ -1409,7 +1409,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                    valid selectors so the fault REFLECTS instead. (+0x63a/+0x63c/+0x640 are kernel
                    scratch: saved fault SS/ESP/EIP.) */
                 *(volatile WORD *)(tib + 0x634) = 0;       /* nesting count              */
-                *(volatile WORD *)(tib + 0x636) = 0x0F;    /* handler CS (our code sel)  */
+                *(volatile WORD *)(tib + 0x636) = 0;       /* 16/32 flag (0 = 16-bit); ntvdm 0x0f01a325 */
                 *(volatile WORD *)(tib + 0x638) = 0x17;    /* handler SS (our stack sel) */
                 /* Confirm the write LANDS in the TIB the kernel reads (TEB[0xF18]). */
                 { BYTE *teb = (BYTE *)NtCurrentTeb();
@@ -1421,13 +1421,12 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                   p = zput(p, " [636]=0x"); p = zhex(p, *(volatile WORD *)(tib + 0x636));
                   p = zput(p, " [638]=0x"); p = zhex(p, *(volatile WORD *)(tib + 0x638));
                   p = zput(p, "\r\n"); log_append(LOG_PATH, base, p); serial_out(base, p); p = base; }
-                /* PROBE (run 32): the kernel resumes the reflected fault at CS=[+0x636]:EIP where
-                   the entry EIP field is unset -> 0. Predicted landing = 0x0F:0 = linear 0x1000.
-                   Plant a BOP (C4 C4 58) there: if the reflect fires, the BOP bounces to the
-                   monitor -> dpmi_enter_pm RETURNS with an event (proving the reflect works and
-                   pinning the landing). HLT guard after, in case of mis-decode. */
-                { volatile BYTE *stub = (volatile BYTE *)(ULONG_PTR)0x1000;
-                  stub[0] = 0xC4; stub[1] = 0xC4; stub[2] = 0x58; stub[3] = 0xF4; }
+                /* CARPET PROBE (run 33): fill the PSP region 0x1000..0x1124 (all BELOW the guest's
+                   INT 31h at linear 0x1125) with BOPs (C4 C4 58). If the kernel reflects the #GP to
+                   any low CS=0x0F:EIP, it lands on a BOP -> dpmi_enter_pm RETURNS and reports the
+                   landing CS:EIP, empirically pinning the reflect target. */
+                { volatile BYTE *c = (volatile BYTE *)(ULONG_PTR)0x1000; unsigned k;
+                  for (k = 0; k + 2 < 0x124; k += 3) { c[k] = 0xC4; c[k+1] = 0xC4; c[k+2] = 0x58; } }
                 dpmi_enter_pm(tib);
                 p = zput(p, "STAGE3-DPMI: dpmi_enter_pm RETURNED event=0x");
                 p = zhex(p, VDM_REG(tib, VTIB_EVENT));
