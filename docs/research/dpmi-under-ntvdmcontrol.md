@@ -610,6 +610,37 @@ disasm `VdmDispatchException` to read (a) its TRUE/FALSE return condition and (b
 VDM_TIB field it uses as the reflection CS:EIP. That field = the PM IDT/handler table we must set
 up (candidate fix: populate the guest PM IDT `[0x31]` with a selector:offset that BOPs to the host).
 
+### Kernel RE session 2 (2026-08-01) — reflection is in KiTrap0D, gated by the VDM fixed-state flag `[FACT, disasm]`
+
+Traced `KiDispatchException`'s VDM branch and ruled it OUT as the reflection point:
+- `KiDispatchException` (VA ~`0x421cf7`): `fs:[0x124]`→KTHREAD, `[+0x44]`→Process, `cmp [+0x158],0`
+  (VdmObjects). If NULL → normal path `0x40ec73`; if non-NULL → `jmp 0x44664c`.
+- **`0x44664c` does NOT reflect** — it just records fault bits
+  (`[ebx+0x298] |= [trapframe+0x88] & 6`) and exits to the normal dispatch tail (`0x40ec73`/
+  `0x40ec85`). The predicate it calls, `fcn.0x441467`, returns TRUE only when `VdmObjects==NULL`
+  **and** a PCR flag (`[0xffdff018]+0x164`) is set — a teardown special-case, not our path.
+
+⇒ **PM-fault reflection happens earlier, in `KiTrap0D` (the #GP handler), before
+`KiDispatchException`.** This fits run 16: a GDT-flat CS fault reaches our VEH (normal path),
+but an LDT-CS fault does **not** — `KiTrap0D` diverts it onto the VDM path. So the kernel
+**recognizes** our PM fault as a VDM fault; it just **fails to complete the reflect** and
+terminates instead.
+
+**The reflect it attempts** (per ntvdm's `0xf04483c`/`dpmi_enter_pm` contract): save guest →
+`VDM_TIB+0x2D8`, restore the host-save CONTEXT at `TIB+0x0C`, set `VTIB_EVENT`, resume the host
+(so `dpmi_enter_pm` *returns* with the event). For the kernel to take this path it must believe a
+host is **monitoring** the VDM — gated by the VDM **fixed-state / in-monitor flag** that
+`dpmi_enter_pm` writes at linear **`[0x714]`** (`lock or [0x714],0x200`, then `test [0x714],3`).
+Prime suspect: the kernel reads the VDM fixed state at an address our minimal `v86_get_tib`/
+`VdmInitialize` never established (real ntvdm maps a `FIXED_NTVDMSTATE`-style block the kernel
+knows), so `[0x714]` is the wrong cell → kernel sees "unmonitored" → terminate.
+
+**Exact next step:** find `KiTrap0D` (the #GP IDT handler) and its VDM branch; read where it
+tests the VDM fixed-state/monitor flag and how it locates that memory (a fixed linear address, or
+a pointer in VdmObjects/VDM_TIB). Confirm whether our `[0x714]` matches. If the kernel expects a
+`FIXED_NTVDMSTATE` block we don't map, mapping/initialising it is the fix. (Cross-check against
+ntvdm's own `VdmInitialize` call site + any low-memory fixed-state setup it does before PM entry.)
+
 ## Open unknowns (what the spike must nail down) `[VERIFY]`
 
 1. **The mode-switch primitive.** Exactly how ntvdm flips the VDM from V86→PM after the client
