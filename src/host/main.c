@@ -957,7 +957,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     (void)hInst; (void)hPrev; (void)lpCmd; (void)nShow;
     progpath[0] = 0; args[0] = 0;
 
-    p = zput(p, "NTVDMEX clean host\r\nSTAGE0: WinMain entered [build dpmi-harness-v4]\r\n");
+    p = zput(p, "NTVDMEX clean host\r\nSTAGE0: WinMain entered [build dpmi-harness-v6]\r\n");
     log_write(LOG_PATH, report, p);
     serial_init();                                      /* DPMI harness: COM1 log sink */
     serial_out(report, p);
@@ -1296,6 +1296,9 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                 VDM_SET16(tib, VTIB_ESI, 0);
                 VDM_SET16(tib, VTIB_ES,  DOS_HDLR_SEG);
                 VDM_SET16(tib, VTIB_EDI, DPMI_ENTRY_OFF);
+                p = zput(p, "STAGE2: DPMI 1687 -> AX=0 ES:DI=0x"); p = zhex(p, DOS_HDLR_SEG);
+                p = zput(p, ":0x"); p = zhex(p, DPMI_ENTRY_OFF); p = zput(p, " (guest must far-call this)\r\n");
+                log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
             }
             /* other INT 2Fh multiplex functions: left to the guest (no-op pass) */
             VDM_REG(tib, VTIB_EIP) += 3;                        /* -> the IRET (CF) */
@@ -1320,7 +1323,9 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         if ((VDM_REG(tib, VTIB_EVENT_INFO) & 0xFF) == DPMI_BOP) {  /* DPMI real->PM switch */
             DWORD csv = VDM_REG(tib, VTIB_CS) & 0xFFFF, ipv = VDM_REG(tib, VTIB_EIP) & 0xFFFF;
             LONG reg_st = 0, set_st = 0; int sw;
-            p = zput(p, " DPMI switch @ 0x"); p = zhex(p, csv); p = zput(p, ":0x"); p = zhex(p, ipv);
+            p = zput(p, "STAGE3: DPMI_BOP far-call LANDED @ 0x"); p = zhex(p, csv);
+            p = zput(p, ":0x"); p = zhex(p, ipv); p = zput(p, " -- switching to PM\r\n");
+            log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
             sw = dpmi_switch_to_pm(tib, 0, &reg_st, &set_st);
             p = zput(p, " [svc11=0x"); p = zhex(p, (unsigned)reg_st);
             p = zput(p, " svc10=0x"); p = zhex(p, (unsigned)set_st); p = zput(p, "]");
@@ -1345,7 +1350,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                 break;
             }
             p = zput(p, " -> SWITCH FAILED (staying real mode, CF=1)\r\n");
-            log_append(LOG_PATH, base, p); p = base;
+            log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
             VDM_REG(tib, VTIB_EFLAGS) |= 1;         /* CF=1 signals failure to the client */
             VDM_REG(tib, VTIB_EIP) += 3;            /* -> the RETF, returns real mode     */
             continue;

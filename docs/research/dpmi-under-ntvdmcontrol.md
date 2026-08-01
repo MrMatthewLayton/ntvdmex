@@ -510,6 +510,48 @@ kernel vectors `INT 31h` there** (distinguishing INT-vectoring from the HLT skip
 log. Added a **watchdog** thread (3s → terminate) so every DPMI run self-terminates;
 `ExitProcess` hangs unwinding the PM engine thread, so it uses `TerminateProcess`.
 
+### VM runs 20–22 (2026-08-01) — runs 17–19 DEBUNKED: the flat LDT descriptor never installed `[FACT, real CPU]`
+
+Rebuilt the headless rig (serial → `vm/serial.log`, autorun) and added serial markers at
+every step of the switch. Three harness bugs were masking the host entirely (fixed):
+`dpmitest.bat` used `start /wait "%prog%"` — `start`'s first *quoted* arg is the window
+**title**, so it opened an empty titled cmd and ran nothing; the QMP `type` helper mapped
+`\` to qcode `backslash`, which types `#` on this VM's **UK keyboard** (real `\` = qcode
+`less`); and after a QMP CD hot-swap XP autologin **beats the optical re-enumeration**, so
+`D:\` looks empty for several seconds (autorun now polls for the CD; a manual re-read via
+Explorer forces it).
+
+With the host actually running and its svc-status logged, the real finding:
+
+- **`VdmSetLdtEntries` (svc 10) AND `VdmSetProcessLdtInfo` (svc 11) both returned
+  `0xC000011A = STATUS_INVALID_LDT_DESCRIPTOR`** for the flat descriptor (base 0, limit
+  `0xFFFFF`, G=1). So **the flat LDT never installed** — runs 17–19 ran PM with an
+  empty/bogus LDT, and their "guest spins past HLT at 100% CPU / kernel swallows the fault"
+  is an **artifact of the broken LDT**, not real kernel behaviour. **Runs 17–19 are retracted.**
+- **Why XP rejects it** (ReactOS `PspIsDescriptorValid`, `ntoskrnl/ke/i386/ldt.c`): after the
+  present/DPL=3/type checks it computes `SegLimit = G ? (limit<<12)|0xFFF : limit` and rejects
+  unless `Base + SegLimit <= MmHighestUserAddress` (~`0x7FFEFFFF`). A flat 4 GB segment
+  (`Base+SegLimit = 0xFFFFFFFF`) is far above the user ceiling → invalid. (ReactOS *disabled*
+  this check for DOS32 compat; **real XP enforces it**.) A DOS/4GW-style flat client is thus
+  impossible via a single 4 GB LDT selector on XP — it must use a limited selector (or GDT).
+- **Fix — based, 64K, 16-bit selectors** (`base = seg<<4`, limit `0xFFFF`, G=0, D=0). These
+  map the guest's real-mode segment (linear `seg<<4`, all < 1 MB, comfortably in user space).
+  **Result (run 22): `svc11=0 svc10=0` — the switch SUCCEEDS**, VM bit cleared, `NtContinue`
+  enters ring-3 PM at `CS=0x0F:0x125`. With a based CS/SS the resume EIP/ESP are the
+  real-mode **offsets**, not linear addresses.
+- **Genuine post-switch behaviour (valid LDT):** the guest's `HLT` (ring-3 `#GP`) makes the
+  process **silently terminate within ~3 s** — no VEH, no watchdog line, no crash dialog.
+  This is **runs 10–16's** behaviour (silent terminate), *not* runs 17–19's spin — confirming
+  10–16 were the valid runs and the flat detour was noise. **The real blocker stands (run 15):
+  a raw PM `#GP` on an LDT CS is not reflected to user mode; reflection is kernel-side.**
+
+**Next (increment 3b, now testable on a *valid* PM entry):** distinguish a raw `#GP` (HLT,
+terminates) from a software `INT nn`. XP's VDM trap path handles `INT nn` specially
+(ReactOS `KiVdmOpcodeINTnn`: read `IVT[nn]`, vector there with an RPL-masked CS) — so
+`INT 31h` may be **vectored to `IVT[0x31]`** even though `HLT` terminates. Change the client's
+post-switch opcode to `INT 31h`, point `IVT[0x31]` at a handler we own, and see whether the
+kernel vectors it (the DPMI service surface) rather than terminating.
+
 ## Open unknowns (what the spike must nail down) `[VERIFY]`
 
 1. **The mode-switch primitive.** Exactly how ntvdm flips the VDM from V86→PM after the client

@@ -41,20 +41,23 @@ int dpmi_switch_to_pm(volatile BYTE *tib, int client_is_32bit,
     WORD code_sel = DPMI_SEL(DPMI_IDX_CODE);
     WORD data_sel = DPMI_SEL(DPMI_IDX_DATA);
     DWORD clo, chi, dlo, dhi;
-    DWORD lin_eip = ((DWORD)ret_cs << 4) + ret_ip;   /* linear addr of the PM code   */
-    DWORD lin_esp = ((DWORD)ss << 4) + new_sp;       /* linear addr of the PM stack  */
+    DWORD code_base = (DWORD)ret_cs << 4;            /* linear base of the guest CS  */
+    DWORD data_base = (DWORD)ss     << 4;            /* linear base of the guest SS  */
+    DWORD lin_eip = code_base + ret_ip;              /* linear addr (diagnostic only) */
     LONG st;
     BYTE code_access = 0xFA, data_access = 0xF2;
     (void)client_is_32bit;
 
-    /* EXPERIMENT (3c/run17): FLAT selectors -- base 0, 4GB (G=1, D/B=1 -> flags 0xC).
-       Hypothesis: exception delivery keeps the faulting CS; our old CS had base 0x1000
-       + 64K limit, so KiUserExceptionDispatcher's high flat address was out of range ->
-       the kernel couldn't deliver -> silent terminate (runs 10-16). A flat CS (base 0,
-       like DOS/4GW extenders) makes the dispatcher reachable, so the INT 31h #GP should
-       reach our VEH. With base 0, CS:EIP and SS:ESP use LINEAR addresses. */
-    dpmi_build_desc(0, 0xFFFFF, code_access, 0xC, &clo, &chi);
-    dpmi_build_desc(0, 0xFFFFF, data_access, 0xC, &dlo, &dhi);
+    /* BASED, 64K, 16-bit selectors (G=0, D/B=0 -> flags 0x0). XP's NtSetLdtEntries
+       REJECTS a flat 4GB LDT descriptor: PspIsDescriptorValid requires
+       base + (G? (limit<<12)|0xFFF : limit) <= MmHighestUserAddress (~0x7FFEFFFF),
+       else STATUS_INVALID_LDT_DESCRIPTOR (0xC000011A) -- so the run-17 flat experiment
+       could NEVER install on XP (VM run 21; ReactOS disabled this check for DOS compat,
+       real XP enforces it). A based selector maps the guest's real-mode segment (linear
+       seg<<4, all < 1MB, comfortably in user space); with a based CS/SS the resume
+       EIP/ESP are the real-mode OFFSETS, not linear addresses. */
+    dpmi_build_desc(code_base, 0xFFFF, code_access, 0x0, &clo, &chi);
+    dpmi_build_desc(data_base, 0xFFFF, data_access, 0x0, &dlo, &dhi);
     g_dpmi_dbg[0] = ret_cs; g_dpmi_dbg[1] = lin_eip; g_dpmi_dbg[2] = clo; g_dpmi_dbg[3] = chi;
 
     /* First REGISTER the LDT table (service 11) so the monitor loads LDTR -- without
@@ -79,13 +82,13 @@ int dpmi_switch_to_pm(volatile BYTE *tib, int client_is_32bit,
        VDM as V86 and won't load our LDT (VM run 5: descriptor correct but base 0). */
     *(volatile WORD *)(tib + VTIB_MSW) |= MSW_PE_BIT;
 
-    /* Rewrite the CONTEXT into protected mode: clear VM, load the FLAT selectors,
-       resume at the LINEAR code/stear addresses (selectors have base 0). */
+    /* Rewrite the CONTEXT into protected mode: clear VM, load the BASED selectors,
+       resume at the real-mode OFFSETS (the selectors carry the seg<<4 base). */
     VDM_REG(tib, VTIB_EFLAGS) = VTIB_EFLAGS_PM;      /* VM clear -> PM              */
     VDM_SET16(tib, VTIB_CS,  code_sel);
-    VDM_REG (tib, VTIB_EIP) = lin_eip;
+    VDM_REG (tib, VTIB_EIP) = ret_ip;                /* offset within the based CS  */
     VDM_SET16(tib, VTIB_SS,  data_sel);
-    VDM_REG (tib, VTIB_ESP) = lin_esp;
+    VDM_REG (tib, VTIB_ESP) = new_sp;                /* offset within the based SS  */
     VDM_SET16(tib, VTIB_DS,  data_sel);
     VDM_SET16(tib, VTIB_ES,  data_sel);
     VDM_SET16(tib, VTIB_FS,  data_sel);

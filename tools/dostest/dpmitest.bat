@@ -16,5 +16,7 @@ if exist %N%\ntvdmhost.log del /f /q %N%\ntvdmhost.log
 
 echo Running GH#1 DPMI 16-bit switch spike (headless; read vm/serial.log)...
 start "" /b cmd /c "ping -n 7 127.0.0.1 >nul & taskkill /f /im ntvdmhost.exe >nul 2>&1"
-start /wait "%~dp0dosstub.com"
+rem NB: `start`'s first quoted arg is the WINDOW TITLE -- must pass an empty "" title
+rem BEFORE the program, else it opens a titled empty cmd and runs nothing.
+start /wait "" "%~dp0dosstub.com"
 endlocal

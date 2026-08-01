@@ -45,7 +45,10 @@ def main():
         keys = [{"type": "qcode", "data": k} for k in a[1:]]
         print(do(f, {"execute": "send-key", "arguments": {"keys": keys}}))
     elif a[0] == "type":                                # type an ASCII string
-        m = {":": ("shift", "semicolon"), "\\": ("backslash",), ".": ("dot",),
+        # NB: this VM uses a UK keyboard layout. The physical US-backslash key
+        # (qcode "backslash") types '#' here; the real '\' is the extra key next to
+        # left-shift (qcode "less"). Map accordingly so paths type correctly.
+        m = {":": ("shift", "semicolon"), "\\": ("less",), ".": ("dot",),
              "_": ("shift", "minus"), "-": ("minus",), " ": ("spc",), "/": ("slash",)}
         for ch in a[1]:
             if ch in m:
