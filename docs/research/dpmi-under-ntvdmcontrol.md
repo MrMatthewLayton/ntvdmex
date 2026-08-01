@@ -820,6 +820,45 @@ equivalent, and where it decides to divert an LDT-CS fault, is the next target).
 kernel-disasm task; foothold: `KiTrapXX` prologue `0x403972`, V86 branch `0x403ac0`,
 `KiDispatchException` VDM record-branch `0x421cf7`→`0x44664c`, user-delivery validation `0x40ec99`.
 
+### Kernel RE session 4 (2026-08-01) — THE ANSWER: PM faults reflect via VDM_TIB+0x634, which we never set up `[FACT, disasm]`
+
+Fully traced XP's `KiTrap0D` #GP path for a protected-mode VDM fault (our `INT 31h`):
+
+1. **Shared trap prologue** (`0x408d02`): `test [esp+8],0x20000` (V86?) → **non-V86 jumps to
+   `0x409177`** (the V86 fall-through does BOP `C4 C4` reflection with `CS<<4` addressing).
+2. **`0x409177`** builds the frame, then the decision (`0x4091e4`):
+   `cmp word [CS],0x1b` → **if CS==`0x1B` (GDT flat) → normal exception path → our VEH**; else
+   `cmp [EPROCESS+0x158],0` (VdmObjects) → **VDM process → `0x40925e`**. *This is exactly run 16:
+   flat-CS delivers to the VEH, our LDT-CS diverts to the VDM path.*
+3. **`0x40925e`**: `call 0x565041` (returns al; if `al&0xf!=0` → resume/handled) else
+   `call 0x4f67f8(6)` else → terminate.
+4. **`0x565041`** = the PM VDM dispatcher: resolves CS:EIP via the LDT (`0x45dd5f`), reads the
+   faulting bytes, reflects ONLY `C4 C4` **BOPs** (sets `VTIB_EVENT=4`). A plain `INT 31h`
+   (`CD 31`) is not a BOP → **returns 0** → not handled.
+5. **`0x4f67f8`** = the PM exception reflector: for VM-clear (PM), CS≠`0x1B`, it saves the fault
+   `CS:EIP:SS:ESP:EFlags` and `call 0x4f6f67`; on success it rewrites the trap frame to the handler
+   and resumes; on **failure → returns 0 → terminate**.
+6. **`0x4f6f67` → `0x4f6fed`** (PM branch): gets `VDM_TIB` (`[KPCR+0x18]→[+0xF18]`), then
+   **`lea edi,[VDM_TIB+0x634]`**, `call 0x4f6e6f`.
+7. **`0x4f6e6f`** decodes **`VDM_TIB+0x634`** — the PM fault-reflection control block:
+   - `+0x00` (word) nesting/"in-handler" count · `+0x04` (word) **handler STACK selector (SS)** ·
+     `+0x06` (word) saved fault SS · `+0x08` (dword) saved fault ESP · `+0x0C` (dword) saved fault EIP.
+   - It saves the fault SS:ESP:EIP into `+6/+8/+0xC`, switches the guest to the handler stack
+     (`SS=[+4]`, `ESP=0x1000`), and **resolves `[+4]` via `0x4f6dc0`; if 0/invalid → returns 0 →
+     the whole reflect fails → terminate.**
+
+**⇒ ROOT CAUSE (after ~30 runs): the kernel reflects a PM VDM fault by switching to a handler whose
+stack/CS:EIP live in `VDM_TIB+0x634`. Real ntvdm populates that block (its PM fault handler + a
+dedicated PM stack selector). Our host never sets it up, so `[VDM_TIB+0x634+4]` (the handler SS) is
+0 → the kernel's selector-resolve fails → every PM fault terminates.** This unifies every prior
+result: PM executes fine (run 28); the switch/LDT are correct (run 22); the fault just has nowhere
+to reflect to.
+
+**Next (implementation):** RE how ntvdm fills `VDM_TIB+0x634` (search ntvdm for writes to `+0x634`
+and the PM-handler CS:EIP/SS it registers), then replicate: install a PM code+stack selector in our
+LDT, point `VDM_TIB+0x634` at a PM handler stub that BOPs back to the host (so `INT 31h` reflects to
+our stub → host services DPMI → returns to the client). Non-trivial but now fully specified.
+
 ## Open unknowns (what the spike must nail down) `[VERIFY]`
 
 1. **The mode-switch primitive.** Exactly how ntvdm flips the VDM from V86→PM after the client
