@@ -38,7 +38,9 @@ start:
     ; post-switch code to SIZE-INDEPENDENT opcodes so it decodes the same whether CS
     ; is 16- or 32-bit: INT 31h (CD 31) and JMP $ (EB FE). If a 32-bit PM CS lets the
     ; kernel deliver the INT 31h #GP to our user-mode VEH, the host logs "DPMI FATAL".
-    int 0x31                   ; CD 31 -- should #GP -> user-mode exception
+    hlt                        ; F4 -- privileged: #GP at ring 3 (unambiguous fault).
+                               ; If the VEH catches THIS with a flat CS, exception
+                               ; delivery works and int 0x31 was just an IDT gate.
 .pmspin:
     jmp .pmspin                ; EB FE
 

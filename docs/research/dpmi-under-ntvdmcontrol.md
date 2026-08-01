@@ -483,6 +483,33 @@ pass** (how NT chooses to deliver vs terminate a ring-3 fault in an LDT/VDM cont
 more quick VM iterations. **Protected-mode execution is proven; the INT 31h surface is
 blocked on this specific kernel-delivery condition.**
 
+### VM runs 17–19 (2026-08-01) — the real blocker: XP's kernel SWALLOWS PM VDM faults `[FACT, real CPU]`
+
+Switched to **flat selectors** (base 0, 4GB) so the faulting CS resolves the (high, flat)
+`KiUserExceptionDispatcher` address — the hypothesis being that our old base-0x1000 CS put
+the dispatcher out of range. New behaviour, and it reframes everything:
+
+- With flat selectors the guest **no longer dies** on a fault — it **runs past `INT 31h`
+  AND past `HLT`** (a guaranteed ring-3 `#GP`) and **spins at 100% CPU** (Task Manager,
+  run 18). The VEH never fires.
+- So `HLT`/`INT 31h` do fault, but the fault is **neither delivered to our VEH nor fatal**
+  — **XP's kernel intercepts the PM VDM fault, skips the instruction, and resumes the
+  guest** (via the TrapcHandler path). This holds with an empty *or* the real TrapcHandler.
+
+**This is the core blocker, finally pinned:** XP's kernel (unlike ReactOS, which lacks PM
+VDM support) **handles PM VDM faults by skip+resume** — it swallows them. So catching
+`INT 31h` via a user-mode exception is impossible: the kernel eats the fault before user
+mode sees it. (This also explains all of runs 8–16.) The only way to service `INT 31h`
+is to make the kernel **vector** it to a handler we control rather than skip it — i.e.
+the `KiVdmOpcodeINTnn` path (ReactOS): for an `INT nn` the kernel reads the vector from
+the real-mode IVT at `0:nn*4` and transfers there (RPL-masked CS for PM). **Untested
+next step: set `IVT[0x31]` to a PM handler selector:offset we own and see whether the
+kernel vectors `INT 31h` there** (distinguishing INT-vectoring from the HLT skip).
+
+**Harness:** spinning PM guests lock `ntvdmhost.exe` (stale-host reruns) and block the
+log. Added a **watchdog** thread (3s → terminate) so every DPMI run self-terminates;
+`ExitProcess` hangs unwinding the PM engine thread, so it uses `TerminateProcess`.
+
 ## Open unknowns (what the spike must nail down) `[VERIFY]`
 
 1. **The mode-switch primitive.** Exactly how ntvdm flips the VDM from V86→PM after the client

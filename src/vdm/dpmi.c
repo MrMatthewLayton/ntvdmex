@@ -41,21 +41,21 @@ int dpmi_switch_to_pm(volatile BYTE *tib, int client_is_32bit,
     WORD code_sel = DPMI_SEL(DPMI_IDX_CODE);
     WORD data_sel = DPMI_SEL(DPMI_IDX_DATA);
     DWORD clo, chi, dlo, dhi;
+    DWORD lin_eip = ((DWORD)ret_cs << 4) + ret_ip;   /* linear addr of the PM code   */
+    DWORD lin_esp = ((DWORD)ss << 4) + new_sp;       /* linear addr of the PM stack  */
     LONG st;
-    /* 16-bit selectors, byte granular, limit 64K-1: code exec/read, data r/w, DPL3.
-       (32-bit clients would set the D/B + G flags and a 4GB limit -- a later step.) */
     BYTE code_access = 0xFA, data_access = 0xF2;
     (void)client_is_32bit;
 
-    /* EXPERIMENT (3c): BOTH code and data/stack selectors 32-bit (flags=0x4, D/B=1).
-       ReactOS shows PM VDM faults aren't kernel-reflected -- they go to user-mode
-       exception delivery. A 16-bit CS (D=0) apparently doesn't dispatch cleanly to
-       KiUserExceptionDispatcher (runs 10/12/13 died with no VEH); a 32-bit CS should.
-       The client's post-switch code is size-independent (INT 31h; JMP $) so it decodes
-       correctly under D=1. */
-    dpmi_build_desc((DWORD)ret_cs << 4, 0xFFFF, code_access, 0x4, &clo, &chi);
-    dpmi_build_desc((DWORD)ds     << 4, 0xFFFF, data_access, 0x4, &dlo, &dhi);
-    g_dpmi_dbg[0] = ret_cs; g_dpmi_dbg[1] = ret_ip; g_dpmi_dbg[2] = clo; g_dpmi_dbg[3] = chi;
+    /* EXPERIMENT (3c/run17): FLAT selectors -- base 0, 4GB (G=1, D/B=1 -> flags 0xC).
+       Hypothesis: exception delivery keeps the faulting CS; our old CS had base 0x1000
+       + 64K limit, so KiUserExceptionDispatcher's high flat address was out of range ->
+       the kernel couldn't deliver -> silent terminate (runs 10-16). A flat CS (base 0,
+       like DOS/4GW extenders) makes the dispatcher reachable, so the INT 31h #GP should
+       reach our VEH. With base 0, CS:EIP and SS:ESP use LINEAR addresses. */
+    dpmi_build_desc(0, 0xFFFFF, code_access, 0xC, &clo, &chi);
+    dpmi_build_desc(0, 0xFFFFF, data_access, 0xC, &dlo, &dhi);
+    g_dpmi_dbg[0] = ret_cs; g_dpmi_dbg[1] = lin_eip; g_dpmi_dbg[2] = clo; g_dpmi_dbg[3] = chi;
 
     /* First REGISTER the LDT table (service 11) so the monitor loads LDTR -- without
        this, svc 10's descriptors resolve base 0 (VM run 2 diagnosis). Table covers
@@ -79,19 +79,15 @@ int dpmi_switch_to_pm(volatile BYTE *tib, int client_is_32bit,
        VDM as V86 and won't load our LDT (VM run 5: descriptor correct but base 0). */
     *(volatile WORD *)(tib + VTIB_MSW) |= MSW_PE_BIT;
 
-    /* Rewrite the CONTEXT into protected mode: clear VM, load the LDT selectors,
-       resume at the client's return address (same linear addr, now via a selector). */
+    /* Rewrite the CONTEXT into protected mode: clear VM, load the FLAT selectors,
+       resume at the LINEAR code/stear addresses (selectors have base 0). */
     VDM_REG(tib, VTIB_EFLAGS) = VTIB_EFLAGS_PM;      /* VM clear -> PM              */
     VDM_SET16(tib, VTIB_CS,  code_sel);
-    VDM_REG (tib, VTIB_EIP) = ret_ip;
+    VDM_REG (tib, VTIB_EIP) = lin_eip;
     VDM_SET16(tib, VTIB_SS,  data_sel);
-    VDM_REG (tib, VTIB_ESP) = new_sp;
+    VDM_REG (tib, VTIB_ESP) = lin_esp;
     VDM_SET16(tib, VTIB_DS,  data_sel);
     VDM_SET16(tib, VTIB_ES,  data_sel);
-    /* FS/GS still hold the real-mode segment left by v86_set_entry -- a real-mode
-       segment value is an invalid PM selector, so loading it on the PM context faults
-       (and without PM fault-reflection set up, that crashes the host). Point them at
-       the data selector too. */
     VDM_SET16(tib, VTIB_FS,  data_sel);
     VDM_SET16(tib, VTIB_GS,  data_sel);
     return 0;

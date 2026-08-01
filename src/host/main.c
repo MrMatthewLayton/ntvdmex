@@ -881,6 +881,22 @@ static LONG CALLBACK dpmi_crash_veh(EXCEPTION_POINTERS *ep)
     return EXCEPTION_CONTINUE_SEARCH;                   /* not reached */
 }
 
+/* DPMI test watchdog: if the PM guest neither faults to the VEH nor exits within a few
+   seconds (the kernel skip+resumes PM faults, so the guest spins), terminate cleanly so
+   the batch dumps the log and locks release. Makes every DPMI run self-terminating. */
+static DWORD WINAPI dpmi_watchdog(LPVOID param)
+{
+    static char wb[256]; char *q = wb; (void)param;
+    Sleep(3000);
+    q = zput(q, "STAGE3-DPMI: watchdog -- PM guest ran ~3s with NO fault delivered to the "
+                "VEH and no exit (kernel skip+resume / spin). Terminating.\r\n");
+    log_append(LOG_PATH, wb, q);
+    /* TerminateProcess (forceful) -- ExitProcess hangs trying to unwind the PM engine
+       thread (un-terminable LDT context). */
+    TerminateProcess(GetCurrentProcess(), 0xDD0);
+    return 0;
+}
+
 int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
 {
     char report[8192]; char *p = report; char *base;
@@ -1285,13 +1301,12 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                 p = zput(p, " -> PM ok (VM cleared, CS=0x");
                 p = zhex(p, VDM_REG(tib, VTIB_CS) & 0xFFFF);
                 p = zput(p, " EIP=0x"); p = zhex(p, VDM_REG(tib, VTIB_EIP) & 0xFFFF);
-                p = zput(p, ") -> running PM (NtContinue, 32-bit CS)\r\n");
+                p = zput(p, ") -> running PM (NtContinue, flat CS)\r\n");
                 log_append(LOG_PATH, base, p); p = base;
-                /* EXPERIMENT: ReactOS shows PM VDM faults go to USER-MODE exception
-                   delivery, not VTIB reflection. Run PM cleanly via NtContinue with a
-                   32-bit code selector and let the INT 31h #GP reach our VEH. If the VEH
-                   fires ("DPMI FATAL"), 32-bit-CS exception delivery works and this is the
-                   path to the INT 31h service surface. */
+                /* Watchdog so the run self-terminates whether the fault reaches the VEH,
+                   kills the process, or the kernel skip+resumes it into a spin. */
+                { HANDLE wd = CreateThread(NULL, 0, dpmi_watchdog, NULL, 0, NULL);
+                  if (wd) CloseHandle(wd); }
                 dpmi_run_pm(tib);
                 /* Only reached if NtContinue failed to enter PM. */
                 p = zput(p, "STAGE3-DPMI: NtContinue returned (PM entry failed)\r\n");
