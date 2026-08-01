@@ -1285,7 +1285,12 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                 p = zput(p, " -> PM ok (VM cleared, CS=0x");
                 p = zhex(p, VDM_REG(tib, VTIB_CS) & 0xFFFF);
                 p = zput(p, " EIP=0x"); p = zhex(p, VDM_REG(tib, VTIB_EIP) & 0xFFFF);
-                p = zput(p, ") -> entering PM (monitor)\r\n");
+                /* ntvdm's PM path calls VdmPMCliControl(13,{3}) before entering -- try
+                   it, in case it's what arms the kernel's PM fault reflection. */
+                { DWORD pm13[2]; LONG r13; pm13[0] = 3; pm13[1] = 0;
+                  r13 = v86_vdmcontrol(VDM_SVC_VdmPMCliControl, pm13);
+                  p = zput(p, " svc13=0x"); p = zhex(p, (unsigned)r13); }
+                p = zput(p, " -> entering PM (monitor)\r\n");
                 log_append(LOG_PATH, base, p); p = base;
                 /* dpmi_enter_pm runs PM CORRECTLY (our process LDT: base applied, proven
                    run 8/12) but faults aren't reflected. VdmStartExecution reflects faults

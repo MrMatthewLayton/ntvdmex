@@ -390,6 +390,33 @@ to reflect). That's a distinct, substantial research effort.
 proven and the mechanism fully mapped; the `INT 31h` service surface is blocked on this
 LDT/reflection unification, which is beyond quick iteration. A strong stopping point.
 
+### VM run 15 + kernel recon (2026-08-01) — reflection is kernel-side; user-mode levers exhausted `[FACT]`
+
+- **Run 15:** added `VdmPMCliControl(13,{3})` before the PM entry (ntvdm does this on its
+  PM path). It **succeeds** (`svc13=0x0`) but does **not** arm fault reflection — same
+  result (process exits at "entering PM", no event, no VEH). That was the last concrete
+  user-mode lever.
+- **ntvdm recon:** `fcn.0f00532e` (which calls the PM entry) is the body of the exported
+  **`VDDSimulate16`** — ntvdm's *user-mode* "run the VDM" primitive, called from its main
+  loop. So ntvdm runs PM from user mode too, yet its faults reflect. The difference must
+  be kernel-side state we can't set from user mode.
+- **ntoskrnl recon (`reverse/ntoskrnl.exe`):** `NtVdmControl` @ `0x4e09b7` gates on
+  `KPROCESS+0x24b` bit0 (is-VDM) and `KPROCESS+0x158` (VdmObjects) — both set by our
+  working `VdmInitialize`. Service 0 with `data!=0` → `0x4e0ac2`; `data==0` (our V86 run)
+  → the dispatch at `0x52d1be`. The actual **PM-fault reflection** is not in
+  `NtVdmControl` at all — it's in the **trap/exception path** (`KiDispatchException` /
+  `VdmDispatchException`), which decides whether a fault in a VDM process is reflected to
+  the monitor vs. delivered/terminated.
+
+**Conclusion — where the spike stops:** every user-mode approach is exhausted. The
+execution-vs-reflection unification is governed by ntoskrnl's trap dispatch, and cracking
+it needs a **dedicated ntoskrnl RE effort** (trace `KiDispatchException`'s VDM path: the
+exact condition under which a non-V86 VDM fault is reflected, and which LDT
+`VdmpStartExecution` loads). That is a distinct research project, not incremental
+iteration. **Protected-mode execution on the real CPU is proven and the entire user-mode
+mechanism is mapped and built; the `INT 31h` service surface is blocked on this kernel
+behaviour.**
+
 ## Open unknowns (what the spike must nail down) `[VERIFY]`
 
 1. **The mode-switch primitive.** Exactly how ntvdm flips the VDM from V86→PM after the client
