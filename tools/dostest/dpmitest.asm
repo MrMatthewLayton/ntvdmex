@@ -33,34 +33,54 @@ start:
     xor ax, ax
     call far [entry]
 
-    ; --- 4. we are now in PROTECTED MODE (run 36) ------------------------
+    ; --- 4. we are now in PROTECTED MODE (run 39) ------------------------
     ; A REAL, UNMODIFIED DPMI client: plain INT 31h / INT 21h. The host patches each
-    ; `CD nn` -> `C4 C4` in this PM code at mode-switch (same 2 bytes), so they reflect as
-    ; BOPs (run 32) and the host dispatches by the recorded original vector.
-    mov ax, 0x0400             ; DPMI: get version
-    int 0x31                   ; -> AX=version (0x005A)
+    ; `CD nn` -> `C4 C4` at mode-switch (same 2 bytes) so they reflect as BOPs. This
+    ; exercises: alloc a selector + alloc a memory block + base the selector onto it +
+    ; read/write THROUGH the selector + DOS write (AH=40) + print (AH=09).
+    mov ax, 0x0400             ; get DPMI version
+    int 0x31
     mov [0x600], ax
-    mov ax, 0x0000             ; DPMI: allocate 1 LDT descriptor
+    mov ax, 0x0000             ; allocate 1 LDT descriptor
     mov cx, 0x0001
-    int 0x31                   ; -> AX = new selector
-    mov [0x604], ax            ; store the selector
-    mov bx, ax                 ; BX = selector for the next calls
-    mov ax, 0x0007             ; DPMI: set segment base of BX = CX:DX
-    mov cx, 0x0001
-    mov dx, 0x2345             ; base := 0x00012345
+    int 0x31                   ; -> AX = selector
+    mov [0x604], ax            ; save it
+    mov ax, 0x0501             ; allocate a 4KB memory block
+    mov bx, 0
+    mov cx, 0x1000
+    int 0x31                   ; -> BX:CX = linear addr, SI:DI = handle
+    mov [0x60A], bx            ; block addr high
+    mov [0x60C], cx            ; block addr low
+    mov dx, cx                 ; set-base wants CX:DX = base
+    mov cx, bx
+    mov bx, [0x604]            ; BX = our selector
+    mov ax, 0x0007             ; set segment base = the block
     int 0x31
-    mov ax, 0x0006             ; DPMI: get segment base of BX -> CX:DX
+    mov bx, [0x604]
+    mov cx, 0                  ; limit 0x00000FFF
+    mov dx, 0x0FFF
+    mov ax, 0x0008             ; set segment limit
     int 0x31
-    mov [0x606], cx            ; base high  (expect 0x0001)
-    mov [0x608], dx            ; base low   (expect 0x2345)
-    mov dx, .pmsg              ; DS:DX -> the $-terminated message
-    mov ah, 0x09               ; DOS print string
-    int 0x21                   ; -> host prints it (DOS output from PM)
+    mov ax, [0x604]
+    mov es, ax                 ; ES = our selector (base = the block)
+    mov word [es:0x10], 0xBEEF ; write a marker THROUGH the descriptor
+    mov ax, [es:0x10]          ; read it back
+    mov [0x60E], ax            ; store (expect 0xBEEF)
+    mov ah, 0x40               ; DOS write to stdout
+    mov bx, 1
+    mov cx, .wlen
+    mov dx, .wmsg
+    int 0x21
+    mov dx, .pmsg              ; DOS print $-string
+    mov ah, 0x09
+    int 0x21
     mov ax, 0x4C00             ; terminate
-    int 0x21                   ; -> host stops the PM loop
+    int 0x21
 .pmspin:
     jmp .pmspin
-.pmsg:  db 'Hello from PROTECTED MODE via DPMI on the real CPU!', 13, 10, '$'
+.pmsg:  db 'DPMI: descriptor + memory alloc + R/W through selector OK!', 13, 10, '$'
+.wmsg:  db 'DPMI wrote this via INT 21h AH=40.', 13, 10
+.wlen   equ $ - .wmsg
 
 .switchfail:
     mov dx, msg_fail

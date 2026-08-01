@@ -1033,7 +1033,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     (void)hInst; (void)hPrev; (void)lpCmd; (void)nShow;
     progpath[0] = 0; args[0] = 0;
 
-    p = zput(p, "NTVDMEX clean host\r\nSTAGE0: WinMain entered [build dpmi-harness-v28]\r\n");
+    p = zput(p, "NTVDMEX clean host\r\nSTAGE0: WinMain entered [build dpmi-harness-v29]\r\n");
     log_write(LOG_PATH, report, p);
     serial_init();                                      /* DPMI harness: COM1 log sink */
     serial_out(report, p);
@@ -1505,6 +1505,29 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                             }
                             p = zput(p, " -> setaccess");
                             break; }
+                        case 0x0500: {                             /* get free memory info -> ES:DI */
+                            DWORD esb = dpmi_sel_base((WORD)VDM_REG(tib, VTIB_ES));
+                            volatile DWORD *info = (volatile DWORD *)(ULONG_PTR)
+                                (esb + (VDM_REG(tib, VTIB_EDI) & 0xFFFF));
+                            int i; for (i = 0; i < 12; ++i) info[i] = 0xFFFFFFFFu;
+                            info[0] = 0x04000000u;                 /* largest free block = 64MB */
+                            p = zput(p, " -> meminfo");
+                            break; }
+                        case 0x0501: {                             /* allocate memory block BX:CX bytes */
+                            DWORD sz = ((VDM_REG(tib, VTIB_EBX) & 0xFFFF) << 16) | (VDM_REG(tib, VTIB_ECX) & 0xFFFF);
+                            void *mem = VirtualAlloc(NULL, sz ? sz : 1, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+                            if (!mem) { VDM_REG(tib, VTIB_EFLAGS) |= 1u; VDM_SET16(tib, VTIB_EAX, 0x8013);
+                                        p = zput(p, " -> ENOMEM"); break; }
+                            { DWORD lin = (DWORD)(ULONG_PTR)mem;   /* in-process: linear = host ptr */
+                              VDM_SET16(tib, VTIB_EBX, lin >> 16); VDM_SET16(tib, VTIB_ECX, lin & 0xFFFF);
+                              VDM_SET16(tib, VTIB_ESI, lin >> 16); VDM_SET16(tib, VTIB_EDI, lin & 0xFFFF); /* handle=addr */
+                              p = zput(p, " -> mem 0x"); p = zhex(p, lin); }
+                            break; }
+                        case 0x0502: {                             /* free memory block SI:DI = handle */
+                            DWORD h = ((VDM_REG(tib, VTIB_ESI) & 0xFFFF) << 16) | (VDM_REG(tib, VTIB_EDI) & 0xFFFF);
+                            if (h) VirtualFree((void *)(ULONG_PTR)h, 0, MEM_RELEASE);
+                            p = zput(p, " -> freed");
+                            break; }
                         default:
                             VDM_REG(tib, VTIB_EFLAGS) |= 1u;       /* CF=1: unsupported */
                             p = zput(p, " -> UNSUP");
@@ -1519,15 +1542,17 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                         if (ah == 0x4C) {                          /* terminate */
                             DWORD ver  = *(volatile WORD *)(ULONG_PTR)0x1600;
                             DWORD sel  = *(volatile WORD *)(ULONG_PTR)0x1604;
-                            DWORD bhi  = *(volatile WORD *)(ULONG_PTR)0x1606;
-                            DWORD blo  = *(volatile WORD *)(ULONG_PTR)0x1608;
-                            int ok = (ver == 0x005A) && (sel == 0x001F) && (bhi == 0x0001) && (blo == 0x2345);
+                            DWORD memh = *(volatile WORD *)(ULONG_PTR)0x160A;   /* block addr hi */
+                            DWORD meml = *(volatile WORD *)(ULONG_PTR)0x160C;   /* block addr lo */
+                            DWORD mark = *(volatile WORD *)(ULONG_PTR)0x160E;   /* marker read via the sel */
+                            int ok = (ver == 0x005A) && (sel == 0x001F) && (mark == 0xBEEF);
                             p = zput(p, "INT21h AH=4Ch -> client EXIT after "); p = zhex(p, steps);
                             p = zput(p, " svc. ver=0x"); p = zhex(p, ver);
                             p = zput(p, " sel=0x"); p = zhex(p, sel);
-                            p = zput(p, " getbase=0x"); p = zhex(p, bhi); p = zput(p, ":0x"); p = zhex(p, blo);
-                            p = zput(p, ok ? "  <<< DPMI OK: version + descriptor set/get-base round-trip >>>\r\n"
-                                           : "\r\n");
+                            p = zput(p, " block=0x"); p = zhex(p, memh); p = zput(p, ":0x"); p = zhex(p, meml);
+                            p = zput(p, " read-via-sel=0x"); p = zhex(p, mark);
+                            p = zput(p, ok ? "  <<< DPMI OK: alloc mem + base a selector on it + R/W through it >>>\r\n"
+                                           : "  <<< MISMATCH >>>\r\n");
                             log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
                             break;
                         }
@@ -1555,6 +1580,27 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                             if (m.conout) m.conout(m.conctx, ch);
                             if (m.out_len < m.out_cap - 1) m.out[m.out_len++] = (char)ch;
                             VDM_REG(tib, VTIB_EFLAGS) &= ~1u;
+                            VDM_REG(tib, VTIB_EIP) += 2;
+                            continue;
+                        }
+                        if (ah == 0x40) {                          /* write BX=handle CX=cnt DS:DX=buf */
+                            DWORD bh = VDM_REG(tib, VTIB_EBX) & 0xFFFF, cnt = VDM_REG(tib, VTIB_ECX) & 0xFFFF;
+                            DWORD dsb = dpmi_sel_base((WORD)VDM_REG(tib, VTIB_DS));
+                            const volatile BYTE *b = (const volatile BYTE *)(ULONG_PTR)
+                                (dsb + (VDM_REG(tib, VTIB_EDX) & 0xFFFF));
+                            VDM_REG(tib, VTIB_EFLAGS) &= ~1u;
+                            if (bh == 1 || bh == 2) {              /* stdout / stderr */
+                                char ob[300]; char *op = ob; DWORD k;
+                                op = zput(op, "INT21h AH=40 write: \"");
+                                for (k = 0; k < cnt && k < 250; ++k) {
+                                    if (b[k] >= 0x20 && op < ob + 270) *op++ = (char)b[k];
+                                    if (m.conout) m.conout(m.conctx, b[k]);
+                                    if (m.out_len < m.out_cap - 1) m.out[m.out_len++] = (char)b[k];
+                                }
+                                op = zput(op, "\"\r\n");
+                                log_append(LOG_PATH, ob, op); serial_out(ob, op);
+                                VDM_SET16(tib, VTIB_EAX, cnt);     /* AX = bytes written */
+                            } else { VDM_REG(tib, VTIB_EFLAGS) |= 1u; VDM_SET16(tib, VTIB_EAX, 6); }
                             VDM_REG(tib, VTIB_EIP) += 2;
                             continue;
                         }
