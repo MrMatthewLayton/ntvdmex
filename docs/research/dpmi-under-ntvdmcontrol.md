@@ -859,6 +859,38 @@ and the PM-handler CS:EIP/SS it registers), then replicate: install a PM code+st
 LDT, point `VDM_TIB+0x634` at a PM handler stub that BOPs back to the host (so `INT 31h` reflects to
 our stub → host services DPMI → returns to the client). Non-trivial but now fully specified.
 
+### VM run 31 (2026-08-01) — implementing the fix: VDM_TIB+0x634 populated, TIB write CONFIRMED landing `[FACT, real CPU + disasm]`
+
+Started implementing the run-4 root-cause fix. From ntvdm's own setup:
+- **`VDM_TIB+0x634` block layout** (init routine `ntvdm 0x0f050ad7`; return `0x0f005040`):
+  `+0x634` (word) nesting count · `+0x636` (word) **handler CS** (from global `[0xf09c178]`; bit 0 =
+  16/32 flag) · `+0x638` (word) **handler SS** · `+0x63a` (word) saved fault SS · `+0x63c` (dword)
+  saved fault ESP · `+0x640` (dword) saved fault EIP · `+0x650` (dword) packed **handler
+  return-address CS:IP** (kernel pushes it on the handler stack — `0x4f71a0`).
+- Populated `[+0x634]=0, [+0x636]=0x0F (code sel), [+0x638]=0x17 (stack sel)` before
+  `dpmi_enter_pm`, and added a readback: **`tib==TEB[0xF18]` (match=YES)** and the values stick — so
+  the write lands in exactly the TIB the kernel dereferences (`[KPCR+0x18]→[+0xF18]`).
+
+**Result: still silent-terminates.** Since the SS (`+0x638`) is now valid (the resolve that used to
+fail now passes), the reflect proceeds — but we set the handler **CS/SS, not the handler ENTRY
+EIP**, so the kernel reflects the guest to `CS=0x0F:0` (zeroed) = linear `0x1000` (PSP garbage) →
+re-fault → nested → terminate. Progress: the *original* terminate cause (invalid SS) is fixed; the
+remaining gap is the handler entry + a real handler.
+
+**Exact remaining work to a working reflect (§1 of the roadmap):**
+1. **Pin the handler-ENTRY field.** `+0x650` is the return address the handler RETFs to, not the
+   entry. The trap-frame CS:EIP the kernel resumes at is set in `0x4f67f8` (`[esi+0xc]/[esi+0x10]`);
+   need to find which VDM_TIB field feeds it (search ntvdm for where it registers the DPMI PM
+   fault/interrupt handler CS:EIP — near the `[0xf09c178]` handler-CS global).
+2. **Build a PM handler stub:** a few bytes reachable via CS=`0x0F` that execute a **BOP (`C4 C4 nn`)** —
+   the kernel's BOP path (`0x565041`) reflects BOPs cleanly as `VTIB_EVENT=4`, so the stub bounces
+   control to our host loop, which then services `INT 31h` (read the saved fault state from
+   `+0x63a/+0x63c/+0x640`, dispatch by AX, set returns, RETF back via `+0x650`).
+3. Set `+0x650` = packed return CS:IP (client resume point) and the entry field = stub CS:IP.
+
+The mechanism is proven and the TIB plumbing works; this is now bounded assembly/bookkeeping, not RE
+of the unknown.
+
 ## Open unknowns (what the spike must nail down) `[VERIFY]`
 
 1. **The mode-switch primitive.** Exactly how ntvdm flips the VDM from V86→PM after the client

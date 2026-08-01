@@ -1009,7 +1009,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     (void)hInst; (void)hPrev; (void)lpCmd; (void)nShow;
     progpath[0] = 0; args[0] = 0;
 
-    p = zput(p, "NTVDMEX clean host\r\nSTAGE0: WinMain entered [build dpmi-harness-v17]\r\n");
+    p = zput(p, "NTVDMEX clean host\r\nSTAGE0: WinMain entered [build dpmi-harness-v19]\r\n");
     log_write(LOG_PATH, report, p);
     serial_init();                                      /* DPMI harness: COM1 log sink */
     serial_out(report, p);
@@ -1402,6 +1402,25 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                    see if the guest's INT 31h fault now REFLECTS (dpmi_enter_pm returns with a
                    VTIB_EVENT) instead of silently terminating. */
                 *(volatile BYTE *)(tib + 0x670) = 1;
+                /* PM fault-reflection control block @ VDM_TIB+0x634 (kernel RE session 4).
+                   XP's KiTrap0D reflects a PM VDM fault by switching the guest to the handler
+                   stack [+0x638] / CS [+0x636]; it RESOLVES [+0x638] and TERMINATES if that
+                   selector is invalid -- which is exactly our silent-terminate. Populate it with
+                   valid selectors so the fault REFLECTS instead. (+0x63a/+0x63c/+0x640 are kernel
+                   scratch: saved fault SS/ESP/EIP.) */
+                *(volatile WORD *)(tib + 0x634) = 0;       /* nesting count              */
+                *(volatile WORD *)(tib + 0x636) = 0x0F;    /* handler CS (our code sel)  */
+                *(volatile WORD *)(tib + 0x638) = 0x17;    /* handler SS (our stack sel) */
+                /* Confirm the write LANDS in the TIB the kernel reads (TEB[0xF18]). */
+                { BYTE *teb = (BYTE *)NtCurrentTeb();
+                  DWORD ktib = teb ? *(volatile DWORD *)(teb + 0xF18) : 0;
+                  p = zput(p, "STAGE3: tib=0x"); p = zhex(p, (unsigned)(ULONG_PTR)tib);
+                  p = zput(p, " TEB[F18]=0x"); p = zhex(p, ktib);
+                  p = zput(p, " match="); p = zput(p, (ktib == (DWORD)(ULONG_PTR)tib) ? "YES" : "NO");
+                  p = zput(p, " [634]=0x"); p = zhex(p, *(volatile WORD *)(tib + 0x634));
+                  p = zput(p, " [636]=0x"); p = zhex(p, *(volatile WORD *)(tib + 0x636));
+                  p = zput(p, " [638]=0x"); p = zhex(p, *(volatile WORD *)(tib + 0x638));
+                  p = zput(p, "\r\n"); log_append(LOG_PATH, base, p); serial_out(base, p); p = base; }
                 dpmi_enter_pm(tib);
                 p = zput(p, "STAGE3-DPMI: dpmi_enter_pm RETURNED event=0x");
                 p = zhex(p, VDM_REG(tib, VTIB_EVENT));
