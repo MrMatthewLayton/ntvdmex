@@ -47,4 +47,12 @@ int dpmi_switch_to_pm(volatile BYTE *tib, int client_is_32bit,
    `tib` is the VDM_TIB holding the PM CONTEXT set up by dpmi_switch_to_pm. */
 void dpmi_run_pm(volatile BYTE *tib);
 
+/* Monitor PM-entry (src/vdm/dpmi_enter.S) -- runs the guest in PM the way ntvdm does
+   (0xf04483c) so a PM fault/INT is reflected by the kernel VDM trap handler as a
+   VTIB_EVENT, not a Win32 exception. Saves host state into the VDM_TIB host-save
+   CONTEXT, sets the [0x714] flag, loads the guest register file, and far-jmps in;
+   "returns" (via the kernel) once the guest stops, with VTIB_EVENT set -- like
+   v86_run(). Read VTIB_EVENT / the guest CONTEXT afterwards. */
+void dpmi_enter_pm(volatile BYTE *tib);
+
 #endif /* VDM_DPMI_H */

@@ -35,14 +35,13 @@ start:
     ; If the switch FAILED the host returns here in real mode with CF=1.
     jc .switchfail
 
-    ; --- 4. we are now in PROTECTED MODE (proven: run 8) -----------------
-    ; Spin with a marker: the host stays ALIVE executing this loop in PM, which
-    ; is the demonstrated capability. INT 31h servicing is NOT wired yet -- runs
-    ; 9/10 proved plain Win32 SEH/VEH can't catch a PM fault once the LDT resolves;
-    ; that needs the monitor PM-entry path (ntvdm 0xf04483c) so faults come back as
-    ; VDM events. Left as the next increment.
-    mov ax, 0xDA1A             ; recognizable PM marker
-    mov bx, 0x5150
+    ; --- 4. we are now in PROTECTED MODE ---------------------------------
+    ; Issue a DPMI service call: AX=0000 (allocate LDT descriptors), CX=1. With the
+    ; monitor PM-entry (dpmi_enter_pm) this INT 31h should reflect to the host as a
+    ; VDM event (kernel VDM trap handler), the way V86 BOPs do.
+    mov ax, 0x0000             ; DPMI function 0000: allocate descriptors
+    mov cx, 1
+    int 0x31
 .pmspin:
     jmp .pmspin
 

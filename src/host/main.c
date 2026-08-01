@@ -1285,11 +1285,17 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                 p = zput(p, " -> PM ok (VM cleared, CS=0x");
                 p = zhex(p, VDM_REG(tib, VTIB_CS) & 0xFFFF);
                 p = zput(p, " EIP=0x"); p = zhex(p, VDM_REG(tib, VTIB_EIP) & 0xFFFF);
-                p = zput(p, ") -> running PM in-process (NtContinue)\r\n");
+                p = zput(p, ") -> entering PM (monitor)\r\n");
                 log_append(LOG_PATH, base, p); p = base;
-                dpmi_run_pm(tib);                   /* iret into PM; VEH catches INT 31h/fault */
-                /* Only reached if NtContinue failed to enter PM. */
-                p = zput(p, "STAGE3-DPMI: NtContinue returned (PM entry failed)\r\n");
+                /* Run PM the ntvdm way: returns (via the kernel VDM trap handler) when
+                   the guest faults/INTs, with the event reflected into VTIB_EVENT. */
+                dpmi_enter_pm(tib);
+                p = zput(p, "STAGE3-DPMI: PM event=0x"); p = zhex(p, VDM_REG(tib, VTIB_EVENT));
+                p = zput(p, " info=0x"); p = zhex(p, VDM_REG(tib, VTIB_EVENT_INFO));
+                p = zput(p, " CS:IP=0x"); p = zhex(p, VDM_REG(tib, VTIB_CS) & 0xFFFF);
+                p = zput(p, ":0x"); p = zhex(p, VDM_REG(tib, VTIB_EIP) & 0xFFFF);
+                p = zput(p, " AX=0x"); p = zhex(p, VDM_REG(tib, VTIB_EAX) & 0xFFFF);
+                p = zput(p, " EFL=0x"); p = zhex(p, VDM_REG(tib, VTIB_EFLAGS)); p = zput(p, "\r\n");
                 log_append(LOG_PATH, base, p); p = base;
                 break;
             }

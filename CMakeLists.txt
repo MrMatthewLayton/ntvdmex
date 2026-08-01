@@ -3,7 +3,7 @@ cmake_minimum_required(VERSION 3.16)
 project(ntvdmex
     VERSION 0.1.0
     DESCRIPTION "New Technology Virtual DOS Manager, Extended"
-    LANGUAGES C)
+    LANGUAGES C ASM)
 
 # ---------------------------------------------------------------------------
 # Target platform: Windows XP SP3, 32-bit only. See ADRs 0001/0005.
@@ -89,6 +89,7 @@ add_executable(ntvdmhost
     src/host/main.c
     src/vdm/v86.c
     src/vdm/dpmi.c
+    src/vdm/dpmi_enter.S
     src/vdm/csrss.c
     src/dos/dos_int21.c
     src/vdd/vdd_bus.c

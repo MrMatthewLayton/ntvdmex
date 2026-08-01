@@ -331,6 +331,34 @@ bypasses this fault delivery. Also note ntvdm's ICA user-data field 9 is a code 
 guest reaches its PM code). INT 31h *servicing* is the open increment, now with a
 precise, disasm-backed plan (replicate `0xf04483c`).
 
+### VM runs 11–12 (2026-08-01) — the monitor PM-entry works; fault reflection still missing `[FACT, real CPU]`
+
+Implemented `dpmi_enter_pm` (`src/vdm/dpmi_enter.S`), a faithful port of ntvdm's
+`0xf04483c`: save host CONTEXT to `VDM_TIB+0x0C`, set `fs=0x3b` + the `[0x714]` flag,
+load the guest register file, `lss` the guest stack, and far-jmp in. (Note: our
+`ntvdmhost.exe` is based at **`0x0f000000`**, matching ntvdm — so host addresses like
+`0x0f00e2af` are *our* code.)
+
+- **Run 11:** faulted at `0x0f00e2af` = the `lss` in our own code, because after
+  `pop ds` (guest DS=0x17, 64K limit) the `lss`/`jmp` read the `.data` globals via DS
+  and overflowed the limit. **ntvdm uses a `cs:` override** on exactly those two
+  instructions (`lss esp, cs:[..]`, `jmp cs:[..]`); we'd missed it. Fixed.
+- **Run 12:** with the `cs:` override, the entry **succeeds** — control reaches
+  `entering PM (monitor)`, the far-jmp runs the guest in PM. But the guest's `INT 31h`
+  is still **not reflected** back: the process exits with no "PM event" line and no VEH
+  fault. So the far-jmp/monitor-entry mechanics are correct, yet the **kernel does not
+  deliver the PM fault as an event** to us (nor does the host-save CONTEXT get restored).
+
+**Where the blocker now sits:** entering PM the ntvdm way is proven, but the kernel's
+**VDM PM fault reflection** doesn't engage for our process. The likely cause is the
+**VDM registration data** we pass to `VdmInitialize` being incomplete: ntvdm's ICA
+user-data **field 9 is a code trampoline** (`0xf044820`, `retf`-to-guest) and its init
+struct carries several code pointers, whereas our `v86.c` sets `p9 = &g_p9` (a plain
+dword) and a minimal 2-pointer init. The kernel probably uses those to re-enter / reflect
+the guest. **Next:** recover the exact `VdmInitialize` ServiceData + ICA layout from
+ntvdm (the `0xf00e68a` struct) and provide correct code trampolines, so the kernel
+reflects the PM `INT 31h` as a `VTIB_EVENT`.
+
 ## Open unknowns (what the spike must nail down) `[VERIFY]`
 
 1. **The mode-switch primitive.** Exactly how ntvdm flips the VDM from V86→PM after the client
