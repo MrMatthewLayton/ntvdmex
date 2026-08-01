@@ -957,7 +957,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     (void)hInst; (void)hPrev; (void)lpCmd; (void)nShow;
     progpath[0] = 0; args[0] = 0;
 
-    p = zput(p, "NTVDMEX clean host\r\nSTAGE0: WinMain entered [build dpmi-harness-v7]\r\n");
+    p = zput(p, "NTVDMEX clean host\r\nSTAGE0: WinMain entered [build dpmi-harness-v8]\r\n");
     log_write(LOG_PATH, report, p);
     serial_init();                                      /* DPMI harness: COM1 log sink */
     serial_out(report, p);
@@ -1185,7 +1185,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             p = zput(p, " SS:SP=0x"); p = zhex(p, VDM_REG(tib, VTIB_SS) & 0xFFFF);
             p = zput(p, ":0x"); p = zhex(p, VDM_REG(tib, VTIB_ESP) & 0xFFFF);
             p = zput(p, "\r\n  VTIB[5A8..]: "); p = zdump(p, (const void *)(tib + 0x5A8), 0x20);
-            log_append(LOG_PATH, base, p); p = base;
+            p = zput(p, "\r\n");
+            log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
             break;
         }
         /* I/O port trap (event 0; VM-confirmed) or a generic GP fault (event 2):
@@ -1337,26 +1338,20 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                 p = zput(p, " -> PM ok (VM cleared, CS=0x");
                 p = zhex(p, VDM_REG(tib, VTIB_CS) & 0xFFFF);
                 p = zput(p, " EIP=0x"); p = zhex(p, VDM_REG(tib, VTIB_EIP) & 0xFFFF);
-                p = zput(p, ") -> entering PM (monitor far-jmp, dpmi_enter_pm)\r\n");
+                p = zput(p, ") -> running PM via VdmStartExecution (kernel monitor) [expt B]\r\n");
                 log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
                 /* Watchdog so the run self-terminates whether the fault reaches the VEH,
                    kills the process, or the kernel skip+resumes it into a spin. */
                 { HANDLE wd = CreateThread(NULL, 0, dpmi_watchdog, NULL, 0, NULL);
                   if (wd) CloseHandle(wd); }
-                /* Monitor-style PM entry (ntvdm's 0xf04483c): saves the host CONTEXT to
-                   VDM_TIB+0x0C so the KERNEL's VDM trap path can reflect a PM fault/INT
-                   back here as a VTIB_EVENT and "return". If it returns, the kernel
-                   REFLECTED the guest's INT 31h -- the taxonomy we've been chasing. */
-                dpmi_enter_pm(tib);
-                p = zput(p, "STAGE3-DPMI: dpmi_enter_pm RETURNED -- kernel reflected a PM event!\r\n");
-                p = zput(p, "  event=0x"); p = zhex(p, VDM_REG(tib, VTIB_EVENT));
-                p = zput(p, " info=0x"); p = zhex(p, VDM_REG(tib, VTIB_EVENT_INFO));
-                p = zput(p, " CS=0x"); p = zhex(p, VDM_REG(tib, VTIB_CS) & 0xFFFF);
-                p = zput(p, ":0x"); p = zhex(p, VDM_REG(tib, VTIB_EIP) & 0xFFFF);
-                p = zput(p, " AX=0x"); p = zhex(p, VDM_REG(tib, VTIB_EAX) & 0xFFFF);
-                p = zput(p, "\r\n");
-                log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
-                break;
+                /* EXPERIMENT B (2026-08-01): V86 faults DO reflect for us because V86 runs
+                   inside VdmStartExecution (the kernel monitor). Hypothesis: the monitor
+                   also runs the PM guest (PE bit set, VM clear, LDT installed) and reflects
+                   its INT 31h / fault as a VTIB_EVENT. So `continue` back to the loop top,
+                   whose v86_run(VdmStartExecution) now runs the PM CONTEXT; a reflected PM
+                   event lands in the g_dpmi_pm handler above. (If the monitor refuses PM,
+                   we learn that here; fall back to plan A -- the KiTrap0D fixed-state RE.) */
+                continue;
             }
             p = zput(p, " -> SWITCH FAILED (staying real mode, CF=1)\r\n");
             log_append(LOG_PATH, base, p); serial_out(base, p); p = base;

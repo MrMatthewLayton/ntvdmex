@@ -641,6 +641,38 @@ a pointer in VdmObjects/VDM_TIB). Confirm whether our `[0x714]` matches. If the 
 `FIXED_NTVDMSTATE` block we don't map, mapping/initialising it is the fix. (Cross-check against
 ntvdm's own `VdmInitialize` call site + any low-memory fixed-state setup it does before PM entry.)
 
+### VM run 24 (2026-08-01) — BREAKTHROUGH: VdmStartExecution delivers the PM fault to user mode `[FACT, real CPU]`
+
+Plan B (empirical). Key asymmetry: our **V86** faults already reflect (DOS INT 21h works) because
+V86 runs *inside* `VdmStartExecution` (the kernel monitor); `dpmi_enter_pm`/`NtContinue` far-jmp
+into PM *outside* it → silent terminate. So: set up the PM state (valid based LDT, PE bit, VM-clear
+CONTEXT, CS=`0x0F:0x125`) and then `continue` back to the loop so **`v86_run` (`VdmStartExecution`)**
+runs the PM CONTEXT. Result (v8):
+
+```
+-> PM ok (VM cleared, CS=0x0f EIP=0x125) -> running PM via VdmStartExecution [expt B]
+STAGE3-DPMI: watchdog thread started
+DPMI FATAL: exception code=0xc000001e at 0x00000127
+  PM fault ctx: CS=0x1b EIP=0x127 SS=0x23 ESP=0xfffe  AX=0x0 CX=0xfffe BX=0x0 DS=0x17
+```
+
+**The VEH FIRES** (`dpmi_crash_veh`) — the first time ANY PM fault reached user mode (vs. silent
+terminate for all of runs 8–23). So **running the PM guest under `VdmStartExecution` is the missing
+mechanism** for kernel→user delivery of PM VDM faults.
+
+State read: the `INT 31h` (CD 31 @ `0x125`) was consumed (EIP `0x125`→`0x127`), but the guest
+resumed with **CS=`0x1B`** (flat GDT user selector) not our LDT `0x0F`, so `0x1B:0x127` = **linear
+`0x127` = the IVT** (garbage) → `0xC000001E` STATUS_INVALID_LOCK_SEQUENCE (executing junk that
+decodes as a bad LOCK prefix). The wrong CS almost certainly comes from the **MonitorContext at
+`VDM_TIB+0x0C`**, which `dpmi_enter_pm` populates but bare-`VdmStartExecution` (expt B) did not —
+so the kernel restored a stale host/monitor context on reflection.
+
+**Next:** combine — populate `TIB+0x0C` (host-save CONTEXT, as `dpmi_enter_pm` does) *before*
+`VdmStartExecution`, so the kernel restores a VALID context on reflection and the guest resumes at
+`0x0F:0x127`. Then chase a CLEAN `INT 31h` trap (stop the guest ON the INT so the host can service
+it) rather than letting it run past into the IVT. Enhance the VEH to dump all segs + the faulting
+bytes to confirm each step.
+
 ## Open unknowns (what the spike must nail down) `[VERIFY]`
 
 1. **The mode-switch primitive.** Exactly how ntvdm flips the VDM from V86→PM after the client
