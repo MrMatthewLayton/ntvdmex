@@ -21,8 +21,11 @@ static PFN_NtVdmControl s_ntvdmctl;
    AFTER VdmInitialize (see v86_map_ems_frame). */
 static HANDLE s_hSec;
 
-/* Trap handler stub -- stored by the kernel, only invoked on a V86 fault. */
-static void __stdcall trap_stub(void) { }
+/* VDM "trap continue" handler = VDM_INITIALIZE_DATA.TrapcHandler. The kernel calls it
+   (ebx = VDM_TIB) to (re)enter the guest via a far return to the guest CS:EIP. ntvdm
+   passes 0xf044820 here; ours is the faithful port dpmi_trapc (src/vdm/dpmi_enter.S).
+   The old empty stub left the kernel's PM trap path unable to complete (DPMI spike). */
+extern void dpmi_trapc(void);
 
 void *v86_teb(void)
 {
@@ -120,7 +123,7 @@ LONG v86_init(void)
     g_ica.pUndelayIrq = &g_undelayirq; g_ica.pDelayIret = &g_delayiret;
     g_ica.pIretHooked = &g_irethooked; g_ica.pAddrIretBopTable = g_ica_bop;
     g_ica.p9 = &g_p9;
-    g_initdata.TrapcHandler = (PVOID)&trap_stub;
+    g_initdata.TrapcHandler = (PVOID)&dpmi_trapc;
     g_initdata.IcaUserData  = &g_ica;
 
     s_ntvdmctl = (PFN_NtVdmControl)GetProcAddress(

@@ -1287,8 +1287,10 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                 p = zput(p, " EIP=0x"); p = zhex(p, VDM_REG(tib, VTIB_EIP) & 0xFFFF);
                 p = zput(p, ") -> entering PM (monitor)\r\n");
                 log_append(LOG_PATH, base, p); p = base;
-                /* Run PM the ntvdm way: returns (via the kernel VDM trap handler) when
-                   the guest faults/INTs, with the event reflected into VTIB_EVENT. */
+                /* dpmi_enter_pm runs PM CORRECTLY (our process LDT: base applied, proven
+                   run 8/12) but faults aren't reflected. VdmStartExecution reflects faults
+                   but runs PM at base 0 (uses a different LDT). Unifying them is the open
+                   problem (needs ntoskrnl VDM-PM RE). We keep the correct-execution path. */
                 dpmi_enter_pm(tib);
                 p = zput(p, "STAGE3-DPMI: PM event=0x"); p = zhex(p, VDM_REG(tib, VTIB_EVENT));
                 p = zput(p, " info=0x"); p = zhex(p, VDM_REG(tib, VTIB_EVENT_INFO));

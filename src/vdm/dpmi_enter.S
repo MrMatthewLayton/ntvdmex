@@ -128,3 +128,17 @@ dpmi_enter_pm:
     mov  esp, ebp
     pop  ebp
     ret
+
+/* dpmi_trapc -- the VDM "trap continue" handler (VDM_INITIALIZE_DATA.TrapcHandler).
+   A faithful port of ntvdm 0xf044820: the kernel calls this (with ebx = VDM_TIB) to
+   (re)enter the guest -- it far-returns to the guest CS:EIP from the VDM_TIB. Our
+   previous empty stub left the kernel's PM trap path unable to complete. */
+    .global _dpmi_trapc
+    .global dpmi_trapc
+_dpmi_trapc:
+dpmi_trapc:
+    and  esp, 0xFFFF
+    push dword ptr [ebx + 0x394]    /* guest CS  */
+    push dword ptr [ebx + 0x390]    /* guest EIP */
+    mov  ebx, [ebx + 0x37C]         /* guest EBX */
+    retf

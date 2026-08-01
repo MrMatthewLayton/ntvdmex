@@ -359,6 +359,37 @@ the guest. **Next:** recover the exact `VdmInitialize` ServiceData + ICA layout 
 ntvdm (the `0xf00e68a` struct) and provide correct code trampolines, so the kernel
 reflects the PM `INT 31h` as a `VTIB_EVENT`.
 
+### VM runs 13–14 (2026-08-01) — correct TrapcHandler; the execution-vs-reflection dichotomy `[FACT, real CPU]`
+
+Recovered the real `VDM_INITIALIZE_DATA`: ntvdm calls `NtVdmControl(3, {0xf044820, &ICA})`
+— so **`TrapcHandler = 0xf044820`** (a `retf`-to-guest trampoline: `and esp,0xffff; push
+guestCS; push guestEIP; retf`), not the empty stub our `v86.c` had. (The ICA is 9 data
+pointers, which we already matched.) Ported it as `dpmi_trapc` and installed it.
+
+- **Run 13:** V86 still works (INT 21h markers + the 1687 switch run), so the new
+  TrapcHandler is safe. But PM `INT 31h` is **still not reflected** via `dpmi_enter_pm`.
+- **Run 14:** with the correct TrapcHandler, tried `VdmStartExecution` for PM (the V86
+  mechanism). The VEH **fired** (fault reflected!) — but at `CS=0x1B EIP=0x127`, i.e.
+  **base 0**: `VdmStartExecution` runs PM but does **not** load our LDT.
+
+**The core dichotomy (now proven from both sides):**
+| Mechanism | PM execution | Fault reflection |
+|-----------|--------------|------------------|
+| `dpmi_enter_pm` (our far-jmp, process LDT) | **correct** (base 0x1000) | **no** (process dies) |
+| `VdmStartExecution` (kernel monitor) | **base 0** (wrong LDT) | **yes** (VEH/events) |
+
+`svc 10/11` populate the **process LDT** (which our far-jmp uses → correct base), but
+`VdmStartExecution` runs PM against the **VDM monitor's own LDT** (lacking our
+descriptors → base 0). Correct execution and fault reflection currently come from two
+different LDTs/mechanisms. **Unifying them** — getting the monitor to run PM against our
+descriptors, or getting our far-jmp's faults reflected — is the open problem and needs
+**ntoskrnl VDM-PM RE** (how `VdmpStartExecution`/the VDM trap path loads LDTR and decides
+to reflect). That's a distinct, substantial research effort.
+
+**Bottom line for the spike:** protected-mode *execution* under our architecture is
+proven and the mechanism fully mapped; the `INT 31h` service surface is blocked on this
+LDT/reflection unification, which is beyond quick iteration. A strong stopping point.
+
 ## Open unknowns (what the spike must nail down) `[VERIFY]`
 
 1. **The mode-switch primitive.** Exactly how ntvdm flips the VDM from V86→PM after the client
