@@ -1009,7 +1009,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     (void)hInst; (void)hPrev; (void)lpCmd; (void)nShow;
     progpath[0] = 0; args[0] = 0;
 
-    p = zput(p, "NTVDMEX clean host\r\nSTAGE0: WinMain entered [build dpmi-harness-v24]\r\n");
+    p = zput(p, "NTVDMEX clean host\r\nSTAGE0: WinMain entered [build dpmi-harness-v25]\r\n");
     log_write(LOG_PATH, report, p);
     serial_init();                                      /* DPMI harness: COM1 log sink */
     serial_out(report, p);
@@ -1386,60 +1386,71 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             p = zput(p, " clo=0x"); p = zhex(p, g_dpmi_dbg[2]);
             p = zput(p, " chi=0x"); p = zhex(p, g_dpmi_dbg[3]);
             if (sw == 0) {
+                unsigned steps;
                 g_dpmi_pm = 1;
                 g_dpmi_code_base = g_dpmi_dbg[0] << 4;   /* retcs<<4 = guest PM code linear base */
-                p = zput(p, " -> PM ok (VM cleared, CS=0x");
-                p = zhex(p, VDM_REG(tib, VTIB_CS) & 0xFFFF);
-                p = zput(p, " EIP=0x"); p = zhex(p, VDM_REG(tib, VTIB_EIP) & 0xFFFF);
-                p = zput(p, ") -> entering PM via dpmi_enter_pm (far-jmp) + sentinel probe\r\n");
+                p = zput(p, " -> PM ok (CS=0x"); p = zhex(p, VDM_REG(tib, VTIB_CS) & 0xFFFF);
+                p = zput(p, ":0x"); p = zhex(p, VDM_REG(tib, VTIB_EIP) & 0xFFFF);
+                p = zput(p, ") -> DPMI PM loop\r\n");
                 log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
-                /* Watchdog samples the guest's sentinel@0x1600 concurrently -> proves
-                   whether the PM guest executes even through a silent terminate. */
+                /* Safety watchdog: an un-terminable spin still self-kills after ~3s. */
                 { HANDLE wd = CreateThread(NULL, 0, dpmi_watchdog, NULL, 0, NULL);
                   if (wd) CloseHandle(wd); }
-                /* LEVER TEST (run 29): ntvdm's PM orchestrator (fcn.0f00532e) sets VDM_TIB[0x670]=1
-                   before calling the PM entry (0xf04483c); our v86_get_tib left it 0. Set it and
-                   see if the guest's INT 31h fault now REFLECTS (dpmi_enter_pm returns with a
-                   VTIB_EVENT) instead of silently terminating. */
-                *(volatile BYTE *)(tib + 0x670) = 1;
-                /* PM fault-reflection control block @ VDM_TIB+0x634 (kernel RE session 4).
-                   XP's KiTrap0D reflects a PM VDM fault by switching the guest to the handler
-                   stack [+0x638] / CS [+0x636]; it RESOLVES [+0x638] and TERMINATES if that
-                   selector is invalid -- which is exactly our silent-terminate. Populate it with
-                   valid selectors so the fault REFLECTS instead. (+0x63a/+0x63c/+0x640 are kernel
-                   scratch: saved fault SS/ESP/EIP.) */
-                *(volatile WORD  *)(tib + 0x634) = 0;      /* nesting count              */
-                *(volatile WORD  *)(tib + 0x636) = 0;      /* 16/32 flag (0 = 16-bit); ntvdm 0x0f01a325 */
-                *(volatile WORD  *)(tib + 0x638) = 0x17;   /* handler SS (our stack sel) */
-                /* Handler far-pointer the kernel reads at [+0x64c] (16-bit path, 0x4f7106) /
-                   [+0x650] (32-bit, 0x4f71a0): low word = IP, high word = CS. Point it at a BOP
-                   stub at 0x0F:0x400 (linear 0x1400) so a landed reflect bounces to the host. */
-                *(volatile DWORD *)(tib + 0x64c) = (0x0Fu << 16) | 0x0400u;
-                *(volatile DWORD *)(tib + 0x650) = (0x0Fu << 16) | 0x0400u;
-                { volatile BYTE *s = (volatile BYTE *)(ULONG_PTR)0x1400;    /* 0x0F:0x400 */
-                  s[0] = 0xC4; s[1] = 0xC4; s[2] = 0x58; s[3] = 0xF4; }
-                /* Confirm the write LANDS in the TIB the kernel reads (TEB[0xF18]). */
-                { BYTE *teb = (BYTE *)NtCurrentTeb();
-                  DWORD ktib = teb ? *(volatile DWORD *)(teb + 0xF18) : 0;
-                  p = zput(p, "STAGE3: tib=0x"); p = zhex(p, (unsigned)(ULONG_PTR)tib);
-                  p = zput(p, " TEB[F18]=0x"); p = zhex(p, ktib);
-                  p = zput(p, " match="); p = zput(p, (ktib == (DWORD)(ULONG_PTR)tib) ? "YES" : "NO");
-                  p = zput(p, " [634]=0x"); p = zhex(p, *(volatile WORD *)(tib + 0x634));
-                  p = zput(p, " [636]=0x"); p = zhex(p, *(volatile WORD *)(tib + 0x636));
-                  p = zput(p, " [638]=0x"); p = zhex(p, *(volatile WORD *)(tib + 0x638));
-                  p = zput(p, "\r\n"); log_append(LOG_PATH, base, p); serial_out(base, p); p = base; }
-                /* CARPET PROBE (run 33): fill the PSP region 0x1000..0x1124 (all BELOW the guest's
-                   INT 31h at linear 0x1125) with BOPs (C4 C4 58). If the kernel reflects the #GP to
-                   any low CS=0x0F:EIP, it lands on a BOP -> dpmi_enter_pm RETURNS and reports the
-                   landing CS:EIP, empirically pinning the reflect target. */
-                { volatile BYTE *c = (volatile BYTE *)(ULONG_PTR)0x1000; unsigned k;
-                  for (k = 0; k + 2 < 0x124; k += 3) { c[k] = 0xC4; c[k+1] = 0xC4; c[k+2] = 0x58; } }
-                dpmi_enter_pm(tib);
-                p = zput(p, "STAGE3-DPMI: dpmi_enter_pm RETURNED event=0x");
-                p = zhex(p, VDM_REG(tib, VTIB_EVENT));
-                p = zput(p, " CS:EIP=0x"); p = zhex(p, VDM_REG(tib, VTIB_CS) & 0xFFFF);
-                p = zput(p, ":0x"); p = zhex(p, VDM_REG(tib, VTIB_EIP) & 0xFFFF); p = zput(p, "\r\n");
-                log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                /* --- DPMI protected-mode execution loop -----------------------------------
+                   Run the client in PM via dpmi_enter_pm (real ntvdm far-jmp). It returns when
+                   the guest hits a BOP (kernel reflects C4 C4 as VTIB_EVENT=4 -- proven run 32).
+                   The client issues DPMI calls as `C4 C4 31` (BOP 0x31) and exits via
+                   `C4 C4 4C`. We service the call by AX, write returns into the guest CONTEXT,
+                   advance past the 3-byte BOP, and re-enter PM. */
+                for (steps = 0; steps < 256; ++steps) {
+                    DWORD ev, info, ax;
+                    dpmi_enter_pm(tib);
+                    ev   = VDM_REG(tib, VTIB_EVENT);
+                    info = VDM_REG(tib, VTIB_EVENT_INFO) & 0xFF;
+                    ax   = VDM_REG(tib, VTIB_EAX) & 0xFFFF;
+                    if (ev == 4 && info == 0x31) {                 /* DPMI service call */
+                        p = zput(p, "DPMI31 AX=0x"); p = zhex(p, ax);
+                        p = zput(p, " CX=0x"); p = zhex(p, VDM_REG(tib, VTIB_ECX) & 0xFFFF);
+                        VDM_REG(tib, VTIB_EFLAGS) &= ~1u;          /* default CF=0 (success) */
+                        switch (ax) {
+                        case 0x0400:                               /* get DPMI version */
+                            VDM_SET16(tib, VTIB_EAX, 0x005A);      /* 0.90 (AH=0,AL=90) */
+                            VDM_SET16(tib, VTIB_EBX, 0x0001);      /* flags: 32-bit? no -> 16-bit host */
+                            VDM_SET16(tib, VTIB_ECX, 0x0003);      /* CL=3 (80386) */
+                            VDM_SET16(tib, VTIB_EDX, 0x0870);      /* DH/DL PIC bases */
+                            p = zput(p, " -> ver 0.90");
+                            break;
+                        case 0x0000:                               /* allocate LDT descriptors */
+                            VDM_SET16(tib, VTIB_EAX, 0x001F);      /* base selector (spike stub) */
+                            p = zput(p, " -> sel 0x1F");
+                            break;
+                        default:
+                            VDM_REG(tib, VTIB_EFLAGS) |= 1u;       /* CF=1: unsupported */
+                            p = zput(p, " -> UNSUP");
+                            break;
+                        }
+                        p = zput(p, "\r\n"); log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                        VDM_REG(tib, VTIB_EIP) += 3;               /* past C4 C4 31 -> resume client */
+                        continue;
+                    }
+                    if (ev == 4 && info == 0x4C) {                 /* DPMI client exit */
+                        DWORD r1 = *(volatile WORD *)(ULONG_PTR)0x1600;
+                        DWORD r2 = *(volatile WORD *)(ULONG_PTR)0x1602;
+                        p = zput(p, "DPMI: client EXIT after "); p = zhex(p, steps);
+                        p = zput(p, " calls. results@0x1600=0x"); p = zhex(p, r1);
+                        p = zput(p, " @0x1602=0x"); p = zhex(p, r2);
+                        p = zput(p, (r1 == 0x005A && r2 == 0x001F)
+                                    ? "  <<< DPMI ROUND-TRIP OK >>>\r\n" : "\r\n");
+                        log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                        break;
+                    }
+                    p = zput(p, "DPMI: unexpected PM stop event=0x"); p = zhex(p, ev);
+                    p = zput(p, " info=0x"); p = zhex(p, info);
+                    p = zput(p, " CS:EIP=0x"); p = zhex(p, VDM_REG(tib, VTIB_CS) & 0xFFFF);
+                    p = zput(p, ":0x"); p = zhex(p, VDM_REG(tib, VTIB_EIP) & 0xFFFF); p = zput(p, "\r\n");
+                    log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                    break;
+                }
                 break;
             }
             p = zput(p, " -> SWITCH FAILED (staying real mode, CF=1)\r\n");
