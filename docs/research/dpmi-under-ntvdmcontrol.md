@@ -277,6 +277,27 @@ risk (can we run PM at all under our architecture?) is **retired: yes.**
 needs ntvdm's actual PM fault-reflection approach (or a stack/handler set up for it).
 That answers the PM event taxonomy (unknown #3) and enables the `0000`/`0300` surface.
 
+### VM run 9 (2026-08-01) — INT 31h does not surface via Win32 SEH; use the VDM TrapcHandler `[FACT, real CPU]`
+
+Increment 3b attempt: made the data/stack selector 32-bit (D/B=1) so Windows could
+deliver the `INT 31h` exception (run 7 had killed the process — a 16-bit stack can't
+hold the exception frame), re-issued `INT 31h` in the client, and expected the VEH to
+catch it.
+
+Result: `ntvdmhost` runs at **100% CPU, spinning** (Task Manager) with no window and no
+log — the guest **reached `.pmspin`, past the `INT 31h`**. So the VEH never fired and
+the guest continued: **`INT 31h` from the in-process PM client does not raise a
+catchable Win32 exception.** It is intercepted by the **VDM trap path** — the
+`TrapcHandler` we registered in `VdmInitialize` (currently an empty stub) silently
+swallows the fault and the kernel resumes the guest.
+
+**Conclusion / increment 3b redirect:** PM faults + software INTs in a VDM are
+delivered through the **`TrapcHandler`**, not SEH/VEH. To service `INT 31h` we must
+implement that handler (recover its ABI: how the kernel invokes it, the fault/context
+it passes, how to resume/skip the faulting instruction) — this is also how V86 BOP
+events are ultimately sourced. Reverse ntvdm's registered trap handler next. The VEH
+stays only as a last-chance crash logger.
+
 ## Open unknowns (what the spike must nail down) `[VERIFY]`
 
 1. **The mode-switch primitive.** Exactly how ntvdm flips the VDM from V86→PM after the client
