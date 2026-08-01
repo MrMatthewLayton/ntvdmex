@@ -43,11 +43,8 @@ start:
     ; reads BEEF CAFE, PM code genuinely ran; if 0000, the guest never executed.
     mov word [0x600], 0xBEEF
     mov word [0x602], 0xCAFE
-    mov ax, 0x0400             ; DPMI: get version
-    int 0x31                   ; -> host returns AX=version, CF=0
-    mov ax, 0x0000             ; DPMI: allocate LDT descriptors
-    mov cx, 0x0001             ; CX = 1 descriptor
-    int 0x31                   ; -> host returns AX=base selector, CF=0
+    ; NO INT / no fault: just spin. If PM code runs, the sentinel above is written and
+    ; the guest stays alive here so the watchdog can read BEEF/CAFE @ linear 0x1600.
 .pmspin:
     jmp .pmspin                ; EB FE (spin; watchdog stops it)
 

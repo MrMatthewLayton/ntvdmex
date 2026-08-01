@@ -957,12 +957,19 @@ static LONG CALLBACK dpmi_crash_veh(EXCEPTION_POINTERS *ep)
    the batch dumps the log and locks release. Makes every DPMI run self-terminating. */
 static DWORD WINAPI dpmi_watchdog(LPVOID param)
 {
-    static char wb[256]; char *q = wb; (void)param;
-    q = zput(q, "STAGE3-DPMI: watchdog thread started (3s to spin-terminate)\r\n");
+    static char wb[256]; char *q = wb; unsigned i; (void)param;
+    const void *sent = (const void *)(ULONG_PTR)0x1600;   /* guest sentinel DS:0x600 */
+    q = zput(q, "STAGE3-DPMI: watchdog started; sampling sentinel@0x1600 (proves PM exec)\r\n");
     serial_out(wb, q); q = wb;
-    Sleep(3000);
-    q = zput(q, "STAGE3-DPMI: watchdog -- PM guest ran ~3s with NO fault delivered to the "
-                "VEH and no exit (kernel skip+resume / spin). Terminating.\r\n");
+    /* Sample the guest's sentinel concurrently: if the PM guest executed its opening
+       'mov [0x600],BEEF/CAFE', we see it here even though dpmi_enter_pm silently
+       terminates on a later fault. BEEF/CAFE => PM code genuinely ran on the real CPU. */
+    for (i = 0; i < 10; ++i) {
+        Sleep(250);
+        q = zput(q, "  wd["); q = zhex(q, i); q = zput(q, "] sentinel="); q = zdump(q, sent, 4);
+        serial_out(wb, q); q = wb;
+    }
+    q = zput(q, "STAGE3-DPMI: watchdog terminating\r\n");
     log_append(LOG_PATH, wb, q);
     serial_out(wb, q);
     /* TerminateProcess (forceful) -- ExitProcess hangs trying to unwind the PM engine
@@ -1002,7 +1009,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     (void)hInst; (void)hPrev; (void)lpCmd; (void)nShow;
     progpath[0] = 0; args[0] = 0;
 
-    p = zput(p, "NTVDMEX clean host\r\nSTAGE0: WinMain entered [build dpmi-harness-v13]\r\n");
+    p = zput(p, "NTVDMEX clean host\r\nSTAGE0: WinMain entered [build dpmi-harness-v14]\r\n");
     log_write(LOG_PATH, report, p);
     serial_init();                                      /* DPMI harness: COM1 log sink */
     serial_out(report, p);
@@ -1384,20 +1391,23 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                 p = zput(p, " -> PM ok (VM cleared, CS=0x");
                 p = zhex(p, VDM_REG(tib, VTIB_CS) & 0xFFFF);
                 p = zput(p, " EIP=0x"); p = zhex(p, VDM_REG(tib, VTIB_EIP) & 0xFFFF);
-                p = zput(p, ") -> running PM via VdmStartExecution (kernel monitor) [expt B]\r\n");
+                p = zput(p, ") -> entering PM via dpmi_enter_pm (far-jmp) + sentinel probe\r\n");
                 log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
-                /* Watchdog so the run self-terminates whether the fault reaches the VEH,
-                   kills the process, or the kernel skip+resumes it into a spin. */
+                /* Watchdog samples the guest's sentinel@0x1600 concurrently -> proves
+                   whether the PM guest executes even through a silent terminate. */
                 { HANDLE wd = CreateThread(NULL, 0, dpmi_watchdog, NULL, 0, NULL);
                   if (wd) CloseHandle(wd); }
-                /* EXPERIMENT B (2026-08-01): V86 faults DO reflect for us because V86 runs
-                   inside VdmStartExecution (the kernel monitor). Hypothesis: the monitor
-                   also runs the PM guest (PE bit set, VM clear, LDT installed) and reflects
-                   its INT 31h / fault as a VTIB_EVENT. So `continue` back to the loop top,
-                   whose v86_run(VdmStartExecution) now runs the PM CONTEXT; a reflected PM
-                   event lands in the g_dpmi_pm handler above. (If the monitor refuses PM,
-                   we learn that here; fall back to plan A -- the KiTrap0D fixed-state RE.) */
-                continue;
+                /* DEFINITIVE TEST (run 28): enter PM the REAL ntvdm way (far-jmp, 0xf04483c)
+                   with the sentinel guest (writes BEEF/CAFE then spins, no INT/fault). If the
+                   watchdog reads the sentinel, PM code genuinely runs on the real CPU and the
+                   only blocker is fault reflection; if it stays 0, PM entry itself never lands. */
+                dpmi_enter_pm(tib);
+                p = zput(p, "STAGE3-DPMI: dpmi_enter_pm RETURNED event=0x");
+                p = zhex(p, VDM_REG(tib, VTIB_EVENT));
+                p = zput(p, " CS:EIP=0x"); p = zhex(p, VDM_REG(tib, VTIB_CS) & 0xFFFF);
+                p = zput(p, ":0x"); p = zhex(p, VDM_REG(tib, VTIB_EIP) & 0xFFFF); p = zput(p, "\r\n");
+                log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                break;
             }
             p = zput(p, " -> SWITCH FAILED (staying real mode, CF=1)\r\n");
             log_append(LOG_PATH, base, p); serial_out(base, p); p = base;

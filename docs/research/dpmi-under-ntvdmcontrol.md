@@ -736,6 +736,36 @@ prove whether the far-jmp executes PM code at all. If yes → PM runs, the block
 fault reflection (back to plan A: KiTrap0D). If no → PM entry itself never lands, and the switch
 CONTEXT/LDT needs rework before anything else.
 
+### VM run 28 (2026-08-01) — DEFINITIVE: PM code EXECUTES on the real CPU via dpmi_enter_pm `[FACT, real CPU]`
+
+The decisive test. Guest (PM): `mov word [0x600],0xBEEF` / `mov word [0x602],0xCAFE` then `jmp $`
+(sentinel + spin, NO INT, so it won't fault if PM runs). Switch reverted to **`dpmi_enter_pm`** (the
+real ntvdm far-jmp, `0xf04483c`). The watchdog thread samples linear `0x1600` (= DS:0x600) every
+250 ms. Result:
+
+```
+wd[0..9] sentinel = ef be fe ca    (all 10 samples, full 3 s, until watchdog terminate)
+```
+
+`ef be fe ca` = **`0xBEEF, 0xCAFE`** — **the guest's PM instructions executed**, and the guest then
+spun cleanly for 3 s (no fault, no silent terminate). **Protected-mode code genuinely runs on the
+real CPU via `dpmi_enter_pm`.** (Confirms the long-assumed "run 8" claim, now sentinel-verified.)
+
+**This settles the foundation and re-aims the whole effort:**
+- ✅ V86→PM switch works (run 22); ✅ LDT installs (svc10/11=0); ✅ **PM code executes (run 28)**.
+- ❌ The SOLE remaining blocker is **fault/INT reflection**: `dpmi_enter_pm` runs PM fine until the
+  guest faults (e.g. `INT 31h`), at which point the kernel silently terminates instead of reflecting
+  to our host (no VEH, no `VTIB_EVENT` return). Runs 24–27 (VdmStartExecution / VEH artifact) were a
+  detour — that path doesn't even run PM.
+
+**⇒ Back to plan A, now on solid ground: RE `KiTrap0D`'s PM-VDM branch** — why a ring-3 LDT-CS fault
+in this VDM terminates instead of reflecting (save guest→`TIB+0x2D8`, restore host CONTEXT@`TIB+0x0C`,
+set `VTIB_EVENT`, return to the host loop). One clue banked from run 24: under `VdmStartExecution`
+the kernel WILL deliver a fault to our user-mode VEH — so the delivery machinery exists; we need the
+state that makes `dpmi_enter_pm`'s in-PM fault take the reflect path. Candidate levers to test on the
+now-proven PM base: the `[0x714]` in-monitor flag, the host-save CONTEXT@`TIB+0x0C` contents, and the
+per-thread VDM "monitored" state.
+
 ## Open unknowns (what the spike must nail down) `[VERIFY]`
 
 1. **The mode-switch primitive.** Exactly how ntvdm flips the VDM from V86→PM after the client
