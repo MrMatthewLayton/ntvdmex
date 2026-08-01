@@ -1010,7 +1010,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     (void)hInst; (void)hPrev; (void)lpCmd; (void)nShow;
     progpath[0] = 0; args[0] = 0;
 
-    p = zput(p, "NTVDMEX clean host\r\nSTAGE0: WinMain entered [build dpmi-harness-v26]\r\n");
+    p = zput(p, "NTVDMEX clean host\r\nSTAGE0: WinMain entered [build dpmi-harness-v27]\r\n");
     log_write(LOG_PATH, report, p);
     serial_init();                                      /* DPMI harness: COM1 log sink */
     serial_out(report, p);
@@ -1460,6 +1460,32 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                                         ? "  <<< DPMI ROUND-TRIP OK (unmodified client) >>>\r\n" : "\r\n");
                             log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
                             break;
+                        }
+                        if (ah == 0x09) {                          /* print $-string DS:DX */
+                            /* DS is the client's data selector; its base == data_base == the
+                               .COM segment (g_dpmi_code_base). Read the string linearly. */
+                            const volatile BYTE *s = (const volatile BYTE *)(ULONG_PTR)
+                                (g_dpmi_code_base + (VDM_REG(tib, VTIB_EDX) & 0xFFFF));
+                            char ob[256]; char *op = ob; int k;
+                            op = zput(op, "INT21h AH=09 print: \"");
+                            for (k = 0; k < 200 && *s != '$'; ++k, ++s) {
+                                if (*s >= 0x20) *op++ = (char)*s;   /* printable -> serial echo */
+                                if (m.conout) m.conout(m.conctx, *s);  /* -> the Luna console */
+                                if (m.out_len < m.out_cap - 1) m.out[m.out_len++] = (char)*s;
+                            }
+                            op = zput(op, "\"\r\n");
+                            log_append(LOG_PATH, ob, op); serial_out(ob, op);
+                            VDM_REG(tib, VTIB_EFLAGS) &= ~1u;
+                            VDM_REG(tib, VTIB_EIP) += 2;
+                            continue;
+                        }
+                        if (ah == 0x02) {                          /* print char DL */
+                            BYTE ch = VDM_REG(tib, VTIB_EDX) & 0xFF;
+                            if (m.conout) m.conout(m.conctx, ch);
+                            if (m.out_len < m.out_cap - 1) m.out[m.out_len++] = (char)ch;
+                            VDM_REG(tib, VTIB_EFLAGS) &= ~1u;
+                            VDM_REG(tib, VTIB_EIP) += 2;
+                            continue;
                         }
                         p = zput(p, "INT21h AH=0x"); p = zhex(p, ah); p = zput(p, " (PM thunk TODO)\r\n");
                         log_append(LOG_PATH, base, p); serial_out(base, p); p = base;

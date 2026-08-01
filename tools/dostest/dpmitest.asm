@@ -44,10 +44,14 @@ start:
     mov cx, 0x0001             ; CX = 1
     int 0x31                   ; -> host: AX=base selector, CF=0
     mov [0x602], ax            ; store selector @ DS:0x602 (linear 0x1602)
+    mov dx, .pmsg              ; DS:DX -> the $-terminated message
+    mov ah, 0x09               ; DOS print string
+    int 0x21                   ; -> host prints it (proves DOS output from PM)
     mov ax, 0x4C00             ; terminate, exit code 0
     int 0x21                   ; -> host: DOS AH=4Ch -> stop the PM loop
 .pmspin:
     jmp .pmspin                ; EB FE (only if exit didn't stop us)
+.pmsg:  db 'Hello from PROTECTED MODE via DPMI on the real CPU!', 13, 10, '$'
 
 .switchfail:
     mov dx, msg_fail
