@@ -1009,7 +1009,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     (void)hInst; (void)hPrev; (void)lpCmd; (void)nShow;
     progpath[0] = 0; args[0] = 0;
 
-    p = zput(p, "NTVDMEX clean host\r\nSTAGE0: WinMain entered [build dpmi-harness-v14]\r\n");
+    p = zput(p, "NTVDMEX clean host\r\nSTAGE0: WinMain entered [build dpmi-harness-v15]\r\n");
     log_write(LOG_PATH, report, p);
     serial_init();                                      /* DPMI harness: COM1 log sink */
     serial_out(report, p);
@@ -1397,10 +1397,11 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                    whether the PM guest executes even through a silent terminate. */
                 { HANDLE wd = CreateThread(NULL, 0, dpmi_watchdog, NULL, 0, NULL);
                   if (wd) CloseHandle(wd); }
-                /* DEFINITIVE TEST (run 28): enter PM the REAL ntvdm way (far-jmp, 0xf04483c)
-                   with the sentinel guest (writes BEEF/CAFE then spins, no INT/fault). If the
-                   watchdog reads the sentinel, PM code genuinely runs on the real CPU and the
-                   only blocker is fault reflection; if it stays 0, PM entry itself never lands. */
+                /* LEVER TEST (run 29): ntvdm's PM orchestrator (fcn.0f00532e) sets VDM_TIB[0x670]=1
+                   before calling the PM entry (0xf04483c); our v86_get_tib left it 0. Set it and
+                   see if the guest's INT 31h fault now REFLECTS (dpmi_enter_pm returns with a
+                   VTIB_EVENT) instead of silently terminating. */
+                *(volatile BYTE *)(tib + 0x670) = 1;
                 dpmi_enter_pm(tib);
                 p = zput(p, "STAGE3-DPMI: dpmi_enter_pm RETURNED event=0x");
                 p = zhex(p, VDM_REG(tib, VTIB_EVENT));

@@ -41,10 +41,10 @@ start:
     ; SENTINEL: prove whether ANY PM instruction executes. Write two marker words to
     ; DS:0x600 (linear 0x1600, DS base 0x1000). The host VEH dumps linear 0x1600 -- if it
     ; reads BEEF CAFE, PM code genuinely ran; if 0000, the guest never executed.
-    mov word [0x600], 0xBEEF
+    mov word [0x600], 0xBEEF    ; sentinel: proves PM code runs (watchdog reads 0x1600)
     mov word [0x602], 0xCAFE
-    ; NO INT / no fault: just spin. If PM code runs, the sentinel above is written and
-    ; the guest stays alive here so the watchdog can read BEEF/CAFE @ linear 0x1600.
+    mov ax, 0x0400             ; DPMI get-version
+    int 0x31                   ; FAULT: does the kernel now reflect it to the host?
 .pmspin:
     jmp .pmspin                ; EB FE (spin; watchdog stops it)
 

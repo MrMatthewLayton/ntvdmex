@@ -766,6 +766,33 @@ state that makes `dpmi_enter_pm`'s in-PM fault take the reflect path. Candidate 
 now-proven PM base: the `[0x714]` in-monitor flag, the host-save CONTEXT@`TIB+0x0C` contents, and the
 per-thread VDM "monitored" state.
 
+### VM run 29 (2026-08-01) — ntvdm-side PM-entry setup deltas ruled out; reflection is kernel-side `[FACT, disasm + real CPU]`
+
+RE'd ntvdm's PM execution orchestrator **`fcn.0f00532e`** (the caller of the PM entry `0xf04483c`).
+Its structure: record `CurrentMonitorTeb=fs:[0x18]`; set `VDM_TIB[0x670]=1`; set
+`VDM_TIB[0x2D8]=0x10007` (guest CONTEXT.ContextFlags — the guest regs at 0x374–0x3A0 are this
+CONTEXT: Eip@0x2D8+0xB8=0x390, Cs@0x394, EFlags@0x398, Esp@0x39C, Ss@0x3A0); `getMSW` PE test →
+PM branch: (conditionally) `VdmPMCliControl(3)`, then `and [0x39A],0xFD` (clear VM bit), then
+`call 0xf04483c`; on return, dispatch `VTIB_EVENT` via table `0xf064a60`, loop while `[0x670]`.
+
+Tested/ruled out each ntvdm-side delta as the reflection lever:
+- **`VDM_TIB[0x670]=1`** (we had 0): set it → the guest's `INT 31h` **still silent-terminates**
+  (so fast the watchdog thread never prints). Not the lever.
+- **`VdmPMCliControl` (svc 13)**: TWO sites — init-ish `0xf004908` (data=2) and per-entry
+  `0xf0053ad` (data=3). BOTH are gated on **guest IF == 0** (`getIF` check). Our guest has IF SET
+  (`EFLAGS=0x202`), so **ntvdm itself skips both** → not the lever. (svc 13 = PM CLI/STI
+  virtualization: manages `[0x714]` bits 0/1 = the virtual interrupt-pending flag.)
+- `CurrentMonitorTeb` is an ntvdm-internal global (used by the TrapcHandler), not kernel-checked.
+- `[0x2D8]=0x10007` — we already set it (`v86_set_entry`, `VTIB_CONTEXT`).
+
+⇒ Our PM-entry setup matches ntvdm's for an IF-set guest, yet the `INT 31h` fault terminates
+instead of reflecting. **The gap is kernel-side**, not in the ntvdm-replicated setup. Definitive
+next step: RE `KiTrap0D`'s #GP path (`reverse/NTOSKRNL`) — for a ring-3 LDT-CS fault in a VDM
+process, the exact predicate/state that selects reflect-to-VDM (save guest→CONTEXT@0x2D8, restore
+host MonitorContext@`TIB+0x0C`, set `VTIB_EVENT`, return to host) vs. terminate. Foothold banked
+in "Kernel RE session 1/2": `KiDispatchException`@~0x421cf7 gates on `EPROCESS[+0x158]` (VdmObjects);
+`KiTrap0D` is the lower #GP handler that reflects BEFORE `KiDispatchException`.
+
 ## Open unknowns (what the spike must nail down) `[VERIFY]`
 
 1. **The mode-switch primitive.** Exactly how ntvdm flips the VDM from V86→PM after the client
