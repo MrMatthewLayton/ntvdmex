@@ -33,54 +33,52 @@ start:
     xor ax, ax
     call far [entry]
 
-    ; --- 4. we are now in PROTECTED MODE (run 39) ------------------------
-    ; A REAL, UNMODIFIED DPMI client: plain INT 31h / INT 21h. The host patches each
-    ; `CD nn` -> `C4 C4` at mode-switch (same 2 bytes) so they reflect as BOPs. This
-    ; exercises: alloc a selector + alloc a memory block + base the selector onto it +
-    ; read/write THROUGH the selector + DOS write (AH=40) + print (AH=09).
+    ; --- 4. we are now in PROTECTED MODE (run 40) ------------------------
+    ; Unmodified DPMI client exercising file I/O + descriptor alias from PM. The host
+    ; patches CD nn -> C4 C4 at mode-switch; all INT 21h buffers (DS:DX) are translated
+    ; via the selector's linear base.
     mov ax, 0x0400             ; get DPMI version
     int 0x31
     mov [0x600], ax
-    mov ax, 0x0000             ; allocate 1 LDT descriptor
-    mov cx, 0x0001
-    int 0x31                   ; -> AX = selector
-    mov [0x604], ax            ; save it
-    mov ax, 0x0501             ; allocate a 4KB memory block
-    mov bx, 0
-    mov cx, 0x1000
-    int 0x31                   ; -> BX:CX = linear addr, SI:DI = handle
-    mov [0x60A], bx            ; block addr high
-    mov [0x60C], cx            ; block addr low
-    mov dx, cx                 ; set-base wants CX:DX = base
-    mov cx, bx
-    mov bx, [0x604]            ; BX = our selector
-    mov ax, 0x0007             ; set segment base = the block
-    int 0x31
-    mov bx, [0x604]
-    mov cx, 0                  ; limit 0x00000FFF
-    mov dx, 0x0FFF
-    mov ax, 0x0008             ; set segment limit
-    int 0x31
-    mov ax, [0x604]
-    mov es, ax                 ; ES = our selector (base = the block)
-    mov word [es:0x10], 0xBEEF ; write a marker THROUGH the descriptor
-    mov ax, [es:0x10]          ; read it back
-    mov [0x60E], ax            ; store (expect 0xBEEF)
-    mov ah, 0x40               ; DOS write to stdout
-    mov bx, 1
-    mov cx, .wlen
-    mov dx, .wmsg
+    ; create C:\ntvdmex\DPMIFILE.TMP and write 8 bytes to it
+    mov dx, .fname
+    mov ah, 0x3C
+    xor cx, cx
+    int 0x21                   ; AX = file handle
+    mov bx, ax
+    mov dx, .fdata
+    mov cx, 8
+    mov ah, 0x40
+    int 0x21                   ; write 8 bytes
+    mov ah, 0x3E               ; close (BX = handle)
     int 0x21
-    mov dx, .pmsg              ; DOS print $-string
+    ; reopen for read, read 8 bytes back into DS:0x620 (linear 0x1620)
+    mov dx, .fname
+    mov ax, 0x3D00
+    int 0x21                   ; AX = handle
+    mov bx, ax
+    mov dx, 0x620
+    mov cx, 8
+    mov ah, 0x3F
+    int 0x21                   ; AX = bytes read
+    mov [0x612], ax            ; store bytes read (expect 8)
+    mov ah, 0x3E               ; close
+    int 0x21
+    ; create a data alias of our data selector (INT 31h 000A)
+    mov bx, ds
+    mov ax, 0x000A
+    int 0x31                   ; AX = alias selector
+    mov [0x614], ax
+    mov dx, .pmsg              ; print the result banner
     mov ah, 0x09
     int 0x21
     mov ax, 0x4C00             ; terminate
     int 0x21
 .pmspin:
     jmp .pmspin
-.pmsg:  db 'DPMI: descriptor + memory alloc + R/W through selector OK!', 13, 10, '$'
-.wmsg:  db 'DPMI wrote this via INT 21h AH=40.', 13, 10
-.wlen   equ $ - .wmsg
+.pmsg:  db 'DPMI: file create/write/read + alias descriptor OK!', 13, 10, '$'
+.fname: db 'C:\ntvdmex\DPMIFILE.TMP', 0
+.fdata: db 'DPMI-IO!'
 
 .switchfail:
     mov dx, msg_fail

@@ -1033,7 +1033,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     (void)hInst; (void)hPrev; (void)lpCmd; (void)nShow;
     progpath[0] = 0; args[0] = 0;
 
-    p = zput(p, "NTVDMEX clean host\r\nSTAGE0: WinMain entered [build dpmi-harness-v29]\r\n");
+    p = zput(p, "NTVDMEX clean host\r\nSTAGE0: WinMain entered [build dpmi-harness-v30]\r\n");
     log_write(LOG_PATH, report, p);
     serial_init();                                      /* DPMI harness: COM1 log sink */
     serial_out(report, p);
@@ -1505,6 +1505,17 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                             }
                             p = zput(p, " -> setaccess");
                             break; }
+                        case 0x000A: {                             /* create data alias of sel BX */
+                            int src = (VDM_REG(tib, VTIB_EBX) & 0xFFFF) >> 3, idx;
+                            if (g_ldt_next >= 512) { VDM_REG(tib, VTIB_EFLAGS) |= 1u; p = zput(p, " -> ENOMEM"); break; }
+                            idx = g_ldt_next++;
+                            if (src >= 3 && src < 512) g_ldt[idx] = g_ldt[src];
+                            else { g_ldt[idx].base = g_dpmi_code_base; g_ldt[idx].limit = 0xFFFF; g_ldt[idx].flags = 0; }
+                            g_ldt[idx].access = 0xF2;              /* data alias */
+                            dpmi_install(idx);
+                            VDM_SET16(tib, VTIB_EAX, (WORD)((idx << 3) | 7));
+                            p = zput(p, " -> alias sel 0x"); p = zhex(p, (idx << 3) | 7);
+                            break; }
                         case 0x0500: {                             /* get free memory info -> ES:DI */
                             DWORD esb = dpmi_sel_base((WORD)VDM_REG(tib, VTIB_ES));
                             volatile DWORD *info = (volatile DWORD *)(ULONG_PTR)
@@ -1540,18 +1551,20 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                     if (vec == 0x21) {                             /* DOS INT 21h (in PM) */
                         DWORD ah = (ax >> 8) & 0xFF;
                         if (ah == 0x4C) {                          /* terminate */
-                            DWORD ver  = *(volatile WORD *)(ULONG_PTR)0x1600;
-                            DWORD sel  = *(volatile WORD *)(ULONG_PTR)0x1604;
-                            DWORD memh = *(volatile WORD *)(ULONG_PTR)0x160A;   /* block addr hi */
-                            DWORD meml = *(volatile WORD *)(ULONG_PTR)0x160C;   /* block addr lo */
-                            DWORD mark = *(volatile WORD *)(ULONG_PTR)0x160E;   /* marker read via the sel */
-                            int ok = (ver == 0x005A) && (sel == 0x001F) && (mark == 0xBEEF);
+                            DWORD ver   = *(volatile WORD *)(ULONG_PTR)0x1600;
+                            DWORD nread = *(volatile WORD *)(ULONG_PTR)0x1612;   /* bytes read back */
+                            DWORD alias = *(volatile WORD *)(ULONG_PTR)0x1614;   /* alias selector */
+                            const char *fc = (const char *)(ULONG_PTR)0x1620;    /* file content read */
+                            static const char want[8] = { 'D','P','M','I','-','I','O','!' };
+                            int fok = (nread == 8), j;
+                            for (j = 0; j < 8; ++j) if (fc[j] != want[j]) fok = 0;
+                            int ok = (ver == 0x005A) && fok && (alias == 0x001F);
+                            char fb[16]; int i; for (i = 0; i < 8; ++i) fb[i] = (fc[i] >= 0x20) ? fc[i] : '.'; fb[8] = 0;
                             p = zput(p, "INT21h AH=4Ch -> client EXIT after "); p = zhex(p, steps);
                             p = zput(p, " svc. ver=0x"); p = zhex(p, ver);
-                            p = zput(p, " sel=0x"); p = zhex(p, sel);
-                            p = zput(p, " block=0x"); p = zhex(p, memh); p = zput(p, ":0x"); p = zhex(p, meml);
-                            p = zput(p, " read-via-sel=0x"); p = zhex(p, mark);
-                            p = zput(p, ok ? "  <<< DPMI OK: alloc mem + base a selector on it + R/W through it >>>\r\n"
+                            p = zput(p, " read="); p = zhex(p, nread); p = zput(p, "b content=\""); p = zput(p, fb);
+                            p = zput(p, "\" alias=0x"); p = zhex(p, alias);
+                            p = zput(p, ok ? "  <<< DPMI OK: file create/write/read + alias descriptor >>>\r\n"
                                            : "  <<< MISMATCH >>>\r\n");
                             log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
                             break;
@@ -1600,9 +1613,61 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                                 op = zput(op, "\"\r\n");
                                 log_append(LOG_PATH, ob, op); serial_out(ob, op);
                                 VDM_SET16(tib, VTIB_EAX, cnt);     /* AX = bytes written */
+                            } else if (bh < 24 && m.fh[bh]) {      /* file handle */
+                                DWORD w = 0; WriteFile(m.fh[bh], (const void *)b, cnt, &w, NULL);
+                                VDM_SET16(tib, VTIB_EAX, w);
+                                p = zput(p, "INT21h AH=40 file write "); p = zhex(p, w); p = zput(p, "b\r\n");
+                                log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
                             } else { VDM_REG(tib, VTIB_EFLAGS) |= 1u; VDM_SET16(tib, VTIB_EAX, 6); }
                             VDM_REG(tib, VTIB_EIP) += 2;
                             continue;
+                        }
+                        if (ah == 0x3C || ah == 0x3D) {            /* create / open: DS:DX = ASCIIZ name */
+                            DWORD dsb = dpmi_sel_base((WORD)VDM_REG(tib, VTIB_DS));
+                            const char *fn = (const char *)(ULONG_PTR)(dsb + (VDM_REG(tib, VTIB_EDX) & 0xFFFF));
+                            DWORD acc = ((ax & 0xFF) == 0) ? GENERIC_READ
+                                       : ((ax & 0xFF) == 1) ? GENERIC_WRITE : (GENERIC_READ | GENERIC_WRITE);
+                            HANDLE f = (ah == 0x3C)
+                                ? CreateFileA(fn, GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ, NULL,
+                                              CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL)
+                                : CreateFileA(fn, acc, FILE_SHARE_READ, NULL, OPEN_EXISTING,
+                                              FILE_ATTRIBUTE_NORMAL, NULL);
+                            VDM_REG(tib, VTIB_EFLAGS) &= ~1u;
+                            if (f == INVALID_HANDLE_VALUE) { VDM_REG(tib, VTIB_EFLAGS) |= 1u; VDM_SET16(tib, VTIB_EAX, 2); }
+                            else { int slot; for (slot = 5; slot < 24 && m.fh[slot]; ++slot) {}
+                                   if (slot < 24) { m.fh[slot] = f; VDM_SET16(tib, VTIB_EAX, slot); }
+                                   else { CloseHandle(f); VDM_REG(tib, VTIB_EFLAGS) |= 1u; VDM_SET16(tib, VTIB_EAX, 4); } }
+                            p = zput(p, "INT21h AH="); p = zhex(p, ah); p = zput(p, " open \"");
+                            p = zput(p, fn); p = zput(p, "\" -> AX=0x"); p = zhex(p, VDM_REG(tib, VTIB_EAX) & 0xFFFF);
+                            p = zput(p, "\r\n"); log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                            VDM_REG(tib, VTIB_EIP) += 2; continue;
+                        }
+                        if (ah == 0x3E) {                          /* close: BX=handle */
+                            DWORD h = VDM_REG(tib, VTIB_EBX) & 0xFFFF;
+                            if (h >= 5 && h < 24 && m.fh[h]) { CloseHandle(m.fh[h]); m.fh[h] = 0; }
+                            VDM_REG(tib, VTIB_EFLAGS) &= ~1u;
+                            VDM_REG(tib, VTIB_EIP) += 2; continue;
+                        }
+                        if (ah == 0x3F) {                          /* read: BX=handle CX=cnt -> DS:DX */
+                            DWORD h = VDM_REG(tib, VTIB_EBX) & 0xFFFF, cnt = VDM_REG(tib, VTIB_ECX) & 0xFFFF, rd = 0;
+                            DWORD dsb = dpmi_sel_base((WORD)VDM_REG(tib, VTIB_DS));
+                            void *b = (void *)(ULONG_PTR)(dsb + (VDM_REG(tib, VTIB_EDX) & 0xFFFF));
+                            VDM_REG(tib, VTIB_EFLAGS) &= ~1u;
+                            if (h < 24 && m.fh[h]) { ReadFile(m.fh[h], b, cnt, &rd, NULL); VDM_SET16(tib, VTIB_EAX, rd); }
+                            else { VDM_REG(tib, VTIB_EFLAGS) |= 1u; VDM_SET16(tib, VTIB_EAX, 6); }
+                            p = zput(p, "INT21h AH=3F read "); p = zhex(p, rd); p = zput(p, "b\r\n");
+                            log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                            VDM_REG(tib, VTIB_EIP) += 2; continue;
+                        }
+                        if (ah == 0x42) {                          /* lseek: AL=org BX=h CX:DX=off */
+                            DWORD h = VDM_REG(tib, VTIB_EBX) & 0xFFFF, meth = ax & 0xFF;
+                            LONG dist = (LONG)(((VDM_REG(tib, VTIB_ECX) & 0xFFFF) << 16) | (VDM_REG(tib, VTIB_EDX) & 0xFFFF));
+                            VDM_REG(tib, VTIB_EFLAGS) &= ~1u;
+                            if (h >= 5 && h < 24 && m.fh[h]) {
+                                DWORD np = SetFilePointer(m.fh[h], dist, NULL, meth);
+                                VDM_SET16(tib, VTIB_EDX, np >> 16); VDM_SET16(tib, VTIB_EAX, np & 0xFFFF);
+                            } else VDM_REG(tib, VTIB_EFLAGS) |= 1u;
+                            VDM_REG(tib, VTIB_EIP) += 2; continue;
                         }
                         p = zput(p, "INT21h AH=0x"); p = zhex(p, ah); p = zput(p, " (PM thunk TODO)\r\n");
                         log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
