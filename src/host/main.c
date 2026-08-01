@@ -878,6 +878,7 @@ static long host_interp(volatile BYTE *tib, long cap)
    catches the fault, dumps the exception (code/addr/params) + the host CONTEXT +
    the guest PM CONTEXT to the log, then exits CLEANLY (no WER dialog) so the batch
    still prints the log. Only meaningful once g_dpmi_pm is set. */
+static int s_veh_count = 0;
 static LONG CALLBACK dpmi_crash_veh(EXCEPTION_POINTERS *ep)
 {
     static char cb[1024]; char *p = cb;
@@ -890,17 +891,36 @@ static LONG CALLBACK dpmi_crash_veh(EXCEPTION_POINTERS *ep)
         p = zput(p, " acc="); p = zhex(p, (unsigned)er->ExceptionInformation[0]);
         p = zput(p, " fault-addr=0x"); p = zhex(p, (unsigned)er->ExceptionInformation[1]);
     }
-    /* ContextRecord is the LIVE fault state (the in-process PM guest at the fault),
-       so CS/EIP here are the guest's -- e.g. CS=0x0F, EIP at the INT 31h. AX/CX/BX
-       identify the DPMI function. */
-    p = zput(p, "\r\n  PM fault ctx: CS=0x"); p = zhex(p, cx->SegCs);
-    p = zput(p, " EIP=0x"); p = zhex(p, cx->Eip);
-    p = zput(p, " SS=0x"); p = zhex(p, cx->SegSs);
-    p = zput(p, " ESP=0x"); p = zhex(p, cx->Esp); p = zput(p, "\r\n");
-    p = zput(p, "  AX=0x"); p = zhex(p, cx->Eax & 0xFFFF);
-    p = zput(p, " CX=0x"); p = zhex(p, cx->Ecx & 0xFFFF);
-    p = zput(p, " BX=0x"); p = zhex(p, cx->Ebx & 0xFFFF);
-    p = zput(p, " DS=0x"); p = zhex(p, cx->SegDs); p = zput(p, "\r\n");
+    /* ContextRecord is the LIVE fault state (the in-process PM guest at the fault). */
+    p = zput(p, "\r\n  CS:EIP=0x"); p = zhex(p, cx->SegCs); p = zput(p, ":0x"); p = zhex(p, cx->Eip);
+    p = zput(p, " SS:ESP=0x"); p = zhex(p, cx->SegSs); p = zput(p, ":0x"); p = zhex(p, cx->Esp);
+    p = zput(p, " EFL=0x"); p = zhex(p, cx->EFlags); p = zput(p, "\r\n");
+    p = zput(p, "  DS=0x"); p = zhex(p, cx->SegDs); p = zput(p, " ES=0x"); p = zhex(p, cx->SegEs);
+    p = zput(p, " FS=0x"); p = zhex(p, cx->SegFs); p = zput(p, " GS=0x"); p = zhex(p, cx->SegGs);
+    p = zput(p, "\r\n");
+    p = zput(p, "  EAX=0x"); p = zhex(p, cx->Eax); p = zput(p, " EBX=0x"); p = zhex(p, cx->Ebx);
+    p = zput(p, " ECX=0x"); p = zhex(p, cx->Ecx); p = zput(p, " EDX=0x"); p = zhex(p, cx->Edx);
+    p = zput(p, "\r\n  ESI=0x"); p = zhex(p, cx->Esi); p = zput(p, " EDI=0x"); p = zhex(p, cx->Edi);
+    p = zput(p, " EBP=0x"); p = zhex(p, cx->Ebp); p = zput(p, "\r\n");
+    /* Faulting bytes (CS flat base 0 -> linear = EIP), and the guest's real INT 31h
+       site at linear 0x1125 = (PSP_SEG 0x100 << 4) + 0x125, to compare. */
+    { const BYTE *fb = (const BYTE *)(ULONG_PTR)(er->ExceptionAddress);
+      p = zput(p, "  bytes@fault: "); p = zdump(p, fb, 16); }
+    { const BYTE *gb = (const BYTE *)(ULONG_PTR)0x1125;
+      p = zput(p, "  bytes@guest-int31h(0x1125): "); p = zdump(p, gb, 16); }
+    /* EXPERIMENT (run 25): the kernel reflected the PM INT 31h -- it advanced EIP past
+       the INT and set FLAT CS/SS (0x1B/0x23) for a handler, but should have kept our LDT
+       CS (0x0F). Fix CS/SS back to the guest's LDT selectors and resume: if the guest
+       then runs clean (spins at jmp $, no repeat fault), the reflect CONSUMED the INT and
+       only CS/SS were mangled -- the DPMI INT-service hook is then the VEH itself. */
+    ++s_veh_count;
+    if (s_veh_count <= 4 && cx->SegCs == 0x1B) {
+        cx->SegCs = 0x0F; cx->SegSs = 0x17;            /* DPMI_SEL(1)=code, (2)=data */
+        p = zput(p, "  VEH: fixed CS/SS -> LDT (0x0F/0x17), resume @0x0F:0x"); p = zhex(p, cx->Eip);
+        p = zput(p, " [try "); p = zhex(p, (unsigned)s_veh_count); p = zput(p, "]\r\n");
+        log_append(LOG_PATH, cb, p); serial_out(cb, p);
+        return EXCEPTION_CONTINUE_EXECUTION;           /* resume the guest in PM */
+    }
     log_append(LOG_PATH, cb, p);
     serial_out(cb, p);
     ExitProcess(0xDE0);                                 /* clean exit; batch dumps the log */
@@ -957,7 +977,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     (void)hInst; (void)hPrev; (void)lpCmd; (void)nShow;
     progpath[0] = 0; args[0] = 0;
 
-    p = zput(p, "NTVDMEX clean host\r\nSTAGE0: WinMain entered [build dpmi-harness-v8]\r\n");
+    p = zput(p, "NTVDMEX clean host\r\nSTAGE0: WinMain entered [build dpmi-harness-v10]\r\n");
     log_write(LOG_PATH, report, p);
     serial_init();                                      /* DPMI harness: COM1 log sink */
     serial_out(report, p);

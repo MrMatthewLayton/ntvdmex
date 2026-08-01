@@ -673,6 +673,38 @@ so the kernel restored a stale host/monitor context on reflection.
 it) rather than letting it run past into the IVT. Enhance the VEH to dump all segs + the faulting
 bytes to confirm each step.
 
+### VM run 25 (2026-08-01) — PM INT 31h INTERCEPTION WORKS: reflect → VEH → fix-up → clean resume `[FACT, real CPU]`
+
+Building on run 24. Enhanced the VEH dump: the fault at `0x1B:0x127` is executing the **IVT**
+(`bytes@fault: f0 53 ff 00...` = `LOCK PUSH`, hence `0xC000001E`), while the guest's real code at
+linear `0x1125` is intact (`cd 31 eb fe` = `INT 31h; jmp $`). Register state at the fault:
+`DS=ES=FS=GS=0x17` (our LDT data sel), but `CS=0x1B`/`SS=0x23` (**flat**), `EIP=0x127`
+(=int_site+2, past the INT), `EDX=0x125` (=int_site), `EAX=0` (the guest's DPMI function). VM bit
+clear (EFL `0x10282`).
+
+So under `VdmStartExecution` the kernel **reflects the PM `INT 31h`**: it advances EIP past the INT
+and reloads `CS`/`SS` to the flat selectors — the ONLY corruption is `CS` is flat (`0x1B`) instead of
+our LDT `0x0F`, so the guest lands at linear `0x127` (IVT) and faults into our VEH.
+
+**Confirmed the fix:** the VEH sets `CS=0x0F`, `SS=0x17` and returns `EXCEPTION_CONTINUE_EXECUTION`.
+Result: **the guest resumes cleanly in PM and runs 3 s with NO further fault** (watchdog stops the
+`jmp $` spin). So the reflect **consumed** the INT; only CS/SS needed restoring.
+
+**⇒ Working PM INT 31h hook:** guest `INT 31h` (PM) → kernel reflect → VEH fires with the guest
+state → VEH services the DPMI call, sets returns, restores `CS/SS`, `CONTINUE_EXECUTION` → guest
+continues. The VEH is the DPMI dispatcher. Vector is recoverable from `[int_site]` (`EDX`), function
+from `AX`.
+
+**Caveat (robustness):** the VEH only fires because the mangled flat `CS:small_offset` lands in
+low memory (IVT) and faults — reliable for a low-offset 16-bit `.COM`, but a guest whose flat
+`CS:offset` hit valid bytes could run past unhooked. Robust path (later): find where the kernel
+reads the PM-interrupt reflection target and point it at a real flat host handler (so no CS mangling
+/ downstream fault). For the spike, the VEH hook is sufficient to build + prove the INT 31h surface.
+
+**Next:** wire the INT 31h dispatch into the VEH (read vector from `[EDX]`, function from `AX`,
+service e.g. `AX=0000` alloc-descriptor via svc 10, return selector, resume) and VM-confirm a real
+DPMI round-trip.
+
 ## Open unknowns (what the spike must nail down) `[VERIFY]`
 
 1. **The mode-switch primitive.** Exactly how ntvdm flips the VDM from V86→PM after the client
