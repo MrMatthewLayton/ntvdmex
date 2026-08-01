@@ -78,6 +78,7 @@ static HANDLE       g_key_event;            /* signalled when a key is pushed   
 static volatile LONG g_running = 1;         /* 0 once the window is closed         */
 static int g_dpmi_pm = 0;                   /* set once the guest is switched to PM (spike) */
 static DWORD g_dpmi_code_base = 0;          /* linear base of the guest PM code seg (retcs<<4) */
+static BYTE  g_int_vec[0x10000];            /* per-CS-offset: original INT vector we patched to a BOP */
 static volatile BYTE *g_tib_dbg = 0;        /* VDM_TIB, for the crash VEH to dump guest state */
 
 /* Serial debug sink (DPMI harness): COM1 is captured by QEMU (-serial file:vm/serial.log)
@@ -1009,7 +1010,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     (void)hInst; (void)hPrev; (void)lpCmd; (void)nShow;
     progpath[0] = 0; args[0] = 0;
 
-    p = zput(p, "NTVDMEX clean host\r\nSTAGE0: WinMain entered [build dpmi-harness-v25]\r\n");
+    p = zput(p, "NTVDMEX clean host\r\nSTAGE0: WinMain entered [build dpmi-harness-v26]\r\n");
     log_write(LOG_PATH, report, p);
     serial_init();                                      /* DPMI harness: COM1 log sink */
     serial_out(report, p);
@@ -1396,32 +1397,46 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                 /* Safety watchdog: an un-terminable spin still self-kills after ~3s. */
                 { HANDLE wd = CreateThread(NULL, 0, dpmi_watchdog, NULL, 0, NULL);
                   if (wd) CloseHandle(wd); }
+                /* Patch the client's PM `INT nn` (CD nn) -> BOP (C4 C4), recording the original
+                   vector per CS offset. Same 2 bytes, so a real unmodified client's INT 31h/21h
+                   now reflect to us as BOPs. Scan the code seg (bounded; INT nn in zeroed tail
+                   won't match). Only 0x31 (DPMI) and 0x21 (DOS) for now. */
+                { volatile BYTE *cs = (volatile BYTE *)(ULONG_PTR)g_dpmi_code_base;
+                  DWORD o, n = 0;
+                  for (o = 0; o < 0x2000; ++o) {
+                      if (cs[o] == 0xCD && (cs[o+1] == 0x31 || cs[o+1] == 0x21)) {
+                          g_int_vec[o] = cs[o+1]; cs[o] = 0xC4; cs[o+1] = 0xC4; ++n;
+                      }
+                  }
+                  p = zput(p, "DPMI: patched "); p = zhex(p, n); p = zput(p, " INT sites -> BOP\r\n");
+                  log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                }
                 /* --- DPMI protected-mode execution loop -----------------------------------
-                   Run the client in PM via dpmi_enter_pm (real ntvdm far-jmp). It returns when
-                   the guest hits a BOP (kernel reflects C4 C4 as VTIB_EVENT=4 -- proven run 32).
-                   The client issues DPMI calls as `C4 C4 31` (BOP 0x31) and exits via
-                   `C4 C4 4C`. We service the call by AX, write returns into the guest CONTEXT,
-                   advance past the 3-byte BOP, and re-enter PM. */
+                   dpmi_enter_pm runs the client in PM until it hits a BOP (a patched INT nn);
+                   the kernel reflects C4 C4 as VTIB_EVENT=4 (run 32). We look up the original
+                   vector by the fault EIP, dispatch (INT 31h = DPMI, INT 21h = DOS), write the
+                   returns into the guest CONTEXT, advance past the 2-byte INT, and re-enter PM. */
                 for (steps = 0; steps < 256; ++steps) {
-                    DWORD ev, info, ax;
+                    DWORD ev, eip, vec, ax;
                     dpmi_enter_pm(tib);
-                    ev   = VDM_REG(tib, VTIB_EVENT);
-                    info = VDM_REG(tib, VTIB_EVENT_INFO) & 0xFF;
-                    ax   = VDM_REG(tib, VTIB_EAX) & 0xFFFF;
-                    if (ev == 4 && info == 0x31) {                 /* DPMI service call */
-                        p = zput(p, "DPMI31 AX=0x"); p = zhex(p, ax);
+                    ev  = VDM_REG(tib, VTIB_EVENT);
+                    eip = VDM_REG(tib, VTIB_EIP) & 0xFFFF;
+                    ax  = VDM_REG(tib, VTIB_EAX) & 0xFFFF;
+                    vec = (ev == 4) ? g_int_vec[eip] : 0;
+                    if (vec == 0x31) {                             /* DPMI INT 31h */
+                        p = zput(p, "INT31h AX=0x"); p = zhex(p, ax);
                         p = zput(p, " CX=0x"); p = zhex(p, VDM_REG(tib, VTIB_ECX) & 0xFFFF);
                         VDM_REG(tib, VTIB_EFLAGS) &= ~1u;          /* default CF=0 (success) */
                         switch (ax) {
                         case 0x0400:                               /* get DPMI version */
-                            VDM_SET16(tib, VTIB_EAX, 0x005A);      /* 0.90 (AH=0,AL=90) */
-                            VDM_SET16(tib, VTIB_EBX, 0x0001);      /* flags: 32-bit? no -> 16-bit host */
+                            VDM_SET16(tib, VTIB_EAX, 0x005A);      /* 0.90 */
+                            VDM_SET16(tib, VTIB_EBX, 0x0001);
                             VDM_SET16(tib, VTIB_ECX, 0x0003);      /* CL=3 (80386) */
-                            VDM_SET16(tib, VTIB_EDX, 0x0870);      /* DH/DL PIC bases */
+                            VDM_SET16(tib, VTIB_EDX, 0x0870);
                             p = zput(p, " -> ver 0.90");
                             break;
                         case 0x0000:                               /* allocate LDT descriptors */
-                            VDM_SET16(tib, VTIB_EAX, 0x001F);      /* base selector (spike stub) */
+                            VDM_SET16(tib, VTIB_EAX, 0x001F);      /* base selector (stub) */
                             p = zput(p, " -> sel 0x1F");
                             break;
                         default:
@@ -1430,24 +1445,30 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                             break;
                         }
                         p = zput(p, "\r\n"); log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
-                        VDM_REG(tib, VTIB_EIP) += 3;               /* past C4 C4 31 -> resume client */
+                        VDM_REG(tib, VTIB_EIP) += 2;               /* past the 2-byte INT */
                         continue;
                     }
-                    if (ev == 4 && info == 0x4C) {                 /* DPMI client exit */
-                        DWORD r1 = *(volatile WORD *)(ULONG_PTR)0x1600;
-                        DWORD r2 = *(volatile WORD *)(ULONG_PTR)0x1602;
-                        p = zput(p, "DPMI: client EXIT after "); p = zhex(p, steps);
-                        p = zput(p, " calls. results@0x1600=0x"); p = zhex(p, r1);
-                        p = zput(p, " @0x1602=0x"); p = zhex(p, r2);
-                        p = zput(p, (r1 == 0x005A && r2 == 0x001F)
-                                    ? "  <<< DPMI ROUND-TRIP OK >>>\r\n" : "\r\n");
+                    if (vec == 0x21) {                             /* DOS INT 21h (in PM) */
+                        DWORD ah = (ax >> 8) & 0xFF;
+                        if (ah == 0x4C) {                          /* terminate */
+                            DWORD r1 = *(volatile WORD *)(ULONG_PTR)0x1600;
+                            DWORD r2 = *(volatile WORD *)(ULONG_PTR)0x1602;
+                            p = zput(p, "INT21h AH=4Ch -> client EXIT after "); p = zhex(p, steps);
+                            p = zput(p, " svc. @0x1600=0x"); p = zhex(p, r1);
+                            p = zput(p, " @0x1602=0x"); p = zhex(p, r2);
+                            p = zput(p, (r1 == 0x005A && r2 == 0x001F)
+                                        ? "  <<< DPMI ROUND-TRIP OK (unmodified client) >>>\r\n" : "\r\n");
+                            log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                            break;
+                        }
+                        p = zput(p, "INT21h AH=0x"); p = zhex(p, ah); p = zput(p, " (PM thunk TODO)\r\n");
                         log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
-                        break;
+                        VDM_REG(tib, VTIB_EIP) += 2;
+                        continue;
                     }
                     p = zput(p, "DPMI: unexpected PM stop event=0x"); p = zhex(p, ev);
-                    p = zput(p, " info=0x"); p = zhex(p, info);
                     p = zput(p, " CS:EIP=0x"); p = zhex(p, VDM_REG(tib, VTIB_CS) & 0xFFFF);
-                    p = zput(p, ":0x"); p = zhex(p, VDM_REG(tib, VTIB_EIP) & 0xFFFF); p = zput(p, "\r\n");
+                    p = zput(p, ":0x"); p = zhex(p, eip); p = zput(p, "\r\n");
                     log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
                     break;
                 }

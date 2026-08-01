@@ -33,21 +33,21 @@ start:
     xor ax, ax
     call far [entry]
 
-    ; --- 4. we are now in PROTECTED MODE (run 35) ------------------------
-    ; DPMI service calls via the proven PM-BOP primitive (run 32): `C4 C4 31` reflects
-    ; to the host loop, which services function AX and returns values in the registers,
-    ; then resumes us in PM past the 3-byte BOP. Results are stored to DS:0x600 so the
-    ; host can read them back and confirm a real DPMI round-trip.
+    ; --- 4. we are now in PROTECTED MODE (run 36) ------------------------
+    ; A REAL, UNMODIFIED DPMI client: plain INT 31h / INT 21h. The host patches each
+    ; `CD nn` -> `C4 C4` in this PM code at mode-switch (same 2 bytes), so they reflect as
+    ; BOPs (run 32) and the host dispatches by the recorded original vector.
     mov ax, 0x0400             ; DPMI: get version
-    db 0xC4, 0xC4, 0x31        ; -> host: AX=version (0x005A), CF=0
+    int 0x31                   ; -> host: AX=version (0x005A), CF=0
     mov [0x600], ax            ; store version @ DS:0x600 (linear 0x1600)
     mov ax, 0x0000             ; DPMI: allocate LDT descriptors
     mov cx, 0x0001             ; CX = 1
-    db 0xC4, 0xC4, 0x31        ; -> host: AX=base selector, CF=0
+    int 0x31                   ; -> host: AX=base selector, CF=0
     mov [0x602], ax            ; store selector @ DS:0x602 (linear 0x1602)
-    db 0xC4, 0xC4, 0x4C        ; DPMI "client exit" BOP -> host stops the PM loop
+    mov ax, 0x4C00             ; terminate, exit code 0
+    int 0x21                   ; -> host: DOS AH=4Ch -> stop the PM loop
 .pmspin:
-    jmp .pmspin                ; EB FE (only if the exit BOP didn't stop us)
+    jmp .pmspin                ; EB FE (only if exit didn't stop us)
 
 .switchfail:
     mov dx, msg_fail
