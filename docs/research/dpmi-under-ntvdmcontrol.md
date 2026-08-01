@@ -705,6 +705,37 @@ reads the PM-interrupt reflection target and point it at a real flat host handle
 service e.g. `AX=0000` alloc-descriptor via svc 10, return selector, resume) and VM-confirm a real
 DPMI round-trip.
 
+### VM run 27 (2026-08-01) — CORRECTION: the guest does NOT execute under VdmStartExecution (runs 25–26 retracted) `[FACT, real CPU]`
+
+Added a sentinel: the guest's FIRST PM instruction is `mov word [0x600],0xBEEF` /
+`mov word [0x602],0xCAFE` (writes to DS:0x600 = linear 0x1600), and the VEH dumps linear 0x1600.
+Result:
+
+```
+DPMI INT31h #1: AX=0x0 ... [site EDX=0x125 EIP=0x127 b@site=c7 06 00 06] sentinel@0x1600=00 00 00 00
+```
+
+- `b@site` (at `EDX`) = `c7 06 00 06` = the guest's first instruction (`mov word [0x600],..`), so
+  **`EDX` = the PM ENTRY point, not an int-site**.
+- **`sentinel@0x1600 = 00 00 00 00` — the guest's first instruction did NOT execute.**
+- `EIP` = entry+2, a FIXED advance independent of instruction length (a 6-byte `mov`).
+
+**⇒ Under `VdmStartExecution` the PM guest never runs.** Feeding the V86 monitor a PM (VM-clear,
+LDT-CS) CONTEXT produces a deterministic, code-independent fault (`CS→flat 0x1B`, `EIP=entry+2`,
+`EDX=entry`) that surfaces to the VEH — but it is NOT `INT 31h` reflection and NOT PM execution.
+**Runs 25–26's "PM INT 31h interception works" is RETRACTED.** (run 6 stands: `VdmStartExecution`
+does not run PM.) The one real gain from B: `VdmStartExecution` + a PM context *does* deliver a
+fault to the user-mode VEH (vs. `dpmi_enter_pm`'s silent terminate) — a kernel-delivery clue, but
+not a working path.
+
+**Open, now-critical question:** has the guest EVER executed a PM instruction on the real CPU?
+Neither `dpmi_enter_pm` (silent terminate) nor `VdmStartExecution` (no run) is sentinel-confirmed.
+**Next:** revert the switch to `dpmi_enter_pm` (the real ntvdm far-jmp) WITH the sentinel guest, and
+capture linear 0x1600 from a concurrent reader (the watchdog thread) before/at the terminate — to
+prove whether the far-jmp executes PM code at all. If yes → PM runs, the blocker is purely the
+fault reflection (back to plan A: KiTrap0D). If no → PM entry itself never lands, and the switch
+CONTEXT/LDT needs rework before anything else.
+
 ## Open unknowns (what the spike must nail down) `[VERIFY]`
 
 1. **The mode-switch primitive.** Exactly how ntvdm flips the VDM from V86→PM after the client

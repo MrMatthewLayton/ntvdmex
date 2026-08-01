@@ -77,6 +77,7 @@ static HWND         g_hwnd;
 static HANDLE       g_key_event;            /* signalled when a key is pushed     */
 static volatile LONG g_running = 1;         /* 0 once the window is closed         */
 static int g_dpmi_pm = 0;                   /* set once the guest is switched to PM (spike) */
+static DWORD g_dpmi_code_base = 0;          /* linear base of the guest PM code seg (retcs<<4) */
 static volatile BYTE *g_tib_dbg = 0;        /* VDM_TIB, for the crash VEH to dump guest state */
 
 /* Serial debug sink (DPMI harness): COM1 is captured by QEMU (-serial file:vm/serial.log)
@@ -884,43 +885,67 @@ static LONG CALLBACK dpmi_crash_veh(EXCEPTION_POINTERS *ep)
     static char cb[1024]; char *p = cb;
     EXCEPTION_RECORD *er = ep->ExceptionRecord;
     CONTEXT *cx = ep->ContextRecord;
-    if (!g_dpmi_pm) return EXCEPTION_CONTINUE_SEARCH;   /* only diagnose PM faults */
+    if (!g_dpmi_pm) return EXCEPTION_CONTINUE_SEARCH;   /* only handle PM events */
+
+    /* --- Reflected PM software interrupt = the DPMI INT 31h dispatch (run 26) ---------
+       Under VdmStartExecution the kernel reflects a PM INT nn by advancing EIP past it and
+       reloading FLAT CS/SS (0x1B/0x23), leaving the int OFFSET in EDX and the guest's other
+       regs intact. So: CS flat + in PM => a reflected guest INT. Read the vector from the
+       instruction bytes at [code_base+EDX] (the guest issues only INT 31h), SERVICE it as a
+       DPMI call (returns in the CONTEXT, CF in EFlags), restore the LDT CS/SS, and resume the
+       guest past the INT. The VEH IS the protected-mode DPMI handler, on the real CPU. */
+    if (cx->SegCs == 0x1B && s_veh_count < 256) {
+        DWORD site = g_dpmi_code_base + (cx->Edx & 0xFFFF);
+        const BYTE *ib = (const BYTE *)(ULONG_PTR)site;
+        DWORD func = cx->Eax & 0xFFFF;
+        BYTE  vec  = (ib[0] == 0xCD) ? ib[1] : 0x31;    /* CD nn -> vector; default 31h    */
+        ++s_veh_count;
+        p = zput(p, "DPMI INT"); p = zhex(p, vec); p = zput(p, "h #"); p = zhex(p, (unsigned)s_veh_count);
+        p = zput(p, ": AX=0x"); p = zhex(p, func);
+        p = zput(p, " BX=0x"); p = zhex(p, cx->Ebx & 0xFFFF);
+        p = zput(p, " CX=0x"); p = zhex(p, cx->Ecx & 0xFFFF);
+        p = zput(p, " [site EDX=0x"); p = zhex(p, cx->Edx & 0xFFFF);
+        p = zput(p, " EIP=0x"); p = zhex(p, cx->Eip);
+        p = zput(p, " b@site="); p = zdump(p, ib, 4); p = zput(p, "]");
+        { const BYTE *sent = (const BYTE *)(ULONG_PTR)0x1600;   /* guest sentinel DS:0x600 */
+          p = zput(p, " sentinel@0x1600="); p = zdump(p, sent, 4); }
+        cx->EFlags &= ~1u;                              /* default: CF=0 (success)          */
+        switch (func) {
+        case 0x0400:                                    /* get DPMI version                 */
+            cx->Eax = (cx->Eax & 0xFFFF0000) | 0x005A;  /* AH=0 major, AL=0x5A (90) minor    */
+            cx->Ebx = (cx->Ebx & 0xFFFF0000) | 0x0000;  /* BX flags: 16-bit host             */
+            cx->Ecx = (cx->Ecx & 0xFFFF0000) | 0x0003;  /* CL=3 (80386)                      */
+            cx->Edx = (cx->Edx & 0xFFFF0000) | 0x7008;  /* DH=slave 0x70, DL=master 0x08 PIC  */
+            p = zput(p, " -> DPMI 0.90 (386)");
+            break;
+        case 0x0000:                                    /* allocate LDT descriptors (CX=count) */
+            cx->Eax = (cx->Eax & 0xFFFF0000) | 0x001F;  /* base selector 0x1F (spike stub)    */
+            p = zput(p, " -> alloc base sel 0x1F");
+            break;
+        default:
+            cx->EFlags |= 1u;                           /* CF=1: unsupported function        */
+            p = zput(p, " -> UNSUPPORTED (CF=1)");
+            break;
+        }
+        p = zput(p, "\r\n");
+        log_append(LOG_PATH, cb, p); serial_out(cb, p);
+        cx->SegCs = 0x0F; cx->SegSs = 0x17;             /* restore the guest's LDT selectors  */
+        return EXCEPTION_CONTINUE_EXECUTION;            /* resume the guest past the INT      */
+    }
+
+    /* --- genuine (non-reflected) PM fault: full dump + clean exit -------------------- */
     p = zput(p, "\r\nDPMI FATAL: exception code=0x"); p = zhex(p, er->ExceptionCode);
     p = zput(p, " at 0x"); p = zhex(p, (unsigned)(ULONG_PTR)er->ExceptionAddress);
-    if (er->NumberParameters >= 2) {
-        p = zput(p, " acc="); p = zhex(p, (unsigned)er->ExceptionInformation[0]);
-        p = zput(p, " fault-addr=0x"); p = zhex(p, (unsigned)er->ExceptionInformation[1]);
-    }
-    /* ContextRecord is the LIVE fault state (the in-process PM guest at the fault). */
     p = zput(p, "\r\n  CS:EIP=0x"); p = zhex(p, cx->SegCs); p = zput(p, ":0x"); p = zhex(p, cx->Eip);
     p = zput(p, " SS:ESP=0x"); p = zhex(p, cx->SegSs); p = zput(p, ":0x"); p = zhex(p, cx->Esp);
     p = zput(p, " EFL=0x"); p = zhex(p, cx->EFlags); p = zput(p, "\r\n");
     p = zput(p, "  DS=0x"); p = zhex(p, cx->SegDs); p = zput(p, " ES=0x"); p = zhex(p, cx->SegEs);
     p = zput(p, " FS=0x"); p = zhex(p, cx->SegFs); p = zput(p, " GS=0x"); p = zhex(p, cx->SegGs);
-    p = zput(p, "\r\n");
-    p = zput(p, "  EAX=0x"); p = zhex(p, cx->Eax); p = zput(p, " EBX=0x"); p = zhex(p, cx->Ebx);
+    p = zput(p, "\r\n  EAX=0x"); p = zhex(p, cx->Eax); p = zput(p, " EBX=0x"); p = zhex(p, cx->Ebx);
     p = zput(p, " ECX=0x"); p = zhex(p, cx->Ecx); p = zput(p, " EDX=0x"); p = zhex(p, cx->Edx);
-    p = zput(p, "\r\n  ESI=0x"); p = zhex(p, cx->Esi); p = zput(p, " EDI=0x"); p = zhex(p, cx->Edi);
-    p = zput(p, " EBP=0x"); p = zhex(p, cx->Ebp); p = zput(p, "\r\n");
-    /* Faulting bytes (CS flat base 0 -> linear = EIP), and the guest's real INT 31h
-       site at linear 0x1125 = (PSP_SEG 0x100 << 4) + 0x125, to compare. */
+    p = zput(p, "\r\n");
     { const BYTE *fb = (const BYTE *)(ULONG_PTR)(er->ExceptionAddress);
       p = zput(p, "  bytes@fault: "); p = zdump(p, fb, 16); }
-    { const BYTE *gb = (const BYTE *)(ULONG_PTR)0x1125;
-      p = zput(p, "  bytes@guest-int31h(0x1125): "); p = zdump(p, gb, 16); }
-    /* EXPERIMENT (run 25): the kernel reflected the PM INT 31h -- it advanced EIP past
-       the INT and set FLAT CS/SS (0x1B/0x23) for a handler, but should have kept our LDT
-       CS (0x0F). Fix CS/SS back to the guest's LDT selectors and resume: if the guest
-       then runs clean (spins at jmp $, no repeat fault), the reflect CONSUMED the INT and
-       only CS/SS were mangled -- the DPMI INT-service hook is then the VEH itself. */
-    ++s_veh_count;
-    if (s_veh_count <= 4 && cx->SegCs == 0x1B) {
-        cx->SegCs = 0x0F; cx->SegSs = 0x17;            /* DPMI_SEL(1)=code, (2)=data */
-        p = zput(p, "  VEH: fixed CS/SS -> LDT (0x0F/0x17), resume @0x0F:0x"); p = zhex(p, cx->Eip);
-        p = zput(p, " [try "); p = zhex(p, (unsigned)s_veh_count); p = zput(p, "]\r\n");
-        log_append(LOG_PATH, cb, p); serial_out(cb, p);
-        return EXCEPTION_CONTINUE_EXECUTION;           /* resume the guest in PM */
-    }
     log_append(LOG_PATH, cb, p);
     serial_out(cb, p);
     ExitProcess(0xDE0);                                 /* clean exit; batch dumps the log */
@@ -977,7 +1002,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     (void)hInst; (void)hPrev; (void)lpCmd; (void)nShow;
     progpath[0] = 0; args[0] = 0;
 
-    p = zput(p, "NTVDMEX clean host\r\nSTAGE0: WinMain entered [build dpmi-harness-v10]\r\n");
+    p = zput(p, "NTVDMEX clean host\r\nSTAGE0: WinMain entered [build dpmi-harness-v13]\r\n");
     log_write(LOG_PATH, report, p);
     serial_init();                                      /* DPMI harness: COM1 log sink */
     serial_out(report, p);
@@ -1355,6 +1380,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             p = zput(p, " chi=0x"); p = zhex(p, g_dpmi_dbg[3]);
             if (sw == 0) {
                 g_dpmi_pm = 1;
+                g_dpmi_code_base = g_dpmi_dbg[0] << 4;   /* retcs<<4 = guest PM code linear base */
                 p = zput(p, " -> PM ok (VM cleared, CS=0x");
                 p = zhex(p, VDM_REG(tib, VTIB_CS) & 0xFFFF);
                 p = zput(p, " EIP=0x"); p = zhex(p, VDM_REG(tib, VTIB_EIP) & 0xFFFF);

@@ -33,16 +33,23 @@ start:
     xor ax, ax
     call far [entry]
 
-    ; --- 4. we are now in PROTECTED MODE ---------------------------------
-    ; EXPERIMENT (run 23): the switch now installs a VALID based LDT (svc10/11=0) and
-    ; we enter PM via the monitor far-jmp (dpmi_enter_pm), which saves the host CONTEXT
-    ; so the KERNEL can reflect a PM event back to the host loop. Software INT 31h (CD 31)
-    ; goes through the kernel's INT-nn VDM path (KiVdmOpcodeINTnn: read IVT, vector) --
-    ; a DIFFERENT path than a raw #GP (HLT), so it may reflect where HLT terminated.
-    ; AX=0000 = DPMI "allocate LDT descriptor". Size-independent (decodes the same 16/32).
-    int 0x31                   ; CD 31 -- the DPMI service call the host must catch.
+    ; --- 4. we are now in PROTECTED MODE (run 26) ------------------------
+    ; TWO DPMI service calls to prove the INT 31h round-trip. Each INT 31h (CD 31) is
+    ; reflected by the kernel (VdmStartExecution) and serviced by the host VEH, which
+    ; returns values in the registers and resumes us in PM past the INT. Reaching the
+    ; second call proves the first resumed cleanly.
+    ; SENTINEL: prove whether ANY PM instruction executes. Write two marker words to
+    ; DS:0x600 (linear 0x1600, DS base 0x1000). The host VEH dumps linear 0x1600 -- if it
+    ; reads BEEF CAFE, PM code genuinely ran; if 0000, the guest never executed.
+    mov word [0x600], 0xBEEF
+    mov word [0x602], 0xCAFE
+    mov ax, 0x0400             ; DPMI: get version
+    int 0x31                   ; -> host returns AX=version, CF=0
+    mov ax, 0x0000             ; DPMI: allocate LDT descriptors
+    mov cx, 0x0001             ; CX = 1 descriptor
+    int 0x31                   ; -> host returns AX=base selector, CF=0
 .pmspin:
-    jmp .pmspin                ; EB FE
+    jmp .pmspin                ; EB FE (spin; watchdog stops it)
 
 .switchfail:
     mov dx, msg_fail
