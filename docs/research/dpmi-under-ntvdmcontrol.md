@@ -973,6 +973,14 @@ the `+0x634` block), rather than cherry-picking fields. What remains solid and o
 executes (28) and a PM BOP round-trips to the host (32); those give the harness to validate the full
 init once replicated.
 
+
+**Elimination (kernel RE):** the selector resolver `0x45dd5f` (used by all reflect resolves)
+requires `(sel & 7)==7` (LDT, RPL3) and a valid process LDT. But the run-32 PM BOP went through
+this SAME resolver (`0x565041` resolves CS to read the opcode) and SUCCEEDED — so **our selectors
+resolve fine; the resolve is not the failure.** The `INT 31h` reflect fails specifically in the
+exception-handler setup inside `0x4f6f67`, which needs ntvdm's registered DPMI PM exception handler.
+This confirms the run-34 pivot: replicate ntvdm's full DPMI-init, don't patch `+0x634` fields.
+
 ## Open unknowns (what the spike must nail down) `[VERIFY]`
 
 1. **The mode-switch primitive.** Exactly how ntvdm flips the VDM from V86→PM after the client
