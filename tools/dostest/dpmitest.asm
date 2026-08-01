@@ -38,19 +38,28 @@ start:
     ; `CD nn` -> `C4 C4` in this PM code at mode-switch (same 2 bytes), so they reflect as
     ; BOPs (run 32) and the host dispatches by the recorded original vector.
     mov ax, 0x0400             ; DPMI: get version
-    int 0x31                   ; -> host: AX=version (0x005A), CF=0
-    mov [0x600], ax            ; store version @ DS:0x600 (linear 0x1600)
-    mov ax, 0x0000             ; DPMI: allocate LDT descriptors
-    mov cx, 0x0001             ; CX = 1
-    int 0x31                   ; -> host: AX=base selector, CF=0
-    mov [0x602], ax            ; store selector @ DS:0x602 (linear 0x1602)
+    int 0x31                   ; -> AX=version (0x005A)
+    mov [0x600], ax
+    mov ax, 0x0000             ; DPMI: allocate 1 LDT descriptor
+    mov cx, 0x0001
+    int 0x31                   ; -> AX = new selector
+    mov [0x604], ax            ; store the selector
+    mov bx, ax                 ; BX = selector for the next calls
+    mov ax, 0x0007             ; DPMI: set segment base of BX = CX:DX
+    mov cx, 0x0001
+    mov dx, 0x2345             ; base := 0x00012345
+    int 0x31
+    mov ax, 0x0006             ; DPMI: get segment base of BX -> CX:DX
+    int 0x31
+    mov [0x606], cx            ; base high  (expect 0x0001)
+    mov [0x608], dx            ; base low   (expect 0x2345)
     mov dx, .pmsg              ; DS:DX -> the $-terminated message
     mov ah, 0x09               ; DOS print string
-    int 0x21                   ; -> host prints it (proves DOS output from PM)
-    mov ax, 0x4C00             ; terminate, exit code 0
-    int 0x21                   ; -> host: DOS AH=4Ch -> stop the PM loop
+    int 0x21                   ; -> host prints it (DOS output from PM)
+    mov ax, 0x4C00             ; terminate
+    int 0x21                   ; -> host stops the PM loop
 .pmspin:
-    jmp .pmspin                ; EB FE (only if exit didn't stop us)
+    jmp .pmspin
 .pmsg:  db 'Hello from PROTECTED MODE via DPMI on the real CPU!', 13, 10, '$'
 
 .switchfail:

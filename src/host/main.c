@@ -79,6 +79,11 @@ static volatile LONG g_running = 1;         /* 0 once the window is closed      
 static int g_dpmi_pm = 0;                   /* set once the guest is switched to PM (spike) */
 static DWORD g_dpmi_code_base = 0;          /* linear base of the guest PM code seg (retcs<<4) */
 static BYTE  g_int_vec[0x10000];            /* per-CS-offset: original INT vector we patched to a BOP */
+/* DPMI LDT descriptor allocator. Indices 0=null,1=code(0x0F),2=data(0x17) are the
+   switch's; DPMI clients allocate from 3+. We keep base/limit/access so INT 31h
+   06/07/08/09 can get/modify them and reinstall via svc 10 (NtSetLdtEntries). */
+static struct dpmi_desc { DWORD base, limit; BYTE access, flags; } g_ldt[512];
+static int   g_ldt_next = 3;
 static volatile BYTE *g_tib_dbg = 0;        /* VDM_TIB, for the crash VEH to dump guest state */
 
 /* Serial debug sink (DPMI harness): COM1 is captured by QEMU (-serial file:vm/serial.log)
@@ -979,6 +984,24 @@ static DWORD WINAPI dpmi_watchdog(LPVOID param)
     return 0;
 }
 
+/* (Re)build g_ldt[idx]'s descriptor and install it in the process LDT via svc 10. */
+static void dpmi_install(int idx)
+{
+    DWORD lo, hi, lim = g_ldt[idx].limit; BYTE fl = g_ldt[idx].flags;
+    WORD sel = (WORD)((idx << 3) | 7);
+    if (lim > 0xFFFFF) { lim >>= 12; fl = (BYTE)(fl | 0x8); }   /* >1MB -> page granular */
+    dpmi_build_desc(g_ldt[idx].base, lim & 0xFFFFF, g_ldt[idx].access, fl, &lo, &hi);
+    v86_set_ldt_entries(sel, lo, hi, sel, lo, hi);             /* idempotent single-entry */
+}
+
+/* Linear base of a selector, for INT 21h pointer thunks. */
+static DWORD dpmi_sel_base(WORD sel)
+{
+    int idx = (sel & 0xFFFF) >> 3;
+    if (idx >= 3 && idx < 512) return g_ldt[idx].base;
+    return g_dpmi_code_base;                                    /* 0x0F/0x17 = the .COM segment */
+}
+
 int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
 {
     char report[8192]; char *p = report; char *base;
@@ -1010,7 +1033,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     (void)hInst; (void)hPrev; (void)lpCmd; (void)nShow;
     progpath[0] = 0; args[0] = 0;
 
-    p = zput(p, "NTVDMEX clean host\r\nSTAGE0: WinMain entered [build dpmi-harness-v27]\r\n");
+    p = zput(p, "NTVDMEX clean host\r\nSTAGE0: WinMain entered [build dpmi-harness-v28]\r\n");
     log_write(LOG_PATH, report, p);
     serial_init();                                      /* DPMI harness: COM1 log sink */
     serial_out(report, p);
@@ -1435,10 +1458,53 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                             VDM_SET16(tib, VTIB_EDX, 0x0870);
                             p = zput(p, " -> ver 0.90");
                             break;
-                        case 0x0000:                               /* allocate LDT descriptors */
-                            VDM_SET16(tib, VTIB_EAX, 0x001F);      /* base selector (stub) */
-                            p = zput(p, " -> sel 0x1F");
+                        case 0x0000: {                             /* allocate CX descriptors */
+                            DWORD cx = VDM_REG(tib, VTIB_ECX) & 0xFFFF, i; WORD basesel;
+                            if (cx == 0) cx = 1;
+                            if (g_ldt_next + (int)cx > 512) {      /* out of descriptors */
+                                VDM_REG(tib, VTIB_EFLAGS) |= 1u; VDM_SET16(tib, VTIB_EAX, 0x8011);
+                                p = zput(p, " -> ENOMEM"); break;
+                            }
+                            basesel = (WORD)((g_ldt_next << 3) | 7);
+                            for (i = 0; i < cx; ++i) {
+                                int idx = g_ldt_next++;
+                                g_ldt[idx].base = 0; g_ldt[idx].limit = 0;
+                                g_ldt[idx].access = 0xF2; g_ldt[idx].flags = 0;  /* data, RPL3 */
+                                dpmi_install(idx);
+                            }
+                            VDM_SET16(tib, VTIB_EAX, basesel);
+                            p = zput(p, " -> sel 0x"); p = zhex(p, basesel);
+                            break; }
+                        case 0x0001:                               /* free descriptor BX (no-op reclaim) */
+                            p = zput(p, " -> free");
                             break;
+                        case 0x0006: {                             /* get base of sel BX -> CX:DX */
+                            int idx = (VDM_REG(tib, VTIB_EBX) & 0xFFFF) >> 3;
+                            DWORD b = (idx >= 3 && idx < 512) ? g_ldt[idx].base : dpmi_sel_base((WORD)(VDM_REG(tib, VTIB_EBX)));
+                            VDM_SET16(tib, VTIB_ECX, b >> 16); VDM_SET16(tib, VTIB_EDX, b & 0xFFFF);
+                            p = zput(p, " -> base 0x"); p = zhex(p, b);
+                            break; }
+                        case 0x0007: {                             /* set base of sel BX = CX:DX */
+                            int idx = (VDM_REG(tib, VTIB_EBX) & 0xFFFF) >> 3;
+                            DWORD b = ((VDM_REG(tib, VTIB_ECX) & 0xFFFF) << 16) | (VDM_REG(tib, VTIB_EDX) & 0xFFFF);
+                            if (idx >= 3 && idx < 512) { g_ldt[idx].base = b; dpmi_install(idx); }
+                            p = zput(p, " -> setbase 0x"); p = zhex(p, b);
+                            break; }
+                        case 0x0008: {                             /* set limit of sel BX = CX:DX */
+                            int idx = (VDM_REG(tib, VTIB_EBX) & 0xFFFF) >> 3;
+                            DWORD l = ((VDM_REG(tib, VTIB_ECX) & 0xFFFF) << 16) | (VDM_REG(tib, VTIB_EDX) & 0xFFFF);
+                            if (idx >= 3 && idx < 512) { g_ldt[idx].limit = l; dpmi_install(idx); }
+                            p = zput(p, " -> setlimit 0x"); p = zhex(p, l);
+                            break; }
+                        case 0x0009: {                             /* set access rights of sel BX (CL) */
+                            int idx = (VDM_REG(tib, VTIB_EBX) & 0xFFFF) >> 3;
+                            if (idx >= 3 && idx < 512) {
+                                g_ldt[idx].access = VDM_REG(tib, VTIB_ECX) & 0xFF;
+                                g_ldt[idx].flags  = (VDM_REG(tib, VTIB_ECX) >> 8) & 0xF;  /* CH high nibble */
+                                dpmi_install(idx);
+                            }
+                            p = zput(p, " -> setaccess");
+                            break; }
                         default:
                             VDM_REG(tib, VTIB_EFLAGS) |= 1u;       /* CF=1: unsupported */
                             p = zput(p, " -> UNSUP");
@@ -1451,21 +1517,26 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                     if (vec == 0x21) {                             /* DOS INT 21h (in PM) */
                         DWORD ah = (ax >> 8) & 0xFF;
                         if (ah == 0x4C) {                          /* terminate */
-                            DWORD r1 = *(volatile WORD *)(ULONG_PTR)0x1600;
-                            DWORD r2 = *(volatile WORD *)(ULONG_PTR)0x1602;
+                            DWORD ver  = *(volatile WORD *)(ULONG_PTR)0x1600;
+                            DWORD sel  = *(volatile WORD *)(ULONG_PTR)0x1604;
+                            DWORD bhi  = *(volatile WORD *)(ULONG_PTR)0x1606;
+                            DWORD blo  = *(volatile WORD *)(ULONG_PTR)0x1608;
+                            int ok = (ver == 0x005A) && (sel == 0x001F) && (bhi == 0x0001) && (blo == 0x2345);
                             p = zput(p, "INT21h AH=4Ch -> client EXIT after "); p = zhex(p, steps);
-                            p = zput(p, " svc. @0x1600=0x"); p = zhex(p, r1);
-                            p = zput(p, " @0x1602=0x"); p = zhex(p, r2);
-                            p = zput(p, (r1 == 0x005A && r2 == 0x001F)
-                                        ? "  <<< DPMI ROUND-TRIP OK (unmodified client) >>>\r\n" : "\r\n");
+                            p = zput(p, " svc. ver=0x"); p = zhex(p, ver);
+                            p = zput(p, " sel=0x"); p = zhex(p, sel);
+                            p = zput(p, " getbase=0x"); p = zhex(p, bhi); p = zput(p, ":0x"); p = zhex(p, blo);
+                            p = zput(p, ok ? "  <<< DPMI OK: version + descriptor set/get-base round-trip >>>\r\n"
+                                           : "\r\n");
                             log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
                             break;
                         }
                         if (ah == 0x09) {                          /* print $-string DS:DX */
-                            /* DS is the client's data selector; its base == data_base == the
-                               .COM segment (g_dpmi_code_base). Read the string linearly. */
+                            /* Resolve DS's linear base from the LDT so a client can print
+                               through a descriptor it allocated + based itself. */
+                            DWORD dsb = dpmi_sel_base((WORD)VDM_REG(tib, VTIB_DS));
                             const volatile BYTE *s = (const volatile BYTE *)(ULONG_PTR)
-                                (g_dpmi_code_base + (VDM_REG(tib, VTIB_EDX) & 0xFFFF));
+                                (dsb + (VDM_REG(tib, VTIB_EDX) & 0xFFFF));
                             char ob[256]; char *op = ob; int k;
                             op = zput(op, "INT21h AH=09 print: \"");
                             for (k = 0; k < 200 && *s != '$'; ++k, ++s) {
