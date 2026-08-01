@@ -78,6 +78,31 @@ static HANDLE       g_key_event;            /* signalled when a key is pushed   
 static volatile LONG g_running = 1;         /* 0 once the window is closed         */
 static int g_dpmi_pm = 0;                   /* set once the guest is switched to PM (spike) */
 static volatile BYTE *g_tib_dbg = 0;        /* VDM_TIB, for the crash VEH to dump guest state */
+
+/* Serial debug sink (DPMI harness): COM1 is captured by QEMU (-serial file:vm/serial.log)
+   so the host reads the log directly -- no GUI screendump, no stale-host ambiguity. */
+static HANDLE g_serial = INVALID_HANDLE_VALUE;
+static void serial_init(void)
+{
+    DCB dcb;
+    g_serial = CreateFileA("\\\\.\\COM1", GENERIC_WRITE, 0, NULL, OPEN_EXISTING, 0, NULL);
+    if (g_serial == INVALID_HANDLE_VALUE) return;
+    { unsigned i; char *q = (char *)&dcb; for (i = 0; i < sizeof dcb; ++i) q[i] = 0; }
+    dcb.DCBlength = sizeof dcb;
+    if (GetCommState(g_serial, &dcb)) {
+        dcb.BaudRate = 115200; dcb.ByteSize = 8; dcb.Parity = 0; dcb.StopBits = 0;
+        SetCommState(g_serial, &dcb);
+    }
+}
+/* Write [buf..end) to COM1 (and it's already in the file log via log_*). */
+static void serial_out(const char *buf, const char *end)
+{
+    DWORD wrote;
+    if (g_serial != INVALID_HANDLE_VALUE && end > buf) {
+        WriteFile(g_serial, buf, (DWORD)(end - buf), &wrote, NULL);
+        FlushFileBuffers(g_serial);
+    }
+}
 static HMENU        g_savedmenu;            /* stashed menu while hidden           */
 
 static void host_irq_sink(void *ctx, uint8_t irq) { (void)ctx; if (irq == 0) g_irq0_pending = 1; }
@@ -877,6 +902,7 @@ static LONG CALLBACK dpmi_crash_veh(EXCEPTION_POINTERS *ep)
     p = zput(p, " BX=0x"); p = zhex(p, cx->Ebx & 0xFFFF);
     p = zput(p, " DS=0x"); p = zhex(p, cx->SegDs); p = zput(p, "\r\n");
     log_append(LOG_PATH, cb, p);
+    serial_out(cb, p);
     ExitProcess(0xDE0);                                 /* clean exit; batch dumps the log */
     return EXCEPTION_CONTINUE_SEARCH;                   /* not reached */
 }
@@ -887,10 +913,13 @@ static LONG CALLBACK dpmi_crash_veh(EXCEPTION_POINTERS *ep)
 static DWORD WINAPI dpmi_watchdog(LPVOID param)
 {
     static char wb[256]; char *q = wb; (void)param;
+    q = zput(q, "STAGE3-DPMI: watchdog thread started (3s to spin-terminate)\r\n");
+    serial_out(wb, q); q = wb;
     Sleep(3000);
     q = zput(q, "STAGE3-DPMI: watchdog -- PM guest ran ~3s with NO fault delivered to the "
                 "VEH and no exit (kernel skip+resume / spin). Terminating.\r\n");
     log_append(LOG_PATH, wb, q);
+    serial_out(wb, q);
     /* TerminateProcess (forceful) -- ExitProcess hangs trying to unwind the PM engine
        thread (un-terminable LDT context). */
     TerminateProcess(GetCurrentProcess(), 0xDD0);
@@ -928,8 +957,10 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     (void)hInst; (void)hPrev; (void)lpCmd; (void)nShow;
     progpath[0] = 0; args[0] = 0;
 
-    p = zput(p, "NTVDMEX clean host\r\nSTAGE0: WinMain entered\r\n");
+    p = zput(p, "NTVDMEX clean host\r\nSTAGE0: WinMain entered [build dpmi-harness-v4]\r\n");
     log_write(LOG_PATH, report, p);
+    serial_init();                                      /* DPMI harness: COM1 log sink */
+    serial_out(report, p);
     AddVectoredExceptionHandler(1, dpmi_crash_veh);     /* DPMI spike crash diagnostic */
 
     /* CSRSS command-info: receive buffers + first-command state + IFEO task id. */
@@ -1248,8 +1279,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         }
         if ((VDM_REG(tib, VTIB_EVENT_INFO) & 0xFF) == 0x2F) {   /* INT 2Fh multiplex */
             DWORD ax = VDM_REG(tib, VTIB_EAX) & 0xFFFF;
-            p = zput(p, " BOP2F ax=0x"); p = zhex(p, ax); p = zput(p, "\r\n");
-            log_append(LOG_PATH, base, p); p = base;
+            p = zput(p, "STAGE2: BOP2F ax=0x"); p = zhex(p, ax); p = zput(p, "\r\n");
+            log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
             if (ax == 0x4300) {                                 /* XMS installation check */
                 VDM_SET16(tib, VTIB_EAX, (VDM_REG(tib, VTIB_EAX) & 0xFF00) | 0x80);  /* AL=80h installed */
             } else if (ax == 0x4310) {                          /* get XMS entry -> ES:BX */
@@ -1302,7 +1333,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                 p = zhex(p, VDM_REG(tib, VTIB_CS) & 0xFFFF);
                 p = zput(p, " EIP=0x"); p = zhex(p, VDM_REG(tib, VTIB_EIP) & 0xFFFF);
                 p = zput(p, ") -> running PM (NtContinue, flat CS)\r\n");
-                log_append(LOG_PATH, base, p); p = base;
+                log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
                 /* Watchdog so the run self-terminates whether the fault reaches the VEH,
                    kills the process, or the kernel skip+resumes it into a spin. */
                 { HANDLE wd = CreateThread(NULL, 0, dpmi_watchdog, NULL, 0, NULL);
@@ -1310,7 +1341,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                 dpmi_run_pm(tib);
                 /* Only reached if NtContinue failed to enter PM. */
                 p = zput(p, "STAGE3-DPMI: NtContinue returned (PM entry failed)\r\n");
-                log_append(LOG_PATH, base, p); p = base;
+                log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
                 break;
             }
             p = zput(p, " -> SWITCH FAILED (staying real mode, CF=1)\r\n");

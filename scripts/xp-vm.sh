@@ -75,6 +75,11 @@ build_args() {
 
         -display cocoa
 
+        # --- COM1 -> host file: the DPMI/test harness log sink. ntvdmhost writes its
+        #     log to \\.\COM1; QEMU appends the bytes to vm/serial.log so the host reads
+        #     the log directly (no GUI screendump, no stale-host ambiguity). ---------
+        -serial "file:$VM_DIR/serial.log"
+
         # --- host control socket: lets the host drive the VM (take snapshots via
         #     'savevm', hot-swap the transfer CD, send keys) without the GUI. ---
         -qmp "unix:$VM_DIR/qmp.sock,server=on,wait=off"
