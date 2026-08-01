@@ -417,6 +417,41 @@ iteration. **Protected-mode execution on the real CPU is proven and the entire u
 mechanism is mapped and built; the `INT 31h` service surface is blocked on this kernel
 behaviour.**
 
+### ReactOS/kernel research (2026-08-01) — the model was wrong: PM faults are USER-MODE exceptions, not VDM reflection `[FACT, ReactOS source]`
+
+Cross-referenced ReactOS's NT-kernel reimplementation (mirrors XP's VDM design). Three
+decisive findings:
+
+1. **The GP fault handler only VDM-reflects V86 faults.** `KiTrap0D`
+   (`ntoskrnl/ke/i386/traphdlr.c`) routes into VDM opcode emulation only when
+   `KiV86Trap(TrapFrame)` is true — and `KiV86Trap` is literally
+   `(EFlags & EFLAGS_V86_MASK) != 0`. A fault with **VM clear (protected mode)**, even in
+   a VDM process (`VdmObjects` set), **falls through to standard exception delivery**
+   (`KiDispatchException`) — it is *never* routed to `Ki386HandleOpcodeV86` /
+   `KiVdmOpcodeINTnn`. This exactly matches our runs 8–15: PM `INT 31h`/faults are not
+   reflected as `VTIB_EVENT`s because **the kernel doesn't do that for PM at all.**
+2. **So real ntvdm must catch PM faults via USER-MODE exception handling** (SEH/VEH) —
+   the normal exception path — not the V86 `VdmStartExecution` event mechanism. Our
+   pursuit of `VTIB_EVENT` reflection for PM was chasing a V86-only mechanism.
+3. **`MonitorContext` = `VDM_TIB+0x0C`** (the CONTEXT immediately before `VdmContext` at
+   `0x2D8`; `VdmSwapContext` swaps between `MonitorContext` and `VdmContext`). Our
+   host-save offset in `dpmi_enter_pm` was correct — but swap-back only happens for V86,
+   so it's moot for PM.
+
+**Corrected direction for the INT 31h surface (supersedes the "monitor PM-entry" plan):**
+run PM via our far-jmp / `NtContinue` (proven, correct base), and **catch the PM
+`INT 31h`/`#GP` with a user-mode handler** (VEH or a frame-based SEH). The real remaining
+problem is *why the PM `#GP` doesn't reach our VEH* — a **user-mode exception-delivery**
+issue for a 16-bit PM CS (D=0) context (runs 10/12/13 died with no VEH), NOT a kernel
+mystery. Leads to try: a frame-based `__try/__except` instead of a VEH; verify the
+exception actually reaches `KiUserExceptionDispatcher` (a 32-bit flat stack is in place
+since run 9); check whether `int 0x31` raises a deliverable `#GP` vs a silent kill;
+consider a **32-bit** PM client (flat CS, D=1) which real DOS/4GW-style extenders use and
+whose faults dispatch cleanly. Then decode the faulting `CD 31`, service the DPMI call in
+the handler, and resume via `NtContinue`. INT 31h service semantics (0000 alloc-descriptor,
+0300 simulate-real-mode-INT) to crib from ReactOS `subsystems/mvdm/ntvdm/dos/dem.c` +
+the DPMI 0.9 spec when wiring the surface.
+
 ## Open unknowns (what the spike must nail down) `[VERIFY]`
 
 1. **The mode-switch primitive.** Exactly how ntvdm flips the VDM from V86→PM after the client
