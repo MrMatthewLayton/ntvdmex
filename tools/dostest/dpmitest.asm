@@ -41,10 +41,13 @@ start:
     ; SENTINEL: prove whether ANY PM instruction executes. Write two marker words to
     ; DS:0x600 (linear 0x1600, DS base 0x1000). The host VEH dumps linear 0x1600 -- if it
     ; reads BEEF CAFE, PM code genuinely ran; if 0000, the guest never executed.
-    ; CS is a 32-bit base-0 selector now -> use ONLY size-independent opcodes.
-    int 0x31                   ; CD 31 -- the PM fault; does it reach our VEH now?
+    ; PROBE (run 32): execute a BOP directly in PM. The kernel's PM fault dispatcher
+    ; (0x565041) recognizes C4 C4 and reflects it as VTIB_EVENT=4 -> the monitor
+    ; (dpmi_enter_pm) should RETURN. If it does, PM->host via BOP works and the whole
+    ; "reflect INT 31h to a BOP stub" strategy is validated.
+    db 0xC4, 0xC4, 0x58        ; BOP 0x58 (C4 C4 58)
 .pmspin:
-    jmp .pmspin                ; EB FE (size-independent spin; watchdog stops it)
+    jmp .pmspin                ; EB FE (spin if the BOP didn't stop us; watchdog catches)
 
 .switchfail:
     mov dx, msg_fail

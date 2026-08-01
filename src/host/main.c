@@ -1009,7 +1009,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     (void)hInst; (void)hPrev; (void)lpCmd; (void)nShow;
     progpath[0] = 0; args[0] = 0;
 
-    p = zput(p, "NTVDMEX clean host\r\nSTAGE0: WinMain entered [build dpmi-harness-v19]\r\n");
+    p = zput(p, "NTVDMEX clean host\r\nSTAGE0: WinMain entered [build dpmi-harness-v21]\r\n");
     log_write(LOG_PATH, report, p);
     serial_init();                                      /* DPMI harness: COM1 log sink */
     serial_out(report, p);
@@ -1421,6 +1421,13 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                   p = zput(p, " [636]=0x"); p = zhex(p, *(volatile WORD *)(tib + 0x636));
                   p = zput(p, " [638]=0x"); p = zhex(p, *(volatile WORD *)(tib + 0x638));
                   p = zput(p, "\r\n"); log_append(LOG_PATH, base, p); serial_out(base, p); p = base; }
+                /* PROBE (run 32): the kernel resumes the reflected fault at CS=[+0x636]:EIP where
+                   the entry EIP field is unset -> 0. Predicted landing = 0x0F:0 = linear 0x1000.
+                   Plant a BOP (C4 C4 58) there: if the reflect fires, the BOP bounces to the
+                   monitor -> dpmi_enter_pm RETURNS with an event (proving the reflect works and
+                   pinning the landing). HLT guard after, in case of mis-decode. */
+                { volatile BYTE *stub = (volatile BYTE *)(ULONG_PTR)0x1000;
+                  stub[0] = 0xC4; stub[1] = 0xC4; stub[2] = 0x58; stub[3] = 0xF4; }
                 dpmi_enter_pm(tib);
                 p = zput(p, "STAGE3-DPMI: dpmi_enter_pm RETURNED event=0x");
                 p = zhex(p, VDM_REG(tib, VTIB_EVENT));
