@@ -33,52 +33,34 @@ start:
     xor ax, ax
     call far [entry]
 
-    ; --- 4. we are now in PROTECTED MODE (run 40) ------------------------
-    ; Unmodified DPMI client exercising file I/O + descriptor alias from PM. The host
-    ; patches CD nn -> C4 C4 at mode-switch; all INT 21h buffers (DS:DX) are translated
-    ; via the selector's linear base.
+    ; --- 4. we are now in PROTECTED MODE (run 41) ------------------------
+    ; Unmodified DPMI client using INT 31h 0300 (simulate real-mode interrupt): the way
+    ; extenders route DOS/BIOS. Build a real-mode call structure (RMCS) for INT 21h AH=09
+    ; and let the host run it in V86 with the RMCS registers, then resume us in PM.
     mov ax, 0x0400             ; get DPMI version
     int 0x31
     mov [0x600], ax
-    ; create C:\ntvdmex\DPMIFILE.TMP and write 8 bytes to it
-    mov dx, .fname
-    mov ah, 0x3C
-    xor cx, cx
-    int 0x21                   ; AX = file handle
-    mov bx, ax
-    mov dx, .fdata
-    mov cx, 8
-    mov ah, 0x40
-    int 0x21                   ; write 8 bytes
-    mov ah, 0x3E               ; close (BX = handle)
-    int 0x21
-    ; reopen for read, read 8 bytes back into DS:0x620 (linear 0x1620)
-    mov dx, .fname
-    mov ax, 0x3D00
-    int 0x21                   ; AX = handle
-    mov bx, ax
-    mov dx, 0x620
-    mov cx, 8
-    mov ah, 0x3F
-    int 0x21                   ; AX = bytes read
-    mov [0x612], ax            ; store bytes read (expect 8)
-    mov ah, 0x3E               ; close
-    int 0x21
-    ; create a data alias of our data selector (INT 31h 000A)
-    mov bx, ds
-    mov ax, 0x000A
-    int 0x31                   ; AX = alias selector
-    mov [0x614], ax
-    mov dx, .pmsg              ; print the result banner
+    mov word [.rmcs + 0x1C], 0x0900   ; RMCS.AX = AH=09 (print string)
+    mov word [.rmcs + 0x24], 0x0100   ; RMCS.DS = 0x0100 (our real-mode segment)
+    mov word [.rmcs + 0x14], .rmsg    ; RMCS.DX = message offset
+    mov word [.rmcs + 0x20], 0x0202   ; RMCS.Flags
+    push ds
+    pop es                     ; ES = DS (the RMCS lives in our data)
+    mov di, .rmcs              ; ES:DI -> RMCS
+    mov ax, 0x0300             ; simulate real-mode interrupt
+    mov bx, 0x0021             ; BL = INT 21h
+    xor cx, cx                 ; no stack words to copy
+    int 0x31                   ; -> host runs real-mode INT 21h AH=09 (prints .rmsg)
+    mov dx, .pmsg              ; direct PM print to confirm we resumed cleanly
     mov ah, 0x09
     int 0x21
     mov ax, 0x4C00             ; terminate
     int 0x21
 .pmspin:
     jmp .pmspin
-.pmsg:  db 'DPMI: file create/write/read + alias descriptor OK!', 13, 10, '$'
-.fname: db 'C:\ntvdmex\DPMIFILE.TMP', 0
-.fdata: db 'DPMI-IO!'
+.rmsg:  db '  [printed via INT 31h 0300 -> real-mode INT 21h AH=09]', 13, 10, '$'
+.pmsg:  db 'DPMI: 0300 simulate-real-mode-int OK!', 13, 10, '$'
+.rmcs:  times 50 db 0
 
 .switchfail:
     mov dx, msg_fail

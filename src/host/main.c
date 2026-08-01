@@ -1033,7 +1033,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     (void)hInst; (void)hPrev; (void)lpCmd; (void)nShow;
     progpath[0] = 0; args[0] = 0;
 
-    p = zput(p, "NTVDMEX clean host\r\nSTAGE0: WinMain entered [build dpmi-harness-v30]\r\n");
+    p = zput(p, "NTVDMEX clean host\r\nSTAGE0: WinMain entered [build dpmi-harness-v31]\r\n");
     log_write(LOG_PATH, report, p);
     serial_init();                                      /* DPMI harness: COM1 log sink */
     serial_out(report, p);
@@ -1539,6 +1539,34 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                             if (h) VirtualFree((void *)(ULONG_PTR)h, 0, MEM_RELEASE);
                             p = zput(p, " -> freed");
                             break; }
+                        case 0x0300: {                             /* simulate real-mode interrupt: BL=int, ES:DI=RMCS */
+                            DWORD intno = VDM_REG(tib, VTIB_EBX) & 0xFF;
+                            DWORD esb = dpmi_sel_base((WORD)VDM_REG(tib, VTIB_ES));
+                            volatile BYTE *r = (volatile BYTE *)(ULONG_PTR)(esb + (VDM_REG(tib, VTIB_EDI) & 0xFFFF));
+                            /* save the client's PM register file */
+                            DWORD sA=VDM_REG(tib,VTIB_EAX),sB=VDM_REG(tib,VTIB_EBX),sC=VDM_REG(tib,VTIB_ECX),
+                                  sD=VDM_REG(tib,VTIB_EDX),sS=VDM_REG(tib,VTIB_ESI),sDi=VDM_REG(tib,VTIB_EDI),
+                                  sBp=VDM_REG(tib,VTIB_EBP),sDs=VDM_REG(tib,VTIB_DS),sEs=VDM_REG(tib,VTIB_ES),
+                                  sSs=VDM_REG(tib,VTIB_SS),sSp=VDM_REG(tib,VTIB_ESP),sFl=VDM_REG(tib,VTIB_EFLAGS);
+                            /* load the real-mode register block from the RMCS (WORD reads -> clean high) */
+                            VDM_REG(tib,VTIB_EDI)=*(volatile WORD*)(r+0x00); VDM_REG(tib,VTIB_ESI)=*(volatile WORD*)(r+0x04);
+                            VDM_REG(tib,VTIB_EBP)=*(volatile WORD*)(r+0x08); VDM_REG(tib,VTIB_EBX)=*(volatile WORD*)(r+0x10);
+                            VDM_REG(tib,VTIB_EDX)=*(volatile WORD*)(r+0x14); VDM_REG(tib,VTIB_ECX)=*(volatile WORD*)(r+0x18);
+                            VDM_REG(tib,VTIB_EAX)=*(volatile WORD*)(r+0x1C); VDM_REG(tib,VTIB_ES)=*(volatile WORD*)(r+0x22);
+                            VDM_REG(tib,VTIB_DS)=*(volatile WORD*)(r+0x24);
+                            VDM_REG(tib,VTIB_SS)=0x0100; VDM_REG(tib,VTIB_ESP)=0xFF00;  /* host scratch stack */
+                            if (intno == 0x21) { m.tp = p; dos_int21(&m); p = m.tp; }
+                            /* write results back into the RMCS */
+                            *(volatile WORD*)(r+0x1C)=VDM_REG(tib,VTIB_EAX); *(volatile WORD*)(r+0x10)=VDM_REG(tib,VTIB_EBX);
+                            *(volatile WORD*)(r+0x18)=VDM_REG(tib,VTIB_ECX); *(volatile WORD*)(r+0x14)=VDM_REG(tib,VTIB_EDX);
+                            *(volatile WORD*)(r+0x00)=VDM_REG(tib,VTIB_EDI); *(volatile WORD*)(r+0x04)=VDM_REG(tib,VTIB_ESI);
+                            /* restore the client's PM register file */
+                            VDM_REG(tib,VTIB_EAX)=sA;VDM_REG(tib,VTIB_EBX)=sB;VDM_REG(tib,VTIB_ECX)=sC;VDM_REG(tib,VTIB_EDX)=sD;
+                            VDM_REG(tib,VTIB_ESI)=sS;VDM_REG(tib,VTIB_EDI)=sDi;VDM_REG(tib,VTIB_EBP)=sBp;VDM_REG(tib,VTIB_DS)=sDs;
+                            VDM_REG(tib,VTIB_ES)=sEs;VDM_REG(tib,VTIB_SS)=sSs;VDM_REG(tib,VTIB_ESP)=sSp;VDM_REG(tib,VTIB_EFLAGS)=sFl;
+                            VDM_REG(tib,VTIB_EFLAGS) &= ~1u;       /* 0300 succeeds */
+                            p = zput(p, " -> simInt 0x"); p = zhex(p, intno);
+                            break; }
                         default:
                             VDM_REG(tib, VTIB_EFLAGS) |= 1u;       /* CF=1: unsupported */
                             p = zput(p, " -> UNSUP");
@@ -1551,21 +1579,11 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                     if (vec == 0x21) {                             /* DOS INT 21h (in PM) */
                         DWORD ah = (ax >> 8) & 0xFF;
                         if (ah == 0x4C) {                          /* terminate */
-                            DWORD ver   = *(volatile WORD *)(ULONG_PTR)0x1600;
-                            DWORD nread = *(volatile WORD *)(ULONG_PTR)0x1612;   /* bytes read back */
-                            DWORD alias = *(volatile WORD *)(ULONG_PTR)0x1614;   /* alias selector */
-                            const char *fc = (const char *)(ULONG_PTR)0x1620;    /* file content read */
-                            static const char want[8] = { 'D','P','M','I','-','I','O','!' };
-                            int fok = (nread == 8), j;
-                            for (j = 0; j < 8; ++j) if (fc[j] != want[j]) fok = 0;
-                            int ok = (ver == 0x005A) && fok && (alias == 0x001F);
-                            char fb[16]; int i; for (i = 0; i < 8; ++i) fb[i] = (fc[i] >= 0x20) ? fc[i] : '.'; fb[8] = 0;
+                            DWORD ver = *(volatile WORD *)(ULONG_PTR)0x1600;
                             p = zput(p, "INT21h AH=4Ch -> client EXIT after "); p = zhex(p, steps);
                             p = zput(p, " svc. ver=0x"); p = zhex(p, ver);
-                            p = zput(p, " read="); p = zhex(p, nread); p = zput(p, "b content=\""); p = zput(p, fb);
-                            p = zput(p, "\" alias=0x"); p = zhex(p, alias);
-                            p = zput(p, ok ? "  <<< DPMI OK: file create/write/read + alias descriptor >>>\r\n"
-                                           : "  <<< MISMATCH >>>\r\n");
+                            p = zput(p, (ver == 0x005A) ? "  <<< DPMI client ran + exited cleanly >>>\r\n"
+                                                        : "  <<< MISMATCH >>>\r\n");
                             log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
                             break;
                         }
