@@ -793,6 +793,33 @@ host MonitorContext@`TIB+0x0C`, set `VTIB_EVENT`, return to host) vs. terminate.
 in "Kernel RE session 1/2": `KiDispatchException`@~0x421cf7 gates on `EPROCESS[+0x158]` (VdmObjects);
 `KiTrap0D` is the lower #GP handler that reflects BEFORE `KiDispatchException`.
 
+### VM run 30 (2026-08-01) — base-0/2GB-limit CS installs but STILL no VEH delivery (limit is not the variable) `[FACT, real CPU]`
+
+Kernel RE (session 3) of the #GP path: the `KiTrapXX` shared prologue
+(`0x403972`: build KTRAP_FRAME, `test [esp+0x70],0x20000` → V86 path `0x403ac0`) shows a **PM VDM
+fault is NON-V86**, so it goes down the generic path → `KiDispatchException`, whose user-mode
+delivery validates the CONTEXT against **`MmHighestUserAddress`** (`0x40ecad`). That surfaced a
+hypothesis: prior LDT CSs had a 64K limit, so `KiUserExceptionDispatcher` (a high user address) was
+out of segment range → delivery impossible; a base-0 CS whose limit covers all user space should
+both install AND let the fault reach the VEH.
+
+Tested (run 30): CS/SS = base 0, limit `0x7FFEF` (G=1 → 0x7FFEFFFF), 32-bit; size-independent guest
+(`INT 31h; jmp $`); linear EIP/ESP.
+- **The descriptor INSTALLS** (`svc10/11=0`, `clo=0x0000ffef chi=0x00c7fa00`) — confirms the
+  `base+limit <= MmHighestUserAddress` install rule.
+- **But the `INT 31h` STILL silently terminates** — no VEH, no watchdog. **Hypothesis DISPROVEN:**
+  segment-limit / dispatcher-reachability is NOT the variable. An LDT-CS VDM PM fault is genuinely
+  **routed away from normal user-mode exception delivery** (run 16 stands) and the divert (the VDM
+  reflect) fails → terminate — regardless of the CS limit. Reverted to the proven based-64K config.
+
+**State of the search:** PM executes (run 28); the LDT-CS PM fault neither delivers to the VEH nor
+completes the VDM reflect. Ruled out: ntvdm-side setup deltas (run 29), CS limit / dispatcher
+reachability (run 30). The reflect-vs-terminate decision + why the reflect fails remains inside
+`KiTrap0D`'s pre-`KiDispatchException` VDM handling (the `0x403ac0` V86 path is for V86; the PM-VDM
+equivalent, and where it decides to divert an LDT-CS fault, is the next target). This is a deep
+kernel-disasm task; foothold: `KiTrapXX` prologue `0x403972`, V86 branch `0x403ac0`,
+`KiDispatchException` VDM record-branch `0x421cf7`→`0x44664c`, user-delivery validation `0x40ec99`.
+
 ## Open unknowns (what the spike must nail down) `[VERIFY]`
 
 1. **The mode-switch primitive.** Exactly how ntvdm flips the VDM from V86→PM after the client

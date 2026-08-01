@@ -43,22 +43,24 @@ int dpmi_switch_to_pm(volatile BYTE *tib, int client_is_32bit,
     DWORD clo, chi, dlo, dhi;
     DWORD code_base = (DWORD)ret_cs << 4;            /* linear base of the guest CS  */
     DWORD data_base = (DWORD)ss     << 4;            /* linear base of the guest SS  */
-    DWORD lin_eip = code_base + ret_ip;              /* linear addr (diagnostic only) */
+    DWORD lin_eip = code_base + ret_ip;              /* linear code addr             */
+    DWORD lin_esp = data_base + new_sp;              /* linear stack addr            */
     LONG st;
     BYTE code_access = 0xFA, data_access = 0xF2;
     (void)client_is_32bit;
 
-    /* BASED, 64K, 16-bit selectors (G=0, D/B=0 -> flags 0x0). XP's NtSetLdtEntries
-       REJECTS a flat 4GB LDT descriptor: PspIsDescriptorValid requires
-       base + (G? (limit<<12)|0xFFF : limit) <= MmHighestUserAddress (~0x7FFEFFFF),
-       else STATUS_INVALID_LDT_DESCRIPTOR (0xC000011A) -- so the run-17 flat experiment
-       could NEVER install on XP (VM run 21; ReactOS disabled this check for DOS compat,
-       real XP enforces it). A based selector maps the guest's real-mode segment (linear
-       seg<<4, all < 1MB, comfortably in user space); with a based CS/SS the resume
-       EIP/ESP are the real-mode OFFSETS, not linear addresses. */
+    /* BASED, 64K, 16-bit selectors (G=0, D/B=0 -> flags 0x0) -- the config that PROVED PM
+       execution (run 28). XP's NtSetLdtEntries REJECTS a flat 4GB LDT descriptor
+       (PspIsDescriptorValid: base + (G?(limit<<12)|0xFFF:limit) <= MmHighestUserAddress),
+       so run-17's flat could never install. NB: a base-0 ~2GB descriptor (limit 0x7FFEF,
+       G=1) ALSO installs (run 30) -- but it did NOT make the LDT-CS PM fault reach the VEH,
+       so dispatcher-reachability is NOT the variable; an LDT-CS VDM fault is routed away from
+       normal user-mode exception delivery (run 16 stands). A based selector maps the guest's
+       real-mode segment (linear seg<<4, <1MB); resume EIP/ESP are the real-mode OFFSETS. */
+    (void)lin_eip; (void)lin_esp;
     dpmi_build_desc(code_base, 0xFFFF, code_access, 0x0, &clo, &chi);
     dpmi_build_desc(data_base, 0xFFFF, data_access, 0x0, &dlo, &dhi);
-    g_dpmi_dbg[0] = ret_cs; g_dpmi_dbg[1] = lin_eip; g_dpmi_dbg[2] = clo; g_dpmi_dbg[3] = chi;
+    g_dpmi_dbg[0] = ret_cs; g_dpmi_dbg[1] = code_base + ret_ip; g_dpmi_dbg[2] = clo; g_dpmi_dbg[3] = chi;
 
     /* First REGISTER the LDT table (service 11) so the monitor loads LDTR -- without
        this, svc 10's descriptors resolve base 0 (VM run 2 diagnosis). Table covers
