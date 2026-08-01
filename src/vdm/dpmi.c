@@ -47,11 +47,13 @@ int dpmi_switch_to_pm(volatile BYTE *tib, int client_is_32bit,
     BYTE code_access = 0xFA, data_access = 0xF2;
     (void)client_is_32bit;
 
-    /* Code stays 16-bit (flags=0); the data/stack selector is 32-bit (flags=0x4,
-       D/B=1) so stack ops use ESP and Windows can deliver the INT 31h / fault
-       exception onto it (a 16-bit stack can't hold the exception frame -> run 7 the
-       process was killed with no VEH). */
-    dpmi_build_desc((DWORD)ret_cs << 4, 0xFFFF, code_access, 0x0, &clo, &chi);
+    /* EXPERIMENT (3c): BOTH code and data/stack selectors 32-bit (flags=0x4, D/B=1).
+       ReactOS shows PM VDM faults aren't kernel-reflected -- they go to user-mode
+       exception delivery. A 16-bit CS (D=0) apparently doesn't dispatch cleanly to
+       KiUserExceptionDispatcher (runs 10/12/13 died with no VEH); a 32-bit CS should.
+       The client's post-switch code is size-independent (INT 31h; JMP $) so it decodes
+       correctly under D=1. */
+    dpmi_build_desc((DWORD)ret_cs << 4, 0xFFFF, code_access, 0x4, &clo, &chi);
     dpmi_build_desc((DWORD)ds     << 4, 0xFFFF, data_access, 0x4, &dlo, &dhi);
     g_dpmi_dbg[0] = ret_cs; g_dpmi_dbg[1] = ret_ip; g_dpmi_dbg[2] = clo; g_dpmi_dbg[3] = chi;
 

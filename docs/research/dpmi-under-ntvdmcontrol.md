@@ -452,6 +452,37 @@ the handler, and resume via `NtContinue`. INT 31h service semantics (0000 alloc-
 0300 simulate-real-mode-INT) to crib from ReactOS `subsystems/mvdm/ntvdm/dos/dem.c` +
 the DPMI 0.9 spec when wiring the surface.
 
+### VM run 16 (2026-08-01) — 32-bit CS disproven; the variable is GDT-flat vs LDT selector `[FACT, real CPU]`
+
+Acting on the ReactOS finding (PM faults = user-mode exceptions), tried a **32-bit code
+selector** (D=1, `chi=0x0040fa00`) with size-independent client code (`INT 31h; JMP $`)
+run via clean `NtContinue`, expecting the `#GP` to reach our VEH.
+
+Result: **no change** — process exits silently, no VEH, no "NtContinue returned". So the
+16-vs-32-bit CS is **not** the variable. Refining across all runs:
+
+| Faulting CS | Path | VEH fires? |
+|-------------|------|-----------|
+| `0x1B` GDT flat (runs 1–6) | VdmStartExecution, base 0 | **yes** |
+| `0x0F` LDT, 16-bit (runs 10/12/13) | far-jmp / NtContinue | no |
+| `0x0F` LDT, 32-bit (run 16) | NtContinue | no |
+
+**The variable is GDT-flat vs LDT selector, not the D-bit.** NT's user-mode exception
+dispatch (`KiUserExceptionDispatcher`) is not delivering a fault whose `CS` is an **LDT
+selector** to our handler — yet real ntvdm, which also runs its DPMI client on LDT
+selectors, *does* catch those faults. So there is a **VDM-setup / kernel-delivery
+difference** we haven't found: something ntvdm registers (beyond `VdmInitialize` +
+TrapcHandler) that makes the kernel deliver an LDT-CS PM fault to its user-mode handler,
+or a per-thread/VDM state the delivery path checks.
+
+**Assessment:** the spike has now exhaustively mapped the problem from both the ntvdm and
+ntoskrnl sides and every user-mode lever. The one remaining unknown — why an LDT-CS PM
+fault reaches ntvdm's handler but not ours — is a subtle kernel exception-delivery
+condition that needs a **dedicated `KiDispatchException`/`KiUserExceptionDispatcher` RE
+pass** (how NT chooses to deliver vs terminate a ring-3 fault in an LDT/VDM context), not
+more quick VM iterations. **Protected-mode execution is proven; the INT 31h surface is
+blocked on this specific kernel-delivery condition.**
+
 ## Open unknowns (what the spike must nail down) `[VERIFY]`
 
 1. **The mode-switch primitive.** Exactly how ntvdm flips the VDM from V86→PM after the client

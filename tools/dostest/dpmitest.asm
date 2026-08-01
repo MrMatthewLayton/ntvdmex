@@ -32,18 +32,15 @@ start:
     ; --- 3. far-call the mode-switch entry (AX=0: 16-bit client) ---------
     xor ax, ax
     call far [entry]
-    ; If the switch FAILED the host returns here in real mode with CF=1.
-    jc .switchfail
 
     ; --- 4. we are now in PROTECTED MODE ---------------------------------
-    ; Issue a DPMI service call: AX=0000 (allocate LDT descriptors), CX=1. With the
-    ; monitor PM-entry (dpmi_enter_pm) this INT 31h should reflect to the host as a
-    ; VDM event (kernel VDM trap handler), the way V86 BOPs do.
-    mov ax, 0x0000             ; DPMI function 0000: allocate descriptors
-    mov cx, 1
-    int 0x31
+    ; EXPERIMENT (3c): this build uses a 32-bit code selector (D=1). We keep the
+    ; post-switch code to SIZE-INDEPENDENT opcodes so it decodes the same whether CS
+    ; is 16- or 32-bit: INT 31h (CD 31) and JMP $ (EB FE). If a 32-bit PM CS lets the
+    ; kernel deliver the INT 31h #GP to our user-mode VEH, the host logs "DPMI FATAL".
+    int 0x31                   ; CD 31 -- should #GP -> user-mode exception
 .pmspin:
-    jmp .pmspin
+    jmp .pmspin                ; EB FE
 
 .switchfail:
     mov dx, msg_fail
