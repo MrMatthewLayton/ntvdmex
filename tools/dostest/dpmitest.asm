@@ -34,13 +34,13 @@ start:
     call far [entry]
 
     ; --- 4. we are now in PROTECTED MODE ---------------------------------
-    ; EXPERIMENT (3c): this build uses a 32-bit code selector (D=1). We keep the
-    ; post-switch code to SIZE-INDEPENDENT opcodes so it decodes the same whether CS
-    ; is 16- or 32-bit: INT 31h (CD 31) and JMP $ (EB FE). If a 32-bit PM CS lets the
-    ; kernel deliver the INT 31h #GP to our user-mode VEH, the host logs "DPMI FATAL".
-    hlt                        ; F4 -- privileged: #GP at ring 3 (unambiguous fault).
-                               ; If the VEH catches THIS with a flat CS, exception
-                               ; delivery works and int 0x31 was just an IDT gate.
+    ; EXPERIMENT (run 23): the switch now installs a VALID based LDT (svc10/11=0) and
+    ; we enter PM via the monitor far-jmp (dpmi_enter_pm), which saves the host CONTEXT
+    ; so the KERNEL can reflect a PM event back to the host loop. Software INT 31h (CD 31)
+    ; goes through the kernel's INT-nn VDM path (KiVdmOpcodeINTnn: read IVT, vector) --
+    ; a DIFFERENT path than a raw #GP (HLT), so it may reflect where HLT terminated.
+    ; AX=0000 = DPMI "allocate LDT descriptor". Size-independent (decodes the same 16/32).
+    int 0x31                   ; CD 31 -- the DPMI service call the host must catch.
 .pmspin:
     jmp .pmspin                ; EB FE
 

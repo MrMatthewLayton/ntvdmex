@@ -957,7 +957,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     (void)hInst; (void)hPrev; (void)lpCmd; (void)nShow;
     progpath[0] = 0; args[0] = 0;
 
-    p = zput(p, "NTVDMEX clean host\r\nSTAGE0: WinMain entered [build dpmi-harness-v6]\r\n");
+    p = zput(p, "NTVDMEX clean host\r\nSTAGE0: WinMain entered [build dpmi-harness-v7]\r\n");
     log_write(LOG_PATH, report, p);
     serial_init();                                      /* DPMI harness: COM1 log sink */
     serial_out(report, p);
@@ -1337,15 +1337,24 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                 p = zput(p, " -> PM ok (VM cleared, CS=0x");
                 p = zhex(p, VDM_REG(tib, VTIB_CS) & 0xFFFF);
                 p = zput(p, " EIP=0x"); p = zhex(p, VDM_REG(tib, VTIB_EIP) & 0xFFFF);
-                p = zput(p, ") -> running PM (NtContinue, flat CS)\r\n");
+                p = zput(p, ") -> entering PM (monitor far-jmp, dpmi_enter_pm)\r\n");
                 log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
                 /* Watchdog so the run self-terminates whether the fault reaches the VEH,
                    kills the process, or the kernel skip+resumes it into a spin. */
                 { HANDLE wd = CreateThread(NULL, 0, dpmi_watchdog, NULL, 0, NULL);
                   if (wd) CloseHandle(wd); }
-                dpmi_run_pm(tib);
-                /* Only reached if NtContinue failed to enter PM. */
-                p = zput(p, "STAGE3-DPMI: NtContinue returned (PM entry failed)\r\n");
+                /* Monitor-style PM entry (ntvdm's 0xf04483c): saves the host CONTEXT to
+                   VDM_TIB+0x0C so the KERNEL's VDM trap path can reflect a PM fault/INT
+                   back here as a VTIB_EVENT and "return". If it returns, the kernel
+                   REFLECTED the guest's INT 31h -- the taxonomy we've been chasing. */
+                dpmi_enter_pm(tib);
+                p = zput(p, "STAGE3-DPMI: dpmi_enter_pm RETURNED -- kernel reflected a PM event!\r\n");
+                p = zput(p, "  event=0x"); p = zhex(p, VDM_REG(tib, VTIB_EVENT));
+                p = zput(p, " info=0x"); p = zhex(p, VDM_REG(tib, VTIB_EVENT_INFO));
+                p = zput(p, " CS=0x"); p = zhex(p, VDM_REG(tib, VTIB_CS) & 0xFFFF);
+                p = zput(p, ":0x"); p = zhex(p, VDM_REG(tib, VTIB_EIP) & 0xFFFF);
+                p = zput(p, " AX=0x"); p = zhex(p, VDM_REG(tib, VTIB_EAX) & 0xFFFF);
+                p = zput(p, "\r\n");
                 log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
                 break;
             }

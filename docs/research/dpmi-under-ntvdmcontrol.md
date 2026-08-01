@@ -552,6 +552,29 @@ terminates) from a software `INT nn`. XP's VDM trap path handles `INT nn` specia
 post-switch opcode to `INT 31h`, point `IVT[0x31]` at a handler we own, and see whether the
 kernel vectors it (the DPMI service surface) rather than terminating.
 
+### VM run 23 (2026-08-01) — valid LDT + real INT 31h + monitor entry still does NOT reflect `[FACT, real CPU]`
+
+With the switch now succeeding (run 22), tested the architecturally-correct path end to end:
+based valid LDT (svc10/11=0) → **`dpmi_enter_pm`** (the `0xf04483c` port that saves the host
+CONTEXT to `VDM_TIB+0x0C` so the kernel's VDM trap path can reflect back) → guest executes a
+real **`INT 31h`** (software INT, the kernel's `KiVdmOpcodeINTnn` path, distinct from a raw
+`#GP`). Serial reached `entering PM (monitor far-jmp, dpmi_enter_pm)` and then **nothing** —
+`dpmi_enter_pm` did **not** return, no `RETURNED` line, no watchdog, silent terminate.
+
+So the reflection failure is **independent** of: (a) LDT descriptor validity (now valid),
+(b) #GP-vs-software-INT (INT 31h behaves the same as HLT here), and (c) NtContinue-vs-monitor
+entry (both terminate). The one thing we have NOT replicated is whatever ntvdm registers so the
+**kernel** chooses to reflect a PM VDM fault to the host instead of terminating the process.
+`VdmInitialize`'s `IcaUserData` is only the **PIC/ICA** emulation data (IRQ reflection), not a
+PM fault-handler table — so it is not the lever.
+
+**Next: RE `ntoskrnl` (reverse/NTOSKRNL.EX_).** Find `KiTrap0D`'s VDM branch and the PM-fault
+reflection routine (`Ki386VdmReflectException` / `VdmDispatchException` / `KiDispatchException`
+VDM case) and read the EXACT predicate that selects reflect-to-VDM vs deliver-to-usermode vs
+terminate for a ring-3 fault whose CS is an LDT selector in a VDM process. That predicate names
+the per-thread/VDM state (or handler-table pointer) we are missing. This is the dedicated kernel
+RE pass flagged after run 16 — now with every user-mode variable eliminated.
+
 ## Open unknowns (what the spike must nail down) `[VERIFY]`
 
 1. **The mode-switch primitive.** Exactly how ntvdm flips the VDM from V86→PM after the client
