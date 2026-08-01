@@ -298,6 +298,39 @@ it passes, how to resume/skip the faulting instruction) — this is also how V86
 events are ultimately sourced. Reverse ntvdm's registered trap handler next. The VEH
 stays only as a last-chance crash logger.
 
+### VM run 10 (2026-08-01) — plain Win32 SEH/VEH cannot catch PM faults; must use the monitor PM-entry `[FACT, real CPU]`
+
+Followed run 9 with an `int3` (STATUS_BREAKPOINT — the easiest exception for the OS to
+deliver) in the PM guest, to test whether *any* fault reaches our VEH under
+`NtContinue`.
+
+Result: the process **exited** (batch returned) but **no VEH log** appeared — the
+breakpoint was not delivered to our vectored handler either. Cross-referencing:
+- run 9 `int 0x31` → guest spun past (an IDT gate, no user exception);
+- run 10 `int3` → process terminated, VEH never ran.
+
+So once svc 10/11 make the LDT resolve correctly (runs 8–10), the guest executes on a
+real 16-bit PM stack (SS=0x17) and **Windows cannot deliver exceptions to our user-mode
+VEH in that context.** (In runs 1–6 the VEH *did* fire — but only because the LDT was
+broken and the fault happened in a degenerate flat-ish state.) The VEH is therefore a
+dead end for PM fault servicing.
+
+**Definitive path for INT 31h (increment "3c"):** run PM through the **monitor
+PM-entry** ntvdm uses — `0xf04483c`: mask ESP to 16-bit, **save the host register state
+into the VDM_TIB host-save area** (offsets ~0xa0..0xd4) so the kernel can return to the
+host, set the VDM-PM signal (`mov fs,0x3b` + the `[0x714]` flag), build an iret frame on
+the guest stack from the VDM_TIB register fields, and `iretd`. Then the **kernel's VDM
+trap handler** (registered via `VdmInitialize`) catches the PM fault/INT, saves the
+guest state, restores the host, and returns with the event in `VTIB_EVENT` — exactly
+like V86 BOPs. This is the intricate-but-correct mechanism; `NtContinue` runs PM but
+bypasses this fault delivery. Also note ntvdm's ICA user-data field 9 is a code pointer
+(`0xf044820`, a `retf`-to-guest resume trampoline), not the plain dword our `v86.c` sets
+— a detail to revisit when wiring the monitor PM-entry.
+
+**Status:** PM *execution* is proven (run 8, and re-confirmed each run: "PM ok" + the
+guest reaches its PM code). INT 31h *servicing* is the open increment, now with a
+precise, disasm-backed plan (replicate `0xf04483c`).
+
 ## Open unknowns (what the spike must nail down) `[VERIFY]`
 
 1. **The mode-switch primitive.** Exactly how ntvdm flips the VDM from V86→PM after the client
