@@ -1009,7 +1009,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     (void)hInst; (void)hPrev; (void)lpCmd; (void)nShow;
     progpath[0] = 0; args[0] = 0;
 
-    p = zput(p, "NTVDMEX clean host\r\nSTAGE0: WinMain entered [build dpmi-harness-v22]\r\n");
+    p = zput(p, "NTVDMEX clean host\r\nSTAGE0: WinMain entered [build dpmi-harness-v24]\r\n");
     log_write(LOG_PATH, report, p);
     serial_init();                                      /* DPMI harness: COM1 log sink */
     serial_out(report, p);
@@ -1408,9 +1408,16 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                    selector is invalid -- which is exactly our silent-terminate. Populate it with
                    valid selectors so the fault REFLECTS instead. (+0x63a/+0x63c/+0x640 are kernel
                    scratch: saved fault SS/ESP/EIP.) */
-                *(volatile WORD *)(tib + 0x634) = 0;       /* nesting count              */
-                *(volatile WORD *)(tib + 0x636) = 0;       /* 16/32 flag (0 = 16-bit); ntvdm 0x0f01a325 */
-                *(volatile WORD *)(tib + 0x638) = 0x17;    /* handler SS (our stack sel) */
+                *(volatile WORD  *)(tib + 0x634) = 0;      /* nesting count              */
+                *(volatile WORD  *)(tib + 0x636) = 0;      /* 16/32 flag (0 = 16-bit); ntvdm 0x0f01a325 */
+                *(volatile WORD  *)(tib + 0x638) = 0x17;   /* handler SS (our stack sel) */
+                /* Handler far-pointer the kernel reads at [+0x64c] (16-bit path, 0x4f7106) /
+                   [+0x650] (32-bit, 0x4f71a0): low word = IP, high word = CS. Point it at a BOP
+                   stub at 0x0F:0x400 (linear 0x1400) so a landed reflect bounces to the host. */
+                *(volatile DWORD *)(tib + 0x64c) = (0x0Fu << 16) | 0x0400u;
+                *(volatile DWORD *)(tib + 0x650) = (0x0Fu << 16) | 0x0400u;
+                { volatile BYTE *s = (volatile BYTE *)(ULONG_PTR)0x1400;    /* 0x0F:0x400 */
+                  s[0] = 0xC4; s[1] = 0xC4; s[2] = 0x58; s[3] = 0xF4; }
                 /* Confirm the write LANDS in the TIB the kernel reads (TEB[0xF18]). */
                 { BYTE *teb = (BYTE *)NtCurrentTeb();
                   DWORD ktib = teb ? *(volatile DWORD *)(teb + 0xF18) : 0;

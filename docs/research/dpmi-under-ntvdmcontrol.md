@@ -950,6 +950,29 @@ the host (32).** The remaining INT 31h routing is a focused RE of ntvdm's full D
 registration + the kernel's `0x4f67f8` handler-CS:EIP source — best taken fresh with the run-32
 observability harness (a landed BOP prints `RETURNED event=4`).
 
+### VM run 34 (2026-08-01) — the #GP reflect FAILS in-kernel (not a +0x634 field); need full ntvdm DPMI-init `[FACT, real CPU]`
+
+Exhausted the field-guessing on `VDM_TIB+0x634`. Tried, all silent-terminate:
+- `+0x636` = 0x0F (32-bit path) and = 0 (16-bit path); `+0x638` = 0x17 (valid SS, TIB match=YES);
+- handler far-ptr `+0x64c`/`+0x650` = `0x0F:0x400` with a BOP stub there;
+- BOP carpet over `0x1000..0x1124`; a BOP right AFTER the INT (`0x127`).
+
+**None of the BOP catchers fired** — so the kernel's exception reflector `0x4f67f8` is **returning
+"not handled" (0) and the process terminates**; it never resumes the guest at any address we can
+plant a stub at. (Fast terminate, watchdog never runs ⇒ not a slow nested loop; it's an early
+`return 0`.) So the failure is a **resolve/state check inside `0x4f67f8`/`0x4f6f67`**, gated on VDM
+state we haven't established — NOT a missing `+0x634` value.
+
+**Conclusion: stop guessing individual fields; replicate ntvdm's COMPLETE DPMI mode-switch init.**
+ntvdm makes `INT 31h` reflect, so its full setup (whatever `0x4f67f8`'s `0x564ed5(&[0x714])` flags
++ resolves require) is the ground truth. Definitive next step: RE ntvdm's **mode-switch entry
+handler** — the routine invoked when the client far-calls the `INT 2Fh/1687` entry (`ntvdm` 1687
+site `0xf02d39f` → the returned entry) — and replicate its ENTIRE PM-setup sequence faithfully
+(LDT, the `[0x714]` fixed-state init, the exception/interrupt handler registration, `VdmPMCliControl`,
+the `+0x634` block), rather than cherry-picking fields. What remains solid and observable: PM
+executes (28) and a PM BOP round-trips to the host (32); those give the harness to validate the full
+init once replicated.
+
 ## Open unknowns (what the spike must nail down) `[VERIFY]`
 
 1. **The mode-switch primitive.** Exactly how ntvdm flips the VDM from V86→PM after the client

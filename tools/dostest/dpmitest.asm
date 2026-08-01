@@ -44,7 +44,8 @@ start:
     ; PROBE (run 33): real INT 31h. The host carpets the PSP region (0x1000..0x1124)
     ; with BOPs, so if the kernel reflects this #GP to a low CS=0x0F:EIP, it lands on a
     ; BOP -> dpmi_enter_pm returns and reports the landing CS:EIP (pins the reflect).
-    int 0x31                   ; CD 31 -- the DPMI fault to reflect
+    int 0x31                   ; CD 31 -- the DPMI fault to reflect (at 0x125)
+    db 0xC4, 0xC4, 0x58        ; BOP at 0x127: catches a reflect that resumes PAST the INT
 .pmspin:
     jmp .pmspin                ; EB FE
 
