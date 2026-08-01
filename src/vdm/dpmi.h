@@ -22,9 +22,12 @@ extern DWORD g_dpmi_dbg[4];
 /* An LDT selector: (index<<3) | TI(=1,LDT) | RPL(=3, ring-3 client). */
 #define DPMI_SEL(index)  (WORD)(((index) << 3) | 0x4 | 0x3)
 
-/* Build the two dwords of a byte-granular 16-bit LDT descriptor for [base, +limit],
-   with the given access byte (0xFA code exec/read DPL3, 0xF2 data r/w DPL3). */
-void dpmi_build_desc(DWORD base, DWORD limit, BYTE access, DWORD *lo, DWORD *hi);
+/* Build the two dwords of an LDT descriptor for [base, +limit] with the given access
+   byte (0xFA code exec/read DPL3, 0xF2 data r/w DPL3) and flags nibble (bit3=G,
+   bit2=D/B: 0 => 16-bit byte-granular, 0x4 => 32-bit stack/data so ESP + exception
+   delivery work). */
+void dpmi_build_desc(DWORD base, DWORD limit, BYTE access, BYTE flags,
+                     DWORD *lo, DWORD *hi);
 
 /* Perform the V86 -> protected-mode switch for a client that just FAR-CALLed the
    DPMI mode-switch entry (served for INT 2Fh AX=1687h). Reads the real-mode return

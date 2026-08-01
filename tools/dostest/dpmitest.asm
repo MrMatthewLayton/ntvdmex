@@ -36,12 +36,12 @@ start:
     jc .switchfail
 
     ; --- 4. we are now in PROTECTED MODE ---------------------------------
-    ; DIAGNOSTIC (increment 3a): don't fault yet -- just spin with a marker in
-    ; the registers. If the host stays ALIVE spinning here, in-process PM
-    ; execution via NtContinue is proven (the Luna window stays up). A later
-    ; step re-introduces INT 31h once fault-catching is sorted.
-    mov ax, 0xDA1A             ; recognizable PM marker
-    mov bx, 0x5150
+    ; Issue a DPMI service call: AX=0000 (allocate LDT descriptors), CX=1.
+    ; With a 32-bit stack the host's VEH can catch this INT 31h (increment 3b).
+    mov ax, 0x0000             ; DPMI function 0000: allocate descriptors
+    mov cx, 1
+    int 0x31
+    ; If the host services it and resumes, spin so nothing undefined runs.
 .pmspin:
     jmp .pmspin
 

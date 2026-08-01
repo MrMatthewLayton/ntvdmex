@@ -13,14 +13,16 @@ DWORD g_dpmi_dbg[4] = {0,0,0,0};
 #define DPMI_IDX_CODE  1
 #define DPMI_IDX_DATA  2
 
-void dpmi_build_desc(DWORD base, DWORD limit, BYTE access, DWORD *lo, DWORD *hi)
+void dpmi_build_desc(DWORD base, DWORD limit, BYTE access, BYTE flags,
+                     DWORD *lo, DWORD *hi)
 {
-    /* Standard x86 descriptor, byte-granular (G=0), 16-bit (D/B=0): limit fits in
-       20 bits, base in 32. access = P|DPL|S|type. */
+    /* Standard x86 descriptor: limit in 20 bits, base in 32. access = P|DPL|S|type;
+       flags nibble = G|D/B|0|AVL in bits 23..20 of the high dword. */
     *lo = (limit & 0xFFFF) | ((base & 0xFFFF) << 16);
     *hi = ((base >> 16) & 0xFF)
         | ((DWORD)access << 8)
         | (((limit >> 16) & 0xF) << 16)
+        | (((DWORD)flags & 0xF) << 20)
         | (((base >> 24) & 0xFF) << 24);
 }
 
@@ -45,8 +47,12 @@ int dpmi_switch_to_pm(volatile BYTE *tib, int client_is_32bit,
     BYTE code_access = 0xFA, data_access = 0xF2;
     (void)client_is_32bit;
 
-    dpmi_build_desc((DWORD)ret_cs << 4, 0xFFFF, code_access, &clo, &chi);
-    dpmi_build_desc((DWORD)ds     << 4, 0xFFFF, data_access, &dlo, &dhi);
+    /* Code stays 16-bit (flags=0); the data/stack selector is 32-bit (flags=0x4,
+       D/B=1) so stack ops use ESP and Windows can deliver the INT 31h / fault
+       exception onto it (a 16-bit stack can't hold the exception frame -> run 7 the
+       process was killed with no VEH). */
+    dpmi_build_desc((DWORD)ret_cs << 4, 0xFFFF, code_access, 0x0, &clo, &chi);
+    dpmi_build_desc((DWORD)ds     << 4, 0xFFFF, data_access, 0x4, &dlo, &dhi);
     g_dpmi_dbg[0] = ret_cs; g_dpmi_dbg[1] = ret_ip; g_dpmi_dbg[2] = clo; g_dpmi_dbg[3] = chi;
 
     /* First REGISTER the LDT table (service 11) so the monitor loads LDTR -- without

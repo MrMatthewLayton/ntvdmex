@@ -865,20 +865,17 @@ static LONG CALLBACK dpmi_crash_veh(EXCEPTION_POINTERS *ep)
         p = zput(p, " acc="); p = zhex(p, (unsigned)er->ExceptionInformation[0]);
         p = zput(p, " fault-addr=0x"); p = zhex(p, (unsigned)er->ExceptionInformation[1]);
     }
-    p = zput(p, "\r\n  host: EIP=0x"); p = zhex(p, cx->Eip);
-    p = zput(p, " CS=0x"); p = zhex(p, cx->SegCs);
-    p = zput(p, " EAX=0x"); p = zhex(p, cx->Eax);
-    p = zput(p, " EBX=0x"); p = zhex(p, cx->Ebx);
+    /* ContextRecord is the LIVE fault state (the in-process PM guest at the fault),
+       so CS/EIP here are the guest's -- e.g. CS=0x0F, EIP at the INT 31h. AX/CX/BX
+       identify the DPMI function. */
+    p = zput(p, "\r\n  PM fault ctx: CS=0x"); p = zhex(p, cx->SegCs);
+    p = zput(p, " EIP=0x"); p = zhex(p, cx->Eip);
+    p = zput(p, " SS=0x"); p = zhex(p, cx->SegSs);
     p = zput(p, " ESP=0x"); p = zhex(p, cx->Esp); p = zput(p, "\r\n");
-    if (g_tib_dbg) {
-        volatile BYTE *t = g_tib_dbg;
-        p = zput(p, "  guest PM: CS=0x"); p = zhex(p, VDM_REG(t, VTIB_CS) & 0xFFFF);
-        p = zput(p, " EIP=0x"); p = zhex(p, VDM_REG(t, VTIB_EIP));
-        p = zput(p, " SS=0x"); p = zhex(p, VDM_REG(t, VTIB_SS) & 0xFFFF);
-        p = zput(p, " DS=0x"); p = zhex(p, VDM_REG(t, VTIB_DS) & 0xFFFF);
-        p = zput(p, " EFL=0x"); p = zhex(p, VDM_REG(t, VTIB_EFLAGS));
-        p = zput(p, " event=0x"); p = zhex(p, VDM_REG(t, VTIB_EVENT)); p = zput(p, "\r\n");
-    }
+    p = zput(p, "  AX=0x"); p = zhex(p, cx->Eax & 0xFFFF);
+    p = zput(p, " CX=0x"); p = zhex(p, cx->Ecx & 0xFFFF);
+    p = zput(p, " BX=0x"); p = zhex(p, cx->Ebx & 0xFFFF);
+    p = zput(p, " DS=0x"); p = zhex(p, cx->SegDs); p = zput(p, "\r\n");
     log_append(LOG_PATH, cb, p);
     ExitProcess(0xDE0);                                 /* clean exit; batch dumps the log */
     return EXCEPTION_CONTINUE_SEARCH;                   /* not reached */
