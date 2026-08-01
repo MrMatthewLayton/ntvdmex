@@ -575,6 +575,41 @@ terminate for a ring-3 fault whose CS is an LDT selector in a VDM process. That 
 the per-thread/VDM state (or handler-table pointer) we are missing. This is the dedicated kernel
 RE pass flagged after run 16 — now with every user-mode variable eliminated.
 
+### Kernel RE session 1 (2026-08-01) — foothold + leads for the KiTrap0D/VdmDispatchException pass `[FACT, disasm]`
+
+Started the ntoskrnl RE flagged after run 23. Environment + facts to resume fast:
+
+- **Tooling:** `r2` (radare2) works on `reverse/ntoskrnl.exe` (XP SP3, 2008-04-14; VA base
+  `0x400000`, so file offset = VA − 0x400000). Use `-e scr.color=0`; ignore the "Relocs not
+  applied" warning for static disasm. `reverse/NTVDM.EX_` is compressed; the annotated
+  `ntvdm.exe` loads at image base `0x0f000000` (`r2 -e bin.baddr=0x0f000000`).
+- **`NtVdmControl` @ VA `0x4e09b7`.** Service # = arg0 (`[ebp+8]`→esi). **Service 3
+  (`VdmInitialize`) is special-cased** and bypasses the VDM-state gate; **service 14
+  (`VdmQueryVdmProcess`)** also special. **All other services require** `EPROCESS[+0x158]`
+  (the **VdmObjects** pointer) ≠ NULL **and** `EPROCESS[+0x24b] & 1`, else fail.
+- **Kernel VDM state accessors (XP SP3 offsets):** current KTHREAD = `fs:[0x124]`;
+  `KTHREAD[+0x44]` = Process (KPROCESS/EPROCESS); **`EPROCESS[+0x158]` = VdmObjects**. The
+  kernel reads VdmObjects fields `+0xac`, `+0xba` (bit 0), `+0xbc` in dispatch/query helpers
+  (e.g. VA `0x46bd53`, `0x54b72f`). This VdmObjects struct is where the PM reflection target
+  almost certainly lives.
+- **Search recipe that works:** find VdmObjects reads with
+  `/x 8058010000` (`mov eax,[eax+0x158]`) and `/x b858010000` (`cmp [eax+0x158],reg`). Hits
+  cluster in two regions: `0x46bxxx`/`0x42xxxx` (trap/dispatch helpers) and
+  `0x565xxx–0x566xxx` (NtVdmControl service handlers w/ ProbeForWrite+SEH — NOT the fault path).
+
+**Refined hypothesis to test next:** the kernel's user-exception delivery needs a **flat** CS to
+reach `KiUserExceptionDispatcher` (run 16: GDT-flat CS → VEH fires; LDT CS → no VEH). For a VDM
+process (`VdmObjects`≠NULL) `KiDispatchException` instead calls **`VdmDispatchException`**, which
+reflects the PM fault to a target read from **VdmObjects / the VDM_TIB** (a PM IDT or PM
+exception-handler vector). We never populate that PM IDT, so `INT 31h` reflects to a null/garbage
+target → silent terminate (no VEH, matches runs 10–16, 22–23).
+
+**Exact next step:** locate `KiDispatchException` (calls the ntdll `KeUserExceptionDispatcher`
+global for normal delivery; calls `VdmDispatchException` in the `VdmObjects≠NULL` branch), then
+disasm `VdmDispatchException` to read (a) its TRUE/FALSE return condition and (b) the VdmObjects/
+VDM_TIB field it uses as the reflection CS:EIP. That field = the PM IDT/handler table we must set
+up (candidate fix: populate the guest PM IDT `[0x31]` with a selector:offset that BOPs to the host).
+
 ## Open unknowns (what the spike must nail down) `[VERIFY]`
 
 1. **The mode-switch primitive.** Exactly how ntvdm flips the VDM from V86→PM after the client
