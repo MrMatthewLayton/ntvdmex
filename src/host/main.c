@@ -1219,6 +1219,28 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                             }
                             p = zput(p, " -> DOSfree");
                             break; }
+                        case 0x0102: {                             /* resize DOS memory block: BX=new paras, DX=sel */
+                            int idx = (VDM_REG(tib, VTIB_EDX) & 0xFFFF) >> 3;
+                            uint16_t want = (uint16_t)(VDM_REG(tib, VTIB_EBX) & 0xFFFF), max = 0;
+                            if (idx >= 1 && idx < 512 && g_ldt[idx].base) {
+                                uint16_t seg = (uint16_t)(g_ldt[idx].base >> 4);
+                                int err = dos_resize(NULL, seg, want, &max);
+                                if (err) {
+                                    VDM_REG(tib, VTIB_EFLAGS) |= 1u;
+                                    VDM_SET16(tib, VTIB_EAX, err);       /* DOS error (7/8/9) */
+                                    VDM_SET16(tib, VTIB_EBX, max);       /* largest available (paras) */
+                                    p = zput(p, " -> resize FAIL max=0x"); p = zhex(p, max);
+                                } else {
+                                    g_ldt[idx].limit = want ? ((DWORD)want << 4) - 1 : 0;
+                                    dpmi_install(idx);
+                                    p = zput(p, " -> resize seg=0x"); p = zhex(p, seg);
+                                    p = zput(p, " to 0x"); p = zhex(p, want); p = zput(p, " paras");
+                                }
+                            } else {
+                                VDM_REG(tib, VTIB_EFLAGS) |= 1u; VDM_SET16(tib, VTIB_EAX, 0x8022);  /* invalid sel */
+                                p = zput(p, " -> resize bad sel");
+                            }
+                            break; }
                         case 0x0204: {                             /* get PM interrupt vector: BL -> CX:DX */
                             DWORD bl = VDM_REG(tib, VTIB_EBX) & 0xFF;
                             VDM_SET16(tib, VTIB_ECX, g_pm_int[bl].sel);
@@ -1246,37 +1268,44 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                             p = zput(p, " -> getIF ");  p = zhex(p, g_dpmi_vi);
                             break;
                         case 0x0006: {                             /* get base of sel BX -> CX:DX */
-                            int idx = (VDM_REG(tib, VTIB_EBX) & 0xFFFF) >> 3;
-                            DWORD b = (idx >= 3 && idx < 512) ? g_ldt[idx].base : dpmi_sel_base((WORD)(VDM_REG(tib, VTIB_EBX)));
+                            DWORD b = dpmi_sel_base((WORD)(VDM_REG(tib, VTIB_EBX)));
                             VDM_SET16(tib, VTIB_ECX, b >> 16); VDM_SET16(tib, VTIB_EDX, b & 0xFFFF);
+                            p = zput(p, " sel 0x"); p = zhex(p, VDM_REG(tib, VTIB_EBX) & 0xFFFF);
                             p = zput(p, " -> base 0x"); p = zhex(p, b);
                             break; }
+                        /* 0007/0008/0009 now act on idx>=1: since run 48 records the switch's
+                           code/data/stack selectors (0x0F/0x17/0x1F) in g_ldt[1..3], a client that
+                           reconfigures its INITIAL selectors (e.g. a C runtime narrowing DS's limit)
+                           must take effect -- else the change silently no-ops and the client faults. */
                         case 0x0007: {                             /* set base of sel BX = CX:DX */
                             int idx = (VDM_REG(tib, VTIB_EBX) & 0xFFFF) >> 3;
                             DWORD b = ((VDM_REG(tib, VTIB_ECX) & 0xFFFF) << 16) | (VDM_REG(tib, VTIB_EDX) & 0xFFFF);
-                            if (idx >= 3 && idx < 512) { g_ldt[idx].base = b; dpmi_install(idx); }
+                            if (idx >= 1 && idx < 512) { g_ldt[idx].base = b; dpmi_install(idx); }
+                            p = zput(p, " sel 0x"); p = zhex(p, VDM_REG(tib, VTIB_EBX) & 0xFFFF);
                             p = zput(p, " -> setbase 0x"); p = zhex(p, b);
                             break; }
                         case 0x0008: {                             /* set limit of sel BX = CX:DX */
                             int idx = (VDM_REG(tib, VTIB_EBX) & 0xFFFF) >> 3;
                             DWORD l = ((VDM_REG(tib, VTIB_ECX) & 0xFFFF) << 16) | (VDM_REG(tib, VTIB_EDX) & 0xFFFF);
-                            if (idx >= 3 && idx < 512) { g_ldt[idx].limit = l; dpmi_install(idx); }
+                            if (idx >= 1 && idx < 512) { g_ldt[idx].limit = l; dpmi_install(idx); }
+                            p = zput(p, " sel 0x"); p = zhex(p, VDM_REG(tib, VTIB_EBX) & 0xFFFF);
                             p = zput(p, " -> setlimit 0x"); p = zhex(p, l);
                             break; }
                         case 0x0009: {                             /* set access rights of sel BX (CL) */
                             int idx = (VDM_REG(tib, VTIB_EBX) & 0xFFFF) >> 3;
-                            if (idx >= 3 && idx < 512) {
+                            if (idx >= 1 && idx < 512) {
                                 g_ldt[idx].access = VDM_REG(tib, VTIB_ECX) & 0xFF;
                                 g_ldt[idx].flags  = (VDM_REG(tib, VTIB_ECX) >> 8) & 0xF;  /* CH high nibble */
                                 dpmi_install(idx);
                             }
-                            p = zput(p, " -> setaccess");
+                            p = zput(p, " sel 0x"); p = zhex(p, VDM_REG(tib, VTIB_EBX) & 0xFFFF);
+                            p = zput(p, " -> setaccess 0x"); p = zhex(p, VDM_REG(tib, VTIB_ECX) & 0xFFFF);
                             break; }
                         case 0x000A: {                             /* create data alias of sel BX */
                             int src = (VDM_REG(tib, VTIB_EBX) & 0xFFFF) >> 3, idx;
                             if (g_ldt_next >= 512) { VDM_REG(tib, VTIB_EFLAGS) |= 1u; p = zput(p, " -> ENOMEM"); break; }
                             idx = g_ldt_next++;
-                            if (src >= 3 && src < 512) g_ldt[idx] = g_ldt[src];
+                            if (src >= 1 && src < 512) g_ldt[idx] = g_ldt[src];
                             else { g_ldt[idx].base = g_dpmi_code_base; g_ldt[idx].limit = 0xFFFF; g_ldt[idx].flags = 0; }
                             g_ldt[idx].access = 0xF2;              /* data alias */
                             dpmi_install(idx);
@@ -1613,7 +1642,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     (void)hInst; (void)hPrev; (void)lpCmd; (void)nShow;
     progpath[0] = 0; args[0] = 0;
 
-    p = zput(p, "NTVDMEX clean host\r\nSTAGE0: WinMain entered [build dpmi-harness-v43]\r\n");
+    p = zput(p, "NTVDMEX clean host\r\nSTAGE0: WinMain entered [build dpmi-harness-v45]\r\n");
     log_write(LOG_PATH, report, p);
     serial_init();                                      /* DPMI harness: COM1 log sink */
     serial_out(report, p);

@@ -1220,6 +1220,27 @@ exits — no host logic change was needed beyond runs 47–49.** Next: the HX au
 regression `.EXE`s (`Src/HDPMI/Regress16/`: `I310102` resize-DOS-block, `mouevnt`, `RAWJMP7`) to surface
 the `default: UNSUP AX=` gaps a fuller extender hits.
 
+### VM run 51 (2026-08-02) — surface hardening (0102 + initial-selector setters), and the C-runtime WALL `[FACT, real CPU]`
+
+Added `INT 31h 0102` (resize DOS memory block → `dos_resize`) and made `0007/0008/0009` (set
+base/limit/access) apply to `idx>=1` — since run 48 records the switch's code/data/stack selectors
+(`0x0F/0x17/0x1F`) in `g_ldt[1..3]`, a client that narrows/retypes its INITIAL selectors must take
+effect (before, those calls silently no-op'd on idx<3). BX is now logged for all get/set-descriptor
+services. Third-party regression: **`DPMIBACK` still passes green (`build v45`)** — the common path is
+intact.
+
+**The wall (honest):** Japheth's C-compiled `I310102.EXE` (tests `0102`) does NOT pass. Its C runtime,
+right after PM entry, reconfigures the selectors we handed it — `setlimit 0x17=0x25cf` (narrow DS), then
+`setbase/setlimit/setaccess` on `0x1F` (our SS) to base `0x1100`, limit `0x25cf`, **access `0xFB` (a
+CODE type)** — and then **hangs on the next, non-INT instruction**. That is the unsolved problem, not a
+missing service: a plain-instruction `#GP` in PM is NOT reflected to the host (only patched `CD nn`
+BOPs are — runs 20–34). `DPMIBACK` works precisely because it touches only patched INTs + `0301`; a C
+runtime that manipulates descriptors and then executes through them faults on an instruction we can't
+see. So the next frontier for *C-runtime / full-extender* binaries is the **native PM-fault reflect**
+(or an equivalent: single-step/emulate PM until the next INT), a separate deep spike — the INT-31h
+service surface is no longer the bottleneck. `mouevnt`/`RAWJMP7`/`I310102a` are expected to hit the
+same wall and are parked behind it.
+
 ## Open unknowns (what the spike must nail down) `[VERIFY]`
 
 1. **The mode-switch primitive.** Exactly how ntvdm flips the VDM from V86→PM after the client
