@@ -117,6 +117,48 @@ start:
     mov ah, 0x09
     int 0x21
 .rm_done:
+
+    ; --- run 46: INT 31h 0303 real-mode callback (nested V86->PM->V86) ----
+    ; Allocate a real-mode callback whose PM handler writes 0xCAFE, then use 0301
+    ; to run an RM proc that far-calls it. Exercises PM->V86->PM->V86->PM.
+    push ds                    ; DS:SI = PM handler (CS-based: handler is code)
+    mov ax, cs                 ; cs = 0x0F (code selector)
+    mov ds, ax
+    mov si, .pmcb              ; handler offset
+    mov ax, 0x0017             ; ES:DI = RMCS buffer (data selector)
+    mov es, ax
+    mov di, .cbrmcs
+    mov ax, 0x0303             ; allocate real-mode callback
+    int 0x31                   ; -> CX:DX = real-mode callback address
+    pop ds                     ; restore DS = data selector
+    mov [0x630], dx            ; store the callback far pointer (offset, then segment)
+    mov [0x632], cx
+    mov word [.rmcs2 + 0x2C], 0x0100   ; 0301 -> run .rmproc2 in V86
+    mov word [.rmcs2 + 0x2A], .rmproc2
+    mov word [.rmcs2 + 0x24], 0x0100
+    mov word [.rmcs2 + 0x30], 0x0100
+    mov word [.rmcs2 + 0x2E], 0xFC00
+    mov word [.rmcs2 + 0x20], 0x0202
+    mov word [0x626], 0x0000           ; clear the handler sentinel
+    push ds
+    pop es
+    mov di, .rmcs2
+    mov ax, 0x0301
+    xor bx, bx
+    xor cx, cx
+    int 0x31                   ; -> .rmproc2 far-calls the callback; PM handler runs; resumes
+    mov ax, [0x626]            ; the PM handler should have written 0xCAFE
+    cmp ax, 0xCAFE
+    jne .cb_bad
+    mov dx, .cbok
+    mov ah, 0x09
+    int 0x21
+    jmp .cb_done
+.cb_bad:
+    mov dx, .cbbad
+    mov ah, 0x09
+    int 0x21
+.cb_done:
     mov ax, 0x4C00             ; terminate
     int 0x21
 .pmspin:
@@ -129,12 +171,21 @@ start:
     mov dl, 'R'                ; (proves the un/re-patch: this CD 21 vectors natively in V86)
     int 0x21
     retf
+.rmproc2:                      ; V86 (via 0301): far-call the 0303 callback, then RETF
+    call far [0x630]
+    retf
+.pmcb:                         ; PM 0303 callback handler (entered by the host on the RM far-call)
+    mov word [0x626], 0xCAFE   ; write a sentinel (DS=0x17 base 0x1000 -> linear 0x1626)
+    iret                       ; -> the host's PM-return catcher
 .rmsg:  db '  [printed via INT 31h 0300 -> real-mode INT 21h AH=09]', 13, 10, '$'
 .pmsg:  db 'DPMI: 0300 simulate-real-mode-int OK!', 13, 10, '$'
 .rmok:  db 'DPMI: 0301 real-mode far-call OK (sentinel BEEF)!', 13, 10, '$'
 .rmbad: db 'DPMI: 0301 FAILED (no sentinel).', 13, 10, '$'
+.cbok:  db 'DPMI: 0303 real-mode callback OK (handler wrote CAFE)!', 13, 10, '$'
+.cbbad: db 'DPMI: 0303 callback FAILED.', 13, 10, '$'
 .rmcs:  times 50 db 0
 .rmcs2: times 50 db 0
+.cbrmcs: times 50 db 0
 
 .switchfail:
     mov dx, msg_fail

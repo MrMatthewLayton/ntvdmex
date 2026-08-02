@@ -1108,6 +1108,37 @@ helper living in separately-allocated conventional memory was never scanned/patc
 already worked. The window where the segment is un-patched is exactly the V86 excursion, which is
 correct (V86 wants clean `CD nn`). Cost = two O(64K) byte scans per `0301` call — negligible.
 
+### VM run 46 (2026-08-02) — the ROUND-TRIP INVERTED: INT 31h 0303 real-mode callback (V86→PM→V86) `[FACT, real CPU]`
+
+`0301` proved PM→V86→PM; `0303` (allocate real-mode callback) proves the other direction —
+**real-mode code far-calls into a protected-mode handler and back** — nested inside a `0301`
+excursion, so the full chain is **PM→V86→PM→V86→PM** and it works first try on the real CPU.
+
+Mechanism: `0303` alloc records the client's PM handler (`DS:SI`) + an RMCS buffer (`ES:DI`) in a
+slot and returns `CX:DX` = a planted real-mode BOP entry (`DOS_HDLR_SEG:0x60+slot*4`, `C4 C4 0x55`).
+A PM-return catcher (`C4 C4 0x56` at `DOS_HDLR_SEG:0x70`) is reachable via `g_pmret_sel`, a code
+selector based at `DOS_HDLR_SEG` (0x500), installed lazily on the first `0303`. When guest real-mode
+code (here, a `0301` proc) far-calls the callback entry, `v86_run` stops on the BOP;
+`dpmi_invoke_callback` pops the far-call return frame, fills the RMCS with the RM register file +
+return `CS:IP:SS:SP`, **re-patches** the segment, sets `MSW PE`, builds a PM stack with an `IRET`
+frame pointing at the PM-return catcher, and runs the handler via `dpmi_enter_pm` until it `IRET`s onto
+the catcher — then reads the RMCS back, **un-patches**, clears PE, and resumes V86 at the RMCS `CS:IP`
+(the far-call return). The `0301` nested loop then continues the RM proc to its `RETF`.
+
+VM-confirmed (`build v36`): `0303 -> cb slot 0 = 0x0050:0x0060 handler 0x0F:0x0271` → inside a `0301`
+excursion `0303-cb slot 0 ret=0x0100:0x0270 -> PM handler 0x0F:0x0271` → `PM handler returned (OK)` →
+`0301 -> RM proc returned after 1 steps (OK)` → the PM client read the handler's write back and printed
+**`DPMI: 0303 real-mode callback OK (handler wrote CAFE)!`** → clean exit (13 services, sentinel `0x5A`,
+24 sites patched). So a `0xCAFE` written by a PM callback that was invoked *from V86 in the middle of a
+0301 call* is visible to the outer PM client — bidirectional mode transitions compose to arbitrary
+depth.
+
+Banked: `dpmi_enter_pm` is safe to call fresh from inside a `0301` excursion (the outer PM loop's
+`dpmi_enter_pm` already returned, so it's not truly nested at the C level); a `handler that itself does
+INT 31h/21h` would need the full PM dispatch (the spike handler only writes memory + `IRET`, so the
+callback PM loop just watches for the return catcher). Together with 0300/0301, the real/protected-mode
+bridge a DOS extender needs is now complete.
+
 ## Open unknowns (what the spike must nail down) `[VERIFY]`
 
 1. **The mode-switch primitive.** Exactly how ntvdm flips the VDM from V86→PM after the client

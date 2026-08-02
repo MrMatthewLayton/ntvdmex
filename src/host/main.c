@@ -55,6 +55,16 @@
    past the mode-switch entry (0x50..0x53). */
 #define DPMI_RMRET_OFF 0x0054
 #define DPMI_RMRET_BOP 0x54
+/* DPMI 0303 (allocate real-mode callback): planted real-mode BOP entries (one per
+   callback slot) that a client's real-mode code far-calls; the host switches V86->PM
+   and runs the client's PM handler. DPMI_PMRET is the PM-side return catcher the
+   handler IRETs to (reached via g_pmret_sel, a code selector based at DOS_HDLR_SEG).
+   All within the 0x500..0x5FF handler segment (env seg starts at 0x600). */
+#define DPMI_CB_BOP      0x55
+#define DPMI_CB_BASE_OFF 0x0060      /* slot i entry at DOS_HDLR_SEG:(base + i*4) */
+#define DPMI_CB_SLOTS    4
+#define DPMI_PMRET_BOP   0x56
+#define DPMI_PMRET_OFF   0x0070
 
 /* EMS (M4): the LIM page frame is a 64KB RAM window in the UMA. v86_map_ems_frame
    scans the conventional page-frame segments AFTER VdmInitialize for a free 64KB
@@ -92,6 +102,12 @@ static BYTE  g_int_vec[0x10000];            /* per-CS-offset: original INT vecto
    a deeper item; storing the vectors is what real extenders' save/restore needs.) */
 static struct { WORD sel; DWORD off; } g_pm_int[256];
 static int   g_dpmi_vi = 1;                 /* DPMI virtual interrupt flag (INT 31h 0900/0901/0902) */
+/* DPMI 0303 real-mode callbacks: each slot records the client's PM handler (sel:off)
+   and the RMCS buffer (sel:off) to marshal register state through. g_pmret_sel is a
+   code selector based at DOS_HDLR_SEG (0x500) so the PM handler's IRET lands on the
+   planted DPMI_PMRET catcher; allocated lazily on the first 0303. */
+static struct { WORD pm_sel; DWORD pm_off; WORD rm_es; DWORD rm_di; int used; } g_cb[DPMI_CB_SLOTS];
+static WORD  g_pmret_sel = 0;
 /* DPMI LDT descriptor allocator. Indices 0=null,1=code(0x0F),2=data(0x17) are the
    switch's; DPMI clients allocate from 3+. We keep base/limit/access so INT 31h
    06/07/08/09 can get/modify them and reinstall via svc 10 (NtSetLdtEntries). */
@@ -1038,6 +1054,79 @@ static void dpmi_repatch(void)
         if (g_int_vec[o]) { cs[o] = 0xC4; cs[o + 1] = 0xC4; }
 }
 
+/* Invoke a DPMI 0303 real-mode callback: the guest (running in V86 during a 0301
+   excursion) far-called a planted callback BOP -- switch V86->PM, run the client's
+   PM handler with the real-mode register state marshalled into its RMCS, then resume
+   V86 at the far-call's return address. The inverse of 0301's PM->V86 direction.
+   On entry the CONTEXT holds the V86 state at the far-call (segment un-patched). */
+static void dpmi_invoke_callback(volatile BYTE *tib, int slot)
+{
+    char lb[256]; char *lp = lb;
+    WORD rss = (WORD)VDM_REG(tib, VTIB_SS), rsp = (WORD)VDM_REG(tib, VTIB_ESP);
+    DWORD rstk = ((DWORD)rss << 4) + rsp;
+    WORD retIP = peekw(rstk), retCS = peekw(rstk + 2);     /* the far-call return frame */
+    WORD newSP = (WORD)(rsp + 4);                          /* pop it */
+    DWORD rmcs = dpmi_sel_base(g_cb[slot].rm_es) + g_cb[slot].rm_di;
+    volatile BYTE *rc = (volatile BYTE *)(ULONG_PTR)rmcs;
+    WORD vMsw = *(volatile WORD *)(tib + VTIB_MSW);
+    unsigned ph; int cbdone = 0;
+    /* fill the callback's RMCS with the real-mode register file + the return CS:IP:SS:SP */
+    *(volatile WORD*)(rc+0x00)=VDM_REG(tib,VTIB_EDI); *(volatile WORD*)(rc+0x04)=VDM_REG(tib,VTIB_ESI);
+    *(volatile WORD*)(rc+0x08)=VDM_REG(tib,VTIB_EBP); *(volatile WORD*)(rc+0x10)=VDM_REG(tib,VTIB_EBX);
+    *(volatile WORD*)(rc+0x14)=VDM_REG(tib,VTIB_EDX); *(volatile WORD*)(rc+0x18)=VDM_REG(tib,VTIB_ECX);
+    *(volatile WORD*)(rc+0x1C)=VDM_REG(tib,VTIB_EAX); *(volatile WORD*)(rc+0x22)=VDM_REG(tib,VTIB_ES);
+    *(volatile WORD*)(rc+0x24)=VDM_REG(tib,VTIB_DS);  *(volatile WORD*)(rc+0x20)=(WORD)VDM_REG(tib,VTIB_EFLAGS);
+    *(volatile WORD*)(rc+0x2A)=retIP; *(volatile WORD*)(rc+0x2C)=retCS;   /* CS:IP = far-call return */
+    *(volatile WORD*)(rc+0x2E)=newSP; *(volatile WORD*)(rc+0x30)=rss;     /* SS:SP after popping it */
+    lp = zput(lp, "  0303-cb slot "); lp = zhex(lp, slot); lp = zput(lp, " ret=0x"); lp = zhex(lp, retCS);
+    lp = zput(lp, ":0x"); lp = zhex(lp, retIP); lp = zput(lp, " -> PM handler 0x"); lp = zhex(lp, g_cb[slot].pm_sel);
+    lp = zput(lp, ":0x"); lp = zhex(lp, g_cb[slot].pm_off); lp = zput(lp, "\r\n");
+    log_append(LOG_PATH, lb, lp); serial_out(lb, lp); lp = lb;
+    /* re-arm the BOP patch (the PM handler is protected-mode code), enter PM */
+    dpmi_repatch();
+    *(volatile WORD *)(tib + VTIB_MSW) = (WORD)(vMsw | MSW_PE_BIT);
+    /* PM handler stack (data selector 0x17, scratch SP) with an IRET frame -> PM-return catcher */
+    { WORD pss = 0x17, psp = 0xF400; DWORD b = dpmi_sel_base(pss);
+      psp -= 2; pokew(b + psp, 0x0202);            /* FLAGS */
+      psp -= 2; pokew(b + psp, g_pmret_sel);       /* CS */
+      psp -= 2; pokew(b + psp, DPMI_PMRET_OFF);    /* IP */
+      VDM_SET16(tib, VTIB_SS, pss); VDM_REG(tib, VTIB_ESP) = psp; }
+    VDM_REG(tib, VTIB_EFLAGS) = VTIB_EFLAGS_PM;
+    VDM_SET16(tib, VTIB_CS, g_cb[slot].pm_sel); VDM_REG(tib, VTIB_EIP) = g_cb[slot].pm_off;
+    VDM_SET16(tib, VTIB_ES, g_cb[slot].rm_es);  VDM_REG(tib, VTIB_EDI) = g_cb[slot].rm_di;  /* ES:DI = RMCS */
+    VDM_SET16(tib, VTIB_DS, 0x17); VDM_REG(tib, VTIB_ESI) = 0;
+    /* run the PM handler until it IRETs onto the PM-return catcher (g_pmret_sel:PMRET_OFF).
+       (A handler that itself does INT 31h/21h would need the full PM dispatch; the spike
+       handler does not -- log + bail on any other PM stop.) */
+    for (ph = 0; ph < 64 && !cbdone; ++ph) {
+        DWORD ev, eip;
+        dpmi_enter_pm(tib);
+        ev = VDM_REG(tib, VTIB_EVENT); eip = VDM_REG(tib, VTIB_EIP) & 0xFFFF;
+        if (ev == VDM_EVENT_BOP && eip == DPMI_PMRET_OFF
+            && (VDM_REG(tib, VTIB_CS) & 0xFFFF) == g_pmret_sel) { cbdone = 1; break; }
+        if (ev == 3) continue;   /* dpmi_enter_pm reports "interrupt pending, not entered" -- retry */
+        lp = zput(lp, "  0303-cb: unexpected PM stop ev=0x"); lp = zhex(lp, ev);
+        lp = zput(lp, " CS:IP=0x"); lp = zhex(lp, VDM_REG(tib, VTIB_CS) & 0xFFFF);
+        lp = zput(lp, ":0x"); lp = zhex(lp, eip); lp = zput(lp, "\r\n");
+        log_append(LOG_PATH, lb, lp); serial_out(lb, lp); lp = lb;
+        break;
+    }
+    /* handler done: un-patch again and resume the RM proc in V86 at the RMCS CS:IP */
+    dpmi_unpatch();
+    *(volatile WORD *)(tib + VTIB_MSW) = vMsw;
+    VDM_REG(tib, VTIB_EFLAGS) = 0x20202;
+    VDM_REG(tib,VTIB_EDI)=*(volatile WORD*)(rc+0x00); VDM_REG(tib,VTIB_ESI)=*(volatile WORD*)(rc+0x04);
+    VDM_REG(tib,VTIB_EBP)=*(volatile WORD*)(rc+0x08); VDM_REG(tib,VTIB_EBX)=*(volatile WORD*)(rc+0x10);
+    VDM_REG(tib,VTIB_EDX)=*(volatile WORD*)(rc+0x14); VDM_REG(tib,VTIB_ECX)=*(volatile WORD*)(rc+0x18);
+    VDM_REG(tib,VTIB_EAX)=*(volatile WORD*)(rc+0x1C);
+    VDM_SET16(tib,VTIB_ES,*(volatile WORD*)(rc+0x22)); VDM_SET16(tib,VTIB_DS,*(volatile WORD*)(rc+0x24));
+    VDM_SET16(tib,VTIB_CS,*(volatile WORD*)(rc+0x2C)); VDM_REG(tib,VTIB_EIP)=*(volatile WORD*)(rc+0x2A);
+    VDM_SET16(tib,VTIB_SS,*(volatile WORD*)(rc+0x30)); VDM_REG(tib,VTIB_ESP)=*(volatile WORD*)(rc+0x2E);
+    VDM_SET16(tib,VTIB_FS,*(volatile WORD*)(rc+0x30)); VDM_SET16(tib,VTIB_GS,*(volatile WORD*)(rc+0x30));
+    lp = zput(lp, cbdone ? "  0303-cb: PM handler returned (OK)\r\n" : "  0303-cb: PM handler NO-RET\r\n");
+    log_append(LOG_PATH, lb, lp); serial_out(lb, lp); lp = lb;
+}
+
 int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
 {
     char report[8192]; char *p = report; char *base;
@@ -1069,7 +1158,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     (void)hInst; (void)hPrev; (void)lpCmd; (void)nShow;
     progpath[0] = 0; args[0] = 0;
 
-    p = zput(p, "NTVDMEX clean host\r\nSTAGE0: WinMain entered [build dpmi-harness-v35]\r\n");
+    p = zput(p, "NTVDMEX clean host\r\nSTAGE0: WinMain entered [build dpmi-harness-v36]\r\n");
     log_write(LOG_PATH, report, p);
     serial_init();                                      /* DPMI harness: COM1 log sink */
     serial_out(report, p);
@@ -1204,6 +1293,14 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
        handler detects it and returns to PM, it never resumes past it). */
     hdlr[DPMI_RMRET_OFF + 0] = VDM_BOP0; hdlr[DPMI_RMRET_OFF + 1] = VDM_BOP1;
     hdlr[DPMI_RMRET_OFF + 2] = DPMI_RMRET_BOP;
+    /* DPMI 0303 real-mode callback entries (one per slot) + the PM-return catcher. */
+    { int s; for (s = 0; s < DPMI_CB_SLOTS; ++s) {
+        hdlr[DPMI_CB_BASE_OFF + s*4 + 0] = VDM_BOP0;
+        hdlr[DPMI_CB_BASE_OFF + s*4 + 1] = VDM_BOP1;
+        hdlr[DPMI_CB_BASE_OFF + s*4 + 2] = DPMI_CB_BOP;
+    } }
+    hdlr[DPMI_PMRET_OFF + 0] = VDM_BOP0; hdlr[DPMI_PMRET_OFF + 1] = VDM_BOP1;
+    hdlr[DPMI_PMRET_OFF + 2] = DPMI_PMRET_BOP;
     /* EMS detection method 2: programs read the INT 67h vector's segment:000Ah for
        the device-driver name "EMMXXXX0". Park it in the handler segment. */
     for (i = 0; i < sizeof(emmname); ++i) hdlr[DOS_EMM_NAME_OFF + i] = emmname[i];
@@ -1731,6 +1828,15 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                                     log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
                                     continue;
                                 }
+                                if (rev == VDM_EVENT_BOP && info == DPMI_CB_BOP) {  /* proc far-called a 0303 callback */
+                                    int cbslot = (int)(((VDM_REG(tib,VTIB_EIP)&0xFFFF) - DPMI_CB_BASE_OFF) / 4);
+                                    if (cbslot >= 0 && cbslot < DPMI_CB_SLOTS && g_cb[cbslot].used) {
+                                        dpmi_invoke_callback(tib, cbslot);   /* V86->PM handler->V86; sets CS:IP to the return */
+                                        continue;
+                                    }
+                                    p = zput(p, "0301: bad cb slot\r\n"); log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                                    break;
+                                }
                                 if (rev == VDM_EVENT_IO || rev == VDM_EVENT_GPFAULT) {
                                     int h; EnterCriticalSection(&g_lock);
                                     h = host_try_io(tib, &g_bus); LeaveCriticalSection(&g_lock);
@@ -1760,6 +1866,29 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                             VDM_REG(tib,VTIB_EFLAGS) &= ~1u;        /* CF=0: success */
                             p = zput(p, "0301 -> RM proc returned after "); p = zhex(p, rt);
                             p = zput(p, done ? " steps (OK)" : " steps (NO-RET)");
+                            break; }
+                        case 0x0303: {                             /* allocate real-mode callback: DS:SI=handler, ES:DI=RMCS -> CX:DX */
+                            int s;
+                            if (g_pmret_sel == 0 && g_ldt_next < 512) {  /* lazily install the PM-return selector */
+                                int idx = g_ldt_next++;
+                                g_ldt[idx].base = (DWORD)DOS_HDLR_SEG << 4; g_ldt[idx].limit = 0xFFFF;
+                                g_ldt[idx].access = 0xFA; g_ldt[idx].flags = 0;   /* code exec/read */
+                                dpmi_install(idx);
+                                g_pmret_sel = (WORD)((idx << 3) | 7);
+                            }
+                            for (s = 0; s < DPMI_CB_SLOTS && g_cb[s].used; ++s) {}
+                            if (s >= DPMI_CB_SLOTS || g_pmret_sel == 0) {
+                                VDM_REG(tib, VTIB_EFLAGS) |= 1u; VDM_SET16(tib, VTIB_EAX, 0x8015);
+                                p = zput(p, " -> cb ENOMEM"); break;
+                            }
+                            g_cb[s].used = 1;
+                            g_cb[s].pm_sel = (WORD)VDM_REG(tib, VTIB_DS); g_cb[s].pm_off = VDM_REG(tib, VTIB_ESI) & 0xFFFF;
+                            g_cb[s].rm_es  = (WORD)VDM_REG(tib, VTIB_ES); g_cb[s].rm_di  = VDM_REG(tib, VTIB_EDI) & 0xFFFF;
+                            VDM_SET16(tib, VTIB_ECX, DOS_HDLR_SEG);
+                            VDM_SET16(tib, VTIB_EDX, DPMI_CB_BASE_OFF + s*4);
+                            p = zput(p, " -> cb slot "); p = zhex(p, s); p = zput(p, " = 0x");
+                            p = zhex(p, DOS_HDLR_SEG); p = zput(p, ":0x"); p = zhex(p, DPMI_CB_BASE_OFF + s*4);
+                            p = zput(p, " handler 0x"); p = zhex(p, g_cb[s].pm_sel); p = zput(p, ":0x"); p = zhex(p, g_cb[s].pm_off);
                             break; }
                         default:
                             VDM_REG(tib, VTIB_EFLAGS) |= 1u;       /* CF=1: unsupported */
