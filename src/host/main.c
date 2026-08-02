@@ -1027,8 +1027,12 @@ static void dpmi_install(int idx)
 static DWORD dpmi_sel_base(WORD sel)
 {
     int idx = (sel & 0xFFFF) >> 3;
-    if (idx >= 3 && idx < 512) return g_ldt[idx].base;
-    return g_dpmi_code_base;                                    /* 0x0F/0x17 = the .COM segment */
+    /* Indices 1..3 are the switch's code/data/stack selectors (recorded in g_ldt[]
+       from g_dpmi_seg_base); 3+ are client allocations. For a .COM all three bases
+       equal g_dpmi_code_base; for a real .EXE (CS!=DS!=SS) they differ, so a per-
+       selector lookup is required to translate DS:/ES: buffers correctly. */
+    if (idx >= 1 && idx < 512) return g_ldt[idx].base;
+    return g_dpmi_code_base;                                    /* null / unknown selector */
 }
 
 /* Un-patch / re-patch the shared code segment around a V86 excursion (INT 31h 0301/
@@ -1609,7 +1613,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     (void)hInst; (void)hPrev; (void)lpCmd; (void)nShow;
     progpath[0] = 0; args[0] = 0;
 
-    p = zput(p, "NTVDMEX clean host\r\nSTAGE0: WinMain entered [build dpmi-harness-v37]\r\n");
+    p = zput(p, "NTVDMEX clean host\r\nSTAGE0: WinMain entered [build dpmi-harness-v40]\r\n");
     log_write(LOG_PATH, report, p);
     serial_init();                                      /* DPMI harness: COM1 log sink */
     serial_out(report, p);
@@ -2000,7 +2004,20 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             if (sw == 0) {
                 unsigned steps;
                 g_dpmi_pm = 1;
-                g_dpmi_code_base = g_dpmi_dbg[0] << 4;   /* retcs<<4 = guest PM code linear base */
+                g_dpmi_code_base = g_dpmi_seg_base[0];   /* CS base = the patch-scan target */
+                /* Record the switch's code/data/stack selector bases (indices 1/2/3) so
+                   dpmi_sel_base() translates DS:/ES:/SS: through the right base -- essential
+                   once CS!=DS!=SS (a real .EXE); for a .COM all three are equal. */
+                { int si; for (si = 0; si < 3; ++si) {
+                    g_ldt[1 + si].base   = g_dpmi_seg_base[si];
+                    g_ldt[1 + si].limit  = 0xFFFF;
+                    g_ldt[1 + si].access = (si == 0) ? 0xFA : 0xF2;
+                    g_ldt[1 + si].flags  = 0;
+                } }
+                if (g_ldt_next < 4) g_ldt_next = 4;      /* client allocs start at index 4 now */
+                p = zput(p, " segbase C=0x"); p = zhex(p, g_dpmi_seg_base[0]);
+                p = zput(p, " D=0x"); p = zhex(p, g_dpmi_seg_base[1]);
+                p = zput(p, " S=0x"); p = zhex(p, g_dpmi_seg_base[2]);
                 p = zput(p, " -> PM ok (CS=0x"); p = zhex(p, VDM_REG(tib, VTIB_CS) & 0xFFFF);
                 p = zput(p, ":0x"); p = zhex(p, VDM_REG(tib, VTIB_EIP) & 0xFFFF);
                 p = zput(p, ") -> DPMI PM loop\r\n");

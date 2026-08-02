@@ -19,6 +19,12 @@
 /* Diagnostic snapshot of the last switch: {ret_cs, ret_ip, code desc lo, hi}. */
 extern DWORD g_dpmi_dbg[4];
 
+/* Linear bases of the three initial selectors the switch installs, published so the
+   host can record them for dpmi_sel_base(): [0]=code (CS, sel 0x0F), [1]=data (DS,
+   sel 0x17), [2]=stack (SS, sel 0x1F). For a .COM these are equal; for a real .EXE
+   (CS!=DS!=SS) they diverge, which is why they are tracked per-selector. */
+extern DWORD g_dpmi_seg_base[3];
+
 /* An LDT selector: (index<<3) | TI(=1,LDT) | RPL(=3, ring-3 client). */
 #define DPMI_SEL(index)  (WORD)(((index) << 3) | 0x4 | 0x3)
 

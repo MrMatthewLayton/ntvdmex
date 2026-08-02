@@ -1158,6 +1158,38 @@ AX=0x0400 -> ver 0.90` and `INT21h AH=09 print: "  [0303 handler ran nested INT 
 The nested INT is serviced by the identical code path as a top-level one, so the whole INT 31h/21h
 surface is available to every handler a real extender installs (timer ticks, exception handlers, etc.).
 
+### VM run 48 (2026-08-02) — a REAL multi-segment MZ .EXE (CS!=DS!=SS) loads, switches, and runs INT 31h/21h in PM `[FACT, real CPU]`
+
+The whole spike so far used `dpmitest.com` — one 64K segment, `CS=DS=SS=PSP`, so the switch could get
+away with a single based selector reused for data and stack. Run 48 proves the real target shape: a
+genuine **MZ `.EXE` with three distinct segments** (`tools/dostest/dpmiexe.asm`, hand-built with NASM
+`-f bin`: MZ header + a relocation on the `mov ax,DATA_SEG` immediate that loads DS). It exercises
+`dos_load`'s `.EXE` path (header parse, relocation fixup, `CS!=PSP` entry) end-to-end, then the switch.
+
+Two host changes made it work:
+1. **`dpmi_switch_to_pm` builds THREE selectors** — code (`0x0F` @ `retcs<<4`), data (`0x17` @ **`ds<<4`**,
+   was wrongly `ss<<4`), stack (`0x1F` @ `ss<<4`, a NEW dedicated selector). It registers a 4-entry LDT
+   (svc 11) + sets all three via svc 10, then loads `CS=0x0F, DS=ES=FS=GS=0x17, SS=0x1F`. The three bases
+   are published in `g_dpmi_seg_base[]`.
+2. **`dpmi_sel_base()` is now per-selector uniform** — the host records the switch's code/data/stack
+   bases into `g_ldt[1..3]` (client allocations move to index 4+), so a DS:/ES:/SS: buffer in any INT
+   31h/21h service translates through the *right* base. For a `.COM` all three are equal (verified: run
+   still green, `segbase C=D=S=0x1000`); for the `.EXE` they diverge.
+
+The client's DATA references are emitted DATA-segment-relative (`sym - DATA`) — the segmented-addressing
+discipline a real linker enforces; the first attempt (flat image-relative offsets) printed string tails
+through the wrong DS base and was the giveaway that DS was correctly *distinct* from CS.
+
+VM-confirmed (`build v40`): serial shows `retcs=0x110`, **`segbase C=0x1100 D=0x1170 S=0x12d0`** (three
+different paragraphs) → `PM ok (CS=0x0F:0x2a)` → `INT31h AX=0x0400 -> ver 0.90` → `INT21h AH=09 print:
+"  [PM INT 21h AH=09 printed via the DATA selector 0x17]"` → **`INT21h AH=09 print: "DPMI .EXE: PROTECTED
+MODE OK -- INT 31h ver 005A, DS-relative print!"`** → clean `4Ch` exit. So an unmodified-shape 16-bit
+protected-mode `.EXE` boots into PM under the host and its DS-relative DOS output resolves correctly.
+(The `.COM`-specific `0x1600` sentinel probe in the `4Ch` log still prints `MISMATCH` for an `.EXE` — a
+cosmetic false flag; the client's own `PROTECTED MODE OK` print is authoritative.) Next: a third-party
+16-bit extender binary, and 0300/0301/0303 from an `.EXE` (needs the client to fill RMCS real-mode
+segments from selector bases via INT 31h 0006, since in PM `SEG data` is a selector, not a paragraph).
+
 ## Open unknowns (what the spike must nail down) `[VERIFY]`
 
 1. **The mode-switch primitive.** Exactly how ntvdm flips the VDM from V86→PM after the client

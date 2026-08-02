@@ -19,6 +19,7 @@ nasm -f bin "$DIR/emstest.asm"  -o "$DIR/emstest.com"    # M4 EMS end-to-end tes
 nasm -f bin "$DIR/selftest.asm" -o "$DIR/selftest.com"  # one-shot regression suite (all subsystems)
 nasm -f bin "$DIR/modeswitch.asm" -o "$DIR/modeswitch.com" # GH#14: graphics->text mode-switch text visibility
 nasm -f bin "$DIR/dpmitest.asm" -o "$DIR/dpmitest.com"     # GH#1: DPMI 16-bit real->PM switch spike
-for f in vgademo.com vga12.com vesademo.com blitfast.com timertst.com mousetst.com xmstest.com emstest.com selftest.com modeswitch.com dpmitest.com; do
+nasm -f bin "$DIR/dpmiexe.asm"  -o "$DIR/dpmiexe.exe"      # GH#2: multi-segment MZ .EXE DPMI client
+for f in vgademo.com vga12.com vesademo.com blitfast.com timertst.com mousetst.com xmstest.com emstest.com selftest.com modeswitch.com dpmitest.com dpmiexe.exe; do
     echo "  $f  ($(wc -c < "$DIR/$f") bytes)"
 done

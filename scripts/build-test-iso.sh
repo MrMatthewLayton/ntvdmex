@@ -38,6 +38,7 @@ cp "$BUILD/dosstub.com"   "$STAGE/"
 cp "$DT/selftest.bat" "$DT/selftest.com" "$STAGE/"
 cp "$DT/modeswitch.bat" "$DT/modeswitch.com" "$STAGE/"   # GH#14 mode-switch regression test
 cp "$DT/dpmitest.bat" "$DT/dpmitest.com" "$STAGE/"       # GH#1 DPMI 16-bit switch spike
+cp "$DT/dpmiexe.exe" "$STAGE/"                           # GH#2 multi-segment MZ .EXE DPMI client
 cp "$DT/dpmiauto.bat" "$DT/dpmiinstall.bat" "$STAGE/"    # headless DPMI autorun harness
 cp "$DT/runtest-demos.bat" "$STAGE/"
 # individual test programs
