@@ -1195,8 +1195,30 @@ client solves it the proper DPMI way — `INT 31h 0006` (get base of the DS sele
 base to a paragraph → write it into `RMCS.DS`. VM-confirmed (`build v41`): `INT31h AX=0x0006 -> base
 0x11a0` → `INT31h AX=0x0300 -> simInt 0x21` → the client resumes in PM and prints **`DPMI .EXE: 0300
 simulate-real-mode-int OK!`** → clean `4Ch`. So an `.EXE` can round-trip DOS calls through PM with its
-data addressed correctly. Next: a third-party 16-bit extender binary (0301/0303 from an `.EXE` follow
-the same RMCS-segment-from-0006 pattern).
+data addressed correctly.
+
+### VM run 50 (2026-08-02) — a genuine THIRD-PARTY 16-bit DPMI binary runs unmodified `[FACT, real CPU]`
+
+The milestone for GH #2: not our own client, but **`DPMIBACK.COM`** — authored by *Japheth* (Baron von
+Riedesel, author of HX/HDPMI and JWasm), sourced verbatim from the bttr-software DPMI tutorial and
+assembled with **his own assembler, JWasm** (built from source on the host: `Baron-von-Riedesel/JWasm`,
+one `<malloc.h>`→`<stdlib.h>` macOS patch + a manual link). So it is written to the *published DPMI 0.9
+spec*, not to our host's quirks. It exercises the init protocol our hand-written clients cheated on:
+`AH=4Ah` shrink computed from `SP`, the `SI` host-data-paragraph path (skipped here since our `1687`
+returns `SI=0`), **`BX` preserved across the mode switch** (holds the real-mode `CS`), and — the real
+stress — an **RMCS built on the STACK** passed as `ES:DI = SS:BP`, driven through `INT 31h 0301` to
+switch back to real mode. That last part only works because run 48 gave `SS` its own selector (`0x1F`)
+and made `dpmi_sel_base()` per-selector: the host resolves the stack-based RMCS through the *stack*
+base, which the pre-run-48 host (which forced `ES=0x17`/one data base) could not.
+
+VM-confirmed (`build v43`): `PM ok` → 27× `AH=02` (`welcome in protected-mode`) → `INT31h AX=0x0301 ->
+callRM 0x100:0x169 SS:SP=0x100:0xffaa` (the stack RMCS read back correctly) → the real-mode proc prints
+`back in real-mode` during the V86 excursion → clean `4Ch` (28 services). The DOS-output flush is now
+mirrored to COM1 (a one-line diagnostic add) so the headless log shows both strings. **An unmodified,
+third-party, spec-written 16-bit DPMI client boots into PM under the host, round-trips PM→V86→PM, and
+exits — no host logic change was needed beyond runs 47–49.** Next: the HX author's own 16-bit DPMI
+regression `.EXE`s (`Src/HDPMI/Regress16/`: `I310102` resize-DOS-block, `mouevnt`, `RAWJMP7`) to surface
+the `default: UNSUP AX=` gaps a fuller extender hits.
 
 ## Open unknowns (what the spike must nail down) `[VERIFY]`
 
