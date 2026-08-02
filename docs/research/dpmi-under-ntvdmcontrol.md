@@ -1050,6 +1050,43 @@ Gate recipe (rig = [[vdm-host-test-harness]]): `scripts/build-test-iso.sh` → `
 **F5** + run `D:dpmitest.bat` → read `vm/serial.log`. NB: `system_reset` gives a slow dirty boot
 (~3–4 min to autologin) before `dpmiauto` fires; wait it out rather than assuming a hang.
 
+### VM run 44 (2026-08-02) — the PM→V86→PM ROUND-TRIP works: INT 31h 0301 real-mode far-call `[FACT, real CPU]`
+
+Until now the host only ever ran the guest in ONE mode per phase (V86 for DOS, then PM for the DPMI
+client); `0300` faked a real-mode INT by calling `dos_int21` host-side without ever leaving PM. `0301`
+(call real-mode procedure) needs the real thing: **run the client's real-mode code in V86 in the
+middle of a PM session, then come back to PM.** It works, first try, on the real CPU.
+
+Mechanism (`src/host/main.c`, the `0301` case): from the DPMI PM loop (where the guest is stopped at a
+BOP and we're back in host code), save the full PM register file + the virtual MSW; rewrite the TIB
+CONTEXT to V86 (EFLAGS.VM=1, CS:IP/SS:SP/DS/ES and the register file loaded from the RMCS at ES:DI);
+**clear the MSW PE bit** (the symmetric inverse of `dpmi_switch_to_pm`, which SETs it) so the monitor
+runs V86; push a far-return frame pointing at a planted **return-BOP catcher** (`DPMI_RMRET_OFF` in
+`DOS_HDLR_SEG`, `C4 C4 0x54`); then loop on `v86_run()` exactly as the main DOS loop does. When the
+proc `RETF`s it lands on the catcher → `v86_run` stops with `EVENT_INFO=0x54` → we copy the V86
+register file back into the RMCS, restore the PM register file, **re-set the MSW PE bit**, and fall
+through to the normal `EIP += 2` so the PM client resumes right after its `INT 31h`.
+
+VM-confirmed (`build dpmi-harness-v34`): `callRM 0x0100:0x01f1 SS:SP=0x0100:0xfc00` → `RM proc returned
+after 0 steps (OK)` (one `v86_run` — the proc wrote its sentinel and `RETF`'d to the catcher in a
+single excursion) → the client read `0xBEEF` back through its PM data selector and printed **`DPMI:
+0301 real-mode far-call OK (sentinel BEEF)!`** → clean exit (10 services, sentinel `0x5A`). So V86
+guest code genuinely executed and its memory writes are visible to the PM client — the round-trip is
+real both ways. 19 INT sites patched (full-64K), `0100` DOS-mem alloc still succeeds.
+
+Key facts banked: (1) `v86_run`/`VdmStartExecution` runs V86 cleanly **mid-PM-session** — no monitor
+state confusion from toggling PE + VM. (2) The process LDT registered by `dpmi_switch_to_pm` persists
+across the V86 excursion, so returning to PM needs only PE re-set + the PM CONTEXT restored (no
+re-`svc 10/11`). (3) A far-return BOP catcher is a clean, reusable "real-mode call finished" signal.
+
+Known limitation (next increment): the up-front patch scan rewrites `CD 21`/`CD 31` → `C4 C4` across
+the WHOLE 64K segment, which is shared between the PM and V86 views — so an `INT 21h` *inside* a `0301`
+real-mode proc is a corrupted `C4 C4 <next>` BOP, not a clean `CD 21`. The test proc deliberately makes
+no INT. Real extenders' real-mode helpers that DO call INT 21h will need either a scan that skips known
+real-mode-only regions, or lazy per-view patching. `0303` (real-mode callback) reuses this same
+round-trip inverted (plant a real-mode BOP entry; on a guest far-call to it, switch to PM and invoke
+the client's PM handler with the RM regs in an RMCS) — now unblocked.
+
 ## Open unknowns (what the spike must nail down) `[VERIFY]`
 
 1. **The mode-switch primitive.** Exactly how ntvdm flips the VDM from V86→PM after the client

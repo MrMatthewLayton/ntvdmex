@@ -87,15 +87,51 @@ start:
     mov dx, .pmsg              ; direct PM print to confirm we resumed cleanly
     mov ah, 0x09
     int 0x21
+
+    ; --- run 44: INT 31h 0301 -- call a REAL-MODE far proc (PM->V86->PM) --
+    ; The host switches us back to V86, runs .rmproc (which writes a sentinel and
+    ; RETFs), then resumes us in PM. Proves the round-trip both ways.
+    mov word [.rmcs2 + 0x2C], 0x0100   ; RMCS.CS = our real-mode segment
+    mov word [.rmcs2 + 0x2A], .rmproc  ; RMCS.IP = proc offset
+    mov word [.rmcs2 + 0x24], 0x0100   ; RMCS.DS
+    mov word [.rmcs2 + 0x30], 0x0100   ; RMCS.SS
+    mov word [.rmcs2 + 0x2E], 0xFC00   ; RMCS.SP = scratch stack
+    mov word [.rmcs2 + 0x20], 0x0202   ; RMCS.Flags
+    mov word [0x620], 0x0000           ; clear the sentinel (PM data selector)
+    push ds
+    pop es
+    mov di, .rmcs2
+    mov ax, 0x0301             ; call real-mode procedure
+    xor bx, bx                 ; BH=0 flags
+    xor cx, cx                 ; no stack words to copy
+    int 0x31                   ; -> host runs .rmproc in V86, resumes us in PM
+    mov ax, [0x620]            ; the RM proc should have written 0xBEEF
+    cmp ax, 0xBEEF
+    jne .rm_bad
+    mov dx, .rmok
+    mov ah, 0x09
+    int 0x21
+    jmp .rm_done
+.rm_bad:
+    mov dx, .rmbad
+    mov ah, 0x09
+    int 0x21
+.rm_done:
     mov ax, 0x4C00             ; terminate
     int 0x21
 .pmspin:
     jmp .pmspin
 .pmhandler:                    ; dummy PM handler target for the 0205/0204 round-trip (never called)
     iret
+.rmproc:                       ; run in V86 by INT 31h 0301: write a sentinel, far-return
+    mov word [0x620], 0xBEEF
+    retf
 .rmsg:  db '  [printed via INT 31h 0300 -> real-mode INT 21h AH=09]', 13, 10, '$'
 .pmsg:  db 'DPMI: 0300 simulate-real-mode-int OK!', 13, 10, '$'
+.rmok:  db 'DPMI: 0301 real-mode far-call OK (sentinel BEEF)!', 13, 10, '$'
+.rmbad: db 'DPMI: 0301 FAILED (no sentinel).', 13, 10, '$'
 .rmcs:  times 50 db 0
+.rmcs2: times 50 db 0
 
 .switchfail:
     mov dx, msg_fail

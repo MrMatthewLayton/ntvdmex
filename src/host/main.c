@@ -48,6 +48,13 @@
    returns to the client in real mode with CF=1). See src/vdm/dpmi.c. */
 #define DPMI_ENTRY_OFF 0x0050
 #define DPMI_BOP       0x50
+/* DPMI 0301 (call real-mode procedure): the far-return catcher. To run a client's
+   real-mode proc we switch the VDM back to V86 and push a far-return frame pointing
+   here; when the proc RETFs it lands on this BOP, which the 0301 handler recognises
+   as "the real-mode call finished" and switches back to protected mode. Lives just
+   past the mode-switch entry (0x50..0x53). */
+#define DPMI_RMRET_OFF 0x0054
+#define DPMI_RMRET_BOP 0x54
 
 /* EMS (M4): the LIM page frame is a 64KB RAM window in the UMA. v86_map_ems_frame
    scans the conventional page-frame segments AFTER VdmInitialize for a free 64KB
@@ -1039,7 +1046,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     (void)hInst; (void)hPrev; (void)lpCmd; (void)nShow;
     progpath[0] = 0; args[0] = 0;
 
-    p = zput(p, "NTVDMEX clean host\r\nSTAGE0: WinMain entered [build dpmi-harness-v33]\r\n");
+    p = zput(p, "NTVDMEX clean host\r\nSTAGE0: WinMain entered [build dpmi-harness-v34]\r\n");
     log_write(LOG_PATH, report, p);
     serial_init();                                      /* DPMI harness: COM1 log sink */
     serial_out(report, p);
@@ -1170,6 +1177,10 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
        BOP by switching to PM; the RETF only executes if the switch fails. */
     hdlr[DPMI_ENTRY_OFF + 0] = VDM_BOP0; hdlr[DPMI_ENTRY_OFF + 1] = VDM_BOP1;
     hdlr[DPMI_ENTRY_OFF + 2] = DPMI_BOP; hdlr[DPMI_ENTRY_OFF + 3] = 0xCB; /* RETF */
+    /* DPMI 0301 real-mode-call return catcher: BOP 0x54 (no IRET/RETF -- the 0301
+       handler detects it and returns to PM, it never resumes past it). */
+    hdlr[DPMI_RMRET_OFF + 0] = VDM_BOP0; hdlr[DPMI_RMRET_OFF + 1] = VDM_BOP1;
+    hdlr[DPMI_RMRET_OFF + 2] = DPMI_RMRET_BOP;
     /* EMS detection method 2: programs read the INT 67h vector's segment:000Ah for
        the device-driver name "EMMXXXX0". Park it in the handler segment. */
     for (i = 0; i < sizeof(emmname); ++i) hdlr[DOS_EMM_NAME_OFF + i] = emmname[i];
@@ -1643,6 +1654,87 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                             VDM_REG(tib,VTIB_ES)=sEs;VDM_REG(tib,VTIB_SS)=sSs;VDM_REG(tib,VTIB_ESP)=sSp;VDM_REG(tib,VTIB_EFLAGS)=sFl;
                             VDM_REG(tib,VTIB_EFLAGS) &= ~1u;       /* 0300 succeeds */
                             p = zput(p, " -> simInt 0x"); p = zhex(p, intno);
+                            break; }
+                        case 0x0301: {                             /* call real-mode FAR proc: ES:DI=RMCS, CX=stack words */
+                            /* This is the first PM->V86->PM round-trip. Unlike 0300 (which fakes a
+                               real-mode INT by calling dos_int21 host-side), 0301 must actually RUN
+                               the client's real-mode procedure in V86: we rewrite the CONTEXT to
+                               V86, push a far-return frame pointing at the DPMI_RMRET_BOP catcher,
+                               run v86_run() until that BOP (servicing any INT 21h the proc makes),
+                               copy the real-mode regs back into the RMCS, then restore PM. */
+                            DWORD esb = dpmi_sel_base((WORD)VDM_REG(tib, VTIB_ES));
+                            volatile BYTE *r = (volatile BYTE *)(ULONG_PTR)(esb + (VDM_REG(tib, VTIB_EDI) & 0xFFFF));
+                            /* --- save the client's PM CONTEXT (full register file + MSW) --- */
+                            DWORD pA=VDM_REG(tib,VTIB_EAX),pB=VDM_REG(tib,VTIB_EBX),pC=VDM_REG(tib,VTIB_ECX),
+                                  pD=VDM_REG(tib,VTIB_EDX),pSi=VDM_REG(tib,VTIB_ESI),pDi=VDM_REG(tib,VTIB_EDI),
+                                  pBp=VDM_REG(tib,VTIB_EBP),pDs=VDM_REG(tib,VTIB_DS),pEs=VDM_REG(tib,VTIB_ES),
+                                  pFs=VDM_REG(tib,VTIB_FS),pGs=VDM_REG(tib,VTIB_GS),pCs=VDM_REG(tib,VTIB_CS),
+                                  pIp=VDM_REG(tib,VTIB_EIP),pSs=VDM_REG(tib,VTIB_SS),pSp=VDM_REG(tib,VTIB_ESP),
+                                  pFl=VDM_REG(tib,VTIB_EFLAGS);
+                            WORD pMsw = *(volatile WORD *)(tib + VTIB_MSW);
+                            /* real-mode target + stack from the RMCS (default SS:SP to the code seg) */
+                            WORD rcs = *(volatile WORD*)(r+0x2C), rip = *(volatile WORD*)(r+0x2A);
+                            WORD rss = *(volatile WORD*)(r+0x30), rsp = *(volatile WORD*)(r+0x2E);
+                            unsigned rt; int done = 0;
+                            if (rss == 0) { rss = (WORD)(g_dpmi_code_base >> 4); rsp = 0xFF00; }
+                            p = zput(p, " -> callRM 0x"); p = zhex(p, rcs); p = zput(p, ":0x"); p = zhex(p, rip);
+                            p = zput(p, " SS:SP=0x"); p = zhex(p, rss); p = zput(p, ":0x"); p = zhex(p, rsp);
+                            p = zput(p, "\r\n"); log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                            /* push the far-return frame [IP=RMRET, CS=DOS_HDLR_SEG] on the RM stack */
+                            rsp -= 2; pokew(((DWORD)rss << 4) + rsp, DOS_HDLR_SEG);   /* return CS */
+                            rsp -= 2; pokew(((DWORD)rss << 4) + rsp, DPMI_RMRET_OFF);  /* return IP */
+                            /* --- rewrite the CONTEXT to V86 with the RMCS register file --- */
+                            *(volatile WORD *)(tib + VTIB_MSW) = (WORD)(pMsw & ~MSW_PE_BIT);  /* leave PM */
+                            VDM_REG(tib,VTIB_EFLAGS) = 0x20202;    /* VM + IF + reserved bit-1 */
+                            VDM_REG(tib,VTIB_EDI)=*(volatile WORD*)(r+0x00); VDM_REG(tib,VTIB_ESI)=*(volatile WORD*)(r+0x04);
+                            VDM_REG(tib,VTIB_EBP)=*(volatile WORD*)(r+0x08); VDM_REG(tib,VTIB_EBX)=*(volatile WORD*)(r+0x10);
+                            VDM_REG(tib,VTIB_EDX)=*(volatile WORD*)(r+0x14); VDM_REG(tib,VTIB_ECX)=*(volatile WORD*)(r+0x18);
+                            VDM_REG(tib,VTIB_EAX)=*(volatile WORD*)(r+0x1C);
+                            VDM_SET16(tib,VTIB_ES,*(volatile WORD*)(r+0x22)); VDM_SET16(tib,VTIB_DS,*(volatile WORD*)(r+0x24));
+                            VDM_SET16(tib,VTIB_FS,rss); VDM_SET16(tib,VTIB_GS,rss);
+                            VDM_SET16(tib,VTIB_CS,rcs); VDM_REG(tib,VTIB_EIP)=rip;
+                            VDM_SET16(tib,VTIB_SS,rss); VDM_REG(tib,VTIB_ESP)=rsp;
+                            /* --- nested V86 run loop: run the proc until the return-BOP --- */
+                            for (rt = 0; rt < 128 && !done; ++rt) {
+                                LONG rst; DWORD rev = v86_run(tib, &rst);
+                                DWORD info = VDM_REG(tib, VTIB_EVENT_INFO) & 0xFF;
+                                if (rev == VDM_EVENT_BOP && info == DPMI_RMRET_BOP) {
+                                    done = 1; break;                /* proc RETF'd -> finished */
+                                }
+                                if (rev == VDM_EVENT_BOP && info == 0x20) {   /* INT 21h from the proc */
+                                    m.tp = p; dos_int21(&m); p = m.tp;
+                                    VDM_REG(tib, VTIB_EIP) += 3;    /* past the BOP -> the stub IRET */
+                                    log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                                    continue;
+                                }
+                                if (rev == VDM_EVENT_IO || rev == VDM_EVENT_GPFAULT) {
+                                    int h; EnterCriticalSection(&g_lock);
+                                    h = host_try_io(tib, &g_bus); LeaveCriticalSection(&g_lock);
+                                    if (h) continue;
+                                }
+                                p = zput(p, "0301: unexpected RM event=0x"); p = zhex(p, rev);
+                                p = zput(p, " info=0x"); p = zhex(p, info);
+                                p = zput(p, " CS:IP=0x"); p = zhex(p, VDM_REG(tib,VTIB_CS)&0xFFFF);
+                                p = zput(p, ":0x"); p = zhex(p, VDM_REG(tib,VTIB_EIP)&0xFFFF); p = zput(p, "\r\n");
+                                log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                                break;
+                            }
+                            /* --- copy the real-mode register file back into the RMCS --- */
+                            *(volatile WORD*)(r+0x1C)=VDM_REG(tib,VTIB_EAX); *(volatile WORD*)(r+0x10)=VDM_REG(tib,VTIB_EBX);
+                            *(volatile WORD*)(r+0x18)=VDM_REG(tib,VTIB_ECX); *(volatile WORD*)(r+0x14)=VDM_REG(tib,VTIB_EDX);
+                            *(volatile WORD*)(r+0x00)=VDM_REG(tib,VTIB_EDI); *(volatile WORD*)(r+0x04)=VDM_REG(tib,VTIB_ESI);
+                            *(volatile WORD*)(r+0x08)=VDM_REG(tib,VTIB_EBP);
+                            *(volatile WORD*)(r+0x22)=VDM_REG(tib,VTIB_ES);  *(volatile WORD*)(r+0x24)=VDM_REG(tib,VTIB_DS);
+                            /* --- restore the client's PM CONTEXT --- */
+                            *(volatile WORD *)(tib + VTIB_MSW) = pMsw;       /* re-enter PM */
+                            VDM_REG(tib,VTIB_EAX)=pA;VDM_REG(tib,VTIB_EBX)=pB;VDM_REG(tib,VTIB_ECX)=pC;VDM_REG(tib,VTIB_EDX)=pD;
+                            VDM_REG(tib,VTIB_ESI)=pSi;VDM_REG(tib,VTIB_EDI)=pDi;VDM_REG(tib,VTIB_EBP)=pBp;
+                            VDM_SET16(tib,VTIB_DS,pDs);VDM_SET16(tib,VTIB_ES,pEs);VDM_SET16(tib,VTIB_FS,pFs);VDM_SET16(tib,VTIB_GS,pGs);
+                            VDM_SET16(tib,VTIB_CS,pCs);VDM_REG(tib,VTIB_EIP)=pIp;
+                            VDM_SET16(tib,VTIB_SS,pSs);VDM_REG(tib,VTIB_ESP)=pSp;VDM_REG(tib,VTIB_EFLAGS)=pFl;
+                            VDM_REG(tib,VTIB_EFLAGS) &= ~1u;        /* CF=0: success */
+                            p = zput(p, "0301 -> RM proc returned after "); p = zhex(p, rt);
+                            p = zput(p, done ? " steps (OK)" : " steps (NO-RET)");
                             break; }
                         default:
                             VDM_REG(tib, VTIB_EFLAGS) |= 1u;       /* CF=1: unsupported */
