@@ -79,6 +79,12 @@ static volatile LONG g_running = 1;         /* 0 once the window is closed      
 static int g_dpmi_pm = 0;                   /* set once the guest is switched to PM (spike) */
 static DWORD g_dpmi_code_base = 0;          /* linear base of the guest PM code seg (retcs<<4) */
 static BYTE  g_int_vec[0x10000];            /* per-CS-offset: original INT vector we patched to a BOP */
+/* DPMI PM interrupt-vector table (INT 31h 0204/0205). A client installs its own PM
+   handlers here; we store them so a get/set/restore round-trips faithfully. (We still
+   service patched INT 21h/31h ourselves -- routing to a client-installed PM handler is
+   a deeper item; storing the vectors is what real extenders' save/restore needs.) */
+static struct { WORD sel; DWORD off; } g_pm_int[256];
+static int   g_dpmi_vi = 1;                 /* DPMI virtual interrupt flag (INT 31h 0900/0901/0902) */
 /* DPMI LDT descriptor allocator. Indices 0=null,1=code(0x0F),2=data(0x17) are the
    switch's; DPMI clients allocate from 3+. We keep base/limit/access so INT 31h
    06/07/08/09 can get/modify them and reinstall via svc 10 (NtSetLdtEntries). */
@@ -1033,7 +1039,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     (void)hInst; (void)hPrev; (void)lpCmd; (void)nShow;
     progpath[0] = 0; args[0] = 0;
 
-    p = zput(p, "NTVDMEX clean host\r\nSTAGE0: WinMain entered [build dpmi-harness-v31]\r\n");
+    p = zput(p, "NTVDMEX clean host\r\nSTAGE0: WinMain entered [build dpmi-harness-v33]\r\n");
     log_write(LOG_PATH, report, p);
     serial_init();                                      /* DPMI harness: COM1 log sink */
     serial_out(report, p);
@@ -1422,16 +1428,32 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                   if (wd) CloseHandle(wd); }
                 /* Patch the client's PM `INT nn` (CD nn) -> BOP (C4 C4), recording the original
                    vector per CS offset. Same 2 bytes, so a real unmodified client's INT 31h/21h
-                   now reflect to us as BOPs. Scan the code seg (bounded; INT nn in zeroed tail
-                   won't match). Only 0x31 (DPMI) and 0x21 (DOS) for now. */
+                   now reflect to us as BOPs.
+
+                   Why UP-FRONT (not lazy on first fault): a raw `INT 31h` in PM raises a #GP the
+                   native kernel cannot reflect to us (runs 20-34) -- that unsolved reflect is the
+                   whole reason we patch, so we cannot wait for the fault to catch it. So the scan
+                   must find every INT site before the client runs.
+
+                   Hardening (run 42): scan the FULL 64K code selector, not just the first 0x2000.
+                   A real program's INT sites live well past 8 KB; the old bound silently missed
+                   them (client would #GP-hang on the first unpatched INT 31h). The zeroed stack/BSS
+                   tail can't match CD 31/CD 21, so scanning it is harmless. g_int_vec[] doubles as
+                   an original-bytes map: g_int_vec[o]!=0 => offset o was `CD g_int_vec[o]` and is
+                   now `C4 C4`, so a mis-patch (a CD 31/CD 21 byte-pair that was DATA, not code) is
+                   detectable and revertible. Data mis-patch stays possible (x86 isn't
+                   self-synchronising; without a disassembler we can't prove a byte is code) -- the
+                   map is the mitigation, and an unexpected-BOP path below logs any surprise. */
                 { volatile BYTE *cs = (volatile BYTE *)(ULONG_PTR)g_dpmi_code_base;
-                  DWORD o, n = 0;
-                  for (o = 0; o < 0x2000; ++o) {
+                  DWORD o, n = 0, last = 0;
+                  for (o = 0; o < 0xFFFF; ++o) {
                       if (cs[o] == 0xCD && (cs[o+1] == 0x31 || cs[o+1] == 0x21)) {
-                          g_int_vec[o] = cs[o+1]; cs[o] = 0xC4; cs[o+1] = 0xC4; ++n;
+                          g_int_vec[o] = cs[o+1]; cs[o] = 0xC4; cs[o+1] = 0xC4; ++n; last = o;
                       }
                   }
-                  p = zput(p, "DPMI: patched "); p = zhex(p, n); p = zput(p, " INT sites -> BOP\r\n");
+                  p = zput(p, "DPMI: patched "); p = zhex(p, n);
+                  p = zput(p, " INT sites -> BOP (full 64K scan, last off 0x"); p = zhex(p, last);
+                  p = zput(p, ")\r\n");
                   log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
                 }
                 /* --- DPMI protected-mode execution loop -----------------------------------
@@ -1477,6 +1499,61 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                             break; }
                         case 0x0001:                               /* free descriptor BX (no-op reclaim) */
                             p = zput(p, " -> free");
+                            break;
+                        case 0x0100: {                             /* allocate DOS memory: BX paras -> AX=seg, DX=sel */
+                            uint16_t want = (uint16_t)(VDM_REG(tib, VTIB_EBX) & 0xFFFF), seg = 0, max = 0;
+                            int err = dos_alloc(NULL, m.first_mcb, want, &seg, &max);
+                            if (err || g_ldt_next >= 512) {
+                                VDM_REG(tib, VTIB_EFLAGS) |= 1u;
+                                VDM_SET16(tib, VTIB_EAX, err ? err : 0x0008);   /* 8 = insufficient memory */
+                                VDM_SET16(tib, VTIB_EBX, max);                  /* largest available (paras) */
+                                p = zput(p, " -> DOSmem ENOMEM max=0x"); p = zhex(p, max);
+                            } else {
+                                int idx = g_ldt_next++;
+                                g_ldt[idx].base = (DWORD)seg << 4;
+                                g_ldt[idx].limit = want ? ((DWORD)want << 4) - 1 : 0;
+                                g_ldt[idx].access = 0xF2; g_ldt[idx].flags = 0;  /* data, RPL3 */
+                                dpmi_install(idx);
+                                VDM_SET16(tib, VTIB_EAX, seg);
+                                VDM_SET16(tib, VTIB_EDX, (WORD)((idx << 3) | 7));
+                                p = zput(p, " -> DOSmem seg=0x"); p = zhex(p, seg);
+                                p = zput(p, " sel=0x"); p = zhex(p, (idx << 3) | 7);
+                            }
+                            break; }
+                        case 0x0101: {                             /* free DOS memory: DX = selector */
+                            int idx = (VDM_REG(tib, VTIB_EDX) & 0xFFFF) >> 3;
+                            if (idx >= 3 && idx < 512) {
+                                DWORD seg = g_ldt[idx].base >> 4;
+                                dos_free(NULL, (uint16_t)seg);
+                                g_ldt[idx].base = g_ldt[idx].limit = 0; /* descriptor left reclaimable */
+                            }
+                            p = zput(p, " -> DOSfree");
+                            break; }
+                        case 0x0204: {                             /* get PM interrupt vector: BL -> CX:DX */
+                            DWORD bl = VDM_REG(tib, VTIB_EBX) & 0xFF;
+                            VDM_SET16(tib, VTIB_ECX, g_pm_int[bl].sel);
+                            VDM_SET16(tib, VTIB_EDX, g_pm_int[bl].off & 0xFFFF);
+                            p = zput(p, " -> getPMvec int 0x"); p = zhex(p, bl);
+                            break; }
+                        case 0x0205: {                             /* set PM interrupt vector: BL = CX:DX */
+                            DWORD bl = VDM_REG(tib, VTIB_EBX) & 0xFF;
+                            g_pm_int[bl].sel = (WORD)VDM_REG(tib, VTIB_ECX);
+                            g_pm_int[bl].off = VDM_REG(tib, VTIB_EDX) & 0xFFFF;
+                            p = zput(p, " -> setPMvec int 0x"); p = zhex(p, bl);
+                            p = zput(p, " = 0x"); p = zhex(p, g_pm_int[bl].sel);
+                            p = zput(p, ":0x"); p = zhex(p, g_pm_int[bl].off);
+                            break; }
+                        case 0x0900:                               /* get + disable virtual interrupt state */
+                            VDM_SET16(tib, VTIB_EAX, 0x0900 | (g_dpmi_vi & 1));
+                            g_dpmi_vi = 0; p = zput(p, " -> cli");
+                            break;
+                        case 0x0901:                               /* get + enable virtual interrupt state */
+                            VDM_SET16(tib, VTIB_EAX, 0x0900 | (g_dpmi_vi & 1));
+                            g_dpmi_vi = 1; p = zput(p, " -> sti");
+                            break;
+                        case 0x0902:                               /* get virtual interrupt state -> AL */
+                            VDM_SET16(tib, VTIB_EAX, 0x0900 | (g_dpmi_vi & 1));
+                            p = zput(p, " -> getIF ");  p = zhex(p, g_dpmi_vi);
                             break;
                         case 0x0006: {                             /* get base of sel BX -> CX:DX */
                             int idx = (VDM_REG(tib, VTIB_EBX) & 0xFFFF) >> 3;

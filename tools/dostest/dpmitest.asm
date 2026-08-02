@@ -17,6 +17,13 @@ start:
     mov ah, 0x09
     int 0x21
 
+    ; --- 1b. shrink our PSP block to 64 KB so conventional memory is FREE for
+    ;         INT 31h 0100 later (a .COM owns all memory on load; without this
+    ;         0100 correctly reports ENOMEM). ES already = PSP for a .COM. -----
+    mov ah, 0x4A
+    mov bx, 0x1000              ; keep 0x1000 paras = 64 KB (stack at top stays valid)
+    int 0x21
+
     ; --- 2. detect DPMI (INT 2Fh AX=1687h) -------------------------------
     mov ax, 0x1687
     int 0x2F
@@ -40,6 +47,32 @@ start:
     mov ax, 0x0400             ; get DPMI version
     int 0x31
     mov [0x600], ax
+
+    ; --- run 42: exercise the new INT 31h table services ----------------
+    ; These INT 31h sites sit well past the old 0x2000 patch bound, so a clean
+    ; pass also proves the hardened full-64K scan caught them.
+    mov bx, 0x0010             ; 16 paras (256 bytes) of conventional memory
+    mov ax, 0x0100             ; allocate DOS memory block
+    int 0x31                   ; -> AX=real seg, DX=selector
+    mov [0x602], ax            ; stash the DOS segment
+    mov [0x604], dx            ; stash the selector
+
+    mov bl, 0x1C               ; install a PM handler vector for INT 1Ch
+    mov cx, 0x000F             ; selector = our PM code selector
+    mov dx, .pmhandler         ; offset
+    mov ax, 0x0205             ; set PM interrupt vector
+    int 0x31
+    mov bl, 0x1C
+    mov ax, 0x0204             ; get PM interrupt vector -> CX:DX (verify round-trip)
+    int 0x31
+    mov [0x606], cx
+    mov [0x608], dx
+
+    mov ax, 0x0900             ; get + disable virtual interrupts
+    int 0x31
+    mov ax, 0x0901             ; get + enable virtual interrupts
+    int 0x31
+
     mov word [.rmcs + 0x1C], 0x0900   ; RMCS.AX = AH=09 (print string)
     mov word [.rmcs + 0x24], 0x0100   ; RMCS.DS = 0x0100 (our real-mode segment)
     mov word [.rmcs + 0x14], .rmsg    ; RMCS.DX = message offset
@@ -58,6 +91,8 @@ start:
     int 0x21
 .pmspin:
     jmp .pmspin
+.pmhandler:                    ; dummy PM handler target for the 0205/0204 round-trip (never called)
+    iret
 .rmsg:  db '  [printed via INT 31h 0300 -> real-mode INT 21h AH=09]', 13, 10, '$'
 .pmsg:  db 'DPMI: 0300 simulate-real-mode-int OK!', 13, 10, '$'
 .rmcs:  times 50 db 0

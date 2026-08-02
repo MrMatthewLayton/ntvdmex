@@ -981,6 +981,75 @@ resolve fine; the resolve is not the failure.** The `INT 31h` reflect fails spec
 exception-handler setup inside `0x4f6f67`, which needs ntvdm's registered DPMI PM exception handler.
 This confirms the run-34 pivot: replicate ntvdm's full DPMI-init, don't patch `+0x634` fields.
 
+### VM runs 35–41 (2026-08-02) — SOLVED by BYPASS: patch client INT nn → BOP at the switch `[FACT, real CPU]`
+
+The run-34 plan ("replicate ntvdm's COMPLETE DPMI mode-switch init") is **superseded**. Rather than
+make the native kernel reflect a raw `INT 31h` #GP (still unsolved), we **sidestep** it: the run-32
+BOP primitive already round-trips PM→host cleanly, so at mode-switch the host scans the client's PM
+code and rewrites each `CD 31`/`CD 21` → `C4 C4` (a BOP — same 2 bytes), recording the original
+vector per CS offset (`g_int_vec[]`). The kernel reflects the BOP as `VTIB_EVENT=4`; the host's **DPMI
+PM loop** (`src/host/main.c`, the `sw==0` block) runs PM → looks up the vector by fault EIP →
+dispatches (INT 31h = DPMI, INT 21h = DOS) → writes returns+CF into the guest CONTEXT → advances +2 →
+re-enters PM. All `DS:DX`/`ES:DI` buffers translate selector→linear via `dpmi_sel_base()`.
+
+Incremental, each VM-confirmed on the real CPU:
+- **run 35** — round-trip works end-to-end; **run 36** — an UNMODIFIED client runs (INT 31h/21h
+  patched to BOP); **run 37** — the client PRINTS from PM (INT 21h AH=09 thunk).
+- **run 38** — descriptor API: INT 31h `0000`/`0001` alloc/free, `0006`/`0007` get/set base, `0008`
+  set limit, `0009` set access. Real LDT via `g_ldt[]` + `dpmi_install()` (svc 10 `NtSetLdtEntries`).
+- **run 39** — extended memory `0500`/`0501`/`0502` (VirtualAlloc; in-process ⇒ linear = host ptr) +
+  INT 21h AH=40 write.
+- **run 40** — file I/O INT 21h `3C`/`3D`/`3E`/`3F`/`42` + descriptor alias `000A`.
+- **run 41** — `0300` **simulate real-mode interrupt** (loads an RMCS at ES:DI, runs the INT via
+  `dos_int21`, writes results back) — the way extenders route DOS/BIOS.
+
+Foundational facts (proven, won't redo): the V86→PM switch works with **based 64K 16-bit LDT
+selectors** (base=seg<<4); XP **rejects** a flat 4GB LDT descriptor (`STATUS_INVALID_LDT_DESCRIPTOR`).
+Client = `tools/dostest/dpmitest.asm`; the STAGE0 marker `dpmi-harness-vNN` proves a fresh host ran.
+
+### VM runs 42–43 (2026-08-02) — harden the patch scan + table services (0100/0101, 0204/0205, 0900–0902) `[FACT, real CPU]`
+
+First hardening pass toward running a REAL extender (GH #2).
+
+- **Patch scan hardened** (`src/host/main.c`). The known fragility was a bound of `0x2000` (8 KB): a
+  real program's INT sites live well past that, so the client would #GP-hang on the first unpatched
+  `INT 31h`. Now scans the **full 64K code selector**. The zeroed stack/BSS tail can't match
+  `CD 31`/`CD 21`, so scanning it is harmless. `g_int_vec[]` doubles as a **revertible original-bytes
+  map** (`!=0` ⇒ that offset was `CD <vec>`, now `C4 C4`), so a data mis-patch is detectable/undoable.
+  **Why up-front, not lazy-on-fault:** a raw PM `INT 31h` #GP is exactly the reflect the kernel won't
+  give us (runs 20–34) — we cannot wait for the fault to catch it, so every site must be found before
+  the client runs. Residual risk: without a disassembler a `CD 31`/`CD 21` byte-pair that is *data*
+  gets over-patched (x86 isn't self-synchronising); the revert map is the mitigation, and an
+  unexpected-BOP path logs any surprise.
+- **New INT 31h services** (no V86 round-trip, so buildable/reasoned off-VM like XMS/EMS bookkeeping):
+  `0100`/`0101` DOS-memory alloc/free (routed to `dos_alloc`/`dos_free`; returns real seg + a based
+  selector — the transfer buffer real extenders need for `0300`); `0204`/`0205` get/set **PM interrupt
+  vector** (a `g_pm_int[256]` table, so a client's save/set/restore round-trips); `0900`/`0901`/`0902`
+  get-disable / get-enable / get **virtual interrupt state** (`g_dpmi_vi`).
+- **Client extended** (`dpmitest.asm`): exercises `0100`, `0205`+`0204` round-trip, `0900`/`0901`
+  before the existing `0300` flow. These INT 31h sites sit **past the old 0x2000 bound**, so a clean
+  pass also proves the full-64K scan caught them.
+- **Deferred** (need a V86 round-trip, next increment): `0301` real-mode far-call, `0303` real-mode
+  callback, and routing more INT 21h subfunctions through `0300`. The `default` case logs the AX of
+  any unsupported INT 31h, so the first run of a real binary pinpoints the next gap.
+
+**VM-CONFIRMED (2026-08-02, headless `dpmiauto` autorun → `vm/serial.log`):**
+- **run 42** (`build dpmi-harness-v32`): `DPMI: patched 0xF INT sites -> BOP (full 64K scan, last off
+  0x241)`; `0400 -> ver 0.90`; `0205 setPMvec int 1C = 0F:0199` + `0204 getPMvec` round-trip;
+  `0900 -> cli` / `0901 -> sti`; `0300 -> simInt 0x21` prints; clean `4Ch` exit (sentinel 0x5A). One
+  expected wrinkle: `0100 -> DOSmem ENOMEM max=0` — **correct DOS semantics**, a `.COM` owns all
+  conventional memory on load, so nothing is free to allocate (the service correctly delegated to
+  `dos_alloc`). Not a host bug.
+- **run 43** (`build dpmi-harness-v33`): added a real-mode `INT 21h AH=4A` shrink to 64 KB in the
+  client BEFORE the switch, freeing conventional memory. `0100` now SUCCEEDS: `-> DOSmem seg=0x1101
+  sel=0x1F` (real segment + a based selector). 16 INT sites patched (the extra `4A` site included),
+  last off 0x248 — full-64K scan proven again. All other services + clean exit unchanged.
+
+Gate recipe (rig = [[vdm-host-test-harness]]): `scripts/build-test-iso.sh` → `qmp.py cd
+/tmp/ntvdmex-test.iso` → (headless) `qmp.py cmd '{"execute":"system_reset"}'`, or (manual) Explorer
+**F5** + run `D:dpmitest.bat` → read `vm/serial.log`. NB: `system_reset` gives a slow dirty boot
+(~3–4 min to autologin) before `dpmiauto` fires; wait it out rather than assuming a hang.
+
 ## Open unknowns (what the spike must nail down) `[VERIFY]`
 
 1. **The mode-switch primitive.** Exactly how ntvdm flips the VDM from V86→PM after the client
