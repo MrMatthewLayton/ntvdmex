@@ -1054,12 +1054,16 @@ static void dpmi_repatch(void)
         if (g_int_vec[o]) { cs[o] = 0xC4; cs[o + 1] = 0xC4; }
 }
 
+/* Forward decl: the shared PM-interrupt dispatcher (defined after this fn). A callback
+   handler that issues its own INT 31h/21h routes through it, same as the main PM loop. */
+static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec, unsigned steps);
+
 /* Invoke a DPMI 0303 real-mode callback: the guest (running in V86 during a 0301
    excursion) far-called a planted callback BOP -- switch V86->PM, run the client's
    PM handler with the real-mode register state marshalled into its RMCS, then resume
    V86 at the far-call's return address. The inverse of 0301's PM->V86 direction.
    On entry the CONTEXT holds the V86 state at the far-call (segment un-patched). */
-static void dpmi_invoke_callback(volatile BYTE *tib, int slot)
+static void dpmi_invoke_callback(dos_machine_t *m, volatile BYTE *tib, int slot)
 {
     char lb[256]; char *lp = lb;
     WORD rss = (WORD)VDM_REG(tib, VTIB_SS), rsp = (WORD)VDM_REG(tib, VTIB_ESP);
@@ -1096,15 +1100,21 @@ static void dpmi_invoke_callback(volatile BYTE *tib, int slot)
     VDM_SET16(tib, VTIB_ES, g_cb[slot].rm_es);  VDM_REG(tib, VTIB_EDI) = g_cb[slot].rm_di;  /* ES:DI = RMCS */
     VDM_SET16(tib, VTIB_DS, 0x17); VDM_REG(tib, VTIB_ESI) = 0;
     /* run the PM handler until it IRETs onto the PM-return catcher (g_pmret_sel:PMRET_OFF).
-       (A handler that itself does INT 31h/21h would need the full PM dispatch; the spike
-       handler does not -- log + bail on any other PM stop.) */
+       A handler that itself issues INT 31h/21h now routes through the shared dispatcher
+       dpmi_service_pm_int() -- the same full surface the main PM loop gets (GH #2), so a
+       callback can allocate descriptors, print, sim-real-mode-int, etc. */
     for (ph = 0; ph < 64 && !cbdone; ++ph) {
-        DWORD ev, eip;
+        DWORD ev, eip, vec;
         dpmi_enter_pm(tib);
         ev = VDM_REG(tib, VTIB_EVENT); eip = VDM_REG(tib, VTIB_EIP) & 0xFFFF;
         if (ev == VDM_EVENT_BOP && eip == DPMI_PMRET_OFF
             && (VDM_REG(tib, VTIB_CS) & 0xFFFF) == g_pmret_sel) { cbdone = 1; break; }
         if (ev == 3) continue;   /* dpmi_enter_pm reports "interrupt pending, not entered" -- retry */
+        vec = (ev == VDM_EVENT_BOP) ? g_int_vec[eip] : 0;   /* a patched INT the handler issued */
+        if (vec == 0x31 || vec == 0x21) {
+            if (dpmi_service_pm_int(m, tib, vec, ph) > 0) continue;   /* serviced -> resume handler */
+            cbdone = 1; break;   /* client-exit or unexpected from inside a callback: end the loop */
+        }
         lp = zput(lp, "  0303-cb: unexpected PM stop ev=0x"); lp = zhex(lp, ev);
         lp = zput(lp, " CS:IP=0x"); lp = zhex(lp, VDM_REG(tib, VTIB_CS) & 0xFFFF);
         lp = zput(lp, ":0x"); lp = zhex(lp, eip); lp = zput(lp, "\r\n");
@@ -1125,6 +1135,447 @@ static void dpmi_invoke_callback(volatile BYTE *tib, int slot)
     VDM_SET16(tib,VTIB_FS,*(volatile WORD*)(rc+0x30)); VDM_SET16(tib,VTIB_GS,*(volatile WORD*)(rc+0x30));
     lp = zput(lp, cbdone ? "  0303-cb: PM handler returned (OK)\r\n" : "  0303-cb: PM handler NO-RET\r\n");
     log_append(LOG_PATH, lb, lp); serial_out(lb, lp); lp = lb;
+}
+
+/* Service one protected-mode interrupt the DPMI client raised (a patched INT nn
+   that reflected as a BOP). `vec` = the ORIGINAL vector (0x31 = DPMI, 0x21 = DOS).
+   Updates the guest CONTEXT with the results (regs + CF) and advances EIP past the
+   2-byte INT. Returns  1 = serviced, keep running;  0 = client terminated (INT 21h
+   AH=4Ch);  -1 = unexpected / unserviceable stop (already logged).
+   Extracted from the main PM loop so nested handlers -- a 0303 real-mode callback or
+   a 0301 excursion proc that itself issues INT 31h/21h -- get the SAME full dispatch
+   (GH #2). `steps` is only used for a log line. `mp` aliases the machine as `m` so the
+   moved body is byte-for-byte the original (localized, #undef'd immediately). */
+static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
+                               unsigned steps)
+{
+#define m (*mp)
+    char report[2048]; char *base = report; char *p = report;
+    DWORD ax = VDM_REG(tib, VTIB_EAX) & 0xFFFF;
+    DWORD ev = VDM_REG(tib, VTIB_EVENT), eip = VDM_REG(tib, VTIB_EIP) & 0xFFFF;
+    (void)steps;
+                    if (vec == 0x31) {                             /* DPMI INT 31h */
+                        p = zput(p, "INT31h AX=0x"); p = zhex(p, ax);
+                        p = zput(p, " CX=0x"); p = zhex(p, VDM_REG(tib, VTIB_ECX) & 0xFFFF);
+                        VDM_REG(tib, VTIB_EFLAGS) &= ~1u;          /* default CF=0 (success) */
+                        switch (ax) {
+                        case 0x0400:                               /* get DPMI version */
+                            VDM_SET16(tib, VTIB_EAX, 0x005A);      /* 0.90 */
+                            VDM_SET16(tib, VTIB_EBX, 0x0001);
+                            VDM_SET16(tib, VTIB_ECX, 0x0003);      /* CL=3 (80386) */
+                            VDM_SET16(tib, VTIB_EDX, 0x0870);
+                            p = zput(p, " -> ver 0.90");
+                            break;
+                        case 0x0000: {                             /* allocate CX descriptors */
+                            DWORD cx = VDM_REG(tib, VTIB_ECX) & 0xFFFF, i; WORD basesel;
+                            if (cx == 0) cx = 1;
+                            if (g_ldt_next + (int)cx > 512) {      /* out of descriptors */
+                                VDM_REG(tib, VTIB_EFLAGS) |= 1u; VDM_SET16(tib, VTIB_EAX, 0x8011);
+                                p = zput(p, " -> ENOMEM"); break;
+                            }
+                            basesel = (WORD)((g_ldt_next << 3) | 7);
+                            for (i = 0; i < cx; ++i) {
+                                int idx = g_ldt_next++;
+                                g_ldt[idx].base = 0; g_ldt[idx].limit = 0;
+                                g_ldt[idx].access = 0xF2; g_ldt[idx].flags = 0;  /* data, RPL3 */
+                                dpmi_install(idx);
+                            }
+                            VDM_SET16(tib, VTIB_EAX, basesel);
+                            p = zput(p, " -> sel 0x"); p = zhex(p, basesel);
+                            break; }
+                        case 0x0001:                               /* free descriptor BX (no-op reclaim) */
+                            p = zput(p, " -> free");
+                            break;
+                        case 0x0100: {                             /* allocate DOS memory: BX paras -> AX=seg, DX=sel */
+                            uint16_t want = (uint16_t)(VDM_REG(tib, VTIB_EBX) & 0xFFFF), seg = 0, max = 0;
+                            int err = dos_alloc(NULL, m.first_mcb, want, &seg, &max);
+                            if (err || g_ldt_next >= 512) {
+                                VDM_REG(tib, VTIB_EFLAGS) |= 1u;
+                                VDM_SET16(tib, VTIB_EAX, err ? err : 0x0008);   /* 8 = insufficient memory */
+                                VDM_SET16(tib, VTIB_EBX, max);                  /* largest available (paras) */
+                                p = zput(p, " -> DOSmem ENOMEM max=0x"); p = zhex(p, max);
+                            } else {
+                                int idx = g_ldt_next++;
+                                g_ldt[idx].base = (DWORD)seg << 4;
+                                g_ldt[idx].limit = want ? ((DWORD)want << 4) - 1 : 0;
+                                g_ldt[idx].access = 0xF2; g_ldt[idx].flags = 0;  /* data, RPL3 */
+                                dpmi_install(idx);
+                                VDM_SET16(tib, VTIB_EAX, seg);
+                                VDM_SET16(tib, VTIB_EDX, (WORD)((idx << 3) | 7));
+                                p = zput(p, " -> DOSmem seg=0x"); p = zhex(p, seg);
+                                p = zput(p, " sel=0x"); p = zhex(p, (idx << 3) | 7);
+                            }
+                            break; }
+                        case 0x0101: {                             /* free DOS memory: DX = selector */
+                            int idx = (VDM_REG(tib, VTIB_EDX) & 0xFFFF) >> 3;
+                            if (idx >= 3 && idx < 512) {
+                                DWORD seg = g_ldt[idx].base >> 4;
+                                dos_free(NULL, (uint16_t)seg);
+                                g_ldt[idx].base = g_ldt[idx].limit = 0; /* descriptor left reclaimable */
+                            }
+                            p = zput(p, " -> DOSfree");
+                            break; }
+                        case 0x0204: {                             /* get PM interrupt vector: BL -> CX:DX */
+                            DWORD bl = VDM_REG(tib, VTIB_EBX) & 0xFF;
+                            VDM_SET16(tib, VTIB_ECX, g_pm_int[bl].sel);
+                            VDM_SET16(tib, VTIB_EDX, g_pm_int[bl].off & 0xFFFF);
+                            p = zput(p, " -> getPMvec int 0x"); p = zhex(p, bl);
+                            break; }
+                        case 0x0205: {                             /* set PM interrupt vector: BL = CX:DX */
+                            DWORD bl = VDM_REG(tib, VTIB_EBX) & 0xFF;
+                            g_pm_int[bl].sel = (WORD)VDM_REG(tib, VTIB_ECX);
+                            g_pm_int[bl].off = VDM_REG(tib, VTIB_EDX) & 0xFFFF;
+                            p = zput(p, " -> setPMvec int 0x"); p = zhex(p, bl);
+                            p = zput(p, " = 0x"); p = zhex(p, g_pm_int[bl].sel);
+                            p = zput(p, ":0x"); p = zhex(p, g_pm_int[bl].off);
+                            break; }
+                        case 0x0900:                               /* get + disable virtual interrupt state */
+                            VDM_SET16(tib, VTIB_EAX, 0x0900 | (g_dpmi_vi & 1));
+                            g_dpmi_vi = 0; p = zput(p, " -> cli");
+                            break;
+                        case 0x0901:                               /* get + enable virtual interrupt state */
+                            VDM_SET16(tib, VTIB_EAX, 0x0900 | (g_dpmi_vi & 1));
+                            g_dpmi_vi = 1; p = zput(p, " -> sti");
+                            break;
+                        case 0x0902:                               /* get virtual interrupt state -> AL */
+                            VDM_SET16(tib, VTIB_EAX, 0x0900 | (g_dpmi_vi & 1));
+                            p = zput(p, " -> getIF ");  p = zhex(p, g_dpmi_vi);
+                            break;
+                        case 0x0006: {                             /* get base of sel BX -> CX:DX */
+                            int idx = (VDM_REG(tib, VTIB_EBX) & 0xFFFF) >> 3;
+                            DWORD b = (idx >= 3 && idx < 512) ? g_ldt[idx].base : dpmi_sel_base((WORD)(VDM_REG(tib, VTIB_EBX)));
+                            VDM_SET16(tib, VTIB_ECX, b >> 16); VDM_SET16(tib, VTIB_EDX, b & 0xFFFF);
+                            p = zput(p, " -> base 0x"); p = zhex(p, b);
+                            break; }
+                        case 0x0007: {                             /* set base of sel BX = CX:DX */
+                            int idx = (VDM_REG(tib, VTIB_EBX) & 0xFFFF) >> 3;
+                            DWORD b = ((VDM_REG(tib, VTIB_ECX) & 0xFFFF) << 16) | (VDM_REG(tib, VTIB_EDX) & 0xFFFF);
+                            if (idx >= 3 && idx < 512) { g_ldt[idx].base = b; dpmi_install(idx); }
+                            p = zput(p, " -> setbase 0x"); p = zhex(p, b);
+                            break; }
+                        case 0x0008: {                             /* set limit of sel BX = CX:DX */
+                            int idx = (VDM_REG(tib, VTIB_EBX) & 0xFFFF) >> 3;
+                            DWORD l = ((VDM_REG(tib, VTIB_ECX) & 0xFFFF) << 16) | (VDM_REG(tib, VTIB_EDX) & 0xFFFF);
+                            if (idx >= 3 && idx < 512) { g_ldt[idx].limit = l; dpmi_install(idx); }
+                            p = zput(p, " -> setlimit 0x"); p = zhex(p, l);
+                            break; }
+                        case 0x0009: {                             /* set access rights of sel BX (CL) */
+                            int idx = (VDM_REG(tib, VTIB_EBX) & 0xFFFF) >> 3;
+                            if (idx >= 3 && idx < 512) {
+                                g_ldt[idx].access = VDM_REG(tib, VTIB_ECX) & 0xFF;
+                                g_ldt[idx].flags  = (VDM_REG(tib, VTIB_ECX) >> 8) & 0xF;  /* CH high nibble */
+                                dpmi_install(idx);
+                            }
+                            p = zput(p, " -> setaccess");
+                            break; }
+                        case 0x000A: {                             /* create data alias of sel BX */
+                            int src = (VDM_REG(tib, VTIB_EBX) & 0xFFFF) >> 3, idx;
+                            if (g_ldt_next >= 512) { VDM_REG(tib, VTIB_EFLAGS) |= 1u; p = zput(p, " -> ENOMEM"); break; }
+                            idx = g_ldt_next++;
+                            if (src >= 3 && src < 512) g_ldt[idx] = g_ldt[src];
+                            else { g_ldt[idx].base = g_dpmi_code_base; g_ldt[idx].limit = 0xFFFF; g_ldt[idx].flags = 0; }
+                            g_ldt[idx].access = 0xF2;              /* data alias */
+                            dpmi_install(idx);
+                            VDM_SET16(tib, VTIB_EAX, (WORD)((idx << 3) | 7));
+                            p = zput(p, " -> alias sel 0x"); p = zhex(p, (idx << 3) | 7);
+                            break; }
+                        case 0x0500: {                             /* get free memory info -> ES:DI */
+                            DWORD esb = dpmi_sel_base((WORD)VDM_REG(tib, VTIB_ES));
+                            volatile DWORD *info = (volatile DWORD *)(ULONG_PTR)
+                                (esb + (VDM_REG(tib, VTIB_EDI) & 0xFFFF));
+                            int i; for (i = 0; i < 12; ++i) info[i] = 0xFFFFFFFFu;
+                            info[0] = 0x04000000u;                 /* largest free block = 64MB */
+                            p = zput(p, " -> meminfo");
+                            break; }
+                        case 0x0501: {                             /* allocate memory block BX:CX bytes */
+                            DWORD sz = ((VDM_REG(tib, VTIB_EBX) & 0xFFFF) << 16) | (VDM_REG(tib, VTIB_ECX) & 0xFFFF);
+                            void *mem = VirtualAlloc(NULL, sz ? sz : 1, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+                            if (!mem) { VDM_REG(tib, VTIB_EFLAGS) |= 1u; VDM_SET16(tib, VTIB_EAX, 0x8013);
+                                        p = zput(p, " -> ENOMEM"); break; }
+                            { DWORD lin = (DWORD)(ULONG_PTR)mem;   /* in-process: linear = host ptr */
+                              VDM_SET16(tib, VTIB_EBX, lin >> 16); VDM_SET16(tib, VTIB_ECX, lin & 0xFFFF);
+                              VDM_SET16(tib, VTIB_ESI, lin >> 16); VDM_SET16(tib, VTIB_EDI, lin & 0xFFFF); /* handle=addr */
+                              p = zput(p, " -> mem 0x"); p = zhex(p, lin); }
+                            break; }
+                        case 0x0502: {                             /* free memory block SI:DI = handle */
+                            DWORD h = ((VDM_REG(tib, VTIB_ESI) & 0xFFFF) << 16) | (VDM_REG(tib, VTIB_EDI) & 0xFFFF);
+                            if (h) VirtualFree((void *)(ULONG_PTR)h, 0, MEM_RELEASE);
+                            p = zput(p, " -> freed");
+                            break; }
+                        case 0x0300: {                             /* simulate real-mode interrupt: BL=int, ES:DI=RMCS */
+                            DWORD intno = VDM_REG(tib, VTIB_EBX) & 0xFF;
+                            DWORD esb = dpmi_sel_base((WORD)VDM_REG(tib, VTIB_ES));
+                            volatile BYTE *r = (volatile BYTE *)(ULONG_PTR)(esb + (VDM_REG(tib, VTIB_EDI) & 0xFFFF));
+                            /* save the client's PM register file */
+                            DWORD sA=VDM_REG(tib,VTIB_EAX),sB=VDM_REG(tib,VTIB_EBX),sC=VDM_REG(tib,VTIB_ECX),
+                                  sD=VDM_REG(tib,VTIB_EDX),sS=VDM_REG(tib,VTIB_ESI),sDi=VDM_REG(tib,VTIB_EDI),
+                                  sBp=VDM_REG(tib,VTIB_EBP),sDs=VDM_REG(tib,VTIB_DS),sEs=VDM_REG(tib,VTIB_ES),
+                                  sSs=VDM_REG(tib,VTIB_SS),sSp=VDM_REG(tib,VTIB_ESP),sFl=VDM_REG(tib,VTIB_EFLAGS);
+                            /* load the real-mode register block from the RMCS (WORD reads -> clean high) */
+                            VDM_REG(tib,VTIB_EDI)=*(volatile WORD*)(r+0x00); VDM_REG(tib,VTIB_ESI)=*(volatile WORD*)(r+0x04);
+                            VDM_REG(tib,VTIB_EBP)=*(volatile WORD*)(r+0x08); VDM_REG(tib,VTIB_EBX)=*(volatile WORD*)(r+0x10);
+                            VDM_REG(tib,VTIB_EDX)=*(volatile WORD*)(r+0x14); VDM_REG(tib,VTIB_ECX)=*(volatile WORD*)(r+0x18);
+                            VDM_REG(tib,VTIB_EAX)=*(volatile WORD*)(r+0x1C); VDM_REG(tib,VTIB_ES)=*(volatile WORD*)(r+0x22);
+                            VDM_REG(tib,VTIB_DS)=*(volatile WORD*)(r+0x24);
+                            VDM_REG(tib,VTIB_SS)=0x0100; VDM_REG(tib,VTIB_ESP)=0xFF00;  /* host scratch stack */
+                            if (intno == 0x21) { m.tp = p; dos_int21(&m); p = m.tp; }
+                            /* write results back into the RMCS */
+                            *(volatile WORD*)(r+0x1C)=VDM_REG(tib,VTIB_EAX); *(volatile WORD*)(r+0x10)=VDM_REG(tib,VTIB_EBX);
+                            *(volatile WORD*)(r+0x18)=VDM_REG(tib,VTIB_ECX); *(volatile WORD*)(r+0x14)=VDM_REG(tib,VTIB_EDX);
+                            *(volatile WORD*)(r+0x00)=VDM_REG(tib,VTIB_EDI); *(volatile WORD*)(r+0x04)=VDM_REG(tib,VTIB_ESI);
+                            /* restore the client's PM register file */
+                            VDM_REG(tib,VTIB_EAX)=sA;VDM_REG(tib,VTIB_EBX)=sB;VDM_REG(tib,VTIB_ECX)=sC;VDM_REG(tib,VTIB_EDX)=sD;
+                            VDM_REG(tib,VTIB_ESI)=sS;VDM_REG(tib,VTIB_EDI)=sDi;VDM_REG(tib,VTIB_EBP)=sBp;VDM_REG(tib,VTIB_DS)=sDs;
+                            VDM_REG(tib,VTIB_ES)=sEs;VDM_REG(tib,VTIB_SS)=sSs;VDM_REG(tib,VTIB_ESP)=sSp;VDM_REG(tib,VTIB_EFLAGS)=sFl;
+                            VDM_REG(tib,VTIB_EFLAGS) &= ~1u;       /* 0300 succeeds */
+                            p = zput(p, " -> simInt 0x"); p = zhex(p, intno);
+                            break; }
+                        case 0x0301: {                             /* call real-mode FAR proc: ES:DI=RMCS, CX=stack words */
+                            /* This is the first PM->V86->PM round-trip. Unlike 0300 (which fakes a
+                               real-mode INT by calling dos_int21 host-side), 0301 must actually RUN
+                               the client's real-mode procedure in V86: we rewrite the CONTEXT to
+                               V86, push a far-return frame pointing at the DPMI_RMRET_BOP catcher,
+                               run v86_run() until that BOP (servicing any INT 21h the proc makes),
+                               copy the real-mode regs back into the RMCS, then restore PM. */
+                            DWORD esb = dpmi_sel_base((WORD)VDM_REG(tib, VTIB_ES));
+                            volatile BYTE *r = (volatile BYTE *)(ULONG_PTR)(esb + (VDM_REG(tib, VTIB_EDI) & 0xFFFF));
+                            /* --- save the client's PM CONTEXT (full register file + MSW) --- */
+                            DWORD pA=VDM_REG(tib,VTIB_EAX),pB=VDM_REG(tib,VTIB_EBX),pC=VDM_REG(tib,VTIB_ECX),
+                                  pD=VDM_REG(tib,VTIB_EDX),pSi=VDM_REG(tib,VTIB_ESI),pDi=VDM_REG(tib,VTIB_EDI),
+                                  pBp=VDM_REG(tib,VTIB_EBP),pDs=VDM_REG(tib,VTIB_DS),pEs=VDM_REG(tib,VTIB_ES),
+                                  pFs=VDM_REG(tib,VTIB_FS),pGs=VDM_REG(tib,VTIB_GS),pCs=VDM_REG(tib,VTIB_CS),
+                                  pIp=VDM_REG(tib,VTIB_EIP),pSs=VDM_REG(tib,VTIB_SS),pSp=VDM_REG(tib,VTIB_ESP),
+                                  pFl=VDM_REG(tib,VTIB_EFLAGS);
+                            WORD pMsw = *(volatile WORD *)(tib + VTIB_MSW);
+                            /* real-mode target + stack from the RMCS (default SS:SP to the code seg) */
+                            WORD rcs = *(volatile WORD*)(r+0x2C), rip = *(volatile WORD*)(r+0x2A);
+                            WORD rss = *(volatile WORD*)(r+0x30), rsp = *(volatile WORD*)(r+0x2E);
+                            unsigned rt; int done = 0;
+                            if (rss == 0) { rss = (WORD)(g_dpmi_code_base >> 4); rsp = 0xFF00; }
+                            p = zput(p, " -> callRM 0x"); p = zhex(p, rcs); p = zput(p, ":0x"); p = zhex(p, rip);
+                            p = zput(p, " SS:SP=0x"); p = zhex(p, rss); p = zput(p, ":0x"); p = zhex(p, rsp);
+                            p = zput(p, "\r\n"); log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                            /* push the far-return frame [IP=RMRET, CS=DOS_HDLR_SEG] on the RM stack */
+                            rsp -= 2; pokew(((DWORD)rss << 4) + rsp, DOS_HDLR_SEG);   /* return CS */
+                            rsp -= 2; pokew(((DWORD)rss << 4) + rsp, DPMI_RMRET_OFF);  /* return IP */
+                            dpmi_unpatch();   /* restore real `CD nn` so RM ints in the proc vector natively */
+                            /* --- rewrite the CONTEXT to V86 with the RMCS register file --- */
+                            *(volatile WORD *)(tib + VTIB_MSW) = (WORD)(pMsw & ~MSW_PE_BIT);  /* leave PM */
+                            VDM_REG(tib,VTIB_EFLAGS) = 0x20202;    /* VM + IF + reserved bit-1 */
+                            VDM_REG(tib,VTIB_EDI)=*(volatile WORD*)(r+0x00); VDM_REG(tib,VTIB_ESI)=*(volatile WORD*)(r+0x04);
+                            VDM_REG(tib,VTIB_EBP)=*(volatile WORD*)(r+0x08); VDM_REG(tib,VTIB_EBX)=*(volatile WORD*)(r+0x10);
+                            VDM_REG(tib,VTIB_EDX)=*(volatile WORD*)(r+0x14); VDM_REG(tib,VTIB_ECX)=*(volatile WORD*)(r+0x18);
+                            VDM_REG(tib,VTIB_EAX)=*(volatile WORD*)(r+0x1C);
+                            VDM_SET16(tib,VTIB_ES,*(volatile WORD*)(r+0x22)); VDM_SET16(tib,VTIB_DS,*(volatile WORD*)(r+0x24));
+                            VDM_SET16(tib,VTIB_FS,rss); VDM_SET16(tib,VTIB_GS,rss);
+                            VDM_SET16(tib,VTIB_CS,rcs); VDM_REG(tib,VTIB_EIP)=rip;
+                            VDM_SET16(tib,VTIB_SS,rss); VDM_REG(tib,VTIB_ESP)=rsp;
+                            /* --- nested V86 run loop: run the proc until the return-BOP --- */
+                            for (rt = 0; rt < 128 && !done; ++rt) {
+                                LONG rst; DWORD rev = v86_run(tib, &rst);
+                                DWORD info = VDM_REG(tib, VTIB_EVENT_INFO) & 0xFF;
+                                if (rev == VDM_EVENT_BOP && info == DPMI_RMRET_BOP) {
+                                    done = 1; break;                /* proc RETF'd -> finished */
+                                }
+                                if (rev == VDM_EVENT_BOP && info == 0x20) {   /* INT 21h from the proc */
+                                    m.tp = p; dos_int21(&m); p = m.tp;
+                                    VDM_REG(tib, VTIB_EIP) += 3;    /* past the BOP -> the stub IRET */
+                                    log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                                    continue;
+                                }
+                                if (rev == VDM_EVENT_BOP && info == DPMI_CB_BOP) {  /* proc far-called a 0303 callback */
+                                    int cbslot = (int)(((VDM_REG(tib,VTIB_EIP)&0xFFFF) - DPMI_CB_BASE_OFF) / 4);
+                                    if (cbslot >= 0 && cbslot < DPMI_CB_SLOTS && g_cb[cbslot].used) {
+                                        dpmi_invoke_callback(mp, tib, cbslot);   /* V86->PM handler->V86; sets CS:IP to the return */
+                                        continue;
+                                    }
+                                    p = zput(p, "0301: bad cb slot\r\n"); log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                                    break;
+                                }
+                                if (rev == VDM_EVENT_IO || rev == VDM_EVENT_GPFAULT) {
+                                    int h; EnterCriticalSection(&g_lock);
+                                    h = host_try_io(tib, &g_bus); LeaveCriticalSection(&g_lock);
+                                    if (h) continue;
+                                }
+                                p = zput(p, "0301: unexpected RM event=0x"); p = zhex(p, rev);
+                                p = zput(p, " info=0x"); p = zhex(p, info);
+                                p = zput(p, " CS:IP=0x"); p = zhex(p, VDM_REG(tib,VTIB_CS)&0xFFFF);
+                                p = zput(p, ":0x"); p = zhex(p, VDM_REG(tib,VTIB_EIP)&0xFFFF); p = zput(p, "\r\n");
+                                log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                                break;
+                            }
+                            dpmi_repatch();   /* re-arm the BOP patch before the PM client resumes */
+                            /* --- copy the real-mode register file back into the RMCS --- */
+                            *(volatile WORD*)(r+0x1C)=VDM_REG(tib,VTIB_EAX); *(volatile WORD*)(r+0x10)=VDM_REG(tib,VTIB_EBX);
+                            *(volatile WORD*)(r+0x18)=VDM_REG(tib,VTIB_ECX); *(volatile WORD*)(r+0x14)=VDM_REG(tib,VTIB_EDX);
+                            *(volatile WORD*)(r+0x00)=VDM_REG(tib,VTIB_EDI); *(volatile WORD*)(r+0x04)=VDM_REG(tib,VTIB_ESI);
+                            *(volatile WORD*)(r+0x08)=VDM_REG(tib,VTIB_EBP);
+                            *(volatile WORD*)(r+0x22)=VDM_REG(tib,VTIB_ES);  *(volatile WORD*)(r+0x24)=VDM_REG(tib,VTIB_DS);
+                            /* --- restore the client's PM CONTEXT --- */
+                            *(volatile WORD *)(tib + VTIB_MSW) = pMsw;       /* re-enter PM */
+                            VDM_REG(tib,VTIB_EAX)=pA;VDM_REG(tib,VTIB_EBX)=pB;VDM_REG(tib,VTIB_ECX)=pC;VDM_REG(tib,VTIB_EDX)=pD;
+                            VDM_REG(tib,VTIB_ESI)=pSi;VDM_REG(tib,VTIB_EDI)=pDi;VDM_REG(tib,VTIB_EBP)=pBp;
+                            VDM_SET16(tib,VTIB_DS,pDs);VDM_SET16(tib,VTIB_ES,pEs);VDM_SET16(tib,VTIB_FS,pFs);VDM_SET16(tib,VTIB_GS,pGs);
+                            VDM_SET16(tib,VTIB_CS,pCs);VDM_REG(tib,VTIB_EIP)=pIp;
+                            VDM_SET16(tib,VTIB_SS,pSs);VDM_REG(tib,VTIB_ESP)=pSp;VDM_REG(tib,VTIB_EFLAGS)=pFl;
+                            VDM_REG(tib,VTIB_EFLAGS) &= ~1u;        /* CF=0: success */
+                            p = zput(p, "0301 -> RM proc returned after "); p = zhex(p, rt);
+                            p = zput(p, done ? " steps (OK)" : " steps (NO-RET)");
+                            break; }
+                        case 0x0303: {                             /* allocate real-mode callback: DS:SI=handler, ES:DI=RMCS -> CX:DX */
+                            int s;
+                            if (g_pmret_sel == 0 && g_ldt_next < 512) {  /* lazily install the PM-return selector */
+                                int idx = g_ldt_next++;
+                                g_ldt[idx].base = (DWORD)DOS_HDLR_SEG << 4; g_ldt[idx].limit = 0xFFFF;
+                                g_ldt[idx].access = 0xFA; g_ldt[idx].flags = 0;   /* code exec/read */
+                                dpmi_install(idx);
+                                g_pmret_sel = (WORD)((idx << 3) | 7);
+                            }
+                            for (s = 0; s < DPMI_CB_SLOTS && g_cb[s].used; ++s) {}
+                            if (s >= DPMI_CB_SLOTS || g_pmret_sel == 0) {
+                                VDM_REG(tib, VTIB_EFLAGS) |= 1u; VDM_SET16(tib, VTIB_EAX, 0x8015);
+                                p = zput(p, " -> cb ENOMEM"); break;
+                            }
+                            g_cb[s].used = 1;
+                            g_cb[s].pm_sel = (WORD)VDM_REG(tib, VTIB_DS); g_cb[s].pm_off = VDM_REG(tib, VTIB_ESI) & 0xFFFF;
+                            g_cb[s].rm_es  = (WORD)VDM_REG(tib, VTIB_ES); g_cb[s].rm_di  = VDM_REG(tib, VTIB_EDI) & 0xFFFF;
+                            VDM_SET16(tib, VTIB_ECX, DOS_HDLR_SEG);
+                            VDM_SET16(tib, VTIB_EDX, DPMI_CB_BASE_OFF + s*4);
+                            p = zput(p, " -> cb slot "); p = zhex(p, s); p = zput(p, " = 0x");
+                            p = zhex(p, DOS_HDLR_SEG); p = zput(p, ":0x"); p = zhex(p, DPMI_CB_BASE_OFF + s*4);
+                            p = zput(p, " handler 0x"); p = zhex(p, g_cb[s].pm_sel); p = zput(p, ":0x"); p = zhex(p, g_cb[s].pm_off);
+                            break; }
+                        default:
+                            VDM_REG(tib, VTIB_EFLAGS) |= 1u;       /* CF=1: unsupported */
+                            p = zput(p, " -> UNSUP");
+                            break;
+                        }
+                        p = zput(p, "\r\n"); log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                        VDM_REG(tib, VTIB_EIP) += 2;               /* past the 2-byte INT */
+                        return 1;
+                    }
+                    if (vec == 0x21) {                             /* DOS INT 21h (in PM) */
+                        DWORD ah = (ax >> 8) & 0xFF;
+                        if (ah == 0x4C) {                          /* terminate */
+                            DWORD ver = *(volatile WORD *)(ULONG_PTR)0x1600;
+                            p = zput(p, "INT21h AH=4Ch -> client EXIT after "); p = zhex(p, steps);
+                            p = zput(p, " svc. ver=0x"); p = zhex(p, ver);
+                            p = zput(p, (ver == 0x005A) ? "  <<< DPMI client ran + exited cleanly >>>\r\n"
+                                                        : "  <<< MISMATCH >>>\r\n");
+                            log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                            return 0;
+                        }
+                        if (ah == 0x09) {                          /* print $-string DS:DX */
+                            /* Resolve DS's linear base from the LDT so a client can print
+                               through a descriptor it allocated + based itself. */
+                            DWORD dsb = dpmi_sel_base((WORD)VDM_REG(tib, VTIB_DS));
+                            const volatile BYTE *s = (const volatile BYTE *)(ULONG_PTR)
+                                (dsb + (VDM_REG(tib, VTIB_EDX) & 0xFFFF));
+                            char ob[256]; char *op = ob; int k;
+                            op = zput(op, "INT21h AH=09 print: \"");
+                            for (k = 0; k < 200 && *s != '$'; ++k, ++s) {
+                                if (*s >= 0x20) *op++ = (char)*s;   /* printable -> serial echo */
+                                if (m.conout) m.conout(m.conctx, *s);  /* -> the Luna console */
+                                if (m.out_len < m.out_cap - 1) m.out[m.out_len++] = (char)*s;
+                            }
+                            op = zput(op, "\"\r\n");
+                            log_append(LOG_PATH, ob, op); serial_out(ob, op);
+                            VDM_REG(tib, VTIB_EFLAGS) &= ~1u;
+                            VDM_REG(tib, VTIB_EIP) += 2;
+                            return 1;
+                        }
+                        if (ah == 0x02) {                          /* print char DL */
+                            BYTE ch = VDM_REG(tib, VTIB_EDX) & 0xFF;
+                            if (m.conout) m.conout(m.conctx, ch);
+                            if (m.out_len < m.out_cap - 1) m.out[m.out_len++] = (char)ch;
+                            VDM_REG(tib, VTIB_EFLAGS) &= ~1u;
+                            VDM_REG(tib, VTIB_EIP) += 2;
+                            return 1;
+                        }
+                        if (ah == 0x40) {                          /* write BX=handle CX=cnt DS:DX=buf */
+                            DWORD bh = VDM_REG(tib, VTIB_EBX) & 0xFFFF, cnt = VDM_REG(tib, VTIB_ECX) & 0xFFFF;
+                            DWORD dsb = dpmi_sel_base((WORD)VDM_REG(tib, VTIB_DS));
+                            const volatile BYTE *b = (const volatile BYTE *)(ULONG_PTR)
+                                (dsb + (VDM_REG(tib, VTIB_EDX) & 0xFFFF));
+                            VDM_REG(tib, VTIB_EFLAGS) &= ~1u;
+                            if (bh == 1 || bh == 2) {              /* stdout / stderr */
+                                char ob[300]; char *op = ob; DWORD k;
+                                op = zput(op, "INT21h AH=40 write: \"");
+                                for (k = 0; k < cnt && k < 250; ++k) {
+                                    if (b[k] >= 0x20 && op < ob + 270) *op++ = (char)b[k];
+                                    if (m.conout) m.conout(m.conctx, b[k]);
+                                    if (m.out_len < m.out_cap - 1) m.out[m.out_len++] = (char)b[k];
+                                }
+                                op = zput(op, "\"\r\n");
+                                log_append(LOG_PATH, ob, op); serial_out(ob, op);
+                                VDM_SET16(tib, VTIB_EAX, cnt);     /* AX = bytes written */
+                            } else if (bh < 24 && m.fh[bh]) {      /* file handle */
+                                DWORD w = 0; WriteFile(m.fh[bh], (const void *)b, cnt, &w, NULL);
+                                VDM_SET16(tib, VTIB_EAX, w);
+                                p = zput(p, "INT21h AH=40 file write "); p = zhex(p, w); p = zput(p, "b\r\n");
+                                log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                            } else { VDM_REG(tib, VTIB_EFLAGS) |= 1u; VDM_SET16(tib, VTIB_EAX, 6); }
+                            VDM_REG(tib, VTIB_EIP) += 2;
+                            return 1;
+                        }
+                        if (ah == 0x3C || ah == 0x3D) {            /* create / open: DS:DX = ASCIIZ name */
+                            DWORD dsb = dpmi_sel_base((WORD)VDM_REG(tib, VTIB_DS));
+                            const char *fn = (const char *)(ULONG_PTR)(dsb + (VDM_REG(tib, VTIB_EDX) & 0xFFFF));
+                            DWORD acc = ((ax & 0xFF) == 0) ? GENERIC_READ
+                                       : ((ax & 0xFF) == 1) ? GENERIC_WRITE : (GENERIC_READ | GENERIC_WRITE);
+                            HANDLE f = (ah == 0x3C)
+                                ? CreateFileA(fn, GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ, NULL,
+                                              CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL)
+                                : CreateFileA(fn, acc, FILE_SHARE_READ, NULL, OPEN_EXISTING,
+                                              FILE_ATTRIBUTE_NORMAL, NULL);
+                            VDM_REG(tib, VTIB_EFLAGS) &= ~1u;
+                            if (f == INVALID_HANDLE_VALUE) { VDM_REG(tib, VTIB_EFLAGS) |= 1u; VDM_SET16(tib, VTIB_EAX, 2); }
+                            else { int slot; for (slot = 5; slot < 24 && m.fh[slot]; ++slot) {}
+                                   if (slot < 24) { m.fh[slot] = f; VDM_SET16(tib, VTIB_EAX, slot); }
+                                   else { CloseHandle(f); VDM_REG(tib, VTIB_EFLAGS) |= 1u; VDM_SET16(tib, VTIB_EAX, 4); } }
+                            p = zput(p, "INT21h AH="); p = zhex(p, ah); p = zput(p, " open \"");
+                            p = zput(p, fn); p = zput(p, "\" -> AX=0x"); p = zhex(p, VDM_REG(tib, VTIB_EAX) & 0xFFFF);
+                            p = zput(p, "\r\n"); log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                            VDM_REG(tib, VTIB_EIP) += 2; return 1;
+                        }
+                        if (ah == 0x3E) {                          /* close: BX=handle */
+                            DWORD h = VDM_REG(tib, VTIB_EBX) & 0xFFFF;
+                            if (h >= 5 && h < 24 && m.fh[h]) { CloseHandle(m.fh[h]); m.fh[h] = 0; }
+                            VDM_REG(tib, VTIB_EFLAGS) &= ~1u;
+                            VDM_REG(tib, VTIB_EIP) += 2; return 1;
+                        }
+                        if (ah == 0x3F) {                          /* read: BX=handle CX=cnt -> DS:DX */
+                            DWORD h = VDM_REG(tib, VTIB_EBX) & 0xFFFF, cnt = VDM_REG(tib, VTIB_ECX) & 0xFFFF, rd = 0;
+                            DWORD dsb = dpmi_sel_base((WORD)VDM_REG(tib, VTIB_DS));
+                            void *b = (void *)(ULONG_PTR)(dsb + (VDM_REG(tib, VTIB_EDX) & 0xFFFF));
+                            VDM_REG(tib, VTIB_EFLAGS) &= ~1u;
+                            if (h < 24 && m.fh[h]) { ReadFile(m.fh[h], b, cnt, &rd, NULL); VDM_SET16(tib, VTIB_EAX, rd); }
+                            else { VDM_REG(tib, VTIB_EFLAGS) |= 1u; VDM_SET16(tib, VTIB_EAX, 6); }
+                            p = zput(p, "INT21h AH=3F read "); p = zhex(p, rd); p = zput(p, "b\r\n");
+                            log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                            VDM_REG(tib, VTIB_EIP) += 2; return 1;
+                        }
+                        if (ah == 0x42) {                          /* lseek: AL=org BX=h CX:DX=off */
+                            DWORD h = VDM_REG(tib, VTIB_EBX) & 0xFFFF, meth = ax & 0xFF;
+                            LONG dist = (LONG)(((VDM_REG(tib, VTIB_ECX) & 0xFFFF) << 16) | (VDM_REG(tib, VTIB_EDX) & 0xFFFF));
+                            VDM_REG(tib, VTIB_EFLAGS) &= ~1u;
+                            if (h >= 5 && h < 24 && m.fh[h]) {
+                                DWORD np = SetFilePointer(m.fh[h], dist, NULL, meth);
+                                VDM_SET16(tib, VTIB_EDX, np >> 16); VDM_SET16(tib, VTIB_EAX, np & 0xFFFF);
+                            } else VDM_REG(tib, VTIB_EFLAGS) |= 1u;
+                            VDM_REG(tib, VTIB_EIP) += 2; return 1;
+                        }
+                        p = zput(p, "INT21h AH=0x"); p = zhex(p, ah); p = zput(p, " (PM thunk TODO)\r\n");
+                        log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                        VDM_REG(tib, VTIB_EIP) += 2;
+                        return 1;
+                    }
+                    p = zput(p, "DPMI: unexpected PM stop event=0x"); p = zhex(p, ev);
+                    p = zput(p, " CS:EIP=0x"); p = zhex(p, VDM_REG(tib, VTIB_CS) & 0xFFFF);
+                    p = zput(p, ":0x"); p = zhex(p, eip); p = zput(p, "\r\n");
+                    log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                    return -1;
+#undef m
 }
 
 int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
@@ -1158,7 +1609,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     (void)hInst; (void)hPrev; (void)lpCmd; (void)nShow;
     progpath[0] = 0; args[0] = 0;
 
-    p = zput(p, "NTVDMEX clean host\r\nSTAGE0: WinMain entered [build dpmi-harness-v36]\r\n");
+    p = zput(p, "NTVDMEX clean host\r\nSTAGE0: WinMain entered [build dpmi-harness-v37]\r\n");
     log_write(LOG_PATH, report, p);
     serial_init();                                      /* DPMI harness: COM1 log sink */
     serial_out(report, p);
@@ -1593,433 +2044,14 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                    vector by the fault EIP, dispatch (INT 31h = DPMI, INT 21h = DOS), write the
                    returns into the guest CONTEXT, advance past the 2-byte INT, and re-enter PM. */
                 for (steps = 0; steps < 256; ++steps) {
-                    DWORD ev, eip, vec, ax;
+                    DWORD ev, eip, vec; int rc;
                     dpmi_enter_pm(tib);
                     ev  = VDM_REG(tib, VTIB_EVENT);
                     eip = VDM_REG(tib, VTIB_EIP) & 0xFFFF;
-                    ax  = VDM_REG(tib, VTIB_EAX) & 0xFFFF;
                     vec = (ev == 4) ? g_int_vec[eip] : 0;
-                    if (vec == 0x31) {                             /* DPMI INT 31h */
-                        p = zput(p, "INT31h AX=0x"); p = zhex(p, ax);
-                        p = zput(p, " CX=0x"); p = zhex(p, VDM_REG(tib, VTIB_ECX) & 0xFFFF);
-                        VDM_REG(tib, VTIB_EFLAGS) &= ~1u;          /* default CF=0 (success) */
-                        switch (ax) {
-                        case 0x0400:                               /* get DPMI version */
-                            VDM_SET16(tib, VTIB_EAX, 0x005A);      /* 0.90 */
-                            VDM_SET16(tib, VTIB_EBX, 0x0001);
-                            VDM_SET16(tib, VTIB_ECX, 0x0003);      /* CL=3 (80386) */
-                            VDM_SET16(tib, VTIB_EDX, 0x0870);
-                            p = zput(p, " -> ver 0.90");
-                            break;
-                        case 0x0000: {                             /* allocate CX descriptors */
-                            DWORD cx = VDM_REG(tib, VTIB_ECX) & 0xFFFF, i; WORD basesel;
-                            if (cx == 0) cx = 1;
-                            if (g_ldt_next + (int)cx > 512) {      /* out of descriptors */
-                                VDM_REG(tib, VTIB_EFLAGS) |= 1u; VDM_SET16(tib, VTIB_EAX, 0x8011);
-                                p = zput(p, " -> ENOMEM"); break;
-                            }
-                            basesel = (WORD)((g_ldt_next << 3) | 7);
-                            for (i = 0; i < cx; ++i) {
-                                int idx = g_ldt_next++;
-                                g_ldt[idx].base = 0; g_ldt[idx].limit = 0;
-                                g_ldt[idx].access = 0xF2; g_ldt[idx].flags = 0;  /* data, RPL3 */
-                                dpmi_install(idx);
-                            }
-                            VDM_SET16(tib, VTIB_EAX, basesel);
-                            p = zput(p, " -> sel 0x"); p = zhex(p, basesel);
-                            break; }
-                        case 0x0001:                               /* free descriptor BX (no-op reclaim) */
-                            p = zput(p, " -> free");
-                            break;
-                        case 0x0100: {                             /* allocate DOS memory: BX paras -> AX=seg, DX=sel */
-                            uint16_t want = (uint16_t)(VDM_REG(tib, VTIB_EBX) & 0xFFFF), seg = 0, max = 0;
-                            int err = dos_alloc(NULL, m.first_mcb, want, &seg, &max);
-                            if (err || g_ldt_next >= 512) {
-                                VDM_REG(tib, VTIB_EFLAGS) |= 1u;
-                                VDM_SET16(tib, VTIB_EAX, err ? err : 0x0008);   /* 8 = insufficient memory */
-                                VDM_SET16(tib, VTIB_EBX, max);                  /* largest available (paras) */
-                                p = zput(p, " -> DOSmem ENOMEM max=0x"); p = zhex(p, max);
-                            } else {
-                                int idx = g_ldt_next++;
-                                g_ldt[idx].base = (DWORD)seg << 4;
-                                g_ldt[idx].limit = want ? ((DWORD)want << 4) - 1 : 0;
-                                g_ldt[idx].access = 0xF2; g_ldt[idx].flags = 0;  /* data, RPL3 */
-                                dpmi_install(idx);
-                                VDM_SET16(tib, VTIB_EAX, seg);
-                                VDM_SET16(tib, VTIB_EDX, (WORD)((idx << 3) | 7));
-                                p = zput(p, " -> DOSmem seg=0x"); p = zhex(p, seg);
-                                p = zput(p, " sel=0x"); p = zhex(p, (idx << 3) | 7);
-                            }
-                            break; }
-                        case 0x0101: {                             /* free DOS memory: DX = selector */
-                            int idx = (VDM_REG(tib, VTIB_EDX) & 0xFFFF) >> 3;
-                            if (idx >= 3 && idx < 512) {
-                                DWORD seg = g_ldt[idx].base >> 4;
-                                dos_free(NULL, (uint16_t)seg);
-                                g_ldt[idx].base = g_ldt[idx].limit = 0; /* descriptor left reclaimable */
-                            }
-                            p = zput(p, " -> DOSfree");
-                            break; }
-                        case 0x0204: {                             /* get PM interrupt vector: BL -> CX:DX */
-                            DWORD bl = VDM_REG(tib, VTIB_EBX) & 0xFF;
-                            VDM_SET16(tib, VTIB_ECX, g_pm_int[bl].sel);
-                            VDM_SET16(tib, VTIB_EDX, g_pm_int[bl].off & 0xFFFF);
-                            p = zput(p, " -> getPMvec int 0x"); p = zhex(p, bl);
-                            break; }
-                        case 0x0205: {                             /* set PM interrupt vector: BL = CX:DX */
-                            DWORD bl = VDM_REG(tib, VTIB_EBX) & 0xFF;
-                            g_pm_int[bl].sel = (WORD)VDM_REG(tib, VTIB_ECX);
-                            g_pm_int[bl].off = VDM_REG(tib, VTIB_EDX) & 0xFFFF;
-                            p = zput(p, " -> setPMvec int 0x"); p = zhex(p, bl);
-                            p = zput(p, " = 0x"); p = zhex(p, g_pm_int[bl].sel);
-                            p = zput(p, ":0x"); p = zhex(p, g_pm_int[bl].off);
-                            break; }
-                        case 0x0900:                               /* get + disable virtual interrupt state */
-                            VDM_SET16(tib, VTIB_EAX, 0x0900 | (g_dpmi_vi & 1));
-                            g_dpmi_vi = 0; p = zput(p, " -> cli");
-                            break;
-                        case 0x0901:                               /* get + enable virtual interrupt state */
-                            VDM_SET16(tib, VTIB_EAX, 0x0900 | (g_dpmi_vi & 1));
-                            g_dpmi_vi = 1; p = zput(p, " -> sti");
-                            break;
-                        case 0x0902:                               /* get virtual interrupt state -> AL */
-                            VDM_SET16(tib, VTIB_EAX, 0x0900 | (g_dpmi_vi & 1));
-                            p = zput(p, " -> getIF ");  p = zhex(p, g_dpmi_vi);
-                            break;
-                        case 0x0006: {                             /* get base of sel BX -> CX:DX */
-                            int idx = (VDM_REG(tib, VTIB_EBX) & 0xFFFF) >> 3;
-                            DWORD b = (idx >= 3 && idx < 512) ? g_ldt[idx].base : dpmi_sel_base((WORD)(VDM_REG(tib, VTIB_EBX)));
-                            VDM_SET16(tib, VTIB_ECX, b >> 16); VDM_SET16(tib, VTIB_EDX, b & 0xFFFF);
-                            p = zput(p, " -> base 0x"); p = zhex(p, b);
-                            break; }
-                        case 0x0007: {                             /* set base of sel BX = CX:DX */
-                            int idx = (VDM_REG(tib, VTIB_EBX) & 0xFFFF) >> 3;
-                            DWORD b = ((VDM_REG(tib, VTIB_ECX) & 0xFFFF) << 16) | (VDM_REG(tib, VTIB_EDX) & 0xFFFF);
-                            if (idx >= 3 && idx < 512) { g_ldt[idx].base = b; dpmi_install(idx); }
-                            p = zput(p, " -> setbase 0x"); p = zhex(p, b);
-                            break; }
-                        case 0x0008: {                             /* set limit of sel BX = CX:DX */
-                            int idx = (VDM_REG(tib, VTIB_EBX) & 0xFFFF) >> 3;
-                            DWORD l = ((VDM_REG(tib, VTIB_ECX) & 0xFFFF) << 16) | (VDM_REG(tib, VTIB_EDX) & 0xFFFF);
-                            if (idx >= 3 && idx < 512) { g_ldt[idx].limit = l; dpmi_install(idx); }
-                            p = zput(p, " -> setlimit 0x"); p = zhex(p, l);
-                            break; }
-                        case 0x0009: {                             /* set access rights of sel BX (CL) */
-                            int idx = (VDM_REG(tib, VTIB_EBX) & 0xFFFF) >> 3;
-                            if (idx >= 3 && idx < 512) {
-                                g_ldt[idx].access = VDM_REG(tib, VTIB_ECX) & 0xFF;
-                                g_ldt[idx].flags  = (VDM_REG(tib, VTIB_ECX) >> 8) & 0xF;  /* CH high nibble */
-                                dpmi_install(idx);
-                            }
-                            p = zput(p, " -> setaccess");
-                            break; }
-                        case 0x000A: {                             /* create data alias of sel BX */
-                            int src = (VDM_REG(tib, VTIB_EBX) & 0xFFFF) >> 3, idx;
-                            if (g_ldt_next >= 512) { VDM_REG(tib, VTIB_EFLAGS) |= 1u; p = zput(p, " -> ENOMEM"); break; }
-                            idx = g_ldt_next++;
-                            if (src >= 3 && src < 512) g_ldt[idx] = g_ldt[src];
-                            else { g_ldt[idx].base = g_dpmi_code_base; g_ldt[idx].limit = 0xFFFF; g_ldt[idx].flags = 0; }
-                            g_ldt[idx].access = 0xF2;              /* data alias */
-                            dpmi_install(idx);
-                            VDM_SET16(tib, VTIB_EAX, (WORD)((idx << 3) | 7));
-                            p = zput(p, " -> alias sel 0x"); p = zhex(p, (idx << 3) | 7);
-                            break; }
-                        case 0x0500: {                             /* get free memory info -> ES:DI */
-                            DWORD esb = dpmi_sel_base((WORD)VDM_REG(tib, VTIB_ES));
-                            volatile DWORD *info = (volatile DWORD *)(ULONG_PTR)
-                                (esb + (VDM_REG(tib, VTIB_EDI) & 0xFFFF));
-                            int i; for (i = 0; i < 12; ++i) info[i] = 0xFFFFFFFFu;
-                            info[0] = 0x04000000u;                 /* largest free block = 64MB */
-                            p = zput(p, " -> meminfo");
-                            break; }
-                        case 0x0501: {                             /* allocate memory block BX:CX bytes */
-                            DWORD sz = ((VDM_REG(tib, VTIB_EBX) & 0xFFFF) << 16) | (VDM_REG(tib, VTIB_ECX) & 0xFFFF);
-                            void *mem = VirtualAlloc(NULL, sz ? sz : 1, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
-                            if (!mem) { VDM_REG(tib, VTIB_EFLAGS) |= 1u; VDM_SET16(tib, VTIB_EAX, 0x8013);
-                                        p = zput(p, " -> ENOMEM"); break; }
-                            { DWORD lin = (DWORD)(ULONG_PTR)mem;   /* in-process: linear = host ptr */
-                              VDM_SET16(tib, VTIB_EBX, lin >> 16); VDM_SET16(tib, VTIB_ECX, lin & 0xFFFF);
-                              VDM_SET16(tib, VTIB_ESI, lin >> 16); VDM_SET16(tib, VTIB_EDI, lin & 0xFFFF); /* handle=addr */
-                              p = zput(p, " -> mem 0x"); p = zhex(p, lin); }
-                            break; }
-                        case 0x0502: {                             /* free memory block SI:DI = handle */
-                            DWORD h = ((VDM_REG(tib, VTIB_ESI) & 0xFFFF) << 16) | (VDM_REG(tib, VTIB_EDI) & 0xFFFF);
-                            if (h) VirtualFree((void *)(ULONG_PTR)h, 0, MEM_RELEASE);
-                            p = zput(p, " -> freed");
-                            break; }
-                        case 0x0300: {                             /* simulate real-mode interrupt: BL=int, ES:DI=RMCS */
-                            DWORD intno = VDM_REG(tib, VTIB_EBX) & 0xFF;
-                            DWORD esb = dpmi_sel_base((WORD)VDM_REG(tib, VTIB_ES));
-                            volatile BYTE *r = (volatile BYTE *)(ULONG_PTR)(esb + (VDM_REG(tib, VTIB_EDI) & 0xFFFF));
-                            /* save the client's PM register file */
-                            DWORD sA=VDM_REG(tib,VTIB_EAX),sB=VDM_REG(tib,VTIB_EBX),sC=VDM_REG(tib,VTIB_ECX),
-                                  sD=VDM_REG(tib,VTIB_EDX),sS=VDM_REG(tib,VTIB_ESI),sDi=VDM_REG(tib,VTIB_EDI),
-                                  sBp=VDM_REG(tib,VTIB_EBP),sDs=VDM_REG(tib,VTIB_DS),sEs=VDM_REG(tib,VTIB_ES),
-                                  sSs=VDM_REG(tib,VTIB_SS),sSp=VDM_REG(tib,VTIB_ESP),sFl=VDM_REG(tib,VTIB_EFLAGS);
-                            /* load the real-mode register block from the RMCS (WORD reads -> clean high) */
-                            VDM_REG(tib,VTIB_EDI)=*(volatile WORD*)(r+0x00); VDM_REG(tib,VTIB_ESI)=*(volatile WORD*)(r+0x04);
-                            VDM_REG(tib,VTIB_EBP)=*(volatile WORD*)(r+0x08); VDM_REG(tib,VTIB_EBX)=*(volatile WORD*)(r+0x10);
-                            VDM_REG(tib,VTIB_EDX)=*(volatile WORD*)(r+0x14); VDM_REG(tib,VTIB_ECX)=*(volatile WORD*)(r+0x18);
-                            VDM_REG(tib,VTIB_EAX)=*(volatile WORD*)(r+0x1C); VDM_REG(tib,VTIB_ES)=*(volatile WORD*)(r+0x22);
-                            VDM_REG(tib,VTIB_DS)=*(volatile WORD*)(r+0x24);
-                            VDM_REG(tib,VTIB_SS)=0x0100; VDM_REG(tib,VTIB_ESP)=0xFF00;  /* host scratch stack */
-                            if (intno == 0x21) { m.tp = p; dos_int21(&m); p = m.tp; }
-                            /* write results back into the RMCS */
-                            *(volatile WORD*)(r+0x1C)=VDM_REG(tib,VTIB_EAX); *(volatile WORD*)(r+0x10)=VDM_REG(tib,VTIB_EBX);
-                            *(volatile WORD*)(r+0x18)=VDM_REG(tib,VTIB_ECX); *(volatile WORD*)(r+0x14)=VDM_REG(tib,VTIB_EDX);
-                            *(volatile WORD*)(r+0x00)=VDM_REG(tib,VTIB_EDI); *(volatile WORD*)(r+0x04)=VDM_REG(tib,VTIB_ESI);
-                            /* restore the client's PM register file */
-                            VDM_REG(tib,VTIB_EAX)=sA;VDM_REG(tib,VTIB_EBX)=sB;VDM_REG(tib,VTIB_ECX)=sC;VDM_REG(tib,VTIB_EDX)=sD;
-                            VDM_REG(tib,VTIB_ESI)=sS;VDM_REG(tib,VTIB_EDI)=sDi;VDM_REG(tib,VTIB_EBP)=sBp;VDM_REG(tib,VTIB_DS)=sDs;
-                            VDM_REG(tib,VTIB_ES)=sEs;VDM_REG(tib,VTIB_SS)=sSs;VDM_REG(tib,VTIB_ESP)=sSp;VDM_REG(tib,VTIB_EFLAGS)=sFl;
-                            VDM_REG(tib,VTIB_EFLAGS) &= ~1u;       /* 0300 succeeds */
-                            p = zput(p, " -> simInt 0x"); p = zhex(p, intno);
-                            break; }
-                        case 0x0301: {                             /* call real-mode FAR proc: ES:DI=RMCS, CX=stack words */
-                            /* This is the first PM->V86->PM round-trip. Unlike 0300 (which fakes a
-                               real-mode INT by calling dos_int21 host-side), 0301 must actually RUN
-                               the client's real-mode procedure in V86: we rewrite the CONTEXT to
-                               V86, push a far-return frame pointing at the DPMI_RMRET_BOP catcher,
-                               run v86_run() until that BOP (servicing any INT 21h the proc makes),
-                               copy the real-mode regs back into the RMCS, then restore PM. */
-                            DWORD esb = dpmi_sel_base((WORD)VDM_REG(tib, VTIB_ES));
-                            volatile BYTE *r = (volatile BYTE *)(ULONG_PTR)(esb + (VDM_REG(tib, VTIB_EDI) & 0xFFFF));
-                            /* --- save the client's PM CONTEXT (full register file + MSW) --- */
-                            DWORD pA=VDM_REG(tib,VTIB_EAX),pB=VDM_REG(tib,VTIB_EBX),pC=VDM_REG(tib,VTIB_ECX),
-                                  pD=VDM_REG(tib,VTIB_EDX),pSi=VDM_REG(tib,VTIB_ESI),pDi=VDM_REG(tib,VTIB_EDI),
-                                  pBp=VDM_REG(tib,VTIB_EBP),pDs=VDM_REG(tib,VTIB_DS),pEs=VDM_REG(tib,VTIB_ES),
-                                  pFs=VDM_REG(tib,VTIB_FS),pGs=VDM_REG(tib,VTIB_GS),pCs=VDM_REG(tib,VTIB_CS),
-                                  pIp=VDM_REG(tib,VTIB_EIP),pSs=VDM_REG(tib,VTIB_SS),pSp=VDM_REG(tib,VTIB_ESP),
-                                  pFl=VDM_REG(tib,VTIB_EFLAGS);
-                            WORD pMsw = *(volatile WORD *)(tib + VTIB_MSW);
-                            /* real-mode target + stack from the RMCS (default SS:SP to the code seg) */
-                            WORD rcs = *(volatile WORD*)(r+0x2C), rip = *(volatile WORD*)(r+0x2A);
-                            WORD rss = *(volatile WORD*)(r+0x30), rsp = *(volatile WORD*)(r+0x2E);
-                            unsigned rt; int done = 0;
-                            if (rss == 0) { rss = (WORD)(g_dpmi_code_base >> 4); rsp = 0xFF00; }
-                            p = zput(p, " -> callRM 0x"); p = zhex(p, rcs); p = zput(p, ":0x"); p = zhex(p, rip);
-                            p = zput(p, " SS:SP=0x"); p = zhex(p, rss); p = zput(p, ":0x"); p = zhex(p, rsp);
-                            p = zput(p, "\r\n"); log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
-                            /* push the far-return frame [IP=RMRET, CS=DOS_HDLR_SEG] on the RM stack */
-                            rsp -= 2; pokew(((DWORD)rss << 4) + rsp, DOS_HDLR_SEG);   /* return CS */
-                            rsp -= 2; pokew(((DWORD)rss << 4) + rsp, DPMI_RMRET_OFF);  /* return IP */
-                            dpmi_unpatch();   /* restore real `CD nn` so RM ints in the proc vector natively */
-                            /* --- rewrite the CONTEXT to V86 with the RMCS register file --- */
-                            *(volatile WORD *)(tib + VTIB_MSW) = (WORD)(pMsw & ~MSW_PE_BIT);  /* leave PM */
-                            VDM_REG(tib,VTIB_EFLAGS) = 0x20202;    /* VM + IF + reserved bit-1 */
-                            VDM_REG(tib,VTIB_EDI)=*(volatile WORD*)(r+0x00); VDM_REG(tib,VTIB_ESI)=*(volatile WORD*)(r+0x04);
-                            VDM_REG(tib,VTIB_EBP)=*(volatile WORD*)(r+0x08); VDM_REG(tib,VTIB_EBX)=*(volatile WORD*)(r+0x10);
-                            VDM_REG(tib,VTIB_EDX)=*(volatile WORD*)(r+0x14); VDM_REG(tib,VTIB_ECX)=*(volatile WORD*)(r+0x18);
-                            VDM_REG(tib,VTIB_EAX)=*(volatile WORD*)(r+0x1C);
-                            VDM_SET16(tib,VTIB_ES,*(volatile WORD*)(r+0x22)); VDM_SET16(tib,VTIB_DS,*(volatile WORD*)(r+0x24));
-                            VDM_SET16(tib,VTIB_FS,rss); VDM_SET16(tib,VTIB_GS,rss);
-                            VDM_SET16(tib,VTIB_CS,rcs); VDM_REG(tib,VTIB_EIP)=rip;
-                            VDM_SET16(tib,VTIB_SS,rss); VDM_REG(tib,VTIB_ESP)=rsp;
-                            /* --- nested V86 run loop: run the proc until the return-BOP --- */
-                            for (rt = 0; rt < 128 && !done; ++rt) {
-                                LONG rst; DWORD rev = v86_run(tib, &rst);
-                                DWORD info = VDM_REG(tib, VTIB_EVENT_INFO) & 0xFF;
-                                if (rev == VDM_EVENT_BOP && info == DPMI_RMRET_BOP) {
-                                    done = 1; break;                /* proc RETF'd -> finished */
-                                }
-                                if (rev == VDM_EVENT_BOP && info == 0x20) {   /* INT 21h from the proc */
-                                    m.tp = p; dos_int21(&m); p = m.tp;
-                                    VDM_REG(tib, VTIB_EIP) += 3;    /* past the BOP -> the stub IRET */
-                                    log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
-                                    continue;
-                                }
-                                if (rev == VDM_EVENT_BOP && info == DPMI_CB_BOP) {  /* proc far-called a 0303 callback */
-                                    int cbslot = (int)(((VDM_REG(tib,VTIB_EIP)&0xFFFF) - DPMI_CB_BASE_OFF) / 4);
-                                    if (cbslot >= 0 && cbslot < DPMI_CB_SLOTS && g_cb[cbslot].used) {
-                                        dpmi_invoke_callback(tib, cbslot);   /* V86->PM handler->V86; sets CS:IP to the return */
-                                        continue;
-                                    }
-                                    p = zput(p, "0301: bad cb slot\r\n"); log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
-                                    break;
-                                }
-                                if (rev == VDM_EVENT_IO || rev == VDM_EVENT_GPFAULT) {
-                                    int h; EnterCriticalSection(&g_lock);
-                                    h = host_try_io(tib, &g_bus); LeaveCriticalSection(&g_lock);
-                                    if (h) continue;
-                                }
-                                p = zput(p, "0301: unexpected RM event=0x"); p = zhex(p, rev);
-                                p = zput(p, " info=0x"); p = zhex(p, info);
-                                p = zput(p, " CS:IP=0x"); p = zhex(p, VDM_REG(tib,VTIB_CS)&0xFFFF);
-                                p = zput(p, ":0x"); p = zhex(p, VDM_REG(tib,VTIB_EIP)&0xFFFF); p = zput(p, "\r\n");
-                                log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
-                                break;
-                            }
-                            dpmi_repatch();   /* re-arm the BOP patch before the PM client resumes */
-                            /* --- copy the real-mode register file back into the RMCS --- */
-                            *(volatile WORD*)(r+0x1C)=VDM_REG(tib,VTIB_EAX); *(volatile WORD*)(r+0x10)=VDM_REG(tib,VTIB_EBX);
-                            *(volatile WORD*)(r+0x18)=VDM_REG(tib,VTIB_ECX); *(volatile WORD*)(r+0x14)=VDM_REG(tib,VTIB_EDX);
-                            *(volatile WORD*)(r+0x00)=VDM_REG(tib,VTIB_EDI); *(volatile WORD*)(r+0x04)=VDM_REG(tib,VTIB_ESI);
-                            *(volatile WORD*)(r+0x08)=VDM_REG(tib,VTIB_EBP);
-                            *(volatile WORD*)(r+0x22)=VDM_REG(tib,VTIB_ES);  *(volatile WORD*)(r+0x24)=VDM_REG(tib,VTIB_DS);
-                            /* --- restore the client's PM CONTEXT --- */
-                            *(volatile WORD *)(tib + VTIB_MSW) = pMsw;       /* re-enter PM */
-                            VDM_REG(tib,VTIB_EAX)=pA;VDM_REG(tib,VTIB_EBX)=pB;VDM_REG(tib,VTIB_ECX)=pC;VDM_REG(tib,VTIB_EDX)=pD;
-                            VDM_REG(tib,VTIB_ESI)=pSi;VDM_REG(tib,VTIB_EDI)=pDi;VDM_REG(tib,VTIB_EBP)=pBp;
-                            VDM_SET16(tib,VTIB_DS,pDs);VDM_SET16(tib,VTIB_ES,pEs);VDM_SET16(tib,VTIB_FS,pFs);VDM_SET16(tib,VTIB_GS,pGs);
-                            VDM_SET16(tib,VTIB_CS,pCs);VDM_REG(tib,VTIB_EIP)=pIp;
-                            VDM_SET16(tib,VTIB_SS,pSs);VDM_REG(tib,VTIB_ESP)=pSp;VDM_REG(tib,VTIB_EFLAGS)=pFl;
-                            VDM_REG(tib,VTIB_EFLAGS) &= ~1u;        /* CF=0: success */
-                            p = zput(p, "0301 -> RM proc returned after "); p = zhex(p, rt);
-                            p = zput(p, done ? " steps (OK)" : " steps (NO-RET)");
-                            break; }
-                        case 0x0303: {                             /* allocate real-mode callback: DS:SI=handler, ES:DI=RMCS -> CX:DX */
-                            int s;
-                            if (g_pmret_sel == 0 && g_ldt_next < 512) {  /* lazily install the PM-return selector */
-                                int idx = g_ldt_next++;
-                                g_ldt[idx].base = (DWORD)DOS_HDLR_SEG << 4; g_ldt[idx].limit = 0xFFFF;
-                                g_ldt[idx].access = 0xFA; g_ldt[idx].flags = 0;   /* code exec/read */
-                                dpmi_install(idx);
-                                g_pmret_sel = (WORD)((idx << 3) | 7);
-                            }
-                            for (s = 0; s < DPMI_CB_SLOTS && g_cb[s].used; ++s) {}
-                            if (s >= DPMI_CB_SLOTS || g_pmret_sel == 0) {
-                                VDM_REG(tib, VTIB_EFLAGS) |= 1u; VDM_SET16(tib, VTIB_EAX, 0x8015);
-                                p = zput(p, " -> cb ENOMEM"); break;
-                            }
-                            g_cb[s].used = 1;
-                            g_cb[s].pm_sel = (WORD)VDM_REG(tib, VTIB_DS); g_cb[s].pm_off = VDM_REG(tib, VTIB_ESI) & 0xFFFF;
-                            g_cb[s].rm_es  = (WORD)VDM_REG(tib, VTIB_ES); g_cb[s].rm_di  = VDM_REG(tib, VTIB_EDI) & 0xFFFF;
-                            VDM_SET16(tib, VTIB_ECX, DOS_HDLR_SEG);
-                            VDM_SET16(tib, VTIB_EDX, DPMI_CB_BASE_OFF + s*4);
-                            p = zput(p, " -> cb slot "); p = zhex(p, s); p = zput(p, " = 0x");
-                            p = zhex(p, DOS_HDLR_SEG); p = zput(p, ":0x"); p = zhex(p, DPMI_CB_BASE_OFF + s*4);
-                            p = zput(p, " handler 0x"); p = zhex(p, g_cb[s].pm_sel); p = zput(p, ":0x"); p = zhex(p, g_cb[s].pm_off);
-                            break; }
-                        default:
-                            VDM_REG(tib, VTIB_EFLAGS) |= 1u;       /* CF=1: unsupported */
-                            p = zput(p, " -> UNSUP");
-                            break;
-                        }
-                        p = zput(p, "\r\n"); log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
-                        VDM_REG(tib, VTIB_EIP) += 2;               /* past the 2-byte INT */
-                        continue;
-                    }
-                    if (vec == 0x21) {                             /* DOS INT 21h (in PM) */
-                        DWORD ah = (ax >> 8) & 0xFF;
-                        if (ah == 0x4C) {                          /* terminate */
-                            DWORD ver = *(volatile WORD *)(ULONG_PTR)0x1600;
-                            p = zput(p, "INT21h AH=4Ch -> client EXIT after "); p = zhex(p, steps);
-                            p = zput(p, " svc. ver=0x"); p = zhex(p, ver);
-                            p = zput(p, (ver == 0x005A) ? "  <<< DPMI client ran + exited cleanly >>>\r\n"
-                                                        : "  <<< MISMATCH >>>\r\n");
-                            log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
-                            break;
-                        }
-                        if (ah == 0x09) {                          /* print $-string DS:DX */
-                            /* Resolve DS's linear base from the LDT so a client can print
-                               through a descriptor it allocated + based itself. */
-                            DWORD dsb = dpmi_sel_base((WORD)VDM_REG(tib, VTIB_DS));
-                            const volatile BYTE *s = (const volatile BYTE *)(ULONG_PTR)
-                                (dsb + (VDM_REG(tib, VTIB_EDX) & 0xFFFF));
-                            char ob[256]; char *op = ob; int k;
-                            op = zput(op, "INT21h AH=09 print: \"");
-                            for (k = 0; k < 200 && *s != '$'; ++k, ++s) {
-                                if (*s >= 0x20) *op++ = (char)*s;   /* printable -> serial echo */
-                                if (m.conout) m.conout(m.conctx, *s);  /* -> the Luna console */
-                                if (m.out_len < m.out_cap - 1) m.out[m.out_len++] = (char)*s;
-                            }
-                            op = zput(op, "\"\r\n");
-                            log_append(LOG_PATH, ob, op); serial_out(ob, op);
-                            VDM_REG(tib, VTIB_EFLAGS) &= ~1u;
-                            VDM_REG(tib, VTIB_EIP) += 2;
-                            continue;
-                        }
-                        if (ah == 0x02) {                          /* print char DL */
-                            BYTE ch = VDM_REG(tib, VTIB_EDX) & 0xFF;
-                            if (m.conout) m.conout(m.conctx, ch);
-                            if (m.out_len < m.out_cap - 1) m.out[m.out_len++] = (char)ch;
-                            VDM_REG(tib, VTIB_EFLAGS) &= ~1u;
-                            VDM_REG(tib, VTIB_EIP) += 2;
-                            continue;
-                        }
-                        if (ah == 0x40) {                          /* write BX=handle CX=cnt DS:DX=buf */
-                            DWORD bh = VDM_REG(tib, VTIB_EBX) & 0xFFFF, cnt = VDM_REG(tib, VTIB_ECX) & 0xFFFF;
-                            DWORD dsb = dpmi_sel_base((WORD)VDM_REG(tib, VTIB_DS));
-                            const volatile BYTE *b = (const volatile BYTE *)(ULONG_PTR)
-                                (dsb + (VDM_REG(tib, VTIB_EDX) & 0xFFFF));
-                            VDM_REG(tib, VTIB_EFLAGS) &= ~1u;
-                            if (bh == 1 || bh == 2) {              /* stdout / stderr */
-                                char ob[300]; char *op = ob; DWORD k;
-                                op = zput(op, "INT21h AH=40 write: \"");
-                                for (k = 0; k < cnt && k < 250; ++k) {
-                                    if (b[k] >= 0x20 && op < ob + 270) *op++ = (char)b[k];
-                                    if (m.conout) m.conout(m.conctx, b[k]);
-                                    if (m.out_len < m.out_cap - 1) m.out[m.out_len++] = (char)b[k];
-                                }
-                                op = zput(op, "\"\r\n");
-                                log_append(LOG_PATH, ob, op); serial_out(ob, op);
-                                VDM_SET16(tib, VTIB_EAX, cnt);     /* AX = bytes written */
-                            } else if (bh < 24 && m.fh[bh]) {      /* file handle */
-                                DWORD w = 0; WriteFile(m.fh[bh], (const void *)b, cnt, &w, NULL);
-                                VDM_SET16(tib, VTIB_EAX, w);
-                                p = zput(p, "INT21h AH=40 file write "); p = zhex(p, w); p = zput(p, "b\r\n");
-                                log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
-                            } else { VDM_REG(tib, VTIB_EFLAGS) |= 1u; VDM_SET16(tib, VTIB_EAX, 6); }
-                            VDM_REG(tib, VTIB_EIP) += 2;
-                            continue;
-                        }
-                        if (ah == 0x3C || ah == 0x3D) {            /* create / open: DS:DX = ASCIIZ name */
-                            DWORD dsb = dpmi_sel_base((WORD)VDM_REG(tib, VTIB_DS));
-                            const char *fn = (const char *)(ULONG_PTR)(dsb + (VDM_REG(tib, VTIB_EDX) & 0xFFFF));
-                            DWORD acc = ((ax & 0xFF) == 0) ? GENERIC_READ
-                                       : ((ax & 0xFF) == 1) ? GENERIC_WRITE : (GENERIC_READ | GENERIC_WRITE);
-                            HANDLE f = (ah == 0x3C)
-                                ? CreateFileA(fn, GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ, NULL,
-                                              CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL)
-                                : CreateFileA(fn, acc, FILE_SHARE_READ, NULL, OPEN_EXISTING,
-                                              FILE_ATTRIBUTE_NORMAL, NULL);
-                            VDM_REG(tib, VTIB_EFLAGS) &= ~1u;
-                            if (f == INVALID_HANDLE_VALUE) { VDM_REG(tib, VTIB_EFLAGS) |= 1u; VDM_SET16(tib, VTIB_EAX, 2); }
-                            else { int slot; for (slot = 5; slot < 24 && m.fh[slot]; ++slot) {}
-                                   if (slot < 24) { m.fh[slot] = f; VDM_SET16(tib, VTIB_EAX, slot); }
-                                   else { CloseHandle(f); VDM_REG(tib, VTIB_EFLAGS) |= 1u; VDM_SET16(tib, VTIB_EAX, 4); } }
-                            p = zput(p, "INT21h AH="); p = zhex(p, ah); p = zput(p, " open \"");
-                            p = zput(p, fn); p = zput(p, "\" -> AX=0x"); p = zhex(p, VDM_REG(tib, VTIB_EAX) & 0xFFFF);
-                            p = zput(p, "\r\n"); log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
-                            VDM_REG(tib, VTIB_EIP) += 2; continue;
-                        }
-                        if (ah == 0x3E) {                          /* close: BX=handle */
-                            DWORD h = VDM_REG(tib, VTIB_EBX) & 0xFFFF;
-                            if (h >= 5 && h < 24 && m.fh[h]) { CloseHandle(m.fh[h]); m.fh[h] = 0; }
-                            VDM_REG(tib, VTIB_EFLAGS) &= ~1u;
-                            VDM_REG(tib, VTIB_EIP) += 2; continue;
-                        }
-                        if (ah == 0x3F) {                          /* read: BX=handle CX=cnt -> DS:DX */
-                            DWORD h = VDM_REG(tib, VTIB_EBX) & 0xFFFF, cnt = VDM_REG(tib, VTIB_ECX) & 0xFFFF, rd = 0;
-                            DWORD dsb = dpmi_sel_base((WORD)VDM_REG(tib, VTIB_DS));
-                            void *b = (void *)(ULONG_PTR)(dsb + (VDM_REG(tib, VTIB_EDX) & 0xFFFF));
-                            VDM_REG(tib, VTIB_EFLAGS) &= ~1u;
-                            if (h < 24 && m.fh[h]) { ReadFile(m.fh[h], b, cnt, &rd, NULL); VDM_SET16(tib, VTIB_EAX, rd); }
-                            else { VDM_REG(tib, VTIB_EFLAGS) |= 1u; VDM_SET16(tib, VTIB_EAX, 6); }
-                            p = zput(p, "INT21h AH=3F read "); p = zhex(p, rd); p = zput(p, "b\r\n");
-                            log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
-                            VDM_REG(tib, VTIB_EIP) += 2; continue;
-                        }
-                        if (ah == 0x42) {                          /* lseek: AL=org BX=h CX:DX=off */
-                            DWORD h = VDM_REG(tib, VTIB_EBX) & 0xFFFF, meth = ax & 0xFF;
-                            LONG dist = (LONG)(((VDM_REG(tib, VTIB_ECX) & 0xFFFF) << 16) | (VDM_REG(tib, VTIB_EDX) & 0xFFFF));
-                            VDM_REG(tib, VTIB_EFLAGS) &= ~1u;
-                            if (h >= 5 && h < 24 && m.fh[h]) {
-                                DWORD np = SetFilePointer(m.fh[h], dist, NULL, meth);
-                                VDM_SET16(tib, VTIB_EDX, np >> 16); VDM_SET16(tib, VTIB_EAX, np & 0xFFFF);
-                            } else VDM_REG(tib, VTIB_EFLAGS) |= 1u;
-                            VDM_REG(tib, VTIB_EIP) += 2; continue;
-                        }
-                        p = zput(p, "INT21h AH=0x"); p = zhex(p, ah); p = zput(p, " (PM thunk TODO)\r\n");
-                        log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
-                        VDM_REG(tib, VTIB_EIP) += 2;
-                        continue;
-                    }
-                    p = zput(p, "DPMI: unexpected PM stop event=0x"); p = zhex(p, ev);
-                    p = zput(p, " CS:EIP=0x"); p = zhex(p, VDM_REG(tib, VTIB_CS) & 0xFFFF);
-                    p = zput(p, ":0x"); p = zhex(p, eip); p = zput(p, "\r\n");
-                    log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
-                    break;
+                    rc = dpmi_service_pm_int(&m, tib, vec, steps);
+                    if (rc > 0) continue;   /* serviced -> keep running the PM client */
+                    break;                  /* 0 = client exited, <0 = unexpected stop */
                 }
                 break;
             }

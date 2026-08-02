@@ -159,6 +159,19 @@ start:
     mov ah, 0x09
     int 0x21
 .cb_done:
+    ; run 47: verify the handler's OWN nested INT 31h round-tripped (version at 0x628).
+    mov ax, [0x628]
+    cmp ax, 0x005A
+    jne .nest_bad
+    mov dx, .nestok
+    mov ah, 0x09
+    int 0x21
+    jmp .nest_done
+.nest_bad:
+    mov dx, .nestbad
+    mov ah, 0x09
+    int 0x21
+.nest_done:
     mov ax, 0x4C00             ; terminate
     int 0x21
 .pmspin:
@@ -175,6 +188,14 @@ start:
     call far [0x630]
     retf
 .pmcb:                         ; PM 0303 callback handler (entered by the host on the RM far-call)
+    ; run 47: the handler now issues its OWN INT 31h + INT 21h -- proving the callback
+    ; PM loop routes through the shared dispatcher (dpmi_service_pm_int), not a subset.
+    mov ax, 0x0400             ; nested INT 31h (get DPMI version) from inside the handler
+    int 0x31                   ; -> AX = 0x005A if the nested dispatch serviced it
+    mov [0x628], ax            ; store it (DS=0x17 base 0x1000 -> linear 0x1628)
+    mov dx, .cbhmsg            ; nested INT 21h AH=09 print from inside the handler
+    mov ah, 0x09
+    int 0x21
     mov word [0x626], 0xCAFE   ; write a sentinel (DS=0x17 base 0x1000 -> linear 0x1626)
     iret                       ; -> the host's PM-return catcher
 .rmsg:  db '  [printed via INT 31h 0300 -> real-mode INT 21h AH=09]', 13, 10, '$'
@@ -183,6 +204,9 @@ start:
 .rmbad: db 'DPMI: 0301 FAILED (no sentinel).', 13, 10, '$'
 .cbok:  db 'DPMI: 0303 real-mode callback OK (handler wrote CAFE)!', 13, 10, '$'
 .cbbad: db 'DPMI: 0303 callback FAILED.', 13, 10, '$'
+.cbhmsg: db '  [0303 handler ran nested INT 31h + INT 21h]', 13, 10, '$'
+.nestok: db 'DPMI: nested INT 31h inside callback OK (ver 005A)!', 13, 10, '$'
+.nestbad: db 'DPMI: nested INT 31h inside callback FAILED.', 13, 10, '$'
 .rmcs:  times 50 db 0
 .rmcs2: times 50 db 0
 .cbrmcs: times 50 db 0

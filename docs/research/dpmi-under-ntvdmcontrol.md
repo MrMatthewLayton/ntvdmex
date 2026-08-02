@@ -1139,6 +1139,25 @@ INT 31h/21h` would need the full PM dispatch (the spike handler only writes memo
 callback PM loop just watches for the return catcher). Together with 0300/0301, the real/protected-mode
 bridge a DOS extender needs is now complete.
 
+### VM run 47 (2026-08-02) — the PM interrupt dispatch is now REUSABLE: a 0303 callback handler that itself calls INT 31h/21h `[FACT, real CPU]`
+
+Removes run 46's known limitation. The ~420-line INT 31h `switch(ax)` + PM INT 21h dispatch that lived
+inline in the main PM loop is factored into **`dpmi_service_pm_int(m, tib, vec, steps)`** (returns 1 =
+serviced, 0 = client `4Ch` exit, −1 = unexpected). The main PM loop now calls it, and — the point —
+`dpmi_invoke_callback`'s PM handler loop routes any patched-`INT` BOP the handler raises through the
+*same* function instead of bailing. So a real-mode callback whose PM handler does DOS output, allocates
+descriptors, or sim-real-mode-ints is fully serviced, at arbitrary nesting depth (a callback can now
+itself do `0301`/`0303`). The `mp`→`#define m (*mp)` alias keeps the moved body byte-for-byte the
+original; the only edits were the outer-loop `continue`/`break` → `return 1/0/-1` transfers.
+
+VM-confirmed (`build v37`): the spike client's `0303` PM handler now issues `INT 31h 0400` + `INT 21h
+AH=09` before writing `0xCAFE`. Serial shows — *inside* the `0303-cb ... PM handler` stanza — `INT31h
+AX=0x0400 -> ver 0.90` and `INT21h AH=09 print: "  [0303 handler ran nested INT 31h + INT 21h]"`, then
+`PM handler returned (OK)`, and the outer client prints **`DPMI: nested INT 31h inside callback OK (ver
+005A)!`** → clean exit (14 services, 28 sites patched — the 4 extra are the handler's own INT sites).
+The nested INT is serviced by the identical code path as a top-level one, so the whole INT 31h/21h
+surface is available to every handler a real extender installs (timer ticks, exception handlers, etc.).
+
 ## Open unknowns (what the spike must nail down) `[VERIFY]`
 
 1. **The mode-switch primitive.** Exactly how ntvdm flips the VDM from V86→PM after the client
