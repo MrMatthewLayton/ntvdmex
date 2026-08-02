@@ -123,8 +123,11 @@ start:
     jmp .pmspin
 .pmhandler:                    ; dummy PM handler target for the 0205/0204 round-trip (never called)
     iret
-.rmproc:                       ; run in V86 by INT 31h 0301: write a sentinel, far-return
+.rmproc:                       ; run in V86 by INT 31h 0301: DOS call + sentinel, far-return
     mov word [0x620], 0xBEEF
+    mov ah, 0x02               ; DOS print char -- a REAL-MODE INT 21h during the excursion
+    mov dl, 'R'                ; (proves the un/re-patch: this CD 21 vectors natively in V86)
+    int 0x21
     retf
 .rmsg:  db '  [printed via INT 31h 0300 -> real-mode INT 21h AH=09]', 13, 10, '$'
 .pmsg:  db 'DPMI: 0300 simulate-real-mode-int OK!', 13, 10, '$'

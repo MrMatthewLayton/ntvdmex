@@ -1015,6 +1015,29 @@ static DWORD dpmi_sel_base(WORD sel)
     return g_dpmi_code_base;                                    /* 0x0F/0x17 = the .COM segment */
 }
 
+/* Un-patch / re-patch the shared code segment around a V86 excursion (INT 31h 0301/
+   0303). The switch-time scan rewrote every `CD 31`/`CD 21` in the code segment to a
+   BOP so PM software-ints reflect to us -- but that segment is ALSO the V86 view, so a
+   real-mode INT inside a 0301 proc would hit a corrupted BOP instead of vectoring
+   natively. g_int_vec[] is the revert map (offset -> original vector), so we restore
+   the real `CD nn` bytes before running V86 (real-mode ints then vector through the
+   IVT to our BOP stubs and are serviced normally) and re-apply the BOP patch before
+   resuming the PM client. */
+static void dpmi_unpatch(void)
+{
+    volatile BYTE *cs = (volatile BYTE *)(ULONG_PTR)g_dpmi_code_base;
+    DWORD o;
+    for (o = 0; o < 0xFFFF; ++o)
+        if (g_int_vec[o]) { cs[o] = 0xCD; cs[o + 1] = g_int_vec[o]; }
+}
+static void dpmi_repatch(void)
+{
+    volatile BYTE *cs = (volatile BYTE *)(ULONG_PTR)g_dpmi_code_base;
+    DWORD o;
+    for (o = 0; o < 0xFFFF; ++o)
+        if (g_int_vec[o]) { cs[o] = 0xC4; cs[o + 1] = 0xC4; }
+}
+
 int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
 {
     char report[8192]; char *p = report; char *base;
@@ -1046,7 +1069,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     (void)hInst; (void)hPrev; (void)lpCmd; (void)nShow;
     progpath[0] = 0; args[0] = 0;
 
-    p = zput(p, "NTVDMEX clean host\r\nSTAGE0: WinMain entered [build dpmi-harness-v34]\r\n");
+    p = zput(p, "NTVDMEX clean host\r\nSTAGE0: WinMain entered [build dpmi-harness-v35]\r\n");
     log_write(LOG_PATH, report, p);
     serial_init();                                      /* DPMI harness: COM1 log sink */
     serial_out(report, p);
@@ -1683,6 +1706,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                             /* push the far-return frame [IP=RMRET, CS=DOS_HDLR_SEG] on the RM stack */
                             rsp -= 2; pokew(((DWORD)rss << 4) + rsp, DOS_HDLR_SEG);   /* return CS */
                             rsp -= 2; pokew(((DWORD)rss << 4) + rsp, DPMI_RMRET_OFF);  /* return IP */
+                            dpmi_unpatch();   /* restore real `CD nn` so RM ints in the proc vector natively */
                             /* --- rewrite the CONTEXT to V86 with the RMCS register file --- */
                             *(volatile WORD *)(tib + VTIB_MSW) = (WORD)(pMsw & ~MSW_PE_BIT);  /* leave PM */
                             VDM_REG(tib,VTIB_EFLAGS) = 0x20202;    /* VM + IF + reserved bit-1 */
@@ -1719,6 +1743,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                                 log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
                                 break;
                             }
+                            dpmi_repatch();   /* re-arm the BOP patch before the PM client resumes */
                             /* --- copy the real-mode register file back into the RMCS --- */
                             *(volatile WORD*)(r+0x1C)=VDM_REG(tib,VTIB_EAX); *(volatile WORD*)(r+0x10)=VDM_REG(tib,VTIB_EBX);
                             *(volatile WORD*)(r+0x18)=VDM_REG(tib,VTIB_ECX); *(volatile WORD*)(r+0x14)=VDM_REG(tib,VTIB_EDX);

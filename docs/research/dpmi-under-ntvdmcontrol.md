@@ -1087,6 +1087,27 @@ real-mode-only regions, or lazy per-view patching. `0303` (real-mode callback) r
 round-trip inverted (plant a real-mode BOP entry; on a guest far-call to it, switch to PM and invoke
 the client's PM handler with the RM regs in an RMCS) — now unblocked.
 
+### VM run 45 (2026-08-02) — a real-mode INT 21h INSIDE a 0301 proc now works (un/re-patch the shared segment) `[FACT, real CPU]`
+
+Closes run 44's known limitation. The switch-time scan rewrites every `CD 31`/`CD 21` in the code
+segment → `C4 C4` so PM software-ints reflect to us, but that segment is ALSO the V86 view, so a
+real-mode INT inside a `0301` proc was hitting a corrupted BOP. Fix: `g_int_vec[]` is already the
+revert map (run 42), so `dpmi_unpatch()` restores the real `CD nn` bytes right before the V86
+excursion and `dpmi_repatch()` re-arms the BOPs right after — during the excursion the proc's
+`CD 21` vectors natively through the IVT to our INT 21h BOP stub and is serviced by the SAME
+`dos_int21` the main DOS loop uses; the PM client only ever sees the patched segment.
+
+VM-confirmed (`build v35`): the `0301` test proc now does `AH=02` (`print 'R'`) before its `RETF`.
+`0301 -> callRM ...` → **`RM proc returned after 1 steps (OK)`** — the step count went 0→1 vs run 44
+precisely because one BOP (the real-mode `INT 21h`) was serviced during the excursion — then the
+client read `0xBEEF` back and printed `0301 real-mode far-call OK` and exited cleanly (sentinel `0x5A`,
+20 sites patched). So a `0301` real-mode proc can now call DOS, which real extenders' RM helpers need.
+
+Scope note: this un/re-patches only the client code segment (`g_dpmi_code_base`); a real extender's RM
+helper living in separately-allocated conventional memory was never scanned/patched, so its INT sites
+already worked. The window where the segment is un-patched is exactly the V86 excursion, which is
+correct (V86 wants clean `CD nn`). Cost = two O(64K) byte scans per `0301` call — negligible.
+
 ## Open unknowns (what the spike must nail down) `[VERIFY]`
 
 1. **The mode-switch primitive.** Exactly how ntvdm flips the VDM from V86→PM after the client
