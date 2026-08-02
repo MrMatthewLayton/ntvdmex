@@ -1186,9 +1186,17 @@ different paragraphs) → `PM ok (CS=0x0F:0x2a)` → `INT31h AX=0x0400 -> ver 0.
 MODE OK -- INT 31h ver 005A, DS-relative print!"`** → clean `4Ch` exit. So an unmodified-shape 16-bit
 protected-mode `.EXE` boots into PM under the host and its DS-relative DOS output resolves correctly.
 (The `.COM`-specific `0x1600` sentinel probe in the `4Ch` log still prints `MISMATCH` for an `.EXE` — a
-cosmetic false flag; the client's own `PROTECTED MODE OK` print is authoritative.) Next: a third-party
-16-bit extender binary, and 0300/0301/0303 from an `.EXE` (needs the client to fill RMCS real-mode
-segments from selector bases via INT 31h 0006, since in PM `SEG data` is a selector, not a paragraph).
+cosmetic false flag; the client's own `PROTECTED MODE OK` print is authoritative.)
+
+**Run 49 (same session) extends `dpmiexe.asm` to do `INT 31h 0300` (simulate real-mode INT) from the
+`.EXE`** — the DOS-services-from-PM path a real extender lives on. The catch a multi-segment `.EXE`
+hits: the RMCS carries real-mode *segments*, but in PM `SEG data` is a selector, not a paragraph. The
+client solves it the proper DPMI way — `INT 31h 0006` (get base of the DS selector `0x17`) → shift the
+base to a paragraph → write it into `RMCS.DS`. VM-confirmed (`build v41`): `INT31h AX=0x0006 -> base
+0x11a0` → `INT31h AX=0x0300 -> simInt 0x21` → the client resumes in PM and prints **`DPMI .EXE: 0300
+simulate-real-mode-int OK!`** → clean `4Ch`. So an `.EXE` can round-trip DOS calls through PM with its
+data addressed correctly. Next: a third-party 16-bit extender binary (0301/0303 from an `.EXE` follow
+the same RMCS-segment-from-0006 pattern).
 
 ## Open unknowns (what the spike must nail down) `[VERIFY]`
 

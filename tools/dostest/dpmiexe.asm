@@ -88,6 +88,32 @@ ds_imm equ $ - 2                    ; the imm16 just emitted (the relocation tar
     mov dx, okmsg - DATA
     mov ah, 0x09
     int 0x21
+
+    ; --- run 49: INT 31h 0300 (simulate real-mode INT) from a multi-segment .EXE ---
+    ; The RMCS carries real-mode SEGMENTS. In PM `SEG data` is a selector, not a
+    ; paragraph, so query the DS (0x17) selector base via INT 31h 0006 and shift it to
+    ; a paragraph -- the proper DPMI way an .EXE addresses its data in a real-mode call.
+    mov bx, 0x0017                 ; the DS data selector
+    mov ax, 0x0006                 ; get base of selector BX -> CX:DX
+    int 0x31
+    mov ax, dx
+    shr ax, 4                      ; DX >> 4
+    shl cx, 12                     ; CX << 12  (high word of the base)
+    or ax, cx                      ; AX = base >> 4 = real-mode DATA paragraph
+    mov [rmcs + 0x24 - DATA], ax   ; RMCS.DS = the real-mode DATA paragraph
+    mov word [rmcs + 0x1C - DATA], 0x0900   ; RMCS.AX = AH=09 print-string
+    mov word [rmcs + 0x14 - DATA], rmsg - DATA   ; RMCS.DX = rmsg offset within DATA
+    mov word [rmcs + 0x20 - DATA], 0x0202        ; RMCS.Flags
+    push ds
+    pop es                         ; ES = DS = 0x17
+    mov di, rmcs - DATA            ; ES:DI -> RMCS
+    mov ax, 0x0300                 ; simulate real-mode interrupt
+    mov bx, 0x0021                 ; BL = INT 21h
+    xor cx, cx                     ; no stack words to copy
+    int 0x31                       ; host runs real-mode INT 21h AH=09 with the RMCS regs
+    mov dx, simokmsg - DATA        ; PM print -- proves we resumed cleanly in PM
+    mov ah, 0x09
+    int 0x21
     jmp .done
 .verbad:
     mov dx, badmsg - DATA
@@ -115,6 +141,10 @@ pmmsg:      db '  [PM INT 21h AH=09 printed via the DATA selector 0x17]', 13, 10
 okmsg:      db 'DPMI .EXE: PROTECTED MODE OK -- INT 31h ver 005A, DS-relative print!', 13, 10, '$'
 badmsg:     db 'DPMI .EXE: version mismatch (switch/dispatch FAILED).', 13, 10, '$'
 msg_nodpmi: db 'DPMI .EXE: DPMI not present.', 13, 10, '$'
+rmsg:       db '  [0300 sim-int -> real-mode INT 21h AH=09 from the .EXE]', 13, 10, '$'
+simokmsg:   db 'DPMI .EXE: 0300 simulate-real-mode-int OK!', 13, 10, '$'
+    align 2
+rmcs:       times 50 db 0                     ; DPMI real-mode call structure (INT 31h 0300)
 
 ; ---- STACK segment (paragraph-aligned) ----
     align 16
