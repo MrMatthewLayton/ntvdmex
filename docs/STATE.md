@@ -369,12 +369,13 @@ order:
    client INT nn are patched → BOP at mode-switch and serviced in a PM loop. Since run 53 the active
    frontier is the **host PM INTERPRETER** (`src/host/v86interp.h`) — a C-runtime client (`i310102`)
    walled the kernel with a setaccess-to-code `#GP`, so we run PM in our own interpreter (no descriptor
-   enforcement) and grow opcode coverage per the `DPMI-INTERP: unmodeled opcode` log. **HEAD = run 56
-   (PUSH imm; off-VM 88/88, host `dpmi-harness-v50`).** Full narrative:
-   [research/dpmi-under-ntvdmcontrol.md](research/dpmi-under-ntvdmcontrol.md) (runs 20–56).
-   **RESUME = run 57 (far `RET` — `0xCB`/`0xCA`)**; first confirm run 56's `i310102` stop interactively
-   (`D:\i31run.bat`; the headless autorun can't reach it — see the research doc / memory). Don't
-   advertise `2Fh 1687` on `main` until a real binary runs clean (spike branch only).
+   enforcement) and grow opcode coverage per the `DPMI-INTERP: unmodeled opcode` log. **HEAD = run 57
+   (far RET; off-VM 94/94, host `dpmi-harness-v51`, VM-confirmed — i310102 far-transferred CS `0x0f->0x1f`,
+   786 interpreted steps, clean exit, reached `main()` I/O; runs 56 PUSH imm + 57 far RET both proven).**
+   Full narrative: [research/dpmi-under-ntvdmcontrol.md](research/dpmi-under-ntvdmcontrol.md) (runs 20–57).
+   **RESUME = run 58 (`0xC9` LEAVE — `MOV SP,BP; POP BP`)**; VM-confirm via interactive `D:\i31run.bat`
+   (the headless autorun can't reach i310102 — see the research doc / memory). Don't advertise `2Fh 1687`
+   on `main` until a real binary runs clean (spike branch only).
 2. After DPMI: M5 (Win16/WOW foundation).
 
 ## Testing harness — consolidated self-test (2026-06-09→11)
