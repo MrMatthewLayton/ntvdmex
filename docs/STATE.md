@@ -363,19 +363,18 @@ order:
 
 0. ~~FIX the graphics→text rendering bug~~ **FIXED + VM-CONFIRMED 2026-07-31 (GH #14)** — DAC palette
    not reloaded on mode set; see *Known host bugs* below.
-1. **DPMI 16-bit spike (GH #1) — IN PROGRESS on branch `spike/dpmi-16bit-switch`. In-process
-   protected-mode execution is PROVEN on the real CPU (VM run 8, 2026-08-01).** The full round-trip
-   works: real mode → `INT 2Fh 1687` detect → far-call → mode switch (svc 10/11 LDT install, verified
-   descriptor) → **16-bit PM code executing in-process via `NtContinue`** (the Luna window stays alive
-   spinning in PM). Key architecture correction: **PM is NOT run by the kernel monitor** — ntvdm
-   `iretd`s into the client in its own ring-3 context (ntvdm `0xf04483c`); we do the same via
-   `NtContinue`. **Remaining (increment 3b):** catch the PM `INT 31h`/faults to service DPMI calls (a
-   16-bit PM CS doesn't dispatch through the plain Win32 VEH — needs ntvdm's PM fault-reflection).
-   That answers the PM event taxonomy and enables the INT 31h `0000`/`0300` surface. Permanent host
-   instrumentation: crash VEH + per-switch diagnostics. Full trace in
-   [research/dpmi-under-ntvdmcontrol.md](research/dpmi-under-ntvdmcontrol.md) ("Spike results", VM
-   runs 1–8). Don't advertise `2Fh 1687` on `main` until the full round-trip incl. INT 31h works
-   (spike branch only).
+1. **DPMI (GH #1 CLOSED; GH #2 active) — on branch `spike/dpmi-16bit-switch`. A WORKING DPMI 0.9 host
+   runs UNMODIFIED clients on the real CPU (runs 35–56), incl. a multi-segment MZ `.EXE` and a
+   third-party binary (Japheth's DPMIBACK).** The kernel `#GP`-reflect (old "increment 3b") is bypassed:
+   client INT nn are patched → BOP at mode-switch and serviced in a PM loop. Since run 53 the active
+   frontier is the **host PM INTERPRETER** (`src/host/v86interp.h`) — a C-runtime client (`i310102`)
+   walled the kernel with a setaccess-to-code `#GP`, so we run PM in our own interpreter (no descriptor
+   enforcement) and grow opcode coverage per the `DPMI-INTERP: unmodeled opcode` log. **HEAD = run 56
+   (PUSH imm; off-VM 88/88, host `dpmi-harness-v50`).** Full narrative:
+   [research/dpmi-under-ntvdmcontrol.md](research/dpmi-under-ntvdmcontrol.md) (runs 20–56).
+   **RESUME = run 57 (far `RET` — `0xCB`/`0xCA`)**; first confirm run 56's `i310102` stop interactively
+   (`D:\i31run.bat`; the headless autorun can't reach it — see the research doc / memory). Don't
+   advertise `2Fh 1687` on `main` until a real binary runs clean (spike branch only).
 2. After DPMI: M5 (Win16/WOW foundation).
 
 ## Testing harness — consolidated self-test (2026-06-09→11)
