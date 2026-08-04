@@ -96,6 +96,27 @@ static volatile LONG g_running = 1;         /* 0 once the window is closed      
 static int g_dpmi_pm = 0;                   /* set once the guest is switched to PM (spike) */
 static DWORD g_dpmi_code_base = 0;          /* linear base of the guest PM code seg (retcs<<4) */
 static BYTE  g_int_vec[0x10000];            /* per-CS-offset: original INT vector we patched to a BOP */
+
+/* --- run 52 hang-diagnostic telemetry (GH #2) ---------------------------------------
+   The PM loop can stop advancing in three indistinguishable-in-the-log ways: (a) the
+   main thread wedges INSIDE one dpmi_enter_pm() because the kernel silently swallowed a
+   plain-instruction PM #GP and skip-resumes it forever (the deep wall, runs 20-34);
+   (b) the client busy-polls something we don't provide, so the host `for steps` loop
+   spins servicing the SAME patched INT over and over; (c) genuine slow progress. The
+   watchdog thread samples these to tell them apart: a live host-loop heartbeat (advances
+   only when the loop iterates -> distinguishes (b)/(c) from (a)), the guest CS:EIP handed
+   to the LAST dpmi_enter_pm (where a frozen guest is wedged), and VEH fire-counters
+   (whether a real exception was ever delivered to us at all). */
+static volatile LONG  g_dpmi_iter     = 0;  /* host PM-loop iteration heartbeat (pre-enter) */
+static volatile DWORD g_dpmi_enter_cs = 0;  /* guest CS handed to the last dpmi_enter_pm    */
+static volatile DWORD g_dpmi_enter_eip= 0;  /* guest EIP handed to the last dpmi_enter_pm   */
+static volatile DWORD g_dpmi_last_ev  = 0;  /* VTIB_EVENT reported by the last return        */
+static volatile DWORD g_dpmi_last_cs  = 0;  /* guest CS after the last return                */
+static volatile DWORD g_dpmi_last_eip = 0;  /* guest EIP after the last return               */
+static volatile DWORD g_dpmi_last_vec = 0;  /* vector serviced on the last iteration         */
+static volatile LONG  g_veh_any       = 0;  /* # PM-context exceptions delivered to the VEH  */
+static volatile LONG  g_veh_fatal     = 0;  /* # of those that took the non-reflect fatal path */
+static DWORD dpmi_sel_base(WORD sel);       /* fwd: watchdog resolves the frozen selector base */
 /* DPMI PM interrupt-vector table (INT 31h 0204/0205). A client installs its own PM
    handlers here; we store them so a get/set/restore round-trips faithfully. (We still
    service patched INT 21h/31h ourselves -- routing to a client-installed PM handler is
@@ -921,6 +942,7 @@ static LONG CALLBACK dpmi_crash_veh(EXCEPTION_POINTERS *ep)
     EXCEPTION_RECORD *er = ep->ExceptionRecord;
     CONTEXT *cx = ep->ContextRecord;
     if (!g_dpmi_pm) return EXCEPTION_CONTINUE_SEARCH;   /* only handle PM events */
+    InterlockedIncrement(&g_veh_any);                   /* run 52: prove ANY PM fault reaches us */
 
     /* --- Reflected PM software interrupt = the DPMI INT 31h dispatch (run 26) ---------
        Under VdmStartExecution the kernel reflects a PM INT nn by advancing EIP past it and
@@ -969,6 +991,7 @@ static LONG CALLBACK dpmi_crash_veh(EXCEPTION_POINTERS *ep)
     }
 
     /* --- genuine (non-reflected) PM fault: full dump + clean exit -------------------- */
+    InterlockedIncrement(&g_veh_fatal);                 /* run 52: a real PM fault WAS delivered */
     p = zput(p, "\r\nDPMI FATAL: exception code=0x"); p = zhex(p, er->ExceptionCode);
     p = zput(p, " at 0x"); p = zhex(p, (unsigned)(ULONG_PTR)er->ExceptionAddress);
     p = zput(p, "\r\n  CS:EIP=0x"); p = zhex(p, cx->SegCs); p = zput(p, ":0x"); p = zhex(p, cx->Eip);
@@ -992,17 +1015,42 @@ static LONG CALLBACK dpmi_crash_veh(EXCEPTION_POINTERS *ep)
    the batch dumps the log and locks release. Makes every DPMI run self-terminating. */
 static DWORD WINAPI dpmi_watchdog(LPVOID param)
 {
-    static char wb[256]; char *q = wb; unsigned i; (void)param;
-    const void *sent = (const void *)(ULONG_PTR)0x1600;   /* guest sentinel DS:0x600 */
-    q = zput(q, "STAGE3-DPMI: watchdog started; sampling sentinel@0x1600 (proves PM exec)\r\n");
+    static char wb[512]; char *q = wb; unsigned i; LONG prev = -1; (void)param;
+    q = zput(q, "STAGE3-DPMI: watchdog started; sampling host PM-loop heartbeat (run 52 diag)\r\n");
     serial_out(wb, q); q = wb;
-    /* Sample the guest's sentinel concurrently: if the PM guest executed its opening
-       'mov [0x600],BEEF/CAFE', we see it here even though dpmi_enter_pm silently
-       terminates on a later fault. BEEF/CAFE => PM code genuinely ran on the real CPU. */
-    for (i = 0; i < 10; ++i) {
+    /* Sample the host PM loop concurrently while the main thread is (possibly) blocked
+       inside dpmi_enter_pm(). Each line answers the run-51 wall question:
+         iter ADVANCING  -> the `for steps` loop is cycling; last ev/cs/eip/vec show WHICH
+                            patched INT it keeps hitting (a busy-poll = a cheap missing
+                            service, not the deep #GP wall).
+         iter FROZEN     -> the main thread is wedged inside ONE dpmi_enter_pm at the guest
+                            CS:EIP we last handed off; the guest bytes there tell a plain-
+                            instruction #GP (the deep wall) from a jmp-self spin.
+         veh any/fatal   -> whether a real Win32 exception was EVER delivered to us. fatal>0
+                            means the PM #GP IS catchable via SEH (good news); both 0 while
+                            frozen confirms the kernel swallowed it (runs 20-34 wall). */
+    for (i = 0; i < 12; ++i) {
+        LONG iter; DWORD en_cs, en_eip, base; const BYTE *ib;
         Sleep(250);
-        q = zput(q, "  wd["); q = zhex(q, i); q = zput(q, "] sentinel="); q = zdump(q, sent, 4);
+        iter   = g_dpmi_iter;
+        en_cs  = g_dpmi_enter_cs;  en_eip = g_dpmi_enter_eip;
+        q = zput(q, "  wd["); q = zhex(q, i);
+        q = zput(q, "] iter="); q = zhex(q, (unsigned)iter);
+        q = zput(q, (iter == prev) ? " FROZEN" : " advancing");
+        q = zput(q, " enter="); q = zhex(q, en_cs); q = zput(q, ":"); q = zhex(q, en_eip);
+        q = zput(q, " last{ev="); q = zhex(q, g_dpmi_last_ev);
+        q = zput(q, " cs:eip="); q = zhex(q, g_dpmi_last_cs); q = zput(q, ":"); q = zhex(q, g_dpmi_last_eip);
+        q = zput(q, " vec="); q = zhex(q, g_dpmi_last_vec); q = zput(q, "}");
+        q = zput(q, " veh{any="); q = zhex(q, (unsigned)g_veh_any);
+        q = zput(q, " fatal="); q = zhex(q, (unsigned)g_veh_fatal); q = zput(q, "}");
+        if (iter == prev && g_dpmi_pm) {                /* wedged: dump the guest bytes there */
+            base = dpmi_sel_base((WORD)en_cs);
+            ib = (const BYTE *)(ULONG_PTR)(base + (en_eip & 0xFFFF));
+            q = zput(q, " b@enter="); q = zdump(q, ib, 8);
+        }
+        q = zput(q, "\r\n");
         serial_out(wb, q); q = wb;
+        prev = iter;
     }
     q = zput(q, "STAGE3-DPMI: watchdog terminating\r\n");
     log_append(LOG_PATH, wb, q);
@@ -1642,7 +1690,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     (void)hInst; (void)hPrev; (void)lpCmd; (void)nShow;
     progpath[0] = 0; args[0] = 0;
 
-    p = zput(p, "NTVDMEX clean host\r\nSTAGE0: WinMain entered [build dpmi-harness-v45]\r\n");
+    p = zput(p, "NTVDMEX clean host\r\nSTAGE0: WinMain entered [build dpmi-harness-v46]\r\n");
     log_write(LOG_PATH, report, p);
     serial_init();                                      /* DPMI harness: COM1 log sink */
     serial_out(report, p);
@@ -2091,10 +2139,18 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                    returns into the guest CONTEXT, advance past the 2-byte INT, and re-enter PM. */
                 for (steps = 0; steps < 256; ++steps) {
                     DWORD ev, eip, vec; int rc;
+                    /* run 52 heartbeat: publish where we're about to hand off + bump the
+                       iteration counter BEFORE entering, so a watchdog sample taken while
+                       we're blocked inside dpmi_enter_pm sees a FROZEN iter at this CS:EIP. */
+                    g_dpmi_enter_cs  = VDM_REG(tib, VTIB_CS)  & 0xFFFF;
+                    g_dpmi_enter_eip = VDM_REG(tib, VTIB_EIP) & 0xFFFF;
+                    g_dpmi_iter      = (LONG)(steps + 1);
                     dpmi_enter_pm(tib);
                     ev  = VDM_REG(tib, VTIB_EVENT);
                     eip = VDM_REG(tib, VTIB_EIP) & 0xFFFF;
                     vec = (ev == 4) ? g_int_vec[eip] : 0;
+                    g_dpmi_last_ev  = ev;  g_dpmi_last_eip = eip;
+                    g_dpmi_last_cs  = VDM_REG(tib, VTIB_CS) & 0xFFFF;  g_dpmi_last_vec = vec;
                     rc = dpmi_service_pm_int(&m, tib, vec, steps);
                     if (rc > 0) continue;   /* serviced -> keep running the PM client */
                     break;                  /* 0 = client exited, <0 = unexpected stop */

@@ -1241,6 +1241,52 @@ see. So the next frontier for *C-runtime / full-extender* binaries is the **nati
 service surface is no longer the bottleneck. `mouevnt`/`RAWJMP7`/`I310102a` are expected to hit the
 same wall and are parked behind it.
 
+### VM run 52 (2026-08-04) — pinpoint the C-runtime hang: it BLOCKS, it does not spin `[FACT, real CPU]`
+
+The cheap diagnostic the run-51 hand-off asked for, to decide the big spike before committing to it.
+Instrumented the DPMI PM loop with run-52 telemetry (`src/host/main.c`): a host-loop heartbeat
+(`g_dpmi_iter`, bumped *before* each `dpmi_enter_pm`), the guest CS:EIP handed to the last entry, the
+last event/vector serviced, and two VEH fire-counters (`g_veh_any`/`g_veh_fatal` — whether ANY PM fault
+reaches us via SEH, and whether it takes the non-reflect fatal path). The watchdog was rewritten to
+sample these every 250 ms and dump the guest bytes at a frozen wedge point. Build `dpmi-harness-v46`,
+`I310102.EXE` staged as `dpmitest.com`, headless serial round.
+
+**Result — the hang is reproduced and classified.** The log dead-stops at exactly the run-51 point:
+```
+INT31h AX=0009 CX=00fb sel 0x1f -> setaccess 0x0fb   ← last thing serviced
+<frozen at 894 bytes, forever>
+```
+The PM loop iterated once more, called `dpmi_enter_pm`, and **never returned**. Three independent
+channels converge:
+
+| Channel | Observation | Rules out |
+|---|---|---|
+| Host-loop heartbeat | stopped cycling — no repeated INT servicing after `setaccess` | **(b) busy-poll** on a missing service |
+| **QEMU vCPU (external `ps`)** | **0 % CPU, guest TIME frozen** | a **CPU spin** — the guest is *blocked*, not burning cycles |
+| VEH counters / `DPMI FATAL` | never fired (no dump, no clean `ExitProcess(0xDE0)`) | the fault being **catchable via SEH** — the kernel did NOT deliver it to us |
+| Watchdog `wd[]` samples | **zero** — even the watchdog thread never ran → vCPU idle | anything but a **process-wide kernel wedge** |
+
+**Verdict: the deep PM-fault wall (case a) — but re-characterized.** Run 51 assumed "the guest
+*spins*." It does **not**. The vCPU goes fully **idle** with **no thread runnable**, which means the
+whole ntvdm process is **blocked in the kernel**: the kernel takes the plain-instruction PM `#GP` (the
+next stack touch after the C runtime makes `SS`=`0x1F`'s descriptor code-typed `0xFB`), routes it into
+its VDM-fault path, and **deadlocks** there because our host never registered the DPMI fault handler it
+expects (`VDM_TIB+0x634` / `0x4f67f8`, runs 20–34). Not a cheap missing service, not a self-inflicted
+`jmp $` regression — the genuine wall, and a *block*, not a *skip-resume spin*.
+
+**Consequence for the fix (sharpens the choice).** Because the kernel *deadlocks* on the fault (rather
+than skip-resuming past it), the only reliable sidestep is to **never hand the faulting instruction to
+the kernel's VDM-fault path** — i.e. run PM under our own single-step/emulate loop (extend `host_interp`,
+already used for the VGA mode-12h I/O traps) and detect/service the `#GP` ourselves. The alternative —
+RE how ntvdm registers so `KiTrap0D` reflects PM faults as a VDM event — is the "proper" fix but is
+exactly what has been unsolved across runs 20–34. **Emulation path recommended; opening as the next
+spike (run 53+).**
+
+*Tool caveat recorded:* the watchdog cannot sample a process-wide kernel wedge on `-smp 1` (no guest
+thread is runnable, so the watchdog thread never gets the vCPU). The **external QEMU-CPU check** (`ps`
+%CPU + guest TIME advancing) did the real discrimination and should be the primary hang-classifier for
+future runs.
+
 ## Open unknowns (what the spike must nail down) `[VERIFY]`
 
 1. **The mode-switch primitive.** Exactly how ntvdm flips the VDM from V86→PM after the client
