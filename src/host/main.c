@@ -1659,6 +1659,94 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
 #undef m
 }
 
+/* ================================================================================ *
+ *  run 53 (GH #2): host-interpreted protected mode -- the emulation path.           *
+ *                                                                                    *
+ *  Run 52 proved the kernel DEADLOCKS (not skip-resumes) on a plain-instruction PM  *
+ *  #GP, so we cannot let the kernel execute risky PM code. Instead run 16-bit PM in  *
+ *  the v86interp core (already proven on the mode-12h fill loops) with g_seg2lin set *
+ *  to an LDT-base resolver, so the SAME interpreter walks PM code -- descriptor      *
+ *  bases instead of paragraph shifts -- and NEVER hands a faulting instruction to    *
+ *  the kernel. An interpreter enforces no descriptor type, so the code-typed-SS      *
+ *  write that #GP's the real CPU (run 51's I310102) simply succeeds here.            *
+ *                                                                                    *
+ *  istep() returns 0 on any opcode it doesn't model. The interpreter deliberately    *
+ *  has no INT handler, so `CD nn` stops it cleanly -- we sync the icpu into the       *
+ *  VDM_TIB, service the INT through the SAME dpmi_service_pm_int() the kernel path    *
+ *  uses, reload, and continue. ANY OTHER unmodeled opcode is logged with its bytes    *
+ *  and stops the run -- that report is the spike's to-do signal (the next opcode to   *
+ *  add). No BOP patch is needed in this mode (the interpreter reads the raw CD nn).   *
+ * ================================================================================ */
+static int g_dpmi_use_interp = 1;             /* run 53 experiment toggle (0 = kernel PM path) */
+
+static uint32_t dpmi_seg2lin(uint16_t sel) { return dpmi_sel_base(sel); }
+
+static void dpmi_icpu_load(icpu *c, volatile BYTE *tib)
+{
+    c->r[0]=(uint16_t)VDM_REG(tib,VTIB_EAX); c->r[1]=(uint16_t)VDM_REG(tib,VTIB_ECX);
+    c->r[2]=(uint16_t)VDM_REG(tib,VTIB_EDX); c->r[3]=(uint16_t)VDM_REG(tib,VTIB_EBX);
+    c->r[4]=(uint16_t)VDM_REG(tib,VTIB_ESP); c->r[5]=(uint16_t)VDM_REG(tib,VTIB_EBP);
+    c->r[6]=(uint16_t)VDM_REG(tib,VTIB_ESI); c->r[7]=(uint16_t)VDM_REG(tib,VTIB_EDI);
+    c->seg[0]=(uint16_t)VDM_REG(tib,VTIB_ES); c->seg[1]=(uint16_t)VDM_REG(tib,VTIB_CS);
+    c->seg[2]=(uint16_t)VDM_REG(tib,VTIB_SS); c->seg[3]=(uint16_t)VDM_REG(tib,VTIB_DS);
+    c->seg[4]=(uint16_t)VDM_REG(tib,VTIB_FS); c->seg[5]=(uint16_t)VDM_REG(tib,VTIB_GS);
+    c->ip=(uint16_t)VDM_REG(tib,VTIB_EIP);
+    c->flags=VDM_REG(tib,VTIB_EFLAGS);
+}
+static void dpmi_icpu_store(icpu *c, volatile BYTE *tib)
+{
+    VDM_SET16(tib,VTIB_EAX,c->r[0]); VDM_SET16(tib,VTIB_ECX,c->r[1]);
+    VDM_SET16(tib,VTIB_EDX,c->r[2]); VDM_SET16(tib,VTIB_EBX,c->r[3]);
+    VDM_SET16(tib,VTIB_ESP,c->r[4]); VDM_SET16(tib,VTIB_EBP,c->r[5]);
+    VDM_SET16(tib,VTIB_ESI,c->r[6]); VDM_SET16(tib,VTIB_EDI,c->r[7]);
+    VDM_SET16(tib,VTIB_ES,c->seg[0]); VDM_SET16(tib,VTIB_CS,c->seg[1]);
+    VDM_SET16(tib,VTIB_SS,c->seg[2]); VDM_SET16(tib,VTIB_DS,c->seg[3]);
+    VDM_SET16(tib,VTIB_FS,c->seg[4]); VDM_SET16(tib,VTIB_GS,c->seg[5]);
+    VDM_SET16(tib,VTIB_EIP,c->ip);
+    VDM_REG(tib,VTIB_EFLAGS) = (VDM_REG(tib,VTIB_EFLAGS) & 0xFFFF0000u) | (c->flags & 0xFFFFu);
+}
+
+/* Returns 0 = client exited (INT 21h AH=4Ch), -1 = stopped on an unmodeled/
+   unserviceable opcode (already logged). Never touches the kernel PM path. */
+static int dpmi_run_pm_interp(dos_machine_t *mp, volatile BYTE *tib)
+{
+    icpu c; long guard = 0; char rb[256]; char *r;
+    g_seg2lin = dpmi_seg2lin;                 /* interpreter now resolves LDT bases */
+    dpmi_icpu_load(&c, tib);
+    r = rb;
+    r = zput(r, "DPMI-INTERP: run 53 host PM begins CS:IP=0x"); r = zhex(r, c.seg[1]);
+    r = zput(r, ":0x"); r = zhex(r, c.ip);
+    r = zput(r, " DS=0x"); r = zhex(r, c.seg[3]); r = zput(r, " SS=0x"); r = zhex(r, c.seg[2]);
+    r = zput(r, "\r\n"); log_append(LOG_PATH, rb, r); serial_out(rb, r);
+    for (;;) {
+        if (istep(&c)) { if (++guard > 20000000L) break; continue; }   /* modeled step */
+        { uint32_t site = seg_base(c.seg[1]) + c.ip;
+          uint8_t op = imem_r8(site), op1 = imem_r8(site+1);
+          if (op == 0xCD) {                   /* INT nn -> shared DPMI/DOS dispatch */
+              int rc;
+              dpmi_icpu_store(&c, tib);
+              VDM_REG(tib, VTIB_EVENT) = 4;   /* mimic a serviceable BOP for the dispatcher */
+              rc = dpmi_service_pm_int(mp, tib, (DWORD)op1, (unsigned)guard);
+              if (rc <= 0) return rc;         /* 0 = 4Ch exit, -1 = unserviceable */
+              dpmi_icpu_load(&c, tib);        /* pick up results + any selector/mode change */
+              continue;
+          }
+          r = rb;                             /* the spike's to-do signal */
+          r = zput(r, "DPMI-INTERP: unmodeled opcode at CS:IP=0x"); r = zhex(r, c.seg[1]);
+          r = zput(r, ":0x"); r = zhex(r, c.ip);
+          r = zput(r, " bytes="); r = zdump(r, (const BYTE*)(ULONG_PTR)site, 8);
+          r = zput(r, " (steps=0x"); r = zhex(r, (unsigned)guard); r = zput(r, ")\r\n");
+          log_append(LOG_PATH, rb, r); serial_out(rb, r);
+          dpmi_icpu_store(&c, tib);
+          return -1;
+        }
+    }
+    dpmi_icpu_store(&c, tib);                 /* guard cap hit (possible infinite loop) */
+    r = rb; r = zput(r, "DPMI-INTERP: guard cap hit (spin?)\r\n");
+    log_append(LOG_PATH, rb, r); serial_out(rb, r);
+    return -1;
+}
+
 int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
 {
     char report[8192]; char *p = report; char *base;
@@ -1690,7 +1778,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     (void)hInst; (void)hPrev; (void)lpCmd; (void)nShow;
     progpath[0] = 0; args[0] = 0;
 
-    p = zput(p, "NTVDMEX clean host\r\nSTAGE0: WinMain entered [build dpmi-harness-v46]\r\n");
+    p = zput(p, "NTVDMEX clean host\r\nSTAGE0: WinMain entered [build dpmi-harness-v47]\r\n");
     log_write(LOG_PATH, report, p);
     serial_init();                                      /* DPMI harness: COM1 log sink */
     serial_out(report, p);
@@ -2099,7 +2187,19 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                 p = zput(p, ":0x"); p = zhex(p, VDM_REG(tib, VTIB_EIP) & 0xFFFF);
                 p = zput(p, ") -> DPMI PM loop\r\n");
                 log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
-                /* Safety watchdog: an un-terminable spin still self-kills after ~3s. */
+                /* run 53: the emulation path -- execute PM in the host interpreter instead of
+                   the kernel (which deadlocks on a PM #GP, run 52). No BOP patch: the interpreter
+                   reads the raw CD nn and stops on it, and we service through the same dispatch.
+                   No kernel watchdog here either -- the interpreter has its own guard cap, and the
+                   watchdog's 3s TerminateProcess would guillotine a long (millions-of-insn) run. */
+                if (g_dpmi_use_interp) {
+                    p = zput(p, "DPMI: run 53 -- PM in host interpreter (no kernel, no BOP patch)\r\n");
+                    log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                    dpmi_run_pm_interp(&m, tib);
+                    break;
+                }
+                /* Safety watchdog (kernel PM path only): an un-terminable spin still self-kills
+                   after ~3s so the batch dumps the log. */
                 { HANDLE wd = CreateThread(NULL, 0, dpmi_watchdog, NULL, 0, NULL);
                   if (wd) CloseHandle(wd); }
                 /* Patch the client's PM `INT nn` (CD nn) -> BOP (C4 C4), recording the original

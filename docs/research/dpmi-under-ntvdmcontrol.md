@@ -1287,6 +1287,43 @@ thread is runnable, so the watchdog thread never gets the vCPU). The **external 
 %CPU + guest TIME advancing) did the real discrimination and should be the primary hang-classifier for
 future runs.
 
+### VM run 53 (2026-08-04) — the emulation path WORKS: host-interpreted PM bypasses the wall `[FACT, real CPU]`
+
+The fix run 52 pointed to. Instead of letting the kernel execute risky PM code (it *deadlocks* on a PM
+`#GP`), run 16-bit PM in the existing `v86interp.h` core — the same bounded 8086 interpreter proven on
+the mode-12h fill loops. **One enabling change:** every segment→linear site in the interpreter now routes
+through a `seg_base()` resolver (`src/host/v86interp.h`). V86 keeps `seg<<4` (the `g_seg2lin` hook is
+NULL → the QuickBASIC path is byte-for-byte unchanged); PM sets the hook to `dpmi_sel_base()`, so the
+interpreter walks PM code with LDT descriptor bases. New driver `dpmi_run_pm_interp()` (`src/host/main.c`,
+gated behind `g_dpmi_use_interp`): loads the guest PM regs into an `icpu`, runs `istep()`, and — since
+the interpreter has no `INT` handler — stops cleanly on a raw `CD nn`, syncs the `icpu` into the
+`VDM_TIB`, services through the **same `dpmi_service_pm_int()`** the kernel path uses, reloads, and
+continues. No BOP patch needed. Any *other* unmodeled opcode is logged with its bytes as the spike's
+to-do signal.
+
+**Result (build `dpmi-harness-v47`, `I310102.EXE`) — both bets pay off:**
+```
+DPMI-INTERP: run 53 host PM begins CS:IP=0x0f:0x83 DS=0x17 SS=0x1f
+INT31h AX=0008 setlimit sel 0x17 -> 0x25cf          ← serviced via the shared dispatch, then continued
+DPMI-INTERP: unmodeled opcode at CS:IP=0x0f:0xa0 bytes=66 0f b7 f6 66 c1 e6 04 (steps=0x0e)
+STAGE2: complete                                     ← clean exit, veh fatal=0, NO kernel deadlock
+```
+1. **The `#GP` vanishes under emulation.** An interpreter enforces no descriptor type/limit, so the
+   code-typed-`SS` write that `#GP`s the real CPU (run 51) simply succeeds. The interpreter sailed *past*
+   the C-runtime selector reconfiguration that walled runs 51–52 — no fault, no deadlock, clean process
+   exit. **The wall is bypassed for host-interpreted PM.**
+2. **The bridge is proven end-to-end:** interpret PM → hit `CD 31` → service INT 31h `0008` via the
+   shared dispatcher → reload → keep interpreting. LDT-base resolution works.
+
+**Next (run 54): 32-bit operand support.** The stopping opcode is `66 0F B7 F6` = `MOVZX ESI,SI`, then
+`66 C1 E6 04` = `SHL ESI,4` — the C runtime does 32-bit register math via the `0x66` operand-size prefix,
+which the 16-bit-only interpreter deliberately bails on. Widening the `icpu` register file to 32-bit and
+handling `0x66`-prefixed variants (`MOVZX`/`SHL` first, then grow as real binaries demand) is the bounded,
+incremental next step. The emulation path is validated; opcode coverage is now the only remaining work —
+exactly the tractable, in-our-control frontier run 52 predicted. `g_dpmi_use_interp` currently defaults ON;
+the kernel BOP path (which keeps `DPMIBACK` green) is preserved behind it until the interpreter is at
+least as capable.
+
 ## Open unknowns (what the spike must nail down) `[VERIFY]`
 
 1. **The mode-switch primitive.** Exactly how ntvdm flips the VDM from V86→PM after the client

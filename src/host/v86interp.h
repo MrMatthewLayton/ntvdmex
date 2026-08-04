@@ -43,6 +43,18 @@ typedef struct {
 
 static int iparity(uint8_t v) { v ^= v >> 4; v ^= v >> 2; v ^= v >> 1; return !(v & 1); }
 
+/* Segment-register -> linear-base resolver. NULL = V86 semantics (base = seg<<4).
+   For protected mode (DPMI, GH #2) the host sets this to an LDT-selector->base
+   lookup, so the SAME 16-bit interpreter core runs PM code -- descriptor bases
+   instead of paragraph shifts. This is the one change that lets us execute PM in
+   the host and never hand a faulting instruction to the kernel's VDM-fault path
+   (which deadlocks on a PM #GP -- run 52). An interpreter enforces no descriptor
+   type/limit, so e.g. a write through a code-typed SS (what #GP's the real CPU in
+   run 51's I310102) simply succeeds here. */
+static uint32_t (*g_seg2lin)(uint16_t seg) = 0;
+static uint32_t seg_base(uint16_t seg)
+{ return g_seg2lin ? g_seg2lin(seg) : ((uint32_t)seg << 4); }
+
 static uint32_t rd_mem(uint32_t lin, int w)
 { return (w == 1) ? imem_r8(lin) : (uint32_t)(imem_r8(lin) | (imem_r8(lin + 1) << 8)); }
 static void wr_mem(uint32_t lin, int w, uint32_t v)
@@ -193,7 +205,7 @@ static int decode_modrm(icpu *c, uint32_t cb, int idx, int segov, modrm_t *o)
     if (mod == 1)      { ea = (uint16_t)(ea + (int16_t)(signed char)CB(idx + len)); len += 1; }
     else if (mod == 2) { ea = (uint16_t)(ea + (CB(idx + len) | (CB(idx + len + 1) << 8))); len += 2; }
     o->is_mem = 1; o->ea = ea;
-    o->lin = ((uint32_t)c->seg[(segov >= 0) ? segov : (bp ? 2 : 3)] << 4) + ea;  /* SS if BP else DS */
+    o->lin = (seg_base(c->seg[(segov >= 0) ? segov : (bp ? 2 : 3)])) + ea;  /* SS if BP else DS */
     return len;
 }
 
@@ -201,7 +213,7 @@ static int decode_modrm(icpu *c, uint32_t cb, int idx, int segov, modrm_t *o)
    0 to bail (state untouched at the current instruction). */
 static int istep(icpu *c)
 {
-    uint32_t cb = ((uint32_t)c->seg[1] << 4) + c->ip;   /* linear CS:IP */
+    uint32_t cb = (seg_base(c->seg[1])) + c->ip;   /* linear CS:IP */
     int idx = 0, segov = -1, rep = 0;
     BYTE op;
     for (;;) {                                        /* prefixes */
@@ -291,13 +303,13 @@ static int istep(icpu *c)
           uint16_t nip = (uint16_t)(c->ip + idx);
           if (m.g == 2) {                              /* CALL near indirect */
               uint16_t sp = (uint16_t)(c->r[4] - 2);
-              wr_mem(((uint32_t)c->seg[2] << 4) + sp, 2, nip);
+              wr_mem((seg_base(c->seg[2])) + sp, 2, nip);
               c->r[4] = sp; c->ip = val; return 1;
           }
           if (m.g == 4) { c->ip = val; return 1; }     /* JMP near indirect */
           if (m.g == 6) {                              /* PUSH r/m16 */
               uint16_t sp = (uint16_t)(c->r[4] - 2);
-              wr_mem(((uint32_t)c->seg[2] << 4) + sp, 2, val);
+              wr_mem((seg_base(c->seg[2])) + sp, 2, val);
               c->r[4] = sp; c->ip = nip; return 1;
           } }
         return 0;                                      /* g=3/5/7: far/illegal -> bail */
@@ -372,12 +384,12 @@ static int istep(icpu *c)
     /* ---- PUSH/POP r16 (50-5F): SS:SP-relative, via imem -------------------- */
     if (op >= 0x50 && op <= 0x57) {
         uint16_t sp = (uint16_t)(c->r[4] - 2);
-        wr_mem(((uint32_t)c->seg[2] << 4) + sp, 2, g16(c, op & 7));
+        wr_mem((seg_base(c->seg[2])) + sp, 2, g16(c, op & 7));
         c->r[4] = sp; c->ip = (uint16_t)(c->ip + idx); return 1;
     }
     if (op >= 0x58 && op <= 0x5F) {
         uint16_t sp = c->r[4];
-        s16(c, op & 7, (uint16_t)rd_mem(((uint32_t)c->seg[2] << 4) + sp, 2));
+        s16(c, op & 7, (uint16_t)rd_mem((seg_base(c->seg[2])) + sp, 2));
         c->r[4] = (uint16_t)(sp + 2); c->ip = (uint16_t)(c->ip + idx); return 1;
     }
 
@@ -388,13 +400,13 @@ static int istep(icpu *c)
     if (op == 0x06 || op == 0x0E || op == 0x16 || op == 0x1E) {        /* PUSH sreg */
         int sr = (op == 0x06) ? 0 : (op == 0x0E) ? 1 : (op == 0x16) ? 2 : 3;
         uint16_t sp = (uint16_t)(c->r[4] - 2);
-        wr_mem(((uint32_t)c->seg[2] << 4) + sp, 2, c->seg[sr]);
+        wr_mem((seg_base(c->seg[2])) + sp, 2, c->seg[sr]);
         c->r[4] = sp; c->ip = (uint16_t)(c->ip + idx); return 1;
     }
     if (op == 0x07 || op == 0x17 || op == 0x1F) {                      /* POP sreg */
         int sr = (op == 0x07) ? 0 : (op == 0x17) ? 2 : 3;
         uint16_t sp = c->r[4];
-        c->seg[sr] = (uint16_t)rd_mem(((uint32_t)c->seg[2] << 4) + sp, 2);
+        c->seg[sr] = (uint16_t)rd_mem((seg_base(c->seg[2])) + sp, 2);
         c->r[4] = (uint16_t)(sp + 2); c->ip = (uint16_t)(c->ip + idx); return 1;
     }
 
@@ -460,7 +472,7 @@ static int istep(icpu *c)
                                     s16(c, op & 7, (uint16_t)v); c->ip = (uint16_t)(c->ip + idx); return 1; }
     if (op >= 0xA0 && op <= 0xA3) {
         uint16_t off = (uint16_t)(CB(idx) | (CB(idx + 1) << 8)); idx += 2;
-        uint32_t lin = ((uint32_t)c->seg[(segov >= 0) ? segov : 3] << 4) + off;
+        uint32_t lin = (seg_base(c->seg[(segov >= 0) ? segov : 3])) + off;
         int w = (op & 1) ? 2 : 1;
         if (lin >= GUEST_HI) return 0;
         if (op <= 0xA1) { uint32_t v = rd_mem(lin, w); if (w == 1) s8(c, 0, (uint8_t)v); else s16(c, 0, (uint16_t)v); }
@@ -472,9 +484,9 @@ static int istep(icpu *c)
     if (op == 0xAA || op == 0xAB) {                   /* STOS ES:DI <- AL/AX */
         int w = (op == 0xAB) ? 2 : 1, dir = (c->flags & F_DF) ? -w : w;
         uint32_t cnt = rep ? c->r[1] : 1, es = c->seg[0], al = c->r[0]; uint16_t di = c->r[7];
-        while (cnt) { uint32_t lin = ((uint32_t)es << 4) + di;
+        while (cnt) { uint32_t lin = (seg_base(es)) + di;
                       imem_w8(lin, (uint8_t)al);
-                      if (w == 2) imem_w8(((uint32_t)es << 4) + (uint16_t)(di + 1), (uint8_t)(al >> 8));
+                      if (w == 2) imem_w8((seg_base(es)) + (uint16_t)(di + 1), (uint8_t)(al >> 8));
                       di = (uint16_t)(di + dir); cnt--; }
         c->r[7] = di; if (rep) c->r[1] = (uint16_t)cnt;
         c->ip = (uint16_t)(c->ip + idx); return 1;
@@ -483,10 +495,10 @@ static int istep(icpu *c)
         int w = (op == 0xA5) ? 2 : 1, dir = (c->flags & F_DF) ? -w : w;
         uint32_t cnt = rep ? c->r[1] : 1, ss = c->seg[(segov >= 0) ? segov : 3], es = c->seg[0];
         uint16_t si = c->r[6], di = c->r[7];
-        while (cnt) { uint32_t sl = ((uint32_t)ss << 4) + si, dl = ((uint32_t)es << 4) + di;
+        while (cnt) { uint32_t sl = (seg_base(ss)) + si, dl = (seg_base(es)) + di;
                       imem_w8(dl, imem_r8(sl));
-                      if (w == 2) imem_w8(((uint32_t)es << 4) + (uint16_t)(di + 1),
-                                          imem_r8(((uint32_t)ss << 4) + (uint16_t)(si + 1)));
+                      if (w == 2) imem_w8((seg_base(es)) + (uint16_t)(di + 1),
+                                          imem_r8((seg_base(ss)) + (uint16_t)(si + 1)));
                       si = (uint16_t)(si + dir); di = (uint16_t)(di + dir); cnt--; }
         c->r[6] = si; c->r[7] = di; if (rep) c->r[1] = (uint16_t)cnt;
         c->ip = (uint16_t)(c->ip + idx); return 1;
@@ -494,8 +506,8 @@ static int istep(icpu *c)
     if (op == 0xAC || op == 0xAD) {                   /* LODS AL/AX <- DS:SI */
         int w = (op == 0xAD) ? 2 : 1, dir = (c->flags & F_DF) ? -w : w;
         uint32_t cnt = rep ? c->r[1] : 1, ss = c->seg[(segov >= 0) ? segov : 3]; uint16_t si = c->r[6];
-        while (cnt) { uint32_t sl = ((uint32_t)ss << 4) + si, v = imem_r8(sl);
-                      if (w == 2) v |= (uint32_t)imem_r8(((uint32_t)ss << 4) + (uint16_t)(si + 1)) << 8;
+        while (cnt) { uint32_t sl = (seg_base(ss)) + si, v = imem_r8(sl);
+                      if (w == 2) v |= (uint32_t)imem_r8((seg_base(ss)) + (uint16_t)(si + 1)) << 8;
                       if (w == 1) s8(c, 0, (uint8_t)v); else s16(c, 0, (uint16_t)v);
                       si = (uint16_t)(si + dir); cnt--; }
         c->r[6] = si; if (rep) c->r[1] = (uint16_t)cnt;
@@ -517,12 +529,12 @@ static int istep(icpu *c)
         int16_t rel = (int16_t)(CB(idx) | (CB(idx + 1) << 8)); idx += 2;
         uint16_t nip = (uint16_t)(c->ip + idx);        /* return address */
         uint16_t sp = (uint16_t)(c->r[4] - 2);
-        wr_mem(((uint32_t)c->seg[2] << 4) + sp, 2, nip);
+        wr_mem((seg_base(c->seg[2])) + sp, 2, nip);
         c->r[4] = sp; c->ip = (uint16_t)(nip + rel); return 1;
     }
     if (op == 0xC3 || op == 0xC2) {                    /* RET near (+ imm16 pop) */
         uint16_t sp = c->r[4];
-        uint16_t ret = (uint16_t)rd_mem(((uint32_t)c->seg[2] << 4) + sp, 2);
+        uint16_t ret = (uint16_t)rd_mem((seg_base(c->seg[2])) + sp, 2);
         uint16_t extra = (op == 0xC2) ? (uint16_t)(CB(idx) | (CB(idx + 1) << 8)) : 0;
         c->r[4] = (uint16_t)(sp + 2 + extra); c->ip = ret; return 1;
     }
