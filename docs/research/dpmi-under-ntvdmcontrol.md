@@ -1382,6 +1382,38 @@ stopped on `0x68` = **`PUSH imm16`**, a trivial common opcode the mode-12h inter
 integer/stack opcodes now, not PM-specific ones. The frontier has shifted from "can we even run PM?" to
 routine opcode coverage of a normal C runtime.
 
+### VM run 56 (2026-08-04) — `PUSH imm`: the first ordinary-opcode increment `[off-VM FACT; real-CPU host healthy]`
+
+Third opcode increment, and the first that is *not* PM-specific. Run 55 stopped on `0x68` = `PUSH imm16`
+(`68 3a 02` = `PUSH 0x023A`). Added `PUSH imm` to the interpreter's main map: `0x68` pushes a W-wide
+immediate (imm16, or imm32 under a `0x66` prefix — a 32-bit C-runtime arg), `0x6A` pushes an imm8
+sign-extended to W. Both decrement SP by W and write the SS:SP slot through `wr_mem` (the same
+descriptor-base-resolved store path as `PUSH reg`), so they work identically in V86 and PM.
+
+**Off-VM battery: 81 → 88/88 green.** New cases exercise the exact wall bytes and the widths:
+`68 3a 02` writes `0x023A` at SS:SP (SP−=2, ip+=3); `6A FF` sign-extends to `0xFFFF`; a `6A 7F; POP AX`
+round-trip; and `66 68 78 56 34 12` = `PUSH 0x12345678` (SP−=4, ip+=6). This is airtight proof of the
+opcode's semantics — the interpreter is unit-tested against a flat memory array, so decode, immediate
+width, sign-extension, and the stack write are all checkable natively.
+
+**Real-CPU status (build `dpmi-harness-v50`).** The v50 host was booted on the XP VM (QEMU/HVF, real
+silicon) headless and **ran a full DPMI PM session through the host interpreter on the real CPU** — the
+`.COM` client `dpmitest.com` executed `0400`/`0100`/`0205`/`0204`/`0300`/`0301`/`0303` (incl. nested
+callbacks) with no regression from the new opcode. That confirms v50 is healthy on hardware. The
+*specific* `i310102` advance past `0x0f:0xcc` is **pending a one-shot interactive confirm** (`D:\i31run.bat`
+on the run-56 ISO): the headless multi-client autorun can't reach `i310102` because `dpmitest.com` runs
+first and hangs on its 2nd `0301` real-mode call, and the self-refresh that would reorder the batch fails
+(a running `.bat` is file-locked — so `i31run.bat`, a single-client CD-direct runner, was added to bridge
+this). **Predicted stop** from the `68 3a 02 cb …` dump: PUSH imm executes, `CS:IP 0xcc → 0xcf`, and the
+next unmodeled opcode is `0xCB` = **RETF** — i.e. the client is doing a `PUSH seg; PUSH off; RETF`
+far-transfer, so run 57's opcode is far RET.
+
+**Next (run 57): far `RET` (`0xCB` RETF, `0xCA` RETF imm16).** In the interpreter this pops the W-wide
+offset then the 2-byte selector into CS — trivial because `seg_base` already resolves the popped selector
+via the LDT (the same machinery LAR/LSL use). It's the natural companion to `PUSH imm` here (the observed
+idiom is `PUSH seg; PUSH off; RETF`) and, unlike the mode-12h path, PM code far-transfers constantly, so
+it will recur. Confirm run 56's `i310102` advance (via `i31run.bat`) at the same time.
+
 ## Open unknowns (what the spike must nail down) `[VERIFY]`
 
 1. **The mode-switch primitive.** Exactly how ntvdm flips the VDM from V86→PM after the client

@@ -403,6 +403,38 @@ int main(void)
       load(&c, 0x1000, 0, p, sizeof p); step1(&c);
       CHECK(c.r[0] == 0x001A, "lea: AX = BX+DI+6 = 0x1A (offset, not [0x1A])"); }
 
+    /* ---- T35: PUSH imm16 (68) writes a W-wide slot; SP -= 2 -- run 56 ---- *
+     * The exact opcode run 55 stopped on: 68 3a 02 = PUSH 0x023A.           */
+    { icpu c = mkcpu(); BYTE p[] = { 0x68, 0x3A, 0x02 };   /* PUSH 0x023A */
+      c.seg[2] = 0x8000; c.r[4] = 0x0100;                  /* SS, SP */
+      load(&c, 0x1000, 0, p, sizeof p);
+      CHECK(step1(&c) == 1 && c.ip == 3 && c.r[4] == 0x00FE, "68: PUSH imm16, ip+=3, SP-=2");
+      CHECK(MEM[((uint32_t)0x8000<<4)+0xFE]==0x3A && MEM[((uint32_t)0x8000<<4)+0xFF]==0x02,
+            "push imm16: word 0x023A written at SS:SP"); }
+
+    /* ---- T36: PUSH imm8 (6A) sign-extends to the 16-bit slot ------------ */
+    { icpu c = mkcpu(); BYTE p[] = { 0x6A, 0xFF };         /* PUSH -1 (byte) */
+      c.seg[2] = 0x8000; c.r[4] = 0x0100;
+      load(&c, 0x1000, 0, p, sizeof p);
+      CHECK(step1(&c) == 1 && c.ip == 2 && c.r[4] == 0x00FE, "6A: PUSH imm8, ip+=2, SP-=2");
+      CHECK(MEM[((uint32_t)0x8000<<4)+0xFE]==0xFF && MEM[((uint32_t)0x8000<<4)+0xFF]==0xFF,
+            "push imm8: -1 sign-extended to 0xFFFF"); }
+
+    /* ---- T37: PUSH imm round-trips through POP (value + flags intact) --- */
+    { icpu c = mkcpu(); BYTE p[] = { 0x6A, 0x7F, 0x58 };   /* PUSH 0x7F ; POP AX */
+      c.seg[2] = 0x8000; c.r[4] = 0x0100;
+      load(&c, 0x1000, 0, p, sizeof p);
+      step1(&c); step1(&c);
+      CHECK(c.r[0] == 0x007F && c.r[4] == 0x0100, "push imm8/pop: AX=0x7F, SP restored"); }
+
+    /* ---- T38: 32-bit PUSH imm32 (66 68) -- a 32-bit C runtime arg ------- */
+    { icpu c = mkcpu(); BYTE p[] = { 0x66, 0x68, 0x78, 0x56, 0x34, 0x12 }; /* PUSH 0x12345678 */
+      c.seg[2] = 0x8000; c.r[4] = 0x0100;
+      load(&c, 0x1000, 0, p, sizeof p);
+      CHECK(step1(&c) == 1 && c.ip == 6 && c.r[4] == 0x00FC, "66 68: PUSH imm32, ip+=6, SP-=4");
+      CHECK(MEM[((uint32_t)0x8000<<4)+0xFC]==0x78 && MEM[((uint32_t)0x8000<<4)+0xFF]==0x12,
+            "push imm32: dword 0x12345678 written at SS:SP"); }
+
     printf("\n%d checks, %d failed\n", total, fails);
     return fails ? 1 : 0;
 }

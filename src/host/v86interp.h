@@ -451,6 +451,19 @@ static int istep(icpu *c)
         c->r[4] = (c->r[4] & 0xFFFF0000u) | (uint16_t)(sp + W); c->ip = (uint16_t)(c->ip + idx); return 1;
     }
 
+    /* ---- PUSH imm (68 = imm16/imm32, 6A = imm8 sign-extended to W): a C runtime *
+     * pushes call args and far-jump targets this way (run 55's I310102 stopped on *
+     * `68 3a 02` = PUSH 0x023A). Slot + immediate are W-wide (0x66 -> 32-bit).     *
+     * run 56. */
+    if (op == 0x68 || op == 0x6A) {
+        uint16_t sp = (uint16_t)(c->r[4] - W);
+        uint32_t v;
+        if (op == 0x68) { v = rd_mem(cb + idx, W); idx += W; }     /* imm is W bytes */
+        else { v = (uint32_t)(int32_t)(int8_t)CB(idx++); v &= wmask(W); }  /* sign-ext imm8 */
+        wr_mem((seg_base(c->seg[2])) + sp, W, v);
+        c->r[4] = (c->r[4] & 0xFFFF0000u) | sp; c->ip = (uint16_t)(c->ip + idx); return 1;
+    }
+
     /* ---- PUSH/POP segment regs (06/0E/16/1E push ES/CS/SS/DS, 07/17/1F pop  *
      * ES/SS/DS). QB saves/restores ES (and DS) around each pixel -- this was  *
      * the per-pixel bail that capped batching at ~1 pixel. POP CS (0F) is not *

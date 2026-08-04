@@ -7,11 +7,13 @@ rem
 rem Self-refreshing: copies the CD's own dpmiauto.bat over the installed one first, so future
 rem edits to this file take effect on the next boot without re-running dpmiinstall.bat.
 rem
-rem Runs TWO clients in sequence, both logging to the same serial:
+rem Runs THREE clients in sequence, all logging to the same serial:
 rem   dpmitest.com  -- the .COM DPMI client (CS=DS=SS=PSP): descriptors, DOS+ext mem, file I/O,
 rem                    PM vectors, 0300 sim-int, 0301 far-call, 0303 callback w/ nested INTs.
 rem   dpmiexe.exe   -- a real multi-segment MZ .EXE (CS!=DS!=SS): proves the .EXE load path +
 rem                    the three-selector switch (GH #2, run 48).
+rem   i310102.exe   -- the C-runtime client (runs 51-55): exercises the host PM interpreter deep
+rem                    into a real compiler's startup (the setaccess-to-code wall, LAR/LSL, etc.).
 set N=C:\ntvdmex
 if not exist %N% md %N%
 if exist D:\dpmiauto.bat copy /y D:\dpmiauto.bat %N%\dpmiauto.bat >nul
@@ -28,6 +30,9 @@ goto :waitcd
 rem IFEO Debugger -> the CD's ntvdmhost.exe directly (unique CD label defeats XP's CD cache).
 reg add "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\ntvdm.exe" /v Debugger /t REG_SZ /d "D:\ntvdmhost.exe" /f >nul
 if exist %N%\ntvdmhost.log del /f /q %N%\ntvdmhost.log
+rem i310102 runs FIRST: it stops cleanly on an unmodeled opcode (never spins), so its
+rem serial output always lands even if a later client's real-mode call hangs headless.
+call :runone i310102.exe
 call :runone dpmitest.com
 call :runone dpmiexe.exe
 goto :eof
