@@ -35,13 +35,19 @@
 #define F_OF 0x0800u
 
 typedef struct {
-    uint16_t r[8];      /* AX CX DX BX SP BP SI DI (x86 reg encoding)   */
+    uint32_t r[8];      /* E-AX/CX/DX/BX/SP/BP/SI/DI (full 32-bit; 16-/8-bit views mask) */
     uint16_t seg[6];    /* ES CS SS DS FS GS       (x86 sreg encoding)  */
-    uint16_t ip;
+    uint16_t ip;        /* address size stays 16-bit (the 0x67 prefix still bails)      */
     uint32_t flags;
 } icpu;
 
 static int iparity(uint8_t v) { v ^= v >> 4; v ^= v >> 2; v ^= v >> 1; return !(v & 1); }
+
+/* Operand-width helpers: w is 1/2/4 bytes. The 4-byte path exists for 16-bit code
+   that uses the 0x66 operand-size prefix (386 32-bit register math -- e.g. a C
+   runtime's MOVZX ESI,SI / SHL ESI,4). run 54. */
+static uint32_t wmask(int w) { return (w == 1) ? 0xFFu : (w == 2) ? 0xFFFFu : 0xFFFFFFFFu; }
+static uint32_t wsign(int w) { return (w == 1) ? 0x80u : (w == 2) ? 0x8000u : 0x80000000u; }
 
 /* Segment-register -> linear-base resolver. NULL = V86 semantics (base = seg<<4).
    For protected mode (DPMI, GH #2) the host sets this to an LDT-selector->base
@@ -56,26 +62,40 @@ static uint32_t seg_base(uint16_t seg)
 { return g_seg2lin ? g_seg2lin(seg) : ((uint32_t)seg << 4); }
 
 static uint32_t rd_mem(uint32_t lin, int w)
-{ return (w == 1) ? imem_r8(lin) : (uint32_t)(imem_r8(lin) | (imem_r8(lin + 1) << 8)); }
+{ uint32_t v = imem_r8(lin);
+  if (w >= 2) v |= (uint32_t)imem_r8(lin + 1) << 8;
+  if (w == 4) v |= ((uint32_t)imem_r8(lin + 2) << 16) | ((uint32_t)imem_r8(lin + 3) << 24);
+  return v; }
 static void wr_mem(uint32_t lin, int w, uint32_t v)
-{ imem_w8(lin, (uint8_t)v); if (w == 2) imem_w8(lin + 1, (uint8_t)(v >> 8)); }
+{ imem_w8(lin, (uint8_t)v);
+  if (w >= 2) imem_w8(lin + 1, (uint8_t)(v >> 8));
+  if (w == 4) { imem_w8(lin + 2, (uint8_t)(v >> 16)); imem_w8(lin + 3, (uint8_t)(v >> 24)); } }
 
-/* CPU register file access by x86 encoding. */
-static uint16_t g16(icpu *c, int e) { return c->r[e & 7]; }
-static void     s16(icpu *c, int e, uint16_t v) { c->r[e & 7] = v; }
+/* CPU register file access by x86 encoding. Sub-register writes preserve the bits
+   they don't touch: a 16-bit write keeps E-reg[31:16]; an 8-bit write keeps the
+   other 24 bits (x86 partial-register semantics). */
+static uint16_t g16(icpu *c, int e) { return (uint16_t)c->r[e & 7]; }
+static void     s16(icpu *c, int e, uint16_t v) { c->r[e & 7] = (c->r[e & 7] & 0xFFFF0000u) | v; }
 static uint8_t  g8(icpu *c, int e)
 { return (e < 4) ? (uint8_t)c->r[e] : (uint8_t)(c->r[e - 4] >> 8); }
 static void     s8(icpu *c, int e, uint8_t v)
-{ if (e < 4) c->r[e] = (uint16_t)((c->r[e] & 0xFF00) | v);
-  else c->r[e - 4] = (uint16_t)((c->r[e - 4] & 0x00FF) | ((uint16_t)v << 8)); }
+{ if (e < 4) c->r[e] = (c->r[e] & 0xFFFFFF00u) | v;
+  else c->r[e - 4] = (c->r[e - 4] & 0xFFFF00FFu) | ((uint32_t)v << 8); }
+/* read/write a register by operand width (1/2/4). */
+static uint32_t grw(icpu *c, int e, int w)
+{ return (w == 1) ? g8(c, e) : (w == 2) ? (uint32_t)(uint16_t)c->r[e & 7] : c->r[e & 7]; }
+static void srw(icpu *c, int e, int w, uint32_t v)
+{ if (w == 1) s8(c, e, (uint8_t)v); else if (w == 2) s16(c, e, (uint16_t)v); else c->r[e & 7] = v; }
 
 /* Flag-computing ALU primitives (result masked to operand width w). */
 static uint32_t do_add(icpu *c, uint32_t a, uint32_t b, int cin, int w)
 {
-    uint32_t m = (w == 1) ? 0xFFu : 0xFFFFu, sb = (w == 1) ? 0x80u : 0x8000u;
-    uint32_t fa = a & m, fb = b & m, full = fa + fb + (uint32_t)cin, res = full & m;
+    uint32_t m = wmask(w), sb = wsign(w);
+    uint32_t fa = a & m, fb = b & m;
+    uint64_t full = (uint64_t)fa + fb + (uint32_t)cin;   /* 64-bit: carry-safe for w==4 */
+    uint32_t res = (uint32_t)(full & m);
     c->flags &= ~(F_CF | F_PF | F_AF | F_ZF | F_SF | F_OF);
-    if (full & (m + 1))                         c->flags |= F_CF;
+    if (full & ((uint64_t)m + 1))               c->flags |= F_CF;
     if ((fa ^ fb ^ res) & 0x10u)                c->flags |= F_AF;
     if (!res)                                   c->flags |= F_ZF;
     if (res & sb)                               c->flags |= F_SF;
@@ -85,10 +105,10 @@ static uint32_t do_add(icpu *c, uint32_t a, uint32_t b, int cin, int w)
 }
 static uint32_t do_sub(icpu *c, uint32_t a, uint32_t b, int cin, int w)
 {
-    uint32_t m = (w == 1) ? 0xFFu : 0xFFFFu, sb = (w == 1) ? 0x80u : 0x8000u;
+    uint32_t m = wmask(w), sb = wsign(w);
     uint32_t fa = a & m, fb = b & m, res = (fa - fb - (uint32_t)cin) & m;
     c->flags &= ~(F_CF | F_PF | F_AF | F_ZF | F_SF | F_OF);
-    if (fa < fb + (uint32_t)cin)                c->flags |= F_CF;
+    if ((uint64_t)fa < (uint64_t)fb + (uint32_t)cin)  c->flags |= F_CF;
     if ((fa ^ fb ^ res) & 0x10u)                c->flags |= F_AF;
     if (!res)                                   c->flags |= F_ZF;
     if (res & sb)                               c->flags |= F_SF;
@@ -98,7 +118,7 @@ static uint32_t do_sub(icpu *c, uint32_t a, uint32_t b, int cin, int w)
 }
 static void do_logic(icpu *c, uint32_t res, int w)
 {
-    uint32_t m = (w == 1) ? 0xFFu : 0xFFFFu, sb = (w == 1) ? 0x80u : 0x8000u;
+    uint32_t m = wmask(w), sb = wsign(w);
     res &= m;
     c->flags &= ~(F_CF | F_PF | F_AF | F_ZF | F_SF | F_OF);   /* CF=OF=0 */
     if (!res)                  c->flags |= F_ZF;
@@ -128,7 +148,7 @@ static uint32_t do_alu(icpu *c, int aluop, uint32_t a, uint32_t b, int w)
    bit-mask with SHR (0x80 >> x) / SHL, so this is on the hot pixel path. */
 static uint32_t do_shrot(icpu *c, int sub, uint32_t v, int cnt, int w)
 {
-    uint32_t m = (w == 1) ? 0xFFu : 0xFFFFu, sb = (w == 1) ? 0x80u : 0x8000u, orig;
+    uint32_t m = wmask(w), sb = wsign(w), orig;
     int cf = (c->flags & F_CF) ? 1 : 0, oldcf, i;
     cnt &= 0x1F; v &= m; orig = v;
     if (cnt == 0) return v;                            /* x86: flags unchanged */
@@ -214,7 +234,8 @@ static int decode_modrm(icpu *c, uint32_t cb, int idx, int segov, modrm_t *o)
 static int istep(icpu *c)
 {
     uint32_t cb = (seg_base(c->seg[1])) + c->ip;   /* linear CS:IP */
-    int idx = 0, segov = -1, rep = 0;
+    int idx = 0, segov = -1, rep = 0, osz = 0;
+    int W;                                            /* word operand width: 4 if 0x66 else 2 */
     BYTE op;
     for (;;) {                                        /* prefixes */
         BYTE b = CB(idx);
@@ -226,79 +247,97 @@ static int istep(icpu *c)
         else if (b == 0x65) { segov = 5; idx++; }     /* GS */
         else if (b == 0xF3) { rep = 1; idx++; }
         else if (b == 0xF2) { rep = 2; idx++; }
-        else if (b == 0x66 || b == 0x67 || b == 0xF0) return 0;   /* 32-bit/LOCK: bail */
+        else if (b == 0x66) { osz = 1; idx++; }       /* run 54: operand-size -> 32-bit */
+        else if (b == 0x67 || b == 0xF0) return 0;    /* addr-size / LOCK: still bail */
         else break;
         if (idx > 4) return 0;
     }
     op = CB(idx++);
+    W = osz ? 4 : 2;                                  /* run 54: word operand width (0x66 -> 4) */
+
+    /* ---- 0F two-byte map (run 54): MOVZX/MOVSX r, r/m -------------------- *
+     * B6/B7 = zero-extend byte/word, BE/BF = sign-extend. Dest width = W, so *
+     * `66 0F B7` gives MOVZX ESI,SI. Other 0F ops bail (the to-do signal).   */
+    if (op == 0x0F) {
+        BYTE op2 = CB(idx++);
+        if (op2 == 0xB6 || op2 == 0xB7 || op2 == 0xBE || op2 == 0xBF) {
+            int sw = (op2 & 1) ? 2 : 1;               /* source width */
+            int sx = (op2 >= 0xBE);                   /* sign- vs zero-extend */
+            modrm_t m; idx += decode_modrm(c, cb, idx, segov, &m);
+            if (m.is_mem && m.lin >= GUEST_HI) return 0;
+            { uint32_t v = m.is_mem ? rd_mem(m.lin, sw)
+                                    : (sw == 1 ? g8(c, m.rm_reg) : (uint32_t)g16(c, m.rm_reg));
+              if (sx && (v & wsign(sw))) v |= ~wmask(sw);   /* sign-extend to 32 */
+              srw(c, m.g, W, v & wmask(W)); }
+            c->ip = (uint16_t)(c->ip + idx); return 1;
+        }
+        return 0;                                     /* other 0F ops: bail */
+    }
 
     /* ---- arithmetic/logic group: ADD..CMP, reg/mem forms ------------------ */
     if (op < 0x40 && (op & 7) < 6) {
         int aluop = (op >> 3) & 7, form = op & 7;
-        int w = (form == 0 || form == 2 || form == 4) ? 1 : 2;
+        int w = (form == 0 || form == 2 || form == 4) ? 1 : W;
         uint32_t a, b, res; int dmem = 0, dreg = 0; uint32_t dlin = 0;
         if (form <= 3) {
             modrm_t m; idx += decode_modrm(c, cb, idx, segov, &m);
             if (m.is_mem && m.lin >= GUEST_HI) return 0;
-            uint32_t ev = m.is_mem ? rd_mem(m.lin, w) : (w == 1 ? g8(c, m.rm_reg) : g16(c, m.rm_reg));
-            uint32_t gv = (w == 1) ? g8(c, m.g) : g16(c, m.g);
+            uint32_t ev = m.is_mem ? rd_mem(m.lin, w) : grw(c, m.rm_reg, w);
+            uint32_t gv = grw(c, m.g, w);
             if (form <= 1) { a = ev; b = gv; if (m.is_mem) { dmem = 1; dlin = m.lin; } else dreg = m.rm_reg; }
             else           { a = gv; b = ev; dreg = m.g; }
         } else if (form == 4) { a = g8(c, 0);  b = CB(idx++); dreg = 0; }
-        else { a = g16(c, 0); b = (uint32_t)(CB(idx) | (CB(idx + 1) << 8)); idx += 2; dreg = 0; }
+        else { a = grw(c, 0, w); b = rd_mem(cb + idx, w); idx += w; dreg = 0; }
         res = do_alu(c, aluop, a, b, w);
         if (aluop != 7) {
-            if (dmem)         wr_mem(dlin, w, res);
-            else if (w == 1)  s8(c, dreg, (uint8_t)res);
-            else              s16(c, dreg, (uint16_t)res);
+            if (dmem) wr_mem(dlin, w, res);
+            else      srw(c, dreg, w, res);
         }
         c->ip = (uint16_t)(c->ip + idx); return 1;
     }
 
     /* ---- group1: ADD..CMP r/m, imm (80/81/83) ----------------------------- */
     if (op == 0x80 || op == 0x81 || op == 0x83) {
-        int w = (op == 0x80) ? 1 : 2; uint32_t a, b, res;
+        int w = (op == 0x80) ? 1 : W; uint32_t a, b, res;
         modrm_t m; idx += decode_modrm(c, cb, idx, segov, &m);
         if (m.is_mem && m.lin >= GUEST_HI) return 0;
-        a = m.is_mem ? rd_mem(m.lin, w) : (w == 1 ? g8(c, m.rm_reg) : g16(c, m.rm_reg));
-        if (op == 0x81) { b = (uint32_t)(CB(idx) | (CB(idx + 1) << 8)); idx += 2; }
-        else { b = (uint32_t)(int32_t)(int8_t)CB(idx++); b &= (w == 1) ? 0xFFu : 0xFFFFu; }
+        a = m.is_mem ? rd_mem(m.lin, w) : grw(c, m.rm_reg, w);
+        if (op == 0x81) { b = rd_mem(cb + idx, w); idx += w; }
+        else { b = (uint32_t)(int32_t)(int8_t)CB(idx++); b &= wmask(w); }
         res = do_alu(c, m.g, a, b, w);
         if (m.g != 7) {
-            if (m.is_mem)    wr_mem(m.lin, w, res);
-            else if (w == 1) s8(c, m.rm_reg, (uint8_t)res);
-            else             s16(c, m.rm_reg, (uint16_t)res);
+            if (m.is_mem) wr_mem(m.lin, w, res);
+            else          srw(c, m.rm_reg, w, res);
         }
         c->ip = (uint16_t)(c->ip + idx); return 1;
     }
 
-    /* ---- INC/DEC r16 (40-4F) ---------------------------------------------- */
+    /* ---- INC/DEC r16/r32 (40-4F) ------------------------------------------ */
     if (op >= 0x40 && op <= 0x4F) {
         int reg = op & 7; uint32_t cf = c->flags & F_CF;
-        uint16_t res = (op >= 0x48) ? (uint16_t)do_sub(c, g16(c, reg), 1, 0, 2)
-                                    : (uint16_t)do_add(c, g16(c, reg), 1, 0, 2);
+        uint32_t res = (op >= 0x48) ? do_sub(c, grw(c, reg, W), 1, 0, W)
+                                    : do_add(c, grw(c, reg, W), 1, 0, W);
         c->flags = (c->flags & ~F_CF) | cf;           /* INC/DEC preserve CF */
-        s16(c, reg, res);
+        srw(c, reg, W, res);
         c->ip = (uint16_t)(c->ip + idx); return 1;
     }
 
     /* ---- group FE/FF: INC/DEC r/m, and (FF only) near indirect CALL/JMP +
             PUSH r/m. Far call/jmp (g=3/5) bail. ---------------------------- */
     if (op == 0xFE || op == 0xFF) {
-        int w = (op == 0xFE) ? 1 : 2;
+        int w = (op == 0xFE) ? 1 : W;
         modrm_t m; idx += decode_modrm(c, cb, idx, segov, &m);
         if (m.is_mem && m.lin >= GUEST_HI) return 0;
         if (m.g == 0 || m.g == 1) {                   /* INC/DEC r/m */
             uint32_t cf = c->flags & F_CF;
-            uint32_t a = m.is_mem ? rd_mem(m.lin, w) : (w == 1 ? g8(c, m.rm_reg) : g16(c, m.rm_reg));
+            uint32_t a = m.is_mem ? rd_mem(m.lin, w) : grw(c, m.rm_reg, w);
             uint32_t res = (m.g == 1) ? do_sub(c, a, 1, 0, w) : do_add(c, a, 1, 0, w);
             c->flags = (c->flags & ~F_CF) | cf;
-            if (m.is_mem)    wr_mem(m.lin, w, res);
-            else if (w == 1) s8(c, m.rm_reg, (uint8_t)res);
-            else             s16(c, m.rm_reg, (uint16_t)res);
+            if (m.is_mem) wr_mem(m.lin, w, res);
+            else          srw(c, m.rm_reg, w, res);
             c->ip = (uint16_t)(c->ip + idx); return 1;
         }
-        if (op != 0xFF) return 0;                      /* FE has no other forms */
+        if (op != 0xFF || osz) return 0;               /* FE none; osz push/call/jmp: TODO */
         { uint16_t val = m.is_mem ? (uint16_t)rd_mem(m.lin, 2) : g16(c, m.rm_reg);
           uint16_t nip = (uint16_t)(c->ip + idx);
           if (m.g == 2) {                              /* CALL near indirect */
@@ -317,52 +356,51 @@ static int istep(icpu *c)
 
     /* ---- TEST r/m,r (84/85); TEST AL/AX,imm (A8/A9) ----------------------- */
     if (op == 0x84 || op == 0x85) {
-        int w = (op == 0x84) ? 1 : 2;
+        int w = (op == 0x84) ? 1 : W;
         modrm_t m; idx += decode_modrm(c, cb, idx, segov, &m);
         if (m.is_mem && m.lin >= GUEST_HI) return 0;
-        { uint32_t e = m.is_mem ? rd_mem(m.lin, w) : (w == 1 ? g8(c, m.rm_reg) : g16(c, m.rm_reg));
-          uint32_t g = (w == 1) ? g8(c, m.g) : g16(c, m.g);
+        { uint32_t e = m.is_mem ? rd_mem(m.lin, w) : grw(c, m.rm_reg, w);
+          uint32_t g = grw(c, m.g, w);
           do_logic(c, e & g, w); }
         c->ip = (uint16_t)(c->ip + idx); return 1;
     }
     if (op == 0xA8) { do_logic(c, (uint32_t)g8(c, 0) & CB(idx), 1); idx++;
                       c->ip = (uint16_t)(c->ip + idx); return 1; }
-    if (op == 0xA9) { uint32_t b = (uint32_t)(CB(idx) | (CB(idx + 1) << 8)); idx += 2;
-                      do_logic(c, (uint32_t)g16(c, 0) & b, 2);
+    if (op == 0xA9) { uint32_t b = rd_mem(cb + idx, W); idx += W;
+                      do_logic(c, grw(c, 0, W) & b, W);
                       c->ip = (uint16_t)(c->ip + idx); return 1; }
-
     /* ---- group3 (F6/F7): only TEST r/m,imm (reg=0/1) here; rest bail ------ */
     if (op == 0xF6 || op == 0xF7) {
-        int w = (op == 0xF6) ? 1 : 2;
+        int w = (op == 0xF6) ? 1 : W;
         modrm_t m; idx += decode_modrm(c, cb, idx, segov, &m);
         if (m.g != 0 && m.g != 1) return 0;           /* NOT/NEG/MUL/DIV: bail */
         if (m.is_mem && m.lin >= GUEST_HI) return 0;
-        { uint32_t e = m.is_mem ? rd_mem(m.lin, w) : (w == 1 ? g8(c, m.rm_reg) : g16(c, m.rm_reg));
-          uint32_t b; if (w == 1) { b = CB(idx++); } else { b = (uint32_t)(CB(idx) | (CB(idx + 1) << 8)); idx += 2; }
+        { uint32_t e = m.is_mem ? rd_mem(m.lin, w) : grw(c, m.rm_reg, w);
+          uint32_t b = rd_mem(cb + idx, w); idx += w;
           do_logic(c, e & b, w); }
         c->ip = (uint16_t)(c->ip + idx); return 1;
     }
 
     /* ---- MOV r/m<->reg (88-8B); MOV r/m,imm (C6/C7) ----------------------- */
     if (op == 0x88 || op == 0x89 || op == 0x8A || op == 0x8B) {
-        int w = (op & 1) ? 2 : 1, load = (op == 0x8A || op == 0x8B);
+        int w = (op & 1) ? W : 1, load = (op == 0x8A || op == 0x8B);
         modrm_t m; idx += decode_modrm(c, cb, idx, segov, &m);
         if (m.is_mem && m.lin >= GUEST_HI) return 0;
-        if (load) { uint32_t v = m.is_mem ? rd_mem(m.lin, w) : (w == 1 ? g8(c, m.rm_reg) : g16(c, m.rm_reg));
-                    if (w == 1) s8(c, m.g, (uint8_t)v); else s16(c, m.g, (uint16_t)v); }
-        else { uint32_t v = (w == 1) ? g8(c, m.g) : g16(c, m.g);
+        if (load) { uint32_t v = m.is_mem ? rd_mem(m.lin, w) : grw(c, m.rm_reg, w);
+                    srw(c, m.g, w, v); }
+        else { uint32_t v = grw(c, m.g, w);
                if (m.is_mem) wr_mem(m.lin, w, v);
-               else if (w == 1) s8(c, m.rm_reg, (uint8_t)v); else s16(c, m.rm_reg, (uint16_t)v); }
+               else          srw(c, m.rm_reg, w, v); }
         c->ip = (uint16_t)(c->ip + idx); return 1;
     }
     if (op == 0xC6 || op == 0xC7) {
-        int w = (op == 0xC7) ? 2 : 1;
+        int w = (op == 0xC7) ? W : 1;
         modrm_t m; idx += decode_modrm(c, cb, idx, segov, &m);
         if (m.g != 0) return 0;
         if (m.is_mem && m.lin >= GUEST_HI) return 0;
-        { uint32_t v; if (w == 1) v = CB(idx++); else { v = (uint32_t)(CB(idx) | (CB(idx + 1) << 8)); idx += 2; }
+        { uint32_t v = rd_mem(cb + idx, w); idx += w;
           if (m.is_mem) wr_mem(m.lin, w, v);
-          else if (w == 1) s8(c, m.rm_reg, (uint8_t)v); else s16(c, m.rm_reg, (uint16_t)v); }
+          else          srw(c, m.rm_reg, w, v); }
         c->ip = (uint16_t)(c->ip + idx); return 1;
     }
 
@@ -370,27 +408,27 @@ static int istep(icpu *c)
      * QuickBASIC plots mode-12h pixels with `XCHG ES:[DI],AL` (read-modify the *
      * VGA latches + write in one op), so this is the hot pixel-store path.     */
     if (op == 0x86 || op == 0x87) {
-        int w = (op == 0x87) ? 2 : 1;
+        int w = (op == 0x87) ? W : 1;
         modrm_t m; idx += decode_modrm(c, cb, idx, segov, &m);
         if (m.is_mem && m.lin >= GUEST_HI) return 0;
-        { uint32_t rv = (w == 1) ? g8(c, m.g) : g16(c, m.g);
-          uint32_t ev = m.is_mem ? rd_mem(m.lin, w) : (w == 1 ? g8(c, m.rm_reg) : g16(c, m.rm_reg));
+        { uint32_t rv = grw(c, m.g, w);
+          uint32_t ev = m.is_mem ? rd_mem(m.lin, w) : grw(c, m.rm_reg, w);
           if (m.is_mem) wr_mem(m.lin, w, rv);
-          else if (w == 1) s8(c, m.rm_reg, (uint8_t)rv); else s16(c, m.rm_reg, (uint16_t)rv);
-          if (w == 1) s8(c, m.g, (uint8_t)ev); else s16(c, m.g, (uint16_t)ev); }
+          else          srw(c, m.rm_reg, w, rv);
+          srw(c, m.g, w, ev); }
         c->ip = (uint16_t)(c->ip + idx); return 1;
     }
 
-    /* ---- PUSH/POP r16 (50-5F): SS:SP-relative, via imem -------------------- */
+    /* ---- PUSH/POP r16/r32 (50-5F): SS:SP-relative, via imem (W-wide slot) --- */
     if (op >= 0x50 && op <= 0x57) {
-        uint16_t sp = (uint16_t)(c->r[4] - 2);
-        wr_mem((seg_base(c->seg[2])) + sp, 2, g16(c, op & 7));
-        c->r[4] = sp; c->ip = (uint16_t)(c->ip + idx); return 1;
+        uint16_t sp = (uint16_t)(c->r[4] - W);
+        wr_mem((seg_base(c->seg[2])) + sp, W, grw(c, op & 7, W));
+        c->r[4] = (c->r[4] & 0xFFFF0000u) | sp; c->ip = (uint16_t)(c->ip + idx); return 1;
     }
     if (op >= 0x58 && op <= 0x5F) {
-        uint16_t sp = c->r[4];
-        s16(c, op & 7, (uint16_t)rd_mem((seg_base(c->seg[2])) + sp, 2));
-        c->r[4] = (uint16_t)(sp + 2); c->ip = (uint16_t)(c->ip + idx); return 1;
+        uint16_t sp = (uint16_t)c->r[4];
+        srw(c, op & 7, W, rd_mem((seg_base(c->seg[2])) + sp, W));
+        c->r[4] = (c->r[4] & 0xFFFF0000u) | (uint16_t)(sp + W); c->ip = (uint16_t)(c->ip + idx); return 1;
     }
 
     /* ---- PUSH/POP segment regs (06/0E/16/1E push ES/CS/SS/DS, 07/17/1F pop  *
@@ -399,15 +437,19 @@ static int istep(icpu *c)
      * modeled (it would change the code segment mid-interpret). ------------- */
     if (op == 0x06 || op == 0x0E || op == 0x16 || op == 0x1E) {        /* PUSH sreg */
         int sr = (op == 0x06) ? 0 : (op == 0x0E) ? 1 : (op == 0x16) ? 2 : 3;
-        uint16_t sp = (uint16_t)(c->r[4] - 2);
+        uint16_t sp;
+        if (osz) return 0;                             /* 32-bit seg push: TODO */
+        sp = (uint16_t)(c->r[4] - 2);
         wr_mem((seg_base(c->seg[2])) + sp, 2, c->seg[sr]);
-        c->r[4] = sp; c->ip = (uint16_t)(c->ip + idx); return 1;
+        c->r[4] = (c->r[4] & 0xFFFF0000u) | sp; c->ip = (uint16_t)(c->ip + idx); return 1;
     }
     if (op == 0x07 || op == 0x17 || op == 0x1F) {                      /* POP sreg */
         int sr = (op == 0x07) ? 0 : (op == 0x17) ? 2 : 3;
-        uint16_t sp = c->r[4];
+        uint16_t sp;
+        if (osz) return 0;                             /* 32-bit seg pop: TODO */
+        sp = (uint16_t)c->r[4];
         c->seg[sr] = (uint16_t)rd_mem((seg_base(c->seg[2])) + sp, 2);
-        c->r[4] = (uint16_t)(sp + 2); c->ip = (uint16_t)(c->ip + idx); return 1;
+        c->r[4] = (c->r[4] & 0xFFFF0000u) | (uint16_t)(sp + 2); c->ip = (uint16_t)(c->ip + idx); return 1;
     }
 
     /* ---- MOV r/m16,Sreg (8C) / MOV Sreg,r/m16 (8E) ------------------------- */
@@ -425,26 +467,26 @@ static int istep(icpu *c)
         c->ip = (uint16_t)(c->ip + idx); return 1;
     }
 
-    /* ---- LEA r16, m (8D): load the effective-address offset (not memory) -- */
+    /* ---- LEA r16/r32, m (8D): load the effective-address offset (not memory) */
     if (op == 0x8D) {
         modrm_t m; idx += decode_modrm(c, cb, idx, segov, &m);
         if (!m.is_mem) return 0;                       /* LEA with reg operand is illegal */
-        s16(c, m.g, m.ea);
+        srw(c, m.g, W, m.ea);                          /* addr size is 16-bit -> ea zero-ext to W */
         c->ip = (uint16_t)(c->ip + idx); return 1;
     }
 
     /* ---- shift/rotate group-2: D0/D1 (by 1), D2/D3 (by CL), C0/C1 (imm8) --- */
     if (op == 0xD0 || op == 0xD1 || op == 0xD2 || op == 0xD3 || op == 0xC0 || op == 0xC1) {
-        int w = (op & 1) ? 2 : 1, cnt;
+        int w = (op & 1) ? W : 1, cnt;
         modrm_t m; idx += decode_modrm(c, cb, idx, segov, &m);
         if (m.is_mem && m.lin >= GUEST_HI) return 0;
         if (op == 0xD0 || op == 0xD1) cnt = 1;
         else if (op == 0xD2 || op == 0xD3) cnt = g8(c, 1);   /* CL */
         else cnt = CB(idx++);                                /* imm8 */
-        { uint32_t v = m.is_mem ? rd_mem(m.lin, w) : (w == 1 ? g8(c, m.rm_reg) : g16(c, m.rm_reg));
+        { uint32_t v = m.is_mem ? rd_mem(m.lin, w) : grw(c, m.rm_reg, w);
           uint32_t res = do_shrot(c, m.g, v, cnt, w);
           if (m.is_mem) wr_mem(m.lin, w, res);
-          else if (w == 1) s8(c, m.rm_reg, (uint8_t)res); else s16(c, m.rm_reg, (uint16_t)res); }
+          else          srw(c, m.rm_reg, w, res); }
         c->ip = (uint16_t)(c->ip + idx); return 1;
     }
 
@@ -468,21 +510,22 @@ static int istep(icpu *c)
     /* ---- MOV r,imm (B0-BF); MOV AL/AX,moffs / moffs,AL/AX (A0-A3) --------- */
     if (op >= 0xB0 && op <= 0xB7) { s8(c, op & 7, CB(idx)); idx++;
                                     c->ip = (uint16_t)(c->ip + idx); return 1; }
-    if (op >= 0xB8 && op <= 0xBF) { uint32_t v = (uint32_t)(CB(idx) | (CB(idx + 1) << 8)); idx += 2;
-                                    s16(c, op & 7, (uint16_t)v); c->ip = (uint16_t)(c->ip + idx); return 1; }
+    if (op >= 0xB8 && op <= 0xBF) { uint32_t v = rd_mem(cb + idx, W); idx += W;
+                                    srw(c, op & 7, W, v); c->ip = (uint16_t)(c->ip + idx); return 1; }
     if (op >= 0xA0 && op <= 0xA3) {
         uint16_t off = (uint16_t)(CB(idx) | (CB(idx + 1) << 8)); idx += 2;
         uint32_t lin = (seg_base(c->seg[(segov >= 0) ? segov : 3])) + off;
-        int w = (op & 1) ? 2 : 1;
+        int w = (op & 1) ? W : 1;
         if (lin >= GUEST_HI) return 0;
-        if (op <= 0xA1) { uint32_t v = rd_mem(lin, w); if (w == 1) s8(c, 0, (uint8_t)v); else s16(c, 0, (uint16_t)v); }
-        else            { uint32_t v = (w == 1) ? g8(c, 0) : g16(c, 0); wr_mem(lin, w, v); }
+        if (op <= 0xA1) srw(c, 0, w, rd_mem(lin, w));
+        else            wr_mem(lin, w, grw(c, 0, w));
         c->ip = (uint16_t)(c->ip + idx); return 1;
     }
 
     /* ---- string ops: STOS (AA/AB), MOVS (A4/A5), LODS (AC/AD) -------------- */
     if (op == 0xAA || op == 0xAB) {                   /* STOS ES:DI <- AL/AX */
         int w = (op == 0xAB) ? 2 : 1, dir = (c->flags & F_DF) ? -w : w;
+        if (osz) return 0;                            /* 32-bit string op: TODO */
         uint32_t cnt = rep ? c->r[1] : 1, es = c->seg[0], al = c->r[0]; uint16_t di = c->r[7];
         while (cnt) { uint32_t lin = (seg_base(es)) + di;
                       imem_w8(lin, (uint8_t)al);
@@ -493,6 +536,7 @@ static int istep(icpu *c)
     }
     if (op == 0xA4 || op == 0xA5) {                   /* MOVS ES:DI <- DS:SI */
         int w = (op == 0xA5) ? 2 : 1, dir = (c->flags & F_DF) ? -w : w;
+        if (osz) return 0;                            /* 32-bit string op: TODO */
         uint32_t cnt = rep ? c->r[1] : 1, ss = c->seg[(segov >= 0) ? segov : 3], es = c->seg[0];
         uint16_t si = c->r[6], di = c->r[7];
         while (cnt) { uint32_t sl = (seg_base(ss)) + si, dl = (seg_base(es)) + di;
@@ -505,6 +549,7 @@ static int istep(icpu *c)
     }
     if (op == 0xAC || op == 0xAD) {                   /* LODS AL/AX <- DS:SI */
         int w = (op == 0xAD) ? 2 : 1, dir = (c->flags & F_DF) ? -w : w;
+        if (osz) return 0;                            /* 32-bit string op: TODO */
         uint32_t cnt = rep ? c->r[1] : 1, ss = c->seg[(segov >= 0) ? segov : 3]; uint16_t si = c->r[6];
         while (cnt) { uint32_t sl = (seg_base(ss)) + si, v = imem_r8(sl);
                       if (w == 2) v |= (uint32_t)imem_r8((seg_base(ss)) + (uint16_t)(si + 1)) << 8;
@@ -523,20 +568,24 @@ static int istep(icpu *c)
         c->ip = (uint16_t)(c->ip + idx + (take ? rel : 0)); return 1;
     }
     if (op == 0xEB) { int8_t rel = (int8_t)CB(idx++); c->ip = (uint16_t)(c->ip + idx + rel); return 1; }
-    if (op == 0xE9) { int16_t rel = (int16_t)(CB(idx) | (CB(idx + 1) << 8)); idx += 2;
+    if (op == 0xE9) { int16_t rel; if (osz) return 0; rel = (int16_t)(CB(idx) | (CB(idx + 1) << 8)); idx += 2;
                       c->ip = (uint16_t)(c->ip + idx + rel); return 1; }
     if (op == 0xE8) {                                  /* CALL near relative */
-        int16_t rel = (int16_t)(CB(idx) | (CB(idx + 1) << 8)); idx += 2;
-        uint16_t nip = (uint16_t)(c->ip + idx);        /* return address */
-        uint16_t sp = (uint16_t)(c->r[4] - 2);
+        int16_t rel; uint16_t nip, sp;
+        if (osz) return 0;                            /* 32-bit near call: TODO */
+        rel = (int16_t)(CB(idx) | (CB(idx + 1) << 8)); idx += 2;
+        nip = (uint16_t)(c->ip + idx);                 /* return address */
+        sp = (uint16_t)(c->r[4] - 2);
         wr_mem((seg_base(c->seg[2])) + sp, 2, nip);
-        c->r[4] = sp; c->ip = (uint16_t)(nip + rel); return 1;
+        c->r[4] = (c->r[4] & 0xFFFF0000u) | sp; c->ip = (uint16_t)(nip + rel); return 1;
     }
     if (op == 0xC3 || op == 0xC2) {                    /* RET near (+ imm16 pop) */
-        uint16_t sp = c->r[4];
-        uint16_t ret = (uint16_t)rd_mem((seg_base(c->seg[2])) + sp, 2);
-        uint16_t extra = (op == 0xC2) ? (uint16_t)(CB(idx) | (CB(idx + 1) << 8)) : 0;
-        c->r[4] = (uint16_t)(sp + 2 + extra); c->ip = ret; return 1;
+        uint16_t sp, ret, extra;
+        if (osz) return 0;                            /* 32-bit near ret: TODO */
+        sp = (uint16_t)c->r[4];
+        ret = (uint16_t)rd_mem((seg_base(c->seg[2])) + sp, 2);
+        extra = (op == 0xC2) ? (uint16_t)(CB(idx) | (CB(idx + 1) << 8)) : 0;
+        c->r[4] = (c->r[4] & 0xFFFF0000u) | (uint16_t)(sp + 2 + extra); c->ip = ret; return 1;
     }
     if (op >= 0xE0 && op <= 0xE3) {
         int8_t rel = (int8_t)CB(idx++); int take;

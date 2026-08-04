@@ -1324,6 +1324,38 @@ exactly the tractable, in-our-control frontier run 52 predicted. `g_dpmi_use_int
 the kernel BOP path (which keeps `DPMIBACK` green) is preserved behind it until the interpreter is at
 least as capable.
 
+### VM run 54 (2026-08-04) — 32-bit operand support: the PM interpreter runs deeper into the C runtime `[FACT, real CPU]`
+
+The first opcode-coverage increment on the run-53 emulation path. The interpreter (`v86interp.h`) was
+16-bit only (it bailed on the `0x66` operand-size prefix); a DPMI C runtime does 32-bit register math in
+its 16-bit segment via `0x66`. Widened it, **test-first** (`tools/dostest/interp_test.c`, 75/75 green,
+all pre-existing 16-bit checks intact):
+
+- **Register file widened to 32-bit** (`icpu.r[]` = `uint32_t[8]`) with correct x86 **partial-register
+  semantics** — a 16-bit write preserves `E-reg[31:16]`; an 8-bit write preserves the other 24 bits.
+- **Width-aware helpers**: `wmask`/`wsign`, `grw`/`srw` (read/write a register by width 1/2/4),
+  `rd_mem`/`wr_mem` 4-byte paths, and **64-bit-safe carry** in `do_add`/`do_sub` so 32-bit `CF` is right
+  at the boundary. `do_logic`/`do_shrot` take the width mask too.
+- **`0x66` now sets `W = 4`** (was a hard bail), threaded through ALU, group1 (`80/81/83`), INC/DEC,
+  TEST, MOV (reg/mem + `imm32`), XCHG, PUSH/POP r32 (4-byte stack slot), shifts, LEA, moffs.
+- **New `0F` two-byte map** with MOVZX/MOVSX (`0F B6/B7/BE/BF`) — the exact instruction run 53 stopped on.
+- Opcodes whose 32-bit forms aren't done yet (string ops, near CALL/JMP/RET, seg PUSH/POP) **bail safely
+  on `osz`** rather than mis-execute, so the DPMI interp logs them as the next to-do instead of corrupting
+  state.
+
+**Result (build `dpmi-harness-v48`, `I310102.EXE`):** the interpreter ran *past* run 53's wall — executed
+the 32-bit `MOVZX ESI,SI` / `SHL ESI,4`, serviced **more** of the C-runtime selector setup (`setlimit
+0x17`, `setbase 0x1f`, `setlimit 0x1f` — deeper into the reconfiguration that deadlocked the kernel in
+runs 51–52), advanced `CS:IP 0xa0 -> 0xbe` (14 -> 25 steps), and exited clean (no deadlock). It now stops
+on `66 0F 02 C9` = **`LAR ECX, CX`** (Load Access Rights) followed by `SHR ECX, 8` — the standard "read a
+descriptor's access byte" idiom.
+
+**Next (run 55): PM descriptor-introspection instructions.** `LAR` (and likely `LSL` load-segment-limit,
+`VERR`/`VERW`) are protected-mode ops that read the descriptor named by a selector. The host already holds
+that state in `g_ldt[]`; the fix is a descriptor hook (like `g_seg2lin`) that the interpreter consults to
+return the access-rights byte and set `ZF`. Small, bounded — the pattern established in run 54 (add the
+opcode the log names, test off-VM, VM-confirm) continues.
+
 ## Open unknowns (what the spike must nail down) `[VERIFY]`
 
 1. **The mode-switch primitive.** Exactly how ntvdm flips the VDM from V86→PM after the client

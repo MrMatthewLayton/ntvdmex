@@ -190,10 +190,52 @@ int main(void)
       CHECK(step1(&c) == 1 && c.ip == 1, "bail: NOP runs");
       CHECK(step1(&c) == 0 && c.ip == 1, "bail: INT 20h returns 0, ip unchanged"); }
 
-    /* ---- T19: bail on 32-bit prefix (0x66) ----------------------------- */
-    { icpu c = mkcpu(); BYTE p[] = { 0x66, 0x40 };
+    /* ---- T19: 32-bit operand-size (0x66) -- run 54 --------------------- *
+     * A C runtime under DPMI does 32-bit register math in a 16-bit segment  *
+     * via the 0x66 prefix (run 53's I310102 stopped on MOVZX ESI,SI). These *
+     * exercise the widened register file + width-aware helpers.             */
+    { icpu c = mkcpu(); BYTE p[] = { 0x66, 0x0F, 0xB7, 0xF6 };   /* MOVZX ESI,SI */
+      load(&c, 0x1000, 0, p, sizeof p); c.r[6] = 0x1234ABCD;
+      CHECK(step1(&c) == 1 && c.ip == 4, "66 0F B7: MOVZX ESI,SI runs, ip += 4");
+      CHECK(c.r[6] == 0x0000ABCD, "movzx: ESI = zero-extended SI"); }
+
+    { icpu c = mkcpu(); BYTE p[] = { 0x66, 0xC1, 0xE6, 0x04 };   /* SHL ESI,4 */
+      load(&c, 0x1000, 0, p, sizeof p); c.r[6] = 0x0000ABCD;
+      CHECK(step1(&c) == 1 && c.r[6] == 0x000ABCD0, "66 C1 /4: SHL ESI,4 (32-bit)"); }
+
+    { icpu c = mkcpu(); BYTE p[] = { 0x66, 0xB8, 0x78, 0x56, 0x34, 0x12 };  /* MOV EAX,imm32 */
       load(&c, 0x1000, 0, p, sizeof p);
-      CHECK(step1(&c) == 0 && c.ip == 0, "bail: 0x66 operand-size prefix"); }
+      CHECK(step1(&c) == 1 && c.ip == 6, "66 B8: MOV EAX,imm32 runs, ip += 6");
+      CHECK(c.r[0] == 0x12345678, "mov: EAX = imm32"); }
+
+    { icpu c = mkcpu(); BYTE p[] = { 0x66, 0x01, 0xC0 };         /* ADD EAX,EAX */
+      load(&c, 0x1000, 0, p, sizeof p); c.r[0] = 0x80000000u;
+      CHECK(step1(&c) == 1 && c.r[0] == 0, "66 01: ADD EAX,EAX = 0 (32-bit wrap)");
+      CHECK((c.flags & F_CF) && (c.flags & F_ZF), "add32: CF+ZF at 32-bit boundary"); }
+
+    { icpu c = mkcpu(); BYTE p[] = { 0x66, 0x0F, 0xBE, 0xC0 };   /* MOVSX EAX,AL */
+      load(&c, 0x1000, 0, p, sizeof p); c.r[0] = 0x00000080u;
+      CHECK(step1(&c) == 1 && c.r[0] == 0xFFFFFF80u, "66 0F BE: MOVSX EAX,AL sign-extends"); }
+
+    /* partial-register semantics: a 16-bit write preserves E-reg[31:16] */
+    { icpu c = mkcpu(); BYTE p[] = { 0xB8, 0xCD, 0xAB };         /* MOV AX,0xABCD (no 0x66) */
+      load(&c, 0x1000, 0, p, sizeof p); c.r[0] = 0x12345678u;
+      CHECK(step1(&c) == 1 && c.r[0] == 0x1234ABCDu, "mov ax preserves high EAX"); }
+
+    /* PUSH/POP r32 with 0x66: 4-byte stack slot, SP +/- 4 */
+    { icpu c = mkcpu(); BYTE p[] = { 0x66, 0x53, 0x66, 0x5B };   /* PUSH EBX; POP EBX */
+      load(&c, 0x1000, 0, p, sizeof p);
+      c.seg[2] = 0x0000; c.r[4] = 0x0100; c.r[3] = 0xCAFEF00Du;
+      CHECK(step1(&c) == 1 && (c.r[4] & 0xFFFF) == 0x00FC, "66 push ebx: SP -= 4");
+      CHECK(rd_mem(0xFC, 4) == 0xCAFEF00Du, "66 push ebx: 4 bytes on stack");
+      c.r[3] = 0;
+      CHECK(step1(&c) == 1 && c.r[3] == 0xCAFEF00Du && (c.r[4] & 0xFFFF) == 0x0100,
+            "66 pop ebx: value + SP restored"); }
+
+    /* a bare 0x66 before a byte op is ignored (operand size irrelevant) */
+    { icpu c = mkcpu(); BYTE p[] = { 0x66, 0x04, 0x01 };         /* ADD AL,1 (66 ignored) */
+      load(&c, 0x1000, 0, p, sizeof p); c.r[0] = 0x05;
+      CHECK(step1(&c) == 1 && (c.r[0] & 0xFF) == 0x06, "66 before byte-op: width stays 1"); }
 
     /* ---- T20: full read-scan fill loop, exit by counter ---------------- *
      * MOV AL,ES:[SI] / OR AL,AL / JNZ found / INC SI / DEC DI / JNZ loop    *
