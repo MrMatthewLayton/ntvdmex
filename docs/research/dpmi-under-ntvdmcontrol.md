@@ -1400,19 +1400,35 @@ width, sign-extension, and the stack write are all checkable natively.
 silicon) headless and **ran a full DPMI PM session through the host interpreter on the real CPU** — the
 `.COM` client `dpmitest.com` executed `0400`/`0100`/`0205`/`0204`/`0300`/`0301`/`0303` (incl. nested
 callbacks) with no regression from the new opcode. That confirms v50 is healthy on hardware. The
-*specific* `i310102` advance past `0x0f:0xcc` is **pending a one-shot interactive confirm** (`D:\i31run.bat`
-on the run-56 ISO): the headless multi-client autorun can't reach `i310102` because `dpmitest.com` runs
-first and hangs on its 2nd `0301` real-mode call, and the self-refresh that would reorder the batch fails
-(a running `.bat` is file-locked — so `i31run.bat`, a single-client CD-direct runner, was added to bridge
-this). **Predicted stop** from the `68 3a 02 cb …` dump: PUSH imm executes, `CS:IP 0xcc → 0xcf`, and the
-next unmodeled opcode is `0xCB` = **RETF** — i.e. the client is doing a `PUSH seg; PUSH off; RETF`
-far-transfer, so run 57's opcode is far RET.
+*specific* `i310102` advance past `0x0f:0xcc` was **confirmed together with run 57** (`i31run.bat`, below):
+the headless multi-client autorun can't reach `i310102` (`dpmitest.com` runs first and hangs on its 2nd
+`0301` real-mode call, and the self-refresh that would reorder the batch fails — a running `.bat` is
+file-locked), so `i31run.bat`, a single-client CD-direct runner, was added and launched interactively.
 
-**Next (run 57): far `RET` (`0xCB` RETF, `0xCA` RETF imm16).** In the interpreter this pops the W-wide
-offset then the 2-byte selector into CS — trivial because `seg_base` already resolves the popped selector
-via the LDT (the same machinery LAR/LSL use). It's the natural companion to `PUSH imm` here (the observed
-idiom is `PUSH seg; PUSH off; RETF`) and, unlike the mode-12h path, PM code far-transfers constantly, so
-it will recur. Confirm run 56's `i310102` advance (via `i31run.bat`) at the same time.
+### VM run 57 (2026-08-04) — far `RET`: PUSH imm + RETF confirmed, the far-transfer follows the LDT `[FACT, real CPU]`
+
+`RETF` (`0xCB`) + `RETF imm16` (`0xCA`) added to the interpreter: pop the W-wide offset, then a **2-byte
+selector into CS** — trivial because `seg_base` already resolves the popped selector via the LDT (the same
+machinery LAR/LSL use). This is the natural companion to run 56's PUSH imm: the observed idiom is
+`PUSH seg; PUSH off; RETF`, a manual far-transfer. Off-VM **88 → 94/94** (`interp_test.c` T39-T41: plain
+RETF sets CS:IP + SP+=4; `RETF imm16` releases the extra bytes; and the full `PUSH 0x0800; PUSH 0x0100;
+RETF` idiom transfers to `0800:0100` with SP restored).
+
+**VM-confirmed (build `dpmi-harness-v51`, `i310102` via `i31run.bat`) — PUSH imm AND far RET both work:**
+```
+run 55 wall (v49):  CS:IP=0x0f:0xcc  bytes=68 3a 02 cb ...  steps=0x1d  (29)
+run 57      (v51):  CS:IP=0x1f:0x8d  bytes=c9 c3 68 77 ...  steps=0x312 (786)  STAGE2: complete
+```
+The interpreter blew past run 55/56's `PUSH imm16` wall and **CS changed `0x0f -> 0x1f`** — the
+`PUSH seg; PUSH off; RETF` far-transfer following the popped selector through the LDT into selector `0x1f`,
+the very descriptor the `setaccess 0x1f -> 0xFA` code-typing (the run 51-52 kernel-deadlock wall) just
+retyped to CODE. 786 interpreted steps (vs 29), a **clean exit**, and the C runtime reached `main()`-level
+I/O (it printed a real DOS string, "this test may fail for 16-bit clients due to selector tiling"). Both
+run 56 (PUSH imm) and run 57 (far RET) are proven on the real CPU in one shot.
+
+**Next (run 58): `LEAVE` (`0xC9` = `MOV SP,BP; POP BP`).** The stopping opcode is a function *epilogue* —
+the interpreter is now walking ordinary C stack-frame teardown (`c9 c3` = `LEAVE; RET near`). Trivial:
+`SP = BP; BP = pop()`. Likely paired soon with `ENTER` (`0xC8`, the prologue) as the log demands.
 
 ## Open unknowns (what the spike must nail down) `[VERIFY]`
 

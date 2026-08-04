@@ -620,6 +620,21 @@ static int istep(icpu *c)
         extra = (op == 0xC2) ? (uint16_t)(CB(idx) | (CB(idx + 1) << 8)) : 0;
         c->r[4] = (c->r[4] & 0xFFFF0000u) | (uint16_t)(sp + 2 + extra); c->ip = ret; return 1;
     }
+
+    /* ---- RETF (CB) / RETF imm16 (CA): far return -- pop offset then a 2-byte  *
+     * SELECTOR into CS. In PM `seg_base` resolves that selector via the LDT (the *
+     * same machinery LAR/LSL use), so the client's `PUSH seg; PUSH off; RETF`    *
+     * far-transfer idiom (run 56's wall) just follows through. run 57. */
+    if (op == 0xCB || op == 0xCA) {
+        uint16_t sp, off, sel, extra;
+        if (osz) return 0;                            /* 32-bit far ret: TODO */
+        sp  = (uint16_t)c->r[4];
+        off = (uint16_t)rd_mem((seg_base(c->seg[2])) + sp, 2);
+        sel = (uint16_t)rd_mem((seg_base(c->seg[2])) + (uint16_t)(sp + 2), 2);
+        extra = (op == 0xCA) ? (uint16_t)(CB(idx) | (CB(idx + 1) << 8)) : 0;
+        c->r[4] = (c->r[4] & 0xFFFF0000u) | (uint16_t)(sp + 4 + extra);
+        c->seg[1] = sel; c->ip = off; return 1;
+    }
     if (op >= 0xE0 && op <= 0xE3) {
         int8_t rel = (int8_t)CB(idx++); int take;
         if (op == 0xE3) take = (c->r[1] == 0);        /* JCXZ */

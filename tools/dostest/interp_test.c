@@ -435,6 +435,40 @@ int main(void)
       CHECK(MEM[((uint32_t)0x8000<<4)+0xFC]==0x78 && MEM[((uint32_t)0x8000<<4)+0xFF]==0x12,
             "push imm32: dword 0x12345678 written at SS:SP"); }
 
+    /* ---- T39: RETF (CB) pops offset then a 2-byte selector into CS -- run 57 - *
+     * The far-return that follows run 56's `PUSH seg; PUSH off; RETF` idiom.    */
+    { icpu c = mkcpu(); BYTE p[] = { 0xCB };               /* RETF */
+      c.seg[2] = 0x8000; c.r[4] = 0x0100;                  /* SS, SP */
+      MEM[((uint32_t)0x8000<<4)+0x100] = 0x34;             /* [SP]   = offset 0x1234 */
+      MEM[((uint32_t)0x8000<<4)+0x101] = 0x12;
+      MEM[((uint32_t)0x8000<<4)+0x102] = 0x78;             /* [SP+2] = selector 0x5678 */
+      MEM[((uint32_t)0x8000<<4)+0x103] = 0x56;
+      load(&c, 0x1000, 0, p, sizeof p); step1(&c);
+      CHECK(c.ip == 0x1234 && c.seg[1] == 0x5678, "CB: RETF sets IP=off, CS=selector");
+      CHECK(c.r[4] == 0x0104, "retf: SP += 4 (offset + selector)"); }
+
+    /* ---- T40: RETF imm16 (CA) also releases imm16 stack bytes ---------------- */
+    { icpu c = mkcpu(); BYTE p[] = { 0xCA, 0x08, 0x00 };   /* RETF 8 */
+      c.seg[2] = 0x8000; c.r[4] = 0x0100;
+      MEM[((uint32_t)0x8000<<4)+0x100] = 0x00; MEM[((uint32_t)0x8000<<4)+0x101] = 0x02; /* off 0x0200 */
+      MEM[((uint32_t)0x8000<<4)+0x102] = 0x0F; MEM[((uint32_t)0x8000<<4)+0x103] = 0x00; /* sel 0x000F */
+      load(&c, 0x1000, 0, p, sizeof p); step1(&c);
+      CHECK(c.ip == 0x0200 && c.seg[1] == 0x000F, "CA: RETF imm16 sets CS:IP");
+      CHECK(c.r[4] == 0x010C, "retf imm16: SP += 4 + 8"); }
+
+    /* ---- T41: the full idiom -- PUSH seg; PUSH off; RETF far-transfers -------- *
+     * seg_base = seg<<4 here (g_seg2lin NULL), so CS=0x0800 lands code at 0x8000. */
+    { icpu c = mkcpu();
+      BYTE code[] = { 0x68, 0x00, 0x08,   /* PUSH 0x0800 (target segment) */
+                      0x68, 0x00, 0x01,   /* PUSH 0x0100 (target offset)  */
+                      0xCB };             /* RETF -> 0x0800:0x0100        */
+      c.seg[2] = 0x9000; c.r[4] = 0x0200;                 /* SS, SP */
+      load(&c, 0x1000, 0, code, sizeof code);
+      MEM[((uint32_t)0x0800<<4)+0x100] = 0xF4;            /* HLT at the target -> run() bails */
+      run(&c);
+      CHECK(c.seg[1] == 0x0800 && c.ip == 0x0100, "push seg/off + RETF: transferred to 0800:0100");
+      CHECK(c.r[4] == 0x0200, "far-transfer: SP back to start (2 pushes + retf pop 4)"); }
+
     printf("\n%d checks, %d failed\n", total, fails);
     return fails ? 1 : 0;
 }
