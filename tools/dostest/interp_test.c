@@ -55,6 +55,17 @@ static icpu mkcpu(void)
     return c;
 }
 
+/* Tiny descriptor table for the LAR/LSL battery (run 55): sel 0x08 = code 0xFA
+   limit 0xFFFF; sel 0x10 = data 0xF3 (G/D nibble 0x4) limit 0x25CF; else invalid. */
+static int test_sel_desc(uint16_t sel, uint32_t *ar, uint32_t *limit)
+{
+    switch (sel & 0xFFF8) {
+    case 0x08: if (ar) *ar = (0xFAu << 8);                        if (limit) *limit = 0xFFFF; return 1;
+    case 0x10: if (ar) *ar = (0xF3u << 8) | (0x4u << 20);         if (limit) *limit = 0x25CF; return 1;
+    default:   return 0;
+    }
+}
+
 int main(void)
 {
     printf("== mode-12h fill-loop interpreter battery ==\n");
@@ -236,6 +247,31 @@ int main(void)
     { icpu c = mkcpu(); BYTE p[] = { 0x66, 0x04, 0x01 };         /* ADD AL,1 (66 ignored) */
       load(&c, 0x1000, 0, p, sizeof p); c.r[0] = 0x05;
       CHECK(step1(&c) == 1 && (c.r[0] & 0xFF) == 0x06, "66 before byte-op: width stays 1"); }
+
+    /* ---- T20: LAR/LSL descriptor introspection -- run 55 --------------- *
+     * A DPMI C runtime reads a descriptor's access byte with LAR;CX / SHR.  *
+     * In V86 (g_sel_desc==NULL) these bail; with the hook they consult it.  */
+    g_sel_desc = test_sel_desc;
+    { icpu c = mkcpu(); BYTE p[] = { 0x66, 0x0F, 0x02, 0xC9 };   /* LAR ECX,CX */
+      load(&c, 0x1000, 0, p, sizeof p); c.r[1] = 0x0008;         /* CX = sel 0x08 (code 0xFA) */
+      CHECK(step1(&c) == 1 && c.ip == 4, "66 0F 02: LAR ECX,CX runs, ip += 4");
+      CHECK(c.r[1] == 0x0000FA00 && (c.flags & F_ZF), "lar: ECX = access<<8, ZF set (valid sel)"); }
+
+    { icpu c = mkcpu(); BYTE p[] = { 0x66, 0x0F, 0x02, 0xC9, 0x66, 0xC1, 0xE9, 0x08 }; /* LAR;SHR ECX,8 */
+      load(&c, 0x1000, 0, p, sizeof p); c.r[1] = 0x0010;         /* CX = sel 0x10 (data 0xF3) */
+      step1(&c); step1(&c);                                      /* LAR then SHR ECX,8 */
+      CHECK((c.r[1] & 0xFF) == 0xF3, "lar+shr: CL = descriptor access byte (the C-runtime idiom)"); }
+
+    { icpu c = mkcpu(); BYTE p[] = { 0x66, 0x0F, 0x02, 0xC9 };   /* LAR ECX,CX -- invalid sel */
+      load(&c, 0x1000, 0, p, sizeof p); c.r[1] = 0x0000; c.flags |= F_ZF; /* ZF preset */
+      CHECK(step1(&c) == 1 && !(c.flags & F_ZF), "lar: invalid selector clears ZF");
+      CHECK(c.r[1] == 0x0000, "lar: dest unchanged on invalid selector"); }
+
+    { icpu c = mkcpu(); BYTE p[] = { 0x66, 0x0F, 0x03, 0xC9 };   /* LSL ECX,CX */
+      load(&c, 0x1000, 0, p, sizeof p); c.r[1] = 0x0010;         /* CX = sel 0x10 (limit 0x25CF) */
+      CHECK(step1(&c) == 1 && c.r[1] == 0x000025CF && (c.flags & F_ZF),
+            "66 0F 03: LSL ECX,CX = byte limit, ZF set"); }
+    g_sel_desc = 0;
 
     /* ---- T20: full read-scan fill loop, exit by counter ---------------- *
      * MOV AL,ES:[SI] / OR AL,AL / JNZ found / INC SI / DEC DI / JNZ loop    *

@@ -61,6 +61,14 @@ static uint32_t (*g_seg2lin)(uint16_t seg) = 0;
 static uint32_t seg_base(uint16_t seg)
 { return g_seg2lin ? g_seg2lin(seg) : ((uint32_t)seg << 4); }
 
+/* Descriptor-introspection hook for PM (LAR/LSL, run 55). Given a selector, returns
+   1 if it names a valid, accessible descriptor and fills *ar (access-rights in LAR
+   format: access byte at bits 8-15, G/D/AVL nibble at 20-23) and *limit (byte-
+   granular). 0 = invalid selector (the op then clears ZF, leaving the dest reg
+   unchanged). NULL in V86 mode -> LAR/LSL bail (they don't occur there). The DPMI
+   host sets this to read its g_ldt[] table. */
+static int (*g_sel_desc)(uint16_t sel, uint32_t *ar, uint32_t *limit) = 0;
+
 static uint32_t rd_mem(uint32_t lin, int w)
 { uint32_t v = imem_r8(lin);
   if (w >= 2) v |= (uint32_t)imem_r8(lin + 1) << 8;
@@ -269,6 +277,18 @@ static int istep(icpu *c)
                                     : (sw == 1 ? g8(c, m.rm_reg) : (uint32_t)g16(c, m.rm_reg));
               if (sx && (v & wsign(sw))) v |= ~wmask(sw);   /* sign-extend to 32 */
               srw(c, m.g, W, v & wmask(W)); }
+            c->ip = (uint16_t)(c->ip + idx); return 1;
+        }
+        if (op2 == 0x02 || op2 == 0x03) {             /* LAR / LSL r, r/m16 (run 55) */
+            modrm_t m; uint16_t sel; uint32_t ar, lim;
+            if (!g_sel_desc) return 0;                /* V86: no descriptor table -> bail */
+            idx += decode_modrm(c, cb, idx, segov, &m);
+            if (m.is_mem && m.lin >= GUEST_HI) return 0;
+            sel = m.is_mem ? (uint16_t)rd_mem(m.lin, 2) : g16(c, m.rm_reg);  /* selector is 16-bit */
+            if (g_sel_desc(sel, &ar, &lim)) {         /* valid -> load rights/limit, set ZF */
+                srw(c, m.g, W, (op2 == 0x02 ? ar : lim) & wmask(W));
+                c->flags |= F_ZF;
+            } else c->flags &= ~F_ZF;                 /* invalid -> clear ZF, dest unchanged */
             c->ip = (uint16_t)(c->ip + idx); return 1;
         }
         return 0;                                     /* other 0F ops: bail */

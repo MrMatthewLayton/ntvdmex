@@ -1083,6 +1083,19 @@ static DWORD dpmi_sel_base(WORD sel)
     return g_dpmi_code_base;                                    /* null / unknown selector */
 }
 
+/* Descriptor introspection for the PM interpreter's LAR/LSL (run 55). Returns 1 if
+   `sel` names a populated descriptor (access byte != 0) and fills the access-rights
+   in LAR format (access byte at bits 8-15, the G/D/AVL flag nibble at 20-23) + the
+   byte-granular limit. The null selector (idx 0) and unallocated slots are invalid. */
+static int dpmi_sel_desc(uint16_t sel, uint32_t *ar, uint32_t *limit)
+{
+    int idx = (sel & 0xFFFF) >> 3;
+    if (idx < 1 || idx >= 512 || g_ldt[idx].access == 0) return 0;
+    if (ar)    *ar    = ((uint32_t)g_ldt[idx].access << 8) | ((uint32_t)(g_ldt[idx].flags & 0xF) << 20);
+    if (limit) *limit = (uint32_t)g_ldt[idx].limit;
+    return 1;
+}
+
 /* Un-patch / re-patch the shared code segment around a V86 excursion (INT 31h 0301/
    0303). The switch-time scan rewrote every `CD 31`/`CD 21` in the code segment to a
    BOP so PM software-ints reflect to us -- but that segment is ALSO the V86 view, so a
@@ -1712,6 +1725,7 @@ static int dpmi_run_pm_interp(dos_machine_t *mp, volatile BYTE *tib)
 {
     icpu c; long guard = 0; char rb[256]; char *r;
     g_seg2lin = dpmi_seg2lin;                 /* interpreter now resolves LDT bases */
+    g_sel_desc = dpmi_sel_desc;               /* ...and answers LAR/LSL from g_ldt[] (run 55) */
     dpmi_icpu_load(&c, tib);
     r = rb;
     r = zput(r, "DPMI-INTERP: run 53 host PM begins CS:IP=0x"); r = zhex(r, c.seg[1]);
@@ -1778,7 +1792,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     (void)hInst; (void)hPrev; (void)lpCmd; (void)nShow;
     progpath[0] = 0; args[0] = 0;
 
-    p = zput(p, "NTVDMEX clean host\r\nSTAGE0: WinMain entered [build dpmi-harness-v48]\r\n");
+    p = zput(p, "NTVDMEX clean host\r\nSTAGE0: WinMain entered [build dpmi-harness-v49]\r\n");
     log_write(LOG_PATH, report, p);
     serial_init();                                      /* DPMI harness: COM1 log sink */
     serial_out(report, p);

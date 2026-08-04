@@ -1356,6 +1356,32 @@ that state in `g_ldt[]`; the fix is a descriptor hook (like `g_seg2lin`) that th
 return the access-rights byte and set `ZF`. Small, bounded — the pattern established in run 54 (add the
 opcode the log names, test off-VM, VM-confirm) continues.
 
+### VM run 55 (2026-08-04) — LAR/LSL: the interpreter runs PAST the setaccess-to-code wall `[FACT, real CPU]`
+
+Second opcode increment. Run 54 stopped on `LAR ECX,CX` (Load Access Rights) — a protected-mode
+descriptor-introspection op. Added `LAR` (`0F 02`) and `LSL` (`0F 03`) to the interpreter's `0F` map, plus
+a **descriptor hook** `g_sel_desc` (mirroring `g_seg2lin`): NULL in V86 (the ops bail there), and in PM
+the DPMI host sets it to `dpmi_sel_desc()`, which reads `g_ldt[]` and returns the access-rights in LAR
+format (access byte at bits 8-15, G/D/AVL nibble at 20-23) + the byte-granular limit, setting `ZF` for a
+populated selector. Off-VM battery: **81/81 green** (the C-runtime idiom `LAR ECX,CX; SHR ECX,8 -> CL =
+access byte`, valid/invalid `ZF`, `LSL` limit).
+
+**Result (build `dpmi-harness-v49`, `I310102.EXE`) — the run-51/52 wall is fully traversed:**
+```
+INT31h 0009 setaccess sel 0x1f -> 0xFA      ← the code-typing of SS that DEADLOCKED the kernel (runs 51-52)
+DPMI-INTERP: unmodeled opcode at 0x0f:0xcc bytes=68 3a 02 cb ... (steps=0x1d)
+STAGE2: complete                            ← clean exit, no deadlock
+```
+The interpreter executed `LAR`, then serviced the very `INT31h 0009` that retypes the stack selector to a
+**code** type — the operation whose *next stack write* `#GP`s the real CPU and deadlocks the kernel — and
+**kept running**. In emulation there is no descriptor-type enforcement, so the stack access simply
+succeeds. This is the wall that defined runs 51–54, now behind us. It advanced `CS:IP 0xbe -> 0xcc` and
+stopped on `0x68` = **`PUSH imm16`**, a trivial common opcode the mode-12h interpreter never needed.
+
+**Next (run 56): `PUSH imm` (`0x68` imm16/imm32, `0x6A` imm8)** and whatever follows — ordinary
+integer/stack opcodes now, not PM-specific ones. The frontier has shifted from "can we even run PM?" to
+routine opcode coverage of a normal C runtime.
+
 ## Open unknowns (what the spike must nail down) `[VERIFY]`
 
 1. **The mode-switch primitive.** Exactly how ntvdm flips the VDM from V86→PM after the client
