@@ -1426,9 +1426,33 @@ retyped to CODE. 786 interpreted steps (vs 29), a **clean exit**, and the C runt
 I/O (it printed a real DOS string, "this test may fail for 16-bit clients due to selector tiling"). Both
 run 56 (PUSH imm) and run 57 (far RET) are proven on the real CPU in one shot.
 
-**Next (run 58): `LEAVE` (`0xC9` = `MOV SP,BP; POP BP`).** The stopping opcode is a function *epilogue* —
-the interpreter is now walking ordinary C stack-frame teardown (`c9 c3` = `LEAVE; RET near`). Trivial:
-`SP = BP; BP = pop()`. Likely paired soon with `ENTER` (`0xC8`, the prologue) as the log demands.
+### VM run 58 (2026-08-05) — `LEAVE`: the C stack-frame epilogue `[FACT — VM-confirmed]`
+
+`LEAVE` (`0xC9`) added to the interpreter: `SP = BP` (discard locals), then `BP = pop()` (restore the
+caller's frame pointer). This is exactly the opcode run 57 stopped on — `c9 c3` = `LEAVE; RET near`, an
+ordinary C function *epilogue*, the mirror of the `PUSH BP; MOV BP,SP` / `ENTER` prologue. 16-bit only;
+the `0x66` 32-bit form (`ESP/EBP`) bails as `TODO`, matching the neighbouring stack ops. Off-VM
+**94 → 98/98** (`interp_test.c` T42-T43: `SP<-BP` then pop with locals discarded and `ip+=1`; and the
+E-reg high halves of SP/BP preserved under the 16-bit form).
+
+**VM-confirmed 2026-08-05** on the real CPU via interactive `D:\i31run.bat` (host `dpmi-harness-v52`,
+client `i310102`). The interpreter walked **past** run 57's `0x1f:0x8d` (`c9 c3`) epilogue wall — proving
+`LEAVE` executed — and advanced **786 → 796 steps** (`steps=0x31c`), the C runtime again reaching
+`main()`-level I/O (printed "this test may fail for 16-bit clients due to selector tiling") and exiting
+clean (`STAGE2: complete`). The new wall is a genuinely different opcode further in:
+
+```
+DPMI-INTERP: unmodeled opcode at CS:IP=0x0000001f:0x000001b3 bytes=9c 66 52 66 52 66 50 51 (steps=0x0000031c)
+```
+
+`0x9C` = **`PUSHF`** (push the 16-bit FLAGS), heading a `PUSHF; PUSH EDX; PUSH EDX; PUSH EAX; PUSH ECX`
+register-save sequence (the `66`-prefixed 32-bit pushes we already model). So run 58 is a clean, predicted
+increment: `LEAVE` reached, one more opcode surfaced.
+
+**Next (run 59): `PUSHF` (`0x9C`)** — push FLAGS onto the stack (its mate `POPF`/`0x9D` will surface right
+after the matching restore). The interpreter already tracks flags in `c->flags`, so this is a plain
+`push16(FLAGS)`; watch the `0x66`-prefixed 32-bit `PUSHFD` form and bail-or-model it like the other stack
+ops. Read the next `DPMI-INTERP: unmodeled opcode` line off `i31run.bat` and follow it.
 
 ## Open unknowns (what the spike must nail down) `[VERIFY]`
 

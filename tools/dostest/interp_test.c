@@ -469,6 +469,26 @@ int main(void)
       CHECK(c.seg[1] == 0x0800 && c.ip == 0x0100, "push seg/off + RETF: transferred to 0800:0100");
       CHECK(c.r[4] == 0x0200, "far-transfer: SP back to start (2 pushes + retf pop 4)"); }
 
+    /* ---- T42: LEAVE (C9) -- MOV SP,BP; POP BP, the callee epilogue -- run 58 - *
+     * SP starts below BP (locals allocated); LEAVE discards them (SP<-BP) then   *
+     * pops the caller's BP. Paired with ENTER / `PUSH BP; MOV BP,SP`.            */
+    { icpu c = mkcpu(); BYTE p[] = { 0xC9 };               /* LEAVE */
+      c.seg[2] = 0x8000; c.r[4] = 0x00F8; c.r[5] = 0x0100;  /* SS, SP (locals), BP */
+      MEM[((uint32_t)0x8000<<4)+0x100] = 0xBC;             /* [BP] = caller's BP 0x0ABC */
+      MEM[((uint32_t)0x8000<<4)+0x101] = 0x0A;
+      load(&c, 0x1000, 0, p, sizeof p); step1(&c);
+      CHECK(c.ip == 1, "C9: LEAVE, ip += 1");
+      CHECK(c.r[5] == 0x0ABC, "leave: BP <- caller's BP popped from [old BP]");
+      CHECK(c.r[4] == 0x0102, "leave: SP <- BP then +2 (locals discarded, BP popped)"); }
+
+    /* ---- T43: LEAVE preserves the high 16 bits of ESP/EBP (partial-reg) ------ */
+    { icpu c = mkcpu(); BYTE p[] = { 0xC9 };               /* LEAVE */
+      c.seg[2] = 0x8000; c.r[4] = 0xDEAD00F8; c.r[5] = 0xBEEF0100;
+      MEM[((uint32_t)0x8000<<4)+0x100] = 0xBC; MEM[((uint32_t)0x8000<<4)+0x101] = 0x0A;
+      load(&c, 0x1000, 0, p, sizeof p); step1(&c);
+      CHECK(c.r[5] == 0xBEEF0ABC && c.r[4] == 0xDEAD0102,
+            "leave: E-reg high halves of SP/BP preserved (16-bit LEAVE)"); }
+
     printf("\n%d checks, %d failed\n", total, fails);
     return fails ? 1 : 0;
 }

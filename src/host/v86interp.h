@@ -635,6 +635,21 @@ static int istep(icpu *c)
         c->r[4] = (c->r[4] & 0xFFFF0000u) | (uint16_t)(sp + 4 + extra);
         c->seg[1] = sel; c->ip = off; return 1;
     }
+
+    /* ---- LEAVE (C9): frame teardown -- MOV SP,BP; POP BP. Paired with the C  *
+     * runtime's function-prologue ENTER/`PUSH BP; MOV BP,SP`, so it lands on    *
+     * every callee return (run 57's far RET reaches main(), whose epilogue is   *
+     * this). SP first snaps to BP (discarding locals), then the caller's BP is  *
+     * popped. run 58. */
+    if (op == 0xC9) {
+        uint16_t sp, bp;
+        if (osz) return 0;                            /* 32-bit LEAVE (ESP/EBP): TODO */
+        sp = (uint16_t)c->r[5];                        /* SP <- BP */
+        bp = (uint16_t)rd_mem((seg_base(c->seg[2])) + sp, 2);
+        c->r[5] = (c->r[5] & 0xFFFF0000u) | bp;        /* BP <- pop */
+        c->r[4] = (c->r[4] & 0xFFFF0000u) | (uint16_t)(sp + 2);
+        c->ip = (uint16_t)(c->ip + idx); return 1;
+    }
     if (op >= 0xE0 && op <= 0xE3) {
         int8_t rel = (int8_t)CB(idx++); int take;
         if (op == 0xE3) take = (c->r[1] == 0);        /* JCXZ */
