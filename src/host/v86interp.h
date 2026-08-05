@@ -557,6 +557,32 @@ static int istep(icpu *c)
         c->r[4] = (c->r[4] & 0xFFFF0000u) | (uint16_t)(sp + 2); c->ip = (uint16_t)(c->ip + idx); return 1;
     }
 
+    /* ---- PUSHA/POPA (60/61): push/pop the whole GP file. A callee saves the    *
+     * register file on entry this way (run 61's I310102 stopped on `66 60` =      *
+     * PUSHAD). Push order AX,CX,DX,BX,SP,BP,SI,DI (indices 0..7) with the pushed  *
+     * SP being its value BEFORE the push; POPA restores DI..AX and DISCARDS the   *
+     * saved-SP slot. Values are W-wide (0x66 -> PUSHAD/POPAD); the stack offset   *
+     * stays 16-bit (address size). run 62. */
+    if (op == 0x60) {                                  /* PUSHA / PUSHAD */
+        uint16_t sp = (uint16_t)c->r[4];
+        uint32_t orig = grw(c, 4, W); int i;           /* SP/ESP before any push */
+        for (i = 0; i < 8; i++) {
+            uint32_t v = (i == 4) ? orig : grw(c, i, W);
+            sp = (uint16_t)(sp - W);
+            wr_mem((seg_base(c->seg[2])) + sp, W, v);
+        }
+        c->r[4] = (c->r[4] & 0xFFFF0000u) | sp; c->ip = (uint16_t)(c->ip + idx); return 1;
+    }
+    if (op == 0x61) {                                  /* POPA / POPAD */
+        uint16_t sp = (uint16_t)c->r[4]; int i;
+        for (i = 7; i >= 0; i--) {
+            if (i == 4) { sp = (uint16_t)(sp + W); continue; }   /* discard saved SP */
+            srw(c, i, W, rd_mem((seg_base(c->seg[2])) + sp, W));
+            sp = (uint16_t)(sp + W);
+        }
+        c->r[4] = (c->r[4] & 0xFFFF0000u) | sp; c->ip = (uint16_t)(c->ip + idx); return 1;
+    }
+
     /* ---- PUSH/POP segment regs (06/0E/16/1E push ES/CS/SS/DS, 07/17/1F pop  *
      * ES/SS/DS). QB saves/restores ES (and DS) around each pixel -- this was  *
      * the per-pixel bail that capped batching at ~1 pixel. POP CS (0F) is not *

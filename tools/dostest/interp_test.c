@@ -600,6 +600,42 @@ int main(void)
       c.r[0] = 5; c.r[2] = 0; c.r[1] = 0; load(&c, 0x1000, 0, p, sizeof p);
       { int adv = step1(&c); CHECK(adv == 0 && c.ip == 0, "div by zero: interp bails (no UB), IP unchanged"); } }
 
+    /* ---- T59: PUSHA (60) -- push AX,CX,DX,BX,SP,BP,SI,DI; saved SP = pre-push - */
+    { icpu c = mkcpu(); BYTE p[] = { 0x60 };              /* PUSHA */
+      c.seg[2] = 0x8000; c.r[4] = 0x0100;
+      c.r[0]=0x1111; c.r[1]=0x2222; c.r[2]=0x3333; c.r[3]=0x4444;
+      c.r[5]=0x6666; c.r[6]=0x7777; c.r[7]=0x8888;
+      load(&c, 0x1000, 0, p, sizeof p); step1(&c);
+      CHECK((c.r[4] & 0xFFFF) == 0x00F0, "60: PUSHA, SP -= 16");
+      { uint32_t b = (uint32_t)0x8000 << 4;
+        CHECK((MEM[b+0xFE] | (MEM[b+0xFF]<<8)) == 0x1111, "pusha: AX at top slot [SP+14]");
+        CHECK((MEM[b+0xF6] | (MEM[b+0xF7]<<8)) == 0x0100, "pusha: saved-SP slot = pre-push SP");
+        CHECK((MEM[b+0xF0] | (MEM[b+0xF1]<<8)) == 0x8888, "pusha: DI at bottom slot [SP]"); } }
+
+    /* ---- T60: PUSHA/POPA round-trip -- POPA restores AX..DI, discards saved SP  */
+    { icpu c = mkcpu(); BYTE p[] = { 0x60, 0x61 };        /* PUSHA; POPA */
+      c.seg[2] = 0x8000; c.r[4] = 0x0100;
+      c.r[0]=0x1111; c.r[1]=0x2222; c.r[2]=0x3333; c.r[3]=0x4444;
+      c.r[5]=0x6666; c.r[6]=0x7777; c.r[7]=0x8888;
+      load(&c, 0x1000, 0, p, sizeof p); step1(&c);        /* PUSHA */
+      c.r[0]=c.r[1]=c.r[2]=c.r[3]=c.r[5]=c.r[6]=c.r[7]=0; /* clobber all GP */
+      step1(&c);                                          /* POPA */
+      CHECK(c.r[0]==0x1111 && c.r[3]==0x4444 && c.r[7]==0x8888 && c.r[6]==0x7777,
+            "61: POPA restores AX/BX/DI/SI from stack");
+      CHECK((c.r[4] & 0xFFFF) == 0x0100, "popa: SP back to start (saved-SP slot discarded)"); }
+
+    /* ---- T61: PUSHAD/POPAD (66 60 / 66 61) -- full 32-bit register file ------- */
+    { icpu c = mkcpu(); BYTE p[] = { 0x66, 0x60, 0x66, 0x61 };  /* PUSHAD; POPAD */
+      c.seg[2] = 0x8000; c.r[4] = 0x0200;
+      c.r[0]=0xAAAA1111; c.r[3]=0xBBBB4444; c.r[7]=0xCCCC8888;
+      load(&c, 0x1000, 0, p, sizeof p); step1(&c);        /* PUSHAD */
+      CHECK((c.r[4] & 0xFFFF) == 0x01E0, "66 60: PUSHAD, SP -= 32");
+      c.r[0]=c.r[3]=c.r[7]=0;
+      step1(&c);                                          /* POPAD */
+      CHECK(c.r[0]==0xAAAA1111 && c.r[3]==0xBBBB4444 && c.r[7]==0xCCCC8888,
+            "66 61: POPAD restores full 32-bit EAX/EBX/EDI");
+      CHECK((c.r[4] & 0xFFFF) == 0x0200, "popad: SP back to 0x0200"); }
+
     printf("\n%d checks, %d failed\n", total, fails);
     return fails ? 1 : 0;
 }

@@ -364,26 +364,31 @@ order:
 0. ~~FIX the graphics→text rendering bug~~ **FIXED + VM-CONFIRMED 2026-07-31 (GH #14)** — DAC palette
    not reloaded on mode set; see *Known host bugs* below.
 1. **DPMI (GH #1 CLOSED; GH #2 active) — on branch `spike/dpmi-16bit-switch`. A WORKING DPMI 0.9 host
-   runs UNMODIFIED clients on the real CPU (runs 35–61), incl. a multi-segment MZ `.EXE` and a
+   runs UNMODIFIED clients on the real CPU (runs 35–62), incl. a multi-segment MZ `.EXE` and a
    third-party binary (Japheth's DPMIBACK).** The kernel `#GP`-reflect (old "increment 3b") is bypassed:
    client INT nn are patched → BOP at mode-switch and serviced in a PM loop. Since run 53 the active
    frontier is the **host PM INTERPRETER** (`src/host/v86interp.h`) — a C-runtime client (`i310102`)
    walled the kernel with a setaccess-to-code `#GP`, so we run PM in our own interpreter (no descriptor
-   enforcement) and grow opcode coverage per the `DPMI-INTERP: unmodeled opcode` log. **HEAD = run 61
-   (the `F7`/`F6` group — MUL/IMUL/DIV/IDIV/NEG/NOT; off-VM 128/128 `interp_test.c` T50-T58, host
-   `dpmi-harness-v55`, VM-confirmed 2026-08-05 — i310102 walked PAST run 60's `0x1f:0x42` DIV EDI wall,
-   advanced 1476 → 1815 steps (`steps=0x717`), and DIV produced CORRECT hex output: the line completed as
-   `int 31h, ax=0100h, bx=0800h returned NC, eax=36e, edx=27` — `36e`/`27` EXACTLY match the earlier
-   `DOSmem seg=0x36e sel=0x27`, a self-checking confirm; clean exit. Runs 56–61 all proven). The new
-   wall: `0x66 0x60` = PUSHAD at `0x1f:0x1c9` (`bytes=66 60 b8 00 00 b9 01 00`, a `PUSHAD; MOV AX,0; MOV
-   CX,1` register-save head).**
-   Full narrative: [research/dpmi-under-ntvdmcontrol.md](research/dpmi-under-ntvdmcontrol.md) (runs 20–61).
-   **RESUME = run 62: `PUSHA`/`POPA` (`0x60`/`0x61`)** — push/pop all eight GP regs in canonical order
-   (`AX,CX,DX,BX,SP,BP,SI,DI`; the pushed `SP` is its value BEFORE the push; `POPA` discards that slot);
-   `W`-wide (`0x66` = PUSHAD/POPAD). Eight stack slots each. VM-confirm via interactive `D:\i31run.bat`
-   (`qmp.py` mouse-drive, NOT telnet — the headless autorun can't reach i310102; see
-   [[vdm-host-test-harness]] / the research doc). Read the next `DPMI-INTERP: unmodeled opcode` line and
-   follow it. Don't advertise `2Fh 1687` on `main` until a real binary runs clean (spike branch only).
+   enforcement) and grow opcode coverage per the `DPMI-INTERP: unmodeled opcode` log. **HEAD = run 62
+   (`0x60`/`0x61` PUSHA/POPA; off-VM 137/137 `interp_test.c` T59-T61, host `dpmi-harness-v56`,
+   VM-confirmed 2026-08-05) — and this run is a MILESTONE: `i310102` hit NO further unmodeled opcode, it
+   RAN TO COMPLETION (`INT 21h 4Ch` after 0x12f6 services), executing its whole DPMI test sequence
+   (alloc DOS mem → alloc descriptor → resize OK → oversize-resize fails w/ carry) and printing CORRECT,
+   self-consistent results for each (`eax=36e edx=27` = the DOSmem seg/sel; `sel=2f`; `max=9c92`). So
+   Japheth's C-runtime DPMI client (an HX Regress16 `.EXE`) now runs END-TO-END in the host PM
+   interpreter on the real CPU. The opcode-climb since run 53 reached its goal; runs 54–62 added exactly
+   the opcodes this one client used (32-bit operands, LAR/LSL, PUSH imm, far RET, LEAVE, PUSHF/POPF,
+   XCHG AX,r16, F7 mul/div group, PUSHA/POPA). The `<<< MISMATCH >>>` on 4Ch is the cosmetic `.COM`
+   `0x1600`-sentinel artifact for an `.EXE` (run 48).**
+   Full narrative: [research/dpmi-under-ntvdmcontrol.md](research/dpmi-under-ntvdmcontrol.md) (runs 20–62).
+   **RESUME = post-62: the `i310102` driver is EXHAUSTED — pick the next target.** Options: (a) run a
+   larger/different client through the interpreter to surface new opcode gaps (other HX Regress16 `.EXE`s
+   — `mouevnt`/`RAWJMP7` — staged under `/tmp/claude/HX/...`; 32-bit DOS/4GW needs the separate 32-bit-PM
+   spike); (b) make `g_dpmi_use_interp` the DEFAULT + run DPMIBACK (run 50) through the interpreter,
+   retiring the kernel BOP path; (c) begin the `INT 2Fh 1687` advertisement now a real binary runs clean.
+   VM-confirm via interactive `D:\i31run.bat` (`qmp.py` mouse-drive, NOT telnet — the headless autorun
+   can't reach i310102; see [[vdm-host-test-harness]] / the research doc). Don't advertise `2Fh 1687` on
+   `main` until broader coverage (spike branch only).
 2. After DPMI: M5 (Win16/WOW foundation).
 
 ## Testing harness — consolidated self-test (2026-06-09→11)

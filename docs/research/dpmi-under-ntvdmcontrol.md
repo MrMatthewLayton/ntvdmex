@@ -1543,6 +1543,48 @@ heading `PUSHAD; MOV AX,0; MOV CX,1` — a callee saving the register file.
 Eight stack slots each; the pushed `SP` is its value *before* the push. Read the next
 `DPMI-INTERP: unmodeled opcode` line off `i31run.bat` and follow it.
 
+### VM run 62 (2026-08-05) — `PUSHA`/`POPA`, and **`i310102` RUNS TO COMPLETION** `[FACT — VM-confirmed]`
+
+`PUSHA`/`POPA` (`0x60`/`0x61`) added: push/pop the whole GP file in canonical order
+(`AX,CX,DX,BX,SP,BP,SI,DI`, indices 0–7), the pushed `SP` being its value *before* the push; `POPA`
+restores `DI..AX` and *discards* the saved-`SP` slot. `W`-wide (`0x66` = `PUSHAD`/`POPAD`); the stack
+offset stays 16-bit (address size). Off-VM **128 → 137/137** (`interp_test.c` T59-T61: push order + saved-
+SP slot; a `PUSHA;POPA` round-trip after clobbering the file; full 32-bit `PUSHAD`/`POPAD`).
+
+**This is the run that finishes `i310102`.** VM-confirmed 2026-08-05 on the real CPU via interactive
+`D:\i31run.bat` (host `dpmi-harness-v56`): the interpreter walked past run 61's `PUSHAD` wall and the
+client **hit NO further unmodeled opcode — it ran to its natural exit** (`INT 21h AH=4Ch` after `0x12f6`
+services). It executed its full DPMI test sequence and printed correct, self-consistent results for every
+call:
+
+```
+int 31h, ax=0100h, bx=0800h returned NC, eax=36e, edx=27      ; DOS-mem alloc -> seg 0x36e / sel 0x27
+int 31h, ax=0,     cx=1  returned eax=2f                       ; alloc 1 descriptor -> sel 0x2f
+int 31h, ax=0102h, bx=1800h returned NC, eax=102, edx=27, ebx=1800   ; resize DOS block -> OK
+int 31h, ax=0102h, bx=-1   returned C,  eax=8,   edx=27, ebx=9c92    ; oversize resize -> fails, max 0x9c92
+```
+
+Every value cross-checks the host's own service log (`DOSmem seg=0x36e sel=0x27`, `sel 0x2f`, the two
+`0102` resizes). So **Japheth's C-runtime DPMI client `i310102` (an HX Regress16 `.EXE`) now executes
+end-to-end in our host PM interpreter on the real XP CPU** — allocation, descriptor management, block
+resize (success + failure), formatted `printf` output, and a clean exit. The `<<< MISMATCH >>>` on the
+`4Ch` line is the known cosmetic `.COM`-sentinel (`0x1600`) check that always logs `MISMATCH` for an
+`.EXE` (run 48) — the client's own output is authoritative.
+
+**Milestone:** the opcode-climb that began at run 53 (host-interpreted PM) reached its goal — a real,
+unmodified, C-compiled DPMI client runs to completion through the interpreter. Runs 54–62 added exactly
+the opcodes this one C runtime exercised (32-bit operands, LAR/LSL, PUSH imm, far RET, LEAVE, PUSHF/POPF,
+XCHG AX,r16, the F7 mul/div group, PUSHA/POPA) — no PM-specific magic left, just ordinary integer/stack
+coverage.
+
+**Next (post-62): the driver `i310102` is exhausted — pick the next target.** Options, roughly in order:
+(a) run a **larger/different client** through the interpreter to surface the next opcode gaps (e.g. the
+other HX Regress16 `.EXE`s — `mouevnt`, `RAWJMP7` — or a DOS/4GW-style program, though 32-bit clients need
+the separate 32-bit-PM work); (b) make `g_dpmi_use_interp` the **default** and run **DPMIBACK** (run 50's
+third-party binary) through the interpreter, retiring the kernel BOP path; (c) start the **`INT 2Fh 1687`
+advertisement** work now that a real binary runs clean end-to-end (still spike-branch only until broader
+coverage). Whichever: drive it, read the `DPMI-INTERP: unmodeled opcode` (or clean-exit) line, follow it.
+
 ## Open unknowns (what the spike must nail down) `[VERIFY]`
 
 1. **The mode-switch primitive.** Exactly how ntvdm flips the VDM from V86→PM after the client
