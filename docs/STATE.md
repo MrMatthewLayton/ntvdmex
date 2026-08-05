@@ -396,15 +396,23 @@ order:
    entry points a real DOS extender uses to switch modes itself instead of trapping via INT 31h. A meaty
    feature (switch stubs both sides), not an opcode. `tools/dostest/rawjmp7.exe` + `rjrun.bat` staged.
    Full narrative: [research/dpmi-under-ntvdmcontrol.md](research/dpmi-under-ntvdmcontrol.md) (runs 20–64).
-   **RESUME = run 65: implement `INT 31h 0306` (raw mode switch addrs) + `0305` (state save/restore).**
-   0306 returns BX:CX=real→prot entry, SI:DI=prot→real entry (client loads a reg block + far-calls to
-   switch); 0305 returns state-save size + save/restore addrs (a no-op save is often OK for a cooperative
-   host). Wire into `dpmi_service_pm_int`; reuse `dpmi_switch_to_pm` / the 0301 PM→V86 machinery for the
-   stubs; re-run `D:\rjrun.bat` and follow the log. Also still open: (ii) a real 16-bit extender; (iii) the
-   **32-bit-PM spike** (32-bit CS/flat selectors + `NtVdmControl` 32-bit exec) for DOS/4GW. `INT 2Fh 1687`
-   already RESPONDS (STAGE2) — just don't enable on `main`. VM-confirm via interactive `D:\<runner>.bat`
-   (`qmp.py` mouse-drive, NOT telnet — the headless autorun can't reach these clients; see
-   [[vdm-host-test-harness]]). Don't advertise `2Fh 1687` on `main` until broader coverage (spike only).
+   **STRATEGIC PIVOT (2026-08-05): the interpreter is the FALLBACK; the mainline is real-CPU PM.** North
+   star = a **superset of ntvdm on XP-32** (host = XP-32 ONLY); acceptance bar = **Doom / Skyroads / ZAR
+   playable with flawless sound**. Focus is now **GitHub milestone #6 "Playable Games"** (P0 #18; P1 #19,
+   #2, #20, #21, #23; P2 #22, #17; Win16/WOW M5/M6 explicitly OUT of scope for this push). Rationale in
+   memory [[playable-games-direction]].
+   **RESUME = GH #18 (P0): crack the kernel PM-fault reflect so PM runs on the REAL CPU like ntvdm** — gets
+   16- AND 32-bit PM (Doom's DOS/4GW = #19) without a 386 emulator. **Kernel RE session 3 lead
+   (2026-08-05):** the kernel reads FIXED_NTVDMSTATE at fixed linear `0x714`; the reflect gate is
+   `[0x714] & 0x203 == 0x203` (bits 0,1,9). Our `src/vdm/dpmi_enter.S` only sets bit 9 → candidate root
+   cause of the silent-terminate. NEXT: (static) `cabextract reverse/NTOSKRNL.EX_` → `r2` (env is EPHEMERAL
+   in `/tmp/ntvdmex-re` — re-extract), locate `KiTrap0D`, confirm its `[0x714]` gate is on the `#GP`-reflect
+   path (vs. the interrupt-injection path); (VM) set bits 0,1 as ntvdm's init does + re-run i310102's
+   SS-retype `#GP` and watch for reflect. Landmarks: NtVdmControl @ 0x4e09b7, KiDispatchException reads
+   fs:[0x124]→[+0x44]→[+0x158]. The interpreter (runs 58–64) stays as the fallback; raw-mode-switch
+   `0305/0306` (old "run 65") is deprioritized under #18/#19. **Sound (#20 SB16 digital + #21 OPL FM) is the
+   co-equal second front.** VM-confirm via interactive `D:\<runner>.bat` (`qmp.py` mouse-drive, NOT telnet).
+   Don't advertise `2Fh 1687` on `main` until broader coverage (spike branch only).
 2. After DPMI: M5 (Win16/WOW foundation).
 
 ## Testing harness — consolidated self-test (2026-06-09→11)
