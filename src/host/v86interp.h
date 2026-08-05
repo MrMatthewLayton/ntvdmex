@@ -389,15 +389,85 @@ static int istep(icpu *c)
     if (op == 0xA9) { uint32_t b = rd_mem(cb + idx, W); idx += W;
                       do_logic(c, grw(c, 0, W) & b, W);
                       c->ip = (uint16_t)(c->ip + idx); return 1; }
-    /* ---- group3 (F6/F7): only TEST r/m,imm (reg=0/1) here; rest bail ------ */
+    /* ---- group3 (F6/F7): TEST r/m,imm (reg 0/1); NOT/NEG (2/3); MUL/IMUL     *
+     * (4/5) -> [E]DX:[E]AX; DIV/IDIV (6/7) <- [E]DX:[E]AX. run 59's I310102     *
+     * reached `66 F7 /6` = DIV EDI (printf's hex-digit divide loop). No #DE     *
+     * trap path here, so a zero divisor or quotient overflow BAILS to V86       *
+     * rather than emit UB (correct code never hits it). run 61. */
     if (op == 0xF6 || op == 0xF7) {
         int w = (op == 0xF6) ? 1 : W;
         modrm_t m; idx += decode_modrm(c, cb, idx, segov, &m);
-        if (m.g != 0 && m.g != 1) return 0;           /* NOT/NEG/MUL/DIV: bail */
         if (m.is_mem && m.lin >= GUEST_HI) return 0;
+        if (m.g == 0 || m.g == 1) {                    /* TEST r/m,imm */
+            uint32_t e = m.is_mem ? rd_mem(m.lin, w) : grw(c, m.rm_reg, w);
+            uint32_t b = rd_mem(cb + idx, w); idx += w;
+            do_logic(c, e & b, w);
+            c->ip = (uint16_t)(c->ip + idx); return 1;
+        }
         { uint32_t e = m.is_mem ? rd_mem(m.lin, w) : grw(c, m.rm_reg, w);
-          uint32_t b = rd_mem(cb + idx, w); idx += w;
-          do_logic(c, e & b, w); }
+          if (m.g == 2) {                              /* NOT: no flags */
+              uint32_t r = (~e) & wmask(w);
+              if (m.is_mem) wr_mem(m.lin, w, r); else srw(c, m.rm_reg, w, r);
+          } else if (m.g == 3) {                       /* NEG: 0 - e, flags like SUB */
+              uint32_t r = do_sub(c, 0, e, 0, w);
+              if (m.is_mem) wr_mem(m.lin, w, r); else srw(c, m.rm_reg, w, r);
+          } else if (m.g == 4 || m.g == 5) {           /* MUL (4) / IMUL (5) */
+              int ovf;
+              if (w == 1) {
+                  uint32_t prod = (m.g == 4)
+                      ? (c->r[0] & 0xFFu) * (e & 0xFFu)
+                      : (uint32_t)(int32_t)((int8_t)(c->r[0] & 0xFF) * (int8_t)e) & 0xFFFFu;
+                  c->r[0] = (c->r[0] & 0xFFFF0000u) | (prod & 0xFFFFu);
+                  ovf = (m.g == 4) ? ((prod >> 8) != 0)
+                                   : ((int16_t)prod != (int8_t)(prod & 0xFF));
+              } else if (w == 2) {
+                  uint32_t prod = (m.g == 4)
+                      ? (c->r[0] & 0xFFFFu) * (e & 0xFFFFu)
+                      : (uint32_t)(int32_t)((int16_t)(c->r[0] & 0xFFFF) * (int16_t)e);
+                  c->r[0] = (c->r[0] & 0xFFFF0000u) | (prod & 0xFFFFu);
+                  c->r[2] = (c->r[2] & 0xFFFF0000u) | ((prod >> 16) & 0xFFFFu);
+                  ovf = (m.g == 4) ? ((prod >> 16) != 0)
+                                   : ((int32_t)prod != (int16_t)(prod & 0xFFFF));
+              } else {                                  /* w == 4 */
+                  uint64_t prod = (m.g == 4)
+                      ? (uint64_t)c->r[0] * (uint64_t)e
+                      : (uint64_t)((int64_t)(int32_t)c->r[0] * (int64_t)(int32_t)e);
+                  c->r[0] = (uint32_t)prod;
+                  c->r[2] = (uint32_t)(prod >> 32);
+                  ovf = (m.g == 4) ? ((prod >> 32) != 0)
+                                   : ((int64_t)prod != (int32_t)prod);
+              }
+              c->flags = (c->flags & ~(F_CF | F_OF)) | (ovf ? (F_CF | F_OF) : 0);
+          } else {                                     /* m.g == 6 DIV / 7 IDIV */
+              if (e == 0) return 0;                     /* #DE (div by zero): bail */
+              if (w == 1) {
+                  if (m.g == 6) { uint32_t dv = c->r[0] & 0xFFFFu, q = dv / (e & 0xFFu), r = dv % (e & 0xFFu);
+                      if (q > 0xFF) return 0;            /* #DE quotient overflow */
+                      c->r[0] = (c->r[0] & 0xFFFF0000u) | (q & 0xFF) | ((r & 0xFF) << 8); }
+                  else { int16_t dv = (int16_t)(c->r[0] & 0xFFFF); int8_t d = (int8_t)e;
+                      int32_t q = dv / d, r = dv % d; if (q > 127 || q < -128) return 0;
+                      c->r[0] = (c->r[0] & 0xFFFF0000u) | (q & 0xFF) | ((r & 0xFF) << 8); }
+              } else if (w == 2) {
+                  uint32_t dv = ((c->r[2] & 0xFFFFu) << 16) | (c->r[0] & 0xFFFFu);
+                  if (m.g == 6) { uint32_t q = dv / (e & 0xFFFFu), r = dv % (e & 0xFFFFu);
+                      if (q > 0xFFFF) return 0;
+                      c->r[0] = (c->r[0] & 0xFFFF0000u) | (q & 0xFFFF);
+                      c->r[2] = (c->r[2] & 0xFFFF0000u) | (r & 0xFFFF); }
+                  else { int32_t sd = (int32_t)dv, d = (int16_t)e, q = sd / d, r = sd % d;
+                      if (q > 32767 || q < -32768) return 0;
+                      c->r[0] = (c->r[0] & 0xFFFF0000u) | (q & 0xFFFF);
+                      c->r[2] = (c->r[2] & 0xFFFF0000u) | (r & 0xFFFF); }
+              } else {                                  /* w == 4 */
+                  uint64_t dv = ((uint64_t)c->r[2] << 32) | (uint64_t)c->r[0];
+                  if (m.g == 6) { uint64_t q = dv / e, r = dv % e;
+                      if (q > 0xFFFFFFFFu) return 0;
+                      c->r[0] = (uint32_t)q; c->r[2] = (uint32_t)r; }
+                  else { int64_t sd = (int64_t)dv, d = (int32_t)e, q = sd / d, r = sd % d;
+                      if (q > 2147483647LL || q < -2147483648LL) return 0;
+                      c->r[0] = (uint32_t)q; c->r[2] = (uint32_t)r; }
+              }
+          }
+        }
         c->ip = (uint16_t)(c->ip + idx); return 1;
     }
 

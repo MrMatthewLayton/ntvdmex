@@ -541,6 +541,65 @@ int main(void)
       load(&c, 0x1000, 0, p, sizeof p); step1(&c);
       CHECK(c.r[0] == 0x55667788 && c.r[3] == 0x11223344, "66 93: XCHG EAX,EBX full 32-bit swap"); }
 
+    /* ---- T50: F7 group -- NOT (reg 2), no flags -- run 61 -------------------- */
+    { icpu c = mkcpu(); BYTE p[] = { 0xF7, 0xD6 };        /* NOT SI */
+      c.r[6] = 0x1234; c.flags = F_CF | 0x0002;
+      load(&c, 0x1000, 0, p, sizeof p); step1(&c);
+      CHECK((c.r[6] & 0xFFFF) == 0xEDCB, "F7 /2: NOT SI = ~0x1234");
+      CHECK(c.flags & F_CF, "not: flags untouched"); }
+
+    /* ---- T51: NEG (reg 3) -- 0 - e, flags like SUB -------------------------- */
+    { icpu c = mkcpu(); BYTE p[] = { 0xF7, 0xD8 };        /* NEG AX */
+      c.r[0] = 0x0005; load(&c, 0x1000, 0, p, sizeof p); step1(&c);
+      CHECK((c.r[0] & 0xFFFF) == 0xFFFB, "F7 /3: NEG AX(5) = 0xFFFB");
+      CHECK((c.flags & F_CF) && (c.flags & F_SF), "neg 5: CF set (nonzero) + SF"); }
+    { icpu c = mkcpu(); BYTE p[] = { 0xF7, 0xD8 };        /* NEG AX, AX=0 */
+      c.r[0] = 0x0000; load(&c, 0x1000, 0, p, sizeof p); step1(&c);
+      CHECK((c.r[0] & 0xFFFF) == 0 && (c.flags & F_ZF) && !(c.flags & F_CF), "neg 0 = 0, ZF, no CF"); }
+
+    /* ---- T52: MUL (reg 4) -- unsigned, DX:AX <- AX*r/m ---------------------- */
+    { icpu c = mkcpu(); BYTE p[] = { 0xF7, 0xE1 };        /* MUL CX */
+      c.r[0] = 0x1000; c.r[1] = 0x0010; load(&c, 0x1000, 0, p, sizeof p); step1(&c);
+      CHECK((c.r[0] & 0xFFFF) == 0x0000 && (c.r[2] & 0xFFFF) == 0x0001, "F7 /4: MUL CX -> DX:AX=0001:0000");
+      CHECK((c.flags & F_CF) && (c.flags & F_OF), "mul: CF/OF set (DX nonzero)"); }
+    { icpu c = mkcpu(); BYTE p[] = { 0xF7, 0xE1 };        /* MUL CX, small */
+      c.r[0] = 3; c.r[1] = 4; load(&c, 0x1000, 0, p, sizeof p); step1(&c);
+      CHECK((c.r[0] & 0xFFFF) == 12 && (c.r[2] & 0xFFFF) == 0, "mul 3*4=12, DX=0");
+      CHECK(!(c.flags & F_CF) && !(c.flags & F_OF), "mul: CF/OF clear (fits)"); }
+
+    /* ---- T53: IMUL (reg 5) -- signed -------------------------------------- */
+    { icpu c = mkcpu(); BYTE p[] = { 0xF7, 0xE9 };        /* IMUL CX */
+      c.r[0] = 0xFFFE; c.r[1] = 0x0003; load(&c, 0x1000, 0, p, sizeof p); step1(&c);   /* -2 * 3 */
+      CHECK((c.r[0] & 0xFFFF) == 0xFFFA && (c.r[2] & 0xFFFF) == 0xFFFF, "F7 /5: IMUL -2*3 = -6 (FFFF:FFFA)");
+      CHECK(!(c.flags & F_CF) && !(c.flags & F_OF), "imul: CF/OF clear (fits 16-bit signed)"); }
+
+    /* ---- T54: DIV (reg 6) -- unsigned, quotient AX, remainder DX ----------- */
+    { icpu c = mkcpu(); BYTE p[] = { 0xF7, 0xF1 };        /* DIV CX */
+      c.r[0] = 0x0000; c.r[2] = 0x0001; c.r[1] = 0x0010;  /* DX:AX = 0x10000 / 0x10 */
+      load(&c, 0x1000, 0, p, sizeof p); step1(&c);
+      CHECK((c.r[0] & 0xFFFF) == 0x1000 && (c.r[2] & 0xFFFF) == 0x0000, "F7 /6: DIV CX 0x10000/0x10 -> AX=0x1000 DX=0"); }
+
+    /* ---- T55: 66 F7 /6 = DIV EDI -- the exact i310102 hex-format opcode ----- */
+    { icpu c = mkcpu(); BYTE p[] = { 0x66, 0xF7, 0xF7 };  /* DIV EDI */
+      c.r[0] = 100; c.r[2] = 0; c.r[7] = 7; load(&c, 0x1000, 0, p, sizeof p); step1(&c);
+      CHECK(c.r[0] == 14 && c.r[2] == 2, "66 F7 /6: DIV EDI 100/7 -> EAX=14 EDX=2 (the run-60 wall op)"); }
+
+    /* ---- T56: IDIV (reg 7) -- signed -------------------------------------- */
+    { icpu c = mkcpu(); BYTE p[] = { 0xF7, 0xF9 };        /* IDIV CX */
+      c.r[0] = 0xFF9C; c.r[2] = 0xFFFF; c.r[1] = 0x0007;  /* DX:AX = -100 / 7 */
+      load(&c, 0x1000, 0, p, sizeof p); step1(&c);
+      CHECK((c.r[0] & 0xFFFF) == 0xFFF2 && (c.r[2] & 0xFFFF) == 0xFFFE, "F7 /7: IDIV -100/7 -> AX=-14 DX=-2"); }
+
+    /* ---- T57: F6 (byte) DIV -- AX / r8 -> AL quotient, AH remainder --------- */
+    { icpu c = mkcpu(); BYTE p[] = { 0xF6, 0xF3 };        /* DIV BL */
+      c.r[0] = 100; c.r[3] = 0x07; load(&c, 0x1000, 0, p, sizeof p); step1(&c);
+      CHECK((c.r[0] & 0xFF) == 14 && ((c.r[0] >> 8) & 0xFF) == 2, "F6 /6: DIV BL 100/7 -> AL=14 AH=2"); }
+
+    /* ---- T58: DIV by zero bails (return 0 -> step1 no-op, IP unchanged) ----- */
+    { icpu c = mkcpu(); BYTE p[] = { 0xF7, 0xF1 };        /* DIV CX, CX=0 */
+      c.r[0] = 5; c.r[2] = 0; c.r[1] = 0; load(&c, 0x1000, 0, p, sizeof p);
+      { int adv = step1(&c); CHECK(adv == 0 && c.ip == 0, "div by zero: interp bails (no UB), IP unchanged"); } }
+
     printf("\n%d checks, %d failed\n", total, fails);
     return fails ? 1 : 0;
 }

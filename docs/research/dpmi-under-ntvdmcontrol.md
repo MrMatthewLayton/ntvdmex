@@ -1508,6 +1508,41 @@ zero or quotient overflow (the interpreter has no trap path — clamp/bail rathe
 `DIV` (reg 6) and its `MUL`/`NEG`/`NOT` neighbours; watch the `0x66` 32-bit width throughout. Read the
 next `DPMI-INTERP: unmodeled opcode` line off `i31run.bat` and follow it.
 
+### VM run 61 (2026-08-05) — the `F7`/`F6` group: MUL/IMUL/DIV/IDIV/NEG/NOT `[FACT — VM-confirmed]`
+
+The group-3 handler (was `TEST`-only, reg 0/1) extended to the full set: `NOT` (reg 2, no flags), `NEG`
+(reg 3, flags via `do_sub 0-e`), `MUL`/`IMUL` (reg 4/5 → `[E]DX:[E]AX`, `CF=OF` on overflow of the low
+half), `DIV`/`IDIV` (reg 6/7 ← `[E]DX:[E]AX`, quotient→`[E]AX`, remainder→`[E]DX`). All width-aware
+(`w=1/2/4`, the `0x66` 32-bit form threaded through). No `#DE` trap path, so a zero divisor or a
+quotient that overflows the destination **bails to V86** (`return 0`) rather than emit UB — correct code
+never hits it. Off-VM **112 → 128/128** (`interp_test.c` T50-T58: NOT/NEG(±)/MUL(±ovf)/IMUL/DIV/IDIV, the
+byte `F6` DIV, the exact `66 F7 /6` DIV EDI, and the div-by-zero bail).
+
+**VM-confirmed 2026-08-05** on the real CPU via interactive `D:\i31run.bat` (host `dpmi-harness-v55`,
+client `i310102`). The `DIV EDI` (run 60's wall) is printf's hex-digit divide, and it **produced the
+correct output**: the interpreter advanced **1476 → 1815 steps** (`steps=0x717`) and the DOS output line
+*completed* —
+
+```
+int 31h, ax=0100h, bx=0800h returned NC, eax=36e, edx=27
+```
+
+— where `eax=36e` / `edx=27` **exactly match** the `DOSmem seg=0x36e sel=0x27` logged earlier in the same
+run. So `DIV` formatted those two values to hex correctly: a self-checking confirmation, not just "ran
+further". Clean exit (`STAGE2: complete`). The new wall:
+
+```
+DPMI-INTERP: unmodeled opcode at CS:IP=0x0000001f:0x000001c9 bytes=66 60 b8 00 00 b9 01 00 (steps=0x0000717)
+```
+
+`0x66 0x60` = **`PUSHAD`** (`0x60` = `PUSHA`, push all GP regs; the `0x66` form is the 32-bit `PUSHAD`),
+heading `PUSHAD; MOV AX,0; MOV CX,1` — a callee saving the register file.
+
+**Next (run 62): `PUSHA`/`POPA` (`0x60`/`0x61`)** — push/pop all eight GP registers in the canonical order
+(`AX,CX,DX,BX,SP,BP,SI,DI`; `POPA` discards the pushed `SP` slot). `W`-wide (`0x66` = `PUSHAD`/`POPAD`).
+Eight stack slots each; the pushed `SP` is its value *before* the push. Read the next
+`DPMI-INTERP: unmodeled opcode` line off `i31run.bat` and follow it.
+
 ## Open unknowns (what the spike must nail down) `[VERIFY]`
 
 1. **The mode-switch primitive.** Exactly how ntvdm flips the VDM from V86→PM after the client
