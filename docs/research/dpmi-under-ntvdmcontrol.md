@@ -1482,6 +1482,32 @@ a no-op; the `0x66` form swaps `EAX`). Trivial: one `grw`/`srw` swap on `r[0]`�
 already has the two-operand `XCHG r/m,r` (`0x86/0x87`); this is just the accumulator short-form. Read the
 next `DPMI-INTERP: unmodeled opcode` line off `i31run.bat` and follow it.
 
+### VM run 60 (2026-08-05) — `XCHG AX,r16`: the accumulator short-form `[FACT — VM-confirmed]`
+
+`XCHG AX,r16` (`0x91`–`0x97`; `0x90` = `XCHG AX,AX` = `NOP`, already handled) added: swap the `W`-wide view
+of `AX`/`EAX` (`r[0]`) with the indexed reg, no flags. The `0x66` form swaps `EAX,r32`. Off-VM **106 →
+112/112** (`interp_test.c` T47-T49: `XCHG AX,SI` swaps + leaves flags; `0x90` NOP + E-reg high halves kept
+under the 16-bit form; `0x66 0x93` full `XCHG EAX,EBX`).
+
+**VM-confirmed 2026-08-05** on the real CPU via interactive `D:\i31run.bat` (host `dpmi-harness-v54`,
+client `i310102`). The interpreter walked past run 59's `0x1f:0x157` `XCHG` wall, advanced **1308 → 1476
+steps** (`steps=0x5c4`), the C runtime printing yet more `main()` output (`... returned NC, eax=` — it's
+mid-way through formatting a hex value) and exiting clean (`STAGE2: complete`). The new wall:
+
+```
+DPMI-INTERP: unmodeled opcode at CS:IP=0x0000001f:0x00000042 bytes=66 f7 f7 80 c2 30 80 fa (steps=0x0000005c4)
+```
+
+`0x66 F7 /6` (ModRM `0xF7` = mod 11, reg 6, rm 7) = **`DIV EDI`** — a 32-bit unsigned divide
+(`EDX:EAX / EDI`), heading `DIV EDI; ADD DL,0x30; CMP DL,…` = printf's number-to-hex-string digit loop
+(divide, `+'0'`, adjust). So the C runtime is now deep in output formatting.
+
+**Next (run 61): the `F7` group (`MUL`/`IMUL`/`DIV`/`IDIV`/`NEG`/`NOT`/`TEST imm`)** — meatier than the
+recent stack/glue ops: `DIV`/`IDIV` use the `EDX:EAX` (or `DX:AX`) pair and can fault `#DE` on divide-by-
+zero or quotient overflow (the interpreter has no trap path — clamp/bail rather than UB). Model at least
+`DIV` (reg 6) and its `MUL`/`NEG`/`NOT` neighbours; watch the `0x66` 32-bit width throughout. Read the
+next `DPMI-INTERP: unmodeled opcode` line off `i31run.bat` and follow it.
+
 ## Open unknowns (what the spike must nail down) `[VERIFY]`
 
 1. **The mode-switch primitive.** Exactly how ntvdm flips the VDM from V86→PM after the client

@@ -518,6 +518,29 @@ int main(void)
       CHECK((c.flags & (F_AF|F_SF|F_DF)) == (F_AF|F_SF|F_DF), "pushf/popf: modeled flags round-trip exactly");
       CHECK(c.r[4] == 0xCAFE0100, "pushf/popf: SP back to start, E-reg high half preserved"); }
 
+    /* ---- T47: XCHG AX,SI (96) -- accumulator short-form swap, no flags -- run 60 */
+    { icpu c = mkcpu(); BYTE p[] = { 0x96 };               /* XCHG AX,SI */
+      c.r[0] = 0x1234; c.r[6] = 0xABCD; c.flags = F_CF | F_ZF;
+      load(&c, 0x1000, 0, p, sizeof p); step1(&c);
+      CHECK(c.ip == 1, "96: XCHG AX,SI, ip += 1");
+      CHECK(c.r[0] == 0xABCD && c.r[6] == 0x1234, "xchg ax,si: AX<->SI swapped");
+      CHECK((c.flags & (F_CF|F_ZF)) == (F_CF|F_ZF), "xchg: flags untouched"); }
+
+    /* ---- T48: XCHG AX,AX (90) is a NOP; XCHG preserves E-reg high halves (16-bit) */
+    { icpu c = mkcpu(); BYTE p[] = { 0x90, 0x91 };         /* NOP; XCHG AX,CX */
+      c.r[0] = 0xDEAD1234; c.r[1] = 0xBEEFABCD;
+      load(&c, 0x1000, 0, p, sizeof p); step1(&c);
+      CHECK(c.r[0] == 0xDEAD1234, "90: NOP leaves AX unchanged");
+      step1(&c);
+      CHECK(c.r[0] == 0xDEADABCD && c.r[1] == 0xBEEF1234,
+            "xchg ax,cx: 16-bit views swap, E-reg high halves preserved"); }
+
+    /* ---- T49: 0x66 XCHG EAX,r32 -- full 32-bit swap ------------------------- */
+    { icpu c = mkcpu(); BYTE p[] = { 0x66, 0x93 };         /* XCHG EAX,EBX */
+      c.r[0] = 0x11223344; c.r[3] = 0x55667788;
+      load(&c, 0x1000, 0, p, sizeof p); step1(&c);
+      CHECK(c.r[0] == 0x55667788 && c.r[3] == 0x11223344, "66 93: XCHG EAX,EBX full 32-bit swap"); }
+
     printf("\n%d checks, %d failed\n", total, fails);
     return fails ? 1 : 0;
 }

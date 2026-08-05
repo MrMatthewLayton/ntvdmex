@@ -684,6 +684,17 @@ static int istep(icpu *c)
         c->ip = (uint16_t)(c->ip + idx + (take ? rel : 0)); return 1;
     }
 
+    /* ---- XCHG AX,r16 (91-97): the accumulator short-form -- swap AX with the  *
+     * indexed reg (0x90 = XCHG AX,AX = NOP, handled just below). No flags. A C   *
+     * runtime uses it as cheap register glue (run 59's I310102 stopped on `96` = *
+     * XCHG AX,SI). W-wide (0x66 -> XCHG EAX,r32). run 60. */
+    if (op >= 0x91 && op <= 0x97) {
+        int reg = op & 7;
+        uint32_t a = grw(c, 0, W), b = grw(c, reg, W);
+        srw(c, 0, W, b); srw(c, reg, W, a);
+        c->ip = (uint16_t)(c->ip + idx); return 1;
+    }
+
     /* ---- flag ops + NOP --------------------------------------------------- */
     if (op == 0x90) { c->ip = (uint16_t)(c->ip + idx); return 1; }              /* NOP */
     if (op == 0xF8) { c->flags &= ~F_CF; c->ip = (uint16_t)(c->ip + idx); return 1; }  /* CLC */

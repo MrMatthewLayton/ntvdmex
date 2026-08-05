@@ -364,25 +364,27 @@ order:
 0. ~~FIX the graphics→text rendering bug~~ **FIXED + VM-CONFIRMED 2026-07-31 (GH #14)** — DAC palette
    not reloaded on mode set; see *Known host bugs* below.
 1. **DPMI (GH #1 CLOSED; GH #2 active) — on branch `spike/dpmi-16bit-switch`. A WORKING DPMI 0.9 host
-   runs UNMODIFIED clients on the real CPU (runs 35–59), incl. a multi-segment MZ `.EXE` and a
+   runs UNMODIFIED clients on the real CPU (runs 35–60), incl. a multi-segment MZ `.EXE` and a
    third-party binary (Japheth's DPMIBACK).** The kernel `#GP`-reflect (old "increment 3b") is bypassed:
    client INT nn are patched → BOP at mode-switch and serviced in a PM loop. Since run 53 the active
    frontier is the **host PM INTERPRETER** (`src/host/v86interp.h`) — a C-runtime client (`i310102`)
    walled the kernel with a setaccess-to-code `#GP`, so we run PM in our own interpreter (no descriptor
-   enforcement) and grow opcode coverage per the `DPMI-INTERP: unmodeled opcode` log. **HEAD = run 59
-   (`0x9C`/`0x9D` PUSHF/POPF — the FLAGS stack pair; off-VM 106/106 `interp_test.c` T44-T46, host
-   `dpmi-harness-v53`, VM-confirmed 2026-08-05 — i310102 walked PAST run 58's `0x1f:0x1b3` PUSHF wall in a
-   BIG unblock, advanced 796 → 1308 steps (`steps=0x51c`), printed NEW `main()` output (`int 31h,
-   ax=0100h, bx=0800h returned`) and exited clean (`STAGE2: complete`); runs 56 PUSH imm + 57 far RET +
-   58 LEAVE + 59 PUSHF/POPF all proven). The new wall is a genuinely new opcode: `0x96` XCHG AX,SI at
-   `0x1f:0x157` (`bytes=96 2b d8 80 7e fd 01 75`, an `XCHG AX,SI; SUB BX,AX; CMP [BP-3],1; JNZ` head).**
-   Full narrative: [research/dpmi-under-ntvdmcontrol.md](research/dpmi-under-ntvdmcontrol.md) (runs 20–59).
-   **RESUME = run 60: `XCHG AX,r16` (`0x90`–`0x97`)** — swap `AX` with the indexed reg (`0x90` = NOP; the
-   `0x66` form swaps `EAX`); trivial `grw`/`srw` swap, mirrors the existing two-operand `XCHG r/m,r`
-   (`0x86/0x87`). VM-confirm via interactive `D:\i31run.bat` (`qmp.py` mouse-drive, NOT telnet — the
-   headless autorun can't reach i310102; see [[vdm-host-test-harness]] / the research doc). Read the next
-   `DPMI-INTERP: unmodeled opcode` line and follow it. Don't advertise `2Fh 1687` on `main` until a real
-   binary runs clean (spike branch only).
+   enforcement) and grow opcode coverage per the `DPMI-INTERP: unmodeled opcode` log. **HEAD = run 60
+   (`0x91`–`0x97` XCHG AX,r16 — the accumulator short-form; off-VM 112/112 `interp_test.c` T47-T49, host
+   `dpmi-harness-v54`, VM-confirmed 2026-08-05 — i310102 walked PAST run 59's `0x1f:0x157` XCHG wall,
+   advanced 1308 → 1476 steps (`steps=0x5c4`), printed MORE `main()` output (`... returned NC, eax=`,
+   mid hex-format) and exited clean (`STAGE2: complete`); runs 56 PUSH imm + 57 far RET + 58 LEAVE +
+   59 PUSHF/POPF + 60 XCHG AX,r16 all proven). The new wall: `0x66 F7 /6` = DIV EDI (32-bit divide) at
+   `0x1f:0x42` (`bytes=66 f7 f7 80 c2 30 80 fa`, a `DIV EDI; ADD DL,0x30; CMP DL,…` printf hex-digit
+   loop).**
+   Full narrative: [research/dpmi-under-ntvdmcontrol.md](research/dpmi-under-ntvdmcontrol.md) (runs 20–60).
+   **RESUME = run 61: the `F7` group (`MUL`/`IMUL`/`DIV`/`IDIV`/`NEG`/`NOT`/`TEST imm`)** — meatier than
+   the recent glue: `DIV`/`IDIV` use the `EDX:EAX` (`DX:AX`) pair and can `#DE` on div-by-zero/overflow
+   (no trap path — clamp/bail, don't UB); model at least `DIV` (reg 6) + `MUL`/`NEG`/`NOT` neighbours;
+   watch the `0x66` 32-bit width. VM-confirm via interactive `D:\i31run.bat` (`qmp.py` mouse-drive, NOT
+   telnet — the headless autorun can't reach i310102; see [[vdm-host-test-harness]] / the research doc).
+   Read the next `DPMI-INTERP: unmodeled opcode` line and follow it. Don't advertise `2Fh 1687` on `main`
+   until a real binary runs clean (spike branch only).
 2. After DPMI: M5 (Win16/WOW foundation).
 
 ## Testing harness — consolidated self-test (2026-06-09→11)
