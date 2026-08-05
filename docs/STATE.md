@@ -364,7 +364,7 @@ order:
 0. ~~FIX the graphics→text rendering bug~~ **FIXED + VM-CONFIRMED 2026-07-31 (GH #14)** — DAC palette
    not reloaded on mode set; see *Known host bugs* below.
 1. **DPMI (GH #1 CLOSED; GH #2 active) — on branch `spike/dpmi-16bit-switch`. A WORKING DPMI 0.9 host
-   runs UNMODIFIED clients on the real CPU (runs 35–63), incl. a multi-segment MZ `.EXE` and a
+   runs UNMODIFIED clients on the real CPU (runs 35–64), incl. a multi-segment MZ `.EXE` and a
    third-party binary (Japheth's DPMIBACK).** The kernel `#GP`-reflect (old "increment 3b") is bypassed:
    client INT nn are patched → BOP at mode-switch and serviced in a PM loop. Since run 53 the active
    frontier is the **host PM INTERPRETER** (`src/host/v86interp.h`) — a C-runtime client (`i310102`)
@@ -388,16 +388,23 @@ order:
    `dpmi_service_pm_int` for 0301). **So the interpreter runs BOTH proven third-party clients (C-runtime
    i310102 + asm DPMIBACK); `g_dpmi_use_interp` has been 1 since run 53, so the kernel BOP PM path
    (`sw==0` / `dpmi_enter_pm`) is now DEAD CODE — option (b) is effectively complete.**
-   Full narrative: [research/dpmi-under-ntvdmcontrol.md](research/dpmi-under-ntvdmcontrol.md) (runs 20–63).
-   **RESUME = broaden the client corpus, then begin 32-bit PM.** The two easy clients run; the interpreter
-   is the single path. Concrete next: (i) the remaining HX Regress16 16-bit `.EXE`s (`mouevnt`, `RAWJMP7`
-   — under `/tmp/claude/HX/Src/HDPMI/Regress16/ex/`) to shake out more opcodes; (ii) a real 16-bit DOS
-   extender; (iii) separately, the **32-bit-PM spike** (32-bit CS/flat selectors + `NtVdmControl` 32-bit
-   execution) that DOS/4GW-class extenders need. Option (c) — the `INT 2Fh 1687` advertisement — the host
-   already RESPONDS to 1687 (see `STAGE2`); the caveat is only about enabling it on `main`. VM-confirm via
-   interactive `D:\i31run.bat` / `D:\dpbrun.bat` (`qmp.py` mouse-drive, NOT telnet — the headless autorun
-   can't reach these clients; see [[vdm-host-test-harness]]). Don't advertise `2Fh 1687` on `main` until
-   broader coverage (spike branch only).
+   **Then run 64 (option a probe): a THIRD HX client, `RAWJMP7.EXE`, found the next gap.** It switches to
+   PM + runs in the interpreter fine (zero unmodeled opcodes, asm like DPMIBACK) but needs `INT 31h 0305`
+   (Get State Save/Restore addrs) + `0306` (Get Raw Mode Switch addrs) — both return UNSUP — and its
+   follow-on `0301` then never returns (the RM proc depends on the raw-switch setup; watchdog kills it).
+   **So the next capability = the RAW MODE SWITCH services (0305/0306)** — the callable real→prot / prot→real
+   entry points a real DOS extender uses to switch modes itself instead of trapping via INT 31h. A meaty
+   feature (switch stubs both sides), not an opcode. `tools/dostest/rawjmp7.exe` + `rjrun.bat` staged.
+   Full narrative: [research/dpmi-under-ntvdmcontrol.md](research/dpmi-under-ntvdmcontrol.md) (runs 20–64).
+   **RESUME = run 65: implement `INT 31h 0306` (raw mode switch addrs) + `0305` (state save/restore).**
+   0306 returns BX:CX=real→prot entry, SI:DI=prot→real entry (client loads a reg block + far-calls to
+   switch); 0305 returns state-save size + save/restore addrs (a no-op save is often OK for a cooperative
+   host). Wire into `dpmi_service_pm_int`; reuse `dpmi_switch_to_pm` / the 0301 PM→V86 machinery for the
+   stubs; re-run `D:\rjrun.bat` and follow the log. Also still open: (ii) a real 16-bit extender; (iii) the
+   **32-bit-PM spike** (32-bit CS/flat selectors + `NtVdmControl` 32-bit exec) for DOS/4GW. `INT 2Fh 1687`
+   already RESPONDS (STAGE2) — just don't enable on `main`. VM-confirm via interactive `D:\<runner>.bat`
+   (`qmp.py` mouse-drive, NOT telnet — the headless autorun can't reach these clients; see
+   [[vdm-host-test-harness]]). Don't advertise `2Fh 1687` on `main` until broader coverage (spike only).
 2. After DPMI: M5 (Win16/WOW foundation).
 
 ## Testing harness — consolidated self-test (2026-06-09→11)

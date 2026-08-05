@@ -1623,6 +1623,40 @@ is the single path. Concrete next targets: the remaining HX Regress16 16-bit `.E
 `RAWJMP7`) to shake out more opcodes, then a real 16-bit DOS extender; separately, the 32-bit-PM work
 (32-bit `CS`/flat selectors, `NtVdmControl` 32-bit execution) that DOS/4GW-class extenders need.
 
+### VM run 64 (2026-08-05) — `RAWJMP7` probe: finds the next gap = INT 31h `0305`/`0306` (raw mode switch) `[FACT — VM-confirmed]`
+
+Ran a THIRD HX Regress16 client, **`RAWJMP7.EXE`** (copied to `tools/dostest/rawjmp7.exe`, runner
+`rjrun.bat`, host `dpmi-harness-v58`) — a gap-finding probe, not an opcode run. RAWJMP7 exercises the DPMI
+**raw mode-switch** path (its name = "raw jump"). VM result (interactive `D:\rjrun.bat`):
+
+```
+STAGE3: ... -> PM ok (CS=0x0f:0x395) -> DPMI PM loop       ; switch + interpreter entry OK
+INT31h AX=0x0305 CX=0x69 -> UNSUP                          ; Get State Save/Restore addresses -- NOT IMPLEMENTED
+INT31h AX=0x0306 CX=0x69 -> UNSUP                          ; Get Raw Mode Switch addresses    -- NOT IMPLEMENTED
+INT31h AX=0x0301 -> callRM 0x110:0x214 SS:SP=0x110:0xff00  ; ...then a 0301 that never returns
+```
+
+So RAWJMP7 switches to PM and runs in the interpreter fine (zero unmodeled opcodes — like DPMIBACK, it's
+asm), but it asks for **`INT 31h 0305` (Get State Save/Restore Addresses)** and **`0306` (Get Raw Mode
+Switch Addresses)**, which the host returns UNSUP for; its subsequent `0301` real-mode call then never
+returns (the RM proc at `0x110:0x214` depends on the raw-switch setup it couldn't get, so the excursion
+stalls and the ~6 s watchdog kills the host — no `STAGE2: complete`).
+
+**This is the concrete next capability gap, and it is exactly the real-extender path.** `0305`/`0306` are
+the "raw mode switch" mechanism: instead of trapping every transition through `INT 31h`, the host hands the
+client two callable entry points (real→protected and protected→real) plus state save/restore routines, and
+the client far-calls them to switch modes itself. Real DOS extenders (CWSDPMI-style, and the DPMI-aware C
+runtimes that prefer raw switching for speed) use this. Implementing it is a meaty feature — callable
+mode-switch stubs on both sides, register-block conventions — comparable to the original V86↔PM switch
+work, **not** an opcode increment.
+
+**Next (run 65+): implement `INT 31h 0306` (raw mode switch addrs) + `0305` (state save/restore addrs).**
+`0306` returns `BX:CX` = real→protected entry, `SI:DI` = protected→real entry; the client loads a register
+block and far-calls the entry to switch. `0305` returns the state-save size + save/restore call addresses
+(a no-op save is often acceptable for a cooperative host). Wire them into `dpmi_service_pm_int`, provide
+the two switch stubs (reuse the proven `dpmi_switch_to_pm` / the `0301` PM→V86 machinery), then re-run
+`D:\rjrun.bat` and follow the log. This unblocks the raw-switch extender class.
+
 ## Open unknowns (what the spike must nail down) `[VERIFY]`
 
 1. **The mode-switch primitive.** Exactly how ntvdm flips the VDM from V86→PM after the client
