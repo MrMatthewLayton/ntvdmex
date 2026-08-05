@@ -1657,6 +1657,43 @@ block and far-calls the entry to switch. `0305` returns the state-save size + sa
 the two switch stubs (reuse the proven `dpmi_switch_to_pm` / the `0301` PM→V86 machinery), then re-run
 `D:\rjrun.bat` and follow the log. This unblocks the raw-switch extender class.
 
+### Kernel RE session 3 (2026-08-05) — FIXED_NTVDMSTATE is at fixed linear `0x714`, and the reflect gate wants bits 0,1,9 `[FACT, static disasm]`
+
+Re-opened the PM-fault-reflect track (GH #18) — the strategic prize: if the kernel reflects PM VDM faults
+to us, PM (16- *and* 32-bit) runs on the **real CPU** like ntvdm, retiring the interpreter (and the
+`INT nn`→BOP patch) for the general case. On XP-32 this is provably solvable — `ntvdm.exe` does it on the
+same kernel — and the binaries are in `reverse/`.
+
+**Env re-established on the dev host:** `cabextract reverse/NTOSKRNL.EX_` / `reverse/NTVDM.EX_` →
+`/tmp/ntvdmex-re/{ntoskrnl,ntvdm}.exe`; `r2` on ntoskrnl (VA base `0x400000`). Landmarks match the older
+sessions: `NtVdmControl` @ `0x4e09b7`; `KiDispatchException` reads `fs:[0x124]→[+0x44]→[+0x158]` (VdmObjects).
+
+**Decisive finding — the fixed-state is at a *fixed linear address* `0x714`, read directly (not via a
+VdmObjects pointer):**
+
+```
+0x4f63dd:  mov eax, [0x714]      ; FIXED_NTVDMSTATE flags
+           and eax, 0x203
+           cmp eax, 0x203         ; branch to the MONITORED path only if bits 0,1,9 all set
+           jne  0x4f63f8          ; else the not-monitored path
+```
+
+The same `[0x714] & 0x203 == 0x203` predicate recurs at `0x4f65bd`; near NtVdmControl, `0x4e0b2e:
+mov ecx,[0x714]; test cl,2` gates on bit 1. **Our `src/vdm/dpmi_enter.S` only ever sets bit 9**
+(`lock or [0x714],0x200`) and merely *tests* bits 0,1 (`test [0x714],3`); a bare `VdmInitialize` never
+establishes bits 0,1. So `(flags & 0x203)` can't reach `0x203` on our PM entry ⇒ the kernel takes the
+**not-monitored → don't-reflect** branch. **Candidate root cause for the silent-terminate on a PM `#GP`.**
+
+**Hypothesis to test (VM):** set FIXED_NTVDMSTATE bits 0,1 (0x3) — the way real ntvdm's init does, not a
+blind poke — before PM entry, then re-run the faulting case (i310102's SS-retype `#GP`, or a `HLT` in PM)
+and see whether the fault now reflects to our handler/VEH instead of terminating.
+
+**Not-yet-closed (before calling it solved):** (1) confirm the `0x4f6xxx` predicates are on the
+`#GP`/trap-reflect path vs. the PIC/virtual-IF interrupt-injection path — **locate `KiTrap0D` and read its
+`[0x714]` gate directly**; (2) find where real ntvdm sets bits 0,1 (its `VdmInitialize` site + low-memory
+FIXED_NTVDMSTATE setup) and mirror it; (3) confirm on a live VM under WinDbg watching the `[0x714]` read at
+fault time. Full context: GH #18. Bits 0,1,9 `= 0x203` is the concrete lever this session surfaced.
+
 ## Open unknowns (what the spike must nail down) `[VERIFY]`
 
 1. **The mode-switch primitive.** Exactly how ntvdm flips the VDM from V86→PM after the client
