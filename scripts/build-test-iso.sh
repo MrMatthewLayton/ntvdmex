@@ -45,6 +45,8 @@ cp "$DT/dpmiauto.bat" "$DT/dpmiinstall.bat" "$STAGE/"    # headless DPMI autorun
 cp "$DT/i31run.bat" "$STAGE/"                            # one-shot i310102 runner (run 56 confirm)
 cp "$DT/dpbrun.bat" "$STAGE/"                            # one-shot dpmiback runner (interpreter-path probe)
 cp "$DT/rawjmp7.exe" "$DT/rjrun.bat" "$STAGE/"          # HX Regress16 raw-mode-switch client + runner
+cp "$DT/pmfault.com" "$DT/pfrun.bat" "$STAGE/"          # GH#18 raw PM-#GP reflect probe + runner (run 59)
+cp "$DT/kddebug.bat" "$STAGE/"                          # option B: enable XP kernel debugging on COM2 (r2 winkd)
 cp "$DT/runtest-demos.bat" "$STAGE/"
 # individual test programs
 cp "$DT/xmstest.com" "$DT/emstest.com" "$DT/timertst.com" \

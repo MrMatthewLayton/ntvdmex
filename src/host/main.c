@@ -66,6 +66,30 @@
 #define DPMI_PMRET_BOP   0x56
 #define DPMI_PMRET_OFF   0x0070
 
+/* GH #18 real-CPU PM-fault trampoline. When a raw (non-BOP) protected-mode #GP faults,
+   the kernel reflect path jumps the guest to [VDM_TIB+0x638]:0x1000 (see ntvdm.h
+   VTIB_FLT_*). We install a code selector H (g_dpmi_fault_sel) based at DOS_HDLR_SEG<<4
+   and plant a BOP (C4 C4 57) at offset 0x1000 within it -- linear (DOS_HDLR_SEG<<4)+0x1000
+   = 0x1500, in the mapped V86 window, in the unused gap below the env block (0x6000) and
+   the program (PSP 0x10000). The reflect therefore surfaces to the host as VTIB_EVENT=4
+   with CS==H and EIP==0x1000, and the saved faulting CS:EIP/SS:ESP sit in VTIB_FLT_SAV*.
+   This routes a raw PM #GP (SS-retype, HLT, privileged op) into the same host loop that
+   services the INT->BOP path -- ntvdm's mechanism (Kernel RE session 6), no ntvdm globals. */
+/* Run 67 corrected mechanism (static disasm of 0x4f6e6f/0x4f6f67/0x4f6efd):
+   - [TIB+0x638] is the fault handler's STACK selector (writable-DATA); the reflect sets
+     new SS:ESP = [TIB+0x638]:0x1000 and builds an IRET frame there (0x4f6dc0 validates it
+     as writable-data -- a CODE selector is REJECTED, which is why run 65/66 failed).
+   - The handler CS:EIP comes from a table pointed to by [VDM_TIB+8], indexed by fault
+     CLASS (KiTrap0D pushes 6 for a #GP), stride 0x10: entry = {CS@+0 word, EIP@+4 dword}.
+     0x4f6efd reads it; 0x4f6d3c validates CS as code + EIP<=limit.
+   So we need TWO selectors + a table: a data stack selector and a code selector with a BOP,
+   and the table[6] = {code_sel, bop_off}, with [VDM_TIB+8] pointing at the table. */
+#define DPMI_FAULT_STK_SEG 0x0200    /* stack sel base = 0x2000; Sd:0x1000 = linear 0x3000 */
+#define DPMI_FAULT_COFF    0x0080    /* BOP offset within the handler code selector (linear 0x580) */
+#define DPMI_FAULT_BOP     0x57      /* BOP number planted at the handler code:COFF        */
+#define DPMI_FLT_CLASS_GP  6         /* KiTrap0D's fault class for a #GP (push 6)           */
+#define DPMI_TIB_FLTTBL    0x08      /* VDM_TIB offset holding the handler-table pointer    */
+
 /* EMS (M4): the LIM page frame is a 64KB RAM window in the UMA. v86_map_ems_frame
    scans the conventional page-frame segments AFTER VdmInitialize for a free 64KB
    hole and maps it there; g_ems_frame_lin holds the linear base actually chosen
@@ -129,6 +153,14 @@ static int   g_dpmi_vi = 1;                 /* DPMI virtual interrupt flag (INT 
    planted DPMI_PMRET catcher; allocated lazily on the first 0303. */
 static struct { WORD pm_sel; DWORD pm_off; WORD rm_es; DWORD rm_di; int used; } g_cb[DPMI_CB_SLOTS];
 static WORD  g_pmret_sel = 0;
+/* GH #18: the PM-fault reflect selectors (0 = not installed). Run 67 corrected model:
+   g_dpmi_fault_sel = the handler STACK selector (writable-data) written to [TIB+0x638];
+   g_dpmi_flt_code_sel = the handler CODE selector (with a BOP at DPMI_FAULT_COFF) whose
+   {sel,off} we plant in the class table; g_flt_tbl = the 8-entry handler table (stride
+   0x10) the kernel reads via [VDM_TIB+8], indexed by fault class. */
+static WORD  g_dpmi_fault_sel = 0;
+static WORD  g_dpmi_flt_code_sel = 0;
+static BYTE  g_flt_tbl[8 * 0x10] __attribute__((aligned(16)));
 /* DPMI LDT descriptor allocator. Indices 0=null,1=code(0x0F),2=data(0x17) are the
    switch's; DPMI clients allocate from 3+. We keep base/limit/access so INT 31h
    06/07/08/09 can get/modify them and reinstall via svc 10 (NtSetLdtEntries). */
@@ -1065,10 +1097,72 @@ static DWORD WINAPI dpmi_watchdog(LPVOID param)
 static void dpmi_install(int idx)
 {
     DWORD lo, hi, lim = g_ldt[idx].limit; BYTE fl = g_ldt[idx].flags;
+    BYTE acc = g_ldt[idx].access;
     WORD sel = (WORD)((idx << 3) | 7);
     if (lim > 0xFFFFF) { lim >>= 12; fl = (BYTE)(fl | 0x8); }   /* >1MB -> page granular */
-    dpmi_build_desc(g_ldt[idx].base, lim & 0xFFFFF, g_ldt[idx].access, fl, &lo, &hi);
+    /* Run 69 (option C: avoid the kernel PM-fault reflect). On the REAL CPU a data/stack
+       selector that a client retypes to CODE (or non-writable) faults the moment it is used
+       -- exactly i310102's wall: its C runtime does INT 31h 0009 to set SS (sel 0x1F, idx 3)
+       access = 0xFB (code), then the next stack write #GPs and the kernel cannot reflect it
+       (runs 51/52), so the VDM silently terminates. The interpreter (runs 53+) survived this
+       by NOT enforcing descriptor types. We do the same on the real CPU: the initial DATA (idx
+       2 = DS) and STACK (idx 3 = SS) selectors are ALWAYS installed as present writable-data,
+       so they stay usable no matter how the client retypes them. g_ldt[idx].access keeps the
+       client's requested value, so LAR/LSL introspection (dpmi_sel_desc) still reports it. */
+    if (idx == 2 || idx == 3) acc = 0xF2;                      /* present, DPL3, data R/W */
+    dpmi_build_desc(g_ldt[idx].base, lim & 0xFFFFF, acc, fl, &lo, &hi);
     v86_set_ldt_entries(sel, lo, hi, sel, lo, hi);             /* idempotent single-entry */
+}
+
+/* GH #18 (run 67 corrected): install the PM-fault reflect machinery. Two LDT selectors:
+   a writable-DATA stack selector (g_dpmi_fault_sel, based at DPMI_FAULT_STK_SEG<<4 so
+   its :0x1000 is a valid scratch stack top) written to [TIB+0x638]; and a CODE selector
+   (g_dpmi_flt_code_sel, based at DOS_HDLR_SEG<<4) with a BOP at DPMI_FAULT_COFF. The
+   handler table g_flt_tbl[class]=({code_sel,COFF}) is what the kernel reads via
+   [VDM_TIB+8] to set the reflected CS:EIP. Allocated once from the g_ldt[] pool. */
+static void dpmi_install_fault_trampoline(void)
+{
+    int si, ci; unsigned i;
+    volatile BYTE *hdlr = (volatile BYTE *)(ULONG_PTR)((DWORD)DOS_HDLR_SEG << 4);
+    if (g_dpmi_fault_sel) return;                  /* already installed */
+    if (g_ldt_next >= 510) return;
+    /* the handler CODE selector + its BOP */
+    ci = g_ldt_next++;
+    g_ldt[ci].base   = (DWORD)DOS_HDLR_SEG << 4;   /* 0x500 -> code:COFF = linear 0x580 */
+    g_ldt[ci].limit  = 0xFFFF;
+    g_ldt[ci].access = 0xFA;                       /* code exec/read, DPL3, present     */
+    g_ldt[ci].flags  = 0;
+    dpmi_install(ci);
+    g_dpmi_flt_code_sel = (WORD)((ci << 3) | 7);
+    hdlr[DPMI_FAULT_COFF + 0] = VDM_BOP0;          /* plant C4 C4 57 at code:COFF (0x580) */
+    hdlr[DPMI_FAULT_COFF + 1] = VDM_BOP1;
+    hdlr[DPMI_FAULT_COFF + 2] = DPMI_FAULT_BOP;
+    /* the handler STACK selector (writable-data) */
+    si = g_ldt_next++;
+    g_ldt[si].base   = (DWORD)DPMI_FAULT_STK_SEG << 4;  /* 0x2000 -> stack:0x1000 = 0x3000 */
+    g_ldt[si].limit  = 0xFFFF;
+    g_ldt[si].access = 0xF2;                       /* data read/write, DPL3, present      */
+    g_ldt[si].flags  = 0;
+    dpmi_install(si);
+    g_dpmi_fault_sel = (WORD)((si << 3) | 7);
+    /* the per-fault-class handler table: entry N (stride 0x10) = {CS@+0 word, EIP@+4 dword}.
+       Fill the #GP class (6) with our code selector + BOP offset; zero the rest. */
+    for (i = 0; i < sizeof g_flt_tbl; ++i) g_flt_tbl[i] = 0;
+    *(WORD  *)(g_flt_tbl + DPMI_FLT_CLASS_GP * 0x10 + 0) = g_dpmi_flt_code_sel;
+    *(DWORD *)(g_flt_tbl + DPMI_FLT_CLASS_GP * 0x10 + 4) = DPMI_FAULT_COFF;
+}
+
+/* GH #18 (run 67): arm the VDM_TIB PM-fault reflect state before each PM entry. The kernel
+   takes the "first level, save" path only when the nest counter is 0 (then inc's it), so
+   this runs before EVERY dpmi_enter_pm. Sets: nest=0, the 16/32 flag, the handler STACK
+   selector at [TIB+0x638], and the handler-table pointer at [VDM_TIB+8]. */
+static void dpmi_arm_fault_trampoline(volatile BYTE *tib, WORD flag)
+{
+    if (!g_dpmi_fault_sel) return;
+    *(volatile WORD  *)(tib + VTIB_FLT_NEST)  = 0;
+    *(volatile WORD  *)(tib + VTIB_FLT_FLAG)  = flag;
+    *(volatile WORD  *)(tib + VTIB_FLT_HSEL)  = g_dpmi_fault_sel;         /* stack selector */
+    *(volatile DWORD *)(tib + DPMI_TIB_FLTTBL) = (DWORD)(ULONG_PTR)g_flt_tbl;
 }
 
 /* Linear base of a selector, for INT 21h pointer thunks. */
@@ -1170,6 +1264,7 @@ static void dpmi_invoke_callback(dos_machine_t *m, volatile BYTE *tib, int slot)
        callback can allocate descriptors, print, sim-real-mode-int, etc. */
     for (ph = 0; ph < 64 && !cbdone; ++ph) {
         DWORD ev, eip, vec;
+        dpmi_arm_fault_trampoline(tib, 0);   /* GH #18: re-arm the PM-fault reflect (no-op on interp path) */
         dpmi_enter_pm(tib);
         ev = VDM_REG(tib, VTIB_EVENT); eip = VDM_REG(tib, VTIB_EIP) & 0xFFFF;
         if (ev == VDM_EVENT_BOP && eip == DPMI_PMRET_OFF
@@ -1690,7 +1785,10 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
  *  and stops the run -- that report is the spike's to-do signal (the next opcode to   *
  *  add). No BOP patch is needed in this mode (the interpreter reads the raw CD nn).   *
  * ================================================================================ */
-static int g_dpmi_use_interp = 1;             /* run 53 experiment toggle (0 = kernel PM path) */
+static int g_dpmi_use_interp = 0;             /* run 53 toggle (1 = interp fallback, 0 = kernel PM path).
+                                                 run 59 (GH #18): 0 to exercise the real-CPU kernel path
+                                                 WITH the +0x638 PM-fault trampoline. Flip to 1 to restore
+                                                 the VM-confirmed interpreter runs (i310102/DPMIBACK). */
 
 static uint32_t dpmi_seg2lin(uint16_t sel) { return dpmi_sel_base(sel); }
 
@@ -1792,7 +1890,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     (void)hInst; (void)hPrev; (void)lpCmd; (void)nShow;
     progpath[0] = 0; args[0] = 0;
 
-    p = zput(p, "NTVDMEX clean host\r\nSTAGE0: WinMain entered [build dpmi-harness-v58]\r\n");
+    p = zput(p, "NTVDMEX clean host\r\nSTAGE0: WinMain entered [build dpmi-harness-v62]\r\n");
     log_write(LOG_PATH, report, p);
     serial_init();                                      /* DPMI harness: COM1 log sink */
     serial_out(report, p);
@@ -1935,6 +2033,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     } }
     hdlr[DPMI_PMRET_OFF + 0] = VDM_BOP0; hdlr[DPMI_PMRET_OFF + 1] = VDM_BOP1;
     hdlr[DPMI_PMRET_OFF + 2] = DPMI_PMRET_BOP;
+    /* (GH #18 run 67: the PM-fault handler BOP is planted at the handler CODE selector's
+       DPMI_FAULT_COFF by dpmi_install_fault_trampoline(), not here.) */
     /* EMS detection method 2: programs read the INT 67h vector's segment:000Ah for
        the device-driver name "EMMXXXX0". Park it in the handler segment. */
     for (i = 0; i < sizeof(emmname); ++i) hdlr[DOS_EMM_NAME_OFF + i] = emmname[i];
@@ -2246,25 +2346,73 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                   p = zput(p, ")\r\n");
                   log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
                 }
+                /* GH #18 (run 67): install the PM-fault reflect machinery, so a RAW (non-BOP)
+                   PM #GP -- an SS-retype, HLT, or privileged op the INT->BOP scan cannot
+                   pre-patch -- is reflected by the kernel to our handler (code sel : BOP) on a
+                   scratch stack, instead of silently terminating the VDM (runs 20-34). */
+                dpmi_install_fault_trampoline();
+                p = zput(p, "DPMI: PM-fault reflect stkSel=0x"); p = zhex(p, g_dpmi_fault_sel);
+                p = zput(p, " codeSel=0x"); p = zhex(p, g_dpmi_flt_code_sel);
+                p = zput(p, " bop@code:0x"); p = zhex(p, DPMI_FAULT_COFF);
+                p = zput(p, " tbl@0x"); p = zhex(p, (DWORD)(ULONG_PTR)g_flt_tbl);
+                p = zput(p, " class="); p = zhex(p, DPMI_FLT_CLASS_GP);
+                p = zput(p, "\r\n");
+                log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+
                 /* --- DPMI protected-mode execution loop -----------------------------------
-                   dpmi_enter_pm runs the client in PM until it hits a BOP (a patched INT nn);
-                   the kernel reflects C4 C4 as VTIB_EVENT=4 (run 32). We look up the original
-                   vector by the fault EIP, dispatch (INT 31h = DPMI, INT 21h = DOS), write the
-                   returns into the guest CONTEXT, advance past the 2-byte INT, and re-enter PM. */
+                   dpmi_enter_pm runs the client in PM until it stops. Two stop kinds:
+                   (1) a patched INT nn BOP -- the kernel reflects C4 C4 as VTIB_EVENT=4
+                       (run 32); we look up the original vector by fault EIP and dispatch.
+                   (2) GH #18: a raw PM #GP the kernel reflects to our handler code selector
+                       -- also VTIB_EVENT=4, but CS==g_dpmi_flt_code_sel and EIP==DPMI_FAULT_COFF.
+                       We recover the saved faulting CS:EIP/SS:ESP from the VTIB_FLT_SAV* slots. */
                 for (steps = 0; steps < 256; ++steps) {
-                    DWORD ev, eip, vec; int rc;
+                    DWORD ev, eip, csv, vec; int rc;
                     /* run 52 heartbeat: publish where we're about to hand off + bump the
                        iteration counter BEFORE entering, so a watchdog sample taken while
                        we're blocked inside dpmi_enter_pm sees a FROZEN iter at this CS:EIP. */
                     g_dpmi_enter_cs  = VDM_REG(tib, VTIB_CS)  & 0xFFFF;
                     g_dpmi_enter_eip = VDM_REG(tib, VTIB_EIP) & 0xFFFF;
                     g_dpmi_iter      = (LONG)(steps + 1);
+                    /* run 66 diagnostic (kept): log FIXED_NTVDMSTATE [0x714] once. Run 66 proved
+                       bit3=0 already (classifier is NOT the blocker), so no forcing needed -- for
+                       a #GP KiTrap0D pushes class 6, which reaches the generic reflect body. */
+                    if (steps == 0) {
+                        DWORD st714 = *(volatile DWORD *)(ULONG_PTR)0x714;
+                        p = zput(p, "GH#18: [0x714]=0x"); p = zhex(p, st714);
+                        p = zput(p, " bit3="); p = zhex(p, (st714 >> 3) & 1);
+                        p = zput(p, " bit4="); p = zhex(p, (st714 >> 4) & 1);
+                        p = zput(p, " bit14="); p = zhex(p, (st714 >> 14) & 1);
+                        p = zput(p, " tib8=0x"); p = zhex(p, *(volatile DWORD *)(tib + DPMI_TIB_FLTTBL));
+                        p = zput(p, "\r\n");
+                        log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                    }
+                    dpmi_arm_fault_trampoline(tib, 0);   /* re-arm nest/flag/[0x638]/[TIB+8] */
                     dpmi_enter_pm(tib);
                     ev  = VDM_REG(tib, VTIB_EVENT);
                     eip = VDM_REG(tib, VTIB_EIP) & 0xFFFF;
-                    vec = (ev == 4) ? g_int_vec[eip] : 0;
-                    g_dpmi_last_ev  = ev;  g_dpmi_last_eip = eip;
-                    g_dpmi_last_cs  = VDM_REG(tib, VTIB_CS) & 0xFFFF;  g_dpmi_last_vec = vec;
+                    csv = VDM_REG(tib, VTIB_CS) & 0xFFFF;
+                    g_dpmi_last_ev  = ev;  g_dpmi_last_eip = eip;  g_dpmi_last_cs = csv;
+                    /* GH #18: the raw-PM-#GP reflect landed on our handler code selector. THIS
+                       is the proof point: the kernel reflected a fault it used to swallow. */
+                    if (ev == VDM_EVENT_BOP && csv == (g_dpmi_flt_code_sel & 0xFFFF)
+                        && eip == DPMI_FAULT_COFF) {
+                        DWORD fcs  = *(volatile WORD  *)(tib + VTIB_FLT_SAVCS);
+                        DWORD feip = *(volatile DWORD *)(tib + VTIB_FLT_SAVEIP);
+                        DWORD fss3 = *(volatile DWORD *)(tib + VTIB_FLT_SAV3);
+                        p = zput(p, "GH#18: PM-FAULT REFLECTED to trampoline -- saved CS:EIP=0x");
+                        p = zhex(p, fcs); p = zput(p, ":0x"); p = zhex(p, feip);
+                        p = zput(p, " sav3=0x"); p = zhex(p, fss3);
+                        p = zput(p, " nest=0x"); p = zhex(p, *(volatile WORD *)(tib + VTIB_FLT_NEST));
+                        p = zput(p, " -- REAL-CPU PM #GP reflect WORKS\r\n");
+                        log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                        /* Servicing a real fault (emulate/skip the instruction, then resume at
+                           the saved CS:EIP) is the follow-on; for run 59 the reflect firing IS
+                           the deliverable, so stop the client cleanly here. */
+                        break;
+                    }
+                    vec = (ev == VDM_EVENT_BOP) ? g_int_vec[eip] : 0;
+                    g_dpmi_last_vec = vec;
                     rc = dpmi_service_pm_int(&m, tib, vec, steps);
                     if (rc > 0) continue;   /* serviced -> keep running the PM client */
                     break;                  /* 0 = client exited, <0 = unexpected stop */

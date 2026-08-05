@@ -152,6 +152,30 @@ typedef LONG (WINAPI *PFN_NtUnmapViewOfSection)(HANDLE, PVOID);
 #define VDM_EVENT_BOP     4
 #define VDM_EVENT_HWIRQ   6
 
+/* --- PM-fault reflect block (GH #18, real-CPU protected mode) --------------------------
+   When a raw (non-BOP) protected-mode #GP faults, the kernel's reflect path
+   (KiTrap0D -> 0x565041[BOP-only] -> 0x4f67f8 -> 0x4f6f67 -> PM branch 0x4f6fed ->
+   0x4f6e6f) reflects the fault through this VDM_TIB block, recovered by disassembling
+   ntoskrnl.exe 0x4f6e6f (Kernel RE sessions 4-7). The writer receives edi = VDM_TIB+0x634
+   and, when the nest counter is 0, saves the interrupted CS/EIP and installs the handler
+   selector as the new CS with EIP=0x1000:
+     +0x634 word  nesting counter -- MUST be 0 for the "first level, save CS:EIP" path;
+                  the kernel inc's it, so the host re-arms it to 0 before each PM entry.
+     +0x636 word  16/32-bit client flag (ntvdm arm routine 0xf050ad7 -> [0xf09c178]).
+     +0x638 word  handler selector -- the kernel loads this as the new CS.
+     +0x63a word  saved faulting CS   (kernel writes).
+     +0x63c dword saved faulting EIP  (kernel writes).
+     +0x640 dword saved third slot ([trap+0x10]; SS:ESP-class, kernel writes).
+   The plan (Kernel RE session 6): make +0x638 a code selector whose base+0x1000 holds a
+   BOP (C4 C4 nn); the kernel jumps the guest to selector:0x1000 -> the BOP reflects as
+   VTIB_EVENT=4 -> the host reads the saved fault CS:EIP from +0x63a/0x63c and services it. */
+#define VTIB_FLT_NEST   0x634    /* nesting counter (arm to 0 each entry)        */
+#define VTIB_FLT_FLAG   0x636    /* 16/32-bit client flag                        */
+#define VTIB_FLT_HSEL   0x638    /* PM-fault handler selector (our trampoline H) */
+#define VTIB_FLT_SAVCS  0x63A    /* kernel: saved faulting CS                     */
+#define VTIB_FLT_SAVEIP 0x63C    /* kernel: saved faulting EIP                    */
+#define VTIB_FLT_SAV3   0x640    /* kernel: saved third slot (SS:ESP-class)      */
+
 /* Access a 32-bit guest register/field at VDM_TIB offset `off` (e.g. VTIB_EAX). */
 #define VDM_REG(tib, off)      (*(volatile DWORD *)((volatile BYTE *)(tib) + (off)))
 /* Set the low 16 bits of such a field, preserving the high half. */

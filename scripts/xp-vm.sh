@@ -80,6 +80,16 @@ build_args() {
         #     the log directly (no GUI screendump, no stale-host ambiguity). ---------
         -serial "file:$VM_DIR/serial.log"
 
+        # --- COM2 -> unix socket: the KERNEL-DEBUG (KD) transport (option B). XP is
+        #     configured with /debug /debugport=COM2 (via kddebug.bat); radare2's winkd
+        #     plugin attaches to this socket ("r2 winkd://vm/kd.sock") to single-step the
+        #     kernel VDM #GP-reflect and SEE which gate rejects (HVF denies the gdbstub).
+        #     Use an explicit chardev with logappend so the socket RE-ACCEPTS after a client
+        #     disconnects (a bare `-serial unix:...,server` is single-use -> "Connection
+        #     refused" on the 2nd attach). ------------------------------------------------
+        -chardev "socket,id=kddbg,path=$VM_DIR/kd.sock,server=on,wait=off"
+        -serial chardev:kddbg
+
         # --- host control socket: lets the host drive the VM (take snapshots via
         #     'savevm', hot-swap the transfer CD, send keys) without the GUI. ---
         -qmp "unix:$VM_DIR/qmp.sock,server=on,wait=off"

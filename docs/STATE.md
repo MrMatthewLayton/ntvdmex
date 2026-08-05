@@ -401,6 +401,117 @@ order:
    playable with flawless sound**. Focus is now **GitHub milestone #6 "Playable Games"** (P0 #18; P1 #19,
    #2, #20, #21, #23; P2 #22, #17; Win16/WOW M5/M6 explicitly OUT of scope for this push). Rationale in
    memory [[playable-games-direction]].
+   **Kernel RE session 7 (2026-08-05) — the #19-scope GO/NO-GO is RESOLVED = GO (disasm-only).** Question:
+   can real-CPU 32-bit PM work under XP's LDT / how does ntvdm give DOS/4GW its flat selectors? Answer, at
+   the instruction level: the kernel LDT install validator (`0x557514`, via `NtVdmControl 0x4e09b7` → svc 10
+   `VdmSetLdtEntries 0x55775b`) hard-caps every usable descriptor to **`base + limit ≤ MmHighestUserAddress`**
+   (`0x7FFEFFFF` ≈ 2GB; `0xBFFEFFFF` with `/3GB`) — a true 4GB flat selector is REJECTED, max flat ≈ 2GB.
+   **But stock ntvdm passes the client's raw descriptor straight to that same validator (`ntvdm 0xf050120`,
+   `push 0xa`→`NtVdmControl`, no clamp), so ntvdm runs under the IDENTICAL cap** — the 2GB "flat" limit is a
+   platform constant shared with ntvdm, not an NTVDMEX blocker. A DOS game uses a few MB (Doom <16MB), so
+   32-bit execution never faults on the limit. **⇒ #18's `+0x638` reflect is worth building for the whole
+   32-bit game class (ntvdm parity), not just 16-bit fidelity.** Selector recipe + bounded residual risk in
+   docs "Kernel RE session 7".
+   **Run 65 (2026-08-05) — the `+0x638` PM-fault trampoline is IMPLEMENTED (VM-CONFIRM PENDING).** Host build
+   `dpmi-harness-v59`: `dpmi_install_fault_trampoline()` installs a code selector H based at `DOS_HDLR_SEG<<4`
+   with a BOP `C4 C4 57` planted at H:0x1000 (linear 0x1500); `dpmi_arm_fault_trampoline()` writes
+   `[TIB+0x634]=0/[TIB+0x636]=flag/[TIB+0x638]=H` before every `dpmi_enter_pm`; the main PM loop detects the
+   reflected fault (`event==4 && CS==H && EIP==0x1000`) and logs the saved fault CS:EIP from `+0x63a/+0x63c`.
+   `g_dpmi_use_interp` flipped to 0 for this build (real-CPU kernel path; flip to 1 to restore the interpreter
+   runs). Re-confirmed the kernel field layout by disassembling `ntoskrnl 0x4f6e6f`. Cross-compiles clean,
+   KERNEL32-only. Probe `tools/dostest/pmfault.com` (detect DPMI → switch → `HLT` = raw PM #GP), runner
+   `pfrun.bat`; both staged on the test ISO.
+   **Run 65 VM RESULT (2026-08-05, interactive `D:\pfrun.bat`) — the reflect did NOT fire; clean NEGATIVE.**
+   Serial log: switch to PM OK (CS=0x0f:0x12c), trampoline install OK (`H=0x27 base=0x500 bop@0x1500`), the
+   guest ran IN PM and its *patched* INT 21h printed `about to HLT` — then the log stops dead on the `HLT`
+   (raw #GP), VDM silently gone, no `PM-FAULT REFLECTED`. So the kernel's **C4 C4 BOP reflect (0x565041)
+   works but the raw non-BOP #GP reflect does not**, even with `+0x638` armed to a valid selector+BOP. Per
+   session 6's run-31 reconciliation, had the fault reached 0x4f6e6f it would have reflected — so the HLT #GP
+   is **rejected UPSTREAM** of the `+0x638` writer, inside `0x4f67f8` (the `[0x714]` classifier bits 3/4/14)
+   or `0x4f6f67` — an early return-0 on VDM state we haven't established (confirms runs 31–34 on the real
+   CPU). The `+0x638` plumbing was necessary but not sufficient.
+   **Run 66 (2026-08-05, VM-confirmed) — the `[0x714]` classifier-bits theory is REFUTED on the real CPU.**
+   RE'd `0x4f67f8`: the #GP reflect classifies on `[0x714]` bits 3/4/14; the generic reflect body (→ our
+   trampoline) needs bit 3 CLEAR. Host v60 logs `[0x714]` + forces bit3 clear. VM result: `[0x714]=0xc0007130
+   bit3=0 bit4=1 bit14=1` — **bit3 is ALREADY 0**, forcing it clear was a no-op, and the HLT #GP still doesn't
+   reflect. So the classifier isn't the blocker (a #GP provably reaches the reflect body `0x4f689c`); the
+   reject is a **descriptor-validation gate** in the body (`0x4f6d3c` CS / `0x4f6dc0` SS / `0x4f6dc0`-on-H
+   inside `0x4f6e6f`, all via `0x45dd5f`). Since the guest already ran in PM with CS=0x0f/SS=0x1f (CPU
+   validated them), the prime suspect is the **handler selector H**: we set it to our own LDT code sel 0x27,
+   but ntvdm's arm routine `0xf050ad7` sets `[TIB+0x638]=word[TIB+0x36c]` (a KERNEL-provided selector), and
+   `0x4f6dc0`'s type gate wants writable-data, which a plain code sel fails. **RESUME = run 67: read/log
+   `[VDM_TIB+0x36c]` after VdmInitialize; if the kernel populates it, use THAT as the handler selector (and
+   find what its `:0x1000` must hold); finish `0x4f6dc0`/`0x45dd5f`'s exact type predicate; bisect which of
+   CS/SS/H fails.** Keep the run-65 `+0x638`/BOP machinery (correct final hop). Full detail: docs "Run 66".
+   Harness gotcha learned: never `rm vm/serial.log` while QEMU holds it (writes go to the unlinked inode) —
+   truncate instead; `qmp.py click` px = guest-pixel × 1.28.
+   **Run 67 static prep (2026-08-05) — reflect mechanism CORRECTED; run 65 was wrong two ways.** Disasm of
+   `0x4f6e6f`/`0x4f6f67`/`0x4f6efd`: (1) `[TIB+0x638]` is the fault handler's **STACK** selector (writable-
+   DATA; reflect sets SS:ESP=[TIB+0x638]:0x1000, `0x4f6dc0` validates it as data) — run 65 made it a CODE sel
+   0xFA, which the gate REJECTS → reflect returns 0 → terminate = the concrete bug. (2) The handler **CS:EIP**
+   comes from a **per-fault-class table in the VDM_TIB** (`0x4f6efd`: `[esi+0xc]=word[VDM_TIB+class*0x10]`
+   CS, `+4` EIP), validated as code + EIP≤limit. **RESUME = run 67 impl: make [TIB+0x638] writable-data
+   (base+0x1000 = scratch stack); plant our BOP at a code sel:off and write that CS:EIP into
+   VDM_TIB[class*0x10] for the #GP class; keep the +0x634 arming. STILL NEEDED: pin the PM-#GP fault-class
+   index (0x4f6f67's ecx≤7; trace 0x4f67f8 vector 0xd→class) + confirm the table TIB base/stride.** Full
+   detail: docs "Run 67 static prep".
+   **Run 67 IMPLEMENTED + VM RESULT (2026-08-05, host v61) — corrected machinery is right, reflect STILL does
+   not fire.** KiTrap0D pushes fault-class **6** for a #GP; handler CS:EIP = `[[VDM_TIB+8] + class*0x10]`
+   ({CS@+0, EIP@+4}). Built the full model: data stack sel 0x2f @ [TIB+0x638], code sel 0x27 with BOP@0x80,
+   8-entry class table @0x0f026e60 with entry6={0x27,0x80}, [VDM_TIB+8]=table, armed each entry. VM: switch
+   OK, guest ran in PM + printed, then HLT → silent terminate, **no PM-FAULT REFLECTED**. `[VDM_TIB+8]` read 0
+   before our arm (kernel doesn't populate it → host must, we do). Everything host-settable is set and it
+   still terminates ⇒ **run 34's conclusion holds on the real CPU: the reflect is gated on ntvdm's COMPLETE
+   DPMI-init state, and a silent terminate gives no signal which gate rejects.** **RESUME = run 68: make the
+   wall OBSERVABLE — launch QEMU with `-gdb tcp::PORT`/`-s`, attach gdb, breakpoint kernel VA 0x4f67f8 (+
+   0x4f6f67/0x4f6efd/0x4f6e6f), fire pfrun.bat, single-step the reflect to see EXACTLY which predicate returns
+   0.** Alt: RE + mirror ntvdm's full 1687→mode-switch→DPMI-init (0xf02d39f/0xf01a300/0xf050ad7/0xf00532e); or
+   accept the interpreter as the 16-bit path (already runs i310102/DPMIBACK) and revisit real-CPU PM later.
+   The run-65…67 +0x638/table machinery is retained (correct final hop). Full detail: docs "Run 67 VM RESULT".
+   **Run 68 (2026-08-05) — HVF BLOCKS the gdbstub; kernel single-stepping is NOT available on this VM.** QEMU
+   returned `gdbstub: current accelerator doesn't support guest debugging` (works only with TCG/KVM, not
+   `-accel hvf`). So we cannot observe which reflect gate rejects without changing tooling. **Strategic fork
+   for #18 (needs a decision):** (A) TCG+gdbstub (slow one-time single-step); (B) guest KD on COM2 + r2 winkd
+   (durable kernel-debug, works with HVF); (C) **AVOID the reflect — pre-patch identifiable privileged insns
+   (HLT/CLI/STI/IN/OUT/LGDT/…) to BOPs like the INT scan, and DON'T apply the SS-retype (setaccess) to the real
+   LDT (keep it valid-data) — keeps the hot path on the real CPU, sidesteps the intractable reflect; best route
+   to real-CPU PM for games**; (D) ship the interpreter for 16-bit + weigh a 32-bit interp for DOS/4GW.
+   Recommended = (C) mainline + (B) as the debugging capability. Full detail: docs "Run 68 RESULT".
+   **Run 69 (2026-08-05, host v62) — option (C) targeted fix NOT sufficient; i310102 still wedges invisibly.**
+   `dpmi_install` now always installs the DS(idx2)/SS(idx3) selectors as writable-data (0xF2) on the real LDT
+   regardless of client retype (tracks requested access for LAR/LSL). VM (real-CPU path, i31run.bat): i310102
+   switched to PM, serviced setlimit/setbase/setaccess(0x1f→0xFB), then **stopped at the exact run-51/52 wall
+   with NO watchdog wd[] samples = process-wide kernel wedge** (run 52 signature). So keeping SS valid-data did
+   not stop the fault — a raw fault hits right after setaccess anyway (candidates blind: a further retype, a
+   stack-limit #GP from setlimit 0x25cf, or a privileged op). **SESSION CONCLUSION (runs 65-69): blind fixing
+   is EXHAUSTED — both real-CPU strategies (replicate reflect 65-67, avoid it 69) die on an INVISIBLE secondary
+   fault, and HVF denies the gdbstub (68). The gating capability is kernel-side visibility = option (B) guest
+   KD.** RESUME options: (B) stand up XP KD on COM2 + radare2 winkd (turns blind guessing into observation) —
+   the enabling next project; OR keep the interpreter for 16-bit (g_dpmi_use_interp=1, already runs
+   i310102+DPMIBACK) and pivot effort to the SOUND epic (#20 SB16 / #21 OPL). Real-CPU machinery stays behind
+   the toggle. Full detail: docs "Run 69 RESULT" + "session conclusion".
+   **Option B (guest KD) STOOD UP (2026-08-05) — transport + KDCOM sync WORK, r2 winkd XP profile incomplete.**
+   `xp-vm.sh` exposes guest COM2 as `vm/kd.sock`; `tools/dostest/kddebug.bat` set boot.ini `/debug
+   /debugport=com2 /baudrate=115200` (VM-confirmed); rebooted. `r2 -d winkd://vm/kd.sock` → **"Sync done! (1
+   cpus found)"** (the KDCOM serial handshake over the QEMU socket WORKS) but then `Cannot retrieve pid` + `dr
+   eip`=0 — r2's winkd EPROCESS/register extraction doesn't fully support XP SP3. **RESUME to make KD usable:**
+   (1) r2 winkd vs a `/break`-halted kernel (risk: bricks boot until fixed offline); (2) a minimal custom
+   KDCOM client (breakin 0x62626262 → READ_CONTROL_SPACE/READ_VIRTUAL for regs+mem at kernel VA
+   0x400000+0xf67f8 — the wire protocol works, only r2's high-level layer is the gap); (3) WinDbg via the pipe.
+   Infra (COM2 + kddebug.bat + confirmed sync) is reusable. Full detail: docs "Option B build".
+   **Custom KDCOM client WORKS at the wire level (2026-08-05) — `scripts/kdclient.py`.** After r2 winkd proved
+   unusable, wrote our own XP 32-bit serial-KD client. QEMU fix: a bare `-serial unix:...,server` is
+   single-use → switched to a re-accepting `-chardev socket,id=kddbg,...,server=on` (xp-vm.sh). Breakthrough:
+   the client broke in and **parsed a STATE_CHANGE64 (PacketType=7 — XP uses the "64" variant, which is why r2
+   misparsed it → eip=0); kernel halted at PC=0x80527bdc**. Framing/checksum/breakin/state-change all work.
+   **TWO bugs to fix (they froze the VM the user had to kill):** (1) must send `DbgKdContinueApi` (0x3136)
+   before exit or XP freezes — now added in a `finally`; (2) KD state persists across connects (halted kernel
+   waits for MANIPULATE, so a fresh breakin times out) → the whole flow must be ONE persistent session:
+   break → GetVersion (0x3146→KernBase; reflect = KernBase+(0x4f67f8-0x400000)) → WriteBP (0x3134) → Continue →
+   run pfrun.bat → catch bp → GetContext (0x3132)+ReadVMem (0x3130) → step the gates. manipulate scaffolding +
+   GetVersion parse are in kdclient.py (packet-id handshake needs live tuning). **Closest we've been to SEEING
+   the reflect reject.** VM currently DOWN (user killed the stuck one); relaunch `./scripts/xp-vm.sh run` (KD
+   already in boot.ini). Full detail: docs "Option B, custom KDCOM client".
    **RESUME = GH #18 (P0): crack the kernel PM-fault reflect so PM runs on the REAL CPU like ntvdm** — gets
    16- AND 32-bit PM (Doom's DOS/4GW = #19) without a 386 emulator. **Kernel RE session 3 lead
    (2026-08-05):** the kernel reads FIXED_NTVDMSTATE at fixed linear `0x714`; the reflect gate is

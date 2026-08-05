@@ -1657,6 +1657,284 @@ block and far-calls the entry to switch. `0305` returns the state-save size + sa
 the two switch stubs (reuse the proven `dpmi_switch_to_pm` / the `0301` PM→V86 machinery), then re-run
 `D:\rjrun.bat` and follow the log. This unblocks the raw-switch extender class.
 
+### Run 65 (2026-08-05) — GH #18: the `+0x638` real-CPU PM-fault trampoline (IMPLEMENTED; VM-CONFIRM PENDING) `[IMPL — needs the interactive VM gate]`
+
+Strategic pivot (see [[playable-games-direction]]): the interpreter (runs 53–64) is the **fallback**; the
+**mainline is running protected mode on the REAL CPU like ntvdm**. Kernel RE session 7 returned **GO** on
+32-bit reachability (XP caps flat selectors to ~2GB but stock ntvdm shares that cap, so DOS/4GW is reachable
+to ntvdm parity), so #18's PM-fault reflect is worth building for the whole game class. Run 65 **implements**
+the `+0x638` PM-fault trampoline per Kernel RE session 6's actionable spec — host build `dpmi-harness-v59`,
+probe `tools/dostest/pmfault.com`, runner `pfrun.bat`.
+
+**What the reflect chain does (re-confirmed by disassembling `ntoskrnl 0x4f6e6f` this session).** The caller
+passes `edi = VDM_TIB+0x634`; when the nesting counter (`+0x634`, word) is 0 it saves the interrupted context
+and redirects execution:
+```
+edi+0 (TIB+0x634) nest counter : cmp==0 -> first level; inc'd afterwards
+edi+4 (TIB+0x638) handler sel  : movzx eax,word -> installed as the faulting context's new CS
+edi+6 (TIB+0x63a) saved CS     : <- word[trapctx+0]
+edi+8 (TIB+0x63c) saved EIP    : <- dword[trapctx+4]
+edi+c (TIB+0x640) saved slot3  : <- dword[trapctx+0x10]
+then: trapctx.CS = [TIB+0x638] ; trapctx.EIP = 0x1000    (mov [esi+4],0x1000)
+```
+So the kernel jumps the faulting guest to **`selector([TIB+0x638]) : 0x1000`**. (The only `return 0` paths in
+`0x4f6e6f` are the SEH unwind if `+0x634`/the trap-context is unwritable, and a `je` on `call 0x4f6dc0`'s
+result — a residual gate to watch if the reflect still doesn't fire.)
+
+**The implementation (`src/`, all cross-compiles clean, KERNEL32-only):**
+- `ntvdm.h`: named the block `VTIB_FLT_NEST/FLAG/HSEL(0x634/636/638)` + `SAVCS/SAVEIP/SAV3(0x63a/63c/640)`.
+- `main.c`: `dpmi_install_fault_trampoline()` allocates a g_ldt[] **code selector H** based at `DOS_HDLR_SEG<<4`
+  (0x500), limit 0xFFFF, access 0xFA; a **BOP `C4 C4 57`** is planted at offset `0x1000` → linear **0x1500**
+  (mapped V86 window, in the unused gap below env seg 0x600 / PSP 0x10000). `dpmi_arm_fault_trampoline()`
+  writes `[TIB+0x634]=0 / [TIB+0x636]=flag / [TIB+0x638]=H` and is called **before every `dpmi_enter_pm`**
+  (main PM loop + the 0303 callback loop) — the kernel inc's the nest counter, so it must be re-zeroed each
+  entry. The main PM loop now detects the reflected fault (`event==4 && CS==H && EIP==0x1000`), reads the saved
+  fault `CS:EIP` from `+0x63a/+0x63c` (+ slot3 from `+0x640`), and logs `GH#18: PM-FAULT REFLECTED`. The
+  INT→BOP scan stays the fast path; the trampoline is the catch-all for raw (non-BOP) `#GP`s.
+- `g_dpmi_use_interp` flipped to **0** for this build so the real-CPU kernel path runs (flip back to 1 to
+  restore the VM-confirmed interpreter runs; the interpreter code is untouched).
+- Probe `pmfault.asm`: detect DPMI → far-call switch → print a PM marker (patched INT 21h BOP) → execute
+  **`HLT`** (privileged at CPL3 ⇒ raw `#GP(0)`, not a BOP, not a scanned INT) to fire the trampoline.
+
+**VM-confirm (interactive, PENDING):** boot the VM with a display (`./scripts/xp-vm.sh run`),
+`qmp.py cd /tmp/ntvdmex-test.iso`, double-click **`D:\pfrun.bat`**, read `vm/serial.log`.
+- **Success** = the log reaches `PMFAULT: in PROTECTED MODE -- about to HLT` **and then** `GH#18: PM-FAULT
+  REFLECTED to trampoline -- saved CS:EIP=... -- REAL-CPU PM #GP reflect WORKS`. That proves the kernel
+  reflects a fault it silently swallowed in runs 20–34 — the keystone for real-CPU PM.
+- **Failure** = the log stops after `about to HLT` (the VDM silently terminates, as in runs 20–34) → the
+  reflect is still gated; next lead is `0x4f6dc0`'s predicate and the classifier bits (`0x714` 3/4/14) the
+  monitor sets at init. Either outcome is a clean, decisive signal.
+Servicing a *real* fault (emulate/skip the faulting instruction, then resume at the saved `CS:EIP`) is the
+follow-on once the reflect is confirmed firing.
+
+**VM RESULT (2026-08-05, interactive `D:\pfrun.bat`, host `dpmi-harness-v59`) — the reflect did NOT fire; a
+clean, decisive NEGATIVE.** Full serial log:
+```
+STAGE0: WinMain entered [build dpmi-harness-v59]
+STAGE2: DPMI 1687 -> AX=0 ES:DI=0x50:0x50
+STAGE3: DPMI_BOP far-call LANDED @ 0x50:0x50 -- switching to PM
+ [svc11=0 svc10=0] retcs=0x100 clo=0x1000ffff chi=0xfa00 segbase C=D=S=0x1000 -> PM ok (CS=0x0f:0x12c)
+DPMI: patched 9 INT sites -> BOP (full 64K scan, last off 0x14a)
+DPMI: PM-fault trampoline H=0x27 base=0x500 bop@0x1500          <- install OK
+INT21h AH=09 print: "PMFAULT: in PROTECTED MODE -- about to HLT (raw #GP)..."   <- guest ran IN PM, printed
+<log ends here -- no "PM-FAULT REFLECTED"; VDM silently gone>
+```
+**Interpretation — the wall is now precisely bracketed.** The trampoline installed correctly and the guest
+demonstrably executed in protected mode (its *patched* `INT 21h` reflected as `event=4` and printed). So the
+kernel's **C4 C4 BOP reflect (`0x565041`) works**, but the **raw (non-BOP) `#GP` reflect does not** — *even
+with `+0x638` armed to a valid code selector whose `:0x1000` holds a live BOP*. Per session 6's reconciliation
+of run 31 (setting `+0x638` made the reflect *proceed* to `sel:0x1000`), had the fault reached `0x4f6e6f` it
+would have reflected here. It did not. **⇒ the HLT `#GP` is rejected UPSTREAM of the `+0x638` writer** —
+inside `0x4f67f8` (the non-BOP fault reflect; top-gate `EPROCESS.VdmObjects` we pass, then the `[0x714]`
+classifier on bits 3/4/14) or `0x4f6f67` — an early `return 0` on VDM state our host has not established. This
+**confirms runs 31–34's localization on the real CPU** and proves the `+0x638` handler plumbing, while
+necessary, is **not sufficient** by itself.
+
+**NEXT (run 66) — find the upstream reject, statically.** Disassemble `0x4f67f8` and `0x4f6f67` in full (not
+just the entry gate): identify every `return 0` predicate between the `VdmObjects` gate and the
+`lea edi,[TIB+0x634]; call 0x4f6e6f` call, and which `[0x714]` classifier bits (3/4/14, `test eax,8/0x10/
+0x4000`) or VDM_TIB fields each tests. Then determine which of those our `VdmInitialize`/monitor path leaves
+unset that ntvdm's does set (session 6: bits 3/4/14 are written kernel-side at init or select the vector —
+re-examine whether our init actually establishes them, since the live negative says something on this path is
+missing). Instrument by re-running `pfrun.bat` after arming each candidate field. The `0x4f6e6f`-level
+`+0x638` trampoline (run 65) stays in — it is the correct final hop; the missing piece is getting the fault
+*to* it. (Keep `g_dpmi_use_interp`=0 for these probes; flip to 1 to restore the interpreter runs.)
+
+### Run 66 (2026-08-05) — the `[0x714]` classifier-bits theory is REFUTED on the real CPU; the reject is a descriptor gate in the reflect body `[FACT — VM-confirmed + static disasm]`
+
+Static RE of `0x4f67f8` (the non-BOP fault reflect) mapped its structure: past the `EPROCESS.VdmObjects`
+gate (which we pass) it safe-reads `[0x714]` and **classifies on bits 3/4/14 against the fault vector**
+(`[ebp+8]`; #GP=0xd). For a #GP, the generic reflect body `0x4f689c` — the path that reaches our `+0x638`
+writer — is entered when **bit 3 is CLEAR** (bit 3 SET routes #GP to `0x4f69be`/`0x4f69dc` instead). The body
+has three sequential gates, any returning 0 ⇒ terminate: `call 0x4f6d3c` (validate **CS**), `call 0x4f6dc0`
+(validate **SS**), `call 0x4f6f67` (→ `0x4f6e6f`, the `+0x638` writer). `0x4f6d3c`/`0x4f6dc0` resolve the
+selector via `0x45dd5f` and, in PM (EFlags.VM clear), reject unless the descriptor is present and of the right
+type (`test type,4` = code for CS; `test type,2` = writable-data for SS). `0x4f6e6f` **additionally validates
+the handler selector `[TIB+0x638]` via `0x4f6dc0`** before installing it as the new CS.
+
+**Host instrumented (v60): log `[0x714]` bits 3/4/14 + force bit 3 clear before each PM entry.** VM re-run
+(interactive `D:\pfrun.bat`) — the decisive line, seen in BOTH the probe and an autorun client:
+```
+GH#18: [0x714]=0xc0007130 bit3=0 bit4=1 bit14=1
+...
+INT21h AH=09 print: "PMFAULT: in PROTECTED MODE -- about to HLT (raw #GP)..."
+<log ends -- still no PM-FAULT REFLECTED>
+```
+**⇒ bit 3 is ALREADY CLEAR (0).** Forcing it clear was a no-op and the HLT `#GP` still does not reflect.
+**This REFUTES the "set/clear the `[0x714]` classifier bits" theory on the real CPU** (sessions 3/5/6's
+residual worry) — definitively, with the live value logged (`0xc0007130`: bit4=1, bit14=1, bit3=0). With
+bit3=0/bit4=1 a #GP (vector 0xd) provably *reaches* the generic reflect body `0x4f689c`, so the classifier is
+not the blocker. **The reject is therefore one of the descriptor-validation gates in the body.** Since the
+guest *already executed in PM* with CS=0x0f/SS=0x1f (it printed from PM), the CPU had already validated those
+two descriptors — so gates 1/2 (CS/SS) should pass, and the **prime suspect is the handler selector `H` gate
+inside `0x4f6e6f`** (`0x4f6dc0` on `[TIB+0x638]`). We set `H` to our own LDT code selector `0x27` (access
+0xFA); `0x4f6dc0`'s `test type,2` gate wants writable-data, which a plain code selector fails — and per Kernel
+RE session 6, **ntvdm does not pick `H` arbitrarily: its arm routine `0xf050ad7` sets `[TIB+0x638] =
+word[TIB+0x36c]`**, a selector the kernel itself provides. Using our own selector is the likely mismatch.
+
+**NEXT (run 67):** (1) read `[VDM_TIB+0x36c]` in our host after `VdmInitialize` and log it — if the kernel
+populates it, use THAT as the handler selector `[TIB+0x638]` (and find where its `:0x1000` must hold the BOP,
+or what the kernel expects there). (2) In parallel, statically finish `0x4f6dc0`'s exact post-`0x45dd5f`
+predicate and `0x45dd5f`'s `ebx` type encoding to state precisely what descriptor `H` must be (present, DPL,
+type). (3) Bisect empirically: instrument the host to report which of the three gates our CS/SS/H descriptors
+would pass under a host-side replica of `0x45dd5f`'s rules. The `+0x638`/BOP machinery (run 65) is correct and
+stays; run 67 is about giving `0x4f6e6f` a handler selector its `0x4f6dc0` gate accepts.
+
+**Run 67 static prep (2026-08-05) — the reflect mechanism, corrected: run 65's design was wrong two ways
+`[FACT — static disasm of `0x4f6e6f`/`0x4f6f67`/`0x4f6efd`]`.** Finishing the disasm of the reflect body
+overturns the run-65 model (handler = a code selector with a BOP at :0x1000). The real mechanism:
+- `0x4f6e6f` sets the interrupted context's **SS:ESP = `[TIB+0x638]`:0x1000** (it writes `[esi]=[TIB+0x638]`,
+  `[esi+4]=0x1000`, saving old SS/ESP/EIP to `+0x63a/+0x63c/+0x640`) and validates `[TIB+0x638]` via
+  `0x4f6dc0` = **it must be a writable-DATA selector** (matches `[TIB+0x638]=word[TIB+0x36c]`=`VTIB_ES`=0x17,
+  a data selector). So `[TIB+0x638]` is the fault handler's **STACK**, NOT a code selector — run 65 made it
+  code (0xFA), which `0x4f6dc0` rejects → the reflect returns 0 → terminate. **This is the concrete bug.**
+- `0x4f6f67` then builds an **IRET fault frame** on that new stack (16- vs 32-bit per `[TIB+0x636]`; pushes the
+  saved CS/EIP/EFlags/SS/ESP) and sets the new **CS:EIP** from a **VDM_TIB table indexed by fault class**:
+  `0x4f6efd` does `[esi+0xc]=word[VDM_TIB + class*0x10]` (CS), `[esi+0x10]=dword[VDM_TIB + class*0x10 + 4]`
+  (EIP), then validates `[esi+0xc]` as **code** via `0x4f6d3c` and bounds-checks EIP ≤ CS limit. So the handler
+  CODE entry (where our BOP must live) comes from this per-class table in the VDM_TIB, not from `[TIB+0x638]`.
+- **Corrected design for run 67:** (a) make `[TIB+0x638]` a **writable-data** selector whose base+0x1000 is a
+  valid scratch stack; (b) plant our BOP (`C4 C4 nn`) at a **code** selector:offset and write that CS:EIP into
+  the VDM_TIB per-class handler table at `[VDM_TIB + class*0x10]` for the #GP class; then the reflect switches
+  to the scratch stack, frames the fault, and vectors CS:EIP to our BOP → `event=4` → host services. **Still
+  needed:** pin the exact **fault-class index** for a PM `#GP` (the `ecx≤7` value `0x4f6f67` receives; trace
+  how `0x4f67f8`'s classifier maps vector 0xd → class) and confirm the table's TIB base/stride (`class*0x10`
+  from VDM_TIB, or from a sub-structure). Then rebuild and re-run `pfrun.bat`. The `+0x634` arming + BOP
+  primitive stay; only the selector TYPE and the handler-CS:EIP planting change.
+
+**Run 67 VM RESULT (2026-08-05, host v61) — the corrected machinery is right but the reflect STILL does not
+fire; the wall is genuinely the "complete VDM-init state" one.** Implemented the corrected model: a
+writable-data stack selector `0x2f` (base 0x2000) at `[TIB+0x638]`, a code selector `0x27` (base 0x500) with a
+BOP at offset 0x80, an 8-entry class table at a host address (`0x0f026e60`) with entry 6 = `{0x27, 0x80}`, and
+`[VDM_TIB+8]` = that table pointer, armed every entry. Serial:
+```
+DPMI: PM-fault reflect stkSel=0x2f codeSel=0x27 bop@code:0x80 tbl@0x0f026e60 class=6
+GH#18: [0x714]=0xc0007130 bit3=0 bit4=1 bit14=1 tib8=0x00000000   (tib8 read is PRE-arm; arm then sets it)
+INT21h AH=09 print: "PMFAULT: in PROTECTED MODE -- about to HLT (raw #GP)..."
+<log ends -- no PM-FAULT REFLECTED; VDM silently gone>
+```
+Notably `[VDM_TIB+8]` read **0 before our arm** — i.e. the kernel did NOT populate it during VdmInitialize, so
+it does expect the VDM host to set it (we do). Everything we can set from the host is set, and it still
+terminates. **This confirms run 34's standing conclusion on the real CPU: the reflect is gated on VDM state
+established by ntvdm's COMPLETE DPMI mode-switch init, not any single field we can name and poke.** We have now
+positively mapped and satisfied: the `[0x714]` classifier (bit3=0, refuted as blocker), the `[TIB+0x638]`
+stack-selector gate, the `[VDM_TIB+8]` handler-table + class-6 entry, and the `+0x634` save block — and it is
+STILL not enough. The missing piece is upstream/structural, and a **silent VDM terminate gives no signal about
+which gate rejects**.
+
+**NEXT (run 68) — stop log-probing blind; make the wall OBSERVABLE via QEMU's gdbstub.** The decisive move is
+kernel-side visibility: launch QEMU with `-gdb tcp::<port>` (or `-s`), attach `gdb`/`lldb`, set a hardware
+breakpoint at the kernel VA `0x4f67f8` (and `0x4f6f67`/`0x4f6efd`/`0x4f6e6f`), fire `pfrun.bat`, and
+**single-step the reflect to see exactly which predicate returns 0** for our HLT `#GP` — turning 15 runs of
+blind field-guessing into one direct observation. (ntoskrnl is at kernel VA base `0x400000` per the r2 base;
+resolve the live KPCR/`[0x714]`/VDM_TIB from the stopped context.) Alternatives if gdbstub is impractical:
+(a) RE ntvdm's full `2Fh 1687` → mode-switch → DPMI-init path (`0xf02d39f` → entry, `0xf01a300`, `0xf050ad7`,
+`0xf00532e`) and mirror EVERY field it writes, not a subset; (b) accept the interpreter as the 16-bit path
+(it already runs i310102/DPMIBACK end-to-end) and revisit real-CPU PM once the wall is observable. The run-65…67
+`+0x638`/table machinery is retained (it is provably the correct final hop); run 68 is about *seeing* the reject.
+
+**Run 68 RESULT (2026-08-05) — HVF blocks the gdbstub; kernel single-stepping is NOT available on this VM.**
+Started a gdbstub on the live QEMU via the monitor (`human-monitor-command: gdbserver tcp::1234`) — it returned
+**`gdbstub: current accelerator doesn't support guest debugging`**. QEMU's gdbstub works only with TCG (or
+KVM), not `-accel hvf`. So the "breakpoint `0x4f67f8` and single-step the reflect" plan is not viable while we
+keep HVF (which is the whole point — real-CPU V86/PM). This is a hard tooling constraint, recorded so it isn't
+re-attempted. `xp`/`x` memory reads over the monitor also returned nothing useful under HVF.
+
+**⇒ Strategic fork for #18 (needs a call).** We have exhaustively established that the kernel PM-fault reflect
+needs ntvdm's complete DPMI-init state, satisfied every host-settable field, and cannot observe the failing
+gate without kernel debugging that HVF denies. The realistic options:
+- **(A) TCG + gdbstub** — boot XP under software emulation (slow: 15–45 min, uncertain) to single-step the
+  kernel reflect once and read the exact failing predicate. One-time but heavy; TCG executes the same kernel
+  code so the finding transfers back to HVF.
+- **(B) Guest KD + radare2 winkd** — enable XP kernel debugging on COM2 (`boot.ini /debug /debugport=COM2`;
+  COM1 is the serial log), expose it as a socket, drive it with r2's winkd io plugin from the host. Proper,
+  reusable kernel-debug capability; works alongside HVF (guest-side). Moderate–heavy setup.
+- **(C) AVOID the reflect entirely (most pragmatic for the games goal).** The reflect is only needed for RAW
+  faults. Most are IDENTIFIABLE by opcode and can be **pre-patched to BOPs like the INT scan already does**:
+  extend the switch-time scan to `HLT`/`CLI`/`STI`/`IN`/`OUT`/`LGDT`/`LIDT`/etc. The one data-dependent class
+  (the i310102 SS-retype: `INT 31h 0009` setaccess makes SS code-typed → the next stack write `#GP`s) is
+  handled by **NOT applying the problematic retype to the real LDT** (keep the selector valid-data; the client
+  doesn't actually need it code-typed) — mirroring the interpreter's "no enforcement" but on the real CPU. This
+  keeps the hot path on the real CPU and sidesteps the intractable reflect. Likely the best route to real-CPU
+  PM for the game class.
+- **(D) Ship the interpreter as the 16-bit path** (already runs i310102 + DPMIBACK end-to-end) and, for 32-bit
+  DOS/4GW, weigh a 32-bit interpreter extension (correct but slow for game inner loops) vs. option (C).
+Recommended: **(C)** as the mainline real-CPU bridge, with **(B)** as the durable debugging capability if a
+residual raw fault needs to be understood. The run-65…67 reflect machinery stays in place behind its toggle.
+
+**Run 69 RESULT (2026-08-05, host v62) — option (C)'s targeted no-enforcement fix is NOT sufficient; i310102
+still wedges on an invisible secondary fault.** Implemented the safe half of (C): `dpmi_install` now always
+installs the initial DATA (idx 2/DS) and STACK (idx 3/SS) selectors as present writable-data (0xF2) on the
+real LDT, no matter how the client retypes them (`g_ldt[].access` keeps the requested value for LAR/LSL). This
+directly targets i310102's known wall (its C runtime does `INT 31h 0009` to set SS=0x1F access 0xFB=code). VM
+(real-CPU path, `i31run.bat`, `g_dpmi_use_interp=0`): i310102 switched to PM, ran, serviced `setlimit 0x17` /
+`setbase 0x1f→0x1100` / `setlimit 0x1f→0x25cf` / `setaccess 0x1f→0xFB` — then **the log stops dead at exactly
+the same point as the original run-51/52 wall**, with **no watchdog `wd[]` samples** = run 52's *process-wide
+kernel wedge* signature (on `-smp 1` a deadlocked-in-kernel process has no runnable thread, so the in-guest
+watchdog never fires). So keeping SS valid-data did NOT prevent the fault: the client hits a raw fault right
+after the setaccess anyway — candidates we cannot disambiguate blind: a subsequent DS/other retype, a
+**stack-limit `#GP`** (it set SS limit `0x25cf` but its ESP may exceed it — the interpreter never enforced
+limits either, so option (C) may also need "don't enforce limits" for data/stack), or a privileged op.
+
+**Session conclusion (runs 65–69): blind fixing is exhausted.** Both real-CPU strategies — replicate the
+reflect (65–67) and avoid it via no-enforcement (69) — die on an *invisible* secondary fault, and HVF denies
+the gdbstub (68). Every further blind attempt costs a full ~5-min VM cycle for a silent yes/no. **The gating
+capability is kernel-side visibility, i.e. option (B): guest KD.** Recommended next project: stand up XP kernel
+debugging on COM2 (`boot.ini /debug /debugport=COM2 /baudrate=115200`; COM1 stays the serial log) exposed as a
+socket, and drive it with radare2's winkd io plugin (`r2 winkd://...`) — then a SINGLE session reveals every
+raw fault i310102/a game hits after the switch, turning runs 65–69's blind guessing into direct observation.
+Until that exists, the honest 16-bit path is the interpreter (`g_dpmi_use_interp=1`, runs 53–64 — it already
+runs i310102 + DPMIBACK end-to-end), and effort is better spent on the sound epic (#20/#21) or the guest-KD
+capability itself. The run-65…69 real-CPU machinery (reflect + no-enforcement) stays behind `g_dpmi_use_interp`.
+
+**Option B build (2026-08-05) — guest KD infrastructure stood up; transport + KDCOM sync WORK, r2 winkd's XP
+profile layer is incomplete.** Built: `xp-vm.sh` now exposes guest COM2 as `vm/kd.sock` (a second `-serial
+unix:...,server`); `tools/dostest/kddebug.bat` runs `bootcfg /raw "/debug /debugport=COM2 /baudrate=115200"
+/a /id 1` (one double-click — VM-confirmed it edited boot.ini: the OS entry now shows `/debug
+/debugport=com2 /baudrate=115200`); rebooted to activate. **r2 winkd results:** `r2 winkd://vm/kd.sock`
+opens the pipe and prints CONNECTED but `Cannot retrieve pid from io`; **`r2 -d winkd://vm/kd.sock` gets
+"Sync done! (1 cpus found)"** — so the KDCOM serial handshake over the QEMU unix socket genuinely works — but
+still `Cannot retrieve pid` and `dr eip` = 0. So the transport + CPU sync are solid; r2's winkd EPROCESS/
+register extraction (which hardcodes Windows-version-specific offsets) does not fully support XP SP3's KDCOM.
+**NEXT to make KD usable:** (1) try r2 winkd against a HALTED kernel — add `/break` to boot.ini so XP stops
+at boot for the debugger (RISK: if r2 can't continue it, the VM is stuck at the wait until boot.ini is fixed
+offline; only do this with an offline-edit recovery ready); (2) or drive KDCOM at a lower level — a minimal
+custom KDCOM client (send breakin `0x62626262`, parse the state-change packet, do `READ_CONTROL_SPACE`/
+`READ_VIRTUAL` for regs+memory at kernel VA `0x400000 + 0xf67f8`) since r2's high-level layer is the gap, not
+the wire protocol; (3) or use a maintained KD client that supports XP (WinDbg via the pipe, if a Windows host
+or wine is available). The infrastructure (COM2 socket + kddebug.bat + confirmed sync) is reusable for any of
+these. The kernel base can be found from the running target via IDT[0xd]→KiTrap0D (RVA 0x9090).
+
+**Option B, custom KDCOM client (2026-08-05) — the wire protocol WORKS; XP uses STATE_CHANGE64 (type 7).**
+Wrote `scripts/kdclient.py` (minimal XP 32-bit serial-KD client over `vm/kd.sock`) after r2 winkd proved
+unusable for XP. First a QEMU fix: a bare `-serial unix:...,server` is SINGLE-USE (2nd attach → "Connection
+refused"); switched `xp-vm.sh` to an explicit re-accepting `-chardev socket,id=kddbg,...,server=on,wait=off`
++ `-serial chardev:kddbg`. Then the breakthrough — the client connects, spams the breakin byte (`0x62`) while
+pumping, and **received a correctly-framed 261-byte packet**: `PacketLeader=0x30303030`, **`PacketType=7`
+(PACKET_TYPE_KD_STATE_CHANGE64 — XP+ uses the "64" wait-state-change, NOT the type-1 "32" struct; THIS is
+what r2 winkd misparses → its eip=0)**, `PacketId=0x80800800` (INITIAL), `NewState=0x3030`
+(DbgKdExceptionStateChange), and the kernel **halted at PC=0x80527bdc** (ntoskrnl). So framing + checksum +
+breakin + STATE_CHANGE64 parse all work — the transport is fully ours now.
+
+**Two bugs to fix next (they caused the stuck VM the user had to kill):** (1) the client breaks in but never
+CONTINUES the kernel (`DbgKdContinueApi` = 0x3136), so XP FREEZES — every session MUST send Continue before
+exit. (2) KD state persists across socket connections: after a break-in the kernel is HALTED and waiting for
+DBGKD_MANIPULATE commands, so a FRESH connect + breakin to an already-halted kernel gets no new state-change
+(it timed out). ⇒ the whole flow must be ONE persistent session: break in once → `DbgKdGetVersionApi`
+(0x3146 → KernBase, to map 0x4f67f8 → runtime = KernBase + 0xf67f8) → `DbgKdWriteBreakPointApi` (0x3134) at
+the reflect → `DbgKdContinueApi` to unfreeze → run `pfrun.bat` → catch the breakpoint STATE_CHANGE64 → read
+the CPU context (`DbgKdGetContextApi` 0x3132) + memory (`DbgKdReadVirtualMemoryApi` 0x3130) → single-step the
+gates. The manipulate send/recv scaffolding + GetVersion parse are already in `kdclient.py` (the manipulate
+packet-id handshake still needs live tuning). **This is the closest we have ever been to SEEING the reflect
+reject** — the wire works; only the KD session state-machine remains. (VM was killed mid-test; relaunch with
+`./scripts/xp-vm.sh run`, KD is already enabled in boot.ini.)
+
+**Harness note (learned this run):** do NOT `rm vm/serial.log` while QEMU holds it open — QEMU keeps writing
+to the unlinked inode and the path reads empty. Truncate (`: > vm/serial.log`) instead, or restart QEMU. The
+same log is mirrored in-guest at `C:\ntvdmex\ntvdmhost.log`. Also: a fresh (clean-shutdown) boot reads the CD's
+new volume label immediately — no F5 needed; only a live `qmp.py cd` hot-swap into an already-open window needs
+the navigate-away-and-back refresh. `qmp.py click` takes **px in 1024×768 space** = guest-pixel × 1.28.
+
 ### Kernel RE session 3 (2026-08-05) — FIXED_NTVDMSTATE is at fixed linear `0x714`, and the reflect gate wants bits 0,1,9 `[FACT, static disasm]`
 
 Re-opened the PM-fault-reflect track (GH #18) — the strategic prize: if the kernel reflects PM VDM faults
@@ -1693,6 +1971,200 @@ and see whether the fault now reflects to our handler/VEH instead of terminating
 `[0x714]` gate directly**; (2) find where real ntvdm sets bits 0,1 (its `VdmInitialize` site + low-memory
 FIXED_NTVDMSTATE setup) and mirror it; (3) confirm on a live VM under WinDbg watching the `[0x714]` read at
 fault time. Full context: GH #18. Bits 0,1,9 `= 0x203` is the concrete lever this session surfaced.
+
+### Kernel RE session 5 (2026-08-05) — the `[0x714]&0x203` gate is the INTERRUPT-INJECTION path, NOT the `#GP` reflect; session 3's bits-0,1,9 lead is retired `[FACT, static disasm]`
+
+Closed session 3's **not-yet-closed item (1)** — "confirm the `0x4f6xxx` predicates are on the
+`#GP`-reflect path vs. the interrupt-injection path; locate `KiTrap0D` and read its `[0x714]` gate
+directly." Re-loaded `/tmp/ntvdmex-re/ntoskrnl.exe` in `r2` (VA base `0x400000`) and traced both the
+`[0x714]&0x203` gate *and* `KiTrap0D` end-to-end. **The two are different code paths, and session 3
+conflated them.**
+
+**1. The `[0x714]&0x203==0x203` gate (`0x4f63dd`, `0x4f65bd`) is the VIRTUAL-INTERRUPT INJECTION path.**
+When the predicate holds it `call 0x50a58d`, which loads the VDM_TIB (`[0xffdff018]→[+0xf18]`, the
+kernel-mode mirror of `dpmi_enter.S`'s `fs:[0x18]→[+0xF18]`) and writes **`VTIB_EVENT(0x5a8)=3`**,
+`0x5ac=0`, `0x5b0=0` — *byte-for-byte the event-3 "interrupt pending" block our own `dpmi_enter.S`
+writes at label `2:`.* The enclosing `0x4f63a6–0x4f647f` routine scans guest opcode bytes
+(`movzx ecx,byte[edi]; inc edi`), bounds-checks `MmHighestUserAddress`, and injects a vector
+(`push 2; call 0x54bd4f`). This is the VDM privileged-opcode / virtual-IF interrupt-delivery engine.
+**Bits 0,1,9 here govern whether a pending virtual interrupt is INJECTED into the guest — not whether a
+`#GP` is reflected.** Setting bits 0,1 (session 3's hypothesis) would change interrupt *delivery*, and
+does not address the PM-fault silent-terminate. **⇒ Session 3's bits-0,1,9 lead is a detour; retired.**
+(It is not *irrelevant forever*: once PM runs on the real CPU, this same gate is what delivers timer /
+keyboard IRQs into PM — Doom needs it — so bits 0,1 matter later, for injection, just not for #18's
+terminate.)
+
+**2. `KiTrap0D`'s actual `#GP`-reflect path (re-confirms session 4).** `KiTrap0D` (~`0x409090`) reflects
+in two stages at both call sites (`0x4090b7`, `0x40926c`):
+```
+call 0x565041      ; BOP reflect — handles ONLY C4 C4 (sets VTIB_EVENT=4), returns 0 for a raw #GP
+test al,0xf / jne handled
+push 6 / call 0x4f67f8   ; the NON-BOP fault reflect; returns 0 → VDM terminates
+test al,0xf / jne handled
+KfLowerIrql / jmp <terminate>
+```
+- `0x565041` computes the fault linear addr — V86: `(EIP&0xffff)+((CS&0xffff)<<4)`; **PM: resolves the
+  selector via `0x45dd5f`** (`test [trapframe+0x72],2` = EFLAGS.VM) — then `cmp word[edi],0xc4c4`:
+  reflects a `C4 C4` BOP (→ `VTIB_EVENT=4`, the path our INT→BOP patch exploits) and returns **1**;
+  otherwise returns **0**. This is why the bypass works in PM and a raw `#GP` does not go here.
+- `0x4f67f8` top-gate = `[[fs:0x124]+0x44]+0x158] != 0` = **`EPROCESS.VdmObjects != 0`** (XP offset
+  0x158) — **which we already satisfy** (the V86 monitor allocates it; BOP reflect proves it). Past the
+  gate it *safe-reads* `[0x714]` via `0x564ed5` (an SEH-guarded `*(&0x714)`) and classifies on NTVDMSTATE
+  **bits 3/4/14** (`test eax,8 / 0x10 / 0x4000`) + the fault vector — a *classifier*, not the injection
+  gate. It then enters the reflect body (`0x4f68b8+`) and calls `0x4f6f67`.
+- `0x4f6f67` branches on trap-frame `EFLAGS.VM`: V86 → build an INT frame on the guest stack and vector
+  through the **real-mode IVT** (`mov eax,[ecx*4]`); **PM (`0x4f6fed`) → load VDM_TIB, `lea edi,[edi+0x634]`,
+  `call 0x4f6e6f`** — reflect through **`VDM_TIB+0x634`**, exactly session 4's answer.
+- `0x4f6e6f` decodes the `VDM_TIB+0x634` block: `+0x634`(word)=nesting counter (0 first time, `inc`'d);
+  `+0x638`(word)=**handler selector** installed as the new CS; new **EIP=0x1000** (`mov [esi+4],0x1000`);
+  `+0x63a/+0x63c/+0x640`=save slots for the interrupted CS/EIP. If the handler selector is 0/invalid the
+  reflect fails → `return 0` → terminate.
+
+**Net: session 4 + run 34 stand as the mainline for #18; session 3 pointed at the wrong gate.** The PM
+`#GP` reflect is `KiTrap0D → 0x4f67f8 → 0x4f6f67 → VDM_TIB+0x634`. Run 34 already localized the failure to
+an **early `return 0` inside `0x4f67f8`/`0x4f6f67`/`0x4f6e6f`, gated on VDM state we haven't established**
+(and proved it is *not* a missing `+0x634` field — field-guessing was exhausted in runs 31–34). Run 33
+also found the **handler CS:EIP is registered in ntvdm GLOBALS `[0xf09c15c/15e]`**, not in the `+0x634`
+block. So the standing plan is unchanged from run 34: **replicate ntvdm's COMPLETE DPMI mode-switch init**
+(the `[0x714]` fixed-state setup incl. the classifier bits 3/4/14, the exception/interrupt handler
+registration at `[0xf09c15c/15e]`, `VdmPMCliControl`, and the `+0x634` block) rather than cherry-pick
+fields — with the run-32 landed-BOP harness (`RETURNED event=4`) for observability. **Do NOT re-run the
+bits-0,1,9 experiment.**
+
+Next static step (if pursued): RE ntvdm's 1687-entry mode-switch handler (`ntvdm 0xf02d39f` → the returned
+entry) and its DPMI-init, capturing the exact `[0x714]` byte pattern it writes + the `[0xf09c15c/15e]`
+handler registration, then mirror the whole sequence in `src/vdm/`. Landmarks: `NtVdmControl @ 0x4e09b7`;
+`0x565041`/`0x4f67f8`/`0x4f6f67`/`0x4f6e6f` (this session); `0x50a58d` = the event-3 injection raiser.
+
+### Kernel RE session 6 (2026-08-05) — the ntvdm-side DPMI-init map: exact `[0x714]` bit semantics + the handler-registration chain to mirror `[FACT, static disasm of ntvdm.exe]`
+
+Followed session 5 with the **ntvdm.exe** side (base `0x0f000000`, `.text @ 0x0f001000`), to produce the
+concrete init sequence to replicate in `src/vdm/`. ntvdm reaches the FIXED_NTVDMSTATE either absolutely
+(`[0x714]`, since the kernel maps the VDM's first MB at flat 0 in the ntvdm process) or via base ptr
+`[0xf0774d0]` (the VDM linear base). **`[0x714]` bit map, from every write/test site:**
+
+| bit | mask | meaning | set/cleared at |
+|----|------|---------|----------------|
+| 0 | 0x1 | virtual-IF state A (interrupt pending/serviceable) | `0xf004933` `or [0x714],1` (arg==3 path), tested `0xf00442b`/`0xf005378` |
+| 1 | 0x2 | virtual-IF state B | `0xf004919` `or [0x714],2` (arg==1 path) |
+| 2 | 0x4 | (mode/state) | `0xf0510c5` `or [base+0x714],4` |
+| 9 | 0x200 | **in-monitor** (gated on guest IF) | `0xf044860` `or [0x714],0x200` / `0xf044897` clear — this is the routine our `dpmi_enter.S` ports (`0xf04483c`) |
+| 12 | 0x1000 | mode-transition | cluster A `0xf05498d` set / `0xf054a0c` clear |
+| 13 | 0x2000 | mode-transition | cluster A `0xf054978`/`0xf0549f2` set / `0xf054986`/`0xf054a00` clear |
+
+**Key correction to session 3/5:** bits 0,1 are the **dynamic virtual-IF state** written by the STI/CLI /
+`VdmPMCliControl` emulator (`0xf004913`, arg 1→bit1, arg 3→bit0) — runtime interrupt bookkeeping, NOT a
+static "monitored" enable. The kernel classifier `0x4f67f8` tests bits **3/4/14**, which **ntvdm never
+writes** — so those are set kernel-side (VdmInitialize/monitor) or select the reflected vector, and are
+*not* the thing our host is missing. **⇒ the reflect blocker is the handler plumbing below, not a `[0x714]`
+bit we forgot to poke.** (Re-confirms run 34: "not a field guess; replicate the whole init.")
+
+**The PM fault/interrupt HANDLER registration chain (the piece runs 33–34 were missing):**
+1. **`0xf01a300`** (DPMI raw-mode-switch / handler-register service): the client passes a far pointer to a
+   `{IP@0, CS@2, DATASEG@4}` struct; ntvdm resolves it (`VdmMapFlat` on `CONTEXT.SegCs`, then
+   `Sim32pGetVDMPointer`) and stores **`[0xf09c15c]=IP`, `[0xf09c15e]=CS`, `[0xf0a419c]=DATASEG`**,
+   the 16/32 flag `(CONTEXT.Eax & 1) → [0xf09c178]` and `→[VDM_TIB+0x636]`, and if 32-bit `[0x715] |= 1`.
+   (`0xf005ba1` is a second/internal registration that fills the same globals from the live CONTEXT.)
+2. **`0xf050ad7`** (per-PM-entry arming of the `+0x634` block, called before `dpmi_enter`): sets
+   `[VDM_TIB+0x634]=0` (nesting counter), `[VDM_TIB+0x638]=word[VDM_TIB+0x36c]` (the **handler selector**
+   the kernel installs as the new CS), `[VDM_TIB+0x636]=[0xf09c178]` (16/32 flag).
+3. **Kernel reflect (session 5):** `0x4f6e6f` sets the faulting context to **`CS=[VDM_TIB+0x638]`,
+   `EIP=0x1000`** and saves the old CS/EIP into `+0x63a/+0x63c/+0x640`. So the kernel jumps the guest to
+   **`selector([VDM_TIB+0x638]) : 0x1000`** — which must be an ntvdm **PM-fault trampoline stub** that reads
+   the real handler from `[0xf09c15c/15e]` and dispatches. **This reconciles run 31 exactly**: run 31 set
+   `[+0x638]=0x17` and the reflect *did* proceed to `[+0x638]:0x1000`, but nothing was planted there →
+   garbage → re-fault. The missing piece was never a `+0x634` field — it was (a) registering the handler
+   globals and (b) planting the trampoline at `selector:0x1000`.
+
+**⇒ Actionable replication spec for real-CPU PM #GP reflect (the `src/vdm/` work for #18):**
+- Allocate an LDT **code selector `H`** whose linear base+`0x1000` holds a **BOP stub (`C4 C4 nn`)** (reuse
+  the run-32 primitive: a PM BOP cleanly reflects to the host loop as `VTIB_EVENT=4`).
+- Per PM entry, arm the block like `0xf050ad7`: `[TIB+0x634]=0`, `[TIB+0x638]=H`, `[TIB+0x636]=<16/32 flag>`.
+- On the host's `event=4` from that stub: read the saved fault `CS:EIP/SS:ESP` from `+0x63a/+0x63c/+0x640`
+  (+ the guest regs in the VTIB block), service the fault the way our INT→BOP loop already services INT
+  31h/21h (or, for a genuine PM exception, emulate/skip the one instruction), then resume the client at
+  the saved CS:EIP. This routes a **raw non-BOP PM `#GP`** into the same host loop that already runs
+  i310102/DPMIBACK — without needing ntvdm's globals `[0xf09c15c/15e]` at all (we substitute our stub for
+  ntvdm's trampoline).
+- Keep the existing INT→BOP scan as the fast path; the `+0x638` trampoline is the catch-all for faults the
+  scan can't pre-patch (SS-retype `#GP`, `HLT`, privileged ops).
+
+**Strategic caveat (record before committing runs):** this gets **16-bit** PM on the real CPU. **32-bit
+DOS/4GW (Doom, #19) additionally needs flat 4GB selectors, which XP's LDT REJECTS**
+(`STATUS_INVALID_LDT_DESCRIPTOR`, base+limit ≤ `MmHighestUserAddress`; runs 20–30) — a *separate, unsolved*
+blocker on top of the reflect. And the interpreter already runs the 16-bit clients end-to-end. So the
+real-CPU reflect is worth doing for #18 correctness/fidelity, but it is **not by itself** the Doom unlock;
+the 32-bit-flat-selector problem is the gating item for #19 and should be scoped before sinking many runs
+into the reflect. Landmarks (ntvdm): register `0xf01a300`; arm `0xf050ad7`; monitor-entry `0xf04483c`;
+VdmPMCliControl/IF `0xf004913` + `0xf00532e`; globals `[0xf09c15c]=IP/[0xf09c15e]=CS/[0xf09c178]=16-32 flag`.
+
+### Kernel RE session 7 (2026-08-05) — GO/NO-GO on real-CPU 32-bit PM: the LDT is hard-capped to `MmHighestUserAddress` (~2GB), and that is the SAME cap stock ntvdm runs under `[FACT, static disasm of ntoskrnl.exe + ntvdm.exe]`
+
+**The scoping question (P0, gates #18-impl-scope):** #19 (Doom's DOS/4GW) is *32-bit* PM. A DOS/4GW client
+conventionally wants a **base-0, 4GB-limit flat data selector**. Runs 20–30 found XP's LDT rejects a flat
+4GB descriptor (`STATUS_INVALID_LDT_DESCRIPTOR`). Before spending runs on the `+0x638` reflect (which only
+buys real-CPU PM if 32-bit is reachable), settle: **does real ntvdm give a DOS/4GW client 32-bit flat
+selectors on this exact XP kernel, and if so how — GDT? a bounded "flat within user space" LDT selector?**
+This session traced both the kernel install-validator and ntvdm's descriptor-install call. Disasm-only, no VM.
+
+**1. The kernel LDT descriptor validator is `0x557514` — instruction-level decode.** `NtVdmControl`
+dispatch (`0x4e09b7` → chain at `0x52d1be`): **service 10 (`VdmSetLdtEntries`) → `0x55775b`**, service 11
+(`VdmSetProcessLdtInfo`) → `0x557a14`. `0x55775b` requires each selector be 16-bit (`test 0xffff0000,sel;
+jne err`) and calls **`0x557514` once per 8-byte descriptor**; a `0` return ⇒ the whole svc-10 fails
+(caller does `setge cl` → DPMI reports failure). `0x557514` decodes the descriptor and enforces:
+- **Range gate (`0x5575a1`):** build the full 32-bit `base` (bytes 2-4,7) and the **effective byte limit**
+  — page-granular limit is expanded `limit = (raw20<<12)|0xFFF` when the **G bit (dword1 bit 23)** is set,
+  and expand-down segments get the D/B-dependent max (`0xFFFF`/`0xFFFFFFFF`). Then `top = base + byte_limit`
+  and: reject if `base > top` (wrap) **or `top > MmHighestUserAddress`** (`[0x488bdc]`). ⇒ **every present,
+  loadable descriptor must satisfy `base + limit ≤ MmHighestUserAddress`.**
+- **DPL forced 3** (`edx & 0x6000 == 0x6000` else reject); **S=1 code/data only** (system segs rejected);
+  **conforming code rejected** (`(access&0x18)==0x18 && access&4 → reject`); reserved bit21 must be 0.
+- Fast-accept only for a truly empty descriptor (type+S bits zero, DPL zero). A *not-present* (P=0) desc
+  skips the range check but is useless once loaded (#NP) — no backdoor to a usable 4GB selector.
+
+**Quantified (the number that matters):** `MmHighestUserAddress` on stock 2GB-split XP = **`0x7FFEFFFF`**
+(`0xBFFEFFFF` with `/3GB`). Worked example of a true 4GB flat request — base 0, G=1, raw limit `0xFFFFF`:
+expand → `0xFFFFF*0x1000+0xFFF = 0xFFFFFFFF`; `top = 0 + 0xFFFFFFFF = 0xFFFFFFFF > 0x7FFEFFFF` ⇒ **REJECTED**.
+The **largest installable flat data selector is base 0, limit ≈ `0x7FFEFFFF` (2GB−64KB), page-granular** —
+NOT 4GB. This confirms runs 20–30 at the instruction level and pins the exact cap and the exact branch.
+
+**2. Stock ntvdm is subject to the identical cap — it does NOT work around it.** ntvdm's descriptor
+install is at **`0xf050120`: `push 0xa` (svc 10) → `call NtVdmControl`**, and it passes the client's **raw
+16 descriptor bytes straight through** (`[eax..eax+0xf]` = two 8-byte descriptors, sel `esi` + `esi+8`) into
+the ServiceData block with **no ntvdm-side clamp**. So when a DPMI client (incl. DOS/4GW) asks for a 4GB
+flat selector, ntvdm hands it to `0x557514`, the kernel rejects it, and ntvdm returns DPMI failure — **real
+ntvdm cannot give any client a true 4GB LDT selector either.** The DPMI host still runs 32-bit clients: the
+validator honours the D/B big bit and ntvdm carries the 16/32 flag end-to-end (`[0xf09c178]`, `[0x715]|=1`,
+per-entry `[TIB+0x636]` — session 6). LDT selectors only (TI=1); no GDT selector is minted for clients
+(`KeI386SetGdtSelector` exists but is not on the DPMI descriptor path).
+
+**⇒ VERDICT: GO — real-CPU 32-bit PM is reachable, and there is NO XP-fundamental block that stops NTVDMEX
+from reaching stock-ntvdm parity for DOS/4GW.** The 4GB→~2GB "flat" cap is a **platform constant shared with
+ntvdm**, not an NTVDMEX regression. Because a DOS game addresses only a few MB (Doom < 16 MB) — all offsets
+well under the 2GB limit — 32-bit execution never faults on the limit. So **#18's `+0x638` reflect is worth
+building for the whole 32-bit game class (to ntvdm parity), not just 16-bit fidelity.** The interpreter stays
+the fallback; it already runs the 16-bit clients and is the honest path for any client that needs a literal
+4GB descriptor the real CPU can't provide.
+
+**The selector recipe (what to install for a 32-bit client, matching what ntvdm can install):** via svc 10
+(`dpmi_install`/`VdmSetLdtEntries`), an LDT data selector with **base 0, G=1 (page-gran), raw limit
+`0x7FFEF` (⇒ byte limit `0x7FFEFFFF`), D/B=1 (32-bit big), DPL 3, S=1, present, non-conforming**; the code
+selector likewise base 0 (or the client's CS base) with D/B=1 for 32-bit. Do NOT request limit `0xFFFFF` —
+it fails the range gate. This is directly checkable off-VM against `0x557514`'s rules before any VM run.
+
+**Residual risk (bounded, and shared with ntvdm — not a blocker):** an extender that, at init, `LSL`s its
+flat data selector and *asserts the limit is literally `0xFFFFFFFF`* would abort on the 2GB cap. That is a
+risk **real ntvdm has too** (same kernel path), so it is not something #18 introduces; DOS/4GW itself does
+not do this (it uses whatever limit the host grants), which is why DOS/4GW games run under stock NTVDM. If a
+specific title trips it, the interpreter fallback covers it. Verified by disasm only; the VM check comes when
+#18's reflect lands and a 32-bit client is driven through `dpmi_service_pm_int`.
+
+Landmarks (kernel): `NtVdmControl @ 0x4e09b7` → dispatch chain `0x52d1be`; **svc 10 `VdmSetLdtEntries`
+`0x55775b`**, svc 11 `0x557a14`; **descriptor validator `0x557514`** (range gate `0x5575a1`, cap vs
+`MmHighestUserAddress [0x488bdc]`); selector→descriptor reader (fault path, session 5) `0x45dd5f`.
+Landmarks (ntvdm): **svc-10 install `0xf050120`** (raw-descriptor passthrough); 16/32 flag globals
+`[0xf09c178]`/`[0x715]` (session 6). Env `/tmp/ntvdmex-re/*.exe` (re-extract if gone); `r2` bases: ntoskrnl
+VA `0x400000`, ntvdm `0x0f000000`.
 
 ## Open unknowns (what the spike must nail down) `[VERIFY]`
 
