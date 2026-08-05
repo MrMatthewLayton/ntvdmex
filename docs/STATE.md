@@ -364,7 +364,7 @@ order:
 0. ~~FIX the graphics→text rendering bug~~ **FIXED + VM-CONFIRMED 2026-07-31 (GH #14)** — DAC palette
    not reloaded on mode set; see *Known host bugs* below.
 1. **DPMI (GH #1 CLOSED; GH #2 active) — on branch `spike/dpmi-16bit-switch`. A WORKING DPMI 0.9 host
-   runs UNMODIFIED clients on the real CPU (runs 35–62), incl. a multi-segment MZ `.EXE` and a
+   runs UNMODIFIED clients on the real CPU (runs 35–63), incl. a multi-segment MZ `.EXE` and a
    third-party binary (Japheth's DPMIBACK).** The kernel `#GP`-reflect (old "increment 3b") is bypassed:
    client INT nn are patched → BOP at mode-switch and serviced in a PM loop. Since run 53 the active
    frontier is the **host PM INTERPRETER** (`src/host/v86interp.h`) — a C-runtime client (`i310102`)
@@ -380,15 +380,24 @@ order:
    the opcodes this one client used (32-bit operands, LAR/LSL, PUSH imm, far RET, LEAVE, PUSHF/POPF,
    XCHG AX,r16, F7 mul/div group, PUSHA/POPA). The `<<< MISMATCH >>>` on 4Ch is the cosmetic `.COM`
    `0x1600`-sentinel artifact for an `.EXE` (run 48).**
-   Full narrative: [research/dpmi-under-ntvdmcontrol.md](research/dpmi-under-ntvdmcontrol.md) (runs 20–62).
-   **RESUME = post-62: the `i310102` driver is EXHAUSTED — pick the next target.** Options: (a) run a
-   larger/different client through the interpreter to surface new opcode gaps (other HX Regress16 `.EXE`s
-   — `mouevnt`/`RAWJMP7` — staged under `/tmp/claude/HX/...`; 32-bit DOS/4GW needs the separate 32-bit-PM
-   spike); (b) make `g_dpmi_use_interp` the DEFAULT + run DPMIBACK (run 50) through the interpreter,
-   retiring the kernel BOP path; (c) begin the `INT 2Fh 1687` advertisement now a real binary runs clean.
-   VM-confirm via interactive `D:\i31run.bat` (`qmp.py` mouse-drive, NOT telnet — the headless autorun
-   can't reach i310102; see [[vdm-host-test-harness]] / the research doc). Don't advertise `2Fh 1687` on
-   `main` until broader coverage (spike branch only).
+   **Then run 63 (option b): DPMIBACK — Japheth's third-party asm DPMI client (run 50) — now runs
+   END-TO-END through the INTERPRETER too** (host `dpmi-harness-v57`, runner `D:\dpbrun.bat`,
+   VM-confirmed 2026-08-05): switched to PM, ran with ZERO unmodeled opcodes, did the `INT 31h 0301`
+   real↔protected round-trip (`welcome in protected-mode` / `back in real-mode`), clean 4Ch exit —
+   identical to run 50 but via the interpreter, not the kernel BOP path (both call the same
+   `dpmi_service_pm_int` for 0301). **So the interpreter runs BOTH proven third-party clients (C-runtime
+   i310102 + asm DPMIBACK); `g_dpmi_use_interp` has been 1 since run 53, so the kernel BOP PM path
+   (`sw==0` / `dpmi_enter_pm`) is now DEAD CODE — option (b) is effectively complete.**
+   Full narrative: [research/dpmi-under-ntvdmcontrol.md](research/dpmi-under-ntvdmcontrol.md) (runs 20–63).
+   **RESUME = broaden the client corpus, then begin 32-bit PM.** The two easy clients run; the interpreter
+   is the single path. Concrete next: (i) the remaining HX Regress16 16-bit `.EXE`s (`mouevnt`, `RAWJMP7`
+   — under `/tmp/claude/HX/Src/HDPMI/Regress16/ex/`) to shake out more opcodes; (ii) a real 16-bit DOS
+   extender; (iii) separately, the **32-bit-PM spike** (32-bit CS/flat selectors + `NtVdmControl` 32-bit
+   execution) that DOS/4GW-class extenders need. Option (c) — the `INT 2Fh 1687` advertisement — the host
+   already RESPONDS to 1687 (see `STAGE2`); the caveat is only about enabling it on `main`. VM-confirm via
+   interactive `D:\i31run.bat` / `D:\dpbrun.bat` (`qmp.py` mouse-drive, NOT telnet — the headless autorun
+   can't reach these clients; see [[vdm-host-test-harness]]). Don't advertise `2Fh 1687` on `main` until
+   broader coverage (spike branch only).
 2. After DPMI: M5 (Win16/WOW foundation).
 
 ## Testing harness — consolidated self-test (2026-06-09→11)

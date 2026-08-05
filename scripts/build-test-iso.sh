@@ -43,6 +43,7 @@ cp "$DT/i310102.exe" "$STAGE/"                           # GH#2 C-runtime client
 cp "$DT/dpmiback.com" "$STAGE/"                          # GH#2 third-party DPMI client (Japheth, JWasm-built)
 cp "$DT/dpmiauto.bat" "$DT/dpmiinstall.bat" "$STAGE/"    # headless DPMI autorun harness
 cp "$DT/i31run.bat" "$STAGE/"                            # one-shot i310102 runner (run 56 confirm)
+cp "$DT/dpbrun.bat" "$STAGE/"                            # one-shot dpmiback runner (interpreter-path probe)
 cp "$DT/runtest-demos.bat" "$STAGE/"
 # individual test programs
 cp "$DT/xmstest.com" "$DT/emstest.com" "$DT/timertst.com" \

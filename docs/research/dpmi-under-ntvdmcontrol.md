@@ -1585,6 +1585,44 @@ third-party binary) through the interpreter, retiring the kernel BOP path; (c) s
 advertisement** work now that a real binary runs clean end-to-end (still spike-branch only until broader
 coverage). Whichever: drive it, read the `DPMI-INTERP: unmodeled opcode` (or clean-exit) line, follow it.
 
+### VM run 63 (2026-08-05) — DPMIBACK runs through the INTERPRETER: the kernel path is subsumed `[FACT — VM-confirmed]`
+
+Chose option (b): pushed **DPMIBACK** (Japheth's third-party 16-bit DPMI client, run 50) through the host
+PM interpreter — which has been the default (`g_dpmi_use_interp = 1`) since run 53, so this is a pure
+client swap (new one-shot runner `tools/dostest/dpbrun.bat`, `target.txt` → `dpmiback.com`; no host code
+change beyond the `v57` marker). DPMIBACK is the ideal probe because it exercises the **real↔protected
+round-trip** (`INT 31h 0301`) that `i310102` never touched.
+
+**VM-confirmed 2026-08-05** on the real CPU via interactive `D:\dpbrun.bat` (host `dpmi-harness-v57`).
+DPMIBACK switched to PM, ran in the interpreter (`CS=0x0f:0x132`), and executed **cleanly with zero
+unmodeled opcodes** — it's hand-written asm, so it needs far fewer opcodes than the C runtime:
+
+```
+INT31h AX=0x0301 -> callRM 0x0100:0x0169 SS:SP=0x0100:0xffaa
+0301 -> RM proc returned after 00000001 steps (OK)
+INT21h AH=4Ch -> client EXIT after 0xba svc
+  ==> DOS OUTPUT: [welcome in protected-mode / back in real-mode]
+```
+
+This is **identical to run 50's behaviour** — but run 50 went through the *kernel BOP* path, and this goes
+through the *interpreter*. The `0301` PM→V86→PM excursion works because both paths call the same
+`dpmi_service_pm_int` (main.c) to service it. So the interpreter now runs BOTH proven third-party clients
+end-to-end: the C-runtime `i310102` (run 62) and the asm DPMIBACK (this run). The `<<< MISMATCH >>>` on
+`4Ch` is again the cosmetic `.COM` `0x1600`-sentinel (`ver=0` here); the DOS output is authoritative.
+
+**Consequence — the kernel BOP PM path is now dead code.** `g_dpmi_use_interp` has been `1` since run 53
+and every proven client (i310102, DPMIBACK, dpmitest, dpmiexe) runs through the interpreter; the
+`sw==0` kernel branch + `dpmi_enter_pm` are no longer exercised. They can be retired (or kept behind the
+toggle as a reference) — that is option (b) *complete* in effect. Remaining: (c) the `INT 2Fh 1687`
+advertisement (the host already RESPONDS to `1687` — see the `STAGE2` log — the caveat is only about
+enabling it on `main`), and broader real-extender coverage (16-bit first; DOS/4GW-class 32-bit is the
+separate 32-bit-PM spike).
+
+**Next: broaden the client corpus / begin 32-bit PM.** The two easy proven clients run; the interpreter
+is the single path. Concrete next targets: the remaining HX Regress16 16-bit `.EXE`s (`mouevnt`,
+`RAWJMP7`) to shake out more opcodes, then a real 16-bit DOS extender; separately, the 32-bit-PM work
+(32-bit `CS`/flat selectors, `NtVdmControl` 32-bit execution) that DOS/4GW-class extenders need.
+
 ## Open unknowns (what the spike must nail down) `[VERIFY]`
 
 1. **The mode-switch primitive.** Exactly how ntvdm flips the VDM from V86→PM after the client
