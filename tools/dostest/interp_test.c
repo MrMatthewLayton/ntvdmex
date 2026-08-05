@@ -489,6 +489,35 @@ int main(void)
       CHECK(c.r[5] == 0xBEEF0ABC && c.r[4] == 0xDEAD0102,
             "leave: E-reg high halves of SP/BP preserved (16-bit LEAVE)"); }
 
+    /* ---- T44: PUSHF (9C) -- push the modeled FLAGS + reserved bit 1 -- run 59 - *
+     * SP -= 2; [SP] = (flags & modeled-mask) | 0x0002. IF/TF/IOPL/NT not modeled. */
+    { icpu c = mkcpu(); BYTE p[] = { 0x9C };               /* PUSHF */
+      c.seg[2] = 0x8000; c.r[4] = 0x0100;
+      c.flags = F_CF | F_ZF | F_SF | F_DF;                /* 0x04C1 + reserved */
+      load(&c, 0x1000, 0, p, sizeof p); step1(&c);
+      CHECK(c.ip == 1, "9C: PUSHF, ip += 1");
+      CHECK(c.r[4] == 0x00FE, "pushf: SP -= 2");
+      { uint16_t w = MEM[((uint32_t)0x8000<<4)+0xFE] | (MEM[((uint32_t)0x8000<<4)+0xFF]<<8);
+        CHECK(w == ((F_CF|F_ZF|F_SF|F_DF) | 0x0002u), "pushf: pushed FLAGS = modeled bits + reserved bit 1"); } }
+
+    /* ---- T45: POPF (9D) -- load FLAGS from stack (modeled bits only) ---------- */
+    { icpu c = mkcpu(); BYTE p[] = { 0x9D };               /* POPF */
+      c.seg[2] = 0x8000; c.r[4] = 0x00FE;
+      MEM[((uint32_t)0x8000<<4)+0xFE] = (F_CF|F_OF|F_PF) & 0xFF; /* low byte 0x05 */
+      MEM[((uint32_t)0x8000<<4)+0xFF] = ((F_OF) >> 8) & 0xFF;    /* high byte 0x08 (OF) */
+      load(&c, 0x1000, 0, p, sizeof p); step1(&c);
+      CHECK(c.r[4] == 0x0100, "popf: SP += 2");
+      CHECK((c.flags & (F_CF|F_PF|F_OF)) == (F_CF|F_PF|F_OF), "popf: CF/PF/OF restored from stack");
+      CHECK((c.flags & 0x0002u) && !(c.flags & F_ZF), "popf: reserved bit set, ZF cleared (not on stack)"); }
+
+    /* ---- T46: PUSHF/POPF round-trip is exact for modeled flags; SP high half kept */
+    { icpu c = mkcpu(); BYTE p[] = { 0x9C, 0x31, 0xC0, 0x9D };  /* PUSHF; XOR AX,AX; POPF */
+      c.seg[2] = 0x8000; c.r[4] = 0xCAFE0100;
+      c.flags = F_AF | F_SF | F_DF;                       /* clobbered by XOR, restored by POPF */
+      load(&c, 0x1000, 0, p, sizeof p); step1(&c); step1(&c); step1(&c);
+      CHECK((c.flags & (F_AF|F_SF|F_DF)) == (F_AF|F_SF|F_DF), "pushf/popf: modeled flags round-trip exactly");
+      CHECK(c.r[4] == 0xCAFE0100, "pushf/popf: SP back to start, E-reg high half preserved"); }
+
     printf("\n%d checks, %d failed\n", total, fails);
     return fails ? 1 : 0;
 }

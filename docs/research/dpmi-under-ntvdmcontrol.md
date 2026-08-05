@@ -1454,6 +1454,34 @@ after the matching restore). The interpreter already tracks flags in `c->flags`,
 `push16(FLAGS)`; watch the `0x66`-prefixed 32-bit `PUSHFD` form and bail-or-model it like the other stack
 ops. Read the next `DPMI-INTERP: unmodeled opcode` line off `i31run.bat` and follow it.
 
+### VM run 59 (2026-08-05) — `PUSHF`/`POPF`: the FLAGS stack pair `[FACT — VM-confirmed]`
+
+`PUSHF` (`0x9C`) and `POPF` (`0x9D`) added together (the natural pair; `POPF` surfaces right after the
+matching restore, so bundling them mirrors runs 56/57). `PUSHF` pushes the flags we model
+(`arithmetic | DF`) plus the always-set reserved bit 1; `POPF` loads back through the same mask, so the
+round-trip is exact and `c->flags` never accumulates the bits we don't model (`IF`/`TF`/`IOPL`/`NT` are
+dropped). 16-bit only; the `0x66` `PUSHFD`/`POPFD` 32-bit-`EFLAGS` form bails as `TODO`, matching the
+neighbouring stack ops. Off-VM **98 → 106/106** (`interp_test.c` T44-T46: `PUSHF` word = modeled bits +
+reserved; `POPF` restores from stack; a `PUSHF; XOR AX,AX; POPF` round-trip exact + `ESP` high half kept).
+
+**VM-confirmed 2026-08-05** on the real CPU via interactive `D:\i31run.bat` (host `dpmi-harness-v53`,
+client `i310102`). This was a **big** unblock — the interpreter walked past run 58's `0x1f:0x1b3` `PUSHF`
+wall and ran a long stretch: **796 → 1308 steps** (`steps=0x51c`), and the C runtime printed *new*
+`main()`-level output (`int 31h, ax=0100h, bx=0800h returned` — it now reports its DPMI DOS-mem-alloc
+result via `printf`), exiting clean (`STAGE2: complete`). The new wall:
+
+```
+DPMI-INTERP: unmodeled opcode at CS:IP=0x0000001f:0x00000157 bytes=96 2b d8 80 7e fd 01 75 (steps=0x0000051c)
+```
+
+`0x96` = **`XCHG AX,SI`** (the single-byte `XCHG AX,r16` family, `0x90`–`0x97`; `0x90` is `NOP` =
+`XCHG AX,AX`), here heading `XCHG AX,SI; SUB BX,AX; CMP byte [BP-3],1; JNZ …` — ordinary integer glue.
+
+**Next (run 60): `XCHG AX,r16` (`0x90`–`0x97`)** — swap `AX` with the indexed 16-bit reg (`0x90` = NOP,
+a no-op; the `0x66` form swaps `EAX`). Trivial: one `grw`/`srw` swap on `r[0]`↔`r[op&7]`. The interpreter
+already has the two-operand `XCHG r/m,r` (`0x86/0x87`); this is just the accumulator short-form. Read the
+next `DPMI-INTERP: unmodeled opcode` line off `i31run.bat` and follow it.
+
 ## Open unknowns (what the spike must nail down) `[VERIFY]`
 
 1. **The mode-switch primitive.** Exactly how ntvdm flips the VDM from V86→PM after the client

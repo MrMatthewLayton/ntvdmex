@@ -464,6 +464,29 @@ static int istep(icpu *c)
         c->r[4] = (c->r[4] & 0xFFFF0000u) | sp; c->ip = (uint16_t)(c->ip + idx); return 1;
     }
 
+    /* ---- PUSHF/POPF (9C/9D): the FLAGS stack pair. A C runtime saves/restores  *
+     * FLAGS around a code sequence (run 58's I310102 stopped on `9c ...` heading  *
+     * a PUSHF; PUSH EDX; ... register-save). We push only the flags we model      *
+     * (arithmetic + DF) plus the always-set reserved bit 1; POPF keeps the same   *
+     * mask so the round-trip is exact (IF/TF/IOPL/NT are not modeled -> dropped,  *
+     * so c->flags never accumulates junk). 16-bit only; the 0x66 PUSHFD/POPFD     *
+     * 32-bit-EFLAGS form bails as TODO, matching the neighbouring stack ops.      *
+     * run 59. */
+    if (op == 0x9C) {                                  /* PUSHF */
+        uint16_t sp;
+        if (osz) return 0;                             /* PUSHFD (32-bit EFLAGS): TODO */
+        sp = (uint16_t)(c->r[4] - 2);
+        wr_mem((seg_base(c->seg[2])) + sp, 2, (uint16_t)((c->flags & 0x0CD5u) | 0x0002u));
+        c->r[4] = (c->r[4] & 0xFFFF0000u) | sp; c->ip = (uint16_t)(c->ip + idx); return 1;
+    }
+    if (op == 0x9D) {                                  /* POPF */
+        uint16_t sp;
+        if (osz) return 0;                             /* POPFD (32-bit EFLAGS): TODO */
+        sp = (uint16_t)c->r[4];
+        c->flags = (rd_mem((seg_base(c->seg[2])) + sp, 2) & 0x0CD5u) | 0x0002u;
+        c->r[4] = (c->r[4] & 0xFFFF0000u) | (uint16_t)(sp + 2); c->ip = (uint16_t)(c->ip + idx); return 1;
+    }
+
     /* ---- PUSH/POP segment regs (06/0E/16/1E push ES/CS/SS/DS, 07/17/1F pop  *
      * ES/SS/DS). QB saves/restores ES (and DS) around each pixel -- this was  *
      * the per-pixel bail that capped batching at ~1 pixel. POP CS (0F) is not *
