@@ -2410,6 +2410,47 @@ host services it instead of the VDM dying. Tooling from this session: `scripts/p
 
 <!-- RUN-70-PFRUN-RESULT -->
 
+### Kernel RE session 8 (2026-08-11) — `0x4f67f8` is a reflect-DECISION gated on `VdmObjects`, sitting inside KiTrap0D's in-kernel VDM instruction EMULATOR `[FACT, fresh disasm of ntoskrnl.exe @ base 0x400000]`
+
+Motivated by run 71 (raw #GP silently terminates; `0x4f67f8` never even reached). Prior sessions treated
+`0x4f67f8` as "the reflect entry" and RE'd downstream; this session RE'd the entry itself and its
+neighbourhood, which reframes the problem.
+
+- **`0x4f67f8` is a small, aligned (called) function — the VDM PM-fault reflect DECISION:**
+  ```
+  0x4f67f8  mov eax,[0xffdff124]      ; KPCR+0x124 = current KTHREAD
+  0x4f67fd  mov eax,[eax+0x44]        ; KTHREAD.ApcState.Process = EPROCESS
+  0x4f6800  cmp dword [eax+0x158], 0  ; EPROCESS+0x158 = VdmObjects
+  0x4f6807  jne 0x4f680c             ; VDM -> classify
+  0x4f6809  xor eax,eax; ret          ; NOT a VDM -> return 0 (no reflect)
+  0x4f680c  ... lea esi,[0x714]; call 0x564ed5 (safe-read [0x714]); test eax,8 (bit3) ...
+  ```
+  So the reflect **hard-requires `EPROCESS+0x158` (VdmObjects) ≠ 0**, then classifies on `[0x714]` bit 3
+  (matches run 66). `0x564ed5` = a ProbeAndRead-a-user-dword-with-SEH helper (reads `[0x714]` safely).
+- **The surrounding region IS KiTrap0D's in-kernel VDM instruction emulator.** Bytes just before
+  `0x4f67f8` are `out dx, eax` + a cluster of jumps (`0x4f679b/0x4f67b5/0x4f67da`), and `0x4f675e-0x4f67c4`
+  is the `[0x714]` monitor-state manager (copies guest IF bit9 into `[0x714]`, manages bits 14/18 from
+  `ebx&0x4000` / `[ebp-4]&0x40000`, gated on global `[0x47c798]` bits 1/2/3, inside an fs:[0]=`[0xffdff000]`
+  SEH frame). ⇒ **the kernel EMULATES privileged VDM ops (e.g. `OUT`) in-kernel**; `0x4f67f8` is just the
+  one branch that reflects to the monitor.
+- **Why run 71's bp never hit:** `0x4f67f8` is reached by a *jmp* from the opcode dispatcher; our raw `HLT`
+  is decoded to a different (terminate) branch. `/c call 0x4f67f8` finds no direct call — it's dispatched.
+
+**Reframe + testable next steps (the actionable output):**
+1. **`HLT` was a MISLEADING probe.** The kernel emulates the privileged ops *games* use (`IN/OUT` for
+   VGA/sound, `CLI/STI` for IF) but has no case for `HLT` → terminate. So pfrun/pmfault's HLT proves
+   nothing about game viability. **NEXT PROBE: replace HLT with `OUT DX,AL` (a VGA-style port write) in a
+   pmfault-style .COM and observe** whether KiTrap0D emulates it (guest continues; ideally the write
+   reaches our VDD) vs terminates. That directly tests whether real-CPU PM I/O virtualization already
+   works for our VDM — potentially unblocking games *without* any reflect.
+2. **Verify our VDM sets `EPROCESS+0x158` (VdmObjects).** The reflect decision returns 0 without it.
+   Confirm our `NtVdmControl(VdmInitialize)` (src/vdm/v86.c) establishes VdmObjects the way ntvdm's full
+   init does; if a further service call is needed, that's a concrete gap.
+3. **RE KiTrap0D's VDM #GP dispatch head + opcode table** (upstream of `0x4f67f8`) to enumerate which
+   opcodes route to emulate vs reflect vs terminate. Landmarks: emulator body ~`0x4f6740-0x4f680c`,
+   `[0x714]` manager `0x4f675e`, monitor global `[0x47c798]`, reflect-decision `0x4f67f8`, safe-read
+   `0x564ed5`, EPROCESS+0x158=VdmObjects, KTHREAD+0x44=ApcState.Process.
+
 ## References
 - [ntvdmcontrol-and-v86.md](ntvdmcontrol-and-v86.md) — the `VDMSERVICECLASS` enum, VDM_TIB/CONTEXT
   offsets, the V86 keystone.
