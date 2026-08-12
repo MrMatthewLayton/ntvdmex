@@ -2451,6 +2451,36 @@ neighbourhood, which reframes the problem.
    `[0x714]` manager `0x4f675e`, monitor global `[0x47c798]`, reflect-decision `0x4f67f8`, safe-read
    `0x564ed5`, EPROCESS+0x158=VdmObjects, KTHREAD+0x44=ApcState.Process.
 
+### Run 72 (2026-08-11) — BREAKTHROUGH: the kernel reflects a real-CPU PM `OUT` as **event 0 (I/O)** — PM I/O virtualization WORKS; only host servicing is missing `[FACT — VM-confirmed]`
+
+Direct test of RE session 8's hypothesis ("HLT was a misleading probe; the game-relevant privileged ops
+are kernel-virtualized"). Built `tools/dostest/outprobe.asm` (identical real→PM path to pmfault, but fires
+`OUT DX,AL` to VGA DAC ports 0x3C8/0x3C9 instead of `HLT`) + `outrun.bat`; ran it real-CPU (host
+`dpmi-harness-v62`, `g_dpmi_use_interp=0`) via an autorun CD — **no KD, no breakpoint, so no reboot risk**.
+
+serial.log:
+- switch to PM OK (`CS=0f:12c`), INT sites patched, printed `OUTPROBE: in PROTECTED MODE -- about to OUT`.
+- then: **`DPMI: unexpected PM stop event=0x00000000 CS:EIP=0f:0x138`** — and the watchdog `b@enter` bytes are
+  `ba c8 03 b0 00 ee ...` = `mov dx,0x3C8; mov al,0; OUT DX,AL`, with the guest frozen on the `ee` (OUT) at
+  EIP 0x138. It did NOT print "OUT survived" — the PM loop spun on the unhandled event → watchdog terminated.
+
+**Interpretation — the key result for #18/#19:** unlike `HLT` (which the kernel silently terminates, run 71),
+a PM `OUT` is **trapped by the kernel and reflected to our monitor as `VTIB_EVENT=0`** — the *identical*
+I/O-trap event our V86 device path already handles ("I/O-port traps reflect as event 0", M3). So **real-CPU
+protected-mode I/O virtualization already works at the kernel level.** The wall was never "the kernel won't
+reflect our faults" — it was that our DPMI PM loop only services `event==4` (BOP) and the `+0x638` reflect,
+so it treats `event==0` as an "unexpected PM stop" and spins. HLT genuinely terminates (no kernel case), but
+the port I/O games use for VGA/sound is virtualized.
+
+**Actionable, bounded, off-VM-codeable next step:** in `main.c`'s DPMI PM execution loop (the `for steps`
+after `dpmi_enter_pm`), handle `event==0` the same way the V86 service loop does — decode the port from
+`VTIB_EVENT_INFO` and dispatch through `host_try_io` / the device bus (VDD), then advance the guest EIP past
+the faulting I/O instruction and re-enter. Then re-run outprobe → expect `OUT survived` + a port-0x3C8 hit in
+the VDD. This routes real-CPU PM port I/O to our VDDs and is the concrete unlock for the game class (VGA/
+sound), independent of the (dead-end) `#GP`-reflect. CLI/STI (PVI) and the EIP-advance width per I/O opcode
+(IN/OUT AL/AX, imm8/DX forms) are the follow-on details. Probe + runner: `tools/dostest/outprobe.asm`,
+`outrun.bat` (autorun-CD trigger).
+
 ## References
 - [ntvdmcontrol-and-v86.md](ntvdmcontrol-and-v86.md) — the `VDMSERVICECLASS` enum, VDM_TIB/CONTEXT
   offsets, the V86 keystone.
