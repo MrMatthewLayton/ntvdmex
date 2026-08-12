@@ -859,6 +859,56 @@ static int host_try_io(volatile BYTE *tib, vdd_bus *bus)
     return 1;
 }
 
+/* PM variant of host_try_io (GH #18 run 72). A real-CPU PROTECTED-MODE IN/OUT is
+   trapped by the kernel and reflected to us as VTIB_EVENT=0 -- the SAME I/O event as
+   V86 (VM-confirmed by outprobe.com: a PM `OUT DX,AL` to 0x3C8 stops with event=0 on
+   the instruction). Only the addressing differs: the faulting insn is at the code
+   selector's LINEAR BASE + EIP, not V86 `CS<<4:IP`. Decode + dispatch through the same
+   VDD bus, then step the guest past it, so PM port I/O (VGA/sound) reaches our VDDs. */
+static int host_try_io_pm(volatile BYTE *tib, vdd_bus *bus)
+{
+    DWORD csv = VDM_REG(tib, VTIB_CS)  & 0xFFFF;
+    DWORD eip = VDM_REG(tib, VTIB_EIP);
+    volatile BYTE *code = (volatile BYTE *)(ULONG_PTR)(dpmi_sel_base((WORD)csv) + (eip & 0xFFFF));
+    int i = 0, opsize = 2, is_in, width, used_dx, len;
+    BYTE op; uint16_t port; uint32_t val, eax;
+
+    while (code[i] == 0x66 || code[i] == 0x67 ||
+           code[i] == 0xF2 || code[i] == 0xF3) {        /* prefixes            */
+        if (code[i] == 0x66) opsize = 4;
+        if (++i > 4) return 0;
+    }
+    op = code[i];
+    switch (op) {
+    case 0xE4: is_in = 1; width = 1;      used_dx = 0; break;  /* IN  AL,ib    */
+    case 0xE5: is_in = 1; width = opsize; used_dx = 0; break;  /* IN  eAX,ib   */
+    case 0xE6: is_in = 0; width = 1;      used_dx = 0; break;  /* OUT ib,AL    */
+    case 0xE7: is_in = 0; width = opsize; used_dx = 0; break;  /* OUT ib,eAX   */
+    case 0xEC: is_in = 1; width = 1;      used_dx = 1; break;  /* IN  AL,DX    */
+    case 0xED: is_in = 1; width = opsize; used_dx = 1; break;  /* IN  eAX,DX   */
+    case 0xEE: is_in = 0; width = 1;      used_dx = 1; break;  /* OUT DX,AL    */
+    case 0xEF: is_in = 0; width = opsize; used_dx = 1; break;  /* OUT DX,eAX   */
+    default:   return 0;                       /* not an I/O op -> real fault  */
+    }
+    if (used_dx) { port = (uint16_t)VDM_REG(tib, VTIB_EDX); len = i + 1; }
+    else         { port = code[i + 1];                      len = i + 2; }
+
+    eax = VDM_REG(tib, VTIB_EAX);
+    if (is_in) {
+        val = 0;
+        vdd_bus_io(bus, port, (uint8_t)width, 1, &val);
+        if (width == 1)      VDM_REG(tib, VTIB_EAX) = (eax & 0xFFFFFF00u) | (val & 0xFF);
+        else if (width == 2) VDM_REG(tib, VTIB_EAX) = (eax & 0xFFFF0000u) | (val & 0xFFFF);
+        else                 VDM_REG(tib, VTIB_EAX) = val;
+    } else {
+        val = (width == 1) ? (eax & 0xFF) : (width == 2) ? (eax & 0xFFFF) : eax;
+        vdd_bus_io(bus, port, (uint8_t)width, 0, &val);
+    }
+    /* step past the I/O insn (16-bit PM client: advance the low word, keep high) */
+    VDM_REG(tib, VTIB_EIP) = (eip & 0xFFFF0000u) | ((eip + len) & 0xFFFF);
+    return 1;
+}
+
 /* --- planar mode-12h: trap direct A0000 writes through the VGA write engine -- */
 #define A000_LO 0xA0000u
 #define A000_HI 0xB0000u
@@ -2410,6 +2460,19 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                            the saved CS:EIP) is the follow-on; for run 59 the reflect firing IS
                            the deliverable, so stop the client cleanly here. */
                         break;
+                    }
+                    /* GH#18 run 72: a real-CPU PROTECTED-MODE I/O insn (IN/OUT) reflects as
+                       event 0 -- the SAME VDD-trap event as V86 (VM-confirmed by outprobe.com,
+                       a PM `OUT DX,AL` to 0x3C8). Service it through the device bus and resume,
+                       so PM port I/O (VGA/sound) reaches our VDDs instead of the loop treating
+                       event 0 as an "unexpected PM stop" and spinning. */
+                    if (ev == VDM_EVENT_IO || ev == VDM_EVENT_GPFAULT) {
+                        int io_h;
+                        EnterCriticalSection(&g_lock);
+                        io_h = host_try_io_pm(tib, &g_bus);
+                        LeaveCriticalSection(&g_lock);
+                        if (io_h) continue;   /* serviced the port op -> keep running */
+                        /* not a decodable I/O op -> fall through to the normal dispatch/stop */
                     }
                     vec = (ev == VDM_EVENT_BOP) ? g_int_vec[eip] : 0;
                     g_dpmi_last_vec = vec;

@@ -2481,6 +2481,31 @@ sound), independent of the (dead-end) `#GP`-reflect. CLI/STI (PVI) and the EIP-a
 (IN/OUT AL/AX, imm8/DX forms) are the follow-on details. Probe + runner: `tools/dostest/outprobe.asm`,
 `outrun.bat` (autorun-CD trigger).
 
+### Run 73 (2026-08-11) — FIX SHIPPED + VM-CONFIRMED: real-CPU PM port I/O is serviced through our VDDs `[FACT — VM-confirmed]`
+
+Implemented the run-72 next step. `src/host/main.c`: new `host_try_io_pm()` (a PM-addressed twin of
+`host_try_io` — decodes the faulting `IN/OUT` at `dpmi_sel_base(CS)+EIP` instead of V86 `CS<<4:IP`,
+dispatches via `vdd_bus_io`, advances the guest EIP past the insn), wired into the DPMI PM loop: on
+`ev==VDM_EVENT_IO (0)` / `GPFAULT (2)`, service via `host_try_io_pm` and `continue` (else fall through to
+the old dispatch/stop). Cross-compiles clean, import-allowlist KERNEL32-only.
+
+VM result (real-CPU, `g_dpmi_use_interp=0`, `outprobe.com` via autorun CD):
+```
+OUTPROBE: in PROTECTED MODE -- about to OUT 0x3C8/0x3C9 (VGA DAC)...
+OUTPROBE: OUT survived -- guest RESUMED (kernel emulated the I/O!).
+OUTPROBE: done, exiting cleanly.
+INT21h AH=4Ch -> client EXIT after 5 svc
+```
+The guest executed BOTH real-CPU protected-mode `OUT`s (ports 0x3C8 then 0x3C9), our host serviced each
+through the VDD bus and stepped past it, the guest resumed, and the client ran to a clean `4Ch` exit
+(contrast run 72: same probe on the old host spun on event 0 → watchdog terminate). **So real-CPU PM
+port I/O now reaches our VDDs — the concrete game-class unlock (VGA/sound), on the real CPU, with no
+`#GP` reflect.** Follow-ons: confirm the VDD acts on 0x3C8/0x3C9 (DAC palette) end-to-end; handle
+CLI/STI (PVI) and INT-in-PM; then drive a real PM graphics client. Probe: `tools/dostest/outprobe.asm`.
+
+Note (autorun gotcha): XP caches autorun by volume LABEL — re-mounting the SAME label does NOT re-fire;
+rebuild the CD with a fresh label to re-trigger (this run needed a fresh-label rebuild after a no-fire).
+
 ## References
 - [ntvdmcontrol-and-v86.md](ntvdmcontrol-and-v86.md) — the `VDMSERVICECLASS` enum, VDM_TIB/CONTEXT
   offsets, the V86 keystone.
