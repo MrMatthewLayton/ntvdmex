@@ -105,6 +105,10 @@ case "$mode" in
             qemu-img create -f qcow2 "$DISK" "$DISK_SIZE" >/dev/null
         fi
         build_args "order=dc,menu=on"   # CD first; falls through to disk on reboot
+        # Unattended answer file: if vm/winnt.img exists, present it as floppy A:.
+        # XP Setup reads A:\WINNT.SIF automatically on a CD-boot install and runs
+        # with no prompts (see vm/winnt.sif). Harmless when absent.
+        [ -f "$VM_DIR/winnt.img" ] && QARGS+=(-drive "file=$VM_DIR/winnt.img,if=floppy,format=raw")
         echo "Booting the XP installer from: $iso"
         echo "TIP: on the mid-install reboot, do NOT press a key at 'Press any key"
         echo "     to boot from CD' -- letting it time out boots the new disk."

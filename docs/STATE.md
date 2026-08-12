@@ -512,6 +512,23 @@ order:
    GetVersion parse are in kdclient.py (packet-id handshake needs live tuning). **Closest we've been to SEEING
    the reflect reject.** VM currently DOWN (user killed the stuck one); relaunch `./scripts/xp-vm.sh run` (KD
    already in boot.ini). Full detail: docs "Option B, custom KDCOM client".
+   **KD CLIENT COMPLETE (2026-08-06) — `scripts/kdclient.py` is a WORKING XP kernel debugger; runs 65-69's
+   blind wall is BROKEN.** Finished the KD session state-machine against ReactOS `kdcom/kddll.c` +
+   `windbgkd.h`. Fixes: (1) packet-id handshake — kernel `RemotePacketId` starts at INITIAL `0x80800000` (NOT
+   `0x80800800`=INITIAL|SYNC) and accepts data ONLY if id==RemotePacketId (strict, kddll.c:290); ACK inbound
+   with `id & ~SYNC`; advance send-id on any response. (2) `DBGKD_MANIPULATE_STATE64` union is at **0x10**
+   (8-aligned), not 0xC; sizeof=56, payload at 56. (3) KD state persists across socket connects → **RESET-on-
+   connect resync**. (4) break-in halts with trap-EIP ON the 0xCC of RtlpBreakWithStatusInstruction
+   (0x80527bdc); plain Continue re-executes it (80/80 re-break) → must GetContext→EIP+1→SetContext→Continue
+   (`KD.resume()`). **VM-CONFIRMED live (KernBase 0x804d7000):** GetVersion(15.2600/machine 0x14c),
+   read_vmem(@base=MZ), get/set context, write_bp@0x805cd7f8→handle1, restore_bp, and **single-step**
+   (Continue2 TraceFlag=1). This is the kernel-side visibility HVF's absent gdbstub (68) + r2's XP-broken
+   winkd denied. **RESUME = the reflect session:** `python3 scripts/kdclient.py session vm/kd.sock steps=300`
+   (default bps = reflect chain 0x4f67f8/0x4f6f67/0x4f6efd/0x4f6e6f/0x4f6d3c/0x4f6dc0, auto-rebased), then
+   trigger `D:\pfrun.bat` (host v62 raw PM #GP) — build a fresh CD first (`./scripts/build-test-iso.sh`; the
+   mounted disc is the OLD June graphics disc) + hot-swap via qmp; an open cmd.exe on the desktop lets the
+   trigger be typed via qmp sendkey. Single-step logs rebased EIP+EAX → SEE which gate returns 0. Full detail:
+   docs "Option B COMPLETE (2026-08-06)".
    **RESUME = GH #18 (P0): crack the kernel PM-fault reflect so PM runs on the REAL CPU like ntvdm** — gets
    16- AND 32-bit PM (Doom's DOS/4GW = #19) without a 386 emulator. **Kernel RE session 3 lead
    (2026-08-05):** the kernel reads FIXED_NTVDMSTATE at fixed linear `0x714`; the reflect gate is

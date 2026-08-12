@@ -1935,6 +1935,108 @@ same log is mirrored in-guest at `C:\ntvdmex\ntvdmhost.log`. Also: a fresh (clea
 new volume label immediately — no F5 needed; only a live `qmp.py cd` hot-swap into an already-open window needs
 the navigate-away-and-back refresh. `qmp.py click` takes **px in 1024×768 space** = guest-pixel × 1.28.
 
+**Option B COMPLETE (2026-08-06) — `scripts/kdclient.py` is a WORKING XP kernel debugger over KDCOM; every
+primitive PROVEN on the live HVF kernel.** The KD session state-machine is finished and VM-confirmed. What was
+wrong in the earlier scaffold, fixed by reading ReactOS `drivers/base/kdcom/kddll.c` + `sdk/include/.../windbgkd.h`:
+- **Packet-id handshake.** `INITIAL_PACKET_ID=0x80800000`, `SYNC_PACKET_ID=0x800` (the wire's first id
+  `0x80800800` = INITIAL|SYNC). The kernel's `RemotePacketId` starts at **INITIAL (`0x80800000`, no sync)** and
+  it accepts a data packet ONLY if `PacketId == RemotePacketId` (kddll.c:290, strict `==`). The scaffold sent
+  `0x80800800` → the kernel **ACKed but IGNORED** every manipulate. Fix: our outgoing data-packet id starts at
+  `0x80800000` and toggles low-bit per ack; **ACK inbound packets with `id & ~SYNC`** (kddll.c:166). Advance
+  our send-id whenever a response arrives (the kernel accepted us), not only on a cleanly-seen ACK.
+- **Struct offset.** `DBGKD_MANIPULATE_STATE64` has NO `pshpack`; its union `u` is 8-aligned at **offset 0x10**
+  (ApiNumber@0, ProcLevel@4, Processor@6, ReturnStatus@8, pad@0xC, u@0x10). The scaffold put the request body
+  at 0xC. `sizeof=56`; appended payload (CONTEXT / read-memory bytes) starts at offset 56.
+- **KD state PERSISTS across socket connections.** A fresh connect to an already-halted kernel gets no new
+  state-change from breakin bytes (it's not polling — it's blocked in `KdReceivePacket`). Fix: **RESET-on-connect
+  resync** (`send_control(PKT_RESET,0)`; kddll.c:176 makes the kernel reset both ids to INITIAL, echo RESET, and
+  re-send its pending STATE_CHANGE). `break_in()` resyncs first and only sends breakin bytes (SPARINGLY) if the
+  kernel is actually running — buffered breakin spam was causing repeated re-breaks.
+- **Resume past the break-in int3.** The break-in halts with the trap-frame EIP sitting **on the 0xCC of
+  `RtlpBreakWithStatusInstruction`** (`mov eax,[esp+4]; int3; ret 4` at RVA `0x50bdc`; runtime `0x80527bdc`).
+  Plain `DbgKdContinueApi`/`ContinueApi2` just re-execute the int3 → re-break (observed 80/80). Fix (what WinDbg
+  does): `get_context` → `EIP+=1` → `SetContext` (needs a prior GetContext: `KdpContextSent`, and
+  `Data->Length==sizeof(CONTEXT)`=716) → Continue. `KD.resume()` bundles this.
+
+**VM-CONFIRMED live (KernBase `0x804d7000`, slide `0x800d7000`):** GetVersion (major 15 / minor 2600 / machine
+0x14c), `read_vmem` (bytes @KernBase = `MZ…`), `get_context`/`set_context` (EIP `…dc`→`…dd`), `write_bp`
+@`0x805cd7f8` (=reflect `0x4f67f8` rebased) → handle 1 status 0, `restore_bp` status 0, and **single-step**
+(Continue2 TraceFlag=1) tracing 6 kernel insns with exc `0x80000004` (STATUS_SINGLE_STEP). This is the exact
+kernel-side visibility HVF's absent gdbstub (run 68) and r2's XP-incompatible winkd denied — **runs 65–69's
+blind wall is broken.**
+
+**RESUME (next run) — SEE the reflect reject.** `python3 scripts/kdclient.py session vm/kd.sock steps=300`
+(default bps = the reflect chain `0x4f67f8/0x4f6f67/0x4f6efd/0x4f6e6f/0x4f6d3c/0x4f6dc0`, auto-rebased). It
+arms bps, resumes, and waits; then in the VM double-click `D:\pfrun.bat` (host v62, `g_dpmi_use_interp=0`, raw
+PM #GP). On the bp hit at `0x4f67f8` it dumps regs+code and single-steps `steps` instructions logging rebased
+EIP+EAX — so we watch the classifier `[0x714]` bits 3/4/14, the `0x45dd5f` selector resolve, and the
+`0x4f6f67→0x4f6efd/0x4f6e6f` gates, and see the exact predicate that returns 0. (Confirm `D:\pfrun.bat` +
+`pmfault.com` + host v62 are on the mounted CD first; rebuild the test disc if not.) Everything uncommitted on
+`spike/dpmi-16bit-switch`; `kdclient.py` is the durable capability.
+
+**Reflect-session attempt #1 (2026-08-06) — two operational lessons; NOT yet observed.** First live run of
+the reflect session surfaced two things to fix before the observation lands:
+- **DANGER: never breakpoint the reflect GATE subroutines `0x4f6d3c`/`0x4f6dc0` (the descriptor validators
+  via `0x45dd5f`).** They are called *constantly* by NORMAL kernel selector validation, so a `0xCC` there
+  floods KD with breaks at raised IRQL and **instantly bugchecks + reboots XP** (attempt #1 armed all 6 chain
+  addresses and the box rebooted before pfrun even ran). Fix: `kdclient.py` DEFAULT_REFLECT is now **only
+  `0x4f67f8`** — the VDM-specific entry, reached only when `EPROCESS.VdmObjects!=0`, so it stays quiet until a
+  VDM raw #GP — then **single-step** into the body (`steps=N`) to reach the gates without leaving `0xCC` in
+  them. (A reboot harmlessly clears all our `0xCC` bytes — fresh kernel image.)
+- **The GUI trigger must be verified.** A blind `Win+R` → type `D:\pfrun.bat` → Enter did NOT run pfrun
+  (serial.log showed only the boot-time dpmiauto/dpmitest output, no `PMFAULT:` strings) — focus/timing. Use a
+  reliable trigger: telnet (`localhost:2323`, user `ntvdmex` if enabled) running `D:\pfrun.bat` is fully
+  scriptable; else screendump-verify the Run dialog opened before typing. NB the reflect bp at `0x4f67f8` is
+  hit ONLY by a raw PM #GP (patched-INT DPMI clients reflect as `C4C4` BOPs at `0x565041`, which returns 1 and
+  never reaches `0x4f67f8`), so the autorun's dpmitest does not trip it — the bp is clean until pmfault's HLT.
+- **Aftermath: the bugcheck reboot WEDGED the boot** (dirty-volume autochk / early hang; KD breakin got 0
+  response and 0 debug packets for 90s), recovered with a QMP `system_reset`. So START THE NEXT REFLECT RUN
+  FROM A CLEAN DESKTOP (fresh `./scripts/xp-vm.sh run` if needed), arm `session vm/kd.sock steps=400 0x4f67f8`
+  (single safe bp), then fire `D:\pfrun.bat` with a VERIFIED trigger (screendump the Run dialog, or a working
+  telnet). The KD toolset itself is proven and unchanged; only the trigger + a healthy VM remain.
+- **Attempt #2 (clean cold boot, single bp) — ROOT CAUSE of the reboot loop found: it is the AUTORUN, not KD.**
+  On a fresh boot the login autorun `dpmiauto.bat` runs `dpmitest` under host v62 (`g_dpmi_use_interp=0`,
+  real-CPU). dpmitest reaches STAGE2 then hits its 2nd-0301 hang — which on the real-CPU path IS the run-52/69
+  **process-wide kernel WEDGE** — and on `-smp 1` that wedge trips XP's bugcheck watchdog → **reboot, every
+  boot**, before a stable window exists. Serial.log confirmed only dpmitest ran (no `PMFAULT:` lines); our
+  `0x4f67f8` bp got 0 hits (dpmitest uses BOP-patched INTs, never raw-#GPs there — the bp is genuinely quiet).
+  So the reboots are the real-CPU host's own hazard, not the debugger. **THE FIX for the next run: neutralize
+  the autorun first** — before triggering pfrun, disable/clear the `dpmiauto` Run-key (or delete
+  `C:\...\dpmiauto.bat`) so the box boots to a QUIET stable desktop; then arm `session vm/kd.sock steps=400
+  0x4f67f8` and run `D:\pfrun.bat` manually. pmfault's fault is a MINIMAL raw `HLT` #GP (not dpmitest's
+  setaccess wedge), so it should reach `0x4f67f8` cleanly and let the single-step trace land — WITHOUT the
+  autorun wedging the box first. (Break-in reliability was also fixed this session: `break_in` now sprays
+  continuously + nudges with a non-flushing RESET; proven 0.2s halt of the running kernel.)
+- **Attempt #3 (pfrun-only CD, autorun neutralized) — the deeper blocker: my aggressive break-in
+  DESTABILIZES the KDCOM state and bugchecks the kernel.** Built a minimal CD (host v62 + pfrun + pmfault +
+  dosstub, NO dpmitest/dpmiexe/i310102) so the autorun's `:waitcd` loop finds no `D:\dpmitest.com` and exits
+  harmlessly — VM-confirmed: serial.log stayed EMPTY, desktop stable, no dpmitest wedge. BUT after a break-in
+  stress test (4×) + arming the session + a single Win+R, the box **rebooted again before pfrun was even
+  triggered**. With dpmitest gone AND pfrun not yet run, the only remaining agent is **kdclient's own break-in
+  churn** — the burst-of-breakin-bytes + repeated RESET control packets. Cumulative breakin/RESET storms
+  appear to corrupt XP's KDCOM state machine → bugcheck. ⇒ **`break_in` must be made WinDbg-GENTLE: send ONE
+  breakin byte and wait patiently (seconds), no byte-sprays, no RESET storms; only RESET once on connect.**
+  The READ primitives (GetVersion / read_vmem / get/set context / single-step) are safe and proven — it is
+  specifically the break-in *acquisition* method that is too aggressive. Until break_in is gentled (or real
+  WinDbg is used via the pipe), each extended KD session ends in a reboot. This is the concrete next fix
+  before the reflect observation can land; the observation itself is otherwise fully set up (single bp
+  `0x4f67f8` + single-step + pfrun-only CD recipe above).
+- **Attempt #4 (gentle break_in) — VM DISK IS NOW CORRUPTED from the accumulated crashes; STOP + RESTORE.**
+  Implemented the WinDbg-gentle break_in (single breakin byte, patient wait, no sprays, no RESET storms;
+  RESET only once on connect). It armed the single bp cleanly and the box confirmed `running` — but the VM
+  **still rebooted on a bare Win+R (pfrun NOT triggered, dpmitest absent, break_in already done)**. With every
+  candidate agent eliminated, the cause is the VM itself: the ~6 accumulated bugchecks/hard-kills this session
+  left the XP install damaged (it threw the "Windows did not start successfully" recovery menu, then
+  spontaneously reboots on minimal interaction). ⇒ **The reflect observation cannot land on this corrupted
+  image.** Recovery: `qemu-img snapshot -a clean vm/xp.qcow2` (VM off) reverts to the **`clean` snapshot (ID 1,
+  2026-06-02)** — a pristine XP (NB: pre-provisioning, so no ntvdmex autologin/autorun/IFEO; pfrun sets its own
+  IFEO, and no autorun = no wedge, which is ideal; may boot to a login screen needing one interactive logon).
+  **NEXT SESSION (clean VM):** restore snapshot → `./scripts/xp-vm.sh run` (pfrun-only CD staged at
+  vm/transfer.iso) → arm `session vm/kd.sock steps=400 0x4f67f8` (gentle break_in, single safe bp) → run
+  `D:\pfrun.bat` → capture the single-step trace of the reflect gate returning 0. All the tooling + the recipe
+  are in place; only a healthy VM was missing. The KD read-debugger (version/mem/context/bp/single-step) is
+  proven and durable regardless.
+
 ### Kernel RE session 3 (2026-08-05) — FIXED_NTVDMSTATE is at fixed linear `0x714`, and the reflect gate wants bits 0,1,9 `[FACT, static disasm]`
 
 Re-opened the PM-fault-reflect track (GH #18) — the strategic prize: if the kernel reflects PM VDM faults
@@ -2209,6 +2311,104 @@ undocumented kernel path; writing an INT 31h surface before the switch is proven
 on an unverified foundation. The research above turns "is this even possible under our
 architecture?" into "yes, via monitor reuse — here is the mechanism and the spike to prove it,"
 which is the valuable, low-regret deliverable now.
+
+### Run 70 (2026-08-11) — KD-observed: a BOP client CANNOT reach the `#GP` reflect; only a raw `#GP` can `[FACT — VM-confirmed via guest KD]`
+
+First live use of the working guest KD harness (`scripts/desktop_trace.py`, `/debug`-only image,
+break-in + arm reflect bp `0x805cd7f8` + robust LOAD_SYMBOLS servicing) against a real client on the
+real-CPU path (`g_dpmi_use_interp=0`, host `dpmi-harness-v62`).
+
+- **Trigger:** `D:\dpbrun.bat` (DPMIBACK, a BOP-based asm DPMI client) with the reflect bp armed.
+- **Result:** DPMIBACK ran **end-to-end** (serial: switch to PM `CS=0x0f:0x132` → `INT31h 0301`
+  real↔protected round-trip → `welcome in protected-mode` / `back in real-mode` → `4Ch` exit) and the
+  reflect bp `0x4f67f8` was **never hit** (0 serviced, pure idle).
+- **Why — the trap-vector split (the correction):** NTVDM BOPs are `C4 C4` = an invalid `LES`
+  encoding ⇒ **`#UD` → KiTrap06 → `VdmDispatchBop`**. The `#GP` reflect at `0x4f67f8` hangs off
+  **`#GP` → KiTrap0D** (via the "BOP-only" gate `0x565041`). **Different trap vectors.** So *no*
+  BOP-based client (DPMIBACK **or** `i310102`) can ever reach `0x4f67f8` — only a genuine
+  privileged-instruction `#GP` (pfrun/`pmfault`'s `HLT`) routes through KiTrap0D toward the reflect.
+  This retro-explains why runs 65–69 (and the session-3 desktop_trace attempt) never saw `0x4f67f8`:
+  the raw `#GP` bugchecks/terminates *before or instead of* reaching it, and BOPs bypass it entirely.
+- **Consequence for #18:** to OBSERVE the reflect decision, the only trigger is the raw `#GP`
+  (`D:\pfrun.bat`), and the observer must classify halts (reflect-bp / benign break-in / benign
+  LOAD_SYMBOLS / **unexpected fault**) and stop-and-dump the unexpected one — `desktop_trace` (bp
+  only) and `kdclient.do_session` (blindly resumes non-bp halts) both step past it. New harness:
+  `scripts/pmfault_observe.py`.
+- **Operational:** DPMIBACK's host leaves a runaway `ntvdmhost.exe` stuck at the `.EXE` 4Ch-exit
+  sentinel (`<<<MISMATCH>>>`, run 48); its watchdog spins, pegs the single CPU, and starves the
+  guest UI (frozen pointer). `dpbrun.bat`'s taskkill is insufficient — recover with QMP
+  `system_reset` (image-safe; provisioning persists). The `/debug`-only image screendumps at native
+  **1024×768**, so `qmp.py click` coords map 1:1 (the old ×1.28 was an 800×600-image artifact).
+
+**pfrun (raw `#GP`) observation — ATTEMPTED, not yet captured (harness race fixed).** Built
+`scripts/pmfault_observe.py` to classify each KD halt (reflect-bp / benign break-in / benign
+LOAD_SYMBOLS / **unexpected fault**) and dump+single-step the unexpected one. First run had a
+**receiver race**: the loop used `wait_state_change` AND `get_context` for halt detection, so an
+async halt-state-change arriving *during* a `get_context` call desynced the two receivers (get_context
+expects a manipulate reply, got a state-change) → mutual stall with the kernel halted at a `0xCC` at
+raised IRQL → **watchdog rebooted the guest** before pfrun was even triggered. (Proof the reflect bp
+itself is safe to arm during idle: the Run-70 dpmiback session armed the *same* bp `0x805cd7f8` and
+idled cleanly to completion.) **Fix applied:** the observer now does **get_context-ONLY** halt
+detection (exactly like `desktop_trace.py`), classifying purely by EIP — no competing `wait_state_change`
+in the main loop. Recovery churn from the repeated resets landed the guest in XP's "Windows did not
+start successfully" menu, so the `/debug`-only image was restored from `vm/xp-debugonly-backup.qcow2`
+(clean). **RESUME:** relaunch, break in, arm `0x805cd7f8`, trigger `D:\pfrun.bat` promptly, and read
+the observer's `UNEXPECTED FAULT`/`REFLECT HIT` dump — the raw `#GP` is the only path to `0x4f67f8`.
+
+**pfrun (raw `#GP`) observation — BLOCKED by VM instability (4/4 attempts rebooted).** Tried to catch
+the raw `#GP` at `0x4f67f8` four times with three observer variants (mixed wait/get_context; get_context-
+only; passive wait_state_change-only). Every attempt the guest **rebooted at the arm/connect stage,
+before pfrun could be triggered.** Ruled out: the observer receiver-race (fixed) and the get_context
+idle-churn (fixed — the passive observer generated zero idle traffic and still rebooted). The passive
+observer even reached a clean idle (serviced the ~27 on-connect LOAD_SYMBOLS re-enumeration, then idle,
+no crash *caught by KD*) and the guest still spontaneously rebooted ~10s later during GUI clicks — i.e.
+NOT a KD-caught bugcheck. The one session that did NOT reboot (Run-70 dpmiback) triggered its client
+immediately and kept the guest busy in the VDM. **Working conclusion: arming a software bp (`0xCC`) at
+the VDM `#GP`-reflect entry `0x805cd7f8` and letting this heavily-dilated HVF guest sit idle
+destabilizes it → reboot.** So KD single-step observation of the reflect is not reliably achievable on
+this VM via a software bp + idle-wait. This is the same environmental wall runs 65–69 hit from the other
+side (HVF denies the gdbstub; blind fixing exhausted). **UNTRIED alternatives worth a future session:**
+(a) HARDWARE bp via `cont2` DR0/DR7 (no `0xCC` in kernel code — avoids the IRQL/int3 destabilizer);
+(b) keep the guest BUSY (arm, then immediately drive pfrun with a pre-staged one-keystroke trigger so
+there is no idle window); (c) accept the interpreter for 16-bit DPMI (already runs i310102 + DPMIBACK
+end-to-end) and pivot to the Sound epic (#20/#21). Reliable-input helper added: `scripts/gtype.sh`
+(one atomic key-chord per char — beats this VM's laggy/interleaving QMP send-key).
+
+### Run 71 (2026-08-11) — KD-OBSERVED: a raw PM `#GP` silently terminates the VDM — it never reaches the reflect, never breaks KD, never bugchecks `[FACT — VM-confirmed via guest KD]`
+
+The pfrun observation finally SUCCEEDED, via two fixes to the two blockers: (1) **trigger** = an autorun
+CD (`autorun.inf` → `pfrun.bat`, `/tmp/ntvdmex-auto.iso`) mounted via QMP — 100% reliable, no GUI
+keyboard/mouse (this VM's QMP `send-key` drops chars even at 0.6s/char, and clicks lag); (2) **reboot** =
+mount the autorun CD the *instant* the bp arms (a log-watcher auto-fires `qmp.py cd` on `armed h=`), so
+the guest goes BUSY in the VDM immediately — the 4 prior idle-wait attempts all rebooted, the one busy
+run (dpmiback) never did. This run the guest **did NOT reboot**.
+
+Observed, real-CPU, host `dpmi-harness-v62` (`g_dpmi_use_interp=0`), reflect bp armed at `0x805cd7f8`:
+- serial: pfrun switched to PM (`CS=0x0f:0x12c`), patched its 9 INT sites to BOPs, printed
+  **`PMFAULT: in PROTECTED MODE -- about to HLT (raw #GP)...`** — then serial STOPS dead at the HLT.
+- KD observer: **NOTHING** — no reflect-bp hit at `0x4f67f8`, no exception state-change, still idle.
+- screen: healthy desktop, **no bugcheck, no reboot**. The VDM (ntvdmhost) is silently gone.
+- KD was provably LIVE (not desynced): pfrun could only run because the observer correctly resumed the
+  guest after arming — the guest ran freely, so "no KD break" is a true negative, not a lost link.
+
+**Conclusion (directly confirms runs 65–69's "invisible fault"):** the kernel's KiTrap0D handles a raw
+(non-BOP) PM `#GP` in a VDM by **silently tearing the VDM down** — a *handled* path, so it neither
+reflects (never reaches `0x4f67f8`) nor raises an unhandled exception (no bugcheck, no KD break). The
+`#GP` reflect at `0x4f67f8` is reachable ONLY via the BOP-gated `0x565041` branch (run 70: BOP = `C4 C4`
+= #UD/KiTrap06 for our INT-patch dispatch; the reflect hangs off #GP/KiTrap0D behind a BOP gate). **So
+chasing the raw-`#GP` reflect for real-CPU PM is a DEAD END** — a raw privileged instruction just kills
+the VDM.
+
+**Actionable pivot for real-CPU PM (GH #18/#19):** do NOT rely on the `#GP` reflect. Instead **pre-patch
+identifiable privileged instructions (HLT/CLI/STI/IN/OUT/LGDT/LIDT/…) to `C4 C4` BOPs**, exactly like the
+existing INT-site scan, and service them through the already-proven host BOP / event-4 mechanism (the
+same path that runs i310102 + DPMIBACK). This is run-68 "option C", now VALIDATED by direct observation:
+the reflect is unreachable for raw faults, but the BOP/event-4 dispatch already works. Next spike: extend
+`dpmi_patch_int_sites` to also scan+patch privileged opcodes, then re-run pfrun (HLT→BOP) and confirm the
+host services it instead of the VDM dying. Tooling from this session: `scripts/pmfault_observe.py`
+(passive, classifies+dumps), `scripts/gtype.sh`, the autorun-CD trigger pattern.
+
+<!-- RUN-70-PFRUN-RESULT -->
 
 ## References
 - [ntvdmcontrol-and-v86.md](ntvdmcontrol-and-v86.md) — the `VDMSERVICECLASS` enum, VDM_TIB/CONTEXT
