@@ -1442,6 +1442,15 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                         VDM_REG(tib, VTIB_EIP) += 2;
                         return 1;
                     }
+                    if (vec == 0x1A || vec == 0x08) {              /* BIOS time / timer tick in PM */
+                        ntvdd_regs r; regs_load(&r, tib);
+                        EnterCriticalSection(&g_lock);
+                        vdd_bus_deliver_int(&g_bus, (uint8_t)vec, &r);   /* INT 1Ah get/set tick, or INT 08h increment */
+                        LeaveCriticalSection(&g_lock);
+                        regs_store(&r, tib);
+                        VDM_REG(tib, VTIB_EIP) += 2;
+                        return 1;
+                    }
                     if (vec == 0x31) {                             /* DPMI INT 31h */
                         p = zput(p, "INT31h AX=0x"); p = zhex(p, ax);
                         p = zput(p, " CX=0x"); p = zhex(p, VDM_REG(tib, VTIB_ECX) & 0xFFFF);
@@ -2466,7 +2475,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                   DWORD o, n = 0, last = 0;
                   for (o = 0; o < 0xFFFF; ++o) {
                       if (cs[o] == 0xCD && (cs[o+1] == 0x31 || cs[o+1] == 0x21 || cs[o+1] == 0x10
-                                            || cs[o+1] == 0x16 || cs[o+1] == 0x33)) {
+                                            || cs[o+1] == 0x16 || cs[o+1] == 0x33
+                                            || cs[o+1] == 0x1A || cs[o+1] == 0x08)) {
                           g_int_vec[o] = cs[o+1]; cs[o] = 0xC4; cs[o+1] = 0xC4; ++n; last = o;
                       }
                   }
@@ -2515,6 +2525,17 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                         p = zput(p, " tib8=0x"); p = zhex(p, *(volatile DWORD *)(tib + DPMI_TIB_FLTTBL));
                         p = zput(p, "\r\n");
                         log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                    }
+                    /* Timing in PM (polled): the host PIT (UI thread) raises IRQ0 at the 8254
+                       rate; here we consume it and run the BIOS tick handler so 0040:006C and
+                       INT 1Ah advance with wall-clock even though nothing injects INT 08h into
+                       the PM client yet. (Async IRQ0 delivery to a client's PM INT 08h hook is
+                       the remaining timing piece.) */
+                    if (InterlockedExchange(&g_irq0_pending, 0)) {
+                        ntvdd_regs tr; regs_load(&tr, tib);
+                        EnterCriticalSection(&g_lock);
+                        vdd_bus_deliver_int(&g_bus, 0x08, &tr);   /* pit_int08 -> ++0040:006C */
+                        LeaveCriticalSection(&g_lock);
                     }
                     dpmi_arm_fault_trampoline(tib, 0);   /* re-arm nest/flag/[0x638]/[TIB+8] */
                     dpmi_enter_pm(tib);

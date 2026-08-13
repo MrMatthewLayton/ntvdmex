@@ -2583,6 +2583,25 @@ down×6` moved the cyan box right + down (before/after screendumps differ, and v
 So real-CPU protected-mode INPUT works end-to-end through our keyboard VDD. Mouse (INT 33h) is routed but
 not yet exercised. Client + runner: `tools/dostest/kbdbox.asm`, `kbrun.bat`.
 
+### Run 77 (2026-08-11) — TIMING in PM (polled): the BIOS tick advances at wall-clock; a box marches with no input `[FACT — VM-confirmed, visual]`
+
+Milestone-#6 timing, polled half. `src/host/main.c`:
+- Route **INT 1Ah / INT 08h in PM** (`dpmi_service_pm_int` vec 0x1A/0x08 → `vdd_bus_deliver_int`,
+  regs_load/store, EIP+=2); patch scan also rewrites `CD 1A`/`CD 08`.
+- **Advance the BIOS tick in the PM loop**: the host PIT (UI thread) raises IRQ0 at the 8254 rate; the
+  PM loop now consumes `g_irq0_pending` (InterlockedExchange) and runs `pit_int08` → `++[0040:006C]`, so
+  the tick + INT 1Ah track wall-clock in PM even though nothing injects INT 08h into the client yet.
+
+Probe `tools/dostest/timerbox.asm`: mode 13h, a box at X = 20 + (INT-1Ah-tick mod 240), redrawn each
+frame, **no input**. VM-confirmed: two screendumps 7 s apart show the green box moved (center → left),
+i.e. the tick advanced ~127 counts ≈ 18.2 Hz × 7 s — real-time-accurate. So polled DOS timing (games that
+read INT 1Ah / the BIOS tick) works in real-CPU PM.
+
+**Remaining timing piece (#2b):** async IRQ0 *injection* to a client's PM INT 08h/1Ch hook (games that
+HOOK the timer, e.g. Doom) — needs PM interrupt reflection to the client's installed PM vector (INT 31h
+0204/0205 table `g_pm_int[]`) gated by the DPMI virtual-IF (`g_dpmi_vi`, INT 31h 0900-0902). Probe +
+runner: `tools/dostest/timerbox.asm`, `tmrun.bat`.
+
 ## References
 - [ntvdmcontrol-and-v86.md](ntvdmcontrol-and-v86.md) — the `VDMSERVICECLASS` enum, VDM_TIB/CONTEXT
   offsets, the V86 keystone.
