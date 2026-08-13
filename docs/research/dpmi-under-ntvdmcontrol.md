@@ -2500,8 +2500,15 @@ The guest executed BOTH real-CPU protected-mode `OUT`s (ports 0x3C8 then 0x3C9),
 through the VDD bus and stepped past it, the guest resumed, and the client ran to a clean `4Ch` exit
 (contrast run 72: same probe on the old host spun on event 0 → watchdog terminate). **So real-CPU PM
 port I/O now reaches our VDDs — the concrete game-class unlock (VGA/sound), on the real CPU, with no
-`#GP` reflect.** Follow-ons: confirm the VDD acts on 0x3C8/0x3C9 (DAC palette) end-to-end; handle
-CLI/STI (PVI) and INT-in-PM; then drive a real PM graphics client. Probe: `tools/dostest/outprobe.asm`.
+`#GP` reflect.** Probe: `tools/dostest/outprobe.asm`.
+
+**End-to-end CONFIRMED (`ioverify.com`, VM-confirmed):** wrote a DAC palette entry via PM `OUT` (idx5 =
+`0A/14/1E`) then read it back via PM `IN` → `IOVERIFY: read back = 0A 14 1E` (exact match) + clean `4Ch`
+exit. So `host_try_io_pm` services BOTH the `OUT` and `IN` directions in PM and the video VDD's palette
+state actually changed (not just EIP advancing) — the fix is real end-to-end, and the `IN` path works.
+Follow-ons: CLI/STI (PVI) + INT-in-PM if a real client needs them; then drive a real PM VGA graphics
+client (mode set + framebuffer) on the real CPU and see it render through the VDD (milestone #6 payoff).
+Probes: `tools/dostest/outprobe.asm`, `tools/dostest/ioverify.asm`.
 
 Note (autorun gotcha): XP caches autorun by volume LABEL — re-mounting the SAME label does NOT re-fire;
 rebuild the CD with a fresh label to re-trigger (this run needed a fresh-label rebuild after a no-fire).
