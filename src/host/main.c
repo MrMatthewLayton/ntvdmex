@@ -132,6 +132,7 @@ static BYTE  g_int_vec[0x10000];            /* per-CS-offset: original INT vecto
    to the LAST dpmi_enter_pm (where a frozen guest is wedged), and VEH fire-counters
    (whether a real exception was ever delivered to us at all). */
 static volatile LONG  g_dpmi_iter     = 0;  /* host PM-loop iteration heartbeat (pre-enter) */
+static volatile LONG  g_dpmi_done     = 0;  /* PM loop finished (client exited cleanly) -> watchdog must NOT kill */
 static volatile DWORD g_dpmi_enter_cs = 0;  /* guest CS handed to the last dpmi_enter_pm    */
 static volatile DWORD g_dpmi_enter_eip= 0;  /* guest EIP handed to the last dpmi_enter_pm   */
 static volatile DWORD g_dpmi_last_ev  = 0;  /* VTIB_EVENT reported by the last return        */
@@ -1114,6 +1115,11 @@ static DWORD WINAPI dpmi_watchdog(LPVOID param)
     for (i = 0; i < 12; ++i) {
         LONG iter; DWORD en_cs, en_eip, base; const BYTE *ib;
         Sleep(250);
+        if (g_dpmi_done) {                              /* client exited cleanly -> stop, keep the window */
+            q = zput(q, "STAGE3-DPMI: watchdog stand-down (client done)\r\n");
+            log_append(LOG_PATH, wb, q); serial_out(wb, q);
+            return 0;
+        }
         iter   = g_dpmi_iter;
         en_cs  = g_dpmi_enter_cs;  en_eip = g_dpmi_enter_eip;
         q = zput(q, "  wd["); q = zhex(q, i);
@@ -1364,6 +1370,19 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
     DWORD ax = VDM_REG(tib, VTIB_EAX) & 0xFFFF;
     DWORD ev = VDM_REG(tib, VTIB_EVENT), eip = VDM_REG(tib, VTIB_EIP) & 0xFFFF;
     (void)steps;
+                    if (vec == 0x10) {                             /* video BIOS in PM -> VDD */
+                        ntvdd_regs r; regs_load(&r, tib);
+                        EnterCriticalSection(&g_lock);
+                        vdd_bus_deliver_int(&g_bus, 0x10, &r);
+                        LeaveCriticalSection(&g_lock);
+                        regs_store(&r, tib);
+                        a000_protect(vdd_video_planar_active(&g_vid));  /* mode 12h A0000 trap; no-op in 13h */
+                        VDM_REG(tib, VTIB_EFLAGS) &= ~1u;
+                        VDM_REG(tib, VTIB_EIP) += 2;              /* past the 2-byte PM BOP */
+                        p = zput(p, "INT10h (PM) -> video VDD AX=0x"); p = zhex(p, ax);
+                        p = zput(p, "\r\n"); log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                        return 1;
+                    }
                     if (vec == 0x31) {                             /* DPMI INT 31h */
                         p = zput(p, "INT31h AX=0x"); p = zhex(p, ax);
                         p = zput(p, " CX=0x"); p = zhex(p, VDM_REG(tib, VTIB_ECX) & 0xFFFF);
@@ -2387,7 +2406,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                 { volatile BYTE *cs = (volatile BYTE *)(ULONG_PTR)g_dpmi_code_base;
                   DWORD o, n = 0, last = 0;
                   for (o = 0; o < 0xFFFF; ++o) {
-                      if (cs[o] == 0xCD && (cs[o+1] == 0x31 || cs[o+1] == 0x21)) {
+                      if (cs[o] == 0xCD && (cs[o+1] == 0x31 || cs[o+1] == 0x21 || cs[o+1] == 0x10)) {
                           g_int_vec[o] = cs[o+1]; cs[o] = 0xC4; cs[o+1] = 0xC4; ++n; last = o;
                       }
                   }
@@ -2480,6 +2499,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                     if (rc > 0) continue;   /* serviced -> keep running the PM client */
                     break;                  /* 0 = client exited, <0 = unexpected stop */
                 }
+                g_dpmi_done = 1;            /* PM run finished -> watchdog stands down, window persists */
                 break;
             }
             p = zput(p, " -> SWITCH FAILED (staying real mode, CF=1)\r\n");

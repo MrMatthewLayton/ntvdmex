@@ -2513,6 +2513,32 @@ Probes: `tools/dostest/outprobe.asm`, `tools/dostest/ioverify.asm`.
 Note (autorun gotcha): XP caches autorun by volume LABEL — re-mounting the SAME label does NOT re-fire;
 rebuild the CD with a fresh label to re-trigger (this run needed a fresh-label rebuild after a no-fire).
 
+### Run 74 (2026-08-11) — MILESTONE: a real protected-mode VGA client RENDERS through our VDD on the real CPU `[FACT — VM-confirmed, visual]`
+
+The payoff. `tools/dostest/mode13.asm` is a real DPMI PM graphics client: after the real→PM switch it
+(1) `INT 10h AX=0013` sets mode 13h, (2) `INT 31h 0000/0007/0008` allocates an LDT descriptor based at
+linear `0xA0000` (the framebuffer, limit 0xFFFF, writable-data), (3) `ES=sel; stosb×64000` fills the
+screen with a colour ramp — direct real-CPU protected-mode writes to `0xA0000`, (4) exits `4Ch`.
+
+Host changes to support it (`src/host/main.c`):
+- **INT 10h in PM**: the patch scan now also rewrites `CD 10` → BOP, and `dpmi_service_pm_int` routes
+  `vec==0x10` to the video VDD (`vdd_bus_deliver_int(0x10)`, regs_load/store, EIP+=2) — mirroring the V86
+  INT 10h path. So a PM `INT 10h` mode-set reaches our VDD.
+- **Watchdog stand-down**: added `g_dpmi_done` — set when the PM loop finishes; the run-52 watchdog now
+  stands down instead of `TerminateProcess`-ing the (cleanly-exited) host, so the Luna window persists on
+  the final frame (previously it killed the window ~3s after exit, hiding the render).
+
+VM result (real-CPU, `g_dpmi_use_interp=0`, mode13 via autorun CD): serial shows
+`INT10h (PM) -> video VDD AX=0x0013` + `MODE13: framebuffer filled via PM selector -> A0000. RENDERED.`
++ clean exit, and the **QMP screendump shows the ntvdmhost Luna window ("Windows XP Virtual DOS Machine -
+mode13.com") displaying the rendered 320×200 mode-13h gradient** (EGA-colour stripes over the default grey
+ramp — exactly the `stosb`/`inc al` pattern). So a protected-mode DPMI graphics client runs its full
+mode-set + framebuffer pipeline on the REAL CPU and renders through our VDD — no `#GP` reflect, no
+interpreter. This is the real-CPU-PM game-class capability (GH #18/#19, milestone #6) demonstrated end to
+end. Next: palette via PM `OUT` in a drawn scene (combine with ioverify's DAC path), CLI/STI (PVI),
+per-frame animation (a PM loop that redraws + yields via a cheap INT so the watchdog sees progress), then
+a real DOS/DPMI game. Client + runner: `tools/dostest/mode13.asm`, `m13run.bat`.
+
 ## References
 - [ntvdmcontrol-and-v86.md](ntvdmcontrol-and-v86.md) — the `VDMSERVICECLASS` enum, VDM_TIB/CONTEXT
   offsets, the V86 keystone.
