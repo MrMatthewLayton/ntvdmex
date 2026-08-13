@@ -113,6 +113,8 @@ static present_ddraw g_pd;
 static xms_state    g_xms;       /* M4: XMS extended-memory manager           */
 static ems_state    g_ems;       /* M4: EMS expanded-memory manager           */
 static volatile LONG g_irq0_pending = 0;    /* PIT raised IRQ0 (UI thread sets, V86 thread delivers) */
+static int g_pm_irq0_latch = 0;             /* #2b: a virtual IRQ0 awaiting injection into the PM hook */
+static int g_in_pm_irq     = 0;             /* #2b: re-entrancy guard while inside an injected PM ISR   */
 static CRITICAL_SECTION g_lock;             /* serialises all bus dispatch       */
 static HWND         g_hwnd;
 static HANDLE       g_key_event;            /* signalled when a key is pushed     */
@@ -1308,6 +1310,7 @@ static void dpmi_repatch(void)
 /* Forward decl: the shared PM-interrupt dispatcher (defined after this fn). A callback
    handler that issues its own INT 31h/21h routes through it, same as the main PM loop. */
 static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec, unsigned steps);
+static void dpmi_ensure_pmret_sel(void);   /* fwd: shared PM-return catcher installer (#2b + 0303) */
 
 /* Invoke a DPMI 0303 real-mode callback: the guest (running in V86 during a 0301
    excursion) far-called a planted callback BOP -- switch V86->PM, run the client's
@@ -1750,13 +1753,7 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                             break; }
                         case 0x0303: {                             /* allocate real-mode callback: DS:SI=handler, ES:DI=RMCS -> CX:DX */
                             int s;
-                            if (g_pmret_sel == 0 && g_ldt_next < 512) {  /* lazily install the PM-return selector */
-                                int idx = g_ldt_next++;
-                                g_ldt[idx].base = (DWORD)DOS_HDLR_SEG << 4; g_ldt[idx].limit = 0xFFFF;
-                                g_ldt[idx].access = 0xFA; g_ldt[idx].flags = 0;   /* code exec/read */
-                                dpmi_install(idx);
-                                g_pmret_sel = (WORD)((idx << 3) | 7);
-                            }
+                            dpmi_ensure_pmret_sel();   /* lazily install the PM-return catcher selector */
                             for (s = 0; s < DPMI_CB_SLOTS && g_cb[s].used; ++s) {}
                             if (s >= DPMI_CB_SLOTS || g_pmret_sel == 0) {
                                 VDM_REG(tib, VTIB_EFLAGS) |= 1u; VDM_SET16(tib, VTIB_EAX, 0x8015);
@@ -1902,6 +1899,95 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                     log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
                     return -1;
 #undef m
+}
+
+/* Lazily install the PM-return catcher selector (g_pmret_sel): a code selector based
+   at DOS_HDLR_SEG so a PM handler's IRET lands on the planted DPMI_PMRET BOP. Shared by
+   the 0303 real-mode-callback path and the async-IRQ injector (#2b). */
+static void dpmi_ensure_pmret_sel(void)
+{
+    if (g_pmret_sel == 0 && g_ldt_next < 512) {
+        int idx = g_ldt_next++;
+        g_ldt[idx].base = (DWORD)DOS_HDLR_SEG << 4; g_ldt[idx].limit = 0xFFFF;
+        g_ldt[idx].access = 0xFA; g_ldt[idx].flags = 0;   /* code exec/read */
+        dpmi_install(idx);
+        g_pmret_sel = (WORD)((idx << 3) | 7);
+    }
+}
+
+/* GH #18 #2b: asynchronously inject a hardware interrupt (IRQ0 -> INT `iv`) into the
+   client's INSTALLED protected-mode vector (g_pm_int[iv], set via INT 31h 0205). This is
+   the mechanism timer-hooking games (e.g. Doom) rely on: they hook INT 08h/1Ch and expect
+   it to fire ~18.2x/s. We snapshot the interrupted PM context, build an IRET frame on the
+   client's own PM stack pointing at the PM-return catcher, vector to the client's handler,
+   run it through the SAME dispatcher the main loop uses (so a handler that itself does INT
+   21h/31h or port I/O still works), and on its IRET restore the interrupted context verbatim.
+   Faithful to a real INT: clears the virtual-IF (g_dpmi_vi) for the duration, restores it
+   after. Returns 1 if the handler ran to its IRET, 0 otherwise. */
+static int dpmi_inject_pm_irq(dos_machine_t *mp, volatile BYTE *tib, unsigned iv, unsigned steps)
+{
+    char lb[256], *lp = lb;
+    /* snapshot the interrupted PM register file */
+    DWORD sEAX=VDM_REG(tib,VTIB_EAX), sEBX=VDM_REG(tib,VTIB_EBX), sECX=VDM_REG(tib,VTIB_ECX);
+    DWORD sEDX=VDM_REG(tib,VTIB_EDX), sESI=VDM_REG(tib,VTIB_ESI), sEDI=VDM_REG(tib,VTIB_EDI);
+    DWORD sEBP=VDM_REG(tib,VTIB_EBP), sEIP=VDM_REG(tib,VTIB_EIP), sESP=VDM_REG(tib,VTIB_ESP);
+    DWORD sEFL=VDM_REG(tib,VTIB_EFLAGS);
+    WORD  sCS=(WORD)VDM_REG(tib,VTIB_CS), sSS=(WORD)VDM_REG(tib,VTIB_SS);
+    WORD  sDS=(WORD)VDM_REG(tib,VTIB_DS), sES=(WORD)VDM_REG(tib,VTIB_ES);
+    WORD  sFS=(WORD)VDM_REG(tib,VTIB_FS), sGS=(WORD)VDM_REG(tib,VTIB_GS);
+    int prev_vi = g_dpmi_vi; unsigned ph; int done = 0;
+
+    dpmi_ensure_pmret_sel();
+    if (g_pmret_sel == 0) return 0;
+
+    /* push a 16-bit INT frame (FLAGS/CS/IP) on the client's current PM stack so the handler's
+       IRET lands on the catcher; keep the client's own SS so the handler has a valid stack. */
+    { WORD ss = sSS; DWORD b = dpmi_sel_base(ss); WORD sp = (WORD)sESP;
+      sp -= 2; pokew(b + sp, (WORD)sEFL);          /* FLAGS (restored below regardless) */
+      sp -= 2; pokew(b + sp, g_pmret_sel);         /* CS  = catcher                      */
+      sp -= 2; pokew(b + sp, DPMI_PMRET_OFF);      /* IP  = catcher                      */
+      VDM_SET16(tib, VTIB_SS, ss); VDM_REG(tib, VTIB_ESP) = sp; }
+    g_dpmi_vi = 0;                                 /* mask further virtual interrupts     */
+    VDM_REG(tib, VTIB_EFLAGS) = VTIB_EFLAGS_PM;
+    VDM_SET16(tib, VTIB_CS, g_pm_int[iv].sel); VDM_REG(tib, VTIB_EIP) = g_pm_int[iv].off & 0xFFFF;
+
+    lp = zput(lp, "  IRQ0->PM INT 0x"); lp = zhex(lp, iv);
+    lp = zput(lp, " handler 0x"); lp = zhex(lp, g_pm_int[iv].sel);
+    lp = zput(lp, ":0x"); lp = zhex(lp, g_pm_int[iv].off & 0xFFFF); lp = zput(lp, "\r\n");
+    log_append(LOG_PATH, lb, lp); serial_out(lb, lp); lp = lb;
+
+    for (ph = 0; ph < 64 && !done; ++ph) {
+        DWORD ev, eip, vec; int rc;
+        dpmi_arm_fault_trampoline(tib, 0);
+        dpmi_enter_pm(tib);
+        ev  = VDM_REG(tib, VTIB_EVENT);
+        eip = VDM_REG(tib, VTIB_EIP) & 0xFFFF;
+        if (ev == VDM_EVENT_BOP && eip == DPMI_PMRET_OFF
+            && (VDM_REG(tib, VTIB_CS) & 0xFFFF) == g_pmret_sel) { done = 1; break; }
+        if (ev == 3) continue;                     /* "interrupt pending, not entered" -> retry */
+        if (ev == VDM_EVENT_IO || ev == VDM_EVENT_GPFAULT) {
+            int io_h;
+            EnterCriticalSection(&g_lock);
+            io_h = host_try_io_pm(tib, &g_bus);
+            LeaveCriticalSection(&g_lock);
+            if (io_h) continue;
+        }
+        vec = (ev == VDM_EVENT_BOP) ? g_int_vec[eip] : 0;
+        rc = dpmi_service_pm_int(mp, tib, vec, steps);
+        if (rc > 0) continue;
+        break;                                     /* handler exited / unexpected stop */
+    }
+
+    /* restore the interrupted PM context verbatim + unmask */
+    VDM_REG(tib,VTIB_EAX)=sEAX; VDM_REG(tib,VTIB_EBX)=sEBX; VDM_REG(tib,VTIB_ECX)=sECX;
+    VDM_REG(tib,VTIB_EDX)=sEDX; VDM_REG(tib,VTIB_ESI)=sESI; VDM_REG(tib,VTIB_EDI)=sEDI;
+    VDM_REG(tib,VTIB_EBP)=sEBP; VDM_REG(tib,VTIB_EIP)=sEIP; VDM_REG(tib,VTIB_ESP)=sESP;
+    VDM_REG(tib,VTIB_EFLAGS)=sEFL;
+    VDM_SET16(tib,VTIB_CS,sCS); VDM_SET16(tib,VTIB_SS,sSS);
+    VDM_SET16(tib,VTIB_DS,sDS); VDM_SET16(tib,VTIB_ES,sES);
+    VDM_SET16(tib,VTIB_FS,sFS); VDM_SET16(tib,VTIB_GS,sGS);
+    g_dpmi_vi = prev_vi;
+    return done;
 }
 
 /* ================================================================================ *
@@ -2536,6 +2622,17 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                         EnterCriticalSection(&g_lock);
                         vdd_bus_deliver_int(&g_bus, 0x08, &tr);   /* pit_int08 -> ++0040:006C */
                         LeaveCriticalSection(&g_lock);
+                        g_pm_irq0_latch = 1;    /* #2b: latch a virtual IRQ0 for the PM hook */
+                    }
+                    /* #2b async IRQ0 injection: when the client has hooked INT 08h in PM
+                       (g_pm_int[8], via INT 31h 0205) and its virtual-IF is enabled, deliver
+                       the latched IRQ0 to that handler -- how timer-hooking games get ticks.
+                       The latch persists across CLI windows so a masked interrupt isn't lost. */
+                    if (g_pm_irq0_latch && g_dpmi_vi && g_pm_int[0x08].sel && !g_in_pm_irq) {
+                        g_pm_irq0_latch = 0;
+                        g_in_pm_irq = 1;
+                        dpmi_inject_pm_irq(&m, tib, 0x08, steps);
+                        g_in_pm_irq = 0;
                     }
                     dpmi_arm_fault_trampoline(tib, 0);   /* re-arm nest/flag/[0x638]/[TIB+8] */
                     dpmi_enter_pm(tib);

@@ -28,6 +28,7 @@ nasm -f bin "$DIR/animate.asm"  -o "$DIR/animate.com"      # GH#18: real-CPU PM 
 nasm -f bin "$DIR/bounce.asm"   -o "$DIR/bounce.com"       # GH#18: PM bouncing-box demo (milestone #6)
 nasm -f bin "$DIR/kbdbox.asm"   -o "$DIR/kbdbox.com"       # GH#18: interactive PM box, arrow-key input (milestone #6)
 nasm -f bin "$DIR/timerbox.asm" -o "$DIR/timerbox.com"     # GH#18: PM timing (INT 1Ah tick) demo (milestone #6)
+nasm -f bin "$DIR/tmrhook.asm"  -o "$DIR/tmrhook.com"      # GH#18 #2b: async IRQ0 injection into a hooked PM INT 08h
 for f in vgademo.com vga12.com vesademo.com blitfast.com timertst.com mousetst.com xmstest.com emstest.com selftest.com modeswitch.com dpmitest.com dpmiexe.exe pmfault.com; do
     echo "  $f  ($(wc -c < "$DIR/$f") bytes)"
 done

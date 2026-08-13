@@ -2602,6 +2602,29 @@ HOOK the timer, e.g. Doom) — needs PM interrupt reflection to the client's ins
 0204/0205 table `g_pm_int[]`) gated by the DPMI virtual-IF (`g_dpmi_vi`, INT 31h 0900-0902). Probe +
 runner: `tools/dostest/timerbox.asm`, `tmrun.bat`.
 
+### Run 78 (2026-08-13) — #2b async IRQ0 INJECTION into a hooked PM INT 08h `[IMPLEMENTED — pending VM-confirm]`
+
+The remaining timing piece. `src/host/main.c` adds `dpmi_inject_pm_irq(iv)`: when the client has
+installed a PM handler for INT `iv` (via INT 31h 0205 → `g_pm_int[iv]`) and its virtual-IF is enabled,
+the host delivers a latched IRQ0 to that handler. Mechanism mirrors the proven 0303 real-mode-callback
+sub-loop: snapshot the interrupted PM register file, push a 16-bit IRET frame (FLAGS/CS/IP) on the
+client's own PM stack pointing at the PM-return catcher (`g_pmret_sel:DPMI_PMRET_OFF`), vector CS:EIP to
+`g_pm_int[iv]`, run the handler through the SAME dispatcher the main loop uses (so an ISR that itself
+does INT 21h/31h or port I/O still works), and on its IRET restore the interrupted context verbatim.
+Faithful to a real INT: clears the virtual-IF (`g_dpmi_vi`) for the duration, restores it after.
+
+Main-loop wiring (the `g_irq0_pending` block): the host still runs `pit_int08` (++0040:006C, polled
+timing) every tick, and now ALSO sets `g_pm_irq0_latch`. A separate guard delivers the latched IRQ0 —
+`if (g_pm_irq0_latch && g_dpmi_vi && g_pm_int[0x08].sel && !g_in_pm_irq)` — so a masked interrupt is
+held pending across CLI windows (latch coalesces, matching a real PIC), and re-entrancy is guarded.
+Refactored the catcher-selector install out of 0303 into a shared `dpmi_ensure_pmret_sel()`.
+
+Probe `tools/dostest/tmrhook.asm` (+ `tmhrun.bat`): PM mode 13h; HOOKS INT 08h via 0205 (handler CS:off);
+the ISR sets DS=0x17 and bumps `hits`; the box marches at X = 20 + (`hits` mod 240) with **NO INT 1Ah
+polling and no input** — so box movement proves the host is injecting IRQ0 into the client's own PM
+handler ~18.2×/s. Host builds clean, client assembles (442 B). **VM-confirmation deferred** (per session
+directive); confirm interactively via `D:\tmhrun.bat` and two screendumps ≥1 s apart (box should march).
+
 ## References
 - [ntvdmcontrol-and-v86.md](ntvdmcontrol-and-v86.md) — the `VDMSERVICECLASS` enum, VDM_TIB/CONTEXT
   offsets, the V86 keystone.
