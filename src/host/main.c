@@ -727,6 +727,30 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
         break;
     case WM_KEYDOWN:
         if (wp == VK_F11) { present_ddraw_set_fullscreen(&g_pd, !g_pd.fullscreen); return 0; }
+        /* Extended keys (arrows, nav cluster, F1-F10) produce NO WM_CHAR, so feed the ring
+           here as BIOS extended keycodes: AL=0, AH=scancode (INT 16h returns them in AX).
+           Games/DOS apps poll these via INT 16h -- without this, arrow input never arrives. */
+        {
+            uint16_t sc = 0;
+            switch (wp) {
+            case VK_UP:     sc = 0x48; break;   case VK_DOWN:  sc = 0x50; break;
+            case VK_LEFT:   sc = 0x4B; break;   case VK_RIGHT: sc = 0x4D; break;
+            case VK_HOME:   sc = 0x47; break;   case VK_END:   sc = 0x4F; break;
+            case VK_PRIOR:  sc = 0x49; break;   case VK_NEXT:  sc = 0x51; break;  /* PgUp/PgDn */
+            case VK_INSERT: sc = 0x52; break;   case VK_DELETE:sc = 0x53; break;
+            case VK_F1: case VK_F2: case VK_F3: case VK_F4: case VK_F5:
+            case VK_F6: case VK_F7: case VK_F8: case VK_F9: case VK_F10:
+                sc = (uint16_t)(0x3B + (wp - VK_F1)); break;  /* F1=0x3B .. F10=0x44 */
+            default: break;
+            }
+            if (sc) {
+                EnterCriticalSection(&g_lock);
+                vdd_input_push(&g_in, (uint16_t)(sc << 8));   /* AH=scancode, AL=0 */
+                LeaveCriticalSection(&g_lock);
+                if (g_key_event) SetEvent(g_key_event);
+                return 0;
+            }
+        }
         break;
     case WM_CHAR:                        /* translated ASCII -> keyboard ring     */
         EnterCriticalSection(&g_lock);
@@ -1393,6 +1417,29 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                         VDM_REG(tib, VTIB_EIP) += 2;              /* past the 2-byte PM BOP */
                         p = zput(p, "INT10h (PM) -> video VDD AX=0x"); p = zhex(p, ax);
                         p = zput(p, "\r\n"); log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                        return 1;
+                    }
+                    if (vec == 0x16) {                             /* keyboard BIOS in PM -> VDD */
+                        ntvdd_regs r; uint8_t ah16; regs_load(&r, tib); ah16 = r_ah(&r);
+                        for (;;) {                                 /* AH=00/10 block until a key */
+                            EnterCriticalSection(&g_lock);
+                            vdd_bus_deliver_int(&g_bus, 0x16, &r);
+                            LeaveCriticalSection(&g_lock);
+                            if ((ah16 != 0x00 && ah16 != 0x10) || r.zf == 0 || !g_running) break;
+                            InterlockedIncrement(&g_dpmi_iter);    /* keep the watchdog happy while blocked */
+                            WaitForSingleObject(g_key_event, 50);
+                        }
+                        regs_store(&r, tib);
+                        /* set CF/ZF directly in the PM eflags (no real-mode IRET frame in PM) */
+                        if (r.cf) VDM_REG(tib, VTIB_EFLAGS) |= 1u;    else VDM_REG(tib, VTIB_EFLAGS) &= ~1u;
+                        if (r.zf) VDM_REG(tib, VTIB_EFLAGS) |= 0x40u; else VDM_REG(tib, VTIB_EFLAGS) &= ~0x40u;
+                        VDM_REG(tib, VTIB_EIP) += 2;               /* past the 2-byte PM BOP */
+                        (void)base;                                 /* no per-poll logging (would flood) */
+                        return 1;
+                    }
+                    if (vec == 0x33) {                             /* mouse in PM -> INT 33h */
+                        mouse_int33(tib);
+                        VDM_REG(tib, VTIB_EIP) += 2;
                         return 1;
                     }
                     if (vec == 0x31) {                             /* DPMI INT 31h */
@@ -2418,7 +2465,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                 { volatile BYTE *cs = (volatile BYTE *)(ULONG_PTR)g_dpmi_code_base;
                   DWORD o, n = 0, last = 0;
                   for (o = 0; o < 0xFFFF; ++o) {
-                      if (cs[o] == 0xCD && (cs[o+1] == 0x31 || cs[o+1] == 0x21 || cs[o+1] == 0x10)) {
+                      if (cs[o] == 0xCD && (cs[o+1] == 0x31 || cs[o+1] == 0x21 || cs[o+1] == 0x10
+                                            || cs[o+1] == 0x16 || cs[o+1] == 0x33)) {
                           g_int_vec[o] = cs[o+1]; cs[o] = 0xC4; cs[o+1] = 0xC4; ++n; last = o;
                       }
                   }

@@ -2566,6 +2566,23 @@ protected-mode ANIMATION rendering through our VDD, indefinitely. Next: input (I
 a moving sprite for interactivity, then a real DOS/DPMI game. Client + runner:
 `tools/dostest/animate.asm`, `anrun.bat`.
 
+### Run 76 (2026-08-11) — INPUT in PM: keyboard (INT 16h) drives a box on the real CPU `[FACT — VM-confirmed, visual]`
+
+Milestone-#6 interactivity. Two fixes:
+- **Keyboard/mouse INT in PM** (`dpmi_service_pm_int`): route `vec==0x16`→keyboard VDD (blocking AH=00/10
+  loop bumps `g_dpmi_iter` so the watchdog tolerates a blocked read; CF/ZF set directly in VTIB_EFLAGS,
+  EIP+=2) and `vec==0x33`→`mouse_int33`. Patch scan also rewrites `CD 16`/`CD 33`.
+- **Extended keys captured** (window proc `WM_KEYDOWN`): arrows/nav/F-keys produce NO `WM_CHAR`, so they
+  were never entering the keyboard ring — the ring was fed only from `WM_CHAR`. Now `WM_KEYDOWN` maps
+  VK_LEFT/RIGHT/UP/DOWN + Home/End/PgUp/PgDn/Ins/Del + F1-F10 to their BIOS extended keycodes
+  (`AH=scancode, AL=0`) and pushes them. (This also fixes arrow input in the V86/DOS path — a latent bug.)
+
+Probe `tools/dostest/kbdbox.asm`: mode 13h + palette + a box you steer with the arrow keys (ESC quits),
+polling `INT 16h AH=01`/`AH=00` each frame. VM-confirmed: with kbdbox running, QMP `send-key right×10 +
+down×6` moved the cyan box right + down (before/after screendumps differ, and visibly the box relocated).
+So real-CPU protected-mode INPUT works end-to-end through our keyboard VDD. Mouse (INT 33h) is routed but
+not yet exercised. Client + runner: `tools/dostest/kbdbox.asm`, `kbrun.bat`.
+
 ## References
 - [ntvdmcontrol-and-v86.md](ntvdmcontrol-and-v86.md) — the `VDMSERVICECLASS` enum, VDM_TIB/CONTEXT
   offsets, the V86 keystone.
