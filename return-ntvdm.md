@@ -1,3 +1,53 @@
+═══════════════════════════════════════════════════════════════════════════════
+██ POWER-DOWN CHECKPOINT — 2026-08-13 (session 6). READ THIS FIRST ON RESTART. ██
+═══════════════════════════════════════════════════════════════════════════════
+
+WHY THIS EXISTS: the PC was powered down mid-track. Everything needed to resume cold
+is in this banner; the dated session logs below are history/detail.
+
+REPO STATE (branch `spike/dpmi-16bit-switch`):
+  • 3 LOCAL commits, NOT pushed to origin — `735637d` (run 78), `b5e2c5c` (run 79),
+    `a1ee68a` (handoff). `git log origin/spike/dpmi-16bit-switch..HEAD` to see them.
+    Decide whether to `git push` on resume (was left unpushed intentionally).
+  • Working tree clean except pre-existing untracked files (MAINICON.ico, demos/,
+    scripts/kd_*.py, scripts/trace_break.py) — NONE are mine this session; leave them.
+  • Host builds clean: `./scripts/build.sh` → build/ntvdmhost.exe. tmrhook.com assembles.
+
+VM STATE: powered OFF, clean. No qemu running. Backup intact at
+  vm/xp-debugonly-backup.qcow2 (restore → vm/xp.qcow2 if XP wedges). This session did
+  NOT boot the VM (user deferred VM-confirm to keep momentum). So TWO things are unverified.
+
+WHAT WAS DONE THIS SESSION (detail in the SESSION 6 block just below, + docs runs 78-79):
+  • run 78 = #2b async IRQ0 injection into a hooked PM INT 08h — IMPLEMENTED, code compiles,
+    but NOT VM-confirmed.
+  • run 79 = #3 (32-bit/DOS4GW) kickoff — landed D/B-aware host_try_io_pm (safe, no
+    regression) + a full line-referenced 32-bit plan. Core 32-bit work NOT started (needs VM).
+
+▶▶ RESUME — DO THESE TWO, IN ORDER (both need the XP VM booted):
+  1. CONFIRM run 78. Boot VM (`./scripts/xp-vm.sh run`; ~5-6 min, poll screendumps until a
+     stable non-black/non-loading frame >2MB). Trigger `tmrhook.com` via an AUTORUN CD with a
+     FRESH volume label (hdiutil makehybrid; XP caches autorun by label) — the runner is
+     tools/dostest/tmhrun.bat. Take 2 QMP screendumps ≥1 s apart: the red box should MARCH
+     across mode 13h with NO input and NO INT 1Ah polling → proves the host is injecting IRQ0
+     into the client's own PM INT 08h handler ~18.2×/s. If it marches, mark run 78 a FACT
+     (update docs/research/dpmi-under-ntvdmcontrol.md run 78 + [[dpmi-realcpu-pm]] memory).
+  2. START #3 for real. FIRST PROBE: write a minimal 32-bit client (16-bit DPMI entry → alloc a
+     code selector → INT 31h 0009 set access 0xFA + D/B bit → far-jmp into 32-bit → a 32-bit
+     `OUT 0x3C8,AL` → report), the smallest test of "does the kernel reflect a 32-bit PM I/O as
+     event 0" (the run-72 gate, for 32-bit). If yes, proceed down the run-79 plan: honor
+     client_is_32bit in src/vdm/dpmi.c switch as a base-0 ~2GB G=1 flat selector (NOT 4GB — XP
+     NtSetLdtEntries rejects flat-4GB; stock ntvdm runs the same ~2GB cap, so DOS4GW is reachable
+     to parity); 1687 BX bit0=1; arm VTIB_FLT_FLAG with client width; widen the 2 catcher IRET
+     frames (dpmi_run_callback, dpmi_inject_pm_irq) to dword EFLAGS/CS/EIP; gate the EIP/off
+     &0xFFFF masks on dpmi_sel_is32(). Full inventory = docs run 79.
+
+HARNESS GOTCHAS (hard-won): only ONE qemu at a time (`pkill -9 -f qemu-system-x86_64` before a
+  fresh launch); never `rm vm/qmp.sock` while qemu holds it; QMP send-key is LOSSY → always
+  trigger clients via autorun CD (fresh label each mount); never `pkill` a KD session mid-halt
+  (stale-halt wedge = reboot-only). Standing directive: DPMI is NOT done — measure against the
+  games bar (Doom/Skyroads/ZAR playable), not the last milestone (see [[dpmi-completeness-directive]]).
+═══════════════════════════════════════════════════════════════════════════════
+
 Resume NTVDMEX — GH #18 real-CPU protected mode, via the guest kernel debugger. Session 3 SOLVED the KD tooling (the ~28 "wall" is gone) — the debugger is now a working, reliable instrument. North star unchanged (superset of XP-32 ntvdm; bar = Doom/Skyroads/ZAR).
 
 ★★★ SESSION 6 (2026-08-13) — runs 78-79 committed on `spike/dpmi-16bit-switch` (in sync w/ origin as of session start; new commits `735637d` run 78, `b5e2c5c` run 79 are LOCAL, push when ready). VM was NOT booted this session (user deferred VM-confirm to keep momentum). TWO deliverables:
