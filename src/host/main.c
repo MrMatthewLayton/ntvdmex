@@ -886,23 +886,39 @@ static int host_try_io(volatile BYTE *tib, vdd_bus *bus)
     return 1;
 }
 
+/* True if selector `sel`'s descriptor has the D/B (32-bit default) bit set. The bit
+   lives in g_ldt[].flags bit 2 (descriptor byte-6 bit 6). All 16-bit DPMI clients leave
+   it 0; a DOS/4GW-class 32-bit code selector sets it (via INT 31h 0009). */
+static int dpmi_sel_is32(WORD sel)
+{
+    int idx = (sel & 0xFFFF) >> 3;
+    if (idx < 1 || idx >= 512) return 0;
+    return (g_ldt[idx].flags & 0x4) != 0;
+}
+
 /* PM variant of host_try_io (GH #18 run 72). A real-CPU PROTECTED-MODE IN/OUT is
    trapped by the kernel and reflected to us as VTIB_EVENT=0 -- the SAME I/O event as
    V86 (VM-confirmed by outprobe.com: a PM `OUT DX,AL` to 0x3C8 stops with event=0 on
    the instruction). Only the addressing differs: the faulting insn is at the code
    selector's LINEAR BASE + EIP, not V86 `CS<<4:IP`. Decode + dispatch through the same
-   VDD bus, then step the guest past it, so PM port I/O (VGA/sound) reaches our VDDs. */
+   VDD bus, then step the guest past it, so PM port I/O (VGA/sound) reaches our VDDs.
+   #3 (32-bit DPMI): the code selector's D/B bit sets the DEFAULT operand size -- 16-bit
+   for a 16-bit segment (0x66 => 4), 32-bit for a DOS/4GW flat segment (0x66 => 2). We
+   read it per-selector and offset EIP by its full 32-bit value when D=1, so this decoder
+   serves both classes; for every existing D=0 client the behaviour is unchanged. */
 static int host_try_io_pm(volatile BYTE *tib, vdd_bus *bus)
 {
     DWORD csv = VDM_REG(tib, VTIB_CS)  & 0xFFFF;
     DWORD eip = VDM_REG(tib, VTIB_EIP);
-    volatile BYTE *code = (volatile BYTE *)(ULONG_PTR)(dpmi_sel_base((WORD)csv) + (eip & 0xFFFF));
-    int i = 0, opsize = 2, is_in, width, used_dx, len;
+    int is32 = dpmi_sel_is32((WORD)csv);
+    DWORD eip_off = is32 ? eip : (eip & 0xFFFF);
+    volatile BYTE *code = (volatile BYTE *)(ULONG_PTR)(dpmi_sel_base((WORD)csv) + eip_off);
+    int i = 0, opsize = is32 ? 4 : 2, is_in, width, used_dx, len;
     BYTE op; uint16_t port; uint32_t val, eax;
 
     while (code[i] == 0x66 || code[i] == 0x67 ||
            code[i] == 0xF2 || code[i] == 0xF3) {        /* prefixes            */
-        if (code[i] == 0x66) opsize = 4;
+        if (code[i] == 0x66) opsize = is32 ? 2 : 4;     /* 0x66 flips the segment default */
         if (++i > 4) return 0;
     }
     op = code[i];
@@ -931,8 +947,9 @@ static int host_try_io_pm(volatile BYTE *tib, vdd_bus *bus)
         val = (width == 1) ? (eax & 0xFF) : (width == 2) ? (eax & 0xFFFF) : eax;
         vdd_bus_io(bus, port, (uint8_t)width, 0, &val);
     }
-    /* step past the I/O insn (16-bit PM client: advance the low word, keep high) */
-    VDM_REG(tib, VTIB_EIP) = (eip & 0xFFFF0000u) | ((eip + len) & 0xFFFF);
+    /* step past the I/O insn. 16-bit client (D=0): advance the low word, keep high.
+       32-bit client (D=1): advance the full EIP. */
+    VDM_REG(tib, VTIB_EIP) = is32 ? (eip + len) : ((eip & 0xFFFF0000u) | ((eip + len) & 0xFFFF));
     return 1;
 }
 

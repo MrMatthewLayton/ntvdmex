@@ -2625,6 +2625,50 @@ polling and no input** — so box movement proves the host is injecting IRQ0 int
 handler ~18.2×/s. Host builds clean, client assembles (442 B). **VM-confirmation deferred** (per session
 directive); confirm interactively via `D:\tmhrun.bat` and two screendumps ≥1 s apart (box should march).
 
+### Run 79 (2026-08-13) — #3 kickoff: D/B-aware PM I/O + a grounded 32-bit scope `[FACT (code) + PLAN]`
+
+The tent-pole for Doom. All PM support to date is 16-bit; a DOS/4GW-class client runs a 32-bit flat
+code segment (descriptor D/B=1), which inverts operand/address defaults and widens every EIP/ESP/offset
+and every interrupt frame to 32 bits. Two deliverables this run:
+
+**(a) Landed, off-VM-safe:** `host_try_io_pm` is now **D/B-aware**. New `dpmi_sel_is32(sel)` reads the code
+selector's D/B bit (`g_ldt[].flags & 0x4`); the I/O decoder picks its default operand size from it
+(16-bit ⇒ `0x66`→4, 32-bit ⇒ `0x66`→2) and steps the full 32-bit EIP when D=1. **No current client sets
+D/B** (none uses INT 31h 0009), so every existing D=0 client decodes byte-for-byte as before — provably
+no regression to the proven 16-bit path. This is the reference pattern the rest of the 32-bit work copies.
+
+**(b) The 32-bit scope (line-referenced inventory of `src/host/main.c` unless noted).** Highest-leverage,
+in dependency order:
+  1. **Honor `client_is_32bit` in the switch** (`src/vdm/dpmi.c:56,67-69`; caller `main.c` passes 0):
+     build code/data/stack with D/B=1. **KNOWN BLOCKER** (`dpmi.c:58-65`, Kernel RE session 7): XP's
+     `NtSetLdtEntries`/`PspIsDescriptorValid` rejects a true flat 4GB LDT descriptor
+     (base+limit ≤ `MmHighestUserAddress` ≈ 2GB) — but a **base-0, ~2GB, G=1** descriptor DOES install
+     (run 30), and **stock ntvdm runs under the SAME cap**, so DOS/4GW is reachable to ntvdm parity. Plan:
+     a base-0 G=1 ~2GB flat selector, not a 4GB one.
+  2. **Advertise 32-bit in INT 2Fh 1687** (`1687` handler sets BX=0 "16-bit only"): set BX bit0=1 so an
+     extender proceeds.
+  3. **Arm the trampoline's 16/32 flag** (`dpmi_arm_fault_trampoline`'s `VTIB_FLT_FLAG` write; all callers
+     pass 0): pass the client width so the kernel builds a 32-bit reflect frame. The `VTIB_FLT_SAV*` slots
+     are already read as dwords (EIP/SS:ESP 32-bit-ready; CS a word, correct).
+  4. **Widen the two catcher IRET frames to dwords** (`dpmi_run_callback` ~`pss=0x17,psp=0xF400` frame;
+     `dpmi_inject_pm_irq`'s `WORD sp=(WORD)sESP` frame): when the target is 32-bit, push EFLAGS/CS/EIP as
+     dwords with full ESP. The catcher/trampoline **code selectors** (`dpmi_ensure_pmret_sel`,
+     `dpmi_install_fault_trampoline`, both `access=0xFA flags=0`) must have D/B matching the client so the
+     IRET frame width agrees.
+  5. **Gate the 16-bit masks on `dpmi_sel_is32`**: the PM-loop/`dpmi_service_pm_int` `EIP & 0xFFFF` reads
+     (note `g_int_vec[]` is only 0x10000 wide — a 32-bit fault EIP>64K needs a different dispatch key or a
+     BOP-offset invariant), `g_pm_int[].off` get/set (0204/0205 mask to 16-bit), the injected-handler
+     entry EIP, and every ES:DI / DS:SI / DS:DX buffer offset (`… & 0xFFFF`) — gated on the *relevant*
+     selector's D/B. RMCS register images stay 16-bit **by DPMI spec** (real-mode side), so those are not
+     bugs; only the truncation of a 32-bit PM register the client passed in matters.
+
+**These all need VM iteration** — the open questions (does `dpmi_enter_pm` run a 32-bit CS; does the
+kernel reflect a 32-bit PM I/O as event 0 and a 32-bit PM #GP to the trampoline; does the base-0 ~2GB
+selector actually execute) are only answerable on the XP VM. **First probe when the VM is next up:** a
+minimal 32-bit client (16-bit DPMI entry → alloc a code sel, 0009 set access `0xFA`+D/B → far-jump 32-bit
+→ a 32-bit `OUT 0x3C8` → report), the smallest test that answers "does the kernel reflect 32-bit PM I/O
+as event 0" — the same gate `outprobe` cleared for 16-bit in run 72.
+
 ## References
 - [ntvdmcontrol-and-v86.md](ntvdmcontrol-and-v86.md) — the `VDMSERVICECLASS` enum, VDM_TIB/CONTEXT
   offsets, the V86 keystone.
