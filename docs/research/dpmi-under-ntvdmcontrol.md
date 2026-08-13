@@ -2539,6 +2539,33 @@ end. Next: palette via PM `OUT` in a drawn scene (combine with ioverify's DAC pa
 per-frame animation (a PM loop that redraws + yields via a cheap INT so the watchdog sees progress), then
 a real DOS/DPMI game. Client + runner: `tools/dostest/mode13.asm`, `m13run.bat`.
 
+### Run 75 (2026-08-11) — MILESTONE: real-CPU protected-mode ANIMATION through the VDD `[FACT — VM-confirmed, visual]`
+
+mode13 (run 74) rendered a static PM frame; this proves a *moving* one — the game shape.
+`tools/dostest/animate.asm`: after the real→PM switch + mode 13h + A0000 framebuffer selector, it
+loops forever — each frame fills the framebuffer with a colour ramp whose start index is a phase
+counter that increments per frame (so the gradient SCROLLS), then `INT 31h 0400` (a cheap, handled
+DPMI call) to yield. The yield is the trick: it lets `dpmi_enter_pm` return so the host PM loop
+iterates (advancing the watchdog heartbeat) and the UI thread presents the new frame — all on the
+real CPU.
+
+Host changes (`src/host/main.c`):
+- **PM loop cap → run-until-window-close**: `for (steps...; g_running && steps < 100000000; ...)`
+  (was `< 256`) so a long-running/animation client keeps going.
+- **Watchdog: kill only a SUSTAINED freeze**: the run-52 watchdog previously `TerminateProcess`'d
+  unconditionally after ~3s. Now it samples forever, resets on any `g_dpmi_iter` progress, and
+  terminates only after ~3s of NO progress (a real wedge) — and stands down on `g_dpmi_done`. So a
+  healthy animating loop (iter advancing every frame) is never killed; logging is throttled to the
+  first 12 samples + any freeze so a long run doesn't flood COM1.
+
+VM result (real-CPU, `g_dpmi_use_interp=0`, animate via autorun CD): serial shows
+`INT10h (PM) -> video VDD AX=0x0013` + "scrolling the gradient forever" and NO watchdog termination;
+the ntvdmhost window ("Windows XP Virtual DOS Machine - animate.com") shows the mode-13h gradient,
+and **two QMP screendumps 6 s apart have different hashes** (the gradient scrolled) — i.e. real-CPU
+protected-mode ANIMATION rendering through our VDD, indefinitely. Next: input (INT 16h/33h in PM) +
+a moving sprite for interactivity, then a real DOS/DPMI game. Client + runner:
+`tools/dostest/animate.asm`, `anrun.bat`.
+
 ## References
 - [ntvdmcontrol-and-v86.md](ntvdmcontrol-and-v86.md) — the `VDMSERVICECLASS` enum, VDM_TIB/CONTEXT
   offsets, the V86 keystone.

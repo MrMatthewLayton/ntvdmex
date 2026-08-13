@@ -1098,7 +1098,7 @@ static LONG CALLBACK dpmi_crash_veh(EXCEPTION_POINTERS *ep)
    the batch dumps the log and locks release. Makes every DPMI run self-terminating. */
 static DWORD WINAPI dpmi_watchdog(LPVOID param)
 {
-    static char wb[512]; char *q = wb; unsigned i; LONG prev = -1; (void)param;
+    static char wb[512]; char *q = wb; LONG prev = -1; (void)param;
     q = zput(q, "STAGE3-DPMI: watchdog started; sampling host PM-loop heartbeat (run 52 diag)\r\n");
     serial_out(wb, q); q = wb;
     /* Sample the host PM loop concurrently while the main thread is (possibly) blocked
@@ -1112,35 +1112,47 @@ static DWORD WINAPI dpmi_watchdog(LPVOID param)
          veh any/fatal   -> whether a real Win32 exception was EVER delivered to us. fatal>0
                             means the PM #GP IS catchable via SEH (good news); both 0 while
                             frozen confirms the kernel swallowed it (runs 20-34 wall). */
-    for (i = 0; i < 12; ++i) {
+    /* Only a SUSTAINED freeze is a wedge. A healthy client -- especially an animation
+       loop -- keeps bumping g_dpmi_iter every frame; it must NOT be killed. So sample
+       forever, reset on any progress, and terminate only after ~3s of NO progress.
+       Stand down entirely once the client has exited cleanly (g_dpmi_done). Log the
+       first 12 samples (the run-51/52 wedge diagnostic) + any frozen streak, and stay
+       quiet while healthy so a long run doesn't flood COM1. */
+    { unsigned n = 0, frozen = 0;
+      for (;;) {
         LONG iter; DWORD en_cs, en_eip, base; const BYTE *ib;
         Sleep(250);
-        if (g_dpmi_done) {                              /* client exited cleanly -> stop, keep the window */
+        if (g_dpmi_done) {                              /* client exited cleanly -> keep the window */
             q = zput(q, "STAGE3-DPMI: watchdog stand-down (client done)\r\n");
             log_append(LOG_PATH, wb, q); serial_out(wb, q);
             return 0;
         }
         iter   = g_dpmi_iter;
-        en_cs  = g_dpmi_enter_cs;  en_eip = g_dpmi_enter_eip;
-        q = zput(q, "  wd["); q = zhex(q, i);
-        q = zput(q, "] iter="); q = zhex(q, (unsigned)iter);
-        q = zput(q, (iter == prev) ? " FROZEN" : " advancing");
-        q = zput(q, " enter="); q = zhex(q, en_cs); q = zput(q, ":"); q = zhex(q, en_eip);
-        q = zput(q, " last{ev="); q = zhex(q, g_dpmi_last_ev);
-        q = zput(q, " cs:eip="); q = zhex(q, g_dpmi_last_cs); q = zput(q, ":"); q = zhex(q, g_dpmi_last_eip);
-        q = zput(q, " vec="); q = zhex(q, g_dpmi_last_vec); q = zput(q, "}");
-        q = zput(q, " veh{any="); q = zhex(q, (unsigned)g_veh_any);
-        q = zput(q, " fatal="); q = zhex(q, (unsigned)g_veh_fatal); q = zput(q, "}");
-        if (iter == prev && g_dpmi_pm) {                /* wedged: dump the guest bytes there */
-            base = dpmi_sel_base((WORD)en_cs);
-            ib = (const BYTE *)(ULONG_PTR)(base + (en_eip & 0xFFFF));
-            q = zput(q, " b@enter="); q = zdump(q, ib, 8);
+        frozen = (iter == prev) ? (frozen + 1) : 0;
+        if (n < 12 || frozen) {                         /* diagnostic window + any freeze */
+            en_cs  = g_dpmi_enter_cs;  en_eip = g_dpmi_enter_eip;
+            q = zput(q, "  wd["); q = zhex(q, n);
+            q = zput(q, "] iter="); q = zhex(q, (unsigned)iter);
+            q = zput(q, frozen ? " FROZEN" : " advancing");
+            q = zput(q, " enter="); q = zhex(q, en_cs); q = zput(q, ":"); q = zhex(q, en_eip);
+            q = zput(q, " last{ev="); q = zhex(q, g_dpmi_last_ev);
+            q = zput(q, " cs:eip="); q = zhex(q, g_dpmi_last_cs); q = zput(q, ":"); q = zhex(q, g_dpmi_last_eip);
+            q = zput(q, " vec="); q = zhex(q, g_dpmi_last_vec); q = zput(q, "}");
+            q = zput(q, " veh{any="); q = zhex(q, (unsigned)g_veh_any);
+            q = zput(q, " fatal="); q = zhex(q, (unsigned)g_veh_fatal); q = zput(q, "}");
+            if (frozen && g_dpmi_pm) {                   /* wedged: dump the guest bytes there */
+                base = dpmi_sel_base((WORD)en_cs);
+                ib = (const BYTE *)(ULONG_PTR)(base + (en_eip & 0xFFFF));
+                q = zput(q, " b@enter="); q = zdump(q, ib, 8);
+            }
+            q = zput(q, "\r\n");
+            serial_out(wb, q); q = wb;
         }
-        q = zput(q, "\r\n");
-        serial_out(wb, q); q = wb;
-        prev = iter;
+        prev = iter; ++n;
+        if (frozen >= 12) break;                         /* ~3s with NO progress -> real wedge */
+      }
     }
-    q = zput(q, "STAGE3-DPMI: watchdog terminating\r\n");
+    q = zput(q, "STAGE3-DPMI: watchdog terminating (wedged)\r\n");
     log_append(LOG_PATH, wb, q);
     serial_out(wb, q);
     /* TerminateProcess (forceful) -- ExitProcess hangs trying to unwind the PM engine
@@ -2435,7 +2447,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                    (2) GH #18: a raw PM #GP the kernel reflects to our handler code selector
                        -- also VTIB_EVENT=4, but CS==g_dpmi_flt_code_sel and EIP==DPMI_FAULT_COFF.
                        We recover the saved faulting CS:EIP/SS:ESP from the VTIB_FLT_SAV* slots. */
-                for (steps = 0; steps < 256; ++steps) {
+                for (steps = 0; g_running && steps < 100000000; ++steps) {  /* run until window close (animation) */
                     DWORD ev, eip, csv, vec; int rc;
                     /* run 52 heartbeat: publish where we're about to hand off + bump the
                        iteration counter BEFORE entering, so a watchdog sample taken while

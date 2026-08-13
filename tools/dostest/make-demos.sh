@@ -24,6 +24,7 @@ nasm -f bin "$DIR/pmfault.asm"  -o "$DIR/pmfault.com"      # GH#18: raw PM-#GP r
 nasm -f bin "$DIR/outprobe.asm" -o "$DIR/outprobe.com"     # GH#18: PM I/O-virtualization probe (run 72)
 nasm -f bin "$DIR/ioverify.asm" -o "$DIR/ioverify.com"     # GH#18: PM I/O VDD round-trip verify (run 73)
 nasm -f bin "$DIR/mode13.asm"   -o "$DIR/mode13.com"       # GH#18: PM VGA render slice (milestone #6)
+nasm -f bin "$DIR/animate.asm"  -o "$DIR/animate.com"      # GH#18: real-CPU PM animation (milestone #6)
 for f in vgademo.com vga12.com vesademo.com blitfast.com timertst.com mousetst.com xmstest.com emstest.com selftest.com modeswitch.com dpmitest.com dpmiexe.exe pmfault.com; do
     echo "  $f  ($(wc -c < "$DIR/$f") bytes)"
 done
