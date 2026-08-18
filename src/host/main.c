@@ -2214,7 +2214,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     (void)hInst; (void)hPrev; (void)lpCmd; (void)nShow;
     progpath[0] = 0; args[0] = 0;
 
-    p = zput(p, "NTVDMEX clean host\r\nSTAGE0: WinMain entered [build dpmi-harness-v67]\r\n");
+    p = zput(p, "NTVDMEX clean host\r\nSTAGE0: WinMain entered [build dpmi-harness-v68]\r\n");
     log_write(LOG_PATH, report, p);
     serial_init();                                      /* DPMI harness: COM1 log sink */
     serial_out(report, p);
@@ -2722,6 +2722,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                    (2) GH #18: a raw PM #GP the kernel reflects to our handler code selector
                        -- also VTIB_EVENT=4, but CS==g_dpmi_flt_code_sel and EIP==DPMI_FAULT_COFF.
                        We recover the saved faulting CS:EIP/SS:ESP from the VTIB_FLT_SAV* slots. */
+                DWORD ev3_retries = 0;   /* GH#18: bounded event-3 (pending-int guard) re-entries */
                 for (steps = 0; g_running && steps < 100000000; ++steps) {  /* run until window close (animation) */
                     DWORD ev, eip, csv, vec; int rc;
                     /* run 52 heartbeat: publish where we're about to hand off + bump the
@@ -2771,6 +2772,33 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                     eip = VDM_REG(tib, VTIB_EIP) & 0xFFFF;
                     csv = VDM_REG(tib, VTIB_CS) & 0xFFFF;
                     g_dpmi_last_ev  = ev;  g_dpmi_last_eip = eip;  g_dpmi_last_cs = csv;
+                    /* GH#18 (bare-metal crack, 2026-08-18): dpmi_enter.S reports event 3 when it
+                       DECLINES to enter PM -- guest IF=1 AND [0x714]&3 signals a pending hardware
+                       interrupt (the FIXED_NTVDMSTATE pending bits; see dpmi_enter.S label 2). We
+                       run PM IN-PROCESS (far-jmp), NOT via VdmStartExecution, so while PM executes
+                       the kernel does not manage this VDM's interrupt assist -- those pending bits
+                       are STALE real-mode state: a timer IRQ0 latched during the DOS INT 21h calls
+                       before the mode switch. On real 3.3GHz silicon a tick is essentially always
+                       pending at switch time (QEMU+HVF's dilated clock rarely had one), so the
+                       monitor bailed with event 3 forever and the PM client never ran a single
+                       instruction (EIP stuck at entry) -- THE session-8 "kernel won't run PM" wall.
+                       Clear the stale pending bits and re-enter. Bounded so a genuinely re-arming
+                       pending can't spin; the BIOS tick still advances via the IRQ0 path above. */
+                    if (ev == 3) {
+                        if (++ev3_retries <= 0x10000) {
+                            if (ev3_retries <= 3) {
+                                p = zput(p, "GH#18: event3 pending-int guard at CS:EIP=0x");
+                                p = zhex(p, csv); p = zput(p, ":0x"); p = zhex(p, eip);
+                                p = zput(p, " [0x714]=0x");
+                                p = zhex(p, *(volatile DWORD *)(ULONG_PTR)0x714);
+                                p = zput(p, " -> clear stale pending + re-enter\r\n");
+                                log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                            }
+                            *(volatile DWORD *)(ULONG_PTR)0x714 &= ~3u;
+                            continue;
+                        }
+                        /* retry budget exhausted -> fall through and report an unexpected stop */
+                    }
                     /* GH #18: the raw-PM-#GP reflect landed on our handler code selector. THIS
                        is the proof point: the kernel reflected a fault it used to swallow. */
                     if (ev == VDM_EVENT_BOP && csv == (g_dpmi_flt_code_sel & 0xFFFF)
