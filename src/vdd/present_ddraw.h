@@ -64,4 +64,10 @@ void present_ddraw_present(present_ddraw *pd);
 /* Snapshot + present in one call (for the standalone present_demo). */
 void present_ddraw_frame(present_ddraw *pd, const ntvdd_frame *f);
 
+/* Serialise the current 8bpp snapshot to an indexed .bmp at `path` (occlusion-proof:
+   reads pd->snap, not the screen). For headless/remote visual validation -- the host
+   screenshots itself so a graphical run is verifiable off the SMB share without VNC.
+   0 = ok, <0 = nothing valid to save / write failed. */
+int present_ddraw_save_bmp(present_ddraw *pd, const char *path);
+
 #endif /* NTVDMEX_PRESENT_DDRAW_H */

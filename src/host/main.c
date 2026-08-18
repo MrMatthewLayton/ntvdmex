@@ -704,6 +704,20 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
         present_ddraw_snapshot(&g_pd, &g_vid.frame);  /* consistent copy UNDER lock  */
         LeaveCriticalSection(&g_lock);
         present_ddraw_present(&g_pd);   /* vsync'd blit OUTSIDE the lock             */
+        /* Headless remote visual capture (session-9): the host screenshots ITSELF to
+           C:\ntvdmex\shotNN.bmp every ~2s so a graphical run (Skyroads, the PM demos)
+           is verifiable off the SMB share -- VNC capture is dead on the real box. The
+           snapshot is owned by this UI thread, so no extra lock is needed; capped at
+           40 frames so a long run never fills the disk. rt.bat copies shot*.bmp off. */
+        if (g_headless) {
+            static unsigned cap_tick = 0, cap_seq = 0;
+            if ((cap_tick++ % 60) == 0 && cap_seq < 40) {
+                char path[] = "C:\\ntvdmex\\shot00.bmp";
+                path[15] = (char)('0' + (cap_seq / 10) % 10);
+                path[16] = (char)('0' + cap_seq % 10);
+                if (present_ddraw_save_bmp(&g_pd, path) == 0) ++cap_seq;
+            }
+        }
         return 0;
     case WM_ERASEBKGND:
         return 1;                       /* we own the whole client -> no white erase */
@@ -2216,7 +2230,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     (void)hInst; (void)hPrev; (void)lpCmd; (void)nShow;
     progpath[0] = 0; args[0] = 0;
 
-    p = zput(p, "NTVDMEX clean host\r\nSTAGE0: WinMain entered [build dpmi-harness-v69]\r\n");
+    p = zput(p, "NTVDMEX clean host\r\nSTAGE0: WinMain entered [build dpmi-harness-v70]\r\n");
     log_write(LOG_PATH, report, p);
     serial_init();                                      /* DPMI harness: COM1 log sink */
     serial_out(report, p);

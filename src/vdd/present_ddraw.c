@@ -178,3 +178,60 @@ void present_ddraw_present(present_ddraw *pd)
 
 void present_ddraw_frame(present_ddraw *pd, const ntvdd_frame *f)
 { present_ddraw_snapshot(pd, f); present_ddraw_present(pd); }
+
+/* Save the current 8bpp snapshot as an indexed .bmp at `path`. This is OCCLUSION-PROOF
+   -- it serialises our own back-buffer (pd->snap + pd->snap_pal), not the on-screen
+   pixels -- so the host can screenshot ITSELF for headless/remote visual validation:
+   a graphical run (mode 13h, Skyroads, the PM demos) is verified by reading the .bmp
+   off the SMB share instead of via VNC or a physical monitor (VNC capture is dead on
+   the real box). Call on the UI thread (which owns snap) or under the bus lock.
+   Returns 0 on success, <0 if there's nothing valid to save or the write failed. */
+static void st_le16(BYTE *p, unsigned v) { p[0]=(BYTE)v; p[1]=(BYTE)(v>>8); }
+static void st_le32(BYTE *p, DWORD v)    { p[0]=(BYTE)v; p[1]=(BYTE)(v>>8); p[2]=(BYTE)(v>>16); p[3]=(BYTE)(v>>24); }
+
+int present_ddraw_save_bmp(present_ddraw *pd, const char *path)
+{
+    int w = pd->snap_w, h = pd->snap_h, x, y;
+    DWORD rowb, imgsz, off, wr;
+    HANDLE hf;
+    BYTE fh[14], ih[40];
+    static BYTE pal[256 * 4];
+    static BYTE row[640 + 4];
+    if (!pd->snap_valid || w <= 0 || h <= 0 || w > 640 || h > 480) return -1;
+    rowb  = ((DWORD)w + 3) & ~3u;               /* rows padded to 4 bytes            */
+    imgsz = rowb * (DWORD)h;
+    off   = 14 + 40 + 256 * 4;                  /* pixels start after headers+palette */
+
+    /* BITMAPFILEHEADER */
+    fh[0] = 'B'; fh[1] = 'M';
+    st_le32(fh + 2, off + imgsz);               /* whole file size                   */
+    st_le16(fh + 6, 0); st_le16(fh + 8, 0);
+    st_le32(fh + 10, off);
+    /* BITMAPINFOHEADER (positive height -> bottom-up rows) */
+    st_le32(ih + 0, 40);
+    st_le32(ih + 4, (DWORD)w);  st_le32(ih + 8, (DWORD)h);
+    st_le16(ih + 12, 1);        st_le16(ih + 14, 8);       /* 1 plane, 8bpp          */
+    st_le32(ih + 16, 0);        st_le32(ih + 20, imgsz);   /* BI_RGB                 */
+    st_le32(ih + 24, 2835);     st_le32(ih + 28, 2835);    /* ~72 dpi                */
+    st_le32(ih + 32, 256);      st_le32(ih + 36, 0);       /* 256 colours used       */
+    /* palette: snap_pal is 0xAARRGGBB -> RGBQUAD {B,G,R,0} */
+    for (x = 0; x < 256; ++x) {
+        uint32_t a = pd->snap_pal[x];
+        pal[x*4+0] = (BYTE)(a & 0xFF);
+        pal[x*4+1] = (BYTE)((a >> 8) & 0xFF);
+        pal[x*4+2] = (BYTE)((a >> 16) & 0xFF);
+        pal[x*4+3] = 0;
+    }
+    hf = CreateFileA(path, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (hf == INVALID_HANDLE_VALUE) return -1;
+    WriteFile(hf, fh, 14, &wr, NULL);
+    WriteFile(hf, ih, 40, &wr, NULL);
+    WriteFile(hf, pal, sizeof pal, &wr, NULL);
+    for (y = h - 1; y >= 0; --y) {              /* BMP is bottom-up                  */
+        for (x = 0; x < w; ++x) row[x] = pd->snap[(size_t)y * (size_t)w + (size_t)x];
+        for (x = w; x < (int)rowb; ++x) row[x] = 0;
+        WriteFile(hf, row, rowb, &wr, NULL);
+    }
+    CloseHandle(hf);
+    return 0;
+}
