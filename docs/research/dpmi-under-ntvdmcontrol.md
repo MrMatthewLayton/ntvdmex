@@ -2602,7 +2602,7 @@ HOOK the timer, e.g. Doom) — needs PM interrupt reflection to the client's ins
 0204/0205 table `g_pm_int[]`) gated by the DPMI virtual-IF (`g_dpmi_vi`, INT 31h 0900-0902). Probe +
 runner: `tools/dostest/timerbox.asm`, `tmrun.bat`.
 
-### Run 78 (2026-08-13) — #2b async IRQ0 INJECTION into a hooked PM INT 08h `[IMPLEMENTED — pending VM-confirm]`
+### Run 78 (2026-08-13) — #2b async IRQ0 INJECTION into a hooked PM INT 08h `[FACT — VM-CONFIRMED 2026-08-18]`
 
 The remaining timing piece. `src/host/main.c` adds `dpmi_inject_pm_irq(iv)`: when the client has
 installed a PM handler for INT `iv` (via INT 31h 0205 → `g_pm_int[iv]`) and its virtual-IF is enabled,
@@ -2624,6 +2624,13 @@ the ISR sets DS=0x17 and bumps `hits`; the box marches at X = 20 + (`hits` mod 2
 polling and no input** — so box movement proves the host is injecting IRQ0 into the client's own PM
 handler ~18.2×/s. Host builds clean, client assembles (442 B). **VM-confirmation deferred** (per session
 directive); confirm interactively via `D:\tmhrun.bat` and two screendumps ≥1 s apart (box should march).
+
+**VM-CONFIRM (2026-08-18, session 7):** booted the XP VM, hot-swapped an autorun CD (fresh label
+`TMH081826`, `autorun.inf`→`tmhrun.bat`) → `ntvdmhost` ran `tmrhook.com`. Serial log streamed
+`IRQ0->PM INT 0x08 handler 0x0f:0x01e2` (the client's own `timer_isr`) ~18×/s, and two screendumps
+~2 s apart show the red box marched right ~75 px with **NO input and NO INT 1Ah polling** — the box
+tracks `hits`, bumped only by the injected ISR. ⇒ the host injects IRQ0 into the client-hooked PM
+INT 08h vector on the real CPU. The timer-hook mechanism games (Doom) depend on now works. FACT.
 
 ### Run 79 (2026-08-13) — #3 kickoff: D/B-aware PM I/O + a grounded 32-bit scope `[FACT (code) + PLAN]`
 
@@ -2668,6 +2675,70 @@ selector actually execute) are only answerable on the XP VM. **First probe when 
 minimal 32-bit client (16-bit DPMI entry → alloc a code sel, 0009 set access `0xFA`+D/B → far-jump 32-bit
 → a 32-bit `OUT 0x3C8` → report), the smallest test that answers "does the kernel reflect 32-bit PM I/O
 as event 0" — the same gate `outprobe` cleared for 16-bit in run 72.
+
+### Run 80 (2026-08-18, session 7) — #3 FIRST PROBE: 32-bit PM I/O reflects as event 0 `[FACT — VM-CONFIRMED]`
+
+The pivotal open question for DOS/4GW is answered **YES**: a genuine 32-bit (CS.D=1) protected-mode
+`OUT` is reflected by XP's KiTrap0D to our monitor as **VTIB_EVENT=0** — the SAME I/O gate a 16-bit
+PM `OUT` cleared in run 72 — and our D/B-aware `host_try_io_pm` (run 79) services it and resumes the
+guest. So the real-CPU PM I/O virtualization proven for 16-bit extends to 32-bit flat code.
+
+**Host fix (prereq):** the INT 31h 0009 (Set Descriptor Access Rights) handler was reading CH's LOW
+nibble (`(ECX>>8)&0xF`, descriptor limit bits) instead of the HIGH nibble that carries G/D/B/L/AVL —
+so a client setting D/B was silently ignored. Corrected to `(ECX>>12)&0xF` (`src/host/main.c` 0009
+case), which maps 1:1 onto our flags nibble (`dpmi_build_desc`) so `dpmi_sel_is32()` sees the bit.
+No regression: run 79 established no existing client uses 0009.
+
+**Probe** `tools/dostest/pm32io.asm` (+ `pm32run.bat`): 16-bit DPMI entry → mode switch → alias CS via
+INT 31h **000A** → retype the alias CODE+D/B=1 via **0009** (CL=0xFA, CH=0x40) → **16:16 far-jmp** into
+it (CS.D=1 ⇒ 32-bit exec) → a 32-bit-segment `OUT 0x3C8`/`OUT 0x3C9` (VGA DAC) → **m16:32 far-jmp** back
+to the 16-bit code selector → report + `INT 21h 4Ch`. VM-confirm: booted XP, autorun CD (label
+`PM32082837`) ran it; the ntvdm console showed all four banners incl. **"32-bit OUT survived — guest
+RESUMED"** and **"done, exiting cleanly"** (screendump). The client only reaches those lines if both
+32-bit OUTs were serviced and the guest resumed each time; a terminated VDM would freeze at "about to
+run 32-bit". (Host-log port cross-check was unavailable this run: a concurrent tmrhook session held
+COM1 exclusively, so the pm32io instance's internal serial log was dropped — a solo re-run would
+capture the 0x3C8 VDD dispatch. The client-side witness is authoritative regardless.)
+
+**⇒ #3 is unblocked at the foundation.** A 32-bit code selector installs (base-0 not needed here — the
+CS-aliased <1MB base with D/B=1 executes), 32-bit code runs on the real CPU, and its PM I/O reflects +
+services exactly like 16-bit. Next down the run-79 inventory: honor `client_is_32bit` in the switch
+(`src/vdm/dpmi.c`) as a base-0 ~2GB G=1 flat selector for a real extender's flat model; 1687 BX bit0=1;
+widen the two catcher IRET frames + the injected-IRQ frame to dwords when the target is 32-bit; gate the
+`EIP/off & 0xFFFF` masks on `dpmi_sel_is32`. Then a 32-bit graphics/animation probe (framebuffer via a
+32-bit data selector + `stosd`), then a real extender (DOS/4GW) + a real game.
+
+### Run 81 (2026-08-18, session 7) — #3 step 1: the mode SWITCH produces a working 32-bit CS `[FACT — VM-CONFIRMED]`
+
+Run 80 reached 32-bit by a manual far-jmp from 16-bit PM. Run 81 does it the real-extender way: the
+DPMI mode switch itself now honors the client's 16/32 flag, so a client that far-calls the entry with
+**AX bit0=1** gets D/B=1 initial CS/DS/SS and its post-switch code runs 32-bit natively.
+
+Changes: `dpmi_switch_to_pm` builds code/data/stack with `dbflag = client_is_32bit ? 0x4 : 0x0`
+(D/B in the flags nibble), keeping the proven based/64K model (base=seg<<4, resume at the real-mode
+offset) — only the D/B bit flips. `src/host/main.c`: the DPMI_BOP switch handler derives
+`is32 = EAX&1`, passes it to the switch, and mirrors it into `g_ldt[1..3].flags` so `dpmi_sel_is32()`
+(I/O decode + EIP-mask gating) agrees with the live descriptor; INT 2Fh 1687 now returns **BX bit0=1**
+(32-bit programs supported). No 16-bit regression: AX=0 ⇒ dbflag=0, byte-identical to before.
+
+Probe `tools/dostest/pm32sw.asm` (+ `pm32swrun.bat`): far-calls the switch with AX=1, then runs a
+32-bit `OUT 0x3C8/0x3C9` and prints via INT 21h — all in 32-bit PM from the switch. **VM-confirm
+(isolated, sole VDM):** serial shows `switching to PM (32-bit client)` and `chi=0x0040fa00` (code
+descriptor high dword, **bit22=D/B set**); the client printed "32-bit SWITCH ok — OUT serviced!" and
+"done, exiting cleanly" and exited via INT 21h 4Ch (screendump + serial). So the mode switch produces
+a live 32-bit CS, a 32-bit OUT reflects as event 0 and is serviced, and INT 21h works from 32-bit PM.
+
+**Harness lesson (cost a reboot):** the FIRST pm32sw attempt ran as the *4th concurrent VDM* (tmrhook
+still looping + pm32io idle) on the time-dilated HVF guest and the guest **rebooted** — then wedged on
+the dirty-boot logon logo for >6 min (qemu at 102% CPU, autochk grinding), forcing a restore from
+`vm/xp-debugonly-backup.qcow2`. Re-run in isolation on the clean image: flawless. ⇒ don't pile
+concurrent VDMs on the dilated guest; one probe at a time, and prefer a fresh boot per test.
+
+**#3 step 1 done.** Remaining #3 (run-79 inventory 3-5), needed once a 32-bit client uses callbacks /
+async IRQ / >64K offsets: widen the two catcher IRET frames (`dpmi_run_callback`, `dpmi_inject_pm_irq`)
++ the injected-IRQ frame to dwords when the target is 32-bit; gate the `EIP/off & 0xFFFF` masks on
+`dpmi_sel_is32`; then a 32-bit graphics probe (framebuffer via a 32-bit data selector + `stosd`), a
+base-0 ~2GB G=1 flat selector alloc test, then a real DOS/4GW extender + a real game.
 
 ## References
 - [ntvdmcontrol-and-v86.md](ntvdmcontrol-and-v86.md) — the `VDMSERVICECLASS` enum, VDM_TIB/CONTEXT

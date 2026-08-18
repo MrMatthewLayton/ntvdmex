@@ -1604,11 +1604,16 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                             p = zput(p, " sel 0x"); p = zhex(p, VDM_REG(tib, VTIB_EBX) & 0xFFFF);
                             p = zput(p, " -> setlimit 0x"); p = zhex(p, l);
                             break; }
-                        case 0x0009: {                             /* set access rights of sel BX (CL) */
+                        case 0x0009: {                             /* set access rights of sel BX (CX) */
                             int idx = (VDM_REG(tib, VTIB_EBX) & 0xFFFF) >> 3;
                             if (idx >= 1 && idx < 512) {
+                                /* CL = access byte (P|DPL|S|type). CH = descriptor byte 6
+                                   (G|D/B|L|AVL|limit19:16); its HIGH nibble carries G/D/B/L/AVL,
+                                   which maps 1:1 onto our flags nibble (see dpmi_build_desc).
+                                   #3 (DOS/4GW): a 32-bit code selector arrives here with CH bit6
+                                   (D/B) set -> flags bit2 -> dpmi_sel_is32() true. */
                                 g_ldt[idx].access = VDM_REG(tib, VTIB_ECX) & 0xFF;
-                                g_ldt[idx].flags  = (VDM_REG(tib, VTIB_ECX) >> 8) & 0xF;  /* CH high nibble */
+                                g_ldt[idx].flags  = (VDM_REG(tib, VTIB_ECX) >> 12) & 0xF;  /* CH high nibble */
                                 dpmi_install(idx);
                             }
                             p = zput(p, " sel 0x"); p = zhex(p, VDM_REG(tib, VTIB_EBX) & 0xFFFF);
@@ -2475,10 +2480,11 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                 VDM_SET16(tib, VTIB_ES, DOS_HDLR_SEG);
                 VDM_SET16(tib, VTIB_EBX, XMS_ENTRY_OFF);
             } else if (ax == 0x1687) {                           /* DPMI installation check (SPIKE) */
-                /* AX=0 present; BX=0 (16-bit only for now); CL=3 (386); DX=0.90;
-                   SI=0 private paras; ES:DI = mode-switch entry to FAR-CALL. */
+                /* AX=0 present; BX bit0=1 (32-bit programs supported, run 81); CL=3 (386);
+                   DX=0.90; SI=0 private paras; ES:DI = mode-switch entry to FAR-CALL. A 16-bit
+                   client ignores BX; a 32-bit client reads bit0 to decide to far-call with AX=1. */
                 VDM_SET16(tib, VTIB_EAX, 0);
-                VDM_SET16(tib, VTIB_EBX, 0);
+                VDM_SET16(tib, VTIB_EBX, 1);
                 VDM_SET16(tib, VTIB_ECX, (VDM_REG(tib, VTIB_ECX) & 0xFF00) | 0x03);
                 VDM_SET16(tib, VTIB_EDX, 0x005A);               /* DPMI 0.90        */
                 VDM_SET16(tib, VTIB_ESI, 0);
@@ -2511,10 +2517,15 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         if ((VDM_REG(tib, VTIB_EVENT_INFO) & 0xFF) == DPMI_BOP) {  /* DPMI real->PM switch */
             DWORD csv = VDM_REG(tib, VTIB_CS) & 0xFFFF, ipv = VDM_REG(tib, VTIB_EIP) & 0xFFFF;
             LONG reg_st = 0, set_st = 0; int sw;
+            /* #3 (run 81): AX bit0 selects the client width -- 0=16-bit, 1=32-bit (DOS/4GW).
+               A 32-bit client gets D/B=1 initial CS/DS/SS so its post-switch code runs 32-bit. */
+            int is32 = (int)(VDM_REG(tib, VTIB_EAX) & 1);
             p = zput(p, "STAGE3: DPMI_BOP far-call LANDED @ 0x"); p = zhex(p, csv);
-            p = zput(p, ":0x"); p = zhex(p, ipv); p = zput(p, " -- switching to PM\r\n");
+            p = zput(p, ":0x"); p = zhex(p, ipv);
+            p = zput(p, is32 ? " -- switching to PM (32-bit client)\r\n"
+                             : " -- switching to PM (16-bit client)\r\n");
             log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
-            sw = dpmi_switch_to_pm(tib, 0, &reg_st, &set_st);
+            sw = dpmi_switch_to_pm(tib, is32, &reg_st, &set_st);
             p = zput(p, " [svc11=0x"); p = zhex(p, (unsigned)reg_st);
             p = zput(p, " svc10=0x"); p = zhex(p, (unsigned)set_st); p = zput(p, "]");
             p = zput(p, " retcs=0x"); p = zhex(p, g_dpmi_dbg[0]);
@@ -2531,7 +2542,9 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                     g_ldt[1 + si].base   = g_dpmi_seg_base[si];
                     g_ldt[1 + si].limit  = 0xFFFF;
                     g_ldt[1 + si].access = (si == 0) ? 0xFA : 0xF2;
-                    g_ldt[1 + si].flags  = 0;
+                    /* mirror the D/B width dpmi_switch_to_pm installed, so dpmi_sel_is32()
+                       (I/O decode + EIP-mask gating) agrees with the live descriptor (run 81). */
+                    g_ldt[1 + si].flags  = is32 ? 0x4 : 0;
                 } }
                 if (g_ldt_next < 4) g_ldt_next = 4;      /* client allocs start at index 4 now */
                 p = zput(p, " segbase C=0x"); p = zhex(p, g_dpmi_seg_base[0]);

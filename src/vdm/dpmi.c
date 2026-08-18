@@ -53,20 +53,26 @@ int dpmi_switch_to_pm(volatile BYTE *tib, int client_is_32bit,
     DWORD lin_esp = stack_base + new_sp;             /* linear stack addr            */
     LONG st;
     BYTE code_access = 0xFA, data_access = 0xF2;
-    (void)client_is_32bit;
+    /* #3 (GH #18, run 81): honor the client's 16/32 flag. A 32-bit DPMI client far-calls the
+       mode-switch entry with AX bit0=1; per spec its initial CS/DS/SS must be 32-bit segments
+       (descriptor D/B=1) so the code AFTER the far-call runs as 32-bit. We keep the proven
+       BASED, 64K model (base=seg<<4, resume at the real-mode OFFSET) and only flip the D/B bit
+       -- run 80 confirmed a based D/B=1 selector executes 32-bit code and its PM I/O reflects
+       as event 0. flags nibble bit2 = D/B (see dpmi_build_desc). */
+    BYTE dbflag = client_is_32bit ? 0x4 : 0x0;
 
-    /* BASED, 64K, 16-bit selectors (G=0, D/B=0 -> flags 0x0) -- the config that PROVED PM
-       execution (run 28). XP's NtSetLdtEntries REJECTS a flat 4GB LDT descriptor
-       (PspIsDescriptorValid: base + (G?(limit<<12)|0xFFF:limit) <= MmHighestUserAddress),
-       so run-17's flat could never install. NB: a base-0 ~2GB descriptor (limit 0x7FFEF,
-       G=1) ALSO installs (run 30) -- but it did NOT make the LDT-CS PM fault reach the VEH,
-       so dispatcher-reachability is NOT the variable; an LDT-CS VDM fault is routed away from
-       normal user-mode exception delivery (run 16 stands). A based selector maps the guest's
-       real-mode segment (linear seg<<4, <1MB); resume EIP/ESP are the real-mode OFFSETS. */
+    /* BASED, 64K selectors (G=0) -- the config that PROVED PM execution (run 28). XP's
+       NtSetLdtEntries REJECTS a flat 4GB LDT descriptor (PspIsDescriptorValid: base +
+       (G?(limit<<12)|0xFFF:limit) <= MmHighestUserAddress), so run-17's flat could never
+       install. NB: a base-0 ~2GB descriptor (limit 0x7FFEF, G=1) ALSO installs (run 30) --
+       that is the FLAT selector a real DOS/4GW extender allocates for itself via INT 31h
+       (0000/0007/0008/0009), NOT the initial mode-switch selectors, which stay based/64K.
+       A based selector maps the guest's real-mode segment (linear seg<<4, <1MB); resume
+       EIP/ESP are the real-mode OFFSETS. */
     (void)lin_eip; (void)lin_esp;
-    dpmi_build_desc(code_base,  0xFFFF, code_access, 0x0, &clo, &chi);
-    dpmi_build_desc(data_base,  0xFFFF, data_access, 0x0, &dlo, &dhi);
-    dpmi_build_desc(stack_base, 0xFFFF, data_access, 0x0, &slo, &shi);
+    dpmi_build_desc(code_base,  0xFFFF, code_access, dbflag, &clo, &chi);
+    dpmi_build_desc(data_base,  0xFFFF, data_access, dbflag, &dlo, &dhi);
+    dpmi_build_desc(stack_base, 0xFFFF, data_access, dbflag, &slo, &shi);
     g_dpmi_dbg[0] = ret_cs; g_dpmi_dbg[1] = code_base + ret_ip; g_dpmi_dbg[2] = clo; g_dpmi_dbg[3] = chi;
     /* Publish the per-selector bases so the host can drive dpmi_sel_base() uniformly. */
     g_dpmi_seg_base[0] = code_base; g_dpmi_seg_base[1] = data_base; g_dpmi_seg_base[2] = stack_base;
