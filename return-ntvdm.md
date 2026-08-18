@@ -31,31 +31,41 @@ event-3 guard once then ran to a clean INT 21h 4Ch exit:
 
 COMMITS THIS SESSION (branch `spike/dpmi-16bit-switch`, all local -- PUSH when ready):
   • `242f884` v67 -- route real-HW I/O reflect (event 3) through host_try_io at 4 sites +
-      AUTOEXIT_PATH headless-exit + PM-fault byte-dump diagnostic + filebuf 512KB (the
-      session-8 uncommitted fixes).
+      AUTOEXIT_PATH headless-exit + PM-fault byte-dump diagnostic + filebuf 512KB (session-8 fixes).
   • `777fd40` -- session-8 checkpoint doc.
-  • `c0831b1` v68 -- THE CRACK (clear stale event-3 pending guard). ← HEAD.
-  Build clean: `./scripts/build.sh` -> build/ntvdmhost.exe (v68, KERNEL32-only).
+  • `c0831b1` v68 -- THE CRACK (clear stale event-3 pending guard).
+  • `d438552` -- session-9 checkpoint doc.
+  • `afafbcb` v69 -- headless robustness (log cap + PM-loop time cap + byte-dump rate-limit). ← HEAD.
+  Build clean: `./scripts/build.sh` -> build/ntvdmhost.exe (v69, KERNEL32-only). Staged to bm/.
 
-⚠️ RIG IS WEDGED (needs user recovery). `pm32irq.com` (async IRQ0 injection into a 32-bit PM
-INT 08h hook) HANGS -- the host wedged inside dpmi_enter_pm (main thread deep in the kernel
-PM far-jmp holding a custom LDT context; TerminateProcess-of-self can't unwind it, per
-main.c:1237). This is EXACTLY the checkpoint's known-incomplete item (32-bit async IRQ needs
-the catcher IRET frames widened to DWORD EFLAGS/CS/EIP -- session-7 resume item #1). The hung
-ntvdmhost blocks the watcher's `start /wait`, so the SMB test loop is dead until the box is
-recovered. NO remote-exec channel exists (only SMB 445 open; 135/22/23 closed) -> RECOVERY =
-on the box, close/kill ntvdmhost.exe (or reboot XP), then restart bm\runwatch.bat.
-  ► DO NOT re-fire pm32irq.com until the 32-bit async-IRQ frames are fixed -- it re-wedges the rig.
+RIG: RECOVERED + GREEN (selftest 8/8). v69 deployed and RE-CONFIRMED on real HW: dpmitest runs
+the full 16-bit DPMI surface + clean 4Ch exit, log is ~3 KB (cap works, no regression).
+
+pm32irq REFRAMED (it was NOT a code bug). `pm32irq.com` is an INFINITE mode-13h animation demo
+(`jmp .frame`; never calls INT 21h 4Ch) -- like animate/bounce/mode13/pm32gfx. Under the headless
+SMB auto-exit harness it ran the PM loop forever (wedged rt.bat's `start /wait` -> wedged the
+watcher) and logged each INT 31h 0400 yield every iteration -> a 148 MB log FLOOD. The 32-bit
+async-IRQ frame code it exercises ALREADY WORKS (dpmi_inject_pm_irq widens the IRET frame to dword
+for 32-bit handlers, run 83; see main.c ~line 2034). v69 hardens the host so no runaway can harm
+the rig again: 4 MB log cap (log.h LOG_MAX_BYTES), a 30 s headless PM-loop wall-clock cap
+(g_headless + PM_HEADLESS_MS -> self-exits so the watcher survives), and byte-dump rate-limit (32).
+  ► RECOVERY (if ever wedged again): NO remote-exec (only SMB 445/139; 135 closed, guest-only, no
+    net/rpcclient/impacket -> a remote `shutdown` RPC is NOT reachable). Blind VNC input works
+    (capture dead): Win+R -> `taskkill /f /im ntvdmhost.exe` -> Enter can clear a hung host, but
+    it's a gamble without a screen (an earlier stray Alt+F4 likely closed the watcher window). With
+    v69's caps a wedge shouldn't recur; worst case, kill ntvdmhost / restart runwatch.bat on the box.
+
+INFINITE VISUAL DEMOS ARE MONITOR-ONLY: pm32irq, pm32gfx, animate, bounce, mode13, blitfast, and
+the vga/vesa demos loop forever and must be watched on the box's PHYSICAL display, NOT the headless
+SMB loop (which auto-times-out at 30 s now, so they no longer wedge -- but you still won't SEE them).
 
 ▶▶ RESUME — NEXT STEPS (in order):
-  0. Recover the rig (kill ntvdmhost / reboot box; restart runwatch.bat). Verify with selftest.com.
-  1. FIX pm32irq (32-bit async IRQ): widen the injected IRET frame in dpmi_inject_pm_irq +
-     dpmi_run_callback to DWORD EFLAGS/CS/EIP when the target selector is 32-bit (dpmi_sel_is32);
-     gate the EIP/off &0xFFFF masks on width. (Session-7 resume items #1/#2 -- now the LAST 32-bit gap.)
-  2. VISUALLY confirm graphics on the box's PHYSICAL monitor (VNC capture is dead): mode13.com,
-     pm32gfx.com, animate.com, bounce.com, and Skyroads (real-mode, event-3 I/O fixed -> should play).
-  3. A REAL DOS/4GW extender, then DOOM (the acceptance test) -- the 32-bit flat model now executes,
-     so this is finally in reach on bare metal.
+  1. VISUALLY confirm on the box's PHYSICAL monitor (VNC capture is dead): the async-IRQ 32-bit
+     timer hook (pm32irq -- red box should MARCH via injected IRQ0), pm32gfx, mode13, animate,
+     bounce, and Skyroads (real-mode, event-3 I/O fixed -> should play). Needs a human at the screen.
+  2. A REAL DOS/4GW extender, then DOOM (the acceptance test) -- the 32-bit flat model now executes
+     on bare metal (pm32flat: base-0 ~2GB selector, ES:[0A0000h] render, clean exit), so it's in reach.
+  3. Broader INT 31h surface as a real extender demands it (0305/0306 raw switch, page-lock, phys-map).
   (Everything above the session-8 banner is now the authoritative state; session-8's "kernel
    won't run PM" conclusion is SUPERSEDED -- it was our own guard.)
 
