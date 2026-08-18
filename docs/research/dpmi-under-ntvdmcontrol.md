@@ -2762,6 +2762,96 @@ gate the `EIP/off & 0xFFFF` masks on `dpmi_sel_is32` (needed once a 32-bit clien
 async timer hooks / >64K offsets); a base-0 ~2GB G=1 flat-selector alloc test (the DOS/4GW flat model);
 then a real DOS/4GW extender + a real game (the acceptance test).
 
+### Run 83 (2026-08-18, session 7) — #3: 32-bit-wide catcher IRET frames `[IMPL — VM-confirm pending]`
+
+The first item on run 82's remaining list. Both host-driven PM re-entry paths built a **16-bit** IRET
+frame (word `FLAGS/CS/IP`) on the handler's stack so the handler's `IRET` lands on the PM-return
+catcher (`g_pmret_sel:DPMI_PMRET_OFF`). That is correct only when the handler runs in a 16-bit CS: the
+`IRET` operand size follows the *executing* code segment's D-bit, so a **32-bit** PM handler pops a
+**dword** `EFLAGS/CS/EIP` frame and would mis-parse a word frame (skewing the stack → immediate #GP).
+
+Fix (`src/host/main.c`): a new `poked()` dword-store helper, and both frame builders now branch on the
+handler CS via `dpmi_sel_is32()`:
+- **`dpmi_run_callback`** (the `0303` real-mode-callback path) — handler CS `g_cb[slot].pm_sel`.
+- **`dpmi_inject_pm_irq`** (async IRQ0 → PM INT 08h, run 78) — handler CS `g_pm_int[iv].sel`; its entry
+  offset now also stays full-32-bit (`h32 ? off : off & 0xFFFF`) instead of always masking to 16 bits.
+- **INT 31h `0204`/`0205`** (get/set PM interrupt vector) — the stored handler offset now keeps its full
+  32 bits when the handler selector is 32-bit (previously always `& 0xFFFF`), so a 32-bit hook installed
+  at a >64K offset survives. This is the last of run 82's "`off & 0xFFFF` masks to gate on `dpmi_sel_is32`".
+
+The 16-bit branch is byte-for-byte the prior code, so 16-bit clients (i310102/DPMIBACK, runs 74-78) are
+unaffected. The catcher-detection compare (`eip & 0xFFFF == DPMI_PMRET_OFF`) still holds: the catcher
+is a 16-bit code selector at offset 0x70, so a 32-bit `IRET` pushes `EIP=0x70` (hi16=0). Cross-compiles
+clean, KERNEL32-only (`check-imports.sh` green).
+
+**Confirm probe staged (VM-confirm pending): `tools/dostest/pm32irq.asm` + `pm32irqrun.bat`.** The 32-bit
+sibling of run 78's `tmrhook`: far-calls the switch with AX=1 (32-bit CS, run 81), sets mode 13h,
+allocates an A0000 framebuffer selector, then HOOKS INT 08h in PM via INT 31h `0205` with a 32-bit
+handler offset and marches a red box driven ONLY by `[hits]` (bumped ONLY by the hooked ISR, which is
+assembled in `bits 32` so its `iret` is `iretd` and pops the dword frame). No INT 1Ah polling, no
+keyboard — if the box moves, the host injected IRQ0 into a 32-bit PM hook and the widened dword frame
+let the ISR run and cleanly `iretd` back, proving run 83 on the real CPU. Wired into `make-demos.sh` +
+`build-test-iso.sh`; the host build for this run is to be tagged on the next VM pass.
+
+### Run 84 (2026-08-18, session 7) — #3: the DOS/4GW base-0 flat-selector model `[IMPL — VM-confirm pending]`
+
+Second item on run 82's remaining list. Kernel RE session 7 established XP's LDT validator caps
+`base + limit <= MmHighestUserAddress` (~2GB) and that stock ntvdm runs under the *same* cap, so a
+base-0 ~2GB G=1 flat selector is reachable (a true 4GB one is rejected). This run makes that concrete.
+
+Host observability (`src/host/main.c`, `dpmi_install`): the `v86_set_ldt_entries` NTSTATUS was being
+**discarded**, so a kernel rejection of a too-large descriptor left a stale selector that only faulted
+later, invisibly. It now logs `DPMI-LDT: install REJECTED sel/base/limit/g/status` on any nonzero
+status — turning the 2GB validator verdict into a serial-log signal. Accepted installs stay silent
+(status 0), so 16-bit clients produce no new noise.
+
+Confirm probe: `tools/dostest/pm32flat.asm` + `pm32flatrun.bat`. Far-calls the switch with AX=1
+(32-bit CS), then in 32-bit PM allocates ONE descriptor and configures it base=0 (`0007`), limit
+`0x7FEFFFFF` ~2GB (`0008`), access `CX=0xC0F2` → CL=0xF2 writable-data + CH high nibble `0xC` = G|D/B
+(`0009`) → a base-0, page-granular, 32-bit flat selector. It then renders mode 13h by writing the VGA
+aperture through that selector at its **linear** address `ES:[0x000A0000]` (offset == linear, the
+DOS/4GW idiom) with `rep stosd`. **Proof:** a visible gradient + NO `DPMI-LDT: install REJECTED` line =
+a base-0 flat selector addressed linear 0xA0000 at the ~2GB ntvdm-parity cap on the real CPU. (A
+follow-on can raise the limit request to a true 4GB to watch the reject fire.) Cross-compiles clean,
+KERNEL32-only; wired into `make-demos.sh` + `build-test-iso.sh`.
+
+### Run 85 (2026-08-18, session 8) — real-game harness + first real game loads `[FACT — VM-CONFIRMED]`
+
+Milestone #6 "Playable Games" moves from synthetic probes to real binaries. Two host/harness pieces:
+- **`filebuf` 128KB → 512KB** (`main.c`): a real game's MZ image (a DOS/4GW stub, or a whole real-mode
+  `.EXE`) no longer silently truncates on load.
+- **Game staging scripts:** `scripts/build-game-iso.sh <name> <EXE> [args]` (extracted games, e.g.
+  Skyroads) and `scripts/build-doom-iso.sh` (id's two-stage DEICE installer: extract under STOCK ntvdm,
+  then run through our host). `games/` is a gitignored drop dir (licensed/large). The generated runner
+  `taskkill`s any prior host before deploying — else a looping game keeps `ntvdmhost.exe` locked and the
+  copy silently runs the OLD build (the run-84→85 stale-host trap; fixed).
+
+**VM-CONFIRMED:** **Skyroads (Bluemoon, 1993 — 16-bit real mode) LOADS AND RENDERS on the real CPU.**
+The host log shows our MZ loader running `SKYROADS.EXE` (entry 0x110:0x60d0), every data file opened via
+`INT 21h AH=3D` (`skyroads.cfg`, `*.lzs`, `*.dat`, `demo.rec`), memory allocated via `AH=48` — and the
+Luna window drew its animated mode-13h intro road. First real commercial DOS game end-to-end through
+NTVDMEX. (Doom staged via DEICE bootstrap, not yet run.)
+
+### Run 86 (2026-08-18, session 8) — RAW KEYBOARD: Skyroads is playable `[FACT — VM-CONFIRMED]`
+
+Skyroads rendered but ignored keys: our input was **INT 16h-only** (WM_CHAR → ring). Action games install
+their own INT 09h handler and read scancodes from **port 0x60** for real-time held-key state — a path we
+never fed. Added the AT keyboard hardware path, the exact keyboard analog of run 78's IRQ0→INT 08h:
+- **Input VDD** (`vdd_input.*`): a raw scancode FIFO + ports **0x60** (data, pop one/read) and **0x64**
+  (status, bit0=OBF). Off-VM input battery stays 20/20.
+- **Host** (`main.c`): `g_irq1_pending` + `host_irq_sink` irq==1; WM_KEYDOWN pushes the MAKE scancode
+  (lParam bits 16-23) + raises IRQ1, new WM_KEYUP pushes the BREAK (sc|0x80); the service loop injects
+  **INT 09h** (`inject_int`, same IF-gating/stub-exclusion as IRQ0); a default **`IVT[9]` IRET stub** at
+  handler offset 0x4C makes a pre-hook IRQ1 safe and leaves the scancode in the FIFO for the game to read.
+
+**VM-CONFIRMED (build `dpmi-harness-v63`):** driving by keyboard alone — intro → **main menu** (Start!/
+Controls/Help) → **level-select** (all ten worlds, rendered planet thumbnails) → **live gameplay cockpit**
+(Red Heat road: ship, obstacles, GRAV-O/FUEL/SPEED/JUMP-O dashboard). Menu navigation is unambiguous proof
+the IRQ1→INT 09h + port 0x60 path delivers. **Skyroads is playable to the cockpit on the real CPU** — the
+same input path Doom needs. Open follow-up (not a keyboard bug): in-flight ship control unconfirmed —
+`qmp` send-key only *taps* (can't hold a key), and extended arrow keys (E0-prefixed) may need the E0 byte;
+both are harness/refinement items.
+
 ## References
 - [ntvdmcontrol-and-v86.md](ntvdmcontrol-and-v86.md) — the `VDMSERVICECLASS` enum, VDM_TIB/CONTEXT
   offsets, the V86 keystone.

@@ -6,6 +6,9 @@
 
 # VM: disk images, install media — NEVER commit these (large + licensed media)
 /vm/
+
+# Real DOS games (DOS/4GW + real-mode) staged for the acceptance tests — licensed, large
+/games/
 *.iso
 *.qcow2
 *.vmdk

@@ -27,6 +27,44 @@ int vdd_input_peek(input_state *st, uint16_t *key)
     return 1;
 }
 
+/* --- raw AT keyboard: scancode FIFO + ports 0x60/0x64 --------------------- */
+void vdd_input_push_scancode(input_state *st, uint8_t sc)
+{
+    int n = next(st->sc_head);
+    if (n == st->sc_tail) st->sc_tail = next(st->sc_tail);   /* full -> drop oldest */
+    st->sc_buf[st->sc_head] = sc;
+    st->sc_head = n;
+}
+
+int vdd_input_sc_pending(const input_state *st)
+{
+    return st->sc_head != st->sc_tail;
+}
+
+/* IN 0x60 = keyboard data (pop one scancode; re-reads see the last byte).
+   IN 0x64 = 8042 status: bit0 (OBF) set while a scancode waits. Writes to
+   either (LED/8042 commands) are accepted and ignored. */
+static void kbd_hw_in(void *self, uint16_t port, uint8_t w, uint32_t *val)
+{
+    input_state *st = (input_state *)self;
+    (void)w;
+    if (port == 0x64) {                       /* status register                    */
+        *val = vdd_input_sc_pending(st) ? 0x01 : 0x00;
+        return;
+    }
+    /* port 0x60: data register */
+    if (st->sc_head != st->sc_tail) {
+        st->sc_last = st->sc_buf[st->sc_tail];
+        st->sc_tail = next(st->sc_tail);
+    }
+    *val = st->sc_last;
+}
+
+static void kbd_hw_out(void *self, uint16_t port, uint8_t w, uint32_t v)
+{
+    (void)self; (void)port; (void)w; (void)v;  /* accept 8042/LED commands, ignore */
+}
+
 /* INT 16h -- BIOS keyboard. ZF semantics: AH=01 sets ZF=1 when no key is ready.
    AH=00 here is non-blocking (the host loops + waits on a key event, re-issuing
    until ZF=0); it sets ZF=1 + leaves AX when the buffer is empty. */
@@ -59,6 +97,8 @@ void vdd_input_reset(void *self)
 {
     input_state *st = (input_state *)self;
     st->head = st->tail = 0;
+    st->sc_head = st->sc_tail = 0;
+    st->sc_last = 0;
 }
 
 int vdd_input_init(vdd_bus *b, void *self)
@@ -66,5 +106,8 @@ int vdd_input_init(vdd_bus *b, void *self)
     input_state *st = (input_state *)self;
     st->bus = b;
     vdd_input_reset(st);
-    return vdd_claim_int(b, 0x16, int16, st);
+    if (vdd_claim_int(b, 0x16, int16, st)) return -1;
+    if (vdd_claim_ports(b, 0x60, 0x60, kbd_hw_in, kbd_hw_out, st)) return -1;  /* data   */
+    if (vdd_claim_ports(b, 0x64, 0x64, kbd_hw_in, kbd_hw_out, st)) return -1;  /* status */
+    return 0;
 }

@@ -46,6 +46,8 @@ cp "$DT/i31run.bat" "$STAGE/"                            # one-shot i310102 runn
 cp "$DT/dpbrun.bat" "$STAGE/"                            # one-shot dpmiback runner (interpreter-path probe)
 cp "$DT/rawjmp7.exe" "$DT/rjrun.bat" "$STAGE/"          # HX Regress16 raw-mode-switch client + runner
 cp "$DT/pmfault.com" "$DT/pfrun.bat" "$STAGE/"          # GH#18 raw PM-#GP reflect probe + runner (run 59)
+cp "$DT/pm32irq.com" "$DT/pm32irqrun.bat" "$STAGE/"     # GH#18 run 83: 32-bit-CS async IRQ0 hook probe + runner
+cp "$DT/pm32flat.com" "$DT/pm32flatrun.bat" "$STAGE/"   # GH#18 run 84: base-0 ~2GB flat-selector probe + runner
 cp "$DT/kddebug.bat" "$STAGE/"                          # option B: enable XP kernel debugging on COM2 (r2 winkd)
 cp "$DT/runtest-demos.bat" "$STAGE/"
 # individual test programs

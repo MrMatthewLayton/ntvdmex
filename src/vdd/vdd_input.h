@@ -19,13 +19,23 @@
 typedef struct input_state {
     vdd_bus *bus;
     uint16_t buf[VDD_KBD_SIZE];
-    int      head, tail;       /* empty when head==tail                          */
+    int      head, tail;       /* INT 16h ring: empty when head==tail            */
+    /* Raw AT keyboard controller (ports 0x60/0x64): the byte stream an INT 09h
+       ISR / a port-polling game reads. UI pushes make (sc) + break (sc|0x80)
+       codes; the guest drains one per IN 0x60. Separate from the INT 16h ring. */
+    uint8_t  sc_buf[VDD_KBD_SIZE];
+    int      sc_head, sc_tail; /* scancode FIFO: empty when sc_head==sc_tail      */
+    uint8_t  sc_last;          /* last byte handed out on IN 0x60 (re-read)       */
 } input_state;
 
 /* ring ops (push = UI thread; pop/peek = V86 thread; caller serialises). */
 void vdd_input_push(input_state *st, uint16_t key);   /* drop oldest if full     */
 int  vdd_input_pop (input_state *st, uint16_t *key);  /* 1 if a key was returned */
 int  vdd_input_peek(input_state *st, uint16_t *key);  /* 1 if a key is available */
+
+/* raw scancode FIFO ops (ports 0x60/0x64) -- UI thread pushes, V86 drains. */
+void vdd_input_push_scancode(input_state *st, uint8_t sc);
+int  vdd_input_sc_pending(const input_state *st);     /* 1 if a scancode waits   */
 
 int  vdd_input_init(vdd_bus *b, void *self);          /* claims INT 16h          */
 void vdd_input_reset(void *self);

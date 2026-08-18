@@ -29,6 +29,8 @@ nasm -f bin "$DIR/bounce.asm"   -o "$DIR/bounce.com"       # GH#18: PM bouncing-
 nasm -f bin "$DIR/kbdbox.asm"   -o "$DIR/kbdbox.com"       # GH#18: interactive PM box, arrow-key input (milestone #6)
 nasm -f bin "$DIR/timerbox.asm" -o "$DIR/timerbox.com"     # GH#18: PM timing (INT 1Ah tick) demo (milestone #6)
 nasm -f bin "$DIR/tmrhook.asm"  -o "$DIR/tmrhook.com"      # GH#18 #2b: async IRQ0 injection into a hooked PM INT 08h
+nasm -f bin "$DIR/pm32irq.asm"  -o "$DIR/pm32irq.com"      # GH#18 run 83: async IRQ0 into a 32-bit-CS PM INT 08h hook
+nasm -f bin "$DIR/pm32flat.asm" -o "$DIR/pm32flat.com"     # GH#18 run 84: base-0 ~2GB flat selector (DOS/4GW model)
 for f in vgademo.com vga12.com vesademo.com blitfast.com timertst.com mousetst.com xmstest.com emstest.com selftest.com modeswitch.com dpmitest.com dpmiexe.exe pmfault.com; do
     echo "  $f  ($(wc -c < "$DIR/$f") bytes)"
 done

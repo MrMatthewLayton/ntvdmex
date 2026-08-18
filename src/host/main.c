@@ -101,7 +101,7 @@ static DWORD g_ems_frame_lin;                        /* set by v86_map_ems_frame
 static char g_cmd[1024], g_app[1024], g_cur[512], g_pif[512];
 static char g_env[8192], g_desk[512], g_title[512], g_rsv[512];
 static VDM_COMMAND_INFO g_ci;
-static BYTE filebuf[0x20000];
+static BYTE filebuf[0x80000];   /* 512KB: hold a real game's MZ image (DOS/4GW stub etc.), run 85 */
 
 /* The device bus + its VDDs + the presentation layer live for the host's life. */
 static vdd_bus      g_bus;
@@ -113,6 +113,7 @@ static present_ddraw g_pd;
 static xms_state    g_xms;       /* M4: XMS extended-memory manager           */
 static ems_state    g_ems;       /* M4: EMS expanded-memory manager           */
 static volatile LONG g_irq0_pending = 0;    /* PIT raised IRQ0 (UI thread sets, V86 thread delivers) */
+static volatile LONG g_irq1_pending = 0;    /* keyboard raised IRQ1 (UI sets, V86 delivers INT 09h)  */
 static int g_pm_irq0_latch = 0;             /* #2b: a virtual IRQ0 awaiting injection into the PM hook */
 static int g_in_pm_irq     = 0;             /* #2b: re-entrancy guard while inside an injected PM ISR   */
 static CRITICAL_SECTION g_lock;             /* serialises all bus dispatch       */
@@ -197,7 +198,8 @@ static void serial_out(const char *buf, const char *end)
 }
 static HMENU        g_savedmenu;            /* stashed menu while hidden           */
 
-static void host_irq_sink(void *ctx, uint8_t irq) { (void)ctx; if (irq == 0) g_irq0_pending = 1; }
+static void host_irq_sink(void *ctx, uint8_t irq)
+{ (void)ctx; if (irq == 0) g_irq0_pending = 1; else if (irq == 1) g_irq1_pending = 1; }
 
 /* Real/synthesised real-mode interrupt dispatch. The guest runs cooperatively
    (we only regain control at event boundaries), so when a hardware IRQ becomes
@@ -207,6 +209,9 @@ static void host_irq_sink(void *ctx, uint8_t irq) { (void)ctx; if (irq == 0) g_i
    still vector natively via VME; this is only for asynchronous IRQ delivery.) */
 static void pokew(DWORD lin, WORD v)
 { volatile BYTE *m = (volatile BYTE *)0; m[lin] = (BYTE)v; m[lin + 1] = (BYTE)(v >> 8); }
+static void poked(DWORD lin, DWORD v)   /* dword store: 32-bit IRET frame slots (GH #18 run 83) */
+{ volatile BYTE *m = (volatile BYTE *)0;
+  m[lin] = (BYTE)v; m[lin+1] = (BYTE)(v >> 8); m[lin+2] = (BYTE)(v >> 16); m[lin+3] = (BYTE)(v >> 24); }
 static WORD peekw(DWORD lin)
 { const volatile BYTE *m = (const volatile BYTE *)0; return (WORD)(m[lin] | (m[lin + 1] << 8)); }
 
@@ -729,6 +734,20 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
         break;
     case WM_KEYDOWN:
         if (wp == VK_F11) { present_ddraw_set_fullscreen(&g_pd, !g_pd.fullscreen); return 0; }
+        /* Raw AT keyboard: push the MAKE scancode (lParam bits 16-23 = the OEM scan
+           code) into the 0x60/0x64 FIFO and raise IRQ1, so action games that hook
+           INT 09h or poll port 0x60 for real-time held-key state get input. This runs
+           for every key, alongside the INT 16h ring below (which other games poll). */
+        {
+            uint8_t rawsc = (uint8_t)((lp >> 16) & 0xFF);
+            if (rawsc) {
+                EnterCriticalSection(&g_lock);
+                vdd_input_push_scancode(&g_in, rawsc);       /* make code */
+                LeaveCriticalSection(&g_lock);
+                g_irq1_pending = 1;
+                if (g_key_event) SetEvent(g_key_event);
+            }
+        }
         /* Extended keys (arrows, nav cluster, F1-F10) produce NO WM_CHAR, so feed the ring
            here as BIOS extended keycodes: AL=0, AH=scancode (INT 16h returns them in AX).
            Games/DOS apps poll these via INT 16h -- without this, arrow input never arrives. */
@@ -751,6 +770,18 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
                 LeaveCriticalSection(&g_lock);
                 if (g_key_event) SetEvent(g_key_event);
                 return 0;
+            }
+        }
+        break;
+    case WM_KEYUP:                       /* raw AT keyboard BREAK code + IRQ1      */
+        {
+            uint8_t rawsc = (uint8_t)((lp >> 16) & 0xFF);
+            if (rawsc) {
+                EnterCriticalSection(&g_lock);
+                vdd_input_push_scancode(&g_in, (uint8_t)(rawsc | 0x80));  /* break code */
+                LeaveCriticalSection(&g_lock);
+                g_irq1_pending = 1;
+                if (g_key_event) SetEvent(g_key_event);
             }
         }
         break;
@@ -1222,7 +1253,22 @@ static void dpmi_install(int idx)
        client's requested value, so LAR/LSL introspection (dpmi_sel_desc) still reports it. */
     if (idx == 2 || idx == 3) acc = 0xF2;                      /* present, DPL3, data R/W */
     dpmi_build_desc(g_ldt[idx].base, lim & 0xFFFFF, acc, fl, &lo, &hi);
-    v86_set_ldt_entries(sel, lo, hi, sel, lo, hi);             /* idempotent single-entry */
+    {
+        /* #3 (DOS/4GW flat model): XP's LDT validator caps base+limit <= MmHighestUserAddress
+           (~2GB); a base-0 ~2GB G=1 selector installs, a true 4GB one is REJECTED (Kernel RE
+           session 7). Surface the NTSTATUS so a rejected flat/large descriptor is visible
+           instead of silently leaving a stale selector that faults on first use (run 84). */
+        LONG st = v86_set_ldt_entries(sel, lo, hi, sel, lo, hi); /* idempotent single-entry */
+        if (st != 0) {
+            char lb[160], *p = lb;
+            p = zput(p, "DPMI-LDT: install REJECTED sel 0x"); p = zhex(p, sel);
+            p = zput(p, " base 0x"); p = zhex(p, g_ldt[idx].base);
+            p = zput(p, " limit 0x"); p = zhex(p, g_ldt[idx].limit);
+            p = zput(p, " g="); p = zhex(p, (DWORD)((fl >> 3) & 1));
+            p = zput(p, " status 0x"); p = zhex(p, (DWORD)st); p = zput(p, "\r\n");
+            log_append(LOG_PATH, lb, p); serial_out(lb, p);
+        }
+    }
 }
 
 /* GH #18 (run 67 corrected): install the PM-fault reflect machinery. Two LDT selectors:
@@ -1360,11 +1406,19 @@ static void dpmi_invoke_callback(dos_machine_t *m, volatile BYTE *tib, int slot)
     /* re-arm the BOP patch (the PM handler is protected-mode code), enter PM */
     dpmi_repatch();
     *(volatile WORD *)(tib + VTIB_MSW) = (WORD)(vMsw | MSW_PE_BIT);
-    /* PM handler stack (data selector 0x17, scratch SP) with an IRET frame -> PM-return catcher */
+    /* PM handler stack (data selector 0x17, scratch SP) with an IRET frame -> PM-return catcher.
+       The IRET operand size follows the HANDLER's CS D-bit: a 32-bit PM handler pops a dword
+       FLAGS/CS/EIP frame, a 16-bit one pops a word frame (GH #18 run 83). */
     { WORD pss = 0x17, psp = 0xF400; DWORD b = dpmi_sel_base(pss);
-      psp -= 2; pokew(b + psp, 0x0202);            /* FLAGS */
-      psp -= 2; pokew(b + psp, g_pmret_sel);       /* CS */
-      psp -= 2; pokew(b + psp, DPMI_PMRET_OFF);    /* IP */
+      if (dpmi_sel_is32(g_cb[slot].pm_sel)) {
+          psp -= 4; poked(b + psp, 0x00000202);        /* EFLAGS */
+          psp -= 4; poked(b + psp, g_pmret_sel);       /* CS (dword; hi16=0) */
+          psp -= 4; poked(b + psp, DPMI_PMRET_OFF);    /* EIP */
+      } else {
+          psp -= 2; pokew(b + psp, 0x0202);            /* FLAGS */
+          psp -= 2; pokew(b + psp, g_pmret_sel);       /* CS */
+          psp -= 2; pokew(b + psp, DPMI_PMRET_OFF);    /* IP */
+      }
       VDM_SET16(tib, VTIB_SS, pss); VDM_REG(tib, VTIB_ESP) = psp; }
     VDM_REG(tib, VTIB_EFLAGS) = VTIB_EFLAGS_PM;
     VDM_SET16(tib, VTIB_CS, g_cb[slot].pm_sel); VDM_REG(tib, VTIB_EIP) = g_cb[slot].pm_off;
@@ -1554,16 +1608,22 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                                 p = zput(p, " -> resize bad sel");
                             }
                             break; }
-                        case 0x0204: {                             /* get PM interrupt vector: BL -> CX:DX */
+                        case 0x0204: {                             /* get PM interrupt vector: BL -> CX:(E)DX */
                             DWORD bl = VDM_REG(tib, VTIB_EBX) & 0xFF;
                             VDM_SET16(tib, VTIB_ECX, g_pm_int[bl].sel);
-                            VDM_SET16(tib, VTIB_EDX, g_pm_int[bl].off & 0xFFFF);
+                            /* 32-bit handler selector -> return the full 32-bit offset (GH #18 run 83) */
+                            if (dpmi_sel_is32(g_pm_int[bl].sel)) VDM_REG(tib, VTIB_EDX) = g_pm_int[bl].off;
+                            else VDM_SET16(tib, VTIB_EDX, g_pm_int[bl].off & 0xFFFF);
                             p = zput(p, " -> getPMvec int 0x"); p = zhex(p, bl);
                             break; }
-                        case 0x0205: {                             /* set PM interrupt vector: BL = CX:DX */
+                        case 0x0205: {                             /* set PM interrupt vector: BL = CX:(E)DX */
                             DWORD bl = VDM_REG(tib, VTIB_EBX) & 0xFF;
-                            g_pm_int[bl].sel = (WORD)VDM_REG(tib, VTIB_ECX);
-                            g_pm_int[bl].off = VDM_REG(tib, VTIB_EDX) & 0xFFFF;
+                            WORD hsel = (WORD)VDM_REG(tib, VTIB_ECX);
+                            g_pm_int[bl].sel = hsel;
+                            /* 32-bit handler selector -> take the full 32-bit offset (GH #18 run 83);
+                               a 16-bit handler keeps the word-masked offset as before */
+                            g_pm_int[bl].off = dpmi_sel_is32(hsel) ? VDM_REG(tib, VTIB_EDX)
+                                                                   : (VDM_REG(tib, VTIB_EDX) & 0xFFFF);
                             p = zput(p, " -> setPMvec int 0x"); p = zhex(p, bl);
                             p = zput(p, " = 0x"); p = zhex(p, g_pm_int[bl].sel);
                             p = zput(p, ":0x"); p = zhex(p, g_pm_int[bl].off);
@@ -1962,16 +2022,29 @@ static int dpmi_inject_pm_irq(dos_machine_t *mp, volatile BYTE *tib, unsigned iv
     dpmi_ensure_pmret_sel();
     if (g_pmret_sel == 0) return 0;
 
-    /* push a 16-bit INT frame (FLAGS/CS/IP) on the client's current PM stack so the handler's
-       IRET lands on the catcher; keep the client's own SS so the handler has a valid stack. */
-    { WORD ss = sSS; DWORD b = dpmi_sel_base(ss); WORD sp = (WORD)sESP;
-      sp -= 2; pokew(b + sp, (WORD)sEFL);          /* FLAGS (restored below regardless) */
-      sp -= 2; pokew(b + sp, g_pmret_sel);         /* CS  = catcher                      */
-      sp -= 2; pokew(b + sp, DPMI_PMRET_OFF);      /* IP  = catcher                      */
-      VDM_SET16(tib, VTIB_SS, ss); VDM_REG(tib, VTIB_ESP) = sp; }
+    /* push an INT frame (FLAGS/CS/IP) on the client's current PM stack so the handler's IRET
+       lands on the catcher; keep the client's own SS so the handler has a valid stack. Frame
+       width + entry-offset mask follow the handler CS D-bit: a 32-bit PM INT handler wants a
+       dword frame and a full 32-bit entry offset (GH #18 run 83). */
+    int h32 = dpmi_sel_is32(g_pm_int[iv].sel);
+    { WORD ss = sSS; DWORD b = dpmi_sel_base(ss);
+      if (h32) {
+          DWORD sp = sESP;
+          sp -= 4; poked(b + sp, sEFL);            /* EFLAGS (restored below regardless) */
+          sp -= 4; poked(b + sp, g_pmret_sel);     /* CS  = catcher (dword; hi16=0)       */
+          sp -= 4; poked(b + sp, DPMI_PMRET_OFF);  /* EIP = catcher                       */
+          VDM_SET16(tib, VTIB_SS, ss); VDM_REG(tib, VTIB_ESP) = sp;
+      } else {
+          WORD sp = (WORD)sESP;
+          sp -= 2; pokew(b + sp, (WORD)sEFL);      /* FLAGS (restored below regardless) */
+          sp -= 2; pokew(b + sp, g_pmret_sel);     /* CS  = catcher                      */
+          sp -= 2; pokew(b + sp, DPMI_PMRET_OFF);  /* IP  = catcher                      */
+          VDM_SET16(tib, VTIB_SS, ss); VDM_REG(tib, VTIB_ESP) = sp;
+      } }
     g_dpmi_vi = 0;                                 /* mask further virtual interrupts     */
     VDM_REG(tib, VTIB_EFLAGS) = VTIB_EFLAGS_PM;
-    VDM_SET16(tib, VTIB_CS, g_pm_int[iv].sel); VDM_REG(tib, VTIB_EIP) = g_pm_int[iv].off & 0xFFFF;
+    VDM_SET16(tib, VTIB_CS, g_pm_int[iv].sel);
+    VDM_REG(tib, VTIB_EIP) = h32 ? g_pm_int[iv].off : (g_pm_int[iv].off & 0xFFFF);
 
     lp = zput(lp, "  IRQ0->PM INT 0x"); lp = zhex(lp, iv);
     lp = zput(lp, " handler 0x"); lp = zhex(lp, g_pm_int[iv].sel);
@@ -2123,6 +2196,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
        (BIOS time-of-day) is a plain BOP. */
     static const BYTE bop08[] = { VDM_BOP0, VDM_BOP1, 0x08, 0xCD, 0x1C, 0xCF };
     static const BYTE bop1c[] = { 0xCF };                           /* iret stub       */
+    static const BYTE bop09[] = { 0xCF };  /* default INT 09h: iret (game hooks its own; scancode stays in the 0x60 FIFO) */
     static const BYTE bop1a[] = { VDM_BOP0, VDM_BOP1, 0x1A, 0xCF }; /* BOP 0x1A ; iret */
     static const BYTE bop2f[] = { VDM_BOP0, VDM_BOP1, 0x2F, 0xCF }; /* INT 2Fh ; iret  */
     /* XMS API entry: reached by FAR CALL (INT 2Fh AX=4310 hands back ES:BX), so it
@@ -2135,7 +2209,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     (void)hInst; (void)hPrev; (void)lpCmd; (void)nShow;
     progpath[0] = 0; args[0] = 0;
 
-    p = zput(p, "NTVDMEX clean host\r\nSTAGE0: WinMain entered [build dpmi-harness-v62]\r\n");
+    p = zput(p, "NTVDMEX clean host\r\nSTAGE0: WinMain entered [build dpmi-harness-v63]\r\n");
     log_write(LOG_PATH, report, p);
     serial_init();                                      /* DPMI harness: COM1 log sink */
     serial_out(report, p);
@@ -2252,6 +2326,9 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     for (i = 0; i < sizeof(bop1c); ++i) hdlr[0x3A + i] = bop1c[i];  /* INT 1Ch iret */
     *(volatile WORD *)(0x1C * 4)     = 0x003A;              /* IVT[0x1C].offset    */
     *(volatile WORD *)(0x1C * 4 + 2) = DOS_HDLR_SEG;        /* IVT[0x1C].segment   */
+    for (i = 0; i < sizeof(bop09); ++i) hdlr[0x4C + i] = bop09[i];  /* INT 09h default iret (0x4C-0x4F) */
+    *(volatile WORD *)(0x09 * 4)     = 0x004C;              /* IVT[0x09].offset    */
+    *(volatile WORD *)(0x09 * 4 + 2) = DOS_HDLR_SEG;        /* IVT[0x09].segment   */
     for (i = 0; i < sizeof(bop1a); ++i) hdlr[0x3C + i] = bop1a[i];  /* INT 1Ah stub */
     *(volatile WORD *)(0x1A * 4)     = 0x003C;              /* IVT[0x1A].offset    */
     *(volatile WORD *)(0x1A * 4 + 2) = DOS_HDLR_SEG;        /* IVT[0x1A].segment   */
@@ -2360,6 +2437,25 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             if ((fl & 0x200) && !(cs == DOS_HDLR_SEG && ip >= 0x34 && ip < 0x3A)) {
                 g_irq0_pending = 0;
                 inject_int(tib, 0x08);
+            }
+        }
+        /* Deliver a pending keyboard IRQ1 as INT 09h, same IF-gating as IRQ0. The
+           scancode is already queued for port 0x60; INT 09h vectors through IVT[9]
+           to the game's own handler (or our IRET stub if it hasn't hooked one).
+           Excludes re-entry into our INT 08h (0x34) and INT 09h (0x4C) stubs. */
+        if (g_irq1_pending) {
+            DWORD cs = VDM_REG(tib, VTIB_CS) & 0xFFFF, ip = VDM_REG(tib, VTIB_EIP) & 0xFFFF;
+            DWORD fl;
+            if (cs == DOS_HDLR_SEG) {
+                DWORD ss = VDM_REG(tib, VTIB_SS) & 0xFFFF, sp = VDM_REG(tib, VTIB_ESP) & 0xFFFF;
+                fl = peekw((ss << 4) + ((sp + 4) & 0xFFFF));
+            } else {
+                fl = VDM_REG(tib, VTIB_EFLAGS);
+            }
+            if ((fl & 0x200) && !(cs == DOS_HDLR_SEG &&
+                                  ((ip >= 0x34 && ip < 0x3A) || (ip >= 0x4C && ip < 0x50)))) {
+                g_irq1_pending = 0;
+                inject_int(tib, 0x09);
             }
         }
         ev = v86_run(tib, &st);
