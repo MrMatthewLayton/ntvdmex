@@ -1,5 +1,66 @@
 ═══════════════════════════════════════════════════════════════════════════════
-██ CHECKPOINT — 2026-08-18 (session 8). READ THIS FIRST ON RESTART. ██
+██ CHECKPOINT — 2026-08-18 (session 9). READ THIS FIRST ON RESTART. ██
+═══════════════════════════════════════════════════════════════════════════════
+
+★★★ THE BARE-METAL PM WALL IS CRACKED (16-bit AND 32-bit DPMI real-CPU PM run on real
+silicon). Session 8's "the kernel declines to run our PM VDM" diagnosis was WRONG: the
+event-3-at-entry was NOT a kernel PM-init gap -- it was OUR OWN monitor's interrupt-pending
+guard in src/vdm/dpmi_enter.S (label 2, lines 45-51 & 122): when the client enters PM with
+IF=1 (VTIB_EFLAGS_PM=0x202) AND ds:[0x714]&3 signals a pending hardware interrupt, dpmi_enter
+reports VTIB_EVENT=3 and DOES NOT enter the guest (EIP stuck at entry -> the exact session-8
+symptom: event 3 at `mov ax,0x400`, EIP unadvanced). We run PM IN-PROCESS (far-jmp), NOT via
+VdmStartExecution, so while PM executes the kernel is not managing this VDM's interrupt assist
+-- [0x714]'s pending bits are STALE real-mode state (a timer IRQ0 latched during the pre-switch
+DOS INT 21h calls). On real 3.3GHz silicon a tick is essentially ALWAYS pending at switch time
+(QEMU+HVF's dilated clock rarely had one) -> the monitor bailed with event 3 forever.
+
+FIX (committed `c0831b1`, host v68): in the main PM loop, on ev==3 clear the stale [0x714]&3
+pending bits and re-enter (bounded to 0x10000 so a genuinely re-arming pending can't spin).
+The guard fires EXACTLY ONCE per run then PM executes free -- confirming the bits are stale,
+not re-arming (as predicted).
+
+BARE-METAL-CONFIRMED via the SMB loop (real-CPU path, g_dpmi_use_interp=0), each ran the
+event-3 guard once then ran to a clean INT 21h 4Ch exit:
+  • dpmitest.com  -- FULL 16-bit DPMI surface: 0400/0100/0205/0204/0900/0901/0300/0301/0303
+      (real-mode callback with NESTED INT 31h+21h inside it). The headline.
+  • outprobe.com  -- 16-bit PM `OUT` to VGA DAC survives + resumes.
+  • pm32io.com    -- 32-bit (D/B=1) PM `OUT` reflects + services.
+  • pm32sw.com    -- the 32-bit MODE SWITCH itself yields a working 32-bit CS; OUT serviced.
+  • pm32flat.com  -- base-0 ~2GB G=1 FLAT selector (the DOS/4GW model) renders via ES:[0A0000h],
+      775 svc calls, clean exit. The 32-bit flat model EXECUTES on real HW.
+
+COMMITS THIS SESSION (branch `spike/dpmi-16bit-switch`, all local -- PUSH when ready):
+  • `242f884` v67 -- route real-HW I/O reflect (event 3) through host_try_io at 4 sites +
+      AUTOEXIT_PATH headless-exit + PM-fault byte-dump diagnostic + filebuf 512KB (the
+      session-8 uncommitted fixes).
+  • `777fd40` -- session-8 checkpoint doc.
+  • `c0831b1` v68 -- THE CRACK (clear stale event-3 pending guard). ← HEAD.
+  Build clean: `./scripts/build.sh` -> build/ntvdmhost.exe (v68, KERNEL32-only).
+
+⚠️ RIG IS WEDGED (needs user recovery). `pm32irq.com` (async IRQ0 injection into a 32-bit PM
+INT 08h hook) HANGS -- the host wedged inside dpmi_enter_pm (main thread deep in the kernel
+PM far-jmp holding a custom LDT context; TerminateProcess-of-self can't unwind it, per
+main.c:1237). This is EXACTLY the checkpoint's known-incomplete item (32-bit async IRQ needs
+the catcher IRET frames widened to DWORD EFLAGS/CS/EIP -- session-7 resume item #1). The hung
+ntvdmhost blocks the watcher's `start /wait`, so the SMB test loop is dead until the box is
+recovered. NO remote-exec channel exists (only SMB 445 open; 135/22/23 closed) -> RECOVERY =
+on the box, close/kill ntvdmhost.exe (or reboot XP), then restart bm\runwatch.bat.
+  ► DO NOT re-fire pm32irq.com until the 32-bit async-IRQ frames are fixed -- it re-wedges the rig.
+
+▶▶ RESUME — NEXT STEPS (in order):
+  0. Recover the rig (kill ntvdmhost / reboot box; restart runwatch.bat). Verify with selftest.com.
+  1. FIX pm32irq (32-bit async IRQ): widen the injected IRET frame in dpmi_inject_pm_irq +
+     dpmi_run_callback to DWORD EFLAGS/CS/EIP when the target selector is 32-bit (dpmi_sel_is32);
+     gate the EIP/off &0xFFFF masks on width. (Session-7 resume items #1/#2 -- now the LAST 32-bit gap.)
+  2. VISUALLY confirm graphics on the box's PHYSICAL monitor (VNC capture is dead): mode13.com,
+     pm32gfx.com, animate.com, bounce.com, and Skyroads (real-mode, event-3 I/O fixed -> should play).
+  3. A REAL DOS/4GW extender, then DOOM (the acceptance test) -- the 32-bit flat model now executes,
+     so this is finally in reach on bare metal.
+  (Everything above the session-8 banner is now the authoritative state; session-8's "kernel
+   won't run PM" conclusion is SUPERSEDED -- it was our own guard.)
+
+═══════════════════════════════════════════════════════════════════════════════
+██ CHECKPOINT — 2026-08-18 (session 8). SUPERSEDED by session 9 above. ██
 ═══════════════════════════════════════════════════════════════════════════════
 
 BIG PICTURE: this session (1) landed runs 83-86 (committed+pushed), then (2) PIVOTED
