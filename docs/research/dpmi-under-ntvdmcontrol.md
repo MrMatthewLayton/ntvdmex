@@ -2740,6 +2740,28 @@ async IRQ / >64K offsets: widen the two catcher IRET frames (`dpmi_run_callback`
 `dpmi_sel_is32`; then a 32-bit graphics probe (framebuffer via a 32-bit data selector + `stosd`), a
 base-0 ~2GB G=1 flat selector alloc test, then a real DOS/4GW extender + a real game.
 
+### Run 82 (2026-08-18, session 7) — #3: a 32-bit real-CPU PM renderer (DOS/4GW shape) `[FACT — VM-CONFIRMED]`
+
+The 32-bit graphics milestone. `tools/dostest/pm32gfx.asm` (+ `pm32gfxrun.bat`) far-calls the switch
+with AX=1 (run 81's 32-bit CS), then ENTIRELY in 32-bit PM: sets mode 13h (INT 10h → video VDD),
+allocates an A0000 framebuffer selector (INT 31h 0000/0007/0008), loads a 256-entry grayscale DAC
+palette via 768 PM `OUT`s (0x3C8/0x3C9), and fills the screen with a vertical gradient using **`rep
+stosd`** — a native 32-bit string store (32-bit ES:EDI, 80 dwords/row, row r → pixel value r).
+
+VM-confirm (visual): the ntvdmhost Luna window shows a smooth black→gray vertical ramp (screendump).
+So a 32-bit-segment renderer drove our video VDD on the real CPU — mode set, 256 palette OUTs each
+reflected as event 0 and serviced, and a 32-bit framebuffer fill — graphics parity with the 16-bit
+run-74 path but through a 32-bit CS produced by the switch. (Serial cross-check unavailable: this ran
+as a 2nd VDM while the run-81 pm32sw window still held COM1 — the visual is authoritative; per the
+run-81 lesson, prefer one VDM / fresh boot per probe.)
+
+**#3 status:** the 32-bit real-CPU foundation is proven end-to-end — I/O (run 80), mode switch (81),
+and now graphics (82). Remaining for a REAL extender + game: widen the two catcher IRET frames
+(`dpmi_run_callback`, `dpmi_inject_pm_irq`) + the injected-IRQ frame to dwords for 32-bit targets;
+gate the `EIP/off & 0xFFFF` masks on `dpmi_sel_is32` (needed once a 32-bit client uses callbacks /
+async timer hooks / >64K offsets); a base-0 ~2GB G=1 flat-selector alloc test (the DOS/4GW flat model);
+then a real DOS/4GW extender + a real game (the acceptance test).
+
 ## References
 - [ntvdmcontrol-and-v86.md](ntvdmcontrol-and-v86.md) — the `VDMSERVICECLASS` enum, VDM_TIB/CONTEXT
   offsets, the V86 keystone.
