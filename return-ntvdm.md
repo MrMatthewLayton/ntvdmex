@@ -57,7 +57,27 @@ the full 16-bit DPMI surface + clean 4Ch exit, log is ~3 KB (cap works, no regre
     ONE remaining human action is a single double-click of bm\runwatch.bat; it's self-perpetuating after.
   • Shares (smbutil view, guest): ntvdmex, SharedDocs (rw), C$/ADMIN$ (denied), IPC$. Ports: 445/139
     open, 135 closed -> NO remote-exec / remote-shutdown RPC reachable.
-  BM SCRIPTS (rt.bat, runwatch.bat) live on the share, NOT in the repo -- consider snapshotting them.
+  BM SCRIPTS now snapshotted in scripts/bm/ (rt.bat, runwatch.bat, controld.c).
+
+★ v70 WEDGE + v71 BULLETPROOFING + controld (the recovery story):
+  • v70 added host self-screenshot; a real-mode run (selftest) then HUNG under v70, and the REAL-MODE
+    exec loop had NO headless cap (only the PM loop got one in v69) -> it wedged rt.bat's start/wait
+    permanently. VNC is fully dead now (capture returns NO file after a DOS mode switch) + no remote-exec,
+    so it could not be unwedged remotely -> the box needs a power-cycle. LESSON: any exec path without a
+    headless cap can permanently wedge the rig.
+  • v71 (commit bf43e33) BULLETPROOFS it: (1) the real-mode V86 loop now honours PM_HEADLESS_MS=30s too
+    (a hung real-mode run self-exits -> would have auto-recovered the v70 wedge in 30s); (2) self-capture
+    is now OPT-IN via CAPTURE_FLAG (a file on the share) so non-graphical tests never touch the capture
+    path. With real-mode + PM caps, NO run can permanently wedge the rig again.
+  • controld.exe (commit 2c8a0e8, scripts/bm/controld.c, build-controld.sh): a tiny XP-safe (no-CRT,
+    KERNEL32/USER32/ADVAPI32 only) CONTROL DAEMON, separate from the test watcher, that NEVER runs guest
+    code so it can't wedge. It polls `control.txt` on the share: `reboot`->ExitWindowsEx force reboot,
+    `poweroff`, `kill`->taskkill ntvdmhost (unwedge a hung host). Writes `controld.txt` heartbeat; singleton.
+    rt.bat + runwatch.bat both `start` it (singleton) and rt.bat refreshes the Startup runwatch each run.
+  • BOOTSTRAP (current wedge): controld isn't running yet, so THIS wedge still needs ONE power-cycle.
+    After boot: Startup runwatch -> test watcher up -> I fire selftest -> new rt.bat launches controld +
+    updates Startup. From then on: `echo reboot > /tmp/xpshare/control.txt` (or `kill`) recovers the box
+    REMOTELY -- no more physical access. HEAD after this = the session-9 remote-infra commits.
 
 pm32irq REFRAMED (it was NOT a code bug). `pm32irq.com` is an INFINITE mode-13h animation demo
 (`jmp .frame`; never calls INT 21h 4Ch) -- like animate/bounce/mode13/pm32gfx. Under the headless
