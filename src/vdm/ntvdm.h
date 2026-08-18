@@ -144,11 +144,15 @@ typedef LONG (WINAPI *PFN_NtUnmapViewOfSection)(HANDLE, PVOID);
 /* Event taxonomy (kernel -> host, ntvdm dispatch table 0xf064a60, index=VTIB_EVENT):
    0 = I/O port access (IOPL-0 IN/OUT trap); 1,3 internal; 2 = GP fault; 4 = BOP/
    software dispatch; 5 = terminate; 6 = hardware IRQ; >=7 exits the loop.
-   [VM-confirmed 2026-06-07] An IOPL-0 `OUT 0x43,al` stops with VTIB_EVENT(0x5A8)=0,
-   EIP exactly on the instruction, and VTIB_EVENT_INFO(0x5B0) low word = the port
-   (0x0043). So I/O is event 0, NOT the generic GP fault (event 2). */
+   [VM-confirmed 2026-06-07] Under QEMU+HVF an IOPL-0 `OUT 0x43,al` stops with
+   VTIB_EVENT(0x5A8)=0 and VTIB_EVENT_INFO(0x5B0) low word = the port (0x0043).
+   [BARE-METAL-confirmed 2026-08-18] On a real XP box (Core 2 / Quadro) the SAME
+   IOPL-0 I/O trap surfaces as VTIB_EVENT=3 with INFO=0 (Skyroads' `IN AL,DX` at
+   0x0110:0x5878). So the I/O reflect code differs by platform: HVF=0, real HW=3.
+   host_try_io() self-validates (decodes the IN/OUT at CS:IP), so we route BOTH. */
 #define VDM_EVENT_IO      0
 #define VDM_EVENT_GPFAULT 2
+#define VDM_EVENT_IO_HW   3       /* I/O reflect code on real hardware (HVF uses 0) */
 #define VDM_EVENT_BOP     4
 #define VDM_EVENT_HWIRQ   6
 

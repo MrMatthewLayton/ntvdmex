@@ -63,6 +63,8 @@ IFEO='HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Opt
     echo 'set N=C:\ntvdmex'
     echo 'if not exist %N% md %N%'
     echo 'if not exist %G%\'"$EXE"' echo NOT FOUND: %G%\'"$EXE"' -- run doominstall.bat first & pause & goto :eof'
+    echo 'taskkill /f /im ntvdmhost.exe >nul 2>&1'
+    echo 'tskill ntvdmhost >nul 2>&1'
     echo 'copy /y "%~dp0ntvdmhost.exe" %G%\ >nul'
     echo 'copy /y "%~dp0dosstub.com" %G%\ >nul'
     echo "reg add \"$IFEO\" /v Debugger /t REG_SZ /d \"%G%\\ntvdmhost.exe\" /f >nul"

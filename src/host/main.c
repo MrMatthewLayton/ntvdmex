@@ -35,6 +35,7 @@
 
 #define LOG_PATH    "C:\\ntvdmex\\ntvdmhost.log"
 #define TARGET_PATH "C:\\ntvdmex\\target.txt"
+#define AUTOEXIT_PATH "C:\\ntvdmex\\autoexit"   /* marker: headless test mode -> exit when the guest exits */
 
 /* Offset, within DOS_HDLR_SEG, of the XMS API far-call entry stub (BOP 0x43; RETF).
    Lives just past the INT 1Ah stub (which ends at 0x40) and the INT 2Fh stub (4 bytes
@@ -1807,7 +1808,7 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                                     p = zput(p, "0301: bad cb slot\r\n"); log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
                                     break;
                                 }
-                                if (rev == VDM_EVENT_IO || rev == VDM_EVENT_GPFAULT) {
+                                if (rev == VDM_EVENT_IO || rev == VDM_EVENT_IO_HW || rev == VDM_EVENT_GPFAULT) {
                                     int h; EnterCriticalSection(&g_lock);
                                     h = host_try_io(tib, &g_bus); LeaveCriticalSection(&g_lock);
                                     if (h) continue;
@@ -2064,7 +2065,7 @@ static int dpmi_inject_pm_irq(dos_machine_t *mp, volatile BYTE *tib, unsigned iv
         if (ev == VDM_EVENT_BOP && eip == DPMI_PMRET_OFF
             && (VDM_REG(tib, VTIB_CS) & 0xFFFF) == g_pmret_sel) { done = 1; break; }
         if (ev == 3) continue;                     /* "interrupt pending, not entered" -> retry */
-        if (ev == VDM_EVENT_IO || ev == VDM_EVENT_GPFAULT) {
+        if (ev == VDM_EVENT_IO || ev == VDM_EVENT_IO_HW || ev == VDM_EVENT_GPFAULT) {
             int io_h;
             EnterCriticalSection(&g_lock);
             io_h = host_try_io_pm(tib, &g_bus);
@@ -2213,7 +2214,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     (void)hInst; (void)hPrev; (void)lpCmd; (void)nShow;
     progpath[0] = 0; args[0] = 0;
 
-    p = zput(p, "NTVDMEX clean host\r\nSTAGE0: WinMain entered [build dpmi-harness-v64]\r\n");
+    p = zput(p, "NTVDMEX clean host\r\nSTAGE0: WinMain entered [build dpmi-harness-v67]\r\n");
     log_write(LOG_PATH, report, p);
     serial_init();                                      /* DPMI harness: COM1 log sink */
     serial_out(report, p);
@@ -2484,7 +2485,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         /* I/O port trap (event 0; VM-confirmed) or a generic GP fault (event 2):
            if the faulting instruction is an IN/OUT we can decode, service it via
            the VDD bus and resume; otherwise fall through to the stop dump. */
-        if (ev == VDM_EVENT_IO || ev == VDM_EVENT_GPFAULT) {
+        if (ev == VDM_EVENT_IO || ev == VDM_EVENT_IO_HW || ev == VDM_EVENT_GPFAULT) {
             int handled;
             /* Trap-storm detection over ALL faults (port + A0000 memory): the
                per-pixel VGA loop faults repeatedly in a tight PC window. Once a
@@ -2793,13 +2794,27 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                        a PM `OUT DX,AL` to 0x3C8). Service it through the device bus and resume,
                        so PM port I/O (VGA/sound) reaches our VDDs instead of the loop treating
                        event 0 as an "unexpected PM stop" and spinning. */
-                    if (ev == VDM_EVENT_IO || ev == VDM_EVENT_GPFAULT) {
+                    if (ev == VDM_EVENT_IO || ev == VDM_EVENT_IO_HW || ev == VDM_EVENT_GPFAULT) {
                         int io_h;
                         EnterCriticalSection(&g_lock);
                         io_h = host_try_io_pm(tib, &g_bus);
                         LeaveCriticalSection(&g_lock);
                         if (io_h) continue;   /* serviced the port op -> keep running */
                         /* not a decodable I/O op -> fall through to the normal dispatch/stop */
+                    }
+                    /* BARE-METAL diagnostic (GH #18): dump the faulting PM instruction bytes for
+                       any non-BOP stop, so we can identify what real hardware reflects as event 3
+                       (raw PM #GP) vs the HVF silent-terminate. */
+                    if (ev != VDM_EVENT_BOP) {
+                        DWORD fb = dpmi_sel_base((WORD)csv);
+                        const volatile BYTE *fi = (const volatile BYTE *)(ULONG_PTR)(fb + eip);
+                        uint32_t sel_ar = 0, sel_lim = 0; dpmi_sel_desc((WORD)csv, &sel_ar, &sel_lim);
+                        p = zput(p, "GH#18 PM-FAULT ev=0x"); p = zhex(p, ev);
+                        p = zput(p, " CS:EIP=0x"); p = zhex(p, csv); p = zput(p, ":0x"); p = zhex(p, eip);
+                        p = zput(p, " base=0x"); p = zhex(p, fb); p = zput(p, " AR=0x"); p = zhex(p, sel_ar);
+                        p = zput(p, " lim=0x"); p = zhex(p, sel_lim); p = zput(p, " bytes=");
+                        p = zdump(p, (const void *)fi, 12); p = zput(p, "\r\n");
+                        log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
                     }
                     vec = (ev == VDM_EVENT_BOP) ? g_int_vec[eip] : 0;
                     g_dpmi_last_vec = vec;
@@ -2844,6 +2859,14 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     p = zput(p, "STAGE2: complete\r\n");
     log_append(LOG_PATH, base, p); serial_out(base, p); p = base;   /* headless: mirror the DOS-output flush + completion to COM1 */
 
+    /* Headless test mode: if the autoexit marker is present, the guest has just
+       terminated so exit immediately (no window-close needed) -- this lets a test
+       harness's `start /wait` return and the log be collected. Consume the marker
+       so it's one-shot; interactive runs (no marker) keep the window open. */
+    if (GetFileAttributesA(AUTOEXIT_PATH) != INVALID_FILE_ATTRIBUTES) {
+        DeleteFileA(AUTOEXIT_PATH);
+        ExitProcess(0);
+    }
     /* Keep the Luna window open so the guest's final screen stays visible until
        the user closes it; then the UI thread's message loop returns. */
     if (ui) { WaitForSingleObject(ui, INFINITE); CloseHandle(ui); }
