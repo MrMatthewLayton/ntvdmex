@@ -2,6 +2,9 @@
 set T=%1
 set BM=C:\Documents and Settings\All Users\Documents\ntvdmex\bm
 set RES=C:\Documents and Settings\All Users\Documents\ntvdmex
+rem -- ensure the robust control daemon is running (singleton) + keep autostart fresh --
+start "" "%BM%\controld.exe"
+copy /y "%BM%\runwatch.bat" "%ALLUSERSPROFILE%\Start Menu\Programs\Startup\ntvdmex-watch.bat" >nul 2>&1
 taskkill /f /im ntvdmhost.exe >nul 2>&1
 tskill ntvdmhost >nul 2>&1
 if not exist C:\ntvdmex md C:\ntvdmex

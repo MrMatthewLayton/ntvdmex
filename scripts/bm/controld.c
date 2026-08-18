@@ -1,0 +1,111 @@
+/*
+ * controld.c -- NTVDMEX bare-metal CONTROL daemon (session-9).
+ *
+ * A tiny, robust remote-control channel for the XP test box, independent of the
+ * test watcher (runwatch.bat). It NEVER launches guest code, so it can never wedge
+ * -- which is exactly why it can recover the test watcher when a run hangs it, and
+ * gives a remote reboot so the box needs no physical access.
+ *
+ * Mechanism: it polls a command file on the SMB share (which the remote driver on
+ * the Mac writes) and acts on it:
+ *   reboot   -> ExitWindowsEx(EWX_REBOOT | EWX_FORCE)   (needs SeShutdownPrivilege)
+ *   poweroff -> ExitWindowsEx(EWX_POWEROFF | EWX_FORCE)
+ *   kill     -> taskkill /f /im ntvdmhost.exe   (unwedge a hung test host)
+ * It writes a heartbeat file every poll so the driver can confirm it's alive, and
+ * is a singleton (a named mutex) so repeated launches from rt.bat are no-ops.
+ *
+ * XP-safe build (msvcrt, subsystem 5.01):
+ *   i686-w64-mingw32-gcc -O2 -mwindows -o controld.exe controld.c \
+ *     -lkernel32 -luser32 -ladvapi32 \
+ *     -Wl,--major-os-version,5 -Wl,--minor-os-version,1 \
+ *     -Wl,--major-subsystem-version,5 -Wl,--minor-subsystem-version,1
+ */
+#include <windows.h>
+
+#define SHARE "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex"
+#define CTRL  SHARE "\\control.txt"
+#define BEAT  SHARE "\\controld.txt"
+
+/* Enable SeShutdownPrivilege in our token so ExitWindowsEx is allowed. */
+static void enable_shutdown_priv(void)
+{
+    HANDLE tok;
+    TOKEN_PRIVILEGES tp;
+    if (!OpenProcessToken(GetCurrentProcess(),
+                          TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY, &tok))
+        return;
+    tp.PrivilegeCount = 1;
+    tp.Privileges[0].Attributes = SE_PRIVILEGE_ENABLED;
+    if (LookupPrivilegeValueA(NULL, "SeShutdownPrivilege", &tp.Privileges[0].Luid))
+        AdjustTokenPrivileges(tok, FALSE, &tp, 0, NULL, NULL);
+    CloseHandle(tok);
+}
+
+/* Read the command file into buf (NUL-terminated). Returns byte count, 0 if absent. */
+static int read_cmd(char *buf, int cap)
+{
+    DWORD n = 0;
+    HANDLE h = CreateFileA(CTRL, GENERIC_READ,
+                           FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
+                           OPEN_EXISTING, 0, NULL);
+    if (h == INVALID_HANDLE_VALUE) return 0;
+    ReadFile(h, buf, (DWORD)(cap - 1), &n, NULL);
+    CloseHandle(h);
+    buf[n] = 0;
+    return (int)n;
+}
+
+static void write_beat(const char *s)
+{
+    DWORD wr;
+    HANDLE h = CreateFileA(BEAT, GENERIC_WRITE, FILE_SHARE_READ, NULL,
+                           CREATE_ALWAYS, 0, NULL);
+    if (h != INVALID_HANDLE_VALUE) { WriteFile(h, s, lstrlenA(s), &wr, NULL); CloseHandle(h); }
+}
+
+/* case-insensitive "does s begin with p" */
+static int starts_with(const char *s, const char *p)
+{
+    while (*p) {
+        char a = *s++, b = *p++;
+        if (a >= 'A' && a <= 'Z') a = (char)(a - 'A' + 'a');
+        if (b >= 'A' && b <= 'Z') b = (char)(b - 'A' + 'a');
+        if (a != b) return 0;
+    }
+    return 1;
+}
+
+int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
+{
+    char buf[256];
+    (void)inst; (void)prev; (void)cmd; (void)show;
+
+    /* singleton: exit quietly if another controld is already running */
+    CreateMutexA(NULL, FALSE, "ntvdmex_controld_singleton");
+    if (GetLastError() == ERROR_ALREADY_EXISTS) return 0;
+
+    enable_shutdown_priv();
+    write_beat("controld: started\r\n");
+
+    for (;;) {
+        if (read_cmd(buf, (int)sizeof buf) > 0) {
+            DeleteFileA(CTRL);                       /* consume: one-shot */
+            if (starts_with(buf, "reboot")) {
+                write_beat("controld: REBOOT\r\n");
+                ExitWindowsEx(EWX_REBOOT | EWX_FORCE, SHTDN_REASON_MAJOR_OTHER);
+            } else if (starts_with(buf, "poweroff")) {
+                write_beat("controld: POWEROFF\r\n");
+                ExitWindowsEx(EWX_POWEROFF | EWX_FORCE, SHTDN_REASON_MAJOR_OTHER);
+            } else if (starts_with(buf, "kill")) {
+                write_beat("controld: kill ntvdmhost\r\n");
+                WinExec("taskkill /f /im ntvdmhost.exe", SW_HIDE);
+            } else {
+                write_beat("controld: unknown cmd\r\n");
+            }
+        } else {
+            write_beat("controld: idle\r\n");
+        }
+        Sleep(1500);
+    }
+    return 0;
+}
