@@ -137,6 +137,8 @@ static BYTE  g_int_vec[0x10000];            /* per-CS-offset: original INT vecto
    (whether a real exception was ever delivered to us at all). */
 static volatile LONG  g_dpmi_iter     = 0;  /* host PM-loop iteration heartbeat (pre-enter) */
 static volatile LONG  g_dpmi_done     = 0;  /* PM loop finished (client exited cleanly) -> watchdog must NOT kill */
+static int            g_headless      = 0;  /* AUTOEXIT marker present: SMB test harness -> bound infinite runs */
+#define PM_HEADLESS_MS 30000                /* headless PM-loop wall-clock cap (an infinite visual demo self-exits) */
 static volatile DWORD g_dpmi_enter_cs = 0;  /* guest CS handed to the last dpmi_enter_pm    */
 static volatile DWORD g_dpmi_enter_eip= 0;  /* guest EIP handed to the last dpmi_enter_pm   */
 static volatile DWORD g_dpmi_last_ev  = 0;  /* VTIB_EVENT reported by the last return        */
@@ -2214,10 +2216,15 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     (void)hInst; (void)hPrev; (void)lpCmd; (void)nShow;
     progpath[0] = 0; args[0] = 0;
 
-    p = zput(p, "NTVDMEX clean host\r\nSTAGE0: WinMain entered [build dpmi-harness-v68]\r\n");
+    p = zput(p, "NTVDMEX clean host\r\nSTAGE0: WinMain entered [build dpmi-harness-v69]\r\n");
     log_write(LOG_PATH, report, p);
     serial_init();                                      /* DPMI harness: COM1 log sink */
     serial_out(report, p);
+    /* Headless test mode = the SMB watcher dropped the AUTOEXIT marker. In that mode the
+       host must self-exit on guest exit AND bound any infinite run (a visual demo like
+       pm32irq/animate never calls INT 21h 4Ch), else rt.bat's `start /wait` blocks forever
+       and wedges the watcher (session-9). Latch it once here (the exit path deletes the marker). */
+    g_headless = (GetFileAttributesA(AUTOEXIT_PATH) != INVALID_FILE_ATTRIBUTES);
     AddVectoredExceptionHandler(1, dpmi_crash_veh);     /* DPMI spike crash diagnostic */
 
     /* CSRSS command-info: receive buffers + first-command state + IFEO task id. */
@@ -2723,8 +2730,25 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                        -- also VTIB_EVENT=4, but CS==g_dpmi_flt_code_sel and EIP==DPMI_FAULT_COFF.
                        We recover the saved faulting CS:EIP/SS:ESP from the VTIB_FLT_SAV* slots. */
                 DWORD ev3_retries = 0;   /* GH#18: bounded event-3 (pending-int guard) re-entries */
+                DWORD g_pmfault_dumps = 0;              /* rate-limit the PM-fault byte dump (anti-flood) */
+                DWORD pm_start_tick = GetTickCount();   /* headless wall-clock cap origin */
                 for (steps = 0; g_running && steps < 100000000; ++steps) {  /* run until window close (animation) */
                     DWORD ev, eip, csv, vec; int rc;
+                    /* Headless safety (session-9): an infinite visual demo (pm32irq/animate)
+                       never calls INT 21h 4Ch, so under the SMB auto-exit harness the PM loop
+                       would run forever and wedge rt.bat's `start /wait`. Bound it by wall clock
+                       so the host self-exits and the watcher survives. Sampled sparsely (every
+                       4096 steps) to keep GetTickCount off the hot path. Interactive runs (no
+                       marker) are unbounded, as before -- the user closes the window. */
+                    if (g_headless && (steps & 0xFFF) == 0 && steps
+                        && GetTickCount() - pm_start_tick > PM_HEADLESS_MS) {
+                        p = zput(p, "STAGE3-DPMI: headless time cap (");
+                        p = zhex(p, PM_HEADLESS_MS); p = zput(p, " ms) reached after 0x");
+                        p = zhex(p, (unsigned)steps);
+                        p = zput(p, " steps -> exiting (infinite/visual demo; watch it on the monitor)\r\n");
+                        log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                        break;
+                    }
                     /* run 52 heartbeat: publish where we're about to hand off + bump the
                        iteration counter BEFORE entering, so a watchdog sample taken while
                        we're blocked inside dpmi_enter_pm sees a FROZEN iter at this CS:EIP. */
@@ -2832,9 +2856,11 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                     }
                     /* BARE-METAL diagnostic (GH #18): dump the faulting PM instruction bytes for
                        any non-BOP stop, so we can identify what real hardware reflects as event 3
-                       (raw PM #GP) vs the HVF silent-terminate. */
-                    if (ev != VDM_EVENT_BOP) {
+                       (raw PM #GP) vs the HVF silent-terminate. Rate-limited to the first 32 stops
+                       so a client that repeatedly faults can't flood the log (session-9). */
+                    if (ev != VDM_EVENT_BOP && g_pmfault_dumps < 32) {
                         DWORD fb = dpmi_sel_base((WORD)csv);
+                        ++g_pmfault_dumps;
                         const volatile BYTE *fi = (const volatile BYTE *)(ULONG_PTR)(fb + eip);
                         uint32_t sel_ar = 0, sel_lim = 0; dpmi_sel_desc((WORD)csv, &sel_ar, &sel_lim);
                         p = zput(p, "GH#18 PM-FAULT ev=0x"); p = zhex(p, ev);
@@ -2887,11 +2913,11 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     p = zput(p, "STAGE2: complete\r\n");
     log_append(LOG_PATH, base, p); serial_out(base, p); p = base;   /* headless: mirror the DOS-output flush + completion to COM1 */
 
-    /* Headless test mode: if the autoexit marker is present, the guest has just
-       terminated so exit immediately (no window-close needed) -- this lets a test
-       harness's `start /wait` return and the log be collected. Consume the marker
+    /* Headless test mode: the guest has just terminated (or the PM loop hit its
+       headless time cap), so exit immediately (no window-close needed) -- this lets a
+       test harness's `start /wait` return and the log be collected. Consume the marker
        so it's one-shot; interactive runs (no marker) keep the window open. */
-    if (GetFileAttributesA(AUTOEXIT_PATH) != INVALID_FILE_ATTRIBUTES) {
+    if (g_headless) {
         DeleteFileA(AUTOEXIT_PATH);
         ExitProcess(0);
     }

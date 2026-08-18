@@ -37,22 +37,47 @@ static inline char *zdump(char *p, const void *b, unsigned n) {
     return p;
 }
 
-/* Overwrite `path` with [buf..end). */
+/* Runaway-log guard. An infinite guest loop that logs each serviced INT can grow
+   the log without bound -- a headless pm32irq (an infinite mode-13h animation demo)
+   flooded 148 MB, thrashed the disk, and wedged the SMB result-copy. Cap the total
+   appended bytes; past the cap log_append silently drops (writing one truncation
+   marker). log_write (the STAGE0 truncate that starts a fresh run) resets the count. */
+#define LOG_MAX_BYTES (4u * 1024u * 1024u)   /* 4 MB -- vastly more than any real trace */
+static unsigned long g_log_total  = 0;
+static int           g_log_capped = 0;
+
+/* Overwrite `path` with [buf..end). Resets the runaway guard -- a new run starts here. */
 static inline void log_write(const char *path, const char *buf, const char *end) {
     HANDLE h = CreateFileA(path, GENERIC_WRITE, 0, NULL,
                            CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    g_log_total = (unsigned long)(end - buf); g_log_capped = 0;
     if (h != INVALID_HANDLE_VALUE) {
         DWORD wr; WriteFile(h, buf, (DWORD)(end - buf), &wr, NULL); CloseHandle(h);
     }
 }
 
 /* Append [buf..end) to `path` -- used inside the service loop so a host crash still
-   leaves the trace-so-far on disk and the in-memory buffer can be reset each pass. */
+   leaves the trace-so-far on disk and the in-memory buffer can be reset each pass.
+   Bounded by LOG_MAX_BYTES so a runaway guest can never flood the disk. */
 static inline void log_append(const char *path, const char *buf, const char *end) {
-    HANDLE h = CreateFileA(path, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE,
-                           NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    DWORD n = (DWORD)(end - buf);
+    HANDLE h;
+    if (g_log_capped) return;
+    if (g_log_total + n > LOG_MAX_BYTES) {
+        static const char mark[] = "\r\n[log capped @4MB: runaway guest output suppressed]\r\n";
+        h = CreateFileA(path, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                        NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+        if (h != INVALID_HANDLE_VALUE) {
+            DWORD wr; WriteFile(h, mark, (DWORD)(sizeof(mark) - 1), &wr, NULL); CloseHandle(h);
+        }
+        g_log_capped = 1;
+        return;
+    }
+    g_log_total += n;
+    h = CreateFileA(path, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                    NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
     if (h != INVALID_HANDLE_VALUE) {
-        DWORD wr; WriteFile(h, buf, (DWORD)(end - buf), &wr, NULL); CloseHandle(h);
+        DWORD wr; WriteFile(h, buf, n, &wr, NULL); CloseHandle(h);
     }
 }
 
