@@ -91,14 +91,30 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
         if (read_cmd(buf, (int)sizeof buf) > 0) {
             DeleteFileA(CTRL);                       /* consume: one-shot */
             if (starts_with(buf, "reboot")) {
-                write_beat("controld: REBOOT\r\n");
-                ExitWindowsEx(EWX_REBOOT | EWX_FORCE, SHTDN_REASON_MAJOR_OTHER);
+                char m[96];
+                /* Primary: shutdown.exe (handles the privilege path itself, the standard
+                   XP reboot). Belt-and-suspenders: ExitWindowsEx too, reporting its error
+                   so we can diagnose if the box still won't go (v1's ExitWindowsEx alone
+                   reached here but never rebooted -- session-9). */
+                write_beat("controld: REBOOT (shutdown.exe -r -f)\r\n");
+                WinExec("shutdown.exe -r -f -t 00", SW_HIDE);
+                if (!ExitWindowsEx(EWX_REBOOT | EWX_FORCE, SHTDN_REASON_MAJOR_OTHER)) {
+                    wsprintfA(m, "controld: ExitWindowsEx err=%lu (shutdown.exe should still fire)\r\n",
+                              GetLastError());
+                    write_beat(m);
+                }
             } else if (starts_with(buf, "poweroff")) {
                 write_beat("controld: POWEROFF\r\n");
+                WinExec("shutdown.exe -s -f -t 00", SW_HIDE);
                 ExitWindowsEx(EWX_POWEROFF | EWX_FORCE, SHTDN_REASON_MAJOR_OTHER);
             } else if (starts_with(buf, "kill")) {
                 write_beat("controld: kill ntvdmhost\r\n");
                 WinExec("taskkill /f /im ntvdmhost.exe", SW_HIDE);
+            } else if (starts_with(buf, "quit")) {
+                /* let the driver stop controld remotely so a new build can be hot-swapped:
+                   the singleton mutex is released on exit, so a fresh start takes over. */
+                write_beat("controld: quit\r\n");
+                return 0;
             } else {
                 write_beat("controld: unknown cmd\r\n");
             }
