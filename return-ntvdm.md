@@ -74,10 +74,23 @@ the full 16-bit DPMI surface + clean 4Ch exit, log is ~3 KB (cap works, no regre
     code so it can't wedge. It polls `control.txt` on the share: `reboot`->ExitWindowsEx force reboot,
     `poweroff`, `kill`->taskkill ntvdmhost (unwedge a hung host). Writes `controld.txt` heartbeat; singleton.
     rt.bat + runwatch.bat both `start` it (singleton) and rt.bat refreshes the Startup runwatch each run.
-  • BOOTSTRAP (current wedge): controld isn't running yet, so THIS wedge still needs ONE power-cycle.
-    After boot: Startup runwatch -> test watcher up -> I fire selftest -> new rt.bat launches controld +
-    updates Startup. From then on: `echo reboot > /tmp/xpshare/control.txt` (or `kill`) recovers the box
-    REMOTELY -- no more physical access. HEAD after this = the session-9 remote-infra commits.
+  • BOOTSTRAP DONE (2026-08-19): box power-cycled, watcher auto-started from Startup, controld
+    bootstrapped via rt.bat. PROVEN: controld receives commands (control.txt) + writes controld.txt
+    heartbeat; **`kill` REMOTELY RECOVERED a wedged watcher** (taskkilled a hung ntvdmhost -> start/wait
+    returned -> watcher resumed). NOT yet working: **`reboot`** -- v1's ExitWindowsEx reached the handler
+    but never rebooted (box stayed up, returned to idle) = a privilege/API detail.
+  • controld v2 (commit 6081b81, STAGED as bm/controld_v2.exe): reboot via `shutdown.exe -r -f` primary +
+    ExitWindowsEx fallback that REPORTS GetLastError to the heartbeat; new `quit` command. Can't hot-swap
+    while v1 runs (singleton mutex + .exe file-locked on share, v1 has no quit). runwatch.bat now
+    SELF-UPGRADES controld on start (taskkill controld -> copy controld_v2.exe -> relaunch).
+    ▶ NEXT SESSION (one small action): restart the watcher (or Start->reboot) ONCE -> v2 loads ->
+      `echo reboot > /tmp/xpshare/control.txt` should reboot via shutdown.exe (heartbeat shows the error
+      code if not). Then remote reboot works with no physical access ever again.
+  • ALSO OPEN: v71 `selftest.com` HANGS the watcher (real-mode run; the 30s real-mode cap did NOT fire ->
+    likely hangs INSIDE v86_run/VdmStartExecution so the loop-top cap never runs). controld `kill`
+    recovers it. This hang appeared v70+ (v68 selftest passed) but is NOT the BMP capture (v71 capture is
+    opt-in/off). INVESTIGATE next session: what in v70/v71 makes a real-mode guest wander off. Meanwhile
+    dpmitest (PM path) is the safe smoke-test. HEAD = 6081b81 (12 unpushed).
 
 pm32irq REFRAMED (it was NOT a code bug). `pm32irq.com` is an INFINITE mode-13h animation demo
 (`jmp .frame`; never calls INT 21h 4Ch) -- like animate/bounce/mode13/pm32gfx. Under the headless
