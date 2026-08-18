@@ -1,5 +1,95 @@
 ═══════════════════════════════════════════════════════════════════════════════
-██ CHECKPOINT — 2026-08-18 (session 7). READ THIS FIRST ON RESTART. ██
+██ CHECKPOINT — 2026-08-18 (session 8). READ THIS FIRST ON RESTART. ██
+═══════════════════════════════════════════════════════════════════════════════
+
+BIG PICTURE: this session (1) landed runs 83-86 (committed+pushed), then (2) PIVOTED
+TO **BARE-METAL TESTING on a REAL Windows XP box** because QEMU+HVF SIGABRTs on DOS/4GW's
+paged 32-bit PM (`mmu_gva_to_gpa`, see [[hvf-paged-pm-blocker]]). On real silicon: **real
+mode fully works (selftest 8/8)**; **protected mode hit a NEW, OBSERVABLE frontier** (kernel
+returns event 3 the instant we run PM). The HVF VM is effectively RETIRED for this work.
+
+REPO STATE (branch `spike/dpmi-16bit-switch`):
+  • COMMITTED + pushed: `af5246a` (run 86 raw keyboard + runs 83-85), `5928ff6` (E0 keys +
+    per-byte IRQ1 counter + qmp key-hold). HEAD = `5928ff6`.
+  • **UNCOMMITTED (the bare-metal fixes, v65→v67):** `src/host/main.c` + `src/vdm/ntvdm.h`.
+    These are GOOD and bare-metal-confirmed for real mode — COMMIT THEM FIRST on resume:
+      - ntvdm.h: `VDM_EVENT_IO_HW 3` + taxonomy note (real HW reflects I/O as event 3; HVF used 0).
+      - main.c: route event 3 through host_try_io at 4 sites (grep VDM_EVENT_IO_HW); `AUTOEXIT_PATH`
+        marker + auto-exit-on-guest-exit (test mode, line ~2849); `filebuf` 128KB→512KB;
+        the "GH#18 PM-FAULT ev=.. bytes=.." byte-dump diagnostic in the PM loop (~line 2804);
+        version string now `dpmi-harness-v67`.
+  • Host builds clean: `./scripts/build.sh` → build/ntvdmhost.exe (v67). KERNEL32-only.
+  • New scripts (committed? NO — untracked): scripts/build-game-iso.sh, build-doom-iso.sh;
+    games/ is gitignored. tools/dostest/pm32irq.* pm32flat.* were committed in af5246a.
+
+▶▶ THE BARE-METAL TEST RIG — how I drive tests MYSELF (no user clicks). ══════════════════
+  BOX: Dell OptiPlex 760, Core2 E8600 3.33GHz, Quadro FX 1800, 4GB, SB X-Fi, XP Pro SP3.
+       IP = **192.168.1.34**. On the same LAN as this Mac. (Network ops need
+       `dangerouslyDisableSandbox` — LAN IP isn't in the sandbox allowlist.)
+  SMB SHARE (THE reliable control channel): `//192.168.1.34/ntvdmex` (GUEST access, no pw).
+       Mount: `mkdir -p /tmp/xpshare; mount_smbfs -N //guest@192.168.1.34/ntvdmex /tmp/xpshare`
+       Maps to `C:\Documents and Settings\All Users\Documents\ntvdmex` on the box. Read+write.
+  VNC (UltraVNC :5900, pw `NTVDMEX`, mirror driver installed): **INPUT works, CAPTURE is
+       black + WEDGES after any DOS full-screen mode switch** — UNRELIABLE, do NOT depend on
+       it. vncdo venv: `/tmp/vncenv/bin/vncdo -s 192.168.1.34::5900 -p NTVDMEX capture x.png`.
+       (Reboot un-wedges it; capture still black on this Quadro even with mirror driver + accel
+       off + 16bpp — treat VNC as dead for viewing; use SMB + the box's physical monitor.)
+  THE AUTONOMOUS SMB TEST LOOP (robust, VNC-free):
+    1. A WATCHER must be RUNNING on the box: `bm/runwatch.bat` (user double-clicks once in the
+       console; it loops, drops `watcher.txt` heartbeat). If absent on resume, ask user to run it.
+    2. Fire a test:  `printf 'selftest.com\r\n' > /tmp/xpshare/cmd.txt`
+    3. Watcher (~2s poll) runs `rt.bat selftest.com`, which: pulls fresh host from bm/, sets IFEO
+       Debugger→C:\ntvdmex\ntvdmhost.exe, writes target.txt, drops the autoexit marker, runs
+       dosstub (→ntvdm→our host; host AUTO-EXITS when the DOS prog exits), then copies
+       C:\ntvdmex\ntvdmhost.log → `result_selftest.com.log` on the share.
+    4. Read `/tmp/xpshare/result_selftest.com.log`. The host log includes the guest's console
+       output ("==> DOS OUTPUT: [...]") so PASS/FAIL tables are readable.
+  DEPLOY A NEW HOST: build → `cp build/ntvdmhost.exe /tmp/xpshare/bm/ntvdmhost.exe`. rt.bat
+       auto-pulls it every run — no separate stage step. (Bump the version string to confirm.)
+  SHARE LAYOUT: `bm/` = {ntvdmhost.exe(v67), dosstub.com, rt.bat, stageall.bat, runwatch.bat,
+       tests/ (32 binaries: selftest, memtest, xms/ems/timer/mouse/key, io*, mode/vga/vesa,
+       dpmitest, pmfault, pm32*, i310102, dpmiback, ...)}. Root: result_*.log, watcher.txt, cmd.txt.
+  ONLY TEST NTVDMEX (per user): do NOT run stock ntvdm — XP's ntvdm is known-good, and a stock
+       full-screen DOS run is what wedges VNC. NTVDMEX is windowed.
+
+FINDINGS THIS SESSION (bare metal): ════════════════════════════════════════════════════════
+  • **selftest = 8/8 PASS on real hardware** (DOS mem, File I/O, XMS, EMS, PIT, mouse, keyboard,
+    video 13h). Real mode is SOLID. Confirmed autonomously via the SMB loop.
+  • **event-3 = the real-hardware I/O reflect.** HVF reflected IOPL-0 IN/OUT as VTIB_EVENT=0;
+    real silicon uses **VTIB_EVENT=3**. That was the ONLY diff blocking real-mode I/O (Skyroads
+    stopped on `IN AL,DX`). Fixed (VDM_EVENT_IO_HW). host_try_io self-validates so routing is safe.
+  • **dpmitest (16-bit PM): the SWITCH works, the kernel WON'T RUN PM.** svc10/11 install the LDT
+    (CS=0x0f valid, AR=0xfa present/code/DPL3, base 0x1000), then the very first PM step returns
+    **event 3 at a harmless `mov ax,0x0400` (b8 00 04), EIP UNADVANCED** — i.e. the kernel declines
+    to execute our PM VDM. On HVF this class of problem was a SILENT terminate; on real silicon it's
+    an OBSERVABLE event with full state = real #18 progress. Likely cause (matches old #18 RE): stock
+    ntvdm does a fuller PM-run init — `VdmPMCliControl` (NtVdmControl service 13) + PM interrupt-flag
+    control (fcn.0f00532e reads getMSW/PE bit) — that our host skips; HVF was lenient, real silicon isn't.
+  • Current build: `g_dpmi_use_interp = 0` (real-CPU kernel PM path). Interpreter fallback (=1,
+    ran i310102/DPMIBACK on HVF) is UNTESTED on bare metal.
+
+▶▶ RESUME — NEXT STEPS (in order): ════════════════════════════════════════════════════════
+  0. COMMIT the uncommitted bare-metal fixes (event-3, auto-exit, filebuf, PM-fault diagnostic).
+  1. CRACK the PM-entry event 3 (the Doom/DOS4GW gate, now tractable because observable):
+     (a) on the unhandled event 3, try RESUME/step a few times — does EIP advance (per-instruction
+         trap) or stick (hard "won't run PM")? (b) RE stock ntvdm's PM-run path and replicate the
+         `VdmPMCliControl`/service-13 + MSW/PE init before VdmStartExecution; (c) confirm whether a
+         PM `C4 C4` BOP reflects as event 4 on real HW (it did on HVF) — if PM BOPs also changed, the
+         INT-patch scheme needs the same event-3 treatment.
+  2. Quick win option: build with `g_dpmi_use_interp = 1`, fire `i310102.exe` / `dpmiback.com` — proves
+     16-bit DPMI works on bare metal via the interpreter regardless of the kernel PM issue.
+  3. Skyroads should now render (event-3 I/O fix) — but it's graphical, and VNC viewing is dead;
+     needs the user's physical monitor, or a working capture. Real-mode game validation still pending.
+
+HVF VM: retired for this work but still on disk (vm/xp.qcow2). The Doom shareware was extracted to
+  C:\DOOMS on that VM (irrelevant now). Do NOT chase DOS/4GW on HVF — it SIGABRTs on paged PM.
+
+───────────────────────────────────────────────────────────────────────────────────────────────
+(Everything below is the SESSION-7 checkpoint — HISTORICAL context; superseded by the above.)
+───────────────────────────────────────────────────────────────────────────────────────────────
+
+═══════════════════════════════════════════════════════════════════════════════
+██ CHECKPOINT — 2026-08-18 (session 7). ██
 ═══════════════════════════════════════════════════════════════════════════════
 
 BIG PICTURE: the 32-bit DOS/4GW real-CPU foundation is now PROVEN END-TO-END and
