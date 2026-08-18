@@ -41,6 +41,24 @@ COMMITS THIS SESSION (branch `spike/dpmi-16bit-switch`, all local -- PUSH when r
 RIG: RECOVERED + GREEN (selftest 8/8). v69 deployed and RE-CONFIRMED on real HW: dpmitest runs
 the full 16-bit DPMI surface + clean 4Ch exit, log is ~3 KB (cap works, no regression).
 
+★ REMOTE-TEST UPGRADE (session 9, box is "not easily accessible" -> minimise human touch):
+  • HOST SELF-SCREENSHOT (v70, commit fee5702): present_ddraw_save_bmp() dumps the 8bpp back-buffer
+    (occlusion-proof) to C:\ntvdmex\shotNN.bmp every ~2s in headless mode (UI-thread timer, capped 40);
+    rt.bat ships them to the share as `shot_<test>_shotNN.bmp`. So GRAPHICAL runs (Skyroads, pm32gfx,
+    mode13, pm32irq box-march) are now verifiable REMOTELY by reading/diffing BMPs -- VNC/monitor no
+    longer needed. Palette byte-order matches gdi_present (0xAARRGGBB -> RGBQUAD). NOT yet end-to-end
+    tested (needs the watcher up).
+  • runwatch.bat now SELF-INSTALLS to `%ALLUSERSPROFILE%\Start Menu\Programs\Startup\ntvdmex-watch.bat`
+    and refreshes watcher.txt every loop (real heartbeat). After ONE bootstrap double-click, every
+    reboot AUTO-STARTS the watcher (box auto-logs in) -> no more per-reboot human action. Combined with
+    v69's headless caps (infinite/wedged runs self-exit in 30s), the rig is now largely hands-off.
+  • Can't bootstrap autostart purely over SMB: guest can mount only ntvdmex + SharedDocs (=All Users\
+    Documents); C$/ADMIN$ are DENIED (simple file sharing), and Startup is outside those shares. So the
+    ONE remaining human action is a single double-click of bm\runwatch.bat; it's self-perpetuating after.
+  • Shares (smbutil view, guest): ntvdmex, SharedDocs (rw), C$/ADMIN$ (denied), IPC$. Ports: 445/139
+    open, 135 closed -> NO remote-exec / remote-shutdown RPC reachable.
+  BM SCRIPTS (rt.bat, runwatch.bat) live on the share, NOT in the repo -- consider snapshotting them.
+
 pm32irq REFRAMED (it was NOT a code bug). `pm32irq.com` is an INFINITE mode-13h animation demo
 (`jmp .frame`; never calls INT 21h 4Ch) -- like animate/bounce/mode13/pm32gfx. Under the headless
 SMB auto-exit harness it ran the PM loop forever (wedged rt.bat's `start /wait` -> wedged the
