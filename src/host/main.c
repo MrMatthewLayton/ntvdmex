@@ -36,6 +36,11 @@
 #define LOG_PATH    "C:\\ntvdmex\\ntvdmhost.log"
 #define TARGET_PATH "C:\\ntvdmex\\target.txt"
 #define AUTOEXIT_PATH "C:\\ntvdmex\\autoexit"   /* marker: headless test mode -> exit when the guest exits */
+/* Opt-in screenshot flag. Lives on the SMB SHARE folder so the remote driver can
+   toggle it (create it before a GRAPHICAL test, remove it otherwise). Non-graphical
+   tests (selftest/dpmitest) then never touch the self-capture path -- keeping the
+   common case off the capture code entirely. */
+#define CAPTURE_FLAG "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\capture.flag"
 
 /* Offset, within DOS_HDLR_SEG, of the XMS API far-call entry stub (BOP 0x43; RETF).
    Lives just past the INT 1Ah stub (which ends at 0x40) and the INT 2Fh stub (4 bytes
@@ -138,6 +143,7 @@ static BYTE  g_int_vec[0x10000];            /* per-CS-offset: original INT vecto
 static volatile LONG  g_dpmi_iter     = 0;  /* host PM-loop iteration heartbeat (pre-enter) */
 static volatile LONG  g_dpmi_done     = 0;  /* PM loop finished (client exited cleanly) -> watchdog must NOT kill */
 static int            g_headless      = 0;  /* AUTOEXIT marker present: SMB test harness -> bound infinite runs */
+static int            g_capture       = 0;  /* CAPTURE_FLAG present: opt-in self-screenshot for graphical tests */
 #define PM_HEADLESS_MS 30000                /* headless PM-loop wall-clock cap (an infinite visual demo self-exits) */
 static volatile DWORD g_dpmi_enter_cs = 0;  /* guest CS handed to the last dpmi_enter_pm    */
 static volatile DWORD g_dpmi_enter_eip= 0;  /* guest EIP handed to the last dpmi_enter_pm   */
@@ -709,7 +715,7 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
            is verifiable off the SMB share -- VNC capture is dead on the real box. The
            snapshot is owned by this UI thread, so no extra lock is needed; capped at
            40 frames so a long run never fills the disk. rt.bat copies shot*.bmp off. */
-        if (g_headless) {
+        if (g_capture) {
             static unsigned cap_tick = 0, cap_seq = 0;
             if ((cap_tick++ % 60) == 0 && cap_seq < 40) {
                 char path[] = "C:\\ntvdmex\\shot00.bmp";
@@ -2230,7 +2236,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     (void)hInst; (void)hPrev; (void)lpCmd; (void)nShow;
     progpath[0] = 0; args[0] = 0;
 
-    p = zput(p, "NTVDMEX clean host\r\nSTAGE0: WinMain entered [build dpmi-harness-v70]\r\n");
+    p = zput(p, "NTVDMEX clean host\r\nSTAGE0: WinMain entered [build dpmi-harness-v71]\r\n");
     log_write(LOG_PATH, report, p);
     serial_init();                                      /* DPMI harness: COM1 log sink */
     serial_out(report, p);
@@ -2239,6 +2245,9 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
        pm32irq/animate never calls INT 21h 4Ch), else rt.bat's `start /wait` blocks forever
        and wedges the watcher (session-9). Latch it once here (the exit path deletes the marker). */
     g_headless = (GetFileAttributesA(AUTOEXIT_PATH) != INVALID_FILE_ATTRIBUTES);
+    /* Self-screenshot only when explicitly requested (graphical tests) AND headless, so
+       the common non-graphical tests never enter the capture path. Latched once here. */
+    g_capture  = g_headless && (GetFileAttributesA(CAPTURE_FLAG) != INVALID_FILE_ATTRIBUTES);
     AddVectoredExceptionHandler(1, dpmi_crash_veh);     /* DPMI spike crash diagnostic */
 
     /* CSRSS command-info: receive buffers + first-command state + IFEO task id. */
@@ -2443,7 +2452,23 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     m.tib = tib; m.out = dosout; m.out_cap = sizeof(dosout); m.out_len = 0;
     (void)guard;
     { static uint32_t s_last_fault = 0; static int s_storm = 0;
+    DWORD rm_start_tick = GetTickCount();   /* headless wall-clock cap origin (real-mode) */
     while (g_running) {
+        /* Headless safety (session-9): the real-mode loop has no iteration cap so
+           interactive/animated programs run free -- but under the SMB auto-exit harness
+           a hung or infinite real-mode program (or a host bug) would run forever and
+           wedge rt.bat's `start /wait`, and the box is not easily accessible to unwedge.
+           So in headless mode bound it by wall clock: the host self-exits, rt.bat returns,
+           the watcher survives. (The PM loop got this in v69; the real-mode loop needs it
+           too -- a real-mode hang was the one path that could still permanently wedge the
+           rig.) GetTickCount per iteration is cheap; the loop runs once per event/BOP. */
+        if (g_headless && GetTickCount() - rm_start_tick > PM_HEADLESS_MS) {
+            p = zput(p, "STAGE2: headless time cap (");
+            p = zhex(p, PM_HEADLESS_MS); p = zput(p, " ms) reached -> exiting"
+                     " (long/hung real-mode run; screenshots captured if graphical)\r\n");
+            log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+            break;
+        }
         /* Deliver a pending PIT IRQ0 as INT 08h when the guest's main-line
            interrupts are enabled. We regain control at event boundaries, almost
            always inside a BOP stub (CS == DOS_HDLR_SEG) where the LIVE IF is the
