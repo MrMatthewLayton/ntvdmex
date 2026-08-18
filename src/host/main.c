@@ -113,7 +113,7 @@ static present_ddraw g_pd;
 static xms_state    g_xms;       /* M4: XMS extended-memory manager           */
 static ems_state    g_ems;       /* M4: EMS expanded-memory manager           */
 static volatile LONG g_irq0_pending = 0;    /* PIT raised IRQ0 (UI thread sets, V86 thread delivers) */
-static volatile LONG g_irq1_pending = 0;    /* keyboard raised IRQ1 (UI sets, V86 delivers INT 09h)  */
+static volatile LONG g_irq1_pending = 0;    /* count of un-delivered keyboard IRQ1s (one per scancode byte) */
 static int g_pm_irq0_latch = 0;             /* #2b: a virtual IRQ0 awaiting injection into the PM hook */
 static int g_in_pm_irq     = 0;             /* #2b: re-entrancy guard while inside an injected PM ISR   */
 static CRITICAL_SECTION g_lock;             /* serialises all bus dispatch       */
@@ -199,7 +199,7 @@ static void serial_out(const char *buf, const char *end)
 static HMENU        g_savedmenu;            /* stashed menu while hidden           */
 
 static void host_irq_sink(void *ctx, uint8_t irq)
-{ (void)ctx; if (irq == 0) g_irq0_pending = 1; else if (irq == 1) g_irq1_pending = 1; }
+{ (void)ctx; if (irq == 0) g_irq0_pending = 1; else if (irq == 1) InterlockedIncrement(&g_irq1_pending); }
 
 /* Real/synthesised real-mode interrupt dispatch. The guest runs cooperatively
    (we only regain control at event boundaries), so when a hardware IRQ becomes
@@ -741,10 +741,12 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
         {
             uint8_t rawsc = (uint8_t)((lp >> 16) & 0xFF);
             if (rawsc) {
+                int ext = (lp & 0x01000000) != 0;   /* extended (arrows, RCtrl, ...) -> E0 prefix */
                 EnterCriticalSection(&g_lock);
+                if (ext) { vdd_input_push_scancode(&g_in, 0xE0); InterlockedIncrement(&g_irq1_pending); }
                 vdd_input_push_scancode(&g_in, rawsc);       /* make code */
                 LeaveCriticalSection(&g_lock);
-                g_irq1_pending = 1;
+                InterlockedIncrement(&g_irq1_pending);       /* one IRQ1 per scancode byte */
                 if (g_key_event) SetEvent(g_key_event);
             }
         }
@@ -777,10 +779,12 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
         {
             uint8_t rawsc = (uint8_t)((lp >> 16) & 0xFF);
             if (rawsc) {
+                int ext = (lp & 0x01000000) != 0;
                 EnterCriticalSection(&g_lock);
+                if (ext) { vdd_input_push_scancode(&g_in, 0xE0); InterlockedIncrement(&g_irq1_pending); }
                 vdd_input_push_scancode(&g_in, (uint8_t)(rawsc | 0x80));  /* break code */
                 LeaveCriticalSection(&g_lock);
-                g_irq1_pending = 1;
+                InterlockedIncrement(&g_irq1_pending);
                 if (g_key_event) SetEvent(g_key_event);
             }
         }
@@ -2209,7 +2213,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     (void)hInst; (void)hPrev; (void)lpCmd; (void)nShow;
     progpath[0] = 0; args[0] = 0;
 
-    p = zput(p, "NTVDMEX clean host\r\nSTAGE0: WinMain entered [build dpmi-harness-v63]\r\n");
+    p = zput(p, "NTVDMEX clean host\r\nSTAGE0: WinMain entered [build dpmi-harness-v64]\r\n");
     log_write(LOG_PATH, report, p);
     serial_init();                                      /* DPMI harness: COM1 log sink */
     serial_out(report, p);
@@ -2443,7 +2447,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
            scancode is already queued for port 0x60; INT 09h vectors through IVT[9]
            to the game's own handler (or our IRET stub if it hasn't hooked one).
            Excludes re-entry into our INT 08h (0x34) and INT 09h (0x4C) stubs. */
-        if (g_irq1_pending) {
+        if (g_irq1_pending > 0) {
             DWORD cs = VDM_REG(tib, VTIB_CS) & 0xFFFF, ip = VDM_REG(tib, VTIB_EIP) & 0xFFFF;
             DWORD fl;
             if (cs == DOS_HDLR_SEG) {
@@ -2454,7 +2458,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             }
             if ((fl & 0x200) && !(cs == DOS_HDLR_SEG &&
                                   ((ip >= 0x34 && ip < 0x3A) || (ip >= 0x4C && ip < 0x50)))) {
-                g_irq1_pending = 0;
+                InterlockedDecrement(&g_irq1_pending);   /* one INT 09h per queued scancode byte */
                 inject_int(tib, 0x09);
             }
         }

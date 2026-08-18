@@ -44,6 +44,20 @@ def main():
     elif a[0] == "key":
         keys = [{"type": "qcode", "data": k} for k in a[1:]]
         print(do(f, {"execute": "send-key", "arguments": {"keys": keys}}))
+    elif a[0] in ("keydown", "keyup"):        # discrete press / release (for held keys)
+        down = (a[0] == "keydown")
+        do(f, {"execute": "input-send-event", "arguments": {"events": [
+            {"type": "key", "data": {"down": down,
+             "key": {"type": "qcode", "data": a[1]}}}]}})
+        print(a[0], a[1])
+    elif a[0] == "hold":                       # hold <qcode> <ms> -- press, wait, release
+        qc = a[1]; ms = int(a[2]) if len(a) > 2 else 500
+        do(f, {"execute": "input-send-event", "arguments": {"events": [
+            {"type": "key", "data": {"down": True, "key": {"type": "qcode", "data": qc}}}]}})
+        time.sleep(ms / 1000.0)
+        do(f, {"execute": "input-send-event", "arguments": {"events": [
+            {"type": "key", "data": {"down": False, "key": {"type": "qcode", "data": qc}}}]}})
+        print("held", qc, ms)
     elif a[0] == "type":                                # type an ASCII string
         # NB: this VM uses a UK keyboard layout. The physical US-backslash key
         # (qcode "backslash") types '#' here; the real '\' is the extra key next to
