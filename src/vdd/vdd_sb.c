@@ -133,6 +133,7 @@ static void sb_exec(sb_state *st)
 
 static void sb_dsp_write(sb_state *st, uint8_t v)
 {
+    st->dsp_writes++;
     if (st->want_args) {                        /* collecting arguments            */
         if (st->nargs < SB_ARG_MAX) st->args[st->nargs++] = v;
         if (st->nargs >= st->want_args) { sb_exec(st); st->cmd = 0; st->want_args = 0; st->nargs = 0; }
@@ -246,6 +247,7 @@ uint32_t vdd_sb_render(sb_state *st, int16_t *out, uint32_t frames)
                auto-init it reloads and keeps streaming (the ring buffer every DOS
                game uses); single-cycle stops until reprogrammed. */
             st->irq_pending = 1;
+            st->blocks++;
             vdd_raise_irq(st->bus, st->irq);
             if (st->xfer_mode == SB_XFER_AUTO && !ended) st->block_left = st->block_len;
             else                                        st->xfer_mode  = SB_XFER_IDLE;
@@ -261,10 +263,12 @@ void vdd_sb_reset(void *self)
     vdd_bus *bus = st->bus; dma_state *dma = st->dma; opl_state *opl = st->opl;
     uint16_t base = st->base;
     uint8_t irq = st->irq, d8 = st->dma8, d16 = st->dma16;
+    uint32_t dw = st->dsp_writes, bl = st->blocks;
     unsigned i; uint8_t *p = (uint8_t *)st;
     for (i = 0; i < sizeof(*st); ++i) p[i] = 0;
     st->bus = bus; st->dma = dma; st->opl = opl;
     st->base = base; st->irq = irq; st->dma8 = d8; st->dma16 = d16;
+    st->dsp_writes = dw; st->blocks = bl;
     st->rate_hz = 22050;
     st->block_len = 1;
     st->mix[0x22] = 0xCC;                       /* master volume, powered-up value */

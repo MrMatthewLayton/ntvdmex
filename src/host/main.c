@@ -34,6 +34,9 @@
 #include "vdd_dma.h"
 #include "vdd_opl.h"
 #include "vdd_sb.h"
+#include "vdd_mpu.h"
+#include "vdd_audio.h"
+#include "audio_wave.h"
 #include "present_ddraw.h"
 
 #define LOG_PATH    "C:\\ntvdmex\\ntvdmhost.log"
@@ -121,6 +124,8 @@ static speaker_state g_spk;      static ntvdd g_spk_dev;
 static dma_state    g_dma;       static ntvdd g_dma_dev;
 static opl_state    g_opl;       static ntvdd g_opl_dev;
 static sb_state     g_sb;        static ntvdd g_sb_dev;
+static mpu_state    g_mpu;       static ntvdd g_mpu_dev;
+static audio_state  g_audio;     static audio_wave g_wave;
 static present_ddraw g_pd;
 static xms_state    g_xms;       /* M4: XMS extended-memory manager           */
 static ems_state    g_ems;       /* M4: EMS expanded-memory manager           */
@@ -243,7 +248,18 @@ static void host_irq_sink(void *ctx, uint8_t irq)
     (void)ctx;
     if (irq == 0) g_irq0_pending = 1;
     else if (irq == 1) InterlockedIncrement(&g_irq1_pending);
-    else if (irq < 8) InterlockedExchange(&g_irqn_pending[irq], 1);
+    else if (irq < 8) {
+        InterlockedExchange(&g_irqn_pending[irq], 1);
+        /* A device IRQ is raised from the AUDIO thread, while the guest may be
+           spinning in V86 code that never faults -- and our exec loop only gets a
+           turn when the guest traps, so the interrupt would never be injected.
+           Setting the kernel's FIXED_NTVDMSTATE hardware-interrupt-pending bit is
+           how a VDM asks to be preempted: the kernel breaks out of V86 execution
+           and hands us event 3, which the exec loop already services. Without
+           this an SB block completes, the IRQ is latched, and the game waits
+           forever inside its own handler. */
+        *(volatile DWORD *)(ULONG_PTR)0x714 |= 1u;
+    }
 }
 
 
@@ -377,6 +393,23 @@ static void opl_pump_time(void)
     LeaveCriticalSection(&g_lock);
 }
 
+/* The audio thread's fill callback. Mixing touches the DMA controller, guest
+   memory and the IRQ path, so it takes the same lock the exec thread uses. */
+static void host_audio_fill(void *ctx, int16_t *out, uint32_t frames)
+{
+    (void)ctx;
+    EnterCriticalSection(&g_lock);
+    vdd_audio_mix(&g_audio, out, frames);
+    LeaveCriticalSection(&g_lock);
+}
+
+/* MPU-401 output -> the host's MIDI synth (XP ships a GS Wavetable device). */
+static void host_midi_sink(void *ctx, uint32_t msg)
+{
+    (void)ctx;
+    audio_wave_midi(&g_wave, msg);
+}
+
 /* Headless deadline watchdog (session-9). A headless run must self-bound even when the
    guest blocks INSIDE a host INT handler -- e.g. a blocking INT 16h/21h key read at a
    "press any key" prompt or a game menu (host_conin + the INT 16h loops spin until
@@ -443,6 +476,12 @@ static DWORD WINAPI headless_deadline_thread(LPVOID pv)
         q = zput(q, " irq0_skip=0x");   q = zhex(q, g_irq0_skip);
         q = zput(q, " intpend=0x");     q = zhex(q, g_ev_intpend);
         q = zput(q, " irqn_inj=0x");    q = zhex(q, g_irqn_inj);
+        q = zput(q, "\r\n  audio: silent=0x"); q = zhex(q, (DWORD)g_wave.silent);
+        q = zput(q, " mixed=0x");        q = zhex(q, g_audio.frames_mixed);
+        q = zput(q, " sb_dspwr=0x");     q = zhex(q, g_sb.dsp_writes);
+        q = zput(q, " sb_blocks=0x");    q = zhex(q, g_sb.blocks);
+        q = zput(q, " sb_mode=0x");      q = zhex(q, (DWORD)g_sb.xfer_mode);
+        q = zput(q, " sb_rate=0x");      q = zhex(q, g_sb.rate_hz);
         q = zput(q, " bda_tick=0x");    q = zhex(q, ((DWORD)peekw(0x46E) << 16) | peekw(0x46C));
         q = zput(q, "\r\n");
         log_append(LOG_PATH, b, q); serial_out(b, q); q = b;
@@ -2615,7 +2654,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     (void)hInst; (void)hPrev; (void)lpCmd; (void)nShow;
     progpath[0] = 0; args[0] = 0;
 
-    p = zput(p, "NTVDMEX clean host\r\nSTAGE0: WinMain entered [build dpmi-harness-v94]\r\n");
+    p = zput(p, "NTVDMEX clean host\r\nSTAGE0: WinMain entered [build dpmi-harness-v97]\r\n");
     log_write(LOG_PATH, report, p);
     serial_init();                                      /* DPMI harness: COM1 log sink */
     serial_out(report, p);
@@ -2811,6 +2850,15 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     g_sb.base = SB_DEFAULT_BASE; g_sb.irq = SB_DEFAULT_IRQ;
     g_sb_dev = vdd_sb_device(&g_sb);
     vdd_bus_add(&g_bus, &g_sb_dev);             /* Sound Blaster 16: 0x220-0x22F  */
+    g_mpu.sink = host_midi_sink;
+    g_mpu_dev = vdd_mpu_device(&g_mpu);
+    vdd_bus_add(&g_bus, &g_mpu_dev);            /* MPU-401 MIDI: 0x330/0x331      */
+    /* Start the mixer + audio thread. This is also the TRANSPORT: it is what
+       walks the SB's DMA buffer and raises the block-completion IRQ, so it must
+       run even if no sound device opens (audio_wave falls back to silent
+       pumping) -- otherwise every SB game hangs on a machine without audio. */
+    vdd_audio_init(&g_audio, &g_opl, &g_sb, AUDIO_OUT_HZ);
+    audio_wave_start(&g_wave, AUDIO_OUT_HZ, host_audio_fill, NULL);
     m.conout = host_conout; m.conctx = NULL;    /* DOS console out -> video      */
     m.conin  = host_conin;  m.cinctx = NULL;    /* DOS console in  <- keyboard   */
     m.coninnb = host_coninnb;                   /* AH=06 DL=FF non-blocking read */
@@ -2920,9 +2968,12 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
            vectored as INT 8+irq. Skip while inside our own timer/keyboard stubs. */
         { int q;
           DWORD qcs = VDM_REG(tib, VTIB_CS) & 0xFFFF, qip = VDM_REG(tib, VTIB_EIP) & 0xFFFF;
-          int in_stub = (qcs == DOS_HDLR_SEG &&
-                         ((qip >= 0x34 && qip < 0x3A) || (qip >= 0x4C && qip < 0x50)));
-          if (!in_stub && guest_if_enabled(tib)) {
+          /* Only the BOP itself is off-limits (we would re-enter mid-service);
+             once past it the guest is running a handler with IF set, and a real
+             PC delivers a device IRQ there quite happily. */
+          int in_bop = (qcs == DOS_HDLR_SEG &&
+                        ((qip >= 0x34 && qip < 0x37) || (qip >= 0x4C && qip < 0x4F)));
+          if (!in_bop && guest_if_enabled(tib)) {
               for (q = 2; q < 8; ++q) {
                   if (InterlockedExchange(&g_irqn_pending[q], 0)) {
                       g_irqn_inj++;

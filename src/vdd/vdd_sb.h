@@ -79,6 +79,9 @@ typedef struct sb_state {
     uint32_t rate_hz;          /* sample rate, from time constant or 0x41         */
     uint8_t  irq_pending;      /* block done: IRQ raised, awaiting ack            */
 
+    uint32_t dsp_writes;       /* DSP command bytes accepted (diagnostics)       */
+    uint32_t blocks;           /* blocks completed -> IRQs raised                */
+
     /* mixer */
     uint8_t  mix_index;
     uint8_t  mix[256];
