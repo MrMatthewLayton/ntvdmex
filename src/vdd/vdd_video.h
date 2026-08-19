@@ -86,4 +86,18 @@ void    vga_planar_write(video_state *st, uint32_t off, uint8_t cpu);
 uint8_t vga_planar_read (video_state *st, uint32_t off);   /* loads latches        */
 int     vdd_video_planar_active(const video_state *st);    /* 1 in mode 12h        */
 
+/* WHERE THE BIOS FONTS LIVE IN GUEST MEMORY.
+   INT 10h AH=11h AL=30h hands the caller a POINTER to the character generator, and plenty of
+   DOS games take it and render text themselves rather than going through the BIOS. We were
+   answering that call with the metrics (CX, DL) but never setting ES:BP -- so the caller drew
+   from whatever ES:BP happened to hold, which is exactly the glyph-shaped noise Skyroads put
+   on screen in place of "ROAD COMPLETED". The tables therefore need a real address the guest
+   can read. The B0000 half of the text aperture is already mapped as RAM and is untouched by
+   a VGA game (our text output lives at B8000), so the fonts go there. */
+#define VDD_FONT8X16_SEG 0xB000       /* 256 chars * 16 bytes = 0x1000 */
+#define VDD_FONT8X8_SEG  0xB100       /* 256 chars *  8 bytes = 0x0800 */
+
+/* Publish both fonts into guest memory. Call once at start-up. */
+void vdd_video_install_fonts(video_state *st);
+
 #endif /* NTVDMEX_VDD_VIDEO_H */

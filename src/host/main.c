@@ -3252,7 +3252,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     (void)hInst; (void)hPrev; (void)lpCmd; (void)nShow;
     progpath[0] = 0; args[0] = 0;
 
-    p = zput(p, "NTVDMEX clean host\r\nSTAGE0: WinMain entered [build dpmi-harness-v143]\r\n");
+    p = zput(p, "NTVDMEX clean host\r\nSTAGE0: WinMain entered [build dpmi-harness-v144]\r\n");
     log_write(LOG_PATH, report, p);
     serial_init();                                      /* DPMI harness: COM1 log sink */
     serial_out(report, p);
@@ -3486,12 +3486,15 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     vdd_bus_init(&g_bus, NULL);
     vdd_bus_set_sinks(&g_bus, host_irq_sink, NULL, NULL, NULL);  /* host presents directly */
     g_pic_dev = vdd_pic_device(&g_pic);      /* before the PIT: it gates every IRQ */
+
     vdd_bus_add(&g_bus, &g_pic_dev);
     g_pit_dev = vdd_pit_device(&g_pit);
     vdd_bus_add(&g_bus, &g_pit_dev);
     g_vid.vmem = (uint8_t *)VID_APERTURE_BASE;  /* the mapped A0000 aperture (RAM) */
     g_vid_dev = vdd_video_device(&g_vid);
     vdd_bus_add(&g_bus, &g_vid_dev);
+    /* AFTER the video VDD is on the bus (it needs st->bus to resolve a guest address). */
+    vdd_video_install_fonts(&g_vid);            /* real glyph data behind INT 10h 1130h */
     g_in_dev = vdd_input_device(&g_in);
     vdd_bus_add(&g_bus, &g_in_dev);             /* keyboard: claims INT 16h      */
     g_spk.pit = &g_pit;                         /* speaker tone <- PIT channel 2 */

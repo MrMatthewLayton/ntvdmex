@@ -285,8 +285,27 @@ static void int10(void *self, ntvdd_regs *r)
         }
         break; }
     case 0x11:                                         /* character generator     */
-        if (al == 0x30) {                              /* get current font info   */
-            s_cx(r, 16);                               /* bytes per character     */
+        if (al == 0x30) {                              /* get font info -> ES:BP  */
+            /* THE POINTER IS THE POINT. BH selects which table the caller wants, and the
+               answer is returned in ES:BP with CX = bytes per character. Returning only
+               CX/DL (as we used to) leaves the caller drawing from whatever ES:BP already
+               held -- which is why Skyroads' "ROAD COMPLETED" came out as glyph-shaped
+               noise. BH: 0/1 = the INT 1Fh / INT 43h vectors, 2 = 8x14, 3 = 8x8 lower,
+               4 = 8x8 upper (chars 128-255), 5 = 9x14 alt, 6 = 8x16, 7 = 9x16 alt. We hold
+               two real tables and answer every code from the nearer of the two. */
+            uint8_t bh = (uint8_t)((r_bx(r) >> 8) & 0xFF);
+            uint16_t seg = VDD_FONT8X16_SEG, off = 0, bpc = 16;
+            switch (bh) {
+            case 0x03: seg = VDD_FONT8X8_SEG;  off = 0;      bpc = 8;  break;
+            case 0x00:
+            case 0x04: seg = VDD_FONT8X8_SEG;  off = 128 * 8; bpc = 8; break;
+            case 0x01:
+            case 0x02:
+            case 0x05: seg = VDD_FONT8X16_SEG; off = 0;      bpc = 14; break;
+            default:   seg = VDD_FONT8X16_SEG; off = 0;      bpc = 16; break;
+            }
+            r->es = seg; r->ebp = off;
+            s_cx(r, bpc);                              /* bytes per character     */
             s_dx(r, (uint16_t)(st->rows ? st->rows - 1 : 24));  /* DL = rows-1     */
         }
         break;
@@ -460,6 +479,27 @@ static void status_in(void *self, uint16_t port, uint8_t w, uint32_t *v)
     video_state *st = (video_state *)self; (void)port; (void)w;
     st->retrace ^= 0x09;                            /* toggle retrace(3) + disp-en(0) */
     *v = st->retrace;
+}
+
+/* Copy both character generators into guest-visible memory so the pointer handed out by
+   INT 10h AH=11h AL=30h resolves to real glyph data. The 8x8 table is DERIVED from the 8x16
+   one -- each output row is the OR of the two rows it replaces, which keeps thin horizontal
+   strokes that plain decimation would drop. It is a faithful-enough 8x8, not the authentic
+   IBM ROM design; if a game's text ever looks subtly wrong in shape rather than garbled,
+   this is the thing to replace with real 8x8 glyph data. */
+void vdd_video_install_fonts(video_state *st)
+{
+    uint8_t *f16, *f8;
+    unsigned c, y;
+    if (!st || !st->bus) return;           /* called before the VDD joined the bus */
+    f16 = (uint8_t *)vdd_map_flat(st->bus, VDD_FONT8X16_SEG, 0);
+    f8  = (uint8_t *)vdd_map_flat(st->bus, VDD_FONT8X8_SEG, 0);
+    if (!f16 || !f8) return;
+    for (c = 0; c < 256; ++c) {
+        const uint8_t *gl = vga_font_8x16[c];
+        for (y = 0; y < 16; ++y) f16[c * 16 + y] = gl[y];
+        for (y = 0; y < 8; ++y)  f8[c * 8 + y] = (uint8_t)(gl[y * 2] | gl[y * 2 + 1]);
+    }
 }
 
 /* B8000 window hook (for the off-VM test; the live host maps the aperture RAM
