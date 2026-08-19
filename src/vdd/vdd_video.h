@@ -65,6 +65,8 @@ typedef struct video_state {
     uint8_t  bit_mask;     /* GR8 (reset 0xFF)                                     */
     uint8_t  latch[4];     /* per-plane read latches                               */
     uint8_t  retrace;      /* Input Status 1 (3DA): toggled so vsync polls advance  */
+    uint8_t  opl_index;    /* Adlib/OPL2 (388/389): last register selected          */
+    uint8_t  opl_armed;    /* OPL2 timer-1 armed -> status read returns 0xC0 (detect) */
     uint8_t  fb[VID_FB_MAX];            /* text glyph / planar render target        */
     int      dirty;
     ntvdd_frame frame;

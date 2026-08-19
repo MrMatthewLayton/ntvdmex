@@ -963,6 +963,47 @@ static int host_try_io(volatile BYTE *tib, vdd_bus *bus)
     return 1;
 }
 
+/* Retro I/O servicer for the real-hardware event-3 reflect. On this XP box an IOPL-0
+   IN/OUT #GP is reflected as VTIB_EVENT=3 with CS:IP pointing at the instruction AFTER
+   the faulting IN/OUT (EIP already advanced past it) -- so host_try_io, which decodes
+   AT CS:IP, sees the next op (e.g. a MOV in Skyroads' vblank poll) and declines. Here
+   we decode the IN/OUT that ENDS at CS:IP and service it WITHOUT advancing EIP: a DX-form
+   (1 byte: EC/ED/EE/EF at IP-1, optional 66 prefix at IP-2) or an imm-form (2 bytes:
+   E4-E7 at IP-2, port imm at IP-1). Returns 1 if serviced. */
+static int host_try_io_retro(volatile BYTE *tib, vdd_bus *bus)
+{
+    DWORD cs = VDM_REG(tib, VTIB_CS) & 0xFFFF;
+    DWORD ip = VDM_REG(tib, VTIB_EIP) & 0xFFFF;
+    volatile BYTE *seg = (volatile BYTE *)(cs << 4);
+    BYTE op; int is_in, width, opsize = 2; uint16_t port; uint32_t val, eax;
+    if (ip < 1) return 0;
+    op = seg[ip - 1];
+    if (op == 0xEC || op == 0xED || op == 0xEE || op == 0xEF) {   /* DX-form (1 byte) */
+        if (ip >= 2 && seg[ip - 2] == 0x66) opsize = 4;           /* 66 prefix -> 32b */
+        is_in = (op == 0xEC || op == 0xED);
+        width = (op == 0xEC || op == 0xEE) ? 1 : opsize;
+        port  = (uint16_t)VDM_REG(tib, VTIB_EDX);
+    } else if (ip >= 2 && ((op = seg[ip - 2]) == 0xE4 || op == 0xE5 ||
+                            op == 0xE6 || op == 0xE7)) {          /* imm-form (2 byte) */
+        is_in = (op == 0xE4 || op == 0xE5);
+        width = (op == 0xE4 || op == 0xE6) ? 1 : opsize;
+        port  = seg[ip - 1];                                      /* imm8 port        */
+    } else {
+        return 0;                                                 /* no I/O ends here */
+    }
+    eax = VDM_REG(tib, VTIB_EAX);
+    if (is_in) {
+        val = 0; vdd_bus_io(bus, port, (uint8_t)width, 1, &val);
+        if (width == 1)      VDM_REG(tib, VTIB_EAX) = (eax & 0xFFFFFF00u) | (val & 0xFF);
+        else if (width == 2) VDM_REG(tib, VTIB_EAX) = (eax & 0xFFFF0000u) | (val & 0xFFFF);
+        else                 VDM_REG(tib, VTIB_EAX) = val;
+    } else {
+        val = (width == 1) ? (eax & 0xFF) : (width == 2) ? (eax & 0xFFFF) : eax;
+        vdd_bus_io(bus, port, (uint8_t)width, 0, &val);
+    }
+    return 1;                              /* EIP already past the I/O -- do NOT advance */
+}
+
 /* True if selector `sel`'s descriptor has the D/B (32-bit default) bit set. The bit
    lives in g_ldt[].flags bit 2 (descriptor byte-6 bit 6). All 16-bit DPMI clients leave
    it 0; a DOS/4GW-class 32-bit code selector sets it (via INT 31h 0009). */
@@ -2255,7 +2296,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     (void)hInst; (void)hPrev; (void)lpCmd; (void)nShow;
     progpath[0] = 0; args[0] = 0;
 
-    p = zput(p, "NTVDMEX clean host\r\nSTAGE0: WinMain entered [build dpmi-harness-v72]\r\n");
+    p = zput(p, "NTVDMEX clean host\r\nSTAGE0: WinMain entered [build dpmi-harness-v81]\r\n");
     log_write(LOG_PATH, report, p);
     serial_init();                                      /* DPMI harness: COM1 log sink */
     serial_out(report, p);
@@ -2492,6 +2533,15 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
             break;
         }
+        /* Pump the PIT tick from THIS thread's wall clock. Normally the UI thread
+           raises IRQ0, but a heavy I/O-trap loop (e.g. Skyroads' OPL/timer delay poll
+           that faults on every IN 388h) starves the UI thread, so the guest's timer
+           would crawl (~100x too slow) and any tick-paced delay appears to hang. Set
+           the pending flag at the ~18.2 Hz BIOS rate from here; it coalesces with the
+           UI thread's flag (both just set it to 1) so there's no double-count. */
+        { static DWORD last_pit = 0; DWORD now = GetTickCount();
+          if (last_pit == 0) last_pit = now;
+          if ((DWORD)(now - last_pit) >= 55) { last_pit += 55; g_irq0_pending = 1; } }
         /* Deliver a pending PIT IRQ0 as INT 08h when the guest's main-line
            interrupts are enabled. We regain control at event boundaries, almost
            always inside a BOP stub (CS == DOS_HDLR_SEG) where the LIVE IF is the
@@ -2572,19 +2622,29 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             handled = host_try_io(tib, &g_bus);     /* single port op (no logging)     */
             LeaveCriticalSection(&g_lock);
             if (handled) continue;
+            /* real-HW event 3 reports CS:IP AFTER the faulting IN/OUT -> retro-decode the
+               I/O instruction ending at CS:IP and service it (Skyroads' vblank IN AL,DX). */
+            if (ev == VDM_EVENT_IO_HW) {
+                EnterCriticalSection(&g_lock);
+                handled = host_try_io_retro(tib, &g_bus);
+                LeaveCriticalSection(&g_lock);
+                if (handled) continue;
+            }
             if (g_a000_prot && host_interp(tib, 1) > 0) continue;  /* single A0000 access */
         }
         if (ev != VDM_EVENT_BOP) {
             DWORD csv = VDM_REG(tib, VTIB_CS) & 0xFFFF;
             DWORD ipv = VDM_REG(tib, VTIB_EIP) & 0xFFFF;
             volatile BYTE *cp = (volatile BYTE *)((csv << 4) + ipv);
-            BYTE ib[8]; unsigned k;
+            BYTE ib[8], pb[8]; unsigned k;
             for (k = 0; k < 8; ++k) ib[k] = cp[k];
+            for (k = 0; k < 8; ++k) pb[k] = (ipv >= 8) ? cp[(int)k - 8] : 0;  /* 8 bytes BEFORE CS:IP */
             p = zput(p, "STAGE2: stop event=0x"); p = zhex(p, ev);
             p = zput(p, " status=0x"); p = zhex(p, (unsigned)st);
             p = zput(p, " info=0x"); p = zhex(p, VDM_REG(tib, VTIB_EVENT_INFO));
             p = zput(p, " CS:IP=0x"); p = zhex(p, csv);
             p = zput(p, ":0x"); p = zhex(p, ipv); p = zput(p, "\r\n");
+            p = zput(p, "  bytes[CS:IP-8]: "); p = zdump(p, pb, 8);
             p = zput(p, "  bytes@CS:IP: "); p = zdump(p, ib, 8);
             p = zput(p, "  VTIB[5A8..]: "); p = zdump(p, (const void *)(tib + 0x5A8), 0x20);
             log_append(LOG_PATH, base, p); p = base;
