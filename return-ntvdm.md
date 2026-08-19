@@ -1,5 +1,161 @@
 ═══════════════════════════════════════════════════════════════════════════════
-██ CHECKPOINT — 2026-08-19 (session 9). READ THIS FIRST ON RESTART. ██
+██ CHECKPOINT — 2026-08-19 (session 10). READ THIS FIRST ON RESTART. ██
+═══════════════════════════════════════════════════════════════════════════════
+
+▶ RESTART POINT (2026-08-19, IDE restart): HEAD = `a44eae8`; branch spike/dpmi-16bit-switch;
+  **22 commits UNPUSHED**. Host = **dpmi-harness-v97**, built clean + deployed to the share `bm/`.
+  Working tree clean except (a) the pre-existing untracked files that are NOT mine (MAINICON.ico,
+  demos/, scripts/kd_*.py, scripts/trace_break.py) and (b) the freshly-compiled native test binaries
+  (tools/dostest/{dma,opl,opl_synth,sb,mpu,audio}_test) which are deliberately untracked -- repo
+  convention is that `.com` guest binaries ARE tracked (can't assemble on the target) and native
+  test binaries are NOT. Rig healthy: watcher + controld both beating, nothing wedged.
+  THIS SESSION: the sound epic (#20/#21) got its FIVE devices + mixer built and tested (520 off-VM
+  checks), and -- the bigger result -- a one-line host bug that had been freezing the guest's clock
+  since forever was found and fixed. Skyroads now detects the Sound Blaster and plays a DMA block.
+  ONE structural gap remains before it reaches gameplay; see THE BLOCKER below.
+
+★★★ THE HEADLINE FIX: **V86 guests were started with IF=0**. `VTIB_EFLAGS_V86` was `0x20002` --
+no interrupt flag. DOS enters a program with interrupts already enabled, so DOS programs never
+issue STI; the guest therefore ran with interrupts disabled for its ENTIRE life. The host's IRQ0
+delivery gate never opened, INT 08h was never injected, and the BIOS tick at 0040:006C never
+advanced. Anything paced on the tick (Skyroads' sound/PIT init, FM music, PCM block timing) hung.
+MEASURED, not inferred: iobench.com saw **34M port-I/O events with irq0_inj=0 and bda_tick frozen**,
+while `[0x714]` sat with VDM_INT_TIMER permanently pending. Fix = `0x20202` (commit `b0d92e6`).
+  ► Note `VTIB_EFLAGS_PM` ALWAYS had IF set (0x202) -- which is exactly why every protected-mode
+    timer result (run 78, pm32irq) worked while real mode "crawled ~100x too slow". That asymmetry
+    was the clue sitting in plain sight in ntvdm.h.
+
+★★ SETTING IF EXPOSED TWO KERNEL BEHAVIOURS WE HAD NOT BEEN USING (both now implemented):
+  • **event 3 is OVERLOADED.** Besides the I/O reflect it is how the kernel says "a hardware
+    interrupt is pending and the VDM can take it" -- the interrupt assist we thought we lacked.
+    It ONLY fires with IF=1, which is why session 9 never saw it. Distinguished from a genuine GP
+    fault by the kernel's own pending bits in `[0x714]&3`; we clear them, latch IRQ0, resume at the
+    SAME EIP (nothing faulted, so nothing must be stepped over).
+  • **event 1 = kernel-decoded STRING I/O** (REP INS/OUTS), previously an unhandled hard stop.
+    The kernel leaves a decoded descriptor at VTIB+0x5A8 -- observed for `rep outsb` to 0x3C9:
+    `{1, 2, port|size<<16 (0x000103C9), 1, count (0x40), seg:off (0x01000355)}`. We deliberately
+    service it from the guest's own SI/DI/CX/DF instead, depending only on fields whose meaning is
+    established; the two agreed on the run that found it.
+
+★ THROUGHPUT: THE SESSION-9 PREMISE WAS WRONG. Port I/O was NEVER the bottleneck. iobench.com on
+bare metal (tools/dostest/iobench.asm, results in result_iobench.com.log):
+    single `IN AL,DX`        1.60 us   |  `IN`+`LOOP` burst   0.082 us  (19.5x faster)
+    single `OUT DX,AL`       1.30 us   |  `REP OUTSB` (ev 1)  0.072 us  (21x, was UNSUPPORTED)
+~1.5us per trapped access is roughly real-ISA speed. The earlier "~40us" figure came from
+misreading a v80 debug counter. The burst fast path is still worth having (an AdLib register write
+spends 43 trapped accesses, 35 of them a settling delay) but it is an optimisation, not the fix.
+
+★ THE RIG CAN NO LONGER WEDGE. Clearing g_running only stops a loop that gets a turn, and a guest
+spinning in pure V86 code never returns from v86_run -- that wedged rt.bat's `start /wait`
+permanently and needed a manual `controld kill` every time. The headless backstop now waits a 3s
+grace then FORCES process exit, and on the way out logs: the frozen CS:IP + 12 bytes there, every
+counter, and the list of unclaimed ports the guest probed. That report is how this session
+diagnosed everything. (It also caught a 256-byte buffer overflow in my own reporting code that was
+silently killing the thread before it could log -- buffer is 512 and flushes in sections now.)
+
+★★ SOUND EPIC (#20/#21): ALL FIVE DEVICES + MIXER BUILT AND TESTED. **520 off-VM checks, 0 fails**
+(`./tools/dostest/run.sh`). Commits `7aaeab6` (devices) and `a44eae8` (mixer + sink).
+  src/vdd/vdd_dma.c        8237 pair: page wiring, byte-pointer flip-flop, 16-bit WORD addressing,
+                           terminal count, auto-init ring wrap.                        41 checks
+  src/vdd/vdd_opl.c        OPL2 register file + REAL timers (80us/320us). Replaces the detect stub
+                           that had been bolted onto the video VDD (it toggled status bits on every
+                           read -- told games a card existed then stranded them).       35 checks
+  src/vdd/vdd_opl_synth.c  OPL2 FM, written from documented YM3812 behaviour, NOT ported, so it is
+                           ours and MIT-clean. Log-domain like the chip: an operator is
+                           exp2(-(logsin+env+TL+KSL)) -- adds and shifts, no multiplies or floats.
+                           Tables generated by tools/gen-opl-tables.py (host is -nostdlib: no libm).
+                           PITCH MEASURES 392.0 Hz vs the chip's published 388.4 Hz formula. 10 checks
+  src/vdd/vdd_sb.c         SB16: DSP reset handshake, version/identify, mixer, rate via time
+                           constant or 0x41, single-cycle + auto-init DMA, completion IRQ + acks,
+                           FM mirror at 2x0/2x8.                                        36 checks
+  src/vdd/vdd_mpu.c        MPU-401 UART mode -> host midiOut (XP has a GS Wavetable synth, so
+                           forwarding beats an FM approximation of GM). Running status, realtime
+                           bytes interleaved mid-message, sysex.                        21 checks
+  src/vdd/vdd_audio.c      Mixer: resamples OPL (native 49716 Hz) + SB (game's rate) onto 44100 and
+                           sums, honouring the SB16 mixer's own master/voice/FM volume registers
+                           (that is what gives real headroom).                          16 checks
+  src/vdd/audio_wave.c     waveOut + midiOut, bound at RUNTIME like present_ddraw binds ddraw, so
+                           the import list is unchanged.
+  ► DESIGN CAVEATS, both flagged in-source: OPL envelope RATES are empirically anchored
+    (`OPL_EG_ANCHOR`) and are within ~2x of real silicon at the extremes -- pitch is exact and note
+    shapes are right, so it reads as a different feel, not wrong notes. Calibrate against a
+    reference recording. SB stereo is folded to mono. Neither blocks a game.
+  ► THE MIXER IS ALSO THE TRANSPORT, not just the audible path: `vdd_sb_render()` is what walks the
+    DMA buffer and raises the completion IRQ. audio_wave keeps pumping even with NO sound device
+    (discarding samples), or every SB game would hang on a silent machine.
+
+★★ SKYROADS STATUS -- the sound stack demonstrably WORKS; one gap stops gameplay.
+  Then (session 9): black screen, stuck in the OPL register-write helper, never reached video.
+  Now (v97, bare metal, `printf 'skyroads\r\n' > cmd.txt`):
+    • Renders its INTRO ROAD SCENE in mode 13h (12 shots, 3 distinct frames).
+      PNG kept at build/shots/skyroads_v88_last.png -- checkerboard road + nebula sky.
+    • **Finds the Sound Blaster at 0x220**: its probe sweep collapsed from 19 unclaimed ports
+      (0x210-0x260, finding nothing) to 4 -- `0x216 0x21A 0x21E` (probes 0x210, then STOPS) + `0x20`
+      (the PIC, which nothing claims -- see resume item 4).
+    • Programs the DSP and PLAYS A BLOCK: `sb_dspwr=6 sb_rate=0x1788 (6024 Hz) sb_blocks=1`.
+    • Audio is genuinely running: `silent=0` (waveOut OPENED) and `mixed=0x144E00` = 1,330,176
+      frames = **30.2 s of audio at 44100 Hz for a 30 s run**, i.e. real time, no underruns.
+    • Timer is healthy: `irq0_inj=483`, tick advancing.
+    • **`irqn_inj=0`** <-- THE GAP. The completion IRQ is RAISED and never DELIVERED.
+
+★★★ THE BLOCKER (pick this up first): **we cannot asynchronously interrupt a V86 guest.**
+The guest is spinning inside its own INT 1Ch handler waiting for the SB IRQ (frozen snapshot is
+CS:IP=0x0050:0x0037 = our INT 08h stub at its `CD 1C` chain, bytes `cd 1c cf ...`), and our exec
+loop only regains control when the guest TRAPS. So the injection point never arrives. This is the
+same root limitation behind two earlier symptoms this session (the rig wedge; and, before the IF
+fix, the frozen tick). Real ntvdm does not have it because the KERNEL owns interrupt delivery via
+the ICA; we run the guest in-process and are blind until it faults.
+  ► **ALREADY TRIED AND FAILED -- do not repeat:** setting the FIXED_NTVDMSTATE hardware-interrupt-
+    pending bit (`*(DWORD*)0x714 |= 1`) from the audio thread does NOT preempt a running guest.
+    v97 was built and run with exactly that: `intpend` stayed at its startup value of 1 and
+    `irqn_inj` stayed 0. The kernel evidently only consults that word at its own transition points.
+    (The mechanism DOES exist though: the kernel preempted us with event 3 at startup when IT had a
+    timer pending -- so the lever is on the kernel side, not in that user-mode word.)
+  ► Device IRQs 2-7 ARE now wired end-to-end otherwise: `host_irq_sink` previously handled only
+    IRQ 0 and 1 and silently DROPPED the SB's IRQ 5; they now latch in `g_irqn_pending[]` and
+    inject as INT (8+irq) with the same IF gating. The stub re-entrancy guard was also relaxed to
+    just the BOP itself (a real PC nests a device IRQ inside a timer handler whenever IF is set).
+    So the moment we can preempt, delivery should just work.
+
+▶▶ RESUME — NEXT STEPS (in order):
+  1. **RE the kernel's interrupt-queue interface** (the agreed direction). Find the NtVdmControl
+     service real ntvdm uses to queue a hardware interrupt into a running VDM -- i.e. what makes the
+     kernel break out of V86 and hand us an event. Landmarks are already mapped (see the session-3/
+     5/7/8 RE notes below, docs/research/dpmi-under-ntvdmcontrol.md, /tmp/ntvdmex-re/ntoskrnl.exe
+     with symbols, r2 base 0x400000, KernBase 0x804d7000). Confirm with the Skyroads run: success =
+     `irqn_inj` becomes non-zero and the game leaves its INT 1Ch handler.
+     ALTERNATIVES if that proves expensive: (a) force periodic guest yields so an injection point
+     always exists (cheaper, less faithful, costs overhead on every run); (b) park Skyroads and take
+     DOOM instead -- its setup can select no-sound and the 32-bit extender path is already proven,
+     so it exercises a different axis while this waits.
+  2. Once IRQs land: re-run Skyroads expecting the intro to ANIMATE (frames currently go static
+     after 3), then drive it to the cockpit; then Doom with sound.
+  3. Calibrate the OPL envelope rates against a reference recording (`OPL_EG_ANCHOR`), and decide
+     whether SB stereo needs un-folding.
+  4. Claim ports 0x20/0x21 with a PIC VDD. Skyroads writes EOI to 0x20 and it currently goes
+     nowhere; harmless today but it means we ignore IRQ masking, which will matter for games that
+     mask/unmask around critical sections.
+  5. `git push` -- 22 commits are sitting local.
+
+▶ HARNESS GOTCHAS LEARNED THIS SESSION (all cost real time):
+  • **SMB ATTRIBUTE CACHING HIDES RESULT FILES.** `ls result_x.log` can say "No such file" while the
+    file exists. Force a readdir first: `ls /tmp/xpshare/ >/dev/null` then stat/tail. Several
+    "TIMEOUT" conclusions this session were this, not a failed run.
+  • **`build.sh 2>&1 | grep -E "error|..." && cp ...` FIRES ON FAILURE** -- grep exits 0 when it
+    MATCHES the error text, so the `&&` chain happily deploys a stale binary. Cost a confusing run
+    against the wrong host. Check the version string in the log (`grep -o 'dpmi-harness-v[0-9]*'`)
+    whenever a result looks like it ignored your change.
+  • The BOX CLOCK RUNS ~30s AHEAD of the Mac. When comparing watcher.txt/controld.txt heartbeats to
+    `date`, a "stale" watcher may be perfectly fine. controld fresher than watcher = watcher is busy
+    inside `start /wait` (i.e. a test is running), which is normal, not a wedge.
+  • **NEVER poll the BIOS tick by reading 0040:006C directly from a probe.** The host injects INT 08h
+    from a loop that only runs when the guest traps, so a pure memory spin on the tick never advances
+    it, never returns, and cannot even be stopped by the headless deadline. It wedged the rig once.
+    Poll with INT 1Ah instead (a BOP -> the host gets a turn). See the note atop iobench.asm.
+  • Test conventions: `.com` guest binaries are TRACKED, native `*_test` binaries are NOT.
+
+═══════════════════════════════════════════════════════════════════════════════
+██ CHECKPOINT — 2026-08-19 (session 9). SUPERSEDED by session 10 above. ██
 ═══════════════════════════════════════════════════════════════════════════════
 
 ▶ RESTART POINT (2026-08-19, IDE restart): HEAD = 2fb8d27 + doc commit; host = dpmi-harness-v81
