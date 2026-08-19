@@ -325,6 +325,18 @@ static WORD peekw(DWORD lin)
 /* The guest's effective interrupt-enable flag. When we regain control inside one
    of our own BOP stubs the LIVE IF is the stub's (the CD nn that vectored in
    cleared it), so the guest's real IF is the FLAGS the stub will IRET to. */
+/* "Are the guest's interrupts enabled?" -- and on VME hardware that is TWO bits, which
+   is what kept the Sound Blaster's IRQ from ever being injected. Virtual Mode Extensions
+   are enabled for our VDM (proven: the kernel sets EFLAGS.VIP in our guest's frame, a
+   branch it only takes when KeI386VirtualIntExtensions has V86 VME on), and under VME a
+   V86 guest's CLI/STI do not touch IF at all -- they manipulate the VIRTUAL interrupt
+   flag, VIF (bit 19). So a game that enables interrupts by executing STI, rather than by
+   inheriting IF=1 from the entry EFLAGS we set, reads as "interrupts disabled" to a gate
+   that only looks at IF -- forever. Skyroads does exactly that inside its INT 1Ch
+   handler: 4.5M I/O traps gave us 4.5M chances to inject its completion IRQ and we
+   declined every one (irqn_inj=0, irq0_skip=123k). A 16-bit FLAGS image pushed on the
+   guest stack is unaffected: VME pushes the virtual flag into the IF bit position. */
+static int if_or_vif(DWORD fl) { return (fl & (0x200u | EFLAGS_VIF_BIT)) != 0; }
 static int guest_if_enabled(volatile BYTE *tib)
 {
     DWORD cs = VDM_REG(tib, VTIB_CS) & 0xFFFF;
@@ -332,7 +344,7 @@ static int guest_if_enabled(volatile BYTE *tib)
         DWORD ss = VDM_REG(tib, VTIB_SS) & 0xFFFF, sp = VDM_REG(tib, VTIB_ESP) & 0xFFFF;
         return (peekw((ss << 4) + ((sp + 4) & 0xFFFF)) & 0x200) != 0;
     }
-    return (VDM_REG(tib, VTIB_EFLAGS) & 0x200) != 0;
+    return if_or_vif(VDM_REG(tib, VTIB_EFLAGS));
 }
 
 /* Width-selected guest memory access (1/2/4 bytes) for the string-I/O servicer. */
@@ -2774,7 +2786,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     (void)hInst; (void)hPrev; (void)lpCmd; (void)nShow;
     progpath[0] = 0; args[0] = 0;
 
-    p = zput(p, "NTVDMEX clean host\r\nSTAGE0: WinMain entered [build dpmi-harness-v104]\r\n");
+    p = zput(p, "NTVDMEX clean host\r\nSTAGE0: WinMain entered [build dpmi-harness-v105]\r\n");
     log_write(LOG_PATH, report, p);
     serial_init();                                      /* DPMI harness: COM1 log sink */
     serial_out(report, p);
@@ -3088,7 +3100,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             } else {
                 fl = VDM_REG(tib, VTIB_EFLAGS);
             }
-            if ((fl & 0x200) && !(cs == DOS_HDLR_SEG && ip >= 0x34 && ip < 0x3A)) {
+            if (if_or_vif(fl) && !(cs == DOS_HDLR_SEG && ip >= 0x34 && ip < 0x3A)) {
                 g_irq0_pending = 0;
                 g_irq0_inj++;
                 inject_int(tib, 0x08);
@@ -3111,7 +3123,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             } else {
                 fl = VDM_REG(tib, VTIB_EFLAGS);
             }
-            if ((fl & 0x200) && !(cs == DOS_HDLR_SEG &&
+            if (if_or_vif(fl) && !(cs == DOS_HDLR_SEG &&
                                   ((ip >= 0x34 && ip < 0x3A) || (ip >= 0x4C && ip < 0x50)))) {
                 InterlockedDecrement(&g_irq1_pending);   /* one INT 09h per queued scancode byte */
                 inject_int(tib, 0x09);
