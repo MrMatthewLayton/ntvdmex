@@ -173,6 +173,8 @@ static DWORD          g_irq0_skip     = 0;  /* IRQ0 delivery gated off (IF=0 etc
 static DWORD          g_ev_intpend    = 0;  /* event-3 interrupt-pending notifications */
 static DWORD          g_ev_iostr      = 0;  /* REP INS/OUTS (event 1) reflects serviced */
 static DWORD          g_irqn_inj      = 0;  /* device IRQs (2-7) injected into the guest */
+static DWORD          g_irqn_refuse_log = 0; /* bounded refusal-log budget (see the gate)  */
+static DWORD          g_irqn_refuse_total = 0;
 static volatile LONG  g_wound_down    = 0;  /* exec loop exited: clean shutdown in progress */
 #define IO_UNCLAIMED_MAX 24
 static uint16_t g_unclaimed[IO_UNCLAIMED_MAX];
@@ -249,6 +251,8 @@ static HMENU        g_savedmenu;            /* stashed menu while hidden        
    this an SB transfer completes, raises IRQ 5, and the game waits forever for an
    interrupt the host quietly dropped. */
 static volatile LONG  g_irqn_pending[8];
+static DWORD          g_irq_raised[8];      /* vdd_raise_irq calls, per line */
+static DWORD          g_irq_raised_any = 0;
 /* Async preemption (session 11). g_hcpu is a handle to the thread that runs the guest
    -- VdmQueueInterrupt's ServiceData -- duplicated once from the exec thread itself.
    g_qi_bits are the [0x714] pending bits to set alongside the queue call, and
@@ -263,6 +267,11 @@ static volatile LONG  g_qi_status     = 0;  /* NTSTATUS of the last queue call *
 static void host_irq_sink(void *ctx, uint8_t irq)
 {
     (void)ctx;
+    /* Every raise, counted by line. sb_blocks reached 1 while irqn_inj AND irqn_refused
+       both stayed 0 -- i.e. the SB's completion IRQ was raised but nothing was ever
+       latched -- so the line number this arrives on is the missing fact. */
+    g_irq_raised[irq & 7]++;
+    g_irq_raised_any++;
     if (irq == 0) g_irq0_pending = 1;
     else if (irq == 1) InterlockedIncrement(&g_irq1_pending);
     else if (irq < 8) {
@@ -333,9 +342,8 @@ static WORD peekw(DWORD lin)
    flag, VIF (bit 19). So a game that enables interrupts by executing STI, rather than by
    inheriting IF=1 from the entry EFLAGS we set, reads as "interrupts disabled" to a gate
    that only looks at IF -- forever. Skyroads does exactly that inside its INT 1Ch
-   handler: 4.5M I/O traps gave us 4.5M chances to inject its completion IRQ and we
-   declined every one (irqn_inj=0, irq0_skip=123k). A 16-bit FLAGS image pushed on the
-   guest stack is unaffected: VME pushes the virtual flag into the IF bit position. */
+   handler. A 16-bit FLAGS image pushed on the guest stack is unaffected: VME pushes the
+   virtual flag into the IF bit position. */
 static int if_or_vif(DWORD fl) { return (fl & (0x200u | EFLAGS_VIF_BIT)) != 0; }
 static int guest_if_enabled(volatile BYTE *tib)
 {
@@ -532,6 +540,16 @@ static DWORD WINAPI heartbeat_thread(LPVOID pv)
         q = zput(q, " irq0=0x");     q = zhex(q, g_irq0_inj);
         q = zput(q, " irqn=0x");     q = zhex(q, g_irqn_inj);
         q = zput(q, " intpend=0x");  q = zhex(q, g_ev_intpend);
+        /* SB transfer state on the beat. irqn_refused=0 across 4.6M gate evaluations
+           proves the completion IRQ was raised only AFTER the exec loop ended, so what
+           matters now is WHEN the block starts and how fast it drains -- neither of which
+           any counter shows after the fact. */
+        q = zput(q, " sb{mode=0x");  q = zhex(q, (DWORD)g_sb.xfer_mode);
+        q = zput(q, " left=0x");     q = zhex(q, g_sb.block_left);
+        q = zput(q, " len=0x");      q = zhex(q, g_sb.block_len);
+        q = zput(q, " blocks=0x");   q = zhex(q, g_sb.blocks);
+        q = zput(q, " rate=0x");     q = zhex(q, g_sb.rate_hz);
+        q = zput(q, "} mixed=0x");   q = zhex(q, g_audio.frames_mixed);
         q = zput(q, "\r\n");
         log_append(LOG_PATH, b, q); serial_out(b, q);
         Sleep(500);
@@ -605,6 +623,11 @@ static DWORD WINAPI headless_deadline_thread(LPVOID pv)
         q = zput(q, " irq0_skip=0x");   q = zhex(q, g_irq0_skip);
         q = zput(q, " intpend=0x");     q = zhex(q, g_ev_intpend);
         q = zput(q, " irqn_inj=0x");    q = zhex(q, g_irqn_inj);
+        q = zput(q, " irqn_refused=0x"); q = zhex(q, g_irqn_refuse_total);
+        q = zput(q, " raised_any=0x"); q = zhex(q, g_irq_raised_any);
+        { int r; q = zput(q, " raised[0..7]=");
+          for (r = 0; r < 8; ++r) { q = zput(q, "0x"); q = zhex(q, g_irq_raised[r]); q = zput(q, " "); } }
+        q = zput(q, " sb_irq=0x"); q = zhex(q, (DWORD)g_sb.irq);
         q = zput(q, " qi_calls=0x");    q = zhex(q, g_qi_calls);
         q = zput(q, " qi_st=0x");       q = zhex(q, (DWORD)g_qi_status);
         q = zput(q, " state714=0x");    q = zhex(q, *(volatile DWORD *)(ULONG_PTR)0x714);
@@ -2786,7 +2809,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     (void)hInst; (void)hPrev; (void)lpCmd; (void)nShow;
     progpath[0] = 0; args[0] = 0;
 
-    p = zput(p, "NTVDMEX clean host\r\nSTAGE0: WinMain entered [build dpmi-harness-v105]\r\n");
+    p = zput(p, "NTVDMEX clean host\r\nSTAGE0: WinMain entered [build dpmi-harness-v109]\r\n");
     log_write(LOG_PATH, report, p);
     serial_init();                                      /* DPMI harness: COM1 log sink */
     serial_out(report, p);
@@ -3145,6 +3168,38 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                       inject_int(tib, (unsigned)(8 + q));
                       break;                    /* one per turn: let it IRET first */
                   }
+              }
+          } else {
+              /* REFUSAL LOG. A pending device IRQ we decline to inject is indistinguishable
+                 from "no interrupt was ever raised" from outside, so record the first few
+                 with everything needed to name the clause. MEASURED ANSWER for Skyroads:
+                 irqn_refused stayed 0 across the whole run, so we never refuse -- the
+                 completion IRQ is raised (raised[5]=1, sb_irq=5) about a second AFTER the
+                 guest stops trapping. Heartbeat timeline: the block is programmed at ~8.5 s
+                 (len 0x7d64 @ 6024 Hz), drains at exactly the right rate, and completes at
+                 ~14 s; `io_events` freezes at ~13 s with the guest at DOS_HDLR_SEG:0x0037
+                 (the `CD 1C`), i.e. inside its own INT 1Ch handler spinning with no traps.
+                 So there is genuinely NO injection point at the moment that matters -- the
+                 4.5M traps all happen in the first 6 s, before the block even exists. Async
+                 delivery is required; this log stays as the discriminator if that changes. */
+              int pend = 0;
+              for (q = 2; q < 8; ++q) if (g_irqn_pending[q]) { pend = q; break; }
+              if (pend) g_irqn_refuse_total++;
+              if (pend && g_irqn_refuse_log < 16) {
+                  char rb[256], *rq = rb;
+                  DWORD ss = VDM_REG(tib, VTIB_SS) & 0xFFFF, sp = VDM_REG(tib, VTIB_ESP) & 0xFFFF;
+                  g_irqn_refuse_log++;
+                  rq = zput(rq, "IRQN-REFUSE irq=0x");  rq = zhex(rq, (DWORD)pend);
+                  rq = zput(rq, " cs:ip=0x");           rq = zhex(rq, qcs);
+                  rq = zput(rq, ":0x");                 rq = zhex(rq, qip);
+                  rq = zput(rq, " efl=0x");             rq = zhex(rq, VDM_REG(tib, VTIB_EFLAGS));
+                  rq = zput(rq, " ss:sp=0x");           rq = zhex(rq, ss);
+                  rq = zput(rq, ":0x");                 rq = zhex(rq, sp);
+                  rq = zput(rq, " stkflags=0x");
+                  rq = zhex(rq, peekw((ss << 4) + ((sp + 4) & 0xFFFF)));
+                  rq = zput(rq, in_bop ? " why=in_bop" : " why=if_gate");
+                  rq = zput(rq, "\r\n");
+                  log_append(LOG_PATH, rb, rq); serial_out(rb, rq);
               }
           } }
         /* Mirror the guest's IF into EFLAGS.VIF before handing the context back. On VME
