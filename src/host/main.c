@@ -170,13 +170,16 @@ static DWORD          g_ev_io         = 0;  /* port-I/O events serviced         
 static DWORD          g_io_extra      = 0;  /* accesses absorbed by the LOOP burst */
 static DWORD          g_irq0_inj      = 0;  /* INT 08h injections into the guest   */
 static DWORD          g_irq0_skip     = 0;  /* IRQ0 delivery gated off (IF=0 etc.) */
+static DWORD          g_irq0_skip_if  = 0;  /* ...because the guest had interrupts off  */
+static DWORD          g_irq0_skip_stub= 0;  /* ...because we were inside our INT 08h stub */
+static DWORD          g_pit_reload_log = 0;
 static DWORD          g_ev_intpend    = 0;  /* event-3 interrupt-pending notifications */
 static DWORD          g_ev_iostr      = 0;  /* REP INS/OUTS (event 1) reflects serviced */
 static DWORD          g_irqn_inj      = 0;  /* device IRQs (2-7) injected into the guest */
 static DWORD          g_irqn_refuse_log = 0; /* bounded refusal-log budget (see the gate)  */
 static DWORD          g_irqn_refuse_total = 0;
 static volatile LONG  g_wound_down    = 0;  /* exec loop exited: clean shutdown in progress */
-#define IO_HOT_MAX 12
+#define IO_HOT_MAX 48   /* 12 filled up before the hottest port was even seen */
 static uint16_t g_io_last_port = 0;      /* port the last serviced access touched */
 static struct { uint16_t port; DWORD n; } g_io_hot[IO_HOT_MAX];
 static int   g_io_hot_n = 0;
@@ -364,19 +367,16 @@ static void host_irq_sink(void *ctx, uint8_t irq)
     g_irq_raised_any++;
     if (irq == 0) {
         g_irq0_pending = 1;
-        /* THE TIMER NEEDS THE ASYNC PATH TOO -- arguably more than the devices do. Skyroads
-           parks in its own INT 1Ch handler and stops trapping, so the exec loop never gets a
-           turn and irq0_inj froze at 483 while the game waited for a tick that could no longer
-           advance. A real PC interrupts it regardless. Rate-limited to the BIOS tick (55 ms)
-           because this sink is called far more often than 18.2 Hz. */
-        if (g_qi_susp) {
-            static DWORD s_last_async_t0 = 0;
-            DWORD now = GetTickCount();
-            if ((DWORD)(now - s_last_async_t0) >= 55 && async_inject_irq(0)) {
-                s_last_async_t0 = now;
-                g_irq0_pending = 0;
-            }
-        }
+        /* THE TIMER NEEDS THE ASYNC PATH TOO -- arguably more than the devices do. A game
+           that parks in its own handler stops trapping, so the exec loop never gets a turn
+           and the tick it is waiting for can never arrive. A real PC interrupts it regardless.
+           NO RATE LIMIT: this sink is now called by the PIT VDD at exactly the rate the GUEST
+           programmed into channel 0, so limiting it here would override the guest. The 55 ms
+           limit that used to be here did precisely that -- it pinned the timer to 18 Hz while
+           Skyroads was asking for 180, which is most of why the game ran ~10x too slow and
+           why its intro stalled after ~3 s (measured: d_irq0 fell to ~1/s while the guest sat
+           at 0110:3b40 waiting, having done all its work in the first three seconds). */
+        if (g_qi_susp && async_inject_irq(0)) g_irq0_pending = 0;
     }
     else if (irq == 1) InterlockedIncrement(&g_irq1_pending);
     else if (irq < 8) {
@@ -1519,6 +1519,21 @@ static void host_io_do(volatile BYTE *tib, vdd_bus *bus, uint16_t port,
     g_io_last_port = port;              /* for the hot-port histogram */
     /* Sync the counter before the guest looks at it, so a poll always reads real time. */
     if (port >= 0x40 && port <= 0x43) host_pit_sync();
+    /* Report the rate the guest programs. Skyroads divides its own fast timer down to the
+       BIOS 18.2 Hz (519 injected IRQ0 vs 32 BIOS ticks last run => ~16:1), so the reload it
+       writes is the tempo the music actually wants. */
+    if (port == 0x40 && !is_in && g_pit_reload_log < 8) {
+        static uint16_t s_prev = 0;
+        if (g_pit.reload != s_prev) {
+            char b[128], *q = b;
+            s_prev = g_pit.reload; g_pit_reload_log++;
+            q = zput(q, "PIT-RELOAD 0x"); q = zhex(q, (DWORD)g_pit.reload);
+            q = zput(q, " (hz=0x");
+            q = zhex(q, g_pit.reload ? (PIT_INPUT_HZ / g_pit.reload) : 18u);
+            q = zput(q, ")\r\n");
+            log_append(LOG_PATH, b, q); serial_out(b, q);
+        }
+    }
     if (is_in) {
         /* An unclaimed ISA port floats high: real hardware reads 0xFF, not 0x00.
            This matters for device detection -- a probe that reads 0x00 from an
@@ -3025,7 +3040,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     (void)hInst; (void)hPrev; (void)lpCmd; (void)nShow;
     progpath[0] = 0; args[0] = 0;
 
-    p = zput(p, "NTVDMEX clean host\r\nSTAGE0: WinMain entered [build dpmi-harness-v122]\r\n");
+    p = zput(p, "NTVDMEX clean host\r\nSTAGE0: WinMain entered [build dpmi-harness-v125]\r\n");
     log_write(LOG_PATH, report, p);
     serial_init();                                      /* DPMI harness: COM1 log sink */
     serial_out(report, p);
@@ -3402,6 +3417,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             } else {
                 static int s_bud_skip = 6;
                 g_irq0_skip++;                  /* IF=0 or inside our own INT 08h */
+                if (cs == DOS_HDLR_SEG && ip >= 0x34 && ip < 0x3A) g_irq0_skip_stub++;
+                else if (!if_or_vif(fl))                           g_irq0_skip_if++;
                 vdmstate_sample("irq0-skip", tib, &s_bud_skip);
             }
         }
@@ -3991,6 +4008,18 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     }
     /* Exec-loop accounting: how much of the run went on port-I/O round trips, how
        much the burst fast path absorbed, and whether timer IRQs actually landed. */
+    { int i; p = zput(p, "STAGE2: hot ports:");
+      for (i = 0; i < g_io_hot_n; ++i) {
+          p = zput(p, " 0x"); p = zhex(p, g_io_hot[i].port);
+          p = zput(p, "=0x"); p = zhex(p, g_io_hot[i].n);
+      }
+      p = zput(p, "\r\nSTAGE2: pit_reload=0x"); p = zhex(p, (DWORD)g_pit.reload);
+      p = zput(p, " skip_if=0x");   p = zhex(p, g_irq0_skip_if);
+      p = zput(p, " skip_stub=0x"); p = zhex(p, g_irq0_skip_stub);
+      p = zput(p, " async_inj=0x"); p = zhex(p, g_async_inj);
+      p = zput(p, " async_bail=0x"); p = zhex(p, g_async_bail);
+      p = zput(p, "\r\n");
+      log_append(LOG_PATH, base, p); serial_out(base, p); p = base; }
     p = zput(p, "STAGE2: io_events=0x");  p = zhex(p, g_ev_io);
     p = zput(p, " io_burst=0x");          p = zhex(p, g_io_extra);
     p = zput(p, " irq0_inj=0x");          p = zhex(p, g_irq0_inj);
