@@ -176,6 +176,11 @@ static DWORD          g_irqn_inj      = 0;  /* device IRQs (2-7) injected into t
 static DWORD          g_irqn_refuse_log = 0; /* bounded refusal-log budget (see the gate)  */
 static DWORD          g_irqn_refuse_total = 0;
 static volatile LONG  g_wound_down    = 0;  /* exec loop exited: clean shutdown in progress */
+#define IO_HOT_MAX 12
+static uint16_t g_io_last_port = 0;      /* port the last serviced access touched */
+static struct { uint16_t port; DWORD n; } g_io_hot[IO_HOT_MAX];
+static int   g_io_hot_n = 0;
+static DWORD g_io_site_logged = 0;
 #define IO_UNCLAIMED_MAX 24
 static uint16_t g_unclaimed[IO_UNCLAIMED_MAX];
 static int      g_unclaimed_n = 0;
@@ -286,6 +291,7 @@ static volatile LONG  g_qi_status     = 0;  /* NTSTATUS of the last queue call *
    Any of those => decline and count it; the normal in-loop path will catch the IRQ later. */
 static void pokew(DWORD lin, WORD v);        /* fwd: guest-memory helpers, defined below */
 static WORD peekw(DWORD lin);
+static void host_pit_sync(void);             /* fwd: the guest's clock, driven by both threads */
 static int async_inject_irq(unsigned irq)
 {
     CONTEXT cx;
@@ -294,6 +300,14 @@ static int async_inject_irq(unsigned irq)
     int ok = 0;
 
     if (!g_hcpu || g_in_exec == 0) { g_async_bail++; return 0; }
+    /* Never deliver a line the guest has not hooked. Its vector still points at our default
+       IRET stub, which means no ISR is installed -- and on a real PC an unused line sits
+       masked in the PIC, so nothing would arrive at all. Delivering anyway is not harmless:
+       it perturbs the guest's stack and control flow for no benefit, and it demonstrably
+       derailed Skyroads (which never installs a Sound Blaster ISR) into executing junk in
+       our own handler segment at 0050:006c, where it "terminated" via a garbage INT 21h. */
+    if (irq >= 2 && peekw((8 + irq) * 4 + 2) == DOS_HDLR_SEG
+                 && peekw((8 + irq) * 4) == 0x0066) { g_async_bail++; return 0; }
     if (SuspendThread(g_hcpu) == (DWORD)-1) { g_async_bail++; return 0; }
     { unsigned i; char *z = (char *)&cx; for (i = 0; i < sizeof cx; ++i) z[i] = 0; }
     cx.ContextFlags = CONTEXT_CONTROL | CONTEXT_SEGMENTS;
@@ -748,6 +762,15 @@ static DWORD WINAPI headless_deadline_thread(LPVOID pv)
         q = zput(q, " bda_tick=0x");    q = zhex(q, ((DWORD)peekw(0x46E) << 16) | peekw(0x46C));
         q = zput(q, "\r\n");
         log_append(LOG_PATH, b, q); serial_out(b, q); q = b;
+        { int i; q = zput(q, "  hot ports:");
+          for (i = 0; i < g_io_hot_n; ++i) {
+              q = zput(q, " 0x"); q = zhex(q, g_io_hot[i].port);
+              q = zput(q, "=0x"); q = zhex(q, g_io_hot[i].n);
+          }
+          q = zput(q, "\r\n  pit_reload=0x"); q = zhex(q, (DWORD)g_pit.reload);
+          q = zput(q, " pit_mode=0x");          q = zhex(q, (DWORD)g_pit.mode);
+          q = zput(q, "\r\n");
+          log_append(LOG_PATH, b, q); serial_out(b, q); q = b; }
         { int i; q = zput(q, "  unclaimed ports touched:");
           for (i = 0; i < g_unclaimed_n; ++i) { q = zput(q, " 0x"); q = zhex(q, g_unclaimed[i]); }
           q = zput(q, "\r\n"); }
@@ -1192,10 +1215,14 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
         /* Drive the PIT from REAL elapsed time so the BIOS tick (0040:006C) and
            INT 1Ah track wall-clock regardless of WM_TIMER jitter; clamp after a
            stall so we don't flood a catch-up burst of ticks. */
-        { static DWORD last = 0; DWORD now = GetTickCount();
-          DWORD dms = last ? (now - last) : 16; last = now;
-          if (dms > 500) dms = 500;
-          g_pit.frame_us = dms * 1000u; }
+        /* The frame loop no longer OWNS the PIT (that is host_pit_sync's shared clock), but
+           it must still drive it: if only the exec thread advanced time, a guest spinning in
+           its own code would wait forever for a clock that only ticks when it traps -- which
+           is exactly the deadlock the first cut of this produced (async_bail=497,
+           async_inj=0, guest frozen 25 s). Ticking here is also what lets the async injector
+           preempt, since this thread is not the one stuck inside VdmStartExecution. */
+        g_pit.frame_us = 0;
+        host_pit_sync();
         EnterCriticalSection(&g_lock);
         vdd_bus_frame(&g_bus);          /* tick PIT + render into g_vid.frame       */
         if (g_ms_hidden == 0 && g_vid.frame.bpp == 8 && g_vid.frame.pixels)
@@ -1394,6 +1421,40 @@ static void regs_store(ntvdd_regs *r, volatile BYTE *tib)
    hunting for hardware probes a fixed set of addresses, so this names the device it
    wants -- e.g. 0x220-0x22F is a Sound Blaster looking for its DSP. Distinct-only
    and budgeted, so it cannot flood a run. */
+/* WHERE THE TIME GOES. 4.5M trapped port accesses in the first 6 s of a Skyroads run is
+   ~750k/s, and at ~1.5 us of round trip each that is the entire CPU -- which is exactly what
+   the game looks like on screen: everything correct, everything far too slow. Counting by
+   PORT says which device is being hammered; capturing the guest CS:IP and the bytes there
+   says which INSTRUCTION IDIOM it is, and that is what a fast path has to match. (The
+   existing burst only collapses `IN/OUT` + `LOOP rel8`, and io_burst was 4828 of 4.5M, so
+   Skyroads' delay loop is plainly a different shape.) */
+static void io_hot_note(uint16_t port, DWORD cs, DWORD ip)
+{
+    int i;
+    for (i = 0; i < g_io_hot_n; ++i)
+        if (g_io_hot[i].port == port) { g_io_hot[i].n++; goto sited; }
+    if (g_io_hot_n < IO_HOT_MAX) {
+        g_io_hot[g_io_hot_n].port = port; g_io_hot[g_io_hot_n].n = 1; g_io_hot_n++;
+    }
+sited:
+    if (g_io_site_logged < 6 && cs) {
+        static DWORD s_seen[6];
+        DWORD k, key = (cs << 16) ^ ip;
+        for (k = 0; k < g_io_site_logged; ++k) if (s_seen[k] == key) return;
+        s_seen[g_io_site_logged++] = key;
+        { char b[192], *q = b;
+          const volatile BYTE *cp = (const volatile BYTE *)((cs << 4) + ((ip - 6) & 0xFFFF));
+          BYTE tmp[16]; unsigned j;
+          for (j = 0; j < 16; ++j) tmp[j] = cp[j];
+          q = zput(q, "IO-SITE port=0x"); q = zhex(q, port);
+          q = zput(q, " cs:ip=0x");       q = zhex(q, cs);
+          q = zput(q, ":0x");             q = zhex(q, ip);
+          q = zput(q, " bytes[ip-6..]: "); q = zdump(q, tmp, 16);
+          q = zput(q, "\r\n");
+          log_append(LOG_PATH, b, q); serial_out(b, q); }
+    }
+}
+
 static void io_unclaimed_note(uint16_t port, int is_in)
 {
     int i;
@@ -1407,10 +1468,57 @@ static void io_unclaimed_note(uint16_t port, int is_in)
    the guest's EAX at the right width. Factored out of the three I/O servicers
    (V86 / retro / PM) so the burst fast path below can repeat an access without
    re-decoding it. */
+/* THE GUEST'S CLOCK. Skyroads -- like a lot of DOS games -- does not ask the BIOS what time
+   it is; it latches PIT counter 0 and reads it, over and over (`out 43h,al; in al,40h; in
+   al,40h`, its hot loop at 0110:5a85). So the guest's ENTIRE sense of elapsed time is
+   whatever that counter says. Until now the counter was advanced by the UI thread's frame
+   loop, once per presented frame -- and that thread is starved precisely when the guest is
+   hammering I/O, which is exactly when the game is asking. The guest therefore saw time
+   crawl, and everything it paces on time crawled with it: the palette fade, the music tempo
+   (pitch was right -- that is the OPL, which is correct -- only the sequencer was slow), and
+   the rate it fed PCM (slow AND pitched down). None of that was a sound bug.
+
+   A real 8254 is a free-running counter, so model it as one: derive elapsed clocks from a
+   high-resolution host clock at the moment the guest looks. QueryPerformanceCounter is
+   KERNEL32, so it stays inside the no-CRT import rules. */
+static void host_pit_sync(void)
+{
+    static LARGE_INTEGER s_freq, s_last;
+    LARGE_INTEGER now;
+    ULONGLONG delta;
+    /* Called from BOTH the exec thread (so a guest polling the counter reads real time) and
+       the UI thread (so the clock keeps running while the guest is spinning and not trapping
+       at all). It must be one shared clock or the two would double-count, hence the lock --
+       g_lock is recursive for the exec thread, which already holds it inside host_io_do. */
+    EnterCriticalSection(&g_lock);
+    if (!s_freq.QuadPart) {
+        if (QueryPerformanceFrequency(&s_freq) && s_freq.QuadPart)
+            QueryPerformanceCounter(&s_last);
+        LeaveCriticalSection(&g_lock);
+        return;
+    }
+    if (!QueryPerformanceCounter(&now) || now.QuadPart <= s_last.QuadPart) {
+        LeaveCriticalSection(&g_lock);
+        return;
+    }
+    delta = (ULONGLONG)(now.QuadPart - s_last.QuadPart);
+    /* clocks = delta * 1193182 / freq, without overflowing: delta is small (microseconds). */
+    { ULONGLONG clocks = (delta * PIT_INPUT_HZ) / (ULONGLONG)s_freq.QuadPart;
+      if (clocks) {
+          s_last.QuadPart += (LONGLONG)((clocks * (ULONGLONG)s_freq.QuadPart) / PIT_INPUT_HZ);
+          if (clocks > PIT_INPUT_HZ) clocks = PIT_INPUT_HZ;   /* cap a long stall at 1 s */
+          vdd_pit_add_clocks(&g_pit, (uint32_t)clocks);
+      } }
+    LeaveCriticalSection(&g_lock);
+}
+
 static void host_io_do(volatile BYTE *tib, vdd_bus *bus, uint16_t port,
                        int is_in, int width)
 {
     uint32_t val, eax = VDM_REG(tib, VTIB_EAX);
+    g_io_last_port = port;              /* for the hot-port histogram */
+    /* Sync the counter before the guest looks at it, so a poll always reads real time. */
+    if (port >= 0x40 && port <= 0x43) host_pit_sync();
     if (is_in) {
         /* An unclaimed ISA port floats high: real hardware reads 0xFF, not 0x00.
            This matters for device detection -- a probe that reads 0x00 from an
@@ -2917,7 +3025,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     (void)hInst; (void)hPrev; (void)lpCmd; (void)nShow;
     progpath[0] = 0; args[0] = 0;
 
-    p = zput(p, "NTVDMEX clean host\r\nSTAGE0: WinMain entered [build dpmi-harness-v116]\r\n");
+    p = zput(p, "NTVDMEX clean host\r\nSTAGE0: WinMain entered [build dpmi-harness-v122]\r\n");
     log_write(LOG_PATH, report, p);
     serial_init();                                      /* DPMI harness: COM1 log sink */
     serial_out(report, p);
@@ -3081,6 +3189,22 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     *(volatile WORD *)(0x1C * 4)     = 0x003A;              /* IVT[0x1C].offset    */
     *(volatile WORD *)(0x1C * 4 + 2) = DOS_HDLR_SEG;        /* IVT[0x1C].segment   */
     for (i = 0; i < sizeof(bop09); ++i) hdlr[0x4C + i] = bop09[i];  /* INT 09h default iret (0x4C-0x4F) */
+    /* DEFAULT DEVICE-IRQ HANDLERS. A real BIOS points the unused hardware vectors at a
+       handler that just acknowledges and returns; we had them pointing at whatever junk was
+       in the IVT, which on this box read F000:A390 -- unowned ROM. That was harmless only so
+       long as we could not deliver a device IRQ asynchronously. Now that we can, injecting an
+       IRQ the guest has not hooked jumps it into that junk and hangs it: measured, Skyroads
+       (which never installs a Sound Blaster ISR at all) froze at F000:A390 the moment its DMA
+       block completed. So give IRQ2-7 and IRQ8-15 a plain IRET, exactly as INT 09h has. */
+    hdlr[0x66] = 0xCF;                                             /* shared IRET stub    */
+    for (i = 0x0A; i <= 0x0F; ++i) {
+        *(volatile WORD *)(i * 4)     = 0x0066;
+        *(volatile WORD *)(i * 4 + 2) = DOS_HDLR_SEG;
+    }
+    for (i = 0x70; i <= 0x77; ++i) {
+        *(volatile WORD *)(i * 4)     = 0x0066;
+        *(volatile WORD *)(i * 4 + 2) = DOS_HDLR_SEG;
+    }
     *(volatile WORD *)(0x09 * 4)     = 0x004C;              /* IVT[0x09].offset    */
     *(volatile WORD *)(0x09 * 4 + 2) = DOS_HDLR_SEG;        /* IVT[0x09].segment   */
     for (i = 0; i < sizeof(bop1a); ++i) hdlr[0x3C + i] = bop1a[i];  /* INT 1Ah stub */
@@ -3249,9 +3373,11 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
            would crawl (~100x too slow) and any tick-paced delay appears to hang. Set
            the pending flag at the ~18.2 Hz BIOS rate from here; it coalesces with the
            UI thread's flag (both just set it to 1) so there's no double-count. */
-        { static DWORD last_pit = 0; DWORD now = GetTickCount();
-          if (last_pit == 0) last_pit = now;
-          if ((DWORD)(now - last_pit) >= 55) { last_pit += 55; g_irq0_pending = 1; } }
+        /* Advance the PIT from the real clock every iteration. This is also what generates
+           IRQ0 now, at whatever rate the GUEST programmed into channel 0 -- the old fixed
+           55 ms pump hard-wired 18.2 Hz, so a game that reprograms the timer for its music
+           (as this one does) had its sequencer clocked far too slowly no matter what. */
+        host_pit_sync();
         opl_pump_time();            /* keep the OPL timers current for the guest */
         /* Deliver a pending PIT IRQ0 as INT 08h when the guest's main-line
            interrupts are enabled. We regain control at event boundaries, almost
@@ -3309,6 +3435,11 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                         ((qip >= 0x34 && qip < 0x37) || (qip >= 0x4C && qip < 0x4F)));
           if (!in_bop && guest_if_enabled(tib)) {
               for (q = 2; q < 8; ++q) {
+                  if (peekw((8 + q) * 4 + 2) == DOS_HDLR_SEG
+                      && peekw((8 + q) * 4) == 0x0066) {
+                      InterlockedExchange(&g_irqn_pending[q], 0);   /* unhooked: drop it */
+                      continue;
+                  }
                   if (InterlockedExchange(&g_irqn_pending[q], 0)) {
                       g_irqn_inj++;
                       inject_int(tib, (unsigned)(8 + q));
@@ -3414,14 +3545,14 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             EnterCriticalSection(&g_lock);
             handled = host_try_io(tib, &g_bus);     /* single port op (no logging)     */
             LeaveCriticalSection(&g_lock);
-            if (handled) { g_ev_io++; continue; }
+            if (handled) { g_ev_io++; io_hot_note(g_io_last_port, VDM_REG(tib, VTIB_CS) & 0xFFFF, VDM_REG(tib, VTIB_EIP) & 0xFFFF); continue; }
             /* real-HW event 3 reports CS:IP AFTER the faulting IN/OUT -> retro-decode the
                I/O instruction ending at CS:IP and service it (Skyroads' vblank IN AL,DX). */
             if (ev == VDM_EVENT_IO_HW) {
                 EnterCriticalSection(&g_lock);
                 handled = host_try_io_retro(tib, &g_bus);
                 LeaveCriticalSection(&g_lock);
-                if (handled) { g_ev_io++; continue; }
+                if (handled) { g_ev_io++; io_hot_note(g_io_last_port, VDM_REG(tib, VTIB_CS) & 0xFFFF, VDM_REG(tib, VTIB_EIP) & 0xFFFF); continue; }
             }
             if (g_a000_prot && host_interp(tib, 1) > 0) continue;  /* single A0000 access */
             /* Not an I/O instruction and not an A0000 touch. On this hardware event 3

@@ -67,6 +67,27 @@ int dos_int21(dos_machine_t *m)
         tp = zput(tp, "  ==> DOS terminate (AH=4Ch), exit code AL=0x");
         tp = zhex(tp, R_AX & 0xFF); tp = zput(tp, "\r\n");
         cont = 0;
+    } else if (ah == 0x00) {                    /* terminate (CP/M style, = INT 20h) */
+        /* Skyroads exits through this one, so "unhandled" was both wrong and misleading:
+           we returned an error and let the guest run on into nowhere. It is just 4Ch with
+           an exit code of 0. Logging the call site because WHY a game terminates is the
+           question, and the CS tells you whether it was the program or something we
+           vectored it into. */
+        m->exit_code = 0;
+        tp = zput(tp, "  ==> DOS terminate (AH=00h) from CS:IP=0x");
+        tp = zhex(tp, VDM_REG(tib, VTIB_CS) & 0xFFFF); tp = zput(tp, ":0x");
+        tp = zhex(tp, VDM_REG(tib, VTIB_EIP) & 0xFFFF);
+        tp = zput(tp, " ivt8=0x");
+        { const volatile BYTE *z = (const volatile BYTE *)0;
+          DWORD s8 = (DWORD)z[0x22] | ((DWORD)z[0x23] << 8);
+          DWORD o8 = (DWORD)z[0x20] | ((DWORD)z[0x21] << 8);
+          DWORD sc = (DWORD)z[0x72] | ((DWORD)z[0x73] << 8);
+          DWORD oc = (DWORD)z[0x70] | ((DWORD)z[0x71] << 8);
+          tp = zhex(tp, s8); tp = zput(tp, ":0x"); tp = zhex(tp, o8);
+          tp = zput(tp, " ivt1C=0x"); tp = zhex(tp, sc);
+          tp = zput(tp, ":0x"); tp = zhex(tp, oc); }
+        tp = zput(tp, "\r\n");
+        cont = 0;
     } else if (ah == 0x02) {                    /* print char DL */
         OUTC(R_DX & 0xFF); OKCF();
     } else if (ah == 0x01 || ah == 0x07 || ah == 0x08) {   /* read char (01 echoes) */
