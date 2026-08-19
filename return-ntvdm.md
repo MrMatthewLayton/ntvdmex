@@ -2,8 +2,8 @@
 ██ CHECKPOINT — 2026-08-19 (session 11). READ THIS FIRST ON RESTART. ██
 ═══════════════════════════════════════════════════════════════════════════════
 
-▶ RESTART POINT (2026-08-19, session 11): HEAD = `c1e5c34`; branch spike/dpmi-16bit-switch;
-  **33 commits UNPUSHED**. Host = **dpmi-harness-v116**, built clean, deployed to the share `bm/`,
+▶ RESTART POINT (2026-08-19, session 11): HEAD = `3164690`; branch spike/dpmi-16bit-switch;
+  **38 commits UNPUSHED**. Host = **dpmi-harness-v126**, built clean, deployed to the share `bm/`,
   and RE-VERIFIED on the rig: selftest **8/8 PASS**, off-VM battery **519/519**. Rig healthy
   (watcher + controld beating). Working tree clean except the same pre-existing untracked files
   that are NOT mine (MAINICON.ico, demos/, scripts/kd_*.py, scripts/trace_break.py) and the
@@ -15,6 +15,35 @@
   guest"). It found the kernel lever, found that a line of session-10 code was ACTIVELY
   WEDGING guests, and -- the most consequential result -- found that **the blocker was
   misdiagnosed**: Skyroads is not starved of injection points, it is being refused them.
+
+★★★★★ **SKYROADS IS PLAYABLE** (user-confirmed on the physical box, 2026-08-19). Host v126.
+It boots, renders, animates its intro, plays OPL music and PCM, takes keyboard input and
+plays. Getting there took four fixes after the async-injection breakthrough, three of them
+timing and NONE of them in the sound code:
+  1. **The guest's CLOCK was driven by the UI thread.** Skyroads reads PIT counter 0 directly
+     (`out 43h,al; in al,40h; in al,40h` at 0110:5a85 -- caught by the new IO-SITE dump), so
+     that counter IS its sense of time; we advanced it from the frame loop, which is starved
+     exactly when the guest is hammering I/O. Everything time-paced crawled: fade, music
+     tempo (pitch was always right -- the OPL is correct, only the sequencer was slow) and the
+     rate it fed PCM (slow AND pitched down). Now `host_pit_sync()` derives clocks from
+     QueryPerformanceCounter, called from BOTH threads -- exec (so a poll reads real time) and
+     UI (so the clock runs while the guest spins). Driving it from one only deadlocks.
+  2. **My own 55 ms rate limit on async IRQ0 pinned the timer to 18 Hz** while the game asked
+     for 180. Removed. Per-3s delivered ticks went ~3 -> ~540.
+  3. **Timer ticks were coalesced by a boolean pending flag** and dropped whenever the guest
+     was CLI'd (which is most of the time -- it CLIs around 256-colour palette writes, 585k
+     writes to 0x3C9 per run). Now a saturating count (cap 4), like a real 8259 latching.
+     Delivery is now 540/541 per 3 s against a programmed 180 Hz.
+  4. **Keyboard IRQ1 never got the async path**, so input arrived whenever the game yielded.
+  Plus: default IRET stubs for IRQ2-7/8-15 (their vectors pointed at unowned ROM); never
+  deliver a line whose vector is still that stub (Skyroads installs no SB ISR, and delivering
+  derailed it); INT 21h AH=00 implemented; audio thread at TIME_CRITICAL with 6 buffers
+  (starvation by the 100%-busy exec thread was heard as ticking).
+  ► METHOD NOTE worth keeping: every one of these was found by MEASURING, not reasoning --
+    per-3s heartbeat deltas showed the game doing all its work in 3 s then idling at ~1 Hz,
+    and a port histogram showed the real load was the palette. My first port histogram was
+    WRONG (12 slots, filled before the hottest port appeared) and my first slowness diagnosis
+    was wrong with it. Widen the instrument before trusting the reading.
 
 ★★★★ THE BLOCKER IS BROKEN: **WE CAN NOW INTERRUPT A SPINNING V86 GUEST.** Three sessions
 were stuck behind this. The kernel will not do it (VdmQueueInterrupt is transition-only --
@@ -152,7 +181,13 @@ disabling interrupts for any guest whose enable lives in VIF.
      long Skyroads run. Watch `async_bail`: a high bail count means the guard rails are refusing
      more than they should. The one real risk is a torn context if a guard is wrong, so look for
      any run whose guest wanders to an unexpected CS:IP.
-  2. **Drive Skyroads to the cockpit** now that the intro animates -- keyboard input through the
+  2. **Skyroads is playable -- now judge it against the bar.** Remaining user-reported
+     roughness after v126 (all UNVERIFIED by me; they need ears/hands on the box): is the
+     music now smooth and correct tempo, is the PCM still pitched low (if so that is a
+     separate SB rate bug -- suspect the mixer's resample ratio, NOT the timer), and is input
+     latency acceptable. Then: a game that DOES install an SB ISR, to exercise the device-IRQ
+     half of async delivery end to end (Skyroads never installs one).
+  3. (was 2) Drive Skyroads further -- keyboard input through the
      menu, as run 86 did. Then the sound epic's real acceptance test: a game that DOES install an
      SB ISR (Skyroads does not -- see above), so the device-IRQ half of async delivery gets
      exercised end to end.
