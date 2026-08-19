@@ -2809,7 +2809,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     (void)hInst; (void)hPrev; (void)lpCmd; (void)nShow;
     progpath[0] = 0; args[0] = 0;
 
-    p = zput(p, "NTVDMEX clean host\r\nSTAGE0: WinMain entered [build dpmi-harness-v109]\r\n");
+    p = zput(p, "NTVDMEX clean host\r\nSTAGE0: WinMain entered [build dpmi-harness-v111]\r\n");
     log_write(LOG_PATH, report, p);
     serial_init();                                      /* DPMI harness: COM1 log sink */
     serial_out(report, p);
@@ -3058,6 +3058,30 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                       if (hq) CloseHandle(hq); }
 
     v86_set_entry(tib, img.cs, img.ip, img.ss, img.sp, DOS_PSP_SEG);
+    /* ENTRY TRAMPOLINE: `STI` then a far jump to the program's real entry point.
+       Under VME the CPU sets EFLAGS.VIF only when the guest EXECUTES sti -- and the
+       kernel's whole notion of "this guest can take an interrupt" is VIF. Session 10
+       correctly observed that DOS programs never issue sti (they are entered with
+       interrupts already on) and fixed it by handing them IF=1 in the CONTEXT, but that
+       sets the REAL IF, which the kernel does not consult, while VIF stays 0 forever.
+       Setting VIF directly in the CONTEXT does not survive either -- the kernel sanitises
+       it. Making the guest execute one real sti costs 6 bytes and gets VIF set the only
+       way the CPU will accept, after which the hardware maintains it across the guest's
+       own cli/sti/iret. Faithful, too: DOS's EXEC really does return into the program
+       with interrupts enabled.
+       RESULT: this does NOT unblock delivery -- and note qirq.com already executed its own
+       sti before spinning, so the "guest never sets VIF" hypothesis was in truth already
+       refuted by the earlier runs. Kept as an opt-in knob (it is the faithful entry
+       sequence regardless) but it is not the missing piece. */
+    if (g_qi_vif) {
+        volatile BYTE *tr = (volatile BYTE *)(ULONG_PTR)(((DWORD)DOS_HDLR_SEG << 4) + 0x60);
+        tr[0] = 0xFB;                                   /* sti                       */
+        tr[1] = 0xEA;                                   /* jmp far cs:ip             */
+        tr[2] = (BYTE)img.ip; tr[3] = (BYTE)(img.ip >> 8);
+        tr[4] = (BYTE)img.cs; tr[5] = (BYTE)(img.cs >> 8);
+        VDM_REG(tib, VTIB_CS)  = DOS_HDLR_SEG;
+        VDM_REG(tib, VTIB_EIP) = 0x60;
+    }
     /* Session 11: the kernel's deliverability test for a V86 frame on a VME CPU reads
        EFLAGS.VIF, not IF (VdmpCanDeliver, ntoskrnl 0x56dce0). Starting the guest with
        VIF clear makes every hardware interrupt undeliverable from the kernel's point of
