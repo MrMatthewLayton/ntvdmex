@@ -110,13 +110,26 @@ INFINITE VISUAL DEMOS ARE MONITOR-ONLY: pm32irq, pm32gfx, animate, bounce, mode1
 the vga/vesa demos loop forever and must be watched on the box's PHYSICAL display, NOT the headless
 SMB loop (which auto-times-out at 30 s now, so they no longer wedge -- but you still won't SEE them).
 
+★★★ 2026-08-19: pm32irq VISUALLY CONFIRMED on BARE METAL via the host self-screenshots (fully remote,
+  no monitor). Enabled capture.flag, fired pm32irq.com; host wrote 11 shotNN.bmp (320x200 mode13),
+  rt.bat copied them, I read+analysed them on the Mac: the red 24px box MARCHES x=20->65->116->168->219
+  (wrap at 240) -> 30->81->... driven ONLY by [hits] which is bumped ONLY by the hooked 32-bit PM INT 08h
+  ISR. ⇒ **async IRQ0 injection into a 32-bit PM timer hook WORKS on the real CPU** (the widened dword
+  IRET frame, run 83, is correct) -- the checkpoint's "last 32-bit gap" is CLOSED. The earlier pm32irq
+  "hang" was purely the infinite-demo-under-headless-harness issue (fixed by v71's 30s cap), NOT a broken
+  async path. Self-screenshot pipeline PROVEN end-to-end. PNGs: build/shots/pm32irq_*.png.
+
 ▶▶ RESUME — NEXT STEPS (in order):
-  1. VISUALLY confirm on the box's PHYSICAL monitor (VNC capture is dead): the async-IRQ 32-bit
-     timer hook (pm32irq -- red box should MARCH via injected IRQ0), pm32gfx, mode13, animate,
-     bounce, and Skyroads (real-mode, event-3 I/O fixed -> should play). Needs a human at the screen.
-  2. A REAL DOS/4GW extender, then DOOM (the acceptance test) -- the 32-bit flat model now executes
-     on bare metal (pm32flat: base-0 ~2GB selector, ES:[0A0000h] render, clean exit), so it's in reach.
+  1. DONE (2026-08-19): pm32irq 32-bit async IRQ visually confirmed remotely. Next visuals to grab the
+     same way (set capture.flag, fire, read shot_*.bmp): pm32gfx (32-bit gradient), mode13, and Skyroads
+     (real-mode game -- but MIND the v71 real-mode selftest hang below; a real-mode graphical run may hang
+     -> use controld `kill` to recover).
+  2. A REAL DOS/4GW extender, then DOOM (the acceptance test) -- the 32-bit flat model executes on bare
+     metal (pm32flat) AND 32-bit async timer hooks work (pm32irq), so both prerequisites Doom needs are in.
   3. Broader INT 31h surface as a real extender demands it (0305/0306 raw switch, page-lock, phys-map).
+  OPEN BUG: v71 selftest.com HANGS the watcher (real-mode; 30s cap didn't fire -> likely hangs INSIDE
+  v86_run so the loop-top check never runs). controld `kill` recovers it. Investigate before trusting
+  real-mode graphical runs (Skyroads). PM-path tests (dpmitest, pm32*) are safe + self-cap at 30s.
   (Everything above the session-8 banner is now the authoritative state; session-8's "kernel
    won't run PM" conclusion is SUPERSEDED -- it was our own guard.)
 
