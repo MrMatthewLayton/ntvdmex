@@ -1,5 +1,106 @@
 ═══════════════════════════════════════════════════════════════════════════════
-██ CHECKPOINT — 2026-08-19 (session 10). READ THIS FIRST ON RESTART. ██
+██ CHECKPOINT — 2026-08-19 (session 11). READ THIS FIRST ON RESTART. ██
+═══════════════════════════════════════════════════════════════════════════════
+
+▶ RESTART POINT (2026-08-19, session 11): HEAD = `b7bc111`; branch spike/dpmi-16bit-switch;
+  **25 commits UNPUSHED**. Host = **dpmi-harness-v105**, built clean, deployed to the share `bm/`,
+  and RE-VERIFIED on the rig: selftest **8/8 PASS**, off-VM battery **519/519**. Rig healthy
+  (watcher + controld beating). Working tree clean except the same pre-existing untracked files
+  that are NOT mine (MAINICON.ico, demos/, scripts/kd_*.py, scripts/trace_break.py) and the
+  untracked native `tools/dostest/*_test` binaries (repo convention). New this session:
+  `build/re/` holds XP's ntoskrnl/ntvdm/ntdll pulled off the box for RE (gitignored; /tmp was
+  wiped, so re-fetch with the cmd.txt injection trick below if it disappears again).
+
+  THIS SESSION went after session 10's blocker ("we cannot asynchronously interrupt a V86
+  guest"). It found the kernel lever, found that a line of session-10 code was ACTIVELY
+  WEDGING guests, and -- the most consequential result -- found that **the blocker was
+  misdiagnosed**: Skyroads is not starved of injection points, it is being refused them.
+
+★★★ THE SESSION-10 BLOCKER IS THE WRONG FRAME. Skyroads' 30 s run makes **4.5M port-I/O
+traps** (`io_events=0x46301c`) and takes 483 timer IRQs. The exec loop therefore gets
+millions of turns while the game waits for its Sound Blaster IRQ -- injection points are
+ABUNDANT. We decline every one: `irqn_inj=0` with `irq0_skip=0x18985`. So "the guest never
+traps so we can never inject" is false for this game; the gate is what is wrong. (It is
+still true in the abstract, and the async lever below is still worth having -- but it is
+NOT what stands between us and Skyroads.)
+
+★★★ WHY WE REFUSE: **VME. The guest's STI sets VIF (bit 19), not IF -- and every gate we
+have reads IF.** Virtual Mode Extensions are enabled for our VDM; that is PROVEN, not
+assumed: the kernel sets EFLAGS.VIP in our guest's frame, a branch it only takes when
+`KeI386VirtualIntExtensions` has V86 VME on. Under VME a V86 guest's CLI/STI never touch
+IF. So a game that enables interrupts by EXECUTING STI -- rather than by inheriting IF=1
+from the entry EFLAGS (session 10's fix, which is why programs that never STI worked) --
+looks permanently interrupt-disabled to us. Gates are now `IF || VIF` (commit `b7bc111`).
+  ► Measured: Skyroads' `irq0_skip` fell 0x1e34c -> 0x18985, so the gate does open more
+    often -- but `irqn_inj` is STILL 0 and it still freezes at `0x0050:0x0037`. There is at
+    least one more refusal on that path. **RESUME ITEM 1 is to log it, not reason about it.**
+
+★★ THE ASYNC LEVER, RE'd FROM XP's KERNEL (full write-up + every address in
+docs/research/dpmi-under-ntvdmcontrol.md, "Runs 87-93"):
+  • **`NtVdmControl(VdmQueueInterrupt=1, ServiceData)` -- ServiceData is a THREAD HANDLE**,
+    not a pointer. It queues an APC to that thread, which IS the preemption we lacked.
+    Rig-confirmed accepted (`st=0`) and its APC demonstrably runs.
+  • The APC's gate `VdmpCanDeliver` (0x56dce0) reads **VIF** on VME hardware, not IF -- the
+    same root cause as above. Every run stopped there: it sets VIP and defers.
+  • The kernel emulates a **full 8259 in memory we hand it at VdmInitialize**, which we had
+    been passing ZEROED -- so it could never dispatch anything. Layout now recovered and
+    programmed (master 0x08 / slave 0x70): `v86_ica_raise/eoi/set_mask/state`.
+  • `VTIB+0x5A8 = 3` is written by that same APC -- session 10's event-3 "interrupt pending"
+    reflect, seen from the kernel side.
+
+★★★ A SESSION-10 LINE WAS WEDGING GUESTS: `*(DWORD*)0x714 |= 1` (VDM_INT_HARDWARE) in
+`host_irq_sink`. With VIP set and VIF clear the guest's next IRET faults under VME into a
+dispatch that refuses to deliver and re-arms VIP -- the guest froze at `DOS_HDLR_SEG:0x0003`
+with the exec loop starved and NO exit path running. Reproduced in every run that set the
+bit **including the control that made no queue call at all**. Removed; the same probe then
+runs to a clean `INT 21h 4Ch` exit. (It is NOT what freezes Skyroads -- tested directly,
+v104 froze identically. Do not conflate the two.)
+  ► Also measured and worth not repeating: bit 9 (0x200) of `[0x714]` is the VDM's virtual
+    interrupt flag and **the KERNEL already maintains it** (read set from the first
+    instruction). Writing it from user mode only clobbers correct state.
+
+★ NEW TEST + TOOLING
+  • `tools/dostest/qirq.asm/.com` -- async-IRQ probe: hooks INT 05h and INT 0Dh with separate
+    counters (which one fires tells you WHICH kernel path delivered), then waits in a pure
+    memory spin that cannot trap, so any vector that fires was delivered asynchronously.
+  • `qimode.txt` on the share = a no-rebuild knob (hex digit: bits0-1 = `[0x714]` bits to set,
+    bit2 = raise a periodic IRQ 5, bit3 = start the guest with VIF). **Absent = everything off**,
+    so normal runs are untouched. Delete it before non-experiment runs.
+  • A headless **heartbeat** (always on) logs guest CS:IP/EFLAGS + counters every 500 ms. This
+    is what turned "the log just stops" into a timestamped last known position.
+  • Fetching files off the box for RE, no physical access:
+    `printf 'dpmitest.com&copy C:\\WINDOWS\\system32\\ntoskrnl.exe "<share>\\re_ntoskrnl.exe"\r\n' > cmd.txt`
+    (the watcher interpolates cmd.txt into a command line, so `&` chains a command after rt.bat).
+
+▶▶ RESUME — NEXT STEPS (in order):
+  1. **Log the refusal, don't theorise.** In the device-IRQ block, log the first ~16 turns where
+     `g_irqn_pending[5]` is set but we decline: CS:IP, VTIB EFLAGS, the stack-FLAGS word, and
+     which clause refused (`in_bop` vs the IF/VIF test). Run Skyroads. That names the remaining
+     gate in one round trip. Success = `irqn_inj` non-zero and the game leaves its INT 1Ch wait.
+     Suspect #1: the `cs == DOS_HDLR_SEG` branch of `guest_if_enabled` reads the pushed FLAGS at
+     `[ss:sp+4]`, which is the frame `CD 1C` pushed -- IF cleared BY the INT instruction -- so
+     while the guest is anywhere in our INT 08h stub we always read "disabled". A real BIOS timer
+     ISR issues STI before chaining INT 1Ch; our stub (`C4 C4 08, CD 1C, CF` at 0x34) never does.
+  2. Then re-run Skyroads expecting the intro to ANIMATE past 3 frames, and drive it to the cockpit.
+  3. The async lever is still the right long-term mechanism (it is how real ntvdm does it, and it
+     brings kernel-side IF/VIP deferral for free). To finish it: find how the kernel's VIF gets
+     set for a running guest. **Top lead = `VdmPMCliControl` (service 13)**, documented in our own
+     notes as "virtualises the client interrupt flag", called by ntvdm with subfns {0,1,3}
+     (0xf0053b6, 0xf03d9d1, 0xf03da59). Test the three against `qirq.com` (mode `d`); success is
+     `c0d` non-zero while `irqn_inj` stays 0 (proving the KERNEL dispatched, not us).
+  4. PIC VDD claiming 0x20/0x21 is now a PREREQUISITE for the kernel path, not a nicety: the ICA's
+     ISR bit stays set until an EOI clears it (`v86_ica_eoi`), or that line never fires again.
+     Skyroads already writes EOI to 0x20 and it goes nowhere (still in `unclaimed ports`).
+  5. Calibrate the OPL envelope rates (`OPL_EG_ANCHOR`); decide on un-folding SB stereo.
+  6. `git push` -- 25 commits are sitting local.
+
+▶ OPEN QUESTION (unexplained, low priority): in the runs that set the hardware-pending bit, the
+  process ended at ~8 s having reached NO exit path -- not the guest's 4Ch flush, not the 30 s
+  deadline backstop's report. The heartbeat proves it was alive until then. Kernel-side VDM
+  termination is the obvious suspect. Harmless now that the bit is gone.
+
+═══════════════════════════════════════════════════════════════════════════════
+██ CHECKPOINT — 2026-08-19 (session 10). SUPERSEDED by session 11 above. ██
 ═══════════════════════════════════════════════════════════════════════════════
 
 ▶ RESTART POINT (2026-08-19, IDE restart): HEAD = `a44eae8`; branch spike/dpmi-16bit-switch;
