@@ -1673,10 +1673,22 @@ static void regs_load(ntvdd_regs *r, volatile BYTE *tib)
     r->ds = (uint16_t)VDM_REG(tib, VTIB_DS); r->es = (uint16_t)VDM_REG(tib, VTIB_ES);
     r->cf = 0;
 }
+/* STORE EVERYTHING LOAD READS. This wrote back only the four general registers, so any
+   service whose ANSWER is a pointer silently threw that answer away: INT 10h AH=11h AL=30h
+   returns the character generator in ES:BP, and the guest got back whatever ES:BP it
+   happened to be holding -- so it drew its text out of an arbitrary chunk of memory. That
+   is the "garbled text" in Skyroads, and it is why fixing the handler to SET ES:BP (and
+   later replacing the font tables themselves) changed nothing: neither value ever reached
+   the guest. Same silent loss applied to every ES:DI and DS:SI answer (VESA info blocks,
+   INT 33h, INT 10h 1Bh). regs_load already reads all seven, so writing all seven back is
+   symmetric: a handler that does not touch one stores the value it was given. */
 static void regs_store(ntvdd_regs *r, volatile BYTE *tib)
 {
     VDM_REG(tib, VTIB_EAX) = r->eax; VDM_REG(tib, VTIB_EBX) = r->ebx;
     VDM_REG(tib, VTIB_ECX) = r->ecx; VDM_REG(tib, VTIB_EDX) = r->edx;
+    VDM_REG(tib, VTIB_ESI) = r->esi; VDM_REG(tib, VTIB_EDI) = r->edi;
+    VDM_REG(tib, VTIB_EBP) = r->ebp;
+    VDM_REG(tib, VTIB_DS)  = r->ds;  VDM_REG(tib, VTIB_ES)  = r->es;
 }
 
 /* Record the first few DISTINCT ports the guest touches that no VDD claims. A game
@@ -4353,6 +4365,22 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
       p = zput(p, " sc_push=0x");    p = zhex(p, g_in.sc_pushed);
       p = zput(p, " sc_drop=0x");    p = zhex(p, g_in.sc_dropped);
       p = zput(p, " int10_11=0x");   p = zhex(p, g_vid.int10_11_calls);
+      /* Each font request, its answer, and the BYTES actually sitting at the address we
+         handed back -- read from guest memory, so a wiped or misaligned table is visible
+         rather than inferred. A glyph is mostly zeros with a few set rows; all-zero or
+         all-FF here means the caller is drawing from the wrong place. */
+      { int fi; for (fi = 0; fi < g_vid.font_qn; ++fi) {
+          const volatile BYTE *fp;
+          p = zput(p, "\r\n  font_q: AL=0x"); p = zhex(p, g_vid.font_q[fi].al);
+          p = zput(p, " BH=0x");   p = zhex(p, g_vid.font_q[fi].bh);
+          p = zput(p, " -> ES:BP=0x"); p = zhex(p, g_vid.font_q[fi].seg);
+          p = zput(p, ":0x");      p = zhex(p, g_vid.font_q[fi].off);
+          p = zput(p, " CX=0x");   p = zhex(p, g_vid.font_q[fi].cx);
+          fp = (const volatile BYTE *)(((DWORD)g_vid.font_q[fi].seg << 4)
+                                       + g_vid.font_q[fi].off);
+          { BYTE fb[16]; unsigned k; for (k = 0; k < 16; ++k) fb[k] = fp[k];
+            p = zput(p, " bytes: "); p = zdump(p, fb, 16); }
+      } }
       p = zput(p, "\r\n");
       log_append(LOG_PATH, base, p); serial_out(base, p); p = base; }
     p = zput(p, "STAGE2: io_events=0x");  p = zhex(p, g_ev_io);

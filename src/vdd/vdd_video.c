@@ -2,6 +2,8 @@
  * shared video aperture (vmem), with the DAC palette, on the VDD bus.  Pure C. */
 #include "vdd_video.h"
 #include "vga_font_8x16.h"
+#include "vga_font_8x8.h"
+#include "vga_font_8x14.h"
 
 /* 16-colour EGA/CGA text palette as 0xAARRGGBB. */
 static const uint32_t ega16[16] = {
@@ -297,17 +299,36 @@ static void int10(void *self, ntvdd_regs *r)
             uint8_t bh = (uint8_t)((r_bx(r) >> 8) & 0xFF);
             uint16_t seg = VDD_FONT8X16_SEG, off = 0, bpc = 16;
             switch (bh) {
-            case 0x03: seg = VDD_FONT8X8_SEG;  off = 0;      bpc = 8;  break;
-            case 0x00:
-            case 0x04: seg = VDD_FONT8X8_SEG;  off = 128 * 8; bpc = 8; break;
-            case 0x01:
-            case 0x02:
-            case 0x05: seg = VDD_FONT8X16_SEG; off = 0;      bpc = 14; break;
-            default:   seg = VDD_FONT8X16_SEG; off = 0;      bpc = 16; break;
+            case 0x03: seg = VDD_FONT8X8_SEG;  off = 0;       bpc = 8;  break;
+            case 0x00:                                        /* INT 1Fh: 8x8 upper half */
+            case 0x04: seg = VDD_FONT8X8_SEG;  off = 128 * 8; bpc = 8;  break;
+            case 0x02:                                        /* ROM 8x14 / 9x14 alt     */
+            case 0x05: seg = VDD_FONT8X14_SEG; off = 0;       bpc = 14; break;
+            case 0x01:                                        /* INT 43h: the CURRENT font */
+                /* Whatever the active mode actually draws with -- 8x8 in the 200-line
+                   graphics modes, 8x16 in text. We used to answer this (and 8x14) with the
+                   8x16 table while reporting CX=14, so a caller striding by 14 through
+                   16-byte glyphs drifted 2 bytes per character and drew shredded text. */
+                if (st->mode == 0x13 || st->mode == 0x04 || st->mode == 0x05 ||
+                    st->mode == 0x06 || st->mode == 0x0D) {
+                    seg = VDD_FONT8X8_SEG;  off = 0; bpc = 8;
+                } else {
+                    seg = VDD_FONT8X16_SEG; off = 0; bpc = 16;
+                }
+                break;
+            default:   seg = VDD_FONT8X16_SEG; off = 0;       bpc = 16; break;
             }
             r->es = seg; r->ebp = off;
             s_cx(r, bpc);                              /* bytes per character     */
             s_dx(r, (uint16_t)(st->rows ? st->rows - 1 : 24));  /* DL = rows-1     */
+            if (st->font_qn < 4) {                     /* record the request + answer */
+                st->font_q[st->font_qn].al  = al;
+                st->font_q[st->font_qn].bh  = bh;
+                st->font_q[st->font_qn].seg = seg;
+                st->font_q[st->font_qn].off = off;
+                st->font_q[st->font_qn].cx  = bpc;
+                st->font_qn++;
+            }
         }
         break;
     case 0x12: {                                       /* alternate function sel  */
@@ -490,16 +511,22 @@ static void status_in(void *self, uint16_t port, uint8_t w, uint32_t *v)
    this is the thing to replace with real 8x8 glyph data. */
 void vdd_video_install_fonts(video_state *st)
 {
-    uint8_t *f16, *f8;
+    uint8_t *f16, *f8, *f14;
     unsigned c, y;
     if (!st || !st->bus) return;           /* called before the VDD joined the bus */
     f16 = (uint8_t *)vdd_map_flat(st->bus, VDD_FONT8X16_SEG, 0);
     f8  = (uint8_t *)vdd_map_flat(st->bus, VDD_FONT8X8_SEG, 0);
-    if (!f16 || !f8) return;
+    f14 = (uint8_t *)vdd_map_flat(st->bus, VDD_FONT8X14_SEG, 0);
+    if (!f16 || !f8 || !f14) return;
+    /* All three are the REAL ROM tables now. The 8x8 used to be manufactured here by
+       OR-ing adjacent row pairs of the 8x16 -- which squashes a 16-row glyph into 6 and
+       fills in every counter, so 'A' came out solid and 'E' came out as noise. Skyroads
+       asks for this exact table (BH=3 and BH=4, measured) and draws its own text from the
+       pointer we return, so that hack WAS the game's garbled text. Never derive a font. */
     for (c = 0; c < 256; ++c) {
-        const uint8_t *gl = vga_font_8x16[c];
-        for (y = 0; y < 16; ++y) f16[c * 16 + y] = gl[y];
-        for (y = 0; y < 8; ++y)  f8[c * 8 + y] = (uint8_t)(gl[y * 2] | gl[y * 2 + 1]);
+        for (y = 0; y < 16; ++y) f16[c * 16 + y] = vga_font_8x16[c][y];
+        for (y = 0; y < 8;  ++y) f8 [c * 8  + y] = vga_font_8x8 [c][y];
+        for (y = 0; y < 14; ++y) f14[c * 14 + y] = vga_font_8x14[c][y];
     }
 }
 

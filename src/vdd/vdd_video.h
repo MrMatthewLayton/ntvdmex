@@ -66,6 +66,12 @@ typedef struct video_state {
     uint8_t  latch[4];     /* per-plane read latches                               */
     uint8_t  retrace;      /* Input Status 1 (3DA): toggled so vsync polls advance  */
     uint32_t int10_11_calls;/* INT 10h AH=11h (character generator) calls -- see below */
+    /* WHAT the guest asked for, not just that it asked. BH selects the table and the
+       answer's CX (bytes per character) is what the caller strides by -- so a wrong CX
+       misaligns every glyph after the first, which looks exactly like garbled text.
+       Recorded per call so the log says which table Skyroads wants. */
+    struct { uint8_t al, bh; uint16_t seg, off, cx; } font_q[4];
+    uint8_t  font_qn;
     uint8_t  fb[VID_FB_MAX];            /* text glyph / planar render target        */
     int      dirty;
     ntvdd_frame frame;
@@ -97,6 +103,7 @@ int     vdd_video_planar_active(const video_state *st);    /* 1 in mode 12h     
    a VGA game (our text output lives at B8000), so the fonts go there. */
 #define VDD_FONT8X16_SEG 0xB000       /* 256 chars * 16 bytes = 0x1000 */
 #define VDD_FONT8X8_SEG  0xB100       /* 256 chars *  8 bytes = 0x0800 */
+#define VDD_FONT8X14_SEG 0xB180       /* 256 chars * 14 bytes = 0x0E00 (B1800..B25FF) */
 
 /* `int10_11_calls` is counted so the next round is not another guess: the font-pointer fix
    assumed the guest asks for its glyphs with INT 10h AH=11h, and the text is still garbled.
