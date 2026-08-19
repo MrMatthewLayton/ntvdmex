@@ -19,7 +19,7 @@
 #include <windows.h>
 #include <stdint.h>
 
-#define AW_BUFFERS   4          /* buffers in flight                             */
+#define AW_BUFFERS   6          /* buffers in flight (~70 ms of slack at 44100)   */
 #define AW_FRAMES  512          /* frames per buffer (~11.6ms at 44100)          */
 
 /* Fill `frames` mono 16-bit samples. Called on the audio thread; the host wraps

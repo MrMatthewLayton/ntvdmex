@@ -41,6 +41,15 @@ static DWORD WINAPI aw_thread(LPVOID pv)
     audio_wave *aw = (audio_wave *)pv;
     int i;
 
+    /* THE EXEC THREAD RUNS FLAT OUT. It is a guest burning 100% of a core, and at normal
+       priority this thread loses the race often enough that buffers run dry -- which is
+       heard as a periodic tick or pulse in otherwise correct music, exactly as reported.
+       Audio refill is a hard real-time deadline (every ~11.6 ms per buffer) doing almost no
+       work, so it belongs above the guest. TIME_CRITICAL is what waveOut feeders normally
+       use; fall back gracefully if the system refuses it. */
+    if (!SetThreadPriority(GetCurrentThread(), 15 /* THREAD_PRIORITY_TIME_CRITICAL */))
+        SetThreadPriority(GetCurrentThread(), 2 /* THREAD_PRIORITY_HIGHEST */);
+
     /* Prime every buffer, then top them up as the driver returns them. */
     for (i = 0; i < AW_BUFFERS && !aw->silent; ++i) {
         AW_WAVEHDR *h = hdr_of(aw, i);
@@ -67,7 +76,9 @@ static DWORD WINAPI aw_thread(LPVOID pv)
             aw->fill(aw->ctx, aw->buf[i], AW_FRAMES);
             if (p_waveOutWrite(aw->hwo, h, sizeof(AW_WAVEHDR)) != 0) aw->underruns++;
         }
-        WaitForSingleObject(aw->event, 20);
+        /* Wake early and often: a full buffer is ~11.6 ms, so a 20 ms timeout could miss a
+           whole buffer's deadline if the completion event is late. */
+        WaitForSingleObject(aw->event, 5);
     }
 
     if (!aw->silent) {

@@ -135,7 +135,19 @@ static audio_state  g_audio;     static audio_wave g_wave;
 static present_ddraw g_pd;
 static xms_state    g_xms;       /* M4: XMS extended-memory manager           */
 static ems_state    g_ems;       /* M4: EMS expanded-memory manager           */
+/* PENDING TIMER TICKS, as a saturating COUNT rather than a flag. A boolean coalesces: every
+   tick that falls while the guest has interrupts off -- and Skyroads spends most of its time
+   in exactly that state, CLI'd around its 256-colour palette writes -- was silently thrown
+   away, so the music's tempo wandered with whatever the guest happened to be doing. A real
+   8259 latches the request and delivers it the moment IF comes back. Saturating at 4 keeps
+   that fidelity without letting a long CLI region accumulate a burst that would then flood
+   the guest with back-to-back timer interrupts. */
+#define IRQ0_PENDING_MAX 4
 static volatile LONG g_irq0_pending = 0;    /* PIT raised IRQ0 (UI thread sets, V86 thread delivers) */
+static void irq0_latch(void)
+{
+    if (g_irq0_pending < IRQ0_PENDING_MAX) InterlockedIncrement(&g_irq0_pending);
+}
 static volatile LONG g_irq1_pending = 0;    /* count of un-delivered keyboard IRQ1s (one per scancode byte) */
 static int g_pm_irq0_latch = 0;             /* #2b: a virtual IRQ0 awaiting injection into the PM hook */
 static int g_in_pm_irq     = 0;             /* #2b: re-entrancy guard while inside an injected PM ISR   */
@@ -366,7 +378,7 @@ static void host_irq_sink(void *ctx, uint8_t irq)
     g_irq_raised[irq & 7]++;
     g_irq_raised_any++;
     if (irq == 0) {
-        g_irq0_pending = 1;
+        irq0_latch();
         /* THE TIMER NEEDS THE ASYNC PATH TOO -- arguably more than the devices do. A game
            that parks in its own handler stops trapping, so the exec loop never gets a turn
            and the tick it is waiting for can never arrive. A real PC interrupts it regardless.
@@ -376,9 +388,15 @@ static void host_irq_sink(void *ctx, uint8_t irq)
            Skyroads was asking for 180, which is most of why the game ran ~10x too slow and
            why its intro stalled after ~3 s (measured: d_irq0 fell to ~1/s while the guest sat
            at 0110:3b40 waiting, having done all its work in the first three seconds). */
-        if (g_qi_susp && async_inject_irq(0)) g_irq0_pending = 0;
+        if (g_qi_susp && async_inject_irq(0)) InterlockedDecrement(&g_irq0_pending);
     }
-    else if (irq == 1) InterlockedIncrement(&g_irq1_pending);
+    else if (irq == 1) {
+        InterlockedIncrement(&g_irq1_pending);
+        /* Same async delivery as the timer. A keypress that has to wait for the guest to
+           trap with interrupts enabled arrives whenever the game happens to yield -- which
+           is what makes input feel laggy. Deliver it now if the guest can take it. */
+        if (g_qi_susp && async_inject_irq(1)) InterlockedDecrement(&g_irq1_pending);
+    }
     else if (irq < 8) {
         InterlockedExchange(&g_irqn_pending[irq], 1);
         /* A device IRQ is raised from the AUDIO thread, while the guest may be
@@ -3040,7 +3058,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     (void)hInst; (void)hPrev; (void)lpCmd; (void)nShow;
     progpath[0] = 0; args[0] = 0;
 
-    p = zput(p, "NTVDMEX clean host\r\nSTAGE0: WinMain entered [build dpmi-harness-v125]\r\n");
+    p = zput(p, "NTVDMEX clean host\r\nSTAGE0: WinMain entered [build dpmi-harness-v126]\r\n");
     log_write(LOG_PATH, report, p);
     serial_init();                                      /* DPMI harness: COM1 log sink */
     serial_out(report, p);
@@ -3411,7 +3429,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                 fl = VDM_REG(tib, VTIB_EFLAGS);
             }
             if (if_or_vif(fl) && !(cs == DOS_HDLR_SEG && ip >= 0x34 && ip < 0x3A)) {
-                g_irq0_pending = 0;
+                InterlockedDecrement(&g_irq0_pending);
                 g_irq0_inj++;
                 inject_int(tib, 0x08);
             } else {
@@ -3588,7 +3606,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                 volatile DWORD *vdmstate = (volatile DWORD *)(ULONG_PTR)0x714;
                 DWORD pend = *vdmstate & 3u;
                 if (pend) {
-                    if (pend & 2u) g_irq0_pending = 1;   /* VDM_INT_TIMER -> IRQ0 */
+                    if (pend & 2u) irq0_latch();         /* VDM_INT_TIMER -> IRQ0 */
                     *vdmstate &= ~3u;
                     g_ev_intpend++;
                     continue;
