@@ -2,8 +2,8 @@
 ██ CHECKPOINT — 2026-08-19 (session 11). READ THIS FIRST ON RESTART. ██
 ═══════════════════════════════════════════════════════════════════════════════
 
-▶ RESTART POINT (2026-08-19, session 11): HEAD = `b7bc111`; branch spike/dpmi-16bit-switch;
-  **25 commits UNPUSHED**. Host = **dpmi-harness-v105**, built clean, deployed to the share `bm/`,
+▶ RESTART POINT (2026-08-19, session 11): HEAD = `e9f4d13`; branch spike/dpmi-16bit-switch;
+  **28 commits UNPUSHED**. Host = **dpmi-harness-v111**, built clean, deployed to the share `bm/`,
   and RE-VERIFIED on the rig: selftest **8/8 PASS**, off-VM battery **519/519**. Rig healthy
   (watcher + controld beating). Working tree clean except the same pre-existing untracked files
   that are NOT mine (MAINICON.ico, demos/, scripts/kd_*.py, scripts/trace_break.py) and the
@@ -16,13 +16,25 @@
   WEDGING guests, and -- the most consequential result -- found that **the blocker was
   misdiagnosed**: Skyroads is not starved of injection points, it is being refused them.
 
-★★★ THE SESSION-10 BLOCKER IS THE WRONG FRAME. Skyroads' 30 s run makes **4.5M port-I/O
-traps** (`io_events=0x46301c`) and takes 483 timer IRQs. The exec loop therefore gets
-millions of turns while the game waits for its Sound Blaster IRQ -- injection points are
-ABUNDANT. We decline every one: `irqn_inj=0` with `irq0_skip=0x18985`. So "the guest never
-traps so we can never inject" is false for this game; the gate is what is wrong. (It is
-still true in the abstract, and the async lever below is still worth having -- but it is
-NOT what stands between us and Skyroads.)
+★★★ SESSION 10'S DIAGNOSIS STANDS -- I briefly concluded otherwise and the instrumentation
+refuted me; the corrected story is below. Mid-session I saw Skyroads' 4.5M port-I/O traps
+and concluded the exec loop had millions of injection points it was refusing. It does not.
+A refusal log at the gate proves `irqn_refused = 0` for the whole run: **we never decline
+anything**. The 4.5M traps all happen in the first 6 s, before the transfer exists.
+
+★★★ THE MEASURED SKYROADS TIMELINE (heartbeat, bare metal -- this is the useful artifact):
+    ~8.5 s  SB block programmed: len 0x7d64 (32,100 bytes) @ rate 0x1788 (6024 Hz)
+    8.5-13s block_left drains at EXACTLY the programmed rate (0x665a -> 0x23c0 in 3 s)
+    ~13 s   `io_events` FREEZES at 0x45aba0 and never moves again; guest parked at
+            DOS_HDLR_SEG:0x0037 -- the `CD 1C` in our INT 08h stub, i.e. it has entered its
+            own INT 1Ch handler and spins there taking no traps at all
+    ~14 s   block completes: blocks=1, raised[5]=1, sb_irq=5 -- the IRQ IS raised, ONE
+            SECOND AFTER the guest stopped trapping, into an exec loop that can never run
+  ⇒ **At the instant that matters there is genuinely no injection point.** Async delivery
+    is required, exactly as session 10 said.
+  ► THE SILVER LINING IS REAL: DMA -> SB -> mixer is **functionally correct end to end**.
+    The block is programmed, drained at the right rate, and completed. Only the completion
+    interrupt cannot reach the guest. That is a much smaller remaining gap than it looked.
 
 ★★★ WHY WE REFUSE: **VME. The guest's STI sets VIF (bit 19), not IF -- and every gate we
 have reads IF.** Virtual Mode Extensions are enabled for our VDM; that is PROVEN, not
@@ -30,10 +42,12 @@ assumed: the kernel sets EFLAGS.VIP in our guest's frame, a branch it only takes
 `KeI386VirtualIntExtensions` has V86 VME on. Under VME a V86 guest's CLI/STI never touch
 IF. So a game that enables interrupts by EXECUTING STI -- rather than by inheriting IF=1
 from the entry EFLAGS (session 10's fix, which is why programs that never STI worked) --
-looks permanently interrupt-disabled to us. Gates are now `IF || VIF` (commit `b7bc111`).
-  ► Measured: Skyroads' `irq0_skip` fell 0x1e34c -> 0x18985, so the gate does open more
-    often -- but `irqn_inj` is STILL 0 and it still freezes at `0x0050:0x0037`. There is at
-    least one more refusal on that path. **RESUME ITEM 1 is to log it, not reason about it.**
+looks permanently interrupt-disabled to us. Gates are now `IF || VIF` (commit `b7bc111`). This is correct on VME hardware and selftest
+stays 8/8, but **it is not what unblocks Skyroads** -- see the timeline above.
+  ► ALSO TESTED AND REFUTED, do not repeat: an entry trampoline that makes the guest execute
+    a real `sti` (`sti; jmp far <entry>` at DOS_HDLR_SEG:0x60, qimode bit 3) so VIF is set
+    the only way the CPU accepts. No delivery. And qirq.com already executed its own `sti`
+    before spinning, so the earlier runs had refuted this before I built it.
 
 ★★ THE ASYNC LEVER, RE'd FROM XP's KERNEL (full write-up + every address in
 docs/research/dpmi-under-ntvdmcontrol.md, "Runs 87-93"):
@@ -72,27 +86,45 @@ v104 froze identically. Do not conflate the two.)
     `printf 'dpmitest.com&copy C:\\WINDOWS\\system32\\ntoskrnl.exe "<share>\\re_ntoskrnl.exe"\r\n' > cmd.txt`
     (the watcher interpolates cmd.txt into a command line, so `&` chains a command after rt.bat).
 
+▶ DEAD LEADS -- CLOSED BY DISASSEMBLY THIS SESSION, do not spend time re-opening:
+  • **`VdmPMCliControl` (service 13) is PM-ONLY.** ServiceData is a pointer to a subfunction
+    dword: {0,1} clear/set bit 0 of the word at VdmObjects+0xBA (the PM client's virtual CLI),
+    {2} = the CLI-timeout watchdog that force-sets `[0x714] |= 0x200`, {3,4} dispatch helpers.
+    It never touches the V86 VIF. (The previous checkpoint called this the top lead. It isn't.)
+  • **`VdmDelayInterrupt` (service 2)** takes a 12-byte struct keyed by IRQ line -- it is the
+    ICA's delay/undelay machinery (`pDelayIrq`/`pUndelayIrq`/`pDelayIret`), not an async timer.
+  • Setting EFLAGS.VIF via the VTIB CONTEXT (sanitised away), and making the guest execute a
+    real `sti` (above). Neither produces a kernel dispatch.
+
 ▶▶ RESUME — NEXT STEPS (in order):
-  1. **Log the refusal, don't theorise.** In the device-IRQ block, log the first ~16 turns where
-     `g_irqn_pending[5]` is set but we decline: CS:IP, VTIB EFLAGS, the stack-FLAGS word, and
-     which clause refused (`in_bop` vs the IF/VIF test). Run Skyroads. That names the remaining
-     gate in one round trip. Success = `irqn_inj` non-zero and the game leaves its INT 1Ch wait.
-     Suspect #1: the `cs == DOS_HDLR_SEG` branch of `guest_if_enabled` reads the pushed FLAGS at
-     `[ss:sp+4]`, which is the frame `CD 1C` pushed -- IF cleared BY the INT instruction -- so
-     while the guest is anywhere in our INT 08h stub we always read "disabled". A real BIOS timer
-     ISR issues STI before chaining INT 1Ch; our stub (`C4 C4 08, CD 1C, CF` at 0x34) never does.
-  2. Then re-run Skyroads expecting the intro to ANIMATE past 3 frames, and drive it to the cockpit.
-  3. The async lever is still the right long-term mechanism (it is how real ntvdm does it, and it
-     brings kernel-side IF/VIP deferral for free). To finish it: find how the kernel's VIF gets
-     set for a running guest. **Top lead = `VdmPMCliControl` (service 13)**, documented in our own
-     notes as "virtualises the client interrupt flag", called by ntvdm with subfns {0,1,3}
-     (0xf0053b6, 0xf03d9d1, 0xf03da59). Test the three against `qirq.com` (mode `d`); success is
-     `c0d` non-zero while `irqn_inj` stays 0 (proving the KERNEL dispatched, not us).
-  4. PIC VDD claiming 0x20/0x21 is now a PREREQUISITE for the kernel path, not a nicety: the ICA's
+  1. **Settle whether `VdmQueueInterrupt`'s APC can EVER reach a running guest.** The live
+     hypothesis, straight from the disassembly of the APC kernel routine (0x46fdfb): its FIRST
+     pass always takes the requeue branch at 0x46fead (it is entered with NormalContext = 0, and
+     only `NormalContext != 0` reaches the dispatch), requeueing itself as a **user-mode** APC
+     with NormalContext = `[0x714] & 1`. A user APC is only delivered to a thread in an alertable
+     wait -- which a thread spinning inside VdmStartExecution never is. If that is right, this
+     service cannot preempt a running V86 guest at all; it only takes effect at the VDM's next
+     kernel transition, which is precisely what we already have. CHEAPEST TEST: run qirq (mode
+     `d`) but make the guest trap once ~1 s after the raises begin (e.g. a single `INT 1Ah`
+     inside the spin) -- if the vector fires on that trap and never otherwise, the APC is
+     transition-only and this whole avenue is closed.
+  2. If closed, take session 10's option (a): **force periodic guest yields.** The precedent is
+     already recorded and is the strongest remaining lead -- **the kernel DID preempt us with
+     event 3 at startup when IT had a timer pending** (session 10). So something kernel-side can
+     break into a running guest; find what arms that VDM timer. Failing that, a host-side yield
+     (a periodic trap planted in the guest) is unfaithful but unblocks the whole device-IRQ class.
+  3. Then re-run Skyroads expecting the intro to ANIMATE past 3 frames, and drive it to the cockpit.
+  4. PIC VDD claiming 0x20/0x21 is a PREREQUISITE for the kernel ICA path, not a nicety: the ICA's
      ISR bit stays set until an EOI clears it (`v86_ica_eoi`), or that line never fires again.
      Skyroads already writes EOI to 0x20 and it goes nowhere (still in `unclaimed ports`).
   5. Calibrate the OPL envelope rates (`OPL_EG_ANCHOR`); decide on un-folding SB stereo.
-  6. `git push` -- 25 commits are sitting local.
+  6. `git push` -- 28 commits are sitting local.
+
+▶ HARNESS GOTCHA (cost me a wrong conclusion this session): **rt.bat copies the log while the
+  host may still be finishing, and SMB caches the result.** A `result_*.log` read too early is a
+  PARTIAL file -- I read one that was missing its last lines and concluded a counter was absent.
+  After `cmd.txt` disappears, wait ~25-40 s, `ls` the share to force a readdir, and sanity-check
+  the version string and a known-final line (`STAGE2: complete` or the HEADLESS report).
 
 ▶ OPEN QUESTION (unexplained, low priority): in the runs that set the hardware-pending bit, the
   process ended at ~8 s having reached NO exit path -- not the guest's 4Ch flush, not the 30 s
