@@ -54,6 +54,21 @@
    3 = both), bit 2 = raise a periodic device IRQ 5 for the qirq probe. Absent = the
    pre-session-11 behaviour (latch the pending bit only, never queue). */
 #define QIMODE_PATH "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\qimode.txt"
+/* Headless wall-clock cap override, decimal milliseconds, also on the share. The 30 s
+   default is right for an unattended test that must not wedge the watcher, but an
+   INTERACTIVE test on the box -- keylog, where a human walks over and presses every key
+   -- needs minutes, and the default would kill the guest mid-typing. Absent = the
+   default. */
+#define HEADLESS_MS_PATH "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\headless_ms.txt"
+/* Scripted synthetic keystrokes, on the share so a test sequence can be changed between
+   runs without a rebuild. Whitespace-separated tokens, played once in order:
+     4d     -- scancode 4D: make, brief hold, break
+     e4d    -- the same as an EXTENDED key (E0 prefix) -- every arrow is one of these
+     w1500  -- wait 1500 ms
+   A hardcoded "tap UP 400 times" cannot reach a specific screen, and worse, UP is a no-op
+   on a menu whose first item is already selected -- a probe that cannot tell success from
+   failure. A script can say "wait for the intro, Enter, DOWN, DOWN, Enter". */
+#define KEYS_PATH "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\keys.txt"
 
 /* Offset, within DOS_HDLR_SEG, of the XMS API far-call entry stub (BOP 0x43; RETF).
    Lives just past the INT 1Ah stub (which ends at 0x40) and the INT 2Fh stub (4 bytes
@@ -204,7 +219,9 @@ static uint16_t g_unclaimed[IO_UNCLAIMED_MAX];
 static int      g_unclaimed_n = 0;
 
 static int            g_capture       = 0;  /* CAPTURE_FLAG present: opt-in self-screenshot for graphical tests */
-#define PM_HEADLESS_MS 30000                     /* headless exec-loop wall-clock cap (an infinite visual demo self-exits) */
+#define PM_HEADLESS_MS_DEFAULT 30000             /* headless exec-loop wall-clock cap (an infinite visual demo self-exits) */
+static DWORD g_headless_ms = PM_HEADLESS_MS_DEFAULT;   /* overridable via HEADLESS_MS_PATH */
+#define PM_HEADLESS_MS g_headless_ms
 #define PM_HEADLESS_GRACE_MS 3000                /* grace for a clean wind-down before the hard backstop forces exit */
 static volatile DWORD g_dpmi_enter_cs = 0;  /* guest CS handed to the last dpmi_enter_pm    */
 static volatile DWORD g_dpmi_enter_eip= 0;  /* guest EIP handed to the last dpmi_enter_pm   */
@@ -620,15 +637,29 @@ static void host_conout(void *ctx, uint8_t ch)
 
 /* DOS console input (INT 21h AH=01/07/08/0A) -> the keyboard VDD ring, blocking
    on the V86 thread until the UI thread pushes a key (or the window closes). */
+/* HOW DOS HANDS OVER AN ARROW. A BIOS keycode is a PAIR (AH=scancode, AL=ascii), but every
+   INT 21h console read returns ONE byte. For the keys with no ascii -- arrows, F-keys, the
+   nav cluster, i.e. AL=0 -- DOS returns 0x00 first and the SCANCODE on the NEXT call, and a
+   program reading arrows is written to expect exactly that. We returned `k & 0xFF` and threw
+   the scancode away, so an arrow arrived as a lone NUL that never had a second half: every
+   extended key was unreadable through DOS. That is the Skyroads menu, which sits in INT 21h
+   (measured: the guest parks at DOS_HDLR_SEG:0000, the INT 21h BOP, for the whole run).
+   g_conin_pending holds that second byte between the two calls. */
+static int g_conin_pending = -1;                /* scancode owed to the next read, or -1 */
+
 static int host_conin(void *ctx)
 {
     uint16_t k; int got;
     (void)ctx;
+    if (g_conin_pending >= 0) { int c = g_conin_pending; g_conin_pending = -1; return c; }
     for (;;) {
         EnterCriticalSection(&g_lock);
         got = vdd_input_pop(&g_in, &k);
         LeaveCriticalSection(&g_lock);
-        if (got) return k & 0xFF;
+        if (got) {
+            if ((k & 0xFF) == 0) { g_conin_pending = (k >> 8) & 0xFF; return 0x00; }
+            return k & 0xFF;
+        }
         if (!g_running) return 0x1B;            /* window gone -> unblock as ESC   */
         WaitForSingleObject(g_key_event, 50);
     }
@@ -801,23 +832,59 @@ static DWORD WINAPI synthkey_thread(LPVOID pv)
     /* Reach the MENU before testing menu keys. The intro/attract loop reads no keyboard at
        all (measured: int16=[0,0,0,0], p60=0 for a whole run), so arrows sent during it prove
        nothing -- Enter is what gets from the intro to the menu, per the bug report. */
+    /* A script on the share wins, if there is one: it can aim at a particular screen. */
+    { HANDLE h = CreateFileA(KEYS_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                             NULL, OPEN_EXISTING, 0, NULL);
+      if (h != INVALID_HANDLE_VALUE) {
+          char s[1024]; DWORD rd = 0; DWORD i = 0;
+          ReadFile(h, s, sizeof s - 1, &rd, NULL);
+          CloseHandle(h);
+          s[rd] = 0;
+          while (i < rd && g_running) {
+              int ext = 0; DWORD v = 0; int digits = 0;
+              while (i < rd && (s[i] == ' ' || s[i] == '\t' || s[i] == '\r' || s[i] == '\n')) ++i;
+              if (i >= rd) break;
+              if (s[i] == 'w' || s[i] == 'W') {           /* w<decimal ms> */
+                  ++i;
+                  while (i < rd && s[i] >= '0' && s[i] <= '9') { v = v*10 + (DWORD)(s[i]-'0'); ++i; }
+                  { DWORD slept = 0;                       /* sleep in slices so a wind-down
+                                                              is not stuck behind a long wait */
+                    while (slept < v && g_running) { Sleep(v - slept > 100 ? 100 : v - slept);
+                                                     slept += 100; } }
+                  continue;
+              }
+              if (s[i] == 'e' || s[i] == 'E') { ext = 1; ++i; }
+              while (i < rd && digits < 2) {               /* up to two hex digits */
+                  char c = s[i]; int d = -1;
+                  if (c >= '0' && c <= '9') d = c - '0';
+                  else if (c >= 'a' && c <= 'f') d = c - 'a' + 10;
+                  else if (c >= 'A' && c <= 'F') d = c - 'A' + 10;
+                  if (d < 0) break;
+                  v = (v << 4) | (DWORD)d; ++i; ++digits;
+              }
+              if (!digits) { ++i; continue; }              /* skip a token we do not grok */
+              host_key_scancode((uint8_t)v, ext, 0);
+              Sleep(60);                                    /* a human-length hold */
+              host_key_scancode((uint8_t)v, ext, 1);
+              Sleep(250);
+          }
+          return 0;
+      } }
+
     Sleep(9000);
-    host_key_scancode(0x1C, 0, 0);                /* Enter make  */
-    Sleep(60);
-    host_key_scancode(0x1C, 0, 1);                /* Enter break */
-    Sleep(2000);
     for (n = 0; n < 400 && g_running; ++n) {
         /* An EXTENDED key (the arrows a player actually holds) at the OS auto-repeat rate,
            through exactly what WM_KEYDOWN does: E0 prefix + make code on the raw FIFO with
            an IRQ1 per byte, AND the BIOS ring entry that INT 16h returns. Feeding only the
            FIFO -- which the first version of this probe did -- means a game that reads INT
            16h never sees the key at all, so the probe passed while a real press killed it. */
-        host_key_scancode(0x48, 1, 0);
-        EnterCriticalSection(&g_lock);
-        vdd_input_push(&g_in, (uint16_t)(0x48 << 8));   /* AH=scancode, AL=0 */
-        LeaveCriticalSection(&g_lock);
+        /* DOWN, not UP, and no Enter first. The menu opens with "Start!" already selected --
+           the TOP item -- so a working UP arrow moves the highlight nowhere and a probe
+           built on it cannot tell success from failure. DOWN has somewhere to go, and
+           staying out of the game keeps the highlight on screen where a screenshot sees it. */
+        host_key_scancode(0x50, 1, 0);                   /* INT 09h fills the BIOS ring now */
         Sleep(250);                                      /* menu-paced taps, not a hold */
-        host_key_scancode(0x48, 1, 1);                   /* release each time          */
+        host_key_scancode(0x50, 1, 1);                   /* release each time          */
         Sleep(250);
     }
     return 0;
@@ -1005,17 +1072,23 @@ static int host_coninnb(void *ctx)
 {
     uint16_t k; int got;
     (void)ctx;
+    if (g_conin_pending >= 0) { int c = g_conin_pending; g_conin_pending = -1; return c; }
     EnterCriticalSection(&g_lock);
     got = vdd_input_pop(&g_in, &k);
     LeaveCriticalSection(&g_lock);
-    return got ? (k & 0xFF) : -1;
+    if (!got) return -1;
+    if ((k & 0xFF) == 0) { g_conin_pending = (k >> 8) & 0xFF; return 0x00; }
+    return k & 0xFF;
 }
 
-/* Non-blocking console status (INT 21h AH=0B / AH=06 DL=FF peek): 1 if a key is ready. */
+/* Non-blocking console status (INT 21h AH=0B / AH=06 DL=FF peek): 1 if a key is ready.
+   An owed scancode counts as ready, or a program that polls status before reading would
+   stall halfway through an arrow. */
 static int host_conpeek(void *ctx)
 {
     uint16_t k; int got;
     (void)ctx;
+    if (g_conin_pending >= 0) return 1;
     EnterCriticalSection(&g_lock);
     got = vdd_input_peek(&g_in, &k);
     LeaveCriticalSection(&g_lock);
@@ -1509,30 +1582,12 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
             uint8_t rawsc = (uint8_t)((lp >> 16) & 0xFF);
             if (rawsc) host_key_scancode(rawsc, (lp & 0x01000000) != 0, 0);
         }
-        /* Extended keys (arrows, nav cluster, F1-F10) produce NO WM_CHAR, so feed the ring
-           here as BIOS extended keycodes: AL=0, AH=scancode (INT 16h returns them in AX).
-           Games/DOS apps poll these via INT 16h -- without this, arrow input never arrives. */
-        {
-            uint16_t sc = 0;
-            switch (wp) {
-            case VK_UP:     sc = 0x48; break;   case VK_DOWN:  sc = 0x50; break;
-            case VK_LEFT:   sc = 0x4B; break;   case VK_RIGHT: sc = 0x4D; break;
-            case VK_HOME:   sc = 0x47; break;   case VK_END:   sc = 0x4F; break;
-            case VK_PRIOR:  sc = 0x49; break;   case VK_NEXT:  sc = 0x51; break;  /* PgUp/PgDn */
-            case VK_INSERT: sc = 0x52; break;   case VK_DELETE:sc = 0x53; break;
-            case VK_F1: case VK_F2: case VK_F3: case VK_F4: case VK_F5:
-            case VK_F6: case VK_F7: case VK_F8: case VK_F9: case VK_F10:
-                sc = (uint16_t)(0x3B + (wp - VK_F1)); break;  /* F1=0x3B .. F10=0x44 */
-            default: break;
-            }
-            if (sc) {
-                EnterCriticalSection(&g_lock);
-                vdd_input_push(&g_in, (uint16_t)(sc << 8));   /* AH=scancode, AL=0 */
-                LeaveCriticalSection(&g_lock);
-                if (g_key_event) SetEvent(g_key_event);
-                return 0;
-            }
-        }
+        /* NOTHING ELSE TO DO. The scancode above is the whole keystroke: INT 09h translates
+           it and fills the BIOS ring in guest memory, which is the single buffer INT 16h and
+           a BDA-reading program both look at. This used to ALSO push a keycode straight into
+           a host-side ring -- a second, invisible buffer that made INT 16h appear to work
+           while 0040:001E stayed empty forever, which is exactly why the Skyroads menu
+           ignored every arrow. One key, one path. */
         break;
     case WM_KEYUP:                       /* raw AT keyboard BREAK code + IRQ1      */
         {
@@ -1540,11 +1595,11 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
             if (rawsc) host_key_scancode(rawsc, (lp & 0x01000000) != 0, 1);
         }
         break;
-    case WM_CHAR:                        /* translated ASCII -> keyboard ring     */
-        EnterCriticalSection(&g_lock);
-        vdd_input_push(&g_in, (uint16_t)(wp & 0xFF));
-        LeaveCriticalSection(&g_lock);
-        if (g_key_event) SetEvent(g_key_event);
+    case WM_CHAR:                        /* Windows' translation: not ours to use */
+        /* WM_KEYDOWN already delivered this key as a scancode, and INT 09h turns that into
+           the BIOS keycode. Pushing the WM_CHAR ascii as well would enter every printable
+           key TWICE. (The scancode path is also the only one that can produce the AL=0
+           extended codes an arrow needs, which WM_CHAR never generates at all.) */
         return 0;
     case WM_MOUSEMOVE:                   /* map client -> guest pixels, + buttons */
     case WM_LBUTTONDOWN: case WM_LBUTTONUP:
@@ -3264,6 +3319,21 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     /* Self-screenshot only when explicitly requested (graphical tests) AND headless, so
        the common non-graphical tests never enter the capture path. Latched once here. */
     g_capture  = g_headless && (GetFileAttributesA(CAPTURE_FLAG) != INVALID_FILE_ATTRIBUTES);
+    /* Headless cap override (decimal ms on the share). Read before the deadline thread
+       starts, since that thread sleeps on it. Clamped: below the default a typo would
+       kill runs early, above 10 min a typo would wedge the watcher for the whole time. */
+    { HANDLE h = CreateFileA(HEADLESS_MS_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                             NULL, OPEN_EXISTING, 0, NULL);
+      if (h != INVALID_HANDLE_VALUE) {
+          char c[16]; DWORD rd = 0, v = 0; int i;
+          ReadFile(h, c, sizeof c, &rd, NULL);
+          CloseHandle(h);
+          for (i = 0; i < (int)rd; ++i) {
+              if (c[i] < '0' || c[i] > '9') break;      /* stop at CR/LF/junk */
+              v = v * 10 + (DWORD)(c[i] - '0');
+          }
+          if (v > PM_HEADLESS_MS_DEFAULT && v <= 600000) g_headless_ms = v;
+      } }
     /* Async-preemption mode (session 11). Read once; a handle to THIS thread is what
        VdmQueueInterrupt takes, and this thread is the one that will be running the
        guest inside VdmStartExecution -- so duplicate it here, before the exec loop. */
@@ -3495,6 +3565,11 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     vdd_bus_add(&g_bus, &g_vid_dev);
     /* AFTER the video VDD is on the bus (it needs st->bus to resolve a guest address). */
     vdd_video_install_fonts(&g_vid);            /* real glyph data behind INT 10h 1130h */
+    /* The BIOS keyboard buffer belongs to the guest: point the VDD at 0040:0000 BEFORE the
+       bus resets it, so the ring pointers it initialises land in guest memory where a DOS
+       program reading 0040:001A can see them. V86 low memory is mapped in our address
+       space, so the BDA is addressable directly. */
+    g_in.bda = (uint8_t *)0x400;
     g_in_dev = vdd_input_device(&g_in);
     vdd_bus_add(&g_bus, &g_in_dev);             /* keyboard: claims INT 16h      */
     g_spk.pit = &g_pit;                         /* speaker tone <- PIT channel 2 */
@@ -3531,7 +3606,10 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     /* Headless: arm the deadline watchdog so a run that blocks on input (a "press any
        key" prompt, a game menu) still self-terminates instead of wedging the harness. */
     if (g_headless) { HANDLE hd = CreateThread(NULL, 0, headless_deadline_thread, NULL, 0, NULL);
-                      if (hd) CloseHandle(hd); }
+                      if (hd) CloseHandle(hd);
+                      /* appended to the preamble, which is flushed further down */
+                      p = zput(p, "HEADLESS: cap=0x"); p = zhex(p, g_headless_ms);
+                      p = zput(p, " ms\r\n"); }
     if (g_headless) { HANDLE hb = CreateThread(NULL, 0, heartbeat_thread, NULL, 0, NULL);
                       if (hb) CloseHandle(hb); }
     if (g_qi_keys) { HANDLE hk = CreateThread(NULL, 0, synthkey_thread, NULL, 0, NULL);
@@ -4272,6 +4350,9 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
       { int k; for (k = 0; k < 4; ++k) { p = zput(p, "0x"); p = zhex(p, g_in.int16_calls[k]); p = zput(p, " "); } }
       p = zput(p, "] p60=0x");       p = zhex(p, g_in.p60_reads);
       p = zput(p, " sc_left=0x");    p = zhex(p, (DWORD)vdd_input_sc_pending(&g_in));
+      p = zput(p, " sc_push=0x");    p = zhex(p, g_in.sc_pushed);
+      p = zput(p, " sc_drop=0x");    p = zhex(p, g_in.sc_dropped);
+      p = zput(p, " int10_11=0x");   p = zhex(p, g_vid.int10_11_calls);
       p = zput(p, "\r\n");
       log_append(LOG_PATH, base, p); serial_out(base, p); p = base; }
     p = zput(p, "STAGE2: io_events=0x");  p = zhex(p, g_ev_io);

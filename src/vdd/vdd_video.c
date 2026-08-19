@@ -285,6 +285,7 @@ static void int10(void *self, ntvdd_regs *r)
         }
         break; }
     case 0x11:                                         /* character generator     */
+        st->int10_11_calls++;                          /* did the guest ASK at all? */
         if (al == 0x30) {                              /* get font info -> ES:BP  */
             /* THE POINTER IS THE POINT. BH selects which table the caller wants, and the
                answer is returned in ES:BP with CX = bytes per character. Returning only
