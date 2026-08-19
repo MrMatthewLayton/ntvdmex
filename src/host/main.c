@@ -263,6 +263,25 @@ static int host_conin(void *ctx)
     }
 }
 
+/* Headless deadline watchdog (session-9). A headless run must self-bound even when the
+   guest blocks INSIDE a host INT handler -- e.g. a blocking INT 16h/21h key read at a
+   "press any key" prompt or a game menu (host_conin + the INT 16h loops spin until
+   g_running clears). The per-loop wall-clock caps can't fire then (the exec loop isn't
+   iterating), so this thread forces the wind-down: after PM_HEADLESS_MS it clears
+   g_running -- which unblocks every blocking key-read (all check !g_running) AND exits
+   both exec loops -- and wakes any blocked reader. Started only when g_headless. */
+static DWORD WINAPI headless_deadline_thread(LPVOID pv)
+{
+    char b[80], *q = b;
+    (void)pv;
+    Sleep(PM_HEADLESS_MS);
+    InterlockedExchange(&g_running, 0);         /* stop exec loops + unblock key reads */
+    if (g_key_event) SetEvent(g_key_event);     /* wake a blocked host_conin/INT16 wait */
+    q = zput(q, "HEADLESS: deadline reached -> g_running=0 (wind down)\r\n");
+    log_append(LOG_PATH, b, q); serial_out(b, q);
+    return 0;
+}
+
 /* Non-blocking console read (INT 21h AH=06 DL=FF): a key char, or -1 if none. */
 static int host_coninnb(void *ctx)
 {
@@ -2236,7 +2255,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     (void)hInst; (void)hPrev; (void)lpCmd; (void)nShow;
     progpath[0] = 0; args[0] = 0;
 
-    p = zput(p, "NTVDMEX clean host\r\nSTAGE0: WinMain entered [build dpmi-harness-v71]\r\n");
+    p = zput(p, "NTVDMEX clean host\r\nSTAGE0: WinMain entered [build dpmi-harness-v72]\r\n");
     log_write(LOG_PATH, report, p);
     serial_init();                                      /* DPMI harness: COM1 log sink */
     serial_out(report, p);
@@ -2433,6 +2452,10 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     g_key_event = CreateEventA(NULL, FALSE, FALSE, NULL);   /* auto-reset        */
     { HWND con = GetConsoleWindow(); if (con) ShowWindow(con, SW_HIDE); }
     ui = CreateThread(NULL, 0, ui_thread, NULL, 0, NULL);
+    /* Headless: arm the deadline watchdog so a run that blocks on input (a "press any
+       key" prompt, a game menu) still self-terminates instead of wedging the harness. */
+    if (g_headless) { HANDLE hd = CreateThread(NULL, 0, headless_deadline_thread, NULL, 0, NULL);
+                      if (hd) CloseHandle(hd); }
 
     v86_set_entry(tib, img.cs, img.ip, img.ss, img.sp, DOS_PSP_SEG);
     if (!img.is_exe)                                        /* .COM near-ret guard */
