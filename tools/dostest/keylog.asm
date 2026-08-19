@@ -18,13 +18,15 @@
 ; Everything is printed through INT 21h, so it lands in the host log under "==> DOS OUTPUT"
 ; and can be read off the share without anyone transcribing anything.
 ;
-; Runs for ~25 s (bounded so the headless harness always collects the log) or until ESC.
+; Runs for ~110 s (bounded so the harness always collects the log) or until ESC. The host's
+; headless cap must be raised to match -- see headless_ms.txt on the share.
 ;
 ; Assemble: nasm -f bin keylog.asm -o keylog.com
 bits 16
 org 0x100
 
-TIMEOUT_TICKS equ 18*25                 ; ~25 s at the BIOS 18.2 Hz tick
+TIMEOUT_TICKS equ 18*110                ; ~110 s: long enough for a human to be told
+                                        ; it is running and then try every key
 
 start:
     cld
@@ -153,7 +155,7 @@ puthex8:
     int 0x21
     ret
 
-s_banner db 'keylog: press keys (arrows, Enter, space). ESC or ~25s ends it.',13,10
+s_banner db 'keylog: press keys (arrows, Enter, space). ESC or ~110s ends it.',13,10
          db 'S:xx = raw scancode from port 60h   B:xxxx = INT 16h (AH=scan AL=ascii)',13,10,'$'
 s_sc     db 'S:$'
 s_bios   db 'B:$'
