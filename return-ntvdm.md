@@ -1,6 +1,21 @@
 ═══════════════════════════════════════════════════════════════════════════════
-██ CHECKPOINT — 2026-08-18 (session 9). READ THIS FIRST ON RESTART. ██
+██ CHECKPOINT — 2026-08-19 (session 9). READ THIS FIRST ON RESTART. ██
 ═══════════════════════════════════════════════════════════════════════════════
+
+▶ RESTART POINT (2026-08-19, IDE restart): HEAD = 2fb8d27 + doc commit; host = dpmi-harness-v81
+  (staged on the share bm/); branch spike/dpmi-16bit-switch; 18 commits UNPUSHED. Working tree clean
+  except the pre-existing untracked files (MAINICON.ico, demos/, scripts/kd_*.py, etc. -- NONE mine).
+  Box = healthy resting state (watcher looping, controld v2 running). REMOTE CONTROL FULLY WORKS:
+  `echo reboot > /tmp/xpshare/control.txt` reboots; `echo kill > .../control.txt` unwedges a hung host;
+  `printf 'capture\r\n' > /tmp/xpshare/capture.flag` enables self-screenshots; fire tests via
+  `printf '<name>\r\n' > /tmp/xpshare/cmd.txt` then read result_<name>.log + shot_<name>_*.bmp.
+  Remount after a reboot: `mount_smbfs -N //guest@192.168.1.34/ntvdmex /tmp/xpshare` (LAN ops need
+  dangerouslyDisableSandbox). THIS SESSION'S ARC: cracked the bare-metal PM wall (v68), proved 32-bit
+  async IRQ visually (pm32irq, remote self-screenshots), built the remote-test rig (controld daemon +
+  game-aware harness + self-screenshots), and brought up Skyroads -- which LOADS + RUNS but is blocked
+  in sound/PIT-timing init (see the "SKYROADS BRING-UP" section below). NEXT = user's call: Doom (DOS/4GW,
+  setup can disable sound) vs the sound epic vs another game. The retro I/O reflect fix (v74/v81) is the
+  key durable bug fix this session -- real-mode direct port I/O now services on this hardware.
 
 ★★★ THE BARE-METAL PM WALL IS CRACKED (16-bit AND 32-bit DPMI real-CPU PM run on real
 silicon). Session 8's "the kernel declines to run our PM VDM" diagnosis was WRONG: the
