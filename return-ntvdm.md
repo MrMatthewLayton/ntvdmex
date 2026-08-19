@@ -59,13 +59,35 @@ MENUS working, which was the "arrows are dead in the menu and intro" report.
   EXTENDED key — a hardcoded "tap UP 400x" cannot reach a screen, and UP is a no-op on a menu
   whose first item is already selected, so it cannot tell success from failure).
 
-  ▶ STILL OPEN ON SKYROADS: (a) **garbled text** — the game DOES call INT 10h AH=11h
-  (`int10_11=0x2`, new counter), so 15991e9 was aimed at the right call and the bug is
-  DOWNSTREAM of the font pointer; (b) **input latency is unmeasured** — the 1-2 s the user
-  observed in keyprobe was that probe's deliberate settle, not host lag, and no instrument
-  yet measures the real thing (needs an echo-on-arrival probe, no settle, no drain);
-  (c) gameplay itself (steering/jump/fuel through a whole road) is INFERRED from session 11,
-  not re-observed this session.
+  ▶ GARBLED TEXT: **FIXED** (`633aae5`) and **user-confirmed in-game** — "Road Completed"
+  renders correctly on the physical box, and gameplay through a whole road is therefore
+  observed, not inferred. Two bugs, the first HIDING the second: (1) `regs_store` wrote back
+  only EAX/EBX/ECX/EDX while `regs_load` read all seven, so **ES:BP was discarded** and the
+  guest drew text from whatever pointer it already held -- which is why 15991e9, correctly
+  setting ES:BP, changed nothing; (2) the 8x8 ROM font was MANUFACTURED by OR-ing row pairs
+  of the 8x16, filling every counter ('A' solid, 'E' noise). Real 8x8/8x14/8x16 dumps now
+  ship. The tell that cracked it: after fixing the font data alone the render was
+  BYTE-IDENTICAL, proving the guest had never read our table.
+
+  ▶ PERFORMANCE, as played by the user on the physical box (a calibration, not a complaint):
+  **genuinely playable**, but with the feel of a game speced for a 386 16MHz / 2MB running on a
+  **386 8MHz / 512KB** — a little sluggish. Keyboard and music lag are perceptible but now in
+  the **milliseconds**. **DEFERRED BY DECISION — do not pick this up unasked.** When it is
+  picked up: keys are still restricted to the SYNCHRONOUS exec-loop path in `host_irq_sink`
+  (async key delivery off by default after it once made things worse) while the timer gets
+  async delivery, and no instrument measures the real latency yet (needs an echo-on-arrival
+  probe, no settle, no drain — the 1-2 s seen in keyprobe was that probe's own settle).
+
+  ▶ NEXT DIRECTION (user's call, 2026-08-19): **GO BROAD, NOT DEEP.** We have hardened exactly
+  ONE real DOS application. Start running a plethora of others -- `command.com`, `edit.com`,
+  `qbasic`, Doom, and on -- and let breadth of exposure tease out the remaining problems.
+  Polishing Skyroads further is NOT the priority.
+
+  ▶ NEW WORKSTREAM: **hardware grounding** — CPU affinity, SpeedStep / power management and
+  friends, handled in realistically stable code. This lands directly on our timing path: guest
+  clocks come from QueryPerformanceCounter (session-11 `host_pit_sync`), so core migration and
+  frequency scaling are in it. Note the framing: **XP's own ntvdm never grounded any of this**,
+  so it is superset territory and a real differentiator rather than parity work.
 
 ═══════════════════════════════════════════════════════════════════════════════
 ██ CHECKPOINT — 2026-08-19 (session 11). ██
