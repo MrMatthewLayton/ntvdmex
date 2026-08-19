@@ -27,6 +27,13 @@ typedef struct {
     int    (*conin)(void *ctx); /* optional source for console input (blocking)     */
     void    *cinctx;           /* passed to conin (e.g. the keyboard VDD)          */
     int    (*coninnb)(void *ctx); /* non-blocking console read: char, or -1 if none */
+    /* RETRY: set by a blocking service that has nothing to return yet. The host must then
+       leave the guest's EIP ON the BOP so it re-executes the INT -- turning a host-side
+       block into a guest-side poll. This matters enormously: blocking the exec thread in C
+       stops the GUEST dead, so its timer stops, its music stops and its screen freezes until
+       a key arrives. A real BIOS spins in the guest with interrupts enabled and the machine
+       stays alive; now so do we. */
+    int    retry;
     int    (*conpeek)(void *ctx); /* non-blocking status: 1 if a key is ready       */
 } dos_machine_t;
 

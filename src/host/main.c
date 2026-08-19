@@ -290,6 +290,7 @@ static int            g_qi_vif        = 0;   /* start the guest with EFLAGS.VIF 
    A/B testing, but nothing should depend on a flag file being present to work. */
 static int            g_qi_susp       = 1;   /* async-inject via SuspendThread+SetThreadContext */
 static int            g_qi_keys       = 0;   /* synthesise keypresses (repro the hang) */
+static int            g_qi_keys_async = 0;   /* opt-in: async-deliver IRQ1 (see host_irq_sink) */
 /* Set only while the exec thread is inside VdmStartExecution, i.e. while the thread's
    CONTEXT genuinely is the guest's frame and our loop is not touching the VDM_TIB. The
    async injector refuses to act unless this is set, so it can never race the exec loop. */
@@ -448,11 +449,24 @@ static void host_irq_sink(void *ctx, uint8_t irq)
         if (g_qi_susp && async_inject_irq(0)) InterlockedDecrement(&g_irq0_pending);
     }
     else if (irq == 1) {
-        InterlockedIncrement(&g_irq1_pending);
-        /* Same async delivery as the timer. A keypress that has to wait for the guest to
-           trap with interrupts enabled arrives whenever the game happens to yield -- which
-           is what makes input feel laggy. Deliver it now if the guest can take it. */
-        if (g_qi_susp && async_inject_irq(1)) InterlockedDecrement(&g_irq1_pending);
+        /* SATURATE. A real 8042 has a ONE-BYTE output buffer and holds IRQ1 asserted while
+           it is full, so a PC cannot owe the guest hundreds of keyboard interrupts. We were
+           latching one per scancode byte with no ceiling: a held arrow key (two bytes each
+           at the OS repeat rate, ~60/s) outran delivery, the backlog grew without bound, and
+           the guest ended up spending every loop iteration entering and IRETing from INT 09h
+           instead of running the game. That is the decay measured with a held-key probe --
+           797k I/O events per 3 s falling to 607, then 198, then zero, with the game dead.
+           The scancodes stay queued in the 0x60 FIFO for the handler to read; only the
+           interrupt is coalesced, which is exactly what the hardware does. */
+        if (g_irq1_pending < 2) InterlockedIncrement(&g_irq1_pending);
+        /* Keys deliberately do NOT take the async path by default (qimode bit 7 turns it
+           on for experiments). Async keyboard delivery is what turned "playable" into
+           "dies as soon as you press a key", and while the PIC stopped the re-entry it did
+           not stop that: with a faithful held-arrow probe the game still degrades to a
+           stop. Until that is understood, keys go back to the exec-loop path they used
+           when input merely felt laggy -- a known-good behaviour beats an unexplained one.
+           The TIMER keeps async delivery, which is what makes the game playable at all. */
+        if (g_qi_keys_async && async_inject_irq(1)) InterlockedDecrement(&g_irq1_pending);
     }
     else if (irq < 8) {
         InterlockedExchange(&g_irqn_pending[irq], 1);
@@ -683,22 +697,40 @@ static void host_midi_sink(void *ctx, uint32_t msg)
    thread uses for a real key: push a make code into the 0x60 FIFO, raise IRQ1, then the break
    code, repeatedly. If the in-service interlock is wrong this will hang the guest just as a
    human would, and if it is right the run completes with the key counts advancing. */
+/* ONE path for a keystroke, whoever produced it. The window proc used to latch
+   g_irq1_pending itself and never call host_irq_sink, which meant real keys bypassed BOTH
+   the async delivery added for input lag AND the PIC that gates re-entry -- so every fix
+   aimed at the keyboard was dead code for actual keys, and the synthetic probe tested a path
+   real keys do not take. Everything goes through here now, so the probe and a human press
+   the same button. */
+static void host_key_scancode(uint8_t rawsc, int ext, int is_break)
+{
+    EnterCriticalSection(&g_lock);
+    if (ext) vdd_input_push_scancode(&g_in, 0xE0);
+    vdd_input_push_scancode(&g_in, is_break ? (uint8_t)(rawsc | 0x80) : rawsc);
+    LeaveCriticalSection(&g_lock);
+    if (ext) host_irq_sink(NULL, 1);      /* one IRQ1 per scancode byte, as the AT does */
+    host_irq_sink(NULL, 1);
+    if (g_key_event) SetEvent(g_key_event);
+}
+
 static DWORD WINAPI synthkey_thread(LPVOID pv)
 {
     int n;
     (void)pv;
     Sleep(4000);                                  /* let the intro get going first */
-    for (n = 0; n < 60 && g_running; ++n) {
+    for (n = 0; n < 400 && g_running; ++n) {
+        /* An EXTENDED key (the arrows a player actually holds) at the OS auto-repeat rate,
+           through exactly what WM_KEYDOWN does: E0 prefix + make code on the raw FIFO with
+           an IRQ1 per byte, AND the BIOS ring entry that INT 16h returns. Feeding only the
+           FIFO -- which the first version of this probe did -- means a game that reads INT
+           16h never sees the key at all, so the probe passed while a real press killed it. */
+        host_key_scancode(0x48, 1, 0);
         EnterCriticalSection(&g_lock);
-        vdd_input_push_scancode(&g_in, 0x48);     /* up-arrow make  */
+        vdd_input_push(&g_in, (uint16_t)(0x48 << 8));   /* AH=scancode, AL=0 */
         LeaveCriticalSection(&g_lock);
-        host_irq_sink(NULL, 1);
-        Sleep(120);
-        EnterCriticalSection(&g_lock);
-        vdd_input_push_scancode(&g_in, (uint8_t)(0x48 | 0x80));   /* break */
-        LeaveCriticalSection(&g_lock);
-        host_irq_sink(NULL, 1);
-        Sleep(180);
+        Sleep(33);                                       /* ~30/s: held-key repeat */
+        if ((n & 7) == 7) host_key_scancode(0x48, 1, 1); /* release now and then   */
     }
     return 0;
 }
@@ -1384,15 +1416,7 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
            for every key, alongside the INT 16h ring below (which other games poll). */
         {
             uint8_t rawsc = (uint8_t)((lp >> 16) & 0xFF);
-            if (rawsc) {
-                int ext = (lp & 0x01000000) != 0;   /* extended (arrows, RCtrl, ...) -> E0 prefix */
-                EnterCriticalSection(&g_lock);
-                if (ext) { vdd_input_push_scancode(&g_in, 0xE0); InterlockedIncrement(&g_irq1_pending); }
-                vdd_input_push_scancode(&g_in, rawsc);       /* make code */
-                LeaveCriticalSection(&g_lock);
-                InterlockedIncrement(&g_irq1_pending);       /* one IRQ1 per scancode byte */
-                if (g_key_event) SetEvent(g_key_event);
-            }
+            if (rawsc) host_key_scancode(rawsc, (lp & 0x01000000) != 0, 0);
         }
         /* Extended keys (arrows, nav cluster, F1-F10) produce NO WM_CHAR, so feed the ring
            here as BIOS extended keycodes: AL=0, AH=scancode (INT 16h returns them in AX).
@@ -1422,15 +1446,7 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
     case WM_KEYUP:                       /* raw AT keyboard BREAK code + IRQ1      */
         {
             uint8_t rawsc = (uint8_t)((lp >> 16) & 0xFF);
-            if (rawsc) {
-                int ext = (lp & 0x01000000) != 0;
-                EnterCriticalSection(&g_lock);
-                if (ext) { vdd_input_push_scancode(&g_in, 0xE0); InterlockedIncrement(&g_irq1_pending); }
-                vdd_input_push_scancode(&g_in, (uint8_t)(rawsc | 0x80));  /* break code */
-                LeaveCriticalSection(&g_lock);
-                InterlockedIncrement(&g_irq1_pending);
-                if (g_key_event) SetEvent(g_key_event);
-            }
+            if (rawsc) host_key_scancode(rawsc, (lp & 0x01000000) != 0, 1);
         }
         break;
     case WM_CHAR:                        /* translated ASCII -> keyboard ring     */
@@ -3140,7 +3156,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     (void)hInst; (void)hPrev; (void)lpCmd; (void)nShow;
     progpath[0] = 0; args[0] = 0;
 
-    p = zput(p, "NTVDMEX clean host\r\nSTAGE0: WinMain entered [build dpmi-harness-v133]\r\n");
+    p = zput(p, "NTVDMEX clean host\r\nSTAGE0: WinMain entered [build dpmi-harness-v137]\r\n");
     log_write(LOG_PATH, report, p);
     serial_init();                                      /* DPMI harness: COM1 log sink */
     serial_out(report, p);
@@ -3173,7 +3189,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                        g_qi_raise = (v & 0x04) != 0;
                        g_qi_vif   = (v & 0x08) != 0;
                        if (v & 0x40) g_qi_susp = 0;      /* bit 6 disables async delivery */
-                       g_qi_keys  = (v & 0x20) != 0; }
+                       g_qi_keys  = (v & 0x20) != 0;
+                       g_qi_keys_async = (v & 0x80) != 0; }
       } }
     if (g_qi_bits || g_qi_susp) {    /* async delivery needs a handle to the exec thread */
         DuplicateHandle(GetCurrentProcess(), GetCurrentThread(), GetCurrentProcess(),
@@ -4091,13 +4108,17 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             continue;
         }
         m.tp = p;
+        m.retry = 0;
         if (!dos_int21(&m)) {                       /* AH=4Ch -> terminate */
             p = m.tp; VDM_REG(tib, VTIB_EIP) += 3;
             log_append(LOG_PATH, base, p); p = base;
             break;
         }
         p = m.tp;
-        VDM_REG(tib, VTIB_EIP) += 3;                /* past the 3-byte BOP -> the IRET */
+        /* A blocking read with nothing to return leaves EIP ON the BOP, so the guest
+           re-executes the INT and keeps running -- and keeps taking timer interrupts, so
+           its music and animation carry on while it waits for a key, as on real hardware. */
+        if (!m.retry) VDM_REG(tib, VTIB_EIP) += 3;  /* past the 3-byte BOP -> the IRET */
         log_append(LOG_PATH, base, p); p = base;
     }
     }   /* storm-state block */

@@ -91,9 +91,14 @@ int dos_int21(dos_machine_t *m)
     } else if (ah == 0x02) {                    /* print char DL */
         OUTC(R_DX & 0xFF); OKCF();
     } else if (ah == 0x01 || ah == 0x07 || ah == 0x08) {   /* read char (01 echoes) */
-        int c = m->conin ? m->conin(m->cinctx) : 0;
-        if (ah == 0x01) OUTC(c);                /* AH=01: echo                     */
-        SETAX((R_AX & 0xFF00) | (c & 0xFF)); OKCF();
+        /* Poll, do not block. If no key is waiting we ask the host to re-run this INT
+           rather than parking the exec thread -- see `retry` in dos_int21.h. */
+        int c = m->coninnb ? m->coninnb(m->cinctx) : -1;
+        if (c < 0) { m->retry = 1; }
+        else {
+            if (ah == 0x01) OUTC(c);            /* AH=01: echo                     */
+            SETAX((R_AX & 0xFF00) | (c & 0xFF)); OKCF();
+        }
     } else if (ah == 0x0A) {                    /* buffered input DS:DX */
         volatile BYTE *buf = (volatile BYTE *)((R_DS << 4) + (R_DX & 0xFFFF));
         int maxn = buf[0], n = 0, c;
