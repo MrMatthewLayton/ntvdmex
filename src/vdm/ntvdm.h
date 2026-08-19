@@ -121,7 +121,16 @@ typedef LONG (WINAPI *PFN_NtUnmapViewOfSection)(HANDLE, PVOID);
 #define VTIB_EFLAGS        0x398
 #define VTIB_ESP           0x39C
 #define VTIB_SS            0x3A0
-#define VTIB_EFLAGS_V86    0x20002    /* EFlags: VM + reserved bit, IOPL=0        */
+/* EFlags: VM + IF + reserved bit, IOPL=0. IF MATTERS: a DOS program is entered by
+   DOS with interrupts already enabled and, having no reason to think otherwise,
+   never issues STI. Starting the guest with IF=0 therefore left it disabled for the
+   whole run, so the host's IRQ0 gate never opened, no INT 08h was ever injected and
+   the BIOS tick at 0040:006C never advanced -- measured, not inferred: iobench saw
+   34M port-I/O events with irq0_inj=0 and the tick frozen, and [0x714] sat with
+   VDM_INT_TIMER pending throughout. Anything paced on the tick (Skyroads' sound/PIT
+   init, FM music, PCM block timing) hung. Note VTIB_EFLAGS_PM below always had IF
+   set, which is why the protected-mode timer path worked while real mode did not. */
+#define VTIB_EFLAGS_V86    0x20202
 #define VTIB_EFLAGS_PM     0x00202    /* EFlags: IF + reserved bit, VM clear (PM) */
 #define EFLAGS_VM_BIT      0x20000    /* EFLAGS.VM (bit 17): set=V86, clear=PM     */
 /* Virtual MSW (low 16 of the client's CR0) the monitor keeps in the VDM_TIB.
@@ -151,6 +160,12 @@ typedef LONG (WINAPI *PFN_NtUnmapViewOfSection)(HANDLE, PVOID);
    0x0110:0x5878). So the I/O reflect code differs by platform: HVF=0, real HW=3.
    host_try_io() self-validates (decodes the IN/OUT at CS:IP), so we route BOTH. */
 #define VDM_EVENT_IO      0
+/* String I/O (REP INS/OUTS). The kernel decodes it for us and leaves a descriptor
+   in the words after VTIB_EVENT -- observed for `rep outsb` to 0x3C9:
+   {1, 2, port|size<<16 (0x000103C9), 1, count (0x40), seg:off (0x01000355)}.
+   We service it from the guest's own SI/DI/CX/DF instead, so we depend only on
+   register fields whose meaning is already established. */
+#define VDM_EVENT_IO_STRING 1
 #define VDM_EVENT_GPFAULT 2
 #define VDM_EVENT_IO_HW   3       /* I/O reflect code on real hardware (HVF uses 0) */
 #define VDM_EVENT_BOP     4

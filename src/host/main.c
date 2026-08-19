@@ -31,6 +31,9 @@
 #include "vdd_video.h"
 #include "vdd_input.h"
 #include "vdd_speaker.h"
+#include "vdd_dma.h"
+#include "vdd_opl.h"
+#include "vdd_sb.h"
 #include "present_ddraw.h"
 
 #define LOG_PATH    "C:\\ntvdmex\\ntvdmhost.log"
@@ -115,6 +118,9 @@ static pit_state    g_pit;       static ntvdd g_pit_dev;
 static video_state  g_vid;       static ntvdd g_vid_dev;
 static input_state  g_in;        static ntvdd g_in_dev;
 static speaker_state g_spk;      static ntvdd g_spk_dev;
+static dma_state    g_dma;       static ntvdd g_dma_dev;
+static opl_state    g_opl;       static ntvdd g_opl_dev;
+static sb_state     g_sb;        static ntvdd g_sb_dev;
 static present_ddraw g_pd;
 static xms_state    g_xms;       /* M4: XMS extended-memory manager           */
 static ems_state    g_ems;       /* M4: EMS expanded-memory manager           */
@@ -143,8 +149,27 @@ static BYTE  g_int_vec[0x10000];            /* per-CS-offset: original INT vecto
 static volatile LONG  g_dpmi_iter     = 0;  /* host PM-loop iteration heartbeat (pre-enter) */
 static volatile LONG  g_dpmi_done     = 0;  /* PM loop finished (client exited cleanly) -> watchdog must NOT kill */
 static int            g_headless      = 0;  /* AUTOEXIT marker present: SMB test harness -> bound infinite runs */
+/* Exec-loop instrumentation, reported once at wind-down (cheap counters, no I/O in
+   the hot path). These separate the two costs that look identical from outside: how
+   many times we round-tripped to service port I/O, how many accesses the burst fast
+   path absorbed without a round trip, and how many timer IRQs actually reached the
+   guest -- the last one being how we caught the BIOS tick starving during an I/O
+   storm (iobench case 1 could not accumulate 5 ticks in 30 s). */
+static DWORD          g_ev_io         = 0;  /* port-I/O events serviced            */
+static DWORD          g_io_extra      = 0;  /* accesses absorbed by the LOOP burst */
+static DWORD          g_irq0_inj      = 0;  /* INT 08h injections into the guest   */
+static DWORD          g_irq0_skip     = 0;  /* IRQ0 delivery gated off (IF=0 etc.) */
+static DWORD          g_ev_intpend    = 0;  /* event-3 interrupt-pending notifications */
+static DWORD          g_ev_iostr      = 0;  /* REP INS/OUTS (event 1) reflects serviced */
+static DWORD          g_irqn_inj      = 0;  /* device IRQs (2-7) injected into the guest */
+static volatile LONG  g_wound_down    = 0;  /* exec loop exited: clean shutdown in progress */
+#define IO_UNCLAIMED_MAX 24
+static uint16_t g_unclaimed[IO_UNCLAIMED_MAX];
+static int      g_unclaimed_n = 0;
+
 static int            g_capture       = 0;  /* CAPTURE_FLAG present: opt-in self-screenshot for graphical tests */
-#define PM_HEADLESS_MS 30000                /* headless PM-loop wall-clock cap (an infinite visual demo self-exits) */
+#define PM_HEADLESS_MS 30000                     /* headless exec-loop wall-clock cap (an infinite visual demo self-exits) */
+#define PM_HEADLESS_GRACE_MS 3000                /* grace for a clean wind-down before the hard backstop forces exit */
 static volatile DWORD g_dpmi_enter_cs = 0;  /* guest CS handed to the last dpmi_enter_pm    */
 static volatile DWORD g_dpmi_enter_eip= 0;  /* guest EIP handed to the last dpmi_enter_pm   */
 static volatile DWORD g_dpmi_last_ev  = 0;  /* VTIB_EVENT reported by the last return        */
@@ -207,8 +232,20 @@ static void serial_out(const char *buf, const char *end)
 }
 static HMENU        g_savedmenu;            /* stashed menu while hidden           */
 
+/* Device IRQs 2-7 (the Sound Blaster's block-completion IRQ 5 above all). IRQ 0
+   and 1 keep their existing dedicated paths; everything else latches here and is
+   injected as INT (8 + irq), the PC's standard master-PIC vector mapping. Without
+   this an SB transfer completes, raises IRQ 5, and the game waits forever for an
+   interrupt the host quietly dropped. */
+static volatile LONG  g_irqn_pending[8];
 static void host_irq_sink(void *ctx, uint8_t irq)
-{ (void)ctx; if (irq == 0) g_irq0_pending = 1; else if (irq == 1) InterlockedIncrement(&g_irq1_pending); }
+{
+    (void)ctx;
+    if (irq == 0) g_irq0_pending = 1;
+    else if (irq == 1) InterlockedIncrement(&g_irq1_pending);
+    else if (irq < 8) InterlockedExchange(&g_irqn_pending[irq], 1);
+}
+
 
 /* Real/synthesised real-mode interrupt dispatch. The guest runs cooperatively
    (we only regain control at event boundaries), so when a hardware IRQ becomes
@@ -223,6 +260,53 @@ static void poked(DWORD lin, DWORD v)   /* dword store: 32-bit IRET frame slots 
   m[lin] = (BYTE)v; m[lin+1] = (BYTE)(v >> 8); m[lin+2] = (BYTE)(v >> 16); m[lin+3] = (BYTE)(v >> 24); }
 static WORD peekw(DWORD lin)
 { const volatile BYTE *m = (const volatile BYTE *)0; return (WORD)(m[lin] | (m[lin + 1] << 8)); }
+/* The guest's effective interrupt-enable flag. When we regain control inside one
+   of our own BOP stubs the LIVE IF is the stub's (the CD nn that vectored in
+   cleared it), so the guest's real IF is the FLAGS the stub will IRET to. */
+static int guest_if_enabled(volatile BYTE *tib)
+{
+    DWORD cs = VDM_REG(tib, VTIB_CS) & 0xFFFF;
+    if (cs == DOS_HDLR_SEG) {
+        DWORD ss = VDM_REG(tib, VTIB_SS) & 0xFFFF, sp = VDM_REG(tib, VTIB_ESP) & 0xFFFF;
+        return (peekw((ss << 4) + ((sp + 4) & 0xFFFF)) & 0x200) != 0;
+    }
+    return (VDM_REG(tib, VTIB_EFLAGS) & 0x200) != 0;
+}
+
+/* Width-selected guest memory access (1/2/4 bytes) for the string-I/O servicer. */
+static DWORD peekw_n(DWORD lin, int width)
+{ const volatile BYTE *m = (const volatile BYTE *)0;
+  if (width == 1) return m[lin];
+  if (width == 2) return peekw(lin);
+  return (DWORD)peekw(lin) | ((DWORD)peekw(lin + 2) << 16); }
+static void pokew_n(DWORD lin, DWORD v, int width)
+{ volatile BYTE *m = (volatile BYTE *)0;
+  if (width == 1) { m[lin] = (BYTE)v; return; }
+  if (width == 2) { pokew(lin, (WORD)v); return; }
+  poked(lin, v); }
+
+/* GH #18 / sound epic: sample the kernel's FIXED_NTVDMSTATE word next to the
+   reflected EFLAGS at a labelled point, for the first few occurrences of each
+   label. iobench proved IRQ0 delivery is gated off forever during port I/O
+   (irq0_inj=0 over 34M I/O events, BIOS tick frozen), which can only mean the
+   reflected EFLAGS reports IF=0. The guest's REAL interrupt-enable state is the
+   one the kernel virtualises in [0x714]; this sampler is how we identify which
+   bit carries it -- compare a known-IF=1 moment (a BOP, where the guest's own
+   FLAGS are on its stack) against an I/O reflect in the same run. */
+static void vdmstate_sample(const char *label, volatile BYTE *tib, int *budget)
+{
+    char b[128], *q = b;
+    if (*budget <= 0) return;
+    (*budget)--;
+    q = zput(q, "GH#18 vdmstate ");
+    q = zput(q, label);
+    q = zput(q, ": [0x714]=0x"); q = zhex(q, *(volatile DWORD *)(ULONG_PTR)0x714);
+    q = zput(q, " EFL=0x");      q = zhex(q, VDM_REG(tib, VTIB_EFLAGS));
+    q = zput(q, " CS:IP=0x");    q = zhex(q, VDM_REG(tib, VTIB_CS) & 0xFFFF);
+    q = zput(q, ":0x");          q = zhex(q, VDM_REG(tib, VTIB_EIP) & 0xFFFF);
+    q = zput(q, "\r\n");
+    log_append(LOG_PATH, b, q); serial_out(b, q);
+}
 
 static void inject_int(volatile BYTE *tib, unsigned vec)
 {
@@ -263,6 +347,36 @@ static int host_conin(void *ctx)
     }
 }
 
+/* Advance the OPL timers from the real clock. The AdLib detect measures an 80us
+   timer and games pace music on timer overflow, so the ~16ms bus frame tick is far
+   too coarse -- the status register has to be current the moment the guest reads
+   it, or detection sees 0x00 and concludes there is no card. We therefore pump
+   from the exec loop, which by construction gets a turn on every port access.
+   A 20us quantum keeps the lock traffic negligible while staying well inside one
+   80us timer step; sub-quantum time is carried, not dropped. */
+static void opl_pump_time(void)
+{
+    static LARGE_INTEGER s_freq, s_last;
+    LARGE_INTEGER now;
+    LONGLONG d;
+    DWORD us;
+    if (!s_freq.QuadPart) {
+        if (!QueryPerformanceFrequency(&s_freq)) return;
+        QueryPerformanceCounter(&s_last);
+        return;
+    }
+    QueryPerformanceCounter(&now);
+    d = now.QuadPart - s_last.QuadPart;
+    if (d <= 0) return;
+    if (d > s_freq.QuadPart) d = s_freq.QuadPart;       /* clamp a long stall to 1s */
+    us = (DWORD)((d * 1000000) / s_freq.QuadPart);
+    if (us < 20) return;                                /* carry sub-quantum time   */
+    s_last = now;
+    EnterCriticalSection(&g_lock);
+    vdd_opl_add_us(&g_opl, us);
+    LeaveCriticalSection(&g_lock);
+}
+
 /* Headless deadline watchdog (session-9). A headless run must self-bound even when the
    guest blocks INSIDE a host INT handler -- e.g. a blocking INT 16h/21h key read at a
    "press any key" prompt or a game menu (host_conin + the INT 16h loops spin until
@@ -272,13 +386,72 @@ static int host_conin(void *ctx)
    both exec loops -- and wakes any blocked reader. Started only when g_headless. */
 static DWORD WINAPI headless_deadline_thread(LPVOID pv)
 {
-    char b[80], *q = b;
+    char b[512], *q = b;
+    DWORD f_cs = 0, f_ip = 0, f_efl = 0, f_tick = 0;
+    BYTE  f_bytes[12];
+    int   f_ok = 0;
     (void)pv;
     Sleep(PM_HEADLESS_MS);
+    /* Snapshot the guest NOW, before anything winds down: by the time the grace
+       period below expires the VDM address space may already be torn down, and
+       reading it then faults this thread and loses the report entirely. */
+    if (g_tib_dbg) {
+        f_cs  = VDM_REG(g_tib_dbg, VTIB_CS)  & 0xFFFF;
+        f_ip  = VDM_REG(g_tib_dbg, VTIB_EIP) & 0xFFFF;
+        f_efl = VDM_REG(g_tib_dbg, VTIB_EFLAGS);
+        { const volatile BYTE *cp = (const volatile BYTE *)((f_cs << 4) + f_ip);
+          unsigned k; for (k = 0; k < 12; ++k) f_bytes[k] = cp[k]; }
+        f_tick = ((DWORD)peekw(0x46E) << 16) | peekw(0x46C);
+        f_ok = 1;
+    }
     InterlockedExchange(&g_running, 0);         /* stop exec loops + unblock key reads */
     if (g_key_event) SetEvent(g_key_event);     /* wake a blocked host_conin/INT16 wait */
     q = zput(q, "HEADLESS: deadline reached -> g_running=0 (wind down)\r\n");
     log_append(LOG_PATH, b, q); serial_out(b, q);
+
+    /* HARD BACKSTOP. Clearing g_running only stops a loop that gets a turn, and the
+       exec loops only get one when the guest faults, BOPs or takes an interrupt. A
+       guest spinning in pure V86 code -- Skyroads after its sound init, or any
+       `jmp $`-shaped wait -- never returns from v86_run at all, so neither loop
+       reaches its check and the process hangs forever. That wedges the SMB harness's
+       `start /wait`, and the box needs a manual `controld kill` to recover, which is
+       precisely the loop we cannot afford once every sound test is a real-mode DOS
+       program. So: give the clean wind-down a grace period to flush its log and DOS
+       output, then take the process down ourselves. rt.bat then collects the log and
+       the watcher survives, which is the whole point of headless mode. */
+    Sleep(PM_HEADLESS_GRACE_MS);
+    if (!g_wound_down) {
+        q = b;
+        q = zput(q, "HEADLESS: exec loop never wound down (guest spinning in V86 with"
+                    " no traps) -> forcing process exit\r\n");
+        /* Report WHERE it froze and what the counters say. Without this the forced
+           exit throws away the only evidence of why the guest stopped trapping,
+           which is exactly what we need to disassemble the offending loop. */
+        if (f_ok) {
+            q = zput(q, "  frozen at CS:IP=0x"); q = zhex(q, f_cs);
+            q = zput(q, ":0x"); q = zhex(q, f_ip);
+            q = zput(q, " EFL=0x"); q = zhex(q, f_efl);
+            q = zput(q, " tick=0x"); q = zhex(q, f_tick);
+            q = zput(q, "\r\n  bytes: "); q = zdump(q, f_bytes, 12);
+            q = zput(q, "\r\n");
+        }
+        log_append(LOG_PATH, b, q); serial_out(b, q); q = b;
+        q = zput(q, "  io_events=0x");  q = zhex(q, g_ev_io);
+        q = zput(q, " io_burst=0x");    q = zhex(q, g_io_extra);
+        q = zput(q, " iostr=0x");       q = zhex(q, g_ev_iostr);
+        q = zput(q, " irq0_inj=0x");    q = zhex(q, g_irq0_inj);
+        q = zput(q, " irq0_skip=0x");   q = zhex(q, g_irq0_skip);
+        q = zput(q, " intpend=0x");     q = zhex(q, g_ev_intpend);
+        q = zput(q, " irqn_inj=0x");    q = zhex(q, g_irqn_inj);
+        q = zput(q, " bda_tick=0x");    q = zhex(q, ((DWORD)peekw(0x46E) << 16) | peekw(0x46C));
+        q = zput(q, "\r\n");
+        log_append(LOG_PATH, b, q); serial_out(b, q); q = b;
+        { int i; q = zput(q, "  unclaimed ports touched:");
+          for (i = 0; i < g_unclaimed_n; ++i) { q = zput(q, " 0x"); q = zhex(q, g_unclaimed[i]); }
+          q = zput(q, "\r\n"); }
+        log_append(LOG_PATH, b, q); serial_out(b, q);
+        ExitProcess(3);
+    }
     return 0;
 }
 
@@ -915,6 +1088,94 @@ static void regs_store(ntvdd_regs *r, volatile BYTE *tib)
     VDM_REG(tib, VTIB_ECX) = r->ecx; VDM_REG(tib, VTIB_EDX) = r->edx;
 }
 
+/* Record the first few DISTINCT ports the guest touches that no VDD claims. A game
+   hunting for hardware probes a fixed set of addresses, so this names the device it
+   wants -- e.g. 0x220-0x22F is a Sound Blaster looking for its DSP. Distinct-only
+   and budgeted, so it cannot flood a run. */
+static void io_unclaimed_note(uint16_t port, int is_in)
+{
+    int i;
+    (void)is_in;
+    for (i = 0; i < g_unclaimed_n; ++i) if (g_unclaimed[i] == port) return;
+    if (g_unclaimed_n >= IO_UNCLAIMED_MAX) return;
+    g_unclaimed[g_unclaimed_n++] = port;
+}
+
+/* Perform ONE decoded port access on the bus and write an IN result back into
+   the guest's EAX at the right width. Factored out of the three I/O servicers
+   (V86 / retro / PM) so the burst fast path below can repeat an access without
+   re-decoding it. */
+static void host_io_do(volatile BYTE *tib, vdd_bus *bus, uint16_t port,
+                       int is_in, int width)
+{
+    uint32_t val, eax = VDM_REG(tib, VTIB_EAX);
+    if (is_in) {
+        /* An unclaimed ISA port floats high: real hardware reads 0xFF, not 0x00.
+           This matters for device detection -- a probe that reads 0x00 from an
+           absent card can conclude it IS present and then wait forever for a
+           response that will never come. */
+        val = 0;
+        if (!vdd_bus_io(bus, port, (uint8_t)width, 1, &val)) {
+            val = 0xFFFFFFFFu;
+            io_unclaimed_note(port, 1);
+        }
+        if (width == 1)      VDM_REG(tib, VTIB_EAX) = (eax & 0xFFFFFF00u) | (val & 0xFF);
+        else if (width == 2) VDM_REG(tib, VTIB_EAX) = (eax & 0xFFFF0000u) | (val & 0xFFFF);
+        else                 VDM_REG(tib, VTIB_EAX) = val;
+    } else {
+        val = (width == 1) ? (eax & 0xFF) : (width == 2) ? (eax & 0xFFFF) : eax;
+        if (!vdd_bus_io(bus, port, (uint8_t)width, 0, &val)) io_unclaimed_note(port, 0);
+    }
+}
+
+/* Burst fast path for the `<I/O insn>; LOOP <back to it>` idiom -- the same
+   trick as the mode-12h fill-loop interpreter below, applied to port I/O.
+
+   Every guest IN/OUT is an IOPL-0 #GP reflected out to this user-mode monitor,
+   which measures ~40x the cost of the ISA access it stands in for (iobench.com).
+   DOS sound code leans on that idiom hard: an AdLib register write is `OUT` the
+   address, 6 dummy reads, `OUT` the data, then `mov cx,35 / in al,dx / loop $-1`
+   to satisfy the OPL's write-settling time -- 43 trapped accesses per register,
+   which is what left Skyroads grinding in its OPL init instead of reaching video.
+   Since the loop body is EXACTLY the one I/O instruction, we can run the rest of
+   the iterations here, one bus call each, and pay a single trap for all of them.
+
+   `io_start` is the offset of the I/O instruction and `ip_next` the offset of the
+   insn after it; we only fire when a LOOP sits at `ip_next` and jumps back to
+   precisely `io_start`, so the body cannot contain anything we would skip.
+
+   Accounting is exact and needs NO EIP fixup: the guest is left about to execute
+   the LOOP, so if it enters with CX=c the body still runs c-1 more times. We run
+   n of those here and subtract n from CX, leaving c-n; the guest then runs
+   (c-n)-1 itself, for n + (c-n-1) = c-1 total. Capping n (rather than draining
+   the loop) also keeps IRQ latency bounded: a `mov cx,0xFFFF` delay loop still
+   re-enters this monitor every IO_BURST_MAX accesses instead of once at the end.
+   Returns the number of extra accesses performed (0 = idiom not present). */
+#define IO_BURST_MAX 4096
+static DWORD host_io_loop_burst(volatile BYTE *tib, vdd_bus *bus,
+                                volatile const BYTE *seg, DWORD ip_next,
+                                DWORD io_start, uint16_t port,
+                                int is_in, int width, int is32)
+{
+    /* A 16-bit segment wraps offsets (and LOOP counts) at 64K; a 32-bit flat one
+       does not, and there LOOP counts in ECX. One mask drives both. */
+    DWORD cx, n, mask = is32 ? 0xFFFFFFFFu : 0xFFFFu;
+    int disp;
+    if (seg[ip_next & mask] != 0xE2) return 0;           /* LOOP rel8 only        */
+    disp = (signed char)seg[(ip_next + 1) & mask];
+    if (((ip_next + 2 + disp) & mask) != (io_start & mask)) return 0;
+    cx = VDM_REG(tib, VTIB_ECX) & mask;
+    n  = (cx - 1) & mask;                                /* body runs c-1 more    */
+    if (n > IO_BURST_MAX) n = IO_BURST_MAX;
+    if (!n) return 0;
+    VDM_REG(tib, VTIB_ECX) = is32 ? (cx - n)
+                                  : ((VDM_REG(tib, VTIB_ECX) & 0xFFFF0000u) |
+                                     ((cx - n) & 0xFFFF));
+    { DWORD i; for (i = 0; i < n; ++i) host_io_do(tib, bus, port, is_in, width); }
+    g_io_extra += n;
+    return n;
+}
+
 /* Decode + service a V86 IN/OUT that #GP-faulted (event 2), dispatch it to the
    bus, and advance EIP past the instruction so the guest resumes. Returns 1 if
    the faulting instruction was a (supported) I/O op we handled, 0 if it was a
@@ -926,7 +1187,7 @@ static int host_try_io(volatile BYTE *tib, vdd_bus *bus)
     DWORD ip = VDM_REG(tib, VTIB_EIP) & 0xFFFF;
     volatile BYTE *code = (volatile BYTE *)((cs << 4) + ip);   /* absolute V86 */
     int i = 0, opsize = 2, is_in, width, used_dx, len;
-    BYTE op; uint16_t port; uint32_t val, eax;
+    BYTE op; uint16_t port;
 
     while (code[i] == 0x66 || code[i] == 0x67 ||
            code[i] == 0xF2 || code[i] == 0xF3) {        /* prefixes            */
@@ -948,18 +1209,11 @@ static int host_try_io(volatile BYTE *tib, vdd_bus *bus)
     if (used_dx) { port = (uint16_t)VDM_REG(tib, VTIB_EDX); len = i + 1; }
     else         { port = code[i + 1];                      len = i + 2; }
 
-    eax = VDM_REG(tib, VTIB_EAX);
-    if (is_in) {
-        val = 0;
-        vdd_bus_io(bus, port, (uint8_t)width, 1, &val);
-        if (width == 1)      VDM_REG(tib, VTIB_EAX) = (eax & 0xFFFFFF00u) | (val & 0xFF);
-        else if (width == 2) VDM_REG(tib, VTIB_EAX) = (eax & 0xFFFF0000u) | (val & 0xFFFF);
-        else                 VDM_REG(tib, VTIB_EAX) = val;
-    } else {
-        val = (width == 1) ? (eax & 0xFF) : (width == 2) ? (eax & 0xFFFF) : eax;
-        vdd_bus_io(bus, port, (uint8_t)width, 0, &val);
-    }
+    host_io_do(tib, bus, port, is_in, width);
     VDM_REG(tib, VTIB_EIP) = (ip + len) & 0xFFFF;          /* step past I/O    */
+    /* ...and if a LOOP over this very instruction follows, drain it here. */
+    host_io_loop_burst(tib, bus, (volatile const BYTE *)(cs << 4),
+                       (ip + len) & 0xFFFF, ip, port, is_in, width, 0);
     return 1;
 }
 
@@ -975,33 +1229,104 @@ static int host_try_io_retro(volatile BYTE *tib, vdd_bus *bus)
     DWORD cs = VDM_REG(tib, VTIB_CS) & 0xFFFF;
     DWORD ip = VDM_REG(tib, VTIB_EIP) & 0xFFFF;
     volatile BYTE *seg = (volatile BYTE *)(cs << 4);
-    BYTE op; int is_in, width, opsize = 2; uint16_t port; uint32_t val, eax;
+    BYTE op; int is_in, width, opsize = 2; uint16_t port; DWORD io_start;
     if (ip < 1) return 0;
     op = seg[ip - 1];
     if (op == 0xEC || op == 0xED || op == 0xEE || op == 0xEF) {   /* DX-form (1 byte) */
-        if (ip >= 2 && seg[ip - 2] == 0x66) opsize = 4;           /* 66 prefix -> 32b */
+        io_start = ip - 1;
+        if (ip >= 2 && seg[ip - 2] == 0x66) { opsize = 4; io_start = ip - 2; }
         is_in = (op == 0xEC || op == 0xED);
         width = (op == 0xEC || op == 0xEE) ? 1 : opsize;
         port  = (uint16_t)VDM_REG(tib, VTIB_EDX);
     } else if (ip >= 2 && ((op = seg[ip - 2]) == 0xE4 || op == 0xE5 ||
                             op == 0xE6 || op == 0xE7)) {          /* imm-form (2 byte) */
+        io_start = ip - 2;
         is_in = (op == 0xE4 || op == 0xE5);
         width = (op == 0xE4 || op == 0xE6) ? 1 : opsize;
         port  = seg[ip - 1];                                      /* imm8 port        */
     } else {
         return 0;                                                 /* no I/O ends here */
     }
-    eax = VDM_REG(tib, VTIB_EAX);
-    if (is_in) {
-        val = 0; vdd_bus_io(bus, port, (uint8_t)width, 1, &val);
-        if (width == 1)      VDM_REG(tib, VTIB_EAX) = (eax & 0xFFFFFF00u) | (val & 0xFF);
-        else if (width == 2) VDM_REG(tib, VTIB_EAX) = (eax & 0xFFFF0000u) | (val & 0xFFFF);
-        else                 VDM_REG(tib, VTIB_EAX) = val;
-    } else {
-        val = (width == 1) ? (eax & 0xFF) : (width == 2) ? (eax & 0xFFFF) : eax;
-        vdd_bus_io(bus, port, (uint8_t)width, 0, &val);
-    }
+    host_io_do(tib, bus, port, is_in, width);
+    /* EIP is already past the I/O, so the guest is sitting on whatever follows --
+       if that is a LOOP back to this same I/O (the OPL write-delay idiom), drain
+       the iterations here rather than paying one #GP reflect per read. */
+    host_io_loop_burst(tib, bus, seg, ip, io_start, port, is_in, width, 0);
     return 1;                              /* EIP already past the I/O -- do NOT advance */
+}
+
+/* Service a REP INS/OUTS reflected as event 1 (string I/O) -- how the VGA palette
+   is loaded (`rep outsb` to 0x3C9) and how several sound drivers push blocks.
+   The kernel hands us a decoded descriptor in the words after VTIB_EVENT, but we
+   deliberately work from the guest's own SI/DI/CX/DF and the instruction bytes at
+   CS:IP instead: those fields are already established, whereas the descriptor's
+   layout is inferred from a single observation. (The two agreed on the run that
+   found this: port 0x3C9, count 0x40, buffer 0100:0355.)
+
+   Unlike the other servicers, CS:IP points AT the instruction here. We transfer at
+   most IO_BURST_MAX units per reflect and only step past the instruction once CX
+   drains -- leaving EIP on the REP otherwise, exactly as a real CPU resumes an
+   interrupted string op, which keeps a 64K transfer from monopolising the monitor. */
+static int host_try_io_string(volatile BYTE *tib, vdd_bus *bus)
+{
+    DWORD cs = VDM_REG(tib, VTIB_CS)  & 0xFFFF;
+    DWORD ip = VDM_REG(tib, VTIB_EIP) & 0xFFFF;
+    volatile BYTE *seg = (volatile BYTE *)(cs << 4);
+    int i = 0, opsize = 2, is_in, width, rep = 0;
+    DWORD sover = 0, count, n, step, k;
+    uint16_t port;
+    BYTE op;
+
+    for (;;) {                                   /* prefixes                        */
+        op = seg[(ip + i) & 0xFFFF];
+        if      (op == 0x66) opsize = 4;
+        else if (op == 0xF2 || op == 0xF3) rep = 1;
+        else if (op == 0x26) sover = VTIB_ES;    /* segment overrides on the source */
+        else if (op == 0x2E) sover = VTIB_CS;
+        else if (op == 0x36) sover = VTIB_SS;
+        else if (op == 0x3E) sover = VTIB_DS;
+        else if (op != 0x67) break;
+        if (++i > 4) return 0;
+    }
+    switch (op) {
+    case 0x6C: is_in = 1; width = 1;      break;              /* INSB             */
+    case 0x6D: is_in = 1; width = opsize; break;              /* INSW / INSD      */
+    case 0x6E: is_in = 0; width = 1;      break;              /* OUTSB            */
+    case 0x6F: is_in = 0; width = opsize; break;              /* OUTSW / OUTSD    */
+    default:   return 0;                                      /* not a string I/O */
+    }
+    port  = (uint16_t)VDM_REG(tib, VTIB_EDX);
+    count = rep ? (VDM_REG(tib, VTIB_ECX) & 0xFFFF) : 1;
+    if (!count) {                                             /* REP with CX=0    */
+        VDM_REG(tib, VTIB_EIP) = (ip + i + 1) & 0xFFFF;
+        return 1;
+    }
+    step = (VDM_REG(tib, VTIB_EFLAGS) & 0x400) ? (DWORD)-width : (DWORD)width;  /* DF */
+    n = (count > IO_BURST_MAX) ? IO_BURST_MAX : count;
+
+    for (k = 0; k < n; ++k) {
+        uint32_t val = 0;
+        if (is_in) {                                          /* port -> ES:DI    */
+            DWORD di = VDM_REG(tib, VTIB_EDI) & 0xFFFF;
+            DWORD lin = ((VDM_REG(tib, VTIB_ES) & 0xFFFF) << 4) + di;
+            vdd_bus_io(bus, port, (uint8_t)width, 1, &val);
+            pokew_n(lin, val, width);
+            VDM_SET16(tib, VTIB_EDI, (WORD)(di + step));
+        } else {                                              /* DS:SI -> port    */
+            DWORD si = VDM_REG(tib, VTIB_ESI) & 0xFFFF;
+            DWORD sregoff = sover ? sover : VTIB_DS;
+            DWORD lin = ((VDM_REG(tib, sregoff) & 0xFFFF) << 4) + si;
+            val = peekw_n(lin, width);
+            vdd_bus_io(bus, port, (uint8_t)width, 0, &val);
+            VDM_SET16(tib, VTIB_ESI, (WORD)(si + step));
+        }
+    }
+    if (rep) {
+        VDM_SET16(tib, VTIB_ECX, (WORD)(count - n));
+        if (count - n) return 1;                 /* more to go: resume ON the REP  */
+    }
+    VDM_REG(tib, VTIB_EIP) = (ip + i + 1) & 0xFFFF;
+    return 1;
 }
 
 /* True if selector `sel`'s descriptor has the D/B (32-bit default) bit set. The bit
@@ -1032,7 +1357,7 @@ static int host_try_io_pm(volatile BYTE *tib, vdd_bus *bus)
     DWORD eip_off = is32 ? eip : (eip & 0xFFFF);
     volatile BYTE *code = (volatile BYTE *)(ULONG_PTR)(dpmi_sel_base((WORD)csv) + eip_off);
     int i = 0, opsize = is32 ? 4 : 2, is_in, width, used_dx, len;
-    BYTE op; uint16_t port; uint32_t val, eax;
+    BYTE op; uint16_t port;
 
     while (code[i] == 0x66 || code[i] == 0x67 ||
            code[i] == 0xF2 || code[i] == 0xF3) {        /* prefixes            */
@@ -1054,20 +1379,14 @@ static int host_try_io_pm(volatile BYTE *tib, vdd_bus *bus)
     if (used_dx) { port = (uint16_t)VDM_REG(tib, VTIB_EDX); len = i + 1; }
     else         { port = code[i + 1];                      len = i + 2; }
 
-    eax = VDM_REG(tib, VTIB_EAX);
-    if (is_in) {
-        val = 0;
-        vdd_bus_io(bus, port, (uint8_t)width, 1, &val);
-        if (width == 1)      VDM_REG(tib, VTIB_EAX) = (eax & 0xFFFFFF00u) | (val & 0xFF);
-        else if (width == 2) VDM_REG(tib, VTIB_EAX) = (eax & 0xFFFF0000u) | (val & 0xFFFF);
-        else                 VDM_REG(tib, VTIB_EAX) = val;
-    } else {
-        val = (width == 1) ? (eax & 0xFF) : (width == 2) ? (eax & 0xFFFF) : eax;
-        vdd_bus_io(bus, port, (uint8_t)width, 0, &val);
-    }
+    host_io_do(tib, bus, port, is_in, width);
     /* step past the I/O insn. 16-bit client (D=0): advance the low word, keep high.
        32-bit client (D=1): advance the full EIP. */
     VDM_REG(tib, VTIB_EIP) = is32 ? (eip + len) : ((eip & 0xFFFF0000u) | ((eip + len) & 0xFFFF));
+    /* Same LOOP-drain as V86 (a PM sound driver runs the identical OPL idiom).
+       With D/B=1 the LOOP counts in ECX, so the counter width follows the selector. */
+    host_io_loop_burst(tib, bus, (volatile const BYTE *)(ULONG_PTR)dpmi_sel_base((WORD)csv),
+                       eip_off + len, eip_off, port, is_in, width, is32);
     return 1;
 }
 
@@ -2296,7 +2615,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     (void)hInst; (void)hPrev; (void)lpCmd; (void)nShow;
     progpath[0] = 0; args[0] = 0;
 
-    p = zput(p, "NTVDMEX clean host\r\nSTAGE0: WinMain entered [build dpmi-harness-v81]\r\n");
+    p = zput(p, "NTVDMEX clean host\r\nSTAGE0: WinMain entered [build dpmi-harness-v94]\r\n");
     log_write(LOG_PATH, report, p);
     serial_init();                                      /* DPMI harness: COM1 log sink */
     serial_out(report, p);
@@ -2483,6 +2802,15 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     g_spk.pit = &g_pit;                         /* speaker tone <- PIT channel 2 */
     g_spk_dev = vdd_speaker_device(&g_spk);
     vdd_bus_add(&g_bus, &g_spk_dev);            /* PC speaker: claims port 0x61  */
+    g_dma_dev = vdd_dma_device(&g_dma);
+    vdd_bus_add(&g_bus, &g_dma_dev);            /* 8237 DMA: 0x00-0x0F/80-8F/C0-DF */
+    g_opl.ext_clock = 1;                        /* exec loop pumps real elapsed us */
+    g_opl_dev = vdd_opl_device(&g_opl);
+    vdd_bus_add(&g_bus, &g_opl_dev);            /* AdLib/OPL2: ports 0x388/0x389 */
+    g_sb.dma = &g_dma; g_sb.opl = &g_opl;       /* SB pulls PCM via DMA, mirrors FM */
+    g_sb.base = SB_DEFAULT_BASE; g_sb.irq = SB_DEFAULT_IRQ;
+    g_sb_dev = vdd_sb_device(&g_sb);
+    vdd_bus_add(&g_bus, &g_sb_dev);             /* Sound Blaster 16: 0x220-0x22F  */
     m.conout = host_conout; m.conctx = NULL;    /* DOS console out -> video      */
     m.conin  = host_conin;  m.cinctx = NULL;    /* DOS console in  <- keyboard   */
     m.coninnb = host_coninnb;                   /* AH=06 DL=FF non-blocking read */
@@ -2542,6 +2870,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         { static DWORD last_pit = 0; DWORD now = GetTickCount();
           if (last_pit == 0) last_pit = now;
           if ((DWORD)(now - last_pit) >= 55) { last_pit += 55; g_irq0_pending = 1; } }
+        opl_pump_time();            /* keep the OPL timers current for the guest */
         /* Deliver a pending PIT IRQ0 as INT 08h when the guest's main-line
            interrupts are enabled. We regain control at event boundaries, almost
            always inside a BOP stub (CS == DOS_HDLR_SEG) where the LIVE IF is the
@@ -2560,7 +2889,12 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             }
             if ((fl & 0x200) && !(cs == DOS_HDLR_SEG && ip >= 0x34 && ip < 0x3A)) {
                 g_irq0_pending = 0;
+                g_irq0_inj++;
                 inject_int(tib, 0x08);
+            } else {
+                static int s_bud_skip = 6;
+                g_irq0_skip++;                  /* IF=0 or inside our own INT 08h */
+                vdmstate_sample("irq0-skip", tib, &s_bud_skip);
             }
         }
         /* Deliver a pending keyboard IRQ1 as INT 09h, same IF-gating as IRQ0. The
@@ -2582,6 +2916,21 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                 inject_int(tib, 0x09);
             }
         }
+        /* Device IRQs (SB block completion on 5, etc.): same IF gating as IRQ0/1,
+           vectored as INT 8+irq. Skip while inside our own timer/keyboard stubs. */
+        { int q;
+          DWORD qcs = VDM_REG(tib, VTIB_CS) & 0xFFFF, qip = VDM_REG(tib, VTIB_EIP) & 0xFFFF;
+          int in_stub = (qcs == DOS_HDLR_SEG &&
+                         ((qip >= 0x34 && qip < 0x3A) || (qip >= 0x4C && qip < 0x50)));
+          if (!in_stub && guest_if_enabled(tib)) {
+              for (q = 2; q < 8; ++q) {
+                  if (InterlockedExchange(&g_irqn_pending[q], 0)) {
+                      g_irqn_inj++;
+                      inject_int(tib, (unsigned)(8 + q));
+                      break;                    /* one per turn: let it IRET first */
+                  }
+              }
+          } }
         ev = v86_run(tib, &st);
         /* SPIKE: once in protected mode, stop at the FIRST PM event and dump the raw
            taxonomy (event/info/selectors) -- this is how the spike learns how the
@@ -2604,8 +2953,17 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         /* I/O port trap (event 0; VM-confirmed) or a generic GP fault (event 2):
            if the faulting instruction is an IN/OUT we can decode, service it via
            the VDD bus and resume; otherwise fall through to the stop dump. */
-        if (ev == VDM_EVENT_IO || ev == VDM_EVENT_IO_HW || ev == VDM_EVENT_GPFAULT) {
+        if (ev == VDM_EVENT_IO || ev == VDM_EVENT_IO_HW ||
+            ev == VDM_EVENT_GPFAULT || ev == VDM_EVENT_IO_STRING) {
             int handled;
+            { static int s_bud_io = 6; vdmstate_sample("io-reflect", tib, &s_bud_io); }
+            /* REP INS/OUTS arrives as its own event with CS:IP ON the instruction. */
+            if (ev == VDM_EVENT_IO_STRING) {
+                EnterCriticalSection(&g_lock);
+                handled = host_try_io_string(tib, &g_bus);
+                LeaveCriticalSection(&g_lock);
+                if (handled) { g_ev_iostr++; continue; }
+            }
             /* Trap-storm detection over ALL faults (port + A0000 memory): the
                per-pixel VGA loop faults repeatedly in a tight PC window. Once a
                storm is established in mode 12h, escalate to the batching
@@ -2621,16 +2979,38 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             EnterCriticalSection(&g_lock);
             handled = host_try_io(tib, &g_bus);     /* single port op (no logging)     */
             LeaveCriticalSection(&g_lock);
-            if (handled) continue;
+            if (handled) { g_ev_io++; continue; }
             /* real-HW event 3 reports CS:IP AFTER the faulting IN/OUT -> retro-decode the
                I/O instruction ending at CS:IP and service it (Skyroads' vblank IN AL,DX). */
             if (ev == VDM_EVENT_IO_HW) {
                 EnterCriticalSection(&g_lock);
                 handled = host_try_io_retro(tib, &g_bus);
                 LeaveCriticalSection(&g_lock);
-                if (handled) continue;
+                if (handled) { g_ev_io++; continue; }
             }
             if (g_a000_prot && host_interp(tib, 1) > 0) continue;  /* single A0000 access */
+            /* Not an I/O instruction and not an A0000 touch. On this hardware event 3
+               is OVERLOADED: besides the I/O reflect, it is how the kernel says "a
+               hardware interrupt is pending and the VDM has interrupts enabled" -- the
+               interrupt assist we thought we lacked. It only ever fires now that the
+               guest runs with IF=1; with IF=0 the kernel had nothing to notify us about
+               and simply left VDM_INT_TIMER pending forever. Distinguish it from a
+               genuine GP fault by the kernel's own pending bits in FIXED_NTVDMSTATE:
+               clear them (so it stops re-notifying), latch the timer IRQ, and resume at
+               the SAME EIP -- no instruction faulted, so nothing must be stepped over.
+               Delivery itself is left to the loop-top gate, which owns the IF and
+               re-entrancy checks. (Session 9 met this same event in protected mode and
+               cleared the bits there; see dpmi_enter.S label 2.) */
+            if (ev == VDM_EVENT_IO_HW) {
+                volatile DWORD *vdmstate = (volatile DWORD *)(ULONG_PTR)0x714;
+                DWORD pend = *vdmstate & 3u;
+                if (pend) {
+                    if (pend & 2u) g_irq0_pending = 1;   /* VDM_INT_TIMER -> IRQ0 */
+                    *vdmstate &= ~3u;
+                    g_ev_intpend++;
+                    continue;
+                }
+            }
         }
         if (ev != VDM_EVENT_BOP) {
             DWORD csv = VDM_REG(tib, VTIB_CS) & 0xFFFF;
@@ -2650,6 +3030,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             log_append(LOG_PATH, base, p); p = base;
             break;
         }
+        { static int s_bud_bop = 6; vdmstate_sample("bop", tib, &s_bud_bop); }
         /* Route the BOP by its number: 0x10 -> INT 10h, 0x16 -> INT 16h (both via
            the bus), else INT 21h. */
         if ((VDM_REG(tib, VTIB_EVENT_INFO) & 0xFF) == 0x10) {
@@ -2895,6 +3276,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                        INT 1Ah advance with wall-clock even though nothing injects INT 08h into
                        the PM client yet. (Async IRQ0 delivery to a client's PM INT 08h hook is
                        the remaining timing piece.) */
+                    opl_pump_time();
                     if (InterlockedExchange(&g_irq0_pending, 0)) {
                         ntvdd_regs tr; regs_load(&tr, tib);
                         EnterCriticalSection(&g_lock);
@@ -3019,6 +3401,15 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     }
     }   /* storm-state block */
 
+    /* Log the exec-loop exit before any flushing, so a hang or fault during
+       shutdown is distinguishable from the loop never exiting at all. */
+    p = zput(p, "STAGE2: exec loop exited -> flushing\r\n");
+    log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+
+    /* The exec loop is out: tell the headless backstop a clean shutdown is under
+       way so it does not force-exit us mid-flush and lose the DOS output. */
+    InterlockedExchange(&g_wound_down, 1);
+
     g_ci.ExitCode = (ULONG)m.exit_code;             /* M2.5: errorlevel (shell notify = best-effort TODO) */
 
     /* Flush captured DOS output to the console + the log. */
@@ -3032,6 +3423,19 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         }
         if (hcon != INVALID_HANDLE_VALUE) CloseHandle(hcon);
     }
+    /* Exec-loop accounting: how much of the run went on port-I/O round trips, how
+       much the burst fast path absorbed, and whether timer IRQs actually landed. */
+    p = zput(p, "STAGE2: io_events=0x");  p = zhex(p, g_ev_io);
+    p = zput(p, " io_burst=0x");          p = zhex(p, g_io_extra);
+    p = zput(p, " irq0_inj=0x");          p = zhex(p, g_irq0_inj);
+    p = zput(p, " irq0_skip=0x");         p = zhex(p, g_irq0_skip);
+    p = zput(p, " intpend=0x");           p = zhex(p, g_ev_intpend);
+    p = zput(p, " iostr=0x");             p = zhex(p, g_ev_iostr);
+    p = zput(p, " bda_tick=0x");          p = zhex(p, ((DWORD)peekw(0x46E) << 16) | peekw(0x46C));
+    p = zput(p, "\r\n");
+    { int i; p = zput(p, "STAGE2: unclaimed ports touched:");
+      for (i = 0; i < g_unclaimed_n; ++i) { p = zput(p, " 0x"); p = zhex(p, g_unclaimed[i]); }
+      p = zput(p, "\r\n"); }
     p = zput(p, "STAGE2: complete\r\n");
     log_append(LOG_PATH, base, p); serial_out(base, p); p = base;   /* headless: mirror the DOS-output flush + completion to COM1 */
 
