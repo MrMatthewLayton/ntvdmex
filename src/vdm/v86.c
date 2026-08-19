@@ -132,6 +132,16 @@ static void v86_ica_program(void)
     g_ica_slave[ICA_BASE + 1]    = 0x00;
 }
 
+/* EXPERIMENT ONLY: retarget the master PIC's vector base. With the faithful base (0x08)
+   an IRQ 5 the KERNEL dispatches and one the HOST injects both arrive as INT 0Dh, so the
+   guest cannot tell which of us delivered it. Moving the kernel's base makes the two
+   distinguishable by vector, which is the whole point of the qirq2 probe. */
+void v86_ica_set_base(unsigned base)
+{
+    g_ica_master[ICA_BASE]     = (BYTE)base;
+    g_ica_master[ICA_BASE + 1] = 0;
+}
+
 void v86_ica_raise(unsigned irq)
 {
     BYTE *ica = (irq < 8) ? g_ica_master : g_ica_slave;

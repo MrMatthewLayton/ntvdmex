@@ -394,12 +394,25 @@ static void inject_int(volatile BYTE *tib, unsigned vec)
 {
     WORD ss = (WORD)VDM_REG(tib, VTIB_SS),  sp = (WORD)VDM_REG(tib, VTIB_ESP);
     WORD cs = (WORD)VDM_REG(tib, VTIB_CS),  ip = (WORD)VDM_REG(tib, VTIB_EIP);
-    WORD fl = (WORD)VDM_REG(tib, VTIB_EFLAGS);     /* push the live frame's FLAGS */
+    DWORD efl = VDM_REG(tib, VTIB_EFLAGS);
+    WORD fl = (WORD)efl;                           /* push the live frame's FLAGS */
+    /* ★ Fold VIF into the pushed IF. On VME hardware the guest's REAL interrupt-enable
+       lives in EFLAGS.VIF (bit 19), because that is what its own STI sets -- but an IRET
+       frame is 16 bits wide, so a straight truncation drops VIF and pushes IF=0. The
+       guest's IRET then restores its virtual interrupt state from that zero and comes back
+       with interrupts off FOREVER. Measured exactly that: after the very first injected
+       INT 08h, irq0_inj stuck at 1 for the rest of the run and every later IRQ was gated
+       off (Skyroads: irq0_skip=123k, and the SB completion IRQ could never be taken). The
+       CPU does this fold itself for a hardware-vectored interrupt; we synthesise the frame,
+       so we must do it too. */
+    if (efl & EFLAGS_VIF_BIT) fl |= 0x200;
     sp -= 2; pokew(((DWORD)ss << 4) + sp, fl);     /* push FLAGS */
     sp -= 2; pokew(((DWORD)ss << 4) + sp, cs);     /* push CS    */
     sp -= 2; pokew(((DWORD)ss << 4) + sp, ip);     /* push IP    */
     VDM_SET16(tib, VTIB_ESP, sp);
-    VDM_REG(tib, VTIB_EFLAGS) &= ~0x300u;          /* clear IF + TF (CPU does this) */
+    /* Clear IF + TF, and VIF with them: vectoring an interrupt disables the guest's
+       interrupts, and under VME "the guest's interrupts" means VIF. */
+    VDM_REG(tib, VTIB_EFLAGS) &= ~(0x300u | EFLAGS_VIF_BIT);
     VDM_SET16(tib, VTIB_EIP, peekw(vec * 4));      /* IVT[vec].offset */
     VDM_SET16(tib, VTIB_CS,  peekw(vec * 4 + 2));  /* IVT[vec].segment */
 }
@@ -2809,7 +2822,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     (void)hInst; (void)hPrev; (void)lpCmd; (void)nShow;
     progpath[0] = 0; args[0] = 0;
 
-    p = zput(p, "NTVDMEX clean host\r\nSTAGE0: WinMain entered [build dpmi-harness-v111]\r\n");
+    p = zput(p, "NTVDMEX clean host\r\nSTAGE0: WinMain entered [build dpmi-harness-v113]\r\n");
     log_write(LOG_PATH, report, p);
     serial_init();                                      /* DPMI harness: COM1 log sink */
     serial_out(report, p);
@@ -2837,9 +2850,14 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             if (v > 0) { g_qi_bits = (DWORD)v & 3; g_qi_raise = (v & 4) != 0;
                          g_qi_vif = (v & 8) != 0; } }
       } }
-    if (g_qi_bits)
+    if (g_qi_bits) {
         DuplicateHandle(GetCurrentProcess(), GetCurrentThread(), GetCurrentProcess(),
                         &g_hcpu, 0, FALSE, DUPLICATE_SAME_ACCESS);
+        /* Experiment mode: retarget the kernel's PIC so a KERNEL-dispatched IRQ 5 arrives
+           as INT 65h while our own injection still arrives as INT 0Dh. Without this the
+           two are the same vector and the qirq2 probe cannot attribute a delivery. */
+        v86_ica_set_base(0x60);
+    }
     p = zput(p, "STAGE0: qi_bits=0x"); p = zhex(p, g_qi_bits);
     p = zput(p, " qi_raise=0x");       p = zhex(p, (DWORD)g_qi_raise);
     p = zput(p, " qi_vif=0x");         p = zhex(p, (DWORD)g_qi_vif);

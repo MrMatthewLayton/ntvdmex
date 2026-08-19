@@ -56,6 +56,7 @@ DWORD v86_run(volatile BYTE *tib, LONG *out_status);
    queues asks the ICA which vector to inject. Raise, then set VDM_INT_HARDWARE in
    FIXED_NTVDMSTATE, then queue. The ISR bit stays set until v86_ica_eoi(), so the
    guest's EOI write must reach us or that line never fires again. */
+void  v86_ica_set_base(unsigned base);  /* experiment: distinguish kernel vs host delivery */
 void  v86_ica_raise(unsigned irq);
 void  v86_ica_eoi(unsigned irq);
 void  v86_ica_set_mask(unsigned irq, int masked);
