@@ -23,6 +23,14 @@ cc -std=c99 -Wall -Wextra -Wno-unused-function -O0 -g \
 
 "$DIR/vdd_test"
 
+# Session 11: the 8259A PIC. Its in-service rules are what stop an injected handler
+# being re-entered before it EOIs, so they get pinned down off-VM.
+cc -std=c99 -Wall -Wextra -Wno-unused-function -O0 -g \
+   -I "$DIR/../../src/vdd" \
+   -o "$DIR/pic_test" "$DIR/pic_test.c" "$DIR/../../src/vdd/vdd_pic.c"
+
+"$DIR/pic_test"
+
 # M3 slice-2: the PIT timer VDD battery (vdd_pit.c on the bus).
 cc -std=c99 -Wall -Wextra -Wno-unused-function -O0 -g \
    -I "$DIR/../../src/vdd" \

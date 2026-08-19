@@ -28,6 +28,7 @@
 #include "dos_ems.h"
 #include "vdd_bus.h"
 #include "vdd_pit.h"
+#include "vdd_pic.h"
 #include "vdd_video.h"
 #include "vdd_input.h"
 #include "vdd_speaker.h"
@@ -124,6 +125,7 @@ static BYTE filebuf[0x80000];   /* 512KB: hold a real game's MZ image (DOS/4GW s
 /* The device bus + its VDDs + the presentation layer live for the host's life. */
 static vdd_bus      g_bus;
 static pit_state    g_pit;       static ntvdd g_pit_dev;
+static pic_state    g_pic;       static ntvdd g_pic_dev;
 static video_state  g_vid;       static ntvdd g_vid_dev;
 static input_state  g_in;        static ntvdd g_in_dev;
 static speaker_state g_spk;      static ntvdd g_spk_dev;
@@ -282,7 +284,12 @@ static HANDLE         g_hcpu          = NULL;
 static DWORD          g_qi_bits       = 0;
 static int            g_qi_raise      = 0;
 static int            g_qi_vif        = 0;   /* start the guest with EFLAGS.VIF set */
-static int            g_qi_susp       = 0;   /* async-inject via SuspendThread+SetThreadContext */
+/* ON BY DEFAULT since v132: async injection is what makes a real game playable (a guest
+   parked in its own handler never traps, so nothing else can deliver its timer or its
+   keystrokes), and it is now gated by a real PIC. qimode can still turn it OFF (bit 6) for
+   A/B testing, but nothing should depend on a flag file being present to work. */
+static int            g_qi_susp       = 1;   /* async-inject via SuspendThread+SetThreadContext */
+static int            g_qi_keys       = 0;   /* synthesise keypresses (repro the hang) */
 /* Set only while the exec thread is inside VdmStartExecution, i.e. while the thread's
    CONTEXT genuinely is the guest's frame and our loop is not touching the VDM_TIB. The
    async injector refuses to act unless this is set, so it can never race the exec loop. */
@@ -304,6 +311,27 @@ static volatile LONG  g_qi_status     = 0;  /* NTSTATUS of the last queue call *
      - never while CS is our own handler segment (we would re-enter a BOP stub mid-service);
      - never while the exec loop owns the context (g_in_exec), or we would race it.
    Any of those => decline and count it; the normal in-loop path will catch the IRQ later. */
+/* AN IN-SERVICE INTERLOCK -- the bit of the 8259 we do not have.
+   A real PIC sets an in-service bit when it delivers a line and will not deliver again until
+   the handler acknowledges with an EOI. We do not emulate the PIC at all (0x20/0x21 are still
+   unclaimed), so nothing stopped us re-entering a handler that had already been entered: a
+   keyboard ISR typically re-enables interrupts early, so the very next injected IRQ1 landed
+   inside it, and the next inside that, until the guest drowned in nested handlers -- exactly
+   the "press a key and everything hangs" regression that async IRQ1 delivery introduced.
+
+   Until there is a real PIC VDD, approximate the in-service bit with the guest's own stack:
+   an injected handler has our 6-byte frame pushed, so while the guest's SP is BELOW where it
+   was at injection (same SS), that handler has not IRETed yet. Refuse to inject while that
+   holds. A handler that switches stacks, or never returns, would latch this forever, so it
+   also times out. This is a guard, not a PIC -- the real fix is the PIC VDD (resume item 4),
+   which also gets us IRQ masking. */
+static DWORD          g_async_nest_blocked = 0;   /* refused: line masked or in service */
+/* True when a line's vector still points at one of our own do-nothing stubs (the shared
+   device IRET at DOS_HDLR_SEG:0x66, or the default INT 09h at 0x4C). Those never send an
+   EOI, so anything delivered through them must be auto-EOI'd or the line latches. */
+static int async_vec_is_our_stub(unsigned irq);
+
+
 static void pokew(DWORD lin, WORD v);        /* fwd: guest-memory helpers, defined below */
 static WORD peekw(DWORD lin);
 static void host_pit_sync(void);             /* fwd: the guest's clock, driven by both threads */
@@ -315,14 +343,19 @@ static int async_inject_irq(unsigned irq)
     int ok = 0;
 
     if (!g_hcpu || g_in_exec == 0) { g_async_bail++; return 0; }
+    /* Ask the PIC, exactly as the hardware would: is this line unmasked, and is nothing of
+       equal or higher priority still in service? That is what stops us re-entering a handler
+       that has not EOI'd yet -- the fault behind "press a key and everything hangs". */
+    if (!vdd_pic_can_deliver(&g_pic, (uint8_t)irq)) { g_async_bail++; g_async_nest_blocked++; return 0; }
     /* Never deliver a line the guest has not hooked. Its vector still points at our default
        IRET stub, which means no ISR is installed -- and on a real PC an unused line sits
        masked in the PIC, so nothing would arrive at all. Delivering anyway is not harmless:
        it perturbs the guest's stack and control flow for no benefit, and it demonstrably
        derailed Skyroads (which never installs a Sound Blaster ISR) into executing junk in
        our own handler segment at 0050:006c, where it "terminated" via a garbage INT 21h. */
-    if (irq >= 2 && peekw((8 + irq) * 4 + 2) == DOS_HDLR_SEG
-                 && peekw((8 + irq) * 4) == 0x0066) { g_async_bail++; return 0; }
+    { unsigned v0 = vdd_pic_vector(&g_pic, (uint8_t)irq);
+      if (irq >= 2 && peekw(v0 * 4 + 2) == DOS_HDLR_SEG
+                   && peekw(v0 * 4) == 0x0066) { g_async_bail++; return 0; } }
     if (SuspendThread(g_hcpu) == (DWORD)-1) { g_async_bail++; return 0; }
     { unsigned i; char *z = (char *)&cx; for (i = 0; i < sizeof cx; ++i) z[i] = 0; }
     cx.ContextFlags = CONTEXT_CONTROL | CONTEXT_SEGMENTS;
@@ -334,17 +367,33 @@ static int async_inject_irq(unsigned irq)
         ResumeThread(g_hcpu); g_async_bail++; return 0;
     }
     ss = cx.SegSs & 0xFFFF; sp = cx.Esp & 0xFFFF; ip = cx.Eip & 0xFFFF;
+
     fl = (WORD)efl;
     if (efl & EFLAGS_VIF_BIT) fl |= 0x200;      /* same VIF fold as inject_int */
     sp = (sp - 2) & 0xFFFF; pokew((ss << 4) + sp, fl);
     sp = (sp - 2) & 0xFFFF; pokew((ss << 4) + sp, (WORD)cs);
     sp = (sp - 2) & 0xFFFF; pokew((ss << 4) + sp, (WORD)ip);
     cx.Esp    = sp;
-    cx.Eip    = peekw((8 + irq) * 4);
-    cx.SegCs  = peekw((8 + irq) * 4 + 2);
+    { unsigned vec = vdd_pic_vector(&g_pic, (uint8_t)irq);
+      cx.Eip   = peekw(vec * 4);
+      cx.SegCs = peekw(vec * 4 + 2); }
     cx.EFlags = efl & ~(0x300u | EFLAGS_VIF_BIT);
     cx.ContextFlags = CONTEXT_CONTROL | CONTEXT_SEGMENTS;
     ok = SetThreadContext(g_hcpu, &cx) ? 1 : 0;
+    if (ok) {
+        vdd_pic_acknowledge(&g_pic, (uint8_t)irq);       /* in service until the guest EOIs */
+        /* Release it immediately in the two cases where nobody ever will:
+           - a line vectored at one of OUR default stubs, which do nothing and never EOI;
+           - THE TIMER. Measured on Skyroads: it EOIs only ~36 times a second against a
+             180 Hz timer, i.e. only on the ~1-in-16 ticks where its handler chains to the
+             BIOS -- so it is relying on something other than a per-tick EOI. Our INT 08h
+             stand-in is a BOP with nowhere to put an EOI at the END of the handler, so
+             modelling IRQ0's in-service bit strictly starves the guest (measured: 540 -> 15
+             delivered ticks per 3 s). IRQ0 is gated by the guest's own IF discipline, which
+             has always worked; the re-entrancy this whole mechanism exists to stop was on
+             IRQ1, and that stays strict. */
+        if (irq == 0 || async_vec_is_our_stub(irq)) vdd_pic_eoi(&g_pic, (uint8_t)irq);
+    }
     ResumeThread(g_hcpu);
     if (ok) g_async_inj++; else g_async_bail++;
     /* Log AFTER the resume (never hold the guest suspended across file I/O). The IVT dump
@@ -369,6 +418,13 @@ static int async_inject_irq(unsigned irq)
     return ok;
 }
 
+static int async_vec_is_our_stub(unsigned irq)
+{
+    unsigned vec = vdd_pic_vector(&g_pic, (uint8_t)irq);
+    WORD seg = peekw(vec * 4 + 2), off = peekw(vec * 4);
+    return seg == DOS_HDLR_SEG && (off == 0x0066 || off == 0x004C);
+}
+
 static void host_irq_sink(void *ctx, uint8_t irq)
 {
     (void)ctx;
@@ -377,6 +433,7 @@ static void host_irq_sink(void *ctx, uint8_t irq)
        latched -- so the line number this arrives on is the missing fact. */
     g_irq_raised[irq & 7]++;
     g_irq_raised_any++;
+    vdd_pic_raise(&g_pic, irq);
     if (irq == 0) {
         irq0_latch();
         /* THE TIMER NEEDS THE ASYNC PATH TOO -- arguably more than the devices do. A game
@@ -621,6 +678,31 @@ static void host_midi_sink(void *ctx, uint32_t msg)
    VDM_INT_HARDWARE when its APC actually dispatches, so a transition here is proof the
    APC ran even if the guest never sees a vector. Logs the first few raises with the
    queue call's NTSTATUS, which is the whole experimental record. */
+/* SYNTHETIC KEYPRESSES (qimode bit 5). The "press a key and it hangs" regression cannot be
+   reproduced from here -- the rig has no remote input -- so drive the exact same path the UI
+   thread uses for a real key: push a make code into the 0x60 FIFO, raise IRQ1, then the break
+   code, repeatedly. If the in-service interlock is wrong this will hang the guest just as a
+   human would, and if it is right the run completes with the key counts advancing. */
+static DWORD WINAPI synthkey_thread(LPVOID pv)
+{
+    int n;
+    (void)pv;
+    Sleep(4000);                                  /* let the intro get going first */
+    for (n = 0; n < 60 && g_running; ++n) {
+        EnterCriticalSection(&g_lock);
+        vdd_input_push_scancode(&g_in, 0x48);     /* up-arrow make  */
+        LeaveCriticalSection(&g_lock);
+        host_irq_sink(NULL, 1);
+        Sleep(120);
+        EnterCriticalSection(&g_lock);
+        vdd_input_push_scancode(&g_in, (uint8_t)(0x48 | 0x80));   /* break */
+        LeaveCriticalSection(&g_lock);
+        host_irq_sink(NULL, 1);
+        Sleep(180);
+    }
+    return 0;
+}
+
 static DWORD WINAPI qirq_probe_thread(LPVOID pv)
 {
     int n;
@@ -3058,7 +3140,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     (void)hInst; (void)hPrev; (void)lpCmd; (void)nShow;
     progpath[0] = 0; args[0] = 0;
 
-    p = zput(p, "NTVDMEX clean host\r\nSTAGE0: WinMain entered [build dpmi-harness-v126]\r\n");
+    p = zput(p, "NTVDMEX clean host\r\nSTAGE0: WinMain entered [build dpmi-harness-v133]\r\n");
     log_write(LOG_PATH, report, p);
     serial_init();                                      /* DPMI harness: COM1 log sink */
     serial_out(report, p);
@@ -3090,9 +3172,10 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
           if (v > 0) { g_qi_bits  = (DWORD)v & 3;
                        g_qi_raise = (v & 0x04) != 0;
                        g_qi_vif   = (v & 0x08) != 0;
-                       g_qi_susp  = (v & 0x10) != 0; }
+                       if (v & 0x40) g_qi_susp = 0;      /* bit 6 disables async delivery */
+                       g_qi_keys  = (v & 0x20) != 0; }
       } }
-    if (g_qi_bits || g_qi_susp) {
+    if (g_qi_bits || g_qi_susp) {    /* async delivery needs a handle to the exec thread */
         DuplicateHandle(GetCurrentProcess(), GetCurrentThread(), GetCurrentProcess(),
                         &g_hcpu, 0, FALSE, DUPLICATE_SAME_ACCESS);
     }
@@ -3289,6 +3372,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     InitializeCriticalSection(&g_lock);
     vdd_bus_init(&g_bus, NULL);
     vdd_bus_set_sinks(&g_bus, host_irq_sink, NULL, NULL, NULL);  /* host presents directly */
+    g_pic_dev = vdd_pic_device(&g_pic);      /* before the PIT: it gates every IRQ */
+    vdd_bus_add(&g_bus, &g_pic_dev);
     g_pit_dev = vdd_pit_device(&g_pit);
     vdd_bus_add(&g_bus, &g_pit_dev);
     g_vid.vmem = (uint8_t *)VID_APERTURE_BASE;  /* the mapped A0000 aperture (RAM) */
@@ -3333,6 +3418,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                       if (hd) CloseHandle(hd); }
     if (g_headless) { HANDLE hb = CreateThread(NULL, 0, heartbeat_thread, NULL, 0, NULL);
                       if (hb) CloseHandle(hb); }
+    if (g_qi_keys) { HANDLE hk = CreateThread(NULL, 0, synthkey_thread, NULL, 0, NULL);
+                     if (hk) CloseHandle(hk); }
     if (g_qi_raise) { HANDLE hq = CreateThread(NULL, 0, qirq_probe_thread, NULL, 0, NULL);
                       if (hq) CloseHandle(hq); }
 
@@ -3428,8 +3515,11 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             } else {
                 fl = VDM_REG(tib, VTIB_EFLAGS);
             }
-            if (if_or_vif(fl) && !(cs == DOS_HDLR_SEG && ip >= 0x34 && ip < 0x3A)) {
+            if (if_or_vif(fl) && vdd_pic_can_deliver(&g_pic, 0)
+                && !(cs == DOS_HDLR_SEG && ip >= 0x34 && ip < 0x3A)) {
                 InterlockedDecrement(&g_irq0_pending);
+                vdd_pic_acknowledge(&g_pic, 0);
+                vdd_pic_eoi(&g_pic, 0);         /* see async_inject_irq: timer is auto-EOI */
                 g_irq0_inj++;
                 inject_int(tib, 0x08);
             } else {
@@ -3456,6 +3546,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             if (if_or_vif(fl) && !(cs == DOS_HDLR_SEG &&
                                   ((ip >= 0x34 && ip < 0x3A) || (ip >= 0x4C && ip < 0x50)))) {
                 InterlockedDecrement(&g_irq1_pending);   /* one INT 09h per queued scancode byte */
+                vdd_pic_acknowledge(&g_pic, 1);
+                if (async_vec_is_our_stub(1)) vdd_pic_eoi(&g_pic, 1);
                 inject_int(tib, 0x09);
             }
         }
@@ -3475,7 +3567,10 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                       InterlockedExchange(&g_irqn_pending[q], 0);   /* unhooked: drop it */
                       continue;
                   }
+                  if (!vdd_pic_can_deliver(&g_pic, (uint8_t)q)) continue;
                   if (InterlockedExchange(&g_irqn_pending[q], 0)) {
+                      vdd_pic_acknowledge(&g_pic, (uint8_t)q);
+                      if (async_vec_is_our_stub((unsigned)q)) vdd_pic_eoi(&g_pic, (uint8_t)q);
                       g_irqn_inj++;
                       inject_int(tib, (unsigned)(8 + q));
                       break;                    /* one per turn: let it IRET first */
@@ -3667,6 +3762,11 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             ntvdd_regs r; regs_load(&r, tib);
             EnterCriticalSection(&g_lock);
             vdd_bus_deliver_int(&g_bus, 0x08, &r);  /* bump BIOS tick at 0040:006C */
+            /* The real BIOS timer ISR ends with `mov al,20h; out 20h,al`. Ours is a BOP
+               with nowhere to put one, so issue the EOI here -- without it the PIC's
+               in-service bit for IRQ0 latches on the first tick and the timer stops dead
+               (measured: exactly one tick delivered in a 30 s run). */
+            vdd_pic_eoi(&g_pic, 0);
             LeaveCriticalSection(&g_lock);
             regs_store(&r, tib);
             VDM_REG(tib, VTIB_EIP) += 3;            /* -> CD 1C (chain user timer) */
@@ -4036,6 +4136,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
       p = zput(p, " skip_stub=0x"); p = zhex(p, g_irq0_skip_stub);
       p = zput(p, " async_inj=0x"); p = zhex(p, g_async_inj);
       p = zput(p, " async_bail=0x"); p = zhex(p, g_async_bail);
+      p = zput(p, " async_nest=0x"); p = zhex(p, g_async_nest_blocked);
       p = zput(p, "\r\n");
       log_append(LOG_PATH, base, p); serial_out(base, p); p = base; }
     p = zput(p, "STAGE2: io_events=0x");  p = zhex(p, g_ev_io);
