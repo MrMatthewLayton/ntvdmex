@@ -51,6 +51,16 @@ void v86_set_entry(volatile BYTE *tib, WORD cs, WORD ip, WORD ss, WORD sp,
    (recovered from ntvdm fcn.0f00532e; see research/dpmi-under-ntvdmcontrol.md). */
 DWORD v86_run(volatile BYTE *tib, LONG *out_status);
 
+/* The kernel's virtual PIC (see the ICA_* offsets + rationale in ntvdm.h). Raising a
+   line here is what makes NtVdmControl(VdmQueueInterrupt) able to deliver: the APC it
+   queues asks the ICA which vector to inject. Raise, then set VDM_INT_HARDWARE in
+   FIXED_NTVDMSTATE, then queue. The ISR bit stays set until v86_ica_eoi(), so the
+   guest's EOI write must reach us or that line never fires again. */
+void  v86_ica_raise(unsigned irq);
+void  v86_ica_eoi(unsigned irq);
+void  v86_ica_set_mask(unsigned irq, int masked);
+DWORD v86_ica_state(unsigned irq);   /* IRR | ISR<<8 | IMR<<16, for logging */
+
 /* Raw NtVdmControl passthrough (for DPMI's LDT + PM-cli services). Returns NTSTATUS
    (>= 0 ok). Requires v86_init() to have cached the entry point. */
 LONG v86_vdmcontrol(ULONG service, PVOID data);

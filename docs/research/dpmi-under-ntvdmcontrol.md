@@ -2852,6 +2852,98 @@ same input path Doom needs. Open follow-up (not a keyboard bug): in-flight ship 
 `qmp` send-key only *taps* (can't hold a key), and extended arrow keys (E0-prefixed) may need the E0 byte;
 both are harness/refinement items.
 
+### Runs 87-93 (2026-08-19, session 11) — the ASYNC-INTERRUPT lever, RE'd from ntoskrnl `[FACT — disasm + BARE METAL]`
+
+Session 10 ended on one blocker: **we cannot asynchronously interrupt a V86 guest.** The Sound Blaster's
+block-completion IRQ is raised from the audio thread while the guest spins in its own INT 1Ch handler; our
+exec loop only regains control when the guest traps, so `irqn_inj` stayed 0 and Skyroads never left that
+wait. Session 10 had already tried setting the FIXED_NTVDMSTATE hardware-pending bit (`[0x714] |= 1`) and
+measured no preemption. This session found what that bit is missing, by disassembling XP's kernel
+(`ntoskrnl.exe`, 5.1.2600.5512, r2 base `0x400000`; runtime base `0x804d7000`).
+
+**`NtVdmControl(VdmQueueInterrupt = 1, ServiceData)` — ServiceData is a THREAD HANDLE, not a pointer.**
+`NtVdmControl` (`0x4d6706`) dispatches service 1 to `VdmpQueueInterrupt` (`0x4700fe`), which passes
+ServiceData straight to `ObReferenceObjectByHandle(h, 0x40, PsThreadType, PreviousMode)`, requires the
+thread to belong to the calling process (`ETHREAD+0x220`) and the process to be a VDM
+(`EPROCESS+0x158` = VdmObjects, set by VdmInitialize), then **queues an APC to that thread**. That APC is
+the preemption we lacked: it takes the thread out of V86 without the guest trapping.
+
+| Kernel routine | Address | What it does |
+|---|---|---|
+| `NtVdmControl` | `0x4d6706` | service dispatch (1 → queue, 2 → delay, 3 → init, 10/11 → LDT, 13 → PM cli) |
+| `VdmpQueueInterrupt` | `0x4700fe` | ObRef the thread handle, init+insert the APC under the VdmObjects spinlock |
+| APC kernel routine | `0x46fdfb` | reads `[0x714] & 3` + the thread's trap frame; delivers, defers, or requeues |
+| `VdmpCanDeliver` | `0x56dce0` | "may I deliver now?" — **see the flag table below** |
+| `VdmpDispatchInterrupts` | `0x56df13` | the real dispatch: picks a line from the virtual ICA, injects the vector |
+| `VdmpGetPendingLine` | `0x56d6ce` | `IRR & ~(IMR \| delayed)`, blocked by `ISR`, scanned from `HIPRI` |
+
+**The APC's decision tree** (`0x46fdfb`), for a V86 trap frame (`EFlags.VM` set):
+- `[0x714] & 3` clear → nothing to do.
+- `VdmpCanDeliver(TrapFrame->EFlags)` false → set **`EFLAGS.VIP` (bit 20)** in the frame and defer.
+- otherwise → if `(state & 2) && !(state & 1)` (TIMER pending, HARDWARE clear) write **`VTIB_EVENT
+  (+0x5A8) = 3`**, info 0, and stop the VDM — *that is exactly the event-3 "interrupt pending"
+  notification session 10 reverse-engineered from the other end*; else call `VdmpDispatchInterrupts`.
+
+**`VdmpCanDeliver` reads VIF, not IF.** For a V86 frame with VME enabled (`KeI386VirtualIntExtensions &
+1`, true on every box we target) it returns `(EFlags & 0x80000) != 0` — **EFLAGS.VIF**. Only without VME
+does it fall back to `EFlags & IF`, and for a PM frame it reads `[0x714] & 0x200` (the VDM's own virtual
+interrupt flag, which **the kernel maintains itself** — it read set from the first instruction; writing
+it from user mode only clobbers correct state, measured).
+
+**The virtual ICA — the kernel emulates a full 8259 in OUR memory.** `VdmInitialize` takes
+`VDMICAUSERDATA` (9 pointers; our field order in `ntvdm.h` is confirmed correct by the kernel's use of
+`+4` = master and `+8` = slave). Until this session we handed over **zeroed** buffers, so the kernel could
+never dispatch anything: vector base 0, no line requested. Layout recovered from `VdmpGetPendingLine` and
+`VdmpDispatchInterrupts`:
+
+| Offset | Field | Notes |
+|---|---|---|
+| `0x00 + line*4` | per-line COUNT (dword) | decremented on dispatch; clears IRR at 0 |
+| `0x28` | word: vector BASE | master 0x08, slave 0x70 |
+| `0x2A` | word: HIPRI | priority rotation start |
+| `0x2C` / `0x2D` | mode bytes | `0x2C & 0x20` and `0x2D & 3` are read |
+| `0x2F` | IRR — request | set to raise a line |
+| `0x30` | ISR — in service | set on dispatch, cleared only by EOI |
+| `0x31` | IMR — mask | |
+| `0x32` | slave-attached mask | master bit 2 = cascade |
+
+Implemented as `v86_ica_raise/eoi/set_mask/state` (`v86.c`), programmed master=0x08 / slave=0x70 in
+`v86_init`.
+
+**BARE-METAL RESULTS** (probe `tools/dostest/qirq.asm` — hooks INT 05h and INT 0Dh with separate counters,
+then waits in a *pure memory spin* that cannot trap, so any vector that fires must have been delivered
+asynchronously; the host raises IRQ 5 from a non-exec thread every 250 ms; mode knob = `qimode.txt` on the
+share):
+
+1. **`VdmQueueInterrupt` is accepted: `st=0x00000000`.** The handle-as-ServiceData decoding is right and
+   the APC demonstrably runs — it is what sets `VIP` in the guest's flags.
+2. **The APC always takes the "cannot deliver" branch**, because `VIF` is clear in the V86 frame. Seeding
+   `VIF` through the VTIB CONTEXT at entry (visible as `EFL=0x000a0202` on the first event) does not
+   survive: the kernel evidently sanitises it. Mirroring IF→VIF on every re-entry changed nothing.
+3. **★ `[0x714] |= 1` (VDM_INT_HARDWARE) is not merely useless — it LIVELOCKS the guest.** With VIP set
+   and VIF clear, the guest's next `IRET`/`STI` faults under VME into a dispatch that refuses to deliver
+   and re-arms VIP: the guest froze at `DOS_HDLR_SEG:0x0003` (the IRET after a BOP) with `EFL=0x00030202`,
+   the exec loop starved (`io=0`, `irq0` stuck at 1), and no exit path ever ran. Reproduced in **every**
+   run that set the bit, **including the control that made no queue call at all** — so the bit alone does
+   it. Removing it (v100) makes the same probe run to a clean `INT 21h 4Ch` exit with `irq0_inj=8`.
+   This is almost certainly session 10's Skyroads freeze at `0x0050:0x0037`, which shares the signature.
+4. Programming the ICA correctly (`ica=0x20` = IRR bit 5, ISR/IMR clear, logged from the probe) does not
+   by itself unblock delivery — the APC still stops at the VIF gate before it ever consults the ICA.
+
+**NEXT LEAD (highest value): `VdmPMCliControl` (service 13).** It is documented in our own notes as
+"virtualises the client interrupt flag" and ntvdm calls it with subfunctions {0,1,3} (`0xf0053b6`,
+`0xf03d9d1`, `0xf03da59`). The VIF the kernel tests is kernel-owned state we have no other way to set, and
+a service whose whole job is the VDM's interrupt flag is the obvious owner. Test = the three subfunctions
+against the same qirq probe; success is `c0d` non-zero (kernel dispatched INT 0Dh = base 8 + IRQ 5) while
+`irqn_inj` stays 0 (proving it was not our own injection).
+A second, independent path if that fails: drive delivery from the **event-3** branch instead by setting
+VDM_INT_TIMER (bit 1) *without* bit 0, which the APC turns into `VTIB_EVENT=3` + a VDM stop — the exact
+event our exec loop already services. The APC's requeue passes `[0x714] & 1` as its NormalContext and only
+delivers when that is non-zero, so this needs the requeue path understood first (`0x46fead`).
+
+Once delivery lands, the guest's EOI (`OUT 0x20`) must clear `ICA_ISR` or that line never fires again —
+which is why the PIC VDD (claiming 0x20/0x21) is now a prerequisite, not a nicety.
+
 ## References
 - [ntvdmcontrol-and-v86.md](ntvdmcontrol-and-v86.md) — the `VDMSERVICECLASS` enum, VDM_TIB/CONTEXT
   offsets, the V86 keystone.

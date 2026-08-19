@@ -47,6 +47,12 @@
    tests (selftest/dpmitest) then never touch the self-capture path -- keeping the
    common case off the capture code entirely. */
 #define CAPTURE_FLAG "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\capture.flag"
+/* Async-preemption experiment knob, also on the share so it can be changed between
+   runs without a rebuild. One digit: bits 0-1 = the FIXED_NTVDMSTATE pending bits to
+   set before NtVdmControl(VdmQueueInterrupt) (1 = VDM_INT_HARDWARE, 2 = VDM_INT_TIMER,
+   3 = both), bit 2 = raise a periodic device IRQ 5 for the qirq probe. Absent = the
+   pre-session-11 behaviour (latch the pending bit only, never queue). */
+#define QIMODE_PATH "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\qimode.txt"
 
 /* Offset, within DOS_HDLR_SEG, of the XMS API far-call entry stub (BOP 0x43; RETF).
    Lives just past the INT 1Ah stub (which ends at 0x40) and the INT 2Fh stub (4 bytes
@@ -243,6 +249,17 @@ static HMENU        g_savedmenu;            /* stashed menu while hidden        
    this an SB transfer completes, raises IRQ 5, and the game waits forever for an
    interrupt the host quietly dropped. */
 static volatile LONG  g_irqn_pending[8];
+/* Async preemption (session 11). g_hcpu is a handle to the thread that runs the guest
+   -- VdmQueueInterrupt's ServiceData -- duplicated once from the exec thread itself.
+   g_qi_bits are the [0x714] pending bits to set alongside the queue call, and
+   g_qi_raise enables the periodic IRQ 5 the qirq probe listens for; both come from
+   QIMODE_PATH so a mode can be retried without a rebuild. */
+static HANDLE         g_hcpu          = NULL;
+static DWORD          g_qi_bits       = 0;
+static int            g_qi_raise      = 0;
+static int            g_qi_vif        = 0;   /* start the guest with EFLAGS.VIF set */
+static DWORD          g_qi_calls      = 0;
+static volatile LONG  g_qi_status     = 0;  /* NTSTATUS of the last queue call */
 static void host_irq_sink(void *ctx, uint8_t irq)
 {
     (void)ctx;
@@ -257,8 +274,37 @@ static void host_irq_sink(void *ctx, uint8_t irq)
            how a VDM asks to be preempted: the kernel breaks out of V86 execution
            and hands us event 3, which the exec loop already services. Without
            this an SB block completes, the IRQ is latched, and the game waits
-           forever inside its own handler. */
-        *(volatile DWORD *)(ULONG_PTR)0x714 |= 1u;
+           forever inside its own handler.
+           SESSION 10 MEASURED THAT THIS IS NOT ENOUGH: the word is only consulted at
+           the kernel's own transition points, so a guest spinning in V86 never notices
+           (intpend stayed 1, irqn_inj stayed 0). Session 11's RE found the missing
+           half -- NtVdmControl(VdmQueueInterrupt, thread) queues an APC that forces
+           the thread out of V86 so those bits are read. Gated on QIMODE_PATH until the
+           rig says which of the kernel's two delivery paths we land on. */
+        /* ...AND SETTING IT UNCONDITIONALLY IS WORSE THAN USELESS (measured, session 11,
+           qirq.com on the rig): VDM_INT_HARDWARE tells the kernel a hardware interrupt
+           is pending and to dispatch it through its own virtual ICA -- which we have
+           never programmed (v86.c registers zeroed buffers). On VME hardware the kernel
+           then sets EFLAGS.VIP and the guest's next IRET/STI faults into a dispatch that
+           finds nothing, forever: the guest froze at DOS_HDLR_SEG:0x0003 with the exec
+           loop starved (io=0, irq0 stuck at 1) in every run that set the bit, including
+           the control that made no queue call. That is almost certainly the same freeze
+           session 10 recorded for Skyroads at 0x0050:0x0037. So the bit is now set only
+           when an experiment asks for it; the ICA must be programmed before this can be
+           the real delivery path. */
+        if (g_qi_bits) {
+            /* The kernel dispatches from its virtual PIC, so request the line there
+               first -- otherwise the APC wakes up, finds nothing requested, and the
+               pending bit just sits there (which is the whole of session 10's
+               "already tried and failed"). */
+            if (g_qi_bits & 1) v86_ica_raise(irq);
+            *(volatile DWORD *)(ULONG_PTR)0x714 |= g_qi_bits;
+        }
+        if (g_qi_bits && g_hcpu) {
+            LONG st = v86_vdmcontrol(VDM_SVC_VdmQueueInterrupt, (PVOID)g_hcpu);
+            InterlockedExchange(&g_qi_status, st);
+            g_qi_calls++;
+        }
     }
 }
 
@@ -410,6 +456,77 @@ static void host_midi_sink(void *ctx, uint32_t msg)
     audio_wave_midi(&g_wave, msg);
 }
 
+/* Async-preemption probe driver (session 11, QIMODE_PATH bit 2). Raises IRQ 5 from a
+   thread that is NOT the exec thread -- exactly how the audio thread raises the Sound
+   Blaster's completion IRQ -- while the guest (qirq.com) spins in pure V86 code that
+   never traps. After each raise it watches [0x714] for up to 50 ms: the kernel clears
+   VDM_INT_HARDWARE when its APC actually dispatches, so a transition here is proof the
+   APC ran even if the guest never sees a vector. Logs the first few raises with the
+   queue call's NTSTATUS, which is the whole experimental record. */
+static DWORD WINAPI qirq_probe_thread(LPVOID pv)
+{
+    int n;
+    (void)pv;
+    Sleep(500);                                  /* let the guest install its ISRs */
+    for (n = 0; n < 40 && g_running; ++n) {
+        DWORD before = *(volatile DWORD *)(ULONG_PTR)0x714, after = before;
+        int k;
+        host_irq_sink(NULL, 5);
+        for (k = 0; k < 50; ++k) {
+            Sleep(1);
+            after = *(volatile DWORD *)(ULONG_PTR)0x714;
+            if (after != before) break;
+        }
+        if (n < 8) {
+            char b[256], *q = b;
+            q = zput(q, "QIRQ: raise#0x");   q = zhex(q, (DWORD)n);
+            q = zput(q, " bits=0x");         q = zhex(q, g_qi_bits);
+            q = zput(q, " st=0x");           q = zhex(q, (DWORD)g_qi_status);
+            q = zput(q, " state 0x");        q = zhex(q, before);
+            q = zput(q, "->0x");             q = zhex(q, after);
+            q = zput(q, " after 0x");        q = zhex(q, (DWORD)k);
+            q = zput(q, "ms pend5=0x");      q = zhex(q, (DWORD)g_irqn_pending[5]);
+            q = zput(q, " ica=0x");          q = zhex(q, v86_ica_state(5));
+            q = zput(q, "\r\n");
+            log_append(LOG_PATH, b, q); serial_out(b, q);
+        }
+        Sleep(250);
+    }
+    return 0;
+}
+
+/* Headless heartbeat (session 11). Both qirq runs stopped logging mid-run and reached
+   NO exit path -- not the guest's 4Ch flush, not the deadline backstop's report -- which
+   means the process died without user-mode notice. A once-per-500ms beat carrying the
+   guest's CS:IP/EFLAGS and the counters turns that silence into a timestamped last known
+   position, which is the only way to tell "guest still spinning" from "process killed". */
+static DWORD WINAPI heartbeat_thread(LPVOID pv)
+{
+    int n;
+    (void)pv;
+    for (n = 0; n < 80 && g_running; ++n) {
+        char b[256], *q = b;
+        DWORD cs = 0, ip = 0, efl = 0;
+        if (g_tib_dbg) {
+            cs  = VDM_REG(g_tib_dbg, VTIB_CS)  & 0xFFFF;
+            ip  = VDM_REG(g_tib_dbg, VTIB_EIP) & 0xFFFF;
+            efl = VDM_REG(g_tib_dbg, VTIB_EFLAGS);
+        }
+        q = zput(q, "HB 0x");        q = zhex(q, (DWORD)n);
+        q = zput(q, " cs:ip=0x");    q = zhex(q, cs); q = zput(q, ":0x"); q = zhex(q, ip);
+        q = zput(q, " efl=0x");      q = zhex(q, efl);
+        q = zput(q, " state=0x");    q = zhex(q, *(volatile DWORD *)(ULONG_PTR)0x714);
+        q = zput(q, " io=0x");       q = zhex(q, g_ev_io);
+        q = zput(q, " irq0=0x");     q = zhex(q, g_irq0_inj);
+        q = zput(q, " irqn=0x");     q = zhex(q, g_irqn_inj);
+        q = zput(q, " intpend=0x");  q = zhex(q, g_ev_intpend);
+        q = zput(q, "\r\n");
+        log_append(LOG_PATH, b, q); serial_out(b, q);
+        Sleep(500);
+    }
+    return 0;
+}
+
 /* Headless deadline watchdog (session-9). A headless run must self-bound even when the
    guest blocks INSIDE a host INT handler -- e.g. a blocking INT 16h/21h key read at a
    "press any key" prompt or a game menu (host_conin + the INT 16h loops spin until
@@ -476,6 +593,9 @@ static DWORD WINAPI headless_deadline_thread(LPVOID pv)
         q = zput(q, " irq0_skip=0x");   q = zhex(q, g_irq0_skip);
         q = zput(q, " intpend=0x");     q = zhex(q, g_ev_intpend);
         q = zput(q, " irqn_inj=0x");    q = zhex(q, g_irqn_inj);
+        q = zput(q, " qi_calls=0x");    q = zhex(q, g_qi_calls);
+        q = zput(q, " qi_st=0x");       q = zhex(q, (DWORD)g_qi_status);
+        q = zput(q, " state714=0x");    q = zhex(q, *(volatile DWORD *)(ULONG_PTR)0x714);
         q = zput(q, "\r\n  audio: silent=0x"); q = zhex(q, (DWORD)g_wave.silent);
         q = zput(q, " mixed=0x");        q = zhex(q, g_audio.frames_mixed);
         q = zput(q, " sb_dspwr=0x");     q = zhex(q, g_sb.dsp_writes);
@@ -2654,7 +2774,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     (void)hInst; (void)hPrev; (void)lpCmd; (void)nShow;
     progpath[0] = 0; args[0] = 0;
 
-    p = zput(p, "NTVDMEX clean host\r\nSTAGE0: WinMain entered [build dpmi-harness-v97]\r\n");
+    p = zput(p, "NTVDMEX clean host\r\nSTAGE0: WinMain entered [build dpmi-harness-v104]\r\n");
     log_write(LOG_PATH, report, p);
     serial_init();                                      /* DPMI harness: COM1 log sink */
     serial_out(report, p);
@@ -2666,6 +2786,30 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     /* Self-screenshot only when explicitly requested (graphical tests) AND headless, so
        the common non-graphical tests never enter the capture path. Latched once here. */
     g_capture  = g_headless && (GetFileAttributesA(CAPTURE_FLAG) != INVALID_FILE_ATTRIBUTES);
+    /* Async-preemption mode (session 11). Read once; a handle to THIS thread is what
+       VdmQueueInterrupt takes, and this thread is the one that will be running the
+       guest inside VdmStartExecution -- so duplicate it here, before the exec loop. */
+    { HANDLE h = CreateFileA(QIMODE_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                             NULL, OPEN_EXISTING, 0, NULL);
+      if (h != INVALID_HANDLE_VALUE) {
+          char c = 0; DWORD rd = 0;
+          ReadFile(h, &c, 1, &rd, NULL);
+          CloseHandle(h);
+          { int v = -1;
+            if (c >= '0' && c <= '9') v = c - '0';
+            else if (c >= 'a' && c <= 'f') v = c - 'a' + 10;
+            else if (c >= 'A' && c <= 'F') v = c - 'A' + 10;
+            if (v > 0) { g_qi_bits = (DWORD)v & 3; g_qi_raise = (v & 4) != 0;
+                         g_qi_vif = (v & 8) != 0; } }
+      } }
+    if (g_qi_bits)
+        DuplicateHandle(GetCurrentProcess(), GetCurrentThread(), GetCurrentProcess(),
+                        &g_hcpu, 0, FALSE, DUPLICATE_SAME_ACCESS);
+    p = zput(p, "STAGE0: qi_bits=0x"); p = zhex(p, g_qi_bits);
+    p = zput(p, " qi_raise=0x");       p = zhex(p, (DWORD)g_qi_raise);
+    p = zput(p, " qi_vif=0x");         p = zhex(p, (DWORD)g_qi_vif);
+    p = zput(p, " hcpu=0x");           p = zhex(p, (DWORD)(ULONG_PTR)g_hcpu);
+    p = zput(p, "\r\n");
     AddVectoredExceptionHandler(1, dpmi_crash_veh);     /* DPMI spike crash diagnostic */
 
     /* CSRSS command-info: receive buffers + first-command state + IFEO task id. */
@@ -2873,8 +3017,17 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
        key" prompt, a game menu) still self-terminates instead of wedging the harness. */
     if (g_headless) { HANDLE hd = CreateThread(NULL, 0, headless_deadline_thread, NULL, 0, NULL);
                       if (hd) CloseHandle(hd); }
+    if (g_headless) { HANDLE hb = CreateThread(NULL, 0, heartbeat_thread, NULL, 0, NULL);
+                      if (hb) CloseHandle(hb); }
+    if (g_qi_raise) { HANDLE hq = CreateThread(NULL, 0, qirq_probe_thread, NULL, 0, NULL);
+                      if (hq) CloseHandle(hq); }
 
     v86_set_entry(tib, img.cs, img.ip, img.ss, img.sp, DOS_PSP_SEG);
+    /* Session 11: the kernel's deliverability test for a V86 frame on a VME CPU reads
+       EFLAGS.VIF, not IF (VdmpCanDeliver, ntoskrnl 0x56dce0). Starting the guest with
+       VIF clear makes every hardware interrupt undeliverable from the kernel's point of
+       view -- it just sets VIP and defers. Opt-in until the rig confirms it. */
+    if (g_qi_vif) VDM_REG(tib, VTIB_EFLAGS) |= EFLAGS_VIF_BIT;
     if (!img.is_exe)                                        /* .COM near-ret guard */
         *(volatile WORD *)(((DWORD)DOS_PSP_SEG << 4) + 0xFFFE) = 0;
 
@@ -2982,6 +3135,22 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                   }
               }
           } }
+        /* Mirror the guest's IF into EFLAGS.VIF before handing the context back. On VME
+           hardware the kernel's deliverability test reads VIF, and VIF is lost every time
+           we synthesise an interrupt frame ourselves -- so a guest that has interrupts
+           enabled still looks disabled to the kernel, which then just sets VIP and defers.
+           With VIP set and VIF clear the guest's next IRET faults into a dispatch that
+           refuses to deliver and re-arms VIP: a livelock, measured on the rig as the guest
+           frozen on the IRET at DOS_HDLR_SEG:0x0003. Keeping the two flags in step is what
+           lets the kernel dispatch instead of deferring. */
+        /* NOTE, measured: do NOT touch bit 9 (0x200) of FIXED_NTVDMSTATE. It is the VDM's
+           virtual interrupt flag and the KERNEL already maintains it -- it read 0x...3230
+           (bit set) from the first instruction. Mirroring our own IF into it only clobbered
+           correct state (the word went 0x3230 -> 0x3030) and changed nothing else. */
+        if (g_qi_vif) {
+            if (VDM_REG(tib, VTIB_EFLAGS) & 0x200) VDM_REG(tib, VTIB_EFLAGS) |= EFLAGS_VIF_BIT;
+            else                                   VDM_REG(tib, VTIB_EFLAGS) &= ~EFLAGS_VIF_BIT;
+        }
         ev = v86_run(tib, &st);
         /* SPIKE: once in protected mode, stop at the FIRST PM event and dump the raw
            taxonomy (event/info/selectors) -- this is how the spike learns how the

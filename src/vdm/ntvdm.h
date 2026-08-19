@@ -48,12 +48,52 @@ typedef BOOL (WINAPI *PFN_GetNextVDMCommand)(VDM_COMMAND_INFO *);
  * ======================================================================== */
 #define VDM_SVC_VdmInitialize     3
 #define VDM_SVC_VdmStartExecution 0   /* NtVdmControl(0, NULL) runs the V86 CONTEXT */
+/* VdmQueueInterrupt -- the ASYNC preemption lever (RE'd from XP ntoskrnl this session;
+   see docs/research/dpmi-under-ntvdmcontrol.md). ServiceData is NOT a pointer: it is a
+   THREAD HANDLE, passed straight to ObReferenceObjectByHandle(h, 0x40, PsThreadType).
+   The target thread must be in the calling process and the process must be a VDM
+   (EPROCESS.VdmObjects set by VdmInitialize). The kernel then queues an APC to that
+   thread, which is what breaks a guest out of V86 execution without waiting for it to
+   trap -- the one thing our in-process exec loop could not do (session 10's blocker).
+   The APC's kernel routine consults the FIXED_NTVDMSTATE pending bits at [0x714]:
+   bit 0 = VDM_INT_HARDWARE (kernel dispatches via its virtual ICA), bit 1 =
+   VDM_INT_TIMER. Returns STATUS_INVALID_PARAMETER_1 (0xC00000EF) if the thread is not
+   ours or the process was never VdmInitialize'd. */
+#define VDM_SVC_VdmQueueInterrupt 1
 /* DPMI plumbing services (recovered from the ntvdm call-site scan, 2026-07-31 --
    see research/dpmi-under-ntvdmcontrol.md). Service 10's ServiceData is the
    NtSetLdtEntries 6-dword block; service 13 virtualises the PM client interrupt flag. */
 #define VDM_SVC_VdmSetLdtEntries     10
 #define VDM_SVC_VdmSetProcessLdtInfo 11
 #define VDM_SVC_VdmPMCliControl      13
+
+/* ===========================================================================
+ * The kernel's VIRTUAL 8259 (ICA). VdmInitialize hands the kernel pointers to
+ * these user-mode structures and the kernel emulates the PIC in them: it is what
+ * VdmQueueInterrupt's APC consults to decide WHICH vector a pending hardware
+ * interrupt becomes, and it is the only path by which the kernel will inject an
+ * interrupt into a guest that is not trapping. Layout recovered this session from
+ * ntoskrnl VdmpGetPendingLine (0x56d6ce) and VdmpDispatchInterrupts (0x56df13):
+ *
+ *   deliverable = IRR & ~(IMR | delayed);  blocked by any bit set in ISR
+ *   vector      = ICA_BASE + line;  lines are scanned from ICA_HIPRI (rotation)
+ *   the per-line COUNT is decremented on dispatch and clears IRR when it hits 0
+ *
+ * So a raise is: count[line] = 1; IRR |= 1 << line -- then set VDM_INT_HARDWARE in
+ * FIXED_NTVDMSTATE and call VdmQueueInterrupt. The ISR bit the kernel sets stays
+ * set until an EOI clears it, exactly like real silicon, which is why the guest's
+ * OUT 0x20,0x20 has to reach us (see the PIC VDD).
+ * ======================================================================== */
+#define ICA_COUNT(line)  ((line) * 4)  /* dword per line: dispatches remaining   */
+#define ICA_BASE         0x28          /* word: vector base (master 0x08)        */
+#define ICA_HIPRI        0x2A          /* word: priority rotation start          */
+#define ICA_MODE         0x2C          /* byte: mode bits (0x20 tested by kernel) */
+#define ICA_MODE2        0x2D          /* byte: &3 -> ignore ISR priority block  */
+#define ICA_IRR          0x2F          /* byte: interrupt REQUEST mask           */
+#define ICA_ISR          0x30          /* byte: IN-SERVICE mask (cleared by EOI) */
+#define ICA_IMR          0x31          /* byte: interrupt MASK register          */
+#define ICA_SLAVE_MASK   0x32          /* byte: lines with a slave attached (IRQ2)*/
+#define ICA_STRUCT_SIZE  0x40          /* generous: kernel touches up to 0x32    */
 
 typedef struct {            /* VDMICAUSERDATA -- 9 pointers (XP ntvdm fills 9) */
     PVOID pIcaLock, pIcaMaster, pIcaSlave, pDelayIrq, pUndelayIrq,
@@ -131,6 +171,15 @@ typedef LONG (WINAPI *PFN_NtUnmapViewOfSection)(HANDLE, PVOID);
    init, FM music, PCM block timing) hung. Note VTIB_EFLAGS_PM below always had IF
    set, which is why the protected-mode timer path worked while real mode did not. */
 #define VTIB_EFLAGS_V86    0x20202
+/* EFLAGS.VIF (bit 19) -- the VIRTUAL interrupt flag. On a VME-capable CPU (every box
+   we target) the kernel's "can I deliver a hardware interrupt to this VDM right now?"
+   test reads VIF, NOT IF: VdmpCanDeliver (ntoskrnl 0x56dce0) branches on
+   KeI386VirtualIntExtensions and, for a V86 frame with VME on, returns
+   (EFlags & 0x80000) != 0. A guest started with IF=1 but VIF=0 therefore looks to the
+   kernel like interrupts are disabled forever, so its interrupt-assist never delivers
+   and it just sets VIP (bit 20) and defers -- which is exactly what the rig showed. */
+#define EFLAGS_VIF_BIT     0x80000
+#define EFLAGS_VIP_BIT     0x100000
 #define VTIB_EFLAGS_PM     0x00202    /* EFlags: IF + reserved bit, VM clear (PM) */
 #define EFLAGS_VM_BIT      0x20000    /* EFLAGS.VM (bit 17): set=V86, clear=PM     */
 /* Virtual MSW (low 16 of the client's CR0) the monitor keeps in the VDM_TIB.

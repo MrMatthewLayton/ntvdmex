@@ -116,8 +116,57 @@ DWORD v86_map_ems_frame(void)
     return 0;
 }
 
+/* Program the virtual PIC the kernel emulates for us. Until now these buffers were
+   handed over zeroed -- "generous sizes so every probe lands in valid memory" -- which
+   means the kernel could never dispatch anything: vector base 0, no lines requested.
+   A real PC's master PIC is based at 0x08 (IRQ0 -> INT 08h) with the slave at 0x70 and
+   cascaded on line 2, so program exactly that. IMR = 0 (nothing masked) matches how DOS
+   leaves the PIC once a game has enabled its device's line; a guest that masks lines
+   does it through the PIC VDD, which mirrors into ICA_IMR. */
+static void v86_ica_program(void)
+{
+    g_ica_master[ICA_BASE]       = 0x08;   /* IRQ0-7  -> INT 08h..0Fh */
+    g_ica_master[ICA_BASE + 1]   = 0x00;
+    g_ica_master[ICA_SLAVE_MASK] = 1 << 2; /* IRQ2 is the cascade      */
+    g_ica_slave[ICA_BASE]        = 0x70;   /* IRQ8-15 -> INT 70h..77h */
+    g_ica_slave[ICA_BASE + 1]    = 0x00;
+}
+
+void v86_ica_raise(unsigned irq)
+{
+    BYTE *ica = (irq < 8) ? g_ica_master : g_ica_slave;
+    unsigned line = irq & 7;
+    /* One pending dispatch for this line. The kernel decrements the count and clears
+       the request bit when it drains, so this is a single edge, not a level. */
+    *(volatile DWORD *)(ica + ICA_COUNT(line)) = 1;
+    ica[ICA_IRR] |= (BYTE)(1u << line);
+    if (irq >= 8) g_ica_master[ICA_IRR] |= 1 << 2;   /* cascade through IRQ2 */
+}
+
+void v86_ica_eoi(unsigned irq)
+{
+    BYTE *ica = (irq < 8) ? g_ica_master : g_ica_slave;
+    ica[ICA_ISR] &= (BYTE)~(1u << (irq & 7));
+    if (irq >= 8) g_ica_master[ICA_ISR] &= (BYTE)~(1 << 2);
+}
+
+void v86_ica_set_mask(unsigned irq, int masked)
+{
+    BYTE *ica = (irq < 8) ? g_ica_master : g_ica_slave;
+    BYTE bit = (BYTE)(1u << (irq & 7));
+    if (masked) ica[ICA_IMR] |= bit; else ica[ICA_IMR] &= (BYTE)~bit;
+}
+
+DWORD v86_ica_state(unsigned irq)
+{
+    const BYTE *ica = (irq < 8) ? g_ica_master : g_ica_slave;
+    return ((DWORD)ica[ICA_IRR]) | ((DWORD)ica[ICA_ISR] << 8) |
+           ((DWORD)ica[ICA_IMR] << 16);
+}
+
 LONG v86_init(void)
 {
+    v86_ica_program();
     g_ica.pIcaLock = g_ica_lock;   g_ica.pIcaMaster = g_ica_master;
     g_ica.pIcaSlave = g_ica_slave; g_ica.pDelayIrq = &g_delayirq;
     g_ica.pUndelayIrq = &g_undelayirq; g_ica.pDelayIret = &g_delayiret;
