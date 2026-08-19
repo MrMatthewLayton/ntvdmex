@@ -189,6 +189,7 @@ static DWORD          g_irq0_skip_stub= 0;  /* ...because we were inside our INT
 static DWORD          g_pit_reload_log = 0;
 static DWORD          g_ev_intpend    = 0;  /* event-3 interrupt-pending notifications */
 static DWORD          g_ev_iostr      = 0;  /* REP INS/OUTS (event 1) reflects serviced */
+static DWORD          g_irq1_inj      = 0;  /* INT 09h injections (should track scancodes) */
 static DWORD          g_irqn_inj      = 0;  /* device IRQs (2-7) injected into the guest */
 static DWORD          g_irqn_refuse_log = 0; /* bounded refusal-log budget (see the gate)  */
 static DWORD          g_irqn_refuse_total = 0;
@@ -449,16 +450,11 @@ static void host_irq_sink(void *ctx, uint8_t irq)
         if (g_qi_susp && async_inject_irq(0)) InterlockedDecrement(&g_irq0_pending);
     }
     else if (irq == 1) {
-        /* SATURATE. A real 8042 has a ONE-BYTE output buffer and holds IRQ1 asserted while
-           it is full, so a PC cannot owe the guest hundreds of keyboard interrupts. We were
-           latching one per scancode byte with no ceiling: a held arrow key (two bytes each
-           at the OS repeat rate, ~60/s) outran delivery, the backlog grew without bound, and
-           the guest ended up spending every loop iteration entering and IRETing from INT 09h
-           instead of running the game. That is the decay measured with a held-key probe --
-           797k I/O events per 3 s falling to 607, then 198, then zero, with the game dead.
-           The scancodes stay queued in the 0x60 FIFO for the handler to read; only the
-           interrupt is coalesced, which is exactly what the hardware does. */
-        if (g_irq1_pending < 2) InterlockedIncrement(&g_irq1_pending);
+        /* One pending interrupt at a time: the 8042 has a single output buffer, and the
+           input VDD now re-raises as the guest drains it, so this can never legitimately
+           run ahead. (The earlier cap-with-a-backlog is what stranded break codes and
+           killed the arrow keys -- see vdd_input_push_scancode.) */
+        if (g_irq1_pending < 1) InterlockedIncrement(&g_irq1_pending);
         /* Keys deliberately do NOT take the async path by default (qimode bit 7 turns it
            on for experiments). Async keyboard delivery is what turned "playable" into
            "dies as soon as you press a key", and while the PIC stopped the re-entry it did
@@ -709,8 +705,9 @@ static void host_key_scancode(uint8_t rawsc, int ext, int is_break)
     if (ext) vdd_input_push_scancode(&g_in, 0xE0);
     vdd_input_push_scancode(&g_in, is_break ? (uint8_t)(rawsc | 0x80) : rawsc);
     LeaveCriticalSection(&g_lock);
-    if (ext) host_irq_sink(NULL, 1);      /* one IRQ1 per scancode byte, as the AT does */
-    host_irq_sink(NULL, 1);
+    /* The VDD raises IRQ1 itself now, on the 8042's empty->full transition and again as the
+       guest drains the FIFO -- so the host must NOT latch one per byte here as well, or the
+       interrupts run ahead of the bytes again. */
     if (g_key_event) SetEvent(g_key_event);
 }
 
@@ -3143,7 +3140,12 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
        (BIOS time-of-day) is a plain BOP. */
     static const BYTE bop08[] = { VDM_BOP0, VDM_BOP1, 0x08, 0xCD, 0x1C, 0xCF };
     static const BYTE bop1c[] = { 0xCF };                           /* iret stub       */
-    static const BYTE bop09[] = { 0xCF };  /* default INT 09h: iret (game hooks its own; scancode stays in the 0x60 FIFO) */
+    /* Default INT 09h = BOP 09 ; IRET. It must CONSUME the scancode, exactly as the BIOS
+       handler does: a bare IRET left the byte in the controller forever, so with the 8042's
+       proper one-byte-at-a-time pacing no further key could ever raise an interrupt (the
+       whole keyboard died after one press). A game that installs its own INT 09h replaces
+       this vector, so its handler still reads port 0x60 itself. */
+    static const BYTE bop09[] = { VDM_BOP0, VDM_BOP1, 0x09, 0xCF };
     static const BYTE bop1a[] = { VDM_BOP0, VDM_BOP1, 0x1A, 0xCF }; /* BOP 0x1A ; iret */
     static const BYTE bop2f[] = { VDM_BOP0, VDM_BOP1, 0x2F, 0xCF }; /* INT 2Fh ; iret  */
     /* XMS API entry: reached by FAR CALL (INT 2Fh AX=4310 hands back ES:BX), so it
@@ -3156,7 +3158,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     (void)hInst; (void)hPrev; (void)lpCmd; (void)nShow;
     progpath[0] = 0; args[0] = 0;
 
-    p = zput(p, "NTVDMEX clean host\r\nSTAGE0: WinMain entered [build dpmi-harness-v137]\r\n");
+    p = zput(p, "NTVDMEX clean host\r\nSTAGE0: WinMain entered [build dpmi-harness-v140]\r\n");
     log_write(LOG_PATH, report, p);
     serial_init();                                      /* DPMI harness: COM1 log sink */
     serial_out(report, p);
@@ -3565,6 +3567,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                 InterlockedDecrement(&g_irq1_pending);   /* one INT 09h per queued scancode byte */
                 vdd_pic_acknowledge(&g_pic, 1);
                 if (async_vec_is_our_stub(1)) vdd_pic_eoi(&g_pic, 1);
+                g_irq1_inj++;
                 inject_int(tib, 0x09);
             }
         }
@@ -3773,6 +3776,13 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         if ((VDM_REG(tib, VTIB_EVENT_INFO) & 0xFF) == 0x33) {   /* INT 33h mouse  */
             mouse_int33(tib);
             VDM_REG(tib, VTIB_EIP) += 3;
+            continue;
+        }
+        if ((VDM_REG(tib, VTIB_EVENT_INFO) & 0xFF) == 0x09) {   /* INT 09h: BIOS keyboard */
+            EnterCriticalSection(&g_lock);
+            vdd_input_bios_consume(&g_in);      /* take the byte, re-arm if more queued */
+            LeaveCriticalSection(&g_lock);
+            VDM_REG(tib, VTIB_EIP) += 3;        /* -> the IRET */
             continue;
         }
         if ((VDM_REG(tib, VTIB_EVENT_INFO) & 0xFF) == 0x08) {   /* INT 08h timer tick */
@@ -4158,6 +4168,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
       p = zput(p, " async_inj=0x"); p = zhex(p, g_async_inj);
       p = zput(p, " async_bail=0x"); p = zhex(p, g_async_bail);
       p = zput(p, " async_nest=0x"); p = zhex(p, g_async_nest_blocked);
+      p = zput(p, " irq1_inj=0x");   p = zhex(p, g_irq1_inj);
+      p = zput(p, " sc_left=0x");    p = zhex(p, (DWORD)vdd_input_sc_pending(&g_in));
       p = zput(p, "\r\n");
       log_append(LOG_PATH, base, p); serial_out(base, p); p = base; }
     p = zput(p, "STAGE2: io_events=0x");  p = zhex(p, g_ev_io);

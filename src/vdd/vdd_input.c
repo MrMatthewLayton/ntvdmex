@@ -28,12 +28,31 @@ int vdd_input_peek(input_state *st, uint16_t *key)
 }
 
 /* --- raw AT keyboard: scancode FIFO + ports 0x60/0x64 --------------------- */
+/* Push a scancode and assert IRQ1 the way an 8042 does: the controller holds ONE byte in
+   its output buffer and raises the line on the empty->full transition; the next byte is not
+   presented (and no further interrupt occurs) until the guest reads port 0x60. Pacing the
+   interrupt off the guest's own reads is what keeps scancodes and interrupts in step.
+   Getting this wrong is very visible in a game: with one latched interrupt per byte and no
+   pacing the backlog outran delivery, and with a cap on that latch the surplus bytes lost
+   their interrupts altogether -- so E0-prefixed keys (every arrow) never arrived, and a
+   key's BREAK code could be stranded in the FIFO, leaving the game convinced it was still
+   held. That is exactly "arrows do nothing, and space sticks on after you let go". */
 void vdd_input_push_scancode(input_state *st, uint8_t sc)
 {
+    int was_empty = (st->sc_head == st->sc_tail);
     int n = next(st->sc_head);
     if (n == st->sc_tail) st->sc_tail = next(st->sc_tail);   /* full -> drop oldest */
     st->sc_buf[st->sc_head] = sc;
     st->sc_head = n;
+    if (was_empty && st->bus) vdd_raise_irq(st->bus, 1);     /* empty -> full        */
+}
+
+void vdd_input_bios_consume(input_state *st)
+{
+    if (st->sc_head == st->sc_tail) return;
+    st->sc_last = st->sc_buf[st->sc_tail];
+    st->sc_tail = next(st->sc_tail);
+    if (st->sc_head != st->sc_tail && st->bus) vdd_raise_irq(st->bus, 1);
 }
 
 int vdd_input_sc_pending(const input_state *st)
@@ -56,6 +75,9 @@ static void kbd_hw_in(void *self, uint16_t port, uint8_t w, uint32_t *val)
     if (st->sc_head != st->sc_tail) {
         st->sc_last = st->sc_buf[st->sc_tail];
         st->sc_tail = next(st->sc_tail);
+        /* Still more queued? The controller presents the next byte and re-asserts the
+           line, so the guest gets exactly one interrupt per scancode, at its own pace. */
+        if (st->sc_head != st->sc_tail && st->bus) vdd_raise_irq(st->bus, 1);
     }
     *val = st->sc_last;
 }

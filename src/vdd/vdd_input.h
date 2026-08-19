@@ -37,6 +37,12 @@ int  vdd_input_peek(input_state *st, uint16_t *key);  /* 1 if a key is available
 void vdd_input_push_scancode(input_state *st, uint8_t sc);
 int  vdd_input_sc_pending(const input_state *st);     /* 1 if a scancode waits   */
 
+/* Consume one scancode the way the BIOS INT 09h handler does: take the byte out of the
+   controller and re-assert the line if more are queued. Our default INT 09h stub used to be
+   a bare IRET, which meant a guest that has not hooked the vector never drained the FIFO --
+   so the controller stayed permanently full and no further keystroke could ever interrupt. */
+void vdd_input_bios_consume(input_state *st);
+
 int  vdd_input_init(vdd_bus *b, void *self);          /* claims INT 16h          */
 void vdd_input_reset(void *self);
 static inline ntvdd vdd_input_device(input_state *st)
