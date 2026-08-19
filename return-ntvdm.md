@@ -2,8 +2,8 @@
 ██ CHECKPOINT — 2026-08-19 (session 11). READ THIS FIRST ON RESTART. ██
 ═══════════════════════════════════════════════════════════════════════════════
 
-▶ RESTART POINT (2026-08-19, session 11): HEAD = `8d42d15`; branch spike/dpmi-16bit-switch;
-  **31 commits UNPUSHED**. Host = **dpmi-harness-v113**, built clean, deployed to the share `bm/`,
+▶ RESTART POINT (2026-08-19, session 11): HEAD = `c1e5c34`; branch spike/dpmi-16bit-switch;
+  **33 commits UNPUSHED**. Host = **dpmi-harness-v116**, built clean, deployed to the share `bm/`,
   and RE-VERIFIED on the rig: selftest **8/8 PASS**, off-VM battery **519/519**. Rig healthy
   (watcher + controld beating). Working tree clean except the same pre-existing untracked files
   that are NOT mine (MAINICON.ico, demos/, scripts/kd_*.py, scripts/trace_break.py) and the
@@ -15,6 +15,33 @@
   guest"). It found the kernel lever, found that a line of session-10 code was ACTIVELY
   WEDGING guests, and -- the most consequential result -- found that **the blocker was
   misdiagnosed**: Skyroads is not starved of injection points, it is being refused them.
+
+★★★★ THE BLOCKER IS BROKEN: **WE CAN NOW INTERRUPT A SPINNING V86 GUEST.** Three sessions
+were stuck behind this. The kernel will not do it (VdmQueueInterrupt is transition-only --
+proven, see below), so we do it ourselves: **a suspended thread's CONTEXT is readable and
+writable even while it sits inside VdmStartExecution, and for a V86 thread that context IS
+the guest's frame.** `async_inject_irq()` (src/host/main.c) does from the device thread
+exactly what the CPU does on a hardware interrupt -- push FLAGS/CS/IP on the guest stack,
+vector CS:EIP through the IVT -- via SuspendThread / GetThreadContext / SetThreadContext /
+ResumeThread. Commit `c1e5c34`, host v116, opt-in behind **qimode bit 4** (`10`).
+  ► Guard rails (we are rewriting a context the kernel is actively running): only when
+    EFLAGS.VM is set; only when the guest's interrupts are on (**IF or VIF**); never while CS
+    is our own handler segment; and never unless the exec thread is inside `v86_run`
+    (`g_in_exec`), so it cannot race the exec loop. Declines are counted (`async_bail`).
+  ► **The timer needed this as much as the devices did** -- arguably more. IRQ0 now takes the
+    async path too, rate-limited to the 55 ms BIOS tick.
+  ► MEASURED: `qirq.com` reports **c0d=03** -- three interrupts delivered into a guest
+    spinning in a pure memory loop that cannot trap -- then exits cleanly. **selftest 8/8
+    with the path ON**, PIT case included.
+  ► ★★ **SKYROADS' INTRO NOW ANIMATES.** It no longer freezes: the full 30 s runs with
+    `io_events` still climbing and the BIOS tick advancing, the host exits cleanly instead of
+    being force-killed, and **8+ distinct captured frames** show the ship flying from the
+    foreground away down the road (session 10 got 3 frames then a static screen). PNGs in
+    build/shots/shot_skyroads_shot*.png.
+  ► DIAGNOSTIC WORTH KEEPING: the IVT dump at injection time showed **Skyroads never installs
+    an SB ISR at all** (vectors 0x0B-0x0F all still point at unowned BIOS stubs). It was never
+    waiting on the Sound Blaster -- it was waiting on the TICK. Injecting IRQ 5 alone just
+    vectored it into ROM at F000:A390. Do not assume a game's device IRQ is what it wants.
 
 ★★★ SESSION 10'S DIAGNOSIS STANDS -- I briefly concluded otherwise and the instrumentation
 refuted me; the corrected story is below. Mid-session I saw Skyroads' 4.5M port-I/O traps
@@ -119,25 +146,21 @@ This did NOT unblock Skyroads (its timer was already flowing, 483 ticks), but it
 disabling interrupts for any guest whose enable lives in VIF.
 
 ▶▶ RESUME — NEXT STEPS (in order):
-  1. **Async delivery must be done OURSELVES, in user mode. The design to try:
-     SuspendThread + Get/SetThreadContext on the exec thread.** A suspended thread's CONTEXT is
-     readable and writable even while it sits inside VdmStartExecution, and for a V86 thread that
-     context is the guest's frame. So from the audio thread: SuspendThread(exec) ->
-     GetThreadContext(CONTEXT_CONTROL|CONTEXT_SEGMENTS) -> if EFLAGS.VM and (IF|VIF) -> build the
-     IRET frame in guest memory at SS:SP exactly as inject_int does (folding VIF into the pushed
-     IF!) and point CS:EIP at IVT[8+irq] -> SetThreadContext -> ResumeThread. No kernel
-     cooperation needed, which is the whole appeal after this session.
-     ► BE CAREFUL, and test on qirq/qirq2 BEFORE Skyroads: we would be rewriting a context the
-       kernel is actively running. Guard it against our own exec loop (it must not be mid-event),
-       verify EFLAGS.VM is set before touching anything, and bail if CS is DOS_HDLR_SEG (we would
-       be re-entering our own stub). If SetThreadContext is rejected or ignored for a VDM thread,
-       that is a one-run answer and the fallback is a periodic trap planted in the guest.
-  2. Then re-run Skyroads expecting the intro to ANIMATE past 3 frames, and drive it to the cockpit.
+  1. **SOAK THE ASYNC PATH, THEN MAKE IT THE DEFAULT** (drop the qimode bit 4 gate). Run the
+     whole tests/ battery with it on -- especially the graphical demos, the DPMI/PM tests (it
+     must never fire while the guest is in PM: the VM check covers that, verify it does), and a
+     long Skyroads run. Watch `async_bail`: a high bail count means the guard rails are refusing
+     more than they should. The one real risk is a torn context if a guard is wrong, so look for
+     any run whose guest wanders to an unexpected CS:IP.
+  2. **Drive Skyroads to the cockpit** now that the intro animates -- keyboard input through the
+     menu, as run 86 did. Then the sound epic's real acceptance test: a game that DOES install an
+     SB ISR (Skyroads does not -- see above), so the device-IRQ half of async delivery gets
+     exercised end to end.
   4. PIC VDD claiming 0x20/0x21 is a PREREQUISITE for the kernel ICA path, not a nicety: the ICA's
      ISR bit stays set until an EOI clears it (`v86_ica_eoi`), or that line never fires again.
      Skyroads already writes EOI to 0x20 and it goes nowhere (still in `unclaimed ports`).
   5. Calibrate the OPL envelope rates (`OPL_EG_ANCHOR`); decide on un-folding SB stereo.
-  6. `git push` -- 31 commits are sitting local.
+  6. `git push` -- 33 commits are sitting local.
 
 ▶ HARNESS GOTCHA (cost me a wrong conclusion this session): **rt.bat copies the log while the
   host may still be finishing, and SMB caches the result.** A `result_*.log` read too early is a
