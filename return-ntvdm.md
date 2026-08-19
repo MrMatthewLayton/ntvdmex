@@ -1,5 +1,92 @@
 ═══════════════════════════════════════════════════════════════════════════════
-██ CHECKPOINT — 2026-08-19 (session 12). READ THIS FIRST ON RESTART. ██
+██ PLAN — M9: DOS/BIOS COMPLETENESS (TDD). START HERE 2026-08-20. ██
+═══════════════════════════════════════════════════════════════════════════════
+
+▶ **THE SUPERVISOR PROMPT LIVES IN GITHUB: EPIC #24.** Read that issue first — it holds the
+  what/why/how, the oracle policy, the failure-mode table and the full sub-issue checklist
+  (#25-#46, milestone "M9 - DOS/BIOS completeness (TDD)"). This block is the local context
+  that goes with it. Branch `main` is clean and pushed at `d07c27c`+; the spike branch is
+  merged and deleted; start fresh from main.
+
+▶ WHERE WE GOT TO: **Skyroads is fully playable** — menus, Controls screen, level select,
+  gameplay, sound, and text, all user-confirmed on the physical box (sessions 11-12). That is
+  the FIRST of the three titles on the acceptance bar (Doom / Skyroads / ZAR).
+
+▶ THE DECISION (user, 2026-08-19): **completeness before breadth.** Hardening one game exposed
+  how uneven the layer is underneath, so before running more applications we close the gaps
+  test-first. The governing principle, in the user's words: *"There should be no cause in
+  NTVDMEX itself to fail — whatever we throw at it should just work."* Illegal instructions in
+  guest programs aside, a failure must never be OURS. The achievable form of that invariant is
+  **no SILENT failure**: every unimplemented thing announces itself.
+
+▶ WHAT THE SURVEY FOUND (2026-08-19) — the implementation is deep exactly where Skyroads
+  walked and thin everywhere else:
+    INT 10h    22 functions; unknown function = SILENT NO-OP (no error, no log)
+    INT 10h    modes: only 13h and 12h are branched on -- everything else SILENTLY becomes
+               80x25 text, so mode 0 gives 80x25 not 40x25, and mode 11h gives a text screen
+               while the program writes pixels into A0000 (planar engine is 12h-only)
+    INT 21h    37 functions; unknown = CF=1 + a log line, but AX is NOT set to an error code
+    I/O ports  ~10 device ranges; unclaimed reads 0xFF, writes swallowed, port recorded
+    IVT        planted: 08 09 10 16 1A 1C 21 2F 33 67, IRET stubs on 0A-0F and 70-77.
+               EVERYTHING ELSE READS 0000:0000 -- INT 13h/11h/12h/15h/25h/26h far-jump into
+               the IVT and execute it as code. This is the landmine; fix it first (#27).
+
+▶ THE METHOD, AND THE ONE RULE: document the gap -> write tests FIRST and run them RED to
+  prove it -> implement to green. **NEVER write an expected value from memory of what DOS
+  does.** Tests written from belief encode our misconceptions as PASSING tests, which is
+  worse than no tests because they look authoritative. This codebase has already been bitten:
+  `15991e9` "fixed" the INT 10h font pointer from a plausible reading of the spec and was
+  wrong -- only a screenshot of the actual pixels caught it. Expected values come from Ralf
+  Brown's Interrupt List, confirmed against a real executable oracle.
+
+▶ THE ORACLE = A PANEL, NOT A REFERENCE. Truth is AGREEMENT; disagreement is a flagged
+  decision with a recorded rationale, never a coin-flip.
+    - **MS-DOS 6.22 under QEMU on the dev Mac** = primary. Genuine Microsoft kernel, so for
+      INT 21h semantics it IS the standard. User has 6.22 (believed floppy images -- CONFIRM
+      THE MEDIA FORM FIRST, #25). Fast, offline, no rig.
+    - **Stock ntvdm on the XP rig** = "what does the thing we are replacing do". Fine for the
+      DOS API (a competent DOS 5.0 reimplementation); WORTHLESS for devices/sound/VESA, which
+      is exactly where it is weak and where NTVDMEX differentiates. Never truth on its own --
+      that was the user's own objection and it is correct.
+    - **DOSBox** = a fourth voice (decades of distilled compatibility fixes).
+    - **FreeDOS** = DELIBERATELY DEMOTED. Known divergence on picky software (it fails the
+      Windows 98 installer's version/internals checks -- the user hit this personally). NO
+      vote on truth, but it is the only oracle whose SOURCE YOU CAN READ when the others
+      disagree and you need to know why.
+    - **BIOS-LAYER CAVEAT, and it is real:** QEMU runs SeaBIOS, so for INT 10h/16h a QEMU
+      answer is just another reimplementation's opinion regardless of which DOS sits on top.
+      Real BIOS truth = the Dell OptiPlex booted off a DOS stick against its actual VGA BIOS:
+      a horrible loop (physical reboots, no remote control), so it is the RARE TIEBREAKER for
+      disputed BIOS cases, not part of the daily cycle. Note both bugs fixed in session 12
+      were BIOS-layer, so this is the weakest part of our evidence base.
+
+▶ ORDERING: prerequisites (#25 oracle, #26 differential harness, #27 loud failure) FIRST.
+  Then run the real applications -- command.com, edit.com, qbasic, Doom -- to turn the gap
+  list into an EVIDENCE-RANKED list, because real programs exercise combinations no test
+  author invents. Then TDD each gap in priority order. The two load-bearing gaps for
+  `command.com` are **#30 EXEC (4Bh)** and **#29 find first/next (4Eh/4Fh)**; without them a
+  shell cannot launch a program or list a directory.
+
+▶ DOS VERSION IS A FEATURE, NOT A CONSTANT (#28): we currently report **5.0**
+  (`AH=30h` -> `AX=0x0005`), same as ntvdm, which does not match the 6.22 oracle. The user
+  wants it **selectable from the NTVDMEX menu** (the menu scaffold exists), and selecting a
+  version must ALIGN THE API BEHAVIOUR, not just the number. Default to 6.22 so we match the
+  oracle; it is also the friendlier lie, since most version checks are floor checks.
+
+▶ TEST TIERS -- put each test in the right one: off-VM C battery (`tools/dostest/run.sh`,
+  currently **325 checks**, runs on the Mac in seconds) for anything that is pure logic; a
+  guest `.COM` through the differential harness for anything guest-observable; the rig
+  (`selftest`, currently 8/8) as the final gate. selftest is a SMOKE TEST on the physical box
+  at ~2 min a round -- it is NOT the TDD loop, do not try to make it one.
+
+▶ DEFERRED BY DECISION -- DO NOT PICK UP UNASKED: keyboard/music latency (see the session-12
+  block below). The user played it and rates it "genuinely playable, a little sluggish"; lag
+  is down to milliseconds. Also queued behind this epic: hardware grounding (CPU affinity,
+  SpeedStep), which lands on our timing path since guest clocks come from
+  QueryPerformanceCounter.
+
+═══════════════════════════════════════════════════════════════════════════════
+██ CHECKPOINT — 2026-08-19 (session 12). ██
 ═══════════════════════════════════════════════════════════════════════════════
 
 ▶ RESTART POINT (2026-08-19, session 12): branch spike/dpmi-16bit-switch. Host rebuilt clean
