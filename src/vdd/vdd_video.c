@@ -462,32 +462,6 @@ static void status_in(void *self, uint16_t port, uint8_t w, uint32_t *v)
     *v = st->retrace;
 }
 
-/* Minimal Adlib/OPL2 (ports 388=address+status, 389=data) -- JUST enough for the
-   standard timer-based DETECTION so games (Skyroads) don't spin forever waiting on
-   the status register. No FM synthesis (silent); the sound epic is separate.
-   Detection protocol: reset timers (reg4=0x60), read status -> expect 0x00; preset
-   timer1 (reg2), start it (reg4 bit0 set, mask/reset bits clear), delay, read status
-   -> expect 0xC0 (bit7 IRQ + bit6 T1 expired). We model exactly that. */
-static void opl_out(void *self, uint16_t port, uint8_t w, uint32_t v)
-{
-    video_state *st = (video_state *)self; (void)w;
-    if ((port & 1) == 0) { st->opl_index = (uint8_t)v; return; }   /* 388: address latch */
-    if (st->opl_index == 0x04) {                                   /* 389 to timer-control */
-        if (v & 0x80)            st->opl_armed = 0;                /* bit7: reset IRQ/flags */
-        else if ((v & 0x01) && !(v & 0x40)) st->opl_armed = 1;     /* start T1, unmasked    */
-    }
-}
-static void opl_in(void *self, uint16_t port, uint8_t w, uint32_t *v)
-{
-    video_state *st = (video_state *)self; (void)port; (void)w;
-    /* Toggle the timer-expired bits (7,6) on every status read, like the 3DA retrace
-       hack: whatever the game's status-wait loop is checking (Skyroads writes a reg
-       then spins on IN 388h), it sees the bits change within two reads and proceeds.
-       Detection concludes "OPL present" enough to move on; no FM synthesis (silent). */
-    st->opl_armed ^= 0xC0;
-    *v = st->opl_armed;
-}
-
 /* B8000 window hook (for the off-VM test; the live host maps the aperture RAM
    so direct writes never trap -- the renderer just reads vmem each frame). */
 static uint8_t vid_rd(void *self, uint32_t off)
@@ -591,7 +565,6 @@ int vdd_video_init(vdd_bus *b, void *self)
     if (vdd_claim_ports(b, 0x3C7, 0x3C9, dac_in, dac_out, st)) return -1;  /* DAC       */
     if (vdd_claim_ports(b, 0x3CE, 0x3CF, gc_in, gc_out, st)) return -1;    /* Graphics  */
     if (vdd_claim_ports(b, 0x3DA, 0x3DA, status_in, status_out, st)) return -1; /* InpStatus1 */
-    if (vdd_claim_ports(b, 0x388, 0x389, opl_in, opl_out, st)) return -1;  /* Adlib/OPL2 detect */
     if (vdd_on_frame(b, vid_frame, st)) return -1;
     return 0;
 }

@@ -55,6 +55,47 @@ cc -std=c99 -Wall -Wextra -Wno-unused-function -O0 -g \
 
 "$DIR/speaker_test"
 
+# Sound epic slice-1: the ISA DMA controller battery (vdd_dma.c on the bus).
+cc -std=c99 -Wall -Wextra -Wno-unused-function -O0 -g \
+   -I "$DIR/../../src/vdd" \
+   -o "$DIR/dma_test" "$DIR/dma_test.c" \
+   "$DIR/../../src/vdd/vdd_dma.c" "$DIR/../../src/vdd/vdd_bus.c"
+
+"$DIR/dma_test"
+
+# Sound epic slice-5: the AdLib/OPL2 register + timer battery (vdd_opl.c on the bus).
+cc -std=c99 -Wall -Wextra -Wno-unused-function -O0 -g \
+   -I "$DIR/../../src/vdd" \
+   -o "$DIR/opl_test" "$DIR/opl_test.c" \
+   "$DIR/../../src/vdd/vdd_opl.c" "$DIR/../../src/vdd/vdd_bus.c"
+
+"$DIR/opl_test"
+
+# Sound epic slice-5b: the OPL2 FM synthesis core (property tests: pitch, envelope, FM).
+cc -std=c99 -Wall -Wextra -Wno-unused-function -O0 -g \
+   -I "$DIR/../../src/vdd" \
+   -o "$DIR/opl_synth_test" "$DIR/opl_synth_test.c" \
+   "$DIR/../../src/vdd/vdd_opl_synth.c" "$DIR/../../src/vdd/vdd_opl.c" "$DIR/../../src/vdd/vdd_bus.c"
+
+"$DIR/opl_synth_test"
+
+# Sound epic slice-3: the Sound Blaster 16 DSP/mixer/DMA battery.
+cc -std=c99 -Wall -Wextra -Wno-unused-function -O0 -g \
+   -I "$DIR/../../src/vdd" \
+   -o "$DIR/sb_test" "$DIR/sb_test.c" \
+   "$DIR/../../src/vdd/vdd_sb.c" "$DIR/../../src/vdd/vdd_dma.c" \
+   "$DIR/../../src/vdd/vdd_opl.c" "$DIR/../../src/vdd/vdd_bus.c"
+
+"$DIR/sb_test"
+
+# Sound epic slice-6: the MPU-401 MIDI battery.
+cc -std=c99 -Wall -Wextra -Wno-unused-function -O0 -g \
+   -I "$DIR/../../src/vdd" \
+   -o "$DIR/mpu_test" "$DIR/mpu_test.c" \
+   "$DIR/../../src/vdd/vdd_mpu.c" "$DIR/../../src/vdd/vdd_bus.c"
+
+"$DIR/mpu_test"
+
 # M3 mode-12h fill-loop interpreter battery (src/host/v86interp.h, flat memory).
 cc -std=c99 -Wall -Wextra -Wno-unused-function -O0 -g \
    -o "$DIR/interp_test" "$DIR/interp_test.c"

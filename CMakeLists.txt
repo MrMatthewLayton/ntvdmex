@@ -94,6 +94,11 @@ add_executable(ntvdmhost
     src/dos/dos_int21.c
     src/vdd/vdd_bus.c
     src/vdd/vdd_pit.c
+    src/vdd/vdd_dma.c
+    src/vdd/vdd_opl.c
+    src/vdd/vdd_opl_synth.c
+    src/vdd/vdd_sb.c
+    src/vdd/vdd_mpu.c
     src/vdd/vdd_video.c
     src/vdd/vdd_input.c
     src/vdd/vdd_speaker.c

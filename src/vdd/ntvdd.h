@@ -83,6 +83,9 @@ int  vdd_on_frame   (vdd_bus *b, ntvdd_frame_fn fn, void *self);
 /* services a VDD may call back into */
 void  vdd_raise_irq (vdd_bus *b, uint8_t irq);
 void *vdd_map_flat  (vdd_bus *b, uint16_t seg, uint16_t off);
+/* Map a PHYSICAL linear address. seg:off cannot express one: ISA DMA addresses
+   memory as page<<16 | offset, so the DMA VDD needs the flat form directly. */
+void *vdd_map_lin   (vdd_bus *b, uint32_t linear);
 void  vdd_present    (vdd_bus *b, const ntvdd_frame *f);
 
 /* --- a device descriptor -------------------------------------------------- */

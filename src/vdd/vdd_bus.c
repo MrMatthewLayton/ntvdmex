@@ -91,6 +91,11 @@ void *vdd_map_flat(vdd_bus *b, uint16_t seg, uint16_t off)
     return (uint8_t *)b->mem_base + flat;           /* base==NULL => absolute   */
 }
 
+void *vdd_map_lin(vdd_bus *b, uint32_t linear)
+{
+    return (uint8_t *)b->mem_base + linear;         /* base==NULL => absolute   */
+}
+
 void vdd_present(vdd_bus *b, const ntvdd_frame *f)
 {
     if (b->present_sink) b->present_sink(b->present_ctx, f);

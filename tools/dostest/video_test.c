@@ -8,6 +8,15 @@
 #include "vdd_video.h"
 #include "vga_font_8x16.h"
 
+/* True if some VDD claimed `port` -- used instead of asserting a range count. */
+static int claims_port(const vdd_bus *b, uint16_t port)
+{
+    int i;
+    for (i = 0; i < b->n_ports; ++i)
+        if (port >= b->ports[i].lo && port <= b->ports[i].hi) return 1;
+    return 0;
+}
+
 static int total = 0, fails = 0;
 #define CHECK(c,m) do{ total++; if(c){printf("  PASS  %s\n",(m));} \
     else{printf("  FAIL  %s\n",(m)); fails++;} }while(0)
@@ -39,7 +48,12 @@ int main(void)
 
     /* T0: registers + clean mode-3 screen -------------------------------- */
     CHECK(vdd_bus_add(&bus, &dev) == 0, "add: video init ok");
-    CHECK(bus.n_mem == 1 && bus.ints[0x10].svc && bus.n_ports == 4 && bus.n_frame == 1,
+    /* Assert WHAT was claimed, not how many ranges: a bare count silently went
+       stale when the OPL detect stub was bolted onto this VDD, and the battery
+       reported a failure that had nothing to do with video. */
+    CHECK(bus.n_mem == 1 && bus.ints[0x10].svc && bus.n_frame == 1 &&
+          claims_port(&bus, 0x3C4) && claims_port(&bus, 0x3C9) &&
+          claims_port(&bus, 0x3CE) && claims_port(&bus, 0x3DA),
           "add: B8000 + INT10h + Seq/DAC/GC/Status ports + frame claimed");
     CHECK(vid.mode == 3 && vid.cols == 80 && vid.rows == 25, "reset: mode 3, 80x25");
     CHECK(cchar(0,0) == ' ' && cattr(0,0) == 0x07, "reset: text cleared to spaces/0x07");
