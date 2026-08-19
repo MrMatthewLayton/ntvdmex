@@ -262,8 +262,84 @@ static HANDLE         g_hcpu          = NULL;
 static DWORD          g_qi_bits       = 0;
 static int            g_qi_raise      = 0;
 static int            g_qi_vif        = 0;   /* start the guest with EFLAGS.VIF set */
+static int            g_qi_susp       = 0;   /* async-inject via SuspendThread+SetThreadContext */
+/* Set only while the exec thread is inside VdmStartExecution, i.e. while the thread's
+   CONTEXT genuinely is the guest's frame and our loop is not touching the VDM_TIB. The
+   async injector refuses to act unless this is set, so it can never race the exec loop. */
+static volatile LONG  g_in_exec       = 0;
+static DWORD          g_async_inj     = 0;   /* successful async injections */
+static DWORD          g_async_bail    = 0;   /* attempts declined (guest not in a safe spot) */
 static DWORD          g_qi_calls      = 0;
 static volatile LONG  g_qi_status     = 0;  /* NTSTATUS of the last queue call */
+/* ASYNC INJECTION, DONE OURSELVES. VdmQueueInterrupt turned out to be transition-only, so
+   the kernel will not break a spinning guest out for us. But a suspended thread's CONTEXT is
+   readable and writable even while it sits inside VdmStartExecution, and for a V86 thread
+   that context IS the guest's frame. So we can do exactly what the CPU would: push the IRET
+   frame on the guest's stack and point CS:EIP at the vector -- from another thread, with no
+   kernel cooperation. Called from the device thread that raises the IRQ.
+
+   Guard rails, because we are rewriting a context the kernel is actively running:
+     - only when EFLAGS.VM is set (the thread really is running guest code, not our host);
+     - only when the guest's interrupts are on -- IF or VIF, since under VME its STI sets VIF;
+     - never while CS is our own handler segment (we would re-enter a BOP stub mid-service);
+     - never while the exec loop owns the context (g_in_exec), or we would race it.
+   Any of those => decline and count it; the normal in-loop path will catch the IRQ later. */
+static void pokew(DWORD lin, WORD v);        /* fwd: guest-memory helpers, defined below */
+static WORD peekw(DWORD lin);
+static int async_inject_irq(unsigned irq)
+{
+    CONTEXT cx;
+    DWORD efl, ss, sp, cs, ip;
+    WORD fl;
+    int ok = 0;
+
+    if (!g_hcpu || g_in_exec == 0) { g_async_bail++; return 0; }
+    if (SuspendThread(g_hcpu) == (DWORD)-1) { g_async_bail++; return 0; }
+    { unsigned i; char *z = (char *)&cx; for (i = 0; i < sizeof cx; ++i) z[i] = 0; }
+    cx.ContextFlags = CONTEXT_CONTROL | CONTEXT_SEGMENTS;
+    if (!GetThreadContext(g_hcpu, &cx)) { ResumeThread(g_hcpu); g_async_bail++; return 0; }
+
+    efl = cx.EFlags;
+    cs  = cx.SegCs & 0xFFFF;
+    if (!(efl & EFLAGS_VM_BIT) || !(efl & (0x200u | EFLAGS_VIF_BIT)) || cs == DOS_HDLR_SEG) {
+        ResumeThread(g_hcpu); g_async_bail++; return 0;
+    }
+    ss = cx.SegSs & 0xFFFF; sp = cx.Esp & 0xFFFF; ip = cx.Eip & 0xFFFF;
+    fl = (WORD)efl;
+    if (efl & EFLAGS_VIF_BIT) fl |= 0x200;      /* same VIF fold as inject_int */
+    sp = (sp - 2) & 0xFFFF; pokew((ss << 4) + sp, fl);
+    sp = (sp - 2) & 0xFFFF; pokew((ss << 4) + sp, (WORD)cs);
+    sp = (sp - 2) & 0xFFFF; pokew((ss << 4) + sp, (WORD)ip);
+    cx.Esp    = sp;
+    cx.Eip    = peekw((8 + irq) * 4);
+    cx.SegCs  = peekw((8 + irq) * 4 + 2);
+    cx.EFlags = efl & ~(0x300u | EFLAGS_VIF_BIT);
+    cx.ContextFlags = CONTEXT_CONTROL | CONTEXT_SEGMENTS;
+    ok = SetThreadContext(g_hcpu, &cx) ? 1 : 0;
+    ResumeThread(g_hcpu);
+    if (ok) g_async_inj++; else g_async_bail++;
+    /* Log AFTER the resume (never hold the guest suspended across file I/O). The IVT dump
+       is the point: vectoring an IRQ the guest never hooked lands it in unowned ROM, which
+       is exactly what happened first time out -- Skyroads ended up at F000:A390. Printing
+       the whole IRQ3-7 vector range shows which line the game is actually listening on. */
+    if (g_async_inj + g_async_bail <= 4) {
+        char ab[256], *aq = ab; int v;
+        aq = zput(aq, "ASYNC-INJ vec=0x");  aq = zhex(aq, (DWORD)(8 + irq));
+        aq = zput(aq, " ok=0x");            aq = zhex(aq, (DWORD)ok);
+        aq = zput(aq, " from=0x");          aq = zhex(aq, cs);
+        aq = zput(aq, ":0x");               aq = zhex(aq, ip);
+        aq = zput(aq, " ivt[0B..0F]=");
+        for (v = 0x0B; v <= 0x0F; ++v) {
+            aq = zput(aq, "0x");  aq = zhex(aq, peekw(v * 4 + 2));
+            aq = zput(aq, ":0x"); aq = zhex(aq, peekw(v * 4));
+            aq = zput(aq, " ");
+        }
+        aq = zput(aq, "\r\n");
+        log_append(LOG_PATH, ab, aq); serial_out(ab, aq);
+    }
+    return ok;
+}
+
 static void host_irq_sink(void *ctx, uint8_t irq)
 {
     (void)ctx;
@@ -272,7 +348,22 @@ static void host_irq_sink(void *ctx, uint8_t irq)
        latched -- so the line number this arrives on is the missing fact. */
     g_irq_raised[irq & 7]++;
     g_irq_raised_any++;
-    if (irq == 0) g_irq0_pending = 1;
+    if (irq == 0) {
+        g_irq0_pending = 1;
+        /* THE TIMER NEEDS THE ASYNC PATH TOO -- arguably more than the devices do. Skyroads
+           parks in its own INT 1Ch handler and stops trapping, so the exec loop never gets a
+           turn and irq0_inj froze at 483 while the game waited for a tick that could no longer
+           advance. A real PC interrupts it regardless. Rate-limited to the BIOS tick (55 ms)
+           because this sink is called far more often than 18.2 Hz. */
+        if (g_qi_susp) {
+            static DWORD s_last_async_t0 = 0;
+            DWORD now = GetTickCount();
+            if ((DWORD)(now - s_last_async_t0) >= 55 && async_inject_irq(0)) {
+                s_last_async_t0 = now;
+                g_irq0_pending = 0;
+            }
+        }
+    }
     else if (irq == 1) InterlockedIncrement(&g_irq1_pending);
     else if (irq < 8) {
         InterlockedExchange(&g_irqn_pending[irq], 1);
@@ -314,6 +405,8 @@ static void host_irq_sink(void *ctx, uint8_t irq)
             InterlockedExchange(&g_qi_status, st);
             g_qi_calls++;
         }
+        if (g_qi_susp && async_inject_irq(irq))
+            InterlockedExchange(&g_irqn_pending[irq], 0);  /* delivered; don't double-inject */
     }
 }
 
@@ -638,6 +731,8 @@ static DWORD WINAPI headless_deadline_thread(LPVOID pv)
         q = zput(q, " irqn_inj=0x");    q = zhex(q, g_irqn_inj);
         q = zput(q, " irqn_refused=0x"); q = zhex(q, g_irqn_refuse_total);
         q = zput(q, " raised_any=0x"); q = zhex(q, g_irq_raised_any);
+        q = zput(q, " async_inj=0x");  q = zhex(q, g_async_inj);
+        q = zput(q, " async_bail=0x"); q = zhex(q, g_async_bail);
         { int r; q = zput(q, " raised[0..7]=");
           for (r = 0; r < 8; ++r) { q = zput(q, "0x"); q = zhex(q, g_irq_raised[r]); q = zput(q, " "); } }
         q = zput(q, " sb_irq=0x"); q = zhex(q, (DWORD)g_sb.irq);
@@ -2822,7 +2917,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     (void)hInst; (void)hPrev; (void)lpCmd; (void)nShow;
     progpath[0] = 0; args[0] = 0;
 
-    p = zput(p, "NTVDMEX clean host\r\nSTAGE0: WinMain entered [build dpmi-harness-v113]\r\n");
+    p = zput(p, "NTVDMEX clean host\r\nSTAGE0: WinMain entered [build dpmi-harness-v116]\r\n");
     log_write(LOG_PATH, report, p);
     serial_init();                                      /* DPMI harness: COM1 log sink */
     serial_out(report, p);
@@ -2840,19 +2935,27 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     { HANDLE h = CreateFileA(QIMODE_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
                              NULL, OPEN_EXISTING, 0, NULL);
       if (h != INVALID_HANDLE_VALUE) {
-          char c = 0; DWORD rd = 0;
-          ReadFile(h, &c, 1, &rd, NULL);
+          char c[2] = { 0, 0 }; DWORD rd = 0; int v = 0, i;
+          ReadFile(h, c, 2, &rd, NULL);
           CloseHandle(h);
-          { int v = -1;
-            if (c >= '0' && c <= '9') v = c - '0';
-            else if (c >= 'a' && c <= 'f') v = c - 'a' + 10;
-            else if (c >= 'A' && c <= 'F') v = c - 'A' + 10;
-            if (v > 0) { g_qi_bits = (DWORD)v & 3; g_qi_raise = (v & 4) != 0;
-                         g_qi_vif = (v & 8) != 0; } }
+          for (i = 0; i < (int)rd; ++i) {          /* up to two hex digits */
+              int d = -1;
+              if (c[i] >= '0' && c[i] <= '9') d = c[i] - '0';
+              else if (c[i] >= 'a' && c[i] <= 'f') d = c[i] - 'a' + 10;
+              else if (c[i] >= 'A' && c[i] <= 'F') d = c[i] - 'A' + 10;
+              if (d < 0) break;
+              v = (v << 4) | d;
+          }
+          if (v > 0) { g_qi_bits  = (DWORD)v & 3;
+                       g_qi_raise = (v & 0x04) != 0;
+                       g_qi_vif   = (v & 0x08) != 0;
+                       g_qi_susp  = (v & 0x10) != 0; }
       } }
-    if (g_qi_bits) {
+    if (g_qi_bits || g_qi_susp) {
         DuplicateHandle(GetCurrentProcess(), GetCurrentThread(), GetCurrentProcess(),
                         &g_hcpu, 0, FALSE, DUPLICATE_SAME_ACCESS);
+    }
+    if (g_qi_bits) {
         /* Experiment mode: retarget the kernel's PIC so a KERNEL-dispatched IRQ 5 arrives
            as INT 65h while our own injection still arrives as INT 0Dh. Without this the
            two are the same vector and the qirq2 probe cannot attribute a delivery. */
@@ -2861,6 +2964,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     p = zput(p, "STAGE0: qi_bits=0x"); p = zhex(p, g_qi_bits);
     p = zput(p, " qi_raise=0x");       p = zhex(p, (DWORD)g_qi_raise);
     p = zput(p, " qi_vif=0x");         p = zhex(p, (DWORD)g_qi_vif);
+    p = zput(p, " qi_susp=0x");        p = zhex(p, (DWORD)g_qi_susp);
     p = zput(p, " hcpu=0x");           p = zhex(p, (DWORD)(ULONG_PTR)g_hcpu);
     p = zput(p, "\r\n");
     AddVectoredExceptionHandler(1, dpmi_crash_veh);     /* DPMI spike crash diagnostic */
@@ -3260,7 +3364,9 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             if (VDM_REG(tib, VTIB_EFLAGS) & 0x200) VDM_REG(tib, VTIB_EFLAGS) |= EFLAGS_VIF_BIT;
             else                                   VDM_REG(tib, VTIB_EFLAGS) &= ~EFLAGS_VIF_BIT;
         }
+        InterlockedExchange(&g_in_exec, 1);
         ev = v86_run(tib, &st);
+        InterlockedExchange(&g_in_exec, 0);
         /* SPIKE: once in protected mode, stop at the FIRST PM event and dump the raw
            taxonomy (event/info/selectors) -- this is how the spike learns how the
            monitor reflects a PM INT 31h / fault. Later increments replace this with
