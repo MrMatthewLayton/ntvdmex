@@ -72,6 +72,7 @@ static void kbd_hw_in(void *self, uint16_t port, uint8_t w, uint32_t *val)
         return;
     }
     /* port 0x60: data register */
+    st->p60_reads++;
     if (st->sc_head != st->sc_tail) {
         st->sc_last = st->sc_buf[st->sc_tail];
         st->sc_tail = next(st->sc_tail);
@@ -94,6 +95,12 @@ static void int16(void *self, ntvdd_regs *r)
 {
     input_state *st = (input_state *)self;
     uint16_t key;
+    switch (r_ah(r)) {
+    case 0x00: case 0x10: st->int16_calls[0]++; break;
+    case 0x01: case 0x11: st->int16_calls[1]++; break;
+    case 0x02:            st->int16_calls[2]++; break;
+    default:              st->int16_calls[3]++; break;
+    }
     switch (r_ah(r)) {
     case 0x00:                              /* read key (host blocks on empty)    */
     case 0x10:                              /* read key, enhanced (101-key)        */

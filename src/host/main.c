@@ -693,6 +693,89 @@ static void host_midi_sink(void *ctx, uint32_t msg)
    thread uses for a real key: push a make code into the 0x60 FIFO, raise IRQ1, then the break
    code, repeatedly. If the in-service interlock is wrong this will hang the guest just as a
    human would, and if it is right the run completes with the key counts advancing. */
+/* Capture > Take Screenshot (and Ctrl+F5). Puts the current frame on the clipboard as a
+   CF_DIB so it can be pasted straight into Paint, AND writes the same image as a .bmp next
+   to the test results on the share -- the second half means a screenshot can be looked at
+   from the build machine without anyone having to move a file around. 8bpp frames carry
+   their palette in the DIB colour table, which is what makes a mode-13h capture come out
+   with the right colours rather than a grey mush. */
+static void host_screenshot(void)
+{
+    static int seq = 0;
+    BITMAPINFOHEADER *bih;
+    HGLOBAL hmem;
+    DWORD w, h, stride, pal_n, img_sz, dib_sz;
+    BYTE *dib, *bits;
+    const uint8_t *src;
+
+    EnterCriticalSection(&g_lock);
+    w = g_vid.frame.w; h = g_vid.frame.h;
+    src = g_vid.frame.pixels;
+    if (!src || !w || !h || g_vid.frame.bpp != 8) { LeaveCriticalSection(&g_lock); return; }
+    stride = (w + 3) & ~3u;                  /* DIB rows are 4-byte aligned          */
+    pal_n  = 256;
+    img_sz = stride * h;
+    dib_sz = sizeof(BITMAPINFOHEADER) + pal_n * 4 + img_sz;
+    hmem = GlobalAlloc(GMEM_MOVEABLE, dib_sz);
+    if (!hmem) { LeaveCriticalSection(&g_lock); return; }
+    dib = (BYTE *)GlobalLock(hmem);
+    { unsigned i; for (i = 0; i < dib_sz; ++i) dib[i] = 0; }
+    bih = (BITMAPINFOHEADER *)dib;
+    bih->biSize = sizeof(BITMAPINFOHEADER);
+    bih->biWidth = (LONG)w; bih->biHeight = (LONG)h;   /* positive => bottom-up      */
+    bih->biPlanes = 1; bih->biBitCount = 8; bih->biCompression = 0;
+    bih->biSizeImage = img_sz; bih->biClrUsed = pal_n; bih->biClrImportant = pal_n;
+    { DWORD i; BYTE *pal = dib + sizeof(BITMAPINFOHEADER);
+      for (i = 0; i < pal_n; ++i) {
+          uint32_t c = g_vid.frame.palette ? g_vid.frame.palette[i] : 0;
+          pal[i*4+0] = (BYTE)(c & 0xFF);          /* B */
+          pal[i*4+1] = (BYTE)((c >> 8) & 0xFF);   /* G */
+          pal[i*4+2] = (BYTE)((c >> 16) & 0xFF);  /* R */
+          pal[i*4+3] = 0;
+      } }
+    bits = dib + sizeof(BITMAPINFOHEADER) + pal_n * 4;
+    { DWORD y, x;
+      for (y = 0; y < h; ++y) {                    /* flip: DIB row 0 is the bottom   */
+          const uint8_t *sr = src + (size_t)(h - 1 - y) * g_vid.frame.stride;
+          BYTE *dr = bits + (size_t)y * stride;
+          for (x = 0; x < w; ++x) dr[x] = sr[x];
+      } }
+    LeaveCriticalSection(&g_lock);
+
+    if (OpenClipboard(g_hwnd)) {                   /* paste-into-Paint path           */
+        EmptyClipboard();
+        if (!SetClipboardData(CF_DIB, hmem)) GlobalFree(hmem);   /* else clipboard owns it */
+        CloseClipboard();
+    } else GlobalFree(hmem);
+
+    /* ...and the same image on the share, so it can be read from the build machine. */
+    {
+        char path[160];
+        const char *dir = "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\";
+        int i = 0, j;
+        while (dir[i]) { path[i] = dir[i]; ++i; }
+        { const char *nm = "shot_manual_00.bmp";
+          for (j = 0; nm[j]; ++j) path[i + j] = nm[j];
+          path[i + 12] = (char)('0' + (seq / 10) % 10);
+          path[i + 13] = (char)('0' + seq % 10);
+          path[i + j] = 0; }
+        ++seq;
+        { HANDLE f = CreateFileA(path, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, 0, NULL);
+          if (f != INVALID_HANDLE_VALUE) {
+              BYTE fh[14]; DWORD wr; DWORD off = 14 + sizeof(BITMAPINFOHEADER) + pal_n * 4;
+              DWORD tot = 14 + dib_sz;
+              fh[0]='B'; fh[1]='M';
+              fh[2]=(BYTE)tot; fh[3]=(BYTE)(tot>>8); fh[4]=(BYTE)(tot>>16); fh[5]=(BYTE)(tot>>24);
+              fh[6]=fh[7]=fh[8]=fh[9]=0;
+              fh[10]=(BYTE)off; fh[11]=(BYTE)(off>>8); fh[12]=(BYTE)(off>>16); fh[13]=(BYTE)(off>>24);
+              WriteFile(f, fh, 14, &wr, NULL);
+              WriteFile(f, dib, dib_sz, &wr, NULL);
+              CloseHandle(f);
+          } }
+    }
+    if (GlobalLock(hmem)) GlobalUnlock(hmem);
+}
+
 /* ONE path for a keystroke, whoever produced it. The window proc used to latch
    g_irq1_pending itself and never call host_irq_sink, which meant real keys bypassed BOTH
    the async delivery added for input lag AND the PIC that gates re-entry -- so every fix
@@ -715,7 +798,14 @@ static DWORD WINAPI synthkey_thread(LPVOID pv)
 {
     int n;
     (void)pv;
-    Sleep(4000);                                  /* let the intro get going first */
+    /* Reach the MENU before testing menu keys. The intro/attract loop reads no keyboard at
+       all (measured: int16=[0,0,0,0], p60=0 for a whole run), so arrows sent during it prove
+       nothing -- Enter is what gets from the intro to the menu, per the bug report. */
+    Sleep(9000);
+    host_key_scancode(0x1C, 0, 0);                /* Enter make  */
+    Sleep(60);
+    host_key_scancode(0x1C, 0, 1);                /* Enter break */
+    Sleep(2000);
     for (n = 0; n < 400 && g_running; ++n) {
         /* An EXTENDED key (the arrows a player actually holds) at the OS auto-repeat rate,
            through exactly what WM_KEYDOWN does: E0 prefix + make code on the raw FIFO with
@@ -726,8 +816,9 @@ static DWORD WINAPI synthkey_thread(LPVOID pv)
         EnterCriticalSection(&g_lock);
         vdd_input_push(&g_in, (uint16_t)(0x48 << 8));   /* AH=scancode, AL=0 */
         LeaveCriticalSection(&g_lock);
-        Sleep(33);                                       /* ~30/s: held-key repeat */
-        if ((n & 7) == 7) host_key_scancode(0x48, 1, 1); /* release now and then   */
+        Sleep(250);                                      /* menu-paced taps, not a hold */
+        host_key_scancode(0x48, 1, 1);                   /* release each time          */
+        Sleep(250);
     }
     return 0;
 }
@@ -1198,6 +1289,7 @@ enum {                                       /* wired command IDs               
     IDM_STUB = 1,                            /* every not-yet-wired item          */
     IDM_FILE_EXIT, IDM_FILE_CLOSEPROG,
     IDM_DISP_FULLSCREEN, IDM_DISP_SHOWMENU,
+    IDM_CAP_SHOT,
     IDM_HELP_ABOUT
 };
 
@@ -1278,7 +1370,7 @@ static HMENU build_menu(void)
     msub(bar, "Drive", m);
 
     m = mpop();                                                   /* Capture      */
-    mi(m,"Take Screenshot\tCtrl+F5",IDM_STUB);
+    mi(m,"Take Screenshot\tCtrl+F5",IDM_CAP_SHOT);
     msub(m,"Record Video (AVI)",(s=mpop(),mi(s,"Start / Stop",IDM_STUB),s));
     msub(m,"Record Audio (WAV)",(s=mpop(),mi(s,"Start / Stop",IDM_STUB),s));
     msub(m,"Record OPL / MIDI",(s=mpop(),mi(s,"Start / Stop",IDM_STUB),s)); msep(m);
@@ -1396,6 +1488,7 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
             HMENU cur = GetMenu(h);
             if (cur) { g_savedmenu = cur; SetMenu(h, NULL); } else SetMenu(h, g_savedmenu);
             return 0; }
+        case IDM_CAP_SHOT: host_screenshot(); return 0;
         case IDM_HELP_ABOUT:
             MessageBoxA(h, "NTVDMEX -- New Technology Virtual DOS Manager, Extended\n"
                           "A from-scratch ntvdm.exe for Windows XP (DOS on the real CPU in V86).",
@@ -1407,6 +1500,7 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
         break;
     case WM_KEYDOWN:
         if (wp == VK_F11) { present_ddraw_set_fullscreen(&g_pd, !g_pd.fullscreen); return 0; }
+        if (wp == VK_F5 && (GetKeyState(VK_CONTROL) & 0x8000)) { host_screenshot(); return 0; }
         /* Raw AT keyboard: push the MAKE scancode (lParam bits 16-23 = the OEM scan
            code) into the 0x60/0x64 FIFO and raise IRQ1, so action games that hook
            INT 09h or poll port 0x60 for real-time held-key state get input. This runs
@@ -3158,7 +3252,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     (void)hInst; (void)hPrev; (void)lpCmd; (void)nShow;
     progpath[0] = 0; args[0] = 0;
 
-    p = zput(p, "NTVDMEX clean host\r\nSTAGE0: WinMain entered [build dpmi-harness-v140]\r\n");
+    p = zput(p, "NTVDMEX clean host\r\nSTAGE0: WinMain entered [build dpmi-harness-v143]\r\n");
     log_write(LOG_PATH, report, p);
     serial_init();                                      /* DPMI harness: COM1 log sink */
     serial_out(report, p);
@@ -3761,13 +3855,15 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         }
         if ((VDM_REG(tib, VTIB_EVENT_INFO) & 0xFF) == 0x16) {
             ntvdd_regs r; uint8_t ah16; regs_load(&r, tib); ah16 = r_ah(&r);
-            for (;;) {                          /* AH=00/10 block until a key     */
-                EnterCriticalSection(&g_lock);
-                vdd_bus_deliver_int(&g_bus, 0x16, &r);
-                LeaveCriticalSection(&g_lock);
-                if ((ah16 != 0x00 && ah16 != 0x10) || r.zf == 0 || !g_running) break;
-                WaitForSingleObject(g_key_event, 50);
-            }
+            EnterCriticalSection(&g_lock);
+            vdd_bus_deliver_int(&g_bus, 0x16, &r);
+            LeaveCriticalSection(&g_lock);
+            /* A blocking BIOS read with no key must NOT park the exec thread -- doing that
+               stops the guest dead, so its timer, its music and its screen freeze until a key
+               arrives. (Same fault as INT 21h AH=01/07/08, fixed the same way.) Leave EIP on
+               the BOP instead: the guest re-executes INT 16h and keeps taking timer
+               interrupts while it waits, which is what a real BIOS spin does. */
+            if ((ah16 == 0x00 || ah16 == 0x10) && r.zf != 0 && g_running) continue;
             regs_store(&r, tib);
             host_set_flags(tib, r.cf, r.zf);
             VDM_REG(tib, VTIB_EIP) += 3;
@@ -4169,6 +4265,9 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
       p = zput(p, " async_bail=0x"); p = zhex(p, g_async_bail);
       p = zput(p, " async_nest=0x"); p = zhex(p, g_async_nest_blocked);
       p = zput(p, " irq1_inj=0x");   p = zhex(p, g_irq1_inj);
+      p = zput(p, " int16=[");
+      { int k; for (k = 0; k < 4; ++k) { p = zput(p, "0x"); p = zhex(p, g_in.int16_calls[k]); p = zput(p, " "); } }
+      p = zput(p, "] p60=0x");       p = zhex(p, g_in.p60_reads);
       p = zput(p, " sc_left=0x");    p = zhex(p, (DWORD)vdd_input_sc_pending(&g_in));
       p = zput(p, "\r\n");
       log_append(LOG_PATH, base, p); serial_out(base, p); p = base; }

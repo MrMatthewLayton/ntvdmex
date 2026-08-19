@@ -25,6 +25,12 @@ typedef struct input_state {
        codes; the guest drains one per IN 0x60. Separate from the INT 16h ring. */
     uint8_t  sc_buf[VDD_KBD_SIZE];
     int      sc_head, sc_tail; /* scancode FIFO: empty when sc_head==sc_tail      */
+    /* HOW THE GUEST ASKS FOR KEYS. Arrow keys work in a Skyroads level but not in its
+       menus, which means the two read the keyboard by different routes -- so count them:
+       [0]=INT 16h AH=00/10 (blocking read), [1]=AH=01/11 (peek), [2]=AH=02 (shift flags),
+       [3]=other, plus raw port 0x60 reads. Whichever the menu uses is where to look. */
+    uint32_t int16_calls[4];
+    uint32_t p60_reads;
     uint8_t  sc_last;          /* last byte handed out on IN 0x60 (re-read)       */
 } input_state;
 
