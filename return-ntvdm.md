@@ -2,8 +2,8 @@
 ██ CHECKPOINT — 2026-08-19 (session 11). READ THIS FIRST ON RESTART. ██
 ═══════════════════════════════════════════════════════════════════════════════
 
-▶ RESTART POINT (2026-08-19, session 11): HEAD = `e9f4d13`; branch spike/dpmi-16bit-switch;
-  **28 commits UNPUSHED**. Host = **dpmi-harness-v111**, built clean, deployed to the share `bm/`,
+▶ RESTART POINT (2026-08-19, session 11): HEAD = `8d42d15`; branch spike/dpmi-16bit-switch;
+  **31 commits UNPUSHED**. Host = **dpmi-harness-v113**, built clean, deployed to the share `bm/`,
   and RE-VERIFIED on the rig: selftest **8/8 PASS**, off-VM battery **519/519**. Rig healthy
   (watcher + controld beating). Working tree clean except the same pre-existing untracked files
   that are NOT mine (MAINICON.ico, demos/, scripts/kd_*.py, scripts/trace_break.py) and the
@@ -86,7 +86,9 @@ v104 froze identically. Do not conflate the two.)
     `printf 'dpmitest.com&copy C:\\WINDOWS\\system32\\ntoskrnl.exe "<share>\\re_ntoskrnl.exe"\r\n' > cmd.txt`
     (the watcher interpolates cmd.txt into a command line, so `&` chains a command after rt.bat).
 
-▶ DEAD LEADS -- CLOSED BY DISASSEMBLY THIS SESSION, do not spend time re-opening:
+▶ DEAD LEADS -- CLOSED BY MEASUREMENT/DISASSEMBLY THIS SESSION, do not re-open:
+  • **`VdmQueueInterrupt` as an async lever** (see above -- transition-only, tested on the real
+    Skyroads IRQ). The RE of it is still valuable and stays documented; the *use* is dead.
   • **`VdmPMCliControl` (service 13) is PM-ONLY.** ServiceData is a pointer to a subfunction
     dword: {0,1} clear/set bit 0 of the word at VdmObjects+0xBA (the PM client's virtual CLI),
     {2} = the CLI-timeout watchdog that force-sets `[0x714] |= 0x200`, {3,4} dispatch helpers.
@@ -96,29 +98,46 @@ v104 froze identically. Do not conflate the two.)
   • Setting EFLAGS.VIF via the VTIB CONTEXT (sanitised away), and making the guest execute a
     real `sti` (above). Neither produces a kernel dispatch.
 
+★★★ THE ASYNC LEVER IS CLOSED -- `VdmQueueInterrupt` CANNOT PREEMPT A RUNNING V86 GUEST.
+Tested at the only moment that matters: Skyroads with the lever armed on its REAL Sound
+Blaster IRQ (qimode `9`, no artificial raiser). `qi_calls=1`, status 0, fired exactly at the
+block completion -- and nothing happened: `state714` went to `...31` and STAYED, `io_events`
+stayed frozen, `irqn_inj` stayed 0, for the remaining 15 s. Matches the disassembly: the APC's
+first pass always requeues itself as a **user-mode** APC (0x46fead; it is entered with
+NormalContext = 0 and only a non-zero NormalContext reaches the dispatch), and a user APC is
+never delivered to a thread spinning inside VdmStartExecution. **The service is
+transition-only.** Do not spend more time on it. Probe: `tools/dostest/qirq2.asm`, which
+retargets the kernel's PIC to base 0x60 so a KERNEL-delivered IRQ 5 arrives as INT 65h and a
+HOST-delivered one as INT 0Dh -- previously the same vector, hence unattributable.
+
+★★ A REAL BUG FIXED ON THE WAY: `inject_int` pushed a **16-bit** FLAGS word, truncating away
+EFLAGS.VIF -- so the guest's IRET restored its virtual interrupt state from a zero bit and came
+back with interrupts off PERMANENTLY. Measured on qirq2: after the first injected INT 08h,
+`irq0_inj` stuck at 1 for the entire run. The CPU folds VIF into the pushed IF itself when it
+vectors a hardware interrupt; we synthesise the frame, so we must too (commit `8d42d15`).
+This did NOT unblock Skyroads (its timer was already flowing, 483 ticks), but it was silently
+disabling interrupts for any guest whose enable lives in VIF.
+
 ▶▶ RESUME — NEXT STEPS (in order):
-  1. **Settle whether `VdmQueueInterrupt`'s APC can EVER reach a running guest.** The live
-     hypothesis, straight from the disassembly of the APC kernel routine (0x46fdfb): its FIRST
-     pass always takes the requeue branch at 0x46fead (it is entered with NormalContext = 0, and
-     only `NormalContext != 0` reaches the dispatch), requeueing itself as a **user-mode** APC
-     with NormalContext = `[0x714] & 1`. A user APC is only delivered to a thread in an alertable
-     wait -- which a thread spinning inside VdmStartExecution never is. If that is right, this
-     service cannot preempt a running V86 guest at all; it only takes effect at the VDM's next
-     kernel transition, which is precisely what we already have. CHEAPEST TEST: run qirq (mode
-     `d`) but make the guest trap once ~1 s after the raises begin (e.g. a single `INT 1Ah`
-     inside the spin) -- if the vector fires on that trap and never otherwise, the APC is
-     transition-only and this whole avenue is closed.
-  2. If closed, take session 10's option (a): **force periodic guest yields.** The precedent is
-     already recorded and is the strongest remaining lead -- **the kernel DID preempt us with
-     event 3 at startup when IT had a timer pending** (session 10). So something kernel-side can
-     break into a running guest; find what arms that VDM timer. Failing that, a host-side yield
-     (a periodic trap planted in the guest) is unfaithful but unblocks the whole device-IRQ class.
-  3. Then re-run Skyroads expecting the intro to ANIMATE past 3 frames, and drive it to the cockpit.
+  1. **Async delivery must be done OURSELVES, in user mode. The design to try:
+     SuspendThread + Get/SetThreadContext on the exec thread.** A suspended thread's CONTEXT is
+     readable and writable even while it sits inside VdmStartExecution, and for a V86 thread that
+     context is the guest's frame. So from the audio thread: SuspendThread(exec) ->
+     GetThreadContext(CONTEXT_CONTROL|CONTEXT_SEGMENTS) -> if EFLAGS.VM and (IF|VIF) -> build the
+     IRET frame in guest memory at SS:SP exactly as inject_int does (folding VIF into the pushed
+     IF!) and point CS:EIP at IVT[8+irq] -> SetThreadContext -> ResumeThread. No kernel
+     cooperation needed, which is the whole appeal after this session.
+     ► BE CAREFUL, and test on qirq/qirq2 BEFORE Skyroads: we would be rewriting a context the
+       kernel is actively running. Guard it against our own exec loop (it must not be mid-event),
+       verify EFLAGS.VM is set before touching anything, and bail if CS is DOS_HDLR_SEG (we would
+       be re-entering our own stub). If SetThreadContext is rejected or ignored for a VDM thread,
+       that is a one-run answer and the fallback is a periodic trap planted in the guest.
+  2. Then re-run Skyroads expecting the intro to ANIMATE past 3 frames, and drive it to the cockpit.
   4. PIC VDD claiming 0x20/0x21 is a PREREQUISITE for the kernel ICA path, not a nicety: the ICA's
      ISR bit stays set until an EOI clears it (`v86_ica_eoi`), or that line never fires again.
      Skyroads already writes EOI to 0x20 and it goes nowhere (still in `unclaimed ports`).
   5. Calibrate the OPL envelope rates (`OPL_EG_ANCHOR`); decide on un-folding SB stereo.
-  6. `git push` -- 28 commits are sitting local.
+  6. `git push` -- 31 commits are sitting local.
 
 ▶ HARNESS GOTCHA (cost me a wrong conclusion this session): **rt.bat copies the log while the
   host may still be finishing, and SMB caches the result.** A `result_*.log` read too early is a
