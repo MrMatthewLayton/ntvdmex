@@ -154,16 +154,43 @@ Selftest cases now assert a substring transcribed from the oracle's real output.
   that produce". Per the epic's own BIOS caveat QEMU video would be weak evidence anyway
   (SeaBIOS, not a real VGA BIOS) — video questions want the Dell OptiPlex.
 
+★★★ **#26 DIFFERENTIAL HARNESS — TWO OF FOUR HOSTS LIVE, DIFF WORKING.**
+    `./scripts/dosdiff.py tools/dostest/p_ver.com` runs ONE unchanged .COM on every available
+    host and prints a per-field agreement table.
+  ▶ **THE CANONICAL DUMP** is `tools/dostest/probe.inc` (shared NASM include). A probe emits
+    `CASE=<name> SIG=<regs> AX=.. BX=.. .. CF=x`. Write new probes with it, not by hand.
+    ► **`SIG` is the load-bearing idea.** It declares which registers actually carry THAT
+      case's answer. All registers are dumped, but DS/ES follow the PSP (`04BD` on the oracle,
+      `0813` under DOSBox) and most FLAGS bits are undefined after a DOS call — comparing them
+      blindly manufactures disagreements that bury the real ones.
+    ► `probe_capture` MUST be the instruction immediately after the call under test.
+  ▶ **VOTING: NTVDMEX DOES NOT VOTE.** It is the `subject`; the others are `oracle`s. Letting
+    the thing being graded into the consensus would be circular. Hosts that cannot run are
+    reported UNAVAILABLE WITH THE REASON, never silently skipped — a diff that quietly dropped
+    a host would read as agreement.
+  ▶ **RECORDED RATIONALES ARE IN THE TOOL**, not just prose: `tools/dostest/oracle-rules.json`
+    (mirrored in `docs/research/oracle-disagreements.md`). A rule makes a host ABSTAIN on one
+    field, and the reason prints on every run. Reason: a permanently DISPUTED row you have
+    learned to ignore is worse than no row.
+  ▶ LIVE: `msdos622` (QEMU oracle) and `dosbox-x`. **NOT YET WIRED: `ntvdm` (stock) and
+    `ntvdmex` — both need the XP rig**, so we currently have NO subject and cannot yet grade
+    ourselves. That is the remaining half of #26 and the next real task.
+  ▶ **DOSBOX CANNOT RUN HEADLESS.** `SDL_VIDEODRIVER=dummy` makes dosbox-x HANG and makes
+    dosbox-staging ABORT ("Could not initialize video: OpenGL ... driver (dummy)"). The adapter
+    opens a real window briefly; it will not work over plain ssh. Use `dosbox-x`, not staging.
+  ▶ FIRST DISAGREEMENT, already settled: DOSBox-X reports **AX=0005 (DOS 5.0)** against the
+    oracle's **1606 (6.22)** — because DOSBox's version is a CONFIGURABLE EMULATOR SETTING, so
+    it is evidence about DOSBox's default, not about MS-DOS. It abstains. (Note we currently
+    report 0005 too — matching DOSBox's default, not real DOS.)
+
 ▶▶ RESUME — NEXT STEPS (in order):
-  1. **#26 differential harness** — one `.COM`, four hosts, one diff. The oracle side is done
-     and importable; what is missing is the NTVDMEX side and the diff/report. Build it on
-     `Oracle.run()`.
+  1. **Finish #26: wire the two XP hosts.** Until `ntvdmex` runs there is NO subject in the
+     table and the harness cannot grade us — it only cross-checks oracles. Stock `ntvdm` needs
+     an rt.bat variant that drops the IFEO Debugger key for the baseline run and restores it.
   2. **#27 make every unimplemented path LOUD.** The IVT landmine first (vectors that read
      0000:0000 and get executed as code).
   3. Then the EVIDENCE PASS: run command.com / edit.com / qbasic / Doom and rank the gaps by
      what real programs actually hit, before implementing any of #29-#46.
-  4. Nothing is committed. `scripts/dosoracle/`, `scripts/oracle.sh`,
-     `tools/dostest/dosver.{asm,com}`, `docs/research/dos-oracle.md` are all untracked.
 
 ═══════════════════════════════════════════════════════════════════════════════
 ██ CHECKPOINT — 2026-08-19 (session 12). ██

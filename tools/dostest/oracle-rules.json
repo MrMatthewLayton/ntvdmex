@@ -1,0 +1,18 @@
+[
+  {
+    "probe": "dosver",
+    "case": "int21.30",
+    "field": "AX",
+    "abstain": ["dosbox-x"],
+    "recorded": "2026-08-20",
+    "why": "DOSBox-X's reported DOS version is a CONFIGURABLE EMULATOR SETTING (config 'dosbox: ver', default 5.0), not an observation about MS-DOS. It is evidence about DOSBox's default, so it carries no weight on what DOS reports. The genuine Microsoft kernel is definitive here: AH=30h returns AX=0x1606 on 6.22. See GH #28 -- our own value is selectable too, which is exactly why DOSBox's cannot be truth."
+  },
+  {
+    "probe": "dosver",
+    "case": "int21.3306",
+    "field": "BX",
+    "abstain": ["dosbox-x"],
+    "recorded": "2026-08-20",
+    "why": "Same cause as int21.30/AX: 3306h reports the same configurable version through BL:BH, so DOSBox-X's answer is its 'ver' setting rather than evidence about MS-DOS."
+  }
+]
