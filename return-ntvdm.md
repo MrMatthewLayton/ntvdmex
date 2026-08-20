@@ -41,6 +41,27 @@
     interpreter declines is named (`P12-BAIL`)** — that list is the to-do list for
     this path, and it is how you tell "we ran it" from "we lost the guest to V86".
 
+  ★★★ **THEN ALL TEN WERE WATCHED LIVE, ONE AT A TIME, AND ALL TEN RENDER CORRECTLY.**
+    Full write-up + every observation: **`docs/research/demo-sweep-findings.md`** — read
+    that before touching video or timing. Headlines:
+      • **NOT ONE PIXEL DEFECT.** Every defect found is TIMING.
+      • **The retrace bit (0x3DA) is untimed** — we toggle it on every read, so
+        `WAIT &H3DA,8` returns instantly and anything that paces on vblank runs
+        unbounded (BOUNCEBX, MATRIX_2, CAVE). **CAVE proves this is PRE-EXISTING and
+        not ours: it is SCREEN 13, which never touches the interpreter.** Re-check
+        Skyroads against it — its "a little sluggish" calibration predates knowing this.
+      • **USER FEATURE REQUEST, and it is load-bearing: a menu dropdown for approximate
+        CPU speed** (33/66/100/200 MHz). Two of the five speed-affected demos pace
+        themselves with a busy-wait or not at all, so NO retrace fix can ever reach
+        them. See finding #3 for implementation notes across both execution paths.
+      • **MOUSE was NOT a defect** and neither was INT 33h. The oracle ran the same
+        binary on genuine MS-DOS 6.22: it exits in 2.9 s there too. `mousetst.com` then
+        proved INT 33h works end to end — cursor tracks, left button draws
+        (`build/shots/mousetst_live.png`). The only real item is cosmetic: our arrow is
+        hand-drawn and the user has a 16×16 cursor to swap in.
+      • Three readings were WRONG and corrected by evidence mid-sweep (see the method
+        note at the end of that file). Every one of them looked obviously right.
+
   ★ **THE DEMO SWEEP RAN: ALL TEN QuickBASIC DEMOS, ALL TEN DRAW.** Six SCREEN 12,
     three SCREEN 13, one SCREEN 0; `video modes unsupported: none` everywhere.
         BLIT      16-colour random filled boxes -- matches the oracle in kind
