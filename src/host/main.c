@@ -62,6 +62,11 @@
    A0000 stores going through the planar engine. This knob keys the interpreter
    off "planar mode is active" instead of "the page is protected". */
 #define INTERP12_FLAG "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\interp12.flag"
+/* Escape hatch for the planar policy (GH #55): present = go back to the A0000
+   page trap. Interpreting the guest for the whole time a planar mode is set is
+   the DEFAULT because the page trap demonstrably freezes the guest on real
+   hardware; this knob exists so the old path is still one file away. */
+#define P12OFF_FLAG   "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\p12off.flag"
 /* Async-preemption experiment knob, also on the share so it can be changed between
    runs without a rebuild. One digit: bits 0-1 = the FIXED_NTVDMSTATE pending bits to
    set before NtVdmControl(VdmQueueInterrupt) (1 = VDM_INT_HARDWARE, 2 = VDM_INT_TIMER,
@@ -254,6 +259,14 @@ static int      g_unclaimed_n = 0;
 static int            g_capture       = 0;  /* CAPTURE_FLAG present: opt-in self-screenshot for graphical tests */
 static int            g_no_a000       = 0;  /* NOA000_FLAG present: leave A0000 mapped (diagnostic) */
 static int            g_interp12      = 0;  /* INTERP12_FLAG: interpret mode 12h, no page trap */
+static int            g_p12_off       = 0;  /* P12OFF_FLAG: revert to the A0000 page trap      */
+/* Planar-mode interpretation, measured. `batches` is how many times we drove the
+   guest from the host, `instrs` how many instructions that came to, and `bails`
+   how often the interpreter declined the very first opcode and had to let V86 run
+   (each bail is a stretch of guest execution whose A0000 writes we do NOT see). */
+static DWORD          g_p12_batches   = 0;
+static DWORD          g_p12_instrs    = 0;
+static DWORD          g_p12_bails     = 0;
 #define PM_HEADLESS_MS_DEFAULT 30000             /* headless exec-loop wall-clock cap (an infinite visual demo self-exits) */
 static DWORD g_headless_ms = PM_HEADLESS_MS_DEFAULT;   /* overridable via HEADLESS_MS_PATH */
 #define PM_HEADLESS_MS g_headless_ms
@@ -2268,6 +2281,30 @@ static void a000_protect(int on)
         g_a000_prot = on;
 }
 
+/* ---- how mode 12h is intercepted (GH #55) --------------------------------- *
+ * MEASURED, twice, on the physical box: arming the A0000 page trap FREEZES the
+ * guest. `PAGE_NOACCESS` and `PAGE_READONLY` behave identically (so it is not
+ * reads-vs-writes, it is protecting the range at all), io_events stops at 10
+ * against 22,532,292 with the trap off, and the exec thread never comes back out
+ * of VdmStartExecution -- the guest's CS:IP in the TIB stays frozen at whatever
+ * the last event left it. The M3 planar trap was VM-confirmed on HVF and NEVER on
+ * real hardware, and there is precedent for exactly this class of difference
+ * (session 8: HVF reflects IOPL-0 I/O as event 0, real silicon as event 3).
+ *
+ * So do not protect the page. Instead, while a planar mode is current, run the
+ * guest in the HOST INTERPRETER, whose A0000 accesses go through the planar write
+ * engine by construction (imem_r8/imem_w8). The interpreter is the CPU for as long
+ * as mode 12h is set; it yields whenever an IRQ is pending, and any opcode it does
+ * not model drops that one instruction back to V86.                              */
+static int g_p12_interp = 0;    /* planar mode is current -> interpret the guest  */
+
+static void video_trap_sync(void)
+{
+    int planar = vdd_video_planar_active(&g_vid);
+    if (planar && !g_p12_off) { a000_protect(0); g_p12_interp = 1; }
+    else                      { a000_protect(planar); g_p12_interp = 0; }
+}
+
 /* ====================================================================== *
  *  Mode-12h fill-loop fast path: a small, bounded, flags-accurate 8086    *
  *  interpreter.                                                           *
@@ -2324,6 +2361,7 @@ static void iio_out(uint16_t port, int width, uint32_t val)
 #define STORM_WINDOW   128       /* faults within this PC span count as "the same loop" */
 #define STORM_GATE      8        /* consecutive in-window faults -> escalate to the interpreter */
 #define TIER1_CAP  2000000L      /* interpreter iteration ceiling once escalated        */
+#define P12_SLICE     20000L     /* planar mode: instructions per interpreter slice     */
 
 static long host_interp(volatile BYTE *tib, long cap)
 {
@@ -2369,6 +2407,15 @@ static long host_interp(volatile BYTE *tib, long cap)
     VDM_SET16(tib, VTIB_ESP, c.r[4]); VDM_SET16(tib, VTIB_EBP, c.r[5]);
     VDM_SET16(tib, VTIB_ESI, c.r[6]); VDM_SET16(tib, VTIB_EDI, c.r[7]);
     VDM_SET16(tib, VTIB_EIP, c.ip);
+    /* SEGMENTS TOO. They were loaded but never stored, so every segment load the
+       interpreter modelled (POP ES / MOV DS,AX / far CALL / INT / IRET) was thrown
+       away the moment we returned to V86 -- the guest carried on with the SEGMENT
+       it had before the batch and the OFFSET the batch had reached. Harmless while
+       batching was confined to a fill loop that never reloads a segment; fatal for
+       continuous interpretation, where CS changes on every interrupt. */
+    VDM_REG(tib, VTIB_ES) = c.seg[0]; VDM_REG(tib, VTIB_CS) = c.seg[1];
+    VDM_REG(tib, VTIB_SS) = c.seg[2]; VDM_REG(tib, VTIB_DS) = c.seg[3];
+    VDM_REG(tib, VTIB_FS) = c.seg[4]; VDM_REG(tib, VTIB_GS) = c.seg[5];
     /* update only the low 16 flag bits (arith + DF); keep VM/IOPL/IF etc. */
     VDM_REG(tib, VTIB_EFLAGS) = (VDM_REG(tib, VTIB_EFLAGS) & 0xFFFF0000u) | (c.flags & 0xFFFFu);
     return iters;
@@ -2773,7 +2820,7 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                         vdd_bus_deliver_int(&g_bus, 0x10, &r);
                         LeaveCriticalSection(&g_lock);
                         regs_store(&r, tib);
-                        a000_protect(vdd_video_planar_active(&g_vid));  /* mode 12h A0000 trap; no-op in 13h */
+                        video_trap_sync();          /* mode 12h: interpret (GH #55); no-op in 13h */
                         VDM_REG(tib, VTIB_EFLAGS) &= ~1u;
                         VDM_REG(tib, VTIB_EIP) += 2;              /* past the 2-byte PM BOP */
                         p = zput(p, "INT10h (PM) -> video VDD AX=0x"); p = zhex(p, ax);
@@ -3533,6 +3580,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     g_capture  = g_headless && (GetFileAttributesA(CAPTURE_FLAG) != INVALID_FILE_ATTRIBUTES);
     g_no_a000  = (GetFileAttributesA(NOA000_FLAG) != INVALID_FILE_ATTRIBUTES);
     g_interp12 = (GetFileAttributesA(INTERP12_FLAG) != INVALID_FILE_ATTRIBUTES);
+    g_p12_off  = (GetFileAttributesA(P12OFF_FLAG)   != INVALID_FILE_ATTRIBUTES);
     if (g_interp12) g_no_a000 = 1;              /* interpreting instead of trapping */
     /* Headless cap override (decimal ms on the share). Read before the deadline thread
        starts, since that thread sleeps on it. Clamped: below the default a typo would
@@ -4088,6 +4136,38 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             if (VDM_REG(tib, VTIB_EFLAGS) & 0x200) VDM_REG(tib, VTIB_EFLAGS) |= EFLAGS_VIF_BIT;
             else                                   VDM_REG(tib, VTIB_EFLAGS) &= ~EFLAGS_VIF_BIT;
         }
+        /* ---- MODE 12h: THE HOST IS THE CPU (GH #55) ------------------------- *
+         * While a planar mode is current we do not hand the guest to V86 at all,
+         * because on real hardware there is no way to see its A0000 writes there:
+         * the page trap that would show them freezes the VDM (see video_trap_sync).
+         * Run a slice in the interpreter instead -- its A0000 accesses go through
+         * the planar write engine -- then loop, which re-runs the IRQ delivery gate
+         * above so timer and keyboard interrupts reach the guest between slices.
+         * A slice ends early the moment an IRQ is pending, so the slice size is a
+         * ceiling on lock-hold time, not on responsiveness.
+         * If the interpreter declines the instruction we are ON (a BOP, or an
+         * opcode it does not model), ran == 0 and we fall through to V86 exactly as
+         * before -- so a DOS call still reaches the kernel as a BOP event, and an
+         * unmodeled opcode still executes on the real CPU. */
+        if (g_p12_interp && !g_dpmi_pm) {
+            long ran = host_interp(tib, P12_SLICE);
+            if (ran > 0) { g_p12_batches++; g_p12_instrs += (DWORD)ran; continue; }
+            /* NAME THE OPCODE. Every bail is guest execution we cannot see, so the
+               list of declined opcodes IS the to-do list for this path (#27). */
+            { static int s_bud_p12 = 12;
+              if (s_bud_p12 > 0) {
+                DWORD c3 = VDM_REG(tib, VTIB_CS) & 0xFFFF, i3 = VDM_REG(tib, VTIB_EIP) & 0xFFFF;
+                const volatile BYTE *ip3 = (const volatile BYTE *)((c3 << 4) + i3);
+                unsigned k5;
+                --s_bud_p12;
+                p = zput(p, "P12-BAIL at 0x"); p = zhex(p, c3);
+                p = zput(p, ":0x"); p = zhex(p, i3); p = zput(p, " bytes:");
+                for (k5 = 0; k5 < 8; ++k5) { p = zput(p, " "); p = zhexb(p, ip3[k5]); }
+                p = zput(p, "\r\n");
+                log_append(LOG_PATH, base, p); p = base;
+              } }
+            g_p12_bails++;
+        }
         InterlockedExchange(&g_in_exec, 1);
         ev = v86_run(tib, &st);
         InterlockedExchange(&g_in_exec, 0);
@@ -4235,7 +4315,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             vdd_bus_deliver_int(&g_bus, 0x10, &r);
             LeaveCriticalSection(&g_lock);
             regs_store(&r, tib);
-            a000_protect(vdd_video_planar_active(&g_vid));   /* trap A0000 in mode 12h */
+            video_trap_sync();     /* mode 12h: interpret the guest (GH #55) */
             VDM_REG(tib, VTIB_EIP) += 3;
             continue;
         }
@@ -4868,6 +4948,9 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         for (k3 = 0; k3 < 8; ++k3) { p = zhexb(p, cd[k3]); p = zput(p, " "); }
         p = zput(p, " asyncinj="); p = zhex(p, g_async_inj);
         p = zput(p, " interp-refused="); p = zhex(p, g_interp_refused);
+        p = zput(p, " p12-batches="); p = zhex(p, g_p12_batches);
+        p = zput(p, " p12-instrs=");  p = zhex(p, g_p12_instrs);
+        p = zput(p, " p12-bails=");   p = zhex(p, g_p12_bails);
         p = zput(p, " bail="); p = zhex(p, g_async_bail);
         p = zput(p, " nestblk="); p = zhex(p, g_async_nest_blocked);
         p = zput(p, "\r\n"); }

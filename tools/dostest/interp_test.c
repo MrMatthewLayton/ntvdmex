@@ -195,11 +195,52 @@ int main(void)
       c.r[0] = 0x00F0; load(&c, 0x1000, 0, p, sizeof p); step1(&c);
       CHECK(c.r[0] == 0x00F0 && (c.flags & F_ZF), "test: AL&1==0 -> ZF, AL kept"); }
 
-    /* ---- T18: bail on unmodeled opcode (INT 20h) leaves state at it ----- */
-    { icpu c = mkcpu(); BYTE p[] = { 0x90, 0xCD, 0x20 };   /* NOP; INT 20h */
+    /* ---- T18: bail on an unmodeled opcode leaves state exactly at it ------ *
+     * The load-bearing case is the VDM BOP, `C4 C4 nn`. C4 is LES, and LES is  *
+     * deliberately NOT modeled: bailing on it is how a DOS/BIOS call reaches   *
+     * the kernel as a BOP event instead of being swallowed here.               */
+    { icpu c = mkcpu(); BYTE p[] = { 0x90, 0xC4, 0xC4, 0x21 };   /* NOP; BOP 21h */
       load(&c, 0x1000, 0, p, sizeof p);
       CHECK(step1(&c) == 1 && c.ip == 1, "bail: NOP runs");
-      CHECK(step1(&c) == 0 && c.ip == 1, "bail: INT 20h returns 0, ip unchanged"); }
+      CHECK(step1(&c) == 0 && c.ip == 1, "bail: BOP (C4 C4 nn) returns 0, ip unchanged"); }
+
+    /* ---- T18b: INT nn / IRET / CLI / STI (GH #55) ------------------------- *
+     * Continuous interpretation in mode 12h means the interpreter has to run    *
+     * the guest THROUGH its own interrupt handlers; before this it stopped at   *
+     * the first INT and handed the guest back to V86, where its A0000 writes    *
+     * are invisible to us. Vectoring goes through the real IVT at linear 0.     */
+    { icpu c = mkcpu();
+      BYTE p[] = { 0xFB, 0xCD, 0x21 };                  /* STI; INT 21h        */
+      BYTE h[] = { 0xCF };                              /* handler: IRET       */
+      MEM[0x21 * 4] = 0x34; MEM[0x21 * 4 + 1] = 0x12;   /* IVT[21h] = 5000:1234 */
+      MEM[0x21 * 4 + 2] = 0x00; MEM[0x21 * 4 + 3] = 0x50;
+      load(&c, 0x5000, 0x1234, h, sizeof h);
+      load(&c, 0x1000, 0, p, sizeof p);
+      c.seg[2] = 0x2000; c.r[4] = 0x0100;               /* SS:SP = 2000:0100   */
+      CHECK(step1(&c) == 1 && (c.flags & 0x200u), "sti: IF set in the flag image");
+      CHECK(step1(&c) == 1, "CD 21: INT is modeled");
+      CHECK(c.seg[1] == 0x5000 && c.ip == 0x1234, "int: vectored via IVT[21h]");
+      CHECK(c.r[4] == 0x00FA, "int: pushed FLAGS/CS/IP (SP -= 6)");
+      CHECK(!(c.flags & 0x200u), "int: IF cleared on entry");
+      CHECK(MEM[0x20000 + 0xFA] == 0x03 && MEM[0x20000 + 0xFB] == 0x00,
+            "int: return IP points past the 2-byte INT");
+      CHECK(MEM[0x20000 + 0xFC] == 0x00 && MEM[0x20000 + 0xFD] == 0x10,
+            "int: return CS is the interrupted segment");
+      CHECK(step1(&c) == 1, "CF: IRET is modeled");
+      CHECK(c.seg[1] == 0x1000 && c.ip == 3, "iret: back past the INT");
+      CHECK(c.r[4] == 0x0100, "iret: stack unwound");
+      CHECK(c.flags & 0x200u, "iret: IF restored from the pushed FLAGS"); }
+
+    /* ---- T18c: far JMP / far CALL ----------------------------------------- */
+    { icpu c = mkcpu(); BYTE p[] = { 0x9A, 0x11, 0x22, 0x00, 0x30 };  /* CALL 3000:2211 */
+      load(&c, 0x1000, 0, p, sizeof p);
+      c.seg[2] = 0x2000; c.r[4] = 0x0100;
+      CHECK(step1(&c) == 1 && c.seg[1] == 0x3000 && c.ip == 0x2211, "9A: far CALL transfers");
+      CHECK(c.r[4] == 0x00FC, "far call: pushed CS:IP (SP -= 4)");
+      CHECK(MEM[0x20000 + 0xFE] == 0x00 && MEM[0x20000 + 0xFF] == 0x10, "far call: pushed CS");
+      { BYTE q[] = { 0xEA, 0x00, 0x01, 0x00, 0x40 };    /* JMP 4000:0100 */
+        load(&c, 0x3000, 0x2211, q, sizeof q);
+        CHECK(step1(&c) == 1 && c.seg[1] == 0x4000 && c.ip == 0x0100, "EA: far JMP transfers"); } }
 
     /* ---- T19: 32-bit operand-size (0x66) -- run 54 --------------------- *
      * A C runtime under DPMI does 32-bit register math in a 16-bit segment  *

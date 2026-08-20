@@ -546,14 +546,16 @@ static int istep(icpu *c)
         uint16_t sp;
         if (osz) return 0;                             /* PUSHFD (32-bit EFLAGS): TODO */
         sp = (uint16_t)(c->r[4] - 2);
-        wr_mem((seg_base(c->seg[2])) + sp, 2, (uint16_t)((c->flags & 0x0CD5u) | 0x0002u));
+        wr_mem((seg_base(c->seg[2])) + sp, 2, (uint16_t)((c->flags & 0x0ED5u) | 0x0002u));
         c->r[4] = (c->r[4] & 0xFFFF0000u) | sp; c->ip = (uint16_t)(c->ip + idx); return 1;
     }
     if (op == 0x9D) {                                  /* POPF */
         uint16_t sp;
         if (osz) return 0;                             /* POPFD (32-bit EFLAGS): TODO */
         sp = (uint16_t)c->r[4];
-        c->flags = (rd_mem((seg_base(c->seg[2])) + sp, 2) & 0x0CD5u) | 0x0002u;
+        /* IF (0x200) is part of the mask: dropping it made every interpreted POPF
+           silently disable the guest's interrupts. */
+        c->flags = (rd_mem((seg_base(c->seg[2])) + sp, 2) & 0x0ED5u) | 0x0002u;
         c->r[4] = (c->r[4] & 0xFFFF0000u) | (uint16_t)(sp + 2); c->ip = (uint16_t)(c->ip + idx); return 1;
     }
 
@@ -798,6 +800,60 @@ static int istep(icpu *c)
     if (op == 0xF5) { c->flags ^=  F_CF; c->ip = (uint16_t)(c->ip + idx); return 1; }  /* CMC */
     if (op == 0xFC) { c->flags &= ~F_DF; c->ip = (uint16_t)(c->ip + idx); return 1; }  /* CLD */
     if (op == 0xFD) { c->flags |=  F_DF; c->ip = (uint16_t)(c->ip + idx); return 1; }  /* STD */
+
+    /* ---- control transfer through the IVT: INT nn (CD) / INT3 (CC) / IRET (CF) *
+     * Needed by CONTINUOUS interpretation (mode 12h, GH #55). Without them the    *
+     * interpreter stopped at the first DOS/BIOS call and handed the guest back to *
+     * the real CPU -- where its A0000 writes bypass the planar engine and the      *
+     * picture is lost until the next port trap. With them the guest keeps running  *
+     * here across its own interrupt handlers.                                      *
+     * LES/LDS (C4/C5) are deliberately still unmodeled: the VDM BOP is `C4 C4 nn`, *
+     * so bailing on C4 is exactly how a DOS/BIOS call reaches the kernel as a BOP  *
+     * event. Modeling LES would swallow every service call the host provides.      */
+    if (op == 0xCD || op == 0xCC) {
+        uint32_t ssb; uint16_t sp, nip, vec;
+        if (g_seg2lin) return 0;                       /* PM: no real-mode IVT -> bail   */
+        vec = (op == 0xCC) ? 3 : CB(idx++);
+        nip = (uint16_t)(c->ip + idx);                 /* return address = past the INT  */
+        ssb = seg_base(c->seg[2]);
+        sp = (uint16_t)(c->r[4] - 2); wr_mem(ssb + sp, 2, (c->flags & 0x0ED5u) | 0x0002u);
+        sp = (uint16_t)(sp - 2);      wr_mem(ssb + sp, 2, c->seg[1]);
+        sp = (uint16_t)(sp - 2);      wr_mem(ssb + sp, 2, nip);
+        c->r[4]   = (c->r[4] & 0xFFFF0000u) | sp;
+        c->flags &= ~0x0300u;                          /* IF/TF cleared on entry         */
+        c->ip     = (uint16_t)rd_mem((uint32_t)vec * 4, 2);
+        c->seg[1] = (uint16_t)rd_mem((uint32_t)vec * 4 + 2, 2);
+        return 1;
+    }
+    if (op == 0xCF) {                                  /* IRET */
+        uint32_t ssb; uint16_t sp;
+        if (osz || g_seg2lin) return 0;                /* 32-bit IRETD / PM IRET: TODO   */
+        sp  = (uint16_t)c->r[4]; ssb = seg_base(c->seg[2]);
+        c->ip     = (uint16_t)rd_mem(ssb + sp, 2);
+        c->seg[1] = (uint16_t)rd_mem(ssb + (uint16_t)(sp + 2), 2);
+        c->flags  = (rd_mem(ssb + (uint16_t)(sp + 4), 2) & 0x0ED5u) | 0x0002u;
+        c->r[4]   = (c->r[4] & 0xFFFF0000u) | (uint16_t)(sp + 6);
+        return 1;
+    }
+    /* ---- far JMP (EA) / far CALL (9A) to a real-mode seg:off ---------------- */
+    if (op == 0xEA || op == 0x9A) {
+        uint16_t off, seg;
+        if (osz || g_seg2lin) return 0;
+        off = (uint16_t)(CB(idx) | (CB(idx + 1) << 8)); idx += 2;
+        seg = (uint16_t)(CB(idx) | (CB(idx + 1) << 8)); idx += 2;
+        if (op == 0x9A) {                              /* CALL FAR: push CS then IP      */
+            uint32_t ssb = seg_base(c->seg[2]);
+            uint16_t nip = (uint16_t)(c->ip + idx), sp;
+            sp = (uint16_t)(c->r[4] - 2); wr_mem(ssb + sp, 2, c->seg[1]);
+            sp = (uint16_t)(sp - 2);      wr_mem(ssb + sp, 2, nip);
+            c->r[4] = (c->r[4] & 0xFFFF0000u) | sp;
+        }
+        c->seg[1] = seg; c->ip = off; return 1;
+    }
+    /* ---- CLI/STI (FA/FB). IF is carried in the flag image so an interpreted   *
+     * handler's IRET restores it and the loop-top delivery gate sees the truth. */
+    if (op == 0xFA) { c->flags &= ~0x0200u; c->ip = (uint16_t)(c->ip + idx); return 1; }
+    if (op == 0xFB) { c->flags |=  0x0200u; c->ip = (uint16_t)(c->ip + idx); return 1; }
 
     return 0;                                          /* unmodeled: bail to V86 */
 }
