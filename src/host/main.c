@@ -49,6 +49,11 @@
    tests (selftest/dpmitest) then never touch the self-capture path -- keeping the
    common case off the capture code entirely. */
 #define CAPTURE_FLAG "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\capture.flag"
+/* Diagnostic knob: disable the mode-12h A0000 NOACCESS trap. With it off, planar
+   writes land in the raw aperture instead of the VGA engine, so the PICTURE will
+   be wrong -- the question it answers is whether the guest EXECUTES AT ALL.
+   Absent = normal behaviour, so ordinary runs are untouched. Delete after use. */
+#define NOA000_FLAG  "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\noa000.flag"
 /* Async-preemption experiment knob, also on the share so it can be changed between
    runs without a rebuild. One digit: bits 0-1 = the FIXED_NTVDMSTATE pending bits to
    set before NtVdmControl(VdmQueueInterrupt) (1 = VDM_INT_HARDWARE, 2 = VDM_INT_TIMER,
@@ -239,6 +244,7 @@ static uint16_t g_unclaimed[IO_UNCLAIMED_MAX];
 static int      g_unclaimed_n = 0;
 
 static int            g_capture       = 0;  /* CAPTURE_FLAG present: opt-in self-screenshot for graphical tests */
+static int            g_no_a000       = 0;  /* NOA000_FLAG present: leave A0000 mapped (diagnostic) */
 #define PM_HEADLESS_MS_DEFAULT 30000             /* headless exec-loop wall-clock cap (an infinite visual demo self-exits) */
 static DWORD g_headless_ms = PM_HEADLESS_MS_DEFAULT;   /* overridable via HEADLESS_MS_PATH */
 #define PM_HEADLESS_MS g_headless_ms
@@ -460,6 +466,7 @@ static int            g_qi_keys_async = 0;   /* opt-in: async-deliver IRQ1 (see 
    async injector refuses to act unless this is set, so it can never race the exec loop. */
 static volatile LONG  g_in_exec       = 0;
 static DWORD          g_async_inj     = 0;   /* successful async injections */
+static DWORD          g_interp_refused = 0;  /* interpreter declined the faulting opcode */
 static DWORD          g_async_bail    = 0;   /* attempts declined (guest not in a safe spot) */
 static DWORD          g_qi_calls      = 0;
 static volatile LONG  g_qi_status     = 0;  /* NTSTATUS of the last queue call */
@@ -2245,6 +2252,7 @@ static int g_a000_prot = 0;
 static void a000_protect(int on)
 {
     DWORD old;
+    if (g_no_a000) on = 0;              /* diagnostic knob -- see NOA000_FLAG */
     if (on == g_a000_prot) return;
     if (VirtualProtect((LPVOID)A000_LO, 0x10000,
                        on ? PAGE_NOACCESS : PAGE_EXECUTE_READWRITE, &old))
@@ -2322,8 +2330,27 @@ static long host_interp(volatile BYTE *tib, long cap)
     c.ip = (uint16_t)VDM_REG(tib, VTIB_EIP); c.flags = VDM_REG(tib, VTIB_EFLAGS);
 
     EnterCriticalSection(&g_lock);
-    for (iters = 0; iters < cap; ++iters)
+    for (iters = 0; iters < cap; ++iters) {
         if (!istep(&c)) break;
+        /* YIELD WHEN AN INTERRUPT IS PENDING. A real CPU takes interrupts in the
+           middle of a loop; the interpreter is standing in for that CPU and must
+           do the same, or a guest whose loop can only END when an interrupt
+           fires runs here forever.
+           This is not hypothetical -- it is why mode 12h never worked. BLIT's
+           outer loop is `DO WHILE INKEY$ = ""`, and QuickBASIC polls for the key
+           in memory. Escalated to the interpreter, that loop burned the whole
+           2,000,000-iteration cap with no way for a keystroke or a tick to ever
+           reach it, returned, re-faulted, re-escalated: TEN I/O events in thirty
+           seconds and a frozen screen, while the same program with the A0000
+           trap disabled produced 22.5 MILLION.
+           Checked every 256 instructions so the cost is negligible against the
+           fill loops this batching exists to accelerate. */
+        if ((iters & 0xFF) == 0xFF) {
+            int q, pend = (g_irq0_pending != 0);
+            for (q = 0; !pend && q < 8; ++q) pend = (g_irqn_pending[q] != 0);
+            if (pend) { ++iters; break; }
+        }
+    }
     LeaveCriticalSection(&g_lock);
 
     if (iters == 0) return 0;                          /* first opcode unmodeled */
@@ -3483,7 +3510,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     (void)hInst; (void)hPrev; (void)lpCmd; (void)nShow;
     progpath[0] = 0; args[0] = 0;
 
-    p = zput(p, "NTVDMEX clean host\r\nSTAGE0: WinMain entered [build dpmi-harness-v170]\r\n");
+    p = zput(p, "NTVDMEX clean host\r\nSTAGE0: WinMain entered [build dpmi-harness-v178]\r\n");
     log_write(LOG_PATH, report, p);
     serial_init();                                      /* DPMI harness: COM1 log sink */
     serial_out(report, p);
@@ -3495,6 +3522,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     /* Self-screenshot only when explicitly requested (graphical tests) AND headless, so
        the common non-graphical tests never enter the capture path. Latched once here. */
     g_capture  = g_headless && (GetFileAttributesA(CAPTURE_FLAG) != INVALID_FILE_ATTRIBUTES);
+    g_no_a000  = (GetFileAttributesA(NOA000_FLAG) != INVALID_FILE_ATTRIBUTES);
     /* Headless cap override (decimal ms on the share). Read before the deadline thread
        starts, since that thread sleeps on it. Clamped: below the default a typo would
        kill runs early, above 10 min a typo would wedge the watcher for the whole time. */
@@ -4109,6 +4137,26 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                 if (handled) { g_ev_io++; io_hot_note(g_io_last_port, VDM_REG(tib, VTIB_CS) & 0xFFFF, VDM_REG(tib, VTIB_EIP) & 0xFFFF); continue; }
             }
             if (g_a000_prot && host_interp(tib, 1) > 0) continue;  /* single A0000 access */
+            /* The interpreter refused the very first opcode. With A0000 trapped that
+               is a LIVELOCK, not a miss: we resume at the same EIP, the guest
+               re-faults on the same store, forever. Name the opcode -- this is the
+               "mode-12h MOV-store decoder gap" from the M3 notes, and it is why
+               mode 12h has never rendered. Budgeted so it cannot flood the log. */
+            if (g_a000_prot) {
+                static int s_bud_dec = 8;
+                if (s_bud_dec > 0) {
+                    DWORD c2 = VDM_REG(tib, VTIB_CS) & 0xFFFF, i2 = VDM_REG(tib, VTIB_EIP) & 0xFFFF;
+                    const volatile BYTE *ip2 = (const volatile BYTE *)((c2 << 4) + i2);
+                    unsigned k4;
+                    --s_bud_dec;
+                    p = zput(p, "INTERP-REFUSED at 0x"); p = zhex(p, c2);
+                    p = zput(p, ":0x"); p = zhex(p, i2); p = zput(p, " bytes:");
+                    for (k4 = 0; k4 < 8; ++k4) { p = zput(p, " "); p = zhexb(p, ip2[k4]); }
+                    p = zput(p, "\r\n");
+                    log_append(LOG_PATH, base, p); p = base;
+                }
+                g_interp_refused++;
+            }
             /* Not an I/O instruction and not an A0000 touch. On this hardware event 3
                is OVERLOADED: besides the I/O reflect, it is how the kernel says "a
                hardware interrupt is pending and the VDM has interrupts enabled" -- the
@@ -4766,6 +4814,43 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
       for (i = 0, n = 0; i < 256; ++i)
           if (VID_UNIMPL_GET(g_vid.unimpl_fn, i)) { p = zput(p, " AH=0x"); p = zhexb(p, (unsigned)i); ++n; }
       if (!n) p = zput(p, " none");
+      p = zput(p, "\r\n");
+      { unsigned pl, nz[4]; 
+        for (pl = 0; pl < 4; ++pl) { unsigned k2, c2 = 0;
+            for (k2 = 0; k2 < VID_PLANE_SIZE; ++k2) if (g_vid.plane[pl][k2]) ++c2;
+            nz[pl] = c2; }
+        p = zput(p, "STAGE2: video now: mkind="); p = zhexb(p, g_vid.mkind);
+        p = zput(p, " gw="); p = zhex(p, g_vid.gw); p = zput(p, " gh="); p = zhex(p, g_vid.gh);
+        p = zput(p, " mapmask="); p = zhexb(p, g_vid.map_mask);
+        p = zput(p, " setreset="); p = zhexb(p, g_vid.set_reset);
+        p = zput(p, " ensr="); p = zhexb(p, g_vid.enable_sr);
+        p = zput(p, " wmode="); p = zhexb(p, g_vid.write_mode);
+        p = zput(p, " plane-nonzero=");
+        for (pl = 0; pl < 4; ++pl) { p = zhex(p, nz[pl]); p = zput(p, pl<3?"/":""); }
+        p = zput(p, "\r\n"); }
+      { const volatile BYTE *z0 = (const volatile BYTE *)0;
+        DWORD cs2 = VDM_REG(tib, VTIB_CS) & 0xFFFF, ip2 = VDM_REG(tib, VTIB_EIP) & 0xFFFF;
+        const volatile BYTE *cd = (const volatile BYTE *)((cs2 << 4) + ip2);
+        unsigned k3;
+        p = zput(p, "STAGE2: ivt08="); p = zhex(p, (DWORD)z0[0x22] | ((DWORD)z0[0x23] << 8));
+        p = zput(p, ":"); p = zhex(p, (DWORD)z0[0x20] | ((DWORD)z0[0x21] << 8));
+        p = zput(p, " ivt1C="); p = zhex(p, (DWORD)z0[0x72] | ((DWORD)z0[0x73] << 8));
+        p = zput(p, ":"); p = zhex(p, (DWORD)z0[0x70] | ((DWORD)z0[0x71] << 8));
+        p = zput(p, " at-cs:ip=");
+        for (k3 = 0; k3 < 8; ++k3) { p = zhexb(p, cd[k3]); p = zput(p, " "); }
+        p = zput(p, " asyncinj="); p = zhex(p, g_async_inj);
+        p = zput(p, " interp-refused="); p = zhex(p, g_interp_refused);
+        p = zput(p, " bail="); p = zhex(p, g_async_bail);
+        p = zput(p, " nestblk="); p = zhex(p, g_async_nest_blocked);
+        p = zput(p, "\r\n"); }
+      p = zput(p, "STAGE2: mode sets:");
+      for (i = 0; i < g_vid.mode_qn; ++i) {
+          p = zput(p, " mode=0x"); p = zhexb(p, g_vid.mode_q[i].mode);
+          p = zput(p, "/kind="); p = zhexb(p, g_vid.mode_q[i].kind);
+          p = zput(p, "/"); p = zhex(p, g_vid.mode_q[i].w);
+          p = zput(p, "x"); p = zhex(p, g_vid.mode_q[i].h);
+      }
+      if (!g_vid.mode_qn) p = zput(p, " none");
       p = zput(p, "\r\n");
       p = zput(p, "STAGE2: video modes unsupported:");
       for (i = 0, n = 0; i < 256; ++i)

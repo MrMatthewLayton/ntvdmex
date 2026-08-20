@@ -93,6 +93,12 @@ typedef struct video_state {
        Recorded per call so the log says which table Skyroads wants. */
     struct { uint8_t al, bh; uint16_t seg, off, cx; } font_q[4];
     uint8_t  font_qn;
+    /* Every mode set, with what it RESOLVED TO. Added after a mode-table change
+       silently altered mode 12h rendering: the STAGE2 line said "modes
+       unsupported: none" and the picture was still wrong, so "which modes were
+       refused" was not the question -- "what did each accepted mode become" was. */
+    struct { uint8_t mode, kind, cols, rows; uint16_t w, h; } mode_q[8];
+    uint8_t  mode_qn;
     uint8_t  fb[VID_FB_MAX];            /* text glyph / planar render target        */
     int      dirty;
     /* GH #27: every unimplemented path must announce itself. An INT 10h function

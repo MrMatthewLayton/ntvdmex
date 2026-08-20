@@ -335,6 +335,15 @@ static void int10(void *self, ntvdd_regs *r)
                     clear_text(st, 0x07);
                 }
             }
+            if (st->mode_qn < 8) {
+                st->mode_q[st->mode_qn].mode = st->mode;
+                st->mode_q[st->mode_qn].kind = st->mkind;
+                st->mode_q[st->mode_qn].cols = st->cols;
+                st->mode_q[st->mode_qn].rows = st->rows;
+                st->mode_q[st->mode_qn].w    = st->gw;
+                st->mode_q[st->mode_qn].h    = st->gh;
+                st->mode_qn++;
+            }
         }
         break;
     case 0x01: st->cur_shape = r_cx(r); break;
@@ -889,6 +898,7 @@ void vdd_video_reset(void *self)
     video_state *st = (video_state *)self;
     st->mode = 3; st->cols = VID_COLS; st->rows = VID_ROWS;
     st->mkind = VID_KIND_TEXT; st->gw = VID_FB_W; st->gh = VID_FB_H;
+    st->mode_qn = 0;
     st->cur_row = st->cur_col = 0; st->cur_shape = 0x0607; st->page = 0;
     st->dac_widx = st->dac_ridx = st->dac_comp = 0;
     st->seq_index = st->gc_index = 0;

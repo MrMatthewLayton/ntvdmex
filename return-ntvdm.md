@@ -472,6 +472,61 @@ clears it and still ends below the next MCB header at 0xFF0. selftest recovered 
   explained, and in each case **we match the genuine kernel** — including the CP437 collating
   table, where DOSBox fails to fold lower case onto upper and ours is byte-identical to 6.22's.
 
+★★★★ **MODE 12h: ROOT-CAUSE HUNT. One real deadlock FIXED; the remaining blocker is
+KERNEL-SIDE and is the next piece of work.**
+
+▶ **SCOPE, from the QuickBASIC demos in `demos/` (sources in `demos/src`):**
+    SCREEN 12 — BLIT, BOUNCEBX, BUBBLES, MATRIX_1, MATRIX_2, MOUSE   **6 of 10, all broken**
+    SCREEN 13 — CAVE, GFXCOPY, PALETTE                                 work (PALETTE confirmed)
+    SCREEN 0  — VS87
+  Matches the user's recollection exactly ("the mode 12h ones never did, at least not very
+  well"). Skyroads is 13h, which is why our one game never touched this path.
+
+★★★ **FIXED: `host_interp()` ran up to 2,000,000 guest instructions WITH NO WAY TO TAKE AN
+INTERRUPT.** BLIT's outer loop is `DO WHILE INKEY$ = ""` — it can only END when an interrupt
+fires. Escalated to the interpreter, it burned the whole cap, returned, re-faulted,
+re-escalated. **TEN I/O events in thirty seconds.** The interpreter is standing in for the CPU
+and a real CPU takes interrupts mid-loop, so it now checks for a pending IRQ every 256
+instructions and yields. **15x improvement (10 -> 157 events, 8x more pixel data).** selftest
+still 8/8. That fix stands on its own regardless of the rest.
+
+★★★ **THE REMAINING BLOCKER: ARMING THE A0000 PAGE TRAP STOPS THE GUEST RUNNING.**
+    trap ON  -> io_events = 10,          guest frozen at 0050:0037 in 58/60 heartbeats
+    trap OFF -> io_events = 22,532,292,  guest running QB code, PC moving every sample
+  `PAGE_NOACCESS` and `PAGE_READONLY` behave IDENTICALLY, so it is not reads-vs-writes: it is
+  protecting that range at all. Diagnostic knob added: **`noa000.flag` on the share** disables
+  the trap (absent = normal). Delete it after use.
+  ► With the trap off the guest's real inner loop is visible at its PC:
+    `DEC DX / MOV AL,07 / OUT DX,AL / INC DX / MOV AL,0F / OUT DX,AL` — per-pixel VGA register
+    reprogramming, exactly what the batching interpreter exists to absorb.
+
+▶ **RULED OUT BY MEASUREMENT — do not re-investigate these:**
+  • **The mode table** (#39). Resolves 12h correctly: `mode=0x12/kind=01/640x480`. New
+    `STAGE2: mode sets:` line proves it.
+  • **The planar write engine.** Complete and correct — 4 write modes, set/reset, ALU, bit
+    mask, latches. I nearly rewrote working code TWICE on the strength of a screenshot.
+  • **The IVT.** `ivt08=0050:0034 ivt1C=0050:003a`, and QuickBASIC has NOT hooked either.
+  • **Async IRQ injection.** 545 successes, **zero bails**, zero nest-blocks.
+  • **The "mode-12h MOV-store decoder gap"** from the M3 notes: `interp-refused=0`. The
+    interpreter never declines an opcode. That lead is DEAD.
+  • **Unhandled events.** None — no `STAGE2: stop event` line; every event is serviced.
+
+▶ **THE LIKELY SHAPE OF THE ANSWER.** The M3 planar trap was **VM-confirmed on HVF, never on
+  real hardware**, and there is precedent for exactly this class of difference: session 8 found
+  HVF reflects IOPL-0 I/O as event 0 while real silicon uses event 3. So the A0000 trap may
+  simply never have worked on the rig. Next step is kernel-side: **why does VirtualProtect on
+  A0000 stall `VdmStartExecution`** — same class of work as the #18 reflect RE, not a patch.
+  ► If that proves hard, the alternative is to stop trapping altogether and drive the
+    INTERPRETER from mode set. It already runs the guest correctly and now yields properly, and
+    it needs no page protection at all.
+
+▶ **A METHOD NOTE WORTH KEEPING.** I called this "a regression I introduced today" on the
+  strength of our new output differing from our old. **Neither was correct** — the oracle showed
+  16 colours, both builds showed 2. Different is not wrong when nothing is right. The reference
+  is the ORACLE, never our own previous build; one oracle run settled in seconds what an hour of
+  comparing our own screenshots could not. (`dosoracle.py run BLIT.EXE --timeout 22 --screenshot`
+  — the timeout path is currently the only way to get pixels out of the oracle.)
+
 ▶▶ RESUME — NEXT STEPS (in order):
   1. Finish the app queue: **43h** (ATTRIB), **5Dh** (COMMAND.COM), **11h/12h** FCB find (TREE, #36).
   2. **#30 EXEC (4Bh)** — after which a shell can actually launch a program.
@@ -842,6 +897,61 @@ disabling interrupts for any guest whose enable lives in VIF.
   explained, and in each case **we match the genuine kernel** — including the CP437 collating
   table, where DOSBox fails to fold lower case onto upper and ours is byte-identical to 6.22's.
 
+★★★★ **MODE 12h: ROOT-CAUSE HUNT. One real deadlock FIXED; the remaining blocker is
+KERNEL-SIDE and is the next piece of work.**
+
+▶ **SCOPE, from the QuickBASIC demos in `demos/` (sources in `demos/src`):**
+    SCREEN 12 — BLIT, BOUNCEBX, BUBBLES, MATRIX_1, MATRIX_2, MOUSE   **6 of 10, all broken**
+    SCREEN 13 — CAVE, GFXCOPY, PALETTE                                 work (PALETTE confirmed)
+    SCREEN 0  — VS87
+  Matches the user's recollection exactly ("the mode 12h ones never did, at least not very
+  well"). Skyroads is 13h, which is why our one game never touched this path.
+
+★★★ **FIXED: `host_interp()` ran up to 2,000,000 guest instructions WITH NO WAY TO TAKE AN
+INTERRUPT.** BLIT's outer loop is `DO WHILE INKEY$ = ""` — it can only END when an interrupt
+fires. Escalated to the interpreter, it burned the whole cap, returned, re-faulted,
+re-escalated. **TEN I/O events in thirty seconds.** The interpreter is standing in for the CPU
+and a real CPU takes interrupts mid-loop, so it now checks for a pending IRQ every 256
+instructions and yields. **15x improvement (10 -> 157 events, 8x more pixel data).** selftest
+still 8/8. That fix stands on its own regardless of the rest.
+
+★★★ **THE REMAINING BLOCKER: ARMING THE A0000 PAGE TRAP STOPS THE GUEST RUNNING.**
+    trap ON  -> io_events = 10,          guest frozen at 0050:0037 in 58/60 heartbeats
+    trap OFF -> io_events = 22,532,292,  guest running QB code, PC moving every sample
+  `PAGE_NOACCESS` and `PAGE_READONLY` behave IDENTICALLY, so it is not reads-vs-writes: it is
+  protecting that range at all. Diagnostic knob added: **`noa000.flag` on the share** disables
+  the trap (absent = normal). Delete it after use.
+  ► With the trap off the guest's real inner loop is visible at its PC:
+    `DEC DX / MOV AL,07 / OUT DX,AL / INC DX / MOV AL,0F / OUT DX,AL` — per-pixel VGA register
+    reprogramming, exactly what the batching interpreter exists to absorb.
+
+▶ **RULED OUT BY MEASUREMENT — do not re-investigate these:**
+  • **The mode table** (#39). Resolves 12h correctly: `mode=0x12/kind=01/640x480`. New
+    `STAGE2: mode sets:` line proves it.
+  • **The planar write engine.** Complete and correct — 4 write modes, set/reset, ALU, bit
+    mask, latches. I nearly rewrote working code TWICE on the strength of a screenshot.
+  • **The IVT.** `ivt08=0050:0034 ivt1C=0050:003a`, and QuickBASIC has NOT hooked either.
+  • **Async IRQ injection.** 545 successes, **zero bails**, zero nest-blocks.
+  • **The "mode-12h MOV-store decoder gap"** from the M3 notes: `interp-refused=0`. The
+    interpreter never declines an opcode. That lead is DEAD.
+  • **Unhandled events.** None — no `STAGE2: stop event` line; every event is serviced.
+
+▶ **THE LIKELY SHAPE OF THE ANSWER.** The M3 planar trap was **VM-confirmed on HVF, never on
+  real hardware**, and there is precedent for exactly this class of difference: session 8 found
+  HVF reflects IOPL-0 I/O as event 0 while real silicon uses event 3. So the A0000 trap may
+  simply never have worked on the rig. Next step is kernel-side: **why does VirtualProtect on
+  A0000 stall `VdmStartExecution`** — same class of work as the #18 reflect RE, not a patch.
+  ► If that proves hard, the alternative is to stop trapping altogether and drive the
+    INTERPRETER from mode set. It already runs the guest correctly and now yields properly, and
+    it needs no page protection at all.
+
+▶ **A METHOD NOTE WORTH KEEPING.** I called this "a regression I introduced today" on the
+  strength of our new output differing from our old. **Neither was correct** — the oracle showed
+  16 colours, both builds showed 2. Different is not wrong when nothing is right. The reference
+  is the ORACLE, never our own previous build; one oracle run settled in seconds what an hour of
+  comparing our own screenshots could not. (`dosoracle.py run BLIT.EXE --timeout 22 --screenshot`
+  — the timeout path is currently the only way to get pixels out of the oracle.)
+
 ▶▶ RESUME — NEXT STEPS (in order):
   1. **SOAK THE ASYNC PATH, THEN MAKE IT THE DEFAULT** (drop the qimode bit 4 gate). Run the
      whole tests/ battery with it on -- especially the graphical demos, the DPMI/PM tests (it
@@ -1080,6 +1190,61 @@ the ICA; we run the guest in-process and are blind until it faults.
 ▶ **54 recorded rationales** in `tools/dostest/oracle-rules.json`. Every DOSBox divergence is
   explained, and in each case **we match the genuine kernel** — including the CP437 collating
   table, where DOSBox fails to fold lower case onto upper and ours is byte-identical to 6.22's.
+
+★★★★ **MODE 12h: ROOT-CAUSE HUNT. One real deadlock FIXED; the remaining blocker is
+KERNEL-SIDE and is the next piece of work.**
+
+▶ **SCOPE, from the QuickBASIC demos in `demos/` (sources in `demos/src`):**
+    SCREEN 12 — BLIT, BOUNCEBX, BUBBLES, MATRIX_1, MATRIX_2, MOUSE   **6 of 10, all broken**
+    SCREEN 13 — CAVE, GFXCOPY, PALETTE                                 work (PALETTE confirmed)
+    SCREEN 0  — VS87
+  Matches the user's recollection exactly ("the mode 12h ones never did, at least not very
+  well"). Skyroads is 13h, which is why our one game never touched this path.
+
+★★★ **FIXED: `host_interp()` ran up to 2,000,000 guest instructions WITH NO WAY TO TAKE AN
+INTERRUPT.** BLIT's outer loop is `DO WHILE INKEY$ = ""` — it can only END when an interrupt
+fires. Escalated to the interpreter, it burned the whole cap, returned, re-faulted,
+re-escalated. **TEN I/O events in thirty seconds.** The interpreter is standing in for the CPU
+and a real CPU takes interrupts mid-loop, so it now checks for a pending IRQ every 256
+instructions and yields. **15x improvement (10 -> 157 events, 8x more pixel data).** selftest
+still 8/8. That fix stands on its own regardless of the rest.
+
+★★★ **THE REMAINING BLOCKER: ARMING THE A0000 PAGE TRAP STOPS THE GUEST RUNNING.**
+    trap ON  -> io_events = 10,          guest frozen at 0050:0037 in 58/60 heartbeats
+    trap OFF -> io_events = 22,532,292,  guest running QB code, PC moving every sample
+  `PAGE_NOACCESS` and `PAGE_READONLY` behave IDENTICALLY, so it is not reads-vs-writes: it is
+  protecting that range at all. Diagnostic knob added: **`noa000.flag` on the share** disables
+  the trap (absent = normal). Delete it after use.
+  ► With the trap off the guest's real inner loop is visible at its PC:
+    `DEC DX / MOV AL,07 / OUT DX,AL / INC DX / MOV AL,0F / OUT DX,AL` — per-pixel VGA register
+    reprogramming, exactly what the batching interpreter exists to absorb.
+
+▶ **RULED OUT BY MEASUREMENT — do not re-investigate these:**
+  • **The mode table** (#39). Resolves 12h correctly: `mode=0x12/kind=01/640x480`. New
+    `STAGE2: mode sets:` line proves it.
+  • **The planar write engine.** Complete and correct — 4 write modes, set/reset, ALU, bit
+    mask, latches. I nearly rewrote working code TWICE on the strength of a screenshot.
+  • **The IVT.** `ivt08=0050:0034 ivt1C=0050:003a`, and QuickBASIC has NOT hooked either.
+  • **Async IRQ injection.** 545 successes, **zero bails**, zero nest-blocks.
+  • **The "mode-12h MOV-store decoder gap"** from the M3 notes: `interp-refused=0`. The
+    interpreter never declines an opcode. That lead is DEAD.
+  • **Unhandled events.** None — no `STAGE2: stop event` line; every event is serviced.
+
+▶ **THE LIKELY SHAPE OF THE ANSWER.** The M3 planar trap was **VM-confirmed on HVF, never on
+  real hardware**, and there is precedent for exactly this class of difference: session 8 found
+  HVF reflects IOPL-0 I/O as event 0 while real silicon uses event 3. So the A0000 trap may
+  simply never have worked on the rig. Next step is kernel-side: **why does VirtualProtect on
+  A0000 stall `VdmStartExecution`** — same class of work as the #18 reflect RE, not a patch.
+  ► If that proves hard, the alternative is to stop trapping altogether and drive the
+    INTERPRETER from mode set. It already runs the guest correctly and now yields properly, and
+    it needs no page protection at all.
+
+▶ **A METHOD NOTE WORTH KEEPING.** I called this "a regression I introduced today" on the
+  strength of our new output differing from our old. **Neither was correct** — the oracle showed
+  16 colours, both builds showed 2. Different is not wrong when nothing is right. The reference
+  is the ORACLE, never our own previous build; one oracle run settled in seconds what an hour of
+  comparing our own screenshots could not. (`dosoracle.py run BLIT.EXE --timeout 22 --screenshot`
+  — the timeout path is currently the only way to get pixels out of the oracle.)
 
 ▶▶ RESUME — NEXT STEPS (in order):
   1. **RE the kernel's interrupt-queue interface** (the agreed direction). Find the NtVdmControl
@@ -1356,6 +1521,61 @@ SMB loop (which auto-times-out at 30 s now, so they no longer wedge -- but you s
   explained, and in each case **we match the genuine kernel** — including the CP437 collating
   table, where DOSBox fails to fold lower case onto upper and ours is byte-identical to 6.22's.
 
+★★★★ **MODE 12h: ROOT-CAUSE HUNT. One real deadlock FIXED; the remaining blocker is
+KERNEL-SIDE and is the next piece of work.**
+
+▶ **SCOPE, from the QuickBASIC demos in `demos/` (sources in `demos/src`):**
+    SCREEN 12 — BLIT, BOUNCEBX, BUBBLES, MATRIX_1, MATRIX_2, MOUSE   **6 of 10, all broken**
+    SCREEN 13 — CAVE, GFXCOPY, PALETTE                                 work (PALETTE confirmed)
+    SCREEN 0  — VS87
+  Matches the user's recollection exactly ("the mode 12h ones never did, at least not very
+  well"). Skyroads is 13h, which is why our one game never touched this path.
+
+★★★ **FIXED: `host_interp()` ran up to 2,000,000 guest instructions WITH NO WAY TO TAKE AN
+INTERRUPT.** BLIT's outer loop is `DO WHILE INKEY$ = ""` — it can only END when an interrupt
+fires. Escalated to the interpreter, it burned the whole cap, returned, re-faulted,
+re-escalated. **TEN I/O events in thirty seconds.** The interpreter is standing in for the CPU
+and a real CPU takes interrupts mid-loop, so it now checks for a pending IRQ every 256
+instructions and yields. **15x improvement (10 -> 157 events, 8x more pixel data).** selftest
+still 8/8. That fix stands on its own regardless of the rest.
+
+★★★ **THE REMAINING BLOCKER: ARMING THE A0000 PAGE TRAP STOPS THE GUEST RUNNING.**
+    trap ON  -> io_events = 10,          guest frozen at 0050:0037 in 58/60 heartbeats
+    trap OFF -> io_events = 22,532,292,  guest running QB code, PC moving every sample
+  `PAGE_NOACCESS` and `PAGE_READONLY` behave IDENTICALLY, so it is not reads-vs-writes: it is
+  protecting that range at all. Diagnostic knob added: **`noa000.flag` on the share** disables
+  the trap (absent = normal). Delete it after use.
+  ► With the trap off the guest's real inner loop is visible at its PC:
+    `DEC DX / MOV AL,07 / OUT DX,AL / INC DX / MOV AL,0F / OUT DX,AL` — per-pixel VGA register
+    reprogramming, exactly what the batching interpreter exists to absorb.
+
+▶ **RULED OUT BY MEASUREMENT — do not re-investigate these:**
+  • **The mode table** (#39). Resolves 12h correctly: `mode=0x12/kind=01/640x480`. New
+    `STAGE2: mode sets:` line proves it.
+  • **The planar write engine.** Complete and correct — 4 write modes, set/reset, ALU, bit
+    mask, latches. I nearly rewrote working code TWICE on the strength of a screenshot.
+  • **The IVT.** `ivt08=0050:0034 ivt1C=0050:003a`, and QuickBASIC has NOT hooked either.
+  • **Async IRQ injection.** 545 successes, **zero bails**, zero nest-blocks.
+  • **The "mode-12h MOV-store decoder gap"** from the M3 notes: `interp-refused=0`. The
+    interpreter never declines an opcode. That lead is DEAD.
+  • **Unhandled events.** None — no `STAGE2: stop event` line; every event is serviced.
+
+▶ **THE LIKELY SHAPE OF THE ANSWER.** The M3 planar trap was **VM-confirmed on HVF, never on
+  real hardware**, and there is precedent for exactly this class of difference: session 8 found
+  HVF reflects IOPL-0 I/O as event 0 while real silicon uses event 3. So the A0000 trap may
+  simply never have worked on the rig. Next step is kernel-side: **why does VirtualProtect on
+  A0000 stall `VdmStartExecution`** — same class of work as the #18 reflect RE, not a patch.
+  ► If that proves hard, the alternative is to stop trapping altogether and drive the
+    INTERPRETER from mode set. It already runs the guest correctly and now yields properly, and
+    it needs no page protection at all.
+
+▶ **A METHOD NOTE WORTH KEEPING.** I called this "a regression I introduced today" on the
+  strength of our new output differing from our old. **Neither was correct** — the oracle showed
+  16 colours, both builds showed 2. Different is not wrong when nothing is right. The reference
+  is the ORACLE, never our own previous build; one oracle run settled in seconds what an hour of
+  comparing our own screenshots could not. (`dosoracle.py run BLIT.EXE --timeout 22 --screenshot`
+  — the timeout path is currently the only way to get pixels out of the oracle.)
+
 ▶▶ RESUME — NEXT STEPS (in order):
   1. DONE (2026-08-19): pm32irq 32-bit async IRQ visually confirmed remotely. Next visuals to grab the
      same way (set capture.flag, fire, read shot_*.bmp): pm32gfx (32-bit gradient), mode13, and Skyroads
@@ -1525,6 +1745,61 @@ FINDINGS THIS SESSION (bare metal): ══════════════�
 ▶ **54 recorded rationales** in `tools/dostest/oracle-rules.json`. Every DOSBox divergence is
   explained, and in each case **we match the genuine kernel** — including the CP437 collating
   table, where DOSBox fails to fold lower case onto upper and ours is byte-identical to 6.22's.
+
+★★★★ **MODE 12h: ROOT-CAUSE HUNT. One real deadlock FIXED; the remaining blocker is
+KERNEL-SIDE and is the next piece of work.**
+
+▶ **SCOPE, from the QuickBASIC demos in `demos/` (sources in `demos/src`):**
+    SCREEN 12 — BLIT, BOUNCEBX, BUBBLES, MATRIX_1, MATRIX_2, MOUSE   **6 of 10, all broken**
+    SCREEN 13 — CAVE, GFXCOPY, PALETTE                                 work (PALETTE confirmed)
+    SCREEN 0  — VS87
+  Matches the user's recollection exactly ("the mode 12h ones never did, at least not very
+  well"). Skyroads is 13h, which is why our one game never touched this path.
+
+★★★ **FIXED: `host_interp()` ran up to 2,000,000 guest instructions WITH NO WAY TO TAKE AN
+INTERRUPT.** BLIT's outer loop is `DO WHILE INKEY$ = ""` — it can only END when an interrupt
+fires. Escalated to the interpreter, it burned the whole cap, returned, re-faulted,
+re-escalated. **TEN I/O events in thirty seconds.** The interpreter is standing in for the CPU
+and a real CPU takes interrupts mid-loop, so it now checks for a pending IRQ every 256
+instructions and yields. **15x improvement (10 -> 157 events, 8x more pixel data).** selftest
+still 8/8. That fix stands on its own regardless of the rest.
+
+★★★ **THE REMAINING BLOCKER: ARMING THE A0000 PAGE TRAP STOPS THE GUEST RUNNING.**
+    trap ON  -> io_events = 10,          guest frozen at 0050:0037 in 58/60 heartbeats
+    trap OFF -> io_events = 22,532,292,  guest running QB code, PC moving every sample
+  `PAGE_NOACCESS` and `PAGE_READONLY` behave IDENTICALLY, so it is not reads-vs-writes: it is
+  protecting that range at all. Diagnostic knob added: **`noa000.flag` on the share** disables
+  the trap (absent = normal). Delete it after use.
+  ► With the trap off the guest's real inner loop is visible at its PC:
+    `DEC DX / MOV AL,07 / OUT DX,AL / INC DX / MOV AL,0F / OUT DX,AL` — per-pixel VGA register
+    reprogramming, exactly what the batching interpreter exists to absorb.
+
+▶ **RULED OUT BY MEASUREMENT — do not re-investigate these:**
+  • **The mode table** (#39). Resolves 12h correctly: `mode=0x12/kind=01/640x480`. New
+    `STAGE2: mode sets:` line proves it.
+  • **The planar write engine.** Complete and correct — 4 write modes, set/reset, ALU, bit
+    mask, latches. I nearly rewrote working code TWICE on the strength of a screenshot.
+  • **The IVT.** `ivt08=0050:0034 ivt1C=0050:003a`, and QuickBASIC has NOT hooked either.
+  • **Async IRQ injection.** 545 successes, **zero bails**, zero nest-blocks.
+  • **The "mode-12h MOV-store decoder gap"** from the M3 notes: `interp-refused=0`. The
+    interpreter never declines an opcode. That lead is DEAD.
+  • **Unhandled events.** None — no `STAGE2: stop event` line; every event is serviced.
+
+▶ **THE LIKELY SHAPE OF THE ANSWER.** The M3 planar trap was **VM-confirmed on HVF, never on
+  real hardware**, and there is precedent for exactly this class of difference: session 8 found
+  HVF reflects IOPL-0 I/O as event 0 while real silicon uses event 3. So the A0000 trap may
+  simply never have worked on the rig. Next step is kernel-side: **why does VirtualProtect on
+  A0000 stall `VdmStartExecution`** — same class of work as the #18 reflect RE, not a patch.
+  ► If that proves hard, the alternative is to stop trapping altogether and drive the
+    INTERPRETER from mode set. It already runs the guest correctly and now yields properly, and
+    it needs no page protection at all.
+
+▶ **A METHOD NOTE WORTH KEEPING.** I called this "a regression I introduced today" on the
+  strength of our new output differing from our old. **Neither was correct** — the oracle showed
+  16 colours, both builds showed 2. Different is not wrong when nothing is right. The reference
+  is the ORACLE, never our own previous build; one oracle run settled in seconds what an hour of
+  comparing our own screenshots could not. (`dosoracle.py run BLIT.EXE --timeout 22 --screenshot`
+  — the timeout path is currently the only way to get pixels out of the oracle.)
 
 ▶▶ RESUME — NEXT STEPS (in order): ════════════════════════════════════════════════════════
   0. COMMIT the uncommitted bare-metal fixes (event-3, auto-exit, filebuf, PM-fault diagnostic).
