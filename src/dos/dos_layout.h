@@ -47,5 +47,9 @@
 #define DOS_CTAB_FNTERM   0x0120   /*  24 bytes */
 #define DOS_CTAB_COLLATE  0x0140   /* 258 bytes */
 #define DOS_CTAB_DBCS     0x0250   /*   4 bytes */
+/* BIOS entry stubs (INT 11h/12h/13h/14h/15h/17h/25h/26h), 4 bytes each:
+   BOP <int> ; IRET.  They live here rather than in DOS_HDLR_SEG because that
+   segment is down to scattered free bytes and these want 32 contiguous. */
+#define DOS_BIOS_STUBS    0x0300
 
 #endif /* DOS_LAYOUT_H */

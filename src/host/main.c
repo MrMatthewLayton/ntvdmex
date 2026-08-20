@@ -263,6 +263,7 @@ static int   g_dpmi_vi = 1;                 /* DPMI virtual interrupt flag (INT 
    code selector based at DOS_HDLR_SEG (0x500) so the PM handler's IRET lands on the
    planted DPMI_PMRET catcher; allocated lazily on the first 0303. */
 static struct { WORD pm_sel; DWORD pm_off; WORD rm_es; DWORD rm_di; int used; } g_cb[DPMI_CB_SLOTS];
+static BYTE g_bios_unimpl[256];   /* GH #27: BIOS services a run actually wanted */
 static WORD  g_pmret_sel = 0;
 /* GH #18: the PM-fault reflect selectors (0 = not installed). Run 67 corrected model:
    g_dpmi_fault_sel = the handler STACK selector (writable-data) written to [TIB+0x638];
@@ -3336,13 +3337,18 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
        ends in RETF (0xCB), not IRET. */
     static const BYTE bopxms[] = { VDM_BOP0, VDM_BOP1, 0x43, 0xCB };
     static const BYTE bop67[] = { VDM_BOP0, VDM_BOP1, 0x67, 0xCF }; /* INT 67h ; iret  */
+    /* GH #43/#44/#45: the BIOS interrupts we had never planted at all. Until now
+       these vectors were filled by the null-vector sweep with a bare IRET, so a
+       guest asking for the equipment list or the memory size got silence and
+       whatever was already in its registers. */
+    static const BYTE bios_ints[] = { 0x11, 0x12, 0x13, 0x14, 0x15, 0x17, 0x25, 0x26 };
     static const BYTE emmname[] = { 'E','M','M','X','X','X','X','0' };  /* EMS device header name */
     HANDLE ui = NULL;
 
     (void)hInst; (void)hPrev; (void)lpCmd; (void)nShow;
     progpath[0] = 0; args[0] = 0;
 
-    p = zput(p, "NTVDMEX clean host\r\nSTAGE0: WinMain entered [build dpmi-harness-v159]\r\n");
+    p = zput(p, "NTVDMEX clean host\r\nSTAGE0: WinMain entered [build dpmi-harness-v160]\r\n");
     log_write(LOG_PATH, report, p);
     serial_init();                                      /* DPMI harness: COM1 log sink */
     serial_out(report, p);
@@ -3574,6 +3580,16 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     /* EMS detection method 2: programs read the INT 67h vector's segment:000Ah for
        the device-driver name "EMMXXXX0". Park it in the handler segment. */
     for (i = 0; i < sizeof(emmname); ++i) hdlr[DOS_EMM_NAME_OFF + i] = emmname[i];
+
+    { unsigned bi;
+      volatile BYTE *bs = (volatile BYTE *)(DOS_CTAB_SEG << 4);
+      for (bi = 0; bi < sizeof(bios_ints); ++bi) {
+          unsigned off = DOS_BIOS_STUBS + bi * 4;
+          bs[off + 0] = VDM_BOP0; bs[off + 1] = VDM_BOP1;
+          bs[off + 2] = bios_ints[bi]; bs[off + 3] = 0xCF;   /* IRET */
+          *(volatile WORD *)(bios_ints[bi] * 4)     = (WORD)off;
+          *(volatile WORD *)(bios_ints[bi] * 4 + 2) = DOS_CTAB_SEG;
+      } }
 
     /* GH #27 -- THE NULL-VECTOR LANDMINE. A vector left at 0000:0000 sends a guest
        that INTs it to 0000:0000, where it executes the interrupt vector table
@@ -4054,6 +4070,76 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             VDM_REG(tib, VTIB_EIP) += 3;            /* -> CD 1C (chain user timer) */
             continue;
         }
+        {   /* ---- BIOS services: INT 11h/12h/13h/14h/15h/17h/25h/26h ---------
+               GH #43/#44/#45. Every one of these was previously an IRET that
+               returned whatever the caller already had in its registers.
+               NOTE ON EVIDENCE: the 6.22 oracle is NOT truth here -- QEMU runs
+               SeaBIOS, so a BIOS answer from it is another reimplementation's
+               opinion (epic #24). The equipment word and memory size are
+               statements about OUR virtual machine's configuration, which is
+               ours to declare; the rest report "not present" honestly and log,
+               rather than pretending hardware exists. */
+            unsigned bn = VDM_REG(tib, VTIB_EVENT_INFO) & 0xFF;
+            int handled = 1;
+            WORD *pflg = (WORD *)(((VDM_REG(tib, VTIB_SS) & 0xFFFF) << 4)
+                                  + (((VDM_REG(tib, VTIB_ESP) & 0xFFFF) + 4) & 0xFFFF));
+            #define BCF_SET() (*pflg |= 1)
+            #define BCF_CLR() (*pflg &= (WORD)~1)
+            #define BSETAX(v) (VDM_REG(tib, VTIB_EAX) = \
+                (VDM_REG(tib, VTIB_EAX) & 0xFFFF0000u) | ((DWORD)(v) & 0xFFFF))
+            if (bn == 0x11) {
+                /* Equipment word. Our machine: one floppy, 80x25 colour video,
+                   one parallel port, one serial port, no coprocessor.
+                   bit0 floppy present, bits4-5 video (10b = 80x25 colour),
+                   bits6-7 floppy count-1, bits9-11 serial, bits14-15 parallel. */
+                BSETAX(0x4021);
+                BCF_CLR();
+            } else if (bn == 0x12) {
+                BSETAX(640);                       /* KB of conventional memory */
+                BCF_CLR();
+            } else if (bn == 0x15) {
+                unsigned ah15 = (VDM_REG(tib, VTIB_EAX) >> 8) & 0xFF;
+                if (ah15 == 0x88) {                /* extended memory, KB */
+                    BSETAX(0x3C00);                /* 15 MB, matching the XMS pool */
+                    BCF_CLR();
+                } else if (ah15 == 0x86) {         /* wait CX:DX microseconds */
+                    BCF_CLR();                     /* the PIT already paces us */
+                } else if (ah15 == 0xC0) {         /* get system config table */
+                    BSETAX(0x8600); BCF_SET();     /* not provided -> unsupported */
+                    g_bios_unimpl[0x15] = 1;
+                } else {
+                    BSETAX((WORD)((VDM_REG(tib, VTIB_EAX) & 0xFF) | 0x8600));
+                    BCF_SET();                     /* AH=86h: unsupported fn */
+                    g_bios_unimpl[0x15] = 1;
+                }
+            } else if (bn == 0x14) {               /* serial: no port fitted */
+                BSETAX(0x0000);                    /* status: not ready       */
+                BCF_CLR();
+                g_bios_unimpl[0x14] = 1;
+            } else if (bn == 0x17) {               /* printer: none fitted    */
+                BSETAX((WORD)((VDM_REG(tib, VTIB_EAX) & 0x00FF) | 0x3000));
+                BCF_CLR();                         /* AH bit4=selected, bit5=out of paper */
+                g_bios_unimpl[0x17] = 1;
+            } else if (bn == 0x13) {               /* disk services           */
+                unsigned ah13 = (VDM_REG(tib, VTIB_EAX) >> 8) & 0xFF;
+                if (ah13 == 0x00) { BSETAX(0); BCF_CLR(); }      /* reset: ok  */
+                else if (ah13 == 0x01) { BSETAX(0); BCF_CLR(); } /* last status*/
+                else {
+                    /* We expose no raw sectors. Say so -- AH=01 "bad command"
+                       with CF -- rather than returning success and no data,
+                       which would look to the guest like an empty disk. */
+                    BSETAX(0x0100); BCF_SET();
+                    g_bios_unimpl[0x13] = 1;
+                }
+            } else if (bn == 0x25 || bn == 0x26) { /* absolute disk read/write */
+                BSETAX(0x0207); BCF_SET();         /* AL=07 drive param error  */
+                g_bios_unimpl[bn] = 1;
+            } else handled = 0;
+            #undef BCF_SET
+            #undef BCF_CLR
+            #undef BSETAX
+            if (handled) { VDM_REG(tib, VTIB_EIP) += 3; continue; }
+        }
         if ((VDM_REG(tib, VTIB_EVENT_INFO) & 0xFF) == 0x1A) {   /* INT 1Ah BIOS time */
             ntvdd_regs r; regs_load(&r, tib);
             EnterCriticalSection(&g_lock);
@@ -4475,6 +4561,11 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
       p = zput(p, "STAGE2: INT21 undefined-on-6.22 (no-op, matches DOS):");
       for (i = 0, n = 0; i < 256; ++i)
           if ((m.noop21[i >> 3] >> (i & 7)) & 1u) { p = zput(p, " AH=0x"); p = zhexb(p, (unsigned)i); ++n; }
+      if (!n) p = zput(p, " none");
+      p = zput(p, "\r\n");
+      p = zput(p, "STAGE2: BIOS partial/unimplemented:");
+      for (i = 0, n = 0; i < 256; ++i)
+          if (g_bios_unimpl[i]) { p = zput(p, " INT"); p = zhexb(p, (unsigned)i); ++n; }
       if (!n) p = zput(p, " none");
       p = zput(p, "\r\n");
       p = zput(p, "STAGE2: INT10 unimplemented:");
