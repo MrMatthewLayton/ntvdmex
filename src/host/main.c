@@ -67,6 +67,12 @@
    the DEFAULT because the page trap demonstrably freezes the guest on real
    hardware; this knob exists so the old path is still one file away. */
 #define P12OFF_FLAG   "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\p12off.flag"
+/* Dev-only: capture the exact OPL register stream a game sends, with timestamps,
+   so it can be replayed offline through BOTH our synth and a reference core and
+   the audio diffed. Counting register writes cannot say WHY an instrument sounds
+   wrong; comparing waveforms from identical input can. Absent = no cost at all. */
+#define OPLTRACE_FLAG "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\opltrace.flag"
+#define OPLTRACE_PATH "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\opltrace.txt"
 /* Async-preemption experiment knob, also on the share so it can be changed between
    runs without a rebuild. One digit: bits 0-1 = the FIXED_NTVDMSTATE pending bits to
    set before NtVdmControl(VdmQueueInterrupt) (1 = VDM_INT_HARDWARE, 2 = VDM_INT_TIMER,
@@ -261,6 +267,14 @@ static int            g_no_a000       = 0;  /* NOA000_FLAG present: leave A0000 
 static int            g_interp12      = 0;  /* INTERP12_FLAG: interpret mode 12h, no page trap */
 static int            g_p12_off       = 0;  /* P12OFF_FLAG: revert to the A0000 page trap      */
 static DWORD          g_run_start_tick= 0;  /* exec-loop start, so STAGE2 can report a RATE    */
+/* OPL register trace (opltrace.flag). One entry per write; a busy run is ~6k
+   writes a minute, so the cap is far above anything real and exists only so a
+   runaway cannot eat memory. Dropped writes are reported, never silently lost. */
+#define OPLTRACE_MAX 262144
+static struct { DWORD us; BYTE reg, val; } g_opltrace[OPLTRACE_MAX];
+static DWORD          g_opltrace_n    = 0;
+static DWORD          g_opltrace_drop = 0;
+static int            g_opltrace_on   = 0;
 /* The UI tick must be well ABOVE the guest refresh (60/70 Hz) or the phase window
    is unreachable and every present falls back to the staleness path. */
 #define VID_PRESENT_TICK_MS   5
@@ -868,6 +882,43 @@ static uint64_t host_time_us(void)
     }
     QueryPerformanceCounter(&now);
     return (uint64_t)(((now.QuadPart - s_base.QuadPart) * 1000000) / s_freq.QuadPart);
+}
+
+/* The trace hook handed to the OPL VDD. Timestamped from the same clock the CRT
+   and PIT use, so a replay reproduces the guest's real WRITE TIMING -- which is
+   most of what makes music sound like itself. */
+static void opl_trace_write(BYTE reg, BYTE val)
+{
+    if (g_opltrace_n >= OPLTRACE_MAX) { g_opltrace_drop++; return; }
+    g_opltrace[g_opltrace_n].us  = (DWORD)host_time_us();
+    g_opltrace[g_opltrace_n].reg = reg;
+    g_opltrace[g_opltrace_n].val = val;
+    g_opltrace_n++;
+}
+
+/* Write the trace out as text: one `us reg val` triple per line, hex. Text so it
+   is diffable and survives the SMB round trip; a long run is well under a MB. */
+static void opl_trace_dump(void)
+{
+    HANDLE h; DWORD i, wr;
+    static char buf[64];
+    if (!g_opltrace_on || !g_opltrace_n) return;
+    h = CreateFileA(OPLTRACE_PATH, GENERIC_WRITE, FILE_SHARE_READ, NULL,
+                    CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (h == INVALID_HANDLE_VALUE) return;
+    { char *p = buf;
+      p = zput(p, "# opl2 register trace: us reg val (hex). writes=");
+      p = zhex(p, g_opltrace_n); p = zput(p, " dropped="); p = zhex(p, g_opltrace_drop);
+      p = zput(p, "\r\n");
+      WriteFile(h, buf, (DWORD)(p - buf), &wr, NULL); }
+    for (i = 0; i < g_opltrace_n; ++i) {
+        char *p = buf;
+        p = zhex(p, g_opltrace[i].us); p = zput(p, " ");
+        p = zhexb(p, g_opltrace[i].reg); p = zput(p, " ");
+        p = zhexb(p, g_opltrace[i].val); p = zput(p, "\r\n");
+        WriteFile(h, buf, (DWORD)(p - buf), &wr, NULL);
+    }
+    CloseHandle(h);
 }
 
 static void opl_pump_time(void)
@@ -3646,6 +3697,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     g_no_a000  = (GetFileAttributesA(NOA000_FLAG) != INVALID_FILE_ATTRIBUTES);
     g_interp12 = (GetFileAttributesA(INTERP12_FLAG) != INVALID_FILE_ATTRIBUTES);
     g_p12_off  = (GetFileAttributesA(P12OFF_FLAG)   != INVALID_FILE_ATTRIBUTES);
+    g_opltrace_on = (GetFileAttributesA(OPLTRACE_FLAG) != INVALID_FILE_ATTRIBUTES);
+    if (g_opltrace_on) g_opl.trace = opl_trace_write;
     if (g_interp12) g_no_a000 = 1;              /* interpreting instead of trapping */
     /* Headless cap override (decimal ms on the share). Read before the deadline thread
        starts, since that thread sleeps on it. Clamped: below the default a typo would
@@ -4994,6 +5047,23 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         for (pl = 0; pl < 4; ++pl) { unsigned k2, c2 = 0;
             for (k2 = 0; k2 < VID_PLANE_SIZE; ++k2) if (g_vid.plane[pl][k2]) ++c2;
             nz[pl] = c2; }
+        /* OPL PROFILE (GH #21): what the guest's music driver actually asks for.
+           A gap the game never uses cannot be why the music sounds flat. */
+        opl_trace_dump();
+        p = zput(p, "STAGE2: opl: trace=");   p = zhex(p, g_opltrace_n);
+        p = zput(p, " tdrop=");               p = zhex(p, g_opltrace_drop);
+        p = zput(p, "\r\n");
+        p = zput(p, "STAGE2: opl: writes=");  p = zhex(p, g_opl.prof_writes);
+        p = zput(p, " keyons=");              p = zhex(p, g_opl.prof_keyons);
+        p = zput(p, " bd_writes=");           p = zhex(p, g_opl.prof_bd_writes);
+        p = zput(p, " bd_or=");               p = zhexb(p, g_opl.prof_bd_or);
+        p = zput(p, " keyon_am=");            p = zhex(p, g_opl.prof_keyon_am);
+        p = zput(p, " keyon_vib=");           p = zhex(p, g_opl.prof_keyon_vib);
+        p = zput(p, " am_ops=");              p = zhex(p, g_opl.prof_am_ops);
+        p = zput(p, " vib_ops=");             p = zhex(p, g_opl.prof_vib_ops);
+        p = zput(p, " waves=");               p = zhexb(p, g_opl.prof_wave_mask);
+        p = zput(p, " wse=");                 p = zhexb(p, g_opl.prof_wse);
+        p = zput(p, "\r\n");
         p = zput(p, "STAGE2: vsync: vbl_edges="); p = zhex(p, g_vid.vbl_edges);
         p = zput(p, " p3da_reads=");             p = zhex(p, g_vid.p3da_reads);
         p = zput(p, " run_ms=");                 p = zhex(p, GetTickCount() - g_run_start_tick);

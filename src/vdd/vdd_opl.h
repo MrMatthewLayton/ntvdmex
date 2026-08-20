@@ -93,6 +93,31 @@ typedef struct opl_state {
                                            so the coarse frame tick must NOT also
                                            advance the timers (that would double-
                                            count and run music at 2x tempo)       */
+
+    /* Register-write trace hook (dev only). Set by the host to capture the exact
+       stream a game sends, so it can be replayed offline through BOTH this synth
+       and a reference core (Nuked OPL3) and the outputs diffed. Counting register
+       writes cannot answer "why does this instrument sound wrong"; comparing
+       waveforms from identical input can. NULL in normal runs and in the battery. */
+    void (*trace)(uint8_t reg, uint8_t val);
+
+    /* ---- WHAT THE GAME ACTUALLY ASKS FOR (GH #21) ------------------------- *
+     * The synth has three declared gaps -- tremolo/vibrato depth (0xBD), rhythm
+     * mode (0xBD), and envelope rates anchored only to within ~2x at the extremes
+     * -- and "the music sounds a bit flat" could be any of them. Rather than rank
+     * them by ear, record what the guest's music driver REALLY writes: a feature
+     * the game never touches cannot be the cause, so this turns three plausible
+     * stories into one by elimination. Reported in the STAGE2 block.            */
+    uint32_t prof_writes;               /* register writes seen                    */
+    uint32_t prof_keyons;               /* key-on edges (notes started)            */
+    uint32_t prof_bd_writes;            /* writes to 0xBD specifically             */
+    uint8_t  prof_bd_or;                /* OR of every value written to 0xBD       */
+    uint8_t  prof_wse;                  /* reg 0x01 bit 5 (waveform select enable) */
+    uint8_t  prof_wave_mask;            /* OR of 1<<wave over every operator       */
+    uint32_t prof_am_ops;               /* bitmask: operators that ever set AM     */
+    uint32_t prof_vib_ops;              /* bitmask: operators that ever set VIB    */
+    uint32_t prof_keyon_am;             /* notes started with AM on either operator */
+    uint32_t prof_keyon_vib;            /* notes started with VIB on either op      */
 } opl_state;
 
 /* Build the device descriptor to hand to vdd_bus_add(). */

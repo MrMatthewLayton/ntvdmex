@@ -61,6 +61,8 @@ void vdd_opl_write_reg(opl_state *st, uint8_t reg, uint8_t val)
 {
     int i;
     st->reg[reg] = val;
+    st->prof_writes++;                                  /* profile: see opl_state */
+    if (st->trace) st->trace(reg, val);                 /* dev-only capture hook  */
 
     if (reg == 0x02) {                                  /* timer 1 preset         */
         st->t1_preset = val;
@@ -95,6 +97,8 @@ void vdd_opl_write_reg(opl_state *st, uint8_t reg, uint8_t val)
         st->op[i].egt  = (val >> 5) & 1;
         st->op[i].ksr  = (val >> 4) & 1;
         st->op[i].mult = val & 0x0F;
+        if (st->op[i].am)  st->prof_am_ops  |= 1u << i;   /* profile: see opl_state */
+        if (st->op[i].vib) st->prof_vib_ops |= 1u << i;
         return;
     }
     if (reg >= 0x40 && reg <= 0x55) {                   /* KSL / total level      */
@@ -118,6 +122,7 @@ void vdd_opl_write_reg(opl_state *st, uint8_t reg, uint8_t val)
     if (reg >= 0xE0 && reg <= 0xF5) {                   /* waveform select        */
         i = opl_off_to_op(reg); if (i < 0) return;
         st->op[i].wave = val & 3;                       /* OPL2: 4 waveforms      */
+        st->prof_wave_mask |= (uint8_t)(1u << (val & 3));
         return;
     }
 
@@ -134,6 +139,9 @@ void vdd_opl_write_reg(opl_state *st, uint8_t reg, uint8_t val)
             int m = vdd_opl_op_index(c, 0), cr = vdd_opl_op_index(c, 1);
             st->op[m].eg_state = OPL_EG_ATTACK; st->op[m].phase = 0;
             st->op[cr].eg_state = OPL_EG_ATTACK; st->op[cr].phase = 0;
+            st->prof_keyons++;                          /* profile: see opl_state  */
+            if (st->op[m].am  || st->op[cr].am)  st->prof_keyon_am++;
+            if (st->op[m].vib || st->op[cr].vib) st->prof_keyon_vib++;
         } else if (!kon && st->ch[c].keyon) {           /* key-off edge: release  */
             st->op[vdd_opl_op_index(c, 0)].eg_state = OPL_EG_RELEASE;
             st->op[vdd_opl_op_index(c, 1)].eg_state = OPL_EG_RELEASE;
@@ -149,6 +157,8 @@ void vdd_opl_write_reg(opl_state *st, uint8_t reg, uint8_t val)
     }
     /* 0x01 (test/WSE), 0x08 (CSM/NTS), 0xBD (rhythm/depth) are stored in reg[]
        and consulted by the synth; nothing to decode here. */
+    if (reg == 0xBD) { st->prof_bd_writes++; st->prof_bd_or |= val; }
+    if (reg == 0x01 && (val & 0x20)) st->prof_wse = 1;
 }
 
 /* --- ports 0x388 / 0x389 -------------------------------------------------- */
