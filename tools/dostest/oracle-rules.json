@@ -38,5 +38,25 @@
     ],
     "recorded": "2026-08-20",
     "why": "The case asks what DOS reports for a drive that does not exist, using DL=26 (Z:). DOSBox-X ALWAYS MOUNTS Z: as its own virtual utility drive, so on that host the drive does exist and 0x0020 is a correct answer to a different question. Real 6.22 has no Z: and returns AX=FFFF -- with CARRY CLEAR, which is the part worth remembering: it is not a CF error."
+  },
+  {
+    "probe": "find",
+    "case": "int21.4F.after.failed.4E",
+    "field": "AX",
+    "abstain": [
+      "dosbox-x"
+    ],
+    "recorded": "2026-08-20",
+    "why": "Measures whether a FAILED find-first clobbers the search state already sitting in the DTA. Real MS-DOS 6.22 leaves it alone, so the following find-next carries on the earlier live '*.*' search and succeeds (AX=0, CF=0). DOSBox-X resets the state and reports no-more-files (AX=0x12, CF=1). NTVDMEX matches 6.22, because our find-first only writes the DTA search fields on success -- worth keeping that way deliberately rather than by accident."
+  },
+  {
+    "probe": "find",
+    "case": "int21.4F.after.failed.4E",
+    "field": "CF",
+    "abstain": [
+      "dosbox-x"
+    ],
+    "recorded": "2026-08-20",
+    "why": "Measures whether a FAILED find-first clobbers the search state already sitting in the DTA. Real MS-DOS 6.22 leaves it alone, so the following find-next carries on the earlier live '*.*' search and succeeds (AX=0, CF=0). DOSBox-X resets the state and reports no-more-files (AX=0x12, CF=1). NTVDMEX matches 6.22, because our find-first only writes the DTA search fields on success -- worth keeping that way deliberately rather than by accident."
   }
 ]

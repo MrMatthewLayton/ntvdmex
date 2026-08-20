@@ -68,6 +68,60 @@ static const uint8_t ctry_us[24] = {
     0x2C, 0x00
 };
 
+/* ---- INT 21h 4Eh/4Fh find-first/find-next.  GH #29. --------------------------
+ *
+ * DTA BLOCK LAYOUT, read off the oracle byte for byte (tools/dostest/p_find.asm).
+ * The dump cross-checks itself: the size field came back 0xD575 = 54645, which is
+ * COMMAND.COM's exact byte count.
+ *
+ *   [0]      drive number            [1-11]  11-byte search template
+ *   [12]     search attributes       [13-14] directory entry number
+ *   [15-16]  starting cluster        [17-20] reserved (DOS search state)
+ *   [21]     attribute of the file found
+ *   [22-23]  time      [24-25] date      [26-29] size (dword)
+ *   [30-42]  filename, ASCIIZ, 13 bytes
+ *
+ * The block is 43 bytes: byte 43 came back still poisoned, so nothing beyond it
+ * may be written.
+ *
+ * DOS keeps its own search state in the first 21 bytes.  We keep a Win32 handle
+ * instead and stash the slot number there, so a program that saves and restores
+ * its DTA between calls -- which real programs do -- resumes the right search.
+ */
+#define DOS_FIND_MAGIC 0x4E
+
+static int dta_match(DWORD attr, uint16_t mask)
+{
+    /* DOS's rule is "normal files always match; these extras only if asked". */
+    if ((attr & FILE_ATTRIBUTE_DIRECTORY) && !(mask & 0x10)) return 0;
+    if ((attr & FILE_ATTRIBUTE_HIDDEN)    && !(mask & 0x02)) return 0;
+    if ((attr & FILE_ATTRIBUTE_SYSTEM)    && !(mask & 0x04)) return 0;
+    return 1;
+}
+
+static void dta_fill(volatile BYTE *d, const WIN32_FIND_DATAA *fd)
+{
+    FILETIME lf;
+    WORD fdate = 0, ftime = 0;
+    const char *nm = fd->cAlternateFileName[0] ? fd->cAlternateFileName : fd->cFileName;
+    int k;
+    if (FileTimeToLocalFileTime(&fd->ftLastWriteTime, &lf))
+        FileTimeToDosDateTime(&lf, &fdate, &ftime);   /* DOS times are LOCAL */
+    d[21] = (BYTE)(fd->dwFileAttributes & 0x3F);
+    d[22] = (BYTE)(ftime & 0xFF);  d[23] = (BYTE)(ftime >> 8);
+    d[24] = (BYTE)(fdate & 0xFF);  d[25] = (BYTE)(fdate >> 8);
+    d[26] = (BYTE)( fd->nFileSizeLow        & 0xFF);
+    d[27] = (BYTE)((fd->nFileSizeLow >> 8)  & 0xFF);
+    d[28] = (BYTE)((fd->nFileSizeLow >> 16) & 0xFF);
+    d[29] = (BYTE)((fd->nFileSizeLow >> 24) & 0xFF);
+    for (k = 0; k < 12 && nm[k]; ++k) {
+        char ch = nm[k];
+        if (ch >= 'a' && ch <= 'z') ch = (char)(ch - 32);   /* DOS reports 8.3 upper */
+        d[30 + k] = (BYTE)ch;
+    }
+    d[30 + k] = 0;
+}
+
 /* Copy an ASCIIZ string out of V86 memory (seg:off) into a host buffer. */
 static void v86_str(DWORD seg, DWORD off, char *dst, int max)
 {
@@ -81,6 +135,7 @@ void dos_int21_init(dos_machine_t *m, uint16_t first_mcb)
 {
     int i;
     for (i = 0; i < 24; ++i) m->fh[i] = 0;
+    for (i = 0; i < 8; ++i) m->find_h[i] = 0;
     m->first_mcb = first_mcb;
     m->dta_seg = DOS_PSP_SEG;
     m->dta_off = 0x0080;
@@ -260,6 +315,59 @@ int dos_int21(dos_machine_t *m)
         SET16(R_BX, 0xFF00);                    /* BH=OEM 0xFF, BL=serial high */
         SET16(R_CX, 0x0000);                    /* serial low                  */
         OKCF();
+    } else if (ah == 0x4E || ah == 0x4F) {      /* find first / find next */
+        volatile BYTE *d = (volatile BYTE *)((m->dta_seg << 4) + m->dta_off);
+        WIN32_FIND_DATAA fd;
+        uint16_t mask;
+        int slot = -1, ok = 0;
+        if (ah == 0x4E) {
+            char pat[300];
+            v86_str(R_DS, R_DX, pat, sizeof(pat));
+            mask = (uint16_t)(R_CX & 0xFFFF);
+            for (slot = 0; slot < 8 && m->find_h[slot]; ++slot) {}
+            if (slot >= 8) { slot = 0;                       /* recycle the oldest */
+                             FindClose(m->find_h[0]); m->find_h[0] = 0; }
+            { HANDLE hf = FindFirstFileA(pat, &fd);
+              if (hf == INVALID_HANDLE_VALUE) {
+                  DWORD e = GetLastError();
+                  /* ORACLE-CONFIRMED, and not what memory suggests: a pattern
+                     that matches nothing inside an EXISTING directory is
+                     AX=18 "no more files", not AX=2 "file not found". A missing
+                     directory is AX=3. */
+                  SETAX(e == ERROR_PATH_NOT_FOUND ? 3 : 18);
+                  ERRCF();
+              } else {
+                  m->find_h[slot] = hf;
+                  ok = 1;
+                  while (!dta_match(fd.dwFileAttributes, mask)) {
+                      if (!FindNextFileA(hf, &fd)) { ok = 0; break; }
+                  }
+                  d[0] = 3;                                  /* drive C:        */
+                  d[12] = (BYTE)(mask & 0xFF);
+                  d[19] = DOS_FIND_MAGIC;
+                  d[20] = (BYTE)slot;
+              }
+            }
+        } else {                                             /* 4Fh: continue   */
+            mask = (uint16_t)d[12];
+            if (d[19] == DOS_FIND_MAGIC && d[20] < 8 && m->find_h[d[20]]) {
+                slot = d[20];
+                ok = 1;
+                do {
+                    if (!FindNextFileA(m->find_h[slot], &fd)) { ok = 0; break; }
+                } while (!dta_match(fd.dwFileAttributes, mask));
+            } else {
+                SETAX(18); ERRCF();                          /* no search live  */
+            }
+        }
+        if (slot >= 0 && ok) {
+            dta_fill(d, &fd);
+            SETAX(0); OKCF();                                /* oracle: AX=0000 */
+        } else if (slot >= 0 && m->find_h[slot] && !ok) {
+            FindClose(m->find_h[slot]); m->find_h[slot] = 0;
+            d[19] = 0;
+            SETAX(18); ERRCF();                              /* no more files   */
+        }
     } else if (ah == 0x47) {                    /* get current directory -> DS:SI */
         /* DOS returns the path WITHOUT the drive letter and WITHOUT a leading
            backslash, ASCIIZ.  Oracle at the root writes exactly ONE byte -- the

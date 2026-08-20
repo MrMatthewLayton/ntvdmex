@@ -322,11 +322,35 @@ A handler-segment offset map is now in main.c next to the define — check it be
   this is a SILENT wrongness in the MCB chain / SysVars stub (52h returns only the MCB head) and
   in XMS reporting. Worth fixing before trusting any memory-related parity claim.
 
+★★★ **#29 FIND FIRST/NEXT (4Eh/4Fh) DONE — `TREE.COM` NOW RENDERS ITS DIRECTORY LISTING.**
+  Oracle-matched on every case. Second real 6.22 tool working (after MEM.EXE).
+  ▶ **DTA BLOCK LAYOUT read off the oracle** and documented in dos_int21.c. The dump
+    cross-checks itself: the size field came back 0xD575 = 54645 = COMMAND.COM's exact byte
+    count. Block is **43 bytes** — byte 43 came back still poisoned, so nothing past it may be
+    written. Fields: [21] attr, [22-23] time, [24-25] date, [26-29] size, [30-42] name ASCIIZ.
+  ▶ **A PATTERN THAT MATCHES NOTHING IS AX=18 ("no more files"), NOT AX=2.** Memory says 2;
+    the oracle says 0x12. A missing *directory* is AX=3. Getting this from memory would have
+    been wrong in the most plausible-looking way.
+  ▶ Win32 handles live in `m->find_h[8]`; the slot is stashed in the DTA's own search-state
+    bytes, so a program that saves and restores its DTA between calls resumes the right search.
+  ▶ **WE MATCH A 6.22 QUIRK: a FAILED 4Eh does not clobber a live search in the DTA**, so a
+    following 4Fh carries on the earlier search. DOSBox-X resets it. We match DOS because our
+    4Eh only writes the DTA search fields on success — now recorded as deliberate, not accident.
+  ▶ Probe case naming matters: this case was first called `4F.exhausted`, which made a correct
+    result look like our bug. Renamed to `4F.after.failed.4E`.
+
+▶ **COVERAGE (measured): 45 of the 103 INT 21h services 6.22 defines = 44%.** Of the 58 missing,
+  19 are the legacy FCB group (#36). Per-app remaining: MEM **none**, CHKDSK `60`,
+  COMMAND.COM `5D 65`, TREE `11 59 69`.
+
 ▶▶ RESUME — NEXT STEPS (in order):
-  1. **#29 find first/next (4Eh/4Fh) + DTA** — the load-bearing one for DIR, and the last big
-     blocker before COMMAND.COM is useful. Then 65h, 60h, 5Dh, 59h, 69h, 11h/12h.
-     Then **#30 EXEC (4Bh)**, after which a shell can actually launch a program.
-  2. Fix the MEM.EXE numbers (above).
+  1. Finish the app queue: **65h** (ATTRIB, COMMAND.COM), **60h** truename (CHKDSK), **5Dh**
+     (COMMAND.COM), **59h** extended error (#34), **69h**, **11h/12h** FCB find (#36).
+  2. **#30 EXEC (4Bh)** — after which a shell can actually launch a program.
+  3. Fix the MEM.EXE numbers (silent wrongness, see above).
+  4. Then the BIOS layer (#39-#46), which is the thin part: ~19 INT 10h functions, only 2 of
+     ~19 video modes, and INT 13h/14h/15h/17h/25h/26h essentially absent. Note the oracle is
+     NOT truth there (SeaBIOS) — video questions need the Dell box.
   2. **Finish #26: wire stock ntvdm** (still needs the rt.bat IFEO variant + the user's call on
      the display-wedge risk).
   3. #28's menu selector. Until `ntvdmex` runs there is NO subject in the

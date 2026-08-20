@@ -23,6 +23,7 @@ typedef struct {
     uint8_t  alloc_strat;      /* AH=58h allocation strategy (0 = first fit)       */
     uint8_t  umb_link;         /* AH=58h UMB link state (0 = not linked)           */
     uint16_t sysvars_seg, sysvars_off;  /* AH=52h list of lists, planted by the host */
+    HANDLE   find_h[8];        /* AH=4Eh/4Fh live searches; slot stashed in the DTA */
     char    *out; int out_cap; int out_len;  /* captured console output (02/09/40) */
     int      out_trunc;        /* set when output was dropped -- see OUTC()        */
     uint8_t  unimpl21[32];     /* GH #27: DOS-defined services we have not written  */
