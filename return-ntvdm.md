@@ -60,7 +60,8 @@
       disputed BIOS cases, not part of the daily cycle. Note both bugs fixed in session 12
       were BIOS-layer, so this is the weakest part of our evidence base.
 
-▶ ORDERING: prerequisites (#25 oracle, #26 differential harness, #27 loud failure) FIRST.
+▶ ORDERING: prerequisites (#25 oracle ✅ DONE 2026-08-20 — see session-13 block below;
+  #26 differential harness, #27 loud failure) FIRST.
   Then run the real applications -- command.com, edit.com, qbasic, Doom -- to turn the gap
   list into an EVIDENCE-RANKED list, because real programs exercise combinations no test
   author invents. Then TDD each gap in priority order. The two load-bearing gaps for
@@ -84,6 +85,85 @@
   is down to milliseconds. Also queued behind this epic: hardware grounding (CPU affinity,
   SpeedStep), which lands on our timing path since guest clocks come from
   QueryPerformanceCounter.
+
+═══════════════════════════════════════════════════════════════════════════════
+██ CHECKPOINT — 2026-08-20 (session 13). ██
+═══════════════════════════════════════════════════════════════════════════════
+
+▶ RESTART POINT: branch `main`. **#25 (the MS-DOS 6.22 oracle) IS DONE AND WORKING.**
+  Full write-up: `docs/research/dos-oracle.md`. Nothing is committed yet.
+
+★★★ **THE PRIMARY ORACLE EXISTS.** Genuine Microsoft MS-DOS 6.22 under QEMU on the dev
+Mac, queryable in ~3 s, offline, no rig:
+    ./scripts/oracle.sh tools/dostest/dosver.com     # run a guest binary on real DOS
+    ./scripts/oracle.sh --batch "VER"                # run DOS commands
+    ./scripts/oracle.sh --selftest                   # 4/4 PASS
+  Media = four retail floppies in `./msdos-622` (gitignored). Build =
+  `python3 scripts/dosoracle/build.py`, ~75 s, produces `vm/dos622.img` (504 MB, 194 files
+  in C:\DOS). Importable as `from dosoracle import Oracle` — that is the interface #26's
+  differential harness should drive.
+
+  ▶ **THE INSTALL DOES NOT DRIVE SETUP.EXE, DELIBERATELY.** SETUP is interactive and would
+    need keystroke synthesis against screen state — the fragile loop that yields a slightly
+    different disk every run. `PACKING.LST` on Disk 1 is MICROSOFT'S OWN compressed→expanded
+    name table for all three disks, so the install is a deterministic list of EXPAND/COPY
+    commands run over 5 non-interactive QEMU passes. Same genuine binaries either way.
+    The supplemental disk has no PACKING.LST; its rules come from its own SETUP.BAT/SD6COPY.BAT.
+    Names are NOT derivable from the underscore — `GORILLA.BA_`→`.BAS` but `DRVBOOT.BA_`→`.BAT`,
+    `WNTOOLS.GR_`→`.GRB`. Unresolvable names are SKIPPED AND LOGGED, never dropped silently.
+
+  ▶ CAPTURE, two paths on purpose: stdout via a scratch floppy (needs NO cooperation from the
+    program, so unmodified binaries like MEM/DIR work) and COM1 serial (survives a guest that
+    hangs after printing). Guest exits itself via `QUIT.COM` → QEMU `isa-debug-exit` → host
+    status 85. No keystrokes, no screen scraping, no timing assumptions.
+
+★★ **THE CARDINAL RULE ALREADY CAUGHT ME — IN MY OWN SELFTEST.** I asserted
+`DIR C:\DOS\*.EXE | FIND "File(s)"` from memory of what DIR prints. Real 6.22 prints
+**`file(s)` LOWER-CASE** and DOS's FIND is case-sensitive, so it matched nothing — **and the
+check still reported PASS**, because it only asserted "some output appeared" and a stray
+sentinel satisfied that. Both halves are the lesson: an expectation from memory is wrong more
+often than it feels, and a weak assertion converts a silent failure into a confident green tick.
+Selftest cases now assert a substring transcribed from the oracle's real output.
+
+★ FIRST ORACLE-CONFIRMED EVIDENCE, for **#28 (configurable DOS version)** —
+`tools/dostest/dosver.com` (new):
+    INT21.30   major=06 minor=16 oem=FF serial=00:0000     ⇒ AH=30h must return **AX=0x1606**
+    INT21.3306 major=06 minor=16 rev=00 flags=10 cf=00
+  We currently return **AX=0x0005** ("5.0"). BH=0xFF = generic MS-DOS OEM; serial is zero.
+  ► **DH=0x10 from 3306h is CONFIG-DEPENDENT, not a constant** — bit 4 = "DOS is in the HMA",
+    and this image boots `DOS=HIGH`. Any test asserting DH must control DOS=HIGH too.
+
+▶ TRAPS FOUND BUILDING IT (all cost real time; all in docs/research/dos-oracle.md):
+  • **DOS parses `<` and `>` inside ECHO.** Sentinels `---8<---`/`--->8---` made DOS write a
+    file literally called `8---`. Use `[BEGIN]`/`[END]`.
+  • `ECHO foo > file` writes `"foo "` — the space before the redirect is part of the text.
+  • **vvfat is NOT USABLE.** `fat:ro:` as a hard disk is refused ("Block node is read-only");
+    as `fat:floppy:ro:` it served the **WRONG FILE CONTENTS** (TYPE of a 20-byte file printed
+    fragments of vvfat's own volume structures) and then hung the guest. `--dir` synthesises a
+    throwaway raw FAT image with mtools instead. This supersedes #25's `-drive file=fat:ro:`
+    instruction — the reason for that instruction (vvfat is corruption-prone) stands; the
+    remedy does not go far enough.
+  • **The dev sandbox refuses to bind a unix socket anywhere**, TMPDIR included — the QEMU
+    monitor runs on **stdio**, not QMP.
+  • The floppies' boot-sector OEM field says `MSDOS5.0` on all four disks. That is what 6.22's
+    own FORMAT writes; it is NOT a version indicator. Genuineness was confirmed from the
+    `1994-05-31 6:22` build stamp on every file instead.
+
+▶ KNOWN GAP, NOT PAPERED OVER: screenshots are captured only on TIMEOUT, as a diagnostic.
+  There is no capture-screen-on-success path, so this oracle cannot answer "what pixels did
+  that produce". Per the epic's own BIOS caveat QEMU video would be weak evidence anyway
+  (SeaBIOS, not a real VGA BIOS) — video questions want the Dell OptiPlex.
+
+▶▶ RESUME — NEXT STEPS (in order):
+  1. **#26 differential harness** — one `.COM`, four hosts, one diff. The oracle side is done
+     and importable; what is missing is the NTVDMEX side and the diff/report. Build it on
+     `Oracle.run()`.
+  2. **#27 make every unimplemented path LOUD.** The IVT landmine first (vectors that read
+     0000:0000 and get executed as code).
+  3. Then the EVIDENCE PASS: run command.com / edit.com / qbasic / Doom and rank the gaps by
+     what real programs actually hit, before implementing any of #29-#46.
+  4. Nothing is committed. `scripts/dosoracle/`, `scripts/oracle.sh`,
+     `tools/dostest/dosver.{asm,com}`, `docs/research/dos-oracle.md` are all untracked.
 
 ═══════════════════════════════════════════════════════════════════════════════
 ██ CHECKPOINT — 2026-08-19 (session 12). ██
