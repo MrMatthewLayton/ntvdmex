@@ -17,6 +17,16 @@
 # DOS oracle scratch: install control floppies, source-disk copies, run temporaries
 /scripts/dosoracle/_build/
 
+# Native off-VM test binaries: rebuilt by tools/dostest/run.sh on every run, so
+# tracking them means binary churn in every commit. Repo convention is that the
+# guest .COM binaries ARE tracked (they cannot be assembled on the target) and
+# these are NOT.
+/tools/dostest/*_test
+
+# Scratch kernel-debugger scripts that predate this branch and are not part of it
+/scripts/kd_*.py
+/scripts/trace_break.py
+
 # Generated DOS test stubs (reproducible via tools/wowprobe/make-*.sh)
 /tools/wowprobe/dosstub.com
 /tools/wowprobe/dosstub.exe
