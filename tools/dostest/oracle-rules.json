@@ -228,5 +228,113 @@
     ],
     "recorded": "2026-08-20",
     "why": "Real 6.22 returns the active CODE PAGE in AX for every AH=65h subfunction (0x1B5 = 437). DOSBox-X leaves AX holding the call number it was given (6502h, 6504h...), i.e. it does not set AX at all. The descriptor and table pointer it returns are fine; only this register differs, so it is not evidence about what DOS puts in AX."
+  },
+  {
+    "probe": "ctry",
+    "case": "ctry.block",
+    "field": "BUF",
+    "ignore_bytes": [
+      [
+        18,
+        4
+      ]
+    ],
+    "recorded": "2026-08-20",
+    "why": "The country block embeds a FAR POINTER to DOS's case-mapping routine at offset 18, and that address is a property of the host, not of DOS -- the oracle's 0116:0CF5, ours in the handler segment, DOSBox's somewhere else. It is the buffer equivalent of DS/ES, so those four bytes are excluded and the rest of the block IS compared."
+  },
+  {
+    "probe": "ctry",
+    "case": "ctry.block.us",
+    "field": "BUF",
+    "ignore_bytes": [
+      [
+        18,
+        4
+      ]
+    ],
+    "recorded": "2026-08-20",
+    "why": "The country block embeds a FAR POINTER to DOS's case-mapping routine at offset 18, and that address is a property of the host, not of DOS -- the oracle's 0116:0CF5, ours in the handler segment, DOSBox's somewhere else. It is the buffer equivalent of DS/ES, so those four bytes are excluded and the rest of the block IS compared."
+  },
+  {
+    "probe": "misc",
+    "case": "ctry65",
+    "field": "BUF",
+    "ignore_bytes": [
+      [
+        25,
+        4
+      ]
+    ],
+    "recorded": "2026-08-20",
+    "why": "The country block embeds a FAR POINTER to DOS's case-mapping routine at offset 18, and that address is a property of the host, not of DOS -- the oracle's 0116:0CF5, ours in the handler segment, DOSBox's somewhere else. It is the buffer equivalent of DS/ES, so those four bytes are excluded and the rest of the block IS compared."
+  },
+  {
+    "probe": "ctry",
+    "case": "ctry.block.us",
+    "field": "BUF",
+    "abstain": [
+      "dosbox-x"
+    ],
+    "ignore_bytes": [
+      [
+        18,
+        4
+      ]
+    ],
+    "recorded": "2026-08-20",
+    "why": "DOSBox-X does not implement AH=38h with AL=FFh (it returns CF=1 and leaves the buffer untouched, still full of the probe's 0xEE poison), so it has no answer to give here. Real 6.22 fills the block. The country block embeds a FAR POINTER to DOS's case-mapping routine at offset 18, and that address is a property of the host, not of DOS -- the oracle's 0116:0CF5, ours in the handler segment, DOSBox's somewhere else. It is the buffer equivalent of DS/ES, so those four bytes are excluded and the rest of the block IS compared."
+  },
+  {
+    "probe": "ctry",
+    "case": "ctry.block",
+    "field": "BUF",
+    "abstain": [
+      "dosbox-x"
+    ],
+    "recorded": "2026-08-20",
+    "why": "With the case-map pointer masked out, the blocks differ in ONE byte: the US date separator. Genuine MS-DOS 6.22 uses '-' (0x2D); DOSBox-X uses '/' (0x2F). NTVDMEX is byte-identical to the oracle across the whole block. DOSBox is stating its own convention, not reporting 6.22's."
+  },
+  {
+    "probe": "ctry",
+    "case": "int21.3800",
+    "field": "AX",
+    "abstain": [
+      "dosbox-x"
+    ],
+    "recorded": "2026-08-20",
+    "why": "Real 6.22 returns the country code in AX (0001). DOSBox-X leaves AX holding the call number it was passed (3801h), i.e. it does not write AX at all -- the same pattern as its AH=65h handling. Not evidence about what DOS returns."
+  },
+  {
+    "probe": "ctry",
+    "case": "int21.38FF.us",
+    "field": "AX",
+    "abstain": [
+      "dosbox-x"
+    ],
+    "recorded": "2026-08-20",
+    "why": "Real 6.22 supports AH=38h with AL=FFh (country code supplied in BX) and returns the country code in AX. DOSBox-X does not implement that form: it returns CF=1 with AX untouched and the caller's buffer left as it was."
+  },
+  {
+    "probe": "ctry",
+    "case": "int21.38FF.us",
+    "field": "CF",
+    "abstain": [
+      "dosbox-x"
+    ],
+    "recorded": "2026-08-20",
+    "why": "As above: DOSBox-X does not implement AH=38h AL=FFh and reports failure, where genuine 6.22 succeeds."
+  },
+  {
+    "probe": "find",
+    "case": "dta.after.4E",
+    "field": "BUF",
+    "ignore_bytes": [
+      [
+        0,
+        44
+      ]
+    ],
+    "recorded": "2026-08-20",
+    "why": "The DTA after a successful find-first describes THE FILE THAT WAS FOUND -- name, size, date, attributes -- plus DOS's private search state. Every host searches a different directory (the oracle's A:, the rig's C:\\\\test, DOSBox's mount), so not one byte of it is comparable across hosts. It is still dumped, because reading it is how the block layout was established in the first place, but it is excluded from the verdict. The layout itself is asserted by the register cases and documented in dos_int21.c."
   }
 ]

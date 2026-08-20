@@ -345,8 +345,32 @@ int dos_int21(dos_machine_t *m)
                   while (!dta_match(fd.dwFileAttributes, mask)) {
                       if (!FindNextFileA(hf, &fd)) { ok = 0; break; }
                   }
+                  /* Fill DOS's private search area deterministically.  It is
+                     DOS-private, but leaving the caller's bytes lying in it
+                     means the DTA differs run to run for no reason; real 6.22
+                     puts the EXPANDED 11-byte search template there (a "*.*"
+                     search reads back as eleven '?'), so do the same. */
+                  { const char *q = pat; int bi = 0, ei, dot = 0;
+                    for (bi = 0; bi < 11; ++bi) d[1 + bi] = ' ';
+                    /* skip any path, match on the final component only */
+                    { const char *r2 = pat;
+                      for (; *r2; ++r2) if (*r2 == '\\' || *r2 == '/' || *r2 == ':') q = r2 + 1; }
+                    for (bi = 0; bi < 8 && q[dot] && q[dot] != '.'; ++dot) {
+                        if (q[dot] == '*') { while (bi < 8) d[1 + bi++] = '?'; 
+                                             while (q[dot] && q[dot] != '.') ++dot; break; }
+                        d[1 + bi++] = (BYTE)(q[dot] >= 'a' && q[dot] <= 'z'
+                                             ? q[dot] - 32 : q[dot]);
+                    }
+                    if (q[dot] == '.') ++dot;
+                    for (ei = 0; ei < 3 && q[dot]; ++dot) {
+                        if (q[dot] == '*') { while (ei < 3) d[9 + ei++] = '?'; break; }
+                        d[9 + ei++] = (BYTE)(q[dot] >= 'a' && q[dot] <= 'z'
+                                             ? q[dot] - 32 : q[dot]);
+                    } }
                   d[0] = 3;                                  /* drive C:        */
                   d[12] = (BYTE)(mask & 0xFF);
+                  d[13] = 0; d[14] = 0; d[15] = 0; d[16] = 0;
+                  d[17] = 0; d[18] = 0;
                   d[19] = DOS_FIND_MAGIC;
                   d[20] = (BYTE)slot;
               }
@@ -705,7 +729,9 @@ int dos_int21(dos_machine_t *m)
            not written it yet.  CF=1 is right for that: a quiet "success" would
            tell the program its request worked when nothing happened.  Functions
            DOS does not define are handled above and stay silent, matching DOS. */
-        tp = zput(tp, "  INT21 AH=0x"); tp = zhex(tp, ah); tp = zput(tp, " UNIMPLEMENTED\r\n");
+        tp = zput(tp, "  INT21 AH=0x"); tp = zhexb(tp, (unsigned)ah);
+        tp = zput(tp, " AL=0x"); tp = zhexb(tp, (unsigned)(R_AX & 0xFF));
+        tp = zput(tp, " UNIMPLEMENTED\r\n");
         m->unimpl21[(ah & 0xFF) >> 3] |= (uint8_t)(1u << (ah & 7));
         ERRCF();
     }

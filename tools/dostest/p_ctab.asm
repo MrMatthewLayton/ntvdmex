@@ -43,7 +43,7 @@
         int     21h
         call    probe_capture
         EMIT    %2, "AX,CF"
-        EMIT_BUF %2, blk, 5
+        EMIT_BUF {%2, ".desc"}, blk, 5
 
         ; follow the far pointer at blk+1 and copy the table locally
         push    ds
@@ -57,7 +57,7 @@
         cld
         rep     movsb
         pop     ds
-        EMIT_BUF %2, tab, %3
+        EMIT_BUF {%2, ".tab"}, tab, %3
 %endmacro
 
 start:

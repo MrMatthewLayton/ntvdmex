@@ -64,20 +64,54 @@ def load_rules(path=RULES_PATH):
         return json.load(f)
 
 
+def mask_buf(hexs, ignore):
+    """Blank byte ranges that cannot be compared across hosts.
+
+    The buffer analogue of SIG. A country block embeds a FAR POINTER to DOS's
+    case-map routine, which lives at a different address on every host -- the
+    same class of thing as DS/ES, and comparing it manufactures a disagreement
+    that means nothing. `ignore` is a list of [offset, length] in BYTES.
+    """
+    if not hexs or not ignore:
+        return hexs
+    b = list(hexs)
+    for off, ln in ignore:
+        for i in range(off * 2, min((off + ln) * 2, len(b))):
+            b[i] = "."
+    return "".join(b)
+
+
 def rule_for(rules, probe, case, field):
-    for r in rules:
-        if r.get("probe") and r["probe"] != probe:
-            continue
-        if r["case"] == case and r["field"].upper() == field.upper():
-            return r
-    return None
+    """All rules for this field, MERGED.
+
+    Merged rather than first-match-wins: two rules for the same field is an easy
+    mistake to make (one recording an abstention, one a byte mask), and
+    first-match silently drops the second -- which looks exactly like the rule
+    not working.
+    """
+    hits = [r for r in rules
+            if (not r.get("probe") or r["probe"] == probe)
+            and r["case"] == case and r["field"].upper() == field.upper()]
+    if not hits:
+        return None
+    out = {"abstain": [], "ignore_bytes": [], "why": ""}
+    whys = []
+    for r in hits:
+        out["abstain"] += r.get("abstain", [])
+        out["ignore_bytes"] += r.get("ignore_bytes", [])
+        if r.get("why") and r["why"] not in whys:
+            whys.append(r["why"])
+    out["abstain"] = sorted(set(out["abstain"]))
+    out["why"] = " / ".join(whys)
+    return out
 
 
 # ------------------------------------------------------------------ parsing
 
 class Case(object):
-    def __init__(self, name, sig, regs):
+    def __init__(self, name, sig, regs, buf=None):
         self.name, self.sig, self.regs = name, sig, regs
+        self.buf = buf          # EMIT_BUF payload, as an upper-case hex string
 
     def field(self, f):
         """Resolve a SIG name to a value: a register, a half-register, or CF."""
@@ -118,6 +152,23 @@ def parse_dump(text):
             if m:
                 regs[r] = int(m.group(1), 16)
         cases.append(Case(name, sig, regs))
+
+    # EMIT_BUF lines: "BUF=<name> <hex>". Buffer contents are the substance of a
+    # lot of DOS calls -- the country block, the DTA, the AH=65h tables -- and
+    # comparing only registers meant those were being checked by eye.
+    for line in text.replace("\r\n", "\n").split("\n"):
+        line = line.strip()
+        if not line.startswith("BUF="):
+            continue
+        parts = line.split(None, 1)
+        nm = parts[0][4:]
+        hexs = (parts[1] if len(parts) > 1 else "").strip().upper()
+        for c in cases:
+            if c.name == nm and c.buf is None:
+                c.buf = hexs
+                break
+        else:
+            cases.append(Case(nm, [], {}, hexs))
     return probe, cases
 
 
@@ -339,12 +390,21 @@ def diff(results, hosts, probe=None, rules=()):
             if cases.get(h) and cases[h].sig:
                 sig = cases[h].sig
                 break
-        for f in sig:
+        fields = list(sig)
+        if any(c is not None and c.buf is not None for c in cases.values()):
+            fields.append("BUF")
+        for f in fields:
             vals = {}
             for h, c in cases.items():
-                vals[h] = c.field(f) if c else None
+                if f == "BUF":
+                    vals[h] = c.buf if c else None
+                else:
+                    vals[h] = c.field(f) if c else None
             rule = rule_for(rules, probe, case_name, f)
-            abstain = set(rule["abstain"]) if rule else set()
+            abstain = set(rule.get("abstain", [])) if rule else set()
+            if f == "BUF" and rule and rule.get("ignore_bytes"):
+                for h in list(vals):
+                    vals[h] = mask_buf(vals[h], rule["ignore_bytes"])
             ovals = [vals[h] for h in oracles
                      if vals.get(h) is not None and h not in abstain]
             if not ovals:
@@ -368,7 +428,7 @@ def diff(results, hosts, probe=None, rules=()):
                     # prevent. It bit me once already, via a truncated log.
                     verdict = "NO-DATA"
 
-            width = next((c.width(f) for c in cases.values() if c), 4)
+            width = 4 if f == "BUF" else next((c.width(f) for c in cases.values() if c), 4)
             rows.append({"case": case_name, "field": f, "values": vals,
                          "verdict": verdict, "truth": truth,
                          "subject_matches": match, "width": width,
@@ -378,7 +438,13 @@ def diff(results, hosts, probe=None, rules=()):
 
 
 def fmt(v, width):
-    return "-" if v is None else ("%0*X" % (width, v))
+    if v is None:
+        return "-"
+    if isinstance(v, str):
+        # A full hex dump would blow the table apart, so show a short digest and
+        # let the diff verdict carry the meaning.
+        return (v[:8] + "..") if len(v) > 10 else v
+    return "%0*X" % (width, v)
 
 
 def report(probe, rows, oracles, subjects, unavailable):

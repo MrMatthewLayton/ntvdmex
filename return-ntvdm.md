@@ -367,10 +367,24 @@ log past "running .COM": selftest, p_misc, p_ctab. Moved to `0x0090` (linear 0x9
 clears it and still ends below the next MCB header at 0xFF0. selftest recovered immediately.
   ► The lesson generalises: the MCB map says that block is free, and the KERNEL disagrees.
 
-▶ **HARNESS GAP (known, not fixed): `EMIT_BUF` contents are dumped but NOT diffed.** dosdiff
-  compares registers only, so the five character tables were verified by eye against the oracle
-  dump rather than by the tool. Buffer contents are the substance of many DOS calls (country
-  block, DTA, tables) — comparing them belongs in dosdiff.
+★★ **HARNESS GAP CLOSED: dosdiff now DIFFS BUFFER CONTENTS, not just registers.** `EMIT_BUF`
+  payloads become a `BUF` pseudo-field and go through the same verdict machinery. Two things
+  were needed to make that useful:
+  ▶ **`ignore_bytes` — the buffer equivalent of `SIG`.** A rule can mask byte ranges that are
+    host properties rather than DOS behaviour. The country block embeds a FAR POINTER to DOS's
+    case-map routine at offset 18 (oracle `0116:0CF5`, ours in the handler segment): comparing
+    it manufactures a disagreement that means nothing, exactly like DS/ES.
+  ▶ **Rules are now MERGED, not first-match-wins.** Two rules for one field (one abstention, one
+    mask) is an easy mistake, and first-match silently dropped the second — which looks exactly
+    like the rule not working. It cost me a debugging round.
+  ▶ IMMEDIATE PAYOFF, invisible before: with the pointer masked, the country blocks differ in
+    ONE byte — **the US date separator. Genuine 6.22 uses `-` (0x2D); DOSBox-X uses `/` (0x2F).**
+    We are byte-identical to the oracle. Eyeballing hex would not reliably have caught that.
+  ▶ The DTA buffer is excluded wholesale (recorded, not silently): after find-first it describes
+    THE FILE FOUND, and every host searches a different directory.
+  ▶ Also fixed while there: our DTA left the caller's bytes lying in DOS's private search area.
+    Real 6.22 puts the EXPANDED 11-byte template there (a `*.*` search reads back as eleven
+    `?`), so we now do the same and zero the rest — deterministic instead of run-dependent.
 
 ▶▶ RESUME — NEXT STEPS (in order):
   1. Finish the app queue: **43h** (ATTRIB), **5Dh** (COMMAND.COM), **11h/12h** FCB find (TREE, #36).
