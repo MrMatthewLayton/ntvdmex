@@ -1,548 +1,236 @@
 ═══════════════════════════════════════════════════════════════════════════════
-██ PLAN — M9: DOS/BIOS COMPLETENESS (TDD). START HERE 2026-08-20. ██
+██ PLAN — M9 IS DONE ON THE API. THE WALL IS MODE 12h. START HERE 2026-08-21. ██
 ═══════════════════════════════════════════════════════════════════════════════
 
-▶ **THE SUPERVISOR PROMPT LIVES IN GITHUB: EPIC #24.** Read that issue first — it holds the
-  what/why/how, the oracle policy, the failure-mode table and the full sub-issue checklist
-  (#25-#46, milestone "M9 - DOS/BIOS completeness (TDD)"). This block is the local context
-  that goes with it. Branch `main` is clean and pushed at `d07c27c`+; the spike branch is
-  merged and deleted; start fresh from main.
+▶ **READ IN THIS ORDER:** (1) this block, (2) the session-13 checkpoint below — it holds the
+  measurements, the ruled-out list and the traps, (3) **GitHub epic #24** for the programme's
+  standing policy, and **#55** for the task in front of you.
 
-▶ WHERE WE GOT TO: **Skyroads is fully playable** — menus, Controls screen, level select,
-  gameplay, sound, and text, all user-confirmed on the physical box (sessions 11-12). That is
-  the FIRST of the three titles on the acceptance bar (Doom / Skyroads / ZAR).
+▶ **M9 STATUS: INT 21h 103/103, BIOS complete, all 15 probes clean against the oracle panel.**
+  17 sub-issues closed, 9 raised (#47-#55), 5 left open with a comment stating exactly what
+  remains. Verified at host `v180`: selftest 8/8, off-VM battery 325/325.
 
-▶ THE DECISION (user, 2026-08-19): **completeness before breadth.** Hardening one game exposed
-  how uneven the layer is underneath, so before running more applications we close the gaps
-  test-first. The governing principle, in the user's words: *"There should be no cause in
-  NTVDMEX itself to fail — whatever we throw at it should just work."* Illegal instructions in
-  guest programs aside, a failure must never be OURS. The achievable form of that invariant is
-  **no SILENT failure**: every unimplemented thing announces itself.
+▶ **THE STANDING PRINCIPLE (user, 2026-08-19), unchanged:** *"There should be no cause in
+  NTVDMEX itself to fail — whatever we throw at it should just work."* The achievable form is
+  **no SILENT failure**: every unimplemented thing announces itself. That is now built in — a
+  run ends with a to-do list (`STAGE2: INT21 unimplemented:` and friends), and it is how the
+  whole evidence pass was driven.
 
-▶ WHAT THE SURVEY FOUND (2026-08-19) — the implementation is deep exactly where Skyroads
-  walked and thin everywhere else:
-    INT 10h    22 functions; unknown function = SILENT NO-OP (no error, no log)
-    INT 10h    modes: only 13h and 12h are branched on -- everything else SILENTLY becomes
-               80x25 text, so mode 0 gives 80x25 not 40x25, and mode 11h gives a text screen
-               while the program writes pixels into A0000 (planar engine is 12h-only)
-    INT 21h    37 functions; unknown = CF=1 + a log line, but AX is NOT set to an error code
-    I/O ports  ~10 device ranges; unclaimed reads 0xFF, writes swallowed, port recorded
-    IVT        planted: 08 09 10 16 1A 1C 21 2F 33 67, IRET stubs on 0A-0F and 70-77.
-               EVERYTHING ELSE READS 0000:0000 -- INT 13h/11h/12h/15h/25h/26h far-jump into
-               the IVT and execute it as code. This is the landmine; fix it first (#27).
+▶ **THE CARDINAL RULE, and it has now earned its keep three times over:** *never write a test
+  expectation from memory of what DOS does.* Take it from RBIL **confirmed against the oracle**.
+  Refuted from memory this session: #27's own headline instruction (real DOS sets NEITHER AX
+  nor CF on an unhandled call), the find-first "not found" code (18, not 2), and the FCB
+  convention (result in AL; **carry is undefined** — a successful open returns CF=1). Each
+  would have made us *less* accurate while looking like a fix.
 
-▶ THE METHOD, AND THE ONE RULE: document the gap -> write tests FIRST and run them RED to
-  prove it -> implement to green. **NEVER write an expected value from memory of what DOS
-  does.** Tests written from belief encode our misconceptions as PASSING tests, which is
-  worse than no tests because they look authoritative. This codebase has already been bitten:
-  `15991e9` "fixed" the INT 10h font pointer from a plausible reading of the spec and was
-  wrong -- only a screenshot of the actual pixels caught it. Expected values come from Ralf
-  Brown's Interrupt List, confirmed against a real executable oracle.
+▶ **THE DECISION THAT SHAPED THE SESSION (user, 2026-08-20):** completeness before breadth,
+  then push for 100%, then EXEC, then the demos. All delivered except the demos, which are
+  blocked on mode 12h.
 
-▶ THE ORACLE = A PANEL, NOT A REFERENCE. Truth is AGREEMENT; disagreement is a flagged
-  decision with a recorded rationale, never a coin-flip.
-    - **MS-DOS 6.22 under QEMU on the dev Mac** = primary. Genuine Microsoft kernel, so for
-      INT 21h semantics it IS the standard. User has 6.22 (believed floppy images -- CONFIRM
-      THE MEDIA FORM FIRST, #25). Fast, offline, no rig.
-    - **Stock ntvdm on the XP rig** = "what does the thing we are replacing do". Fine for the
-      DOS API (a competent DOS 5.0 reimplementation); WORTHLESS for devices/sound/VESA, which
-      is exactly where it is weak and where NTVDMEX differentiates. Never truth on its own --
-      that was the user's own objection and it is correct.
-    - **DOSBox** = a fourth voice (decades of distilled compatibility fixes).
-    - **FreeDOS** = DELIBERATELY DEMOTED. Known divergence on picky software (it fails the
-      Windows 98 installer's version/internals checks -- the user hit this personally). NO
-      vote on truth, but it is the only oracle whose SOURCE YOU CAN READ when the others
-      disagree and you need to know why.
-    - **BIOS-LAYER CAVEAT, and it is real:** QEMU runs SeaBIOS, so for INT 10h/16h a QEMU
-      answer is just another reimplementation's opinion regardless of which DOS sits on top.
-      Real BIOS truth = the Dell OptiPlex booted off a DOS stick against its actual VGA BIOS:
-      a horrible loop (physical reboots, no remote control), so it is the RARE TIEBREAKER for
-      disputed BIOS cases, not part of the daily cycle. Note both bugs fixed in session 12
-      were BIOS-layer, so this is the weakest part of our evidence base.
+▶ **WHERE THE REAL FRONTIER IS NOW: COVERAGE IS NOT CORRECTNESS.**
+  We have 100% of the documented API, oracle-matched. We have **application** evidence for
+  exactly one game (Skyroads, mode 13h) and four command-line tools. Two independent things say
+  that is not the same as working:
+    • **#47** — MEM.EXE reports nothing missing and prints WRONG NUMBERS. The failure mode this
+      epic exists to remove, surviving *because* the coverage is complete.
+    • **#55** — mode 12h has never rendered. Six of the ten QuickBASIC demos need it.
+  **Next milestone should be measured in APPLICATIONS THAT BEHAVE CORRECTLY, not functions
+  implemented.** The bar remains Doom / Skyroads / ZAR.
 
-▶ ORDERING: prerequisites (#25 oracle ✅ DONE 2026-08-20 — see session-13 block below;
-  #26 differential harness, #27 loud failure) FIRST.
-  Then run the real applications -- command.com, edit.com, qbasic, Doom -- to turn the gap
-  list into an EVIDENCE-RANKED list, because real programs exercise combinations no test
-  author invents. Then TDD each gap in priority order. The two load-bearing gaps for
-  `command.com` are **#30 EXEC (4Bh)** and **#29 find first/next (4Eh/4Fh)**; without them a
-  shell cannot launch a program or list a directory.
+▶ **THE ACCEPTANCE BAR:** Skyroads is fully playable (menus, gameplay, sound, text — confirmed
+  on the physical box, sessions 11-12). Doom and ZAR remain; both are DOS/4GW, so they sit
+  behind the DPMI workstream, not this one.
 
-▶ DOS VERSION IS A FEATURE, NOT A CONSTANT (#28): we currently report **5.0**
-  (`AH=30h` -> `AX=0x0005`), same as ntvdm, which does not match the 6.22 oracle. The user
-  wants it **selectable from the NTVDMEX menu** (the menu scaffold exists), and selecting a
-  version must ALIGN THE API BEHAVIOUR, not just the number. Default to 6.22 so we match the
-  oracle; it is also the friendlier lie, since most version checks are floor checks.
+▶ **TEST TIERS — put each test in the right one:** off-VM C battery (`tools/dostest/run.sh`,
+  **325 checks**, runs on the Mac in seconds) for anything that is pure logic; a guest `.COM`
+  through **`scripts/dosdiff.py`** for anything guest-observable; the rig (`selftest`, 8/8) as
+  the final gate. selftest is a SMOKE TEST at ~2 min a round — it is NOT the TDD loop.
+  ► The fast loop is now the **oracle** (`./scripts/oracle.sh <probe>.com`, ~3 s, offline).
 
-▶ TEST TIERS -- put each test in the right one: off-VM C battery (`tools/dostest/run.sh`,
-  currently **325 checks**, runs on the Mac in seconds) for anything that is pure logic; a
-  guest `.COM` through the differential harness for anything guest-observable; the rig
-  (`selftest`, currently 8/8) as the final gate. selftest is a SMOKE TEST on the physical box
-  at ~2 min a round -- it is NOT the TDD loop, do not try to make it one.
-
-▶ DEFERRED BY DECISION -- DO NOT PICK UP UNASKED: keyboard/music latency (see the session-12
-  block below). The user played it and rates it "genuinely playable, a little sluggish"; lag
-  is down to milliseconds. Also queued behind this epic: hardware grounding (CPU affinity,
-  SpeedStep), which lands on our timing path since guest clocks come from
-  QueryPerformanceCounter.
+▶ DEFERRED BY DECISION — DO NOT PICK UP UNASKED: keyboard/music latency (user rates Skyroads
+  "genuinely playable, a little sluggish"; lag is in the milliseconds). Also queued: hardware
+  grounding (CPU affinity, SpeedStep), which lands on our timing path since guest clocks come
+  from QueryPerformanceCounter.
 
 ═══════════════════════════════════════════════════════════════════════════════
-██ CHECKPOINT — 2026-08-20 (session 13). ██
+██ CHECKPOINT — 2026-08-20 (session 13). M9 API COMPLETE; MODE 12h IS THE WALL. ██
 ═══════════════════════════════════════════════════════════════════════════════
 
-▶ RESTART POINT: branch `main`. **#25 (the MS-DOS 6.22 oracle) IS DONE AND WORKING.**
-  Full write-up: `docs/research/dos-oracle.md`. Nothing is committed yet.
+▶ RESTART POINT: branch `m9/completeness`, **19 commits UNPUSHED**, working tree clean apart
+  from the usual not-mine untracked files (MAINICON.ico, demos/, scripts/kd_*.py,
+  trace_break.py) and the untracked native `tools/dostest/*_test` binaries (repo convention).
+  Host = **dpmi-harness-v180**, built clean, deployed to the share `bm/`. Rig healthy.
+  **Share knobs CLEARED** — no capture.flag, no noa000.flag, no interp12.flag. Leave them that
+  way; a stray knob makes every later run lie to you.
+  Verified at v180: selftest **8/8**, off-VM battery **325/325**, all 15 probes clean.
 
-★★★ **THE PRIMARY ORACLE EXISTS.** Genuine Microsoft MS-DOS 6.22 under QEMU on the dev
-Mac, queryable in ~3 s, offline, no rig:
-    ./scripts/oracle.sh tools/dostest/dosver.com     # run a guest binary on real DOS
-    ./scripts/oracle.sh --batch "VER"                # run DOS commands
-    ./scripts/oracle.sh --selftest                   # 4/4 PASS
-  Media = four retail floppies in `./msdos-622` (gitignored). Build =
-  `python3 scripts/dosoracle/build.py`, ~75 s, produces `vm/dos622.img` (504 MB, 194 files
-  in C:\DOS). Importable as `from dosoracle import Oracle` — that is the interface #26's
-  differential harness should drive.
+▶ **THE RIG IP MOVES — DO NOT HARDCODE IT.** `.34` → `.29` during this session after a
+  broadband outage. Find it, then `mount_smbfs -N //guest@<ip>/ntvdmex /tmp/xpshare`.
+  A ping sweep finds it; note an ARP sweep leaves INCOMPLETE entries for every address, so
+  `arp -a` afterwards lists all 254 and means nothing — probe port 445 instead. LAN access
+  needs `dangerouslyDisableSandbox`.
 
-  ▶ **THE INSTALL DOES NOT DRIVE SETUP.EXE, DELIBERATELY.** SETUP is interactive and would
-    need keystroke synthesis against screen state — the fragile loop that yields a slightly
-    different disk every run. `PACKING.LST` on Disk 1 is MICROSOFT'S OWN compressed→expanded
-    name table for all three disks, so the install is a deterministic list of EXPAND/COPY
-    commands run over 5 non-interactive QEMU passes. Same genuine binaries either way.
-    The supplemental disk has no PACKING.LST; its rules come from its own SETUP.BAT/SD6COPY.BAT.
-    Names are NOT derivable from the underscore — `GORILLA.BA_`→`.BAS` but `DRVBOOT.BA_`→`.BAT`,
-    `WNTOOLS.GR_`→`.GRB`. Unresolvable names are SKIPPED AND LOGGED, never dropped silently.
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ 1. WHERE M9 GOT TO                                                            │
+└──────────────────────────────────────────────────────────────────────────────┘
 
-  ▶ CAPTURE, two paths on purpose: stdout via a scratch floppy (needs NO cooperation from the
-    program, so unmodified binaries like MEM/DIR work) and COM1 serial (survives a guest that
-    hangs after printing). Guest exits itself via `QUIT.COM` → QEMU `isa-debug-exit` → host
-    status 85. No keystrokes, no screen scraping, no timing assumptions.
+  **INT 21h: 103/103.** Every service MS-DOS 6.22 defines is implemented and oracle-matched.
+  **BIOS: complete** — modes, palette, character generator, VESA, and INT 11h/12h/13h/14h/15h/
+  17h/20h/25h/26h/27h/28h/29h, every one of which was previously a bare IRET handing the caller
+  its own registers back.
+  **All five real 6.22 tools report `INT21 unimplemented: none`** — MEM, CHKDSK, TREE, ATTRIB,
+  COMMAND.COM. EXEC works: a parent launches a child, the child runs, the parent resumes with
+  the child's exit code.
 
-★★ **THE CARDINAL RULE ALREADY CAUGHT ME — IN MY OWN SELFTEST.** I asserted
-`DIR C:\DOS\*.EXE | FIND "File(s)"` from memory of what DIR prints. Real 6.22 prints
-**`file(s)` LOWER-CASE** and DOS's FIND is case-sensitive, so it matched nothing — **and the
-check still reported PASS**, because it only asserted "some output appeared" and a stray
-sentinel satisfied that. Both halves are the lesson: an expectation from memory is wrong more
-often than it feels, and a weak assertion converts a silent failure into a confident green tick.
-Selftest cases now assert a substring transcribed from the oracle's real output.
+  GitHub: **17 issues closed**, 9 raised (#47-#55), 5 left open with a comment saying exactly
+  what remains. Epic #24's body carries the full picture.
 
-★ FIRST ORACLE-CONFIRMED EVIDENCE, for **#28 (configurable DOS version)** —
-`tools/dostest/dosver.com` (new):
-    INT21.30   major=06 minor=16 oem=FF serial=00:0000     ⇒ AH=30h must return **AX=0x1606**
-    INT21.3306 major=06 minor=16 rev=00 flags=10 cf=00
-  We currently return **AX=0x0005** ("5.0"). BH=0xFF = generic MS-DOS OEM; serial is zero.
-  ► **DH=0x10 from 3306h is CONFIG-DEPENDENT, not a constant** — bit 4 = "DOS is in the HMA",
-    and this image boots `DOS=HIGH`. Any test asserting DH must control DOS=HIGH too.
+  ▶▶ **COVERAGE IS NOT CORRECTNESS, AND WE HAVE PROOF.** MEM.EXE reports nothing missing and
+     prints WRONG NUMBERS (#47): "largest executable program size 0K (4,294,967,280 bytes)",
+     conventional free 0K, XMS 0K against a 16 MB pool. Every function it calls is implemented
+     and oracle-matched. **That is the failure mode this whole epic exists to remove, surviving
+     precisely BECAUSE the coverage is complete.** Fix it before any memory-parity claim.
 
-▶ TRAPS FOUND BUILDING IT (all cost real time; all in docs/research/dos-oracle.md):
-  • **DOS parses `<` and `>` inside ECHO.** Sentinels `---8<---`/`--->8---` made DOS write a
-    file literally called `8---`. Use `[BEGIN]`/`[END]`.
-  • `ECHO foo > file` writes `"foo "` — the space before the redirect is part of the text.
-  • **vvfat is NOT USABLE.** `fat:ro:` as a hard disk is refused ("Block node is read-only");
-    as `fat:floppy:ro:` it served the **WRONG FILE CONTENTS** (TYPE of a 20-byte file printed
-    fragments of vvfat's own volume structures) and then hung the guest. `--dir` synthesises a
-    throwaway raw FAT image with mtools instead. This supersedes #25's `-drive file=fat:ro:`
-    instruction — the reason for that instruction (vvfat is corruption-prone) stands; the
-    remedy does not go far enough.
-  • **The dev sandbox refuses to bind a unix socket anywhere**, TMPDIR included — the QEMU
-    monitor runs on **stdio**, not QMP.
-  • The floppies' boot-sector OEM field says `MSDOS5.0` on all four disks. That is what 6.22's
-    own FORMAT writes; it is NOT a version indicator. Genuineness was confirmed from the
-    `1994-05-31 6:22` build stamp on every file instead.
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ 2. THE NEXT TASK: WHY DOES PROTECTING A0000 STALL THE VDM?  (GH #55)          │
+└──────────────────────────────────────────────────────────────────────────────┘
 
-▶ KNOWN GAP, NOT PAPERED OVER: screenshots are captured only on TIMEOUT, as a diagnostic.
-  There is no capture-screen-on-success path, so this oracle cannot answer "what pixels did
-  that produce". Per the epic's own BIOS caveat QEMU video would be weak evidence anyway
-  (SeaBIOS, not a real VGA BIOS) — video questions want the Dell OptiPlex.
+  **Mode 12h has never rendered.** Six of the ten QuickBASIC demos in `demos/` are SCREEN 12
+  and all six are affected; the three SCREEN 13 ones work. Skyroads is 13h, which is why our
+  one game never touched this path. (Sources in `demos/src` — BLIT.BAS is four lines and draws
+  random filled boxes in all 16 colours.)
 
-★★★ **#26 DIFFERENTIAL HARNESS — TWO OF FOUR HOSTS LIVE, DIFF WORKING.**
-    `./scripts/dosdiff.py tools/dostest/p_ver.com` runs ONE unchanged .COM on every available
-    host and prints a per-field agreement table.
-  ▶ **THE CANONICAL DUMP** is `tools/dostest/probe.inc` (shared NASM include). A probe emits
-    `CASE=<name> SIG=<regs> AX=.. BX=.. .. CF=x`. Write new probes with it, not by hand.
-    ► **`SIG` is the load-bearing idea.** It declares which registers actually carry THAT
-      case's answer. All registers are dumped, but DS/ES follow the PSP (`04BD` on the oracle,
-      `0813` under DOSBox) and most FLAGS bits are undefined after a DOS call — comparing them
-      blindly manufactures disagreements that bury the real ones.
-    ► `probe_capture` MUST be the instruction immediately after the call under test.
-  ▶ **VOTING: NTVDMEX DOES NOT VOTE.** It is the `subject`; the others are `oracle`s. Letting
-    the thing being graded into the consensus would be circular. Hosts that cannot run are
-    reported UNAVAILABLE WITH THE REASON, never silently skipped — a diff that quietly dropped
-    a host would read as agreement.
-  ▶ **RECORDED RATIONALES ARE IN THE TOOL**, not just prose: `tools/dostest/oracle-rules.json`
-    (mirrored in `docs/research/oracle-disagreements.md`). A rule makes a host ABSTAIN on one
-    field, and the reason prints on every run. Reason: a permanently DISPUTED row you have
-    learned to ignore is worse than no row.
-  ▶ LIVE: `msdos622` (QEMU oracle), `dosbox-x`, and **`ntvdmex` ON THE BARE-METAL RIG — the
-    subject column works, so the harness now GRADES US.** Adapter = `NtvdmexRig` in dosdiff.py,
-    driving the existing SMB watcher loop (drop probe in `bm/tests/`, write `cmd.txt`, read
-    `result_<name>.log`, pull the `==> DOS OUTPUT: [...]` block). It waits for the
-    `STAGE2: complete` line rather than a fixed duration, which is the documented fix for the
-    partial-log/SMB-cache trap, and it refuses to run if `watcher.txt` is not MOVING (a stale
-    heartbeat looks identical to a live one).
-  ▶ **THE RIG IP MOVES — DO NOT HARDCODE IT.** It was `.34`, is `.29` today (2026-08-20) after
-    a broadband outage; `.27` was a mis-recollection. Find it, then
-    `mount_smbfs -N //guest@<ip>/ntvdmex /tmp/xpshare`. A ping sweep is the quick way, but note
-    an ARP sweep leaves INCOMPLETE entries for every address — `arp -a` after a sweep lists all
-    254 and means nothing. Probe port 445 instead. LAN needs `dangerouslyDisableSandbox`.
-  ▶ STILL NOT WIRED: stock `ntvdm`. It needs the rt.bat variant AND a user decision — the
-    repo's own note says a stock full-screen DOS run wedges the box's display, costing a
-    physical reboot. Flagged to the user, not run.
+  ★★★ **THE MEASUREMENT. Same program, same build, one knob:**
+        trap armed             io_events =         10   guest frozen at 0050:0037 (58/60 HBs)
+        trap OFF               io_events = 22,532,292   guest running, PC moving every sample
+        trap off + interpret   io_events =         10   two batches of 46/38 instrs, then quiet
+    `PAGE_NOACCESS` and `PAGE_READONLY` behave IDENTICALLY, so it is NOT reads-vs-writes — it
+    is protecting the range at all. Knob: **`noa000.flag`** on the share disables the trap.
 
-★★ **FIRST REAL GRADING — 5 MISMATCHES, AND ONE IS THE #27 SILENT-FAILURE CLASS CAUGHT LIVE:**
-    case             field  msdos622 dosbox-x ntvdmex
-    int21.30         AX     1606     0005     0005     MISMATCH  (known, #28)
-    int21.30         BX     FF00     FF00     B1B1     MISMATCH  <- UNTOUCHED
-    int21.30         CX     0000     0000     C1C1     MISMATCH  <- UNTOUCHED
-    int21.3306       BX     1606     0005     B1B1     MISMATCH  <- UNTOUCHED
-    int21.3306       DL     00       00       D1       MISMATCH  <- UNTOUCHED
-    int21.3306       CF     0        0        0        AGREE     <- THE DANGEROUS ONE
-  ► `B1B1/C1C1/D1D1` = the probe's POISON pattern, i.e. **the register was never written**.
-    Added after the first rig run returned `BX=3246` for 3306h and 3246 turned out to be a
-    value MY OWN `probe_emit` had left in BX. Without poison, "untouched" and "deliberately
-    zero" are indistinguishable and you will misread leftovers as answers.
-  ► **CONFIRMED IN SOURCE, not inferred:**
-    - `src/dos/dos_int21.c:235` — `ah == 0x33` handles ONLY `AL=00` (get Ctrl-Break); every
-      other subfunction, `AL=06` included, falls through to `OKCF()`. So "get true version"
-      returns **CF=0 (success) with all registers untouched**. The guest is told it succeeded
-      and handed garbage. This is exactly #27's target, caught by the harness on day one.
-    - `src/dos/dos_int21.c:177` — `ah == 0x30` is `SETAX(0x0005); OKCF();`. BX and CX are never
-      written, so the OEM number and the 24-bit serial are whatever the CALLER left there.
-      Real DOS returns BH=0xFF, BL:CX=0.
-  ▶ **DOSBOX CANNOT RUN HEADLESS.** `SDL_VIDEODRIVER=dummy` makes dosbox-x HANG and makes
-    dosbox-staging ABORT ("Could not initialize video: OpenGL ... driver (dummy)"). The adapter
-    opens a real window briefly; it will not work over plain ssh. Use `dosbox-x`, not staging.
-  ▶ FIRST DISAGREEMENT, already settled: DOSBox-X reports **AX=0005 (DOS 5.0)** against the
-    oracle's **1606 (6.22)** — because DOSBox's version is a CONFIGURABLE EMULATOR SETTING, so
-    it is evidence about DOSBox's default, not about MS-DOS. It abstains. (Note we currently
-    report 0005 too — matching DOSBox's default, not real DOS.)
+  ★★★ **THE FRAMING THAT MATTERS, and it narrows the RE a lot:** with the trap simply OFF the
+    guest RUNS PERFECTLY — 22.5M events, correct execution, PC advancing. The only thing wrong
+    is that its A0000 writes bypass the planar engine into the raw aperture. **So the guest is
+    not the problem and the planar engine is not the problem. The sole issue is INTERCEPTING
+    those writes.** The question is therefore narrow: what does the VDM require of that address
+    range that VirtualProtect breaks, and **is there a kernel-sanctioned way to ask for the
+    same interception** (a VDD memory hook, the kernel's own A0000 handling) rather than doing
+    it behind the kernel's back?
 
-★★★ **#27 LOUD FAILURE — DONE (host v146, rig-verified, selftest 8/8, off-VM 325/325).**
-  ▶ **THE NULL-VECTOR LANDMINE IS REAL, BUT NOT WHERE THE SURVEY SAID.** Measured before
-    fixing, and the measurement narrowed the fix. The vectors #27 named (11h/12h/13h/15h/25h/26h)
-    are **NOT null on the rig** — they carry the VDM's own BIOS entries (INT 13h read
-    `F000:5595`, INT 11h `F000:F84D`). Blanket-planting an IRET over those would swap a working
-    handler for a silent "success" — the exact failure mode the issue exists to remove. The
-    genuinely null ones are the USER-INTERRUPT ranges: **`0x60-0x66` and `0x78-0xF5`, 133 of
-    them.** So the fix fills only vectors that read 0000:0000, and names them:
-      `STAGE0: null IVT vectors -> IRET stub: 0x60-0x66 0x78-0xf5`
-  ▶ **A RUN NOW YIELDS A TO-DO LIST** (STAGE2, always printed — "none" is a positive statement
-    that nothing was missing, which a suppressed line is not):
-      `STAGE2: INT21 unimplemented: AH=0x73 AH=0x88 AH=0xff`
-      `STAGE2: INT10 unimplemented: none`
-      `STAGE2: video modes unsupported: none`
-    INT 10h unknown functions and unsupported mode numbers are recorded in the video VDD
-    (`unimpl_fn`/`unimpl_mode` bitmaps in video_state, kept dependency-free) and drained by the
-    host. The INT 21h tail logs `AH=0x.. UNIMPLEMENTED` and sets a bitmap.
-  ▶ **THE DOS-OUTPUT CAPTURE WAS SILENTLY TRUNCATING AT 1 KB** (`char dosout[1024]`), which cut
-    a probe dump mid-line — and the missing rows READ AS AGREEMENT in the harness. Two fixes:
-    buffer raised to 16 KB, and truncation now appends `<<<OUTPUT TRUNCATED>>>` instead of
-    dropping bytes. **Also fixed in dosdiff.py: a field with no subject data is now NO-DATA, not
-    AGREE.** That was a false-green in my own tool, found by being bitten by it.
-  ▶ **#27's STATED FIX IS REFUTED BY THE ORACLE.** The issue says *"Set AX=1 (invalid function)
-    alongside CF on unhandled INT 21h calls; DOS sets both, we only set carry."* Real MS-DOS
-    6.22 sets **NEITHER** — `AX` unchanged, `CF=0` — measured on AH=FFh/73h/88h. We return
-    CF=1, so we DIVERGE, and that is **kept deliberately**: our unhandled tail is reached both
-    by functions DOS does not define (match = CF=0) and by functions DOS defines that we have
-    not written yet (4Bh/4Eh/39h — where CF=0 would claim success for a no-op). Splitting them
-    needs a table of which AH values 6.22 defines; #29-#38 need that table anyway. Recorded in
-    full in `docs/research/oracle-disagreements.md` so nobody "fixes" it without the argument.
-  ▶ DOSBox-X abstains on `int21.73/CF`: AH=73h is the DOS 7.1 FAT32 group, absent from 6.22.
+  ▶ **RULED OUT BY MEASUREMENT — DO NOT RE-INVESTIGATE ANY OF THESE:**
+    • **The mode table** (#39). Resolves 12h correctly: `mode=0x12/kind=01/640x480`, proved by
+      the `STAGE2: mode sets:` line. I nearly rewrote it anyway.
+    • **The planar write engine.** Complete and correct — 4 write modes, set/reset, ALU, bit
+      mask, latches. I nearly rewrote THIS anyway too.
+    • **The IVT.** `ivt08=0050:0034 ivt1C=0050:003a`; QuickBASIC hooks neither.
+    • **Async IRQ injection.** 545 successes, ZERO bails, zero nest-blocks.
+    • **The "mode-12h MOV-store decoder gap"** from the M3 notes: `interp-refused=0`. The
+      interpreter never declines an opcode. **THAT LEAD IS DEAD.**
+    • **Unhandled events.** None — no `STAGE2: stop event` line; every event is serviced.
+    • **Interpreter-driven mode 12h** (`interp12.flag`, committed as a measured negative). The
+      reasoning was sound — port traps alone hand us control 22M times, so no page protection
+      should be needed — but the storm gate is met twice in thirty seconds and the guest goes
+      quiet afterwards.
 
-★★★ **THE 6.22 FUNCTION TABLE + #28 VERSION + FIRST REAL APP RUNNING (host v149).**
-  ▶ **`dos622_defines()` in dos_int21.c splits the unhandled tail in two**, because the halves
-    want opposite answers: a service 6.22 DEFINES that we have not written → CF=1, loud (a quiet
-    "success" makes the guest believe a no-op worked); a service 6.22 does NOT define → AX
-    unchanged, CF=0, exactly as real DOS. We now MATCH the oracle on the second class.
-    **BOUNDARY MEASURED** (`tools/dostest/p_defs.asm`): 6Dh..E0h all return with every poisoned
-    register intact — nothing happens. 6Ch is the highest that does anything. Documented nulls
-    18h/1Dh/1Eh/20h/61h/6Bh carry the same signature and sit on the quiet side.
-    ► **TRAP:** "AX came back unchanged" is NOT a test for absence — 54h returns AL=0 when
-      verify is off (same as the AL=0 passed in) and 2Ch leaves AX alone while writing CX/DX.
-      The signature that works is EVERY OUTPUT REGISTER STILL POISONED. The probe's control
-      cases exist to catch a broken discriminator and here they earned it.
-  ▶ **#28 DONE (core): we report 6.22.** AH=30h → AX=0x1606, **BH=0xFF and CX=0 now actually
-    written** (they never were — callers read their own leftovers as our OEM/serial). AH=33h
-    gained AL=01/05/06; 3306h returns the true version. Version lives in `m->ver_major/minor`,
-    default 6/22. **The menu selector is NOT built yet** — that half of #28 remains.
-  ▶ **#35 STARTED: 58h (alloc strategy, all 4 subfns) + 52h (list of lists).** Oracle-confirmed
-    defaults: 5800h→AX=0000 first fit, 5802h→AL=00 UMBs unlinked. For 52h only the word at
-    ES:BX-2 (first MCB segment) is real and the rest of SysVars is **deliberately ZEROED** — a
-    walker that follows a garbage DPB/SFT pointer wanders into nonsense (silent failure),
-    whereas a null pointer stops it.
+  ★★ **FIXED ON THE WAY (keep, it stands alone): `host_interp()` could not take interrupts.**
+    It ran up to 2,000,000 guest instructions in the host with no way to be interrupted. A
+    guest loop that can only END on an interrupt — BLIT's `DO WHILE INKEY$ = ""` — ran there
+    forever. It now checks for a pending IRQ every 256 instructions and yields. 15x improvement.
+    The interpreter stands in for the CPU; a real CPU takes interrupts mid-loop.
 
-★★★★ **REAL MS-DOS 6.22 `MEM.EXE` RUNS UNDER NTVDMEX AND PRINTS ITS MEMORY REPORT.** First
-genuine 6.22 utility working. The loop that got there is the point and it is now self-sustaining:
-run a real app → read `STAGE2: INT21 unimplemented:` → implement exactly that → re-run.
-    run 1: "Incorrect DOS version"        → #28
-    run 2: to-do list = AH=0x52, AH=0x58  → implemented
-    run 3: renders; to-do list = AH=0x38  (country info, #38) ← NEXT
-  ► Real 6.22 binaries are staged on the rig in `bm/tests/` (MEM, CHKDSK, TREE, ATTRIB, MORE,
-    XCOPY, COMMAND.COM), extracted from the oracle image with mtools into `build/dosapps/`.
+  ▶ **WHY THIS PROBABLY NEVER WORKED:** the M3 planar trap was **VM-confirmed on HVF and never
+    on real hardware**, and there is precedent for exactly this class of difference — session 8
+    found HVF reflects IOPL-0 I/O as event 0 while real silicon uses event 3.
 
-★★ **A REAL LATENT BUG FOUND ON THE WAY — the "safe IRET stub" was not an IRET.** The shared
-stub lived at `DOS_HDLR_SEG:0x66`, but the DPMI real-mode callback slots are based at 0x60 with
-a 4-byte stride, so **slot 1 owns 0x64-0x66** and its third byte (`DPMI_CB_BOP` = 0x55) is
-written AFTER the stub. 0x55 decodes as `PUSH BP`, then execution runs into uninitialised
-memory. Every vector pointed at the "safe" stub was pointed at a crash. Latent for IRQ 2-7/8-15
-since session 11 — and #27's null-vector sweep had just aimed 133 more vectors at it. Moved to
-`DOS_IRET_STUB_OFF 0x0058`, and **the three async-delivery guards that compare against the stub
-offset were updated with it** (they are what stops us injecting an IRQ the guest never hooked).
-A handler-segment offset map is now in main.c next to the define — check it before adding stubs.
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ 3. THE TOOLING BUILT THIS SESSION — USE IT, DO NOT REBUILD IT                 │
+└──────────────────────────────────────────────────────────────────────────────┘
 
-★★★ **THE EVIDENCE-RANKED GAP LIST (host v151), from running the real 6.22 tools on the rig.**
-  This is the artifact the epic asked for, and it is ranked by what programs ACTUALLY call:
-      AH=47h  get current dir      TREE, ATTRIB, XCOPY, COMMAND.COM   4 of 5  <- done
-      AH=65h  ext country info     ATTRIB, COMMAND.COM                2
-      AH=4Eh  find first           TREE (load-bearing for DIR, #29)    1  <- NEXT
-      AH=60h  truename             CHKDSK                             1
-      AH=5Dh  server/internal      COMMAND.COM                        1
-      AH=11h  FCB find first       TREE (#36)                         1
-      AH=59h  extended error       TREE (#34)                         1
-      AH=69h  disk serial          TREE (#35)                         1
-  ▶ DONE THIS ROUND, all oracle-matched in dosdiff: **38h country info (#38), 47h get current
-    dir + 3Bh chdir (#32), 36h free space (#35)**, on top of 30h/33h/52h/58h.
-    To-do lists shrank: TREE `11 3B 47 4E 69`→`11 4E 59 69`; COMMAND.COM `47 5D 65`→`5D 65`;
-    CHKDSK `36 60`→`60`; MEM.EXE → **none**.
-  ▶ **MEASURE THE BUFFER, NOT JUST THE REGISTERS.** 38h's country block is **24 bytes, not the
-    commonly quoted 34** — proved by poisoning the destination with 0xEE first; DOS leaves
-    everything past byte 23 alone. Writing 34 would have silently clobbered 10 bytes of the
-    caller's memory. Same trick showed 47h at the root writes exactly ONE byte (the NUL).
-  ▶ 38h hands back a FAR pointer to DOS's case-map routine; ours points at a planted **RETF**
-    (`DOS_CASEMAP_OFF`), so a program that actually calls it returns safely (identity mapping)
-    instead of jumping into nothing.
-  ▶ **36h on a bad drive returns AX=FFFF with CARRY CLEAR** — not a CF error. Easy to get wrong.
-  ▶ TWO MORE DOSBOX ABSTENTIONS, both "correct answer to a different question": 36h's
-    sectors-per-cluster is VOLUME GEOMETRY (oracle 16, DOSBox 64, rig 8) so it is no longer
-    compared at all; and DOSBox **always mounts Z:**, so the "drive does not exist" case is
-    false there.
+  **THE ORACLE (#25)** — genuine MS-DOS 6.22 under QEMU, ~3s a query, offline.
+      ./scripts/oracle.sh tools/dostest/p_ver.com      # run a guest binary on real DOS
+      ./scripts/oracle.sh --batch "VER"                # run DOS commands
+      ./scripts/oracle.sh --selftest                   # 4/4
+      python3 scripts/dosoracle/build.py               # rebuild the image, ~75s
+    Media = `./msdos-622` (4 retail floppies, gitignored). Runs `snapshot=on`, so a probe
+    calling destructive DOS functions cannot corrupt it. Full write-up:
+    `docs/research/dos-oracle.md`.
+    ► **PIXELS:** there is no capture-on-success path. The only way to get a picture out is the
+      TIMEOUT screendump: `dosoracle.py run BLIT.EXE --timeout 22 --screenshot out.ppm`.
+      That is how `build/shots/demos/oracle_blit.png` (the mode-12h reference) was captured.
 
-▶ **KNOWN DEFECT, NOT PAPERED OVER: MEM.EXE runs to completion but its NUMBERS ARE WRONG.**
-  "Largest executable program size 0K (4,294,967,280 bytes)" is -16 unsigned; conventional free
-  reads 0K; XMS reads 0K despite a 16 MB pool. Zero unimplemented functions are reported, so
-  this is a SILENT wrongness in the MCB chain / SysVars stub (52h returns only the MCB head) and
-  in XMS reporting. Worth fixing before trusting any memory-related parity claim.
+  **THE DIFFERENTIAL HARNESS (#26)** — one .COM, three hosts, one diff.
+      python3 scripts/dosdiff.py tools/dostest/p_ver.com
+    • **NTVDMEX does not vote.** It is the subject; the oracles vote. Letting the thing being
+      graded into its own consensus would be circular.
+    • **`SIG`** — each case declares which registers hold ITS answer. DS/ES follow the PSP and
+      most FLAGS bits are undefined after a DOS call.
+    • **Buffers are diffed too**, with `ignore_bytes` as the buffer analogue of SIG.
+    • **54 recorded rationales** in `tools/dostest/oracle-rules.json`, merged not first-match.
+    • 15 probes in `tools/dostest/p_*.asm`, all built on `probe.inc`. Companion files via a
+      `<probe>.deps` sidecar. Every host runs a probe from its own directory.
+    • **NOT WIRED: stock `ntvdm`** — needs an rt.bat variant that drops the IFEO Debugger key,
+      and a decision on the display-wedge risk.
 
-★★★ **#29 FIND FIRST/NEXT (4Eh/4Fh) DONE — `TREE.COM` NOW RENDERS ITS DIRECTORY LISTING.**
-  Oracle-matched on every case. Second real 6.22 tool working (after MEM.EXE).
-  ▶ **DTA BLOCK LAYOUT read off the oracle** and documented in dos_int21.c. The dump
-    cross-checks itself: the size field came back 0xD575 = 54645 = COMMAND.COM's exact byte
-    count. Block is **43 bytes** — byte 43 came back still poisoned, so nothing past it may be
-    written. Fields: [21] attr, [22-23] time, [24-25] date, [26-29] size, [30-42] name ASCIIZ.
-  ▶ **A PATTERN THAT MATCHES NOTHING IS AX=18 ("no more files"), NOT AX=2.** Memory says 2;
-    the oracle says 0x12. A missing *directory* is AX=3. Getting this from memory would have
-    been wrong in the most plausible-looking way.
-  ▶ Win32 handles live in `m->find_h[8]`; the slot is stashed in the DTA's own search-state
-    bytes, so a program that saves and restores its DTA between calls resumes the right search.
-  ▶ **WE MATCH A 6.22 QUIRK: a FAILED 4Eh does not clobber a live search in the DTA**, so a
-    following 4Fh carries on the earlier search. DOSBox-X resets it. We match DOS because our
-    4Eh only writes the DTA search fields on success — now recorded as deliberate, not accident.
-  ▶ Probe case naming matters: this case was first called `4F.exhausted`, which made a correct
-    result look like our bug. Renamed to `4F.after.failed.4E`.
+  **THE LOUD-FAILURE BLOCK (#27)** — every run ends with a to-do list:
+      STAGE2: INT21 unimplemented: / undefined-on-6.22: / BIOS partial: / INT10 unimplemented:
+      STAGE2: video modes unsupported: / mode sets: / video now: / ivt08=...
+    Plus `INTERP-REFUSED` (names any opcode the interpreter declines) and `BATCH ran=...`
+    (how far each interpreter escalation got). **These instruments are what killed four wrong
+    hypotheses this session. Read them before theorising.**
 
-▶ **COVERAGE (measured): 45 of the 103 INT 21h services 6.22 defines = 44%.** Of the 58 missing,
-  19 are the legacy FCB group (#36). Per-app remaining: MEM **none**, CHKDSK `60`,
-  COMMAND.COM `5D 65`, TREE `11 59 69`.
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ 4. TRAPS — EVERY ONE OF THESE COST REAL TIME                                  │
+└──────────────────────────────────────────────────────────────────────────────┘
 
-★★★ **59h / 60h / 65h / 69h DONE. EVERY APP IS DOWN TO ONE MISSING FUNCTION:**
-      MEM **none** · CHKDSK **none** · ATTRIB `43` · COMMAND.COM `5D` · TREE `11`
-  ▶ **#34 extended error: class/action/locus are MEASURED, not guessed.** `p_err.asm` provokes
-    each failure and asks 59h what DOS made of it: codes 2/3/18 → BX=0803 CH=02; code 6 →
-    BX=0704 CH=01. **CL is never written** (came back poisoned), so we leave it alone. Codes we
-    have not provoked LOG "class/action/locus UNMEASURED" rather than inventing a class.
-    `last_err` is captured in ONE place — the end of the dispatcher, where CF and AX are already
-    what the guest will see — not at each of the ~20 error sites.
-  ▶ **#38 character tables: DUMPED, NOT SYNTHESISED.** ATTRIB wants 65h AL=07, COMMAND.COM
-    AL=04, so the AL=01 country block was not enough. Each subfunction returns ES:DI → a 5-byte
-    descriptor {id, FAR ptr}. The tables are in `src/dos/dos_ctab.h`, dumped byte-for-byte off
-    the oracle by following those pointers (`p_ctab.asm`). The collating table in particular is
-    NOT guessable — it folds accented chars onto unaccented letters in a specific way.
-    Rig output is byte-identical to the oracle for all five tables.
-
-★★ **A BUG THAT WEDGED EVERY GUEST, INCLUDING SELFTEST — READ THIS BEFORE PLACING DATA IN LOW
-MEMORY.** The tables first went at `DOS_CTAB_SEG 0x0071`, which is the DOS-resident MCB filler
-block's data area (linear 0x710) and looks like exactly the right home. **Linear 0x714 is the
-KERNEL's VDM interrupt-state dword** — the `[0x714]` session 10 found wedges guests when written
-from user mode. Planting 600 bytes at 0x710 wrote straight over it, and EVERY run died with no
-log past "running .COM": selftest, p_misc, p_ctab. Moved to `0x0090` (linear 0x900), which
-clears it and still ends below the next MCB header at 0xFF0. selftest recovered immediately.
-  ► The lesson generalises: the MCB map says that block is free, and the KERNEL disagrees.
-
-★★ **HARNESS GAP CLOSED: dosdiff now DIFFS BUFFER CONTENTS, not just registers.** `EMIT_BUF`
-  payloads become a `BUF` pseudo-field and go through the same verdict machinery. Two things
-  were needed to make that useful:
-  ▶ **`ignore_bytes` — the buffer equivalent of `SIG`.** A rule can mask byte ranges that are
-    host properties rather than DOS behaviour. The country block embeds a FAR POINTER to DOS's
-    case-map routine at offset 18 (oracle `0116:0CF5`, ours in the handler segment): comparing
-    it manufactures a disagreement that means nothing, exactly like DS/ES.
-  ▶ **Rules are now MERGED, not first-match-wins.** Two rules for one field (one abstention, one
-    mask) is an easy mistake, and first-match silently dropped the second — which looks exactly
-    like the rule not working. It cost me a debugging round.
-  ▶ IMMEDIATE PAYOFF, invisible before: with the pointer masked, the country blocks differ in
-    ONE byte — **the US date separator. Genuine 6.22 uses `-` (0x2D); DOSBox-X uses `/` (0x2F).**
-    We are byte-identical to the oracle. Eyeballing hex would not reliably have caught that.
-  ▶ The DTA buffer is excluded wholesale (recorded, not silently): after find-first it describes
-    THE FILE FOUND, and every host searches a different directory.
-  ▶ Also fixed while there: our DTA left the caller's bytes lying in DOS's private search area.
-    Real 6.22 puts the EXPANDED 11-byte template there (a `*.*` search reads back as eleven
-    `?`), so we now do the same and zero the rest — deterministic instead of run-dependent.
-
-★★★★ **ROUND 3 (host v165): DOS API 102/103 = 99%, BIOS ~70%, OVERALL ~85%.**
-  ▶ **INT 21h: only 4Bh EXEC remains.** Added this round: the FCB group (0Fh-24h, 27h-29h),
-    1Bh/1Ch/1Fh/32h drive params, 26h/55h PSP creation, 31h TSR, 37h switch char ('/'),
-    53h, 5Eh/5Fh, 64h, 66h code page (437), plus the earlier file/handle batch.
-    **All five real 6.22 apps report `INT21 unimplemented: none`** — MEM, CHKDSK, TREE,
-    ATTRIB, COMMAND.COM.
-  ▶ **BIOS: eight interrupts planted** (11h/12h/13h/14h/15h/17h/25h/26h) — every one was a
-    bare IRET before, handing the caller its own registers back. New STAGE2 line reports
-    partial/unimplemented BIOS services.
-  ▶ **#39 VIDEO MODES: the epic's named defect is fixed.** There is now a MODE TABLE
-    (`vid_modes[]`): text 0/1/2/3/7 with real geometry (mode 0 is 40 columns, not 80), planar
-    0Dh/0Eh/0Fh/10h/11h/12h with per-mode resolution, linear 13h. The renderer follows
-    `st->mkind` + `st->gw/gh` instead of branching on 12h/13h only, so **11h no longer shows a
-    text screen while the program writes pixels**. CGA 4/5/6 are marked UNSUPPORTED and LOUD
-    rather than approximated -- their two-bank interleaved B800 layout shares nothing with the
-    planar path, and quietly showing text is the failure mode #27 exists to remove.
-
-★★ **TWO SCAFFOLDING BUGS FOUND THIS ROUND, both of which would have corrupted future work:**
-  1. **DOS calls that RETURN A SEGMENT IN DS** (1Bh, 1Ch, 32h, 52h) broke the probes' own
-     output: every probe store is DS-relative, so the probe wrote its state into DOS's segment
-     and printed labels read from there -- the dump came out as unlabelled hex, then as
-     fragments of executable code. Fixed IN `probe_capture` (restores DS=CS on exit, after
-     capturing the guest's DS faithfully), not per-probe, so it cannot be forgotten.
-  2. **The oracle harness decoded helper output as UTF-8**, so any probe whose buffer dump held
-     a byte above 0x7F aborted the whole run with a UnicodeDecodeError. Now CP437. The harness
-     must never be the thing that fails on unusual data — that is the data worth seeing.
-
-★★★★★ **#30 EXEC (4Bh) WORKS — INT 21h IS 103/103. host v166.**
-    EXEC: "P_CHILD.COM"
-    EXEC: child at seg=0x1101 entry=1101:0100 (COM) depth=01
-    EXEC: child exited rc=0x2a, parent resumed (depth=00)
-  Oracle-matched on all three properties that matter: the child RAN, the parent RESUMED at the
-  instruction after its INT 21h, and the child's EXIT CODE came back through AH=4Dh.
-  ▶ **HOW THE RETURN WORKS — the load-bearing idea.** The parent entered via `INT 21h`, so the
-    CPU pushed FLAGS/CS/IP on ITS stack and we are inside our BOP stub. We snapshot the parent's
-    ENTIRE frame — including CS:IP pointing AT the BOP and SS:SP pointing at that IRET frame —
-    then overwrite it with the child's entry state. On child exit we put the frame back and step
-    EIP past the BOP, so the stub's own IRET pops the parent's own frame and lands exactly where
-    EXEC returning normally would have. **No stack is unwound by hand.** Nesting stack is 8 deep
-    (`g_exec[]` in main.c); child memory is freed on exit.
-  ▶ SPLIT BY LAYER: `dos_int21` only RECORDS the request (path + parameter block) and sets
-    `exec_pending`; the host's `exec_begin()` does the load and the transfer, because the loader,
-    file I/O and the guest register frame all live there.
-  ▶ **A .COM OWNS ALL OF MEMORY, so EXEC returns AX=0008 until the parent gives some back.**
-    The probe shrinks itself with 4Ah first — that is not a workaround, it is what COMMAND.COM
-    does before launching anything. Worth knowing before diagnosing an "out of memory" EXEC.
-  ▶ AL=01 (load-without-execute) and AL=03 (overlay) are LOUD-unimplemented, not silent.
-  ▶ NEW: probes can ship companion files via a `<probe>.deps` sidecar, and all three hosts now
-    run a probe FROM ITS OWN DIRECTORY so a relative companion path resolves everywhere.
-
-★★★★★ **ROUND 4 (host v170): DOS 103/103, BIOS COMPLETE. ALL 15 PROBES CLEAN.**
-  ▶ **#39 CGA modes 4/5/6 now RENDER.** They were the last "unsupported" modes and the layout
-    is why: rows INTERLEAVE between two 8 KB banks at B800 (even rows from 0, odd from 0x2000)
-    and pixels are 2 bits (4/5) or 1 bit (6), packed high-bit-first. Nothing is shared with the
-    planar path — approximating them with a text screen was never going to work.
-  ▶ **#41 palette complete**: 10h AL=00/01/02/03/07/08/09/13/15/17/1A/1B, plus **0Bh** (border +
-    CGA palette), **0Dh** (read pixel), **07h** (scroll DOWN — 06h scrolled up and 07h fell
-    through to nothing, so downward scrolls silently did nothing), **1Ch** save/restore state.
-  ▶ **#40 character generator**: 11h AL=x1-x4 ROM font selection and AL=20-24 graphics font
-    pointers. User-font LOADS (AL=x0) are LOUD — we render from our own tables, so accepting a
-    user font would silently draw the wrong glyphs.
-  ▶ **#42 VESA complete**: 4F03/06/07/08/09. 4F0A (PM interface) and 4F15 (DDC) report NOT
-    SUPPORTED rather than returning success with a null pointer a client would call into.
-  ▶ **#46 INT 20h/27h/28h/29h planted.** 29h (fast console out) was an IRET that swallowed
-    output silently.
-
-★★ **A REGRESSION I CAUSED AND THE SELFTEST CAUGHT — the reason that gate exists.**
-  I planted INT 20h with **BOP number 0x20 — which is ALREADY the INT 21h handler's**. The new
-  BIOS dispatch sits ahead of INT 21h, so it intercepted EVERY INT 21h call as "terminate
-  program": selftest exited at its first DOS call with no output at all. BOP numbers are a
-  SHARED NAMESPACE across DOS, BIOS, XMS (0x43) and DPMI (0x50-0x57). INT 20h now uses BOP 0x30
-  and the table is {vector, bopnum} pairs so the two can differ. **Check the namespace before
-  adding a BOP.**
-
-▶ **PROBE HYGIENE, prompted by making every host run from its own directory:** several probes
-  were comparing values that describe WHERE THE PROBE IS rather than what DOS does — the default
-  drive, the current directory, the volume serial, truename's base. Those are now dumped but not
-  compared, with the reason recorded. Also dropped: AX after 47h/60h/69h, which RBIL documents as
-  destroyed and which the hosts duly disagree on.
-  ► And a real fidelity fix it exposed: FCB open now fills in the RESOLVED DRIVE (DOS replaces a
-    "default drive" 0 with the actual drive; we were leaving the caller's 0).
-
-▶ **54 recorded rationales** in `tools/dostest/oracle-rules.json`. Every DOSBox divergence is
-  explained, and in each case **we match the genuine kernel** — including the CP437 collating
-  table, where DOSBox fails to fold lower case onto upper and ours is byte-identical to 6.22's.
-
-★★★★ **MODE 12h: ROOT-CAUSE HUNT. One real deadlock FIXED; the remaining blocker is
-KERNEL-SIDE and is the next piece of work.**
-
-▶ **SCOPE, from the QuickBASIC demos in `demos/` (sources in `demos/src`):**
-    SCREEN 12 — BLIT, BOUNCEBX, BUBBLES, MATRIX_1, MATRIX_2, MOUSE   **6 of 10, all broken**
-    SCREEN 13 — CAVE, GFXCOPY, PALETTE                                 work (PALETTE confirmed)
-    SCREEN 0  — VS87
-  Matches the user's recollection exactly ("the mode 12h ones never did, at least not very
-  well"). Skyroads is 13h, which is why our one game never touched this path.
-
-★★★ **FIXED: `host_interp()` ran up to 2,000,000 guest instructions WITH NO WAY TO TAKE AN
-INTERRUPT.** BLIT's outer loop is `DO WHILE INKEY$ = ""` — it can only END when an interrupt
-fires. Escalated to the interpreter, it burned the whole cap, returned, re-faulted,
-re-escalated. **TEN I/O events in thirty seconds.** The interpreter is standing in for the CPU
-and a real CPU takes interrupts mid-loop, so it now checks for a pending IRQ every 256
-instructions and yields. **15x improvement (10 -> 157 events, 8x more pixel data).** selftest
-still 8/8. That fix stands on its own regardless of the rest.
-
-★★★ **THE REMAINING BLOCKER: ARMING THE A0000 PAGE TRAP STOPS THE GUEST RUNNING.**
-    trap ON  -> io_events = 10,          guest frozen at 0050:0037 in 58/60 heartbeats
-    trap OFF -> io_events = 22,532,292,  guest running QB code, PC moving every sample
-  `PAGE_NOACCESS` and `PAGE_READONLY` behave IDENTICALLY, so it is not reads-vs-writes: it is
-  protecting that range at all. Diagnostic knob added: **`noa000.flag` on the share** disables
-  the trap (absent = normal). Delete it after use.
-  ► With the trap off the guest's real inner loop is visible at its PC:
-    `DEC DX / MOV AL,07 / OUT DX,AL / INC DX / MOV AL,0F / OUT DX,AL` — per-pixel VGA register
-    reprogramming, exactly what the batching interpreter exists to absorb.
-
-▶ **RULED OUT BY MEASUREMENT — do not re-investigate these:**
-  • **The mode table** (#39). Resolves 12h correctly: `mode=0x12/kind=01/640x480`. New
-    `STAGE2: mode sets:` line proves it.
-  • **The planar write engine.** Complete and correct — 4 write modes, set/reset, ALU, bit
-    mask, latches. I nearly rewrote working code TWICE on the strength of a screenshot.
-  • **The IVT.** `ivt08=0050:0034 ivt1C=0050:003a`, and QuickBASIC has NOT hooked either.
-  • **Async IRQ injection.** 545 successes, **zero bails**, zero nest-blocks.
-  • **The "mode-12h MOV-store decoder gap"** from the M3 notes: `interp-refused=0`. The
-    interpreter never declines an opcode. That lead is DEAD.
-  • **Unhandled events.** None — no `STAGE2: stop event` line; every event is serviced.
-
-▶ **THE LIKELY SHAPE OF THE ANSWER.** The M3 planar trap was **VM-confirmed on HVF, never on
-  real hardware**, and there is precedent for exactly this class of difference: session 8 found
-  HVF reflects IOPL-0 I/O as event 0 while real silicon uses event 3. So the A0000 trap may
-  simply never have worked on the rig. Next step is kernel-side: **why does VirtualProtect on
-  A0000 stall `VdmStartExecution`** — same class of work as the #18 reflect RE, not a patch.
-  ► If that proves hard, the alternative is to stop trapping altogether and drive the
-    INTERPRETER from mode set. It already runs the guest correctly and now yields properly, and
-    it needs no page protection at all.
-
-▶ **A METHOD NOTE WORTH KEEPING.** I called this "a regression I introduced today" on the
-  strength of our new output differing from our old. **Neither was correct** — the oracle showed
-  16 colours, both builds showed 2. Different is not wrong when nothing is right. The reference
-  is the ORACLE, never our own previous build; one oracle run settled in seconds what an hour of
-  comparing our own screenshots could not. (`dosoracle.py run BLIT.EXE --timeout 22 --screenshot`
-  — the timeout path is currently the only way to get pixels out of the oracle.)
+  ▶ **THE REFERENCE IS THE ORACLE, NEVER OUR OWN PREVIOUS BUILD.** I called mode 12h "a
+    regression I introduced today" because our new output differed from our old. **Neither was
+    correct** — the oracle showed 16 colours, both of our builds showed 2. *Different is not
+    wrong when nothing is right.* One oracle run settled in seconds what an hour of comparing
+    our own screenshots could not.
+  ▶ **BOP NUMBERS ARE A SHARED NAMESPACE** across DOS, BIOS, XMS (0x43) and DPMI (0x50-0x57).
+    Planting INT 20h with BOP 0x20 — already INT 21h's — made the BIOS dispatch intercept EVERY
+    INT 21h call as "terminate program"; selftest exited at its first DOS call with no output.
+  ▶ **LINEAR 0x714 IS KERNEL VDM STATE.** Putting the AH=65h tables at segment 0x0071 (the
+    DOS-resident MCB block's data area — by the memory map, exactly the right home) wrote over
+    it and wedged EVERY guest including selftest. The map says free; the kernel disagrees.
+  ▶ **DOS CALLS THAT RETURN A SEGMENT IN DS** (1Bh, 1Ch, 32h, 52h) corrupted the probes' own
+    output: every probe store is DS-relative, so the probe wrote its state into DOS's segment
+    and printed labels read from there. Fixed in `probe_capture`, not per-probe.
+  ▶ **MEASURE THE BUFFER, NOT JUST THE REGISTERS.** The country block is **24 bytes, not the
+    commonly quoted 34** — poison the destination with 0xEE first. Writing 34 would clobber ten
+    bytes of the caller's memory.
+  ▶ **POISON THE OUTPUT REGISTERS.** "Untouched" and "deliberately zero" are otherwise
+    identical, and BX may hold leftovers from the probe's own print routine — which is exactly
+    what happened (a "result" of 3246 that `probe_emit` had left there).
+  ▶ **A WEAK ASSERTION IS WORSE THAN NO TEST.** My own selftest asserted `FIND "File(s)"`,
+    matched nothing (6.22 prints `file(s)` lower-case, FIND is case-sensitive) and still
+    reported PASS, because it only checked "some output appeared".
+  ▶ **CASE NAMES MATTER.** A case first called `4F.exhausted` actually measured whether a
+    failed find-first clobbers the DTA — the misleading name framed a CORRECT result as our bug.
+  ▶ **A .COM OWNS ALL OF MEMORY**, so EXEC returns AX=0008 until the parent gives some back
+    with 4Ah. Not a defect — it is what every real shell does. "EXEC says out of memory" is
+    otherwise a mystifying first symptom.
+  ▶ **DOSBOX CANNOT RUN HEADLESS.** `SDL_VIDEODRIVER=dummy` hangs dosbox-x and aborts
+    dosbox-staging. The adapter opens a real window; it will not work over plain ssh.
+  ▶ **THE DEV SANDBOX REFUSES TO BIND A UNIX SOCKET ANYWHERE**, TMPDIR included — the QEMU
+    monitor runs on stdio. `$TMPDIR` also differs inside and outside the sandbox; use absolute
+    paths when handing files between the two.
+  ▶ **`cd` PERSISTS BETWEEN COMMANDS** in this harness. A leaked `cd` silently ran a whole
+    probe sweep from the wrong directory and reported nothing.
 
 ▶▶ RESUME — NEXT STEPS (in order):
-  1. Finish the app queue: **43h** (ATTRIB), **5Dh** (COMMAND.COM), **11h/12h** FCB find (TREE, #36).
-  2. **#30 EXEC (4Bh)** — after which a shell can actually launch a program.
-  3. Fix the MEM.EXE numbers (silent wrongness, see above).
-  4. Then the BIOS layer (#39-#46), which is the thin part: ~19 INT 10h functions, only 2 of
-     ~19 video modes, and INT 13h/14h/15h/17h/25h/26h essentially absent. Note the oracle is
-     NOT truth there (SeaBIOS) — video questions need the Dell box.
-  2. **Finish #26: wire stock ntvdm** (still needs the rt.bat IFEO variant + the user's call on
-     the display-wedge risk).
-  3. #28's menu selector. Until `ntvdmex` runs there is NO subject in the
-     table and the harness cannot grade us — it only cross-checks oracles. Stock `ntvdm` needs
-     an rt.bat variant that drops the IFEO Debugger key for the baseline run and restores it.
-  2. **#27 make every unimplemented path LOUD.** The IVT landmine first (vectors that read
-     0000:0000 and get executed as code).
-  3. Then the EVIDENCE PASS: run command.com / edit.com / qbasic / Doom and rank the gaps by
-     what real programs actually hit, before implementing any of #29-#46.
+  1. **GH #55 — RE XP's VDM memory handling.** The narrow question: what does the VDM require
+     of A0000 that VirtualProtect breaks, and is there a kernel-sanctioned interception (VDD
+     memory hook / the kernel's own A0000 path)? Everything else is ruled out and listed above.
+     Acceptance: BLIT.EXE renders 16-colour filled boxes matching `build/shots/demos/
+     oracle_blit.png`. Then the other five SCREEN 12 demos.
+  2. **GH #47 — MEM.EXE's wrong numbers.** Silent wrongness in the MCB chain / stubbed SysVars
+     (#48) / XMS reporting. Do NOT close it by making the numbers look nicer.
+  3. **Then the demo sweep** — 10 QuickBASIC demos, screenshots, USER WATCHING THE SCREEN
+     (they asked to be told before it runs). `capture.flag` on the share enables self-capture;
+     shots come back as `shot_<test>_*.bmp`. **Delete the flag afterwards.**
+  4. Finish #26 (stock ntvdm host) and #28 (the version menu) if the display-wedge risk is
+     acceptable.
+  5. `git push` — 19 commits sitting local on `m9/completeness`.
 
 ═══════════════════════════════════════════════════════════════════════════════
 ██ CHECKPOINT — 2026-08-19 (session 12). ██
