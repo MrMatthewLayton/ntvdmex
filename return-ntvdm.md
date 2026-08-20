@@ -386,6 +386,33 @@ clears it and still ends below the next MCB header at 0xFF0. selftest recovered 
     Real 6.22 puts the EXPANDED 11-byte template there (a `*.*` search reads back as eleven
     `?`), so we now do the same and zero the rest — deterministic instead of run-dependent.
 
+★★★★ **ROUND 3 (host v165): DOS API 102/103 = 99%, BIOS ~70%, OVERALL ~85%.**
+  ▶ **INT 21h: only 4Bh EXEC remains.** Added this round: the FCB group (0Fh-24h, 27h-29h),
+    1Bh/1Ch/1Fh/32h drive params, 26h/55h PSP creation, 31h TSR, 37h switch char ('/'),
+    53h, 5Eh/5Fh, 64h, 66h code page (437), plus the earlier file/handle batch.
+    **All five real 6.22 apps report `INT21 unimplemented: none`** — MEM, CHKDSK, TREE,
+    ATTRIB, COMMAND.COM.
+  ▶ **BIOS: eight interrupts planted** (11h/12h/13h/14h/15h/17h/25h/26h) — every one was a
+    bare IRET before, handing the caller its own registers back. New STAGE2 line reports
+    partial/unimplemented BIOS services.
+  ▶ **#39 VIDEO MODES: the epic's named defect is fixed.** There is now a MODE TABLE
+    (`vid_modes[]`): text 0/1/2/3/7 with real geometry (mode 0 is 40 columns, not 80), planar
+    0Dh/0Eh/0Fh/10h/11h/12h with per-mode resolution, linear 13h. The renderer follows
+    `st->mkind` + `st->gw/gh` instead of branching on 12h/13h only, so **11h no longer shows a
+    text screen while the program writes pixels**. CGA 4/5/6 are marked UNSUPPORTED and LOUD
+    rather than approximated -- their two-bank interleaved B800 layout shares nothing with the
+    planar path, and quietly showing text is the failure mode #27 exists to remove.
+
+★★ **TWO SCAFFOLDING BUGS FOUND THIS ROUND, both of which would have corrupted future work:**
+  1. **DOS calls that RETURN A SEGMENT IN DS** (1Bh, 1Ch, 32h, 52h) broke the probes' own
+     output: every probe store is DS-relative, so the probe wrote its state into DOS's segment
+     and printed labels read from there -- the dump came out as unlabelled hex, then as
+     fragments of executable code. Fixed IN `probe_capture` (restores DS=CS on exit, after
+     capturing the guest's DS faithfully), not per-probe, so it cannot be forgotten.
+  2. **The oracle harness decoded helper output as UTF-8**, so any probe whose buffer dump held
+     a byte above 0x7F aborted the whole run with a UnicodeDecodeError. Now CP437. The harness
+     must never be the thing that fails on unusual data — that is the data worth seeing.
+
 ▶▶ RESUME — NEXT STEPS (in order):
   1. Finish the app queue: **43h** (ATTRIB), **5Dh** (COMMAND.COM), **11h/12h** FCB find (TREE, #36).
   2. **#30 EXEC (4Bh)** — after which a shell can actually launch a program.
@@ -670,6 +697,33 @@ vectors a hardware interrupt; we synthesise the frame, so we must too (commit `8
 This did NOT unblock Skyroads (its timer was already flowing, 483 ticks), but it was silently
 disabling interrupts for any guest whose enable lives in VIF.
 
+★★★★ **ROUND 3 (host v165): DOS API 102/103 = 99%, BIOS ~70%, OVERALL ~85%.**
+  ▶ **INT 21h: only 4Bh EXEC remains.** Added this round: the FCB group (0Fh-24h, 27h-29h),
+    1Bh/1Ch/1Fh/32h drive params, 26h/55h PSP creation, 31h TSR, 37h switch char ('/'),
+    53h, 5Eh/5Fh, 64h, 66h code page (437), plus the earlier file/handle batch.
+    **All five real 6.22 apps report `INT21 unimplemented: none`** — MEM, CHKDSK, TREE,
+    ATTRIB, COMMAND.COM.
+  ▶ **BIOS: eight interrupts planted** (11h/12h/13h/14h/15h/17h/25h/26h) — every one was a
+    bare IRET before, handing the caller its own registers back. New STAGE2 line reports
+    partial/unimplemented BIOS services.
+  ▶ **#39 VIDEO MODES: the epic's named defect is fixed.** There is now a MODE TABLE
+    (`vid_modes[]`): text 0/1/2/3/7 with real geometry (mode 0 is 40 columns, not 80), planar
+    0Dh/0Eh/0Fh/10h/11h/12h with per-mode resolution, linear 13h. The renderer follows
+    `st->mkind` + `st->gw/gh` instead of branching on 12h/13h only, so **11h no longer shows a
+    text screen while the program writes pixels**. CGA 4/5/6 are marked UNSUPPORTED and LOUD
+    rather than approximated -- their two-bank interleaved B800 layout shares nothing with the
+    planar path, and quietly showing text is the failure mode #27 exists to remove.
+
+★★ **TWO SCAFFOLDING BUGS FOUND THIS ROUND, both of which would have corrupted future work:**
+  1. **DOS calls that RETURN A SEGMENT IN DS** (1Bh, 1Ch, 32h, 52h) broke the probes' own
+     output: every probe store is DS-relative, so the probe wrote its state into DOS's segment
+     and printed labels read from there -- the dump came out as unlabelled hex, then as
+     fragments of executable code. Fixed IN `probe_capture` (restores DS=CS on exit, after
+     capturing the guest's DS faithfully), not per-probe, so it cannot be forgotten.
+  2. **The oracle harness decoded helper output as UTF-8**, so any probe whose buffer dump held
+     a byte above 0x7F aborted the whole run with a UnicodeDecodeError. Now CP437. The harness
+     must never be the thing that fails on unusual data — that is the data worth seeing.
+
 ▶▶ RESUME — NEXT STEPS (in order):
   1. **SOAK THE ASYNC PATH, THEN MAKE IT THE DEFAULT** (drop the qimode bit 4 gate). Run the
      whole tests/ battery with it on -- especially the graphical demos, the DPMI/PM tests (it
@@ -822,6 +876,33 @@ the ICA; we run the guest in-process and are blind until it faults.
     inject as INT (8+irq) with the same IF gating. The stub re-entrancy guard was also relaxed to
     just the BOP itself (a real PC nests a device IRQ inside a timer handler whenever IF is set).
     So the moment we can preempt, delivery should just work.
+
+★★★★ **ROUND 3 (host v165): DOS API 102/103 = 99%, BIOS ~70%, OVERALL ~85%.**
+  ▶ **INT 21h: only 4Bh EXEC remains.** Added this round: the FCB group (0Fh-24h, 27h-29h),
+    1Bh/1Ch/1Fh/32h drive params, 26h/55h PSP creation, 31h TSR, 37h switch char ('/'),
+    53h, 5Eh/5Fh, 64h, 66h code page (437), plus the earlier file/handle batch.
+    **All five real 6.22 apps report `INT21 unimplemented: none`** — MEM, CHKDSK, TREE,
+    ATTRIB, COMMAND.COM.
+  ▶ **BIOS: eight interrupts planted** (11h/12h/13h/14h/15h/17h/25h/26h) — every one was a
+    bare IRET before, handing the caller its own registers back. New STAGE2 line reports
+    partial/unimplemented BIOS services.
+  ▶ **#39 VIDEO MODES: the epic's named defect is fixed.** There is now a MODE TABLE
+    (`vid_modes[]`): text 0/1/2/3/7 with real geometry (mode 0 is 40 columns, not 80), planar
+    0Dh/0Eh/0Fh/10h/11h/12h with per-mode resolution, linear 13h. The renderer follows
+    `st->mkind` + `st->gw/gh` instead of branching on 12h/13h only, so **11h no longer shows a
+    text screen while the program writes pixels**. CGA 4/5/6 are marked UNSUPPORTED and LOUD
+    rather than approximated -- their two-bank interleaved B800 layout shares nothing with the
+    planar path, and quietly showing text is the failure mode #27 exists to remove.
+
+★★ **TWO SCAFFOLDING BUGS FOUND THIS ROUND, both of which would have corrupted future work:**
+  1. **DOS calls that RETURN A SEGMENT IN DS** (1Bh, 1Ch, 32h, 52h) broke the probes' own
+     output: every probe store is DS-relative, so the probe wrote its state into DOS's segment
+     and printed labels read from there -- the dump came out as unlabelled hex, then as
+     fragments of executable code. Fixed IN `probe_capture` (restores DS=CS on exit, after
+     capturing the guest's DS faithfully), not per-probe, so it cannot be forgotten.
+  2. **The oracle harness decoded helper output as UTF-8**, so any probe whose buffer dump held
+     a byte above 0x7F aborted the whole run with a UnicodeDecodeError. Now CP437. The harness
+     must never be the thing that fails on unusual data — that is the data worth seeing.
 
 ▶▶ RESUME — NEXT STEPS (in order):
   1. **RE the kernel's interrupt-queue interface** (the agreed direction). Find the NtVdmControl
@@ -1012,6 +1093,33 @@ SMB loop (which auto-times-out at 30 s now, so they no longer wedge -- but you s
   (b) a LESS sound-coupled real-mode game; (c) DOOM (DOS/4GW 32-bit -- the path we cracked; Doom's setup
   can select no-sound, so it may reach gameplay without the sound epic). HOST NOW v81, staged.
 
+★★★★ **ROUND 3 (host v165): DOS API 102/103 = 99%, BIOS ~70%, OVERALL ~85%.**
+  ▶ **INT 21h: only 4Bh EXEC remains.** Added this round: the FCB group (0Fh-24h, 27h-29h),
+    1Bh/1Ch/1Fh/32h drive params, 26h/55h PSP creation, 31h TSR, 37h switch char ('/'),
+    53h, 5Eh/5Fh, 64h, 66h code page (437), plus the earlier file/handle batch.
+    **All five real 6.22 apps report `INT21 unimplemented: none`** — MEM, CHKDSK, TREE,
+    ATTRIB, COMMAND.COM.
+  ▶ **BIOS: eight interrupts planted** (11h/12h/13h/14h/15h/17h/25h/26h) — every one was a
+    bare IRET before, handing the caller its own registers back. New STAGE2 line reports
+    partial/unimplemented BIOS services.
+  ▶ **#39 VIDEO MODES: the epic's named defect is fixed.** There is now a MODE TABLE
+    (`vid_modes[]`): text 0/1/2/3/7 with real geometry (mode 0 is 40 columns, not 80), planar
+    0Dh/0Eh/0Fh/10h/11h/12h with per-mode resolution, linear 13h. The renderer follows
+    `st->mkind` + `st->gw/gh` instead of branching on 12h/13h only, so **11h no longer shows a
+    text screen while the program writes pixels**. CGA 4/5/6 are marked UNSUPPORTED and LOUD
+    rather than approximated -- their two-bank interleaved B800 layout shares nothing with the
+    planar path, and quietly showing text is the failure mode #27 exists to remove.
+
+★★ **TWO SCAFFOLDING BUGS FOUND THIS ROUND, both of which would have corrupted future work:**
+  1. **DOS calls that RETURN A SEGMENT IN DS** (1Bh, 1Ch, 32h, 52h) broke the probes' own
+     output: every probe store is DS-relative, so the probe wrote its state into DOS's segment
+     and printed labels read from there -- the dump came out as unlabelled hex, then as
+     fragments of executable code. Fixed IN `probe_capture` (restores DS=CS on exit, after
+     capturing the guest's DS faithfully), not per-probe, so it cannot be forgotten.
+  2. **The oracle harness decoded helper output as UTF-8**, so any probe whose buffer dump held
+     a byte above 0x7F aborted the whole run with a UnicodeDecodeError. Now CP437. The harness
+     must never be the thing that fails on unusual data — that is the data worth seeing.
+
 ▶▶ RESUME — NEXT STEPS (in order):
   1. DONE (2026-08-19): pm32irq 32-bit async IRQ visually confirmed remotely. Next visuals to grab the
      same way (set capture.flag, fire, read shot_*.bmp): pm32gfx (32-bit gradient), mode13, and Skyroads
@@ -1095,6 +1203,33 @@ FINDINGS THIS SESSION (bare metal): ══════════════�
     control (fcn.0f00532e reads getMSW/PE bit) — that our host skips; HVF was lenient, real silicon isn't.
   • Current build: `g_dpmi_use_interp = 0` (real-CPU kernel PM path). Interpreter fallback (=1,
     ran i310102/DPMIBACK on HVF) is UNTESTED on bare metal.
+
+★★★★ **ROUND 3 (host v165): DOS API 102/103 = 99%, BIOS ~70%, OVERALL ~85%.**
+  ▶ **INT 21h: only 4Bh EXEC remains.** Added this round: the FCB group (0Fh-24h, 27h-29h),
+    1Bh/1Ch/1Fh/32h drive params, 26h/55h PSP creation, 31h TSR, 37h switch char ('/'),
+    53h, 5Eh/5Fh, 64h, 66h code page (437), plus the earlier file/handle batch.
+    **All five real 6.22 apps report `INT21 unimplemented: none`** — MEM, CHKDSK, TREE,
+    ATTRIB, COMMAND.COM.
+  ▶ **BIOS: eight interrupts planted** (11h/12h/13h/14h/15h/17h/25h/26h) — every one was a
+    bare IRET before, handing the caller its own registers back. New STAGE2 line reports
+    partial/unimplemented BIOS services.
+  ▶ **#39 VIDEO MODES: the epic's named defect is fixed.** There is now a MODE TABLE
+    (`vid_modes[]`): text 0/1/2/3/7 with real geometry (mode 0 is 40 columns, not 80), planar
+    0Dh/0Eh/0Fh/10h/11h/12h with per-mode resolution, linear 13h. The renderer follows
+    `st->mkind` + `st->gw/gh` instead of branching on 12h/13h only, so **11h no longer shows a
+    text screen while the program writes pixels**. CGA 4/5/6 are marked UNSUPPORTED and LOUD
+    rather than approximated -- their two-bank interleaved B800 layout shares nothing with the
+    planar path, and quietly showing text is the failure mode #27 exists to remove.
+
+★★ **TWO SCAFFOLDING BUGS FOUND THIS ROUND, both of which would have corrupted future work:**
+  1. **DOS calls that RETURN A SEGMENT IN DS** (1Bh, 1Ch, 32h, 52h) broke the probes' own
+     output: every probe store is DS-relative, so the probe wrote its state into DOS's segment
+     and printed labels read from there -- the dump came out as unlabelled hex, then as
+     fragments of executable code. Fixed IN `probe_capture` (restores DS=CS on exit, after
+     capturing the guest's DS faithfully), not per-probe, so it cannot be forgotten.
+  2. **The oracle harness decoded helper output as UTF-8**, so any probe whose buffer dump held
+     a byte above 0x7F aborted the whole run with a UnicodeDecodeError. Now CP437. The harness
+     must never be the thing that fails on unusual data — that is the data worth seeing.
 
 ▶▶ RESUME — NEXT STEPS (in order): ════════════════════════════════════════════════════════
   0. COMMIT the uncommitted bare-metal fixes (event-3, auto-exit, filebuf, PM-fault diagnostic).

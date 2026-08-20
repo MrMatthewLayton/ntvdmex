@@ -28,6 +28,30 @@ static void load_default_palette(video_state *st)
     for (i = 16; i < 256; ++i) st->pal[i] = 0xFF000000u | (uint32_t)(i * 0x010101u);
 }
 
+/* The standard BIOS mode set.  Dimensions are the modes' documented geometry;
+   what makes them right for US is that the renderer now honours them instead of
+   forcing 80x25 text.  CGA modes 4/5/6 are marked UNSUPPORTED rather than
+   approximated: they use a two-bank interleaved layout at B800 that shares
+   nothing with the planar path, and quietly showing a text screen instead is the
+   silent failure GH #27 exists to remove. */
+static const struct { uint8_t mode, kind, cols, rows; uint16_t w, h; } vid_modes[] = {
+    { 0x00, VID_KIND_TEXT,    40, 25,   320, 400 },
+    { 0x01, VID_KIND_TEXT,    40, 25,   320, 400 },
+    { 0x02, VID_KIND_TEXT,    80, 25,   640, 400 },
+    { 0x03, VID_KIND_TEXT,    80, 25,   640, 400 },
+    { 0x04, VID_KIND_UNSUP,   80, 25,   320, 200 },   /* CGA 4-colour   */
+    { 0x05, VID_KIND_UNSUP,   80, 25,   320, 200 },
+    { 0x06, VID_KIND_UNSUP,   80, 25,   640, 200 },   /* CGA 2-colour   */
+    { 0x07, VID_KIND_TEXT,    80, 25,   640, 400 },   /* MDA mono text  */
+    { 0x0D, VID_KIND_PLANAR,  40, 25,   320, 200 },
+    { 0x0E, VID_KIND_PLANAR,  80, 25,   640, 200 },
+    { 0x0F, VID_KIND_PLANAR,  80, 25,   640, 350 },
+    { 0x10, VID_KIND_PLANAR,  80, 25,   640, 350 },
+    { 0x11, VID_KIND_PLANAR,  80, 30,   640, 480 },
+    { 0x12, VID_KIND_PLANAR,  80, 30,   640, 480 },
+    { 0x13, VID_KIND_LINEAR8, 40, 25,   320, 200 },
+};
+
 static uint8_t *cell(video_state *st, int r, int c)   /* -> char byte of (r,c)    */
 { return st->vmem + VID_TEXT_OFF + (r * st->cols + c) * 2; }
 
@@ -208,21 +232,39 @@ static void int10(void *self, ntvdd_regs *r)
         st->mode = al & 0x7F; st->in_vesa = 0;        /* a standard mode leaves VESA */
         st->cur_row = st->cur_col = 0; st->page = 0;
         load_default_palette(st);                     /* HW reloads the DAC on mode set */
-        if (st->mode == 0x13) {                       /* 320x200x256 graphics    */
-            int i; for (i = 0; i < VID_G13_W * VID_G13_H; ++i) st->vmem[i] = 0;
-        } else if (st->mode == 0x12) {                /* 640x480x16 planar       */
-            int p, i;
-            for (p = 0; p < 4; ++p) for (i = 0; i < VID_PLANE_SIZE; ++i) st->plane[p][i] = 0;
-            st->cols = 80; st->rows = 30;             /* 80x30 text cells (8x16) */
-        } else {                                      /* text                    */
-            /* Only 13h and 12h are branched on above, so EVERY other mode lands
-               here and silently becomes 80x25 text -- mode 0 gives 80x25 rather
-               than 40x25, and mode 11h gives a text screen while the program
-               writes pixels into A0000. Record anything that is not a mode we
-               genuinely implement, so the log names it (GH #27, #39). */
-            if (st->mode != 0x03 && st->mode != 0x02)
+        {   unsigned mi; const void *found = 0;
+            for (mi = 0; mi < sizeof(vid_modes)/sizeof(vid_modes[0]); ++mi)
+                if (vid_modes[mi].mode == st->mode) { found = &vid_modes[mi]; break; }
+            if (!found) {                             /* a mode nobody defines   */
                 VID_UNIMPL_SET(st->unimpl_mode, st->mode);
-            st->cols = VID_COLS; st->rows = VID_ROWS; clear_text(st, 0x07);
+                st->mkind = VID_KIND_TEXT;
+                st->cols = VID_COLS; st->rows = VID_ROWS;
+                st->gw = VID_FB_W; st->gh = VID_FB_H;
+                clear_text(st, 0x07);
+            } else {
+                st->mkind = vid_modes[mi].kind;
+                st->cols  = vid_modes[mi].cols;
+                st->rows  = vid_modes[mi].rows;
+                st->gw    = vid_modes[mi].w;
+                st->gh    = vid_modes[mi].h;
+                if (st->mkind == VID_KIND_UNSUP) {
+                    /* Say so; do not paint a text screen and let the program
+                       draw into a layout that is not there. */
+                    VID_UNIMPL_SET(st->unimpl_mode, st->mode);
+                    st->mkind = VID_KIND_TEXT;
+                    st->cols = VID_COLS; st->rows = VID_ROWS;
+                    st->gw = VID_FB_W;  st->gh = VID_FB_H;
+                    clear_text(st, 0x07);
+                } else if (st->mkind == VID_KIND_LINEAR8) {
+                    int i; for (i = 0; i < VID_G13_W * VID_G13_H; ++i) st->vmem[i] = 0;
+                } else if (st->mkind == VID_KIND_PLANAR) {
+                    int pl, i;
+                    for (pl = 0; pl < 4; ++pl)
+                        for (i = 0; i < VID_PLANE_SIZE; ++i) st->plane[pl][i] = 0;
+                } else {
+                    clear_text(st, 0x07);
+                }
+            }
         }
         break;
     case 0x01: st->cur_shape = r_cx(r); break;
@@ -241,16 +283,16 @@ static void int10(void *self, ntvdd_regs *r)
         int c = st->cur_col, rr = st->cur_row; if (!n) n = 1;
         while (n-- && rr < st->rows) {
             uint8_t *p = cell(st, rr, c); p[0] = al; if (ah == 0x09) p[1] = attr;
-            if (st->mode == 0x12)                     /* draw the glyph as pixels */
+            if (st->mkind == VID_KIND_PLANAR)         /* draw the glyph as pixels */
                 glyph_12h(st, c, rr, al, (uint8_t)(attr & 0x0F), (uint8_t)((attr >> 4) & 0x0F));
             if (++c >= st->cols) { c = 0; if (++rr >= st->rows) break; }
         }
         break; }
     case 0x0C:                                        /* write graphics pixel    */
-        if (st->mode == 0x13) {
+        if (st->mkind == VID_KIND_LINEAR8) {
             uint32_t x = r_cx(r), y = r_dx(r);
             if (x < VID_G13_W && y < VID_G13_H) st->vmem[y * VID_G13_W + x] = al;
-        } else if (st->mode == 0x12) {                /* planar: set 4-bit colour */
+        } else if (st->mkind == VID_KIND_PLANAR) {    /* planar: set 4-bit colour */
             uint32_t x = r_cx(r), y = r_dx(r);
             if (x < VID_G12_W && y < VID_G12_H) {
                 uint32_t byte = y * (VID_G12_W / 8) + (x >> 3);
@@ -263,7 +305,7 @@ static void int10(void *self, ntvdd_regs *r)
         }
         break;
     case 0x0E:                                        /* teletype                */
-        if (st->mode == 0x12 && al >= 0x20) {         /* graphics: draw glyph + advance */
+        if (st->mkind == VID_KIND_PLANAR && al >= 0x20) { /* graphics: glyph + advance */
             glyph_12h(st, st->cur_col, st->cur_row, al, (uint8_t)(r_bx(r) & 0x0F), 0);
             advance(st);
         } else teletype(st, al);
@@ -458,7 +500,7 @@ uint8_t vga_planar_read(video_state *st, uint32_t off)
     return st->plane[st->read_map & 3][off];                    /* read mode 0     */
 }
 
-int vdd_video_planar_active(const video_state *st) { return st->mode == 0x12; }
+int vdd_video_planar_active(const video_state *st) { return st->mkind == VID_KIND_PLANAR; }
 
 /* Sequencer ports 3C4 (index) / 3C5 (data) -- Map Mask (SR2). */
 static void seq_out(void *self, uint16_t port, uint8_t w, uint32_t v)
@@ -574,10 +616,12 @@ void vdd_video_render(video_state *st)                 /* text glyph render     
 static void render_planar(video_state *st)
 {
     int y, xb, b;
-    for (y = 0; y < VID_G12_H; ++y) {
-        uint32_t row = y * (VID_G12_W / 8);
-        uint8_t *out = &st->fb[y * VID_G12_W];
-        for (xb = 0; xb < VID_G12_W / 8; ++xb) {
+    int gw = st->gw ? st->gw : VID_G12_W;
+    int gh = st->gh ? st->gh : VID_G12_H;
+    for (y = 0; y < gh; ++y) {
+        uint32_t row = y * (gw / 8);
+        uint8_t *out = &st->fb[y * gw];
+        for (xb = 0; xb < gw / 8; ++xb) {
             uint8_t p0 = st->plane[0][row+xb], p1 = st->plane[1][row+xb];
             uint8_t p2 = st->plane[2][row+xb], p3 = st->plane[3][row+xb];
             for (b = 0; b < 8; ++b) {
@@ -599,17 +643,22 @@ static void vid_frame(void *self)
         vesa_sync(st);
         st->frame.w = st->vesa_w; st->frame.h = st->vesa_h; st->frame.bpp = 8;
         st->frame.stride = st->vesa_w; st->frame.pixels = st->vesa_vram; st->frame.palette = st->pal;
-    } else if (st->mode == 0x13) {                     /* graphics: vmem is the FB */
-        st->frame.w = VID_G13_W; st->frame.h = VID_G13_H; st->frame.bpp = 8;
-        st->frame.stride = VID_G13_W; st->frame.pixels = st->vmem; st->frame.palette = st->pal;
-    } else if (st->mode == 0x12) {                     /* planar: combine -> fb    */
+    } else if (st->mkind == VID_KIND_LINEAR8) {        /* graphics: vmem is the FB */
+        st->frame.w = st->gw; st->frame.h = st->gh; st->frame.bpp = 8;
+        st->frame.stride = st->gw; st->frame.pixels = st->vmem; st->frame.palette = st->pal;
+    } else if (st->mkind == VID_KIND_PLANAR) {         /* planar: combine -> fb    */
         render_planar(st);
-        st->frame.w = VID_G12_W; st->frame.h = VID_G12_H; st->frame.bpp = 8;
-        st->frame.stride = VID_G12_W; st->frame.pixels = st->fb; st->frame.palette = st->pal;
+        st->frame.w = st->gw; st->frame.h = st->gh; st->frame.bpp = 8;
+        st->frame.stride = st->gw; st->frame.pixels = st->fb; st->frame.palette = st->pal;
     } else {                                           /* text: render glyphs      */
+        /* Geometry now follows the MODE, not a fixed 80x25 -- a 40-column mode
+           renders 320 pixels wide instead of pretending to be 640. */
         vdd_video_render(st);
-        st->frame.w = VID_FB_W; st->frame.h = VID_FB_H; st->frame.bpp = 8;
-        st->frame.stride = VID_FB_W; st->frame.pixels = st->fb; st->frame.palette = st->pal;
+        st->frame.w = (uint16_t)(st->cols * VID_CELL_W);
+        st->frame.h = (uint16_t)(st->rows * VID_CELL_H);
+        st->frame.bpp = 8;
+        st->frame.stride = st->frame.w;
+        st->frame.pixels = st->fb; st->frame.palette = st->pal;
     }
     st->dirty = 0;
 }
@@ -620,6 +669,7 @@ void vdd_video_reset(void *self)
 {
     video_state *st = (video_state *)self;
     st->mode = 3; st->cols = VID_COLS; st->rows = VID_ROWS;
+    st->mkind = VID_KIND_TEXT; st->gw = VID_FB_W; st->gh = VID_FB_H;
     st->cur_row = st->cur_col = 0; st->cur_shape = 0x0607; st->page = 0;
     st->dac_widx = st->dac_ridx = st->dac_comp = 0;
     st->seq_index = st->gc_index = 0;

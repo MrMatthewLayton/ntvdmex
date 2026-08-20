@@ -37,11 +37,22 @@
 #define VID_VESA_VRAM     0x80000u      /* 512KB total emulated VRAM (8 banks)    */
 #define VID_FB_MAX        (640 * 480)   /* largest glyph/planar render target     */
 
+/* How a mode is rendered.  Before this, only 13h and 12h were branched on and
+   EVERY other mode silently became 80x25 text -- so mode 0 gave 80 columns
+   instead of 40, and mode 11h gave a text screen while the program wrote pixels
+   into A0000 (GH #39). */
+#define VID_KIND_TEXT     0
+#define VID_KIND_PLANAR   1             /* 4-plane EGA/VGA, 16 colours             */
+#define VID_KIND_LINEAR8  2             /* mode 13h: one byte per pixel            */
+#define VID_KIND_UNSUP    3
+
 typedef struct video_state {
     vdd_bus *bus;
     uint8_t *vmem;                      /* the 128KB aperture (A0000); caller-set  */
     uint8_t  mode;                      /* 0x03 text, 0x13 graphics                */
     uint8_t  cols, rows;
+    uint16_t gw, gh;                    /* graphics resolution of the current mode  */
+    uint8_t  mkind;                     /* VID_KIND_* below                          */
     uint8_t  cur_row, cur_col;
     uint16_t cur_shape;
     uint8_t  page;
