@@ -1,6 +1,72 @@
 ═══════════════════════════════════════════════════════════════════════════════
-██ PLAN — M9 IS DONE ON THE API. THE WALL IS MODE 12h. START HERE 2026-08-21. ██
+██ PLAN — M9 API DONE, MODE 12h NOW RENDERS. START HERE 2026-08-21.           ██
 ═══════════════════════════════════════════════════════════════════════════════
+
+▶▶▶ **SESSION 14 (2026-08-20, late): THE MODE-12h WALL IS DOWN. #55 IS CLOSED.**
+  BLIT.EXE renders 640x480 16-colour filled boxes on the physical box, matching
+  `build/shots/demos/oracle_blit.png` in kind (the boxes are random per run).
+  Frames in `build/shots/p12/`. Commit `b3abbce`.
+
+  ★ **THE MOVE THAT WORKED WAS TO STOP TRYING TO INTERCEPT THE WRITES.** Session 13
+    had already measured the answer and framed it as a question about interception:
+    with the A0000 page trap off the guest runs perfectly (22.5M I/O events) and the
+    only defect is that its planar writes bypass the VGA engine. The unexamined
+    assumption was that we therefore had to SEE those writes. We don't — we can
+    simply BE the CPU that performs them. While a planar mode is set the guest now
+    runs in the host interpreter, whose A0000 accesses go through the planar write
+    engine by construction (`imem_r8`/`imem_w8`). No page protection, no kernel RE,
+    no VDD memory hook. **The planned next step — disassembling XP's VDM memory
+    handling — was not needed and was not done.**
+
+  ★ **THREE BUGS HAD TO DIE FIRST, and two of them were silent corrupters:**
+    1. The interpreter could not survive an interrupt: no `INT nn`, no `IRET`, no far
+       `JMP`/`CALL`. It stopped at the first DOS call and handed the guest back to
+       V86 — precisely where the writes become invisible. Now modelled, vectoring
+       through the real IVT. **`LES` (`C4`) stays unmodelled ON PURPOSE**: bailing on
+       it is how a BOP still reaches the kernel. Modelling it would swallow every
+       DOS/BIOS call in the system.
+    2. **`host_interp` never wrote the SEGMENT registers back.** It modelled `POP ES`
+       and `MOV DS,AX` and then threw the result away, so the guest resumed with the
+       segment it had BEFORE the batch and the offset the batch had reached. Harmless
+       while batching was confined to a fill loop that reloads nothing; fatal the
+       moment CS changes on every interrupt.
+    3. **`POPF` masked `IF` out of the flag image**, so every interpreted `POPF`
+       silently disabled the guest's interrupts.
+
+  ★ MEASURED, same build, same program, one policy switch:
+        page trap    io_events=0x1d       plane-nonzero = 0/0/0/0        frozen
+        interpret    io_events=0x50d4e6   plane-nonzero = 1f5b/389e/79c6/25f8
+    575M instructions interpreted, 11 captured frames. `p12off.flag` reverts to the
+    page trap. STAGE2 reports `p12-batches/instrs/bails`, and **every opcode the
+    interpreter declines is named (`P12-BAIL`)** — that list is the to-do list for
+    this path, and it is how you tell "we ran it" from "we lost the guest to V86".
+
+  ★ **THE DEMO SWEEP RAN: ALL TEN QuickBASIC DEMOS, ALL TEN DRAW.** Six SCREEN 12,
+    three SCREEN 13, one SCREEN 0; `video modes unsupported: none` everywhere.
+        BLIT      16-colour random filled boxes -- matches the oracle in kind
+        MATRIX_1  full-screen Matrix rain, glyphs + green ramp  ← the strongest one
+        MATRIX_2  same, sparser (planes 0b04/0b21/0b47/0bed)
+        BUBBLES   greyscale starfield. **The greys are CORRECT** -- BUBBLES.BAS sets
+                  its own `PALETTE index, index*4` ramp, so this also proves the
+                  palette path. Do not "fix" it into colour.
+        BOUNCEBX  40x40 filled box, caught mid erase-redraw (planes b4/00/b4/00)
+        MOUSE     sets 12h, returns to mode 3 and exits in ~3 s -- ONE shot, and the
+                  only demo whose behaviour is not yet explained. Look here first.
+        CAVE / GFXCOPY / PALETTE (13h) and VS87 (text) unchanged -- no regression.
+    Frames: `build/shots/p12/`. Screenshots need `capture.flag` on the share; it was
+    deleted afterwards, as it must be.
+
+  ▶ **WHAT IS STILL OPEN HERE:** every bail is a stretch of guest execution running
+    on the real CPU with its A0000 writes going nowhere. BLIT had ~5.3M of them
+    against 515k batches, so the picture is right but not provably complete. Work the
+    `P12-BAIL` list before claiming planar parity.
+
+  ▶ THE PAGE-TRAP FREEZE ITSELF IS STILL UNEXPLAINED and is now a curiosity rather
+    than a blocker. If it is ever picked up: the exec thread does not return from
+    `VdmStartExecution` at all (the TIB's CS:IP stays frozen at whatever the last
+    event left it — 0050:0037, the `CD 1C` in our INT 08h stub, is a STALE reading,
+    not where the guest is). Do not read it as "the guest is in its timer handler".
+
 
 ▶ **READ IN THIS ORDER:** (1) this block, (2) the session-13 checkpoint below — it holds the
   measurements, the ruled-out list and the traps, (3) **GitHub epic #24** for the programme's
