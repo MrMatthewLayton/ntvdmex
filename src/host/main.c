@@ -2987,6 +2987,7 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                                 if (*s >= 0x20) *op++ = (char)*s;   /* printable -> serial echo */
                                 if (m.conout) m.conout(m.conctx, *s);  /* -> the Luna console */
                                 if (m.out_len < m.out_cap - 1) m.out[m.out_len++] = (char)*s;
+                                else m.out_trunc = 1;
                             }
                             op = zput(op, "\"\r\n");
                             log_append(LOG_PATH, ob, op); serial_out(ob, op);
@@ -2998,6 +2999,7 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                             BYTE ch = VDM_REG(tib, VTIB_EDX) & 0xFF;
                             if (m.conout) m.conout(m.conctx, ch);
                             if (m.out_len < m.out_cap - 1) m.out[m.out_len++] = (char)ch;
+                            else m.out_trunc = 1;
                             VDM_REG(tib, VTIB_EFLAGS) &= ~1u;
                             VDM_REG(tib, VTIB_EIP) += 2;
                             return 1;
@@ -3015,6 +3017,7 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                                     if (b[k] >= 0x20 && op < ob + 270) *op++ = (char)b[k];
                                     if (m.conout) m.conout(m.conctx, b[k]);
                                     if (m.out_len < m.out_cap - 1) m.out[m.out_len++] = (char)b[k];
+                                    else m.out_trunc = 1;
                                 }
                                 op = zput(op, "\"\r\n");
                                 log_append(LOG_PATH, ob, op); serial_out(ob, op);
@@ -3289,7 +3292,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     DWORD nread = 0, err = 0, ev; LONG st;
     dos_image_t img;
     dos_machine_t m;
-    char dosout[1024];
+    char dosout[16384];   /* M9 probe dumps run to several KB; 1024 truncated them */
     char progpath[768]; char args[256];
     unsigned i; int guard;
     static const BYTE bop[] = { VDM_BOP0, VDM_BOP1, 0x20, 0xCF };  /* BOP 0x20 ; iret */
@@ -3319,7 +3322,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     (void)hInst; (void)hPrev; (void)lpCmd; (void)nShow;
     progpath[0] = 0; args[0] = 0;
 
-    p = zput(p, "NTVDMEX clean host\r\nSTAGE0: WinMain entered [build dpmi-harness-v144]\r\n");
+    p = zput(p, "NTVDMEX clean host\r\nSTAGE0: WinMain entered [build dpmi-harness-v146]\r\n");
     log_write(LOG_PATH, report, p);
     serial_init();                                      /* DPMI harness: COM1 log sink */
     serial_out(report, p);
@@ -3550,6 +3553,33 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
        the device-driver name "EMMXXXX0". Park it in the handler segment. */
     for (i = 0; i < sizeof(emmname); ++i) hdlr[DOS_EMM_NAME_OFF + i] = emmname[i];
 
+    /* GH #27 -- THE NULL-VECTOR LANDMINE. A vector left at 0000:0000 sends a guest
+       that INTs it to 0000:0000, where it executes the interrupt vector table
+       itself as code. Point any such vector at the shared IRET stub.
+       MEASURED BEFORE FIXING, and the measurement narrowed the fix: on the
+       bare-metal rig most unclaimed vectors are NOT null -- they carry the VDM's
+       own BIOS entries (INT 13h read F000:5595, INT 11h F000:F84D). Planting over
+       those would swap a working handler for a bare IRET, i.e. a silent
+       "success", which is the very failure mode this issue exists to remove. So
+       fill only the genuinely null ones, and name them in the log. */
+    { int v, n = 0, start = -1;
+      p = zput(p, "STAGE0: null IVT vectors -> IRET stub:");
+      for (v = 0; v <= 256; ++v) {                  /* 256 flushes a trailing run */
+          int isnull = (v < 256) && (*(volatile DWORD *)(v * 4) == 0);
+          if (isnull) {
+              *(volatile WORD *)(v * 4)     = 0x0066;
+              *(volatile WORD *)(v * 4 + 2) = DOS_HDLR_SEG;
+              if (start < 0) start = v;
+              ++n;
+          } else if (start >= 0) {                  /* emit as ranges, not 133 items */
+              p = zput(p, " 0x"); p = zhexb(p, (unsigned)start);
+              if (v - 1 > start) { p = zput(p, "-0x"); p = zhexb(p, (unsigned)(v - 1)); }
+              start = -1;
+          }
+      }
+      if (!n) p = zput(p, " none");
+      p = zput(p, "\r\n"); }
+
     dos_psp_build(NULL, DOS_PSP_SEG, DOS_ENV_SEG, DOS_MEM_TOP);
     dos_env_build(NULL, DOS_ENV_SEG, progpath[0] ? progpath : "C:\\PROGRAM.COM");  /* M2.5: env */
     dos_cmdtail_build(NULL, DOS_PSP_SEG, args);                                    /* M2.5: args */
@@ -3673,7 +3703,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     /* Service loop: run V86 until a BOP, dispatch INT 21h, step past the BOP, re-enter.
        Runs until the guest terminates, a hard stop, or the window closes (g_running);
        no iteration cap so interactive/animated programs keep going. */
-    m.tib = tib; m.out = dosout; m.out_cap = sizeof(dosout); m.out_len = 0;
+    m.tib = tib; m.out = dosout; m.out_cap = sizeof(dosout); m.out_len = 0; m.out_trunc = 0;
     (void)guard;
     { static uint32_t s_last_fault = 0; static int s_storm = 0;
     DWORD rm_start_tick = GetTickCount();   /* headless wall-clock cap origin (real-mode) */
@@ -4340,7 +4370,9 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         if (m.out_len > 0) {
             m.out[m.out_len] = 0;
             if (hcon != INVALID_HANDLE_VALUE) { DWORD w; WriteFile(hcon, m.out, m.out_len, &w, NULL); }
-            p = zput(p, "  ==> DOS OUTPUT: ["); p = zput(p, m.out); p = zput(p, "]\r\n");
+            p = zput(p, "  ==> DOS OUTPUT: ["); p = zput(p, m.out);
+            if (m.out_trunc) p = zput(p, "\r\n<<<OUTPUT TRUNCATED>>>");
+            p = zput(p, "]\r\n");
         }
         if (hcon != INVALID_HANDLE_VALUE) CloseHandle(hcon);
     }
@@ -4393,6 +4425,26 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     p = zput(p, "\r\n");
     { int i; p = zput(p, "STAGE2: unclaimed ports touched:");
       for (i = 0; i < g_unclaimed_n; ++i) { p = zput(p, " 0x"); p = zhex(p, g_unclaimed[i]); }
+      p = zput(p, "\r\n"); }
+    /* GH #27: one line per class of unimplemented thing the run actually reached,
+       so a run yields a to-do list instead of "the screen looked wrong". Empty
+       lines are printed too -- "INT21 unimplemented:" with nothing after it is a
+       positive statement that nothing was missing, which a suppressed line is not. */
+    { int i, n;
+      p = zput(p, "STAGE2: INT21 unimplemented:");
+      for (i = 0, n = 0; i < 256; ++i)
+          if ((m.unimpl21[i >> 3] >> (i & 7)) & 1u) { p = zput(p, " AH=0x"); p = zhexb(p, (unsigned)i); ++n; }
+      if (!n) p = zput(p, " none");
+      p = zput(p, "\r\n");
+      p = zput(p, "STAGE2: INT10 unimplemented:");
+      for (i = 0, n = 0; i < 256; ++i)
+          if (VID_UNIMPL_GET(g_vid.unimpl_fn, i)) { p = zput(p, " AH=0x"); p = zhexb(p, (unsigned)i); ++n; }
+      if (!n) p = zput(p, " none");
+      p = zput(p, "\r\n");
+      p = zput(p, "STAGE2: video modes unsupported:");
+      for (i = 0, n = 0; i < 256; ++i)
+          if (VID_UNIMPL_GET(g_vid.unimpl_mode, i)) { p = zput(p, " 0x"); p = zhexb(p, (unsigned)i); ++n; }
+      if (!n) p = zput(p, " none");
       p = zput(p, "\r\n"); }
     p = zput(p, "STAGE2: complete\r\n");
     log_append(LOG_PATH, base, p); serial_out(base, p); p = base;   /* headless: mirror the DOS-output flush + completion to COM1 */

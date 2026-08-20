@@ -25,6 +25,14 @@ static inline char *zhex(char *p, unsigned v) {
     return zput(p, t);
 }
 
+/* Append v as 2 lowercase hex digits. For byte-sized things -- interrupt numbers,
+   AH values, mode numbers -- where zhex's 8 digits turn a list into a wall. */
+static inline char *zhexb(char *p, unsigned v) {
+    char t[3]; t[0] = "0123456789abcdef"[(v >> 4) & 0xf];
+    t[1] = "0123456789abcdef"[v & 0xf]; t[2] = 0;
+    return zput(p, t);
+}
+
 /* Append a raw hex dump of n bytes at b (space-separated, newline every 16). */
 static inline char *zdump(char *p, const void *b, unsigned n) {
     const unsigned char *q = (const unsigned char *)b; unsigned i;

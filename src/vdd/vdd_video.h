@@ -74,8 +74,18 @@ typedef struct video_state {
     uint8_t  font_qn;
     uint8_t  fb[VID_FB_MAX];            /* text glyph / planar render target        */
     int      dirty;
+    /* GH #27: every unimplemented path must announce itself. An INT 10h function
+       we do not handle, or a mode number we do not support, used to be a silent
+       no-op -- the program carried on drawing into a screen that was never set
+       up, and the only symptom was "the display looks wrong". These bitmaps are
+       drained into the STAGE2 block so a run yields a to-do list instead. */
+    uint8_t  unimpl_fn[32];             /* INT 10h AH values seen but unhandled     */
+    uint8_t  unimpl_mode[32];           /* mode numbers requested but unsupported   */
     ntvdd_frame frame;
 } video_state;
+
+#define VID_UNIMPL_SET(bm, n)  ((bm)[((n) & 0xFF) >> 3] |= (uint8_t)(1u << ((n) & 7)))
+#define VID_UNIMPL_GET(bm, n)  (((bm)[((n) & 0xFF) >> 3] >> ((n) & 7)) & 1u)
 
 int  vdd_video_init(vdd_bus *b, void *self);
 void vdd_video_reset(void *self);

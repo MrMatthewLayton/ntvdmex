@@ -21,7 +21,8 @@ void dos_int21_init(dos_machine_t *m, uint16_t first_mcb)
     m->first_mcb = first_mcb;
     m->dta_seg = DOS_PSP_SEG;
     m->dta_off = 0x0080;
-    m->out_len = 0;
+    m->out_len = 0; m->out_trunc = 0;
+    { int _i; for (_i = 0; _i < 32; ++_i) m->unimpl21[_i] = 0; }
     m->exit_code = 0;
     m->conout = 0;
     m->conctx = 0;
@@ -52,8 +53,12 @@ int dos_int21(dos_machine_t *m)
     #define ERRCF()     (*pfl |= 1)
     #define SETZF()     (*pfl |= 0x40)
     #define CLRZF()     (*pfl &= (WORD)~0x40)
+    /* Dropping output silently once cost a wrong conclusion: a probe's dump was
+       cut mid-line, the harness saw fewer results than it asked for, and the
+       missing rows read as agreement. Record the drop so the log can say so. */
     #define OUTC(c)     do { uint8_t _ch = (uint8_t)(c); \
         if (m->out_len < m->out_cap - 1) m->out[m->out_len++] = (char)_ch; \
+        else m->out_trunc = 1; \
         if (m->conout) m->conout(m->conctx, _ch); } while (0)
 
     /* CF is returned via the FLAGS the INT pushed on the V86 stack (SS:SP+4): the
@@ -250,7 +255,18 @@ int dos_int21(dos_machine_t *m)
         SETAX(R_AX & 0xFF00);                   /* AL=0 = ok */
         OKCF();
     } else {                                    /* unhandled service */
-        tp = zput(tp, "  INT21 AH=0x"); tp = zhex(tp, ah); tp = zput(tp, " unhandled\r\n");
+        /* GH #27. Recorded as well as logged, so the STAGE2 block can list every
+           service a run actually wanted -- that list is the to-do list.
+           NOTE ON CF, and it matters: the oracle says real MS-DOS 6.22 returns
+           CF=0 with AX UNCHANGED for a function it does not define (measured on
+           AH=FFh/73h/88h, tools/dostest/p_unimp.asm). We return CF=1 here, which
+           DIVERGES. That is deliberate for now: this tail is also reached by
+           functions DOS *does* define and we simply have not written yet (4Bh,
+           4Eh, 39h...), and for those a silent "success" would be a worse lie
+           than a visible failure. Splitting the two needs DOS's own function
+           table -- see the note in docs/research/oracle-disagreements.md. */
+        tp = zput(tp, "  INT21 AH=0x"); tp = zhex(tp, ah); tp = zput(tp, " UNIMPLEMENTED\r\n");
+        m->unimpl21[(ah & 0xFF) >> 3] |= (uint8_t)(1u << (ah & 7));
         ERRCF();
     }
 

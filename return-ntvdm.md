@@ -216,7 +216,41 @@ Selftest cases now assert a substring transcribed from the oracle's real output.
     it is evidence about DOSBox's default, not about MS-DOS. It abstains. (Note we currently
     report 0005 too — matching DOSBox's default, not real DOS.)
 
+★★★ **#27 LOUD FAILURE — DONE (host v146, rig-verified, selftest 8/8, off-VM 325/325).**
+  ▶ **THE NULL-VECTOR LANDMINE IS REAL, BUT NOT WHERE THE SURVEY SAID.** Measured before
+    fixing, and the measurement narrowed the fix. The vectors #27 named (11h/12h/13h/15h/25h/26h)
+    are **NOT null on the rig** — they carry the VDM's own BIOS entries (INT 13h read
+    `F000:5595`, INT 11h `F000:F84D`). Blanket-planting an IRET over those would swap a working
+    handler for a silent "success" — the exact failure mode the issue exists to remove. The
+    genuinely null ones are the USER-INTERRUPT ranges: **`0x60-0x66` and `0x78-0xF5`, 133 of
+    them.** So the fix fills only vectors that read 0000:0000, and names them:
+      `STAGE0: null IVT vectors -> IRET stub: 0x60-0x66 0x78-0xf5`
+  ▶ **A RUN NOW YIELDS A TO-DO LIST** (STAGE2, always printed — "none" is a positive statement
+    that nothing was missing, which a suppressed line is not):
+      `STAGE2: INT21 unimplemented: AH=0x73 AH=0x88 AH=0xff`
+      `STAGE2: INT10 unimplemented: none`
+      `STAGE2: video modes unsupported: none`
+    INT 10h unknown functions and unsupported mode numbers are recorded in the video VDD
+    (`unimpl_fn`/`unimpl_mode` bitmaps in video_state, kept dependency-free) and drained by the
+    host. The INT 21h tail logs `AH=0x.. UNIMPLEMENTED` and sets a bitmap.
+  ▶ **THE DOS-OUTPUT CAPTURE WAS SILENTLY TRUNCATING AT 1 KB** (`char dosout[1024]`), which cut
+    a probe dump mid-line — and the missing rows READ AS AGREEMENT in the harness. Two fixes:
+    buffer raised to 16 KB, and truncation now appends `<<<OUTPUT TRUNCATED>>>` instead of
+    dropping bytes. **Also fixed in dosdiff.py: a field with no subject data is now NO-DATA, not
+    AGREE.** That was a false-green in my own tool, found by being bitten by it.
+  ▶ **#27's STATED FIX IS REFUTED BY THE ORACLE.** The issue says *"Set AX=1 (invalid function)
+    alongside CF on unhandled INT 21h calls; DOS sets both, we only set carry."* Real MS-DOS
+    6.22 sets **NEITHER** — `AX` unchanged, `CF=0` — measured on AH=FFh/73h/88h. We return
+    CF=1, so we DIVERGE, and that is **kept deliberately**: our unhandled tail is reached both
+    by functions DOS does not define (match = CF=0) and by functions DOS defines that we have
+    not written yet (4Bh/4Eh/39h — where CF=0 would claim success for a no-op). Splitting them
+    needs a table of which AH values 6.22 defines; #29-#38 need that table anyway. Recorded in
+    full in `docs/research/oracle-disagreements.md` so nobody "fixes" it without the argument.
+  ▶ DOSBox-X abstains on `int21.73/CF`: AH=73h is the DOS 7.1 FAT32 group, absent from 6.22.
+
 ▶▶ RESUME — NEXT STEPS (in order):
+  0. **DECISION WANTED: the INT 21h CF deviation above** — match the oracle (CF=0) or keep
+     failing loudly (CF=1)? Currently CF=1. The clean answer is the defines-table.
   1. **Finish #26: wire the two XP hosts.** Until `ntvdmex` runs there is NO subject in the
      table and the harness cannot grade us — it only cross-checks oracles. Stock `ntvdm` needs
      an rt.bat variant that drops the IFEO Debugger key for the baseline run and restores it.

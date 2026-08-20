@@ -53,6 +53,53 @@ anyone else.
 *Recorded 2026-08-20.* Same cause as #1 — `AX=3306h` reports the same configurable
 version through `BL:BH`, so DOSBox-X is again reporting its own `ver` setting.
 
+## 3. `unimp` / `int21.73` / `CF` — DOSBox-X abstains
+
+*Recorded 2026-08-20.*
+
+| Host | Value |
+|---|---|
+| `msdos622` | `CF=0` |
+| `dosbox-x` | `CF=1` |
+
+`AH=73h` is the FAT32 function group introduced in DOS 7.1. MS-DOS 6.22 does not
+define it at all, so it lands in the undefined bucket and returns `CF=0` with `AX`
+unchanged — exactly like `AH=FFh` and `AH=88h`. DOSBox-X implements the group and
+returns `CF=1` for the unsupported subfunction: a sensible answer for the later
+DOS it emulates, but an answer to a different question.
+
+---
+
+## A deliberate deviation of OURS (not an oracle dispute)
+
+`int21.FF/CF` and `int21.88/CF` show as MISMATCH and are **left that way on
+purpose**. This is recorded here so nobody "fixes" it without reading the
+argument.
+
+**Measured:** real MS-DOS 6.22 answers an undefined INT 21h function with `CF=0`
+and `AX` unchanged (confirmed on `AH=FFh`, `73h`, `88h` — `tools/dostest/p_unimp.asm`).
+**We return `CF=1`.**
+
+Note this also refutes the plan written into GH #27, which says *"Set AX=1
+(invalid function) alongside CF on unhandled INT 21h calls; DOS sets both, we
+only set carry."* The oracle says DOS sets **neither**.
+
+We keep `CF=1` anyway, because our unhandled tail is reached by two different
+kinds of call and they want opposite answers:
+
+- **Functions DOS does not define** (`FFh`, `88h`) — matching DOS means `CF=0`.
+- **Functions DOS defines and we simply have not written yet** (`4Bh` EXEC, `4Eh`
+  find-first, `39h` mkdir …) — here `CF=0` would tell the program *"your request
+  succeeded"* when nothing happened. That is the silent-failure class #27 exists
+  to remove, and it is a worse outcome than a visible error.
+
+Splitting the two needs a table of which `AH` values MS-DOS 6.22 actually
+defines. That table is worth building — #29–#38 need it anyway — at which point
+the undefined bucket should switch to `CF=0`/`AX` unchanged to match the oracle,
+and the not-yet-written bucket should keep failing loudly.
+
+**Until then this is a known, evidence-backed deviation, not an oversight.**
+
 ---
 
 ## Fields deliberately NOT compared

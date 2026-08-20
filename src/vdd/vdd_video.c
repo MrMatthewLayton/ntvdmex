@@ -215,6 +215,13 @@ static void int10(void *self, ntvdd_regs *r)
             for (p = 0; p < 4; ++p) for (i = 0; i < VID_PLANE_SIZE; ++i) st->plane[p][i] = 0;
             st->cols = 80; st->rows = 30;             /* 80x30 text cells (8x16) */
         } else {                                      /* text                    */
+            /* Only 13h and 12h are branched on above, so EVERY other mode lands
+               here and silently becomes 80x25 text -- mode 0 gives 80x25 rather
+               than 40x25, and mode 11h gives a text screen while the program
+               writes pixels into A0000. Record anything that is not a mode we
+               genuinely implement, so the log names it (GH #27, #39). */
+            if (st->mode != 0x03 && st->mode != 0x02)
+                VID_UNIMPL_SET(st->unimpl_mode, st->mode);
             st->cols = VID_COLS; st->rows = VID_ROWS; clear_text(st, 0x07);
         }
         break;
@@ -364,7 +371,10 @@ static void int10(void *self, ntvdd_regs *r)
         s_ax(r, (uint16_t)((r_ax(r) & 0xFF00) | 0x1B));/* AL=1B: supported        */
         break; }
     case 0x4F: vesa(st, r); break;                     /* VESA VBE 2.0            */
-    default: st->dirty = 0; break;
+    default:                                           /* unimplemented function  */
+        VID_UNIMPL_SET(st->unimpl_fn, ah);
+        st->dirty = 0;
+        break;
     }
 }
 

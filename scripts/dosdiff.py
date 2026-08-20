@@ -355,16 +355,25 @@ def diff(results, hosts, probe=None, rules=()):
                 verdict, truth = "DISPUTED", None
 
             match = None
+            missing = [h for h in list(oracles) + list(subjects)
+                       if vals.get(h) is None]
             if truth is not None and subjects:
                 sv = [vals[h] for h in subjects if vals.get(h) is not None]
                 if sv:
                     match = all(v == truth for v in sv)
+                else:
+                    # The subject produced nothing for this field. That is NOT
+                    # agreement -- it is missing evidence, and reporting it as
+                    # AGREE is exactly the false green this harness exists to
+                    # prevent. It bit me once already, via a truncated log.
+                    verdict = "NO-DATA"
 
             width = next((c.width(f) for c in cases.values() if c), 4)
             rows.append({"case": case_name, "field": f, "values": vals,
                          "verdict": verdict, "truth": truth,
                          "subject_matches": match, "width": width,
-                         "abstain": sorted(abstain), "why": rule["why"] if rule else None})
+                         "abstain": sorted(abstain), "why": rule["why"] if rule else None,
+                         "missing": missing})
     return rows, oracles, subjects
 
 
@@ -391,7 +400,7 @@ def report(probe, rows, oracles, subjects, unavailable):
     print("\n" + head)
     print("   " + "-" * (len(head) - 3))
 
-    disputed = failed = 0
+    disputed = failed = nodata = 0
     notes = []
     for r in rows:
         line = "   %-16s %-6s " % (r["case"], r["field"])
@@ -403,6 +412,8 @@ def report(probe, rows, oracles, subjects, unavailable):
             failed += 1
         elif v == "DISPUTED":
             disputed += 1
+        elif v == "NO-DATA":
+            nodata += 1
         if r["abstain"]:
             notes.append(r)
             v += " [%d]" % len(notes)
@@ -421,7 +432,11 @@ def report(probe, rows, oracles, subjects, unavailable):
         print("   rationale in docs/research/oracle-disagreements.md, not a coin-flip.")
     if failed:
         print("   %d field(s) where NTVDMEX disagrees with oracle consensus." % failed)
-    if not disputed and not failed:
+    if nodata:
+        print("   %d field(s) with NO DATA from the subject -- missing evidence, not"
+              % nodata)
+        print("   agreement. Check for a truncated log or a probe that died early.")
+    if not disputed and not failed and not nodata:
         print("   no disputes, no mismatches.")
     return 0
 
