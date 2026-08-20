@@ -20,4 +20,25 @@
    immediately -- an identity case map, which is a correct no-op for ASCII. */
 #define DOS_CASEMAP_OFF 0x0059
 
+/* AH=65h character tables (GH #38) live inside the DOS-resident filler block the
+   MCB chain reserves at paragraph 0x0070 (0x8E paragraphs, owner 8 = "DOS").
+   That block exists to stand in for resident DOS, so no guest allocates over it,
+   and these tables ARE resident DOS data.  The handler segment cannot host them:
+   DOS_HDLR_SEG (0x50) runs into DOS_ENV_SEG (0x60) after only 256 bytes and the
+   tables need ~600.
+
+   !! DO NOT MOVE THIS DOWN TO THE START OF THE BLOCK (0x0071 / linear 0x710) !!
+   Linear 0x714 is the KERNEL's VDM interrupt-state dword -- the [0x714] that
+   session 10 found wedges guests when written from user mode.  The block's own
+   data area begins at 0x710, so the obvious placement lands directly on it and
+   breaks EVERY guest, selftest included.  Starting at 0x0090 (linear 0x900)
+   clears it with room to spare and still ends well below the next MCB header at
+   0xFF0. */
+#define DOS_CTAB_SEG      0x0090
+#define DOS_CTAB_UPPER    0x0000   /* 130 bytes */
+#define DOS_CTAB_FNUPPER  0x0090   /* 130 bytes */
+#define DOS_CTAB_FNTERM   0x0120   /*  24 bytes */
+#define DOS_CTAB_COLLATE  0x0140   /* 258 bytes */
+#define DOS_CTAB_DBCS     0x0250   /*   4 bytes */
+
 #endif /* DOS_LAYOUT_H */

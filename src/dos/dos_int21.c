@@ -4,6 +4,7 @@
 #include "dos_mcb.h"
 #include "dos_layout.h"
 #include "log.h"          /* zput / zhex */
+#include "dos_ctab.h"     /* CP437 tables dumped from the 6.22 oracle */
 
 /* Does MS-DOS 6.22 provide a MEANINGFUL service at this AH?  GH #27.
  *
@@ -136,6 +137,7 @@ void dos_int21_init(dos_machine_t *m, uint16_t first_mcb)
     int i;
     for (i = 0; i < 24; ++i) m->fh[i] = 0;
     for (i = 0; i < 8; ++i) m->find_h[i] = 0;
+    m->last_err = 0;
     m->first_mcb = first_mcb;
     m->dta_seg = DOS_PSP_SEG;
     m->dta_off = 0x0080;
@@ -174,6 +176,7 @@ int dos_int21(dos_machine_t *m)
     #define R_DS VDM_REG(tib, VTIB_DS)
     #define R_ES VDM_REG(tib, VTIB_ES)
     #define R_SI VDM_REG(tib, VTIB_ESI)
+    #define R_DI VDM_REG(tib, VTIB_EDI)
     #define SETAX(v)    (R_AX = (R_AX & 0xFFFF0000u) | ((DWORD)(v) & 0xFFFF))
     #define SET16(r, v) ((r)  = ((r)  & 0xFFFF0000u) | ((DWORD)(v) & 0xFFFF))
     #define OKCF()      (*pfl &= (WORD)~1)
@@ -367,6 +370,122 @@ int dos_int21(dos_machine_t *m)
             FindClose(m->find_h[slot]); m->find_h[slot] = 0;
             d[19] = 0;
             SETAX(18); ERRCF();                              /* no more files   */
+        }
+    } else if (ah == 0x59) {                    /* get extended error */
+        /* Four answers, not one: extended code (AX), class (BH), suggested
+           action (BL) and locus (CH).  The pairings are MEASURED, by provoking
+           each failure on the oracle and asking (tools/dostest/p_err.asm):
+             codes 2, 3, 18  -> BX=0803, CH=02   (not-found family)
+             code  6         -> BX=0704, CH=01   (bad handle)
+           CL is left ALONE -- the oracle returns it still holding the caller's
+           value, so writing it would be an invention. */
+        uint16_t e = m->last_err, bx59 = 0, ch59 = 0;
+        if (e == 2 || e == 3 || e == 18) { bx59 = 0x0803; ch59 = 0x02; }
+        else if (e == 6)                 { bx59 = 0x0704; ch59 = 0x01; }
+        else if (e) {
+            /* Rather than fabricate a class for a code we have not provoked on
+               real DOS, say so. Extend p_err.asm and this table together. */
+            tp = zput(tp, "  INT21 AH=59 class/action/locus UNMEASURED for code 0x");
+            tp = zhex(tp, e); tp = zput(tp, "\r\n");
+        }
+        SETAX(e);
+        SET16(R_BX, bx59);
+        R_CX = (R_CX & 0xFFFF00FFu) | (((DWORD)ch59 & 0xFF) << 8);
+        OKCF();
+    } else if (ah == 0x60) {                    /* truename: DS:SI -> ES:DI */
+        char in[300], out[300];
+        DWORD n;
+        v86_str(R_DS, R_SI, in, sizeof(in));
+        n = GetFullPathNameA(in, sizeof(out), out, NULL);
+        if (n == 0 || n >= sizeof(out)) { SETAX(3); ERRCF(); }
+        else {
+            volatile BYTE *d = (volatile BYTE *)((R_ES << 4) + (R_DI & 0xFFFF));
+            int k = 0;
+            /* Oracle: a RELATIVE name resolves against the current directory and
+               comes back fully qualified and UPPER CASE, and existence is not
+               required -- "SUB\\FILE.TXT" became "C:\\SUB\\FILE.TXT" with no such dir. */
+            while (out[k] && k < 127) {
+                char ch = out[k];
+                if (ch >= 'a' && ch <= 'z') ch = (char)(ch - 32);
+                d[k] = (BYTE)ch; ++k;
+            }
+            d[k] = 0;
+            OKCF();
+        }
+    } else if (ah == 0x65) {                    /* get extended country info */
+        uint8_t al65 = (uint8_t)(R_AX & 0xFF);
+        if (al65 == 0x01) {
+            /* Oracle layout: [0]=1 id, [1-2]=size 0x26, [3-4]=country,
+               [5-6]=code page, [7-40]=34-byte country block.  41 bytes total.
+               NOTE the block here is the 34-byte form (24 meaningful + 10 zero),
+               where AH=38h writes only 24 -- measured, not assumed. */
+            volatile BYTE *d = (volatile BYTE *)((R_ES << 4) + (R_DI & 0xFFFF));
+            uint16_t cap = (uint16_t)(R_CX & 0xFFFF), k;
+            uint8_t blk[41];
+            int j;
+            for (j = 0; j < 41; ++j) blk[j] = 0;
+            blk[0] = 0x01; blk[1] = 0x26; blk[2] = 0x00;
+            blk[3] = 0x01; blk[4] = 0x00;                /* country 1  */
+            blk[5] = 0xB5; blk[6] = 0x01;                /* code page 437 */
+            for (j = 0; j < 24; ++j) blk[7 + j] = ctry_us[j];
+            blk[7 + 18] = (uint8_t)(DOS_CASEMAP_OFF & 0xFF);
+            blk[7 + 19] = (uint8_t)(DOS_CASEMAP_OFF >> 8);
+            blk[7 + 20] = (uint8_t)(DOS_HDLR_SEG & 0xFF);
+            blk[7 + 21] = (uint8_t)(DOS_HDLR_SEG >> 8);
+            for (k = 0; k < 41 && k < cap; ++k) d[k] = blk[k];
+            SETAX(0x01B5); OKCF();                       /* oracle: AX = code page */
+        } else if (al65 >= 0x02 && al65 <= 0x07) {
+            /* Table subfunctions: ES:DI gets a 5-byte descriptor -- the
+               subfunction id, then a FAR POINTER to the table itself.  ATTRIB
+               wants AL=07 and COMMAND.COM AL=04, which is why AL=01 alone was
+               not enough. Offsets from dos_layout.h; contents in dos_ctab.h,
+               dumped from the oracle rather than synthesised. */
+            volatile BYTE *d = (volatile BYTE *)((R_ES << 4) + (R_DI & 0xFFFF));
+            uint16_t off = 0;
+            switch (al65) {
+            case 0x02: off = DOS_CTAB_UPPER;   break;
+            case 0x04: off = DOS_CTAB_FNUPPER; break;
+            case 0x05: off = DOS_CTAB_FNTERM;  break;
+            case 0x06: off = DOS_CTAB_COLLATE; break;
+            case 0x07: off = DOS_CTAB_DBCS;    break;
+            default:   off = DOS_CTAB_UPPER;   break;   /* AL=03, same shape */
+            }
+            d[0] = al65;
+            d[1] = (BYTE)(off & 0xFF);        d[2] = (BYTE)(off >> 8);
+            d[3] = (BYTE)(DOS_CTAB_SEG & 0xFF); d[4] = (BYTE)(DOS_CTAB_SEG >> 8);
+            SETAX(0x01B5); OKCF();
+        } else {
+            tp = zput(tp, "  INT21 AH=65 AL=0x"); tp = zhex(tp, al65);
+            tp = zput(tp, " UNIMPLEMENTED subfunction\r\n");
+            m->unimpl21[0x65 >> 3] |= (uint8_t)(1u << (0x65 & 7));
+            SETAX(1); ERRCF();
+        }
+    } else if (ah == 0x69) {                    /* get/set volume serial number */
+        uint8_t al69 = (uint8_t)(R_AX & 0xFF);
+        if (al69 == 0x00) {
+            /* Oracle layout: [0-1] NOT WRITTEN (came back poisoned), [2-5]
+               serial dword, [6-16] 11-byte label, [17-24] 8-byte fs type. */
+            volatile BYTE *d = (volatile BYTE *)((R_DS << 4) + (R_DX & 0xFFFF));
+            char label[64], fstype[32];
+            DWORD serial = 0, maxc = 0, flags = 0;
+            int k;
+            for (k = 0; k < 64; ++k) label[k] = 0;
+            for (k = 0; k < 32; ++k) fstype[k] = 0;
+            if (GetVolumeInformationA(NULL, label, sizeof(label), &serial,
+                                      &maxc, &flags, fstype, sizeof(fstype))) {
+                d[2] = (BYTE)( serial        & 0xFF);
+                d[3] = (BYTE)((serial >> 8)  & 0xFF);
+                d[4] = (BYTE)((serial >> 16) & 0xFF);
+                d[5] = (BYTE)((serial >> 24) & 0xFF);
+                for (k = 0; k < 11; ++k) d[6 + k]  = (BYTE)(label[k] ? label[k] : ' ');
+                for (k = 0; k < 8;  ++k) d[17 + k] = (BYTE)(fstype[k] ? fstype[k] : ' ');
+                OKCF();
+            } else { SETAX(0x0F); ERRCF(); }
+        } else {
+            tp = zput(tp, "  INT21 AH=69 AL=0x"); tp = zhex(tp, al69);
+            tp = zput(tp, " UNIMPLEMENTED (set serial)\r\n");
+            m->unimpl21[0x69 >> 3] |= (uint8_t)(1u << (0x69 & 7));
+            SETAX(1); ERRCF();
         }
     } else if (ah == 0x47) {                    /* get current directory -> DS:SI */
         /* DOS returns the path WITHOUT the drive letter and WITHOUT a leading
@@ -590,6 +709,12 @@ int dos_int21(dos_machine_t *m)
         m->unimpl21[(ah & 0xFF) >> 3] |= (uint8_t)(1u << (ah & 7));
         ERRCF();
     }
+
+    /* GH #34: remember the last failure for AH=59h. Done HERE, once, rather
+       than at each of the ~20 error sites -- CF and AX are already exactly what
+       the guest is about to see. 59h itself is excluded so reading the error
+       does not overwrite it. */
+    if (ah != 0x59 && (*pfl & 1)) m->last_err = (uint16_t)(R_AX & 0xFFFF);
 
     m->tp = tp;
     #undef R_AX

@@ -24,6 +24,7 @@
 #include "dos_env.h"
 #include "dos_int21.h"
 #include "dos_layout.h"
+#include "dos_ctab.h"
 #include "dos_xms.h"
 #include "dos_ems.h"
 #include "vdd_bus.h"
@@ -3341,7 +3342,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     (void)hInst; (void)hPrev; (void)lpCmd; (void)nShow;
     progpath[0] = 0; args[0] = 0;
 
-    p = zput(p, "NTVDMEX clean host\r\nSTAGE0: WinMain entered [build dpmi-harness-v152]\r\n");
+    p = zput(p, "NTVDMEX clean host\r\nSTAGE0: WinMain entered [build dpmi-harness-v155]\r\n");
     log_write(LOG_PATH, report, p);
     serial_init();                                      /* DPMI harness: COM1 log sink */
     serial_out(report, p);
@@ -3604,6 +3605,13 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     dos_env_build(NULL, DOS_ENV_SEG, progpath[0] ? progpath : "C:\\PROGRAM.COM");  /* M2.5: env */
     dos_cmdtail_build(NULL, DOS_PSP_SEG, args);                                    /* M2.5: args */
     dos_int21_init(&m, dos_mcb_init(NULL));
+    /* GH #38: plant the AH=65h character tables in the DOS-resident block. */
+    { volatile BYTE *ct = (volatile BYTE *)(DOS_CTAB_SEG << 4); unsigned k;
+      for (k = 0; k < sizeof(dos_tab_upper);   ++k) ct[DOS_CTAB_UPPER   + k] = dos_tab_upper[k];
+      for (k = 0; k < sizeof(dos_tab_fnupper); ++k) ct[DOS_CTAB_FNUPPER + k] = dos_tab_fnupper[k];
+      for (k = 0; k < sizeof(dos_tab_fnterm);  ++k) ct[DOS_CTAB_FNTERM  + k] = dos_tab_fnterm[k];
+      for (k = 0; k < sizeof(dos_tab_collate); ++k) ct[DOS_CTAB_COLLATE + k] = dos_tab_collate[k];
+      for (k = 0; k < sizeof(dos_tab_dbcs);    ++k) ct[DOS_CTAB_DBCS    + k] = dos_tab_dbcs[k]; }
     /* GH #35: plant SysVars for INT 21h AH=52h. Only the word at BX-2 (the first
        MCB segment) is real; the remaining fields are deliberately left zero --
        see the handler for why a null stub beats a plausible-looking one. */

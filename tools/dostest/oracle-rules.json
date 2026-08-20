@@ -58,5 +58,175 @@
     ],
     "recorded": "2026-08-20",
     "why": "Measures whether a FAILED find-first clobbers the search state already sitting in the DTA. Real MS-DOS 6.22 leaves it alone, so the following find-next carries on the earlier live '*.*' search and succeeds (AX=0, CF=0). DOSBox-X resets the state and reports no-more-files (AX=0x12, CF=1). NTVDMEX matches 6.22, because our find-first only writes the DTA search fields on success -- worth keeping that way deliberately rather than by accident."
+  },
+  {
+    "probe": "err",
+    "case": "err.after.4E.nofile",
+    "field": "BX",
+    "abstain": [
+      "dosbox-x"
+    ],
+    "recorded": "2026-08-20",
+    "why": "AH=59h reports a failure as four things: the extended code (AX), an error CLASS (BH), a suggested ACTION (BL) and a LOCUS (CH). The oracle populates all of them -- 0803/CH=02 for the not-found family, 0704/CH=01 for a bad handle. DOSBox-X returns the code correctly but largely does not populate class/action/locus (0001 or 0801, CH=00), so it is not evidence about what DOS reports in those fields. AX itself is still compared and agrees everywhere."
+  },
+  {
+    "probe": "err",
+    "case": "err.after.4E.nofile",
+    "field": "CX",
+    "abstain": [
+      "dosbox-x"
+    ],
+    "recorded": "2026-08-20",
+    "why": "AH=59h reports a failure as four things: the extended code (AX), an error CLASS (BH), a suggested ACTION (BL) and a LOCUS (CH). The oracle populates all of them -- 0803/CH=02 for the not-found family, 0704/CH=01 for a bad handle. DOSBox-X returns the code correctly but largely does not populate class/action/locus (0001 or 0801, CH=00), so it is not evidence about what DOS reports in those fields. AX itself is still compared and agrees everywhere."
+  },
+  {
+    "probe": "err",
+    "case": "err.after.4E.nopath",
+    "field": "BX",
+    "abstain": [
+      "dosbox-x"
+    ],
+    "recorded": "2026-08-20",
+    "why": "AH=59h reports a failure as four things: the extended code (AX), an error CLASS (BH), a suggested ACTION (BL) and a LOCUS (CH). The oracle populates all of them -- 0803/CH=02 for the not-found family, 0704/CH=01 for a bad handle. DOSBox-X returns the code correctly but largely does not populate class/action/locus (0001 or 0801, CH=00), so it is not evidence about what DOS reports in those fields. AX itself is still compared and agrees everywhere."
+  },
+  {
+    "probe": "err",
+    "case": "err.after.4E.nopath",
+    "field": "CX",
+    "abstain": [
+      "dosbox-x"
+    ],
+    "recorded": "2026-08-20",
+    "why": "AH=59h reports a failure as four things: the extended code (AX), an error CLASS (BH), a suggested ACTION (BL) and a LOCUS (CH). The oracle populates all of them -- 0803/CH=02 for the not-found family, 0704/CH=01 for a bad handle. DOSBox-X returns the code correctly but largely does not populate class/action/locus (0001 or 0801, CH=00), so it is not evidence about what DOS reports in those fields. AX itself is still compared and agrees everywhere."
+  },
+  {
+    "probe": "err",
+    "case": "err.after.3D.missing",
+    "field": "BX",
+    "abstain": [
+      "dosbox-x"
+    ],
+    "recorded": "2026-08-20",
+    "why": "AH=59h reports a failure as four things: the extended code (AX), an error CLASS (BH), a suggested ACTION (BL) and a LOCUS (CH). The oracle populates all of them -- 0803/CH=02 for the not-found family, 0704/CH=01 for a bad handle. DOSBox-X returns the code correctly but largely does not populate class/action/locus (0001 or 0801, CH=00), so it is not evidence about what DOS reports in those fields. AX itself is still compared and agrees everywhere."
+  },
+  {
+    "probe": "err",
+    "case": "err.after.3D.missing",
+    "field": "CX",
+    "abstain": [
+      "dosbox-x"
+    ],
+    "recorded": "2026-08-20",
+    "why": "AH=59h reports a failure as four things: the extended code (AX), an error CLASS (BH), a suggested ACTION (BL) and a LOCUS (CH). The oracle populates all of them -- 0803/CH=02 for the not-found family, 0704/CH=01 for a bad handle. DOSBox-X returns the code correctly but largely does not populate class/action/locus (0001 or 0801, CH=00), so it is not evidence about what DOS reports in those fields. AX itself is still compared and agrees everywhere."
+  },
+  {
+    "probe": "err",
+    "case": "err.after.3B.missing",
+    "field": "BX",
+    "abstain": [
+      "dosbox-x"
+    ],
+    "recorded": "2026-08-20",
+    "why": "AH=59h reports a failure as four things: the extended code (AX), an error CLASS (BH), a suggested ACTION (BL) and a LOCUS (CH). The oracle populates all of them -- 0803/CH=02 for the not-found family, 0704/CH=01 for a bad handle. DOSBox-X returns the code correctly but largely does not populate class/action/locus (0001 or 0801, CH=00), so it is not evidence about what DOS reports in those fields. AX itself is still compared and agrees everywhere."
+  },
+  {
+    "probe": "err",
+    "case": "err.after.3B.missing",
+    "field": "CX",
+    "abstain": [
+      "dosbox-x"
+    ],
+    "recorded": "2026-08-20",
+    "why": "AH=59h reports a failure as four things: the extended code (AX), an error CLASS (BH), a suggested ACTION (BL) and a LOCUS (CH). The oracle populates all of them -- 0803/CH=02 for the not-found family, 0704/CH=01 for a bad handle. DOSBox-X returns the code correctly but largely does not populate class/action/locus (0001 or 0801, CH=00), so it is not evidence about what DOS reports in those fields. AX itself is still compared and agrees everywhere."
+  },
+  {
+    "probe": "err",
+    "case": "err.after.3F.badhandle",
+    "field": "BX",
+    "abstain": [
+      "dosbox-x"
+    ],
+    "recorded": "2026-08-20",
+    "why": "AH=59h reports a failure as four things: the extended code (AX), an error CLASS (BH), a suggested ACTION (BL) and a LOCUS (CH). The oracle populates all of them -- 0803/CH=02 for the not-found family, 0704/CH=01 for a bad handle. DOSBox-X returns the code correctly but largely does not populate class/action/locus (0001 or 0801, CH=00), so it is not evidence about what DOS reports in those fields. AX itself is still compared and agrees everywhere."
+  },
+  {
+    "probe": "err",
+    "case": "err.after.3F.badhandle",
+    "field": "CX",
+    "abstain": [
+      "dosbox-x"
+    ],
+    "recorded": "2026-08-20",
+    "why": "AH=59h reports a failure as four things: the extended code (AX), an error CLASS (BH), a suggested ACTION (BL) and a LOCUS (CH). The oracle populates all of them -- 0803/CH=02 for the not-found family, 0704/CH=01 for a bad handle. DOSBox-X returns the code correctly but largely does not populate class/action/locus (0001 or 0801, CH=00), so it is not evidence about what DOS reports in those fields. AX itself is still compared and agrees everywhere."
+  },
+  {
+    "probe": "err",
+    "case": "err.after.3E.badhandle",
+    "field": "BX",
+    "abstain": [
+      "dosbox-x"
+    ],
+    "recorded": "2026-08-20",
+    "why": "AH=59h reports a failure as four things: the extended code (AX), an error CLASS (BH), a suggested ACTION (BL) and a LOCUS (CH). The oracle populates all of them -- 0803/CH=02 for the not-found family, 0704/CH=01 for a bad handle. DOSBox-X returns the code correctly but largely does not populate class/action/locus (0001 or 0801, CH=00), so it is not evidence about what DOS reports in those fields. AX itself is still compared and agrees everywhere."
+  },
+  {
+    "probe": "err",
+    "case": "err.after.3E.badhandle",
+    "field": "CX",
+    "abstain": [
+      "dosbox-x"
+    ],
+    "recorded": "2026-08-20",
+    "why": "AH=59h reports a failure as four things: the extended code (AX), an error CLASS (BH), a suggested ACTION (BL) and a LOCUS (CH). The oracle populates all of them -- 0803/CH=02 for the not-found family, 0704/CH=01 for a bad handle. DOSBox-X returns the code correctly but largely does not populate class/action/locus (0001 or 0801, CH=00), so it is not evidence about what DOS reports in those fields. AX itself is still compared and agrees everywhere."
+  },
+  {
+    "probe": "ctab",
+    "case": "t.02.upper",
+    "field": "AX",
+    "abstain": [
+      "dosbox-x"
+    ],
+    "recorded": "2026-08-20",
+    "why": "Real 6.22 returns the active CODE PAGE in AX for every AH=65h subfunction (0x1B5 = 437). DOSBox-X leaves AX holding the call number it was given (6502h, 6504h...), i.e. it does not set AX at all. The descriptor and table pointer it returns are fine; only this register differs, so it is not evidence about what DOS puts in AX."
+  },
+  {
+    "probe": "ctab",
+    "case": "t.04.fnupper",
+    "field": "AX",
+    "abstain": [
+      "dosbox-x"
+    ],
+    "recorded": "2026-08-20",
+    "why": "Real 6.22 returns the active CODE PAGE in AX for every AH=65h subfunction (0x1B5 = 437). DOSBox-X leaves AX holding the call number it was given (6502h, 6504h...), i.e. it does not set AX at all. The descriptor and table pointer it returns are fine; only this register differs, so it is not evidence about what DOS puts in AX."
+  },
+  {
+    "probe": "ctab",
+    "case": "t.05.fnterm",
+    "field": "AX",
+    "abstain": [
+      "dosbox-x"
+    ],
+    "recorded": "2026-08-20",
+    "why": "Real 6.22 returns the active CODE PAGE in AX for every AH=65h subfunction (0x1B5 = 437). DOSBox-X leaves AX holding the call number it was given (6502h, 6504h...), i.e. it does not set AX at all. The descriptor and table pointer it returns are fine; only this register differs, so it is not evidence about what DOS puts in AX."
+  },
+  {
+    "probe": "ctab",
+    "case": "t.06.collate",
+    "field": "AX",
+    "abstain": [
+      "dosbox-x"
+    ],
+    "recorded": "2026-08-20",
+    "why": "Real 6.22 returns the active CODE PAGE in AX for every AH=65h subfunction (0x1B5 = 437). DOSBox-X leaves AX holding the call number it was given (6502h, 6504h...), i.e. it does not set AX at all. The descriptor and table pointer it returns are fine; only this register differs, so it is not evidence about what DOS puts in AX."
+  },
+  {
+    "probe": "ctab",
+    "case": "t.07.dbcs",
+    "field": "AX",
+    "abstain": [
+      "dosbox-x"
+    ],
+    "recorded": "2026-08-20",
+    "why": "Real 6.22 returns the active CODE PAGE in AX for every AH=65h subfunction (0x1B5 = 437). DOSBox-X leaves AX holding the call number it was given (6502h, 6504h...), i.e. it does not set AX at all. The descriptor and table pointer it returns are fine; only this register differs, so it is not evidence about what DOS puts in AX."
   }
 ]

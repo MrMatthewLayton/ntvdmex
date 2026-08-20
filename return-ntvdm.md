@@ -343,9 +343,37 @@ A handler-segment offset map is now in main.c next to the define — check it be
   19 are the legacy FCB group (#36). Per-app remaining: MEM **none**, CHKDSK `60`,
   COMMAND.COM `5D 65`, TREE `11 59 69`.
 
+★★★ **59h / 60h / 65h / 69h DONE. EVERY APP IS DOWN TO ONE MISSING FUNCTION:**
+      MEM **none** · CHKDSK **none** · ATTRIB `43` · COMMAND.COM `5D` · TREE `11`
+  ▶ **#34 extended error: class/action/locus are MEASURED, not guessed.** `p_err.asm` provokes
+    each failure and asks 59h what DOS made of it: codes 2/3/18 → BX=0803 CH=02; code 6 →
+    BX=0704 CH=01. **CL is never written** (came back poisoned), so we leave it alone. Codes we
+    have not provoked LOG "class/action/locus UNMEASURED" rather than inventing a class.
+    `last_err` is captured in ONE place — the end of the dispatcher, where CF and AX are already
+    what the guest will see — not at each of the ~20 error sites.
+  ▶ **#38 character tables: DUMPED, NOT SYNTHESISED.** ATTRIB wants 65h AL=07, COMMAND.COM
+    AL=04, so the AL=01 country block was not enough. Each subfunction returns ES:DI → a 5-byte
+    descriptor {id, FAR ptr}. The tables are in `src/dos/dos_ctab.h`, dumped byte-for-byte off
+    the oracle by following those pointers (`p_ctab.asm`). The collating table in particular is
+    NOT guessable — it folds accented chars onto unaccented letters in a specific way.
+    Rig output is byte-identical to the oracle for all five tables.
+
+★★ **A BUG THAT WEDGED EVERY GUEST, INCLUDING SELFTEST — READ THIS BEFORE PLACING DATA IN LOW
+MEMORY.** The tables first went at `DOS_CTAB_SEG 0x0071`, which is the DOS-resident MCB filler
+block's data area (linear 0x710) and looks like exactly the right home. **Linear 0x714 is the
+KERNEL's VDM interrupt-state dword** — the `[0x714]` session 10 found wedges guests when written
+from user mode. Planting 600 bytes at 0x710 wrote straight over it, and EVERY run died with no
+log past "running .COM": selftest, p_misc, p_ctab. Moved to `0x0090` (linear 0x900), which
+clears it and still ends below the next MCB header at 0xFF0. selftest recovered immediately.
+  ► The lesson generalises: the MCB map says that block is free, and the KERNEL disagrees.
+
+▶ **HARNESS GAP (known, not fixed): `EMIT_BUF` contents are dumped but NOT diffed.** dosdiff
+  compares registers only, so the five character tables were verified by eye against the oracle
+  dump rather than by the tool. Buffer contents are the substance of many DOS calls (country
+  block, DTA, tables) — comparing them belongs in dosdiff.
+
 ▶▶ RESUME — NEXT STEPS (in order):
-  1. Finish the app queue: **65h** (ATTRIB, COMMAND.COM), **60h** truename (CHKDSK), **5Dh**
-     (COMMAND.COM), **59h** extended error (#34), **69h**, **11h/12h** FCB find (#36).
+  1. Finish the app queue: **43h** (ATTRIB), **5Dh** (COMMAND.COM), **11h/12h** FCB find (TREE, #36).
   2. **#30 EXEC (4Bh)** — after which a shell can actually launch a program.
   3. Fix the MEM.EXE numbers (silent wrongness, see above).
   4. Then the BIOS layer (#39-#46), which is the thin part: ~19 INT 10h functions, only 2 of
