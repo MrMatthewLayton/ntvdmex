@@ -296,6 +296,72 @@ ROM font dumps from session 12, in text mode rather than graphics.
 
 ---
 
+# FIX 1 — THE RETRACE BIT IS NOW TIMED (done, measured)
+
+`st->retrace ^= 0x09` on every read is gone. Bit 3 is asserted only during the vertical
+blanking interval, derived from `QueryPerformanceCounter` (the same source as
+`host_pit_sync`, so retrace and the PIT cannot drift apart): 60 Hz for 480-line modes,
+70 Hz for 200/400-line ones, keyed off DISPLAYED HEIGHT rather than mode number. Bit 0
+is now a separate signal that changes per scanline, as on real hardware, instead of
+being toggled in lockstep with bit 3.
+
+**The VDD takes its clock as a hook** (`video_state.time_us`), like `vmem` and the
+interpreter's `g_seg2lin`. So it stays pure C, and the off-VM battery injects a fake
+clock — which turns CRT timing, normally the least testable thing in an emulator, into
+ten ordinary deterministic assertions. Two of them encode the actual bug, and the old
+code failed both by construction:
+  - two reads at the SAME instant must agree (the toggle alternated);
+  - bit 0 must change WITHIN a scanline (the toggle moved it with bit 3).
+
+**★ MEASURED ON THE RIG, which is the point — "is it paced?" stopped being an opinion.**
+`vbl_edges` counts clear→set transitions as seen by the GUEST's own reads, so one edge
+is one completed `WAIT &H3DA,8`, and edges/second IS its frame rate:
+
+    MATRIX_2  (12h)   1797 edges / 30.000 s = 59.9 Hz   (expected 60)
+    CAVE      (13h)   2089 edges / 30.000 s = 69.6 Hz   (expected 70)
+    MATRIX_1  (12h)      0 edges, 0 reads              (never polls 3DA — see #4)
+
+MATRIX_1's zero reads independently confirm the source reading in #4 that it paces on a
+software delay loop. Selftest stayed 8/8; the off-VM battery is 580/580.
+
+## ...AND IT IS SUFFICIENT FOR NOTHING. The user still reports "too fast".
+
+Correct pacing caps MATRIX_2 at 60 fps — **and a 386 never redrew an 80×30 grid at 60
+fps.** On period hardware the binding constraint was always CPU SPEED; `WAIT &H3DA,8`
+was only ever tear-avoidance. So the taxonomy in #5a collapses after this fix:
+
+  ⇒ **ALL FIVE speed-affected demos now need #3, the CPU-speed throttle.** The retrace
+    fix was NECESSARY (it stops the tearing and makes pacing deterministic and
+    measurable) and is SUFFICIENT FOR NONE of them.
+
+**Side observation, and a second argument for #3:** MATRIX_2 polled 0x3DA **49.3 million
+times in 30 s** (1.6M/s) — faithful busy-waiting, but now the dominant cost of that run.
+A throttled CPU polls proportionally less.
+
+# FIX 2 — PRESENT IN PHASE WITH THE GUEST (done; residual is host-side)
+
+After fix 1, BOUNCEBX was "better, visibly a box now, but still tearing a little", against
+"butter smooth" on stock ntvdm. The frame rate was provably 59.9 Hz, so that tearing was
+**ours**: `SetTimer(g_hwnd, 1, 33, ...)` presented at **30 Hz** and snapshotted whenever
+it happened to fire — once per TWO guest frames, at an arbitrary phase. A program that
+erases an object and redraws it one pixel along gets caught between the two about half
+the time, and the object is simply missing from that frame. (It is also what made the
+very first captured still show a partial box, misread then as a mid-fill artefact.)
+
+Now: the UI tick runs at 5 ms and the present is gated on `vdd_video_present_ready()` —
+snapshot only in the tail of the emulated active period, when the guest has finished
+drawing and is parked in its retrace wait. A 25 ms staleness fallback guarantees the
+screen still updates for guests that never touch 0x3DA, so nothing else regresses.
+
+**Residual, and accepted by the user:** some tearing remains, and it is **below us** —
+a windowed blit on a NON-COMPOSITED XP desktop is not synchronised to the physical
+monitor's retrace, and no amount of emulator-side correctness can change that.
+  ▶ **Worth testing if it ever matters: the FULLSCREEN DirectDraw path**, which is the
+    one case where DirectDraw can genuinely wait for the real vertical blank. Windowed
+    cannot.
+
+---
+
 # RESULT OF THE SWEEP
 
 **Ten demos, watched one at a time on the physical box. All ten render correctly.**

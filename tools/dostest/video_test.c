@@ -23,6 +23,13 @@ static int total = 0, fails = 0;
 
 
 static uint8_t g_flat[0x100000];          /* guest memory for INT 10h ES:BP/ES:DX */
+
+/* Fake microsecond clock for the 0x3DA retrace timing tests (T17). The VDD takes
+   its timebase as a hook so the host can hand it QueryPerformanceCounter and the
+   battery can hand it a value it controls -- which makes CRT timing, normally the
+   least testable thing in an emulator, an ordinary deterministic assertion. */
+uint64_t g_fake_us = 0;
+static uint64_t fake_clock(void) { return g_fake_us; }
 static uint8_t g_vmem[VID_APERTURE_SIZE]; /* the video aperture (A0000) stand-in   */
 static video_state vid;
 
@@ -193,6 +200,76 @@ int main(void)
     { uint32_t v; v=4; vdd_bus_io(&bus,0x3CE,1,0,&v); v=2; vdd_bus_io(&bus,0x3CF,1,0,&v); } /* read_map=2 */
     { uint8_t got = vga_planar_read(&vid, 3);
       CHECK(got==0x33 && vid.latch[0]==0x11 && vid.latch[3]==0x44, "planar read: latches + read_map=2"); }
+
+    /* T17: 0x3DA vertical retrace is TIMED, not toggled (GH #55 follow-up) ----- *
+     * The old implementation flipped bits 3 and 0 on every read, so `WAIT &H3DA,8`
+     * -- the frame clock of most DOS graphics code -- returned instantly and those
+     * programs ran unbounded. A fake clock makes the real thing deterministic to
+     * test: set the microsecond time, read the port, assert the bits.            */
+    { uint32_t v; int i, hi, lo;
+      vid.time_us = fake_clock;
+
+      /* --- 640x480 (mode 12h): 60 Hz, 525 lines, 480 active --------------- */
+      vid.gh = 480;
+      g_fake_us = 0;                       /* line 0 = active picture           */
+      vdd_bus_io(&bus, 0x3DA, 1, 1, &v);
+      CHECK(!(v & 0x08), "3DA: no retrace during the active picture");
+
+      g_fake_us = 16000;                   /* 16.0ms of a 16.67ms frame = vblank */
+      vdd_bus_io(&bus, 0x3DA, 1, 1, &v);
+      CHECK((v & 0x08) != 0, "3DA: retrace asserted during vertical blanking");
+      CHECK((v & 0x01) != 0, "3DA: display-disabled set during vblank too");
+
+      /* --- IT DOES NOT ALTERNATE. Two reads at the SAME instant must agree; the
+       *     old toggle failed exactly here, and that was the whole bug. ------- */
+      { uint32_t a, b;
+        g_fake_us = 1000;
+        vdd_bus_io(&bus, 0x3DA, 1, 1, &a);
+        vdd_bus_io(&bus, 0x3DA, 1, 1, &b);
+        CHECK(a == b, "3DA: two reads at the same instant agree (no toggle)"); }
+
+      /* --- Duty cycle: retrace must be a MINORITY of the frame, or a program
+       *     that waits for it to clear stalls. Sample a whole frame. -------- */
+      hi = lo = 0;
+      for (i = 0; i < 1000; i++) {
+          g_fake_us = (uint64_t)(i * 16667 / 1000);       /* one 60 Hz frame */
+          vdd_bus_io(&bus, 0x3DA, 1, 1, &v);
+          if (v & 0x08) hi++; else lo++;
+      }
+      CHECK(hi > 0 && lo > 0, "3DA: retrace both asserted and clear across a frame");
+      CHECK(hi < lo / 4, "3DA: retrace is a small minority of the frame (~9%)");
+
+      /* --- 320x200 / text run at 70 Hz, so the SAME wall-clock instant lands
+       *     differently. Keys off displayed height, not mode number. -------- */
+      vid.gh = 400;
+      hi = lo = 0;
+      for (i = 0; i < 1000; i++) {
+          g_fake_us = (uint64_t)(i * 14286 / 1000);       /* one 70 Hz frame */
+          vdd_bus_io(&bus, 0x3DA, 1, 1, &v);
+          if (v & 0x08) hi++; else lo++;
+      }
+      CHECK(hi > 0 && lo > 0, "3DA: 70 Hz modes also retrace once per frame");
+
+      /* --- bit 0 is a DIFFERENT signal: it must change WITHIN one scanline,
+       *     which the old code (toggling it with bit 3) could never do. ----- */
+      { int changed = 0; uint32_t prev = 0xFF;
+        vid.gh = 480;
+        for (i = 0; i < 40; i++) {                        /* ~1.3 scanlines */
+            g_fake_us = (uint64_t)i;                      /* 1 us steps      */
+            vdd_bus_io(&bus, 0x3DA, 1, 1, &v);
+            if (prev != 0xFF && (v & 1) != (prev & 1)) changed = 1;
+            prev = v;
+        }
+        CHECK(changed, "3DA: display-disabled (bit 0) toggles within a scanline"); }
+
+      /* --- No clock injected -> the legacy toggle still applies, so off-VM
+       *     callers that never set a clock are unaffected. ------------------ */
+      { uint32_t a, b;
+        vid.time_us = 0;
+        vdd_bus_io(&bus, 0x3DA, 1, 1, &a);
+        vdd_bus_io(&bus, 0x3DA, 1, 1, &b);
+        CHECK(a != b, "3DA: with no clock injected the legacy toggle remains"); }
+    }
 
     printf("\n%d checks, %d failed\n", total, fails);
     return fails ? 1 : 0;

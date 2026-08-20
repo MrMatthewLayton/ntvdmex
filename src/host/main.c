@@ -260,6 +260,11 @@ static int            g_capture       = 0;  /* CAPTURE_FLAG present: opt-in self
 static int            g_no_a000       = 0;  /* NOA000_FLAG present: leave A0000 mapped (diagnostic) */
 static int            g_interp12      = 0;  /* INTERP12_FLAG: interpret mode 12h, no page trap */
 static int            g_p12_off       = 0;  /* P12OFF_FLAG: revert to the A0000 page trap      */
+static DWORD          g_run_start_tick= 0;  /* exec-loop start, so STAGE2 can report a RATE    */
+/* The UI tick must be well ABOVE the guest refresh (60/70 Hz) or the phase window
+   is unreachable and every present falls back to the staleness path. */
+#define VID_PRESENT_TICK_MS   5
+#define VID_PRESENT_STALE_MS 25    /* never let the screen go quiet longer than this */
 /* Planar-mode interpretation, measured. `batches` is how many times we drove the
    guest from the host, `instrs` how many instructions that came to, and `bails`
    how often the interpreter declined the very first opcode and had to let V86 run
@@ -847,6 +852,24 @@ static int host_conin(void *ctx)
    from the exec loop, which by construction gets a turn on every port access.
    A 20us quantum keeps the lock traffic negligible while staying well inside one
    80us timer step; sub-quantum time is carried, not dropped. */
+/* Free-running microsecond clock for the video VDD's CRT timebase (GH #55
+   follow-up). The VDD takes its clock as a hook so it stays pure C and off-VM
+   testable; this is what the host hands it. Monotonic and never reset -- the VDD
+   only ever takes it modulo a frame period, so the origin does not matter.
+   Same source as host_pit_sync(): QueryPerformanceCounter, which is why the guest's
+   retrace and its PIT cannot drift against each other. */
+static uint64_t host_time_us(void)
+{
+    static LARGE_INTEGER s_freq, s_base;
+    LARGE_INTEGER now;
+    if (!s_freq.QuadPart) {
+        if (!QueryPerformanceFrequency(&s_freq) || !s_freq.QuadPart) return 0;
+        QueryPerformanceCounter(&s_base);
+    }
+    QueryPerformanceCounter(&now);
+    return (uint64_t)(((now.QuadPart - s_base.QuadPart) * 1000000) / s_freq.QuadPart);
+}
+
 static void opl_pump_time(void)
 {
     static LARGE_INTEGER s_freq, s_last;
@@ -1694,12 +1717,34 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
         host_pit_sync();
         EnterCriticalSection(&g_lock);
         vdd_bus_frame(&g_bus);          /* tick PIT + render into g_vid.frame       */
-        if (g_ms_hidden == 0 && g_vid.frame.bpp == 8 && g_vid.frame.pixels)
-            overlay_cursor((uint8_t *)g_vid.frame.pixels, g_vid.frame.w, g_vid.frame.h,
-                           (int)g_vid.frame.stride, g_ms_x, g_ms_y);   /* driver mouse cursor */
-        present_ddraw_snapshot(&g_pd, &g_vid.frame);  /* consistent copy UNDER lock  */
-        LeaveCriticalSection(&g_lock);
-        present_ddraw_present(&g_pd);   /* vsync'd blit OUTSIDE the lock             */
+        /* PRESENT IN PHASE WITH THE GUEST'S FRAME, not on our own timer.
+           This tick used to run at 30 Hz and snapshot whenever it happened to fire.
+           Once the guest was correctly paced to 60/70 Hz that meant sampling once
+           per TWO of its frames at an arbitrary phase -- so a program that erases an
+           object and redraws it one pixel along (BOUNCEBX) got caught between the
+           two about half the time, and the object was simply missing from that
+           frame. That is the residual tearing left after the 0x3DA fix, and it was
+           ours, not the guest's: its frame rate measured 59.9 Hz.
+           Now the timer runs fast and we snapshot only when the emulated CRT is in
+           the tail of its active period, i.e. the guest has finished drawing and is
+           parked in its retrace wait. The staleness fallback guarantees we still
+           present if the phase window keeps being missed, so a guest that never
+           touches 0x3DA is unaffected. */
+        {   static DWORD s_last_present = 0;
+            DWORD nowt = GetTickCount();
+            int stale = (DWORD)(nowt - s_last_present) >= VID_PRESENT_STALE_MS;
+            if (vdd_video_present_ready(&g_vid) || stale) {
+                s_last_present = nowt;
+                if (g_ms_hidden == 0 && g_vid.frame.bpp == 8 && g_vid.frame.pixels)
+                    overlay_cursor((uint8_t *)g_vid.frame.pixels, g_vid.frame.w, g_vid.frame.h,
+                                   (int)g_vid.frame.stride, g_ms_x, g_ms_y);  /* driver cursor */
+                present_ddraw_snapshot(&g_pd, &g_vid.frame); /* consistent copy UNDER lock */
+                LeaveCriticalSection(&g_lock);
+                present_ddraw_present(&g_pd);   /* vsync'd blit OUTSIDE the lock         */
+            } else {
+                LeaveCriticalSection(&g_lock);  /* not our phase: keep the last frame up */
+            }
+        }
         /* Headless remote visual capture (session-9): the host screenshots ITSELF to
            C:\ntvdmex\shotNN.bmp every ~2s so a graphical run (Skyroads, the PM demos)
            is verifiable off the SMB share -- VNC capture is dead on the real box. The
@@ -1707,7 +1752,7 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
            40 frames so a long run never fills the disk. rt.bat copies shot*.bmp off. */
         if (g_capture) {
             static unsigned cap_tick = 0, cap_seq = 0;
-            if ((cap_tick++ % 60) == 0 && cap_seq < 40) {
+            if ((cap_tick++ % (2000 / VID_PRESENT_TICK_MS)) == 0 && cap_seq < 40) {
                 char path[] = "C:\\ntvdmex\\shot00.bmp";
                 path[15] = (char)('0' + (cap_seq / 10) % 10);
                 path[16] = (char)('0' + cap_seq % 10);
@@ -1832,7 +1877,7 @@ static DWORD WINAPI ui_thread(LPVOID arg)
     present_ddraw_init(&g_pd, g_hwnd);          /* GDI windowed; DDraw for fullscreen */
     make_status(g_hwnd, hi);                     /* native themed status bar          */
     ShowWindow(g_hwnd, SW_SHOW); UpdateWindow(g_hwnd);
-    SetTimer(g_hwnd, 1, 33, NULL);              /* ~30 Hz present/PIT tick         */
+    SetTimer(g_hwnd, 1, VID_PRESENT_TICK_MS, NULL);  /* fast tick; present is PHASE-gated */
     while (GetMessageA(&msg, NULL, 0, 0) > 0) { TranslateMessage(&msg); DispatchMessageA(&msg); }
     present_ddraw_shutdown(&g_pd);
     return 0;
@@ -3877,6 +3922,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     g_pit_dev = vdd_pit_device(&g_pit);
     vdd_bus_add(&g_bus, &g_pit_dev);
     g_vid.vmem = (uint8_t *)VID_APERTURE_BASE;  /* the mapped A0000 aperture (RAM) */
+    g_vid.time_us = host_time_us;               /* real CRT timebase for 0x3DA (#55) */
     g_vid_dev = vdd_video_device(&g_vid);
     vdd_bus_add(&g_bus, &g_vid_dev);
     /* AFTER the video VDD is on the bus (it needs st->bus to resolve a guest address). */
@@ -3981,6 +4027,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     (void)guard;
     { static uint32_t s_last_fault = 0; static int s_storm = 0;
     DWORD rm_start_tick = GetTickCount();   /* headless wall-clock cap origin (real-mode) */
+    g_run_start_tick = rm_start_tick;       /* published for the STAGE2 vsync rate line */
     while (g_running) {
         /* Headless safety (session-9): the real-mode loop has no iteration cap so
            interactive/animated programs run free -- but under the SMB auto-exit harness
@@ -4927,6 +4974,10 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         for (pl = 0; pl < 4; ++pl) { unsigned k2, c2 = 0;
             for (k2 = 0; k2 < VID_PLANE_SIZE; ++k2) if (g_vid.plane[pl][k2]) ++c2;
             nz[pl] = c2; }
+        p = zput(p, "STAGE2: vsync: vbl_edges="); p = zhex(p, g_vid.vbl_edges);
+        p = zput(p, " p3da_reads=");             p = zhex(p, g_vid.p3da_reads);
+        p = zput(p, " run_ms=");                 p = zhex(p, GetTickCount() - g_run_start_tick);
+        p = zput(p, "\r\n");
         p = zput(p, "STAGE2: video now: mkind="); p = zhexb(p, g_vid.mkind);
         p = zput(p, " gw="); p = zhex(p, g_vid.gw); p = zput(p, " gh="); p = zhex(p, g_vid.gh);
         p = zput(p, " mapmask="); p = zhexb(p, g_vid.map_mask);

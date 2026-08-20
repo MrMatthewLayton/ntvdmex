@@ -701,6 +701,32 @@ uint8_t vga_planar_read(video_state *st, uint32_t off)
 
 int vdd_video_planar_active(const video_state *st) { return st->mkind == VID_KIND_PLANAR; }
 
+/* CRT timings, shared by the 0x3DA status read and the present scheduler. */
+#define VID_VBL_HZ_HI     60        /* 640x480 modes                                */
+#define VID_VBL_HZ_LO     70        /* 320x200 / 720x400 modes                      */
+#define VID_VTOTAL_HI    525        /* scanlines per frame incl. blanking, 480-line */
+#define VID_VTOTAL_LO    449        /*                                    400-line  */
+#define VID_VACTIVE_HI   480
+#define VID_VACTIVE_LO   400
+#define VID_HACTIVE_PCT   80        /* % of a scanline that is active (rest = hblank) */
+
+/* See the header. Phase within the frame, in permille, against the point where the
+   active picture ends (480/525 = 914, 400/449 = 891). The window is the last ~12%
+   of the active period: late enough that a guest released by the PREVIOUS retrace
+   has finished its drawing, early enough to be a distinct instant every frame. */
+#define VID_PRESENT_WINDOW_PM 120
+int vdd_video_present_ready(video_state *st)
+{
+    uint32_t frame_us, pm;
+    int act;
+    if (!st->time_us) return 1;                 /* no clock: present every tick   */
+    frame_us = 1000000u / (uint32_t)((st->gh > VID_VACTIVE_LO) ? VID_VBL_HZ_HI : VID_VBL_HZ_LO);
+    if (!frame_us) return 1;
+    pm  = (uint32_t)((st->time_us() % frame_us) * 1000u / frame_us);
+    act = (st->gh > VID_VACTIVE_LO) ? 914 : 891;
+    return (int)pm >= act - VID_PRESENT_WINDOW_PM && (int)pm < act;
+}
+
 /* Sequencer ports 3C4 (index) / 3C5 (data) -- Map Mask (SR2). */
 static void seq_out(void *self, uint16_t port, uint8_t w, uint32_t v)
 {
@@ -740,18 +766,72 @@ static void gc_in(void *self, uint16_t port, uint8_t w, uint32_t *v)
     }
 }
 
-/* Input Status Register 1 (3DA/3BA). Graphics demos pace their animation by
-   polling bit 3 (vertical retrace) and bit 0 (display enable). We have no real
-   CRT timing, so toggle both bits on every read: any "wait until set then wait
-   until clear" retrace loop completes within two reads, so the animation
-   advances (a read of 3DA also resets the attribute-controller flip-flop). */
+/* Input Status Register 1 (3DA/3BA) -- bit 3 = vertical retrace, bit 0 = display
+   disabled (set during EITHER horizontal or vertical blanking). A read also resets
+   the attribute-controller flip-flop.
+
+   ▶ THIS USED TO TOGGLE BOTH BITS ON EVERY READ. That guaranteed a "wait until set,
+     then wait until clear" loop finished within two reads, so no guest could ever
+     spin here forever -- the right call when the alternative was a hang, and the
+     comment that lived here said plainly "we have no real CRT timing".
+     But it also meant the bits had NO RELATIONSHIP TO TIME. `WAIT &H3DA,8` -- which
+     is the entire frame clock of a great deal of DOS graphics code -- returned
+     immediately, so those programs ran as fast as we could execute them instead of
+     at ~60-70 Hz. Measured live on the physical box: BOUNCEBX tore instead of
+     animating, MATRIX_2 outran MATRIX_1 (stock ntvdm has that pair the other way
+     round), and CAVE ran "way too fast" in SCREEN 13.
+   ▶ We DO have a timebase now -- `host_pit_sync()` has derived guest clocks from
+     QueryPerformanceCounter since session 11 -- so derive the bits from it.
+     `st->time_us` is NULL off-VM by default, which keeps the old toggle for tests
+     that do not care about timing.
+   ▶ The retrace bit is asserted for the whole VERTICAL BLANKING interval rather
+     than just the 2-line sync pulse. A 2-line window is 0.4% of a frame, and a
+     guest that does any work between polls would miss it and wait an extra frame;
+     the blanking interval (~9%) is the forgiving reading and is what emulators
+     conventionally report. */
 static void status_out(void *self, uint16_t port, uint8_t w, uint32_t v)
 { (void)self; (void)port; (void)w; (void)v; }     /* feature ctrl: ignore */
 static void status_in(void *self, uint16_t port, uint8_t w, uint32_t *v)
 {
     video_state *st = (video_state *)self; (void)port; (void)w;
-    st->retrace ^= 0x09;                            /* toggle retrace(3) + disp-en(0) */
-    *v = st->retrace;
+    uint64_t now, in_frame;
+    uint32_t frame_us, line_us, line, dot_us;
+    int tall, vtotal, vactive, in_vbl, in_hbl;
+
+    if (!st->time_us) {                             /* no clock injected: old behaviour */
+        st->retrace ^= 0x09;
+        *v = st->retrace;
+        return;
+    }
+    /* 480-line modes run at 60 Hz, the 200/400-line ones at 70 Hz. Mode 13h is
+       320x200 displayed as 400 scanlines, so it belongs with the 70 Hz group -- key
+       the choice off the DISPLAYED height, not the mode number. */
+    tall    = (st->gh > VID_VACTIVE_LO);
+    vtotal  = tall ? VID_VTOTAL_HI  : VID_VTOTAL_LO;
+    vactive = tall ? VID_VACTIVE_HI : VID_VACTIVE_LO;
+    frame_us = 1000000u / (uint32_t)(tall ? VID_VBL_HZ_HI : VID_VBL_HZ_LO);
+    line_us  = frame_us / (uint32_t)vtotal;
+    if (!line_us) line_us = 1;                      /* never divide by zero          */
+
+    now      = st->time_us();
+    in_frame = now % (uint64_t)frame_us;
+    line     = (uint32_t)(in_frame / line_us);
+    dot_us   = (uint32_t)(in_frame % line_us);
+    if (line >= (uint32_t)vtotal) line = (uint32_t)vtotal - 1;  /* rounding guard     */
+
+    in_vbl = (line >= (uint32_t)vactive);
+    in_hbl = (dot_us * 100u >= line_us * VID_HACTIVE_PCT);
+    /* bit 3 = vertical retrace; bit 0 = display disabled (h- OR v-blank). Bit 0 is a
+       DIFFERENT signal on a real card -- it changes per scanline, not per frame --
+       so toggling the two together, as we used to, was doubly wrong. */
+    *v = (uint32_t)((in_vbl ? 0x08u : 0u) | ((in_vbl || in_hbl) ? 0x01u : 0u));
+    st->retrace = (uint8_t)*v;                      /* keep it observable in dumps    */
+    /* Count the edge the GUEST sees, not the one the model produces: a clear->set
+       transition between two of its own reads is exactly one completed
+       `WAIT &H3DA,8`, so edges/second IS the guest's frame rate. */
+    st->p3da_reads++;
+    if (in_vbl && !st->vbl_prev) st->vbl_edges++;
+    st->vbl_prev = (uint8_t)in_vbl;
 }
 
 /* Copy both character generators into guest-visible memory so the pointer handed out by

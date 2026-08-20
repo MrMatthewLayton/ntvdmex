@@ -85,7 +85,23 @@ typedef struct video_state {
     uint8_t  write_mode;   /* GR5 bits0-1                                          */
     uint8_t  bit_mask;     /* GR8 (reset 0xFF)                                     */
     uint8_t  latch[4];     /* per-plane read latches                               */
-    uint8_t  retrace;      /* Input Status 1 (3DA): toggled so vsync polls advance  */
+    uint8_t  retrace;      /* Input Status 1 (3DA): legacy toggle, used only if no clock */
+    /* CRT TIMEBASE (GH #55 follow-up). Host sets this to a microsecond clock so
+       0x3DA reports vertical retrace ON A REAL PERIOD instead of alternating per
+       read. Without it, `WAIT &H3DA,8` returns instantly and every program that
+       paces on vblank runs unbounded -- measured on BOUNCEBX/MATRIX_2/CAVE.
+       NULL (the off-VM default) keeps the old toggle, so tests that do not care
+       about timing are unaffected; the video battery injects a fake clock. */
+    uint64_t (*time_us)(void);
+    /* WHAT THE GUEST ACTUALLY SEES on 0x3DA. `vbl_edges` counts clear->set
+       transitions as observed BY THE GUEST's own reads, which is its real frame
+       rate: one `WAIT &H3DA,8` completes per edge. Without this, "is it paced?"
+       is a matter of opinion about how fast the screen looks; with it, it is
+       edges/second against an expected 60 or 70. `p3da_reads` is the poll count,
+       so the two together also say how hard the guest is spinning. */
+    uint32_t vbl_edges;
+    uint32_t p3da_reads;
+    uint8_t  vbl_prev;
     uint32_t int10_11_calls;/* INT 10h AH=11h (character generator) calls -- see below */
     /* WHAT the guest asked for, not just that it asked. BH selects the table and the
        answer's CX (bytes per character) is what the caller strides by -- so a wrong CX
@@ -129,6 +145,12 @@ void vdd_video_putc(video_state *st, uint8_t ch);      /* console teletype sink 
 void    vga_planar_write(video_state *st, uint32_t off, uint8_t cpu);
 uint8_t vga_planar_read (video_state *st, uint32_t off);   /* loads latches        */
 int     vdd_video_planar_active(const video_state *st);    /* 1 in mode 12h        */
+/* 1 when the emulated CRT is in the tail of its active period -- the guest has
+   finished drawing this frame and is parked waiting for retrace, so a snapshot
+   taken now is a WHOLE frame. Presenting at an arbitrary phase is what makes a
+   program that erases-then-redraws (BOUNCEBX) tear: catch it between the two and
+   the object is simply missing. Returns 1 unconditionally with no clock injected. */
+int     vdd_video_present_ready(video_state *st);
 
 /* WHERE THE BIOS FONTS LIVE IN GUEST MEMORY.
    INT 10h AH=11h AL=30h hands the caller a POINTER to the character generator, and plenty of
