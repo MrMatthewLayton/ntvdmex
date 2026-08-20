@@ -35,6 +35,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "scripts", "dosoracle"))
@@ -190,6 +191,96 @@ class DosBoxX(Host):
             return f.read().decode("cp437", "replace")
 
 
+class NtvdmexRig(Host):
+    """NTVDMEX itself, on the bare-metal XP rig.  THE SUBJECT UNDER TEST.
+
+    Driven through the SMB watcher loop documented in return-ntvdm.md: drop the
+    probe in bm/tests/, write cmd.txt, the watcher runs rt.bat, and the host log
+    comes back as result_<name>.log with the guest's console output embedded.
+
+    Mount the share first (the IP moves -- it has been .34 and .29):
+        mkdir -p /tmp/xpshare
+        mount_smbfs -N //guest@<box-ip>/ntvdmex /tmp/xpshare
+
+    NOTE: LAN access is outside the dev sandbox's allowlist, so this adapter
+    only works when dosdiff.py is run with the sandbox disabled (or from a
+    normal terminal).
+    """
+
+    role = "subject"
+
+    def __init__(self, share=None):
+        Host.__init__(self, "ntvdmex")
+        self.share = share or os.environ.get("NTVDMEX_SHARE", "/tmp/xpshare")
+
+    def available(self):
+        if not os.path.ismount(self.share):
+            return False, ("share not mounted at %s -- mount_smbfs -N "
+                           "//guest@<box-ip>/ntvdmex %s" % (self.share, self.share))
+        beat = os.path.join(self.share, "watcher.txt")
+        if not os.path.exists(beat):
+            return False, "no watcher.txt on the share -- the rig watcher is not running"
+        # The heartbeat must be MOVING.  A stale watcher.txt looks identical to a
+        # live one, and every run would then time out with a confusing message.
+        try:
+            t0 = os.stat(beat).st_mtime
+            time.sleep(6)
+            if os.stat(beat).st_mtime == t0:
+                return False, ("watcher.txt is not updating -- the rig watcher has "
+                               "stopped (run bm/runwatch.bat on the box)")
+        except OSError as e:
+            return False, "cannot stat watcher.txt: %s" % e
+        return True, ""
+
+    def run(self, com, timeout=240):
+        name = os.path.basename(com)
+        shutil.copyfile(com, os.path.join(self.share, "bm", "tests", name))
+        log = os.path.join(self.share, "result_%s.log" % name)
+        if os.path.exists(log):
+            os.unlink(log)
+
+        with open(os.path.join(self.share, "cmd.txt"), "wb") as f:
+            f.write((name + "\r\n").encode())
+
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            time.sleep(3)
+            if not os.path.exists(os.path.join(self.share, "cmd.txt")):
+                break
+        else:
+            raise RuntimeError("watcher never consumed cmd.txt within %ds" % timeout)
+
+        # rt.bat copies the log while the host may still be finishing, and SMB
+        # caches the result -- a log read too early is a PARTIAL file.  Wait for
+        # the known-final line rather than for a duration, and re-list the
+        # directory each poll to force a fresh readdir.
+        while time.time() < deadline:
+            time.sleep(3)
+            os.listdir(self.share)
+            if not os.path.exists(log):
+                continue
+            with open(log, "rb") as f:
+                text = f.read().decode("cp437", "replace")
+            if "STAGE2: complete" in text or "==> DOS OUTPUT:" in text and "\n]" in text:
+                return self._dos_output(text)
+        raise RuntimeError("result log never completed (no 'STAGE2: complete')")
+
+    @staticmethod
+    def _dos_output(text):
+        """Pull the guest's console output out of the host log."""
+        marker = "==> DOS OUTPUT: ["
+        i = text.find(marker)
+        if i < 0:
+            return text
+        rest = text[i + len(marker):]
+        out = []
+        for line in rest.split("\n"):
+            if line.strip() == "]":
+                break
+            out.append(line)
+        return "\n".join(out)
+
+
 class RigHost(Host):
     """NTVDMEX and stock ntvdm both need the XP rig; neither runs on the Mac.
 
@@ -214,11 +305,11 @@ def all_hosts():
         MsDos622(),
         DosBoxX(),
         RigHost("ntvdm", "oracle",
-                "needs the XP rig with the IFEO Debugger key dropped for the "
-                "baseline run (not yet wired -- see #26)"),
-        RigHost("ntvdmex", "subject",
-                "needs the XP rig or an XP VM to run the NTVDMEX host "
-                "(not yet wired -- see #26)"),
+                "needs an rt.bat variant that drops the IFEO Debugger key for the "
+                "baseline run and restores it after -- AND a decision from the user: "
+                "the repo notes warn a stock full-screen DOS run wedges the box's "
+                "display, which costs a physical reboot (see #26)"),
+        NtvdmexRig(),
     ]
 
 

@@ -43,6 +43,22 @@
         call    probe_begin
 %endmacro
 
+; POISON -- stamp the output registers with recognisable junk before the call.
+;
+; Without this, "the host left BX alone" and "the host deliberately returned 0"
+; look identical, and worse, BX may hold leftovers from our own print routine --
+; which is exactly what happened on the first rig run: NTVDMEX returned BX=3246
+; for INT 21h AX=3306h and 3246 turned out to be a value probe_emit itself had
+; left there.  With the poison in place an untouched register reads back as
+; B1B1/C1C1/D1D1 and says so plainly.
+;
+; Only safe on calls that take no input in BX/CX/DX -- check RBIL before using it.
+%macro POISON 0
+        mov     bx, 0B1B1h
+        mov     cx, 0C1C1h
+        mov     dx, 0D1D1h
+%endmacro
+
 %macro EMIT 2
         jmp     %%over
 %%case: db      %1, 0

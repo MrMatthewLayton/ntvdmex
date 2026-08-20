@@ -14,6 +14,7 @@ start:
 
         ; ---- INT 21h AH=30h, AL=00.  AL=00 asks for the OEM number in BH.
         ; AL=major, AH=minor, BH=OEM, BL:CX=24-bit user serial.
+        POISON                          ; 30h takes no input in BX/CX/DX
         mov     ax, 3000h
         int     21h
         call    probe_capture
@@ -26,6 +27,7 @@ start:
         ; DH is deliberately NOT significant: bit 4 means "DOS is in the HMA",
         ; which is a property of the host's CONFIG.SYS, not of the DOS version.
         ; Asserting on it would flag a configuration difference as a defect.
+        POISON                          ; 3306h takes no input in BX/CX/DX
         mov     ax, 3306h
         int     21h
         call    probe_capture

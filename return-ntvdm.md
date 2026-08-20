@@ -172,9 +172,42 @@ Selftest cases now assert a substring transcribed from the oracle's real output.
     (mirrored in `docs/research/oracle-disagreements.md`). A rule makes a host ABSTAIN on one
     field, and the reason prints on every run. Reason: a permanently DISPUTED row you have
     learned to ignore is worse than no row.
-  ▶ LIVE: `msdos622` (QEMU oracle) and `dosbox-x`. **NOT YET WIRED: `ntvdm` (stock) and
-    `ntvdmex` — both need the XP rig**, so we currently have NO subject and cannot yet grade
-    ourselves. That is the remaining half of #26 and the next real task.
+  ▶ LIVE: `msdos622` (QEMU oracle), `dosbox-x`, and **`ntvdmex` ON THE BARE-METAL RIG — the
+    subject column works, so the harness now GRADES US.** Adapter = `NtvdmexRig` in dosdiff.py,
+    driving the existing SMB watcher loop (drop probe in `bm/tests/`, write `cmd.txt`, read
+    `result_<name>.log`, pull the `==> DOS OUTPUT: [...]` block). It waits for the
+    `STAGE2: complete` line rather than a fixed duration, which is the documented fix for the
+    partial-log/SMB-cache trap, and it refuses to run if `watcher.txt` is not MOVING (a stale
+    heartbeat looks identical to a live one).
+  ▶ **THE RIG IP MOVES — DO NOT HARDCODE IT.** It was `.34`, is `.29` today (2026-08-20) after
+    a broadband outage; `.27` was a mis-recollection. Find it, then
+    `mount_smbfs -N //guest@<ip>/ntvdmex /tmp/xpshare`. A ping sweep is the quick way, but note
+    an ARP sweep leaves INCOMPLETE entries for every address — `arp -a` after a sweep lists all
+    254 and means nothing. Probe port 445 instead. LAN needs `dangerouslyDisableSandbox`.
+  ▶ STILL NOT WIRED: stock `ntvdm`. It needs the rt.bat variant AND a user decision — the
+    repo's own note says a stock full-screen DOS run wedges the box's display, costing a
+    physical reboot. Flagged to the user, not run.
+
+★★ **FIRST REAL GRADING — 5 MISMATCHES, AND ONE IS THE #27 SILENT-FAILURE CLASS CAUGHT LIVE:**
+    case             field  msdos622 dosbox-x ntvdmex
+    int21.30         AX     1606     0005     0005     MISMATCH  (known, #28)
+    int21.30         BX     FF00     FF00     B1B1     MISMATCH  <- UNTOUCHED
+    int21.30         CX     0000     0000     C1C1     MISMATCH  <- UNTOUCHED
+    int21.3306       BX     1606     0005     B1B1     MISMATCH  <- UNTOUCHED
+    int21.3306       DL     00       00       D1       MISMATCH  <- UNTOUCHED
+    int21.3306       CF     0        0        0        AGREE     <- THE DANGEROUS ONE
+  ► `B1B1/C1C1/D1D1` = the probe's POISON pattern, i.e. **the register was never written**.
+    Added after the first rig run returned `BX=3246` for 3306h and 3246 turned out to be a
+    value MY OWN `probe_emit` had left in BX. Without poison, "untouched" and "deliberately
+    zero" are indistinguishable and you will misread leftovers as answers.
+  ► **CONFIRMED IN SOURCE, not inferred:**
+    - `src/dos/dos_int21.c:235` — `ah == 0x33` handles ONLY `AL=00` (get Ctrl-Break); every
+      other subfunction, `AL=06` included, falls through to `OKCF()`. So "get true version"
+      returns **CF=0 (success) with all registers untouched**. The guest is told it succeeded
+      and handed garbage. This is exactly #27's target, caught by the harness on day one.
+    - `src/dos/dos_int21.c:177` — `ah == 0x30` is `SETAX(0x0005); OKCF();`. BX and CX are never
+      written, so the OEM number and the 24-bit serial are whatever the CALLER left there.
+      Real DOS returns BH=0xFF, BL:CX=0.
   ▶ **DOSBOX CANNOT RUN HEADLESS.** `SDL_VIDEODRIVER=dummy` makes dosbox-x HANG and makes
     dosbox-staging ABORT ("Could not initialize video: OpenGL ... driver (dummy)"). The adapter
     opens a real window briefly; it will not work over plain ssh. Use `dosbox-x`, not staging.
