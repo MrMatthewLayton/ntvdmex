@@ -196,6 +196,7 @@ void dos_int21_init(dos_machine_t *m, uint16_t first_mcb)
     m->verify = 0;
     m->child_rc = 0;
     m->fcb_find = 0;
+    m->switch_char = '/';   /* oracle-confirmed 6.22 default */
     m->first_mcb = first_mcb;
     m->dta_seg = DOS_PSP_SEG;
     m->dta_off = 0x0080;
@@ -655,6 +656,110 @@ int dos_int21(dos_machine_t *m)
         } else FCB_FAIL();
         #undef FCB_OK
         #undef FCB_FAIL
+    } else if (ah == 0x1B || ah == 0x1C) {      /* allocation info for a drive */
+        /* AL=sectors/cluster, DS:BX -> media descriptor byte, CX=bytes/sector,
+           DX=total clusters.  All disk geometry, so the probe compares only CF.
+           NOTE this call RETURNS A SEGMENT IN DS -- which is what broke the
+           probe's own output until probe_capture learned to restore it. */
+        DWORD spc = 0, bps = 0, freec = 0, totc = 0;
+        char root[4]; char *rp = 0;
+        uint8_t dl1b = (uint8_t)(R_DX & 0xFF);
+        if (ah == 0x1C && dl1b) { root[0] = (char)('A' + dl1b - 1); root[1] = ':';
+                                  root[2] = '\\'; root[3] = 0; rp = root; }
+        if (GetDiskFreeSpaceA(rp, &spc, &bps, &freec, &totc)) {
+            volatile BYTE *md = (volatile BYTE *)((DOS_CTAB_SEG << 4) + DOS_MEDIA_OFF);
+            *md = 0xF8;                          /* fixed disk */
+            SETAX((R_AX & 0xFF00) | (spc & 0xFF));
+            SET16(R_DS, DOS_CTAB_SEG); SET16(R_BX, DOS_MEDIA_OFF);
+            SET16(R_CX, (uint16_t)bps);
+            SET16(R_DX, totc > 0xFFFF ? 0xFFFF : totc);
+            OKCF();
+        } else { SETAX((R_AX & 0xFF00) | 0xFF); ERRCF(); }
+    } else if (ah == 0x1F || ah == 0x32) {      /* get drive parameter block */
+        /* DPB contents are disk geometry and its address is host-specific; AL is
+           the comparable part -- 00 for a valid drive, FF otherwise (measured). */
+        uint8_t dl32 = (ah == 0x1F) ? 0 : (uint8_t)(R_DX & 0xFF);
+        DWORD spc = 0, bps = 0, freec = 0, totc = 0;
+        char root[4]; char *rp = 0;
+        if (dl32) { root[0] = (char)('A' + dl32 - 1); root[1] = ':';
+                    root[2] = '\\'; root[3] = 0; rp = root; }
+        if (dl32 > 26 || !GetDiskFreeSpaceA(rp, &spc, &bps, &freec, &totc)) {
+            SETAX((R_AX & 0xFF00) | 0xFF);
+        } else {
+            volatile BYTE *d = (volatile BYTE *)((DOS_CTAB_SEG << 4) + DOS_DPB_OFF);
+            int k; uint8_t shift = 0;
+            while ((1u << shift) < spc && shift < 15) ++shift;
+            for (k = 0; k < 33; ++k) d[k] = 0;
+            d[0] = (BYTE)(dl32 ? dl32 - 1 : 2);   /* 0-based drive */
+            d[1] = 0;
+            d[2] = (BYTE)(bps & 0xFF); d[3] = (BYTE)(bps >> 8);
+            d[4] = (BYTE)(spc - 1);
+            d[5] = shift;
+            d[6] = 1; d[7] = 0;                   /* reserved sectors  */
+            d[8] = 2;                             /* number of FATs    */
+            d[9] = 0x00; d[10] = 0x02;            /* root entries 512  */
+            d[13] = (BYTE)((totc + 1) & 0xFF); d[14] = (BYTE)(((totc + 1) >> 8) & 0xFF);
+            d[23] = 0xF8;                         /* media descriptor  */
+            d[25] = 0xFF; d[26] = 0xFF; d[27] = 0xFF; d[28] = 0xFF;  /* no next DPB */
+            SET16(R_DS, DOS_CTAB_SEG); SET16(R_BX, DOS_DPB_OFF);
+            SETAX(R_AX & 0xFF00);
+        }
+        OKCF();
+    } else if (ah == 0x37) {                    /* get/set the SWITCH character */
+        uint8_t al37 = (uint8_t)(R_AX & 0xFF);
+        if (al37 == 0x00) {                     /* oracle: DL = '/' */
+            SET16(R_DX, (uint16_t)((R_DX & 0xFF00) | m->switch_char));
+            SETAX(R_AX & 0xFF00); OKCF();
+        } else if (al37 == 0x01) {
+            m->switch_char = (uint8_t)(R_DX & 0xFF);
+            SETAX(R_AX & 0xFF00); OKCF();
+        } else { SETAX((R_AX & 0xFF00) | 0xFF); OKCF(); }
+    } else if (ah == 0x66) {                    /* get/set global code page */
+        uint8_t al66 = (uint8_t)(R_AX & 0xFF);
+        if (al66 == 0x01) {                     /* oracle: BX=DX=437 */
+            SET16(R_BX, 437); SET16(R_DX, 437); OKCF();
+        } else if (al66 == 0x02) {
+            OKCF();                             /* accept; we have only 437 */
+        } else { SETAX(1); ERRCF(); }
+    } else if (ah == 0x26 || ah == 0x55) {      /* create a PSP / child PSP */
+        /* Copy our PSP to the segment in DX and fix up the fields that must
+           differ. 55h additionally takes the child's memory top in SI. */
+        volatile BYTE *src = (volatile BYTE *)(DOS_PSP_SEG << 4);
+        volatile BYTE *dst = (volatile BYTE *)((R_DX & 0xFFFF) << 4);
+        int k;
+        for (k = 0; k < 256; ++k) dst[k] = src[k];
+        dst[0x16] = (BYTE)(DOS_PSP_SEG & 0xFF);       /* parent PSP segment */
+        dst[0x17] = (BYTE)(DOS_PSP_SEG >> 8);
+        if (ah == 0x55) {
+            dst[0x02] = (BYTE)(R_SI & 0xFF);          /* memory top          */
+            dst[0x03] = (BYTE)((R_SI >> 8) & 0xFF);
+        }
+        OKCF();
+    } else if (ah == 0x31) {                    /* terminate and stay resident */
+        /* We run one program at a time, so nothing can stay resident behind it.
+           Say so rather than pretend: a TSR that believes it installed and did
+           not is the silent-failure class #27 exists to remove. */
+        tp = zput(tp, "  INT21 AH=31 TSR: residency NOT honoured (single-program host)\r\n");
+        m->unimpl21[0x31 >> 3] |= (uint8_t)(1u << (0x31 & 7));
+        m->exit_code = (int)(R_AX & 0xFF);
+        cont = 0;
+    } else if (ah == 0x53) {                    /* translate a BPB into a DPB */
+        tp = zput(tp, "  INT21 AH=53 BPB->DPB UNIMPLEMENTED (no installable "
+                      "block drivers)\r\n");
+        m->unimpl21[0x53 >> 3] |= (uint8_t)(1u << (0x53 & 7));
+        SETAX(1); ERRCF();
+    } else if (ah == 0x5E) {                    /* network machine name / printer */
+        uint8_t al5e = (uint8_t)(R_AX & 0xFF);
+        if (al5e == 0x00) {                     /* oracle: AX=0, CF=0 */
+            volatile BYTE *d = (volatile BYTE *)((R_DS << 4) + (R_DX & 0xFFFF));
+            int k; for (k = 0; k < 16; ++k) d[k] = 0;
+            SETAX(0); SET16(R_CX, 0); OKCF();
+        } else { SETAX(1); ERRCF(); }
+    } else if (ah == 0x5F) {                    /* network redirection list */
+        tp = zput(tp, "  INT21 AH=5F network redirection: no redirector present\r\n");
+        SETAX(1); ERRCF();                      /* invalid function */
+    } else if (ah == 0x64) {                    /* set device driver lookahead */
+        OKCF();                                 /* internal; accepted, no effect */
     } else if (ah == 0x03) {                    /* AUX input  */
         SETAX((R_AX & 0xFF00) | 0x1A);          /* no serial attached -> EOF   */
         OKCF();

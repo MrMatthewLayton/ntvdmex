@@ -77,10 +77,19 @@ def _indent(text, prefix="    "):
 
 
 def _run(cmd, **kw):
-    p = subprocess.run(cmd, capture_output=True, text=True, env=MTOOLS_ENV, **kw)
+    """Run a helper and decode as CP437, never UTF-8.
+
+    A probe's output is DOS bytes, not text: a buffer dump can contain anything,
+    and text=True made Python decode it as UTF-8 and abort the whole run on the
+    first byte above 0x7F. The harness must never be the thing that fails when a
+    probe returns unusual data -- that is the data we most want to see.
+    """
+    p = subprocess.run(cmd, capture_output=True, env=MTOOLS_ENV, **kw)
+    out = p.stdout.decode("cp437", "replace")
+    err = p.stderr.decode("cp437", "replace")
     if p.returncode != 0:
-        raise OracleError("%s\n%s%s" % (" ".join(cmd), p.stdout, p.stderr))
-    return p.stdout
+        raise OracleError("%s\n%s%s" % (" ".join(cmd), out, err))
+    return out
 
 
 class Oracle:

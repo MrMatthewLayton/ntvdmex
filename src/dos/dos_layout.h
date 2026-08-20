@@ -51,5 +51,7 @@
    BOP <int> ; IRET.  They live here rather than in DOS_HDLR_SEG because that
    segment is down to scattered free bytes and these want 32 contiguous. */
 #define DOS_BIOS_STUBS    0x0300
+#define DOS_DPB_OFF       0x0340   /* AH=1Fh/32h drive parameter block, 33 bytes */
+#define DOS_MEDIA_OFF     0x0364   /* AH=1Bh/1Ch media descriptor byte           */
 
 #endif /* DOS_LAYOUT_H */

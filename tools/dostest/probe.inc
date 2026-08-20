@@ -91,17 +91,30 @@
 ; sets no flags) risks moving what we are trying to measure.  CALL itself does
 ; not disturb flags, and the MOVs below do not either, so the PUSHF at the end
 ; still sees the flags the call left.
+; IT ALSO RESTORES DS TO CS ON THE WAY OUT, and that is not incidental.  Several
+; DOS calls RETURN A SEGMENT IN DS -- 1Bh and 1Ch hand back DS:BX pointing at the
+; media byte, 32h a DPB, 52h the list of lists.  Every store below, and every
+; store the EMIT macros make afterwards, is DS-relative, so without this the
+; probe writes its own state into DOS's segment and then prints labels read from
+; there: the dump comes out as unlabelled hex, or as fragments of code.  The
+; guest-visible DS is still reported faithfully -- it is captured first.
 probe_capture:
+        pushf                           ; flags FIRST, before anything of ours
+        push    ds
+        push    ax
+        mov     ax, cs
+        mov     ds, ax                  ; from here on our own data is reachable
+        pop     ax
         mov     [__ax], ax
         mov     [__bx], bx
         mov     [__cx], cx
         mov     [__dx], dx
         mov     [__si], si
         mov     [__di], di
-        mov     [__ds], ds
         mov     [__es], es
-        pushf
-        pop     ax
+        pop     ax                      ; the DS the call left
+        mov     [__ds], ax
+        pop     ax                      ; the flags the call left
         mov     [__fl], ax
         mov     ax, [__ax]              ; leave the caller's AX as we found it
         ret

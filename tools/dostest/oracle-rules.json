@@ -362,5 +362,15 @@
     ],
     "recorded": "2026-08-20",
     "why": "An FCB find-first fills the DTA with the directory entry OF THE FILE FOUND, and every host searches a different directory. Not one byte is comparable. Still dumped, because reading it is how the 33-byte layout was established, but excluded from the verdict; the layout itself is asserted by the register cases and documented in dos_int21.c."
+  },
+  {
+    "probe": "rest",
+    "case": "int21.3200.baddrive",
+    "field": "AX",
+    "abstain": [
+      "dosbox-x"
+    ],
+    "recorded": "2026-08-20",
+    "why": "Same cause as int21.3600.baddrive: the case uses DL=26 (Z:) to mean 'a drive that does not exist', and DOSBox-X always mounts Z: as its own utility drive, so there it DOES exist and AL=00 is correct for that host. Real 6.22 returns AL=FF."
   }
 ]
