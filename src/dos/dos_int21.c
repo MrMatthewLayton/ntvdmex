@@ -123,6 +123,61 @@ static void dta_fill(volatile BYTE *d, const WIN32_FIND_DATAA *fd)
     d[30 + k] = 0;
 }
 
+/* ---- The FCB interface (AH=0Fh-24h, 27h-29h).  GH #36. ----------------------
+ *
+ * The pre-1983 file API.  Little 6.22-era software uses it, but TREE.COM does,
+ * and it is 19 of the 103 services 6.22 defines.
+ *
+ * MEASURED ON THE ORACLE (tools/dostest/p_fcb.asm), and the first fact matters
+ * more than the rest: **FCB calls report success in AL (00 ok, FF fail), and the
+ * CARRY FLAG IS UNDEFINED** -- a successful open came back with CF=1.  Anything
+ * that treats carry as the result here is reading noise.
+ *
+ * An opened FCB comes back with bytes 0-31 filled and the current-record and
+ * random-record fields (32-36) LEFT ALONE:
+ *   [0] drive  [1-8] name  [9-11] ext  [12-13] current block
+ *   [14-15] record size (128)  [16-19] file size  [20-21] date  [22-23] time
+ *   [24-31] DOS's own workspace -- we keep our handle slot there
+ *   [32] current record  [33-36] random record
+ *
+ * AH=11h/12h put a 33-byte directory entry in the DTA (that dump cross-checked
+ * itself: the size field read 54645, COMMAND.COM's exact length):
+ *   [0] drive  [1-11] name+ext  [12] attribute  [13-22] reserved
+ *   [23-24] time  [25-26] date  [27-28] starting cluster  [29-32] size
+ */
+#define FCB_MAGIC 0x46
+
+static volatile BYTE *fcb_at(DWORD seg, DWORD off)
+{
+    volatile BYTE *f = (volatile BYTE *)((seg << 4) + (off & 0xFFFF));
+    return (f[0] == 0xFF) ? f + 7 : f;      /* skip an extended FCB's prefix */
+}
+
+/* Build "D:NAME.EXT" from an FCB's drive/name/extension fields. */
+static void fcb_name(const volatile BYTE *f, char *out)
+{
+    int i, n = 0;
+    if (f[0]) { out[n++] = (char)('A' + f[0] - 1); out[n++] = ':'; }
+    for (i = 1; i <= 8 && f[i] != ' '; ++i) out[n++] = (char)f[i];
+    if (f[9] != ' ') {
+        out[n++] = '.';
+        for (i = 9; i <= 11 && f[i] != ' '; ++i) out[n++] = (char)f[i];
+    }
+    out[n] = 0;
+}
+
+static void fcb_put_name(volatile BYTE *d, const char *nm)
+{
+    int i = 0, k;
+    for (k = 0; k < 11; ++k) d[k] = ' ';
+    for (k = 0; k < 8 && nm[i] && nm[i] != '.'; ++k, ++i)
+        d[k] = (BYTE)(nm[i] >= 'a' && nm[i] <= 'z' ? nm[i] - 32 : nm[i]);
+    while (nm[i] && nm[i] != '.') ++i;
+    if (nm[i] == '.') ++i;
+    for (k = 8; k < 11 && nm[i]; ++k, ++i)
+        d[k] = (BYTE)(nm[i] >= 'a' && nm[i] <= 'z' ? nm[i] - 32 : nm[i]);
+}
+
 /* Copy an ASCIIZ string out of V86 memory (seg:off) into a host buffer. */
 static void v86_str(DWORD seg, DWORD off, char *dst, int max)
 {
@@ -140,6 +195,7 @@ void dos_int21_init(dos_machine_t *m, uint16_t first_mcb)
     m->last_err = 0;
     m->verify = 0;
     m->child_rc = 0;
+    m->fcb_find = 0;
     m->first_mcb = first_mcb;
     m->dta_seg = DOS_PSP_SEG;
     m->dta_off = 0x0080;
@@ -397,6 +453,208 @@ int dos_int21(dos_machine_t *m)
             d[19] = 0;
             SETAX(18); ERRCF();                              /* no more files   */
         }
+    } else if ((ah >= 0x0F && ah <= 0x17) || (ah >= 0x21 && ah <= 0x24)
+               || (ah >= 0x27 && ah <= 0x29)) {  /* ---- the FCB interface ---- */
+        volatile BYTE *f = fcb_at(R_DS, R_DX);
+        char nm[300];
+        #define FCB_OK()   SETAX((R_AX & 0xFF00) | 0x00)
+        #define FCB_FAIL() SETAX((R_AX & 0xFF00) | 0xFF)
+        /* CF is undefined for these on real DOS; leave it as the guest set it. */
+        if (ah == 0x0F || ah == 0x16) {         /* open / create */
+            HANDLE fh2; DWORD slot;
+            fcb_name(f, nm);
+            fh2 = CreateFileA(nm, GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ, NULL,
+                              (ah == 0x16) ? CREATE_ALWAYS : OPEN_EXISTING,
+                              FILE_ATTRIBUTE_NORMAL, NULL);
+            if (fh2 == INVALID_HANDLE_VALUE) FCB_FAIL();
+            else {
+                FILETIME ft, lf; WORD fdt = 0, ftm = 0;
+                DWORD sz = GetFileSize(fh2, NULL);
+                for (slot = 5; slot < 64 && m->fh[slot]; ++slot) {}
+                if (slot >= 64) { CloseHandle(fh2); FCB_FAIL(); }
+                else {
+                    m->fh[slot] = fh2;
+                    if (GetFileTime(fh2, NULL, NULL, &ft)
+                        && FileTimeToLocalFileTime(&ft, &lf))
+                        FileTimeToDosDateTime(&lf, &fdt, &ftm);
+                    f[12] = 0; f[13] = 0;
+                    f[14] = 128; f[15] = 0;         /* oracle: record size 128 */
+                    f[16] = (BYTE)(sz & 0xFF);        f[17] = (BYTE)((sz >> 8) & 0xFF);
+                    f[18] = (BYTE)((sz >> 16) & 0xFF); f[19] = (BYTE)((sz >> 24) & 0xFF);
+                    f[20] = (BYTE)(fdt & 0xFF); f[21] = (BYTE)(fdt >> 8);
+                    f[22] = (BYTE)(ftm & 0xFF); f[23] = (BYTE)(ftm >> 8);
+                    f[24] = FCB_MAGIC; f[25] = (BYTE)slot;
+                    FCB_OK();
+                }
+            }
+        } else if (ah == 0x10) {                /* close */
+            if (f[24] == FCB_MAGIC && f[25] < 64 && m->fh[f[25]]) {
+                CloseHandle(m->fh[f[25]]); m->fh[f[25]] = 0; f[24] = 0; FCB_OK();
+            } else FCB_FAIL();
+        } else if (ah == 0x11 || ah == 0x12) {  /* find first / find next */
+            volatile BYTE *d = (volatile BYTE *)((m->dta_seg << 4) + m->dta_off);
+            WIN32_FIND_DATAA fd;
+            int got = 0;
+            /* An extended FCB carries its search attribute in the byte just
+               before the part fcb_at() returns; a normal one asks for ordinary
+               files only.  WITHOUT THIS FILTER the search returns "." first --
+               measured: our DTA came back with a blank name where the oracle had
+               COMMAND.COM, because "." has no 8.3 name to put in the field. */
+            uint16_t fmask = (f != (volatile BYTE *)((R_DS << 4) + (R_DX & 0xFFFF)))
+                           ? (uint16_t)f[-1] : 0;
+            if (ah == 0x11) {
+                HANDLE hf;
+                fcb_name(f, nm);
+                if (m->fcb_find) { FindClose(m->fcb_find); m->fcb_find = 0; }
+                hf = FindFirstFileA(nm, &fd);
+                if (hf != INVALID_HANDLE_VALUE) {
+                    m->fcb_find = hf; got = 1;
+                    while (!dta_match(fd.dwFileAttributes, fmask)) {
+                        if (!FindNextFileA(hf, &fd)) { got = 0; break; }
+                    }
+                }
+            } else if (m->fcb_find) {
+                got = 1;
+                do {
+                    if (!FindNextFileA(m->fcb_find, &fd)) { got = 0; break; }
+                } while (!dta_match(fd.dwFileAttributes, fmask));
+                if (!got) { FindClose(m->fcb_find); m->fcb_find = 0; }
+            }
+            if (!got) FCB_FAIL();
+            else {
+                const char *bn = fd.cAlternateFileName[0] ? fd.cAlternateFileName
+                                                          : fd.cFileName;
+                FILETIME lf; WORD fdt = 0, ftm = 0;
+                int k;
+                if (FileTimeToLocalFileTime(&fd.ftLastWriteTime, &lf))
+                    FileTimeToDosDateTime(&lf, &fdt, &ftm);
+                d[0] = 3;                                 /* drive C:          */
+                fcb_put_name(d + 1, bn);
+                d[12] = (BYTE)(fd.dwFileAttributes & 0x3F);
+                for (k = 13; k <= 22; ++k) d[k] = 0;
+                d[23] = (BYTE)(ftm & 0xFF); d[24] = (BYTE)(ftm >> 8);
+                d[25] = (BYTE)(fdt & 0xFF); d[26] = (BYTE)(fdt >> 8);
+                d[27] = 0; d[28] = 0;                     /* starting cluster  */
+                d[29] = (BYTE)( fd.nFileSizeLow        & 0xFF);
+                d[30] = (BYTE)((fd.nFileSizeLow >> 8)  & 0xFF);
+                d[31] = (BYTE)((fd.nFileSizeLow >> 16) & 0xFF);
+                d[32] = (BYTE)((fd.nFileSizeLow >> 24) & 0xFF);
+                FCB_OK();
+            }
+        } else if (ah == 0x13) {                /* delete (wildcards allowed) */
+            WIN32_FIND_DATAA fd; HANDLE hf; int any = 0;
+            fcb_name(f, nm);
+            hf = FindFirstFileA(nm, &fd);
+            if (hf != INVALID_HANDLE_VALUE) {
+                do {
+                    if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
+                    if (DeleteFileA(fd.cFileName)) any = 1;
+                } while (FindNextFileA(hf, &fd));
+                FindClose(hf);
+            }
+            if (any) FCB_OK(); else FCB_FAIL();
+        } else if (ah == 0x17) {                /* rename: new name at f[17..27] */
+            char to[300];
+            char save[16]; int k;
+            fcb_name(f, nm);
+            for (k = 0; k < 12; ++k) save[k] = (char)f[k];
+            { volatile BYTE tmp[12]; tmp[0] = f[0];
+              for (k = 1; k < 12; ++k) tmp[k] = f[16 + k];
+              fcb_name(tmp, to); }
+            if (MoveFileA(nm, to)) FCB_OK(); else FCB_FAIL();
+            (void)save;
+        } else if (ah == 0x14 || ah == 0x15 || ah == 0x21 || ah == 0x22
+                   || ah == 0x27 || ah == 0x28) {         /* record I/O */
+            volatile BYTE *d = (volatile BYTE *)((m->dta_seg << 4) + m->dta_off);
+            DWORD recsz = (DWORD)f[14] | ((DWORD)f[15] << 8);
+            DWORD blk   = (DWORD)f[12] | ((DWORD)f[13] << 8);
+            DWORD rec, count = 1, done = 0, k;
+            BYTE buf[512];
+            if (!recsz) recsz = 128;
+            if (recsz > sizeof(buf)) recsz = sizeof(buf);
+            if (ah == 0x14 || ah == 0x15) rec = blk * 128 + f[32];
+            else rec = (DWORD)f[33] | ((DWORD)f[34] << 8)
+                     | ((DWORD)f[35] << 16) | ((DWORD)f[36] << 24);
+            if (ah == 0x27 || ah == 0x28) count = R_CX & 0xFFFF;
+            if (f[24] != FCB_MAGIC || f[25] >= 64 || !m->fh[f[25]]) SETAX((R_AX & 0xFF00) | 1);
+            else {
+                HANDLE hh = m->fh[f[25]];
+                DWORD n = 0;
+                SetFilePointer(hh, (LONG)(rec * recsz), NULL, FILE_BEGIN);
+                for (k = 0; k < count; ++k) {
+                    if (ah == 0x14 || ah == 0x21 || ah == 0x27) {
+                        DWORD j;
+                        if (!ReadFile(hh, buf, recsz, &n, NULL) || n == 0) break;
+                        for (j = 0; j < recsz; ++j)
+                            d[done * recsz + j] = (j < n) ? buf[j] : 0;
+                        ++done;
+                        if (n < recsz) break;
+                    } else {
+                        DWORD j;
+                        for (j = 0; j < recsz; ++j) buf[j] = d[done * recsz + j];
+                        if (!WriteFile(hh, buf, recsz, &n, NULL)) break;
+                        ++done;
+                    }
+                }
+                if (ah == 0x27 || ah == 0x28) SET16(R_CX, (uint16_t)done);
+                /* AL: 0 = all done, 1 = end of file / nothing transferred,
+                   3 = a partial final record. */
+                if (done == count) SETAX((R_AX & 0xFF00) | 0);
+                else if (!done)    SETAX((R_AX & 0xFF00) | 1);
+                else               SETAX((R_AX & 0xFF00) | 3);
+                if (ah == 0x14 || ah == 0x15) {           /* advance sequentially */
+                    DWORD nr = rec + done;
+                    f[12] = (BYTE)((nr / 128) & 0xFF); f[13] = (BYTE)((nr / 128) >> 8);
+                    f[32] = (BYTE)(nr % 128);
+                } else {
+                    DWORD nr = rec + done;
+                    f[33] = (BYTE)(nr & 0xFF);         f[34] = (BYTE)((nr >> 8) & 0xFF);
+                    f[35] = (BYTE)((nr >> 16) & 0xFF); f[36] = (BYTE)((nr >> 24) & 0xFF);
+                }
+            }
+        } else if (ah == 0x23) {                /* get file size, in records */
+            HANDLE fh3;
+            fcb_name(f, nm);
+            fh3 = CreateFileA(nm, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                              NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+            if (fh3 == INVALID_HANDLE_VALUE) FCB_FAIL();
+            else {
+                DWORD sz = GetFileSize(fh3, NULL);
+                DWORD recsz = (DWORD)f[14] | ((DWORD)f[15] << 8);
+                DWORD recs;
+                CloseHandle(fh3);
+                if (!recsz) recsz = 128;
+                recs = (sz + recsz - 1) / recsz;
+                f[33] = (BYTE)(recs & 0xFF);         f[34] = (BYTE)((recs >> 8) & 0xFF);
+                f[35] = (BYTE)((recs >> 16) & 0xFF); f[36] = (BYTE)((recs >> 24) & 0xFF);
+                FCB_OK();
+            }
+        } else if (ah == 0x24) {                /* set random record from current */
+            DWORD nr = ((DWORD)f[12] | ((DWORD)f[13] << 8)) * 128 + f[32];
+            f[33] = (BYTE)(nr & 0xFF);         f[34] = (BYTE)((nr >> 8) & 0xFF);
+            f[35] = (BYTE)((nr >> 16) & 0xFF); f[36] = (BYTE)((nr >> 24) & 0xFF);
+            OKCF();
+        } else if (ah == 0x29) {                /* parse a filename into an FCB */
+            char in[300];
+            volatile BYTE *dst = (volatile BYTE *)((R_ES << 4) + (R_DI & 0xFFFF));
+            int i2 = 0, wild = 0, k;
+            v86_str(R_DS, R_SI, in, sizeof(in));
+            while (in[i2] == ' ' || in[i2] == 9) ++i2;
+            dst[0] = 0;
+            if (in[i2] && in[i2 + 1] == ':') {
+                char dch = in[i2];
+                dst[0] = (BYTE)((dch >= 'a' ? dch - 32 : dch) - 'A' + 1);
+                i2 += 2;
+            }
+            fcb_put_name(dst + 1, in + i2);
+            for (k = 1; k <= 11; ++k) if (dst[k] == '?' || dst[k] == '*') wild = 1;
+            for (k = 12; k <= 15; ++k) dst[k] = 0;
+            SETAX((R_AX & 0xFF00) | (wild ? 1 : 0));
+            SET16(R_SI, (uint16_t)((R_SI & 0xFFFF) + i2));
+            OKCF();
+        } else FCB_FAIL();
+        #undef FCB_OK
+        #undef FCB_FAIL
     } else if (ah == 0x03) {                    /* AUX input  */
         SETAX((R_AX & 0xFF00) | 0x1A);          /* no serial attached -> EOF   */
         OKCF();
@@ -418,6 +676,12 @@ int dos_int21(dos_machine_t *m)
         SETAX((R_AX & 0xFF00) | m->verify); OKCF();
     } else if (ah == 0x34) {                    /* get InDOS flag -> ES:BX */
         SET16(R_ES, DOS_HDLR_SEG); SET16(R_BX, DOS_INDOS_OFF); OKCF();
+    } else if (ah == 0x5D && ((R_AX & 0xFF) == 0x08 || (R_AX & 0xFF) == 0x09)) {
+        /* 5D08h/5D09h set and flush the network redirector's sharing retry
+           counts. COMMAND.COM calls both at startup. There is no redirector
+           here, so accept and ignore -- that is what DOS does on a machine with
+           no network, and refusing would make the shell think something failed. */
+        OKCF();
     } else if (ah == 0x5D && (R_AX & 0xFF) == 0x06) {   /* get swappable data area */
         SET16(R_DS, DOS_HDLR_SEG); SET16(R_SI, DOS_SDA_OFF);
         SET16(R_CX, DOS_SDA_LEN); SET16(R_DX, DOS_SDA_LEN);

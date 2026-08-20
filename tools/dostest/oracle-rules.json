@@ -336,5 +336,31 @@
     ],
     "recorded": "2026-08-20",
     "why": "The DTA after a successful find-first describes THE FILE THAT WAS FOUND -- name, size, date, attributes -- plus DOS's private search state. Every host searches a different directory (the oracle's A:, the rig's C:\\\\test, DOSBox's mount), so not one byte of it is comparable across hosts. It is still dumped, because reading it is how the block layout was established in the first place, but it is excluded from the verdict. The layout itself is asserted by the register cases and documented in dos_int21.c."
+  },
+  {
+    "probe": "fcb",
+    "case": "fcb.opened",
+    "field": "BUF",
+    "ignore_bytes": [
+      [
+        20,
+        12
+      ]
+    ],
+    "recorded": "2026-08-20",
+    "why": "Bytes 20-23 are the scratch file's date and time, which differ by when each host created it, and 24-31 are DOS's own workspace inside the FCB -- we keep our handle slot there, the oracle keeps something else. The drive, name, extension, current block, record size and file size (bytes 0-19) ARE compared."
+  },
+  {
+    "probe": "fcb",
+    "case": "fcb.dta.found",
+    "field": "BUF",
+    "ignore_bytes": [
+      [
+        0,
+        40
+      ]
+    ],
+    "recorded": "2026-08-20",
+    "why": "An FCB find-first fills the DTA with the directory entry OF THE FILE FOUND, and every host searches a different directory. Not one byte is comparable. Still dumped, because reading it is how the 33-byte layout was established, but excluded from the verdict; the layout itself is asserted by the register cases and documented in dos_int21.c."
   }
 ]

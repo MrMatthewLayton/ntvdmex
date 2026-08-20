@@ -27,6 +27,7 @@ typedef struct {
     uint16_t last_err;         /* AH=59h extended error -- last failing call's AX   */
     uint8_t  verify;           /* AH=2Eh/54h verify-after-write flag                */
     uint16_t child_rc;         /* AH=4Dh return code of the last child              */
+    HANDLE   fcb_find;         /* AH=11h/12h FCB search in progress                  */
     char    *out; int out_cap; int out_len;  /* captured console output (02/09/40) */
     int      out_trunc;        /* set when output was dropped -- see OUTC()        */
     uint8_t  unimpl21[32];     /* GH #27: DOS-defined services we have not written  */
