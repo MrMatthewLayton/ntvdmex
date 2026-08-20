@@ -54,6 +54,14 @@
    be wrong -- the question it answers is whether the guest EXECUTES AT ALL.
    Absent = normal behaviour, so ordinary runs are untouched. Delete after use. */
 #define NOA000_FLAG  "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\noa000.flag"
+/* Mode 12h WITHOUT the A0000 page trap (GH #55). Arming that trap stops the V86
+   guest running at all -- 10 I/O events in 30s against 22.5 MILLION with it off.
+   But we do not actually need it: in mode 12h QuickBASIC reprograms a VGA
+   register via OUT between pixels, so the PORT traps alone hand us control
+   constantly, and the batching interpreter can then run the pixel loop with its
+   A0000 stores going through the planar engine. This knob keys the interpreter
+   off "planar mode is active" instead of "the page is protected". */
+#define INTERP12_FLAG "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\interp12.flag"
 /* Async-preemption experiment knob, also on the share so it can be changed between
    runs without a rebuild. One digit: bits 0-1 = the FIXED_NTVDMSTATE pending bits to
    set before NtVdmControl(VdmQueueInterrupt) (1 = VDM_INT_HARDWARE, 2 = VDM_INT_TIMER,
@@ -245,6 +253,7 @@ static int      g_unclaimed_n = 0;
 
 static int            g_capture       = 0;  /* CAPTURE_FLAG present: opt-in self-screenshot for graphical tests */
 static int            g_no_a000       = 0;  /* NOA000_FLAG present: leave A0000 mapped (diagnostic) */
+static int            g_interp12      = 0;  /* INTERP12_FLAG: interpret mode 12h, no page trap */
 #define PM_HEADLESS_MS_DEFAULT 30000             /* headless exec-loop wall-clock cap (an infinite visual demo self-exits) */
 static DWORD g_headless_ms = PM_HEADLESS_MS_DEFAULT;   /* overridable via HEADLESS_MS_PATH */
 #define PM_HEADLESS_MS g_headless_ms
@@ -3510,7 +3519,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     (void)hInst; (void)hPrev; (void)lpCmd; (void)nShow;
     progpath[0] = 0; args[0] = 0;
 
-    p = zput(p, "NTVDMEX clean host\r\nSTAGE0: WinMain entered [build dpmi-harness-v178]\r\n");
+    p = zput(p, "NTVDMEX clean host\r\nSTAGE0: WinMain entered [build dpmi-harness-v180]\r\n");
     log_write(LOG_PATH, report, p);
     serial_init();                                      /* DPMI harness: COM1 log sink */
     serial_out(report, p);
@@ -3523,6 +3532,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
        the common non-graphical tests never enter the capture path. Latched once here. */
     g_capture  = g_headless && (GetFileAttributesA(CAPTURE_FLAG) != INVALID_FILE_ATTRIBUTES);
     g_no_a000  = (GetFileAttributesA(NOA000_FLAG) != INVALID_FILE_ATTRIBUTES);
+    g_interp12 = (GetFileAttributesA(INTERP12_FLAG) != INVALID_FILE_ATTRIBUTES);
+    if (g_interp12) g_no_a000 = 1;              /* interpreting instead of trapping */
     /* Headless cap override (decimal ms on the share). Read before the deadline thread
        starts, since that thread sleeps on it. Clamped: below the default a typo would
        kill runs early, above 10 min a typo would wedge the watcher for the whole time. */
@@ -4122,8 +4133,24 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             uint32_t d = (cur > s_last_fault) ? (cur - s_last_fault) : (s_last_fault - cur);
             s_storm = (d <= STORM_WINDOW) ? (s_storm + 1) : 0;
             s_last_fault = cur;
-            if (g_a000_prot && s_storm >= STORM_GATE && host_interp(tib, TIER1_CAP) > 0)
-                continue;                           /* batched the hot loop            */
+            if ((g_a000_prot || (g_interp12 && vdd_video_planar_active(&g_vid)))
+                && s_storm >= STORM_GATE) {
+                DWORD bc = VDM_REG(tib, VTIB_CS) & 0xFFFF, bi = VDM_REG(tib, VTIB_EIP) & 0xFFFF;
+                long ran = host_interp(tib, TIER1_CAP);
+                if (ran > 0) {
+                    static int s_bud_bat = 10;
+                    if (s_bud_bat > 0) {            /* is the batch ADVANCING the guest? */
+                        --s_bud_bat;
+                        p = zput(p, "BATCH ran="); p = zhex(p, (DWORD)ran);
+                        p = zput(p, " from 0x"); p = zhex(p, bc); p = zput(p, ":0x"); p = zhex(p, bi);
+                        p = zput(p, " to 0x"); p = zhex(p, VDM_REG(tib, VTIB_CS) & 0xFFFF);
+                        p = zput(p, ":0x"); p = zhex(p, VDM_REG(tib, VTIB_EIP) & 0xFFFF);
+                        p = zput(p, "\r\n");
+                        log_append(LOG_PATH, base, p); p = base;
+                    }
+                    continue;                       /* batched the hot loop            */
+                }
+            }
             EnterCriticalSection(&g_lock);
             handled = host_try_io(tib, &g_bus);     /* single port op (no logging)     */
             LeaveCriticalSection(&g_lock);
@@ -4136,13 +4163,14 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                 LeaveCriticalSection(&g_lock);
                 if (handled) { g_ev_io++; io_hot_note(g_io_last_port, VDM_REG(tib, VTIB_CS) & 0xFFFF, VDM_REG(tib, VTIB_EIP) & 0xFFFF); continue; }
             }
-            if (g_a000_prot && host_interp(tib, 1) > 0) continue;  /* single A0000 access */
+            if ((g_a000_prot || (g_interp12 && vdd_video_planar_active(&g_vid)))
+                && host_interp(tib, 1) > 0) continue;   /* single A0000 access */
             /* The interpreter refused the very first opcode. With A0000 trapped that
                is a LIVELOCK, not a miss: we resume at the same EIP, the guest
                re-faults on the same store, forever. Name the opcode -- this is the
                "mode-12h MOV-store decoder gap" from the M3 notes, and it is why
                mode 12h has never rendered. Budgeted so it cannot flood the log. */
-            if (g_a000_prot) {
+            if (g_a000_prot || g_interp12) {
                 static int s_bud_dec = 8;
                 if (s_bud_dec > 0) {
                     DWORD c2 = VDM_REG(tib, VTIB_CS) & 0xFFFF, i2 = VDM_REG(tib, VTIB_EIP) & 0xFFFF;
