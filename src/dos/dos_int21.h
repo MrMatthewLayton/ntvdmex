@@ -16,7 +16,7 @@
 /* DOS-machine state the INT 21h surface owns. */
 typedef struct {
     volatile BYTE *tib;        /* guest CONTEXT (registers via VDM_REG)            */
-    HANDLE   fh[24];           /* DOS handle -> Win32 (0..4 console; files in 5+)  */
+    HANDLE   fh[64];           /* DOS handle -> Win32 (0..4 console; files in 5+)  */
     uint16_t first_mcb;        /* MCB chain root (AH=48/49/4A)                     */
     uint16_t dta_seg, dta_off; /* Disk Transfer Area (AH=1A/2F)                    */
     uint8_t  ver_major, ver_minor;  /* reported DOS version -- GH #28, default 6.22 */
@@ -25,6 +25,8 @@ typedef struct {
     uint16_t sysvars_seg, sysvars_off;  /* AH=52h list of lists, planted by the host */
     HANDLE   find_h[8];        /* AH=4Eh/4Fh live searches; slot stashed in the DTA */
     uint16_t last_err;         /* AH=59h extended error -- last failing call's AX   */
+    uint8_t  verify;           /* AH=2Eh/54h verify-after-write flag                */
+    uint16_t child_rc;         /* AH=4Dh return code of the last child              */
     char    *out; int out_cap; int out_len;  /* captured console output (02/09/40) */
     int      out_trunc;        /* set when output was dropped -- see OUTC()        */
     uint8_t  unimpl21[32];     /* GH #27: DOS-defined services we have not written  */

@@ -20,6 +20,13 @@
    immediately -- an identity case map, which is a correct no-op for ASCII. */
 #define DOS_CASEMAP_OFF 0x0059
 
+/* AH=34h hands the guest a FAR pointer to the InDOS flag, and AH=5D06h a pointer
+   to the swappable data area whose first bytes are the critical-error flag and
+   that same InDOS byte. Both point here. */
+#define DOS_SDA_OFF     0x00D4      /* [0]=crit-err flag, [1]=InDOS, then zeros */
+#define DOS_SDA_LEN     0x20
+#define DOS_INDOS_OFF   (DOS_SDA_OFF + 1)
+
 /* AH=65h character tables (GH #38) live inside the DOS-resident filler block the
    MCB chain reserves at paragraph 0x0070 (0x8E paragraphs, owner 8 = "DOS").
    That block exists to stand in for resident DOS, so no guest allocates over it,

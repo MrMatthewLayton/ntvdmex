@@ -135,9 +135,11 @@ static void v86_str(DWORD seg, DWORD off, char *dst, int max)
 void dos_int21_init(dos_machine_t *m, uint16_t first_mcb)
 {
     int i;
-    for (i = 0; i < 24; ++i) m->fh[i] = 0;
+    for (i = 0; i < 64; ++i) m->fh[i] = 0;
     for (i = 0; i < 8; ++i) m->find_h[i] = 0;
     m->last_err = 0;
+    m->verify = 0;
+    m->child_rc = 0;
     m->first_mcb = first_mcb;
     m->dta_seg = DOS_PSP_SEG;
     m->dta_off = 0x0080;
@@ -283,8 +285,8 @@ int dos_int21(dos_machine_t *m)
                             FILE_ATTRIBUTE_NORMAL, NULL);
         }
         if (f != INVALID_HANDLE_VALUE) {
-            for (slot = 5; slot < 24 && m->fh[slot]; ++slot) {}
-            if (slot < 24) { m->fh[slot] = f; SETAX(slot); OKCF(); }
+            for (slot = 5; slot < 64 && m->fh[slot]; ++slot) {}
+            if (slot < 64) { m->fh[slot] = f; SETAX(slot); OKCF(); }
             else { CloseHandle(f); SETAX(4); ERRCF(); }
         } else { SETAX(2); ERRCF(); }
         tp = zput(tp, "  INT21 AH=0x"); tp = zhex(tp, ah);
@@ -292,18 +294,18 @@ int dos_int21(dos_machine_t *m)
         tp = zhex(tp, R_AX & 0xFFFF); tp = zput(tp, (*pfl & 1) ? " (err)\r\n" : "\r\n");
     } else if (ah == 0x3E) {                    /* close: BX=handle */
         DWORD h = R_BX & 0xFFFF;
-        if (h >= 5 && h < 24 && m->fh[h]) { CloseHandle(m->fh[h]); m->fh[h] = 0; }
+        if (h >= 5 && h < 64 && m->fh[h]) { CloseHandle(m->fh[h]); m->fh[h] = 0; }
         OKCF();
     } else if (ah == 0x3F) {                    /* read: BX=handle CX=cnt -> DS:DX */
         DWORD h = R_BX & 0xFFFF, cnt = R_CX & 0xFFFF, rd = 0;
         void *b = (void *)((R_DS << 4) + (R_DX & 0xFFFF));
-        if (h >= 5 && h < 24 && m->fh[h]) { ReadFile(m->fh[h], b, cnt, &rd, NULL); SETAX(rd); OKCF(); }
+        if (h >= 5 && h < 64 && m->fh[h]) { ReadFile(m->fh[h], b, cnt, &rd, NULL); SETAX(rd); OKCF(); }
         else if (h == 0) { SETAX(0); OKCF(); }  /* stdin: EOF for now */
         else { SETAX(6); ERRCF(); }
     } else if (ah == 0x42) {                    /* lseek: AL=org BX=h CX:DX=off */
         DWORD h = R_BX & 0xFFFF, meth = R_AX & 0xFF;
         LONG dist = (LONG)(((R_CX & 0xFFFF) << 16) | (R_DX & 0xFFFF));
-        if (h >= 5 && h < 24 && m->fh[h]) {
+        if (h >= 5 && h < 64 && m->fh[h]) {
             DWORD np = SetFilePointer(m->fh[h], dist, NULL, meth);
             SETAX(np & 0xFFFF);
             R_DX = (R_DX & 0xFFFF0000u) | ((np >> 16) & 0xFFFF); OKCF();
@@ -394,6 +396,201 @@ int dos_int21(dos_machine_t *m)
             FindClose(m->find_h[slot]); m->find_h[slot] = 0;
             d[19] = 0;
             SETAX(18); ERRCF();                              /* no more files   */
+        }
+    } else if (ah == 0x03) {                    /* AUX input  */
+        SETAX((R_AX & 0xFF00) | 0x1A);          /* no serial attached -> EOF   */
+        OKCF();
+    } else if (ah == 0x04 || ah == 0x05) {      /* AUX / printer output        */
+        OKCF();                                 /* accepted and discarded      */
+    } else if (ah == 0x0C) {                    /* flush input, then run AL     */
+        /* AL names the input function to perform after flushing. Anything else
+           is just a flush. Re-dispatching is the whole point of the call. */
+        uint8_t fn = (uint8_t)(R_AX & 0xFF);
+        while (m->conpeek && m->conpeek(m->cinctx) && m->coninnb)
+            (void)m->coninnb(m->cinctx);
+        if (fn == 0x01 || fn == 0x06 || fn == 0x07 || fn == 0x08 || fn == 0x0A) {
+            SETAX((uint16_t)(fn << 8));
+            m->retry = 1;                       /* re-enter with AH = that fn  */
+        } else OKCF();
+    } else if (ah == 0x2E) {                    /* set verify flag */
+        m->verify = (uint8_t)(R_AX & 0xFF); OKCF();
+    } else if (ah == 0x54) {                    /* get verify flag */
+        SETAX((R_AX & 0xFF00) | m->verify); OKCF();
+    } else if (ah == 0x34) {                    /* get InDOS flag -> ES:BX */
+        SET16(R_ES, DOS_HDLR_SEG); SET16(R_BX, DOS_INDOS_OFF); OKCF();
+    } else if (ah == 0x5D && (R_AX & 0xFF) == 0x06) {   /* get swappable data area */
+        SET16(R_DS, DOS_HDLR_SEG); SET16(R_SI, DOS_SDA_OFF);
+        SET16(R_CX, DOS_SDA_LEN); SET16(R_DX, DOS_SDA_LEN);
+        tp = zput(tp, "  INT21 AH=5D06 SDA (minimal: crit-err + InDOS only)\r\n");
+        OKCF();
+    } else if (ah == 0x39 || ah == 0x3A) {      /* mkdir / rmdir */
+        char fn[300];
+        int ok2;
+        v86_str(R_DS, R_DX, fn, sizeof(fn));
+        ok2 = (ah == 0x39) ? (int)CreateDirectoryA(fn, NULL)
+                           : (int)RemoveDirectoryA(fn);
+        if (ok2) OKCF();
+        else {
+            /* Oracle: mkdir over an existing name is 5 (access denied); rmdir of
+               something absent is 3 (path not found). */
+            DWORD e = GetLastError();
+            SETAX((uint16_t)(e == ERROR_ALREADY_EXISTS ? 5
+                           : e == ERROR_PATH_NOT_FOUND ? 3
+                           : e == ERROR_FILE_NOT_FOUND ? 3 : 5));
+            ERRCF();
+        }
+    } else if (ah == 0x41) {                    /* delete file */
+        char fn[300];
+        v86_str(R_DS, R_DX, fn, sizeof(fn));
+        if (DeleteFileA(fn)) OKCF();
+        else { SETAX(2); ERRCF(); }             /* oracle: absent -> AX=2 */
+    } else if (ah == 0x43) {                    /* get/set file attributes */
+        char fn[300];
+        uint8_t al43 = (uint8_t)(R_AX & 0xFF);
+        v86_str(R_DS, R_DX, fn, sizeof(fn));
+        if (al43 == 0x00) {
+            DWORD a = GetFileAttributesA(fn);
+            if (a == 0xFFFFFFFFu) { SETAX(2); ERRCF(); }
+            else { SET16(R_CX, (uint16_t)(a & 0x3F)); SETAX((uint16_t)(a & 0x3F)); OKCF(); }
+        } else if (al43 == 0x01) {
+            DWORD a = (DWORD)(R_CX & 0x3F);
+            if (!a) a = FILE_ATTRIBUTE_NORMAL;
+            if (SetFileAttributesA(fn, a)) OKCF();
+            else { SETAX(2); ERRCF(); }
+        } else {
+            tp = zput(tp, "  INT21 AH=43 AL=0x"); tp = zhexb(tp, al43);
+            tp = zput(tp, " UNIMPLEMENTED subfunction\r\n");
+            m->unimpl21[0x43 >> 3] |= (uint8_t)(1u << (0x43 & 7));
+            SETAX(1); ERRCF();
+        }
+    } else if (ah == 0x45 || ah == 0x46) {      /* dup / dup2 */
+        DWORD src = R_BX & 0xFFFF, dst;
+        if (src >= 64 || !m->fh[src]) { SETAX(6); ERRCF(); }
+        else {
+            HANDLE nh = 0;
+            if (!DuplicateHandle(GetCurrentProcess(), m->fh[src],
+                                 GetCurrentProcess(), &nh, 0, FALSE,
+                                 DUPLICATE_SAME_ACCESS)) { SETAX(6); ERRCF(); }
+            else if (ah == 0x45) {
+                for (dst = 5; dst < 64 && m->fh[dst]; ++dst) {}
+                if (dst < 64) { m->fh[dst] = nh; SETAX(dst); OKCF(); }
+                else { CloseHandle(nh); SETAX(4); ERRCF(); }
+            } else {
+                dst = R_CX & 0xFFFF;
+                if (dst >= 64) { CloseHandle(nh); SETAX(6); ERRCF(); }
+                else { if (m->fh[dst]) CloseHandle(m->fh[dst]);
+                       m->fh[dst] = nh; OKCF(); }
+            }
+        }
+    } else if (ah == 0x4D) {                    /* get child return code */
+        SETAX(m->child_rc); m->child_rc = 0;    /* DOS clears it after reading */
+        OKCF();
+    } else if (ah == 0x56) {                    /* rename: DS:DX -> ES:DI */
+        char from[300], to[300];
+        v86_str(R_DS, R_DX, from, sizeof(from));
+        v86_str(R_ES, R_DI, to,   sizeof(to));
+        if (MoveFileA(from, to)) OKCF();
+        else { DWORD e = GetLastError();
+               SETAX((uint16_t)(e == ERROR_ALREADY_EXISTS ? 5 : 2)); ERRCF(); }
+    } else if (ah == 0x57) {                    /* get/set file date and time */
+        DWORD h57 = R_BX & 0xFFFF;
+        uint8_t al57 = (uint8_t)(R_AX & 0xFF);
+        if (h57 >= 64 || !m->fh[h57]) { SETAX(6); ERRCF(); }
+        else if (al57 == 0x00) {
+            FILETIME ft, lf; WORD fdate = 0, ftime = 0;
+            if (GetFileTime(m->fh[h57], NULL, NULL, &ft)
+                && FileTimeToLocalFileTime(&ft, &lf)
+                && FileTimeToDosDateTime(&lf, &fdate, &ftime)) {
+                SET16(R_CX, ftime); SET16(R_DX, fdate); OKCF();
+            } else { SETAX(6); ERRCF(); }
+        } else if (al57 == 0x01) {
+            FILETIME ft, lf;
+            if (DosDateTimeToFileTime((WORD)(R_DX & 0xFFFF), (WORD)(R_CX & 0xFFFF), &lf)
+                && LocalFileTimeToFileTime(&lf, &ft)
+                && SetFileTime(m->fh[h57], NULL, NULL, &ft)) OKCF();
+            else { SETAX(6); ERRCF(); }
+        } else { SETAX(1); ERRCF(); }
+    } else if (ah == 0x5A || ah == 0x5B) {      /* create temp / create new */
+        char fn[300]; HANDLE f; DWORD slot;
+        v86_str(R_DS, R_DX, fn, sizeof(fn));
+        if (ah == 0x5A) {                       /* DS:DX is a DIRECTORY path;
+                                                   DOS appends a generated name
+                                                   and hands it back in place. */
+            int k = 0; static unsigned seq = 0;
+            const char *hexd = "0123456789ABCDEF";
+            while (fn[k] && k < 280) ++k;
+            if (k && fn[k-1] != '\\' && fn[k-1] != '/') fn[k++] = '\\';
+            { unsigned v = (unsigned)(GetTickCount() + (seq++ * 0x1234u));
+              int j; for (j = 0; j < 8; ++j) fn[k + j] = hexd[(v >> (28 - j*4)) & 0xF]; }
+            fn[k + 8] = 0;
+            { volatile BYTE *d = (volatile BYTE *)((R_DS << 4) + (R_DX & 0xFFFF));
+              int j = 0; while (fn[j]) { d[j] = (BYTE)fn[j]; ++j; } d[j] = 0; }
+        }
+        f = CreateFileA(fn, GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ, NULL,
+                        CREATE_NEW, (DWORD)(R_CX & 0x3F) ? (DWORD)(R_CX & 0x3F)
+                                                         : FILE_ATTRIBUTE_NORMAL, NULL);
+        if (f == INVALID_HANDLE_VALUE) {
+            /* Oracle: create-new over an existing file is error 80 (file exists),
+               not 5 -- measured, and not the obvious guess. */
+            DWORD e = GetLastError();
+            SETAX((uint16_t)(e == ERROR_FILE_EXISTS || e == ERROR_ALREADY_EXISTS ? 80 : 3));
+            ERRCF();
+        } else {
+            for (slot = 5; slot < 64 && m->fh[slot]; ++slot) {}
+            if (slot < 64) { m->fh[slot] = f; SETAX(slot); OKCF(); }
+            else { CloseHandle(f); SETAX(4); ERRCF(); }
+        }
+    } else if (ah == 0x5C) {                    /* lock / unlock a byte range */
+        DWORD h5c = R_BX & 0xFFFF;
+        DWORD off = ((DWORD)(R_CX & 0xFFFF) << 16) | (DWORD)(R_DX & 0xFFFF);
+        DWORD len = ((DWORD)(R_SI & 0xFFFF) << 16) | (DWORD)(R_DI & 0xFFFF);
+        if (h5c >= 64 || !m->fh[h5c]) { SETAX(6); ERRCF(); }
+        else {
+            BOOL ok5 = ((R_AX & 0xFF) == 0)
+                     ? LockFile(m->fh[h5c], off, 0, len, 0)
+                     : UnlockFile(m->fh[h5c], off, 0, len, 0);
+            if (ok5) OKCF(); else { SETAX(0x21); ERRCF(); }   /* 33 = lock violation */
+        }
+    } else if (ah == 0x67) {                    /* set maximum handle count */
+        /* We keep a fixed 64-entry table, so anything up to that succeeds.
+           NOTE the oracle FAILED this with AX=8 (insufficient memory) when asked
+           for 30 -- that is a property of ITS memory state at that moment, not a
+           rule about DOS, which is why the probe treats the result as
+           informational rather than comparable. */
+        if ((R_BX & 0xFFFF) <= 64) OKCF();
+        else { SETAX(8); ERRCF(); }
+    } else if (ah == 0x68 || ah == 0x6A) {      /* commit file (flush) */
+        DWORD h68 = R_BX & 0xFFFF;
+        if (h68 >= 64 || !m->fh[h68]) { SETAX(6); ERRCF(); }
+        else { FlushFileBuffers(m->fh[h68]); OKCF(); }
+    } else if (ah == 0x6C) {                    /* extended open/create */
+        /* BX=mode, CX=attributes, DX=action, DS:SI=name.
+           action: bits 0-3 if it exists (0 fail, 1 open, 2 truncate),
+                   bits 4-7 if it does not (0 fail, 1 create).
+           CX on return says what happened: 1 opened, 2 created, 3 truncated. */
+        char fn[300]; HANDLE f; DWORD slot, disp;
+        uint16_t act = (uint16_t)(R_DX & 0xFFFF);
+        uint16_t exists = act & 0x0F, missing = (act >> 4) & 0x0F;
+        DWORD mode = R_BX & 3;
+        DWORD acc = (mode == 1) ? GENERIC_WRITE
+                  : (mode == 2) ? (GENERIC_READ | GENERIC_WRITE) : GENERIC_READ;
+        v86_str(R_DS, R_SI, fn, sizeof(fn));
+        if      (exists == 2 && missing == 1) disp = CREATE_ALWAYS;
+        else if (exists == 1 && missing == 1) disp = OPEN_ALWAYS;
+        else if (exists == 0 && missing == 1) disp = CREATE_NEW;
+        else if (exists == 2 && missing == 0) disp = TRUNCATE_EXISTING;
+        else                                  disp = OPEN_EXISTING;
+        f = CreateFileA(fn, acc, FILE_SHARE_READ, NULL, disp,
+                        (DWORD)(R_CX & 0x3F) ? (DWORD)(R_CX & 0x3F)
+                                             : FILE_ATTRIBUTE_NORMAL, NULL);
+        if (f == INVALID_HANDLE_VALUE) { SETAX(2); ERRCF(); }
+        else {
+            uint16_t res = (disp == CREATE_NEW) ? 2
+                         : (disp == TRUNCATE_EXISTING || disp == CREATE_ALWAYS) ? 3 : 1;
+            if (disp == OPEN_ALWAYS && GetLastError() != ERROR_ALREADY_EXISTS) res = 2;
+            for (slot = 5; slot < 64 && m->fh[slot]; ++slot) {}
+            if (slot < 64) { m->fh[slot] = f; SETAX(slot); SET16(R_CX, res); OKCF(); }
+            else { CloseHandle(f); SETAX(4); ERRCF(); }
         }
     } else if (ah == 0x59) {                    /* get extended error */
         /* Four answers, not one: extended code (AX), class (BH), suggested
