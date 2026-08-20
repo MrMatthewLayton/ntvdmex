@@ -42,6 +42,32 @@ static int dos622_defines(uint8_t ah)
     }
 }
 
+/* MS-DOS 6.22 country block for country 1 (USA), INT 21h AH=38h.  GH #38.
+ *
+ * TRANSCRIBED FROM THE ORACLE, byte for byte (tools/dostest/p_ctry.asm):
+ *   [0-1]  0000     date format, 0 = USA month/day/year
+ *   [2-6]  "$"      currency symbol, ASCIIZ in 5 bytes
+ *   [7-8]  ","      thousands separator      [9-10]  "."  decimal separator
+ *   [11-12] "-"     date separator           [13-14] ":"  time separator
+ *   [15]   00       currency format          [16]    02   digits after decimal
+ *   [17]   00       time format, 0 = 12-hour
+ *   [18-21]         FAR pointer to DOS's case-map routine -- filled in at run time
+ *   [22-23] ","     data-list separator
+ *
+ * THE LENGTH IS MEASURED, NOT ASSUMED. The probe poisoned the destination with
+ * 0xEE first: real DOS writes exactly 24 bytes and leaves everything past them
+ * alone. The commonly quoted "34-byte block" would have had us zeroing 10 bytes
+ * of the caller's memory that DOS never touches.
+ */
+static const uint8_t ctry_us[24] = {
+    0x00, 0x00,
+    0x24, 0x00, 0x00, 0x00, 0x00,
+    0x2C, 0x00,   0x2E, 0x00,   0x2D, 0x00,   0x3A, 0x00,
+    0x00,   0x02,   0x00,
+    0x00, 0x00, 0x00, 0x00,               /* case-map FAR ptr, patched below */
+    0x2C, 0x00
+};
+
 /* Copy an ASCIIZ string out of V86 memory (seg:off) into a host buffer. */
 static void v86_str(DWORD seg, DWORD off, char *dst, int max)
 {
@@ -234,6 +260,85 @@ int dos_int21(dos_machine_t *m)
         SET16(R_BX, 0xFF00);                    /* BH=OEM 0xFF, BL=serial high */
         SET16(R_CX, 0x0000);                    /* serial low                  */
         OKCF();
+    } else if (ah == 0x47) {                    /* get current directory -> DS:SI */
+        /* DOS returns the path WITHOUT the drive letter and WITHOUT a leading
+           backslash, ASCIIZ.  Oracle at the root writes exactly ONE byte -- the
+           terminating NUL -- and leaves the rest of the caller's 64-byte buffer
+           untouched, so we must not pad it.
+           Wanted by four of the five real 6.22 tools we ran (TREE, ATTRIB,
+           XCOPY, COMMAND.COM), which is why it came first.  GH #32. */
+        char cwd[300];
+        DWORD n = GetCurrentDirectoryA(sizeof(cwd), cwd);
+        uint8_t dl47 = (uint8_t)(R_DX & 0xFF);
+        uint8_t curdrv = (n >= 2 && cwd[1] == ':')
+                       ? (uint8_t)((cwd[0] | 0x20) - 'a' + 1) : 3;
+        if (n == 0 || (dl47 != 0 && dl47 != curdrv)) {
+            /* Per-drive current directories are real DOS behaviour and we keep
+               only one, so say so rather than answer for the wrong drive. */
+            tp = zput(tp, "  INT21 AH=47 drive 0x"); tp = zhex(tp, dl47);
+            tp = zput(tp, " UNIMPLEMENTED (only the current drive is tracked)\r\n");
+            m->unimpl21[0x47 >> 3] |= (uint8_t)(1u << (0x47 & 7));
+            SETAX(0x0F); ERRCF();
+        } else {
+            volatile BYTE *dst = (volatile BYTE *)((R_DS << 4) + (R_SI & 0xFFFF));
+            const char *p47 = cwd;
+            int k = 0;
+            if (cwd[1] == ':') p47 += 2;              /* drop "C:"            */
+            if (*p47 == '\\' || *p47 == '/') ++p47;   /* drop the separator   */
+            while (p47[k] && k < 63) { dst[k] = (BYTE)p47[k]; ++k; }
+            dst[k] = 0;
+            SETAX(0x0100); OKCF();                    /* oracle: AX=0100      */
+        }
+    } else if (ah == 0x3B) {                    /* chdir: DS:DX = ASCIIZ path */
+        char fn[300];
+        v86_str(R_DS, R_DX, fn, sizeof(fn));
+        if (SetCurrentDirectoryA(fn)) { OKCF(); }
+        else { SETAX(3); ERRCF(); }             /* oracle: AX=0003, CF=1      */
+    } else if (ah == 0x36) {                    /* get free disk space: DL = drive */
+        /* AX=sectors/cluster BX=free clusters CX=bytes/sector DX=total clusters.
+           AN INVALID DRIVE RETURNS AX=FFFF WITH CARRY CLEAR -- oracle-confirmed,
+           and easy to get wrong: it is not a CF error.  Counts are 16-bit in the
+           DOS interface, so a large volume has to be clamped rather than wrapped. */
+        uint8_t dl36 = (uint8_t)(R_DX & 0xFF);
+        DWORD spc = 0, bps = 0, freec = 0, totc = 0;
+        char root[4]; char *rp = 0;
+        if (dl36) { root[0] = (char)('A' + dl36 - 1); root[1] = ':'; root[2] = '\\';
+                    root[3] = 0; rp = root; }
+        if (dl36 <= 26 && GetDiskFreeSpaceA(rp, &spc, &bps, &freec, &totc)) {
+            SETAX((uint16_t)spc);
+            SET16(R_BX, freec > 0xFFFF ? 0xFFFF : freec);
+            SET16(R_CX, (uint16_t)bps);
+            SET16(R_DX, totc  > 0xFFFF ? 0xFFFF : totc);
+            OKCF();
+        } else {
+            SETAX(0xFFFF); OKCF();
+        }
+    } else if (ah == 0x38) {                    /* get/set country information */
+        uint8_t al38 = (uint8_t)(R_AX & 0xFF);
+        uint16_t want = (al38 == 0xFF) ? (uint16_t)(R_BX & 0xFFFF)
+                                       : (uint16_t)(al38 ? al38 : 1);
+        if ((R_DX & 0xFFFF) == 0xFFFF) {        /* DX=FFFF selects SET, not GET */
+            tp = zput(tp, "  INT21 AH=38 SET country UNIMPLEMENTED\r\n");
+            m->unimpl21[0x38 >> 3] |= (uint8_t)(1u << (0x38 & 7));
+            SETAX(2); ERRCF();
+        } else if (want == 1) {                 /* USA -- the only block we have */
+            volatile BYTE *b = (volatile BYTE *)((R_DS << 4) + (R_DX & 0xFFFF));
+            int k;
+            for (k = 0; k < 24; ++k) b[k] = ctry_us[k];
+            b[18] = (BYTE)(DOS_CASEMAP_OFF & 0xFF);
+            b[19] = (BYTE)(DOS_CASEMAP_OFF >> 8);
+            b[20] = (BYTE)(DOS_HDLR_SEG & 0xFF);
+            b[21] = (BYTE)(DOS_HDLR_SEG >> 8);
+            SETAX(1); SET16(R_BX, 1); OKCF();
+        } else {
+            /* We only have measured data for country 1. Inventing a block for
+               another country would be exactly the from-memory guess the
+               programme forbids, so say so rather than fabricate one. */
+            tp = zput(tp, "  INT21 AH=38 country 0x"); tp = zhex(tp, want);
+            tp = zput(tp, " UNIMPLEMENTED (only country 1 measured)\r\n");
+            m->unimpl21[0x38 >> 3] |= (uint8_t)(1u << (0x38 & 7));
+            SETAX(2); ERRCF();
+        }
     } else if (ah == 0x58) {                    /* get/set memory allocation strategy */
         uint8_t al58 = (uint8_t)(R_AX & 0xFF);
         if (al58 == 0x00)      { SETAX(m->alloc_strat); OKCF(); }

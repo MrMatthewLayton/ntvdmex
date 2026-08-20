@@ -28,5 +28,15 @@
     ],
     "recorded": "2026-08-20",
     "why": "AH=73h is the FAT32 function group introduced in DOS 7.1. MS-DOS 6.22 does not define it at all, so it falls into the undefined bucket and returns CF=0 with AX unchanged, exactly like AH=FFh and AH=88h. DOSBox-X implements the group and returns CF=1 for the unsupported subfunction -- a sensible answer for the later DOS it emulates, but an answer to a different question. For 'what does 6.22 do', the genuine kernel is definitive."
+  },
+  {
+    "probe": "dir",
+    "case": "int21.3600.baddrive",
+    "field": "AX",
+    "abstain": [
+      "dosbox-x"
+    ],
+    "recorded": "2026-08-20",
+    "why": "The case asks what DOS reports for a drive that does not exist, using DL=26 (Z:). DOSBox-X ALWAYS MOUNTS Z: as its own virtual utility drive, so on that host the drive does exist and 0x0020 is a correct answer to a different question. Real 6.22 has no Z: and returns AX=FFFF -- with CARRY CLEAR, which is the part worth remembering: it is not a CF error."
   }
 ]

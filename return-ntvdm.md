@@ -289,10 +289,44 @@ since session 11 — and #27's null-vector sweep had just aimed 133 more vectors
 offset were updated with it** (they are what stops us injecting an IRQ the guest never hooked).
 A handler-segment offset map is now in main.c next to the define — check it before adding stubs.
 
+★★★ **THE EVIDENCE-RANKED GAP LIST (host v151), from running the real 6.22 tools on the rig.**
+  This is the artifact the epic asked for, and it is ranked by what programs ACTUALLY call:
+      AH=47h  get current dir      TREE, ATTRIB, XCOPY, COMMAND.COM   4 of 5  <- done
+      AH=65h  ext country info     ATTRIB, COMMAND.COM                2
+      AH=4Eh  find first           TREE (load-bearing for DIR, #29)    1  <- NEXT
+      AH=60h  truename             CHKDSK                             1
+      AH=5Dh  server/internal      COMMAND.COM                        1
+      AH=11h  FCB find first       TREE (#36)                         1
+      AH=59h  extended error       TREE (#34)                         1
+      AH=69h  disk serial          TREE (#35)                         1
+  ▶ DONE THIS ROUND, all oracle-matched in dosdiff: **38h country info (#38), 47h get current
+    dir + 3Bh chdir (#32), 36h free space (#35)**, on top of 30h/33h/52h/58h.
+    To-do lists shrank: TREE `11 3B 47 4E 69`→`11 4E 59 69`; COMMAND.COM `47 5D 65`→`5D 65`;
+    CHKDSK `36 60`→`60`; MEM.EXE → **none**.
+  ▶ **MEASURE THE BUFFER, NOT JUST THE REGISTERS.** 38h's country block is **24 bytes, not the
+    commonly quoted 34** — proved by poisoning the destination with 0xEE first; DOS leaves
+    everything past byte 23 alone. Writing 34 would have silently clobbered 10 bytes of the
+    caller's memory. Same trick showed 47h at the root writes exactly ONE byte (the NUL).
+  ▶ 38h hands back a FAR pointer to DOS's case-map routine; ours points at a planted **RETF**
+    (`DOS_CASEMAP_OFF`), so a program that actually calls it returns safely (identity mapping)
+    instead of jumping into nothing.
+  ▶ **36h on a bad drive returns AX=FFFF with CARRY CLEAR** — not a CF error. Easy to get wrong.
+  ▶ TWO MORE DOSBOX ABSTENTIONS, both "correct answer to a different question": 36h's
+    sectors-per-cluster is VOLUME GEOMETRY (oracle 16, DOSBox 64, rig 8) so it is no longer
+    compared at all; and DOSBox **always mounts Z:**, so the "drive does not exist" case is
+    false there.
+
+▶ **KNOWN DEFECT, NOT PAPERED OVER: MEM.EXE runs to completion but its NUMBERS ARE WRONG.**
+  "Largest executable program size 0K (4,294,967,280 bytes)" is -16 unsigned; conventional free
+  reads 0K; XMS reads 0K despite a 16 MB pool. Zero unimplemented functions are reported, so
+  this is a SILENT wrongness in the MCB chain / SysVars stub (52h returns only the MCB head) and
+  in XMS reporting. Worth fixing before trusting any memory-related parity claim.
+
 ▶▶ RESUME — NEXT STEPS (in order):
-  1. **Keep the evidence loop running** — it is cheap now. Next to-do is **AH=0x38 country info
-     (#38)** from MEM.EXE. Then CHKDSK, TREE, ATTRIB, XCOPY, then COMMAND.COM (expect #29 4Eh/4Fh
-     and #30 4Bh to dominate), then edit/qbasic/Doom.
+  1. **#29 find first/next (4Eh/4Fh) + DTA** — the load-bearing one for DIR, and the last big
+     blocker before COMMAND.COM is useful. Then 65h, 60h, 5Dh, 59h, 69h, 11h/12h.
+     Then **#30 EXEC (4Bh)**, after which a shell can actually launch a program.
+  2. Fix the MEM.EXE numbers (above).
   2. **Finish #26: wire stock ntvdm** (still needs the rt.bat IFEO variant + the user's call on
      the display-wedge risk).
   3. #28's menu selector. Until `ntvdmex` runs there is NO subject in the

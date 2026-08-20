@@ -14,4 +14,10 @@
 #define DOS_EMM_NAME_OFF 0x000A /* "EMMXXXX0" device-header name (M4 EMS detect, *
                                  * INT 67h vector segment : offset 0Ah)        */
 
+/* Bare RETF, planted by the host. INT 21h AH=38h hands the caller a FAR pointer
+   to DOS's case-mapping routine; pointing it at nothing would send any program
+   that actually calls it into the weeds, so it points here and returns
+   immediately -- an identity case map, which is a correct no-op for ASCII. */
+#define DOS_CASEMAP_OFF 0x0059
+
 #endif /* DOS_LAYOUT_H */

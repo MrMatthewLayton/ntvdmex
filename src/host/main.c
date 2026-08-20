@@ -3341,7 +3341,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     (void)hInst; (void)hPrev; (void)lpCmd; (void)nShow;
     progpath[0] = 0; args[0] = 0;
 
-    p = zput(p, "NTVDMEX clean host\r\nSTAGE0: WinMain entered [build dpmi-harness-v149]\r\n");
+    p = zput(p, "NTVDMEX clean host\r\nSTAGE0: WinMain entered [build dpmi-harness-v151]\r\n");
     log_write(LOG_PATH, report, p);
     serial_init();                                      /* DPMI harness: COM1 log sink */
     serial_out(report, p);
@@ -3530,6 +3530,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
        (which never installs a Sound Blaster ISR at all) froze at F000:A390 the moment its DMA
        block completed. So give IRQ2-7 and IRQ8-15 a plain IRET, exactly as INT 09h has. */
     hdlr[DOS_IRET_STUB_OFF] = 0xCF;                                /* shared IRET stub    */
+    hdlr[DOS_CASEMAP_OFF]   = 0xCB;                                /* AH=38h case map: RETF */
     for (i = 0x0A; i <= 0x0F; ++i) {
         *(volatile WORD *)(i * 4)     = DOS_IRET_STUB_OFF;
         *(volatile WORD *)(i * 4 + 2) = DOS_HDLR_SEG;
