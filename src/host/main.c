@@ -100,6 +100,25 @@
 #define DPMI_PMRET_BOP   0x56
 #define DPMI_PMRET_OFF   0x0070
 
+/* Shared IRET stub for every vector that has no real handler.
+ *
+ * IT USED TO LIVE AT 0x66 AND WAS BEING CLOBBERED. The DPMI real-mode callback
+ * slots are based at 0x60 with a 4-byte stride, so slot 1 occupies 0x64-0x66 and
+ * its third byte (DPMI_CB_BOP, 0x55) is written AFTER the stub -- leaving 0x55
+ * there, which decodes as PUSH BP and then runs into uninitialised memory. Every
+ * vector pointed at the "safe" stub was therefore pointed at a crash. Latent for
+ * IRQ 2-7/8-15, and much worse once #27 started filling every null vector with it.
+ *
+ * HANDLER SEGMENT MAP -- check this before adding anything:
+ *   0x00-0x1F  INT 21h BOP + DBCS(0x18) + EMM name(0x0A)
+ *   0x20,0x28,0x30,0x34,0x3A,0x3C,0x40,0x48,0x4C  INT 10/16/33/08/1C/1A/2F/67/09 stubs
+ *   0x44       XMS entry          0x50-0x53  DPMI entry     0x54-0x56  DPMI RMRET
+ *   0x58       >>> this stub <<<  0x60-0x6F  DPMI CB slots  0x70-0x72  DPMI PMRET
+ *   0x80       DPMI fault BOP (code selector)
+ */
+#define DOS_IRET_STUB_OFF 0x0058
+#define DOS_SYSVARS_OFF   0x0090      /* AH=52h list of lists; MCB head at -2 (GH #35) */
+
 /* GH #18 real-CPU PM-fault trampoline. When a raw (non-BOP) protected-mode #GP faults,
    the kernel reflect path jumps the guest to [VDM_TIB+0x638]:0x1000 (see ntvdm.h
    VTIB_FLT_*). We install a code selector H (g_dpmi_fault_sel) based at DOS_HDLR_SEG<<4
@@ -374,7 +393,7 @@ static int async_inject_irq(unsigned irq)
        our own handler segment at 0050:006c, where it "terminated" via a garbage INT 21h. */
     { unsigned v0 = vdd_pic_vector(&g_pic, (uint8_t)irq);
       if (irq >= 2 && peekw(v0 * 4 + 2) == DOS_HDLR_SEG
-                   && peekw(v0 * 4) == 0x0066) { g_async_bail++; return 0; } }
+                   && peekw(v0 * 4) == DOS_IRET_STUB_OFF) { g_async_bail++; return 0; } }
     if (SuspendThread(g_hcpu) == (DWORD)-1) { g_async_bail++; return 0; }
     { unsigned i; char *z = (char *)&cx; for (i = 0; i < sizeof cx; ++i) z[i] = 0; }
     cx.ContextFlags = CONTEXT_CONTROL | CONTEXT_SEGMENTS;
@@ -441,7 +460,7 @@ static int async_vec_is_our_stub(unsigned irq)
 {
     unsigned vec = vdd_pic_vector(&g_pic, (uint8_t)irq);
     WORD seg = peekw(vec * 4 + 2), off = peekw(vec * 4);
-    return seg == DOS_HDLR_SEG && (off == 0x0066 || off == 0x004C);
+    return seg == DOS_HDLR_SEG && (off == DOS_IRET_STUB_OFF || off == 0x004C);
 }
 
 static void host_irq_sink(void *ctx, uint8_t irq)
@@ -3322,7 +3341,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     (void)hInst; (void)hPrev; (void)lpCmd; (void)nShow;
     progpath[0] = 0; args[0] = 0;
 
-    p = zput(p, "NTVDMEX clean host\r\nSTAGE0: WinMain entered [build dpmi-harness-v147]\r\n");
+    p = zput(p, "NTVDMEX clean host\r\nSTAGE0: WinMain entered [build dpmi-harness-v149]\r\n");
     log_write(LOG_PATH, report, p);
     serial_init();                                      /* DPMI harness: COM1 log sink */
     serial_out(report, p);
@@ -3510,13 +3529,13 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
        IRQ the guest has not hooked jumps it into that junk and hangs it: measured, Skyroads
        (which never installs a Sound Blaster ISR at all) froze at F000:A390 the moment its DMA
        block completed. So give IRQ2-7 and IRQ8-15 a plain IRET, exactly as INT 09h has. */
-    hdlr[0x66] = 0xCF;                                             /* shared IRET stub    */
+    hdlr[DOS_IRET_STUB_OFF] = 0xCF;                                /* shared IRET stub    */
     for (i = 0x0A; i <= 0x0F; ++i) {
-        *(volatile WORD *)(i * 4)     = 0x0066;
+        *(volatile WORD *)(i * 4)     = DOS_IRET_STUB_OFF;
         *(volatile WORD *)(i * 4 + 2) = DOS_HDLR_SEG;
     }
     for (i = 0x70; i <= 0x77; ++i) {
-        *(volatile WORD *)(i * 4)     = 0x0066;
+        *(volatile WORD *)(i * 4)     = DOS_IRET_STUB_OFF;
         *(volatile WORD *)(i * 4 + 2) = DOS_HDLR_SEG;
     }
     *(volatile WORD *)(0x09 * 4)     = 0x004C;              /* IVT[0x09].offset    */
@@ -3567,7 +3586,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
       for (v = 0; v <= 256; ++v) {                  /* 256 flushes a trailing run */
           int isnull = (v < 256) && (*(volatile DWORD *)(v * 4) == 0);
           if (isnull) {
-              *(volatile WORD *)(v * 4)     = 0x0066;
+              *(volatile WORD *)(v * 4)     = DOS_IRET_STUB_OFF;
               *(volatile WORD *)(v * 4 + 2) = DOS_HDLR_SEG;
               if (start < 0) start = v;
               ++n;
@@ -3584,6 +3603,13 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     dos_env_build(NULL, DOS_ENV_SEG, progpath[0] ? progpath : "C:\\PROGRAM.COM");  /* M2.5: env */
     dos_cmdtail_build(NULL, DOS_PSP_SEG, args);                                    /* M2.5: args */
     dos_int21_init(&m, dos_mcb_init(NULL));
+    /* GH #35: plant SysVars for INT 21h AH=52h. Only the word at BX-2 (the first
+       MCB segment) is real; the remaining fields are deliberately left zero --
+       see the handler for why a null stub beats a plausible-looking one. */
+    { int k; for (k = -2; k < 0x40; ++k) hdlr[DOS_SYSVARS_OFF + k] = 0; }
+    *(volatile WORD *)((DOS_HDLR_SEG << 4) + DOS_SYSVARS_OFF - 2) = m.first_mcb;
+    m.sysvars_seg = DOS_HDLR_SEG;
+    m.sysvars_off = DOS_SYSVARS_OFF;
     xms_init(&g_xms, 16384, xms_host_alloc, xms_host_free, NULL);  /* M4: 16MB XMS pool */
     ems_init(&g_ems, (uint16_t)(g_ems_frame_lin >> 4), EMS_POOL_PAGES,
              (volatile BYTE *)g_ems_frame_lin,
@@ -3800,7 +3826,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
           if (!in_bop && guest_if_enabled(tib)) {
               for (q = 2; q < 8; ++q) {
                   if (peekw((8 + q) * 4 + 2) == DOS_HDLR_SEG
-                      && peekw((8 + q) * 4) == 0x0066) {
+                      && peekw((8 + q) * 4) == DOS_IRET_STUB_OFF) {
                       InterlockedExchange(&g_irqn_pending[q], 0);   /* unhooked: drop it */
                       continue;
                   }

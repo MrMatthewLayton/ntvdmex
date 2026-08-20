@@ -19,6 +19,10 @@ typedef struct {
     HANDLE   fh[24];           /* DOS handle -> Win32 (0..4 console; files in 5+)  */
     uint16_t first_mcb;        /* MCB chain root (AH=48/49/4A)                     */
     uint16_t dta_seg, dta_off; /* Disk Transfer Area (AH=1A/2F)                    */
+    uint8_t  ver_major, ver_minor;  /* reported DOS version -- GH #28, default 6.22 */
+    uint8_t  alloc_strat;      /* AH=58h allocation strategy (0 = first fit)       */
+    uint8_t  umb_link;         /* AH=58h UMB link state (0 = not linked)           */
+    uint16_t sysvars_seg, sysvars_off;  /* AH=52h list of lists, planted by the host */
     char    *out; int out_cap; int out_len;  /* captured console output (02/09/40) */
     int      out_trunc;        /* set when output was dropped -- see OUTC()        */
     uint8_t  unimpl21[32];     /* GH #27: DOS-defined services we have not written  */

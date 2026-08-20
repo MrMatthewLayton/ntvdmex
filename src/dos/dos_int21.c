@@ -61,6 +61,15 @@ void dos_int21_init(dos_machine_t *m, uint16_t first_mcb)
     m->out_len = 0; m->out_trunc = 0;
     { int _i; for (_i = 0; _i < 32; ++_i) { m->unimpl21[_i] = 0; m->noop21[_i] = 0; } }
     m->exit_code = 0;
+    /* GH #28: default to 6.22 so we match the oracle. It is also the friendlier
+       lie -- most version checks are floor checks, and real 6.22 tools refuse to
+       run at all under a lower number ("Incorrect DOS version" from MEM.EXE was
+       the first thing the evidence pass hit). */
+    m->ver_major = 6; m->ver_minor = 22;
+    /* Oracle-confirmed 6.22 defaults: 5800h -> AX=0000 (first fit),
+       5802h -> AL=00 (UMBs not linked). */
+    m->alloc_strat = 0; m->umb_link = 0;
+    m->sysvars_seg = 0; m->sysvars_off = 0;
     m->conout = 0;
     m->conctx = 0;
     m->conin = 0;
@@ -215,8 +224,45 @@ int dos_int21(dos_machine_t *m)
             SETAX(np & 0xFFFF);
             R_DX = (R_DX & 0xFFFF0000u) | ((np >> 16) & 0xFFFF); OKCF();
         } else { SETAX(6); ERRCF(); }
-    } else if (ah == 0x30) {                    /* get DOS version -> 5.0 */
-        SETAX(0x0005); OKCF();
+    } else if (ah == 0x30) {                    /* get DOS version */
+        /* AL=major, AH=minor, BH=OEM, BL:CX=24-bit serial.  GH #28.
+           BX and CX were never written before, so a caller saw whatever it had
+           left in them and read that as our OEM number and serial.  Values
+           confirmed against the 6.22 oracle: BH=0xFF (generic MS-DOS), serial 0.
+           The version itself is configurable -- see dos_int21_set_version(). */
+        SETAX((uint16_t)((m->ver_minor << 8) | m->ver_major));
+        SET16(R_BX, 0xFF00);                    /* BH=OEM 0xFF, BL=serial high */
+        SET16(R_CX, 0x0000);                    /* serial low                  */
+        OKCF();
+    } else if (ah == 0x58) {                    /* get/set memory allocation strategy */
+        uint8_t al58 = (uint8_t)(R_AX & 0xFF);
+        if (al58 == 0x00)      { SETAX(m->alloc_strat); OKCF(); }
+        else if (al58 == 0x01) { m->alloc_strat = (uint8_t)(R_BX & 0xFF); OKCF(); }
+        else if (al58 == 0x02) { SETAX((R_AX & 0xFF00) | m->umb_link); OKCF(); }
+        else if (al58 == 0x03) { m->umb_link = (uint8_t)(R_BX & 0xFF); OKCF(); }
+        else {
+            tp = zput(tp, "  INT21 AH=58 AL=0x"); tp = zhex(tp, al58);
+            tp = zput(tp, " UNIMPLEMENTED subfunction\r\n");
+            m->unimpl21[0x58 >> 3] |= (uint8_t)(1u << (0x58 & 7));
+            SETAX(1); ERRCF();
+        }
+    } else if (ah == 0x52) {                    /* get list of lists -> ES:BX */
+        /* The word at ES:BX-2 is the first MCB segment, and that is the field a
+           memory walker actually follows -- it is filled in truthfully from our
+           own MCB chain. The rest of SysVars is a stub, so it is ZEROED rather
+           than left as whatever was in memory: a walker that follows a garbage
+           DPB or SFT pointer wanders off into nonsense, which is the silent
+           failure #27 exists to remove, whereas a null pointer stops it. */
+        if (m->sysvars_seg) {
+            SET16(R_ES, m->sysvars_seg);
+            SET16(R_BX, m->sysvars_off);
+            tp = zput(tp, "  INT21 AH=52 list-of-lists (MCB head only; rest stubbed)\r\n");
+            OKCF();
+        } else {
+            tp = zput(tp, "  INT21 AH=52 UNIMPLEMENTED (no SysVars planted)\r\n");
+            m->unimpl21[0x52 >> 3] |= (uint8_t)(1u << (0x52 & 7));
+            SETAX(1); ERRCF();
+        }
     } else if (ah == 0x44) {                    /* IOCTL (C-runtime isatty etc.) */
         BYTE al = (BYTE)(R_AX & 0xFF);
         WORD bx = (WORD)(R_BX & 0xFFFF);
@@ -274,9 +320,26 @@ int dos_int21(dos_machine_t *m)
         SETAX((R_AX & 0xFF00) | 0x03); OKCF();
     } else if (ah == 0x0D) {                    /* disk reset (flush) -> nop */
         OKCF();
-    } else if (ah == 0x33) {                    /* get/set Ctrl-Break -> off */
-        if ((R_AX & 0xFF) == 0) SET16(R_DX, 0);
-        OKCF();
+    } else if (ah == 0x33) {                    /* get/set Ctrl-Break, get true version */
+        uint8_t al33 = (uint8_t)(R_AX & 0xFF);
+        if (al33 == 0x00) { SET16(R_DX, 0); OKCF(); }          /* get: break off  */
+        else if (al33 == 0x01) { OKCF(); }                     /* set: accepted   */
+        else if (al33 == 0x05) { SET16(R_DX, 3); OKCF(); }     /* boot drive = C: */
+        else if (al33 == 0x06) {                               /* get TRUE version */
+            /* BL=major BH=minor DL=revision DH=flags.  DH bit 3 = DOS in ROM,
+               bit 4 = DOS in HMA; we are in neither, so 0.  Note the oracle
+               reports DH=0x10 because that image boots DOS=HIGH -- DH is a
+               property of the host's configuration, not of the version, which
+               is why the probes do not compare it. */
+            SET16(R_BX, (uint16_t)((m->ver_minor << 8) | m->ver_major));
+            SET16(R_DX, 0x0000);
+            OKCF();
+        } else {                                               /* unknown subfn   */
+            tp = zput(tp, "  INT21 AH=33 AL=0x"); tp = zhex(tp, al33);
+            tp = zput(tp, " UNIMPLEMENTED subfunction\r\n");
+            m->unimpl21[0x33 >> 3] |= (uint8_t)(1u << (0x33 & 7));
+            ERRCF();
+        }
     } else if (ah == 0x2A) {                    /* get date: CX=yr DH=mon DL=day AL=dow */
         SYSTEMTIME t; GetLocalTime(&t);
         SET16(R_CX, t.wYear);

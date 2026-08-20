@@ -248,10 +248,54 @@ Selftest cases now assert a substring transcribed from the oracle's real output.
     full in `docs/research/oracle-disagreements.md` so nobody "fixes" it without the argument.
   ▶ DOSBox-X abstains on `int21.73/CF`: AH=73h is the DOS 7.1 FAT32 group, absent from 6.22.
 
+★★★ **THE 6.22 FUNCTION TABLE + #28 VERSION + FIRST REAL APP RUNNING (host v149).**
+  ▶ **`dos622_defines()` in dos_int21.c splits the unhandled tail in two**, because the halves
+    want opposite answers: a service 6.22 DEFINES that we have not written → CF=1, loud (a quiet
+    "success" makes the guest believe a no-op worked); a service 6.22 does NOT define → AX
+    unchanged, CF=0, exactly as real DOS. We now MATCH the oracle on the second class.
+    **BOUNDARY MEASURED** (`tools/dostest/p_defs.asm`): 6Dh..E0h all return with every poisoned
+    register intact — nothing happens. 6Ch is the highest that does anything. Documented nulls
+    18h/1Dh/1Eh/20h/61h/6Bh carry the same signature and sit on the quiet side.
+    ► **TRAP:** "AX came back unchanged" is NOT a test for absence — 54h returns AL=0 when
+      verify is off (same as the AL=0 passed in) and 2Ch leaves AX alone while writing CX/DX.
+      The signature that works is EVERY OUTPUT REGISTER STILL POISONED. The probe's control
+      cases exist to catch a broken discriminator and here they earned it.
+  ▶ **#28 DONE (core): we report 6.22.** AH=30h → AX=0x1606, **BH=0xFF and CX=0 now actually
+    written** (they never were — callers read their own leftovers as our OEM/serial). AH=33h
+    gained AL=01/05/06; 3306h returns the true version. Version lives in `m->ver_major/minor`,
+    default 6/22. **The menu selector is NOT built yet** — that half of #28 remains.
+  ▶ **#35 STARTED: 58h (alloc strategy, all 4 subfns) + 52h (list of lists).** Oracle-confirmed
+    defaults: 5800h→AX=0000 first fit, 5802h→AL=00 UMBs unlinked. For 52h only the word at
+    ES:BX-2 (first MCB segment) is real and the rest of SysVars is **deliberately ZEROED** — a
+    walker that follows a garbage DPB/SFT pointer wanders into nonsense (silent failure),
+    whereas a null pointer stops it.
+
+★★★★ **REAL MS-DOS 6.22 `MEM.EXE` RUNS UNDER NTVDMEX AND PRINTS ITS MEMORY REPORT.** First
+genuine 6.22 utility working. The loop that got there is the point and it is now self-sustaining:
+run a real app → read `STAGE2: INT21 unimplemented:` → implement exactly that → re-run.
+    run 1: "Incorrect DOS version"        → #28
+    run 2: to-do list = AH=0x52, AH=0x58  → implemented
+    run 3: renders; to-do list = AH=0x38  (country info, #38) ← NEXT
+  ► Real 6.22 binaries are staged on the rig in `bm/tests/` (MEM, CHKDSK, TREE, ATTRIB, MORE,
+    XCOPY, COMMAND.COM), extracted from the oracle image with mtools into `build/dosapps/`.
+
+★★ **A REAL LATENT BUG FOUND ON THE WAY — the "safe IRET stub" was not an IRET.** The shared
+stub lived at `DOS_HDLR_SEG:0x66`, but the DPMI real-mode callback slots are based at 0x60 with
+a 4-byte stride, so **slot 1 owns 0x64-0x66** and its third byte (`DPMI_CB_BOP` = 0x55) is
+written AFTER the stub. 0x55 decodes as `PUSH BP`, then execution runs into uninitialised
+memory. Every vector pointed at the "safe" stub was pointed at a crash. Latent for IRQ 2-7/8-15
+since session 11 — and #27's null-vector sweep had just aimed 133 more vectors at it. Moved to
+`DOS_IRET_STUB_OFF 0x0058`, and **the three async-delivery guards that compare against the stub
+offset were updated with it** (they are what stops us injecting an IRQ the guest never hooked).
+A handler-segment offset map is now in main.c next to the define — check it before adding stubs.
+
 ▶▶ RESUME — NEXT STEPS (in order):
-  0. **DECISION WANTED: the INT 21h CF deviation above** — match the oracle (CF=0) or keep
-     failing loudly (CF=1)? Currently CF=1. The clean answer is the defines-table.
-  1. **Finish #26: wire the two XP hosts.** Until `ntvdmex` runs there is NO subject in the
+  1. **Keep the evidence loop running** — it is cheap now. Next to-do is **AH=0x38 country info
+     (#38)** from MEM.EXE. Then CHKDSK, TREE, ATTRIB, XCOPY, then COMMAND.COM (expect #29 4Eh/4Fh
+     and #30 4Bh to dominate), then edit/qbasic/Doom.
+  2. **Finish #26: wire stock ntvdm** (still needs the rt.bat IFEO variant + the user's call on
+     the display-wedge risk).
+  3. #28's menu selector. Until `ntvdmex` runs there is NO subject in the
      table and the harness cannot grade us — it only cross-checks oracles. Stock `ntvdm` needs
      an rt.bat variant that drops the IFEO Debugger key for the baseline run and restores it.
   2. **#27 make every unimplemented path LOUD.** The IVT landmine first (vectors that read
