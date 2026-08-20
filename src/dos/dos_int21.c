@@ -486,6 +486,16 @@ int dos_int21(dos_machine_t *m)
                     f[18] = (BYTE)((sz >> 16) & 0xFF); f[19] = (BYTE)((sz >> 24) & 0xFF);
                     f[20] = (BYTE)(fdt & 0xFF); f[21] = (BYTE)(fdt >> 8);
                     f[22] = (BYTE)(ftm & 0xFF); f[23] = (BYTE)(ftm >> 8);
+                    /* DOS replaces a "default drive" 0 with the drive it
+                       actually resolved -- measured: the oracle returns 01 when
+                       run from A:, DOSBox 03 from C:. We were leaving the
+                       caller's 0 in place. */
+                    if (!f[0]) {
+                        char cw[300];
+                        DWORD cn = GetCurrentDirectoryA(sizeof(cw), cw);
+                        if (cn >= 2 && cw[1] == ':')
+                            f[0] = (BYTE)((cw[0] | 0x20) - 'a' + 1);
+                    }
                     f[24] = FCB_MAGIC; f[25] = (BYTE)slot;
                     FCB_OK();
                 }

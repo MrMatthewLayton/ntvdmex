@@ -36,7 +36,10 @@ start:
         mov     si, cwdbuf
         int     21h
         call    probe_capture
-        EMIT    "int21.4700", "AX,CF"
+        ; AX is NOT compared: RBIL documents it as destroyed by 47h, and the
+        ; hosts duly differ (0100 vs 0000) once they run from different
+        ; directories. Only CF is a fact about the call.
+        EMIT    "int21.4700", "CF"
         EMIT_BUF "cwd", cwdbuf, 16
 
         ; ---- 36h: free space on the default drive (DL=0).

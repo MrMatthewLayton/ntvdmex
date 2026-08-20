@@ -436,6 +436,42 @@ clears it and still ends below the next MCB header at 0xFF0. selftest recovered 
   ▶ NEW: probes can ship companion files via a `<probe>.deps` sidecar, and all three hosts now
     run a probe FROM ITS OWN DIRECTORY so a relative companion path resolves everywhere.
 
+★★★★★ **ROUND 4 (host v170): DOS 103/103, BIOS COMPLETE. ALL 15 PROBES CLEAN.**
+  ▶ **#39 CGA modes 4/5/6 now RENDER.** They were the last "unsupported" modes and the layout
+    is why: rows INTERLEAVE between two 8 KB banks at B800 (even rows from 0, odd from 0x2000)
+    and pixels are 2 bits (4/5) or 1 bit (6), packed high-bit-first. Nothing is shared with the
+    planar path — approximating them with a text screen was never going to work.
+  ▶ **#41 palette complete**: 10h AL=00/01/02/03/07/08/09/13/15/17/1A/1B, plus **0Bh** (border +
+    CGA palette), **0Dh** (read pixel), **07h** (scroll DOWN — 06h scrolled up and 07h fell
+    through to nothing, so downward scrolls silently did nothing), **1Ch** save/restore state.
+  ▶ **#40 character generator**: 11h AL=x1-x4 ROM font selection and AL=20-24 graphics font
+    pointers. User-font LOADS (AL=x0) are LOUD — we render from our own tables, so accepting a
+    user font would silently draw the wrong glyphs.
+  ▶ **#42 VESA complete**: 4F03/06/07/08/09. 4F0A (PM interface) and 4F15 (DDC) report NOT
+    SUPPORTED rather than returning success with a null pointer a client would call into.
+  ▶ **#46 INT 20h/27h/28h/29h planted.** 29h (fast console out) was an IRET that swallowed
+    output silently.
+
+★★ **A REGRESSION I CAUSED AND THE SELFTEST CAUGHT — the reason that gate exists.**
+  I planted INT 20h with **BOP number 0x20 — which is ALREADY the INT 21h handler's**. The new
+  BIOS dispatch sits ahead of INT 21h, so it intercepted EVERY INT 21h call as "terminate
+  program": selftest exited at its first DOS call with no output at all. BOP numbers are a
+  SHARED NAMESPACE across DOS, BIOS, XMS (0x43) and DPMI (0x50-0x57). INT 20h now uses BOP 0x30
+  and the table is {vector, bopnum} pairs so the two can differ. **Check the namespace before
+  adding a BOP.**
+
+▶ **PROBE HYGIENE, prompted by making every host run from its own directory:** several probes
+  were comparing values that describe WHERE THE PROBE IS rather than what DOS does — the default
+  drive, the current directory, the volume serial, truename's base. Those are now dumped but not
+  compared, with the reason recorded. Also dropped: AX after 47h/60h/69h, which RBIL documents as
+  destroyed and which the hosts duly disagree on.
+  ► And a real fidelity fix it exposed: FCB open now fills in the RESOLVED DRIVE (DOS replaces a
+    "default drive" 0 with the actual drive; we were leaving the caller's 0).
+
+▶ **54 recorded rationales** in `tools/dostest/oracle-rules.json`. Every DOSBox divergence is
+  explained, and in each case **we match the genuine kernel** — including the CP437 collating
+  table, where DOSBox fails to fold lower case onto upper and ours is byte-identical to 6.22's.
+
 ▶▶ RESUME — NEXT STEPS (in order):
   1. Finish the app queue: **43h** (ATTRIB), **5Dh** (COMMAND.COM), **11h/12h** FCB find (TREE, #36).
   2. **#30 EXEC (4Bh)** — after which a shell can actually launch a program.
@@ -770,6 +806,42 @@ disabling interrupts for any guest whose enable lives in VIF.
   ▶ NEW: probes can ship companion files via a `<probe>.deps` sidecar, and all three hosts now
     run a probe FROM ITS OWN DIRECTORY so a relative companion path resolves everywhere.
 
+★★★★★ **ROUND 4 (host v170): DOS 103/103, BIOS COMPLETE. ALL 15 PROBES CLEAN.**
+  ▶ **#39 CGA modes 4/5/6 now RENDER.** They were the last "unsupported" modes and the layout
+    is why: rows INTERLEAVE between two 8 KB banks at B800 (even rows from 0, odd from 0x2000)
+    and pixels are 2 bits (4/5) or 1 bit (6), packed high-bit-first. Nothing is shared with the
+    planar path — approximating them with a text screen was never going to work.
+  ▶ **#41 palette complete**: 10h AL=00/01/02/03/07/08/09/13/15/17/1A/1B, plus **0Bh** (border +
+    CGA palette), **0Dh** (read pixel), **07h** (scroll DOWN — 06h scrolled up and 07h fell
+    through to nothing, so downward scrolls silently did nothing), **1Ch** save/restore state.
+  ▶ **#40 character generator**: 11h AL=x1-x4 ROM font selection and AL=20-24 graphics font
+    pointers. User-font LOADS (AL=x0) are LOUD — we render from our own tables, so accepting a
+    user font would silently draw the wrong glyphs.
+  ▶ **#42 VESA complete**: 4F03/06/07/08/09. 4F0A (PM interface) and 4F15 (DDC) report NOT
+    SUPPORTED rather than returning success with a null pointer a client would call into.
+  ▶ **#46 INT 20h/27h/28h/29h planted.** 29h (fast console out) was an IRET that swallowed
+    output silently.
+
+★★ **A REGRESSION I CAUSED AND THE SELFTEST CAUGHT — the reason that gate exists.**
+  I planted INT 20h with **BOP number 0x20 — which is ALREADY the INT 21h handler's**. The new
+  BIOS dispatch sits ahead of INT 21h, so it intercepted EVERY INT 21h call as "terminate
+  program": selftest exited at its first DOS call with no output at all. BOP numbers are a
+  SHARED NAMESPACE across DOS, BIOS, XMS (0x43) and DPMI (0x50-0x57). INT 20h now uses BOP 0x30
+  and the table is {vector, bopnum} pairs so the two can differ. **Check the namespace before
+  adding a BOP.**
+
+▶ **PROBE HYGIENE, prompted by making every host run from its own directory:** several probes
+  were comparing values that describe WHERE THE PROBE IS rather than what DOS does — the default
+  drive, the current directory, the volume serial, truename's base. Those are now dumped but not
+  compared, with the reason recorded. Also dropped: AX after 47h/60h/69h, which RBIL documents as
+  destroyed and which the hosts duly disagree on.
+  ► And a real fidelity fix it exposed: FCB open now fills in the RESOLVED DRIVE (DOS replaces a
+    "default drive" 0 with the actual drive; we were leaving the caller's 0).
+
+▶ **54 recorded rationales** in `tools/dostest/oracle-rules.json`. Every DOSBox divergence is
+  explained, and in each case **we match the genuine kernel** — including the CP437 collating
+  table, where DOSBox fails to fold lower case onto upper and ours is byte-identical to 6.22's.
+
 ▶▶ RESUME — NEXT STEPS (in order):
   1. **SOAK THE ASYNC PATH, THEN MAKE IT THE DEFAULT** (drop the qimode bit 4 gate). Run the
      whole tests/ battery with it on -- especially the graphical demos, the DPMI/PM tests (it
@@ -972,6 +1044,42 @@ the ICA; we run the guest in-process and are blind until it faults.
   ▶ AL=01 (load-without-execute) and AL=03 (overlay) are LOUD-unimplemented, not silent.
   ▶ NEW: probes can ship companion files via a `<probe>.deps` sidecar, and all three hosts now
     run a probe FROM ITS OWN DIRECTORY so a relative companion path resolves everywhere.
+
+★★★★★ **ROUND 4 (host v170): DOS 103/103, BIOS COMPLETE. ALL 15 PROBES CLEAN.**
+  ▶ **#39 CGA modes 4/5/6 now RENDER.** They were the last "unsupported" modes and the layout
+    is why: rows INTERLEAVE between two 8 KB banks at B800 (even rows from 0, odd from 0x2000)
+    and pixels are 2 bits (4/5) or 1 bit (6), packed high-bit-first. Nothing is shared with the
+    planar path — approximating them with a text screen was never going to work.
+  ▶ **#41 palette complete**: 10h AL=00/01/02/03/07/08/09/13/15/17/1A/1B, plus **0Bh** (border +
+    CGA palette), **0Dh** (read pixel), **07h** (scroll DOWN — 06h scrolled up and 07h fell
+    through to nothing, so downward scrolls silently did nothing), **1Ch** save/restore state.
+  ▶ **#40 character generator**: 11h AL=x1-x4 ROM font selection and AL=20-24 graphics font
+    pointers. User-font LOADS (AL=x0) are LOUD — we render from our own tables, so accepting a
+    user font would silently draw the wrong glyphs.
+  ▶ **#42 VESA complete**: 4F03/06/07/08/09. 4F0A (PM interface) and 4F15 (DDC) report NOT
+    SUPPORTED rather than returning success with a null pointer a client would call into.
+  ▶ **#46 INT 20h/27h/28h/29h planted.** 29h (fast console out) was an IRET that swallowed
+    output silently.
+
+★★ **A REGRESSION I CAUSED AND THE SELFTEST CAUGHT — the reason that gate exists.**
+  I planted INT 20h with **BOP number 0x20 — which is ALREADY the INT 21h handler's**. The new
+  BIOS dispatch sits ahead of INT 21h, so it intercepted EVERY INT 21h call as "terminate
+  program": selftest exited at its first DOS call with no output at all. BOP numbers are a
+  SHARED NAMESPACE across DOS, BIOS, XMS (0x43) and DPMI (0x50-0x57). INT 20h now uses BOP 0x30
+  and the table is {vector, bopnum} pairs so the two can differ. **Check the namespace before
+  adding a BOP.**
+
+▶ **PROBE HYGIENE, prompted by making every host run from its own directory:** several probes
+  were comparing values that describe WHERE THE PROBE IS rather than what DOS does — the default
+  drive, the current directory, the volume serial, truename's base. Those are now dumped but not
+  compared, with the reason recorded. Also dropped: AX after 47h/60h/69h, which RBIL documents as
+  destroyed and which the hosts duly disagree on.
+  ► And a real fidelity fix it exposed: FCB open now fills in the RESOLVED DRIVE (DOS replaces a
+    "default drive" 0 with the actual drive; we were leaving the caller's 0).
+
+▶ **54 recorded rationales** in `tools/dostest/oracle-rules.json`. Every DOSBox divergence is
+  explained, and in each case **we match the genuine kernel** — including the CP437 collating
+  table, where DOSBox fails to fold lower case onto upper and ours is byte-identical to 6.22's.
 
 ▶▶ RESUME — NEXT STEPS (in order):
   1. **RE the kernel's interrupt-queue interface** (the agreed direction). Find the NtVdmControl
@@ -1212,6 +1320,42 @@ SMB loop (which auto-times-out at 30 s now, so they no longer wedge -- but you s
   ▶ NEW: probes can ship companion files via a `<probe>.deps` sidecar, and all three hosts now
     run a probe FROM ITS OWN DIRECTORY so a relative companion path resolves everywhere.
 
+★★★★★ **ROUND 4 (host v170): DOS 103/103, BIOS COMPLETE. ALL 15 PROBES CLEAN.**
+  ▶ **#39 CGA modes 4/5/6 now RENDER.** They were the last "unsupported" modes and the layout
+    is why: rows INTERLEAVE between two 8 KB banks at B800 (even rows from 0, odd from 0x2000)
+    and pixels are 2 bits (4/5) or 1 bit (6), packed high-bit-first. Nothing is shared with the
+    planar path — approximating them with a text screen was never going to work.
+  ▶ **#41 palette complete**: 10h AL=00/01/02/03/07/08/09/13/15/17/1A/1B, plus **0Bh** (border +
+    CGA palette), **0Dh** (read pixel), **07h** (scroll DOWN — 06h scrolled up and 07h fell
+    through to nothing, so downward scrolls silently did nothing), **1Ch** save/restore state.
+  ▶ **#40 character generator**: 11h AL=x1-x4 ROM font selection and AL=20-24 graphics font
+    pointers. User-font LOADS (AL=x0) are LOUD — we render from our own tables, so accepting a
+    user font would silently draw the wrong glyphs.
+  ▶ **#42 VESA complete**: 4F03/06/07/08/09. 4F0A (PM interface) and 4F15 (DDC) report NOT
+    SUPPORTED rather than returning success with a null pointer a client would call into.
+  ▶ **#46 INT 20h/27h/28h/29h planted.** 29h (fast console out) was an IRET that swallowed
+    output silently.
+
+★★ **A REGRESSION I CAUSED AND THE SELFTEST CAUGHT — the reason that gate exists.**
+  I planted INT 20h with **BOP number 0x20 — which is ALREADY the INT 21h handler's**. The new
+  BIOS dispatch sits ahead of INT 21h, so it intercepted EVERY INT 21h call as "terminate
+  program": selftest exited at its first DOS call with no output at all. BOP numbers are a
+  SHARED NAMESPACE across DOS, BIOS, XMS (0x43) and DPMI (0x50-0x57). INT 20h now uses BOP 0x30
+  and the table is {vector, bopnum} pairs so the two can differ. **Check the namespace before
+  adding a BOP.**
+
+▶ **PROBE HYGIENE, prompted by making every host run from its own directory:** several probes
+  were comparing values that describe WHERE THE PROBE IS rather than what DOS does — the default
+  drive, the current directory, the volume serial, truename's base. Those are now dumped but not
+  compared, with the reason recorded. Also dropped: AX after 47h/60h/69h, which RBIL documents as
+  destroyed and which the hosts duly disagree on.
+  ► And a real fidelity fix it exposed: FCB open now fills in the RESOLVED DRIVE (DOS replaces a
+    "default drive" 0 with the actual drive; we were leaving the caller's 0).
+
+▶ **54 recorded rationales** in `tools/dostest/oracle-rules.json`. Every DOSBox divergence is
+  explained, and in each case **we match the genuine kernel** — including the CP437 collating
+  table, where DOSBox fails to fold lower case onto upper and ours is byte-identical to 6.22's.
+
 ▶▶ RESUME — NEXT STEPS (in order):
   1. DONE (2026-08-19): pm32irq 32-bit async IRQ visually confirmed remotely. Next visuals to grab the
      same way (set capture.flag, fire, read shot_*.bmp): pm32gfx (32-bit gradient), mode13, and Skyroads
@@ -1345,6 +1489,42 @@ FINDINGS THIS SESSION (bare metal): ══════════════�
   ▶ AL=01 (load-without-execute) and AL=03 (overlay) are LOUD-unimplemented, not silent.
   ▶ NEW: probes can ship companion files via a `<probe>.deps` sidecar, and all three hosts now
     run a probe FROM ITS OWN DIRECTORY so a relative companion path resolves everywhere.
+
+★★★★★ **ROUND 4 (host v170): DOS 103/103, BIOS COMPLETE. ALL 15 PROBES CLEAN.**
+  ▶ **#39 CGA modes 4/5/6 now RENDER.** They were the last "unsupported" modes and the layout
+    is why: rows INTERLEAVE between two 8 KB banks at B800 (even rows from 0, odd from 0x2000)
+    and pixels are 2 bits (4/5) or 1 bit (6), packed high-bit-first. Nothing is shared with the
+    planar path — approximating them with a text screen was never going to work.
+  ▶ **#41 palette complete**: 10h AL=00/01/02/03/07/08/09/13/15/17/1A/1B, plus **0Bh** (border +
+    CGA palette), **0Dh** (read pixel), **07h** (scroll DOWN — 06h scrolled up and 07h fell
+    through to nothing, so downward scrolls silently did nothing), **1Ch** save/restore state.
+  ▶ **#40 character generator**: 11h AL=x1-x4 ROM font selection and AL=20-24 graphics font
+    pointers. User-font LOADS (AL=x0) are LOUD — we render from our own tables, so accepting a
+    user font would silently draw the wrong glyphs.
+  ▶ **#42 VESA complete**: 4F03/06/07/08/09. 4F0A (PM interface) and 4F15 (DDC) report NOT
+    SUPPORTED rather than returning success with a null pointer a client would call into.
+  ▶ **#46 INT 20h/27h/28h/29h planted.** 29h (fast console out) was an IRET that swallowed
+    output silently.
+
+★★ **A REGRESSION I CAUSED AND THE SELFTEST CAUGHT — the reason that gate exists.**
+  I planted INT 20h with **BOP number 0x20 — which is ALREADY the INT 21h handler's**. The new
+  BIOS dispatch sits ahead of INT 21h, so it intercepted EVERY INT 21h call as "terminate
+  program": selftest exited at its first DOS call with no output at all. BOP numbers are a
+  SHARED NAMESPACE across DOS, BIOS, XMS (0x43) and DPMI (0x50-0x57). INT 20h now uses BOP 0x30
+  and the table is {vector, bopnum} pairs so the two can differ. **Check the namespace before
+  adding a BOP.**
+
+▶ **PROBE HYGIENE, prompted by making every host run from its own directory:** several probes
+  were comparing values that describe WHERE THE PROBE IS rather than what DOS does — the default
+  drive, the current directory, the volume serial, truename's base. Those are now dumped but not
+  compared, with the reason recorded. Also dropped: AX after 47h/60h/69h, which RBIL documents as
+  destroyed and which the hosts duly disagree on.
+  ► And a real fidelity fix it exposed: FCB open now fills in the RESOLVED DRIVE (DOS replaces a
+    "default drive" 0 with the actual drive; we were leaving the caller's 0).
+
+▶ **54 recorded rationales** in `tools/dostest/oracle-rules.json`. Every DOSBox divergence is
+  explained, and in each case **we match the genuine kernel** — including the CP437 collating
+  table, where DOSBox fails to fold lower case onto upper and ours is byte-identical to 6.22's.
 
 ▶▶ RESUME — NEXT STEPS (in order): ════════════════════════════════════════════════════════
   0. COMMIT the uncommitted bare-metal fixes (event-3, auto-exit, filebuf, PM-fault diagnostic).

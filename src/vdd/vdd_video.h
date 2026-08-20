@@ -44,7 +44,8 @@
 #define VID_KIND_TEXT     0
 #define VID_KIND_PLANAR   1             /* 4-plane EGA/VGA, 16 colours             */
 #define VID_KIND_LINEAR8  2             /* mode 13h: one byte per pixel            */
-#define VID_KIND_UNSUP    3
+#define VID_KIND_CGA      3             /* modes 4/5: 320x200x4, 6: 640x200x2      */
+#define VID_KIND_UNSUP    4
 
 typedef struct video_state {
     vdd_bus *bus;
@@ -53,6 +54,15 @@ typedef struct video_state {
     uint8_t  cols, rows;
     uint16_t gw, gh;                    /* graphics resolution of the current mode  */
     uint8_t  mkind;                     /* VID_KIND_* below                          */
+    uint8_t  cga_bpp;                   /* 2 for modes 4/5, 1 for mode 6             */
+    uint8_t  cga_pal;                   /* AH=0Bh BH=1: which 4-colour CGA palette   */
+    uint8_t  overscan;                  /* AH=0Bh BH=0: border/background colour     */
+    uint8_t  blink;                     /* AH=10h AL=03: blink vs bright background  */
+    uint8_t  dac_page;                  /* AH=10h AL=13: DAC page state              */
+    uint8_t  vpal[17];                  /* the 16 EGA palette registers + border     */
+    uint16_t vesa_scanline;             /* 4F06 logical scan line length, pixels     */
+    uint16_t vesa_start_x, vesa_start_y;/* 4F07 display start                        */
+    uint8_t  vesa_dacwidth;             /* 4F08 bits per DAC primary (6 or 8)        */
     uint8_t  cur_row, cur_col;
     uint16_t cur_shape;
     uint8_t  page;

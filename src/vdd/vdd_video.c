@@ -39,9 +39,9 @@ static const struct { uint8_t mode, kind, cols, rows; uint16_t w, h; } vid_modes
     { 0x01, VID_KIND_TEXT,    40, 25,   320, 400 },
     { 0x02, VID_KIND_TEXT,    80, 25,   640, 400 },
     { 0x03, VID_KIND_TEXT,    80, 25,   640, 400 },
-    { 0x04, VID_KIND_UNSUP,   80, 25,   320, 200 },   /* CGA 4-colour   */
-    { 0x05, VID_KIND_UNSUP,   80, 25,   320, 200 },
-    { 0x06, VID_KIND_UNSUP,   80, 25,   640, 200 },   /* CGA 2-colour   */
+    { 0x04, VID_KIND_CGA,     40, 25,   320, 200 },   /* CGA 4-colour   */
+    { 0x05, VID_KIND_CGA,     40, 25,   320, 200 },   /* 4-colour, grey */
+    { 0x06, VID_KIND_CGA,     80, 25,   640, 200 },   /* CGA 2-colour   */
     { 0x07, VID_KIND_TEXT,    80, 25,   640, 400 },   /* MDA mono text  */
     { 0x0D, VID_KIND_PLANAR,  40, 25,   320, 200 },
     { 0x0E, VID_KIND_PLANAR,  80, 25,   640, 200 },
@@ -182,8 +182,73 @@ static void vesa(video_state *st, ntvdd_regs *r)
             st->dirty = 1; s_ax(r, 0x004F);
         } else s_ax(r, 0x014F);
         break; }
-    case 0x03:                                    /* get current mode             */
-        s_bx(r, st->in_vesa ? st->vesa_mode : 0); s_ax(r, 0x004F); break;
+    case 0x03:                                    /* get the current VBE mode      */
+        s_bx(r, (uint16_t)(st->in_vesa ? st->vesa_mode : st->mode));
+        s_ax(r, 0x004F);
+        break;
+    case 0x06:                                    /* get/set logical scan length   */
+        /* BL=0 set in pixels, 1 get, 2 set in bytes, 3 get max. Returns BX=bytes
+           per scan line, CX=pixels, DX=number of scan lines. */
+        if ((r_bx(r) & 0xFF) == 0 && r_cx(r)) st->vesa_scanline = r_cx(r);
+        if (!st->vesa_scanline) st->vesa_scanline = st->vesa_w;
+        s_bx(r, st->vesa_scanline);               /* 8bpp: bytes == pixels         */
+        s_cx(r, st->vesa_scanline);
+        s_dx(r, (uint16_t)(st->vesa_scanline ? VID_VESA_VRAM / st->vesa_scanline : 0));
+        s_ax(r, 0x004F);
+        break;
+    case 0x07:                                    /* get/set display start         */
+        if ((r_bx(r) & 0xFF) == 0x01) {           /* BL=1 get                      */
+            s_cx(r, st->vesa_start_x); s_dx(r, st->vesa_start_y); s_bx(r, 0);
+        } else {                                  /* BL=0/80h set                  */
+            st->vesa_start_x = r_cx(r); st->vesa_start_y = r_dx(r);
+            st->dirty = 1;
+        }
+        s_ax(r, 0x004F);
+        break;
+    case 0x08:                                    /* get/set DAC palette width     */
+        if ((r_bx(r) & 0xFF) == 0x00) {           /* BL=0 set                      */
+            uint8_t w8 = (uint8_t)((r_bx(r) >> 8) & 0xFF);
+            st->vesa_dacwidth = (uint8_t)(w8 == 8 ? 8 : 6);
+        }
+        if (!st->vesa_dacwidth) st->vesa_dacwidth = 6;
+        s_bx(r, (uint16_t)((r_bx(r) & 0x00FF) | ((uint16_t)st->vesa_dacwidth << 8)));
+        s_ax(r, 0x004F);
+        break;
+    case 0x09: {                                  /* get/set palette data          */
+        /* BL=0 set, 1 get; DX=first, CX=count, ES:DI = quads (B,G,R,align).
+           The DAC width set by 4F08 decides how far to shift. */
+        uint8_t bl9 = (uint8_t)(r_bx(r) & 0xFF);
+        uint16_t first = r_dx(r), n = r_cx(r), i;
+        uint8_t *t = (uint8_t *)vdd_map_flat(st->bus, r->es, (uint16_t)r->edi);
+        uint8_t sh = (uint8_t)(st->vesa_dacwidth == 8 ? 0 : 2);
+        for (i = 0; i < n && (first + i) < 256; ++i) {
+            if (bl9 == 0x00 || bl9 == 0x80)
+                st->pal[first + i] = 0xFF000000u
+                    | ((uint32_t)(t[i*4+2] << sh) << 16)
+                    | ((uint32_t)(t[i*4+1] << sh) << 8)
+                    |  (uint32_t)(t[i*4+0] << sh);
+            else {
+                uint32_t v = st->pal[first + i];
+                t[i*4+0] = (uint8_t)((v & 0xFF) >> sh);
+                t[i*4+1] = (uint8_t)(((v >> 8) & 0xFF) >> sh);
+                t[i*4+2] = (uint8_t)(((v >> 16) & 0xFF) >> sh);
+                t[i*4+3] = 0;
+            }
+        }
+        st->dirty = 1;
+        s_ax(r, 0x004F);
+        break; }
+    case 0x0A:                                    /* protected-mode interface      */
+        /* There is no PM bank-switching stub to hand out. Report NOT SUPPORTED
+           (AH=01) rather than returning 4F00 with a null pointer, which a client
+           would call straight into. */
+        s_ax(r, 0x014F);
+        VID_UNIMPL_SET(st->unimpl_fn, 0x4F);
+        break;
+    case 0x15:                                    /* DDC / display identification  */
+        s_ax(r, 0x014F);                          /* no monitor EDID to report     */
+        VID_UNIMPL_SET(st->unimpl_fn, 0x4F);
+        break;
     case 0x05:                                    /* window control (bank switch) */
         if ((r_bx(r) & 0xFF) == 0) {              /* BL=0 set window A             */
             vesa_sync(st);                        /* flush current bank            */
@@ -261,6 +326,11 @@ static void int10(void *self, ntvdd_regs *r)
                     int pl, i;
                     for (pl = 0; pl < 4; ++pl)
                         for (i = 0; i < VID_PLANE_SIZE; ++i) st->plane[pl][i] = 0;
+                } else if (st->mkind == VID_KIND_CGA) {
+                    int i;
+                    st->cga_bpp = (uint8_t)(st->mode == 0x06 ? 1 : 2);
+                    st->cga_pal = 0;
+                    for (i = 0; i < 16384; ++i) st->vmem[VID_TEXT_OFF + i] = 0;
                 } else {
                     clear_text(st, 0x07);
                 }
@@ -322,8 +392,115 @@ static void int10(void *self, ntvdd_regs *r)
             uint8_t *t = (uint8_t *)vdd_map_flat(st->bus, r->es, (uint16_t)r_dx(r));
             for (i = 0; i < n && (first + i) < 256; ++i)
                 st->pal[first + i] = dac_pack(t[i*3] & 0x3F, t[i*3+1] & 0x3F, t[i*3+2] & 0x3F);
+        } else if (al == 0x00) {                      /* set one palette register */
+            uint8_t reg = (uint8_t)((r_bx(r) >> 8) & 0xFF);
+            if (reg < 17) st->vpal[reg] = (uint8_t)(r_bx(r) & 0x3F);
+        } else if (al == 0x01) {                      /* set the border           */
+            st->vpal[16] = st->overscan = (uint8_t)((r_bx(r) >> 8) & 0x3F);
+        } else if (al == 0x02) {                      /* set all 16 + border      */
+            uint8_t *t = (uint8_t *)vdd_map_flat(st->bus, r->es, (uint16_t)r_dx(r));
+            int i; for (i = 0; i < 17; ++i) st->vpal[i] = (uint8_t)(t[i] & 0x3F);
+            st->overscan = st->vpal[16];
+        } else if (al == 0x03) {                      /* blink vs bright background */
+            st->blink = (uint8_t)(r_bx(r) & 1);
+        } else if (al == 0x07) {                      /* get one palette register */
+            uint8_t reg = (uint8_t)((r_bx(r) >> 8) & 0xFF);
+            s_bx(r, (uint16_t)((r_bx(r) & 0xFF00) | (reg < 17 ? st->vpal[reg] : 0)));
+        } else if (al == 0x08) {                      /* get the border           */
+            s_bx(r, (uint16_t)((r_bx(r) & 0x00FF) | ((uint16_t)st->vpal[16] << 8)));
+        } else if (al == 0x09) {                      /* get all 16 + border      */
+            uint8_t *t = (uint8_t *)vdd_map_flat(st->bus, r->es, (uint16_t)r_dx(r));
+            int i; for (i = 0; i < 17; ++i) t[i] = st->vpal[i];
+        } else if (al == 0x13) {                      /* select DAC page / mode   */
+            st->dac_page = (uint8_t)(r_bx(r) >> 8);
+        } else if (al == 0x15) {                      /* get one DAC register     */
+            uint32_t v = st->pal[r_bx(r) & 0xFF];
+            s_dx(r, (uint16_t)(((v >> 18) & 0x3F) << 8));
+            s_cx(r, (uint16_t)(((((v >> 10) & 0x3F)) << 8) | ((v >> 2) & 0x3F)));
+        } else if (al == 0x17) {                      /* get block of DAC regs    */
+            uint16_t first = r_bx(r), n = r_cx(r), i;
+            uint8_t *t = (uint8_t *)vdd_map_flat(st->bus, r->es, (uint16_t)r_dx(r));
+            for (i = 0; i < n && (first + i) < 256; ++i) {
+                uint32_t v = st->pal[first + i];
+                t[i*3] = (uint8_t)((v >> 18) & 0x3F);
+                t[i*3+1] = (uint8_t)((v >> 10) & 0x3F);
+                t[i*3+2] = (uint8_t)((v >> 2) & 0x3F);
+            }
+        } else if (al == 0x1A) {                      /* get DAC page state       */
+            s_bx(r, (uint16_t)((st->dac_page << 8) | 0));
+        } else if (al == 0x1B) {                      /* convert to grey scale    */
+            uint16_t first = r_bx(r), n = r_cx(r), i;
+            for (i = 0; i < n && (first + i) < 256; ++i) {
+                uint32_t v = st->pal[first + i];
+                uint32_t g = ((((v >> 16) & 0xFF) * 30) + (((v >> 8) & 0xFF) * 59)
+                              + ((v & 0xFF) * 11)) / 100;
+                st->pal[first + i] = 0xFF000000u | (g << 16) | (g << 8) | g;
+            }
+        } else {
+            VID_UNIMPL_SET(st->unimpl_fn, 0x10);      /* name it, do not ignore it */
         }
         break;
+    case 0x07: {                                       /* scroll window DOWN      */
+        /* 06h scrolled up and 07h fell through to the unimplemented default, so
+           any program scrolling downwards silently did nothing. */
+        uint8_t n = al, top = (uint8_t)(r_cx(r) >> 8), lft = (uint8_t)(r_cx(r) & 0xFF);
+        uint8_t bot = (uint8_t)(r_dx(r) >> 8), rgt = (uint8_t)(r_dx(r) & 0xFF);
+        uint8_t attr = (uint8_t)(r_bx(r) >> 8);
+        int rr, cc, k;
+        if (!n || n > (bot - top + 1)) {               /* 0 or oversized = clear  */
+            for (rr = top; rr <= bot; ++rr)
+                for (cc = lft; cc <= rgt; ++cc)
+                    { uint8_t *p2 = cell(st, rr, cc); p2[0] = ' '; p2[1] = attr; }
+        } else {
+            for (k = 0; k < n; ++k) {
+                for (rr = bot; rr > top; --rr)
+                    for (cc = lft; cc <= rgt; ++cc) {
+                        uint8_t *d2 = cell(st, rr, cc), *s2 = cell(st, rr - 1, cc);
+                        d2[0] = s2[0]; d2[1] = s2[1];
+                    }
+                for (cc = lft; cc <= rgt; ++cc)
+                    { uint8_t *p2 = cell(st, top, cc); p2[0] = ' '; p2[1] = attr; }
+            }
+        }
+        break; }
+    case 0x0B:                                         /* set background / palette */
+        if ((r_bx(r) >> 8) == 0x00) st->overscan = (uint8_t)(r_bx(r) & 0xFF);
+        else                        st->cga_pal  = (uint8_t)(r_bx(r) & 0x01);
+        break;
+    case 0x0D: {                                       /* READ a pixel            */
+        uint16_t x = r_cx(r), y = r_dx(r);
+        uint8_t v = 0;
+        if (st->mkind == VID_KIND_LINEAR8) {
+            if (x < st->gw && y < st->gh) v = st->vmem[y * st->gw + x];
+        } else if (st->mkind == VID_KIND_PLANAR) {
+            uint32_t byi = y * (st->gw / 8) + (x >> 3);
+            uint8_t  msk = (uint8_t)(0x80 >> (x & 7));
+            if (byi < VID_PLANE_SIZE)
+                v = (uint8_t)(((st->plane[0][byi] & msk) ? 1 : 0)
+                            | ((st->plane[1][byi] & msk) ? 2 : 0)
+                            | ((st->plane[2][byi] & msk) ? 4 : 0)
+                            | ((st->plane[3][byi] & msk) ? 8 : 0));
+        }
+        s_ax(r, (uint16_t)((r_ax(r) & 0xFF00) | v));
+        break; }
+    case 0x1C: {                                       /* save / restore state    */
+        /* CX is a bitmask of what to save; BX:0 is the buffer. We report the
+           size in BX (blocks of 64 bytes) and accept save/restore of the DAC,
+           which is the part programs actually use. */
+        uint8_t al1c = al;
+        if (al1c == 0x00)      { s_bx(r, 3); s_ax(r, (uint16_t)((r_ax(r) & 0xFF00) | 0x1C)); }
+        else if (al1c == 0x01 || al1c == 0x02) {
+            uint8_t *buf = (uint8_t *)vdd_map_flat(st->bus, r->es, (uint16_t)r->ebx);
+            int i;
+            if (al1c == 0x01) for (i = 0; i < 256; ++i)
+                { buf[i*3] = (uint8_t)((st->pal[i] >> 18) & 0x3F);
+                  buf[i*3+1] = (uint8_t)((st->pal[i] >> 10) & 0x3F);
+                  buf[i*3+2] = (uint8_t)((st->pal[i] >> 2) & 0x3F); }
+            else for (i = 0; i < 256; ++i)
+                st->pal[i] = dac_pack(buf[i*3] & 0x3F, buf[i*3+1] & 0x3F, buf[i*3+2] & 0x3F);
+            s_ax(r, (uint16_t)((r_ax(r) & 0xFF00) | 0x1C));
+        }
+        break; }
     case 0x13: {                                       /* write string ES:BP      */
         uint16_t n = r_cx(r), i; uint8_t mode = al, attr = (uint8_t)(r_bx(r) & 0xFF);
         uint8_t *s = (uint8_t *)vdd_map_flat(st->bus, r->es, (uint16_t)r->ebp);
@@ -378,6 +555,19 @@ static void int10(void *self, ntvdd_regs *r)
                 st->font_q[st->font_qn].cx  = bpc;
                 st->font_qn++;
             }
+        } else if ((al & 0x0F) <= 0x04 && (al <= 0x04 || (al >= 0x10 && al <= 0x14))) {
+            /* Load a user-supplied or ROM font.  We render from our own tables,
+               so a user font cannot change what is drawn -- and pretending
+               otherwise would silently give the caller the wrong glyphs. Accept
+               the ROM-font selections (AL=x1/x2/x3/x4), which only pick between
+               tables we DO have, and announce the user-font loads (AL=x0). */
+            if ((al & 0x0F) == 0x00) VID_UNIMPL_SET(st->unimpl_fn, 0x11);
+            s_dx(r, (uint16_t)(st->rows ? st->rows - 1 : 24));
+        } else if (al >= 0x20 && al <= 0x24) {
+            /* Set the graphics-mode font pointer used by INT 43h / INT 1Fh. */
+            s_dx(r, (uint16_t)(st->rows ? st->rows - 1 : 24));
+        } else {
+            VID_UNIMPL_SET(st->unimpl_fn, 0x11);
         }
         break;
     case 0x12: {                                       /* alternate function sel  */
@@ -613,6 +803,31 @@ void vdd_video_render(video_state *st)                 /* text glyph render     
 }
 
 /* combine the 4 bit-planes into fb (16-colour indices) -- mode 12h. */
+/* CGA modes 4/5/6 at B800.  The layout is the reason these were left out before:
+   rows INTERLEAVE between two 8 KB banks -- even rows from offset 0, odd rows
+   from 0x2000 -- and pixels are 2 bits (modes 4/5) or 1 bit (mode 6), packed
+   high-bit-first.  Nothing about that is shared with the planar path, which is
+   why approximating it with a text screen was never going to work. */
+static void render_cga(video_state *st)
+{
+    const uint8_t *src = st->vmem + VID_TEXT_OFF;
+    int gw = st->gw, gh = st->gh, y, x;
+    int per = st->cga_bpp == 1 ? 8 : 4;             /* pixels per byte          */
+    /* Mode 5's palette is the grey/brown variant; 4's default is cyan/magenta. */
+    static const uint8_t pal4[2][4] = { { 0, 11, 13, 15 }, { 0, 10, 12, 14 } };
+    for (y = 0; y < gh; ++y) {
+        const uint8_t *row = src + ((y & 1) ? 0x2000 : 0) + (y >> 1) * (gw / per);
+        uint8_t *out = &st->fb[y * gw];
+        for (x = 0; x < gw; ++x) {
+            uint8_t b = row[x / per];
+            if (st->cga_bpp == 1)
+                out[x] = (uint8_t)((b >> (7 - (x & 7))) & 1 ? 15 : 0);
+            else
+                out[x] = pal4[st->cga_pal & 1][(b >> (6 - 2 * (x & 3))) & 3];
+        }
+    }
+}
+
 static void render_planar(video_state *st)
 {
     int y, xb, b;
@@ -646,6 +861,10 @@ static void vid_frame(void *self)
     } else if (st->mkind == VID_KIND_LINEAR8) {        /* graphics: vmem is the FB */
         st->frame.w = st->gw; st->frame.h = st->gh; st->frame.bpp = 8;
         st->frame.stride = st->gw; st->frame.pixels = st->vmem; st->frame.palette = st->pal;
+    } else if (st->mkind == VID_KIND_CGA) {            /* CGA: de-interleave -> fb */
+        render_cga(st);
+        st->frame.w = st->gw; st->frame.h = st->gh; st->frame.bpp = 8;
+        st->frame.stride = st->gw; st->frame.pixels = st->fb; st->frame.palette = st->pal;
     } else if (st->mkind == VID_KIND_PLANAR) {         /* planar: combine -> fb    */
         render_planar(st);
         st->frame.w = st->gw; st->frame.h = st->gh; st->frame.bpp = 8;

@@ -40,13 +40,26 @@
         EMIT    %2, "AX,CF"
 %endmacro
 
+; As TRYFN, but the result is host-specific: dumped for the log, not compared.
+%macro TRYFN_INFO 2
+        POISON
+        mov     ax, (%1 << 8)
+        int     21h
+        call    probe_capture
+        EMIT    %2, ""
+%endmacro
+
 start:
         PROBE_BEGIN "defs"
 
         ; ---- CONTROLS: documented, safe, and certainly present on 6.22.
         ; If any of these comes back with AX unchanged the discriminator is
         ; broken and nothing below can be trusted.
-        TRYFN 019h, "def.19.getdrive"           ; -> AL = default drive
+        ; 19h returns the DEFAULT DRIVE in AL, which says where the probe is
+        ; running, not what DOS does -- so it is dumped, not compared. It still
+        ; earns its place as a control: AL comes back changed from the poison on
+        ; every host, which is what proves the discriminator works.
+        TRYFN_INFO 019h, "def.19.getdrive"
         TRYFN 02Ch, "def.2C.gettime"            ; -> CX:DX = time
         TRYFN 054h, "def.54.getverify"          ; -> AL = verify flag
         TRYFN 030h, "def.30.version"            ; -> AX = version

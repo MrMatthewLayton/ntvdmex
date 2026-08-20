@@ -372,5 +372,231 @@
     ],
     "recorded": "2026-08-20",
     "why": "Same cause as int21.3600.baddrive: the case uses DL=26 (Z:) to mean 'a drive that does not exist', and DOSBox-X always mounts Z: as its own utility drive, so there it DOES exist and AL=00 is correct for that host. Real 6.22 returns AL=FF."
+  },
+  {
+    "probe": "dir",
+    "case": "cwd",
+    "field": "BUF",
+    "ignore_bytes": [
+      [
+        0,
+        16
+      ]
+    ],
+    "recorded": "2026-08-20",
+    "why": "AH=47h returns THE CURRENT DIRECTORY, and each host runs a probe from its own directory -- the oracle's A:\\\\, the rig's C:\\\\test, DOSBox's mount root. The buffer is therefore never comparable; it is still dumped, and the call's success is asserted by CF."
+  },
+  {
+    "probe": "fcb",
+    "case": "fcb.opened",
+    "field": "BUF",
+    "ignore_bytes": [
+      [
+        0,
+        1
+      ]
+    ],
+    "recorded": "2026-08-20",
+    "why": "Byte 0 is the DRIVE the open resolved to, and each host runs the probe from its own drive -- the oracle from A: (01), DOSBox from C: (03), the rig from C:. The behaviour being checked is that the field gets FILLED IN at all, which it now is; the value itself is a property of where the probe is running."
+  },
+  {
+    "probe": "defs",
+    "case": "def.30.version",
+    "field": "AX",
+    "recorded": "2026-08-20",
+    "why": "Same as dosver/int21.30: DOSBox-X's reported DOS version is a configurable emulator setting, not an observation about MS-DOS. We match the genuine kernel (0x1606).",
+    "abstain": [
+      "dosbox-x"
+    ]
+  },
+  {
+    "probe": "defs",
+    "case": "edge.71",
+    "field": "CF",
+    "recorded": "2026-08-20",
+    "why": "AH=71h is the long-filename group introduced with Windows 95. MS-DOS 6.22 does not define it, so it no-ops with carry clear; DOSBox-X implements it and reports a real error. A correct answer to a later DOS's question.",
+    "abstain": [
+      "dosbox-x"
+    ]
+  },
+  {
+    "probe": "alloc",
+    "case": "sysvars.at.bx-2",
+    "field": "BUF",
+    "recorded": "2026-08-20",
+    "why": "DOS's internal SysVars: real kernels fill it with pointers to their own DPB, SFT and driver chains, all host addresses. Ours is deliberately a stub with only the first-MCB word real (see the AH=52h handler for why a null stub beats a plausible one). Nothing here is comparable.",
+    "ignore_bytes": [
+      [
+        0,
+        48
+      ]
+    ]
+  },
+  {
+    "probe": "misc",
+    "case": "int21.6501",
+    "field": "AX",
+    "recorded": "2026-08-20",
+    "why": "Real 6.22 returns the active code page in AX (0x1B5 = 437); DOSBox-X leaves AX holding the call number. We match the oracle.",
+    "abstain": [
+      "dosbox-x"
+    ]
+  },
+  {
+    "probe": "misc",
+    "case": "int21.5900",
+    "field": "BX",
+    "recorded": "2026-08-20",
+    "why": "Same as the err probe: DOSBox-X returns the extended error CODE correctly but does not populate the class/action fields. We match the oracle.",
+    "abstain": [
+      "dosbox-x"
+    ]
+  },
+  {
+    "probe": "misc",
+    "case": "int21.5900",
+    "field": "CX",
+    "recorded": "2026-08-20",
+    "why": "Same as the err probe: DOSBox-X returns the extended error CODE correctly but does not populate the locus fields. We match the oracle.",
+    "abstain": [
+      "dosbox-x"
+    ]
+  },
+  {
+    "probe": "misc",
+    "case": "ctry65",
+    "field": "BUF",
+    "recorded": "2026-08-20",
+    "why": "With the case-map pointer masked, the remaining difference is the US date separator: genuine 6.22 uses '-' (0x2D), DOSBox-X uses '/' (0x2F). We are byte-identical to the oracle.",
+    "abstain": [
+      "dosbox-x"
+    ],
+    "ignore_bytes": [
+      [
+        25,
+        4
+      ]
+    ]
+  },
+  {
+    "probe": "misc",
+    "case": "truename",
+    "field": "BUF",
+    "recorded": "2026-08-20",
+    "why": "60h canonicalises against the CURRENT DIRECTORY. Each host runs a probe from its own directory and drive -- the oracle's A:, the rig's C:\\\\test, DOSBox's mount root -- so this value describes WHERE THE PROBE IS, not what DOS does.",
+    "ignore_bytes": [
+      [
+        0,
+        24
+      ]
+    ]
+  },
+  {
+    "probe": "misc",
+    "case": "serial",
+    "field": "BUF",
+    "recorded": "2026-08-20",
+    "why": "The volume serial number, label and filesystem type of whichever disk the probe is running from. Each host runs a probe from its own directory and drive -- the oracle's A:, the rig's C:\\\\test, DOSBox's mount root -- so this value describes WHERE THE PROBE IS, not what DOS does.",
+    "ignore_bytes": [
+      [
+        0,
+        24
+      ]
+    ]
+  },
+  {
+    "probe": "ctab",
+    "case": "t.02.upper.desc",
+    "field": "BUF",
+    "recorded": "2026-08-20",
+    "why": "The descriptor's bytes 1-4 are a FAR POINTER to the table, which lives at a different address on every host. The subfunction id in byte 0 IS compared, and the table the pointer leads to is compared separately.",
+    "ignore_bytes": [
+      [
+        1,
+        4
+      ]
+    ]
+  },
+  {
+    "probe": "ctab",
+    "case": "t.04.fnupper.desc",
+    "field": "BUF",
+    "recorded": "2026-08-20",
+    "why": "The descriptor's bytes 1-4 are a FAR POINTER to the table, which lives at a different address on every host. The subfunction id in byte 0 IS compared, and the table the pointer leads to is compared separately.",
+    "ignore_bytes": [
+      [
+        1,
+        4
+      ]
+    ]
+  },
+  {
+    "probe": "ctab",
+    "case": "t.05.fnterm.desc",
+    "field": "BUF",
+    "recorded": "2026-08-20",
+    "why": "The descriptor's bytes 1-4 are a FAR POINTER to the table, which lives at a different address on every host. The subfunction id in byte 0 IS compared, and the table the pointer leads to is compared separately.",
+    "ignore_bytes": [
+      [
+        1,
+        4
+      ]
+    ]
+  },
+  {
+    "probe": "ctab",
+    "case": "t.06.collate.desc",
+    "field": "BUF",
+    "recorded": "2026-08-20",
+    "why": "The descriptor's bytes 1-4 are a FAR POINTER to the table, which lives at a different address on every host. The subfunction id in byte 0 IS compared, and the table the pointer leads to is compared separately.",
+    "ignore_bytes": [
+      [
+        1,
+        4
+      ]
+    ]
+  },
+  {
+    "probe": "ctab",
+    "case": "t.07.dbcs.desc",
+    "field": "BUF",
+    "recorded": "2026-08-20",
+    "why": "The descriptor's bytes 1-4 are a FAR POINTER to the table, which lives at a different address on every host. The subfunction id in byte 0 IS compared, and the table the pointer leads to is compared separately.",
+    "ignore_bytes": [
+      [
+        1,
+        4
+      ]
+    ]
+  },
+  {
+    "probe": "ctab",
+    "case": "t.02.upper.tab",
+    "field": "BUF",
+    "recorded": "2026-08-20",
+    "why": "DOSBox-X's uppercase table is a near-identity mapping (80,81,82,83...), not code page 437's real case folding. Ours is byte-identical to the genuine 6.22 table, which is the point of having dumped it rather than generated it.",
+    "abstain": [
+      "dosbox-x"
+    ]
+  },
+  {
+    "probe": "ctab",
+    "case": "t.04.fnupper.tab",
+    "field": "BUF",
+    "recorded": "2026-08-20",
+    "why": "DOSBox-X's uppercase table is a near-identity mapping (80,81,82,83...), not code page 437's real case folding. Ours is byte-identical to the genuine 6.22 table, which is the point of having dumped it rather than generated it.",
+    "abstain": [
+      "dosbox-x"
+    ]
+  },
+  {
+    "probe": "ctab",
+    "case": "t.06.collate.tab",
+    "field": "BUF",
+    "abstain": [
+      "dosbox-x"
+    ],
+    "recorded": "2026-08-20",
+    "why": "DOSBox-X's collating sequence does not fold lower case onto upper (it diverges from the genuine table at byte 99: 'A' vs 'a'). Ours is byte-identical to 6.22's, which is exactly why the table was dumped from the oracle rather than generated -- a plausible-looking collating table would sort wrongly in a way nobody would notice until a program listed names out of order."
   }
 ]

@@ -46,6 +46,12 @@ start:
         EMIT    "int21.29.parse", "AX"
         EMIT_BUF "fcb.parsed", fcb, 16
 
+        ; The parse above deliberately used "C:" to exercise the drive field, and
+        ; fcb.parsed proves it landed. But the scratch file was created in the
+        ; CURRENT directory, which is not C:\ on every host, so clear the drive
+        ; byte to "default" before opening it.
+        mov     byte [fcb], 0
+
         ; ---- 0Fh: open it through that parsed FCB
         POISON
         mov     dx, fcb

@@ -3466,14 +3466,24 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
        these vectors were filled by the null-vector sweep with a bare IRET, so a
        guest asking for the equipment list or the memory size got silence and
        whatever was already in its registers. */
-    static const BYTE bios_ints[] = { 0x11, 0x12, 0x13, 0x14, 0x15, 0x17, 0x25, 0x26 };
+    /* {vector, BOP number}.  They match for all but INT 20h: BOP 0x20 is ALREADY
+       the INT 21h handler's, and planting INT 20h with it made the BIOS dispatch
+       intercept every INT 21h call as "terminate program" -- selftest exited at
+       its first DOS call with no output. BOP numbers are a shared namespace with
+       DPMI (0x50-0x57), XMS (0x43) and the rest; 0x30 is free. */
+    static const BYTE bios_ints[][2] = {
+        { 0x11, 0x11 }, { 0x12, 0x12 }, { 0x13, 0x13 }, { 0x14, 0x14 },
+        { 0x15, 0x15 }, { 0x17, 0x17 }, { 0x25, 0x25 }, { 0x26, 0x26 },
+        { 0x20, 0x30 },                                  /* GH #46: see above */
+        { 0x27, 0x27 }, { 0x28, 0x28 }, { 0x29, 0x29 },
+    };
     static const BYTE emmname[] = { 'E','M','M','X','X','X','X','0' };  /* EMS device header name */
     HANDLE ui = NULL;
 
     (void)hInst; (void)hPrev; (void)lpCmd; (void)nShow;
     progpath[0] = 0; args[0] = 0;
 
-    p = zput(p, "NTVDMEX clean host\r\nSTAGE0: WinMain entered [build dpmi-harness-v166]\r\n");
+    p = zput(p, "NTVDMEX clean host\r\nSTAGE0: WinMain entered [build dpmi-harness-v170]\r\n");
     log_write(LOG_PATH, report, p);
     serial_init();                                      /* DPMI harness: COM1 log sink */
     serial_out(report, p);
@@ -3708,12 +3718,12 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
 
     { unsigned bi;
       volatile BYTE *bs = (volatile BYTE *)(DOS_CTAB_SEG << 4);
-      for (bi = 0; bi < sizeof(bios_ints); ++bi) {
+      for (bi = 0; bi < sizeof(bios_ints)/sizeof(bios_ints[0]); ++bi) {
           unsigned off = DOS_BIOS_STUBS + bi * 4;
           bs[off + 0] = VDM_BOP0; bs[off + 1] = VDM_BOP1;
-          bs[off + 2] = bios_ints[bi]; bs[off + 3] = 0xCF;   /* IRET */
-          *(volatile WORD *)(bios_ints[bi] * 4)     = (WORD)off;
-          *(volatile WORD *)(bios_ints[bi] * 4 + 2) = DOS_CTAB_SEG;
+          bs[off + 2] = bios_ints[bi][1]; bs[off + 3] = 0xCF;   /* IRET */
+          *(volatile WORD *)(bios_ints[bi][0] * 4)     = (WORD)off;
+          *(volatile WORD *)(bios_ints[bi][0] * 4 + 2) = DOS_CTAB_SEG;
       } }
 
     /* GH #27 -- THE NULL-VECTOR LANDMINE. A vector left at 0000:0000 sends a guest
@@ -4256,6 +4266,27 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                     BSETAX(0x0100); BCF_SET();
                     g_bios_unimpl[0x13] = 1;
                 }
+            } else if (bn == 0x30) {               /* INT 20h: terminate       */
+                /* INT 20h is AH=4Ch with an exit code of 0. Routing it here
+                   rather than leaving an IRET means a program that exits this
+                   way actually exits, instead of returning into itself. */
+                VDM_REG(tib, VTIB_EAX) &= 0xFFFF0000u;
+                m.tp = p; dos_int21(&m); p = m.tp;   /* AH=00 -> terminate       */
+                handled = 2;
+            } else if (bn == 0x27) {               /* TSR, CP/M style          */
+                p = zput(p, "  INT27 TSR: residency NOT honoured "
+                            "(single-program host)\r\n");
+                g_bios_unimpl[0x27] = 1;
+                VDM_REG(tib, VTIB_EAX) &= 0xFFFF0000u;
+                m.tp = p; dos_int21(&m); p = m.tp;
+                handled = 2;
+            } else if (bn == 0x28) {               /* DOS idle                 */
+                BCF_CLR();                         /* nothing to yield to      */
+            } else if (bn == 0x29) {               /* fast console output      */
+                /* AL is the character. Programs that hook this expect it to
+                   PRINT; leaving it as an IRET swallowed the output silently. */
+                vdd_video_putc(&g_vid, (uint8_t)(VDM_REG(tib, VTIB_EAX) & 0xFF));
+                BCF_CLR();
             } else if (bn == 0x25 || bn == 0x26) { /* absolute disk read/write */
                 BSETAX(0x0207); BCF_SET();         /* AL=07 drive param error  */
                 g_bios_unimpl[bn] = 1;
@@ -4263,6 +4294,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             #undef BCF_SET
             #undef BCF_CLR
             #undef BSETAX
+            if (handled == 2) break;               /* terminate: leave the loop */
             if (handled) { VDM_REG(tib, VTIB_EIP) += 3; continue; }
         }
         if ((VDM_REG(tib, VTIB_EVENT_INFO) & 0xFF) == 0x1A) {   /* INT 1Ah BIOS time */

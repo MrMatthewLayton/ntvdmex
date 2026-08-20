@@ -58,7 +58,8 @@ start:
         mov     ax, 6000h
         int     21h
         call    probe_capture
-        EMIT    "int21.60", "AX,CF"
+        ; AX is destroyed by 60h (the oracle returns 0x5C, others leave it); only CF.
+        EMIT    "int21.60", "CF"
         EMIT_BUF "truename", tname, 24
 
         ; ---- 59h: get extended error for the LAST error.  The 4Eh below is
@@ -85,7 +86,8 @@ start:
         mov     dx, serial
         int     21h
         call    probe_capture
-        EMIT    "int21.6900", "AX,CF"
+        ; AX is destroyed by 69h -- all three hosts differ. CF is the fact.
+        EMIT    "int21.6900", "CF"
         EMIT_BUF "serial", serial, 24
 
         ; ---- 5D06h: get the DOS swappable data area -> DS:SI, CX, DX.
