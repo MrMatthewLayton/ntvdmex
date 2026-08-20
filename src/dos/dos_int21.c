@@ -5,6 +5,43 @@
 #include "dos_layout.h"
 #include "log.h"          /* zput / zhex */
 
+/* Does MS-DOS 6.22 provide a MEANINGFUL service at this AH?  GH #27.
+ *
+ * This is the line between "we are missing something" and "DOS has nothing here
+ * either", and the two need opposite behaviour: the first must fail loudly so a
+ * no-op is never mistaken for success, the second must stay silent so we do not
+ * invent an error real DOS never reports.
+ *
+ * THE BOUNDARY IS MEASURED, NOT REMEMBERED (tools/dostest/p_defs.asm, run against
+ * the 6.22 oracle).  Every probed AH from 6Dh upward -- 6Dh, 6Eh, 6Fh, 70h, 71h,
+ * 72h, 74h, 80h, A0h, E0h -- returns with AX unchanged, CF clear and every
+ * poisoned output register still holding its poison: nothing happened at all.
+ * 6Ch is the highest that does anything.
+ *
+ * The exceptions inside the table were measured the same way and carry the same
+ * do-nothing signature, so they belong on the quiet side: 18h, 1Dh, 1Eh and 20h
+ * are DOS's documented internal null functions, 61h is reserved, 6Bh is a null
+ * function from DOS 5 on.
+ *
+ * A CAUTION FOR WHOEVER EXTENDS THIS: "AX came back unchanged" is NOT on its own
+ * a reliable test for absence.  AH=54h (get verify flag) returns AL=0 when verify
+ * is off, which is indistinguishable from the AL=0 that went in, and AH=2Ch
+ * leaves AX alone while writing CX and DX.  The signature that actually works is
+ * EVERY output register still poisoned.
+ */
+static int dos622_defines(uint8_t ah)
+{
+    if (ah > 0x6C) return 0;
+    switch (ah) {
+    case 0x18: case 0x1D: case 0x1E: case 0x20:   /* internal null functions */
+    case 0x61:                                    /* reserved                */
+    case 0x6B:                                    /* null function (DOS 5+)  */
+        return 0;
+    default:
+        return 1;
+    }
+}
+
 /* Copy an ASCIIZ string out of V86 memory (seg:off) into a host buffer. */
 static void v86_str(DWORD seg, DWORD off, char *dst, int max)
 {
@@ -22,7 +59,7 @@ void dos_int21_init(dos_machine_t *m, uint16_t first_mcb)
     m->dta_seg = DOS_PSP_SEG;
     m->dta_off = 0x0080;
     m->out_len = 0; m->out_trunc = 0;
-    { int _i; for (_i = 0; _i < 32; ++_i) m->unimpl21[_i] = 0; }
+    { int _i; for (_i = 0; _i < 32; ++_i) { m->unimpl21[_i] = 0; m->noop21[_i] = 0; } }
     m->exit_code = 0;
     m->conout = 0;
     m->conctx = 0;
@@ -254,17 +291,25 @@ int dos_int21(dos_machine_t *m)
     } else if (ah == 0x2B || ah == 0x2D) {      /* set date/time -> report success */
         SETAX(R_AX & 0xFF00);                   /* AL=0 = ok */
         OKCF();
+    } else if (!dos622_defines(ah)) {
+        /* MS-DOS 6.22 has nothing here, and what IT does is the specification:
+           return with AX unchanged and CF clear, touching nothing.  Measured on
+           the oracle (tools/dostest/p_defs.asm) -- AH=6Dh..E0h, plus the
+           documented null functions, all come back with every poisoned output
+           register intact.  Failing loudly here would be US inventing an error
+           that real DOS does not report, which breaks programs that probe for
+           an extension by calling it and checking CF. */
+        tp = zput(tp, "  INT21 AH=0x"); tp = zhex(tp, ah);
+        tp = zput(tp, " undefined on 6.22 -- no-op (matches DOS)\r\n");
+        m->noop21[(ah & 0xFF) >> 3] |= (uint8_t)(1u << (ah & 7));
+        OKCF();
     } else {                                    /* unhandled service */
         /* GH #27. Recorded as well as logged, so the STAGE2 block can list every
            service a run actually wanted -- that list is the to-do list.
-           NOTE ON CF, and it matters: the oracle says real MS-DOS 6.22 returns
-           CF=0 with AX UNCHANGED for a function it does not define (measured on
-           AH=FFh/73h/88h, tools/dostest/p_unimp.asm). We return CF=1 here, which
-           DIVERGES. That is deliberate for now: this tail is also reached by
-           functions DOS *does* define and we simply have not written yet (4Bh,
-           4Eh, 39h...), and for those a silent "success" would be a worse lie
-           than a visible failure. Splitting the two needs DOS's own function
-           table -- see the note in docs/research/oracle-disagreements.md. */
+           Reaching HERE means 6.22 defines a real service at this AH and we have
+           not written it yet.  CF=1 is right for that: a quiet "success" would
+           tell the program its request worked when nothing happened.  Functions
+           DOS does not define are handled above and stay silent, matching DOS. */
         tp = zput(tp, "  INT21 AH=0x"); tp = zhex(tp, ah); tp = zput(tp, " UNIMPLEMENTED\r\n");
         m->unimpl21[(ah & 0xFF) >> 3] |= (uint8_t)(1u << (ah & 7));
         ERRCF();

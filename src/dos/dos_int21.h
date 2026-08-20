@@ -21,7 +21,8 @@ typedef struct {
     uint16_t dta_seg, dta_off; /* Disk Transfer Area (AH=1A/2F)                    */
     char    *out; int out_cap; int out_len;  /* captured console output (02/09/40) */
     int      out_trunc;        /* set when output was dropped -- see OUTC()        */
-    uint8_t  unimpl21[32];     /* GH #27: AH values reached the unhandled tail      */
+    uint8_t  unimpl21[32];     /* GH #27: DOS-defined services we have not written  */
+    uint8_t  noop21[32];       /* GH #27: services 6.22 does not define either       */
     char    *tp;               /* current trace cursor (caller resets + flushes)   */
     int      exit_code;        /* AH=4Ch AL -- DOS errorlevel (read after the loop) */
     void   (*conout)(void *ctx, uint8_t ch);  /* optional sink for console output  */

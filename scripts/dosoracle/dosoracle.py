@@ -119,7 +119,14 @@ class Oracle:
               serial=None, hostdir=None):
         cmd = [
             "qemu-system-i386", "-M", "pc", "-m", str(self.memory),
-            "-drive", "file=%s,format=raw,if=ide,index=0,media=disk" % self.image,
+            # snapshot=on: the C: image is COPY-ON-WRITE for the run and every
+            # write is discarded at exit. Probes call DOS functions with poisoned
+            # registers, and some of those functions delete, create or truncate
+            # files -- without this, one careless probe silently corrupts the
+            # oracle and every later answer is suspect. It also makes runs
+            # reproducible. The scratch floppy is a separate drive and stays
+            # writable, so results still come back.
+            "-drive", "file=%s,format=raw,if=ide,index=0,media=disk,snapshot=on" % self.image,
             "-boot", "c", "-no-reboot",
             "-device", "isa-debug-exit,iobase=0xf4,iosize=0x04",
         ]

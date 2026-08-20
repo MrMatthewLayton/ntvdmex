@@ -3322,7 +3322,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     (void)hInst; (void)hPrev; (void)lpCmd; (void)nShow;
     progpath[0] = 0; args[0] = 0;
 
-    p = zput(p, "NTVDMEX clean host\r\nSTAGE0: WinMain entered [build dpmi-harness-v146]\r\n");
+    p = zput(p, "NTVDMEX clean host\r\nSTAGE0: WinMain entered [build dpmi-harness-v147]\r\n");
     log_write(LOG_PATH, report, p);
     serial_init();                                      /* DPMI harness: COM1 log sink */
     serial_out(report, p);
@@ -4434,6 +4434,11 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
       p = zput(p, "STAGE2: INT21 unimplemented:");
       for (i = 0, n = 0; i < 256; ++i)
           if ((m.unimpl21[i >> 3] >> (i & 7)) & 1u) { p = zput(p, " AH=0x"); p = zhexb(p, (unsigned)i); ++n; }
+      if (!n) p = zput(p, " none");
+      p = zput(p, "\r\n");
+      p = zput(p, "STAGE2: INT21 undefined-on-6.22 (no-op, matches DOS):");
+      for (i = 0, n = 0; i < 256; ++i)
+          if ((m.noop21[i >> 3] >> (i & 7)) & 1u) { p = zput(p, " AH=0x"); p = zhexb(p, (unsigned)i); ++n; }
       if (!n) p = zput(p, " none");
       p = zput(p, "\r\n");
       p = zput(p, "STAGE2: INT10 unimplemented:");
