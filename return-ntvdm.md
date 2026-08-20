@@ -413,6 +413,29 @@ clears it and still ends below the next MCB header at 0xFF0. selftest recovered 
      a byte above 0x7F aborted the whole run with a UnicodeDecodeError. Now CP437. The harness
      must never be the thing that fails on unusual data — that is the data worth seeing.
 
+★★★★★ **#30 EXEC (4Bh) WORKS — INT 21h IS 103/103. host v166.**
+    EXEC: "P_CHILD.COM"
+    EXEC: child at seg=0x1101 entry=1101:0100 (COM) depth=01
+    EXEC: child exited rc=0x2a, parent resumed (depth=00)
+  Oracle-matched on all three properties that matter: the child RAN, the parent RESUMED at the
+  instruction after its INT 21h, and the child's EXIT CODE came back through AH=4Dh.
+  ▶ **HOW THE RETURN WORKS — the load-bearing idea.** The parent entered via `INT 21h`, so the
+    CPU pushed FLAGS/CS/IP on ITS stack and we are inside our BOP stub. We snapshot the parent's
+    ENTIRE frame — including CS:IP pointing AT the BOP and SS:SP pointing at that IRET frame —
+    then overwrite it with the child's entry state. On child exit we put the frame back and step
+    EIP past the BOP, so the stub's own IRET pops the parent's own frame and lands exactly where
+    EXEC returning normally would have. **No stack is unwound by hand.** Nesting stack is 8 deep
+    (`g_exec[]` in main.c); child memory is freed on exit.
+  ▶ SPLIT BY LAYER: `dos_int21` only RECORDS the request (path + parameter block) and sets
+    `exec_pending`; the host's `exec_begin()` does the load and the transfer, because the loader,
+    file I/O and the guest register frame all live there.
+  ▶ **A .COM OWNS ALL OF MEMORY, so EXEC returns AX=0008 until the parent gives some back.**
+    The probe shrinks itself with 4Ah first — that is not a workaround, it is what COMMAND.COM
+    does before launching anything. Worth knowing before diagnosing an "out of memory" EXEC.
+  ▶ AL=01 (load-without-execute) and AL=03 (overlay) are LOUD-unimplemented, not silent.
+  ▶ NEW: probes can ship companion files via a `<probe>.deps` sidecar, and all three hosts now
+    run a probe FROM ITS OWN DIRECTORY so a relative companion path resolves everywhere.
+
 ▶▶ RESUME — NEXT STEPS (in order):
   1. Finish the app queue: **43h** (ATTRIB), **5Dh** (COMMAND.COM), **11h/12h** FCB find (TREE, #36).
   2. **#30 EXEC (4Bh)** — after which a shell can actually launch a program.
@@ -724,6 +747,29 @@ disabling interrupts for any guest whose enable lives in VIF.
      a byte above 0x7F aborted the whole run with a UnicodeDecodeError. Now CP437. The harness
      must never be the thing that fails on unusual data — that is the data worth seeing.
 
+★★★★★ **#30 EXEC (4Bh) WORKS — INT 21h IS 103/103. host v166.**
+    EXEC: "P_CHILD.COM"
+    EXEC: child at seg=0x1101 entry=1101:0100 (COM) depth=01
+    EXEC: child exited rc=0x2a, parent resumed (depth=00)
+  Oracle-matched on all three properties that matter: the child RAN, the parent RESUMED at the
+  instruction after its INT 21h, and the child's EXIT CODE came back through AH=4Dh.
+  ▶ **HOW THE RETURN WORKS — the load-bearing idea.** The parent entered via `INT 21h`, so the
+    CPU pushed FLAGS/CS/IP on ITS stack and we are inside our BOP stub. We snapshot the parent's
+    ENTIRE frame — including CS:IP pointing AT the BOP and SS:SP pointing at that IRET frame —
+    then overwrite it with the child's entry state. On child exit we put the frame back and step
+    EIP past the BOP, so the stub's own IRET pops the parent's own frame and lands exactly where
+    EXEC returning normally would have. **No stack is unwound by hand.** Nesting stack is 8 deep
+    (`g_exec[]` in main.c); child memory is freed on exit.
+  ▶ SPLIT BY LAYER: `dos_int21` only RECORDS the request (path + parameter block) and sets
+    `exec_pending`; the host's `exec_begin()` does the load and the transfer, because the loader,
+    file I/O and the guest register frame all live there.
+  ▶ **A .COM OWNS ALL OF MEMORY, so EXEC returns AX=0008 until the parent gives some back.**
+    The probe shrinks itself with 4Ah first — that is not a workaround, it is what COMMAND.COM
+    does before launching anything. Worth knowing before diagnosing an "out of memory" EXEC.
+  ▶ AL=01 (load-without-execute) and AL=03 (overlay) are LOUD-unimplemented, not silent.
+  ▶ NEW: probes can ship companion files via a `<probe>.deps` sidecar, and all three hosts now
+    run a probe FROM ITS OWN DIRECTORY so a relative companion path resolves everywhere.
+
 ▶▶ RESUME — NEXT STEPS (in order):
   1. **SOAK THE ASYNC PATH, THEN MAKE IT THE DEFAULT** (drop the qimode bit 4 gate). Run the
      whole tests/ battery with it on -- especially the graphical demos, the DPMI/PM tests (it
@@ -903,6 +949,29 @@ the ICA; we run the guest in-process and are blind until it faults.
   2. **The oracle harness decoded helper output as UTF-8**, so any probe whose buffer dump held
      a byte above 0x7F aborted the whole run with a UnicodeDecodeError. Now CP437. The harness
      must never be the thing that fails on unusual data — that is the data worth seeing.
+
+★★★★★ **#30 EXEC (4Bh) WORKS — INT 21h IS 103/103. host v166.**
+    EXEC: "P_CHILD.COM"
+    EXEC: child at seg=0x1101 entry=1101:0100 (COM) depth=01
+    EXEC: child exited rc=0x2a, parent resumed (depth=00)
+  Oracle-matched on all three properties that matter: the child RAN, the parent RESUMED at the
+  instruction after its INT 21h, and the child's EXIT CODE came back through AH=4Dh.
+  ▶ **HOW THE RETURN WORKS — the load-bearing idea.** The parent entered via `INT 21h`, so the
+    CPU pushed FLAGS/CS/IP on ITS stack and we are inside our BOP stub. We snapshot the parent's
+    ENTIRE frame — including CS:IP pointing AT the BOP and SS:SP pointing at that IRET frame —
+    then overwrite it with the child's entry state. On child exit we put the frame back and step
+    EIP past the BOP, so the stub's own IRET pops the parent's own frame and lands exactly where
+    EXEC returning normally would have. **No stack is unwound by hand.** Nesting stack is 8 deep
+    (`g_exec[]` in main.c); child memory is freed on exit.
+  ▶ SPLIT BY LAYER: `dos_int21` only RECORDS the request (path + parameter block) and sets
+    `exec_pending`; the host's `exec_begin()` does the load and the transfer, because the loader,
+    file I/O and the guest register frame all live there.
+  ▶ **A .COM OWNS ALL OF MEMORY, so EXEC returns AX=0008 until the parent gives some back.**
+    The probe shrinks itself with 4Ah first — that is not a workaround, it is what COMMAND.COM
+    does before launching anything. Worth knowing before diagnosing an "out of memory" EXEC.
+  ▶ AL=01 (load-without-execute) and AL=03 (overlay) are LOUD-unimplemented, not silent.
+  ▶ NEW: probes can ship companion files via a `<probe>.deps` sidecar, and all three hosts now
+    run a probe FROM ITS OWN DIRECTORY so a relative companion path resolves everywhere.
 
 ▶▶ RESUME — NEXT STEPS (in order):
   1. **RE the kernel's interrupt-queue interface** (the agreed direction). Find the NtVdmControl
@@ -1120,6 +1189,29 @@ SMB loop (which auto-times-out at 30 s now, so they no longer wedge -- but you s
      a byte above 0x7F aborted the whole run with a UnicodeDecodeError. Now CP437. The harness
      must never be the thing that fails on unusual data — that is the data worth seeing.
 
+★★★★★ **#30 EXEC (4Bh) WORKS — INT 21h IS 103/103. host v166.**
+    EXEC: "P_CHILD.COM"
+    EXEC: child at seg=0x1101 entry=1101:0100 (COM) depth=01
+    EXEC: child exited rc=0x2a, parent resumed (depth=00)
+  Oracle-matched on all three properties that matter: the child RAN, the parent RESUMED at the
+  instruction after its INT 21h, and the child's EXIT CODE came back through AH=4Dh.
+  ▶ **HOW THE RETURN WORKS — the load-bearing idea.** The parent entered via `INT 21h`, so the
+    CPU pushed FLAGS/CS/IP on ITS stack and we are inside our BOP stub. We snapshot the parent's
+    ENTIRE frame — including CS:IP pointing AT the BOP and SS:SP pointing at that IRET frame —
+    then overwrite it with the child's entry state. On child exit we put the frame back and step
+    EIP past the BOP, so the stub's own IRET pops the parent's own frame and lands exactly where
+    EXEC returning normally would have. **No stack is unwound by hand.** Nesting stack is 8 deep
+    (`g_exec[]` in main.c); child memory is freed on exit.
+  ▶ SPLIT BY LAYER: `dos_int21` only RECORDS the request (path + parameter block) and sets
+    `exec_pending`; the host's `exec_begin()` does the load and the transfer, because the loader,
+    file I/O and the guest register frame all live there.
+  ▶ **A .COM OWNS ALL OF MEMORY, so EXEC returns AX=0008 until the parent gives some back.**
+    The probe shrinks itself with 4Ah first — that is not a workaround, it is what COMMAND.COM
+    does before launching anything. Worth knowing before diagnosing an "out of memory" EXEC.
+  ▶ AL=01 (load-without-execute) and AL=03 (overlay) are LOUD-unimplemented, not silent.
+  ▶ NEW: probes can ship companion files via a `<probe>.deps` sidecar, and all three hosts now
+    run a probe FROM ITS OWN DIRECTORY so a relative companion path resolves everywhere.
+
 ▶▶ RESUME — NEXT STEPS (in order):
   1. DONE (2026-08-19): pm32irq 32-bit async IRQ visually confirmed remotely. Next visuals to grab the
      same way (set capture.flag, fire, read shot_*.bmp): pm32gfx (32-bit gradient), mode13, and Skyroads
@@ -1230,6 +1322,29 @@ FINDINGS THIS SESSION (bare metal): ══════════════�
   2. **The oracle harness decoded helper output as UTF-8**, so any probe whose buffer dump held
      a byte above 0x7F aborted the whole run with a UnicodeDecodeError. Now CP437. The harness
      must never be the thing that fails on unusual data — that is the data worth seeing.
+
+★★★★★ **#30 EXEC (4Bh) WORKS — INT 21h IS 103/103. host v166.**
+    EXEC: "P_CHILD.COM"
+    EXEC: child at seg=0x1101 entry=1101:0100 (COM) depth=01
+    EXEC: child exited rc=0x2a, parent resumed (depth=00)
+  Oracle-matched on all three properties that matter: the child RAN, the parent RESUMED at the
+  instruction after its INT 21h, and the child's EXIT CODE came back through AH=4Dh.
+  ▶ **HOW THE RETURN WORKS — the load-bearing idea.** The parent entered via `INT 21h`, so the
+    CPU pushed FLAGS/CS/IP on ITS stack and we are inside our BOP stub. We snapshot the parent's
+    ENTIRE frame — including CS:IP pointing AT the BOP and SS:SP pointing at that IRET frame —
+    then overwrite it with the child's entry state. On child exit we put the frame back and step
+    EIP past the BOP, so the stub's own IRET pops the parent's own frame and lands exactly where
+    EXEC returning normally would have. **No stack is unwound by hand.** Nesting stack is 8 deep
+    (`g_exec[]` in main.c); child memory is freed on exit.
+  ▶ SPLIT BY LAYER: `dos_int21` only RECORDS the request (path + parameter block) and sets
+    `exec_pending`; the host's `exec_begin()` does the load and the transfer, because the loader,
+    file I/O and the guest register frame all live there.
+  ▶ **A .COM OWNS ALL OF MEMORY, so EXEC returns AX=0008 until the parent gives some back.**
+    The probe shrinks itself with 4Ah first — that is not a workaround, it is what COMMAND.COM
+    does before launching anything. Worth knowing before diagnosing an "out of memory" EXEC.
+  ▶ AL=01 (load-without-execute) and AL=03 (overlay) are LOUD-unimplemented, not silent.
+  ▶ NEW: probes can ship companion files via a `<probe>.deps` sidecar, and all three hosts now
+    run a probe FROM ITS OWN DIRECTORY so a relative companion path resolves everywhere.
 
 ▶▶ RESUME — NEXT STEPS (in order): ════════════════════════════════════════════════════════
   0. COMMIT the uncommitted bare-metal fixes (event-3, auto-exit, filebuf, PM-fault diagnostic).

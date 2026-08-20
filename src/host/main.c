@@ -264,6 +264,131 @@ static int   g_dpmi_vi = 1;                 /* DPMI virtual interrupt flag (INT 
    planted DPMI_PMRET catcher; allocated lazily on the first 0303. */
 static struct { WORD pm_sel; DWORD pm_off; WORD rm_es; DWORD rm_di; int used; } g_cb[DPMI_CB_SLOTS];
 static BYTE g_bios_unimpl[256];   /* GH #27: BIOS services a run actually wanted */
+
+/* ---- INT 21h AH=4Bh EXEC.  GH #30. ------------------------------------------
+ *
+ * A parent calls EXEC, a child runs to completion, and the parent carries on at
+ * the instruction after its INT 21h with the child's exit code retrievable via
+ * AH=4Dh.  That is what turns COMMAND.COM from a prompt into a shell.
+ *
+ * The work is split: dos_int21 only RECORDS the request, because the loader, the
+ * file I/O and the guest's register frame all live out here.
+ *
+ * HOW THE RETURN WORKS, which is the part worth understanding.  The parent
+ * entered through `INT 21h`, so the CPU pushed FLAGS/CS/IP on the parent's stack
+ * and we are executing inside our BOP stub.  We snapshot the parent's ENTIRE
+ * register frame -- including CS:IP pointing AT the BOP and SS:SP pointing at
+ * that IRET frame -- then overwrite the frame with the child's entry state.
+ * When the child terminates we put the parent's frame back and step EIP past the
+ * BOP, so the stub's IRET pops the parent's own frame and lands exactly where it
+ * would have if EXEC had simply returned.  No stack is unwound by hand.
+ */
+#define EXEC_MAX_DEPTH 8
+static struct {
+    DWORD eax, ebx, ecx, edx, esi, edi, ebp, esp, eip, efl;
+    WORD  cs, ss, ds, es;
+    WORD  psp, dta_seg, dta_off;
+    WORD  child_seg;                  /* freed when the child terminates */
+} g_exec[EXEC_MAX_DEPTH];
+static int g_exec_depth;
+
+static BYTE exec_filebuf[0x80000];    /* child image; separate from the parent's */
+
+/* Perform a recorded EXEC: load the child, snapshot the parent, hand over. */
+static char *exec_begin(dos_machine_t *m, volatile BYTE *tib, char *p)
+{
+    HANDLE hf;
+    DWORD nread = 0;
+    uint16_t child = 0, maxpara = 0, want;
+    dos_image_t img;
+    volatile WORD *pfl;
+    int d = g_exec_depth;
+
+    pfl = (volatile WORD *)(((VDM_REG(tib, VTIB_SS) & 0xFFFF) << 4)
+           + (((VDM_REG(tib, VTIB_ESP) & 0xFFFF) + 4) & 0xFFFF));
+
+    p = zput(p, "  EXEC: \""); p = zput(p, m->exec_path); p = zput(p, "\"\r\n");
+
+    if (d >= EXEC_MAX_DEPTH) {
+        p = zput(p, "  EXEC: nesting limit reached\r\n");
+        VDM_REG(tib, VTIB_EAX) = (VDM_REG(tib, VTIB_EAX) & 0xFFFF0000u) | 8;
+        *pfl |= 1; VDM_REG(tib, VTIB_EIP) += 3;
+        return p;
+    }
+    hf = CreateFileA(m->exec_path, GENERIC_READ, FILE_SHARE_READ, NULL,
+                     OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (hf == INVALID_HANDLE_VALUE) {
+        p = zput(p, "  EXEC: file not found\r\n");
+        VDM_REG(tib, VTIB_EAX) = (VDM_REG(tib, VTIB_EAX) & 0xFFFF0000u) | 2;
+        *pfl |= 1; VDM_REG(tib, VTIB_EIP) += 3;
+        return p;
+    }
+    ReadFile(hf, exec_filebuf, sizeof(exec_filebuf), &nread, NULL);
+    CloseHandle(hf);
+
+    /* Ask for everything: DOS gives a .COM all of free memory, and an .EXE at
+       least its minalloc. Probe the largest block by asking for too much. */
+    if (dos_alloc(NULL, m->first_mcb, 0xFFFF, &child, &maxpara) == 0) maxpara = 0;
+    want = maxpara;
+    if (!want || dos_alloc(NULL, m->first_mcb, want, &child, &maxpara) != 0) {
+        p = zput(p, "  EXEC: no memory\r\n");
+        VDM_REG(tib, VTIB_EAX) = (VDM_REG(tib, VTIB_EAX) & 0xFFFF0000u) | 8;
+        *pfl |= 1; VDM_REG(tib, VTIB_EIP) += 3;
+        return p;
+    }
+
+    /* Snapshot the parent BEFORE anything is overwritten. */
+    g_exec[d].eax = VDM_REG(tib, VTIB_EAX); g_exec[d].ebx = VDM_REG(tib, VTIB_EBX);
+    g_exec[d].ecx = VDM_REG(tib, VTIB_ECX); g_exec[d].edx = VDM_REG(tib, VTIB_EDX);
+    g_exec[d].esi = VDM_REG(tib, VTIB_ESI); g_exec[d].edi = VDM_REG(tib, VTIB_EDI);
+    g_exec[d].ebp = VDM_REG(tib, VTIB_EBP); g_exec[d].esp = VDM_REG(tib, VTIB_ESP);
+    g_exec[d].eip = VDM_REG(tib, VTIB_EIP); g_exec[d].efl = VDM_REG(tib, VTIB_EFLAGS);
+    g_exec[d].cs  = (WORD)VDM_REG(tib, VTIB_CS); g_exec[d].ss = (WORD)VDM_REG(tib, VTIB_SS);
+    g_exec[d].ds  = (WORD)VDM_REG(tib, VTIB_DS); g_exec[d].es = (WORD)VDM_REG(tib, VTIB_ES);
+    g_exec[d].psp = m->psp_seg;
+    g_exec[d].dta_seg = m->dta_seg; g_exec[d].dta_off = m->dta_off;
+    g_exec[d].child_seg = child;
+
+    /* Build the child's PSP and copy in its command tail, then load the image. */
+    dos_psp_build(NULL, child, m->exec_env ? m->exec_env : DOS_ENV_SEG,
+                  (uint16_t)(child + want));
+    { volatile BYTE *dpsp = (volatile BYTE *)(child << 4);
+      const volatile BYTE *tail = (const volatile BYTE *)
+          ((m->exec_tail_seg << 4) + m->exec_tail_off);
+      int k, n = tail[0] > 126 ? 126 : tail[0];
+      for (k = 0; k <= n; ++k) dpsp[0x80 + k] = tail[k];
+      dpsp[0x81 + n] = 0x0D;
+      dpsp[0x16] = (BYTE)(m->psp_seg & 0xFF);       /* parent PSP */
+      dpsp[0x17] = (BYTE)(m->psp_seg >> 8); }
+
+    img = dos_load(NULL, exec_filebuf, nread, child);
+
+    if (m->exec_mode == 0x01) {
+        /* Load without executing: DOS hands the entry point back in the caller's
+           parameter block and returns. We have not wired that back, so say so
+           rather than pretend the program ran. */
+        p = zput(p, "  EXEC: AL=01 load-without-execute UNIMPLEMENTED\r\n");
+        m->unimpl21[0x4B >> 3] |= (uint8_t)(1u << (0x4B & 7));
+        dos_free(NULL, child);
+        VDM_REG(tib, VTIB_EAX) = (VDM_REG(tib, VTIB_EAX) & 0xFFFF0000u) | 1;
+        *pfl |= 1; VDM_REG(tib, VTIB_EIP) += 3;
+        return p;
+    }
+
+    ++g_exec_depth;
+    m->psp_seg = child;
+    m->dta_seg = child; m->dta_off = 0x0080;        /* DOS resets the DTA to PSP:80 */
+    VDM_REG(tib, VTIB_CS)  = img.cs; VDM_REG(tib, VTIB_EIP) = img.ip;
+    VDM_REG(tib, VTIB_SS)  = img.ss; VDM_REG(tib, VTIB_ESP) = img.sp;
+    VDM_REG(tib, VTIB_DS)  = child;  VDM_REG(tib, VTIB_ES)  = child;
+    VDM_REG(tib, VTIB_EAX) = 0;
+    p = zput(p, "  EXEC: child at seg=0x"); p = zhex(p, child);
+    p = zput(p, " entry="); p = zhex(p, img.cs); p = zput(p, ":"); p = zhex(p, img.ip);
+    p = zput(p, img.is_exe ? " (EXE)" : " (COM)");
+    p = zput(p, " depth="); p = zhexb(p, (unsigned)g_exec_depth);
+    p = zput(p, "\r\n");
+    return p;
+}
 static WORD  g_pmret_sel = 0;
 /* GH #18: the PM-fault reflect selectors (0 = not installed). Run 67 corrected model:
    g_dpmi_fault_sel = the handler STACK selector (writable-data) written to [TIB+0x638];
@@ -3348,7 +3473,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     (void)hInst; (void)hPrev; (void)lpCmd; (void)nShow;
     progpath[0] = 0; args[0] = 0;
 
-    p = zput(p, "NTVDMEX clean host\r\nSTAGE0: WinMain entered [build dpmi-harness-v165]\r\n");
+    p = zput(p, "NTVDMEX clean host\r\nSTAGE0: WinMain entered [build dpmi-harness-v166]\r\n");
     log_write(LOG_PATH, report, p);
     serial_init();                                      /* DPMI harness: COM1 log sink */
     serial_out(report, p);
@@ -4461,11 +4586,48 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         m.tp = p;
         m.retry = 0;
         if (!dos_int21(&m)) {                       /* AH=4Ch -> terminate */
-            p = m.tp; VDM_REG(tib, VTIB_EIP) += 3;
+            p = m.tp;
+            if (g_exec_depth > 0) {
+                /* A CHILD terminated, not the program we were asked to run.
+                   Put the parent's frame back and let it continue. */
+                int d = --g_exec_depth;
+                volatile WORD *pfl2;
+                m.child_rc = (WORD)(m.exit_code & 0xFF);
+                if (g_exec[d].child_seg) dos_free(NULL, g_exec[d].child_seg);
+                VDM_REG(tib, VTIB_EAX) = g_exec[d].eax; VDM_REG(tib, VTIB_EBX) = g_exec[d].ebx;
+                VDM_REG(tib, VTIB_ECX) = g_exec[d].ecx; VDM_REG(tib, VTIB_EDX) = g_exec[d].edx;
+                VDM_REG(tib, VTIB_ESI) = g_exec[d].esi; VDM_REG(tib, VTIB_EDI) = g_exec[d].edi;
+                VDM_REG(tib, VTIB_EBP) = g_exec[d].ebp; VDM_REG(tib, VTIB_ESP) = g_exec[d].esp;
+                VDM_REG(tib, VTIB_EIP) = g_exec[d].eip; VDM_REG(tib, VTIB_EFLAGS) = g_exec[d].efl;
+                VDM_REG(tib, VTIB_CS)  = g_exec[d].cs;  VDM_REG(tib, VTIB_SS) = g_exec[d].ss;
+                VDM_REG(tib, VTIB_DS)  = g_exec[d].ds;  VDM_REG(tib, VTIB_ES) = g_exec[d].es;
+                m.psp_seg = g_exec[d].psp;
+                m.dta_seg = g_exec[d].dta_seg; m.dta_off = g_exec[d].dta_off;
+                /* EXEC succeeded, so clear the carry the parent's IRET will
+                   restore, and set AX=0 as DOS does. */
+                pfl2 = (volatile WORD *)(((VDM_REG(tib, VTIB_SS) & 0xFFFF) << 4)
+                        + (((VDM_REG(tib, VTIB_ESP) & 0xFFFF) + 4) & 0xFFFF));
+                *pfl2 &= (WORD)~1;
+                VDM_REG(tib, VTIB_EAX) &= 0xFFFF0000u;
+                VDM_REG(tib, VTIB_EIP) += 3;        /* past the BOP -> the IRET */
+                m.exit_code = 0;
+                p = zput(p, "  EXEC: child exited rc=0x"); p = zhexb(p, m.child_rc);
+                p = zput(p, ", parent resumed (depth="); p = zhexb(p, (unsigned)g_exec_depth);
+                p = zput(p, ")\r\n");
+                log_append(LOG_PATH, base, p); p = base;
+                continue;
+            }
+            VDM_REG(tib, VTIB_EIP) += 3;
             log_append(LOG_PATH, base, p); p = base;
             break;
         }
         p = m.tp;
+        if (m.exec_pending) {                       /* GH #30: AH=4Bh */
+            m.exec_pending = 0;
+            p = exec_begin(&m, tib, p);
+            log_append(LOG_PATH, base, p); p = base;
+            continue;                               /* CS:IP now points at the child */
+        }
         /* A blocking read with nothing to return leaves EIP ON the BOP, so the guest
            re-executes the INT and keeps running -- and keeps taking timer interrupts, so
            its music and animation carry on while it waits for a key, as on real hardware. */

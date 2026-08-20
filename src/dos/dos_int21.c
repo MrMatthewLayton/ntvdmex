@@ -197,6 +197,8 @@ void dos_int21_init(dos_machine_t *m, uint16_t first_mcb)
     m->child_rc = 0;
     m->fcb_find = 0;
     m->switch_char = '/';   /* oracle-confirmed 6.22 default */
+    m->psp_seg = DOS_PSP_SEG;
+    m->exec_pending = 0;
     m->first_mcb = first_mcb;
     m->dta_seg = DOS_PSP_SEG;
     m->dta_off = 0x0080;
@@ -656,6 +658,30 @@ int dos_int21(dos_machine_t *m)
         } else FCB_FAIL();
         #undef FCB_OK
         #undef FCB_FAIL
+    } else if (ah == 0x4B) {                    /* EXEC: load and run a program */
+        uint8_t al4b = (uint8_t)(R_AX & 0xFF);
+        if (al4b == 0x00 || al4b == 0x01) {
+            const volatile BYTE *pb =
+                (const volatile BYTE *)((R_ES << 4) + (R_BX & 0xFFFF));
+            v86_str(R_DS, R_DX, m->exec_path, sizeof(m->exec_path));
+            m->exec_env      = (uint16_t)(pb[0] | (pb[1] << 8));
+            m->exec_tail_off = (uint16_t)(pb[2] | (pb[3] << 8));
+            m->exec_tail_seg = (uint16_t)(pb[4] | (pb[5] << 8));
+            m->exec_fcb1_off = (uint16_t)(pb[6] | (pb[7] << 8));
+            m->exec_fcb1_seg = (uint16_t)(pb[8] | (pb[9] << 8));
+            m->exec_fcb2_off = (uint16_t)(pb[10] | (pb[11] << 8));
+            m->exec_fcb2_seg = (uint16_t)(pb[12] | (pb[13] << 8));
+            m->exec_mode = al4b;
+            m->exec_pending = 1;                /* the host does the rest */
+            OKCF();
+        } else {
+            /* AL=03 loads an overlay into a caller-supplied segment with no PSP
+               and no transfer of control.  Not wired up; say so. */
+            tp = zput(tp, "  INT21 AH=4B AL=0x"); tp = zhexb(tp, al4b);
+            tp = zput(tp, " UNIMPLEMENTED (overlay load)\r\n");
+            m->unimpl21[0x4B >> 3] |= (uint8_t)(1u << (0x4B & 7));
+            SETAX(1); ERRCF();
+        }
     } else if (ah == 0x1B || ah == 0x1C) {      /* allocation info for a drive */
         /* AL=sectors/cluster, DS:BX -> media descriptor byte, CX=bytes/sector,
            DX=total clusters.  All disk geometry, so the probe compares only CF.
@@ -1229,9 +1255,9 @@ int dos_int21(dos_machine_t *m)
         tp = zput(tp, " -> 0x"); tp = zhex(tp, want);
         tp = zput(tp, (*pfl & 1) ? " (err)\r\n" : "\r\n");
     } else if (ah == 0x51 || ah == 0x62) {      /* get current PSP -> BX */
-        SET16(R_BX, DOS_PSP_SEG); OKCF();
-    } else if (ah == 0x50) {                    /* set current PSP (single process) */
-        OKCF();
+        SET16(R_BX, m->psp_seg); OKCF();
+    } else if (ah == 0x50) {                    /* set current PSP */
+        m->psp_seg = (uint16_t)(R_BX & 0xFFFF); OKCF();
     } else if (ah == 0x1A) {                    /* set DTA = DS:DX */
         m->dta_seg = (WORD)(R_DS & 0xFFFF); m->dta_off = (WORD)(R_DX & 0xFFFF); OKCF();
     } else if (ah == 0x2F) {                    /* get DTA -> ES:BX */

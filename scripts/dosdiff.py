@@ -106,6 +106,19 @@ def rule_for(rules, probe, case, field):
     return out
 
 
+def _deps(program):
+    """Companion files listed in a `<probe>.deps` sidecar beside the probe."""
+    side = os.path.splitext(program)[0] + ".deps"
+    if not os.path.exists(side):
+        return []
+    out = []
+    for line in open(side):
+        line = line.strip()
+        if line and not line.startswith("#"):
+            out.append(os.path.join(os.path.dirname(program), line))
+    return out
+
+
 # ------------------------------------------------------------------ parsing
 
 class Case(object):
@@ -229,6 +242,8 @@ class DosBoxX(Host):
         os.makedirs(work)
         name = os.path.basename(com).upper()
         shutil.copyfile(com, os.path.join(work, name))
+        for dep in _deps(com):          # e.g. EXEC's child program
+            shutil.copyfile(dep, os.path.join(work, os.path.basename(dep).upper()))
         subprocess.run(
             ["dosbox-x", "-nolog", "-fastlaunch",
              "-c", "mount c %s" % work, "-c", "c:",
@@ -286,6 +301,31 @@ class NtvdmexRig(Host):
     def run(self, com, timeout=240):
         name = os.path.basename(com)
         shutil.copyfile(com, os.path.join(self.share, "bm", "tests", name))
+        # rt.bat copies only the named test into C:\test, so a probe's companion
+        # files are staged there directly and left in place between runs.
+        deps = _deps(com)
+        for dep in deps:
+            shutil.copyfile(dep, os.path.join(self.share, "bm", "tests",
+                                              os.path.basename(dep)))
+        if deps:
+            # rt.bat copies only the named test into C:\test, so stage the
+            # companions with a preliminary run. The watcher interpolates
+            # cmd.txt into a command line, so `&` chains a copy after rt.bat.
+            # They persist in C:\test, but re-staging each time keeps a stale
+            # companion from silently being the thing under test.
+            chain = "dosstub.com"
+            for dep in deps:
+                chain += "&copy /y \"%s\\bm\\tests\\%s\" C:\\test\\" % (
+                    "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex",
+                    os.path.basename(dep))
+            with open(os.path.join(self.share, "cmd.txt"), "wb") as f:
+                f.write((chain + "\r\n").encode())
+            deadline2 = time.time() + 120
+            while time.time() < deadline2:
+                time.sleep(3)
+                if not os.path.exists(os.path.join(self.share, "cmd.txt")):
+                    break
+            time.sleep(8)
         log = os.path.join(self.share, "result_%s.log" % name)
         if os.path.exists(log):
             os.unlink(log)

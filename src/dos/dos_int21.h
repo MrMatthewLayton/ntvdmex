@@ -29,6 +29,17 @@ typedef struct {
     uint16_t child_rc;         /* AH=4Dh return code of the last child              */
     HANDLE   fcb_find;         /* AH=11h/12h FCB search in progress                  */
     uint8_t  switch_char;      /* AH=37h -- oracle says '/' on 6.22                  */
+    uint16_t psp_seg;          /* AH=50h/51h/62h -- the CURRENT process's PSP        */
+    /* AH=4Bh EXEC.  dos_int21 only RECORDS the request; the host performs the
+       load and the control transfer, because the loader, the file I/O and the
+       guest's register frame all live there.  See exec_begin() in main.c. */
+    int      exec_pending;
+    uint8_t  exec_mode;        /* AL: 00 load+go, 01 load only, 03 overlay          */
+    char     exec_path[128];
+    uint16_t exec_env;         /* 0 = inherit the parent's environment               */
+    uint16_t exec_tail_seg, exec_tail_off;
+    uint16_t exec_fcb1_seg, exec_fcb1_off;
+    uint16_t exec_fcb2_seg, exec_fcb2_off;
     char    *out; int out_cap; int out_len;  /* captured console output (02/09/40) */
     int      out_trunc;        /* set when output was dropped -- see OUTC()        */
     uint8_t  unimpl21[32];     /* GH #27: DOS-defined services we have not written  */

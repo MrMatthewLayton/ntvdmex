@@ -216,6 +216,24 @@ class Oracle:
         lines += self._epilogue()
         return self._go("\r\n".join(lines), (), screenshot, hostdir)
 
+    @staticmethod
+    def deps(program):
+        """Companion files a probe needs beside it, from a `<probe>.deps` sidecar.
+
+        EXEC has to have something to execute, so its probe ships a child
+        program. A sidecar keeps that general -- the harness does not need to
+        know which probe needs what.
+        """
+        side = os.path.splitext(program)[0] + ".deps"
+        if not os.path.exists(side):
+            return []
+        out = []
+        for line in open(side):
+            line = line.strip()
+            if line and not line.startswith("#"):
+                out.append(os.path.join(os.path.dirname(program), line))
+        return out
+
     def run(self, program, args="", screenshot=None, hostdir=None):
         """Copy a .COM/.EXE onto A: and run it, returning its stdout."""
         if not os.path.exists(program):
@@ -224,11 +242,20 @@ class Oracle:
         base, ext = os.path.splitext(name)
         if len(base) > 8 or ext not in (".COM", ".EXE", ".BAT"):
             raise OracleError("program must be an 8.3 .COM/.EXE/.BAT: %s" % name)
+        # Run the probe FROM the directory it lives in, so a companion file it
+        # names relatively (EXEC's child program) resolves. The rig's rt.bat
+        # already does `cd /d C:\test` and the DOSBox adapter runs from the mount
+        # root, so this puts all three hosts on the same footing.
         lines = ["@ECHO OFF",
                  "ECHO [BEGIN] > A:\\OUT.TXT",
-                 "A:\\%s %s >> A:\\OUT.TXT" % (name, args)]
+                 "A:",
+                 "%s %s >> A:\\OUT.TXT" % (name, args),
+                 "C:"]
         lines += self._epilogue()
-        return self._go("\r\n".join(lines), [(program, name)], screenshot, hostdir)
+        payload = [(program, name)]
+        for dep in self.deps(program):
+            payload.append((dep, os.path.basename(dep).upper()))
+        return self._go("\r\n".join(lines), payload, screenshot, hostdir)
 
     @staticmethod
     def _epilogue():
