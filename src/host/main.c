@@ -1916,6 +1916,22 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
         return 0; }
     case WM_DESTROY:
         InterlockedExchange(&g_running, 0);
+        /* PANIC-STOP THE SOUND, HERE, BEFORE ANYTHING ELSE UNWINDS.
+           Closing the window used to leave notes sounding until the host was
+           restarted (user, 2026-08-21). Nothing ever called audio_wave_stop -- it
+           existed and had no caller -- so waveOut kept playing, and the mixer kept
+           being asked for samples from an OPL whose voices were still keyed on. A
+           sustaining voice (EGT=1) holds its level forever by design, so "forever"
+           is exactly what you get: the chord under the cursor at the moment you
+           clicked the X, indefinitely.
+           ORDER MATTERS. Stop the device FIRST: that resets waveOut and ends the
+           fill callbacks, so no audio thread is inside vdd_audio_mix when the OPL
+           is torn down underneath it. Only then silence the chip. Doing it the
+           other way round races the callback for the state it is reading. */
+        audio_wave_stop(&g_wave);
+        EnterCriticalSection(&g_lock);
+        vdd_opl_reset(&g_opl);                    /* all voices off, registers clear */
+        LeaveCriticalSection(&g_lock);
         if (g_key_event) SetEvent(g_key_event);   /* unblock the V86 thread        */
         PostQuitMessage(0);
         return 0;
@@ -2046,33 +2062,36 @@ static void io_unclaimed_note(uint16_t port, int is_in)
    A real 8254 is a free-running counter, so model it as one: derive elapsed clocks from a
    high-resolution host clock at the moment the guest looks. QueryPerformanceCounter is
    KERNEL32, so it stays inside the no-CRT import rules. */
-/* HOW MUCH ELAPSED TIME MAY BE DELIVERED IN ONE GO. Past this the backlog is thrown
-   away instead of replayed, and that choice is the whole point.
-   ► THE SYMPTOM IT FIXES (user, 2026-08-21): the music "speeds up for a few
-     milliseconds and then returns to normal", dropping a few notes. That is a
-     CATCH-UP BURST. Skyroads divides its own timer down to about 16x the BIOS
-     18.2 Hz, so a tick every ~3.4 ms; the sequencer advances one step per tick. Let
-     the host stall 100 ms -- a present, a page fault, a scheduler hiccup -- and the
-     next sync handed the guest ~29 ticks AT ONCE. The sequencer runs 29 steps with
-     no time in between: the tempo lurches, and any note whose on AND off both land
-     inside the burst never sounds at all.
-   ► The old cap was one full SECOND (~290 ticks), which guards against a catastrophe
-     and does nothing about this. The comment on the caller even promised it clamped
-     "so we don't flood a catch-up burst of ticks" -- it did not.
-   ► IT ALSO COVERS A SECOND CAUSE FOR FREE. On XP, QueryPerformanceCounter can be
-     backed by the TSC, and with no CPU affinity a thread migrating between cores
-     with unsynchronised TSCs makes it JUMP FORWARD. A jump is indistinguishable
-     from a stall from in here, and both are wrong in the same direction, so
-     bounding the delivery fixes both without having to pin the process to one core
-     (which would put the exec, UI and audio threads in contention -- that belongs
-     with the hardware-grounding workstream, not smuggled in here).
-   ► THE TRADE-OFF, stated plainly: the guest's clock now runs slow by whatever a
-     stall exceeds this. For a game that is the right way round -- a dropped beat is
-     far less audible than a rushed one -- but it does mean 0040:006C can drift
-     behind wall-clock under sustained stalling. 10 ms is far longer than the gap
-     between two syncs in normal running, so it costs nothing when nothing is wrong. */
-#define PIT_CATCHUP_MAX (PIT_INPUT_HZ / 100u)      /* 10 ms of 8254 clocks */
-static uint32_t g_pit_catchup_clamped;             /* how often we hit it (STAGE2) */
+/* ★ A MEASUREMENT THRESHOLD, NOT A LIMIT. NOTHING IS CLAMPED TO IT. READ THIS
+   BEFORE "fixing" the catch-up burst, because I already tried and it was worse.
+   ► THE SYMPTOM (user, 2026-08-21): the music "speeds up for a few milliseconds and
+     then returns to normal", dropping a few notes. That is a real CATCH-UP BURST:
+     Skyroads runs its timer at about 16x the BIOS 18.2 Hz and advances its
+     sequencer one step per tick, so a host stall hands it dozens of ticks at once.
+     The tempo lurches, and a note whose on AND off both land inside the burst never
+     sounds at all.
+   ► WHAT I DID, AND WHY IT WAS A REGRESSION. I capped delivery at 10 ms and
+     DISCARDED the excess. The user's verdict was immediate: "speed is all over the
+     place now -- slow, normal, fast, normal, fast, slow". The reasoning behind the
+     cap contained an assumption I never measured: that syncs are always much closer
+     together than 10 ms because the UI tick is 5 ms. They are not. host_pit_sync
+     takes g_lock, and a heavy I/O-trap loop starves the UI thread (that is what the
+     comment above the exec-loop call at the bottom of this file is about) -- so gaps
+     past 10 ms are ORDINARY, and the cap threw away real time on every one of them.
+   ► THE LESSON, which is this project's own cardinal rule wearing a new hat: the old
+     burst was at least CORRECT ON AVERAGE. Discarding time is not a smaller version
+     of that error, it is a bigger and more constant one. Do not trade an occasional
+     artefact for a permanent one.
+   ► IF YOU PICK THIS UP: never discard. Keep the total exact and SMOOTH the
+     delivery -- carry the backlog and release it at a bounded rate over the next few
+     syncs, so the average tempo is preserved and only the lurch is removed. And
+     measure the real gap distribution FIRST: that is what g_pit_gap_max and the
+     counter below exist for. A second, independent cause is also in play -- with no
+     CPU affinity set anywhere, a TSC-backed QueryPerformanceCounter can JUMP FORWARD
+     when a thread migrates cores, which is indistinguishable from a stall in here. */
+#define PIT_CATCHUP_MAX (PIT_INPUT_HZ / 100u)      /* 10 ms: the reporting threshold */
+static uint32_t g_pit_catchup_clamped;             /* gaps past it (STAGE2)          */
+static uint32_t g_pit_gap_max;                     /* the worst one, in 8254 clocks  */
 
 static void host_pit_sync(void)
 {
@@ -2101,7 +2120,12 @@ static void host_pit_sync(void)
           /* Consume the WHOLE delta from the clock, then deliver only a bounded part of
              it: past the cap, time is DISCARDED rather than queued up and replayed. */
           s_last.QuadPart += (LONGLONG)((clocks * (ULONGLONG)s_freq.QuadPart) / PIT_INPUT_HZ);
-          if (clocks > PIT_CATCHUP_MAX) { g_pit_catchup_clamped++; clocks = PIT_CATCHUP_MAX; }
+          /* OBSERVE ONLY -- do not act on this. See PIT_CATCHUP_MAX. */
+          if (clocks > PIT_CATCHUP_MAX) {
+              g_pit_catchup_clamped++;
+              if (clocks > g_pit_gap_max) g_pit_gap_max = (uint32_t)clocks;
+          }
+          if (clocks > PIT_INPUT_HZ) clocks = PIT_INPUT_HZ;   /* cap a long stall at 1 s */
           vdd_pit_add_clocks(&g_pit, (uint32_t)clocks);
       } }
     LeaveCriticalSection(&g_lock);
@@ -5022,7 +5046,12 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
          bursts the PIT refused to replay. Together these say whether a held key was
          starved of exec-loop turns and whether the guest's clock ever lurched. */
       p = zput(p, " sc_hi=0x");      p = zhex(p, g_in.sc_hiwater);
-      p = zput(p, " pit_clamp=0x");  p = zhex(p, g_pit_catchup_clamped);
+      /* pit_gaps = syncs more than 10 ms apart; pit_gapmax = the worst, in 8254
+         clocks (1193182 = 1 s). NOTHING is clamped to these -- they exist so the
+         catch-up burst can be fixed from a measured gap distribution instead of an
+         assumed one, which is precisely the mistake that made it worse. */
+      p = zput(p, " pit_gaps=0x");   p = zhex(p, g_pit_catchup_clamped);
+      p = zput(p, " pit_gapmax=0x"); p = zhex(p, g_pit_gap_max);
       p = zput(p, " int10_11=0x");   p = zhex(p, g_vid.int10_11_calls);
       /* Each font request, its answer, and the BYTES actually sitting at the address we
          handed back -- read from guest memory, so a wiped or misaligned table is visible
