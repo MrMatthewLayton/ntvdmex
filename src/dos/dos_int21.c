@@ -6,6 +6,12 @@
 #include "log.h"          /* zput / zhex */
 #include "dos_ctab.h"     /* CP437 tables dumped from the 6.22 oracle */
 
+/* Set when the caller is servicing INT 21h for a client that is still in PROTECTED
+   mode (a DPMI client), so CF/ZF go to the live VTIB_EFLAGS instead of a pushed V86
+   FLAGS frame that does not exist there. See the pfl assignment below. */
+int g_dos_int21_pm = 0;
+void dos_int21_set_pm(int on) { g_dos_int21_pm = on ? 1 : 0; }
+
 /* Does MS-DOS 6.22 provide a MEANINGFUL service at this AH?  GH #27.
  *
  * This is the line between "we are missing something" and "DOS has nothing here
@@ -253,8 +259,17 @@ int dos_int21(dos_machine_t *m)
         if (m->conout) m->conout(m->conctx, _ch); } while (0)
 
     /* CF is returned via the FLAGS the INT pushed on the V86 stack (SS:SP+4): the
-       handler's IRET restores FLAGS from there, so the live EFlags get clobbered. */
-    pfl = (volatile WORD *)(((VDM_REG(tib, VTIB_SS) & 0xFFFF) << 4)
+       handler's IRET restores FLAGS from there, so the live EFlags get clobbered.
+       ► NOT IN PROTECTED MODE. A DPMI client's INT 21h is serviced by the host with the
+         guest still in PM, where SS holds a SELECTOR -- so `SS<<4` is not the stack at
+         all (0x1f -> linear 0x1f0) and this would both fail to return CF and scribble
+         on low memory. There is no pushed-FLAGS frame to honour there either: the PM
+         dispatcher resumes the client by advancing EIP past the BOP, so the live
+         VTIB_EFLAGS *is* what the client sees. Point at its low word, which carries
+         CF/ZF. Set by the PM caller via dos_int21_set_pm(). */
+    pfl = g_dos_int21_pm
+        ? (volatile WORD *)(tib + VTIB_EFLAGS)
+        : (volatile WORD *)(((VDM_REG(tib, VTIB_SS) & 0xFFFF) << 4)
                             + (((VDM_REG(tib, VTIB_ESP) & 0xFFFF) + 4) & 0xFFFF));
     ah = (R_AX >> 8) & 0xFF;
 

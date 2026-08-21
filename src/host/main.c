@@ -3128,6 +3128,26 @@ static int dpmi_sel_desc(uint16_t sel, uint32_t *ar, uint32_t *limit)
     return 1;
 }
 
+/* Resolve a PM BOP at CS:EIP back to the original interrupt vector.
+   ► WHY THIS IS NOT JUST g_int_vec[eip]. The switch-time scan rewrote every `CD nn` in
+     a 64K window at g_dpmi_code_base, and g_int_vec[] is keyed by OFFSET INTO THAT
+     WINDOW. A client may reach the very same physical bytes through a DIFFERENT
+     selector, and DOS/4GW does exactly that: it builds a second code selector (0x57,
+     base 0xd9b0) for its protected-mode interrupt handlers, which overlaps the patched
+     window. A BOP then fires at 0x57:0x558c -- linear 0xF33C, i.e. window offset
+     0x969C -- and an EIP-keyed lookup asks for g_int_vec[0x558c], finds nothing, and
+     the run dies as "unexpected PM stop". Resolve through the LINEAR address so any
+     alias of the patched memory maps back to the right vector. */
+static DWORD dpmi_bop_vec(DWORD csv, DWORD eip)
+{
+    DWORD csb = dpmi_sel_base((WORD)csv);
+    DWORD lin = csb + eip;
+    DWORD off;
+    if (lin < g_dpmi_code_base) return 0;
+    off = lin - g_dpmi_code_base;
+    return (off < 0xFFFF) ? g_int_vec[off] : 0;
+}
+
 /* Un-patch / re-patch the shared code segment around a V86 excursion (INT 31h 0301/
    0303). The switch-time scan rewrote every `CD 31`/`CD 21` in the code segment to a
    BOP so PM software-ints reflect to us -- but that segment is ALSO the V86 view, so a
@@ -3217,7 +3237,7 @@ static void dpmi_invoke_callback(dos_machine_t *m, volatile BYTE *tib, int slot)
         if (ev == VDM_EVENT_BOP && eip == DPMI_PMRET_OFF
             && (VDM_REG(tib, VTIB_CS) & 0xFFFF) == g_pmret_sel) { cbdone = 1; break; }
         if (ev == 3) continue;   /* dpmi_enter_pm reports "interrupt pending, not entered" -- retry */
-        vec = (ev == VDM_EVENT_BOP) ? g_int_vec[eip] : 0;   /* a patched INT the handler issued */
+        vec = (ev == VDM_EVENT_BOP) ? dpmi_bop_vec(VDM_REG(tib, VTIB_CS) & 0xFFFF, eip) : 0;   /* a patched INT the handler issued */
         if (vec == 0x31 || vec == 0x21) {
             if (dpmi_service_pm_int(m, tib, vec, ph) > 0) continue;   /* serviced -> resume handler */
             cbdone = 1; break;   /* client-exit or unexpected from inside a callback: end the loop */
@@ -3852,6 +3872,83 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                             } else VDM_REG(tib, VTIB_EFLAGS) |= 1u;
                             VDM_REG(tib, VTIB_EIP) += 2; return 1;
                         }
+                        /* ── REGISTER-ONLY INT 21h: DELEGATE TO THE V86 DOS IMPLEMENTATION ──
+                           dos_int21() reads and writes the same VDM_TIB register fields the PM
+                           client left behind, so a service that takes NO pointer argument needs
+                           no thunking at all -- there is nothing to translate.
+                           ► THE WHITELIST IS DELIBERATE, NOT LAZINESS. A service that takes a
+                             DS:DX / ES:BX pointer must NOT come through here: in protected mode
+                             those registers hold SELECTORS, and handing a selector to code that
+                             treats it as a real-mode segment reads or writes whatever happens to
+                             live at selector<<4. That is a silent wrong-memory bug of exactly the
+                             kind that cost this session a day (see the D/B fix). Pointer-taking
+                             services are hand-rolled above with dpmi_sel_base(), or stay loud.
+                           ► ES-as-SEGMENT services (49h free, 4Ah resize) are ALSO excluded: the
+                             block address they want is a real-mode paragraph, but in PM ES holds
+                             a selector, and which one the client means is not something to guess.
+                             Doom reaches 48h first; if it then calls 49h/4Ah the log will say so
+                             and we can settle the convention on evidence.
+                           Doom (DOS/4GW) needs 48h to allocate the memory it loads its LE image
+                           into -- it is the first DOS call it makes from protected mode. */
+                        if (ah == 0x48) {
+                            /* ── DOS ALLOCATE, FROM PROTECTED MODE, RETURNS A SELECTOR ──────
+                               A raw real-mode segment is useless to a PM client, and Doom
+                               proves the convention in its own code: immediately after this
+                               call it does
+                                   jnc +3 / mov [0x0c4a],ax / mov [0x0980],dl / MOV ES,AX
+                               Loading ES from AX only makes sense if AX is a SELECTOR -- with
+                               the raw segment 0x151c it is GDT index 0x2A3, which #GPs and
+                               silently kills the VDM. That `mov es,ax` IS the specification
+                               here, the same way DOS/4GW clearing D/B itself settled the
+                               initial-selector width.
+                               So: do the real DOS allocation (dos_int21 owns the MCB chain),
+                               then hand back a descriptor covering it. DX gets the selector
+                               too, matching INT 31h 0100's shape, which costs nothing and is
+                               what a client written against 0100 would expect. */
+                            DWORD want = VDM_REG(tib, VTIB_EBX) & 0xFFFF;
+                            m.tp = p; dos_int21_set_pm(1); dos_int21(&m); dos_int21_set_pm(0); p = m.tp;
+                            p = zput(p, "INT21h AH=48 (PM) alloc 0x"); p = zhex(p, want);
+                            if (VDM_REG(tib, VTIB_EFLAGS) & 1u) {
+                                p = zput(p, " -> FAILED, largest 0x");
+                                p = zhex(p, VDM_REG(tib, VTIB_EBX) & 0xFFFF);
+                            } else if (g_ldt_next >= 512) {
+                                VDM_REG(tib, VTIB_EFLAGS) |= 1u;
+                                VDM_SET16(tib, VTIB_EAX, 8);       /* insufficient memory */
+                                p = zput(p, " -> no free LDT slot");
+                            } else {
+                                DWORD seg = VDM_REG(tib, VTIB_EAX) & 0xFFFF;
+                                int idx = g_ldt_next++;
+                                WORD sel;
+                                g_ldt[idx].base   = seg << 4;
+                                g_ldt[idx].limit  = want ? (want * 16u - 1u) : 0xFFFF;
+                                g_ldt[idx].access = 0xF2;          /* present, DPL3, data R/W */
+                                g_ldt[idx].flags  = 0;             /* 16-bit, byte granular   */
+                                dpmi_install(idx);
+                                sel = (WORD)((idx << 3) | 7);
+                                VDM_SET16(tib, VTIB_EAX, sel);
+                                VDM_SET16(tib, VTIB_EDX, sel);
+                                p = zput(p, " -> seg 0x"); p = zhex(p, seg);
+                                p = zput(p, " as sel 0x"); p = zhex(p, sel);
+                                p = zput(p, " limit 0x"); p = zhex(p, g_ldt[idx].limit);
+                            }
+                            p = zput(p, "\r\n");
+                            log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                            VDM_REG(tib, VTIB_EIP) += 2;
+                            return 1;
+                        }
+                        if (ah == 0x19 || ah == 0x2A || ah == 0x2C || ah == 0x30 ||
+                            ah == 0x58) {
+                            m.tp = p; dos_int21_set_pm(1); dos_int21(&m); dos_int21_set_pm(0); p = m.tp;
+                            p = zput(p, "INT21h AH=0x"); p = zhex(p, ah);
+                            p = zput(p, " (PM, register-only -> V86 DOS) -> AX=0x");
+                            p = zhex(p, VDM_REG(tib, VTIB_EAX) & 0xFFFF);
+                            p = zput(p, " BX=0x"); p = zhex(p, VDM_REG(tib, VTIB_EBX) & 0xFFFF);
+                            p = zput(p, " CF="); p = zhex(p, VDM_REG(tib, VTIB_EFLAGS) & 1u);
+                            p = zput(p, "\r\n");
+                            log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                            VDM_REG(tib, VTIB_EIP) += 2;
+                            return 1;
+                        }
                         p = zput(p, "INT21h AH=0x"); p = zhex(p, ah); p = zput(p, " (PM thunk TODO)\r\n");
                         log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
                         VDM_REG(tib, VTIB_EIP) += 2;
@@ -3949,7 +4046,7 @@ static int dpmi_inject_pm_irq(dos_machine_t *mp, volatile BYTE *tib, unsigned iv
             HOST_UNLOCK();
             if (io_h) continue;
         }
-        vec = (ev == VDM_EVENT_BOP) ? g_int_vec[eip] : 0;
+        vec = (ev == VDM_EVENT_BOP) ? dpmi_bop_vec(VDM_REG(tib, VTIB_CS) & 0xFFFF, eip) : 0;
         rc = dpmi_service_pm_int(mp, tib, vec, steps);
         if (rc > 0) continue;
         break;                                     /* handler exited / unexpected stop */
@@ -5259,9 +5356,9 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                        nothing said which: arming the trampoline, entering PM, the guest's
                        first instruction, or the return path. So checkpoint each side for the
                        first few iterations -- cheap, self-limiting, and it turns "died
-                       somewhere in here" into a named step. Bounded to 64 so a healthy client
+                       somewhere in here" into a named step. Bounded to 4096 so a healthy client
                        (millions of iterations) pays nothing. */
-                    if (steps < 64) {
+                    if (steps < 4096) {
                         /* Dump the descriptor and the actual BYTES we are about to run. Doom
                            dies inside the FIRST dpmi_enter_pm and never returns, so the only
                            thing that can tell a bad mode switch from a specific offending
@@ -5285,7 +5382,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                         log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
                     }
                     dpmi_arm_fault_trampoline(tib, 0);   /* re-arm nest/flag/[0x638]/[TIB+8] */
-                    if (steps < 64) {
+                    if (steps < 4096) {
                         p = zput(p, "DPMI-CP["); p = zhex(p, (unsigned)steps);
                         p = zput(p, "] armed -> entering PM\r\n");
                         log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
@@ -5296,7 +5393,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                        not that the thread never ran. 300 ms, once, on a diagnostic path. */
                     if (steps == 0) Sleep(300);
                     dpmi_enter_pm(tib);
-                    if (steps < 64) {
+                    if (steps < 4096) {
                         p = zput(p, "DPMI-CP["); p = zhex(p, (unsigned)steps);
                         p = zput(p, "] returned ev=0x"); p = zhex(p, VDM_REG(tib, VTIB_EVENT));
                         p = zput(p, " cs:eip=0x"); p = zhex(p, VDM_REG(tib, VTIB_CS) & 0xFFFF);
@@ -5382,7 +5479,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                         p = zdump(p, (const void *)fi, 12); p = zput(p, "\r\n");
                         log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
                     }
-                    vec = (ev == VDM_EVENT_BOP) ? g_int_vec[eip] : 0;
+                    vec = (ev == VDM_EVENT_BOP) ? dpmi_bop_vec(csv, eip) : 0;
                     g_dpmi_last_vec = vec;
                     rc = dpmi_service_pm_int(&m, tib, vec, steps);
                     if (rc > 0) continue;   /* serviced -> keep running the PM client */

@@ -66,6 +66,8 @@ void dos_int21_init(dos_machine_t *m, uint16_t first_mcb);
 
 /* Service one INT 21h BOP (function in AH). Returns 1 to continue the guest, 0 to
    terminate (AH=4Ch). Appends a trace via m->tp; writes console output to m->out. */
+extern int g_dos_int21_pm;      /* 1 = client is in protected mode (DPMI) */
+void dos_int21_set_pm(int on);  /* CF/ZF -> live VTIB_EFLAGS, not a V86 FLAGS frame */
 int dos_int21(dos_machine_t *m);
 
 #endif /* DOS_INT21_H */
