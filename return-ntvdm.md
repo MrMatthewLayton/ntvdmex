@@ -1,33 +1,132 @@
 ═══════════════════════════════════════════════════════════════════════════════
-██ PLAN — MODE 12h RENDERS. NEXT TASK = MAKE THE OPL SOUND RIGHT (#21).      ██
+██ THE OPL TIMBRE FAULT IS FIXED (#21). WHAT IS LEFT IS THREE DRUM VOICES.   ██
 ═══════════════════════════════════════════════════════════════════════════════
 
 ╔══════════════════════════════════════════════════════════════════════════════╗
-║ ▶▶▶ NEXT TASK: MAKE THE OPL SOUND RIGHT (GH #21). READ THIS WHOLE BLOCK.     ║
+║ ▶▶▶ SESSION 15 (2026-08-21): "the instruments sound flat" IS CLOSED.         ║
+║     Commits `94dc86f`, `fc6995b`, `8159d28` on `m9/completeness`.            ║
 ╚══════════════════════════════════════════════════════════════════════════════╝
 
-**THE PROBLEM, in the user's words:** Skyroads plays "the right tune, but the
-instruments sound a bit flat" / "melodic synths sound inaccurate". The synth WORKS
-(right notes, right tempo, music recognisable); its TIMBRE is wrong.
+**THE COMPLAINT WAS:** Skyroads plays "the right tune, but the instruments sound a
+bit flat" / "melodic synths sound inaccurate". Same 90 s trace, same harness:
 
-**IT IS ALREADY DIAGNOSED AND MEASURED. Do not re-diagnose it by ear.**
-90 s of real Skyroads, 4243 register writes, replayed through our synth and the
-reference core from an identical stream:
+                          BEFORE      AFTER      (and at best alignment)
+    waveform correlation  0.4119  ->  0.9114              0.9255
+    envelope correlation  0.8680  ->  0.9732
+    level ratio           1.628   ->  1.004
+    RMS error              152%   ->   42%
 
-        envelope correlation  0.8680     dynamics LARGELY RIGHT
-        waveform correlation  0.4119     waveform SUBSTANTIALLY DIFFERENT
-        level ratio           1.628      we are ~4.2 dB TOO LOUD
-        RMS error             152.0% of reference
-        silent frames         ours 14.4%  vs  ref 0.1%
+**The melodic synthesis — the actual complaint — is at 0.96-0.97.** The per-segment
+scores show it plainly: 0.962 and 0.971 over the first 20 s, before any percussion
+enters. Everything below 0.92 after that is the three unimplemented drum voices.
 
-**Read those two correlations together — that IS the diagnosis:**
-    envelope HIGH + waveform LOW  ->  dynamics right, **HARMONICS WRONG**
-    envelope LOW                  ->  notes start/stop/decay differently
-So this is **timbre**, NOT the envelope-rate calibration that `vdd_opl_synth.c`'s own
-header nominates as "the first thing to refine". Suspects, all in the modulation path:
-**modulation-depth scaling** (prime — a shift one bit off changes sideband content AND
-energy, which is exactly the symptom pair), **feedback scaling**, log-sin/exp
-quantisation. The 4.2 dB level error is plausibly the SAME root cause.
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ WHAT WAS WRONG. FIVE DEFECTS + TWO MISSING FEATURES, ALL MEASURED             │
+└──────────────────────────────────────────────────────────────────────────────┘
+
+  1. **MODULATION DEPTH WAS HALVED — this was the timbre fault itself.** An
+     operator's output goes straight into the phase index, so full modulation
+     swings the carrier FOUR whole cycles; we did two. Measured ratio 0.501, flat
+     across the whole TL sweep. Halving the index changes neither pitch, tempo nor
+     loudness — phase modulation preserves power — only WHICH harmonics exist.
+     That is exactly "right tune, wrong instruments". Feedback was halved in the
+     same place: our FB=n matched the reference's FB=n-1 step for step.
+  2. **THE ENVELOPE NEVER STARTED FROM SILENCE.** `env` counts ATTENUATION, so a
+     zeroed struct is FULL VOLUME. Key-on does not reset it (measured — the
+     reference resumes an interrupted attack), so the first note of a run jumped to
+     full level whatever its attack rate said. Attack measured 0.00 ms at EVERY
+     rate against the reference's 1689 ms at AR=1.
+  3. **THE RATE LAW HAD NO SUB-STEPS.** Speed is `(4 + rate_lo) / 2^(15 - rate_hi)`
+     — linear 4:5:6:7 inside a group of four, doubling at the boundary. We shifted
+     by whole octaves and rounded the mantissa away: mid-range decays 1.5x too slow.
+  4. **KSL WAS OFF BY AN OCTAVE AND A FACTOR OF TWO.** The ROM is in 0.75 dB units,
+     not 0.375, and the octave origin is 8, not 7 — together under-attenuating high
+     notes by up to 18 dB, so bass and treble sat at the wrong relative levels
+     across the whole keyboard.
+  5. **AR=0 MEANT "INSTANT" INSTEAD OF "NEVER"** — turning silent voices into loud
+     ones.
+  6/7. **TREMOLO AND VIBRATO** implemented (0xBD was stored and never acted on).
+
+  **Already correct, and now under regression:** total level (1.003 at full scale,
+  0.75 dB/step to 0.01 dB), all four waveforms, all sixteen MULT settings, pitch.
+
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ ▶▶▶ THE NEXT TASK: SNARE, HI-HAT AND CYMBAL. ~548+138+70 HITS PER SONG.       │
+└──────────────────────────────────────────────────────────────────────────────┘
+
+  Rhythm mode is implemented except for these three voices. They need the chip's
+  **special phase generator**: a boolean function of bits taken from TWO phase
+  accumulators, plus a noise source. **I deliberately did not guess it** — writing
+  it from half-memory produces something plausible and wrong, and the harness would
+  score it as an improvement because ANY sound beats silence. They are COUNTED
+  instead and reported in STAGE2 as `NOT SYNTHESISED`.
+
+  **EVERYTHING NEEDED TO DERIVE THEM IS ALREADY MEASURED** (`oplprobe rhythm`):
+
+    voice       envelope   PHASE runs on   tonality   dominant component
+    bass drum   op12+op15  own             1.000      ordinary 2-op FM   ✔ DONE
+    tom-tom     op14       own             1.000      a plain sine       ✔ DONE
+    snare       op16       **op13's**      0.509      H2 (2x op13)
+    hi-hat      op13       op13 + op17     0.003      essentially noise
+    cymbal      op17       op13 + op17     0.749      near Nyquist
+
+    Percussion is summed at **DOUBLE amplitude** (tom-tom peaks 8170 where an
+    ordinary operator peaks 4085). Verified per voice: tom-tom **+1.000**, bass
+    drum **+0.999**.
+
+  ★ **THE SUGGESTED METHOD, and it is tractable.** The cymbal's output is BINARY —
+    its RMS equals its peak, at 0.707 of full scale — so its phase alternates
+    between two values and **the output sign is a one-bit sequence you can read
+    straight out of the oracle.** Extract that bit sequence, compute the candidate
+    phase bits yourself (you control op13/op17 rates via MULT and F-num), and
+    SEARCH over small boolean functions of those bits for the one that reproduces
+    it. That is a derivation, not a guess, and it is a for-loop.
+
+  ▶ **DO NOT MEASURE A NOISE VOICE WITH WAVEFORM CORRELATION.** Uncorrelated noise
+    of exactly the right character scores 0. Judge hi-hat and snare on envelope
+    correlation, RMS and the per-segment level instead.
+
+  ▶ **AFTER THAT:** the user has not yet heard any of this. **The acceptance test is
+    still the user's ears on the physical box.** Everything here is measured against
+    a reference core, which is necessary and not sufficient.
+
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ RIG STATUS AT THE END OF SESSION 15 — VERIFIED, AND LEFT CLEAN                │
+└──────────────────────────────────────────────────────────────────────────────┘
+
+  Rig `192.168.1.29`, share mounted, **new host deployed and VERIFIED on the
+  physical box: `selftest.com` -> `==== ALL TESTS PASSED ====`.** Off-VM battery
+  325/325. Host cross-builds clean and passes `check-imports.sh`.
+  Share left clean: `headless_ms.txt` back to 30000, no cmd.txt, no control.txt,
+  no flags. Watcher up, controld beating.
+
+  ▶ **NOT DONE: a Skyroads run on the rig.** Two attempts at a 60 s cap produced no
+    `result_skyroads.log` and left the watcher blocked in `rt.bat`'s `start /wait`,
+    which needed a reboot to clear. The previous session used a **90 s** cap for
+    this game; try that first. The rhythm counters are therefore verified as
+    PRESENT (they print, correctly zero, on every run) but have not yet been seen
+    counting real hits on hardware — the 548/142/138/70 figures come from replaying
+    the captured trace offline, which is solid but is not the same evidence.
+
+  ★★★ **THE TRAP THAT COST TWO REBOOTS, AND IT WILL CATCH ANYONE: THE BUILD
+      PRODUCES TWO EXEs AND ONLY ONE OF THEM IS THE HOST.**
+        build/ntvdmhost.exe   ~409 KB   ** THIS is the DOS host — deploy THIS **
+        build/ntvdmex.exe      ~20 KB   the launcher; it is not rebuilt and is stale
+    I copied `ntvdmex.exe` over `bm/ntvdmhost.exe`. `rt.bat` then installed it as
+    the **IFEO Debugger for ntvdm.exe** — and that binary's job is to LAUNCH
+    ntvdm.exe, so every launch redirected straight back into it. The box wedged.
+    ▶ **The symptom is deeply misleading:** runs still "complete" in ~20 s and
+      `rt.bat` faithfully copies `C:\ntvdmex\ntvdmhost.log` to `result_<target>.log`
+      — so you get a plausible log for a run that never happened. **It was the OLD
+      log every time.** `controld kill` did not clear it; only a reboot did.
+    ▶ **HOW TO TELL, in one command:** checksum the result against a known previous
+      log. `md5 result_p_ver.com.log result_skyroads.log` returning the SAME hash
+      for two different targets is the tell. Grepping the log for something only
+      your new build prints is the other.
+    ▶ `result_selftest.log` on the share is a **stale copy of a Skyroads run** left
+      by this. The real one is `result_selftest.com.log` — `rt.bat` resolves targets
+      out of `bm\tests\`, so bare `selftest` matches nothing and silently falls
+      through to copying the previous log.
 
 ┌──────────────────────────────────────────────────────────────────────────────┐
 │ THE METHOD — NUKED AS A BLACK-BOX ORACLE. THIS IS NOT OPTIONAL CEREMONY.      │
@@ -52,6 +151,57 @@ quantisation. The 4.2 dB level error is plausibly the SAME root cause.
 ▶ The usual objection is "clean-room is the long way round". Normally yes — two teams,
   months. **Here it is a for-loop**: the harness scores automatically, so a sweep is
   minutes. The saving from reading the source is small.
+
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ ★ THE SINGLE-NOTE RIG — `oplprobe`. THIS IS WHAT MADE THE SESSION SHORT.      │
+└──────────────────────────────────────────────────────────────────────────────┘
+
+  `./tools/oplref/build.sh` now builds TWO binaries. **`oplcmp` proves the timbre is
+  wrong; it cannot say WHICH parameter**, because every note of a game trace moves
+  every variable at once. `oplprobe` does the opposite: holds one channel still,
+  moves ONE register, and reports a DERIVED PHYSICAL QUANTITY for both cores.
+
+      ./build/oplref/oplprobe <experiment>     # or `all`
+        validate  silence/determinism/pure-tone/pitch -- RUN THIS FIRST, ALWAYS
+        tl        total level: full scale and dB per step
+        mod       MODULATION INDEX in radians -- the prime suspect, fitted from
+                  the sideband amplitudes via a Bessel fit
+        fb        feedback          wave  the four waveforms     mult  all sixteen
+        ksl / kslrom   the whole block x F-num surface, and the ROM read back
+        env       attack/decay/release times     egrate  the RATE LAW, derived
+        attack    the attack CURVE (geometric), fitted against the decay slope
+        lfo       tremolo/vibrato rate, depth AND SHAPE
+        rhythm    maps percussion from the outside: which operator, whose phase
+
+  ▶ **EVERY CONSTANT IN `vdd_opl_synth.c` NAMES THE EXPERIMENT THAT PRODUCED IT.**
+    Re-derive rather than argue; a sweep is seconds.
+
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ ★★ FOUR TRAPS IN THE INSTRUMENT ITSELF. ALL FOUR PRODUCED CONFIDENT NONSENSE. │
+└──────────────────────────────────────────────────────────────────────────────┘
+
+  Every one of these was MY measurement being wrong, not the synth — and each
+  looked right at the time. This is the same lesson the rest of this file keeps
+  teaching, pointed at a new domain.
+
+  1. **A "PURE TONE" THAT WAS NOT PURE.** A modulator parked at TL=63 is only
+     -47 dB, not silent, and it still bends the carrier: 5% THD. Fine for a level
+     reading, fatal for a distortion one. **Park the unwanted operator on ANOTHER
+     HARMONIC (MULT=12)** so its residual cannot reach the bins being measured.
+  2. **THE QUANTISATION FLOOR.** Fitting a decay slope over points near zero
+     amplitude — where the 16-bit output has stopped moving — reported a rate 8%
+     too slow AND a beautifully constant anchor column that made it look correct.
+     Only when I raised the floor did the divisor snap to exactly 2^15.
+  3. **A CONSTANT LAG READS EXACTLY LIKE A WRONG WAVEFORM.** The bass drum scored
+     **-0.135 at lag 0 and +0.999 at lag 4** — identical waveform, four samples
+     apart. The reference is cycle-accurate and reaches its output a few samples
+     after the write that caused it. **Both harnesses now report best-lag
+     correlation**; without it I would have hunted a defect that does not exist.
+  4. **AN UNRESOLVABLE READING IS NOT EVIDENCE.** The vibrato sweep printed
+     "121 cents" at F-num 0x100 — a pitch whose test note has too few zero
+     crossings per window to resolve a 7-cent shift. That reading is now DELETED
+     from the sweep rather than reported, because a number with no precision behind
+     it is worse than no number.
 
 ┌──────────────────────────────────────────────────────────────────────────────┐
 │ THE TOOLING — BUILT AND WORKING. USE IT, DO NOT REBUILD IT.                   │
