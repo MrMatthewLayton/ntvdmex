@@ -80,6 +80,18 @@ void vdd_input_push_scancode(input_state *st, uint8_t sc)
     if (n == st->sc_tail) { st->sc_dropped++; st->sc_tail = next(st->sc_tail); }  /* full -> drop oldest */
     st->sc_buf[st->sc_head] = sc;
     st->sc_head = n;
+    /* HOW FULL DID IT EVER GET. sc_dropped only fires once the ring has ALREADY
+       overflowed, which makes it a pass/fail light with nothing before the failure.
+       A held arrow auto-repeats at the OS rate and costs TWO bytes a repeat (E0 +
+       code), while IRQ1 is delivered only when the exec loop gets a turn -- so the
+       interesting question is how close a guest that stops trapping for a while
+       comes to filling 32 bytes. This answers it without needing an overflow.
+       ► It matters because of what overflow DOES here: dropping the oldest byte can
+         strand an E0 prefix, and a bare 0x48 is keypad-8, not up-arrow. A held arrow
+         would quietly stop being an arrow. */
+    { int depth = st->sc_head - st->sc_tail;
+      if (depth < 0) depth += (int)VDD_KBD_SIZE;
+      if ((uint32_t)depth > st->sc_hiwater) st->sc_hiwater = (uint32_t)depth; }
     if (was_empty && st->bus) vdd_raise_irq(st->bus, 1);     /* empty -> full        */
 }
 

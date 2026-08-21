@@ -54,6 +54,7 @@ typedef struct input_state {
        from pushes-minus-reads. */
     uint32_t sc_pushed;
     uint32_t sc_dropped;
+    uint32_t sc_hiwater;       /* deepest the FIFO ever got (of VDD_KBD_SIZE)     */
     uint8_t  sc_last;          /* last byte handed out on IN 0x60 (re-read)       */
 } input_state;
 
