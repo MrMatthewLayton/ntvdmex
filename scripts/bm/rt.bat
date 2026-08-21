@@ -1,4 +1,14 @@
 @echo off
+set BM=C:\Documents and Settings\All Users\Documents\ntvdmex\bm
+rem -- STOCK NTVDM DISPATCH (GH #26). "stock <target>" in cmd.txt runs the target
+rem    under stock ntvdm instead of NTVDMEX, so the oracle can be driven remotely
+rem    like every other test rather than typed at the box by hand.
+if /i "%1"=="stock" goto stockrun
+goto normal
+:stockrun
+call "%BM%\rt_stock.bat" %2
+goto :eof
+:normal
 set T=%1
 set BM=C:\Documents and Settings\All Users\Documents\ntvdmex\bm
 set RES=C:\Documents and Settings\All Users\Documents\ntvdmex

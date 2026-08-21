@@ -1,4 +1,203 @@
 ═══════════════════════════════════════════════════════════════════════════════
+██ ▶▶▶ NEXT SESSION: RESTART THE RIG, THEN SELF-DRIVE. DOOM REACHED 32-BIT PM. ██
+═══════════════════════════════════════════════════════════════════════════════
+
+╔══════════════════════════════════════════════════════════════════════════════╗
+║ THE USER'S INSTRUCTION (2026-08-21, end of session 15):                      ║
+║   "restart the rig in the next session then self-drive as much as you can"   ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ 0. START HERE — GET THE RIG DRIVING ITSELF (5 min, do this FIRST)            │
+└──────────────────────────────────────────────────────────────────────────────┘
+
+  ```
+  nc -z -w 3 192.168.1.29 445                       # .29; a reboot does NOT move it
+  mount_smbfs -N //guest@192.168.1.29/ntvdmex /tmp/xpshare     # needs dangerouslyDisableSandbox
+  printf 'reboot\r\n' > /tmp/xpshare/control.txt    # controld: reboot|poweroff|kill|quit
+  # ~75 s, then umount + remount (the mount goes stale across a reboot)
+  ```
+
+  ★ **THE WATCHER MAY NOT COME BACK, AND YOU CANNOT FIX IT REMOTELY.** The Startup
+    copy is made by `rt.bat` from `bm\runwatch.bat`, and the copy that landed there
+    late in session 15 has **LF-only line endings** (see the CRLF trap below). The
+    `bm\` originals are now correct, but only a run of `rt.bat` refreshes Startup —
+    and that needs a working watcher. Circular.
+    ▶ **TEST:** `rm watcher.txt`, wait 10 s, see if it returns. If it does not, the
+      watcher is dead and **the user must run `bm\runwatch.bat` once** (it
+      self-installs from `%~f0`, so that also repairs the Startup copy). Ask early;
+      everything remote is blocked until then.
+
+  **DRIVING A TEST** — write `cmd.txt` **atomically**, never with a plain `>`:
+  ```
+  printf 'skyroads\r\n' > /tmp/xpshare/cmd.tmp
+  mv /tmp/xpshare/cmd.tmp /tmp/xpshare/cmd.txt      # rename: never visible empty
+  printf 'stock tymat.com\r\n' > ...                # `stock <target>` = STOCK NTVDM
+  ```
+  ▶ **THE ONLY RELIABLE "IT STARTED" SIGNAL IS `cmd.txt` BEING CONSUMED.** A dead
+    watcher and a busy watcher both leave `watcher.txt` absent — I reported runs as
+    under way twice when the watcher had died. Weak assertion, exactly as this file
+    keeps warning.
+  ▶ Targets resolve from `bm\tests\`; a DIRECTORY on the share root is a "game"
+    (runs `<name>.EXE`). `headless_ms.txt` caps a run (max 600000). Guest console
+    output IS captured into the host log, so probes need no screen-reading.
+
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ 1. ★★★ DOOM: DOS/4GW REACHED 32-BIT PROTECTED MODE. FURTHEST EVER.           │
+└──────────────────────────────────────────────────────────────────────────────┘
+
+  Run it: `doomrun.bat` on the share root (already installed at `C:\DOOMS`, so
+  **skip `doominstall.bat`** — it is only needed for a fresh extraction and it is
+  the one thing that touches the IFEO key). Takes optional args:
+  `doomrun.bat [EXE] [DIR]`, defaults `DOOM.EXE` / `C:\DOOMS`; on a miss it prints a
+  `dir` and writes `doom_dir.txt` rather than asserting why. Log comes back as
+  `result_doom.log`.
+
+  **WHAT HAPPENED (log kept verbatim in this repo's history, commit of this doc):**
+  ```
+  INT21 AH=3d [C:\DOOMS\DOOM.EXE] -> AX=5        opened its own LE image
+  INT21 AH=3d [C:\DOOMS\DOOM.ETX] -> AX=2 (err)  expected miss
+  STAGE2: BOP2F ax=0x1687
+  STAGE2: DPMI 1687 -> AX=0                      WE ANSWERED; a host is present
+  STAGE2: BOP2F ax=0x1600                        Windows-enhanced check
+  STAGE3: DPMI_BOP far-call LANDED @ 0x50:0x50 -- switching to PM (32-bit client)
+     ... -> PM ok (CS=0x0f:0x6e6a) -> DPMI PM loop
+  DPMI: patched 0x76 INT sites -> BOP (full 64K scan, last off 0xd29c)
+  DPMI: PM-fault reflect stkSel=0x2f codeSel=0x27 bop@code:0x80 tbl@0x0f04dfc0
+  GH#18: [0x714]=0xc0003230 bit3=0 bit4=1 bit14=0 tib8=0
+  <log ends>
+  ```
+  DOS/4GW **detected our DPMI host, far-called the mode-switch entry, entered
+  32-bit paged protected mode on real silicon, and we patched 118 INT sites and
+  armed the fault reflect.** That whole path works. It was never even ASKABLE
+  before: QEMU+HVF aborts on DOS/4GW paged PM *under stock ntvdm too*, so bare
+  metal is the only place the question exists.
+
+  **WHERE IT STOPS, and the reasoning is tight — do not re-derive it:**
+    • **The host process dies within ~250 ms of entering PM.** The kernel-PM
+      watchdog samples every 250 ms and `log_append`s its first 12 samples; **not
+      one appears**. So it died before the first sample.
+    • **NOT a wedge.** The watchdog only kills after ~3 s of no progress and logs
+      `watchdog terminating (wedged)` first. Absent.
+    • **NOT the headless cap** (600000 ms) — that would leave many samples.
+    • **Silent.** No crash dump, no exception line. User confirms **nothing on
+      screen, not even Doom's startup banner** — and that banner is plain DOS text,
+      so Doom's own `main()` never produced a single INT 21h call.
+
+  ▶▶ **NEXT STEP, and it is cheap. THE GAP IS UNBRACKETED:** the last thing logged
+     is `dpmi_install_fault_trampoline()`, the next thing is the first
+     `dpmi_enter_pm()`. Put logged checkpoints on both sides and on the first few
+     iterations, so the next run says whether we die INSTALLING the trampoline,
+     ENTERING pm, or on the guest's FIRST INSTRUCTION.
+  ▶▶ **AND FIX THE INSTRUMENT FIRST:** much of the DPMI path reports via
+     `serial_out()` — the **QEMU dev VM's serial port, which does not exist on bare
+     metal**. We are blind exactly where we need to see. Route those to
+     `log_append(LOG_PATH, ...)` too. Same lesson as everything else in session 15:
+     the instrument was the problem more often than the code.
+  ▶ **A WRONG TURN I ALMOST TOOK:** I nearly called this the known "32-bit async
+    IRQ hangs the rig" gap, because a pending IRQ0 shows in the heartbeat. **That
+    gap was CLOSED** — see the 2026-08-19 note further down: pm32irq was reframed
+    (not a code bug) and async IRQ0 into a 32-bit PM timer hook is VISUALLY
+    CONFIRMED on bare metal. My memory of it was stale; this file was right.
+  ▶ Scope honestly: this is the **DPMI epic (#18/#19)**, not a loose end. "Enters
+    PM" is a long way from "loads a 512 KB LE image and renders".
+
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ 2. NEW HARNESS — STOCK NTVDM IS NOW A FIRST-CLASS ORACLE (closes #26's gap)   │
+└──────────────────────────────────────────────────────────────────────────────┘
+
+  #26 left stock ntvdm unwired ("needs an rt.bat variant that drops the IFEO
+  Debugger key, and a decision on the display-wedge risk"). Both done:
+    • `bm\rt_stock.bat` — drops the IFEO Debugger value, runs the target, **restores
+      it on every exit path** and writes `stock_state.txt` with `reg query` output
+      proving it. Leaving that key absent is the failure worth fearing: every later
+      test would silently measure stock ntvdm while the logs looked plausible.
+    • `rt.bat` now dispatches `stock <target>` → `rt_stock.bat`, so the oracle is
+      drivable **remotely**, like any other test.
+    • Output is redirected to a file (`result_stock_<target>.txt`) — there is no
+      host log under stock, and the window closes the instant the program exits,
+      which is exactly how the first attempt lost its results.
+  ▶ Display-wedge risk applies to GRAPHICS targets. Text-mode probes carry none.
+  ▶ **This is the answer to "what does real DOS actually do?" for everything from
+    here on.** It settled the keyboard question in one run after I had produced
+    three wrong hypotheses from reasoning.
+
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ 3. KEYBOARD — PINNED BY THE USER, IMPROVED 1-in-10 → 1-in-5, NOT FIXED        │
+└──────────────────────────────────────────────────────────────────────────────┘
+
+  Symptom: crash in Skyroads holding UP; the restarted level should accelerate, as
+  it does on real DOS. **Ruled out by measurement:** the scancode FIFO (3205 pushes,
+  ZERO drops, peak depth 6 of 32) and lock contention (max wait 0.57 ms, hold
+  0.80 ms). Root cause was architectural — we modelled an AT keyboard but
+  outsourced its REPEAT to Windows' message queue, and the UI thread stalls up to
+  857 ms. We now generate typematic ourselves, pumped from both threads.
+  **STILL OPEN:** rate fidelity. Measured with `tymat.com` under both hosts:
+        stock 385 ms / 22.1 per second      ours now 494 ms / 35.3 per second
+  We **overshoot** — the documented SPI mapping ("31 ≈ 30/s") does not match what a
+  DOS program observes under stock. Fix the mapping against the oracle, then
+  re-test the actual restart behaviour, which is the only acceptance test that
+  counts. Also still unanswered: **does Skyroads set its own rate via 8042 `0xF3`?**
+  Those writes are now logged (`STAGE2: kbd 8042:`) but only a SKYROADS run answers
+  it — `tymat.com` reports `writes=0` and that says nothing about the game.
+
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ 4. ★★ TRAPS FROM SESSION 15 — EVERY ONE COST REAL TIME, SEVERAL WERE MINE     │
+└──────────────────────────────────────────────────────────────────────────────┘
+
+  1. **TWO EXEs, AND ONLY ONE IS THE HOST.** `build/ntvdmhost.exe` (~409 KB) is the
+     DOS host — deploy THAT. `build/ntvdmex.exe` (~20 KB) is the launcher and is
+     stale. Deploying the launcher makes `rt.bat` install it as the IFEO Debugger,
+     and its job is to launch ntvdm.exe — which redirects straight back into it.
+     **Runs still "succeed" in ~20 s because rt.bat copies a STALE log.** Tell: the
+     same md5 for two different targets. Only a reboot cleared it. **CHECKSUM THE
+     DEPLOYED BINARY AGAINST THE LOCAL ONE EVERY TIME.**
+  2. **NEVER EDIT WINDOWS BATCH FILES WITH PYTHON TEXT MODE ON macOS.** It strips
+     the CRs on read and writes LF. `cmd.exe` breaks on `goto`/labels first, which
+     is the entire watcher loop. Read and write **binary**, normalise to CRLF. I did
+     this to all three harness scripts and killed the watcher with it.
+  3. **`$TMPDIR` DIFFERS INSIDE AND OUTSIDE THE SANDBOX.** A file written by a
+     sandboxed command is not where an unsandboxed one looks. Use absolute paths, or
+     patch the file on the share in place.
+  4. **THE STALE-`TN` RACE (user caught this one).** `for /f ... do set TN=%%c` only
+     assigns if the read yields a line; an SMB-empty `cmd.txt` left `TN` at its
+     PREVIOUS value, so the watcher silently re-ran the last target. Queued
+     `skyroads`, got `p_ver`, and the log looked entirely plausible. Fixed with
+     `set TN=` + an empty check; **also write `cmd.txt` atomically via rename.**
+  5. **THE WATCHER DIES WHEN THE HOST EXITS.** `runwatch.bat` ran the test with
+     `call`, i.e. inside its own `cmd.exe`, and the host is linked
+     `--subsystem,console` so it shares in console teardown. Now `cmd /c`, giving
+     the test its own process. (Reported by the user; the earlier deaths predate my
+     CRLF damage, so these are two separate causes.)
+  6. **A CONSTANT LAG READS EXACTLY LIKE A WRONG WAVEFORM.** Both audio harnesses
+     now report best-lag correlation. The bass drum scored -0.135 at lag 0 and
+     **+0.999 at lag 4**.
+
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ 5. ★★★ THE METHOD LESSON OF SESSION 15 — READ THIS BEFORE FIXING ANYTHING     │
+└──────────────────────────────────────────────────────────────────────────────┘
+
+  **I shipped a regression by reasoning where I should have measured.** I capped the
+  PIT catch-up at 10 ms on the assumption that syncs are always closer together than
+  that. They are not — `host_pit_sync` takes `g_lock` and a heavy I/O-trap loop
+  starves the UI thread, which the code says in a comment I had already read. The
+  user's verdict was immediate: *"speed is all over the place now... a definite
+  regression."* The original burst was at least CORRECT ON AVERAGE; discarding time
+  is a bigger and permanent error. **Reverted.** One counter would have refuted the
+  assumption before it shipped.
+
+  Then **three successive wrong hypotheses about the keyboard** — FIFO overflow,
+  lock contention, and a remembered typematic rate — before the user said *"I'd be
+  better testing the exact behavior in stock NTVDM."* That was better methodology
+  than anything I had produced, and it settled the question in one run.
+
+  ▶ **THE RULE, restated for a domain this file had not yet aimed it at:** the
+    cardinal rule is not only about DOS API expectations. It applies to **hardware
+    timing constants, repeat rates, and anything else you "know"**. Take it from an
+    executable oracle. We now have three: MS-DOS 6.22 under QEMU, Nuked OPL3, and —
+    new — **stock ntvdm on the rig itself**.
+
+═══════════════════════════════════════════════════════════════════════════════
 ██ THE OPL TIMBRE FAULT IS FIXED (#21). WHAT IS LEFT IS THREE DRUM VOICES.   ██
 ═══════════════════════════════════════════════════════════════════════════════
 
