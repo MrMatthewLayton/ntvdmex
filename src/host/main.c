@@ -213,6 +213,78 @@ static volatile LONG g_irq1_pending = 0;    /* count of un-delivered keyboard IR
 static int g_pm_irq0_latch = 0;             /* #2b: a virtual IRQ0 awaiting injection into the PM hook */
 static int g_in_pm_irq     = 0;             /* #2b: re-entrancy guard while inside an injected PM ISR   */
 static CRITICAL_SECTION g_lock;             /* serialises all bus dispatch       */
+
+/* ── LOCK CONTENTION INSTRUMENT ──────────────────────────────────────────────
+   MEASURED (gameplay run, 2026-08-21): the guest's clock went 448 ms without
+   advancing and then received all 448 ms at once. At Skyroads' ~291 Hz tick that
+   is ~130 sequencer steps in a single burst -- the "speeds up for a few
+   milliseconds and then returns to normal" the user reports. It is very likely
+   also the held-key bug, because a UI thread that is not pumping messages
+   delivers no auto-repeat, and IRQ1 is only delivered when the exec loop gets a
+   turn: 2274 scancodes over several minutes is ~4.7 events/s, far too few for
+   held-key play.
+
+   ► THE FORK THIS EXISTS TO SETTLE. Is the UI thread BLOCKED ON THIS LOCK, or is
+     it simply not being scheduled? The two need opposite fixes -- split the lock
+     versus change thread priority/pumping -- and choosing between them by
+     reasoning is exactly what went wrong earlier today, when a threshold picked
+     from an unmeasured assumption made the timing worse rather than better.
+       lk_wait  longest time a thread sat waiting in EnterCriticalSection
+       lk_hold  longest OUTERMOST hold, with the source line that took it
+       ui_gap   longest gap between WM_TIMER entries, taken BEFORE any lock
+     Read them together: a large ui_gap with a small lk_wait means the thread is
+     not running at all; a large lk_wait means contention, and lk_hold names the
+     culprit by line number.
+
+   ► Only the OUTERMOST acquisition is timed. g_lock is recursive for the exec
+     thread (host_io_do already holds it when host_pit_sync re-enters), so timing
+     every acquisition would report near-zero holds for the nested ones and bury
+     the one that actually matters. */
+static LARGE_INTEGER g_qpf;
+static DWORD    g_lk_owner, g_lk_depth;
+static LONGLONG g_lk_since;
+static int      g_lk_site, g_lk_hold_site, g_lk_wait_site;
+static uint32_t g_lk_hold_us, g_lk_wait_us, g_ui_gap_us;
+
+static uint32_t qpc_us(LONGLONG d)
+{
+    if (!g_qpf.QuadPart || d <= 0) return 0;
+    return (uint32_t)((d * 1000000) / g_qpf.QuadPart);
+}
+
+static void host_lock_enter(int site)
+{
+    LARGE_INTEGER a, b;
+    DWORD me = GetCurrentThreadId();
+    int nested = (g_lk_owner == me && g_lk_depth != 0);
+    QueryPerformanceCounter(&a);
+    EnterCriticalSection(&g_lock);
+    if (!nested) {
+        uint32_t w;
+        QueryPerformanceCounter(&b);
+        w = qpc_us(b.QuadPart - a.QuadPart);
+        if (w > g_lk_wait_us) { g_lk_wait_us = w; g_lk_wait_site = site; }
+        g_lk_owner = me; g_lk_since = b.QuadPart; g_lk_site = site; g_lk_depth = 0;
+    }
+    g_lk_depth++;
+}
+
+static void host_lock_leave(void)
+{
+    if (g_lk_depth && --g_lk_depth == 0) {
+        LARGE_INTEGER n;
+        uint32_t h;
+        QueryPerformanceCounter(&n);
+        h = qpc_us(n.QuadPart - g_lk_since);
+        if (h > g_lk_hold_us) { g_lk_hold_us = h; g_lk_hold_site = g_lk_site; }
+        g_lk_owner = 0;                 /* clear BEFORE releasing: the next owner
+                                           must not see us as the holder */
+    }
+    LeaveCriticalSection(&g_lock);
+}
+/* __LINE__ gives every site its own identity without touching 28 call sites by hand. */
+#define HOST_LOCK()   host_lock_enter(__LINE__)
+#define HOST_UNLOCK() host_lock_leave()
 static HWND         g_hwnd;
 static HANDLE       g_key_event;            /* signalled when a key is pushed     */
 static volatile LONG g_running = 1;         /* 0 once the window is closed         */
@@ -824,9 +896,9 @@ static void inject_int(volatile BYTE *tib, unsigned vec)
 static void host_conout(void *ctx, uint8_t ch)
 {
     (void)ctx;
-    EnterCriticalSection(&g_lock);
+    HOST_LOCK();
     vdd_video_putc(&g_vid, ch);
-    LeaveCriticalSection(&g_lock);
+    HOST_UNLOCK();
 }
 
 /* DOS console input (INT 21h AH=01/07/08/0A) -> the keyboard VDD ring, blocking
@@ -847,9 +919,9 @@ static int host_conin(void *ctx)
     (void)ctx;
     if (g_conin_pending >= 0) { int c = g_conin_pending; g_conin_pending = -1; return c; }
     for (;;) {
-        EnterCriticalSection(&g_lock);
+        HOST_LOCK();
         got = vdd_input_pop(&g_in, &k);
-        LeaveCriticalSection(&g_lock);
+        HOST_UNLOCK();
         if (got) {
             if ((k & 0xFF) == 0) { g_conin_pending = (k >> 8) & 0xFF; return 0x00; }
             return k & 0xFF;
@@ -939,9 +1011,9 @@ static void opl_pump_time(void)
     us = (DWORD)((d * 1000000) / s_freq.QuadPart);
     if (us < 20) return;                                /* carry sub-quantum time   */
     s_last = now;
-    EnterCriticalSection(&g_lock);
+    HOST_LOCK();
     vdd_opl_add_us(&g_opl, us);
-    LeaveCriticalSection(&g_lock);
+    HOST_UNLOCK();
 }
 
 /* The audio thread's fill callback. Mixing touches the DMA controller, guest
@@ -949,9 +1021,9 @@ static void opl_pump_time(void)
 static void host_audio_fill(void *ctx, int16_t *out, uint32_t frames)
 {
     (void)ctx;
-    EnterCriticalSection(&g_lock);
+    HOST_LOCK();
     vdd_audio_mix(&g_audio, out, frames);
-    LeaveCriticalSection(&g_lock);
+    HOST_UNLOCK();
 }
 
 /* MPU-401 output -> the host's MIDI synth (XP ships a GS Wavetable device). */
@@ -988,16 +1060,16 @@ static void host_screenshot(void)
     BYTE *dib, *bits;
     const uint8_t *src;
 
-    EnterCriticalSection(&g_lock);
+    HOST_LOCK();
     w = g_vid.frame.w; h = g_vid.frame.h;
     src = g_vid.frame.pixels;
-    if (!src || !w || !h || g_vid.frame.bpp != 8) { LeaveCriticalSection(&g_lock); return; }
+    if (!src || !w || !h || g_vid.frame.bpp != 8) { HOST_UNLOCK(); return; }
     stride = (w + 3) & ~3u;                  /* DIB rows are 4-byte aligned          */
     pal_n  = 256;
     img_sz = stride * h;
     dib_sz = sizeof(BITMAPINFOHEADER) + pal_n * 4 + img_sz;
     hmem = GlobalAlloc(GMEM_MOVEABLE, dib_sz);
-    if (!hmem) { LeaveCriticalSection(&g_lock); return; }
+    if (!hmem) { HOST_UNLOCK(); return; }
     dib = (BYTE *)GlobalLock(hmem);
     { unsigned i; for (i = 0; i < dib_sz; ++i) dib[i] = 0; }
     bih = (BITMAPINFOHEADER *)dib;
@@ -1020,7 +1092,7 @@ static void host_screenshot(void)
           BYTE *dr = bits + (size_t)y * stride;
           for (x = 0; x < w; ++x) dr[x] = sr[x];
       } }
-    LeaveCriticalSection(&g_lock);
+    HOST_UNLOCK();
 
     if (OpenClipboard(g_hwnd)) {                   /* paste-into-Paint path           */
         EmptyClipboard();
@@ -1064,10 +1136,10 @@ static void host_screenshot(void)
    the same button. */
 static void host_key_scancode(uint8_t rawsc, int ext, int is_break)
 {
-    EnterCriticalSection(&g_lock);
+    HOST_LOCK();
     if (ext) vdd_input_push_scancode(&g_in, 0xE0);
     vdd_input_push_scancode(&g_in, is_break ? (uint8_t)(rawsc | 0x80) : rawsc);
-    LeaveCriticalSection(&g_lock);
+    HOST_UNLOCK();
     /* The VDD raises IRQ1 itself now, on the 8042's empty->full transition and again as the
        guest drains the FIFO -- so the host must NOT latch one per byte here as well, or the
        interrupts run ahead of the bytes again. */
@@ -1322,9 +1394,9 @@ static int host_coninnb(void *ctx)
     uint16_t k; int got;
     (void)ctx;
     if (g_conin_pending >= 0) { int c = g_conin_pending; g_conin_pending = -1; return c; }
-    EnterCriticalSection(&g_lock);
+    HOST_LOCK();
     got = vdd_input_pop(&g_in, &k);
-    LeaveCriticalSection(&g_lock);
+    HOST_UNLOCK();
     if (!got) return -1;
     if ((k & 0xFF) == 0) { g_conin_pending = (k >> 8) & 0xFF; return 0x00; }
     return k & 0xFF;
@@ -1338,9 +1410,9 @@ static int host_conpeek(void *ctx)
     uint16_t k; int got;
     (void)ctx;
     if (g_conin_pending >= 0) return 1;
-    EnterCriticalSection(&g_lock);
+    HOST_LOCK();
     got = vdd_input_peek(&g_in, &k);
-    LeaveCriticalSection(&g_lock);
+    HOST_UNLOCK();
     return got;
 }
 
@@ -1784,9 +1856,19 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
            is exactly the deadlock the first cut of this produced (async_bail=497,
            async_inj=0, guest frozen 25 s). Ticking here is also what lets the async injector
            preempt, since this thread is not the one stuck inside VdmStartExecution. */
+        /* BEFORE ANY LOCK. If this gap is large while lk_wait stays small, the UI
+           thread is not running at all and no amount of lock-splitting will help. */
+        {   static LARGE_INTEGER s_prev;
+            LARGE_INTEGER n;
+            QueryPerformanceCounter(&n);
+            if (s_prev.QuadPart) {
+                uint32_t g = qpc_us(n.QuadPart - s_prev.QuadPart);
+                if (g > g_ui_gap_us) g_ui_gap_us = g;
+            }
+            s_prev = n; }
         g_pit.frame_us = 0;
         host_pit_sync();
-        EnterCriticalSection(&g_lock);
+        HOST_LOCK();
         vdd_bus_frame(&g_bus);          /* tick PIT + render into g_vid.frame       */
         /* PRESENT IN PHASE WITH THE GUEST'S FRAME, not on our own timer.
            This tick used to run at 30 Hz and snapshot whenever it happened to fire.
@@ -1810,10 +1892,10 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
                     overlay_cursor((uint8_t *)g_vid.frame.pixels, g_vid.frame.w, g_vid.frame.h,
                                    (int)g_vid.frame.stride, g_ms_x, g_ms_y);  /* driver cursor */
                 present_ddraw_snapshot(&g_pd, &g_vid.frame); /* consistent copy UNDER lock */
-                LeaveCriticalSection(&g_lock);
+                HOST_UNLOCK();
                 present_ddraw_present(&g_pd);   /* vsync'd blit OUTSIDE the lock         */
             } else {
-                LeaveCriticalSection(&g_lock);  /* not our phase: keep the last frame up */
+                HOST_UNLOCK();  /* not our phase: keep the last frame up */
             }
         }
         /* Headless remote visual capture (session-9): the host screenshots ITSELF to
@@ -1929,9 +2011,9 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
            is torn down underneath it. Only then silence the chip. Doing it the
            other way round races the callback for the state it is reading. */
         audio_wave_stop(&g_wave);
-        EnterCriticalSection(&g_lock);
+        HOST_LOCK();
         vdd_opl_reset(&g_opl);                    /* all voices off, registers clear */
-        LeaveCriticalSection(&g_lock);
+        HOST_UNLOCK();
         if (g_key_event) SetEvent(g_key_event);   /* unblock the V86 thread        */
         PostQuitMessage(0);
         return 0;
@@ -2102,15 +2184,15 @@ static void host_pit_sync(void)
        the UI thread (so the clock keeps running while the guest is spinning and not trapping
        at all). It must be one shared clock or the two would double-count, hence the lock --
        g_lock is recursive for the exec thread, which already holds it inside host_io_do. */
-    EnterCriticalSection(&g_lock);
+    HOST_LOCK();
     if (!s_freq.QuadPart) {
         if (QueryPerformanceFrequency(&s_freq) && s_freq.QuadPart)
             QueryPerformanceCounter(&s_last);
-        LeaveCriticalSection(&g_lock);
+        HOST_UNLOCK();
         return;
     }
     if (!QueryPerformanceCounter(&now) || now.QuadPart <= s_last.QuadPart) {
-        LeaveCriticalSection(&g_lock);
+        HOST_UNLOCK();
         return;
     }
     delta = (ULONGLONG)(now.QuadPart - s_last.QuadPart);
@@ -2128,7 +2210,7 @@ static void host_pit_sync(void)
           if (clocks > PIT_INPUT_HZ) clocks = PIT_INPUT_HZ;   /* cap a long stall at 1 s */
           vdd_pit_add_clocks(&g_pit, (uint32_t)clocks);
       } }
-    LeaveCriticalSection(&g_lock);
+    HOST_UNLOCK();
 }
 
 static void host_io_do(volatile BYTE *tib, vdd_bus *bus, uint16_t port,
@@ -2546,7 +2628,7 @@ static long host_interp(volatile BYTE *tib, long cap)
     c.seg[4] = (uint16_t)VDM_REG(tib, VTIB_FS); c.seg[5] = (uint16_t)VDM_REG(tib, VTIB_GS);
     c.ip = (uint16_t)VDM_REG(tib, VTIB_EIP); c.flags = VDM_REG(tib, VTIB_EFLAGS);
 
-    EnterCriticalSection(&g_lock);
+    HOST_LOCK();
     for (iters = 0; iters < cap; ++iters) {
         if (!istep(&c)) break;
         /* YIELD WHEN AN INTERRUPT IS PENDING. A real CPU takes interrupts in the
@@ -2568,7 +2650,7 @@ static long host_interp(volatile BYTE *tib, long cap)
             if (pend) { ++iters; break; }
         }
     }
-    LeaveCriticalSection(&g_lock);
+    HOST_UNLOCK();
 
     if (iters == 0) return 0;                          /* first opcode unmodeled */
 
@@ -2986,9 +3068,9 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
     (void)steps;
                     if (vec == 0x10) {                             /* video BIOS in PM -> VDD */
                         ntvdd_regs r; regs_load(&r, tib);
-                        EnterCriticalSection(&g_lock);
+                        HOST_LOCK();
                         vdd_bus_deliver_int(&g_bus, 0x10, &r);
-                        LeaveCriticalSection(&g_lock);
+                        HOST_UNLOCK();
                         regs_store(&r, tib);
                         video_trap_sync();          /* mode 12h: interpret (GH #55); no-op in 13h */
                         VDM_REG(tib, VTIB_EFLAGS) &= ~1u;
@@ -3000,9 +3082,9 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                     if (vec == 0x16) {                             /* keyboard BIOS in PM -> VDD */
                         ntvdd_regs r; uint8_t ah16; regs_load(&r, tib); ah16 = r_ah(&r);
                         for (;;) {                                 /* AH=00/10 block until a key */
-                            EnterCriticalSection(&g_lock);
+                            HOST_LOCK();
                             vdd_bus_deliver_int(&g_bus, 0x16, &r);
-                            LeaveCriticalSection(&g_lock);
+                            HOST_UNLOCK();
                             if ((ah16 != 0x00 && ah16 != 0x10) || r.zf == 0 || !g_running) break;
                             InterlockedIncrement(&g_dpmi_iter);    /* keep the watchdog happy while blocked */
                             WaitForSingleObject(g_key_event, 50);
@@ -3022,9 +3104,9 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                     }
                     if (vec == 0x1A || vec == 0x08) {              /* BIOS time / timer tick in PM */
                         ntvdd_regs r; regs_load(&r, tib);
-                        EnterCriticalSection(&g_lock);
+                        HOST_LOCK();
                         vdd_bus_deliver_int(&g_bus, (uint8_t)vec, &r);   /* INT 1Ah get/set tick, or INT 08h increment */
-                        LeaveCriticalSection(&g_lock);
+                        HOST_UNLOCK();
                         regs_store(&r, tib);
                         VDM_REG(tib, VTIB_EIP) += 2;
                         return 1;
@@ -3308,8 +3390,8 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                                     break;
                                 }
                                 if (rev == VDM_EVENT_IO || rev == VDM_EVENT_IO_HW || rev == VDM_EVENT_GPFAULT) {
-                                    int h; EnterCriticalSection(&g_lock);
-                                    h = host_try_io(tib, &g_bus); LeaveCriticalSection(&g_lock);
+                                    int h; HOST_LOCK();
+                                    h = host_try_io(tib, &g_bus); HOST_UNLOCK();
                                     if (h) continue;
                                 }
                                 p = zput(p, "0301: unexpected RM event=0x"); p = zhex(p, rev);
@@ -3569,9 +3651,9 @@ static int dpmi_inject_pm_irq(dos_machine_t *mp, volatile BYTE *tib, unsigned iv
         if (ev == 3) continue;                     /* "interrupt pending, not entered" -> retry */
         if (ev == VDM_EVENT_IO || ev == VDM_EVENT_IO_HW || ev == VDM_EVENT_GPFAULT) {
             int io_h;
-            EnterCriticalSection(&g_lock);
+            HOST_LOCK();
             io_h = host_try_io_pm(tib, &g_bus);
-            LeaveCriticalSection(&g_lock);
+            HOST_UNLOCK();
             if (io_h) continue;
         }
         vec = (ev == VDM_EVENT_BOP) ? g_int_vec[eip] : 0;
@@ -4041,6 +4123,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
        thread. I/O on claimed ports reflects as event 0 -> the bus; INT 10h comes
        in as a BOP routed below; DOS console output is routed via m.conout. */
     InitializeCriticalSection(&g_lock);
+    QueryPerformanceFrequency(&g_qpf);      /* seeds qpc_us for the lock instrument */
     vdd_bus_init(&g_bus, NULL);
     vdd_bus_set_sinks(&g_bus, host_irq_sink, NULL, NULL, NULL);  /* host presents directly */
     g_pic_dev = vdd_pic_device(&g_pic);      /* before the PIT: it gates every IRQ */
@@ -4372,9 +4455,9 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             { static int s_bud_io = 6; vdmstate_sample("io-reflect", tib, &s_bud_io); }
             /* REP INS/OUTS arrives as its own event with CS:IP ON the instruction. */
             if (ev == VDM_EVENT_IO_STRING) {
-                EnterCriticalSection(&g_lock);
+                HOST_LOCK();
                 handled = host_try_io_string(tib, &g_bus);
-                LeaveCriticalSection(&g_lock);
+                HOST_UNLOCK();
                 if (handled) { g_ev_iostr++; continue; }
             }
             /* Trap-storm detection over ALL faults (port + A0000 memory): the
@@ -4405,16 +4488,16 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                     continue;                       /* batched the hot loop            */
                 }
             }
-            EnterCriticalSection(&g_lock);
+            HOST_LOCK();
             handled = host_try_io(tib, &g_bus);     /* single port op (no logging)     */
-            LeaveCriticalSection(&g_lock);
+            HOST_UNLOCK();
             if (handled) { g_ev_io++; io_hot_note(g_io_last_port, VDM_REG(tib, VTIB_CS) & 0xFFFF, VDM_REG(tib, VTIB_EIP) & 0xFFFF); continue; }
             /* real-HW event 3 reports CS:IP AFTER the faulting IN/OUT -> retro-decode the
                I/O instruction ending at CS:IP and service it (Skyroads' vblank IN AL,DX). */
             if (ev == VDM_EVENT_IO_HW) {
-                EnterCriticalSection(&g_lock);
+                HOST_LOCK();
                 handled = host_try_io_retro(tib, &g_bus);
-                LeaveCriticalSection(&g_lock);
+                HOST_UNLOCK();
                 if (handled) { g_ev_io++; io_hot_note(g_io_last_port, VDM_REG(tib, VTIB_CS) & 0xFFFF, VDM_REG(tib, VTIB_EIP) & 0xFFFF); continue; }
             }
             if ((g_a000_prot || (g_interp12 && vdd_video_planar_active(&g_vid)))
@@ -4485,9 +4568,9 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
            the bus), else INT 21h. */
         if ((VDM_REG(tib, VTIB_EVENT_INFO) & 0xFF) == 0x10) {
             ntvdd_regs r; regs_load(&r, tib);
-            EnterCriticalSection(&g_lock);
+            HOST_LOCK();
             vdd_bus_deliver_int(&g_bus, 0x10, &r);
-            LeaveCriticalSection(&g_lock);
+            HOST_UNLOCK();
             regs_store(&r, tib);
             video_trap_sync();     /* mode 12h: interpret the guest (GH #55) */
             VDM_REG(tib, VTIB_EIP) += 3;
@@ -4495,9 +4578,9 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         }
         if ((VDM_REG(tib, VTIB_EVENT_INFO) & 0xFF) == 0x16) {
             ntvdd_regs r; uint8_t ah16; regs_load(&r, tib); ah16 = r_ah(&r);
-            EnterCriticalSection(&g_lock);
+            HOST_LOCK();
             vdd_bus_deliver_int(&g_bus, 0x16, &r);
-            LeaveCriticalSection(&g_lock);
+            HOST_UNLOCK();
             /* A blocking BIOS read with no key must NOT park the exec thread -- doing that
                stops the guest dead, so its timer, its music and its screen freeze until a key
                arrives. (Same fault as INT 21h AH=01/07/08, fixed the same way.) Leave EIP on
@@ -4515,22 +4598,22 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             continue;
         }
         if ((VDM_REG(tib, VTIB_EVENT_INFO) & 0xFF) == 0x09) {   /* INT 09h: BIOS keyboard */
-            EnterCriticalSection(&g_lock);
+            HOST_LOCK();
             vdd_input_bios_consume(&g_in);      /* take the byte, re-arm if more queued */
-            LeaveCriticalSection(&g_lock);
+            HOST_UNLOCK();
             VDM_REG(tib, VTIB_EIP) += 3;        /* -> the IRET */
             continue;
         }
         if ((VDM_REG(tib, VTIB_EVENT_INFO) & 0xFF) == 0x08) {   /* INT 08h timer tick */
             ntvdd_regs r; regs_load(&r, tib);
-            EnterCriticalSection(&g_lock);
+            HOST_LOCK();
             vdd_bus_deliver_int(&g_bus, 0x08, &r);  /* bump BIOS tick at 0040:006C */
             /* The real BIOS timer ISR ends with `mov al,20h; out 20h,al`. Ours is a BOP
                with nowhere to put one, so issue the EOI here -- without it the PIC's
                in-service bit for IRQ0 latches on the first tick and the timer stops dead
                (measured: exactly one tick delivered in a 30 s run). */
             vdd_pic_eoi(&g_pic, 0);
-            LeaveCriticalSection(&g_lock);
+            HOST_UNLOCK();
             regs_store(&r, tib);
             VDM_REG(tib, VTIB_EIP) += 3;            /* -> CD 1C (chain user timer) */
             continue;
@@ -4629,9 +4712,9 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         }
         if ((VDM_REG(tib, VTIB_EVENT_INFO) & 0xFF) == 0x1A) {   /* INT 1Ah BIOS time */
             ntvdd_regs r; regs_load(&r, tib);
-            EnterCriticalSection(&g_lock);
+            HOST_LOCK();
             vdd_bus_deliver_int(&g_bus, 0x1A, &r);
-            LeaveCriticalSection(&g_lock);
+            HOST_UNLOCK();
             regs_store(&r, tib);
             host_set_flags(tib, r.cf, r.zf);
             VDM_REG(tib, VTIB_EIP) += 3;
@@ -4675,9 +4758,9 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         if ((VDM_REG(tib, VTIB_EVENT_INFO) & 0xFF) == 0x67) {   /* INT 67h EMM (EMS) */
             p = zput(p, " EMS AH=0x"); p = zhex(p, (VDM_REG(tib, VTIB_EAX) >> 8) & 0xFF); p = zput(p, "\r\n");
             log_append(LOG_PATH, base, p); p = base;
-            EnterCriticalSection(&g_lock);
+            HOST_LOCK();
             host_ems(tib);
-            LeaveCriticalSection(&g_lock);
+            HOST_UNLOCK();
             VDM_REG(tib, VTIB_EIP) += 3;                        /* -> the IRET      */
             continue;
         }
@@ -4835,9 +4918,9 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                     opl_pump_time();
                     if (InterlockedExchange(&g_irq0_pending, 0)) {
                         ntvdd_regs tr; regs_load(&tr, tib);
-                        EnterCriticalSection(&g_lock);
+                        HOST_LOCK();
                         vdd_bus_deliver_int(&g_bus, 0x08, &tr);   /* pit_int08 -> ++0040:006C */
-                        LeaveCriticalSection(&g_lock);
+                        HOST_UNLOCK();
                         g_pm_irq0_latch = 1;    /* #2b: latch a virtual IRQ0 for the PM hook */
                     }
                     /* #2b async IRQ0 injection: when the client has hooked INT 08h in PM
@@ -4908,9 +4991,9 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                        event 0 as an "unexpected PM stop" and spinning. */
                     if (ev == VDM_EVENT_IO || ev == VDM_EVENT_IO_HW || ev == VDM_EVENT_GPFAULT) {
                         int io_h;
-                        EnterCriticalSection(&g_lock);
+                        HOST_LOCK();
                         io_h = host_try_io_pm(tib, &g_bus);
-                        LeaveCriticalSection(&g_lock);
+                        HOST_UNLOCK();
                         if (io_h) continue;   /* serviced the port op -> keep running */
                         /* not a decodable I/O op -> fall through to the normal dispatch/stop */
                     }
@@ -5052,6 +5135,11 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
          assumed one, which is precisely the mistake that made it worse. */
       p = zput(p, " pit_gaps=0x");   p = zhex(p, g_pit_catchup_clamped);
       p = zput(p, " pit_gapmax=0x"); p = zhex(p, g_pit_gap_max);
+      p = zput(p, "\r\nSTAGE2: lock: wait_us=0x");  p = zhex(p, g_lk_wait_us);
+      p = zput(p, "@line ");                        p = zhex(p, (DWORD)g_lk_wait_site);
+      p = zput(p, " hold_us=0x");                   p = zhex(p, g_lk_hold_us);
+      p = zput(p, "@line ");                        p = zhex(p, (DWORD)g_lk_hold_site);
+      p = zput(p, " ui_gap_us=0x");                 p = zhex(p, g_ui_gap_us);
       p = zput(p, " int10_11=0x");   p = zhex(p, g_vid.int10_11_calls);
       /* Each font request, its answer, and the BYTES actually sitting at the address we
          handed back -- read from guest memory, so a wiped or misaligned table is visible
