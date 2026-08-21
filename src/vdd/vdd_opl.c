@@ -198,7 +198,17 @@ void vdd_opl_reset(void *self)
     st->frame_us  = fus ? fus : OPL_DEFAULT_FRAME_US;
     st->sample_hz = shz ? shz : OPL_DEFAULT_HZ;
     st->ext_clock = ext;
-    for (i = 0; i < OPL_NUM_OP; ++i) st->op[i].eg_state = OPL_EG_OFF;
+    /* SILENT MEANS FULLY ATTENUATED, NOT ZERO. env counts attenuation, so zeroing
+       the struct leaves every operator at FULL VOLUME waiting for its first note.
+       Key-on does not reset env -- measured: the reference resumes an interrupted
+       attack from where it was rather than restarting from silence -- so the very
+       first note of a run attacked instantly at full level no matter what its
+       attack rate said. That reads as "too loud" and as "no attack", and it is
+       both: it is why our first measured attack time was 0.00 ms at every rate.  */
+    for (i = 0; i < OPL_NUM_OP; ++i) {
+        st->op[i].eg_state = OPL_EG_OFF;
+        st->op[i].env = OPL_ENV_FULL;
+    }
 }
 
 int vdd_opl_init(vdd_bus *b, void *self)

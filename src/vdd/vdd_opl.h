@@ -50,6 +50,14 @@
 /* envelope generator phase */
 enum { OPL_EG_OFF = 0, OPL_EG_ATTACK, OPL_EG_DECAY, OPL_EG_SUSTAIN, OPL_EG_RELEASE };
 
+/* The envelope counts ATTENUATION, so 0 is full volume and OPL_ENV_MAX is silence
+   -- the opposite of the intuitive reading, and the direction that matters when
+   initialising it. Carried in fixed point because the slowest rate advances only
+   one unit per 4096 samples; 511 << 20 still fits an int32. See vdd_opl_synth.c. */
+#define OPL_ENV_MAX    511                                  /* fully attenuated   */
+#define OPL_ENV_SHIFT   20                                  /* fractional bits    */
+#define OPL_ENV_FULL   ((int32_t)OPL_ENV_MAX << OPL_ENV_SHIFT)
+
 typedef struct opl_op {
     /* programmed by the register file */
     uint8_t am, vib, egt, ksr, mult;    /* 0x20-0x35                              */
@@ -59,7 +67,7 @@ typedef struct opl_op {
     uint8_t wave;                       /* 0xE0-0xF5: waveform select (OPL2: 0-3)  */
     /* synthesis state */
     uint32_t phase;                     /* phase accumulator, 10.10 fixed point    */
-    int32_t  env;                       /* attenuation in 1/96 dB steps, 0 = loud  */
+    int32_t  env;                       /* attenuation, OPL_ENV_SHIFT fixed point  */
     uint8_t  eg_state;
     int32_t  out1, out2;                /* last two outputs, for feedback          */
 } opl_op;

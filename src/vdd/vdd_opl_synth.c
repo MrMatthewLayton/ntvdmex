@@ -20,11 +20,14 @@
  * tremolo/vibrato depth (0xBD) and rhythm mode -- both are additive on top of
  * this and neither affects pitch or note timing.
  *
- * CALIBRATION NOTE: envelope RATES are anchored empirically (see OPL_EG_ANCHOR).
- * Pitch is exact and the envelope shape is right, but absolute attack/decay times
- * are within roughly a factor of two of real silicon at the extremes of the rate
- * range. That is audible as a slightly different "feel", not as wrong notes, and
- * is the first thing to refine against a reference recording.
+ * CALIBRATION. Every scaling constant below is MEASURED, not guessed: driven into
+ * both this core and a reference one from an identical register stream, one
+ * variable at a time, and read back out of the spectrum. `tools/oplref/oplprobe.c`
+ * is that rig and each constant names the experiment that produced it, so any of
+ * them can be re-derived in seconds rather than argued about. What the measurement
+ * is allowed to give us is a PHYSICAL quantity -- a dB slope, a modulation index in
+ * radians, an envelope speed in units per sample -- which is what the datasheet
+ * describes and what the silicon does; the reference core's own source is not read.
  */
 #include "vdd_opl.h"
 #include "opl_tables.h"
@@ -35,7 +38,10 @@
 static const uint8_t opl_mult2[16] =
     { 1, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 20, 24, 24, 30, 30 };
 
-/* Key-scale-level ROM, in units of 0.375 dB, indexed by the top 4 bits of F-num. */
+/* Key-scale-level ROM, indexed by the top 4 bits of F-num. MEASURED to be in units
+   of 0.75 dB, not the 0.375 this once assumed: at KSL=3 the reference attenuates
+   6.02 dB per octave and the block term moves 8 ROM units per octave, so one unit
+   is 0.7526 dB. See OPL_KSL_TO_LOG and `oplprobe ksl`. */
 static const uint8_t opl_kslrom[16] =
     { 0, 32, 40, 45, 48, 51, 53, 55, 56, 58, 59, 60, 61, 62, 63, 64 };
 /* KSL field -> right shift. 0 means "no key scaling", expressed as a shift big
@@ -46,15 +52,28 @@ static const uint8_t opl_kslshift[4] = { 8, 1, 2, 0 };
    total-level steps 0.75 dB, so they scale into log units by 8 and 32. */
 #define OPL_ENV_TO_LOG   8
 #define OPL_TL_TO_LOG   32
-#define OPL_KSL_TO_LOG  16      /* 0.375 dB per ROM unit                         */
-#define OPL_ENV_MAX    511      /* fully attenuated                              */
+#define OPL_KSL_TO_LOG  32      /* 0.75 dB per ROM unit -- measured, see above    */
 
-/* Envelope rate anchor: at this 6-bit rate the envelope moves one level unit per
-   sample, and every 4 rate units doubles the speed. See the calibration note. */
-#define OPL_EG_ANCHOR   52
+/* ENVELOPE SPEED. Measured: `oplprobe egrate` times the reference's decay at every
+   effective rate and reports samples per envelope unit. The law it gives is
+       units per sample = (4 + rate_lo) / 2^(15 - rate_hi)
+   where rate_hi/rate_lo are the top four and bottom two bits of the 6-bit rate.
+   Note the MANTISSA: inside a group of four rates the speed goes 4:5:6:7 -- linear,
+   not geometric -- and only the group boundary is a doubling. Measured across 30
+   rates and all four sub-steps, the implied divisor came out 32983/33007/33008/
+   33006, i.e. 2^15 to within the measurement's own bias.
+   ► The previous model shifted by whole octaves and rounded the sub-step away,
+     which made mid-range decays and releases run 1.5x too slow. */
+#define OPL_EG_DIV_SHIFT 15
 
-/* env is carried in 8.8 fixed point so the slowest rates still make progress. */
-#define OPL_ENV_SHIFT    8
+/* ATTACK. Not linear: the attenuation loses a FRACTION OF ITSELF each sample, so
+   the note rushes up and then eases in. `oplprobe attack` fits that fraction
+   against the decay speed at the same rate and gets 0.1435 -- constant to +-1.5%
+   over 19 rates and all four sub-steps, which is what says the shape is right and
+   not merely the endpoint. 147/1024 is that number. */
+#define OPL_EG_ATTACK_NUM   147
+#define OPL_EG_ATTACK_SHIFT  10
+
 
 /* exp2(-x/256) * 4096 for an arbitrary x, via the table plus a shift. */
 static int32_t opl_exp2neg(int32_t logv)
@@ -108,20 +127,11 @@ static int opl_eff_rate(const opl_state *st, int chi, uint8_t r4, uint8_t ksr)
     return r > 63 ? 63 : r;
 }
 
-/* Envelope step per sample in 8.8 units, doubling every 4 rate units. */
+/* Envelope step per sample, in env fixed point. See OPL_EG_DIV_SHIFT. */
 static int32_t opl_eg_step(int rate)
 {
-    int e = rate - OPL_EG_ANCHOR;               /* e == 0 -> one level per sample */
-    int32_t base = 1 << OPL_ENV_SHIFT;
-    if (!rate) return 0;
-    if (e >= 0) {
-        int sh = e / 4;
-        if (sh > 12) sh = 12;
-        return base << sh;                      /* (fractional quarter ignored)   */
-    }
-    { int sh = (-e + 3) / 4;
-      if (sh > 20) return 0;                    /* slower than we can represent   */
-      return base >> sh; }
+    if (!rate) return 0;                        /* rate 0 never moves             */
+    return (int32_t)(4 + (rate & 3)) << (OPL_ENV_SHIFT - OPL_EG_DIV_SHIFT + (rate >> 2));
 }
 
 static void opl_env_tick(opl_state *st, int chi, int opi)
@@ -131,12 +141,20 @@ static void opl_env_tick(opl_state *st, int chi, int opi)
     switch (o->eg_state) {
     case OPL_EG_ATTACK:
         step = opl_eg_step(opl_eff_rate(st, chi, o->ar, o->ksr));
-        if (!step || o->ar == 15) { o->env = 0; o->eg_state = OPL_EG_DECAY; break; }
+        /* AR=0 is not "instant", it is NEVER: the operator stays fully attenuated
+           and the note is silent. Confirmed against the reference, which produces
+           a peak of 1 against our 4096 before this was fixed -- reading it the
+           other way turns silent voices into loud ones. */
+        if (!step) break;
+        if (o->ar == 15) { o->env = 0; o->eg_state = OPL_EG_DECAY; break; }
         /* Attack is exponential: the closer to full volume, the slower it moves.
            Scaling the step by the remaining attenuation gives that curve without
-           a second table. */
-        o->env -= (int32_t)(((int64_t)step * (o->env + (1 << OPL_ENV_SHIFT)))
-                            >> (OPL_ENV_SHIFT + 3));
+           a second table. The +1 unit keeps it moving once the product would
+           otherwise round to nothing, so a slow attack still finishes. */
+        { int64_t d = (((int64_t)step * (o->env + (1 << OPL_ENV_SHIFT))) >> OPL_ENV_SHIFT);
+          d = (d * OPL_EG_ATTACK_NUM) >> OPL_EG_ATTACK_SHIFT;
+          if (d < 1) d = 1;
+          o->env -= (int32_t)d; }
         if (o->env <= 0) { o->env = 0; o->eg_state = OPL_EG_DECAY; }
         break;
     case OPL_EG_DECAY:
@@ -183,12 +201,31 @@ static uint32_t opl_phase_inc(const opl_state *st, int chi, const opl_op *o)
 static int32_t opl_static_att(const opl_state *st, int chi, const opl_op *o)
 {
     int32_t att = (int32_t)o->tl * OPL_TL_TO_LOG;
+    /* The octave origin is 8, not 7. Measured: at KSL=3 with F-num's top nibble at
+       15 the reference is still at full volume in block 0 and down 6 dB in block 1,
+       which places the zero one octave lower than this had it. Being one octave out
+       under-attenuates every high note -- at block 7 by 6 dB, and by 18 dB once the
+       KSL=3 shift is applied -- so bass and treble sit at the wrong relative
+       levels across the whole keyboard. */
     int32_t k = (int32_t)opl_kslrom[(st->ch[chi].fnum >> 6) & 0x0F]
-              - 8 * (7 - (int32_t)st->ch[chi].block);
+              - 8 * (8 - (int32_t)st->ch[chi].block);
     if (k < 0) k = 0;
     att += (k >> opl_kslshift[o->ksl]) * OPL_KSL_TO_LOG;
     return att;
 }
+
+/* MODULATION DEPTH. An operator's output runs to +-4096 at full volume and that
+   value is added STRAIGHT into the 1024-step phase index -- so a modulator at
+   TL=0 swings the carrier through four whole cycles. MEASURED: `oplprobe mod`
+   fits the modulation index from the sideband amplitudes and reads 4.000 cycles
+   for the reference against our 2.000, a ratio of exactly 0.501 held across the
+   whole TL sweep. We were halving it on the way in.
+   ► This is why the timbre was wrong while the tune was right. Halving the index
+     does not change pitch, tempo or loudness -- phase modulation preserves total
+     power -- it changes only WHICH harmonics are present and how strongly, which
+     is precisely "the right tune, but the instruments sound flat".
+   ► Feedback measured the same way: our FB=n matched the reference's FB=n-1 step
+     for step, the same factor of two, in the same place.                          */
 
 /* One operator sample. `mod` is a phase offset in sine-table steps (FM input). */
 static int32_t opl_op_sample(opl_state *st, int chi, int opi, int32_t mod)
@@ -229,7 +266,7 @@ void vdd_opl_render(opl_state *st, int16_t *out, uint32_t frames)
             if (st->ch[c].fb)
                 fbmod = (m->out1 + m->out2) >> (9 - st->ch[c].fb);
 
-            mo = opl_op_sample(st, c, mi, fbmod >> 1);
+            mo = opl_op_sample(st, c, mi, fbmod);
             m->out2 = m->out1; m->out1 = mo;
             opl_env_tick(st, c, mi);
 
@@ -237,7 +274,7 @@ void vdd_opl_render(opl_state *st, int16_t *out, uint32_t frames)
                 co = opl_op_sample(st, c, ci, 0);
                 acc += mo + co;
             } else {                            /* FM: modulator bends the carrier */
-                co = opl_op_sample(st, c, ci, mo >> 1);
+                co = opl_op_sample(st, c, ci, mo);
                 acc += co;
             }
             opl_env_tick(st, c, ci);
