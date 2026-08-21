@@ -1,106 +1,158 @@
 ═══════════════════════════════════════════════════════════════════════════════
-██ ▶▶▶ NEXT SESSION: RESTART THE RIG, THEN SELF-DRIVE. DOOM REACHED 32-BIT PM. ██
+██ ▶▶▶ NEXT SESSION: DOOM LOADS ITS IMAGE. FINISH THE PM SURFACE.             ██
 ═══════════════════════════════════════════════════════════════════════════════
 
 ╔══════════════════════════════════════════════════════════════════════════════╗
-║ THE USER'S INSTRUCTION (2026-08-21, end of session 15):                      ║
-║   "restart the rig in the next session then self-drive as much as you can"   ║
+║ THE USER'S INSTRUCTION (2026-08-21, end of session 16):                      ║
+║   "stay on DPMI. The next north star is Doom working"                        ║
 ╚══════════════════════════════════════════════════════════════════════════════╝
 
 ┌──────────────────────────────────────────────────────────────────────────────┐
-│ 0. START HERE — GET THE RIG DRIVING ITSELF (5 min, do this FIRST)            │
+│ 0. RESTARTING THE RIG (it is healthy and SELF-RECOVERABLE as of session 16)  │
 └──────────────────────────────────────────────────────────────────────────────┘
 
+  Every LAN command below needs `dangerouslyDisableSandbox` (the rig is not in the
+  sandbox's allowed-hosts list, so a plain probe returns a FALSE "down").
+
   ```
-  nc -z -w 3 192.168.1.29 445                       # .29; a reboot does NOT move it
-  mount_smbfs -N //guest@192.168.1.29/ntvdmex /tmp/xpshare     # needs dangerouslyDisableSandbox
-  printf 'reboot\r\n' > /tmp/xpshare/control.txt    # controld: reboot|poweroff|kill|quit
-  # ~75 s, then umount + remount (the mount goes stale across a reboot)
+  nc -z -w 3 192.168.1.29 445                                  # .29 is stable
+  mkdir -p /tmp/xpshare
+  mount_smbfs -N //guest@192.168.1.29/ntvdmex /tmp/xpshare     # remount after a reboot
   ```
 
-  ★ **THE WATCHER MAY NOT COME BACK, AND YOU CANNOT FIX IT REMOTELY.** The Startup
-    copy is made by `rt.bat` from `bm\runwatch.bat`, and the copy that landed there
-    late in session 15 has **LF-only line endings** (see the CRLF trap below). The
-    `bm\` originals are now correct, but only a run of `rt.bat` refreshes Startup —
-    and that needs a working watcher. Circular.
-    ▶ **TEST:** `rm watcher.txt`, wait 10 s, see if it returns. If it does not, the
-      watcher is dead and **the user must run `bm\runwatch.bat` once** (it
-      self-installs from `%~f0`, so that also repairs the Startup copy). Ask early;
-      everything remote is blocked until then.
+  ★ **IS THE WATCHER ALIVE?** Do NOT test by "does watcher.txt exist".
+    `runwatch.bat` writes it ONCE before `:loop` and again every ~3 s inside the loop.
+    So the signature is:
+      `watcher.txt` mtime ADVANCING + `controld.txt` advancing  → healthy
+      `watcher.txt` FROZEN + `controld.txt` advancing           → **WATCHER DEAD**
+    (frozen-but-controld-beating is exactly what a broken `goto` looks like; that is
+     how session 16 found the LF-only Startup copy.)
+    ```
+    stat -f '%Sm %N' -t '%H:%M:%S' /tmp/xpshare/watcher.txt /tmp/xpshare/controld.txt
+    ```
 
-  **DRIVING A TEST** — write `cmd.txt` **atomically**, never with a plain `>`:
-  ```
-  printf 'skyroads\r\n' > /tmp/xpshare/cmd.tmp
-  mv /tmp/xpshare/cmd.tmp /tmp/xpshare/cmd.txt      # rename: never visible empty
-  printf 'stock tymat.com\r\n' > ...                # `stock <target>` = STOCK NTVDM
-  ```
-  ▶ **THE ONLY RELIABLE "IT STARTED" SIGNAL IS `cmd.txt` BEING CONSUMED.** A dead
-    watcher and a busy watcher both leave `watcher.txt` absent — I reported runs as
-    under way twice when the watcher had died. Weak assertion, exactly as this file
-    keeps warning.
-  ▶ Targets resolve from `bm\tests\`; a DIRECTORY on the share root is a "game"
-    (runs `<name>.EXE`). `headless_ms.txt` caps a run (max 600000). Guest console
-    output IS captured into the host log, so probes need no screen-reading.
+  ★★ **IF THE WATCHER IS DEAD, YOU CAN NOW FIX IT REMOTELY** — this was impossible
+     before session 16 and cost a physical trip to the box:
+    ```
+    printf 'exec cmd /c "C:\Documents and Settings\All Users\Documents\ntvdmex\bm\runwatch.bat"\r\n' \
+      > /tmp/xpshare/control.txt
+    ```
+    `controld` gained a generic `exec` (scripts/bm/controld.c). Running `bm\runwatch.bat`
+    also re-installs a correct CRLF copy to Startup, so it repairs the cause too.
+
+  **REBOOT** — two INDEPENDENT channels, on purpose, so each can recover the other:
+    ```
+    printf 'reboot\r\n' > /tmp/xpshare/control.txt      # via controld
+    printf 'reboot\r\n' > /tmp/xpshare/cmd.tmp && mv ... cmd.txt   # via the watcher (rt.bat arm)
+    ```
+    ~75 s, then **umount + remount** (the mount goes stale across a reboot).
+
+  **DRIVE A TEST — write `cmd.txt` ATOMICALLY, never with a plain `>`:**
+    ```
+    printf 'selftest.com\r\n' > /tmp/xpshare/cmd.tmp
+    mv /tmp/xpshare/cmd.tmp /tmp/xpshare/cmd.txt
+    ```
+    Targets: a file in `bm\tests\`; a DIRECTORY on the share root = a "game" (runs
+    `<name>.EXE`); `stock <target>` = STOCK NTVDM oracle; `doom` = C:\DOOMS\DOOM.EXE;
+    `reboot`. `headless_ms.txt` caps a run (max 600000). Guest console output IS
+    captured into the host log, so probes need no screen-reading.
+
+  ⚠ **`cmd.txt` DISAPPEARING MEANS THE RUN *STARTED*, NOT FINISHED.** `runwatch.bat`
+    deletes it BEFORE invoking rt.bat. I misread this twice in session 16 and read a
+    half-written log. **The completion signal is `result_<target>.log` SIZE GOING
+    STABLE** (poll it; 3 s apart, twice equal).
+
+  ⚠ **DEPLOY THE RIGHT EXE.** `build/ntvdmhost.exe` (~420 KB) is the host;
+    `build/ntvdmex.exe` (~20 KB) is the launcher and deploying it self-relaunches and
+    leaves runs "succeeding" on a STALE log. Verify:
+    ```
+    cp build/ntvdmhost.exe /tmp/xpshare/bm/ntvdmhost.exe
+    md5 -q build/ntvdmhost.exe /tmp/xpshare/bm/ntvdmhost.exe    # must match
+    ./scripts/check-imports.sh build/ntvdmhost.exe              # XP-safe (no UCRT)
+    ```
+
+  ⚠ **`bm\rt.bat` EDITS NEED A REBOOT.** Only `runwatch.bat` at startup copies it to
+    `C:\WINDOWS\rt.bat`, which is what the watcher actually runs.
+
+  ⚠ **SMB attribute caching lies.** `stat` reported a log unchanged right after a run
+    that HAD rewritten it; `ls -lt` on the directory showed the truth.
+
+  ⚠ **Never edit a Windows .bat with Python text mode on macOS** — it strips CRs and
+    `cmd.exe` then fails on `goto`/labels, i.e. the watcher loop. Read/write BINARY and
+    normalise to CRLF, then confirm with `file`.
+
+  BASELINE AFTER ANY RESTART: `selftest.com` → **8/8 PASS** (verified end of session 16,
+  after the DOS-layer changes).
 
 ┌──────────────────────────────────────────────────────────────────────────────┐
-│ 1. ★★★ DOOM: DOS/4GW REACHED 32-BIT PROTECTED MODE. FURTHEST EVER.           │
+│ 1. ★★★ DOOM: NEGOTIATES DPMI AND LOADS ITS LE IMAGE (session 16)             │
 └──────────────────────────────────────────────────────────────────────────────┘
 
-  Run it: `doomrun.bat` on the share root (already installed at `C:\DOOMS`, so
-  **skip `doominstall.bat`** — it is only needed for a fresh extraction and it is
-  the one thing that touches the IFEO key). Takes optional args:
-  `doomrun.bat [EXE] [DIR]`, defaults `DOOM.EXE` / `C:\DOOMS`; on a miss it prints a
-  `dir` and writes `doom_dir.txt` rather than asserting why. Log comes back as
-  `result_doom.log`.
+  Run it: `doom` in `cmd.txt` (rt.bat now has the arm). Log = `result_doom.log`.
 
-  **WHAT HAPPENED (log kept verbatim in this repo's history, commit of this doc):**
+  **PROGRESSION IN ONE SESSION:**
   ```
-  INT21 AH=3d [C:\DOOMS\DOOM.EXE] -> AX=5        opened its own LE image
-  INT21 AH=3d [C:\DOOMS\DOOM.ETX] -> AX=2 (err)  expected miss
-  STAGE2: BOP2F ax=0x1687
-  STAGE2: DPMI 1687 -> AX=0                      WE ANSWERED; a host is present
-  STAGE2: BOP2F ax=0x1600                        Windows-enhanced check
-  STAGE3: DPMI_BOP far-call LANDED @ 0x50:0x50 -- switching to PM (32-bit client)
-     ... -> PM ok (CS=0x0f:0x6e6a) -> DPMI PM loop
-  DPMI: patched 0x76 INT sites -> BOP (full 64K scan, last off 0xd29c)
-  DPMI: PM-fault reflect stkSel=0x2f codeSel=0x27 bop@code:0x80 tbl@0x0f04dfc0
-  GH#18: [0x714]=0xc0003230 bit3=0 bit4=1 bit14=0 tib8=0
-  <log ends>
+  start of session   died INSIDE the first dpmi_enter_pm(), log 2.7 KB, no output
+  after the D/B fix  full DPMI negotiation, 354 INT 31h calls, log 43 KB
+  after the PM thunk ~410 PM iterations, READS ITS LE IMAGE, log 142 KB
   ```
-  DOS/4GW **detected our DPMI host, far-called the mode-switch entry, entered
-  32-bit paged protected mode on real silicon, and we patched 118 INT sites and
-  armed the fault reflect.** That whole path works. It was never even ASKABLE
-  before: QEMU+HVF aborts on DOS/4GW paged PM *under stock ntvdm too*, so bare
-  metal is the only place the question exists.
+  It also printed its first-ever output under NTVDMEX — `DOS/16M error: [10] cannot
+  allocate memory for GDT` — which turned out to be OUR bug and is now gone.
 
-  **WHERE IT STOPS, and the reasoning is tight — do not re-derive it:**
-    • **The host process dies within ~250 ms of entering PM.** The kernel-PM
-      watchdog samples every 250 ms and `log_append`s its first 12 samples; **not
-      one appears**. So it died before the first sample.
-    • **NOT a wedge.** The watchdog only kills after ~3 s of no progress and logs
-      `watchdog terminating (wedged)` first. Absent.
-    • **NOT the headless cap** (600000 ms) — that would leave many samples.
-    • **Silent.** No crash dump, no exception line. User confirms **nothing on
-      screen, not even Doom's startup banner** — and that banner is plain DOS text,
-      so Doom's own `main()` never produced a single INT 21h call.
+  **★★★ THE ROOT CAUSE, and the argument is airtight — do not re-litigate it.**
+  `dpmi_switch_to_pm()` set the initial CS/DS/SS to **D/B=1** whenever the client
+  declared itself 32-bit. Wrong: our mode-switch stub is `BOP 0x50 ; RETF`, and the
+  **RETF is taken when the switch FAILS**, returning the client to REAL MODE with CF=1.
+  So the bytes after the client's `call far` are executed as 16-bit real-mode code on
+  the failure path and CANNOT also be 32-bit. Doom's entry bytes prove it:
+  ```
+  16-bit: jb <err> / cld / mov word ss:[0xac2],0x71dc / mov word ss:[0xc30],ds
+  32-bit: jb / cld / mov DWORD ss:[esi],..  / mov WORD ss:[esi],ds / xor BYTE [esp+ecx*4],cl
+  ```
+  three WILD WRITES through uninitialised ESI within four instructions — hence a silent
+  death with NO exception reaching our VEH. The client agrees: its first act in PM is
+  `000B / and byte [es:di+6],0BFh / 000C` — it clears D/B ITSELF.
+  ▶ Decode any such bytes with `i686-w64-mingw32-objdump -D -b binary -m i8086|i386`.
 
-  ▶▶ **NEXT STEP, and it is cheap. THE GAP IS UNBRACKETED:** the last thing logged
-     is `dpmi_install_fault_trampoline()`, the next thing is the first
-     `dpmi_enter_pm()`. Put logged checkpoints on both sides and on the first few
-     iterations, so the next run says whether we die INSTALLING the trampoline,
-     ENTERING pm, or on the guest's FIRST INSTRUCTION.
-  ▶▶ **AND FIX THE INSTRUMENT FIRST:** much of the DPMI path reports via
-     `serial_out()` — the **QEMU dev VM's serial port, which does not exist on bare
-     metal**. We are blind exactly where we need to see. Route those to
-     `log_append(LOG_PATH, ...)` too. Same lesson as everything else in session 15:
-     the instrument was the problem more often than the code.
-  ▶ **A WRONG TURN I ALMOST TOOK:** I nearly called this the known "32-bit async
-    IRQ hangs the rig" gap, because a pending IRQ0 shows in the heartbeat. **That
-    gap was CLOSED** — see the 2026-08-19 note further down: pm32irq was reframed
-    (not a code bug) and async IRQ0 into a 32-bit PM timer hook is VISUALLY
-    CONFIRMED on bare metal. My memory of it was stale; this file was right.
-  ▶ Scope honestly: this is the **DPMI epic (#18/#19)**, not a loose end. "Enters
-    PM" is a long way from "loads a 512 KB LE image and renders".
+  **THE OTHER FOUR FIXES (all found by letting the client name its own requirement):**
+   • `INT 21h AH=48h` from PM must return a **SELECTOR** — Doom does `MOV ES,AX` right
+     after, which only works for a selector. Its own code IS the spec.
+   • Register-only INT 21h delegates to `dos_int21()` (whitelist 19/2A/2C/30/58).
+     Pointer-taking services must NOT: DS:DX / ES:BX are SELECTORS in PM, and handing
+     one to code that treats it as a segment touches `selector<<4`.
+   • **`dos_int21` returned CF to `SS<<4+SP+4`** — the pushed-V86-FLAGS frame. In PM SS
+     is a selector, so that is linear 0x1f0: the client never saw CF *and we corrupted
+     low memory every call*. Now gated by `dos_int21_set_pm()` → live VTIB_EFLAGS.
+     This was the true cause of the GDT error. (`0300` deliberately still uses the V86
+     path — it builds a real frame.)
+   • Resolve a PM BOP by **LINEAR address** (`dpmi_bop_vec`), not EIP: DOS/4GW aliases
+     the patched 64 K window through a SECOND code selector (0x57, base 0xd9b0) for its
+     PM interrupt handlers, so a BOP fired at an EIP meaningless in the original segment.
+
+  ▶▶ **NEXT GAPS — all NAMED IN THE LOG, in rough priority order:**
+   1. `INT 31h 0202/0203` get/set exception handler vector — **45 calls**, the biggest
+      remaining block.
+   2. `INT 21h AH=49h` (free), `33h` (Ctrl-Break), `FFh` from PM.
+   3. `INT 31h 0702` (demand-paging hint, advisory) — 6 calls.
+   4. It STILL stops eventually (log ends mid-iteration at `DPMI-CP[0000019a]`). The
+      checkpoint bracket is already widened to 4096 iterations, so the next run
+      localises the death exactly as it did three times today.
+
+  ⚠ **KNOWN REGRESSION, NOT YET FIXED:** `pm32flat/pm32io/pm32gfx/pm32irq/pm32sw` put
+    `bits 32` directly after `call far [entry]`, so they were written to MATCH the old
+    behaviour rather than test it — and, unlike a real client, they have no `jc` failure
+    path, which is the very thing that forces post-switch code to be 16-bit. They
+    misdecode now (`mov cx,1` arriving as `CX=3`) and need rewriting to the real-client
+    pattern: stay 16-bit, allocate a 32-bit selector via INT 31h, far-jmp to it.
+
+  ★ **THE METHOD LESSON OF SESSION 16, and it is the durable part.** Session 15
+    concluded "Doom dies within ~250 ms" from the ABSENCE of watchdog samples in the
+    log. Those samples were written by `serial_out()` only — COM1, which exists on the
+    QEMU dev VM and **not on the bare-metal box**. They were never written anywhere, so
+    their absence was evidence of nothing. The conclusion happened to survive retesting,
+    but the reasoning was unsound. **Before inferring anything from a MISSING log line,
+    verify that line can reach the log on the machine under test.**
+    Check with: `grep -n serial_out src/host/main.c | grep -v log_append`
 
 ┌──────────────────────────────────────────────────────────────────────────────┐
 │ 2. NEW HARNESS — STOCK NTVDM IS NOW A FIRST-CLASS ORACLE (closes #26's gap)   │
@@ -132,6 +184,22 @@
   0.80 ms). Root cause was architectural — we modelled an AT keyboard but
   outsourced its REPEAT to Windows' message queue, and the UI thread stalls up to
   857 ms. We now generate typematic ourselves, pumped from both threads.
+
+  ▶▶ **SESSION 16 — DO NOT JUST RETUNE THE RATE; THE MEASUREMENT IS AIMED WRONG.**
+   • **Skyroads never programs its own typematic**: a 30 s run measured
+     `kbd 8042: writes=0 typematic_set=0`. So OUR generated rate is the only source.
+     (Caveat: that run only covered the ATTRACT LOOP — `int16=[0,0,0,0]`, `p60=0` —
+     so it does not rule out a `0xF3` once gameplay starts.)
+   • **`tymat.com` measures the INT 16h PATH ONLY** — deliberately, per its own header,
+     because stock ntvdm may not grant raw 8042 access. But Skyroads reads IN-GAME via
+     **INT 09h + port 60h**. So our verified 35.3/s says nothing about the path the bug
+     actually lives on. That fits the otherwise-odd fact that making repeats 3.3x
+     faster (92 ms → 28 ms) only moved failures from 1-in-10 to 1-in-5.
+   • ⇒ **NEXT STEP IS AN INT 09h-LEVEL PROBE WITH A HELD KEY**, not a constant change:
+     does a held key produce ~N makes/second at the guest's INT 09h handler under
+     NTVDMEX? Counters already exist (`ty_sent`, `irq1_inj`, `sc_push`, `sc_drop`).
+     Only once that is known does the SPI->ms mapping (still overshooting: ours 35.3/s
+     vs stock 22.1/s, delay 500 ms vs stock 385 ms) become the right thing to fix.
   **STILL OPEN:** rate fidelity. Measured with `tymat.com` under both hosts:
         stock 385 ms / 22.1 per second      ours now 494 ms / 35.3 per second
   We **overshoot** — the documented SPI mapping ("31 ≈ 30/s") does not match what a
