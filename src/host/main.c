@@ -1146,6 +1146,100 @@ static void host_key_scancode(uint8_t rawsc, int ext, int is_break)
     if (g_key_event) SetEvent(g_key_event);
 }
 
+/* ── TYPEMATIC REPEAT: WE ARE THE KEYBOARD, SO WE MUST DO ITS REPEATING ───────
+   THE BUG (user, reported twice): crash the ship in Skyroads while holding the up
+   arrow and, on real DOS or stock ntvdm, the restarted level accelerates
+   immediately. Under NTVDMEX you must release the key and press it again, and it
+   works about one time in ten.
+   ► WHY. The game hooks INT 09h and tracks key state from make/break codes. Its
+     restart path clears that state, so the key has to be RE-ASSERTED -- and on real
+     hardware it is, because an AT keyboard repeats the held key by itself, roughly
+     every 92 ms after a ~500 ms delay. The guest sees a fresh make and carries on.
+   ► WHAT WE WERE DOING. Outsourcing that to Windows: one make per WM_KEYDOWN, OS
+     auto-repeat included. But auto-repeat arrives as WINDOW MESSAGES, and the UI
+     thread was measured stalling up to 857 ms at a time -- so the repeats simply do
+     not arrive. MEASURED: 3205 scancodes across a whole session, when a single
+     60-second hold should exceed that on its own. The one-in-ten is the race
+     between the restart and a repeat that mostly is not coming.
+   ► THE FIX IS A MODELLING FIX, not a tuning one. A real keyboard's repeat does not
+     depend on how busy the host is, so ours must not either: the deadline is driven
+     from QueryPerformanceCounter and pumped from BOTH the exec loop and the UI
+     timer, exactly as the PIT already is. When one thread stalls the other covers.
+   ► ONE KEY, ONE PATH. OS auto-repeat is now SUPPRESSED (WM_KEYDOWN bit 30) because
+     we generate our own; letting both through would double the rate and make typing
+     stutter. That is the same principle that fixed the earlier keyboard bug, where
+     a parallel host-side ring meant INT 16h appeared to work while the BIOS ring
+     stayed empty forever.
+   Only the most recently pressed key repeats, which is what AT hardware does. */
+/* ► THE RATE IS NOT A CONSTANT AND MUST NOT BE ONE HERE. These started as 500 ms
+     and 10.9/s, remembered AT hardware defaults. MEASURED against stock ntvdm on
+     the same box with the same keyboard (tools/dostest/tymat.asm, run under both
+     hosts via rt_stock.bat):
+         stock ntvdm   delay 7 ticks ~385 ms   102 repeats -> 22.1/s
+         us            delay 9 ticks ~495 ms    49 repeats -> 10.9/s
+     Half the rate and a third again the delay. Hardcoding 385/22.1 would repeat
+     the same mistake with a fresher number, because that is THIS box's XP setting,
+     not a universal truth -- the user can change it in Control Panel and a real DOS
+     box would follow. So take it from the system, which is the thing stock ntvdm is
+     effectively passing through, and keep the measured pair above as the
+     VERIFICATION target rather than the source. */
+static uint32_t g_ty_delay_us  = 500000u;   /* replaced at startup from XP's setting */
+static uint32_t g_ty_period_us =  92000u;
+static DWORD    g_ty_spi_delay, g_ty_spi_speed;     /* raw, so STAGE2 can show them */
+
+/* XP exposes the two values it programs into the keyboard controller:
+     SPI_GETKEYBOARDDELAY  0..3  -> 250, 500, 750, 1000 ms
+     SPI_GETKEYBOARDSPEED  0..31 -> about 2.5/s at 0 up to about 30/s at 31,
+                                    linear in PERIOD rather than in rate. */
+static void host_key_typematic_init(void)
+{
+    DWORD d = 1, s = 31;
+    if (!SystemParametersInfoA(SPI_GETKEYBOARDDELAY, 0, &d, 0)) d = 1;
+    if (!SystemParametersInfoA(SPI_GETKEYBOARDSPEED, 0, &s, 0)) s = 31;
+    if (d > 3)  d = 3;
+    if (s > 31) s = 31;
+    g_ty_spi_delay = d; g_ty_spi_speed = s;
+    g_ty_delay_us  = (d + 1) * 250000u;
+    g_ty_period_us = 400000u - (s * 12000u);        /* 0 -> 400 ms, 31 -> 28 ms */
+}
+#define KEY_TYPEMATIC_DELAY_US  g_ty_delay_us
+#define KEY_TYPEMATIC_PERIOD_US g_ty_period_us
+static uint8_t  g_ty_sc, g_ty_ext, g_ty_on;
+static LONGLONG g_ty_due;
+static uint32_t g_ty_sent, g_ty_os_repeats;  /* ours generated / OS ones suppressed */
+
+static LONGLONG qpc_ticks(uint32_t us)
+{ return g_qpf.QuadPart ? (LONGLONG)((g_qpf.QuadPart / 1000) * us / 1000) : 0; }
+
+static void host_key_typematic_press(uint8_t sc, int ext)
+{
+    LARGE_INTEGER n;
+    QueryPerformanceCounter(&n);
+    g_ty_sc = sc; g_ty_ext = (uint8_t)(ext ? 1 : 0); g_ty_on = 1;
+    g_ty_due = n.QuadPart + qpc_ticks(KEY_TYPEMATIC_DELAY_US);
+}
+
+static void host_key_typematic_release(uint8_t sc, int ext)
+{
+    if (g_ty_on && g_ty_sc == sc && g_ty_ext == (uint8_t)(ext ? 1 : 0)) g_ty_on = 0;
+}
+
+/* Pumped from both threads; cheap and lock-free until it actually fires. */
+static void host_key_typematic(void)
+{
+    LARGE_INTEGER n;
+    if (!g_ty_on || !g_qpf.QuadPart) return;
+    QueryPerformanceCounter(&n);
+    if (n.QuadPart < g_ty_due) return;
+    /* A stall must not turn into a burst of makes: schedule from NOW, not from the
+       missed deadline, so we never try to "catch up" the repeats we owe. That is
+       the same mistake the PIT catch-up made, and it is worse here -- a burst of
+       makes is indistinguishable to the guest from the player hammering the key. */
+    g_ty_due = n.QuadPart + qpc_ticks(KEY_TYPEMATIC_PERIOD_US);
+    host_key_scancode(g_ty_sc, g_ty_ext, 0);
+    g_ty_sent++;
+}
+
 static DWORD WINAPI synthkey_thread(LPVOID pv)
 {
     int n;
@@ -1868,6 +1962,7 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
             s_prev = n; }
         g_pit.frame_us = 0;
         host_pit_sync();
+        host_key_typematic();       /* pumped from BOTH threads, like the PIT */
         HOST_LOCK();
         vdd_bus_frame(&g_bus);          /* tick PIT + render into g_vid.frame       */
         /* PRESENT IN PHASE WITH THE GUEST'S FRAME, not on our own timer.
@@ -1953,7 +2048,17 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
            for every key, alongside the INT 16h ring below (which other games poll). */
         {
             uint8_t rawsc = (uint8_t)((lp >> 16) & 0xFF);
-            if (rawsc) host_key_scancode(rawsc, (lp & 0x01000000) != 0, 0);
+            int ext = (lp & 0x01000000) != 0;
+            /* Bit 30 = the key was ALREADY down, i.e. this is OS auto-repeat. We
+               generate typematic ourselves (see host_key_typematic), so swallow it:
+               two sources would double the repeat rate. Counted, not silently
+               dropped -- the count is how we tell "the OS stopped sending them"
+               from "we stopped listening". */
+            if (lp & 0x40000000) { g_ty_os_repeats++; break; }
+            if (rawsc) {
+                host_key_scancode(rawsc, ext, 0);
+                host_key_typematic_press(rawsc, ext);
+            }
         }
         /* NOTHING ELSE TO DO. The scancode above is the whole keystroke: INT 09h translates
            it and fills the BIOS ring in guest memory, which is the single buffer INT 16h and
@@ -1965,7 +2070,11 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
     case WM_KEYUP:                       /* raw AT keyboard BREAK code + IRQ1      */
         {
             uint8_t rawsc = (uint8_t)((lp >> 16) & 0xFF);
-            if (rawsc) host_key_scancode(rawsc, (lp & 0x01000000) != 0, 1);
+            int ext = (lp & 0x01000000) != 0;
+            if (rawsc) {
+                host_key_typematic_release(rawsc, ext);   /* stop repeating first */
+                host_key_scancode(rawsc, ext, 1);
+            }
         }
         break;
     case WM_CHAR:                        /* Windows' translation: not ours to use */
@@ -4124,6 +4233,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
        in as a BOP routed below; DOS console output is routed via m.conout. */
     InitializeCriticalSection(&g_lock);
     QueryPerformanceFrequency(&g_qpf);      /* seeds qpc_us for the lock instrument */
+    host_key_typematic_init();              /* typematic from XP's setting, not a guess */
     vdd_bus_init(&g_bus, NULL);
     vdd_bus_set_sinks(&g_bus, host_irq_sink, NULL, NULL, NULL);  /* host presents directly */
     g_pic_dev = vdd_pic_device(&g_pic);      /* before the PIT: it gates every IRQ */
@@ -4266,6 +4376,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
            (as this one does) had its sequencer clocked far too slowly no matter what. */
         host_pit_sync();
         opl_pump_time();            /* keep the OPL timers current for the guest */
+        host_key_typematic();       /* the keyboard repeats even when the UI stalls */
         /* Deliver a pending PIT IRQ0 as INT 08h when the guest's main-line
            interrupts are enabled. We regain control at event boundaries, almost
            always inside a BOP stub (CS == DOS_HDLR_SEG) where the LIVE IF is the
@@ -5140,6 +5251,28 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
       p = zput(p, " hold_us=0x");                   p = zhex(p, g_lk_hold_us);
       p = zput(p, "@line ");                        p = zhex(p, (DWORD)g_lk_hold_site);
       p = zput(p, " ui_gap_us=0x");                 p = zhex(p, g_ui_gap_us);
+      /* ty_sent = typematic repeats WE generated; ty_os = OS auto-repeats we
+         suppressed because we generate our own. If ty_os is large and ty_sent is
+         small, the pump is not running; if both are small while a key was held,
+         the OS was not delivering repeats either -- which is what started this. */
+      p = zput(p, " ty_sent=0x");                   p = zhex(p, g_ty_sent);
+      p = zput(p, " ty_os=0x");                     p = zhex(p, g_ty_os_repeats);
+      /* The XP setting we derived the rate from, raw and in microseconds, so a run
+         says WHY it repeats at the speed it does. Verify against stock ntvdm with
+         tools/dostest/tymat.asm: the target is delay 7 ticks / 102 repeats. */
+      p = zput(p, " spi_delay=0x");                 p = zhex(p, g_ty_spi_delay);
+      p = zput(p, " spi_speed=0x");                 p = zhex(p, g_ty_spi_speed);
+      p = zput(p, " ty_delay_us=0x");               p = zhex(p, g_ty_delay_us);
+      p = zput(p, " ty_period_us=0x");              p = zhex(p, g_ty_period_us);
+      /* Does the guest set its OWN typematic rate? If it does, ours is a guess and
+         should be taken from its 0xF3 byte instead (bits 0-4 rate, 5-6 delay). */
+      p = zput(p, "\r\nSTAGE2: kbd 8042: writes=0x"); p = zhex(p, g_in.kbd_out_writes);
+      p = zput(p, " typematic_set=0x");               p = zhexb(p, g_in.kbd_typematic_set);
+      p = zput(p, " rate_byte=0x");                   p = zhexb(p, g_in.kbd_typematic_byte);
+      p = zput(p, " seq=");
+      { unsigned k; for (k = 0; k < g_in.kbd_out_n; ++k) {
+            p = zput(p, k ? "," : ""); p = zhexb(p, g_in.kbd_out_log[k][0]);
+            p = zput(p, ":");          p = zhexb(p, g_in.kbd_out_log[k][1]); } }
       p = zput(p, " int10_11=0x");   p = zhex(p, g_vid.int10_11_calls);
       /* Each font request, its answer, and the BYTES actually sitting at the address we
          handed back -- read from guest memory, so a wiped or misaligned table is visible

@@ -55,6 +55,23 @@ typedef struct input_state {
     uint32_t sc_pushed;
     uint32_t sc_dropped;
     uint32_t sc_hiwater;       /* deepest the FIFO ever got (of VDD_KBD_SIZE)     */
+
+    /* WHAT THE GUEST ASKS OF THE 8042. Every write to 0x60/0x64 used to be dropped
+       on the floor with a comment saying so -- a silent failure, which is the one
+       thing this project's standing principle rules out. It matters here because
+       the TYPEMATIC RATE is not a constant: DOS action games commonly set their own
+       via command 0xF3 (often the fastest, 30 cps / 250 ms delay) precisely so held
+       keys feel responsive. Ignoring that leaves us repeating at whatever rate we
+       chose for ourselves, which is a guess dressed as hardware.
+       Logged as a SEQUENCE rather than OR-ed together: an OR over a run cannot tell
+       "asked for once at init" from "asked for repeatedly", and that exact weakness
+       has already produced one confident wrong answer on this project. */
+    uint32_t kbd_out_writes;   /* writes to 0x60/0x64 seen                        */
+    uint8_t  kbd_out_log[16][2];   /* first 16 as (port low byte, value)          */
+    uint8_t  kbd_out_n;
+    uint8_t  kbd_expect_rate;  /* 0xF3 seen; the next byte is the rate/delay      */
+    uint8_t  kbd_typematic_set;    /* the guest set a rate at least once          */
+    uint8_t  kbd_typematic_byte;   /* the last rate/delay byte it asked for       */
     uint8_t  sc_last;          /* last byte handed out on IN 0x60 (re-read)       */
 } input_state;
 

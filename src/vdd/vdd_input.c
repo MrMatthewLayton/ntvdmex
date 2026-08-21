@@ -231,9 +231,31 @@ static void kbd_hw_in(void *self, uint16_t port, uint8_t w, uint32_t *val)
     *val = st->sc_last;
 }
 
+/* 8042 command/data writes. Still ACCEPTED-AND-IGNORED behaviourally -- changing
+   what the keyboard does on the strength of an untested guess is how the last two
+   attempts at this went -- but no longer SILENTLY. See the fields in vdd_input.h:
+   what we want out of a run is whether the guest ever sets its own typematic rate,
+   and to what. */
 static void kbd_hw_out(void *self, uint16_t port, uint8_t w, uint32_t v)
 {
-    (void)self; (void)port; (void)w; (void)v;  /* accept 8042/LED commands, ignore */
+    input_state *st = (input_state *)self;
+    uint8_t b = (uint8_t)v;
+    (void)w;
+    if (st) {
+        st->kbd_out_writes++;
+        if (st->kbd_out_n < 16) {
+            st->kbd_out_log[st->kbd_out_n][0] = (uint8_t)(port & 0xFF);
+            st->kbd_out_log[st->kbd_out_n][1] = b;
+            st->kbd_out_n++;
+        }
+        if (st->kbd_expect_rate) {          /* the byte after 0xF3 is the rate     */
+            st->kbd_typematic_byte = b;
+            st->kbd_typematic_set  = 1;
+            st->kbd_expect_rate    = 0;
+        } else if (port == 0x60 && b == 0xF3) {
+            st->kbd_expect_rate = 1;
+        }
+    }
 }
 
 /* INT 16h -- BIOS keyboard. ZF semantics: AH=01 sets ZF=1 when no key is ready.
