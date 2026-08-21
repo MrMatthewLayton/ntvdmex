@@ -292,18 +292,79 @@ static int32_t opl_op_sample(opl_state *st, int chi, int opi, int32_t mod)
     return neg ? -amp : amp;
 }
 
+/* --- rhythm mode ---------------------------------------------------------- *
+ * With 0xBD bit 5 set, channels 6-8 stop being melodic voices and become five
+ * percussion ones. Everything below was mapped from the OUTSIDE (`oplprobe
+ * rhythm`) rather than written down from memory: each operator was silenced in
+ * turn to find whose ENVELOPE drives which drum, and each operator's MULT was
+ * doubled in turn to find whose PHASE it runs on. Those are not the same answer,
+ * and assuming they were would have got the snare wrong.
+ *
+ *   voice       envelope   phase        character (measured)
+ *   bass drum   op12+op15  own          tonality 1.000 -- ordinary 2-op FM
+ *   tom-tom     op14       own          tonality 1.000 -- a plain sine
+ *   snare       op16       OP13's       tonality 0.509 -- half tone, half noise
+ *   hi-hat      op13       op13 + op17  tonality 0.003 -- essentially pure noise
+ *   cymbal      op17       op13 + op17  tonality 0.749
+ *
+ * Also measured, and not something to guess at: the percussion voices are summed
+ * at DOUBLE amplitude. A tom-tom peaks at 8170 where an ordinary operator at the
+ * same settings peaks at 4085.
+ *
+ * ► THE LAST THREE ARE NOT IMPLEMENTED, DELIBERATELY. Snare, hi-hat and cymbal
+ *   need the chip's special phase generator -- a boolean function of bits taken
+ *   from two different phase accumulators, plus a noise source. That is precisely
+ *   the kind of detail this project's cardinal rule exists for: writing it from
+ *   half-memory would produce something plausible that is wrong, and the harness
+ *   would score it as an improvement because ANY sound beats silence. They are
+ *   counted instead (prof_rhythm_hits), so a run says out loud what it could not
+ *   play. The measurements needed to derive them are recorded above and in
+ *   return-ntvdm.md.                                                              */
+static int32_t opl_rhythm_sample(opl_state *st)
+{
+    int32_t acc = 0, mo, co, fbmod = 0;
+    opl_op *m = &st->op[12], *cr = &st->op[15];
+
+    /* BASS DRUM -- channel 6, an ordinary two-operator voice. */
+    if (m->eg_state != OPL_EG_OFF || cr->eg_state != OPL_EG_OFF) {
+        if (st->ch[6].fb) fbmod = (m->out1 + m->out2) >> (9 - st->ch[6].fb);
+        mo = opl_op_sample(st, 6, 12, fbmod);
+        m->out2 = m->out1; m->out1 = mo;
+        opl_env_tick(st, 6, 12);
+        if (st->ch[6].cnt) { co = opl_op_sample(st, 6, 15, 0); acc += (mo + co) * 2; }
+        else               { co = opl_op_sample(st, 6, 15, mo); acc += co * 2; }
+        opl_env_tick(st, 6, 15);
+    }
+
+    /* TOM-TOM -- op14 alone, on channel 8's pitch. */
+    if (st->op[14].eg_state != OPL_EG_OFF) {
+        acc += opl_op_sample(st, 8, 14, 0) * 2;
+        opl_env_tick(st, 8, 14);
+    }
+
+    /* Snare (op16), hi-hat (op13) and cymbal (op17) belong here. Their envelopes
+       still run so that a key-on is not left latched forever, but they produce no
+       sound: see the note above. */
+    if (st->op[13].eg_state != OPL_EG_OFF) opl_env_tick(st, 7, 13);
+    if (st->op[16].eg_state != OPL_EG_OFF) opl_env_tick(st, 7, 16);
+    if (st->op[17].eg_state != OPL_EG_OFF) opl_env_tick(st, 8, 17);
+    return acc;
+}
+
 /* --- public: render ------------------------------------------------------- */
 void vdd_opl_render(opl_state *st, int16_t *out, uint32_t frames)
 {
     uint32_t n;
+    int rhythm = (st->reg[0xBD] & OPL_BD_RHY) ? 1 : 0;
+    int nmelodic = rhythm ? 6 : OPL_NUM_CH;     /* 6-8 are percussion in rhythm    */
     for (n = 0; n < frames; ++n) {
-        int32_t acc = 0;
+        int32_t acc = rhythm ? opl_rhythm_sample(st) : 0;
         int c;
         /* Outside the channel loop, and before the early-out below: the LFOs run
            whether or not anything is sounding. Advancing them only while a note
            plays would restart the sweep at every silence. */
         st->lfo_count++;
-        for (c = 0; c < OPL_NUM_CH; ++c) {
+        for (c = 0; c < nmelodic; ++c) {
             int mi = vdd_opl_op_index(c, 0), ci = vdd_opl_op_index(c, 1);
             opl_op *m = &st->op[mi], *cr = &st->op[ci];
             int32_t mo, co, fbmod = 0;

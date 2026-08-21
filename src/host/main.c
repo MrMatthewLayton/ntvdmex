@@ -5064,6 +5064,18 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         p = zput(p, " waves=");               p = zhexb(p, g_opl.prof_wave_mask);
         p = zput(p, " wse=");                 p = zhexb(p, g_opl.prof_wse);
         p = zput(p, "\r\n");
+        /* PERCUSSION, BY EDGE COUNT. bd_or above is an OR over the whole run and
+           cannot tell "set once at init" from "drums play throughout" -- it once
+           produced a confident wrong answer about exactly this register. These are
+           key-on edges per voice, and the last three are NOT SYNTHESISED YET, so
+           this doubles as their loud-failure report: the run says how many hits it
+           could not play rather than going quietly silent. */
+        p = zput(p, "STAGE2: opl rhythm: bassdrum="); p = zhex(p, g_opl.prof_rhythm_hits[4]);
+        p = zput(p, " tomtom=");                      p = zhex(p, g_opl.prof_rhythm_hits[2]);
+        p = zput(p, "  NOT SYNTHESISED hihat=");      p = zhex(p, g_opl.prof_rhythm_hits[0]);
+        p = zput(p, " snare=");                       p = zhex(p, g_opl.prof_rhythm_hits[3]);
+        p = zput(p, " cymbal=");                      p = zhex(p, g_opl.prof_rhythm_hits[1]);
+        p = zput(p, "\r\n");
         p = zput(p, "STAGE2: vsync: vbl_edges="); p = zhex(p, g_vid.vbl_edges);
         p = zput(p, " p3da_reads=");             p = zhex(p, g_vid.p3da_reads);
         p = zput(p, " run_ms=");                 p = zhex(p, GetTickCount() - g_run_start_tick);

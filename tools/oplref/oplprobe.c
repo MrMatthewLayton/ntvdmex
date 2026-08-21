@@ -794,6 +794,166 @@ static void exp_ksl(void)
 }
 
 /* ============================================================================ *
+ * EXPERIMENT M -- RHYTHM MODE, MAPPED FROM THE OUTSIDE.
+ *
+ * With 0xBD bit 5 set, channels 6-8 stop being melodic voices and become five
+ * percussion ones. WHICH operator belongs to which drum, and whether each is heard
+ * directly or through FM, is exactly the sort of thing it would be easy to write
+ * down from half-memory and get subtly wrong -- so this does not write it down at
+ * all. It silences one operator at a time and watches which drum goes quiet. The
+ * mapping falls out of the measurement.
+ *
+ * It also asks of each voice: is it TONAL or NOISE? Energy that lands on harmonics
+ * of the channel's own frequency is tonal and can be reproduced by the ordinary
+ * phase generator; energy spread off that grid cannot, and marks the voices that
+ * need the chip's special phase logic.
+ *
+ * MEASURED NEED (edge counts from the Skyroads trace, the trustworthy instrument):
+ *   hi-hat 548, bass drum 142, cymbal 138, snare 70, tom-tom 0, over 89.8 s
+ *   starting at 19.8 s -- against 545 melodic notes on channels 0-3 only.
+ * And the 10-second segment scores put the residual error exactly there: 0.96-0.97
+ * before the drums come in, 0.26 in the quiet percussion-led passage after.
+ * ============================================================================ */
+static const char *g_drum[5]     = { "hi-hat", "cymbal", "tom-tom", "snare", "bass drum" };
+static const uint8_t g_drumbit[5] = { 0x01, 0x02, 0x04, 0x08, 0x10 };
+/* operators 12..17 live at register offsets 0x10..0x15 */
+static const uint8_t g_rop[6]    = { 0x10, 0x11, 0x12, 0x13, 0x14, 0x15 };
+
+static uint8_t g_rmult[6] = { 1, 1, 1, 1, 1, 1 };         /* per-operator MULT    */
+
+static void rhythm_setup(uint8_t mute_off, uint8_t drumbits)
+{
+    int i;
+    both_reset();
+    both_write(0x01, 0x20);
+    for (i = 0; i < 6; i++) {
+        uint8_t o = g_rop[i];
+        both_write((uint8_t)(0x20 + o), (uint8_t)(0x20 | g_rmult[i]));  /* EGT=1  */
+        both_write((uint8_t)(0x40 + o), (uint8_t)(o == mute_off ? 0x3F : 0x00));
+        both_write((uint8_t)(0x60 + o), 0xF0);            /* AR=15, DR=0          */
+        both_write((uint8_t)(0x80 + o), 0x0F);            /* SL=0,  RR=15         */
+        both_write((uint8_t)(0xE0 + o), 0x00);
+    }
+    for (i = 6; i < 9; i++) {
+        both_write((uint8_t)(0xC0 + i), 0x00);            /* FM, no feedback      */
+        both_write((uint8_t)(0xA0 + i), TEST_FNUM & 0xFF);
+        /* NO key-on bit: in rhythm mode these voices are keyed from 0xBD */
+        both_write((uint8_t)(0xB0 + i),
+                   (uint8_t)((TEST_BLOCK << 2) | ((TEST_FNUM >> 8) & 3)));
+    }
+    both_write(0xBD, (uint8_t)(OPL_BD_RHY | drumbits));
+}
+
+/* Fraction of the signal's energy sitting on harmonics of the test note. Near 1 is
+   tonal; near 0 is noise. */
+static double tonality(const int16_t *s)
+{
+    double tot = 0, tone = 0;
+    int i, k;
+    for (i = 0; i < NWIN; i++) tot += (double)s[NSETTLE + i] * s[NSETTLE + i];
+    tot /= NWIN;
+    for (k = 1; k <= 60; k++) { double h = harm(s, k); tone += h * h / 2; }
+    return tot > 0 ? tone / tot : 0;
+}
+
+static void exp_rhythm(void)
+{
+    int d, i;
+    printf("  WHICH OPERATOR DRIVES WHICH DRUM (reference RMS with that operator at TL=63,\n"
+           "  as a fraction of the RMS with all six at full volume)\n");
+    printf("  drum        all on");
+    for (i = 0; i < 6; i++) printf("   op%d", 12 + i);
+    printf("\n");
+    for (d = 0; d < 5; d++) {
+        double base;
+        rhythm_setup(0xFF, g_drumbit[d]);
+        both_render(NMAX);
+        base = rms_of(g_b, NSETTLE, NWIN);
+        printf("  %-10s %7.0f", g_drum[d], base);
+        for (i = 0; i < 6; i++) {
+            rhythm_setup(g_rop[i], g_drumbit[d]);
+            both_render(NMAX);
+            printf("  %.2f", base > 0 ? rms_of(g_b, NSETTLE, NWIN) / base : 0.0);
+        }
+        printf("\n");
+    }
+
+    printf("\n  CHARACTER OF EACH VOICE (reference)\n");
+    printf("  drum        RMS    peak   tonality   H1     H2     H3     H4\n");
+    for (d = 0; d < 5; d++) {
+        double h[5];
+        int k;
+        rhythm_setup(0xFF, g_drumbit[d]);
+        both_render(NMAX);
+        for (k = 1; k <= 4; k++) h[k] = harm(g_b, k);
+        printf("  %-10s %6.0f %6.0f     %5.3f  %6.0f %6.0f %6.0f %6.0f\n",
+               g_drum[d], rms_of(g_b, NSETTLE, NWIN), peak_of(g_b, NSETTLE, NWIN),
+               tonality(g_b), h[1], h[2], h[3], h[4]);
+    }
+
+    /* WHICH PHASE ACCUMULATOR FEEDS WHICH VOICE. The mute test says which operator
+       supplies a voice's ENVELOPE; it cannot say whose PHASE it runs on, and for
+       the percussion voices those are not the same thing. Doubling one operator's
+       MULT doubles its phase rate and nothing else, so whichever voices shift
+       spectrally are the ones reading that accumulator. */
+    printf("\n  WHOSE PHASE DOES EACH VOICE RUN ON (peak harmonic bin in the reference,\n"
+           "  first with every MULT at 1, then doubling one operator's MULT at a time)\n");
+    printf("  drum        base");
+    for (i = 0; i < 6; i++) printf("   op%d", 12 + i);
+    printf("\n");
+    for (d = 0; d < 5; d++) {
+        int basebin = 0, k;
+        double v = 0;
+        rhythm_setup(0xFF, g_drumbit[d]);
+        both_render(NMAX);
+        for (k = 1; k <= 60; k++) { double x = harm(g_b, k); if (x > v) { v = x; basebin = k; } }
+        printf("  %-10s %4d", g_drum[d], basebin);
+        for (i = 0; i < 6; i++) {
+            int bin = 0;
+            g_rmult[i] = 2;
+            rhythm_setup(0xFF, g_drumbit[d]);
+            both_render(NMAX);
+            v = 0;
+            for (k = 1; k <= 60; k++) { double x = harm(g_b, k); if (x > v) { v = x; bin = k; } }
+            g_rmult[i] = 1;
+            printf("  %4s", bin == basebin ? "." : "");
+            if (bin != basebin) printf("\b\b\b\b%4d", bin);
+        }
+        printf("\n");
+    }
+    printf("  ('.' = unchanged, so that operator's phase does not reach this voice)\n");
+
+    printf("\n  OURS vs REFERENCE, one voice at a time\n");
+    /* Correlation is also reported at the BEST SMALL LAG. A waveform that is right
+       but a sample or two early scores near zero at lag 0, which reads exactly like
+       a wrong waveform -- and the fix for the two is completely different. */
+    printf("  drum         ours RMS   ref RMS    ratio    corr    best corr @ lag\n");
+    for (d = 0; d < 5; d++) {
+        double ra, rb, xa = 0, xb = 0, xc = 0, best = -2;
+        int j, lag, bestlag = 0;
+        rhythm_setup(0xFF, g_drumbit[d]);
+        both_render(NMAX);
+        ra = rms_of(g_a, NSETTLE, NWIN); rb = rms_of(g_b, NSETTLE, NWIN);
+        for (j = 0; j < NWIN; j++) {
+            double x = g_a[NSETTLE + j], y = g_b[NSETTLE + j];
+            xa += x * x; xb += y * y; xc += x * y;
+        }
+        for (lag = -16; lag <= 16; lag++) {
+            double ca = 0, cb = 0, cc = 0, r;
+            for (j = 32; j < NWIN - 32; j++) {
+                double x = g_a[NSETTLE + j], y = g_b[NSETTLE + j + lag];
+                ca += x * x; cb += y * y; cc += x * y;
+            }
+            r = (ca > 0 && cb > 0) ? cc / sqrt(ca * cb) : 0;
+            if (r > best) { best = r; bestlag = lag; }
+        }
+        printf("  %-10s %9.0f %9.0f  %7.3f  %+6.3f    %+6.3f @ %+d\n", g_drum[d], ra, rb,
+               rb > 0 ? ra / rb : 0.0,
+               (xa > 0 && xb > 0) ? xc / sqrt(xa * xb) : 0.0, best, bestlag);
+    }
+}
+
+/* ============================================================================ *
  * EXPERIMENT L -- THE TREMOLO AND VIBRATO LFOs.
  *
  * Both are currently no-ops: 0xBD is stored and never acted on. They are not
@@ -1042,6 +1202,7 @@ int main(int argc, char **argv)
     if (all || !strcmp(what, "ksl"))  { printf("== F. KEY SCALE LEVEL ==\n");   exp_ksl();  printf("\n"); }
     if (all || !strcmp(what, "kslrom")) { printf("== K. KSL ROM READ-OUT ==\n"); exp_kslrom(); printf("\n"); }
     if (all || !strcmp(what, "lfo"))  { printf("== L. TREMOLO / VIBRATO LFOs ==\n"); exp_lfo(); printf("\n"); }
+    if (all || !strcmp(what, "rhythm")) { printf("== M. RHYTHM MODE ==\n"); exp_rhythm(); printf("\n"); }
     if (all || !strcmp(what, "env"))  { printf("== E. ENVELOPE RATES ==\n");    exp_env();  printf("\n"); }
     if (all || !strcmp(what, "egrate")) { printf("== H. ENVELOPE RATE LAW ==\n"); exp_egrate(); printf("\n"); }
     if (all || !strcmp(what, "retrig")) { printf("== I. RETRIGGER ==\n");         exp_retrig(); printf("\n"); }

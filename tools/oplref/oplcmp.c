@@ -170,6 +170,28 @@ int main(int argc, char **argv)
            eb > 0 ? sqrt(ea / eb) : 0.0);
     printf("correlation       %.4f  (1.0 = same waveform)\n",
            (ea > 0 && eb > 0) ? cross / sqrt(ea * eb) : 0.0);
+
+    /* CORRELATION AT THE BEST SMALL LAG. The reference core is cycle-accurate and
+       reaches its output a few samples after the register write that caused it; we
+       do not model that pipeline. A constant offset of a few samples costs raw
+       correlation heavily at these frequencies while changing nothing you could
+       hear, so reporting only lag 0 charges our synth for the reference's latency.
+       Per-voice this was decisive: the bass drum scored -0.135 at lag 0 and +0.999
+       at lag 4 -- identical waveform, four samples apart. If the two numbers below
+       differ much, the gap is alignment, not timbre. */
+    {
+        double best = -2; int lag, bestlag = 0;
+        for (lag = 0; lag <= 24; lag++) {
+            double ca = 0, cb = 0, cc = 0, r;
+            for (i = 32; i + 32 < total; i++) {
+                double x = a[i], y = b[i + lag];
+                ca += x * x; cb += y * y; cc += x * y;
+            }
+            r = (ca > 0 && cb > 0) ? cc / sqrt(ca * cb) : 0;
+            if (r > best) { best = r; bestlag = lag; }
+        }
+        printf("correlation @ lag %.4f  (best alignment, lag %d samples)\n", best, bestlag);
+    }
     printf("RMS error         %.1f  (%.1f%% of reference)\n",
            sqrt(se / total), eb > 0 ? 100.0 * sqrt(se / eb) : 0.0);
     /* "Silent frames" counts EXACT zeros, and that is a trap: the reference carries

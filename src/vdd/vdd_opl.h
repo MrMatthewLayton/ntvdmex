@@ -140,6 +140,12 @@ typedef struct opl_state {
     uint32_t prof_vib_ops;              /* bitmask: operators that ever set VIB    */
     uint32_t prof_keyon_am;             /* notes started with AM on either operator */
     uint32_t prof_keyon_vib;            /* notes started with VIB on either op      */
+    /* Percussion hits by voice: hi-hat, cymbal, tom-tom, snare, bass drum. EDGES,
+       not an OR over the run -- a counter that only says a feature was TOUCHED
+       once produced a confident wrong answer about this very register. Three of
+       these five voices are not synthesised yet, so this is also the loud-failure
+       report for them: a run says how much percussion it could not play. */
+    uint32_t prof_rhythm_hits[5];
 } opl_state;
 
 /* Build the device descriptor to hand to vdd_bus_add(). */

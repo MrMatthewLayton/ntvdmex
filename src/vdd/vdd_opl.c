@@ -57,9 +57,52 @@ void vdd_opl_add_us(opl_state *st, uint32_t us)
 }
 
 /* --- register file -------------------------------------------------------- */
+/* Key one OPERATOR, rather than a channel. Rhythm mode needs this: four of the five
+   percussion voices are single operators keyed independently from 0xBD, so the
+   channel-wide key-on the melodic path uses cannot express them. */
+static void opl_key_op(opl_state *st, int opi, int on)
+{
+    if (on) {
+        st->op[opi].eg_state = OPL_EG_ATTACK;
+        st->op[opi].phase = 0;
+    } else if (st->op[opi].eg_state != OPL_EG_OFF) {
+        st->op[opi].eg_state = OPL_EG_RELEASE;
+    }
+}
+
+/* 0xBD's low five bits key the percussion voices. MEASURED, not assumed -- each
+   operator was silenced in turn and the drum that went quiet named the owner
+   (tools/oplref/oplprobe.c, experiment M):
+       bit 0 hi-hat -> op13      bit 1 cymbal -> op17     bit 2 tom-tom -> op14
+       bit 3 snare  -> op16      bit 4 bass drum -> channel 6, BOTH operators
+   The bass drum is an ordinary two-operator FM voice; the other four are single
+   operators heard directly. */
+static void opl_rhythm_write(opl_state *st, uint8_t old, uint8_t val)
+{
+    static const uint8_t drum_op[4] = { 13, 17, 14, 16 };   /* HH, TC, TT, SD     */
+    int b;
+    if (!(val & OPL_BD_RHY)) {                  /* leaving rhythm mode: all quiet */
+        if (old & OPL_BD_RHY)
+            for (b = 12; b < 18; ++b) opl_key_op(st, b, 0);
+        return;
+    }
+    if (!(old & OPL_BD_RHY)) old = 0;           /* entering: every set bit is new */
+    for (b = 0; b < 4; ++b)
+        if (((val >> b) & 1) != ((old >> b) & 1)) {
+            opl_key_op(st, drum_op[b], (val >> b) & 1);
+            if ((val >> b) & 1) st->prof_rhythm_hits[b]++;
+        }
+    if ((val & 0x10) != (old & 0x10)) {         /* bass drum keys both operators  */
+        opl_key_op(st, 12, val & 0x10);
+        opl_key_op(st, 15, val & 0x10);
+        if (val & 0x10) st->prof_rhythm_hits[4]++;
+    }
+}
+
 void vdd_opl_write_reg(opl_state *st, uint8_t reg, uint8_t val)
 {
     int i;
+    uint8_t old = st->reg[reg];                 /* before the store: edge detection */
     st->reg[reg] = val;
     st->prof_writes++;                                  /* profile: see opl_state */
     if (st->trace) st->trace(reg, val);                 /* dev-only capture hook  */
@@ -135,6 +178,10 @@ void vdd_opl_write_reg(opl_state *st, uint8_t reg, uint8_t val)
         int c = reg - 0xB0, kon = (val >> 5) & 1;
         st->ch[c].fnum  = (uint16_t)((st->ch[c].fnum & 0xFF) | ((val & 3) << 8));
         st->ch[c].block = (val >> 2) & 7;
+        /* In rhythm mode channels 6-8 ARE the percussion voices, keyed from 0xBD.
+           Their own key-on bit is not theirs to use any more -- but the F-number
+           and block above still are, because that is how a driver tunes the drums. */
+        if (c >= 6 && (st->reg[0xBD] & OPL_BD_RHY)) return;
         if (kon && !st->ch[c].keyon) {                  /* key-on edge: restart   */
             int m = vdd_opl_op_index(c, 0), cr = vdd_opl_op_index(c, 1);
             st->op[m].eg_state = OPL_EG_ATTACK; st->op[m].phase = 0;
@@ -157,7 +204,10 @@ void vdd_opl_write_reg(opl_state *st, uint8_t reg, uint8_t val)
     }
     /* 0x01 (test/WSE), 0x08 (CSM/NTS), 0xBD (rhythm/depth) are stored in reg[]
        and consulted by the synth; nothing to decode here. */
-    if (reg == 0xBD) { st->prof_bd_writes++; st->prof_bd_or |= val; }
+    if (reg == 0xBD) {
+        opl_rhythm_write(st, old, val);
+        st->prof_bd_writes++; st->prof_bd_or |= val;
+    }
     if (reg == 0x01 && (val & 0x20)) st->prof_wse = 1;
 }
 
