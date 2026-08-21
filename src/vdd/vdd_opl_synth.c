@@ -188,12 +188,56 @@ static void opl_env_tick(opl_state *st, int chi, int opi)
     if (o->env > (OPL_ENV_MAX << OPL_ENV_SHIFT)) o->env = OPL_ENV_MAX << OPL_ENV_SHIFT;
 }
 
+/* --- the two low-frequency oscillators ------------------------------------ */
+/* TREMOLO. MEASURED (`oplprobe lfo`): a 52-step triangle climbing to 26 envelope
+   units and back, one step every 256 samples -- 3.73 Hz, and 4.89 dB deep at DAM=1
+   against 4.87 measured. It is a STAIRCASE, not a sine: the reference's amplitude
+   moves in exact 0.188 dB steps, one envelope unit at a time. DAM=0 is the same
+   counter shifted down two places, which is why its steps last four times as long
+   and it measures a quarter as deep. */
+#define OPL_AM_SHIFT   8        /* 256 samples per tremolo step                   */
+#define OPL_AM_STEPS  52
+#define OPL_AM_PEAK   26
+
+static int32_t opl_trem_units(const opl_state *st)
+{
+    uint32_t s = (st->lfo_count >> OPL_AM_SHIFT) % OPL_AM_STEPS;
+    int32_t  t = (s < OPL_AM_PEAK) ? (int32_t)s : (int32_t)(OPL_AM_STEPS - s);
+    return (st->reg[0xBD] & OPL_BD_DAM) ? t : (t >> 2);
+}
+
+/* VIBRATO. MEASURED: eight steps of 1024 samples -- 49716/8192 = 6.069 Hz, which
+   is what the reference reads to four figures -- following the pattern
+   0, half, full, half, 0, -half, -full, -half.
+   The depth is a SHIFT of the F-number, not a fixed number of cents: fnum >> 7,
+   halved again when DVB is clear. That predicts 25.23 cents peak-to-peak at
+   F-num 0x3C0 against 25.17 measured, and 27.05 at 0x200 against 27.07 -- and it
+   means the effect QUANTISES, so an F-num below 128 gets no vibrato at all. A
+   constant-cents implementation matches at one pitch and drifts at every other. */
+#define OPL_VIB_SHIFT 10        /* 1024 samples per vibrato step                  */
+static const signed char opl_vib_pat[8] = { 0, 1, 2, 1, 0, -1, -2, -1 };
+
+static int32_t opl_vib_offset(const opl_state *st, int chi)
+{
+    int32_t full = (int32_t)st->ch[chi].fnum >> ((st->reg[0xBD] & OPL_BD_DVB) ? 7 : 8);
+    int     t    = opl_vib_pat[(st->lfo_count >> OPL_VIB_SHIFT) & 7];
+    int32_t v    = (t == 2 || t == -2) ? full : (t ? (full >> 1) : 0);
+    return (t < 0) ? -v : v;
+}
+
 /* --- operator ------------------------------------------------------------- */
 /* Phase increment per native sample: (F-num << block) * multiplier / 2. With
-   multiplier 1 this gives f = fnum * 49716 / 2^(20-block), the chip's formula. */
+   multiplier 1 this gives f = fnum * 49716 / 2^(20-block), the chip's formula.
+   Vibrato rides on the F-number itself, so it scales with block and multiplier
+   exactly as the pitch does -- which is why the effect is a constant interval
+   rather than a constant number of hertz. */
 static uint32_t opl_phase_inc(const opl_state *st, int chi, const opl_op *o)
 {
-    uint32_t base = (uint32_t)st->ch[chi].fnum << st->ch[chi].block;
+    int32_t fnum = (int32_t)st->ch[chi].fnum;
+    uint32_t base;
+    if (o->vib) fnum += opl_vib_offset(st, chi);
+    if (fnum < 0) fnum = 0;
+    base = (uint32_t)fnum << st->ch[chi].block;
     return (base * opl_mult2[o->mult]) >> 1;
 }
 
@@ -243,6 +287,7 @@ static int32_t opl_op_sample(opl_state *st, int chi, int opi, int32_t mod)
     if (mute) return 0;
 
     att = logv + (o->env >> OPL_ENV_SHIFT) * OPL_ENV_TO_LOG + opl_static_att(st, chi, o);
+    if (o->am) att += opl_trem_units(st) * OPL_ENV_TO_LOG;
     amp = opl_exp2neg(att);
     return neg ? -amp : amp;
 }
@@ -254,6 +299,10 @@ void vdd_opl_render(opl_state *st, int16_t *out, uint32_t frames)
     for (n = 0; n < frames; ++n) {
         int32_t acc = 0;
         int c;
+        /* Outside the channel loop, and before the early-out below: the LFOs run
+           whether or not anything is sounding. Advancing them only while a note
+           plays would restart the sweep at every silence. */
+        st->lfo_count++;
         for (c = 0; c < OPL_NUM_CH; ++c) {
             int mi = vdd_opl_op_index(c, 0), ci = vdd_opl_op_index(c, 1);
             opl_op *m = &st->op[mi], *cr = &st->op[ci];

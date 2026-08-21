@@ -794,6 +794,162 @@ static void exp_ksl(void)
 }
 
 /* ============================================================================ *
+ * EXPERIMENT L -- THE TREMOLO AND VIBRATO LFOs.
+ *
+ * Both are currently no-ops: 0xBD is stored and never acted on. They are not
+ * speculative gaps -- the per-note edge counters say 103 of Skyroads' 982 notes
+ * start with tremolo and 149 with vibrato, and those counters count EDGES, unlike
+ * the OR-over-the-run field that once produced a confident wrong answer about
+ * rhythm mode.
+ *
+ * Three things have to come out of the oracle for each: the RATE, the DEPTH, and
+ * the SHAPE. Shape matters as much as the other two -- a sine and a triangle of
+ * equal rate and depth do not sound alike -- so both experiments print the raw
+ * curve rather than only its summary statistics.
+ * ============================================================================ */
+#define LFO_STEP 128            /* one reading per cycle of the test note        */
+#define LFO_LEN  (RATE * 8)     /* ~30 LFO cycles: enough to time one to 0.03%   */
+#define VIB_STEP 1024           /* one vibrato step, so readings do not smear     */
+
+/* Rate and peak-to-peak of a slow periodic curve, by counting how often it crosses
+   its own mean going upwards. Robust to shape, which matters because we do not yet
+   know whether these are sines or triangles. */
+static void lfo_stats_step(const double *v, int n, int stride, double *rate, double *depth)
+{
+    double mn = 1e300, mx = -1e300, mean = 0;
+    int i, first = -1, last = -1, cross = 0;
+    for (i = 0; i < n; i++) { if (v[i] < mn) mn = v[i]; if (v[i] > mx) mx = v[i]; mean += v[i]; }
+    mean /= n;
+    for (i = 1; i < n; i++)
+        if (v[i - 1] <= mean && v[i] > mean) {
+            if (first < 0) first = i; else { last = i; cross++; }
+        }
+    *depth = mx - mn;
+    *rate = (cross > 0 && last > first)
+          ? (double)cross * RATE / ((double)(last - first) * stride) : 0.0;
+}
+
+static void lfo_stats(const double *v, int n, double *rate, double *depth)
+{ lfo_stats_step(v, n, LFO_STEP, rate, depth); }
+
+static void lfo_dump(const char *what, const double *v, int n)
+{
+    int i;
+    printf("    %s over one cycle:", what);
+    for (i = 0; i < n && i < 26; i++) {
+        if (i % 13 == 0) printf("\n      ");
+        printf("%8.3f", v[i]);
+    }
+    printf("\n");
+}
+
+static void exp_lfo(void)
+{
+    static double va[LFO_LEN / LFO_STEP], vb[LFO_LEN / LFO_STEP];
+    int n = LFO_LEN / LFO_STEP, d, i;
+    printf("  (test note is %d Hz; one reading per %d samples)\n",
+           RATE / PERIOD, LFO_STEP);
+
+    /* ---- TREMOLO: AM=1 on the carrier, depth bit DAM = 0xBD bit 7 ------------ */
+    for (d = 0; d <= 1; d++) {
+        rv p[] = {
+            { 0x01, 0x20 }, { 0x20, (uint8_t)(0x20 | PARK_MULT) }, { 0x23, 0xA1 },
+            { 0x40, PARK_TL }, { 0x43, 0x00 },      /* carrier AM=1, EGT=1, MULT=1 */
+            { 0x60, 0xF0 }, { 0x63, 0xF0 },
+            { 0x80, 0x0F }, { 0x83, 0x0F },
+            { 0xE0, 0x00 }, { 0xE3, 0x00 }, { 0xC0, 0x01 },       /* additive      */
+            { 0xA0, TEST_FNUM & 0xFF },
+            { 0xB0, (uint8_t)(0x20 | (TEST_BLOCK << 2) | ((TEST_FNUM >> 8) & 3)) },
+        };
+        double ra, rb, da, db;
+        both_reset();
+        both_prog(p, (int)(sizeof p / sizeof p[0]));
+        both_write(0xBD, (uint8_t)(d ? 0x80 : 0x00));
+        env_render(g_ea, g_eb, LFO_LEN);
+        for (i = 0; i < n; i++) {
+            double ea = env_pk(g_ea, i * LFO_STEP, LFO_STEP);
+            double eb = env_pk(g_eb, i * LFO_STEP, LFO_STEP);
+            va[i] = ea > 0 ? 20 * log10(ea / 4096.0) : -99;
+            vb[i] = eb > 0 ? 20 * log10(eb / 4085.0) : -99;
+        }
+        lfo_stats(va, n, &ra, &da);
+        lfo_stats(vb, n, &rb, &db);
+        printf("  TREMOLO DAM=%d   ours %6.3f Hz / %5.2f dB     ref %6.3f Hz / %5.2f dB\n",
+               d, ra, da, rb, db);
+        lfo_dump("ref amplitude, dB", vb, n);
+        if (d) {
+            /* COUNT THE STAIRCASE. The rate alone cannot separate a 52-step
+               triangle from a 54-step one -- 4% apart, inside the measurement --
+               but the steps are individually visible, so count them instead. */
+            int steps = 0; double prev = vb[0];
+            for (i = 1; i < n; i++) {
+                if (vb[i] != prev) { steps++; prev = vb[i]; }
+                if (steps && vb[i] == vb[0] && vb[i - 1] != vb[0]) break;
+            }
+            printf("    distinct levels before returning to the top: %d"
+                   "  (one step per %d samples)\n", steps, LFO_STEP * i / (steps ? steps : 1));
+        }
+    }
+
+    /* ---- VIBRATO: VIB=1 on the carrier, depth bit DVB = 0xBD bit 6 ----------- *
+     * Swept over F-num as well as depth. The offset looks like a shift of the
+     * F-number, and a shift QUANTISES: if the law really is fnum >> 9 then an
+     * F-num below 512 gets no vibrato at all at DVB=0. That is a sharp, falsifiable
+     * prediction, and it is the kind of edge a depth measured at one pitch would
+     * sail straight past.                                                         */
+    /* 0x100 is deliberately absent: at that F-num the test note is 256 samples a
+       cycle, so a reading window holds too few zero crossings to resolve a 7-cent
+       shift. An unresolvable reading is not evidence, and the earlier run of this
+       sweep printed 121 cents there -- which is my instrument, not the chip. */
+    { static const uint16_t vfn[2] = { 0x200, 0x3C0 };
+      int fi;
+      for (fi = 0; fi < 2; fi++)
+    for (d = 0; d <= 1; d++) {
+        rv p[] = {
+            { 0x01, 0x20 }, { 0x20, (uint8_t)(0x20 | PARK_MULT) }, { 0x23, 0x61 },
+            { 0x40, PARK_TL }, { 0x43, 0x00 },      /* carrier VIB=1, EGT=1        */
+            { 0x60, 0xF0 }, { 0x63, 0xF0 },
+            { 0x80, 0x0F }, { 0x83, 0x0F },
+            { 0xE0, 0x00 }, { 0xE3, 0x00 }, { 0xC0, 0x01 },
+            { 0xA0, (uint8_t)(vfn[fi] & 0xFF) },
+            { 0xB0, (uint8_t)(0x20 | (TEST_BLOCK << 2) | ((vfn[fi] >> 8) & 3)) },
+        };
+        double ra, rb, da, db;
+        both_reset();
+        both_prog(p, (int)(sizeof p / sizeof p[0]));
+        both_write(0xBD, (uint8_t)(d ? 0x40 : 0x00));
+        env_render(g_ea, g_eb, LFO_LEN);
+        /* Instantaneous pitch from interpolated upward zero crossings, averaged
+           over each reading window; expressed in cents against the mean. */
+        { int c;
+          for (c = 0; c < 2; c++) {
+            const int16_t *s = c ? g_eb : g_ea;
+            double *out = c ? vb : va, mean = 0;
+            int k;
+            for (k = 0; k < LFO_LEN / VIB_STEP; k++) {
+                int j, base = k * VIB_STEP, nx = 0; double f0 = -1, f1 = -1;
+                for (j = base + 1; j < base + VIB_STEP && j < LFO_LEN; j++)
+                    if (s[j - 1] < 0 && s[j] >= 0) {
+                        double frac = (double)(-s[j - 1]) / (double)(s[j] - s[j - 1]);
+                        double t = (j - 1) + frac;
+                        if (f0 < 0) f0 = t; else { f1 = t; nx++; }
+                    }
+                out[k] = (nx > 0 && f1 > f0) ? (double)nx * RATE / (f1 - f0) : 0;
+                mean += out[k];
+            }
+            mean /= (LFO_LEN / VIB_STEP);
+            for (k = 0; k < LFO_LEN / VIB_STEP; k++)
+                out[k] = out[k] > 0 ? 1200.0 * log2(out[k] / mean) : 0;
+          } }
+        lfo_stats_step(va, LFO_LEN / VIB_STEP, VIB_STEP, &ra, &da);
+        lfo_stats_step(vb, LFO_LEN / VIB_STEP, VIB_STEP, &rb, &db);
+        printf("  VIBRATO fnum=%03X DVB=%d   ours %6.3f Hz / %6.2f cents   "
+               "ref %6.3f Hz / %6.2f cents  (fnum>>9 = %d, fnum>>8 = %d)\n",
+               vfn[fi], d, ra, da, rb, db, vfn[fi] >> 9, vfn[fi] >> 8);
+    } }
+}
+
+/* ============================================================================ *
  * EXPERIMENT K -- READ THE KSL ROM OUT OF THE ORACLE.
  * `ksl` above only sampled four F-num nibbles and they all happened to land on
  * whole ROM steps, which validates the LAW but says nothing about the 16-entry
@@ -885,6 +1041,7 @@ int main(int argc, char **argv)
     if (all || !strcmp(what, "mult")) { printf("== G. MULT ==\n");              exp_mult(); printf("\n"); }
     if (all || !strcmp(what, "ksl"))  { printf("== F. KEY SCALE LEVEL ==\n");   exp_ksl();  printf("\n"); }
     if (all || !strcmp(what, "kslrom")) { printf("== K. KSL ROM READ-OUT ==\n"); exp_kslrom(); printf("\n"); }
+    if (all || !strcmp(what, "lfo"))  { printf("== L. TREMOLO / VIBRATO LFOs ==\n"); exp_lfo(); printf("\n"); }
     if (all || !strcmp(what, "env"))  { printf("== E. ENVELOPE RATES ==\n");    exp_env();  printf("\n"); }
     if (all || !strcmp(what, "egrate")) { printf("== H. ENVELOPE RATE LAW ==\n"); exp_egrate(); printf("\n"); }
     if (all || !strcmp(what, "retrig")) { printf("== I. RETRIGGER ==\n");         exp_retrig(); printf("\n"); }

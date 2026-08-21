@@ -40,6 +40,13 @@
 #define OPL_ST_T1   0x40
 #define OPL_ST_T2   0x20
 
+/* register 0xBD: LFO depths, and rhythm mode. The two depth bits scale the chip's
+   single shared tremolo and vibrato oscillators; the AM/VIB bits in 0x20-0x35 say
+   which operators listen to them. */
+#define OPL_BD_DAM  0x80        /* tremolo depth: 0 = 1.2 dB, 1 = 4.9 dB          */
+#define OPL_BD_DVB  0x40        /* vibrato depth: 1 = double                      */
+#define OPL_BD_RHY  0x20        /* rhythm mode enable                             */
+
 /* register 0x04 (timer control) bits */
 #define OPL_TC_T1_START 0x01
 #define OPL_TC_T2_START 0x02
@@ -94,6 +101,13 @@ typedef struct opl_state {
     uint16_t t1_count, t2_count;        /* current up-counters (preset..256)       */
     uint8_t  status;                    /* what a read of 0x388 returns            */
     uint32_t t1_frac_us, t2_frac_us;    /* microseconds not yet turned into steps  */
+
+    /* Free-running sample counter driving BOTH low-frequency oscillators. They are
+       properties of the chip, not of a note: one tremolo and one vibrato shared by
+       all 18 operators, never restarted by key-on. Two notes struck a beat apart
+       are therefore at different points in the sweep, which is most of what makes
+       the effect sound like an instrument rather than a wobble. */
+    uint32_t lfo_count;
 
     uint32_t sample_hz;                 /* render rate (0 => OPL_DEFAULT_HZ)       */
     uint32_t frame_us;                  /* microseconds per bus frame tick         */
