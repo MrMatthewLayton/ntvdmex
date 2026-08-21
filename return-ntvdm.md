@@ -1,6 +1,154 @@
 ═══════════════════════════════════════════════════════════════════════════════
-██ PLAN — M9 API DONE, MODE 12h NOW RENDERS. START HERE 2026-08-21.           ██
+██ PLAN — MODE 12h RENDERS. NEXT TASK = MAKE THE OPL SOUND RIGHT (#21).      ██
 ═══════════════════════════════════════════════════════════════════════════════
+
+╔══════════════════════════════════════════════════════════════════════════════╗
+║ ▶▶▶ NEXT TASK: MAKE THE OPL SOUND RIGHT (GH #21). READ THIS WHOLE BLOCK.     ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+
+**THE PROBLEM, in the user's words:** Skyroads plays "the right tune, but the
+instruments sound a bit flat" / "melodic synths sound inaccurate". The synth WORKS
+(right notes, right tempo, music recognisable); its TIMBRE is wrong.
+
+**IT IS ALREADY DIAGNOSED AND MEASURED. Do not re-diagnose it by ear.**
+90 s of real Skyroads, 4243 register writes, replayed through our synth and the
+reference core from an identical stream:
+
+        envelope correlation  0.8680     dynamics LARGELY RIGHT
+        waveform correlation  0.4119     waveform SUBSTANTIALLY DIFFERENT
+        level ratio           1.628      we are ~4.2 dB TOO LOUD
+        RMS error             152.0% of reference
+        silent frames         ours 14.4%  vs  ref 0.1%
+
+**Read those two correlations together — that IS the diagnosis:**
+    envelope HIGH + waveform LOW  ->  dynamics right, **HARMONICS WRONG**
+    envelope LOW                  ->  notes start/stop/decay differently
+So this is **timbre**, NOT the envelope-rate calibration that `vdd_opl_synth.c`'s own
+header nominates as "the first thing to refine". Suspects, all in the modulation path:
+**modulation-depth scaling** (prime — a shift one bit off changes sideband content AND
+energy, which is exactly the symptom pair), **feedback scaling**, log-sin/exp
+quantisation. The 4.2 dB level error is plausibly the SAME root cause.
+
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ THE METHOD — NUKED AS A BLACK-BOX ORACLE. THIS IS NOT OPTIONAL CEREMONY.      │
+└──────────────────────────────────────────────────────────────────────────────┘
+
+▶ **DO NOT READ `build/oplref/opl3.c` FOR CONSTANTS.** Nuked OPL3 is **LGPL-2.1**;
+  `vdd_opl_synth.c` is deliberately clean-room MIT ("written from the documented
+  YM3812 behaviour rather than ported from an existing core, so it is ours and
+  MIT-clean"). Reading it forfeits that, and the loss is not limited to the line you
+  looked at: some constants are FORCED by the hardware (one valid value, no exposure)
+  and others are the implementation's own CHOICES (structure, edge cases, rounding) —
+  **and you cannot tell which is which by looking.** Reading contaminates you for all
+  of it. The user was asked and chose to keep the MIT posture.
+
+▶ **DO use it as an ORACLE:** controlled input -> observe output -> derive the value.
+▶ **DO read public, non-LGPL documentation** for the expectation: OPL2/OPL3 datasheets
+  and the public hardware write-ups. This is the project's cardinal rule pointed at a
+  new domain — **docs for the expectation, executable oracle for the verification.**
+▶ **Converging on the same constant Nuked uses is EXPECTED and FINE.** Clean-room is
+  about provenance, not divergence; the Phoenix BIOS was functionally identical by
+  design. (Engineering practice, not legal advice.)
+▶ The usual objection is "clean-room is the long way round". Normally yes — two teams,
+  months. **Here it is a for-loop**: the harness scores automatically, so a sweep is
+  minutes. The saving from reading the source is small.
+
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ THE TOOLING — BUILT AND WORKING. USE IT, DO NOT REBUILD IT.                   │
+└──────────────────────────────────────────────────────────────────────────────┘
+
+  **1. CAPTURE a register trace from a real run** (host writes it itself):
+      : > /tmp/xpshare/opltrace.flag            # the knob; absent = zero cost
+      printf '90000' > /tmp/xpshare/headless_ms.txt
+      rm -f /tmp/xpshare/result_skyroads.log /tmp/xpshare/opltrace.txt
+      printf 'skyroads\r\n' > /tmp/xpshare/cmd.txt
+      # wait for result_skyroads.log to appear, then:
+      cp /tmp/xpshare/opltrace.txt build/oplref/skyroads.txt
+      rm -f /tmp/xpshare/opltrace.flag          # ALWAYS clear it afterwards
+    Format: one `us reg val` per line, hex. Timestamps are the guest's REAL write
+    times, so a replay reproduces its phrasing. Hook is `opl_state.trace`, set by the
+    host only when the flag exists, so the VDD stays pure C.
+    ► ★★ **NEVER end a trace run with controld `kill`.** It is `taskkill /f`; the
+      trace and the whole STAGE2 block are written during the CLEAN wind-down, so a
+      killed run yields a log file with the useful half missing. **It looks like it
+      worked.** Let the headless cap expire, or quit the guest from its own menu
+      (rt.bat sets `autoexit`). This cost the user replaying Skyroads twice.
+
+  **2. BUILD the comparison harness** (pulls the reference out-of-tree on demand):
+      ./tools/oplref/fetch.sh      # -> build/oplref/opl3.[ch]  (gitignored)
+      ./tools/oplref/build.sh      # -> build/oplref/oplcmp
+
+  **3. COMPARE:**
+      ./build/oplref/oplcmp build/oplref/skyroads.txt build/oplref
+    Prints the metrics above and writes `ours.wav`, `ref.wav`, `envelope.csv`.
+    **`ref.wav` is what Skyroads should sound like; `ours.wav` is what we produce.**
+
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ THE PLAN, IN ORDER                                                            │
+└──────────────────────────────────────────────────────────────────────────────┘
+
+  **0. VALIDATE THE HARNESS FIRST (~30 min). Do not bisect against an unverified
+     instrument.** It has ALREADY produced one artefact: the reference was driven
+     with `OPL3_WriteRegBuffered` (a realtime write-latency queue) and that alone
+     cost 0.17 vs 0.41 waveform correlation — **a quarter of the apparent defect was
+     mine, not the synth's.** Sanity checks worth doing: silence in -> silence out in
+     both; a single pure tone matches; the same trace twice is bit-identical.
+
+  **1. Build the SINGLE-NOTE experiment (~30 min).** A hand-written trace: one
+     operator pair, one sustained note, ONE variable moving. A game trace proves the
+     timbre is wrong; one note with one variable NAMES THE PARAMETER. This is what
+     turns a multi-hour search into a short one.
+
+  **2. Derive the constants, in this order** (each is a sweep scored automatically):
+     a. **Attenuation / TL mapping** — one operator, no modulation, sweep TL 0..63,
+        measure output amplitude in both cores. Should settle the 1.628 level ratio
+        on its own.
+     b. **Modulation index scaling** — two operators, fixed carrier, sweep modulator
+        TL, compare sideband amplitudes. **PRIME SUSPECT for the timbre.**
+     c. **Feedback scaling** — one self-modulating operator, sweep FB 0..7.
+
+  **3. THEN the two genuinely missing features** (both currently no-ops; `0xBD` is
+     stored in `reg[]` and never acted on — see `vdd_opl.c`):
+     a. **Tremolo/vibrato LFOs.** MEASURED as genuinely used: **103 notes start with
+        tremolo and 149 with vibrato out of 982**. Those counters are per-note EDGES,
+        so they are trustworthy. ~2-3 h.
+     b. **Rhythm mode** — the 5 percussion voices. **ONLY IF PROVEN NEEDED**, see the
+        correction below. ~half a day.
+
+  **ACCEPTANCE:** beat the baseline above — waveform correlation toward 0.9+, level
+  ratio toward 1.0 — and the user confirms by ear on the rig. Every synth change now
+  has a regression score, so never change it without re-running `oplcmp`.
+
+  **ESTIMATE GIVEN (honest, wide because the parameter is not yet identified):**
+  ~half a day if it is a scaling constant; up to two days if it is structural (our
+  1/96 dB, 8.8 fixed-point envelope vs the chip's exact 9-bit attenuation pipeline)
+  and all gaps are closed.
+
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ ★ A WRONG CONCLUSION I REACHED — DO NOT REPEAT IT                             │
+└──────────────────────────────────────────────────────────────────────────────┘
+
+  I added register counters, read `bd_or=0xFB` + 888 writes to `0xBD`, and announced
+  that Skyroads drives ~888 percussion hits and our missing rhythm mode was the cause.
+  **That was wrong, and the user — who knows the game — corrected it: the music is
+  mostly melodic synths.**
+  ▶ **The flaw was the instrument.** `bd_or` is an **OR across the whole run**, so it
+    cannot distinguish "these bits were set once during init or a silence-all reset"
+    from "drums play throughout". It is a weak assertion dressed as evidence —
+    exactly the trap already recorded in this file, in a new costume.
+  ▶ **The second trace makes it starker:** 2144 of 4243 writes go to `0xBD` against
+    only 545 notes — **~4 writes per note**, which is a driver hammering the register
+    in its update loop, not drum triggering.
+  ▶ **Trustworthy counters** in the same STAGE2 line are the per-note EDGE ones:
+    `keyon_am`, `keyon_vib`, `keyons`. Use those; treat every `_or` field as a hint.
+  ▶ **The lesson generalises:** a counter can tell you a feature was TOUCHED. Only a
+    waveform comparison can tell you a feature SOUNDS WRONG. That is why the harness
+    exists and why it should be the first thing you reach for.
+
+  ▶ WHERE THE CODE IS: `src/vdd/vdd_opl.c` (device + registers, the profile counters),
+    `src/vdd/vdd_opl_synth.c` (**the FM synthesis — the thing to fix**),
+    `src/vdd/opl_tables.h` (log-sin / exp tables), `tools/oplref/` (harness, in tree),
+    `build/oplref/` (gitignored: the reference core, the binary, the WAVs, the CSV).
 
 ▶▶▶ **SESSION 14 (2026-08-20, late): THE MODE-12h WALL IS DOWN. #55 IS CLOSED.**
   BLIT.EXE renders 640x480 16-colour filled boxes on the physical box, matching
@@ -151,11 +299,16 @@
   way; a stray knob makes every later run lie to you.
   Verified at v180: selftest **8/8**, off-VM battery **325/325**, all 15 probes clean.
 
-▶ **THE RIG IP MOVES — DO NOT HARDCODE IT.** `.34` → `.29` during this session after a
-  broadband outage. Find it, then `mount_smbfs -N //guest@<ip>/ntvdmex /tmp/xpshare`.
-  A ping sweep finds it; note an ARP sweep leaves INCOMPLETE entries for every address, so
-  `arp -a` afterwards lists all 254 and means nothing — probe port 445 instead. LAN access
-  needs `dangerouslyDisableSandbox`.
+▶ **THE RIG IP: `192.168.1.29`. TRY IT FIRST — A REBOOT DOES NOT MOVE IT.** (User's
+  correction, 2026-08-21, after I swept the LAN following a reboot for no reason.) Only a
+  **network drop** has ever moved it: `.34` → `.29` after a broadband outage. So sweep only
+  when `.29` genuinely does not answer on port 445. Note an ARP sweep leaves INCOMPLETE
+  entries for every address, so `arp -a` afterwards lists all 254 and means nothing — probe
+  port 445 instead. LAN access needs `dangerouslyDisableSandbox`.
+  `mount_smbfs -N //guest@192.168.1.29/ntvdmex /tmp/xpshare`
+  ▶ **If the box goes down, the SMB mount goes STALE and any `ls` of it HANGS** (it cost a
+    3-minute timeout). Once the box is back the mount may simply be empty — just re-run
+    `mount_smbfs`. Do not reach for a forced unmount first.
 
 ┌──────────────────────────────────────────────────────────────────────────────┐
 │ 1. WHERE M9 GOT TO                                                            │
