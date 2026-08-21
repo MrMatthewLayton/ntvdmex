@@ -25,6 +25,12 @@ extern DWORD g_dpmi_dbg[4];
    (CS!=DS!=SS) they diverge, which is why they are tracked per-selector. */
 extern DWORD g_dpmi_seg_base[3];
 
+/* Client width from the mode-switch AX bit0 (1 = 32-bit client, e.g. DOS/4GW). NOTE:
+   this must NOT set the D/B bit of the initial CS/DS/SS -- those stay 16-bit because
+   the client's post-switch code also has to run in real mode on the failure path.
+   See the note in dpmi_switch_to_pm(). Kept for DPMI API register widths. */
+extern int g_dpmi_client32;
+
 /* An LDT selector: (index<<3) | TI(=1,LDT) | RPL(=3, ring-3 client). */
 #define DPMI_SEL(index)  (WORD)(((index) << 3) | 0x4 | 0x3)
 

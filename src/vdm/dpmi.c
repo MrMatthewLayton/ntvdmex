@@ -11,6 +11,11 @@ DWORD g_dpmi_dbg[4] = {0,0,0,0};
 /* Bases of the three initial selectors (code/data/stack); see dpmi.h. */
 DWORD g_dpmi_seg_base[3] = {0,0,0};
 
+/* The client's declared width from the mode-switch AX bit0 (1 = 32-bit, e.g. DOS/4GW).
+   Recorded rather than acted on for the INITIAL selectors -- see the long note in
+   dpmi_switch_to_pm. It is the right input for DPMI API register widths, not for D/B. */
+int g_dpmi_client32 = 0;
+
 /* LDT selector indices we hand the client. A ring-3 Win32 process has no LDT
    entries of its own, so starting at 1 is safe (index 0 would be selector 0x07). */
 #define DPMI_IDX_CODE  1
@@ -53,13 +58,42 @@ int dpmi_switch_to_pm(volatile BYTE *tib, int client_is_32bit,
     DWORD lin_esp = stack_base + new_sp;             /* linear stack addr            */
     LONG st;
     BYTE code_access = 0xFA, data_access = 0xF2;
-    /* #3 (GH #18, run 81): honor the client's 16/32 flag. A 32-bit DPMI client far-calls the
-       mode-switch entry with AX bit0=1; per spec its initial CS/DS/SS must be 32-bit segments
-       (descriptor D/B=1) so the code AFTER the far-call runs as 32-bit. We keep the proven
-       BASED, 64K model (base=seg<<4, resume at the real-mode OFFSET) and only flip the D/B bit
-       -- run 80 confirmed a based D/B=1 selector executes 32-bit code and its PM I/O reflects
-       as event 0. flags nibble bit2 = D/B (see dpmi_build_desc). */
-    BYTE dbflag = client_is_32bit ? 0x4 : 0x0;
+    /* ── THE INITIAL SELECTORS ARE 16-BIT, EVEN FOR A 32-BIT CLIENT ──────────────
+       Run 81 set D/B=1 here when the client passed AX bit0=1, reasoning that "its
+       initial CS/DS/SS must be 32-bit so the code AFTER the far-call runs as 32-bit".
+       That is WRONG, and it is what killed Doom (session 16).
+
+       THE ARGUMENT, which needs no spec lookup: our mode-switch entry stub is
+       `BOP 0x50 ; RETF`, and the RETF is taken when the switch FAILS -- returning to
+       the client IN REAL MODE with CF=1. So the bytes immediately after the client's
+       `call far` are executed as 16-bit real-mode code on the failure path. The same
+       bytes cannot also be 32-bit code on the success path. Therefore the client's
+       post-switch code is 16-bit, and its CS must be D/B=0.
+
+       THE EVIDENCE. Doom (DOS/4GW) resumes at CS base 0x5ca0, offset 0x6e6a, bytes
+       `72 81 fc 36 c7 06 c2 0a dc 71 36 8c 1e 30 0c`:
+         as 16-bit: jb <err> / cld / mov word ss:[0xac2],0x71dc / mov word ss:[0xc30],ds
+         as 32-bit: jb <err> / cld / mov DWORD ss:[esi],0x71dc0ac2   <-- wild write
+                                     mov WORD  ss:[esi],ds          <-- wild write
+                                     xor BYTE  [esp+ecx*4],cl       <-- wild write
+       The 16-bit decode is a textbook post-switch stub: test CF, clear direction, save
+       DS. The 32-bit decode is three wild writes through an uninitialised ESI within
+       four instructions -- which is precisely the observed failure: the host dies
+       inside the FIRST dpmi_enter_pm, with no output and no reflected exception.
+
+       WHY OUR OWN TESTS DID NOT CATCH IT: pm32flat/pm32io/... put `bits 32` directly
+       after `call far [entry]`, so they were written to match this implementation
+       rather than to test it -- and, unlike a real client, they have no `jc` failure
+       path, which is the very thing that forces real post-switch code to be 16-bit.
+       Same lesson as the OPL work: our own instrument agreed with us.
+
+       A 32-bit client reaches 32-bit code the way DOS/4GW does -- it allocates its own
+       descriptors via INT 31h (0000/0008/0009) and far-jmps to them; dpmi_sel_is32()
+       then reports 32-bit for THOSE selectors, which is correct. The client's declared
+       width is still recorded (g_dpmi_client32) for DPMI API widths; it just must not
+       decide the D/B of these based, 64K, real-mode-derived selectors. */
+    BYTE dbflag = 0x0;
+    g_dpmi_client32 = client_is_32bit ? 1 : 0;
 
     /* BASED, 64K selectors (G=0) -- the config that PROVED PM execution (run 28). XP's
        NtSetLdtEntries REJECTS a flat 4GB LDT descriptor (PspIsDescriptorValid: base +

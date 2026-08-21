@@ -124,6 +124,33 @@
 #define DPMI_CB_SLOTS    4
 #define DPMI_PMRET_BOP   0x56
 #define DPMI_PMRET_OFF   0x0070
+/* INT 31h 0306 RAW MODE SWITCH (Doom/DOS/4GW needs it -- it tests CF from 0306 and
+   `jmp`s to its abort path when the call fails, which is exactly where it died).
+   Spec (DPMI 1.0 0306): returns BX:CX = real-to-protected entry, SI:(E)DI =
+   protected-to-real entry. Both are entered by FAR JMP -- not call -- with
+     AX = new DS, CX = new ES, DX = new SS, (E)BX = new (E)SP,
+     SI = new CS, (E)DI = new (E)IP
+   (E)BP is preserved across the switch; FS/GS read 0 afterwards; the other GPRs are
+   undefined. So each entry is just a BOP the host traps and completes by rewriting
+   the CONTEXT -- there is no return address to honour, which is why a FAR JMP is
+   safe. NB offset 0x58 is DOS_IRET_STUB_OFF and BOP 0x57 is DPMI_FAULT_BOP; these
+   take the next free slots in both namespaces. */
+#define DPMI_RAW2PM_BOP  0x58        /* real -> protected (entered in V86)          */
+#define DPMI_RAW2PM_OFF  0x005C
+#define DPMI_RAW2RM_BOP  0x59        /* protected -> real (entered in PM)           */
+#define DPMI_RAW2RM_OFF  0x0074
+/* INT 31h 0305 state save/restore. Both procedures are FAR CALLed with AL=0 save /
+   AL=1 restore, ES:(E)DI = buffer, and MUST PRESERVE ALL REGISTERS. We keep the whole
+   guest register file in the VDM_TIB across every mode switch we perform, so there is
+   no host-side state the client has to hand back to us -- a bare RETF is a correct,
+   register-preserving implementation. Planted as data (0xCB), not a BOP: it never
+   needs to reach the host at all. */
+#define DPMI_SSR_OFF     0x0078
+/* Highest linear address XP's LDT descriptor validator will accept for base+limit
+   (MmHighestUserAddress on a 2GB-user build). Kernel RE session 7 recovered the rule
+   from PspIsDescriptorValid; run 30 confirmed base 0 / limit 0x7FFEF / G=1 installs
+   while a true 4GB selector does not. Used to clamp a client's flat selector. */
+#define XP_LDT_MAX_LINEAR 0x7FFEFFFFu
 
 /* Shared IRET stub for every vector that has no real handler.
  *
@@ -2869,7 +2896,13 @@ static DWORD WINAPI dpmi_watchdog(LPVOID param)
 {
     static char wb[512]; char *q = wb; LONG prev = -1; (void)param;
     q = zput(q, "STAGE3-DPMI: watchdog started; sampling host PM-loop heartbeat (run 52 diag)\r\n");
-    serial_out(wb, q); q = wb;
+    /* ► LOG, don't just serial. serial_out writes COM1, which exists on the QEMU dev VM
+         and NOT on the bare-metal box -- so on the rig these lines went nowhere. That
+         cost us a wrong conclusion about Doom (session 15): the absence of wd[] samples
+         in result_doom.log was read as "it died before the first 250 ms sample", when in
+         fact the samples were never written anywhere. Every diagnostic must reach the
+         file log or it does not exist on the machine we actually test on. */
+    log_append(LOG_PATH, wb, q); serial_out(wb, q); q = wb;
     /* Sample the host PM loop concurrently while the main thread is (possibly) blocked
        inside dpmi_enter_pm(). Each line answers the run-51 wall question:
          iter ADVANCING  -> the `for steps` loop is cycling; last ev/cs/eip/vec show WHICH
@@ -2915,7 +2948,7 @@ static DWORD WINAPI dpmi_watchdog(LPVOID param)
                 q = zput(q, " b@enter="); q = zdump(q, ib, 8);
             }
             q = zput(q, "\r\n");
-            serial_out(wb, q); q = wb;
+            log_append(LOG_PATH, wb, q); serial_out(wb, q); q = wb;   /* COM1-only = invisible on bare metal */
         }
         prev = iter; ++n;
         if (frozen >= 12) break;                         /* ~3s with NO progress -> real wedge */
@@ -2928,6 +2961,28 @@ static DWORD WINAPI dpmi_watchdog(LPVOID param)
        thread (un-terminable LDT context). */
     TerminateProcess(GetCurrentProcess(), 0xDD0);
     return 0;
+}
+
+static void dpmi_install(int idx);           /* defined just below; used by the helper */
+
+/* A 16-bit CODE selector based on DOS_HDLR_SEG, so the host's own stubs (the 0306
+   protected-to-real entry, the 0305 save/restore no-op) have a protected-mode address
+   to hand the client. Allocated once, from the same LDT pool the client allocates from,
+   and cached -- 0305 and 0306 both want it and a client may call either more than once. */
+static WORD g_dpmi_hdlr_sel = 0;
+static WORD dpmi_hdlr_code_sel(void)
+{
+    int idx;
+    if (g_dpmi_hdlr_sel) return g_dpmi_hdlr_sel;
+    if (g_ldt_next >= 512) return 0;
+    idx = g_ldt_next++;
+    g_ldt[idx].base   = (DWORD)DOS_HDLR_SEG << 4;
+    g_ldt[idx].limit  = 0xFFFF;
+    g_ldt[idx].access = 0xFA;                 /* present, DPL3, code, readable        */
+    g_ldt[idx].flags  = 0;                    /* 16-bit: the stubs are 16-bit code    */
+    dpmi_install(idx);
+    g_dpmi_hdlr_sel = (WORD)((idx << 3) | 7);
+    return g_dpmi_hdlr_sel;
 }
 
 /* (Re)build g_ldt[idx]'s descriptor and install it in the process LDT via svc 10. */
@@ -2955,13 +3010,44 @@ static void dpmi_install(int idx)
            instead of silently leaving a stale selector that faults on first use (run 84). */
         LONG st = v86_set_ldt_entries(sel, lo, hi, sel, lo, hi); /* idempotent single-entry */
         if (st != 0) {
-            char lb[160], *p = lb;
-            p = zput(p, "DPMI-LDT: install REJECTED sel 0x"); p = zhex(p, sel);
-            p = zput(p, " base 0x"); p = zhex(p, g_ldt[idx].base);
-            p = zput(p, " limit 0x"); p = zhex(p, g_ldt[idx].limit);
-            p = zput(p, " g="); p = zhex(p, (DWORD)((fl >> 3) & 1));
-            p = zput(p, " status 0x"); p = zhex(p, (DWORD)st); p = zput(p, "\r\n");
-            log_append(LOG_PATH, lb, p); serial_out(lb, p);
+            /* ── CLAMP AND RETRY, don't just report ────────────────────────────────
+               DOS/4GW (Doom) allocates a base-0 4GB G=1 FLAT selector and XP rejects it
+               (0xC000011A): PspIsDescriptorValid requires
+                   base + (G ? ((limit<<12)|0xFFF) : limit) <= MmHighestUserAddress.
+               Merely logging the refusal leaves the client holding a selector that is
+               not installed, so its first flat access faults -- which is a silent death,
+               exactly the failure mode this project keeps being bitten by. XP cannot be
+               talked into a true 4GB LDT selector (Kernel RE session 7: stock ntvdm is
+               under the same cap), so the honest best effort is the largest descriptor
+               the validator WILL take, which run 30 already showed installs: base 0,
+               limit 0x7FFEF, G=1.
+               The clamp is LOUD -- a client that then walks off the end of a segment it
+               believes is 4GB must not look like a mystery. */
+            DWORD cap = XP_LDT_MAX_LINEAR;
+            DWORD clo = lo, chi = hi, want = g_ldt[idx].limit, cl = 0;
+            LONG st2 = st;
+            if (g_ldt[idx].base < cap) {
+                DWORD room = cap - g_ldt[idx].base;
+                if (fl & 0x8) cl = (room > 0xFFF) ? ((room - 0xFFF) >> 12) : 0;  /* G=1 */
+                else          cl = room;                                        /* G=0 */
+                if (cl > 0xFFFFF) cl = 0xFFFFF;
+                dpmi_build_desc(g_ldt[idx].base, cl, acc, fl, &clo, &chi);
+                st2 = v86_set_ldt_entries(sel, clo, chi, sel, clo, chi);
+            }
+            {
+                char lb[256], *p = lb;
+                p = zput(p, "DPMI-LDT: install REJECTED sel 0x"); p = zhex(p, sel);
+                p = zput(p, " base 0x"); p = zhex(p, g_ldt[idx].base);
+                p = zput(p, " limit 0x"); p = zhex(p, want);
+                p = zput(p, " g="); p = zhex(p, (DWORD)((fl >> 3) & 1));
+                p = zput(p, " status 0x"); p = zhex(p, (DWORD)st);
+                if (st2 == 0) { p = zput(p, " -> CLAMPED to limit 0x"); p = zhex(p, cl);
+                                p = zput(p, " (XP LDT cap) and installed"); }
+                else          { p = zput(p, " -> clamp ALSO refused, status 0x");
+                                p = zhex(p, (DWORD)st2); }
+                p = zput(p, "\r\n");
+                log_append(LOG_PATH, lb, p); serial_out(lb, p);
+            }
         }
     }
 }
@@ -3384,6 +3470,104 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                             dpmi_install(idx);
                             VDM_SET16(tib, VTIB_EAX, (WORD)((idx << 3) | 7));
                             p = zput(p, " -> alias sel 0x"); p = zhex(p, (idx << 3) | 7);
+                            break; }
+                        /* 000B/000C GET/SET DESCRIPTOR -- the raw 8-byte descriptor form of
+                           0006-0009. DOS/4GW (Doom) is the client that needs them, and the
+                           sequence it runs is worth recording because it names its intent:
+                             mov bx,ds / mov di,sp / mov es,bx   ; 8-byte buffer on the stack
+                             mov ax,000Bh / int 31h              ; read descriptor
+                             and byte [es:di+6],0BFh             ; CLEAR the D/B bit
+                             mov ax,000Ch / int 31h              ; write it back
+                             add sp,8
+                           i.e. the extender manages segment widths itself -- which is the same
+                           conclusion dpmi_switch_to_pm() reaches from the other direction. */
+                        case 0x0003:                               /* get selector increment value */
+                            /* The amount to add to a selector to reach the next one in a block
+                               allocated by 0000. Our selectors are LDT entries, so 8. */
+                            VDM_SET16(tib, VTIB_EAX, 8);
+                            VDM_REG(tib, VTIB_EFLAGS) &= ~1u;
+                            p = zput(p, " -> sel increment 8");
+                            break;
+                        case 0x0A00:                               /* get vendor-specific API entry */
+                            /* Correct answer is "no such vendor API": CF=1. The default arm
+                               already does that, but naming it here stops it reading as a gap
+                               in the Doom trace -- DOS/4GW asks, is refused, and carries on. */
+                            VDM_REG(tib, VTIB_EFLAGS) |= 1u;
+                            p = zput(p, " -> no vendor API (CF=1, correct)");
+                            break;
+                        case 0x000B: {                             /* get descriptor of sel BX -> ES:DI */
+                            int idx = (VDM_REG(tib, VTIB_EBX) & 0xFFFF) >> 3;
+                            DWORD esb = dpmi_sel_base((WORD)VDM_REG(tib, VTIB_ES));
+                            volatile DWORD *d = (volatile DWORD *)(ULONG_PTR)
+                                (esb + (VDM_REG(tib, VTIB_EDI) & 0xFFFF));
+                            DWORD lo = 0, hi = 0;
+                            if (idx >= 1 && idx < 512)
+                                dpmi_build_desc(g_ldt[idx].base, g_ldt[idx].limit,
+                                                g_ldt[idx].access, g_ldt[idx].flags, &lo, &hi);
+                            else { VDM_REG(tib, VTIB_EFLAGS) |= 1u; p = zput(p, " -> bad sel"); break; }
+                            d[0] = lo; d[1] = hi;
+                            p = zput(p, " sel 0x"); p = zhex(p, VDM_REG(tib, VTIB_EBX) & 0xFFFF);
+                            p = zput(p, " -> desc 0x"); p = zhex(p, lo);
+                            p = zput(p, ":0x"); p = zhex(p, hi);
+                            break; }
+                        case 0x000C: {                             /* set descriptor of sel BX from ES:DI */
+                            int idx = (VDM_REG(tib, VTIB_EBX) & 0xFFFF) >> 3;
+                            DWORD esb = dpmi_sel_base((WORD)VDM_REG(tib, VTIB_ES));
+                            volatile DWORD *d = (volatile DWORD *)(ULONG_PTR)
+                                (esb + (VDM_REG(tib, VTIB_EDI) & 0xFFFF));
+                            DWORD lo, hi;
+                            if (idx < 1 || idx >= 512) { VDM_REG(tib, VTIB_EFLAGS) |= 1u;
+                                                         p = zput(p, " -> bad sel"); break; }
+                            lo = d[0]; hi = d[1];
+                            /* Exact inverse of dpmi_build_desc(). */
+                            g_ldt[idx].limit  = (lo & 0xFFFF) | (((hi >> 16) & 0xF) << 16);
+                            g_ldt[idx].base   = ((lo >> 16) & 0xFFFF) | ((hi & 0xFF) << 16)
+                                              | (((hi >> 24) & 0xFF) << 24);
+                            g_ldt[idx].access = (BYTE)((hi >> 8) & 0xFF);
+                            g_ldt[idx].flags  = (BYTE)((hi >> 20) & 0xF);
+                            dpmi_install(idx);
+                            p = zput(p, " sel 0x"); p = zhex(p, VDM_REG(tib, VTIB_EBX) & 0xFFFF);
+                            p = zput(p, " <- desc 0x"); p = zhex(p, lo);
+                            p = zput(p, ":0x"); p = zhex(p, hi);
+                            p = zput(p, " (base 0x"); p = zhex(p, g_ldt[idx].base);
+                            p = zput(p, " limit 0x"); p = zhex(p, g_ldt[idx].limit);
+                            p = zput(p, " acc 0x"); p = zhexb(p, g_ldt[idx].access);
+                            p = zput(p, " flg 0x"); p = zhexb(p, g_ldt[idx].flags); p = zput(p, ")");
+                            break; }
+                        case 0x0305: {                             /* get state save/restore addresses */
+                            /* AX = buffer size, BX:CX = real-mode routine, SI:(E)DI = PM routine.
+                               Both routines are register-preserving no-ops here (DPMI_SSR_OFF).
+                               The size is nominal rather than 0: nothing is written to the
+                               buffer, but a client that allocates AX bytes should not be handed
+                               a zero-size allocation. */
+                            WORD sel = dpmi_hdlr_code_sel();
+                            VDM_SET16(tib, VTIB_EAX, 0x0040);
+                            VDM_SET16(tib, VTIB_EBX, DOS_HDLR_SEG);
+                            VDM_SET16(tib, VTIB_ECX, DPMI_SSR_OFF);
+                            VDM_SET16(tib, VTIB_ESI, sel);
+                            VDM_REG  (tib, VTIB_EDI) = DPMI_SSR_OFF;
+                            VDM_REG(tib, VTIB_EFLAGS) &= ~1u;      /* CF=0: always succeeds */
+                            p = zput(p, " -> saverestore rm=0x"); p = zhex(p, DOS_HDLR_SEG);
+                            p = zput(p, ":0x"); p = zhex(p, DPMI_SSR_OFF);
+                            p = zput(p, " pm=0x"); p = zhex(p, sel);
+                            p = zput(p, ":0x"); p = zhex(p, DPMI_SSR_OFF);
+                            p = zput(p, " size=0x40");
+                            break; }
+                        case 0x0306: {                             /* get raw mode switch addresses */
+                            /* THE CALL DOOM DIES ON. Its code right after this BOP is
+                               `73 03 e9 44 02` = jnc +3 / jmp +0x244, so CF=1 sends DOS/4GW
+                               straight to its abort path. Returning the two entries is what
+                               lets it proceed. */
+                            WORD sel = dpmi_hdlr_code_sel();
+                            VDM_SET16(tib, VTIB_EBX, DOS_HDLR_SEG);        /* real->prot seg   */
+                            VDM_SET16(tib, VTIB_ECX, DPMI_RAW2PM_OFF);     /* real->prot off   */
+                            VDM_SET16(tib, VTIB_ESI, sel);                 /* prot->real sel   */
+                            VDM_REG  (tib, VTIB_EDI) = DPMI_RAW2RM_OFF;    /* prot->real off   */
+                            VDM_REG(tib, VTIB_EFLAGS) &= ~1u;              /* CF=0             */
+                            p = zput(p, " -> rawswitch r2p=0x"); p = zhex(p, DOS_HDLR_SEG);
+                            p = zput(p, ":0x"); p = zhex(p, DPMI_RAW2PM_OFF);
+                            p = zput(p, " p2r=0x"); p = zhex(p, sel);
+                            p = zput(p, ":0x"); p = zhex(p, DPMI_RAW2RM_OFF);
                             break; }
                         case 0x0500: {                             /* get free memory info -> ES:DI */
                             DWORD esb = dpmi_sel_base((WORD)VDM_REG(tib, VTIB_ES));
@@ -4160,6 +4344,17 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     } }
     hdlr[DPMI_PMRET_OFF + 0] = VDM_BOP0; hdlr[DPMI_PMRET_OFF + 1] = VDM_BOP1;
     hdlr[DPMI_PMRET_OFF + 2] = DPMI_PMRET_BOP;
+    /* 0306 raw mode-switch entries. Both are bare BOPs: the host completes the switch
+       by rewriting the CONTEXT, so control never resumes past the BOP and no RETF/IRET
+       tail is wanted (the same shape as DPMI_RMRET_OFF). The protected-to-real entry
+       lives in this segment too and is reached through a code selector based here --
+       see the 0306 handler. */
+    hdlr[DPMI_RAW2PM_OFF + 0] = VDM_BOP0; hdlr[DPMI_RAW2PM_OFF + 1] = VDM_BOP1;
+    hdlr[DPMI_RAW2PM_OFF + 2] = DPMI_RAW2PM_BOP;
+    hdlr[DPMI_RAW2RM_OFF + 0] = VDM_BOP0; hdlr[DPMI_RAW2RM_OFF + 1] = VDM_BOP1;
+    hdlr[DPMI_RAW2RM_OFF + 2] = DPMI_RAW2RM_BOP;
+    /* 0305 save/restore: a register-preserving no-op (see the define). */
+    hdlr[DPMI_SSR_OFF] = 0xCB;                               /* RETF */
     /* (GH #18 run 67: the PM-fault handler BOP is planted at the handler CODE selector's
        DPMI_FAULT_COFF by dpmi_install_fault_trampoline(), not here.) */
     /* EMS detection method 2: programs read the INT 67h vector's segment:000Ah for
@@ -4878,8 +5073,9 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         if ((VDM_REG(tib, VTIB_EVENT_INFO) & 0xFF) == DPMI_BOP) {  /* DPMI real->PM switch */
             DWORD csv = VDM_REG(tib, VTIB_CS) & 0xFFFF, ipv = VDM_REG(tib, VTIB_EIP) & 0xFFFF;
             LONG reg_st = 0, set_st = 0; int sw;
-            /* #3 (run 81): AX bit0 selects the client width -- 0=16-bit, 1=32-bit (DOS/4GW).
-               A 32-bit client gets D/B=1 initial CS/DS/SS so its post-switch code runs 32-bit. */
+            /* AX bit0 = the client's declared width (0=16-bit, 1=32-bit e.g. DOS/4GW).
+               Logged and recorded, but it does NOT set the initial selectors' D/B --
+               see dpmi_switch_to_pm(); doing so ran DOS/4GW's 16-bit stub as 32-bit. */
             int is32 = (int)(VDM_REG(tib, VTIB_EAX) & 1);
             p = zput(p, "STAGE3: DPMI_BOP far-call LANDED @ 0x"); p = zhex(p, csv);
             p = zput(p, ":0x"); p = zhex(p, ipv);
@@ -4903,9 +5099,13 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                     g_ldt[1 + si].base   = g_dpmi_seg_base[si];
                     g_ldt[1 + si].limit  = 0xFFFF;
                     g_ldt[1 + si].access = (si == 0) ? 0xFA : 0xF2;
-                    /* mirror the D/B width dpmi_switch_to_pm installed, so dpmi_sel_is32()
-                       (I/O decode + EIP-mask gating) agrees with the live descriptor (run 81). */
-                    g_ldt[1 + si].flags  = is32 ? 0x4 : 0;
+                    /* Mirror the D/B width dpmi_switch_to_pm ACTUALLY installed, so
+                       dpmi_sel_is32() (I/O decode + EIP-mask gating) agrees with the live
+                       descriptor. That is now always 16-bit for these three: the client's
+                       post-switch code must also be valid real-mode code on the failure
+                       path, so it cannot be 32-bit. A 32-bit client far-jmps to its OWN
+                       INT 31h-allocated 32-bit selectors, which are reported correctly. */
+                    g_ldt[1 + si].flags  = 0;
                 } }
                 if (g_ldt_next < 4) g_ldt_next = 4;      /* client allocs start at index 4 now */
                 p = zput(p, " segbase C=0x"); p = zhex(p, g_dpmi_seg_base[0]);
@@ -4929,7 +5129,15 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                 /* Safety watchdog (kernel PM path only): an un-terminable spin still self-kills
                    after ~3s so the batch dumps the log. */
                 { HANDLE wd = CreateThread(NULL, 0, dpmi_watchdog, NULL, 0, NULL);
-                  if (wd) CloseHandle(wd); }
+                  if (wd) CloseHandle(wd);
+                  /* Prove creation FROM THIS THREAD. The watchdog's own first line is
+                     written by the new thread, so its absence is ambiguous -- it cannot
+                     distinguish "thread never created" from "created but the process was
+                     killed before it was ever scheduled". Doom's log shows neither that
+                     line nor any sample, so we need the difference. */
+                  p = zput(p, "STAGE3-DPMI: watchdog thread created h="); p = zhex(p, (DWORD)(ULONG_PTR)wd);
+                  p = zput(p, "\r\n");
+                  log_append(LOG_PATH, base, p); serial_out(base, p); p = base; }
                 /* Patch the client's PM `INT nn` (CD nn) -> BOP (C4 C4), recording the original
                    vector per CS offset. Same 2 bytes, so a real unmodified client's INT 31h/21h
                    now reflect to us as BOPs.
@@ -5044,8 +5252,58 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                         dpmi_inject_pm_irq(&m, tib, 0x08, steps);
                         g_in_pm_irq = 0;
                     }
+                    /* ── BRACKET THE FIRST ENTRIES (session 16, Doom) ────────────────────
+                       Doom's log ends at the steps==0 [0x714] dump above and the process is
+                       gone, with no fault, no banner and no INT 21h. Between that line and
+                       the next thing that logs there are FOUR things that can kill us, and
+                       nothing said which: arming the trampoline, entering PM, the guest's
+                       first instruction, or the return path. So checkpoint each side for the
+                       first few iterations -- cheap, self-limiting, and it turns "died
+                       somewhere in here" into a named step. Bounded to 64 so a healthy client
+                       (millions of iterations) pays nothing. */
+                    if (steps < 64) {
+                        /* Dump the descriptor and the actual BYTES we are about to run. Doom
+                           dies inside the FIRST dpmi_enter_pm and never returns, so the only
+                           thing that can tell a bad mode switch from a specific offending
+                           instruction is knowing which instruction it was. Cheap: 4 iterations. */
+                        DWORD cbase = dpmi_sel_base((WORD)g_dpmi_enter_cs);
+                        p = zput(p, "DPMI-CP["); p = zhex(p, (unsigned)steps);
+                        p = zput(p, "] pre-arm cs:eip=0x"); p = zhex(p, g_dpmi_enter_cs);
+                        p = zput(p, ":0x"); p = zhex(p, g_dpmi_enter_eip);
+                        p = zput(p, " csbase=0x"); p = zhex(p, cbase);
+                        p = zput(p, " ss:esp=0x"); p = zhex(p, VDM_REG(tib, VTIB_SS) & 0xFFFF);
+                        p = zput(p, ":0x"); p = zhex(p, VDM_REG(tib, VTIB_ESP));
+                        p = zput(p, " bytes@cs:eip=");
+                        /* GUARD THE INSTRUMENT. Doom is a PAGED client -- DOS/4GW builds its
+                           own page tables -- so csbase+eip need not be readable from the
+                           host's flat address space. An unguarded read here would fault in
+                           our own diagnostic and destroy the very evidence we came for. */
+                        { const BYTE *ib = (const BYTE *)(ULONG_PTR)(cbase + g_dpmi_enter_eip);
+                          if (IsBadReadPtr(ib, 16)) p = zput(p, "<unreadable from host>");
+                          else                      p = zdump(p, ib, 16); }
+                        p = zput(p, "\r\n");
+                        log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                    }
                     dpmi_arm_fault_trampoline(tib, 0);   /* re-arm nest/flag/[0x638]/[TIB+8] */
+                    if (steps < 64) {
+                        p = zput(p, "DPMI-CP["); p = zhex(p, (unsigned)steps);
+                        p = zput(p, "] armed -> entering PM\r\n");
+                        log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                    }
+                    /* Give the watchdog a guaranteed turn before the FIRST entry only. If it
+                       has logged a sample by the time we hand off, then its silence afterwards
+                       means the whole process was killed at once (a kernel VDM terminate),
+                       not that the thread never ran. 300 ms, once, on a diagnostic path. */
+                    if (steps == 0) Sleep(300);
                     dpmi_enter_pm(tib);
+                    if (steps < 64) {
+                        p = zput(p, "DPMI-CP["); p = zhex(p, (unsigned)steps);
+                        p = zput(p, "] returned ev=0x"); p = zhex(p, VDM_REG(tib, VTIB_EVENT));
+                        p = zput(p, " cs:eip=0x"); p = zhex(p, VDM_REG(tib, VTIB_CS) & 0xFFFF);
+                        p = zput(p, ":0x"); p = zhex(p, VDM_REG(tib, VTIB_EIP) & 0xFFFF);
+                        p = zput(p, "\r\n");
+                        log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                    }
                     ev  = VDM_REG(tib, VTIB_EVENT);
                     eip = VDM_REG(tib, VTIB_EIP) & 0xFFFF;
                     csv = VDM_REG(tib, VTIB_CS) & 0xFFFF;
