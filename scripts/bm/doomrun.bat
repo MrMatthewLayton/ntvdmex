@@ -53,5 +53,7 @@ if exist "%G%" (dir /b "%G%") else (echo   %G% does not exist at all.)
 echo ------------------------------------------------------------
 dir /b "%G%" > "%SH%doom_dir.txt" 2>&1
 echo (also written to doom_dir.txt on the share)
-pause
+rem NO `pause` HERE. This is now driven from cmd.txt by the watcher (rt.bat `doom`),
+rem and a pause on the miss path would block `cmd /c rt.bat` forever -- wedging the
+rem watcher and costing a reboot. The evidence is already in doom_dir.txt.
 endlocal

@@ -11,6 +11,7 @@
  *   reboot   -> ExitWindowsEx(EWX_REBOOT | EWX_FORCE)   (needs SeShutdownPrivilege)
  *   poweroff -> ExitWindowsEx(EWX_POWEROFF | EWX_FORCE)
  *   kill     -> taskkill /f /im ntvdmhost.exe   (unwedge a hung test host)
+ *   exec CMD -> WinExec(CMD)                    (restart a dead watcher; see below)
  * It writes a heartbeat file every poll so the driver can confirm it's alive, and
  * is a singleton (a named mutex) so repeated launches from rt.bat are no-ops.
  *
@@ -110,6 +111,26 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
             } else if (starts_with(buf, "kill")) {
                 write_beat("controld: kill ntvdmhost\r\n");
                 WinExec("taskkill /f /im ntvdmhost.exe", SW_HIDE);
+            } else if (starts_with(buf, "exec ")) {
+                /* GENERIC EXEC -- the lever that makes a dead watcher recoverable
+                   remotely. Session 16: runwatch.bat's Startup copy had LF-only line
+                   endings, so cmd.exe could not resolve `goto loop` and the watcher
+                   died one iteration in. controld was alive, but reboot/kill/quit
+                   could not RESTART anything, so the only repair was physical access
+                   to the box. `exec cmd /c "...\runwatch.bat"` closes that hole.
+                   WinExec (not CreateProcess) deliberately: it is what the rest of
+                   this file already uses, it returns immediately, and the child
+                   outlives us -- which matters because runwatch.bat's first act is
+                   to taskkill controld and start a fresh one. */
+                char m[192];
+                char *arg = buf + 5;
+                char *p;
+                while (*arg == ' ' || *arg == '\t') arg++;
+                for (p = arg; *p; p++)                 /* trim the CR/LF the share adds */
+                    if (*p == '\r' || *p == '\n') { *p = 0; break; }
+                wsprintfA(m, "controld: exec [%s]\r\n", arg);
+                write_beat(m);
+                if (*arg) WinExec(arg, SW_SHOWNORMAL);
             } else if (starts_with(buf, "quit")) {
                 /* let the driver stop controld remotely so a new build can be hot-swapped:
                    the singleton mutex is released on exit, so a fresh start takes over. */

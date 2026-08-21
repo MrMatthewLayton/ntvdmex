@@ -4,9 +4,25 @@ rem -- STOCK NTVDM DISPATCH (GH #26). "stock <target>" in cmd.txt runs the targe
 rem    under stock ntvdm instead of NTVDMEX, so the oracle can be driven remotely
 rem    like every other test rather than typed at the box by hand.
 if /i "%1"=="stock" goto stockrun
+rem -- DOOM DISPATCH. doomrun.bat lives on the share root and runs C:\DOOMS\DOOM.EXE,
+rem    which no `%RES%\<name>\` game directory describes, so it needs its own arm to be
+rem    drivable from cmd.txt like everything else. `doom [EXE] [DIR]`.
+if /i "%1"=="doom" goto doomrun
+rem -- REBOOT DISPATCH. controld.exe is the normal remote-reboot lever, but it is a
+rem    SINGLE POINT OF FAILURE: runwatch.bat hot-swaps it from controld_v2.exe on every
+rem    boot, so a bad staged build would overwrite the good one and leave no way to
+rem    restart the box remotely. The watcher is an INDEPENDENT channel, so give it a
+rem    reboot arm too -- then either channel can recover the other.
+if /i "%1"=="reboot" goto rebootnow
 goto normal
+:rebootnow
+shutdown.exe -r -f -t 03
+goto :eof
 :stockrun
 call "%BM%\rt_stock.bat" %2
+goto :eof
+:doomrun
+call "C:\Documents and Settings\All Users\Documents\ntvdmex\doomrun.bat" %2 %3
 goto :eof
 :normal
 set T=%1
