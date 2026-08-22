@@ -329,10 +329,61 @@ static DWORD g_dpmi_code_base = 0;          /* linear base of the guest PM code 
    Keying by linear address lets the map cover every region the client later declares to
    be code, and makes dpmi_bop_vec's alias handling fall out for free. Sized to the V86
    window plus the HMA; the DOS blocks Doom loads into land around 0x15000-0x2F000. */
-#define DPMI_PATCH_LIN_MAX 0x110000u
-static BYTE  g_int_vec[DPMI_PATCH_LIN_MAX]; /* linear addr -> original INT vector we patched to a BOP */
-static DWORD g_patch_lo = DPMI_PATCH_LIN_MAX;  /* watermarks, so unpatch/repatch stay cheap */
-static DWORD g_patch_hi = 0;
+/* Keyed by LINEAR ADDRESS and stored as a HASH, not a flat array.
+   It was a flat byte array over the low 1.1 MB, which is exactly as much of the guest
+   as it could describe -- and Doom walked straight out of it. Once the extender is
+   working properly it loads its protected-mode modules into EXTENDED memory (INT 31h
+   0501 -> VirtualAlloc, addresses around 0x0398xxxx), retypes those descriptors to code
+   and jumps in. Those modules' `CD 21` instructions were therefore never patched, and a
+   raw INT in protected mode is the #GP XP will not reflect: instant silent VDM death at
+   the handoff.
+   A flat array cannot cover arbitrary VirtualAlloc addresses, so this is an open-
+   addressed hash of linear -> original vector. It is also FASTER than what it replaces:
+   unpatch/repatch used to sweep up to 1.1 MB of array per INT 31h 0301/0302, and now
+   sweep 64K slots. */
+#define DPMI_PMAP_SLOTS 65536u                 /* power of two, open addressing */
+#define DPMI_PMAP_MASK  (DPMI_PMAP_SLOTS - 1u)
+static DWORD g_pmap_lin[DPMI_PMAP_SLOTS];      /* 0 = empty (linear 0 is never a site) */
+static BYTE  g_pmap_vec[DPMI_PMAP_SLOTS];
+static DWORD g_pmap_n;
+
+static DWORD pmap_hash(DWORD lin) { return ((lin * 2654435761u) >> 8) & DPMI_PMAP_MASK; }
+
+static BYTE pmap_get(DWORD lin)
+{
+    DWORD i = pmap_hash(lin), k;
+    if (!lin) return 0;
+    for (k = 0; k < DPMI_PMAP_SLOTS; ++k) {
+        DWORD sl = (i + k) & DPMI_PMAP_MASK;
+        if (!g_pmap_lin[sl]) return 0;
+        if (g_pmap_lin[sl] == lin) return g_pmap_vec[sl];
+    }
+    return 0;
+}
+
+static void pmap_set(DWORD lin, BYTE vec)
+{
+    DWORD i = pmap_hash(lin), k;
+    if (!lin || g_pmap_n >= DPMI_PMAP_SLOTS - 16) return;   /* leave headroom, never fill */
+    for (k = 0; k < DPMI_PMAP_SLOTS; ++k) {
+        DWORD sl = (i + k) & DPMI_PMAP_MASK;
+        if (!g_pmap_lin[sl]) { g_pmap_lin[sl] = lin; g_pmap_vec[sl] = vec; ++g_pmap_n; return; }
+        if (g_pmap_lin[sl] == lin) { g_pmap_vec[sl] = vec; return; }
+    }
+}
+
+/* Clearing leaves the key in place with vec=0: a tombstone, so probe chains that ran
+   through this slot still find what is past it. Slots are never reused, which is fine
+   at these counts and is the whole reason for the headroom check above. */
+static void pmap_clear(DWORD lin)
+{
+    DWORD i = pmap_hash(lin), k;
+    for (k = 0; k < DPMI_PMAP_SLOTS; ++k) {
+        DWORD sl = (i + k) & DPMI_PMAP_MASK;
+        if (!g_pmap_lin[sl]) return;
+        if (g_pmap_lin[sl] == lin) { g_pmap_vec[sl] = 0; return; }
+    }
+}
 
 /* ── GUEST BREAKPOINTS IN PROTECTED MODE. ─────────────────────────────────────────
    THE PROBLEM THIS EXISTS FOR, because it has now cost three sessions. When a PM
@@ -3252,8 +3303,7 @@ static int dpmi_sel_desc(uint16_t sel, uint32_t *ar, uint32_t *limit)
      alias of the patched memory maps back to the right vector. */
 static DWORD dpmi_bop_vec(DWORD csv, DWORD eip)
 {
-    DWORD lin = dpmi_sel_base((WORD)csv) + eip;
-    return (lin < DPMI_PATCH_LIN_MAX) ? g_int_vec[lin] : 0;
+    return pmap_get(dpmi_sel_base((WORD)csv) + eip);
 }
 
 /* ── PATCH A REGION THE CLIENT HAS JUST DECLARED TO BE CODE. ──────────────────────
@@ -3272,7 +3322,6 @@ static void dpmi_patch_code_region(DWORD base, DWORD limit)
     volatile BYTE *mem;
     DWORD end, a, n = 0;
     char lb[192], *q = lb;
-    if (base >= DPMI_PATCH_LIN_MAX) return;
     /* ► NEVER PATCH THE IVT / BIOS DATA AREA, even when the client declares a base-0
          code selector -- and Doom does exactly that (sel 0x67, base 0, limit 0xFFFF),
          which made the first version of this scan rewrite 16 sites in linear 0..0xFFFF.
@@ -3283,19 +3332,21 @@ static void dpmi_patch_code_region(DWORD base, DWORD limit)
          client's code. Start the scan above it. */
     end = base + limit;                              /* limit is the LAST valid byte */
     if (base < 0x600) base = 0x600;                  /* ...but the region END is unchanged */
-    if (end >= DPMI_PATCH_LIN_MAX) end = DPMI_PATCH_LIN_MAX - 1;
-    if (end <= base) return;
+    /* No upper bound any more: the regions that matter now live in EXTENDED memory,
+       which is where a working extender puts its modules. The size cap is a sanity
+       bound rather than a policy -- a "code" region of tens of megabytes is a flat
+       alias, not a module, and scanning it would cost seconds and mis-patch data. */
+    if (end <= base || (end - base) > 0x00400000u) return;
+    if (!host_readable((const void *)(ULONG_PTR)base, 2)) return;
     mem = (volatile BYTE *)(ULONG_PTR)base;
     for (a = 0; a + 1 < (end - base); ++a) {
         if (mem[a] == 0xCD && (mem[a+1] == 0x31 || mem[a+1] == 0x21 || mem[a+1] == 0x10
                                || mem[a+1] == 0x16 || mem[a+1] == 0x33
                                || mem[a+1] == 0x1A || mem[a+1] == 0x08)) {
             DWORD lin = base + a;
-            if (g_int_vec[lin]) continue;            /* already patched (aliased region) */
-            g_int_vec[lin] = mem[a+1];
+            if (pmap_get(lin)) continue;             /* already patched (aliased region) */
+            pmap_set(lin, mem[a+1]);
             mem[a] = 0xC4; mem[a+1] = 0xC4;
-            if (lin < g_patch_lo) g_patch_lo = lin;
-            if (lin > g_patch_hi) g_patch_hi = lin;
             ++n;
         }
     }
@@ -3369,7 +3420,7 @@ static void dpmi_bp_arm(void)
         DWORD lin = g_bp_lin[k];
         volatile BYTE *b;
         char lb[128], *q = lb;
-        if (lin < 0x600 || lin + 1 >= DPMI_PATCH_LIN_MAX) continue;
+        if (lin < 0x600) continue;
         b = (volatile BYTE *)(ULONG_PTR)lin;
         /* ► RE-ARM IF THE CLIENT OVERWROTE US, and skip empty memory entirely. The
              first version armed at mode-switch time into memory the client had not
@@ -3384,10 +3435,10 @@ static void dpmi_bp_arm(void)
         if (g_bp_armed[k]) {
             if (g_bp_mode[k] == 1 ? (b[0] == 0xCC)
                                   : (b[0] == 0xC4 && b[1] == 0xC4)) continue;  /* still planted */
-            g_bp_armed[k] = 0; g_int_vec[lin] = 0;         /* clobbered -> re-arm below */
+            g_bp_armed[k] = 0; pmap_clear(lin);            /* clobbered -> re-arm below */
         }
         if (b[0] == 0x00 && b[1] == 0x00) continue;        /* nothing loaded here yet */
-        if (g_int_vec[lin]) continue;             /* an INT site already lives here */
+        if (pmap_get(lin)) continue;              /* an INT site already lives here */
         /* ► A BREAKPOINT HAS A TWO-BYTE FOOTPRINT, and that is not a detail. It
              displaces the byte AFTER the one you named, so a breakpoint on a ONE-BYTE
              instruction eats its neighbour. Session 17 put one on a `c3` (ret) at
@@ -3417,11 +3468,9 @@ static void dpmi_bp_arm(void)
             b[0] = 0xCC;                      /* INT3: one byte, fits over CLI/STI */
         } else {
             b[0] = 0xC4; b[1] = 0xC4;
-            g_int_vec[lin] = DPMI_BP_VEC;     /* only a BOP is resolvable by vector  */
+            pmap_set(lin, DPMI_BP_VEC);       /* only a BOP is resolvable by vector  */
         }
         g_bp_armed[k] = 1; g_bp_pending[k] = 0;
-        if (lin < g_patch_lo) g_patch_lo = lin;
-        if (lin > g_patch_hi) g_patch_hi = lin;
         q = zput(q, "DPMI-BP: armed at linear 0x"); q = zhex(q, lin);
         q = zput(q, "..0x"); q = zhex(q, lin + 1);       /* say the 2-byte footprint */
         q = zput(q, " (displaced "); q = zdump(q, (const BYTE *)g_bp_orig[k], 2);
@@ -3451,7 +3500,7 @@ static int dpmi_bp_disarm(DWORD lin)
             volatile BYTE *b = (volatile BYTE *)(ULONG_PTR)lin;
             b[0] = g_bp_orig[k][0];
             if (g_bp_mode[k] != 1) b[1] = g_bp_orig[k][1];
-            g_int_vec[lin] = 0; g_bp_armed[k] = 0;
+            pmap_clear(lin); g_bp_armed[k] = 0;
             return k;
         }
     return -1;
@@ -3481,23 +3530,25 @@ static int dpmi_bp_disarm(DWORD lin)
    the guest will reuse, which is not knowable. */
 static void dpmi_unpatch(void)
 {
-    DWORD a;
-    for (a = g_patch_lo; a <= g_patch_hi && a < DPMI_PATCH_LIN_MAX; ++a)
-        if (g_int_vec[a] && g_int_vec[a] != DPMI_BP_VEC) {   /* a BP is not an INT site */
-            volatile BYTE *b = (volatile BYTE *)(ULONG_PTR)a;
-            if (b[0] == 0xC4 && b[1] == 0xC4) { b[0] = 0xCD; b[1] = g_int_vec[a]; }
-            else g_int_vec[a] = 0;                            /* stale: guest reused it */
-        }
+    DWORD sl;
+    for (sl = 0; sl < DPMI_PMAP_SLOTS; ++sl) {
+        DWORD a = g_pmap_lin[sl]; BYTE v = g_pmap_vec[sl];
+        if (!a || !v || v == DPMI_BP_VEC) continue;           /* a BP is not an INT site */
+        { volatile BYTE *b = (volatile BYTE *)(ULONG_PTR)a;
+          if (b[0] == 0xC4 && b[1] == 0xC4) { b[0] = 0xCD; b[1] = v; }
+          else g_pmap_vec[sl] = 0; }                          /* stale: guest reused it */
+    }
 }
 static void dpmi_repatch(void)
 {
-    DWORD a;
-    for (a = g_patch_lo; a <= g_patch_hi && a < DPMI_PATCH_LIN_MAX; ++a)
-        if (g_int_vec[a] && g_int_vec[a] != DPMI_BP_VEC) {   /* a BP stays planted */
-            volatile BYTE *b = (volatile BYTE *)(ULONG_PTR)a;
-            if (b[0] == 0xCD && b[1] == g_int_vec[a]) { b[0] = 0xC4; b[1] = 0xC4; }
-            else g_int_vec[a] = 0;                            /* stale: guest reused it */
-        }
+    DWORD sl;
+    for (sl = 0; sl < DPMI_PMAP_SLOTS; ++sl) {
+        DWORD a = g_pmap_lin[sl]; BYTE v = g_pmap_vec[sl];
+        if (!a || !v || v == DPMI_BP_VEC) continue;           /* a BP stays planted */
+        { volatile BYTE *b = (volatile BYTE *)(ULONG_PTR)a;
+          if (b[0] == 0xCD && b[1] == v) { b[0] = 0xC4; b[1] = 0xC4; }
+          else g_pmap_vec[sl] = 0; }                          /* stale: guest reused it */
+    }
 }
 
 /* Forward decl: the shared PM-interrupt dispatcher (defined after this fn). A callback
@@ -6234,10 +6285,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                                             || cs[o+1] == 0x16 || cs[o+1] == 0x33
                                             || cs[o+1] == 0x1A || cs[o+1] == 0x08)) {
                           DWORD lin = g_dpmi_code_base + o;      /* map is linear-keyed now */
-                          if (lin >= DPMI_PATCH_LIN_MAX) break;
-                          g_int_vec[lin] = cs[o+1]; cs[o] = 0xC4; cs[o+1] = 0xC4; ++n; last = o;
-                          if (lin < g_patch_lo) g_patch_lo = lin;
-                          if (lin > g_patch_hi) g_patch_hi = lin;
+                          pmap_set(lin, cs[o+1]); cs[o] = 0xC4; cs[o+1] = 0xC4; ++n; last = o;
                       }
                   }
                   p = zput(p, "DPMI: patched "); p = zhex(p, n);
