@@ -1,11 +1,147 @@
 ═══════════════════════════════════════════════════════════════════════════════
-██ ▶▶▶ NEXT SESSION: DOOM LOADS ITS IMAGE. FINISH THE PM SURFACE.             ██
+██ ▶▶▶ NEXT SESSION: GIVE THE CLIENT A PSP SELECTOR IN ES. IT IS ONE FIX.     ██
 ═══════════════════════════════════════════════════════════════════════════════
 
 ╔══════════════════════════════════════════════════════════════════════════════╗
 ║ THE USER'S INSTRUCTION (2026-08-21, end of session 16):                      ║
 ║   "stay on DPMI. The next north star is Doom working"                        ║
 ╚══════════════════════════════════════════════════════════════════════════════╝
+
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ ★★★ SESSION 17 (2026-08-22): THE SESSION-15 WALL IS DOWN, AND THE NEXT ONE   │
+│     IS ALREADY NAMED DOWN TO THE INSTRUCTION. START HERE.                     │
+└──────────────────────────────────────────────────────────────────────────────┘
+
+  Commits `60e7868` (INT patching for runtime-loaded code) and `7ab1f0f` (guest
+  breakpoints) on `m9/completeness`. selftest.com **8/8 on the rig** with the final
+  build; off-VM battery **349/349**; check-imports clean.
+
+  **▶▶ DO THIS FIRST — the whole task is one well-evidenced change.**
+  `dpmi_switch_to_pm()` sets the client's initial **ES = DS** (both based at the
+  client's real-mode DS). DPMI's initial client state gives **ES = a selector for
+  the client's PSP**. Doom dies on that, and the client is its own second witness:
+
+  ```
+  0x8F:36c9  mov es,[0x38f8]     ; ES = the DS it was handed = sel 0x17
+  0x8F:36cd  mov bx,es:[0x2c]    ; the PSP ENVIRONMENT field
+  0x8F:36d2  mov es,bx           ; <<< #GP: BX = 0x8b17 = LDT index 4450
+  0x8F:36d4  ...                 ; never reached
+  ```
+  A breakpoint dump of what ES actually points at settles it — it is **code**, not
+  a PSP:
+  ```
+  dump@0x5ca0 = 10 01 46 02 66 cf .. 9c 8c d1 8b d4 2e 8e 16 ..
+                                     ^ pushf / mov cx,ss / mov dx,sp
+  and +0x2c into it is the byte pair `17 8b`  ->  BX = 0x8b17
+  ```
+  Reading +0x2c and loading the result as a selector is the PSP environment field
+  and nothing else, so the requirement is not in doubt.
+
+  ⚠ **THE HALF I DELIBERATELY DID NOT GUESS, and you must not either.** Whether the
+    PSP's environment field must hold a **segment** (client converts, via INT 31h
+    **0002 segment-to-descriptor — which we do NOT implement**) or a **selector**
+    (host converts at load) is exactly the kind of thing this file forbids answering
+    from memory. Take it from the DPMI 0.9/1.0 spec text, and confirm against the
+    **stock ntvdm oracle** (`stock <target>`). Note DOS/4GW here loads it DIRECTLY,
+    with no 0002 call anywhere in the trace — which is evidence, but for *one*
+    extender only.
+  ▶ While you are there: `0x8F:36d2` is `8e c3`, two bytes, so it is a perfect
+    breakpoint site to re-verify the fix.
+
+  **WHAT SESSION 17 ACTUALLY FIXED — and the cause was not where three sessions of
+  reasoning had put it.** Doom stopped at the *same instruction* every run since
+  session 15. The INT->BOP scan was a **one-shot pass over a single 64K window** at
+  `g_dpmi_code_base`. DOS/4GW allocates conventional memory with INT 21h AH=48h,
+  **reads a protected-mode module into it out of DOOM.EXE**, retypes the descriptor
+  to code, and far-jumps in. That module's first instruction is `mov ah,30h ; CD 21`
+  — a **raw INT**, outside the window, never patched. A raw INT in PM raises the #GP
+  the kernel will not reflect, so the VDM died silently.
+   • `g_int_vec[]` is now keyed by **linear address** (was: offset into that one
+     window), with lo/hi watermarks so unpatch/repatch stay cheap.
+   • `dpmi_patch_code_region()` scans a region **at the moment the client declares it
+     CODE** (INT 31h 0009/000C with a code access byte). The timing is the client's,
+     not ours, and the trace shows it is right: allocate → read → retype → jump. That
+     is the only window in which the bytes exist and have not yet run.
+   • The IVT/BDA (< 0x600) is excluded. Doom *also* declares a base-0 64K code
+     selector, and the first version of the scan cheerfully rewrote 16 sites in
+     linear 0..0xFFFF — an interrupt vector of 0x21CD is an ordinary VALUE.
+
+  **ALSO CLOSED — every remaining gap session 16 named:**
+   • `INT 31h 0202/0203` get/set PM exception handler (45 calls, the biggest UNSUP
+     block). Own table, not `g_pm_int`: exceptions 00-1Fh and interrupt vectors are
+     different namespaces and a client may install both.
+   • `INT 31h 0600-0604 / 0701 / 0702`. Not stubs — with no virtual memory here,
+     "already locked" and "hint ignored" are the CORRECT answers, and 4096 is
+     architecture.
+   • `INT 21h AH=49h` from PM. Session 16 said "if Doom calls 49h the log will say so
+     and we can settle the convention on evidence" — it did, twice. ES resolves
+     through the LDT (the mirror of AH=48h returning a selector); a base that is not
+     a DOS paragraph is refused loudly rather than corrupting the MCB chain.
+   • `INT 21h AH=33h` joined the register-only whitelist.
+
+  **▶ THE REMAINING KNOWN GAPS AFTER THE ES FIX** (all still true from session 16):
+   1. `INT 31h 0002` segment-to-descriptor — unimplemented, and now suspected
+      load-bearing (see above).
+   2. `pm32flat/pm32io/pm32gfx/pm32irq/pm32sw` still misdecode: they put `bits 32`
+      straight after `call far [entry]`, so they were written to MATCH the old D/B
+      behaviour rather than test it, and they have no `jc` failure path. Rewrite to
+      the real-client pattern: stay 16-bit, allocate a 32-bit selector via INT 31h,
+      far-jmp to it.
+   3. Doom's flat selector is CLAMPED, loudly, and this is not fixable: XP's LDT
+      validator caps base+limit ≤ ~2GB and **stock ntvdm is under the same cap**.
+      `DPMI-LDT: install REJECTED sel 0x3f ... -> CLAMPED to limit 0x7ffef`.
+
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ ★★ THE NEW INSTRUMENT: GUEST BREAKPOINTS. USE IT BEFORE YOU THEORISE.        │
+└──────────────────────────────────────────────────────────────────────────────┘
+
+  A PM client's death takes the whole VDM with it: no VEH exception, no trampoline
+  catch, the log just stops. Until now the only evidence was "the last INT before
+  it died", and between two INTs there can be thousands of instructions.
+
+  ```
+  # pmbp.txt on the share -- one line per breakpoint, absent file = zero cost
+  <hex LINEAR addr to break on>   [hex LINEAR addr to DUMP on hit]   # comment
+  00018d62 00005ca0   # 0x8f:36d2 MOV ES,BX -- and show me what ES points at
+  ```
+  On hit it logs the full register file, SS:SP, the top of stack, the optional
+  memory dump, then **restores the displaced bytes and leaves EIP alone** so the
+  real instruction runs and the client carries on. One-shot: a loop reports its
+  first pass, not its ten-thousandth. Up to 32.
+
+  ▶ **It is driven from a FILE on purpose.** Addresses come from disassembling the
+    client and change every time you halve the interval; a rebuild-and-deploy per
+    guess is what makes people stop bisecting and start speculating. **Twelve
+    breakpoints across Doom's dead stretch, ONE run, and the killer was named.**
+  ⚠ **DELETE `pmbp.txt` FROM THE SHARE WHEN YOU ARE DONE.** A stale one silently
+    alters every later run — same class of trap as the stale `TN` and the
+    `opltrace.flag`. (Session 17 left the share clean; verified.)
+
+  ★ **AND THE TRAP THE FIRST VERSION OF IT WALKED INTO, which is the lesson.** It
+    armed at mode-switch time into memory the client had not loaded yet. Every
+    breakpoint logged `armed at ... (was 00 00)`, the module was then READ IN OVER
+    THE TOP, and not one fired. **Twelve confident lines of output measuring
+    nothing.** `dpmi_bp_arm()` now re-arms anything whose bytes are no longer our
+    BOP and refuses to arm on `00 00`. Fourth entry in this file's list of "my own
+    instrument lied to me".
+
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ ★★★ A LATENT LANDMINE FOUND THE HARD WAY — `IsBadReadPtr` IS BANNED IN PM     │
+└──────────────────────────────────────────────────────────────────────────────┘
+
+  `dpmi_crash_veh` treated **any** exception with a flat CS (0x1B) as a reflected
+  guest INT 31h — but our own host code also runs with CS=0x1B. `IsBadReadPtr` does
+  its job by TOUCHING memory inside an SEH frame, so on a bad pointer it raises, and
+  a VECTORED handler sees that before the SEH frame swallows it. A diagnostic I had
+  just added, guarded "safely" with `IsBadReadPtr`, was therefore answered as
+  *"INT 31h, unsupported function"*, had **EAX/EFLAGS/CS/SS rewritten and was
+  RESUMED**, and the run ended with no explanation — one line before the thing the
+  diagnostic existed to show.
+   • The reflect arm now also requires the faulting EIP to be in the guest's low
+     window (< 2 MB): no host code or system DLL lives down there.
+   • `host_readable()` asks **VirtualQuery**, which cannot raise. **Every
+     `IsBadReadPtr` in the PM paths is gone** — each was the same landmine.
+  ▶ The general rule: **a probe that faults on purpose is not a guard.**
 
 ┌──────────────────────────────────────────────────────────────────────────────┐
 │ 0. RESTARTING THE RIG (it is healthy and SELF-RECOVERABLE as of session 16)  │
@@ -81,11 +217,31 @@
     `cmd.exe` then fails on `goto`/labels, i.e. the watcher loop. Read/write BINARY and
     normalise to CRLF, then confirm with `file`.
 
-  BASELINE AFTER ANY RESTART: `selftest.com` → **8/8 PASS** (verified end of session 16,
-  after the DOS-layer changes).
+  BASELINE AFTER ANY RESTART: `selftest.com` → **8/8 PASS** (re-verified end of
+  session 17, twice, with the final build).
+
+  ★ **DISASSEMBLING THE CLIENT IS NOW A LOCAL, OFFLINE OPERATION** — this is what made
+    session 17 short, and it costs one command to set up:
+    ```
+    printf 'exec cmd /c copy "C:\DOOMS\*.EXE" "C:\Documents and Settings\All Users\Documents\ntvdmex\doombin\"\r\n' \
+      > /tmp/xpshare/control.txt
+    ```
+    Then map a guest address to a file offset by SEARCHING for bytes the log already
+    dumped (`bytes@cs:eip=`), which pins the whole segment in one step:
+    ```
+    python3 -c "d=open('DOOM.EXE','rb').read(); print(hex(d.find(bytes.fromhex('919 8c3b0ff...'.replace(' ','')))))"
+    # DOS/4GW's 16-bit half: guest 0x0F:off == file 0x1DD0+off
+    # its runtime-loaded PM module: guest 0x8F:off == file 0xF384+off
+    i686-w64-mingw32-objdump -D -b binary -m i8086 --start-address=0x... carved.bin
+    ```
+    ⚠ Pick a pattern with **no relocated immediates** in it — `mov di,<selector>` differs
+      between file and memory, and a longer "safer" pattern that includes one will simply
+      not be found.
 
 ┌──────────────────────────────────────────────────────────────────────────────┐
-│ 1. ★★★ DOOM: NEGOTIATES DPMI AND LOADS ITS LE IMAGE (session 16)             │
+│ 1. DOOM: NEGOTIATES DPMI AND LOADS ITS LE IMAGE (session 16)                 │
+│    ▶ SUPERSEDED IN PART BY SESSION 17 AT THE TOP OF THIS FILE. The "NEXT     │
+│      GAPS" list below is CLOSED; the D/B argument and the four fixes stand.  │
 └──────────────────────────────────────────────────────────────────────────────┘
 
   Run it: `doom` in `cmd.txt` (rt.bat now has the arm). Log = `result_doom.log`.
