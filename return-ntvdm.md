@@ -1,30 +1,64 @@
 ═══════════════════════════════════════════════════════════════════════════════
-██ ▶▶▶ DOOM'S EXTENDER IS COPYING ITS IMAGE IN. THE WALL IS A COPY LOOP.      ██
-██     GH #18 IS **NOT** ON THE CRITICAL PATH -- SEE THE CORRECTION BELOW.    ██
+██ ▶▶▶ DOOM'S EXTENDER COMPLETES ITS STARTUP AND HANDS OFF TO THE GAME.       ██
+██     NEXT EDGE: THE TIMER IRQ WE INJECT INTO ITS OWN PM INT 08h HANDLER.    ██
 ═══════════════════════════════════════════════════════════════════════════════
 
 ┌──────────────────────────────────────────────────────────────────────────────┐
-│ ★★★ WHERE IT IS NOW (end of session 17, 2026-08-22)                          │
+│ ★★★ WHERE IT IS (end of session 17, 2026-08-22). FURTHEST EVER BY FAR.       │
 └──────────────────────────────────────────────────────────────────────────────┘
 
-  Doom's DOS/4GW negotiates DPMI, loads its PM modules, runs **its own protected-mode
-  INT 21h handler** (28 clean IRET returns in a run), forwards DOS calls to real mode
-  through INT 31h 0302, allocates extended memory, sets descriptors over it, and is
-  **copying Doom's LE image in**.
+  Doom's DOS/4GW now, in one run:
+   • negotiates DPMI and switches to protected mode
+   • loads its PM modules into EXTENDED memory and relocates them
+   • runs **its own protected-mode INT 21h handler** — **160 clean IRET returns**
+   • forwards DOS calls to real mode through **INT 31h 0302**
+   • completes the **relocation pass** and retypes all three objects to code
+   • **hands off to the application** (all twelve handoff instructions breakpointed and
+     hit, through `mov es,bx` immediately before the IRET)
+   • the application's runtime starts and installs **its own PM interrupt vectors** —
+     43 `setPMvec` calls, walking 0x00..0x08
 
-  ▶ **IT NOW STOPS INSIDE THAT COPY LOOP: `0x0F:0x4BEE .. 0x4C61`, on a LATER
-    ITERATION.** Breakpoints confirm every instruction of the loop body is reached
-    (0x4bd6, 0x4bee, 0x4c14, 0x4c54, 0x4c57, 0x4c5b, 0x4c5d, 0x4c61 all hit) and that
-    the `je 0x4bee` back-edge is taken. The log is otherwise CLEAN — no UNSUP, no
-    thunk-TODO, no descriptor rejection. So this is a fault on some iteration, most
-    likely a write through a window selector (`mov es:[bx],ax` at 0x4c57, ES = a
-    0x0399xxxx-based extended-memory selector) once the walk passes something we set
-    slightly wrong.
-  ▶ **NEXT STEP:** one-shot breakpoints are consumed on the first pass, so use the SKIP
-    column's re-arming path, or add a per-breakpoint HIT COUNT so it fires on the Nth
-    iteration. Then dump ES's descriptor and BX at the failing pass. The loop advances
-    its window with 0006 (get base) + 000C (set descriptor), both of which are worth
-    checking against what the client actually asked for.
+  ▶▶ **IT STOPS THE INSTANT WE DELIVER THE TIMER.** The log's last line is
+     `IRQ0->PM INT 0x08 handler 0x00af:0x0020` — the moment the client installs its PM
+     INT 08h vector, `dpmi_inject_pm_irq()` injects IRQ0 into it and the run ends.
+     That function now shares the corrected frame-width and stack-pointer rules (below)
+     but has never otherwise been exercised against a 32-bit client.
+   ▶ **START HERE, and ask the cheap question first:** is delivering IRQ0 while the
+     client is still half-way through building its own vector table even legitimate? A
+     real host gates delivery on the client's virtual interrupt flag; ours defaults
+     `g_dpmi_vi` to 1. Try suppressing injection until the client has run for a while,
+     or until it has enabled interrupts explicitly — if that gets further, the bug is
+     the POLICY, not the mechanism.
+   ▶ Then check the mechanism: the injected frame, and whether the handler's IRET lands
+     on the PM-return catcher.
+
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ THE FOUR BUGS THIS SESSION FOUND AFTER THE CORRECTION, ALL OURS              │
+└──────────────────────────────────────────────────────────────────────────────┘
+
+  1. **The PM interrupt frame width is the CLIENT'S mode, not the handler selector's D
+     bit.** DOS/4GW's handler sits in a 16-bit code selector but returns with `66 cf`
+     (IRETD), popping twelve bytes from the six we pushed.
+  2. **Frame width and stack-pointer width are different questions.** Fixing (1) alone
+     faulted in our own process: with a 16-bit SS the CPU maintains SP and the top half
+     of ESP is junk. A 32-bit frame on a 16-bit stack is ordinary.
+  3. ★ **The patch map must VERIFY before it writes — it was corrupting loaded images.**
+     The client declares a base-0 64K code selector, so the scan recorded `CD nn` pairs
+     all over low memory, including addresses that later became DOS/4GW's file transfer
+     buffer. Every 0301/0302 unpatched, ran the real-mode READ that fills that buffer,
+     then repatched — stamping `C4 C4` over two bytes of freshly-read image:
+     ```
+        file    9a a4 59 80 | 00 83 | c4 08      lcall 0x0080:0x59a4 / add sp,8
+        memory  9a a4 59 80 | c4 c4 | c4 08
+     ```
+     Found by a repeating breakpoint over the relocation loop: 236 iterations reading a
+     clean 0x0080, then one reading 0xC480. unpatch/repatch now only rewrite bytes that
+     are still what we put there; anything else is stale and is dropped.
+     ▶ **The general shape: a cache of "I changed these bytes" is only valid while
+       nothing else writes them, and in a VDM the guest owns that memory.**
+  4. **The map only covered the low 1.1 MB.** A working extender puts its modules in
+     EXTENDED memory, so their INT sites were never patched. Now an open-addressed hash
+     keyed by linear address — and faster than the array it replaced.
 
 ┌──────────────────────────────────────────────────────────────────────────────┐
 │ ★★★ A CORRECTION. THE PREVIOUS HANDOFF NAMED THE WRONG BLOCKER.              │
