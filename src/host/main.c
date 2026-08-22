@@ -435,6 +435,21 @@ static void pmap_clear(DWORD lin)
                                                  that increments it: a different bug
    Absent file = no watch and no cost, like every other knob here. */
 #define PMWATCH_PATH "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\pmwatch.txt"
+/* ── RUN PROTECTED MODE UNDER THE KERNEL MONITOR INSTEAD OF IN-PROCESS. ──────────
+   This host far-jmps into PM (dpmi_enter.S) because an early spike found
+   VdmStartExecution faulting when it ran PM -- and everything expensive we have
+   built since exists to work around that one decision: the INT->BOP patch map
+   (because a raw PM INT is not reflected to us) and the asynchronous
+   SuspendThread injector (because the kernel will not deliver interrupts to us).
+   The second is not a preference. Measured: PM entry loads flags with `popfd`,
+   POPFD at CPL 3 cannot modify VIF, and the kernel's delivery gate reads VIF --
+   so an in-process PM guest can NEVER be given a hardware interrupt by the
+   kernel, whatever we write. Only ring 0 can set those flags, which is exactly
+   what stock ntvdm gets and why it reaches Doom's title screen on this box.
+   So it is worth asking the original question again, against a host that now has
+   working descriptors, services and thunks rather than almost nothing. Opt-in,
+   because the far-jmp path is what currently works. */
+#define PMKERNEL_PATH "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\pmkernel.flag"
 static int g_pm_noirq = 0;
 /* Per-event checkpoint verbosity. The full dump -- registers, stack, frame, entry code
    -- was built for the era when the client died inside the FIRST dpmi_enter_pm and the
@@ -624,6 +639,7 @@ static DWORD g_pm_vec8_armed_ms = 0;
 /* Set when the APPLICATION (not the extender's arming pass) installs a timer ISR. Until
    then vector 8 holds a placeholder stub and delivering to it is both pointless and, on
    DOS/4GW, fatal. Learned by snooping INT 21h AH=25h -- see the routing path. */
+static int   g_dpmi_use_kernel = 0;         /* pmkernel.flag: run PM via VdmStartExecution */
 static int   g_pm_app_hooked_timer = 0;
 /* ...and WHERE it is. Kept apart from g_pm_int[8] on purpose: that table is what INT 31h
    0204 reports back, and it must keep saying exactly what the client installed through
@@ -7187,6 +7203,11 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                       p = zput(p, "\r\n");
                       log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
                   } }
+                g_dpmi_use_kernel = (GetFileAttributesA(PMKERNEL_PATH) != INVALID_FILE_ATTRIBUTES);
+                if (g_dpmi_use_kernel) {
+                    p = zput(p, "DPMI: pmkernel.flag -- PM will run under VdmStartExecution\r\n");
+                    log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                }
                 g_pm_noirq = (GetFileAttributesA(PMNOIRQ_PATH) != INVALID_FILE_ATTRIBUTES);
                 if (g_pm_noirq) {
                     p = zput(p, "DPMI: pmnoirq.flag present -- IRQ0->PM injection SUPPRESSED\r\n");
@@ -7423,7 +7444,53 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                          a PM guest could never be interrupted at all. Protected-mode
                          execution is execution too. */
                     InterlockedExchange(&g_in_exec, 1);
-                    dpmi_enter_pm(tib);
+                    if (g_dpmi_use_kernel) {
+                        /* Hand the PM CONTEXT to the kernel monitor exactly as the V86
+                           path does. Same TIB, same call; the only difference is that
+                           EFLAGS.VM is clear and CS/SS/DS hold LDT selectors. */
+                        LONG kst = 0; DWORD kev;
+                        /* ► THE TOP HALF OF ESP IS JUNK ON A 16-BIT STACK, AND THE KERNEL
+                             READS ALL OF IT. With a 16-bit SS the CPU maintains SP only, so
+                             whatever was last in the high half stays there -- the far-jmp
+                             path stores that junk into the TIB on exit and reloads it
+                             harmlessly with `lss`, because the CPU ignores it. The kernel
+                             does not: it takes the CONTEXT's ESP whole. Measured, and it is
+                             the difference between the entry that works and the one that
+                             never returns:
+                                 entry 0  ss:esp=0x1f:0x0000fffe   -> returns ev=4
+                                 entry 1  ss:esp=0x17:0xb33afffa   -> never returns
+                             0xb33a is a host thread-stack address, and 0xb33afffa is far
+                             outside a 0xFFFF-limit selector. Narrow it to what the
+                             descriptor can actually address. */
+                        if (!dpmi_sel_is32((WORD)(VDM_REG(tib, VTIB_SS) & 0xFFFF)))
+                            VDM_REG(tib, VTIB_ESP) &= 0xFFFFu;
+                        if (steps < 400) {      /* BEFORE the call: an entry that never
+                                                  returns leaves no other trace at all */
+                            p = zput(p, "PMKERNEL[");   p = zhex(p, (unsigned)steps);
+                            p = zput(p, "] enter cs:eip=0x"); p = zhex(p, VDM_REG(tib, VTIB_CS) & 0xFFFF);
+                            p = zput(p, ":0x");         p = zhex(p, VDM_REG(tib, VTIB_EIP));
+                            p = zput(p, " ss:esp=0x");  p = zhex(p, VDM_REG(tib, VTIB_SS) & 0xFFFF);
+                            p = zput(p, ":0x");         p = zhex(p, VDM_REG(tib, VTIB_ESP));
+                            p = zput(p, " efl=0x");     p = zhex(p, VDM_REG(tib, VTIB_EFLAGS));
+                            p = zput(p, " msw=0x");     p = zhex(p, *(volatile WORD *)(tib + VTIB_MSW));
+                            p = zput(p, " [0x714]=0x"); p = zhex(p, *(volatile DWORD *)(ULONG_PTR)0x714);
+                            p = zput(p, "\r\n");
+                            log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                        }
+                        kev = v86_run(tib, &kst);
+                        if (steps < 400) {
+                            p = zput(p, "PMKERNEL[");     p = zhex(p, (unsigned)steps);
+                            p = zput(p, "] VdmStartExecution -> st=0x"); p = zhex(p, (DWORD)kst);
+                            p = zput(p, " ev=0x");        p = zhex(p, kev);
+                            p = zput(p, " cs:eip=0x");    p = zhex(p, VDM_REG(tib, VTIB_CS) & 0xFFFF);
+                            p = zput(p, ":0x");           p = zhex(p, VDM_REG(tib, VTIB_EIP));
+                            p = zput(p, " efl=0x");       p = zhex(p, VDM_REG(tib, VTIB_EFLAGS));
+                            p = zput(p, "\r\n");
+                            log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                        }
+                    } else {
+                        dpmi_enter_pm(tib);
+                    }
                     InterlockedExchange(&g_in_exec, 0);
                     if (steps < g_dpmi_cp_max) {
                         p = zput(p, "DPMI-CP["); p = zhex(p, (unsigned)steps);
