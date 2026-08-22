@@ -405,6 +405,20 @@ static void pmap_clear(DWORD lin)
    the real instruction executes and the client runs on undisturbed. A loop therefore
    reports its first pass, not its ten-thousandth. */
 #define PMBP_PATH "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\pmbp.txt"
+/* Suppress the asynchronous IRQ0 -> PM INT 08h injection. A knob, not a feature: when a
+   client dies the instant we deliver a timer tick, the first question is whether the
+   DELIVERY is wrong or merely BADLY TIMED, and the cheapest way to ask it is to stop
+   delivering and see how much further the client gets. Absent file = normal behaviour. */
+#define PMNOIRQ_PATH "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\pmnoirq.flag"
+static int g_pm_noirq = 0;
+/* Per-event checkpoint verbosity. The full dump -- registers, stack, frame, entry code
+   -- was built for the era when the client died inside the FIRST dpmi_enter_pm and the
+   only question was "did we get there at all". Now that a client runs for thousands of
+   events it is the thing stopping it: a Doom run hit the 4 MB log cap at event 0xdb1
+   with the game still loading. So: a handful of checkpoints always (they still catch a
+   death at the switch), and the full firehose only when asked for. */
+#define PMVERBOSE_PATH "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\pmverbose.flag"
+static unsigned g_dpmi_cp_max = 8;
 #define DPMI_BP_VEC  0xEE               /* sentinel in g_int_vec[]: not a real vector */
 #define DPMI_BP_MAX  32
 static DWORD g_bp_lin[DPMI_BP_MAX];     /* requested linear addresses (from PMBP_PATH) */
@@ -674,8 +688,19 @@ static BYTE  g_flt_tbl[8 * 0x10] __attribute__((aligned(16)));
 /* DPMI LDT descriptor allocator. Indices 0=null,1=code(0x0F),2=data(0x17) are the
    switch's; DPMI clients allocate from 3+. We keep base/limit/access so INT 31h
    06/07/08/09 can get/modify them and reinstall via svc 10 (NtSetLdtEntries). */
-static struct dpmi_desc { DWORD base, limit; BYTE access, flags; } g_ldt[512];
+/* ── THE LDT, WITH A REAL FREE LIST. ─────────────────────────────────────────────
+   INT 31h 0001 (free descriptor) used to be a no-op that logged " -> free", which is
+   fine right up until a client actually recycles descriptors -- and Doom does, heavily:
+   360 allocations against 315 frees in a single startup. Leaking every one exhausted
+   the table, 0000 started returning ENOMEM, and the client carried on using the garbage
+   selector it got back (0x8011, index 4098). A no-op is not a safe stub when the thing
+   being stubbed is a RESOURCE.
+   The table is also bigger: 512 was an arbitrary bound from the spike era. */
+#define DPMI_LDT_MAX 2048
+static struct dpmi_desc { DWORD base, limit; BYTE access, flags; } g_ldt[DPMI_LDT_MAX];
 static int   g_ldt_next = 3;
+static WORD  g_ldt_free[DPMI_LDT_MAX];   /* recycled indices, LIFO */
+static int   g_ldt_nfree = 0;
 static volatile BYTE *g_tib_dbg = 0;        /* VDM_TIB, for the crash VEH to dump guest state */
 
 /* Serial debug sink (DPMI harness): COM1 is captured by QEMU (-serial file:vm/serial.log)
@@ -3137,7 +3162,7 @@ static WORD dpmi_hdlr_code_sel(void)
 {
     int idx;
     if (g_dpmi_hdlr_sel) return g_dpmi_hdlr_sel;
-    if (g_ldt_next >= 512) return 0;
+    if (g_ldt_next >= DPMI_LDT_MAX) return 0;
     idx = g_ldt_next++;
     g_ldt[idx].base   = (DWORD)DOS_HDLR_SEG << 4;
     g_ldt[idx].limit  = 0xFFFF;
@@ -3274,7 +3299,7 @@ static DWORD dpmi_sel_base(WORD sel)
        from g_dpmi_seg_base); 3+ are client allocations. For a .COM all three bases
        equal g_dpmi_code_base; for a real .EXE (CS!=DS!=SS) they differ, so a per-
        selector lookup is required to translate DS:/ES: buffers correctly. */
-    if (idx >= 1 && idx < 512) return g_ldt[idx].base;
+    if (idx >= 1 && idx < DPMI_LDT_MAX) return g_ldt[idx].base;
     return g_dpmi_code_base;                                    /* null / unknown selector */
 }
 
@@ -3320,7 +3345,7 @@ static void dpmi_bp_rearm_pending(DWORD cur_lin);   /* fwd: re-plant stepped-ove
 static void dpmi_patch_code_region(DWORD base, DWORD limit)
 {
     volatile BYTE *mem;
-    DWORD end, a, n = 0;
+    DWORD end, n = 0;
     char lb[192], *q = lb;
     /* ► NEVER PATCH THE IVT / BIOS DATA AREA, even when the client declares a base-0
          code selector -- and Doom does exactly that (sel 0x67, base 0, limit 0xFFFF),
@@ -3332,24 +3357,42 @@ static void dpmi_patch_code_region(DWORD base, DWORD limit)
          client's code. Start the scan above it. */
     end = base + limit;                              /* limit is the LAST valid byte */
     if (base < 0x600) base = 0x600;                  /* ...but the region END is unchanged */
-    /* No upper bound any more: the regions that matter now live in EXTENDED memory,
-       which is where a working extender puts its modules. The size cap is a sanity
-       bound rather than a policy -- a "code" region of tens of megabytes is a flat
-       alias, not a module, and scanning it would cost seconds and mis-patch data. */
+    /* No upper bound any more: the regions that matter live in EXTENDED memory, which is
+       where a working extender puts its modules. The size cap is a sanity bound rather
+       than a policy -- a multi-megabyte "code" region is a flat alias, not a module. */
     if (end <= base || (end - base) > 0x00400000u) return;
-    if (!host_readable((const void *)(ULONG_PTR)base, 2)) return;
-    mem = (volatile BYTE *)(ULONG_PTR)base;
-    for (a = 0; a + 1 < (end - base); ++a) {
-        if (mem[a] == 0xCD && (mem[a+1] == 0x31 || mem[a+1] == 0x21 || mem[a+1] == 0x10
-                               || mem[a+1] == 0x16 || mem[a+1] == 0x33
-                               || mem[a+1] == 0x1A || mem[a+1] == 0x08)) {
-            DWORD lin = base + a;
-            if (pmap_get(lin)) continue;             /* already patched (aliased region) */
-            pmap_set(lin, mem[a+1]);
-            mem[a] = 0xC4; mem[a+1] = 0xC4;
-            ++n;
-        }
-    }
+    /* ► WALK THE COMMITTED REGIONS, DO NOT WALK THE ADDRESS RANGE. A declared code
+         region is the CLIENT's idea of what is code, and a client hands us ranges that
+         span memory nobody has mapped -- Doom's own runtime declares a base-0 1 MB
+         selector, and the low megabyte has holes. Scanning straight through faulted
+         inside this very loop (caught by the VEH: `cmp al,0xcd` with EDX=0xd4000), i.e.
+         our own scanner killing the run it exists to help. Probing every N bytes is not
+         good enough either -- it guesses at a boundary the memory manager already knows.
+         Ask it: VirtualQuery hands back exactly the committed, readable extents. */
+    { DWORD a = base;
+      while (a < end) {
+          MEMORY_BASIC_INFORMATION mbi;
+          DWORD rend, i;
+          if (VirtualQuery((LPCVOID)(ULONG_PTR)a, &mbi, sizeof mbi) != sizeof mbi) break;
+          rend = (DWORD)((ULONG_PTR)mbi.BaseAddress + mbi.RegionSize);
+          if (rend <= a) break;                      /* no progress -> stop, never spin */
+          if (rend > end) rend = end;
+          if (mbi.State == MEM_COMMIT && !(mbi.Protect & (PAGE_NOACCESS | PAGE_GUARD))) {
+              mem = (volatile BYTE *)(ULONG_PTR)a;
+              for (i = 0; i + 1 < (rend - a); ++i) {
+                  if (mem[i] == 0xCD && (mem[i+1] == 0x31 || mem[i+1] == 0x21 || mem[i+1] == 0x10
+                                         || mem[i+1] == 0x16 || mem[i+1] == 0x33
+                                         || mem[i+1] == 0x1A || mem[i+1] == 0x08)) {
+                      DWORD lin = a + i;
+                      if (pmap_get(lin)) continue;   /* already patched (aliased region) */
+                      pmap_set(lin, mem[i+1]);
+                      mem[i] = 0xC4; mem[i+1] = 0xC4;
+                      ++n;
+                  }
+              }
+          }
+          a = rend;
+      } }
     q = zput(q, "DPMI: code region 0x"); q = zhex(q, base);
     q = zput(q, "..0x"); q = zhex(q, end);
     q = zput(q, " -> patched "); q = zhex(q, n); q = zput(q, " INT sites\r\n");
@@ -3752,7 +3795,7 @@ static int dpmi_dispatch_to_pm_handler(dos_machine_t *mp, volatile BYTE *tib,
              there is exactly the blind stretch this session spent hours removing -- one
              log line, then nothing. Bounded to the first 64 entries per dispatch so a
              handler that loops pays nothing. */
-        if (ph < 64) {
+        if (ph < 64 && g_dpmi_cp_max > 8) {
             DWORD ccs = VDM_REG(tib, VTIB_CS) & 0xFFFF;
             DWORD cb  = dpmi_sel_base((WORD)ccs), cip = VDM_REG(tib, VTIB_EIP);
             const BYTE *ib = (const BYTE *)(ULONG_PTR)(cb + cip);
@@ -3950,7 +3993,21 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                         case 0x0000: {                             /* allocate CX descriptors */
                             DWORD cx = VDM_REG(tib, VTIB_ECX) & 0xFFFF, i; WORD basesel;
                             if (cx == 0) cx = 1;
-                            if (g_ldt_next + (int)cx > 512) {      /* out of descriptors */
+                            /* Recycle first, and only for CX==1: 0000 promises CONTIGUOUS
+                               selectors (that is what 0003's increment is for), and a free
+                               list cannot promise that. Single allocations are the whole of
+                               what real clients ask for in bulk. */
+                            if (cx == 1 && g_ldt_nfree > 0) {
+                                int idx = g_ldt_free[--g_ldt_nfree];
+                                g_ldt[idx].base = 0; g_ldt[idx].limit = 0;
+                                g_ldt[idx].access = 0xF2; g_ldt[idx].flags = 0;
+                                dpmi_install(idx);
+                                VDM_SET16(tib, VTIB_EAX, (WORD)((idx << 3) | 7));
+                                p = zput(p, " -> sel 0x"); p = zhex(p, (idx << 3) | 7);
+                                p = zput(p, " (recycled)");
+                                break;
+                            }
+                            if (g_ldt_next + (int)cx > DPMI_LDT_MAX) {      /* out of descriptors */
                                 VDM_REG(tib, VTIB_EFLAGS) |= 1u; VDM_SET16(tib, VTIB_EAX, 0x8011);
                                 p = zput(p, " -> ENOMEM"); break;
                             }
@@ -3964,13 +4021,39 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                             VDM_SET16(tib, VTIB_EAX, basesel);
                             p = zput(p, " -> sel 0x"); p = zhex(p, basesel);
                             break; }
-                        case 0x0001:                               /* free descriptor BX (no-op reclaim) */
-                            p = zput(p, " -> free");
-                            break;
+                        case 0x0001: {                             /* free descriptor BX */
+                            WORD fsel = (WORD)(VDM_REG(tib, VTIB_EBX) & 0xFFFF);
+                            int idx = fsel >> 3;
+                            /* Never recycle OUR OWN selectors: the mode-switch trio, the PSP
+                               and environment descriptors, and the stubs/trampoline. A client
+                               is entitled to free anything it was given, but it was not given
+                               these, and handing one back out later would pull the floor up. */
+                            int reserved = (idx < 6)
+                                || fsel == g_dpmi_hdlr_sel || fsel == g_pmret_sel
+                                || fsel == g_dpmi_fault_sel || fsel == g_dpmi_flt_code_sel;
+                            if (idx >= 1 && idx < DPMI_LDT_MAX && !reserved
+                                && g_ldt[idx].access != 0 && g_ldt_nfree < DPMI_LDT_MAX) {
+                                int d, dup = 0;
+                                for (d = 0; d < g_ldt_nfree; ++d)   /* refuse a double free */
+                                    if (g_ldt_free[d] == (WORD)idx) { dup = 1; break; }
+                                if (!dup) {
+                                    g_ldt[idx].base = g_ldt[idx].limit = 0;
+                                    g_ldt[idx].access = 0;          /* not present */
+                                    g_ldt[idx].flags = 0;
+                                    dpmi_install(idx);
+                                    g_ldt_free[g_ldt_nfree++] = (WORD)idx;
+                                    p = zput(p, " -> freed sel 0x"); p = zhex(p, fsel);
+                                    p = zput(p, " ("); p = zhex(p, (DWORD)g_ldt_nfree);
+                                    p = zput(p, " on the free list)");
+                                    break;
+                                }
+                            }
+                            p = zput(p, " -> free (kept: reserved or not allocated)");
+                            break; }
                         case 0x0100: {                             /* allocate DOS memory: BX paras -> AX=seg, DX=sel */
                             uint16_t want = (uint16_t)(VDM_REG(tib, VTIB_EBX) & 0xFFFF), seg = 0, max = 0;
                             int err = dos_alloc(NULL, m.first_mcb, want, &seg, &max);
-                            if (err || g_ldt_next >= 512) {
+                            if (err || g_ldt_next >= DPMI_LDT_MAX) {
                                 VDM_REG(tib, VTIB_EFLAGS) |= 1u;
                                 VDM_SET16(tib, VTIB_EAX, err ? err : 0x0008);   /* 8 = insufficient memory */
                                 VDM_SET16(tib, VTIB_EBX, max);                  /* largest available (paras) */
@@ -3989,7 +4072,7 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                             break; }
                         case 0x0101: {                             /* free DOS memory: DX = selector */
                             int idx = (VDM_REG(tib, VTIB_EDX) & 0xFFFF) >> 3;
-                            if (idx >= 3 && idx < 512) {
+                            if (idx >= 3 && idx < DPMI_LDT_MAX) {
                                 DWORD seg = g_ldt[idx].base >> 4;
                                 dos_free(NULL, (uint16_t)seg);
                                 g_ldt[idx].base = g_ldt[idx].limit = 0; /* descriptor left reclaimable */
@@ -3999,7 +4082,7 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                         case 0x0102: {                             /* resize DOS memory block: BX=new paras, DX=sel */
                             int idx = (VDM_REG(tib, VTIB_EDX) & 0xFFFF) >> 3;
                             uint16_t want = (uint16_t)(VDM_REG(tib, VTIB_EBX) & 0xFFFF), max = 0;
-                            if (idx >= 1 && idx < 512 && g_ldt[idx].base) {
+                            if (idx >= 1 && idx < DPMI_LDT_MAX && g_ldt[idx].base) {
                                 uint16_t seg = (uint16_t)(g_ldt[idx].base >> 4);
                                 int err = dos_resize(NULL, seg, want, &max);
                                 if (err) {
@@ -4139,20 +4222,20 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                         case 0x0007: {                             /* set base of sel BX = CX:DX */
                             int idx = (VDM_REG(tib, VTIB_EBX) & 0xFFFF) >> 3;
                             DWORD b = ((VDM_REG(tib, VTIB_ECX) & 0xFFFF) << 16) | (VDM_REG(tib, VTIB_EDX) & 0xFFFF);
-                            if (idx >= 1 && idx < 512) { g_ldt[idx].base = b; dpmi_install(idx); }
+                            if (idx >= 1 && idx < DPMI_LDT_MAX) { g_ldt[idx].base = b; dpmi_install(idx); }
                             p = zput(p, " sel 0x"); p = zhex(p, VDM_REG(tib, VTIB_EBX) & 0xFFFF);
                             p = zput(p, " -> setbase 0x"); p = zhex(p, b);
                             break; }
                         case 0x0008: {                             /* set limit of sel BX = CX:DX */
                             int idx = (VDM_REG(tib, VTIB_EBX) & 0xFFFF) >> 3;
                             DWORD l = ((VDM_REG(tib, VTIB_ECX) & 0xFFFF) << 16) | (VDM_REG(tib, VTIB_EDX) & 0xFFFF);
-                            if (idx >= 1 && idx < 512) { g_ldt[idx].limit = l; dpmi_install(idx); }
+                            if (idx >= 1 && idx < DPMI_LDT_MAX) { g_ldt[idx].limit = l; dpmi_install(idx); }
                             p = zput(p, " sel 0x"); p = zhex(p, VDM_REG(tib, VTIB_EBX) & 0xFFFF);
                             p = zput(p, " -> setlimit 0x"); p = zhex(p, l);
                             break; }
                         case 0x0009: {                             /* set access rights of sel BX (CX) */
                             int idx = (VDM_REG(tib, VTIB_EBX) & 0xFFFF) >> 3;
-                            if (idx >= 1 && idx < 512) {
+                            if (idx >= 1 && idx < DPMI_LDT_MAX) {
                                 /* CL = access byte (P|DPL|S|type). CH = descriptor byte 6
                                    (G|D/B|L|AVL|limit19:16); its HIGH nibble carries G/D/B/L/AVL,
                                    which maps 1:1 onto our flags nibble (see dpmi_build_desc).
@@ -4173,9 +4256,9 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                             break; }
                         case 0x000A: {                             /* create data alias of sel BX */
                             int src = (VDM_REG(tib, VTIB_EBX) & 0xFFFF) >> 3, idx;
-                            if (g_ldt_next >= 512) { VDM_REG(tib, VTIB_EFLAGS) |= 1u; p = zput(p, " -> ENOMEM"); break; }
+                            if (g_ldt_next >= DPMI_LDT_MAX) { VDM_REG(tib, VTIB_EFLAGS) |= 1u; p = zput(p, " -> ENOMEM"); break; }
                             idx = g_ldt_next++;
-                            if (src >= 1 && src < 512) g_ldt[idx] = g_ldt[src];
+                            if (src >= 1 && src < DPMI_LDT_MAX) g_ldt[idx] = g_ldt[src];
                             else { g_ldt[idx].base = g_dpmi_code_base; g_ldt[idx].limit = 0xFFFF; g_ldt[idx].flags = 0; }
                             g_ldt[idx].access = 0xF2;              /* data alias */
                             dpmi_install(idx);
@@ -4212,7 +4295,7 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                             volatile DWORD *d = (volatile DWORD *)(ULONG_PTR)
                                 (esb + (VDM_REG(tib, VTIB_EDI) & 0xFFFF));
                             DWORD lo = 0, hi = 0;
-                            if (idx >= 1 && idx < 512)
+                            if (idx >= 1 && idx < DPMI_LDT_MAX)
                                 dpmi_build_desc(g_ldt[idx].base, g_ldt[idx].limit,
                                                 g_ldt[idx].access, g_ldt[idx].flags, &lo, &hi);
                             else { VDM_REG(tib, VTIB_EFLAGS) |= 1u; p = zput(p, " -> bad sel"); break; }
@@ -4676,7 +4759,7 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                             if (VDM_REG(tib, VTIB_EFLAGS) & 1u) {
                                 p = zput(p, " -> FAILED, largest 0x");
                                 p = zhex(p, VDM_REG(tib, VTIB_EBX) & 0xFFFF);
-                            } else if (g_ldt_next >= 512) {
+                            } else if (g_ldt_next >= DPMI_LDT_MAX) {
                                 VDM_REG(tib, VTIB_EFLAGS) |= 1u;
                                 VDM_SET16(tib, VTIB_EAX, 8);       /* insufficient memory */
                                 p = zput(p, " -> no free LDT slot");
@@ -4732,7 +4815,7 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                                 if (err) { VDM_REG(tib, VTIB_EFLAGS) |= 1u; VDM_SET16(tib, VTIB_EAX, err);
                                            p = zput(p, " -> err 0x"); p = zhex(p, err); }
                                 else { VDM_REG(tib, VTIB_EFLAGS) &= ~1u;
-                                       if (idx >= 3 && idx < 512) { g_ldt[idx].base = g_ldt[idx].limit = 0; }
+                                       if (idx >= 3 && idx < DPMI_LDT_MAX) { g_ldt[idx].base = g_ldt[idx].limit = 0; }
                                        p = zput(p, " -> freed seg 0x"); p = zhex(p, segbase >> 4); }
                             }
                             p = zput(p, "\r\n");
@@ -4824,7 +4907,7 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                                     p = zput(p, " max 0x"); p = zhex(p, max);
                                 } else {
                                     VDM_REG(tib, VTIB_EFLAGS) &= ~1u;
-                                    if (idx >= 1 && idx < 512) {
+                                    if (idx >= 1 && idx < DPMI_LDT_MAX) {
                                         g_ldt[idx].limit = want ? (want * 16u - 1u) : 0;
                                         dpmi_install(idx);
                                         p = zput(p, " -> ok, sel limit now 0x");
@@ -4927,7 +5010,7 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
    the 0303 real-mode-callback path and the async-IRQ injector (#2b). */
 static void dpmi_ensure_pmret_sel(void)
 {
-    if (g_pmret_sel == 0 && g_ldt_next < 512) {
+    if (g_pmret_sel == 0 && g_ldt_next < DPMI_LDT_MAX) {
         int idx = g_ldt_next++;
         g_ldt[idx].base = (DWORD)DOS_HDLR_SEG << 4; g_ldt[idx].limit = 0xFFFF;
         g_ldt[idx].access = 0xFA; g_ldt[idx].flags = 0;   /* code exec/read */
@@ -6200,7 +6283,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                 { WORD psp = m.psp_seg;
                   DWORD pspbase = (DWORD)psp << 4;
                   WORD psp_sel = 0, env_sel = 0;
-                  if (g_ldt_next < 512) {
+                  if (g_ldt_next < DPMI_LDT_MAX) {
                       int pi = g_ldt_next++;
                       g_ldt[pi].base   = pspbase;
                       g_ldt[pi].limit  = 0xFF;        /* "a 100h byte limit", exactly */
@@ -6215,7 +6298,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                     /* envseg == 0 is legal and documented: a client may free its
                        environment and zero this word BEFORE switching, in which case
                        there is nothing to convert and we must not invent a descriptor. */
-                    if (envseg && g_ldt_next < 512) {
+                    if (envseg && g_ldt_next < DPMI_LDT_MAX) {
                         int ei = g_ldt_next++;
                         g_ldt[ei].base   = (DWORD)envseg << 4;
                         g_ldt[ei].limit  = 0xFF;      /* dos_env_build fills a 0x10-para block */
@@ -6299,6 +6382,13 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                    has not loaded yet simply arms later. */
                 dpmi_bp_load();
                 dpmi_bp_arm();
+                if (GetFileAttributesA(PMVERBOSE_PATH) != INVALID_FILE_ATTRIBUTES)
+                    g_dpmi_cp_max = 0x100000;   /* verbose: trace a whole startup */
+                g_pm_noirq = (GetFileAttributesA(PMNOIRQ_PATH) != INVALID_FILE_ATTRIBUTES);
+                if (g_pm_noirq) {
+                    p = zput(p, "DPMI: pmnoirq.flag present -- IRQ0->PM injection SUPPRESSED\r\n");
+                    log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                }
                 /* GH #18 (run 67): install the PM-fault reflect machinery, so a RAW (non-BOP)
                    PM #GP -- an SS-retype, HLT, or privileged op the INT->BOP scan cannot
                    pre-patch -- is reflected by the kernel to our handler (code sel : BOP) on a
@@ -6375,7 +6465,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                        (g_pm_int[8], via INT 31h 0205) and its virtual-IF is enabled, deliver
                        the latched IRQ0 to that handler -- how timer-hooking games get ticks.
                        The latch persists across CLI windows so a masked interrupt isn't lost. */
-                    if (g_pm_irq0_latch && g_dpmi_vi && g_pm_int[0x08].sel && !g_in_pm_irq) {
+                    if (g_pm_irq0_latch && g_dpmi_vi && g_pm_int[0x08].sel && !g_in_pm_irq
+                        && !g_pm_noirq) {
                         g_pm_irq0_latch = 0;
                         g_in_pm_irq = 1;
                         dpmi_inject_pm_irq(&m, tib, 0x08, steps);
@@ -6390,7 +6481,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                        first few iterations -- cheap, self-limiting, and it turns "died
                        somewhere in here" into a named step. Bounded to 4096 so a healthy client
                        (millions of iterations) pays nothing. */
-                    if (steps < 4096) {
+                    if (steps < g_dpmi_cp_max) {
                         /* Dump the descriptor and the actual BYTES we are about to run. Doom
                            dies inside the FIRST dpmi_enter_pm and never returns, so the only
                            thing that can tell a bad mode switch from a specific offending
@@ -6501,7 +6592,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                           log_append(LOG_PATH, base, p); serial_out(base, p); p = base; }
                     }
                     dpmi_arm_fault_trampoline(tib, 0);   /* re-arm nest/flag/[0x638]/[TIB+8] */
-                    if (steps < 4096) {
+                    if (steps < g_dpmi_cp_max) {
                         p = zput(p, "DPMI-CP["); p = zhex(p, (unsigned)steps);
                         p = zput(p, "] armed -> entering PM\r\n");
                         log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
@@ -6512,7 +6603,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                        not that the thread never ran. 300 ms, once, on a diagnostic path. */
                     if (steps == 0) Sleep(300);
                     dpmi_enter_pm(tib);
-                    if (steps < 4096) {
+                    if (steps < g_dpmi_cp_max) {
                         p = zput(p, "DPMI-CP["); p = zhex(p, (unsigned)steps);
                         p = zput(p, "] returned ev=0x"); p = zhex(p, VDM_REG(tib, VTIB_EVENT));
                         p = zput(p, " cs:eip=0x"); p = zhex(p, VDM_REG(tib, VTIB_CS) & 0xFFFF);

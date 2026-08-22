@@ -50,7 +50,7 @@ static inline char *zdump(char *p, const void *b, unsigned n) {
    flooded 148 MB, thrashed the disk, and wedged the SMB result-copy. Cap the total
    appended bytes; past the cap log_append silently drops (writing one truncation
    marker). log_write (the STAGE0 truncate that starts a fresh run) resets the count. */
-#define LOG_MAX_BYTES (4u * 1024u * 1024u)   /* 4 MB -- vastly more than any real trace */
+#define LOG_MAX_BYTES (32u * 1024u * 1024u)   /* raised from 4 MB: a client that RUNS produces a long trace, and truncating it mid-startup hides exactly the part that matters */
 static unsigned long g_log_total  = 0;
 static int           g_log_capped = 0;
 
