@@ -146,19 +146,40 @@
        Doom's ISR chains every Nth tick and that chain was landing in DOS/4GW's
        dispatcher. Also no change.
 
-  **▶ THE NEXT INSTRUMENT, AND BUILD IT BEFORE THE NEXT THEORY.**
-  Watch the tick counter itself: **linear `0x03b68820`** (obj3+0x28820), which the
-  spin at obj1+`0x153dc` compares against. Dump it either side of each injection.
+  **▶ THAT INSTRUMENT WAS BUILT AND IT ANSWERED. `pmwatch.txt` (commit `095532b`)**
+  — one hex linear address on the share, dumped either side of every injection;
+  absent file = no cost. Watching `03b68820`, the counter the spin compares against:
   ```
-     counter ADVANCES but the spin does not exit  -> the wait count (edx) is huge;
-                                                     it is a RATE problem, coalesce harder
-     counter DOES NOT advance while ticks complete -> the ISR we are entering is not
-                                                     the one that increments it, which is
-                                                     a different problem from delivery
+     ticks=1 watch=0x2 (was 0x1)  ...  ticks=5 watch=0x6 (was 0x5)
   ```
-  That one dump separates the two remaining explanations, and nothing done so far
-  distinguishes them. **Do not pick one without it** — this session lost its last
-  hour to exactly that.
+  ▶ **DELIVERY IS ENTIRELY SOUND — STOP RE-INVESTIGATING IT.** The right handler is
+    entered, from the spin, on the right stack, it IRETs cleanly (`done=1
+    phases=1`), and it increments the right variable by exactly one per tick.
+  ▶ **WHAT IS LEFT IS ONE FACT: THE SIXTH ENTRY KILLS THE VDM.** Reproducible
+    across three builds, always the sixth, whether the ticks come one at a time or
+    as a batch of five from a single async entry.
+
+  **DOOM'S ISR, DISASSEMBLED — the shape of the thing that dies (obj1 offsets):**
+  ```
+    0x131f0  the Watcom __interrupt wrapper: pusha; push ds/es/fs/gs; mov ebp,esp;
+             cld; call 0x40de8; xor eax,eax (=IRQ index); call 0x134e0; pops; IRET
+    0x134e0  the shared IRQ body. `cli`, then decrements a nesting budget at
+             [0x283e8] and a per-nesting stack top at [0x283f0] (down 0x1000 each)
+    0x1355e  EOI (out 0x20,0x20) -- and FALLS THROUGH, so every tick reaches:
+    0x13566  `sti` (the handler RE-ENABLES INTERRUPTS mid-flight), then either
+               [0x283e8] >= 0 -> 0x13582: lss esp,[edx+8]  <-- SWITCHES STACK
+                                          call *ebx        <-- indirect callback
+               [0x283e8] <  0 -> 0x135a6: call *[0x281ac+edx] on the current stack
+    0x135bd  the epilogue: inc ebx / restore [0x283e8] and [0x283f0] -- so the
+             bookkeeping IS balanced; "budget exhaustion" was checked and is WRONG
+  ```
+  ▶ **NEXT, AND IT IS TWO MORE `pmwatch` RUNS, NOT A THEORY.** Watch the nesting
+    pair across the six entries — `03b683e8` (the budget) and `03b683f0` (the
+    stack top). If either drifts instead of returning to its start value, our
+    entries are not balanced with the guest's own accounting and the sixth falls
+    off the end of the nested-stack pool. If both are stable, the suspect is the
+    `sti` at 0x1356d: the handler runs with interrupts ENABLED, so it is
+    re-entrant by design and something of ours is re-entering it.
   ⚠ `pmnoirq.flag` is now ABSENT on the share: injection is properly gated and is
     where the work is. Re-create it to get the older, stable, further-but-wedged run.
 
