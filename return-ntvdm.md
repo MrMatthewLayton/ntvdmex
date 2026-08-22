@@ -135,9 +135,30 @@
     injector loop while the latch is deep), so one thread round trip serves many
     ticks. That is the next thing to build, and it should be measured against the
     counter at linear `0x03b68820` actually advancing.
-  ⚠ After the third tick the run ends silently (VDM kill, no watchdog line). The
-    ASYNC-PM log is capped at 8 lines, so the killer is an UNLOGGED later
-    injection — raise the cap first, do not theorise.
+  ⚠ After a handful of ticks the run ends silently (VDM kill, no watchdog line).
+
+  **▶ TWO THINGS WERE TRIED AND CHANGED NOTHING — 5 COMPLETED TICKS EITHER WAY.**
+  Recorded so they are not tried again as if new (commit `39265a9`):
+    1. **Coalescing** the drain (run the ISR in a batch of up to 64 per async
+       entry) — right in principle, no measured change.
+    2. **A safe chain target**: `AH=35h` on a host-owned vector now returns the
+       host's own default stub instead of the extender's, on the theory that
+       Doom's ISR chains every Nth tick and that chain was landing in DOS/4GW's
+       dispatcher. Also no change.
+
+  **▶ THE NEXT INSTRUMENT, AND BUILD IT BEFORE THE NEXT THEORY.**
+  Watch the tick counter itself: **linear `0x03b68820`** (obj3+0x28820), which the
+  spin at obj1+`0x153dc` compares against. Dump it either side of each injection.
+  ```
+     counter ADVANCES but the spin does not exit  -> the wait count (edx) is huge;
+                                                     it is a RATE problem, coalesce harder
+     counter DOES NOT advance while ticks complete -> the ISR we are entering is not
+                                                     the one that increments it, which is
+                                                     a different problem from delivery
+  ```
+  That one dump separates the two remaining explanations, and nothing done so far
+  distinguishes them. **Do not pick one without it** — this session lost its last
+  hour to exactly that.
   ⚠ `pmnoirq.flag` is now ABSENT on the share: injection is properly gated and is
     where the work is. Re-create it to get the older, stable, further-but-wedged run.
 
