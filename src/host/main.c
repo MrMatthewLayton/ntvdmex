@@ -417,6 +417,24 @@ static void pmap_clear(DWORD lin)
    DELIVERY is wrong or merely BADLY TIMED, and the cheapest way to ask it is to stop
    delivering and see how much further the client gets. Absent file = normal behaviour. */
 #define PMNOIRQ_PATH "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\pmnoirq.flag"
+/* ── A WATCH ADDRESS: ONE HEX LINEAR ADDRESS, DUMPED EITHER SIDE OF EACH INJECTED
+     INTERRUPT. ─────────────────────────────────────────────────────────────────────
+   The question an injected timer tick always raises is not "did the handler run" --
+   the phases/done counters answer that -- but "did it have the EFFECT the guest is
+   waiting for". Those are different, and confusing them is how this turned into
+   guesswork: Doom's ISR enters and IRETs cleanly while the spin it should release
+   goes round for ever.
+   So watch the thing the guest is actually testing. Doom's delay is
+       153dc:  cmp [0x28820],eax
+       153e2:  je  153dc
+   and after relocation that counter is linear 0x03b68820 (obj3 base 0x03b40000).
+   Put `03b68820` in the file and every injection prints the dword before and after.
+     counter MOVES but the spin does not exit -> the wait is hundreds of ticks: a RATE
+                                                 problem, coalesce far harder
+     counter DOES NOT move while ticks complete -> the handler we enter is not the one
+                                                 that increments it: a different bug
+   Absent file = no watch and no cost, like every other knob here. */
+#define PMWATCH_PATH "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\pmwatch.txt"
 static int g_pm_noirq = 0;
 /* Per-event checkpoint verbosity. The full dump -- registers, stack, frame, entry code
    -- was built for the era when the client died inside the FIRST dpmi_enter_pm and the
@@ -916,6 +934,7 @@ static DWORD g_async_pm_eip = 0, g_async_pm_esp = 0, g_async_pm_efl = 0;
 static WORD  g_async_pm_cs  = 0, g_async_pm_ss  = 0;
 static DWORD g_async_pm_inj = 0;             /* delivered                              */
 static DWORD g_async_pm_bail2 = 0;           /* PM async attempts that did not commit  */
+static DWORD g_pm_watch       = 0;           /* linear address to watch, 0 = none       */
 static DWORD g_pm_irq0_done   = 0;           /* cooperative injections that reached an IRET */
 static int async_inject_irq(unsigned irq)
 {
@@ -5702,6 +5721,9 @@ static int dpmi_inject_pm_irq(dos_machine_t *mp, volatile BYTE *tib, unsigned iv
     WORD  sDS=(WORD)VDM_REG(tib,VTIB_DS), sES=(WORD)VDM_REG(tib,VTIB_ES);
     WORD  sFS=(WORD)VDM_REG(tib,VTIB_FS), sGS=(WORD)VDM_REG(tib,VTIB_GS);
     int prev_vi = g_dpmi_vi; unsigned ph; int done = 0;
+    DWORD wpre = 0;
+    if (g_pm_watch) { const BYTE *wp0 = (const BYTE *)(ULONG_PTR)g_pm_watch;
+                      if (host_readable(wp0, 4)) wpre = *(const DWORD *)wp0; }
 
     dpmi_ensure_pmret_sel();
     if (g_pmret_sel == 0) return 0;
@@ -5808,6 +5830,13 @@ static int dpmi_inject_pm_irq(dos_machine_t *mp, volatile BYTE *tib, unsigned iv
       cq = zput(cq, "  IRQ0<-PM INT done="); cq = zhex(cq, (DWORD)done);
       cq = zput(cq, " phases="); cq = zhex(cq, (DWORD)ph);
       cq = zput(cq, " ticks="); cq = zhex(cq, ++g_pm_irq0_done);
+      if (g_pm_watch) {
+          const BYTE *wp = (const BYTE *)(ULONG_PTR)g_pm_watch;
+          cq = zput(cq, " watch=0x");
+          if (!host_readable(wp, 4)) cq = zput(cq, "<unreadable>");
+          else cq = zhex(cq, *(const DWORD *)wp);
+          cq = zput(cq, " (was 0x"); cq = zhex(cq, wpre); cq = zput(cq, ")");
+      }
       cq = zput(cq, "\r\n"); log_append(LOG_PATH, cb2, cq); serial_out(cb2, cq); }
     /* restore the interrupted PM context verbatim + unmask */
     VDM_REG(tib,VTIB_EAX)=sEAX; VDM_REG(tib,VTIB_EBX)=sEBX; VDM_REG(tib,VTIB_ECX)=sECX;
@@ -7100,6 +7129,24 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                 dpmi_bp_arm();
                 if (GetFileAttributesA(PMVERBOSE_PATH) != INVALID_FILE_ATTRIBUTES)
                     g_dpmi_cp_max = 0x100000;   /* verbose: trace a whole startup */
+                { HANDLE hw = CreateFileA(PMWATCH_PATH, GENERIC_READ,
+                                          FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
+                                          OPEN_EXISTING, 0, NULL);
+                  if (hw != INVALID_HANDLE_VALUE) {
+                      char wb2[32]; DWORD wn = 0, k2; g_pm_watch = 0;
+                      ReadFile(hw, wb2, sizeof wb2 - 1, &wn, NULL); CloseHandle(hw);
+                      for (k2 = 0; k2 < wn; ++k2) {
+                          char c = wb2[k2];
+                          int d = (c >= '0' && c <= '9') ? c - '0'
+                                : (c >= 'a' && c <= 'f') ? c - 'a' + 10
+                                : (c >= 'A' && c <= 'F') ? c - 'A' + 10 : -1;
+                          if (d < 0) break;
+                          g_pm_watch = (g_pm_watch << 4) | (DWORD)d;
+                      }
+                      p = zput(p, "DPMI: pmwatch.txt -> watching linear 0x");
+                      p = zhex(p, g_pm_watch); p = zput(p, "\r\n");
+                      log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                  } }
                 g_pm_noirq = (GetFileAttributesA(PMNOIRQ_PATH) != INVALID_FILE_ATTRIBUTES);
                 if (g_pm_noirq) {
                     p = zput(p, "DPMI: pmnoirq.flag present -- IRQ0->PM injection SUPPRESSED\r\n");
