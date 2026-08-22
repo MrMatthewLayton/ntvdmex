@@ -1,543 +1,313 @@
 ═══════════════════════════════════════════════════════════════════════════════
-██ ▶▶▶ SESSION 18 (2026-08-22). THE WALL IS DOWN. DOOM RUNS ITS OWN CODE,     ██
-██     SETS A VIDEO MODE, AND COMPLETES STARTUP TO `I_StartupTimer()`.        ██
-██     THE ONE REMAINING BLOCKER IS THE IRQ0 INJECTION.                       ██
+██ ▶▶▶ SESSION 18 (2026-08-22). DOOM'S OWN CODE RUNS AND ITS DPMI WORKS.      ██
+██     IT STOPS AT `I_StartupTimer()` BECAUSE OF ONE ARCHITECTURAL CEILING,   ██
+██     AND THE SPIKE THAT LIFTS IT ALREADY RUNS.                              ██
 ═══════════════════════════════════════════════════════════════════════════════
 
+  Branch `m9/completeness`, HEAD `965e154`. Gates at the end: **off-VM 349/349**
+  (8 suites), **selftest.com 8/8** on the rig, `dpmitest.com` + `dpmiback.com` both
+  `STAGE2: complete` with correct output, `check-imports.sh` clean, share clean.
+  **Doom is NOT playable and does not reach the menu.**
+
 ┌──────────────────────────────────────────────────────────────────────────────┐
-│ ★★★ THE EXISTENCE PROOF, MEASURED AT LAST: STOCK NTVDM RUNS DOOM ON THIS BOX │
+│ ★★★★ START HERE. ONE BOUNDED BUG, THEN TWO QUESTIONS THAT COLLAPSE A LOT.    │
 └──────────────────────────────────────────────────────────────────────────────┘
 
-  `scripts/bm/stockdoom.bat` (commit `3e3df6f`), driven by
-  `controld exec …\stockdoom.bat`. Reference trace: `build/doom_stock_reference.txt`.
+  **1. FIX `INT 31h 0301` UNDER THE KERNEL PM PATH.** With `pmkernel.flag` on the
+     share, `dpmitest.com` runs 8 clean PM entries and then dies here:
+     ```
+        INT31h AX=0x0301 -> callRM 0x0000:0x0000  [RMCS ES:EDI=0x17:0x476 @0x1476]
+     ```
+     The RMCS reads as **all zeros**, so it calls real mode at `0000:0000` and the
+     guest is gone. The SAME client COMPLETES on the far-jmp path, so the RMCS is
+     being filled — just not where we look, or not by the time we look.
+  **2. THEN ASK: IS THE INT→BOP PATCH MAP STILL NEEDED?** The kernel reflects a PM
+     `INT nn` natively on this path (`Under VdmStartExecution the kernel reflects a
+     PM INT nn by advancing EIP past it…`, `dpmi_crash_veh` comment).
+  **3. AND: DOES THE KERNEL DELIVER IRQ0 WITH NO INJECTION AT ALL?** That is the
+     whole point — see the ceiling below. If it does, the async injector and every
+     failure it caused stop existing rather than getting fixed.
+
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ ★★★★ THE CEILING, AND WHY IT MAKES THE SPIKE THE MAIN LINE                   │
+└──────────────────────────────────────────────────────────────────────────────┘
+
+  Three facts. Together they say the CURRENT architecture cannot ever finish Doom:
+
+  1. **The guest runs with VIF clear however we write it.** The mode switch writes
+     `EFLAGS=0x80202` (IF|VIF) into the TIB; a live `GetThreadContext` of the
+     suspended guest — `CS=0x187`, its own flat code selector — reads
+     `efl=0x00000246`: **IF=1, VIF=0, VIP=0**.
+  2. **`POPFD` at CPL 3 cannot modify IF, IOPL, VM, VIP or VIF.** PM entry loads
+     flags with `push [ebx+0x398] ; popfd` (`dpmi_enter.S`), so our VIF write is
+     discarded and the guest runs with the host thread's ordinary user-mode flags.
+  3. **The kernel's delivery gate reads VIF, not IF** (`VdmpCanDeliver`; see the
+     `EFLAGS_VIF_BIT` note in `ntvdm.h`, where this once cost the real-mode timer).
+
+  ⇒ **While PM runs IN-PROCESS via far-jmp, the kernel can NEVER hand a hardware
+    interrupt to a protected-mode client.** Only ring 0 can set those flags. That is
+    why the async `SuspendThread`/`SetThreadContext` injector had to be invented —
+    it does the kernel's job from user mode — and why it is fragile enough to tear
+    the VDM down (proven by control, below).
+
+  **AND THE SPIKE LIFTS IT.** `VdmStartExecution` **runs protected mode** — commit
+  `d127228`, opt-in via **`pmkernel.flag`**, default path untouched:
+  ```
+     PMKERNEL[0] enter cs:eip=0x0f:0x12e ss:esp=0x1f:0xfffe msw=0x1
+     PMKERNEL[0] VdmStartExecution -> st=0x0 ev=0x4 cs:eip=0x0f:0x131
+  ```
+  Eight consecutive entries (`0x12e…0x1cf`), eight `INT 31h` serviced, and
+  `dpmitest.com` prints FROM PROTECTED MODE via `INT 31h 0300`.
+  ▶ **The early spike's "VdmStartExecution faults when it runs PM" DOES NOT
+    REPRODUCE.** It was measured when almost none of the DPMI host existed — and the
+    entire in-process architecture (INT→BOP patch map + async injector) was built on
+    that one result.
+  ▶ **THE FIX THAT GOT PAST ENTRY 1**, a hazard documented elsewhere in this file
+    biting from a new direction: with a 16-bit SS the CPU maintains **SP only**, so
+    ESP's top half keeps host junk. The far-jmp path stores it and reloads it
+    harmlessly with `lss`; **the kernel takes the CONTEXT's ESP whole**:
+    ```
+       entry 0   ss:esp=0x1f:0x0000fffe   -> returns ev=4
+       entry 1   ss:esp=0x17:0xb33afffa   -> NEVER RETURNS
+    ```
+    `0xb33a` is a host thread-stack address. Narrowing ESP to the descriptor took it
+    from 1 entry to 8.
+
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ ★★★ THE EXISTENCE PROOF: STOCK NTVDM REACHES DOOM'S TITLE SCREEN ON THIS BOX │
+└──────────────────────────────────────────────────────────────────────────────┘
+
+  `scripts/bm/stockdoom.bat` via `controld exec`; trace: `build/doom_stock_reference.txt`.
   ```
      I_StartupTimer()            <-- NTVDMEX STOPS DEAD ON THIS LINE
        calling DMX_Init
-     D_CheckNetGame: Checking network game status.
-     startskill 2  deathmatch: 0  startmap: 1  startepisode: 1
-     player 1 of 1 (1 nodes)
-     S_Init: Setting up sound.
-     HU_Init: Setting up heads up display.
-     ST_Init: Init status bar.      <-- last line before the game loop
+     D_CheckNetGame / startskill 2 / player 1 of 1 / S_Init / HU_Init / ST_Init
   ```
-  ▶ **This had never been run.** "Stock runs Doom, so we can" was an assumption for
-    the whole project; `rt_stock.bat` can only reach targets staged into `bm\tests\`,
-    so it could not run Doom at all. It is now a measurement.
-  ▶ **What it buys, beyond morale:** (a) the bar is achievable ON THIS HARDWARE;
-    (b) a reference trace to diff against, one line at a time; (c) **proof that the
-    kernel CAN deliver a timer interrupt to a DOS/4GW protected-mode client** — which
-    is exactly the mechanism we lack and have been substituting for with
-    SuspendThread preemption (proven, this session, to be what tears the VDM down).
-  ▶ First difference already visible: stock reports
-    `DPMI memory: 0xf00000, 0x800000 allocated for zone`; we report `0x0`. Our
-    `0500`/`0501` memory info does not match the real host's.
-  ⚠ **THE IFEO KEY.** `stockdoom.bat` restores it on every exit path and PROVES the
-    restore with a `reg query` into `stockdoom_state.txt`. Leaving it absent turns
-    every later test into a stock run with entirely plausible logs. Check that file,
-    and re-run `selftest.com` after, every time.
+  `ST_Init` is the last line before the game loop.
+  ▶ **This had never been run** — `rt_stock.bat` only reaches targets staged into
+    `bm\tests\`, so it could not run Doom at all. "Stock runs Doom, therefore so can
+    we" was a load-bearing ASSUMPTION for the whole project. One run settled it.
+  ▶ It proves the bar is achievable ON THIS HARDWARE, gives a line-by-line reference
+    to diff, and proves **the kernel CAN deliver a timer interrupt to a DOS/4GW PM
+    client** — the exact thing the ceiling above denies us.
+  ▶ First visible difference: stock reports `DPMI memory: 0xf00000, 0x800000
+    allocated for zone`; we report `0x0`. Our `0500`/`0501` info is not the real
+    host's.
+  ⚠ **THE IFEO DEBUGGER KEY IS THE HAZARD.** `stockdoom.bat` deletes it to get stock
+    and restores it on every exit path, proving the restore with a `reg query` into
+    `stockdoom_state.txt`. **Left absent, every later test silently measures stock
+    ntvdm while the logs look entirely plausible.** Check that file and re-run
+    `selftest.com` after, every time. Graphics targets carry a display-wedge risk.
 
 ┌──────────────────────────────────────────────────────────────────────────────┐
-│ ★★★ AND THE RESEARCH ANSWER: THE KERNEL **CANNOT** DELIVER TO AN IN-PROCESS  │
-│     PM GUEST. `POPFD` AT CPL 3 DROPS VIF. THIS IS STRUCTURAL.                │
+│ ★★★ WHERE DOOM ACTUALLY GETS TO NOW (and it is a long way)                   │
 └──────────────────────────────────────────────────────────────────────────────┘
 
-  Three facts, and together they close the question (commit `5335d74`):
+  ```
+     P_Init: Checking cmd-line parameters...
+     V_Init: allocate screens.        M_LoadDefaults: Load system defaults.
+     Z_Init: Init zone memory allocation daemon.
+     DPMI memory: 0x0, 0x800000 allocated for zone
+     W_Init: Init WADfiles.  -> adding doom1.wad  -> shareware version.
+     M_Init  R_Init: Init DOOM refresh daemon - [   ]...................
+     P_Init: Init Playloop state.     I_Init: Setting up machine state.
+     I_StartupDPMI / I_StartupMouse / Mouse: detected / CyberMan: Wrong mouse driver
+     I_StartupJoystick / I_StartupKeyboard / I_StartupSound
+     I_StartupTimer()          <-- stops here
+  ```
+  **Its DPMI works**: one run services **5,331 INT 31h calls across 25 distinct
+  services**, and **464 `INT 21h` calls routed through Doom's OWN protected-mode
+  handler**. Sets `INT 10h` mode 3. Opens `default.cfg`. Identifies the shareware
+  WAD correctly. Canonical log: `build/doom_s18_final.log`.
+  ▶ Doom's timer ISR IS hooked and DOES run: ticks are delivered into
+    `0x187:0x03ae31f0`, it IRETs cleanly (`done=1 phases=1`), and the counter it
+    increments (`0x03b68820`) advances by exactly one per tick. **Delivery is sound.
+    Do not re-investigate it.** What kills the run is the mechanism doing the
+    delivering.
 
-  1. **The guest runs with VIF CLEAR no matter what we write.** The mode switch now
-     writes `EFLAGS = 0x80202` (IF|VIF) into the TIB. A live `GetThreadContext` read
-     of the suspended guest — `CS=0x187`, its OWN flat code selector, so this is the
-     guest and not the host — comes back:
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ ★★★ THE FOUR BUGS THAT WERE SESSION 18's WALL. ALL OURS.                     │
+└──────────────────────────────────────────────────────────────────────────────┘
+
+  1. **THE CLIENT'S EXECUTABLE KNOWS WHICH OF ITS MEMORY IS CODE — ASK IT.** An LE
+     flags its EXECUTABLE objects and DOS/4GW allocates ONE `0501` block per object
+     at exactly the page-rounded virtual size. Exact on DOOM.EXE:
      ```
-        ASYNC-PM ok=1 from=0x187:0x03ae53dc efl=0x00000246   IF=1 VIF=0 VIP=0
+        obj1 vsize 0x44f71 READ|EXEC|BIG32   -> 0501 of 0x45000 @ 0x03AD0000
+        obj2 vsize 0x00019 READ|EXEC|ALIAS16 -> 0501 of 0x01000 @ 0x03B30000
+        obj3 vsize 0x85e10 READ|WRITE|BIG32  -> 0501 of 0x86000 @ 0x03B40000
      ```
-  2. **`POPFD` at CPL 3 cannot modify IF, IOPL, VM, VIP or VIF.** PM entry loads the
-     guest's flags with `push [ebx+0x398] ; popfd` (`dpmi_enter.S`), so our VIF write
-     is silently discarded and the guest simply runs with the host thread's ordinary
-     user-mode flags — and `0x246` is exactly that.
-  3. **The kernel's delivery gate reads VIF, not IF** — `VdmpCanDeliver`, per the
-     `EFLAGS_VIF_BIT` note in `ntvdm.h`, which cost the real-mode timer the same way.
+     `dpmi_le_learn()` parses this out of `filebuf`; `0501` tags the block;
+     `dpmi_scan_code_blocks()` patches it. **VERIFIED BY COUNT:** the scan patches
+     **0x44** sites and obj1 contains **exactly 0x44** `CD nn` pairs in our vector
+     set. Zero data bytes touched. Re-run that check if this ever regresses.
+     Only objects ≥ 64 KB are keyed on (a page-rounded size is a weak key when
+     small); small code objects get a based descriptor, which `0009`/`000C` already
+     patches. The block is allocated ~1100 log lines before its last page arrives,
+     so the scan is idempotent and re-runs on every `0501` and code declaration.
+  2. **AN EIP IS ONLY 16 BITS WIDE WHEN ITS CODE SELECTOR IS.** `EIP & 0xFFFF`
+     truncated a flat 32-bit EIP, so Doom's first `int 21h` (AH=30h at obj1+0x40be5)
+     fired our BOP exactly as intended at linear `0x03b10be5` and the masked lookup
+     asked for `0x0be5` — dying as "unexpected PM stop" AT THE INSTRUCTION THAT
+     PROVED THE PATCH WORKED. `dpmi_pm_eip()` asks the descriptor.
+  3. **THE PM-RETURN CATCHER'S D/B BIT IS PART OF THE CALLER'S IDENTITY.** An
+     extender reads the frame's return CS to size pointer arguments. Ours was
+     16-bit, so DOS/4GW truncated Doom's flat pointers:
+     `app DS:EDX=0x18f:0x03b69b80 "default.cfg"` → `RMCS DS:DX=0x000:0x9b80`, open
+     failed. The stack frame width was ALREADY right — **frame width and advertised
+     caller width are two different questions.**
+  4. **THE RMCS COPY-BACK OMITTED FLAGS, SO EVERY DOS CALL REPORTED SUCCESS.**
+     `0300`/`0301`/`0302` copied eight registers back and dropped the ninth. Watcom
+     reads *only* CF (`int 21h ; rcl eax,1 ; ror eax,1`). `access("doom2f.wad")`
+     returned "error 2" with CF=0, so Doom picked the FRENCH wad, opened it
+     (failing, also as success), and read forever from a handle it never got.
 
-  ⇒ **While PM runs IN-PROCESS via far-jmp, the host cannot establish the guest's
-    virtual-interrupt state at all, so the kernel's gate is permanently shut and it can
-    NEVER deliver a hardware interrupt to a protected-mode client.** That is why the
-    asynchronous `SuspendThread`/`SetThreadContext` injector had to be invented — it is
-    doing the kernel's job from user mode — and why it is fragile enough to tear the
-    VDM down. Stock ntvdm gets kernel delivery because **the KERNEL runs its PM guest**
-    and sets the flags from ring 0, which is also why it reaches Doom's title screen on
-    this box while we stop at `I_StartupTimer()`.
+  Also: the host now owns PM vectors 08h–0Fh for a 32-bit client (Doom hooks its
+  timer with `AX=2508 int 21h`, not `INT 31h 0205`; letting DOS/4GW service it gives
+  CF=1 then `fatal error (1001): error in interrupt chain` — a chain with two
+  owners). `INT 31h 0204` returns the offset at the CLIENT's width, not the
+  handler selector's. The watchdog flushes captured DOS output before killing a
+  wedged run.
 
 ┌──────────────────────────────────────────────────────────────────────────────┐
-│ ★★★★ AND THE SPIKE LANDED: **`VdmStartExecution` RUNS PROTECTED MODE.**      │
-│      THE FOUNDING ASSUMPTION OF THIS HOST'S ARCHITECTURE WAS WRONG.          │
+│ ⚠⚠ DO NOT RE-SPEND A SESSION ON THESE. ALL KILLED BY MEASUREMENT.            │
 └──────────────────────────────────────────────────────────────────────────────┘
 
-  Commit `d127228`, opt-in behind **`pmkernel.flag`** on the share (default path
-  untouched). Against today's host it does not fault at all:
-  ```
-    PMKERNEL[0] enter cs:eip=0x0f:0x12e ss:esp=0x1f:0xfffe msw=0x1
-    PMKERNEL[0] VdmStartExecution -> st=0x0 ev=0x4 cs:eip=0x0f:0x131
-  ```
-  **Eight consecutive entries** — `0x12e, 0x131, 0x133 … 0x1cf` — every one
-  `st=0 ev=4`, servicing **eight INT 31h calls**, and `dpmitest.com` prints FROM
-  PROTECTED MODE via `INT 31h 0300`. The kernel runs our PM guest.
-  ▶ The early spike's "VdmStartExecution faults when it runs PM" **does not
-    reproduce**. It was measured when almost none of the DPMI host existed, and the
-    entire in-process architecture — INT→BOP patch map, async injector — was built
-    on it.
-
-  **THE ONE FIX NEEDED TO GET PAST ENTRY 1**, and it is a hazard already documented
-  elsewhere in this file: with a 16-bit SS the CPU maintains **SP only**, so the top
-  half of ESP keeps whatever was last there. The far-jmp path stores that junk into
-  the TIB on exit and reloads it harmlessly with `lss` (the CPU ignores it). **The
-  kernel takes the CONTEXT's ESP whole:**
-  ```
-     entry 0   ss:esp=0x1f:0x0000fffe    -> returns ev=4
-     entry 1   ss:esp=0x17:0xb33afffa    -> NEVER RETURNS
-  ```
-  `0xb33a` is a host thread-stack address; `0xb33afffa` is far outside a `0xFFFF`
-  limit. Narrowing ESP to what the descriptor can address took it from 1 entry to 8.
-
-  ▶ **WHERE IT STOPS NOW — and it is a bounded bug, not an unknown.** `INT 31h 0301`
-    reads its RMCS (`ES:EDI = 0x17:0x476`, linear `0x1476`) as **all zeros**, so it
-    calls real mode at `0000:0000` and the guest is gone. The same client COMPLETES
-    on the far-jmp path, so the RMCS is being filled — just not where we look, or
-    not by the time we look. **Start here.**
-  ▶ Then: re-check whether the INT→BOP patch map is still needed at all (the kernel
-    reflects a PM `INT nn` natively on this path), and whether the kernel now
-    delivers IRQ0 without any async injection — which is the whole point.
-
-  ▶▶ **SO `VdmStartExecution`-FOR-PM IS NO LONGER A HUNCH ABOUT A NICER ARCHITECTURE —
-     IT IS THE ONLY PLACE THE GUEST'S INTERRUPT STATE CAN BE SET.** Our own source says
-     the kernel has a working PM path (`Under VdmStartExecution the kernel reflects a
-     PM INT nn …`) and that an early spike found it faulting when it ran PM — which is
-     why this host far-jmps instead. Both the INT→BOP patch map and the async injector
-     exist ONLY to work around that one decision. Re-run the spike against today's host
-     (the crash VEH already dumps the fault with both contexts); the original attempt
-     failed when almost none of the DPMI host existed.
-  ▶ The VIF write at the mode switch is KEPT: correct, free, and load-bearing the
-    moment PM is entered by a path that can honour it.
-
-  Commit `308b3de` on `m9/completeness`. Gates at the end: **off-VM 349/349** (8
-  suites), **selftest.com 8/8** on the rig, `dpmitest.com` + `dpmiback.com` both
-  `STAGE2: complete` with correct output, `check-imports.sh` clean.
+  * **GH #18 / the `#GP` reflect is a PROVEN DEAD END.** Run 71, with a kernel
+    debugger attached: the kernel handles a raw non-BOP PM `#GP` by **silently
+    tearing the VDM down** — a *handled* path, so it never reaches `0x4f67f8`, never
+    bugchecks, never breaks KD. The `+0x638` machinery is correct AND satisfied
+    (runs 65-67). Nothing about it can make this fault visible. **I proposed it
+    anyway this session without re-reading run 71. Don't.**
+  * **The async mechanism is what tears the VDM down** — control experiment,
+    `qimode.txt`=`40` (`qi_susp=0`): async ON → 5 ticks then silent teardown; async
+    OFF → 0 ticks, guest wedges, watchdog ends it CLEANLY.
+  * **Not the ISR** (zero `HLT`/`INT3` in the whole ISR path — scanned).
+    **Not nesting exhaustion** (budget `0x03b683e8` and stack top `0x03b683f0`
+    IDENTICAL before and after every entry). **Not a tick count** (batch 64 → 5
+    ticks, batch 3 → 4). **Not "the Nth tick releases the delay"** (a breakpoint on
+    the delay's return address obj1+`0x10f6c` was armed and NEVER hit). **Not VIP**
+    (`efl=0x246` every time: neither VIF nor VIP set — refuted by my own log
+    *before* I ran it).
+  * **Coalescing the tick drain** and **giving `AH=35h` a safe chain target** were
+    both tried; **neither changed anything** (5 ticks either way).
+  * Session 17's four: **CLI/STI in PM are FINE**; **IOPL cannot be raised** (the
+    kernel strips it); **`AX=FF00` failing is a red herring**; **`DOOM.ETX` is not
+    an error signal**.
 
 ┌──────────────────────────────────────────────────────────────────────────────┐
-│ ★★★ WHAT DOOM DOES NOW. THIS IS ITS REAL STARTUP, FROM THE LOG.              │
+│ ★ A SEPARATE, SHARP, REPRODUCIBLE BUG: COMMAND-LINE ARGUMENTS                 │
+└──────────────────────────────────────────────────────────────────────────────┘
+
+  **Passing ANY argument makes DOS/4GW quit before printing a character.** The
+  DPMI/INT 21h trace is identical to a working run for **all 617 of its lines** then
+  stops — right after the `AH=30h` version check (returns `0x1606` = 6.22, correct)
+  and before the `AH=35h`/`AH=25h` vector-0 install a working run does next. The
+  tail is well-formed: `cmdtail len=0x05 [20 2d 7a 7a 7a 0d]` = `" -zzz\r"`.
+  ▶ Blocks `doom -nosound`, the obvious way to take the sound path out of the
+    picture, and every game that takes options.
+  ▶ Arguments go in **`doomargs.txt`** on the share root (`doomrun.bat` reads it).
+  ▶ Cheap next probe: the same target under `stock <target>` for comparison.
+
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ RUNNING IT — AND THE KNOBS                                                   │
 └──────────────────────────────────────────────────────────────────────────────┘
 
   ```
-    P_Init: Checking cmd-line parameters
-    V_Init: allocate screens        M_LoadDefaults: Load system defaults
-    Z_Init: Init zone memory allocation daemon
-    DPMI memory: 0x…, 0x800000 allocated for zone
-    W_Init: Init WADfiles
-            adding doom1.wad
-            shareware version
-    M_Init  R_Init: Init DOOM refresh daemon [ . . . progress bar . . . ]
-    P_Init: Init Playloop state     I_Init: Setting up machine state
-    I_StartupDPMI   I_StartupMouse   Mouse: detected
-    I_StartupJoystick  I_StartupKeyboard  I_StartupSound
-    I_StartupTimer()          <-- and it wedges here; see the IRQ0 section
+  cp build/ntvdmhost.exe /tmp/xpshare/bm/ntvdmhost.exe
+  md5 -q build/ntvdmhost.exe /tmp/xpshare/bm/ntvdmhost.exe   # MUST match, every time
+  rm -f /tmp/xpshare/result_doom.log
+  printf 'doom\r\n' > /tmp/xpshare/cmd.tmp && mv /tmp/xpshare/cmd.tmp /tmp/xpshare/cmd.txt
   ```
-  63 console writes, `INT 10h` mode 3 set from PM, `default.cfg` opened, the
-  shareware WAD correctly identified. Session 17 produced **no output at all** and
-  the VDM was killed. Canonical log: `build/doom_s18_final.log` (2.9 MB).
-  ⚠ It is **still not playable** — it never reaches the menu.
+  Poll `result_doom.log` for a stable size (3 s apart, twice equal). A clean
+  wind-down writes `STAGE2: complete`; its absence means the VDM was killed — but a
+  **wedged** run now still flushes `==> DOS OUTPUT (wedged):`, so the program's own
+  output survives either way.
+
+  **Share knobs** (absent file = off, zero cost):
+  ```
+    pmkernel.flag   run PM under VdmStartExecution instead of the far-jmp  ★ THE SPIKE
+    pmnoirq.flag    suppress IRQ0 -> PM injection entirely
+    pmverbose.flag  per-event checkpoint firehose (cp_max 8 -> 0x100000)
+    pmwatch.txt     up to 4 hex LINEAR addresses, dumped either side of each injection
+    pmbp.txt        guest breakpoints (format in the standing reference below)
+    doomargs.txt    extra command line for doom  (currently fatal — see the bug above)
+    qimode.txt      hex bits; 0x40 = disable async delivery (qi_susp=0)
+                    ⚠ it also stops g_hcpu being created, so ANY tool needing the
+                      exec-thread handle silently goes away with it
+    headless_ms.txt run cap in ms (currently 45000)
+  ```
+  Gates before any commit: `./tools/dostest/run.sh` (8 suites, 349 checks),
+  `selftest.com` on the rig, `dpmitest.com` + `dpmiback.com`, `check-imports.sh`.
 
 ┌──────────────────────────────────────────────────────────────────────────────┐
-│ ★★★ THE FOUR BUGS THAT WERE THE WALL. ALL OURS.                              │
-└──────────────────────────────────────────────────────────────────────────────┘
-
-  1. **THE CLIENT'S EXECUTABLE KNOWS WHICH OF ITS MEMORY IS CODE — ASK IT.**
-     An LE names its objects and flags which are EXECUTABLE, and DOS/4GW allocates
-     ONE 0501 block per object at exactly the object's page-rounded virtual size.
-     So the object table identifies the code blocks with no guessing at content.
-     Exact in all three cases on DOOM.EXE:
-     ```
-        obj1  vsize 0x44f71  READ|EXEC|BIG32    -> 0501 of 0x45000 @ 0x03AD0000
-        obj2  vsize 0x00019  READ|EXEC|ALIAS16  -> 0501 of 0x01000 @ 0x03B30000
-        obj3  vsize 0x85e10  READ|WRITE|BIG32   -> 0501 of 0x86000 @ 0x03B40000
-     ```
-     `dpmi_le_learn()` parses this out of `filebuf` (the loader is already holding
-     it); 0501 tags a block when the size matches; `dpmi_scan_code_blocks()` patches.
-     ▶ **VERIFIED BY COUNT, NOT BY "IT GOT FURTHER":** the scan patches **0x44**
-       sites and obj1 contains **exactly 0x44** `CD nn` pairs in our vector set.
-       Zero data bytes touched. That is the check to re-run if this ever regresses.
-     ▶ Only objects **≥ 64 KB** are keyed on: a page-rounded size is a weak key when
-       it is small (0x1000 is the commonest allocation there is, and Doom makes an
-       unrelated one). Small code objects get a based descriptor, which 0009/000C
-       already patches — obj2 proves it.
-     ▶ The block is allocated ~1100 log lines BEFORE its last page arrives, and we
-       never see the fill (DOS/4GW reads through a low transfer buffer and copies up
-       in its own code). So the scan is idempotent and runs on every 0501 and every
-       code-region declaration rather than hunting for a "loaded" event.
-
-  2. **AN EIP IS ONLY 16 BITS WIDE WHEN ITS CODE SELECTOR IS.** Every PM stop read
-     `EIP & 0xFFFF`. Doom's first `int 21h` (AH=30h, at obj1+0x40be5) fired our BOP
-     exactly as intended at linear 0x03b10be5 — and the masked lookup asked for
-     `0x0be5`, found nothing, and the run died as "unexpected PM stop" **at the very
-     instruction that proved the patch worked**, reported as `0x187:0x0be7`, which
-     reads like a wild jump into the BIOS data area. `dpmi_pm_eip()` now asks the
-     descriptor. Same rule the interrupt-frame width already follows.
-
-  3. **THE CATCHER'S D/B BIT IS PART OF THE CALLER'S IDENTITY.** We push the
-     PM-return catcher as the return CS of the frame the client's handler runs on —
-     and an extender READS that CS to learn whether the interrupted code was 16- or
-     32-bit, hence whether a pointer argument is a word or a dword. It was 16-bit:
-     ```
-        app passed   DS:EDX = 0x18f:0x03b69b80  -> "default.cfg"
-        RMCS got     DS:DX  = 0x000:0x9b80      -> open failed, file not found
-     ```
-     The stack frame width was ALREADY right (`SS D/B=1`), which is exactly what made
-     this hard: **frame width and advertised caller width are two different
-     questions**, and only one was being answered. Now follows `g_dpmi_client32`.
-
-  4. **THE RMCS COPY-BACK DROPPED FLAGS, SO EVERY DOS CALL REPORTED SUCCESS.**
-     0300/0301/0302 copied eight registers back and omitted the ninth. Every DOS
-     service reports failure in CF, and Watcom reads *nothing else* —
-     `int 21h ; rcl eax,1 ; ror eax,1` folds CF into EAX's sign bit and branches on
-     it. How far a false success travels: `access("doom2f.wad")` returned "error 2"
-     with **CF=0**, so Doom selected the FRENCH wad, opened it (failing, also as a
-     success), and read forever from a handle it never got — 20969 spins at
-     obj1+0x40985 until the watchdog fired.
-     ▶ **A copy-back that omits FLAGS is not a partial implementation, it is an
-       inverted one:** it reports the opposite of what happened, on every call.
-
-┌──────────────────────────────────────────────────────────────────────────────┐
-│ ★★★ SESSION 18b: THE TIMER IS HOOKED AND TICKS REACH DOOM'S ISR.             │
-│     WHAT IS LEFT IS **RATE**, AND IT IS AN ARCHITECTURE PROBLEM.             │
-└──────────────────────────────────────────────────────────────────────────────┘
-
-  Commits `fcb6ede`, `7433a41`. Doom is **still not at the menu** — it hangs in the
-  same delay loop — but the mechanism underneath now works and the remaining
-  obstacle is quantitative and named.
-
-  **WHAT NOW WORKS**
-  * `dpmi_async_inject_pm()` — asynchronous delivery INTO protected mode, via
-    SuspendThread / GetThreadContext / SetThreadContext on the CPU thread. The V86
-    side has had this for ages and bailed on `!(EFLAGS & VM)`; that hole is where
-    every DOS/4GW game lives. **A PM guest that spins never leaves PM**, so the
-    cooperative injector (which only runs BETWEEN `dpmi_enter_pm()` calls) can
-    never reach it.
-  * `g_in_exec` was set only around `v86_run()`, so for a whole PM session
-    `async_inject_irq()` answered "the guest isn't running" and bailed at line one.
-  * **The host owns vectors 08h-0Fh for a 32-bit client.** Doom hooks its timer
-    with `AX=2508 / int 21h`, DS = its own code selector — not INT 31h 0205.
-    Letting DOS/4GW service that fails the hook (CF=1) and then reports
-    `fatal error (1001): error in interrupt chain`, because the extender is
-    splicing into a chain whose hardware end is US. Two owners, one chain.
-  * `INT 31h 0204` returned the offset at the HANDLER selector's width, so a
-    16-bit handler came back via `VDM_SET16` and a 32-bit client read
-    `0x????0020`. Third width bug of the same family in one day.
-
-  **THE MEASUREMENT THAT MATTERS**
-  ```
-     ASYNC-PM ok=1 from=0x187:0x03ae53dc -> 0x187:0x03ae31f0 SS:ESP=0x18f:… efl=0x246
-       IRQ0<-PM INT done=1 phases=1 ticks=1     (…2, …3)
-  ```
-  Doom's ISR is entered from the spin, on its own 32-bit stack, with IF set, and
-  **reaches its IRET cleanly** three times. Delivery is sound.
-
-  **▶ THE WALL IS THE TICK RATE, AND IT IS ARITHMETIC.**
-  Doom programs the PIT to `reload 0x4a` = **16124 Hz** and its delay waits
-  `ms * [0x28824] / 1000` ticks — for a 30 ms delay, ~480 of them. We deliver
-  **three**. Even fixed, one SuspendThread/SetThreadContext round trip per tick at
-  16 kHz is not a viable design: it is tens of microseconds against a 62 µs budget.
-  ▶ **COALESCE, DO NOT CHASE.** The right shape is almost certainly to run the
-    client's ISR N times per injection when N ticks are owed (or to let the
-    injector loop while the latch is deep), so one thread round trip serves many
-    ticks. That is the next thing to build, and it should be measured against the
-    counter at linear `0x03b68820` actually advancing.
-  ⚠ After a handful of ticks the run ends silently (VDM kill, no watchdog line).
-
-  **▶ TWO THINGS WERE TRIED AND CHANGED NOTHING — 5 COMPLETED TICKS EITHER WAY.**
-  Recorded so they are not tried again as if new (commit `39265a9`):
-    1. **Coalescing** the drain (run the ISR in a batch of up to 64 per async
-       entry) — right in principle, no measured change.
-    2. **A safe chain target**: `AH=35h` on a host-owned vector now returns the
-       host's own default stub instead of the extender's, on the theory that
-       Doom's ISR chains every Nth tick and that chain was landing in DOS/4GW's
-       dispatcher. Also no change.
-
-  **▶ THAT INSTRUMENT WAS BUILT AND IT ANSWERED. `pmwatch.txt` (commit `095532b`)**
-  — one hex linear address on the share, dumped either side of every injection;
-  absent file = no cost. Watching `03b68820`, the counter the spin compares against:
-  ```
-     ticks=1 watch=0x2 (was 0x1)  ...  ticks=5 watch=0x6 (was 0x5)
-  ```
-  ▶ **DELIVERY IS ENTIRELY SOUND — STOP RE-INVESTIGATING IT.** The right handler is
-    entered, from the spin, on the right stack, it IRETs cleanly (`done=1
-    phases=1`), and it increments the right variable by exactly one per tick.
-  ▶ **WHAT IS LEFT IS ONE FACT: THE SIXTH ENTRY KILLS THE VDM.** Reproducible
-    across three builds, always the sixth, whether the ticks come one at a time or
-    as a batch of five from a single async entry.
-
-  **DOOM'S ISR, DISASSEMBLED — the shape of the thing that dies (obj1 offsets):**
-  ```
-    0x131f0  the Watcom __interrupt wrapper: pusha; push ds/es/fs/gs; mov ebp,esp;
-             cld; call 0x40de8; xor eax,eax (=IRQ index); call 0x134e0; pops; IRET
-    0x134e0  the shared IRQ body. `cli`, then decrements a nesting budget at
-             [0x283e8] and a per-nesting stack top at [0x283f0] (down 0x1000 each)
-    0x1355e  EOI (out 0x20,0x20) -- and FALLS THROUGH, so every tick reaches:
-    0x13566  `sti` (the handler RE-ENABLES INTERRUPTS mid-flight), then either
-               [0x283e8] >= 0 -> 0x13582: lss esp,[edx+8]  <-- SWITCHES STACK
-                                          call *ebx        <-- indirect callback
-               [0x283e8] <  0 -> 0x135a6: call *[0x281ac+edx] on the current stack
-    0x135bd  the epilogue: inc ebx / restore [0x283e8] and [0x283f0] -- so the
-             bookkeeping IS balanced; "budget exhaustion" was checked and is WRONG
-  ```
-  ▶ **THOSE RUNS WERE DONE. FOUR THEORIES KILLED BY MEASUREMENT — DO NOT RETRY.**
-  ```
-    1. "we exhaust its interrupt-stack pool"   WRONG. Budget 0x03b683e8 and stack
-       top 0x03b683f0 are IDENTICAL before and after every entry (0x4 / 0x04405300).
-    2. "the Nth tick releases the delay and    WRONG. A breakpoint on the delay's
-        Doom dies later, in sound init"        return address obj1+0x10f6c was armed
-                                               and NEVER HIT.
-    3. "the fatal one is the 6th"              WRONG. Batch 64 -> dies after 5 ticks;
-                                               batch 3 -> after 4. Not a count.
-    4. "state drifts inside the ISR"           WRONG. Breakpoints on the stack switch
-                                               (obj1+0x1359a) and the indirect call
-                                               (0x1359e) hit repeatedly with identical
-                                               registers: EBX=0x03ae5210 (Doom's timer
-                                               callback), ECX=0x04405300, DS=0x18f.
-  ```
-  **WHAT IS ACTUALLY TRUE:** it dies immediately after the **SECOND asynchronous
-  entry**, whatever the batch size. Async entry #1 delivers its ticks and every one
-  completes; entry #2 delivers one and the VDM is gone — silently, no fault to our
-  VEH, no watchdog line, nothing after the log's last byte.
-
-  ▶ ⚠⚠ **DO NOT "GO AND DO GH #18" — IT IS A PROVEN DEAD END AND I PROPOSED IT
-    ANYWAY.** An earlier version of this section said the signature was GH #18's and
-    the next step was to finish the `+0x638` trampoline. **That was written without
-    re-reading run 71, which already settled it with a kernel debugger attached:**
-    ```
-      the kernel handles a raw (non-BOP) PM #GP by SILENTLY TEARING THE VDM DOWN --
-      a *handled* path, so it neither reflects (never reaches 0x4f67f8) nor raises an
-      unhandled exception (no bugcheck, no KD break).      -- run 71, VM-confirmed
-    ```
-    The `+0x638` machinery is correct AND satisfied (runs 65-67 set the stack
-    selector, the class table, `[VDM_TIB+8]`, the `+0x634` block) and the reflect
-    still never fires, because the fault never gets that far. **Nothing about the
-    trampoline will make this fault visible.** See also kernel RE session 8.
-
-  ▶ **THE CONTROL THAT ACTUALLY NARROWED IT (do this kind of thing first).**
-    `qimode.txt` = `40` sets `qi_susp=0` and disables asynchronous delivery:
-    ```
-       async ON    5 ticks delivered, then the VDM is torn down silently
-       async OFF   0 ticks, guest wedges in its spin, watchdog ends it CLEANLY
-    ```
-    **So the killer is the ASYNC MECHANISM ITSELF** — SuspendThread /
-    GetThreadContext / SetThreadContext against a thread executing guest code
-    through an LDT code selector, in-process, after a far jmp the kernel knows
-    nothing about. Not the ISR (no HLT and no INT3 anywhere in the wrapper, the
-    shared IRQ body or the timer callback — scanned, zero), not the tick count, not
-    the nesting bookkeeping, not VIP (every ASYNC-PM line logged `efl=0x246`, which
-    has neither VIF nor VIP set — that idea was refuted by the log before it was
-    tried).
-
-  ▶ **WHERE THAT LEAVES IT.** The V86 arm of `async_inject_irq()` has always been
-    safe because the kernel OWNS a V86 guest's context. A protected-mode guest we
-    entered by far-jmp is not something the kernel is tracking, so rewriting its
-    trap frame is unsupported territory — and it survives the first entry and dies
-    on a later one, which is what "unsupported" usually looks like.
-    Candidate directions, none yet tested:
-      * make the guest LEAVE PM cooperatively instead of being preempted — e.g.
-        plant a temporary BOP in the guest's spin so it exits on its own, service
-        the tick, and restore the bytes. The patch map already does exactly this
-        for INT sites and is proven; nothing is rewritten behind the kernel's back.
-      * or drive the guest's PM execution in bounded slices so control returns
-        without preemption at all.
-    ▶ The first is much closer to machinery that already works, and `pmbp.txt`
-      already plants and restores bytes in guest code safely.
-
-┌──────────────────────────────────────────────────────────────────────────────┐
-│ ★ A SEPARATE, SHARP, REPRODUCIBLE BUG FOUND ON THE WAY: ARGUMENTS             │
-└──────────────────────────────────────────────────────────────────────────────┘
-
-  **Passing ANY command-line argument makes DOS/4GW quit before printing a single
-  character.** `-nosound`, `-zzz`, anything. The DPMI/INT 21h trace is identical to
-  a working run for **all 617 of its lines** and then simply stops — right after
-  the `AH=30h` DOS-version check (which returns 0x1606 = 6.22, correct) and before
-  the `AH=35h`/`AH=25h` vector-0 install a working run does next. The tail is
-  well-formed:
-  ```
-     cmdtail len=0x05 [20 2d 7a 7a 7a 0d]      i.e. " -zzz\r"
-  ```
-  length includes the leading space, terminated by 0x0D — textbook. So the extender
-  is branching on something else it reads when a tail is present.
-  ▶ This matters beyond tidiness: it blocks `doom -nosound`, which is the obvious
-    way to take the sound path out of the picture, and every game that takes options.
-  ▶ `doomrun.bat` on the share now supports it: put the arguments in
-    **`doomargs.txt`** on the share root, absent file = none.
-  ▶ Next probe is cheap: the same run under `stock <target>` — if stock ntvdm runs
-    `doom -zzz` fine, the difference is ours and the trace comparison is short.
-  ⚠ `pmnoirq.flag` is now ABSENT on the share: injection is properly gated and is
-    where the work is. Re-create it to get the older, stable, further-but-wedged run.
-
-┌──────────────────────────────────────────────────────────────────────────────┐
-│ (SUPERSEDED) THE IRQ0 INJECTION AS OF SESSION 18a                            │
-└──────────────────────────────────────────────────────────────────────────────┘
-
-  `pmnoirq.flag` is **STILL on the share and still load-bearing.** With it removed:
-  ```
-     before this session   run ends the instant the client installs INT 08h
-     with the 55 ms gate   run reaches file loading, then ends on the FIRST inject
-  ```
-  ▶ **The handoff's "cheap question" was right, and here is the answer.** We fired
-    IRQ0 the instruction after the vector appeared. Real IRQ0 runs at **18.2 Hz** —
-    the next tick is up to **55 ms**, millions of instructions, away. DOS/4GW is
-    arming a TABLE at that moment: vectors 0..8 in one sequential pass, 4-byte
-    default stubs at `0x97:0x00, 0x04, … 0x20`. A 55 ms hold-off past the INT 08h
-    hook (`DPMI_IRQ0_ARM_QUIET_MS`) now carries the run past arming.
-  ▶ **BUT THE INJECTION ITSELF STILL ENDS THE RUN**, vectoring into `0x97:0x20` —
-    which is STILL DOS/4GW's default stub, i.e. `call <common> ; db 8` into the
-    dispatcher at `mod:0x550`. Doom installs its REAL timer handler much later, in
-    `I_StartupTimer()`. So the next question is whether we should be delivering to
-    that stub at all, and what `dpmi_inject_pm_irq()` does wrong for a 32-bit
-    client — it is otherwise unexercised against one, and it shares the frame-width
-    and stack-pointer-width rules that bugs 3 and 4 above turned out to hinge on.
-  ▶ **THIS IS ALSO WHAT WEDGES THE GOOD RUN.** With the flag ON, Doom hangs in its
-    delay routine at obj1+0x153b0 — and that routine is a *timer* spin:
-    ```
-       mov eax,[0x28820]      ; snapshot the tick counter
-       …
-       cmp [0x28820],eax      ; spin until it CHANGES
-    ```
-    incremented by its INT 08h handler. No IRQ0 → the loop is infinite. **Doom
-    cannot finish `I_StartupTimer()` until the injection works.** These are the same
-    problem, and it is the last one between here and a menu.
-  ⚠ **DELETE `pmnoirq.flag` FROM THE SHARE once it is fixed.**
-
-┌──────────────────────────────────────────────────────────────────────────────┐
-│ THE INSTRUMENTS ADDED THIS SESSION (each one found the next bug)             │
-└──────────────────────────────────────────────────────────────────────────────┘
-
-  * The **PM-stop report** now prints linear address, CS width, the register file
-    and the instruction bytes — not a truncated `CS:EIP`. Bug 2 was invisible
-    precisely because the old line looked plausible.
-  * The **client-handler route** prints `DS:EDX`, the bytes AT it, and the caller's
-    `SS`/`CS` widths. This is what refuted the `LAR SS` theory (SS D/B was already
-    1) and pointed at the return CS instead.
-  * **0301/0302** print the RMCS location and the pointer argument with its target
-    bytes. Seeing `DS:DX=0x000:0x9b80 @=<garbage>` next to a known-good
-    `DS:DX=0x110:0x2380 @="C:\DOOMS\DOOM.EX"` is what made bug 3 one comparison.
-  ⚠ These roughly quintupled the log (545 KB → 2.9 MB). `LOG_MAX_BYTES` is 32 MB.
-
-┌──────────────────────────────────────────────────────────────────────────────┐
-│ ★★ OFFLINE: DOOM'S LE IS FULLY MAPPED NOW. DO NOT RE-DERIVE IT.              │
+│ ★★ OFFLINE: DOOM'S LE IS FULLY MAPPED. DO NOT RE-DERIVE IT.                  │
 └──────────────────────────────────────────────────────────────────────────────┘
 
   `build/doom_obj{1,2,3}.bin` are extracted. To regenerate, or for another game:
   ```
-    LE header      search for "LE\0\0" AND VALIDATE (byte/word order 0, format
-                   level 0, cpu 1-4, os 1-4, 1<=nobj<=64). DOOM.EXE: file 0x27acc.
-    ⚠ e_lfanew IS NOT A POINTER TO IT in a bound exe -- DOOM.EXE's reads
-      0x09b40000, off the end of a 0xad511-byte file. The MZ stub is the extender.
-    ⚠ HEADER LAYOUT: cpu at +0x08, objtab at +0x40, nobj +0x44, pagemap +0x48.
-      (Not the LX layout -- being 8 bytes off parses cleanly into garbage: it gave
-      "265032 pages, 0 objects" and I nearly believed it.)
-    ⚠ THE `datapages` FIELD AT +0x80 IS WRONG FOR A BOUND IMAGE. DOOM.EXE says
-      0x1ce00, which is INSIDE the extender. Real base = 0x42014, i.e. flush to
-      EOF (107 full pages + last-page 0x4fd). CONFIRM BY CONTENT, two ways:
-      the entry point disassembles to `jmp` over "WATCOM C/C++32 Run-Time system",
-      and obj3 contains "doom1.wad" / "Z_Init" / "-devparm".
-    mapping       obj1 file 0x42014  guest 0x03AD0000   entry EIP 0x40b48
-                  obj3 file 0x88014  guest 0x03B40000
-      cross-check: the log's `setbase 0x03b10b48` == 0x03AD0000 + 0x40b48. 
+    LE header   search for "LE\0\0" AND VALIDATE (byte/word order 0, format level 0,
+                cpu 1-4, os 1-4, 1<=nobj<=64). DOOM.EXE: file 0x27acc.
+    ⚠ e_lfanew IS NOT A POINTER TO IT in a bound exe -- DOOM.EXE's reads 0x09b40000,
+      off the end of a 0xad511-byte file. The MZ stub is the extender.
+    ⚠ HEADER LAYOUT: cpu +0x08, objtab +0x40, nobj +0x44, pagemap +0x48. NOT the LX
+      layout -- being 8 bytes off parses cleanly into GARBAGE ("265032 pages, 0
+      objects") and I nearly believed it.
+    ⚠ THE `datapages` FIELD AT +0x80 IS WRONG FOR A BOUND IMAGE (says 0x1ce00, which
+      is INSIDE the extender). Real base = 0x42014, flush to EOF. CONFIRM BY
+      CONTENT: the entry disassembles to `jmp` over "WATCOM C/C++32 Run-Time
+      system", and obj3 contains "doom1.wad" / "Z_Init" / "-devparm".
+    mapping     obj1 file 0x42014 -> guest 0x03AD0000, entry EIP 0x40b48
+                obj3 file 0x88014 -> guest 0x03B40000
+      cross-check: the log's `setbase 0x03b10b48` == 0x03AD0000 + 0x40b48.
   ```
-  Useful landmarks found inside obj1:
+  Landmarks inside obj1:
   ```
-    0x40b48   LE entry -- `jmp` over the Watcom copyright banner
-    0x40be5   `mov ah,30h ; int 21h`  (get DOS version -- the first app INT)
-    0x406d0   the file-open thunk: `mov ah,3Dh ; int 21h ; rcl eax,1 ; ror eax,1`
-    0x40985   `mov ah,3Fh ; int 21h`  -- the read that spun 20969 times on bug 4
-    0x10f5f   Sound Blaster DSP reset: `out dx,al` 1 / delay / 0 / delay
-    0x153b0   the millisecond delay -- SPINS ON THE TIMER TICK AT [0x28820]
-    0x41e41   a table of `int N ; ret` thunks (Watcom's generic dispatch)
+    0x40b48  LE entry -- `jmp` over the Watcom copyright banner
+    0x40be5  `mov ah,30h ; int 21h`   (the first application INT)
+    0x406d0  file-open thunk: `mov ah,3Dh ; int 21h ; rcl eax,1 ; ror eax,1`
+    0x40985  `mov ah,3Fh ; int 21h`   (spun 20969 times on bug 4)
+    0x10f5f  Sound Blaster DSP reset: `out dx,al` 1 / delay / 0 / delay
+    0x153b0  the millisecond delay -- SPINS on the tick at [0x28820] (lin 0x03b68820)
+    0x153dc  that spin: `cmp [0x28820],eax ; je` -- two instructions, no I/O, no INT
+    0x131f0  Doom's timer ISR (Watcom __interrupt wrapper) -> 0x134e0 shared body
+    0x1359a  its stack switch `lss esp,[edx+8]`, 0x1359e the indirect `call *ebx`
+    0x41e41  a table of `int N ; ret` thunks (Watcom's generic dispatch)
   ```
 
 ┌──────────────────────────────────────────────────────────────────────────────┐
-│ ★★ METHOD, AND THIS SESSION EARNED IT TWICE                                  │
+│ ★★★ METHOD — THIS SESSION PAID FOR THESE                                     │
 └──────────────────────────────────────────────────────────────────────────────┘
 
+  ▶ **CHECK THE LOAD-BEARING ASSUMPTION FIRST.** "Stock ntvdm runs Doom" underpinned
+    the whole project and had never been run. One command settled it — and it
+    produced the best result of the session.
   ▶ **AN INSTRUMENT THAT LIES IS WORSE THAN NONE, AND MINE DID.** The first LE
     extraction used the header's `datapages` field, landed inside the extender, and
-    reported "57 `CD 21` sites in Doom's code object" — a number that was 30× over
-    chance and looked like proof. It was measuring the wrong bytes. What caught it
-    was DISASSEMBLING the result: 16-bit `lcall 0x0080:…` where 32-bit code belonged.
-    **Before believing a count, decode a sample of what you counted.**
-  ▶ **PREDICT THE NUMBER BEFORE THE RUN.** "obj1 should contain ~66 sites" turned a
-    "does it work?" run into a "does it patch exactly the code object and nothing
-    else?" run. The answer was 0x44 both sides. A count that matches a
-    pre-registered prediction is evidence; "the log got bigger" is not.
-  ▶ **THE TWO REFUTED THEORIES WERE REFUTED CHEAPLY, ON PURPOSE.** `LAR SS` (the
-    caller's stack was already 32-bit) and "our RMCS read is truncated" (the RMCS
-    address was identical in the working and failing calls) both died in one run
-    each, because the diagnostic printed the control case next to the failing one.
+    reported "57 `CD 21` sites in Doom's code" — 30× over chance and it looked like
+    proof. **Before believing a count, DECODE A SAMPLE of what you counted**; the
+    disassembly showed 16-bit `lcall` where 32-bit code belonged.
+  ▶ **PREDICT THE NUMBER BEFORE THE RUN.** "obj1 should hold ~66 sites" turned "did
+    it work?" into "did it patch exactly the code object and nothing else?" —
+    answer 0x44 both sides. A count matching a pre-registered prediction is
+    evidence; "the log got bigger" is not.
+  ▶ **RUN THE CONTROL BEFORE THE THEORY.** `qimode=40` (async off) narrowed the
+    teardown to the mechanism in ONE run, after hours of hypotheses.
+  ▶ **READ YOUR OWN LOG BEFORE THEORISING PAST IT.** The VIP theory was refuted by
+    `efl=0x246` lines already sitting in the log. Twice in one day I theorised past
+    available evidence.
+  ▶ **RE-READ THE HANDOFF BEFORE PROPOSING A DIRECTION.** I recommended GH #18,
+    which this very file records as a measured dead end.
 
 ╔══════════════════════════════════════════════════════════════════════════════╗
 ║ THE USER'S INSTRUCTION (2026-08-22): "North star is playable Doom"           ║
 ╚══════════════════════════════════════════════════════════════════════════════╝
 
 ═══════════════════════════════════════════════════════════════════════════════
-██     SESSION 17 (2026-08-22) — SUPERSEDED ABOVE. Its "THE WALL" section is  ██
-██     SOLVED; its dead ends and instruments still stand. Kept for those.     ██
+██  STANDING REFERENCE — rig operations, instruments, landmarks, older traps.  ██
+██  Everything below is still true; the narrative history has been pruned.     ██
+██  ⚠ "this session" in the material below means SESSION 17 or 15, not 18.     ██
 ═══════════════════════════════════════════════════════════════════════════════
-
-  Commits `fbf95a6` .. `f744c63` on `m9/completeness`.
-  Verified at the end: **selftest.com 8/8 on the rig**, `dpmitest.com`/`dpmiback.com`
-  still exit cleanly, **off-VM 349/349** (8 suites), `check-imports.sh` clean, share
-  left clean (no `cmd.txt`, no `pmbp.txt`, no flags).
-
-  **Doom is NOT playable and produces NO visible output.** It sets no video mode
-  (`INT 10h` from PM: zero calls) and dies before printing anything, so the VDM window
-  is blank and closes in a few seconds. All the progress below is in the log.
-
-┌──────────────────────────────────────────────────────────────────────────────┐
-│ ★★★ THE WALL, AND IT IS ONE SENTENCE. START HERE.                            │
-└──────────────────────────────────────────────────────────────────────────────┘
-
-  Doom's own 32-bit code selector is **`setaccess 0xC7FA`** — present, DPL3, code,
-  **G=1, D/B=1, base 0, limit 4 GB**. `dpmi_patch_code_region()` refuses any region over
-  4 MB, so the **application's** raw `CD 21` / `CD 31` are never converted to BOPs — and
-  a raw INT in protected mode is the one fault XP will not reflect. The extender's own
-  modules ARE patched (they get ordinary based selectors); the game's code is not.
-  The refusal is now **logged loudly** ("FLAT code region ... NOT scanned; the client's
-  INT sites here are UNPATCHED"); it used to return silently, which is how it hid.
-
-  ▶ (SESSION 18: SOLVED -- the LE object table names the code blocks. See the top.)
-  ▶ **SCANNING THE CLIENT'S 0501 BLOCKS INSTEAD WAS TRIED AND IS WORSE.** Measured:
-    ```
-      without   545 KB log, 441 client-handler returns, reaches AX=FF00
-      with      453 KB log, no FF00 -- and 3 extra byte pairs patched inside the 1 MB
-                block that already held the extender's modules, i.e. DATA
-    ```
-    The client's memory is code and data mixed; "everything we handed out" is not a code
-    region. Reverted; the attempt and its result are recorded in the source too.
-  ▶ **THE SHAPE OF THE ANSWER:** we need to know which parts of the client's memory are
-    CODE. The client knows — it loads objects with a flag — and while we never see that
-    flag, we DO see (a) every window descriptor it builds over each object (`0006` +
-    `000C`) while relocating, and (b) each object's exact file extent from the read log.
-    `g_dpmi_blk[]` records every 0501 block and is ready for this.
-
-┌──────────────────────────────────────────────────────────────────────────────┐
-│ ★★ AND THE OTHER THING IN THE WAY: THE IRQ0 INJECTION                        │
-└──────────────────────────────────────────────────────────────────────────────┘
-
-  `pmnoirq.flag` on the share suppresses the async IRQ0 → PM `INT 08h` injection, **and
-  Doom needs it** — everything above only reproduces with the flag present:
-  ```
-     injection ON   -> run ends the instant the client installs INT 08h  (cp 0x23b)
-     injection OFF  -> the client reaches cp 0xdb1+ and loads its whole image
-  ```
-  It is **a knob for asking the question, not a fix** — a game that hooks the timer and
-  never receives it will not play. `dpmi_inject_pm_irq()` shares the corrected
-  frame-width / stack-pointer rules but is otherwise unexercised against a 32-bit client.
-  ▶ Ask the cheap question first: is delivering IRQ0 while the client is still building
-    its own vector table legitimate at all? We fire as soon as `g_pm_int[8].client` is
-    set, i.e. on the instruction after it installs the vector.
-  ⚠ **DELETE `pmnoirq.flag` FROM THE SHARE once it is fixed.**
-
 ┌──────────────────────────────────────────────────────────────────────────────┐
 │ ★★ FOUR DEAD ENDS, EACH RULED OUT BY MEASUREMENT. DO NOT RE-SPEND A SESSION. │
 └──────────────────────────────────────────────────────────────────────────────┘
@@ -585,83 +355,6 @@
     footprint eating a call target, `dpmi_bp_arm()` reading unmapped memory.
 
 ┌──────────────────────────────────────────────────────────────────────────────┐
-│ WHAT DOOM ACTUALLY DOES NOW, IN ONE RUN                                      │
-└──────────────────────────────────────────────────────────────────────────────┘
-
-  negotiates DPMI → loads its PM modules into EXTENDED memory and relocates them →
-  runs **its own protected-mode INT 21h handler** (441 clean IRET returns) → forwards
-  DOS calls to real mode via **INT 31h 0302** → completes the relocation pass and
-  retypes all objects to code → hands off to the application (all twelve handoff
-  instructions breakpointed and hit) → the game's runtime builds its flat model, installs
-  its own PM vectors (43 `setPMvec`), and **reads DOOM.EXE to file position 0xAD511 — its
-  exact size** → **281 passes through the 16↔32 gateway**, every instruction of the stack
-  switch executing (`mov ss,bx`, `mov esp,ebp`, `pop fs/gs`, `popal`, `iretl`).
-
-  It never opens DOOM1.WAD — it dies first. 173 file reads, all of DOOM.EXE.
-
-┌──────────────────────────────────────────────────────────────────────────────┐
-│ ELEVEN BUGS FIXED THIS SESSION. EVERY ONE OURS.                              │
-└──────────────────────────────────────────────────────────────────────────────┘
-
-   1. **The INT→BOP scan only covered ONE 64K window.** DOS/4GW allocates DOS memory,
-      READS A PM MODULE INTO IT, retypes the descriptor to code and jumps in — so that
-      module's `CD 21` was never patched. Regions are now patched **when the client
-      declares them CODE** (`0009`/`000C`). The client's own timing, and the trace proves
-      it right: allocate → read → retype → jump.
-   2. **`ES` must be a selector for the PSP** (100h limit), and the PSP's environment
-      pointer must be **converted to a selector**. From the DPMI 0.9 text, confirmed by
-      the client: `mov bx,es:[0x2c] / mov es,bx`.
-   3. **The client's own PM INT 21h handler must win.** `AX=FF80h` was never a DOS call —
-      it is DOS/4GW talking to itself, and every answer we invented was wrong. Scoped to
-      INT 21h on purpose: `0300` only implements INT 21h, so routing video/keyboard too
-      would trade a working path for a broken one.
-   4. **PM interrupt frame width is the CLIENT'S mode, not the handler selector's D
-      bit.** DOS/4GW's handler sits in a 16-bit code selector but returns with `66 cf`
-      (IRETD), popping twelve bytes from the six we pushed.
-   5. **Frame width and stack-pointer width are different questions.** With a 16-bit SS
-      the CPU maintains SP and the top half of ESP is junk; a 32-bit frame on a 16-bit
-      stack is ordinary. Fixing (4) alone faulted in our own process.
-   6. ★ **The patch map must VERIFY before it writes — it was corrupting loaded images.**
-      Sites recorded in low memory later became DOS/4GW's file transfer buffer, and every
-      `0301`/`0302` repatch stamped `C4 C4` over freshly-read image bytes:
-      ```
-         file    9a a4 59 80 | 00 83 | c4 08      lcall 0x0080:0x59a4 / add sp,8
-         memory  9a a4 59 80 | c4 c4 | c4 08
-      ```
-      Found with a repeating breakpoint over the relocation loop: 236 iterations reading
-      a clean 0x0080, then one reading 0xC480.
-      ▶ **A cache of "I changed these bytes" is only valid while nothing else writes
-        them, and in a VDM the guest owns that memory.**
-   7. **The map only covered the low 1.1 MB.** A working extender puts its modules in
-      EXTENDED memory. Now an open-addressed hash keyed by linear address — and faster
-      than the flat array it replaced (unpatch/repatch sweep 64K slots, not 1.1 MB).
-   8. ★ **INT 31h 0001 (free descriptor) was a no-op.** Doom does 360 allocations against
-      315 frees; we leaked all of them, the table ran dry, `0000` returned ENOMEM and the
-      client carried on using the garbage selector it got back (0x8011 = index 4098).
-      Real LIFO free list; our own selectors are never recycled; table 512 → 2048.
-      ▶ **A no-op is not a safe stub when the thing being stubbed is a RESOURCE.**
-   9. **The code-region scanner walked unmapped memory and faulted in our own process.**
-      It now walks `VirtualQuery`'s committed extents instead of guessing at page
-      boundaries the memory manager already knows exactly.
-  10. **INT 31h 0204 returned 0000:0000** for an uninstalled vector, so a client that
-      CHAINS had nowhere to chain to. Every vector now points at a host stub
-      `C4 C4 CF` (BOP ; IRET — the third byte is both the BOP immediate AND the IRET,
-      which matches the existing +2 EIP convention), registered in the patch map against
-      its vector. `g_pm_int[].client` distinguishes a vector the client CHOSE, and gates
-      both routing and IRQ0 injection.
-  11. ★ **PM `AH=48h` returned the selector in AX *and DX*** (added session 16 as
-      "costs nothing"). Real DOS returns AX (and BX on failure) and preserves the rest;
-      DOS/4GW keeps the request's BYTE SIZE in DX across the call and then does
-      `mov ax,dx / mov di,ax / dec di / dec di / movw [di],..`.
-      ▶ **A service's register footprint is part of its contract.**
-
-  Also implemented: **INT 31h 0302** (= 0301 with an IRET frame — the only difference is
-  FLAGS pushed under CS:IP), **0202/0203** (45 calls), **0600-0604/0701/0702**, coherent
-  **0500** page counts, and from PM **INT 21h AH=06/25/33/35/44/49/4A**. `AH=25h/35h`
-  act on the PROTECTED-mode vector (the spec is silent; DS:DX is a selector:offset and
-  cannot go in the real-mode IVT — outstanding verification is a stock-ntvdm probe).
-
-┌──────────────────────────────────────────────────────────────────────────────┐
 │ ★★ THE INSTRUMENTS. USE THEM BEFORE THEORISING.                              │
 └──────────────────────────────────────────────────────────────────────────────┘
 
@@ -702,32 +395,6 @@
   `LOG_MAX_BYTES` is now **32 MB** (was 4 MB, which truncated mid-startup).
 
 ┌──────────────────────────────────────────────────────────────────────────────┐
-│ ★★ OFFLINE DISASSEMBLY OF DOOM — THE MAPPINGS, AND THE TRAP                  │
-└──────────────────────────────────────────────────────────────────────────────┘
-
-  Copy the binaries off the rig once (`controld exec ... copy "C:\DOOMS\*.EXE" ...`),
-  then map a guest address to a file offset by SEARCHING for bytes the log already
-  dumped. ⚠ Pick a pattern with **no relocated immediates** — `mov di,<selector>` differs
-  between file and memory, and a longer "safer" pattern containing one is simply not
-  found.
-
-  ```
-    DOS/4GW 16-bit half   guest 0x0F:off        == DOOM.EXE 0x1DD0 + off   (d4g16.bin)
-    its aliased window    guest 0x67:off        == d4g16.bin off + 0x7d10
-    PM module ("mod:")    guest <modsel>:off    == DOOM.EXE 0xF384 + off   (d4gmod.bin)
-    second object ("obj2") guest <objsel>:off   == DOOM.EXE 0x151c4 + off  (d4gobj2.bin)
-  ```
-  Derive an object's file extent from the read log: the run of `INT21 AH=3F` reads whose
-  sizes total the object's limit, starting at the first `pos=`.
-
-  ⚠⚠ **SELECTOR NUMBERS SHIFT BETWEEN BUILDS.** Every internal LDT allocation we add or
-     remove moves every client selector: the PM module was `0x8f`, then `0x97`; obj2 was
-     `0xa7`, then `0xaf`. **Breakpoints must be computed from LINEAR addresses**, and
-     those ARE stable across runs (0501 hands back 0x03980000 and 0x03a80000 every time).
-     Read the current base out of the log (`sel 0x… -> base 0x…`) before generating a
-     sweep; do not carry selector numbers between runs.
-
-┌──────────────────────────────────────────────────────────────────────────────┐
 │ CLIENT LANDMARKS ALREADY MAPPED (save yourself the bisection)                │
 └──────────────────────────────────────────────────────────────────────────────┘
 
@@ -747,34 +414,6 @@
   ```
   The unwind after the final FF00 (all breakpointed and hit, in order):
   `mod:0x4b81 → mod:0x4bc5 → mod:0x4edd → obj2:0xb00a → obj2:0x745`.
-
-┌──────────────────────────────────────────────────────────────────────────────┐
-│ RUNNING IT                                                                   │
-└──────────────────────────────────────────────────────────────────────────────┘
-
-  ```
-  cp build/ntvdmhost.exe /tmp/xpshare/bm/ntvdmhost.exe
-  md5 -q build/ntvdmhost.exe /tmp/xpshare/bm/ntvdmhost.exe    # MUST match, every time
-  : > /tmp/xpshare/pmnoirq.flag                               # currently load-bearing
-  rm -f /tmp/xpshare/result_doom.log
-  printf 'doom\r\n' > /tmp/xpshare/cmd.tmp && mv /tmp/xpshare/cmd.tmp /tmp/xpshare/cmd.txt
-  ```
-  The run **dies in about ten seconds** (the 45 s `headless_ms` cap is never reached), so
-  poll `result_doom.log` for a stable size. A clean wind-down writes `STAGE2: complete`;
-  its ABSENCE means the VDM was killed. Regression gates before any commit:
-  `./tools/dostest/run.sh` (8 suites, 349 checks) and `selftest.com` on the rig (8/8).
-
-╔══════════════════════════════════════════════════════════════════════════════╗
-║ THE USER'S INSTRUCTION (2026-08-21, end of session 16):                      ║
-║   "stay on DPMI. The next north star is Doom working"                        ║
-╚══════════════════════════════════════════════════════════════════════════════╝
-
-┌──────────────────────────────────────────────────────────────────────────────┐
-│ (An interim session-17 handoff stood here. It said "DO THIS FIRST: make ES a │
-│  PSP selector" and named CLI/STI as the blocker. BOTH ARE DONE OR WRONG —    │
-│  everything it held is folded, corrected, into the section at the top of     │
-│  this file. Removed rather than left to be followed by mistake.)             │
-└──────────────────────────────────────────────────────────────────────────────┘
 
 ┌──────────────────────────────────────────────────────────────────────────────┐
 │ 0. RESTARTING THE RIG (it is healthy and SELF-RECOVERABLE as of session 16)  │
@@ -870,78 +509,6 @@
     ⚠ Pick a pattern with **no relocated immediates** in it — `mov di,<selector>` differs
       between file and memory, and a longer "safer" pattern that includes one will simply
       not be found.
-
-┌──────────────────────────────────────────────────────────────────────────────┐
-│ 1. DOOM: NEGOTIATES DPMI AND LOADS ITS LE IMAGE (session 16)                 │
-│    ▶ SUPERSEDED IN PART BY SESSION 17 AT THE TOP OF THIS FILE. The "NEXT     │
-│      GAPS" list below is CLOSED; the D/B argument and the four fixes stand.  │
-└──────────────────────────────────────────────────────────────────────────────┘
-
-  Run it: `doom` in `cmd.txt` (rt.bat now has the arm). Log = `result_doom.log`.
-
-  **PROGRESSION IN ONE SESSION:**
-  ```
-  start of session   died INSIDE the first dpmi_enter_pm(), log 2.7 KB, no output
-  after the D/B fix  full DPMI negotiation, 354 INT 31h calls, log 43 KB
-  after the PM thunk ~410 PM iterations, READS ITS LE IMAGE, log 142 KB
-  ```
-  It also printed its first-ever output under NTVDMEX — `DOS/16M error: [10] cannot
-  allocate memory for GDT` — which turned out to be OUR bug and is now gone.
-
-  **★★★ THE ROOT CAUSE, and the argument is airtight — do not re-litigate it.**
-  `dpmi_switch_to_pm()` set the initial CS/DS/SS to **D/B=1** whenever the client
-  declared itself 32-bit. Wrong: our mode-switch stub is `BOP 0x50 ; RETF`, and the
-  **RETF is taken when the switch FAILS**, returning the client to REAL MODE with CF=1.
-  So the bytes after the client's `call far` are executed as 16-bit real-mode code on
-  the failure path and CANNOT also be 32-bit. Doom's entry bytes prove it:
-  ```
-  16-bit: jb <err> / cld / mov word ss:[0xac2],0x71dc / mov word ss:[0xc30],ds
-  32-bit: jb / cld / mov DWORD ss:[esi],..  / mov WORD ss:[esi],ds / xor BYTE [esp+ecx*4],cl
-  ```
-  three WILD WRITES through uninitialised ESI within four instructions — hence a silent
-  death with NO exception reaching our VEH. The client agrees: its first act in PM is
-  `000B / and byte [es:di+6],0BFh / 000C` — it clears D/B ITSELF.
-  ▶ Decode any such bytes with `i686-w64-mingw32-objdump -D -b binary -m i8086|i386`.
-
-  **THE OTHER FOUR FIXES (all found by letting the client name its own requirement):**
-   • `INT 21h AH=48h` from PM must return a **SELECTOR** — Doom does `MOV ES,AX` right
-     after, which only works for a selector. Its own code IS the spec.
-   • Register-only INT 21h delegates to `dos_int21()` (whitelist 19/2A/2C/30/58).
-     Pointer-taking services must NOT: DS:DX / ES:BX are SELECTORS in PM, and handing
-     one to code that treats it as a segment touches `selector<<4`.
-   • **`dos_int21` returned CF to `SS<<4+SP+4`** — the pushed-V86-FLAGS frame. In PM SS
-     is a selector, so that is linear 0x1f0: the client never saw CF *and we corrupted
-     low memory every call*. Now gated by `dos_int21_set_pm()` → live VTIB_EFLAGS.
-     This was the true cause of the GDT error. (`0300` deliberately still uses the V86
-     path — it builds a real frame.)
-   • Resolve a PM BOP by **LINEAR address** (`dpmi_bop_vec`), not EIP: DOS/4GW aliases
-     the patched 64 K window through a SECOND code selector (0x57, base 0xd9b0) for its
-     PM interrupt handlers, so a BOP fired at an EIP meaningless in the original segment.
-
-  ▶▶ **NEXT GAPS — all NAMED IN THE LOG, in rough priority order:**
-   1. `INT 31h 0202/0203` get/set exception handler vector — **45 calls**, the biggest
-      remaining block.
-   2. `INT 21h AH=49h` (free), `33h` (Ctrl-Break), `FFh` from PM.
-   3. `INT 31h 0702` (demand-paging hint, advisory) — 6 calls.
-   4. It STILL stops eventually (log ends mid-iteration at `DPMI-CP[0000019a]`). The
-      checkpoint bracket is already widened to 4096 iterations, so the next run
-      localises the death exactly as it did three times today.
-
-  ⚠ **KNOWN REGRESSION, NOT YET FIXED:** `pm32flat/pm32io/pm32gfx/pm32irq/pm32sw` put
-    `bits 32` directly after `call far [entry]`, so they were written to MATCH the old
-    behaviour rather than test it — and, unlike a real client, they have no `jc` failure
-    path, which is the very thing that forces post-switch code to be 16-bit. They
-    misdecode now (`mov cx,1` arriving as `CX=3`) and need rewriting to the real-client
-    pattern: stay 16-bit, allocate a 32-bit selector via INT 31h, far-jmp to it.
-
-  ★ **THE METHOD LESSON OF SESSION 16, and it is the durable part.** Session 15
-    concluded "Doom dies within ~250 ms" from the ABSENCE of watchdog samples in the
-    log. Those samples were written by `serial_out()` only — COM1, which exists on the
-    QEMU dev VM and **not on the bare-metal box**. They were never written anywhere, so
-    their absence was evidence of nothing. The conclusion happened to survive retesting,
-    but the reasoning was unsound. **Before inferring anything from a MISSING log line,
-    verify that line can reach the log on the machine under test.**
-    Check with: `grep -n serial_out src/host/main.c | grep -v log_append`
 
 ┌──────────────────────────────────────────────────────────────────────────────┐
 │ 2. NEW HARNESS — STOCK NTVDM IS NOW A FIRST-CLASS ORACLE (closes #26's gap)   │
@@ -2120,840 +1687,29 @@ still 8/8. That fix stands on its own regardless of the rest.
   deadline backstop's report. The heartbeat proves it was alive until then. Kernel-side VDM
   termination is the obvious suspect. Harmless now that the bit is gone.
 
-═══════════════════════════════════════════════════════════════════════════════
-██ CHECKPOINT — 2026-08-19 (session 10). SUPERSEDED by session 11 above. ██
-═══════════════════════════════════════════════════════════════════════════════
-
-▶ RESTART POINT (2026-08-19, IDE restart): HEAD = `a44eae8`; branch spike/dpmi-16bit-switch;
-  **22 commits UNPUSHED**. Host = **dpmi-harness-v97**, built clean + deployed to the share `bm/`.
-  Working tree clean except (a) the pre-existing untracked files that are NOT mine (MAINICON.ico,
-  demos/, scripts/kd_*.py, scripts/trace_break.py) and (b) the freshly-compiled native test binaries
-  (tools/dostest/{dma,opl,opl_synth,sb,mpu,audio}_test) which are deliberately untracked -- repo
-  convention is that `.com` guest binaries ARE tracked (can't assemble on the target) and native
-  test binaries are NOT. Rig healthy: watcher + controld both beating, nothing wedged.
-  THIS SESSION: the sound epic (#20/#21) got its FIVE devices + mixer built and tested (520 off-VM
-  checks), and -- the bigger result -- a one-line host bug that had been freezing the guest's clock
-  since forever was found and fixed. Skyroads now detects the Sound Blaster and plays a DMA block.
-  ONE structural gap remains before it reaches gameplay; see THE BLOCKER below.
-
-★★★ THE HEADLINE FIX: **V86 guests were started with IF=0**. `VTIB_EFLAGS_V86` was `0x20002` --
-no interrupt flag. DOS enters a program with interrupts already enabled, so DOS programs never
-issue STI; the guest therefore ran with interrupts disabled for its ENTIRE life. The host's IRQ0
-delivery gate never opened, INT 08h was never injected, and the BIOS tick at 0040:006C never
-advanced. Anything paced on the tick (Skyroads' sound/PIT init, FM music, PCM block timing) hung.
-MEASURED, not inferred: iobench.com saw **34M port-I/O events with irq0_inj=0 and bda_tick frozen**,
-while `[0x714]` sat with VDM_INT_TIMER permanently pending. Fix = `0x20202` (commit `b0d92e6`).
-  ► Note `VTIB_EFLAGS_PM` ALWAYS had IF set (0x202) -- which is exactly why every protected-mode
-    timer result (run 78, pm32irq) worked while real mode "crawled ~100x too slow". That asymmetry
-    was the clue sitting in plain sight in ntvdm.h.
-
-★★ SETTING IF EXPOSED TWO KERNEL BEHAVIOURS WE HAD NOT BEEN USING (both now implemented):
-  • **event 3 is OVERLOADED.** Besides the I/O reflect it is how the kernel says "a hardware
-    interrupt is pending and the VDM can take it" -- the interrupt assist we thought we lacked.
-    It ONLY fires with IF=1, which is why session 9 never saw it. Distinguished from a genuine GP
-    fault by the kernel's own pending bits in `[0x714]&3`; we clear them, latch IRQ0, resume at the
-    SAME EIP (nothing faulted, so nothing must be stepped over).
-  • **event 1 = kernel-decoded STRING I/O** (REP INS/OUTS), previously an unhandled hard stop.
-    The kernel leaves a decoded descriptor at VTIB+0x5A8 -- observed for `rep outsb` to 0x3C9:
-    `{1, 2, port|size<<16 (0x000103C9), 1, count (0x40), seg:off (0x01000355)}`. We deliberately
-    service it from the guest's own SI/DI/CX/DF instead, depending only on fields whose meaning is
-    established; the two agreed on the run that found it.
-
-★ THROUGHPUT: THE SESSION-9 PREMISE WAS WRONG. Port I/O was NEVER the bottleneck. iobench.com on
-bare metal (tools/dostest/iobench.asm, results in result_iobench.com.log):
-    single `IN AL,DX`        1.60 us   |  `IN`+`LOOP` burst   0.082 us  (19.5x faster)
-    single `OUT DX,AL`       1.30 us   |  `REP OUTSB` (ev 1)  0.072 us  (21x, was UNSUPPORTED)
-~1.5us per trapped access is roughly real-ISA speed. The earlier "~40us" figure came from
-misreading a v80 debug counter. The burst fast path is still worth having (an AdLib register write
-spends 43 trapped accesses, 35 of them a settling delay) but it is an optimisation, not the fix.
-
-★ THE RIG CAN NO LONGER WEDGE. Clearing g_running only stops a loop that gets a turn, and a guest
-spinning in pure V86 code never returns from v86_run -- that wedged rt.bat's `start /wait`
-permanently and needed a manual `controld kill` every time. The headless backstop now waits a 3s
-grace then FORCES process exit, and on the way out logs: the frozen CS:IP + 12 bytes there, every
-counter, and the list of unclaimed ports the guest probed. That report is how this session
-diagnosed everything. (It also caught a 256-byte buffer overflow in my own reporting code that was
-silently killing the thread before it could log -- buffer is 512 and flushes in sections now.)
-
-★★ SOUND EPIC (#20/#21): ALL FIVE DEVICES + MIXER BUILT AND TESTED. **520 off-VM checks, 0 fails**
-(`./tools/dostest/run.sh`). Commits `7aaeab6` (devices) and `a44eae8` (mixer + sink).
-  src/vdd/vdd_dma.c        8237 pair: page wiring, byte-pointer flip-flop, 16-bit WORD addressing,
-                           terminal count, auto-init ring wrap.                        41 checks
-  src/vdd/vdd_opl.c        OPL2 register file + REAL timers (80us/320us). Replaces the detect stub
-                           that had been bolted onto the video VDD (it toggled status bits on every
-                           read -- told games a card existed then stranded them).       35 checks
-  src/vdd/vdd_opl_synth.c  OPL2 FM, written from documented YM3812 behaviour, NOT ported, so it is
-                           ours and MIT-clean. Log-domain like the chip: an operator is
-                           exp2(-(logsin+env+TL+KSL)) -- adds and shifts, no multiplies or floats.
-                           Tables generated by tools/gen-opl-tables.py (host is -nostdlib: no libm).
-                           PITCH MEASURES 392.0 Hz vs the chip's published 388.4 Hz formula. 10 checks
-  src/vdd/vdd_sb.c         SB16: DSP reset handshake, version/identify, mixer, rate via time
-                           constant or 0x41, single-cycle + auto-init DMA, completion IRQ + acks,
-                           FM mirror at 2x0/2x8.                                        36 checks
-  src/vdd/vdd_mpu.c        MPU-401 UART mode -> host midiOut (XP has a GS Wavetable synth, so
-                           forwarding beats an FM approximation of GM). Running status, realtime
-                           bytes interleaved mid-message, sysex.                        21 checks
-  src/vdd/vdd_audio.c      Mixer: resamples OPL (native 49716 Hz) + SB (game's rate) onto 44100 and
-                           sums, honouring the SB16 mixer's own master/voice/FM volume registers
-                           (that is what gives real headroom).                          16 checks
-  src/vdd/audio_wave.c     waveOut + midiOut, bound at RUNTIME like present_ddraw binds ddraw, so
-                           the import list is unchanged.
-  ► DESIGN CAVEATS, both flagged in-source: OPL envelope RATES are empirically anchored
-    (`OPL_EG_ANCHOR`) and are within ~2x of real silicon at the extremes -- pitch is exact and note
-    shapes are right, so it reads as a different feel, not wrong notes. Calibrate against a
-    reference recording. SB stereo is folded to mono. Neither blocks a game.
-  ► THE MIXER IS ALSO THE TRANSPORT, not just the audible path: `vdd_sb_render()` is what walks the
-    DMA buffer and raises the completion IRQ. audio_wave keeps pumping even with NO sound device
-    (discarding samples), or every SB game would hang on a silent machine.
-
-★★ SKYROADS STATUS -- the sound stack demonstrably WORKS; one gap stops gameplay.
-  Then (session 9): black screen, stuck in the OPL register-write helper, never reached video.
-  Now (v97, bare metal, `printf 'skyroads\r\n' > cmd.txt`):
-    • Renders its INTRO ROAD SCENE in mode 13h (12 shots, 3 distinct frames).
-      PNG kept at build/shots/skyroads_v88_last.png -- checkerboard road + nebula sky.
-    • **Finds the Sound Blaster at 0x220**: its probe sweep collapsed from 19 unclaimed ports
-      (0x210-0x260, finding nothing) to 4 -- `0x216 0x21A 0x21E` (probes 0x210, then STOPS) + `0x20`
-      (the PIC, which nothing claims -- see resume item 4).
-    • Programs the DSP and PLAYS A BLOCK: `sb_dspwr=6 sb_rate=0x1788 (6024 Hz) sb_blocks=1`.
-    • Audio is genuinely running: `silent=0` (waveOut OPENED) and `mixed=0x144E00` = 1,330,176
-      frames = **30.2 s of audio at 44100 Hz for a 30 s run**, i.e. real time, no underruns.
-    • Timer is healthy: `irq0_inj=483`, tick advancing.
-    • **`irqn_inj=0`** <-- THE GAP. The completion IRQ is RAISED and never DELIVERED.
-
-★★★ THE BLOCKER (pick this up first): **we cannot asynchronously interrupt a V86 guest.**
-The guest is spinning inside its own INT 1Ch handler waiting for the SB IRQ (frozen snapshot is
-CS:IP=0x0050:0x0037 = our INT 08h stub at its `CD 1C` chain, bytes `cd 1c cf ...`), and our exec
-loop only regains control when the guest TRAPS. So the injection point never arrives. This is the
-same root limitation behind two earlier symptoms this session (the rig wedge; and, before the IF
-fix, the frozen tick). Real ntvdm does not have it because the KERNEL owns interrupt delivery via
-the ICA; we run the guest in-process and are blind until it faults.
-  ► **ALREADY TRIED AND FAILED -- do not repeat:** setting the FIXED_NTVDMSTATE hardware-interrupt-
-    pending bit (`*(DWORD*)0x714 |= 1`) from the audio thread does NOT preempt a running guest.
-    v97 was built and run with exactly that: `intpend` stayed at its startup value of 1 and
-    `irqn_inj` stayed 0. The kernel evidently only consults that word at its own transition points.
-    (The mechanism DOES exist though: the kernel preempted us with event 3 at startup when IT had a
-    timer pending -- so the lever is on the kernel side, not in that user-mode word.)
-  ► Device IRQs 2-7 ARE now wired end-to-end otherwise: `host_irq_sink` previously handled only
-    IRQ 0 and 1 and silently DROPPED the SB's IRQ 5; they now latch in `g_irqn_pending[]` and
-    inject as INT (8+irq) with the same IF gating. The stub re-entrancy guard was also relaxed to
-    just the BOP itself (a real PC nests a device IRQ inside a timer handler whenever IF is set).
-    So the moment we can preempt, delivery should just work.
-
-★★★★ **ROUND 3 (host v165): DOS API 102/103 = 99%, BIOS ~70%, OVERALL ~85%.**
-  ▶ **INT 21h: only 4Bh EXEC remains.** Added this round: the FCB group (0Fh-24h, 27h-29h),
-    1Bh/1Ch/1Fh/32h drive params, 26h/55h PSP creation, 31h TSR, 37h switch char ('/'),
-    53h, 5Eh/5Fh, 64h, 66h code page (437), plus the earlier file/handle batch.
-    **All five real 6.22 apps report `INT21 unimplemented: none`** — MEM, CHKDSK, TREE,
-    ATTRIB, COMMAND.COM.
-  ▶ **BIOS: eight interrupts planted** (11h/12h/13h/14h/15h/17h/25h/26h) — every one was a
-    bare IRET before, handing the caller its own registers back. New STAGE2 line reports
-    partial/unimplemented BIOS services.
-  ▶ **#39 VIDEO MODES: the epic's named defect is fixed.** There is now a MODE TABLE
-    (`vid_modes[]`): text 0/1/2/3/7 with real geometry (mode 0 is 40 columns, not 80), planar
-    0Dh/0Eh/0Fh/10h/11h/12h with per-mode resolution, linear 13h. The renderer follows
-    `st->mkind` + `st->gw/gh` instead of branching on 12h/13h only, so **11h no longer shows a
-    text screen while the program writes pixels**. CGA 4/5/6 are marked UNSUPPORTED and LOUD
-    rather than approximated -- their two-bank interleaved B800 layout shares nothing with the
-    planar path, and quietly showing text is the failure mode #27 exists to remove.
-
-★★ **TWO SCAFFOLDING BUGS FOUND THIS ROUND, both of which would have corrupted future work:**
-  1. **DOS calls that RETURN A SEGMENT IN DS** (1Bh, 1Ch, 32h, 52h) broke the probes' own
-     output: every probe store is DS-relative, so the probe wrote its state into DOS's segment
-     and printed labels read from there -- the dump came out as unlabelled hex, then as
-     fragments of executable code. Fixed IN `probe_capture` (restores DS=CS on exit, after
-     capturing the guest's DS faithfully), not per-probe, so it cannot be forgotten.
-  2. **The oracle harness decoded helper output as UTF-8**, so any probe whose buffer dump held
-     a byte above 0x7F aborted the whole run with a UnicodeDecodeError. Now CP437. The harness
-     must never be the thing that fails on unusual data — that is the data worth seeing.
-
-★★★★★ **#30 EXEC (4Bh) WORKS — INT 21h IS 103/103. host v166.**
-    EXEC: "P_CHILD.COM"
-    EXEC: child at seg=0x1101 entry=1101:0100 (COM) depth=01
-    EXEC: child exited rc=0x2a, parent resumed (depth=00)
-  Oracle-matched on all three properties that matter: the child RAN, the parent RESUMED at the
-  instruction after its INT 21h, and the child's EXIT CODE came back through AH=4Dh.
-  ▶ **HOW THE RETURN WORKS — the load-bearing idea.** The parent entered via `INT 21h`, so the
-    CPU pushed FLAGS/CS/IP on ITS stack and we are inside our BOP stub. We snapshot the parent's
-    ENTIRE frame — including CS:IP pointing AT the BOP and SS:SP pointing at that IRET frame —
-    then overwrite it with the child's entry state. On child exit we put the frame back and step
-    EIP past the BOP, so the stub's own IRET pops the parent's own frame and lands exactly where
-    EXEC returning normally would have. **No stack is unwound by hand.** Nesting stack is 8 deep
-    (`g_exec[]` in main.c); child memory is freed on exit.
-  ▶ SPLIT BY LAYER: `dos_int21` only RECORDS the request (path + parameter block) and sets
-    `exec_pending`; the host's `exec_begin()` does the load and the transfer, because the loader,
-    file I/O and the guest register frame all live there.
-  ▶ **A .COM OWNS ALL OF MEMORY, so EXEC returns AX=0008 until the parent gives some back.**
-    The probe shrinks itself with 4Ah first — that is not a workaround, it is what COMMAND.COM
-    does before launching anything. Worth knowing before diagnosing an "out of memory" EXEC.
-  ▶ AL=01 (load-without-execute) and AL=03 (overlay) are LOUD-unimplemented, not silent.
-  ▶ NEW: probes can ship companion files via a `<probe>.deps` sidecar, and all three hosts now
-    run a probe FROM ITS OWN DIRECTORY so a relative companion path resolves everywhere.
-
-★★★★★ **ROUND 4 (host v170): DOS 103/103, BIOS COMPLETE. ALL 15 PROBES CLEAN.**
-  ▶ **#39 CGA modes 4/5/6 now RENDER.** They were the last "unsupported" modes and the layout
-    is why: rows INTERLEAVE between two 8 KB banks at B800 (even rows from 0, odd from 0x2000)
-    and pixels are 2 bits (4/5) or 1 bit (6), packed high-bit-first. Nothing is shared with the
-    planar path — approximating them with a text screen was never going to work.
-  ▶ **#41 palette complete**: 10h AL=00/01/02/03/07/08/09/13/15/17/1A/1B, plus **0Bh** (border +
-    CGA palette), **0Dh** (read pixel), **07h** (scroll DOWN — 06h scrolled up and 07h fell
-    through to nothing, so downward scrolls silently did nothing), **1Ch** save/restore state.
-  ▶ **#40 character generator**: 11h AL=x1-x4 ROM font selection and AL=20-24 graphics font
-    pointers. User-font LOADS (AL=x0) are LOUD — we render from our own tables, so accepting a
-    user font would silently draw the wrong glyphs.
-  ▶ **#42 VESA complete**: 4F03/06/07/08/09. 4F0A (PM interface) and 4F15 (DDC) report NOT
-    SUPPORTED rather than returning success with a null pointer a client would call into.
-  ▶ **#46 INT 20h/27h/28h/29h planted.** 29h (fast console out) was an IRET that swallowed
-    output silently.
-
-★★ **A REGRESSION I CAUSED AND THE SELFTEST CAUGHT — the reason that gate exists.**
-  I planted INT 20h with **BOP number 0x20 — which is ALREADY the INT 21h handler's**. The new
-  BIOS dispatch sits ahead of INT 21h, so it intercepted EVERY INT 21h call as "terminate
-  program": selftest exited at its first DOS call with no output at all. BOP numbers are a
-  SHARED NAMESPACE across DOS, BIOS, XMS (0x43) and DPMI (0x50-0x57). INT 20h now uses BOP 0x30
-  and the table is {vector, bopnum} pairs so the two can differ. **Check the namespace before
-  adding a BOP.**
-
-▶ **PROBE HYGIENE, prompted by making every host run from its own directory:** several probes
-  were comparing values that describe WHERE THE PROBE IS rather than what DOS does — the default
-  drive, the current directory, the volume serial, truename's base. Those are now dumped but not
-  compared, with the reason recorded. Also dropped: AX after 47h/60h/69h, which RBIL documents as
-  destroyed and which the hosts duly disagree on.
-  ► And a real fidelity fix it exposed: FCB open now fills in the RESOLVED DRIVE (DOS replaces a
-    "default drive" 0 with the actual drive; we were leaving the caller's 0).
-
-▶ **54 recorded rationales** in `tools/dostest/oracle-rules.json`. Every DOSBox divergence is
-  explained, and in each case **we match the genuine kernel** — including the CP437 collating
-  table, where DOSBox fails to fold lower case onto upper and ours is byte-identical to 6.22's.
-
-★★★★ **MODE 12h: ROOT-CAUSE HUNT. One real deadlock FIXED; the remaining blocker is
-KERNEL-SIDE and is the next piece of work.**
-
-▶ **SCOPE, from the QuickBASIC demos in `demos/` (sources in `demos/src`):**
-    SCREEN 12 — BLIT, BOUNCEBX, BUBBLES, MATRIX_1, MATRIX_2, MOUSE   **6 of 10, all broken**
-    SCREEN 13 — CAVE, GFXCOPY, PALETTE                                 work (PALETTE confirmed)
-    SCREEN 0  — VS87
-  Matches the user's recollection exactly ("the mode 12h ones never did, at least not very
-  well"). Skyroads is 13h, which is why our one game never touched this path.
-
-★★★ **FIXED: `host_interp()` ran up to 2,000,000 guest instructions WITH NO WAY TO TAKE AN
-INTERRUPT.** BLIT's outer loop is `DO WHILE INKEY$ = ""` — it can only END when an interrupt
-fires. Escalated to the interpreter, it burned the whole cap, returned, re-faulted,
-re-escalated. **TEN I/O events in thirty seconds.** The interpreter is standing in for the CPU
-and a real CPU takes interrupts mid-loop, so it now checks for a pending IRQ every 256
-instructions and yields. **15x improvement (10 -> 157 events, 8x more pixel data).** selftest
-still 8/8. That fix stands on its own regardless of the rest.
-
-★★★ **THE REMAINING BLOCKER: ARMING THE A0000 PAGE TRAP STOPS THE GUEST RUNNING.**
-    trap ON  -> io_events = 10,          guest frozen at 0050:0037 in 58/60 heartbeats
-    trap OFF -> io_events = 22,532,292,  guest running QB code, PC moving every sample
-  `PAGE_NOACCESS` and `PAGE_READONLY` behave IDENTICALLY, so it is not reads-vs-writes: it is
-  protecting that range at all. Diagnostic knob added: **`noa000.flag` on the share** disables
-  the trap (absent = normal). Delete it after use.
-  ► With the trap off the guest's real inner loop is visible at its PC:
-    `DEC DX / MOV AL,07 / OUT DX,AL / INC DX / MOV AL,0F / OUT DX,AL` — per-pixel VGA register
-    reprogramming, exactly what the batching interpreter exists to absorb.
-
-▶ **RULED OUT BY MEASUREMENT — do not re-investigate these:**
-  • **The mode table** (#39). Resolves 12h correctly: `mode=0x12/kind=01/640x480`. New
-    `STAGE2: mode sets:` line proves it.
-  • **The planar write engine.** Complete and correct — 4 write modes, set/reset, ALU, bit
-    mask, latches. I nearly rewrote working code TWICE on the strength of a screenshot.
-  • **The IVT.** `ivt08=0050:0034 ivt1C=0050:003a`, and QuickBASIC has NOT hooked either.
-  • **Async IRQ injection.** 545 successes, **zero bails**, zero nest-blocks.
-  • **The "mode-12h MOV-store decoder gap"** from the M3 notes: `interp-refused=0`. The
-    interpreter never declines an opcode. That lead is DEAD.
-  • **Unhandled events.** None — no `STAGE2: stop event` line; every event is serviced.
-
-▶ **THE LIKELY SHAPE OF THE ANSWER.** The M3 planar trap was **VM-confirmed on HVF, never on
-  real hardware**, and there is precedent for exactly this class of difference: session 8 found
-  HVF reflects IOPL-0 I/O as event 0 while real silicon uses event 3. So the A0000 trap may
-  simply never have worked on the rig. Next step is kernel-side: **why does VirtualProtect on
-  A0000 stall `VdmStartExecution`** — same class of work as the #18 reflect RE, not a patch.
-  ► If that proves hard, the alternative is to stop trapping altogether and drive the
-    INTERPRETER from mode set. It already runs the guest correctly and now yields properly, and
-    it needs no page protection at all.
-
-▶ **A METHOD NOTE WORTH KEEPING.** I called this "a regression I introduced today" on the
-  strength of our new output differing from our old. **Neither was correct** — the oracle showed
-  16 colours, both builds showed 2. Different is not wrong when nothing is right. The reference
-  is the ORACLE, never our own previous build; one oracle run settled in seconds what an hour of
-  comparing our own screenshots could not. (`dosoracle.py run BLIT.EXE --timeout 22 --screenshot`
-  — the timeout path is currently the only way to get pixels out of the oracle.)
-
-▶▶ RESUME — NEXT STEPS (in order):
-  1. **RE the kernel's interrupt-queue interface** (the agreed direction). Find the NtVdmControl
-     service real ntvdm uses to queue a hardware interrupt into a running VDM -- i.e. what makes the
-     kernel break out of V86 and hand us an event. Landmarks are already mapped (see the session-3/
-     5/7/8 RE notes below, docs/research/dpmi-under-ntvdmcontrol.md, /tmp/ntvdmex-re/ntoskrnl.exe
-     with symbols, r2 base 0x400000, KernBase 0x804d7000). Confirm with the Skyroads run: success =
-     `irqn_inj` becomes non-zero and the game leaves its INT 1Ch handler.
-     ALTERNATIVES if that proves expensive: (a) force periodic guest yields so an injection point
-     always exists (cheaper, less faithful, costs overhead on every run); (b) park Skyroads and take
-     DOOM instead -- its setup can select no-sound and the 32-bit extender path is already proven,
-     so it exercises a different axis while this waits.
-  2. Once IRQs land: re-run Skyroads expecting the intro to ANIMATE (frames currently go static
-     after 3), then drive it to the cockpit; then Doom with sound.
-  3. Calibrate the OPL envelope rates against a reference recording (`OPL_EG_ANCHOR`), and decide
-     whether SB stereo needs un-folding.
-  4. Claim ports 0x20/0x21 with a PIC VDD. Skyroads writes EOI to 0x20 and it currently goes
-     nowhere; harmless today but it means we ignore IRQ masking, which will matter for games that
-     mask/unmask around critical sections.
-  5. `git push` -- 22 commits are sitting local.
-
-▶ HARNESS GOTCHAS LEARNED THIS SESSION (all cost real time):
-  • **SMB ATTRIBUTE CACHING HIDES RESULT FILES.** `ls result_x.log` can say "No such file" while the
-    file exists. Force a readdir first: `ls /tmp/xpshare/ >/dev/null` then stat/tail. Several
-    "TIMEOUT" conclusions this session were this, not a failed run.
-  • **`build.sh 2>&1 | grep -E "error|..." && cp ...` FIRES ON FAILURE** -- grep exits 0 when it
-    MATCHES the error text, so the `&&` chain happily deploys a stale binary. Cost a confusing run
-    against the wrong host. Check the version string in the log (`grep -o 'dpmi-harness-v[0-9]*'`)
-    whenever a result looks like it ignored your change.
-  • The BOX CLOCK RUNS ~30s AHEAD of the Mac. When comparing watcher.txt/controld.txt heartbeats to
-    `date`, a "stale" watcher may be perfectly fine. controld fresher than watcher = watcher is busy
-    inside `start /wait` (i.e. a test is running), which is normal, not a wedge.
-  • **NEVER poll the BIOS tick by reading 0040:006C directly from a probe.** The host injects INT 08h
-    from a loop that only runs when the guest traps, so a pure memory spin on the tick never advances
-    it, never returns, and cannot even be stopped by the headless deadline. It wedged the rig once.
-    Poll with INT 1Ah instead (a BOP -> the host gets a turn). See the note atop iobench.asm.
-  • Test conventions: `.com` guest binaries are TRACKED, native `*_test` binaries are NOT.
 
 ═══════════════════════════════════════════════════════════════════════════════
-██ CHECKPOINT — 2026-08-19 (session 9). SUPERSEDED by session 10 above. ██
+██  PRUNED: SESSIONS 6, 8, 9, 10 (stale restart snapshots)                     ██
 ═══════════════════════════════════════════════════════════════════════════════
 
-▶ RESTART POINT (2026-08-19, IDE restart): HEAD = 2fb8d27 + doc commit; host = dpmi-harness-v81
-  (staged on the share bm/); branch spike/dpmi-16bit-switch; 18 commits UNPUSHED. Working tree clean
-  except the pre-existing untracked files (MAINICON.ico, demos/, scripts/kd_*.py, etc. -- NONE mine).
-  Box = healthy resting state (watcher looping, controld v2 running). REMOTE CONTROL FULLY WORKS:
-  `echo reboot > /tmp/xpshare/control.txt` reboots; `echo kill > .../control.txt` unwedges a hung host;
-  `printf 'capture\r\n' > /tmp/xpshare/capture.flag` enables self-screenshots; fire tests via
-  `printf '<name>\r\n' > /tmp/xpshare/cmd.txt` then read result_<name>.log + shot_<name>_*.bmp.
-  Remount after a reboot: `mount_smbfs -N //guest@192.168.1.34/ntvdmex /tmp/xpshare` (LAN ops need
-  dangerouslyDisableSandbox). THIS SESSION'S ARC: cracked the bare-metal PM wall (v68), proved 32-bit
-  async IRQ visually (pm32irq, remote self-screenshots), built the remote-test rig (controld daemon +
-  game-aware harness + self-screenshots), and brought up Skyroads -- which LOADS + RUNS but is blocked
-  in sound/PIT-timing init (see the "SKYROADS BRING-UP" section below). NEXT = user's call: Doom (DOS/4GW,
-  setup can disable sound) vs the sound epic vs another game. The retro I/O reflect fix (v74/v81) is the
-  key durable bug fix this session -- real-mode direct port I/O now services on this hardware.
-
-★★★ THE BARE-METAL PM WALL IS CRACKED (16-bit AND 32-bit DPMI real-CPU PM run on real
-silicon). Session 8's "the kernel declines to run our PM VDM" diagnosis was WRONG: the
-event-3-at-entry was NOT a kernel PM-init gap -- it was OUR OWN monitor's interrupt-pending
-guard in src/vdm/dpmi_enter.S (label 2, lines 45-51 & 122): when the client enters PM with
-IF=1 (VTIB_EFLAGS_PM=0x202) AND ds:[0x714]&3 signals a pending hardware interrupt, dpmi_enter
-reports VTIB_EVENT=3 and DOES NOT enter the guest (EIP stuck at entry -> the exact session-8
-symptom: event 3 at `mov ax,0x400`, EIP unadvanced). We run PM IN-PROCESS (far-jmp), NOT via
-VdmStartExecution, so while PM executes the kernel is not managing this VDM's interrupt assist
--- [0x714]'s pending bits are STALE real-mode state (a timer IRQ0 latched during the pre-switch
-DOS INT 21h calls). On real 3.3GHz silicon a tick is essentially ALWAYS pending at switch time
-(QEMU+HVF's dilated clock rarely had one) -> the monitor bailed with event 3 forever.
-
-FIX (committed `c0831b1`, host v68): in the main PM loop, on ev==3 clear the stale [0x714]&3
-pending bits and re-enter (bounded to 0x10000 so a genuinely re-arming pending can't spin).
-The guard fires EXACTLY ONCE per run then PM executes free -- confirming the bits are stale,
-not re-arming (as predicted).
-
-BARE-METAL-CONFIRMED via the SMB loop (real-CPU path, g_dpmi_use_interp=0), each ran the
-event-3 guard once then ran to a clean INT 21h 4Ch exit:
-  • dpmitest.com  -- FULL 16-bit DPMI surface: 0400/0100/0205/0204/0900/0901/0300/0301/0303
-      (real-mode callback with NESTED INT 31h+21h inside it). The headline.
-  • outprobe.com  -- 16-bit PM `OUT` to VGA DAC survives + resumes.
-  • pm32io.com    -- 32-bit (D/B=1) PM `OUT` reflects + services.
-  • pm32sw.com    -- the 32-bit MODE SWITCH itself yields a working 32-bit CS; OUT serviced.
-  • pm32flat.com  -- base-0 ~2GB G=1 FLAT selector (the DOS/4GW model) renders via ES:[0A0000h],
-      775 svc calls, clean exit. The 32-bit flat model EXECUTES on real HW.
-
-COMMITS THIS SESSION (branch `spike/dpmi-16bit-switch`, all local -- PUSH when ready):
-  • `242f884` v67 -- route real-HW I/O reflect (event 3) through host_try_io at 4 sites +
-      AUTOEXIT_PATH headless-exit + PM-fault byte-dump diagnostic + filebuf 512KB (session-8 fixes).
-  • `777fd40` -- session-8 checkpoint doc.
-  • `c0831b1` v68 -- THE CRACK (clear stale event-3 pending guard).
-  • `d438552` -- session-9 checkpoint doc.
-  • `afafbcb` v69 -- headless robustness (log cap + PM-loop time cap + byte-dump rate-limit). ← HEAD.
-  Build clean: `./scripts/build.sh` -> build/ntvdmhost.exe (v69, KERNEL32-only). Staged to bm/.
-
-RIG: RECOVERED + GREEN (selftest 8/8). v69 deployed and RE-CONFIRMED on real HW: dpmitest runs
-the full 16-bit DPMI surface + clean 4Ch exit, log is ~3 KB (cap works, no regression).
-
-★ REMOTE-TEST UPGRADE (session 9, box is "not easily accessible" -> minimise human touch):
-  • HOST SELF-SCREENSHOT (v70, commit fee5702): present_ddraw_save_bmp() dumps the 8bpp back-buffer
-    (occlusion-proof) to C:\ntvdmex\shotNN.bmp every ~2s in headless mode (UI-thread timer, capped 40);
-    rt.bat ships them to the share as `shot_<test>_shotNN.bmp`. So GRAPHICAL runs (Skyroads, pm32gfx,
-    mode13, pm32irq box-march) are now verifiable REMOTELY by reading/diffing BMPs -- VNC/monitor no
-    longer needed. Palette byte-order matches gdi_present (0xAARRGGBB -> RGBQUAD). NOT yet end-to-end
-    tested (needs the watcher up).
-  • runwatch.bat now SELF-INSTALLS to `%ALLUSERSPROFILE%\Start Menu\Programs\Startup\ntvdmex-watch.bat`
-    and refreshes watcher.txt every loop (real heartbeat). After ONE bootstrap double-click, every
-    reboot AUTO-STARTS the watcher (box auto-logs in) -> no more per-reboot human action. Combined with
-    v69's headless caps (infinite/wedged runs self-exit in 30s), the rig is now largely hands-off.
-  • Can't bootstrap autostart purely over SMB: guest can mount only ntvdmex + SharedDocs (=All Users\
-    Documents); C$/ADMIN$ are DENIED (simple file sharing), and Startup is outside those shares. So the
-    ONE remaining human action is a single double-click of bm\runwatch.bat; it's self-perpetuating after.
-  • Shares (smbutil view, guest): ntvdmex, SharedDocs (rw), C$/ADMIN$ (denied), IPC$. Ports: 445/139
-    open, 135 closed -> NO remote-exec / remote-shutdown RPC reachable.
-  BM SCRIPTS now snapshotted in scripts/bm/ (rt.bat, runwatch.bat, controld.c).
-
-★ v70 WEDGE + v71 BULLETPROOFING + controld (the recovery story):
-  • v70 added host self-screenshot; a real-mode run (selftest) then HUNG under v70, and the REAL-MODE
-    exec loop had NO headless cap (only the PM loop got one in v69) -> it wedged rt.bat's start/wait
-    permanently. VNC is fully dead now (capture returns NO file after a DOS mode switch) + no remote-exec,
-    so it could not be unwedged remotely -> the box needs a power-cycle. LESSON: any exec path without a
-    headless cap can permanently wedge the rig.
-  • v71 (commit bf43e33) BULLETPROOFS it: (1) the real-mode V86 loop now honours PM_HEADLESS_MS=30s too
-    (a hung real-mode run self-exits -> would have auto-recovered the v70 wedge in 30s); (2) self-capture
-    is now OPT-IN via CAPTURE_FLAG (a file on the share) so non-graphical tests never touch the capture
-    path. With real-mode + PM caps, NO run can permanently wedge the rig again.
-  • controld.exe (commit 2c8a0e8, scripts/bm/controld.c, build-controld.sh): a tiny XP-safe (no-CRT,
-    KERNEL32/USER32/ADVAPI32 only) CONTROL DAEMON, separate from the test watcher, that NEVER runs guest
-    code so it can't wedge. It polls `control.txt` on the share: `reboot`->ExitWindowsEx force reboot,
-    `poweroff`, `kill`->taskkill ntvdmhost (unwedge a hung host). Writes `controld.txt` heartbeat; singleton.
-    rt.bat + runwatch.bat both `start` it (singleton) and rt.bat refreshes the Startup runwatch each run.
-  • BOOTSTRAP DONE (2026-08-19): box power-cycled, watcher auto-started from Startup, controld
-    bootstrapped via rt.bat. PROVEN: controld receives commands (control.txt) + writes controld.txt
-    heartbeat; **`kill` REMOTELY RECOVERED a wedged watcher** (taskkilled a hung ntvdmhost -> start/wait
-    returned -> watcher resumed). NOT yet working: **`reboot`** -- v1's ExitWindowsEx reached the handler
-    but never rebooted (box stayed up, returned to idle) = a privilege/API detail.
-  • controld v2 (commit 6081b81, STAGED as bm/controld_v2.exe): reboot via `shutdown.exe -r -f` primary +
-    ExitWindowsEx fallback that REPORTS GetLastError to the heartbeat; new `quit` command. Can't hot-swap
-    while v1 runs (singleton mutex + .exe file-locked on share, v1 has no quit). runwatch.bat now
-    SELF-UPGRADES controld on start (taskkill controld -> copy controld_v2.exe -> relaunch).
-    ▶ NEXT SESSION (one small action): restart the watcher (or Start->reboot) ONCE -> v2 loads ->
-      `echo reboot > /tmp/xpshare/control.txt` should reboot via shutdown.exe (heartbeat shows the error
-      code if not). Then remote reboot works with no physical access ever again.
-  • ALSO OPEN: v71 `selftest.com` HANGS the watcher (real-mode run; the 30s real-mode cap did NOT fire ->
-    likely hangs INSIDE v86_run/VdmStartExecution so the loop-top cap never runs). controld `kill`
-    recovers it. This hang appeared v70+ (v68 selftest passed) but is NOT the BMP capture (v71 capture is
-    opt-in/off). INVESTIGATE next session: what in v70/v71 makes a real-mode guest wander off. Meanwhile
-    dpmitest (PM path) is the safe smoke-test. HEAD = 6081b81 (12 unpushed).
-
-pm32irq REFRAMED (it was NOT a code bug). `pm32irq.com` is an INFINITE mode-13h animation demo
-(`jmp .frame`; never calls INT 21h 4Ch) -- like animate/bounce/mode13/pm32gfx. Under the headless
-SMB auto-exit harness it ran the PM loop forever (wedged rt.bat's `start /wait` -> wedged the
-watcher) and logged each INT 31h 0400 yield every iteration -> a 148 MB log FLOOD. The 32-bit
-async-IRQ frame code it exercises ALREADY WORKS (dpmi_inject_pm_irq widens the IRET frame to dword
-for 32-bit handlers, run 83; see main.c ~line 2034). v69 hardens the host so no runaway can harm
-the rig again: 4 MB log cap (log.h LOG_MAX_BYTES), a 30 s headless PM-loop wall-clock cap
-(g_headless + PM_HEADLESS_MS -> self-exits so the watcher survives), and byte-dump rate-limit (32).
-  ► RECOVERY (if ever wedged again): NO remote-exec (only SMB 445/139; 135 closed, guest-only, no
-    net/rpcclient/impacket -> a remote `shutdown` RPC is NOT reachable). Blind VNC input works
-    (capture dead): Win+R -> `taskkill /f /im ntvdmhost.exe` -> Enter can clear a hung host, but
-    it's a gamble without a screen (an earlier stray Alt+F4 likely closed the watcher window). With
-    v69's caps a wedge shouldn't recur; worst case, kill ntvdmhost / restart runwatch.bat on the box.
-
-INFINITE VISUAL DEMOS ARE MONITOR-ONLY: pm32irq, pm32gfx, animate, bounce, mode13, blitfast, and
-the vga/vesa demos loop forever and must be watched on the box's PHYSICAL display, NOT the headless
-SMB loop (which auto-times-out at 30 s now, so they no longer wedge -- but you still won't SEE them).
-
-★★★ 2026-08-19: pm32irq VISUALLY CONFIRMED on BARE METAL via the host self-screenshots (fully remote,
-  no monitor). Enabled capture.flag, fired pm32irq.com; host wrote 11 shotNN.bmp (320x200 mode13),
-  rt.bat copied them, I read+analysed them on the Mac: the red 24px box MARCHES x=20->65->116->168->219
-  (wrap at 240) -> 30->81->... driven ONLY by [hits] which is bumped ONLY by the hooked 32-bit PM INT 08h
-  ISR. ⇒ **async IRQ0 injection into a 32-bit PM timer hook WORKS on the real CPU** (the widened dword
-  IRET frame, run 83, is correct) -- the checkpoint's "last 32-bit gap" is CLOSED. The earlier pm32irq
-  "hang" was purely the infinite-demo-under-headless-harness issue (fixed by v71's 30s cap), NOT a broken
-  async path. Self-screenshot pipeline PROVEN end-to-end. PNGs: build/shots/pm32irq_*.png.
-
-★★ 2026-08-19 SKYROADS BRING-UP (real-mode game via the game-aware harness). Skyroads LOADS + RUNS
-  on the host (game rt.bat: folder->C:\game, target SKYROADS.EXE, capture). Surfaced + fixed 3 real host
-  gaps (commit 2fb8d27, host v81): (1) ★ RETRO I/O REFLECT -- on this box the IOPL-0 IN/OUT #GP reflects
-  as event 3 with CS:IP pointing AFTER the faulting insn (EIP already advanced), so host_try_io (decodes
-  AT CS:IP) declined; new host_try_io_retro decodes the IN/OUT ENDING at CS:IP + services w/o advancing
-  EIP (fixes real-mode port I/O generally; Skyroads' IN AL,DX vblank poll now flows); (2) OPL2 detect stub
-  at 388/389 (status bits toggle so detection loops complete; no FM synth); (3) wall-clock PIT pump in the
-  real-mode loop (a heavy I/O-trap loop starves the UI thread that raises IRQ0). BLOCKED: Skyroads hooks
-  INT 08h and paces its init on the PIT rate IT programs -- needs real timer/OPL emulation (the SOUND EPIC
-  #20/#21), not a quick fix. So Skyroads is sound/timing-init-bound. Remote control ALL WORKING now:
-  reboot via `echo reboot > control.txt` (controld v2 shutdown.exe) or the watcher-injection
-  `q&shutdown -r -f -t 00` > cmd.txt; `kill` unwedges; self-screenshots via capture.flag.
-  OPTIONS from here: (a) SOUND EPIC (OPL2 timer + PIT-rate emulation -- unblocks Skyroads + many games);
-  (b) a LESS sound-coupled real-mode game; (c) DOOM (DOS/4GW 32-bit -- the path we cracked; Doom's setup
-  can select no-sound, so it may reach gameplay without the sound epic). HOST NOW v81, staged.
-
-★★★★ **ROUND 3 (host v165): DOS API 102/103 = 99%, BIOS ~70%, OVERALL ~85%.**
-  ▶ **INT 21h: only 4Bh EXEC remains.** Added this round: the FCB group (0Fh-24h, 27h-29h),
-    1Bh/1Ch/1Fh/32h drive params, 26h/55h PSP creation, 31h TSR, 37h switch char ('/'),
-    53h, 5Eh/5Fh, 64h, 66h code page (437), plus the earlier file/handle batch.
-    **All five real 6.22 apps report `INT21 unimplemented: none`** — MEM, CHKDSK, TREE,
-    ATTRIB, COMMAND.COM.
-  ▶ **BIOS: eight interrupts planted** (11h/12h/13h/14h/15h/17h/25h/26h) — every one was a
-    bare IRET before, handing the caller its own registers back. New STAGE2 line reports
-    partial/unimplemented BIOS services.
-  ▶ **#39 VIDEO MODES: the epic's named defect is fixed.** There is now a MODE TABLE
-    (`vid_modes[]`): text 0/1/2/3/7 with real geometry (mode 0 is 40 columns, not 80), planar
-    0Dh/0Eh/0Fh/10h/11h/12h with per-mode resolution, linear 13h. The renderer follows
-    `st->mkind` + `st->gw/gh` instead of branching on 12h/13h only, so **11h no longer shows a
-    text screen while the program writes pixels**. CGA 4/5/6 are marked UNSUPPORTED and LOUD
-    rather than approximated -- their two-bank interleaved B800 layout shares nothing with the
-    planar path, and quietly showing text is the failure mode #27 exists to remove.
-
-★★ **TWO SCAFFOLDING BUGS FOUND THIS ROUND, both of which would have corrupted future work:**
-  1. **DOS calls that RETURN A SEGMENT IN DS** (1Bh, 1Ch, 32h, 52h) broke the probes' own
-     output: every probe store is DS-relative, so the probe wrote its state into DOS's segment
-     and printed labels read from there -- the dump came out as unlabelled hex, then as
-     fragments of executable code. Fixed IN `probe_capture` (restores DS=CS on exit, after
-     capturing the guest's DS faithfully), not per-probe, so it cannot be forgotten.
-  2. **The oracle harness decoded helper output as UTF-8**, so any probe whose buffer dump held
-     a byte above 0x7F aborted the whole run with a UnicodeDecodeError. Now CP437. The harness
-     must never be the thing that fails on unusual data — that is the data worth seeing.
-
-★★★★★ **#30 EXEC (4Bh) WORKS — INT 21h IS 103/103. host v166.**
-    EXEC: "P_CHILD.COM"
-    EXEC: child at seg=0x1101 entry=1101:0100 (COM) depth=01
-    EXEC: child exited rc=0x2a, parent resumed (depth=00)
-  Oracle-matched on all three properties that matter: the child RAN, the parent RESUMED at the
-  instruction after its INT 21h, and the child's EXIT CODE came back through AH=4Dh.
-  ▶ **HOW THE RETURN WORKS — the load-bearing idea.** The parent entered via `INT 21h`, so the
-    CPU pushed FLAGS/CS/IP on ITS stack and we are inside our BOP stub. We snapshot the parent's
-    ENTIRE frame — including CS:IP pointing AT the BOP and SS:SP pointing at that IRET frame —
-    then overwrite it with the child's entry state. On child exit we put the frame back and step
-    EIP past the BOP, so the stub's own IRET pops the parent's own frame and lands exactly where
-    EXEC returning normally would have. **No stack is unwound by hand.** Nesting stack is 8 deep
-    (`g_exec[]` in main.c); child memory is freed on exit.
-  ▶ SPLIT BY LAYER: `dos_int21` only RECORDS the request (path + parameter block) and sets
-    `exec_pending`; the host's `exec_begin()` does the load and the transfer, because the loader,
-    file I/O and the guest register frame all live there.
-  ▶ **A .COM OWNS ALL OF MEMORY, so EXEC returns AX=0008 until the parent gives some back.**
-    The probe shrinks itself with 4Ah first — that is not a workaround, it is what COMMAND.COM
-    does before launching anything. Worth knowing before diagnosing an "out of memory" EXEC.
-  ▶ AL=01 (load-without-execute) and AL=03 (overlay) are LOUD-unimplemented, not silent.
-  ▶ NEW: probes can ship companion files via a `<probe>.deps` sidecar, and all three hosts now
-    run a probe FROM ITS OWN DIRECTORY so a relative companion path resolves everywhere.
-
-★★★★★ **ROUND 4 (host v170): DOS 103/103, BIOS COMPLETE. ALL 15 PROBES CLEAN.**
-  ▶ **#39 CGA modes 4/5/6 now RENDER.** They were the last "unsupported" modes and the layout
-    is why: rows INTERLEAVE between two 8 KB banks at B800 (even rows from 0, odd from 0x2000)
-    and pixels are 2 bits (4/5) or 1 bit (6), packed high-bit-first. Nothing is shared with the
-    planar path — approximating them with a text screen was never going to work.
-  ▶ **#41 palette complete**: 10h AL=00/01/02/03/07/08/09/13/15/17/1A/1B, plus **0Bh** (border +
-    CGA palette), **0Dh** (read pixel), **07h** (scroll DOWN — 06h scrolled up and 07h fell
-    through to nothing, so downward scrolls silently did nothing), **1Ch** save/restore state.
-  ▶ **#40 character generator**: 11h AL=x1-x4 ROM font selection and AL=20-24 graphics font
-    pointers. User-font LOADS (AL=x0) are LOUD — we render from our own tables, so accepting a
-    user font would silently draw the wrong glyphs.
-  ▶ **#42 VESA complete**: 4F03/06/07/08/09. 4F0A (PM interface) and 4F15 (DDC) report NOT
-    SUPPORTED rather than returning success with a null pointer a client would call into.
-  ▶ **#46 INT 20h/27h/28h/29h planted.** 29h (fast console out) was an IRET that swallowed
-    output silently.
-
-★★ **A REGRESSION I CAUSED AND THE SELFTEST CAUGHT — the reason that gate exists.**
-  I planted INT 20h with **BOP number 0x20 — which is ALREADY the INT 21h handler's**. The new
-  BIOS dispatch sits ahead of INT 21h, so it intercepted EVERY INT 21h call as "terminate
-  program": selftest exited at its first DOS call with no output at all. BOP numbers are a
-  SHARED NAMESPACE across DOS, BIOS, XMS (0x43) and DPMI (0x50-0x57). INT 20h now uses BOP 0x30
-  and the table is {vector, bopnum} pairs so the two can differ. **Check the namespace before
-  adding a BOP.**
-
-▶ **PROBE HYGIENE, prompted by making every host run from its own directory:** several probes
-  were comparing values that describe WHERE THE PROBE IS rather than what DOS does — the default
-  drive, the current directory, the volume serial, truename's base. Those are now dumped but not
-  compared, with the reason recorded. Also dropped: AX after 47h/60h/69h, which RBIL documents as
-  destroyed and which the hosts duly disagree on.
-  ► And a real fidelity fix it exposed: FCB open now fills in the RESOLVED DRIVE (DOS replaces a
-    "default drive" 0 with the actual drive; we were leaving the caller's 0).
-
-▶ **54 recorded rationales** in `tools/dostest/oracle-rules.json`. Every DOSBox divergence is
-  explained, and in each case **we match the genuine kernel** — including the CP437 collating
-  table, where DOSBox fails to fold lower case onto upper and ours is byte-identical to 6.22's.
-
-★★★★ **MODE 12h: ROOT-CAUSE HUNT. One real deadlock FIXED; the remaining blocker is
-KERNEL-SIDE and is the next piece of work.**
-
-▶ **SCOPE, from the QuickBASIC demos in `demos/` (sources in `demos/src`):**
-    SCREEN 12 — BLIT, BOUNCEBX, BUBBLES, MATRIX_1, MATRIX_2, MOUSE   **6 of 10, all broken**
-    SCREEN 13 — CAVE, GFXCOPY, PALETTE                                 work (PALETTE confirmed)
-    SCREEN 0  — VS87
-  Matches the user's recollection exactly ("the mode 12h ones never did, at least not very
-  well"). Skyroads is 13h, which is why our one game never touched this path.
-
-★★★ **FIXED: `host_interp()` ran up to 2,000,000 guest instructions WITH NO WAY TO TAKE AN
-INTERRUPT.** BLIT's outer loop is `DO WHILE INKEY$ = ""` — it can only END when an interrupt
-fires. Escalated to the interpreter, it burned the whole cap, returned, re-faulted,
-re-escalated. **TEN I/O events in thirty seconds.** The interpreter is standing in for the CPU
-and a real CPU takes interrupts mid-loop, so it now checks for a pending IRQ every 256
-instructions and yields. **15x improvement (10 -> 157 events, 8x more pixel data).** selftest
-still 8/8. That fix stands on its own regardless of the rest.
-
-★★★ **THE REMAINING BLOCKER: ARMING THE A0000 PAGE TRAP STOPS THE GUEST RUNNING.**
-    trap ON  -> io_events = 10,          guest frozen at 0050:0037 in 58/60 heartbeats
-    trap OFF -> io_events = 22,532,292,  guest running QB code, PC moving every sample
-  `PAGE_NOACCESS` and `PAGE_READONLY` behave IDENTICALLY, so it is not reads-vs-writes: it is
-  protecting that range at all. Diagnostic knob added: **`noa000.flag` on the share** disables
-  the trap (absent = normal). Delete it after use.
-  ► With the trap off the guest's real inner loop is visible at its PC:
-    `DEC DX / MOV AL,07 / OUT DX,AL / INC DX / MOV AL,0F / OUT DX,AL` — per-pixel VGA register
-    reprogramming, exactly what the batching interpreter exists to absorb.
-
-▶ **RULED OUT BY MEASUREMENT — do not re-investigate these:**
-  • **The mode table** (#39). Resolves 12h correctly: `mode=0x12/kind=01/640x480`. New
-    `STAGE2: mode sets:` line proves it.
-  • **The planar write engine.** Complete and correct — 4 write modes, set/reset, ALU, bit
-    mask, latches. I nearly rewrote working code TWICE on the strength of a screenshot.
-  • **The IVT.** `ivt08=0050:0034 ivt1C=0050:003a`, and QuickBASIC has NOT hooked either.
-  • **Async IRQ injection.** 545 successes, **zero bails**, zero nest-blocks.
-  • **The "mode-12h MOV-store decoder gap"** from the M3 notes: `interp-refused=0`. The
-    interpreter never declines an opcode. That lead is DEAD.
-  • **Unhandled events.** None — no `STAGE2: stop event` line; every event is serviced.
-
-▶ **THE LIKELY SHAPE OF THE ANSWER.** The M3 planar trap was **VM-confirmed on HVF, never on
-  real hardware**, and there is precedent for exactly this class of difference: session 8 found
-  HVF reflects IOPL-0 I/O as event 0 while real silicon uses event 3. So the A0000 trap may
-  simply never have worked on the rig. Next step is kernel-side: **why does VirtualProtect on
-  A0000 stall `VdmStartExecution`** — same class of work as the #18 reflect RE, not a patch.
-  ► If that proves hard, the alternative is to stop trapping altogether and drive the
-    INTERPRETER from mode set. It already runs the guest correctly and now yields properly, and
-    it needs no page protection at all.
-
-▶ **A METHOD NOTE WORTH KEEPING.** I called this "a regression I introduced today" on the
-  strength of our new output differing from our old. **Neither was correct** — the oracle showed
-  16 colours, both builds showed 2. Different is not wrong when nothing is right. The reference
-  is the ORACLE, never our own previous build; one oracle run settled in seconds what an hour of
-  comparing our own screenshots could not. (`dosoracle.py run BLIT.EXE --timeout 22 --screenshot`
-  — the timeout path is currently the only way to get pixels out of the oracle.)
-
-▶▶ RESUME — NEXT STEPS (in order):
-  1. DONE (2026-08-19): pm32irq 32-bit async IRQ visually confirmed remotely. Next visuals to grab the
-     same way (set capture.flag, fire, read shot_*.bmp): pm32gfx (32-bit gradient), mode13, and Skyroads
-     (real-mode game -- but MIND the v71 real-mode selftest hang below; a real-mode graphical run may hang
-     -> use controld `kill` to recover).
-  2. A REAL DOS/4GW extender, then DOOM (the acceptance test) -- the 32-bit flat model executes on bare
-     metal (pm32flat) AND 32-bit async timer hooks work (pm32irq), so both prerequisites Doom needs are in.
-  3. Broader INT 31h surface as a real extender demands it (0305/0306 raw switch, page-lock, phys-map).
-  OPEN BUG: v71 selftest.com HANGS the watcher (real-mode; 30s cap didn't fire -> likely hangs INSIDE
-  v86_run so the loop-top check never runs). controld `kill` recovers it. Investigate before trusting
-  real-mode graphical runs (Skyroads). PM-path tests (dpmitest, pm32*) are safe + self-cap at 30s.
-  (Everything above the session-8 banner is now the authoritative state; session-8's "kernel
-   won't run PM" conclusion is SUPERSEDED -- it was our own guard.)
-
-═══════════════════════════════════════════════════════════════════════════════
-██ CHECKPOINT — 2026-08-18 (session 8). SUPERSEDED by session 9 above. ██
-═══════════════════════════════════════════════════════════════════════════════
-
-BIG PICTURE: this session (1) landed runs 83-86 (committed+pushed), then (2) PIVOTED
-TO **BARE-METAL TESTING on a REAL Windows XP box** because QEMU+HVF SIGABRTs on DOS/4GW's
-paged 32-bit PM (`mmu_gva_to_gpa`, see [[hvf-paged-pm-blocker]]). On real silicon: **real
-mode fully works (selftest 8/8)**; **protected mode hit a NEW, OBSERVABLE frontier** (kernel
-returns event 3 the instant we run PM). The HVF VM is effectively RETIRED for this work.
-
-REPO STATE (branch `spike/dpmi-16bit-switch`):
-  • COMMITTED + pushed: `af5246a` (run 86 raw keyboard + runs 83-85), `5928ff6` (E0 keys +
-    per-byte IRQ1 counter + qmp key-hold). HEAD = `5928ff6`.
-  • **UNCOMMITTED (the bare-metal fixes, v65→v67):** `src/host/main.c` + `src/vdm/ntvdm.h`.
-    These are GOOD and bare-metal-confirmed for real mode — COMMIT THEM FIRST on resume:
-      - ntvdm.h: `VDM_EVENT_IO_HW 3` + taxonomy note (real HW reflects I/O as event 3; HVF used 0).
-      - main.c: route event 3 through host_try_io at 4 sites (grep VDM_EVENT_IO_HW); `AUTOEXIT_PATH`
-        marker + auto-exit-on-guest-exit (test mode, line ~2849); `filebuf` 128KB→512KB;
-        the "GH#18 PM-FAULT ev=.. bytes=.." byte-dump diagnostic in the PM loop (~line 2804);
-        version string now `dpmi-harness-v67`.
-  • Host builds clean: `./scripts/build.sh` → build/ntvdmhost.exe (v67). KERNEL32-only.
-  • New scripts (committed? NO — untracked): scripts/build-game-iso.sh, build-doom-iso.sh;
-    games/ is gitignored. tools/dostest/pm32irq.* pm32flat.* were committed in af5246a.
-
-▶▶ THE BARE-METAL TEST RIG — how I drive tests MYSELF (no user clicks). ══════════════════
-  BOX: Dell OptiPlex 760, Core2 E8600 3.33GHz, Quadro FX 1800, 4GB, SB X-Fi, XP Pro SP3.
-       IP = **192.168.1.34**. On the same LAN as this Mac. (Network ops need
-       `dangerouslyDisableSandbox` — LAN IP isn't in the sandbox allowlist.)
-  SMB SHARE (THE reliable control channel): `//192.168.1.34/ntvdmex` (GUEST access, no pw).
-       Mount: `mkdir -p /tmp/xpshare; mount_smbfs -N //guest@192.168.1.34/ntvdmex /tmp/xpshare`
-       Maps to `C:\Documents and Settings\All Users\Documents\ntvdmex` on the box. Read+write.
-  VNC (UltraVNC :5900, pw `NTVDMEX`, mirror driver installed): **INPUT works, CAPTURE is
-       black + WEDGES after any DOS full-screen mode switch** — UNRELIABLE, do NOT depend on
-       it. vncdo venv: `/tmp/vncenv/bin/vncdo -s 192.168.1.34::5900 -p NTVDMEX capture x.png`.
-       (Reboot un-wedges it; capture still black on this Quadro even with mirror driver + accel
-       off + 16bpp — treat VNC as dead for viewing; use SMB + the box's physical monitor.)
-  THE AUTONOMOUS SMB TEST LOOP (robust, VNC-free):
-    1. A WATCHER must be RUNNING on the box: `bm/runwatch.bat` (user double-clicks once in the
-       console; it loops, drops `watcher.txt` heartbeat). If absent on resume, ask user to run it.
-    2. Fire a test:  `printf 'selftest.com\r\n' > /tmp/xpshare/cmd.txt`
-    3. Watcher (~2s poll) runs `rt.bat selftest.com`, which: pulls fresh host from bm/, sets IFEO
-       Debugger→C:\ntvdmex\ntvdmhost.exe, writes target.txt, drops the autoexit marker, runs
-       dosstub (→ntvdm→our host; host AUTO-EXITS when the DOS prog exits), then copies
-       C:\ntvdmex\ntvdmhost.log → `result_selftest.com.log` on the share.
-    4. Read `/tmp/xpshare/result_selftest.com.log`. The host log includes the guest's console
-       output ("==> DOS OUTPUT: [...]") so PASS/FAIL tables are readable.
-  DEPLOY A NEW HOST: build → `cp build/ntvdmhost.exe /tmp/xpshare/bm/ntvdmhost.exe`. rt.bat
-       auto-pulls it every run — no separate stage step. (Bump the version string to confirm.)
-  SHARE LAYOUT: `bm/` = {ntvdmhost.exe(v67), dosstub.com, rt.bat, stageall.bat, runwatch.bat,
-       tests/ (32 binaries: selftest, memtest, xms/ems/timer/mouse/key, io*, mode/vga/vesa,
-       dpmitest, pmfault, pm32*, i310102, dpmiback, ...)}. Root: result_*.log, watcher.txt, cmd.txt.
-  ONLY TEST NTVDMEX (per user): do NOT run stock ntvdm — XP's ntvdm is known-good, and a stock
-       full-screen DOS run is what wedges VNC. NTVDMEX is windowed.
-
-FINDINGS THIS SESSION (bare metal): ════════════════════════════════════════════════════════
-  • **selftest = 8/8 PASS on real hardware** (DOS mem, File I/O, XMS, EMS, PIT, mouse, keyboard,
-    video 13h). Real mode is SOLID. Confirmed autonomously via the SMB loop.
-  • **event-3 = the real-hardware I/O reflect.** HVF reflected IOPL-0 IN/OUT as VTIB_EVENT=0;
-    real silicon uses **VTIB_EVENT=3**. That was the ONLY diff blocking real-mode I/O (Skyroads
-    stopped on `IN AL,DX`). Fixed (VDM_EVENT_IO_HW). host_try_io self-validates so routing is safe.
-  • **dpmitest (16-bit PM): the SWITCH works, the kernel WON'T RUN PM.** svc10/11 install the LDT
-    (CS=0x0f valid, AR=0xfa present/code/DPL3, base 0x1000), then the very first PM step returns
-    **event 3 at a harmless `mov ax,0x0400` (b8 00 04), EIP UNADVANCED** — i.e. the kernel declines
-    to execute our PM VDM. On HVF this class of problem was a SILENT terminate; on real silicon it's
-    an OBSERVABLE event with full state = real #18 progress. Likely cause (matches old #18 RE): stock
-    ntvdm does a fuller PM-run init — `VdmPMCliControl` (NtVdmControl service 13) + PM interrupt-flag
-    control (fcn.0f00532e reads getMSW/PE bit) — that our host skips; HVF was lenient, real silicon isn't.
-  • Current build: `g_dpmi_use_interp = 0` (real-CPU kernel PM path). Interpreter fallback (=1,
-    ran i310102/DPMIBACK on HVF) is UNTESTED on bare metal.
-
-★★★★ **ROUND 3 (host v165): DOS API 102/103 = 99%, BIOS ~70%, OVERALL ~85%.**
-  ▶ **INT 21h: only 4Bh EXEC remains.** Added this round: the FCB group (0Fh-24h, 27h-29h),
-    1Bh/1Ch/1Fh/32h drive params, 26h/55h PSP creation, 31h TSR, 37h switch char ('/'),
-    53h, 5Eh/5Fh, 64h, 66h code page (437), plus the earlier file/handle batch.
-    **All five real 6.22 apps report `INT21 unimplemented: none`** — MEM, CHKDSK, TREE,
-    ATTRIB, COMMAND.COM.
-  ▶ **BIOS: eight interrupts planted** (11h/12h/13h/14h/15h/17h/25h/26h) — every one was a
-    bare IRET before, handing the caller its own registers back. New STAGE2 line reports
-    partial/unimplemented BIOS services.
-  ▶ **#39 VIDEO MODES: the epic's named defect is fixed.** There is now a MODE TABLE
-    (`vid_modes[]`): text 0/1/2/3/7 with real geometry (mode 0 is 40 columns, not 80), planar
-    0Dh/0Eh/0Fh/10h/11h/12h with per-mode resolution, linear 13h. The renderer follows
-    `st->mkind` + `st->gw/gh` instead of branching on 12h/13h only, so **11h no longer shows a
-    text screen while the program writes pixels**. CGA 4/5/6 are marked UNSUPPORTED and LOUD
-    rather than approximated -- their two-bank interleaved B800 layout shares nothing with the
-    planar path, and quietly showing text is the failure mode #27 exists to remove.
-
-★★ **TWO SCAFFOLDING BUGS FOUND THIS ROUND, both of which would have corrupted future work:**
-  1. **DOS calls that RETURN A SEGMENT IN DS** (1Bh, 1Ch, 32h, 52h) broke the probes' own
-     output: every probe store is DS-relative, so the probe wrote its state into DOS's segment
-     and printed labels read from there -- the dump came out as unlabelled hex, then as
-     fragments of executable code. Fixed IN `probe_capture` (restores DS=CS on exit, after
-     capturing the guest's DS faithfully), not per-probe, so it cannot be forgotten.
-  2. **The oracle harness decoded helper output as UTF-8**, so any probe whose buffer dump held
-     a byte above 0x7F aborted the whole run with a UnicodeDecodeError. Now CP437. The harness
-     must never be the thing that fails on unusual data — that is the data worth seeing.
-
-★★★★★ **#30 EXEC (4Bh) WORKS — INT 21h IS 103/103. host v166.**
-    EXEC: "P_CHILD.COM"
-    EXEC: child at seg=0x1101 entry=1101:0100 (COM) depth=01
-    EXEC: child exited rc=0x2a, parent resumed (depth=00)
-  Oracle-matched on all three properties that matter: the child RAN, the parent RESUMED at the
-  instruction after its INT 21h, and the child's EXIT CODE came back through AH=4Dh.
-  ▶ **HOW THE RETURN WORKS — the load-bearing idea.** The parent entered via `INT 21h`, so the
-    CPU pushed FLAGS/CS/IP on ITS stack and we are inside our BOP stub. We snapshot the parent's
-    ENTIRE frame — including CS:IP pointing AT the BOP and SS:SP pointing at that IRET frame —
-    then overwrite it with the child's entry state. On child exit we put the frame back and step
-    EIP past the BOP, so the stub's own IRET pops the parent's own frame and lands exactly where
-    EXEC returning normally would have. **No stack is unwound by hand.** Nesting stack is 8 deep
-    (`g_exec[]` in main.c); child memory is freed on exit.
-  ▶ SPLIT BY LAYER: `dos_int21` only RECORDS the request (path + parameter block) and sets
-    `exec_pending`; the host's `exec_begin()` does the load and the transfer, because the loader,
-    file I/O and the guest register frame all live there.
-  ▶ **A .COM OWNS ALL OF MEMORY, so EXEC returns AX=0008 until the parent gives some back.**
-    The probe shrinks itself with 4Ah first — that is not a workaround, it is what COMMAND.COM
-    does before launching anything. Worth knowing before diagnosing an "out of memory" EXEC.
-  ▶ AL=01 (load-without-execute) and AL=03 (overlay) are LOUD-unimplemented, not silent.
-  ▶ NEW: probes can ship companion files via a `<probe>.deps` sidecar, and all three hosts now
-    run a probe FROM ITS OWN DIRECTORY so a relative companion path resolves everywhere.
-
-★★★★★ **ROUND 4 (host v170): DOS 103/103, BIOS COMPLETE. ALL 15 PROBES CLEAN.**
-  ▶ **#39 CGA modes 4/5/6 now RENDER.** They were the last "unsupported" modes and the layout
-    is why: rows INTERLEAVE between two 8 KB banks at B800 (even rows from 0, odd from 0x2000)
-    and pixels are 2 bits (4/5) or 1 bit (6), packed high-bit-first. Nothing is shared with the
-    planar path — approximating them with a text screen was never going to work.
-  ▶ **#41 palette complete**: 10h AL=00/01/02/03/07/08/09/13/15/17/1A/1B, plus **0Bh** (border +
-    CGA palette), **0Dh** (read pixel), **07h** (scroll DOWN — 06h scrolled up and 07h fell
-    through to nothing, so downward scrolls silently did nothing), **1Ch** save/restore state.
-  ▶ **#40 character generator**: 11h AL=x1-x4 ROM font selection and AL=20-24 graphics font
-    pointers. User-font LOADS (AL=x0) are LOUD — we render from our own tables, so accepting a
-    user font would silently draw the wrong glyphs.
-  ▶ **#42 VESA complete**: 4F03/06/07/08/09. 4F0A (PM interface) and 4F15 (DDC) report NOT
-    SUPPORTED rather than returning success with a null pointer a client would call into.
-  ▶ **#46 INT 20h/27h/28h/29h planted.** 29h (fast console out) was an IRET that swallowed
-    output silently.
-
-★★ **A REGRESSION I CAUSED AND THE SELFTEST CAUGHT — the reason that gate exists.**
-  I planted INT 20h with **BOP number 0x20 — which is ALREADY the INT 21h handler's**. The new
-  BIOS dispatch sits ahead of INT 21h, so it intercepted EVERY INT 21h call as "terminate
-  program": selftest exited at its first DOS call with no output at all. BOP numbers are a
-  SHARED NAMESPACE across DOS, BIOS, XMS (0x43) and DPMI (0x50-0x57). INT 20h now uses BOP 0x30
-  and the table is {vector, bopnum} pairs so the two can differ. **Check the namespace before
-  adding a BOP.**
-
-▶ **PROBE HYGIENE, prompted by making every host run from its own directory:** several probes
-  were comparing values that describe WHERE THE PROBE IS rather than what DOS does — the default
-  drive, the current directory, the volume serial, truename's base. Those are now dumped but not
-  compared, with the reason recorded. Also dropped: AX after 47h/60h/69h, which RBIL documents as
-  destroyed and which the hosts duly disagree on.
-  ► And a real fidelity fix it exposed: FCB open now fills in the RESOLVED DRIVE (DOS replaces a
-    "default drive" 0 with the actual drive; we were leaving the caller's 0).
-
-▶ **54 recorded rationales** in `tools/dostest/oracle-rules.json`. Every DOSBox divergence is
-  explained, and in each case **we match the genuine kernel** — including the CP437 collating
-  table, where DOSBox fails to fold lower case onto upper and ours is byte-identical to 6.22's.
-
-★★★★ **MODE 12h: ROOT-CAUSE HUNT. One real deadlock FIXED; the remaining blocker is
-KERNEL-SIDE and is the next piece of work.**
-
-▶ **SCOPE, from the QuickBASIC demos in `demos/` (sources in `demos/src`):**
-    SCREEN 12 — BLIT, BOUNCEBX, BUBBLES, MATRIX_1, MATRIX_2, MOUSE   **6 of 10, all broken**
-    SCREEN 13 — CAVE, GFXCOPY, PALETTE                                 work (PALETTE confirmed)
-    SCREEN 0  — VS87
-  Matches the user's recollection exactly ("the mode 12h ones never did, at least not very
-  well"). Skyroads is 13h, which is why our one game never touched this path.
-
-★★★ **FIXED: `host_interp()` ran up to 2,000,000 guest instructions WITH NO WAY TO TAKE AN
-INTERRUPT.** BLIT's outer loop is `DO WHILE INKEY$ = ""` — it can only END when an interrupt
-fires. Escalated to the interpreter, it burned the whole cap, returned, re-faulted,
-re-escalated. **TEN I/O events in thirty seconds.** The interpreter is standing in for the CPU
-and a real CPU takes interrupts mid-loop, so it now checks for a pending IRQ every 256
-instructions and yields. **15x improvement (10 -> 157 events, 8x more pixel data).** selftest
-still 8/8. That fix stands on its own regardless of the rest.
-
-★★★ **THE REMAINING BLOCKER: ARMING THE A0000 PAGE TRAP STOPS THE GUEST RUNNING.**
-    trap ON  -> io_events = 10,          guest frozen at 0050:0037 in 58/60 heartbeats
-    trap OFF -> io_events = 22,532,292,  guest running QB code, PC moving every sample
-  `PAGE_NOACCESS` and `PAGE_READONLY` behave IDENTICALLY, so it is not reads-vs-writes: it is
-  protecting that range at all. Diagnostic knob added: **`noa000.flag` on the share** disables
-  the trap (absent = normal). Delete it after use.
-  ► With the trap off the guest's real inner loop is visible at its PC:
-    `DEC DX / MOV AL,07 / OUT DX,AL / INC DX / MOV AL,0F / OUT DX,AL` — per-pixel VGA register
-    reprogramming, exactly what the batching interpreter exists to absorb.
-
-▶ **RULED OUT BY MEASUREMENT — do not re-investigate these:**
-  • **The mode table** (#39). Resolves 12h correctly: `mode=0x12/kind=01/640x480`. New
-    `STAGE2: mode sets:` line proves it.
-  • **The planar write engine.** Complete and correct — 4 write modes, set/reset, ALU, bit
-    mask, latches. I nearly rewrote working code TWICE on the strength of a screenshot.
-  • **The IVT.** `ivt08=0050:0034 ivt1C=0050:003a`, and QuickBASIC has NOT hooked either.
-  • **Async IRQ injection.** 545 successes, **zero bails**, zero nest-blocks.
-  • **The "mode-12h MOV-store decoder gap"** from the M3 notes: `interp-refused=0`. The
-    interpreter never declines an opcode. That lead is DEAD.
-  • **Unhandled events.** None — no `STAGE2: stop event` line; every event is serviced.
-
-▶ **THE LIKELY SHAPE OF THE ANSWER.** The M3 planar trap was **VM-confirmed on HVF, never on
-  real hardware**, and there is precedent for exactly this class of difference: session 8 found
-  HVF reflects IOPL-0 I/O as event 0 while real silicon uses event 3. So the A0000 trap may
-  simply never have worked on the rig. Next step is kernel-side: **why does VirtualProtect on
-  A0000 stall `VdmStartExecution`** — same class of work as the #18 reflect RE, not a patch.
-  ► If that proves hard, the alternative is to stop trapping altogether and drive the
-    INTERPRETER from mode set. It already runs the guest correctly and now yields properly, and
-    it needs no page protection at all.
-
-▶ **A METHOD NOTE WORTH KEEPING.** I called this "a regression I introduced today" on the
-  strength of our new output differing from our old. **Neither was correct** — the oracle showed
-  16 colours, both builds showed 2. Different is not wrong when nothing is right. The reference
-  is the ORACLE, never our own previous build; one oracle run settled in seconds what an hour of
-  comparing our own screenshots could not. (`dosoracle.py run BLIT.EXE --timeout 22 --screenshot`
-  — the timeout path is currently the only way to get pixels out of the oracle.)
-
-▶▶ RESUME — NEXT STEPS (in order): ════════════════════════════════════════════════════════
-  0. COMMIT the uncommitted bare-metal fixes (event-3, auto-exit, filebuf, PM-fault diagnostic).
-  1. CRACK the PM-entry event 3 (the Doom/DOS4GW gate, now tractable because observable):
-     (a) on the unhandled event 3, try RESUME/step a few times — does EIP advance (per-instruction
-         trap) or stick (hard "won't run PM")? (b) RE stock ntvdm's PM-run path and replicate the
-         `VdmPMCliControl`/service-13 + MSW/PE init before VdmStartExecution; (c) confirm whether a
-         PM `C4 C4` BOP reflects as event 4 on real HW (it did on HVF) — if PM BOPs also changed, the
-         INT-patch scheme needs the same event-3 treatment.
-  2. Quick win option: build with `g_dpmi_use_interp = 1`, fire `i310102.exe` / `dpmiback.com` — proves
-     16-bit DPMI works on bare metal via the interpreter regardless of the kernel PM issue.
-  3. Skyroads should now render (event-3 I/O fix) — but it's graphical, and VNC viewing is dead;
-     needs the user's physical monitor, or a working capture. Real-mode game validation still pending.
-
-HVF VM: retired for this work but still on disk (vm/xp.qcow2). The Doom shareware was extracted to
-  C:\DOOMS on that VM (irrelevant now). Do NOT chase DOS/4GW on HVF — it SIGABRTs on paged PM.
-
-───────────────────────────────────────────────────────────────────────────────────────────────
-(Everything below is the SESSION-7 checkpoint — HISTORICAL context; superseded by the above.)
-───────────────────────────────────────────────────────────────────────────────────────────────
+  These were "RESTART POINT" blocks — HEAD hashes, unpushed-commit counts, working
+  -tree state on branch `spike/dpmi-16bit-switch`. Every one of those facts is now
+  WRONG, and stale operational state in a rehydration doc is worse than none.
+  Removed 2026-08-22; recoverable from git history. What they established that still
+  matters is kept in memory and in docs/research/dpmi-under-ntvdmcontrol.md:
+    * **session 8** — the pivot to BARE-METAL testing (QEMU+HVF SIGABRTs on DOS/4GW
+      paged 32-bit PM); real mode 8/8 on real silicon.
+    * **session 9** — THE CRACK: 16- AND 32-bit DPMI real-CPU PM RUN on bare metal.
+      Session 8's "the kernel won't run PM" was OUR OWN `dpmi_enter.S`
+      interrupt-pending guard firing on a STALE `[0x714]&3`; fix v68 `c0831b1`.
+      (Referenced from memory as "return-ntvdm.md session-9" — full detail is in
+      docs/research/dpmi-under-ntvdmcontrol.md, runs 65-79.)
+    * **session 10** — host v97 iteration on the same track.
+    * **session 6** — power-down snapshot; runs 78-79 (async IRQ0 injection, the
+      D/B-aware `host_try_io_pm`).
+  The KD / GH #18 history that sat at the end of this file is likewise in
+  [[kd-guest-debugger-ops]] and the research doc — including run 71, whose verdict
+  (a raw PM #GP silently terminates the VDM) is quoted in DO-NOT-RE-SPEND above.
 
 ═══════════════════════════════════════════════════════════════════════════════
 ██ CHECKPOINT — 2026-08-18 (session 7). ██
@@ -3007,103 +1763,3 @@ HARNESS LESSONS (hard-won this session): **ONE VDM/probe at a time** — 4 concu
   `python3 scripts/qmp.py cd <abs-iso>`. Only ONE qemu at a time. See [[vdm-host-test-harness]].
 ═══════════════════════════════════════════════════════════════════════════════
 
-═══════════════════════════════════════════════════════════════════════════════
-██ POWER-DOWN CHECKPOINT — 2026-08-13 (session 6). SUPERSEDED — history below. ██
-═══════════════════════════════════════════════════════════════════════════════
-
-WHY THIS EXISTS: the PC was powered down mid-track. Everything needed to resume cold
-is in this banner; the dated session logs below are history/detail.
-
-REPO STATE (branch `spike/dpmi-16bit-switch`):
-  • 3 LOCAL commits, NOT pushed to origin — `735637d` (run 78), `b5e2c5c` (run 79),
-    `a1ee68a` (handoff). `git log origin/spike/dpmi-16bit-switch..HEAD` to see them.
-    Decide whether to `git push` on resume (was left unpushed intentionally).
-  • Working tree clean except pre-existing untracked files (MAINICON.ico, demos/,
-    scripts/kd_*.py, scripts/trace_break.py) — NONE are mine this session; leave them.
-  • Host builds clean: `./scripts/build.sh` → build/ntvdmhost.exe. tmrhook.com assembles.
-
-VM STATE: powered OFF, clean. No qemu running. Backup intact at
-  vm/xp-debugonly-backup.qcow2 (restore → vm/xp.qcow2 if XP wedges). This session did
-  NOT boot the VM (user deferred VM-confirm to keep momentum). So TWO things are unverified.
-
-WHAT WAS DONE THIS SESSION (detail in the SESSION 6 block just below, + docs runs 78-79):
-  • run 78 = #2b async IRQ0 injection into a hooked PM INT 08h — IMPLEMENTED, code compiles,
-    but NOT VM-confirmed.
-  • run 79 = #3 (32-bit/DOS4GW) kickoff — landed D/B-aware host_try_io_pm (safe, no
-    regression) + a full line-referenced 32-bit plan. Core 32-bit work NOT started (needs VM).
-
-▶▶ RESUME — DO THESE TWO, IN ORDER (both need the XP VM booted):
-  1. CONFIRM run 78. Boot VM (`./scripts/xp-vm.sh run`; ~5-6 min, poll screendumps until a
-     stable non-black/non-loading frame >2MB). Trigger `tmrhook.com` via an AUTORUN CD with a
-     FRESH volume label (hdiutil makehybrid; XP caches autorun by label) — the runner is
-     tools/dostest/tmhrun.bat. Take 2 QMP screendumps ≥1 s apart: the red box should MARCH
-     across mode 13h with NO input and NO INT 1Ah polling → proves the host is injecting IRQ0
-     into the client's own PM INT 08h handler ~18.2×/s. If it marches, mark run 78 a FACT
-     (update docs/research/dpmi-under-ntvdmcontrol.md run 78 + [[dpmi-realcpu-pm]] memory).
-  2. START #3 for real. FIRST PROBE: write a minimal 32-bit client (16-bit DPMI entry → alloc a
-     code selector → INT 31h 0009 set access 0xFA + D/B bit → far-jmp into 32-bit → a 32-bit
-     `OUT 0x3C8,AL` → report), the smallest test of "does the kernel reflect a 32-bit PM I/O as
-     event 0" (the run-72 gate, for 32-bit). If yes, proceed down the run-79 plan: honor
-     client_is_32bit in src/vdm/dpmi.c switch as a base-0 ~2GB G=1 flat selector (NOT 4GB — XP
-     NtSetLdtEntries rejects flat-4GB; stock ntvdm runs the same ~2GB cap, so DOS4GW is reachable
-     to parity); 1687 BX bit0=1; arm VTIB_FLT_FLAG with client width; widen the 2 catcher IRET
-     frames (dpmi_run_callback, dpmi_inject_pm_irq) to dword EFLAGS/CS/EIP; gate the EIP/off
-     &0xFFFF masks on dpmi_sel_is32(). Full inventory = docs run 79.
-
-HARNESS GOTCHAS (hard-won): only ONE qemu at a time (`pkill -9 -f qemu-system-x86_64` before a
-  fresh launch); never `rm vm/qmp.sock` while qemu holds it; QMP send-key is LOSSY → always
-  trigger clients via autorun CD (fresh label each mount); never `pkill` a KD session mid-halt
-  (stale-halt wedge = reboot-only). Standing directive: DPMI is NOT done — measure against the
-  games bar (Doom/Skyroads/ZAR playable), not the last milestone (see [[dpmi-completeness-directive]]).
-═══════════════════════════════════════════════════════════════════════════════
-
-Resume NTVDMEX — GH #18 real-CPU protected mode, via the guest kernel debugger. Session 3 SOLVED the KD tooling (the ~28 "wall" is gone) — the debugger is now a working, reliable instrument. North star unchanged (superset of XP-32 ntvdm; bar = Doom/Skyroads/ZAR).
-
-★★★ SESSION 6 (2026-08-13) — runs 78-79 committed on `spike/dpmi-16bit-switch` (in sync w/ origin as of session start; new commits `735637d` run 78, `b5e2c5c` run 79 are LOCAL, push when ready). VM was NOT booted this session (user deferred VM-confirm to keep momentum). TWO deliverables:
-  • RUN 78 (#2b async IRQ0 injection) — IMPLEMENTED, **VM-CONFIRM PENDING**. `dpmi_inject_pm_irq()` in src/host/main.c: on a latched IRQ0, if the client hooked INT 08h in PM (`g_pm_int[8]`, via 0205) and `g_dpmi_vi`, snapshot the interrupted PM ctx, push a 16-bit IRET frame → PM-return catcher on the client stack, vector to the handler, run it through the shared dispatcher, restore ctx on IRET (clears/restores g_dpmi_vi like a real INT). Main-loop wiring keeps polled `pit_int08` + adds `g_pm_irq0_latch` (survives CLI) + `g_in_pm_irq` guard. Catcher-selector install factored to shared `dpmi_ensure_pmret_sel()`. Probe `tools/dostest/tmrhook.asm` (+ `tmhrun.bat`): HOOKS INT 08h; ISR bumps a counter; box marches off the counter with NO INT 1Ah polling → movement proves injection. **CONFIRM: run `D:\tmhrun.bat` via autorun CD; 2 screendumps ≥1s apart, box should march.**
-  • RUN 79 (#3 32-bit kickoff) — `host_try_io_pm` now **D/B-aware** (new `dpmi_sel_is32()` reads `g_ldt[].flags&0x4`; picks default opsize + full-EIP step from it). PROVABLY no regression: no current client sets D/B (none uses INT 31h 0009), so all D=0 clients decode identically. Docs run 79 = the full line-referenced 32-bit inventory + ordered plan. RESUME #3 (NEEDS VM): (1) honor `client_is_32bit` in `src/vdm/dpmi.c` switch — build a **base-0 ~2GB G=1 flat** selector (NOT 4GB: XP `NtSetLdtEntries` rejects flat-4GB; stock ntvdm runs under the same ~2GB cap, so DOS4GW reachable to parity); (2) 1687 BX bit0=1; (3) arm `VTIB_FLT_FLAG` with client width; (4) widen the two catcher IRET frames (`dpmi_run_callback`, `dpmi_inject_pm_irq`) to dword EFLAGS/CS/EIP when target is 32-bit; (5) gate the `EIP/off & 0xFFFF` masks on `dpmi_sel_is32`. **FIRST PROBE:** a minimal 32-bit client (16-bit DPMI entry → alloc code sel → 0009 set 0xFA+D/B → far-jmp 32-bit → 32-bit `OUT 0x3C8` → report) — smallest test of "does the kernel reflect 32-bit PM I/O as event 0" (the run-72 gate, for 32-bit).
-
-★★★ SESSION 4 (2026-08-11) — THE FAULT-TRIGGER QUESTION IS ANSWERED (and Session-3's recommendation below is REFUTED). Session 3 said "use a BOP-based DPMI trigger (dpbrun/i31run), NOT raw pmfault." **WRONG — VM-confirmed via KD.** A BOP client can NEVER reach the reflect at 0x4f67f8: NTVDM BOPs are `C4 C4` = an invalid LES encoding ⇒ #UD ⇒ KiTrap06 ⇒ VdmDispatchBop, whereas 0x4f67f8 hangs off #GP ⇒ KiTrap0D (via the "BOP-only" gate 0x565041). DIFFERENT TRAP VECTORS. Proof: ran DPMIBACK on the real-CPU path (host v62, g_dpmi_use_interp=0) with the reflect bp armed — it ran end-to-end (PM switch, 0301 round-trip, clean exit) and the bp was NEVER hit (0 serviced). ⇒ **ONLY a raw privileged-instruction #GP (pfrun/pmfault HLT) routes toward 0x4f67f8.** So the correct trigger is `D:\pfrun.bat` after all — Session 3 had the polarity backwards.
-  TOOLING: built `scripts/pmfault_observe.py` — classifies every KD halt (reflect-bp / benign break-in 0x80527bdc / benign LOAD_SYMBOLS 0x8052e4c4 / **UNEXPECTED FAULT**) and dumps ctx+stack+code + single-steps the unexpected one. FIXED a receiver race (it first mixed wait_state_change + get_context → desync → the kernel stalled at a 0xCC at raised IRQL → watchdog REBOOT before pfrun even ran; the reflect bp itself is SAFE — the dpmiback session armed the same bp and idled fine). Now get_context-ONLY, exactly like desktop_trace. The repeated resets pushed XP into its "did not start successfully" recovery menu → restored `vm/xp.qcow2` from `vm/xp-debugonly-backup.qcow2` (clean). VM currently POWERED OFF but clean.
-  ★★★ RUN 71 (2026-08-11) — pfrun OBSERVATION SUCCEEDED, and it's the #18 ANSWER (docs run 71). Two fixes cracked it: TRIGGER = an autorun CD (`autorun.inf`→pfrun.bat, `/tmp/ntvdmex-auto.iso`) mounted via QMP the INSTANT the bp arms (a log-watcher auto-fires `qmp.py cd` on `armed h=`) — 100% reliable (this VM's send-key drops chars even at 0.6s/char) AND keeps the guest BUSY so it does NOT reboot (the 4 idle-wait attempts all rebooted; arming the 0xCC at 0x805cd7f8 + letting the dilated HVF guest sit idle destabilizes it). RESULT: pfrun ran real-CPU (serial: PM switch CS=0f:12c → "about to HLT" → serial STOPS), and the KD observer saw **NOTHING** — no reflect-bp hit at 0x4f67f8, no exception, no bugcheck, guest healthy. KD was provably live (pfrun could only run because the observer resumed the guest correctly). **⇒ the kernel's KiTrap0D SILENTLY TERMINATES the VDM on a raw PM #GP — a HANDLED path, so it never reaches the reflect and never breaks KD. Chasing the raw-#GP reflect is a DEAD END** (directly confirms runs 65-69's "invisible fault").
-  ★★ OPTION C IS DEAD (2026-08-11), and the DPMI-init RE thread advanced (docs "Kernel RE session 8"). Option C (BOP-patch privileged insns) is blocked two ways: the BOP is 2 bytes (C4 C4) but HLT/CLI/STI/IN-OUT-DX are 1 byte (no in-place swap), AND those are ops the KERNEL is meant to virtualize, not us. RE session 8 (fresh ntoskrnl disasm) reframes #18: `0x4f67f8` is NOT "the reflect entry" — it's a small reflect-DECISION function (`if EPROCESS+0x158 (VdmObjects)==0 return 0; else classify [0x714] bit3`), and it sits INSIDE KiTrap0D's in-kernel VDM instruction EMULATOR (bytes right before it are `out dx,eax` — the kernel emulates OUT for a VDM). Our raw HLT is dispatched to a terminate branch, never reaching `0x4f67f8`. **⇒ HLT was a MISLEADING probe** (the kernel has no HLT case); the game-relevant ops (IN/OUT/CLI/STI) may already be emulated in-kernel for a proper VDM. ★★★ RUN 72 (2026-08-11) — BREAKTHROUGH, the OUT probe answered it: a real-CPU PM `OUT` is trapped by the kernel and reflected to our monitor as **event 0 (I/O)** — the SAME event our V86 device path already handles. Built `tools/dostest/outprobe.asm` (OUT DX,AL to VGA 0x3C8/0x3C9 instead of HLT) + `outrun.bat`, ran via autorun CD (NO KD, no reboot risk). serial: PM switch OK → "about to OUT" → `DPMI: unexpected PM stop event=0x00000000 CS:EIP=0f:0x138` (frozen ON the OUT). **⇒ real-CPU PM I/O virtualization WORKS at the kernel level; HLT was a red herring (no kernel case → terminate).** The only gap is HOST-side: our DPMI PM loop services only event==4 (BOP)+the reflect, so it treats event==0 as "unexpected" and spins → watchdog kills it.
-  ★★★ RUN 73 (2026-08-11) — DONE + VM-CONFIRMED: real-CPU PM port I/O now flows to our VDDs. Added `host_try_io_pm()` in src/host/main.c (PM-addressed twin of `host_try_io`: decodes IN/OUT at `dpmi_sel_base(CS)+EIP`, dispatches `vdd_bus_io`, advances EIP) and wired it into the DPMI PM loop on `ev==VDM_EVENT_IO(0)`/`GPFAULT(2)`. outprobe.com now prints "OUT survived -- guest RESUMED" for BOTH OUTs (0x3C8/0x3C9) and exits cleanly (4Ch). So the #18 wall is broken: real-CPU protected-mode port I/O is virtualized to our VDDs, no #GP reflect needed.
-  ★★★ RUNS 73b + 74 (2026-08-11) — DONE + VM-CONFIRMED (visual): (73b/ioverify) PM DAC write→readback round-trips through the VDD (`read back = 0A 14 1E`), proving IN+OUT both service end-to-end. (74/mode13) a REAL protected-mode VGA client renders on the real CPU: `INT 10h` mode 13h (now routed to the VDD in PM), alloc an A0000 framebuffer selector (`INT 31h 0000/0007/0008`), `stosb`×64000 pixel fill, and the ntvdmhost Luna window SHOWS the 320×200 gradient. Host changes: patch scan also rewrites `CD 10`; `dpmi_service_pm_int` routes `vec==0x10`→video VDD; new `g_dpmi_done` so the run-52 watchdog stands down on clean exit (keeps the window up). ⇒ real-CPU PM graphics through our VDD, no reflect/interpreter. Milestone #6 capability demonstrated.
-  ★★★ RUN 75 (2026-08-11) — DONE + VM-CONFIRMED (visual): real-CPU PM ANIMATION. animate.com loops forever scrolling a mode-13h gradient (fill with a per-frame phase offset + INT 31h 0400 yield); two screendumps 6s apart differ = motion, no watchdog kill. Host: PM loop cap raised to run-until-window-close (g_running); watchdog now kills ONLY a sustained freeze (resets on g_dpmi_iter progress), stands down on g_dpmi_done. So a game-shaped redraw loop runs indefinitely on the real CPU rendering through the VDD.
-  ★ DPMI is NOT done — see [[dpmi-completeness-directive]]. Answer "is DPMI done?" against the games bar (Doom/Skyroads/ZAR), not the last milestone. DONE so far (real-CPU 16-bit PM, VM-confirmed): run 72 PM I/O trap=event0, 73 I/O servicing, 73b ioverify round-trip, 74 mode13 static render, 75 animation, bounce (palette via PM OUT + moving box), **run 76 INPUT (INT 16h arrow keys drive a box; also fixed extended-key capture in WM_KEYDOWN, which fixes V86 arrows too; INT 33h mouse routed, untested)**.
-  REMAINING (suggested order): (1) DONE input (run 76); (2a) DONE polled timing (run 77 — INT 1Ah + BIOS tick advance in the PM loop, timerbox VM-confirmed); (2b) **async IRQ0 injection to a PM INT 08h hook** (games like Doom HOOK the timer) — SPEC (worked out, not yet built): in the PM loop when `InterlockedExchange(&g_irq0_pending,0)` fires, after `pit_int08`, if `!g_isr_active && g_dpmi_vi && g_pm_int[0x08].sel`: save CS/EIP/EFLAGS/vi, push a 16-bit IRET frame {EFLAGS, g_pmret_sel, DPMI_PMRET_OFF} onto the PM stack (linear = `dpmi_sel_base(SS)+(SP&0xFFFF)`, via pokew), set CS:EIP=g_pm_int[8], `g_dpmi_vi=0; g_isr_active=1`; then in the main PM loop detect the catcher (ev==BOP && csv==g_pmret_sel && eip==DPMI_PMRET_OFF) → restore saved CS:EIP/EFLAGS + vi, `g_isr_active=0`, continue. PREREQ: ensure g_pmret_sel + the DPMI_PMRET catcher BOP are allocated at PM ENTRY (currently lazy on first 0303). Test client: a PM prog that INT 31h 0205-installs an INT 08h handler that ++a counter and moves a box → box moves with NO polling. Watch: don't double-count the BIOS tick (pit_int08 already ++0040:006C); a hooking handler usually doesn't touch it. (3) **32-bit DPMI / DOS4GW** — the big one, Doom's extender (all work so far is 16-bit; needs 32-bit flat selectors + 32-bit PM exec + 32-bit EIP/IO handling; host_try_io_pm masks EIP to 16-bit); (4) **raw mode switch (INT 31h 0305/0306)** for real extenders (RAWJMP7 stalled here); (5) **broader INT 31h surface** — 0002 seg→desc, 0600-0604 page-lock, 0800/0801 phys-map (VESA LFB); (6) **a REAL extender + REAL game** end-to-end (the acceptance test); (7) retire the g_dpmi_use_interp toggle (confirm real-CPU path runs i310102/DPMIBACK). Probes: mode13/animate/bounce/kbdbox + *run.bat. Trigger via AUTORUN CD (fresh LABEL each time; GUI keyboard is lossy). HARNESS GOTCHA: only ONE qemu at a time — never `rm vm/qmp.sock` while a qemu holds it (unlinks the socket → screendump fails); `pkill -9 -f qemu-system-x86_64` to clear leftovers before a fresh launch. Docs: runs 72-76 + RE session 8. Option C below is SUPERSEDED/dead.
-  (SUPERSEDED) RESUME (Session 5) = the VALIDATED real-CPU-PM direction is run-68 OPTION C: do NOT rely on the #GP reflect. **Pre-patch identifiable privileged instructions (HLT/CLI/STI/IN/OUT/LGDT/LIDT/…) to `C4 C4` BOPs**, like the existing INT-site scan (`dpmi_patch_int_sites`), and service them via the already-proven host BOP/event-4 mechanism (the same path that runs i310102 + DPMIBACK). NEXT SPIKE: extend the patch scan to privileged opcodes → re-run pfrun (its HLT now a BOP) → confirm the host services it instead of the VDM dying. If that pays off it opens real-CPU PM for the game class; if not, the interpreter (g_dpmi_use_interp=1) already covers 16-bit DPMI and the Sound epic (#20/#21) is the other high-value track. Tooling ready: `scripts/pmfault_observe.py` (passive KD observer, classifies+dumps), `scripts/gtype.sh`, the AUTORUN-CD trigger (build: stage + `autorun.inf` open=pfrun.bat → hdiutil; mount on `armed h=`). VM boot recipe: `./scripts/xp-vm.sh run` → poll screendump sz>2MB, exclude black a50ae736 / loading 5ea20161 → native 1024×768. If resets pile up → XP recovery menu → restore `vm/xp.qcow2` from `vm/xp-debugonly-backup.qcow2`. See docs runs 70-71 + [[kd-guest-debugger-ops]].
-  (Session-3 text below is retained for the KD operational recipe, but its "BOP trigger" conclusion in ★ THE LAST MILE is superseded by the above.)
-
-★ SESSION-3 RESULT (2026-08-07): KD TOOLING WORKS END-TO-END. `scripts/desktop_trace.py` breaks in at the idle /debug-only desktop, arms the reflect bp @ 0x805cd7f8, and services the module-load break stream ROBUSTLY (drives continues off get_context as the authoritative halt-detector; the old wall was just a MISSED state-change packet, not corruption). VALIDATED: serviced 28 of pfrun's module loads past the old wall, zero wedge, stayed live. The **/debug-ONLY provisioned image is backed up as `vm/xp-debugonly-backup.qcow2`** (cp over vm/xp.qcow2 to reset; boots normally to desktop — NO re-provision needed). NewState constants: 0x3030=EXCEPTION, 0x3031=LOAD_SYMBOLS.
-
-★ THE LAST MILE (next step): with the bp armed, `pfrun` (RAW PM HLT #GP via pmfault) did NOT hit 0x4f67f8 — it bugchecked/rebooted the guest. The reflect is `KiTrap0D→0x565041(BOP-only)→0x4f67f8`, so a RAW #GP bypasses the BOP-gated 0x565041 and never reaches the reflect. **RESUME = build/mount a BOP-based DPMI trigger (i310102 / dpbrun-style, INT 31h path) instead of raw pmfault, then run `python3 -u scripts/desktop_trace.py` (break-in ~110s → arm → GUI-launch the trigger → catch reflect → 400-step single-step trace).** The tooling is ready; only the trigger needs swapping. GUI trigger recipe: Start(50,748)→Run(232,596)+Enter→type path→OK button ~(188,715), move-away-before-click, be patient (slow VM).
-
-STATE OF THE VM (session 3, 2026-08-06):
-- **Fresh XP reinstalled, provisioned, backed up.** `vm/xp-fresh-install-backup.qcow2` = bare fresh install (autologin Test/blank, NO /debug). `vm/xp-break-stuck.qcow2` = provisioned (autologon + /debug on COM2 + IFEO ntvdm→ntvdmhost) PLUS **/break** — halts deterministically at boot init; the halt PERSISTS so you can hammer continue variants with NO reboot between tries (cp it over `vm/xp.qcow2` to reset). Internal snapshot `freshinstall` also exists.
-- **KD attach + read is SOLID:** KernBase 0x804d7000, GetVersion 15.2600, read_vmem, get/set_context (verified set_context moves EIP), write_bp/restore_bp all work. Reflect entry static 0x4f67f8 → runtime **0x805cd7f8** (slide 0x800d7000).
-
-THE BREAKTHROUGH (why "resume" seemed broken):
-- resume()/cont() were fine. The real obstacle: with **/debug**, the kernel executes an int3 (**DbgLoadImageSymbols**, runtime **0x8052e4c4**) on EVERY module load so a debugger can load symbols — each HALTS the CPU until continued past (advance EIP+1 since byte@EIP==0xCC, then DbgKdContinueApi/DBG_CONTINUE). Confirmed on the wire: Continue is ACK'd with the correct id, kernel resumes, re-breaks at the next module.
-- **CRUCIAL corollary:** these module-load breaks ONLY halt when a debugger is CONNECTED. With /debug and NOBODY connected, boot runs normally to the desktop (breaks are no-ops). So **/break was the wrong turn** — it forces a connection during boot, turning every module load into a serviced halt (molasses + the sync wall). The RIGHT architecture: /debug-only (no /break) → boot normally to desktop → connect at the desktop → break-in once → arm bp → trigger pfrun → service pfrun's ~10-15 module-load breaks → catch the reflect #GP.
-
-THE ~28 WALL — SOLVED (was NOT a KDCOM sync bug, despite earlier suspicion):
-- At the "wall" the kernel is HALTED and fully responsive (get_context works) — the client had simply MISSED one state-change packet (receive timing) and then waited while the kernel waited for us (mutual stall). NewState decode confirmed the ~28 are LOAD_SYMBOLS notifications (0x3031), NOT int3 exceptions; pc=0x8052e4c4 is a MmIsAddressValid validator the reporting thread sits in.
-- FIX (in `scripts/desktop_trace.py`, the current harness): drive continues off `get_context` (returns EIP if halted, None if running) as the authoritative halt-detector; decouple Continue from receive; single-byte break-in (cadence>secs) for zero leftover. Superseded scripts: kd_boot_servicer.py, kd_servicer2.py, trace_break.py (all /break-era; ignore). Off-VM RE env: /tmp/ntvdmex-re/ntoskrnl.exe (HAS symbols; r2 base 0x400000); vm/kddll_ref.c = ReactOS KDCOM source.
-- Old /break test-bed (`vm/xp-break-stuck.qcow2`) is now only of historical use — /break forces molasses; the /debug-only backup is the one to use.
-
-TOOLING BUILT THIS SESSION (all in scripts/):
-- `kd_boot_servicer.py [bp_runtime_hex] [max_secs]` — poll-attach, arm bp, continuously service the break stream, distinguish the reflect bp (0x805cd7f8) from symbol breaks (0x8052e4c4), single-step-trace on the reflect HIT. **This is the harness to finish** once sync is robust.
-- `trace_break.py` — earlier /break attach+trace (superseded by kd_boot_servicer).
-- `kdclient.py` — break_in() now sparse (cadence=90, secs=260); do_session deadline 600.
-
-THE RECIPE TO FINISH (once sync is robust):
-1. Get a /debug-ONLY provisioned image (restore `vm/xp-fresh-install-backup.qcow2` → re-provision with `vm/provision.iso` autorun, which adds /debug WITHOUT /break). Boots normally to desktop.
-2. At the idle desktop, run the (sync-hardened) servicer: break-in once, arm bp @ 0x805cd7f8, then service continuously.
-3. Trigger `C:\ntvdmex\pfrun.bat` in the guest (GUI: Start→Run; files already at C:\ntvdmex — do NOT remount provision.iso, its autorun re-runs provision.cmd). The guest runs freely at idle desktop so GUI input works.
-4. pfrun → ntvdmhost → PM fault → #GP → reflect bp HIT at 0x805cd7f8 → single-step 400 logging rebased EIP+EAX → SEE the gate that returns 0.
-Reflect chain (static VAs, r2 base 0x400000): 0x4f67f8(entry)→0x4f6f67→0x4f6efd(CS:EIP from VDM_TIB[class*0x10])→0x4f6e6f(SS:ESP=[TIB+0x638]:0x1000)→gates 0x4f6d3c(CS)/0x4f6dc0(SS) via 0x45dd5f. class=6 for #GP. **NEVER bp 0x4f6d3c/0x4f6dc0** (hot in normal selector validation → floods KD → bugcheck). Only bp 0x4f67f8 + single-step.
-
-HARD-WON RULES (see [[kd-guest-debugger-ops]]): never `pkill` a KD script while CPU~100% (stale-halt wedge → reboot-only); background python needs `-u` (block-buffered else); `system_reset` is the safe image-safe recovery and provisioning persists; QEMU/qmp ops need `dangerouslyDisableSandbox:true`; screendump-diff (identical over ~6s) distinguishes halted vs live. VM is EXTREMELY slow (~110s break-in latency, multi-min boots). Landmarks: ntoskrnl VA base 0x400000, KernBase 0x804d7000; ntvdm 0x0f000000; host v62 = build/ntvdmhost.exe (g_dpmi_use_interp=0 real-CPU + reflect trampoline; =1 restores the VM-confirmed interpreter). VM launch = `./scripts/xp-vm.sh run` (COM1→vm/serial.log, COM2→vm/kd.sock, QMP→vm/qmp.sock).
-
-FALLBACK (still true): the interpreter (g_dpmi_use_interp=1) already runs i310102 + DPMIBACK end-to-end — 16-bit DPMI is effectively done for the games bar. If the KD sync fight isn't worth it, ship the interpreter and pivot to the Sound epic (#20 SB16 / #21 OPL), the biggest unbuilt piece. But the KD trace is now genuinely CLOSE — only the sync-hardening stands between here and the #18 observation.
