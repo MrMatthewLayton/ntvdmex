@@ -1,6 +1,203 @@
 ═══════════════════════════════════════════════════════════════════════════════
-██ ▶▶▶ SESSION 17 (2026-08-22). DOOM'S 32-BIT CODE RUNS; ITS `INT` SITES ARE  ██
-██     UNPATCHED BECAUSE ITS CODE SELECTOR IS FLAT. THAT IS THE WALL.         ██
+██ ▶▶▶ SESSION 18 (2026-08-22). THE WALL IS DOWN. DOOM RUNS ITS OWN CODE,     ██
+██     SETS A VIDEO MODE, AND COMPLETES STARTUP TO `I_StartupTimer()`.        ██
+██     THE ONE REMAINING BLOCKER IS THE IRQ0 INJECTION.                       ██
+═══════════════════════════════════════════════════════════════════════════════
+
+  Commit `308b3de` on `m9/completeness`. Gates at the end: **off-VM 349/349** (8
+  suites), **selftest.com 8/8** on the rig, `dpmitest.com` + `dpmiback.com` both
+  `STAGE2: complete` with correct output, `check-imports.sh` clean.
+
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ ★★★ WHAT DOOM DOES NOW. THIS IS ITS REAL STARTUP, FROM THE LOG.              │
+└──────────────────────────────────────────────────────────────────────────────┘
+
+  ```
+    P_Init: Checking cmd-line parameters
+    V_Init: allocate screens        M_LoadDefaults: Load system defaults
+    Z_Init: Init zone memory allocation daemon
+    DPMI memory: 0x…, 0x800000 allocated for zone
+    W_Init: Init WADfiles
+            adding doom1.wad
+            shareware version
+    M_Init  R_Init: Init DOOM refresh daemon [ . . . progress bar . . . ]
+    P_Init: Init Playloop state     I_Init: Setting up machine state
+    I_StartupDPMI   I_StartupMouse   Mouse: detected
+    I_StartupJoystick  I_StartupKeyboard  I_StartupSound
+    I_StartupTimer()          <-- and it wedges here; see the IRQ0 section
+  ```
+  63 console writes, `INT 10h` mode 3 set from PM, `default.cfg` opened, the
+  shareware WAD correctly identified. Session 17 produced **no output at all** and
+  the VDM was killed. Canonical log: `build/doom_s18_final.log` (2.9 MB).
+  ⚠ It is **still not playable** — it never reaches the menu.
+
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ ★★★ THE FOUR BUGS THAT WERE THE WALL. ALL OURS.                              │
+└──────────────────────────────────────────────────────────────────────────────┘
+
+  1. **THE CLIENT'S EXECUTABLE KNOWS WHICH OF ITS MEMORY IS CODE — ASK IT.**
+     An LE names its objects and flags which are EXECUTABLE, and DOS/4GW allocates
+     ONE 0501 block per object at exactly the object's page-rounded virtual size.
+     So the object table identifies the code blocks with no guessing at content.
+     Exact in all three cases on DOOM.EXE:
+     ```
+        obj1  vsize 0x44f71  READ|EXEC|BIG32    -> 0501 of 0x45000 @ 0x03AD0000
+        obj2  vsize 0x00019  READ|EXEC|ALIAS16  -> 0501 of 0x01000 @ 0x03B30000
+        obj3  vsize 0x85e10  READ|WRITE|BIG32   -> 0501 of 0x86000 @ 0x03B40000
+     ```
+     `dpmi_le_learn()` parses this out of `filebuf` (the loader is already holding
+     it); 0501 tags a block when the size matches; `dpmi_scan_code_blocks()` patches.
+     ▶ **VERIFIED BY COUNT, NOT BY "IT GOT FURTHER":** the scan patches **0x44**
+       sites and obj1 contains **exactly 0x44** `CD nn` pairs in our vector set.
+       Zero data bytes touched. That is the check to re-run if this ever regresses.
+     ▶ Only objects **≥ 64 KB** are keyed on: a page-rounded size is a weak key when
+       it is small (0x1000 is the commonest allocation there is, and Doom makes an
+       unrelated one). Small code objects get a based descriptor, which 0009/000C
+       already patches — obj2 proves it.
+     ▶ The block is allocated ~1100 log lines BEFORE its last page arrives, and we
+       never see the fill (DOS/4GW reads through a low transfer buffer and copies up
+       in its own code). So the scan is idempotent and runs on every 0501 and every
+       code-region declaration rather than hunting for a "loaded" event.
+
+  2. **AN EIP IS ONLY 16 BITS WIDE WHEN ITS CODE SELECTOR IS.** Every PM stop read
+     `EIP & 0xFFFF`. Doom's first `int 21h` (AH=30h, at obj1+0x40be5) fired our BOP
+     exactly as intended at linear 0x03b10be5 — and the masked lookup asked for
+     `0x0be5`, found nothing, and the run died as "unexpected PM stop" **at the very
+     instruction that proved the patch worked**, reported as `0x187:0x0be7`, which
+     reads like a wild jump into the BIOS data area. `dpmi_pm_eip()` now asks the
+     descriptor. Same rule the interrupt-frame width already follows.
+
+  3. **THE CATCHER'S D/B BIT IS PART OF THE CALLER'S IDENTITY.** We push the
+     PM-return catcher as the return CS of the frame the client's handler runs on —
+     and an extender READS that CS to learn whether the interrupted code was 16- or
+     32-bit, hence whether a pointer argument is a word or a dword. It was 16-bit:
+     ```
+        app passed   DS:EDX = 0x18f:0x03b69b80  -> "default.cfg"
+        RMCS got     DS:DX  = 0x000:0x9b80      -> open failed, file not found
+     ```
+     The stack frame width was ALREADY right (`SS D/B=1`), which is exactly what made
+     this hard: **frame width and advertised caller width are two different
+     questions**, and only one was being answered. Now follows `g_dpmi_client32`.
+
+  4. **THE RMCS COPY-BACK DROPPED FLAGS, SO EVERY DOS CALL REPORTED SUCCESS.**
+     0300/0301/0302 copied eight registers back and omitted the ninth. Every DOS
+     service reports failure in CF, and Watcom reads *nothing else* —
+     `int 21h ; rcl eax,1 ; ror eax,1` folds CF into EAX's sign bit and branches on
+     it. How far a false success travels: `access("doom2f.wad")` returned "error 2"
+     with **CF=0**, so Doom selected the FRENCH wad, opened it (failing, also as a
+     success), and read forever from a handle it never got — 20969 spins at
+     obj1+0x40985 until the watchdog fired.
+     ▶ **A copy-back that omits FLAGS is not a partial implementation, it is an
+       inverted one:** it reports the opposite of what happened, on every call.
+
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ ★★★ THE ONE THING LEFT: THE IRQ0 INJECTION. START HERE.                      │
+└──────────────────────────────────────────────────────────────────────────────┘
+
+  `pmnoirq.flag` is **STILL on the share and still load-bearing.** With it removed:
+  ```
+     before this session   run ends the instant the client installs INT 08h
+     with the 55 ms gate   run reaches file loading, then ends on the FIRST inject
+  ```
+  ▶ **The handoff's "cheap question" was right, and here is the answer.** We fired
+    IRQ0 the instruction after the vector appeared. Real IRQ0 runs at **18.2 Hz** —
+    the next tick is up to **55 ms**, millions of instructions, away. DOS/4GW is
+    arming a TABLE at that moment: vectors 0..8 in one sequential pass, 4-byte
+    default stubs at `0x97:0x00, 0x04, … 0x20`. A 55 ms hold-off past the INT 08h
+    hook (`DPMI_IRQ0_ARM_QUIET_MS`) now carries the run past arming.
+  ▶ **BUT THE INJECTION ITSELF STILL ENDS THE RUN**, vectoring into `0x97:0x20` —
+    which is STILL DOS/4GW's default stub, i.e. `call <common> ; db 8` into the
+    dispatcher at `mod:0x550`. Doom installs its REAL timer handler much later, in
+    `I_StartupTimer()`. So the next question is whether we should be delivering to
+    that stub at all, and what `dpmi_inject_pm_irq()` does wrong for a 32-bit
+    client — it is otherwise unexercised against one, and it shares the frame-width
+    and stack-pointer-width rules that bugs 3 and 4 above turned out to hinge on.
+  ▶ **THIS IS ALSO WHAT WEDGES THE GOOD RUN.** With the flag ON, Doom hangs in its
+    delay routine at obj1+0x153b0 — and that routine is a *timer* spin:
+    ```
+       mov eax,[0x28820]      ; snapshot the tick counter
+       …
+       cmp [0x28820],eax      ; spin until it CHANGES
+    ```
+    incremented by its INT 08h handler. No IRQ0 → the loop is infinite. **Doom
+    cannot finish `I_StartupTimer()` until the injection works.** These are the same
+    problem, and it is the last one between here and a menu.
+  ⚠ **DELETE `pmnoirq.flag` FROM THE SHARE once it is fixed.**
+
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ THE INSTRUMENTS ADDED THIS SESSION (each one found the next bug)             │
+└──────────────────────────────────────────────────────────────────────────────┘
+
+  * The **PM-stop report** now prints linear address, CS width, the register file
+    and the instruction bytes — not a truncated `CS:EIP`. Bug 2 was invisible
+    precisely because the old line looked plausible.
+  * The **client-handler route** prints `DS:EDX`, the bytes AT it, and the caller's
+    `SS`/`CS` widths. This is what refuted the `LAR SS` theory (SS D/B was already
+    1) and pointed at the return CS instead.
+  * **0301/0302** print the RMCS location and the pointer argument with its target
+    bytes. Seeing `DS:DX=0x000:0x9b80 @=<garbage>` next to a known-good
+    `DS:DX=0x110:0x2380 @="C:\DOOMS\DOOM.EX"` is what made bug 3 one comparison.
+  ⚠ These roughly quintupled the log (545 KB → 2.9 MB). `LOG_MAX_BYTES` is 32 MB.
+
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ ★★ OFFLINE: DOOM'S LE IS FULLY MAPPED NOW. DO NOT RE-DERIVE IT.              │
+└──────────────────────────────────────────────────────────────────────────────┘
+
+  `build/doom_obj{1,2,3}.bin` are extracted. To regenerate, or for another game:
+  ```
+    LE header      search for "LE\0\0" AND VALIDATE (byte/word order 0, format
+                   level 0, cpu 1-4, os 1-4, 1<=nobj<=64). DOOM.EXE: file 0x27acc.
+    ⚠ e_lfanew IS NOT A POINTER TO IT in a bound exe -- DOOM.EXE's reads
+      0x09b40000, off the end of a 0xad511-byte file. The MZ stub is the extender.
+    ⚠ HEADER LAYOUT: cpu at +0x08, objtab at +0x40, nobj +0x44, pagemap +0x48.
+      (Not the LX layout -- being 8 bytes off parses cleanly into garbage: it gave
+      "265032 pages, 0 objects" and I nearly believed it.)
+    ⚠ THE `datapages` FIELD AT +0x80 IS WRONG FOR A BOUND IMAGE. DOOM.EXE says
+      0x1ce00, which is INSIDE the extender. Real base = 0x42014, i.e. flush to
+      EOF (107 full pages + last-page 0x4fd). CONFIRM BY CONTENT, two ways:
+      the entry point disassembles to `jmp` over "WATCOM C/C++32 Run-Time system",
+      and obj3 contains "doom1.wad" / "Z_Init" / "-devparm".
+    mapping       obj1 file 0x42014  guest 0x03AD0000   entry EIP 0x40b48
+                  obj3 file 0x88014  guest 0x03B40000
+      cross-check: the log's `setbase 0x03b10b48` == 0x03AD0000 + 0x40b48. 
+  ```
+  Useful landmarks found inside obj1:
+  ```
+    0x40b48   LE entry -- `jmp` over the Watcom copyright banner
+    0x40be5   `mov ah,30h ; int 21h`  (get DOS version -- the first app INT)
+    0x406d0   the file-open thunk: `mov ah,3Dh ; int 21h ; rcl eax,1 ; ror eax,1`
+    0x40985   `mov ah,3Fh ; int 21h`  -- the read that spun 20969 times on bug 4
+    0x10f5f   Sound Blaster DSP reset: `out dx,al` 1 / delay / 0 / delay
+    0x153b0   the millisecond delay -- SPINS ON THE TIMER TICK AT [0x28820]
+    0x41e41   a table of `int N ; ret` thunks (Watcom's generic dispatch)
+  ```
+
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ ★★ METHOD, AND THIS SESSION EARNED IT TWICE                                  │
+└──────────────────────────────────────────────────────────────────────────────┘
+
+  ▶ **AN INSTRUMENT THAT LIES IS WORSE THAN NONE, AND MINE DID.** The first LE
+    extraction used the header's `datapages` field, landed inside the extender, and
+    reported "57 `CD 21` sites in Doom's code object" — a number that was 30× over
+    chance and looked like proof. It was measuring the wrong bytes. What caught it
+    was DISASSEMBLING the result: 16-bit `lcall 0x0080:…` where 32-bit code belonged.
+    **Before believing a count, decode a sample of what you counted.**
+  ▶ **PREDICT THE NUMBER BEFORE THE RUN.** "obj1 should contain ~66 sites" turned a
+    "does it work?" run into a "does it patch exactly the code object and nothing
+    else?" run. The answer was 0x44 both sides. A count that matches a
+    pre-registered prediction is evidence; "the log got bigger" is not.
+  ▶ **THE TWO REFUTED THEORIES WERE REFUTED CHEAPLY, ON PURPOSE.** `LAR SS` (the
+    caller's stack was already 32-bit) and "our RMCS read is truncated" (the RMCS
+    address was identical in the working and failing calls) both died in one run
+    each, because the diagnostic printed the control case next to the failing one.
+
+╔══════════════════════════════════════════════════════════════════════════════╗
+║ THE USER'S INSTRUCTION (2026-08-22): "North star is playable Doom"           ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+
+═══════════════════════════════════════════════════════════════════════════════
+██     SESSION 17 (2026-08-22) — SUPERSEDED ABOVE. Its "THE WALL" section is  ██
+██     SOLVED; its dead ends and instruments still stand. Kept for those.     ██
 ═══════════════════════════════════════════════════════════════════════════════
 
   Commits `fbf95a6` .. `f744c63` on `m9/completeness`.
@@ -24,6 +221,7 @@
   The refusal is now **logged loudly** ("FLAT code region ... NOT scanned; the client's
   INT sites here are UNPATCHED"); it used to return silently, which is how it hid.
 
+  ▶ (SESSION 18: SOLVED -- the LE object table names the code blocks. See the top.)
   ▶ **SCANNING THE CLIENT'S 0501 BLOCKS INSTEAD WAS TRIED AND IS WORSE.** Measured:
     ```
       without   545 KB log, 441 client-handler returns, reaches AX=FF00
