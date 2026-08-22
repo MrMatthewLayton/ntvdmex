@@ -600,6 +600,8 @@ static int   g_le_ncode = 0;
    then hold off. One 18.2 Hz tick period is 54.9 ms -- the shortest gap real hardware can
    put between "the vector exists" and "the timer fires". See INT 31h 0205. */
 #define DPMI_IRQ0_ARM_QUIET_MS 55
+/* Ticks run per asynchronous entry -- see the drain in the main loop. */
+#define DPMI_IRQ0_BATCH 64
 static DWORD g_pm_vec8_armed_ms = 0;
 /* Set when the APPLICATION (not the extender's arming pass) installs a timer ISR. Until
    then vector 8 holds a placeholder stub and delivering to it is both pointless and, on
@@ -964,7 +966,7 @@ static int async_inject_irq(unsigned irq)
            completely silent: the cooperative path prints its entry and exit, so a log that
            simply STOPS after a clean tick points here by elimination, which is not the same
            as evidence. */
-        if (g_async_pm_inj + g_async_pm_bail2 <= 8) {
+        if (g_async_pm_inj + g_async_pm_bail2 <= 40) {
             char pb[224], *pq = pb;
             pq = zput(pq, "ASYNC-PM vec=0x08 ok=0x"); pq = zhex(pq, (DWORD)ok);
             pq = zput(pq, " from=0x");   pq = zhex(pq, cs);
@@ -4278,11 +4280,32 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                                 p = zhex(p, al25); p = zput(p, " = 0x"); p = zhex(p, hs);
                                 p = zput(p, ":0x"); p = zhex(p, g_pm_int[al25].off);
                             } else {
-                                VDM_SET16(tib, VTIB_ES, g_pm_int[al25].sel);
-                                VDM_REG(tib, VTIB_EBX) = g_pm_int[al25].off;   /* client is 32-bit */
+                                /* ── WHAT THE CALLER CHAINS TO MUST BE SAFE TO CHAIN TO. ────
+                                     A game saves the "old" handler here and far-jumps to it
+                                     periodically -- Doom's timer ISR passes the tick down
+                                     every Nth interrupt to keep the BIOS clock. If we hand
+                                     back the extender's arming-pass stub, that chain lands in
+                                     DOS/4GW's dispatcher, entered from a hardware interrupt
+                                     WE synthesised rather than through its own IDT, on a
+                                     stack it did not switch: measured, that kills the VDM
+                                     outright, with no fault and no log. It is why delivery
+                                     died after a handful of ticks however it was arranged --
+                                     the deaths were never the injections, they were the Nth
+                                     one, when the ISR chained.
+                                     Once we own the line, the far end of the chain is OURS:
+                                     hand back the host's own default stub for the vector
+                                     (BOP; IRET), which accepts the chain and returns. */
+                                WORD  osel = g_pm_int[al25].sel;
+                                DWORD ooff = g_pm_int[al25].off;
+                                if (!dpmi_sel_is32(osel) && g_pm_defsel) {
+                                    osel = g_pm_defsel;
+                                    ooff = (DWORD)al25 * DPMI_PMDEF_STRIDE;
+                                }
+                                VDM_SET16(tib, VTIB_ES, osel);
+                                VDM_REG(tib, VTIB_EBX) = ooff;                 /* client is 32-bit */
                                 p = zput(p, "PM INT 21h AH=35 (host-owned IRQ vector) 0x");
-                                p = zhex(p, al25); p = zput(p, " -> 0x"); p = zhex(p, g_pm_int[al25].sel);
-                                p = zput(p, ":0x"); p = zhex(p, g_pm_int[al25].off);
+                                p = zhex(p, al25); p = zput(p, " -> 0x"); p = zhex(p, osel);
+                                p = zput(p, ":0x"); p = zhex(p, ooff);
                             }
                             VDM_REG(tib, VTIB_EFLAGS) &= ~1u;          /* success */
                             p = zput(p, "\r\n");
@@ -7344,6 +7367,30 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                         VDM_REG(tib, VTIB_EFLAGS) = g_async_pm_efl;
                         g_dpmi_vi = 1;                   /* unmask: the handler has finished */
                         g_async_pm_active = 0;
+                        /* ── DRAIN THE BACKLOG WHILE WE STILL HAVE CONTROL. ──────────────
+                             One asynchronous delivery costs a SuspendThread /
+                             GetThreadContext / SetThreadContext round trip -- tens of
+                             microseconds. Doom programs the PIT to reload 0x4a, i.e.
+                             16124 Hz, and its millisecond delay waits `ms * scale / 1000`
+                             ticks: about 480 for a 30 ms wait. One round trip per tick is
+                             not a design at that rate, and the latch saturates at
+                             IRQ0_PENDING_MAX=4 anyway, so chasing it delivered THREE ticks
+                             against the hundreds owed and the guest never left its spin.
+                             The asynchronous path's real job is to get us INTO a guest that
+                             would otherwise never come out. Once here, the ISR can be run
+                             directly and synchronously -- measured at phases=1, i.e. it
+                             enters and IRETs with no excursion -- so one round trip serves a
+                             whole batch. This is catch-up, the same shape the PIT already
+                             uses when the host falls behind (pit_gaps), not an invention. */
+                        if (g_dpmi_client32 && g_pm_app_hooked_timer && !g_pm_noirq
+                            && dpmi_sel_is32((WORD)(VDM_REG(tib, VTIB_CS) & 0xFFFF))) {
+                            int k;
+                            g_in_pm_irq = 1;
+                            for (k = 0; k < DPMI_IRQ0_BATCH; ++k) {
+                                if (!dpmi_inject_pm_irq(&m, tib, 0x08, steps)) break;
+                            }
+                            g_in_pm_irq = 0;
+                        }
                         continue;
                     }
                     /* GH#18 (bare-metal crack, 2026-08-18): dpmi_enter.S reports event 3 when it
