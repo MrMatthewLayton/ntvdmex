@@ -535,7 +535,29 @@ static DWORD dpmi_sel_base(WORD sel);       /* fwd: watchdog resolves the frozen
    handlers here; we store them so a get/set/restore round-trips faithfully. (We still
    service patched INT 21h/31h ourselves -- routing to a client-installed PM handler is
    a deeper item; storing the vectors is what real extenders' save/restore needs.) */
-static struct { WORD sel; DWORD off; } g_pm_int[256];
+/* `client` distinguishes a vector the CLIENT installed (0205 / INT 21h AH=25h) from
+   the host default we pre-load into every entry at mode-switch time. The difference is
+   load-bearing in two places: we only ROUTE an interrupt to a handler the client chose,
+   and we only INJECT IRQ0 into an INT 08h the client actually hooked -- injecting into
+   our own default would be a very confusing way to talk to ourselves. */
+static struct { WORD sel; DWORD off; BYTE client; } g_pm_int[256];
+/* ── THE HOST'S DEFAULT PROTECTED-MODE INTERRUPT HANDLERS. ────────────────────────
+   0204 (get PM interrupt vector) used to return 0000:0000 for anything the client had
+   not yet installed, and that is not an answer -- it is a null pointer wearing the
+   shape of one. A DOS extender reads the CURRENT vector before installing its own,
+   precisely so it can CHAIN to it for anything it does not handle itself; Doom's
+   DOS/4GW does exactly that for INT 21h, and then failed every call it wanted to pass
+   down (its private AX=FF00 among them) because the chain led nowhere.
+   So every vector starts out pointing at a three-byte stub of our own:
+       C4 C4 CF     BOP ; IRET
+   The third byte does double duty -- it is the BOP's immediate AND the IRET that
+   returns to the client -- which is exactly the +2 EIP convention the patched-INT path
+   already uses, so it needs no special case in the dispatcher. Each stub's LINEAR
+   address is registered in the patch map against its vector, so dpmi_bop_vec() resolves
+   a chained call straight back to the service the client was asking for. */
+#define DPMI_PMDEF_STRIDE 3
+static WORD  g_pm_defsel  = 0;      /* code selector over the stub block */
+static DWORD g_pm_defbase = 0;      /* its linear base                   */
 /* DPMI PM EXCEPTION-handler table (INT 31h 0202/0203). Separate from g_pm_int on
    purpose: 0202/0203 address CPU exceptions 00h-1Fh, which are a different namespace
    from the interrupt vectors 0204/0205 addresses -- a client may legitimately install
@@ -3173,6 +3195,41 @@ static WORD dpmi_hdlr_code_sel(void)
     return g_dpmi_hdlr_sel;
 }
 
+/* Plant the default PM interrupt handlers and point every vector at them. See the
+   note on g_pm_defsel. Called once, at the mode switch, before the client runs. */
+static void dpmi_install_default_pm_handlers(dos_machine_t *mp)
+{
+    uint16_t seg = 0, max = 0;
+    volatile BYTE *stub;
+    int v, idx;
+    char lb[160], *q = lb;
+    /* 256 vectors x 3 bytes = 768; one 0x40-paragraph block covers it with room over. */
+    if (dos_alloc(NULL, mp->first_mcb, 0x40, &seg, &max) || !seg) return;
+    if (g_ldt_next >= DPMI_LDT_MAX) return;
+    g_pm_defbase = (DWORD)seg << 4;
+    stub = (volatile BYTE *)(ULONG_PTR)g_pm_defbase;
+    idx = g_ldt_next++;
+    g_ldt[idx].base   = g_pm_defbase;
+    g_ldt[idx].limit  = 0x3FF;
+    g_ldt[idx].access = 0xFA;                    /* present, DPL3, code, readable */
+    g_ldt[idx].flags  = 0;                       /* 16-bit: the stubs are 16-bit  */
+    dpmi_install(idx);
+    g_pm_defsel = (WORD)((idx << 3) | 7);
+    for (v = 0; v < 256; ++v) {
+        DWORD off = (DWORD)v * DPMI_PMDEF_STRIDE;
+        stub[off + 0] = 0xC4; stub[off + 1] = 0xC4;
+        stub[off + 2] = 0xCF;                    /* BOP immediate AND the IRET */
+        pmap_set(g_pm_defbase + off, (BYTE)v);   /* resolves the chained BOP -> vector v */
+        g_pm_int[v].sel = g_pm_defsel;
+        g_pm_int[v].off = off;
+        g_pm_int[v].client = 0;
+    }
+    q = zput(q, "DPMI: default PM handlers at 0x"); q = zhex(q, g_pm_defsel);
+    q = zput(q, ":0 (linear 0x"); q = zhex(q, g_pm_defbase);
+    q = zput(q, ", 256 vectors)\r\n");
+    log_append(LOG_PATH, lb, q); serial_out(lb, q);
+}
+
 /* (Re)build g_ldt[idx]'s descriptor and install it in the process LDT via svc 10. */
 static void dpmi_install(int idx)
 {
@@ -3465,6 +3522,14 @@ static void dpmi_bp_arm(void)
         char lb[128], *q = lb;
         if (lin < 0x600) continue;
         b = (volatile BYTE *)(ULONG_PTR)lin;
+        /* ► THE TARGET NEED NOT EXIST YET, and reading it blindly faults in OUR OWN
+             process. A breakpoint is usually placed on a module the client has not
+             loaded at the time the list is read -- extended-memory addresses are not
+             even allocated until the client asks for them -- so this arming pass runs
+             repeatedly and must tolerate an address that is currently nothing. Same
+             lesson as IsBadReadPtr: an instrument that faults kills the run it exists
+             to observe. */
+        if (!host_readable((const void *)(ULONG_PTR)lin, 2)) continue;
         /* ► RE-ARM IF THE CLIENT OVERWROTE US, and skip empty memory entirely. The
              first version armed at mode-switch time into memory the client had not
              loaded yet -- every breakpoint reported "was 00 00", the module was then
@@ -3865,7 +3930,7 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                        path for a broken one. Route the interrupt the evidence names,
                        measure, then widen. The order matters: this test comes before every
                        service arm below, so it cannot be shadowed by one of them. */
-                    if (vec == 0x21 && g_pm_int[vec].sel && !g_pm_disp[vec]) {
+                    if (vec == 0x21 && g_pm_int[vec].client && !g_pm_disp[vec]) {
                         int rc = dpmi_dispatch_to_pm_handler(mp, tib, vec, steps);
                         if (rc != 0 || g_pm_int[vec].sel) return rc;
                         /* rc==0 with no handler means dispatch declined -> fall through */
@@ -4117,6 +4182,7 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                                a 16-bit handler keeps the word-masked offset as before */
                             g_pm_int[bl].off = dpmi_sel_is32(hsel) ? VDM_REG(tib, VTIB_EDX)
                                                                    : (VDM_REG(tib, VTIB_EDX) & 0xFFFF);
+                            g_pm_int[bl].client = 1;         /* the client owns it now */
                             p = zput(p, " -> setPMvec int 0x"); p = zhex(p, bl);
                             p = zput(p, " = 0x"); p = zhex(p, g_pm_int[bl].sel);
                             p = zput(p, ":0x"); p = zhex(p, g_pm_int[bl].off);
@@ -4853,6 +4919,7 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                                 g_pm_int[al].sel = hsel;
                                 g_pm_int[al].off = dpmi_sel_is32(hsel) ? VDM_REG(tib, VTIB_EDX)
                                                                        : (VDM_REG(tib, VTIB_EDX) & 0xFFFF);
+                                g_pm_int[al].client = 1;
                                 p = zput(p, "INT21h AH=25 (PM) set PM vector 0x"); p = zhex(p, al);
                                 p = zput(p, " = 0x"); p = zhex(p, g_pm_int[al].sel);
                                 p = zput(p, ":0x"); p = zhex(p, g_pm_int[al].off);
@@ -6309,6 +6376,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                         *envf = env_sel;
                     }
                   }
+                  dpmi_install_default_pm_handlers(&m);
                   p = zput(p, " PSP 0x"); p = zhex(p, psp);
                   p = zput(p, " -> ES=0x"); p = zhex(p, psp_sel);
                   p = zput(p, " env -> sel 0x"); p = zhex(p, env_sel);
@@ -6465,7 +6533,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                        (g_pm_int[8], via INT 31h 0205) and its virtual-IF is enabled, deliver
                        the latched IRQ0 to that handler -- how timer-hooking games get ticks.
                        The latch persists across CLI windows so a masked interrupt isn't lost. */
-                    if (g_pm_irq0_latch && g_dpmi_vi && g_pm_int[0x08].sel && !g_in_pm_irq
+                    if (g_pm_irq0_latch && g_dpmi_vi && g_pm_int[0x08].client && !g_in_pm_irq
                         && !g_pm_noirq) {
                         g_pm_irq0_latch = 0;
                         g_in_pm_irq = 1;
