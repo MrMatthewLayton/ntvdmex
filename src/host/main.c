@@ -317,7 +317,22 @@ static HANDLE       g_key_event;            /* signalled when a key is pushed   
 static volatile LONG g_running = 1;         /* 0 once the window is closed         */
 static int g_dpmi_pm = 0;                   /* set once the guest is switched to PM (spike) */
 static DWORD g_dpmi_code_base = 0;          /* linear base of the guest PM code seg (retcs<<4) */
-static BYTE  g_int_vec[0x10000];            /* per-CS-offset: original INT vector we patched to a BOP */
+/* ── THE INT->BOP PATCH MAP, KEYED BY LINEAR ADDRESS. ─────────────────────────────
+   It used to be keyed by OFFSET INTO A SINGLE 64K WINDOW at g_dpmi_code_base, and that
+   is exactly as much of the guest as the one up-front scan could reach. Session 17
+   measured what that misses: DOS/4GW allocates conventional memory with INT 21h AH=48h,
+   READS A PROTECTED-MODE MODULE INTO IT from DOOM.EXE, retypes the descriptor to code
+   (INT 31h 0009, access 0xFB) and far-jumps in. That module's first instruction is
+   `mov ah,0x30 / CD 21` -- a RAW int, outside the window, never patched. A raw INT in
+   PM raises a #GP the kernel will not reflect, so the VDM died silently, at the same
+   address, every run since session 15.
+   Keying by linear address lets the map cover every region the client later declares to
+   be code, and makes dpmi_bop_vec's alias handling fall out for free. Sized to the V86
+   window plus the HMA; the DOS blocks Doom loads into land around 0x15000-0x2F000. */
+#define DPMI_PATCH_LIN_MAX 0x110000u
+static BYTE  g_int_vec[DPMI_PATCH_LIN_MAX]; /* linear addr -> original INT vector we patched to a BOP */
+static DWORD g_patch_lo = DPMI_PATCH_LIN_MAX;  /* watermarks, so unpatch/repatch stay cheap */
+static DWORD g_patch_hi = 0;
 
 /* --- run 52 hang-diagnostic telemetry (GH #2) ---------------------------------------
    The PM loop can stop advancing in three indistinguishable-in-the-log ways: (a) the
@@ -403,6 +418,14 @@ static DWORD dpmi_sel_base(WORD sel);       /* fwd: watchdog resolves the frozen
    service patched INT 21h/31h ourselves -- routing to a client-installed PM handler is
    a deeper item; storing the vectors is what real extenders' save/restore needs.) */
 static struct { WORD sel; DWORD off; } g_pm_int[256];
+/* DPMI PM EXCEPTION-handler table (INT 31h 0202/0203). Separate from g_pm_int on
+   purpose: 0202/0203 address CPU exceptions 00h-1Fh, which are a different namespace
+   from the interrupt vectors 0204/0205 addresses -- a client may legitimately install
+   a #GP (0Dh) exception handler and an INT 0Dh (IRQ5) interrupt handler at once, and
+   collapsing them into one table would make each silently overwrite the other.
+   Doom's DOS/4GW makes 45 of these calls -- the biggest single block of UNSUP in the
+   session-16 trace -- installing its own fault handlers before it runs the game. */
+static struct { WORD sel; DWORD off; int set; } g_pm_exc[32];
 static int   g_dpmi_vi = 1;                 /* DPMI virtual interrupt flag (INT 31h 0900/0901/0902) */
 /* DPMI 0303 real-mode callbacks: each slot records the client's PM handler (sel:off)
    and the RMCS buffer (sel:off) to marshal register state through. g_pmret_sel is a
@@ -2809,6 +2832,32 @@ static long host_interp(volatile BYTE *tib, long cap)
     return iters;
 }
 
+/* ── PROBE A GUEST POINTER WITHOUT FAULTING. Session 17, and it cost a run. ────────
+   IsBadReadPtr does its job by TOUCHING the memory inside an SEH frame -- so on a bad
+   pointer it raises an access violation, and a VECTORED handler sees that before the
+   SEH frame swallows it. dpmi_crash_veh below is exactly such a handler, and while a
+   PM client is running it treats any fault with a flat CS as a reflected guest INT
+   31h: it rewrote our OWN thread's CONTEXT and resumed it. A diagnostic that guards
+   itself with IsBadReadPtr therefore KILLS the run it is diagnosing, and the log ends
+   one line before the thing you added it to see. That is what happened here.
+   VirtualQuery answers the same question by asking the memory manager instead of the
+   CPU, so it cannot raise. Committed + readable (any of the four read-capable
+   protections) + the whole span inside one region is the test. */
+static int host_readable(const void *addr, SIZE_T len)
+{
+    MEMORY_BASIC_INFORMATION mbi;
+    ULONG_PTR a = (ULONG_PTR)addr;
+    if (!a || len == 0) return 0;
+    if (VirtualQuery((LPCVOID)a, &mbi, sizeof(mbi)) != sizeof(mbi)) return 0;
+    if (mbi.State != MEM_COMMIT) return 0;
+    if (mbi.Protect & (PAGE_NOACCESS | PAGE_GUARD)) return 0;
+    if (!(mbi.Protect & (PAGE_READONLY | PAGE_READWRITE | PAGE_WRITECOPY |
+                         PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY)))
+        return 0;
+    /* the span must not run off the end of this region into an unmapped one */
+    return (a + len) <= ((ULONG_PTR)mbi.BaseAddress + mbi.RegionSize);
+}
+
 /* Crash diagnostic (DPMI spike): the PM switch works but VdmStartExecution faults
    inside the monitor when it runs PM, crashing the host with no info. This VEH
    catches the fault, dumps the exception (code/addr/params) + the host CONTEXT +
@@ -2830,7 +2879,17 @@ static LONG CALLBACK dpmi_crash_veh(EXCEPTION_POINTERS *ep)
        instruction bytes at [code_base+EDX] (the guest issues only INT 31h), SERVICE it as a
        DPMI call (returns in the CONTEXT, CF in EFlags), restore the LDT CS/SS, and resume the
        guest past the INT. The VEH IS the protected-mode DPMI handler, on the real CPU. */
-    if (cx->SegCs == 0x1B && s_veh_count < 256) {
+    /* ► "FLAT CS" IS NOT ENOUGH TO IDENTIFY A GUEST REFLECT, and assuming it was cost
+         session 17 a run. Our own host code ALSO runs with CS=0x1B, so a plain access
+         violation anywhere in the host -- a bad pointer in a diagnostic, a library
+         probe -- landed in this arm, got answered as "INT 31h, unsupported function",
+         had EAX/EFLAGS/CS/SS rewritten, and was RESUMED. The host then continued with a
+         corrupted context and the run ended with no explanation.
+         The guest's PM address space is the low megabyte-and-a-bit (V86 window + our
+         0x500 handler segment + the DPMI code base); no host code or system DLL lives
+         below 2 MB. So require the faulting EIP to be down there. Anything else is OUR
+         fault and must go to the fatal path, which says so and dumps it. */
+    if (cx->SegCs == 0x1B && cx->Eip < 0x00200000u && s_veh_count < 256) {
         DWORD site = g_dpmi_code_base + (cx->Edx & 0xFFFF);
         const BYTE *ib = (const BYTE *)(ULONG_PTR)site;
         DWORD func = cx->Eax & 0xFFFF;
@@ -3140,13 +3199,60 @@ static int dpmi_sel_desc(uint16_t sel, uint32_t *ar, uint32_t *limit)
      alias of the patched memory maps back to the right vector. */
 static DWORD dpmi_bop_vec(DWORD csv, DWORD eip)
 {
-    DWORD csb = dpmi_sel_base((WORD)csv);
-    DWORD lin = csb + eip;
-    DWORD off;
-    if (lin < g_dpmi_code_base) return 0;
-    off = lin - g_dpmi_code_base;
-    return (off < 0xFFFF) ? g_int_vec[off] : 0;
+    DWORD lin = dpmi_sel_base((WORD)csv) + eip;
+    return (lin < DPMI_PATCH_LIN_MAX) ? g_int_vec[lin] : 0;
 }
+
+/* ── PATCH A REGION THE CLIENT HAS JUST DECLARED TO BE CODE. ──────────────────────
+   Called from INT 31h 0009/000C when the resulting descriptor is a CODE type. The
+   TIMING is the client's, not ours, and it is right: Doom's trace shows AH=48h
+   allocate -> AH=3Fh read the module in -> 0009 retype to code -> far jump. So at the
+   moment the client says "code", the bytes are already in memory and have not yet been
+   executed -- the only window in which patching is both possible and safe.
+   Scanning a data region would be the dangerous thing (a `CD 21` byte pair that is
+   really data gets corrupted); scanning only what the client itself calls code is the
+   narrowest rule that covers the case, and g_int_vec[] remains the revert map. */
+static void dpmi_patch_code_region(DWORD base, DWORD limit)
+{
+    volatile BYTE *mem;
+    DWORD end, a, n = 0;
+    char lb[192], *q = lb;
+    if (base >= DPMI_PATCH_LIN_MAX) return;
+    /* ► NEVER PATCH THE IVT / BIOS DATA AREA, even when the client declares a base-0
+         code selector -- and Doom does exactly that (sel 0x67, base 0, limit 0xFFFF),
+         which made the first version of this scan rewrite 16 sites in linear 0..0xFFFF.
+         An interrupt vector is a word pair, so `CD 21` is a perfectly ordinary VALUE
+         down there: vector n = 0x21CD would be silently turned into 0xC4C4 and the
+         guest would jump into hyperspace on the next INT n. Below 0x600 is IVT + BDA +
+         our own handler segment prologue: definitionally data, never executed as the
+         client's code. Start the scan above it. */
+    end = base + limit;                              /* limit is the LAST valid byte */
+    if (base < 0x600) base = 0x600;                  /* ...but the region END is unchanged */
+    if (end >= DPMI_PATCH_LIN_MAX) end = DPMI_PATCH_LIN_MAX - 1;
+    if (end <= base) return;
+    mem = (volatile BYTE *)(ULONG_PTR)base;
+    for (a = 0; a + 1 < (end - base); ++a) {
+        if (mem[a] == 0xCD && (mem[a+1] == 0x31 || mem[a+1] == 0x21 || mem[a+1] == 0x10
+                               || mem[a+1] == 0x16 || mem[a+1] == 0x33
+                               || mem[a+1] == 0x1A || mem[a+1] == 0x08)) {
+            DWORD lin = base + a;
+            if (g_int_vec[lin]) continue;            /* already patched (aliased region) */
+            g_int_vec[lin] = mem[a+1];
+            mem[a] = 0xC4; mem[a+1] = 0xC4;
+            if (lin < g_patch_lo) g_patch_lo = lin;
+            if (lin > g_patch_hi) g_patch_hi = lin;
+            ++n;
+        }
+    }
+    q = zput(q, "DPMI: code region 0x"); q = zhex(q, base);
+    q = zput(q, "..0x"); q = zhex(q, end);
+    q = zput(q, " -> patched "); q = zhex(q, n); q = zput(q, " INT sites\r\n");
+    log_append(LOG_PATH, lb, q); serial_out(lb, q);
+}
+
+/* A descriptor access byte names CODE iff it is a segment (S, bit 4) and executable
+   (bit 3). 0xFB -- what DOS/4GW writes -- is present/DPL3/S/code/readable/accessed. */
+#define DPMI_ACC_IS_CODE(a) (((a) & 0x18) == 0x18)
 
 /* Un-patch / re-patch the shared code segment around a V86 excursion (INT 31h 0301/
    0303). The switch-time scan rewrote every `CD 31`/`CD 21` in the code segment to a
@@ -3158,17 +3264,21 @@ static DWORD dpmi_bop_vec(DWORD csv, DWORD eip)
    resuming the PM client. */
 static void dpmi_unpatch(void)
 {
-    volatile BYTE *cs = (volatile BYTE *)(ULONG_PTR)g_dpmi_code_base;
-    DWORD o;
-    for (o = 0; o < 0xFFFF; ++o)
-        if (g_int_vec[o]) { cs[o] = 0xCD; cs[o + 1] = g_int_vec[o]; }
+    DWORD a;
+    for (a = g_patch_lo; a <= g_patch_hi && a < DPMI_PATCH_LIN_MAX; ++a)
+        if (g_int_vec[a]) {
+            volatile BYTE *b = (volatile BYTE *)(ULONG_PTR)a;
+            b[0] = 0xCD; b[1] = g_int_vec[a];
+        }
 }
 static void dpmi_repatch(void)
 {
-    volatile BYTE *cs = (volatile BYTE *)(ULONG_PTR)g_dpmi_code_base;
-    DWORD o;
-    for (o = 0; o < 0xFFFF; ++o)
-        if (g_int_vec[o]) { cs[o] = 0xC4; cs[o + 1] = 0xC4; }
+    DWORD a;
+    for (a = g_patch_lo; a <= g_patch_hi && a < DPMI_PATCH_LIN_MAX; ++a)
+        if (g_int_vec[a]) {
+            volatile BYTE *b = (volatile BYTE *)(ULONG_PTR)a;
+            b[0] = 0xC4; b[1] = 0xC4;
+        }
 }
 
 /* Forward decl: the shared PM-interrupt dispatcher (defined after this fn). A callback
@@ -3429,6 +3539,82 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                             p = zput(p, " = 0x"); p = zhex(p, g_pm_int[bl].sel);
                             p = zput(p, ":0x"); p = zhex(p, g_pm_int[bl].off);
                             break; }
+                        /* ── 0202/0203 GET/SET PROTECTED-MODE EXCEPTION HANDLER ──────────
+                           DPMI 0.9: BL = exception 00h..1Fh; CX:(E)DX = handler sel:off.
+                           BL > 1Fh is the one documented error (8021h, "invalid value").
+                           ► WHAT 0202 RETURNS BEFORE THE CLIENT HAS SET ANYTHING is a real
+                             decision, not a detail. A client that CHAINS (the usual pattern:
+                             get, save, set, and far-call the saved one for exceptions it
+                             does not want) will store whatever we hand back and jump to it.
+                             0000:0000 is therefore an unexecutable address dressed up as a
+                             valid answer. We hand back the host's own handler segment and
+                             the register-preserving RETF at DPMI_SSR_OFF, so a chain lands
+                             on a real instruction inside a selector that exists.
+                             This is NOT a working default exception handler -- the DPMI spec
+                             says a host's default terminates the client, and ours cannot yet
+                             do that from PM. It is the inert answer, and it is only ever
+                             reached if an exception actually fires, at which point the run
+                             is already lost. Recorded so the next reader does not mistake it
+                             for a considered exception-delivery design: there isn't one yet. */
+                        case 0x0202: {                             /* get PM exception handler: BL -> CX:(E)DX */
+                            DWORD bl = VDM_REG(tib, VTIB_EBX) & 0xFF;
+                            if (bl > 0x1F) {
+                                VDM_REG(tib, VTIB_EFLAGS) |= 1u; VDM_SET16(tib, VTIB_EAX, 0x8021);
+                                p = zput(p, " -> getEXC bad exception 0x"); p = zhex(p, bl); break;
+                            }
+                            if (!g_pm_exc[bl].set) {
+                                g_pm_exc[bl].sel = dpmi_hdlr_code_sel();
+                                g_pm_exc[bl].off = DPMI_SSR_OFF;
+                            }
+                            VDM_SET16(tib, VTIB_ECX, g_pm_exc[bl].sel);
+                            if (dpmi_sel_is32(g_pm_exc[bl].sel)) VDM_REG(tib, VTIB_EDX) = g_pm_exc[bl].off;
+                            else VDM_SET16(tib, VTIB_EDX, g_pm_exc[bl].off & 0xFFFF);
+                            p = zput(p, " -> getEXC 0x"); p = zhex(p, bl);
+                            p = zput(p, " = 0x"); p = zhex(p, g_pm_exc[bl].sel);
+                            p = zput(p, ":0x"); p = zhex(p, g_pm_exc[bl].off);
+                            break; }
+                        case 0x0203: {                             /* set PM exception handler: BL = CX:(E)DX */
+                            DWORD bl = VDM_REG(tib, VTIB_EBX) & 0xFF;
+                            WORD hsel = (WORD)VDM_REG(tib, VTIB_ECX);
+                            if (bl > 0x1F) {
+                                VDM_REG(tib, VTIB_EFLAGS) |= 1u; VDM_SET16(tib, VTIB_EAX, 0x8021);
+                                p = zput(p, " -> setEXC bad exception 0x"); p = zhex(p, bl); break;
+                            }
+                            g_pm_exc[bl].sel = hsel;
+                            /* same 16/32 offset rule as 0205: a 32-bit handler selector means
+                               the client passed a full EDX (GH #18 run 83). */
+                            g_pm_exc[bl].off = dpmi_sel_is32(hsel) ? VDM_REG(tib, VTIB_EDX)
+                                                                   : (VDM_REG(tib, VTIB_EDX) & 0xFFFF);
+                            g_pm_exc[bl].set = 1;
+                            p = zput(p, " -> setEXC 0x"); p = zhex(p, bl);
+                            p = zput(p, " = 0x"); p = zhex(p, g_pm_exc[bl].sel);
+                            p = zput(p, ":0x"); p = zhex(p, g_pm_exc[bl].off);
+                            break; }
+                        /* ── 06xx PAGE LOCKING / 07xx DEMAND-PAGING HINTS ────────────────
+                           These are all trivially satisfiable here, and that is a FACT about
+                           this host rather than a shortcut: our 0501 blocks are VirtualAlloc'd
+                           MEM_COMMIT in our own process and are never paged out by us. There
+                           is no virtual memory to lock, so "lock" is already true and "unlock"
+                           costs nothing; the 07xx pair are explicitly advisory in the spec
+                           ("the host may ignore this call"). Returning CF=0 is the correct
+                           answer, not a stub. Doom asks 0702 six times.
+                           0604 (get page size) is the one that carries information: 4096 on
+                           every x86, which is not a guess -- it is architecture. */
+                        case 0x0600:                               /* lock linear region      */
+                        case 0x0601:                               /* unlock linear region    */
+                        case 0x0602:                               /* unlock real-mode region */
+                        case 0x0603:                               /* relock real-mode region */
+                        case 0x0701:                               /* discard page contents (advisory) */
+                        case 0x0702:                               /* mark pages demand-paging candidates (advisory) */
+                            VDM_REG(tib, VTIB_EFLAGS) &= ~1u;
+                            p = zput(p, " -> paging no-op (no virtual memory here)");
+                            break;
+                        case 0x0604:                               /* get page size -> BX:CX */
+                            VDM_SET16(tib, VTIB_EBX, 0);
+                            VDM_SET16(tib, VTIB_ECX, 0x1000);
+                            VDM_REG(tib, VTIB_EFLAGS) &= ~1u;
+                            p = zput(p, " -> page size 4096");
+                            break;
                         case 0x0900:                               /* get + disable virtual interrupt state */
                             VDM_SET16(tib, VTIB_EAX, 0x0900 | (g_dpmi_vi & 1));
                             g_dpmi_vi = 0; p = zput(p, " -> cli");
@@ -3476,6 +3662,12 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                                 g_ldt[idx].access = VDM_REG(tib, VTIB_ECX) & 0xFF;
                                 g_ldt[idx].flags  = (VDM_REG(tib, VTIB_ECX) >> 12) & 0xF;  /* CH high nibble */
                                 dpmi_install(idx);
+                                /* "This region is now code" is the client naming its own
+                                   requirement -- and the only notice we get that a module
+                                   it just loaded is about to be executed. Patch its INT
+                                   sites now; see dpmi_patch_code_region(). */
+                                if (DPMI_ACC_IS_CODE(g_ldt[idx].access))
+                                    dpmi_patch_code_region(g_ldt[idx].base, g_ldt[idx].limit);
                             }
                             p = zput(p, " sel 0x"); p = zhex(p, VDM_REG(tib, VTIB_EBX) & 0xFFFF);
                             p = zput(p, " -> setaccess 0x"); p = zhex(p, VDM_REG(tib, VTIB_ECX) & 0xFFFF);
@@ -3546,6 +3738,8 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                             g_ldt[idx].access = (BYTE)((hi >> 8) & 0xFF);
                             g_ldt[idx].flags  = (BYTE)((hi >> 20) & 0xF);
                             dpmi_install(idx);
+                            if (DPMI_ACC_IS_CODE(g_ldt[idx].access))   /* same rule as 0009 */
+                                dpmi_patch_code_region(g_ldt[idx].base, g_ldt[idx].limit);
                             p = zput(p, " sel 0x"); p = zhex(p, VDM_REG(tib, VTIB_EBX) & 0xFFFF);
                             p = zput(p, " <- desc 0x"); p = zhex(p, lo);
                             p = zput(p, ":0x"); p = zhex(p, hi);
@@ -3883,11 +4077,18 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                              live at selector<<4. That is a silent wrong-memory bug of exactly the
                              kind that cost this session a day (see the D/B fix). Pointer-taking
                              services are hand-rolled above with dpmi_sel_base(), or stay loud.
-                           ► ES-as-SEGMENT services (49h free, 4Ah resize) are ALSO excluded: the
-                             block address they want is a real-mode paragraph, but in PM ES holds
-                             a selector, and which one the client means is not something to guess.
-                             Doom reaches 48h first; if it then calls 49h/4Ah the log will say so
-                             and we can settle the convention on evidence.
+                           ► ES-as-SEGMENT services (49h free, 4Ah resize) are ALSO excluded from
+                             the whitelist: the block address they want is a real-mode paragraph,
+                             but in PM ES holds a selector. Session 16 said "if Doom calls 49h the
+                             log will say so and we can settle the convention on evidence" -- IT
+                             DID (twice), so 49h is hand-rolled below, resolving ES through the
+                             LDT. 4Ah is still unevidenced and still stays loud.
+                           ► 33h (Ctrl-Break / true version) joined the whitelist on the same
+                             evidence: Doom calls it twice, and every subfunction dos_int21
+                             implements (AL=00/01/05/06) reads and writes GPRs only. Leaving it
+                             unhandled was NOT neutral -- the TODO arm returned with AX still
+                             0x33xx and CF untouched, and the caller's very next instructions are
+                             `xchg ax,cx / cbw / retn`, i.e. it propagates whatever we left.
                            Doom (DOS/4GW) needs 48h to allocate the memory it loads its LE image
                            into -- it is the first DOS call it makes from protected mode. */
                         if (ah == 0x48) {
@@ -3936,8 +4137,48 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                             VDM_REG(tib, VTIB_EIP) += 2;
                             return 1;
                         }
+                        if (ah == 0x49) {
+                            /* ── DOS FREE, FROM PROTECTED MODE: ES IS A SELECTOR ────────────
+                               The mirror image of 48h above, and the convention is forced by
+                               it rather than chosen: 48h handed the client a SELECTOR in AX,
+                               the client did `mov es,ax`, and the only thing it can pass back
+                               to 49h is that selector. So resolve ES through the LDT and free
+                               the paragraph its base names. Treating ES as a raw segment here
+                               would free whatever MCB happens to live at the selector VALUE --
+                               a silent heap corruption, which is precisely the hazard the
+                               whitelist comment below exists to prevent.
+                               The LDT slot is zeroed rather than reused: g_ldt_next is a bump
+                               allocator, so a freed slot is left reclaimable (same treatment
+                               as INT 31h 0101) instead of pretending to a free list we do not
+                               have. */
+                            WORD sel = (WORD)(VDM_REG(tib, VTIB_ES) & 0xFFFF);
+                            int idx = sel >> 3;
+                            DWORD segbase = dpmi_sel_base(sel);
+                            int err;
+                            p = zput(p, "INT21h AH=49 (PM) free sel 0x"); p = zhex(p, sel);
+                            p = zput(p, " base 0x"); p = zhex(p, segbase);
+                            if ((segbase & 0xF) || segbase > 0xFFFFFu) {
+                                /* Not a paragraph-aligned conventional-memory base: this is not
+                                   a block DOS ever handed out, so refuse LOUDLY rather than
+                                   corrupt the MCB chain guessing. */
+                                VDM_REG(tib, VTIB_EFLAGS) |= 1u;
+                                VDM_SET16(tib, VTIB_EAX, 9);       /* invalid memory block address */
+                                p = zput(p, " -> REFUSED (not a DOS paragraph)");
+                            } else {
+                                err = dos_free(NULL, (uint16_t)(segbase >> 4));
+                                if (err) { VDM_REG(tib, VTIB_EFLAGS) |= 1u; VDM_SET16(tib, VTIB_EAX, err);
+                                           p = zput(p, " -> err 0x"); p = zhex(p, err); }
+                                else { VDM_REG(tib, VTIB_EFLAGS) &= ~1u;
+                                       if (idx >= 3 && idx < 512) { g_ldt[idx].base = g_ldt[idx].limit = 0; }
+                                       p = zput(p, " -> freed seg 0x"); p = zhex(p, segbase >> 4); }
+                            }
+                            p = zput(p, "\r\n");
+                            log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                            VDM_REG(tib, VTIB_EIP) += 2;
+                            return 1;
+                        }
                         if (ah == 0x19 || ah == 0x2A || ah == 0x2C || ah == 0x30 ||
-                            ah == 0x58) {
+                            ah == 0x33 || ah == 0x58) {
                             m.tp = p; dos_int21_set_pm(1); dos_int21(&m); dos_int21_set_pm(0); p = m.tp;
                             p = zput(p, "INT21h AH=0x"); p = zhex(p, ah);
                             p = zput(p, " (PM, register-only -> V86 DOS) -> AX=0x");
@@ -3949,7 +4190,35 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                             VDM_REG(tib, VTIB_EIP) += 2;
                             return 1;
                         }
-                        p = zput(p, "INT21h AH=0x"); p = zhex(p, ah); p = zput(p, " (PM thunk TODO)\r\n");
+                        /* ── UNHANDLED INT 21h FROM PM: SAY ENOUGH TO IDENTIFY IT ────────
+                           The session-16 trace reported five calls with "AH=0xff", which is
+                           not a DOS function at all -- so either the client really is passing
+                           0xFF, or AH is inherited garbage from the caller, or the vector
+                           resolution put us here wrongly. The old one-line log could not tell
+                           those apart, and guessing between them is exactly the reasoning-
+                           instead-of-measuring failure this project keeps paying for. Dump the
+                           full register file and the caller's bytes so the NEXT run names it.
+                           Note the caller's INT is 2 bytes back from EIP (the patched BOP). */
+                        { DWORD cs = VDM_REG(tib, VTIB_CS) & 0xFFFF;
+                          DWORD cb = dpmi_sel_base((WORD)cs);
+                          DWORD ip = VDM_REG(tib, VTIB_EIP);
+                          p = zput(p, "INT21h AH=0x"); p = zhex(p, ah); p = zput(p, " (PM thunk TODO)");
+                          p = zput(p, " EAX=0x"); p = zhex(p, VDM_REG(tib, VTIB_EAX));
+                          p = zput(p, " EBX=0x"); p = zhex(p, VDM_REG(tib, VTIB_EBX));
+                          p = zput(p, " ECX=0x"); p = zhex(p, VDM_REG(tib, VTIB_ECX));
+                          p = zput(p, " EDX=0x"); p = zhex(p, VDM_REG(tib, VTIB_EDX));
+                          p = zput(p, " DS=0x");  p = zhex(p, VDM_REG(tib, VTIB_DS) & 0xFFFF);
+                          p = zput(p, " ES=0x");  p = zhex(p, VDM_REG(tib, VTIB_ES) & 0xFFFF);
+                          p = zput(p, " cs:eip=0x"); p = zhex(p, cs);
+                          p = zput(p, ":0x"); p = zhex(p, ip);
+                          p = zput(p, " bytes@int=");
+                          /* Same guard as the checkpoint dump, and for the same reason it
+                             must be host_readable() and never IsBadReadPtr: a probe that
+                             faults on purpose is caught by our own VEH mid-PM-run. */
+                          { const BYTE *ib = (const BYTE *)(ULONG_PTR)(cb + ip - 2);
+                            if (!host_readable(ib, 16)) p = zput(p, "<unreadable from host>");
+                            else                        p = zdump(p, ib, 16); }
+                          p = zput(p, "\r\n"); }
                         log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
                         VDM_REG(tib, VTIB_EIP) += 2;
                         return 1;
@@ -5259,7 +5528,11 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                       if (cs[o] == 0xCD && (cs[o+1] == 0x31 || cs[o+1] == 0x21 || cs[o+1] == 0x10
                                             || cs[o+1] == 0x16 || cs[o+1] == 0x33
                                             || cs[o+1] == 0x1A || cs[o+1] == 0x08)) {
-                          g_int_vec[o] = cs[o+1]; cs[o] = 0xC4; cs[o+1] = 0xC4; ++n; last = o;
+                          DWORD lin = g_dpmi_code_base + o;      /* map is linear-keyed now */
+                          if (lin >= DPMI_PATCH_LIN_MAX) break;
+                          g_int_vec[lin] = cs[o+1]; cs[o] = 0xC4; cs[o+1] = 0xC4; ++n; last = o;
+                          if (lin < g_patch_lo) g_patch_lo = lin;
+                          if (lin > g_patch_hi) g_patch_hi = lin;
                       }
                   }
                   p = zput(p, "DPMI: patched "); p = zhex(p, n);
@@ -5371,15 +5644,102 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                         p = zput(p, " ss:esp=0x"); p = zhex(p, VDM_REG(tib, VTIB_SS) & 0xFFFF);
                         p = zput(p, ":0x"); p = zhex(p, VDM_REG(tib, VTIB_ESP));
                         p = zput(p, " bytes@cs:eip=");
-                        /* GUARD THE INSTRUMENT. Doom is a PAGED client -- DOS/4GW builds its
-                           own page tables -- so csbase+eip need not be readable from the
-                           host's flat address space. An unguarded read here would fault in
-                           our own diagnostic and destroy the very evidence we came for. */
+                        /* GUARD THE INSTRUMENT -- with host_readable(), NOT IsBadReadPtr.
+                           csbase+eip need not be readable from the host's flat address
+                           space, and an unguarded read would fault in our own diagnostic
+                           and destroy the evidence we came for. IsBadReadPtr looks like
+                           the guard for that but IS the same bug wearing a coat: it faults
+                           on purpose, and dpmi_crash_veh sees the fault first. */
                         { const BYTE *ib = (const BYTE *)(ULONG_PTR)(cbase + g_dpmi_enter_eip);
-                          if (IsBadReadPtr(ib, 16)) p = zput(p, "<unreadable from host>");
-                          else                      p = zdump(p, ib, 16); }
+                          if (!host_readable(ib, 16)) p = zput(p, "<unreadable from host>");
+                          else                        p = zdump(p, ib, 16); }
                         p = zput(p, "\r\n");
                         log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                        /* ── WHERE DOES CONTROL GO NEXT? ────────────────────────────────
+                           Session 17: Doom now clears every service it asks for and STILL
+                           stops at the same instruction (0x0F:0x6644, a `xchg ax,cx / cbw /
+                           retn` tail). The bytes at CS:EIP no longer explain anything --
+                           they are three harmless instructions -- so the interesting address
+                           is the one the RETN goes to, and the interesting state is what the
+                           client is carrying into it. The old checkpoint could show neither.
+                           Dump the register file and the top of the guest stack: the first
+                           stack word IS the return address for the pending RETN, and that
+                           turns "died somewhere after here" into a named next basic block.
+                           ► THE STACK ADDRESS MUST FOLLOW THE SS D/B BIT. With a 16-bit
+                             stack selector the CPU uses SP and leaves the top half of ESP
+                             holding whatever junk was there -- the first run of this dump
+                             read ESP=0xb3371474 against a base of 0x1100 and probed kernel
+                             space. That is not a corrupt guest; it is the architecture, and
+                             the same dpmi_sel_is32() rule 0204/0205 already use. */
+                        { WORD ss = (WORD)(VDM_REG(tib, VTIB_SS) & 0xFFFF);
+                          DWORD sb = dpmi_sel_base(ss);
+                          DWORD sp = dpmi_sel_is32(ss) ? VDM_REG(tib, VTIB_ESP)
+                                                       : (VDM_REG(tib, VTIB_ESP) & 0xFFFF);
+                          const BYTE *sk = (const BYTE *)(ULONG_PTR)(sb + sp);
+                          p = zput(p, "DPMI-CP["); p = zhex(p, (unsigned)steps);
+                          p = zput(p, "] regs EAX=0x"); p = zhex(p, VDM_REG(tib, VTIB_EAX));
+                          p = zput(p, " EBX=0x"); p = zhex(p, VDM_REG(tib, VTIB_EBX));
+                          p = zput(p, " ECX=0x"); p = zhex(p, VDM_REG(tib, VTIB_ECX));
+                          p = zput(p, " EDX=0x"); p = zhex(p, VDM_REG(tib, VTIB_EDX));
+                          p = zput(p, " ESI=0x"); p = zhex(p, VDM_REG(tib, VTIB_ESI));
+                          p = zput(p, " EDI=0x"); p = zhex(p, VDM_REG(tib, VTIB_EDI));
+                          p = zput(p, " EBP=0x"); p = zhex(p, VDM_REG(tib, VTIB_EBP));
+                          p = zput(p, " DS=0x"); p = zhex(p, VDM_REG(tib, VTIB_DS) & 0xFFFF);
+                          p = zput(p, " ES=0x"); p = zhex(p, VDM_REG(tib, VTIB_ES) & 0xFFFF);
+                          p = zput(p, " FS=0x"); p = zhex(p, VDM_REG(tib, VTIB_FS) & 0xFFFF);
+                          p = zput(p, " GS=0x"); p = zhex(p, VDM_REG(tib, VTIB_GS) & 0xFFFF);
+                          p = zput(p, " efl=0x"); p = zhex(p, VDM_REG(tib, VTIB_EFLAGS));
+                          p = zput(p, " ssbase=0x"); p = zhex(p, sb);
+                          p = zput(p, " sp=0x"); p = zhex(p, sp);
+                          p = zput(p, " stack@ss:sp=");
+                          if (!host_readable(sk, 32)) p = zput(p, "<unreadable from host>");
+                          else                        p = zdump(p, sk, 32);
+                          /* ── AND THE FRAME AT SS:BP ──────────────────────────────────
+                             Static disassembly of DOOM.EXE (the DOS/4GW 16-bit half is
+                             bound in at file offset 0x1DD0, so guest 0x0F:off = file
+                             0x1DD0+off) says the client dies in its HANDOFF to the
+                             application, twelve instructions after the last checkpoint:
+                               72d8 mov es,[bp+2]   72db mov di,[bp+0xe]
+                               72de/e2/e6 build an IRET frame from [bp+0x1e/0x22/0x26]
+                               72ea mov bx,[bp+4]   72ef mov ss,ax   72f8 mov ds/es,bx
+                               72fc iret            <- enters the app
+                             EVERY operand is a word in the frame at SS:BP, and all of
+                             them are selectors or a far entry point. Dumping the frame is
+                             therefore the whole question: which descriptors it is about to
+                             load, and where it is about to jump. Without it we would be
+                             guessing which of the twelve faults; with it the answer is a
+                             lookup against the descriptor calls already in this log. */
+                          { const BYTE *fr = (const BYTE *)(ULONG_PTR)
+                                (sb + (VDM_REG(tib, VTIB_EBP) & 0xFFFF));
+                            p = zput(p, " frame@ss:bp=");
+                            if (!host_readable(fr, 0x30)) p = zput(p, "<unreadable from host>");
+                            else {
+                                p = zdump(p, fr, 0x30);
+                                /* ► AND THE CODE IT IS ABOUT TO JUMP TO. This half IS
+                                     DOS/4GW-frame-specific and says so: [bp+0x22]:[bp+0x1e]
+                                     is the far entry the IRET at 0x72fc consumes. The first
+                                     frame dump proved every descriptor it loads is in range
+                                     and correctly typed (SS=0xAF lim 0x7cff, SP=0x6F3E;
+                                     DS/ES=0x17; CS=0x8F lim 0x5e3f, IP=0x2C63) -- so the
+                                     fault is not the handoff, it is the FIRST INSTRUCTIONS
+                                     OF THE MODULE, and those live in a block DOS/4GW read
+                                     out of DOOM.EXE at runtime. They are not in any file we
+                                     can disassemble offline; the only place they exist is
+                                     guest memory, here, now. Hence the dump.
+                                     Costs nothing when the frame is not a DOS/4GW one: the
+                                     selector simply will not resolve to readable memory. */
+                                { WORD fcs = *(const WORD *)(fr + 0x22);
+                                  WORD fip = *(const WORD *)(fr + 0x1e);
+                                  const BYTE *ep = (const BYTE *)(ULONG_PTR)
+                                      (dpmi_sel_base(fcs) + fip);
+                                  p = zput(p, " entry=0x"); p = zhex(p, fcs);
+                                  p = zput(p, ":0x"); p = zhex(p, fip);
+                                  p = zput(p, " base=0x"); p = zhex(p, dpmi_sel_base(fcs));
+                                  p = zput(p, " code@entry=");
+                                  if (!host_readable(ep, 64)) p = zput(p, "<unreadable from host>");
+                                  else                        p = zdump(p, ep, 64); } } }
+                          p = zput(p, "\r\n");
+                          log_append(LOG_PATH, base, p); serial_out(base, p); p = base; }
                     }
                     dpmi_arm_fault_trampoline(tib, 0);   /* re-arm nest/flag/[0x638]/[TIB+8] */
                     if (steps < 4096) {
