@@ -66,6 +66,46 @@
     and sets the flags from ring 0, which is also why it reaches Doom's title screen on
     this box while we stop at `I_StartupTimer()`.
 
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ ★★★★ AND THE SPIKE LANDED: **`VdmStartExecution` RUNS PROTECTED MODE.**      │
+│      THE FOUNDING ASSUMPTION OF THIS HOST'S ARCHITECTURE WAS WRONG.          │
+└──────────────────────────────────────────────────────────────────────────────┘
+
+  Commit `d127228`, opt-in behind **`pmkernel.flag`** on the share (default path
+  untouched). Against today's host it does not fault at all:
+  ```
+    PMKERNEL[0] enter cs:eip=0x0f:0x12e ss:esp=0x1f:0xfffe msw=0x1
+    PMKERNEL[0] VdmStartExecution -> st=0x0 ev=0x4 cs:eip=0x0f:0x131
+  ```
+  **Eight consecutive entries** — `0x12e, 0x131, 0x133 … 0x1cf` — every one
+  `st=0 ev=4`, servicing **eight INT 31h calls**, and `dpmitest.com` prints FROM
+  PROTECTED MODE via `INT 31h 0300`. The kernel runs our PM guest.
+  ▶ The early spike's "VdmStartExecution faults when it runs PM" **does not
+    reproduce**. It was measured when almost none of the DPMI host existed, and the
+    entire in-process architecture — INT→BOP patch map, async injector — was built
+    on it.
+
+  **THE ONE FIX NEEDED TO GET PAST ENTRY 1**, and it is a hazard already documented
+  elsewhere in this file: with a 16-bit SS the CPU maintains **SP only**, so the top
+  half of ESP keeps whatever was last there. The far-jmp path stores that junk into
+  the TIB on exit and reloads it harmlessly with `lss` (the CPU ignores it). **The
+  kernel takes the CONTEXT's ESP whole:**
+  ```
+     entry 0   ss:esp=0x1f:0x0000fffe    -> returns ev=4
+     entry 1   ss:esp=0x17:0xb33afffa    -> NEVER RETURNS
+  ```
+  `0xb33a` is a host thread-stack address; `0xb33afffa` is far outside a `0xFFFF`
+  limit. Narrowing ESP to what the descriptor can address took it from 1 entry to 8.
+
+  ▶ **WHERE IT STOPS NOW — and it is a bounded bug, not an unknown.** `INT 31h 0301`
+    reads its RMCS (`ES:EDI = 0x17:0x476`, linear `0x1476`) as **all zeros**, so it
+    calls real mode at `0000:0000` and the guest is gone. The same client COMPLETES
+    on the far-jmp path, so the RMCS is being filled — just not where we look, or
+    not by the time we look. **Start here.**
+  ▶ Then: re-check whether the INT→BOP patch map is still needed at all (the kernel
+    reflects a PM `INT nn` natively on this path), and whether the kernel now
+    delivers IRQ0 without any async injection — which is the whole point.
+
   ▶▶ **SO `VdmStartExecution`-FOR-PM IS NO LONGER A HUNCH ABOUT A NICER ARCHITECTURE —
      IT IS THE ONLY PLACE THE GUEST'S INTERRUPT STATE CAN BE SET.** Our own source says
      the kernel has a working PM path (`Under VdmStartExecution the kernel reflects a
