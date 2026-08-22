@@ -555,6 +555,13 @@ static struct { WORD sel; DWORD off; BYTE client; } g_pm_int[256];
    already uses, so it needs no special case in the dispatcher. Each stub's LINEAR
    address is registered in the patch map against its vector, so dpmi_bop_vec() resolves
    a chained call straight back to the service the client was asking for. */
+/* Every block we have handed the client through INT 31h 0501. We know exactly which
+   memory is the client's because we allocated it -- and that is the only usable answer
+   when the client declares a FLAT code selector. See dpmi_patch_code_region(). */
+#define DPMI_MEMBLK_MAX 64
+static struct { DWORD base, size; } g_dpmi_blk[DPMI_MEMBLK_MAX];
+static int g_dpmi_nblk = 0;
+
 #define DPMI_PMDEF_STRIDE 3
 static WORD  g_pm_defsel  = 0;      /* code selector over the stub block */
 static DWORD g_pm_defbase = 0;      /* its linear base                   */
@@ -3417,7 +3424,42 @@ static void dpmi_patch_code_region(DWORD base, DWORD limit)
     /* No upper bound any more: the regions that matter live in EXTENDED memory, which is
        where a working extender puts its modules. The size cap is a sanity bound rather
        than a policy -- a multi-megabyte "code" region is a flat alias, not a module. */
-    if (end <= base || (end - base) > 0x00400000u) return;
+    if (end <= base) return;
+    /* ► A FLAT CODE SELECTOR CANNOT BE SCANNED, BUT THE CLIENT'S MEMORY CAN. Doom's own
+         32-bit code selector is `setaccess 0xC7FA` -- present, DPL3, code, G=1, D/B=1,
+         base 0, limit 4 GB. Scanning that range is impossible and would mis-patch every
+         byte of the address space, so we used to refuse it outright and the application's
+         raw `CD 21` / `CD 31` were left unpatched -- which is the one fault XP will not
+         reflect. The usable answer is that WE KNOW WHICH MEMORY IS THE CLIENT'S: it is
+         what we handed out through 0501. So for an oversized region, scan those blocks
+         (clipped to the region) instead of the range.
+         Timing is on our side: the client declares its code selector once its image is
+         loaded and long before it reads data files, so the blocks in play at that moment
+         are code. The count is logged -- thousands of "INT sites" would mean we are
+         patching data, and that is the number to look at if something later reads wrong. */
+    if ((end - base) > 0x00400000u) {
+        /* ► A FLAT CODE SELECTOR, AND WE DO NOT HAVE AN ANSWER FOR IT YET. Doom's own
+             32-bit code selector is `setaccess 0xC7FA` -- present, DPL3, code, G=1,
+             D/B=1, base 0, limit 4 GB. Scanning that range is impossible, so the
+             application's raw `CD 21` / `CD 31` go unpatched, and a raw INT in protected
+             mode is the one fault XP will not reflect.
+             ▶ SCANNING THE CLIENT'S OWN 0501 BLOCKS INSTEAD WAS TRIED AND IS WORSE
+               (measured, session 17): it patched three extra byte pairs inside the 1 MB
+               block that already held the extender's modules -- i.e. DATA -- and the run
+               ended EARLIER than without it. The client's memory is code and data mixed;
+               "everything we handed out" is not a code region.
+             ▶ What is needed is a way to know which parts of the client's memory are
+               code. The client knows: it loads objects with a flag. We do not see that
+               flag, but we DO see every window descriptor it builds over each object
+               (0006 + 000C) while relocating -- that is the shape of the answer.
+             g_dpmi_blk[] is recorded and ready for whoever takes this on. */
+        q = zput(q, "DPMI: FLAT code region 0x"); q = zhex(q, base);
+        q = zput(q, "..0x"); q = zhex(q, end);
+        q = zput(q, " -- NOT scanned; the client's INT sites here are UNPATCHED ("); 
+        q = zhex(q, (DWORD)g_dpmi_nblk); q = zput(q, " blocks known)\r\n");
+        log_append(LOG_PATH, lb, q); serial_out(lb, q);
+        return;
+    }
     /* ► WALK THE COMMITTED REGIONS, DO NOT WALK THE ADDRESS RANGE. A declared code
          region is the CLIENT's idea of what is code, and a client hands us ranges that
          span memory nobody has mapped -- Doom's own runtime declares a base-0 1 MB
@@ -4469,6 +4511,11 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                             void *mem = VirtualAlloc(NULL, sz ? sz : 1, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
                             if (!mem) { VDM_REG(tib, VTIB_EFLAGS) |= 1u; VDM_SET16(tib, VTIB_EAX, 0x8013);
                                         p = zput(p, " -> ENOMEM"); break; }
+                            if (g_dpmi_nblk < DPMI_MEMBLK_MAX) {   /* remember it: see the flat-selector case */
+                                g_dpmi_blk[g_dpmi_nblk].base = (DWORD)(ULONG_PTR)mem;
+                                g_dpmi_blk[g_dpmi_nblk].size = sz ? sz : 1;
+                                ++g_dpmi_nblk;
+                            }
                             { DWORD lin = (DWORD)(ULONG_PTR)mem;   /* in-process: linear = host ptr */
                               VDM_SET16(tib, VTIB_EBX, lin >> 16); VDM_SET16(tib, VTIB_ECX, lin & 0xFFFF);
                               VDM_SET16(tib, VTIB_ESI, lin >> 16); VDM_SET16(tib, VTIB_EDI, lin & 0xFFFF); /* handle=addr */
