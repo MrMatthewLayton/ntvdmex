@@ -334,6 +334,34 @@ static BYTE  g_int_vec[DPMI_PATCH_LIN_MAX]; /* linear addr -> original INT vecto
 static DWORD g_patch_lo = DPMI_PATCH_LIN_MAX;  /* watermarks, so unpatch/repatch stay cheap */
 static DWORD g_patch_hi = 0;
 
+/* ── GUEST BREAKPOINTS IN PROTECTED MODE. ─────────────────────────────────────────
+   THE PROBLEM THIS EXISTS FOR, because it has now cost three sessions. When a PM
+   client dies, the kernel terminates the whole VDM: no exception reaches our VEH, the
+   fault trampoline does not catch, and the log simply stops. All we ever learn is the
+   last INT the client executed -- and between two INTs there can be thousands of
+   instructions. Session 17 broke one such wall by dumping the guest stack and reading
+   DOS/4GW's handoff frame, but that worked only because the dead stretch happened to
+   end in a far transfer whose operands were in memory. The next stretch is straight-
+   line code, and that trick does not generalise.
+   A breakpoint does. The INT->BOP patch already proves we can make the guest stop at a
+   chosen byte and hand us its full register file; a breakpoint is the same mechanism
+   pointed at an address WE choose rather than one the client's INT happens to sit on.
+   Bisecting a dead stretch then costs one run per step instead of one rebuild per idea.
+   DRIVEN FROM A FILE ON THE SHARE, deliberately: addresses come from disassembling the
+   client, they change every time you halve the interval, and a rebuild-and-deploy cycle
+   per guess is the thing that makes people stop bisecting and start speculating.
+   ONE-SHOT by design: on hit we restore the original bytes and do NOT advance EIP, so
+   the real instruction executes and the client runs on undisturbed. A loop therefore
+   reports its first pass, not its ten-thousandth. */
+#define PMBP_PATH "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\pmbp.txt"
+#define DPMI_BP_VEC  0xEE               /* sentinel in g_int_vec[]: not a real vector */
+#define DPMI_BP_MAX  32
+static DWORD g_bp_lin[DPMI_BP_MAX];     /* requested linear addresses (from PMBP_PATH) */
+static DWORD g_bp_dump[DPMI_BP_MAX];    /* optional 2nd column: linear addr to dump on hit */
+static BYTE  g_bp_orig[DPMI_BP_MAX][2]; /* the two bytes we displaced                  */
+static BYTE  g_bp_armed[DPMI_BP_MAX];
+static int   g_bp_n = 0;
+
 /* --- run 52 hang-diagnostic telemetry (GH #2) ---------------------------------------
    The PM loop can stop advancing in three indistinguishable-in-the-log ways: (a) the
    main thread wedges INSIDE one dpmi_enter_pm() because the kernel silently swallowed a
@@ -3212,6 +3240,7 @@ static DWORD dpmi_bop_vec(DWORD csv, DWORD eip)
    Scanning a data region would be the dangerous thing (a `CD 21` byte pair that is
    really data gets corrupted); scanning only what the client itself calls code is the
    narrowest rule that covers the case, and g_int_vec[] remains the revert map. */
+static void dpmi_bp_arm(void);               /* fwd: a new region may hold a requested BP */
 static void dpmi_patch_code_region(DWORD base, DWORD limit)
 {
     volatile BYTE *mem;
@@ -3248,11 +3277,113 @@ static void dpmi_patch_code_region(DWORD base, DWORD limit)
     q = zput(q, "..0x"); q = zhex(q, end);
     q = zput(q, " -> patched "); q = zhex(q, n); q = zput(q, " INT sites\r\n");
     log_append(LOG_PATH, lb, q); serial_out(lb, q);
+    dpmi_bp_arm();          /* a module that has just appeared may hold a requested BP */
 }
 
 /* A descriptor access byte names CODE iff it is a segment (S, bit 4) and executable
    (bit 3). 0xFB -- what DOS/4GW writes -- is present/DPL3/S/code/readable/accessed. */
 #define DPMI_ACC_IS_CODE(a) (((a) & 0x18) == 0x18)
+
+/* Read PMBP_PATH. One line per breakpoint:
+       <hex linear addr to break on>  [hex linear addr to DUMP on hit]   # comment
+   The optional second column is what makes this a debugger rather than a tracer:
+   "stop here and show me that memory" is the question you actually have when a
+   register holds a value you cannot explain -- as BX=0x8b17 did, read from a PSP
+   field whose contents nothing in the log could show. '#' comments, blanks ignored.
+   Absent file = no breakpoints and no cost, like every other knob here. */
+static void dpmi_bp_load(void)
+{
+    HANDLE h = CreateFileA(PMBP_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                           NULL, OPEN_EXISTING, 0, NULL);
+    char buf[1024]; DWORD rd = 0, i = 0;
+    if (h == INVALID_HANDLE_VALUE) return;
+    ReadFile(h, buf, sizeof buf - 1, &rd, NULL);
+    CloseHandle(h);
+    while (i < rd && g_bp_n < DPMI_BP_MAX) {
+        DWORD v[2] = { 0, 0 }; int col = 0;
+        /* consume one LINE, taking up to two hex fields from it */
+        while (i < rd && (buf[i] == '\r' || buf[i] == '\n')) ++i;   /* line breaks */
+        if (i >= rd) break;
+        if (buf[i] == '#') { while (i < rd && buf[i] != '\n') ++i; continue; }
+        while (i < rd && buf[i] != '\r' && buf[i] != '\n') {
+            int digits = 0;
+            while (i < rd && (buf[i] == ' ' || buf[i] == '\t')) ++i;
+            if (i >= rd || buf[i] == '\r' || buf[i] == '\n') break;
+            if (buf[i] == '#') { while (i < rd && buf[i] != '\n') ++i; break; }
+            while (i < rd) {
+                char c = buf[i];
+                int d = (c >= '0' && c <= '9') ? c - '0'
+                      : (c >= 'a' && c <= 'f') ? c - 'a' + 10
+                      : (c >= 'A' && c <= 'F') ? c - 'A' + 10 : -1;
+                if (d < 0) break;
+                if (col < 2) v[col] = (v[col] << 4) | (DWORD)d;
+                ++digits; ++i;
+            }
+            if (digits) ++col;
+            else ++i;                              /* junk byte: skip, never spin */
+        }
+        if (col >= 1) {
+            g_bp_lin[g_bp_n] = v[0];
+            g_bp_dump[g_bp_n] = (col >= 2) ? v[1] : 0;
+            ++g_bp_n;
+        }
+    }
+}
+
+/* Arm any requested breakpoint whose address is now present in guest memory. Called
+   after the up-front INT scan and after every code-region patch, because a module the
+   client loads at runtime does not exist to be patched before then. */
+static void dpmi_bp_arm(void)
+{
+    int k;
+    for (k = 0; k < g_bp_n; ++k) {
+        DWORD lin = g_bp_lin[k];
+        volatile BYTE *b;
+        char lb[128], *q = lb;
+        if (lin < 0x600 || lin + 1 >= DPMI_PATCH_LIN_MAX) continue;
+        b = (volatile BYTE *)(ULONG_PTR)lin;
+        /* ► RE-ARM IF THE CLIENT OVERWROTE US, and skip empty memory entirely. The
+             first version armed at mode-switch time into memory the client had not
+             loaded yet -- every breakpoint reported "was 00 00", the module was then
+             READ IN OVER THE TOP, and not one of them fired. The instrument looked
+             like it worked (twelve confident "armed at" lines) and measured nothing,
+             which is this project's most familiar failure mode.
+             So: an armed breakpoint whose bytes are no longer our BOP has been
+             clobbered and must be re-armed against the NEW contents; and a site that
+             is still 00 00 holds nothing to break on, so leave it unarmed and try
+             again after the next region is loaded. */
+        if (g_bp_armed[k]) {
+            if (b[0] == 0xC4 && b[1] == 0xC4) continue;    /* still planted */
+            g_bp_armed[k] = 0; g_int_vec[lin] = 0;         /* clobbered -> re-arm below */
+        }
+        if (b[0] == 0x00 && b[1] == 0x00) continue;        /* nothing loaded here yet */
+        if (g_int_vec[lin]) continue;             /* an INT site already lives here */
+        g_bp_orig[k][0] = b[0]; g_bp_orig[k][1] = b[1];
+        b[0] = 0xC4; b[1] = 0xC4;
+        g_int_vec[lin] = DPMI_BP_VEC;
+        g_bp_armed[k] = 1;
+        if (lin < g_patch_lo) g_patch_lo = lin;
+        if (lin > g_patch_hi) g_patch_hi = lin;
+        q = zput(q, "DPMI-BP: armed at linear 0x"); q = zhex(q, lin);
+        q = zput(q, " (was "); q = zdump(q, (const BYTE *)g_bp_orig[k], 2);
+        q = zput(q, ")\r\n");
+        log_append(LOG_PATH, lb, q); serial_out(lb, q);
+    }
+}
+
+/* Disarm the breakpoint at `lin` (restore its bytes). Returns its index, or -1. */
+static int dpmi_bp_disarm(DWORD lin)
+{
+    int k;
+    for (k = 0; k < g_bp_n; ++k)
+        if (g_bp_armed[k] && g_bp_lin[k] == lin) {
+            volatile BYTE *b = (volatile BYTE *)(ULONG_PTR)lin;
+            b[0] = g_bp_orig[k][0]; b[1] = g_bp_orig[k][1];
+            g_int_vec[lin] = 0; g_bp_armed[k] = 0;
+            return k;
+        }
+    return -1;
+}
 
 /* Un-patch / re-patch the shared code segment around a V86 excursion (INT 31h 0301/
    0303). The switch-time scan rewrote every `CD 31`/`CD 21` in the code segment to a
@@ -3266,7 +3397,7 @@ static void dpmi_unpatch(void)
 {
     DWORD a;
     for (a = g_patch_lo; a <= g_patch_hi && a < DPMI_PATCH_LIN_MAX; ++a)
-        if (g_int_vec[a]) {
+        if (g_int_vec[a] && g_int_vec[a] != DPMI_BP_VEC) {   /* a BP is not an INT site */
             volatile BYTE *b = (volatile BYTE *)(ULONG_PTR)a;
             b[0] = 0xCD; b[1] = g_int_vec[a];
         }
@@ -3275,7 +3406,7 @@ static void dpmi_repatch(void)
 {
     DWORD a;
     for (a = g_patch_lo; a <= g_patch_hi && a < DPMI_PATCH_LIN_MAX; ++a)
-        if (g_int_vec[a]) {
+        if (g_int_vec[a] && g_int_vec[a] != DPMI_BP_VEC) {   /* a BP stays planted */
             volatile BYTE *b = (volatile BYTE *)(ULONG_PTR)a;
             b[0] = 0xC4; b[1] = 0xC4;
         }
@@ -3391,6 +3522,50 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
     DWORD ax = VDM_REG(tib, VTIB_EAX) & 0xFFFF;
     DWORD ev = VDM_REG(tib, VTIB_EVENT), eip = VDM_REG(tib, VTIB_EIP) & 0xFFFF;
     (void)steps;
+                    if (vec == DPMI_BP_VEC) {                      /* guest breakpoint hit */
+                        /* Report EVERYTHING -- the whole point is that the run may not
+                           survive to the next line. Then restore the displaced bytes and
+                           leave EIP WHERE IT IS, so the real instruction runs next and the
+                           client carries on as if we had never been here. */
+                        DWORD cs = VDM_REG(tib, VTIB_CS) & 0xFFFF;
+                        DWORD cb = dpmi_sel_base((WORD)cs);
+                        DWORD lin = cb + eip;
+                        WORD  ss  = (WORD)(VDM_REG(tib, VTIB_SS) & 0xFFFF);
+                        DWORD sb  = dpmi_sel_base(ss);
+                        DWORD sp  = dpmi_sel_is32(ss) ? VDM_REG(tib, VTIB_ESP)
+                                                      : (VDM_REG(tib, VTIB_ESP) & 0xFFFF);
+                        p = zput(p, "DPMI-BP HIT linear 0x"); p = zhex(p, lin);
+                        p = zput(p, " cs:eip=0x"); p = zhex(p, cs);
+                        p = zput(p, ":0x"); p = zhex(p, eip);
+                        p = zput(p, " after "); p = zhex(p, steps); p = zput(p, " svc");
+                        p = zput(p, " EAX=0x"); p = zhex(p, VDM_REG(tib, VTIB_EAX));
+                        p = zput(p, " EBX=0x"); p = zhex(p, VDM_REG(tib, VTIB_EBX));
+                        p = zput(p, " ECX=0x"); p = zhex(p, VDM_REG(tib, VTIB_ECX));
+                        p = zput(p, " EDX=0x"); p = zhex(p, VDM_REG(tib, VTIB_EDX));
+                        p = zput(p, " ESI=0x"); p = zhex(p, VDM_REG(tib, VTIB_ESI));
+                        p = zput(p, " EDI=0x"); p = zhex(p, VDM_REG(tib, VTIB_EDI));
+                        p = zput(p, " EBP=0x"); p = zhex(p, VDM_REG(tib, VTIB_EBP));
+                        p = zput(p, " DS=0x"); p = zhex(p, VDM_REG(tib, VTIB_DS) & 0xFFFF);
+                        p = zput(p, " ES=0x"); p = zhex(p, VDM_REG(tib, VTIB_ES) & 0xFFFF);
+                        p = zput(p, " SS:SP=0x"); p = zhex(p, ss); p = zput(p, ":0x"); p = zhex(p, sp);
+                        p = zput(p, " efl=0x"); p = zhex(p, VDM_REG(tib, VTIB_EFLAGS));
+                        p = zput(p, " stack=");
+                        { const BYTE *sk = (const BYTE *)(ULONG_PTR)(sb + sp);
+                          if (!host_readable(sk, 16)) p = zput(p, "<unreadable>");
+                          else                        p = zdump(p, sk, 16); }
+                        { int bk = dpmi_bp_disarm(lin);
+                          if (bk < 0) p = zput(p, " [WARN: no BP record here]");
+                          else if (g_bp_dump[bk]) {
+                              const BYTE *dm = (const BYTE *)(ULONG_PTR)g_bp_dump[bk];
+                              p = zput(p, "\r\n  dump@0x"); p = zhex(p, g_bp_dump[bk]);
+                              p = zput(p, "=");
+                              if (!host_readable(dm, 64)) p = zput(p, "<unreadable from host>");
+                              else                        p = zdump(p, dm, 64);
+                          } }
+                        p = zput(p, "\r\n");
+                        log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                        return 1;                                  /* EIP unchanged on purpose */
+                    }
                     if (vec == 0x10) {                             /* video BIOS in PM -> VDD */
                         ntvdd_regs r; regs_load(&r, tib);
                         HOST_LOCK();
@@ -5540,6 +5715,12 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                   p = zput(p, ")\r\n");
                   log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
                 }
+                /* Guest breakpoints (PMBP_PATH). Loaded here rather than at WinMain entry
+                   so the list is read on the run that will use it, and armed both now and
+                   after every code-region patch -- an address inside a module the client
+                   has not loaded yet simply arms later. */
+                dpmi_bp_load();
+                dpmi_bp_arm();
                 /* GH #18 (run 67): install the PM-fault reflect machinery, so a RAW (non-BOP)
                    PM #GP -- an SS-retype, HLT, or privileged op the INT->BOP scan cannot
                    pre-patch -- is reflected by the kernel to our handler (code sel : BOP) on a
