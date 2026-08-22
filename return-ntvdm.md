@@ -1,56 +1,96 @@
 ═══════════════════════════════════════════════════════════════════════════════
-██ ▶▶▶ BLOCKED ON ONE THING: `CLI`/`STI` IN PROTECTED MODE. GH #18 IS NOW     ██
-██     THE CRITICAL PATH FOR DOOM -- NOTHING ELSE IS IN THE WAY.              ██
+██ ▶▶▶ DOOM'S EXTENDER IS COPYING ITS IMAGE IN. THE WALL IS A COPY LOOP.      ██
+██     GH #18 IS **NOT** ON THE CRITICAL PATH -- SEE THE CORRECTION BELOW.    ██
 ═══════════════════════════════════════════════════════════════════════════════
 
 ┌──────────────────────────────────────────────────────────────────────────────┐
-│ ★★★ THE BLOCKER, STATED PRECISELY (session 17, 2026-08-22). READ THIS FIRST. │
+│ ★★★ WHERE IT IS NOW (end of session 17, 2026-08-22)                          │
 └──────────────────────────────────────────────────────────────────────────────┘
 
-  Doom's DOS/4GW now negotiates DPMI, loads its protected-mode modules, **enters its
-  own PM INT 21h handler**, makes real-mode DOS calls through INT 31h 0302, and
-  allocates and installs its own descriptors. It then executes:
+  Doom's DOS/4GW negotiates DPMI, loads its PM modules, runs **its own protected-mode
+  INT 21h handler** (28 clean IRET returns in a run), forwards DOS calls to real mode
+  through INT 31h 0302, allocates extended memory, sets descriptors over it, and is
+  **copying Doom's LE image in**.
+
+  ▶ **IT NOW STOPS INSIDE THAT COPY LOOP: `0x0F:0x4BEE .. 0x4C61`, on a LATER
+    ITERATION.** Breakpoints confirm every instruction of the loop body is reached
+    (0x4bd6, 0x4bee, 0x4c14, 0x4c54, 0x4c57, 0x4c5b, 0x4c5d, 0x4c61 all hit) and that
+    the `je 0x4bee` back-edge is taken. The log is otherwise CLEAN — no UNSUP, no
+    thunk-TODO, no descriptor rejection. So this is a fault on some iteration, most
+    likely a write through a window selector (`mov es:[bx],ax` at 0x4c57, ES = a
+    0x0399xxxx-based extended-memory selector) once the walk passes something we set
+    slightly wrong.
+  ▶ **NEXT STEP:** one-shot breakpoints are consumed on the first pass, so use the SKIP
+    column's re-arming path, or add a per-breakpoint HIT COUNT so it fires on the Nth
+    iteration. Then dump ES's descriptor and BX at the failing pass. The loop advances
+    its window with 0006 (get base) + 000C (set descriptor), both of which are worth
+    checking against what the client actually asked for.
+
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ ★★★ A CORRECTION. THE PREVIOUS HANDOFF NAMED THE WRONG BLOCKER.              │
+└──────────────────────────────────────────────────────────────────────────────┘
+
+  It said DOS/4GW died on a protected-mode `STI`, and that GH #18's #GP reflect was
+  therefore the critical path for Doom. **That was wrong.** `tools/dostest/pmfault.asm`
+  settles it in twenty seconds:
 
   ```
-  ...INT 31h wrapper epilogue...
-  push ss / pop ss / mov edi,edx / cmc / mov ax,0 / rcl ax,1 / STI / jmp cx
-                                                              ^^^
+      IN AL,0x21   SURVIVED   (arrives as VDM_EVENT_IO -- the control case)
+      STI          SURVIVED
+      CLI          SURVIVED
+      INT3         DIED
+      HLT          DIED
   ```
 
-  **The guest runs at CPL 3 and IOPL is 0, so `STI` raises a #GP — the one fault XP
-  will not reflect to us.** The kernel terminates the whole VDM: no VEH exception, no
-  trampoline catch, the log simply stops. DOS/4GW brackets *every* DPMI call this way,
-  so it is systemic, not one site.
+  **CLI/STI run fine at CPL 3 on this box.** What misled me: a breakpoint on that STI
+  fired, the run died, and I read *"died after reaching the STI"* as *"died ON the
+  STI"*. The skip-mode run then died one byte later at `jmp cx`, and I recorded that as
+  "the next CLI/STI" without checking. Same wall both times — and it was OURS:
 
-  **PROVEN, NOT INFERRED — and the proof matters because this file has been burned by
-  plausible reasoning before:**
-   1. A breakpoint planted on that exact `STI` **FIRED** → the client reaches it.
-   2. Letting the single restored byte execute killed the run, every time.
-   3. A new breakpoint **skip** mode (step over the instruction) let the client
-      continue — straight to the next `CLI`/`STI`.
+   1. **The PM interrupt frame width must be the CLIENT'S mode, not the handler
+      selector's D bit.** DOS/4GW's PM INT 21h handler sits in a 16-bit code selector,
+      so `dpmi_sel_is32()` said 16-bit and we pushed 6 bytes — but it returns with
+      `66 cf`, an operand-size-prefixed **IRETD**, which pops **twelve**.
+   2. **Frame width and stack-pointer width are different questions.** Fixing (1) alone
+      faulted in our own process: SS is a 16-bit selector, so the CPU maintains SP and
+      the top half of ESP holds junk. A 32-bit frame on a 16-bit stack is ordinary.
 
-  ▶▶ **TWO NON-ANSWERS, BOTH ALREADY MEASURED. DO NOT SPEND A SESSION ON EITHER.**
-   • **Setting IOPL=3 in `VTIB_EFLAGS_PM` does nothing** — the kernel SANITISES IOPL out
-     of the context it loads. Across a whole run the live EFLAGS were 0x...0296 / 0292 /
-     0206 / 0202 / 0246: bits 12-13 never once set. The constant is back at IOPL 0 on
-     purpose, with the finding recorded beside it in `src/vdm/ntvdm.h`.
-   • **`NtSetInformationProcess(ProcessUserModeIOPL)` is WORSE than the disease.** At
-     CPL <= IOPL the I/O permission bitmap is **bypassed**, so every guest `IN`/`OUT`
-     would reach real hardware instead of our VDDs. That trades a fault for the silent
-     loss of the entire device emulation.
+  ▶ **GH #18 IS STILL WANTED** — `INT3` and `HLT` still kill the VDM, so a raw PM trap
+    is still undeliverable, and that will matter eventually. It is just **not** what is
+    standing between us and Doom, and the two IOPL non-answers below remain true and
+    worth not re-deriving.
 
-  ▶▶ **WHAT IS ACTUALLY REQUIRED: the GH #18 protected-mode #GP reflect.** A privileged
-     instruction must surface to us so we can emulate it (`STI`/`CLI` → `g_dpmi_vi`,
-     which is exactly what a VDM monitor does and what our INT 31h 0900/0901/0902
-     already track). The machinery is written and armed (`dpmi_install_fault_trampoline`,
-     `[TIB+0x638]`, the `[VDM_TIB+8]` class table, fault class 6) and **does not catch**.
-     That is now the single item between here and Doom running.
-   ▶ A self-contained alternative if the kernel work stalls: patch `CLI`/`STI` the way we
-     patch `INT nn`. It is one byte, so `CC` (INT3) is the only same-size trap — and a
-     blind byte scan is NOT safe (a `0xFA` inside an immediate, e.g. `mov ax,0x00fa`,
-     would be silently corrupted). It would need instruction boundaries, which we can get
-     dynamically: every PM event hands us an exact CS:EIP, and `v86interp.h` already has
-     a 16-bit decoder to sweep forward from it. Medium effort, no kernel RE.
+  ▶▶ **THE METHOD LESSON, and it is the one this file keeps teaching in new costumes.**
+     I had a breakpoint that fired and a skip test that moved the death by one byte —
+     both *consistent* with "STI kills us", neither *evidence* for it. The control case
+     (`IN`, known to work) is what would have caught it immediately, and I only built
+     the probe **after** committing the wrong conclusion. **Build the instrument that
+     can say NO before writing down a yes.**
+
+  ▶ **TWO NON-ANSWERS ABOUT IOPL, both measured, still true:** setting IOPL=3 in
+    `VTIB_EFLAGS_PM` does nothing (the kernel strips it; live EFLAGS bits 12-13 never
+    set), and `NtSetInformationProcess(ProcessUserModeIOPL)` is worse — at CPL <= IOPL
+    the I/O permission bitmap is bypassed, so guest `IN`/`OUT` would reach real hardware
+    instead of our VDDs.
+
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ ★ THE FAST PROBE + THE SWEEP GENERATOR. USE THEM BEFORE THEORISING.          │
+└──────────────────────────────────────────────────────────────────────────────┘
+
+  `tools/dostest/pmfault.asm` builds five ~350-byte clients — `pmfsti` / `pmfcli` /
+  `pmfint3` / `pmfhlt` / `pmfin` — that enter protected mode, execute ONE privileged
+  instruction and print a verdict. Twenty seconds against Doom's forty-second, 400 KB
+  run. **`pmfin` is the control case on purpose:** without it, "nothing happened"
+  cannot distinguish a real wall from a broken test.
+
+  `tools/dostest/mkbp.py <carve.bin> <offset> [--count N] [--base L] [--carve-off O]`
+  writes a `pmbp.txt` sweep from a disassembly, skipping one-byte instructions so a
+  breakpoint's two-byte footprint cannot eat its neighbour. Address mappings for Doom:
+  ```
+    CS 0x0F (base 0x5ca0)  -> carve d4g16.bin at offset+0        (--base 0x5ca0 --carve-off 0)
+    CS 0x67 (base 0xd9b0)  -> carve d4g16.bin at offset+0x7d10   (defaults)
+    CS 0x8F/0x9F           -> carve d4gmod.bin (file base 0xF384)
+  ```
 
 ┌──────────────────────────────────────────────────────────────────────────────┐
 │ WHAT SESSION 17 CLOSED ON THE WAY TO THAT WALL                               │
