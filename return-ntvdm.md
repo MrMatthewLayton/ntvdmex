@@ -91,7 +91,58 @@
        inverted one:** it reports the opposite of what happened, on every call.
 
 ┌──────────────────────────────────────────────────────────────────────────────┐
-│ ★★★ THE ONE THING LEFT: THE IRQ0 INJECTION. START HERE.                      │
+│ ★★★ SESSION 18b: THE TIMER IS HOOKED AND TICKS REACH DOOM'S ISR.             │
+│     WHAT IS LEFT IS **RATE**, AND IT IS AN ARCHITECTURE PROBLEM.             │
+└──────────────────────────────────────────────────────────────────────────────┘
+
+  Commits `fcb6ede`, `7433a41`. Doom is **still not at the menu** — it hangs in the
+  same delay loop — but the mechanism underneath now works and the remaining
+  obstacle is quantitative and named.
+
+  **WHAT NOW WORKS**
+  * `dpmi_async_inject_pm()` — asynchronous delivery INTO protected mode, via
+    SuspendThread / GetThreadContext / SetThreadContext on the CPU thread. The V86
+    side has had this for ages and bailed on `!(EFLAGS & VM)`; that hole is where
+    every DOS/4GW game lives. **A PM guest that spins never leaves PM**, so the
+    cooperative injector (which only runs BETWEEN `dpmi_enter_pm()` calls) can
+    never reach it.
+  * `g_in_exec` was set only around `v86_run()`, so for a whole PM session
+    `async_inject_irq()` answered "the guest isn't running" and bailed at line one.
+  * **The host owns vectors 08h-0Fh for a 32-bit client.** Doom hooks its timer
+    with `AX=2508 / int 21h`, DS = its own code selector — not INT 31h 0205.
+    Letting DOS/4GW service that fails the hook (CF=1) and then reports
+    `fatal error (1001): error in interrupt chain`, because the extender is
+    splicing into a chain whose hardware end is US. Two owners, one chain.
+  * `INT 31h 0204` returned the offset at the HANDLER selector's width, so a
+    16-bit handler came back via `VDM_SET16` and a 32-bit client read
+    `0x????0020`. Third width bug of the same family in one day.
+
+  **THE MEASUREMENT THAT MATTERS**
+  ```
+     ASYNC-PM ok=1 from=0x187:0x03ae53dc -> 0x187:0x03ae31f0 SS:ESP=0x18f:… efl=0x246
+       IRQ0<-PM INT done=1 phases=1 ticks=1     (…2, …3)
+  ```
+  Doom's ISR is entered from the spin, on its own 32-bit stack, with IF set, and
+  **reaches its IRET cleanly** three times. Delivery is sound.
+
+  **▶ THE WALL IS THE TICK RATE, AND IT IS ARITHMETIC.**
+  Doom programs the PIT to `reload 0x4a` = **16124 Hz** and its delay waits
+  `ms * [0x28824] / 1000` ticks — for a 30 ms delay, ~480 of them. We deliver
+  **three**. Even fixed, one SuspendThread/SetThreadContext round trip per tick at
+  16 kHz is not a viable design: it is tens of microseconds against a 62 µs budget.
+  ▶ **COALESCE, DO NOT CHASE.** The right shape is almost certainly to run the
+    client's ISR N times per injection when N ticks are owed (or to let the
+    injector loop while the latch is deep), so one thread round trip serves many
+    ticks. That is the next thing to build, and it should be measured against the
+    counter at linear `0x03b68820` actually advancing.
+  ⚠ After the third tick the run ends silently (VDM kill, no watchdog line). The
+    ASYNC-PM log is capped at 8 lines, so the killer is an UNLOGGED later
+    injection — raise the cap first, do not theorise.
+  ⚠ `pmnoirq.flag` is now ABSENT on the share: injection is properly gated and is
+    where the work is. Re-create it to get the older, stable, further-but-wedged run.
+
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ (SUPERSEDED) THE IRQ0 INJECTION AS OF SESSION 18a                            │
 └──────────────────────────────────────────────────────────────────────────────┘
 
   `pmnoirq.flag` is **STILL on the share and still load-bearing.** With it removed:
