@@ -601,6 +601,32 @@ static int   g_le_ncode = 0;
    put between "the vector exists" and "the timer fires". See INT 31h 0205. */
 #define DPMI_IRQ0_ARM_QUIET_MS 55
 static DWORD g_pm_vec8_armed_ms = 0;
+/* Set when the APPLICATION (not the extender's arming pass) installs a timer ISR. Until
+   then vector 8 holds a placeholder stub and delivering to it is both pointless and, on
+   DOS/4GW, fatal. Learned by snooping INT 21h AH=25h -- see the routing path. */
+static int   g_pm_app_hooked_timer = 0;
+/* ...and WHERE it is. Kept apart from g_pm_int[8] on purpose: that table is what INT 31h
+   0204 reports back, and it must keep saying exactly what the client installed through
+   0205. Answering 0204 with a handler DOS/4GW never set is how the first attempt at this
+   produced "fatal error (1001): error in interrupt chain" -- the extender queried the
+   vector during shutdown, did not recognise it, and concluded its chain was corrupt.
+   Where we DELIVER and what the vector table REPORTS are two different questions. */
+static WORD  g_pm_app_timer_sel = 0;
+static DWORD g_pm_app_timer_off = 0;
+/* Where an injected IRQ should actually land. For the timer on a 32-bit client that is the
+   application's own ISR once we have seen it installed; otherwise the vector table. */
+/* ► DELIVER THROUGH THE EXTENDER'S OWN STUB, NOT STRAIGHT AT THE APPLICATION'S ISR.
+     DOS/4GW owns the IDT and keeps per-vector nesting state; entering the game's handler
+     behind its back leaves that state unbalanced the moment the handler chains onward,
+     and the extender says so:
+         DOS/4GW Professional fatal error (1001): error in interrupt chain
+     So the vector table is the delivery target, as it always was. What the AH=25h snoop
+     is for is only KNOWING that the application has an ISR at all -- before that, vector
+     8 holds an arming-pass placeholder and delivering to it is fatal. The app handler is
+     still recorded, because it is what makes that judgement possible and it is the thing
+     to print when this goes wrong again. */
+#define DPMI_IRQ_TARGET_SEL(iv) (g_pm_int[iv].sel)
+#define DPMI_IRQ_TARGET_OFF(iv) (g_pm_int[iv].off)
 
 #define DPMI_PMDEF_STRIDE 3
 static WORD  g_pm_defsel  = 0;      /* code selector over the stub block */
@@ -868,6 +894,25 @@ static int async_vec_is_our_stub(unsigned irq);
 static void pokew(DWORD lin, WORD v);        /* fwd: guest-memory helpers, defined below */
 static WORD peekw(DWORD lin);
 static void host_pit_sync(void);             /* fwd: the guest's clock, driven by both threads */
+
+/* ── ASYNCHRONOUS DELIVERY INTO **PROTECTED MODE**. ───────────────────────────────
+   The V86 arm below has always bailed when the guest is not in V86, and that hole is
+   exactly where a DOS/4GW game lives. It is not a detail: a protected-mode guest that
+   is spinning on a memory location NEVER LEAVES PROTECTED MODE, so the cooperative
+   injector in the main loop -- which only runs BETWEEN entries -- can never reach it.
+   Doom proves it. Its millisecond delay is two instructions:
+       153dc:  cmp  [0x28820],eax
+       153e2:  je   153dc
+   waiting for a counter its own INT 08h handler increments. No I/O, no INT, no HLT, so
+   dpmi_enter_pm() never returns and the watchdog eventually calls it a wedge. The only
+   way in is the same one this file already uses for real mode: suspend the CPU thread,
+   rewrite its context, resume. Defined next to dpmi_inject_pm_irq() because it shares
+   that function's frame rules; declared here because async_inject_irq() needs it. */
+static int  dpmi_async_inject_pm(unsigned irq, CONTEXT *cx);
+static volatile LONG g_async_pm_active = 0;  /* an async PM interrupt is in flight     */
+static DWORD g_async_pm_eip = 0, g_async_pm_esp = 0, g_async_pm_efl = 0;
+static WORD  g_async_pm_cs  = 0, g_async_pm_ss  = 0;
+static DWORD g_async_pm_inj = 0;             /* delivered                              */
 static int async_inject_irq(unsigned irq)
 {
     CONTEXT cx;
@@ -896,7 +941,25 @@ static int async_inject_irq(unsigned irq)
 
     efl = cx.EFlags;
     cs  = cx.SegCs & 0xFFFF;
-    if (!(efl & EFLAGS_VM_BIT) || !(efl & (0x200u | EFLAGS_VIF_BIT)) || cs == DOS_HDLR_SEG) {
+    /* ► PROTECTED MODE IS A DIFFERENT FRAME AND A DIFFERENT VECTOR TABLE, so it gets its
+         own arm rather than a widened condition. The test for "is this the guest at all"
+         is the selector's TABLE INDICATOR: everything we hand the client comes out of our
+         LDT (TI=1, bit 2 set), and the host's own flat CS is a GDT selector. So `cs & 4`
+         separates "the thread is executing client PM code" from "the thread is in our own
+         code between entries" exactly, with nothing to keep in sync. */
+    if (!(efl & EFLAGS_VM_BIT)) {
+        if ((cs & 4) && dpmi_async_inject_pm(irq, &cx)) {
+            cx.ContextFlags = CONTEXT_CONTROL | CONTEXT_SEGMENTS;
+            ok = SetThreadContext(g_hcpu, &cx) ? 1 : 0;
+            if (ok) { vdd_pic_acknowledge(&g_pic, (uint8_t)irq);
+                      if (irq == 0 || async_vec_is_our_stub(irq)) vdd_pic_eoi(&g_pic, (uint8_t)irq); }
+            else    { g_async_pm_active = 0; }     /* never leave the flag set on failure */
+        }
+        ResumeThread(g_hcpu);
+        if (ok) { g_async_inj++; g_async_pm_inj++; } else g_async_bail++;
+        return ok;
+    }
+    if (!(efl & (0x200u | EFLAGS_VIF_BIT)) || cs == DOS_HDLR_SEG) {
         ResumeThread(g_hcpu); g_async_bail++; return 0;
     }
     ss = cx.SegSs & 0xFFFF; sp = cx.Esp & 0xFFFF; ip = cx.Eip & 0xFFFF;
@@ -4148,6 +4211,66 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                        path for a broken one. Route the interrupt the evidence names,
                        measure, then widen. The order matters: this test comes before every
                        service arm below, so it cannot be shadowed by one of them. */
+                    /* ── SNOOP `AH=25h` ON THE WAY PAST: IT IS HOW A GAME HOOKS ITS TIMER. ──
+                       INT 31h 0205 is not the only way a client installs a protected-mode
+                       handler, and for the case that matters it is not the way used at all.
+                       Doom hooks its timer with DOS's own call:
+                           AX=3508 int 21h          ; save the old vector
+                           AX=2508 int 21h          ; DS:EDX = 0x187:0x03ae31f0
+                       and DS is its OWN 32-bit code selector, with `60 1e 06 0f a0 0f a8`
+                       (pushad; push ds/es/fs/gs) at the target -- an ISR prologue.
+                       DOS/4GW's own PM INT 21h handler services that internally, in its own
+                       IDT, and never tells us: no 0205 for vector 8 appears in a whole run.
+                       So without this we do not know where the game's timer ISR is, and the
+                       only INT 08h we can see is the extender's arming-pass stub -- which is
+                       both the wrong target and, measured, fatal to enter asynchronously.
+                       Record it and let the client's handler run as well; both want it, and
+                       observing a call costs the client nothing. */
+                    /* ── THE HOST OWNS THE HARDWARE-INTERRUPT VECTORS OF A 32-BIT CLIENT. ──
+                       Doom hooks its timer with DOS's own call rather than INT 31h 0205:
+                           AX=3508 int 21h ; AX=2508 int 21h, DS:EDX = 0x187:0x03ae31f0
+                       with DS its own 32-bit code selector and `60 1e 06 0f a0 0f a8`
+                       (pushad; push ds/es/fs/gs) at the target -- an ISR prologue.
+                       Letting DOS/4GW service that does not work: it FAILS the hook (CF=1,
+                       measured) and then reports "fatal error (1001): error in interrupt
+                       chain", because the extender is trying to splice a handler into a
+                       chain whose hardware end WE are, not it. It cannot see our injection
+                       and we cannot see its internal IDT, and a chain with two owners is
+                       exactly what error 1001 describes.
+                       So for vectors 08h-0Fh -- the PIC lines, the ones this host actually
+                       delivers -- answer 25h/35h ourselves against g_pm_int[], the table
+                       injection reads. 21h and the rest still go to the client's handler,
+                       untouched. Scoped to a 32-bit client so nothing 16-bit changes. */
+                    if (vec == 0x21 && g_dpmi_client32) {
+                        DWORD ah25 = (ax >> 8) & 0xFF, al25 = ax & 0xFF;
+                        if ((ah25 == 0x25 || ah25 == 0x35) && al25 >= 0x08 && al25 <= 0x0F) {
+                            if (ah25 == 0x25) {
+                                WORD hs = (WORD)(VDM_REG(tib, VTIB_DS) & 0xFFFF);
+                                g_pm_int[al25].sel = hs;
+                                g_pm_int[al25].off = dpmi_sel_is32(hs) ? VDM_REG(tib, VTIB_EDX)
+                                                                       : (VDM_REG(tib, VTIB_EDX) & 0xFFFF);
+                                g_pm_int[al25].client = 1;
+                                if (al25 == 0x08) { g_pm_app_hooked_timer = 1;
+                                                    g_pm_app_timer_sel = hs;
+                                                    g_pm_app_timer_off = g_pm_int[al25].off;
+                                                    g_pm_vec8_armed_ms = GetTickCount(); }
+                                p = zput(p, "PM INT 21h AH=25 (host-owned IRQ vector) 0x");
+                                p = zhex(p, al25); p = zput(p, " = 0x"); p = zhex(p, hs);
+                                p = zput(p, ":0x"); p = zhex(p, g_pm_int[al25].off);
+                            } else {
+                                VDM_SET16(tib, VTIB_ES, g_pm_int[al25].sel);
+                                VDM_REG(tib, VTIB_EBX) = g_pm_int[al25].off;   /* client is 32-bit */
+                                p = zput(p, "PM INT 21h AH=35 (host-owned IRQ vector) 0x");
+                                p = zhex(p, al25); p = zput(p, " -> 0x"); p = zhex(p, g_pm_int[al25].sel);
+                                p = zput(p, ":0x"); p = zhex(p, g_pm_int[al25].off);
+                            }
+                            VDM_REG(tib, VTIB_EFLAGS) &= ~1u;          /* success */
+                            p = zput(p, "\r\n");
+                            log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                            VDM_REG(tib, VTIB_EIP) += 2;
+                            return 1;
+                        }
+                    }
                     if (vec == 0x21 && g_pm_int[vec].client && !g_pm_disp[vec]) {
                         int rc = dpmi_dispatch_to_pm_handler(mp, tib, vec, steps);
                         if (rc != 0 || g_pm_int[vec].sel) return rc;
@@ -4388,9 +4511,24 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                         case 0x0204: {                             /* get PM interrupt vector: BL -> CX:(E)DX */
                             DWORD bl = VDM_REG(tib, VTIB_EBX) & 0xFF;
                             VDM_SET16(tib, VTIB_ECX, g_pm_int[bl].sel);
-                            /* 32-bit handler selector -> return the full 32-bit offset (GH #18 run 83) */
-                            if (dpmi_sel_is32(g_pm_int[bl].sel)) VDM_REG(tib, VTIB_EDX) = g_pm_int[bl].off;
-                            else VDM_SET16(tib, VTIB_EDX, g_pm_int[bl].off & 0xFFFF);
+                            /* ── THE RETURNED OFFSET IS AS WIDE AS THE CLIENT, NOT AS WIDE AS
+                                 THE HANDLER'S SELECTOR. This tested only the handler selector,
+                                 so a 16-bit handler (the extender's own stubs are all 16-bit)
+                                 was reported with VDM_SET16 -- which preserves the top half of
+                                 EDX. A 32-bit client reads all of EDX, so it got 0x????0020:
+                                 the right offset with sixteen bits of whatever was there
+                                 before glued on top.
+                                 That is what broke Doom's timer. DOS/4GW services the game's
+                                 `AH=25h` hook by first reading the vector back with 0204 to
+                                 walk its chain; handed a garbage offset it does not recognise
+                                 its own stub, fails the hook with CF=1, and later reports
+                                     DOS/4GW Professional fatal error (1001):
+                                     error in interrupt chain
+                                 Zero-extend for a 32-bit client and the offset is just 0x20. */
+                            if (dpmi_sel_is32(g_pm_int[bl].sel) || g_dpmi_client32)
+                                VDM_REG(tib, VTIB_EDX) = g_pm_int[bl].off;
+                            else
+                                VDM_SET16(tib, VTIB_EDX, g_pm_int[bl].off & 0xFFFF);
                             p = zput(p, " -> getPMvec int 0x"); p = zhex(p, bl);
                             break; }
                         case 0x0205: {                             /* set PM interrupt vector: BL = CX:(E)DX */
@@ -5443,6 +5581,72 @@ static void dpmi_ensure_pmret_sel(void)
    21h/31h or port I/O still works), and on its IRET restore the interrupted context verbatim.
    Faithful to a real INT: clears the virtual-IF (g_dpmi_vi) for the duration, restores it
    after. Returns 1 if the handler ran to its IRET, 0 otherwise. */
+/* Build a protected-mode interrupt frame ON THE SUSPENDED THREAD'S OWN CONTEXT and vector
+   it at the client's handler. Runs on the TIMER thread with the CPU thread suspended, so
+   it may touch guest memory and the context but must not log, allocate an LDT entry, or
+   block. Returns 1 if `cx` was rewritten and should be committed.
+   ► THE RETURN PATH IS THE CATCHER, exactly as for the synchronous injector: the frame's
+     return CS:EIP is g_pmret_sel:DPMI_PMRET_OFF, so the handler's IRET lands on a BOP and
+     the main loop gets control back. What the main loop CANNOT recover from the IRET is
+     where the guest actually was -- that return address was overwritten with the catcher's
+     -- so the interrupted CS:EIP:SS:ESP:EFLAGS are saved here and restored there.
+   ► ONE IN FLIGHT AT A TIME, claimed with an interlocked compare-exchange, because this
+     runs on a different thread from the one that clears it. */
+static int dpmi_async_inject_pm(unsigned irq, CONTEXT *cx)
+{
+    unsigned iv = 0x08 + irq;                    /* IRQ0-7 -> PM vectors 08h-0Fh */
+    DWORD efl = cx->EFlags;
+    WORD  ss;
+    if (iv > 0x0F) return 0;
+    if (g_pm_noirq || g_in_pm_irq) return 0;     /* knob off, or a sync injection is running */
+    if (g_pmret_sel == 0) return 0;              /* no catcher yet -> no way back */
+    if (!g_pm_int[iv].client) return 0;          /* the client has not hooked this line */
+    /* Not before the application has an ISR; see dpmi_inject_pm_irq(). */
+    if (g_dpmi_client32 && iv == 0x08 && !g_pm_app_hooked_timer) return 0;
+    if (!g_dpmi_vi) return 0;                    /* the client has interrupts masked */
+    if (!(efl & (0x200u | EFLAGS_VIF_BIT))) return 0;      /* ...and the CPU agrees */
+    /* Same hold-off the cooperative path uses: a vector installed microseconds ago is an
+       arming pass, and real IRQ0 could not have arrived yet. See INT 31h 0205. */
+    if ((GetTickCount() - g_pm_vec8_armed_ms) < DPMI_IRQ0_ARM_QUIET_MS) return 0;
+    if (InterlockedCompareExchange(&g_async_pm_active, 1, 0) != 0) return 0;
+
+    ss = (WORD)(cx->SegSs & 0xFFFF);
+    if (!(ss & 4)) { g_async_pm_active = 0; return 0; }    /* not a client stack -> not safe */
+    /* Same rule as the cooperative path: interrupt the APPLICATION, never the extender
+       mid-service. See dpmi_inject_pm_irq() for what that cost to learn. */
+    if (g_dpmi_client32 && !dpmi_sel_is32((WORD)(cx->SegCs & 0xFFFF))) {
+        g_async_pm_active = 0; return 0;
+    }
+
+    /* Save what we are interrupting; the catcher BOP is where it gets put back. */
+    g_async_pm_cs  = (WORD)(cx->SegCs & 0xFFFF); g_async_pm_eip = cx->Eip;
+    g_async_pm_ss  = ss;                          g_async_pm_esp = cx->Esp;
+    g_async_pm_efl = efl;
+
+    /* Frame width is the CLIENT's mode; stack addressing is the SS descriptor's B bit.
+       Two different questions -- see dpmi_dispatch_to_pm_handler() for what conflating
+       them costs. */
+    { DWORD b = dpmi_sel_base(ss);
+      int   ss32 = dpmi_sel_is32(ss), h32 = g_dpmi_client32;
+      DWORD sp = ss32 ? cx->Esp : (cx->Esp & 0xFFFF);
+      if (h32) {
+          sp = ss32 ? sp - 4 : ((sp - 4) & 0xFFFF); poked(b + sp, efl);
+          sp = ss32 ? sp - 4 : ((sp - 4) & 0xFFFF); poked(b + sp, g_pmret_sel);
+          sp = ss32 ? sp - 4 : ((sp - 4) & 0xFFFF); poked(b + sp, DPMI_PMRET_OFF);
+      } else {
+          sp = ss32 ? sp - 2 : ((sp - 2) & 0xFFFF); pokew(b + sp, (WORD)efl);
+          sp = ss32 ? sp - 2 : ((sp - 2) & 0xFFFF); pokew(b + sp, g_pmret_sel);
+          sp = ss32 ? sp - 2 : ((sp - 2) & 0xFFFF); pokew(b + sp, DPMI_PMRET_OFF);
+      }
+      cx->Esp = ss32 ? sp : ((cx->Esp & 0xFFFF0000u) | sp); }
+
+    cx->SegCs  = DPMI_IRQ_TARGET_SEL(iv);
+    cx->Eip    = g_dpmi_client32 ? DPMI_IRQ_TARGET_OFF(iv) : (DPMI_IRQ_TARGET_OFF(iv) & 0xFFFF);
+    cx->EFlags = efl & ~(0x200u | EFLAGS_VIF_BIT);   /* an interrupt gate clears IF */
+    g_dpmi_vi  = 0;                                  /* ...and our model of it */
+    return 1;
+}
+
 static int dpmi_inject_pm_irq(dos_machine_t *mp, volatile BYTE *tib, unsigned iv, unsigned steps)
 {
     char lb[256], *lp = lb;
@@ -5458,6 +5662,25 @@ static int dpmi_inject_pm_irq(dos_machine_t *mp, volatile BYTE *tib, unsigned iv
 
     dpmi_ensure_pmret_sel();
     if (g_pmret_sel == 0) return 0;
+    /* ── DO NOT INTERRUPT THE EXTENDER, ONLY THE APPLICATION. ────────────────────────
+         Measured: the first injection landed at mod:0x4b81 -- inside DOS/4GW's own INT
+         21h thunk epilogue, on ITS internal 16-bit stack (SS=0xcf, SP=0x1a74) -- and the
+         run ended with no further output. Its dispatcher (mod:0x550) immediately reads
+         `LAR SS` and then walks an internal stack table at [0xa42], switching stacks and
+         bounds-checking the result; arriving there on a stack it did not expect, in the
+         middle of servicing a call it had not finished, is not a state it is written to
+         survive.
+         The case that MATTERS is the other one: the application spinning on its own timer
+         counter, in its own 32-bit flat code, which is precisely where a tick has to land
+         for the game to advance. So require the interrupted code to be 32-bit whenever
+         the client is -- the extender's modules are all 16-bit selectors, so this
+         separates "the game is running" from "the extender is mid-service" exactly.
+         A 16-bit client keeps the previous behaviour unchanged. */
+    if (g_dpmi_client32 && !dpmi_sel_is32(sCS)) return 0;
+    /* ...and not before the application actually has an ISR. Delivery still goes through
+       the extender's stub, because the extender owns the IDT and must do the dispatching
+       (bypassing it produced "fatal error (1001): error in interrupt chain"). */
+    if (g_dpmi_client32 && iv == 0x08 && !g_pm_app_hooked_timer) return 0;
 
     /* push an INT frame (FLAGS/CS/IP) on the client's current PM stack so the handler's IRET
        lands on the catcher; keep the client's own SS so the handler has a valid stack. Frame
@@ -5483,13 +5706,33 @@ static int dpmi_inject_pm_irq(dos_machine_t *mp, volatile BYTE *tib, unsigned iv
       VDM_SET16(tib, VTIB_SS, ss);
       VDM_REG(tib, VTIB_ESP) = ss32 ? sp : ((sESP & 0xFFFF0000u) | sp); }
     g_dpmi_vi = 0;                                 /* mask further virtual interrupts     */
-    VDM_REG(tib, VTIB_EFLAGS) = VTIB_EFLAGS_PM;
-    VDM_SET16(tib, VTIB_CS, g_pm_int[iv].sel);
-    VDM_REG(tib, VTIB_EIP) = h32 ? g_pm_int[iv].off : (g_pm_int[iv].off & 0xFFFF);
+    /* An interrupt gate CLEARS IF and leaves everything else alone. This used to assign
+       VTIB_EFLAGS_PM (0x202) outright, which both sets IF -- the opposite of what a gate
+       does -- and discards the guest's own flags, DF included, so a handler that returned
+       through a string operation would run it in the wrong direction. */
+    VDM_REG(tib, VTIB_EFLAGS) = (sEFL & ~(0x200u | EFLAGS_VIF_BIT)) | 2u;
+    VDM_SET16(tib, VTIB_CS, DPMI_IRQ_TARGET_SEL(iv));
+    VDM_REG(tib, VTIB_EIP) = h32 ? DPMI_IRQ_TARGET_OFF(iv) : (DPMI_IRQ_TARGET_OFF(iv) & 0xFFFF);
 
     lp = zput(lp, "  IRQ0->PM INT 0x"); lp = zhex(lp, iv);
-    lp = zput(lp, " handler 0x"); lp = zhex(lp, g_pm_int[iv].sel);
-    lp = zput(lp, ":0x"); lp = zhex(lp, g_pm_int[iv].off & 0xFFFF); lp = zput(lp, "\r\n");
+    lp = zput(lp, " handler 0x"); lp = zhex(lp, DPMI_IRQ_TARGET_SEL(iv));
+    lp = zput(lp, ":0x"); lp = zhex(lp, DPMI_IRQ_TARGET_OFF(iv));
+    /* What we are about to RUN, and the stack we are about to run it on. This path dies
+       with no further output, so anything not printed here is unrecoverable afterwards. */
+    { WORD hs = DPMI_IRQ_TARGET_SEL(iv);
+      DWORD hl = dpmi_sel_base(hs) + (g_dpmi_client32 ? DPMI_IRQ_TARGET_OFF(iv) : (DPMI_IRQ_TARGET_OFF(iv) & 0xFFFF));
+      const BYTE *hb = (const BYTE *)(ULONG_PTR)hl;
+      lp = zput(lp, " lin=0x"); lp = zhex(lp, hl);
+      lp = zput(lp, dpmi_sel_is32(hs) ? " (h CS D/B=1)" : " (h CS D/B=0)");
+      lp = zput(lp, " h32="); lp = zhex(lp, (DWORD)h32);
+      lp = zput(lp, " SS:ESP=0x"); lp = zhex(lp, VDM_REG(tib, VTIB_SS) & 0xFFFF);
+      lp = zput(lp, ":0x"); lp = zhex(lp, VDM_REG(tib, VTIB_ESP));
+      lp = zput(lp, dpmi_sel_is32(sSS) ? " (SS D/B=1)" : " (SS D/B=0)");
+      lp = zput(lp, " from 0x"); lp = zhex(lp, sCS); lp = zput(lp, ":0x"); lp = zhex(lp, sEIP);
+      lp = zput(lp, " bytes@handler=");
+      if (!host_readable(hb, 16)) lp = zput(lp, "<unreadable>");
+      else                        lp = zdump(lp, hb, 16); }
+    lp = zput(lp, "\r\n");
     log_append(LOG_PATH, lb, lp); serial_out(lb, lp); lp = lb;
 
     for (ph = 0; ph < 64 && !done; ++ph) {
@@ -6886,8 +7129,15 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                        (g_pm_int[8], via INT 31h 0205) and its virtual-IF is enabled, deliver
                        the latched IRQ0 to that handler -- how timer-hooking games get ticks.
                        The latch persists across CLI windows so a masked interrupt isn't lost. */
+                    /* ► AND NOT WHILE AN ASYNC ONE IS STILL IN FLIGHT. The two injectors
+                         guarded themselves but not each other: the async path can vector the
+                         guest into its ISR and return, and if that ISR then leaves PM for a
+                         DOS call, control arrives back HERE with the handler still live --
+                         and a second tick would re-enter it on top of itself. Measured: the
+                         run died on such an injection taken at obj1+0x153dc, i.e. inside the
+                         very delay loop the tick exists to release. */
                     if (g_pm_irq0_latch && g_dpmi_vi && g_pm_int[0x08].client && !g_in_pm_irq
-                        && !g_pm_noirq
+                        && !g_pm_noirq && !g_async_pm_active
                         && (GetTickCount() - g_pm_vec8_armed_ms) >= DPMI_IRQ0_ARM_QUIET_MS) {
                         g_pm_irq0_latch = 0;
                         g_in_pm_irq = 1;
@@ -7024,7 +7274,18 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                        means the whole process was killed at once (a kernel VDM terminate),
                        not that the thread never ran. 300 ms, once, on a diagnostic path. */
                     if (steps == 0) Sleep(300);
+                    /* ── TELL THE ASYNC INJECTOR THE GUEST IS RUNNING. ───────────────────
+                         g_in_exec means "the CPU thread is executing GUEST code, so its
+                         context is the guest's and may be rewritten"; async_inject_irq()
+                         refuses to touch the thread without it, precisely so it cannot race
+                         the host manipulating the TIB. It was set only around v86_run(), so
+                         for the whole of a protected-mode session the answer was "no" and
+                         every asynchronous delivery bailed at the first line -- which is why
+                         a PM guest could never be interrupted at all. Protected-mode
+                         execution is execution too. */
+                    InterlockedExchange(&g_in_exec, 1);
                     dpmi_enter_pm(tib);
+                    InterlockedExchange(&g_in_exec, 0);
                     if (steps < g_dpmi_cp_max) {
                         p = zput(p, "DPMI-CP["); p = zhex(p, (unsigned)steps);
                         p = zput(p, "] returned ev=0x"); p = zhex(p, VDM_REG(tib, VTIB_EVENT));
@@ -7037,6 +7298,25 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                     eip = dpmi_pm_eip(tib);
                     csv = VDM_REG(tib, VTIB_CS) & 0xFFFF;
                     g_dpmi_last_ev  = ev;  g_dpmi_last_eip = eip;  g_dpmi_last_cs = csv;
+                    /* ── AN ASYNC PM INTERRUPT HAS COME BACK. ────────────────────────────
+                       dpmi_async_inject_pm() rewrote the running thread's context to vector
+                       at the client's handler, with the frame's return CS:EIP pointing at
+                       our catcher -- so the handler's IRET lands here as a BOP. The IRET
+                       restored the FLAGS we pushed but NOT the guest's place in its own
+                       code, because that return address was the catcher's. Put the saved
+                       context back and let the guest carry on as though nothing happened,
+                       which is precisely what "transparent" means for a hardware interrupt. */
+                    if (ev == VDM_EVENT_BOP && g_async_pm_active
+                        && csv == g_pmret_sel && eip == DPMI_PMRET_OFF) {
+                        VDM_SET16(tib, VTIB_CS, g_async_pm_cs);
+                        VDM_REG(tib, VTIB_EIP)    = g_async_pm_eip;
+                        VDM_SET16(tib, VTIB_SS, g_async_pm_ss);
+                        VDM_REG(tib, VTIB_ESP)    = g_async_pm_esp;
+                        VDM_REG(tib, VTIB_EFLAGS) = g_async_pm_efl;
+                        g_dpmi_vi = 1;                   /* unmask: the handler has finished */
+                        g_async_pm_active = 0;
+                        continue;
+                    }
                     /* GH#18 (bare-metal crack, 2026-08-18): dpmi_enter.S reports event 3 when it
                        DECLINES to enter PM -- guest IF=1 AND [0x714]&3 signals a pending hardware
                        interrupt (the FIXED_NTVDMSTATE pending bits; see dpmi_enter.S label 2). We
@@ -7214,6 +7494,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
       p = zput(p, " skip_if=0x");   p = zhex(p, g_irq0_skip_if);
       p = zput(p, " skip_stub=0x"); p = zhex(p, g_irq0_skip_stub);
       p = zput(p, " async_inj=0x"); p = zhex(p, g_async_inj);
+      p = zput(p, " async_pm=0x"); p = zhex(p, g_async_pm_inj);
       p = zput(p, " async_bail=0x"); p = zhex(p, g_async_bail);
       p = zput(p, " async_nest=0x"); p = zhex(p, g_async_nest_blocked);
       p = zput(p, " irq1_inj=0x");   p = zhex(p, g_irq1_inj);
