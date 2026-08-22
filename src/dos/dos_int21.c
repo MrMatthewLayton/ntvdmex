@@ -373,7 +373,23 @@ int dos_int21(dos_machine_t *m)
     } else if (ah == 0x3F) {                    /* read: BX=handle CX=cnt -> DS:DX */
         DWORD h = R_BX & 0xFFFF, cnt = R_CX & 0xFFFF, rd = 0;
         void *b = (void *)((R_DS << 4) + (R_DX & 0xFFFF));
-        if (h >= 5 && h < 64 && m->fh[h]) { ReadFile(m->fh[h], b, cnt, &rd, NULL); SETAX(rd); OKCF(); }
+        if (h >= 5 && h < 64 && m->fh[h]) {
+            /* ► LOG THE FILE POSITION, THE COUNT AND THE FIRST BYTES. A DOS extender
+                 loading an executable is doing nothing but seek+read, so if the image it
+                 ends up with is wrong, the first question is whether WE handed it the
+                 right bytes -- and that is answerable offline by comparing these lines
+                 against the file. Without the position a short or misplaced read is
+                 indistinguishable from a correct one. */
+            DWORD pos = SetFilePointer(m->fh[h], 0, NULL, FILE_CURRENT);
+            ReadFile(m->fh[h], b, cnt, &rd, NULL); SETAX(rd); OKCF();
+            tp = zput(tp, "  INT21 AH=3F h="); tp = zhex(tp, h);
+            tp = zput(tp, " pos=0x"); tp = zhex(tp, pos);
+            tp = zput(tp, " cnt=0x"); tp = zhex(tp, cnt);
+            tp = zput(tp, " got=0x"); tp = zhex(tp, rd);
+            tp = zput(tp, " -> 0x"); tp = zhex(tp, (DWORD)(ULONG_PTR)b);
+            tp = zput(tp, " first="); tp = zdump(tp, (const BYTE *)b, (rd >= 8) ? 8 : 0);
+            tp = zput(tp, "\r\n");
+        }
         else if (h == 0) { SETAX(0); OKCF(); }  /* stdin: EOF for now */
         else { SETAX(6); ERRCF(); }
     } else if (ah == 0x42) {                    /* lseek: AL=org BX=h CX:DX=off */

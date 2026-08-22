@@ -375,6 +375,14 @@ static DWORD g_bp_skip[DPMI_BP_MAX];
    is the answer. A one-byte trap is also the only patch that FITS over CLI/STI. */
 static DWORD g_bp_mode[DPMI_BP_MAX];
 static BYTE  g_bp_pending[DPMI_BP_MAX];  /* skipped -> needs re-arming once EIP moves on */
+/* Optional 5th column: 1 = REPEATING. One-shot is right for a "how far did it get"
+   sweep, and useless for a loop -- the first pass eats every breakpoint and the failing
+   iteration is the thousandth. A repeating breakpoint cannot re-plant itself while the
+   guest is standing on its footprint, so it re-arms the way skip mode does: mark it
+   pending and let the NEXT event (typically the other breakpoint in the same loop) put
+   it back. Put at least TWO repeating breakpoints in a loop and they alternate, which
+   gives a register dump per iteration. */
+static DWORD g_bp_rep[DPMI_BP_MAX];
 static BYTE  g_bp_orig[DPMI_BP_MAX][2]; /* the two bytes we displaced                  */
 static BYTE  g_bp_armed[DPMI_BP_MAX];
 static int   g_bp_n = 0;
@@ -3318,7 +3326,7 @@ static void dpmi_bp_load(void)
     ReadFile(h, buf, sizeof buf - 1, &rd, NULL);
     CloseHandle(h);
     while (i < rd && g_bp_n < DPMI_BP_MAX) {
-        DWORD v[4] = { 0, 0, 0, 0 }; int col = 0;
+        DWORD v[5] = { 0, 0, 0, 0, 0 }; int col = 0;
         /* consume one LINE, taking up to two hex fields from it */
         while (i < rd && (buf[i] == '\r' || buf[i] == '\n')) ++i;   /* line breaks */
         if (i >= rd) break;
@@ -3334,7 +3342,7 @@ static void dpmi_bp_load(void)
                       : (c >= 'a' && c <= 'f') ? c - 'a' + 10
                       : (c >= 'A' && c <= 'F') ? c - 'A' + 10 : -1;
                 if (d < 0) break;
-                if (col < 4) v[col] = (v[col] << 4) | (DWORD)d;
+                if (col < 5) v[col] = (v[col] << 4) | (DWORD)d;
                 ++digits; ++i;
             }
             if (digits) ++col;
@@ -3345,6 +3353,7 @@ static void dpmi_bp_load(void)
             g_bp_dump[g_bp_n] = (col >= 2) ? v[1] : 0;
             g_bp_skip[g_bp_n] = (col >= 3) ? v[2] : 0;
             g_bp_mode[g_bp_n] = (col >= 4) ? v[3] : 0;
+            g_bp_rep[g_bp_n]  = (col >= 5) ? v[4] : 0;
             ++g_bp_n;
         }
     }
@@ -3456,13 +3465,28 @@ static int dpmi_bp_disarm(DWORD lin)
    the real `CD nn` bytes before running V86 (real-mode ints then vector through the
    IVT to our BOP stubs and are serviced normally) and re-apply the BOP patch before
    resuming the PM client. */
+/* ── THE PATCH MAP MUST VERIFY BEFORE IT WRITES. ──────────────────────────────────
+   These used to rewrite every recorded site unconditionally, and that CORRUPTS LIVE
+   DATA. Doom found it: the client declares a base-0 64K code selector, so the scan
+   records `CD nn` pairs all over low memory -- including addresses that later become
+   DOS/4GW's FILE TRANSFER BUFFER. Every INT 31h 0301/0302 unpatches, runs the real-mode
+   read (which fills that buffer with image bytes), then repatches -- stamping C4 C4 over
+   two bytes of freshly-read program image. The client copied that up to extended memory
+   and its relocation pass then read 0xC4C4 where an object index belonged:
+       file    9a a4 59 80 | 00 83 | c4 08     lcall 0x0080:0x59a4 / add sp,8
+       memory  9a a4 59 80 | c4 c4 | c4 08
+   Verifying first makes the map SELF-CORRECTING: if the bytes are no longer what we put
+   there, the guest has reused that memory, so the site is stale -- drop it and never
+   touch those bytes again. That is strictly better than trying to predict which regions
+   the guest will reuse, which is not knowable. */
 static void dpmi_unpatch(void)
 {
     DWORD a;
     for (a = g_patch_lo; a <= g_patch_hi && a < DPMI_PATCH_LIN_MAX; ++a)
         if (g_int_vec[a] && g_int_vec[a] != DPMI_BP_VEC) {   /* a BP is not an INT site */
             volatile BYTE *b = (volatile BYTE *)(ULONG_PTR)a;
-            b[0] = 0xCD; b[1] = g_int_vec[a];
+            if (b[0] == 0xC4 && b[1] == 0xC4) { b[0] = 0xCD; b[1] = g_int_vec[a]; }
+            else g_int_vec[a] = 0;                            /* stale: guest reused it */
         }
 }
 static void dpmi_repatch(void)
@@ -3471,7 +3495,8 @@ static void dpmi_repatch(void)
     for (a = g_patch_lo; a <= g_patch_hi && a < DPMI_PATCH_LIN_MAX; ++a)
         if (g_int_vec[a] && g_int_vec[a] != DPMI_BP_VEC) {   /* a BP stays planted */
             volatile BYTE *b = (volatile BYTE *)(ULONG_PTR)a;
-            b[0] = 0xC4; b[1] = 0xC4;
+            if (b[0] == 0xCD && b[1] == g_int_vec[a]) { b[0] = 0xC4; b[1] = 0xC4; }
+            else g_int_vec[a] = 0;                            /* stale: guest reused it */
         }
 }
 
@@ -3786,6 +3811,7 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                           if (!host_readable(sk, 64)) p = zput(p, "<unreadable>");
                           else                        p = zdump(p, sk, 64); }
                         { int bk = dpmi_bp_disarm(lin);
+                          if (bk >= 0 && g_bp_rep[bk]) g_bp_pending[bk] = 1;   /* repeating */
                           if (bk >= 0 && g_bp_skip[bk]) {
                               /* SKIP MODE: step over the instruction entirely. The bytes are
                                  already restored, so advancing EIP lands on whatever follows
