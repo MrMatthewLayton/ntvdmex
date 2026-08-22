@@ -173,13 +173,56 @@
     0x135bd  the epilogue: inc ebx / restore [0x283e8] and [0x283f0] -- so the
              bookkeeping IS balanced; "budget exhaustion" was checked and is WRONG
   ```
-  ▶ **NEXT, AND IT IS TWO MORE `pmwatch` RUNS, NOT A THEORY.** Watch the nesting
-    pair across the six entries — `03b683e8` (the budget) and `03b683f0` (the
-    stack top). If either drifts instead of returning to its start value, our
-    entries are not balanced with the guest's own accounting and the sixth falls
-    off the end of the nested-stack pool. If both are stable, the suspect is the
-    `sti` at 0x1356d: the handler runs with interrupts ENABLED, so it is
-    re-entrant by design and something of ours is re-entering it.
+  ▶ **THOSE RUNS WERE DONE. FOUR THEORIES KILLED BY MEASUREMENT — DO NOT RETRY.**
+  ```
+    1. "we exhaust its interrupt-stack pool"   WRONG. Budget 0x03b683e8 and stack
+       top 0x03b683f0 are IDENTICAL before and after every entry (0x4 / 0x04405300).
+    2. "the Nth tick releases the delay and    WRONG. A breakpoint on the delay's
+        Doom dies later, in sound init"        return address obj1+0x10f6c was armed
+                                               and NEVER HIT.
+    3. "the fatal one is the 6th"              WRONG. Batch 64 -> dies after 5 ticks;
+                                               batch 3 -> after 4. Not a count.
+    4. "state drifts inside the ISR"           WRONG. Breakpoints on the stack switch
+                                               (obj1+0x1359a) and the indirect call
+                                               (0x1359e) hit repeatedly with identical
+                                               registers: EBX=0x03ae5210 (Doom's timer
+                                               callback), ECX=0x04405300, DS=0x18f.
+  ```
+  **WHAT IS ACTUALLY TRUE:** it dies immediately after the **SECOND asynchronous
+  entry**, whatever the batch size. Async entry #1 delivers its ticks and every one
+  completes; entry #2 delivers one and the VDM is gone — silently, no fault to our
+  VEH, no watchdog line, nothing after the log's last byte.
+
+  ▶ **THAT SIGNATURE IS GH #18's, AND THAT IS THE HONEST NEXT STEP.** A silent VDM
+    termination with no reflected exception is exactly the class this project has
+    hit before (runs 20-34). Every cheap instrument has now been built and used —
+    watch addresses, guest breakpoints, injection and completion logging, offline
+    disassembly of the ISR — and none of them can see this, because the process is
+    killed rather than faulted. **Make the fault observable before guessing again:**
+    finish the `+0x638` PM-fault trampoline so a raw PM trap is reflected instead of
+    terminating the VDM. Until then any further theory here is unfalsifiable.
+
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ ★ A SEPARATE, SHARP, REPRODUCIBLE BUG FOUND ON THE WAY: ARGUMENTS             │
+└──────────────────────────────────────────────────────────────────────────────┘
+
+  **Passing ANY command-line argument makes DOS/4GW quit before printing a single
+  character.** `-nosound`, `-zzz`, anything. The DPMI/INT 21h trace is identical to
+  a working run for **all 617 of its lines** and then simply stops — right after
+  the `AH=30h` DOS-version check (which returns 0x1606 = 6.22, correct) and before
+  the `AH=35h`/`AH=25h` vector-0 install a working run does next. The tail is
+  well-formed:
+  ```
+     cmdtail len=0x05 [20 2d 7a 7a 7a 0d]      i.e. " -zzz\r"
+  ```
+  length includes the leading space, terminated by 0x0D — textbook. So the extender
+  is branching on something else it reads when a tail is present.
+  ▶ This matters beyond tidiness: it blocks `doom -nosound`, which is the obvious
+    way to take the sound path out of the picture, and every game that takes options.
+  ▶ `doomrun.bat` on the share now supports it: put the arguments in
+    **`doomargs.txt`** on the share root, absent file = none.
+  ▶ Next probe is cheap: the same run under `stock <target>` — if stock ntvdm runs
+    `doom -zzz` fine, the difference is ours and the trace comparison is short.
   ⚠ `pmnoirq.flag` is now ABSENT on the share: injection is properly gated and is
     where the work is. Re-create it to get the older, stable, further-but-wedged run.
 
