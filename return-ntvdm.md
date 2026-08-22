@@ -1,64 +1,74 @@
 ═══════════════════════════════════════════════════════════════════════════════
-██ ▶▶▶ DOOM'S EXTENDER COMPLETES ITS STARTUP AND HANDS OFF TO THE GAME.       ██
-██     NEXT EDGE: THE TIMER IRQ WE INJECT INTO ITS OWN PM INT 08h HANDLER.    ██
+██ ▶▶▶ DOOM LOADS ITS WHOLE EXECUTABLE. FIX THE IRQ0 INJECTION NEXT.          ██
 ═══════════════════════════════════════════════════════════════════════════════
 
 ┌──────────────────────────────────────────────────────────────────────────────┐
-│ ★★★ WHERE IT IS (end of session 17, 2026-08-22). FURTHEST EVER BY FAR.       │
+│ ★★★ WHERE IT IS (end of session 17, 2026-08-22)                              │
 └──────────────────────────────────────────────────────────────────────────────┘
 
-  Doom's DOS/4GW now, in one run:
-   • negotiates DPMI and switches to protected mode
-   • loads its PM modules into EXTENDED memory and relocates them
-   • runs **its own protected-mode INT 21h handler** — **160 clean IRET returns**
-   • forwards DOS calls to real mode through **INT 31h 0302**
-   • completes the **relocation pass** and retypes all three objects to code
-   • **hands off to the application** (all twelve handoff instructions breakpointed and
-     hit, through `mov es,bx` immediately before the IRET)
-   • the application's runtime starts and installs **its own PM interrupt vectors** —
-     43 `setPMvec` calls, walking 0x00..0x08
+  In one run Doom's DOS/4GW now: negotiates DPMI; loads its PM modules into EXTENDED
+  memory and relocates them; runs **its own protected-mode INT 21h handler**; forwards
+  DOS calls to real mode through **INT 31h 0302**; hands off to the application; and the
+  game's runtime builds its flat model and **reads DOOM.EXE to file position 0xAD511 --
+  its exact size -- then closes the handle.** Checkpoint count went 0x1a6 -> 0xdb1+.
 
-  ▶▶ **IT STOPS THE INSTANT WE DELIVER THE TIMER.** The log's last line is
-     `IRQ0->PM INT 0x08 handler 0x00af:0x0020` — the moment the client installs its PM
-     INT 08h vector, `dpmi_inject_pm_irq()` injects IRQ0 into it and the run ends.
-     That function now shares the corrected frame-width and stack-pointer rules (below)
-     but has never otherwise been exercised against a 32-bit client.
-   ▶ **START HERE, and ask the cheap question first:** is delivering IRQ0 while the
-     client is still half-way through building its own vector table even legitimate? A
-     real host gates delivery on the client's virtual interrupt flag; ours defaults
-     `g_dpmi_vi` to 1. Try suppressing injection until the client has run for a while,
-     or until it has enabled interrupts explicitly — if that gets further, the bug is
-     the POLICY, not the mechanism.
-   ▶ Then check the mechanism: the injected frame, and whether the handler's IRET lands
-     on the PM-return catcher.
+  ▶▶ **THE ONE THING TO FIX FIRST, and it is currently papered over by a flag.**
+     `pmnoirq.flag` on the share suppresses the asynchronous IRQ0 -> PM INT 08h
+     injection, **and Doom needs it**:
+     ```
+        injection ON   -> run ends the instant the client installs INT 08h  (cp 0x23b)
+        injection OFF  -> client reaches cp 0xdb1+ and loads its whole image
+     ```
+     That flag is **a knob for asking the question, not a fix** — a game that hooks the
+     timer and never receives it will not play. `dpmi_inject_pm_irq()` now shares the
+     corrected frame-width and stack-pointer rules but has never otherwise been
+     exercised against a 32-bit client.
+   ▶ **Ask the cheap question first:** is delivering IRQ0 while the client is still
+     building its own vector table even legitimate? Ours defaults `g_dpmi_vi` to 1 and
+     fires the moment `g_pm_int[8].sel` is non-zero — i.e. on the very instruction after
+     the client installs it. Then check the mechanism: the injected frame, and whether
+     the handler's IRET reaches the PM-return catcher.
+   ▶ **DELETE `pmnoirq.flag` FROM THE SHARE** once it is fixed; leaving it silently
+     changes every later run. (Session 17 left the share clean.)
+
+  ▶ After that: Doom stops just past its private `INT 21h AX=FF00` returning CF=1 from
+    its OWN handler, inside its DOS-call thunk at `0x8F:0x4B81`.
 
 ┌──────────────────────────────────────────────────────────────────────────────┐
-│ THE FOUR BUGS THIS SESSION FOUND AFTER THE CORRECTION, ALL OURS              │
+│ THE SEVEN BUGS THIS SESSION FOUND AFTER THE CORRECTION — EVERY ONE OURS      │
 └──────────────────────────────────────────────────────────────────────────────┘
 
-  1. **The PM interrupt frame width is the CLIENT'S mode, not the handler selector's D
-     bit.** DOS/4GW's handler sits in a 16-bit code selector but returns with `66 cf`
-     (IRETD), popping twelve bytes from the six we pushed.
-  2. **Frame width and stack-pointer width are different questions.** Fixing (1) alone
-     faulted in our own process: with a 16-bit SS the CPU maintains SP and the top half
-     of ESP is junk. A 32-bit frame on a 16-bit stack is ordinary.
+  1. **PM interrupt frame width is the CLIENT'S mode, not the handler selector's D bit.**
+     DOS/4GW's handler sits in a 16-bit code selector but returns with `66 cf` (IRETD),
+     popping twelve bytes from the six we pushed.
+  2. **Frame width and stack-pointer width are different questions.** With a 16-bit SS
+     the CPU maintains SP and the top half of ESP is junk; a 32-bit frame on a 16-bit
+     stack is ordinary.
   3. ★ **The patch map must VERIFY before it writes — it was corrupting loaded images.**
-     The client declares a base-0 64K code selector, so the scan recorded `CD nn` pairs
-     all over low memory, including addresses that later became DOS/4GW's file transfer
-     buffer. Every 0301/0302 unpatched, ran the real-mode READ that fills that buffer,
-     then repatched — stamping `C4 C4` over two bytes of freshly-read image:
+     Sites recorded in low memory later became DOS/4GW's file transfer buffer, and every
+     0301/0302 repatch stamped `C4 C4` over freshly-read image bytes:
      ```
         file    9a a4 59 80 | 00 83 | c4 08      lcall 0x0080:0x59a4 / add sp,8
         memory  9a a4 59 80 | c4 c4 | c4 08
      ```
-     Found by a repeating breakpoint over the relocation loop: 236 iterations reading a
-     clean 0x0080, then one reading 0xC480. unpatch/repatch now only rewrite bytes that
-     are still what we put there; anything else is stale and is dropped.
-     ▶ **The general shape: a cache of "I changed these bytes" is only valid while
-       nothing else writes them, and in a VDM the guest owns that memory.**
+     Found with a repeating breakpoint over the relocation loop: 236 iterations reading
+     a clean 0x0080, then one reading 0xC480.
+     ▶ **A cache of "I changed these bytes" is only valid while nothing else writes them,
+       and in a VDM the guest owns that memory.**
   4. **The map only covered the low 1.1 MB.** A working extender puts its modules in
-     EXTENDED memory, so their INT sites were never patched. Now an open-addressed hash
-     keyed by linear address — and faster than the array it replaced.
+     EXTENDED memory. Now an open-addressed hash keyed by linear address — and faster
+     than the flat array it replaced.
+  5. ★ **INT 31h 0001 (free descriptor) was a no-op.** Doom does 360 allocations against
+     315 frees; we leaked all of them, the table ran dry and the client used the garbage
+     selector ENOMEM handed back. Real LIFO free list now; our own selectors are never
+     recycled. ▶ **A no-op is not a safe stub when the thing being stubbed is a
+     RESOURCE.**
+  6. **The code-region scanner walked unmapped memory and faulted in our own process.**
+     It now walks VirtualQuery's committed extents instead of guessing at page
+     boundaries the memory manager already knows exactly.
+  7. **The per-event checkpoint dump was the bottleneck** once a client actually ran —
+     4 MB log cap hit mid-startup. Eight checkpoints always, the firehose behind
+     `pmverbose.flag`, cap raised to 32 MB.
 
 ┌──────────────────────────────────────────────────────────────────────────────┐
 │ ★★★ A CORRECTION. THE PREVIOUS HANDOFF NAMED THE WRONG BLOCKER.              │
