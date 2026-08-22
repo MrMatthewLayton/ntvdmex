@@ -365,6 +365,16 @@ static DWORD g_bp_dump[DPMI_BP_MAX];    /* optional 2nd column: linear addr to d
    #GP XP will not reflect, so it kills the VDM -- and the question "is STI the only
    thing in the way" is answerable in one run by skipping it. */
 static DWORD g_bp_skip[DPMI_BP_MAX];
+/* Optional 4th column: 1 = plant a ONE-BYTE INT3 (0xCC) instead of the two-byte BOP.
+   This exists to answer one question that forks the whole CLI/STI strategy: does a
+   protected-mode TRAP reach our VEH at all? Runs 20-34 had the kernel reflecting PM
+   SOFTWARE interrupts to us (the SegCs==0x1B arm), and #BP is software-generated, so
+   there is reason to hope -- but hoping is not measuring. An INT3 in guest code arrives
+   with the GUEST's CS, so it falls to dpmi_crash_veh's fatal arm and prints
+   "DPMI FATAL: exception code=0x80000003". Seeing that line instead of a silent death
+   is the answer. A one-byte trap is also the only patch that FITS over CLI/STI. */
+static DWORD g_bp_mode[DPMI_BP_MAX];
+static BYTE  g_bp_pending[DPMI_BP_MAX];  /* skipped -> needs re-arming once EIP moves on */
 static BYTE  g_bp_orig[DPMI_BP_MAX][2]; /* the two bytes we displaced                  */
 static BYTE  g_bp_armed[DPMI_BP_MAX];
 static int   g_bp_n = 0;
@@ -3248,6 +3258,7 @@ static DWORD dpmi_bop_vec(DWORD csv, DWORD eip)
    really data gets corrupted); scanning only what the client itself calls code is the
    narrowest rule that covers the case, and g_int_vec[] remains the revert map. */
 static void dpmi_bp_arm(void);               /* fwd: a new region may hold a requested BP */
+static void dpmi_bp_rearm_pending(DWORD cur_lin);   /* fwd: re-plant stepped-over breakpoints */
 static void dpmi_patch_code_region(DWORD base, DWORD limit)
 {
     volatile BYTE *mem;
@@ -3307,7 +3318,7 @@ static void dpmi_bp_load(void)
     ReadFile(h, buf, sizeof buf - 1, &rd, NULL);
     CloseHandle(h);
     while (i < rd && g_bp_n < DPMI_BP_MAX) {
-        DWORD v[3] = { 0, 0, 0 }; int col = 0;
+        DWORD v[4] = { 0, 0, 0, 0 }; int col = 0;
         /* consume one LINE, taking up to two hex fields from it */
         while (i < rd && (buf[i] == '\r' || buf[i] == '\n')) ++i;   /* line breaks */
         if (i >= rd) break;
@@ -3323,7 +3334,7 @@ static void dpmi_bp_load(void)
                       : (c >= 'a' && c <= 'f') ? c - 'a' + 10
                       : (c >= 'A' && c <= 'F') ? c - 'A' + 10 : -1;
                 if (d < 0) break;
-                if (col < 3) v[col] = (v[col] << 4) | (DWORD)d;
+                if (col < 4) v[col] = (v[col] << 4) | (DWORD)d;
                 ++digits; ++i;
             }
             if (digits) ++col;
@@ -3333,6 +3344,7 @@ static void dpmi_bp_load(void)
             g_bp_lin[g_bp_n] = v[0];
             g_bp_dump[g_bp_n] = (col >= 2) ? v[1] : 0;
             g_bp_skip[g_bp_n] = (col >= 3) ? v[2] : 0;
+            g_bp_mode[g_bp_n] = (col >= 4) ? v[3] : 0;
             ++g_bp_n;
         }
     }
@@ -3361,7 +3373,8 @@ static void dpmi_bp_arm(void)
              is still 00 00 holds nothing to break on, so leave it unarmed and try
              again after the next region is loaded. */
         if (g_bp_armed[k]) {
-            if (b[0] == 0xC4 && b[1] == 0xC4) continue;    /* still planted */
+            if (g_bp_mode[k] == 1 ? (b[0] == 0xCC)
+                                  : (b[0] == 0xC4 && b[1] == 0xC4)) continue;  /* still planted */
             g_bp_armed[k] = 0; g_int_vec[lin] = 0;         /* clobbered -> re-arm below */
         }
         if (b[0] == 0x00 && b[1] == 0x00) continue;        /* nothing loaded here yet */
@@ -3391,9 +3404,13 @@ static void dpmi_bp_arm(void)
               continue;
           } }
         g_bp_orig[k][0] = b[0]; g_bp_orig[k][1] = b[1];
-        b[0] = 0xC4; b[1] = 0xC4;
-        g_int_vec[lin] = DPMI_BP_VEC;
-        g_bp_armed[k] = 1;
+        if (g_bp_mode[k] == 1) {
+            b[0] = 0xCC;                      /* INT3: one byte, fits over CLI/STI */
+        } else {
+            b[0] = 0xC4; b[1] = 0xC4;
+            g_int_vec[lin] = DPMI_BP_VEC;     /* only a BOP is resolvable by vector  */
+        }
+        g_bp_armed[k] = 1; g_bp_pending[k] = 0;
         if (lin < g_patch_lo) g_patch_lo = lin;
         if (lin > g_patch_hi) g_patch_hi = lin;
         q = zput(q, "DPMI-BP: armed at linear 0x"); q = zhex(q, lin);
@@ -3404,6 +3421,18 @@ static void dpmi_bp_arm(void)
     }
 }
 
+/* Re-plant any breakpoint that was stepped over, once the guest is no longer standing
+   on its footprint. Called at every PM event, which is the first safe moment. */
+static void dpmi_bp_rearm_pending(DWORD cur_lin)
+{
+    int k, any = 0;
+    for (k = 0; k < g_bp_n; ++k)
+        if (g_bp_pending[k] && cur_lin != g_bp_lin[k] && cur_lin != g_bp_lin[k] + 1) {
+            g_bp_pending[k] = 0; any = 1;
+        }
+    if (any) dpmi_bp_arm();
+}
+
 /* Disarm the breakpoint at `lin` (restore its bytes). Returns its index, or -1. */
 static int dpmi_bp_disarm(DWORD lin)
 {
@@ -3411,7 +3440,8 @@ static int dpmi_bp_disarm(DWORD lin)
     for (k = 0; k < g_bp_n; ++k)
         if (g_bp_armed[k] && g_bp_lin[k] == lin) {
             volatile BYTE *b = (volatile BYTE *)(ULONG_PTR)lin;
-            b[0] = g_bp_orig[k][0]; b[1] = g_bp_orig[k][1];
+            b[0] = g_bp_orig[k][0];
+            if (g_bp_mode[k] != 1) b[1] = g_bp_orig[k][1];
             g_int_vec[lin] = 0; g_bp_armed[k] = 0;
             return k;
         }
@@ -3589,23 +3619,45 @@ static int dpmi_dispatch_to_pm_handler(dos_machine_t *mp, volatile BYTE *tib,
     DWORD sEIP = VDM_REG(tib, VTIB_EIP), sESP = VDM_REG(tib, VTIB_ESP);
     WORD  sCS  = (WORD)VDM_REG(tib, VTIB_CS), sSS = (WORD)VDM_REG(tib, VTIB_SS);
     DWORD sEFL = VDM_REG(tib, VTIB_EFLAGS);
-    int h32 = dpmi_sel_is32(g_pm_int[vec].sel);
+    /* ── THE FRAME WIDTH FOLLOWS THE CLIENT'S MODE, NOT THE HANDLER SELECTOR'S D BIT.
+         This is measured, and getting it wrong is invisible until the handler RETURNS.
+         DOS/4GW's PM INT 21h handler lives in a 16-BIT code selector (0x67, D/B=0) --
+         so dpmi_sel_is32() says "16-bit" and we pushed a 6-byte frame -- but it ends
+         with `66 cf`, an operand-size-prefixed IRETD, which pops TWELVE bytes. It
+         therefore returned to a wild address and the VDM died, with the last breakpoint
+         sitting on the instruction before it.
+         The client declared itself 32-bit at the mode switch (g_dpmi_client32), and an
+         interrupt frame is a DPMI API width -- exactly the distinction the switch code
+         already draws: the declared width is "the right input for DPMI API register
+         widths, not for D/B". A 16-bit client's handler ends in a plain IRET and gets a
+         6-byte frame, which is the same rule. */
+    int h32 = g_dpmi_client32;
     unsigned ph; int done = 0;
 
     dpmi_ensure_pmret_sel();
     if (g_pmret_sel == 0) return 0;                 /* caller falls back to servicing */
 
+    /* ► FRAME WIDTH AND STACK-POINTER WIDTH ARE TWO DIFFERENT QUESTIONS, and conflating
+         them faults in OUR OWN process. How many bytes the handler pops is the client's
+         mode (h32, above). How the stack is ADDRESSED is the SS descriptor's B bit: with
+         a 16-bit stack selector the CPU maintains SP only, and the top half of ESP holds
+         whatever junk was last there -- 0xb350 in the run that caught this. Using that as
+         an offset from the segment base walked straight off the end of guest memory and
+         the VEH reported an access violation inside pokew(). A 32-bit frame on a 16-bit
+         stack is perfectly ordinary and is exactly what DOS/4GW uses. */
     { DWORD b = dpmi_sel_base(sSS);
-      if (h32) { DWORD sp = sESP;
-                 sp -= 4; poked(b + sp, sEFL);
-                 sp -= 4; poked(b + sp, g_pmret_sel);
-                 sp -= 4; poked(b + sp, DPMI_PMRET_OFF);
-                 VDM_REG(tib, VTIB_ESP) = sp; }
-      else     { WORD sp = (WORD)sESP;
-                 sp -= 2; pokew(b + sp, (WORD)sEFL);
-                 sp -= 2; pokew(b + sp, g_pmret_sel);
-                 sp -= 2; pokew(b + sp, DPMI_PMRET_OFF);
-                 VDM_REG(tib, VTIB_ESP) = (sESP & 0xFFFF0000u) | sp; } }
+      int ss32 = dpmi_sel_is32(sSS);
+      DWORD sp = ss32 ? sESP : (sESP & 0xFFFF);
+      if (h32) {
+          sp = ss32 ? sp - 4 : ((sp - 4) & 0xFFFF); poked(b + sp, sEFL);
+          sp = ss32 ? sp - 4 : ((sp - 4) & 0xFFFF); poked(b + sp, g_pmret_sel);
+          sp = ss32 ? sp - 4 : ((sp - 4) & 0xFFFF); poked(b + sp, DPMI_PMRET_OFF);
+      } else {
+          sp = ss32 ? sp - 2 : ((sp - 2) & 0xFFFF); pokew(b + sp, (WORD)sEFL);
+          sp = ss32 ? sp - 2 : ((sp - 2) & 0xFFFF); pokew(b + sp, g_pmret_sel);
+          sp = ss32 ? sp - 2 : ((sp - 2) & 0xFFFF); pokew(b + sp, DPMI_PMRET_OFF);
+      }
+      VDM_REG(tib, VTIB_ESP) = ss32 ? sp : ((sESP & 0xFFFF0000u) | sp); }
 
     VDM_SET16(tib, VTIB_CS, g_pm_int[vec].sel);
     VDM_REG(tib, VTIB_EIP) = h32 ? g_pm_int[vec].off : (g_pm_int[vec].off & 0xFFFF);
@@ -3683,6 +3735,8 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
     DWORD ax = VDM_REG(tib, VTIB_EAX) & 0xFFFF;
     DWORD ev = VDM_REG(tib, VTIB_EVENT), eip = VDM_REG(tib, VTIB_EIP) & 0xFFFF;
     (void)steps;
+    /* First safe moment to re-plant anything the skip mode stepped over. */
+    if (g_bp_n) dpmi_bp_rearm_pending(dpmi_sel_base((WORD)(VDM_REG(tib, VTIB_CS) & 0xFFFF)) + eip);
                     /* ── THE CLIENT'S OWN PM HANDLER WINS, IF IT INSTALLED ONE. ──────
                        Scoped to INT 21h ON PURPOSE, for now. DOS/4GW also installs PM
                        handlers for 10h/16h/1Ah/... and by the spec those should route to
@@ -3739,6 +3793,12 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                               VDM_REG(tib, VTIB_EIP) += g_bp_skip[bk];
                               p = zput(p, " [SKIPPED "); p = zhex(p, g_bp_skip[bk]);
                               p = zput(p, " byte(s)]");
+                              /* A skipped site is usually in a loop or a shared wrapper, so
+                                 one-shot is useless there. We cannot re-plant NOW -- EIP is
+                                 inside the two-byte footprint we just restored -- so mark it
+                                 and let dpmi_bp_rearm_pending() do it once the guest has
+                                 moved on. */
+                              g_bp_pending[bk] = 1;
                           }
                           if (bk < 0) p = zput(p, " [WARN: no BP record here]");
                           else if (g_bp_dump[bk]) {
@@ -4828,21 +4888,25 @@ static int dpmi_inject_pm_irq(dos_machine_t *mp, volatile BYTE *tib, unsigned iv
        lands on the catcher; keep the client's own SS so the handler has a valid stack. Frame
        width + entry-offset mask follow the handler CS D-bit: a 32-bit PM INT handler wants a
        dword frame and a full 32-bit entry offset (GH #18 run 83). */
-    int h32 = dpmi_sel_is32(g_pm_int[iv].sel);
+    /* Same rule as dpmi_dispatch_to_pm_handler(): the frame width is the CLIENT's, not
+       the handler selector's. For every case confirmed so far the two agree (a 16-bit
+       client with a 16-bit handler), so this is a consistency fix rather than a
+       behaviour change -- but they diverge exactly where DOS/4GW lives. */
+    int h32 = g_dpmi_client32;
     { WORD ss = sSS; DWORD b = dpmi_sel_base(ss);
+      int ss32 = dpmi_sel_is32(ss);                /* see the note in the dispatch path */
+      DWORD sp = ss32 ? sESP : (sESP & 0xFFFF);
       if (h32) {
-          DWORD sp = sESP;
-          sp -= 4; poked(b + sp, sEFL);            /* EFLAGS (restored below regardless) */
-          sp -= 4; poked(b + sp, g_pmret_sel);     /* CS  = catcher (dword; hi16=0)       */
-          sp -= 4; poked(b + sp, DPMI_PMRET_OFF);  /* EIP = catcher                       */
-          VDM_SET16(tib, VTIB_SS, ss); VDM_REG(tib, VTIB_ESP) = sp;
+          sp = ss32 ? sp - 4 : ((sp - 4) & 0xFFFF); poked(b + sp, sEFL);
+          sp = ss32 ? sp - 4 : ((sp - 4) & 0xFFFF); poked(b + sp, g_pmret_sel);
+          sp = ss32 ? sp - 4 : ((sp - 4) & 0xFFFF); poked(b + sp, DPMI_PMRET_OFF);
       } else {
-          WORD sp = (WORD)sESP;
-          sp -= 2; pokew(b + sp, (WORD)sEFL);      /* FLAGS (restored below regardless) */
-          sp -= 2; pokew(b + sp, g_pmret_sel);     /* CS  = catcher                      */
-          sp -= 2; pokew(b + sp, DPMI_PMRET_OFF);  /* IP  = catcher                      */
-          VDM_SET16(tib, VTIB_SS, ss); VDM_REG(tib, VTIB_ESP) = sp;
-      } }
+          sp = ss32 ? sp - 2 : ((sp - 2) & 0xFFFF); pokew(b + sp, (WORD)sEFL);
+          sp = ss32 ? sp - 2 : ((sp - 2) & 0xFFFF); pokew(b + sp, g_pmret_sel);
+          sp = ss32 ? sp - 2 : ((sp - 2) & 0xFFFF); pokew(b + sp, DPMI_PMRET_OFF);
+      }
+      VDM_SET16(tib, VTIB_SS, ss);
+      VDM_REG(tib, VTIB_ESP) = ss32 ? sp : ((sESP & 0xFFFF0000u) | sp); }
     g_dpmi_vi = 0;                                 /* mask further virtual interrupts     */
     VDM_REG(tib, VTIB_EFLAGS) = VTIB_EFLAGS_PM;
     VDM_SET16(tib, VTIB_CS, g_pm_int[iv].sel);
