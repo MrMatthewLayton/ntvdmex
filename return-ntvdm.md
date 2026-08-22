@@ -36,15 +36,46 @@
     every later test into a stock run with entirely plausible logs. Check that file,
     and re-run `selftest.com` after, every time.
 
-  ▶▶ **THEREFORE THE NEXT RESEARCH QUESTION IS SHARP:** how does ntvdm get the kernel
-     to deliver that interrupt? Our own source says the kernel has a working PM path
-     (`Under VdmStartExecution the kernel reflects a PM INT nn …`) and that an early
-     spike found `VdmStartExecution` faulting when it ran PM — which is why this host
-     runs PM in-process by far-jmp instead, and why neither native INT reflection nor
-     native interrupt delivery is available to us. Both the INT→BOP patch map and the
-     async injector exist ONLY to work around that choice. Re-run that spike against
-     today's host (the crash VEH already dumps the fault) — the original attempt
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ ★★★ AND THE RESEARCH ANSWER: THE KERNEL **CANNOT** DELIVER TO AN IN-PROCESS  │
+│     PM GUEST. `POPFD` AT CPL 3 DROPS VIF. THIS IS STRUCTURAL.                │
+└──────────────────────────────────────────────────────────────────────────────┘
+
+  Three facts, and together they close the question (commit `5335d74`):
+
+  1. **The guest runs with VIF CLEAR no matter what we write.** The mode switch now
+     writes `EFLAGS = 0x80202` (IF|VIF) into the TIB. A live `GetThreadContext` read
+     of the suspended guest — `CS=0x187`, its OWN flat code selector, so this is the
+     guest and not the host — comes back:
+     ```
+        ASYNC-PM ok=1 from=0x187:0x03ae53dc efl=0x00000246   IF=1 VIF=0 VIP=0
+     ```
+  2. **`POPFD` at CPL 3 cannot modify IF, IOPL, VM, VIP or VIF.** PM entry loads the
+     guest's flags with `push [ebx+0x398] ; popfd` (`dpmi_enter.S`), so our VIF write
+     is silently discarded and the guest simply runs with the host thread's ordinary
+     user-mode flags — and `0x246` is exactly that.
+  3. **The kernel's delivery gate reads VIF, not IF** — `VdmpCanDeliver`, per the
+     `EFLAGS_VIF_BIT` note in `ntvdm.h`, which cost the real-mode timer the same way.
+
+  ⇒ **While PM runs IN-PROCESS via far-jmp, the host cannot establish the guest's
+    virtual-interrupt state at all, so the kernel's gate is permanently shut and it can
+    NEVER deliver a hardware interrupt to a protected-mode client.** That is why the
+    asynchronous `SuspendThread`/`SetThreadContext` injector had to be invented — it is
+    doing the kernel's job from user mode — and why it is fragile enough to tear the
+    VDM down. Stock ntvdm gets kernel delivery because **the KERNEL runs its PM guest**
+    and sets the flags from ring 0, which is also why it reaches Doom's title screen on
+    this box while we stop at `I_StartupTimer()`.
+
+  ▶▶ **SO `VdmStartExecution`-FOR-PM IS NO LONGER A HUNCH ABOUT A NICER ARCHITECTURE —
+     IT IS THE ONLY PLACE THE GUEST'S INTERRUPT STATE CAN BE SET.** Our own source says
+     the kernel has a working PM path (`Under VdmStartExecution the kernel reflects a
+     PM INT nn …`) and that an early spike found it faulting when it ran PM — which is
+     why this host far-jmps instead. Both the INT→BOP patch map and the async injector
+     exist ONLY to work around that one decision. Re-run the spike against today's host
+     (the crash VEH already dumps the fault with both contexts); the original attempt
      failed when almost none of the DPMI host existed.
+  ▶ The VIF write at the mode switch is KEPT: correct, free, and load-bearing the
+    moment PM is entered by a path that can honour it.
 
   Commit `308b3de` on `m9/completeness`. Gates at the end: **off-VM 349/349** (8
   suites), **selftest.com 8/8** on the rig, `dpmitest.com` + `dpmiback.com` both
