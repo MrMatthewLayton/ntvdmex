@@ -557,10 +557,43 @@ static struct { WORD sel; DWORD off; BYTE client; } g_pm_int[256];
    a chained call straight back to the service the client was asking for. */
 /* Every block we have handed the client through INT 31h 0501. We know exactly which
    memory is the client's because we allocated it -- and that is the only usable answer
-   when the client declares a FLAT code selector. See dpmi_patch_code_region(). */
+   when the client declares a FLAT code selector. See dpmi_patch_code_region().
+   `code` marks a block that holds one of the program's EXECUTABLE objects, matched by
+   size against the LE object table -- see dpmi_le_learn(). */
 #define DPMI_MEMBLK_MAX 64
-static struct { DWORD base, size; } g_dpmi_blk[DPMI_MEMBLK_MAX];
+static struct { DWORD base, size; BYTE code; } g_dpmi_blk[DPMI_MEMBLK_MAX];
 static int g_dpmi_nblk = 0;
+
+/* ── THE CLIENT'S EXECUTABLE DECLARES WHICH OF ITS MEMORY IS CODE. ────────────────
+   A flat code selector (base 0, limit 4 GB) cannot be scanned for INT sites, so an
+   application whose own code lives behind one -- every DOS/4GW game -- runs with its
+   `CD 21`/`CD 31` unpatched, and a raw INT in protected mode is the one fault XP will
+   not reflect. Scanning "every block we handed out" was tried and is WORSE (session 17:
+   it patched bytes inside DATA and the run ended earlier), because the client's memory
+   is code and data mixed.
+   But the client is an LE ("linear executable") image, and an LE names its own objects:
+   each carries a flags word with bit 2 = EXECUTABLE. DOS/4GW allocates ONE 0501 block
+   per object, sized to the object's virtual size rounded up to a page -- so the object
+   table tells us which blocks are code, exactly, with no guessing at content.
+   Measured on DOOM.EXE, and the correspondence is exact in all three cases:
+       obj1  vsize 0x44f71  READ|EXEC|BIG32   -> 0501 of 0x45000  = the game's code
+       obj2  vsize 0x00019  READ|EXEC|ALIAS16 -> 0501 of 0x01000  (also gets a based
+                                                  descriptor, so it was already patched)
+       obj3  vsize 0x85e10  READ|WRITE|BIG32  -> 0501 of 0x86000  = data, NOT scanned
+   ► ONLY OBJECTS OF 64 KB AND UP ARE MATCHED. A page-rounded size is a weak key when it
+     is small: 0x1000 is the commonest allocation there is, and Doom makes an unrelated
+     one. Small code objects need a based descriptor to be reachable at all (obj2 does),
+     which the 0009/000C path already patches -- so the size key is only ever asked to
+     identify the big flat-addressed image, where it is distinctive. */
+#define DPMI_LE_MAX 16
+static DWORD g_le_code_sz[DPMI_LE_MAX];   /* page-rounded sizes of the EXEC objects */
+static int   g_le_ncode = 0;
+
+/* When the client last installed a PM INT 08h handler, and how long IRQ0 injection must
+   then hold off. One 18.2 Hz tick period is 54.9 ms -- the shortest gap real hardware can
+   put between "the vector exists" and "the timer fires". See INT 31h 0205. */
+#define DPMI_IRQ0_ARM_QUIET_MS 55
+static DWORD g_pm_vec8_armed_ms = 0;
 
 #define DPMI_PMDEF_STRIDE 3
 static WORD  g_pm_defsel  = 0;      /* code selector over the stub block */
@@ -3395,6 +3428,25 @@ static DWORD dpmi_bop_vec(DWORD csv, DWORD eip)
     return pmap_get(dpmi_sel_base((WORD)csv) + eip);
 }
 
+/* ── AN EIP IS ONLY 16 BITS WIDE WHEN ITS CODE SELECTOR IS. ───────────────────────
+   Every PM stop used to read `VDM_REG(tib, VTIB_EIP) & 0xFFFF`, which is right for the
+   16-bit selectors this host grew up on and WRONG the moment a client runs 32-bit code
+   in a flat selector -- there, EIP is a full linear address and the top sixteen bits
+   are the address, not junk to be discarded.
+   It cost a whole diagnosis to see. Doom's first `int 21h` (AH=30h, get DOS version,
+   at obj1+0x40be5) fired our BOP exactly as intended at linear 0x03b10be5, and the
+   masked EIP turned the lookup into `pmap_get(0x0be5)` -- a different address, in low
+   memory, with nothing recorded there. The run then died as "unexpected PM stop" AT THE
+   VERY INSTRUCTION THAT PROVED THE PATCH WORKED, and the log said 0x187:0x0be7, which
+   reads like a wild jump into the BIOS data area rather than what it was.
+   This is the same rule the interrupt-frame width already follows: ask the descriptor,
+   not the host's habits. dpmi_sel_is32() reads the D/B bit we store for the selector. */
+static DWORD dpmi_pm_eip(volatile BYTE *tib)
+{
+    DWORD e = VDM_REG(tib, VTIB_EIP);
+    return dpmi_sel_is32((WORD)(VDM_REG(tib, VTIB_CS) & 0xFFFF)) ? e : (e & 0xFFFF);
+}
+
 /* ── PATCH A REGION THE CLIENT HAS JUST DECLARED TO BE CODE. ──────────────────────
    Called from INT 31h 0009/000C when the resulting descriptor is a CODE type. The
    TIMING is the client's, not ours, and it is right: Doom's trace shows AH=48h
@@ -3455,8 +3507,9 @@ static void dpmi_patch_code_region(DWORD base, DWORD limit)
              g_dpmi_blk[] is recorded and ready for whoever takes this on. */
         q = zput(q, "DPMI: FLAT code region 0x"); q = zhex(q, base);
         q = zput(q, "..0x"); q = zhex(q, end);
-        q = zput(q, " -- NOT scanned; the client's INT sites here are UNPATCHED ("); 
-        q = zhex(q, (DWORD)g_dpmi_nblk); q = zput(q, " blocks known)\r\n");
+        q = zput(q, " -- not scanned as a range (");
+        q = zhex(q, (DWORD)g_dpmi_nblk); q = zput(q, " blocks known, ");
+        q = zhex(q, (DWORD)g_le_ncode); q = zput(q, " LE code sizes)\r\n");
         log_append(LOG_PATH, lb, q); serial_out(lb, q);
         return;
     }
@@ -3497,6 +3550,78 @@ static void dpmi_patch_code_region(DWORD base, DWORD limit)
     q = zput(q, " -> patched "); q = zhex(q, n); q = zput(q, " INT sites\r\n");
     log_append(LOG_PATH, lb, q); serial_out(lb, q);
     dpmi_bp_arm();          /* a module that has just appeared may hold a requested BP */
+}
+
+/* Learn the program's EXECUTABLE object sizes from its own LE header. See the commentary
+   on g_le_code_sz. The image is already in `filebuf` -- the loader read it to run the
+   MZ stub -- so this costs one pass over memory we are holding anyway and no file I/O.
+   ► THE HEADER IS FOUND BY SEARCH, NOT BY e_lfanew. In a bound executable the MZ stub is
+     the extender (DOS/4GW), and its e_lfanew is not a pointer to the LE at all -- on
+     DOOM.EXE it reads 0x09b40000, i.e. off the end of a 0xad511-byte file. Every offset
+     INSIDE the LE header is relative to the header, not the file, for the same reason.
+   ► AND THE CANDIDATE IS VALIDATED, because "LE\0\0" is two ASCII letters and two zeroes
+     and occurs in data by chance. Byte/word order little-endian, format level 0, a 386+
+     CPU, a plausible OS and object count: five agreeing fields, which no accident of
+     data passed on any binary tried here. */
+static void dpmi_le_learn(const BYTE *buf, DWORD n)
+{
+    DWORD i;
+    char lb[192], *q;
+    if (!buf || n < 0x200) return;
+#define LE32(o) ((DWORD)buf[(o)] | ((DWORD)buf[(o)+1] << 8) | ((DWORD)buf[(o)+2] << 16) | ((DWORD)buf[(o)+3] << 24))
+#define LE16(o) ((DWORD)buf[(o)] | ((DWORD)buf[(o)+1] << 8))
+    for (i = 0; i + 0x100 < n; ++i) {
+        DWORD objoff, nobj, k;
+        if (buf[i] != 'L' || buf[i+1] != 'E' || buf[i+2] || buf[i+3]) continue;
+        if (LE32(i + 0x04) != 0) continue;                     /* format level      */
+        { DWORD cpu = LE16(i + 0x08), os = LE16(i + 0x0A);
+          if (cpu < 1 || cpu > 4 || os < 1 || os > 4) continue; }
+        nobj   = LE32(i + 0x44);
+        objoff = LE32(i + 0x40);
+        if (nobj < 1 || nobj > 64) continue;
+        if (objoff < 0x50 || i + objoff + nobj * 24 > n) continue;
+        q = lb; q = zput(q, "DPMI: LE image at file 0x"); q = zhex(q, i);
+        q = zput(q, ", "); q = zhex(q, nobj); q = zput(q, " objects\r\n");
+        log_append(LOG_PATH, lb, q);
+        for (k = 0; k < nobj; ++k) {
+            DWORD o     = i + objoff + k * 24;
+            DWORD vsize = LE32(o + 0x00), flags = LE32(o + 0x08);
+            DWORD pr    = (vsize + 0xFFFu) & ~0xFFFu;          /* what 0501 will ask for */
+            int   exec  = (flags & 0x0004u) != 0;
+            q = lb; q = zput(q, "DPMI:   obj"); q = zhex(q, k + 1);
+            q = zput(q, " vsize 0x"); q = zhex(q, vsize);
+            q = zput(q, " flags 0x"); q = zhex(q, flags);
+            q = zput(q, exec ? " EXEC" : " data");
+            if (exec && pr >= 0x10000u && g_le_ncode < DPMI_LE_MAX) {
+                g_le_code_sz[g_le_ncode++] = pr;
+                q = zput(q, " -- code block size 0x"); q = zhex(q, pr);
+            } else if (exec) {
+                q = zput(q, " -- too small to key on (a based descriptor will reach it)");
+            }
+            q = zput(q, "\r\n");
+            log_append(LOG_PATH, lb, q);
+        }
+        return;                                                /* first valid LE wins */
+    }
+#undef LE32
+#undef LE16
+}
+
+/* Patch the INT sites in every block that holds an EXEC object. Called whenever the
+   picture may have changed -- a new block, or the client naming a region code.
+   ► WHY IT IS CALLED REPEATEDLY RATHER THAN ONCE. The block is allocated EMPTY and
+     filled afterwards, and we never see the fill: DOS/4GW reads through a low-memory
+     transfer buffer and copies up in its own code. On DOOM.EXE the code object's block
+     is allocated ~1100 log lines before its last page arrives. There is no single event
+     that means "loaded", so this is idempotent and cheap instead: sites already in the
+     patch map are skipped, and the map drops entries whose bytes the guest has since
+     overwritten, so a later pass re-patches what a copy undid. */
+static void dpmi_scan_code_blocks(void)
+{
+    int i;
+    for (i = 0; i < g_dpmi_nblk; ++i)
+        if (g_dpmi_blk[i].code)
+            dpmi_patch_code_region(g_dpmi_blk[i].base, g_dpmi_blk[i].size - 1);
 }
 
 /* A descriptor access byte names CODE iff it is a segment (S, bit 4) and executable
@@ -3763,7 +3888,7 @@ static void dpmi_invoke_callback(dos_machine_t *m, volatile BYTE *tib, int slot)
         DWORD ev, eip, vec;
         dpmi_arm_fault_trampoline(tib, 0);   /* GH #18: re-arm the PM-fault reflect (no-op on interp path) */
         dpmi_enter_pm(tib);
-        ev = VDM_REG(tib, VTIB_EVENT); eip = VDM_REG(tib, VTIB_EIP) & 0xFFFF;
+        ev = VDM_REG(tib, VTIB_EVENT); eip = dpmi_pm_eip(tib);
         if (ev == VDM_EVENT_BOP && eip == DPMI_PMRET_OFF
             && (VDM_REG(tib, VTIB_CS) & 0xFFFF) == g_pmret_sel) { cbdone = 1; break; }
         if (ev == 3) continue;   /* dpmi_enter_pm reports "interrupt pending, not entered" -- retry */
@@ -3892,6 +4017,33 @@ static int dpmi_dispatch_to_pm_handler(dos_machine_t *mp, volatile BYTE *tib,
     lp = zput(lp, " -> CLIENT handler 0x"); lp = zhex(lp, g_pm_int[vec].sel);
     lp = zput(lp, ":0x"); lp = zhex(lp, g_pm_int[vec].off);
     lp = zput(lp, " AX=0x"); lp = zhex(lp, VDM_REG(tib, VTIB_EAX) & 0xFFFF);
+    /* ► WHAT THE CALLER ACTUALLY PASSED. A DOS call that takes a pointer takes it in
+         DS:(E)DX, and when one fails the FIRST question is whether the caller's pointer
+         was good -- i.e. whether the fault is the client's or ours. Print the selector,
+         the full 32-bit EDX (a flat client's offset does not fit in a word) and the
+         bytes at the resulting linear address. */
+    { DWORD dsv = VDM_REG(tib, VTIB_DS) & 0xFFFF;
+      DWORD edx = VDM_REG(tib, VTIB_EDX);
+      DWORD off = dpmi_sel_is32((WORD)dsv) ? edx : (edx & 0xFFFF);
+      DWORD lin = dpmi_sel_base((WORD)dsv) + off;
+      const BYTE *sb = (const BYTE *)(ULONG_PTR)lin;
+      lp = zput(lp, " DS:EDX=0x"); lp = zhex(lp, dsv); lp = zput(lp, ":0x"); lp = zhex(lp, edx);
+      lp = zput(lp, " lin=0x"); lp = zhex(lp, lin); lp = zput(lp, " @=");
+      if (!host_readable(sb, 16)) lp = zput(lp, "<unreadable>");
+      else                        lp = zdump(lp, sb, 16);
+      /* ► AND THE CALLER'S STACK WIDTH, because that is what the client's dispatcher
+           ASKS. DOS/4GW's common handler (mod:0x550) begins `LAR eax,SS` + `bt eax,22`
+           -- it reads the D/B bit of the interrupted SS descriptor to decide whether the
+           caller was 16- or 32-bit, and therefore whether a pointer argument is a word
+           or a dword. If that bit is wrong, the extender truncates a flat pointer to its
+           low 16 bits, which is exactly the failure being chased here. */
+      { WORD ssv = (WORD)VDM_REG(tib, VTIB_SS);
+        lp = zput(lp, " SS=0x"); lp = zhex(lp, ssv);
+        lp = zput(lp, dpmi_sel_is32(ssv) ? " (SS D/B=1)" : " (SS D/B=0)");
+        lp = zput(lp, " ESP=0x"); lp = zhex(lp, VDM_REG(tib, VTIB_ESP));
+        lp = zput(lp, " CS=0x"); lp = zhex(lp, (WORD)VDM_REG(tib, VTIB_CS));
+        lp = zput(lp, dpmi_sel_is32((WORD)VDM_REG(tib, VTIB_CS)) ? " (CS D/B=1)" : " (CS D/B=0)");
+        lp = zput(lp, " h32="); lp = zhex(lp, (DWORD)h32); } }
     lp = zput(lp, "\r\n"); log_append(LOG_PATH, lb, lp); serial_out(lb, lp); lp = lb;
 
     g_pm_disp[vec] = 1;
@@ -3923,7 +4075,7 @@ static int dpmi_dispatch_to_pm_handler(dos_machine_t *mp, volatile BYTE *tib,
         dpmi_arm_fault_trampoline(tib, 0);
         dpmi_enter_pm(tib);
         ev  = VDM_REG(tib, VTIB_EVENT);
-        eip = VDM_REG(tib, VTIB_EIP) & 0xFFFF;
+        eip = dpmi_pm_eip(tib);
         if (ev == VDM_EVENT_BOP && eip == DPMI_PMRET_OFF
             && (VDM_REG(tib, VTIB_CS) & 0xFFFF) == g_pmret_sel) { done = 1; break; }
         if (ev == 3) continue;                      /* "interrupt pending" -> retry */
@@ -3959,7 +4111,7 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
 #define m (*mp)
     char report[2048]; char *base = report; char *p = report;
     DWORD ax = VDM_REG(tib, VTIB_EAX) & 0xFFFF;
-    DWORD ev = VDM_REG(tib, VTIB_EVENT), eip = VDM_REG(tib, VTIB_EIP) & 0xFFFF;
+    DWORD ev = VDM_REG(tib, VTIB_EVENT), eip = dpmi_pm_eip(tib);
     (void)steps;
     /* First safe moment to re-plant anything the skip mode stepped over. */
     if (g_bp_n) dpmi_bp_rearm_pending(dpmi_sel_base((WORD)(VDM_REG(tib, VTIB_CS) & 0xFFFF)) + eip);
@@ -4085,6 +4237,7 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                         return 1;
                     }
                     if (vec == 0x31) {                             /* DPMI INT 31h */
+                        int need_scan = 0;   /* deferred: scanning logs, so do it after the flush */
                         p = zput(p, "INT31h AX=0x"); p = zhex(p, ax);
                         p = zput(p, " BX=0x"); p = zhex(p, VDM_REG(tib, VTIB_EBX) & 0xFFFF);
                         p = zput(p, " CX=0x"); p = zhex(p, VDM_REG(tib, VTIB_ECX) & 0xFFFF);
@@ -4225,6 +4378,21 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                             g_pm_int[bl].off = dpmi_sel_is32(hsel) ? VDM_REG(tib, VTIB_EDX)
                                                                    : (VDM_REG(tib, VTIB_EDX) & 0xFFFF);
                             g_pm_int[bl].client = 1;         /* the client owns it now */
+                            /* ── A HOOK IS NOT AN INVITATION TO INTERRUPT IMMEDIATELY. ──────
+                                 We latch IRQ0 and deliver it as soon as the vector exists and
+                                 virtual-IF is on, which in practice means THE INSTRUCTION AFTER
+                                 the client installs it. Real hardware cannot do that: IRQ0 runs
+                                 at 18.2 Hz, so the next tick is up to 55 ms -- millions of
+                                 instructions -- away, and no DOS program is written to survive a
+                                 timer interrupt arriving inside its own vector-arming loop.
+                                 DOS/4GW is arming a TABLE when this bites: vectors 0..8 in one
+                                 sequential pass, each a 4-byte default stub at 0x97:0x00, 0x04,
+                                 ... 0x20. Injecting on the install of vector 8 vectors into a
+                                 stub that is a placeholder, not the timer handler (Doom installs
+                                 the real one much later, in I_StartupTimer), and the run ends
+                                 there -- which is why `pmnoirq.flag` had to exist at all.
+                                 Record when the vector was armed and let a tick period pass. */
+                            if (bl == 0x08) g_pm_vec8_armed_ms = GetTickCount();
                             p = zput(p, " -> setPMvec int 0x"); p = zhex(p, bl);
                             p = zput(p, " = 0x"); p = zhex(p, g_pm_int[bl].sel);
                             p = zput(p, ":0x"); p = zhex(p, g_pm_int[bl].off);
@@ -4356,8 +4524,15 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                                    requirement -- and the only notice we get that a module
                                    it just loaded is about to be executed. Patch its INT
                                    sites now; see dpmi_patch_code_region(). */
-                                if (DPMI_ACC_IS_CODE(g_ldt[idx].access))
+                                if (DPMI_ACC_IS_CODE(g_ldt[idx].access)) {
                                     dpmi_patch_code_region(g_ldt[idx].base, g_ldt[idx].limit);
+                                    /* The client naming ANY region code means it has finished
+                                       loading something -- a good moment to re-look at the
+                                       blocks holding its EXEC objects. On DOOM.EXE this is the
+                                       25-byte 16-bit alias object, declared code four log lines
+                                       after the last page of the game's code object arrived. */
+                                    need_scan = 1;
+                                }
                             }
                             p = zput(p, " sel 0x"); p = zhex(p, VDM_REG(tib, VTIB_EBX) & 0xFFFF);
                             p = zput(p, " -> setaccess 0x"); p = zhex(p, VDM_REG(tib, VTIB_ECX) & 0xFFFF);
@@ -4428,8 +4603,10 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                             g_ldt[idx].access = (BYTE)((hi >> 8) & 0xFF);
                             g_ldt[idx].flags  = (BYTE)((hi >> 20) & 0xF);
                             dpmi_install(idx);
-                            if (DPMI_ACC_IS_CODE(g_ldt[idx].access))   /* same rule as 0009 */
+                            if (DPMI_ACC_IS_CODE(g_ldt[idx].access)) { /* same rule as 0009 */
                                 dpmi_patch_code_region(g_ldt[idx].base, g_ldt[idx].limit);
+                                need_scan = 1;
+                            }
                             p = zput(p, " sel 0x"); p = zhex(p, VDM_REG(tib, VTIB_EBX) & 0xFFFF);
                             p = zput(p, " <- desc 0x"); p = zhex(p, lo);
                             p = zput(p, ":0x"); p = zhex(p, hi);
@@ -4512,14 +4689,26 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                             if (!mem) { VDM_REG(tib, VTIB_EFLAGS) |= 1u; VDM_SET16(tib, VTIB_EAX, 0x8013);
                                         p = zput(p, " -> ENOMEM"); break; }
                             if (g_dpmi_nblk < DPMI_MEMBLK_MAX) {   /* remember it: see the flat-selector case */
+                                int c; BYTE iscode = 0;
+                                /* Does this allocation match one of the program's EXEC objects?
+                                   DOS/4GW asks for exactly the object's page-rounded virtual
+                                   size, so the size IS the client telling us "this block is
+                                   about to hold my code". See dpmi_le_learn(). */
+                                for (c = 0; c < g_le_ncode; ++c)
+                                    if (g_le_code_sz[c] == ((sz + 0xFFFu) & ~0xFFFu)) { iscode = 1; break; }
                                 g_dpmi_blk[g_dpmi_nblk].base = (DWORD)(ULONG_PTR)mem;
                                 g_dpmi_blk[g_dpmi_nblk].size = sz ? sz : 1;
+                                g_dpmi_blk[g_dpmi_nblk].code = iscode;
                                 ++g_dpmi_nblk;
+                                if (iscode) { p = zput(p, " [LE CODE OBJECT]"); }
                             }
                             { DWORD lin = (DWORD)(ULONG_PTR)mem;   /* in-process: linear = host ptr */
                               VDM_SET16(tib, VTIB_EBX, lin >> 16); VDM_SET16(tib, VTIB_ECX, lin & 0xFFFF);
                               VDM_SET16(tib, VTIB_ESI, lin >> 16); VDM_SET16(tib, VTIB_EDI, lin & 0xFFFF); /* handle=addr */
                               p = zput(p, " -> mem 0x"); p = zhex(p, lin); }
+                            /* A new block may be the one the image is being read into, and an
+                               EARLIER code block may have finished filling since we last looked. */
+                            need_scan = 1;
                             break; }
                         case 0x0502: {                             /* free memory block SI:DI = handle */
                             DWORD h = ((VDM_REG(tib, VTIB_ESI) & 0xFFFF) << 16) | (VDM_REG(tib, VTIB_EDI) & 0xFFFF);
@@ -4547,6 +4736,7 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                             *(volatile WORD*)(r+0x1C)=VDM_REG(tib,VTIB_EAX); *(volatile WORD*)(r+0x10)=VDM_REG(tib,VTIB_EBX);
                             *(volatile WORD*)(r+0x18)=VDM_REG(tib,VTIB_ECX); *(volatile WORD*)(r+0x14)=VDM_REG(tib,VTIB_EDX);
                             *(volatile WORD*)(r+0x00)=VDM_REG(tib,VTIB_EDI); *(volatile WORD*)(r+0x04)=VDM_REG(tib,VTIB_ESI);
+                            *(volatile WORD*)(r+0x20)=(WORD)VDM_REG(tib,VTIB_EFLAGS);   /* FLAGS -- see 0301 */
                             /* restore the client's PM register file */
                             VDM_REG(tib,VTIB_EAX)=sA;VDM_REG(tib,VTIB_EBX)=sB;VDM_REG(tib,VTIB_ECX)=sC;VDM_REG(tib,VTIB_EDX)=sD;
                             VDM_REG(tib,VTIB_ESI)=sS;VDM_REG(tib,VTIB_EDI)=sDi;VDM_REG(tib,VTIB_EBP)=sBp;VDM_REG(tib,VTIB_DS)=sDs;
@@ -4591,6 +4781,30 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                             p = zput(p, (ax == 0x0302) ? " -> callRM(iret) 0x" : " -> callRM 0x");
                             p = zhex(p, rcs); p = zput(p, ":0x"); p = zhex(p, rip);
                             p = zput(p, " SS:SP=0x"); p = zhex(p, rss); p = zput(p, ":0x"); p = zhex(p, rsp);
+                            /* ► THE POINTER ARGUMENT, BECAUSE THAT IS WHAT GOES WRONG HERE.
+                                 Every pointer-taking DOS call arrives as DS:DX in the RMCS, and
+                                 the client is responsible for having copied the string DOWN into
+                                 real-mode-addressable memory first. When Doom's AH=3Dh open came
+                                 through with an EMPTY name there was no way to tell whether the
+                                 client had copied nothing or we were reading the wrong place.
+                                 Print both the pointer and what is actually AT it. */
+                            { WORD rds = *(volatile WORD*)(r+0x24), rdx = *(volatile WORD*)(r+0x14);
+                              DWORD lin = ((DWORD)rds << 4) + rdx;
+                              const BYTE *sb = (const BYTE *)(ULONG_PTR)lin;
+                              p = zput(p, " AX=0x"); p = zhex(p, *(volatile WORD*)(r+0x1C));
+                              p = zput(p, " BX=0x"); p = zhex(p, *(volatile WORD*)(r+0x10));
+                              p = zput(p, " CX=0x"); p = zhex(p, *(volatile WORD*)(r+0x18));
+                              p = zput(p, " DS:DX=0x"); p = zhex(p, rds); p = zput(p, ":0x"); p = zhex(p, rdx);
+                              /* And WHERE we read the RMCS from -- ES:EDI, full width. The
+                                 offset is masked to 16 bits below, which is right only while
+                                 the caller is 16-bit code; print it so a garbage RMCS can be
+                                 told apart from a correctly-read one that says something odd. */
+                              p = zput(p, " [RMCS ES:EDI=0x"); p = zhex(p, VDM_REG(tib, VTIB_ES) & 0xFFFF);
+                              p = zput(p, ":0x"); p = zhex(p, VDM_REG(tib, VTIB_EDI));
+                              p = zput(p, " @0x"); p = zhex(p, (DWORD)(ULONG_PTR)r); p = zput(p, "]");
+                              p = zput(p, " @=");
+                              if (!host_readable(sb, 16)) p = zput(p, "<unreadable>");
+                              else                        p = zdump(p, sb, 16); }
                             p = zput(p, "\r\n"); log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
                             /* push the return frame on the RM stack: [FLAGS] CS IP, with FLAGS
                                present only for 0302 (the procedure will IRET, not RETF). */
@@ -4653,6 +4867,23 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                             *(volatile WORD*)(r+0x00)=VDM_REG(tib,VTIB_EDI); *(volatile WORD*)(r+0x04)=VDM_REG(tib,VTIB_ESI);
                             *(volatile WORD*)(r+0x08)=VDM_REG(tib,VTIB_EBP);
                             *(volatile WORD*)(r+0x22)=VDM_REG(tib,VTIB_ES);  *(volatile WORD*)(r+0x24)=VDM_REG(tib,VTIB_DS);
+                            /* ── AND THE FLAGS, WHICH ARE THE ANSWER, NOT A DETAIL. ─────────────
+                                 This block copied eight registers back and silently dropped the
+                                 ninth. Every DOS service reports failure in CF, so discarding
+                                 FLAGS told the client that every call SUCCEEDED -- and the client
+                                 passes that verdict to the application, which believes it.
+                                 Doom shows exactly how far a false success travels: `access()`
+                                 on doom2f.wad returned "error 2, file not found" with CF=0, so
+                                 the runtime concluded the French WAD existed, selected it, opened
+                                 it (open failed, also as a "success"), and then read forever from
+                                 the handle it never got -- 20969 iterations of `mov ah,3Fh; int
+                                 21h` at obj1+0x40985 until the watchdog killed the run.
+                                 Watcom's own idiom makes the point: `int 21h; rcl eax,1; ror
+                                 eax,1` folds CF into the sign bit of EAX and branches on it, so
+                                 CF is not one output among many -- it is the only one it reads.
+                                 The DPMI 0.9 spec is explicit that 0300/0301/0302 return the
+                                 real-mode register state in the RMCS, and FLAGS is part of it. */
+                            *(volatile WORD*)(r+0x20)=(WORD)VDM_REG(tib,VTIB_EFLAGS);
                             /* --- restore the client's PM CONTEXT --- */
                             *(volatile WORD *)(tib + VTIB_MSW) = pMsw;       /* re-enter PM */
                             VDM_REG(tib,VTIB_EAX)=pA;VDM_REG(tib,VTIB_EBX)=pB;VDM_REG(tib,VTIB_ECX)=pC;VDM_REG(tib,VTIB_EDX)=pD;
@@ -4687,6 +4918,7 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                             break;
                         }
                         p = zput(p, "\r\n"); log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                        if (need_scan) dpmi_scan_code_blocks();
                         VDM_REG(tib, VTIB_EIP) += 2;               /* past the 2-byte INT */
                         return 1;
                     }
@@ -5111,9 +5343,36 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                         VDM_REG(tib, VTIB_EIP) += 2;
                         return 1;
                     }
-                    p = zput(p, "DPMI: unexpected PM stop event=0x"); p = zhex(p, ev);
-                    p = zput(p, " CS:EIP=0x"); p = zhex(p, VDM_REG(tib, VTIB_CS) & 0xFFFF);
-                    p = zput(p, ":0x"); p = zhex(p, eip); p = zput(p, "\r\n");
+                    /* ── THE LAST THING THE RUN SAYS SHOULD NAME THE WALL. ───────────
+                       This printed only the event and a CS:EIP, and that is how the
+                       32-bit EIP truncation hid: "0x187:0x0be7" looked like a wild jump
+                       into low memory when it was really 0x03b10be7, two bytes past the
+                       BOP we had just planted in Doom's own code. Dump the linear
+                       address, the instruction bytes and the register file, so the run
+                       that ends here identifies its own cause instead of needing a
+                       breakpoint sweep to re-find it. */
+                    { DWORD csv = VDM_REG(tib, VTIB_CS) & 0xFFFF;
+                      DWORD lin = dpmi_sel_base((WORD)csv) + eip;
+                      p = zput(p, "DPMI: unexpected PM stop event=0x"); p = zhex(p, ev);
+                      p = zput(p, " CS:EIP=0x"); p = zhex(p, csv);
+                      p = zput(p, ":0x"); p = zhex(p, eip);
+                      p = zput(p, " linear=0x"); p = zhex(p, lin);
+                      p = zput(p, (csv && dpmi_sel_is32((WORD)csv)) ? " (32-bit CS)" : " (16-bit CS)");
+                      p = zput(p, " EAX=0x"); p = zhex(p, VDM_REG(tib, VTIB_EAX));
+                      p = zput(p, " EBX=0x"); p = zhex(p, VDM_REG(tib, VTIB_EBX));
+                      p = zput(p, " ECX=0x"); p = zhex(p, VDM_REG(tib, VTIB_ECX));
+                      p = zput(p, " EDX=0x"); p = zhex(p, VDM_REG(tib, VTIB_EDX));
+                      p = zput(p, " DS=0x");  p = zhex(p, VDM_REG(tib, VTIB_DS) & 0xFFFF);
+                      p = zput(p, " SS:ESP=0x"); p = zhex(p, VDM_REG(tib, VTIB_SS) & 0xFFFF);
+                      p = zput(p, ":0x"); p = zhex(p, VDM_REG(tib, VTIB_ESP));
+                      /* Two bytes back is the BOP/INT itself, on the same +2 convention
+                         the patched-INT path uses. host_readable(), never IsBadReadPtr:
+                         a probe that faults on purpose kills the run it exists to watch. */
+                      p = zput(p, " bytes@eip-2=");
+                      { const BYTE *ib = (const BYTE *)(ULONG_PTR)(lin - 2);
+                        if (lin < 2 || !host_readable(ib, 16)) p = zput(p, "<unreadable from host>");
+                        else                                   p = zdump(p, ib, 16); }
+                      p = zput(p, "\r\n"); }
                     log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
                     return -1;
 #undef m
@@ -5127,7 +5386,25 @@ static void dpmi_ensure_pmret_sel(void)
     if (g_pmret_sel == 0 && g_ldt_next < DPMI_LDT_MAX) {
         int idx = g_ldt_next++;
         g_ldt[idx].base = (DWORD)DOS_HDLR_SEG << 4; g_ldt[idx].limit = 0xFFFF;
-        g_ldt[idx].access = 0xFA; g_ldt[idx].flags = 0;   /* code exec/read */
+        g_ldt[idx].access = 0xFA;                         /* code exec/read */
+        /* ── THE CATCHER'S D/B BIT IS PART OF THE CALLER'S IDENTITY. ─────────────────
+             We push this selector as the RETURN CS of the interrupt frame the client's
+             handler runs on, so that its IRET lands back on our BOP. But a DOS extender
+             READS that return CS: it is how the handler learns whether the code it
+             interrupted was 16- or 32-bit, and therefore whether a pointer argument in
+             (E)DX is a word or a dword. Leaving it 16-bit told DOS/4GW that every caller
+             was 16-bit, and it TRUNCATED the application's flat pointers to their low
+             word -- measured, on Doom's open of default.cfg:
+                 app passed   DS:EDX = 0x18f:0x03b69b80  -> "default.cfg"
+                 RMCS got     DS:DX  = 0x000:0x9b80      -> garbage, open failed with
+                                                            "file not found"
+             and its 16-bit stack frame was ALREADY correct (SS D/B=1), which is what
+             made this hard to see: the frame width and the caller's advertised width are
+             two different questions, and only one of them was being answered.
+             Follow g_dpmi_client32, exactly as the frame width does (h32). A 16-bit
+             client is unaffected: flags stay 0 and every existing test keeps its
+             6-byte frame and 16-bit catcher. */
+        g_ldt[idx].flags = g_dpmi_client32 ? 0x4 : 0x0;   /* 0x4 = D/B */
         dpmi_install(idx);
         g_pmret_sel = (WORD)((idx << 3) | 7);
     }
@@ -5196,7 +5473,7 @@ static int dpmi_inject_pm_irq(dos_machine_t *mp, volatile BYTE *tib, unsigned iv
         dpmi_arm_fault_trampoline(tib, 0);
         dpmi_enter_pm(tib);
         ev  = VDM_REG(tib, VTIB_EVENT);
-        eip = VDM_REG(tib, VTIB_EIP) & 0xFFFF;
+        eip = dpmi_pm_eip(tib);
         if (ev == VDM_EVENT_BOP && eip == DPMI_PMRET_OFF
             && (VDM_REG(tib, VTIB_CS) & 0xFFFF) == g_pmret_sel) { done = 1; break; }
         if (ev == 3) continue;                     /* "interrupt pending, not entered" -> retry */
@@ -5531,6 +5808,10 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
       for (q = progpath; *q; ++q) if (*q == '\\' || *q == '/') bn = q + 1;
       if (*bn) { while (bn[k] && k < 63) { g_progname[k] = bn[k]; ++k; } g_progname[k] = 0; } }
     g_title_dirty = 1;                             /* UI thread sets the caption + prog name */
+
+    /* If this is a bound linear executable (every DOS/4GW game is one), learn which of
+       its objects are code before it starts asking us for memory to load them into. */
+    dpmi_le_learn(filebuf, nread);
 
     /* Build the DOS process in conventional memory (base=NULL => absolute V86). */
     img = dos_load(NULL, filebuf, nread, DOS_PSP_SEG);
@@ -6548,7 +6829,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                        iteration counter BEFORE entering, so a watchdog sample taken while
                        we're blocked inside dpmi_enter_pm sees a FROZEN iter at this CS:EIP. */
                     g_dpmi_enter_cs  = VDM_REG(tib, VTIB_CS)  & 0xFFFF;
-                    g_dpmi_enter_eip = VDM_REG(tib, VTIB_EIP) & 0xFFFF;
+                    g_dpmi_enter_eip = dpmi_pm_eip(tib);
                     g_dpmi_iter      = (LONG)(steps + 1);
                     /* run 66 diagnostic (kept): log FIXED_NTVDMSTATE [0x714] once. Run 66 proved
                        bit3=0 already (classifier is NOT the blocker), so no forcing needed -- for
@@ -6581,7 +6862,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                        the latched IRQ0 to that handler -- how timer-hooking games get ticks.
                        The latch persists across CLI windows so a masked interrupt isn't lost. */
                     if (g_pm_irq0_latch && g_dpmi_vi && g_pm_int[0x08].client && !g_in_pm_irq
-                        && !g_pm_noirq) {
+                        && !g_pm_noirq
+                        && (GetTickCount() - g_pm_vec8_armed_ms) >= DPMI_IRQ0_ARM_QUIET_MS) {
                         g_pm_irq0_latch = 0;
                         g_in_pm_irq = 1;
                         dpmi_inject_pm_irq(&m, tib, 0x08, steps);
@@ -6727,7 +7009,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                         log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
                     }
                     ev  = VDM_REG(tib, VTIB_EVENT);
-                    eip = VDM_REG(tib, VTIB_EIP) & 0xFFFF;
+                    eip = dpmi_pm_eip(tib);
                     csv = VDM_REG(tib, VTIB_CS) & 0xFFFF;
                     g_dpmi_last_ev  = ev;  g_dpmi_last_eip = eip;  g_dpmi_last_cs = csv;
                     /* GH#18 (bare-metal crack, 2026-08-18): dpmi_enter.S reports event 3 when it
