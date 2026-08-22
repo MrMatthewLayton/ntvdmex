@@ -358,6 +358,13 @@ static DWORD g_patch_hi = 0;
 #define DPMI_BP_MAX  32
 static DWORD g_bp_lin[DPMI_BP_MAX];     /* requested linear addresses (from PMBP_PATH) */
 static DWORD g_bp_dump[DPMI_BP_MAX];    /* optional 2nd column: linear addr to dump on hit */
+/* Optional 3rd column: bytes to SKIP on hit instead of re-executing the instruction.
+   This turns a breakpoint into a one-instruction PATCH, which is how you test "would
+   the client survive if this instruction simply did not happen?" without a rebuild.
+   Session 17 needed exactly that for a `STI`: at CPL 3 with IOPL 0 it raises the one
+   #GP XP will not reflect, so it kills the VDM -- and the question "is STI the only
+   thing in the way" is answerable in one run by skipping it. */
+static DWORD g_bp_skip[DPMI_BP_MAX];
 static BYTE  g_bp_orig[DPMI_BP_MAX][2]; /* the two bytes we displaced                  */
 static BYTE  g_bp_armed[DPMI_BP_MAX];
 static int   g_bp_n = 0;
@@ -3300,7 +3307,7 @@ static void dpmi_bp_load(void)
     ReadFile(h, buf, sizeof buf - 1, &rd, NULL);
     CloseHandle(h);
     while (i < rd && g_bp_n < DPMI_BP_MAX) {
-        DWORD v[2] = { 0, 0 }; int col = 0;
+        DWORD v[3] = { 0, 0, 0 }; int col = 0;
         /* consume one LINE, taking up to two hex fields from it */
         while (i < rd && (buf[i] == '\r' || buf[i] == '\n')) ++i;   /* line breaks */
         if (i >= rd) break;
@@ -3316,7 +3323,7 @@ static void dpmi_bp_load(void)
                       : (c >= 'a' && c <= 'f') ? c - 'a' + 10
                       : (c >= 'A' && c <= 'F') ? c - 'A' + 10 : -1;
                 if (d < 0) break;
-                if (col < 2) v[col] = (v[col] << 4) | (DWORD)d;
+                if (col < 3) v[col] = (v[col] << 4) | (DWORD)d;
                 ++digits; ++i;
             }
             if (digits) ++col;
@@ -3325,6 +3332,7 @@ static void dpmi_bp_load(void)
         if (col >= 1) {
             g_bp_lin[g_bp_n] = v[0];
             g_bp_dump[g_bp_n] = (col >= 2) ? v[1] : 0;
+            g_bp_skip[g_bp_n] = (col >= 3) ? v[2] : 0;
             ++g_bp_n;
         }
     }
@@ -3358,6 +3366,30 @@ static void dpmi_bp_arm(void)
         }
         if (b[0] == 0x00 && b[1] == 0x00) continue;        /* nothing loaded here yet */
         if (g_int_vec[lin]) continue;             /* an INT site already lives here */
+        /* ► A BREAKPOINT HAS A TWO-BYTE FOOTPRINT, and that is not a detail. It
+             displaces the byte AFTER the one you named, so a breakpoint on a ONE-BYTE
+             instruction eats its neighbour. Session 17 put one on a `c3` (ret) at
+             0x4a0b; the next byte, 0x4a0c, was the entry point of the routine being
+             called two instructions earlier. `call 0x4a0c` therefore landed on the
+             second half of our BOP, decoded as `LES DX,[BX+0x8b]`, read past the
+             segment limit and killed the VDM -- a death the log presented as the
+             client's, in the middle of a bisection hunting exactly that.
+             We cannot tell where instructions start, so we cannot prevent this in
+             general. What we CAN do is refuse the case that is definitely wrong -- two
+             requested breakpoints whose footprints overlap -- and say the footprint out
+             loud in every armed line, so the next reader places them knowing the rule:
+             PUT A BREAKPOINT ON AN INSTRUCTION OF AT LEAST TWO BYTES, or make sure the
+             following byte is not reachable before the breakpoint fires. */
+        { int j, clash = 0;
+          for (j = 0; j < g_bp_n; ++j)
+              if (j != k && g_bp_armed[j] &&
+                  (g_bp_lin[j] == lin + 1 || g_bp_lin[j] + 1 == lin)) clash = 1;
+          if (clash) {
+              q = zput(q, "DPMI-BP: REFUSED 0x"); q = zhex(q, lin);
+              q = zput(q, " -- its 2-byte footprint overlaps another breakpoint\r\n");
+              log_append(LOG_PATH, lb, q); serial_out(lb, q);
+              continue;
+          } }
         g_bp_orig[k][0] = b[0]; g_bp_orig[k][1] = b[1];
         b[0] = 0xC4; b[1] = 0xC4;
         g_int_vec[lin] = DPMI_BP_VEC;
@@ -3365,7 +3397,8 @@ static void dpmi_bp_arm(void)
         if (lin < g_patch_lo) g_patch_lo = lin;
         if (lin > g_patch_hi) g_patch_hi = lin;
         q = zput(q, "DPMI-BP: armed at linear 0x"); q = zhex(q, lin);
-        q = zput(q, " (was "); q = zdump(q, (const BYTE *)g_bp_orig[k], 2);
+        q = zput(q, "..0x"); q = zhex(q, lin + 1);       /* say the 2-byte footprint */
+        q = zput(q, " (displaced "); q = zdump(q, (const BYTE *)g_bp_orig[k], 2);
         q = zput(q, ")\r\n");
         log_append(LOG_PATH, lb, q); serial_out(lb, q);
     }
@@ -3514,6 +3547,134 @@ static void dpmi_invoke_callback(dos_machine_t *m, volatile BYTE *tib, int slot)
    a 0301 excursion proc that itself issues INT 31h/21h -- get the SAME full dispatch
    (GH #2). `steps` is only used for a log line. `mp` aliases the machine as `m` so the
    moved body is byte-for-byte the original (localized, #undef'd immediately). */
+/* ── VECTOR A PROTECTED-MODE SOFTWARE INTERRUPT TO THE CLIENT'S OWN HANDLER. ──────
+ *
+ *  THE GAP THIS CLOSES, and it is architectural rather than a missing service.
+ *  A DPMI client may install its own protected-mode handler for any interrupt (INT 31h
+ *  0205), and a host that then services the interrupt ITSELF has taken the client's
+ *  interrupt away from it. We did exactly that for every PM INT, and the old comment on
+ *  g_pm_int[] admitted it: "We still service patched INT 21h/31h ourselves -- routing to
+ *  a client-installed PM handler is a deeper item".
+ *
+ *  It is not deep, it is load-bearing. DOS/4GW installs a PM INT 21h handler at
+ *  0x67:0x84 (inside the aliased code window at base 0xd9b0) and then calls its OWN
+ *  private extender functions through it -- `mov ax,0xff80 / mov dx,0x1301 / mov es,sel
+ *  / int 21h`, and on CF it prints "DOS/16M error: [34] DPMI host error (cannot lock
+ *  stack)" and dies. AX=FF80h is not a DOS function and never was; it is DOS/4GW talking
+ *  to itself, and every answer WE invent for it is wrong. Measured both ways: leaving the
+ *  flags alone let it limp on to a later failure, returning CF=1 killed it here. The only
+ *  right answer is to let its handler run.
+ *
+ *  Mechanics are the proven ones from dpmi_inject_pm_irq(): push an IRET frame on the
+ *  client's own stack pointing at the PM-return catcher, vector to the handler, and run
+ *  it through the SAME dispatcher the main loop uses so a handler that issues INT 31h,
+ *  port I/O or a nested DOS call still works.
+ *
+ *  ► WHAT WE DELIBERATELY DO **NOT** DO IS RESTORE THE REGISTER FILE. An async IRQ is
+ *    transparent, so dpmi_inject_pm_irq restores everything; a SOFTWARE interrupt is a
+ *    call, and its whole purpose is to return AX/BX/CF to the caller. We keep what the
+ *    handler produced -- including EFLAGS, which after its IRET holds whatever it wrote
+ *    into the stack frame, which is precisely how a DOS handler returns CF.
+ *
+ *  ► RE-ENTRANCY: g_pm_disp[vec] guards the case where the handler issues the same INT
+ *    again (a chain back to the host). We then service it ourselves, which is the
+ *    correct meaning of "chain to the previous handler" when the previous one is us.
+ */
+static BYTE g_pm_disp[256];                 /* 1 while inside vec's client handler */
+
+static int dpmi_dispatch_to_pm_handler(dos_machine_t *mp, volatile BYTE *tib,
+                                       DWORD vec, unsigned steps)
+{
+    char lb[256], *lp = lb;
+    DWORD sEIP = VDM_REG(tib, VTIB_EIP), sESP = VDM_REG(tib, VTIB_ESP);
+    WORD  sCS  = (WORD)VDM_REG(tib, VTIB_CS), sSS = (WORD)VDM_REG(tib, VTIB_SS);
+    DWORD sEFL = VDM_REG(tib, VTIB_EFLAGS);
+    int h32 = dpmi_sel_is32(g_pm_int[vec].sel);
+    unsigned ph; int done = 0;
+
+    dpmi_ensure_pmret_sel();
+    if (g_pmret_sel == 0) return 0;                 /* caller falls back to servicing */
+
+    { DWORD b = dpmi_sel_base(sSS);
+      if (h32) { DWORD sp = sESP;
+                 sp -= 4; poked(b + sp, sEFL);
+                 sp -= 4; poked(b + sp, g_pmret_sel);
+                 sp -= 4; poked(b + sp, DPMI_PMRET_OFF);
+                 VDM_REG(tib, VTIB_ESP) = sp; }
+      else     { WORD sp = (WORD)sESP;
+                 sp -= 2; pokew(b + sp, (WORD)sEFL);
+                 sp -= 2; pokew(b + sp, g_pmret_sel);
+                 sp -= 2; pokew(b + sp, DPMI_PMRET_OFF);
+                 VDM_REG(tib, VTIB_ESP) = (sESP & 0xFFFF0000u) | sp; } }
+
+    VDM_SET16(tib, VTIB_CS, g_pm_int[vec].sel);
+    VDM_REG(tib, VTIB_EIP) = h32 ? g_pm_int[vec].off : (g_pm_int[vec].off & 0xFFFF);
+
+    lp = zput(lp, "PM INT 0x"); lp = zhex(lp, vec);
+    lp = zput(lp, " -> CLIENT handler 0x"); lp = zhex(lp, g_pm_int[vec].sel);
+    lp = zput(lp, ":0x"); lp = zhex(lp, g_pm_int[vec].off);
+    lp = zput(lp, " AX=0x"); lp = zhex(lp, VDM_REG(tib, VTIB_EAX) & 0xFFFF);
+    lp = zput(lp, "\r\n"); log_append(LOG_PATH, lb, lp); serial_out(lb, lp); lp = lb;
+
+    g_pm_disp[vec] = 1;
+    for (ph = 0; ph < 4096 && !done; ++ph) {
+        DWORD ev, eip, nvec; int rc;
+        /* ► CHECKPOINT INSIDE THE HANDLER TOO. The main loop's DPMI-CP lines stop at the
+             moment we hand control to the client's handler, so without this a death in
+             there is exactly the blind stretch this session spent hours removing -- one
+             log line, then nothing. Bounded to the first 64 entries per dispatch so a
+             handler that loops pays nothing. */
+        if (ph < 64) {
+            DWORD ccs = VDM_REG(tib, VTIB_CS) & 0xFFFF;
+            DWORD cb  = dpmi_sel_base((WORD)ccs), cip = VDM_REG(tib, VTIB_EIP);
+            const BYTE *ib = (const BYTE *)(ULONG_PTR)(cb + cip);
+            lp = zput(lp, "  PMH["); lp = zhex(lp, ph);
+            lp = zput(lp, "] cs:eip=0x"); lp = zhex(lp, ccs);
+            lp = zput(lp, ":0x"); lp = zhex(lp, cip);
+            lp = zput(lp, " ss:esp=0x"); lp = zhex(lp, VDM_REG(tib, VTIB_SS) & 0xFFFF);
+            lp = zput(lp, ":0x"); lp = zhex(lp, VDM_REG(tib, VTIB_ESP));
+            lp = zput(lp, " EAX=0x"); lp = zhex(lp, VDM_REG(tib, VTIB_EAX));
+            lp = zput(lp, " DS=0x"); lp = zhex(lp, VDM_REG(tib, VTIB_DS) & 0xFFFF);
+            lp = zput(lp, " ES=0x"); lp = zhex(lp, VDM_REG(tib, VTIB_ES) & 0xFFFF);
+            lp = zput(lp, " b=");
+            if (!host_readable(ib, 16)) lp = zput(lp, "<unreadable>");
+            else                        lp = zdump(lp, ib, 16);
+            lp = zput(lp, "\r\n");
+            log_append(LOG_PATH, lb, lp); serial_out(lb, lp); lp = lb;
+        }
+        dpmi_arm_fault_trampoline(tib, 0);
+        dpmi_enter_pm(tib);
+        ev  = VDM_REG(tib, VTIB_EVENT);
+        eip = VDM_REG(tib, VTIB_EIP) & 0xFFFF;
+        if (ev == VDM_EVENT_BOP && eip == DPMI_PMRET_OFF
+            && (VDM_REG(tib, VTIB_CS) & 0xFFFF) == g_pmret_sel) { done = 1; break; }
+        if (ev == 3) continue;                      /* "interrupt pending" -> retry */
+        if (ev == VDM_EVENT_IO || ev == VDM_EVENT_IO_HW || ev == VDM_EVENT_GPFAULT) {
+            int io_h; HOST_LOCK(); io_h = host_try_io_pm(tib, &g_bus); HOST_UNLOCK();
+            if (io_h) continue;
+        }
+        nvec = (ev == VDM_EVENT_BOP) ? dpmi_bop_vec(VDM_REG(tib, VTIB_CS) & 0xFFFF, eip) : 0;
+        rc = dpmi_service_pm_int(mp, tib, nvec, steps);
+        if (rc > 0) continue;
+        g_pm_disp[vec] = 0;
+        return rc;                                  /* 0 = client exited, -1 = stop */
+    }
+    g_pm_disp[vec] = 0;
+
+    /* Resume the client past its INT. CS/SS and the stack pointer go back to what they
+       were; the GPRs and EFLAGS are the handler's answer and are left alone. */
+    VDM_SET16(tib, VTIB_CS, sCS);
+    VDM_REG(tib, VTIB_EIP) = sEIP + 2;               /* past the 2-byte patched INT */
+    VDM_SET16(tib, VTIB_SS, sSS);
+    VDM_REG(tib, VTIB_ESP) = sESP;
+    lp = zput(lp, "PM INT 0x"); lp = zhex(lp, vec);
+    lp = zput(lp, done ? " <- handler IRET, AX=0x" : " <- handler NO-RET, AX=0x");
+    lp = zhex(lp, VDM_REG(tib, VTIB_EAX) & 0xFFFF);
+    lp = zput(lp, " CF="); lp = zhex(lp, VDM_REG(tib, VTIB_EFLAGS) & 1u);
+    lp = zput(lp, "\r\n"); log_append(LOG_PATH, lb, lp); serial_out(lb, lp);
+    return 1;
+}
+
 static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                                unsigned steps)
 {
@@ -3522,6 +3683,20 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
     DWORD ax = VDM_REG(tib, VTIB_EAX) & 0xFFFF;
     DWORD ev = VDM_REG(tib, VTIB_EVENT), eip = VDM_REG(tib, VTIB_EIP) & 0xFFFF;
     (void)steps;
+                    /* ── THE CLIENT'S OWN PM HANDLER WINS, IF IT INSTALLED ONE. ──────
+                       Scoped to INT 21h ON PURPOSE, for now. DOS/4GW also installs PM
+                       handlers for 10h/16h/1Ah/... and by the spec those should route to
+                       it too -- but our 0300 (simulate real-mode interrupt) currently only
+                       implements INT 21h, so routing video and keyboard to a handler that
+                       then asks us to simulate a real-mode INT 10h would trade a working
+                       path for a broken one. Route the interrupt the evidence names,
+                       measure, then widen. The order matters: this test comes before every
+                       service arm below, so it cannot be shadowed by one of them. */
+                    if (vec == 0x21 && g_pm_int[vec].sel && !g_pm_disp[vec]) {
+                        int rc = dpmi_dispatch_to_pm_handler(mp, tib, vec, steps);
+                        if (rc != 0 || g_pm_int[vec].sel) return rc;
+                        /* rc==0 with no handler means dispatch declined -> fall through */
+                    }
                     if (vec == DPMI_BP_VEC) {                      /* guest breakpoint hit */
                         /* Report EVERYTHING -- the whole point is that the run may not
                            survive to the next line. Then restore the displaced bytes and
@@ -3550,10 +3725,21 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                         p = zput(p, " SS:SP=0x"); p = zhex(p, ss); p = zput(p, ":0x"); p = zhex(p, sp);
                         p = zput(p, " efl=0x"); p = zhex(p, VDM_REG(tib, VTIB_EFLAGS));
                         p = zput(p, " stack=");
+                        /* 64 bytes, not 16: when a breakpoint sits inside a leaf routine the
+                           question is almost always "who called this", and one frame is never
+                           enough -- the whole return CHAIN is what names the decision. */
                         { const BYTE *sk = (const BYTE *)(ULONG_PTR)(sb + sp);
-                          if (!host_readable(sk, 16)) p = zput(p, "<unreadable>");
-                          else                        p = zdump(p, sk, 16); }
+                          if (!host_readable(sk, 64)) p = zput(p, "<unreadable>");
+                          else                        p = zdump(p, sk, 64); }
                         { int bk = dpmi_bp_disarm(lin);
+                          if (bk >= 0 && g_bp_skip[bk]) {
+                              /* SKIP MODE: step over the instruction entirely. The bytes are
+                                 already restored, so advancing EIP lands on whatever follows
+                                 the skipped instruction -- the caller states its length. */
+                              VDM_REG(tib, VTIB_EIP) += g_bp_skip[bk];
+                              p = zput(p, " [SKIPPED "); p = zhex(p, g_bp_skip[bk]);
+                              p = zput(p, " byte(s)]");
+                          }
                           if (bk < 0) p = zput(p, " [WARN: no BP record here]");
                           else if (g_bp_dump[bk]) {
                               const BYTE *dm = (const BYTE *)(ULONG_PTR)g_bp_dump[bk];
@@ -3613,6 +3799,7 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                     }
                     if (vec == 0x31) {                             /* DPMI INT 31h */
                         p = zput(p, "INT31h AX=0x"); p = zhex(p, ax);
+                        p = zput(p, " BX=0x"); p = zhex(p, VDM_REG(tib, VTIB_EBX) & 0xFFFF);
                         p = zput(p, " CX=0x"); p = zhex(p, VDM_REG(tib, VTIB_ECX) & 0xFFFF);
                         VDM_REG(tib, VTIB_EFLAGS) &= ~1u;          /* default CF=0 (success) */
                         switch (ax) {
@@ -3959,12 +4146,37 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                             p = zput(p, ":0x"); p = zhex(p, DPMI_RAW2RM_OFF);
                             break; }
                         case 0x0500: {                             /* get free memory info -> ES:DI */
+                            /* ── REPORT COHERENT NUMBERS, NOT A FIELD OF -1s. ───────────────
+                               The 0.9 spec's 30h-byte block is
+                                 00 largest available free block (BYTES)
+                                 04 max unlocked page allocation   08 max locked page allocation
+                                 0C total linear address space (PAGES, incl. already allocated)
+                                 10 total unlocked pages           14 free pages
+                                 18 total physical pages           1C free linear address space
+                                 20 size of paging file/partition  24.. reserved
+                               and says a host sets fields it does not support to -1. We used to
+                               set ALL of them to -1 except the first, which is legal but tells a
+                               client that sizes itself from the PAGE counts precisely nothing --
+                               and 0xFFFFFFFF is a value a client may well arithmetic on. We do
+                               know these numbers: 0501 is VirtualAlloc in our own process, so the
+                               pool is what we say it is. Report it consistently in both units
+                               rather than making the client guess. Reserved fields stay -1. */
                             DWORD esb = dpmi_sel_base((WORD)VDM_REG(tib, VTIB_ES));
                             volatile DWORD *info = (volatile DWORD *)(ULONG_PTR)
                                 (esb + (VDM_REG(tib, VTIB_EDI) & 0xFFFF));
+                            const DWORD pool_bytes = 0x04000000u;          /* 64 MB            */
+                            const DWORD pool_pages = pool_bytes >> 12;     /* 0x4000 pages     */
                             int i; for (i = 0; i < 12; ++i) info[i] = 0xFFFFFFFFu;
-                            info[0] = 0x04000000u;                 /* largest free block = 64MB */
-                            p = zput(p, " -> meminfo");
+                            info[0] = pool_bytes;                  /* largest free block, bytes */
+                            info[1] = pool_pages;                  /* max unlocked page alloc   */
+                            info[2] = pool_pages;                  /* max locked page alloc     */
+                            info[3] = pool_pages;                  /* total linear address space*/
+                            info[4] = pool_pages;                  /* total unlocked pages      */
+                            info[5] = pool_pages;                  /* free pages                */
+                            info[6] = pool_pages;                  /* total physical pages      */
+                            info[7] = pool_pages;                  /* free linear address space */
+                            info[8] = 0;                           /* no paging file            */
+                            p = zput(p, " -> meminfo 64MB/0x4000 pages");
                             break; }
                         case 0x0501: {                             /* allocate memory block BX:CX bytes */
                             DWORD sz = ((VDM_REG(tib, VTIB_EBX) & 0xFFFF) << 16) | (VDM_REG(tib, VTIB_ECX) & 0xFFFF);
@@ -4009,13 +4221,25 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                             VDM_REG(tib,VTIB_EFLAGS) &= ~1u;       /* 0300 succeeds */
                             p = zput(p, " -> simInt 0x"); p = zhex(p, intno);
                             break; }
+                        case 0x0302:                               /* ...with an IRET frame */
                         case 0x0301: {                             /* call real-mode FAR proc: ES:DI=RMCS, CX=stack words */
                             /* This is the first PM->V86->PM round-trip. Unlike 0300 (which fakes a
                                real-mode INT by calling dos_int21 host-side), 0301 must actually RUN
                                the client's real-mode procedure in V86: we rewrite the CONTEXT to
                                V86, push a far-return frame pointing at the DPMI_RMRET_BOP catcher,
                                run v86_run() until that BOP (servicing any INT 21h the proc makes),
-                               copy the real-mode regs back into the RMCS, then restore PM. */
+                               copy the real-mode regs back into the RMCS, then restore PM.
+                               ── 0302 IS THE SAME CALL WITH AN IRET FRAME. ─────────────────────
+                               The ONLY difference is the frame pushed on the real-mode stack:
+                               0301's procedure is entered as if FAR CALLed and ends in RETF, so
+                               the frame is CS:IP; 0302's is entered as if by an INTERRUPT and ends
+                               in IRET, so FLAGS is pushed underneath. Same catcher, same run loop,
+                               same RMCS marshalling -- sharing the case is not a shortcut, it is
+                               the actual relationship between the two services.
+                               DOS/4GW's own protected-mode INT 21h handler needs 0302 the moment
+                               it starts handling calls itself (session 17), because the real-mode
+                               DOS entry it forwards to is an interrupt handler and returns by
+                               IRET; giving it a RETF frame would leave FLAGS on the stack. */
                             DWORD esb = dpmi_sel_base((WORD)VDM_REG(tib, VTIB_ES));
                             volatile BYTE *r = (volatile BYTE *)(ULONG_PTR)(esb + (VDM_REG(tib, VTIB_EDI) & 0xFFFF));
                             /* --- save the client's PM CONTEXT (full register file + MSW) --- */
@@ -4031,10 +4255,16 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                             WORD rss = *(volatile WORD*)(r+0x30), rsp = *(volatile WORD*)(r+0x2E);
                             unsigned rt; int done = 0;
                             if (rss == 0) { rss = (WORD)(g_dpmi_code_base >> 4); rsp = 0xFF00; }
-                            p = zput(p, " -> callRM 0x"); p = zhex(p, rcs); p = zput(p, ":0x"); p = zhex(p, rip);
+                            p = zput(p, (ax == 0x0302) ? " -> callRM(iret) 0x" : " -> callRM 0x");
+                            p = zhex(p, rcs); p = zput(p, ":0x"); p = zhex(p, rip);
                             p = zput(p, " SS:SP=0x"); p = zhex(p, rss); p = zput(p, ":0x"); p = zhex(p, rsp);
                             p = zput(p, "\r\n"); log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
-                            /* push the far-return frame [IP=RMRET, CS=DOS_HDLR_SEG] on the RM stack */
+                            /* push the return frame on the RM stack: [FLAGS] CS IP, with FLAGS
+                               present only for 0302 (the procedure will IRET, not RETF). */
+                            if (ax == 0x0302) {
+                                rsp -= 2; pokew(((DWORD)rss << 4) + rsp,
+                                                *(volatile WORD*)(r+0x20));   /* RMCS.Flags */
+                            }
                             rsp -= 2; pokew(((DWORD)rss << 4) + rsp, DOS_HDLR_SEG);   /* return CS */
                             rsp -= 2; pokew(((DWORD)rss << 4) + rsp, DPMI_RMRET_OFF);  /* return IP */
                             dpmi_unpatch();   /* restore real `CD nn` so RM ints in the proc vector natively */
@@ -4278,9 +4508,31 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                                here, the same way DOS/4GW clearing D/B itself settled the
                                initial-selector width.
                                So: do the real DOS allocation (dos_int21 owns the MCB chain),
-                               then hand back a descriptor covering it. DX gets the selector
-                               too, matching INT 31h 0100's shape, which costs nothing and is
-                               what a client written against 0100 would expect. */
+                               then hand back a descriptor covering it, IN AX ONLY.
+
+                               ► DO NOT ALSO PUT IT IN DX. Session 16 did, reasoning that it
+                                 "matches INT 31h 0100's shape, which costs nothing and is
+                                 what a client written against 0100 would expect". It cost
+                                 Doom. Real DOS's AH=48h returns AX (and BX on failure) and
+                                 PRESERVES EVERYTHING ELSE, so callers keep live values in
+                                 the other registers across it -- and DOS/4GW keeps the
+                                 request's BYTE SIZE in DX:
+                                     mov dx,cx / add dx,0x27 / and dl,0xf0   ; DX = bytes
+                                     mov bx,dx / ...shift...                 ; BX = paragraphs
+                                     mov ah,48h / int 21h
+                                     ...
+                                     mov ax,dx                               ; DX still = bytes
+                                     mov di,ax / add di,bx / dec di / dec di
+                                     movw [di],0xfffe                        ; last word of block
+                                 With DX clobbered to the selector (0xcf) instead of the size
+                                 (0x40), DI became 0xcd against a 0x4f limit: a write past the
+                                 segment end, #GP, and XP terminated the VDM with nothing in
+                                 the log. Bisected to the instruction with the pmbp.txt
+                                 breakpoints.
+                               ► THE GENERAL RULE THIS EARNS: a service's register footprint
+                                 is part of its contract. Writing a register the real service
+                                 leaves alone is not a harmless bonus, it is a silent
+                                 corruption of the caller's state. Return what DOS returns. */
                             DWORD want = VDM_REG(tib, VTIB_EBX) & 0xFFFF;
                             m.tp = p; dos_int21_set_pm(1); dos_int21(&m); dos_int21_set_pm(0); p = m.tp;
                             p = zput(p, "INT21h AH=48 (PM) alloc 0x"); p = zhex(p, want);
@@ -4301,8 +4553,7 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                                 g_ldt[idx].flags  = 0;             /* 16-bit, byte granular   */
                                 dpmi_install(idx);
                                 sel = (WORD)((idx << 3) | 7);
-                                VDM_SET16(tib, VTIB_EAX, sel);
-                                VDM_SET16(tib, VTIB_EDX, sel);
+                                VDM_SET16(tib, VTIB_EAX, sel);   /* AX only -- see above */
                                 p = zput(p, " -> seg 0x"); p = zhex(p, seg);
                                 p = zput(p, " as sel 0x"); p = zhex(p, sel);
                                 p = zput(p, " limit 0x"); p = zhex(p, g_ldt[idx].limit);
@@ -4352,8 +4603,121 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                             VDM_REG(tib, VTIB_EIP) += 2;
                             return 1;
                         }
+                        if (ah == 0x25 || ah == 0x35) {
+                            /* ── SET/GET INTERRUPT VECTOR FROM PROTECTED MODE ───────────────
+                               These operate on the PROTECTED-MODE vector, i.e. they are
+                               INT 31h 0205/0204 wearing a DOS hat, and must never reach
+                               dos_int21() -- which writes DS:DX straight into the real-mode
+                               IVT at linear (AL*4). In PM that would store a SELECTOR where
+                               a segment belongs, in the first kilobyte of guest memory.
+
+                               ► THE SPEC IS SILENT HERE. DPMI 0.9 defines INT 31h 0200-0206
+                                 for vectors and says only that "DPMI defines a specific
+                                 subset of DOS and BIOS calls that can be made by protected
+                                 mode DOS programs" -- it does not say which side 25h/35h act
+                                 on. Checked, not remembered.
+                               ► WHAT SETTLES IT IS THE CLIENT, as usual. DOS/4GW does
+                                     mov ax,0x3500 / int 21h        ; save the old vector
+                                     mov ax,0x2500 / mov dx,0x2cf3 / int 21h
+                                 with DS = 0x9F -- its own CODE SELECTOR -- and 0x2cf3 is a
+                                 handler inside that selector. A selector:offset pair cannot
+                                 be installed in the real-mode IVT, and a chain built from a
+                                 35h that read the real vector and a 25h that wrote the PM one
+                                 would be incoherent. So both act on the PM table.
+                               ► OUTSTANDING VERIFICATION: confirm against stock ntvdm's own
+                                 DPMI host with a text-mode probe (`stock <target>`). Until
+                                 then this is forced-by-the-data, not oracle-confirmed. */
+                            DWORD al = ax & 0xFF;
+                            if (ah == 0x25) {
+                                WORD hsel = (WORD)(VDM_REG(tib, VTIB_DS) & 0xFFFF);
+                                g_pm_int[al].sel = hsel;
+                                g_pm_int[al].off = dpmi_sel_is32(hsel) ? VDM_REG(tib, VTIB_EDX)
+                                                                       : (VDM_REG(tib, VTIB_EDX) & 0xFFFF);
+                                p = zput(p, "INT21h AH=25 (PM) set PM vector 0x"); p = zhex(p, al);
+                                p = zput(p, " = 0x"); p = zhex(p, g_pm_int[al].sel);
+                                p = zput(p, ":0x"); p = zhex(p, g_pm_int[al].off);
+                            } else {
+                                VDM_SET16(tib, VTIB_ES, g_pm_int[al].sel);
+                                if (dpmi_sel_is32(g_pm_int[al].sel)) VDM_REG(tib, VTIB_EBX) = g_pm_int[al].off;
+                                else VDM_SET16(tib, VTIB_EBX, g_pm_int[al].off & 0xFFFF);
+                                p = zput(p, "INT21h AH=35 (PM) get PM vector 0x"); p = zhex(p, al);
+                                p = zput(p, " -> 0x"); p = zhex(p, g_pm_int[al].sel);
+                                p = zput(p, ":0x"); p = zhex(p, g_pm_int[al].off);
+                            }
+                            VDM_REG(tib, VTIB_EFLAGS) &= ~1u;
+                            p = zput(p, "\r\n");
+                            log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                            VDM_REG(tib, VTIB_EIP) += 2;
+                            return 1;
+                        }
+                        if (ah == 0x4A) {
+                            /* ── DOS RESIZE, FROM PROTECTED MODE ────────────────────────────
+                               ES is a selector, exactly as for 49h, and the evidence arrived
+                               the same way: session 16 left 4Ah loud pending a client that
+                               actually calls it, and DOS/4GW does -- immediately after the
+                               48h whose block it is shrinking (ES=0xcf, BX=0x40 paras).
+                               Resolve ES through the LDT, resize the real block, and then
+                               UPDATE THE DESCRIPTOR: the client goes on using the selector it
+                               already holds, so a limit left describing the old size is either
+                               a spurious #GP (grown block) or a licence to run off the end of
+                               the heap (shrunk one).
+                               Register footprint is DOS's: nothing on success; AX = error and
+                               BX = largest available on failure. See the AH=48h note above for
+                               what happens when we improvise extra return values. */
+                            WORD sel = (WORD)(VDM_REG(tib, VTIB_ES) & 0xFFFF);
+                            int idx = sel >> 3;
+                            DWORD segbase = dpmi_sel_base(sel);
+                            DWORD want = VDM_REG(tib, VTIB_EBX) & 0xFFFF;
+                            uint16_t max = 0;
+                            p = zput(p, "INT21h AH=4A (PM) resize sel 0x"); p = zhex(p, sel);
+                            p = zput(p, " base 0x"); p = zhex(p, segbase);
+                            p = zput(p, " to 0x"); p = zhex(p, want); p = zput(p, " paras");
+                            if ((segbase & 0xF) || segbase > 0xFFFFFu) {
+                                VDM_REG(tib, VTIB_EFLAGS) |= 1u;
+                                VDM_SET16(tib, VTIB_EAX, 9);   /* invalid memory block address */
+                                p = zput(p, " -> REFUSED (not a DOS paragraph)");
+                            } else {
+                                int err = dos_resize(NULL, (uint16_t)(segbase >> 4),
+                                                     (uint16_t)want, &max);
+                                if (err) {
+                                    VDM_REG(tib, VTIB_EFLAGS) |= 1u;
+                                    VDM_SET16(tib, VTIB_EAX, err);
+                                    if (err == 8) VDM_SET16(tib, VTIB_EBX, max);
+                                    p = zput(p, " -> err 0x"); p = zhex(p, err);
+                                    p = zput(p, " max 0x"); p = zhex(p, max);
+                                } else {
+                                    VDM_REG(tib, VTIB_EFLAGS) &= ~1u;
+                                    if (idx >= 1 && idx < 512) {
+                                        g_ldt[idx].limit = want ? (want * 16u - 1u) : 0;
+                                        dpmi_install(idx);
+                                        p = zput(p, " -> ok, sel limit now 0x");
+                                        p = zhex(p, g_ldt[idx].limit);
+                                    } else p = zput(p, " -> ok (no descriptor to update)");
+                                }
+                            }
+                            p = zput(p, "\r\n");
+                            log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                            VDM_REG(tib, VTIB_EIP) += 2;
+                            return 1;
+                        }
+                        /* AH=44h IOCTL: only the register-only subfunctions. AL=00 (get
+                           device info, BX in / DX out) is what a C runtime's isatty() uses
+                           and what DOS/4GW calls for handles 0..4; AL=06/07 (input/output
+                           status) likewise touch no memory. Everything else takes a DS:DX
+                           buffer and stays loud -- the whitelist rule, applied within a
+                           function rather than to it. */
+                        if (ah == 0x44) {
+                            DWORD al = ax & 0xFF;
+                            if (al != 0x00 && al != 0x06 && al != 0x07) goto pm_int21_unhandled;
+                        }
+                        /* AH=06h direct console I/O is register-only in BOTH directions
+                           (DL=char out, DL=FFh -> AL=char in, ZF), so it thunks with no
+                           translation. It is also how DOS/4GW prints its FATAL ERRORS --
+                           leaving it unimplemented is why "not enough memory for dispatcher
+                           data" was invisible for a whole session and had to be
+                           reconstructed character by character out of the TODO log lines. */
                         if (ah == 0x19 || ah == 0x2A || ah == 0x2C || ah == 0x30 ||
-                            ah == 0x33 || ah == 0x58) {
+                            ah == 0x33 || ah == 0x58 || ah == 0x06 || ah == 0x44) {
                             m.tp = p; dos_int21_set_pm(1); dos_int21(&m); dos_int21_set_pm(0); p = m.tp;
                             p = zput(p, "INT21h AH=0x"); p = zhex(p, ah);
                             p = zput(p, " (PM, register-only -> V86 DOS) -> AX=0x");
@@ -4365,6 +4729,7 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                             VDM_REG(tib, VTIB_EIP) += 2;
                             return 1;
                         }
+                    pm_int21_unhandled:
                         /* ── UNHANDLED INT 21h FROM PM: SAY ENOUGH TO IDENTIFY IT ────────
                            The session-16 trace reported five calls with "AH=0xff", which is
                            not a DOS function at all -- so either the client really is passing
@@ -4394,6 +4759,20 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                             if (!host_readable(ib, 16)) p = zput(p, "<unreadable from host>");
                             else                        p = zdump(p, ib, 16); }
                           p = zput(p, "\r\n"); }
+                        /* ── AND ANSWER IT THE WAY OUR OWN DOS ANSWERS AN UNHANDLED
+                              SERVICE: CF=1. ──────────────────────────────────────────
+                           This arm used to return with the flags exactly as the client
+                           left them, which in practice means CF=0 -- it told the client
+                           its request SUCCEEDED. dos_int21()'s unhandled arm sets CF=1
+                           and says why: "a quiet success would tell the program its
+                           request worked when nothing happened". The protected-mode path
+                           has no business disagreeing with the real-mode path about that.
+                           It matters here: DOS/4GW routes these through a generic register-
+                           block thunk, so whatever it is probing for, a false success sends
+                           it down the branch for a feature we do not have. AX is left alone,
+                           same as ERRCF() in dos_int21 -- CF is the answer, not a code we
+                           would be inventing. */
+                        VDM_REG(tib, VTIB_EFLAGS) |= 1u;
                         log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
                         VDM_REG(tib, VTIB_EIP) += 2;
                         return 1;
@@ -5649,6 +6028,67 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                     g_ldt[1 + si].flags  = 0;
                 } }
                 if (g_ldt_next < 4) g_ldt_next = 4;      /* client allocs start at index 4 now */
+                /* ── DPMI INITIAL CLIENT STATE: ES = PSP SELECTOR, AND THE PSP'S
+                      ENVIRONMENT POINTER CONVERTED TO A SELECTOR. ────────────────────
+                   dpmi_switch_to_pm() sets ES = DS (a second copy of the data selector),
+                   and that is simply wrong. DPMI 0.9, "entering protected mode", on the
+                   register state at a successful return:
+                       CS = 16-bit selector with base of real mode CS and a 64K limit
+                       SS = Selector with base of real mode SS and a 64K limit
+                       DS = Selector with base of real mode DS and a 64K limit
+                       ES = Selector to program's PSP with a 100h byte limit
+                   and, separately: "The environment pointer in the current program's PSP
+                   will automatically be converted to a descriptor."
+
+                   THIS IS NOT A SPEC DETAIL WE ARE HONOURING FOR TIDINESS -- it is what
+                   killed Doom for four sessions. DOS/4GW's PM module does:
+                       mov es,[saved DS] / mov bx,es:[0x2c] / mov es,bx
+                   i.e. it reads the PSP's environment field and loads it as a SELECTOR.
+                   With ES pointing at the data segment instead of the PSP, +0x2c is an
+                   arbitrary code byte pair -- measured as 0x8b17, LDT index 4450 -- and
+                   `mov es,bx` #GPs, which XP answers by terminating the whole VDM with no
+                   exception we can catch. The client is thus its own second witness for
+                   BOTH halves of the rule, independently of the spec text.
+
+                   The environment field is left holding the SELECTOR from here on. The
+                   spec makes restoring it the client's job before it terminates ("it must
+                   restore it to the selector created by the DPMI host"), and nothing in
+                   our DOS layer reads PSP+0x2C -- dos_psp.h writes it once at load and no
+                   reader exists (checked). If one is ever added, it must not assume a
+                   segment after a DPMI switch. */
+                { WORD psp = m.psp_seg;
+                  DWORD pspbase = (DWORD)psp << 4;
+                  WORD psp_sel = 0, env_sel = 0;
+                  if (g_ldt_next < 512) {
+                      int pi = g_ldt_next++;
+                      g_ldt[pi].base   = pspbase;
+                      g_ldt[pi].limit  = 0xFF;        /* "a 100h byte limit", exactly */
+                      g_ldt[pi].access = 0xF2;        /* present, DPL3, data R/W       */
+                      g_ldt[pi].flags  = 0;
+                      dpmi_install(pi);
+                      psp_sel = (WORD)((pi << 3) | 7);
+                      VDM_SET16(tib, VTIB_ES, psp_sel);
+                  }
+                  { volatile WORD *envf = (volatile WORD *)(ULONG_PTR)(pspbase + 0x2C);
+                    WORD envseg = *envf;
+                    /* envseg == 0 is legal and documented: a client may free its
+                       environment and zero this word BEFORE switching, in which case
+                       there is nothing to convert and we must not invent a descriptor. */
+                    if (envseg && g_ldt_next < 512) {
+                        int ei = g_ldt_next++;
+                        g_ldt[ei].base   = (DWORD)envseg << 4;
+                        g_ldt[ei].limit  = 0xFF;      /* dos_env_build fills a 0x10-para block */
+                        g_ldt[ei].access = 0xF2;
+                        g_ldt[ei].flags  = 0;
+                        dpmi_install(ei);
+                        env_sel = (WORD)((ei << 3) | 7);
+                        *envf = env_sel;
+                    }
+                  }
+                  p = zput(p, " PSP 0x"); p = zhex(p, psp);
+                  p = zput(p, " -> ES=0x"); p = zhex(p, psp_sel);
+                  p = zput(p, " env -> sel 0x"); p = zhex(p, env_sel);
+                }
                 p = zput(p, " segbase C=0x"); p = zhex(p, g_dpmi_seg_base[0]);
                 p = zput(p, " D=0x"); p = zhex(p, g_dpmi_seg_base[1]);
                 p = zput(p, " S=0x"); p = zhex(p, g_dpmi_seg_base[2]);

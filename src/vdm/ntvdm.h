@@ -180,7 +180,33 @@ typedef LONG (WINAPI *PFN_NtUnmapViewOfSection)(HANDLE, PVOID);
    and it just sets VIP (bit 20) and defers -- which is exactly what the rig showed. */
 #define EFLAGS_VIF_BIT     0x80000
 #define EFLAGS_VIP_BIT     0x100000
-#define VTIB_EFLAGS_PM     0x00202    /* EFlags: IF + reserved bit, VM clear (PM) */
+/* ── PROTECTED-MODE EFLAGS: IOPL MUST BE 3, AND IT IS NOT A DETAIL. ──────────────
+   The guest runs at CPL 3. With IOPL 0, `STI`, `CLI`, `IN`, `OUT` and `INT n` to a
+   gate are all IOPL-sensitive and raise #GP -- and a raw protected-mode #GP is the one
+   fault XP will not reflect to us, so the kernel silently terminates the whole VDM. No
+   VEH exception, no trampoline catch, the log just stops.
+   Session 17 measured it exactly: Doom's DOS/4GW returns from an INT 31h 000C wrapper
+   into
+       push ss / pop ss / mov edi,edx / cmc / mov ax,0 / rcl ax,1 / STI / jmp cx
+   and a breakpoint planted on that STI FIRED -- proving the client got there -- after
+   which letting the single displaced byte execute killed the run every time.
+   ► THE OBVIOUS FIX DOES NOT WORK, AND THAT IS MEASURED, NOT ASSUMED. Setting IOPL=3
+     here (0x03202) changes nothing: the kernel SANITISES IOPL out of the context it
+     loads. Across a whole Doom run the live EFLAGS the guest reported were 0x...0296,
+     0x...0292, 0x...0206, 0x...0202, 0x...0246 -- bits 12-13 never once set. So the
+     value below stays 0, because pretending otherwise would read as "IOPL is 3" to the
+     next person.
+   ► AND THE PROCESS-WIDE ROUTE IS WORSE, NOT BETTER. NtSetInformationProcess's
+     ProcessUserModeIOPL would give the whole process IOPL 3 -- but at CPL <= IOPL the
+     I/O permission bitmap is BYPASSED, so every guest IN/OUT would reach real hardware
+     instead of our VDDs. That trades a fault for silent loss of the entire device
+     emulation. Do not "fix" STI that way.
+   ► WHAT IS ACTUALLY REQUIRED is the GH #18 protected-mode #GP reflect, so a privileged
+     instruction surfaces to us and can be emulated (STI/CLI -> g_dpmi_vi), which is what
+     a VDM monitor does. Until then a PM client that uses CLI/STI cannot run to
+     completion. See return-ntvdm.md. */
+#define VTIB_EFLAGS_PM     0x00202    /* EFlags: IF + reserved bit, VM clear (PM); IOPL
+                                         is 0 because the kernel strips anything else */
 #define EFLAGS_VM_BIT      0x20000    /* EFLAGS.VM (bit 17): set=V86, clear=PM     */
 /* Virtual MSW (low 16 of the client's CR0) the monitor keeps in the VDM_TIB.
    getMSW (ntvdm 0xf0041b5) reads word[TIB+0x668]; fcn.0f00532e gates PM-vs-V86 on
