@@ -1,38 +1,58 @@
 ═══════════════════════════════════════════════════════════════════════════════
-██ ▶▶▶ DOOM LOADS ITS WHOLE EXECUTABLE. FIX THE IRQ0 INJECTION NEXT.          ██
+██ ▶▶▶ DOOM'S 32-BIT CODE IS RUNNING. IT DIES AFTER A PRIVATE AX=FF00 CALL.   ██
 ═══════════════════════════════════════════════════════════════════════════════
 
 ┌──────────────────────────────────────────────────────────────────────────────┐
 │ ★★★ WHERE IT IS (end of session 17, 2026-08-22)                              │
 └──────────────────────────────────────────────────────────────────────────────┘
 
-  In one run Doom's DOS/4GW now: negotiates DPMI; loads its PM modules into EXTENDED
-  memory and relocates them; runs **its own protected-mode INT 21h handler**; forwards
-  DOS calls to real mode through **INT 31h 0302**; hands off to the application; and the
-  game's runtime builds its flat model and **reads DOOM.EXE to file position 0xAD511 --
-  its exact size -- then closes the handle.** Checkpoint count went 0x1a6 -> 0xdb1+.
+  The extender starts fully, loads and relocates its modules in extended memory, reads
+  DOOM.EXE to its exact size, hands off, and **the application's 32-bit code runs**:
+  breakpoints show **281 passes through DOS/4GW's 16↔32 gateway** (the switcher at
+  `mod:0x4ce` -> `mod:0x691` -> the `IRETD` at `mod:0x6d5`), every instruction of the
+  stack switch executing — `mov ss,bx`, `mov esp,ebp`, `pop fs/gs`, `popal`, `iretl`.
 
-  ▶▶ **THE ONE THING TO FIX FIRST, and it is currently papered over by a flag.**
-     `pmnoirq.flag` on the share suppresses the asynchronous IRQ0 -> PM INT 08h
-     injection, **and Doom needs it**:
+  ▶▶ **WHERE IT ENDS.** The last service is the client's own PM `INT 21h` handler
+     answering its **private `AX=FF00`** with **CF=1**, after which the client unwinds
+     through four levels of C wrappers and the VDM dies:
      ```
-        injection ON   -> run ends the instant the client installs INT 08h  (cp 0x23b)
-        injection OFF  -> client reaches cp 0xdb1+ and loads its whole image
+       mod:0x4b81  the generic INT 21h thunk epilogue   (runs to completion)
+       mod:0x4bc5  -> lret                              (hit)
+       mod:0x4edd  the FF00 wrapper epilogue            (hit)
+       obj2:0xb00a -> lret 4                            (hit)
+       obj2:0x745 -> 0x7a6 -> 0x7a8 -> jmp 0x823
+       obj2:0x823  lcall 0x80:0x4ce   = the 16->32 gateway
      ```
-     That flag is **a knob for asking the question, not a fix** — a game that hooks the
-     timer and never receives it will not play. `dpmi_inject_pm_irq()` now shares the
-     corrected frame-width and stack-pointer rules but has never otherwise been
-     exercised against a 32-bit client.
-   ▶ **Ask the cheap question first:** is delivering IRQ0 while the client is still
-     building its own vector table even legitimate? Ours defaults `g_dpmi_vi` to 1 and
-     fires the moment `g_pm_int[8].sel` is non-zero — i.e. on the very instruction after
-     the client installs it. Then check the mechanism: the injected frame, and whether
-     the handler's IRET reaches the PM-return catcher.
-   ▶ **DELETE `pmnoirq.flag` FROM THE SHARE** once it is fixed; leaving it silently
-     changes every later run. (Session 17 left the share clean.)
+   ▶ **THE OPEN QUESTION IS WHETHER FF00 FAILING IS THE CAUSE OR A SYMPTOM, AND IT HAS
+     NOT BEEN TESTED.** Do not assume, as I did twice this session. `AX=FF00` is
+     DOS/4GW's own private function; its handler services it **itself** and returns CF=1
+     — it does NOT chain to us, so this is not a missing host service. Find out what it
+     wants: the handler's dispatch table is at `mod:0x84` (`call <common>; db <vec>`)
+     with the common routine at `mod:0x550`, which begins by doing **`LAR` on SS and
+     testing the D/B bit (bit 22)** to decide whether the frame is 16- or 32-bit. That
+     is the client interrogating OUR descriptors — worth checking that what LAR reports
+     matches what the client set via 0009/000C.
+   ▶ There is a DOS/4GW debugger-hint string on the stack at that point
+     (`bp 0187:0B48; comp ms; go`), which is what its FATAL REPORT builds. It may be
+     live or it may be dead stack — check before believing it.
 
-  ▶ After that: Doom stops just past its private `INT 21h AX=FF00` returning CF=1 from
-    its OWN handler, inside its DOS-call thunk at `0x8F:0x4B81`.
+  ⚠ **`pmnoirq.flag` IS STILL LOAD-BEARING** and must be on the share for any of the
+    above to reproduce. Injecting IRQ0 into the client's PM INT 08h still ends the run
+    at once. Fixing that is required for a playable game and is independent of the FF00
+    question. **Delete the flag once fixed.**
+
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ NINE BUGS THIS SESSION, EVERY ONE OURS                                       │
+└──────────────────────────────────────────────────────────────────────────────┘
+
+  8. **INT 31h 0204 returned 0000:0000** for an uninstalled vector, so a client that
+     chains had nowhere to chain to. Every vector now points at a host stub
+     `C4 C4 CF` (BOP ; IRET — the third byte is both the BOP immediate and the IRET),
+     registered in the patch map against its vector. `g_pm_int[].client` distinguishes
+     a vector the client chose, which gates both routing and IRQ0 injection.
+  9. **dpmi_bp_arm() read its target without checking it was mapped** and faulted in our
+     own process. Third instance this session of an instrument killing the run it was
+     there to observe.
 
 ┌──────────────────────────────────────────────────────────────────────────────┐
 │ THE SEVEN BUGS THIS SESSION FOUND AFTER THE CORRECTION — EVERY ONE OURS      │
