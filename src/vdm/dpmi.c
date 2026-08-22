@@ -140,7 +140,19 @@ int dpmi_switch_to_pm(volatile BYTE *tib, int client_is_32bit,
 
     /* Rewrite the CONTEXT into protected mode: clear VM, load the BASED selectors,
        resume at the real-mode OFFSETS (the selectors carry the seg<<4 base). */
-    VDM_REG(tib, VTIB_EFLAGS) = VTIB_EFLAGS_PM;      /* VM clear -> PM              */
+    /* ── VIF, NOT JUST IF, OR THE KERNEL WILL NEVER DELIVER AN INTERRUPT HERE. ──────
+         The kernel's "can I deliver a hardware interrupt to this VDM right now?" test
+         reads the VIRTUAL interrupt flag, not IF -- see the EFLAGS_VIF_BIT note in
+         ntvdm.h, where exactly this cost the real-mode timer: "a guest started with
+         IF=1 but VIF=0 therefore looks to the kernel like interrupts are disabled
+         forever, so its interrupt-assist never delivers and it just sets VIP and
+         defers". The V86 path learned that and has a knob for it (g_qi_vif); the
+         protected-mode path was never given one and has always entered with VIF clear.
+         That fits what the rig shows: with our own asynchronous injection disabled a PM
+         guest receives ZERO timer ticks and spins for ever, while stock ntvdm runs the
+         same client to Doom's title screen. If the kernel is willing to deliver to a PM
+         VDM at all, VIF is the flag it asks about. */
+    VDM_REG(tib, VTIB_EFLAGS) = VTIB_EFLAGS_PM | EFLAGS_VIF_BIT;  /* VM clear -> PM */
     VDM_SET16(tib, VTIB_CS,  code_sel);
     VDM_REG (tib, VTIB_EIP) = ret_ip;                /* offset within the based CS  */
     VDM_SET16(tib, VTIB_SS,  stack_sel);
