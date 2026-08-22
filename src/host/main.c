@@ -208,6 +208,13 @@ static char g_env[8192], g_desk[512], g_title[512], g_rsv[512];
 static VDM_COMMAND_INFO g_ci;
 static BYTE filebuf[0x80000];   /* 512KB: hold a real game's MZ image (DOS/4GW stub etc.), run 85 */
 
+/* The live machine, for the WATCHDOG THREAD. A wedged run is terminated forcefully and
+   therefore skips the normal wind-down -- which is where captured DOS output is flushed,
+   so everything the program printed was thrown away in exactly the case where it matters
+   most. Doom prints its whole startup and then hangs; without this the log proved it had
+   run but could not show what it said. */
+static dos_machine_t *g_mach = NULL;
+
 /* The device bus + its VDDs + the presentation layer live for the host's life. */
 static vdd_bus      g_bus;
 static pit_state    g_pit;       static ntvdd g_pit_dev;
@@ -3207,6 +3214,23 @@ static DWORD WINAPI dpmi_watchdog(LPVOID param)
     q = zput(q, "STAGE3-DPMI: watchdog terminating (wedged)\r\n");
     log_append(LOG_PATH, wb, q);
     serial_out(wb, q);
+    /* ► FLUSH WHAT THE PROGRAM PRINTED BEFORE KILLING IT. Same text the clean
+         wind-down emits, in the one path that used to lose it. Written in bounded
+         slices because the accumulator is far larger than this thread's buffer. */
+    if (g_mach && g_mach->out_len > 0) {
+        DWORD off = 0, total = (DWORD)g_mach->out_len;
+        q = wb; q = zput(q, "  ==> DOS OUTPUT (wedged): [\r\n");
+        log_append(LOG_PATH, wb, q);
+        while (off < total) {
+            DWORD n2 = total - off; char sl[257];
+            if (n2 > 256) n2 = 256;
+            { DWORD k; for (k = 0; k < n2; ++k) sl[k] = g_mach->out[off + k]; }
+            log_append(LOG_PATH, sl, sl + n2);
+            off += n2;
+        }
+        q = wb; q = zput(q, "\r\n]\r\n");
+        log_append(LOG_PATH, wb, q);
+    }
     /* TerminateProcess (forceful) -- ExitProcess hangs trying to unwind the PM engine
        thread (un-terminable LDT context). */
     TerminateProcess(GetCurrentProcess(), 0xDD0);
@@ -6078,6 +6102,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
        Runs until the guest terminates, a hard stop, or the window closes (g_running);
        no iteration cap so interactive/animated programs keep going. */
     m.tib = tib; m.out = dosout; m.out_cap = sizeof(dosout); m.out_len = 0; m.out_trunc = 0;
+    g_mach = &m;              /* the watchdog flushes this if the run wedges */
     (void)guard;
     { static uint32_t s_last_fault = 0; static int s_storm = 0;
     DWORD rm_start_tick = GetTickCount();   /* headless wall-clock cap origin (real-mode) */
