@@ -1,45 +1,57 @@
 ═══════════════════════════════════════════════════════════════════════════════
-██ ▶▶▶ DOOM'S 32-BIT CODE IS RUNNING. IT DIES AFTER A PRIVATE AX=FF00 CALL.   ██
+██ ▶▶▶ DOOM'S 32-BIT CODE RUNS. ITS `INT` SITES ARE UNPATCHED, BECAUSE ITS    ██
+██     CODE SELECTOR IS FLAT. THAT IS THE WALL. START THERE.                  ██
 ═══════════════════════════════════════════════════════════════════════════════
 
 ┌──────────────────────────────────────────────────────────────────────────────┐
-│ ★★★ WHERE IT IS (end of session 17, 2026-08-22)                              │
+│ ★★★ THE WALL, AND IT IS ONE SENTENCE                                         │
 └──────────────────────────────────────────────────────────────────────────────┘
 
-  The extender starts fully, loads and relocates its modules in extended memory, reads
-  DOOM.EXE to its exact size, hands off, and **the application's 32-bit code runs**:
-  breakpoints show **281 passes through DOS/4GW's 16↔32 gateway** (the switcher at
-  `mod:0x4ce` -> `mod:0x691` -> the `IRETD` at `mod:0x6d5`), every instruction of the
-  stack switch executing — `mov ss,bx`, `mov esp,ebp`, `pop fs/gs`, `popal`, `iretl`.
+  Doom's own 32-bit code selector is **`setaccess 0xC7FA`** — present, DPL3, code,
+  **G=1, D/B=1, base 0, limit 4 GB**. `dpmi_patch_code_region()` refuses any region over
+  4 MB, so the **application's** raw `CD 21` / `CD 31` are never converted to BOPs — and
+  a raw INT in protected mode is the one fault XP will not reflect. The extender's own
+  modules are patched (they get ordinary based selectors); the game's code is not.
 
-  ▶▶ **WHERE IT ENDS.** The last service is the client's own PM `INT 21h` handler
-     answering its **private `AX=FF00`** with **CF=1**, after which the client unwinds
-     through four levels of C wrappers and the VDM dies:
-     ```
-       mod:0x4b81  the generic INT 21h thunk epilogue   (runs to completion)
-       mod:0x4bc5  -> lret                              (hit)
-       mod:0x4edd  the FF00 wrapper epilogue            (hit)
-       obj2:0xb00a -> lret 4                            (hit)
-       obj2:0x745 -> 0x7a6 -> 0x7a8 -> jmp 0x823
-       obj2:0x823  lcall 0x80:0x4ce   = the 16->32 gateway
-     ```
-   ▶ **THE OPEN QUESTION IS WHETHER FF00 FAILING IS THE CAUSE OR A SYMPTOM, AND IT HAS
-     NOT BEEN TESTED.** Do not assume, as I did twice this session. `AX=FF00` is
-     DOS/4GW's own private function; its handler services it **itself** and returns CF=1
-     — it does NOT chain to us, so this is not a missing host service. Find out what it
-     wants: the handler's dispatch table is at `mod:0x84` (`call <common>; db <vec>`)
-     with the common routine at `mod:0x550`, which begins by doing **`LAR` on SS and
-     testing the D/B bit (bit 22)** to decide whether the frame is 16- or 32-bit. That
-     is the client interrogating OUR descriptors — worth checking that what LAR reports
-     matches what the client set via 0009/000C.
-   ▶ There is a DOS/4GW debugger-hint string on the stack at that point
-     (`bp 0187:0B48; comp ms; go`), which is what its FATAL REPORT builds. It may be
-     live or it may be dead stack — check before believing it.
+  ▶ **SCANNING THE CLIENT'S 0501 BLOCKS INSTEAD WAS TRIED AND IS WORSE.** Measured:
+    ```
+      without   545 KB log, 441 client-handler returns, reaches AX=FF00
+      with      453 KB log, no FF00 -- and 3 extra byte pairs patched inside the 1 MB
+                block that already held the extender's modules, i.e. DATA
+    ```
+    The client's memory is code and data mixed; "everything we handed out" is not a code
+    region. Reverted, and the attempt is recorded in the source so nobody repeats it.
+  ▶ **THE SHAPE OF THE ANSWER:** we need to know which parts of the client's memory are
+    CODE. The client knows — it loads objects with a flag — and while we never see that
+    flag, we DO see every window descriptor it builds over each object (`0006` + `000C`)
+    as it relocates, and each object's file extent from the read log. `g_dpmi_blk[]` now
+    records every 0501 block and is ready for this.
+  ▶ The flat case is now **logged loudly** ("FLAT code region ... NOT scanned; the
+    client's INT sites here are UNPATCHED"). It used to return silently, which is how it
+    hid for a whole session.
 
-  ⚠ **`pmnoirq.flag` IS STILL LOAD-BEARING** and must be on the share for any of the
-    above to reproduce. Injecting IRQ0 into the client's PM INT 08h still ends the run
-    at once. Fixing that is required for a playable game and is independent of the FF00
-    question. **Delete the flag once fixed.**
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ ★★ TWO DEAD ENDS, RULED OUT BY MEASUREMENT. DO NOT RE-SPEND A SESSION.       │
+└──────────────────────────────────────────────────────────────────────────────┘
+
+  • **`AX=FF00` failing is a RED HERRING.** It is the last service before the run ends,
+    which is exactly why it looked causal. Its caller settles it: the code after the call
+    is `testb $0x1,0x347e / jne / jmp` — a MEMORY flag. **FF00's CF is never tested.**
+    Its handler services it internally and never chains, so it is not a missing host
+    service either.
+  • **`DOOM.ETX` is NOT an error signal.** DOS/4GW opens `<program>.ETX` — its error-TEXT
+    file — during normal startup, before the DPMI switch, so the strings are on hand if
+    ever needed. I nearly built a theory on it.
+
+  ▶ What IS true: Doom's 32-bit code genuinely runs. Breakpoints counted **281 passes
+    through DOS/4GW's 16↔32 gateway** (`mod:0x4ce` -> `mod:0x691` -> the `IRETD` at
+    `mod:0x6d5`), with every instruction of the stack switch executing — `mov ss,bx`,
+    `mov esp,ebp`, `pop fs/gs`, `popal`, `iretl`.
+
+  ⚠ **`pmnoirq.flag` IS STILL LOAD-BEARING** and must be on the share to reproduce any of
+    this. Injecting IRQ0 into the client's PM INT 08h still ends the run at once. That is
+    independent of the flat-selector gap and is also required for a playable game.
+    **Delete the flag once fixed.**
 
 ┌──────────────────────────────────────────────────────────────────────────────┐
 │ NINE BUGS THIS SESSION, EVERY ONE OURS                                       │
