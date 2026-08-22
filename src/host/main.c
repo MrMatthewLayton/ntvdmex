@@ -5706,7 +5706,25 @@ static int dpmi_async_inject_pm(unsigned irq, CONTEXT *cx)
 
     cx->SegCs  = DPMI_IRQ_TARGET_SEL(iv);
     cx->Eip    = g_dpmi_client32 ? DPMI_IRQ_TARGET_OFF(iv) : (DPMI_IRQ_TARGET_OFF(iv) & 0xFFFF);
-    cx->EFlags = efl & ~(0x200u | EFLAGS_VIF_BIT);   /* an interrupt gate clears IF */
+    /* ── CLEAR **VIP**, NOT JUST VIF — OR THE GUEST'S NEXT `STI` FAULTS. ─────────────
+         The guest runs at CPL 3 with PVI, which is why CLI/STI are survivable there at
+         all (measured: both SURVIVE, while INT3 and HLT kill the VDM). Under PVI, `STI`
+         sets VIF -- but if **VIP (bit 20) is already set it raises #GP instead**, by
+         design, so that the OS can deliver the interrupt it had pending. And a raw
+         protected-mode #GP is the one fault XP will not reflect: run 71 watched it with
+         a kernel debugger attached and the kernel just tears the VDM down, silently, no
+         bugcheck and no break.
+         That is exactly this failure. We deliver the tick OURSELVES, behind the
+         kernel's back, so the kernel's own pending IRQ0 stays queued: it sets VIP and
+         defers (see the EFLAGS_VIP_BIT note in ntvdm.h). Doom's timer ISR executes
+         `sti` at obj1+0x1356d on EVERY tick, so the first tick that lands with VIP set
+         dies there -- which is why it survived a handful of entries and then vanished
+         with no fault, no watchdog line, and nothing after the log's last byte.
+         We ARE the delivery, so the interrupt is no longer pending: clear VIP with VIF,
+         and clear the kernel's own pending bits too, exactly as the event-3 guard in the
+         main loop already does for the stale-pending case. */
+    cx->EFlags = efl & ~(0x200u | EFLAGS_VIF_BIT | EFLAGS_VIP_BIT);
+    *(volatile DWORD *)(ULONG_PTR)0x714 &= ~3u;      /* the kernel's pending-IRQ bits */
     g_dpmi_vi  = 0;                                  /* ...and our model of it */
     return 1;
 }
@@ -5779,7 +5797,9 @@ static int dpmi_inject_pm_irq(dos_machine_t *mp, volatile BYTE *tib, unsigned iv
        VTIB_EFLAGS_PM (0x202) outright, which both sets IF -- the opposite of what a gate
        does -- and discards the guest's own flags, DF included, so a handler that returned
        through a string operation would run it in the wrong direction. */
-    VDM_REG(tib, VTIB_EFLAGS) = (sEFL & ~(0x200u | EFLAGS_VIF_BIT)) | 2u;
+    /* VIP too -- see dpmi_async_inject_pm() for why an STI with VIP set is fatal here. */
+    VDM_REG(tib, VTIB_EFLAGS) = (sEFL & ~(0x200u | EFLAGS_VIF_BIT | EFLAGS_VIP_BIT)) | 2u;
+    *(volatile DWORD *)(ULONG_PTR)0x714 &= ~3u;
     VDM_SET16(tib, VTIB_CS, DPMI_IRQ_TARGET_SEL(iv));
     VDM_REG(tib, VTIB_EIP) = h32 ? DPMI_IRQ_TARGET_OFF(iv) : (DPMI_IRQ_TARGET_OFF(iv) & 0xFFFF);
 
