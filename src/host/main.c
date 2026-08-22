@@ -913,6 +913,8 @@ static volatile LONG g_async_pm_active = 0;  /* an async PM interrupt is in flig
 static DWORD g_async_pm_eip = 0, g_async_pm_esp = 0, g_async_pm_efl = 0;
 static WORD  g_async_pm_cs  = 0, g_async_pm_ss  = 0;
 static DWORD g_async_pm_inj = 0;             /* delivered                              */
+static DWORD g_async_pm_bail2 = 0;           /* PM async attempts that did not commit  */
+static DWORD g_pm_irq0_done   = 0;           /* cooperative injections that reached an IRET */
 static int async_inject_irq(unsigned irq)
 {
     CONTEXT cx;
@@ -957,6 +959,24 @@ static int async_inject_irq(unsigned irq)
         }
         ResumeThread(g_hcpu);
         if (ok) { g_async_inj++; g_async_pm_inj++; } else g_async_bail++;
+        /* Log AFTER the resume, never while the guest is held -- and bounded, because this
+           fires at the PIT's rate. Without it an async injection that kills the run is
+           completely silent: the cooperative path prints its entry and exit, so a log that
+           simply STOPS after a clean tick points here by elimination, which is not the same
+           as evidence. */
+        if (g_async_pm_inj + g_async_pm_bail2 <= 8) {
+            char pb[224], *pq = pb;
+            pq = zput(pq, "ASYNC-PM vec=0x08 ok=0x"); pq = zhex(pq, (DWORD)ok);
+            pq = zput(pq, " from=0x");   pq = zhex(pq, cs);
+            pq = zput(pq, ":0x");        pq = zhex(pq, g_async_pm_eip);
+            pq = zput(pq, " -> 0x");     pq = zhex(pq, (DWORD)DPMI_IRQ_TARGET_SEL(8));
+            pq = zput(pq, ":0x");        pq = zhex(pq, DPMI_IRQ_TARGET_OFF(8));
+            pq = zput(pq, " SS:ESP=0x"); pq = zhex(pq, (DWORD)g_async_pm_ss);
+            pq = zput(pq, ":0x");        pq = zhex(pq, g_async_pm_esp);
+            pq = zput(pq, " efl=0x");    pq = zhex(pq, g_async_pm_efl);
+            pq = zput(pq, "\r\n"); log_append(LOG_PATH, pb, pq); serial_out(pb, pq);
+            if (!ok) g_async_pm_bail2++;
+        }
         return ok;
     }
     if (!(efl & (0x200u | EFLAGS_VIF_BIT)) || cs == DOS_HDLR_SEG) {
@@ -5757,6 +5777,15 @@ static int dpmi_inject_pm_irq(dos_machine_t *mp, volatile BYTE *tib, unsigned iv
         break;                                     /* handler exited / unexpected stop */
     }
 
+    /* ► DID THE HANDLER ACTUALLY FINISH? The entry line alone cannot distinguish "the
+         ISR ran and returned" from "the ISR was entered and the run ended inside it",
+         and those need completely different fixes. `done` is set only by the catcher
+         BOP, i.e. by the handler's own IRET. */
+    { char cb2[128], *cq = cb2;
+      cq = zput(cq, "  IRQ0<-PM INT done="); cq = zhex(cq, (DWORD)done);
+      cq = zput(cq, " phases="); cq = zhex(cq, (DWORD)ph);
+      cq = zput(cq, " ticks="); cq = zhex(cq, ++g_pm_irq0_done);
+      cq = zput(cq, "\r\n"); log_append(LOG_PATH, cb2, cq); serial_out(cb2, cq); }
     /* restore the interrupted PM context verbatim + unmask */
     VDM_REG(tib,VTIB_EAX)=sEAX; VDM_REG(tib,VTIB_EBX)=sEBX; VDM_REG(tib,VTIB_ECX)=sECX;
     VDM_REG(tib,VTIB_EDX)=sEDX; VDM_REG(tib,VTIB_ESI)=sESI; VDM_REG(tib,VTIB_EDI)=sEDI;
