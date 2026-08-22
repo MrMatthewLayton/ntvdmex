@@ -4,6 +4,48 @@
 ██     THE ONE REMAINING BLOCKER IS THE IRQ0 INJECTION.                       ██
 ═══════════════════════════════════════════════════════════════════════════════
 
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ ★★★ THE EXISTENCE PROOF, MEASURED AT LAST: STOCK NTVDM RUNS DOOM ON THIS BOX │
+└──────────────────────────────────────────────────────────────────────────────┘
+
+  `scripts/bm/stockdoom.bat` (commit `3e3df6f`), driven by
+  `controld exec …\stockdoom.bat`. Reference trace: `build/doom_stock_reference.txt`.
+  ```
+     I_StartupTimer()            <-- NTVDMEX STOPS DEAD ON THIS LINE
+       calling DMX_Init
+     D_CheckNetGame: Checking network game status.
+     startskill 2  deathmatch: 0  startmap: 1  startepisode: 1
+     player 1 of 1 (1 nodes)
+     S_Init: Setting up sound.
+     HU_Init: Setting up heads up display.
+     ST_Init: Init status bar.      <-- last line before the game loop
+  ```
+  ▶ **This had never been run.** "Stock runs Doom, so we can" was an assumption for
+    the whole project; `rt_stock.bat` can only reach targets staged into `bm\tests\`,
+    so it could not run Doom at all. It is now a measurement.
+  ▶ **What it buys, beyond morale:** (a) the bar is achievable ON THIS HARDWARE;
+    (b) a reference trace to diff against, one line at a time; (c) **proof that the
+    kernel CAN deliver a timer interrupt to a DOS/4GW protected-mode client** — which
+    is exactly the mechanism we lack and have been substituting for with
+    SuspendThread preemption (proven, this session, to be what tears the VDM down).
+  ▶ First difference already visible: stock reports
+    `DPMI memory: 0xf00000, 0x800000 allocated for zone`; we report `0x0`. Our
+    `0500`/`0501` memory info does not match the real host's.
+  ⚠ **THE IFEO KEY.** `stockdoom.bat` restores it on every exit path and PROVES the
+    restore with a `reg query` into `stockdoom_state.txt`. Leaving it absent turns
+    every later test into a stock run with entirely plausible logs. Check that file,
+    and re-run `selftest.com` after, every time.
+
+  ▶▶ **THEREFORE THE NEXT RESEARCH QUESTION IS SHARP:** how does ntvdm get the kernel
+     to deliver that interrupt? Our own source says the kernel has a working PM path
+     (`Under VdmStartExecution the kernel reflects a PM INT nn …`) and that an early
+     spike found `VdmStartExecution` faulting when it ran PM — which is why this host
+     runs PM in-process by far-jmp instead, and why neither native INT reflection nor
+     native interrupt delivery is available to us. Both the INT→BOP patch map and the
+     async injector exist ONLY to work around that choice. Re-run that spike against
+     today's host (the crash VEH already dumps the fault) — the original attempt
+     failed when almost none of the DPMI host existed.
+
   Commit `308b3de` on `m9/completeness`. Gates at the end: **off-VM 349/349** (8
   suites), **selftest.com 8/8** on the rig, `dpmitest.com` + `dpmiback.com` both
   `STAGE2: complete` with correct output, `check-imports.sh` clean.
