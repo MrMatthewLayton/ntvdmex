@@ -1,5 +1,86 @@
 ═══════════════════════════════════════════════════════════════════════════════
-██ ▶▶▶ NEXT SESSION: GIVE THE CLIENT A PSP SELECTOR IN ES. IT IS ONE FIX.     ██
+██ ▶▶▶ BLOCKED ON ONE THING: `CLI`/`STI` IN PROTECTED MODE. GH #18 IS NOW     ██
+██     THE CRITICAL PATH FOR DOOM -- NOTHING ELSE IS IN THE WAY.              ██
+═══════════════════════════════════════════════════════════════════════════════
+
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ ★★★ THE BLOCKER, STATED PRECISELY (session 17, 2026-08-22). READ THIS FIRST. │
+└──────────────────────────────────────────────────────────────────────────────┘
+
+  Doom's DOS/4GW now negotiates DPMI, loads its protected-mode modules, **enters its
+  own PM INT 21h handler**, makes real-mode DOS calls through INT 31h 0302, and
+  allocates and installs its own descriptors. It then executes:
+
+  ```
+  ...INT 31h wrapper epilogue...
+  push ss / pop ss / mov edi,edx / cmc / mov ax,0 / rcl ax,1 / STI / jmp cx
+                                                              ^^^
+  ```
+
+  **The guest runs at CPL 3 and IOPL is 0, so `STI` raises a #GP — the one fault XP
+  will not reflect to us.** The kernel terminates the whole VDM: no VEH exception, no
+  trampoline catch, the log simply stops. DOS/4GW brackets *every* DPMI call this way,
+  so it is systemic, not one site.
+
+  **PROVEN, NOT INFERRED — and the proof matters because this file has been burned by
+  plausible reasoning before:**
+   1. A breakpoint planted on that exact `STI` **FIRED** → the client reaches it.
+   2. Letting the single restored byte execute killed the run, every time.
+   3. A new breakpoint **skip** mode (step over the instruction) let the client
+      continue — straight to the next `CLI`/`STI`.
+
+  ▶▶ **TWO NON-ANSWERS, BOTH ALREADY MEASURED. DO NOT SPEND A SESSION ON EITHER.**
+   • **Setting IOPL=3 in `VTIB_EFLAGS_PM` does nothing** — the kernel SANITISES IOPL out
+     of the context it loads. Across a whole run the live EFLAGS were 0x...0296 / 0292 /
+     0206 / 0202 / 0246: bits 12-13 never once set. The constant is back at IOPL 0 on
+     purpose, with the finding recorded beside it in `src/vdm/ntvdm.h`.
+   • **`NtSetInformationProcess(ProcessUserModeIOPL)` is WORSE than the disease.** At
+     CPL <= IOPL the I/O permission bitmap is **bypassed**, so every guest `IN`/`OUT`
+     would reach real hardware instead of our VDDs. That trades a fault for the silent
+     loss of the entire device emulation.
+
+  ▶▶ **WHAT IS ACTUALLY REQUIRED: the GH #18 protected-mode #GP reflect.** A privileged
+     instruction must surface to us so we can emulate it (`STI`/`CLI` → `g_dpmi_vi`,
+     which is exactly what a VDM monitor does and what our INT 31h 0900/0901/0902
+     already track). The machinery is written and armed (`dpmi_install_fault_trampoline`,
+     `[TIB+0x638]`, the `[VDM_TIB+8]` class table, fault class 6) and **does not catch**.
+     That is now the single item between here and Doom running.
+   ▶ A self-contained alternative if the kernel work stalls: patch `CLI`/`STI` the way we
+     patch `INT nn`. It is one byte, so `CC` (INT3) is the only same-size trap — and a
+     blind byte scan is NOT safe (a `0xFA` inside an immediate, e.g. `mov ax,0x00fa`,
+     would be silently corrupted). It would need instruction boundaries, which we can get
+     dynamically: every PM event hands us an exact CS:EIP, and `v86interp.h` already has
+     a 16-bit decoder to sweep forward from it. Medium effort, no kernel RE.
+
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ WHAT SESSION 17 CLOSED ON THE WAY TO THAT WALL                               │
+└──────────────────────────────────────────────────────────────────────────────┘
+
+  Commits `60e7868`, `7ab1f0f`, `966b46d`, `52128d4` on `m9/completeness`.
+  selftest.com **8/8 on the rig** (checked three times, incl. with the final build);
+  off-VM **349/349**; check-imports clean; share left clean.
+
+  1. **The INT->BOP scan only covered ONE 64K window.** DOS/4GW allocates DOS memory,
+     READS A PM MODULE INTO IT, retypes the descriptor to code and jumps in — so that
+     module's `CD 21` was never patched, and a raw PM INT is an unreflectable #GP. Now
+     keyed by LINEAR address, and regions are patched **when the client declares them
+     CODE** (0009/000C). The client's own timing, and the trace proves it is right:
+     allocate → read → retype → jump.
+  2. **`ES` must be a selector for the PSP** (100h limit), and the PSP's environment
+     pointer must be **converted to a selector**. Both from the DPMI 0.9 text, confirmed
+     by the client: `mov bx,es:[0x2c] / mov es,bx`.
+  3. **The client's own PM INT 21h handler now runs.** `AX=FF80h` was never a DOS call —
+     it is DOS/4GW talking to itself. Every answer we invented was wrong.
+  4. **INT 31h 0302**, **INT 21h AH=4Ah/25h/35h/06h/44h/49h/33h** from PM, **0202/0203**
+     (45 calls), **0600-0604/0701/0702**, coherent **0500** page counts.
+  5. ★ **OUR OWN BUG, four sessions of symptom:** PM `AH=48h` returned the selector in AX
+     **and DX**. DOS/4GW keeps the request's BYTE SIZE in DX across the call. **A
+     service's register footprint is part of its contract.**
+  6. ★ **`IsBadReadPtr` is banned in PM paths** — it faults on purpose, and our VEH
+     treated any flat-CS fault as a reflected INT 31h, rewrote our own thread's context
+     and resumed it. Use `host_readable()` (VirtualQuery). *A probe that faults on
+     purpose is not a guard.*
+
 ═══════════════════════════════════════════════════════════════════════════════
 
 ╔══════════════════════════════════════════════════════════════════════════════╗
@@ -101,9 +182,13 @@
 
   ```
   # pmbp.txt on the share -- one line per breakpoint, absent file = zero cost
-  <hex LINEAR addr to break on>   [hex LINEAR addr to DUMP on hit]   # comment
-  00018d62 00005ca0   # 0x8f:36d2 MOV ES,BX -- and show me what ES points at
+  <hex LINEAR addr>  [hex LINEAR addr to DUMP on hit]  [bytes to SKIP]   # comment
+  00018d62 00005ca0            # break, and show me what ES points at
+  00011ad2 00000000 00000001   # break, and STEP OVER the 1-byte instruction
   ```
+  The SKIP column turns a breakpoint into a one-instruction patch, which is how you
+  answer "would the client survive if this instruction simply did not happen?" without
+  a rebuild. It is what proved the `STI` wall above.
   On hit it logs the full register file, SS:SP, the top of stack, the optional
   memory dump, then **restores the displaced bytes and leaves EIP alone** so the
   real instruction runs and the client carries on. One-shot: a loop reports its
@@ -113,6 +198,14 @@
     client and change every time you halve the interval; a rebuild-and-deploy per
     guess is what makes people stop bisecting and start speculating. **Twelve
     breakpoints across Doom's dead stretch, ONE run, and the killer was named.**
+  ⚠ **A BREAKPOINT HAS A TWO-BYTE FOOTPRINT.** It displaces the byte AFTER the one you
+    name, so one placed on a ONE-BYTE instruction eats its neighbour. Session 17 put one
+    on a `c3` (ret) whose next byte was the entry point of a routine called two
+    instructions earlier -- `call` landed on the second half of the BOP, decoded as
+    `LES DX,[BX+0x8b]`, read past the segment limit and killed the VDM. The log presented
+    that as the client's death, in the middle of a bisection hunting exactly that.
+    Overlapping breakpoints are now REFUSED and the footprint is printed; the rest is on
+    you: put them on instructions of at least two bytes.
   ⚠ **DELETE `pmbp.txt` FROM THE SHARE WHEN YOU ARE DONE.** A stale one silently
     alters every later run — same class of trap as the stale `TN` and the
     `opltrace.flag`. (Session 17 left the share clean; verified.)
