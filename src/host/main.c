@@ -934,7 +934,9 @@ static DWORD g_async_pm_eip = 0, g_async_pm_esp = 0, g_async_pm_efl = 0;
 static WORD  g_async_pm_cs  = 0, g_async_pm_ss  = 0;
 static DWORD g_async_pm_inj = 0;             /* delivered                              */
 static DWORD g_async_pm_bail2 = 0;           /* PM async attempts that did not commit  */
-static DWORD g_pm_watch       = 0;           /* linear address to watch, 0 = none       */
+#define DPMI_WATCH_MAX 4
+static DWORD g_pm_watch[DPMI_WATCH_MAX];     /* linear addresses to watch (whitespace-separated) */
+static int   g_pm_nwatch      = 0;
 static DWORD g_pm_irq0_done   = 0;           /* cooperative injections that reached an IRET */
 static int async_inject_irq(unsigned irq)
 {
@@ -5721,9 +5723,11 @@ static int dpmi_inject_pm_irq(dos_machine_t *mp, volatile BYTE *tib, unsigned iv
     WORD  sDS=(WORD)VDM_REG(tib,VTIB_DS), sES=(WORD)VDM_REG(tib,VTIB_ES);
     WORD  sFS=(WORD)VDM_REG(tib,VTIB_FS), sGS=(WORD)VDM_REG(tib,VTIB_GS);
     int prev_vi = g_dpmi_vi; unsigned ph; int done = 0;
-    DWORD wpre = 0;
-    if (g_pm_watch) { const BYTE *wp0 = (const BYTE *)(ULONG_PTR)g_pm_watch;
-                      if (host_readable(wp0, 4)) wpre = *(const DWORD *)wp0; }
+    DWORD wpre[DPMI_WATCH_MAX]; int wi;
+    for (wi = 0; wi < g_pm_nwatch; ++wi) {
+        const BYTE *wp0 = (const BYTE *)(ULONG_PTR)g_pm_watch[wi];
+        wpre[wi] = host_readable(wp0, 4) ? *(const DWORD *)wp0 : 0xDEADDEADu;
+    }
 
     dpmi_ensure_pmret_sel();
     if (g_pmret_sel == 0) return 0;
@@ -5830,12 +5834,12 @@ static int dpmi_inject_pm_irq(dos_machine_t *mp, volatile BYTE *tib, unsigned iv
       cq = zput(cq, "  IRQ0<-PM INT done="); cq = zhex(cq, (DWORD)done);
       cq = zput(cq, " phases="); cq = zhex(cq, (DWORD)ph);
       cq = zput(cq, " ticks="); cq = zhex(cq, ++g_pm_irq0_done);
-      if (g_pm_watch) {
-          const BYTE *wp = (const BYTE *)(ULONG_PTR)g_pm_watch;
-          cq = zput(cq, " watch=0x");
-          if (!host_readable(wp, 4)) cq = zput(cq, "<unreadable>");
+      for (wi = 0; wi < g_pm_nwatch; ++wi) {
+          const BYTE *wp = (const BYTE *)(ULONG_PTR)g_pm_watch[wi];
+          cq = zput(cq, " ["); cq = zhex(cq, g_pm_watch[wi]); cq = zput(cq, "]=0x");
+          if (!host_readable(wp, 4)) cq = zput(cq, "????????");
           else cq = zhex(cq, *(const DWORD *)wp);
-          cq = zput(cq, " (was 0x"); cq = zhex(cq, wpre); cq = zput(cq, ")");
+          cq = zput(cq, "<-0x"); cq = zhex(cq, wpre[wi]);
       }
       cq = zput(cq, "\r\n"); log_append(LOG_PATH, cb2, cq); serial_out(cb2, cq); }
     /* restore the interrupted PM context verbatim + unmask */
@@ -6288,6 +6292,16 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     dos_psp_build(NULL, DOS_PSP_SEG, DOS_ENV_SEG, DOS_MEM_TOP);
     dos_env_build(NULL, DOS_ENV_SEG, progpath[0] ? progpath : "C:\\PROGRAM.COM");  /* M2.5: env */
     dos_cmdtail_build(NULL, DOS_PSP_SEG, args);                                    /* M2.5: args */
+    /* ► DUMP THE TAIL AS THE GUEST WILL SEE IT. Passing ANY argument makes DOS/4GW
+         quit before printing a single character, with a DPMI/INT 21h trace identical
+         to a working run for all 617 of its lines -- so the branch it takes is on
+         MEMORY, and this is the memory. Length byte, the bytes, and the terminator. */
+    { volatile BYTE *pspb = (volatile BYTE *)((DWORD)DOS_PSP_SEG << 4);
+      unsigned ti;
+      p = zput(p, "STAGE2: cmdtail len=0x"); p = zhexb(p, pspb[0x80]);
+      p = zput(p, " [");
+      for (ti = 0; ti < 16; ++ti) { p = zhexb(p, pspb[0x81 + ti]); p = zput(p, " "); }
+      p = zput(p, "]\r\n"); }
     dos_int21_init(&m, dos_mcb_init(NULL));
     /* GH #38: plant the AH=65h character tables in the DOS-resident block. */
     { volatile BYTE *ct = (volatile BYTE *)(DOS_CTAB_SEG << 4); unsigned k;
@@ -7133,18 +7147,24 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                                           FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
                                           OPEN_EXISTING, 0, NULL);
                   if (hw != INVALID_HANDLE_VALUE) {
-                      char wb2[32]; DWORD wn = 0, k2; g_pm_watch = 0;
+                      char wb2[128]; DWORD wn = 0, k2 = 0;
                       ReadFile(hw, wb2, sizeof wb2 - 1, &wn, NULL); CloseHandle(hw);
-                      for (k2 = 0; k2 < wn; ++k2) {
-                          char c = wb2[k2];
-                          int d = (c >= '0' && c <= '9') ? c - '0'
-                                : (c >= 'a' && c <= 'f') ? c - 'a' + 10
-                                : (c >= 'A' && c <= 'F') ? c - 'A' + 10 : -1;
-                          if (d < 0) break;
-                          g_pm_watch = (g_pm_watch << 4) | (DWORD)d;
+                      while (k2 < wn && g_pm_nwatch < DPMI_WATCH_MAX) {
+                          DWORD v = 0; int dig = 0;
+                          while (k2 < wn) {
+                              char c = wb2[k2];
+                              int d = (c >= '0' && c <= '9') ? c - '0'
+                                    : (c >= 'a' && c <= 'f') ? c - 'a' + 10
+                                    : (c >= 'A' && c <= 'F') ? c - 'A' + 10 : -1;
+                              if (d < 0) break;
+                              v = (v << 4) | (DWORD)d; ++dig; ++k2;
+                          }
+                          if (dig) g_pm_watch[g_pm_nwatch++] = v; else ++k2;
                       }
-                      p = zput(p, "DPMI: pmwatch.txt -> watching linear 0x");
-                      p = zhex(p, g_pm_watch); p = zput(p, "\r\n");
+                      p = zput(p, "DPMI: pmwatch.txt -> ");
+                      { int wi; for (wi = 0; wi < g_pm_nwatch; ++wi) {
+                            p = zput(p, "0x"); p = zhex(p, g_pm_watch[wi]); p = zput(p, " "); } }
+                      p = zput(p, "\r\n");
                       log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
                   } }
                 g_pm_noirq = (GetFileAttributesA(PMNOIRQ_PATH) != INVALID_FILE_ATTRIBUTES);
