@@ -31,7 +31,11 @@ if not exist %N% md %N%
 copy /y "%SH%bm\ntvdmhost.exe" %N%\ >nul
 copy /y "%SH%bm\dosstub.com" "%G%\" >nul
 reg add "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\ntvdm.exe" /v Debugger /t REG_SZ /d "C:\ntvdmex\ntvdmhost.exe" /f >nul
-echo %G%\%EXE%> %N%\target.txt
+rem -- optional extra command line for the game, from doomargs.txt on the share
+rem    (e.g. "-nosound"). Absent file = no arguments, exactly as before.
+set ARGS=
+if exist "%SH%doomargs.txt" for /f "delims=" %%a in ('type "%SH%doomargs.txt"') do set ARGS=%%a
+>%N%\target.txt echo %G%\%EXE% %ARGS%
 echo.> %N%\autoexit
 cd /d "%G%"
 start /wait /d "%G%" "" "%G%\dosstub.com"
