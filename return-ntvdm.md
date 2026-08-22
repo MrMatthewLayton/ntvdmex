@@ -193,14 +193,49 @@
   completes; entry #2 delivers one and the VDM is gone — silently, no fault to our
   VEH, no watchdog line, nothing after the log's last byte.
 
-  ▶ **THAT SIGNATURE IS GH #18's, AND THAT IS THE HONEST NEXT STEP.** A silent VDM
-    termination with no reflected exception is exactly the class this project has
-    hit before (runs 20-34). Every cheap instrument has now been built and used —
-    watch addresses, guest breakpoints, injection and completion logging, offline
-    disassembly of the ISR — and none of them can see this, because the process is
-    killed rather than faulted. **Make the fault observable before guessing again:**
-    finish the `+0x638` PM-fault trampoline so a raw PM trap is reflected instead of
-    terminating the VDM. Until then any further theory here is unfalsifiable.
+  ▶ ⚠⚠ **DO NOT "GO AND DO GH #18" — IT IS A PROVEN DEAD END AND I PROPOSED IT
+    ANYWAY.** An earlier version of this section said the signature was GH #18's and
+    the next step was to finish the `+0x638` trampoline. **That was written without
+    re-reading run 71, which already settled it with a kernel debugger attached:**
+    ```
+      the kernel handles a raw (non-BOP) PM #GP by SILENTLY TEARING THE VDM DOWN --
+      a *handled* path, so it neither reflects (never reaches 0x4f67f8) nor raises an
+      unhandled exception (no bugcheck, no KD break).      -- run 71, VM-confirmed
+    ```
+    The `+0x638` machinery is correct AND satisfied (runs 65-67 set the stack
+    selector, the class table, `[VDM_TIB+8]`, the `+0x634` block) and the reflect
+    still never fires, because the fault never gets that far. **Nothing about the
+    trampoline will make this fault visible.** See also kernel RE session 8.
+
+  ▶ **THE CONTROL THAT ACTUALLY NARROWED IT (do this kind of thing first).**
+    `qimode.txt` = `40` sets `qi_susp=0` and disables asynchronous delivery:
+    ```
+       async ON    5 ticks delivered, then the VDM is torn down silently
+       async OFF   0 ticks, guest wedges in its spin, watchdog ends it CLEANLY
+    ```
+    **So the killer is the ASYNC MECHANISM ITSELF** — SuspendThread /
+    GetThreadContext / SetThreadContext against a thread executing guest code
+    through an LDT code selector, in-process, after a far jmp the kernel knows
+    nothing about. Not the ISR (no HLT and no INT3 anywhere in the wrapper, the
+    shared IRQ body or the timer callback — scanned, zero), not the tick count, not
+    the nesting bookkeeping, not VIP (every ASYNC-PM line logged `efl=0x246`, which
+    has neither VIF nor VIP set — that idea was refuted by the log before it was
+    tried).
+
+  ▶ **WHERE THAT LEAVES IT.** The V86 arm of `async_inject_irq()` has always been
+    safe because the kernel OWNS a V86 guest's context. A protected-mode guest we
+    entered by far-jmp is not something the kernel is tracking, so rewriting its
+    trap frame is unsupported territory — and it survives the first entry and dies
+    on a later one, which is what "unsupported" usually looks like.
+    Candidate directions, none yet tested:
+      * make the guest LEAVE PM cooperatively instead of being preempted — e.g.
+        plant a temporary BOP in the guest's spin so it exits on its own, service
+        the tick, and restore the bytes. The patch map already does exactly this
+        for INT sites and is proven; nothing is rewritten behind the kernel's back.
+      * or drive the guest's PM execution in bounded slices so control returns
+        without preemption at all.
+    ▶ The first is much closer to machinery that already works, and `pmbp.txt`
+      already plants and restores bytes in guest code safely.
 
 ┌──────────────────────────────────────────────────────────────────────────────┐
 │ ★ A SEPARATE, SHARP, REPRODUCIBLE BUG FOUND ON THE WAY: ARGUMENTS             │
