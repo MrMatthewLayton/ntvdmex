@@ -1021,7 +1021,17 @@ static int async_inject_irq(unsigned irq)
            completely silent: the cooperative path prints its entry and exit, so a log that
            simply STOPS after a clean tick points here by elimination, which is not the same
            as evidence. */
-        if (g_async_pm_inj + g_async_pm_bail2 <= 40) {
+        /* ► LOG EVERY SUCCESSFUL INJECTION, CAP ONLY THE BAILS. The 40-entry cap
+             counted bails and successes together, and the bails (why=9, the arm
+             hold-off) burn it long before the interesting part: in a Doom run the
+             last logged async sits at line 42024 of 55124, so the injections around
+             the death were invisible. Every logged one interrupts the guest at
+             0x03ae53dc -- the millisecond-delay spin -- which is the SAFE case. The
+             question is whether a later one lands somewhere else, e.g. inside
+             R_ExecuteSetViewSize's long arithmetic, which is the only stretch where
+             the guest runs thousands of instructions with no BOP. Successes are rare
+             (one per delivered tick at most), so this is not a firehose. */
+        if (ok || g_async_pm_bail2 <= 40) {
             char pb[224], *pq = pb;
             pq = zput(pq, "ASYNC-PM vec=0x08 ok=0x"); pq = zhex(pq, (DWORD)ok);
             pq = zput(pq, " why="); pq = zhex(pq, (DWORD)g_async_why);
