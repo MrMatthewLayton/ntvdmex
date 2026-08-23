@@ -3224,6 +3224,61 @@ static LONG CALLBACK dpmi_crash_veh(EXCEPTION_POINTERS *ep)
         p = zput(p, " b@site="); p = zdump(p, ib, 4); p = zput(p, "]");
         { const BYTE *sent = (const BYTE *)(ULONG_PTR)0x1600;   /* guest sentinel DS:0x600 */
           p = zput(p, " sentinel@0x1600="); p = zdump(p, sent, 4); }
+        /* ── WHAT ACTUALLY FAULTED. THIS ARM NEVER SAID, AND THAT IS THE WHOLE GAP. ──
+             Everything above is an INTERPRETATION: it ASSUMES the fault is a kernel-
+             reflected `INT nn`, reads the vector from [code_base+EDX] and answers it as
+             a DPMI call -- then RESUMES the guest. If the assumption is wrong the guest
+             carries on with EAX/EFLAGS/CS/SS rewritten and instructions silently skipped,
+             and the log still reads like a serviced DPMI call. Under `pmkernel.flag` this
+             arm fires once per PM entry and the client's `INT 31h 0301` then finds its
+             RMCS half-written -- with no way, from this log, to tell whether that is a
+             reflected INT we answered wrongly, our own `C4 C4` BOP raising #UD in PM, or
+             a genuine access violation. So print the primitives, not the interpretation:
+             the exception CODE, the address the KERNEL blames, its AV read/write
+             parameters, the bytes at the faulting EIP, and the TIB's own idea of where
+             the guest is -- because a CONTEXT that disagrees with the TIB is not the
+             guest's CONTEXT at all. Cheap: one line, on a path that already logs. */
+        p = zput(p, " exc=0x"); p = zhex(p, er->ExceptionCode);
+        p = zput(p, " at=0x"); p = zhex(p, (DWORD)(ULONG_PTR)er->ExceptionAddress);
+        if (er->ExceptionCode == EXCEPTION_ACCESS_VIOLATION && er->NumberParameters >= 2) {
+            p = zput(p, " av{op=0x");  p = zhex(p, (DWORD)er->ExceptionInformation[0]);
+            p = zput(p, " addr=0x");   p = zhex(p, (DWORD)er->ExceptionInformation[1]);
+            p = zput(p, "}");
+        }
+        { const BYTE *fb = (const BYTE *)(ULONG_PTR)(g_dpmi_code_base + (cx->Eip & 0xFFFF));
+          p = zput(p, " b@eip="); p = zdump(p, fb, 6); }
+        p = zput(p, " ctx{ss:esp=0x"); p = zhex(p, cx->SegSs); p = zput(p, ":0x"); p = zhex(p, cx->Esp);
+        p = zput(p, " ds=0x"); p = zhex(p, cx->SegDs); p = zput(p, " es=0x"); p = zhex(p, cx->SegEs);
+        p = zput(p, " edi=0x"); p = zhex(p, cx->Edi); p = zput(p, "}");
+        if (g_tib_dbg) {
+            volatile BYTE *t = g_tib_dbg;
+            p = zput(p, " tib{cs:eip=0x"); p = zhex(p, VDM_REG(t, VTIB_CS) & 0xFFFF);
+            p = zput(p, ":0x"); p = zhex(p, VDM_REG(t, VTIB_EIP));
+            p = zput(p, " eax=0x"); p = zhex(p, VDM_REG(t, VTIB_EAX));
+            p = zput(p, " edx=0x"); p = zhex(p, VDM_REG(t, VTIB_EDX)); p = zput(p, "}");
+        }
+        /* ── IS THIS A REFLECTED `INT nn` AT ALL? ASK THE INSTRUCTION, NOT THE ARM. ──
+             Measured under `pmkernel.flag` (build/pmk5.log, 8 hits, one per PM entry):
+             SIX carry exc=0xC0000005 and TWO exc=0xC000001E, and the bytes at the
+             faulting EIP decode to plain stores -- `mov [0x600],ax`, `mov [0x604],dx`,
+             `mov word [0x49a],0x0100` -- not to `CD nn`. They are FAULTS, and answering
+             a fault as "INT 31h, unsupported function" rewrites EAX and CF, forces CS
+             and SS, and resumes the guest corrupted, once per entry. That is why
+             dpmitest.com's `INT 31h 0301` finds a half-written RMCS: the client's own
+             stores are being interleaved with our damage.
+             The store DOES land when re-executed -- the sentinel at 0x1600 goes 00->01
+             across hit #2 -- so the correct response to a fault here is to put the
+             guest's LDT selectors back (the CONTEXT arrives with flat CS=0x1B/SS=0x23,
+             so resuming without that dies instantly) and resume, touching NOTHING else.
+             Service ONLY what is provably an INT: `CD nn` at the faulting EIP. */
+        { const BYTE *fi = (const BYTE *)(ULONG_PTR)(g_dpmi_code_base + (cx->Eip & 0xFFFF));
+          if (fi[0] != 0xCD) {
+              p = zput(p, " -> FAULT, not an INT: resuming untouched");
+              p = zput(p, "\r\n");
+              log_append(LOG_PATH, cb, p); serial_out(cb, p);
+              cx->SegCs = 0x0F; cx->SegSs = 0x17;       /* guest selectors back; regs intact */
+              return EXCEPTION_CONTINUE_EXECUTION;
+          } }
         cx->EFlags &= ~1u;                              /* default: CF=0 (success)          */
         switch (func) {
         case 0x0400:                                    /* get DPMI version                 */
