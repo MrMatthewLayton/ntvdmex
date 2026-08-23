@@ -91,47 +91,53 @@
     it. `dpmitest`'s zero RMCS and `pmtick`'s death at entry 1 need another cause.
 
 ┌──────────────────────────────────────────────────────────────────────────────┐
-│ ★★★★ THE MECHANISM: A `+3` FAULT ON A 2-BYTE-FIRST-INSTRUCTION ENTRY         │
+│ ★★★★ FIXED (`6c6b5e8`): RESUME A PM FAULT AT THE **ENTRY** EIP               │
 └──────────────────────────────────────────────────────────────────────────────┘
 
-  **THE FAULT ADDRESS IS ALWAYS `entry+0` OR `entry+3`. NOTHING ELSE.** ~25 samples
-  across `dpmitest`, `pmtick`, `pmstep`, `pmt1a` (`build/pmk6`, `pmk7_pmtick`,
-  `pmk9_pmstep` + the bisect runs). `+3` is the length of the kernel's `C4 C4 nn`
-  BOP; ours is two bytes.
+  **THE ZERO RMCS IS CLOSED.** `dpmitest.com` under `pmkernel.flag`:
+  ```
+     callRM 0x0100:0x0277                      (was callRM 0x0000:0x0000)
+     "0301 real-mode far-call OK (sentinel BEEF)!"   printed FROM PROTECTED MODE
+     INT 31h sequence now 0400 0100 0205 0204 0900 0901 0300 0301
+        -- exactly the client source; three of these used to arrive with a
+           corrupted AX (0001, 0208, 0902)
+  ```
 
-  **AND THAT IS THE BUG, because `entry+3` is only sometimes an instruction
-  boundary:**
-  ```
-     first instruction 3 bytes -> entry+3 IS the boundary (usually the BOP)
-                                  -> the VEH resumes correctly -> HARMLESS
-     first instruction 2 bytes -> entry+3 is MID-INSTRUCTION
-                                  -> the VEH resumes the guest INSIDE an opcode
-  ```
-  Every observation fits, including the ones that looked unrelated:
-  ```
-     pmtick   entry 1  `8c d8`(2) -> fault 0x135 mid-insn  -> DIES
-     dpmitest entry 3  `b3 1c`(2) -> fault 0x155 mid-insn  -> survives, but the
-              resumed `04 02` is `add al,2`: AX 0x0204 -> 0x0206 -> 0x0208, i.e.
-              THE WRONG AX AT THE NEXT INT 31h. That is how the RMCS gets half
-              written and 0301 reads zeros. Item 1 and this are ONE bug.
-     pmstep / pmcall / pmt1a / pmsubint -- no entry ever combined a 2-byte first
-              instruction WITH a +3 fault, so all four COMPLETE.
-  ```
-  ⚠ **MY "CONTROLLED" CLIENT DID NOT CONTROL THE VARIABLE THAT MATTERED.** pmstep was
-    built to discriminate four offset rules and it did — but it dodged the bug,
-    because whether an entry gets `+0` or `+3` is not something the client chooses.
-    **What selects `+0` vs `+3` is still UNKNOWN.** In pmstep it alternated almost
-    perfectly; in dpmitest it did not. Do not assume alternation.
+  **WHAT IT WAS.** The kernel's exception record reports a fault EIP that is simply
+  **not reliable**, and the VEH was resuming there.
+  ⚠ **THE "entry+0 OR entry+3" RULE IN THE HISTORY BELOW IS WRONG — IGNORE IT.**
+    `pmal.com` entry 1 is `mov ax,0x4C00` at `0x144` and faults at `0x145` (+1);
+    `pmstep.com`'s BYTE-IDENTICAL entry 1 faults at +3. Same code, different offset,
+    so the address is not a function of the instruction stream. **Three address
+    "patterns" in a row turned out to be sampling artifacts** — see the method note.
 
-  ▶ **THE NEXT EXPERIMENT** is a client whose PM entries are *all* 2-byte
-    instructions, so whichever entries draw `+3` must land mid-instruction. Predict
-    the death before running it.
-  ▶ **THE FIX CANDIDATE:** the VEH must not resume at `cx->Eip` unconditionally. The
-    host knows the EIP it handed to `VdmStartExecution`; `v86interp.h` can already
-    decode instruction lengths, so it can tell whether `cx->Eip` is a boundary
-    reachable from the entry and correct it when it is not. Resuming at the entry EIP
-    unconditionally is NOT safe — for the `+3`-is-a-BOP entries the first instruction
-    has already executed and would run twice.
+  **HOW IT WAS SETTLED — STOP INFERRING, MAKE THE GUEST COUNT.** `tools/dostest/pmal.asm`
+  fills the PM entry with `mov al,imm8` (2 bytes each, ascending) so **AL is a program
+  counter the fault log already prints**:
+  ```
+     fault 1   AX=0x0000 at E+0   AL untouched            -> nothing executed
+     fault 2   AX=0x090B at E+1   unchanged               -> `mov ax,0x4C00` had NOT run
+     pmtick    AX=0x0901 at E+3   AX would be 0x17        -> `mov ax,ds` had NOT run
+  ```
+  ⇒ **the guest has executed NOTHING when the fault arrives.** The fault is spurious,
+    raised at PM entry; only the reported EIP is wrong. So resume at the EIP the host
+    handed to `VdmStartExecution` — which it knows exactly.
+  ▶ This also retro-explains the `AH=4Ch` loose end: `pmstep` resumed at +3, which
+    **skipped** its `mov ax,0x4C00`, so the exit ran with the wrong AX. Same bug.
+  ```
+     pmal.com    died -> COMPLETES      pmstep.com  completes, and now exits cleanly
+     pmtick.com  died at entry 1 -> reaches the spin
+  ```
+
+  ⚠ **STILL OPEN, AND IT IS THE NEXT THING.** `pmtick` fails later as a RUNAWAY:
+    entry 2 (`enter 0x20b`, the tail of its `rm_tick`) returns at `cs:eip=0x3f:0x0080`
+    and a `STATUS_BREAKPOINT` appears at `0x3dc`, inside its own data. Its `ret` is
+    popping a bad stack. **So item 3 is STILL unanswered.**
+  ⚠ **THE FIX'S OWN LIMIT, stated honestly:** it is only proven safe where the guest
+    has executed nothing — true of every fault measured so far, but a fault genuinely
+    raised mid-entry would now RE-EXECUTE from the entry, and a re-executed `call`
+    would push a second return address and produce exactly the runaway above. **Check
+    that first.** `dpmitest` also shows a suspicious `ss:esp=0x17:0x01da` late on.
 
   **THE BISECT, for the record** (all under `pmkernel.flag`, all COMPLETE, so all
   four constructs are INNOCENT): `pmcall` (+ a PM `CALL`), `pmt1a` (+ `INT 1Ah`),
@@ -435,6 +441,13 @@
     mislabelled, and three carried the wrong AX. This is the SAME lesson as session
     18's "57 CD 21 sites" — *decode a sample of what you counted* — and it caught me
     again one session later, on my own instrument's output rather than a client's.
+  ▶ **(SESSION 19) I EXTRACTED THREE ADDRESS PATTERNS FROM FAULT LOGS AND ALL THREE
+    WERE ARTIFACTS** — "fixed +3", then "entry+0 or entry+3" (committed, then refuted
+    by the very next client), then the mid-instruction story. What finally worked was
+    not a better pattern but a DIFFERENT KIND OF DATA: make the guest carry a counter
+    (`pmal.asm` puts a program counter in AL) so the log reports GUEST PROGRESS rather
+    than an address I have to interpret. **When two readings of an address disagree,
+    stop reading addresses.**
   ▶ **(SESSION 19) WHEN THE SAMPLES ARE INCIDENTAL, CHOOSE THE CODE INSTEAD.** Ten
     fault addresses read off whatever the clients happened to have at those offsets
     fitted FOUR incompatible rules, and I picked the wrong one and wrote it into this
