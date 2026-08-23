@@ -13,6 +13,46 @@
   **Doom is NOT playable and does not reach the menu.**
 
 ┌──────────────────────────────────────────────────────────────────────────────┐
+│ ★★★★ DOOM: THE TICK COUNTER *DOES* ADVANCE. THE PROBLEM IS THROUGHPUT.       │
+└──────────────────────────────────────────────────────────────────────────────┘
+
+  Session 18 signed off with "NEXT = dump the tick counter at linear 0x03b68820,
+  don't theorise." Done (`pmwatch.txt` = `03b68820`, log `build/doom_s19_watch.log`):
+  ```
+     [03b68820]=0x00000002   0x00000003   0x00000004   0x00000005   0x00000006
+  ```
+  **Exactly one increment per injection. Delivery is sound AND the counter the guest
+  actually polls is being updated.** That whole family of doubt is now closed.
+
+  **AND THE GUEST NEVER LEAVES ITS SPIN.** Every injection interrupts Doom at the
+  IDENTICAL place — this repeats verbatim for all five:
+  ```
+     from 0x0187:0x03ae53dc   SS:ESP=0x18f:0x03bc5b64
+  ```
+  A real async interrupt of a running program lands at scattered addresses; this is a
+  program pinned in one loop. `0x03ae53dc` = obj1+`0x153dc`, which the landmark table
+  below already names: *"that spin: `cmp [0x28820],eax ; je`"* — the millisecond delay.
+
+  ⇒ **THE PROBLEM IS NOT DELIVERY, IT IS RATE.** Doom's delay waits `ms * scale / 1000`
+    ticks — about **480** for a 30 ms wait at the PIT rate it programs. We deliver
+    **one tick per SuspendThread/SetThreadContext round trip**, so at ~18 Hz a single
+    30 ms sleep would take ~26 seconds. Even with the teardown fixed Doom would be
+    unusable. **Fixing the teardown alone is not enough — this is the real wall.**
+  ▶ The designed answer already exists and does not fire: the synchronous batch drain
+    (`DPMI_IRQ0_BATCH`, `dpmi_inject_pm_irq`) runs only off the catcher BOP and is
+    gated by the saturating latch (`IRQ0_PENDING_MAX=4`), which is why session 18
+    measured "batch 64 -> 5 ticks, batch 3 -> 4" and concluded coalescing changed
+    nothing. **It changed nothing because it never ran.** Make the batch deliver what
+    the PIT says is OWED (the `pit_gaps` catch-up shape already in the host), not what
+    the 4-deep latch happens to hold.
+  ⚠ Ruled out cheaply this session: a host-side access violation in the injector's
+    `poked()` of the guest stack (no writability check exists) — **zero `DPMI FATAL`
+    in the whole run**, so the poke is not faulting. Don't spend a session there.
+  ⚠ A silently torn-down run writes NO `STAGE2:` block, so `pit_reload` and the other
+    counters are unavailable from these logs. Get the programmed PIT rate another way
+    before sizing the fix.
+
+┌──────────────────────────────────────────────────────────────────────────────┐
 │ ★★★★ SESSION 19 VERDICT: pmkernel IS NOT THE ROAD TO DOOM. MEASURED.         │
 └──────────────────────────────────────────────────────────────────────────────┘
 
