@@ -7848,15 +7848,54 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                         DWORD fcs  = *(volatile WORD  *)(tib + VTIB_FLT_SAVCS);
                         DWORD feip = *(volatile DWORD *)(tib + VTIB_FLT_SAVEIP);
                         DWORD fss3 = *(volatile DWORD *)(tib + VTIB_FLT_SAV3);
-                        p = zput(p, "GH#18: PM-FAULT REFLECTED to trampoline -- saved CS:EIP=0x");
+                        /* ⚠ THESE TWO FIELDS ARE **NOT** CS:EIP, WHATEVER THEIR NAMES SAY.
+                             Measured (session 19): the pair reads 0x00c7:0x...6f1e while the
+                             guest's CS was 0x6f and its SS:ESP was 0x00c7:0x...6f14 -- i.e.
+                             SS and ESP+0xa. Proved by accident and decisively: clearing the
+                             junk top half of ESP changed this "EIP" from 0xb33b6f1e to
+                             0x00006f1e. A field that tracks ESP is not EIP. The raw window
+                             below shows the layout; `sav3` (tib+0x640, 0x36af here) is the
+                             likelier faulting EIP. Do not resume anything on fcs:feip until
+                             the slots are calibrated against a fault at a KNOWN address --
+                             pmfault's HLT/INT3 cannot do it (they die without reflecting),
+                             so that needs a new variant that loads a bad selector. */
+                        p = zput(p, "GH#18: PM-FAULT REFLECTED to trampoline -- savSS:savESP=0x");
                         p = zhex(p, fcs); p = zput(p, ":0x"); p = zhex(p, feip);
-                        p = zput(p, " sav3=0x"); p = zhex(p, fss3);
+                        p = zput(p, " (MISNAMED VTIB_FLT_SAVCS/SAVEIP) sav3=0x"); p = zhex(p, fss3);
                         p = zput(p, " nest=0x"); p = zhex(p, *(volatile WORD *)(tib + VTIB_FLT_NEST));
+                        /* ► READ THE LAYOUT OFF THE TIB INSTEAD OF TRUSTING THE OFFSETS.
+                             VTIB_FLT_SAVCS/SAVEIP were reverse-engineered in an earlier
+                             session, and what they return does not look like a code
+                             address: the argument-run fault reported CS=0x00c7 -- which is
+                             the guest's SS, not its CS (0x6f) -- and EIP=0xb33b6f1e, which
+                             is that run's ESP (0xb33b6f14) plus 0xa. Dump the window so the
+                             real slots can be identified by looking for the KNOWN CS and a
+                             plausible EIP, rather than by guessing a frame shape. */
+                        { const BYTE *fw = (const BYTE *)(ULONG_PTR)(tib + 0x630);
+                          p = zput(p, " tib[630..64f]=");
+                          if (!host_readable(fw, 0x20)) p = zput(p, "<unreadable>");
+                          else                          p = zdump(p, fw, 0x20); }
+                        p = zput(p, " liveCS=0x"); p = zhex(p, VDM_REG(tib, VTIB_CS) & 0xFFFF);
+                        p = zput(p, " liveSS=0x"); p = zhex(p, VDM_REG(tib, VTIB_SS) & 0xFFFF);
+                        p = zput(p, " liveESP=0x"); p = zhex(p, VDM_REG(tib, VTIB_ESP));
                         p = zput(p, " -- REAL-CPU PM #GP reflect WORKS\r\n");
                         log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
-                        /* Servicing a real fault (emulate/skip the instruction, then resume at
-                           the saved CS:EIP) is the follow-on; for run 59 the reflect firing IS
-                           the deliverable, so stop the client cleanly here. */
+                        /* ⚠⚠ **THIS `break` IS WHY "DOS/4GW QUITS" ON A COMMAND-LINE ARGUMENT.**
+                             It was right for run 59, whose deliverable was the reflect FIRING.
+                             But it means ANY real PM fault ends the run with a tidy
+                             `STAGE2: exec loop exited -> flushing` and `STAGE2: complete`,
+                             which reads exactly like the client choosing to exit -- and that
+                             is how the argument bug was described for two sessions. The guest
+                             is not quitting; we are stopping it.
+                             ▶ THE FIX IS DPMI-STANDARD AND THE PLUMBING EXISTS: a client
+                               registers exception handlers with INT 31h 0203, and DOS/4GW
+                               registers THIRTEEN of them (measured). A reflected fault should
+                               be dispatched to g_pm_exc[n] for its exception number, exactly
+                               as dpmi_dispatch_to_pm_handler() does for interrupts; only if
+                               none is registered should the run end -- and then with a
+                               message saying so, not a clean `complete`.
+                               Blocked on identifying the exception number and the faulting
+                               CS:EIP -- see the misnaming note above. */
                         break;
                     }
                     /* GH#18 run 72: a real-CPU PROTECTED-MODE I/O insn (IN/OUT) reflects as
