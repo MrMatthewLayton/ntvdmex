@@ -90,20 +90,53 @@
     everything dies" is TOO STRONG — I wrote it, and a fifty-line client disproves
     it. `dpmitest`'s zero RMCS and `pmtick`'s death at entry 1 need another cause.
 
-  **THE FAULT RULE, by controlled experiment.** Ten samples fitted four incompatible
-  rules at once, so `tools/dostest/pmstep.asm` puts a CHOSEN sequence at the PM entry
-  (2-byte `jcc`, three 3-byte `mov`s, then the first store) making the four rules
-  predict four different addresses. I registered `E+3` — a fixed advance matching the
-  kernel's `C4 C4 nn` BOP against our two-byte one — **and it was wrong.**
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ ★★★★ THE MECHANISM: A `+3` FAULT ON A 2-BYTE-FIRST-INSTRUCTION ENTRY         │
+└──────────────────────────────────────────────────────────────────────────────┘
+
+  **THE FAULT ADDRESS IS ALWAYS `entry+0` OR `entry+3`. NOTHING ELSE.** ~25 samples
+  across `dpmitest`, `pmtick`, `pmstep`, `pmt1a` (`build/pmk6`, `pmk7_pmtick`,
+  `pmk9_pmstep` + the bisect runs). `+3` is the length of the kernel's `C4 C4 nn`
+  BOP; ours is two bytes.
+
+  **AND THAT IS THE BUG, because `entry+3` is only sometimes an instruction
+  boundary:**
   ```
-     enter 0x125 fault 0x125 ret 0x138      enter 0x13a fault 0x13d ret 0x13d
-     enter 0x13f fault 0x13f ret 0x144      enter 0x146 fault 0x149 ret 0x149
-     enter 0x14b fault 0x14b ret 0x150      enter 0x152 fault 0x155 ret 0x155
+     first instruction 3 bytes -> entry+3 IS the boundary (usually the BOP)
+                                  -> the VEH resumes correctly -> HARMLESS
+     first instruction 2 bytes -> entry+3 is MID-INSTRUCTION
+                                  -> the VEH resumes the guest INSIDE an opcode
   ```
-  The fault is always at **either the entry EIP or the BOP the entry returns on.**
-  Nothing lands mid-instruction. The "+3" cases were entries that ran ONE 3-byte
-  instruction, so entry+3 simply WAS the BOP — a sampling artifact of reading
-  incidental client code.
+  Every observation fits, including the ones that looked unrelated:
+  ```
+     pmtick   entry 1  `8c d8`(2) -> fault 0x135 mid-insn  -> DIES
+     dpmitest entry 3  `b3 1c`(2) -> fault 0x155 mid-insn  -> survives, but the
+              resumed `04 02` is `add al,2`: AX 0x0204 -> 0x0206 -> 0x0208, i.e.
+              THE WRONG AX AT THE NEXT INT 31h. That is how the RMCS gets half
+              written and 0301 reads zeros. Item 1 and this are ONE bug.
+     pmstep / pmcall / pmt1a / pmsubint -- no entry ever combined a 2-byte first
+              instruction WITH a +3 fault, so all four COMPLETE.
+  ```
+  ⚠ **MY "CONTROLLED" CLIENT DID NOT CONTROL THE VARIABLE THAT MATTERED.** pmstep was
+    built to discriminate four offset rules and it did — but it dodged the bug,
+    because whether an entry gets `+0` or `+3` is not something the client chooses.
+    **What selects `+0` vs `+3` is still UNKNOWN.** In pmstep it alternated almost
+    perfectly; in dpmitest it did not. Do not assume alternation.
+
+  ▶ **THE NEXT EXPERIMENT** is a client whose PM entries are *all* 2-byte
+    instructions, so whichever entries draw `+3` must land mid-instruction. Predict
+    the death before running it.
+  ▶ **THE FIX CANDIDATE:** the VEH must not resume at `cx->Eip` unconditionally. The
+    host knows the EIP it handed to `VdmStartExecution`; `v86interp.h` can already
+    decode instruction lengths, so it can tell whether `cx->Eip` is a boundary
+    reachable from the entry and correct it when it is not. Resuming at the entry EIP
+    unconditionally is NOT safe — for the `+3`-is-a-BOP entries the first instruction
+    has already executed and would run twice.
+
+  **THE BISECT, for the record** (all under `pmkernel.flag`, all COMPLETE, so all
+  four constructs are INNOCENT): `pmcall` (+ a PM `CALL`), `pmt1a` (+ `INT 1Ah`),
+  `pmsubint` (+ `INT 1Ah` inside a subroutine behind register pushes). `pmnoirq` is
+  innocent too — `pmtick` dies with it absent as well.
 
   **`pmvehpass.flag` (new) settled the other half:** let a non-INT PM fault fall
   THROUGH the VEH and `VdmStartExecution` does NOT return it as an event — the run

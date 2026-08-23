@@ -23,6 +23,9 @@ nasm -f bin "$DIR/dpmiexe.asm"  -o "$DIR/dpmiexe.exe"      # GH#2: multi-segment
 nasm -f bin "$DIR/pmfault.asm"  -o "$DIR/pmfault.com"      # GH#18: raw PM-#GP reflect probe (run 59)
 nasm -f bin "$DIR/pmtick.asm"   -o "$DIR/pmtick.com"       # session 19: does the KERNEL deliver IRQ0 to a PM handler?
 nasm -f bin "$DIR/pmstep.asm"   -o "$DIR/pmstep.com"       # session 19: where does the one-fault-per-PM-entry land?
+nasm -f bin -dWITHCALL   "$DIR/pmstep.asm" -o "$DIR/pmcall.com"    # session 19 bisect: + a PM CALL          (completes)
+nasm -f bin -dWITHINT1A  "$DIR/pmstep.asm" -o "$DIR/pmt1a.com"     # session 19 bisect: + an INT 1Ah         (completes)
+nasm -f bin -dWITHSUBINT "$DIR/pmstep.asm" -o "$DIR/pmsubint.com"  # session 19 bisect: + INT 1Ah in a sub   (completes)
 nasm -f bin "$DIR/outprobe.asm" -o "$DIR/outprobe.com"     # GH#18: PM I/O-virtualization probe (run 72)
 nasm -f bin "$DIR/ioverify.asm" -o "$DIR/ioverify.com"     # GH#18: PM I/O VDD round-trip verify (run 73)
 nasm -f bin "$DIR/mode13.asm"   -o "$DIR/mode13.com"       # GH#18: PM VGA render slice (milestone #6)

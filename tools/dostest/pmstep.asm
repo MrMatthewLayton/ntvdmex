@@ -76,6 +76,31 @@ pm_entry:
     mov     bx, 0x2222              ; E+5
     mov     cx, 0x3333              ; E+8
     mov     [marker], ax            ; E+11  <- the first store
+; ---------------------------------------------------------------------------
+; BISECT pmstep (completes) -> pmtick (dies at PM entry 1). pmtick's entry 1 is
+; `mov ax,ds / mov [dsel],ax / call rm_tick` -- BEFORE its IRQ0 hook and before
+; its `sti`, so neither of those can be the trigger. pmstep already does a store
+; and survives. The one thing pmstep does NOT do is CALL: a push onto the 16-bit
+; PM stack, and stack width under the kernel path is a KNOWN hazard (the ESP
+; narrowing that took the spike from 1 entry to 8).
+; Assemble with -dWITHCALL to add exactly that and nothing else.
+; ---------------------------------------------------------------------------
+%ifdef WITHCALL
+    call    pm_sub                  ; the ONLY difference in the pmcall build
+%endif
+%ifdef WITHSUBINT
+    ; pmcall (CALL alone) and pmt1a (INT 1Ah alone) BOTH completed. pmtick has
+    ; them COMBINED -- an INT 1Ah inside a subroutine, behind register pushes --
+    ; and that combination was never built. This is pmtick's rm_tick, reduced.
+    call    pm_tickfn
+%endif
+%ifdef WITHINT1A
+    ; pmcall COMPLETED, so the CALL is innocent. Next delta: pmtick's entry 1
+    ; would have returned on the BOP for `int 0x1A` inside its rm_tick, and
+    ; pmstep/pmcall only ever use INT 21h. Add exactly that vector.
+    xor     ah, ah
+    int     0x1A
+%endif
     mov     dx, msg_inpm            ; the first BOP follows, ending the entry
     mov     ah, 0x09
     int     0x21
@@ -95,6 +120,26 @@ nodpmi:
     int     0x21
     mov     ax, 0x4C02
     int     0x21
+
+%ifdef WITHSUBINT
+pm_tickfn:
+    push    bx
+    push    cx
+    push    dx
+    xor     ah, ah
+    int     0x1A
+    mov     ax, dx
+    pop     dx
+    pop     cx
+    pop     bx
+    ret
+%endif
+
+%ifdef WITHCALL
+pm_sub:
+    inc     word [marker]
+    ret
+%endif
 
 entry:          dd 0
 marker:         dw 0
