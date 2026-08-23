@@ -224,7 +224,7 @@
 ═══════════════════════════════════════════════════════════════════════════════
 ██  STANDING REFERENCE — rig operations, instruments, landmarks, older traps.  ██
 ██  Everything below is still true; the narrative history has been pruned.     ██
-██  ⚠ "this session" in the material below means SESSION 17 or 15, not 18.     ██
+██  ⚠ "this session" below means SESSION 17 or 15 -- NOT 18, NOT 19.            ██
 ═══════════════════════════════════════════════════════════════════════════════
 ┌──────────────────────────────────────────────────────────────────────────────┐
 │ ★★ FOUR DEAD ENDS, EACH RULED OUT BY MEASUREMENT. DO NOT RE-SPEND A SESSION. │
