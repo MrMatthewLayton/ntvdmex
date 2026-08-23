@@ -19,6 +19,10 @@
      (`build/pmk5.log`, `build/pmk6.log`), and the old text below is kept only so
      the correction reads against it.
 
+  ⚠ **AND ITEM 1 BELOW IS ITSELF TOO STRONG — see "THE PER-ENTRY FAULT IS HARMLESS"
+     further down.** The faults are real and the measurements hold, but they do not
+     kill a client: `pmstep.com` completes under `pmkernel.flag`. Read both.
+
   **1. THE KERNEL PM PATH FAULTS ON ORDINARY GUEST MEMORY STORES.** Under
      `pmkernel.flag`, `dpmitest.com` takes **one unhandled fault per PM entry, eight
      of eight** — six `exc=0xC0000005`, two `exc=0xC000001E` — and the bytes at the
@@ -64,35 +68,58 @@
      ▶ The first line is worth having on its own: **the ceiling is now MEASURED, not
        just reasoned.** It was an argument from `POPFD` at CPL 3 and `VdmpCanDeliver`;
        now 36 ticks of real time pass with a hooked PM handler and nothing arrives.
-     ▶ The second line **collapses the fork.** Under the kernel the probe dies at PM
-       entry 1 — `VdmStartExecution` never returns, no watchdog line, no wind-down
-       (`build/pmk7_pmtick.log`) — before it ever reaches the hook. So the store
-       faults in item 1 are **not optional groundwork**; nothing can run long enough
-       to answer item 3 until they are fixed. Do item 1 first.
+     ▶ The second line: under the kernel the probe dies at PM entry 1 —
+       `VdmStartExecution` never returns, no watchdog line, no wind-down
+       (`build/pmk7_pmtick.log`) — before it ever reaches the hook.
+       ⚠ I first read that as "the store faults block everything, fix them first."
+         **That was wrong**, and `pmstep.com` completing under the same flag is the
+         refutation. The right next move is to **bisect pmstep → pmtick**, not to go
+         after the faults: two tiny clients, one completes and one dies, and the
+         difference between them is a subroutine call, an `INT 31h 0205` hook and a
+         `sti`. That is a couple of runs, and it answers item 3 as a side effect.
 
 ┌──────────────────────────────────────────────────────────────────────────────┐
-│ ★★ THE SHARPEST LEAD ON THE STORE FAULTS: A FIXED 3-BYTE ADVANCE             │
+│ ★★★★ THE PER-ENTRY FAULT IS HARMLESS, AND A CLIENT RUNS TO COMPLETION        │
 └──────────────────────────────────────────────────────────────────────────────┘
 
-  Across the ten faults in `build/pmk6.log` + `build/pmk7_pmtick.log`, tabulate the
-  fault address against the PM entry EIP:
+  **`pmstep.com` COMPLETES UNDER `pmkernel.flag`** — `STAGE2: complete`, printing
+  from protected mode, its store landing. Seven PM entries, one fault each, every
+  one swallowed by the VEH and harmless (`build/pmk9_pmstep.log`).
+  ⇒ **The one-fault-per-entry is NOT the wall.** Item 1 above still describes real
+    faults, but "the kernel PM path faults on ordinary stores and that is why
+    everything dies" is TOO STRONG — I wrote it, and a fifty-line client disproves
+    it. `dpmitest`'s zero RMCS and `pmtick`'s death at entry 1 need another cause.
+
+  **THE FAULT RULE, by controlled experiment.** Ten samples fitted four incompatible
+  rules at once, so `tools/dostest/pmstep.asm` puts a CHOSEN sequence at the PM entry
+  (2-byte `jcc`, three 3-byte `mov`s, then the first store) making the four rules
+  predict four different addresses. I registered `E+3` — a fixed advance matching the
+  kernel's `C4 C4 nn` BOP against our two-byte one — **and it was wrong.**
   ```
-     EIGHT land on a real instruction boundary.
-     TWO do not -- and they are EXACTLY the two whose first instruction is 2 bytes:
-        dpmitest entry 3   enter 0x152  `b3 1c`(2) -> 0x154   fault 0x155   (+3)
-        pmtick   entry 1   enter 0x132  `8c d8`(2) -> 0x134   fault 0x135   (+3)
-     Both land at entry+3, i.e. ONE BYTE PAST the next boundary.
+     enter 0x125 fault 0x125 ret 0x138      enter 0x13a fault 0x13d ret 0x13d
+     enter 0x13f fault 0x13f ret 0x144      enter 0x146 fault 0x149 ret 0x149
+     enter 0x14b fault 0x14b ret 0x150      enter 0x152 fault 0x155 ret 0x155
   ```
-  Every 3-byte-first-instruction entry faults at entry+3 too — which is a boundary
-  there, so it looks correct and hides the bug. **`+3` is the length of the kernel's
-  BOP (`C4 C4 nn`); ours is two bytes (`C4 C4`), and the outer loop advances by 2.**
-  ▶ **FALSIFIABLE, AND CHEAP:** a PM entry whose first instruction is ONE byte should
-    mis-land by 2. Build a client that arranges exactly that before theorising
-    further — and predict the number before the run.
-  ⚠ It does not explain everything yet: entry 0 of `dpmitest` arrives at its BOP with
+  The fault is always at **either the entry EIP or the BOP the entry returns on.**
+  Nothing lands mid-instruction. The "+3" cases were entries that ran ONE 3-byte
+  instruction, so entry+3 simply WAS the BOP — a sampling artifact of reading
+  incidental client code.
+
+  **`pmvehpass.flag` (new) settled the other half:** let a non-INT PM fault fall
+  THROUGH the VEH and `VdmStartExecution` does NOT return it as an event — the run
+  wedges on the first fault with no event and no return. **The VEH swallow is
+  load-bearing.** Don't retry it.
+
+  ▶ **WHERE TO GO NEXT.** `pmstep` completes and `pmtick` dies at entry 1; both are
+    tiny 16-bit clients. **Bisect between them** — that is a much shorter path than
+    reasoning about the kernel. The obvious differences: pmtick calls a subroutine,
+    hooks `INT 31h 0205`, and does `sti`.
+  ⚠ Still unexplained, do not file away: `dpmitest` entry 0 reaches its BOP with
     `AX=0x0001` where the guest wrote `0x0400` and the TIB says `0x0000` at entry.
-    Something SETS AX to 1; a pure skip would leave 0. Do not file that away as
-    explained.
+    Something SETS AX to 1.
+  ⚠ Also real, also unexplained: under `pmkernel`, **`INT 21h AH=4Ch` does not
+    terminate the client.** pmstep ran on past its own exit into unrelated code and
+    ended on `GH#18 PM-FAULT ev=0x1` at `0x0f:0xe638`.
 
 ┌──────────────────────────────────────────────────────────────────────────────┐
 │ ★★★★ THE CEILING, AND WHY IT MAKES THE SPIKE THE MAIN LINE                   │
@@ -375,6 +402,17 @@
     mislabelled, and three carried the wrong AX. This is the SAME lesson as session
     18's "57 CD 21 sites" — *decode a sample of what you counted* — and it caught me
     again one session later, on my own instrument's output rather than a client's.
+  ▶ **(SESSION 19) WHEN THE SAMPLES ARE INCIDENTAL, CHOOSE THE CODE INSTEAD.** Ten
+    fault addresses read off whatever the clients happened to have at those offsets
+    fitted FOUR incompatible rules, and I picked the wrong one and wrote it into this
+    file as "the sharpest lead". A fifty-line client whose instruction lengths make
+    the four rules predict four DIFFERENT addresses settled it in one run — and the
+    lead was an artifact. When log archaeology supports several stories, stop reading
+    and start arranging.
+  ▶ **(SESSION 19) A NEGATIVE RESULT FROM A COMPLEX CLIENT IS NOT A PROPERTY OF THE
+    PLATFORM.** "dpmitest's RMCS is corrupt and pmtick dies, therefore the kernel PM
+    path cannot run guests" — then the simplest possible client ran to completion on
+    it. Before concluding a path is broken, try the smallest thing that could work.
   ▶ **(SESSION 19) WHEN AN ARM INTERPRETS, MAKE IT LOG THE PRIMITIVES TOO.**
     `dpmi_crash_veh` printed a confident `AX=… -> UNSUPPORTED (CF=1)` and never the
     exception code or fault address. Adding four fields to one line refuted a
