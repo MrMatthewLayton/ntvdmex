@@ -461,18 +461,42 @@
     an error signal**.
 
 ┌──────────────────────────────────────────────────────────────────────────────┐
-│ ★ A SEPARATE, SHARP, REPRODUCIBLE BUG: COMMAND-LINE ARGUMENTS                 │
+│ ★★ COMMAND-LINE ARGUMENTS: NOW BRACKETED TO A PM #GP AFTER `AH=30h`          │
 └──────────────────────────────────────────────────────────────────────────────┘
 
-  **Passing ANY argument makes DOS/4GW quit before printing a character.** The
-  DPMI/INT 21h trace is identical to a working run for **all 617 of its lines** then
-  stops — right after the `AH=30h` version check (returns `0x1606` = 6.22, correct)
-  and before the `AH=35h`/`AH=25h` vector-0 install a working run does next. The
-  tail is well-formed: `cmdtail len=0x05 [20 2d 7a 7a 7a 0d]` = `" -zzz\r"`.
-  ▶ Blocks `doom -nosound`, the obvious way to take the sound path out of the
-    picture, and every game that takes options.
-  ▶ Arguments go in **`doomargs.txt`** on the share root (`doomrun.bat` reads it).
-  ▶ Cheap next probe: the same target under `stock <target>` for comparison.
+  **Passing ANY argument makes DOS/4GW quit before printing a character.** It blocks
+  `doom -nosound`, which is how you take the sound path — where Doom now dies — out of
+  the picture, and every game that takes options. Arguments go in **`doomargs.txt`**
+  on the share root; ⚠ **DELETE IT WHEN DONE**, it silently alters every later run.
+
+  **THE CAUSE IS BRACKETED** (session 19, `build/doom_s19_int15.log`). 467 `INT 31h`
+  calls against 25691, and the run **exits CLEANLY** in 328 ms (`STAGE2: complete`,
+  `run_ms=0x148`) — DOS/4GW *decides* to quit, it does not crash. The last events:
+  ```
+     PM INT 21h AX=0x3000 -> handler IRET, AX=0x1606      (DOS 6.22, correct)
+     GH#18: PM-FAULT REFLECTED to trampoline -- saved CS:EIP=0x00c7:0xb33b6f1e
+  ```
+  A **PM #GP immediately after the `AH=30h` version check**, caught by the trampoline.
+  The stack in the lines just before is `SS=0x00c7 (SS D/B=0) ESP=0xb33b6f14` — and
+  `0xb33b` is a HOST THREAD-STACK address in the top half of ESP, i.e. the documented
+  16-bit-SS junk, on DOS/4GW's own 16-bit stack.
+  ▶ **NEXT:** find what faults. The trampoline's saved `CS:EIP=0x00c7:0xb33b6f1e` has
+    CS equal to the *stack* selector, so the saved pair is not a code address —
+    either the fault corrupted it or the trampoline is recording the wrong thing.
+    Settle which before theorising about the guest.
+
+  ⚠⚠ **TWO DEAD ENDS, MEASURED. DO NOT RE-SPEND THEM.**
+  * **INT 15h.** The argument run is the ONLY one reporting `BIOS ... unimplemented:
+    INT15`, which looks decisive. It is not: the calls are `AX=0xBFDE` and `AX=0xBF02`
+    at line 39 of 845, during the MZ stub, **long before the PM switch**, and the run
+    continues past them into protected mode.
+    ★ The probe that found them lied first: it printed AX *after* the arm had
+      overwritten AH with `0x86`, reporting our own write back as the guest's request
+      (`ax=0x86de`). **Log before mutating.**
+  * **Narrowing ESP on the far-jmp path.** The junk is real, and the same narrowing
+    took the kernel path from 1 PM entry to 8. Here: **no change**, 467 either way.
+    The narrowing was kept (the high half is never meaningful with a 16-bit SS) but it
+    is NOT the fix.
 
 ┌──────────────────────────────────────────────────────────────────────────────┐
 │ RUNNING IT — AND THE KNOBS                                                   │
