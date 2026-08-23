@@ -1024,12 +1024,35 @@ static void render_modey(video_state *st)
     uint32_t pitch = (uint32_t)(st->crtc_offset ? st->crtc_offset : 40) * 2u;
     uint32_t start = modey_page(st);
     int y, x;
-    for (y = 0; y < st->gh; ++y) {
-        uint32_t row = start + (uint32_t)y * pitch;
-        uint8_t *dst = st->fb + (uint32_t)y * st->gw;
-        for (x = 0; x < st->gw; ++x)
-            dst[x] = st->yplane[x & 3][(row + ((uint32_t)x >> 2)) & (VID_Y_PLANE - 1u)];
-    }
+    /* ► THE SELECTED PLANE IS READ LIVE; THE REST COME FROM THEIR SNAPSHOTS.
+         Snapshotting the current plane at present time was non-deterministic (an
+         arbitrary moment, possibly mid-write). Dropping that snapshot instead left
+         the LAST plane written never captured at all -- once the title screen goes
+         static no further mask change ever comes -- so every 4th column rendered
+         black: visible on the physical screen as vertical stripes at a 4-pixel
+         interval, with ymask=08 naming plane 3 as the culprit.
+         Reading the live aperture for whichever planes the mask currently selects
+         fixes both: no copy at an unpredictable moment, and no plane left stale.
+         The aperture always holds exactly the plane(s) the mask has selected. */
+    /* ► LIVE-READ ONLY A **SINGLE**-PLANE MASK. The aperture holds one plane's
+         worth of bytes; if the mask selects several, every one of them would read
+         the SAME bytes and each group of four columns would repeat -- which is
+         what "pixelated but not stitched" looked like on the physical screen. With
+         more than one bit set the aperture cannot be attributed to a plane at all,
+         so fall back to the snapshots, which were captured when their masks were
+         unambiguous. */
+    { int live = -1, pl;
+      if (st->y_mask && (st->y_mask & (uint8_t)(st->y_mask - 1)) == 0)   /* exactly one bit */
+          for (pl = 0; pl < 4; ++pl) if (st->y_mask & (1u << pl)) { live = pl; break; }
+      for (y = 0; y < st->gh; ++y) {
+          uint32_t row = start + (uint32_t)y * pitch;
+          uint8_t *dst = st->fb + (uint32_t)y * st->gw;
+          for (x = 0; x < st->gw; ++x) {
+              int p2 = x & 3;
+              const uint8_t *src = (p2 == live) ? st->vmem : st->yplane[p2];
+              dst[x] = src[(row + ((uint32_t)x >> 2)) & (VID_Y_PLANE - 1u)];
+          }
+      } }
 }
 
 static void vid_frame(void *self)
@@ -1041,7 +1064,15 @@ static void vid_frame(void *self)
         st->frame.w = st->vesa_w; st->frame.h = st->vesa_h; st->frame.bpp = 8;
         st->frame.stride = st->vesa_w; st->frame.pixels = st->vesa_vram; st->frame.palette = st->pal;
     } else if (st->mkind == VID_KIND_LINEAR8 && !st->chain4) {  /* mode Y */
-        modey_snapshot(st);                            /* capture the live plane   */
+        /* ⚠ NO SNAPSHOT HERE. It used to capture the "live" plane at present time,
+             but present time is an ARBITRARY moment: it can land mid-write, and
+             which planes get overwritten then depends purely on timing. That made
+             the picture NON-DETERMINISTIC -- the same binary produced a perfect
+             title screen on one run and a coarse, blocky one on the next (observed
+             directly on the physical screen; my own analysis missed it because I
+             only ever inspected the richest captured frame, which hid the bad runs).
+             The mask-change snapshot is well defined -- the outgoing plane is
+             complete by then -- so rely on that alone. */
         render_modey(st);
         st->frame.w = st->gw; st->frame.h = st->gh; st->frame.bpp = 8;
         st->frame.stride = st->gw; st->frame.pixels = st->fb; st->frame.palette = st->pal;
