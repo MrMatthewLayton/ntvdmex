@@ -50,7 +50,15 @@ static inline char *zdump(char *p, const void *b, unsigned n) {
    flooded 148 MB, thrashed the disk, and wedged the SMB result-copy. Cap the total
    appended bytes; past the cap log_append silently drops (writing one truncation
    marker). log_write (the STAGE0 truncate that starts a fresh run) resets the count. */
-#define LOG_MAX_BYTES (32u * 1024u * 1024u)   /* raised from 4 MB: a client that RUNS produces a long trace, and truncating it mid-startup hides exactly the part that matters */
+#define LOG_MAX_BYTES (256u * 1024u * 1024u)  /* 4 MB -> 32 MB -> 256 MB. A client that RUNS
+                                                 produces a long trace, and truncating it hides
+                                                 exactly the part that matters. Measured: with
+                                                 pmverbose.flag, Doom past the D/B fix fills 32 MB
+                                                 BEFORE it dies, so the cap looked like the
+                                                 stopping point -- an instrument lying by
+                                                 omission. On a silent VDM teardown nothing runs
+                                                 afterwards, so anything not already flushed is
+                                                 gone: the ceiling has to clear the whole run. */
 static unsigned long g_log_total  = 0;
 static int           g_log_capped = 0;
 
@@ -72,7 +80,7 @@ static inline void log_append(const char *path, const char *buf, const char *end
     HANDLE h;
     if (g_log_capped) return;
     if (g_log_total + n > LOG_MAX_BYTES) {
-        static const char mark[] = "\r\n[log capped @4MB: runaway guest output suppressed]\r\n";
+        static const char mark[] = "\r\n[log capped at LOG_MAX_BYTES: runaway guest output suppressed]\r\n";
         h = CreateFileA(path, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE,
                         NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
         if (h != INVALID_HANDLE_VALUE) {

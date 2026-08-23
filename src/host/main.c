@@ -3832,6 +3832,16 @@ static void dpmi_patch_code_region(DWORD base, DWORD limit)
           if (mbi.State == MEM_COMMIT && !(mbi.Protect & (PAGE_NOACCESS | PAGE_GUARD))) {
               mem = (volatile BYTE *)(ULONG_PTR)a;
               for (i = 0; i + 1 < (rend - a); ++i) {
+                  /* ⚠ ADDING 0x32/0x34/0x35/0x36 HERE WAS TRIED AND IS NOT THE ANSWER.
+                       Doom's Watcom thunk table at obj1+0x41e41 is `[cd nn][c3]` triples and
+                       the log dump shows only INT 33h patched:
+                           c3  cd 32 c3  c4 c4 c3  cd 34 c3  cd 35 c3  cd 36 c3
+                       A raw `CD nn` in PM is the fault XP will not reflect, so those looked
+                       like the silent teardown. Measured (session 19): patching them changes
+                       NOTHING -- same tick count, same INT 31h total, and vectors 32/34/35/36
+                       are NEVER SERVICED, i.e. the guest never calls those thunks. Reverted
+                       rather than left in as unverified scan surface. The guest enters the
+                       table only at the `c3` tail of the already-patched INT 31h thunk. */
                   if (mem[i] == 0xCD && (mem[i+1] == 0x31 || mem[i+1] == 0x21 || mem[i+1] == 0x10
                                          || mem[i+1] == 0x16 || mem[i+1] == 0x33
                                          || mem[i+1] == 0x1A || mem[i+1] == 0x08)) {
