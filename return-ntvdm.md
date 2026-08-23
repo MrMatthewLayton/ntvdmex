@@ -13,6 +13,55 @@
   **Doom is NOT playable and does not reach the menu.**
 
 ┌──────────────────────────────────────────────────────────────────────────────┐
+│ ★★★★★ DOOM: 5 TIMER TICKS -> 5,520. THE DEFAULT PM STUBS WERE 16-BIT.        │
+└──────────────────────────────────────────────────────────────────────────────┘
+
+  ```
+     ticks survived      5      ->  0x1590 (5520)      INT 31h calls 24911 -> 25691
+     injections          6      ->  5520               distinct svcs    26 -> 27
+     INT 21h via the client's PM handler  1825 -> 2124
+  ```
+  The new service is **`0x0201`, set REAL-MODE interrupt vector** — what `DMX_Init`
+  does for the sound driver, and `DMX_Init` is the line straight after
+  `I_StartupTimer()` in the stock reference. Doom is now reading **`MUS\x1a`** lumps
+  and locking the buffers (`INT 31h 0600`, 23 of them): it is in sound init.
+
+  **WHAT IT WAS.** Each default PM vector is `C4 C4 CF` — a BOP we service, then an
+  IRET back to whoever chained in. That selector was built **16-bit unconditionally**
+  ("the stubs are 16-bit"): right for a 16-bit client, wrong for DOS/4GW. Doom's timer
+  ISR chains to the previous vector-8 handler every sixth tick, and `INT 31h 0204` had
+  reported that as our default stub. We serviced the BOP, advanced past it, and left
+  the guest at `0x37:0x1a` about to run `CF` — **a 16-bit IRET popping the 12-byte
+  frame a 32-bit ISR pushed.** Six bytes taken, garbage CS:EIP, VDM gone, no
+  diagnostic. Fixed with one bit (`0830492`), synced at use because the client's width
+  is unknown when the table is built.
+  ▶ **THIRD TIME** this project has paid for *frame width and descriptor width are the
+    same question* — see the initial-selector and PM-return-catcher notes.
+
+  ⚠⚠ **TWO SESSION-18 CONCLUSIONS ARE REFUTED. DO NOT BUILD ON THEM.**
+  * **"The async mechanism is what tears the VDM down"** — NO. Tagging every early-out
+    in `dpmi_async_inject_pm` (a `why=` code, now permanent) shows it bailed SIX times
+    on `why=9`, the arm-quiet hold-off, and succeeded exactly ONCE — and that one
+    success is immediately followed by all five cooperative ticks. **Async is not the
+    killer; it is what hands the host back control.** The control that indicted it also
+    removed `g_hcpu`, so it moved two variables at once.
+  * **"Coalescing the tick drain changed nothing"** — NO. The batch drain **never ran**:
+    instrumenting it printed ZERO `BATCH` lines, because the async-catcher branch it
+    hangs off is never taken. It did not fail, it was unreachable. Still true today.
+
+  **WHERE IT STOPS NOW**, and the cap that hid it: with `pmverbose.flag` Doom fills
+  32 MB *before* dying, so the log just stopped and looked like the answer — caught
+  only because the capped path writes a marker and the marker was ABSENT.
+  `LOG_MAX_BYTES` is now **256 MB**. The real last line is
+  `DPMI-CP[00006487] armed -> entering PM`, guest at `0x187:0x03b11e55` =
+  obj1+`0x41e55`, the Watcom `int N ; ret` thunk table (landmark `0x41e41`).
+  ▶ ⚠ **PATCHING THE UNPATCHED THUNK VECTORS (32h/34h/35h/36h) IS NOT THE ANSWER** —
+    tried and reverted. Same tick count, identical INT 31h total, and those vectors
+    are NEVER SERVICED. The guest only ever enters that table at the `c3` tail of the
+    already-patched INT 31h thunk. It free-runs from there and faults with no further
+    event, so narrowing needs finer granularity than one checkpoint per event.
+
+┌──────────────────────────────────────────────────────────────────────────────┐
 │ ★★★★ DOOM: THE TICK COUNTER *DOES* ADVANCE. THE PROBLEM IS THROUGHPUT.       │
 └──────────────────────────────────────────────────────────────────────────────┘
 
