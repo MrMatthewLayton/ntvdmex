@@ -13,6 +13,51 @@
   **Doom is NOT playable and does not reach the menu.**
 
 ┌──────────────────────────────────────────────────────────────────────────────┐
+│ ★★★★ WHERE DOOM STOPS NOW: MODE 13h IS SET, NOTHING IS DRAWN, AND IT IS      │
+│      DETERMINISTIC                                                           │
+└──────────────────────────────────────────────────────────────────────────────┘
+
+  ```
+     mode 13h set        log line 55064 of 55134
+     A000 writes after   ZERO
+  ```
+  Doom switches to mode 13h, reads a graphics lump, does mouse init, loads a MUS
+  lump, and dies **without writing one byte to the framebuffer**. Stock still has
+  `D_CheckNetGame`, `S_Init`, `HU_Init`, `ST_Init` to go before the loop that draws
+  the title. **There is no menu to see yet** — confirmed on the physical screen by
+  the user: loader banner, then exit, no perceptible mode change (consistent: the
+  mode lives for a fraction of a second).
+
+  **IT IS DETERMINISTIC — this is the most useful fact here.**
+  ```
+     doom_s19_dbfix   ticks=0x1590   mode13=1
+     doom_userwatch   ticks=0x158c   mode13=1
+     doom_s19_bp      ticks=0x158b   mode13=1   <- with +3,200 guest breakpoint traps
+  ```
+  A ~3,200-trap timing perturbation moves it by FIVE TICKS. **Not a race, not an
+  injection-timing artifact.** That kills the whole family of causes the async
+  injector made plausible, and means a bisection reproduces.
+
+  **THE INT 31h HELPER IS NOT IMPLICATED.** `pmbp.txt` (guest breakpoints — the
+  instrument for this, unused until session 19) on the helper that services every
+  Doom `INT 31h`:
+  ```
+     1606 hits at obj1+0x41cfc (its first store)
+     1608 hits at obj1+0x41d1a (its LAST instruction)  <- and the run's last hit
+  ```
+  It completes ~1,600 times including the fatal call. The fault is downstream, in
+  the caller.
+  ⚠⚠ **THERE IS NO NULL-DS FAULT.** An earlier session-19 commit (`4869a82`) claimed
+    one at `obj1+0x41cfc`; it was a TRANSCRIPTION ERROR — I hand-copied the logged
+    stack dump and dropped two bytes. Re-parsed: `EDI=0x03bc5b4c` (valid),
+    `DS=0x0000018f` (correct selector). Retracted in `867f780`. **Parse the log, do
+    not retype it.**
+  ▶ **NEXT:** bisect outward into the caller with `pmbp.txt`. It is safe to do so —
+    the determinism above means each probe run reproduces.
+  ⚠ `nosb.flag` (new) unfits BOTH sound devices (SB DSP withholds its 0xAA, OPL
+    status floats 0xFF). It does NOT change the outcome — sound is not the cause.
+
+┌──────────────────────────────────────────────────────────────────────────────┐
 │ ★★★★★ DOOM: 5 TIMER TICKS -> 5,520. THE DEFAULT PM STUBS WERE 16-BIT.        │
 └──────────────────────────────────────────────────────────────────────────────┘
 
