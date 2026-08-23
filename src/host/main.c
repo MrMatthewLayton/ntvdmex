@@ -417,6 +417,7 @@ static void pmap_clear(DWORD lin)
    DELIVERY is wrong or merely BADLY TIMED, and the cheapest way to ask it is to stop
    delivering and see how much further the client gets. Absent file = normal behaviour. */
 #define PMNOIRQ_PATH "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\pmnoirq.flag"
+#define PMVEHPASS_PATH "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\pmvehpass.flag"
 /* ── A WATCH ADDRESS: ONE HEX LINEAR ADDRESS, DUMPED EITHER SIDE OF EACH INJECTED
      INTERRUPT. ─────────────────────────────────────────────────────────────────────
    The question an injected timer tick always raises is not "did the handler run" --
@@ -451,6 +452,7 @@ static void pmap_clear(DWORD lin)
    because the far-jmp path is what currently works. */
 #define PMKERNEL_PATH "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\pmkernel.flag"
 static int g_pm_noirq = 0;
+static int g_pm_veh_pass = 0;   /* pmvehpass.flag: let a non-INT PM fault fall THROUGH the VEH */
 /* Per-event checkpoint verbosity. The full dump -- registers, stack, frame, entry code
    -- was built for the era when the client died inside the FIRST dpmi_enter_pm and the
    only question was "did we get there at all". Now that a client runs for thousands of
@@ -3273,6 +3275,25 @@ static LONG CALLBACK dpmi_crash_veh(EXCEPTION_POINTERS *ep)
              Service ONLY what is provably an INT: `CD nn` at the faulting EIP. */
         { const BYTE *fi = (const BYTE *)(ULONG_PTR)(g_dpmi_code_base + (cx->Eip & 0xFFFF));
           if (fi[0] != 0xCD) {
+              /* ► WE ARE A FIRST-CHANCE HANDLER. ARE WE STEALING A FAULT THE KERNEL
+                   WOULD HANDLE BETTER? Under `pmkernel.flag` the guest runs INSIDE
+                   VdmStartExecution, and the kernel's whole job for a VDM is to turn
+                   a guest fault into an EVENT the monitor is handed back -- which the
+                   outer loop already knows how to service (VDM_EVENT_GPFAULT and
+                   friends). Swallowing the fault here means VdmStartExecution never
+                   sees it. And swallowing it is not free: it resumes the guest at the
+                   EIP the kernel reported, which for a 2-byte first instruction is
+                   entry+3, one byte PAST the boundary -- measured twice, and fatal for
+                   pmtick.com.
+                   `pmvehpass.flag` runs the other arm of the experiment: let it fall
+                   through and see whether VdmStartExecution returns an event instead.
+                   Absent file = the behaviour above, unchanged. */
+              if (g_pm_veh_pass) {
+                  p = zput(p, " -> FAULT, not an INT: PASSING IT THROUGH (pmvehpass)");
+                  p = zput(p, "\r\n");
+                  log_append(LOG_PATH, cb, p); serial_out(cb, p);
+                  return EXCEPTION_CONTINUE_SEARCH;
+              }
               p = zput(p, " -> FAULT, not an INT: resuming untouched");
               p = zput(p, "\r\n");
               log_append(LOG_PATH, cb, p); serial_out(cb, p);
@@ -7261,6 +7282,11 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                 g_dpmi_use_kernel = (GetFileAttributesA(PMKERNEL_PATH) != INVALID_FILE_ATTRIBUTES);
                 if (g_dpmi_use_kernel) {
                     p = zput(p, "DPMI: pmkernel.flag -- PM will run under VdmStartExecution\r\n");
+                    log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                }
+                g_pm_veh_pass = (GetFileAttributesA(PMVEHPASS_PATH) != INVALID_FILE_ATTRIBUTES);
+                if (g_pm_veh_pass) {
+                    p = zput(p, "DPMI: pmvehpass.flag -- non-INT PM faults will NOT be swallowed by the VEH\r\n");
                     log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
                 }
                 g_pm_noirq = (GetFileAttributesA(PMNOIRQ_PATH) != INVALID_FILE_ATTRIBUTES);
