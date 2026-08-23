@@ -13,20 +13,49 @@
 │ ★★★★ START HERE. ONE BOUNDED BUG, THEN TWO QUESTIONS THAT COLLAPSE A LOT.    │
 └──────────────────────────────────────────────────────────────────────────────┘
 
-  **1. FIX `INT 31h 0301` UNDER THE KERNEL PM PATH.** With `pmkernel.flag` on the
-     share, `dpmitest.com` runs 8 clean PM entries and then dies here:
+  ⚠⚠ **SESSION 19 CORRECTION — "8 CLEAN PM ENTRIES" WAS NEVER TRUE, AND ITEM 1 AS
+     WRITTEN IS MIS-SCOPED.** `INT 31h 0301` is not broken. The guest never
+     correctly executes the stores that FILL its RMCS. Measured, twice
+     (`build/pmk5.log`, `build/pmk6.log`), and the old text below is kept only so
+     the correction reads against it.
+
+  **1. THE KERNEL PM PATH FAULTS ON ORDINARY GUEST MEMORY STORES.** Under
+     `pmkernel.flag`, `dpmitest.com` takes **one unhandled fault per PM entry, eight
+     of eight** — six `exc=0xC0000005`, two `exc=0xC000001E` — and the bytes at the
+     faulting EIP decode to plain stores, not to any `INT nn`:
      ```
-        INT31h AX=0x0301 -> callRM 0x0000:0x0000  [RMCS ES:EDI=0x17:0x476 @0x1476]
+        at=0x0133  a3 00 06        mov [0x600],ax
+        at=0x0141  89 16 04 06     mov [0x604],dx
+        at=0x01a5  c7 06 9a 04 ..  mov word [0x49a],0x0100   <- an RMCS field
      ```
-     The RMCS reads as **all zeros**, so it calls real mode at `0000:0000` and the
-     guest is gone. The SAME client COMPLETES on the far-jmp path, so the RMCS is
-     being filled — just not where we look, or not by the time we look.
-  **2. THEN ASK: IS THE INT→BOP PATCH MAP STILL NEEDED?** The kernel reflects a PM
-     `INT nn` natively on this path (`Under VdmStartExecution the kernel reflects a
-     PM INT nn by advancing EIP past it…`, `dpmi_crash_veh` comment).
+     The RMCS reading all zeros is a SYMPTOM of this, not a separate bug.
+     ▶ The old story — "the kernel reflects a PM `INT nn`, so `dpmi_crash_veh`
+       services it" (run 26) — **is refuted.** That arm was answering genuine faults
+       as "INT 31h, unsupported function", rewriting EAX and CF and forcing CS/SS,
+       once per entry. Fixed in `f6c5b16`: it now services only a provable `CD nn`
+       at the faulting EIP. **That fix did NOT change the run** — a control with the
+       fake servicing removed is identical line for line. Do not re-try it.
+     ▶ **AND THE GUEST IS EXECUTING FROM MID-INSTRUCTION ADDRESSES.** Entry 3 enters
+       at `0x152` and faults at `0x155`, which is inside `b8 04 02`
+       (`mov ax,0x0204` at `0x154`). At `0x155` those bytes are `add al,2`; the VEH
+       reads `AX=0x0206` and the outer loop then reads `AX=0x0208` at the BOP — two
+       executions of `add al,2` over `0x0204`. Every number matches, so this is not
+       a mislabelled register: **control flow itself is desynchronising.** Three of
+       the eight `INT 31h` dispositions in that log are consequently wrong
+       (`0x0400`→`0x0001`, `0x0204`→`0x0208`, `0x0901`→`0x0902`).
+     ▶ **NEXT, AND IT IS ONE RUN:** find out whether the fault is the FIRST store to
+       a page (the sentinel at `0x1600` goes `00`→`01` across hit #2, so a faulting
+       store DOES land on retry — that smells like a page the kernel will not fix up
+       for a PM VDM). Dump the page protection of the guest's low memory
+       (`VirtualQuery`) at the fault, and log every fault rather than one per entry.
+  **2. THE INT→BOP PATCH MAP IS STILL NEEDED** — settled, and it is the inverse of
+     what this file used to say. The kernel does NOT natively reflect a PM `INT nn`
+     to us; every reflect we thought we saw was a fault. The BOPs are what make
+     `VdmStartExecution` return at all (`ev=0x4`, eight times).
   **3. AND: DOES THE KERNEL DELIVER IRQ0 WITH NO INJECTION AT ALL?** That is the
      whole point — see the ceiling below. If it does, the async injector and every
-     failure it caused stop existing rather than getting fixed.
+     failure it caused stop existing rather than getting fixed. **Still unanswered**,
+     and it is the question that decides whether this whole path is worth it.
 
 ┌──────────────────────────────────────────────────────────────────────────────┐
 │ ★★★★ THE CEILING, AND WHY IT MAKES THE SPIKE THE MAIN LINE                   │
@@ -58,6 +87,11 @@
   ```
   Eight consecutive entries (`0x12e…0x1cf`), eight `INT 31h` serviced, and
   `dpmitest.com` prints FROM PROTECTED MODE via `INT 31h 0300`.
+  ⚠ **READ THE SESSION-19 CORRECTION ABOVE BEFORE TRUSTING THIS PARAGRAPH.** The
+    entries are real and the print is real, but they are NOT clean: each one takes an
+    unhandled access violation on a guest store, and three of the eight `INT 31h`
+    calls arrive with the wrong AX. "Eight entries, eight INT 31h" was a LINE COUNT,
+    and I wrote it up as a health claim without decoding what the lines said.
   ▶ **The early spike's "VdmStartExecution faults when it runs PM" DOES NOT
     REPRODUCE.** It was measured when almost none of the DPMI host existed — and the
     entire in-process architecture (INT→BOP patch map + async injector) was built on
@@ -298,6 +332,17 @@
     available evidence.
   ▶ **RE-READ THE HANDOFF BEFORE PROPOSING A DIRECTION.** I recommended GH #18,
     which this very file records as a measured dead end.
+  ▶ **(SESSION 19) A COUNT OF LOG LINES IS NOT A HEALTH CHECK — DECODE WHAT THEY
+    SAY.** "8 clean entries, 8 INT 31h serviced" went into a commit subject and the
+    top of this file. Eight lines existed; every one of them was a fault we had
+    mislabelled, and three carried the wrong AX. This is the SAME lesson as session
+    18's "57 CD 21 sites" — *decode a sample of what you counted* — and it caught me
+    again one session later, on my own instrument's output rather than a client's.
+  ▶ **(SESSION 19) WHEN AN ARM INTERPRETS, MAKE IT LOG THE PRIMITIVES TOO.**
+    `dpmi_crash_veh` printed a confident `AX=… -> UNSUPPORTED (CF=1)` and never the
+    exception code or fault address. Adding four fields to one line refuted a
+    two-session-old story in a single run. An instrument that prints its CONCLUSION
+    but not its EVIDENCE is how a wrong story survives.
 
 ╔══════════════════════════════════════════════════════════════════════════════╗
 ║ THE USER'S INSTRUCTION (2026-08-22): "North star is playable Doom"           ║
