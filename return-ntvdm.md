@@ -129,15 +129,26 @@
      pmtick.com  died at entry 1 -> reaches the spin
   ```
 
-  ⚠ **STILL OPEN, AND IT IS THE NEXT THING.** `pmtick` fails later as a RUNAWAY:
-    entry 2 (`enter 0x20b`, the tail of its `rm_tick`) returns at `cs:eip=0x3f:0x0080`
-    and a `STATUS_BREAKPOINT` appears at `0x3dc`, inside its own data. Its `ret` is
-    popping a bad stack. **So item 3 is STILL unanswered.**
-  ⚠ **THE FIX'S OWN LIMIT, stated honestly:** it is only proven safe where the guest
-    has executed nothing — true of every fault measured so far, but a fault genuinely
-    raised mid-entry would now RE-EXECUTE from the entry, and a re-executed `call`
-    would push a second return address and produce exactly the runaway above. **Check
-    that first.** `dpmitest` also shows a suspicious `ss:esp=0x17:0x01da` late on.
+  **THE DISCRIMINATOR IS `EDX`, NOT THE EXCEPTION CODE** (`b8043d8`). Three codes now
+  denote the SAME spurious entry event — `0xC0000005`, `0xC000001E` and `0x80000003`.
+  Keying on the code mislabels one every time a new client appears: pmtick's
+  `STATUS_BREAKPOINT` "at 0x3dc" looked real, but guest `0x3dc` is the middle of the
+  string `"PMTICK: mode switch FAILED (CF=1)"` — message data, no `0xCC` in it.
+  What IS invariant, and was in the very first log: **the kernel puts the ENTRY EIP in
+  `EDX`**, and it is not the guest's own (pmtick entry 2: ctx `EDX=0x20b`, the entry,
+  while the guest's real EDX was `0x2c2d`). Anything else goes to the fatal dump.
+
+  ⚠ **STILL OPEN, AND IT IS THE NEXT THREAD.** `pmtick` entry 2 (`enter 0x20b`, the
+    tail of its `rm_tick`) ends at `cs:eip=0x3f:0x0080` — and **`0x0080` is
+    `DPMI_FAULT_COFF`, our own GH#18 PM-fault trampoline.** A near `ret` cannot change
+    CS, so the guest took a GENUINE PM fault in `mov ax,dx / pop dx / pop cx / pop bx
+    / ret` and the trampoline caught it correctly. A real fault, not a reporting
+    artifact. **So item 3 is STILL unanswered.**
+  ▶ **Its stack is NOT the cause — already checked.** The entry-2 dump decodes
+    cleanly: `[0xfff8]=0x013a` (the `call rm_tick` return), then pushed BX/CX/DX, plus
+    `[0xfffc]=0x0100 [0xfffa]=0x0127` — the **un-popped `call far [entry]` mode-switch
+    frame**. That accounts for the 4 bytes I first mistook for a re-executed `CALL`.
+    Don't re-derive it.
 
   **THE BISECT, for the record** (all under `pmkernel.flag`, all COMPLETE, so all
   four constructs are INNOCENT): `pmcall` (+ a PM `CALL`), `pmt1a` (+ `INT 1Ah`),
