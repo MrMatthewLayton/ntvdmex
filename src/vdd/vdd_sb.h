@@ -105,4 +105,8 @@ uint32_t vdd_sb_render(sb_state *st, int16_t *out, uint32_t frames);
 static inline int vdd_sb_active(const sb_state *st)
 { return st->xfer_mode != SB_XFER_IDLE && !st->paused; }
 
+/* nosb.flag: when set, the DSP reset handshake withholds its 0xAA so a detect
+   fails, i.e. the machine reports no Sound Blaster fitted. See vdd_sb.c. */
+extern int g_sb_absent;
+
 #endif /* NTVDMEX_VDD_SB_H */

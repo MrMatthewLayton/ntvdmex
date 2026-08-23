@@ -174,4 +174,7 @@ int  vdd_opl_op_index(int ch, int which);
 #define OPL_NATIVE_HZ 49716u
 void vdd_opl_render(opl_state *st, int16_t *out, uint32_t frames);
 
+/* nosb.flag: when set, the status port floats (0xFF) so an AdLib detect fails. */
+extern int g_opl_absent;
+
 #endif /* NTVDMEX_VDD_OPL_H */

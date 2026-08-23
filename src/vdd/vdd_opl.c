@@ -29,6 +29,12 @@ static int opl_off_to_op(uint8_t reg)
    (256 - preset) * resolution. AdLib detection is exactly this measurement:
    preset 0xFF gives one 80us tick, which is why a detect that sees no flag
    concludes there is no card. */
+/* nosb.flag: no FM chip fitted. Kept as its own flag rather than reading the Sound
+   Blaster's, because the off-VM suites link these two VDDs SEPARATELY -- referencing
+   vdd_sb.c's copy from here broke `opl_synth_test` with an undefined symbol and cost
+   half the gate (580 checks -> 244) until run.sh caught it. */
+int g_opl_absent = 0;
+
 static void opl_timer_step(uint16_t *count, uint8_t preset, uint8_t mask,
                            uint8_t flag, uint8_t *status)
 {
@@ -225,6 +231,15 @@ static void opl_in(void *self, uint16_t port, uint8_t w, uint32_t *v)
     opl_state *st = (opl_state *)self;
     (void)w;
     /* 0x388 reads the status register; the data port is write-only on an OPL2. */
+    /* ► `nosb.flag` ALSO UNFITS THE OPL. The AdLib detect is a status-register
+         dance (mask/reset the timers, read 0xC0, run timer 1, read 0x80) -- a
+         machine with no FM chip floats the bus and reads 0xFF, which fails it.
+         Doom's DMX uses ADLIB for music even with no Sound Blaster DSP, so
+         withholding only the DSP's 0xAA left music running and the run still died
+         in the timer ISR. One knob, no sound devices at all: that is the point of
+         the knob, which is to find out what Doom does with NO music rather than to
+         ship a machine without an OPL. */
+    if (g_opl_absent) { *v = 0xFF; return; }
     *v = ((port & 1) == 0) ? st->status : 0xFF;
 }
 

@@ -22,6 +22,8 @@ static uint8_t sb_outq_pop(sb_state *st)
     return v;
 }
 
+int g_sb_absent = 0;      /* nosb.flag -- see the DSP-reset case below */
+
 static void sb_dsp_soft_reset(sb_state *st)
 {
     st->cmd = 0; st->nargs = 0; st->want_args = 0;
@@ -164,7 +166,18 @@ static void sb_out(void *self, uint16_t port, uint8_t w, uint32_t v)
         /* The handshake: 1 then 0. Only the falling edge arms 0xAA, which is what
            a detect is really looking for. */
         if (val & 1) { st->reset_state = 1; sb_dsp_soft_reset(st); }
-        else if (st->reset_state) { st->reset_state = 0; sb_outq_push(st, 0xAA); }
+        else if (st->reset_state) {
+            st->reset_state = 0;
+            /* ► `nosb.flag`: ANSWER THE PROBE WITH SILENCE, i.e. behave as a machine
+                 with no Sound Blaster fitted. Withholding the 0xAA is exactly how a
+                 card-less PC fails a detect, so a client takes its own no-sound path
+                 rather than being lied to about a device we then cannot service.
+                 This is a diagnostic knob, not a policy: Doom dies inside DMX sound
+                 init, and this is the way to find out what it does WITHOUT sound
+                 without going through the command line (which is separately broken).
+                 Absent file = fitted, exactly as before. */
+            if (!g_sb_absent) sb_outq_push(st, 0xAA);
+        }
         break;
     case 0xC: sb_dsp_write(st, val); break;     /* DSP command / data              */
     default: break;

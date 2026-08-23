@@ -418,6 +418,7 @@ static void pmap_clear(DWORD lin)
    delivering and see how much further the client gets. Absent file = normal behaviour. */
 #define PMNOIRQ_PATH "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\pmnoirq.flag"
 #define PMVEHPASS_PATH "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\pmvehpass.flag"
+#define NOSB_PATH      "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\nosb.flag"
 /* ── A WATCH ADDRESS: ONE HEX LINEAR ADDRESS, DUMPED EITHER SIDE OF EACH INJECTED
      INTERRUPT. ─────────────────────────────────────────────────────────────────────
    The question an injected timer tick always raises is not "did the handler run" --
@@ -7433,6 +7434,12 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                 g_dpmi_use_kernel = (GetFileAttributesA(PMKERNEL_PATH) != INVALID_FILE_ATTRIBUTES);
                 if (g_dpmi_use_kernel) {
                     p = zput(p, "DPMI: pmkernel.flag -- PM will run under VdmStartExecution\r\n");
+                    log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                }
+                g_sb_absent = (GetFileAttributesA(NOSB_PATH) != INVALID_FILE_ATTRIBUTES);
+                g_opl_absent = g_sb_absent;      /* one knob, both devices unfitted */
+                if (g_sb_absent) {
+                    p = zput(p, "SB: nosb.flag -- DSP reset will NOT answer; no Sound Blaster fitted\r\n");
                     log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
                 }
                 g_pm_veh_pass = (GetFileAttributesA(PMVEHPASS_PATH) != INVALID_FILE_ATTRIBUTES);
