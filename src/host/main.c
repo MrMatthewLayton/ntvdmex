@@ -2389,7 +2389,13 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
            40 frames so a long run never fills the disk. rt.bat copies shot*.bmp off. */
         if (g_capture) {
             static unsigned cap_tick = 0, cap_seq = 0;
-            if ((cap_tick++ % (2000 / VID_PRESENT_TICK_MS)) == 0 && cap_seq < 40) {
+            /* ► 2 s IS FAR TOO SLOW TO CATCH A MODE SWITCH. Doom runs about ten
+                 seconds and sets mode 13h in the last fraction of it, so a 2 s cadence
+                 caught exactly ONE frame -- blank text mode, two distinct colours. At
+                 ~300 ms the 40-frame budget spans a whole run and straddles the switch,
+                 which is the only way to SEE what the guest drew: the rig has no VNC and
+                 `screendump` is QEMU-only, so these BMPs are the only eyes we have. */
+            if ((cap_tick++ % (300 / VID_PRESENT_TICK_MS + 1)) == 0 && cap_seq < 40) {
                 char path[] = "C:\\ntvdmex\\shot00.bmp";
                 path[15] = (char)('0' + (cap_seq / 10) % 10);
                 path[16] = (char)('0' + cap_seq % 10);
