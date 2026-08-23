@@ -1001,14 +1001,22 @@ static void render_planar(video_state *st)
    limit rather than a surprise. */
 static uint32_t modey_page(const video_state *st)
 {
+    /* ► PAGES ARE 0x4000 APART, NOT 16000. A 320x200 mode-Y page OCCUPIES 16000
+         bytes per plane, but programs align the pages to 0x4000 so the page
+         address is a shift rather than a multiply -- Doom's pagestart[] is
+         0, 0x4000, 0x8000. Detecting on a 16000 stride put the start 384 bytes
+         (16384-16000) below the real page base, which is 4.8 rows: the frame came
+         out VERTICALLY ROTATED by ~5 rows, with the bottom of the picture stitched
+         onto the top. Measured -- the largest row-to-row discontinuity in the
+         captured frame sits at y=5. */
     uint32_t page = 0, bestn = 0, pg;
     for (pg = 0; pg < 4; ++pg) {
-        uint32_t base = pg * 16000u, i, n = 0;
+        uint32_t base = pg * 0x4000u, i, n = 0;
         if (base + 16000u > VID_Y_PLANE) break;
         for (i = 0; i < 16000u; i += 8) if (st->yplane[0][base + i]) ++n;
         if (n > bestn) { bestn = n; page = pg; }
     }
-    return page * 16000u;
+    return page * 0x4000u;
 }
 
 static void render_modey(video_state *st)
