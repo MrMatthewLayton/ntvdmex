@@ -13,6 +13,40 @@
   **Doom is NOT playable and does not reach the menu.**
 
 ┌──────────────────────────────────────────────────────────────────────────────┐
+│ ★★★★★ DOOM RENDERS 320x200 WITH NO TILING (`4393f1d`). MODE Y WORKS.         │
+└──────────────────────────────────────────────────────────────────────────────┘
+
+  ```
+     non-black rows    50 of 200  ->  195 of 200
+     distinct colours  235        ->  244
+     horizontal period EXACTLY 80 ->  gone
+  ```
+  `build/doom_modey_ok.png` — DOOM logo, marine, demon, id Software logo, licence
+  line. Full screen, correct aspect. Startup also matches the stock reference LINE
+  FOR LINE through `ST_Init`.
+
+  **HOW.** `chain4` (SR4 bit 3) is tracked and **confirmed cleared by Doom**
+  (`STAGE2: video now: chain4=00`), so mode Y is measured, not inferred. Planes are
+  de-interleaved by **SNAPSHOT ON MAP-MASK CHANGE** (a port write) plus once per
+  frame — **never a page trap**: arming the A000 trap collapsed the run from ~553k
+  log lines to ~55k, because with it armed the interpreter becomes the CPU.
+
+  ⚠⚠ **THE PAGE ADDRESS IS A WORKAROUND.** `modey_page()` counts non-zero bytes per
+    16000-byte page and displays the busiest. The right source is the CRTC start
+    register, and **CLAIMING CRTC 0x3D4/0x3D5 REGRESSES DOOM** — tried twice, with a
+    read handler (55,740 lines vs 555,296) and write-only with reads left at the
+    unclaimed `0xFFFFFFFF` (three attempts, all ~55k). Not read semantics, not range
+    shadowing (`0x3DA` is a separate claim). **Mechanism unknown — that is the open
+    question.** Limit: a game double-buffering two equally-busy pages may pick
+    either; fine for a title/menu, not for gameplay.
+
+  ⚠ **THIS IS NOT PLAYABLE DOOM.** It runs with `D_Display`'s call to
+    `R_ExecuteSetViewSize` SKIPPED via `pmbp` (`03aed1fe 00000000 00000005`). The
+    display path is proven; the crash in that function is still THE bug.
+  ⚠ **THE LONG RUN IS FLAKY, ~1 IN 3** (~55k lines instead of ~555k), independent of
+    any of these changes. Never trust a single run.
+
+┌──────────────────────────────────────────────────────────────────────────────┐
 │ ★★★★★ DOOM DIES IN ITS **DISPLAY** PATH — CALL STACK FULLY WALKED            │
 └──────────────────────────────────────────────────────────────────────────────┘
 
