@@ -746,8 +746,7 @@ static void modey_snapshot(video_state *st)
    display START address (how a mode-Y program flips pages) and 0x13 the logical
    line width. Everything else is accepted and ignored -- this VDD does not model
    CRTC timing and pretending to would be worse than not. */
-/* ⚠ NOT CLAIMED: see the note at the call site. */
-static void crtc_out_unused(void *self, uint16_t port, uint8_t w, uint32_t v)
+static void crtc_out(void *self, uint16_t port, uint8_t w, uint32_t v)
 {
     video_state *st = (video_state *)self; (void)w;
     if (port == 0x3D4) { st->crtc_index = (uint8_t)v; return; }
@@ -993,10 +992,29 @@ static void render_planar(video_state *st)
 /* Combine the snapshotted planes. pitch/start come from the CRTC in 2-byte units,
    which is how a mode-Y program page-flips. Masked so a mid-flip value cannot
    index outside the plane. */
+/* WHICH PAGE IS ON SCREEN, without the CRTC. A mode-Y program page-flips by
+   pointing the CRTC start at one of the 16000-byte pages, and we cannot watch that
+   register (above). But the pages are in our snapshot, so pick the one that
+   actually holds a picture: count non-zero bytes per page in plane 0 and take the
+   busiest. Exact for a title/menu screen, which is what this is for; a game
+   double-buffering two equally-busy pages may pick either, and that is a known
+   limit rather than a surprise. */
+static uint32_t modey_page(const video_state *st)
+{
+    uint32_t page = 0, bestn = 0, pg;
+    for (pg = 0; pg < 4; ++pg) {
+        uint32_t base = pg * 16000u, i, n = 0;
+        if (base + 16000u > VID_Y_PLANE) break;
+        for (i = 0; i < 16000u; i += 8) if (st->yplane[0][base + i]) ++n;
+        if (n > bestn) { bestn = n; page = pg; }
+    }
+    return page * 16000u;
+}
+
 static void render_modey(video_state *st)
 {
     uint32_t pitch = (uint32_t)(st->crtc_offset ? st->crtc_offset : 40) * 2u;
-    uint32_t start = (uint32_t)st->crtc_start * 2u;
+    uint32_t start = modey_page(st);
     int y, x;
     for (y = 0; y < st->gh; ++y) {
         uint32_t row = start + (uint32_t)y * pitch;
@@ -1073,6 +1091,14 @@ int vdd_video_init(vdd_bus *b, void *self)
     if (vdd_claim_mem(b, VID_TEXT_BASE, 0x8000, vid_rd, vid_wr, st)) return -1;
     if (vdd_claim_int(b, 0x10, int10, st)) return -1;
     if (vdd_claim_ports(b, 0x3C4, 0x3C5, seq_in, seq_out, st)) return -1;  /* Sequencer */
+    /* ⚠⚠ DO NOT CLAIM CRTC 0x3D4/0x3D5. Tried TWICE and it regresses Doom both
+         ways -- with a read handler (55,740 log lines vs 555,296) and write-only
+         with reads left at the unclaimed 0xFFFFFFFF (three attempts, all ~55k).
+         It is not read semantics and not range shadowing (0x3DA is a separate
+         claim). Whatever the mechanism, claiming that range costs the run, so the
+         page-flip address is DETECTED FROM THE DATA instead -- see modey_page().
+         If you retry this, gate it and run Doom three times: the run is flaky at
+         about 1 in 3 and a single green result proves nothing. */
     if (vdd_claim_ports(b, 0x3C7, 0x3C9, dac_in, dac_out, st)) return -1;  /* DAC       */
     if (vdd_claim_ports(b, 0x3CE, 0x3CF, gc_in, gc_out, st)) return -1;    /* Graphics  */
     if (vdd_claim_ports(b, 0x3DA, 0x3DA, status_in, status_out, st)) return -1; /* InpStatus1 */
