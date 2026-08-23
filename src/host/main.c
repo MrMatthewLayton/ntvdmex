@@ -453,6 +453,12 @@ static void pmap_clear(DWORD lin)
 #define PMKERNEL_PATH "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\pmkernel.flag"
 static int g_pm_noirq = 0;
 static int g_pm_veh_pass = 0;   /* pmvehpass.flag: let a non-INT PM fault fall THROUGH the VEH */
+/* THE EIP WE HANDED TO VdmStartExecution. The kernel's exception record reports a
+   fault EIP that is NOT reliable -- E+0, E+1 and E+3 all measured, and pmal.com and
+   pmstep.com fault at DIFFERENT offsets on byte-identical code. Since the guest has
+   provably executed nothing when the fault arrives (pmal makes AL a program counter:
+   AL=0 at the first fault, and unchanged at the second), this is where it really is. */
+static volatile LONG g_pm_entry_eip = -1;
 /* Per-event checkpoint verbosity. The full dump -- registers, stack, frame, entry code
    -- was built for the era when the client died inside the FIRST dpmi_enter_pm and the
    only question was "did we get there at all". Now that a client runs for thousands of
@@ -3294,7 +3300,25 @@ static LONG CALLBACK dpmi_crash_veh(EXCEPTION_POINTERS *ep)
                   log_append(LOG_PATH, cb, p); serial_out(cb, p);
                   return EXCEPTION_CONTINUE_SEARCH;
               }
-              p = zput(p, " -> FAULT, not an INT: resuming untouched");
+              /* ── RESUME WHERE THE GUEST ACTUALLY IS, NOT WHERE THE RECORD SAYS. ──
+                   The reported EIP is unreliable: E+0, E+1 and E+3 all measured, and
+                   pmal.com and pmstep.com report DIFFERENT offsets for byte-identical
+                   entry code, so it is not a function of the instruction stream.
+                   Resuming at it is what actually breaks clients -- when it lands past
+                   the entry the instruction there is SKIPPED (pmstep's `mov ax,0x4C00`
+                   went missing, which is why its AH=4Ch never terminated; dpmitest
+                   reaches INT 31h with the wrong AX and half-writes its RMCS), and when
+                   it lands mid-instruction the guest dies outright (pmtick, pmal).
+                   pmal.com settles where the guest really is by making AL a program
+                   counter: AL=0 at the first fault and UNCHANGED at the second, so no
+                   guest instruction had executed at either. The entry EIP is correct. */
+              if (g_pm_entry_eip >= 0 && (DWORD)g_pm_entry_eip != cx->Eip) {
+                  p = zput(p, " -> FAULT, not an INT: resuming at ENTRY 0x");
+                  p = zhex(p, (DWORD)g_pm_entry_eip);
+                  cx->Eip = (DWORD)g_pm_entry_eip;
+              } else {
+                  p = zput(p, " -> FAULT, not an INT: resuming untouched");
+              }
               p = zput(p, "\r\n");
               log_append(LOG_PATH, cb, p); serial_out(cb, p);
               cx->SegCs = 0x0F; cx->SegSs = 0x17;       /* guest selectors back; regs intact */
@@ -7558,7 +7582,9 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                             p = zput(p, "\r\n");
                             log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
                         }
+                        g_pm_entry_eip = (LONG)VDM_REG(tib, VTIB_EIP);
                         kev = v86_run(tib, &kst);
+                        g_pm_entry_eip = -1;
                         if (steps < 400) {
                             p = zput(p, "PMKERNEL[");     p = zhex(p, (unsigned)steps);
                             p = zput(p, "] VdmStartExecution -> st=0x"); p = zhex(p, (DWORD)kst);
