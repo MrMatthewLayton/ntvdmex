@@ -52,10 +52,47 @@
      what this file used to say. The kernel does NOT natively reflect a PM `INT nn`
      to us; every reflect we thought we saw was a fault. The BOPs are what make
      `VdmStartExecution` return at all (`ev=0x4`, eight times).
-  **3. AND: DOES THE KERNEL DELIVER IRQ0 WITH NO INJECTION AT ALL?** That is the
-     whole point — see the ceiling below. If it does, the async injector and every
-     failure it caused stop existing rather than getting fixed. **Still unanswered**,
-     and it is the question that decides whether this whole path is worth it.
+  **3. DOES THE KERNEL DELIVER IRQ0 WITH NO INJECTION AT ALL? ASKED DIRECTLY —
+     AND IT CANNOT BE ANSWERED YET.** `tools/dostest/pmtick.asm` (new) hooks IRQ0
+     with `INT 31h 0205`, spins, and reports PM handler entries alongside the BIOS
+     tick either side. Run it with **both** `pmkernel.flag` and `pmnoirq.flag`;
+     without pmnoirq OUR injector answers instead of the kernel.
+     ```
+        far-jmp + pmnoirq   PM entries = 0x0000  tick delta = 0x0024  tick0 = 0x2C2D
+        pmkernel + pmnoirq  dies in PM entry 1 -- no answer
+     ```
+     ▶ The first line is worth having on its own: **the ceiling is now MEASURED, not
+       just reasoned.** It was an argument from `POPFD` at CPL 3 and `VdmpCanDeliver`;
+       now 36 ticks of real time pass with a hooked PM handler and nothing arrives.
+     ▶ The second line **collapses the fork.** Under the kernel the probe dies at PM
+       entry 1 — `VdmStartExecution` never returns, no watchdog line, no wind-down
+       (`build/pmk7_pmtick.log`) — before it ever reaches the hook. So the store
+       faults in item 1 are **not optional groundwork**; nothing can run long enough
+       to answer item 3 until they are fixed. Do item 1 first.
+
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ ★★ THE SHARPEST LEAD ON THE STORE FAULTS: A FIXED 3-BYTE ADVANCE             │
+└──────────────────────────────────────────────────────────────────────────────┘
+
+  Across the ten faults in `build/pmk6.log` + `build/pmk7_pmtick.log`, tabulate the
+  fault address against the PM entry EIP:
+  ```
+     EIGHT land on a real instruction boundary.
+     TWO do not -- and they are EXACTLY the two whose first instruction is 2 bytes:
+        dpmitest entry 3   enter 0x152  `b3 1c`(2) -> 0x154   fault 0x155   (+3)
+        pmtick   entry 1   enter 0x132  `8c d8`(2) -> 0x134   fault 0x135   (+3)
+     Both land at entry+3, i.e. ONE BYTE PAST the next boundary.
+  ```
+  Every 3-byte-first-instruction entry faults at entry+3 too — which is a boundary
+  there, so it looks correct and hides the bug. **`+3` is the length of the kernel's
+  BOP (`C4 C4 nn`); ours is two bytes (`C4 C4`), and the outer loop advances by 2.**
+  ▶ **FALSIFIABLE, AND CHEAP:** a PM entry whose first instruction is ONE byte should
+    mis-land by 2. Build a client that arranges exactly that before theorising
+    further — and predict the number before the run.
+  ⚠ It does not explain everything yet: entry 0 of `dpmitest` arrives at its BOP with
+    `AX=0x0001` where the guest wrote `0x0400` and the TIB says `0x0000` at entry.
+    Something SETS AX to 1; a pure skip would leave 0. Do not file that away as
+    explained.
 
 ┌──────────────────────────────────────────────────────────────────────────────┐
 │ ★★★★ THE CEILING, AND WHY IT MAKES THE SPIKE THE MAIN LINE                   │
