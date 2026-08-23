@@ -7110,9 +7110,26 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                     BSETAX(0x8600); BCF_SET();     /* not provided -> unsupported */
                     g_bios_unimpl[0x15] = 1;
                 } else {
+                    /* ► LOG BEFORE BSETAX, NOT AFTER. The first cut printed AX *after*
+                         this arm had already overwritten AH with 0x86, so the log said
+                         "ax=0x86de" and only AL was the guest's -- the instrument
+                         reporting its own write back as the guest's request. */
+                    { char xb[96], *xq = xb;
+                      xq = zput(xq, "  INT15 UNIMPL ax=0x");
+                      xq = zhex(xq, VDM_REG(tib, VTIB_EAX) & 0xFFFF);
+                      xq = zput(xq, " bx=0x"); xq = zhex(xq, VDM_REG(tib, VTIB_EBX) & 0xFFFF);
+                      xq = zput(xq, " cx=0x"); xq = zhex(xq, VDM_REG(tib, VTIB_ECX) & 0xFFFF);
+                      xq = zput(xq, " dx=0x"); xq = zhex(xq, VDM_REG(tib, VTIB_EDX) & 0xFFFF);
+                      xq = zput(xq, " es=0x"); xq = zhex(xq, VDM_REG(tib, VTIB_ES) & 0xFFFF);
+                      xq = zput(xq, "\r\n"); log_append(LOG_PATH, xb, xq); serial_out(xb, xq); }
                     BSETAX((WORD)((VDM_REG(tib, VTIB_EAX) & 0xFF) | 0x8600));
                     BCF_SET();                     /* AH=86h: unsupported fn */
                     g_bios_unimpl[0x15] = 1;
+                    /* ► WHICH function, because "INT15" alone does not say. This arm is
+                         the only difference between a Doom run that works and one given
+                         a command-line argument: with an argument the trace is identical
+                         until here, DOS/4GW takes this CF=1, and exits CLEANLY in 328 ms
+                         (STAGE2: complete, run_ms=0x148) without printing a character. */
                 }
             } else if (bn == 0x14) {               /* serial: no port fitted */
                 BSETAX(0x0000);                    /* status: not ready       */
@@ -7658,6 +7675,24 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                          every asynchronous delivery bailed at the first line -- which is why
                          a PM guest could never be interrupted at all. Protected-mode
                          execution is execution too. */
+                    /* ► NARROW ESP ON A 16-BIT STACK FOR **BOTH** PATHS. This was added
+                         for the kernel path (it took the spike from 1 PM entry to 8) on the
+                         reasoning that the far-jmp path reloads the junk harmlessly with
+                         `lss`. Mostly true -- but measured, it is not always: give Doom a
+                         command-line argument and the run dies right after the AH=30h
+                         version check with
+                             SS=0x00c7 (SS D/B=0)  ESP=0xb33b6f14
+                             GH#18: PM-FAULT REFLECTED -- saved CS:EIP=0x00c7:0xb33b6f1e
+                         and 0xb33b is a HOST THREAD-STACK address sitting in the top half
+                         of ESP, because with a 16-bit SS the CPU maintains SP only and
+                         whatever the host last had there stays.
+                         ⚠ CLEARING IT DOES **NOT** FIX THAT BUG -- measured, the run is
+                           identical (467 INT 31h calls either way). Kept anyway because
+                           the junk is objectively wrong state that shows up in every dump
+                           and there is no case where the high half of ESP is meaningful
+                           while SS is 16-bit. Do not read this as the argument fix. */
+                    if (!dpmi_sel_is32((WORD)(VDM_REG(tib, VTIB_SS) & 0xFFFF)))
+                        VDM_REG(tib, VTIB_ESP) &= 0xFFFFu;
                     InterlockedExchange(&g_in_exec, 1);
                     if (g_dpmi_use_kernel) {
                         /* Hand the PM CONTEXT to the kernel monitor exactly as the V86
