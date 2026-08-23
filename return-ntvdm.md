@@ -4,10 +4,38 @@
 ██     AND THE SPIKE THAT LIFTS IT ALREADY RUNS.                              ██
 ═══════════════════════════════════════════════════════════════════════════════
 
-  Branch `m9/completeness`, HEAD `965e154`. Gates at the end: **off-VM 349/349**
-  (8 suites), **selftest.com 8/8** on the rig, `dpmitest.com` + `dpmiback.com` both
+  Branch `m9/completeness`. Gates at the end: **off-VM 580 checks across 16 suites,
+  0 failed** (⚠ session 19: the long-quoted "349/349 (8 suites)" is WRONG — it counts
+  only the suites printing `N checks, 0 failed` and misses the seven printing
+  `-- N checks, 0 failures --` plus the 49/49 MCB battery. `./tools/dostest/run.sh`
+  and add them up before quoting a number), **selftest.com 8/8** on the rig, `dpmitest.com` + `dpmiback.com` both
   `STAGE2: complete` with correct output, `check-imports.sh` clean, share clean.
   **Doom is NOT playable and does not reach the menu.**
+
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ ★★★★ SESSION 19 VERDICT: pmkernel IS NOT THE ROAD TO DOOM. MEASURED.         │
+└──────────────────────────────────────────────────────────────────────────────┘
+
+  Doom was run under `pmkernel.flag` for the first time (`build/doom_pmkernel2.log`):
+  ```
+     pmkernel path   TWO PM entries, then VdmStartExecution never returns.
+     far-jmp path    full startup, its own timer ISR entered, ticks=5, teardown.
+  ```
+  **The far-jmp path is enormously further along, and today's pmkernel work does not
+  move Doom at all.** Everything session 19 fixed (the entry-EIP resume, the EDX
+  discriminator, the 32-bit guard) is real and closed `dpmitest`'s zero RMCS — but it
+  is progress on a path that is two PM entries deep against a path that reaches the
+  game's startup. **If the north star is playable Doom, the shortest route is the
+  far-jmp path**, i.e. the async injector's fragility: Doom's ISR is entered, IRETs
+  cleanly, and the run dies ~5 ticks in (session 18 established delivery is sound and
+  the MECHANISM is what tears the VDM down).
+  ▶ Doom on the default path is UNCHANGED from session 18 — same `ticks=5`, same
+    silent teardown, and note `doom_s18_final.log` has no DOS-output block either
+    (a silent teardown flushes nothing, so Doom's startup text is absent from BOTH;
+    do not read that as a regression).
+  ▶ Keep `pmkernel` alive as a spike — it is the only path that could ever get
+    kernel-delivered IRQ0 — but stop treating it as the Doom path until it can at
+    least run `pmtick` to its report.
 
 ┌──────────────────────────────────────────────────────────────────────────────┐
 │ ★★★★ START HERE. ONE BOUNDED BUG, THEN TWO QUESTIONS THAT COLLAPSE A LOT.    │
