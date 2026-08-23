@@ -3312,6 +3312,36 @@ static LONG CALLBACK dpmi_crash_veh(EXCEPTION_POINTERS *ep)
                    pmal.com settles where the guest really is by making AL a program
                    counter: AL=0 at the first fault and UNCHANGED at the second, so no
                    guest instruction had executed at either. The entry EIP is correct. */
+              /* ── ONLY THE SPURIOUS ENTRY FAULT GETS REDIRECTED. ──────────────
+                   Measured: the spurious one is exc=0xC0000005 whose AV record
+                   carries NO address (0xFFFFFFFF, i.e. the kernel synthesised it)
+                   or exc=0xC000001E. A genuine guest fault looks nothing like that
+                   -- pmtick.com produced exc=0x80000003 (STATUS_BREAKPOINT) at
+                   0x3dc, INSIDE ITS OWN MESSAGE DATA, from a guest that had already
+                   run away. Redirecting THAT to the entry EIP is not a fix, it is a
+                   loop: it keeps restarting an entry whose guest is long gone, and
+                   the run ends at a nonsense cs:eip=0x3f:0x0080 with the real
+                   failure never reported. Send anything unrecognised to the fatal
+                   dump, which prints the code, the address and the bytes -- so a
+                   runaway is VISIBLE instead of being silently "resumed". */
+              /* ► THE DISCRIMINATOR IS EDX, NOT THE EXCEPTION CODE. Three codes have
+                     now been seen for the SAME spurious entry event -- 0xC0000005,
+                     0xC000001E and 0xC0000003/0x80000003 -- so keying on the code
+                     mislabels one of them every time a new client turns up. pmtick
+                     produced a STATUS_BREAKPOINT "at 0x3dc", and guest 0x3dc is the
+                     middle of the string "PMTICK: mode switch FAILED (CF=1)": message
+                     data, with no 0xCC in it. The guest was never there; the address
+                     is as unreliable as the rest.
+                     What IS constant, in every spurious fault since the first log, is
+                     that the kernel puts THE ENTRY EIP IN EDX -- and it is demonstrably
+                     not the guest's own EDX (here EDX=0x20b, the entry, while the
+                     guest's real EDX was 0x2c2d). So ask that. */
+              if ((DWORD)cx->Edx != (DWORD)g_pm_entry_eip || g_pm_entry_eip < 0) {
+                  p = zput(p, " -> REAL fault (EDX is not the entry EIP): FATAL dump");
+                  p = zput(p, "\r\n");
+                  log_append(LOG_PATH, cb, p); serial_out(cb, p);
+                  goto veh_fatal;
+              }
               if (g_pm_entry_eip >= 0 && (DWORD)g_pm_entry_eip != cx->Eip) {
                   p = zput(p, " -> FAULT, not an INT: resuming at ENTRY 0x");
                   p = zhex(p, (DWORD)g_pm_entry_eip);
@@ -3349,6 +3379,7 @@ static LONG CALLBACK dpmi_crash_veh(EXCEPTION_POINTERS *ep)
     }
 
     /* --- genuine (non-reflected) PM fault: full dump + clean exit -------------------- */
+veh_fatal:
     InterlockedIncrement(&g_veh_fatal);                 /* run 52: a real PM fault WAS delivered */
     p = zput(p, "\r\nDPMI FATAL: exception code=0x"); p = zhex(p, er->ExceptionCode);
     p = zput(p, " at 0x"); p = zhex(p, (unsigned)(ULONG_PTR)er->ExceptionAddress);
