@@ -21,6 +21,7 @@ nasm -f bin "$DIR/modeswitch.asm" -o "$DIR/modeswitch.com" # GH#14: graphics->te
 nasm -f bin "$DIR/dpmitest.asm" -o "$DIR/dpmitest.com"     # GH#1: DPMI 16-bit real->PM switch spike
 nasm -f bin "$DIR/dpmiexe.asm"  -o "$DIR/dpmiexe.exe"      # GH#2: multi-segment MZ .EXE DPMI client
 nasm -f bin "$DIR/pmfault.asm"  -o "$DIR/pmfault.com"      # GH#18: raw PM-#GP reflect probe (run 59)
+nasm -f bin "$DIR/pmtick.asm"   -o "$DIR/pmtick.com"       # session 19: does the KERNEL deliver IRQ0 to a PM handler?
 nasm -f bin "$DIR/outprobe.asm" -o "$DIR/outprobe.com"     # GH#18: PM I/O-virtualization probe (run 72)
 nasm -f bin "$DIR/ioverify.asm" -o "$DIR/ioverify.com"     # GH#18: PM I/O VDD round-trip verify (run 73)
 nasm -f bin "$DIR/mode13.asm"   -o "$DIR/mode13.com"       # GH#18: PM VGA render slice (milestone #6)
