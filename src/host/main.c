@@ -675,6 +675,7 @@ static DWORD g_pm_app_timer_off = 0;
 #define DPMI_PMDEF_STRIDE 3
 static WORD  g_pm_defsel  = 0;      /* code selector over the stub block */
 static DWORD g_pm_defbase = 0;      /* its linear base                   */
+static int   g_pm_defidx  = -1;     /* its LDT slot, so its D/B can follow the client */
 /* DPMI PM EXCEPTION-handler table (INT 31h 0202/0203). Separate from g_pm_int on
    purpose: 0202/0203 address CPU exceptions 00h-1Fh, which are a different namespace
    from the interrupt vectors 0204/0205 addresses -- a client may legitimately install
@@ -953,6 +954,13 @@ static void host_pit_sync(void);             /* fwd: the guest's clock, driven b
    rewrite its context, resume. Defined next to dpmi_inject_pm_irq() because it shares
    that function's frame rules; declared here because async_inject_irq() needs it. */
 static int  dpmi_async_inject_pm(unsigned irq, CONTEXT *cx);
+/* WHICH gate refused the last async PM injection. Doom's log showed ok=0 on all six
+   attempts with `from=0x187:...`, i.e. the thread WAS in 32-bit client PM code, so
+   dpmi_async_inject_pm() was reached and returned 0 -- and nothing said which of its
+   ten early-outs fired. Session 18 concluded "the async mechanism is what tears the
+   VDM down" from a control where async was ON; if it never injects, that attribution
+   was to a mechanism that was not running. */
+static LONG g_async_why = 0;
 static volatile LONG g_async_pm_active = 0;  /* an async PM interrupt is in flight     */
 static DWORD g_async_pm_eip = 0, g_async_pm_esp = 0, g_async_pm_efl = 0;
 static WORD  g_async_pm_cs  = 0, g_async_pm_ss  = 0;
@@ -997,6 +1005,7 @@ static int async_inject_irq(unsigned irq)
          separates "the thread is executing client PM code" from "the thread is in our own
          code between entries" exactly, with nothing to keep in sync. */
     if (!(efl & EFLAGS_VM_BIT)) {
+        g_async_why = 0;
         if ((cs & 4) && dpmi_async_inject_pm(irq, &cx)) {
             cx.ContextFlags = CONTEXT_CONTROL | CONTEXT_SEGMENTS;
             ok = SetThreadContext(g_hcpu, &cx) ? 1 : 0;
@@ -1014,6 +1023,7 @@ static int async_inject_irq(unsigned irq)
         if (g_async_pm_inj + g_async_pm_bail2 <= 40) {
             char pb[224], *pq = pb;
             pq = zput(pq, "ASYNC-PM vec=0x08 ok=0x"); pq = zhex(pq, (DWORD)ok);
+            pq = zput(pq, " why="); pq = zhex(pq, (DWORD)g_async_why);
             pq = zput(pq, " from=0x");   pq = zhex(pq, cs);
             pq = zput(pq, ":0x");        pq = zhex(pq, g_async_pm_eip);
             pq = zput(pq, " -> 0x");     pq = zhex(pq, (DWORD)DPMI_IRQ_TARGET_SEL(8));
@@ -3553,6 +3563,7 @@ static void dpmi_install_default_pm_handlers(dos_machine_t *mp)
         g_pm_int[v].off = off;
         g_pm_int[v].client = 0;
     }
+    g_pm_defidx = idx;      /* so the width can be corrected once the client declares it */
     q = zput(q, "DPMI: default PM handlers at 0x"); q = zhex(q, g_pm_defsel);
     q = zput(q, ":0 (linear 0x"); q = zhex(q, g_pm_defbase);
     q = zput(q, ", 256 vectors)\r\n");
@@ -4117,6 +4128,30 @@ static void dpmi_repatch(void)
 
 /* Forward decl: the shared PM-interrupt dispatcher (defined after this fn). A callback
    handler that issues its own INT 31h/21h routes through it, same as the main PM loop. */
+/* ── THE DEFAULT PM STUBS MUST BE AS WIDE AS THE CLIENT. ─────────────────────────────
+     Each default vector is `C4 C4 CF`: a BOP we service, then an IRET that returns to
+     whoever chained here. The selector was built 16-bit unconditionally ("the stubs are
+     16-bit"), which is right for a 16-bit client and WRONG for DOS/4GW -- and Doom chains
+     to it. Measured: Doom's timer ISR runs clean for five ticks, then on the sixth it
+     chains to the previous vector-8 handler, which INT 31h 0204 reported as our default
+     stub (`0x37:0x18`). We service the BOP, advance past it, and the guest is left at
+     `0x37:0x1a` about to execute `CF` -- a SIXTEEN-BIT IRET popping the TWELVE-byte frame
+     a 32-bit ISR pushed. It takes 6 bytes, lands on garbage, and the kernel tears the VDM
+     down with no diagnostic. That is the whole "dies ~5 ticks in".
+     One bit fixes it: with D/B set, the same `CF` is an IRETD. This is the third time this
+     project has paid for "frame width and descriptor width are the same question" -- see
+     the initial-selector and PM-return-catcher notes. The client's width is not known when
+     the table is built, so sync it at use. */
+static void dpmi_sync_defsel_width(void)
+{
+    BYTE want;
+    if (g_pm_defidx < 0) return;
+    want = (BYTE)(g_dpmi_client32 ? 0x4 : 0x0);      /* 0x4 = D/B, same idiom as the handler code sel */
+    if (g_ldt[g_pm_defidx].flags == want) return;
+    g_ldt[g_pm_defidx].flags = want;
+    dpmi_install(g_pm_defidx);
+}
+
 static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec, unsigned steps);
 static void dpmi_ensure_pmret_sel(void);   /* fwd: shared PM-return catcher installer (#2b + 0303) */
 
@@ -4275,6 +4310,7 @@ static int dpmi_dispatch_to_pm_handler(dos_machine_t *mp, volatile BYTE *tib,
     unsigned ph; int done = 0;
 
     dpmi_ensure_pmret_sel();
+    dpmi_sync_defsel_width();     /* the ISR may chain into the default stubs -- see the helper */
     if (g_pmret_sel == 0) return 0;                 /* caller falls back to servicing */
 
     /* ► FRAME WIDTH AND STACK-POINTER WIDTH ARE TWO DIFFERENT QUESTIONS, and conflating
@@ -5820,25 +5856,25 @@ static int dpmi_async_inject_pm(unsigned irq, CONTEXT *cx)
     unsigned iv = 0x08 + irq;                    /* IRQ0-7 -> PM vectors 08h-0Fh */
     DWORD efl = cx->EFlags;
     WORD  ss;
-    if (iv > 0x0F) return 0;
-    if (g_pm_noirq || g_in_pm_irq) return 0;     /* knob off, or a sync injection is running */
-    if (g_pmret_sel == 0) return 0;              /* no catcher yet -> no way back */
-    if (!g_pm_int[iv].client) return 0;          /* the client has not hooked this line */
+    if (iv > 0x0F) { g_async_why = 1; return 0; }
+    if (g_pm_noirq || g_in_pm_irq) { g_async_why = g_in_pm_irq ? 2 : 3; return 0; }     /* knob off, or a sync injection is running */
+    if (g_pmret_sel == 0) { g_async_why = 4; return 0; }              /* no catcher yet -> no way back */
+    if (!g_pm_int[iv].client) { g_async_why = 5; return 0; }          /* the client has not hooked this line */
     /* Not before the application has an ISR; see dpmi_inject_pm_irq(). */
-    if (g_dpmi_client32 && iv == 0x08 && !g_pm_app_hooked_timer) return 0;
-    if (!g_dpmi_vi) return 0;                    /* the client has interrupts masked */
-    if (!(efl & (0x200u | EFLAGS_VIF_BIT))) return 0;      /* ...and the CPU agrees */
+    if (g_dpmi_client32 && iv == 0x08 && !g_pm_app_hooked_timer) { g_async_why = 6; return 0; }
+    if (!g_dpmi_vi) { g_async_why = 7; return 0; }                    /* the client has interrupts masked */
+    if (!(efl & (0x200u | EFLAGS_VIF_BIT))) { g_async_why = 8; return 0; }      /* ...and the CPU agrees */
     /* Same hold-off the cooperative path uses: a vector installed microseconds ago is an
        arming pass, and real IRQ0 could not have arrived yet. See INT 31h 0205. */
-    if ((GetTickCount() - g_pm_vec8_armed_ms) < DPMI_IRQ0_ARM_QUIET_MS) return 0;
-    if (InterlockedCompareExchange(&g_async_pm_active, 1, 0) != 0) return 0;
+    if ((GetTickCount() - g_pm_vec8_armed_ms) < DPMI_IRQ0_ARM_QUIET_MS) { g_async_why = 9; return 0; }
+    if (InterlockedCompareExchange(&g_async_pm_active, 1, 0) != 0) { g_async_why = 10; return 0; }
 
     ss = (WORD)(cx->SegSs & 0xFFFF);
-    if (!(ss & 4)) { g_async_pm_active = 0; return 0; }    /* not a client stack -> not safe */
+    if (!(ss & 4)) { g_async_pm_active = 0; g_async_why = 11; return 0; }    /* not a client stack -> not safe */
     /* Same rule as the cooperative path: interrupt the APPLICATION, never the extender
        mid-service. See dpmi_inject_pm_irq() for what that cost to learn. */
     if (g_dpmi_client32 && !dpmi_sel_is32((WORD)(cx->SegCs & 0xFFFF))) {
-        g_async_pm_active = 0; return 0;
+        g_async_pm_active = 0; g_async_why = 12; return 0;
     }
 
     /* Save what we are interrupting; the catcher BOP is where it gets put back. */
@@ -5986,6 +6022,27 @@ static int dpmi_inject_pm_irq(dos_machine_t *mp, volatile BYTE *tib, unsigned iv
     for (ph = 0; ph < 64 && !done; ++ph) {
         DWORD ev, eip, vec; int rc;
         dpmi_arm_fault_trampoline(tib, 0);
+        /* ► THE LAST THING BEFORE THE CLIFF. Doom takes five of these injections and
+             dies inside the SIXTH: its "IRQ0->PM INT" entry line is the final line in
+             the log, dpmi_enter_pm() never returns, and the VDM is gone. The entry line
+             above is printed once per injection, so it cannot show what changed BETWEEN
+             the fifth and the sixth -- and the five that work are byte-identical in
+             every field it prints. Log the state at each PM entry instead, bounded, so
+             the fatal one can be DIFFED against its five healthy predecessors. */
+        if (g_pm_irq0_done < 12) {
+            char eb[192], *eq = eb;
+            eq = zput(eq, "   PMENT tick="); eq = zhex(eq, (DWORD)g_pm_irq0_done);
+            eq = zput(eq, " ph="); eq = zhex(eq, (DWORD)ph);
+            eq = zput(eq, " cs:eip=0x"); eq = zhex(eq, VDM_REG(tib, VTIB_CS) & 0xFFFF);
+            eq = zput(eq, ":0x"); eq = zhex(eq, VDM_REG(tib, VTIB_EIP));
+            eq = zput(eq, " ss:esp=0x"); eq = zhex(eq, VDM_REG(tib, VTIB_SS) & 0xFFFF);
+            eq = zput(eq, ":0x"); eq = zhex(eq, VDM_REG(tib, VTIB_ESP));
+            eq = zput(eq, " efl=0x"); eq = zhex(eq, VDM_REG(tib, VTIB_EFLAGS));
+            eq = zput(eq, " [714]=0x"); eq = zhex(eq, *(volatile DWORD *)(ULONG_PTR)0x714);
+            eq = zput(eq, " vi="); eq = zhex(eq, (DWORD)g_dpmi_vi);
+            eq = zput(eq, " apa="); eq = zhex(eq, (DWORD)g_async_pm_active);
+            eq = zput(eq, "\r\n"); log_append(LOG_PATH, eb, eq); serial_out(eb, eq);
+        }
         dpmi_enter_pm(tib);
         ev  = VDM_REG(tib, VTIB_EVENT);
         eip = dpmi_pm_eip(tib);
@@ -7686,15 +7743,30 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                              enters and IRETs with no excursion -- so one round trip serves a
                              whole batch. This is catch-up, the same shape the PIT already
                              uses when the host falls behind (pit_gaps), not an invention. */
-                        if (g_dpmi_client32 && g_pm_app_hooked_timer && !g_pm_noirq
-                            && dpmi_sel_is32((WORD)(VDM_REG(tib, VTIB_CS) & 0xFFFF))) {
-                            int k;
+                        /* ► SAY WHETHER THIS RAN, AND HOW FAR. Session 18 recorded
+                             "coalescing the tick drain changed nothing (batch 64 -> 5
+                             ticks, batch 3 -> 4)" and filed it as a dead end. But the
+                             tick counter only ever advances ONE per async round trip,
+                             which is what it would do if this batch never delivered --
+                             and nothing here says which. Two numbers settle it: was the
+                             gate taken, and what was k at exit. */
+                        { int k = -1, gate;
+                          gate = (g_dpmi_client32 && g_pm_app_hooked_timer && !g_pm_noirq
+                                  && dpmi_sel_is32((WORD)(VDM_REG(tib, VTIB_CS) & 0xFFFF)));
+                          if (gate) {
                             g_in_pm_irq = 1;
                             for (k = 0; k < DPMI_IRQ0_BATCH; ++k) {
                                 if (!dpmi_inject_pm_irq(&m, tib, 0x08, steps)) break;
                             }
                             g_in_pm_irq = 0;
-                        }
+                          }
+                          { char bb[160], *bq = bb;
+                            bq = zput(bq, "  BATCH gate="); bq = zhex(bq, (DWORD)gate);
+                            bq = zput(bq, " k="); bq = zhex(bq, (DWORD)k);
+                            bq = zput(bq, " c32="); bq = zhex(bq, (DWORD)g_dpmi_client32);
+                            bq = zput(bq, " hooked="); bq = zhex(bq, (DWORD)g_pm_app_hooked_timer);
+                            bq = zput(bq, " cs=0x"); bq = zhex(bq, VDM_REG(tib, VTIB_CS) & 0xFFFF);
+                            bq = zput(bq, "\r\n"); log_append(LOG_PATH, bb, bq); serial_out(bb, bq); } }
                         continue;
                     }
                     /* GH#18 (bare-metal crack, 2026-08-18): dpmi_enter.S reports event 3 when it
