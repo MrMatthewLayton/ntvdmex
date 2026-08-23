@@ -13,6 +13,50 @@
   **Doom is NOT playable and does not reach the menu.**
 
 ┌──────────────────────────────────────────────────────────────────────────────┐
+│ ★★★★★ DOOM DIES IN ITS **DISPLAY** PATH — CALL STACK FULLY WALKED            │
+└──────────────────────────────────────────────────────────────────────────────┘
+
+  12 `pmbp.txt` runs walking outward from the last PM entry. Every step confirmed by
+  HIT COUNTS, not inference:
+  ```
+    obj1+0x41ce8  INT 31h helper                completes (1608 hits, last = its end)
+    obj1+0xa110   DPMI 0600 wrapper, 0x1c-byte stack struct -- matches the writes
+    obj1+0x3ed8f  locks the "d_intro" MUS lump  completes  (the dump contains the
+                                                bytes 64 5f 69 6e 74 72 6f)
+    obj1+0x1d74e  music start, song 0x1d        completes
+    obj1+0x1fa2c  loop x5                       completes, exits via its bounded
+                                                counter -- a NORMAL exit, not a crash
+    obj1+0x1d603  call 0x1d1e0                  ** NEVER RETURNS **
+    obj1+0x1d1e0  has mov $0x140 / $0xc8 = 320x200 -> THE DISPLAY PATH
+    obj1+0x1d1fe  call 0x35a70                  ** NEVER RETURNS **
+    obj1+0x35a70  R_ExecuteSetViewSize-shaped view/scale setup
+  ```
+  **Doom dies inside its screen-setup path** — exactly consistent with "mode 13h set,
+  ZERO A000 writes". It gets as far as starting the intro music and setting up the
+  view, i.e. the frame before anything is drawn.
+
+  ⚠⚠ **AND THEN THE BISECTION BROKE THE MODEL — READ THIS BEFORE CONTINUING.**
+  Narrowing inside `0x35a70` converged on:
+  ```
+     35ae5  mov 0x32308,%eax     <- LAST instruction confirmed executed
+     35aea  mov 0x38ff8,%cl
+     35af0  sar %cl,%eax
+     35af2  mov 0x32304,%edx     <- never reached
+  ```
+  **A load and a shift. Those cannot fault.** Operands are absolute addresses inside
+  obj1's own 0x45000 block, `DS=0x18f` is the flat data selector, `ECX=0x18`/`EAX=0`
+  are unremarkable. Controls done: all six breakpoints armed with NO refusals, and the
+  run matches baseline (`ticks=0x1587` vs `0x158c`, `mode13=1`) — **not** breakpoint
+  perturbation.
+  ⇒ Either the kill is **ASYNCHRONOUS** (host/kernel tearing the VDM down, landing
+    here only because the timing is deterministic), or the breakpoint mechanism
+    misbehaves at this density. **"The guest faults at its own EIP" no longer fits.**
+    Do not resume bisecting until that is settled — it is a broken instrument or a
+    broken model, and either way more bisection is wasted.
+  ⚠ `pmnoirq.flag` CANNOT discriminate: without tick injection Doom never reaches
+    mode 13h at all (`mode13=0`), so the control is useless here.
+
+┌──────────────────────────────────────────────────────────────────────────────┐
 │ ★★★★ WHERE DOOM STOPS NOW: MODE 13h IS SET, NOTHING IS DRAWN, AND IT IS      │
 │      DETERMINISTIC                                                           │
 └──────────────────────────────────────────────────────────────────────────────┘
