@@ -480,10 +480,35 @@
   The stack in the lines just before is `SS=0x00c7 (SS D/B=0) ESP=0xb33b6f14` — and
   `0xb33b` is a HOST THREAD-STACK address in the top half of ESP, i.e. the documented
   16-bit-SS junk, on DOS/4GW's own 16-bit stack.
-  ▶ **NEXT:** find what faults. The trampoline's saved `CS:EIP=0x00c7:0xb33b6f1e` has
-    CS equal to the *stack* selector, so the saved pair is not a code address —
-    either the fault corrupted it or the trampoline is recording the wrong thing.
-    Settle which before theorising about the guest.
+  ▶▶ **AND THE "QUIT" IS OURS.** The trampoline arm ends with `break` — *"for run 59
+    the reflect firing IS the deliverable, so stop the client cleanly here."* True then;
+    it means **ANY** real PM fault now ends the run with `STAGE2: exec loop exited ->
+    flushing` + `STAGE2: complete`, which reads exactly like the client choosing to
+    exit. **DOS/4GW is not quitting — we kill it.** Two sessions described this bug in
+    the client's voice.
+  ▶ **THE FIX IS DPMI-STANDARD AND THE PLUMBING EXISTS.** Clients register exception
+    handlers with `INT 31h 0203`; **DOS/4GW registers THIRTEEN** (measured). A
+    reflected fault belongs DISPATCHED to `g_pm_exc[n]`, exactly as
+    `dpmi_dispatch_to_pm_handler()` does for interrupts. Only with no handler should
+    the run end — and then saying so, not "complete".
+  ⚠ **BLOCKED ON ONE THING, AND IT IS A LYING INSTRUMENT:**
+    **`VTIB_FLT_SAVCS`/`VTIB_FLT_SAVEIP` DO NOT HOLD CS:EIP.** The log printed
+    `saved CS:EIP=0x00c7:0xb33b6f1e` for a guest whose CS was `0x6f` and whose SS:ESP
+    was `0x00c7:0xb33b6f14` — SS, and ESP+0xa. **Proved by accident and decisively:**
+    clearing the junk top half of ESP changed the reported "EIP" from `0xb33b6f1e` to
+    `0x00006f1e`. *A field that tracks ESP is not EIP.* The raw window is now dumped:
+    ```
+       tib+0x634  01 00 00 00   nest = 1
+       tib+0x638  47 00         our fault-handler STACK selector (we write this)
+       tib+0x63a  c7 00         guest SS        <- was read as "CS"
+       tib+0x63c  1e 6f 00 00   guest ESP+0xa   <- was read as "EIP"
+       tib+0x640  af 36 00 00   0x36af -- the likelier faulting EIP (called "sav3")
+    ```
+    Relabelled in the log; **NOT renamed in `ntvdm.h`** until calibrated against a
+    fault at a KNOWN address. ⚠ `pmfault`'s HLT/INT3 CANNOT calibrate it — re-measured
+    this session, `pmfhlt.com` dies silently with no reflect at all. **Write a variant
+    that loads a bad selector** (`mov ax,0x1234 ; mov ds,ax`) at a known offset; that
+    is the unblocking task.
 
   ⚠⚠ **TWO DEAD ENDS, MEASURED. DO NOT RE-SPEND THEM.**
   * **INT 15h.** The argument run is the ONLY one reporting `BIOS ... unimplemented:
