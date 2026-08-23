@@ -728,11 +728,62 @@ int vdd_video_present_ready(video_state *st)
 }
 
 /* Sequencer ports 3C4 (index) / 3C5 (data) -- Map Mask (SR2). */
+/* Copy the aperture into whichever planes the outgoing mask selected. Called on
+   a mask change and once per presented frame -- never per write. */
+static void modey_snapshot(video_state *st)
+{
+    int p;
+    if (st->chain4 || st->mkind != VID_KIND_LINEAR8 || !st->vmem) return;
+    for (p = 0; p < 4; ++p)
+        if (st->y_mask & (1u << p)) {              /* no CRT/memcpy dependency here */
+            uint32_t i; const uint8_t *src = st->vmem; uint8_t *dst = st->yplane[p];
+            for (i = 0; i < VID_Y_PLANE; ++i) dst[i] = src[i];
+        }
+    st->dirty = 1;
+}
+
+/* CRTC: only the registers unchained page-flipping needs. 0x0C/0x0D are the
+   display START address (how a mode-Y program flips pages) and 0x13 the logical
+   line width. Everything else is accepted and ignored -- this VDD does not model
+   CRTC timing and pretending to would be worse than not. */
+/* ⚠ NOT CLAIMED: see the note at the call site. */
+static void crtc_out_unused(void *self, uint16_t port, uint8_t w, uint32_t v)
+{
+    video_state *st = (video_state *)self; (void)w;
+    if (port == 0x3D4) { st->crtc_index = (uint8_t)v; return; }
+    switch (st->crtc_index) {
+    case 0x0C: st->crtc_start = (uint16_t)((st->crtc_start & 0x00FF) | ((uint16_t)(v & 0xFF) << 8)); st->dirty = 1; break;
+    case 0x0D: st->crtc_start = (uint16_t)((st->crtc_start & 0xFF00) | (v & 0xFF));                  st->dirty = 1; break;
+    case 0x13: st->crtc_offset = (uint8_t)v;                                                          st->dirty = 1; break;
+    default: break;
+    }
+}
+static void crtc_in_unused(void *self, uint16_t port, uint8_t w, uint32_t *v)
+{
+    video_state *st = (video_state *)self; (void)w;
+    if (port == 0x3D4) { *v = st->crtc_index; return; }
+    switch (st->crtc_index) {
+    case 0x0C: *v = (uint8_t)(st->crtc_start >> 8); break;
+    case 0x0D: *v = (uint8_t)(st->crtc_start & 0xFF); break;
+    case 0x13: *v = st->crtc_offset; break;
+    default:   *v = 0; break;
+    }
+}
+
 static void seq_out(void *self, uint16_t port, uint8_t w, uint32_t v)
 {
     video_state *st = (video_state *)self; (void)w;
     if (port == 0x3C4) st->seq_index = (uint8_t)v;
-    else if (st->seq_index == 2) st->map_mask = (uint8_t)(v & 0x0F);
+    else if (st->seq_index == 2) {
+        /* A mask change is the moment the outgoing plane's data is complete. */
+        if (!st->chain4 && (uint8_t)(v & 0x0F) != st->y_mask) modey_snapshot(st);
+        st->map_mask = (uint8_t)(v & 0x0F);
+        st->y_mask   = st->map_mask;
+    }
+    else if (st->seq_index == 4) {                 /* Memory Mode: bit 3 = Chain-4 */
+        uint8_t c4 = (uint8_t)((v >> 3) & 1);
+        if (c4 != st->chain4) { st->chain4 = c4; st->y_mask = st->map_mask; st->dirty = 1; }
+    }
 }
 static void seq_in(void *self, uint16_t port, uint8_t w, uint32_t *v)
 {
@@ -939,6 +990,22 @@ static void render_planar(video_state *st)
 /* Render the current mode into st->frame each tick (always, so direct A0000
    writes show and the client stays refreshed). Does NOT blit -- the host presents
    st->frame outside the bus lock so the slow blit never starves the V86 thread. */
+/* Combine the snapshotted planes. pitch/start come from the CRTC in 2-byte units,
+   which is how a mode-Y program page-flips. Masked so a mid-flip value cannot
+   index outside the plane. */
+static void render_modey(video_state *st)
+{
+    uint32_t pitch = (uint32_t)(st->crtc_offset ? st->crtc_offset : 40) * 2u;
+    uint32_t start = (uint32_t)st->crtc_start * 2u;
+    int y, x;
+    for (y = 0; y < st->gh; ++y) {
+        uint32_t row = start + (uint32_t)y * pitch;
+        uint8_t *dst = st->fb + (uint32_t)y * st->gw;
+        for (x = 0; x < st->gw; ++x)
+            dst[x] = st->yplane[x & 3][(row + ((uint32_t)x >> 2)) & (VID_Y_PLANE - 1u)];
+    }
+}
+
 static void vid_frame(void *self)
 {
     video_state *st = (video_state *)self;
@@ -947,6 +1014,11 @@ static void vid_frame(void *self)
         vesa_sync(st);
         st->frame.w = st->vesa_w; st->frame.h = st->vesa_h; st->frame.bpp = 8;
         st->frame.stride = st->vesa_w; st->frame.pixels = st->vesa_vram; st->frame.palette = st->pal;
+    } else if (st->mkind == VID_KIND_LINEAR8 && !st->chain4) {  /* mode Y */
+        modey_snapshot(st);                            /* capture the live plane   */
+        render_modey(st);
+        st->frame.w = st->gw; st->frame.h = st->gh; st->frame.bpp = 8;
+        st->frame.stride = st->gw; st->frame.pixels = st->fb; st->frame.palette = st->pal;
     } else if (st->mkind == VID_KIND_LINEAR8) {        /* graphics: vmem is the FB */
         st->frame.w = st->gw; st->frame.h = st->gh; st->frame.bpp = 8;
         st->frame.stride = st->gw; st->frame.pixels = st->vmem; st->frame.palette = st->pal;
@@ -983,6 +1055,8 @@ void vdd_video_reset(void *self)
     st->dac_widx = st->dac_ridx = st->dac_comp = 0;
     st->seq_index = st->gc_index = 0;
     st->map_mask = 0x0F; st->bit_mask = 0xFF; st->write_mode = 0;
+    st->chain4 = 1; st->y_mask = 0x0F;
+    st->crtc_index = 0; st->crtc_offset = 40; st->crtc_start = 0;
     st->set_reset = st->enable_sr = st->func_rotate = st->read_map = 0;
     st->latch[0] = st->latch[1] = st->latch[2] = st->latch[3] = 0;
     st->in_vesa = 0; st->vesa_mode = 0; st->vesa_bank = 0;

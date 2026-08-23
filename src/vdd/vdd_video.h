@@ -31,6 +31,7 @@
 #define VID_G12_W         640           /* mode 12h: 640x480x16 planar            */
 #define VID_G12_H         480
 #define VID_PLANE_SIZE    (VID_G12_W * VID_G12_H / 8)   /* 38400 bytes/plane      */
+#define VID_Y_PLANE       65536u                        /* mode-Y plane = full 64K */
 
 /* VESA VBE 2.0 (banked, packed-256). A0000 is the 64KB window onto vesa_vram. */
 #define VID_VESA_WIN      0x10000u      /* 64KB banked window                     */
@@ -82,6 +83,27 @@ typedef struct video_state {
     uint8_t  enable_sr;    /* GR1                                                  */
     uint8_t  func_rotate;  /* GR3: bits0-2 rotate count, bits3-4 ALU               */
     uint8_t  read_map;     /* GR4: plane read in read-mode 0                       */
+    /* ── UNCHAINED ("mode Y") SUPPORT, snapshot-based. ────────────────────────
+         Clearing Sequencer reg 4 bit 3 unchains mode 13h: 320x200 becomes four
+         planes, pixel (x,y) in plane (x&3) at y*80 + x/4, and programs page-flip
+         via the CRTC start address. Doom's DOS build does this.
+         We CANNOT demultiplex by trapping A000 -- measured, arming that page trap
+         collapsed a Doom run from ~553k log lines to ~55k, because with the trap
+         armed the interpreter becomes the CPU and a 32-bit client rewriting the
+         framebuffer every frame cannot afford it.
+         So: snapshot instead. The guest changes the plane mask only a handful of
+         times per frame, and that write goes through a PORT (already cheap to
+         intercept). On each mask change we copy the aperture into the planes the
+         OLD mask selected. Exact for a program that fills a whole plane before
+         switching -- which is what a full-screen blit does -- and approximate for
+         one that interleaves planes mid-scan. Documented as an approximation
+         because it is one. */
+    uint8_t  chain4;       /* SR4 bit 3: 1 = chained (plain 13h), 0 = mode Y       */
+    uint8_t  y_mask;       /* map mask in force since the last snapshot            */
+    uint8_t  crtc_index;   /* 3D4 index latch                                      */
+    uint8_t  crtc_offset;  /* CRTC 0x13: logical line width in 2-byte units        */
+    uint16_t crtc_start;   /* CRTC 0x0C/0x0D: display start -- the page-flip reg   */
+    uint8_t  yplane[4][VID_Y_PLANE];   /* de-interleaved mode-Y planes             */
     uint8_t  write_mode;   /* GR5 bits0-1                                          */
     uint8_t  bit_mask;     /* GR8 (reset 0xFF)                                     */
     uint8_t  latch[4];     /* per-plane read latches                               */

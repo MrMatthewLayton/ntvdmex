@@ -8192,7 +8192,12 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         p = zput(p, " p3da_reads=");             p = zhex(p, g_vid.p3da_reads);
         p = zput(p, " run_ms=");                 p = zhex(p, GetTickCount() - g_run_start_tick);
         p = zput(p, "\r\n");
-        p = zput(p, "STAGE2: video now: mkind="); p = zhexb(p, g_vid.mkind);
+        /* ► Is mode Y actually in use? The whole unchained theory rests on Doom
+             clearing Sequencer reg 4 bit 3, which was INFERRED from a pixel pattern
+             (80-px period, 50 rows) and never observed directly. Print the register. */
+        p = zput(p, "STAGE2: video now: chain4="); p = zhexb(p, g_vid.chain4);
+        p = zput(p, " ymask="); p = zhexb(p, g_vid.y_mask);
+        p = zput(p, " mkind="); p = zhexb(p, g_vid.mkind);
         p = zput(p, " gw="); p = zhex(p, g_vid.gw); p = zput(p, " gh="); p = zhex(p, g_vid.gh);
         p = zput(p, " mapmask="); p = zhexb(p, g_vid.map_mask);
         p = zput(p, " setreset="); p = zhexb(p, g_vid.set_reset);
