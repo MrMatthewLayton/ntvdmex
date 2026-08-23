@@ -3217,7 +3217,19 @@ static LONG CALLBACK dpmi_crash_veh(EXCEPTION_POINTERS *ep)
          0x500 handler segment + the DPMI code base); no host code or system DLL lives
          below 2 MB. So require the faulting EIP to be down there. Anything else is OUR
          fault and must go to the fatal path, which says so and dumps it. */
-    if (cx->SegCs == 0x1B && cx->Eip < 0x00200000u && s_veh_count < 256) {
+    /* ► THE < 2 MB GUARD IS A 16-BIT CLIENT'S GUARD, AND DOOM IS NOT ONE. It exists
+         to keep OUR OWN host faults (also CS=0x1B) out of this arm, using the fact
+         that a 16-bit guest lives in the low megabyte. A 32-bit DOS/4GW client does
+         not: Doom's code sits at ~0x03Bxxxxx, and its first PM fault under
+         pmkernel.flag reported EIP=0x02620013 -- so the guard threw a SPURIOUS ENTRY
+         FAULT onto the fatal path and killed the run at PM entry 1, two entries in.
+         The EDX signature does not care about the address range: the kernel puts the
+         ENTRY EIP in EDX (that fault carried EDX=0x5fd8, entry 1 exactly), and we
+         only look while g_pm_entry_eip is set, i.e. inside VdmStartExecution. Accept
+         either: the old low-memory case, or a match on EDX. */
+    if (cx->SegCs == 0x1B && s_veh_count < 256
+        && (cx->Eip < 0x00200000u
+            || (g_pm_entry_eip >= 0 && (DWORD)cx->Edx == (DWORD)g_pm_entry_eip))) {
         DWORD site = g_dpmi_code_base + (cx->Edx & 0xFFFF);
         const BYTE *ib = (const BYTE *)(ULONG_PTR)site;
         DWORD func = cx->Eax & 0xFFFF;

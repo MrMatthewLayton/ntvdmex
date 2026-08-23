@@ -10,14 +10,19 @@
 ; fail-code byte, so a failure pinpoints the step). The harness prints each
 ; test's LABEL *before* running it and its result *after* -- so if a test hangs
 ; or faults, its label is the last line on screen, pinpointing the culprit.
-; The video test runs first (it switches modes, which clears the screen) and its
-; result is stashed; everything else prints live.
+; Every test prints live, in table order; video runs LAST. (An older revision ran
+; video first because it switched modes and cleared the screen -- it no longer
+; switches, so that no longer applies. The comment outlived the code and claimed
+; the opposite of both the table and t_video's own comment.)
 ;
 ; Coverage: DOS memory (AH 48/4A/49), file I/O (3C/40/3E/3D/3F), XMS 3.0
 ; (INT 2Fh + far-call API + Move round-trip), EMS LIM 4.0 (INT 67h + page-frame
 ; shadowing round-trip), PIT timer IRQ (0040:006C advances), mouse INT 33h
 ; (driver present), keyboard INT 16h (AH=01/11 report "no key" -- the INKEY$
-; phantom-key guard), video (mode 13h set + A000 aperture round-trip).
+; phantom-key guard), video (INT 10h AH=0F reports text mode 3 + A000 aperture
+; round-trip). NOTE: the video test does NOT set mode 13h and never has in this
+; revision -- the label used to say "13h", which advertised coverage that does not
+; exist. Mode 13h is exercised by the separate demos, not here.
 ;
 ; Exit code (errorlevel) = number of failed tests (0 = all passed).
 ; Assemble: nasm -f bin selftest.asm -o selftest.com
@@ -484,7 +489,7 @@ lbl_ems:    db "EMS LIM 4.0.....  $"
 lbl_timer:  db "PIT timer IRQ...  $"
 lbl_mouse:  db "Mouse INT 33h...  $"
 lbl_kbd:    db "Keyboard INT16..  $"
-lbl_video:  db "Video 13h+A000..  $"
+lbl_video:  db "Video mode+A000..  $"
 
 ; ===========================================================================
 ; strings + data
