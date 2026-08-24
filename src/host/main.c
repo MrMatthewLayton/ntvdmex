@@ -3545,6 +3545,53 @@ static int    g_yremap      = 0;             /* the window is ours              
 static int    g_ycur        = -1;            /* section index currently at A0000     */
 static int    g_yprev_mask  = 0;             /* mask live while the scratch was up   */
 static DWORD  g_yswaps = 0, g_yfanouts = 0, g_yfail = 0;
+/* ── DOES THE FAN-OUT ITSELF CREATE THE STATUS BAR'S FOUR-WAY COLLAPSE? ──────────────
+     `bar_planes_equal` says ~1709 of 2560 bar offsets hold the SAME byte in all four
+     planes, and the fan-out is the only path in this host that writes ONE byte to
+     SEVERAL planes -- so it is the obvious suspect. Session 22 believed it had ruled
+     that out: it disabled the fan-out entirely and the bar was "still 58% wrong".
+   ⚠ THAT ELIMINATION DOES NOT HOLD, AND THE REASON IS THE METRIC. With the fan-out
+     off, a multi-plane write reaches NO plane at all -- so the bar is wrong because it
+     is UNWRITTEN rather than wrong because it is COLLAPSED, and a percentage of
+     differing PIXELS scores those two identically. The experiment changed one wrong
+     picture for a different wrong picture and the number could not tell them apart.
+     (Same shape as `underruns=0` and `blocks_replayed`: a metric that cannot separate
+     two failure modes is not evidence about which one is happening.)
+   ► SO COUNT THE THING ITSELF, not a proxy: how many DISTINCT bar offsets does the
+     fan-out write under a multi-bit mask, split by the two row bands session 23 showed
+     behave differently (168-183, which no latch burst ever reaches, and 184-199, which
+     they all do). If this lands near 1709 the fan-out IS the collapse; if it lands near
+     zero the path is exonerated properly this time, by a number that could have said
+     otherwise. One bit per (page, bar offset) = 960 bytes, set in a loop that already
+     runs only over CHANGED bytes. */
+#define YBAR_OFF_LO   (168u * 80u)      /* first bar byte within a page */
+#define YBAR_OFF_MID  (184u * 80u)      /* band split: rows 184..199    */
+#define YBAR_OFF_HI   (200u * 80u)
+#define YBAR_PER_PAGE (YBAR_OFF_HI - YBAR_OFF_LO)          /* 2560 */
+static BYTE  g_yfan_bar_seen[(3u * YBAR_PER_PAGE + 7u) / 8u];
+static DWORD g_yfan_bar_writes[2];      /* fan-out writes to bar bytes, by band  */
+static DWORD g_yfan_bar_distinct[2];    /* ...distinct offsets, by band          */
+static DWORD g_yfan_bar_4way[2];        /* ...of which the mask was all four     */
+/* Record a fan-out write at plane offset k under `mask`. Returns nothing; cheap
+   enough to sit in the fan-out's inner loop (3 compares for a non-bar byte). */
+static void yfan_bar_note(unsigned k, int mask)
+{
+    unsigned pg;
+    for (pg = 0; pg < 3; ++pg) {
+        unsigned off = k - pg * 0x4000u;
+        unsigned idx, band;
+        if (k < pg * 0x4000u || off < YBAR_OFF_LO || off >= YBAR_OFF_HI) continue;
+        band = (off < YBAR_OFF_MID) ? 0u : 1u;
+        g_yfan_bar_writes[band]++;
+        if ((mask & 0x0F) == 0x0F) g_yfan_bar_4way[band]++;
+        idx = pg * YBAR_PER_PAGE + (off - YBAR_OFF_LO);
+        if (!(g_yfan_bar_seen[idx >> 3] & (1u << (idx & 7)))) {
+            g_yfan_bar_seen[idx >> 3] |= (BYTE)(1u << (idx & 7));
+            g_yfan_bar_distinct[band]++;
+        }
+        return;
+    }
+}
 static int    g_ywmode      = 0;             /* GC write mode, tracked for latch copies */
 static int    g_ylatch      = 0;             /* write mode 1 seen in the current window */
 static DWORD  g_ylatch_ok = 0, g_ylatch_unsolved = 0, g_ylatch_desc = 0;
@@ -3751,6 +3798,7 @@ static void modey_remap_select(void *ctx, int mask)
             BYTE b;
             if (sc[k] == g_yseed[k]) continue;   /* untouched: not this mask's business */
             b = sc[k];
+            yfan_bar_note(k, g_yprev_mask);      /* is this how the bar collapses? */
             for (p = 0; p < 4; ++p)
                 if (g_yprev_mask & (1 << p)) ((BYTE *)g_yview[p])[k] = b;
         }
@@ -9739,6 +9787,19 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
               p = zhex(p, eq); p = zput(p, "/"); p = zhex(p, tot);
           }
       }
+      /* ► THE FAN-OUT'S OWN CONTRIBUTION TO THE COLLAPSE, by row band. Compare
+           `distinct` against bar_planes_equal above: near it means this path IS the
+           four-way collapse; near zero exonerates it properly. Band A is rows 168-183,
+           which no write-mode-1 burst ever reaches and which session 23 measured as the
+           WORSE half; band B is 184-199, where every burst lands. */
+      p = zput(p, " fanout_bar[A=rows168-183,B=184-199]: writes=");
+      p = zhex(p, g_yfan_bar_writes[0]); p = zput(p, "/"); p = zhex(p, g_yfan_bar_writes[1]);
+      p = zput(p, " distinct=");
+      p = zhex(p, g_yfan_bar_distinct[0]); p = zput(p, "/"); p = zhex(p, g_yfan_bar_distinct[1]);
+      p = zput(p, " of "); p = zhex(p, YBAR_OFF_MID - YBAR_OFF_LO);
+      p = zput(p, "/");    p = zhex(p, YBAR_OFF_HI - YBAR_OFF_MID);
+      p = zput(p, " per page, 4way=");
+      p = zhex(p, g_yfan_bar_4way[0]); p = zput(p, "/"); p = zhex(p, g_yfan_bar_4way[1]);
       p = zput(p, " latch_solved="); p = zhex(p, g_ylatch_ok);
       p = zput(p, " latch_UNSOLVED="); p = zhex(p, g_ylatch_unsolved);
       p = zput(p, " gap="); p = zhex(p, g_vid.modey_gap);
