@@ -9191,6 +9191,31 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
       p = zput(p, " swaps="); p = zhex(p, g_yswaps);
       p = zput(p, " fanouts="); p = zhex(p, g_yfanouts);
       p = zput(p, " failed="); p = zhex(p, g_yfail);
+      /* ► ARE THE PLANES COLLAPSED, OR DOES THE RENDER COLLAPSE THEM? The oracle says
+           62% of the status bar's four-pixel groups hold one value where the reference
+           holds four. That can only come from the four PLANES agreeing, or from the
+           render reading one plane four times. Ask the planes directly, over the bar's
+           own offsets in the page the CRTC is displaying. If they disagree here and the
+           screen shows agreement, the fault is downstream of the planes. */
+      if (g_yremap) {
+          /* ► PER PAGE, because "we are displaying the wrong buffer" and "the buffer is
+               wrong" look identical from one page. Doom triple-buffers at 0, 0x4000 and
+               0x8000; if one page's bar is intact and the one the CRTC points at is not,
+               the fault is in following the page flip, not in the writes. */
+          uint32_t pg;
+          p = zput(p, " bar_planes_equal_per_page:");
+          for (pg = 0; pg < 3; ++pg) {
+              uint32_t o, eq = 0, tot = 0, base = pg * 0x4000u;
+              for (o = base + 168u * 80u; o < base + 200u * 80u; ++o) {
+                  uint32_t m = o & (MODEY_WIN - 1u);
+                  BYTE a = ((BYTE *)g_yview[0])[m], b = ((BYTE *)g_yview[1])[m];
+                  BYTE c = ((BYTE *)g_yview[2])[m], d2 = ((BYTE *)g_yview[3])[m];
+                  ++tot; if (a == b && b == c && c == d2) ++eq;
+              }
+              p = zput(p, " p"); p = zhexb(p, pg); p = zput(p, "=");
+              p = zhex(p, eq); p = zput(p, "/"); p = zhex(p, tot);
+          }
+      }
       p = zput(p, " latch_solved="); p = zhex(p, g_ylatch_ok);
       p = zput(p, " latch_UNSOLVED="); p = zhex(p, g_ylatch_unsolved);
       p = zput(p, " gap="); p = zhex(p, g_vid.modey_gap);
