@@ -50,6 +50,9 @@
    tests (selftest/dpmitest) then never touch the self-capture path -- keeping the
    common case off the capture code entirely. */
 #define CAPTURE_FLAG "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\capture.flag"
+/* Mode-Y de-interleave tuning; see modey_flush() in vdd_video.c. Contents = the run
+   coalescing slack in dwords. Absent = the built-in default. */
+#define MODEY_PATH "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\modey.txt"
 /* Diagnostic knob: disable the mode-12h A0000 NOACCESS trap. With it off, planar
    writes land in the raw aperture instead of the VGA engine, so the PICTURE will
    be wrong -- the question it answers is whether the guest EXECUTES AT ALL.
@@ -6573,6 +6576,19 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     g_headless = (GetFileAttributesA(AUTOEXIT_PATH) != INVALID_FILE_ATTRIBUTES);
     /* Self-screenshot only when explicitly requested (graphical tests) AND headless, so
        the common non-graphical tests never enter the capture path. Latched once here. */
+    { HANDLE hm = CreateFileA(MODEY_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                              NULL, OPEN_EXISTING, 0, NULL);
+      if (hm != INVALID_HANDLE_VALUE) {
+          char mb[32]; DWORD rd4 = 0, v4 = 0, i4; int got = 0;
+          ReadFile(hm, mb, sizeof mb - 1, &rd4, NULL); CloseHandle(hm);
+          for (i4 = 0; i4 < rd4 && mb[i4] >= '0' && mb[i4] <= '9'; ++i4) { v4 = v4 * 10 + (DWORD)(mb[i4] - '0'); got = 1; }
+          if (got && v4 <= 65536u) {
+              char lb4[96], *lq = lb4;
+              g_vid.modey_gap = v4;
+              lq = zput(lq, "STAGE0: modey.txt -> gap="); lq = zhex(lq, v4);
+              lq = zput(lq, " dwords\r\n"); log_append(LOG_PATH, lb4, lq); serial_out(lb4, lq);
+          }
+      } }
     g_capture  = g_headless && (GetFileAttributesA(CAPTURE_FLAG) != INVALID_FILE_ATTRIBUTES);
     if (g_capture) {                       /* its contents, if any, are the period in ms */
         HANDLE hc = CreateFileA(CAPTURE_FLAG, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
@@ -8707,6 +8723,11 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
            mode never touches -- so it has reported four zeroes for every mode-Y run
            ever made and told us nothing. These are the arrays a mode-Y frame is
            actually built from, plus the map-mask values the program really used. */
+      p = zput(p, "STAGE2: modeY gap="); p = zhex(p, g_vid.modey_gap);
+      p = zput(p, " attributed="); p = zhex(p, g_vid.ynz[0]);
+      p = zput(p, " crtc_seen="); p = zhexb(p, g_vid.crtc_seen);
+      p = zput(p, " crtc_start=0x"); p = zhex(p, g_vid.crtc_start);
+      p = zput(p, "\r\n");
       p = zput(p, "STAGE2: modeY snaps:");
       for (i = 0; i < 4; ++i) {
           p = zput(p, " p"); p = zhexb(p, (unsigned)i);

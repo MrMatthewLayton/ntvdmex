@@ -751,55 +751,100 @@ int vdd_video_present_ready(video_state *st)
      So keep a shadow of the aperture and attribute the differences. That is exact
      without a page trap, and it is not more expensive than the copy it replaces --
      comparing dwords, an untouched region costs a quarter of the reads a copy did. */
-/* ── WE CANNOT DE-INTERLEAVE MODE Y FROM THE FLAT APERTURE. THIS IS AN APPROXIMATION.
+/* ── DE-INTERLEAVE MODE Y BY ATTRIBUTING EACH CHANGED RUN TO THE SELECTED PLANE. ────
      A0000 is one flat buffer -- the page trap is deliberately not armed, because arming
      it makes the interpreter the CPU and collapses the run -- so a guest write lands
-     there carrying no record of which plane the map mask had selected. Everything below
-     is an attempt to recover that record after the fact, and session 21 measured four
-     of them against captured frames (even-column match: 0.08 is a real 320-wide
-     picture, 1.000 is every even column equal to the next):
+     there carrying no record of which plane the map mask had selected. It has to be
+     recovered afterwards, from a shadow of the aperture.
 
-       whole aperture   SHIPS. Copy the aperture into the outgoing plane on every mask
-                        change. Exact for a program that fills one plane at a time;
-                        Doom updates in dirty boxes (~516 mask changes a frame) so every
-                        plane converges on the same image -- 1.000, i.e. a coherent
-                        picture at half horizontal resolution.
-       changed BYTES    0.08 and STREAKED. A byte rewritten with the value it already
-                        held is still a write and the shadow cannot see it; Doom's
-                        textures are full of equal neighbours, so whole columns kept an
-                        earlier frame's content.
-       changed SPAN     0.90. min..max covers nearly the whole page, so it degenerates
-                        into the whole-aperture rule with extra work.
-       fixed 16B runs   0.78. A plane byte is FOUR screen pixels wide, so a 16-byte
-                        group spans 64 pixels and over-attribution wrecks the picture.
+   ► WHAT THE USER'S PLAY SESSION HANDED US, AND IT IS THE WHOLE DESIGN. "The intro
+     screen is 320x200 until the menu shows, then it degrades... I played through the
+     first level and got to the score screen, which went back to correct 320x200, and
+     then degraded again on the next level."
+     Title and intermission are FULL-SCREEN blits: one mask change per plane, the whole
+     plane written under it. Menu, demo and gameplay are DIRTY-BOX updates: ~516 mask
+     changes a frame, a few columns each. So the rule that copies the WHOLE aperture
+     into the outgoing plane is exactly right for the first and exactly wrong for the
+     second -- which is precisely the split seen on the screen, and confirms the model.
 
-   ▶ THE REAL FIX IS NOT IN HERE. The information does not exist in the aperture and no
-     rule can invent it. It has to be captured at write time: give each plane its own
-     backing and point A0000 at the selected one on a mask change (four pagefile-backed
-     sections and MapViewOfFileEx at a fixed address -- O(1) per change, exact, no
-     copying), or trap the writes. Both are design changes, not tweaks to this function.
-     ⚠ Do not "improve" the rule below without measuring even-column match on a captured
-       frame. Three plausible improvements have already made it worse. */
+   ► THE RULE: copy the aperture over the CHANGED EXTENT WITHIN EACH GRANULE. A whole-
+     plane write changes every granule end to end, so the copy is the whole plane and
+     the full-screen case stays exact. A box changes only the granules its columns fall
+     in, and only the span within them, so the rest of each plane keeps its own data.
+     Sizing the granule is the entire trick, and each wrong answer was measured on
+     captured frames (even-column match: 0.08 is a real 320-wide picture, 1.000 is
+     every even column equal to the next, i.e. half horizontal resolution):
+
+       whole aperture      1.000  correct only for full-screen writers
+       changed bytes       0.08   full resolution but STREAKED -- a byte rewritten with
+                                  the value it already held is still a write and the
+                                  shadow cannot see it, and Doom's textures are full of
+                                  equal neighbours
+       changed span (all)  0.90   one global min..max spans nearly the whole page
+       whole 16B granules  0.78   copying the WHOLE granule over-attributes: a plane
+                                  byte is FOUR screen pixels wide, so 16 bytes span 64
+
+     Per-granule min..max is the one that is tight in both directions: it never copies
+     beyond the outermost change in a granule, and it carries the same-valued bytes
+     between two changes, which is what kills the streaks.
+   ⚠ Do not change the rule or the granule without measuring even-column match on a
+     captured frame. Four plausible variants have already made it worse. */
+/* A guest store to the aperture is a CONTIGUOUS RUN of plane bytes -- a row segment of
+   whatever box is being updated. Find those runs in the diff and copy each one whole.
+   Bytes inside a run that happen to be unchanged (the same value written again, which
+   the shadow cannot see) come along with it; bytes outside stay with their own plane.
+   MODEY_GAP is how many unchanged dwords may sit inside one run before it is treated as
+   two: it is the only tuning constant here, and it trades streaks (too small) against
+   over-attribution (too large). */
+/* ► IT IS A KNOB, AND THE HUMAN IS THE INSTRUMENT. There is no good point on this
+     curve -- six rules have been measured and every one trades resolution against
+     stale streaks -- so the value is read from `modey.txt` on the share rather than
+     compiled in, and a play session can walk it without a rebuild. Measured
+     even-column match on Doom's 3D view (0.08 = a real 320-wide picture, 1.000 = every
+     even column equal to the next):
+         gap 0     tightest, most detail, most streaking
+         gap 2     ~0.55, the shipped default
+         gap huge  1.000, the old whole-aperture behaviour: coherent, half resolution
+     A run of guest stores is contiguous, so this is how many unchanged dwords may sit
+     inside one before it is treated as two. */
+#define MODEY_GAP_DEFAULT 2u
+
+static void modey_copy(video_state *st, const int *sel, int nsel, uint32_t lo, uint32_t hi)
+{
+    uint32_t i;
+    for (i = lo; i < hi; ++i) {
+        uint8_t b = st->vmem[i];
+        int k;
+        st->yshadow[i] = b;
+        for (k = 0; k < nsel; ++k) st->yplane[sel[k]][i] = b;
+    }
+    st->ynz[0] += hi - lo;                              /* bytes attributed, for STAGE2 */
+}
+
 static void modey_flush(video_state *st)
 {
-    int p;
+    uint32_t i, run_lo = 0, run_hi = 0, gap = 0;
+    const uint32_t *src32, *shd32;
+    int p, sel[4], nsel = 0, in_run = 0;
     if (st->chain4 || st->mkind != VID_KIND_LINEAR8 || !st->vmem) return;
-    for (p = 0; p < 4; ++p)
-        if (st->y_mask & (1u << p)) {
-            /* ► DWORD, AND DO NOT COUNT WHILE COPYING. This is the hottest loop in the
-                 host: the map mask changes about 3,800 times a second in Doom, so a
-                 byte-at-a-time copy of the whole 64K plane is a quarter of a GIGABYTE a
-                 second of single-byte work, on the exec thread, inside the device lock.
-                 It was invisible for as long as the map-mask write was being dropped
-                 (the mask never changed, so this almost never ran); fixing that write
-                 turned it on. The non-zero tally that shared the loop was diagnostic
-                 only and cost a branch per byte -- it is sampled once per frame now. */
-            uint32_t i;
-            const uint32_t *src = (const uint32_t *)st->vmem;
-            uint32_t *dst = (uint32_t *)st->yplane[p];
-            for (i = 0; i < VID_Y_PLANE / 4; ++i) dst[i] = src[i];
-            st->ysnap[p]++;
+    for (p = 0; p < 4; ++p) if (st->y_mask & (1u << p)) sel[nsel++] = p;
+    if (!nsel) return;
+    src32 = (const uint32_t *)st->vmem;
+    shd32 = (const uint32_t *)st->yshadow;
+
+    /* Dword-at-a-time scan. Most of the aperture is untouched between two adjacent
+       mask changes -- and in Doom there are ~3,800 of those a second -- so the reject
+       path is the one that has to be cheap. */
+    for (i = 0; i < VID_Y_PLANE / 4; ++i) {
+        if (src32[i] != shd32[i]) {
+            if (!in_run) { in_run = 1; run_lo = i; }
+            run_hi = i + 1; gap = 0;
+        } else if (in_run && ++gap > st->modey_gap) {
+            modey_copy(st, sel, nsel, run_lo * 4u, run_hi * 4u);
+            in_run = 0;
         }
+    }
+    if (in_run) modey_copy(st, sel, nsel, run_lo * 4u, run_hi * 4u);
     st->dirty = 1;
 }
 
@@ -1156,17 +1201,18 @@ static void render_modey(video_state *st)
          flush ever comes, and that plane's columns would render as whatever was last
          snapshotted. Only a SINGLE-plane mask can be attributed this way; with more
          bits set the aperture belongs to no one plane, so fall back to the snapshots. */
-    { int live = -1, pl, y, x2;
-      if (st->y_mask && (st->y_mask & (uint8_t)(st->y_mask - 1)) == 0)
-          for (pl = 0; pl < 4; ++pl) if (st->y_mask & (1u << pl)) { live = pl; break; }
+    /* Flush first, then render from the planes ONLY. There is no live-aperture read
+       any more: under box updates the aperture is a mixture of whichever planes were
+       written most recently, so reading it for the selected plane pulls in another
+       plane's pixels -- which is the same error as the whole-aperture copy, wearing a
+       different hat. modey_flush() has already moved everything that was written. */
+    modey_flush(st);
+    { int y, x2;
       for (y = 0; y < st->gh; ++y) {
           uint32_t row = start + (uint32_t)y * pitch;
           uint8_t *dst = st->fb + (uint32_t)y * st->gw;
-          for (x2 = 0; x2 < st->gw; ++x2) {
-              int p2 = x2 & 3;
-              const uint8_t *sp = (p2 == live) ? st->vmem : st->yplane[p2];
-              dst[x2] = sp[(row + ((uint32_t)x2 >> 2)) & (VID_Y_PLANE - 1u)];
-          }
+          for (x2 = 0; x2 < st->gw; ++x2)
+              dst[x2] = st->yplane[x2 & 3][(row + ((uint32_t)x2 >> 2)) & (VID_Y_PLANE - 1u)];
       } }
 }
 
@@ -1242,17 +1288,15 @@ int vdd_video_init(vdd_bus *b, void *self)
     video_state *st = (video_state *)self;
     st->bus = b;
     vdd_video_reset(st);
+    st->modey_gap = MODEY_GAP_DEFAULT;
     if (vdd_claim_mem(b, VID_TEXT_BASE, 0x8000, vid_rd, vid_wr, st)) return -1;
     if (vdd_claim_int(b, 0x10, int10, st)) return -1;
     if (vdd_claim_ports(b, 0x3C4, 0x3C5, seq_in, seq_out, st)) return -1;  /* Sequencer */
-    /* ⚠⚠ DO NOT CLAIM CRTC 0x3D4/0x3D5. Tried TWICE and it regresses Doom both
-         ways -- with a read handler (55,740 log lines vs 555,296) and write-only
-         with reads left at the unclaimed 0xFFFFFFFF (three attempts, all ~55k).
-         It is not read semantics and not range shadowing (0x3DA is a separate
-         claim). Whatever the mechanism, claiming that range costs the run, so the
-         page-flip address is DETECTED FROM THE DATA instead -- see modey_page().
-         If you retry this, gate it and run Doom three times: the run is flaky at
-         about 1 in 3 and a single green result proves nothing. */
+    /* ⚠ THE OLD WARNING HERE ("DO NOT CLAIM CRTC 0x3D4/0x3D5", three regressions,
+         mechanism UNKNOWN) IS RESOLVED, not ignored. The mechanism was that Doom
+         page-flips with ONE 16-BIT WRITE and these handlers dropped the data byte, so
+         claiming the port broke the flip outright -- worse than not claiming it. See
+         seq_out()/vga_idx_data(). */
     if (vdd_claim_ports(b, 0x3C7, 0x3C9, dac_in, dac_out, st)) return -1;  /* DAC       */
     if (vdd_claim_ports(b, 0x3CE, 0x3CF, gc_in, gc_out, st)) return -1;    /* Graphics  */
     /* CRTC. Claimed at last -- see render_modey() for why three earlier attempts

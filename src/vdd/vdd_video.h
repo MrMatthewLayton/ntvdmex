@@ -104,7 +104,9 @@ typedef struct video_state {
     uint8_t  crtc_offset;  /* CRTC 0x13: logical line width in 2-byte units        */
     uint16_t crtc_start;   /* CRTC 0x0C/0x0D: display start -- the page-flip reg   */
     uint8_t  yplane[4][VID_Y_PLANE];   /* de-interleaved mode-Y planes             */
+    uint8_t  yshadow[VID_Y_PLANE];     /* the aperture as of the last plane flush   */
     uint8_t  crtc_seen;                /* the guest has written a CRTC start address */
+    uint32_t modey_gap;                /* mode-Y run coalescing slack, in dwords     */
     uint8_t  write_mode;   /* GR5 bits0-1                                          */
     uint8_t  bit_mask;     /* GR8 (reset 0xFF)                                     */
     uint8_t  latch[4];     /* per-plane read latches                               */
