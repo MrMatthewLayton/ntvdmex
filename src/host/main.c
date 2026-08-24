@@ -679,7 +679,13 @@ static int   g_le_ncode = 0;
    put between "the vector exists" and "the timer fires". See INT 31h 0205. */
 #define DPMI_IRQ0_ARM_QUIET_MS 55
 /* Ticks run per asynchronous entry -- see the drain in the main loop. */
-#define DPMI_IRQ0_BATCH 64
+/* ► A BATCH IS CATCH-UP, NOT A LICENCE TO COMPRESS TIME. At Doom's 140 Hz, draining
+     64 ticks back to back hands the guest 0.45 SECONDS of game time in microseconds --
+     and its timer ISR is where DMX writes PCM into the DMA ring, so the ring is filled
+     in bursts while the mixer reads it smoothly. That is a chk-a-chk-a in the sampled
+     audio no amount of mixer accuracy can undo. The exec loop gets a turn thousands of
+     times a second, so a small batch still clears any real backlog. */
+#define DPMI_IRQ0_BATCH 4
 /* How far an injected protected-mode ISR may run before we stop waiting for its IRET.
    See the commentary at the phase loop in dpmi_inject_pm_irq(): a phase is one PM entry,
    not a unit of time, so the real bound is the clock; the phase count is only a backstop
@@ -3312,6 +3318,7 @@ static int host_try_io_pm(volatile BYTE *tib, vdd_bus *bus)
 static HANDLE g_ysec[MODEY_NSEC];
 static void  *g_yview[MODEY_NSEC];           /* host-side views, always mapped       */
 static HANDLE g_bsec;
+static BYTE   g_yseed[MODEY_WIN];            /* scratch contents as it was seeded    */
 static int    g_yremap      = 0;             /* the window is ours                   */
 static int    g_ycur        = -1;            /* section index currently at A0000     */
 static int    g_yprev_mask  = 0;             /* mask live while the scratch was up   */
@@ -3427,14 +3434,30 @@ static void modey_remap_select(void *ctx, int mask)
     (void)ctx;
     if (!g_yremap) return;
 
-    /* Close the previous window: a multi-plane mask wrote to the scratch, and every
-       plane it selected owns that data. */
+    /* ── FAN OUT ONLY WHAT THE GUEST ACTUALLY WROTE. ────────────────────────────────
+         A multi-plane mask means one store lands in several planes at once, so a
+         scratch window's WRITES do belong to every selected plane -- but the bytes
+         nobody touched do not. Copying the whole scratch pushed the plane it was
+         seeded from over the top of all the others, making four identical planes and
+         therefore duplicated columns.
+         That is what the user could still see after the remap landed: Doom clears with
+         mask 0x0F at level start (44 windows a run, measured), so every plane went
+         identical across the page. The 3D view redraws completely every frame and
+         healed itself; the STATUS BAR is only updated where it changes, so the
+         corruption stayed -- "the game bar at the bottom still has quite a lot of
+         pixelated graphics" -- and a screen wipe looked pixelated until the full redraw
+         behind it cleaned up. Diffing against the seed is exact and costs one pass over
+         64K, 44 times a run. */
     if (g_ycur == 5 && g_yprev_mask) {
-        for (p = 0; p < 4; ++p)
-            if (g_yprev_mask & (1 << p)) {
-                unsigned k; BYTE *d = (BYTE *)g_yview[p]; const BYTE *s2 = (const BYTE *)g_yview[5];
-                for (k = 0; k < MODEY_WIN; ++k) d[k] = s2[k];
-            }
+        unsigned k;
+        const BYTE *sc = (const BYTE *)g_yview[5];
+        for (k = 0; k < MODEY_WIN; ++k) {
+            BYTE b;
+            if (sc[k] == g_yseed[k]) continue;   /* untouched: not this mask's business */
+            b = sc[k];
+            for (p = 0; p < 4; ++p)
+                if (g_yprev_mask & (1 << p)) ((BYTE *)g_yview[p])[k] = b;
+        }
         ++g_yfanouts;
     }
     if (mask < 0) { want = 4; g_yprev_mask = 0; }
@@ -3447,9 +3470,12 @@ static void modey_remap_select(void *ctx, int mask)
     if (want == g_ycur) return;
     if (!UnmapViewOfFile((LPVOID)(ULONG_PTR)0xA0000)) { ++g_yfail; return; }
     if (want == 5) {                                     /* seed the scratch so a
-                                                            read-modify-write sees data */
+                                                            read-modify-write sees data,
+                                                            and remember the seed so the
+                                                            fan-out can tell writes from
+                                                            bytes nobody touched */
         unsigned k; BYTE *d = (BYTE *)g_yview[5]; const BYTE *s2 = (const BYTE *)g_yview[sel[0]];
-        for (k = 0; k < MODEY_WIN; ++k) d[k] = s2[k];
+        for (k = 0; k < MODEY_WIN; ++k) { d[k] = s2[k]; g_yseed[k] = s2[k]; }
     }
     if (!MapViewOfFileEx(g_ysec[want], FILE_MAP_ALL_ACCESS | FILE_MAP_EXECUTE,
                          0, 0, MODEY_WIN, (LPVOID)(ULONG_PTR)0xA0000)) {
