@@ -9919,6 +9919,15 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                           / (g_ysmp_cross_same[bnd] + g_ysmp_cross_diff[bnd]));
               p = zput(p, "% same, decimal-in-hex)");
           } } }
+      /* ► IS THE LINEAR SECTION EVEN OCCUPIED? One number, ahead of the dump: how many
+           of the bar region's 10240 linear bytes are non-zero. Zero means nothing was
+           ever written to A0000 while the window pointed at the linear section, and the
+           candidate dies here without parsing anything. */
+      { uint32_t o2, nz = 0; const BYTE *lv = (const BYTE *)g_yview[4];
+        for (o2 = 168u * 320u; o2 < 200u * 320u; ++o2)
+            if (lv[o2 & (MODEY_WIN - 1u)]) ++nz;
+        p = zput(p, " linear_bar_nonzero="); p = zhex(p, nz);
+        p = zput(p, "/"); p = zhex(p, 32u * 320u); }
       p = zput(p, " latch_solved="); p = zhex(p, g_ylatch_ok);
       p = zput(p, " latch_UNSOLVED="); p = zhex(p, g_ylatch_unsolved);
       p = zput(p, " gap="); p = zhex(p, g_vid.modey_gap);
@@ -9995,6 +10004,37 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                        dump nobody reads off the serial line. */
                     log_append(LOG_PATH, lb, lq);
                 }
+        /* ── AND THE LINEAR SECTION, WHICH IS THE ONE PLACE NOBODY HAS LOOKED. ────────
+             modey_remap_init() sets g_ycur = 4 and a chain4 change selects 4, so A0000
+             maps g_ysec[4] -- NOT any plane -- both before the first map-mask write and
+             for as long as the guest stays chained. Anything the guest writes to A0000
+             in either window lands here and is invisible to all four planes, for good.
+             That is the exact shape the evidence demands: the bar is wrong from the
+             FIRST frame and flat afterwards, the fully-redrawn surfaces (title screen
+             0-of-64000, the 3D view) are perfect, and every "what corrupts it during
+             play" candidate has come back excluded. Write-once damage needs a
+             write-once mechanism, and this is one.
+             In chained mode the byte at offset o IS pixel (o%320, o/320), so the bar
+             region is rows 168..199 at 320 bytes a row -- no plane stride. Score it
+             against STBAR directly: a good score means Doom drew the bar while the
+             window pointed here and the planes never received it. */
+        lq = lb; lq = zput(lq, "MODEYLIN dump: linear section, rows 168..199, "
+                               "320 bytes/row in 4 chunks (offset = row*320 + x)\r\n");
+        log_append(LOG_PATH, lb, lq); serial_out(lb, lq);
+        for (row = 168; row < 200; ++row) {
+            uint32_t q4, x;
+            for (q4 = 0; q4 < 4; ++q4) {
+                uint32_t o = (row * 320u + q4 * 80u) & (MODEY_WIN - 1u);
+                const BYTE *src = (const BYTE *)g_yview[4];
+                lq = lb;
+                lq = zput(lq, "MODEYLIN y"); lq = zhexb(lq, row);
+                lq = zput(lq, " q");         lq = zhexb(lq, q4);
+                lq = zput(lq, " ");
+                for (x = 0; x < 80; ++x) lq = zhexb(lq, src[(o + x) & (MODEY_WIN - 1u)]);
+                lq = zput(lq, "\r\n");
+                log_append(LOG_PATH, lb, lq);
+            }
+        }
     }
     p = zput(p, "STAGE2: complete\r\n");
     log_append(LOG_PATH, base, p); serial_out(base, p); p = base;   /* headless: mirror the DOS-output flush + completion to COM1 */
