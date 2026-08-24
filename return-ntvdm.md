@@ -1,10 +1,252 @@
 ═══════════════════════════════════════════════════════════════════════════════
-██ ▶▶▶ SESSION 23 (2026-08-24). **BOTH REMAINING DEFECTS RE-DIAGNOSED.**      ██
-██     Session 22's cause for EACH was wrong. Both new causes are measured.   ██
+██ ▶▶▶ SESSION 24 (2026-08-24). **THE TIMER IS NOT STARVED.**                 ██
+██     Session 23's central chain is refuted at its FIRST LINK. The echo is   ██
+██     real, smaller than reported, and its mechanism is now measured.        ██
 ═══════════════════════════════════════════════════════════════════════════════
 
 ┌──────────────────────────────────────────────────────────────────────────────┐
 │ ★ START HERE — THE 60-SECOND VERSION                                         │
+└──────────────────────────────────────────────────────────────────────────────┘
+  Session 24 did the ONE THING session 23 asked for (TASK 1: instrument which
+  refusal `async_inject_irq` returns) and the answer was **none of the three**.
+  Following that answer took down session 23's headline as well.
+```
+   TIMER   NOT STARVED. Doom programs 140 Hz and the client's INT 08h is entered
+           135 times a second -- 91% of every tick the 8254 raised. Session 23's
+           "we deliver 55 Hz / 39%" counted the ASYNCHRONOUS arm only; the
+           cooperative arm delivers 59% MORE on top and was not in the line.
+   BACKLOG NOT SATURATED. `owed_max` is a HIGH-WATER MARK. Sampled at every sync,
+           92.5% of syncs see an EMPTY backlog and 4 in 2914 see the cap.
+   ⇒       "The video path starves the timer, and the timer starves the audio"
+           is REFUTED at the first link. TASK 2 and TASK 3 lose their stated
+           motivation. (The lock contention is real -- 103 ms waits -- and worth
+           doing on its own merits. It is not why the audio echoes.)
+   AUDIO   the echo is REAL but 32%, not 44%: a fifth of the old headline was the
+           game being SILENT, and silence is identical to the previous lap when
+           the guest refills it CORRECTLY. It is a MARGIN RACE, not a stall --
+           never more than 2-3 consecutive blocks, 90% of runs are a single one.
+   ▶ ROOT  DMX steers by the 8237's channel-1 CURRENT COUNT. It polls 55x/s while
+           82 blocks complete -- so 32% of blocks pass unlooked-at, matching the
+           32% echo to a point across four runs. And an ASYNC tick reaches that
+           poll 13x more often than a COOPERATIVE one (0.89 vs 0.068 polls/tick),
+           though both enter the same handler and both complete.
+```
+  ▶ **THE SINGLE NEXT ACTION** is at the bottom of this block: find out what DMX
+    does differently inside a cooperative INT 08h. That is the whole of the echo.
+
+  Branch `m9/completeness`, tree clean but for the same 11 untracked files.
+  Gates green on the shipped binary: off-VM **581 checks / 16 suites, 0 failed**,
+  check-imports pass. **Two commits, `75f00c7`..`a5d8abe`:**
+```
+   75f00c7  audio: separate "not refilled" from "refilled with silence"
+   a5d8abe  timer: the refusal histogram says the injector is innocent
+```
+  Rig `192.168.1.29` UP, share mounted at `/tmp/xpshare`, **current build deployed
+  and md5-verified**, all knobs cleared, `headless_ms.txt`=45000. Six rig runs,
+  archived in `build/rigruns/result_doom_19{2358,2942,3301,3717,4040,4306}.log`.
+
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ ⚠⚠ REFUTED: THE TIMER DEFICIT. IT WAS AN ASYNC-ONLY COUNTER.                 │
+└──────────────────────────────────────────────────────────────────────────────┘
+  TASK 1 asked which clause refuses at 144 Hz. `g_async_why` held only the LAST
+  refusal, so a run said "62 attempts, 56 delivered" and could not say what took
+  the other six. Keyed per LINE now, with codes for two exits that previously left
+  `why=0` -- **which is the code for SUCCESS**: `HOST_CS` (the CPU thread was in
+  HOST code, not the client) and a failed `SetThreadContext`.
+```
+   async why irq00  total=2782  DELIVERED=2500  vIF_off=12  arm_quiet=2
+                    HOST_CS=77  not_in_exec=154  observed=37
+```
+  **All three candidates the handoff named are dead.** `g_async_pm_active` (an
+  injection still in flight): **ZERO**. `vdd_pic_can_deliver`: **ZERO**. The
+  client's virtual-IF: 12 of 2782, **0.4%**. Ninety percent of attempts deliver.
+  ▶ Then the reason the shortfall looked large: **`delivered` was HALF THE
+    ACCOUNT.** It is `g_async_inj_line[0]` -- the asynchronous arm only -- and the
+    client's INT 08h is entered by TWO mechanisms. The cooperative
+    `dpmi_inject_pm_irq()` (the #2b latch, and the catch-up batch on the catcher's
+    return) delivers MORE than the async arm does:
+```
+   isr08 delivery: raises=6612  async=2500  coop=3568  TOTAL=6068  (91% of raises)
+                   = 135 Hz against the 140 Hz Doom programmed
+```
+  ▶ And **`owed_max` IS A HIGH-WATER MARK, NOT AN OCCUPANCY.** One stall anywhere in
+    45 s pins it at the cap forever, so "owed_max = 0x40 = PM_TICK_OWED_MAX, the
+    backlog is PERMANENTLY SATURATED" read a maximum as a steady state. Sampled at
+    every sync:
+```
+   owed_depth_at_sync[0,1,2,3,4-7,8-15,16-31,32-63,64] = 2695,53,12,6,19,40,66,25,4
+   92.5% of syncs see an EMPTY backlog.  4 syncs in 2914 ever see the cap.
+```
+  ⚠ **WHAT IS STILL TRUE FROM SESSION 23.** The lock contention is real and
+    measured -- `wait_us=103,099` (the AUDIO thread, `host_audio_fill`),
+    `hold_us=108,702` (`host_pit_sync`), `ui_gap_us=127,146`, 1.86M plane swaps a
+    run. TASK 3 is still a good idea *for video and for the audio thread's own
+    stalls*. It is not the timer's problem, because the timer does not have one.
+
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ ★★★★★ THE ECHO: A MARGIN RACE, AND DMX IS STEERING BY THE 8237 COUNT         │
+└──────────────────────────────────────────────────────────────────────────────┘
+  **1. A FIFTH OF THE 44% WAS SILENCE.** `blocks_replayed` counts blocks >=90%
+  identical to the same ring offsets one lap earlier and its comment called that
+  "DMX never refilled". That is a conclusion: it is equally what a CORRECT refill
+  looks like whenever the guest writes the same bytes again, and for 8-bit PCM
+  that is every stretch of silence. Session 23 flagged the risk in prose and left
+  it uninstrumented. Classifying each block by its own dynamic range:
+```
+   blocks_checked=3662  REPLAYED=1619 (44%)  flat=743
+   REPLAYED_LOUD=933  = 32% of NON-FLAT blocks     (stable across 4 runs)
+```
+  The defect is real -- ~930 blocks a run, ~21/s of audible content played twice
+  186 ms apart -- and it is 32%, not 44%.
+
+  **2. IT IS A MARGIN RACE, NOT A STALL.** A rate cannot tell "every third block is
+  stale" from "fine for a second, then forty in a row", and those are different
+  bugs. The run-length distribution:
+```
+   runs[1,2,3,4-7,8-15,16-31,32-63,64+] = 753,79,0,0,0,0,0,0    run_max=2
+```
+  **Never more than two or three consecutive blocks.** Nothing ever stops DMX for
+  long -- which is independent evidence against the starved-timer story, because a
+  starved timer would produce exactly the long runs that are absent.
+
+  **3. DMX STEERS BY THE 8237's CURRENT COUNT, AND LOOKS LESS OFTEN THAN BLOCKS
+  COMPLETE.** How does the guest decide what is safe to overwrite? Measured:
+```
+   ch1_addr=0   ch5_addr=0   status=0      <- it NEVER reads the current ADDRESS
+   ch1_count=4962, ALL 8-BIT reads         <- so 2 reads per poll = 2481 polls
+   2481 polls / 45 s = 55/s      against    82 blocks/s
+   => 32% of blocks complete with no poll between them
+      ...against 32% of audible blocks being lap repeats.  Four runs, both
+         ratios agree to within a point every time.
+```
+  ⚠ The width was MEASURED, not assumed: a read count is not a poll count behind a
+    lo/hi flip-flop, and the whole reading rests on the factor of two.
+  ⚠ Two ratios agreeing is a correspondence, not a mechanism. Which is why:
+
+  **4. ★★★ AN ASYNC TICK REACHES THAT POLL 13x MORE OFTEN THAN A COOPERATIVE ONE.**
+  55 polls/s is also, to within 1.5% in two separate runs, the ASYNC arm's delivery
+  rate -- while the cooperative arm delivers 79/s more on top. Bracketing the
+  cooperative injection (the handler runs synchronously inside
+  `dpmi_inject_pm_irq`, so a before/after snapshot of `rd_count[1]` is exact):
+```
+   ch1_count=4962 total     from_coop_isr08=484        (9.8%)
+      per ASYNC tick        0.89 polls
+      per COOPERATIVE tick  0.068 polls     ...for 59% of all delivered ticks
+```
+  **Both paths enter the same handler and both complete** -- `done=1`, `phases=4-5`,
+  every one of 4478. What DMX does *inside* them differs. That is what is left of
+  the echo, and it is the only thing left of it.
+
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ ▶▶▶ RESUME HERE. THE NEXT ACTION, CONCRETELY.                                │
+└──────────────────────────────────────────────────────────────────────────────┘
+  **TASK A (the echo's root -- everything else is downstream).** Find what DMX does
+  differently inside a cooperative INT 08h. Both paths run the same handler to its
+  IRET; only one leads to the DMA poll. Candidates, in the order they are cheap:
+```
+   the ISR takes an EARLY EXIT     DMX's INT 08h chains/divides -- it may only mix
+                                   on some entries, and the cooperative path may be
+                                   landing on the entries that do not. Instrument
+                                   the guest EIP at IRET, or how far into the
+                                   handler each path gets (phases already differ?).
+   register/flag state at entry    dpmi_async_inject_pm builds the frame on the
+                                   SUSPENDED THREAD'S OWN CONTEXT; dpmi_inject_pm_irq
+                                   builds it from the VDM_TIB register file. If the
+                                   two disagree about anything DMX tests, that is it.
+                                   DIFF THE TWO FRAME BUILDERS FIELD BY FIELD.
+   g_in_pm_irq blocks something    it is set for the whole cooperative injection.
+                                   Anything DMX's mixer needs that is refused while
+                                   it is set would produce exactly this.
+   the SB IRQ, not the timer       ⚠ NOT YET EXCLUDED: the polls may follow IRQ5,
+                                   not IRQ0. Bracket the devirq injection at
+                                   main.c:8603 the same way (2 lines) and read
+                                   `from_coop_isr05` before assuming the timer.
+```
+  ▶ **DO THIS ONE FIRST**, because it is two lines and it decides which handler you
+    are even looking at. `g_coop_dma_polls` is the pattern to copy.
+  **TASK B (if TASK A lands).** If cooperative ticks can be made to produce refills
+  the way async ones do, polls go from 55/s to ~135/s against 82 blocks/s and the
+  margin race has no margin left. That is the fix, and it needs no lock work, no
+  page traps and no new subsystem.
+  **TASK C (video, untouched this session).** Name the writer that puts phase-1 data
+  into all four planes -- session 23's status-bar section below is unchanged and
+  still correct. Nothing this session bears on it.
+  **TASK D (still worth doing, on its own merits).** `g_lock` contention: 103 ms
+  waits with the AUDIO thread the longest waiter, 108 ms holds, 1.86M plane swaps.
+  It will help video and the audio thread's own stalls. It will NOT fix the echo.
+  ⚠ Do not spend a run on the async injector's refusal rate. It is 90% efficient and
+    the three suspected clauses are at ZERO, ZERO and 0.4%.
+
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ ★★★★ NEW INSTRUMENTS (session 24). All bounded; all on by default.           │
+└──────────────────────────────────────────────────────────────────────────────┘
+```
+   STAGE2: async why irqNN   the refusal histogram, PER LINE, named not numbered.
+                             Codes 0-14 from dpmi_async_inject_pm + the two new
+                             ones; 20-27 from async_early_bail. Sums to `total`.
+   STAGE2: isr08 delivery    raises / async / coop / TOTAL / % of raises /
+                             owed_now / owed_depth_at_sync[9]. The whole account,
+                             in the units of the claim. USE THIS, not pit budget's
+                             `delivered`, which is the async arm alone.
+   STAGE2: coop per IRQ      cooperative dpmi_inject_pm_irq injections by vector.
+   STAGE2: sb replay ...     now also flat= / REPLAYED_LOUD= / % of NON-FLAT /
+                             runs[8] / run_max. REPLAYED alone cannot support a
+                             claim -- silence replays correctly.
+   STAGE2: 8237 guest reads  ch1/ch5 addr+count, status, count reads BY WIDTH, and
+                             from_coop_isr08. This is what found the poll rate.
+   PMIRQ vec=0x..            was "IRQ0<-PM" for every vector it injected, including
+                             the device lines it has served since 7a13b45.
+```
+
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ ★★★★★ METHOD — SESSION 24 PAID FOR THESE                                     │
+└──────────────────────────────────────────────────────────────────────────────┘
+  ▶ **A COUNTER PRINTED BESIDE ANOTHER IS A CLAIM THAT THEY ARE COMPARABLE.**
+    `raises=144/s ... delivered=56/s` invited "we deliver 39% of the ticks" -- but
+    `delivered` was one of TWO delivery paths and the other was larger. Nothing was
+    wrong with either number. The LAYOUT made the false statement, and a whole
+    session's root cause was built on it. **Before comparing two counters, ask what
+    each one does NOT count.**
+  ▶ **A MAXIMUM IS NOT AN OCCUPANCY.** `owed_max` saturates permanently on one stall,
+    so "PERMANENTLY SATURATED" and "touched the cap once in 45 s" are the same
+    number. They mean opposite things. Sample the distribution, not the extreme.
+  ▶ **WHY=0 MEANT "SUCCESS" AND ALSO "NOBODY SET IT".** Two exits in the async
+    injector returned failure with the reason field untouched, so a histogram keyed
+    on it would have booked them as deliveries -- and one of those two (`HOST_CS`)
+    was the third-largest bucket. **When you turn a last-value field into a
+    histogram, audit every path that reaches the field, not just the ones that set
+    it.**
+  ▶ **A METRIC WHOSE NAME IS A CONCLUSION WILL BE READ AS ONE.** `blocks_replayed`
+    measured "identical to one lap earlier" and its comment said "DMX never
+    refilled". Those differ by every silent block, which was a fifth of the total.
+  ▶ **A RATE CANNOT SHOW A SHAPE.** 32% replayed is the same number for a margin
+    race and for a half-second stall. The run-length histogram cost one counter and
+    excluded an entire family of causes -- including the one the previous session
+    had settled on.
+  ▶ **A READ COUNT IS NOT A POLL COUNT.** The 8237's count is 16 bits behind an
+    8-bit port with a flip-flop, so the poll rate depends on a factor of two that
+    depends on the guest's operand width. Measuring it cost one run and one counter;
+    assuming it would have put a 2x error under the session's central number.
+  ▶ **TWO RATIOS AGREEING IS NOT A MECHANISM.** 55 polls/s vs 56 async ticks/s
+    matched to 1.5% in two runs, which is suggestive and proves nothing. Bracketing
+    the cooperative injection turned it into 0.89 vs 0.068 polls per tick -- a
+    direct measurement of the thing itself, for two lines of code.
+  ▶ **FOLLOWING A REFUTATION IS THE WORK.** TASK 1 was meant to choose between three
+    fixes. It eliminated all three, and the value of the run was entirely in what it
+    ruled out. Two of the three tasks below it were then cancelled without being
+    attempted, which is the cheapest possible outcome for both.
+
+
+═══════════════════════════════════════════════════════════════════════════════
+██ ▶▶▶ SESSION 23 (2026-08-24). **BOTH REMAINING DEFECTS RE-DIAGNOSED.**      ██
+██     Session 22's cause for EACH was wrong.                                 ██
+██  ⚠⚠ ITS AUDIO/TIMER CHAIN IS REFUTED BY SESSION 24 ABOVE. The status-bar   ██
+██     section stands; "the timer starves the audio" does NOT. Read the       ██
+██     numbers below as HISTORY -- `delivered` there is the async arm alone.  ██
+═══════════════════════════════════════════════════════════════════════════════
+
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ ★ START HERE — THE 60-SECOND VERSION (⚠ superseded in part; see session 24)  │
 └──────────────────────────────────────────────────────────────────────────────┘
   Doom is still playable; nothing regressed. Session 23 did **no feature work**: it
   re-diagnosed both remaining defects, and **session 22 was wrong about each**.
