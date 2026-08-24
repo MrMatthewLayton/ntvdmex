@@ -441,7 +441,47 @@
 ```
     ⚠ Hold it loosely: several hypotheses fell over today (log spam under the lock, the
       fan-out delivery repair, the page trap). This one is structural rather than
-      inferred, which is why it is worth a run -- but it is still untested.
+      inferred, which is why it is worth a run.
+    ▶▶ **RUN. IT IS DEAD.** `linear_bar_nonzero = 0 / 10240` -- not one byte of the bar
+       region was ever written through that window. Exactly the unambiguous outcome it
+       was designed for, and it cost one run.
+
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ ⚠⚠⚠ THE IMPASSE, STATED PLAINLY -- AND THE EXCLUSION THAT IS CIRCULAR        │
+└──────────────────────────────────────────────────────────────────────────────┘
+  **The planes are FULL, and the collapse is real content, not emptiness:**
+```
+   plane zero-bytes   0.0% / 0.2% / 0.1% / 0.1%      (band A; same in band B)
+   four-way uniform   ALL-ZERO 0.0%    all-equal-NON-ZERO  53.8% (A)  79.8% (B)
+```
+  So something writes the SAME NON-ZERO byte to all four planes at most bar offsets --
+  and **every candidate writer is now excluded by measurement**: the fan-out (0 bar
+  bytes, counted in its own loop), the latch bursts (delivering them moves the oracle
+  under a point), the linear window (0 bytes), the guest's single-plane stores (planes
+  receive mostly DISTINCT bytes).
+  ▶ **WHEN EVERY WRITER IS EXCLUDED AND THE CONTENT IS STILL THERE, ONE EXCLUSION IS
+    WRONG.** Distrust the one measured most indirectly.
+  ⚠⚠ **THAT IS THE RENDER, AND ITS EXCLUSION IS VERGING ON CIRCULAR.** Session 23 ruled
+    it innocent because plane-vs-WAD (69.4/33.5/29.0/27.1) matches screen-vs-WAD
+    (70.3/33.6/29.3/27.3) "to the digit". But MODEYBAR dumps `g_yview[pl]` and the
+    render reads `ymap_plane(p) = g_yview[p & 3]` -- **THE SAME MEMORY**. Those two
+    agreeing is very nearly a tautology. It shows the render adds no error of its own;
+    it says NOTHING about a cause upstream of both, and it cannot exclude anything that
+    makes the PLANES wrong -- which is exactly what is being hunted.
+  ▶ **THE NEXT MEASUREMENT MUST NOT SHARE A SOURCE WITH THE THING IT CHECKS.** Two
+    candidates, neither run:
+```
+     (a) plane bytes vs the host's own SCREENSHOT (shotNN.bmp via capture.flag),
+         scored with doomref.py -- two different paths out of the same store, so a
+         disagreement localises the fault to one of them.
+     (b) what the GUEST believes it wrote: Doom's screens[0] lives in its own memory
+         and IS readable. Compare the bar region of screens[0] against STBAR. If the
+         guest's own buffer is already collapsed, nothing in this host is at fault and
+         the search has been in the wrong process all along.
+```
+    ▶ (b) is the stronger of the two and has never been attempted. It is the only check
+      that can distinguish "we corrupt Doom's data" from "Doom hands us collapsed data
+      because of something we did upstream of the blit".
 
   **TASK D (video -- and the player just narrowed it).** Name the writer that puts
   phase-1 data into all four planes. Session 23's status-bar section below is
