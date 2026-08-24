@@ -3572,6 +3572,59 @@ static BYTE  g_yfan_bar_seen[(3u * YBAR_PER_PAGE + 7u) / 8u];
 static DWORD g_yfan_bar_writes[2];      /* fan-out writes to bar bytes, by band  */
 static DWORD g_yfan_bar_distinct[2];    /* ...distinct offsets, by band          */
 static DWORD g_yfan_bar_4way[2];        /* ...of which the mask was all four     */
+/* ── IS THE GUEST WRITING THE SAME BYTES TO EVERY PLANE? ─────────────────────────────
+     Everything else is now excluded by measurement: the fan-out writes 0 bar bytes, the
+     latch bursts change the oracle by under a point when delivered, and the render is
+     innocent (plane-vs-WAD matches screen-vs-WAD to the digit). What remains is the
+     guest's own stores under single-plane masks -- and `bandprof.py` says all four
+     planes hold PHASE-1 data at 54% (band A) to 80% (band B) of bar offsets against a
+     reference uniformity of 12%.
+     There are only two ways that happens. Either Doom writes four different byte
+     streams and we misdirect them onto one plane's worth of content, or Doom writes the
+     SAME stream four times because its per-plane source offset never advances. Those
+     need completely different fixes and no measurement so far separates them.
+   ► SO SAMPLE THE OUTGOING PLANE. A0000 maps exactly one plane at a time, so a store
+     can only reach the plane that is mapped; take a fixed 32-byte window of the bar
+     from a plane just before we swap away from it, and compare it with the last window
+     taken from a DIFFERENT plane -- but only count comparisons where the plane's own
+     content actually CHANGED since we last looked, or "identical" would mostly mean
+     "nobody wrote anything".
+       cross_same  two different planes were each written and received IDENTICAL bytes
+       cross_diff  ...and received different bytes
+     High cross_same means the fault is upstream of the planes entirely: the guest is
+     writing one stream four times, and the question becomes whether a store lands under
+     the mask Doom believes it set. Near-zero means the planes receive distinct data and
+     the collapse is created somewhere we have not looked yet.
+     Two windows, one per band, because the bands differ in intensity (54% vs 80%) and
+     a single sample point cannot show that. Two 32-byte compares per swap. */
+#define YSMP_LEN 32u
+#define YSMP_A   (176u * 80u)      /* band A, rows 168-183 */
+#define YSMP_B   (192u * 80u)      /* band B, rows 184-199 */
+static BYTE  g_ysmp[2][4][YSMP_LEN];      /* [band][plane] last seen                */
+static int   g_ysmp_have[2][4];
+static BYTE  g_ysmp_last[2][YSMP_LEN];    /* last CHANGED window, any plane         */
+static int   g_ysmp_last_pl[2] = { -1, -1 };
+static DWORD g_ysmp_cross_same[2], g_ysmp_cross_diff[2], g_ysmp_writes[2];
+static void ysmp_check(int band, unsigned off, int pl)
+{
+    const BYTE *v = (const BYTE *)g_yview[pl] + off;
+    unsigned i;
+    int changed = !g_ysmp_have[band][pl];
+    for (i = 0; i < YSMP_LEN && !changed; ++i)
+        if (g_ysmp[band][pl][i] != v[i]) changed = 1;
+    if (!changed) return;                       /* nobody wrote this window */
+    for (i = 0; i < YSMP_LEN; ++i) g_ysmp[band][pl][i] = v[i];
+    g_ysmp_have[band][pl] = 1;
+    g_ysmp_writes[band]++;
+    if (g_ysmp_last_pl[band] >= 0 && g_ysmp_last_pl[band] != pl) {
+        int same = 1;
+        for (i = 0; i < YSMP_LEN && same; ++i)
+            if (g_ysmp_last[band][i] != v[i]) same = 0;
+        if (same) g_ysmp_cross_same[band]++; else g_ysmp_cross_diff[band]++;
+    }
+    for (i = 0; i < YSMP_LEN; ++i) g_ysmp_last[band][i] = v[i];
+    g_ysmp_last_pl[band] = pl;
+}
 /* Record a fan-out write at plane offset k under `mask`. Returns nothing; cheap
    enough to sit in the fan-out's inner loop (3 compares for a non-bar byte). */
 static void yfan_bar_note(unsigned k, int mask)
@@ -3812,6 +3865,8 @@ static void modey_remap_select(void *ctx, int mask)
         g_yprev_mask = (n == 1) ? 0 : mask;
     }
     if (want == g_ycur) return;
+    /* Before the mapping moves: what did the plane we are leaving actually receive? */
+    if (g_ycur >= 0 && g_ycur < 4) { ysmp_check(0, YSMP_A, g_ycur); ysmp_check(1, YSMP_B, g_ycur); }
     if (!UnmapViewOfFile((LPVOID)(ULONG_PTR)0xA0000)) { ++g_yfail; return; }
     if (want == 5) {                                     /* seed the scratch so a
                                                             read-modify-write sees data,
@@ -9850,6 +9905,20 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
       p = zput(p, "/");    p = zhex(p, YBAR_OFF_HI - YBAR_OFF_MID);
       p = zput(p, " per page, 4way=");
       p = zhex(p, g_yfan_bar_4way[0]); p = zput(p, "/"); p = zhex(p, g_yfan_bar_4way[1]);
+      /* ► DOES THE GUEST WRITE THE SAME BYTES TO DIFFERENT PLANES? See ysmp_check().
+           cross_same high => one stream written four times, fault is upstream of the
+           planes. cross_same ~0 => the planes receive distinct data. */
+      { int bnd; for (bnd = 0; bnd < 2; ++bnd) {
+          p = zput(p, bnd ? " ysmpB[184-199]:" : " ysmpA[168-183]:");
+          p = zput(p, " writes="); p = zhex(p, g_ysmp_writes[bnd]);
+          p = zput(p, " cross_same="); p = zhex(p, g_ysmp_cross_same[bnd]);
+          p = zput(p, " cross_diff="); p = zhex(p, g_ysmp_cross_diff[bnd]);
+          if (g_ysmp_cross_same[bnd] + g_ysmp_cross_diff[bnd]) {
+              p = zput(p, " (");
+              p = zhex(p, g_ysmp_cross_same[bnd] * 100u
+                          / (g_ysmp_cross_same[bnd] + g_ysmp_cross_diff[bnd]));
+              p = zput(p, "% same, decimal-in-hex)");
+          } } }
       p = zput(p, " latch_solved="); p = zhex(p, g_ylatch_ok);
       p = zput(p, " latch_UNSOLVED="); p = zhex(p, g_ylatch_unsolved);
       p = zput(p, " gap="); p = zhex(p, g_vid.modey_gap);

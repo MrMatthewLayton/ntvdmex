@@ -1,0 +1,112 @@
+     1                                  ; pmal.asm -- MAKE THE GUEST'S PROGRESS A NUMBER THE FAULT LOG CAN READ.
+     2                                  ;
+     3                                  ; WHY THIS EXISTS. The `entry+0 or entry+3` rule is solid (~25 samples), but the
+     4                                  ; STORY built on it -- "the VEH resumes mid-instruction, so instructions re-execute"
+     5                                  ; -- rests on inferring how far the guest had actually got from AX values I could not
+     6                                  ; fully account for. dpmitest entry 3 is the case in point: the VEH reports AX=0x0206
+     7                                  ; and the next INT 31h sees 0x0208, which needs `add al,2` to have run once BEFORE
+     8                                  ; the fault and once after. That is consistent with several different mechanisms and
+     9                                  ; I could not separate them by staring at it.
+    10                                  ;
+    11                                  ; So stop inferring. Fill the PM entry with a run of `mov al,imm8` -- TWO bytes each,
+    12                                  ; which is exactly the case that misbehaves -- with ascending values. AL then IS a
+    13                                  ; program counter, and the VEH already prints the faulting CONTEXT's AX. One run says:
+    14                                  ;
+    15                                  ;   ctx AL  = how many instructions the guest REALLY executed
+    16                                  ;   cx->Eip = where the kernel CLAIMS it is
+    17                                  ;
+    18                                  ; and the difference between them is the bug, measured instead of argued.
+    19                                  ;
+    20                                  ; THE MAP (E = pm_entry; every instruction here is 2 bytes, on purpose):
+    21                                  ;   E+0   jc noswitch     AL unchanged from entry
+    22                                  ;   E+2   mov al,0x01     AL=01  <- so AL=n means the guest reached E+2n
+    23                                  ;   E+4   mov al,0x02     AL=02
+    24                                  ;   ...
+    25                                  ;   E+22  mov al,0x0B     AL=0B
+    26                                  ;   E+24  int 21h (BOP)   ends the entry
+    27                                  ;
+    28                                  ; PREDICTIONS, registered before the run:
+    29                                  ;   * a fault reported at E+0 with ctx AL unchanged  -> the kernel reports the entry
+    30                                  ;     before executing anything, and the resume there is CORRECT.
+    31                                  ;   * a fault reported at E+3 with AL=0x01           -> the guest is really at E+4;
+    32                                  ;     the reported EIP is 1 byte SHORT of the true boundary, and resuming at E+3
+    33                                  ;     re-runs `mov al,0x01` harmlessly here but would corrupt a real client.
+    34                                  ;   * a fault reported at E+3 with AL unchanged      -> the guest is really at E+2 and
+    35                                  ;     the reported EIP is 1 byte PAST it.
+    36                                  ;   * AL greater than 1 at a +3 fault                -> the reported EIP is badly
+    37                                  ;     stale and neither of the two stories above survives.
+    38                                  ;
+    39                                  ; Run with `pmkernel.flag`. Assemble: nasm -f bin -o pmal.com pmal.asm
+    40                                  
+    41                                  bits 16
+    42                                  org 0x100
+    43                                  
+    44                                  start:
+    45 00000000 BA[6500]                    mov     dx, msg_start
+    46 00000003 B409                        mov     ah, 0x09
+    47 00000005 CD21                        int     0x21
+    48                                  
+    49 00000007 B44A                        mov     ah, 0x4A                ; shrink to 64 KB
+    50 00000009 BB0010                      mov     bx, 0x1000
+    51 0000000C CD21                        int     0x21
+    52                                  
+    53 0000000E B88716                      mov     ax, 0x1687              ; detect DPMI
+    54 00000011 CD2F                        int     0x2F
+    55 00000013 85C0                        test    ax, ax
+    56 00000015 753E                        jnz     nodpmi
+    57 00000017 893E[6100]                  mov     [entry], di
+    58 0000001B 8C06[6300]                  mov     [entry+2], es
+    59                                  
+    60 0000001F 31C0                        xor     ax, ax                  ; ...but AL must start at 0 to read as a counter
+    61 00000021 FF1E[6100]                  call    far [entry]
+    62                                  ; ---------------------------------------------------------------------------
+    63                                  ; DO NOT "TIDY" THIS. Every instruction is deliberately 2 bytes and the values
+    64                                  ; are deliberately ascending -- that is the measurement.
+    65                                  ; ---------------------------------------------------------------------------
+    66                                  pm_entry:
+    67 00000025 7222                        jc      noswitch                ; E+0
+    68 00000027 B001                        mov     al, 0x01                ; E+2
+    69 00000029 B002                        mov     al, 0x02                ; E+4
+    70 0000002B B003                        mov     al, 0x03                ; E+6
+    71 0000002D B004                        mov     al, 0x04                ; E+8
+    72 0000002F B005                        mov     al, 0x05                ; E+10
+    73 00000031 B006                        mov     al, 0x06                ; E+12
+    74 00000033 B007                        mov     al, 0x07                ; E+14
+    75 00000035 B008                        mov     al, 0x08                ; E+16
+    76 00000037 B009                        mov     al, 0x09                ; E+18
+    77 00000039 B00A                        mov     al, 0x0A                ; E+20
+    78 0000003B B00B                        mov     al, 0x0B                ; E+22
+    79 0000003D B409                        mov     ah, 0x09                ; E+24
+    80 0000003F BA[7300]                    mov     dx, msg_inpm
+    81 00000042 CD21                        int     0x21
+    82                                  
+    83 00000044 B8004C                      mov     ax, 0x4C00
+    84 00000047 CD21                        int     0x21
+    85                                  
+    86                                  noswitch:
+    87 00000049 BA[8D00]                    mov     dx, msg_noswitch
+    88 0000004C B409                        mov     ah, 0x09
+    89 0000004E CD21                        int     0x21
+    90 00000050 B8014C                      mov     ax, 0x4C01
+    91 00000053 CD21                        int     0x21
+    92                                  nodpmi:
+    93 00000055 BA[AF00]                    mov     dx, msg_nodpmi
+    94 00000058 B409                        mov     ah, 0x09
+    95 0000005A CD21                        int     0x21
+    96 0000005C B8024C                      mov     ax, 0x4C02
+    97 0000005F CD21                        int     0x21
+    98                                  
+    99 00000061 00000000                entry:          dd 0
+   100                                  
+   101 00000065 504D414C3A20737461-     msg_start:      db 'PMAL: start', 13, 10, '$'
+   101 0000006E 72740D0A24         
+   102 00000073 504D414C3A20726561-     msg_inpm:       db 'PMAL: reached the print', 13, 10, '$'
+   102 0000007C 636865642074686520-
+   102 00000085 7072696E740D0A24   
+   103 0000008D 504D414C3A206D6F64-     msg_noswitch:   db 'PMAL: mode switch FAILED (CF=1)', 13, 10, '$'
+   103 00000096 652073776974636820-
+   103 0000009F 4641494C4544202843-
+   103 000000A8 463D31290D0A24     
+   104 000000AF 504D414C3A206E6F20-     msg_nodpmi:     db 'PMAL: no DPMI host', 13, 10, '$'
+   104 000000B8 44504D4920686F7374-
+   104 000000C1 0D0A24             
