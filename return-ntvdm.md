@@ -66,7 +66,7 @@
     `rows=` and `barbytes=` beside the hex span.
 
 ┌──────────────────────────────────────────────────────────────────────────────┐
-│ ★★★★★ THE STATUS BAR: EVERY PLANE HOLDS **PLANE 1'S PHASE**                  │
+│ ★★★★★ THE STATUS BAR: A FOUR-WAY PLANE COLLAPSE (phase 1 survives most)      │
 └──────────────────────────────────────────────────────────────────────────────┘
   New instrument `MODEYBAR` dumps all 4 planes x 3 pages x rows 168..199 at wind-down;
   `tools/doomoracle/planejudge.py` judges them against STBAR. Plane p's byte i is
@@ -108,7 +108,7 @@
     first change of each offset.
 
 ┌──────────────────────────────────────────────────────────────────────────────┐
-│ ★★★★★ THE PCM CLICK: BLOCK-COMPLETION IRQs ARE BEING DROPPED                 │
+│ ★★★★★ THE PCM CLICK: dropped IRQs FIXED; residual echo is the TIMER          │
 └──────────────────────────────────────────────────────────────────────────────┘
   New instrument: the **block ledger** (`sb_blkrec` in vdd_sb.h, `STAGE2: sbblk` lines)
   records cap_off / block_len / 8237 state at each of the first 24 block completions.
