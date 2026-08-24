@@ -447,7 +447,41 @@
        was designed for, and it cost one run.
 
 ┌──────────────────────────────────────────────────────────────────────────────┐
-│ ⚠⚠⚠ THE IMPASSE, STATED PLAINLY -- AND THE EXCLUSION THAT IS CIRCULAR        │
+│ ★★★★★ THE COLLAPSE **IS** PLANE 1 REPLICATED. SESSION 23'S CONTROL WAS VOID. │
+└──────────────────────────────────────────────────────────────────────────────┘
+  At offsets where all four planes hold the same byte, WHICH reference phase is that
+  byte? (`bandprof.py`, free, off the dump already in every log.)
+```
+   band A 168-183   688 uniform offsets   q0 27.3%  q1 73.3%  q2 21.9%  q3 20.2%
+   band B 184-199  1021 uniform offsets   q0 32.3%  q1 88.6%  q2 26.7%  q3 22.0%
+```
+  **The common value is STBAR's PHASE 1 pixel.** Planes 0, 2 and 3 are holding PLANE
+  1'S CORRECT DATA. That is "plane 1 smeared outward" -- the reading session 23 ruled
+  out with a CONTROL (p0-vs-p2 agreeing at 73%, "neither being the suspected source").
+  ⚠⚠ **THE CONTROL WAS INVALID.** If plane 1's bytes are copied into 0, 2 AND 3 then
+    p0-vs-p2 MUST agree -- both hold plane 1. Its outcome is exactly what the hypothesis
+    PREDICTS, so it had no power to refute it. **A control has to be something the
+    hypothesis forbids; this one forbade nothing.** Session 23 also described the common
+    value as "the phase-1 pixel more often than the others" -- 88.6% against 22-32% is
+    not "more often", it is near-exclusive, and the qualitative phrasing is most of why
+    the right answer was discarded.
+  ▶ **THE QUESTION IS NARROW AT LAST: what puts plane 1's bytes into planes 0, 2 and 3?**
+    No code path in this host copies one plane to another. The seed writes the SCRATCH
+    (from `sel[0]`, which is plane 0 for every multi-plane mask observed); the fan-out
+    writes planes from the scratch and is measured at 0 bar bytes; the latch `dl` path
+    copies WITHIN one plane and has never run. Which leaves the GUEST writing plane 1's
+    data four times -- either its blit source not advancing per plane, or three of its
+    four mask changes not moving our window.
+    ▶ **THE SECOND IS DIRECTLY CHECKABLE AND SHOULD BE DONE FIRST.** Count
+      `ymap_select` calls per mask VALUE against the map-mask write histogram
+      (0x01/0x02/0x04/0x08 at ~510k each) and look for the window sitting on plane 1
+      across passes that should have moved it. `vdd_video.c:941` only remaps when
+      `(v & 0x0F) != st->y_mask`, so any path that updates `y_mask` WITHOUT calling
+      `ymap_select` would strand the window on whichever plane was last mapped --
+      and `st->y_mask = st->map_mask` is assigned at line 947 and again at 952.
+
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ ⚠⚠⚠ THE IMPASSE (now largely resolved above) -- AND A CIRCULAR EXCLUSION     │
 └──────────────────────────────────────────────────────────────────────────────┘
   **The planes are FULL, and the collapse is real content, not emptiness:**
 ```
