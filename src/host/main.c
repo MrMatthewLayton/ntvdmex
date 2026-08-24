@@ -1115,6 +1115,11 @@ static DWORD g_pm_coop_line[8];
      dpmi_inject_pm_irq(), so a before/after snapshot of the counter brackets it exactly,
      with no new plumbing into the device model. Near zero here confirms it. */
 static uint32_t g_coop_dma_polls;
+static uint32_t g_coop_dma_polls_dev[8];   /* ...and the same, per DEVICE line */
+/* Count-register reads split by whether an ASYNC injection was in flight. Note the
+   pair does NOT have to sum to the device's own rd_count[1]: this sees only reads
+   dispatched through host_io_do, and a gap between the two is itself informative. */
+static uint32_t g_dmapoll_in_async, g_dmapoll_mainline;
 /* Cooperative delivery of DEVICE lines (2-7) to a PM client -- the retry the async
    path never had. `inj` is the interrupts that would previously have been LOST. */
 static DWORD g_pm_devirq_inj  = 0;
@@ -3113,6 +3118,17 @@ static void host_io_do(volatile BYTE *tib, vdd_bus *bus, uint16_t port,
 {
     uint32_t val, eax = VDM_REG(tib, VTIB_EAX);
     g_io_last_port = port;              /* for the hot-port histogram */
+    /* ► THE LAST FORK IN THE ECHO. 91% of DMX's 8237 count reads happen outside any
+         COOPERATIVE injection -- but "outside cooperative" is two very different
+         places: inside an ASYNC-delivered ISR (the async path does something the
+         cooperative one does not, and making them equivalent is the fix), or in
+         Doom's MAINLINE code (DMX polls at its own rate, the tick path is irrelevant,
+         and the fix is somewhere else entirely). The async ISR cannot be bracketed
+         the way the cooperative one was -- the guest runs it on its own thread -- but
+         g_async_pm_active is set for exactly its duration, from the injection to the
+         catcher. Read it here, where the port access is dispatched. */
+    if (port == 0x03) { if (g_async_pm_active) ++g_dmapoll_in_async;
+                        else                   ++g_dmapoll_mainline; }
     /* Sync the counter before the guest looks at it, so a poll always reads real time. */
     if (port >= 0x40 && port <= 0x43) host_pit_sync();
     /* Report the rate the guest programs. Skyroads divides its own fast timer down to the
@@ -8656,6 +8672,15 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                                there, so clearing afterwards would cancel the interrupt the
                                handler itself just asked for. That is verbatim the mistake
                                the keyboard made. */
+                            /* ► AND THE SAME BRACKET ON THE DEVICE LINES, BECAUSE THE
+                                 TIMER MAY NOT BE THE HANDLER THAT POLLS AT ALL. DMX
+                                 reads the 8237 count 55 times a second; that was matched
+                                 against IRQ0's rate first only because IRQ0 was what the
+                                 previous session was looking at. IRQ5 -- the block
+                                 completion, which is when a refill is actually DUE -- is
+                                 the more natural place for a driver to look, and nothing
+                                 has excluded it. Same snapshot, same exactness. */
+                            uint32_t pred = g_dma.rd_count[1];
                             InterlockedExchange(&g_irqn_pending[q], 0);
                             g_in_pm_irq = 1;
                             if (dpmi_inject_pm_irq(&m, tib, 0x08u + q, steps)) {
@@ -8672,6 +8697,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                                 ++g_pm_devirq_fail;
                             }
                             g_in_pm_irq = 0;
+                            g_coop_dma_polls_dev[q & 7] += g_dma.rd_count[1] - pred;
                             break;                  /* one per pass: let it IRET first */
                         }
                     }
@@ -9495,6 +9521,12 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         p = zput(p, " w4=");                   p = zhex(p, g_dma.rd_w4);
         /* ...and how many of those reads DMX made from inside a COOPERATIVE tick. */
         p = zput(p, " from_coop_isr08=");      p = zhex(p, g_coop_dma_polls);
+        { unsigned dq; for (dq = 2; dq < 8; ++dq)
+            { if (!g_coop_dma_polls_dev[dq]) continue;
+              p = zput(p, " from_coop_irq"); p = zhexb(p, dq);
+              p = zput(p, "=");              p = zhex(p, g_coop_dma_polls_dev[dq]); } }
+        p = zput(p, " in_async_isr=");  p = zhex(p, g_dmapoll_in_async);
+        p = zput(p, " mainline=");      p = zhex(p, g_dmapoll_mainline);
         p = zput(p, "\r\nSTAGE2: devirq (cooperative PM retry): inj=");
         p = zhex(p, g_pm_devirq_inj);
         p = zput(p, " fail=");  p = zhex(p, g_pm_devirq_fail);
