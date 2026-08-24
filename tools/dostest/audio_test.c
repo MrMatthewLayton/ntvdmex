@@ -181,6 +181,32 @@ int main(void)
           CHECK(wrapped < 4096 / 20, "mix: overload clamps rather than wrapping"); }
     }
 
+    /* ── THE TRANSPORT MUST NOT EAT SAMPLES IT DOES NOT PLAY. ───────────────────────
+         vdd_sb_render() pulls out of the guest's DMA ring, so any sample the mixer asks
+         for and then discards is data the game wrote and nobody hears. rs_need() used
+         to ask for two extra every chunk "for the pair being interpolated between",
+         which at Doom's rate is 172 dropped PCM samples a second: the read pointer
+         walks away from the guest's write pointer and you hear a click at chunk rate.
+         Drive a whole number of chunks at an exact 4:1 ratio and check the ring
+         advanced by the arithmetic amount and no more. */
+    {
+        uint32_t before, after, want, chunks = 8;
+        for (i = 0; i < 4096; ++i) g_flat[0x50000 + i] = 0x80;
+        dma_program(0x50000, 4096, 1);                       /* auto-init ring   */
+        wr(BASE + 0xC, 0x41); wr(BASE + 0xC, 0x2B); wr(BASE + 0xC, 0x11);  /* 11025 Hz */
+        wr(BASE + 0xC, 0xC6); wr(BASE + 0xC, 0x00);          /* 8-bit auto, mono */
+        wr(BASE + 0xC, 0xFF); wr(BASE + 0xC, 0x0F);          /* 4096-byte block  */
+        vdd_audio_mix(&mix, buf, 512);                       /* prime the pair   */
+        before = sb.block_left;
+        for (i = 0; i < chunks; ++i) vdd_audio_mix(&mix, buf, 512);
+        after = sb.block_left;
+        want = chunks * 512u * 11025u / AUDIO_OUT_HZ;        /* exactly 1:4      */
+        printf("        ring consumed %u over %u chunks, arithmetic says %u\n",
+               before - after, chunks, want);
+        CHECK(before - after == want,
+              "resampler pulls exactly what it plays (no DMA samples discarded)");
+    }
+
     printf("-- %d checks, %d failures --\n", total, fails);
     return fails ? 1 : 0;
 }

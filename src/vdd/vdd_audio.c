@@ -28,12 +28,21 @@ static void rs_setup(audio_resampler *r, uint32_t src_hz, uint32_t out_hz)
     }
 }
 
-/* How many source samples this chunk needs: one per whole step crossed, plus the
-   pair being interpolated between. */
+/* ── PULL EXACTLY WHAT WILL BE CONSUMED, AND NOT ONE SAMPLE MORE. ───────────────────
+     This used to ask for two extra samples every chunk, "the pair being interpolated
+     between". For a synthesised source that is merely wasteful; for the SOUND BLASTER
+     it is data loss. vdd_sb_render() is the TRANSPORT -- every sample it is asked for
+     is pulled out of the guest's DMA ring and thrown away if the resampler does not
+     use it. Two per chunk, 86 chunks a second at Doom's 11025 Hz stereo, is 172
+     dropped PCM samples a second: the read pointer walks away from the guest's write
+     pointer at 1.6%, and what you hear is a soft click at chunk rate over everything.
+     The count is exact and provable: prev/cur persist across calls, so the only
+     samples consumed are the ones a phase wrap loads, and there are exactly
+     floor((frac + step*frames) / 0x10000) wraps. Priming loads the first pair, once. */
 static uint32_t rs_need(const audio_resampler *r, uint32_t frames)
 {
     uint64_t span = (uint64_t)r->frac + (uint64_t)r->step * frames;
-    uint32_t n = (uint32_t)(span >> 16) + 2;
+    uint32_t n = (uint32_t)(span >> 16) + (r->primed ? 0u : 2u);
     return n > AUDIO_SRC_MAX ? AUDIO_SRC_MAX : n;
 }
 
