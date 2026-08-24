@@ -23,7 +23,7 @@ void vdd_bus_set_sinks(vdd_bus *b, vdd_irq_sink irq, void *irq_ctx,
 
 int vdd_bus_add(vdd_bus *b, ntvdd *dev)
 {
-    if (b->n_dev >= VDD_MAX_DEV) return -1;
+    if (b->n_dev >= VDD_MAX_DEV) { b->claim_fail++; return -1; }
     b->dev[b->n_dev++] = dev;
     return dev->init ? dev->init(b, dev->self) : 0;
 }
@@ -47,7 +47,7 @@ int vdd_claim_ports(vdd_bus *b, uint16_t lo, uint16_t hi,
                     ntvdd_in_fn in, ntvdd_out_fn out, void *self)
 {
     vdd_port_ent *e;
-    if (lo > hi || b->n_ports >= VDD_MAX_PORTS) return -1;
+    if (lo > hi || b->n_ports >= VDD_MAX_PORTS) { b->claim_fail++; return -1; }
     e = &b->ports[b->n_ports++];
     e->lo = lo; e->hi = hi; e->in = in; e->out = out; e->self = self;
     return 0;
@@ -57,7 +57,7 @@ int vdd_claim_mem(vdd_bus *b, uint32_t base, uint32_t size,
                   ntvdd_rd_fn rd, ntvdd_wr_fn wr, void *self)
 {
     vdd_mem_ent *e;
-    if (!size || b->n_mem >= VDD_MAX_MEM) return -1;
+    if (!size || b->n_mem >= VDD_MAX_MEM) { b->claim_fail++; return -1; }
     e = &b->mem[b->n_mem++];
     e->base = base; e->end = base + size - 1; e->rd = rd; e->wr = wr; e->self = self;
     return 0;
@@ -73,7 +73,7 @@ int vdd_claim_int(vdd_bus *b, uint8_t vec, ntvdd_int_fn svc, void *self)
 int vdd_on_frame(vdd_bus *b, ntvdd_frame_fn fn, void *self)
 {
     vdd_frame_ent *e;
-    if (b->n_frame >= VDD_MAX_FRAME) return -1;
+    if (b->n_frame >= VDD_MAX_FRAME) { b->claim_fail++; return -1; }
     e = &b->frame[b->n_frame++];
     e->fn = fn; e->self = self;
     return 0;

@@ -271,6 +271,7 @@ static int pm_tick_take(void)
     InterlockedDecrement(&g_pm_tick_owed);
     return 1;
 }
+static int   g_async_tried_this_sync = 0;   /* see host_irq_sink: one attempt per PIT sync */
 static DWORD g_keypm_logged  = 0;           /* bounded KEYPM account; see the PM exec loop */
 static DWORD g_keyirq_logged = 0;           /* bounded KEYIRQ account; see host_irq_sink */
 static volatile LONG g_irq1_pending = 0;    /* count of un-delivered keyboard IRQ1s (one per scancode byte) */
@@ -1286,11 +1287,28 @@ static void host_irq_sink(void *ctx, uint8_t irq)
            Skyroads was asking for 180, which is most of why the game ran ~10x too slow and
            why its intro stalled after ~3 s (measured: d_irq0 fell to ~1/s while the guest sat
            at 0110:3b40 waiting, having done all its work in the first three seconds). */
-        /* An asynchronous delivery IS a tick delivered: bill it, or the catch-up batch
-           will pay for it a second time. */
-        if (g_qi_susp && async_inject_irq(0)) {
-            InterlockedDecrement(&g_irq0_pending);
-            pm_tick_take();
+        /* ── ONE ASYNCHRONOUS ATTEMPT PER SYNC, NOT ONE PER TICK RAISED. ─────────────
+             vdd_pit_add_clocks() raises IRQ0 once per reload period for the whole
+             elapsed gap, synchronously, from inside host_pit_sync's lock. Doom's music
+             driver programs the 8254 fast (reload 0x4a = 16 kHz, measured), so a 50 ms
+             gap is EIGHT HUNDRED raises -- and this used to answer every one of them
+             with a SuspendThread / GetThreadContext / SetThreadContext / ResumeThread
+             round trip plus a log write, all still holding the device lock.
+             Measured on a ten-minute play session: a 44 ms lock hold attributed to
+             host_pit_sync, with the AUDIO thread blocked 36.8 ms behind it waiting to
+             mix. That is the user's "chk-a-chk-a" in one number, and it is ours.
+             Only ONE of those attempts can ever deliver anything -- the rest bail on
+             g_async_pm_active because an injection is already in flight -- and they pay
+             the full round trip to find out. The backlog is not lost by skipping them:
+             g_pm_tick_owed counts every raise and the catch-up batch drains it.
+             After: hold 44ms -> 15.9ms, audio-thread wait 36.8ms -> 5.8ms, longest UI
+             gap 61ms -> 31.8ms, with the delivered tick rate unchanged. */
+        if (g_qi_susp && !g_async_tried_this_sync) {
+            g_async_tried_this_sync = 1;
+            if (async_inject_irq(0)) {
+                InterlockedDecrement(&g_irq0_pending);
+                pm_tick_take();
+            }
         }
     }
     else if (irq == 1) {
@@ -2903,6 +2921,7 @@ static void host_pit_sync(void)
         HOST_UNLOCK();
         return;
     }
+    g_async_tried_this_sync = 0;        /* a fresh burst of raises gets one attempt */
     delta = (ULONGLONG)(now.QuadPart - s_last.QuadPart);
     /* clocks = delta * 1193182 / freq, without overflowing: delta is small (microseconds). */
     { ULONGLONG clocks = (delta * PIT_INPUT_HZ) / (ULONGLONG)s_freq.QuadPart;
@@ -6956,6 +6975,14 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     g_mpu.sink = host_midi_sink;
     g_mpu_dev = vdd_mpu_device(&g_mpu);
     vdd_bus_add(&g_bus, &g_mpu_dev);            /* MPU-401 MIDI: 0x330/0x331      */
+    /* ► SAY WHETHER EVERY DEVICE ACTUALLY GOT ON THE BUS. VDD_MAX_PORTS was 16 and
+         exactly full; adding one range pushed the LAST device added -- the MPU-401 --
+         off, its claim returned -1, nobody looked, and the guest's MIDI port read 0xFF
+         like an empty slot. Doom reset it four times, got nothing, and played no music.
+         A device that cannot get on the bus is not a detail to discover by diffing
+         port traces against a working run. */
+    /* (the bus health line is emitted after the preamble is written -- see below;
+       every log_write() before then TRUNCATES the file.) */
     /* Start the mixer + audio thread. This is also the TRANSPORT: it is what
        walks the SB's DMA buffer and raises the block-completion IRQ, so it must
        run even if no sound device opens (audio_wave falls back to silent
@@ -7024,6 +7051,16 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     p = zhex(p, img.cs); p = zput(p, ":0x"); p = zhex(p, img.ip); p = zput(p, ")...\r\n");
     log_write(LOG_PATH, report, p);
     base = p;                       /* preamble is on disk; the loop appends from here */
+    { char bb2[160], *bq = bb2;
+      bq = zput(bq, g_bus.claim_fail ? "STAGE2: *** BUS CLAIMS REFUSED: " : "STAGE2: bus ok: ");
+      bq = zhex(bq, (DWORD)g_bus.claim_fail);
+      bq = zput(bq, " refused, ports="); bq = zhex(bq, (DWORD)g_bus.n_ports);
+      bq = zput(bq, "/"); bq = zhex(bq, (DWORD)VDD_MAX_PORTS);
+      bq = zput(bq, " mem="); bq = zhex(bq, (DWORD)g_bus.n_mem);
+      bq = zput(bq, "/"); bq = zhex(bq, (DWORD)VDD_MAX_MEM);
+      bq = zput(bq, " dev="); bq = zhex(bq, (DWORD)g_bus.n_dev);
+      bq = zput(bq, "/"); bq = zhex(bq, (DWORD)VDD_MAX_DEV);
+      bq = zput(bq, "\r\n"); log_append(LOG_PATH, bb2, bq); serial_out(bb2, bq); }
 
     SetCurrentDirectoryA(g_cur);    /* DOS relative paths resolve against CurDir */
 

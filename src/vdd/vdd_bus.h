@@ -16,7 +16,14 @@
 #include "ntvdd.h"
 
 #ifndef VDD_MAX_PORTS
-#define VDD_MAX_PORTS  16       /* claimed port ranges                          */
+#define VDD_MAX_PORTS  32       /* claimed port ranges                          */
+/* ⚠ THIS WAS 16, AND IT WAS EXACTLY FULL. Adding one CRTC range pushed the LAST
+     device added -- the MPU-401 -- off the bus: vdd_claim_ports() returned -1, nobody
+     looked, and the guest's MIDI port read 0xFF like an empty ISA slot. Doom's music
+     driver reset it four times, got nothing, and played no music at all. Nothing in
+     any log said so; it took diffing an SNDIO trace against a working run to see
+     0x330 answering 0xffffffff. Hence `claim_fail` below and the STAGE0 line that
+     prints it: a device that cannot get on the bus must be LOUD. */
 #endif
 #ifndef VDD_MAX_MEM
 #define VDD_MAX_MEM    8        /* claimed memory windows                       */
@@ -48,6 +55,7 @@ struct vdd_bus {
     vdd_frame_ent  frame[VDD_MAX_FRAME];   int n_frame;
 
     ntvdd         *dev[VDD_MAX_DEV];       int n_dev;
+    int            claim_fail;             /* claims refused for want of a table slot */
 };
 
 /* --- host-side lifecycle + dispatch (the V86 loop calls these) ------------- */
