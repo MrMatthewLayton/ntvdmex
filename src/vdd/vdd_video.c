@@ -728,16 +728,77 @@ int vdd_video_present_ready(video_state *st)
 }
 
 /* Sequencer ports 3C4 (index) / 3C5 (data) -- Map Mask (SR2). */
-/* Copy the aperture into whichever planes the outgoing mask selected. Called on
-   a mask change and once per presented frame -- never per write. */
-static void modey_snapshot(video_state *st)
+/* ── ATTRIBUTE ONLY THE BYTES THAT CHANGED, NOT THE WHOLE APERTURE. ─────────────────
+     The A0000 aperture is one flat buffer -- the page trap is deliberately not armed,
+     because arming it makes the interpreter the CPU and collapses the run -- so a guest
+     write lands there with no record of which plane the map mask had selected. This
+     used to copy the ENTIRE aperture into the outgoing plane on every mask change, on
+     the assumption that an unchained program fills one whole plane before moving to the
+     next.
+
+     Doom does not. It updates in dirty boxes: measured, the map mask changes about 516
+     times per frame, four planes x ~129 boxes, each write touching a few columns. So
+     every "snapshot" copied 16000 bytes of which only a handful belonged to that plane,
+     and the other 15,900-odd were whatever the PREVIOUS plane had left behind. All four
+     planes therefore converged on the same picture -- measured, they ended a run
+     reporting an identical 48,031 non-zero bytes -- and the frame came out with every
+     even column equal to the one after it. On screen that reads as Doom at half
+     horizontal resolution, which is not a thing Doom can do: its own low-detail mode
+     leaves the status bar alone, and the doubling was in the status bar too.
+
+     The aperture does carry the information, just not in its addresses: a byte that
+     CHANGED since the last flush was written under the mask that is now going out.
+     So keep a shadow of the aperture and attribute the differences. That is exact
+     without a page trap, and it is not more expensive than the copy it replaces --
+     comparing dwords, an untouched region costs a quarter of the reads a copy did. */
+/* ── WE CANNOT DE-INTERLEAVE MODE Y FROM THE FLAT APERTURE. THIS IS AN APPROXIMATION.
+     A0000 is one flat buffer -- the page trap is deliberately not armed, because arming
+     it makes the interpreter the CPU and collapses the run -- so a guest write lands
+     there carrying no record of which plane the map mask had selected. Everything below
+     is an attempt to recover that record after the fact, and session 21 measured four
+     of them against captured frames (even-column match: 0.08 is a real 320-wide
+     picture, 1.000 is every even column equal to the next):
+
+       whole aperture   SHIPS. Copy the aperture into the outgoing plane on every mask
+                        change. Exact for a program that fills one plane at a time;
+                        Doom updates in dirty boxes (~516 mask changes a frame) so every
+                        plane converges on the same image -- 1.000, i.e. a coherent
+                        picture at half horizontal resolution.
+       changed BYTES    0.08 and STREAKED. A byte rewritten with the value it already
+                        held is still a write and the shadow cannot see it; Doom's
+                        textures are full of equal neighbours, so whole columns kept an
+                        earlier frame's content.
+       changed SPAN     0.90. min..max covers nearly the whole page, so it degenerates
+                        into the whole-aperture rule with extra work.
+       fixed 16B runs   0.78. A plane byte is FOUR screen pixels wide, so a 16-byte
+                        group spans 64 pixels and over-attribution wrecks the picture.
+
+   ▶ THE REAL FIX IS NOT IN HERE. The information does not exist in the aperture and no
+     rule can invent it. It has to be captured at write time: give each plane its own
+     backing and point A0000 at the selected one on a mask change (four pagefile-backed
+     sections and MapViewOfFileEx at a fixed address -- O(1) per change, exact, no
+     copying), or trap the writes. Both are design changes, not tweaks to this function.
+     ⚠ Do not "improve" the rule below without measuring even-column match on a captured
+       frame. Three plausible improvements have already made it worse. */
+static void modey_flush(video_state *st)
 {
     int p;
     if (st->chain4 || st->mkind != VID_KIND_LINEAR8 || !st->vmem) return;
     for (p = 0; p < 4; ++p)
-        if (st->y_mask & (1u << p)) {              /* no CRT/memcpy dependency here */
-            uint32_t i; const uint8_t *src = st->vmem; uint8_t *dst = st->yplane[p];
-            for (i = 0; i < VID_Y_PLANE; ++i) dst[i] = src[i];
+        if (st->y_mask & (1u << p)) {
+            /* ► DWORD, AND DO NOT COUNT WHILE COPYING. This is the hottest loop in the
+                 host: the map mask changes about 3,800 times a second in Doom, so a
+                 byte-at-a-time copy of the whole 64K plane is a quarter of a GIGABYTE a
+                 second of single-byte work, on the exec thread, inside the device lock.
+                 It was invisible for as long as the map-mask write was being dropped
+                 (the mask never changed, so this almost never ran); fixing that write
+                 turned it on. The non-zero tally that shared the loop was diagnostic
+                 only and cost a branch per byte -- it is sampled once per frame now. */
+            uint32_t i;
+            const uint32_t *src = (const uint32_t *)st->vmem;
+            uint32_t *dst = (uint32_t *)st->yplane[p];
+            for (i = 0; i < VID_Y_PLANE / 4; ++i) dst[i] = src[i];
+            st->ysnap[p]++;
         }
     st->dirty = 1;
 }
@@ -746,18 +807,34 @@ static void modey_snapshot(video_state *st)
    display START address (how a mode-Y program flips pages) and 0x13 the logical
    line width. Everything else is accepted and ignored -- this VDD does not model
    CRTC timing and pretending to would be worse than not. */
+static void vga_idx_data(uint8_t *index, uint8_t w, uint32_t v,
+                         void (*setdata)(void *, uint32_t), void *ctx)
+{
+    *index = (uint8_t)v;
+    if (w == 2) setdata(ctx, (v >> 8) & 0xFF);
+}
+
+static void crtc_set_data(void *self, uint32_t v);
+
 static void crtc_out(void *self, uint16_t port, uint8_t w, uint32_t v)
 {
-    video_state *st = (video_state *)self; (void)w;
-    if (port == 0x3D4) { st->crtc_index = (uint8_t)v; return; }
+    video_state *st = (video_state *)self;
+    if (port == 0x3D4) { vga_idx_data(&st->crtc_index, w, v, crtc_set_data, st); return; }
+    crtc_set_data(st, v);
+}
+static void crtc_set_data(void *self, uint32_t v)
+{
+    video_state *st = (video_state *)self;
     switch (st->crtc_index) {
-    case 0x0C: st->crtc_start = (uint16_t)((st->crtc_start & 0x00FF) | ((uint16_t)(v & 0xFF) << 8)); st->dirty = 1; break;
-    case 0x0D: st->crtc_start = (uint16_t)((st->crtc_start & 0xFF00) | (v & 0xFF));                  st->dirty = 1; break;
+    case 0x0C: st->crtc_start = (uint16_t)((st->crtc_start & 0x00FF) | ((uint16_t)(v & 0xFF) << 8));
+               st->crtc_seen = 1; st->dirty = 1; break;
+    case 0x0D: st->crtc_start = (uint16_t)((st->crtc_start & 0xFF00) | (v & 0xFF));
+               st->crtc_seen = 1; st->dirty = 1; break;
     case 0x13: st->crtc_offset = (uint8_t)v;                                                          st->dirty = 1; break;
     default: break;
     }
 }
-static void crtc_in_unused(void *self, uint16_t port, uint8_t w, uint32_t *v)
+static void crtc_in(void *self, uint16_t port, uint8_t w, uint32_t *v)
 {
     video_state *st = (video_state *)self; (void)w;
     if (port == 0x3D4) { *v = st->crtc_index; return; }
@@ -769,13 +846,46 @@ static void crtc_in_unused(void *self, uint16_t port, uint8_t w, uint32_t *v)
     }
 }
 
+/* ── A 16-BIT `OUT` TO A VGA INDEX PORT WRITES INDEX **AND** DATA. ──────────────────
+     The index and data registers of the sequencer, the graphics controller and the CRTC
+     are adjacent by design precisely so that one word OUT can set both -- `outpw(0x3C4,
+     index | value<<8)` is the idiom every DOS graphics programmer uses, and Watcom
+     compiles it to `mov eax,0x102 / out dx,ax`.
+     These handlers ignored `w` and treated the whole word as an index, THROWING THE
+     DATA BYTE AWAY. Doom's mode-Y frame blit selects each plane with exactly that
+     instruction:
+         19f8f:  mov edx,0x3c4 / mov eax,0x102 / out dx,ax    ; map mask := plane 0
+     so the map mask never changed, the de-interleave saw one plane's bytes where four
+     should have been, and every even screen column came out identical to the one after
+     it -- measured at 1.000 across whole frames, status bar included. It reads as "Doom
+     at half resolution", which is not a thing Doom can do: its low-detail mode leaves
+     the status bar alone.
+   ► THIS IS ALSO WHY CLAIMING THE CRTC REGRESSED DOOM THREE TIMES (sessions 19-20,
+     "mechanism UNKNOWN"). Doom page-flips with `mov edx,0x3d4 / out dx,ax` -- the same
+     idiom. Claiming 0x3D4 while dropping the data byte breaks the flip outright, which
+     is strictly worse than not claiming it and inferring the page from the data. */
+static void seq_set_data(void *self, uint32_t v);
+
 static void seq_out(void *self, uint16_t port, uint8_t w, uint32_t v)
 {
-    video_state *st = (video_state *)self; (void)w;
-    if (port == 0x3C4) st->seq_index = (uint8_t)v;
-    else if (st->seq_index == 2) {
+    video_state *st = (video_state *)self;
+    if (port == 0x3C4) { vga_idx_data(&st->seq_index, w, v, seq_set_data, st); return; }
+    seq_set_data(st, v);
+}
+static void seq_set_data(void *self, uint32_t v)
+{
+    video_state *st = (video_state *)self;
+    if (st->seq_index == 2) {
+        /* Which map-mask values does this program actually use, and how often? The
+           de-interleave is built entirely on the assumption that an unchained program
+           selects ONE plane at a time and changes the mask between planes; nothing has
+           ever checked that against a real one. A 16-entry histogram costs nothing and
+           turns "the frame comes out doubled" into "plane 1 was never selected". */
+        st->mask_hist[v & 0x0F]++;
         /* A mask change is the moment the outgoing plane's data is complete. */
-        if (!st->chain4 && (uint8_t)(v & 0x0F) != st->y_mask) modey_snapshot(st);
+        /* Flush BEFORE the mask moves: everything written since the last flush
+           belongs to the mask that is now going out. */
+        if (!st->chain4 && (uint8_t)(v & 0x0F) != st->y_mask) modey_flush(st);
         st->map_mask = (uint8_t)(v & 0x0F);
         st->y_mask   = st->map_mask;
     }
@@ -790,10 +900,17 @@ static void seq_in(void *self, uint16_t port, uint8_t w, uint32_t *v)
     *v = (port == 0x3C4) ? st->seq_index : (st->seq_index == 2 ? st->map_mask : 0);
 }
 /* Graphics Controller ports 3CE (index) / 3CF (data). */
+static void gc_set_data(void *self, uint32_t v);
+
 static void gc_out(void *self, uint16_t port, uint8_t w, uint32_t v)
 {
-    video_state *st = (video_state *)self; (void)w;
-    if (port == 0x3CE) { st->gc_index = (uint8_t)v; return; }
+    video_state *st = (video_state *)self;
+    if (port == 0x3CE) { vga_idx_data(&st->gc_index, w, v, gc_set_data, st); return; }
+    gc_set_data(st, v);
+}
+static void gc_set_data(void *self, uint32_t v)
+{
+    video_state *st = (video_state *)self;
     switch (st->gc_index) {
     case 0: st->set_reset   = (uint8_t)(v & 0x0F); break;
     case 1: st->enable_sr   = (uint8_t)(v & 0x0F); break;
@@ -1022,35 +1139,33 @@ static uint32_t modey_page(const video_state *st)
 static void render_modey(video_state *st)
 {
     uint32_t pitch = (uint32_t)(st->crtc_offset ? st->crtc_offset : 40) * 2u;
-    uint32_t start = modey_page(st);
-    int y, x;
-    /* ► THE SELECTED PLANE IS READ LIVE; THE REST COME FROM THEIR SNAPSHOTS.
-         Snapshotting the current plane at present time was non-deterministic (an
-         arbitrary moment, possibly mid-write). Dropping that snapshot instead left
-         the LAST plane written never captured at all -- once the title screen goes
-         static no further mask change ever comes -- so every 4th column rendered
-         black: visible on the physical screen as vertical stripes at a 4-pixel
-         interval, with ymask=08 naming plane 3 as the culprit.
-         Reading the live aperture for whichever planes the mask currently selects
-         fixes both: no copy at an unpredictable moment, and no plane left stale.
-         The aperture always holds exactly the plane(s) the mask has selected. */
-    /* ► LIVE-READ ONLY A **SINGLE**-PLANE MASK. The aperture holds one plane's
-         worth of bytes; if the mask selects several, every one of them would read
-         the SAME bytes and each group of four columns would repeat -- which is
-         what "pixelated but not stitched" looked like on the physical screen. With
-         more than one bit set the aperture cannot be attributed to a plane at all,
-         so fall back to the snapshots, which were captured when their masks were
-         unambiguous. */
-    { int live = -1, pl;
-      if (st->y_mask && (st->y_mask & (uint8_t)(st->y_mask - 1)) == 0)   /* exactly one bit */
+    /* ► READ THE PAGE FLIP; DO NOT GUESS IT. modey_page() picks the busiest page out
+         of the snapshot, and its own commentary admits the limit: "a game
+         double-buffering two equally-busy pages may pick either". Doom double-buffers
+         every frame, so the guess alternated and the picture came out streaked with
+         bands of the other buffer. It only ever existed because we could not watch the
+         register -- claiming 0x3D4 regressed Doom three times for reasons recorded as
+         UNKNOWN. The reason was that Doom flips with ONE 16-BIT WRITE,
+             19fd4: mov edx,0x3d4 / add eax,0xc / out dx,ax
+         and the handler took the whole word as an index and dropped the data, so
+         claiming the port broke the flip outright -- strictly worse than not claiming
+         it. With index+data writes honoured, the register is the answer. */
+    uint32_t start = st->crtc_seen ? st->crtc_start : modey_page(st);
+    /* ► THE SELECTED PLANE IS READ LIVE. Its most recent bytes are in the aperture
+         and nowhere else -- once a static screen stops changing the mask, no further
+         flush ever comes, and that plane's columns would render as whatever was last
+         snapshotted. Only a SINGLE-plane mask can be attributed this way; with more
+         bits set the aperture belongs to no one plane, so fall back to the snapshots. */
+    { int live = -1, pl, y, x2;
+      if (st->y_mask && (st->y_mask & (uint8_t)(st->y_mask - 1)) == 0)
           for (pl = 0; pl < 4; ++pl) if (st->y_mask & (1u << pl)) { live = pl; break; }
       for (y = 0; y < st->gh; ++y) {
           uint32_t row = start + (uint32_t)y * pitch;
           uint8_t *dst = st->fb + (uint32_t)y * st->gw;
-          for (x = 0; x < st->gw; ++x) {
-              int p2 = x & 3;
-              const uint8_t *src = (p2 == live) ? st->vmem : st->yplane[p2];
-              dst[x] = src[(row + ((uint32_t)x >> 2)) & (VID_Y_PLANE - 1u)];
+          for (x2 = 0; x2 < st->gw; ++x2) {
+              int p2 = x2 & 3;
+              const uint8_t *sp = (p2 == live) ? st->vmem : st->yplane[p2];
+              dst[x2] = sp[(row + ((uint32_t)x2 >> 2)) & (VID_Y_PLANE - 1u)];
           }
       } }
 }
@@ -1140,6 +1255,9 @@ int vdd_video_init(vdd_bus *b, void *self)
          about 1 in 3 and a single green result proves nothing. */
     if (vdd_claim_ports(b, 0x3C7, 0x3C9, dac_in, dac_out, st)) return -1;  /* DAC       */
     if (vdd_claim_ports(b, 0x3CE, 0x3CF, gc_in, gc_out, st)) return -1;    /* Graphics  */
+    /* CRTC. Claimed at last -- see render_modey() for why three earlier attempts
+       regressed Doom and why that cause is gone. */
+    if (vdd_claim_ports(b, 0x3D4, 0x3D5, crtc_in, crtc_out, st)) return -1; /* CRTC     */
     if (vdd_claim_ports(b, 0x3DA, 0x3DA, status_in, status_out, st)) return -1; /* InpStatus1 */
     if (vdd_on_frame(b, vid_frame, st)) return -1;
     return 0;

@@ -7868,7 +7868,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                         && (GetTickCount() - g_pm_vec8_armed_ms) >= DPMI_IRQ0_ARM_QUIET_MS) {
                         g_pm_irq0_latch = 0;
                         g_in_pm_irq = 1;
-                        if (pm_tick_take()) dpmi_inject_pm_irq(&m, tib, 0x08, steps);
+                        if (g_pm_tick_owed > 0 && dpmi_inject_pm_irq(&m, tib, 0x08, steps))
+                            InterlockedDecrement(&g_pm_tick_owed);
                         g_in_pm_irq = 0;
                     }
                     /* ── AND THE KEYBOARD, WHICH HAD NO COOPERATIVE PATH AT ALL. ─────────
@@ -8252,9 +8253,21 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                                  batch is still worth having -- one SuspendThread round trip
                                  should repay a whole backlog -- but the backlog is a COUNT,
                                  and pm_tick_take() is where it lives. */
+                            /* ► CONSUME A TICK ONLY IF IT WAS ACTUALLY DELIVERED.
+                                 dpmi_inject_pm_irq() declines whenever the guest is in
+                                 the extender's 16-bit code rather than the application
+                                 -- a routine and correct refusal -- and taking the tick
+                                 first threw it away every time that happened. Measured
+                                 on Doom: 3,349 ISR entries in 45 s against the 6,300 it
+                                 programmed at 140 Hz, i.e. a game clock running at half
+                                 speed, which is most of "very laggy". The same mistake
+                                 as the keyboard's, with the sign reversed: there,
+                                 consuming late cancelled an interrupt the handler had
+                                 raised; here, consuming early discarded one nobody ran. */
                             for (k = 0; k < DPMI_IRQ0_BATCH; ++k) {
-                                if (!pm_tick_take()) break;
+                                if (g_pm_tick_owed <= 0) break;
                                 if (!dpmi_inject_pm_irq(&m, tib, 0x08, steps)) break;
+                                InterlockedDecrement(&g_pm_tick_owed);
                             }
                             g_in_pm_irq = 0;
                           }
@@ -8688,6 +8701,22 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
           p = zput(p, "x"); p = zhex(p, g_vid.mode_q[i].h);
       }
       if (!g_vid.mode_qn) p = zput(p, " none");
+      p = zput(p, "\r\n");
+      /* ► THE MODE-Y ARRAYS, NOT THE PLANAR ONES. "plane-nonzero" above counts
+           g_vid.plane[] -- the 16-colour planar buffer, which an unchained 256-colour
+           mode never touches -- so it has reported four zeroes for every mode-Y run
+           ever made and told us nothing. These are the arrays a mode-Y frame is
+           actually built from, plus the map-mask values the program really used. */
+      p = zput(p, "STAGE2: modeY snaps:");
+      for (i = 0; i < 4; ++i) {
+          p = zput(p, " p"); p = zhexb(p, (unsigned)i);
+          p = zput(p, "="); p = zhex(p, g_vid.ysnap[i]);
+          p = zput(p, "/nz="); p = zhex(p, g_vid.ynz[i]);
+      }
+      p = zput(p, " mapmask hist:");
+      for (i = 0; i < 16; ++i)
+          if (g_vid.mask_hist[i]) { p = zput(p, " 0x"); p = zhexb(p, (unsigned)i);
+                                    p = zput(p, "x"); p = zhex(p, g_vid.mask_hist[i]); }
       p = zput(p, "\r\n");
       p = zput(p, "STAGE2: video modes unsupported:");
       for (i = 0, n = 0; i < 256; ++i)

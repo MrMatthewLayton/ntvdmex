@@ -104,6 +104,7 @@ typedef struct video_state {
     uint8_t  crtc_offset;  /* CRTC 0x13: logical line width in 2-byte units        */
     uint16_t crtc_start;   /* CRTC 0x0C/0x0D: display start -- the page-flip reg   */
     uint8_t  yplane[4][VID_Y_PLANE];   /* de-interleaved mode-Y planes             */
+    uint8_t  crtc_seen;                /* the guest has written a CRTC start address */
     uint8_t  write_mode;   /* GR5 bits0-1                                          */
     uint8_t  bit_mask;     /* GR8 (reset 0xFF)                                     */
     uint8_t  latch[4];     /* per-plane read latches                               */
@@ -147,6 +148,13 @@ typedef struct video_state {
     uint8_t  unimpl_fn[32];             /* INT 10h AH values seen but unhandled     */
     uint8_t  unimpl_mode[32];           /* mode numbers requested but unsupported   */
     ntvdd_frame frame;
+    /* Mode-Y de-interleave instrumentation. `plane-nonzero` in STAGE2 has always
+       counted st->plane[] -- the 16-colour PLANAR array -- which mode Y never touches,
+       so it reported four zeroes for every unchained run ever made. These are the
+       arrays that actually carry a mode-Y frame. */
+    uint32_t mask_hist[16];             /* map-mask values written, by value          */
+    uint32_t ysnap[4];                  /* snapshots taken into each mode-Y plane      */
+    uint32_t ynz[4];                    /* busiest snapshot each plane ever received   */
 } video_state;
 
 #define VID_UNIMPL_SET(bm, n)  ((bm)[((n) & 0xFF) >> 3] |= (uint8_t)(1u << ((n) & 7)))
