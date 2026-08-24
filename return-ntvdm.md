@@ -93,6 +93,26 @@
     account with no I/O -- but **reasoning about a cost is not measuring it.**
 
 ┌──────────────────────────────────────────────────────────────────────────────┐
+│ ★★ ...AND DOOM DOES **NOT** CARRY THE SAME HIDDEN REGRESSION. IT IMPROVED.   │
+└──────────────────────────────────────────────────────────────────────────────┘
+  The Skyroads fix does nothing for Doom -- it is gated on `!g_dpmi_pm` and Doom is a
+  PM client, so it takes the branch it always took (TOTAL 6067 against a 6040-6090
+  range across nine runs today). But having proved this CLASS of bug exists, the
+  obvious question is whether Doom is silently carrying one too. It is not:
+```
+   session 21 (c740f4e)   async irq0  494 + coop irq0 4660 = 5154   82% of 140 Hz
+   session 24 HEAD        async irq0 2485 + coop irq0 3582 = 6067   96% of 140 Hz
+```
+  **+17.7% of its timer ISR entries since session 21**, and the throttle that cost
+  Skyroads a fifth of its clock is part of why -- e2f7486 was a real Doom fix. The
+  work of sessions 22-23 moved Doom's clock forward; it only ever moved the wrong way
+  for the guest nobody re-ran.
+  ▶ **A STRUCTURAL FACT WORTH KEEPING.** Across all nine Doom runs today, `raises`
+    spans 6432-6913 (±3.7%) while `TOTAL` spans 6040-6090 (**±0.4%**). Delivery is
+    PINNED at ~135 Hz whatever the 8254 generated, so the "% of raises" figure moves
+    only because its denominator wobbles. Quote TOTAL, not the percentage.
+
+┌──────────────────────────────────────────────────────────────────────────────┐
 │ ★★ WHAT THE PLAYER REPORTED, VERBATIM -- TWO OF THE THREE ARE NEW DATA        │
 └──────────────────────────────────────────────────────────────────────────────┘
 ```
