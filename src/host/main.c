@@ -971,6 +971,20 @@ static DWORD g_async_pm_bail2 = 0;           /* PM async attempts that did not c
 static DWORD g_pm_watch[DPMI_WATCH_MAX];     /* linear addresses to watch (whitespace-separated) */
 static int   g_pm_nwatch      = 0;
 static DWORD g_pm_irq0_done   = 0;           /* cooperative injections that reached an IRET */
+/* Record and (boundedly) report an async attempt that gave up BEFORE the guest context
+   was ever inspected. Bounded for the same reason the PM bail log is: these fire at the
+   PIT's rate, so an uncapped line per tick would bury the run it exists to explain. The
+   cap is generous enough to span a whole 45s headless run. */
+static DWORD g_async_early_bail_logged = 0;
+static void async_early_bail(unsigned why)
+{
+    char pb[96], *pq = pb;
+    g_async_bail++;
+    g_async_why = (LONG)why;
+    if (g_async_early_bail_logged++ > 4000) return;
+    pq = zput(pq, "ASYNC-EARLY bail why="); pq = zhex(pq, (DWORD)why);
+    pq = zput(pq, "\r\n"); log_append(LOG_PATH, pb, pq); serial_out(pb, pq);
+}
 static int async_inject_irq(unsigned irq)
 {
     CONTEXT cx;
@@ -978,11 +992,18 @@ static int async_inject_irq(unsigned irq)
     WORD fl;
     int ok = 0;
 
-    if (!g_hcpu || g_in_exec == 0) { g_async_bail++; return 0; }
+    /* ► THE EARLY BAILS LOG TOO, BECAUSE THEY ARE THE ONES THAT MATTER. Everything below
+         reports itself through g_async_why, but these four returned in silence -- so when
+         Doom's R_ExecuteSetViewSize died inside a 3.5M-instruction BOP-free stretch, the
+         log showed NO async attempt at all in the window, and "the injector never tried"
+         was indistinguishable from "the injector tried and bailed before it could say so".
+         That is the difference between a measurement and an unread instrument, so give
+         each early exit a why code (20+) and let async_early_bail() say it out loud. */
+    if (!g_hcpu || g_in_exec == 0) { async_early_bail(20); return 0; }
     /* Ask the PIC, exactly as the hardware would: is this line unmasked, and is nothing of
        equal or higher priority still in service? That is what stops us re-entering a handler
        that has not EOI'd yet -- the fault behind "press a key and everything hangs". */
-    if (!vdd_pic_can_deliver(&g_pic, (uint8_t)irq)) { g_async_bail++; g_async_nest_blocked++; return 0; }
+    if (!vdd_pic_can_deliver(&g_pic, (uint8_t)irq)) { g_async_nest_blocked++; async_early_bail(21); return 0; }
     /* Never deliver a line the guest has not hooked. Its vector still points at our default
        IRET stub, which means no ISR is installed -- and on a real PC an unused line sits
        masked in the PIC, so nothing would arrive at all. Delivering anyway is not harmless:
@@ -991,11 +1012,11 @@ static int async_inject_irq(unsigned irq)
        our own handler segment at 0050:006c, where it "terminated" via a garbage INT 21h. */
     { unsigned v0 = vdd_pic_vector(&g_pic, (uint8_t)irq);
       if (irq >= 2 && peekw(v0 * 4 + 2) == DOS_HDLR_SEG
-                   && peekw(v0 * 4) == DOS_IRET_STUB_OFF) { g_async_bail++; return 0; } }
-    if (SuspendThread(g_hcpu) == (DWORD)-1) { g_async_bail++; return 0; }
+                   && peekw(v0 * 4) == DOS_IRET_STUB_OFF) { async_early_bail(22); return 0; } }
+    if (SuspendThread(g_hcpu) == (DWORD)-1) { async_early_bail(23); return 0; }
     { unsigned i; char *z = (char *)&cx; for (i = 0; i < sizeof cx; ++i) z[i] = 0; }
     cx.ContextFlags = CONTEXT_CONTROL | CONTEXT_SEGMENTS;
-    if (!GetThreadContext(g_hcpu, &cx)) { ResumeThread(g_hcpu); g_async_bail++; return 0; }
+    if (!GetThreadContext(g_hcpu, &cx)) { ResumeThread(g_hcpu); async_early_bail(24); return 0; }
 
     efl = cx.EFlags;
     cs  = cx.SegCs & 0xFFFF;
@@ -1031,7 +1052,15 @@ static int async_inject_irq(unsigned irq)
              R_ExecuteSetViewSize's long arithmetic, which is the only stretch where
              the guest runs thousands of instructions with no BOP. Successes are rare
              (one per delivered tick at most), so this is not a firehose. */
-        if (ok || g_async_pm_bail2 <= 40) {
+        /* ► AND THE BAIL CAP IS 4000, NOT 40, FOR THE SAME REASON ONE LEVEL DOWN.
+             Raising the SUCCESS logging was not enough: the why=9 arm hold-off burns a
+             40-entry bail budget in the first second, so by the time the guest reaches
+             R_ExecuteSetViewSize every bail is silent too -- and "no async line near the
+             death" then means "we stopped looking", not "nothing was attempted". That is
+             the difference between evidence and an unread instrument. Bails fire at the
+             PIT's rate (~100/s) against a 45s headless cap, so 4000 covers a whole run
+             with ~900KB of log, well inside LOG_MAX_BYTES. */
+        if (ok || g_async_pm_bail2 <= 4000) {
             char pb[224], *pq = pb;
             pq = zput(pq, "ASYNC-PM vec=0x08 ok=0x"); pq = zhex(pq, (DWORD)ok);
             pq = zput(pq, " why="); pq = zhex(pq, (DWORD)g_async_why);
