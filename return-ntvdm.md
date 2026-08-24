@@ -36,14 +36,22 @@
 
   Branch `m9/completeness`, tree clean but for the same 11 untracked files.
   Gates green on the shipped binary: off-VM **581 checks / 16 suites, 0 failed**,
-  check-imports pass. **Two commits, `75f00c7`..`a5d8abe`:**
+  check-imports pass, and the BARE-METAL gates re-run this session -- `selftest.com`
+  **8/8**, `dpmitest.com` clean exit (0300/0301/0303 + nested INT 31h),
+  `dpmiback.com` clean (its `<<< MISMATCH >>>` is the documented benign sentinel).
+  **Three commits, `75f00c7`..`57a8772`:**
 ```
    75f00c7  audio: separate "not refilled" from "refilled with silence"
    a5d8abe  timer: the refusal histogram says the injector is innocent
+   57a8772  audio: the DMA poll comes from the TIMER ISR, only the async arm makes it
 ```
+  ⚠ **NOTHING FUNCTIONAL CHANGED THIS SESSION.** Every commit is instrumentation and
+  log text. A play session would sound and look exactly as it did after session 23 --
+  there is nothing new to listen to until TASK B lands.
   Rig `192.168.1.29` UP, share mounted at `/tmp/xpshare`, **current build deployed
   and md5-verified**, all knobs cleared, `headless_ms.txt`=45000. Six rig runs,
-  archived in `build/rigruns/result_doom_19{2358,2942,3301,3717,4040,4306}.log`.
+  archived in `build/rigruns/result_doom_19{2358,2942,3301,3717,4040,4306}.log` and
+  `..._20{3505,3719}.log` (the two bracket runs).
 
 ┌──────────────────────────────────────────────────────────────────────────────┐
 │ ⚠⚠ REFUTED: THE TIMER DEFICIT. IT WAS AN ASYNC-ONLY COUNTER.                 │
@@ -137,41 +145,79 @@
   every one of 4478. What DMX does *inside* them differs. That is what is left of
   the echo, and it is the only thing left of it.
 
+  **5. ★★★ AND IT IS THE TIMER'S HANDLER, NOT THE SOUND BLASTER'S, AND NOT MAINLINE.**
+  Two more brackets closed both remaining ambiguities. IRQ5 -- the block completion,
+  when a refill is actually DUE -- was the more natural suspect and is excluded
+  outright; then `g_async_pm_active`, which is set for exactly the async ISR's
+  duration, split the remaining 89%:
+```
+   from_coop_isr08=546   from_coop_irq05=0        <- ZERO, of 953 IRQ5 injections
+   ch1_count=4996  in_async_isr=4450 (89%)  mainline=548 (11%)
+                   ...and 546 of that 548 IS the cooperative ISR (it sets no flag)
+   => Doom's MAIN LOOP polls the DMA controller essentially NEVER.
+
+      per ASYNC tick        0.89 polls   (2493 ticks -> 4450 reads)
+      per COOPERATIVE tick  0.076 polls  (3597 ticks ->  546 reads)
+```
+  So DMX's DMA polling lives in its **timer ISR**, and **59% of the ticks we deliver
+  do essentially nothing for the audio.** The reframing came free: the IRQ5 bracket
+  was two lines and it turned the question from "which line?" into "which path?".
+
+  ⚠⚠ **WHAT THIS STILL DOES NOT ESTABLISH, AND DO NOT SKIP IT.** A POLL IS NOT A
+    REFILL. The 55-polls/s vs 82-blocks/s arithmetic matches the 32% replay to a
+    point across five runs -- but if DMX writes more than one block per poll, the
+    two ratios agreeing is a COINCIDENCE and the replay has some other proximate
+    cause. Two ratios agreeing is exactly the trap that the `from_coop_isr08`
+    bracket was built to escape, and the same trap is still open one level down.
+    **The instrument that closes it measures what the guest WRITES into the ring,
+    not what it reads from the 8237.**
+
 ┌──────────────────────────────────────────────────────────────────────────────┐
 │ ▶▶▶ RESUME HERE. THE NEXT ACTION, CONCRETELY.                                │
 └──────────────────────────────────────────────────────────────────────────────┘
-  **TASK A (the echo's root -- everything else is downstream).** Find what DMX does
-  differently inside a cooperative INT 08h. Both paths run the same handler to its
-  IRET; only one leads to the DMA poll. Candidates, in the order they are cheap:
+  **TASK A (do this FIRST -- it guards everything below it).** **A POLL IS NOT A
+  REFILL.** Measure what the guest WRITES into the DMA ring, not what it reads from
+  the 8237. Until that exists, "55 polls/s against 82 blocks/s explains the 32%
+  replay" is two ratios agreeing, which is the exact trap the brackets above were
+  built to escape. If DMX writes more than one block per poll, the correspondence is
+  a coincidence and TASK B is chasing the wrong thing.
+  ▶ The ring is guest memory, so a write is not trapped -- but the replay detector
+    already keeps a full ring shadow (`lap_buf`). Diff the shadow against the ring at
+    each block completion to get "bytes the guest changed since we last looked", per
+    block. That is a rewrite of the existing loop, not a new subsystem.
+
+  **TASK B (the echo's likely root).** Find what DMX does differently inside a
+  cooperative INT 08h. Both paths run the same handler to its IRET (`done=1`,
+  `phases=4-5`, all of them); only one leads to the DMA poll. Candidates, cheapest
+  first:
 ```
    the ISR takes an EARLY EXIT     DMX's INT 08h chains/divides -- it may only mix
                                    on some entries, and the cooperative path may be
-                                   landing on the entries that do not. Instrument
-                                   the guest EIP at IRET, or how far into the
-                                   handler each path gets (phases already differ?).
+                                   landing on the ones that do not. phases=4-5 on
+                                   EVERY cooperative entry is suspiciously uniform
+                                   for a handler that sometimes mixes: instrument
+                                   the guest EIP reached, not just the phase count.
+   BATCHING                        the catch-up batch drains up to DPMI_IRQ0_BATCH
+                                   ticks back to back with no guest time between
+                                   them. A divider in DMX fires once per BURST, not
+                                   once per tick, which would produce exactly this.
+                                   k=1 981x, k=2 1069x -- so most bursts are 1-2.
    register/flag state at entry    dpmi_async_inject_pm builds the frame on the
                                    SUSPENDED THREAD'S OWN CONTEXT; dpmi_inject_pm_irq
-                                   builds it from the VDM_TIB register file. If the
-                                   two disagree about anything DMX tests, that is it.
+                                   builds it from the VDM_TIB register file. If those
+                                   disagree about anything DMX tests, that is it.
                                    DIFF THE TWO FRAME BUILDERS FIELD BY FIELD.
-   g_in_pm_irq blocks something    it is set for the whole cooperative injection.
-                                   Anything DMX's mixer needs that is refused while
-                                   it is set would produce exactly this.
-   the SB IRQ, not the timer       ⚠ NOT YET EXCLUDED: the polls may follow IRQ5,
-                                   not IRQ0. Bracket the devirq injection at
-                                   main.c:8603 the same way (2 lines) and read
-                                   `from_coop_isr05` before assuming the timer.
+   g_in_pm_irq blocks something    set for the whole cooperative injection. Anything
+                                   DMX's mixer needs that is refused while it is set
+                                   would produce exactly this.
 ```
-  ▶ **DO THIS ONE FIRST**, because it is two lines and it decides which handler you
-    are even looking at. `g_coop_dma_polls` is the pattern to copy.
-  **TASK B (if TASK A lands).** If cooperative ticks can be made to produce refills
+  **TASK C (if A and B land).** If cooperative ticks can be made to produce refills
   the way async ones do, polls go from 55/s to ~135/s against 82 blocks/s and the
-  margin race has no margin left. That is the fix, and it needs no lock work, no
-  page traps and no new subsystem.
-  **TASK C (video, untouched this session).** Name the writer that puts phase-1 data
+  margin race has no margin left -- no lock work, no page traps, no new subsystem.
+  **TASK D (video, untouched this session).** Name the writer that puts phase-1 data
   into all four planes -- session 23's status-bar section below is unchanged and
   still correct. Nothing this session bears on it.
-  **TASK D (still worth doing, on its own merits).** `g_lock` contention: 103 ms
+  **TASK E (still worth doing, on its own merits).** `g_lock` contention: 103 ms
   waits with the AUDIO thread the longest waiter, 108 ms holds, 1.86M plane swaps.
   It will help video and the audio thread's own stalls. It will NOT fix the echo.
   ⚠ Do not spend a run on the async injector's refusal rate. It is 90% efficient and
@@ -196,6 +242,13 @@
                              from_coop_isr08. This is what found the poll rate.
    PMIRQ vec=0x..            was "IRQ0<-PM" for every vector it injected, including
                              the device lines it has served since 7a13b45.
+   from_coop_isr08 /         DMA count-register reads attributed to the injection
+   from_coop_irqNN /         path that caused them. The cooperative ones are
+   in_async_isr / mainline   bracketed exactly (the handler runs synchronously
+                             inside dpmi_inject_pm_irq); the async ones are
+                             identified by g_async_pm_active, which is set for
+                             precisely that ISR's duration. This is what proved
+                             the asymmetry is PATH, not LINE.
 ```
 
 ┌──────────────────────────────────────────────────────────────────────────────┐
