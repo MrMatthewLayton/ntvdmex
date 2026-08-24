@@ -3,8 +3,42 @@
 ██     Session 22's cause for EACH was wrong. Both new causes are measured.   ██
 ═══════════════════════════════════════════════════════════════════════════════
 
-  Branch `m9/completeness`. Gates green: off-VM **630 checks / 18 suites, 0 failed**,
-  check-imports pass. One rig run (`result_doom_172146.log`, archived).
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ ★ START HERE — THE 60-SECOND VERSION                                         │
+└──────────────────────────────────────────────────────────────────────────────┘
+  Doom is still playable; nothing regressed. Session 23 did **no feature work**: it
+  re-diagnosed both remaining defects, and **session 22 was wrong about each**.
+```
+   AUDIO   was "incoherent glitching", is now "on par with stock ntvdm, more like
+           an ECHO than a glitch" (user's words, after 7a13b45). One cause FIXED
+           (device IRQs had no cooperative PM path: delivery 73.5% -> 99.5%).
+           The residual echo is MEASURED as a 185.8 ms ring-lap replay, and its
+           cause is the TIMER: Doom asks 144 Hz, we deliver 56 Hz, and DMX mixes
+           PCM in the timer ISR -- so missing ticks ARE missing refills.
+   VIDEO   the status bar is UNCHANGED and still ~60% wrong. But the planned fix
+           is CANCELLED: the latch copy is not the cause. New signature measured.
+   ROOT    the timer dies on g_lock, and Doom's mode-Y drawing does ~43,000 port
+           writes a second through that same lock. THE VIDEO PATH STARVES THE
+           TIMER, AND THE TIMER STARVES THE AUDIO. One chain, both defects.
+```
+  ▶ **THE SINGLE NEXT ACTION** is at the bottom of this block: instrument WHICH
+    refusal `async_inject_irq` returns at 144 Hz. One run; it decides between two
+    quite different fixes and neither of them is anything tried so far.
+
+  Branch `m9/completeness`, tree CLEAN (11 untracked files, all pre-existing from
+  session 22: `MAINICON.ico`, `demos/`, `doom-screenshots/`, `tools/dostest/pm*.com`).
+  Gates green on the shipped binary: off-VM **630 checks / 18 suites, 0 failed**,
+  check-imports pass. **Five commits, `7919416`..`ceb178c`:**
+```
+   7919416  doom: both remaining defects re-diagnosed -- session 22 was wrong on each
+   e0ca881  video: describe EVERY latch burst -- the refutation was right by luck
+   7a13b45  audio: give the device lines a cooperative PM path -- 73.5% -> 99.5%
+   637e2b8  audio: the echo is the TIMER deficit -- live replay counter proves it
+   ceb178c  timer: find where 144 Hz becomes 56 Hz, and rule out the obvious fix
+```
+  Rig `192.168.1.29` is UP, share mounted at `/tmp/xpshare`, current build deployed
+  (`bm/ntvdmhost.exe`, md5-verified), **all knobs cleared, `headless_ms.txt`=45000**.
+  Archived run logs are in `build/rigruns/` (gitignored, local only).
 
 ┌──────────────────────────────────────────────────────────────────────────────┐
 │ ⚠⚠ REFUTED: THE STATUS BAR IS **NOT** THE WRITE-MODE-1 LATCH COPY            │
@@ -188,6 +222,110 @@
        `g_lock` is the root of the starvation, and it would speed up video too.
     ⚠ Still do not raise `DPMI_IRQ0_BATCH`: session 22 measured that draining 64 ticks
       back to back compressed 0.45 s of game time into microseconds.
+
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ ▶▶▶ RESUME HERE. THE NEXT ACTION, CONCRETELY.                                │
+└──────────────────────────────────────────────────────────────────────────────┘
+  **TASK 1 (one rig run, decides everything else).** `async_inject_irq()` already sets
+  `g_async_why` on every refusal and `async_early_bail()` gives the early exits codes
+  20-24. What is missing is a **HISTOGRAM PER LINE**: `g_async_why_hist[irq][why]`,
+  printed in STAGE2. Today a run says "62 attempts, 56 delivered" and cannot say which
+  clause consumed the other six, nor -- more importantly -- what the refusal profile
+  looks like when the sync rate itself is the binding constraint.
+  Then read it against these three, because they need OPPOSITE fixes:
+```
+     why=9 / g_async_pm_active   an injection is still in flight -> the guest's ISR is
+                                 slow to IRET, and MORE attempts can never help
+     vdd_pic_can_deliver == 0    IRQ0's in-service bit is still set -> we are not seeing
+                                 the guest's EOI, which would be OUR bug, not a rate one
+     virtual-IF clear            the client has interrupts off -> only the cooperative
+                                 path can ever deliver, and TASK 2 is the answer
+```
+  **TASK 2 (probably the real fix).** Give the timer the same cooperative treatment the
+  Sound Blaster got in `7a13b45`. The cooperative PM-loop injection at
+  `dpmi_inject_pm_irq(&m, tib, 0x08, steps)` needs **no SuspendThread and no g_lock**,
+  and the PM loop is entered constantly (every INT 31h, every trapped port access). It
+  is gated today by `g_pm_irq0_latch` + `DPMI_IRQ0_ARM_QUIET_MS`; the SB fix worked
+  precisely because it stopped depending on the async path. Check whether IRQ0 can lean
+  on the same mechanism rather than on `SuspendThread` at 144 Hz.
+  **TASK 3 (helps BOTH defects, biggest and riskiest).** `g_lock` contention. Doom's
+  mode-Y drawing takes it ~43,000 times a second for `outpw(0x3C4, ...)` mask changes,
+  each one an `UnmapViewOfFile`+`MapViewOfFileEx` pair (1.95M swaps a run). That is the
+  root of the timer starvation AND most of the video cost. A cheaper plane swap, or a
+  mask path that does not need the device lock, would pay twice.
+  **TASK 4 (video, independent).** Name the writer that puts phase-1 data in all four
+  planes -- see the status-bar section above. Record which mask was live when each bar
+  offset last changed; sample it, since 2M swaps x 2560 bytes cannot be diffed each time.
+
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ ★★★★ NEW INSTRUMENTS (session 23). All bounded; all on by default.           │
+└──────────────────────────────────────────────────────────────────────────────┘
+```
+   STAGE2: sb replay:     blocks >=90% identical to the same RING OFFSETS one lap
+                          earlier = blocks DMX never refilled. Live, on the audio
+                          thread, no allocation, no I/O. Agrees with the offline
+                          capture to 0.4 points, so sbdump+copy+anchor is no longer
+                          needed to see the echo. (vdd_sb.c / SB_LAP_MAX.)
+   STAGE2: sbblk NN       the block ledger: cap_off / block_len / 8237 state at each
+                          of the first 24 completions. cap_off is the load-bearing
+                          column -- it MEASURES the block grid that sbref.py used to
+                          infer. First 24 entries, filled on the audio thread.
+   STAGE2: pit budget:    raises / syncs / attempts / delivered / owed_max /
+                          ui_gap_us. Separates four losses nothing distinguished.
+   STAGE2: devirq         cooperative PM delivery of device lines 2-7.
+   MODEYBAR               4 planes x 3 pages x rows 168..199 at wind-down, ~67 KB,
+                          file only. Diff against the WAD with planejudge.py.
+   MODEY-LATCH burst      now prints rows= and barbytes= beside the hex span, and
+                          the cap is 4096 not 6.
+   awbufs.txt             the audio LEAD as a controlled variable. ⚠ MEASURING
+                          instrument, NOT a tuning knob -- see the knob table.
+```
+  **New analysis tools, all in `tools/doomoracle/` (they need `DOOM1.WAD` there):**
+```
+   barprof.py     per-row STBAR diff + 4-pixel collapse.  barprof.py <shot.bmp>
+   whichplane.py  which plane survives each collapsed group
+   replicate.py   is the bar one plane replicated four times?
+   planejudge.py  judge the MODEYBAR dump against the WAD.  planejudge.py <log>
+   blockphase.py  discontinuities by position within the DMA block, two anchors
+```
+
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ ★★★★★ METHOD — SESSION 23 PAID FOR THESE, AND THREE COST RIG RUNS            │
+└──────────────────────────────────────────────────────────────────────────────┘
+  ▶ **A BOUND ON AN INSTRUMENT IS A CLAIM ABOUT WHAT IS REPRESENTATIVE.** "The bursts
+    only touch rows 186..199" was generalised from the SIX descriptions the instrument
+    was capped at -- of which only TWO had changed bytes -- out of 160 bursts. It
+    retired a root cause and cancelled a subsystem. Raising the cap changed the answer
+    (184, not 186). The conclusion survived; until then it was luck, not evidence.
+  ▶ **AN INSTRUMENT THAT INFERS ITS OWN REFERENCE FRAME CONFIRMS WHATEVER IT GUESSED.**
+    `sbref.py` inferred the block grid and anchored it at byte 0. Real boundaries were
+    at 15 + n*256. Every "offset 2 of the block" statement was measured against a
+    guessed phase. Fix: make the HOST emit the anchor (the block ledger).
+  ▶ **A NUMBER IN A LOG IS NOT A MEASUREMENT UNTIL IT IS IN THE UNITS OF THE CLAIM.**
+    `0x3a1c..0x3e7f` was read as "the status bar" for a whole session. It is rows
+    184..199. The burst line now prints `rows=` next to the offsets.
+  ▶ **A STALE ARTEFACT READS AS A RESULT; A MISSING ONE FAILS LOUDLY.** Nothing ever
+    copied `sb.raw` off the box, so "before" and "after" runs of a deliberately changed
+    binary analysed the SAME hours-old file and produced BYTE-IDENTICAL histograms.
+    Caught only by `md5`-ing two captures that were supposed to differ. Delete the
+    destination BEFORE the run; never `>nul 2>&1` a collection step; never delete the
+    source afterwards (the first fix did, and left nothing to diagnose).
+  ▶ **TWO COUNTERS IN THE SAME BASIC BLOCK CANNOT DISAGREE ABOUT WHETHER THEY RAN.**
+    When one printed and the adjacent one did not, two rig runs went on "stale binary
+    vs code not reached". It was the report buffer: `base` points PAST the preamble, so
+    `report[8192]` has well under 8 KB of headroom. **Suspect the transport.**
+  ▶ **THE OBVIOUS FIX MUST STILL BE MEASURED.** Raising the per-sync attempt budget was
+    sound reasoning from correct numbers and did NOTHING (attempts 62->189/s, delivery
+    56->55/s) while making the UI gap 10x worse. It would have shipped without the
+    counters that were added ten minutes earlier.
+  ▶ **A COUNTER THAT READS ZERO IS NOT A GUARANTEE.** `underruns=0` in EVERY run,
+    including the one where the audio pump was starving at 38 blocks/s against the 86/s
+    the sample rate demands. It only counts `waveOutWrite` failures. Had the replay
+    metric been read alone, "lead 2 is better" would have shipped a half-speed mixer.
+  ▶ **THE USER'S DESCRIPTION IS A MEASUREMENT, AGAIN.** "More like they have an echo
+    than an all-out glitch" named the mechanism before the instrument did: the ring lap
+    IS an echo delay, and the capture is 46% identical to the byte 185.8 ms earlier
+    against ~22% at every neighbouring lag. Session 22 recorded this same lesson.
 
 ═══════════════════════════════════════════════════════════════════════════════
 ██ ▶▶▶ SESSION 22 (2026-08-24, same day, after the session-21 handoff).       ██
@@ -428,6 +566,17 @@
   ⚠ **THE BASH TOOL TIMES OUT AT 2 MINUTES AND A DOOM RUN TAKES ~90-100s PLUS THE LOG
     COPY.** Start `bmqueue.sh` with `( ... &)` and then `sleep 100`, or the tool kills
     the wrapper mid-run and you read a stale log.
+  ⚠ **A PLAY SESSION (the user listens/plays) is queued differently:** clear EVERY knob,
+    `headless_ms.txt`=600000, and write `cmd.txt` DIRECTLY rather than via bmqueue.sh --
+    a 10-minute run far exceeds its result-log wait. Poll for `cmd.txt` to be CONSUMED
+    (that is the proof the watcher is alive), then hand back. Put `headless_ms.txt` back
+    to 45000 afterwards.
+  ⚠ **ALWAYS `md5` THE DEPLOYED EXE AGAINST `build/ntvdmhost.exe`.** Two of the three
+    traps that cost runs this session were "is the box running what I think it is".
+    Deploy `ntvdmhost.exe`, never `ntvdmex.exe`.
+  ⚠ **PING FAILS FROM THE MAC SANDBOX** (the allowlist has no LAN hosts) -- that is NOT
+    the rig being down. Use `nc -z -w 3 192.168.1.29 445` with
+    `dangerouslyDisableSandbox`, and remember every share write needs it too.
 
 ┌──────────────────────────────────────────────────────────────────────────────┐
 │ ★★★★★ METHOD — SESSION 22 PAID FOR EVERY ONE OF THESE                        │
