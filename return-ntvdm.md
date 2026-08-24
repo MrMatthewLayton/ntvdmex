@@ -296,6 +296,47 @@
   **TASK C (if A and B land).** If cooperative ticks can be made to produce refills
   the way async ones do, polls go from 55/s to ~135/s against 82 blocks/s and the
   margin race has no margin left -- no lock work, no page traps, no new subsystem.
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ ★★★★★ THE STATUS BAR IS **TWO** FAULTS. SESSION 23's REFUTATION ASSUMED ONE. │
+└──────────────────────────────────────────────────────────────────────────────┘
+  Prompted by the player's melt observation (the fault follows COPIES; fresh renders
+  are pixel-exact), the write-mode-1 path was re-opened. Three measurements:
+```
+   1 THE FAN-OUT IS INNOCENT -- properly, this time.
+       fanout_bar writes=0/0  distinct=0/0  4way=0/0   over 44 fan-outs
+       ...against bar_planes_equal 1709/2560 on every page
+     ⚠ SESSION 22's EXONERATION OF IT WAS INVALID even though the answer was right:
+       it DISABLED the fan-out and found the bar "still 58% wrong". With it off a
+       multi-plane write reaches NO plane, so the bar is wrong because UNWRITTEN
+       rather than wrong because COLLAPSED -- and a percentage of differing PIXELS
+       scores those the same. Count the thing, not a proxy.
+   2 THE LATCH COPY'S OUTPUT IS DISCARDED.  latch_solved=0, latch_UNSOLVED=120:
+     the displacement solver has NEVER once explained a burst, so the per-plane
+     correction never runs -- and per (1) the bytes are never fanned out either.
+     ~10,014 bytes a run are computed by the guest and thrown away.
+   3 SESSION 23 MISREAD ITS OWN FIELD. "120 bursts, 116 changed bytes": 116 is the
+     number of BURSTS THAT CHANGED SOMETHING. The byte total is ~10,014
+     (45x64, 41x128, 25x62, 4x59, 1x100, 4 empty). `changed=` is PER BURST.
+```
+  ▶ **AND THE ROW CLAIM SURVIVES, WHICH IS WHAT MAKES THIS A DECOMPOSITION.** Across
+    all 120 bursts: `184..199` x111, `185..199` x4, `184..197` x1, empty x4. So no
+    burst reaches rows 168-183 -- the half session 23 measured as WORSE (62.2% vs
+    57.6%). Both facts are true. Session 23's refutation only follows if the bar has
+    ONE cause, and it does not:
+```
+     rows 184-199   latch-copy destination data, computed and then DISCARDED
+     rows 168-183   a SECOND fault. No burst touches it. The fan-out does not
+                    touch it. It is the worse half, and its writer is unnamed.
+```
+  ▶ **NEXT, AND BOTH ARE SMALLER THAN "WHAT IS WRONG WITH THE STATUS BAR".**
+    (a) rows 184-199: make write mode 1 move EACH PLANE'S OWN latched byte instead of
+        leaning on a displacement solver with a 0-for-120 record. The scratch holds
+        one byte per offset, which cannot represent four latches -- that is the real
+        shape of the fix, and it is why every inference scheme over it has failed.
+    (b) rows 168-183: name the writer. Only guest stores under a SINGLE-plane mask
+        remain, so instrument which mask was live when each offset there last
+        changed. Everything else that could write a plane is now excluded by count.
+
   **TASK D (video -- and the player just narrowed it).** Name the writer that puts
   phase-1 data into all four planes. Session 23's status-bar section below is
   unchanged and still correct, but the new observation that **the menu-to-FPS MELT is
