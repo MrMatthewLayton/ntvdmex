@@ -1129,6 +1129,9 @@ static DWORD g_pm_devirq_drop = 0;           /* pending on a line the client nev
    was ever inspected. Bounded for the same reason the PM bail log is: these fire at the
    PIT's rate, so an uncapped line per tick would bury the run it exists to explain. The
    cap is generous enough to span a whole 45s headless run. */
+/* Enough to show WHEN the bails start and what the first ones are; the totals live in
+   g_async_why_hist, which costs nothing. See async_early_bail() for what 4000 cost. */
+#define ASYNC_EARLY_BAIL_LOG_MAX 32
 static DWORD g_async_early_bail_logged = 0;
 /* ── WHERE WAS THE GUEST WHEN THE CLOCK ASKED FOR A TURN? ────────────────────────────
      The asynchronous injector is the ONLY thing that can touch a protected-mode guest
@@ -1186,8 +1189,29 @@ static void async_early_bail(unsigned irq, unsigned why)
     char pb[96], *pq = pb;
     g_async_bail++;
     async_why_note(irq, why);
-    if (g_async_early_bail_logged++ > 4000) return;
-    pq = zput(pq, "ASYNC-EARLY bail why="); pq = zhex(pq, (DWORD)why);
+    /* ── ⚠⚠ THE CAP WAS 4000 AND IT COST SKYROADS A FIFTH OF ITS TIMER. ──────────────
+         This log is reached from host_irq_sink, which runs inside host_pit_sync --
+         **while it holds g_lock**. Every line is a log_append (open/write/close) plus a
+         serial_out, so a bail that fires at the PIT's rate is FILE I/O UNDER THE DEVICE
+         LOCK at that rate. Session 23 raised the cap from 40 to 4000 and justified it on
+         LOG SIZE ("~900KB, well inside LOG_MAX_BYTES") against a Doom run, where the
+         early bails are ~1000. Nobody costed it, and nobody tried it on a V86 guest.
+         Measured on Skyroads (30 s cap, same binary path, matched durations):
+             Aug 21 (before)   irq0_inj 4487   io_events 6,383,494   ASYNC-EARLY    0
+             session 23        irq0_inj 3418   io_events 4,172,879   ASYNC-EARLY 3249
+         -24% of the guest's delivered timer ticks and -34% of its total I/O -- which is
+         the "definite timing issue affecting OPL and graphics" a player reported on a
+         title that had been fully playable since session 19. **A DIAGNOSTIC INSTRUMENT
+         WAS DEGRADING THE PRODUCT, AND ONLY THE USER'S EAR CAUGHT IT.**
+       ► THE ACCOUNT DOES NOT NEED THE LINES. g_async_why_hist records every bail, per
+         line and per code, with no I/O at all -- strictly more information than these
+         lines carried. So keep a handful for SHAPE (when in the run they start, what
+         the early ones are) and let the histogram carry the totals. That is what the
+         histogram was for; this is the first thing it pays for. */
+    if (g_async_early_bail_logged++ >= ASYNC_EARLY_BAIL_LOG_MAX) return;
+    pq = zput(pq, "ASYNC-EARLY bail irq="); pq = zhexb(pq, irq);
+    pq = zput(pq, " why="); pq = zhex(pq, (DWORD)why);
+    pq = zput(pq, " ms="); pq = zhex(pq, GetTickCount());
     pq = zput(pq, "\r\n"); log_append(LOG_PATH, pb, pq); serial_out(pb, pq);
 }
 static int async_inject_irq(unsigned irq)
@@ -9487,6 +9511,15 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             "not_in_exec","pic_refuse","unhooked","suspend_fail","getctx_fail",
             "v86_IF_off","in_our_hdlr","observed","?1c","?1d","?1e","?1f" };
           log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+          /* NO SILENT CAPS: say how many ASYNC-EARLY lines were written and how many
+             were suppressed, so the log's thinness is never read as "it stopped
+             happening". The histogram below is the complete account either way. */
+          p = zput(p, "STAGE2: async early-bail lines logged=");
+          p = zhex(p, g_async_early_bail_logged < ASYNC_EARLY_BAIL_LOG_MAX
+                        ? g_async_early_bail_logged : ASYNC_EARLY_BAIL_LOG_MAX);
+          p = zput(p, " of ");   p = zhex(p, g_async_early_bail_logged);
+          p = zput(p, " (cap "); p = zhex(p, ASYNC_EARLY_BAIL_LOG_MAX);
+          p = zput(p, " -- these are FILE I/O UNDER g_lock; see async_early_bail)\r\n");
           for (wl = 0; wl < 8; ++wl) {
               unsigned tot = 0;
               for (wc = 0; wc < ASYNC_WHY_MAX; ++wc) tot += g_async_why_hist[wl][wc];
