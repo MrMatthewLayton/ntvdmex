@@ -3646,14 +3646,29 @@ static int   g_ysmp_last_pl[2] = { -1, -1 };
 static DWORD g_ysmp_cross_same[2], g_ysmp_cross_diff[2], g_ysmp_writes[2];
 static DWORD g_ysmp_cross_eqb[2], g_ysmp_cross_totb[2];
 static DWORD g_ysmp_p1_eq[2][4], g_ysmp_p1_tot[2][4];
+/* ── ⚠ AND `cross_eqb` IS A STATE MEASUREMENT, NOT A DELIVERY ONE. ───────────────────
+     It compares the WHOLE 256-byte window whenever ANY byte of it changed, so 255 of
+     those bytes can be stale content left by an earlier event. That makes it very
+     nearly `bar_planes_equal` computed a second way -- which is why it landed on 56/79%
+     against that number's 66.8% -- and it is NOT independent evidence that the guest
+     DELIVERED collapsed bytes. Same family of error as the all-or-nothing predicate it
+     replaced: I read a number as answering a question it does not address.
+   ► THE DELIVERY MEASUREMENT IS THE CHANGED BYTES ONLY. For each byte this pass
+     actually wrote, was the value already present in the other plane? Stale bytes are
+     excluded by construction, so a high rate means the guest HANDED us the same byte for
+     two different planes -- which state cannot fake. */
+static DWORD g_ysmp_dlv_eq[2], g_ysmp_dlv_tot[2];
 static void ysmp_check(int band, unsigned off, int pl)
 {
     const BYTE *v = (const BYTE *)g_yview[pl] + off;
     unsigned i;
-    int changed = !g_ysmp_have[band][pl];
+    BYTE prev[YSMP_LEN];
+    int had = g_ysmp_have[band][pl];
+    int changed = !had;
     for (i = 0; i < YSMP_LEN && !changed; ++i)
         if (g_ysmp[band][pl][i] != v[i]) changed = 1;
     if (!changed) return;                       /* nobody wrote this window */
+    for (i = 0; i < YSMP_LEN; ++i) prev[i] = g_ysmp[band][pl][i];
     /* Against plane 1 BEFORE this window is stored, so pl==1 compares with its own
        previous content (a self-consistency baseline) rather than with itself. */
     if (g_ysmp_have[band][1]) {
@@ -3670,6 +3685,12 @@ static void ysmp_check(int band, unsigned off, int pl)
         for (i = 0; i < YSMP_LEN; ++i) {
             g_ysmp_cross_totb[band]++;
             if (g_ysmp_last[band][i] == v[i]) g_ysmp_cross_eqb[band]++; else same = 0;
+            /* DELIVERY: only bytes this pass actually changed. `prev` was captured
+               before the store above overwrote it. */
+            if (had && prev[i] != v[i]) {
+                g_ysmp_dlv_tot[band]++;
+                if (g_ysmp_last[band][i] == v[i]) g_ysmp_dlv_eq[band]++;
+            }
         }
         if (same) g_ysmp_cross_same[band]++; else g_ysmp_cross_diff[band]++;
     }
@@ -3875,12 +3896,15 @@ static long modey_latch_delta(void)
     return 0;
 }
 
+static void ygr4_close_run(void);       /* defined with the GR4 counters below */
+
 static void modey_remap_select(void *ctx, int mask)
 {
     int want, p, n = 0, sel[4];
     (void)ctx;
     if (!g_yremap) return;
     ++g_ysel_calls;
+    ygr4_close_run();   /* the window is about to move: end the current read run */
 
     /* ── FAN OUT ONLY WHAT THE GUEST ACTUALLY WROTE. ────────────────────────────────
          A multi-plane mask means one store lands in several planes at once, so a
@@ -3945,6 +3969,102 @@ static uint8_t *modey_remap_plane(void *ctx, int p)
 {
     (void)ctx;
     return (uint8_t *)g_yview[p & 3];
+}
+
+/* ── DOES THE GUEST EVER READ A PLANE OTHER THAN THE ONE IT IS WRITING? ──────────────
+     A0000 holds ONE section, and `modey_remap_select` positions it from the WRITE MASK.
+     A guest read of A0000 is served by the mapping directly -- the VDD never sees it --
+     so it returns the WRITE plane, whatever GR4 says. On the hardware those two are
+     independent registers.
+     Doom's `I_ReadScreen` reads all four planes into a linear buffer by cycling GR4
+     alone; the write mask is irrelevant to it and is left wherever the last blit put it.
+     Under this host every one of those four passes would read THE SAME PLANE, producing
+     a linear buffer whose every four-pixel group holds one plane's byte -- which is the
+     collapse, arriving via a path no write-side measurement could ever have seen.
+   ► THE PAIR IS THE MEASUREMENT. `gr4_hist` says only that GR4 was written; the defect
+     is GR4 disagreeing with the mapped plane, and only the host knows `g_ycur`. If
+     `mismatch` is ~0 this candidate dies in one run, like the linear section did.
+     Measure first: do NOT move the window here yet. Remapping on GR4 would change what
+     the guest sees mid-run and there would be no clean before/after.
+
+   ▶▶ **AND THE MEASUREMENT IS IN, AND SO IS DOOM'S OWN CODE.** `DOOM.EXE` disassembles
+     (file offset 0x5c154, obj1 = the LE code object) to:
+
+         I_ReadScreen(scr):
+           mov edx,3CEh / mov al,4 / out dx,al      GC index := 4 (READ MAP SELECT)
+         plane_loop:
+           mov edx,3CFh / mov al,cl / out dx,al     GR4 := plane   <- THE ONLY PORT WRITE
+         byte_loop:
+           mov bl,[ebx+eax]                         read video memory
+           mov [edx-4],bl                           scr[plane + 4*i] := byte
+           cmp eax,3E80h / jl byte_loop             16000 = 64000/4
+           inc ecx / cmp ecx,4 / jl plane_loop
+
+     It cycles the READ plane four times and **never writes the map mask**. Under this
+     host every one of those four passes is served by whatever section the WRITE mask
+     last left at A0000, so the buffer comes back as `scr[p + 4i] = plane_M[i]` for all
+     four p: every four-pixel group holding ONE plane's byte, replicated. That IS the
+     collapse, and it arrives through a path no write-side instrument could see -- which
+     is why every writer was excluded and the content was still there.
+     The run-length histogram agrees to the count: 193 runs of 4 GR4 writes with no
+     intervening mask change, plus 35 of 5, = 228 -- I_ReadScreen's call count. It is the
+     SCREEN WIPE (wipe_StartScreen / wipe_EndScreen). The 3D view is redrawn every frame
+     and heals; the status bar is repainted only where it CHANGES (ST_diffDraw), so its
+     collapsed pixels are never rewritten and the damage is permanent. That is also the
+     "the wipe looked pixelated until the full redraw cleaned up" note from session 22.
+
+   ► THE FIX: FOLLOW GR4. Point the window at the read plane. Safe because Doom sets the
+     map mask before every plane WRITE (2,029,794 mask writes against 39,975 GR4 writes)
+     and the pairing matrix shows the order is GR4-then-mask, so a write is always
+     preceded by a mask change that puts the window back. Not done when the scratch is up
+     (`g_ycur == 5`): a multi-plane write window is mid-flight and I_ReadScreen never runs
+     under one. */
+static DWORD g_ygr4_calls = 0, g_ygr4_mismatch = 0, g_ygr4_pair[4][6];
+/* ── AND THE MISMATCH ONLY BITES IF NO MASK CHANGE FOLLOWS. ──────────────────────────
+     `mismatch` is sampled at the instant GR4 is written, and 74% of those instants have
+     the window one plane behind -- but that is HARMLESS in the ordinary blit, where the
+     guest sets GR4 = p and then immediately sets the mask to 1<<p, moving the window
+     before any read happens. The pairing matrix cannot tell that apart from the case
+     that matters.
+   ► COUNT GR4 WRITES BETWEEN CONSECUTIVE MASK CHANGES. A pure-READ pass sets GR4 four
+     times and never touches the mask, so the window sits still for all four and every
+     read returns ONE plane -- filling the guest's buffer with one plane's bytes
+     replicated across each four-pixel group. That is the collapse, and a run length of
+     4 with no intervening select is its fingerprint. A run of 1 is the ordinary blit and
+     is fine. This is the counter that can come out either way. */
+static DWORD g_ygr4_since_sel = 0, g_ygr4_runs[10], g_ygr4_run_planes[4];
+static void ygr4_close_run(void)
+{
+    if (g_ygr4_since_sel) {
+        g_ygr4_runs[g_ygr4_since_sel < 9 ? g_ygr4_since_sel : 9]++;
+        /* A run of 4+ is a read pass: record which plane the window was stranded on,
+           because that plane's bytes are what the guest took away four times. */
+        if (g_ygr4_since_sel >= 4 && g_ycur >= 0 && g_ycur < 4) g_ygr4_run_planes[g_ycur]++;
+        g_ygr4_since_sel = 0;
+    }
+}
+static DWORD g_ygr4_moves = 0;
+static void modey_remap_readmap(void *ctx, int plane)
+{
+    (void)ctx;
+    if (!g_yremap) return;
+    ++g_ygr4_calls;
+    ++g_ygr4_since_sel;
+    if (g_ycur >= 0 && g_ycur < 6) g_ygr4_pair[plane & 3][g_ycur]++;
+    if (plane != g_ycur) ++g_ygr4_mismatch;
+
+    plane &= 3;
+    if (g_ycur == 5 || g_ycur == plane) return;   /* scratch in flight, or already there */
+    if (!UnmapViewOfFile((LPVOID)(ULONG_PTR)0xA0000)) { ++g_yfail; return; }
+    if (!MapViewOfFileEx(g_ysec[plane], FILE_MAP_ALL_ACCESS | FILE_MAP_EXECUTE,
+                         0, 0, MODEY_WIN, (LPVOID)(ULONG_PTR)0xA0000)) {
+        ++g_yfail;
+        MapViewOfFileEx(g_ysec[g_ycur < 0 ? 4 : g_ycur], FILE_MAP_ALL_ACCESS | FILE_MAP_EXECUTE,
+                        0, 0, MODEY_WIN, (LPVOID)(ULONG_PTR)0xA0000);
+        return;
+    }
+    g_ycur = plane;
+    ++g_ygr4_moves;     /* NOT g_yswaps: the map-mask identity must keep balancing */
 }
 
 /* ► THE COPY'S BOUNDARY IS THE WRITE-MODE CHANGE, NOT THE MASK CHANGE. Solving over a
@@ -7857,6 +7977,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         g_vid.ymap_select = modey_remap_select;
         g_vid.ymap_plane  = modey_remap_plane;
         g_vid.ymap_wmode  = modey_remap_wmode;
+        g_vid.ymap_readmap = modey_remap_readmap;
     }
     ui = CreateThread(NULL, 0, ui_thread, NULL, 0, NULL);
     /* Headless: arm the deadline watchdog so a run that blocks on input (a "press any
@@ -9982,6 +10103,16 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
           if (g_ysmp_cross_totb[bnd]) {
               p = zput(p, "(");
               p = zhex(p, g_ysmp_cross_eqb[bnd] * 100u / g_ysmp_cross_totb[bnd]);
+              p = zput(p, "% STATE-not-delivery)");
+          }
+          /* ► THE DELIVERY RATE -- CHANGED BYTES ONLY. This is the one to read:
+               high => the guest handed the same byte to two different planes. */
+          p = zput(p, " delivered_eq=");
+          p = zhex(p, g_ysmp_dlv_eq[bnd]); p = zput(p, "/");
+          p = zhex(p, g_ysmp_dlv_tot[bnd]);
+          if (g_ysmp_dlv_tot[bnd]) {
+              p = zput(p, "(");
+              p = zhex(p, g_ysmp_dlv_eq[bnd] * 100u / g_ysmp_dlv_tot[bnd]);
               p = zput(p, "%)");
           }
           p = zput(p, " p1eq=");
@@ -10000,13 +10131,19 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
            a residual is a path nobody has accounted for. */
       { DWORD mw = 0, resid;
         for (i = 0; i < 16; ++i) mw += g_vid.mask_hist[i];
+        /* ⚠ `skip_same` LEFT THIS IDENTITY WHEN THE GR4 FIX LANDED. A map-mask write
+             whose value is unchanged now still calls select -- it has to, because a read
+             may have moved the window since -- so it is no longer a bucket that
+             ACCOUNTS for a write, just a note about how many writes were redundant.
+             Leaving it in the sum printed a **UNACCOUNTED** residual of exactly
+             -skip_same, which is a counter describing the code as it used to be. */
         p = zput(p, " maskacct: writes="); p = zhex(p, mw);
         p = zput(p, " = sel_calls="); p = zhex(p, g_ysel_calls);
         p = zput(p, " - c4sel="); p = zhex(p, g_vid.chain4_sel);
-        p = zput(p, " + skip_same="); p = zhex(p, g_vid.mask_skip_same);
         p = zput(p, " + skip_chain4="); p = zhex(p, g_vid.mask_skip_chain4);
-        resid = mw - (g_ysel_calls - g_vid.chain4_sel)
-                   - g_vid.mask_skip_same - g_vid.mask_skip_chain4;
+        p = zput(p, " [redundant_same="); p = zhex(p, g_vid.mask_skip_same);
+        p = zput(p, ", informational]");
+        resid = mw - (g_ysel_calls - g_vid.chain4_sel) - g_vid.mask_skip_chain4;
         p = zput(p, " residual="); p = zhex(p, resid);
         p = zput(p, resid ? " **UNACCOUNTED**" : " (balanced)");
         p = zput(p, " | sel_calls = swaps="); p = zhex(p, g_yswaps);
@@ -10016,6 +10153,35 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         resid = g_ysel_calls - g_yswaps - g_ysel_same - g_ysel_zero - g_yfail;
         p = zput(p, " residual="); p = zhex(p, resid);
         p = zput(p, resid ? " **UNACCOUNTED**" : " (balanced)"); }
+      /* ► THE READ PLANE. See modey_remap_readmap(). `mismatch` counts GR4 writes that
+           named a plane other than the one mapped at A0000 -- every guest read between
+           such a write and the next mask change returns the WRONG PLANE'S BYTES, and no
+           write-side instrument can see it. `pair` is the (GR4, mapped) matrix, so a
+           mismatch can be attributed rather than just counted: a column concentrated on
+           one mapped plane means the guest cycled GR4 while the window sat still, which
+           is exactly the I_ReadScreen shape. Section 4 is linear, 5 is the scratch. */
+      p = zput(p, " gr4: writes="); p = zhex(p, g_ygr4_calls);
+      p = zput(p, " mismatch="); p = zhex(p, g_ygr4_mismatch);
+      p = zput(p, " WINDOW_MOVES="); p = zhex(p, g_ygr4_moves);
+      p = zput(p, " hist=");
+      for (i = 0; i < 4; ++i) { p = zput(p, i ? "/" : ""); p = zhex(p, g_vid.gr4_hist[i]); }
+      p = zput(p, " pair[gr4->mapped]:");
+      { unsigned a2, b2;
+        for (a2 = 0; a2 < 4; ++a2)
+          for (b2 = 0; b2 < 6; ++b2)
+            if (g_ygr4_pair[a2][b2]) {
+                p = zput(p, " r"); p = zhexb(p, a2);
+                p = zput(p, "->m"); p = zhexb(p, b2);
+                p = zput(p, "="); p = zhex(p, g_ygr4_pair[a2][b2]); } }
+      /* ► THE ONE THAT DECIDES IT. GR4 writes between consecutive mask changes:
+           1 = the ordinary blit (window moves before any read -- harmless)
+           4 = a PURE READ PASS with the window stranded (the collapse)          */
+      p = zput(p, " gr4_runs[n GR4 per select]:");
+      { unsigned r2; for (r2 = 1; r2 < 10; ++r2)
+          if (g_ygr4_runs[r2]) { p = zput(p, " "); p = zhexb(p, r2);
+                                 p = zput(p, "x"); p = zhex(p, g_ygr4_runs[r2]); } }
+      p = zput(p, " stranded_on_plane=");
+      for (i = 0; i < 4; ++i) { p = zput(p, i ? "/" : ""); p = zhex(p, g_ygr4_run_planes[i]); }
       /* ► IS THE LINEAR SECTION EVEN OCCUPIED? One number, ahead of the dump: how many
            of the bar region's 10240 linear bytes are non-zero. Zero means nothing was
            ever written to A0000 while the window pointed at the linear section, and the

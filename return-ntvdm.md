@@ -1,7 +1,93 @@
 ═══════════════════════════════════════════════════════════════════════════════
-██ ▶▶▶ SESSION 25 (2026-08-25). **THE HOST DOES NOT COLLAPSE THE BAR.**       ██
-██     Every map-mask write is accounted for and every one moved the window.  ██
-██     The planes RECEIVE collapsed data. The fault is upstream of them.      ██
+██ ▶▶▶ SESSION 25 (2026-08-25). ★★★★★ **THE STATUS BAR IS FIXED.**            ██
+██     `I_ReadScreen` reads all four planes with GR4 and never writes the     ██
+██     map mask. We served every read from the WRITE plane. Found by          ██
+██     DISASSEMBLING DOOM.EXE after four runs of instruments found nothing.   ██
+═══════════════════════════════════════════════════════════════════════════════
+
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ ★★★★★ THE RESULT                                                             │
+└──────────────────────────────────────────────────────────────────────────────┘
+```
+   plane vs STBAR (WAD oracle)   before    after     delta
+     plane 0                      34.4%    69.9%    +35.5
+     plane 1                      70.7%    69.1%     -1.6   (was already right)
+     plane 2                      29.8%    70.7%    +40.9
+     plane 3                      27.8%    67.9%    +40.1
+
+   plane-to-plane identity      70-76%   18-30%   collapsed -> distinct
+   bar_planes_equal          1709/2560  176/2560   66.8% -> 6.9% (ref ~12%)
+```
+  The three broken planes rose to meet the one that was always correct, and plane 1
+  did not move. That is the shape of a real fix rather than a metric moving.
+
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ ★ THE CAUSE — READ FROM THE BINARY, NOT INFERRED                             │
+└──────────────────────────────────────────────────────────────────────────────┘
+  `DOOM.EXE` obj1 (LE header at file 0x27acc), routine at file offset **0x5c154**:
+```
+   I_ReadScreen(scr):
+     mov edx,3CEh / mov al,4 / out dx,al       GC index := 4 (READ MAP SELECT)
+   plane_loop:
+     mov edx,3CFh / mov al,cl / out dx,al      GR4 := plane   <- THE ONLY PORT WRITE
+   byte_loop:
+     mov bl,[ebx+eax]                          read video memory
+     mov [edx-4],bl                            scr[plane + 4*i] := byte
+     cmp eax,3E80h / jl byte_loop              16000 = 64000/4
+     inc ecx / cmp ecx,4 / jl plane_loop
+```
+  It cycles the READ plane and **never writes the map mask**. Our A0000 window holds one
+  section, positioned by the WRITE mask, and a guest read is served by the mapping
+  without the VDD ever seeing it — so all four passes read the SAME plane and the buffer
+  comes back `scr[p + 4i] = plane_M[i]`: every four-pixel group holding one plane's byte,
+  four times. **That is the collapse.**
+  It is the SCREEN WIPE (`wipe_StartScreen`/`wipe_EndScreen`). The 3D view is redrawn
+  every frame and heals; the status bar is repainted only where it CHANGES
+  (`ST_diffDraw`), so its collapsed pixels are never rewritten — permanent damage from a
+  transient event, which is exactly the shape the evidence demanded and nobody could
+  find. It also explains session 22's "the wipe looked pixelated until the redraw
+  cleaned up", which was recorded and never followed.
+
+  ▶ **THE FIX** (`modey_remap_readmap`): point the window at the GR4 plane. Safe because
+    Doom sets the map mask before every plane WRITE (2,029,794 mask writes against 39,975
+    GR4 writes) and the pairing matrix shows the order is GR4-then-mask. Not done while
+    the scratch is up. Companion change in `vdd_video.c`: with host backing a map-mask
+    write now calls `ymap_select` **even when the value is unchanged**, because a read may
+    have moved the window since — otherwise a store lands in the plane the last READ
+    selected. Skyroads is untouched: `chain4=1`, so the branch never executes (`swaps=0`),
+    and its PIT rate is identical (182.1/s vs 182.0/s).
+
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ ★★★ THE METHOD FAILURE THAT COST FOUR SESSIONS — READ THIS ONE               │
+└──────────────────────────────────────────────────────────────────────────────┘
+  ⚠⚠ **EVERY EXCLUSION WAS ABOUT WRITES, AND THE BUG WAS IN READS.** The fan-out, the
+    latch bursts, the linear section, the render, the mask routing — five careful
+    measurements, each sound, all of them blind to the same thing. "Every candidate
+    writer is excluded and the content is still there" was read as *one exclusion is
+    wrong*. It was not. **They were all correct and the category was wrong.**
+  ⚠⚠ **I SPENT ~20 RIG RUNS ON INSTRUMENTS AND ZERO ON READING THE GUEST.** Doom's DOS
+    video layer was never released, so I treated it as unavailable — while `DOOM.EXE` sat
+    in `build/`, disassembles in twenty lines of `capstone`, and answered the question
+    outright. The user called this out; that is what ended the loop.
+    **When the guest's behaviour is the unknown, READ THE GUEST. The binary is on disk
+    and it is the authority. Instrumenting the host can only ever describe the host.**
+  ⚠ Two of my own instruments were void THIS SESSION and I found both by computing what
+    they would read under the hypothesis: `cross_same` (all-32-bytes-match, p = 2.5e-6
+    under the collapse) and `cross_eqb` (whole-window, so it measured STATE not delivery).
+    Before trusting a counter, work out what it reads if the hypothesis is TRUE.
+  ★ **AND ONE MORE WRONG BELIEF, REMOVED BY READING.** Heretic's `I_IBM.C` (the nearest
+    public relative of Doom's DOS video layer) shows the write-mode-1 latch copy under
+    mask 0x0F is the **DISK-FLASH ICON** — `src = currentscreen + 184*80 + 304/4`, 16
+    rows, 4 bytes each, a 16x16 sprite at (304,184). Its region is 0x39cc..0x3e7f and our
+    measured burst span is 0x3a1c..**0x3e7f** — the upper bound matches to the byte.
+    Our own source comment claimed those 120 bursts were "Doom carrying the STATUS BAR
+    between its three pages"; the COUNT was measured, the INTERPRETATION was invented,
+    and it steered three sessions (it is why the latch solver exists and why band B was
+    thought special). It also explains why delivering those bytes moved the oracle under
+    a point: a corner icon is 2.5% of the bar.
+
+═══════════════════════════════════════════════════════════════════════════════
+██ ▶▶▶ SESSION 25 — the instrument runs that preceded the fix                 ██
 ═══════════════════════════════════════════════════════════════════════════════
 
 ┌──────────────────────────────────────────────────────────────────────────────┐

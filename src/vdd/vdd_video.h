@@ -117,6 +117,7 @@ typedef struct video_state {
     void    *ymap_ctx;
     void   (*ymap_select)(void *ctx, int mask);
     void   (*ymap_wmode)(void *ctx, int wmode);   /* GC write mode changed */
+    void   (*ymap_readmap)(void *ctx, int plane); /* GR4 read-plane changed -- see gc_set_data */
     uint8_t *(*ymap_plane)(void *ctx, int p);
     uint8_t  write_mode;   /* GR5 bits0-1                                          */
     uint8_t  bit_mask;     /* GR8 (reset 0xFF)                                     */
@@ -170,6 +171,7 @@ typedef struct video_state {
     uint32_t mw_hist[64];               /* (write mode, map mask) pairs -- see seq_out */
     uint32_t mask_skip_chain4;          /* map-mask writes dropped: chained            */
     uint32_t mask_skip_same;            /* map-mask writes dropped: value unchanged    */
+    uint32_t gr4_hist[4];               /* GR4 read-plane values written, by value      */
     uint32_t chain4_sel;                /* ymap_select calls made by a CHAIN4 change,
                                            not by a map-mask write -- the map-mask
                                            identity has to subtract these or it will

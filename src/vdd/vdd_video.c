@@ -947,10 +947,17 @@ static void seq_set_data(void *self, uint32_t v)
              while chained and expect the change to hold once it unchains. */
         if (st->chain4)                                   st->mask_skip_chain4++;
         else if ((uint8_t)(v & 0x0F) == st->y_mask)       st->mask_skip_same++;
-        if (!st->chain4 && (uint8_t)(v & 0x0F) != st->y_mask) {
-            if (st->ymap_select) st->ymap_select(st->ymap_ctx, (int)(v & 0x0F));
-            else                 modey_flush(st);
-            st->dirty = 1;
+        if (!st->chain4) {
+            /* ⚠ WITH HOST BACKING, CALL ON EVERY WRITE -- NOT ONLY ON A CHANGE. Once the
+                 host follows GR4 (the read plane) the window can have MOVED since the
+                 last map-mask write, so "the mask value is unchanged" no longer implies
+                 "the window is where the writes need it". The host early-returns when it
+                 already is, so the extra calls cost a compare; the alternative is a
+                 store landing in the plane the last READ selected.
+                 The fallback de-interleave path has no such window and keeps the skip. */
+            if (st->ymap_select)                        st->ymap_select(st->ymap_ctx, (int)(v & 0x0F));
+            else if ((uint8_t)(v & 0x0F) != st->y_mask) modey_flush(st);
+            if ((uint8_t)(v & 0x0F) != st->y_mask)      st->dirty = 1;
         }
         st->map_mask = (uint8_t)(v & 0x0F);
         st->y_mask   = st->map_mask;
@@ -986,7 +993,22 @@ static void gc_set_data(void *self, uint32_t v)
     case 0: st->set_reset   = (uint8_t)(v & 0x0F); break;
     case 1: st->enable_sr   = (uint8_t)(v & 0x0F); break;
     case 3: st->func_rotate = (uint8_t)(v & 0x1F); break;
-    case 4: st->read_map    = (uint8_t)(v & 3);    break;
+    /* ── GR4 IS THE READ PLANE, AND THE REMAP PATH CANNOT SEE READS AT ALL. ──────────
+         In the `st->plane[]` interpreter path a guest read is served by us and honours
+         this register (see the read-mode-0 return). With host-supplied per-plane backing
+         A0000 is a REAL mapped section, so a guest read never reaches this file and
+         returns whatever plane the WRITE MASK last selected. Read plane and write plane
+         are independent on the hardware, so any guest that sets them apart -- Doom's
+         `I_ReadScreen` cycles GR4 with the write mask irrelevant -- gets the wrong bytes,
+         SILENTLY. Every exclusion so far in the status-bar hunt has been about writes.
+       ► Count the pairing, not the register. `gr4_hist` alone cannot say whether GR4
+         ever DISAGREED with the mapped plane, and disagreement is the entire defect;
+         the host compares against `g_ycur` in the hook. */
+    case 4:
+        st->read_map = (uint8_t)(v & 3);
+        st->gr4_hist[v & 3]++;
+        if (st->ymap_readmap) st->ymap_readmap(st->ymap_ctx, (int)(v & 3));
+        break;
     case 5:
         /* ► COUNT THE WRITE MODES. Per-plane backing can only serve write mode 0, where
              a guest store is a plain byte into the selected plane. WRITE MODE 1 is a
