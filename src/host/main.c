@@ -1495,7 +1495,32 @@ static void host_irq_sink(void *ctx, uint8_t irq)
              anything else. Note that the injectable window may simply be scarce while
              Doom holds its own ISR, in which case the answer is the cooperative PM-loop
              path (which needs no suspend at all), not the asynchronous one. */
-        if (g_qi_susp && !g_async_tried_this_sync) {
+        /* ── ⚠ ONE ATTEMPT PER SYNC IS RIGHT FOR A PM CLIENT AND WRONG FOR A V86 GUEST.
+             The throttle above was introduced for DOOM, whose music driver programs the
+             8254 at 16 kHz: vdd_pit_add_clocks then raises 800 times for a single 50 ms
+             catch-up gap, each answered with a full SuspendThread round trip inside this
+             lock. That pathology is real and the throttle fixes it.
+             But it was applied to every guest, and SKYROADS -- V86, an 180 Hz timer, at
+             most a raise or two per sync, so the burst it guards against cannot occur --
+             lost a fifth of its clock to it. BISECTED to e2f7486 against an Aug-21
+             reference, then confirmed by disabling the throttle alone (30 s cap each):
+                 session 21 (c740f4e)   irq0_inj 4485    <- and the Aug-21 log says 4487
+                 141f347                irq0_inj 4588
+                 07835a5                irq0_inj 4505
+                 e2f7486                irq0_inj 3413    <- the throttle lands here
+                 HEAD, throttle off     irq0_inj 4537    <- restored
+             The player heard this as an OPL and graphics timing fault on a title that
+             had been fully playable since session 19, and no instrument reported it:
+             every counter this host prints was inside its normal range.
+           ► SO SCOPE THE THROTTLE TO WHAT IT WAS MEASURED ON. A protected-mode client
+             keeps the exact behaviour session 22 measured and session 23 tuned -- not
+             one attempt more -- and the V86 path goes back to what it did before, which
+             is the behaviour every V86 measurement in this project was taken against.
+           ⚠ A V86 guest that programs a Doom-like timer rate would be exposed to the
+             800-raise burst again. None that we run does (Skyroads 180 Hz is the
+             fastest measured), and the honest fix if one appears is to bound the BURST
+             -- attempts per sync, not per guest -- rather than to widen this back. */
+        if (g_qi_susp && (!g_dpmi_pm || !g_async_tried_this_sync)) {
             g_async_tried_this_sync = 1;
             ++g_pit_async_attempts;
             if (async_inject_irq(0)) {
