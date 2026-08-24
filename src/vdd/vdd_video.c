@@ -938,6 +938,15 @@ static void seq_set_data(void *self, uint32_t v)
            belongs to the mask that is now going out. With host-supplied per-plane
            backing there is nothing to flush -- the write already went to the right
            plane -- and all that is needed is to point the window at the new one. */
+        /* ► ACCOUNT FOR EVERY WRITE THAT DOES NOT REACH ymap_select. 8.6% of a run's
+             map-mask writes did not move the window and no counter said why. These two
+             are the only ways a write can be dropped here, and a dropped mask change
+             strands the window on the plane the PREVIOUS mask chose -- so the next
+             store lands in the wrong plane, which is what a four-way collapse is made
+             of. `chain4` in particular is a live suspect: the guest may change the mask
+             while chained and expect the change to hold once it unchains. */
+        if (st->chain4)                                   st->mask_skip_chain4++;
+        else if ((uint8_t)(v & 0x0F) == st->y_mask)       st->mask_skip_same++;
         if (!st->chain4 && (uint8_t)(v & 0x0F) != st->y_mask) {
             if (st->ymap_select) st->ymap_select(st->ymap_ctx, (int)(v & 0x0F));
             else                 modey_flush(st);
@@ -950,6 +959,7 @@ static void seq_set_data(void *self, uint32_t v)
         uint8_t c4 = (uint8_t)((v >> 3) & 1);
         if (c4 != st->chain4) {
             st->chain4 = c4; st->y_mask = st->map_mask;
+            st->chain4_sel++;
             if (st->ymap_select) st->ymap_select(st->ymap_ctx, c4 ? -1 : (int)st->map_mask);
             st->dirty = 1;
         }

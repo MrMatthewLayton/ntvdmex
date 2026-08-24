@@ -1,4 +1,72 @@
 ═══════════════════════════════════════════════════════════════════════════════
+██ ▶▶▶ SESSION 25 (2026-08-25). **THE HOST DOES NOT COLLAPSE THE BAR.**       ██
+██     Every map-mask write is accounted for and every one moved the window.  ██
+██     The planes RECEIVE collapsed data. The fault is upstream of them.      ██
+═══════════════════════════════════════════════════════════════════════════════
+
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ ★ START HERE — THE 60-SECOND VERSION                                         │
+└──────────────────────────────────────────────────────────────────────────────┘
+  Session 24 left two candidates for what puts plane 1's bytes into planes 0, 2 and
+  3: **(a)** three of Doom's four mask changes not moving our window, or **(b)** the
+  guest writing one byte stream four times. It named (a) as "directly checkable and
+  should be done first". One run answered both.
+```
+   (a) DEAD, BY AN IDENTITY RATHER THAN A RATE.
+       mask writes 2,029,794 = sel_calls 1,856,424 - c4sel 1 + skip_same 173,371
+                             + skip_chain4 0                     residual 0
+       sel_calls   1,856,424 = swaps 1,856,424 + sel_same 0 + sel_zero 0 + failed 0
+                                                                residual 0
+       EVERY mask change moved the window. The window was never stranded, never
+       dropped by chain4, never left where it already was. Session 24's unexplained
+       8.6% is ENTIRELY the guest rewriting the mask it already had.
+
+   (b) CONFIRMED, and it is what the previous instrument was built to test and
+       could not. CROSS-PLANE agreement, PER BYTE:
+                            band A 56.0%      band B 79.1%
+       against ~12% for an intact bar (bandprof reference) and 66.8% for
+       `bar_planes_equal`. Different planes are handed near-identical bytes.
+```
+  ⚠⚠ **AND THE OLD READING OF THAT INSTRUMENT WAS VOID — THE SAME MISTAKE AS SESSION
+    23'S CONTROL, IN A DIFFERENT COSTUME.** `cross_same` required **all 32 bytes** of
+    the window to match. The collapse implies ~67% per-byte agreement, and
+    0.668^32 = 2.5e-6 — so under the hypothesis the counter should read ~0 same out of
+    246, and it read 30/246. **"cross_diff dominates" is what BOTH hypotheses predict.**
+    Session 24 filed it as "guest single-plane stores excluded (weak)". It was not weak
+    evidence; it was no evidence. That exclusion is **withdrawn**, and with it the
+    "every candidate writer is excluded" impasse — the wrong exclusion has been found,
+    and it was not the render.
+  ▶ **THE QUESTION NOW.** A single-bit map mask routes a store to exactly one of six
+    DISTINCT sections (`modey_remap_init` calls `CreateFileMapping` once per section),
+    and the identity above proves the routing happens on every mask change. **The host
+    therefore cannot replicate a byte across planes.** So Doom is issuing near-identical
+    stores under four different masks, which means **its blit SOURCE is already
+    collapsed** — the bar is wrong in guest memory before it reaches us.
+  ▶ **THE SINGLE NEXT ACTION:** score Doom's own `screens[0]` (guest RAM, readable, and
+    NOT circular — it shares no code with `g_yview[]`) against STBAR. If it is collapsed
+    there, every remaining question is about the guest's drawing path, not our planes.
+
+  The strongest single number is `p1eq` in band B: planes 0/2/3 match **plane 1's**
+  window at 70/74/81%, while plane 1 matches **its own previous** content at only 61%.
+  The other planes resemble plane 1 more than plane 1 resembles itself a frame ago.
+  Band A is the milder band (49/56/53% against a 79% self-baseline), which is the same
+  A-milder-than-B ordering `bandprof.py` reports (q1 73.3% vs 88.6%). Two instruments
+  built on different data agree on the intensity ordering.
+
+  Branch `m9/completeness`. Gates green on the shipped binary: off-VM **581 checks /
+  16 suites, 0 failed**, check-imports pass. Rig `192.168.1.29` up, share at
+  `/tmp/xpshare`, build deployed and md5-verified (`bd75be31…`), `headless_ms.txt`=45000.
+  One rig run, archived as `build/rigruns/result_doom_MASKACCT.log`.
+
+  ★ **METHOD NOTE, AND IT IS THE THIRD TIME THIS SESSION-PAIR:** an all-or-nothing
+    predicate over a wide window cannot measure a partial effect. `cross_same` (32 bytes,
+    all-must-match), session 23's p0-vs-p2 control, and session 24's `% of raises` all
+    failed the same way — **the number could not have come out differently if the
+    hypothesis were true.** Before trusting a counter, compute what it would read UNDER
+    THE HYPOTHESIS. If that is indistinguishable from what it reads under the null, the
+    counter is decoration. See [[counter-layout-is-a-claim]].
+
+═══════════════════════════════════════════════════════════════════════════════
 ██ ▶▶▶ SESSION 24 (2026-08-24). **THE TIMER IS NOT STARVED.**                 ██
 ██     Session 23's central chain is refuted at its FIRST LINK. The echo is   ██
 ██     real, smaller than reported, and its mechanism is now measured.        ██

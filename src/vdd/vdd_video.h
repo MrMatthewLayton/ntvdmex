@@ -168,6 +168,12 @@ typedef struct video_state {
     uint32_t mask_hist[16];             /* map-mask values written, by value          */
     uint32_t wmode_hist[4];             /* GC write modes selected (1 = LATCH COPY)   */
     uint32_t mw_hist[64];               /* (write mode, map mask) pairs -- see seq_out */
+    uint32_t mask_skip_chain4;          /* map-mask writes dropped: chained            */
+    uint32_t mask_skip_same;            /* map-mask writes dropped: value unchanged    */
+    uint32_t chain4_sel;                /* ymap_select calls made by a CHAIN4 change,
+                                           not by a map-mask write -- the map-mask
+                                           identity has to subtract these or it will
+                                           show a residual that is not a lost write   */
     uint32_t ysnap[4];                  /* snapshots taken into each mode-Y plane      */
     uint32_t ynz[4];                    /* busiest snapshot each plane ever received   */
 } video_state;

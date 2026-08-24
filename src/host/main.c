@@ -3545,6 +3545,22 @@ static int    g_yremap      = 0;             /* the window is ours              
 static int    g_ycur        = -1;            /* section index currently at A0000     */
 static int    g_yprev_mask  = 0;             /* mask live while the scratch was up   */
 static DWORD  g_yswaps = 0, g_yfanouts = 0, g_yfail = 0;
+/* ── WHERE DOES A MAP-MASK WRITE GO IF IT DOES NOT MOVE THE WINDOW? ──────────────────
+     The last run wrote the map mask 2,042,942 times and swapped 1,867,689 times: 175,253
+     writes -- 8.6% -- did not move the window, and nothing says which of the four ways
+     that can happen they took. Two of those ways are harmless (the guest rewrote the
+     mask it already had; the window was already on that plane) and two would strand the
+     window on the WRONG plane, which is exactly the shape a four-way collapse needs:
+     a mask change that is dropped means the next store lands in the plane the PREVIOUS
+     mask selected.
+   ► SO CLOSE THE ARITHMETIC. Every map-mask write must land in exactly one bucket:
+         mask_writes = sel_calls + mask_skip_same + mask_skip_chain4
+         sel_calls   = swaps + sel_same + sel_zero + failed
+     A residual in either line is a path nobody has accounted for. This is deliberately
+     an IDENTITY rather than a rate: a rate cannot show a shape, and 8.6% has no shape. */
+static DWORD  g_ysel_calls = 0;   /* modey_remap_select() entered with the remap live  */
+static DWORD  g_ysel_same  = 0;   /* ...and the window was already where it wanted     */
+static DWORD  g_ysel_zero  = 0;   /* ...and the mask selected no plane at all          */
 /* ── DOES THE FAN-OUT ITSELF CREATE THE STATUS BAR'S FOUR-WAY COLLAPSE? ──────────────
      `bar_planes_equal` says ~1709 of 2560 bar offsets hold the SAME byte in all four
      planes, and the fan-out is the only path in this host that writes ONE byte to
@@ -3596,15 +3612,40 @@ static DWORD g_yfan_bar_4way[2];        /* ...of which the mask was all four    
      the mask Doom believes it set. Near-zero means the planes receive distinct data and
      the collapse is created somewhere we have not looked yet.
      Two windows, one per band, because the bands differ in intensity (54% vs 80%) and
-     a single sample point cannot show that. Two 32-byte compares per swap. */
-#define YSMP_LEN 32u
-#define YSMP_A   (176u * 80u)      /* band A, rows 168-183 */
-#define YSMP_B   (192u * 80u)      /* band B, rows 184-199 */
+     a single sample point cannot show that. Two 32-byte compares per swap.
+
+   ⚠⚠ AND THAT INSTRUMENT COULD NOT HAVE SAID OTHERWISE -- IT IS THE SAME MISTAKE AS
+     SESSION 23'S p0-vs-p2 CONTROL. `same` demanded that ALL 32 bytes match. The
+     collapse this is testing for means roughly 67% per-byte agreement (that is what
+     `bar_planes_equal` measures), and 0.668^32 = 2.5e-6 -- so under the hypothesis the
+     window-level counter should read ~0 same out of 246, which is what it read
+     (30/246). "cross_diff dominates" was therefore NOT evidence that the planes receive
+     distinct data; it is what BOTH hypotheses predict, and the exclusion built on it is
+     withdrawn.
+   ► COUNT BYTES, NOT WINDOWS, and make the number DIRECTLY COMPARABLE to the two
+     figures that already exist: bar_planes_equal (66.8% of bar offsets agree across all
+     four planes) and bandprof.py's reference uniformity (~12% for an intact bar). An
+     all-or-nothing predicate over a 256-byte window can only ever report "different";
+     a per-byte rate lands between those two numbers and picks a side.
+       cross_eqb/cross_totb  bytes agreeing between the outgoing plane and the last
+                             window written by a DIFFERENT plane
+       p1_eq/p1_tot[pl]      bytes of plane `pl`'s window agreeing with plane 1's last
+                             window -- the hypothesis names plane 1 specifically, so ask
+                             about plane 1 specifically rather than about "some other
+                             plane"
+     256 bytes rather than 32: the windows are sampled only when the plane's bar content
+     actually CHANGED (247 times a run, measured), so the compare is free and a wider
+     window is a tighter rate. */
+#define YSMP_LEN 256u
+#define YSMP_A   (176u * 80u)      /* band A, rows 168-183 (256B spans rows 176-179) */
+#define YSMP_B   (192u * 80u)      /* band B, rows 184-199 (256B spans rows 192-195) */
 static BYTE  g_ysmp[2][4][YSMP_LEN];      /* [band][plane] last seen                */
 static int   g_ysmp_have[2][4];
 static BYTE  g_ysmp_last[2][YSMP_LEN];    /* last CHANGED window, any plane         */
 static int   g_ysmp_last_pl[2] = { -1, -1 };
 static DWORD g_ysmp_cross_same[2], g_ysmp_cross_diff[2], g_ysmp_writes[2];
+static DWORD g_ysmp_cross_eqb[2], g_ysmp_cross_totb[2];
+static DWORD g_ysmp_p1_eq[2][4], g_ysmp_p1_tot[2][4];
 static void ysmp_check(int band, unsigned off, int pl)
 {
     const BYTE *v = (const BYTE *)g_yview[pl] + off;
@@ -3613,13 +3654,23 @@ static void ysmp_check(int band, unsigned off, int pl)
     for (i = 0; i < YSMP_LEN && !changed; ++i)
         if (g_ysmp[band][pl][i] != v[i]) changed = 1;
     if (!changed) return;                       /* nobody wrote this window */
+    /* Against plane 1 BEFORE this window is stored, so pl==1 compares with its own
+       previous content (a self-consistency baseline) rather than with itself. */
+    if (g_ysmp_have[band][1]) {
+        for (i = 0; i < YSMP_LEN; ++i) {
+            g_ysmp_p1_tot[band][pl]++;
+            if (g_ysmp[band][1][i] == v[i]) g_ysmp_p1_eq[band][pl]++;
+        }
+    }
     for (i = 0; i < YSMP_LEN; ++i) g_ysmp[band][pl][i] = v[i];
     g_ysmp_have[band][pl] = 1;
     g_ysmp_writes[band]++;
     if (g_ysmp_last_pl[band] >= 0 && g_ysmp_last_pl[band] != pl) {
         int same = 1;
-        for (i = 0; i < YSMP_LEN && same; ++i)
-            if (g_ysmp_last[band][i] != v[i]) same = 0;
+        for (i = 0; i < YSMP_LEN; ++i) {
+            g_ysmp_cross_totb[band]++;
+            if (g_ysmp_last[band][i] == v[i]) g_ysmp_cross_eqb[band]++; else same = 0;
+        }
         if (same) g_ysmp_cross_same[band]++; else g_ysmp_cross_diff[band]++;
     }
     for (i = 0; i < YSMP_LEN; ++i) g_ysmp_last[band][i] = v[i];
@@ -3829,6 +3880,7 @@ static void modey_remap_select(void *ctx, int mask)
     int want, p, n = 0, sel[4];
     (void)ctx;
     if (!g_yremap) return;
+    ++g_ysel_calls;
 
     /* ── FAN OUT ONLY WHAT THE GUEST ACTUALLY WROTE. ────────────────────────────────
          A multi-plane mask means one store lands in several planes at once, so a
@@ -3860,11 +3912,11 @@ static void modey_remap_select(void *ctx, int mask)
     if (mask < 0) { want = 4; g_yprev_mask = 0; }
     else {
         for (p = 0; p < 4; ++p) if (mask & (1 << p)) sel[n++] = p;
-        if (!n) return;                                  /* mask 0: nothing to point at */
+        if (!n) { ++g_ysel_zero; return; }                /* mask 0: nothing to point at */
         want = (n == 1) ? sel[0] : 5;
         g_yprev_mask = (n == 1) ? 0 : mask;
     }
-    if (want == g_ycur) return;
+    if (want == g_ycur) { ++g_ysel_same; return; }
     /* Before the mapping moves: what did the plane we are leaving actually receive? */
     if (g_ycur >= 0 && g_ycur < 4) { ysmp_check(0, YSMP_A, g_ycur); ysmp_check(1, YSMP_B, g_ycur); }
     if (!UnmapViewOfFile((LPVOID)(ULONG_PTR)0xA0000)) { ++g_yfail; return; }
@@ -9906,19 +9958,64 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
       p = zput(p, " per page, 4way=");
       p = zhex(p, g_yfan_bar_4way[0]); p = zput(p, "/"); p = zhex(p, g_yfan_bar_4way[1]);
       /* ► DOES THE GUEST WRITE THE SAME BYTES TO DIFFERENT PLANES? See ysmp_check().
-           cross_same high => one stream written four times, fault is upstream of the
-           planes. cross_same ~0 => the planes receive distinct data. */
+           Read `eqb` (PER-BYTE agreement), not `cross_same` (per-window, kept only so
+           the old number stays comparable and visibly useless). Compare eqb against the
+           two figures printed above and by bandprof.py:
+             ~67%  matches bar_planes_equal  => the planes are RECEIVING collapsed data
+                                                and the fault is upstream of them
+             ~12%  matches an intact bar     => they receive distinct data and something
+                                                downstream collapses it
+           p1eq is the same rate against PLANE 1's last window specifically, per plane,
+           because the hypothesis names plane 1. p1eq[1] is the self-baseline: how much
+           plane 1 agrees with its own previous content, i.e. how much of this window is
+           static anyway. A p1eq[0/2/3] near p1eq[1] is the collapse; well below it is
+           not. All rates are percent, printed in hex. */
       { int bnd; for (bnd = 0; bnd < 2; ++bnd) {
+          int pq;
           p = zput(p, bnd ? " ysmpB[184-199]:" : " ysmpA[168-183]:");
           p = zput(p, " writes="); p = zhex(p, g_ysmp_writes[bnd]);
           p = zput(p, " cross_same="); p = zhex(p, g_ysmp_cross_same[bnd]);
           p = zput(p, " cross_diff="); p = zhex(p, g_ysmp_cross_diff[bnd]);
-          if (g_ysmp_cross_same[bnd] + g_ysmp_cross_diff[bnd]) {
-              p = zput(p, " (");
-              p = zhex(p, g_ysmp_cross_same[bnd] * 100u
-                          / (g_ysmp_cross_same[bnd] + g_ysmp_cross_diff[bnd]));
-              p = zput(p, "% same, decimal-in-hex)");
+          p = zput(p, " cross_eqb=");
+          p = zhex(p, g_ysmp_cross_eqb[bnd]); p = zput(p, "/");
+          p = zhex(p, g_ysmp_cross_totb[bnd]);
+          if (g_ysmp_cross_totb[bnd]) {
+              p = zput(p, "(");
+              p = zhex(p, g_ysmp_cross_eqb[bnd] * 100u / g_ysmp_cross_totb[bnd]);
+              p = zput(p, "%)");
+          }
+          p = zput(p, " p1eq=");
+          for (pq = 0; pq < 4; ++pq) {
+              p = zput(p, pq ? "/" : "");
+              if (g_ysmp_p1_tot[bnd][pq])
+                  p = zhex(p, g_ysmp_p1_eq[bnd][pq] * 100u / g_ysmp_p1_tot[bnd][pq]);
+              else p = zput(p, "-");
+          }
+          p = zput(p, "% n=");
+          for (pq = 0; pq < 4; ++pq) {
+              p = zput(p, pq ? "/" : "");
+              p = zhex(p, g_ysmp_p1_tot[bnd][pq] / YSMP_LEN);
           } } }
+      /* ► THE MAP-MASK IDENTITY. See g_ysel_calls. Both lines must balance exactly;
+           a residual is a path nobody has accounted for. */
+      { DWORD mw = 0, resid;
+        for (i = 0; i < 16; ++i) mw += g_vid.mask_hist[i];
+        p = zput(p, " maskacct: writes="); p = zhex(p, mw);
+        p = zput(p, " = sel_calls="); p = zhex(p, g_ysel_calls);
+        p = zput(p, " - c4sel="); p = zhex(p, g_vid.chain4_sel);
+        p = zput(p, " + skip_same="); p = zhex(p, g_vid.mask_skip_same);
+        p = zput(p, " + skip_chain4="); p = zhex(p, g_vid.mask_skip_chain4);
+        resid = mw - (g_ysel_calls - g_vid.chain4_sel)
+                   - g_vid.mask_skip_same - g_vid.mask_skip_chain4;
+        p = zput(p, " residual="); p = zhex(p, resid);
+        p = zput(p, resid ? " **UNACCOUNTED**" : " (balanced)");
+        p = zput(p, " | sel_calls = swaps="); p = zhex(p, g_yswaps);
+        p = zput(p, " + sel_same="); p = zhex(p, g_ysel_same);
+        p = zput(p, " + sel_zero="); p = zhex(p, g_ysel_zero);
+        p = zput(p, " + failed="); p = zhex(p, g_yfail);
+        resid = g_ysel_calls - g_yswaps - g_ysel_same - g_ysel_zero - g_yfail;
+        p = zput(p, " residual="); p = zhex(p, resid);
+        p = zput(p, resid ? " **UNACCOUNTED**" : " (balanced)"); }
       /* ► IS THE LINEAR SECTION EVEN OCCUPIED? One number, ahead of the dump: how many
            of the bar region's 10240 linear bytes are non-zero. Zero means nothing was
            ever written to A0000 while the window pointed at the linear section, and the
