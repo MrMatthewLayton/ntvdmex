@@ -2,7 +2,7 @@
 
 The whole-bar number (60% differ) cannot distinguish two mechanisms acting on
 different rows, and the session-22 log says the write-mode-1 latch bursts only ever
-touch plane offsets 0x3a1c..0x3e7f -- screen rows 186..199, i.e. BAR ROWS 18..31.
+touch plane offsets 0x3a1c..0x3e7f -- screen rows 184..199, i.e. BAR ROWS 18..31.
 If rows 0..17 are also wrong, the latch copy is not the whole story.
 
 grp4 collapsed = 4-pixel groups in the CAPTURE holding one value. In mode Y pixel x
@@ -55,8 +55,8 @@ for y in range(h):
           (y, AT_Y + y, dif, cmp_, pct, cg, ng, cr, ng, '#' * int(pct / 2.5)))
 print("TOTAL %d/%d = %.2f%%" % (tot_d, tot_c, 100.0 * tot_d / tot_c))
 
-lat = [y for y in range(h) if AT_Y + y >= 186]
-oth = [y for y in range(h) if AT_Y + y < 186]
+lat = [y for y in range(h) if AT_Y + y >= 184]
+oth = [y for y in range(h) if AT_Y + y < 184]
 
 
 def band(rows):
@@ -72,8 +72,8 @@ def band(rows):
 
 
 dd, cc = band(oth)
-print("\nrows 168..185 (NOT touched by any write-mode-1 burst): %d/%d = %.1f%%" %
+print("\nrows 168..183 (NOT touched by any write-mode-1 burst): %d/%d = %.1f%%" %
       (dd, cc, 100.0 * dd / max(cc, 1)))
 dd, cc = band(lat)
-print("rows 186..199 (the ONLY rows the bursts touch):        %d/%d = %.1f%%" %
+print("rows 184..199 (the ONLY rows the bursts touch):        %d/%d = %.1f%%" %
       (dd, cc, 100.0 * dd / max(cc, 1)))

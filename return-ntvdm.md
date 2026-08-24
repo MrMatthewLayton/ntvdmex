@@ -10,17 +10,26 @@
 │ ⚠⚠ REFUTED: THE STATUS BAR IS **NOT** THE WRITE-MODE-1 LATCH COPY            │
 └──────────────────────────────────────────────────────────────────────────────┘
   Session 22 planned an A0000 page-trap subsystem (~614k faults/run) on the strength
-  of the latch-copy story. **DO NOT BUILD IT.** The bursts only ever touch plane
-  offsets 0x3a1c..0x3e7f = screen rows 186..199. Split the bar there
-  (`tools/doomoracle/barprof.py`):
+  of the latch-copy story. **DO NOT BUILD IT.** Every burst was described (the bound
+  was raised from 6 to 4096) and the row range printed next to the offsets:
 ```
-     rows 168..185  NO burst ever reaches them   3583/5760 = 62.2% wrong
-     rows 186..199  the ONLY rows bursts touch   2550/4480 = 56.9% wrong
+     120 bursts, 116 changed bytes, and ALL 116 land in rows 184..199
+        rows 184..199 : 111 bursts     rows 185..199 : 4     rows 184..197 : 1
+     rows 168..183  NO burst ever reaches them   3184/5120 = 62.2% wrong
+     rows 184..199  ALL 116 bursts land here     2949/5120 = 57.6% wrong
 ```
-  The rows the latch copy cannot explain are **worse** than the rows it touches.
-  ⚠ This was recoverable from session 22's OWN log. The burst spans were printed and
-    never converted into rows. **A number in a log is not a measurement until it has
-    been put in the same units as the thing it is meant to explain.**
+  The half of the bar the latch copy cannot explain is **worse** than the half it
+  touches. (`tools/doomoracle/barprof.py`.)
+  ⚠⚠ **THE FIRST VERSION OF THIS REFUTATION WAS UNSOUND AND HAPPENED TO BE RIGHT.**
+    It generalised "bursts only touch rows 186..199" from the SIX descriptions the
+    instrument was bounded to -- of which only TWO had changed bytes, both at the same
+    span -- out of 160 bursts. **A BOUND ON AN INSTRUMENT IS A CLAIM ABOUT WHAT IS
+    REPRESENTATIVE.** Raising it changed the answer (184, not 186) and only then made
+    the conclusion evidence rather than luck.
+  ⚠ Also recoverable from session 22's own log: the burst spans were printed and never
+    converted into rows. **A number in a log is not a measurement until it has been put
+    in the same units as the thing it is meant to explain.** The burst line now prints
+    `rows=` and `barbytes=` beside the hex span.
 
 ┌──────────────────────────────────────────────────────────────────────────────┐
 │ ★★★★★ THE STATUS BAR: EVERY PLANE HOLDS **PLANE 1'S PHASE**                  │
@@ -41,8 +50,16 @@
 ```
    the render is INNOCENT     plane-vs-WAD (69.4/33.5/29.0/27.1) matches
                               screen-vs-WAD (70.3/33.6/29.3/27.3) to the digit
-   NOT a literal copy         plane-to-plane byte identity is only 69-76%, not ~100%,
-                              so 0/2/3 are separately damaged, not memcpy'd from 1
+   a FOUR-WAY collapse, NOT   every plane pair agrees at ~75%: p0-vs-p1 75.5%,
+   "plane 1 smeared outward"  p0-vs-p2 73.2% (the CONTROL, neither being the suspected
+                              source). So one value reaches all four planes at ~3/4 of
+                              bar offsets, and that value happens to be the phase-1
+                              pixel more often than the others. ⚠ the "plane 1 is
+                              copied into the rest" reading is WRONG -- the control
+                              kills it. A four-way collapse under mask 0x0f is what
+                              write mode 1 looks like when one value serves all four.
+   no plane is UNWRITTEN      0.0% of any plane's bar region still holds its seed
+                              marker, so this is not "three planes never drawn"
    all THREE pages identical  every figure equal to the digit across pg0/1/2
    the seed hypothesis is DEAD mapmask hist is 0x01/0x02/0x04/0x08/0x0f and nothing
                               else, so sel[0] for a multi-plane mask is ALWAYS plane 0

@@ -3614,15 +3614,26 @@ static void modey_remap_wmode(void *ctx, int wm)
              not. So describe the burst instead of guessing at it: how much changed, over
              what span, and whether the destination is a CONSTANT (a latched fill) rather
              than a copy. Bounded to the first few, because one example settles it. */
-        if (g_ylatch_desc < 6) {
-            unsigned k2, n = 0, lo = MODEY_WIN, hi = 0, uniq = 0;
+        /* ⚠⚠ THIS BOUND WAS 6, AND IT PRODUCED A WRONG ROOT CAUSE. Six descriptions of
+             160 bursts, of which only TWO had any changed bytes -- both at 0x3a1c..0x3e7f
+             -- were generalised into "the bursts only ever touch rows 186..199", and that
+             sentence retired the latch copy as the status bar's cause. Two samples out of
+             a hundred and sixty. A BOUND ON AN INSTRUMENT IS A CLAIM ABOUT WHAT IS
+             REPRESENTATIVE, and this one was never checked. 160 lines is ~19 KB; describe
+             them ALL, and let the row coverage be measured rather than extrapolated. */
+        if (g_ylatch_desc < 4096) {
+            unsigned k2, n = 0, lo = MODEY_WIN, hi = 0, uniq = 0, nbar = 0;
             BYTE first = 0;
             int constant = 1;
             for (k2 = 0; k2 < MODEY_WIN; ++k2) {
+                unsigned row;
                 if (sc[k2] == g_yseed[k2]) continue;
                 if (!n) { lo = k2; first = sc[k2]; }
                 if (sc[k2] != first) constant = 0;
                 hi = k2; ++n;
+                /* how much of this burst lands in the status bar at all */
+                row = (k2 % 0x4000u) / 80u;
+                if (row >= 168 && row < 200) ++nbar;
             }
             (void)uniq;
             { char lb2[224], *lq = lb2;
@@ -3630,6 +3641,13 @@ static void modey_remap_wmode(void *ctx, int wm)
               lq = zput(lq, "MODEY-LATCH burst changed="); lq = zhex(lq, n);
               lq = zput(lq, " span=0x"); lq = zhex(lq, lo);
               lq = zput(lq, "..0x"); lq = zhex(lq, hi);
+              /* ► IN THE UNITS OF THE CLAIM. A plane offset is row*80 + x/4, so a span
+                   in hex says nothing about which rows a burst reaches -- and reading
+                   0x3a1c..0x3e7f as "the status bar" without converting it is exactly
+                   how the wrong cause survived. Print the rows next to the offsets. */
+              lq = zput(lq, " rows="); lq = zhex(lq, n ? (lo % 0x4000u) / 80u : 0);
+              lq = zput(lq, "..");     lq = zhex(lq, n ? (hi % 0x4000u) / 80u : 0);
+              lq = zput(lq, " barbytes="); lq = zhex(lq, nbar);
               lq = zput(lq, constant ? " DEST IS CONSTANT 0x" : " dest varies, first=0x");
               lq = zhexb(lq, first);
               lq = zput(lq, " mask=0x"); lq = zhexb(lq, (unsigned)g_yprev_mask);
