@@ -359,7 +359,42 @@
     (b) rows 168-183: name the writer, and this is now the BETTER-VALUE half -- it is
         the worse band, no burst reaches it, and the fan-out is excluded by count
         (`writes=0` in band A across every run). Only guest stores under a SINGLE-plane
-        mask remain. Instrument which mask was live when each offset there last changed.
+        mask remain.
+
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ ★★★★ ...AND THE TWO BANDS ARE ONE SIGNATURE AT TWO INTENSITIES               │
+└──────────────────────────────────────────────────────────────────────────────┘
+  `tools/doomoracle/bandprof.py` (new, runs off the MODEYBAR dump already in every
+  log -- no rig run). Session 23's plane-vs-phase matrix was built over the WHOLE bar;
+  split by band it says something the union could not:
+```
+   band A rows168-183 (NO bursts)        band B rows184-199 (all bursts)
+         q=0   q=1   q=2   q=3                 q=0   q=1   q=2   q=3
+   pl0  34.9  47.1  17.0  16.2            pl0  33.8  74.4  23.8  19.4
+   pl1  19.3  61.2  17.8  15.9            pl1  28.2  80.2  23.5  19.5
+   pl2  18.4  46.9  30.2  16.5            pl2  27.9  73.7  29.4  21.1
+   pl3  19.1  45.9  17.7  30.2            pl3  27.5  73.0  24.6  25.3
+   four-way uniform 53.8% (ref 11.8%)     four-way uniform 79.8% (ref 13.4%)
+```
+  **Both bands collapse toward phase 1, band B roughly twice as hard** -- 79.8%
+  uniform against 53.8%, and a phase-1 margin over each plane's own phase of 41-48
+  points against 12-17. Band B is close to "plane 1 replicated into all four"; band A
+  is a weaker version of the SAME thing.
+  ▶ So this is **one mechanism whose exposure differs by band**, not the two unrelated
+    causes the decomposition above first suggested. Correct that reading; keep the
+    band split, because it is what made the difference visible.
+  ▶ **WHAT IS LEFT, BY ELIMINATION.** The fan-out is excluded by direct count (0 bar
+    bytes in band A, every run). The latch bursts are excluded by experiment
+    (delivering them moves the oracle under a point). The render is excluded because
+    plane-vs-WAD matches screen-vs-WAD to the digit. **That leaves the GUEST's own
+    stores under single-plane masks** -- so the question is why Doom's per-plane
+    stores would deposit PHASE-1 data into all four planes, and specifically
+    **whether the mask a store lands under is the mask Doom believes it set.**
+    ▶ Cheapest next probe: at the first few hundred mask changes, sample a fixed bar
+      row from the OUTGOING plane before swapping away. If consecutive planes receive
+      byte-identical samples, the guest is writing the same data four times and the
+      fault is upstream of the planes -- in how a mask write is sequenced against the
+      stores that follow it. Bounded, no diffing of 2M swaps.
 
   **TASK D (video -- and the player just narrowed it).** Name the writer that puts
   phase-1 data into all four planes. Session 23's status-bar section below is
