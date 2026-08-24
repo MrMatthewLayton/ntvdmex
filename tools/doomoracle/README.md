@@ -39,3 +39,29 @@ way when a bug is fixed is worse than no metric.
 
 That chain ended at `wmode hist: 0x79 in mode 0, 0x78 in mode 1` — Doom uses **VGA write
 mode 1, the latch copy**, 120 times a run.
+
+# sbref.py — the same idea for sampled audio
+
+`sbdump.flag` on the share makes the host record every byte `vdd_sb_render()` pulls out
+of the guest's DMA ring to `C:\ntvdmex\sb.raw` (no I/O on the audio thread; it is written
+at wind-down). That file is the audio equivalent of a screenshot.
+
+```
+./sbref.py sb.raw --rate 11025 --stereo --block 256
+```
+
+What it established on Doom, where "sound is still glitchy" had survived a resampler fix
+and a tick-batching fix:
+
+* 41.5 s of audio from a 45 s run — **the rate is right**, so it is not a pitch or clock
+  error.
+* `corr(L,R) = 0.978` — the two interleaved channels really are two channels of one
+  effect, so **the stereo framing is right**. (Doom asks for stereo: DSP command `0xC6`,
+  mode byte `0x20`. A 256-byte block is 128 FRAMES, not 256 samples — mistaking that led
+  to a confident, wrong "the DMA runs 1.87x too fast".)
+* Discontinuities are **12.8× over-represented at offset 2 of every 128-frame block**
+  (183 against a mean of 14.3). A jump rate that peaks at one fixed offset in every block
+  is a defect at the DMA block boundary — at 86 blocks/s, which is audibly a buzz.
+
+That last number is what a raw count of "glitches" could never give: game audio has sharp
+attacks, so the count alone says nothing. The *periodicity* is the evidence.
