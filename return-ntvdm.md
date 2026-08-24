@@ -122,12 +122,45 @@
 ```
   ⚠ the last figure is CONTENT-SENSITIVE (silence trivially repeats) and the two runs are
     different 45 s of attract demo, so treat it as indicative, not as a score.
-  ▶ **NEXT: THE SECOND CAUSE IS THE PRODUCER/CONSUMER RACE.** Delivery is now ~99.5% and
-    the ring still laps the refill, so the remaining replay is not a lost interrupt: it is
-    that `vdd_sb_render()` pulls a whole audio-device chunk at once, running AHEAD of real
-    time, while DMX refills on the guest's clock. Real hardware cannot do this -- the card
-    fetches at exactly the sample rate. Meter the fetch against elapsed wall clock, or
-    keep the read pointer a bounded distance behind the refill.
+  **★ THE RESIDUAL IS AN ECHO, AND THE USER NAMED IT BEFORE IT WAS MEASURED.** "They sound
+  more like they have an echo than an all-out glitch" -- and the ring lap IS an echo delay:
+```
+     repeat lag: % of bytes identical to the byte N earlier
+        lag 2048 ( 92.9 ms) 21.7%    lag 4095 (185.7 ms) 24.7%
+        lag 4096 (185.8 ms) 46.0%  <- ONE RING LAP     lag 4097 24.7%
+```
+  A spike that collapses ONE BYTE either side is a literal repeat, not a correlation. The
+  transition from "incoherent" to "echo" is exactly the transition from LOST interrupts
+  (data never written) to LATE refills (real audio, played twice).
+
+  **★★ THE BINDING CONSTRAINT IS THE TIMER TICK DEFICIT, NOT THE SB IRQ OR THE LEAD.**
+  New live counter `STAGE2: sb replay:` scores every block against the same ring offsets
+  one lap earlier (>=90% identical = DMX never refilled it). It agrees with the offline
+  capture to within 0.4 points (46.4% vs 46.0%), so the analysis script is no longer
+  needed to see this. `awbufs.txt` makes the audio LEAD a controlled variable:
+```
+     lead   sb_blocks/45s   blocks/s   replayed        underruns
+       6            3657         81    1604/3641 = 44%      0
+       2            1690         38     549/1674 = 33%      0
+```
+  ⚠ **LEAD 2 IS NOT AN IMPROVEMENT -- IT STARVES THE PUMP.** 38 blocks/s against the 86/s
+    the sample rate demands is audio at under half speed. `underruns=0` throughout, so
+    that counter does NOT detect this; it only counts waveOutWrite failures. The replay
+    rate fell because we consumed the ring more slowly, not because the race was fixed.
+  But that is what makes the experiment decisive. Refills happen in DMX's TIMER ISR, so
+  ticks ARE refill opportunities, and both rows are explained by one ratio:
+```
+     Doom asks for 140 Hz (pit_reload 8522). WE DELIVER 55 Hz = 39%.
+       lead 6:  81 blocks/s needed vs 55 refills/s available -> 44% replayed
+       lead 2:  38 blocks/s needed vs 56 refills/s available -> 33% replayed
+```
+  ▶ **NEXT: RAISE DELIVERED IRQ0 FROM 39% TOWARDS 100%.** The echo is a symptom of the
+    timer, and the SB is downstream of it. `DPMI_IRQ0_BATCH` is 4 and
+    `g_async_tried_this_sync` allows ONE async attempt per PIT sync -- both were tuned in
+    session 22 against tick RATE, with no idea that the PCM refill rate depended on them.
+    ⚠ Do not simply raise the batch: session 22 measured that draining 64 ticks back to
+      back compressed 0.45 s of game time into microseconds. The goal is more DELIVERY
+      OPPORTUNITIES, not more ticks per opportunity.
 
 ═══════════════════════════════════════════════════════════════════════════════
 ██ ▶▶▶ SESSION 22 (2026-08-24, same day, after the session-21 handoff).       ██
@@ -352,6 +385,11 @@
                      caught by md5-ing the two "different" captures. **A stale artefact
                      is worse than a missing one: absent fails loudly, stale reads as a
                      result.** Delete first, and never swallow the copy's output.
+   awbufs.txt        waveOut buffers queued = THE AUDIO LEAD (each ~11.6 ms). 2..6,
+                     absent = 6. ⚠ LOW IS NOT BETTER: at 2 the pump starves to 38
+                     blocks/s against the 86/s the rate demands, and `underruns` stays
+                     0 because it only counts waveOutWrite failures. It is a MEASURING
+                     instrument, not a tuning knob -- put it back (delete it) after.
    modey.txt         mode-Y run-coalescing slack, only used when the remap is OFF
    noremap.flag      disable per-plane backing, fall back to the heuristic
    qimode.txt        `20` starts the synthetic-key thread

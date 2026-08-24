@@ -21,6 +21,14 @@
 
 #define AW_BUFFERS   6          /* buffers in flight (~70 ms of slack at 44100)   */
 #define AW_FRAMES  512          /* frames per buffer (~11.6ms at 44100)          */
+/* ► THE BUFFER COUNT IS THE AUDIO LEAD, AND THE LEAD IS A SUSPECT. Every queued
+     buffer is 11.6 ms that our DMA read pointer runs AHEAD of what is audible, and
+     the guest has to refill a block before we reach it. Doom's longest protected-mode
+     stretch with no host turn was measured at 62.8 ms against a 70 ms lead -- close
+     enough that the lead cannot be assumed innocent. So it is a RUNTIME field, set
+     from awbufs.txt before the pump starts, and the SB's replay counter is scored
+     against it: change one number, read one number back. Clamped to [2, AW_BUFFERS];
+     0 means "use them all". */
 
 /* Fill `frames` mono 16-bit samples. Called on the audio thread; the host wraps
    it in the same lock the exec thread uses for the device bus. */
@@ -36,6 +44,7 @@ typedef struct audio_wave {
     aw_fill_fn fill; void *ctx;
     int       silent;                   /* 1 = no device; pump but discard       */
     uint32_t  underruns;
+    uint32_t  nbufs;                    /* buffers actually queued: the LEAD     */
 
     /* WAVEHDR + sample storage, allocated inline to avoid a heap dependency */
     unsigned char hdr[AW_BUFFERS][32];  /* WAVEHDR is 32 bytes on win32          */

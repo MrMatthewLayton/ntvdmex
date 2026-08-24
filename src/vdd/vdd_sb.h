@@ -122,6 +122,34 @@ typedef struct sb_state {
         uint8_t  page, mode, ended, reloaded;
     } blklog[SB_BLKLOG_MAX];
     uint32_t blklog_n;         /* blocks seen; entries kept = min(n, MAX)          */
+
+    /* ── THE REPLAY DETECTOR. ────────────────────────────────────────────────────
+         The residual click is an ECHO, and the user heard it as one before it was
+         measured: the capture is 46.0% identical to the byte ONE RING LAP earlier
+         (4096 bytes = 185.8 ms at 11025 Hz stereo) against ~22% at 2048, 8192, and
+         at 4095/4097 -- a spike that collapses one byte either side is a literal
+         repeat, not a correlation. We are re-reading ring content DMX has not
+         refilled yet, so the same audio is played twice 186 ms apart.
+       ► WHY THIS LIVES IN THE HOST AND NOT IN THE ANALYSIS SCRIPT. Post-hoc capture
+         analysis needs sbdump.flag, a copy off the box, and a matching anchor, and it
+         cannot be correlated with anything happening inside the run. As a live counter
+         the replay rate becomes a number in STAGE2 -- which makes the AUDIO LEAD a
+         CONTROLLED VARIABLE: vary aw->nbufs and see whether replays move with it. If
+         they do it is the lead-vs-refill race; if they do not, DMX is failing to refill
+         for some other reason and the lead is the wrong suspect.
+         Compare each fetched byte against what we fetched at the same RING OFFSET one
+         lap ago. Ring-sized shadow, no allocation, no I/O -- this runs on the audio
+         thread. Rings larger than the shadow simply disable the check (counted). */
+#define SB_LAP_MAX 8192
+    uint8_t  lap_buf[SB_LAP_MAX];   /* what we read at each ring offset last lap    */
+    uint32_t lap_len;               /* ring size currently being tracked (0 = off)  */
+    uint32_t lap_seen;              /* bytes fetched since the ring was programmed  */
+    uint32_t blk_same, blk_bytes;   /* accumulators for the block in progress       */
+    uint32_t blocks_checked;        /* blocks that had a full previous lap to compare */
+    uint32_t blocks_replayed;       /* ...of which >=90% identical: DMX never refilled */
+    uint32_t lap_same, lap_total;   /* byte-level rate, the live form of the 46%    */
+    uint32_t lap_toobig;            /* rings larger than SB_LAP_MAX: check skipped  */
+    uint32_t lap_off;               /* ring offset of the fetch in progress         */
 } sb_state;
 
 /* Build the device descriptor to hand to vdd_bus_add(). Set base/irq/dma and the

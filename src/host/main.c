@@ -95,6 +95,7 @@
    -- needs minutes, and the default would kill the guest mid-typing. Absent = the
    default. */
 #define HEADLESS_MS_PATH "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\headless_ms.txt"
+#define AWBUFS_PATH      "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\awbufs.txt"
 /* Scripted synthetic keystrokes, on the share so a test sequence can be changed between
    runs without a rebuild. Whitespace-separated tokens, played once in order:
      4d     -- scancode 4D: make, brief hold, break
@@ -7390,6 +7391,27 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
        run even if no sound device opens (audio_wave falls back to silent
        pumping) -- otherwise every SB game hangs on a machine without audio. */
     vdd_audio_init(&g_audio, &g_opl, &g_sb, AUDIO_OUT_HZ);
+    /* ── THE AUDIO LEAD, AS A CONTROLLED VARIABLE (awbufs.txt). ──────────────────────
+         Each queued waveOut buffer is ~11.6 ms that our DMA read pointer runs ahead of
+         what is audible, and the guest must refill a block before we reach it. Doom's
+         longest PM stretch with no host turn measured 62.8 ms against a 70 ms lead, so
+         the lead is a suspect for the residual ECHO -- the capture is 46% identical to
+         one ring lap (185.8 ms) earlier, against ~22% at every neighbouring lag.
+         Setting this and reading back `sb replay:` in STAGE2 is the experiment: if
+         replays move with the lead it is the race, if they do not, DMX is failing to
+         refill for another reason and the lead is the wrong suspect. Absent = 6. */
+    { HANDLE h = CreateFileA(AWBUFS_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                             NULL, OPEN_EXISTING, 0, NULL);
+      if (h != INVALID_HANDLE_VALUE) {
+          char c[16]; DWORD rd = 0, v = 0; int i;
+          ReadFile(h, c, sizeof c, &rd, NULL);
+          CloseHandle(h);
+          for (i = 0; i < (int)rd; ++i) {
+              if (c[i] < '0' || c[i] > '9') break;
+              v = v * 10 + (DWORD)(c[i] - '0');
+          }
+          g_wave.nbufs = v;                   /* audio_wave_start clamps to [2,AW_BUFFERS] */
+      } }
     audio_wave_start(&g_wave, AUDIO_OUT_HZ, host_audio_fill, NULL);
     m.conout = host_conout; m.conctx = NULL;    /* DOS console out -> video      */
     m.conin  = host_conin;  m.cinctx = NULL;    /* DOS console in  <- keyboard   */
@@ -9189,6 +9211,32 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
            IRQ that would previously have been dropped, and so a 256-byte refill DMX would
            never have made. Compare `devirq_inj` against the shortfall between sb_blocks
            and irq05 above -- that is the whole of the fix, in one subtraction. */
+        /* ► THE ECHO, AS A NUMBER, WITH ITS CONTROLLED VARIABLE NEXT TO IT. `replayed`
+             counts blocks >=90% identical to the same ring offsets one lap earlier --
+             blocks DMX never refilled, played twice 186 ms apart. `lead` is the buffers
+             actually queued, i.e. how far ahead of audible we read. Vary one, read the
+             other; if they do not move together the lead is not the cause. */
+        /* ⚠ FLUSH FIRST. `base` points PAST the preamble, so report[] has well under
+             8 KB of headroom, and the 24-line sbblk ledger added above eats most of what
+             was left. The first cut of this line was written into the overflow and simply
+             never appeared -- while the line immediately AFTER it did, which reads exactly
+             like "the code did not run" and cost a wasted pair of rig runs to tell apart
+             from a stale binary. Two counters in the same basic block cannot disagree
+             about whether they executed; when they appear to, suspect the transport. */
+        p = zput(p, "\r\n");
+        log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+        p = zput(p, "STAGE2: sb replay: blocks_checked="); p = zhex(p, g_sb.blocks_checked);
+        p = zput(p, " REPLAYED=");   p = zhex(p, g_sb.blocks_replayed);
+        if (g_sb.blocks_checked) {
+            p = zput(p, " (");
+            p = zhex(p, g_sb.blocks_replayed * 100u / g_sb.blocks_checked);
+            p = zput(p, "% of blocks, decimal-in-hex)");
+        }
+        p = zput(p, " byte_lap_same="); p = zhex(p, g_sb.lap_same);
+        p = zput(p, "/");              p = zhex(p, g_sb.lap_total);
+        p = zput(p, " ring=");         p = zhex(p, g_sb.lap_len);
+        p = zput(p, " toobig=");       p = zhex(p, g_sb.lap_toobig);
+        p = zput(p, " lead_buffers=");  p = zhex(p, g_wave.nbufs);
         p = zput(p, "\r\nSTAGE2: devirq (cooperative PM retry): inj=");
         p = zhex(p, g_pm_devirq_inj);
         p = zput(p, " fail=");  p = zhex(p, g_pm_devirq_fail);
@@ -9231,6 +9279,9 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                     log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
                 }
             }
+            /* Hand the rest of STAGE2 an empty buffer: the ledger is the biggest single
+               block in this report and everything after it was running on fumes. */
+            log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
         }
         p = zput(p, "STAGE2: opl: trace=");   p = zhex(p, g_opltrace_n);
         p = zput(p, " tdrop=");               p = zhex(p, g_opltrace_drop);

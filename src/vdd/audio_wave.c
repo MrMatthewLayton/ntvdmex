@@ -39,7 +39,7 @@ static AW_WAVEHDR *hdr_of(audio_wave *aw, int i)
 static DWORD WINAPI aw_thread(LPVOID pv)
 {
     audio_wave *aw = (audio_wave *)pv;
-    int i;
+    uint32_t i;                          /* matches aw->nbufs; was int (sign-compare) */
 
     /* THE EXEC THREAD RUNS FLAT OUT. It is a guest burning 100% of a core, and at normal
        priority this thread loses the race often enough that buffers run dry -- which is
@@ -51,7 +51,7 @@ static DWORD WINAPI aw_thread(LPVOID pv)
         SetThreadPriority(GetCurrentThread(), 2 /* THREAD_PRIORITY_HIGHEST */);
 
     /* Prime every buffer, then top them up as the driver returns them. */
-    for (i = 0; i < AW_BUFFERS && !aw->silent; ++i) {
+    for (i = 0; i < aw->nbufs && !aw->silent; ++i) {
         AW_WAVEHDR *h = hdr_of(aw, i);
         h->lpData = (LPSTR)aw->buf[i];
         h->dwBufferLength = AW_FRAMES * sizeof(int16_t);
@@ -69,7 +69,7 @@ static DWORD WINAPI aw_thread(LPVOID pv)
             Sleep((AW_FRAMES * 1000) / (aw->hz ? aw->hz : 44100));
             continue;
         }
-        for (i = 0; i < AW_BUFFERS; ++i) {
+        for (i = 0; i < aw->nbufs; ++i) {
             AW_WAVEHDR *h = hdr_of(aw, i);
             if (!(h->dwFlags & WHDR_DONE)) continue;
             h->dwFlags &= ~WHDR_DONE;
@@ -83,7 +83,7 @@ static DWORD WINAPI aw_thread(LPVOID pv)
 
     if (!aw->silent) {
         p_waveOutReset(aw->hwo);
-        for (i = 0; i < AW_BUFFERS; ++i)
+        for (i = 0; i < aw->nbufs; ++i)
             p_waveOutUnprepare(aw->hwo, hdr_of(aw, i), sizeof(AW_WAVEHDR));
     }
     return 0;
@@ -110,7 +110,16 @@ int audio_wave_start(audio_wave *aw, uint32_t hz, aw_fill_fn fill, void *ctx)
 {
     AW_WAVEFORMATEX fmt;
     unsigned i; unsigned char *p = (unsigned char *)aw;
+    /* ► PRESERVE THE LEAD ACROSS THE ZEROING. The caller sets aw->nbufs from awbufs.txt
+         BEFORE calling us, and this function wipes the whole struct -- so read it back
+         out first, exactly as vdd_sb_reset() preserves its bus pointers. Getting this
+         wrong would silently pin the experiment at one value while appearing to vary it,
+         which is the failure mode this counter exists to avoid. */
+    uint32_t want_bufs = aw->nbufs;
     for (i = 0; i < sizeof(*aw); ++i) p[i] = 0;
+    if (want_bufs < 2) want_bufs = AW_BUFFERS;          /* 0/1 = "use them all" */
+    if (want_bufs > AW_BUFFERS) want_bufs = AW_BUFFERS;
+    aw->nbufs = want_bufs;
 
     aw->hz = hz ? hz : 44100;
     aw->fill = fill; aw->ctx = ctx;

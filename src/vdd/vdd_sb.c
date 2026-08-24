@@ -230,8 +230,39 @@ static int16_t sb_fetch_sample(sb_state *st, int *ended)
 
     *ended = 0;
     if (!st->dma) return 0;
+
+    /* ── REPLAY CHECK: capture the ring offset BEFORE the fetch advances it. ──────
+         Ring offset is the distance of the current address from the channel's base;
+         everything else about the comparison hangs off that, so it must be sampled
+         before vdd_dma_read() walks the 8237. */
+    { const dma_chan *c = &st->dma->ch[ch & 7];
+      uint32_t rlen = (uint32_t)c->base_count + 1u;
+      uint32_t roff = (uint32_t)(uint16_t)(c->cur_addr - c->base_addr);
+      if (rlen != st->lap_len) {              /* (re)programmed: start a fresh lap */
+          st->lap_len  = rlen;
+          st->lap_seen = 0;
+          st->blk_same = st->blk_bytes = 0;
+          if (rlen > SB_LAP_MAX) ++st->lap_toobig;
+      }
+      st->lap_off = (rlen && rlen <= SB_LAP_MAX) ? (roff % rlen) : 0xFFFFFFFFu; }
+
     got = vdd_dma_read(st->dma, ch, raw, want, &tc);
     if (got < want) { *ended = 1; return 0; }
+
+    if (st->lap_off != 0xFFFFFFFFu) {
+        uint32_t i2;
+        for (i2 = 0; i2 < want; ++i2) {
+            uint32_t o = (st->lap_off + i2) % st->lap_len;
+            /* Only compare once a whole lap has been recorded, or the shadow's
+               zero-fill would read as a mountain of false "replays" at startup. */
+            if (st->lap_seen >= st->lap_len) {
+                ++st->blk_bytes; ++st->lap_total;
+                if (st->lap_buf[o] == raw[i2]) { ++st->blk_same; ++st->lap_same; }
+            }
+            st->lap_buf[o] = raw[i2];
+        }
+        st->lap_seen += want;
+    }
 
     if (st->xfer_16bit) {
         l = (int16_t)((uint16_t)raw[0] | ((uint16_t)raw[1] << 8));
@@ -287,6 +318,14 @@ uint32_t vdd_sb_render(sb_state *st, int16_t *out, uint32_t frames)
                 b->reloaded   = (uint8_t)(c->cur_addr == c->base_addr);
                 st->blklog_n  = st->blocks + 1;      /* entries actually filled */
             }
+            /* Score the block that just finished: >=90% identical to the same ring
+               offsets one lap ago means DMX never rewrote it and we played the
+               previous lap's audio again -- one echo, 186 ms after the original. */
+            if (st->blk_bytes) {
+                ++st->blocks_checked;
+                if (st->blk_same * 10u >= st->blk_bytes * 9u) ++st->blocks_replayed;
+            }
+            st->blk_same = st->blk_bytes = 0;
             st->irq_pending = 1;
             st->blocks++;
             vdd_raise_irq(st->bus, st->irq);
