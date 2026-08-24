@@ -419,11 +419,29 @@
     which is what you would expect if nothing is corrupting anything during play.
     Ask instead: **what did the planes contain when the bar was first drawn, and why
     did that draw not cover every offset?**
-  ▶ **A CONCRETE, UNTESTED CANDIDATE.** While `chain4=1` (mode 13h chained) the A0000
-    window maps `g_ysec[4]` -- the LINEAR section, not any plane. Anything the guest
-    writes before it switches to unchained lands there and is invisible to all four
-    planes. What Doom draws across that transition, and in what order, is the next
-    question. `ymap_select(-1)` on the chain4 change is where to start reading.
+  ▶ **A CONCRETE CANDIDATE, AND A DECISIVE ONE-RUN TEST FOR IT.** `modey_remap_init()`
+    sets `g_ycur = 4`, and `ymap_select(-1)` on a chain4 change selects 4 as well -- so
+    A0000 maps `g_ysec[4]`, **the LINEAR section, not any plane**, both before the first
+    map-mask write and for as long as the guest stays chained. Anything the guest writes
+    to A0000 in either window lands there and is INVISIBLE TO ALL FOUR PLANES. That is
+    exactly the shape the evidence now demands: content written once, never rewritten,
+    and not corrupted by anything during play.
+    ▶ **THE TEST (≈10 lines, one run, and it cannot come back ambiguous).** At wind-down,
+      dump `g_ysec[4]`'s BAR REGION (rows 168-199) the same way MODEYBAR dumps the
+      planes, and score it against STBAR with `planejudge`/`bandprof`.
+```
+       if the LINEAR section's bar region scores WELL against STBAR
+           -> Doom drew the bar while A0000 pointed at linear; the planes never
+              received it, and the fix is about WHEN the window is repointed,
+              not about how any write is handled. SMOKING GUN.
+       if it is empty or scores at chance
+           -> the candidate is dead, and the write-once damage happened somewhere
+              else. Either way the answer is unambiguous, which is what the last
+              four hypotheses were not.
+```
+    ⚠ Hold it loosely: several hypotheses fell over today (log spam under the lock, the
+      fan-out delivery repair, the page trap). This one is structural rather than
+      inferred, which is why it is worth a run -- but it is still untested.
 
   **TASK D (video -- and the player just narrowed it).** Name the writer that puts
   phase-1 data into all four planes. Session 23's status-bar section below is
