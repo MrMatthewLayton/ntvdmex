@@ -28,6 +28,16 @@ static inline uint32_t dos_env_build(volatile uint8_t *base, uint16_t env_seg,
     p = dos_env_puts(p, "COMSPEC=C:\\COMMAND.COM"); *p++ = 0;
     p = dos_env_puts(p, "PATH=C:\\");               *p++ = 0;
     p = dos_env_puts(p, "PROMPT=$p$g");             *p++ = 0;
+    /* ── BLASTER IS HOW A DOS GAME FINDS THE SOUND CARD. ─────────────────────────
+         Every Sound Blaster install sets it, so every DOS sound driver reads it and
+         only falls back to probing when it is absent -- and a fallback probe is a
+         WORSE test of our card than being told where it is, because it also has to
+         guess the IRQ and DMA channel. The values are the ones vdd_sb is actually
+         configured with (SB_DEFAULT_BASE / SB_DEFAULT_IRQ / channel 1); T3 = an
+         SB 2.0-class card, which matches the DSP version the VDD reports.
+         A220 I7 D1 T3 is the stock factory setting, so this is what a real machine
+         of the period would say. */
+    p = dos_env_puts(p, "BLASTER=A220 I7 D1 T3");   *p++ = 0;
     *p++ = 0;                                       /* trailing \0 ends the var list */
     *p++ = 0x01; *p++ = 0x00;                       /* WORD: one string follows */
     p = dos_env_puts(p, (progpath && progpath[0]) ? progpath : "C:\\PROGRAM.COM");

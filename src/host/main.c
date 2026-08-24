@@ -240,9 +240,33 @@ static ems_state    g_ems;       /* M4: EMS expanded-memory manager           */
    the guest with back-to-back timer interrupts. */
 #define IRQ0_PENDING_MAX 4
 static volatile LONG g_irq0_pending = 0;    /* PIT raised IRQ0 (UI thread sets, V86 thread delivers) */
+/* ── HOW MANY TIMER TICKS DOES THE PROTECTED-MODE CLIENT ACTUALLY OWE? ───────────────
+     Separate from g_irq0_pending, which SATURATES AT FOUR on purpose (see above) and so
+     cannot answer the question. The PM catch-up batch needs a true count, and without
+     one it invented its own: it injected a fixed DPMI_IRQ0_BATCH of 64 ticks on every
+     asynchronous return, with no reference to elapsed time at all. Measured on Doom,
+     which programs 140 Hz (PIT reload 0x214a): 2612 asynchronous returns x 64 =
+     169,032 ISR entries in 45 seconds, against the 6,300 it asked for -- a game clock
+     running 27 times too fast, which is not a small error in a program whose entire
+     frame pacing is I_GetTime().
+     Bounded, for the same reason the saturating latch is: a host stall must not be
+     repaid as one enormous burst. 64 at 140 Hz is ~460 ms of catch-up, well past any
+     stall this host produces and still short enough that the tempo cannot lurch a
+     visible amount. */
+#define PM_TICK_OWED_MAX 64
+static volatile LONG g_pm_tick_owed = 0;
 static void irq0_latch(void)
 {
     if (g_irq0_pending < IRQ0_PENDING_MAX) InterlockedIncrement(&g_irq0_pending);
+    if (g_pm_tick_owed < PM_TICK_OWED_MAX)  InterlockedIncrement(&g_pm_tick_owed);
+}
+/* Consume one owed tick. Returns 0 if none is owed, i.e. "the client is up to date --
+   do not manufacture time it has not been billed for". */
+static int pm_tick_take(void)
+{
+    if (g_pm_tick_owed <= 0) return 0;
+    InterlockedDecrement(&g_pm_tick_owed);
+    return 1;
 }
 static volatile LONG g_irq1_pending = 0;    /* count of un-delivered keyboard IRQ1s (one per scancode byte) */
 static int g_pm_irq0_latch = 0;             /* #2b: a virtual IRQ0 awaiting injection into the PM hook */
@@ -645,6 +669,12 @@ static int   g_le_ncode = 0;
 #define DPMI_IRQ0_ARM_QUIET_MS 55
 /* Ticks run per asynchronous entry -- see the drain in the main loop. */
 #define DPMI_IRQ0_BATCH 64
+/* How far an injected protected-mode ISR may run before we stop waiting for its IRET.
+   See the commentary at the phase loop in dpmi_inject_pm_irq(): a phase is one PM entry,
+   not a unit of time, so the real bound is the clock; the phase count is only a backstop
+   against a handler that traps forever without making progress. */
+#define DPMI_IRQ0_PHASE_MAX 65536u
+#define DPMI_IRQ0_MS_MAX    500u
 static DWORD g_pm_vec8_armed_ms = 0;
 /* Set when the APPLICATION (not the extender's arming pass) installs a timer ISR. Until
    then vector 8 holds a placeholder stub and delivering to it is both pointless and, on
@@ -1058,9 +1088,21 @@ static int async_inject_irq(unsigned irq)
        it perturbs the guest's stack and control flow for no benefit, and it demonstrably
        derailed Skyroads (which never installs a Sound Blaster ISR) into executing junk in
        our own handler segment at 0050:006c, where it "terminated" via a garbage INT 21h. */
+    /* ► A PROTECTED-MODE CLIENT HOOKS THE PM VECTOR, NOT THE IVT. This test only ever
+         looked at the real-mode IVT, so for a DPMI client every device line looked
+         unhooked and was refused -- including the one the Sound Blaster's own
+         detection depends on. DMX resets the DSP and then issues command 0xF2, whose
+         entire purpose is to make the card assert its interrupt so the driver can find
+         out which line it is wired to; refusing that interrupt is exactly how Doom ends
+         up printing "SB isn't responding at p=0x220, i=7, d=1" about a card that
+         answered its reset with 0xAA and reported DSP version 4.05 two lines earlier.
+         Ask both tables: the client has hooked the line if EITHER the real-mode vector
+         has moved off our IRET stub or it has installed a protected-mode handler. */
     { unsigned v0 = vdd_pic_vector(&g_pic, (uint8_t)irq);
-      if (irq >= 2 && peekw(v0 * 4 + 2) == DOS_HDLR_SEG
-                   && peekw(v0 * 4) == DOS_IRET_STUB_OFF) { async_early_bail(22); return 0; } }
+      int rm_hooked = !(peekw(v0 * 4 + 2) == DOS_HDLR_SEG
+                        && peekw(v0 * 4) == DOS_IRET_STUB_OFF);
+      int pm_hooked = g_dpmi_pm && g_pm_int[0x08u + irq].client;
+      if (irq >= 2 && !rm_hooked && !pm_hooked) { async_early_bail(22); return 0; } }
     if (SuspendThread(g_hcpu) == (DWORD)-1) { async_early_bail(23); return 0; }
     { unsigned i; char *z = (char *)&cx; for (i = 0; i < sizeof cx; ++i) z[i] = 0; }
     cx.ContextFlags = CONTEXT_CONTROL | CONTEXT_SEGMENTS;
@@ -1233,7 +1275,12 @@ static void host_irq_sink(void *ctx, uint8_t irq)
            Skyroads was asking for 180, which is most of why the game ran ~10x too slow and
            why its intro stalled after ~3 s (measured: d_irq0 fell to ~1/s while the guest sat
            at 0110:3b40 waiting, having done all its work in the first three seconds). */
-        if (g_qi_susp && async_inject_irq(0)) InterlockedDecrement(&g_irq0_pending);
+        /* An asynchronous delivery IS a tick delivered: bill it, or the catch-up batch
+           will pay for it a second time. */
+        if (g_qi_susp && async_inject_irq(0)) {
+            InterlockedDecrement(&g_irq0_pending);
+            pm_tick_take();
+        }
     }
     else if (irq == 1) {
         /* One pending interrupt at a time: the 8042 has a single output buffer, and the
@@ -2831,6 +2878,7 @@ static void host_pit_sync(void)
     HOST_UNLOCK();
 }
 
+static DWORD g_sndio_logged = 0;    /* bounded SNDIO trace; see the note below */
 static void host_io_do(volatile BYTE *tib, vdd_bus *bus, uint16_t port,
                        int is_in, int width)
 {
@@ -2869,6 +2917,32 @@ static void host_io_do(volatile BYTE *tib, vdd_bus *bus, uint16_t port,
     } else {
         val = (width == 1) ? (eax & 0xFF) : (width == 2) ? (eax & 0xFFFF) : eax;
         if (!vdd_bus_io(bus, port, (uint8_t)width, 0, &val)) io_unclaimed_note(port, 0);
+    }
+    /* ── THE SOUND-CARD HANDSHAKE, IN FULL, FOR AS LONG AS IT LASTS. ─────────────────
+         "SB isn't responding at p=0x220, i=7, d=1" is Doom's verdict, not a
+         measurement: it says the probe failed, not which step of it did. The DSP reset
+         is a four-step conversation (write 1 to base+6, write 0, poll base+0xE for
+         bit 7, read base+0xA for 0xAA) and any one of them can be the miss.
+         Bounded to the first 300 accesses, which is far more than a probe needs and far
+         less than a playing game produces -- the point is the OPENING of the
+         conversation, and after that the per-block counters in STAGE2 take over.
+         `io_hot_note` cannot serve here: it is only called on the V86 arm of the exec
+         loop, so for a protected-mode client like Doom it records nothing at all --
+         which is why STAGE2's "hot ports:" line came back empty from a run that had
+         plainly done thousands of port accesses. */
+    if (g_sndio_logged < 300
+        && ((port >= 0x220 && port <= 0x22F)      /* Sound Blaster            */
+         || (port >= 0x388 && port <= 0x389)      /* AdLib / OPL              */
+         || (port >= 0x330 && port <= 0x331))) {  /* MPU-401 MIDI             */
+        char sb2[128], *sq = sb2;
+        ++g_sndio_logged;
+        sq = zput(sq, "SNDIO "); sq = zput(sq, is_in ? "in  0x" : "out 0x");
+        sq = zhex(sq, port);
+        sq = zput(sq, is_in ? " -> 0x" : " <- 0x");
+        sq = zhex(sq, val);
+        sq = zput(sq, " w="); sq = zhexb(sq, (unsigned)width);
+        sq = zput(sq, " ms="); sq = zhex(sq, GetTickCount());
+        sq = zput(sq, "\r\n"); log_append(LOG_PATH, sb2, sq); serial_out(sb2, sq);
     }
 }
 
@@ -6116,6 +6190,7 @@ static int dpmi_inject_pm_irq(dos_machine_t *mp, volatile BYTE *tib, unsigned iv
     WORD  sDS=(WORD)VDM_REG(tib,VTIB_DS), sES=(WORD)VDM_REG(tib,VTIB_ES);
     WORD  sFS=(WORD)VDM_REG(tib,VTIB_FS), sGS=(WORD)VDM_REG(tib,VTIB_GS);
     int prev_vi = g_dpmi_vi; unsigned ph; int done = 0;
+    DWORD t_isr0 = GetTickCount();
     DWORD wpre[DPMI_WATCH_MAX]; int wi;
     for (wi = 0; wi < g_pm_nwatch; ++wi) {
         const BYTE *wp0 = (const BYTE *)(ULONG_PTR)g_pm_watch[wi];
@@ -6199,8 +6274,27 @@ static int dpmi_inject_pm_irq(dos_machine_t *mp, volatile BYTE *tib, unsigned iv
     lp = zput(lp, "\r\n");
     log_append(LOG_PATH, lb, lp); serial_out(lb, lp); lp = lb;
 
-    for (ph = 0; ph < 64 && !done; ++ph) {
+    /* ── GIVING UP HALFWAY THROUGH SOMEONE ELSE'S INTERRUPT HANDLER CORRUPTS THEM. ──
+         This loop used to stop after 64 phases and then restore the interrupted context
+         verbatim, abandoning the client's ISR wherever it had got to. That is not a
+         timeout, it is a silent state corruption, and it is what stopped Doom's clock:
+             IRQ0<-PM done=0 phases=0x40   [DMX depth]=3<-4   [DMX stack]=...4300<-...5300
+         one abandoned dispatch leaked DMX's re-entrancy counter and one 4KB frame of its
+         private interrupt stack, permanently. Doom's ticcount froze at 0x61 while 3,000
+         more ticks were delivered into a dispatcher that would never call its service
+         again, so I_GetTime() stopped, so TryRunTics() spun forever, so the title screen
+         sat there for the rest of the run.
+         A PHASE IS NOT A UNIT OF TIME -- it is one PM entry, and an ISR pays one for
+         every trapped port access. The handler that blew the cap was the MIDI driver
+         feeding the MPU-401: ~11 status polls per byte written, so a single music update
+         is hundreds of phases. 64 was never a bound on anything real.
+         So: bound it by WALL CLOCK, which is the thing actually at risk, keep the phase
+         count only as a runaway backstop, and if we ever do stop early SAY SO -- it is a
+         corruption event, not housekeeping. A genuinely wedged ISR is the watchdog's
+         problem; it already terminates a VDM that stops making progress. */
+    for (ph = 0; ph < DPMI_IRQ0_PHASE_MAX && !done; ++ph) {
         DWORD ev, eip, vec; int rc;
+        if ((ph & 0x3F) == 0x3F && (GetTickCount() - t_isr0) > DPMI_IRQ0_MS_MAX) break;
         dpmi_arm_fault_trampoline(tib, 0);
         /* ► THE LAST THING BEFORE THE CLIFF. Doom takes five of these injections and
              dies inside the SIXTH: its "IRQ0->PM INT" entry line is the final line in
@@ -6246,6 +6340,20 @@ static int dpmi_inject_pm_irq(dos_machine_t *mp, volatile BYTE *tib, unsigned iv
          ISR ran and returned" from "the ISR was entered and the run ended inside it",
          and those need completely different fixes. `done` is set only by the catcher
          BOP, i.e. by the handler's own IRET. */
+    /* ► AN ABANDONED HANDLER IS A LOUD EVENT. It leaves the client's interrupt
+         bookkeeping permanently wrong -- see the phase loop -- so it must never again
+         be readable as a routine "done=0". */
+    if (!done) {
+        char ab2[192], *aq = ab2;
+        aq = zput(aq, "DPMI: *** PM ISR ABANDONED after "); aq = zhex(aq, (DWORD)ph);
+        aq = zput(aq, " phases / "); aq = zhex(aq, GetTickCount() - t_isr0);
+        aq = zput(aq, " ms -- the client's interrupt state is now INCONSISTENT"
+                      " (vec 0x"); aq = zhexb(aq, iv);
+        aq = zput(aq, ", last cs:eip=0x"); aq = zhex(aq, VDM_REG(tib, VTIB_CS) & 0xFFFF);
+        aq = zput(aq, ":0x"); aq = zhex(aq, dpmi_pm_eip(tib));
+        aq = zput(aq, ")\r\n");
+        log_append(LOG_PATH, ab2, aq); serial_out(ab2, aq);
+    }
     { char cb2[128], *cq = cb2;
       cq = zput(cq, "  IRQ0<-PM INT done="); cq = zhex(cq, (DWORD)done);
       cq = zput(cq, " phases="); cq = zhex(cq, (DWORD)ph);
@@ -7709,7 +7817,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                         && (GetTickCount() - g_pm_vec8_armed_ms) >= DPMI_IRQ0_ARM_QUIET_MS) {
                         g_pm_irq0_latch = 0;
                         g_in_pm_irq = 1;
-                        dpmi_inject_pm_irq(&m, tib, 0x08, steps);
+                        if (pm_tick_take()) dpmi_inject_pm_irq(&m, tib, 0x08, steps);
                         g_in_pm_irq = 0;
                     }
                     /* ── BRACKET THE FIRST ENTRIES (session 16, Doom) ────────────────────
@@ -8014,7 +8122,18 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                                   && dpmi_sel_is32((WORD)(VDM_REG(tib, VTIB_CS) & 0xFFFF)));
                           if (gate) {
                             g_in_pm_irq = 1;
+                            /* ► DRAIN WHAT IS OWED, NOT A FIXED SIXTY-FOUR. This loop used to
+                                 run the full DPMI_IRQ0_BATCH every time it was entered, with
+                                 nothing tying it to elapsed time -- so the client's clock ran
+                                 at the rate we happened to return from asynchronous
+                                 injections rather than the rate it programmed into the 8254.
+                                 Measured on Doom at 140 Hz: 169,032 ISR entries in 45 s
+                                 against 6,300 owed, i.e. a game running 27x too fast. The
+                                 batch is still worth having -- one SuspendThread round trip
+                                 should repay a whole backlog -- but the backlog is a COUNT,
+                                 and pm_tick_take() is where it lives. */
                             for (k = 0; k < DPMI_IRQ0_BATCH; ++k) {
+                                if (!pm_tick_take()) break;
                                 if (!dpmi_inject_pm_irq(&m, tib, 0x08, steps)) break;
                             }
                             g_in_pm_irq = 0;
