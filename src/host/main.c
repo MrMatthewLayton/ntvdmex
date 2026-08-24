@@ -3420,8 +3420,14 @@ static int modey_remap_init(void)
     for (i = 0; i < MODEY_NSEC; ++i) {
         g_yview[i] = MapViewOfFile(g_ysec[i], FILE_MAP_ALL_ACCESS, 0, 0, MODEY_WIN);
         if (!g_yview[i]) { modey_remap_log("host-side plane view FAILED", GetLastError()); return 0; }
-        /* Seed every plane with what was on screen, so nothing goes blank at the swap. */
-        { unsigned k; BYTE *d = (BYTE *)g_yview[i]; for (k = 0; k < MODEY_WIN; ++k) d[k] = savea[k]; }
+        /* ► SEED EVERY PLANE WITH A DISTINCT MARKER, NOT WITH THE APERTURE. Seeding all
+             four from the same flat buffer makes them IDENTICAL, and any region the guest
+             never writes per-plane then renders as four equal pixels -- indistinguishable
+             from the plane-collapse bug this whole change exists to remove. A per-plane
+             marker makes "never written" visible and attributable instead: the oracle
+             sees index 0/1/2/3 rather than a plausible picture. */
+        { unsigned k; BYTE *d = (BYTE *)g_yview[i];
+          for (k = 0; k < MODEY_WIN; ++k) d[k] = (BYTE)(i < 4 ? i : savea[k]); }
     }
     g_ycur = 4; g_yremap = 1;
     modey_remap_log("A0000 is ours: 4 planes + linear + scratch", 0);
@@ -9041,6 +9047,9 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
           p = zput(p, "="); p = zhex(p, g_vid.ysnap[i]);
           p = zput(p, "/nz="); p = zhex(p, g_vid.ynz[i]);
       }
+      p = zput(p, " wmode hist:");
+      for (i = 0; i < 4; ++i) { p = zput(p, " "); p = zhexb(p, (unsigned)i);
+                                p = zput(p, "x"); p = zhex(p, g_vid.wmode_hist[i]); }
       p = zput(p, " mapmask hist:");
       for (i = 0; i < 16; ++i)
           if (g_vid.mask_hist[i]) { p = zput(p, " 0x"); p = zhexb(p, (unsigned)i);

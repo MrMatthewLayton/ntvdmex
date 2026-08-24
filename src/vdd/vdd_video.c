@@ -971,7 +971,19 @@ static void gc_set_data(void *self, uint32_t v)
     case 1: st->enable_sr   = (uint8_t)(v & 0x0F); break;
     case 3: st->func_rotate = (uint8_t)(v & 0x1F); break;
     case 4: st->read_map    = (uint8_t)(v & 3);    break;
-    case 5: st->write_mode  = (uint8_t)(v & 3);    break;
+    case 5:
+        /* ► COUNT THE WRITE MODES. Per-plane backing can only serve write mode 0, where
+             a guest store is a plain byte into the selected plane. WRITE MODE 1 is a
+             LATCH COPY: reading an address loads all four planes into the VGA's latches
+             and the next store writes all four back at once. That is the standard mode-Y
+             trick for moving a region inside video memory without touching the CPU bus
+             four times -- and with A0000 pointing at ONE plane it collapses, because the
+             guest can only read and write the plane that happens to be mapped.
+             If a program uses it, the mapping approach cannot serve it and the fact has
+             to be visible rather than inferred. */
+        st->wmode_hist[v & 3]++;
+        st->write_mode  = (uint8_t)(v & 3);
+        break;
     case 8: st->bit_mask    = (uint8_t)v;          break;
     default: break;
     }

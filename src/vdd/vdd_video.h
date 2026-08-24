@@ -165,6 +165,7 @@ typedef struct video_state {
        so it reported four zeroes for every unchained run ever made. These are the
        arrays that actually carry a mode-Y frame. */
     uint32_t mask_hist[16];             /* map-mask values written, by value          */
+    uint32_t wmode_hist[4];             /* GC write modes selected (1 = LATCH COPY)   */
     uint32_t ysnap[4];                  /* snapshots taken into each mode-Y plane      */
     uint32_t ynz[4];                    /* busiest snapshot each plane ever received   */
 } video_state;
