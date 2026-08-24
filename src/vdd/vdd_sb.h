@@ -141,12 +141,41 @@ typedef struct sb_state {
          lap ago. Ring-sized shadow, no allocation, no I/O -- this runs on the audio
          thread. Rings larger than the shadow simply disable the check (counted). */
 #define SB_LAP_MAX 8192
+/* Peak-to-peak span, in raw DMA bytes, at or below which a block carries no audio. */
+#define SB_FLAT_RANGE 2
     uint8_t  lap_buf[SB_LAP_MAX];   /* what we read at each ring offset last lap    */
     uint32_t lap_len;               /* ring size currently being tracked (0 = off)  */
     uint32_t lap_seen;              /* bytes fetched since the ring was programmed  */
     uint32_t blk_same, blk_bytes;   /* accumulators for the block in progress       */
     uint32_t blocks_checked;        /* blocks that had a full previous lap to compare */
     uint32_t blocks_replayed;       /* ...of which >=90% identical: DMX never refilled */
+    /* ⚠ ...AND THAT LAST COMMENT IS A CONCLUSION, NOT A MEASUREMENT. "identical to one
+         lap earlier" is what a MISSING REFILL looks like -- and it is also what a
+         CORRECT refill looks like whenever the guest writes the same bytes again, which
+         for 8-bit PCM means every stretch of silence (0x80) and every sustained flat
+         tone. Doom's attract demo is quiet for long stretches, so a large fraction of
+         this counter may be the game being silent rather than the host losing data, and
+         the two need completely different work. The metric cannot separate them and
+         session 23 flagged the risk in prose without instrumenting it.
+         So classify each block by its own DYNAMIC RANGE as well: a block whose bytes
+         span almost no range carries no audio, and a "replay" verdict on it says
+         nothing. `replayed_loud` -- replayed AND carrying signal -- is the only one of
+         these numbers the defect claim can rest on. One min/max per byte, in a loop
+         that already runs. */
+    uint32_t blocks_flat;           /* blocks with essentially no dynamic range      */
+    uint32_t blocks_replayed_loud;  /* replayed AND not flat: the number that counts */
+    /* ── AND THE SHAPE OF THE FAILURE, WHICH A RATE CANNOT SHOW. ─────────────────
+         "32% of audible blocks are lap repeats" is the same number whether every
+         third block is stale (a race at the margin: our read head and DMX's write
+         head are too close, and the fix is the LEAD) or whether the run is fine
+         for a second and then replays forty blocks in a row (a STALL: something
+         stops DMX refilling at all for ~half a second, and the lead is irrelevant).
+         Those are different bugs. The run-length distribution separates them for
+         one comparison and one counter per block. */
+    uint32_t replay_run;            /* consecutive replayed-loud blocks, in progress */
+    uint32_t replay_runs[8];        /* run lengths 1,2,3,4-7,8-15,16-31,32-63,64+    */
+    uint32_t replay_run_max;
+    uint32_t blk_min, blk_max;      /* range accumulators for the block in progress  */
     uint32_t lap_same, lap_total;   /* byte-level rate, the live form of the 46%    */
     uint32_t lap_toobig;            /* rings larger than SB_LAP_MAX: check skipped  */
     uint32_t lap_off;               /* ring offset of the fetch in progress         */

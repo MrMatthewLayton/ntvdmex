@@ -53,6 +53,27 @@ typedef struct dma_state {
     dma_chan ch[8];
     uint8_t  ff[2];                 /* per-controller lo/hi byte-pointer flip-flop */
     uint8_t  cmd[2];                /* per-controller command register             */
+    /* ── DOES THE GUEST ASK US WHERE THE PLAY HEAD IS? ───────────────────────────
+         A double-buffering sound driver has two ways to decide which half of the
+         DMA ring is safe to write: count the block-completion IRQs, or READ THE
+         8237's CURRENT ADDRESS. If DMX does the latter then the fidelity of
+         cur_addr -- which advances on the AUDIO thread here, in whatever chunks
+         waveOut happens to ask for -- is load-bearing for every refill decision,
+         and a ring replay would be the guest writing where we told it to write.
+         If it never reads them, that whole family of causes is dead and the
+         refill must be driven by the IRQ count alone. Nothing distinguishes the
+         two today: SNDIO traces only the card's own ports, and the hot-port
+         histogram is empty for a protected-mode client. Three counters settle it. */
+    uint32_t rd_addr[8], rd_count[8];  /* guest reads of cur_addr / cur_count      */
+    uint32_t rd_status[2];             /* ...and of the status register (TC bits)  */
+    /* ⚠ A COUNT OF PORT READS IS NOT A COUNT OF POLLS. The 8237's count register is
+         16 bits behind an 8-bit port with a lo/hi flip-flop, so one poll is TWO
+         reads -- unless the guest issues a 16-bit IN, which `dma_in` currently
+         serves by ignoring the width and returning a single half. Dividing reads by
+         two to get a poll rate is an assumption about which of those is happening,
+         and the whole "DMX looks less often than blocks complete" reading rests on
+         it. Count the widths and let the run say. */
+    uint32_t rd_w1, rd_w2, rd_w4;      /* count-register reads by operand width    */
 } dma_state;
 
 /* Build the device descriptor to hand to vdd_bus_add(). */

@@ -242,6 +242,7 @@ static int16_t sb_fetch_sample(sb_state *st, int *ended)
           st->lap_len  = rlen;
           st->lap_seen = 0;
           st->blk_same = st->blk_bytes = 0;
+          st->blk_min  = 0xFFFFFFFFu; st->blk_max = 0;
           if (rlen > SB_LAP_MAX) ++st->lap_toobig;
       }
       st->lap_off = (rlen && rlen <= SB_LAP_MAX) ? (roff % rlen) : 0xFFFFFFFFu; }
@@ -258,6 +259,9 @@ static int16_t sb_fetch_sample(sb_state *st, int *ended)
             if (st->lap_seen >= st->lap_len) {
                 ++st->blk_bytes; ++st->lap_total;
                 if (st->lap_buf[o] == raw[i2]) { ++st->blk_same; ++st->lap_same; }
+                /* The block's own dynamic range, from the bytes already in hand. */
+                if (raw[i2] < st->blk_min) st->blk_min = raw[i2];
+                if (raw[i2] > st->blk_max) st->blk_max = raw[i2];
             }
             st->lap_buf[o] = raw[i2];
         }
@@ -322,10 +326,37 @@ uint32_t vdd_sb_render(sb_state *st, int16_t *out, uint32_t frames)
                offsets one lap ago means DMX never rewrote it and we played the
                previous lap's audio again -- one echo, 186 ms after the original. */
             if (st->blk_bytes) {
+                /* SB_FLAT_RANGE: 8-bit PCM silence is a run of 0x80, and DMX's own
+                   fades settle to it. A span this small cannot be audible content, so
+                   a "replay" verdict on such a block is uninformative either way --
+                   see the note in vdd_sb.h. */
+                int replayed = (st->blk_same * 10u >= st->blk_bytes * 9u);
+                int flat     = (st->blk_max - st->blk_min) <= SB_FLAT_RANGE;
                 ++st->blocks_checked;
-                if (st->blk_same * 10u >= st->blk_bytes * 9u) ++st->blocks_replayed;
+                if (replayed)          ++st->blocks_replayed;
+                if (flat)              ++st->blocks_flat;
+                if (replayed && !flat) ++st->blocks_replayed_loud;
+                /* Close the run on the first block that is NOT an audible repeat --
+                   flat blocks end it too, since a silent block carries no evidence
+                   either way and bridging across one would invent a longer run. */
+                if (replayed && !flat) {
+                    ++st->replay_run;
+                    if (st->replay_run > st->replay_run_max)
+                        st->replay_run_max = st->replay_run;
+                } else if (st->replay_run) {
+                    uint32_t r = st->replay_run, b2;
+                    if      (r < 4)  b2 = r - 1;          /* 1, 2, 3 exactly */
+                    else if (r < 8)  b2 = 3;
+                    else if (r < 16) b2 = 4;
+                    else if (r < 32) b2 = 5;
+                    else if (r < 64) b2 = 6;
+                    else             b2 = 7;
+                    ++st->replay_runs[b2];
+                    st->replay_run = 0;
+                }
             }
             st->blk_same = st->blk_bytes = 0;
+            st->blk_min = 0xFFFFFFFFu; st->blk_max = 0;
             st->irq_pending = 1;
             st->blocks++;
             vdd_raise_irq(st->bus, st->irq);

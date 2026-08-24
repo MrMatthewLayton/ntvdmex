@@ -168,7 +168,10 @@ static void dma_in(void *self, uint16_t port, uint8_t w, uint32_t *val)
 {
     dma_state *st = (dma_state *)self;
     int ctrl, reg, chan, i;
-    (void)w;
+    /* `w` is OBSERVED but still not acted on: the 8237 is an 8-bit device and every
+       read below returns one half through the flip-flop, which is faithful for the
+       `in al,dx` the BIOS and every driver we have seen use. It is recorded because
+       the poll RATE cannot be derived from the read count without knowing it. */
 
     if (port >= 0x80 && port <= 0x8F) {
         int c = dma_page_chan(port);
@@ -180,12 +183,19 @@ static void dma_in(void *self, uint16_t port, uint8_t w, uint32_t *val)
 
     if (reg < 8) {
         chan = (ctrl ? 4 : 0) + (reg >> 1);
+        if (reg & 1) {
+            ++st->rd_count[chan];
+            if      (w == 1) ++st->rd_w1;
+            else if (w == 2) ++st->rd_w2;
+            else             ++st->rd_w4;
+        } else ++st->rd_addr[chan];
         *val = (reg & 1) ? dma_read_half(st->ch[chan].cur_count, &st->ff[ctrl])
                          : dma_read_half(st->ch[chan].cur_addr,  &st->ff[ctrl]);
         return;
     }
     if (reg == 0x8) {                            /* status: TC bits 0-3, DRQ 4-7   */
         uint8_t s = 0;
+        ++st->rd_status[ctrl];
         for (i = 0; i < 4; ++i) {
             chan = (ctrl ? 4 : 0) + i;
             if (st->ch[chan].tc) s |= (uint8_t)(1 << i);
