@@ -3873,7 +3873,57 @@ static void modey_remap_wmode(void *ctx, int wm)
                     if (g_yprev_mask & (1 << p)) ((BYTE *)g_yview[p])[k] = ((BYTE *)g_yview[p])[src];
             }
             ++g_ylatch_ok;
-        } else ++g_ylatch_unsolved;
+        } else {
+            /* ── ⚠⚠ THE UNSOLVED PATH USED TO DROP THE BURST ENTIRELY. ────────────────
+                 The solver is 0-for-120: `dl` has never once been non-zero on a real
+                 run, so this branch IS the burst path, not an edge case. It counted the
+                 failure and did nothing -- and then the re-seed at the bottom of this
+                 function overwrote g_yseed with the scratch, which is the very
+                 comparison modey_remap_select()'s fan-out uses to decide what to
+                 propagate. So by the time the mask changed, every byte matched the seed
+                 and the fan-out copied NOTHING. Measured, and this is what sent me
+                 looking: `fanout_bar distinct=0` over a whole run while the burst
+                 instrument reported ~10,014 changed bytes.
+                 The guest computed those bytes and we threw them away.
+               ► WHAT WE CAN AND CANNOT PUT BACK. Write mode 1 gives each plane its OWN
+                 latched byte, and the scratch holds ONE byte per offset -- it cannot
+                 represent four latches, which is precisely why every inference scheme
+                 over it has failed and why the solver never succeeds. Recovering the
+                 true per-plane bytes needs the accesses themselves, and the A0000 page
+                 trap that would provide them is MEASURED TWICE ON THIS BOX TO FREEZE
+                 THE GUEST (see a000_protect) -- so that door is shut.
+                 What we can do is stop discarding: propagate the scratch byte to the
+                 planes the mask selected, exactly as the write-mode-0 fan-out does.
+                 For the 6 CONSTANT bursts a run (fills of 0x00) that is EXACTLY right.
+                 For the 114 copy bursts it is an approximation -- plane 0's source byte
+                 reaching all four -- but it puts the guest's own data where stale
+                 content sits today.
+               ⚠ THAT TRADE IS NOT SELF-EVIDENT: it swaps "stale in four planes" for
+                 "collapsed across four planes", and this project has been burned by
+                 reasoning about which wrong picture is less wrong. So it is judged on
+                 the WAD ORACLE (planejudge.py, plane-vs-STBAR), not on
+                 bar_planes_equal, which by construction gets WORSE when we fan out.
+               ⚠⚠ **AND IT WAS TRIED, MEASURED, AND NOT KEPT. DO NOT RE-APPLY IT.**
+                 Propagating the scratch byte to the selected planes here delivers the
+                 data -- `fanout_bar` band B went 0 -> 7352 writes over 192 distinct bar
+                 offsets -- and the WAD oracle says it buys NOTHING:
+                     plane 0  34.4% -> 34.9%      plane 2  29.8% -> 29.8%
+                     plane 1  70.7% -> 70.2%      plane 3  27.8% -> 27.6%
+                 Under a point either way, and it makes plane 1 -- the one plane that is
+                 mostly CORRECT -- slightly worse, by smearing plane 0's bytes across it.
+                 The informative part is what that implies: those 192 offsets were no
+                 more wrong before than after, so **the bytes we discard are not what is
+                 wrong with the status bar.** Session 23's refutation of the latch copy
+                 stands, though not for the reason it gave (it argued from which rows the
+                 bursts touch; the stronger argument is that delivering the data changes
+                 nothing).
+                 So keep DROPPING them, and keep COUNTING the drop, rather than shipping
+                 an approximation that would read to the next session like the latch path
+                 is handled. The real repair needs per-plane latch capture; see above for
+                 why the page trap cannot provide it on this hardware, which leaves the
+                 mode-12h-style interpreter as the only remaining candidate. */
+            ++g_ylatch_unsolved;
+        }
         /* ► WHAT IS A BURST, ACTUALLY? Two inference schemes have now failed on it --
              plausible page strides explained 71 of 120 (the shape of a lucky guess) and
              deriving the displacement from the copied run explained NONE. That second
