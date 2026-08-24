@@ -280,6 +280,26 @@ static volatile LONG g_irq0_pending = 0;    /* PIT raised IRQ0 (UI thread sets, 
 static uint32_t g_pit_syncs;
 static uint32_t g_pit_async_attempts;
 static LONG     g_pm_tick_owed_max;
+/* ── ...AND owed_max IS A HIGH-WATER MARK, NOT AN OCCUPANCY. ─────────────────────────
+     "owed_max = 0x40 = PM_TICK_OWED_MAX, the backlog is PERMANENTLY SATURATED" reads a
+     maximum as a steady state: ONE stall anywhere in 45 s pins it at the cap for the
+     rest of the run and it can never come back down. A saturated backlog and a backlog
+     that touched the cap once look identical in that number, and they mean opposite
+     things about whether delivery is keeping up.
+     So sample the DEPTH at every sync. Nine buckets, one increment, no lock. */
+static uint32_t g_pm_owed_hist[9];
+static void pm_owed_sample(LONG d)
+{
+    unsigned b = 0;
+    if      (d <= 0)  b = 0;
+    else if (d <  4)  b = (unsigned)d;          /* 1, 2, 3 exactly */
+    else if (d <  8)  b = 4;
+    else if (d < 16)  b = 5;
+    else if (d < 32)  b = 6;
+    else if (d < 64)  b = 7;
+    else              b = 8;
+    g_pm_owed_hist[b]++;
+}
 static volatile LONG g_pm_tick_owed = 0;
 static void irq0_latch(void)
 {
@@ -1030,6 +1050,34 @@ static int  dpmi_async_inject_pm(unsigned irq, CONTEXT *cx);
    VDM down" from a control where async was ON; if it never injects, that attribution
    was to a mechanism that was not running. */
 static LONG g_async_why = 0;
+/* ── ...AND `g_async_why` ALONE STILL CANNOT ANSWER THE QUESTION THAT MATTERS. ───────
+     It holds the LAST refusal, so a run can say "62 attempts, 56 delivered" and not say
+     which clause consumed the other six -- nor, far more importantly, what the refusal
+     PROFILE looks like when the sync rate itself is the binding constraint. Session 23
+     measured that tripling the attempt budget moved delivery by one tick per second:
+     the ceiling is not how often we ask, it is how often the guest is in an injectable
+     state, and "injectable" is a dozen different conditions wearing one number.
+     So keep the whole distribution, per LINE -- the timer and the Sound Blaster fail for
+     different reasons and averaging them together hides both. Three buckets need
+     OPPOSITE fixes and only a histogram tells them apart:
+       10  g_async_pm_active   an injection is still in flight -> the guest's ISR is slow
+                               to IRET, and MORE attempts can never help
+       21  vdd_pic_can_deliver IRQ0's in-service bit is still set -> we are not seeing the
+                               guest's EOI, which would be OUR bug, not a rate one
+       7/8 virtual-IF clear    the client has interrupts off -> only the cooperative path
+                               can ever deliver
+       14  host CS             the CPU thread was inside the HOST, not the client, when
+                               the clock asked -- the g_lock starvation showing up here
+     Bucket 0 is delivery. Two DWORDs per line per code is 1 KB of BSS, no lock (the
+     timer/UI thread is the only writer; a torn count would cost a unit, not a wrong
+     conclusion) and no I/O, so it costs nothing at the PIT's rate. */
+#define ASYNC_WHY_MAX 32
+static DWORD g_async_why_hist[8][ASYNC_WHY_MAX];
+static void async_why_note(unsigned irq, unsigned why)
+{
+    g_async_why = (LONG)why;
+    if (why < ASYNC_WHY_MAX) g_async_why_hist[irq & 7][why]++;
+}
 static volatile LONG g_async_pm_active = 0;  /* an async PM interrupt is in flight     */
 static DWORD g_async_pm_eip = 0, g_async_pm_esp = 0, g_async_pm_efl = 0;
 static WORD  g_async_pm_cs  = 0, g_async_pm_ss  = 0;
@@ -1040,6 +1088,33 @@ static DWORD g_async_pm_bail2 = 0;           /* PM async attempts that did not c
 static DWORD g_pm_watch[DPMI_WATCH_MAX];     /* linear addresses to watch (whitespace-separated) */
 static int   g_pm_nwatch      = 0;
 static DWORD g_pm_irq0_done   = 0;           /* cooperative injections that reached an IRET */
+/* ── THE OTHER HALF OF THE DELIVERY ACCOUNT. ─────────────────────────────────────────
+     `pit budget` reads "raises 144/s ... delivered 56/s" and concludes the guest's clock
+     runs at 39% of the rate it programmed. But `delivered` is g_async_inj_line[0] -- the
+     ASYNCHRONOUS arm only -- and the client's INT 08h handler is entered by TWO
+     mechanisms: that one, and the cooperative dpmi_inject_pm_irq() the PM loop runs (the
+     per-pass latch at #2b, and the catch-up batch on the catcher's return). Putting an
+     async-only counter next to `raises` invites reading it as the total, which is a
+     units error of exactly the kind that has cost this project rig runs before.
+     Count the cooperative arm per VECTOR and print both arms against `raises`, so the
+     line answers the question it appears to answer. */
+static DWORD g_pm_coop_line[8];
+/* ── WHICH INJECTION PATH ACTUALLY PRODUCES A REFILL? ────────────────────────────────
+     Measured: DMX polls the 8237's channel-1 CURRENT COUNT ~55 times a second (all
+     8-bit reads, so two per poll) while 82 DMA blocks complete -- and 32% of audible
+     blocks are lap repeats, which is the same fraction as the blocks that complete
+     without DMX ever having looked. 55/s is also, to within 1.5% in two separate runs,
+     the ASYNCHRONOUS arm's delivery rate -- while the cooperative arm delivers 79/s
+     more on top and the total is 135/s.
+     If that is a coincidence, DMX's poll rate is its own and the refill headroom is the
+     thing to attack. If it is not, then the two injection paths are NOT equivalent from
+     the guest's side -- a cooperative tick enters the same handler and does not produce
+     the same work -- and making them equivalent would take refills from 55/s to 135/s.
+     Two ratios agreeing is not a mechanism, so measure it directly: count the count-reads
+     that happen INSIDE a cooperative INT 08h. The handler runs synchronously within
+     dpmi_inject_pm_irq(), so a before/after snapshot of the counter brackets it exactly,
+     with no new plumbing into the device model. Near zero here confirms it. */
+static uint32_t g_coop_dma_polls;
 /* Cooperative delivery of DEVICE lines (2-7) to a PM client -- the retry the async
    path never had. `inj` is the interrupts that would previously have been LOST. */
 static DWORD g_pm_devirq_inj  = 0;
@@ -1097,11 +1172,15 @@ static int async_site_new(WORD cs, DWORD eip)
     g_async_nsite++;
     return 1;
 }
-static void async_early_bail(unsigned why)
+/* ► TAKES THE LINE NOW. It recorded the reason and threw away WHICH INTERRUPT was
+     refused, so the SB's losses and the timer's landed in the same number -- and those
+     two have different causes and different fixes (session 23 fixed the SB's by giving
+     the device lines a cooperative path; that would have been invisible here). */
+static void async_early_bail(unsigned irq, unsigned why)
 {
     char pb[96], *pq = pb;
     g_async_bail++;
-    g_async_why = (LONG)why;
+    async_why_note(irq, why);
     if (g_async_early_bail_logged++ > 4000) return;
     pq = zput(pq, "ASYNC-EARLY bail why="); pq = zhex(pq, (DWORD)why);
     pq = zput(pq, "\r\n"); log_append(LOG_PATH, pb, pq); serial_out(pb, pq);
@@ -1120,11 +1199,11 @@ static int async_inject_irq(unsigned irq)
          was indistinguishable from "the injector tried and bailed before it could say so".
          That is the difference between a measurement and an unread instrument, so give
          each early exit a why code (20+) and let async_early_bail() say it out loud. */
-    if (!g_hcpu || g_in_exec == 0) { async_early_bail(20); return 0; }
+    if (!g_hcpu || g_in_exec == 0) { async_early_bail(irq, 20); return 0; }
     /* Ask the PIC, exactly as the hardware would: is this line unmasked, and is nothing of
        equal or higher priority still in service? That is what stops us re-entering a handler
        that has not EOI'd yet -- the fault behind "press a key and everything hangs". */
-    if (!vdd_pic_can_deliver(&g_pic, (uint8_t)irq)) { g_async_nest_blocked++; async_early_bail(21); return 0; }
+    if (!vdd_pic_can_deliver(&g_pic, (uint8_t)irq)) { g_async_nest_blocked++; async_early_bail(irq, 21); return 0; }
     /* Never deliver a line the guest has not hooked. Its vector still points at our default
        IRET stub, which means no ISR is installed -- and on a real PC an unused line sits
        masked in the PIC, so nothing would arrive at all. Delivering anyway is not harmless:
@@ -1145,11 +1224,11 @@ static int async_inject_irq(unsigned irq)
       int rm_hooked = !(peekw(v0 * 4 + 2) == DOS_HDLR_SEG
                         && peekw(v0 * 4) == DOS_IRET_STUB_OFF);
       int pm_hooked = g_dpmi_pm && g_pm_int[0x08u + irq].client;
-      if (irq >= 2 && !rm_hooked && !pm_hooked) { async_early_bail(22); return 0; } }
-    if (SuspendThread(g_hcpu) == (DWORD)-1) { async_early_bail(23); return 0; }
+      if (irq >= 2 && !rm_hooked && !pm_hooked) { async_early_bail(irq, 22); return 0; } }
+    if (SuspendThread(g_hcpu) == (DWORD)-1) { async_early_bail(irq, 23); return 0; }
     { unsigned i; char *z = (char *)&cx; for (i = 0; i < sizeof cx; ++i) z[i] = 0; }
     cx.ContextFlags = CONTEXT_CONTROL | CONTEXT_SEGMENTS;
-    if (!GetThreadContext(g_hcpu, &cx)) { ResumeThread(g_hcpu); async_early_bail(24); return 0; }
+    if (!GetThreadContext(g_hcpu, &cx)) { ResumeThread(g_hcpu); async_early_bail(irq, 24); return 0; }
 
     efl = cx.EFlags;
     cs  = cx.SegCs & 0xFFFF;
@@ -1170,6 +1249,7 @@ static int async_inject_irq(unsigned irq)
         sq = zput(sq, " efl=0x"); sq = zhex(sq, efl);
         sq = zput(sq, " ms="); sq = zhex(sq, GetTickCount());
         sq = zput(sq, "\r\n"); log_append(LOG_PATH, sb2, sq); serial_out(sb2, sq);
+        async_why_note(irq, 27);                 /* accounted for, so the histogram sums */
         return 0;                                /* observed only -- the next tick injects */
     }
     /* ► PROTECTED MODE IS A DIFFERENT FRAME AND A DIFFERENT VECTOR TABLE, so it gets its
@@ -1180,13 +1260,22 @@ static int async_inject_irq(unsigned irq)
          code between entries" exactly, with nothing to keep in sync. */
     if (!(efl & EFLAGS_VM_BIT)) {
         g_async_why = 0;
-        if ((cs & 4) && dpmi_async_inject_pm(irq, &cx)) {
+        /* ► TWO EXITS USED TO LEAVE why=0, WHICH IS THE CODE FOR SUCCESS. A thread found
+             in PM on a GDT selector (we are inside the HOST, not the client) and a failed
+             SetThreadContext both returned ok=0 with why untouched, so a histogram keyed
+             on it would have booked them as deliveries. Give each its own code: 14 is the
+             one to watch, because "the CPU thread was in host code when the clock asked"
+             is exactly what g_lock starvation looks like from this side. */
+        if (!(cs & 4)) async_why_note(irq, 14);
+        else if (dpmi_async_inject_pm(irq, &cx)) {
             cx.ContextFlags = CONTEXT_CONTROL | CONTEXT_SEGMENTS;
             ok = SetThreadContext(g_hcpu, &cx) ? 1 : 0;
             if (ok) { vdd_pic_acknowledge(&g_pic, (uint8_t)irq);
                       if (irq == 0 || async_vec_is_our_stub(irq)) vdd_pic_eoi(&g_pic, (uint8_t)irq); }
             else    { g_async_pm_active = 0; }     /* never leave the flag set on failure */
+            async_why_note(irq, ok ? 0u : 13u);
         }
+        else async_why_note(irq, (unsigned)g_async_why);   /* the clause that said no */
         ResumeThread(g_hcpu);
         if (ok) { g_async_inj++; g_async_pm_inj++; g_async_inj_line[irq & 7]++; } else g_async_bail++;
         /* Log AFTER the resume, never while the guest is held -- and bounded, because this
@@ -1240,7 +1329,7 @@ static int async_inject_irq(unsigned irq)
          a why code like every other exit; async_early_bail's cap keeps it bounded. */
     if (!(efl & (0x200u | EFLAGS_VIF_BIT)) || cs == DOS_HDLR_SEG) {
         ResumeThread(g_hcpu);
-        async_early_bail((cs == DOS_HDLR_SEG) ? 26 : 25);
+        async_early_bail(irq, (cs == DOS_HDLR_SEG) ? 26 : 25);
         return 0;
     }
     ss = cx.SegSs & 0xFFFF; sp = cx.Esp & 0xFFFF; ip = cx.Eip & 0xFFFF;
@@ -1273,6 +1362,7 @@ static int async_inject_irq(unsigned irq)
     }
     ResumeThread(g_hcpu);
     if (ok) g_async_inj++; else g_async_bail++;
+    async_why_note(irq, ok ? 0u : 13u);     /* the V86 arm's only failure is SetThreadContext */
     /* Log AFTER the resume (never hold the guest suspended across file I/O). The IVT dump
        is the point: vectoring an IRQ the guest never hooked lands it in unowned ROM, which
        is exactly what happened first time out -- Skyroads ended up at F000:A390. Printing
@@ -2997,6 +3087,8 @@ static void host_pit_sync(void)
     }
     g_async_tried_this_sync = 0;        /* a fresh burst of raises gets one attempt */
     ++g_pit_syncs;
+    /* Before this sync's raises are added: how far behind had delivery fallen? */
+    pm_owed_sample(g_pm_tick_owed);
     delta = (ULONGLONG)(now.QuadPart - s_last.QuadPart);
     /* clocks = delta * 1193182 / freq, without overflowing: delta is small (microseconds). */
     { ULONGLONG clocks = (delta * PIT_INPUT_HZ) / (ULONGLONG)s_freq.QuadPart;
@@ -6868,8 +6960,15 @@ static int dpmi_inject_pm_irq(dos_machine_t *mp, volatile BYTE *tib, unsigned iv
         aq = zput(aq, ")\r\n");
         log_append(LOG_PATH, ab2, aq); serial_out(ab2, aq);
     }
+    /* ► NAME THE VECTOR. This line said "IRQ0" whatever it had just injected, and since
+         session 23 gave the DEVICE lines a cooperative path it is used for IRQ5 too --
+         so counting these lines to measure the TIMER's delivery over-counts by however
+         much the Sound Blaster contributed. Same fault as ASYNC-PM's hardcoded
+         "vec=0x08", one function over, and the same fix. */
+    if (iv <= 0x0F) g_pm_coop_line[iv & 7]++;
     { char cb2[128], *cq = cb2;
-      cq = zput(cq, "  IRQ0<-PM INT done="); cq = zhex(cq, (DWORD)done);
+      cq = zput(cq, "  PMIRQ vec=0x"); cq = zhexb(cq, iv);
+      cq = zput(cq, " done="); cq = zhex(cq, (DWORD)done);
       cq = zput(cq, " phases="); cq = zhex(cq, (DWORD)ph);
       cq = zput(cq, " ticks="); cq = zhex(cq, ++g_pm_irq0_done);
       for (wi = 0; wi < g_pm_nwatch; ++wi) {
@@ -8439,11 +8538,13 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                     if (g_pm_irq0_latch && g_dpmi_vi && g_pm_int[0x08].client && !g_in_pm_irq
                         && !g_pm_noirq && !g_async_pm_active
                         && (GetTickCount() - g_pm_vec8_armed_ms) >= DPMI_IRQ0_ARM_QUIET_MS) {
+                        uint32_t pre8 = g_dma.rd_count[1];
                         g_pm_irq0_latch = 0;
                         g_in_pm_irq = 1;
                         if (g_pm_tick_owed > 0 && dpmi_inject_pm_irq(&m, tib, 0x08, steps))
                             InterlockedDecrement(&g_pm_tick_owed);
                         g_in_pm_irq = 0;
+                        g_coop_dma_polls += g_dma.rd_count[1] - pre8;
                     }
                     /* ── AND THE KEYBOARD, WHICH HAD NO COOPERATIVE PATH AT ALL. ─────────
                          IRQ0 has had one since #2b; IRQ1 had only the asynchronous
@@ -8874,6 +8975,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                         { int k = -1, gate;
                           gate = (g_dpmi_client32 && g_pm_app_hooked_timer && !g_pm_noirq
                                   && dpmi_sel_is32((WORD)(VDM_REG(tib, VTIB_CS) & 0xFFFF)));
+                          uint32_t preb = g_dma.rd_count[1];
                           if (gate) {
                             g_in_pm_irq = 1;
                             /* ► DRAIN WHAT IS OWED, NOT A FIXED SIXTY-FOUR. This loop used to
@@ -8904,6 +9006,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                             }
                             g_in_pm_irq = 0;
                           }
+                          g_coop_dma_polls += g_dma.rd_count[1] - preb;
                           { char bb[160], *bq = bb;
                             bq = zput(bq, "  BATCH gate="); bq = zhex(bq, (DWORD)gate);
                             bq = zput(bq, " k="); bq = zhex(bq, (DWORD)k);
@@ -9289,6 +9392,22 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             p = zhex(p, g_sb.blocks_replayed * 100u / g_sb.blocks_checked);
             p = zput(p, "% of blocks, decimal-in-hex)");
         }
+        /* ► ...AND HOW MANY OF THOSE BLOCKS CARRIED ANY AUDIO. A silent block is
+             identical to the previous lap when the guest refills it CORRECTLY, so
+             `REPLAYED` on its own cannot support "DMX never refilled it". Only
+             REPLAYED_LOUD can, and its denominator is the non-flat blocks. */
+        p = zput(p, " flat=");          p = zhex(p, g_sb.blocks_flat);
+        p = zput(p, " REPLAYED_LOUD="); p = zhex(p, g_sb.blocks_replayed_loud);
+        if (g_sb.blocks_checked > g_sb.blocks_flat) {
+            p = zput(p, " (");
+            p = zhex(p, g_sb.blocks_replayed_loud * 100u
+                        / (g_sb.blocks_checked - g_sb.blocks_flat));
+            p = zput(p, "% of NON-FLAT blocks, decimal-in-hex)");
+        }
+        p = zput(p, " runs[1,2,3,4-7,8-15,16-31,32-63,64+]=");
+        { unsigned rb; for (rb = 0; rb < 8; ++rb)
+            { p = zput(p, rb ? "," : ""); p = zhex(p, g_sb.replay_runs[rb]); } }
+        p = zput(p, " run_max="); p = zhex(p, g_sb.replay_run_max);
         p = zput(p, " byte_lap_same="); p = zhex(p, g_sb.lap_same);
         p = zput(p, "/");              p = zhex(p, g_sb.lap_total);
         p = zput(p, " ring=");         p = zhex(p, g_sb.lap_len);
@@ -9300,6 +9419,82 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         p = zput(p, " delivered="); p = zhex(p, g_async_inj_line[0]);
         p = zput(p, " owed_max=");  p = zhex(p, (DWORD)g_pm_tick_owed_max);
         p = zput(p, " ui_gap_us="); p = zhex(p, g_ui_gap_us);
+        p = zput(p, "\r\n");
+        /* ► THE WHOLE DELIVERY ACCOUNT, IN ONE LINE, IN THE UNITS OF THE CLAIM. `raises`
+             is what the 8254 generated; `async` is the SuspendThread arm; `coop` is the
+             PM loop's own injections (the #2b latch plus the catch-up batch). Only the
+             SUM can be compared with `raises`, and the pit budget line above shows only
+             the first of the two -- which is how "we deliver 39% of the ticks Doom asked
+             for" was read off an async-only counter. owed_now is the live depth, and the
+             histogram behind it says how often the backlog was actually deep. */
+        p = zput(p, "STAGE2: isr08 delivery: raises=");  p = zhex(p, g_irq_raised[0]);
+        p = zput(p, " async=");   p = zhex(p, g_async_inj_line[0]);
+        p = zput(p, " coop=");    p = zhex(p, g_pm_coop_line[0]);
+        p = zput(p, " TOTAL=");   p = zhex(p, g_async_inj_line[0] + g_pm_coop_line[0]);
+        if (g_irq_raised[0])
+            { p = zput(p, " (");
+              p = zhex(p, (g_async_inj_line[0] + g_pm_coop_line[0]) * 100u / g_irq_raised[0]);
+              p = zput(p, "% of raises, decimal-in-hex)"); }
+        p = zput(p, " owed_now="); p = zhex(p, (DWORD)g_pm_tick_owed);
+        p = zput(p, " owed_depth_at_sync[0,1,2,3,4-7,8-15,16-31,32-63,64]=");
+        { unsigned ob; for (ob = 0; ob < 9; ++ob)
+            { p = zput(p, ob ? "," : ""); p = zhex(p, g_pm_owed_hist[ob]); } }
+        p = zput(p, "\r\nSTAGE2: coop per IRQ:");
+        { unsigned cl; for (cl = 0; cl < 8; ++cl)
+            { if (!g_pm_coop_line[cl]) continue;
+              p = zput(p, " irq"); p = zhexb(p, cl);
+              p = zput(p, "=");    p = zhex(p, g_pm_coop_line[cl]); } }
+        p = zput(p, "\r\n");
+        /* ► WHICH CLAUSE SAID NO, PER LINE. `attempts` and `delivered` above give the
+             shortfall as one subtraction and no reason for it; this names every refusal.
+             Read bucket 14 (the CPU thread was in HOST code) against 10 (an injection
+             still in flight) and 7/8 (the client has interrupts off) -- they need three
+             completely different fixes, and session 23 spent a rig run on the one fix
+             that could not have helped any of them. Flushed first, deliberately: `base`
+             points past the preamble, so report[] has well under 8 KB of headroom and
+             the sbblk ledger below eats most of what is left. */
+        { unsigned wl, wc;
+          static const char *const whyname[ASYNC_WHY_MAX] = {
+            "DELIVERED","badvec","in_pm_irq","pm_noirq","no_catcher","unhooked_pm",
+            "no_app_timer","vIF_off","IF_off","arm_quiet","IN_FLIGHT","host_stack",
+            "not32","setctx_fail","HOST_CS","?f","?10","?11","?12","?13",
+            "not_in_exec","pic_refuse","unhooked","suspend_fail","getctx_fail",
+            "v86_IF_off","in_our_hdlr","observed","?1c","?1d","?1e","?1f" };
+          log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+          for (wl = 0; wl < 8; ++wl) {
+              unsigned tot = 0;
+              for (wc = 0; wc < ASYNC_WHY_MAX; ++wc) tot += g_async_why_hist[wl][wc];
+              if (!tot) continue;
+              p = zput(p, "STAGE2: async why irq"); p = zhexb(p, wl);
+              p = zput(p, " total=");               p = zhex(p, tot);
+              for (wc = 0; wc < ASYNC_WHY_MAX; ++wc) {
+                  if (!g_async_why_hist[wl][wc]) continue;
+                  p = zput(p, " "); p = zput(p, whyname[wc]);
+                  p = zput(p, "="); p = zhex(p, g_async_why_hist[wl][wc]);
+              }
+              p = zput(p, "\r\n");
+              /* Bound against report[] itself, not p - base: see the sbblk loop below. */
+              if ((size_t)(p - report) > sizeof report - 512) {
+                  log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+              }
+          }
+          log_append(LOG_PATH, base, p); serial_out(base, p); p = base; }
+        /* ► DOES DMX ASK US WHERE THE PLAY HEAD IS? See the note in vdd_dma.h. A
+             nonzero rd_addr on the SB's channel means every refill decision the guest
+             makes is downstream of our cur_addr, which advances on the audio thread in
+             whatever chunk size waveOut asked for. Zero means that whole family of
+             causes is dead and the refill is driven by the IRQ count alone. */
+        p = zput(p, "STAGE2: 8237 guest reads: ch1_addr="); p = zhex(p, g_dma.rd_addr[1]);
+        p = zput(p, " ch1_count=");  p = zhex(p, g_dma.rd_count[1]);
+        p = zput(p, " ch5_addr=");   p = zhex(p, g_dma.rd_addr[5]);
+        p = zput(p, " ch5_count=");  p = zhex(p, g_dma.rd_count[5]);
+        p = zput(p, " status0=");    p = zhex(p, g_dma.rd_status[0]);
+        p = zput(p, " status1=");    p = zhex(p, g_dma.rd_status[1]);
+        p = zput(p, " count_rd_by_width w1="); p = zhex(p, g_dma.rd_w1);
+        p = zput(p, " w2=");                   p = zhex(p, g_dma.rd_w2);
+        p = zput(p, " w4=");                   p = zhex(p, g_dma.rd_w4);
+        /* ...and how many of those reads DMX made from inside a COOPERATIVE tick. */
+        p = zput(p, " from_coop_isr08=");      p = zhex(p, g_coop_dma_polls);
         p = zput(p, "\r\nSTAGE2: devirq (cooperative PM retry): inj=");
         p = zhex(p, g_pm_devirq_inj);
         p = zput(p, " fail=");  p = zhex(p, g_pm_devirq_fail);
