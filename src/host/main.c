@@ -7051,6 +7051,34 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     p = zhex(p, img.cs); p = zput(p, ":0x"); p = zhex(p, img.ip); p = zput(p, ")...\r\n");
     log_write(LOG_PATH, report, p);
     base = p;                       /* preamble is on disk; the loop appends from here */
+    /* ── CAN THE A0000 WINDOW BE REMAPPED? THE ONE FACT THE REAL VIDEO FIX NEEDS. ────
+         Mode Y cannot be de-interleaved from a flat aperture: A0000 is one buffer, so
+         a guest write lands there with no record of which plane the map mask selected,
+         and six after-the-fact rules have now been measured against captured frames
+         without finding a good one (see modey_flush()). The fix is to stop guessing --
+         give each plane its own backing and point A0000 at the selected one on a mask
+         change, with four pagefile-backed sections and MapViewOfFileEx at a fixed
+         address: O(1) per change, exact, no copying.
+         Whether that is possible at all turns on ONE thing: is A0000 its own
+         allocation, or a slice of a larger reservation the VDM kernel made? A section
+         cannot be mapped into the middle of an existing reservation, and MEM_RELEASE
+         only takes a whole allocation. VirtualQuery answers it for the cost of one log
+         line, and it is worth far more than another guess at a heuristic. */
+    { MEMORY_BASIC_INFORMATION mbi;
+      if (VirtualQuery((LPCVOID)(ULONG_PTR)0xA0000, &mbi, sizeof mbi) == sizeof mbi) {
+          p = zput(p, "STAGE2: A0000 region: alloc_base=0x");
+          p = zhex(p, (DWORD)(ULONG_PTR)mbi.AllocationBase);
+          p = zput(p, " base=0x");   p = zhex(p, (DWORD)(ULONG_PTR)mbi.BaseAddress);
+          p = zput(p, " size=0x");   p = zhex(p, (DWORD)mbi.RegionSize);
+          p = zput(p, " state=0x");  p = zhex(p, mbi.State);
+          p = zput(p, " type=0x");   p = zhex(p, mbi.Type);
+          p = zput(p, " prot=0x");   p = zhex(p, mbi.Protect);
+          p = zput(p, " allocprot=0x"); p = zhex(p, mbi.AllocationProtect);
+          p = zput(p, (mbi.AllocationBase == (LPVOID)(ULONG_PTR)0xA0000)
+                        ? "  -> OWN ALLOCATION: remappable\r\n"
+                        : "  -> inside a larger reservation: NOT remappable in place\r\n");
+          log_append(LOG_PATH, base, p); p = base;
+      } }
     { char bb2[160], *bq = bb2;
       bq = zput(bq, g_bus.claim_fail ? "STAGE2: *** BUS CLAIMS REFUSED: " : "STAGE2: bus ok: ");
       bq = zhex(bq, (DWORD)g_bus.claim_fail);
