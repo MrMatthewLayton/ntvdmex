@@ -107,6 +107,16 @@ typedef struct video_state {
     uint8_t  yshadow[VID_Y_PLANE];     /* the aperture as of the last plane flush   */
     uint8_t  crtc_seen;                /* the guest has written a CRTC start address */
     uint32_t modey_gap;                /* mode-Y run coalescing slack, in dwords     */
+    /* ── OPTIONAL: PER-PLANE BACKING SUPPLIED BY THE HOST. ───────────────────────
+         When these are set, the guest's A0000 window IS whichever plane the map mask
+         selects -- the host swaps the mapping on a mask change -- so a guest write
+         lands in the right plane and there is nothing to de-interleave afterwards.
+         `select` is called with the NEW mask, or -1 for chained/linear; `plane`
+         returns a host-side view of a plane, valid whatever is mapped at A0000.
+         Left null, the VDD falls back to modey_flush()'s heuristic. */
+    void    *ymap_ctx;
+    void   (*ymap_select)(void *ctx, int mask);
+    uint8_t *(*ymap_plane)(void *ctx, int p);
     uint8_t  write_mode;   /* GR5 bits0-1                                          */
     uint8_t  bit_mask;     /* GR8 (reset 0xFF)                                     */
     uint8_t  latch[4];     /* per-plane read latches                               */

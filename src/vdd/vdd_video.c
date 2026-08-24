@@ -929,14 +929,24 @@ static void seq_set_data(void *self, uint32_t v)
         st->mask_hist[v & 0x0F]++;
         /* A mask change is the moment the outgoing plane's data is complete. */
         /* Flush BEFORE the mask moves: everything written since the last flush
-           belongs to the mask that is now going out. */
-        if (!st->chain4 && (uint8_t)(v & 0x0F) != st->y_mask) modey_flush(st);
+           belongs to the mask that is now going out. With host-supplied per-plane
+           backing there is nothing to flush -- the write already went to the right
+           plane -- and all that is needed is to point the window at the new one. */
+        if (!st->chain4 && (uint8_t)(v & 0x0F) != st->y_mask) {
+            if (st->ymap_select) st->ymap_select(st->ymap_ctx, (int)(v & 0x0F));
+            else                 modey_flush(st);
+            st->dirty = 1;
+        }
         st->map_mask = (uint8_t)(v & 0x0F);
         st->y_mask   = st->map_mask;
     }
     else if (st->seq_index == 4) {                 /* Memory Mode: bit 3 = Chain-4 */
         uint8_t c4 = (uint8_t)((v >> 3) & 1);
-        if (c4 != st->chain4) { st->chain4 = c4; st->y_mask = st->map_mask; st->dirty = 1; }
+        if (c4 != st->chain4) {
+            st->chain4 = c4; st->y_mask = st->map_mask;
+            if (st->ymap_select) st->ymap_select(st->ymap_ctx, c4 ? -1 : (int)st->map_mask);
+            st->dirty = 1;
+        }
     }
 }
 static void seq_in(void *self, uint16_t port, uint8_t w, uint32_t *v)
@@ -1206,13 +1216,16 @@ static void render_modey(video_state *st)
        written most recently, so reading it for the selected plane pulls in another
        plane's pixels -- which is the same error as the whole-aperture copy, wearing a
        different hat. modey_flush() has already moved everything that was written. */
-    modey_flush(st);
+    if (!st->ymap_plane) modey_flush(st);
     { int y, x2;
+      const uint8_t *pl[4];
+      for (x2 = 0; x2 < 4; ++x2)
+          pl[x2] = st->ymap_plane ? st->ymap_plane(st->ymap_ctx, x2) : st->yplane[x2];
       for (y = 0; y < st->gh; ++y) {
           uint32_t row = start + (uint32_t)y * pitch;
           uint8_t *dst = st->fb + (uint32_t)y * st->gw;
           for (x2 = 0; x2 < st->gw; ++x2)
-              dst[x2] = st->yplane[x2 & 3][(row + ((uint32_t)x2 >> 2)) & (VID_Y_PLANE - 1u)];
+              dst[x2] = pl[x2 & 3][(row + ((uint32_t)x2 >> 2)) & (VID_Y_PLANE - 1u)];
       } }
 }
 

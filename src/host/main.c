@@ -53,6 +53,10 @@
 /* Mode-Y de-interleave tuning; see modey_flush() in vdd_video.c. Contents = the run
    coalescing slack in dwords. Absent = the built-in default. */
 #define MODEY_PATH "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\modey.txt"
+/* Per-plane backing for mode Y is ON by default -- see the MODE-Y PLANE BACKING block.
+   This file DISABLES it and falls back to the de-interleave heuristic, which is worth
+   keeping only because it is what a machine that refuses the remap will use. */
+#define NOREMAP_FLAG "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\noremap.flag"
 /* Diagnostic knob: disable the mode-12h A0000 NOACCESS trap. With it off, planar
    writes land in the raw aperture instead of the VGA engine, so the PICTURE will
    be wrong -- the question it answers is whether the guest EXECUTES AT ALL.
@@ -3268,6 +3272,202 @@ static int host_try_io_pm(volatile BYTE *tib, vdd_bus *bus)
     host_io_loop_burst(tib, bus, (volatile const BYTE *)(ULONG_PTR)dpmi_sel_base((WORD)csv),
                        eip_off + len, eip_off, port, is_in, width, is32);
     return 1;
+}
+
+/* ══ MODE-Y PLANE BACKING: POINT A0000 AT THE PLANE THE MASK SELECTS ═════════════════
+ *
+ *  Mode Y cannot be de-interleaved after the fact. The A0000 aperture is one flat
+ *  buffer, so a guest write lands there with no record of which plane the map mask had
+ *  selected, and six reconstruction rules were measured against captured frames without
+ *  finding a good one -- every one trades horizontal resolution against stale content
+ *  (see modey_flush() in vdd_video.c for the numbers). The information is simply not in
+ *  the aperture.
+ *
+ *  So stop reconstructing it: give each plane its own memory and make A0000 BE the
+ *  selected plane. A guest write then lands in the right plane by construction, and the
+ *  renderer reads four planes that were never mixed.
+ *
+ *  ► THIS IS ONLY POSSIBLE BECAUSE A0000 IS ITS OWN ALLOCATION. Measured:
+ *        A0000 region: alloc_base=0xa0000 size=0x20000 type=MEM_MAPPED
+ *    AllocationBase IS 0xA0000 and it is already a section view, so it can be unmapped
+ *    and replaced. A section cannot be mapped into the middle of a larger reservation,
+ *    and that is what would have killed this idea.
+ *
+ *  ► THE WINDOW IS 128K AND ONLY THE FIRST HALF IS PLANAR. B0000-BFFFF is the text and
+ *    mono window -- B8000 is the colour text page the VDD reads through `vmem+0x18000`
+ *    -- so it gets its own section, mapped once and left alone. Unmapping the original
+ *    view frees all 128K, so B0000 has to be re-established and its CONTENTS RESTORED
+ *    before anything looks at them.
+ *
+ *  ► A MULTI-PLANE MASK CANNOT BE ONE MAPPING. Doom writes 0x0F 107 times a run, for
+ *    its screen clear. Those windows get a scratch section, and its contents are fanned
+ *    out to every plane the mask selected when the mask next moves.
+ *
+ *  ► REMAPPING HAPPENS ONLY ON THE CPU THREAD, inside the I/O trap that serviced the
+ *    map-mask write, i.e. with the guest stopped. The renderer runs on the UI thread and
+ *    only ever READS the host-side views, which stay mapped whatever is at A0000.
+ */
+#define MODEY_WIN   0x10000u                 /* 64K: A0000..AFFFF and B0000..BFFFF   */
+#define MODEY_NSEC  6                        /* 0-3 planes, 4 chained/linear, 5 scratch */
+static HANDLE g_ysec[MODEY_NSEC];
+static void  *g_yview[MODEY_NSEC];           /* host-side views, always mapped       */
+static HANDLE g_bsec;
+static int    g_yremap      = 0;             /* the window is ours                   */
+static int    g_ycur        = -1;            /* section index currently at A0000     */
+static int    g_yprev_mask  = 0;             /* mask live while the scratch was up   */
+static DWORD  g_yswaps = 0, g_yfanouts = 0, g_yfail = 0;
+
+/* VirtualQuery a probe address into the log -- the shape of the A0000 region after each
+   step is the only thing that distinguishes "the range is reserved by the VDM" from
+   "we asked for it wrongly", and those need completely different answers. */
+static void modey_remap_probe(const char *when, DWORD addr)
+{
+    MEMORY_BASIC_INFORMATION mbi;
+    char b[200], *q = b;
+    q = zput(q, "MODEY-REMAP probe "); q = zput(q, when);
+    q = zput(q, " @0x"); q = zhex(q, addr);
+    if (VirtualQuery((LPCVOID)(ULONG_PTR)addr, &mbi, sizeof mbi) == sizeof mbi) {
+        q = zput(q, " allocbase=0x"); q = zhex(q, (DWORD)(ULONG_PTR)mbi.AllocationBase);
+        q = zput(q, " base=0x");      q = zhex(q, (DWORD)(ULONG_PTR)mbi.BaseAddress);
+        q = zput(q, " size=0x");      q = zhex(q, (DWORD)mbi.RegionSize);
+        q = zput(q, " state=0x");     q = zhex(q, mbi.State);
+        q = zput(q, " type=0x");      q = zhex(q, mbi.Type);
+        q = zput(q, mbi.State == MEM_FREE     ? " (FREE)"
+                  : mbi.State == MEM_RESERVE  ? " (RESERVED)" : " (COMMIT)");
+    } else q = zput(q, " <VirtualQuery failed>");
+    q = zput(q, "\r\n"); log_append(LOG_PATH, b, q); serial_out(b, q);
+}
+
+/* ► THE REPORT IS BUFFERED, BECAUSE THIS RUNS BEFORE THE PREAMBLE. The remap has to
+     happen before the UI thread exists -- the renderer dereferences the A0000 window
+     every few milliseconds and there is an instant during the swap when it is unmapped
+     -- and every log_write() before the preamble TRUNCATES the file. Two separate
+     reports have already been lost to that. */
+static char  g_remap_rep[2048];
+static char *g_remap_repq = g_remap_rep;
+static void modey_remap_emit(const char *b, const char *e)
+{
+    while (b < e && g_remap_repq < g_remap_rep + sizeof g_remap_rep - 1) *g_remap_repq++ = *b++;
+    *g_remap_repq = 0;
+}
+static void modey_remap_flush_report(void)
+{
+    if (g_remap_repq == g_remap_rep) return;
+    log_append(LOG_PATH, g_remap_rep, g_remap_repq);
+    serial_out(g_remap_rep, g_remap_repq);
+    g_remap_repq = g_remap_rep;
+}
+static void modey_remap_log(const char *what, DWORD err)
+{
+    char b[160], *q = b;
+    q = zput(q, "MODEY-REMAP "); q = zput(q, what);
+    if (err) { q = zput(q, " err=0x"); q = zhex(q, err); }
+    q = zput(q, "\r\n"); modey_remap_emit(b, q);
+}
+
+/* Take ownership of the A0000 window. Returns 0 and leaves everything as it was if any
+   step fails -- the heuristic path still works, so a failure here must not be fatal. */
+static int modey_remap_init(void)
+{
+    static BYTE savea[MODEY_WIN], saveb[MODEY_WIN];
+    unsigned i;
+    for (i = 0; i < MODEY_WIN; ++i) savea[i] = ((volatile BYTE *)(ULONG_PTR)0xA0000)[i];
+    for (i = 0; i < MODEY_WIN; ++i) saveb[i] = ((volatile BYTE *)(ULONG_PTR)0xB0000)[i];
+
+    modey_remap_probe("before unmap", 0xA0000);
+    if (!UnmapViewOfFile((LPVOID)(ULONG_PTR)0xA0000)) {
+        modey_remap_log("unmap of the original A0000 view FAILED", GetLastError());
+        return 0;
+    }
+    modey_remap_probe("after unmap", 0xA0000);
+    /* Text memory first: it must be back before anything reads B8000. */
+    g_bsec = CreateFileMappingA(INVALID_HANDLE_VALUE, NULL, PAGE_EXECUTE_READWRITE,
+                                0, MODEY_WIN, NULL);
+    if (!g_bsec || !MapViewOfFileEx(g_bsec, FILE_MAP_ALL_ACCESS | FILE_MAP_EXECUTE,
+                                    0, 0, MODEY_WIN, (LPVOID)(ULONG_PTR)0xB0000)) {
+        modey_remap_log("could not re-establish B0000 -- text memory is GONE", GetLastError());
+        return 0;
+    }
+    for (i = 0; i < MODEY_WIN; ++i) ((volatile BYTE *)(ULONG_PTR)0xB0000)[i] = saveb[i];
+
+    /* ► CLAIM A0000 BEFORE ASKING FOR ANY FLOATING VIEW. Unmapping the original view
+         makes A0000-AFFFF the LOWEST FREE 64K-aligned hole in the address space, and
+         MapViewOfFile with no address hint takes the lowest hole -- so the first
+         host-side view landed exactly on the address we were about to need, and the
+         fixed map then failed with ERROR_INVALID_ADDRESS against our own mapping.
+         Measured, and it reads as though the range were forbidden:
+             after unmap      A0000 size=0x20000 (FREE)
+             after failed map A0000 size=0x10000 (COMMIT, MEM_MAPPED)  <- ours
+         Take the fixed address first; everything else can live anywhere. */
+    for (i = 0; i < MODEY_NSEC; ++i) {
+        g_ysec[i] = CreateFileMappingA(INVALID_HANDLE_VALUE, NULL, PAGE_EXECUTE_READWRITE,
+                                       0, MODEY_WIN, NULL);
+        if (!g_ysec[i]) { modey_remap_log("plane section allocation FAILED", GetLastError()); return 0; }
+    }
+    if (!MapViewOfFileEx(g_ysec[4], FILE_MAP_ALL_ACCESS | FILE_MAP_EXECUTE,
+                         0, 0, MODEY_WIN, (LPVOID)(ULONG_PTR)0xA0000)) {
+        modey_remap_log("could not map a replacement at A0000", GetLastError());
+        modey_remap_probe("after failed map", 0xA0000);
+        return 0;
+    }
+    for (i = 0; i < MODEY_NSEC; ++i) {
+        g_yview[i] = MapViewOfFile(g_ysec[i], FILE_MAP_ALL_ACCESS, 0, 0, MODEY_WIN);
+        if (!g_yview[i]) { modey_remap_log("host-side plane view FAILED", GetLastError()); return 0; }
+        /* Seed every plane with what was on screen, so nothing goes blank at the swap. */
+        { unsigned k; BYTE *d = (BYTE *)g_yview[i]; for (k = 0; k < MODEY_WIN; ++k) d[k] = savea[k]; }
+    }
+    g_ycur = 4; g_yremap = 1;
+    modey_remap_log("A0000 is ours: 4 planes + linear + scratch", 0);
+    return 1;
+}
+
+static void modey_remap_select(void *ctx, int mask)
+{
+    int want, p, n = 0, sel[4];
+    (void)ctx;
+    if (!g_yremap) return;
+
+    /* Close the previous window: a multi-plane mask wrote to the scratch, and every
+       plane it selected owns that data. */
+    if (g_ycur == 5 && g_yprev_mask) {
+        for (p = 0; p < 4; ++p)
+            if (g_yprev_mask & (1 << p)) {
+                unsigned k; BYTE *d = (BYTE *)g_yview[p]; const BYTE *s2 = (const BYTE *)g_yview[5];
+                for (k = 0; k < MODEY_WIN; ++k) d[k] = s2[k];
+            }
+        ++g_yfanouts;
+    }
+    if (mask < 0) { want = 4; g_yprev_mask = 0; }
+    else {
+        for (p = 0; p < 4; ++p) if (mask & (1 << p)) sel[n++] = p;
+        if (!n) return;                                  /* mask 0: nothing to point at */
+        want = (n == 1) ? sel[0] : 5;
+        g_yprev_mask = (n == 1) ? 0 : mask;
+    }
+    if (want == g_ycur) return;
+    if (!UnmapViewOfFile((LPVOID)(ULONG_PTR)0xA0000)) { ++g_yfail; return; }
+    if (want == 5) {                                     /* seed the scratch so a
+                                                            read-modify-write sees data */
+        unsigned k; BYTE *d = (BYTE *)g_yview[5]; const BYTE *s2 = (const BYTE *)g_yview[sel[0]];
+        for (k = 0; k < MODEY_WIN; ++k) d[k] = s2[k];
+    }
+    if (!MapViewOfFileEx(g_ysec[want], FILE_MAP_ALL_ACCESS | FILE_MAP_EXECUTE,
+                         0, 0, MODEY_WIN, (LPVOID)(ULONG_PTR)0xA0000)) {
+        ++g_yfail;
+        /* Never leave the window unmapped: put SOMETHING back or the guest's next
+           store faults into a hole. */
+        MapViewOfFileEx(g_ysec[g_ycur < 0 ? 4 : g_ycur], FILE_MAP_ALL_ACCESS | FILE_MAP_EXECUTE,
+                        0, 0, MODEY_WIN, (LPVOID)(ULONG_PTR)0xA0000);
+        return;
+    }
+    g_ycur = want;
+    ++g_yswaps;
+}
+
+static uint8_t *modey_remap_plane(void *ctx, int p)
+{
+    (void)ctx;
+    return (uint8_t *)g_yview[p & 3];
 }
 
 /* --- planar mode-12h: trap direct A0000 writes through the VGA write engine -- */
@@ -6948,6 +7148,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     g_pit_dev = vdd_pit_device(&g_pit);
     vdd_bus_add(&g_bus, &g_pit_dev);
     g_vid.vmem = (uint8_t *)VID_APERTURE_BASE;  /* the mapped A0000 aperture (RAM) */
+    /* (per-plane backing is taken later, once the preamble is on disk -- every
+       log_write() before that point TRUNCATES the file and would eat its report.) */
     g_vid.time_us = host_time_us;               /* real CRT timebase for 0x3DA (#55) */
     g_vid_dev = vdd_video_device(&g_vid);
     vdd_bus_add(&g_bus, &g_vid_dev);
@@ -6998,6 +7200,15 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
        is now the display. Then start the UI thread that owns it. */
     g_key_event = CreateEventA(NULL, FALSE, FALSE, NULL);   /* auto-reset        */
     { HWND con = GetConsoleWindow(); if (con) ShowWindow(con, SW_HIDE); }
+    /* ► PER-PLANE BACKING BEFORE THE UI THREAD EXISTS. The remap unmaps the A0000
+         window for an instant, and the renderer dereferences it every few milliseconds;
+         doing this with that thread already running hung the host so early that no log
+         reached disk at all. Its report is buffered and flushed after the preamble. */
+    if (GetFileAttributesA(NOREMAP_FLAG) == INVALID_FILE_ATTRIBUTES && modey_remap_init()) {
+        g_vid.ymap_ctx    = NULL;
+        g_vid.ymap_select = modey_remap_select;
+        g_vid.ymap_plane  = modey_remap_plane;
+    }
     ui = CreateThread(NULL, 0, ui_thread, NULL, 0, NULL);
     /* Headless: arm the deadline watchdog so a run that blocks on input (a "press any
        key" prompt, a game menu) still self-terminates instead of wedging the harness. */
@@ -7051,6 +7262,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     p = zhex(p, img.cs); p = zput(p, ":0x"); p = zhex(p, img.ip); p = zput(p, ")...\r\n");
     log_write(LOG_PATH, report, p);
     base = p;                       /* preamble is on disk; the loop appends from here */
+    modey_remap_flush_report();     /* whatever the A0000 remap had to say, now it fits */
     /* ── CAN THE A0000 WINDOW BE REMAPPED? THE ONE FACT THE REAL VIDEO FIX NEEDS. ────
          Mode Y cannot be de-interleaved from a flat aperture: A0000 is one buffer, so
          a guest write lands there with no record of which plane the map mask selected,
@@ -8788,7 +9000,11 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
            mode never touches -- so it has reported four zeroes for every mode-Y run
            ever made and told us nothing. These are the arrays a mode-Y frame is
            actually built from, plus the map-mask values the program really used. */
-      p = zput(p, "STAGE2: modeY gap="); p = zhex(p, g_vid.modey_gap);
+      p = zput(p, "STAGE2: modeY remap="); p = zhex(p, (DWORD)g_yremap);
+      p = zput(p, " swaps="); p = zhex(p, g_yswaps);
+      p = zput(p, " fanouts="); p = zhex(p, g_yfanouts);
+      p = zput(p, " failed="); p = zhex(p, g_yfail);
+      p = zput(p, " gap="); p = zhex(p, g_vid.modey_gap);
       p = zput(p, " attributed="); p = zhex(p, g_vid.ynz[0]);
       p = zput(p, " crtc_seen="); p = zhexb(p, g_vid.crtc_seen);
       p = zput(p, " crtc_start=0x"); p = zhex(p, g_vid.crtc_start);
