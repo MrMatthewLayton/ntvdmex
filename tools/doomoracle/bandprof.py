@@ -74,3 +74,29 @@ for name, r0, r1 in BANDS:
     print("  four-way uniform: ours %5.1f%%   reference %5.1f%%" %
           (100.0 * same / max(tot, 1), 100.0 * rsame / max(rtot, 1)))
     print()
+
+# --- WHAT IS THE COMMON VALUE AT A FOUR-WAY-UNIFORM OFFSET? -------------------
+# Session 23 rejected "plane 1 is copied into the rest" using a CONTROL: p0-vs-p2
+# agree at 73%, "neither being the suspected source". That control cannot refute
+# the hypothesis -- if plane 1's bytes are copied into 0, 2 AND 3 then p0-vs-p2
+# agreeing is exactly what it PREDICTS. Ask the question the control could not:
+# at offsets where all four planes agree, WHICH reference phase is the common value?
+for name, r0, r1 in BANDS:
+    hit = [0] * 4
+    n = 0
+    for row in range(r0, r1):
+        ps = [planes[0][p].get(row) for p in range(4)]
+        if not all(ps):
+            continue
+        y = row - 168
+        for i in range(80):
+            v = [p[i] for p in ps]
+            if not (v[0] == v[1] == v[2] == v[3]):
+                continue
+            n += 1
+            for q in range(4):
+                x = 4 * i + q
+                if x < w and opaque[y][x] and v[0] == ref[y][x]:
+                    hit[q] += 1
+    print("band %s: %d four-way-uniform offsets; common value matches phase" % (name, n))
+    print("   " + "  ".join("q%d=%5.1f%%" % (q, 100.0 * hit[q] / max(n, 1)) for q in range(4)))
