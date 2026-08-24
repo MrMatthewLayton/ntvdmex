@@ -154,13 +154,40 @@
        lead 6:  81 blocks/s needed vs 55 refills/s available -> 44% replayed
        lead 2:  38 blocks/s needed vs 56 refills/s available -> 33% replayed
 ```
-  ▶ **NEXT: RAISE DELIVERED IRQ0 FROM 39% TOWARDS 100%.** The echo is a symptom of the
-    timer, and the SB is downstream of it. `DPMI_IRQ0_BATCH` is 4 and
-    `g_async_tried_this_sync` allows ONE async attempt per PIT sync -- both were tuned in
-    session 22 against tick RATE, with no idea that the PCM refill rate depended on them.
-    ⚠ Do not simply raise the batch: session 22 measured that draining 64 ticks back to
-      back compressed 0.45 s of game time into microseconds. The goal is more DELIVERY
-      OPPORTUNITIES, not more ticks per opportunity.
+  **★★★ WHERE THE TIMER GOES FROM 144 Hz TO 56 Hz** (`STAGE2: pit budget:`, new):
+```
+     raises     6483/45s = 144/s   the 8254 generates EVERY tick Doom asked for
+     syncs      2921/45s =  65/s   host_pit_sync() runs this often -- THE CEILING
+     attempts   2791/45s =  62/s   one async attempt per sync, by design
+     delivered  2528/45s =  56/s
+     owed_max   0x40 = PM_TICK_OWED_MAX -- the backlog is PERMANENTLY SATURATED
+     ui_gap_us  24415             the UI thread targets 5 ms and misses by 5x
+```
+  The ticks are generated and then die at `host_pit_sync`, which takes `g_lock` -- and
+  Doom's mode-Y drawing does **~43,000 port writes a second** through that same lock.
+  **The video path is starving the timer, and the timer is starving the audio.**
+
+  ⚠⚠ **RAISING THE ATTEMPT BUDGET WAS TRIED AND IS WRONG. DO NOT REPEAT IT.** Allowing up
+  to 4 attempts per sync while the backlog is deep, stopping at the first refusal:
+```
+                     attempts/s   delivered/s   ui_gap_us   lock hold
+     one per sync            62            56      24,415      ~15 ms
+     up to four             189            55     260,009      188 ms
+```
+  **Attempts TRIPLED and delivery did not move.** The ceiling was never the attempt
+  budget: it is how often the guest is in an INJECTABLE STATE. Extra attempts pay full
+  SuspendThread round trips under the lock to be told no. Reverted; the reasoning is
+  preserved in the comment at `host_irq_sink`.
+  ▶ **NEXT, IN PRIORITY ORDER.**
+    1. **Instrument WHICH refusal fires** at 144 Hz -- `g_async_pm_active` (an injection
+       still in flight), `vdd_pic_can_deliver`, or the client's virtual-IF. One of those
+       is the real ceiling and none of them is the attempt count.
+    2. **Consider the COOPERATIVE path instead of the asynchronous one** for the timer:
+       it needs no SuspendThread at all, and the PM loop is entered constantly.
+    3. **Attack the lock contention itself** -- 43k mode-Y port writes a second through
+       `g_lock` is the root of the starvation, and it would speed up video too.
+    ⚠ Still do not raise `DPMI_IRQ0_BATCH`: session 22 measured that draining 64 ticks
+      back to back compressed 0.45 s of game time into microseconds.
 
 ═══════════════════════════════════════════════════════════════════════════════
 ██ ▶▶▶ SESSION 22 (2026-08-24, same day, after the session-21 handoff).       ██

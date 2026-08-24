@@ -264,11 +264,28 @@ static volatile LONG g_irq0_pending = 0;    /* PIT raised IRQ0 (UI thread sets, 
      stall this host produces and still short enough that the tempo cannot lurch a
      visible amount. */
 #define PM_TICK_OWED_MAX 64
+/* ── WHERE THE TIMER GOES FROM 140 Hz TO 55 Hz. ──────────────────────────────────────
+     Doom programs 140 Hz and gets 55 delivered (39%), and DMX mixes PCM in the timer
+     ISR -- so the missing 61% of ticks are the missing PCM refills, and the echo. Four
+     numbers separate the candidate losses, and nothing currently distinguishes them:
+       syncs    host_pit_sync() calls that advanced the clock. This is the CEILING on
+                async delivery, because g_async_tried_this_sync allows ONE attempt each.
+       raises   what the 8254 model actually generated: should be ~140/s.
+       attempts async_inject_irq(0) calls -- syncs that got as far as trying.
+       owed_max the backlog high-water mark: how far behind delivery ever fell.
+     ⚠ SUSPECT THE LOCK. host_pit_sync takes g_lock, and Doom's mode-Y drawing does
+       ~43,000 port writes a second (1.95M mask changes a run), every one of which also
+       takes it. If syncs come in well under the UI thread's 5 ms tick, the video path
+       is starving the timer, which is starving the audio. */
+static uint32_t g_pit_syncs;
+static uint32_t g_pit_async_attempts;
+static LONG     g_pm_tick_owed_max;
 static volatile LONG g_pm_tick_owed = 0;
 static void irq0_latch(void)
 {
     if (g_irq0_pending < IRQ0_PENDING_MAX) InterlockedIncrement(&g_irq0_pending);
     if (g_pm_tick_owed < PM_TICK_OWED_MAX)  InterlockedIncrement(&g_pm_tick_owed);
+    if (g_pm_tick_owed > g_pm_tick_owed_max) g_pm_tick_owed_max = g_pm_tick_owed;
 }
 /* Consume one owed tick. Returns 0 if none is owed, i.e. "the client is up to date --
    do not manufacture time it has not been billed for". */
@@ -1321,8 +1338,47 @@ static void host_irq_sink(void *ctx, uint8_t irq)
              g_pm_tick_owed counts every raise and the catch-up batch drains it.
              After: hold 44ms -> 15.9ms, audio-thread wait 36.8ms -> 5.8ms, longest UI
              gap 61ms -> 31.8ms, with the delivered tick rate unchanged. */
+        /* ── ...BUT ONE ATTEMPT PER SYNC IS A CEILING, AND WE ARE UNDER IT. ──────────
+             The cap above is right about the COST and wrong about the BUDGET. Measured:
+                 raises 144/s   syncs 65/s   attempts 62/s   delivered 56/s
+                 owed_max = 64 = PM_TICK_OWED_MAX, i.e. the backlog is SATURATED
+             The 8254 generates every one of Doom's 140 ticks; they die at host_pit_sync,
+             which runs 65 times a second rather than the UI thread's intended 200 because
+             it takes g_lock and Doom's mode-Y drawing does ~43,000 port writes a second
+             through the same lock. One attempt per sync then caps delivery at 65/s -- and
+             DMX mixes PCM in the timer ISR, so the missing ticks ARE the missing refills
+             and the 186 ms echo.
+           ► SO SPEND MORE ONLY WHEN THE BACKLOG SAYS IT IS WORTH IT, AND STOP AT THE
+             FIRST REFUSAL. Session 22's disaster was ~800 unbounded attempts per sync,
+             each a full SuspendThread round trip under the lock; this is at most
+             PIT_ASYNC_PER_SYNC, only while ticks are actually owed, and it gives up the
+             instant one declines -- because if the guest is not in an injectable spot now
+             it will not be three microseconds from now, and the rest of the burst is pure
+             round-trip cost. That is the distinction the old cap could not express. */
+        /* ── ...AND RAISING THAT BUDGET WAS TRIED, MEASURED, AND REVERTED. ───────────
+             The reasoning was: one attempt per sync x 65 syncs/s caps delivery at 65/s
+             against Doom's 144 raises/s, the backlog is saturated, so buy more attempts
+             when it is deep (up to 4, stopping at the first refusal). It does not work,
+             and the numbers are unambiguous:
+                                attempts/s   delivered/s   ui_gap_us   lock hold
+                 one per sync           62            56      24,415      ~15 ms
+                 up to four            189            55     260,009      188 ms
+             **ATTEMPTS TRIPLED AND DELIVERY DID NOT MOVE.** So the ceiling was never the
+             attempt budget: it is how often the guest is in an INJECTABLE STATE, and
+             extra attempts merely pay full SuspendThread round trips under g_lock to be
+             told no -- which is session 22's lesson arriving from a new direction, and a
+             10x worse UI gap for nothing.
+           ▶ WHAT THIS RULES OUT, AND WHERE TO GO. Do not spend effort on the delivery
+             RATE; spend it on the guest's INJECTABILITY, or bypass the async path for
+             the timer entirely. `async_inject_irq` refuses on g_async_pm_active (an
+             injection still in flight), on vdd_pic_can_deliver, and on the client's
+             virtual-IF -- instrument WHICH of those says no at 144 Hz before changing
+             anything else. Note that the injectable window may simply be scarce while
+             Doom holds its own ISR, in which case the answer is the cooperative PM-loop
+             path (which needs no suspend at all), not the asynchronous one. */
         if (g_qi_susp && !g_async_tried_this_sync) {
             g_async_tried_this_sync = 1;
+            ++g_pit_async_attempts;
             if (async_inject_irq(0)) {
                 InterlockedDecrement(&g_irq0_pending);
                 pm_tick_take();
@@ -2940,6 +2996,7 @@ static void host_pit_sync(void)
         return;
     }
     g_async_tried_this_sync = 0;        /* a fresh burst of raises gets one attempt */
+    ++g_pit_syncs;
     delta = (ULONGLONG)(now.QuadPart - s_last.QuadPart);
     /* clocks = delta * 1193182 / freq, without overflowing: delta is small (microseconds). */
     { ULONGLONG clocks = (delta * PIT_INPUT_HZ) / (ULONGLONG)s_freq.QuadPart;
@@ -9237,6 +9294,12 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         p = zput(p, " ring=");         p = zhex(p, g_sb.lap_len);
         p = zput(p, " toobig=");       p = zhex(p, g_sb.lap_toobig);
         p = zput(p, " lead_buffers=");  p = zhex(p, g_wave.nbufs);
+        p = zput(p, "\r\nSTAGE2: pit budget: syncs="); p = zhex(p, g_pit_syncs);
+        p = zput(p, " raises=");    p = zhex(p, g_irq_raised[0]);
+        p = zput(p, " attempts=");  p = zhex(p, g_pit_async_attempts);
+        p = zput(p, " delivered="); p = zhex(p, g_async_inj_line[0]);
+        p = zput(p, " owed_max=");  p = zhex(p, (DWORD)g_pm_tick_owed_max);
+        p = zput(p, " ui_gap_us="); p = zhex(p, g_ui_gap_us);
         p = zput(p, "\r\nSTAGE2: devirq (cooperative PM retry): inj=");
         p = zhex(p, g_pm_devirq_inj);
         p = zput(p, " fail=");  p = zhex(p, g_pm_devirq_fail);
