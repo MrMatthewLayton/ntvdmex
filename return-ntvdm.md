@@ -1,4 +1,93 @@
 ═══════════════════════════════════════════════════════════════════════════════
+██ ▶▶▶ SESSION 23 (2026-08-24). **BOTH REMAINING DEFECTS RE-DIAGNOSED.**      ██
+██     Session 22's cause for EACH was wrong. Both new causes are measured.   ██
+═══════════════════════════════════════════════════════════════════════════════
+
+  Branch `m9/completeness`. Gates green: off-VM **630 checks / 18 suites, 0 failed**,
+  check-imports pass. One rig run (`result_doom_172146.log`, archived).
+
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ ⚠⚠ REFUTED: THE STATUS BAR IS **NOT** THE WRITE-MODE-1 LATCH COPY            │
+└──────────────────────────────────────────────────────────────────────────────┘
+  Session 22 planned an A0000 page-trap subsystem (~614k faults/run) on the strength
+  of the latch-copy story. **DO NOT BUILD IT.** The bursts only ever touch plane
+  offsets 0x3a1c..0x3e7f = screen rows 186..199. Split the bar there
+  (`tools/doomoracle/barprof.py`):
+```
+     rows 168..185  NO burst ever reaches them   3583/5760 = 62.2% wrong
+     rows 186..199  the ONLY rows bursts touch   2550/4480 = 56.9% wrong
+```
+  The rows the latch copy cannot explain are **worse** than the rows it touches.
+  ⚠ This was recoverable from session 22's OWN log. The burst spans were printed and
+    never converted into rows. **A number in a log is not a measurement until it has
+    been put in the same units as the thing it is meant to explain.**
+
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ ★★★★★ THE STATUS BAR: EVERY PLANE HOLDS **PLANE 1'S PHASE**                  │
+└──────────────────────────────────────────────────────────────────────────────┘
+  New instrument `MODEYBAR` dumps all 4 planes x 3 pages x rows 168..199 at wind-down;
+  `tools/doomoracle/planejudge.py` judges them against STBAR. Plane p's byte i is
+  pixel x = 4i + p, so each plane can be scored against every reference PHASE:
+```
+             q=0     q=1     q=2     q=3        <- reference phase
+     pl0    33.5%   60.7%   20.2%   17.5%
+     pl1    23.6%   69.4%   20.5%   17.6%
+     pl2    22.8%   60.4%   29.0%   18.8%
+     pl3    22.9%   59.5%   21.2%   27.1%
+     best-with-shift: EVERY plane peaks at q=1, shift k=0
+```
+  **All four planes contain plane 1's column set.** Each plane matches phase 1 roughly
+  twice as well as it matches its own. Established alongside it:
+```
+   the render is INNOCENT     plane-vs-WAD (69.4/33.5/29.0/27.1) matches
+                              screen-vs-WAD (70.3/33.6/29.3/27.3) to the digit
+   NOT a literal copy         plane-to-plane byte identity is only 69-76%, not ~100%,
+                              so 0/2/3 are separately damaged, not memcpy'd from 1
+   all THREE pages identical  every figure equal to the digit across pg0/1/2
+   the seed hypothesis is DEAD mapmask hist is 0x01/0x02/0x04/0x08/0x0f and nothing
+                              else, so sel[0] for a multi-plane mask is ALWAYS plane 0
+                              -- the scratch seed cannot produce a plane-1 bias
+```
+  ▶ **NEXT: NAME THE WRITER.** Something deposits mask-0x02-phase data into all four
+    planes. The fan-out is excluded (it would smear the scratch, seeded from plane 0 =
+    phase 0), the latch path writes nothing at all (`latch_solved=0`), and the render
+    is excluded above. Instrument WHICH MASK WAS LIVE when each bar offset last
+    changed -- a per-plane shadow of the 2560-byte bar region, diffed on mask change.
+    2M swaps x 2560 bytes is too much to diff every time; sample, or diff only the
+    first change of each offset.
+
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ ★★★★★ THE PCM CLICK: BLOCK-COMPLETION IRQs ARE BEING DROPPED                 │
+└──────────────────────────────────────────────────────────────────────────────┘
+  New instrument: the **block ledger** (`sb_blkrec` in vdd_sb.h, `STAGE2: sbblk` lines)
+  records cap_off / block_len / 8237 state at each of the first 24 block completions.
+```
+     sbblk 00 cap_off=0x004 blk_len=0x004 mode=09   <- single-cycle prime
+     sbblk 01 cap_off=0x00f blk_len=0x00b mode=09   <- single-cycle prime
+     sbblk 02 cap_off=0x10f blk_len=0x100 mode=19   <- auto-init ring starts
+     sbblk 11 ... WRAPPED                            <- ring = 0x1000 = 16 blocks
+```
+  ⚠ **`sbref.py`'s GRID WAS 15 BYTES OUT OF PHASE.** DMX primes the DSP with two
+    single-cycle transfers (4 and 11 bytes) before the ring starts, and both land in
+    the capture -- so real boundaries are at **15 + n*256**, not n*256. 11 is ODD, so
+    the stereo frame parity flips there too. Session 22's "offset 2 of every block"
+    was measured against an inferred grid, not a real one. **An instrument that infers
+    its own reference frame will confirm whatever phase it guessed.**
+  **THE ACTUAL FAULT** (`tools/doomoracle/blockphase.py`): the discontinuity sits at
+  block offset 245/246 (13.0x mean) -- 11 bytes BEFORE each block ends, not at the
+  boundary. Dumping the bytes there shows the pre-seam data is a **VERBATIM REPEAT OF
+  THE PREVIOUS RING LAP** (two seams 4096 bytes apart share their preceding 10 bytes
+  exactly; 96/182 seams are preceded by a full 256-byte repeat). We are playing ring
+  content the guest never refilled.
+  **WHY:** `sb_blocks=0x0dee` (3566) against `irq05=0x0a95` (2709). **857 block-
+  completion IRQs -- 24% -- never reached the guest.** No IRQ, no DMX refill, so that
+  block replays the previous lap. At 86 blocks/s that is the buzz.
+  ▶ **NEXT:** this is a DELIVERY defect, not a mixer or resampler one. `async_bail`
+    is 0x406 (1030). Find why injection declines for IRQ5 and whether an undelivered
+    block IRQ can be retried rather than dropped -- an SB completion IRQ is not
+    coalescable the way a timer tick is: each one owns a distinct 256-byte refill.
+
+═══════════════════════════════════════════════════════════════════════════════
 ██ ▶▶▶ SESSION 22 (2026-08-24, same day, after the session-21 handoff).       ██
 ██     **DOOM IS PLAYABLE.** Menu, a whole level, intermission, PCM + MIDI.   ██
 ██     What is left is TWO NAMED, MEASURED DEFECTS -- not a mystery.          ██

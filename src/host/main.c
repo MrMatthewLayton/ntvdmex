@@ -9108,6 +9108,39 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         p = zput(p, " host_midi=");               p = zput(p, g_wave.hmidi ? "open" : "NONE");
         p = zput(p, " underruns=");               p = zhex(p, g_wave.underruns);
         p = zput(p, "\r\n");
+        /* ► THE BLOCK-BOUNDARY LEDGER (see the sb_blkrec comment in vdd_sb.h). One line
+             per completed block for the first few: where the capture stood, what the
+             8237 held, and whether it had wrapped. cap_off is the load-bearing column --
+             it turns sbref.py's INFERRED 128-frame grid into measured boundaries, so
+             "the jump is two frames in" can be checked against fact instead of against
+             our own guess at where a block starts. */
+        if (g_sb.blklog_n) {
+            uint32_t bi;
+            p = zput(p, "STAGE2: sound blocks: n="); p = zhex(p, g_sb.blocks);
+            p = zput(p, " logged="); p = zhex(p, g_sb.blklog_n);
+            p = zput(p, " (cap_off block_len phys count base_addr base_count page mode)\r\n");
+            for (bi = 0; bi < g_sb.blklog_n && bi < SB_BLKLOG_MAX; ++bi) {
+                const struct sb_blkrec *b = &g_sb.blklog[bi];
+                p = zput(p, "STAGE2: sbblk "); p = zhexb(p, bi);
+                p = zput(p, " cap_off=");    p = zhex(p, b->cap_off);
+                p = zput(p, " blk_len=");    p = zhex(p, b->block_len);
+                p = zput(p, " phys=");       p = zhex(p, b->phys);
+                p = zput(p, " count=");      p = zhex(p, b->cur_count);
+                p = zput(p, " base=");       p = zhex(p, b->base_addr);
+                p = zput(p, "/");            p = zhex(p, b->base_count);
+                p = zput(p, " page=");       p = zhexb(p, b->page);
+                p = zput(p, " mode=");       p = zhexb(p, b->mode);
+                p = zput(p, b->reloaded ? " WRAPPED" : " mid-ring");
+                if (b->ended) p = zput(p, " ENDED");
+                p = zput(p, "\r\n");
+                /* `base` points PAST the preamble, not at report[0], so bound against
+                   the array itself -- p - base would let this overrun by the preamble's
+                   length. */
+                if (p > report + sizeof report - 512) {
+                    log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                }
+            }
+        }
         p = zput(p, "STAGE2: opl: trace=");   p = zhex(p, g_opltrace_n);
         p = zput(p, " tdrop=");               p = zhex(p, g_opltrace_drop);
         p = zput(p, "\r\n");
@@ -9250,6 +9283,49 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
           if (VID_UNIMPL_GET(g_vid.unimpl_mode, i)) { p = zput(p, " 0x"); p = zhexb(p, (unsigned)i); ++n; }
       if (!n) p = zput(p, " none");
       p = zput(p, "\r\n"); }
+    /* ── DUMP THE BAR'S FOUR PLANES SO THE WAD CAN JUDGE THEM. ──────────────────────
+         Everything measured so far describes the SCREEN, and the screen is planes plus
+         a render. The oracle can only say "this pixel is wrong"; it cannot say which
+         plane holds the right byte, because by then the four have been interleaved.
+       ► WHAT THIS SETTLES. Measured against the IWAD on the last run's captures:
+         plane 1's columns are 70.3% correct and planes 0/2/3 are 33.6/29.3/27.3%, and
+         "plane 1 replicated across the group" explains 63.0% of bar pixels against a
+         40.1%-correct baseline. So plane 1's content is reaching the other three. What
+         no capture can distinguish is whether 0/2/3 hold a LITERAL COPY of plane 1
+         (one writer smearing) or their own damaged content that merely resembles it
+         (a per-plane fault). Comparing the planes to each other answers that, and the
+         answer picks between two completely different fixes.
+       ► ALSO REFUTED, AND WHY THIS IS NOT THE LATCH DUMP IT LOOKS LIKE: the
+         write-mode-1 bursts only ever touch plane offsets 0x3a1c..0x3e7f, i.e. rows
+         186..199. Rows 168..185, which no burst reaches, are MORE wrong (62.2% against
+         56.9%). The latch copy is not the status bar's cause; do not rebuild the A0000
+         trap on the strength of session 22's note. See build/barprof.py.
+         All three pages, because the pages have been equal to the digit before and
+         that is itself a fact worth re-checking. Mode-Y runs only; ~67 KB, one shot. */
+    if (g_yremap && g_vid.mkind == VID_KIND_LINEAR8 && !g_vid.chain4) {
+        uint32_t pg, pl, row;
+        char lb[220], *lq;
+        log_append(LOG_PATH, base, p); serial_out(base, p); p = base;  /* keep the log in order */
+        lq = lb; lq = zput(lq, "MODEYBAR dump: 3 pages x 4 planes x rows 168..199, "
+                               "80 bytes/row (plane offset = row*80 + x/4)\r\n");
+        log_append(LOG_PATH, lb, lq); serial_out(lb, lq);
+        for (pg = 0; pg < 3; ++pg)
+            for (pl = 0; pl < 4; ++pl)
+                for (row = 168; row < 200; ++row) {
+                    uint32_t o = (pg * 0x4000u + row * 80u) & (MODEY_WIN - 1u), x;
+                    const BYTE *src = (const BYTE *)g_yview[pl];
+                    lq = lb;
+                    lq = zput(lq, "MODEYBAR pg"); lq = zhexb(lq, pg);
+                    lq = zput(lq, " pl");         lq = zhexb(lq, pl);
+                    lq = zput(lq, " y");          lq = zhexb(lq, row);
+                    lq = zput(lq, " ");
+                    for (x = 0; x < 80; ++x) lq = zhexb(lq, src[(o + x) & (MODEY_WIN - 1u)]);
+                    lq = zput(lq, "\r\n");
+                    /* File only: 67 KB down a 115200 COM1 is ~6 s of wind-down for a
+                       dump nobody reads off the serial line. */
+                    log_append(LOG_PATH, lb, lq);
+                }
+    }
     p = zput(p, "STAGE2: complete\r\n");
     log_append(LOG_PATH, base, p); serial_out(base, p); p = base;   /* headless: mirror the DOS-output flush + completion to COM1 */
 

@@ -95,6 +95,33 @@ typedef struct sb_state {
          host writes it out at wind-down. */
     uint8_t *cap_buf;
     uint32_t cap_len, cap_cap;
+
+    /* ── THE BLOCK-BOUNDARY LEDGER. ──────────────────────────────────────────────
+         The click is not a rate fault (41.5 s of audio from a 45 s run) nor a framing
+         fault (corr(L,R) = 0.978). It is a DISCONTINUITY 12.8x over-represented at
+         offset 2 of every 128-frame block -- a defect at the boundary, 86 times a
+         second, which the ear hears as a buzz rather than as clicks.
+         Three things happen at that boundary and only one of them can be two frames
+         out: the completion IRQ we raise, the 8237's auto-init reload of
+         cur_addr/cur_count, and the guest's refill arriving afterwards. Nothing
+         recorded so far distinguishes them.
+       ► cap_off IS THE FIELD THAT MATTERS. sbref.py currently INFERS the 128-frame
+         period from the capture and then measures against its own inference. Writing
+         down where each block actually ended, as an offset into the very buffer being
+         analysed, replaces that inference with a fact -- so "the jump is two frames
+         into the block" stops being a property of a guessed grid.
+         Bounded and allocation-free: the first few blocks settle it, and the audio
+         thread must never do I/O, so the host prints this at wind-down. */
+#define SB_BLKLOG_MAX 24
+    struct sb_blkrec {
+        uint32_t cap_off;      /* bytes captured when the block completed          */
+        uint32_t block_len;    /* what the DSP was told a block is                 */
+        uint32_t phys;         /* 8237 current physical address, post-fetch        */
+        uint16_t cur_count;    /* 8237 count remaining (reloaded already on TC)    */
+        uint16_t base_addr, base_count;
+        uint8_t  page, mode, ended, reloaded;
+    } blklog[SB_BLKLOG_MAX];
+    uint32_t blklog_n;         /* blocks seen; entries kept = min(n, MAX)          */
 } sb_state;
 
 /* Build the device descriptor to hand to vdd_bus_add(). Set base/irq/dma and the

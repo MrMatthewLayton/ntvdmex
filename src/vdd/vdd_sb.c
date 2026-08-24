@@ -263,6 +263,30 @@ uint32_t vdd_sb_render(sb_state *st, int16_t *out, uint32_t frames)
             /* Block complete: this is the interrupt the game is waiting for. In
                auto-init it reloads and keeps streaming (the ring buffer every DOS
                game uses); single-cycle stops until reprogrammed. */
+            /* ► RECORD THE BOUNDARY BEFORE ANYTHING REACTS TO IT. The IRQ below can
+                 reach the guest and the reload has already happened inside dma_step,
+                 so this is the only instant at which the three candidate culprits are
+                 still distinguishable. Taken before vdd_raise_irq() deliberately. */
+            if (st->blocks < SB_BLKLOG_MAX && st->dma) {
+                struct sb_blkrec *b = &st->blklog[st->blocks];
+                uint8_t dch = st->xfer_16bit ? st->dma16 : st->dma8;
+                const dma_chan *c = &st->dma->ch[dch & 7];
+                b->cap_off    = st->cap_len;
+                b->block_len  = st->block_len;
+                b->phys       = vdd_dma_cur_phys(st->dma, dch);
+                b->cur_count  = c->cur_count;
+                b->base_addr  = c->base_addr;
+                b->base_count = c->base_count;
+                b->page       = c->page;
+                b->mode       = c->mode;
+                b->ended      = (uint8_t)ended;
+                /* cur_addr back at base means the 8237 wrapped this fetch: the block
+                   we just finished and the ring's end coincide. If they routinely do
+                   NOT coincide, our block accounting and the guest's disagree, which
+                   is exactly the two-frame skew being hunted. */
+                b->reloaded   = (uint8_t)(c->cur_addr == c->base_addr);
+                st->blklog_n  = st->blocks + 1;      /* entries actually filled */
+            }
             st->irq_pending = 1;
             st->blocks++;
             vdd_raise_irq(st->bus, st->irq);
