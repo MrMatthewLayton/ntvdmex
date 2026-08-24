@@ -328,14 +328,38 @@
      rows 168-183   a SECOND fault. No burst touches it. The fan-out does not
                     touch it. It is the worse half, and its writer is unnamed.
 ```
+  ▶ **AND THE DISCARD WAS LOCATED, IN ONE LINE.** `modey_remap_wmode()` ends every
+    burst with `for (k...) g_yseed[k] = sc[k];` while the fan-out decides what to
+    propagate with `if (sc[k] == g_yseed[k]) continue;` -- so the re-seed erases the
+    fan-out's input before it can run. That is the whole of `fanout_bar distinct=0`.
+  ⚠⚠ **DELIVERING THEM WAS TRIED AND DOES NOT FIX THE BAR. DO NOT RE-APPLY IT.**
+    Propagating the scratch byte to the selected planes works -- band B goes 0 -> 7352
+    writes over 192 distinct offsets -- and the WAD oracle is flat:
+```
+     plane 0  34.4% -> 34.9%        plane 2  29.8% -> 29.8%
+     plane 1  70.7% -> 70.2%        plane 3  27.8% -> 27.6%
+```
+    Under a point either way, and plane 1 -- the one plane that is mostly CORRECT --
+    gets WORSE, because the fan-out smears plane 0 across it. **Those 192 offsets were
+    no more wrong before than after, so the bytes we discard are not what is wrong with
+    the bar.** Session 23's refutation stands, on better grounds than it gave.
   ▶ **NEXT, AND BOTH ARE SMALLER THAN "WHAT IS WRONG WITH THE STATUS BAR".**
-    (a) rows 184-199: make write mode 1 move EACH PLANE'S OWN latched byte instead of
-        leaning on a displacement solver with a 0-for-120 record. The scratch holds
-        one byte per offset, which cannot represent four latches -- that is the real
-        shape of the fix, and it is why every inference scheme over it has failed.
-    (b) rows 168-183: name the writer. Only guest stores under a SINGLE-plane mask
-        remain, so instrument which mask was live when each offset there last
-        changed. Everything else that could write a plane is now excluded by count.
+    (a) rows 184-199: needs the TRUE per-plane latches. The scratch holds one byte per
+        offset and cannot represent four, which is why the solver is 0-for-120 and why
+        every inference scheme over it has failed.
+        ⚠⚠ **THE PAGE TRAP CANNOT PROVIDE THEM -- AND THIS IS ALREADY MEASURED.** The
+        note at `a000_protect` records that arming the A0000 trap FREEZES THE GUEST on
+        this box, twice: `io_events` 10 against 22,532,292, with `PAGE_READONLY`
+        behaving identically. Session 22 planned this subsystem; session 23 cancelled
+        it for the wrong reason. **The right reason is that it does not work here.**
+        Mode 12h's workaround -- run the guest in the HOST INTERPRETER while the mode
+        is current -- is the only remaining candidate, scoped to the 120 short bursts.
+        ⚠ Doom is a 32-bit DPMI client on the real CPU; `v86interp.h` is the V86/16-bit
+        engine, so this is not a small change and its feasibility is UNASSESSED.
+    (b) rows 168-183: name the writer, and this is now the BETTER-VALUE half -- it is
+        the worse band, no burst reaches it, and the fan-out is excluded by count
+        (`writes=0` in band A across every run). Only guest stores under a SINGLE-plane
+        mask remain. Instrument which mask was live when each offset there last changed.
 
   **TASK D (video -- and the player just narrowed it).** Name the writer that puts
   phase-1 data into all four planes. Session 23's status-bar section below is
