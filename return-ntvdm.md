@@ -100,6 +100,104 @@
     before theorising further.**
 
 ┌──────────────────────────────────────────────────────────────────────────────┐
+│ ★★★ LANDMARKS — the address arithmetic every probe needs. Get this wrong and │
+│     you dump code bytes and "discover" nonsense (session 19 did exactly that).│
+└──────────────────────────────────────────────────────────────────────────────┘
+```
+   obj1 (CODE) base 0x03AD0000     0501 BX:CX=0x00045000   [LE CODE OBJECT] in the log
+   obj3 (DATA) base 0x03B40000     0501 BX:CX=0x00086000   <- 548,864 bytes, covers ALL BSS
+   linear = base + offset. Disassembly operands are ALREADY obj3 offsets (unrelocated
+   file values that the loader fixes against the DATA object), so [0x38fe0] -> obj3+0x38fe0.
+   ⚠ Both bases were STABLE across all 11 runs this session. Re-check them in the log
+     before trusting a probe address anyway -- one 0501 line, it costs nothing.
+
+   CODE (obj1+off / linear)                  DATA (obj3+off / linear)
+     0x1d1e0 / 03aed1e0  D_Display             0x32304 / 03b72304  viewheight   = 144
+     0x1d1fe / 03aed1fe  call R_ExecSetViewSz  0x32308 / 03b72308  scaledviewwidth=288
+     0x35a70 / 03b05a70  R_ExecuteSetViewSize  0x3230c / 03b7230c  viewwidth    = 288
+     0x34e10 / 03b04e10  R_InitBuffer          0x38fe0 / 03b78fe0  setblocks    = 9
+     0x35870 / 03b05870  R_InitTextureMapping  0x38fe4 / 03b78fe4  setdetail    = 0
+     0x358fa / 03b058fa  end of loop 1  (HITS) 0x38ff8 / 03b78ff8  detailshift  = 0
+     0x35924 / 03b05924  loop 2 outer body     0x34fe0 / 03b74fe0  viewangletox[0] = 289
+     0x3593f / 03b0593f  loop 2 BACK-EDGE      0x39020 / 03b79020  xtoviewangle[]
+     0x35943 / 03b05943  after loop 2 (NEVER)  0x01a84 / 03b41a84  finetangent[]
+     0x1d180 / 03aed180  FixedDiv              0x04a84 / 03b44a84  finetangent[3072]
+```
+
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ ★★★★★ NEXT SESSION: START HERE                                               │
+└──────────────────────────────────────────────────────────────────────────────┘
+
+  **1. FIND THE THRESHOLD LENGTH.** This is the one measurement that splits the
+  remaining hypotheses, and nothing should be built before it.
+  ```
+     a threshold in INSTRUCTIONS  -> the guest is doing something illegal eventually
+     a threshold in MILLISECONDS -> the kernel's timer/quantum is killing the VDM
+  ```
+  ▶ **The back-edge skip is a 2-point dial only** (full 3.5M = dies; one pass ≈ 12k =
+    survives), because a `skip` re-arms via `dpmi_bp_rearm_pending()`, which needs a
+    host turn the stretch never grants -- so it fires ONCE and ends the loop. For a
+    CONTINUOUS dial use Doom's own `screenblocks`: loop 2 costs
+    `(viewwidth+1) x ~3073` and `viewwidth = screenblocks*32`. Write a `DEFAULT.CFG`
+    into `C:\DOOMS` with `screenblocks 3` … `11` and the stretch sweeps ~300k…~990k
+    instructions with **no host change and no guest patch** — a real user setting, so
+    nothing about the run is artificial. Find where death starts.
+  ▶ Timing needs a clock in the log: BP-HIT lines print `after NNNN svc`, not a time.
+    Add `GetTickCount()` to the BP HIT and ASYNC lines before sweeping, or the
+    milliseconds answer is unobtainable.
+
+  **2. THEN ask why the kernel kills it.** Leading candidate, from the `PMKERNEL_PATH`
+  commentary already in `main.c`: an interrupt goes pending with nowhere to land —
+  **POPFD at CPL 3 cannot set VIF, and the kernel's delivery gate reads VIF**, so an
+  in-process far-jmp PM guest can never be handed a hardware interrupt. The async
+  SuspendThread injector exists to work around exactly that, and it is measurably
+  ABSENT across the death window. `pmkernel.flag` (run PM under the kernel monitor
+  instead of the far-jmp path) is the opt-in lever built for this question.
+
+  **3. STILL OWED FROM SESSION 19: confirm the render is stably correct.** Needs the
+  `pmbp` skip `03aed1fe 00000000 00000005` plus `capture.flag`, several runs, eyes on
+  the physical screen. Not attempted in session 20.
+
+  ⚠ **WHAT "SURVIVES" MEANT, PRECISELY.** With loop 2 cut to one pass, `xtoviewangle[]`
+    is left almost entirely unfilled, so Doom exits a few hundred ms later
+    (`run_ms=0xf72`, `plane-nonzero` all zero — **nothing was drawn**). The result
+    measured is "**the VDM was not torn down**" (`STAGE2: complete` present, all three
+    host exit paths silent), **NOT** "Doom rendered". Do not upgrade that claim.
+
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ ▶ EVIDENCE ARCHIVE + EXACT REPRO (session 20)                                │
+└──────────────────────────────────────────────────────────────────────────────┘
+```
+   build/doomlogs/result_doom_004351.log   probe @0x35bbd -> HIT; finetangent dump
+   build/doomlogs/result_doom_004622.log   probe @0x35943 -> NOT hit (after loop 2)
+   build/doomlogs/result_doom_004651.log   probe @0x358fa -> HIT (end of loop 1)
+   build/doomlogs/result_doom_004821.log   viewangletox TAIL dump (all -1)
+   build/doomlogs/result_doom_004906.log   pmnoirq: wedges at I_StartupTimer -- INCONCLUSIVE
+   build/doomlogs/result_doom_005042.log   rep BP in loop 2: fires ONCE (rep cannot re-arm)
+   build/doomlogs/result_doom_005229.log   raised bail cap: still zero async near death
+   build/doomlogs/result_doom_005514.log   nosb.flag: IDENTICAL death
+   build/doomlogs/result_doom_005631.log   ★ loop-2 skip -> STAGE2: complete (run 1/2)
+   build/doomlogs/result_doom_005921.log   ★ CONTROL on the same binary -> death
+   build/doomlogs/result_doom_010039.log   ★ loop-2 skip -> STAGE2: complete (run 2/2)
+```
+  ⚠ **`build/` IS GITIGNORED, so those 11 logs (48MB) are LOCAL ONLY** and do not
+    survive a clean or a fresh clone. The three ★ runs — the experiment/control pair the
+    whole conclusion rests on — are therefore COMMITTED, gzipped (~190KB each), at
+    **`docs/research/doom-loop2-stretch/`**, with a README that states the claim, how to
+    read the logs, and what "survives" does and does not mean. If you need one of the
+    other eight, re-run it; the recipe is below.
+  Reproduce (sandbox MUST be off for share writes -- see RIG NOTES):
+  ```
+     printf '03b0593f 0 2\r\n' > /private/tmp/xpshare/pmbp.txt      # the survival case
+     ARCHIVE=build/doomlogs TIMEOUT=300 ./scripts/bmqueue.sh doom
+     rm -f /private/tmp/xpshare/pmbp.txt                            # ALWAYS clean up
+     # verdict: grep -c 'STAGE2: complete'  ->  1 = survived, 0 = VDM torn down
+  ```
+  Commits: `1099104` (early-bail instrumentation + `scripts/bmqueue.sh`),
+  `16ef457` (this analysis). Gates re-run GREEN after the instrumentation change:
+  580/16 off-VM, check-imports, and bare-metal `selftest.com` 8/8 on the new binary.
+
+┌──────────────────────────────────────────────────────────────────────────────┐
 │ ▶ RIG NOTES (session 20)                                                     │
 └──────────────────────────────────────────────────────────────────────────────┘
 ```
