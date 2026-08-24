@@ -268,6 +268,8 @@ static int pm_tick_take(void)
     InterlockedDecrement(&g_pm_tick_owed);
     return 1;
 }
+static DWORD g_keypm_logged  = 0;           /* bounded KEYPM account; see the PM exec loop */
+static DWORD g_keyirq_logged = 0;           /* bounded KEYIRQ account; see host_irq_sink */
 static volatile LONG g_irq1_pending = 0;    /* count of un-delivered keyboard IRQ1s (one per scancode byte) */
 static int g_pm_irq0_latch = 0;             /* #2b: a virtual IRQ0 awaiting injection into the PM hook */
 static int g_in_pm_irq     = 0;             /* #2b: re-entrancy guard while inside an injected PM ISR   */
@@ -568,6 +570,7 @@ static DWORD g_io_site_logged = 0;
 static uint16_t g_unclaimed[IO_UNCLAIMED_MAX];
 static int      g_unclaimed_n = 0;
 
+static unsigned       g_capture_ms    = 300; /* CAPTURE_FLAG contents: ms between shots */
 static int            g_capture       = 0;  /* CAPTURE_FLAG present: opt-in self-screenshot for graphical tests */
 static int            g_no_a000       = 0;  /* NOA000_FLAG present: leave A0000 mapped (diagnostic) */
 static int            g_interp12      = 0;  /* INTERP12_FLAG: interpret mode 12h, no page trap */
@@ -997,6 +1000,7 @@ static volatile LONG g_async_pm_active = 0;  /* an async PM interrupt is in flig
 static DWORD g_async_pm_eip = 0, g_async_pm_esp = 0, g_async_pm_efl = 0;
 static WORD  g_async_pm_cs  = 0, g_async_pm_ss  = 0;
 static DWORD g_async_pm_inj = 0;             /* delivered                              */
+static DWORD g_async_inj_line[8];            /* ...and which IRQ line each one was      */
 static DWORD g_async_pm_bail2 = 0;           /* PM async attempts that did not commit  */
 #define DPMI_WATCH_MAX 4
 static DWORD g_pm_watch[DPMI_WATCH_MAX];     /* linear addresses to watch (whitespace-separated) */
@@ -1145,7 +1149,7 @@ static int async_inject_irq(unsigned irq)
             else    { g_async_pm_active = 0; }     /* never leave the flag set on failure */
         }
         ResumeThread(g_hcpu);
-        if (ok) { g_async_inj++; g_async_pm_inj++; } else g_async_bail++;
+        if (ok) { g_async_inj++; g_async_pm_inj++; g_async_inj_line[irq & 7]++; } else g_async_bail++;
         /* Log AFTER the resume, never while the guest is held -- and bounded, because this
            fires at the PIT's rate. Without it an async injection that kills the run is
            completely silent: the cooperative path prints its entry and exit, so a log that
@@ -1171,12 +1175,16 @@ static int async_inject_irq(unsigned irq)
              with ~900KB of log, well inside LOG_MAX_BYTES. */
         if (ok || g_async_pm_bail2 <= 4000) {
             char pb[224], *pq = pb;
-            pq = zput(pq, "ASYNC-PM vec=0x08 ok=0x"); pq = zhex(pq, (DWORD)ok);
+            /* ► SAY WHICH LINE. This said "vec=0x08" literally, whatever interrupt it
+                 had just delivered, so a run could not be asked "did any keyboard
+                 interrupt reach the client?" -- every line claimed to be the timer. */
+            pq = zput(pq, "ASYNC-PM vec=0x"); pq = zhexb(pq, 0x08u + irq);
+            pq = zput(pq, " ok=0x"); pq = zhex(pq, (DWORD)ok);
             pq = zput(pq, " why="); pq = zhex(pq, (DWORD)g_async_why);
             pq = zput(pq, " from=0x");   pq = zhex(pq, cs);
             pq = zput(pq, ":0x");        pq = zhex(pq, g_async_pm_eip);
-            pq = zput(pq, " -> 0x");     pq = zhex(pq, (DWORD)DPMI_IRQ_TARGET_SEL(8));
-            pq = zput(pq, ":0x");        pq = zhex(pq, DPMI_IRQ_TARGET_OFF(8));
+            pq = zput(pq, " -> 0x");     pq = zhex(pq, (DWORD)DPMI_IRQ_TARGET_SEL(0x08u + irq));
+            pq = zput(pq, ":0x");        pq = zhex(pq, DPMI_IRQ_TARGET_OFF(0x08u + irq));
             pq = zput(pq, " SS:ESP=0x"); pq = zhex(pq, (DWORD)g_async_pm_ss);
             pq = zput(pq, ":0x");        pq = zhex(pq, g_async_pm_esp);
             pq = zput(pq, " efl=0x");    pq = zhex(pq, g_async_pm_efl);
@@ -1294,8 +1302,33 @@ static void host_irq_sink(void *ctx, uint8_t irq)
            not stop that: with a faithful held-arrow probe the game still degrades to a
            stop. Until that is understood, keys go back to the exec-loop path they used
            when input merely felt laggy -- a known-good behaviour beats an unexplained one.
-           The TIMER keeps async delivery, which is what makes the game playable at all. */
-        if (g_qi_keys_async && async_inject_irq(1)) InterlockedDecrement(&g_irq1_pending);
+           The TIMER keeps async delivery, which is what makes the game playable at all.
+           ► ...BUT A PROTECTED-MODE CLIENT HAS NO OTHER PATH. That reasoning is about the
+             V86 exec loop, which drains g_irq1_pending when the guest traps. There is no
+             equivalent for a DPMI client: the only cooperative injection the PM loop does
+             is IRQ0, so a key raised while Doom is inside its own game loop is simply
+             never delivered and the guest never sees a keystroke at all. When the client
+             has installed a protected-mode INT 09h handler, asynchronous delivery is not
+             a preference, it is the mechanism. */
+        { int gate = (g_qi_keys_async || (g_dpmi_pm && g_pm_int[0x09].client));
+          int ok   = gate ? async_inject_irq(1) : 0;
+          if (ok) InterlockedDecrement(&g_irq1_pending);
+          /* ► EVERY KEYBOARD INTERRUPT, ACCOUNTED FOR, FOR THE FIRST FEW DOZEN. A key
+               press is a rare, deliberate event -- there is no firehose to guard against
+               -- and "the guest never saw my keystroke" has at least four different
+               causes between here and the client's ISR. Naming the gate values at the
+               moment of the raise turns that into one line. */
+          if (g_keyirq_logged++ < 64) {
+              char kb[160], *kq = kb;
+              kq = zput(kq, "KEYIRQ raise gate="); kq = zhex(kq, (DWORD)gate);
+              kq = zput(kq, " ok=");        kq = zhex(kq, (DWORD)ok);
+              kq = zput(kq, " pm=");        kq = zhex(kq, (DWORD)g_dpmi_pm);
+              kq = zput(kq, " pmhook=");    kq = zhex(kq, (DWORD)g_pm_int[0x09].client);
+              kq = zput(kq, " in_exec=");   kq = zhex(kq, (DWORD)g_in_exec);
+              kq = zput(kq, " why=");       kq = zhex(kq, (DWORD)g_async_why);
+              kq = zput(kq, " ms=");        kq = zhex(kq, GetTickCount());
+              kq = zput(kq, "\r\n"); log_append(LOG_PATH, kb, kq); serial_out(kb, kq);
+          } }
     }
     else if (irq < 8) {
         InterlockedExchange(&g_irqn_pending[irq], 1);
@@ -2556,7 +2589,14 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
                  ~300 ms the 40-frame budget spans a whole run and straddles the switch,
                  which is the only way to SEE what the guest drew: the rig has no VNC and
                  `screendump` is QEMU-only, so these BMPs are the only eyes we have. */
-            if ((cap_tick++ % (300 / VID_PRESENT_TICK_MS + 1)) == 0 && cap_seq < 40) {
+            /* ► THE CADENCE IS A KNOB, BECAUSE 40 FRAMES x 300 ms ONLY SEES THE FIRST
+                 TWELVE SECONDS. A scripted keypress run presses its first key at 14 s
+                 -- deliberately, so the game has reached its demo -- and every shot had
+                 already been taken by then. The run looked like "the keys did nothing"
+                 when what actually happened is that nobody was looking. capture.flag's
+                 CONTENTS are the period in milliseconds now; empty keeps the 300 ms
+                 default, and 1100 spans a whole 45 s headless run. */
+            if ((cap_tick++ % (g_capture_ms / VID_PRESENT_TICK_MS + 1)) == 0 && cap_seq < 40) {
                 char path[] = "C:\\ntvdmex\\shot00.bmp";
                 path[15] = (char)('0' + (cap_seq / 10) % 10);
                 path[16] = (char)('0' + cap_seq % 10);
@@ -6534,6 +6574,17 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     /* Self-screenshot only when explicitly requested (graphical tests) AND headless, so
        the common non-graphical tests never enter the capture path. Latched once here. */
     g_capture  = g_headless && (GetFileAttributesA(CAPTURE_FLAG) != INVALID_FILE_ATTRIBUTES);
+    if (g_capture) {                       /* its contents, if any, are the period in ms */
+        HANDLE hc = CreateFileA(CAPTURE_FLAG, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                                NULL, OPEN_EXISTING, 0, NULL);
+        if (hc != INVALID_HANDLE_VALUE) {
+            char cb3[32]; DWORD rd3 = 0, v3 = 0, i3;
+            ReadFile(hc, cb3, sizeof cb3 - 1, &rd3, NULL); CloseHandle(hc);
+            for (i3 = 0; i3 < rd3 && cb3[i3] >= '0' && cb3[i3] <= '9'; ++i3)
+                v3 = v3 * 10 + (DWORD)(cb3[i3] - '0');
+            if (v3 >= 50 && v3 <= 60000) g_capture_ms = v3;
+        }
+    }
     g_no_a000  = (GetFileAttributesA(NOA000_FLAG) != INVALID_FILE_ATTRIBUTES);
     g_interp12 = (GetFileAttributesA(INTERP12_FLAG) != INVALID_FILE_ATTRIBUTES);
     g_p12_off  = (GetFileAttributesA(P12OFF_FLAG)   != INVALID_FILE_ATTRIBUTES);
@@ -7820,6 +7871,75 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                         if (pm_tick_take()) dpmi_inject_pm_irq(&m, tib, 0x08, steps);
                         g_in_pm_irq = 0;
                     }
+                    /* ── AND THE KEYBOARD, WHICH HAD NO COOPERATIVE PATH AT ALL. ─────────
+                         IRQ0 has had one since #2b; IRQ1 had only the asynchronous
+                         injector, and that gets ONE attempt per keystroke: the 8042 model
+                         raises on the FIFO's empty->full edge and again as the guest
+                         drains it, so if the one raise lands while the CPU thread is
+                         inside the host rather than the guest, the attempt bails
+                         (why=20, "not executing guest code") and nothing ever retries.
+                         Measured, with a scripted key script and every gate open:
+                             KEYIRQ raise gate=1 ok=0 pm=1 pmhook=1 in_exec=0 why=0x14
+                         exactly once in a whole run, twelve scancodes pushed, p60=0 --
+                         the client never read the keyboard port because it was never told
+                         there was anything to read.
+                         A pending interrupt is not a moment, it is a STATE: the 8259 holds
+                         the request until it can be delivered. So hold it here too and
+                         offer it at every pass round the loop, exactly as the timer latch
+                         does. The guest reaches this point constantly (every INT 31h,
+                         every trapped port access), so the latency is microseconds. */
+                    /* ► AND ASK THE 8042, NOT ONLY THE COUNTER. On real hardware the
+                         keyboard's request is a STATE -- OBF stays set until the byte is
+                         read -- so a byte in the FIFO with no interrupt outstanding is a
+                         condition that cannot arise. Deriving the arm from the FIFO as
+                         well as the latch makes any future counter slip self-correcting
+                         instead of silently swallowing a keystroke. */
+                    if ((g_irq1_pending > 0 || vdd_input_sc_pending(&g_in))
+                        && g_pm_int[0x09].client && !g_pm_noirq) {
+                        if (g_irq1_pending <= 0) InterlockedIncrement(&g_irq1_pending);
+                        int vi   = g_dpmi_vi;
+                        int busy = g_in_pm_irq || g_async_pm_active;
+                        int pic  = vdd_pic_can_deliver(&g_pic, 1);
+                        int app  = dpmi_sel_is32((WORD)(VDM_REG(tib, VTIB_CS) & 0xFFFF));
+                        int done1 = 0;
+                        if (vi && !busy && pic) {
+                            /* ── CLAIM THE PENDING INTERRUPT BEFORE RUNNING THE HANDLER,
+                                 NOT AFTER. The client's ISR reads port 0x60 while we are
+                                 inside this call, and the 8042 model RE-ASSERTS the line
+                                 from in there whenever a byte is still queued. Decrementing
+                                 afterwards therefore cancels the interrupt the ISR itself
+                                 just raised, and the remaining byte sits in the FIFO with
+                                 nothing left to announce it. Measured, with a scripted
+                                 E0-50 (down arrow): three bytes delivered, `scleft=1`, and
+                                 not one further raise for the rest of the run -- the
+                                 keyboard simply stopped after the first arrow's prefix.
+                                 Claim first, hand it back if the injection did not run. */
+                            InterlockedDecrement(&g_irq1_pending);
+                            g_in_pm_irq = 1;
+                            done1 = dpmi_inject_pm_irq(&m, tib, 0x09, steps);
+                            g_in_pm_irq = 0;
+                            if (!done1) InterlockedIncrement(&g_irq1_pending);
+                        }
+                        /* ► WHY A HELD-BACK KEY IS HELD BACK. Five separate conditions
+                             stand between a raised IRQ1 and the client's ISR, and a key
+                             that never arrives looks the same whichever one said no.
+                             Bounded, and only while something IS pending, so a run with
+                             no keyboard activity pays nothing. */
+                        if (g_keypm_logged < 64
+                            && (!done1 || g_keypm_logged < 8)) {
+                            char kb2[176], *kq = kb2;
+                            ++g_keypm_logged;
+                            kq = zput(kq, "KEYPM pend=");  kq = zhex(kq, (DWORD)g_irq1_pending);
+                            kq = zput(kq, " vi=");         kq = zhex(kq, (DWORD)vi);
+                            kq = zput(kq, " busy=");       kq = zhex(kq, (DWORD)busy);
+                            kq = zput(kq, " pic=");        kq = zhex(kq, (DWORD)pic);
+                            kq = zput(kq, " app32=");      kq = zhex(kq, (DWORD)app);
+                            kq = zput(kq, " done=");       kq = zhex(kq, (DWORD)done1);
+                            kq = zput(kq, " cs=0x");       kq = zhex(kq, VDM_REG(tib, VTIB_CS) & 0xFFFF);
+                            kq = zput(kq, " scleft=");     kq = zhex(kq, (DWORD)vdd_input_sc_pending(&g_in));
+                            kq = zput(kq, "\r\n"); log_append(LOG_PATH, kb2, kq); serial_out(kb2, kq);
+                        }
+                    }
                     /* ── BRACKET THE FIRST ENTRIES (session 16, Doom) ────────────────────
                        Doom's log ends at the steps==0 [0x714] dump above and the process is
                        gone, with no fault, no banner and no INT 21h. Between that line and
@@ -8472,6 +8592,29 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         /* OPL PROFILE (GH #21): what the guest's music driver actually asks for.
            A gap the game never uses cannot be why the music sounds flat. */
         opl_trace_dump();
+        /* ── THE SOUND STACK, END TO END, IN ONE LINE. ───────────────────────────────
+             Every part of this was previously either unreported or spread across three
+             places, and "sound works" was being inferred from the guest not complaining.
+             It answers, in order: did the guest's PCM reach the DMA engine, did the
+             mixer run, did MIDI messages leave the MPU-401, and did the HOST devices
+             actually open -- because a silent run with a happy guest and a silent run
+             with no wave device look identical from the guest's side. */
+        p = zput(p, "STAGE2: sound: sb_blocks="); p = zhex(p, g_sb.blocks);
+        p = zput(p, " sb_rate=");                 p = zhex(p, g_sb.rate_hz);
+        p = zput(p, " sb_mode=");                 p = zhex(p, (DWORD)g_sb.xfer_mode);
+        p = zput(p, " sb_dspwr=");                p = zhex(p, g_sb.dsp_writes);
+        p = zput(p, " midi_msgs=");               p = zhex(p, g_mpu.sent);
+        p = zput(p, "\r\n");
+        p = zput(p, "STAGE2: async per IRQ:");
+        { unsigned li; for (li = 0; li < 8; ++li) {
+            p = zput(p, " irq"); p = zhexb(p, li); p = zput(p, "=");
+            p = zhex(p, g_async_inj_line[li]); } }
+        p = zput(p, "\r\nSTAGE2: sound2: ");
+        p = zput(p, " mpu_uart=");                p = zhex(p, (DWORD)g_mpu.uart_mode);
+        p = zput(p, " host_wave=");               p = zput(p, g_wave.silent ? "SILENT" : "open");
+        p = zput(p, " host_midi=");               p = zput(p, g_wave.hmidi ? "open" : "NONE");
+        p = zput(p, " underruns=");               p = zhex(p, g_wave.underruns);
+        p = zput(p, "\r\n");
         p = zput(p, "STAGE2: opl: trace=");   p = zhex(p, g_opltrace_n);
         p = zput(p, " tdrop=");               p = zhex(p, g_opltrace_drop);
         p = zput(p, "\r\n");
