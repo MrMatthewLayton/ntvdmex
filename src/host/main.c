@@ -1022,6 +1022,11 @@ static DWORD g_async_pm_bail2 = 0;           /* PM async attempts that did not c
 static DWORD g_pm_watch[DPMI_WATCH_MAX];     /* linear addresses to watch (whitespace-separated) */
 static int   g_pm_nwatch      = 0;
 static DWORD g_pm_irq0_done   = 0;           /* cooperative injections that reached an IRET */
+/* Cooperative delivery of DEVICE lines (2-7) to a PM client -- the retry the async
+   path never had. `inj` is the interrupts that would previously have been LOST. */
+static DWORD g_pm_devirq_inj  = 0;
+static DWORD g_pm_devirq_fail = 0;
+static DWORD g_pm_devirq_drop = 0;           /* pending on a line the client never hooked */
 /* Record and (boundedly) report an async attempt that gave up BEFORE the guest context
    was ever inspected. Bounded for the same reason the PM bail log is: these fire at the
    PIT's rate, so an uncapped line per tick would bury the run it exists to explain. The
@@ -8430,6 +8435,66 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                             kq = zput(kq, "\r\n"); log_append(LOG_PATH, kb2, kq); serial_out(kb2, kq);
                         }
                     }
+                    /* ── AND THE DEVICE LINES, WHICH HAD NO COOPERATIVE PATH EITHER. ─────
+                         This is the KEYBOARD BUG ABOVE, one line number over, and it is
+                         the PCM click. A device IRQ gets exactly ONE delivery attempt --
+                         the synchronous async_inject_irq() inside host_irq_sink(), made
+                         from the AUDIO thread at the instant of the raise. If the CPU
+                         thread happens to be inside the host rather than in guest code
+                         that attempt bails at why=20 and NOTHING RETRIES: the V86 exec
+                         loop's drain (the `for (q = 2; q < 8; ...)` above) needs a `tib`
+                         from a trapping guest, and a 32-bit DPMI client never goes there.
+                         MEASURED on a 45 s Doom run, and it is not marginal:
+                             sb_blocks   0x0de6 = 3558 block completions raised
+                             irq05 (PM)  0x0a37 = 2615 delivered
+                             ASYNC-EARLY 1009 bails, EVERY ONE why=0x14 (g_in_exec == 0)
+                         A dropped SB completion is not a dropped tick. Each one owns a
+                         distinct 256-byte refill: no IRQ means DMX never rewrites that
+                         block, so the 8237 laps the ring and we play the PREVIOUS lap's
+                         audio verbatim. Proven in the capture -- seams 4096 bytes apart
+                         share their preceding bytes exactly, and 96 of 182 seams are
+                         preceded by a full 256-byte repeat. At 86 blocks/s that is the
+                         buzz. A timer tick can be coalesced; this cannot.
+                         So hold the request and offer it every pass, exactly as the
+                         timer latch and the keyboard now do. The guest reaches this point
+                         constantly (every INT 31h, every trapped port access), so the
+                         added latency is microseconds and no new thread is involved. */
+                    if (g_dpmi_vi && !g_pm_noirq && !g_in_pm_irq && !g_async_pm_active) {
+                        int q;
+                        for (q = 2; q < 8; ++q) {
+                            if (!g_irqn_pending[q]) continue;
+                            /* No PM handler: the client cannot want it. Drop it rather
+                               than spin on it forever. */
+                            if (!g_pm_int[0x08u + q].client) {
+                                InterlockedExchange(&g_irqn_pending[q], 0);
+                                ++g_pm_devirq_drop;
+                                continue;
+                            }
+                            if (!vdd_pic_can_deliver(&g_pic, (uint8_t)q)) continue;
+                            /* CLAIM BEFORE RUNNING, HAND BACK ON FAILURE -- the ISR runs
+                               inside the call below and the device model re-raises from in
+                               there, so clearing afterwards would cancel the interrupt the
+                               handler itself just asked for. That is verbatim the mistake
+                               the keyboard made. */
+                            InterlockedExchange(&g_irqn_pending[q], 0);
+                            g_in_pm_irq = 1;
+                            if (dpmi_inject_pm_irq(&m, tib, 0x08u + q, steps)) {
+                                /* Same acknowledge/EOI rule the async path already uses for
+                                   these lines (and which the 2615 delivered ones prove out):
+                                   set in-service, and EOI ourselves only when the vector is
+                                   still our own stub, because then no guest ISR will. */
+                                vdd_pic_acknowledge(&g_pic, (uint8_t)q);
+                                if (async_vec_is_our_stub((unsigned)q))
+                                    vdd_pic_eoi(&g_pic, (uint8_t)q);
+                                ++g_pm_devirq_inj;
+                            } else {
+                                InterlockedExchange(&g_irqn_pending[q], 1);
+                                ++g_pm_devirq_fail;
+                            }
+                            g_in_pm_irq = 0;
+                            break;                  /* one per pass: let it IRET first */
+                        }
+                    }
                     /* ── BRACKET THE FIRST ENTRIES (session 16, Doom) ────────────────────
                        Doom's log ends at the steps==0 [0x714] dump above and the process is
                        gone, with no fault, no banner and no INT 21h. Between that line and
@@ -9120,6 +9185,14 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         { unsigned li; for (li = 0; li < 8; ++li) {
             p = zput(p, " irq"); p = zhexb(p, li); p = zput(p, "=");
             p = zhex(p, g_async_inj_line[li]); } }
+        /* The retry that did not exist before: every one of these is a block-completion
+           IRQ that would previously have been dropped, and so a 256-byte refill DMX would
+           never have made. Compare `devirq_inj` against the shortfall between sb_blocks
+           and irq05 above -- that is the whole of the fix, in one subtraction. */
+        p = zput(p, "\r\nSTAGE2: devirq (cooperative PM retry): inj=");
+        p = zhex(p, g_pm_devirq_inj);
+        p = zput(p, " fail=");  p = zhex(p, g_pm_devirq_fail);
+        p = zput(p, " dropped_unhooked="); p = zhex(p, g_pm_devirq_drop);
         p = zput(p, "\r\nSTAGE2: sound2: ");
         p = zput(p, " mpu_uart=");                p = zhex(p, (DWORD)g_mpu.uart_mode);
         p = zput(p, " host_wave=");               p = zput(p, g_wave.silent ? "SILENT" : "open");

@@ -40,6 +40,25 @@ echo.> %N%\autoexit
 cd /d "%G%"
 start /wait /d "%G%" "" "%G%\dosstub.com"
 copy /y %N%\ntvdmhost.log "%SH%result_doom.log" >nul 2>&1
+rem -- COLLECT THE PCM CAPTURE TOO, AND DELETE IT FIRST.
+rem    sbdump.flag makes the host write C:\ntvdmex\sb.raw, but nothing ever copied it
+rem    back, so the share kept ONE capture from whenever somebody last did it by hand --
+rem    and every later "before vs after" comparison silently re-analysed that same file.
+rem    Two runs of a changed binary produced byte-identical histograms before this was
+rem    noticed. The delete is the important half: absent is a visible failure, stale is
+rem    an invisible one that reads as a result.
+rem    Do NOT delete the source afterwards: the first cut did, so when the copy failed
+rem    there was nothing left to diagnose with. And do not swallow the copy's output --
+rem    a silent failure here is exactly what produced two "different" runs with
+rem    byte-identical histograms.
+del /q "%SH%doombin\sb.raw" >nul 2>&1
+echo sbcopy: src=%N%\sb.raw dst=%SH%doombin\ > "%SH%sbcopy.txt"
+if exist %N%\sb.raw (
+  dir %N%\sb.raw >> "%SH%sbcopy.txt" 2>&1
+  copy /y %N%\sb.raw "%SH%doombin\sb.raw" >> "%SH%sbcopy.txt" 2>&1
+) else (
+  echo sbcopy: NO SOURCE -- sbdump.flag was not set, or the host never wrote it >> "%SH%sbcopy.txt"
+)
 del /q %N%\autoexit >nul 2>&1
 echo.
 echo Done. Log copied to result_doom.log on the share.

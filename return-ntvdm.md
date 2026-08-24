@@ -99,10 +99,35 @@
   **WHY:** `sb_blocks=0x0dee` (3566) against `irq05=0x0a95` (2709). **857 block-
   completion IRQs -- 24% -- never reached the guest.** No IRQ, no DMX refill, so that
   block replays the previous lap. At 86 blocks/s that is the buzz.
-  ▶ **NEXT:** this is a DELIVERY defect, not a mixer or resampler one. `async_bail`
-    is 0x406 (1030). Find why injection declines for IRQ5 and whether an undelivered
-    block IRQ can be retried rather than dropped -- an SB completion IRQ is not
-    coalescable the way a timer tick is: each one owns a distinct 256-byte refill.
+  **▶ FIXED (partially) -- THE DEVICE LINES HAD NO COOPERATIVE PATH.** Every early bail
+  was ONE reason: `1009 ASYNC-EARLY bail why=0x14` = `g_in_exec == 0`, i.e. the SB raised
+  from the audio thread while the CPU thread was inside the host. A device IRQ got
+  exactly ONE attempt (the synchronous `async_inject_irq()` in `host_irq_sink`), and the
+  retry loop that exists for device lines needs a `tib` from a TRAPPING V86 guest -- which
+  a 32-bit DPMI client never is. So the interrupt was simply lost.
+  This is **the keyboard bug of session 22, one line number over**: "a pending interrupt
+  is not a moment, it is a STATE". Same fix, same place in the PM loop, same
+  claim-before-running rule. Measured:
+```
+                      blocks   async irq05   coop retry   delivered   shortfall
+     before             3558          2615            -    73.5%          943
+     after              3680          2809          852    99.5%           19
+```
+  ⚠ **IT DID NOT ELIMINATE THE REPLAY, ONLY REDUCED IT.** With delivery essentially
+  complete the capture still replays the previous ring lap:
+```
+     total jumps                3617 -> 2621
+     seams preceded by a >=64-byte verbatim lap repeat   53% -> 48%
+     whole capture identical to one lap earlier          59% -> 46%
+```
+  ⚠ the last figure is CONTENT-SENSITIVE (silence trivially repeats) and the two runs are
+    different 45 s of attract demo, so treat it as indicative, not as a score.
+  ▶ **NEXT: THE SECOND CAUSE IS THE PRODUCER/CONSUMER RACE.** Delivery is now ~99.5% and
+    the ring still laps the refill, so the remaining replay is not a lost interrupt: it is
+    that `vdd_sb_render()` pulls a whole audio-device chunk at once, running AHEAD of real
+    time, while DMX refills on the guest's clock. Real hardware cannot do this -- the card
+    fetches at exactly the sample rate. Meter the fetch against elapsed wall clock, or
+    keep the read pointer a bounded distance behind the refill.
 
 ═══════════════════════════════════════════════════════════════════════════════
 ██ ▶▶▶ SESSION 22 (2026-08-24, same day, after the session-21 handoff).       ██
@@ -317,7 +342,16 @@
    capture.flag      self-screenshot. ITS CONTENTS ARE THE PERIOD IN MS (1100 spans a
                      45s run; the old fixed 300ms only ever saw the first 12 SECONDS,
                      which made a scripted keypress at 14s look like it did nothing).
-   sbdump.flag       raw PCM capture -> C:\ntvdmex\sb.raw
+   sbdump.flag       raw PCM capture -> C:\ntvdmex\sb.raw. **doomrun.bat now DELETES the
+                     share's copy and collects the new one into doombin\, reporting the
+                     result in sbcopy.txt.** ⚠⚠ IT DID NOT BEFORE: nothing ever copied
+                     sb.raw back, so the share kept ONE capture from whenever somebody
+                     last did it by hand (14:16) and every later before/after comparison
+                     silently re-analysed THAT SAME FILE. Two runs of a deliberately
+                     changed binary produced BYTE-IDENTICAL histograms and it was only
+                     caught by md5-ing the two "different" captures. **A stale artefact
+                     is worse than a missing one: absent fails loudly, stale reads as a
+                     result.** Delete first, and never swallow the copy's output.
    modey.txt         mode-Y run-coalescing slack, only used when the remap is OFF
    noremap.flag      disable per-plane backing, fall back to the heuristic
    qimode.txt        `20` starts the synthetic-key thread
