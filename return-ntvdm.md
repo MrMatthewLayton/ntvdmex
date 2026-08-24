@@ -39,19 +39,81 @@
   check-imports pass, and the BARE-METAL gates re-run this session -- `selftest.com`
   **8/8**, `dpmitest.com` clean exit (0300/0301/0303 + nested INT 31h),
   `dpmiback.com` clean (its `<<< MISMATCH >>>` is the documented benign sentinel).
-  **Three commits, `75f00c7`..`57a8772`:**
+  **Six commits, `75f00c7`..`4e8d5f0`:**
 ```
    75f00c7  audio: separate "not refilled" from "refilled with silence"
    a5d8abe  timer: the refusal histogram says the injector is innocent
    57a8772  audio: the DMA poll comes from the TIMER ISR, only the async arm makes it
+   c980a5e  docs: session-24 handoff
+   b82b675  timer: stop 3249 log lines under the lock -- NOT the regression
+   4e8d5f0  timing: scope the per-sync throttle to PM clients (THE SKYROADS FIX)
 ```
-  ⚠ **NOTHING FUNCTIONAL CHANGED THIS SESSION.** Every commit is instrumentation and
-  log text. A play session would sound and look exactly as it did after session 23 --
-  there is nothing new to listen to until TASK B lands.
+  **ONE FUNCTIONAL CHANGE: `4e8d5f0`, which fixes the Skyroads regression.** Everything
+  else is instrumentation and log text, so Doom looks and sounds exactly as it did
+  after session 23 -- there is nothing new to hear there until TASK B lands.
   Rig `192.168.1.29` UP, share mounted at `/tmp/xpshare`, **current build deployed
   and md5-verified**, all knobs cleared, `headless_ms.txt`=45000. Six rig runs,
   archived in `build/rigruns/result_doom_19{2358,2942,3301,3717,4040,4306}.log` and
   `..._20{3505,3719}.log` (the two bracket runs).
+
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ ⚠⚠⚠ A PLAY SESSION FOUND A REGRESSION NO INSTRUMENT REPORTED. NOW FIXED.     │
+└──────────────────────────────────────────────────────────────────────────────┘
+  The user played Doom, then tried **SKYROADS** and reported it had regressed --
+  still playable, but "a definite timing issue now that affects OPL and graphics".
+  It had been fully playable since session 19. **Every counter this host prints was
+  inside its normal range**; nothing flagged it, because nothing had re-run the
+  title since session 21.
+  Bisected against an Aug-21 reference log found on the share, all runs at a matched
+  30 s cap. `irq0_inj` reproduces to ±0.3%, so it bisects cleanly:
+```
+   c740f4e  session 21 HEAD          irq0_inj 4485    <- the Aug-21 log says 4487
+   141f347  16-bit VGA index writes  irq0_inj 4588
+   07835a5  mode-Y de-interleave     irq0_inj 4505
+   e2f7486  bus+timing               irq0_inj 3413    <- HERE  (-24%)
+   a6fdee6 / session 24 HEAD         irq0_inj 3418 / 3410
+   HEAD with the fix                 irq0_inj 4540
+```
+  ★ **THE CONTROL MATTERED AS MUCH AS THE BISECT.** Rebuilding session 21's HEAD
+    reproduced the reference to **0.04%**, which is what makes this a regression
+    rather than two differently-configured runs being compared.
+  **CAUSE.** `e2f7486` changed `host_irq_sink` from one async attempt per RAISE to one
+  per SYNC. It was written for **Doom**, whose music driver programs the 8254 at
+  16 kHz -- 800 raises for a single 50 ms catch-up gap, each a SuspendThread round
+  trip inside the device lock. Real pathology, real fix. But it was applied to EVERY
+  guest, and Skyroads (V86, 180 Hz, a raise or two per sync) cannot produce that
+  burst -- it only paid for it. **The throttle is now scoped to PM clients**: Doom
+  keeps exactly the behaviour sessions 22-23 measured and tuned, the V86 path returns
+  to what every V86 measurement in this project was taken against. Doom re-measured
+  after the fix: every figure inside the day's run-to-run range.
+  ⚠ **AND THE FIRST HYPOTHESIS WAS WRONG.** 3249 `ASYNC-EARLY bail` lines per 30 s --
+    file I/O under `g_lock` at the PIT's rate -- looked obviously guilty. Capping them
+    (3249 -> 32, log 161 KB -> 62 KB) moved `irq0_inj` by 10, i.e. nothing. Kept
+    anyway on its own merits (`b82b675`), because `g_async_why_hist` now carries that
+    account with no I/O -- but **reasoning about a cost is not measuring it.**
+
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ ★★ WHAT THE PLAYER REPORTED, VERBATIM -- TWO OF THE THREE ARE NEW DATA        │
+└──────────────────────────────────────────────────────────────────────────────┘
+```
+   AUDIO   "the echo is still there (sounds roughly equivalent to stock NTVDM)"
+           ▶ WE ARE AT PARITY WITH STOCK. That is a ceiling on what the remaining
+             audio work is worth, and it should be weighed before spending more
+             sessions on it. ⚠ NOT verified how the comparison was made -- stock
+             ntvdm has only ever been measured as far as Doom's TITLE SCREEN.
+   VIDEO   "the status bar is still pixelated, AND IMMEDIATE SCENE CHANGES
+           (i.e. menu melt into FPS) ARE PIXELATED"
+           ▶ ★★★ NEW, AND THE BEST VIDEO CLUE SINCE THE ORACLE. The melt/wipe is a
+             screen-to-screen COPY, not a fresh render. So the rule may be: anything
+             Doom COPIES within video memory collapses; anything it DRAWS from CPU
+             memory is perfect (title screen 0-of-64000, the 3D view, all correct).
+             That unifies the status bar with the melt and points at the copy path.
+             ⚠ It does NOT simply reinstate the write-mode-1 latch story -- session
+             23 killed that on the row evidence (see below) -- but "which copy path"
+             is a sharper question than "which writer".
+   TIMING  "once in FPS, it plays as I would expect on a period-correct DOS
+           machine" -> INDEPENDENTLY CONFIRMS the 135 Hz / 91%-of-raises finding.
+```
 
 ┌──────────────────────────────────────────────────────────────────────────────┐
 │ ⚠⚠ REFUTED: THE TIMER DEFICIT. IT WAS AN ASYNC-ONLY COUNTER.                 │
@@ -214,9 +276,14 @@
   **TASK C (if A and B land).** If cooperative ticks can be made to produce refills
   the way async ones do, polls go from 55/s to ~135/s against 82 blocks/s and the
   margin race has no margin left -- no lock work, no page traps, no new subsystem.
-  **TASK D (video, untouched this session).** Name the writer that puts phase-1 data
-  into all four planes -- session 23's status-bar section below is unchanged and
-  still correct. Nothing this session bears on it.
+  **TASK D (video -- and the player just narrowed it).** Name the writer that puts
+  phase-1 data into all four planes. Session 23's status-bar section below is
+  unchanged and still correct, but the new observation that **the menu-to-FPS MELT is
+  also pixelated** says the fault follows COPIES, not the status bar specifically:
+  the melt is a screen-to-screen copy, the title screen and 3D view are fresh renders
+  and both are perfect. ▶ Start by finding which copy path the melt uses and whether
+  it is the same one the bar uses -- that is a much smaller search than "name the
+  writer", and one run with the oracle against a melt frame would confirm the rule.
   **TASK E (still worth doing, on its own merits).** `g_lock` contention: 103 ms
   waits with the AUDIO thread the longest waiter, 108 ms holds, 1.86M plane swaps.
   It will help video and the audio thread's own stalls. It will NOT fix the echo.
