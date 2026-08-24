@@ -390,11 +390,40 @@
     stores under single-plane masks** -- so the question is why Doom's per-plane
     stores would deposit PHASE-1 data into all four planes, and specifically
     **whether the mask a store lands under is the mask Doom believes it set.**
-    ▶ Cheapest next probe: at the first few hundred mask changes, sample a fixed bar
-      row from the OUTGOING plane before swapping away. If consecutive planes receive
-      byte-identical samples, the guest is writing the same data four times and the
-      fault is upstream of the planes -- in how a mask write is sequenced against the
-      stores that follow it. Bounded, no diffing of 2M swaps.
+    ▶ **THAT PROBE IS BUILT AND RUN** (`ysmp_check`, `STAGE2: ... ysmpA/ysmpB`). It
+      samples the OUTGOING plane before each swap and counts only windows that actually
+      CHANGED, comparing each against the last changed window from a DIFFERENT plane:
+```
+       band A rows168-183   writes=243  cross_same=30  cross_diff=212   12% same
+       band B rows184-199   writes=67   cross_same=32  cross_diff=34    48% same
+```
+      The ordering matches bandprof's collapse intensity (54% / 80% uniform), which is
+      suggestive -- but the planes mostly receive DIFFERENT bytes, and 12/48 is well
+      under 54/80, so **the uniformity is not produced by the writes we can see.**
+      ⚠ WEAK: n is 243 and 67 for a whole run, because those rows rarely change. It
+        narrows; it does not settle.
+
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ ★★★★★ THE CONSTRAINT THAT SHOULD HAVE BEEN DRIVING THIS ALL ALONG           │
+└──────────────────────────────────────────────────────────────────────────────┘
+  **The TITLE SCREEN is pixel-exact (0 of 64000) and the 3D view renders correctly,
+  and BOTH go through the SAME unchained per-plane blit** -- same mask sequence, same
+  remap, chain4=0, mapmask 0x01/0x02/0x04/0x08 at ~510k each. So Doom's per-plane
+  stores and our mask-to-plane mapping are **SOUND for content that is fully redrawn.**
+  The status bar is the one thing that is NOT fully redrawn: Doom updates only what
+  changes. That is exactly why session 22 watched the 3D view "heal itself" while the
+  bar stayed wrong and FLAT FROM THE FIRST FRAME.
+  ▶ **SO THE BAR'S WRONG BYTES ARE WRITTEN ONCE, WRONGLY, AND NEVER REWRITTEN.** Stop
+    hunting a writer that corrupts plane data during play -- every such hunt (fan-out,
+    latch bursts, render, guest stores) has now come back excluded or inconclusive,
+    which is what you would expect if nothing is corrupting anything during play.
+    Ask instead: **what did the planes contain when the bar was first drawn, and why
+    did that draw not cover every offset?**
+  ▶ **A CONCRETE, UNTESTED CANDIDATE.** While `chain4=1` (mode 13h chained) the A0000
+    window maps `g_ysec[4]` -- the LINEAR section, not any plane. Anything the guest
+    writes before it switches to unchained lands there and is invisible to all four
+    planes. What Doom draws across that transition, and in what order, is the next
+    question. `ymap_select(-1)` on the chain4 change is where to start reading.
 
   **TASK D (video -- and the player just narrowed it).** Name the writer that puts
   phase-1 data into all four planes. Session 23's status-bar section below is
