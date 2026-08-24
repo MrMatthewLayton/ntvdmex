@@ -56,6 +56,8 @@
 /* Per-plane backing for mode Y is ON by default -- see the MODE-Y PLANE BACKING block.
    This file DISABLES it and falls back to the de-interleave heuristic, which is worth
    keeping only because it is what a machine that refuses the remap will use. */
+#define SBDUMP_FLAG  "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\sbdump.flag"
+#define SBDUMP_PATH  "C:\\ntvdmex\\sb.raw"
 #define NOREMAP_FLAG "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\noremap.flag"
 /* Diagnostic knob: disable the mode-12h A0000 NOACCESS trap. With it off, planar
    writes land in the raw aperture instead of the VGA engine, so the PICTURE will
@@ -3323,6 +3325,9 @@ static int    g_yremap      = 0;             /* the window is ours              
 static int    g_ycur        = -1;            /* section index currently at A0000     */
 static int    g_yprev_mask  = 0;             /* mask live while the scratch was up   */
 static DWORD  g_yswaps = 0, g_yfanouts = 0, g_yfail = 0;
+static int    g_ywmode      = 0;             /* GC write mode, tracked for latch copies */
+static int    g_ylatch      = 0;             /* write mode 1 seen in the current window */
+static DWORD  g_ylatch_ok = 0, g_ylatch_unsolved = 0, g_ylatch_desc = 0;
 
 /* VirtualQuery a probe address into the log -- the shape of the A0000 region after each
    step is the only thing that distinguishes "the range is reserved by the VDM" from
@@ -3434,6 +3439,71 @@ static int modey_remap_init(void)
     return 1;
 }
 
+/* ── A LATCH COPY MOVES ALL FOUR PLANES AT ONCE, AND ONE MAPPING CANNOT DO THAT. ────
+     VGA write mode 1: reading an address loads every plane into the chip's latches, and
+     the next store writes them all back at the destination. It is the standard mode-Y
+     way to move a region inside video memory, and Doom uses it to carry the STATUS BAR
+     between its three pages rather than redraw it -- measured, 120 times a run, always
+     as `mask := 0x0F` (write mode 0), `write mode := 1`, copy, `write mode := 0`.
+
+     With A0000 pointing at one buffer the guest can only move the bytes it can see, so
+     every plane ended up with the same data: the four-equal-pixel collapse the WAD
+     oracle found in the bar (STBAR 60% wrong, identical in every frame) while the 3D
+     view and the title screen -- plain write-mode-0 stores -- were pixel-exact.
+
+   ► THE COPY IS RECOVERABLE, AND IT IS SOLVED RATHER THAN GUESSED. What the window
+     leaves behind is `scratch[dst] = seed[src]` for every byte it moved. The offsets it
+     changed are known exactly (scratch vs seed), so a single displacement `src = dst -
+     delta` explains the whole window if it explains EVERY changed byte -- and that is
+     checkable. Try the plausible page strides, VERIFY each against every changed byte,
+     and only apply one that survives. A window nothing explains falls back to the plain
+     fan-out and is counted, so "we could not solve it" can never masquerade as success. */
+/* Does one displacement explain EVERY byte the burst changed? */
+static int modey_latch_verify(long dl)
+{
+    const BYTE *sc = (const BYTE *)g_yview[5];
+    unsigned i, n = 0;
+    for (i = 0; i < MODEY_WIN; ++i) {
+        long src;
+        if (sc[i] == g_yseed[i]) continue;
+        ++n;
+        src = (long)i - dl;
+        if (src < 0 || src >= (long)MODEY_WIN || g_yseed[src] != sc[i]) return 0;
+    }
+    return n != 0;
+}
+
+/* ► DERIVE THE DISPLACEMENT FROM THE DATA, DO NOT GUESS AT PAGE STRIDES. A candidate
+     list of plausible strides solved 71 of 120 bursts and left 49 unexplained, which is
+     the shape of a guess: it works where the guess was right. The burst itself says what
+     the source was -- the longest run of changed bytes IS a verbatim copy of some run in
+     the pre-burst image, so find that run in the seed and the displacement falls out.
+     Every hit is then VERIFIED against every changed byte before it is used, so a wrong
+     match cannot be applied; a burst nothing explains is counted, never guessed at. */
+static long modey_latch_delta(void)
+{
+    const BYTE *sc = (const BYTE *)g_yview[5];
+    unsigned i, run_lo = 0, run_len = 0, best_lo = 0, best_len = 0, cap;
+    for (i = 0; i < MODEY_WIN; ++i) {
+        if (sc[i] != g_yseed[i]) {
+            if (!run_len) run_lo = i;
+            ++run_len;
+            if (run_len > best_len) { best_len = run_len; best_lo = run_lo; }
+        } else run_len = 0;
+    }
+    if (best_len < 8) return 0;                  /* too little to identify a source */
+    cap = best_len > 24 ? 24 : best_len;
+    for (i = 0; i + cap <= MODEY_WIN; ++i) {
+        unsigned j;
+        if (g_yseed[i] != sc[best_lo]) continue;              /* cheap first-byte reject */
+        for (j = 1; j < cap; ++j) if (g_yseed[i + j] != sc[best_lo + j]) break;
+        if (j < cap) continue;
+        { long dl = (long)best_lo - (long)i;
+          if (dl && modey_latch_verify(dl)) return dl; }
+    }
+    return 0;
+}
+
 static void modey_remap_select(void *ctx, int mask)
 {
     int want, p, n = 0, sel[4];
@@ -3500,6 +3570,75 @@ static uint8_t *modey_remap_plane(void *ctx, int p)
 {
     (void)ctx;
     return (uint8_t *)g_yview[p & 3];
+}
+
+/* ► THE COPY'S BOUNDARY IS THE WRITE-MODE CHANGE, NOT THE MASK CHANGE. Solving over a
+     whole mask window found nothing (44 windows, 0 solved): Doom sets `mask := 0x0F`
+     once and then does MANY separate latch copies under it, so the changed bytes are the
+     union of several moves and no single displacement explains them. Between `write mode
+     := 1` and `write mode := 0` there is exactly one burst, which is the thing a single
+     displacement CAN describe. Seed at the start of the burst, solve at its end. */
+static void modey_remap_wmode(void *ctx, int wm)
+{
+    (void)ctx;
+    if (!g_yremap) { g_ywmode = wm; return; }
+    if (wm == 1 && g_ywmode != 1) {
+        if (g_ycur == 5) {                          /* multi-plane: the scratch is the
+                                                       only place the copy is visible */
+            unsigned k; const BYTE *sc = (const BYTE *)g_yview[5];
+            for (k = 0; k < MODEY_WIN; ++k) g_yseed[k] = sc[k];
+            g_ylatch = 1;
+        }
+        /* A single-plane mask needs nothing: the guest is moving bytes inside the plane
+           that IS mapped, which is exactly what the hardware would do. */
+    } else if (wm != 1 && g_ywmode == 1 && g_ylatch) {
+        long dl = modey_latch_delta();
+        unsigned k;
+        const BYTE *sc = (const BYTE *)g_yview[5];
+        if (dl) {
+            int p;
+            for (k = 0; k < MODEY_WIN; ++k) {
+                long src;
+                if (sc[k] == g_yseed[k]) continue;
+                src = (long)k - dl;
+                for (p = 0; p < 4; ++p)
+                    if (g_yprev_mask & (1 << p)) ((BYTE *)g_yview[p])[k] = ((BYTE *)g_yview[p])[src];
+            }
+            ++g_ylatch_ok;
+        } else ++g_ylatch_unsolved;
+        /* ► WHAT IS A BURST, ACTUALLY? Two inference schemes have now failed on it --
+             plausible page strides explained 71 of 120 (the shape of a lucky guess) and
+             deriving the displacement from the copied run explained NONE. That second
+             result is the informative one: if the burst were a verbatim region copy, its
+             longest changed run would appear verbatim in the pre-burst image, and it does
+             not. So describe the burst instead of guessing at it: how much changed, over
+             what span, and whether the destination is a CONSTANT (a latched fill) rather
+             than a copy. Bounded to the first few, because one example settles it. */
+        if (g_ylatch_desc < 6) {
+            unsigned k2, n = 0, lo = MODEY_WIN, hi = 0, uniq = 0;
+            BYTE first = 0;
+            int constant = 1;
+            for (k2 = 0; k2 < MODEY_WIN; ++k2) {
+                if (sc[k2] == g_yseed[k2]) continue;
+                if (!n) { lo = k2; first = sc[k2]; }
+                if (sc[k2] != first) constant = 0;
+                hi = k2; ++n;
+            }
+            (void)uniq;
+            { char lb2[224], *lq = lb2;
+              ++g_ylatch_desc;
+              lq = zput(lq, "MODEY-LATCH burst changed="); lq = zhex(lq, n);
+              lq = zput(lq, " span=0x"); lq = zhex(lq, lo);
+              lq = zput(lq, "..0x"); lq = zhex(lq, hi);
+              lq = zput(lq, constant ? " DEST IS CONSTANT 0x" : " dest varies, first=0x");
+              lq = zhexb(lq, first);
+              lq = zput(lq, " mask=0x"); lq = zhexb(lq, (unsigned)g_yprev_mask);
+              lq = zput(lq, "\r\n"); log_append(LOG_PATH, lb2, lq); serial_out(lb2, lq); }
+        }
+        for (k = 0; k < MODEY_WIN; ++k) g_yseed[k] = sc[k];   /* re-seed for the byte diff */
+        g_ylatch = 0;
+    }
+    g_ywmode = wm;
 }
 
 /* --- planar mode-12h: trap direct A0000 writes through the VGA write engine -- */
@@ -7204,6 +7343,12 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     vdd_bus_add(&g_bus, &g_opl_dev);            /* AdLib/OPL2: ports 0x388/0x389 */
     g_sb.dma = &g_dma; g_sb.opl = &g_opl;       /* SB pulls PCM via DMA, mirrors FM */
     g_sb.base = SB_DEFAULT_BASE; g_sb.irq = SB_DEFAULT_IRQ;
+    /* Opt-in raw PCM capture -- see sb_state.cap_buf. 4 MB is ~3 minutes of Doom's
+       11025 Hz stereo, and it is a static buffer so the audio thread never allocates. */
+    if (GetFileAttributesA(SBDUMP_FLAG) != INVALID_FILE_ATTRIBUTES) {
+        static BYTE s_sbcap[4u * 1024u * 1024u];
+        g_sb.cap_buf = s_sbcap; g_sb.cap_cap = sizeof s_sbcap; g_sb.cap_len = 0;
+    }
     g_sb_dev = vdd_sb_device(&g_sb);
     vdd_bus_add(&g_bus, &g_sb_dev);             /* Sound Blaster 16: 0x220-0x22F  */
     g_mpu.sink = host_midi_sink;
@@ -7240,6 +7385,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         g_vid.ymap_ctx    = NULL;
         g_vid.ymap_select = modey_remap_select;
         g_vid.ymap_plane  = modey_remap_plane;
+        g_vid.ymap_wmode  = modey_remap_wmode;
     }
     ui = CreateThread(NULL, 0, ui_thread, NULL, 0, NULL);
     /* Headless: arm the deadline watchdog so a run that blocks on input (a "press any
@@ -8937,7 +9083,16 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
              mixer run, did MIDI messages leave the MPU-401, and did the HOST devices
              actually open -- because a silent run with a happy guest and a silent run
              with no wave device look identical from the guest's side. */
-        p = zput(p, "STAGE2: sound: sb_blocks="); p = zhex(p, g_sb.blocks);
+        if (g_sb.cap_buf && g_sb.cap_len) {
+          HANDLE hc = CreateFileA(SBDUMP_PATH, GENERIC_WRITE, 0, NULL,
+                                  CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+          if (hc != INVALID_HANDLE_VALUE) {
+              DWORD wr = 0; WriteFile(hc, g_sb.cap_buf, g_sb.cap_len, &wr, NULL); CloseHandle(hc);
+          }
+          p = zput(p, "STAGE2: sound: raw PCM capture -> sb.raw, "); p = zhex(p, g_sb.cap_len);
+          p = zput(p, " bytes\r\n");
+      }
+      p = zput(p, "STAGE2: sound: sb_blocks="); p = zhex(p, g_sb.blocks);
         p = zput(p, " sb_rate=");                 p = zhex(p, g_sb.rate_hz);
         p = zput(p, " sb_mode=");                 p = zhex(p, (DWORD)g_sb.xfer_mode);
         p = zput(p, " sb_dspwr=");                p = zhex(p, g_sb.dsp_writes);
@@ -9036,6 +9191,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
       p = zput(p, " swaps="); p = zhex(p, g_yswaps);
       p = zput(p, " fanouts="); p = zhex(p, g_yfanouts);
       p = zput(p, " failed="); p = zhex(p, g_yfail);
+      p = zput(p, " latch_solved="); p = zhex(p, g_ylatch_ok);
+      p = zput(p, " latch_UNSOLVED="); p = zhex(p, g_ylatch_unsolved);
       p = zput(p, " gap="); p = zhex(p, g_vid.modey_gap);
       p = zput(p, " attributed="); p = zhex(p, g_vid.ynz[0]);
       p = zput(p, " crtc_seen="); p = zhexb(p, g_vid.crtc_seen);
@@ -9050,7 +9207,15 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
       p = zput(p, " wmode hist:");
       for (i = 0; i < 4; ++i) { p = zput(p, " "); p = zhexb(p, (unsigned)i);
                                 p = zput(p, "x"); p = zhex(p, g_vid.wmode_hist[i]); }
-      p = zput(p, " mapmask hist:");
+      p = zput(p, "\r\nSTAGE2: modeY (wmode,mask) pairs:");
+      { unsigned wm, mk;
+        for (wm = 0; wm < 4; ++wm)
+          for (mk = 0; mk < 16; ++mk)
+            if (g_vid.mw_hist[wm * 16 + mk]) {
+                p = zput(p, " w"); p = zhexb(p, wm);
+                p = zput(p, "/m"); p = zhexb(p, mk);
+                p = zput(p, "="); p = zhex(p, g_vid.mw_hist[wm * 16 + mk]); } }
+      p = zput(p, "\r\nSTAGE2: modeY mapmask hist:");
       for (i = 0; i < 16; ++i)
           if (g_vid.mask_hist[i]) { p = zput(p, " 0x"); p = zhexb(p, (unsigned)i);
                                     p = zput(p, "x"); p = zhex(p, g_vid.mask_hist[i]); }

@@ -242,6 +242,10 @@ static int16_t sb_fetch_sample(sb_state *st, int *ended)
               ? (st->xfer_signed ? (int8_t)raw[1] * 256 : ((int32_t)raw[1] - 128) * 256)
               : l;
     }
+    if (st->cap_buf && st->cap_len + want <= st->cap_cap) {
+        uint32_t i2;
+        for (i2 = 0; i2 < want; ++i2) st->cap_buf[st->cap_len++] = raw[i2];
+    }
     st->block_left = (st->block_left > want) ? (st->block_left - want) : 0;
     return (int16_t)((l + r) / 2);
 }

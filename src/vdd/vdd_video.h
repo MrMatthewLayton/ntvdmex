@@ -116,6 +116,7 @@ typedef struct video_state {
          Left null, the VDD falls back to modey_flush()'s heuristic. */
     void    *ymap_ctx;
     void   (*ymap_select)(void *ctx, int mask);
+    void   (*ymap_wmode)(void *ctx, int wmode);   /* GC write mode changed */
     uint8_t *(*ymap_plane)(void *ctx, int p);
     uint8_t  write_mode;   /* GR5 bits0-1                                          */
     uint8_t  bit_mask;     /* GR8 (reset 0xFF)                                     */
@@ -166,6 +167,7 @@ typedef struct video_state {
        arrays that actually carry a mode-Y frame. */
     uint32_t mask_hist[16];             /* map-mask values written, by value          */
     uint32_t wmode_hist[4];             /* GC write modes selected (1 = LATCH COPY)   */
+    uint32_t mw_hist[64];               /* (write mode, map mask) pairs -- see seq_out */
     uint32_t ysnap[4];                  /* snapshots taken into each mode-Y plane      */
     uint32_t ynz[4];                    /* busiest snapshot each plane ever received   */
 } video_state;

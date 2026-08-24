@@ -927,6 +927,12 @@ static void seq_set_data(void *self, uint32_t v)
            ever checked that against a real one. A 16-entry histogram costs nothing and
            turns "the frame comes out doubled" into "plane 1 was never selected". */
         st->mask_hist[v & 0x0F]++;
+        /* ► THE PAIR, NOT THE TWO HISTOGRAMS SEPARATELY. "write mode 1 happens 120
+             times" and "mask 0x0F happens 44 times" cannot be combined by the reader:
+             a latch copy through a SINGLE-plane mask is served correctly by per-plane
+             backing, one through an ALL-plane mask is not, and only the pairing says
+             which Doom actually does. */
+        st->mw_hist[(st->write_mode & 3) * 16 + (v & 0x0F)]++;
         /* A mask change is the moment the outgoing plane's data is complete. */
         /* Flush BEFORE the mask moves: everything written since the last flush
            belongs to the mask that is now going out. With host-supplied per-plane
@@ -983,6 +989,7 @@ static void gc_set_data(void *self, uint32_t v)
              to be visible rather than inferred. */
         st->wmode_hist[v & 3]++;
         st->write_mode  = (uint8_t)(v & 3);
+        if (st->ymap_wmode) st->ymap_wmode(st->ymap_ctx, (int)(v & 3));
         break;
     case 8: st->bit_mask    = (uint8_t)v;          break;
     default: break;

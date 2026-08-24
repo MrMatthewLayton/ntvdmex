@@ -85,6 +85,16 @@ typedef struct sb_state {
     /* mixer */
     uint8_t  mix_index;
     uint8_t  mix[256];
+    /* ── RAW CAPTURE OF WHAT WE ACTUALLY PLAY. ───────────────────────────────────
+         The DMA ring is the only place the guest's PCM exists, and vdd_sb_render() is
+         the only thing that reads it -- so a byte-for-byte record of what came out is
+         the audio equivalent of a screenshot. Doom's sound effects are DS* lumps in the
+         IWAD, 8-bit unsigned at 11025 Hz, which makes them an exact oracle: correlate
+         the capture against the lump and any deviation is ours, located in time.
+         Host-owned buffer, filled without I/O so the audio thread never blocks; the
+         host writes it out at wind-down. */
+    uint8_t *cap_buf;
+    uint32_t cap_len, cap_cap;
 } sb_state;
 
 /* Build the device descriptor to hand to vdd_bus_add(). Set base/irq/dma and the
