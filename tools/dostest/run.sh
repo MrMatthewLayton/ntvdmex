@@ -133,3 +133,12 @@ cc -std=c99 -Wall -Wextra -Wno-unused-function -O0 -g \
    -o "$DIR/ems_test" "$DIR/ems_test.c"
 
 "$DIR/ems_test"
+
+# Session 21: the x86 instruction-LENGTH decoder and boundary test (src/host/x86len.h).
+# It decides which `CD nn` byte pairs the DPMI host may rewrite into a BOP, and getting
+# that wrong is silent and fatal in both directions -- a mid-instruction rewrite is what
+# killed Doom inside R_InitTextureMapping for five sessions.
+cc -std=c99 -Wall -Wextra -Wno-unused-function -O0 -g \
+   -o "$DIR/x86len_test" "$DIR/x86len_test.c"
+
+"$DIR/x86len_test"

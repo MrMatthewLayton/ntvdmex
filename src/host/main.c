@@ -18,6 +18,7 @@
 #include "dpmi.h"
 #include "csrss.h"
 #include "log.h"
+#include "x86len.h"     /* which `CD nn` byte pairs are really INT instructions */
 #include "dos_mcb.h"
 #include "dos_loader.h"
 #include "dos_psp.h"
@@ -976,6 +977,53 @@ static DWORD g_pm_irq0_done   = 0;           /* cooperative injections that reac
    PIT's rate, so an uncapped line per tick would bury the run it exists to explain. The
    cap is generous enough to span a whole 45s headless run. */
 static DWORD g_async_early_bail_logged = 0;
+/* ── WHERE WAS THE GUEST WHEN THE CLOCK ASKED FOR A TURN? ────────────────────────────
+     The asynchronous injector is the ONLY thing that can touch a protected-mode guest
+     inside a BOP-free stretch, and session 20 localised Doom's death to exactly such a
+     stretch (R_InitTextureMapping's ~3.5M-instruction loop 2). The commentary above
+     async_inject_irq() already names the open question: every LOGGED injection lands at
+     0x03ae53dc -- the millisecond-delay spin, the safe case -- and "whether a later one
+     lands somewhere else" was never measured.
+     It could not be measured with a per-attempt line: the guest's timer runs at 16124 Hz
+     (PIT-RELOAD 0x4a, measured), so an uncapped line per attempt is ~700k lines a run and
+     a capped one goes quiet long before the interesting part. Session 20 raised the cap
+     and still saw nothing near the death, and concluded "zero async attempts" -- but the
+     V86 arm of async_inject_irq() returns SILENTLY, so that was an unread instrument, not
+     a measurement.
+     So dedupe by SITE instead of counting attempts: log each distinct protected-mode
+     CS:EIP the injector finds the CPU at, ONCE. Doom's PM code has a handful of such
+     sites, so this is tens of lines for a whole run and it CANNOT miss a new one -- a
+     tick landing inside loop 2 is a new EIP by construction.
+   ► THE OBSERVATION PASS DOES NOT INJECT. Logging while the guest thread is suspended
+     is the one thing this file has always refused to do, and resuming-then-logging
+     races the very death we are trying to catch. So a new site costs one DROPPED tick:
+     resume, log, return 0. The next tick injects. At 16 kHz that is unmeasurable, and
+     it means the site line is on disk BEFORE anything is rewritten. */
+/* The longest single dpmi_enter_pm() -- i.e. the longest run of guest protected-mode
+   code that gave the host no turn at all -- and the record-breakers past the threshold.
+   Only NEW maxima log, so a run reports a growth curve of a few dozen lines instead of
+   one line per entry. */
+#define PM_STRETCH_LOG_US 300u
+static DWORD g_pm_stretch_max_us = 0;
+static DWORD g_pm_stretch_logged = 0;
+#define ASYNC_SITE_MAX 96
+static DWORD g_async_site_eip[ASYNC_SITE_MAX];
+static WORD  g_async_site_cs[ASYNC_SITE_MAX];
+static int   g_async_nsite = 0;
+static int   g_async_site_full = 0;
+/* 1 = not seen before (and now recorded). Runs on the timer/UI thread only, so the
+   table needs no lock: async_inject_irq() bails at why=20 unless the CPU thread is
+   inside guest execution, which is precisely when it is not in here. */
+static int async_site_new(WORD cs, DWORD eip)
+{
+    int i;
+    for (i = 0; i < g_async_nsite; ++i)
+        if (g_async_site_eip[i] == eip && g_async_site_cs[i] == cs) return 0;
+    if (g_async_nsite >= ASYNC_SITE_MAX) { g_async_site_full = 1; return 0; }
+    g_async_site_cs[g_async_nsite] = cs; g_async_site_eip[g_async_nsite] = eip;
+    g_async_nsite++;
+    return 1;
+}
 static void async_early_bail(unsigned why)
 {
     char pb[96], *pq = pb;
@@ -1020,6 +1068,25 @@ static int async_inject_irq(unsigned irq)
 
     efl = cx.EFlags;
     cs  = cx.SegCs & 0xFFFF;
+    /* ── THE OBSERVATION PASS. See async_site_new(). Protected mode only: in V86 the
+         guest's EIP wanders over the whole real-mode image and would fill the table with
+         noise, burying the one site this exists to catch. */
+    if (!(efl & EFLAGS_VM_BIT) && (cs & 4) && async_site_new((WORD)cs, cx.Eip)) {
+        char sb2[160], *sq = sb2;
+        DWORD sblin = dpmi_sel_base((WORD)cs) + cx.Eip;
+        ResumeThread(g_hcpu);                    /* NEVER log while the guest is held */
+        sq = zput(sq, "ASYNC-SITE #"); sq = zhex(sq, (DWORD)g_async_nsite);
+        sq = zput(sq, " irq="); sq = zhex(sq, irq);
+        sq = zput(sq, " cs:eip=0x"); sq = zhex(sq, cs);
+        sq = zput(sq, ":0x"); sq = zhex(sq, cx.Eip);
+        sq = zput(sq, " lin=0x"); sq = zhex(sq, sblin);
+        sq = zput(sq, " ss:esp=0x"); sq = zhex(sq, cx.SegSs & 0xFFFF);
+        sq = zput(sq, ":0x"); sq = zhex(sq, cx.Esp);
+        sq = zput(sq, " efl=0x"); sq = zhex(sq, efl);
+        sq = zput(sq, " ms="); sq = zhex(sq, GetTickCount());
+        sq = zput(sq, "\r\n"); log_append(LOG_PATH, sb2, sq); serial_out(sb2, sq);
+        return 0;                                /* observed only -- the next tick injects */
+    }
     /* ► PROTECTED MODE IS A DIFFERENT FRAME AND A DIFFERENT VECTOR TABLE, so it gets its
          own arm rather than a widened condition. The test for "is this the guest at all"
          is the selector's TABLE INDICATOR: everything we hand the client comes out of our
@@ -1076,8 +1143,16 @@ static int async_inject_irq(unsigned irq)
         }
         return ok;
     }
+    /* ► THIS ARM USED TO RETURN IN SILENCE, AND THAT SILENCE WAS READ AS EVIDENCE.
+         Session 20 recorded "ZERO async attempts of ANY kind across the death window"
+         and struck the injector off the suspect list. But Doom is doing real-mode file
+         I/O right up to the death (INT 31h 0302 -> callRM), so the CPU is in V86 for
+         most of those attempts and every one of them left here without a word. Give it
+         a why code like every other exit; async_early_bail's cap keeps it bounded. */
     if (!(efl & (0x200u | EFLAGS_VIF_BIT)) || cs == DOS_HDLR_SEG) {
-        ResumeThread(g_hcpu); g_async_bail++; return 0;
+        ResumeThread(g_hcpu);
+        async_early_bail((cs == DOS_HDLR_SEG) ? 26 : 25);
+        return 0;
     }
     ss = cx.SegSs & 0xFFFF; sp = cx.Esp & 0xFFFF; ip = cx.Eip & 0xFFFF;
 
@@ -3804,10 +3879,17 @@ static DWORD dpmi_pm_eip(volatile BYTE *tib)
    narrowest rule that covers the case, and g_int_vec[] remains the revert map. */
 static void dpmi_bp_arm(void);               /* fwd: a new region may hold a requested BP */
 static void dpmi_bp_rearm_pending(DWORD cur_lin);   /* fwd: re-plant stepped-over breakpoints */
-static void dpmi_patch_code_region(DWORD base, DWORD limit)
+/* `d32` is the region's DEFAULT OPERAND SIZE -- the D/B bit of the descriptor that named
+   it code -- and it is not optional: instruction lengths differ between the two, so
+   decoding DOS/4GW's 16-bit modules as 32-bit rejects obvious real sites (`mov ax,4c00h
+   / int 21h` scored zero votes, measured). Where the width is genuinely unknown the scan
+   is idempotent and self-healing: a site rejected under the wrong width is not recorded
+   in the patch map, so the next pass -- and there is always a next pass, because the
+   client declares its regions repeatedly while it loads -- gets another chance at it. */
+static void dpmi_patch_code_region(DWORD base, DWORD limit, int d32)
 {
     volatile BYTE *mem;
-    DWORD end, n = 0;
+    DWORD end, n = 0, rej = 0;
     char lb[192], *q = lb;
     /* ► NEVER PATCH THE IVT / BIOS DATA AREA, even when the client declares a base-0
          code selector -- and Doom does exactly that (sel 0x67, base 0, limit 0xFFFF),
@@ -3893,6 +3975,36 @@ static void dpmi_patch_code_region(DWORD base, DWORD limit)
                                          || mem[i+1] == 0x1A || mem[i+1] == 0x08)) {
                       DWORD lin = a + i;
                       if (pmap_get(lin)) continue;   /* already patched (aliased region) */
+                      /* ── ONLY IF IT IS AN INSTRUCTION. ───────────────────────────────
+                           This scan used to take the byte pair as proof, and in Doom's
+                           code object that is wrong in three places -- one of them
+                           fatally. At obj1+0x3593f the stream is
+                               39 fa  7e cd  31 c9    cmp edx,edi / jle -51 / xor ecx,ecx
+                           and the `cd 31` is the jle's DISPLACEMENT followed by the xor's
+                           opcode. Patching it made R_InitTextureMapping's loop-2 back edge
+                           jump to obj1+0x35905 -- the middle of a `jl` -- where the guest
+                           executed `cmp ecx,[ebx+0x034fe02d]` with an ANGLE in ebx, read
+                           an unmapped address, and XP tore the VDM down with no VEH, no
+                           watchdog line and no last log entry. Sessions 16-20 hunted that
+                           as a fault in Doom. It was this line.
+                           x86_is_insn_start() decodes forward from each of the preceding
+                           48 bytes and asks how many streams land here; see x86len.h for
+                           the measured separation (real sites 19-48 votes, false pairs
+                           0-3) and why the threshold leans toward keeping. */
+                      if (!x86_int_site_is_real((const unsigned char *)(ULONG_PTR)a, i,
+                                                rend - a, d32)) {
+                          if (rej++ < 16) {
+                              char rb[128], *rq = rb;
+                              rq = zput(rq, "DPMI: NOT an INT site (mid-instruction) 0x");
+                              rq = zhex(rq, lin);
+                              rq = zput(rq, " vec=0x"); rq = zhexb(rq, mem[i+1]);
+                              rq = zput(rq, d32 ? " d32=1" : " d32=0");
+                              rq = zput(rq, " ctx="); rq = zdump(rq, (const BYTE *)(ULONG_PTR)(lin - 4), 10);
+                              rq = zput(rq, "\r\n");
+                              log_append(LOG_PATH, rb, rq); serial_out(rb, rq);
+                          }
+                          continue;
+                      }
                       pmap_set(lin, mem[i+1]);
                       mem[i] = 0xC4; mem[i+1] = 0xC4;
                       ++n;
@@ -3903,7 +4015,8 @@ static void dpmi_patch_code_region(DWORD base, DWORD limit)
       } }
     q = zput(q, "DPMI: code region 0x"); q = zhex(q, base);
     q = zput(q, "..0x"); q = zhex(q, end);
-    q = zput(q, " -> patched "); q = zhex(q, n); q = zput(q, " INT sites\r\n");
+    q = zput(q, " -> patched "); q = zhex(q, n); q = zput(q, " INT sites, rejected ");
+    q = zhex(q, rej); q = zput(q, " mid-instruction byte pairs\r\n");
     log_append(LOG_PATH, lb, q); serial_out(lb, q);
     dpmi_bp_arm();          /* a module that has just appeared may hold a requested BP */
 }
@@ -3977,7 +4090,8 @@ static void dpmi_scan_code_blocks(void)
     int i;
     for (i = 0; i < g_dpmi_nblk; ++i)
         if (g_dpmi_blk[i].code)
-            dpmi_patch_code_region(g_dpmi_blk[i].base, g_dpmi_blk[i].size - 1);
+            dpmi_patch_code_region(g_dpmi_blk[i].base, g_dpmi_blk[i].size - 1,
+                                   g_dpmi_client32);
 }
 
 /* A descriptor access byte names CODE iff it is a segment (S, bit 4) and executable
@@ -4607,6 +4721,14 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                         p = zput(p, " cs:eip=0x"); p = zhex(p, cs);
                         p = zput(p, ":0x"); p = zhex(p, eip);
                         p = zput(p, " after "); p = zhex(p, steps); p = zput(p, " svc");
+                        /* ► A CLOCK, NOT JUST A SERVICE COUNT. Session 20 could bracket the
+                             R_ExecuteSetViewSize death in INSTRUCTIONS but not in TIME, and
+                             those two answers point at different culprits: a threshold in
+                             instructions is the guest doing something illegal, a threshold in
+                             milliseconds is the kernel's timer. `svc` counts host services,
+                             which stop entirely inside a BOP-free stretch -- so it is exactly
+                             the wrong unit for the question. GetTickCount is free. */
+                        p = zput(p, " ms="); p = zhex(p, GetTickCount());
                         p = zput(p, " EAX=0x"); p = zhex(p, VDM_REG(tib, VTIB_EAX));
                         p = zput(p, " EBX=0x"); p = zhex(p, VDM_REG(tib, VTIB_EBX));
                         p = zput(p, " ECX=0x"); p = zhex(p, VDM_REG(tib, VTIB_ECX));
@@ -5002,7 +5124,8 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                                    it just loaded is about to be executed. Patch its INT
                                    sites now; see dpmi_patch_code_region(). */
                                 if (DPMI_ACC_IS_CODE(g_ldt[idx].access)) {
-                                    dpmi_patch_code_region(g_ldt[idx].base, g_ldt[idx].limit);
+                                    dpmi_patch_code_region(g_ldt[idx].base, g_ldt[idx].limit,
+                                                           (g_ldt[idx].flags & 0x4) != 0);
                                     /* The client naming ANY region code means it has finished
                                        loading something -- a good moment to re-look at the
                                        blocks holding its EXEC objects. On DOOM.EXE this is the
@@ -5081,7 +5204,8 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                             g_ldt[idx].flags  = (BYTE)((hi >> 20) & 0xF);
                             dpmi_install(idx);
                             if (DPMI_ACC_IS_CODE(g_ldt[idx].access)) { /* same rule as 0009 */
-                                dpmi_patch_code_region(g_ldt[idx].base, g_ldt[idx].limit);
+                                dpmi_patch_code_region(g_ldt[idx].base, g_ldt[idx].limit,
+                                                       (g_ldt[idx].flags & 0x4) != 0);
                                 need_scan = 1;
                             }
                             p = zput(p, " sel 0x"); p = zhex(p, VDM_REG(tib, VTIB_EBX) & 0xFFFF);
@@ -7793,7 +7917,45 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                             log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
                         }
                     } else {
+                        /* ── HOW LONG DOES THE GUEST RUN WITHOUT GIVING US A TURN? ───────
+                             Session 20's finding is that Doom dies inside a stretch of
+                             protected-mode code that never BOPs, and that shortening the
+                             stretch makes the VDM survive. That was measured in
+                             INSTRUCTIONS, from a disassembly. Nothing has ever measured it
+                             in TIME -- and time is what decides between "the guest
+                             eventually does something illegal" and "a wall-clock deadline
+                             in the kernel expires". One QueryPerformanceCounter pair per
+                             PM entry is free next to the CreateFile-per-line logging this
+                             host already does, and only stretches past the threshold say
+                             anything, so a healthy run pays one comparison.
+                             Report the ENTRY point as well as the exit: the entry is the
+                             instruction after the BOP we last serviced, i.e. the name of
+                             the stretch. */
+                        LARGE_INTEGER t0, t1;
+                        DWORD s_cs = VDM_REG(tib, VTIB_CS) & 0xFFFF, s_eip = dpmi_pm_eip(tib);
+                        QueryPerformanceCounter(&t0);
                         dpmi_enter_pm(tib);
+                        QueryPerformanceCounter(&t1);
+                        {
+                            DWORD us = qpc_us(t1.QuadPart - t0.QuadPart);
+                            if (us > g_pm_stretch_max_us) {
+                                g_pm_stretch_max_us = us;
+                                if (us >= PM_STRETCH_LOG_US && g_pm_stretch_logged++ < 256) {
+                                    p = zput(p, "PMSTRETCH us="); p = zhex(p, us);
+                                    p = zput(p, " entry=0x"); p = zhex(p, s_cs);
+                                    p = zput(p, ":0x"); p = zhex(p, s_eip);
+                                    p = zput(p, " lin=0x");
+                                    p = zhex(p, dpmi_sel_base((WORD)s_cs) + s_eip);
+                                    p = zput(p, " exit=0x");
+                                    p = zhex(p, VDM_REG(tib, VTIB_CS) & 0xFFFF);
+                                    p = zput(p, ":0x"); p = zhex(p, dpmi_pm_eip(tib));
+                                    p = zput(p, " ev=0x"); p = zhex(p, VDM_REG(tib, VTIB_EVENT));
+                                    p = zput(p, " ms="); p = zhex(p, GetTickCount());
+                                    p = zput(p, "\r\n");
+                                    log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                                }
+                            }
+                        }
                     }
                     InterlockedExchange(&g_in_exec, 0);
                     if (steps < g_dpmi_cp_max) {
@@ -8252,6 +8414,9 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         p = zput(p, " p12-bails=");   p = zhex(p, g_p12_bails);
         p = zput(p, " bail="); p = zhex(p, g_async_bail);
         p = zput(p, " nestblk="); p = zhex(p, g_async_nest_blocked);
+        p = zput(p, " asyncsites="); p = zhex(p, (DWORD)g_async_nsite);
+        p = zput(p, (g_async_site_full ? "(FULL)" : ""));
+        p = zput(p, " pmstretch_max_us="); p = zhex(p, g_pm_stretch_max_us);
         p = zput(p, "\r\n"); }
       p = zput(p, "STAGE2: mode sets:");
       for (i = 0; i < g_vid.mode_qn; ++i) {
