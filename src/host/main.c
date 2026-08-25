@@ -988,6 +988,24 @@ static void serial_out(const char *buf, const char *end)
         FlushFileBuffers(g_serial);
     }
 }
+/* Is [addr, addr+len) committed and readable RIGHT NOW? For probes that dereference
+   an address derived from one guest's memory map: under that guest the page is there,
+   under every other guest it is not, and an unguarded read takes the whole host down
+   with an access violation. Ask, don't assume -- and don't reach for SEH to paper over
+   it, because a fault we swallow is a fault we stop seeing. */
+static int mem_readable(ULONG_PTR addr, SIZE_T len)
+{
+    MEMORY_BASIC_INFORMATION mb;
+    if (VirtualQuery((LPCVOID)addr, &mb, sizeof mb) != sizeof mb) return 0;
+    if (mb.State != MEM_COMMIT) return 0;
+    if (mb.Protect & PAGE_GUARD) return 0;
+    if (!(mb.Protect & (PAGE_READONLY | PAGE_READWRITE | PAGE_WRITECOPY
+                      | PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE
+                      | PAGE_EXECUTE_WRITECOPY))) return 0;
+    /* the region must also COVER the whole span, not merely start inside it */
+    return (addr + len) <= ((ULONG_PTR)mb.BaseAddress + mb.RegionSize);
+}
+
 static HMENU        g_savedmenu;            /* stashed menu while hidden           */
 
 /* Device IRQs 2-7 (the Sound Blaster's block-completion IRQ 5 above all). IRQ 0
@@ -10387,8 +10405,18 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
           MEMORY_BASIC_INFORMATION mb;
           ULONG_PTR a = 0x00010000u, lim = 0x7ff00000u;   /* whole user space */
           unsigned found = 0, t;
+          /* ⚠ 0x03b431f0 IS DOOM'S ADDRESS, AND ONLY DOOM'S. Reading it unguarded is
+               the very mistake the note above says the scan got wrong -- made again,
+               one line below the warning. Under Doom the page is mapped and the probe
+               is free; under ANY OTHER GUEST it is not, and the access violation
+               killed the host mid-summary: Skyroads crashed on exit four times over
+               and truncated its own STAGE2 log at `async why irq00`. A Doom-shaped
+               instrument must be inert everywhere else, so ASK FIRST. */
           p = zput(p, " DMXCHK=");
-          for (t = 0; t < 5; ++t) p = zhexb(p, stub[t]);       /* expect 601e060fa0 */
+          if (mem_readable((ULONG_PTR)stub, 5))
+              for (t = 0; t < 5; ++t) p = zhexb(p, stub[t]);   /* expect 601e060fa0 */
+          else
+              p = zput(p, "unmapped");   /* not Doom: the probe has nothing to say */
           p = zput(p, " mixer=0x"); p = zhex(p, mixer);
           while (a < lim && found < 3) {
               ULONG_PTR base, end, q;
