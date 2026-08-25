@@ -98,6 +98,7 @@
 #define AWBUFS_PATH      "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\awbufs.txt"
 #define AWFRAMES_PATH    "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\awframes.txt"
 #define EXECPRIO_PATH    "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\execprio.txt"
+#define DSPVER_PATH      "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\dspver.txt"
 /* Scripted synthetic keystrokes, on the share so a test sequence can be changed between
    runs without a rebuild. Whitespace-separated tokens, played once in order:
      4d     -- scancode 4D: make, brief hold, break
@@ -7742,6 +7743,22 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
          wrong about before: execprio.txt absent or 1 = ABOVE_NORMAL (default),
          0 = leave at NORMAL (the old behaviour, for an A/B without a rebuild),
          2 = HIGHEST. */
+    /* ── WHICH DSP VERSION WE CLAIM PICKS THE GUEST'S DRIVER PATH. See vdd_sb.h.
+         dspver.txt holds "major minor" as two decimal numbers, e.g. "2 1" for a
+         Sound Blaster 2.01, which makes DMX skip the mixer-0x82 interrupt gate and
+         use the older 0x48/0x1C auto-init pair instead of the SB16 0xC6 command.
+         Absent = 4.05, i.e. no change. */
+    { HANDLE hv = CreateFileA(DSPVER_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                              NULL, OPEN_EXISTING, 0, NULL);
+      if (hv != INVALID_HANDLE_VALUE) {
+          char c[16]; DWORD rd = 0; int i = 0, mj = 0, mn = 0;
+          ReadFile(hv, c, sizeof c, &rd, NULL);
+          CloseHandle(hv);
+          while (i < (int)rd && c[i] >= '0' && c[i] <= '9') mj = mj * 10 + (c[i++] - '0');
+          while (i < (int)rd && (c[i] == ' ' || c[i] == '.')) ++i;
+          while (i < (int)rd && c[i] >= '0' && c[i] <= '9') mn = mn * 10 + (c[i++] - '0');
+          if (mj > 0 && mj < 256) { g_sb_ver_major = (uint8_t)mj; g_sb_ver_minor = (uint8_t)mn; }
+      } }
     { DWORD prio = 1;
       HANDLE hp = CreateFileA(EXECPRIO_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
                               NULL, OPEN_EXISTING, 0, NULL);
@@ -9817,7 +9834,9 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
          assumed one, which is precisely the mistake that made it worse. */
       p = zput(p, " pit_gaps=0x");   p = zhex(p, g_pit_catchup_clamped);
       p = zput(p, " pit_gapmax=0x"); p = zhex(p, g_pit_gap_max);
-      p = zput(p, "\r\nSTAGE2: execprio="); p = zhex(p, g_exec_prio);
+      p = zput(p, "\r\nSTAGE2: dspver="); p = zhex(p, (DWORD)g_sb_ver_major);
+      p = zput(p, "."); p = zhex(p, (DWORD)g_sb_ver_minor);
+      p = zput(p, " execprio="); p = zhex(p, g_exec_prio);
       p = zput(p, "\r\nSTAGE2: lock: wait_us=0x");  p = zhex(p, g_lk_wait_us);
       p = zput(p, "@line ");                        p = zhex(p, (DWORD)g_lk_wait_site);
       p = zput(p, " hold_us=0x");                   p = zhex(p, g_lk_hold_us);

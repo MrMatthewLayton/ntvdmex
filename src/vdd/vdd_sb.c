@@ -23,6 +23,8 @@ static uint8_t sb_outq_pop(sb_state *st)
 }
 
 int g_sb_absent = 0;      /* nosb.flag -- see the DSP-reset case below */
+uint8_t g_sb_ver_major = SB_DSP_VER_MAJOR;   /* dspver.txt -- see vdd_sb.h */
+uint8_t g_sb_ver_minor = SB_DSP_VER_MINOR;
 
 static void sb_dsp_soft_reset(sb_state *st)
 {
@@ -124,8 +126,8 @@ static void sb_exec(sb_state *st)
         sb_outq_push(st, (uint8_t)~a[0]);
         break;
     case 0xE1:                                  /* DSP version                     */
-        sb_outq_push(st, SB_DSP_VER_MAJOR);
-        sb_outq_push(st, SB_DSP_VER_MINOR);
+        sb_outq_push(st, g_sb_ver_major);
+        sb_outq_push(st, g_sb_ver_minor);
         break;
     case 0xE3:                                  /* copyright string: NUL is enough */
         sb_outq_push(st, 0);

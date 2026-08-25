@@ -40,6 +40,18 @@
    a game needs to see before it will use the 16-bit and auto-init commands. */
 #define SB_DSP_VER_MAJOR 4
 #define SB_DSP_VER_MINOR 5
+/* ── ...AND THAT CHOICE SELECTS THE GUEST'S ENTIRE DRIVER PATH. ──────────────────
+     DMX branches on it in two places that matter. Its SB interrupt handler
+     (DOOM.EXE 0x53024) tests `version >= 4.00` and, if so, asks MIXER REGISTER 0x82
+     whether the interrupt was really the card's before refilling; below 4.00 it
+     skips that check entirely. And 4.xx is what makes it use the SB16 programmed
+     transfer commands (0xC6 = 8-bit auto-init, measured, issued once) instead of the
+     older 0x48 + 0x1C pair.
+     So the version is not cosmetic -- it picks which of two quite different guest
+     code paths runs against this VDD, and only one of them has ever been exercised.
+     Runtime override so both can be heard without a rebuild; the default is
+     unchanged. */
+extern uint8_t g_sb_ver_major, g_sb_ver_minor;
 
 #define SB_OUTQ_MAX 8          /* bytes the DSP can have waiting to be read      */
 #define SB_ARG_MAX  4          /* longest command argument list we accept        */
