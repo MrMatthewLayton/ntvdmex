@@ -101,6 +101,9 @@
 #define DSPVER_PATH      "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\dspver.txt"
 #define SBGATE_PATH      "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\sbgate.txt"
 #define PITPACE_PATH     "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\pitpace.txt"
+#define PITPRIO_PATH     "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\pitprio.txt"
+#define PITINJ_PATH      "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\pitinj.txt"
+#define UITICK_PATH      "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\uitick.txt"
 /* Scripted synthetic keystrokes, on the share so a test sequence can be changed between
    runs without a rebuild. Whitespace-separated tokens, played once in order:
      4d     -- scancode 4D: make, brief hold, break
@@ -321,6 +324,11 @@ static int pm_tick_take(void)
     return 1;
 }
 static int   g_async_tried_this_sync = 0;   /* see host_irq_sink: one attempt per PIT sync */
+/* Set (under g_lock) while the PACER thread is inside a sync, when pitinj.txt = 0: the
+   pacer then only advances the clock and does NOT perform the async injection, leaving
+   delivery to the UI and exec threads as it was before the pacer existed. See
+   pit_pacer_thread for why that is one of the two things worth testing. */
+static int   g_pit_noinject = 0;
 /* ── HOW EVENLY DO IRQ0s ACTUALLY LAND? ──────────────────────────────────────────────
      DMX's mixer is armed by the SB block IRQ (next_due = NOW) and SERVICED on the next
      timer interrupt. A block is 11.6 ms; a tick period at the 135/s we deliver is
@@ -386,6 +394,65 @@ static DWORD    g_lk_owner, g_lk_depth;
 static LONGLONG g_lk_since;
 static int      g_lk_site, g_lk_hold_site, g_lk_wait_site;
 static uint32_t g_lk_hold_us, g_lk_wait_us, g_ui_gap_us;
+/* Floor on how often the WM_TIMER body may do its frame work, in ms. 15 restores the
+   ~64 Hz this has always actually run at under XP's default granularity; 0 = unbounded
+   (the behaviour timeBeginPeriod(1) exposed). Knob: uitick.txt. See WM_TIMER. */
+static int      g_ui_tick_min_ms = 15;
+static DWORD    g_ui_tick_skips;
+
+/* ── MEASURE THE KEYSTROKE ITSELF, BECAUSE FOUR HYPOTHESES HAVE NOW MISSED. ──────────
+     Session 26: the user reports Skyroads key lag whenever the pacer runs, and it has
+     survived every fix aimed at a mechanism I INFERRED -- pacer period, pacer injection,
+     the frame timer's rate, pacer thread priority. Each was argued from a counter that
+     measures something ADJACENT to a keystroke. So measure the keystroke, and split the
+     path at the only place it can be split:
+       A. QUEUE DELAY -- GetMessageTime() says when the key was POSTED; comparing with
+          now says how long it sat before the UI thread got to it. This is UI-thread
+          starvation, per key, and it needs no control run to interpret.
+       B. DELIVERY -- from the scancode entering the 8042 FIFO to the exec loop actually
+          vectoring the guest through INT 09h. This is everything downstream of us.
+     If A is large the UI thread is not running; if B is large the guest is not being
+     reached; if BOTH are small the lag is not in this path at all and I am still wrong.
+     One producer (UI thread) and one consumer (exec thread), so the ring needs no lock --
+     a torn sample costs one bucket, not a wrong conclusion. */
+#define KEYLAT_RING 32
+static uint32_t qpc_us(LONGLONG d);          /* fwd: defined with the lock instruments */
+static volatile LONGLONG g_keylat_t[KEYLAT_RING];
+static volatile LONG     g_keylat_head, g_keylat_tail;
+static DWORD    g_keymsg_hist[8];     /* queue delay ms: 0,1,2,4,8,16,32,64+       */
+static DWORD    g_keymsg_max_ms, g_keymsg_n;
+static DWORD    g_keydel_hist[8];     /* queue->INT 09h ms: same buckets           */
+static DWORD    g_keydel_max_ms, g_keydel_n;
+/* Which of the three exits from the cooperative IRQ1 gate fires. See its call site. */
+static DWORD    g_irq1_checks, g_irq1_no_if, g_irq1_in_08, g_irq1_in_09;
+
+static void keylat_bucket(DWORD *h, DWORD ms)
+{
+    unsigned b = 0;
+    while (b < 7 && ms >= (DWORD)(1u << b)) ++b;   /* 0,1,2,4,8,16,32,64+ */
+    h[b]++;
+}
+static void keylat_push(void)                      /* UI thread: a scancode was queued */
+{
+    LARGE_INTEGER n;
+    LONG h = g_keylat_head;
+    if (!QueryPerformanceCounter(&n)) return;
+    g_keylat_t[h & (KEYLAT_RING - 1)] = n.QuadPart;
+    g_keylat_head = h + 1;
+}
+static void keylat_pop(void)                       /* exec thread: INT 09h went in     */
+{
+    LARGE_INTEGER n;
+    LONG t = g_keylat_tail;
+    if (t == g_keylat_head) return;                /* nothing outstanding */
+    if (QueryPerformanceCounter(&n)) {
+        DWORD ms = qpc_us(n.QuadPart - g_keylat_t[t & (KEYLAT_RING - 1)]) / 1000u;
+        keylat_bucket(g_keydel_hist, ms);
+        if (ms > g_keydel_max_ms) g_keydel_max_ms = ms;
+        ++g_keydel_n;
+    }
+    g_keylat_tail = t + 1;
+}
 
 static uint32_t qpc_us(LONGLONG d)
 {
@@ -1591,7 +1658,7 @@ static void host_irq_sink(void *ctx, uint8_t irq)
              If this is ever revisited, the prerequisite is a separate suspend-safe
              handshake (the exec thread marking itself un-suspendable while it holds
              g_lock), not simply moving the call. */
-        if (g_qi_susp && (!g_dpmi_pm || !g_async_tried_this_sync)) {
+        if (g_qi_susp && !g_pit_noinject && (!g_dpmi_pm || !g_async_tried_this_sync)) {
             g_async_tried_this_sync = 1;
             ++g_pit_async_attempts;
             if (async_inject_irq(0)) {
@@ -1993,13 +2060,45 @@ typedef MMRESULT (WINAPI *PFN_timeBeginPeriod)(UINT);
 static HANDLE g_pitpace_thread;
 static int    g_pitpace_on = 1, g_pitpace_ms = 1;
 static DWORD  g_pitpace_calls;
+/* ── TWO LEVERS, BECAUSE THE PERIOD IS NOT ONE. ──────────────────────────────────────
+     Session 26, user-confirmed on bare metal: the pacer costs SKYROADS its input --
+     "pressing left/right arrows throws you off the road", gone the moment pitpace=0.
+     It is NOT the clock (three port-profile-matched runs: 183.6 pre-pacer, 185.0, 184.1
+     raises/s, within 0.8%) and it is NOT the pacer's CALL RATE either: 4 ms felt exactly
+     like 1 ms. What does not change with the period is the number of RAISES, and a raise
+     is where host_irq_sink does a SuspendThread/SetThreadContext round trip on the guest
+     **while holding g_lock** -- deliberately, because the lock is the interlock that
+     stops us suspending a lock holder (see the note in host_irq_sink).
+     Before the pacer, the UI thread called host_pit_sync itself and therefore DID that
+     suspend inline and carried on. Now the pacer does it and the UI thread BLOCKS on the
+     lock instead -- and the UI thread is the one that turns WM_KEYUP into a break code,
+     so a key stays down. That is rate-independent, which is exactly the shape measured.
+   ► So make the two candidate mechanisms separately testable, from the share, without a
+     rebuild -- this is an empirical loop with a human as the instrument and each round
+     costs the user a play session:
+       pitprio.txt  0-4  pacer thread priority (idle/below/normal/above/HIGHEST=default)
+       pitinj.txt   0/1  may the PACER perform the async injection? 1 = as shipped.
+                         0 = the pacer only ADVANCES THE CLOCK and leaves delivery to the
+                             UI and exec threads, exactly as before the pacer existed.
+   ⚠ Both default to the shipped behaviour, so an absent file changes nothing. */
+static int  g_pitpace_prio = THREAD_PRIORITY_HIGHEST;
+static int  g_pitpace_inject = 1;
 static DWORD WINAPI pit_pacer_thread(LPVOID param)
 {
     (void)param;
     /* Above the guest but below the audio pump, so it can never starve either. */
-    SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST);
+    SetThreadPriority(GetCurrentThread(), g_pitpace_prio);
     while (g_running) {
-        host_pit_sync();
+        if (g_pitpace_inject) host_pit_sync();
+        else {
+            /* g_lock is recursive, so host_pit_sync may re-enter it; taking it out here is
+               what makes the flag safe -- no other thread can be inside a sync at once. */
+            HOST_LOCK();
+            g_pit_noinject = 1;
+            host_pit_sync();
+            g_pit_noinject = 0;
+            HOST_UNLOCK();
+        }
         ++g_pitpace_calls;
         Sleep((DWORD)g_pitpace_ms);
     }
@@ -2129,6 +2228,7 @@ static void host_key_scancode(uint8_t rawsc, int ext, int is_break)
     if (ext) vdd_input_push_scancode(&g_in, 0xE0);
     vdd_input_push_scancode(&g_in, is_break ? (uint8_t)(rawsc | 0x80) : rawsc);
     HOST_UNLOCK();
+    keylat_push();                  /* start the clock on this keystroke's delivery */
     /* The VDD raises IRQ1 itself now, on the 8042's empty->full transition and again as the
        guest drains the FIFO -- so the host must NOT latch one per byte here as well, or the
        interrupts run ahead of the bytes again. */
@@ -2965,6 +3065,66 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
 {
     switch (msg) {
     case WM_TIMER:
+        /* ── THE 5 ms FRAME TIMER WAS NEVER ACTUALLY HONOURED, AND THE PACER REVEALED IT.
+             SetTimer asks for VID_PRESENT_TICK_MS = 5, but XP's default timer granularity
+             is 15.6 ms, so this body has ALWAYS run at ~64 Hz -- which is exactly the
+             "host_pit_sync ran 65 times a second" that e220033 measured and set out to
+             fix. That commit raises the system-wide resolution with timeBeginPeriod(1) so
+             the pacer's 1 ms Sleep works (audio_wave.c does NOT do this -- the claim that
+             it already did is about loading winmm dynamically, not about resolution).
+             Raising it system-wide also makes THIS timer start firing at the 5 ms it
+             always asked for: **3x the frame work**, and vdd_bus_frame renders the whole
+             frame under g_lock every single tick, at a site whose measured holds are
+             13-22 ms. A body that cannot finish inside its own period saturates the UI
+             thread, and the UI thread is the one that turns WM_KEYUP into a break code.
+           ► That is the shape the user measured by hand: pitpace=1 and pitpace=4 feel
+             IDENTICAL (both call timeBeginPeriod), pitpace=0 is clean (it does not), and
+             disabling the pacer's injection did not help (resolution still raised). The
+             pacer's PERIOD was never the variable.
+           ► So bound the expensive body to the rate it has actually always run at, and
+             leave the tick itself fast -- the present is phase-gated and WANTS to sample
+             often. uitick.txt sets the floor in ms; 0 restores the unbounded behaviour. */
+        if (g_ui_tick_min_ms) {
+            static LARGE_INTEGER s_body;
+            LARGE_INTEGER bn;
+            QueryPerformanceCounter(&bn);
+            if (s_body.QuadPart &&
+                qpc_us(bn.QuadPart - s_body.QuadPart) < (uint32_t)g_ui_tick_min_ms * 1000u) {
+                ++g_ui_tick_skips;
+                return 0;
+            }
+            s_body = bn;
+        }
+        /* ── DO NOT MAKE THE MEASUREMENT DEPEND ON A CLEAN EXIT. ─────────────────────
+             The STAGE2 summary is only written when the guest terminates, and two runs
+             in a row failed to produce one -- the first because the guest was still
+             running when the log was read, the second because the box was rebooted. An
+             instrument that only reports if the run ends politely is an instrument that
+             does not report. Dump it every 5 s instead, so whatever state the run ends
+             in, the last five seconds of it are on disk. */
+        {   static DWORD s_kl;
+            DWORD nowt = GetTickCount();
+            if (g_keymsg_n && (DWORD)(nowt - s_kl) >= 5000) {
+                char kb[384], *kq = kb; unsigned i;
+                s_kl = nowt;
+                kq = zput(kq, "KEYLAT msgq_ms[0,1,2,4,8,16,32,64+]=");
+                for (i = 0; i < 8; ++i) { kq = zput(kq, i ? "," : ""); kq = zhex(kq, g_keymsg_hist[i]); }
+                kq = zput(kq, " n=");      kq = zhex(kq, g_keymsg_n);
+                kq = zput(kq, " max_ms="); kq = zhex(kq, g_keymsg_max_ms);
+                kq = zput(kq, " || deliver_ms=");
+                for (i = 0; i < 8; ++i) { kq = zput(kq, i ? "," : ""); kq = zhex(kq, g_keydel_hist[i]); }
+                kq = zput(kq, " n=");      kq = zhex(kq, g_keydel_n);
+                kq = zput(kq, " max_ms="); kq = zhex(kq, g_keydel_max_ms);
+                kq = zput(kq, " ui_gap_us="); kq = zhex(kq, g_ui_gap_us);
+                kq = zput(kq, " lk_wait_us="); kq = zhex(kq, g_lk_wait_us);
+                kq = zput(kq, " || IRQ1GATE checks="); kq = zhex(kq, g_irq1_checks);
+                kq = zput(kq, " no_if=");   kq = zhex(kq, g_irq1_no_if);
+                kq = zput(kq, " in_08h=");  kq = zhex(kq, g_irq1_in_08);
+                kq = zput(kq, " in_09h=");  kq = zhex(kq, g_irq1_in_09);
+                kq = zput(kq, " injected="); kq = zhex(kq, g_irq1_inj);
+                kq = zput(kq, "\r\n");
+                log_append(LOG_PATH, kb, kq);
+            } }
         if (g_title_dirty) { set_window_title(); g_title_dirty = 0; }  /* apply on UI thread */
         /* Drive the PIT from REAL elapsed time so the BIOS tick (0040:006C) and
            INT 1Ah track wall-clock regardless of WM_TIMER jitter; clamp after a
@@ -3085,6 +3245,12 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
         if (wp == VK_RETURN) { present_ddraw_set_fullscreen(&g_pd, !g_pd.fullscreen); return 0; }
         break;
     case WM_KEYDOWN:
+        /* How long did this key sit in the queue before we got to it? See keylat_bucket:
+           this is UI-thread starvation measured on the key itself, not inferred. */
+        {   DWORD qd = GetTickCount() - (DWORD)GetMessageTime();
+            if ((LONG)qd < 0) qd = 0;
+            keylat_bucket(g_keymsg_hist, qd); ++g_keymsg_n;
+            if (qd > g_keymsg_max_ms) g_keymsg_max_ms = qd; }
         if (wp == VK_F11) { present_ddraw_set_fullscreen(&g_pd, !g_pd.fullscreen); return 0; }
         if (wp == VK_F5 && (GetKeyState(VK_CONTROL) & 0x8000)) { host_screenshot(); return 0; }
         /* Ctrl+F8 -> host cursor on/off. It needs a hotkey and not just the menu
@@ -3120,6 +3286,10 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
            ignored every arrow. One key, one path. */
         break;
     case WM_KEYUP:                       /* raw AT keyboard BREAK code + IRQ1      */
+        {   DWORD qd = GetTickCount() - (DWORD)GetMessageTime();
+            if ((LONG)qd < 0) qd = 0;
+            keylat_bucket(g_keymsg_hist, qd); ++g_keymsg_n;
+            if (qd > g_keymsg_max_ms) g_keymsg_max_ms = qd; }
         {
             uint8_t rawsc = (uint8_t)((lp >> 16) & 0xFF);
             int ext = (lp & 0x01000000) != 0;
@@ -8350,6 +8520,37 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
           if (rd && c[0] >= '0' && c[0] <= '9') g_pitpace_ms = c[0] - '0';
           g_pitpace_on = (g_pitpace_ms != 0);
       } }
+    /* The pacer's two OTHER levers -- see pit_pacer_thread. Absent file = as shipped. */
+    { HANDLE hp3 = CreateFileA(PITPRIO_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                               NULL, OPEN_EXISTING, 0, NULL);
+      if (hp3 != INVALID_HANDLE_VALUE) {
+          char c[8]; DWORD rd = 0;
+          ReadFile(hp3, c, sizeof c, &rd, NULL); CloseHandle(hp3);
+          if (rd && c[0] >= '0' && c[0] <= '4') {
+              static const int pri[5] = { THREAD_PRIORITY_IDLE, THREAD_PRIORITY_BELOW_NORMAL,
+                                          THREAD_PRIORITY_NORMAL, THREAD_PRIORITY_ABOVE_NORMAL,
+                                          THREAD_PRIORITY_HIGHEST };
+              g_pitpace_prio = pri[c[0] - '0'];
+          }
+      } }
+    { HANDLE hp4 = CreateFileA(PITINJ_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                               NULL, OPEN_EXISTING, 0, NULL);
+      if (hp4 != INVALID_HANDLE_VALUE) {
+          char c[8]; DWORD rd = 0;
+          ReadFile(hp4, c, sizeof c, &rd, NULL); CloseHandle(hp4);
+          if (rd && (c[0] == '0' || c[0] == '1')) g_pitpace_inject = c[0] - '0';
+      } }
+    { HANDLE hp5 = CreateFileA(UITICK_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                               NULL, OPEN_EXISTING, 0, NULL);
+      if (hp5 != INVALID_HANDLE_VALUE) {
+          char c[8]; DWORD rd = 0; int v = 0, i;
+          ReadFile(hp5, c, sizeof c, &rd, NULL); CloseHandle(hp5);
+          for (i = 0; i < (int)rd; ++i) {
+              if (c[i] < '0' || c[i] > '9') break;
+              v = v * 10 + (c[i] - '0');
+          }
+          if (rd && c[0] >= '0' && c[0] <= '9' && v <= 100) g_ui_tick_min_ms = v;
+      } }
     if (g_pitpace_on) {
         HMODULE mm = LoadLibraryA("winmm.dll");
         if (mm) { PFN_timeBeginPeriod tbp =
@@ -8555,6 +8756,15 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             } else {
                 fl = VDM_REG(tib, VTIB_EFLAGS);
             }
+            /* ── WHY IS THIS REFUSED? MEASURED, NOT ASSUMED. ─────────────────────────
+                 KEYLAT says 90% of keystrokes take >64 ms to reach INT 09h (max 9.6 s)
+                 while the UI thread hands them over in 0 ms, so the refusal is here and
+                 it is not rare -- it is the normal case. There are exactly three ways
+                 out of this gate, and guessing which one has already cost four rounds. */
+            ++g_irq1_checks;
+            if (!if_or_vif(fl))                                          ++g_irq1_no_if;
+            else if (cs == DOS_HDLR_SEG && ip >= 0x34 && ip < 0x3A)      ++g_irq1_in_08;
+            else if (cs == DOS_HDLR_SEG && ip >= 0x4C && ip < 0x50)      ++g_irq1_in_09;
             if (if_or_vif(fl) && !(cs == DOS_HDLR_SEG &&
                                   ((ip >= 0x34 && ip < 0x3A) || (ip >= 0x4C && ip < 0x50)))) {
                 InterlockedDecrement(&g_irq1_pending);   /* one INT 09h per queued scancode byte */
@@ -8562,6 +8772,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                 if (async_vec_is_our_stub(1)) vdd_pic_eoi(&g_pic, 1);
                 g_irq1_inj++;
                 inject_int(tib, 0x09);
+                keylat_pop();               /* the guest is now IN its INT 09h */
             }
         }
         /* Device IRQs (SB block completion on 5, etc.): same IF gating as IRQ0/1,
@@ -10054,6 +10265,21 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
       p = zput(p, " pit_gapmax=0x"); p = zhex(p, g_pit_gap_max);
       p = zput(p, "\r\nSTAGE2: pitpace=");  p = zhex(p, (DWORD)g_pitpace_ms);
       p = zput(p, " calls="); p = zhex(p, g_pitpace_calls);
+      p = zput(p, " prio="); p = zhex(p, (DWORD)g_pitpace_prio);
+      p = zput(p, " inject="); p = zhex(p, (DWORD)g_pitpace_inject);
+      p = zput(p, " uitick_min_ms="); p = zhex(p, (DWORD)g_ui_tick_min_ms);
+      p = zput(p, " uitick_skipped="); p = zhex(p, g_ui_tick_skips);
+      /* THE KEYSTROKE ITSELF, both halves. ms buckets [0,1,2,4,8,16,32,64+]. */
+      p = zput(p, "\r\nSTAGE2: KEYLAT msgq_ms[0,1,2,4,8,16,32,64+]=");
+      { unsigned kb; for (kb = 0; kb < 8; ++kb) { p = zput(p, kb ? "," : "");
+                                                  p = zhex(p, g_keymsg_hist[kb]); } }
+      p = zput(p, " n="); p = zhex(p, g_keymsg_n);
+      p = zput(p, " max_ms="); p = zhex(p, g_keymsg_max_ms);
+      p = zput(p, " || deliver_ms[0,1,2,4,8,16,32,64+]=");
+      { unsigned kb; for (kb = 0; kb < 8; ++kb) { p = zput(p, kb ? "," : "");
+                                                  p = zhex(p, g_keydel_hist[kb]); } }
+      p = zput(p, " n="); p = zhex(p, g_keydel_n);
+      p = zput(p, " max_ms="); p = zhex(p, g_keydel_max_ms);
       p = zput(p, "\r\nSTAGE2: TICKGAP us[<.5k,1k,2k,4k,8k,16k,32k,64k,128k,256k,512k,+]=");
       { unsigned tb; for (tb = 0; tb < 12; ++tb) { p = zput(p, tb ? "," : "");
                                                    p = zhex(p, g_tickgap[tb]); } }
