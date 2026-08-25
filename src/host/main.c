@@ -3104,7 +3104,11 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
              in, the last five seconds of it are on disk. */
         {   static DWORD s_kl;
             DWORD nowt = GetTickCount();
-            if (g_keymsg_n && (DWORD)(nowt - s_kl) >= 5000) {
+            /* g_keymsg_n counts WINDOWS key messages, so gating on it alone silently
+               disabled this whole dump for SCRIPTED runs (keys.txt drives
+               host_key_scancode directly, never WM_KEYDOWN) -- a headless repro
+               attempt produced one sample and no IRQ1GATE at all. Gate on either half. */
+            if ((g_keymsg_n || g_keydel_n) && (DWORD)(nowt - s_kl) >= 5000) {
                 char kb[384], *kq = kb; unsigned i;
                 s_kl = nowt;
                 kq = zput(kq, "KEYLAT msgq_ms[0,1,2,4,8,16,32,64+]=");

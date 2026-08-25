@@ -1,0 +1,20 @@
+skyroads-play.keys -- the SCRIPTED PLAY SESSION that reproduces the V86 keyboard-lag
+fault headlessly, so it needs no human at the box.
+
+Copy to the share as keys.txt, and set on the share:
+    qimode.txt  = 20      (bit 5: play keys.txt through host_key_scancode)
+    capture.flag= 1100    (optional: self-screenshots, to SEE which screen it reached)
+Then: ./scripts/bmqueue.sh skyroads
+
+⚠ IT MUST REACH ACTUAL GAMEPLAY, and that is the whole trick. The first attempt sent
+  two Enters and 60 arrows and measured nothing -- the screenshots showed it sitting on
+  the LEVEL SELECT screen, where the arrows only moved the highlight. A menu does not
+  run Skyroads' timer ISR hard, so interrupts are enabled ~67% of the time there and
+  keys deliver instantly. Intro -> main menu -> level select -> level needs THREE
+  Enters; only past the third does no_if go to ~96% and the fault appear. Always check
+  a screenshot before believing a null result.
+
+Measured with this script (45 s runs, identical key counts and identical injections):
+    pacer ON   n=102  >=64ms = 44 (43%)  max 684 ms  | gate checks=9635 no_if=96.3%
+    pacer OFF  n=102  >=64ms =  0 ( 0%)  max  52 ms  | gate checks=1785 no_if=88.9%
+Read the numbers from the KEYLAT / IRQ1GATE lines, which the host dumps every 5 s.
