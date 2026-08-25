@@ -15,7 +15,18 @@ copied off by doomrun.bat) and answers the two questions the counters cannot:
        middle of the current sound. 562 isolated singles. That is the reported
        symptom, "the sample parts have gaps between them".
 
-Usage: sbgaps.py <sb.raw> [--map N]     (block 256 B, ring 4096 B = 16 blocks)
+  3 Is the "played in chunks" a SECOND defect, or the same one?
+    -> the seam at each block boundary, split by whether the two JOINED blocks were
+       refilled. Measured 2026-08-25:
+           both fresh   seam  9.23   within-block 9.17    <- SEAMLESS
+           prev stale   seam 25.30   within-block 9.25
+           this stale   seam 26.29   within-block 9.45
+       When DMX refills correctly the join is perfect. There is ONE defect.
+       (This also retires the old "PCM click at offset 2 of every 128-frame block":
+       that was measured against a GUESSED grid. Derived from the data the spike is
+       at offset 12, period 128 = the guest's blk_len, and it is the stale blocks.)
+
+Usage: sbgaps.py <sb.raw> [--map N] [--seam]   (block/ring read from the run's log)
 """
 import sys, collections
 
