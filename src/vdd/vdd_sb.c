@@ -354,6 +354,27 @@ uint32_t vdd_sb_render(sb_state *st, int16_t *out, uint32_t frames)
                 if (replayed)          ++st->blocks_replayed;
                 if (flat)              ++st->blocks_flat;
                 if (replayed && !flat) ++st->blocks_replayed_loud;
+                /* ── A SILENT BLOCK IS NOT A DEFECT. AN ISOLATED SILENT BLOCK IS. ────
+                     20% of blocks are flat, but the demo is genuinely quiet much of
+                     the time, so the raw count cannot say how much of that the user
+                     hears as a GAP. A long run of flat blocks is real silence; ONE
+                     flat block between loud ones is a dropout, and that is exactly the
+                     reported symptom -- |- - - - - -| instead of |------|.
+                     Same run-length treatment the replay counter already gets, for the
+                     same reason: a rate cannot show a shape. */
+                if (flat) {
+                    ++st->flat_run;
+                } else if (st->flat_run) {
+                    uint32_t r = st->flat_run, b3;
+                    if      (r < 4)  b3 = r - 1;          /* 1, 2, 3 exactly */
+                    else if (r < 8)  b3 = 3;
+                    else if (r < 16) b3 = 4;
+                    else if (r < 32) b3 = 5;
+                    else if (r < 64) b3 = 6;
+                    else             b3 = 7;
+                    ++st->flat_runs[b3];
+                    st->flat_run = 0;
+                }
                 /* Close the run on the first block that is NOT an audible repeat --
                    flat blocks end it too, since a silent block carries no evidence
                    either way and bridging across one would invent a longer run. */

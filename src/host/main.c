@@ -96,6 +96,7 @@
    default. */
 #define HEADLESS_MS_PATH "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\headless_ms.txt"
 #define AWBUFS_PATH      "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\awbufs.txt"
+#define AWFRAMES_PATH    "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\awframes.txt"
 /* Scripted synthetic keystrokes, on the share so a test sequence can be changed between
    runs without a rebuild. Whitespace-separated tokens, played once in order:
      4d     -- scancode 4D: make, brief hold, break
@@ -7958,6 +7959,25 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
           }
           g_wave.nbufs = v;                   /* audio_wave_start clamps to [2,AW_BUFFERS] */
       } }
+    /* ── AND THE GRANULARITY, AS A SEPARATE CONTROLLED VARIABLE (awframes.txt). ──────
+         nframes x nbufs is the LEAD; nframes alone is the STEP the guest's DMA read
+         pointer moves in. They are different suspects and must be varied independently
+         or a result cannot be attributed to either. `awbufs=2` already showed why this
+         matters: it cut the lead, starved the transport, and the replay rate "improved"
+         only because the non-flat block count collapsed 13x.
+         To hold the lead constant while quartering the step: awframes=128, awbufs=24. */
+    { HANDLE h = CreateFileA(AWFRAMES_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                             NULL, OPEN_EXISTING, 0, NULL);
+      if (h != INVALID_HANDLE_VALUE) {
+          char c[16]; DWORD rd = 0, v = 0; int i;
+          ReadFile(h, c, sizeof c, &rd, NULL);
+          CloseHandle(h);
+          for (i = 0; i < (int)rd; ++i) {
+              if (c[i] < '0' || c[i] > '9') break;
+              v = v * 10 + (DWORD)(c[i] - '0');
+          }
+          g_wave.nframes = v;                 /* clamped to [AW_MIN_FRAMES,AW_FRAMES] */
+      } }
     audio_wave_start(&g_wave, AUDIO_OUT_HZ, host_audio_fill, NULL);
     m.conout = host_conout; m.conctx = NULL;    /* DOS console out -> video      */
     m.conin  = host_conin;  m.cinctx = NULL;    /* DOS console in  <- keyboard   */
@@ -9915,6 +9935,22 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         p = zput(p, " gap_runs[1,2,4,8,16,32,64,128+]=");
         { int gb; for (gb = 0; gb < 8; ++gb) { p = zput(p, gb ? "," : "");
                                                p = zhex(p, g_sb.idle_runs[gb]); } }
+        /* ► ISOLATED silent blocks are the dropouts; long runs are real silence. */
+        p = zput(p, " flat_runs[1,2,3,4-7,8-15,16-31,32-63,64+]=");
+        { int fb; for (fb = 0; fb < 8; ++fb) { p = zput(p, fb ? "," : "");
+                                               p = zhex(p, g_sb.flat_runs[fb]); } }
+        /* ► THE QUEUE, WHICH IS WHAT THE SPEAKER ACTUALLY SEES. STARVED>0 means the
+             driver ran out of data and played silence -- an audible gap that no
+             ring-side counter can show. `drain` is the margin: its mass sitting at
+             nbufs-1 is one buffer from silence even when starved reads 0. */
+        p = zput(p, " QUEUE: starved="); p = zhex(p, g_wave.starved);
+        p = zput(p, " drain_max=");      p = zhex(p, g_wave.drain_max);
+        p = zput(p, " wr_fail=");        p = zhex(p, g_wave.underruns);
+        p = zput(p, " drain_hist=");
+        { uint32_t db; for (db = 0; db <= g_wave.nbufs && db <= AW_BUFFERS; ++db) {
+              p = zput(p, db ? "," : ""); p = zhex(p, g_wave.drain_hist[db]); } }
+        p = zput(p, " geom: nbufs="); p = zhex(p, g_wave.nbufs);
+        p = zput(p, " nframes=");     p = zhex(p, g_wave.nframes);
         p = zput(p, " rate_hz="); p = zhex(p, g_sb.rate_hz);
         p = zput(p, " blk_len="); p = zhex(p, g_sb.block_len);
         p = zput(p, " dsp_cmds:");

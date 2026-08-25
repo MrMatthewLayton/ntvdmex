@@ -197,6 +197,9 @@ typedef struct sb_state {
     uint32_t replay_run;            /* consecutive replayed-loud blocks, in progress */
     uint32_t replay_runs[8];        /* run lengths 1,2,3,4-7,8-15,16-31,32-63,64+    */
     uint32_t replay_run_max;
+    uint32_t flat_run;              /* consecutive FLAT blocks, in progress          */
+    uint32_t flat_runs[8];          /* ...run lengths, same buckets. runs of 1 = the
+                                       audible DROPOUTS; long runs = real silence.   */
     uint32_t blk_min, blk_max;      /* range accumulators for the block in progress  */
     uint32_t lap_same, lap_total;   /* byte-level rate, the live form of the 46%    */
     uint32_t lap_toobig;            /* rings larger than SB_LAP_MAX: check skipped  */

@@ -54,10 +54,10 @@ static DWORD WINAPI aw_thread(LPVOID pv)
     for (i = 0; i < aw->nbufs && !aw->silent; ++i) {
         AW_WAVEHDR *h = hdr_of(aw, i);
         h->lpData = (LPSTR)aw->buf[i];
-        h->dwBufferLength = AW_FRAMES * sizeof(int16_t);
+        h->dwBufferLength = aw->nframes * sizeof(int16_t);
         h->dwFlags = 0; h->dwLoops = 0; h->dwUser = 0;
         p_waveOutPrepare(aw->hwo, h, sizeof(AW_WAVEHDR));
-        aw->fill(aw->ctx, aw->buf[i], AW_FRAMES);
+        aw->fill(aw->ctx, aw->buf[i], aw->nframes);
         p_waveOutWrite(aw->hwo, h, sizeof(AW_WAVEHDR));
     }
 
@@ -65,15 +65,25 @@ static DWORD WINAPI aw_thread(LPVOID pv)
         if (aw->silent) {
             /* No device: still pump the mixer at real-time pace, because that is
                what advances SB playback and raises its IRQ. */
-            aw->fill(aw->ctx, aw->buf[0], AW_FRAMES);
-            Sleep((AW_FRAMES * 1000) / (aw->hz ? aw->hz : 44100));
+            aw->fill(aw->ctx, aw->buf[0], aw->nframes);
+            Sleep((aw->nframes * 1000) / (aw->hz ? aw->hz : 44100));
             continue;
         }
+        /* How much of the queue has the driver already given back? Sampled BEFORE we
+           refill anything, so it is the true low-water mark of this pass. See the note
+           on `starved` in audio_wave.h: waveOutWrite succeeding tells us nothing. */
+        { uint32_t back = 0;
+          for (i = 0; i < aw->nbufs; ++i)
+              if (hdr_of(aw, i)->dwFlags & WHDR_DONE) ++back;
+          if (back > aw->drain_max) aw->drain_max = back;
+          if (back >= aw->nbufs) ++aw->starved;
+          aw->drain_hist[back <= AW_BUFFERS ? back : AW_BUFFERS]++; }
+
         for (i = 0; i < aw->nbufs; ++i) {
             AW_WAVEHDR *h = hdr_of(aw, i);
             if (!(h->dwFlags & WHDR_DONE)) continue;
             h->dwFlags &= ~WHDR_DONE;
-            aw->fill(aw->ctx, aw->buf[i], AW_FRAMES);
+            aw->fill(aw->ctx, aw->buf[i], aw->nframes);
             if (p_waveOutWrite(aw->hwo, h, sizeof(AW_WAVEHDR)) != 0) aw->underruns++;
         }
         /* Wake early and often: a full buffer is ~11.6 ms, so a 20 ms timeout could miss a
@@ -115,11 +125,16 @@ int audio_wave_start(audio_wave *aw, uint32_t hz, aw_fill_fn fill, void *ctx)
          out first, exactly as vdd_sb_reset() preserves its bus pointers. Getting this
          wrong would silently pin the experiment at one value while appearing to vary it,
          which is the failure mode this counter exists to avoid. */
-    uint32_t want_bufs = aw->nbufs;
+    uint32_t want_bufs = aw->nbufs, want_frames = aw->nframes;
     for (i = 0; i < sizeof(*aw); ++i) p[i] = 0;
-    if (want_bufs < 2) want_bufs = AW_BUFFERS;          /* 0/1 = "use them all" */
+    if (!want_bufs)   want_bufs   = AW_DEF_BUFFERS;     /* 0 = "leave it alone"  */
+    if (want_bufs < 2) want_bufs = 2;
     if (want_bufs > AW_BUFFERS) want_bufs = AW_BUFFERS;
-    aw->nbufs = want_bufs;
+    if (!want_frames) want_frames = AW_DEF_FRAMES;
+    if (want_frames < AW_MIN_FRAMES) want_frames = AW_MIN_FRAMES;
+    if (want_frames > AW_FRAMES)     want_frames = AW_FRAMES;
+    aw->nbufs   = want_bufs;
+    aw->nframes = want_frames;
 
     aw->hz = hz ? hz : 44100;
     aw->fill = fill; aw->ctx = ctx;
