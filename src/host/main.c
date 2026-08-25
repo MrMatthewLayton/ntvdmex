@@ -2870,6 +2870,35 @@ static int           g_ms_sens = 100;       /* percent; msens.txt tunes feel per
    the raw path DISABLES the absolute-derived fallback, so a silent raw failure reports
    no motion at all where the old code at least reported clamped motion. */
 static DWORD g_ms_wm_input, g_ms_raw_abs, g_ms_i33[16], g_ms_i33_other;
+/* ── `i33oth=1079` IS NOT A MEASUREMENT, IT IS A BUCKET. ──────────────────────────
+     A thousand INT 33h calls arrive with AX >= 0x10 and the histogram above lumps
+     every one of them together, so it cannot tell the two live explanations apart --
+     and they need OPPOSITE fixes:
+       (a) Doom calls driver functions we do not implement. `mouse_int33`'s
+           `default: break;` accepts them silently and returns nothing: the same
+           "does nothing, reports success" shape as the 0300 bug below.
+       (b) A MIS-PATCHED `CD 33` SITE. The DPMI host rewrites `CD nn` into BOPs, so a
+           false positive inside data or mid-instruction calls us with ARBITRARY EAX --
+           which is exactly what "a thousand calls with AX >= 0x10" looks like. That
+           is the class of bug that killed Doom for five sessions (see x86len.h).
+     The two have different SHAPES and the shape is the discriminator: a real function
+     set is a handful of plausible values from a handful of sites; a mis-patch is
+     scattered values, and its site is not a `CD 33` in DOOM.EXE.
+   ⚠ SO RECORD BOTH, AND DO NOT GUESS BETWEEN THEM. The AX values as they actually
+     are (sparse, not bucketed), and WHERE the caller was -- linear address, which
+     entry path, and the bytes around the site so it can be diffed against the file
+     on disk without another run. That diff is the session-21 method and it found the
+     last mis-patch inside an hour. */
+#define I33_AXN   24                        /* distinct AX values kept                */
+#define I33_SITEN 12                        /* distinct caller sites kept             */
+static struct { WORD ax; DWORD n; }  g_ms_i33ax[I33_AXN];
+static struct { DWORD lin, eip, n; WORD cs, ax; BYTE src; BYTE ctx[12]; } g_ms_i33site[I33_SITEN];
+static DWORD g_ms_i33ax_ovf, g_ms_i33site_n, g_ms_i33site_ovf;
+/* Which arm called us -- a mis-patch can only arrive through the PM BOP, and 0300's
+   site is the INT 31h thunk rather than a `CD 33` at all, so the path is evidence. */
+#define I33_SRC_V86  1                      /* V86 BOP (patched `CD 33` in real mode) */
+#define I33_SRC_PM   2                      /* PM BOP  (patched `CD 33` in PM code)   */
+#define I33_SRC_SIM  3                      /* DPMI 0300 simulate-real-mode-interrupt */
 /* DPMI 0300 (simulate real-mode interrupt) vectors we do NOT service. See the 0300 arm. */
 static DWORD g_simint_unhandled, g_simint_vec[256];
 static LONG  g_ms_raw_tot_x, g_ms_raw_tot_y;
@@ -2890,12 +2919,43 @@ static volatile LONG g_captured = 0;
 /* INT 33h mouse driver (functions DOS apps actually use). The host draws the
    cursor (overlay in the present path) when the hide-count is 0, so apps that
    rely on the driver cursor (the common case) get a visible pointer. */
-static void mouse_int33(volatile BYTE *tib)
+static void mouse_int33(volatile BYTE *tib, int src)
 {
     static LONG last_x = 320, last_y = 240;             /* for AX=0B motion (V86 thread only) */
     DWORD ax = VDM_REG(tib, VTIB_EAX) & 0xFFFF;
     LONG x = g_ms_x, y = g_ms_y, b = g_ms_btn;
     if (ax < 16) g_ms_i33[ax]++; else g_ms_i33_other++;
+    /* The real histogram, and the caller. See the commentary on g_ms_i33ax. */
+    {   DWORD cs  = VDM_REG(tib, VTIB_CS) & 0xFFFF;
+        DWORD eip = VDM_REG(tib, VTIB_EIP);
+        /* An EIP is only 16 bits wide when its code selector is -- so mask it in V86
+           and NEVER in PM, where a flat selector makes EIP the address itself. */
+        DWORD lin = (src == I33_SRC_V86) ? ((cs << 4) + (eip & 0xFFFF))
+                                         : (dpmi_sel_base((WORD)cs) + eip);
+        unsigned i;
+        for (i = 0; i < I33_AXN && g_ms_i33ax[i].n; ++i)
+            if (g_ms_i33ax[i].ax == (WORD)ax) break;
+        if (i < I33_AXN) { g_ms_i33ax[i].ax = (WORD)ax; ++g_ms_i33ax[i].n; }
+        else ++g_ms_i33ax_ovf;
+        for (i = 0; i < g_ms_i33site_n; ++i) if (g_ms_i33site[i].lin == lin) break;
+        if (i < I33_SITEN) {
+            if (i == g_ms_i33site_n) {                  /* first call from this site */
+                g_ms_i33site[i].lin = lin; g_ms_i33site[i].cs = (WORD)cs;
+                g_ms_i33site[i].eip = eip; g_ms_i33site[i].ax = (WORD)ax;
+                g_ms_i33site[i].src = (BYTE)src;
+                /* The bytes AROUND the site, so the diff against DOOM.EXE needs no
+                   second run. Guarded: an address derived from a guest register is
+                   not an address we may dereference on trust. */
+                if (mem_readable((ULONG_PTR)(lin - 4), sizeof g_ms_i33site[i].ctx)) {
+                    unsigned k;
+                    for (k = 0; k < sizeof g_ms_i33site[i].ctx; ++k)
+                        g_ms_i33site[i].ctx[k] = ((volatile BYTE *)(ULONG_PTR)(lin - 4))[k];
+                }
+                ++g_ms_i33site_n;
+            }
+            ++g_ms_i33site[i].n;
+        } else ++g_ms_i33site_ovf;
+    }
     switch (ax) {
     case 0x0000:                                        /* reset + get status      */
         VDM_SET16(tib, VTIB_EAX, 0xFFFF);               /* driver installed        */
@@ -3378,6 +3438,45 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
                 kq = zput(kq, " retries=");   kq = zhex(kq, g_irq1_async_retry);
                 kq = zput(kq, "\r\n");
                 log_append(LOG_PATH, kb, kq);
+            } }
+        /* ── THE INT 33h DETAIL, ON ITS OWN GATE AND ITS OWN LINES. ──────────────────
+             Two rules learned the hard way, both of them here on purpose:
+             1. GATE IT ON WHAT IT MEASURES. The block above only runs once a KEY has
+                been seen, which silently disables it for a run where nobody types --
+                and a headless Doom attract run is exactly that. This one reports as
+                soon as an INT 33h call has arrived, which is its own subject.
+             2. ONE LINE PER SITE, not one line for everything. The line above smashed
+                the UI thread's stack at 379 bytes in a 384-byte buffer; a dozen sites
+                with a 12-byte context dump each is several times that. Bounded work
+                per line, and the buffer is sized for the worst case with room over. */
+        {   static DWORD s_md;
+            DWORD nowt = GetTickCount();
+            if (g_ms_i33site_n && (DWORD)(nowt - s_md) >= 5000) {
+                char mb[768], *mq = mb; unsigned i;
+                s_md = nowt;
+                mq = zput(mq, "MOUSEI33 ax:");
+                for (i = 0; i < I33_AXN && g_ms_i33ax[i].n; ++i) {
+                    mq = zput(mq, " "); mq = zhexb(mq, (g_ms_i33ax[i].ax >> 8) & 0xFF);
+                    mq = zhexb(mq, g_ms_i33ax[i].ax & 0xFF);
+                    mq = zput(mq, "x"); mq = zhex(mq, g_ms_i33ax[i].n);
+                }
+                mq = zput(mq, " ax_ovf="); mq = zhex(mq, g_ms_i33ax_ovf);
+                mq = zput(mq, " sites="); mq = zhex(mq, g_ms_i33site_n);
+                mq = zput(mq, " site_ovf="); mq = zhex(mq, g_ms_i33site_ovf);
+                mq = zput(mq, "\r\n");
+                log_append(LOG_PATH, mb, mq);
+                for (i = 0; i < g_ms_i33site_n && i < I33_SITEN; ++i) {
+                    char sb[256], *sq = sb;
+                    sq = zput(sq, "MOUSEI33 site src=");  sq = zhexb(sq, g_ms_i33site[i].src);
+                    sq = zput(sq, " lin=0x");   sq = zhex(sq, g_ms_i33site[i].lin);
+                    sq = zput(sq, " cs=0x");    sq = zhex(sq, g_ms_i33site[i].cs);
+                    sq = zput(sq, " eip=0x");   sq = zhex(sq, g_ms_i33site[i].eip);
+                    sq = zput(sq, " ax0=0x");   sq = zhex(sq, g_ms_i33site[i].ax);
+                    sq = zput(sq, " n=");       sq = zhex(sq, g_ms_i33site[i].n);
+                    sq = zput(sq, " ctx[-4]="); sq = zdump(sq, g_ms_i33site[i].ctx, 12);
+                    sq = zput(sq, "\r\n");
+                    log_append(LOG_PATH, sb, sq);
+                }
             } }
         if (g_title_dirty) { set_window_title(); g_title_dirty = 0; }  /* apply on UI thread */
         /* Drive the PIT from REAL elapsed time so the BIOS tick (0040:006C) and
@@ -6448,6 +6547,86 @@ static int dpmi_dispatch_to_pm_handler(dos_machine_t *mp, volatile BYTE *tib,
     return 1;
 }
 
+/* ── WHICH ADDRESS IS THE RMCS? PRINT BOTH; DO NOT PICK ONE AND HOPE. ────────────
+     The real-mode call structure is passed in ES:(E)DI, and the "(E)" is the whole
+     question: a 16-bit client passes DI, a 32-bit one passes the full EDI. Every arm
+     that takes an RMCS here has always masked it to 16 bits.
+     What made this worth asking: Doom calls 0300 with BL=33h 2915 times in a 45 s
+     headless run, and the AX we read out of the RMCS is 0xffff EVERY TIME -- a value
+     I_ReadMouse never writes, and precisely the value OUR OWN INT 33h reset returned
+     into that structure on the first call. Reading back exactly what we last wrote is
+     the signature of a location that is nobody's but ours.
+   ⚠ THIS FUNCTION CHANGES NOTHING. It reports the masked and unmasked candidates side
+     by side with the EAX field at each, for the first few calls of each vector. If the
+     unmasked address holds 3 or 0x0b -- I_ReadMouse's two functions -- the mask is the
+     bug and the fix is one expression. If it does not, the mask is innocent and the
+     next guess would have cost a session. The same probe rides on 0301/0302 because
+     they share the structure and DOS/4GW's INT 21h forwarding depends on them: if
+     those show a 32-bit EDI too, they are already wrong and only look right. */
+/* ── ES:(E)DI, AND THE (E) IS NOT DECORATION. ────────────────────────────────────
+     THE MEASUREMENT (headless Doom, 45 s), from dpmi_rmcs_probe below:
+         RMCS 0300 int=0x33 es=0x18f edi=0x03dc9158 esb=0x0 cl32=1
+              masked@0x00009158 eax=0x4e800000     <- junk in the guest's low memory
+              full  @0x03dc9158 eax=0x00000003     <- I_ReadMouse, "read buttons"
+         ...and the next call, full@ eax=0x0000000b <- "read counters"
+     So Doom WAS asking, 2915 times in 45 seconds, and it was never the "unimplemented
+     function" or the "mis-patched CD 33" this was filed as. The offset is a full
+     32-bit EDI, every arm here masked it to 16 bits, and the address that produced
+     was somebody else's memory: we read a function number out of it (0xffff, then
+     whatever we had written there LAST call -- reading back your own answer is what
+     a self-owned scratch address looks like) and we wrote our results into it, i.e.
+     we were also corrupting two words of the guest's low memory 2915 times.
+   ► THE RULE IS THE CALLER'S D/B BIT, NOT A CLIENT-WIDE FLAG. DPMI passes the
+     structure in ES:DI from 16-bit code and ES:EDI from 32-bit code, because that is
+     simply what `mov di,x` versus `mov edi,x` leaves behind -- a 16-bit caller's top
+     half is stale, not zero. dpmi_sel_is32(CS) asks exactly that question, per call.
+   ⚠ AND THAT IS WHY THIS IS SAFE FOR THE EXTENDER. DOS/4GW's own 0301/0302 traffic
+     comes from 16-bit code, where this reduces to the mask that is already there --
+     measured, not assumed: its RMCS pointers log as es=0x1f edi=0x00004b54, masked
+     and full identical. Only a 32-bit caller changes, and for a 32-bit caller the
+     old behaviour was never right. */
+static DWORD dpmi_rmcs_ptr(volatile BYTE *tib, DWORD esb)
+{
+    DWORD edi = VDM_REG(tib, VTIB_EDI);
+    return esb + (dpmi_sel_is32((WORD)(VDM_REG(tib, VTIB_CS) & 0xFFFF)) ? edi : (edi & 0xFFFF));
+}
+
+static void dpmi_rmcs_probe(volatile BYTE *tib, DWORD esb, unsigned slot, DWORD intno)
+{
+    static BYTE s_seen[5][256];
+    DWORD edi = VDM_REG(tib, VTIB_EDI), es = VDM_REG(tib, VTIB_ES) & 0xFFFF;
+    DWORD ma  = esb + (edi & 0xFFFF), fa = esb + edi;
+    char b[512], *q = b;
+    static const char *const TAG[5] = { "0300", "0301", "0302", "000b", "000c" };
+    if (slot > 4 || intno > 255) return;
+    if (s_seen[slot][intno] >= 3) return;
+    ++s_seen[slot][intno];
+    q = zput(q, "RMCS ");     q = zput(q, TAG[slot]);
+    q = zput(q, " int=0x");   q = zhexb(q, intno);
+    q = zput(q, " es=0x");    q = zhex(q, es);
+    q = zput(q, " edi=0x");   q = zhex(q, edi);
+    q = zput(q, " esb=0x");   q = zhex(q, esb);
+    q = zput(q, " cl32=");    q = zhex(q, (DWORD)g_dpmi_client32);
+    /* The RMCS fields that name the CALL: EAX (+0x1C) is the function number, and
+       EBX/ECX/EDX (+0x10/+0x18/+0x14) are where an INT 33h answer goes back. */
+    q = zput(q, " masked@0x"); q = zhex(q, ma);
+    if (mem_readable((ULONG_PTR)ma, 0x20)) {
+        volatile DWORD *m = (volatile DWORD *)(ULONG_PTR)ma;
+        q = zput(q, " eax=0x"); q = zhex(q, m[0x1C/4]);
+        q = zput(q, " ebx=0x"); q = zhex(q, m[0x10/4]);
+        q = zput(q, " d0=0x");  q = zhex(q, m[0]);
+    } else q = zput(q, " unreadable");
+    q = zput(q, " || full@0x"); q = zhex(q, fa);
+    if (mem_readable((ULONG_PTR)fa, 0x20)) {
+        volatile DWORD *f = (volatile DWORD *)(ULONG_PTR)fa;
+        q = zput(q, " eax=0x"); q = zhex(q, f[0x1C/4]);
+        q = zput(q, " ebx=0x"); q = zhex(q, f[0x10/4]);
+        q = zput(q, " d0=0x");  q = zhex(q, f[0]);
+    } else q = zput(q, " unreadable");
+    q = zput(q, "\r\n");
+    log_append(LOG_PATH, b, q);
+}
+
 static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                                unsigned steps)
 {
@@ -6655,7 +6834,7 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                         return 1;
                     }
                     if (vec == 0x33) {                             /* mouse in PM -> INT 33h */
-                        mouse_int33(tib);
+                        mouse_int33(tib, I33_SRC_PM);
                         VDM_REG(tib, VTIB_EIP) += 2;
                         return 1;
                     }
@@ -7020,12 +7199,15 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                             VDM_REG(tib, VTIB_EFLAGS) |= 1u;
                             p = zput(p, " -> no vendor API (CF=1, correct)");
                             break;
-                        case 0x000B: {                             /* get descriptor of sel BX -> ES:DI */
+                        case 0x000B: {                             /* get descriptor of sel BX -> ES:(E)DI */
                             int idx = (VDM_REG(tib, VTIB_EBX) & 0xFFFF) >> 3;
                             DWORD esb = dpmi_sel_base((WORD)VDM_REG(tib, VTIB_ES));
-                            volatile DWORD *d = (volatile DWORD *)(ULONG_PTR)
-                                (esb + (VDM_REG(tib, VTIB_EDI) & 0xFFFF));
+                            /* Same ES:(E)DI rule as the RMCS -- see dpmi_rmcs_ptr. A no-op for
+                               the 16-bit extender code that calls this today; the probe says so
+                               in the log rather than leaving it as an assumption. */
+                            volatile DWORD *d = (volatile DWORD *)(ULONG_PTR)dpmi_rmcs_ptr(tib, esb);
                             DWORD lo = 0, hi = 0;
+                            dpmi_rmcs_probe(tib, esb, 3, 0);       /* observation only */
                             if (idx >= 1 && idx < DPMI_LDT_MAX)
                                 dpmi_build_desc(g_ldt[idx].base, g_ldt[idx].limit,
                                                 g_ldt[idx].access, g_ldt[idx].flags, &lo, &hi);
@@ -7035,12 +7217,12 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                             p = zput(p, " -> desc 0x"); p = zhex(p, lo);
                             p = zput(p, ":0x"); p = zhex(p, hi);
                             break; }
-                        case 0x000C: {                             /* set descriptor of sel BX from ES:DI */
+                        case 0x000C: {                             /* set descriptor of sel BX from ES:(E)DI */
                             int idx = (VDM_REG(tib, VTIB_EBX) & 0xFFFF) >> 3;
                             DWORD esb = dpmi_sel_base((WORD)VDM_REG(tib, VTIB_ES));
-                            volatile DWORD *d = (volatile DWORD *)(ULONG_PTR)
-                                (esb + (VDM_REG(tib, VTIB_EDI) & 0xFFFF));
+                            volatile DWORD *d = (volatile DWORD *)(ULONG_PTR)dpmi_rmcs_ptr(tib, esb);
                             DWORD lo, hi;
+                            dpmi_rmcs_probe(tib, esb, 4, 0);       /* observation only */
                             if (idx < 1 || idx >= 512) { VDM_REG(tib, VTIB_EFLAGS) |= 1u;
                                                          p = zput(p, " -> bad sel"); break; }
                             lo = d[0]; hi = d[1];
@@ -7167,7 +7349,8 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                         case 0x0300: {                             /* simulate real-mode interrupt: BL=int, ES:DI=RMCS */
                             DWORD intno = VDM_REG(tib, VTIB_EBX) & 0xFF;
                             DWORD esb = dpmi_sel_base((WORD)VDM_REG(tib, VTIB_ES));
-                            volatile BYTE *r = (volatile BYTE *)(ULONG_PTR)(esb + (VDM_REG(tib, VTIB_EDI) & 0xFFFF));
+                            volatile BYTE *r = (volatile BYTE *)(ULONG_PTR)dpmi_rmcs_ptr(tib, esb);
+                            dpmi_rmcs_probe(tib, esb, 0, intno);   /* observation only */
                             /* save the client's PM register file */
                             DWORD sA=VDM_REG(tib,VTIB_EAX),sB=VDM_REG(tib,VTIB_EBX),sC=VDM_REG(tib,VTIB_ECX),
                                   sD=VDM_REG(tib,VTIB_EDX),sS=VDM_REG(tib,VTIB_ESI),sDi=VDM_REG(tib,VTIB_EDI),
@@ -7199,7 +7382,7 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                                  a service that does nothing and reports success is exactly
                                  what cost this one a session to find. */
                             if (intno == 0x21) { m.tp = p; dos_int21(&m); p = m.tp; }
-                            else if (intno == 0x33) mouse_int33(tib);
+                            else if (intno == 0x33) mouse_int33(tib, I33_SRC_SIM);
                             else { g_simint_unhandled++;
                                    if (intno < 256) g_simint_vec[intno]++; }
                             /* write results back into the RMCS */
@@ -7234,7 +7417,8 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                                DOS entry it forwards to is an interrupt handler and returns by
                                IRET; giving it a RETF frame would leave FLAGS on the stack. */
                             DWORD esb = dpmi_sel_base((WORD)VDM_REG(tib, VTIB_ES));
-                            volatile BYTE *r = (volatile BYTE *)(ULONG_PTR)(esb + (VDM_REG(tib, VTIB_EDI) & 0xFFFF));
+                            volatile BYTE *r = (volatile BYTE *)(ULONG_PTR)dpmi_rmcs_ptr(tib, esb);
+                            dpmi_rmcs_probe(tib, esb, (ax == 0x0302) ? 2 : 1, 0);  /* observation only */
                             /* --- save the client's PM CONTEXT (full register file + MSW) --- */
                             DWORD pA=VDM_REG(tib,VTIB_EAX),pB=VDM_REG(tib,VTIB_EBX),pC=VDM_REG(tib,VTIB_ECX),
                                   pD=VDM_REG(tib,VTIB_EDX),pSi=VDM_REG(tib,VTIB_ESI),pDi=VDM_REG(tib,VTIB_EDI),
@@ -9390,7 +9574,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             continue;
         }
         if ((VDM_REG(tib, VTIB_EVENT_INFO) & 0xFF) == 0x33) {   /* INT 33h mouse  */
-            mouse_int33(tib);
+            mouse_int33(tib, I33_SRC_V86);
             VDM_REG(tib, VTIB_EIP) += 3;
             continue;
         }
