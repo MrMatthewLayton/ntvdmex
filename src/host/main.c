@@ -2857,6 +2857,9 @@ static volatile LONG g_ms_hidden = 1;       /* INT 33h cursor hide-count; 0 => v
    it is a toggle -- Input > Mouse > Show Host Cursor, or Ctrl+F8. Default OFF, i.e.
    exactly the behaviour that shipped, so no run changes unless it is asked for. */
 static volatile LONG g_cursor_show = 0;
+/* Input capture ("exclusivity") -- see input_capture_set. Declared up here because
+   set_window_title, which is defined above it, puts the release chord in the caption. */
+static volatile LONG g_captured = 0;
 
 /* INT 33h mouse driver (functions DOS apps actually use). The host draws the
    cursor (overlay in the present path) when the hide-count is 0, so apps that
@@ -2949,7 +2952,7 @@ enum {                                       /* wired command IDs               
     IDM_STUB = 1,                            /* every not-yet-wired item          */
     IDM_FILE_EXIT, IDM_FILE_CLOSEPROG,
     IDM_DISP_FULLSCREEN, IDM_DISP_SHOWMENU,
-    IDM_INPUT_CURSOR,
+    IDM_INPUT_CURSOR, IDM_INPUT_CAPTURE,
     IDM_CAP_SHOT,
     IDM_HELP_ABOUT
 };
@@ -3017,7 +3020,7 @@ static HMENU build_menu(void)
     msub(bar, "Audio", m);
 
     m = mpop();                                                   /* Input        */
-    msub(m,"Mouse",(s=mpop(),mi(s,"Capture\tCtrl+F10",IDM_STUB),
+    msub(m,"Mouse",(s=mpop(),mi(s,"Capture\tCtrl+F10",IDM_INPUT_CAPTURE),
         mi(s,"Show Host Cursor\tCtrl+F8",IDM_INPUT_CURSOR),
         mi(s,"Seamless",IDM_STUB),mi(s,"Sensitivity",IDM_STUB),s));
     msub(m,"Keyboard",(s=mpop(),mi(s,"Layout",IDM_STUB),mi(s,"Typematic rate",IDM_STUB),mi(s,"Send Ctrl+Alt+Del",IDM_STUB),s));
@@ -3063,7 +3066,10 @@ static HWND g_status;                        /* the native comctl32 status bar  
 #define VDM_WIN_TITLE "Windows XP Virtual DOS Machine"
 static void set_window_title(void)
 {
-    char t[128]; char *p = t; const char *s = VDM_WIN_TITLE;
+    /* ⚠ 192: the base title (30) + " - " + a 64-char program name already reaches ~97,
+       and the captured suffix adds 34 -> 131. At 128 this overflowed. Same class of bug
+       as the KEYLAT dump buffer earlier this session; do not trim the margin. */
+    char t[192]; char *p = t; const char *s = VDM_WIN_TITLE;
     if (!g_hwnd) return;
     while (*s) *p++ = *s++;
     if (g_progname[0] && g_progname[0] != '(') {       /* not "(none)" */
@@ -3071,6 +3077,10 @@ static void set_window_title(void)
         while (*d) *p++ = *d++;
         while (*b) *p++ = *b++;
     }
+    /* While captured the caption is the ONLY place the release chord is written down --
+       the menu bar may be hidden and the pointer is clipped inside the window. */
+    if (g_captured) { const char *c = "   [captured -- Ctrl+F10 releases]";
+                      while (*c) *p++ = *c++; }
     *p = 0;
     SetWindowTextA(g_hwnd, t);
 }
@@ -3100,6 +3110,71 @@ static void menu_check(HWND h, UINT id, int on)
     if (m) CheckMenuItem(m, id, MF_BYCOMMAND | (UINT)(on ? MF_CHECKED : MF_UNCHECKED));
 }
 
+/* ── INPUT CAPTURE ("exclusivity"). ─────────────────────────────────────────────────
+     Two different things are stealing the guest's keys, and they need different fixes.
+   1. WINDOWS' OWN MENU KEYS. F10 and Alt do not arrive as WM_KEYDOWN at all -- they are
+      SYSTEM keys (WM_SYSKEYDOWN) and DefWindowProc turns them into menu activation. So a
+      DOS program that wants F10 -- Doom's SETUP.EXE is the reported case -- never sees
+      it, and the menu bar lights up instead. That is fixed unconditionally below: system
+      keys are routed to the guest like any other, because in a DOS box they ARE the
+      guest's. Alt+F4 is the deliberate exception while uncaptured, so the window can
+      always be closed.
+   2. THE SHELL'S CHORDS -- Alt+Tab, Ctrl+Esc, the Windows keys. Those never reach the
+      window at all; only a low-level hook sees them, and only while we are foreground.
+      Swallowing them is what "exclusive" means, and it is a MODE, not a default: a
+      window that eats Alt+Tab whenever it has focus is hostile. Ctrl+F10 toggles it
+      (the binding the menu has always advertised, and DOSBox's), and Ctrl+F10 is
+      swallowed by us so the guest can never see it -- there is no chord a DOS guest
+      cannot generate, so the release must be one WE reserve.
+   ⚠ Ctrl+Alt+Del is the Secure Attention Sequence and CANNOT be hooked. That is by
+     design in Windows and not a defect here.
+   ⚠ Capture is dropped on WM_KILLFOCUS -- otherwise a clipped cursor and a swallowed
+     Alt+Tab would strand the user in a window they cannot leave. */
+static HHOOK         g_llkbd;
+
+static LRESULT CALLBACK ll_kbd_proc(int code, WPARAM wp, LPARAM lp)
+{
+    if (code == HC_ACTION && g_captured && GetForegroundWindow() == g_hwnd) {
+        KBDLLHOOKSTRUCT *k = (KBDLLHOOKSTRUCT *)lp;
+        int alt  = (k->flags & LLKHF_ALTDOWN) != 0;
+        int ctrl = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
+        /* Swallow only, and deliberately do NOT push these to the guest from here: a
+           low-level hook that blocks is torn down by Windows, and host_key_scancode
+           takes g_lock. Losing Alt+Tab to the guest costs nothing; stalling the hook
+           would cost every key. */
+        if (k->vkCode == VK_LWIN || k->vkCode == VK_RWIN) return 1;
+        if (k->vkCode == VK_TAB    && alt)  return 1;
+        if (k->vkCode == VK_ESCAPE && (ctrl || alt)) return 1;
+    }
+    return CallNextHookEx(g_llkbd, code, wp, lp);
+}
+
+static void input_capture_set(HWND h, int on)
+{
+    if (on == g_captured) return;
+    InterlockedExchange(&g_captured, on ? 1 : 0);
+    if (on) {
+        RECT rc; POINT tl;
+        if (!g_llkbd)
+            g_llkbd = SetWindowsHookExA(WH_KEYBOARD_LL, ll_kbd_proc,
+                                        GetModuleHandleA(NULL), 0);
+        GetClientRect(h, &rc);
+        tl.x = rc.left; tl.y = rc.top;
+        ClientToScreen(h, &tl);
+        rc.left = tl.x; rc.top = tl.y;
+        rc.right += tl.x; rc.bottom += tl.y;
+        ClipCursor(&rc);
+    } else {
+        ClipCursor(NULL);
+        if (g_llkbd) { UnhookWindowsHookEx(g_llkbd); g_llkbd = NULL; }
+    }
+    menu_check(h, IDM_INPUT_CAPTURE, on);
+    { POINT pt;                          /* apply the pointer change now, not on next move */
+      if (GetCursorPos(&pt) && WindowFromPoint(pt) == h)
+          SetCursor((on || !g_cursor_show) ? NULL : LoadCursorA(NULL, IDC_ARROW)); }
+    g_title_dirty = 1;                   /* the caption says how to get back out */
+}
+
 /* Show/hide the host arrow over the video. The immediate SetCursor matters:
    WM_SETCURSOR only fires when the mouse next MOVES or re-enters the window, so
    without it the tick changes and the pointer does not until you jiggle it. Guard
@@ -3112,6 +3187,36 @@ static void host_cursor_set(HWND h, int on)
     menu_check(h, IDM_INPUT_CURSOR, on);
     if (GetCursorPos(&pt) && WindowFromPoint(pt) == h)
         SetCursor(on ? LoadCursorA(NULL, IDC_ARROW) : NULL);
+}
+
+/* One keystroke, ONE path -- shared by WM_KEYDOWN and WM_SYSKEYDOWN, because F10 and
+   Alt arrive as SYSTEM keys and are just as much the guest's as any other. */
+static void key_msg_note(void)
+{
+    /* How long did this key sit in the queue before we got to it? GetMessageTime says
+       when it was posted; this is UI-thread starvation measured on the key itself. */
+    DWORD qd = GetTickCount() - (DWORD)GetMessageTime();
+    if ((LONG)qd < 0) qd = 0;
+    keylat_bucket(g_keymsg_hist, qd); ++g_keymsg_n;
+    if (qd > g_keymsg_max_ms) g_keymsg_max_ms = qd;
+}
+static void key_push_make(LPARAM lp)
+{
+    uint8_t rawsc = (uint8_t)((lp >> 16) & 0xFF);
+    int ext = (lp & 0x01000000) != 0;
+    /* Bit 30 = the key was ALREADY down, i.e. OS auto-repeat. We generate typematic
+       ourselves, so swallow it -- two sources would double the repeat rate. Counted,
+       not silently dropped: the count is how we tell "the OS stopped sending them"
+       from "we stopped listening". */
+    if (lp & 0x40000000) { g_ty_os_repeats++; return; }
+    if (rawsc) { host_key_scancode(rawsc, ext, 0); host_key_typematic_press(rawsc, ext); }
+}
+static void key_push_break(LPARAM lp)
+{
+    uint8_t rawsc = (uint8_t)((lp >> 16) & 0xFF);
+    int ext = (lp & 0x01000000) != 0;
+    if (rawsc) { host_key_typematic_release(rawsc, ext);   /* stop repeating first */
+                 host_key_scancode(rawsc, ext, 1); }
 }
 
 /* --- the UI thread: window + present + frame timer ------------------------- */
@@ -3279,8 +3384,8 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
            window the hit-test belongs to, and testing the hit-test ALONE was wrong:
            the status bar is a child that forwards its own HTCLIENT here, so the
            cursor vanished over the status bar and its size grip as well. */
-        if ((HWND)wp == h && LOWORD(lp) == HTCLIENT && !g_cursor_show) {
-            SetCursor(NULL); return TRUE;
+        if ((HWND)wp == h && LOWORD(lp) == HTCLIENT && (g_captured || !g_cursor_show)) {
+            SetCursor(NULL); return TRUE;   /* captured always hides, whatever the toggle */
         }
         break;
     case WM_PAINT: {                     /* re-blit the last snapshot on expose/move   */
@@ -3300,6 +3405,7 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
             if (cur) { g_savedmenu = cur; SetMenu(h, NULL); } else SetMenu(h, g_savedmenu);
             return 0; }
         case IDM_INPUT_CURSOR: host_cursor_set(h, !g_cursor_show); return 0;
+        case IDM_INPUT_CAPTURE: input_capture_set(h, !g_captured); return 0;
         case IDM_CAP_SHOT: host_screenshot(); return 0;
         case IDM_HELP_ABOUT:
             MessageBoxA(h, "NTVDMEX -- New Technology Virtual DOS Manager, Extended\n"
@@ -3307,16 +3413,31 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
                           "About NTVDMEX", MB_OK | MB_ICONINFORMATION); return 0;
         default: return 0;               /* IDM_STUB / not-yet-wired items: no-op      */
         }
-    case WM_SYSKEYDOWN:                  /* Alt+Enter -> toggle fullscreen          */
+    case WM_SYSKEYDOWN:                  /* F10 / Alt / Alt+key -- see input_capture_set */
         if (wp == VK_RETURN) { present_ddraw_set_fullscreen(&g_pd, !g_pd.fullscreen); return 0; }
-        break;
+        /* Alt+F4 stays Windows' while uncaptured: there must always be a way to close
+           the window that does not require knowing a chord. Captured, it is the guest's. */
+        if (wp == VK_F4 && !g_captured) break;
+        key_msg_note();
+        key_push_make(lp);
+        return 0;                        /* never let DefWindowProc open the menu bar */
+    case WM_SYSKEYUP:
+        if (wp == VK_F4 && !g_captured) break;
+        key_msg_note();
+        key_push_break(lp);
+        return 0;
+    case WM_SYSCHAR:
+        return 0;                        /* swallow the menu-mnemonic beep */
+    case WM_KILLFOCUS:
+        input_capture_set(h, 0);         /* never strand the user in a captured window */
+        return 0;
     case WM_KEYDOWN:
-        /* How long did this key sit in the queue before we got to it? See keylat_bucket:
-           this is UI-thread starvation measured on the key itself, not inferred. */
-        {   DWORD qd = GetTickCount() - (DWORD)GetMessageTime();
-            if ((LONG)qd < 0) qd = 0;
-            keylat_bucket(g_keymsg_hist, qd); ++g_keymsg_n;
-            if (qd > g_keymsg_max_ms) g_keymsg_max_ms = qd; }
+        key_msg_note();
+        /* Ctrl+F10 -> capture on/off. Swallowed here, so the guest never sees it: it is
+           the release chord and it has to be one key the guest cannot claim. */
+        if (wp == VK_F10 && (GetKeyState(VK_CONTROL) & 0x8000)) {
+            input_capture_set(h, !g_captured); return 0;
+        }
         if (wp == VK_F11) { present_ddraw_set_fullscreen(&g_pd, !g_pd.fullscreen); return 0; }
         if (wp == VK_F5 && (GetKeyState(VK_CONTROL) & 0x8000)) { host_screenshot(); return 0; }
         /* Ctrl+F8 -> host cursor on/off. It needs a hotkey and not just the menu
@@ -3330,20 +3451,7 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
            code) into the 0x60/0x64 FIFO and raise IRQ1, so action games that hook
            INT 09h or poll port 0x60 for real-time held-key state get input. This runs
            for every key, alongside the INT 16h ring below (which other games poll). */
-        {
-            uint8_t rawsc = (uint8_t)((lp >> 16) & 0xFF);
-            int ext = (lp & 0x01000000) != 0;
-            /* Bit 30 = the key was ALREADY down, i.e. this is OS auto-repeat. We
-               generate typematic ourselves (see host_key_typematic), so swallow it:
-               two sources would double the repeat rate. Counted, not silently
-               dropped -- the count is how we tell "the OS stopped sending them"
-               from "we stopped listening". */
-            if (lp & 0x40000000) { g_ty_os_repeats++; break; }
-            if (rawsc) {
-                host_key_scancode(rawsc, ext, 0);
-                host_key_typematic_press(rawsc, ext);
-            }
-        }
+        key_push_make(lp);
         /* NOTHING ELSE TO DO. The scancode above is the whole keystroke: INT 09h translates
            it and fills the BIOS ring in guest memory, which is the single buffer INT 16h and
            a BDA-reading program both look at. This used to ALSO push a keycode straight into
@@ -3352,18 +3460,8 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
            ignored every arrow. One key, one path. */
         break;
     case WM_KEYUP:                       /* raw AT keyboard BREAK code + IRQ1      */
-        {   DWORD qd = GetTickCount() - (DWORD)GetMessageTime();
-            if ((LONG)qd < 0) qd = 0;
-            keylat_bucket(g_keymsg_hist, qd); ++g_keymsg_n;
-            if (qd > g_keymsg_max_ms) g_keymsg_max_ms = qd; }
-        {
-            uint8_t rawsc = (uint8_t)((lp >> 16) & 0xFF);
-            int ext = (lp & 0x01000000) != 0;
-            if (rawsc) {
-                host_key_typematic_release(rawsc, ext);   /* stop repeating first */
-                host_key_scancode(rawsc, ext, 1);
-            }
-        }
+        key_msg_note();
+        key_push_break(lp);
         break;
     case WM_CHAR:                        /* Windows' translation: not ours to use */
         /* WM_KEYDOWN already delivered this key as a scancode, and INT 09h turns that into
