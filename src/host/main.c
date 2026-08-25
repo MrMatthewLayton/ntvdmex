@@ -1521,6 +1521,25 @@ static void host_irq_sink(void *ctx, uint8_t irq)
              800-raise burst again. None that we run does (Skyroads 180 Hz is the
              fastest measured), and the honest fix if one appears is to bound the BURST
              -- attempts per sync, not per guest -- rather than to widen this back. */
+        /* ── ⚠⚠ DO NOT MOVE THIS ATTEMPT OUTSIDE THE LOCK. TRIED, MEASURED, REVERTED.
+             It looks wrong to hold g_lock across a SuspendThread / GetThreadContext /
+             SetThreadContext / ResumeThread round trip -- SuspendThread does not return
+             until the target reaches a safe point, and honouring GR4 in the video path
+             pushed the hold attributed to host_pit_sync from 14.6 ms to 45.7 ms against
+             DMX's 7.4 ms tick period. Deferring the syscall until after HOST_UNLOCK is
+             the obvious repair, and it makes things WORSE:
+                 longest hold   45.7 ms -> 149 ms   (and it moves to host_audio_fill)
+                 longest wait   41.5 ms -> 149 ms
+                 tick delivery  135/s   -> 136/s    REPLAYED_LOUD  30% -> 30%
+           ► WHY, AND IT IS THE WHOLE POINT: holding the lock is what GUARANTEES THE
+             THREAD WE ARE ABOUT TO SUSPEND IS NOT HOLDING IT. Suspend the exec thread
+             from outside and it can be frozen mid-critical-section, so g_lock stays
+             taken for the entire suspend and every other thread piles up behind it -- a
+             bounded hold traded for an unbounded one. The lock is not merely protecting
+             device state here; it is an interlock against suspending a lock holder.
+             If this is ever revisited, the prerequisite is a separate suspend-safe
+             handshake (the exec thread marking itself un-suspendable while it holds
+             g_lock), not simply moving the call. */
         if (g_qi_susp && (!g_dpmi_pm || !g_async_tried_this_sync)) {
             g_async_tried_this_sync = 1;
             ++g_pit_async_attempts;
