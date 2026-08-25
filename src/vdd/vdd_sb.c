@@ -358,6 +358,21 @@ uint32_t vdd_sb_render(sb_state *st, int16_t *out, uint32_t frames)
              gate is not doing its job and this must not be believed.
            ⚠ SB16 ONLY, exactly as VDMSound scopes it -- an older DSP has no
              acknowledged-IRQ concept and games driving it do not expect the stall. */
+        /* ⚠⚠ "STALL ONLY ON A BLOCK THAT IS STILL UNFILLED" WAS TRIED AND IS WRONG
+             BY DESIGN -- DO NOT RE-DERIVE IT. It looks like the obvious refinement of
+             mode 2 (which stalls on every block and so freezes the output ~3500
+             samples/s), and it cannot work: DMX NEVER REFILLS THE BLOCK WE ARE IN. Its
+             mixer targets `(DMA position / blocksize) + 1` (DOOM.EXE 0x56884), always
+             the block AHEAD -- so waiting for the current block to change is waiting
+             for something that will never happen, and every wait ends at the safety.
+             Measured over three attempts: stalling on unchanged content gated almost
+             continuously (3% playback) because the ring is mostly silence; exempting
+             flat blocks gated 11 samples/s instead of the ~3400 due, because the offset
+             it compared at was one sample stale; and with that fixed it ran at 18%
+             playback with 748 forced yields. The design is the problem, not the
+             implementation.
+             Mode 2 is right precisely BECAUSE it waits for the mixer to RUN -- that is
+             what fills the block ahead, which we are about to enter. */
         /* gate mode 2: hold until the guest's mixer POLLS the DMA position, which is
            the only signal that the refill has actually begun. Mode 1 (the ACK, as
            VDMSound uses) is kept for comparison but is measured not to help here --
