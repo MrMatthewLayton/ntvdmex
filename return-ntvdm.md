@@ -1,7 +1,10 @@
 ═══════════════════════════════════════════════════════════════════════════════
-██ ▶▶▶ SESSION 27 (2026-08-25). THE MOUSE FAULT IS FOUND AND FIXED.           ██
-██     ONE THING LEFT: THE USER'S HAND ON THE RIG TO CONFIRM IT.              ██
+██ ★★★★★★ **DOOM IS FULLY PLAYABLE — MOUSE INCLUDED.** (2026-08-26, session 27)██
+██     USER-CONFIRMED BY HAND ON THE RIG: *"mouse working in Doom."*          ██
 ═══════════════════════════════════════════════════════════════════════════════
+
+The last open defect is closed. Graphics, PCM, MIDI, keyboard AND mouse all working on
+real silicon, under a from-scratch DPMI host, with no guest patch of any kind.
 
 `cd28879`  **DOOM WAS ASKING ALL ALONG. ES:(E)DI, AND THE (E) WAS MASKED AWAY.**
   Session 26 left this filed as two competing explanations -- unimplemented INT 33h
@@ -36,12 +39,12 @@
     functions reported as never happening. Run healthy: STAGE2 complete, no PM stops,
     no exceptions, all video modes supported.
 
-⚠ **NOT YET CONFIRMED BY HAND, AND HEADLESS CANNOT CONFIRM IT** -- nobody moves a mouse
-  on the rig, so look and fire are attested only by call counts and the register values
-  we now put in the right place. See [[headless-rig-cannot-see-input-lag]].
-  ► TO CONFIRM: deploy (`bm\ntvdmhost.exe` is already the fixed build, md5
-    `4939ae65372e7a7eb1f69dc2e72a377a`), run `scripts/bm/doomex.bat`, take capture with
-    **Win+F10**, and try mouse look and the left button as fire. `msens.txt` tunes feel.
+✅ **CONFIRMED BY HAND ON THE RIG (2026-08-26): the mouse works in Doom.** Headless proved
+  the CALLS (1275 each of AX=3 and AX=0Bh per 45 s run, with the register block finally
+  landing at the right address); the user's hand proved the FEEL. Neither could have done
+  the other's job -- see [[headless-rig-cannot-see-input-lag]]. Build md5
+  `4939ae65372e7a7eb1f69dc2e72a377a`; play with `scripts/bm/doomex.bat`, capture on
+  **Win+F10**, `msens.txt` tunes sensitivity.
   ► RESIDUAL, ONE CALL IN 2551: the FIRST 0300 with BL=33h uses a DIFFERENT structure
     (edi=0x03dc9240, 0xe8 bytes from the other) and reads AX=0x53c1, which is not a
     mouse function and is not initialised by anything Doom does to `dpmiregs`. It was
