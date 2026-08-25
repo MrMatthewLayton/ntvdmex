@@ -68,6 +68,12 @@ void dos_int21_init(dos_machine_t *m, uint16_t first_mcb);
    terminate (AH=4Ch). Appends a trace via m->tp; writes console output to m->out. */
 extern int g_dos_int21_pm;      /* 1 = client is in protected mode (DPMI) */
 void dos_int21_set_pm(int on);  /* CF/ZF -> live VTIB_EFLAGS, not a V86 FLAGS frame */
+/* The reported DOS version, which is a LIE THE GUEST GETS TO CHOOSE -- real DOS has
+   SETVER for exactly this. Default is 6.22 (the oracle), and that default is what
+   XP's own COMMAND.COM refuses: it prints "Incorrect DOS version" and terminates,
+   because NT's DOS has always reported 5.00 and its shell is built to match.
+   Call before dos_int21_init's defaults are wanted, or any time after. */
+void dos_int21_set_version(dos_machine_t *m, uint8_t major, uint8_t minor);
 int dos_int21(dos_machine_t *m);
 
 #endif /* DOS_INT21_H */

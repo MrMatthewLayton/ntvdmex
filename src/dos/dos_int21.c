@@ -228,6 +228,14 @@ void dos_int21_init(dos_machine_t *m, uint16_t first_mcb)
     m->conpeek = 0;
 }
 
+/* See the header. The comment at AH=30h has promised this function since GH #28;
+   COMMAND.COM is what finally needed it. */
+void dos_int21_set_version(dos_machine_t *m, uint8_t major, uint8_t minor)
+{
+    if (!m || !major) return;                   /* major 0 is not a DOS version */
+    m->ver_major = major; m->ver_minor = minor;
+}
+
 int dos_int21(dos_machine_t *m)
 {
     volatile BYTE *tib = m->tib;
@@ -811,6 +819,18 @@ int dos_int21(dos_machine_t *m)
         m->exit_code = (int)(R_AX & 0xFF);
         cont = 0;
     } else if (ah == 0x53) {                    /* translate a BPB into a DPB */
+        /* ⚠ TESTED AS THE CAUSE OF THE COMMAND.COM EXIT, AND REFUTED. XP's own
+             COMMAND.COM calls this during init and terminates shortly after,
+             printing nothing, and this was the ONLY unimplemented call in the whole
+             run -- which made it the tempting answer rather than the proven one.
+             Answering SUCCESS with a zeroed DPB was tried: the shell still exits, at
+             the SAME CS:IP (0x95eb:0x03ce), after the same 32 ms. So 53h is not what
+             stops it, and reporting success here would have bought nothing at the
+             price of a call that lies. Reverted deliberately.
+             What COMMAND.COM asks for and does not get is INT 2Fh AX=122Eh, the five
+             DOS error-message table addresses (DL=00/02/04/06/08) -- see the widened
+             BOP2F log. That is the next thing to chase, and "died after" is still not
+             "died because": prove it before implementing it. */
         tp = zput(tp, "  INT21 AH=53 BPB->DPB UNIMPLEMENTED (no installable "
                       "block drivers)\r\n");
         m->unimpl21[0x53 >> 3] |= (uint8_t)(1u << (0x53 & 7));

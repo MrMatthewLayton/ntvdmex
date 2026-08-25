@@ -106,6 +106,7 @@
 #define UITICK_PATH      "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\uitick.txt"
 #define KEYIRQ_PATH      "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\keyirq.txt"
 #define MSENS_PATH       "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\msens.txt"
+#define DOSVER_PATH      "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\dosver.txt"
 /* Scripted synthetic keystrokes, on the share so a test sequence can be changed between
    runs without a rebuild. Whitespace-separated tokens, played once in order:
      4d     -- scancode 4D: make, brief hold, break
@@ -8894,6 +8895,30 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
       for (ti = 0; ti < 16; ++ti) { p = zhexb(p, pspb[0x81 + ti]); p = zput(p, " "); }
       p = zput(p, "]\r\n"); }
     dos_int21_init(&m, dos_mcb_init(NULL));
+    /* ── THE REPORTED DOS VERSION IS A KNOB, BECAUSE IT IS A LIE THE GUEST CHOOSES.
+         Real DOS ships SETVER for precisely this, and the number is not a fact about
+         us: it is what a particular guest will accept. We default to 6.22 to match the
+         M9 oracle, and XP's OWN COMMAND.COM refuses that outright -- "Incorrect DOS
+         version", INT 21h AH=00h, terminated before it printed a prompt. NT's DOS has
+         always reported 5.00 and its shell is built to match.
+         `dosver.txt` on the share: "5.0", "6.22", "3.31" -- major.minor decimal. */
+    { HANDLE h = CreateFileA(DOSVER_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                             NULL, OPEN_EXISTING, 0, NULL);
+      if (h != INVALID_HANDLE_VALUE) {
+          char c[16]; DWORD rd = 0; unsigned i = 0, mj = 0, mn = 0;
+          ReadFile(h, c, sizeof c - 1, &rd, NULL);
+          CloseHandle(h);
+          while (i < rd && c[i] >= '0' && c[i] <= '9') { mj = mj*10 + (unsigned)(c[i]-'0'); ++i; }
+          if (i < rd && c[i] == '.') {
+              ++i;
+              while (i < rd && c[i] >= '0' && c[i] <= '9') { mn = mn*10 + (unsigned)(c[i]-'0'); ++i; }
+          }
+          if (mj && mj < 256 && mn < 256) {
+              dos_int21_set_version(&m, (uint8_t)mj, (uint8_t)mn);
+              p = zput(p, "STAGE2: dosver override -> "); p = zhex(p, mj);
+              p = zput(p, "."); p = zhex(p, mn); p = zput(p, "\r\n");
+          }
+      } }
     /* GH #38: plant the AH=65h character tables in the DOS-resident block. */
     { volatile BYTE *ct = (volatile BYTE *)(DOS_CTAB_SEG << 4); unsigned k;
       for (k = 0; k < sizeof(dos_tab_upper);   ++k) ct[DOS_CTAB_UPPER   + k] = dos_tab_upper[k];
@@ -9720,7 +9745,26 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         }
         if ((VDM_REG(tib, VTIB_EVENT_INFO) & 0xFF) == 0x2F) {   /* INT 2Fh multiplex */
             DWORD ax = VDM_REG(tib, VTIB_EAX) & 0xFFFF;
-            p = zput(p, "STAGE2: BOP2F ax=0x"); p = zhex(p, ax); p = zput(p, "\r\n");
+            /* ── AX ALONE IS NOT THE CALL. ───────────────────────────────────────
+                 INT 2Fh is a multiplex: the function is AX, but the REQUEST is in
+                 the other registers and the ANSWER goes back through them too. We
+                 pass everything we do not recognise straight through, so the guest
+                 reads its own registers back as our reply -- the same "does nothing,
+                 reports success" shape as the DPMI 0300 bug -- and logging AX alone
+                 cannot show it. XP's COMMAND.COM asks 122Eh five times and 5501h
+                 once, then terminates without printing, so those registers are the
+                 evidence. Print them. */
+            p = zput(p, "STAGE2: BOP2F ax=0x"); p = zhex(p, ax);
+            p = zput(p, " bx=0x");  p = zhex(p, VDM_REG(tib, VTIB_EBX) & 0xFFFF);
+            p = zput(p, " cx=0x");  p = zhex(p, VDM_REG(tib, VTIB_ECX) & 0xFFFF);
+            p = zput(p, " dx=0x");  p = zhex(p, VDM_REG(tib, VTIB_EDX) & 0xFFFF);
+            p = zput(p, " ds:si=0x"); p = zhex(p, VDM_REG(tib, VTIB_DS) & 0xFFFF);
+            p = zput(p, ":0x");     p = zhex(p, VDM_REG(tib, VTIB_ESI) & 0xFFFF);
+            p = zput(p, " es:di=0x"); p = zhex(p, VDM_REG(tib, VTIB_ES) & 0xFFFF);
+            p = zput(p, ":0x");     p = zhex(p, VDM_REG(tib, VTIB_EDI) & 0xFFFF);
+            p = zput(p, " from=0x"); p = zhex(p, VDM_REG(tib, VTIB_CS) & 0xFFFF);
+            p = zput(p, ":0x");     p = zhex(p, VDM_REG(tib, VTIB_EIP) & 0xFFFF);
+            p = zput(p, "\r\n");
             log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
             if (ax == 0x4300) {                                 /* XMS installation check */
                 VDM_SET16(tib, VTIB_EAX, (VDM_REG(tib, VTIB_EAX) & 0xFF00) | 0x80);  /* AL=80h installed */
