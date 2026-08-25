@@ -97,6 +97,7 @@
 #define HEADLESS_MS_PATH "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\headless_ms.txt"
 #define AWBUFS_PATH      "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\awbufs.txt"
 #define AWFRAMES_PATH    "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\awframes.txt"
+#define EXECPRIO_PATH    "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\execprio.txt"
 /* Scripted synthetic keystrokes, on the share so a test sequence can be changed between
    runs without a rebuild. Whitespace-separated tokens, played once in order:
      4d     -- scancode 4D: make, brief hold, break
@@ -973,6 +974,7 @@ static DWORD          g_irq_raised_any = 0;
    g_qi_raise enables the periodic IRQ 5 the qirq probe listens for; both come from
    QIMODE_PATH so a mode can be retried without a rebuild. */
 static HANDLE         g_hcpu          = NULL;
+static DWORD          g_exec_prio     = 0;   /* guest thread priority class; see EXECPRIO_PATH */
 static DWORD          g_qi_bits       = 0;
 static int            g_qi_raise      = 0;
 static int            g_qi_vif        = 0;   /* start the guest with EFLAGS.VIF set */
@@ -7720,6 +7722,39 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         DuplicateHandle(GetCurrentProcess(), GetCurrentThread(), GetCurrentProcess(),
                         &g_hcpu, 0, FALSE, DUPLICATE_SAME_ACCESS);
     }
+    /* ── THE GUEST RAN AT NORMAL PRIORITY AGAINST A TIME_CRITICAL AUDIO THREAD. ──────
+         audio_wave.c raises its pump to THREAD_PRIORITY_TIME_CRITICAL because refilling
+         waveOut is a hard deadline. Nothing ever raised the thread that RUNS THE GUEST,
+         so on this single-core box the mixer thread preempts guest code whenever it has
+         work -- and Doom's DMX mixer is guest code that must finish inside one 7.4 ms
+         timer tick or its scheduler abandons the pass, recomputes the deadline from NOW,
+         and the block it would have filled replays the previous ring lap instead.
+         Measured: the mixer NEVER runs on consecutive ticks (2.6% of gaps are one tick,
+         49% two, 45% three or four) although we deliver 135 ticks/s against a 140 Hz
+         reload -- so it is overrunning, not starved of ticks. And it is not lock
+         contention: slicing host_audio_fill's hold into 64-frame pieces moved
+         REPLAYED_LOUD by 2 blocks in 894. Preemption is what slicing cannot touch.
+       ► ABOVE_NORMAL, not higher. The audio pump stays at 15 so it still wins every
+         race it needs to -- starving it is what "a periodic tick or pulse in otherwise
+         correct music" was, and that is a worse fault than the one being fixed. This
+         only lifts the guest above the UI thread and the system's background work.
+       ⚠ Knob, because it is a scheduling change on a box whose behaviour we have been
+         wrong about before: execprio.txt absent or 1 = ABOVE_NORMAL (default),
+         0 = leave at NORMAL (the old behaviour, for an A/B without a rebuild),
+         2 = HIGHEST. */
+    { DWORD prio = 1;
+      HANDLE hp = CreateFileA(EXECPRIO_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                              NULL, OPEN_EXISTING, 0, NULL);
+      if (hp != INVALID_HANDLE_VALUE) {
+          char c[8]; DWORD rd = 0;
+          ReadFile(hp, c, sizeof c, &rd, NULL);
+          CloseHandle(hp);
+          if (rd && c[0] >= '0' && c[0] <= '9') prio = (DWORD)(c[0] - '0');
+      }
+      g_exec_prio = prio;
+      if (prio == 1) SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_ABOVE_NORMAL);
+      else if (prio >= 2) SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST);
+    }
     if (g_qi_bits) {
         /* Experiment mode: retarget the kernel's PIC so a KERNEL-dispatched IRQ 5 arrives
            as INT 65h while our own injection still arrives as INT 0Dh. Without this the
@@ -9782,6 +9817,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
          assumed one, which is precisely the mistake that made it worse. */
       p = zput(p, " pit_gaps=0x");   p = zhex(p, g_pit_catchup_clamped);
       p = zput(p, " pit_gapmax=0x"); p = zhex(p, g_pit_gap_max);
+      p = zput(p, "\r\nSTAGE2: execprio="); p = zhex(p, g_exec_prio);
       p = zput(p, "\r\nSTAGE2: lock: wait_us=0x");  p = zhex(p, g_lk_wait_us);
       p = zput(p, "@line ");                        p = zhex(p, (DWORD)g_lk_wait_site);
       p = zput(p, " hold_us=0x");                   p = zhex(p, g_lk_hold_us);
