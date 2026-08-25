@@ -100,6 +100,7 @@
 #define EXECPRIO_PATH    "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\execprio.txt"
 #define DSPVER_PATH      "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\dspver.txt"
 #define SBGATE_PATH      "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\sbgate.txt"
+#define PITPACE_PATH     "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\pitpace.txt"
 /* Scripted synthetic keystrokes, on the share so a test sequence can be changed between
    runs without a rebuild. Whitespace-separated tokens, played once in order:
      4d     -- scancode 4D: make, brief hold, break
@@ -320,6 +321,33 @@ static int pm_tick_take(void)
     return 1;
 }
 static int   g_async_tried_this_sync = 0;   /* see host_irq_sink: one attempt per PIT sync */
+/* ── HOW EVENLY DO IRQ0s ACTUALLY LAND? ──────────────────────────────────────────────
+     DMX's mixer is armed by the SB block IRQ (next_due = NOW) and SERVICED on the next
+     timer interrupt. A block is 11.6 ms; a tick period at the 135/s we deliver is
+     7.4 ms, so every arm should be serviced well inside its block -- and yet a block
+     finds the previous arm unserviced 32.8% of the time, and the two arms collapse into
+     one refill. Either the gaps between DELIVERED ticks are exceeding 11.6 ms a third
+     of the time (ours), or they are even and DMX is not servicing at the first
+     available tick (the guest's). The RATE cannot tell those apart -- 135/s is 135/s
+     either way -- so bucket the interval. QPC, because a tick period is smaller than
+     GetTickCount's granularity. */
+static DWORD g_tickgap[12], g_tickgap_max_us, g_tickgap_over;   /* >11.6ms = a block */
+static void tick_delivered_note(void)
+{
+    static LARGE_INTEGER pf, prev;
+    LARGE_INTEGER now;
+    if (!pf.QuadPart && !QueryPerformanceFrequency(&pf)) return;
+    if (!QueryPerformanceCounter(&now)) return;
+    if (prev.QuadPart) {
+        LONGLONG us = ((now.QuadPart - prev.QuadPart) * 1000000) / pf.QuadPart;
+        unsigned b = 0;
+        while (b < 11 && us >= (LONGLONG)500 << b) ++b;      /* 0.5,1,2,4..512 ms */
+        g_tickgap[b]++;
+        if (us > (LONGLONG)g_tickgap_max_us) g_tickgap_max_us = (DWORD)us;
+        if (us > 11600) g_tickgap_over++;   /* longer than one 128-byte block at 11111 Hz */
+    }
+    prev = now;
+}
 static DWORD g_keypm_logged  = 0;           /* bounded KEYPM account; see the PM exec loop */
 static DWORD g_keyirq_logged = 0;           /* bounded KEYIRQ account; see host_irq_sink */
 static volatile LONG g_irq1_pending = 0;    /* count of un-delivered keyboard IRQ1s (one per scancode byte) */
@@ -1311,7 +1339,8 @@ static int async_inject_irq(unsigned irq)
         }
         else async_why_note(irq, (unsigned)g_async_why);   /* the clause that said no */
         ResumeThread(g_hcpu);
-        if (ok) { g_async_inj++; g_async_pm_inj++; g_async_inj_line[irq & 7]++; } else g_async_bail++;
+        if (ok) { g_async_inj++; g_async_pm_inj++; g_async_inj_line[irq & 7]++;
+                  if (!(irq & 7)) tick_delivered_note(); } else g_async_bail++;
         /* Log AFTER the resume, never while the guest is held -- and bounded, because this
            fires at the PIT's rate. Without it an async injection that kills the run is
            completely silent: the cooperative path prints its entry and exit, so a log that
@@ -1915,6 +1944,48 @@ static void dmx_sample(void)
           ++g_dmx_overdue;
           if (late > g_dmx_overdue_max) g_dmx_overdue_max = late;
       } }
+}
+
+/* ── PACE THE PIT. ──────────────────────────────────────────────────────────────────
+     host_pit_sync() advances the emulated 8254 by however much wall-clock has elapsed
+     since the last call, raising one IRQ0 per reload period -- so its CALL RATE sets
+     how evenly the guest's ticks land. It is driven by the UI thread and by guest I/O
+     traps, and measured it runs 65 times a second against a 140 Hz timer: each call
+     therefore raises about two ticks, which go out back-to-back.
+     Measured interval between DELIVERED IRQ0s (n=6069, 135/s, so 7.4 ms if even):
+         <0.5ms  52.7%     8-16ms  22.9%     16-32ms  18.6%     max 48 ms
+     53% arrive in BURSTS and 28% of gaps exceed 11.6 ms -- one DMA block. That is the
+     whole audio defect: DMX's mixer is armed by the SB block IRQ (next_due = NOW) and
+     serviced on the next timer tick, so a gap longer than a block lets a second block
+     arm before the first is serviced. The two arms COLLAPSE into one refill and a block
+     is never filled -- 32.8% measured, against 28% of gaps being over-length.
+   ► So call it far more often. At ~1 kHz each sync raises at most one tick and the
+     ticks come out evenly, WITHOUT changing the rate: the 8254 still advances by real
+     elapsed time and the guest still gets the 140 Hz it programmed. This is a pacing
+     change, not a rate change -- which matters, because session 22 proved that
+     delivering MORE ticks per opportunity (DPMI_IRQ0_BATCH) compresses game time and
+     is catastrophic.
+   ⚠ 1 ms Sleep needs the multimedia timer resolution raised; without timeBeginPeriod
+     XP's default granularity is ~15.6 ms and this thread would run slower than the UI
+     one it is meant to replace. Loaded dynamically, as audio_wave.c already does for
+     waveOut, so the import allowlist is unaffected.
+   ⚠ It takes g_lock like every other caller, so it is a knob (pitpace.txt = 0 to
+     disable) and the lock figures must be read on the first run with it on. */
+typedef MMRESULT (WINAPI *PFN_timeBeginPeriod)(UINT);
+static HANDLE g_pitpace_thread;
+static int    g_pitpace_on = 1, g_pitpace_ms = 1;
+static DWORD  g_pitpace_calls;
+static DWORD WINAPI pit_pacer_thread(LPVOID param)
+{
+    (void)param;
+    /* Above the guest but below the audio pump, so it can never starve either. */
+    SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST);
+    while (g_running) {
+        host_pit_sync();
+        ++g_pitpace_calls;
+        Sleep((DWORD)g_pitpace_ms);
+    }
+    return 0;
 }
 
 static void host_audio_fill(void *ctx, int16_t *out, uint32_t frames)
@@ -7523,7 +7594,8 @@ static int dpmi_inject_pm_irq(dos_machine_t *mp, volatile BYTE *tib, unsigned iv
          so counting these lines to measure the TIMER's delivery over-counts by however
          much the Sound Blaster contributed. Same fault as ASYNC-PM's hardcoded
          "vec=0x08", one function over, and the same fix. */
-    if (iv <= 0x0F) g_pm_coop_line[iv & 7]++;
+    if (iv <= 0x0F) { g_pm_coop_line[iv & 7]++;
+                      if (iv == 0x08) tick_delivered_note(); }
     { char cb2[128], *cq = cb2;
       cq = zput(cq, "  PMIRQ vec=0x"); cq = zhexb(cq, iv);
       cq = zput(cq, " done="); cq = zhex(cq, (DWORD)done);
@@ -8201,6 +8273,21 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
           }
           g_wave.nframes = v;                 /* clamped to [AW_MIN_FRAMES,AW_FRAMES] */
       } }
+    { HANDLE hp2 = CreateFileA(PITPACE_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                               NULL, OPEN_EXISTING, 0, NULL);
+      if (hp2 != INVALID_HANDLE_VALUE) {
+          char c[8]; DWORD rd = 0;
+          ReadFile(hp2, c, sizeof c, &rd, NULL); CloseHandle(hp2);
+          if (rd && c[0] >= '0' && c[0] <= '9') g_pitpace_ms = c[0] - '0';
+          g_pitpace_on = (g_pitpace_ms != 0);
+      } }
+    if (g_pitpace_on) {
+        HMODULE mm = LoadLibraryA("winmm.dll");
+        if (mm) { PFN_timeBeginPeriod tbp =
+                      (PFN_timeBeginPeriod)GetProcAddress(mm, "timeBeginPeriod");
+                  if (tbp) tbp(1); }
+        g_pitpace_thread = CreateThread(NULL, 0, pit_pacer_thread, NULL, 0, NULL);
+    }
     audio_wave_start(&g_wave, AUDIO_OUT_HZ, host_audio_fill, NULL);
     m.conout = host_conout; m.conctx = NULL;    /* DOS console out -> video      */
     m.conin  = host_conin;  m.cinctx = NULL;    /* DOS console in  <- keyboard   */
@@ -9896,6 +9983,13 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
          assumed one, which is precisely the mistake that made it worse. */
       p = zput(p, " pit_gaps=0x");   p = zhex(p, g_pit_catchup_clamped);
       p = zput(p, " pit_gapmax=0x"); p = zhex(p, g_pit_gap_max);
+      p = zput(p, "\r\nSTAGE2: pitpace=");  p = zhex(p, (DWORD)g_pitpace_ms);
+      p = zput(p, " calls="); p = zhex(p, g_pitpace_calls);
+      p = zput(p, "\r\nSTAGE2: TICKGAP us[<.5k,1k,2k,4k,8k,16k,32k,64k,128k,256k,512k,+]=");
+      { unsigned tb; for (tb = 0; tb < 12; ++tb) { p = zput(p, tb ? "," : "");
+                                                   p = zhex(p, g_tickgap[tb]); } }
+      p = zput(p, " max_us="); p = zhex(p, g_tickgap_max_us);
+      p = zput(p, " OVER_11600us="); p = zhex(p, g_tickgap_over);
       p = zput(p, "\r\nSTAGE2: DMXTASK: ok="); p = zhex(p, g_dmx_mixer_ok);
       p = zput(p, " samples="); p = zhex(p, g_dmx_samples);
       p = zput(p, " any_busy="); p = zhex(p, g_dmx_anybusy);
