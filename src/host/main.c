@@ -3465,6 +3465,26 @@ static int dpmi_sel_is32(WORD sel)
 #define DMAPOLL_MAX 8
 static DWORD g_dmapoll_eip[DMAPOLL_MAX], g_dmapoll_hits[DMAPOLL_MAX];
 static unsigned g_dmapoll_n = 0, g_dmapoll_overflow = 0;
+/* ── WHO CALLS THE POLL? THE STACK KNOWS, AND THE IMAGE DOES NOT. ────────────────────
+     DMX dispatches through a card-driver vtable -- four position routines of identical
+     shape, one per sound card -- and in an LE image those entries are FIXUP RECORDS, so
+     the pointer is simply not in the file. Searching for it statically returned nothing
+     under every plausible encoding, which is why the caller chain is unknown.
+     At the instant of the poll, though, the guest's own stack holds the return chain.
+     Take the top of it and keep every word that looks like a code address, i.e. lands
+     near the poll site itself (the whole code object is ~0x45000 bytes, so a +/-0x60000
+     window cannot miss it and cannot admit heap or ring data). The union over a whole
+     run is the set of call sites, and each converts to a file offset by subtracting
+     0x03AEDFEC -- at which point DMX's refill path can be READ instead of inferred.
+   ► WHAT THIS IS FOR. `getpos`'s caller computes `total - remaining` and is gated on an
+     "is this transfer active" flag: that is the shape of a position REPORT, not
+     necessarily the refill trigger. If DMX refills on the SB block IRQ instead -- which
+     arrives at 99.5% -- then the 56/s poll rate has nothing to do with the 30% stale
+     blocks and the 31%-vs-30% agreement is a coincidence. This decides that, and it is
+     the difference between a cause and a pattern match. */
+#define POLLSTK_MAX 48
+static DWORD g_pollstk[POLLSTK_MAX], g_pollstk_hits[POLLSTK_MAX];
+static unsigned g_pollstk_n = 0, g_pollstk_overflow = 0;
 
 static int host_try_io_pm(volatile BYTE *tib, vdd_bus *bus)
 {
@@ -3516,6 +3536,23 @@ static int host_try_io_pm(volatile BYTE *tib, vdd_bus *bus)
             g_dmapoll_eip[g_dmapoll_n] = site; g_dmapoll_hits[g_dmapoll_n] = 1;
             ++g_dmapoll_n;
         } else ++g_dmapoll_overflow;
+
+        /* The return chain, straight off the guest's stack. */
+        { DWORD ssb = dpmi_sel_base((WORD)(VDM_REG(tib, VTIB_SS) & 0xFFFF));
+          DWORD esp = VDM_REG(tib, VTIB_ESP);
+          const volatile DWORD *sp = (const volatile DWORD *)(ULONG_PTR)(ssb + esp);
+          unsigned k;
+          for (k = 0; k < 40; ++k) {
+              DWORD w = sp[k], dlt = (w > site) ? (w - site) : (site - w);
+              unsigned t;
+              if (dlt > 0x60000u) continue;             /* not a code address */
+              for (t = 0; t < g_pollstk_n; ++t) if (g_pollstk[t] == w) break;
+              if (t < g_pollstk_n) g_pollstk_hits[t]++;
+              else if (g_pollstk_n < POLLSTK_MAX) {
+                  g_pollstk[g_pollstk_n] = w; g_pollstk_hits[g_pollstk_n] = 1;
+                  ++g_pollstk_n;
+              } else ++g_pollstk_overflow;
+          } }
     }
 
     host_io_do(tib, bus, port, is_in, width);
@@ -9991,6 +10028,12 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
               p = zput(p, s ? " " : ""); p = zput(p, "0x"); p = zhex(p, g_dmapoll_eip[s]);
               p = zput(p, "x"); p = zhex(p, g_dmapoll_hits[s]); } }
         p = zput(p, " overflow="); p = zhex(p, (DWORD)g_dmapoll_overflow);
+        /* ► THE CALL CHAIN. Subtract 0x03AEDFEC for the DOOM.EXE file offset. */
+        p = zput(p, " poll_stack=");
+        { unsigned s; for (s = 0; s < g_pollstk_n; ++s) {
+              p = zput(p, s ? " " : ""); p = zput(p, "0x"); p = zhex(p, g_pollstk[s]);
+              p = zput(p, "x"); p = zhex(p, g_pollstk_hits[s]); } }
+        p = zput(p, " stkovf="); p = zhex(p, (DWORD)g_pollstk_overflow);
         p = zput(p, " count_rd_by_width w1="); p = zhex(p, g_dma.rd_w1);
         p = zput(p, " w2=");                   p = zhex(p, g_dma.rd_w2);
         p = zput(p, " w4=");                   p = zhex(p, g_dma.rd_w4);
