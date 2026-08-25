@@ -104,6 +104,8 @@
 #define PITPRIO_PATH     "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\pitprio.txt"
 #define PITINJ_PATH      "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\pitinj.txt"
 #define UITICK_PATH      "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\uitick.txt"
+#define KEYIRQ_PATH      "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\keyirq.txt"
+#define MSENS_PATH       "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\msens.txt"
 /* Scripted synthetic keystrokes, on the share so a test sequence can be changed between
    runs without a rebuild. Whitespace-separated tokens, played once in order:
      4d     -- scancode 4D: make, brief hold, break
@@ -2847,6 +2849,30 @@ static volatile int g_title_dirty = 1;      /* UI thread re-applies the caption 
 /* Mouse state shared UI thread -> V86 thread (INT 33h). Position is in guest
    pixels (mapped from the window client); buttons: bit0 L, bit1 R, bit2 M. */
 static volatile LONG g_ms_x = 320, g_ms_y = 240, g_ms_btn = 0;
+/* ── RELATIVE MOTION, WHICH IS WHAT A GAME ACTUALLY ASKS FOR. ────────────────────────
+     INT 33h function 0Bh reports MICKEYS MOVED SINCE THE LAST CALL, and we derived that
+     from the absolute pointer: (x - last_x) * 8. Fine for a menu, useless for Doom -- the
+     absolute position is CLAMPED to the window, so push the mouse left past the edge and
+     the deltas simply stop: a turn ends at the frame boundary and you cannot spin. It is
+     also wrong in kind. The guest wants how far the DEVICE moved, not where the Windows
+     pointer ended up.
+   ► So take the device's own counts. WM_INPUT (raw input, XP+) gives true relative
+     movement, unclamped, and it keeps working while the pointer is hidden and clipped by
+     capture -- which is exactly the state you play in. Accumulated here, drained by 0Bh.
+   ⚠ A FALLBACK, not a replacement: if RegisterRawInputDevices fails we go back to the
+     absolute-derived delta rather than reporting no motion at all. */
+static volatile LONG g_ms_dx, g_ms_dy;      /* raw mickeys since the last 0Bh drain */
+static int           g_ms_raw_ok;           /* raw mouse registered with the window */
+static int           g_ms_sens = 100;       /* percent; msens.txt tunes feel per-guest */
+/* Doom reports "no mouse look" while capture is demonstrably on. Three things can be
+   false and they need opposite fixes: raw input never REGISTERED, WM_INPUT never
+   ARRIVING, or the guest never ASKING (INT 33h 0Bh). Count all three -- and note that
+   the raw path DISABLES the absolute-derived fallback, so a silent raw failure reports
+   no motion at all where the old code at least reported clamped motion. */
+static DWORD g_ms_wm_input, g_ms_raw_abs, g_ms_i33[16], g_ms_i33_other;
+/* DPMI 0300 (simulate real-mode interrupt) vectors we do NOT service. See the 0300 arm. */
+static DWORD g_simint_unhandled, g_simint_vec[256];
+static LONG  g_ms_raw_tot_x, g_ms_raw_tot_y;
 static volatile LONG g_ms_hidden = 1;       /* INT 33h cursor hide-count; 0 => visible */
 
 /* THE HOST ARROW over the video area, which is a SEPARATE thing from the INT 33h
@@ -2869,6 +2895,7 @@ static void mouse_int33(volatile BYTE *tib)
     static LONG last_x = 320, last_y = 240;             /* for AX=0B motion (V86 thread only) */
     DWORD ax = VDM_REG(tib, VTIB_EAX) & 0xFFFF;
     LONG x = g_ms_x, y = g_ms_y, b = g_ms_btn;
+    if (ax < 16) g_ms_i33[ax]++; else g_ms_i33_other++;
     switch (ax) {
     case 0x0000:                                        /* reset + get status      */
         VDM_SET16(tib, VTIB_EAX, 0xFFFF);               /* driver installed        */
@@ -2896,11 +2923,23 @@ static void mouse_int33(volatile BYTE *tib)
         VDM_SET16(tib, VTIB_ECX, (WORD)x);
         VDM_SET16(tib, VTIB_EDX, (WORD)y);
         break;
-    case 0x000B:                                        /* read relative motion    */
-        VDM_SET16(tib, VTIB_ECX, (WORD)((x - last_x) * 8));   /* ~8 mickeys / pixel */
-        VDM_SET16(tib, VTIB_EDX, (WORD)((y - last_y) * 8));
-        last_x = x; last_y = y;
-        break;
+    case 0x000B: {                                      /* read relative motion    */
+        LONG dx, dy;
+        if (g_ms_raw_ok) {                              /* the device's own counts */
+            dx = InterlockedExchange(&g_ms_dx, 0);
+            dy = InterlockedExchange(&g_ms_dy, 0);
+            dx = dx * g_ms_sens / 100; dy = dy * g_ms_sens / 100;
+        } else {                                        /* fallback: absolute-derived */
+            dx = (x - last_x) * 8; dy = (y - last_y) * 8;
+            last_x = x; last_y = y;
+        }
+        /* 0Bh is SIGNED 16-bit and the guest reads it as such; clamp rather than let a
+           big sweep wrap round and turn the player the wrong way. */
+        if (dx >  32767) dx =  32767; else if (dx < -32768) dx = -32768;
+        if (dy >  32767) dy =  32767; else if (dy < -32768) dy = -32768;
+        VDM_SET16(tib, VTIB_ECX, (WORD)(SHORT)dx);
+        VDM_SET16(tib, VTIB_EDX, (WORD)(SHORT)dy);
+        break; }
     default: break;                                     /* 07/08 range, 0C handler, ...: accept */
     }
 }
@@ -3020,7 +3059,7 @@ static HMENU build_menu(void)
     msub(bar, "Audio", m);
 
     m = mpop();                                                   /* Input        */
-    msub(m,"Mouse",(s=mpop(),mi(s,"Capture\tCtrl+F10",IDM_INPUT_CAPTURE),
+    msub(m,"Mouse",(s=mpop(),mi(s,"Capture\tWin+F10",IDM_INPUT_CAPTURE),
         mi(s,"Show Host Cursor\tCtrl+F8",IDM_INPUT_CURSOR),
         mi(s,"Seamless",IDM_STUB),mi(s,"Sensitivity",IDM_STUB),s));
     msub(m,"Keyboard",(s=mpop(),mi(s,"Layout",IDM_STUB),mi(s,"Typematic rate",IDM_STUB),mi(s,"Send Ctrl+Alt+Del",IDM_STUB),s));
@@ -3079,7 +3118,7 @@ static void set_window_title(void)
     }
     /* While captured the caption is the ONLY place the release chord is written down --
        the menu bar may be hidden and the pointer is clipped inside the window. */
-    if (g_captured) { const char *c = "   [captured -- Ctrl+F10 releases]";
+    if (g_captured) { const char *c = "   [captured -- Win+F10 releases]";
                       while (*c) *p++ = *c++; }
     *p = 0;
     SetWindowTextA(g_hwnd, t);
@@ -3122,15 +3161,19 @@ static void menu_check(HWND h, UINT id, int on)
    2. THE SHELL'S CHORDS -- Alt+Tab, Ctrl+Esc, the Windows keys. Those never reach the
       window at all; only a low-level hook sees them, and only while we are foreground.
       Swallowing them is what "exclusive" means, and it is a MODE, not a default: a
-      window that eats Alt+Tab whenever it has focus is hostile. Ctrl+F10 toggles it
-      (the binding the menu has always advertised, and DOSBox's), and Ctrl+F10 is
-      swallowed by us so the guest can never see it -- there is no chord a DOS guest
-      cannot generate, so the release must be one WE reserve.
+      window that eats Alt+Tab whenever it has focus is hostile. WIN+F10 toggles it
+      (Scroll Lock too, where the keyboard still has one),
+      swallowed by us so the guest never sees it -- there is no chord a DOS guest cannot
+      generate, so the release must be one WE reserve. It is deliberately NOT Ctrl+F10
+      (DOSBox's binding): Doom fires with Ctrl and uses every F-key, so that chord fought
+      the guest for keys it needs constantly -- and F10 is a SYSTEM key, so the check
+      never even ran. See the WM_KEYDOWN handler.
    ⚠ Ctrl+Alt+Del is the Secure Attention Sequence and CANNOT be hooked. That is by
      design in Windows and not a defect here.
    ⚠ Capture is dropped on WM_KILLFOCUS -- otherwise a clipped cursor and a swallowed
      Alt+Tab would strand the user in a window they cannot leave. */
 static HHOOK         g_llkbd;
+static volatile LONG g_win_down;         /* Win held -- maintained by the hook, see below */
 
 static LRESULT CALLBACK ll_kbd_proc(int code, WPARAM wp, LPARAM lp)
 {
@@ -3138,15 +3181,40 @@ static LRESULT CALLBACK ll_kbd_proc(int code, WPARAM wp, LPARAM lp)
         KBDLLHOOKSTRUCT *k = (KBDLLHOOKSTRUCT *)lp;
         int alt  = (k->flags & LLKHF_ALTDOWN) != 0;
         int ctrl = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
+        int down = (wp == WM_KEYDOWN || wp == WM_SYSKEYDOWN);
+        /* ⚠⚠ NEVER SWALLOW A KEY-UP. Capture is entered with Win+F10 while the hook is
+             NOT yet installed, so Windows SEES the Win key go down; the hook is installed
+             a moment later and used to eat the key-UP, leaving the system believing Win
+             was held forever. Every subsequent keystroke then became Win+key -- pressing
+             D minimised the window, because Win+D is Show Desktop (user-reported, and it
+             is what pointed straight at this). Swallowing a down without its up is a
+             stuck modifier; only downs may be eaten. */
+        if (!down) { if (k->vkCode == VK_LWIN || k->vkCode == VK_RWIN)
+                         InterlockedExchange(&g_win_down, 0);
+                     return CallNextHookEx(g_llkbd, code, wp, lp); }
         /* Swallow only, and deliberately do NOT push these to the guest from here: a
            low-level hook that blocks is torn down by Windows, and host_key_scancode
            takes g_lock. Losing Alt+Tab to the guest costs nothing; stalling the hook
            would cost every key. */
-        if (k->vkCode == VK_LWIN || k->vkCode == VK_RWIN) return 1;
+        if (k->vkCode == VK_LWIN || k->vkCode == VK_RWIN) {
+            /* Swallowing the down also stops the SYSTEM tracking it, so GetAsyncKeyState
+               would report Win as up and the Win+F10 release chord could never fire while
+               captured -- the exact state you need it in. Track it here instead. */
+            InterlockedExchange(&g_win_down, 1);
+            return 1;
+        }
         if (k->vkCode == VK_TAB    && alt)  return 1;
         if (k->vkCode == VK_ESCAPE && (ctrl || alt)) return 1;
     }
     return CallNextHookEx(g_llkbd, code, wp, lp);
+}
+
+/* Is a Windows key held? While captured the hook owns the answer (it swallowed the key);
+   uncaptured there is no hook, so ask the system. */
+static int host_key_held(void)
+{
+    if (g_win_down) return 1;
+    return ((GetAsyncKeyState(VK_LWIN) | GetAsyncKeyState(VK_RWIN)) & 0x8000) != 0;
 }
 
 static void input_capture_set(HWND h, int on)
@@ -3274,7 +3342,7 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
                    mine, not the code's -- the tell was a build whose new code path had
                    provably never run (its counter read zero) dying identically to one
                    whose had. Leave room. */
-                char kb[768], *kq = kb; unsigned i;
+                char kb[1024], *kq = kb; unsigned i;
                 s_kl = nowt;
                 kq = zput(kq, "KEYLAT msgq_ms[0,1,2,4,8,16,32,64+]=");
                 for (i = 0; i < 8; ++i) { kq = zput(kq, i ? "," : ""); kq = zhex(kq, g_keymsg_hist[i]); }
@@ -3284,7 +3352,22 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
                 for (i = 0; i < 8; ++i) { kq = zput(kq, i ? "," : ""); kq = zhex(kq, g_keydel_hist[i]); }
                 kq = zput(kq, " n=");      kq = zhex(kq, g_keydel_n);
                 kq = zput(kq, " max_ms="); kq = zhex(kq, g_keydel_max_ms);
-                kq = zput(kq, " ui_gap_us="); kq = zhex(kq, g_ui_gap_us);
+                kq = zput(kq, " || MOUSE raw_ok="); kq = zhex(kq, (DWORD)g_ms_raw_ok);
+                kq = zput(kq, " wm_input=");  kq = zhex(kq, g_ms_wm_input);
+                kq = zput(kq, " abs_pkts=");  kq = zhex(kq, g_ms_raw_abs);
+                kq = zput(kq, " totx=");      kq = zhex(kq, (DWORD)g_ms_raw_tot_x);
+                kq = zput(kq, " toty=");      kq = zhex(kq, (DWORD)g_ms_raw_tot_y);
+                kq = zput(kq, " i33[0]=");    kq = zhex(kq, g_ms_i33[0]);
+                kq = zput(kq, " i33[3]=");    kq = zhex(kq, g_ms_i33[3]);
+                kq = zput(kq, " i33[B]=");    kq = zhex(kq, g_ms_i33[0xB]);
+                kq = zput(kq, " i33[1]=");    kq = zhex(kq, g_ms_i33[1]);
+                kq = zput(kq, " i33oth=");    kq = zhex(kq, g_ms_i33_other);
+                kq = zput(kq, " captured=");  kq = zhex(kq, (DWORD)g_captured);
+                kq = zput(kq, " simint_unh="); kq = zhex(kq, g_simint_unhandled);
+                { unsigned sv; for (sv = 0; sv < 256; ++sv) if (g_simint_vec[sv]) {
+                      kq = zput(kq, " v"); kq = zhexb(kq, (BYTE)sv);
+                      kq = zput(kq, "x");  kq = zhex(kq, g_simint_vec[sv]); } }
+                kq = zput(kq, " || ui_gap_us="); kq = zhex(kq, g_ui_gap_us);
                 kq = zput(kq, " lk_wait_us="); kq = zhex(kq, g_lk_wait_us);
                 kq = zput(kq, " || IRQ1GATE checks="); kq = zhex(kq, g_irq1_checks);
                 kq = zput(kq, " no_if=");   kq = zhex(kq, g_irq1_no_if);
@@ -3414,7 +3497,17 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
         default: return 0;               /* IDM_STUB / not-yet-wired items: no-op      */
         }
     case WM_SYSKEYDOWN:                  /* F10 / Alt / Alt+key -- see input_capture_set */
-        if (wp == VK_RETURN) { present_ddraw_set_fullscreen(&g_pd, !g_pd.fullscreen); return 0; }
+        /* ── WIN+F10 IS THE HOST KEY. ────────────────────────────────────────────────
+             It has to be handled HERE and not in WM_KEYDOWN, because F10 is a SYSTEM key
+             and only ever arrives as WM_SYSKEYDOWN -- binding it in WM_KEYDOWN is exactly
+             why the first attempt at capture silently never fired.
+             Why the Windows key: DOS predates it, so no guest asks for it, and it is not
+             a reserved XP shortcut. Scroll Lock is kept as an alternative below but must
+             not be the only one -- plenty of current keyboards no longer have the key. */
+        if (wp == VK_F10 && host_key_held()) {
+            input_capture_set(h, !g_captured); return 0;
+        }
+        if (wp == VK_RETURN && !g_captured) { present_ddraw_set_fullscreen(&g_pd, !g_pd.fullscreen); return 0; }
         /* Alt+F4 stays Windows' while uncaptured: there must always be a way to close
            the window that does not require knowing a chord. Captured, it is the guest's. */
         if (wp == VK_F4 && !g_captured) break;
@@ -3433,11 +3526,21 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
         return 0;
     case WM_KEYDOWN:
         key_msg_note();
-        /* Ctrl+F10 -> capture on/off. Swallowed here, so the guest never sees it: it is
-           the release chord and it has to be one key the guest cannot claim. */
-        if (wp == VK_F10 && (GetKeyState(VK_CONTROL) & 0x8000)) {
-            input_capture_set(h, !g_captured); return 0;
-        }
+        /* ── THE HOST KEY IS SCROLL LOCK, AND BOTH HALVES OF THAT ARE THE FIX. ─────────
+             It was Ctrl+F10, which was broken twice over. F10 is a SYSTEM key: it arrives
+             as WM_SYSKEYDOWN, never here, so the chord could never fire at all -- capture
+             simply did not work. And the binding was wrong even in principle, because
+             DOOM USES CTRL TO FIRE and uses every F-key (F10 quit, F11 gamma, F12 spy),
+             so a Ctrl+F<n> host chord fights the guest for keys it needs constantly.
+             The host key is WIN+F10 (handled in WM_SYSKEYDOWN, because F10 only ever
+             arrives there); Scroll Lock is kept as an alternative for keyboards that
+             still have one, and many current keyboards do not. Swallowed here so the guest never sees it: the release has to be
+             one key WE reserve, because there is no chord a DOS guest cannot generate. */
+        if (wp == VK_SCROLL) { input_capture_set(h, !g_captured); return 0; }  /* alt: ScrLk */
+        /* ► CAPTURED MEANS CAPTURED. Every other host hotkey stands down and the key goes
+             to the guest -- F11 is Doom's gamma, Ctrl+F5/F8 collide with its fire key.
+             Exclusivity that still eats keys is not exclusivity. */
+        if (g_captured) { key_push_make(lp); break; }
         if (wp == VK_F11) { present_ddraw_set_fullscreen(&g_pd, !g_pd.fullscreen); return 0; }
         if (wp == VK_F5 && (GetKeyState(VK_CONTROL) & 0x8000)) { host_screenshot(); return 0; }
         /* Ctrl+F8 -> host cursor on/off. It needs a hotkey and not just the menu
@@ -3469,6 +3572,32 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
            key TWICE. (The scancode path is also the only one that can produce the AL=0
            extended codes an arrow needs, which WM_CHAR never generates at all.) */
         return 0;
+    case WM_INPUT: {                     /* raw relative motion -- see g_ms_dx      */
+        RAWINPUT ri; UINT sz = sizeof ri;
+        if (GetRawInputData((HRAWINPUT)lp, RID_INPUT, &ri, &sz, sizeof(RAWINPUTHEADER))
+                != (UINT)-1
+            && ri.header.dwType == RIM_TYPEMOUSE
+            && !(ri.data.mouse.usFlags & MOUSE_MOVE_ABSOLUTE)) {
+            /* Counted separately: an ABSOLUTE packet (RDP, some tablets/VMs) carries a
+               screen coordinate, not a delta, and adding it as one would fling the view. */
+            ++g_ms_wm_input;
+            InterlockedExchangeAdd(&g_ms_raw_tot_x, (LONG)ri.data.mouse.lLastX);
+            InterlockedExchangeAdd(&g_ms_raw_tot_y, (LONG)ri.data.mouse.lLastY);
+            InterlockedExchangeAdd(&g_ms_dx, (LONG)ri.data.mouse.lLastX);
+            InterlockedExchangeAdd(&g_ms_dy, (LONG)ri.data.mouse.lLastY);
+            /* While captured the pointer is clipped, so WM_MOUSEMOVE stops telling the
+               truth about position -- drive the driver cursor from the deltas instead,
+               so INT 33h 03h still reports somewhere sensible. */
+            if (g_captured && g_vid.frame.w && g_vid.frame.h) {
+                LONG nx = g_ms_x + (LONG)ri.data.mouse.lLastX;
+                LONG ny = g_ms_y + (LONG)ri.data.mouse.lLastY;
+                if (nx < 0) nx = 0; else if (nx >= (LONG)g_vid.frame.w) nx = (LONG)g_vid.frame.w - 1;
+                if (ny < 0) ny = 0; else if (ny >= (LONG)g_vid.frame.h) ny = (LONG)g_vid.frame.h - 1;
+                InterlockedExchange(&g_ms_x, nx); InterlockedExchange(&g_ms_y, ny);
+            }
+        }
+        else if (ri.header.dwType == RIM_TYPEMOUSE) ++g_ms_raw_abs;
+        break; }                         /* DefWindowProc must run: WM_INPUT cleanup */
     case WM_MOUSEMOVE:                   /* map client -> guest pixels, + buttons */
     case WM_LBUTTONDOWN: case WM_LBUTTONUP:
     case WM_RBUTTONDOWN: case WM_RBUTTONUP:
@@ -3485,7 +3614,8 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
           else if (fx >= fw) fx = fw - 1;
           if (fy < 0) fy = 0;
           else if (fy >= fh) fy = fh - 1;
-          InterlockedExchange(&g_ms_x, fx); InterlockedExchange(&g_ms_y, fy); }
+          if (!g_captured) { InterlockedExchange(&g_ms_x, fx);   /* captured: WM_INPUT owns it */
+                             InterlockedExchange(&g_ms_y, fy); } }
         if (wp & MK_LBUTTON) b |= 1;
         if (wp & MK_RBUTTON) b |= 2;
         if (wp & MK_MBUTTON) b |= 4;
@@ -3537,6 +3667,12 @@ static DWORD WINAPI ui_thread(LPVOID arg)
                            CW_USEDEFAULT, CW_USEDEFAULT, rc.right - rc.left, rc.bottom - rc.top,
                            NULL, NULL, hi, NULL);
     if (!g_hwnd) return 1;
+    {   RAWINPUTDEVICE rid;              /* generic desktop / mouse */
+        rid.usUsagePage = 0x01; rid.usUsage = 0x02;
+        rid.dwFlags = 0;                 /* follow focus: no INPUTSINK, foreground only */
+        rid.hwndTarget = g_hwnd;
+        g_ms_raw_ok = RegisterRawInputDevices(&rid, 1, sizeof rid) ? 1 : 0;
+    }
     SetMenu(g_hwnd, build_menu());
     menu_check(g_hwnd, IDM_INPUT_CURSOR, g_cursor_show);  /* tick reflects the state  */
     present_ddraw_init(&g_pd, g_hwnd);          /* GDI windowed; DDraw for fullscreen */
@@ -7044,7 +7180,28 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                             VDM_REG(tib,VTIB_EAX)=*(volatile WORD*)(r+0x1C); VDM_REG(tib,VTIB_ES)=*(volatile WORD*)(r+0x22);
                             VDM_REG(tib,VTIB_DS)=*(volatile WORD*)(r+0x24);
                             VDM_REG(tib,VTIB_SS)=0x0100; VDM_REG(tib,VTIB_ESP)=0xFF00;  /* host scratch stack */
+                            /* ── 0300 SERVICED EXACTLY ONE VECTOR, AND THAT IS THE BUG. ──
+                                 Everything except INT 21h loaded the real-mode register
+                                 block, did NOTHING, and copied it straight back -- so the
+                                 client got its own registers echoed and read that as a
+                                 successful call returning "nothing happened".
+                                 That is why DOOM HAS NO MOUSE. I_ReadMouse does not use a
+                                 plain `int 33h`; it calls DPMIInt(), i.e. 0300 with BL=33h,
+                                 for both "read buttons" (AX=3) and "read counters" (AX=0Bh).
+                                 Measured with the mouse instrument: raw input registered,
+                                 3927 WM_INPUT packets, real deltas accumulated -- and
+                                 i33[3]=0, i33[B]=0. The guest was never asking, because we
+                                 never answered. Its INT 33h RESET works only because that
+                                 one goes through the PROTECTED-mode INT 33h path instead.
+                               ► The note at the PM-handler routing site says to widen this
+                                 "when the evidence names an interrupt". It names 33h.
+                               ⚠ Unhandled vectors are COUNTED now, not silently ignored --
+                                 a service that does nothing and reports success is exactly
+                                 what cost this one a session to find. */
                             if (intno == 0x21) { m.tp = p; dos_int21(&m); p = m.tp; }
+                            else if (intno == 0x33) mouse_int33(tib);
+                            else { g_simint_unhandled++;
+                                   if (intno < 256) g_simint_vec[intno]++; }
                             /* write results back into the RMCS */
                             *(volatile WORD*)(r+0x1C)=VDM_REG(tib,VTIB_EAX); *(volatile WORD*)(r+0x10)=VDM_REG(tib,VTIB_EBX);
                             *(volatile WORD*)(r+0x18)=VDM_REG(tib,VTIB_ECX); *(volatile WORD*)(r+0x14)=VDM_REG(tib,VTIB_EDX);
@@ -8714,6 +8871,26 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
               v = v * 10 + (c[i] - '0');
           }
           if (rd && c[0] >= '0' && c[0] <= '9' && v <= 100) g_ui_tick_min_ms = v;
+      } }
+    /* keyirq.txt -- the knob 5b6a4a6's message promises. It was lost in that session's
+       revert, so the escape hatch documented at the retry site did not actually exist. */
+    { HANDLE hp6 = CreateFileA(KEYIRQ_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                               NULL, OPEN_EXISTING, 0, NULL);
+      if (hp6 != INVALID_HANDLE_VALUE) {
+          char c[8]; DWORD rd = 0;
+          ReadFile(hp6, c, sizeof c, &rd, NULL); CloseHandle(hp6);
+          if (rd && (c[0] == '0' || c[0] == '1')) g_keyirq_retry = c[0] - '0';
+      } }
+    /* Mouse feel is per-guest and per-hand, and every test of it costs a play session,
+       so it is a knob from the start: percent, 100 = the device's own counts. */
+    { HANDLE hp7 = CreateFileA(MSENS_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                               NULL, OPEN_EXISTING, 0, NULL);
+      if (hp7 != INVALID_HANDLE_VALUE) {
+          char c[8]; DWORD rd = 0; int v2 = 0, j;
+          ReadFile(hp7, c, sizeof c, &rd, NULL); CloseHandle(hp7);
+          for (j = 0; j < (int)rd; ++j) { if (c[j] < '0' || c[j] > '9') break;
+                                          v2 = v2 * 10 + (c[j] - '0'); }
+          if (v2 >= 10 && v2 <= 1000) g_ms_sens = v2;
       } }
     if (g_pitpace_on) {
         HMODULE mm = LoadLibraryA("winmm.dll");
