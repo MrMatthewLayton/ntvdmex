@@ -1673,6 +1673,31 @@ static void host_irq_sink(void *ctx, uint8_t irq)
            run ahead. (The earlier cap-with-a-backlog is what stranded break codes and
            killed the arrow keys -- see vdd_input_push_scancode.) */
         if (g_irq1_pending < 1) InterlockedIncrement(&g_irq1_pending);
+        /* ── THREE FIXES FOR THE V86 KEY-DELIVERY LAG, ALL MEASURED, ALL REFUTED. ──────
+             Symptom (headless repro: tools/dostest/skyroads-play.keys, pacer on):
+                 baseline pacer ON   n=102  >=64ms = 44 (43%)  max  684 ms  inj=186
+                 baseline pacer OFF  n=102  >=64ms =  0 ( 0%)  max   52 ms  inj=186
+             The guest has interrupts off ~96% of the time in gameplay, so IRQ0 and IRQ1
+             compete for a scarce supply of interrupts-enabled moments, and the timer wins.
+             What does NOT work -- do not spend another round on these:
+               1. ASYNC-INJECT IRQ1 at the raise site, taking the IRQ0 opportunity (which
+                  async_inject_irq has already verified as IF-set):
+                      n=50  >=64ms = 12 (24%)  max 2552 ms  inj=78  retries=108
+                  Faster for keys that land, but only 78 of 186 interrupts are placed --
+                  it LOSES KEYS. Suspect the IRQ1 in-service bit never clearing (we do not
+                  auto-EOI a line vectored at the game's own handler).
+               2. YIELD the async IRQ0 opportunity when a key is pending, so the guest's
+                  enabled window survives for the cooperative path:
+                      n=37  >=64ms = 1 (3%)  max 1468 ms  inj=66  yields=2218
+                  Also loses keys, and no_if stayed at 96% -- which REFUTES the premise
+                  that our own injections are what keep the guest's interrupts off.
+               3. DEFER the cooperative IRQ0 so the keyboard block below gets the pass:
+                      n=102  >=64ms = 32 (31%)  max 5320 ms  inj=185  defers=14
+                  Harmless but pointless: with the pacer running, IRQ0 is delivered on the
+                  ASYNCHRONOUS path, so the cooperative block has almost nothing to yield.
+             ► The unexplored direction is the PIC: every attempt that placed IRQ1 early
+               also lost later ones, which smells like in-service never being released.
+               Measure vdd_pic in-service for line 1 across a run BEFORE trying again. */
         /* Keys deliberately do NOT take the async path by default (qimode bit 7 turns it
            on for experiments). Async keyboard delivery is what turned "playable" into
            "dies as soon as you press a key", and while the PIC stopped the re-entry it did
@@ -3109,7 +3134,13 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
                host_key_scancode directly, never WM_KEYDOWN) -- a headless repro
                attempt produced one sample and no IRQ1GATE at all. Gate on either half. */
             if ((g_keymsg_n || g_keydel_n) && (DWORD)(nowt - s_kl) >= 5000) {
-                char kb[384], *kq = kb; unsigned i;
+                /* ⚠ 768, and the margin is the point. At 384 this line already emitted
+                   379 bytes; adding two more fields took it past 418 and SMASHED THE UI
+                   THREAD'S STACK. Two experiments "died" on that and both verdicts were
+                   mine, not the code's -- the tell was a build whose new code path had
+                   provably never run (its counter read zero) dying identically to one
+                   whose had. Leave room. */
+                char kb[768], *kq = kb; unsigned i;
                 s_kl = nowt;
                 kq = zput(kq, "KEYLAT msgq_ms[0,1,2,4,8,16,32,64+]=");
                 for (i = 0; i < 8; ++i) { kq = zput(kq, i ? "," : ""); kq = zhex(kq, g_keymsg_hist[i]); }
