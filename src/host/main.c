@@ -9900,6 +9900,28 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         p = zput(p, " ch5_count=");  p = zhex(p, g_dma.rd_count[5]);
         p = zput(p, " status0=");    p = zhex(p, g_dma.rd_status[0]);
         p = zput(p, " status1=");    p = zhex(p, g_dma.rd_status[1]);
+        /* ► THE OUTPUT SIDE. See vdd_sb.h: everything else here measures the RING.
+             `idle` is silence WE inserted because the DSP was un-armed; the run-length
+             buckets say whether that is a scatter of single samples or a gap once per
+             block. `cmd` names which transfer command the guest used -- 0x14 single
+             (stops every block) vs 0x1C/0xBx auto-init (streams). */
+        p = zput(p, "\r\nSTAGE2: sb OUTPUT: active="); p = zhex(p, g_sb.out_active);
+        p = zput(p, " idle=");   p = zhex(p, g_sb.out_idle);
+        p = zput(p, " paused="); p = zhex(p, g_sb.out_paused);
+        { uint32_t tot = g_sb.out_active + g_sb.out_idle + g_sb.out_paused;
+          if (tot) { p = zput(p, " (");
+                     p = zhex(p, (g_sb.out_idle + g_sb.out_paused) * 100u / tot);
+                     p = zput(p, "% of output is inserted silence)"); } }
+        p = zput(p, " gap_runs[1,2,4,8,16,32,64,128+]=");
+        { int gb; for (gb = 0; gb < 8; ++gb) { p = zput(p, gb ? "," : "");
+                                               p = zhex(p, g_sb.idle_runs[gb]); } }
+        p = zput(p, " rate_hz="); p = zhex(p, g_sb.rate_hz);
+        p = zput(p, " blk_len="); p = zhex(p, g_sb.block_len);
+        p = zput(p, " dsp_cmds:");
+        { unsigned cc; for (cc = 0; cc < 256; ++cc)
+            if (g_sb.cmd_hist[cc]) { p = zput(p, " "); p = zhexb(p, cc);
+                                     p = zput(p, "x"); p = zhex(p, g_sb.cmd_hist[cc]); } }
+        p = zput(p, "\r\nSTAGE2: sb ");
         p = zput(p, " count_rd_by_width w1="); p = zhex(p, g_dma.rd_w1);
         p = zput(p, " w2=");                   p = zhex(p, g_dma.rd_w2);
         p = zput(p, " w4=");                   p = zhex(p, g_dma.rd_w4);

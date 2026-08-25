@@ -81,6 +81,28 @@ typedef struct sb_state {
 
     uint32_t dsp_writes;       /* DSP command bytes accepted (diagnostics)       */
     uint32_t blocks;           /* blocks completed -> IRQs raised                */
+    /* ── ⚠ EVERY AUDIO METRIC IN THIS PROJECT MEASURES THE RING. THE USER HEARS THE
+         OUTPUT. ────────────────────────────────────────────────────────────────────
+         `REPLAYED`, `flat`, `byte_lap_same` all compare the guest's DMA buffer against
+         itself a lap earlier. A defect introduced BETWEEN the ring and the speaker is
+         invisible to all of them -- and the symptom reported is exactly that shape:
+         "I hear the gun fire but the sample parts have gaps between them",
+         |- - - - - -| rather than |------|. Gaps are MISSING output, not REPEATED
+         content, so the replay counters could never have shown them.
+         `vdd_sb_render` emits a zero for every output sample taken while the DSP is
+         un-armed (`SB_XFER_IDLE`) or paused -- and a SINGLE-CYCLE transfer goes IDLE at
+         the end of EVERY block, until the guest re-arms it. If that is what Doom uses,
+         the output is silence-padded once per block by construction.
+       ► So count the OUTPUT: how many samples were real, how many were zeros we
+         inserted, and -- because a rate cannot show a shape -- the LENGTH of each run
+         of inserted zeros. A few scattered samples and "half of every block" are the
+         same percentage and completely different sounds. */
+    uint32_t out_active;       /* output samples actually fetched from the ring   */
+    uint32_t out_idle;         /* ...zeros emitted because the DSP was un-armed   */
+    uint32_t out_paused;       /* ...zeros emitted because the guest paused it    */
+    uint32_t idle_run;         /* current run of consecutive inserted zeros       */
+    uint32_t idle_runs[8];     /* run lengths, log2 buckets: 1,2,4,8,...,128+     */
+    uint32_t cmd_hist[256];    /* DSP commands the guest issued, by opcode        */
 
     /* mixer */
     uint8_t  mix_index;

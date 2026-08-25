@@ -73,6 +73,12 @@ static void sb_exec(sb_state *st)
     uint8_t c = st->cmd;
     const uint8_t *a = st->args;
 
+    /* Which transfer command does the guest actually use? 0x14 is SINGLE-CYCLE (the
+       DSP stops at every block end); 0x1C/0x2C and 0xB0-0xCF with bit 2 are AUTO-INIT
+       (it streams). That one bit decides whether the output is gapped by construction,
+       and it has never been recorded. */
+    st->cmd_hist[c]++;
+
     if (c >= 0xB0 && c <= 0xCF) {               /* SB16 programmed transfers      */
         int is16   = (c & 0xF0) == 0xB0;
         int autoin = (c & 0x04) != 0;
@@ -290,7 +296,19 @@ uint32_t vdd_sb_render(sb_state *st, int16_t *out, uint32_t frames)
     uint32_t n;
     for (n = 0; n < frames; ++n) {
         int ended = 0;
-        if (st->xfer_mode == SB_XFER_IDLE || st->paused) { out[n] = 0; continue; }
+        if (st->xfer_mode == SB_XFER_IDLE || st->paused) {
+            out[n] = 0;
+            if (st->paused) st->out_paused++; else st->out_idle++;
+            st->idle_run++;
+            continue;
+        }
+        if (st->idle_run) {                     /* a gap just ended: bucket its length */
+            uint32_t r = st->idle_run, b = 0;
+            while (r > 1 && b < 7) { r >>= 1; ++b; }
+            st->idle_runs[b]++;
+            st->idle_run = 0;
+        }
+        st->out_active++;
 
         out[n] = sb_fetch_sample(st, &ended);
 
