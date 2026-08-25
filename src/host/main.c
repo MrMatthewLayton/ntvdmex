@@ -10121,6 +10121,66 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         { unsigned gb; for (gb = 0; gb < 10; ++gb) { p = zput(p, gb ? "," : "");
                                                      p = zhex(p, g_pollgap[gb]); } }
         p = zput(p, " gap_max_us="); p = zhex(p, g_pollgap_max_us);
+        /* ── READ DMX'S TASK PERIOD OUT OF THE LIVE GUEST. ──────────────────────────
+             Everything about the refill rate is inferred from how often the mixer polls:
+             "period 1 tick, overrunning" and "period 2 ticks, working as designed" both
+             fit 58 runs/s and need opposite fixes. The scheduler (DOOM.EXE 0x57224)
+             walks 32-byte task entries -- +0x00 handler, +0x08 PERIOD, +0x14 next_due,
+             +0x1c busy, +0x1e enabled -- so the period is simply there to be read.
+           ⚠ DO NOT COMPUTE THE ADDRESS. Composing virtual->guest through the LE object
+             table produced a table of noise, and the structural scan written to find it
+             instead read unmapped memory and killed the run before STAGE2 finished.
+           ► SEARCH FOR THE HANDLER. The mixer's entry is DOOM.EXE file 0x56884, and the
+             file->guest delta 0x03AEDFEC is verified twice over (DMX's IRQ0 stub and
+             Doom's keyboard ISR, and DMXCHK re-checks it in-run), so the task entry is
+             whatever 32 bytes begin with that pointer. No data-address arithmetic at
+             all, and a hit is self-verifying.
+             Walk only COMMITTED, READABLE regions and stop 32 bytes short of each one's
+             end -- that is what the previous attempt got wrong. */
+        { const DWORD mixer = 0x56884u + 0x03AEDFECu;   /* DMX mixer entry, guest linear */
+          const volatile BYTE *stub = (const volatile BYTE *)(ULONG_PTR)0x03b431f0;
+          MEMORY_BASIC_INFORMATION mb;
+          ULONG_PTR a = 0x00010000u, lim = 0x7ff00000u;   /* whole user space */
+          unsigned found = 0, t;
+          p = zput(p, " DMXCHK=");
+          for (t = 0; t < 5; ++t) p = zhexb(p, stub[t]);       /* expect 601e060fa0 */
+          p = zput(p, " mixer=0x"); p = zhex(p, mixer);
+          while (a < lim && found < 3) {
+              ULONG_PTR base, end, q;
+              int readable;
+              if (VirtualQuery((LPCVOID)a, &mb, sizeof mb) != sizeof mb) break;
+              base = (ULONG_PTR)mb.BaseAddress; end = base + mb.RegionSize;
+              readable = (mb.State == MEM_COMMIT)
+                       && (mb.Protect & (PAGE_READONLY | PAGE_READWRITE | PAGE_WRITECOPY
+                                       | PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE
+                                       | PAGE_EXECUTE_WRITECOPY))
+                       && !(mb.Protect & PAGE_GUARD);
+              if (readable) {
+                  for (q = base; q + 64 <= end && found < 3; q += 4) {
+                      const volatile DWORD *e = (const volatile DWORD *)q;
+                      if (e[0] != mixer) continue;
+                      /* ⚠ DUMP RAW, DO NOT INTERPRET. The first attempt read
+                           [+8] as the period and got 140 -- which at a ~135/s clock
+                           means one run a SECOND against 58 observed, so either the
+                           match is spurious or the field offsets are wrong. Print the
+                           bytes and decide offline; a guessed layout is how this
+                           session has already produced two counters that could not
+                           have contradicted themselves. 64 bytes = two table entries,
+                           so a real table shows a second handler pointer at +32. */
+                      unsigned bi;
+                      ++found;
+                      p = zput(p, " TASK@0x"); p = zhex(p, (DWORD)q);
+                      p = zput(p, "=");
+                      for (bi = 0; bi < 64; ++bi) {
+                          if (bi && !(bi & 3)) p = zput(p, "_");
+                          p = zhexb(p, ((const volatile BYTE *)e)[bi]);
+                      }
+                  }
+              }
+              if (end <= base) break;
+              a = end;
+          }
+          if (!found) p = zput(p, " TASK-NOT-FOUND"); }
         p = zput(p, " count_rd_by_width w1="); p = zhex(p, g_dma.rd_w1);
         p = zput(p, " w2=");                   p = zhex(p, g_dma.rd_w2);
         p = zput(p, " w4=");                   p = zhex(p, g_dma.rd_w4);
