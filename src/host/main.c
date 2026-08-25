@@ -10231,7 +10231,32 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
               if (end <= base) break;
               a = end;
           }
-          if (!found) p = zput(p, " TASK-NOT-FOUND"); }
+          if (!found) p = zput(p, " IRQTAB-NOT-FOUND");
+          /* ── THE CALLBACK BETWEEN THE SB ISR AND THE MIXER. ─────────────────────
+               DMX's SB handler ends with `call dword [0x584]` (DOOM.EXE 0x53298) and
+               that callback is where the 28% goes: the ISR runs 86/s (mix82 reads ==
+               blocks) but the mixer is entered 58/s. Its address is runtime data, and
+               the code virtual->file map is the one map still unknown.
+               But the IRQ table settles the addressing: the pointers IN it are LINEAR
+               (entry 0 read back as 0x03b45210, exactly file 0x57224 + 0x03AEDFEC),
+               while data operands like 0x281ac needed +0x03BA0000 to be found. So CS
+               is flat at base 0 and DS is not -- and a code pointer STORED in data is
+               therefore directly a linear address. Read it and subtract 0x03AEDFEC.
+               Also read DMX's own state word at data 0x26370, which its ISR compares
+               against 1 before doing anything at all. */
+          { const volatile DWORD *cb  = (const volatile DWORD *)(ULONG_PTR)(0x584u   + 0x03BA0000u);
+            const volatile DWORD *stt = (const volatile DWORD *)(ULONG_PTR)(0x26370u + 0x03BA0000u);
+            MEMORY_BASIC_INFORMATION mq;
+            if (VirtualQuery((LPCVOID)cb, &mq, sizeof mq) == sizeof mq && mq.State == MEM_COMMIT) {
+                DWORD v = *cb;
+                p = zput(p, " CB[0x584]=0x"); p = zhex(p, v);
+                if (v > 0x03AEDFECu && v < 0x03AEDFECu + 0x45000u) {
+                    p = zput(p, "=file0x"); p = zhex(p, v - 0x03AEDFECu);
+                } else p = zput(p, "(not a linear code addr)");
+            }
+            if (VirtualQuery((LPCVOID)stt, &mq, sizeof mq) == sizeof mq && mq.State == MEM_COMMIT) {
+                p = zput(p, " STATE[0x26370]="); p = zhex(p, *stt);
+            } } }
         p = zput(p, " count_rd_by_width w1="); p = zhex(p, g_dma.rd_w1);
         p = zput(p, " w2=");                   p = zhex(p, g_dma.rd_w2);
         p = zput(p, " w4=");                   p = zhex(p, g_dma.rd_w4);
