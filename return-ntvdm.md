@@ -1,4 +1,62 @@
 ═══════════════════════════════════════════════════════════════════════════════
+██ ★★★★★★ **DOOM IS PLAYABLE WITH SOUND.** (2026-08-25, session 25)          ██
+██     Both remaining defects CLOSED. The project's stated bar is MET.        ██
+═══════════════════════════════════════════════════════════════════════════════
+  User verdict, by ear, on the rig: *"Still 99.999% on sound — DOOM IS PLAYABLE!"*
+  Real silicon, from-scratch DPMI host, no guest patch of any kind.
+```
+   VIDEO  status bar FIXED (8648f41). I_ReadScreen cycles GR4 and never writes the
+          map mask, so every read was served from the WRITE plane. Planes vs STBAR
+          34/71/30/28%  ->  70/69/71/68%.
+   AUDIO  PCM FIXED (e220033) by PACING THE PIT. host_pit_sync ran 65 times a second
+          against a 140 Hz timer, so ticks came out in BURSTS: 53% within 0.5 ms of
+          each other, 28% of gaps over 11.6 ms = one DMA block. DMX's mixer is ARMED
+          by the SB block IRQ (next_due = NOW, 0x571b4) and SERVICED on the next
+          timer tick (0x57224) -- so an over-length gap lets a second block arm
+          before the first is serviced, the arms COLLAPSE into one refill, and a
+          block is never filled. 32.8% measured against 30% of loud blocks stale.
+          FIX = a ~1 kHz thread calling host_pit_sync. A PACING change, not a rate
+          change: the 8254 still advances by real elapsed time.
+```
+  ⚠ **BEFORE TOUCHING AUDIO AGAIN, READ THE DEAD ENDS** — all measured, none helped:
+    audio lead (`awbufs`), DMA granularity (`awframes`), moving the async injection
+    out of `g_lock` (WORSE: the lock is an interlock against suspending a lock
+    holder), slicing the audio lock, exec-thread priority, VDMSound's ACK gate (DMX
+    acks BEFORE it refills), and a "stall unfilled blocks" gate (wrong by design --
+    DMX only ever fills the block AHEAD).
+  ★ **METHOD, and it is the whole session:** the video bug fell within an hour of
+    DISASSEMBLING DOOM.EXE after ~20 rig runs of host instruments found nothing, and
+    the audio bug fell the same way — DMX's arm/service split is not inferable from
+    this side of the boundary. See [[read-the-guest-binary]]. The user's EAR caught
+    three things no counter did: the Skyroads regression, "gaps not echo", and
+    "repeated or mixed", each of which redirected the investigation.
+
+  ▶▶ **OPEN, CARRIED FORWARD (see GH tickets / the two items below):**
+     1. Sound is 99.999%, not 100%. Residual may relate to CPU affinity, SpeedStep,
+        or other hardware grounding — untested.
+     2. The Doom MELT/wipe screen may still show pixelation. Needs confirming by eye
+        against the WAD oracle; `I_ReadScreen` is the wipe's source and was the
+        status-bar cause, so this is plausibly a remnant of the same fault.
+     3. ▶ NEXT WORKSTREAM: **mouse + keyboard EXCLUSIVITY** (see the block below).
+
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ ▶▶ NEXT: INPUT EXCLUSIVITY (mouse + keyboard capture)                        │
+└──────────────────────────────────────────────────────────────────────────────┘
+  Three concrete requirements, from the user, 2026-08-25:
+  1. **The hidden mouse cursor must become a menu option.** NTVDMEX currently hides
+     the cursor when it passes over the video output because it caused lag. Make it
+     configurable so the lag can be re-tested rather than assumed.
+  2. **Windows swallows chords the guest needs.** Doom's `SETUP.EXE` waits for **F10**
+     to accept a key configuration and never sees it. (Note SETUP.EXE also currently
+     fails earlier for an unrelated reason: `INT21 AH=3Dh [DEFAULT.CFG] -> AX=5`,
+     access denied — most likely the file carries the read-only attribute.)
+  3. **The mouse does not work in Doom at all.**
+  ► THE DESIGN: while the VDM window has focus, ALL keyboard and mouse input goes to
+    NTVDMEX exclusively and Windows gets nothing — until an escape chord releases it.
+    The chord must be something DOS could never produce, so no guest can be locked
+    out of its own input by a game that happens to use it.
+
+═══════════════════════════════════════════════════════════════════════════════
 ██ ▶▶▶ SESSION 25 (2026-08-25). ★★★★★ **THE STATUS BAR IS FIXED.**            ██
 ██     `I_ReadScreen` reads all four planes with GR4 and never writes the     ██
 ██     map mask. We served every read from the WRITE plane. Found by          ██
