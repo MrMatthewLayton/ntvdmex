@@ -3462,6 +3462,10 @@ static int dpmi_sel_is32(WORD sel)
    for a 16-bit segment (0x66 => 4), 32-bit for a DOS/4GW flat segment (0x66 => 2). We
    read it per-selector and offset EIP by its full 32-bit value when D=1, so this decoder
    serves both classes; for every existing D=0 client the behaviour is unchanged. */
+#define DMAPOLL_MAX 8
+static DWORD g_dmapoll_eip[DMAPOLL_MAX], g_dmapoll_hits[DMAPOLL_MAX];
+static unsigned g_dmapoll_n = 0, g_dmapoll_overflow = 0;
+
 static int host_try_io_pm(volatile BYTE *tib, vdd_bus *bus)
 {
     DWORD csv = VDM_REG(tib, VTIB_CS)  & 0xFFFF;
@@ -3491,6 +3495,28 @@ static int host_try_io_pm(volatile BYTE *tib, vdd_bus *bus)
     }
     if (used_dx) { port = (uint16_t)VDM_REG(tib, VTIB_EDX); len = i + 1; }
     else         { port = code[i + 1];                      len = i + 2; }
+
+    /* ── WHERE IN THE GUEST IS THE DMA POLL? A LOCATOR, NOT A HYPOTHESIS. ────────────
+         DMX refills from its timer ISR and steers by the 8237's channel-1 count, and
+         ~23 of the 135 ticks a second we deliver enter its handler and return without
+         ever reading that count. The dispatcher is not what drops them -- it ALWAYS
+         calls the registered handler (DOOM.EXE file 0x554f4, disassembled) -- so the
+         decision is inside DMX's own routine, whose address is runtime data and cannot
+         be read out of the image.
+         The host, however, sees the instruction. Record the guest EIP of the reads of
+         port 3, and the map `guest = file + 0x03AEDFEC` (verified on DMX's IRQ0 stub
+         and Doom's keyboard ISR) turns it straight into a file offset to disassemble.
+         The overflow is counted, so a too-small table cannot pass as a complete answer. */
+    if (is_in && port == 0x03) {
+        DWORD site = dpmi_sel_base((WORD)csv) + eip_off;
+        unsigned s;
+        for (s = 0; s < g_dmapoll_n; ++s) if (g_dmapoll_eip[s] == site) break;
+        if (s < g_dmapoll_n) g_dmapoll_hits[s]++;
+        else if (g_dmapoll_n < DMAPOLL_MAX) {
+            g_dmapoll_eip[g_dmapoll_n] = site; g_dmapoll_hits[g_dmapoll_n] = 1;
+            ++g_dmapoll_n;
+        } else ++g_dmapoll_overflow;
+    }
 
     host_io_do(tib, bus, port, is_in, width);
     /* step past the I/O insn. 16-bit client (D=0): advance the low word, keep high.
@@ -9958,6 +9984,13 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             if (g_sb.cmd_hist[cc]) { p = zput(p, " "); p = zhexb(p, cc);
                                      p = zput(p, "x"); p = zhex(p, g_sb.cmd_hist[cc]); } }
         p = zput(p, "\r\nSTAGE2: sb ");
+        /* ► THE GUEST ADDRESS OF EVERY DMA-COUNT POLL. Subtract 0x03AEDFEC for the
+             DOOM.EXE file offset and disassemble it. */
+        p = zput(p, " dma_poll_sites=");
+        { unsigned s; for (s = 0; s < g_dmapoll_n; ++s) {
+              p = zput(p, s ? " " : ""); p = zput(p, "0x"); p = zhex(p, g_dmapoll_eip[s]);
+              p = zput(p, "x"); p = zhex(p, g_dmapoll_hits[s]); } }
+        p = zput(p, " overflow="); p = zhex(p, (DWORD)g_dmapoll_overflow);
         p = zput(p, " count_rd_by_width w1="); p = zhex(p, g_dma.rd_w1);
         p = zput(p, " w2=");                   p = zhex(p, g_dma.rd_w2);
         p = zput(p, " w4=");                   p = zhex(p, g_dma.rd_w4);
