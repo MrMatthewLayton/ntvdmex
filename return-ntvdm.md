@@ -21,6 +21,25 @@
   The three broken planes rose to meet the one that was always correct, and plane 1
   did not move. That is the shape of a real fix rather than a metric moving.
 
+  ▶▶ **AND THE USER CONFIRMED IT ON THE RIG: "Doom graphics is FULLY WORKING."** A play
+     session at a 240 s cap, watched live. That is the acceptance test; the oracle score
+     was only ever a proxy for it.
+  ★ **SO THE RESIDUAL ~30% vs STBAR IS NOT A DEFECT — DO NOT CHASE IT.** `planejudge.py`
+    compares the planes against the bare `STBAR` background lump, but the live bar has
+    ammo, health, keys and the face drawn OVER it. ~69-71% is close to this metric's
+    ceiling, and the human check says the picture is right. A future session that sees
+    "only 70% correct" and starts digging is chasing the oracle's model, not a bug.
+  ⚠ The play-session log came back WITHOUT the end-of-run report (copied off the rig
+    before the host finished its shutdown): no `MODEYBAR`, no `modeY` block, no
+    `STAGE2: complete`. Archived as `result_doom_PLAYSESSION.log` for completeness, but
+    it carries NO numbers — the numbers above are from the 45 s headless run
+    `result_doom_GR4FIX.log`. If a long run's report is wanted, that copy path needs
+    fixing first.
+
+  **VIDEO IS DONE FOR DOOM. WHAT REMAINS IS AUDIO** — the PCM click at DMA block offset
+  2 and the ~32% echo (a margin race, not a stall; see session 24 and TASK A: measure
+  what DMX *writes* to the ring, since a poll is not a refill).
+
 ┌──────────────────────────────────────────────────────────────────────────────┐
 │ ★ THE CAUSE — READ FROM THE BINARY, NOT INFERRED                             │
 └──────────────────────────────────────────────────────────────────────────────┘
