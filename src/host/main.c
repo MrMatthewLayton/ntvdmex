@@ -10096,6 +10096,11 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
               p = zput(p, db ? "," : ""); p = zhex(p, g_wave.drain_hist[db]); } }
         p = zput(p, " geom: nbufs="); p = zhex(p, g_wave.nbufs);
         p = zput(p, " nframes=");     p = zhex(p, g_wave.nframes);
+        p = zput(p, " mix82=");   p = zhex(p, g_sb.mix82_reads);
+        p = zput(p, " ANSWERED_NO="); p = zhex(p, g_sb.mix82_zero);
+        if (g_sb.mix82_reads) { p = zput(p, "(");
+            p = zhex(p, g_sb.mix82_zero * 100u / g_sb.mix82_reads);
+            p = zput(p, "% turned away)"); }
         p = zput(p, " rate_hz="); p = zhex(p, g_sb.rate_hz);
         p = zput(p, " blk_len="); p = zhex(p, g_sb.block_len);
         p = zput(p, " dsp_cmds:");
@@ -10137,7 +10142,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
              all, and a hit is self-verifying.
              Walk only COMMITTED, READABLE regions and stop 32 bytes short of each one's
              end -- that is what the previous attempt got wrong. */
-        { const DWORD mixer = 0x56884u + 0x03AEDFECu;   /* DMX mixer entry, guest linear */
+        { const DWORD mixer = 0x57224u + 0x03AEDFECu;   /* DMX IRQ0 handler = table[0] */
           const volatile BYTE *stub = (const volatile BYTE *)(ULONG_PTR)0x03b431f0;
           MEMORY_BASIC_INFORMATION mb;
           ULONG_PTR a = 0x00010000u, lim = 0x7ff00000u;   /* whole user space */
@@ -10156,7 +10161,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                                        | PAGE_EXECUTE_WRITECOPY))
                        && !(mb.Protect & PAGE_GUARD);
               if (readable) {
-                  for (q = base; q + 64 <= end && found < 3; q += 4) {
+                  for (q = base; q + 16u*36u <= end && found < 3; q += 4) {
                       const volatile DWORD *e = (const volatile DWORD *)q;
                       if (e[0] != mixer) continue;
                       /* ⚠ DUMP RAW, DO NOT INTERPRET. The first attempt read
@@ -10167,13 +10172,26 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                            session has already produced two counters that could not
                            have contradicted themselves. 64 bytes = two table entries,
                            so a real table shows a second handler pointer at +32. */
-                      unsigned bi;
+                      /* ── THE DISPATCHER'S HANDLER TABLE. ───────────────────────
+                           DOOM.EXE 0x554f4 calls [eax*4 + 0x281ac] with eax = irq*9,
+                           i.e. a 36-byte stride from a base whose ADDRESS is an LE
+                           fixup and therefore absent from the image. But entry 0 is
+                           DMX's IRQ0 handler and that address IS known -- so the base
+                           is wherever that pointer lies, and every other IRQ's handler
+                           follows at +36. No address arithmetic, self-verifying.
+                           IRQ5 is the Sound Blaster: 81 block IRQs a second are
+                           delivered and only 58 reach the mixer, so its handler is
+                           what decides the missing 28%. Subtract 0x03AEDFEC from the
+                           printed value for the file offset to disassemble. */
+                      unsigned iq;
+                      if (q + 16u * 36u > end) continue;   /* table must fit */
                       ++found;
-                      p = zput(p, " TASK@0x"); p = zhex(p, (DWORD)q);
-                      p = zput(p, "=");
-                      for (bi = 0; bi < 64; ++bi) {
-                          if (bi && !(bi & 3)) p = zput(p, "_");
-                          p = zhexb(p, ((const volatile BYTE *)e)[bi]);
+                      p = zput(p, " IRQTAB@0x"); p = zhex(p, (DWORD)q);
+                      for (iq = 0; iq < 16; ++iq) {
+                          DWORD h = *(const volatile DWORD *)(q + iq * 36u);
+                          if (!h) continue;
+                          p = zput(p, " i"); p = zhexb(p, iq);
+                          p = zput(p, "=0x"); p = zhex(p, h);
                       }
                   }
               }

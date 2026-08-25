@@ -201,8 +201,24 @@ static void sb_in(void *self, uint16_t port, uint8_t w, uint32_t *v)
         break;
     case 0x5:                                   /* mixer data                      */
         /* 0x82 is the IRQ-status register: bit 0 = 8-bit DMA, bit 1 = 16-bit. */
-        if (st->mix_index == 0x82)
-            *v = (uint8_t)(st->irq_pending ? (st->xfer_16bit ? 0x02 : 0x01) : 0x00);
+        if (st->mix_index == 0x82) {
+            /* ── THIS ANSWER DECIDES WHETHER THE GUEST REFILLS. ──────────────────
+                 DMX's SB IRQ handler (DOOM.EXE 0x53274) does almost nothing
+                 unconditionally: for a DSP reporting >= 4.00 it asks mixer register
+                 0x82 whether the interrupt was really the Blaster's, and if neither
+                 the 8-bit nor the 16-bit bit is set it RETURNS WITHOUT REFILLING.
+                 Blocks complete 81/s, IRQ5 is delivered 99.5% of the time, and the
+                 mixer is only entered 58/s -- so ~28% of delivered SB interrupts are
+                 being turned away, and this register is the only thing that can turn
+                 them away. Count what we answer.
+                 `irq_pending` is a single FLAG, and `case 0xE` clears it -- but 0xE
+                 is also the DSP data-ready poll, so any read of it for another
+                 purpose disarms the next ISR's check. */
+            uint8_t st82 = (uint8_t)(st->irq_pending ? (st->xfer_16bit ? 0x02 : 0x01) : 0x00);
+            st->mix82_reads++;
+            if (!st82) st->mix82_zero++;
+            *v = st82;
+        }
         else
             *v = st->mix[st->mix_index];
         break;

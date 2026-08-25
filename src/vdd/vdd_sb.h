@@ -97,6 +97,8 @@ typedef struct sb_state {
          inserted, and -- because a rate cannot show a shape -- the LENGTH of each run
          of inserted zeros. A few scattered samples and "half of every block" are the
          same percentage and completely different sounds. */
+    uint32_t mix82_reads;      /* guest asks 'was that IRQ yours?'  -- see vdd_sb.c */
+    uint32_t mix82_zero;       /* ...and we answered NO, so it did not refill      */
     uint32_t out_active;       /* output samples actually fetched from the ring   */
     uint32_t out_idle;         /* ...zeros emitted because the DSP was un-armed   */
     uint32_t out_paused;       /* ...zeros emitted because the guest paused it    */
