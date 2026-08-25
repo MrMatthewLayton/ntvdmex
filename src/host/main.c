@@ -1864,9 +1864,63 @@ static void opl_pump_time(void)
 
 /* The audio thread's fill callback. Mixing touches the DMA controller, guest
    memory and the IRQ path, so it takes the same lock the exec thread uses. */
+/* ── WATCH DMX'S TASK TABLE FROM OUTSIDE. ────────────────────────────────────────
+     The SB interrupt only ARMS the mixer (sets next_due = now, DOOM.EXE 0x571b4);
+     the TIMER services it, and the scheduler's first act on a busy task is
+     `jne 0x572ed` -- the loop EXIT, not the next task -- so ONE busy task abandons
+     the whole pass and there are up to 12. Doom runs a MIDI task alongside the PCM
+     mixer, so a task that overruns can starve the refill wholesale.
+     Addresses are settled and self-checked: the IRQ table was FOUND at 0x03bc81ac and
+     the code says it lives at virtual 0x281ac, so data guest = virtual + 0x03BA0000.
+     That puts the task table at 0x03bc86a0 and the tick clock at 0x03bc8820 -- and it
+     predicts the mixer task at index 4 (0x03bc8720), which is exactly where the
+     earlier structure search found it. `mixer_ok` re-checks that in-run; if it is 0
+     every number here is meaningless.
+     Sampled from the audio fill, which runs ~86 times a second -- one sample per
+     block, i.e. exactly the rate the refill is supposed to happen at. */
+#define DMX_TASKS   0x03bc86a0u
+#define DMX_CLOCK   0x03bc8820u
+#define DMX_MIXER_I 4u
+static DWORD g_dmx_samples, g_dmx_busy[12], g_dmx_mixer_ok;
+static DWORD g_dmx_overdue, g_dmx_overdue_max, g_dmx_anybusy;
+static void dmx_sample(void)
+{
+    static int ok = 0;
+    const volatile BYTE *tt = (const volatile BYTE *)(ULONG_PTR)DMX_TASKS;
+    const volatile DWORD *clk = (const volatile DWORD *)(ULONG_PTR)DMX_CLOCK;
+    unsigned t; int anybusy = 0;
+    /* ⚠ RE-PROBE UNTIL IT APPEARS. Probing once latched a failure: this runs from the
+         audio thread, which starts long before the guest has allocated the zone this
+         table lives in, so the first call always sees unmapped memory and a one-shot
+         probe would report `ok=0` for the whole run -- which is exactly what it did. */
+    if (!ok) {
+        MEMORY_BASIC_INFORMATION mb;
+        if (!(VirtualQuery((LPCVOID)tt, &mb, sizeof mb) == sizeof mb
+              && mb.State == MEM_COMMIT && !(mb.Protect & (PAGE_NOACCESS | PAGE_GUARD))))
+            return;
+        ok = 1;
+    }
+    /* the mixer must be where the addressing predicts, or none of this means anything */
+    if (*(const volatile DWORD *)(tt + DMX_MIXER_I * 32u) == 0x56884u + 0x03AEDFECu)
+        g_dmx_mixer_ok = 1;
+    else return;
+    ++g_dmx_samples;
+    for (t = 0; t < 12; ++t) {
+        if (tt[t * 32u + 0x1c]) { g_dmx_busy[t]++; anybusy = 1; }
+    }
+    if (anybusy) ++g_dmx_anybusy;
+    { DWORD due = *(const volatile DWORD *)(tt + DMX_MIXER_I * 32u + 0x14), now = *clk;
+      if ((LONG)(now - due) >= 0) {            /* armed and still not serviced */
+          DWORD late = now - due;
+          ++g_dmx_overdue;
+          if (late > g_dmx_overdue_max) g_dmx_overdue_max = late;
+      } }
+}
+
 static void host_audio_fill(void *ctx, int16_t *out, uint32_t frames)
 {
     (void)ctx;
+    dmx_sample();
     HOST_LOCK();
     vdd_audio_mix(&g_audio, out, frames);
     HOST_UNLOCK();
@@ -9842,6 +9896,14 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
          assumed one, which is precisely the mistake that made it worse. */
       p = zput(p, " pit_gaps=0x");   p = zhex(p, g_pit_catchup_clamped);
       p = zput(p, " pit_gapmax=0x"); p = zhex(p, g_pit_gap_max);
+      p = zput(p, "\r\nSTAGE2: DMXTASK: ok="); p = zhex(p, g_dmx_mixer_ok);
+      p = zput(p, " samples="); p = zhex(p, g_dmx_samples);
+      p = zput(p, " any_busy="); p = zhex(p, g_dmx_anybusy);
+      p = zput(p, " mixer_OVERDUE="); p = zhex(p, g_dmx_overdue);
+      p = zput(p, " max_late_ticks="); p = zhex(p, g_dmx_overdue_max);
+      p = zput(p, " busy_by_task=");
+      { unsigned dt; for (dt = 0; dt < 12; ++dt) { p = zput(p, dt ? "," : "");
+                                                   p = zhex(p, g_dmx_busy[dt]); } }
       p = zput(p, "\r\nSTAGE2: dspver="); p = zhex(p, (DWORD)g_sb_ver_major);
       p = zput(p, "."); p = zhex(p, (DWORD)g_sb_ver_minor);
       p = zput(p, " execprio="); p = zhex(p, g_exec_prio);
