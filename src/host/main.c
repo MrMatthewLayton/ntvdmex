@@ -2677,6 +2677,15 @@ static volatile int g_title_dirty = 1;      /* UI thread re-applies the caption 
 static volatile LONG g_ms_x = 320, g_ms_y = 240, g_ms_btn = 0;
 static volatile LONG g_ms_hidden = 1;       /* INT 33h cursor hide-count; 0 => visible */
 
+/* THE HOST ARROW over the video area, which is a SEPARATE thing from the INT 33h
+   driver cursor above. The client used to hide it unconditionally, which is right
+   for a game that has taken the mouse and wrong for everything else: with no
+   pointer at all you cannot see where you are aiming a click, and you lose the
+   pointer entirely the moment it crosses into the window. It is a user choice, so
+   it is a toggle -- Input > Mouse > Show Host Cursor, or Ctrl+F8. Default OFF, i.e.
+   exactly the behaviour that shipped, so no run changes unless it is asked for. */
+static volatile LONG g_cursor_show = 0;
+
 /* INT 33h mouse driver (functions DOS apps actually use). The host draws the
    cursor (overlay in the present path) when the hide-count is 0, so apps that
    rely on the driver cursor (the common case) get a visible pointer. */
@@ -2768,6 +2777,7 @@ enum {                                       /* wired command IDs               
     IDM_STUB = 1,                            /* every not-yet-wired item          */
     IDM_FILE_EXIT, IDM_FILE_CLOSEPROG,
     IDM_DISP_FULLSCREEN, IDM_DISP_SHOWMENU,
+    IDM_INPUT_CURSOR,
     IDM_CAP_SHOT,
     IDM_HELP_ABOUT
 };
@@ -2835,7 +2845,9 @@ static HMENU build_menu(void)
     msub(bar, "Audio", m);
 
     m = mpop();                                                   /* Input        */
-    msub(m,"Mouse",(s=mpop(),mi(s,"Capture\tCtrl+F10",IDM_STUB),mi(s,"Seamless",IDM_STUB),mi(s,"Sensitivity",IDM_STUB),s));
+    msub(m,"Mouse",(s=mpop(),mi(s,"Capture\tCtrl+F10",IDM_STUB),
+        mi(s,"Show Host Cursor\tCtrl+F8",IDM_INPUT_CURSOR),
+        mi(s,"Seamless",IDM_STUB),mi(s,"Sensitivity",IDM_STUB),s));
     msub(m,"Keyboard",(s=mpop(),mi(s,"Layout",IDM_STUB),mi(s,"Typematic rate",IDM_STUB),mi(s,"Send Ctrl+Alt+Del",IDM_STUB),s));
     msub(m,"Joystick",(s=mpop(),mi(s,"Type",IDM_STUB),mi(s,"Map to gamepad",IDM_STUB),mi(s,"Calibrate",IDM_STUB),s));
     msep(m); mi(m,"Key Mapper...",IDM_STUB);
@@ -2904,6 +2916,30 @@ static void make_status(HWND parent, HINSTANCE hi)
     SendMessageA(g_status, SB_SETTEXTA, 0, (LPARAM)line);
     GetWindowRect(g_status, &sr);
     if (sr.bottom > sr.top) g_pd.status_h = sr.bottom - sr.top;
+}
+
+/* Tick/untick a menu item BY COMMAND, through whichever menu is live: "Show Menu
+   Bar" DETACHES the bar into g_savedmenu, and a toggle pressed by hotkey while it
+   is detached must still be recorded there or the tick is stale when it returns. */
+static void menu_check(HWND h, UINT id, int on)
+{
+    HMENU m = GetMenu(h);
+    if (!m) m = g_savedmenu;
+    if (m) CheckMenuItem(m, id, MF_BYCOMMAND | (UINT)(on ? MF_CHECKED : MF_UNCHECKED));
+}
+
+/* Show/hide the host arrow over the video. The immediate SetCursor matters:
+   WM_SETCURSOR only fires when the mouse next MOVES or re-enters the window, so
+   without it the tick changes and the pointer does not until you jiggle it. Guard
+   it on the pointer actually being over us -- SetCursor changes the shape there and
+   then, and we have no business touching it while it is over someone else. */
+static void host_cursor_set(HWND h, int on)
+{
+    POINT pt;
+    InterlockedExchange(&g_cursor_show, on ? 1 : 0);
+    menu_check(h, IDM_INPUT_CURSOR, on);
+    if (GetCursorPos(&pt) && WindowFromPoint(pt) == h)
+        SetCursor(on ? LoadCursorA(NULL, IDC_ARROW) : NULL);
 }
 
 /* --- the UI thread: window + present + frame timer ------------------------- */
@@ -2995,7 +3031,13 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
     case WM_ERASEBKGND:
         return 1;                       /* we own the whole client -> no white erase */
     case WM_SETCURSOR:
-        if (LOWORD(lp) == HTCLIENT) { SetCursor(NULL); return TRUE; }  /* hide over video */
+        /* Hide it over the VIDEO ONLY, and only while the toggle says so. wp is the
+           window the hit-test belongs to, and testing the hit-test ALONE was wrong:
+           the status bar is a child that forwards its own HTCLIENT here, so the
+           cursor vanished over the status bar and its size grip as well. */
+        if ((HWND)wp == h && LOWORD(lp) == HTCLIENT && !g_cursor_show) {
+            SetCursor(NULL); return TRUE;
+        }
         break;
     case WM_PAINT: {                     /* re-blit the last snapshot on expose/move   */
         PAINTSTRUCT ps; BeginPaint(h, &ps);
@@ -3013,6 +3055,7 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
             HMENU cur = GetMenu(h);
             if (cur) { g_savedmenu = cur; SetMenu(h, NULL); } else SetMenu(h, g_savedmenu);
             return 0; }
+        case IDM_INPUT_CURSOR: host_cursor_set(h, !g_cursor_show); return 0;
         case IDM_CAP_SHOT: host_screenshot(); return 0;
         case IDM_HELP_ABOUT:
             MessageBoxA(h, "NTVDMEX -- New Technology Virtual DOS Manager, Extended\n"
@@ -3026,6 +3069,13 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
     case WM_KEYDOWN:
         if (wp == VK_F11) { present_ddraw_set_fullscreen(&g_pd, !g_pd.fullscreen); return 0; }
         if (wp == VK_F5 && (GetKeyState(VK_CONTROL) & 0x8000)) { host_screenshot(); return 0; }
+        /* Ctrl+F8 -> host cursor on/off. It needs a hotkey and not just the menu
+           item because FULLSCREEN is exactly when you most want it and exactly when
+           there is no menu bar to reach. Swallowed here, like Ctrl+F5, so the guest
+           never sees the F-key. */
+        if (wp == VK_F8 && (GetKeyState(VK_CONTROL) & 0x8000)) {
+            host_cursor_set(h, !g_cursor_show); return 0;
+        }
         /* Raw AT keyboard: push the MAKE scancode (lParam bits 16-23 = the OEM scan
            code) into the 0x60/0x64 FIFO and raise IRQ1, so action games that hook
            INT 09h or poll port 0x60 for real-time held-key state get input. This runs
@@ -3136,6 +3186,7 @@ static DWORD WINAPI ui_thread(LPVOID arg)
                            NULL, NULL, hi, NULL);
     if (!g_hwnd) return 1;
     SetMenu(g_hwnd, build_menu());
+    menu_check(g_hwnd, IDM_INPUT_CURSOR, g_cursor_show);  /* tick reflects the state  */
     present_ddraw_init(&g_pd, g_hwnd);          /* GDI windowed; DDraw for fullscreen */
     make_status(g_hwnd, hi);                     /* native themed status bar          */
     ShowWindow(g_hwnd, SW_SHOW); UpdateWindow(g_hwnd);
