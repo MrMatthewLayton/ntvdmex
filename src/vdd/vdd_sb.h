@@ -52,6 +52,7 @@
      Runtime override so both can be heard without a rebuild; the default is
      unchanged. */
 extern uint8_t g_sb_ver_major, g_sb_ver_minor;
+extern int g_sb_gate;   /* ACK gate, opt-in: deviates from the hardware. See vdd_sb.c */
 
 #define SB_OUTQ_MAX 8          /* bytes the DSP can have waiting to be read      */
 #define SB_ARG_MAX  4          /* longest command argument list we accept        */
@@ -109,6 +110,12 @@ typedef struct sb_state {
          inserted, and -- because a rate cannot show a shape -- the LENGTH of each run
          of inserted zeros. A few scattered samples and "half of every block" are the
          same percentage and completely different sounds. */
+    uint8_t  gate_on;          /* 0=off 1=ACK gate (VDMSound) 2=POLL gate           */
+    uint32_t gate_mark;        /* dma->count_reads as of the last block IRQ         */
+    int16_t  last_sample;      /* held while the gate is closed                     */
+    uint32_t gate_wait;        /* samples the gate has held THIS time               */
+    uint32_t gate_stalled;     /* total samples held                                */
+    uint32_t gate_forced;      /* times the safety yielded -- must be ~0            */
     uint32_t mix82_reads;      /* guest asks 'was that IRQ yours?'  -- see vdd_sb.c */
     uint32_t mix82_zero;       /* ...and we answered NO, so it did not refill      */
     uint32_t out_active;       /* output samples actually fetched from the ring   */

@@ -99,6 +99,7 @@
 #define AWFRAMES_PATH    "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\awframes.txt"
 #define EXECPRIO_PATH    "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\execprio.txt"
 #define DSPVER_PATH      "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\dspver.txt"
+#define SBGATE_PATH      "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\sbgate.txt"
 /* Scripted synthetic keystrokes, on the share so a test sequence can be changed between
    runs without a rebuild. Whitespace-separated tokens, played once in order:
      4d     -- scancode 4D: make, brief hold, break
@@ -7759,6 +7760,13 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
           while (i < (int)rd && c[i] >= '0' && c[i] <= '9') mn = mn * 10 + (c[i++] - '0');
           if (mj > 0 && mj < 256) { g_sb_ver_major = (uint8_t)mj; g_sb_ver_minor = (uint8_t)mn; }
       } }
+    { HANDLE hg = CreateFileA(SBGATE_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                              NULL, OPEN_EXISTING, 0, NULL);
+      if (hg != INVALID_HANDLE_VALUE) {
+          char c[8]; DWORD rd = 0;
+          ReadFile(hg, c, sizeof c, &rd, NULL); CloseHandle(hg);
+          g_sb_gate = (rd && c[0] >= '0' && c[0] <= '9') ? (c[0] - '0') : 1;
+      } }
     { DWORD prio = 1;
       HANDLE hp = CreateFileA(EXECPRIO_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
                               NULL, OPEN_EXISTING, 0, NULL);
@@ -10115,6 +10123,12 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
               p = zput(p, db ? "," : ""); p = zhex(p, g_wave.drain_hist[db]); } }
         p = zput(p, " geom: nbufs="); p = zhex(p, g_wave.nbufs);
         p = zput(p, " nframes=");     p = zhex(p, g_wave.nframes);
+        p = zput(p, " GATE: on="); p = zhex(p, (DWORD)g_sb.gate_on);
+        p = zput(p, " stalled_samples="); p = zhex(p, g_sb.gate_stalled);
+        p = zput(p, " FORCED="); p = zhex(p, g_sb.gate_forced);
+        if (g_sb.out_active) { p = zput(p, "(stall=");
+            p = zhex(p, g_sb.gate_stalled * 1000u / g_sb.out_active);
+            p = zput(p, " per mille of output)"); }
         p = zput(p, " mix82=");   p = zhex(p, g_sb.mix82_reads);
         p = zput(p, " ANSWERED_NO="); p = zhex(p, g_sb.mix82_zero);
         if (g_sb.mix82_reads) { p = zput(p, "(");

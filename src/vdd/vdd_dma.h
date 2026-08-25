@@ -65,6 +65,14 @@ typedef struct dma_state {
          two today: SNDIO traces only the card's own ports, and the hot-port
          histogram is empty for a protected-mode client. Three counters settle it. */
     uint32_t rd_addr[8], rd_count[8];  /* guest reads of cur_addr / cur_count      */
+    /* ── A COUNT READ IS THE GUEST'S MIXER SAYING 'I AM RUNNING NOW'. ────────────
+         DMX's refill routine polls the 8237's current count as its FIRST action
+         (DOOM.EXE 0x56884), before it decides which block to fill. So a read of the
+         count register is the one externally visible moment at which the guest is
+         known to be mid-refill -- which is exactly the phase signal the ACK cannot
+         give, because DMX acknowledges the interrupt BEFORE it refills (0x53024's
+         status read runs ahead of the `call [0x584]` that does the work). */
+    uint32_t count_reads;              /* monotonic: any guest read of a count reg  */
     uint32_t rd_status[2];             /* ...and of the status register (TC bits)  */
     /* ⚠ A COUNT OF PORT READS IS NOT A COUNT OF POLLS. The 8237's count register is
          16 bits behind an 8-bit port with a lo/hi flip-flop, so one poll is TWO

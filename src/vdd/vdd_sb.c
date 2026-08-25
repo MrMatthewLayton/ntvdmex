@@ -24,6 +24,13 @@ static uint8_t sb_outq_pop(sb_state *st)
 
 int g_sb_absent = 0;      /* nosb.flag -- see the DSP-reset case below */
 uint8_t g_sb_ver_major = SB_DSP_VER_MAJOR;   /* dspver.txt -- see vdd_sb.h */
+/* ⚠ THE ACK GATE IS A DELIBERATE DEVIATION FROM THE HARDWARE AND DEFAULTS OFF.
+     A real SB16 in auto-init raises an IRQ per block whether or not the previous one
+     was acknowledged, and tools/dostest/sb_test.c asserts exactly that ('auto-init: an
+     IRQ per block, continuously'). Arming the gate by default would have quietly
+     broken that assertion -- the battery caught it on the first build, which is what
+     it is for. So the gate is opt-in until it has been shown to earn the trade. */
+int g_sb_gate = 0;        /* sbgate.txt */
 uint8_t g_sb_ver_minor = SB_DSP_VER_MINOR;
 
 static void sb_dsp_soft_reset(sb_state *st)
@@ -39,6 +46,10 @@ static void sb_dsp_soft_reset(sb_state *st)
 /* --- transfer programming ------------------------------------------------- */
 static void sb_start_block(sb_state *st, uint32_t bytes, int autoinit)
 {
+    /* SB16 only, exactly as VDMSound scopes it (getDSPVersion() >= 0x0400). */
+    st->gate_on    = (uint8_t)((g_sb_gate == 1 && g_sb_ver_major >= 4) ? 1
+                             : (g_sb_gate == 2) ? 2 : 0);
+    st->gate_wait  = 0;
     st->block_len  = bytes ? bytes : 1;
     st->block_left = st->block_len;
     st->xfer_mode  = autoinit ? SB_XFER_AUTO : SB_XFER_SINGLE;
@@ -320,6 +331,60 @@ uint32_t vdd_sb_render(sb_state *st, int16_t *out, uint32_t frames)
             st->idle_run++;
             continue;
         }
+        /* ── ⚠ THE ACK GATE. DO NOT ENTER THE NEXT BLOCK UNTIL THE GUEST HAS
+             ACKNOWLEDGED THE LAST ONE. ─────────────────────────────────────────────
+             Straight from VDMSound (SBCompatCtl.cpp HandleTransfer):
+                 // On SB16: if the last IRQ was not acknowledged, don't process any bytes
+                 if ((getDSPVersion() >= 0x0400) && get8BitIRQ()) return S_OK;
+             which is a mature implementation that plays Doom correctly under STOCK
+             NTVDM -- i.e. on a worse clock than ours -- so this is copied, not invented.
+           ► WHY IT IS THE RIGHT SHAPE HERE, measured. DMX refills exactly ONE block per
+             mixer call and targets `(DMA position / blocksize) + 1` (DOOM.EXE 0x56884),
+             so every block our read pointer crosses while its mixer is not looking is a
+             block that is never filled -- it plays the previous ring lap instead. The
+             arithmetic came out exactly: stale = 1 - (mixer 58/s / blocks 86/s) = 33%,
+             against 30-33% measured, and the seam analysis showed that when DMX DOES
+             refill both sides of a boundary the join is perfectly clean (9.23 against
+             9.17 within-block). So there is nothing else to fix -- only the phase.
+             This does NOT throttle the rate. DMX acknowledges 86 times a second, once
+             per block, so the gate is almost never closed; what it stops is our pointer
+             DRIFTING AHEAD between the guest's mixer calls.
+           ⚠ SAFETY, AND VDMSound'S OWN TRAP. A guest that stops acknowledging must not
+             be able to silence us forever, so the gate yields after a bounded wait. But
+             their first attempt used a 64-tick safety, it fired CONSTANTLY, and they
+             read 21 blocks ahead of an 8-block ring -- lapping it 2.6x into garbage,
+             which is worse than the fault being fixed. So the safety here is two whole
+             blocks, and every yield is COUNTED: if `gate_forced` is not near zero the
+             gate is not doing its job and this must not be believed.
+           ⚠ SB16 ONLY, exactly as VDMSound scopes it -- an older DSP has no
+             acknowledged-IRQ concept and games driving it do not expect the stall. */
+        /* gate mode 2: hold until the guest's mixer POLLS the DMA position, which is
+           the only signal that the refill has actually begun. Mode 1 (the ACK, as
+           VDMSound uses) is kept for comparison but is measured not to help here --
+           DMX acks before it refills, so it re-opens the gate too early. */
+        if (st->gate_on == 2 && st->dma
+            && st->gate_mark && st->dma->count_reads == st->gate_mark
+            && !st->xfer_16bit) {
+            if (st->gate_wait < st->block_len * 2u) {
+                st->gate_wait++; st->gate_stalled++;
+                out[n] = st->last_sample;
+                continue;
+            }
+            st->gate_forced++;
+        }
+        if (st->gate_on == 1 && st->irq_pending && !st->xfer_16bit) {
+            if (st->gate_wait < st->block_len * 2u) {
+                st->gate_wait++;
+                st->gate_stalled++;
+                out[n] = st->last_sample;       /* hold, do not inject a zero: a DC hold
+                                                   is inaudible for a few samples where
+                                                   a silence notch is a click */
+                continue;
+            }
+            st->gate_forced++;                  /* guest stopped acking -- yield */
+        }
+        st->gate_wait = 0;
+
         if (st->idle_run) {                     /* a gap just ended: bucket its length */
             uint32_t r = st->idle_run, b = 0;
             while (r > 1 && b < 7) { r >>= 1; ++b; }
@@ -329,6 +394,7 @@ uint32_t vdd_sb_render(sb_state *st, int16_t *out, uint32_t frames)
         st->out_active++;
 
         out[n] = sb_fetch_sample(st, &ended);
+        st->last_sample = out[n];
 
         if (st->block_left == 0 || ended) {
             /* Block complete: this is the interrupt the game is waiting for. In
@@ -416,6 +482,7 @@ uint32_t vdd_sb_render(sb_state *st, int16_t *out, uint32_t frames)
             st->blk_min = 0xFFFFFFFFu; st->blk_max = 0;
             st->irq_pending = 1;
             st->blocks++;
+            if (st->dma) st->gate_mark = st->dma->count_reads;  /* gate mode 2 */
             vdd_raise_irq(st->bus, st->irq);
             if (st->xfer_mode == SB_XFER_AUTO && !ended) st->block_left = st->block_len;
             else                                        st->xfer_mode  = SB_XFER_IDLE;

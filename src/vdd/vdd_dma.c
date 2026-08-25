@@ -185,6 +185,7 @@ static void dma_in(void *self, uint16_t port, uint8_t w, uint32_t *val)
         chan = (ctrl ? 4 : 0) + (reg >> 1);
         if (reg & 1) {
             ++st->rd_count[chan];
+            ++st->count_reads;
             if      (w == 1) ++st->rd_w1;
             else if (w == 2) ++st->rd_w2;
             else             ++st->rd_w4;
