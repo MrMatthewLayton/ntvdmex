@@ -3484,6 +3484,7 @@ static unsigned g_dmapoll_n = 0, g_dmapoll_overflow = 0;
      the difference between a cause and a pattern match. */
 #define POLLSTK_MAX 48
 static DWORD g_pollstk[POLLSTK_MAX], g_pollstk_hits[POLLSTK_MAX];
+static DWORD g_pollgap[10], g_pollgap_max_us = 0;
 static unsigned g_pollstk_n = 0, g_pollstk_overflow = 0;
 
 static int host_try_io_pm(volatile BYTE *tib, vdd_bus *bus)
@@ -3536,6 +3537,32 @@ static int host_try_io_pm(volatile BYTE *tib, vdd_bus *bus)
             g_dmapoll_eip[g_dmapoll_n] = site; g_dmapoll_hits[g_dmapoll_n] = 1;
             ++g_dmapoll_n;
         } else ++g_dmapoll_overflow;
+
+        /* ── WHY IS THE MIXER RUN ONLY 56 TIMES A SECOND? TWO CAUSES, ONE SHAPE EACH.
+             DMX's scheduler (DOOM.EXE file 0x57224) runs a task when the tick clock
+             reaches its deadline, ABANDONS THE WHOLE PASS if the task is still busy,
+             and recomputes the deadline from NOW so a missed run is never made up.
+             (a) the mixer overruns the 7.4 ms tick period, so the next tick finds it
+                 busy -> the gaps between polls are LONG and irregular.
+             (b) we deliver ticks in bursts; each burst tick advances DMX's clock but
+                 only one task run happens per ISR entry -> the gaps are SHORT and
+                 regular, and the loss is in the bunching, not the duration.
+             A rate cannot tell those apart -- both give 56/s -- so bucket the actual
+             interval. QPC because at these scales GetTickCount's 10-16 ms granularity
+             is the same size as the effect. */
+        { static LARGE_INTEGER pf, prev;
+          LARGE_INTEGER now;
+          if (!pf.QuadPart) QueryPerformanceFrequency(&pf);
+          if (pf.QuadPart && QueryPerformanceCounter(&now)) {
+              if (prev.QuadPart) {
+                  LONGLONG dus = ((now.QuadPart - prev.QuadPart) * 1000000) / pf.QuadPart;
+                  unsigned b = 0;
+                  while (b < 9 && dus >= (LONGLONG)1000 << b) ++b;   /* 1,2,4..256ms+ */
+                  g_pollgap[b]++;
+                  if (dus > (LONGLONG)g_pollgap_max_us) g_pollgap_max_us = (DWORD)dus;
+              }
+              prev = now;
+          } }
 
         /* The return chain, straight off the guest's stack. */
         { DWORD ssb = dpmi_sel_base((WORD)(VDM_REG(tib, VTIB_SS) & 0xFFFF));
@@ -10034,6 +10061,11 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
               p = zput(p, s ? " " : ""); p = zput(p, "0x"); p = zhex(p, g_pollstk[s]);
               p = zput(p, "x"); p = zhex(p, g_pollstk_hits[s]); } }
         p = zput(p, " stkovf="); p = zhex(p, (DWORD)g_pollstk_overflow);
+        /* ► WHY ONLY 56 MIXER RUNS/s: long overruns (a) or bunching (b)? */
+        p = zput(p, " poll_gap_us[<1k,2k,4k,8k,16k,32k,64k,128k,256k,+]=");
+        { unsigned gb; for (gb = 0; gb < 10; ++gb) { p = zput(p, gb ? "," : "");
+                                                     p = zhex(p, g_pollgap[gb]); } }
+        p = zput(p, " gap_max_us="); p = zhex(p, g_pollgap_max_us);
         p = zput(p, " count_rd_by_width w1="); p = zhex(p, g_dma.rd_w1);
         p = zput(p, " w2=");                   p = zhex(p, g_dma.rd_w2);
         p = zput(p, " w4=");                   p = zhex(p, g_dma.rd_w4);
