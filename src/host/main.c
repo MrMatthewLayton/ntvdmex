@@ -425,6 +425,11 @@ static DWORD    g_keydel_hist[8];     /* queue->INT 09h ms: same buckets        
 static DWORD    g_keydel_max_ms, g_keydel_n;
 /* Which of the three exits from the cooperative IRQ1 gate fires. See its call site. */
 static DWORD    g_irq1_checks, g_irq1_no_if, g_irq1_in_08, g_irq1_in_09;
+static DWORD    g_irq1_async_inj;        /* IRQ1s placed on the ASYNC path (see above) */
+static int      g_keyirq_retry = 1;      /* keyirq.txt = 0 restores single-attempt */
+static DWORD    g_irq1_async_retry;
+static int      g_irq0_yielded;
+#define KEYIRQ_MAX_YIELD 3
 
 static void keylat_bucket(DWORD *h, DWORD ms)
 {
@@ -1507,6 +1512,13 @@ static int async_inject_irq(unsigned irq)
              has always worked; the re-entrancy this whole mechanism exists to stop was on
              IRQ1, and that stays strict. */
         if (irq == 0 || async_vec_is_our_stub(irq)) vdd_pic_eoi(&g_pic, (uint8_t)irq);
+        /* ⚠ A KEY DELIVERED HERE WAS INVISIBLE. g_irq1_inj and keylat_pop() both live in
+           the COOPERATIVE block only, so an asynchronously-placed keystroke counted as
+           neither delivered nor timed -- and the retry experiment therefore read as
+           "places 78 of 186 interrupts, loses keys" when it had in fact placed all 186
+           (78 cooperative + 108 here) and the histogram was measuring only the slow
+           leftovers. Time it where it happens. */
+        if (irq == 1) { ++g_irq1_async_inj; keylat_pop(); }
     }
     ResumeThread(g_hcpu);
     if (ok) g_async_inj++; else g_async_bail++;
@@ -1660,10 +1672,27 @@ static void host_irq_sink(void *ctx, uint8_t irq)
              g_lock), not simply moving the call. */
         if (g_qi_susp && !g_pit_noinject && (!g_dpmi_pm || !g_async_tried_this_sync)) {
             g_async_tried_this_sync = 1;
-            ++g_pit_async_attempts;
-            if (async_inject_irq(0)) {
-                InterlockedDecrement(&g_irq0_pending);
-                pm_tick_take();
+            /* A PENDING KEY IS A STATE, NOT A MOMENT. IRQ1 gets ONE async attempt, at the
+               raise; if the guest had interrupts off (96% of gameplay) it falls to the
+               exec loop, which can only place it on a pass where they are back on. This is
+               the retry, and it is free: async_inject_irq VERIFIES IF/VIF before it
+               injects, so an IRQ0 opportunity IS a proven enabled moment, ~184/s. The key
+               takes it and the tick waits -- g_irq0_pending is not decremented, so the
+               tick is not lost, just delivered on the next raise. Bounded so a key that
+               can never be placed cannot stop the clock. */
+            if (g_keyirq_retry && !g_dpmi_pm && g_irq1_pending > 0
+                && g_irq0_yielded < KEYIRQ_MAX_YIELD
+                && vdd_pic_can_deliver(&g_pic, 1) && async_inject_irq(1)) {
+                InterlockedDecrement(&g_irq1_pending);
+                ++g_irq0_yielded;
+                ++g_irq1_async_retry;
+            } else {
+                g_irq0_yielded = 0;
+                ++g_pit_async_attempts;
+                if (async_inject_irq(0)) {
+                    InterlockedDecrement(&g_irq0_pending);
+                    pm_tick_take();
+                }
             }
         }
     }
@@ -3157,6 +3186,8 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
                 kq = zput(kq, " in_08h=");  kq = zhex(kq, g_irq1_in_08);
                 kq = zput(kq, " in_09h=");  kq = zhex(kq, g_irq1_in_09);
                 kq = zput(kq, " injected="); kq = zhex(kq, g_irq1_inj);
+                kq = zput(kq, " async_inj="); kq = zhex(kq, g_irq1_async_inj);
+                kq = zput(kq, " retries=");   kq = zhex(kq, g_irq1_async_retry);
                 kq = zput(kq, "\r\n");
                 log_append(LOG_PATH, kb, kq);
             } }
