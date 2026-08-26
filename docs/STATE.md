@@ -81,8 +81,12 @@ flawless sound.
    ⚠️ **Load every module, assign every selector, then relocate ONCE.** Relocation is not
    idempotent: a chained record's next site is the word *at* the current site, and the
    first pass overwrites exactly those words.
-   **Next: extract `keyboard.drv` / `system.drv` / `shell.dll` from the rig, then the
-   DLL init calling convention.**
+   ⚠️ **krnl386's init entry is gated on `AX == 0x4B4F` ('OK')** and it is a **DPMI
+   client** (`int 31h` fifteen instructions in) — not the documented Win16 `LibMain`
+   convention. Measured by disassembling it; `tools/ne/neints.py` lists everything it
+   calls.
+   **Next: extract `keyboard.drv` / `system.drv` / `shell.dll` from the rig, then enter
+   krnl386 with a stack, `DS`=autodata and `AX=0x4B4F`.**
 2. **[#131] Console/stdio integration.** Independent of WOW and needed regardless:
    anything script-driven behaves differently under NTVDMEX than under stock.
 3. **[#130] Installation & routing.** Blocked on #128 — an installer is not useful while

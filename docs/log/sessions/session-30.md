@@ -255,14 +255,94 @@ Incidental, and worth remembering when the thunking work starts: krnl386 exports
 *unnamed* absolutes, `@454 = 0x001b` and `@455 = 0x0023` — NT's flat user-mode code and
 data selectors.
 
+---
+
+## Part 5 — reading krnl386 instead of theorising about its init convention
+
+Item 2 of Part 4's list was "work out the DLL initialisation calling convention".
+The method that has paid off repeatedly on this project — **read the guest binary** —
+answered it in minutes, and the answer is not the documented convention.
+
+### ★ The init entry is gated on a magic value
+
+```
+c02b  cmp ax,0x4b4f      ; 'OK'
+c02e  jz  0xc033
+c030  xor ax,ax
+c032  retf               ; ...otherwise it just returns 0
+```
+
+The host passes **AX = 0x4B4F**. It is *not* the documented Win16 `LibMain` convention
+(`DI`=hInstance, `CX`=heap, `ES:SI`=cmdline): `DI` is pushed and used as a scratch four
+instructions later. Entering with the LibMain registers would have made krnl386 return 0
+on its second instruction — a "failure" that would have looked like a loader bug and sent
+the next session after the wrong thing.
+
+`DS` *is* live (`mov [0x59a],cs` / `mov [0x59c],ds` / `mov [cs:0x30],ds`), and it pushes
+immediately, so a stack must be supplied — which the header cannot give, because a
+LIBRARY has `SS:SP = 0:0`.
+
+### ★ krnl386 is a DPMI client
+
+Fifteen instructions in, before anything else:
+
+```
+c0f9  mov bx,[0x26f]
+c0fd  mov ax,0x0002
+c100  int 0x31           ; DPMI: segment -> descriptor
+```
+
+`tools/ne/neints.py` (new) reads the whole service list off the binary:
+
+```
+INT 31h  53 sites  0002 x12, 0203 x18, 0202 x9, 0006 x2, 0007 x2, 000A x2,
+                   0000, 0001, 0301, and one non-standard 04F3
+INT 21h  51 sites  AH=25h x12 and 35h x4 (vectors), 52h x2 (list of lists),
+                   42h x6, 4Ch x4, 3Dh/3Eh/3Fh, 50h/55h/71h/DCh
+INT 2Fh   5 sites  1600, 1684, 1687, 1689, 168A
+INT 41h   6 sites  the Windows kernel-debugger interface
+INT 11h, 10h, 2Ah, 5Ch
+```
+
+This is **good news**: krnl386 lands on the DPMI 0.9 host that already runs unmodified
+third-party clients on real silicon, and on a DOS layer with 103 INT 21h functions. It
+is not a new subsystem; it is a new client of two working ones.
+
+### ★ DPMI 0002 was missing — and it is the one krnl386 calls most
+
+Twelve sites, against two each for 0006 and 000A. Implemented with a **cache**, because
+the same segment must return the *same* selector: the descriptor belongs to the host and
+the client is told never to free it, so a fresh LDT entry per call would leak one per
+call and let one part of a client modify a mapping another part is still using. `0001`
+drops the cache entry if a client frees one anyway, so the next `0002` rebuilds instead
+of returning a selector that is no longer present.
+
+`04F3` is left **unimplemented and flagged**, not guessed at:
+
+```
+c8fc  mov bx,cs / mov si,bx / mov dx,0x4e81 / mov di,0x4ebb / mov ax,0x4f3 / int 31h
+```
+
+Coherent and aligned, so the call is real. The register shape is 0306's raw-mode-switch
+pair being **set** rather than got — probably an NTVDM-private WOW extension. It needs
+the kernel-RE treatment, not a plausible-sounding answer.
+
+⚠ `neints.py` is a **linear sweep** and says so in its own docstring. Code segments
+contain data, so a sweep decodes some of it as instructions and invents `int` sites.
+Both of this project's instrument-lied incidents were this exact shape (session 21's
+`CD nn` byte-pair patcher; session 18's count measured on the wrong bytes). It prints
+the raw `0xCD` byte count as an upper bound and declares itself desynced if it ever
+exceeds it — 122 found against 154 raw, so: an upper bound and a to-do list, not a census.
+
 ## Next actions
 
 1. **Extract `keyboard.drv`, `system.drv` and `shell.dll`** from the rig into `guest/ne/`.
    Three named stops become zero, and wowexec becomes fully bindable.
-2. **DLL initialisation calling convention** for krnl386 (stack, `DS`=autodata, `DI`, `CX`).
-   krnl386 is a LIBRARY: no stack of its own, and its `CS:IP` is an *init* entry.
-3. Rig round: confirm the two-phase load + bind on real hardware and real selectors.
-4. Then, and only then, something worth executing.
+2. **Give krnl386 a stack and enter it with `AX=0x4B4F`, `DS`=autodata**, in 16-bit PM
+   as a DPMI client. The convention is measured now, not assumed.
+3. **Answer what it calls**: DPMI `0202`/`0203` (exception handlers, 27 sites) and
+   `INT 2Fh 1684/1689/168A`; work out `INT 31h 04F3`. `INT 41h` can safely be a no-op.
+4. Rig round: confirm the two-phase load + bind on real hardware and real selectors.
 5. Independent of WOW: **#131 console/stdio** (redirection/piping bypassed today).
 
 **Rig left with:** IFEO `Debugger` **set** and `wowtry.flag` **present**. Clear both to
