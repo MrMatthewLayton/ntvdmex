@@ -12,13 +12,16 @@ the real `src/dos/` and `src/vdd/` code — the DOS and device layers are header
 convention precisely so this is possible.
 
 ```bash
-cd tools/dostest
-for t in *_test; do printf '%-16s ' "$t"; ./$t >/dev/null && echo PASS || echo FAIL; done
+./tools/dostest/run.sh          # builds + runs everything; non-zero exit if anything fails
 ```
 
-Covers: MCB, XMS, EMS, DMA, PIC, PIT, SB, OPL, OPL synth, MPU, speaker, video, input, the PM
-interpreter, the instruction-length decoder, and the VDD bus. **This is the loop to develop
-against.**
+**16 batteries, 630 checks, ~10 seconds** — verified from a clean clone. Covers MCB, XMS,
+EMS, DMA, PIC, PIT, SB, OPL, OPL synth, MPU, speaker, video, input, the PM interpreter, the
+instruction-length decoder, and the VDD bus. **This is the loop to develop against.**
+
+> ⚠️ The compiled batteries are gitignored, so **a fresh clone has no `tools/dostest/*_test`
+> files** and running them directly matches nothing — in `bash` that silently "passes" a
+> loop that ran zero tests. `run.sh` compiles them every time. Always go through it.
 
 ---
 

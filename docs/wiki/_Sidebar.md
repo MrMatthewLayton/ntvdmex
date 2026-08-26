@@ -10,6 +10,7 @@
 - [Building and running](Building-and-running)
 - [Testing and oracles](Testing-and-oracles)
 - [The bare-metal rig](The-bare-metal-rig)
+- [Provisioning a new rig](Provisioning-a-new-rig)
 - ⚠️ **[Traps and lessons](Traps-and-lessons)**
 
 **Live state**

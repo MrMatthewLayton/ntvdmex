@@ -52,12 +52,16 @@ Two consequences worth knowing:
 ## Test it without any Windows machine
 
 ```bash
-cd tools/dostest
-for t in *_test; do printf '%-16s ' "$t"; ./$t >/dev/null && echo PASS || echo FAIL; done
+./tools/dostest/run.sh
 ```
 
-17 batteries, a couple of seconds, and they exercise the real DOS and device code. This is
-the development loop — see [Testing and oracles](Testing-and-oracles).
+It **builds and runs** 16 batteries — 630 checks, about ten seconds — against the real
+`src/dos/` and `src/vdd/` code, and exits non-zero if anything fails, so it can gate a
+commit. This is the development loop; see [Testing and oracles](Testing-and-oracles).
+
+> The battery binaries are gitignored (`tools/dostest/*_test`) because tracking them means
+> binary churn in every commit. `run.sh` compiles them each time — so **a fresh clone has
+> no `*_test` files and running them directly finds nothing.** Always go through `run.sh`.
 
 ---
 
