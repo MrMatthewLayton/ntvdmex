@@ -16,6 +16,7 @@ was wrong"* is only useful if session 22 is still there to be wrong.
 
 | Session | Date | Headline |
 |---|---|---|
+| [30](session-30.md) | 2026-08-26 | **Repo made public** (history purged of DOOM1.WAD first), wiki published, tracker reconciled 58→140 issues, docs consolidated. Then **#129 Win16 passthrough proved IMPOSSIBLE** (Windows validates the VDM image identity) and **#128 WOW started**: NE loader works, krnl386 loads and relocates on the rig. |
 | [29](session-29.md) | 2026-08-26 | Host UI: a constant caption, a status strip reporting program/width/CPU mode, five menus folded into a tabbed Settings dialog. `rigshot` — the rig can see its own window at last. |
 | [28](session-28.md) | 2026-08-26 | **MS-DOS 6.22's own COMMAND.COM runs.** Five defects in an afternoon, four in code every guest uses — biggest: INT 21h AH=0Ah blocked the exec thread, which deadlocks a shell absolutely. Settings move into the registry. |
 | [27](session-27.md) | 2026-08-26 | **★ Doom's mouse fixed and user-confirmed.** A 32-bit EDI masked to 16 bits. Both previously filed explanations were wrong, and so was the headline "Doom never asks". |

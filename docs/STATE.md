@@ -4,9 +4,9 @@
 > this file top to bottom and you will know where it is, what works, what does not, and
 > what to do next.
 
-- **Last updated:** 2026-08-26 (session 29)
+- **Last updated:** 2026-08-26 (session 30)
 - **Branch:** `m9/completeness`
-- **Tracker:** [140 issues](https://github.com/MrMatthewLayton/ntvdmex/issues) — 43 open, 97 closed, reconciled against the repo on 2026-08-26
+- **Tracker:** [140+ issues](https://github.com/MrMatthewLayton/ntvdmex/issues) — reconciled against the repo on 2026-08-26 (`tools/gh/backfill.py` is the manifest)
 - **Knowledge base:** the [wiki](https://github.com/MrMatthewLayton/ntvdmex/wiki)
 - **Day-by-day history:** [`docs/log/sessions/`](log/sessions/)
 
@@ -69,9 +69,12 @@ flawless sound.
 
 1. **[#128] WOW / Win16 — IN PROGRESS.** NE loader done (`src/wow/ne.h`, 18th battery).
    On the rig, **krnl386.exe loads and relocates inside NTVDMEX**: 4 segments, 13
-   relocation records expanding to **495 patched sites**, imports none. Next: give those
-   segments LDT selectors from the DPMI layer and enter 16-bit protected mode at
-   `seg1:0xc02b` — krnl386 is the 386 *enhanced-mode* kernel and does not run in V86.
+   relocation records expanding to **495 patched sites**, imports none. LDT selectors
+   are **unblocked** (call `v86_get_tib()` first — see session 30).
+   ⚠️ **krnl386 is a LIBRARY, not a program** — no stack of its own, and its `CS:IP` is a
+   DLL *init* entry. Do not jump to it. The bootstrap is: init krnl386 → init user + gdi
+   → run **wowexec.exe** (the PROGRAM) → wowexec launches the app.
+   **Next: the DLL init calling convention, then import-by-ordinal resolution.**
 2. **[#131] Console/stdio integration.** Independent of WOW and needed regardless:
    anything script-driven behaves differently under NTVDMEX than under stock.
 3. **[#130] Installation & routing.** Blocked on #128 — an installer is not useful while
