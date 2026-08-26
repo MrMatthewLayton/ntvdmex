@@ -56,9 +56,30 @@ Signing is *not* the obstacle — XP-32 does not enforce user-mode EXE signature
 will restore the original from `dllcache` behind your back, which is a uniquely confusing
 failure to debug.
 
-**First plan, disproven:** repoint
-`HKLM\SYSTEM\CurrentControlSet\Control\WOW\cmdline` (DOS) and `wowcmdline` (Win16). This
-looked like the designed extension point. It does not work.
+**First plan, disproven — and re-tested 2026-08-26 because it was worth being sure:**
+repoint `HKLM\SYSTEM\CurrentControlSet\Control\WOW\cmdline` (DOS) and `wowcmdline` (Win16).
+
+Those two values genuinely exist and are genuinely separate, which is tantalising — it
+would mean DOS routes to us and Win16 never does:
+
+```
+cmdline     REG_EXPAND_SZ  %SystemRoot%\system32\ntvdm.exe
+wowcmdline  REG_EXPAND_SZ  %SystemRoot%\system32\ntvdm.exe -a %SystemRoot%\system32\krnl386
+```
+
+and the `-a …\krnl386` there matches, exactly, the command line a live WOW launch arrives
+with. So the values really are the source of the two launch strings.
+
+**It still does not work.** With the IFEO value removed and `cmdline` pointed at our host:
+a DOS launch produced no log, and `tasklist` showed *neither* our host nor stock `ntvdm` —
+**before a reboot and, identically, after a full one.** The reboot hypothesis (that the key
+is read only at boot, which would have neatly explained the original disproof) is ruled
+out.
+
+The value is clearly live: repointing it **broke DOS launching entirely**, where the IFEO
+route had been working. So Windows consults it and then cannot drive our binary through it.
+⚠️ *Why* is not established — plausibly CSRSS expects a launch protocol or validation only
+`ntvdm.exe` satisfies, but that has not been measured and should not be repeated as fact.
 
 **What actually works:** an **Image File Execution Options `Debugger` value on
 `ntvdm.exe`**. Windows launches your binary with the original command line appended, you
