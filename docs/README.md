@@ -4,19 +4,30 @@
 for `ntvdm.exe` on **Windows XP SP3, 32-bit**, that executes 16-bit code on the **real CPU
 via Virtual-8086 (V86) mode** — *not* a software CPU emulator.
 
-This `docs/` tree is the project's source of truth. It is designed so that work can be
-**paused and resumed across sessions/contexts** without loss of state.
+## Where things live
 
-## How to resume work (read this first every session)
+| Kind of question | Where |
+|---|---|
+| **Where is the project now? What next?** | **[STATE.md](STATE.md)** — the one canonical resume point |
+| How does it work, and why is it built this way? | **[The wiki](https://github.com/MrMatthewLayton/ntvdmex/wiki)** (source in [`wiki/`](wiki/), published by `tools/wiki/publish.sh`) |
+| What is left to do? | **[Issues](https://github.com/MrMatthewLayton/ntvdmex/issues)** — epics and tasks, reconciled against the repo |
+| What happened on a given day? | **[log/sessions/](log/sessions/)** — the verbatim session archive |
+| Why was *X* decided? | [decisions/](decisions/) |
+| What did a specific investigation find? | [research/](research/) |
 
-1. Read **[STATE.md](STATE.md)** — the living handoff doc. It says where we are, what is
-   decided, what is open, and the single next action.
-2. Skim the most recent entry in **[log/](log/)** for the last session's narrative.
-3. Check **[ROADMAP.md](ROADMAP.md)** for the current milestone.
-4. Then continue.
+## How to resume work
 
-When you finish a working session, **update `STATE.md`** and **append a dated entry to
-`log/`**. These two steps are the contract that makes resumption reliable.
+1. Read **[STATE.md](STATE.md)**. It says where we are, what works, what does not, and the
+   next four actions with issue numbers.
+2. If you are picking up a specific thread, read that session in
+   **[log/sessions/](log/sessions/)**.
+3. Before touching the test rig or trusting any measurement, read the wiki's
+   **[Traps and lessons](https://github.com/MrMatthewLayton/ntvdmex/wiki/Traps-and-lessons)**.
+
+When you finish a working session: **update `STATE.md`** and **add
+`log/sessions/session-NN.md`**. That contract is what makes resumption reliable — and it is
+what broke last time, when `STATE.md` sat three weeks stale while the project moved four
+milestones on.
 
 ## Layout
 

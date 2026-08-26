@@ -4,14 +4,27 @@
 `ntvdm.exe` on **Windows XP SP3 (32-bit)** that runs legacy 16-bit DOS and Win16 software on
 the **real CPU**, not a software emulator.
 
-> **Status:** 🟢 V86 proven — **DOS kernel (M2) closed**, starting **device model + video (M3)**.
-> Real DOS `.COM` **and** `.EXE` programs, loaded off disk, run on the real CPU in
-> **Virtual-8086 mode** via `NtVdmControl` — launched transparently when XP starts a 16-bit program —
-> with INT 21h **file I/O** backed by Win32, a DOS memory manager, and process plumbing (PSP/args/env/
-> errorlevel). **M0–M2** are done in the clean `src/` host (`ntvdmhost.exe`); the original
-> `tools/vdmhost` proving spike has been **retired** now the clean host reached parity (see git
-> history). See [`docs/STATE.md`](docs/STATE.md) and [`docs/ROADMAP.md`](docs/ROADMAP.md) for live
-> status.
+> ## Status — **Doom is fully playable**
+>
+> On a real Pentium-era Windows XP box: 3D rendering, status bar, menus, digital sound,
+> music, keyboard **and mouse**, running Doom's own 32-bit code through DOS/4GW in paged
+> protected mode on the real CPU. **Skyroads** is fully playable too, and **MS-DOS 6.22's
+> own `COMMAND.COM`** runs as a guest — prompt, internals, `DIR`, and an external program
+> EXEC'd and returned from.
+>
+> Under the hood: 103 INT 21h functions, XMS 3.0, EMS (LIM 4.0), VGA text/13h/12h-planar/
+> VESA video, SB16 PCM at 99.999% delivery, a clean-room OPL2/OPL3 synthesiser, MPU-401
+> MIDI, and a DPMI 0.9 host.
+>
+> **The big gap is Win16.** `ntvdm.exe` is also the host for every 16-bit *Windows*
+> program, and NTVDMEX has no WOW layer at all — no NE loader, no `krnl386`/`user`/`gdi`
+> hosting, no thunking. That is [the top open epic](https://github.com/MrMatthewLayton/ntvdmex/issues/128),
+> and it means NTVDMEX is not yet ready to be a machine's only VDM.
+>
+> 📍 **[`docs/STATE.md`](docs/STATE.md)** is the canonical "where is this" document.
+> 📖 **[The wiki](https://github.com/MrMatthewLayton/ntvdmex/wiki)** is the knowledge base —
+> architecture, motivations, testing, and the [traps](https://github.com/MrMatthewLayton/ntvdmex/wiki/Traps-and-lessons)
+> that cost the most.
 
 ## What it is
 
