@@ -412,22 +412,91 @@ Both fall out of **one cheap rig round**: run `lolprobe.com` under **stock ntvdm
 already has `stock <target>`) and diff against the MS-DOS 6.22 baseline now on disk at
 `docs/research/evidence/lolprobe-msdos622.txt`.
 
+---
+
+## Part 7 — the rig was never down, and the whole graph binds on real silicon
+
+The "rig unreachable" in Part 6 was **my own sandbox blocking raw sockets**. The share was
+mounted the entire time and the watcher was heartbeating. Worth remembering: a failed
+`nc` from inside a sandbox is evidence about the sandbox, not about the box.
+
+### ★ SysVars+0x6A is an NTVDM contract, and it is now measured
+
+`lolprobe.com` under **stock ntvdm** (evidence: `docs/research/evidence/lolprobe-stock-ntvdm.txt`).
+Stock returns `ES=00A7 BX=0026`, and `[ES:BX+6A] = 0x1482` — a plain offset *inside* the
+SysVars segment, where MS-DOS 6.22 had DOS kernel code. At that offset is exactly the
+structure krnl386 expects: **eleven far pointers**, every one segmented to the SysVars
+segment itself, followed by code (`1E 50 B8 40` = `push ds / push ax / mov ax,40`).
+
+```
++00 00a7:0047 <-krnl386   +04 00a7:003c            +08 00a7:13f3
++0c 00a7:0338 <-krnl386   +10 00a7:0332 <-krnl386  +14 00a7:0612
++18 00a7:0325 <-krnl386   +1c 00a7:13ca            +20 00a7:00ce
++24 00a7:0326 <-krnl386   +28 00a7:0328 <-krnl386
+```
+
+Every one of the six offsets krnl386 reads lands on a real entry. And **entry +0x20 is
+`0x00CE`, which is exactly what the list of lists gives as the first SFT** (`00A7:00CE`)
+— an independent identification proving the table is genuine DOS-internals pointers, not
+a coincidence at the right offset. The MS-DOS 6.22 baseline was what made this legible:
+without it, `0x1482` is just a number.
+
+### ★ The entire XP WOW module graph closes
+
+The three "stops" the loader reported — SYSTEM, KEYBOARD, SHELL — were a **shopping
+list**. Pulled them off the box along with mouse, sound, comm, toolhelp, winnls, wifeman
+and commdlg. **15 modules, every import resolved, and not one line of loader code
+changed.** That is the whole payoff for making a failed import *name its module* instead
+of just failing.
+
+On the rig, all eleven the host loads bind, and the site counts match the off-VM battery
+**to the digit**:
+
+```
+KERNEL 495   SYSTEM 16   KEYBOARD 22   MOUSE 0   SOUND 36   COMM 58
+GDI 781      USER 1269   SHELL 74      TOOLHELP 138          WOWEXEC 144
+```
+
+27 LDT descriptors installed, 27 `LAR` readbacks ok, zero failures.
+Evidence: `docs/research/evidence/wow-bind-rig.txt`.
+
+### ★ And the readback caught a silent #GP before it happened
+
+KERNEL's segment 1 logged `" CODE ... LAR ok"` — and read back **`ar=0xf200`**, a DATA
+descriptor, while segments 2 and 3 of the same module read `0xfa00`.
+
+`g_ldt_next` starts at **3**, and `dpmi_install()` **force-types indices 2 and 3 to
+writable data**. That is a deliberate hack for the DPMI path — i310102's C runtime
+retypes its first allocation to code and then `#GP`s on it — but WOW's first allocation
+is not a stack. It is krnl386's **code** segment. The very next step of this work is
+jumping to `sel:0xC02B`, which would have `#GP`d instantly, against a log claiming the
+code selector installed cleanly. A silent death, far from the cause, of exactly the kind
+this project keeps paying for.
+
+Fixed by naming the reserved floor (`DPMI_LDT_RESERVED`, shared with the INT 31h `0001`
+free path so the two cannot drift) and having the WOW stage step past it. Confirmed on
+hardware: KERNEL seg 1 is now `sel 0x37 ar=0xfa00`, and across all 27 descriptors **zero
+CODE reads back as DATA and zero DATA as CODE**.
+
+★ **That readback exists precisely so the CPU, not our bookkeeping, says whether a
+descriptor installed.** It has now paid for itself. Every "instrument" in this project
+that merely re-reports what we wrote has eventually lied; this one asks the hardware.
+
 ## Next actions
 
-1. **RIG, and it is the decisive one: run `tools/dostest/lolprobe.com` under STOCK
-   ntvdm** and diff against `docs/research/evidence/lolprobe-msdos622.txt`. Answers
-   SysVars+0x6A — the last thing krnl386's init reads that we cannot supply. Running it
-   under NTVDMEX in the same round gives the other side of the diff.
-2. **Extract `keyboard.drv`, `system.drv` and `shell.dll`** from the rig into `guest/ne/`.
-   USER / WOWEXEC / SYSEDIT stop exactly there; three named stops become zero.
-3. **Give krnl386 a stack and enter it with `AX=0x4B4F`, `DS`=autodata**, in 16-bit PM as
-   a DPMI client. The convention is measured now, not assumed.
-4. **`INT 31h 04F3`** — the other NTVDM contract. Kernel-RE, not a plausible guess.
-   `INT 41h` (kernel debugger, 6 sites) can safely be a no-op.
-5. Independent of WOW: **#131 console/stdio** (redirection/piping bypassed today).
+1. **Enter krnl386.** Everything it needs is now either in place or measured: a code
+   selector that is genuinely code, `AX=0x4B4F`, `DS`=autodata, a supplied stack (it is a
+   LIBRARY, `SS:SP = 0:0`), 16-bit PM as a DPMI client.
+2. **Plant a SysVars+0x6A table.** The shape is known — eleven far pointers into the
+   SysVars segment. What the six krnl386 reads *mean* is still open; the offsets
+   (`0x0325`, `0x0326`, `0x0328`, `0x0332`, `0x0338`, `0x0047`) cluster tightly, which
+   suggests DOS internal flags. Identify them before inventing values.
+3. **`INT 31h 04F3`** — the last NTVDM contract. Kernel-RE, not a guess.
+4. Independent of WOW: **#131 console/stdio**.
 
 **Not blockers, established by reading the call sites** — INT 2Fh `1600`/`1684`/`1689`/
 `168A`, and the "MS-DOS" vendor API krnl386 asks for and tolerates being refused.
 
-**Rig left with:** IFEO `Debugger` **set** and `wowtry.flag` **present**. Clear both to
-return the box to stock.
+**Rig left with:** IFEO `Debugger` **set** (pointing at `C:\ntvdmex\ntvdmhost.exe`) and
+`wowtry.flag` **present**; the WOW module set staged in `guest/ne/` on the build machine.
+Clear both to return the box to stock.

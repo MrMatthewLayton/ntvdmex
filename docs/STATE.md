@@ -48,7 +48,7 @@ flawless sound.
 
 | | Why it matters |
 |---|---|
-| **Win16 / WOW — entirely absent** | `ntvdm.exe` is *also* the host for every 16-bit **Windows** program. There is no NE loader, no `krnl386`/`user`/`gdi` hosting, no 16:16↔flat thunking. Since interception is an IFEO key on `ntvdm.exe`, and Win16 launches go through `ntvdm.exe` too, **installing NTVDMEX permanently would break every 16-bit Windows app today**. → [#128](https://github.com/MrMatthewLayton/ntvdmex/issues/128) |
+| **Win16 / WOW — loader done, nothing executes yet** | `ntvdm.exe` is *also* the host for every 16-bit **Windows** program. The NE loader now loads, relocates and binds the **whole** XP WOW module set on real hardware — but nothing is executed yet, and there is no 16:16↔flat thunking. Since interception is an IFEO key on `ntvdm.exe`, and Win16 launches go through `ntvdm.exe` too, **installing NTVDMEX permanently would break every 16-bit Windows app today**. → [#128](https://github.com/MrMatthewLayton/ntvdmex/issues/128) |
 | **Console/stdio integration** | DOS output is buffered and flushed to `CONOUT$` at exit, so shell redirection and piping are bypassed and every DOS program pops a window. Blocks non-interactive use. |
 | **In-guest redirection** | `echo x > file` writes to the screen and leaves the file 0 bytes. Three fixes attempted, all at the wrong end. |
 | **No INT 13h / INT 25h / 26h** | No direct disk access. |
@@ -67,30 +67,28 @@ flawless sound.
 > refused outright, and the real name re-enters us through the IFEO hook. So there is no
 > safe install story until WOW exists, and #128 moved onto the critical path.
 
-1. **[#128] WOW / Win16 — IN PROGRESS.** NE loader **and cross-module import
-   resolution** done (`src/wow/ne.h`, 18th battery, 106 checks against all five real
-   binaries). On the rig, **krnl386.exe loads and relocates inside NTVDMEX**: 4 segments,
-   13 relocation records expanding to **495 patched sites**. Off-VM the host's whole
-   module set now binds: GDI resolves all **781** of its sites into KERNEL, while USER,
-   WOWEXEC and SYSEDIT stop precisely at **SYSTEM**, **KEYBOARD** and **SHELL** — the
-   three modules not extracted yet, each named by the failure. LDT selectors are
-   **unblocked** (call `v86_get_tib()` first — see session 30).
+1. **[#128] WOW / Win16 — IN PROGRESS, and the loader half is DONE.** On real
+   hardware the **entire XP WOW module set loads, gets LDT selectors and binds**:
+   krnl386 + system/keyboard/mouse/sound/comm drivers + gdi + user + shell + toolhelp +
+   wowexec. Every import resolves; 27 descriptors installed and confirmed by `LAR`
+   readback. Site counts match the off-VM battery to the digit (KERNEL 495, GDI 781,
+   USER 1269, WOWEXEC 144). Evidence in `docs/research/evidence/wow-bind-rig.txt`;
+   `src/wow/ne.h` + a 209-check battery over all 15 real binaries.
    ⚠️ **krnl386 is a LIBRARY, not a program** — no stack of its own, and its `CS:IP` is a
-   DLL *init* entry. Do not jump to it. The bootstrap is: init krnl386 → init user + gdi
-   → run **wowexec.exe** (the PROGRAM) → wowexec launches the app.
+   DLL *init* entry. Do not jump to it. Bootstrap: init krnl386 → user + gdi → run
+   **wowexec.exe** (the PROGRAM) → wowexec launches the app.
    ⚠️ **Load every module, assign every selector, then relocate ONCE.** Relocation is not
-   idempotent: a chained record's next site is the word *at* the current site, and the
-   first pass overwrites exactly those words.
-   ⚠️ **krnl386's init entry is gated on `AX == 0x4B4F` ('OK')** and it is a **DPMI
-   client** (`int 31h` fifteen instructions in) — not the documented Win16 `LibMain`
-   convention. Measured by disassembling it; `tools/ne/neints.py` lists everything it
-   calls.
-   ⚠️ **krnl386's init reads `[SysVars+0x6A]`, which is NOT a DOS field.** Genuine
-   MS-DOS 6.22 has DOS kernel *code* there (measured — `tools/dostest/lolprobe.com`,
-   baseline in `docs/research/evidence/`), so ntvdm plants a WOW block MS-DOS never had.
-   That, and `INT 31h 04F3`, are the only two blockers left in krnl386's init path, and
-   both are NTVDM contracts. INT 2Fh is **not** a blocker — every call site read.
-   **Next: run `lolprobe.com` under STOCK ntvdm on the rig and diff. One decisive round.**
+   idempotent: a chained record's next site is the word *at* the current site.
+   ⚠️ **Its init entry demands `AX == 0x4B4F` ('OK')** and it is a **DPMI client** — not
+   the documented Win16 `LibMain` convention. Measured by disassembly.
+   ⚠️ **LDT indices below `DPMI_LDT_RESERVED` are force-typed to data by
+   `dpmi_install()`** — WOW's first allocation is a CODE segment and silently became
+   data until the `LAR` readback caught it.
+   **Next: enter krnl386** (code selector, `AX=0x4B4F`, `DS`=autodata, supplied stack),
+   and plant a **SysVars+0x6A** table — stock ntvdm's shape is measured (eleven far
+   pointers; `+0x20` is provably the first SFT), but what six of them *mean* is open.
+   Remaining unknown: **`INT 31h 04F3`**.
+
 2. **[#131] Console/stdio integration.** Independent of WOW and needed regardless:
    anything script-driven behaves differently under NTVDMEX than under stock.
 3. **[#130] Installation & routing.** Blocked on #128 — an installer is not useful while
@@ -106,7 +104,7 @@ flawless sound.
 ./scripts/build.sh                 # -> build/ntvdmhost.exe
 
 # Fast test loop -- no VM and no rig needed. Builds the batteries, then runs them.
-./tools/dostest/run.sh                 # 18 batteries, 736 checks, ~10s, non-zero on failure
+./tools/dostest/run.sh                 # 18 batteries, 839 checks, ~10s, non-zero on failure
 ```
 
 - The build is **no-CRT on purpose**: the toolchain is UCRT-default and UCRT is absent on
