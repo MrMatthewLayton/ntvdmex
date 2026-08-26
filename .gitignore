@@ -49,3 +49,7 @@ __pycache__/
 # Guest binaries extracted from the vendored MS-DOS images (see
 # tools/dostest/extract-dos-file.py) -- Microsoft's, not ours to redistribute unpacked.
 guest/
+
+# Third-party reference screenshots (MobyGames) used to eyeball our rendering.
+# Not ours to redistribute -- the repo is public.
+/doom-screenshots/
