@@ -3301,9 +3301,10 @@ static int wow_load_one(const char *path)
      krnl386 alone is not enough any more: it imports from nothing, so it exercises
      none of the import machinery. user.exe and gdi.exe both import from KERNEL by
      ordinal (and user once BY NAME), which is the path every real program takes.
-   ⚠ Segments get HOST memory here and nothing else. Real execution needs LDT
-     selectors from the DPMI layer and an entry into 16-bit protected mode -- krnl386
-     is the 386 ENHANCED-mode kernel and does not run in V86. */
+   ⚠ Segments get HOST memory here and nothing else -- which is NOT where execution
+     will want them. See wow_probe_selectors() for the correction: krnl386's init entry
+     runs in V86, so a real load puts its segments in CONVENTIONAL memory and relocates
+     against real-mode paragraphs. */
 static void wow_probe_load(const char *cmd)
 {
     /* The whole graph, in dependency order. Everything imports from KERNEL, USER
@@ -6278,10 +6279,32 @@ static void wow_probe_ldt_matrix(const char *tag)
 }
 
 /* ── WOW STAGE 2: give the loaded module REAL SELECTORS. (GH #128) ──────────────────
-     The load stage put each segment in host memory and fixed it up. To execute any of
-     it, every segment needs an LDT descriptor, because krnl386 is the 386 ENHANCED-mode
-     kernel: it runs in 16-bit PROTECTED mode, not V86. That is why this lives here,
-     after the DPMI LDT pool exists and the VDM is registered.
+     The load stage put each segment in host memory and fixed it up. This gives every
+     segment an LDT descriptor, which is why it lives here, after the DPMI LDT pool
+     exists and the VDM is registered.
+
+   ⚠⚠ THIS IS NOT THE ENTRY PATH, AND THE COMMENT THAT USED TO SIT HERE SAID IT WAS.
+     It claimed "krnl386 is the 386 ENHANCED-mode kernel: it runs in 16-bit PROTECTED
+     mode, not V86". That is a plausible inference from what krnl386 IS, it survived
+     four sessions in these comments, and krnl386's own instructions refute it:
+
+       c045  mov ax,es / shl ax,4      ES is a real-mode PARAGRAPH. Shifting a selector
+                                       by 4 is meaningless; this computes the right
+                                       answer against two independent oracle dumps.
+       c03b  mov word [cs:0x30], ds    A store through CS. Never legal in protected
+                                       mode -- a code selector is not writable.
+       c0c2  call <2F/1687 check>      It finds the DPMI host and SWITCHES ITSELF, with
+                                       AX=0 (16-bit client), then checks cs&7==7, then
+                                       INT 31h 000A for a data alias of CS -- and redoes
+                                       the SAME cs:0x30 store through that alias.
+
+     The identical store, once per mode, is the binary telling you where the boundary
+     is. krnl386 is entered in V86 and becomes a 16-bit DPMI client; that is why
+     INT 31h 0002 (paragraph -> selector) is the function it calls most, twelve times.
+     So real execution needs the segments in CONVENTIONAL memory with paragraph
+     relocations. What is below still earns its keep -- it proved LDT installation
+     works on a WOW launch, proved relocation against real descriptors, and caught the
+     force-typed-index bug -- but it belongs AFTER the switch, not before it.
 
    ⚠ THE QUESTION THIS ANSWERS, AND IT IS NOT RHETORICAL: XP's LDT validator caps
      base + limit at MmHighestUserAddress (~2GB) -- a true 4GB flat selector is refused

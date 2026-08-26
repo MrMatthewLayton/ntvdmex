@@ -482,21 +482,98 @@ CODE reads back as DATA and zero DATA as CODE**.
 descriptor installed.** It has now paid for itself. Every "instrument" in this project
 that merely re-reports what we wrote has eventually lied; this one asks the hardware.
 
+---
+
+## Part 8 — ⚠ THE ENTRY PLAN WAS BACKWARDS: krnl386 starts in V86, not protected mode
+
+Part 7 ended with "next: enter krnl386 in 16-bit PM as a DPMI client". Before writing that
+code I read the entry path properly. **It is wrong**, and writing it would have produced a
+`#GP` on the third instruction with no obvious cause.
+
+### The proof, from three independent places in krnl386's own code
+
+**1. It does segment arithmetic on `ES`.** At `c045`, ten instructions in:
+
+```
+mov ax,es / shl ax,4 / add ax,0x86 / sub ax,0x400
+```
+
+`ES << 4` is only meaningful if ES is a **real-mode paragraph**. In protected mode it is a
+selector and that shift is nonsense. And it is not nonsense — it computes exactly the
+right answer against *both* oracle dumps (MS-DOS: `0x116<<4 + 0x86 - 0x400 = 0xDE6`, and
+`0040:0DE6` → linear `0x11E6` = `ES:0x86` ✓; stock ntvdm: `0x0A7<<4` → `0040:06F6` →
+`0xAF6` = `ES:0x86` ✓).
+
+**2. It stores through `CS`.** At `c03b`: `mov word [cs:0x30], ds`. A code selector is
+never writable on x86 — that store `#GP`s in protected mode. In V86 it is ordinary.
+
+**3. It switches modes itself, and then redoes that store the legal way.** At `c0c2` —
+before anything else of substance — it calls the `INT 2Fh 1687` DPMI installation check,
+then:
+
+```
+pop ax / add ax,0x10 / mov es,ax     ; ES = real-mode paragraph of the DPMI private area
+xor ax,ax                            ; AX=0 -> 16-BIT client
+call far [0x1726]                    ; the mode-switch entry 2F/1687 handed back
+jc  <fail>
+mov ax,cs / and al,7 / cmp al,7      ; ...did we land on an LDT selector at RPL 3?
+mov bx,cs / mov ax,0x000A / int 31h  ; create a DATA ALIAS of CS
+mov [0x598],ax
+mov ds,ax
+mov [0x30],bx                        ; <-- THE SAME STORE AS c03b, offset 0x30, redone
+```
+
+**The same store to offset `0x30`, once per mode.** In V86 through `cs:`; in protected
+mode through a DPMI alias, because by then it cannot write through `CS`. That is not
+inference — it is the binary doing the identical thing twice and telling you why.
+
+### The corrected model
+
+```
+1. entered in V86 at seg1:0xC02B, AX = 0x4B4F ('OK')
+2. reads DOS SysVars (INT 21h AH=52h) and the +0x6A table
+3. INT 2Fh 1687  -> our DPMI host's mode-switch entry
+4. far-calls it with AX=0  -> 16-bit protected mode
+5. checks cs & 7 == 7      -> confirms an LDT selector at RPL 3
+6. INT 31h 000A            -> data alias of CS
+7. INT 31h 0002 x12        -> turns the paragraphs it already knows into selectors
+```
+
+★ **This is why `0002` is the function it calls most** — twelve sites — and it is the one
+that was missing until Part 5. Every step above is machinery NTVDMEX already has and has
+proven on real silicon: V86 execution, INT 21h, `2F/1687`, the mode switch, `000A`, `0002`.
+krnl386 is not a new subsystem. It is a new client of working ones.
+
+### What this costs, and what it does not
+
+The selector stage in Part 7 is **not** the entry path: it gave NE segments LDT
+descriptors, and the entry needs them in **V86 memory with real-mode paragraph values**.
+Relocation itself needs no change — `ne_apply_relocs` writes whatever segment value it is
+given, and a paragraph is just a different number.
+
+Not wasted, either: that stage proved LDT installation works on a WOW launch, proved
+relocation against real selectors, and found the force-typed-index bug. But the plan it
+was heading toward was aimed at step 4 of the list above, skipping steps 1-3 — entering
+directly in protected mode, at an address whose first actions assume real mode.
+
+⚠ **The lesson is the one this project keeps relearning.** "krnl386 is the 386
+enhanced-mode kernel, therefore it runs in protected mode" is a plausible inference from
+what the thing *is*. It survived four parts of this session in the comments and the
+docs. What killed it was reading the instructions.
+
 ## Next actions
 
-1. **Enter krnl386.** Everything it needs is now either in place or measured: a code
-   selector that is genuinely code, `AX=0x4B4F`, `DS`=autodata, a supplied stack (it is a
-   LIBRARY, `SS:SP = 0:0`), 16-bit PM as a DPMI client.
-2. **Plant a SysVars+0x6A table.** The shape is known — eleven far pointers into the
-   SysVars segment. What the six krnl386 reads *mean* is still open; the offsets
-   (`0x0325`, `0x0326`, `0x0328`, `0x0332`, `0x0338`, `0x0047`) cluster tightly, which
-   suggests DOS internal flags. Identify them before inventing values.
-3. **`INT 31h 04F3`** — the last NTVDM contract. Kernel-RE, not a guess.
-4. Independent of WOW: **#131 console/stdio**.
+1. **Load krnl386 into V86 conventional memory** and relocate against **real-mode
+   paragraphs**, not selectors. ~83 KB across four segments; conventional memory has room.
+2. **Enter at seg1:0xC02B in V86** with `AX=0x4B4F`, `DS` = the autodata paragraph and a
+   supplied stack — the same path every DOS guest already takes.
+3. **Plant a SysVars+0x6A table.** Shape measured off stock ntvdm (eleven far pointers,
+   `+0x20` provably the first SFT); what six of them *mean* is still open. Identify before
+   inventing — but note krnl386 may survive garbage here long enough to reach step 4.
+4. Then it switches itself, and the DPMI host takes over. `INT 31h 04F3` is the last
+   unknown on that side.
 
-**Not blockers, established by reading the call sites** — INT 2Fh `1600`/`1684`/`1689`/
-`168A`, and the "MS-DOS" vendor API krnl386 asks for and tolerates being refused.
+**Not blockers** — INT 2Fh `1600`/`1684`/`1689`/`168A`, and the "MS-DOS" vendor API.
 
-**Rig left with:** IFEO `Debugger` **set** (pointing at `C:\ntvdmex\ntvdmhost.exe`) and
-`wowtry.flag` **present**; the WOW module set staged in `guest/ne/` on the build machine.
-Clear both to return the box to stock.
+**Rig left with:** IFEO `Debugger` **set** and `wowtry.flag` **present**; the full WOW
+module set staged in `guest/ne/` on the build machine. Clear both to return to stock.

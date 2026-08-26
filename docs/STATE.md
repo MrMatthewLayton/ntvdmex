@@ -84,10 +84,16 @@ flawless sound.
    ⚠️ **LDT indices below `DPMI_LDT_RESERVED` are force-typed to data by
    `dpmi_install()`** — WOW's first allocation is a CODE segment and silently became
    data until the `LAR` readback caught it.
-   **Next: enter krnl386** (code selector, `AX=0x4B4F`, `DS`=autodata, supplied stack),
-   and plant a **SysVars+0x6A** table — stock ntvdm's shape is measured (eleven far
-   pointers; `+0x20` is provably the first SFT), but what six of them *mean* is open.
-   Remaining unknown: **`INT 31h 04F3`**.
+   ⚠️ **krnl386's init entry runs in V86, NOT protected mode.** Proven three ways from
+   its own code: it does `mov ax,es / shl ax,4` (a selector shifted by 4 is nonsense), it
+   stores through `cs:` (never legal in PM), and at `c0c2` it calls `INT 2Fh 1687` and
+   **switches itself** — then redoes that same `cs:0x30` store through a DPMI `000A`
+   alias. It is a V86 program that becomes a 16-bit DPMI client, which is why `0002`
+   (paragraph → selector) is the function it calls most.
+   **Next: load krnl386 into V86 conventional memory, relocate against real-mode
+   PARAGRAPHS, and enter at seg1:0xC02B with `AX=0x4B4F`** — the same path DOS guests
+   take. The LDT selector stage is for after it switches, not before.
+   Remaining unknowns: what six **SysVars+0x6A** pointers mean, and **`INT 31h 04F3`**.
 
 2. **[#131] Console/stdio integration.** Independent of WOW and needed regardless:
    anything script-driven behaves differently under NTVDMEX than under stock.
