@@ -133,7 +133,12 @@ def dump(path, summary=False):
     mods = ne.modules()
     if summary:
         nrel = sum(len(ne.relocs(s)) for s in segs)
-        print(f"{path:28} os={TARGET_OS.get(ne.target_os, ne.target_os):8} "
+        # LIBRARY vs PROGRAM is the single most load-bearing bit in the header for a
+        # loader: a LIBRARY has no stack of its own (SS:SP = 0:0) and its CS:IP is an
+        # INITIALISATION entry called with the DLL register convention -- you do not
+        # "run" it. krnl386/user/gdi are all libraries; wowexec is the program.
+        kind = "LIBRARY" if ne.prog_flags & 0x8000 else "PROGRAM"
+        print(f"{path:28} {kind} os={TARGET_OS.get(ne.target_os, ne.target_os):8} "
               f"segs={ne.n_seg:3} movable={ne.n_movable:3} relocs={nrel:5} "
               f"imports={len(mods):2} {flags(ne.prog_flags, PROG_FLAGS)}")
         return
