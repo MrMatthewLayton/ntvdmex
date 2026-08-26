@@ -6182,6 +6182,56 @@ static WORD dpmi_hdlr_code_sel(void)
     return g_dpmi_hdlr_sel;
 }
 
+/* ── DPMI 0002: SEGMENT TO DESCRIPTOR. ──────────────────────────────────────────────
+     Hand back a selector whose base is a real-mode paragraph address and whose limit
+     is 64K-1. Trivially small, and it was missing -- which mattered less than it
+     sounds until krnl386 was disassembled: it is the DPMI function krnl386 calls MOST
+     (12 sites, against 2 for 0006 and 2 for 000A), because that is how the 16-bit
+     Windows kernel reaches the BIOS data area, the DOS list-of-lists, and everything
+     else it knows only as a paragraph.
+
+   ⚠ THE SAME SEGMENT MUST GIVE THE SAME SELECTOR. The descriptor belongs to the HOST,
+     not the client -- the client is told never to modify or free it -- so handing out
+     a fresh LDT entry per call would leak a descriptor per call and let a client
+     modify a mapping another part of it is still using. Hence the cache.
+     If a client frees one anyway (0001), the cache entry is dropped there, so the
+     next 0002 builds a fresh one rather than returning a selector that is no longer
+     present. That is the failure this avoids: a stale mapping faults far from here. */
+#define DPMI_S2D_MAX 64
+static WORD g_s2d_seg[DPMI_S2D_MAX], g_s2d_sel[DPMI_S2D_MAX];
+static int  g_s2d_n = 0;
+
+static WORD dpmi_seg_to_desc(WORD seg)
+{
+    int i, idx;
+    for (i = 0; i < g_s2d_n; ++i) if (g_s2d_seg[i] == seg) return g_s2d_sel[i];
+    if (g_ldt_next >= DPMI_LDT_MAX) return 0;
+    idx = g_ldt_next++;
+    g_ldt[idx].base   = (DWORD)seg << 4;
+    g_ldt[idx].limit  = 0xFFFF;
+    g_ldt[idx].access = 0xF2;                /* present, DPL3, data, read/write */
+    g_ldt[idx].flags  = 0;                   /* 16-bit                          */
+    dpmi_install(idx);
+    if (g_s2d_n < DPMI_S2D_MAX) {
+        g_s2d_seg[g_s2d_n] = seg;
+        g_s2d_sel[g_s2d_n] = (WORD)((idx << 3) | 7);
+        ++g_s2d_n;
+    }
+    return (WORD)((idx << 3) | 7);
+}
+
+static void dpmi_s2d_forget(WORD sel)
+{
+    int i;
+    for (i = 0; i < g_s2d_n; ++i)
+        if (g_s2d_sel[i] == sel) {
+            g_s2d_seg[i] = g_s2d_seg[g_s2d_n - 1];
+            g_s2d_sel[i] = g_s2d_sel[g_s2d_n - 1];
+            --g_s2d_n;
+            return;
+        }
+}
+
 /* ── CAN THIS PROCESS INSTALL AN LDT DESCRIPTOR AT ALL, RIGHT HERE? ─────────────────
      Every descriptor the WOW stage tried was refused with STATUS_INVALID_PARAMETER_1
      (0xC00000EF), and varying index / access / limit / base changed nothing -- so the
@@ -7629,6 +7679,8 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                                     g_ldt[idx].access = 0;          /* not present */
                                     g_ldt[idx].flags = 0;
                                     dpmi_install(idx);
+                                    /* If this was a 0002 mapping, stop claiming it. */
+                                    dpmi_s2d_forget(fsel);
                                     g_ldt_free[g_ldt_nfree++] = (WORD)idx;
                                     p = zput(p, " -> freed sel 0x"); p = zhex(p, fsel);
                                     p = zput(p, " ("); p = zhex(p, (DWORD)g_ldt_nfree);
@@ -7902,6 +7954,20 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                              add sp,8
                            i.e. the extender manages segment widths itself -- which is the same
                            conclusion dpmi_switch_to_pm() reaches from the other direction. */
+                        case 0x0002: {                             /* segment (BX) -> descriptor */
+                            WORD rseg = (WORD)(VDM_REG(tib, VTIB_EBX) & 0xFFFF);
+                            WORD s2d  = dpmi_seg_to_desc(rseg);
+                            if (!s2d) {
+                                VDM_REG(tib, VTIB_EFLAGS) |= 1u;
+                                VDM_SET16(tib, VTIB_EAX, 0x8011);  /* descriptor unavailable */
+                                p = zput(p, " -> seg2desc ENOMEM");
+                                break;
+                            }
+                            VDM_SET16(tib, VTIB_EAX, s2d);
+                            VDM_REG(tib, VTIB_EFLAGS) &= ~1u;
+                            p = zput(p, " -> seg 0x");  p = zhex(p, rseg);
+                            p = zput(p, " = sel 0x");   p = zhex(p, s2d);
+                            break; }
                         case 0x0003:                               /* get selector increment value */
                             /* The amount to add to a selector to reach the next one in a block
                                allocated by 0000. Our selectors are LDT entries, so 8. */
