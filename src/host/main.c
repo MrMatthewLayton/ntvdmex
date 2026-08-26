@@ -3089,6 +3089,98 @@ static void msep(HMENU m) { AppendMenuA(m, MF_SEPARATOR, 0, NULL); }
 static void msub(HMENU p, const char *s, HMENU c) { AppendMenuA(p, MF_POPUP, (UINT_PTR)c, s); }
 static HMENU mpop(void) { return CreatePopupMenu(); }
 
+/* ── WIN16 / WOW PASSTHROUGH (GH #129). ─────────────────────────────────────────
+     See the call site at the top of WinMain for the measured launch shapes. Two
+     helpers: one decides, one hands off. They live away from the DOS machinery
+     because they run before ANY of it is initialised. */
+#define NTVDM_STOCK_COPY "C:\\ntvdmex\\ntvdm_stock.exe"
+
+/* Step over argv[0] (which Windows may have quoted) and return the rest. Under an
+   IFEO Debugger hook argv[0] is OUR exe, and what follows is the ORIGINAL command
+   line, starting with the quoted path of the program really being launched. */
+static const char *cmdline_after_argv0(const char *a)
+{
+    if (*a == '"') { ++a; while (*a && *a != '"') ++a; if (*a) ++a; }
+    else           { while (*a && *a != ' ') ++a; }
+    while (*a == ' ') ++a;
+    return a;
+}
+
+/* Is `-w` present as a WHOLE TOKEN? Substring matching would be wrong: a DOS
+   program's own path can contain "-w" (…\my-widget\game.exe) and would then be
+   handed silently to stock ntvdm -- a worse failure than the one this guard exists
+   to prevent, because the program WOULD run and we would never hear about it. */
+static int launch_is_wow(const char *cmd)
+{
+    const char *a = cmdline_after_argv0(cmd);
+    while (*a) {
+        if ((a[0] == '-' || a[0] == '/') && a[1] == 'w' && (a[2] == 0 || a[2] == ' '))
+            return 1;
+        if (*a == '"') { ++a; while (*a && *a != '"') ++a; if (*a) ++a; }
+        else           { while (*a && *a != ' ') ++a; }
+        while (*a == ' ') ++a;
+    }
+    return 0;
+}
+
+/* Launch the real ntvdm with the command line Windows intended, and wait for it so
+   the shell's process bookkeeping stays honest.
+   ⚠⚠ WHY A RENAMED COPY AND NOT `System32\ntvdm.exe` DIRECTLY: the IFEO Debugger
+      value is keyed on the image NAME and is evaluated by CreateProcess. Spawning
+      `ntvdm.exe` from here would hook US again, immediately and forever -- a fork
+      bomb on every Win16 launch. Running a copy under a DIFFERENT name is what
+      breaks the cycle; making that copy is the installer's job (#130). */
+static int wow_passthrough(const char *cmd)
+{
+    char line[2048];
+    STARTUPINFOA si;
+    PROCESS_INFORMATION pi;
+    DWORD rc = 0;
+    int i;
+
+    for (i = 0; i < (int)sizeof si; ++i) ((BYTE *)&si)[i] = 0;
+    for (i = 0; i < (int)sizeof pi; ++i) ((BYTE *)&pi)[i] = 0;
+    si.cb = sizeof si;
+    zput(line, cmdline_after_argv0(cmd));   /* verbatim: ntvdm parses its own -i/-a */
+
+    if (GetFileAttributesA(NTVDM_STOCK_COPY) == INVALID_FILE_ATTRIBUTES) {
+        /* Fail LOUDLY. A 16-bit program that silently does nothing is exactly the
+           "runs but reports success" class this project bans everywhere else. */
+        char m[320], *q = m;
+        q = zput(q, "STAGE0: WOW passthrough IMPOSSIBLE -- " NTVDM_STOCK_COPY
+                    " missing; Win16 cannot run. See GH #130 (installer).\r\n");
+        log_append(LOG_PATH, m, q);
+        MessageBoxA(NULL,
+            "NTVDMEX cannot start this 16-bit Windows program.\n\n"
+            "Win16 support is not implemented yet, so those launches are handed back "
+            "to the original ntvdm -- but the copy that needs (" NTVDM_STOCK_COPY ") "
+            "is missing.\n\n"
+            "Reinstall NTVDMEX, or delete its Image File Execution Options "
+            "\"Debugger\" value to restore stock behaviour.",
+            "NTVDMEX", MB_OK | MB_ICONERROR);
+        return 1;
+    }
+    if (!CreateProcessA(NTVDM_STOCK_COPY, line, NULL, NULL, TRUE, 0, NULL, NULL, &si, &pi)) {
+        char m[160], *q = m;
+        q = zput(q, "STAGE0: WOW passthrough CreateProcess failed err=0x");
+        q = zhex(q, GetLastError()); q = zput(q, "\r\n");
+        log_append(LOG_PATH, m, q);
+        return 1;
+    }
+    {   char m[200], *q = m;
+        q = zput(q, "STAGE0: WOW passthrough spawned pid=0x"); q = zhex(q, pi.dwProcessId);
+        q = zput(q, " image=" NTVDM_STOCK_COPY "\r\n");
+        log_append(LOG_PATH, m, q); }
+    WaitForSingleObject(pi.hProcess, INFINITE);
+    GetExitCodeProcess(pi.hProcess, &rc);
+    {   char m[160], *q = m;
+        q = zput(q, "STAGE0: WOW passthrough child exited rc=0x"); q = zhex(q, rc);
+        q = zput(q, "\r\n"); log_append(LOG_PATH, m, q); }
+    CloseHandle(pi.hThread);
+    CloseHandle(pi.hProcess);
+    return (int)rc;
+}
+
 /* ── THE MENU BAR AFTER THE SETTINGS MOVE. ───────────────────────────────────────
      CPU, Display, Audio, Input and Drive are GONE from the bar. Everything they held
      that was configuration now lives on a tab of the Settings dialog, which is one
@@ -8838,6 +8930,26 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     log_write(LOG_PATH, report, p);
     serial_init();                                      /* DPMI harness: COM1 log sink */
     serial_out(report, p);
+
+    /* ── IS THIS A WIN16 (WOW) LAUNCH? IF SO, HAND IT STRAIGHT BACK. (GH #129) ──
+         Windows runs 16-bit WINDOWS programs inside the SAME ntvdm.exe it uses for
+         DOS, so our IFEO Debugger hook catches both -- and we implement only the DOS
+         half. Left unhandled, installing NTVDMEX breaks every Win16 program on the
+         machine. This is the guard that makes "leave it installed" safe.
+       ► MEASURED, not assumed (both captured on the rig, 2026-08-26):
+           DOS : ntvdmhost.exe "…\ntvdm.exe" -f -i20
+           WOW : ntvdmhost.exe "…\ntvdm.exe" -f -i1 -w -a …\krnl386.exe
+         `-w` is the discriminator and `-a <krnl386>` is the WOW bootstrap. A second,
+         independent tell: GetNextVDMCommand returns FALSE err=0x57 on a WOW launch,
+         because a WOW VDM does not receive its program that way.
+       ► NOT a throwaway. When the WOW epic (#128) lands, this same detection becomes
+         the dispatch point -- the `-w` arm routes to our WOW layer instead of stock. */
+    if (launch_is_wow(GetCommandLineA())) {
+        p = zput(p, "STAGE0: WIN16/WOW launch detected -> passthrough to stock ntvdm\r\n");
+        p = zput(p, "STAGE0: cmdline=["); p = zput(p, GetCommandLineA()); p = zput(p, "]\r\n");
+        log_append(LOG_PATH, report, p); serial_out(report, p);
+        return wow_passthrough(GetCommandLineA());
+    }
     /* Headless test mode = the SMB watcher dropped the AUTOEXIT marker. In that mode the
        host must self-exit on guest exit AND bound any infinite run (a visual demo like
        pm32irq/animate never calls INT 21h 4Ch), else rt.bat's `start /wait` blocks forever
@@ -9022,6 +9134,18 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     g_ci.VDMState = VDM_GET_FIRST_COMMAND;
     g_ci.TaskId   = csrss_parse_taskid(GetCommandLineA());
 
+    /* ── WHAT SHAPE OF LAUNCH IS THIS? (GH #129) ────────────────────────────────
+         Windows launches ntvdm.exe for BOTH a DOS program and a 16-bit WINDOWS
+         program -- WOW runs inside the same VDM binary. Our IFEO Debugger hook
+         therefore intercepts both, and we implement only the DOS half, so a Win16
+         launch currently lands in a host that cannot load an NE file at all.
+       ► Before deciding anything from the command line, RECORD IT. The flags that
+         distinguish the two are described in various places and this project has
+         been bitten repeatedly by building on a documented claim instead of a
+         measured one. Log the raw string; diff a DOS launch against a Win16 launch
+         on the rig; write the detector against what the diff actually shows. */
+    p = zput(p, "STAGE0: cmdline=["); p = zput(p, GetCommandLineA()); p = zput(p, "]\r\n");
+
     /* V86 address space, then register as a VDM with the kernel (order matters). */
     v86_setup_memory();
     st = v86_init();
@@ -9036,6 +9160,21 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     if (csrss_get_command(&g_ci, &err)) {
         p = zput(p, "STAGE1: program "); p = zput(p, g_cur);
         p = zput(p, "\\"); p = zput(p, g_title); p = zput(p, "\r\n");
+        /* #129: the OTHER half of the launch shape. CSRSS hands back the app name,
+           the command tail, the PIF and a set of flags -- any of which may be what
+           actually distinguishes a WOW launch from a DOS one. Print them all rather
+           than guessing which one matters; a trace that prints the request but not
+           the answer is half an instrument. */
+        p = zput(p, "STAGE1: vdm app=[");   p = zput(p, g_app);
+        p = zput(p, "] cmd=[");             p = zput(p, g_cmd);
+        p = zput(p, "] pif=[");             p = zput(p, g_pif);
+        p = zput(p, "] title=[");           p = zput(p, g_title);
+        p = zput(p, "]\r\n");
+        p = zput(p, "STAGE1: vdm flags=0x");   p = zhex(p, g_ci.CreationFlags);
+        p = zput(p, " state=0x");              p = zhex(p, g_ci.VDMState);
+        p = zput(p, " taskid=0x");             p = zhex(p, g_ci.TaskId);
+        p = zput(p, " codepage=0x");           p = zhex(p, g_ci.CodePage);
+        p = zput(p, "\r\n");
     } else {
         p = zput(p, "STAGE1: GetNextVDMCommand FALSE err=0x"); p = zhex(p, err); p = zput(p, "\r\n");
     }

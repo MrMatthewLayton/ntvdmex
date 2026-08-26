@@ -19,6 +19,8 @@
  *   rigshot click <x> <y>     synthesise a left click at a screen coordinate
  *   rigshot fg   <caption>    bring a window to the foreground by exact caption
  *   rigshot list              dump every top-level window caption (diagnostic)
+ *   rigshot isne <dir>        classify every .exe in <dir> as NE / PE / LE / MZ
+ *                             -- i.e. FIND THE 16-BIT WINDOWS PROGRAMS (GH #129/#128)
  *
  * ⚠ WHY KEYS AND NOT MESSAGES for switching tabs. TCM_SETCURSEL crosses a process
  *   boundary fine, but it does NOT raise TCN_SELCHANGE, and the notification that
@@ -202,6 +204,58 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show)
     if (seq(verb, "list")) {
         logline("list: visible top-level windows");
         EnumWindows(enum_cb, 0);
+        return 0;
+    }
+
+    /* ── WHICH EXECUTABLES HERE ARE 16-BIT WINDOWS? ──────────────────────────────
+         An .exe's real type is in its header, not its name: `MZ` at 0, then a
+         LONG at 0x3C giving the offset of the second header -- `NE` (16-bit
+         Windows / OS-2), `PE` (Win32), `LE`/`LX` (a DOS extender's linear image),
+         or nothing at all (a plain DOS MZ). Windows dispatches an NE to WOW, i.e.
+         to ntvdm.exe, which is why finding one is the prerequisite for measuring
+         a Win16 launch. */
+    if (seq(verb, "isne")) {
+        WIN32_FIND_DATAA fd;
+        char pat[320], *q; HANDLE h; int n_ne = 0, n_pe = 0, n_other = 0;
+        q = sput(pat, arg1[0] ? arg1 : "C:\\WINDOWS\\system32");
+        q = sput(q, "\\*.exe");
+        { char m[400], *mp = m; mp = sput(mp, "isne: scanning "); sput(mp, pat); logline(m); }
+        h = FindFirstFileA(pat, &fd);
+        if (h == INVALID_HANDLE_VALUE) { logline("isne: nothing found"); return 1; }
+        do {
+            char full[512], *fp = full, line[600], *lp = line;
+            BYTE hdr[4]; LONG lfa = 0; DWORD got = 0; HANDLE f;
+            fp = sput(full, arg1[0] ? arg1 : "C:\\WINDOWS\\system32");
+            fp = sput(fp, "\\"); sput(fp, fd.cFileName);
+            f = CreateFileA(full, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                            NULL, OPEN_EXISTING, 0, NULL);
+            if (f == INVALID_HANDLE_VALUE) continue;
+            ReadFile(f, hdr, 2, &got, NULL);
+            if (got == 2 && hdr[0] == 'M' && hdr[1] == 'Z') {
+                SetFilePointer(f, 0x3C, NULL, FILE_BEGIN);
+                ReadFile(f, &lfa, 4, &got, NULL);
+                if (got == 4 && lfa > 0 && lfa < 0x10000000) {
+                    SetFilePointer(f, lfa, NULL, FILE_BEGIN);
+                    hdr[0] = hdr[1] = 0;
+                    ReadFile(f, hdr, 2, &got, NULL);
+                    if (got == 2 && hdr[0] == 'N' && hdr[1] == 'E') {
+                        /* The one we are hunting. Report it loudly. */
+                        lp = sput(line, "  NE  <-- 16-bit Windows: ");
+                        sput(lp, fd.cFileName);
+                        logline(line);
+                        ++n_ne;
+                    } else if (got == 2 && hdr[0] == 'P' && hdr[1] == 'E') ++n_pe;
+                    else ++n_other;
+                } else ++n_other;      /* plain DOS MZ, no second header */
+            } else ++n_other;
+            CloseHandle(f);
+        } while (FindNextFileA(h, &fd));
+        FindClose(h);
+        { char m[200], *mp = m; char num[16];
+          wsprintfA(num, "%d", n_ne);  mp = sput(m, "isne: NE=");    mp = sput(mp, num);
+          wsprintfA(num, "%d", n_pe);  mp = sput(mp, "  PE=");       mp = sput(mp, num);
+          wsprintfA(num, "%d", n_other); mp = sput(mp, "  other="); sput(mp, num);
+          logline(m); }
         return 0;
     }
 
