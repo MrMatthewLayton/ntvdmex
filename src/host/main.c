@@ -3093,8 +3093,6 @@ static HMENU mpop(void) { return CreatePopupMenu(); }
      See the call site at the top of WinMain for the measured launch shapes. Two
      helpers: one decides, one hands off. They live away from the DOS machinery
      because they run before ANY of it is initialised. */
-#define NTVDM_STOCK_COPY "C:\\ntvdmex\\ntvdm_stock.exe"
-
 /* Step over argv[0] (which Windows may have quoted) and return the rest. Under an
    IFEO Debugger hook argv[0] is OUR exe, and what follows is the ORIGINAL command
    line, starting with the quoted path of the program really being launched. */
@@ -3123,62 +3121,55 @@ static int launch_is_wow(const char *cmd)
     return 0;
 }
 
-/* Launch the real ntvdm with the command line Windows intended, and wait for it so
-   the shell's process bookkeeping stays honest.
-   ⚠⚠ WHY A RENAMED COPY AND NOT `System32\ntvdm.exe` DIRECTLY: the IFEO Debugger
-      value is keyed on the image NAME and is evaluated by CreateProcess. Spawning
-      `ntvdm.exe` from here would hook US again, immediately and forever -- a fork
-      bomb on every Win16 launch. Running a copy under a DIFFERENT name is what
-      breaks the cycle; making that copy is the installer's job (#130). */
-static int wow_passthrough(const char *cmd)
+/* ── WE CANNOT HAND A WIN16 LAUNCH BACK. MEASURED, THREE WAYS. ───────────────────
+     This function used to try. It does not any more, because relaunching stock
+     ntvdm is not merely unimplemented -- it is impossible through this mechanism,
+     and leaving hopeful code here would be the "does nothing, reports success"
+     shape the rest of this project bans. What was eliminated, on the rig
+     (2026-08-26, GH #129):
+
+     1. SPAWN `System32\ntvdm.exe` DIRECTLY -- cannot: the IFEO Debugger value is
+        keyed on the image NAME and is evaluated inside CreateProcess, so this
+        re-enters US immediately. A fork bomb on every Win16 launch.
+
+     2. SPAWN A RENAMED COPY -- tried; child exits rc=0xFF at once and the program
+        never appears. Not a STARTUPINFO problem: passing our real one through
+        (console handles, window station, desktop) gave the identical result.
+
+     3. ⇒ THE ROOT CAUSE. A renamed ntvdm CANNOT BE A VDM AT ALL. Pointing
+        `Control\WOW\wowcmdline` straight at a byte-identical copy under a different
+        name -- no IFEO involved, Windows launching it itself -- makes Windows
+        refuse the Win16 program outright:
+            "C:\WINDOWS\system32\sysedit.exe is not a valid Win32 application."
+        So Windows validates the VDM image's identity, and rc=0xFF in (2) was that
+        same rejection seen from the other side.
+
+     Both exits are therefore closed: the real name re-hooks us, and any other name
+     is not accepted as a VDM.
+
+   ► ONE CANDIDATE REMAINS, UNTESTED: delete the IFEO value, spawn the real
+     ntvdm.exe, restore the value. It is a race -- a DOS launch landing in that
+     window would silently get stock -- which is why it has not been done casually.
+   ► THE REAL ANSWER IS #128: implement WOW, and this becomes the dispatch point
+     rather than a dead end. The detection above is what that will hang off. */
+static int wow_refuse(const char *cmd)
 {
-    char line[2048];
-    STARTUPINFOA si;
-    PROCESS_INFORMATION pi;
-    DWORD rc = 0;
-    int i;
-
-    for (i = 0; i < (int)sizeof si; ++i) ((BYTE *)&si)[i] = 0;
-    for (i = 0; i < (int)sizeof pi; ++i) ((BYTE *)&pi)[i] = 0;
-    si.cb = sizeof si;
-    zput(line, cmdline_after_argv0(cmd));   /* verbatim: ntvdm parses its own -i/-a */
-
-    if (GetFileAttributesA(NTVDM_STOCK_COPY) == INVALID_FILE_ATTRIBUTES) {
-        /* Fail LOUDLY. A 16-bit program that silently does nothing is exactly the
-           "runs but reports success" class this project bans everywhere else. */
-        char m[320], *q = m;
-        q = zput(q, "STAGE0: WOW passthrough IMPOSSIBLE -- " NTVDM_STOCK_COPY
-                    " missing; Win16 cannot run. See GH #130 (installer).\r\n");
-        log_append(LOG_PATH, m, q);
-        MessageBoxA(NULL,
-            "NTVDMEX cannot start this 16-bit Windows program.\n\n"
-            "Win16 support is not implemented yet, so those launches are handed back "
-            "to the original ntvdm -- but the copy that needs (" NTVDM_STOCK_COPY ") "
-            "is missing.\n\n"
-            "Reinstall NTVDMEX, or delete its Image File Execution Options "
-            "\"Debugger\" value to restore stock behaviour.",
-            "NTVDMEX", MB_OK | MB_ICONERROR);
-        return 1;
-    }
-    if (!CreateProcessA(NTVDM_STOCK_COPY, line, NULL, NULL, TRUE, 0, NULL, NULL, &si, &pi)) {
-        char m[160], *q = m;
-        q = zput(q, "STAGE0: WOW passthrough CreateProcess failed err=0x");
-        q = zhex(q, GetLastError()); q = zput(q, "\r\n");
-        log_append(LOG_PATH, m, q);
-        return 1;
-    }
-    {   char m[200], *q = m;
-        q = zput(q, "STAGE0: WOW passthrough spawned pid=0x"); q = zhex(q, pi.dwProcessId);
-        q = zput(q, " image=" NTVDM_STOCK_COPY "\r\n");
-        log_append(LOG_PATH, m, q); }
-    WaitForSingleObject(pi.hProcess, INFINITE);
-    GetExitCodeProcess(pi.hProcess, &rc);
-    {   char m[160], *q = m;
-        q = zput(q, "STAGE0: WOW passthrough child exited rc=0x"); q = zhex(q, rc);
-        q = zput(q, "\r\n"); log_append(LOG_PATH, m, q); }
-    CloseHandle(pi.hThread);
-    CloseHandle(pi.hProcess);
-    return (int)rc;
+    char m[256], *q = m;
+    (void)cmd;
+    q = zput(q, "STAGE0: WIN16/WOW -- NOT SUPPORTED and cannot be handed back "
+                "(see GH #129). Refusing loudly.\r\n");
+    log_append(LOG_PATH, m, q);
+    MessageBoxA(NULL,
+        "NTVDMEX cannot run 16-bit Windows programs.\n\n"
+        "It replaces the DOS half of NTVDM only. Because Windows starts 16-bit "
+        "Windows programs through the same ntvdm.exe, this launch reached NTVDMEX "
+        "as well -- and it cannot be passed back to the original.\n\n"
+        "To run this program, remove NTVDMEX's interception:\n\n"
+        "    reg delete \"HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion"
+        "\\Image File Execution Options\\ntvdm.exe\" /v Debugger /f\n\n"
+        "DOS programs will then use the original NTVDM too.",
+        "NTVDMEX - 16-bit Windows not supported", MB_OK | MB_ICONERROR);
+    return 1;
 }
 
 /* ── THE MENU BAR AFTER THE SETTINGS MOVE. ───────────────────────────────────────
@@ -8942,13 +8933,16 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
          `-w` is the discriminator and `-a <krnl386>` is the WOW bootstrap. A second,
          independent tell: GetNextVDMCommand returns FALSE err=0x57 on a WOW launch,
          because a WOW VDM does not receive its program that way.
+       ► WE CANNOT HAND IT BACK. Three routes measured and eliminated -- see
+         wow_refuse() below. So this refuses loudly instead, which is at least an
+         accurate, actionable failure rather than a DOS host chewing on an NE file.
        ► NOT a throwaway. When the WOW epic (#128) lands, this same detection becomes
-         the dispatch point -- the `-w` arm routes to our WOW layer instead of stock. */
+         the dispatch point -- the `-w` arm routes to our WOW layer. */
     if (launch_is_wow(GetCommandLineA())) {
-        p = zput(p, "STAGE0: WIN16/WOW launch detected -> passthrough to stock ntvdm\r\n");
+        p = zput(p, "STAGE0: WIN16/WOW launch detected -> refusing (see GH #129)\r\n");
         p = zput(p, "STAGE0: cmdline=["); p = zput(p, GetCommandLineA()); p = zput(p, "]\r\n");
         log_append(LOG_PATH, report, p); serial_out(report, p);
-        return wow_passthrough(GetCommandLineA());
+        return wow_refuse(GetCommandLineA());
     }
     /* Headless test mode = the SMB watcher dropped the AUTOEXIT marker. In that mode the
        host must self-exit on guest exit AND bound any infinite run (a visual demo like
