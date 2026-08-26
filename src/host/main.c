@@ -3157,6 +3157,13 @@ static int launch_is_wow(const char *cmd)
      window would silently get stock -- which is why it has not been done casually.
    ► THE REAL ANSWER IS #128: implement WOW, and this becomes the dispatch point
      rather than a dead end. The detection above is what that will hang off. */
+/* The loaded module, at file scope: selector allocation happens in a LATER stage of
+   WinMain -- dpmi_install and the LDT pool are defined further down, and entering
+   protected mode needs the VDM registered first -- so the result of the load has to
+   outlive this call. */
+static ne_module g_wow_ne;
+static int       g_wow_loaded = 0;
+
 /* Pull the `-a <path>` argument out of a WOW command line. Measured shape:
      "…\ntvdm.exe" -f -i1 -w -a C:\WINDOWS\system32\krnl386.exe
    That path is the module WOW is asked to bootstrap, so it is the loader's input. */
@@ -3271,17 +3278,14 @@ static void wow_probe_load(const char *cmd)
         q = zhex(q, r == 0 ? ne.sites : (DWORD)ne.err);
         q = zput(q, "\r\n"); log_append(LOG_PATH, m, q);
     }
-    q = m; q = zput(q, "WOWTRY: probe complete -- module is loaded and relocated in "
-                       "host memory. Execution is the NEXT step (needs LDT selectors "
-                       "+ 16-bit PM entry).\r\n");
+    g_wow_ne = ne; g_wow_loaded = 1;
+    q = m; q = zput(q, "WOWTRY: loaded + relocated in host memory; selector stage next\r\n");
     log_append(LOG_PATH, m, q);
 }
 
 static int wow_refuse(const char *cmd)
 {
     char m[256], *q = m;
-    if (GetFileAttributesA(WOWTRY_FLAG) != INVALID_FILE_ATTRIBUTES)
-        wow_probe_load(cmd);
     q = zput(q, "STAGE0: WIN16/WOW -- NOT SUPPORTED and cannot be handed back "
                 "(see GH #129). Refusing loudly.\r\n");
     log_append(LOG_PATH, m, q);
@@ -6134,6 +6138,123 @@ static WORD dpmi_hdlr_code_sel(void)
     dpmi_install(idx);
     g_dpmi_hdlr_sel = (WORD)((idx << 3) | 7);
     return g_dpmi_hdlr_sel;
+}
+
+/* ── CAN THIS PROCESS INSTALL AN LDT DESCRIPTOR AT ALL, RIGHT HERE? ─────────────────
+     Every descriptor the WOW stage tried was refused with STATUS_INVALID_PARAMETER_1
+     (0xC00000EF), and varying index / access / limit / base changed nothing -- so the
+     objection is not to the descriptor, it is to the CALL CONTEXT. The DPMI path
+     installs descriptors happily, but it does so much later, with the VDM fully
+     established and a guest running.
+
+     So run the IDENTICAL matrix from the IDENTICAL point in WinMain on a DOS launch
+     and compare. Same code, same moment, one variable: which kind of launch this is.
+     That is the only way to tell "NtSetLdtEntries needs more VDM setup" apart from
+     "a WOW launch leaves the process in a different state". */
+static void wow_probe_ldt_matrix(const char *tag)
+{
+    static const struct { const char *what; DWORD base, limit; BYTE acc, fl; int idx; }
+    T[] = {
+        { "idx3  code small",  0x10000, 0x0FFF, 0xFA, 0, 3  },
+        { "idx8  code small",  0x10000, 0x0FFF, 0xFA, 0, 8  },
+        { "idx8  data small",  0x10000, 0x0FFF, 0xF2, 0, 8  },
+        { "idx9  data 64K",    0x10000, 0xFFFF, 0xF2, 0, 9  },
+    };
+    char m[300], *q;
+    size_t t;
+    for (t = 0; t < sizeof T / sizeof T[0]; ++t) {
+        DWORD lo, hi; LONG st;
+        WORD sel = (WORD)((T[t].idx << 3) | 7);
+        dpmi_build_desc(T[t].base, T[t].limit, T[t].acc, T[t].fl, &lo, &hi);
+        st = v86_set_ldt_entries(sel, lo, hi, sel, lo, hi);
+        q = m;
+        q = zput(q, "LDTPROBE["); q = zput(q, tag);
+        q = zput(q, "] ");       q = zput(q, T[t].what);
+        q = zput(q, " sel=0x");  q = zhex(q, sel);
+        q = zput(q, " -> st=0x");q = zhex(q, (DWORD)st);
+        q = zput(q, "\r\n"); log_append(LOG_PATH, m, q);
+    }
+}
+
+/* ── WOW STAGE 2: give the loaded module REAL SELECTORS. (GH #128) ──────────────────
+     The load stage put each segment in host memory and fixed it up. To execute any of
+     it, every segment needs an LDT descriptor, because krnl386 is the 386 ENHANCED-mode
+     kernel: it runs in 16-bit PROTECTED mode, not V86. That is why this lives here,
+     after the DPMI LDT pool exists and the VDM is registered.
+
+   ⚠ THE QUESTION THIS ANSWERS, AND IT IS NOT RHETORICAL: XP's LDT validator caps
+     base + limit at MmHighestUserAddress (~2GB) -- a true 4GB flat selector is refused
+     outright (Kernel RE session 7, and it is why Doom's DOS/4GW selector has to be
+     clamped). Our segments come from VirtualAlloc, which normally lands well under 2GB,
+     so these SHOULD install. "Should" is not "does", and v86_set_ldt_entries returns an
+     NTSTATUS, so ask it rather than assume. A descriptor that silently fails to install
+     leaves a selector that faults on first use -- a silent death, far from the cause. */
+static void wow_probe_selectors(void)
+{
+    char m[400], *q;
+    int i;
+    if (!g_wow_loaded) return;
+    q = m; q = zput(q, "WOWTRY: selector stage\r\n"); log_append(LOG_PATH, m, q);
+    wow_probe_ldt_matrix("wow");
+
+
+    for (i = 0; i < (int)g_wow_ne.n_seg; ++i) {
+        ne_seg *sg = &g_wow_ne.seg[i];
+        int is_code = !(sg->flags & NE_SEG_DATA);
+        uint32_t need = ne_seg_alloc_size(sg);
+        int idx;
+        if (g_ldt_next >= DPMI_LDT_MAX) {
+            q = m; q = zput(q, "  LDT POOL EXHAUSTED\r\n"); log_append(LOG_PATH, m, q);
+            return;
+        }
+        idx = g_ldt_next++;
+        g_ldt[idx].base   = (DWORD)(ULONG_PTR)sg->mem;
+        g_ldt[idx].limit  = need - 1;
+        g_ldt[idx].access = (BYTE)(is_code ? 0xFA : 0xF2);
+        g_ldt[idx].flags  = 0;                       /* 16-bit segments */
+        dpmi_install(idx);
+        sg->seg = (WORD)((idx << 3) | 7);            /* the REAL selector now */
+
+        q = m;
+        q = zput(q, "  seg ");      q = zhex(q, (DWORD)(i + 1));
+        q = zput(q, is_code ? " CODE" : " DATA");
+        q = zput(q, " base=0x");    q = zhex(q, g_ldt[idx].base);
+        q = zput(q, " limit=0x");   q = zhex(q, g_ldt[idx].limit);
+        q = zput(q, " -> sel 0x");  q = zhex(q, sg->seg);
+        /* Read the descriptor back through the CPU. LAR only succeeds on a selector
+           the processor can actually see, so this is the hardware confirming the
+           install rather than us believing our own bookkeeping. */
+        {   DWORD ar = 0; unsigned char zf = 0; WORD sel = sg->seg;
+            __asm__ __volatile__("lar %2, %0\n\tsetz %1"
+                                 : "=r"(ar), "=q"(zf) : "r"(sel) : "cc");
+            q = zput(q, zf ? "  LAR ok ar=0x" : "  LAR FAILED ar=0x");
+            q = zhex(q, zf ? ar : 0);
+        }
+        q = zput(q, "\r\n"); log_append(LOG_PATH, m, q);
+    }
+
+    /* Relocations were applied with PLACEHOLDER segment values, so every patched site
+       now holds a number that means nothing. Redo them against the real selectors --
+       and say so, because "we relocated twice" is the sort of thing that looks like a
+       bug in six months if it is not written down. */
+    g_wow_ne.sites = 0;
+    for (i = 0; i < (int)g_wow_ne.n_seg; ++i) {
+        int r = ne_apply_relocs(&g_wow_ne, i, NULL, NULL);
+        if (r != 0) {
+            q = m; q = zput(q, "  RE-RELOC FAILED seg "); q = zhex(q, (DWORD)(i + 1));
+            q = zput(q, " at ne.h line "); q = zhex(q, (DWORD)g_wow_ne.err);
+            q = zput(q, "\r\n"); log_append(LOG_PATH, m, q);
+            return;
+        }
+    }
+    q = m;
+    q = zput(q, "WOWTRY: re-relocated against real selectors, sites=");
+    q = zhex(q, g_wow_ne.sites);
+    q = zput(q, "\r\n  entry would be CS:IP = sel 0x");
+    q = zhex(q, g_wow_ne.seg[(g_wow_ne.csip >> 16) - 1].seg);
+    q = zput(q, ":0x"); q = zhex(q, g_wow_ne.csip & 0xFFFF);
+    q = zput(q, "\r\nWOWTRY: NOT entering PM yet -- next step.\r\n");
+    log_append(LOG_PATH, m, q);
 }
 
 /* Plant the default PM interrupt handlers and point every vector at them. See the
@@ -9068,7 +9189,12 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         p = zput(p, "STAGE0: WIN16/WOW launch detected -> refusing (see GH #129)\r\n");
         p = zput(p, "STAGE0: cmdline=["); p = zput(p, GetCommandLineA()); p = zput(p, "]\r\n");
         log_append(LOG_PATH, report, p); serial_out(report, p);
-        return wow_refuse(GetCommandLineA());
+        if (GetFileAttributesA(WOWTRY_FLAG) == INVALID_FILE_ATTRIBUTES)
+            return wow_refuse(GetCommandLineA());
+        /* Experiment opted in: load now, then fall through so the selector stage can
+           run once the VDM is registered. Still refuses at the end -- nothing here
+           executes guest code yet. */
+        wow_probe_load(GetCommandLineA());
     }
     /* Headless test mode = the SMB watcher dropped the AUTOEXIT marker. In that mode the
        host must self-exit on guest exit AND bound any infinite run (a visual demo like
@@ -9270,6 +9396,11 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     v86_setup_memory();
     st = v86_init();
     p = zput(p, "STAGE1: v86_init NTSTATUS=0x"); p = zhex(p, (unsigned)st); p = zput(p, "\r\n");
+    if (g_wow_loaded) {                       /* GH #128: WOW selector stage */
+        log_append(LOG_PATH, report, p); p = report;
+        wow_probe_selectors();
+        return wow_refuse(GetCommandLineA());
+    }
     /* EMS page frame must be mapped AFTER VdmInitialize (see v86_map_ems_frame). */
     g_ems_frame_lin = v86_map_ems_frame();
     p = zput(p, "STAGE1: ems_frame lin=0x"); p = zhex(p, g_ems_frame_lin);
@@ -9299,7 +9430,10 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         p = zput(p, "STAGE1: GetNextVDMCommand FALSE err=0x"); p = zhex(p, err); p = zput(p, "\r\n");
     }
     log_write(LOG_PATH, report, p);
-
+    /* ⚠ AFTER the log_write, not before: log_write TRUNCATES. The first cut of this
+         ran the probe earlier and its output was silently erased by this very line,
+         which looked exactly like "the probe never ran". Same stale/truncated-artefact
+         trap this project keeps paying for, in a new costume. */
     tib = v86_get_tib();
     g_tib_dbg = tib;                                    /* let the crash VEH dump guest state */
     if (!tib) {
@@ -9794,6 +9928,20 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     p = zhex(p, img.cs); p = zput(p, ":0x"); p = zhex(p, img.ip); p = zput(p, ")...\r\n");
     log_write(LOG_PATH, report, p);
     base = p;                       /* preamble is on disk; the loop appends from here */
+    /* ⚠⚠ AFTER THE **LAST** log_write. There are THREE of them in WinMain and every one
+         TRUNCATES. This probe was placed after the first, then after the second, and
+         both times its output was silently erased by the next one -- which reads
+         exactly like "the code never ran", and cost three rounds of looking in the
+         wrong place. If you add diagnostics to WinMain, append AFTER line ~9941 or put
+         them in `p` so a log_write carries them. */
+    {   DWORD fa = GetFileAttributesA(WOWTRY_FLAG);
+        char m2[200], *q2 = m2;
+        q2 = zput(q2, "LDTARM: wow_loaded="); q2 = zhex(q2, (DWORD)g_wow_loaded);
+        q2 = zput(q2, " flag_attr=0x");      q2 = zhex(q2, fa);
+        q2 = zput(q2, "\r\n"); log_append(LOG_PATH, m2, q2);
+        if (!g_wow_loaded && fa != INVALID_FILE_ATTRIBUTES)
+            wow_probe_ldt_matrix("dos");   /* the differential arm */
+    }
     modey_remap_flush_report();     /* whatever the A0000 remap had to say, now it fits */
     /* ── CAN THE A0000 WINDOW BE REMAPPED? THE ONE FACT THE REAL VIDEO FIX NEEDS. ────
          Mode Y cannot be de-interleaved from a flat aperture: A0000 is one buffer, so
