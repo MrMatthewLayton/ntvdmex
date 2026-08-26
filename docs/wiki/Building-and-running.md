@@ -55,7 +55,7 @@ Two consequences worth knowing:
 ./tools/dostest/run.sh
 ```
 
-It **builds and runs** 17 batteries — 630 checks, about ten seconds — against the real
+It **builds and runs** 18 batteries — 664 checks, about ten seconds — against the real
 `src/dos/` and `src/vdd/` code, and exits non-zero if anything fails, so it can gate a
 commit. This is the development loop; see [Testing and oracles](Testing-and-oracles).
 

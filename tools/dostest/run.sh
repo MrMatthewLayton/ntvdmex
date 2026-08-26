@@ -142,3 +142,14 @@ cc -std=c99 -Wall -Wextra -Wno-unused-function -O0 -g \
    -o "$DIR/x86len_test" "$DIR/x86len_test.c"
 
 "$DIR/x86len_test"
+
+# GH #128/#4: the 16-bit New Executable loader (src/wow/ne.h) -- first brick of the
+# WOW layer. Two halves: a synthetic image exercising every relocation shape (chains
+# and moveable/entry-ordinal targets especially, both easy to get subtly wrong), plus
+# assertions against REAL binaries if you have supplied them in guest/ne/. Those are
+# Microsoft's and are not in the repo, so they SKIP when absent rather than fail --
+# see tools/ne/nedump.py for where the expected numbers came from.
+cc -std=c99 -Wall -Wextra -Wno-unused-function -O0 -g \
+   -o "$DIR/ne_test" "$DIR/ne_test.c"
+
+"$DIR/ne_test"

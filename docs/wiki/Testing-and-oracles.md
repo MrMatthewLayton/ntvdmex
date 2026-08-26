@@ -7,7 +7,7 @@ established, but it is minutes per round and every round has a way of lying to y
 
 ## Layer 1 — off-VM batteries (seconds, no VM, no rig)
 
-17 native test binaries under `tools/dostest/`, compiled for the build machine. They link
+18 native test binaries under `tools/dostest/`, compiled for the build machine. They link
 the real `src/dos/` and `src/vdd/` code — the DOS and device layers are header-only by
 convention precisely so this is possible.
 
@@ -15,9 +15,9 @@ convention precisely so this is possible.
 ./tools/dostest/run.sh          # builds + runs everything; non-zero exit if anything fails
 ```
 
-**17 batteries, 630 checks, ~10 seconds** — verified from a clean clone. Covers MCB, XMS,
+**18 batteries, 664 checks, ~10 seconds** — verified from a clean clone. Covers MCB, XMS,
 EMS, DMA, PIC, PIT, SB, OPL, OPL synth, MPU, speaker, video, input, the PM interpreter, the
-instruction-length decoder, and the VDD bus. **This is the loop to develop against.**
+instruction-length decoder, the VDD bus, and the NE loader. **This is the loop to develop against.**
 
 > ⚠️ The compiled batteries are gitignored, so **a fresh clone has no `tools/dostest/*_test`
 > files** and running them directly matches nothing — in `bash` that silently "passes" a

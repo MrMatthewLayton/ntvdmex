@@ -78,7 +78,7 @@ flawless sound.
 ./scripts/build.sh                 # -> build/ntvdmhost.exe
 
 # Fast test loop -- no VM and no rig needed. Builds the batteries, then runs them.
-./tools/dostest/run.sh                 # 17 batteries, 630 checks, ~10s, non-zero on failure
+./tools/dostest/run.sh                 # 18 batteries, 664 checks, ~10s, non-zero on failure
 ```
 
 - The build is **no-CRT on purpose**: the toolchain is UCRT-default and UCRT is absent on
