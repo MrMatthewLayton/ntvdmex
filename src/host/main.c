@@ -7565,6 +7565,77 @@ static void dpmi_rmcs_probe(volatile BYTE *tib, DWORD esb, unsigned slot, DWORD 
     log_append(LOG_PATH, b, q);
 }
 
+/* ── THE "MS-DOS" VENDOR-SPECIFIC DPMI API (INT 2Fh 168A). GH #128. ─────────────────
+     krnl386 will not run without this. It asks with DS:SI -> "MS-DOS" and tests
+     `cmp al,0x8a / jz 0xd71b`; 0xd71b is the ABORT path, and it prints
+     "NTVDM KERNEL: Inadequate DPMI Server". Leaving AL alone -- the correct answer for
+     a host with no vendor API -- is therefore fatal to this one guest.
+
+   ★ WHAT STOCK NTVDM ACTUALLY RETURNS, measured (tools/dostest/vendprobe.com under
+     `stock`): in REAL mode AL=8A (not supported); in PROTECTED mode AL=00 and
+     ES:DI = 00C7:2037, a readable code selector (LAR=0xFB00) holding 22 bytes:
+
+         cmp ax,0      / jnz +5 / mov ax,0x0100 / jmp +8
+         cmp ax,0x0100 / jnz +5 / mov ax,0x0137
+         clc / retf                                  <- known function
+         stc / retf                                  <- anything else
+
+     A two-function dispatcher returning constants. So the API is PM-ONLY, which is
+     consistent: krnl386 only ever asks after it has switched.
+
+   ★ AND krnl386 ONLY NEEDS IT TO EXIST. Having stored the entry it calls it once:
+         mov ax,0x0100 / call far [0x1726]
+         jc  skip                  <- CF set: skip
+         verw ax / jnz skip        <- not a WRITABLE selector: skip
+         mov es,[0x598] / mov [es:0x32],ax
+     Both failure arms rejoin the normal path. So an honest "that function is not
+     provided" (CF=1) is explicitly tolerated by the guest's own code.
+
+   ⚠ WHICH IS WHY FUNCTION 0x0100 RETURNS CF=1 HERE AND NOT A SELECTOR. Stock hands
+     back 0x0137, and `verw` proves that is a writable data selector onto something
+     ntvdm owns -- we do not know what, and a selector onto an empty block of ours
+     would pass verw, get stored, and be read later as if it were that something.
+     That is the "runs but lies" failure this project treats as the most expensive
+     kind. Declining is truthful and costs nothing today. Function 0 mirrors the
+     oracle exactly, because there we are copying a measured answer rather than
+     inventing one. */
+static WORD g_wow_vendor_sel = 0;
+
+static int wow_vendor_api_entry(dos_machine_t *mp, WORD *sel, WORD *off)
+{
+    static const BYTE stub[] = {
+        0x3D, 0x00, 0x00,        /* cmp ax,0x0000      */
+        0x75, 0x05,              /* jnz  +5            */
+        0xB8, 0x00, 0x01,        /* mov ax,0x0100      */
+        0xF8,                    /* clc                */
+        0xCB,                    /* retf               */
+        0xF9,                    /* stc  -- not provided */
+        0xCB                     /* retf               */
+    };
+    WORD seg = 0, max = 0;
+    volatile BYTE *b;
+    int idx, i;
+
+    *off = 0;
+    if (g_wow_vendor_sel) { *sel = g_wow_vendor_sel; return 0; }
+    /* Its own paragraph rather than a corner of DOS_HDLR_SEG: that segment is at
+       linear 0x500 and DOS_ENV_SEG starts at 0x600, so it has 0x100 bytes total and
+       the map in the header shows them nearly all spoken for. */
+    if (dos_alloc(NULL, mp->first_mcb, 1, &seg, &max) || !seg) return -1;
+    b = (volatile BYTE *)(ULONG_PTR)((DWORD)seg << 4);
+    for (i = 0; i < (int)sizeof stub; ++i) b[i] = stub[i];
+    if (g_ldt_next >= DPMI_LDT_MAX) return -1;
+    idx = g_ldt_next++;
+    g_ldt[idx].base   = (DWORD)seg << 4;
+    g_ldt[idx].limit  = 0x0F;
+    g_ldt[idx].access = 0xFA;            /* present, DPL3, code, readable */
+    g_ldt[idx].flags  = 0;               /* 16-bit                        */
+    dpmi_install(idx);
+    g_wow_vendor_sel = (WORD)((idx << 3) | 7);
+    *sel = g_wow_vendor_sel;
+    return 0;
+}
+
 static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                                unsigned steps)
 {
@@ -7785,6 +7856,38 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                         VDM_REG(tib, VTIB_EIP) += 2;
                         return 1;
                     }
+                    if (vec == 0x11) {                             /* BIOS equipment, in PM */
+                        /* Same answer as the V86 arm below (0x4021: one floppy, 80x25
+                           colour, one serial, one parallel, NO coprocessor). Sharing
+                           the constant matters -- krnl386 tests `test al,2` for a
+                           coprocessor at seg1:0xc136 and sets a kernel flag from it, so
+                           the two modes disagreeing would mean the guest believes
+                           different hardware depending on when it asked. */
+                        VDM_SET16(tib, VTIB_EAX, 0x4021);
+                        p = zput(p, "INT11h(PM) equipment -> 0x4021\r\n");
+                        log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                        VDM_REG(tib, VTIB_EIP) += 2;
+                        return 1;
+                    }
+                    if (vec == 0x41) {                             /* Windows kernel debugger */
+                        /* ⚠ THIS ARM EXISTS TO STOP A SILENT DEATH, NOT TO PROVIDE A
+                             SERVICE. INT 41h is the WDEB386 kernel-debugger interface;
+                             krnl386 calls it six times during init (AX=0001, 000F,
+                             0012, 0040, 004F). With no debugger present the correct
+                             behaviour is to return with registers untouched -- the
+                             "is a debugger there?" query (AX=004Fh) answers by
+                             returning 0xF386 when one IS, so anything else means no.
+                           Without the arm the site stays an unpatched `CD 41`, and a
+                           PM guest executing that reaches the kernel #GP reflect,
+                           which does not reflect: it terminates the VDM with no
+                           exception and no log line. Doing nothing, visibly, beats
+                           doing nothing invisibly. */
+                        p = zput(p, "INT41h(PM) kernel-debugger AX=0x"); p = zhex(p, ax);
+                        p = zput(p, " -> no debugger (registers untouched)\r\n");
+                        log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                        VDM_REG(tib, VTIB_EIP) += 2;
+                        return 1;
+                    }
                     if (vec == 0x2F) {                             /* INT 2Fh, from PM */
                         /* ── The PM twin of the V86 BOP2F arm. ──────────────────────
                              Answers exactly what the V86 side answers and no more, so
@@ -7816,6 +7919,36 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                             VDM_SET16(tib, VTIB_ES, 0);
                             VDM_REG(tib, VTIB_EDI) = 0;
                             p = zput(p, " -> no device API (ES:DI=0)");
+                        } else if (ax == 0x168A) {
+                            /* DS:SI names the vendor. Match it rather than answering
+                               every caller: the entry we hand back is specific to the
+                               "MS-DOS" contract and means nothing to anyone else. */
+                            DWORD sb = dpmi_sel_base((WORD)(VDM_REG(tib, VTIB_DS) & 0xFFFF));
+                            DWORD so = VDM_REG(tib, VTIB_ESI) & 0xFFFF;
+                            const volatile BYTE *v = (const volatile BYTE *)(ULONG_PTR)(sb + so);
+                            static const char want[] = "MS-DOS";
+                            int k = 0, same = 1;
+                            for (k = 0; k < (int)sizeof want; ++k)
+                                if (v[k] != (BYTE)want[k]) { same = 0; break; }
+                            p = zput(p, " vendor=[");
+                            for (k = 0; k < 8 && v[k] >= 0x20 && v[k] < 0x7F; ++k) {
+                                char c[2]; c[0] = (char)v[k]; c[1] = 0; p = zput(p, c);
+                            }
+                            p = zput(p, "]");
+                            if (same) {
+                                WORD vs = 0, vo = 0;
+                                if (wow_vendor_api_entry(mp, &vs, &vo) == 0) {
+                                    VDM_SET16(tib, VTIB_EAX, (WORD)(ax & 0xFF00));  /* AL=0 */
+                                    VDM_SET16(tib, VTIB_ES, vs);
+                                    VDM_REG(tib, VTIB_EDI) = vo;
+                                    p = zput(p, " -> SUPPORTED, entry 0x"); p = zhex(p, vs);
+                                    p = zput(p, ":0x"); p = zhex(p, vo);
+                                } else {
+                                    p = zput(p, " -> wanted, but no memory for the stub");
+                                }
+                            } else {
+                                p = zput(p, " -> not ours (AL unchanged = no)");
+                            }
                         } else {
                             p = zput(p, " -> untouched (unchanged AX is the 'no' answer)");
                         }
@@ -11161,6 +11294,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                       if (cs[o] == 0xCD && (cs[o+1] == 0x31 || cs[o+1] == 0x21 || cs[o+1] == 0x10
                                             || cs[o+1] == 0x16 || cs[o+1] == 0x33
                                             || cs[o+1] == 0x2F
+                                            || cs[o+1] == 0x11 || cs[o+1] == 0x41
                                             || cs[o+1] == 0x1A || cs[o+1] == 0x08)) {
                           DWORD lin = g_dpmi_code_base + o;      /* map is linear-keyed now */
                           pmap_set(lin, cs[o+1]); cs[o] = 0xC4; cs[o+1] = 0xC4; ++n; last = o;
@@ -11170,6 +11304,32 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                   p = zput(p, " INT sites -> BOP (full 64K scan, last off 0x"); p = zhex(p, last);
                   p = zput(p, ")\r\n");
                   log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                  /* ── WHAT DID THE PATCH LEAVE BEHIND? ────────────────────────────
+                       Every `CD nn` still in this region is a vector we did not claim,
+                       and a PM guest cannot reach the IVT -- so if the guest executes
+                       one, the kernel #GP reflect silently terminates the VDM. No
+                       exception, no log line, the process simply gone. That is how
+                       krnl386 died on INT 2Fh, and finding it meant reading this
+                       function's constant list by hand afterwards.
+                     So say it up front, as a histogram by vector. It is an UPPER
+                     BOUND -- a linear byte-pair count over a region that contains data
+                     as well as code, so some of these are not instructions at all --
+                     but a vector that is ABSENT here cannot kill the guest, which
+                     makes the list a genuine shortlist of suspects rather than a
+                     guess. Cheap, and it turns the next silent death into a lookup. */
+                  {   DWORD hist[256], o2, tot = 0; int v;
+                      for (v = 0; v < 256; ++v) hist[v] = 0;
+                      for (o2 = 0; o2 < 0xFFFF; ++o2)
+                          if (cs[o2] == 0xCD) { ++hist[cs[o2 + 1]]; ++tot; }
+                      p = zput(p, "DPMI: residual CD nn in the region: "); p = zhex(p, tot);
+                      p = zput(p, " (unclaimed vectors, upper bound)");
+                      for (v = 0; v < 256; ++v) if (hist[v]) {
+                          p = zput(p, " "); p = zhexb(p, (BYTE)v);
+                          p = zput(p, "h x"); p = zhex(p, hist[v]);
+                      }
+                      p = zput(p, "\r\n");
+                      log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                  }
                 }
                 /* Guest breakpoints (PMBP_PATH). Loaded here rather than at WinMain entry
                    so the list is read on the run that will use it, and armed both now and
