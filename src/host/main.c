@@ -18,6 +18,7 @@
 #include "dpmi.h"
 #include "csrss.h"
 #include "log.h"
+#include "settings.h"   /* registry-backed knobs + the Settings dialog */
 #include "x86len.h"     /* which `CD nn` byte pairs are really INT instructions */
 #include "dos_mcb.h"
 #include "dos_loader.h"
@@ -3078,6 +3079,7 @@ enum {                                       /* wired command IDs               
     IDM_FILE_EXIT, IDM_FILE_CLOSEPROG,
     IDM_DISP_FULLSCREEN, IDM_DISP_SHOWMENU,
     IDM_INPUT_CURSOR, IDM_INPUT_CAPTURE,
+    IDM_FILE_SETTINGS,
     IDM_CAP_SHOT,
     IDM_HELP_ABOUT
 };
@@ -3101,7 +3103,8 @@ static HMENU build_menu(void)
     msep(m);
     msub(m, "Configuration", (s=mpop(), mi(s,"Edit Config File...",IDM_STUB),
         mi(s,"Reload Configuration",IDM_STUB), mi(s,"Save Current as Default",IDM_STUB),
-        mi(s,"Open Config Folder",IDM_STUB), mi(s,"Configuration Tool...",IDM_STUB), s));
+        mi(s,"Open Config Folder",IDM_STUB), mi(s,"Configuration Tool...",IDM_FILE_SETTINGS), s));
+    mi(m, "Settings...", IDM_FILE_SETTINGS);
     msep(m);
     mi(m, "Restart Machine", IDM_STUB);
     mi(m, "Close Program", IDM_FILE_CLOSEPROG);
@@ -3341,6 +3344,97 @@ static void host_cursor_set(HWND h, int on)
     menu_check(h, IDM_INPUT_CURSOR, on);
     if (GetCursorPos(&pt) && WindowFromPoint(pt) == h)
         SetCursor(on ? LoadCursorA(NULL, IDC_ARROW) : NULL);
+}
+
+/* ── SETTINGS: THE STORE, AND WHAT APPLYING THEM MEANS. ──────────────────────────
+     g_set is the live copy. settings_apply() is deliberately the ONLY place that
+     pushes a setting into the machine, so "what does this knob actually do" has one
+     answer and the dialog cannot drift from startup.
+   ⚠ EVERY ONE OF THESE IS ALSO A TEXT FILE ON THE TEST SHARE, and the file wins --
+     see the precedence note in settings.h. settings_apply() therefore runs BEFORE
+     the file-knob block in WinMain, never after. */
+static ntvdmex_settings g_set;
+static dos_machine_t   *g_dosm;          /* so the DOS version can be changed live */
+
+static void settings_apply(HWND h, const ntvdmex_settings *s, int live)
+{
+    g_ms_sens        = (int)s->mouse_sens;
+    g_pitpace_on     = (int)(s->pit_pace ? 1 : 0);
+    g_ui_tick_min_ms = (int)s->ui_tick_ms;
+    g_vid.cursor_blink = (uint8_t)(s->blink_text_cursor ? 1 : 0);
+    if (g_dosm) dos_int21_set_version(g_dosm, (uint8_t)s->dos_major, (uint8_t)s->dos_minor);
+    /* The cursor is the one setting with a VISIBLE side effect, so it goes through
+       the same helper the menu item and Ctrl+F8 use rather than poking the flag. */
+    if (live && h) host_cursor_set(h, (int)s->show_host_cursor);
+    else InterlockedExchange(&g_cursor_show, s->show_host_cursor ? 1 : 0);
+}
+
+static void settings_to_dialog(HWND dlg, const ntvdmex_settings *s)
+{
+    char ver[16];
+    CheckDlgButton(dlg, IDC_S_HOSTCURSOR,  s->show_host_cursor  ? BST_CHECKED : BST_UNCHECKED);
+    CheckDlgButton(dlg, IDC_S_BLINKCURSOR, s->blink_text_cursor ? BST_CHECKED : BST_UNCHECKED);
+    CheckDlgButton(dlg, IDC_S_PITPACE,     s->pit_pace          ? BST_CHECKED : BST_UNCHECKED);
+    SetDlgItemInt(dlg, IDC_S_MSENS,  s->mouse_sens, FALSE);
+    SetDlgItemInt(dlg, IDC_S_UITICK, s->ui_tick_ms, FALSE);
+    /* "6.22", not "6.2200" -- two digits, zero-padded, which is how DOS says it. */
+    wsprintfA(ver, "%u.%02u", (unsigned)s->dos_major, (unsigned)s->dos_minor);
+    SetDlgItemTextA(dlg, IDC_S_DOSVER, ver);
+}
+
+static void settings_from_dialog(HWND dlg, ntvdmex_settings *s)
+{
+    char ver[32];
+    BOOL ok = FALSE; UINT v;
+    s->show_host_cursor  = IsDlgButtonChecked(dlg, IDC_S_HOSTCURSOR)  == BST_CHECKED;
+    s->blink_text_cursor = IsDlgButtonChecked(dlg, IDC_S_BLINKCURSOR) == BST_CHECKED;
+    s->pit_pace          = IsDlgButtonChecked(dlg, IDC_S_PITPACE)     == BST_CHECKED;
+    v = GetDlgItemInt(dlg, IDC_S_MSENS, &ok, FALSE);
+    if (ok && v >= 10 && v <= 1000) s->mouse_sens = v;
+    v = GetDlgItemInt(dlg, IDC_S_UITICK, &ok, FALSE);
+    if (ok && v >= 1 && v <= 200) s->ui_tick_ms = v;
+    if (GetDlgItemTextA(dlg, IDC_S_DOSVER, ver, sizeof ver))
+        settings_parse_ver(ver, &s->dos_major, &s->dos_minor);
+}
+
+static INT_PTR CALLBACK settings_dlgproc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
+{
+    (void)lp;
+    switch (msg) {
+    case WM_INITDIALOG: {
+        /* The list is a convenience, not a constraint: the combo is editable
+           (CBS_DROPDOWN) because the next guest to refuse to start will want some
+           number nobody has thought of yet. */
+        static const char *const VERS[] = { "6.22", "5.00", "4.01", "3.31", "7.10" };
+        int i;
+        for (i = 0; i < (int)(sizeof VERS / sizeof VERS[0]); ++i)
+            SendDlgItemMessageA(dlg, IDC_S_DOSVER, CB_ADDSTRING, 0, (LPARAM)VERS[i]);
+        settings_to_dialog(dlg, &g_set);
+        return TRUE; }
+    case WM_COMMAND:
+        switch (LOWORD(wp)) {
+        case IDC_S_DEFAULTS: {
+            ntvdmex_settings d; settings_defaults(&d);
+            settings_to_dialog(dlg, &d);          /* shown, not applied -- OK commits */
+            return TRUE; }
+        case IDOK: {
+            ntvdmex_settings n = g_set;
+            settings_from_dialog(dlg, &n);
+            g_set = n;
+            settings_save(&g_set);                /* the registry IS the store        */
+            settings_apply(GetParent(dlg), &g_set, 1);
+            EndDialog(dlg, IDOK);
+            return TRUE; }
+        case IDCANCEL:
+            EndDialog(dlg, IDCANCEL);
+            return TRUE;
+        }
+        return FALSE;
+    case WM_CLOSE:
+        EndDialog(dlg, IDCANCEL);
+        return TRUE;
+    }
+    return FALSE;
 }
 
 /* One keystroke, ONE path -- shared by WM_KEYDOWN and WM_SYSKEYDOWN, because F10 and
@@ -3613,6 +3707,13 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
             if (cur) { g_savedmenu = cur; SetMenu(h, NULL); } else SetMenu(h, g_savedmenu);
             return 0; }
         case IDM_INPUT_CURSOR: host_cursor_set(h, !g_cursor_show); return 0;
+        case IDM_FILE_SETTINGS:
+            /* Modal, on the UI thread. The guest keeps running throughout -- it lives
+               on the exec thread, and the PIT is paced by its own thread -- so this
+               freezes the picture, not the machine. */
+            DialogBoxParamA(GetModuleHandleA(NULL), MAKEINTRESOURCEA(IDD_SETTINGS),
+                            h, settings_dlgproc, 0);
+            return 0;
         case IDM_INPUT_CAPTURE: input_capture_set(h, !g_captured); return 0;
         case IDM_CAP_SHOT: host_screenshot(); return 0;
         case IDM_HELP_ABOUT:
@@ -8543,6 +8644,23 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
        host must self-exit on guest exit AND bound any infinite run (a visual demo like
        pm32irq/animate never calls INT 21h 4Ch), else rt.bat's `start /wait` blocks forever
        and wedges the watcher (session-9). Latch it once here (the exit path deletes the marker). */
+    /* ── SETTINGS FIRST, TEST FILES SECOND. ─────────────────────────────────────
+         Load the stored configuration here, at the TOP of the knob block, so every
+         file knob below it still overrides. That ordering is the whole contract (see
+         settings.h): the rig configures this host by writing files and re-launching,
+         and a setting clicked in a dialog on that machine must never silently change
+         what a headless measurement is measuring. */
+    settings_load(&g_set);
+    settings_apply(NULL, &g_set, 0);
+    p = zput(p, "STAGE0: settings cursor="); p = zhex(p, g_set.show_host_cursor);
+    p = zput(p, " blink=");   p = zhex(p, g_set.blink_text_cursor);
+    p = zput(p, " msens=");   p = zhex(p, g_set.mouse_sens);
+    p = zput(p, " dosver=");  p = zhex(p, g_set.dos_major);
+    p = zput(p, ".");         p = zhex(p, g_set.dos_minor);
+    p = zput(p, " pitpace="); p = zhex(p, g_set.pit_pace);
+    p = zput(p, " uitick=");  p = zhex(p, g_set.ui_tick_ms);
+    p = zput(p, "\r\n");
+
     g_headless = (GetFileAttributesA(AUTOEXIT_PATH) != INVALID_FILE_ATTRIBUTES);
     /* Self-screenshot only when explicitly requested (graphical tests) AND headless, so
        the common non-graphical tests never enter the capture path. Latched once here. */
@@ -8920,6 +9038,11 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
       for (ti = 0; ti < 16; ++ti) { p = zhexb(p, pspb[0x81 + ti]); p = zput(p, " "); }
       p = zput(p, "]\r\n"); }
     dos_int21_init(&m, dos_mcb_init(NULL));
+    /* Published so the Settings dialog can change the reported DOS version while a
+       guest is running -- it is read per INT 21h AH=30h, so it takes effect at the
+       guest's next version check with no restart. */
+    g_dosm = &m;
+    dos_int21_set_version(&m, (uint8_t)g_set.dos_major, (uint8_t)g_set.dos_minor);
     /* ── THE REPORTED DOS VERSION IS A KNOB, BECAUSE IT IS A LIE THE GUEST CHOOSES.
          Real DOS ships SETVER for precisely this, and the number is not a fact about
          us: it is what a particular guest will accept. We default to 6.22 to match the

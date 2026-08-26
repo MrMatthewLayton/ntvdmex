@@ -65,7 +65,8 @@ typedef struct video_state {
     uint16_t vesa_start_x, vesa_start_y;/* 4F07 display start                        */
     uint8_t  vesa_dacwidth;             /* 4F08 bits per DAC primary (6 or 8)        */
     uint8_t  cur_row, cur_col;
-    uint16_t cur_shape;
+    uint16_t cur_shape;                 /* INT 10h AH=01 CX: start/end scan lines    */
+    uint8_t  cursor_blink;              /* host setting: blink it, as a real CRTC does */
     uint8_t  page;
     uint32_t pal[256];                  /* ARGB palette ([0..15]=EGA for text)     */
     /* DAC (ports 3C7/3C8/3C9) write/read state */

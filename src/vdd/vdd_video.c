@@ -1156,11 +1156,43 @@ void vdd_video_render(video_state *st)                 /* text glyph render     
                 for (gx = 0; gx < VID_CELL_W; ++gx) row[gx] = (bits & (0x80 >> gx)) ? fg : bg;
             }
         }
-    if (st->cur_row < st->rows && st->cur_col < st->cols) {   /* underline cursor */
-        uint8_t fg = cell(st, st->cur_row, st->cur_col)[1] & 0x0F;
-        for (gy = VID_CELL_H - 2; gy < VID_CELL_H; ++gy)
-            for (gx = 0; gx < VID_CELL_W; ++gx)
-                st->fb[(st->cur_row*VID_CELL_H + gy) * VID_FB_W + st->cur_col*VID_CELL_W + gx] = fg;
+    /* ── THE TEXT CURSOR: SHAPE FROM THE GUEST, BLINK FROM THE CLOCK. ────────────
+         This used to be two hard-coded scan lines, always lit. Two things were wrong
+         with that and only one of them is cosmetic:
+           * A REAL CURSOR BLINKS. On VGA the CRTC blinks it at the vertical rate
+             divided by 32 -- 16 frames lit, 16 dark, about 1.9 Hz. A steady block is
+             the one thing every DOS user would notice instantly.
+           * THE GUEST CHOOSES THE SHAPE, and says so in INT 10h AH=01h CX: CH is the
+             first scan line, CL the last. It is also how a program HIDES the cursor
+             -- bit 5 of CH, or a start line past the end -- so ignoring CX means a
+             full-screen editor that turned the cursor off gets one anyway, now
+             blinking at it. Honouring the shape and honouring the hide are the same
+             piece of code, which is why they arrive together.
+         The phase comes from st->time_us, the injected clock the CRT timebase already
+         uses, so this stays pure C and off-VM testable: with no clock injected the
+         cursor is simply steady, which is what the existing battery expects. */
+    if (st->cur_row < st->rows && st->cur_col < st->cols) {
+        unsigned start = (st->cur_shape >> 8) & 0x1F;    /* CH bits 0-4: first line  */
+        unsigned end   =  st->cur_shape       & 0x1F;    /* CL bits 0-4: last line   */
+        int hidden     = ((st->cur_shape >> 8) & 0x20) != 0;   /* CH bit 5: cursor off */
+        int lit = 1;
+        if (st->cur_shape == 0) { start = VID_CELL_H - 2; end = VID_CELL_H - 1; }
+        if (start >= VID_CELL_H) start = VID_CELL_H - 2;
+        if (end   >= VID_CELL_H) end   = VID_CELL_H - 1;
+        if (start > end) hidden = 1;                     /* the other "off" idiom    */
+        if (st->cursor_blink && st->time_us) {
+            /* 16 frames on / 16 off at 60 Hz = a 533 ms period, lit for the first
+               half. Integer maths only; no floating point in a VDD. */
+            uint64_t ph = st->time_us() % 533000u;
+            lit = (ph < 266500u);
+        }
+        if (!hidden && lit) {
+            uint8_t fg = cell(st, st->cur_row, st->cur_col)[1] & 0x0F;
+            for (gy = (int)start; gy <= (int)end; ++gy)
+                for (gx = 0; gx < VID_CELL_W; ++gx)
+                    st->fb[(st->cur_row*VID_CELL_H + gy) * VID_FB_W
+                           + st->cur_col*VID_CELL_W + gx] = fg;
+        }
     }
 }
 

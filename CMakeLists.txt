@@ -122,7 +122,7 @@ target_link_options(ntvdmhost PRIVATE
     -Wl,--subsystem,console -Wl,--entry,_WinMainCRTStartup
     -Wl,--major-subsystem-version,4 -Wl,--minor-subsystem-version,0
     -Wl,--disable-nxcompat -Wl,--disable-dynamicbase)
-target_link_libraries(ntvdmhost PRIVATE kernel32 user32 gdi32 comctl32 gcc)
+target_link_libraries(ntvdmhost PRIVATE kernel32 user32 gdi32 comctl32 advapi32 gcc)
 
 # --- present_demo.exe: standalone DirectDraw presentation exerciser (M3 slice-3)
 # A GUI app that drives src/vdd/present_ddraw.c with an animated test frame, to
