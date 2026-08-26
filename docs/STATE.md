@@ -77,8 +77,8 @@ flawless sound.
 # Build (macOS/Linux cross-compile to XP-32; needs mingw-w64 i686)
 ./scripts/build.sh                 # -> build/ntvdmhost.exe
 
-# Fast test loop -- 17 native batteries, seconds, no VM or rig needed
-./tools/dostest/run.sh                 # 16 batteries, 630 checks, ~10s
+# Fast test loop -- no VM and no rig needed. Builds the batteries, then runs them.
+./tools/dostest/run.sh                 # 16 batteries, 630 checks, ~10s, non-zero on failure
 ```
 
 - The build is **no-CRT on purpose**: the toolchain is UCRT-default and UCRT is absent on
