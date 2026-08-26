@@ -172,15 +172,44 @@ static void fcb_name(const volatile BYTE *f, char *out)
     out[n] = 0;
 }
 
+/* ── A DOS FILENAME ENDS AT A TERMINATOR, NOT ONLY AT A NUL. ─────────────────────
+     The set is DOS's own, and we already publish it to guests as the AH=65h AL=05
+     "filename terminator" table (dos_ctab.h): every control character and the space
+     (0x00-0x20), plus the punctuation that separates a path from what follows.
+     '.' is not here -- it is the extension separator and the caller handles it.
+   ⚠ WHY THIS IS NOT COSMETIC. A command line is terminated by 0x0D, and the name
+     builder below used to copy that CR straight into the FCB. COMMAND.COM matches
+     its internal command table by comparing the entry's characters and then checking
+     that the NEXT byte of the FCB is blank -- so `ver` parsed to "VER\r    " and
+     missed, while `ver ` parsed to "VER \r   " and hit purely because the user had
+     typed the blank we should have supplied. That is why every internal command was
+     "Bad command or file name" until you put a space after it. */
+static int fcb_name_ends(unsigned char c)
+{
+    if (c <= 0x20) return 1;                    /* NUL, CR, TAB, space, any control */
+    return c == '"' || c == '/' || c == '\\' || c == '[' || c == ']' || c == ':'
+        || c == '|' || c == '<'  || c == '>'  || c == '+' || c == '=' || c == ';'
+        || c == ',';
+}
+
 static void fcb_put_name(volatile BYTE *d, const char *nm)
 {
     int i = 0, k;
     for (k = 0; k < 11; ++k) d[k] = ' ';
-    for (k = 0; k < 8 && nm[i] && nm[i] != '.'; ++k, ++i)
+    /* "." AND ".." ARE NAMES, NOT EXTENSIONS. The rule below ends the name at the
+       first '.', which for these two directory entries ends it at character zero and
+       leaves eleven blanks -- DIR then printed an empty column where the oracle
+       shows "." and "..". DOS stores them literally in the name field. */
+    if (nm[0] == '.') {
+        d[0] = '.';
+        if (nm[1] == '.' && (nm[2] == 0 || nm[2] == '.')) d[1] = '.';
+        if (nm[1] == 0 || nm[1] == '.') return;
+    }
+    for (k = 0; k < 8 && !fcb_name_ends((unsigned char)nm[i]) && nm[i] != '.'; ++k, ++i)
         d[k] = (BYTE)(nm[i] >= 'a' && nm[i] <= 'z' ? nm[i] - 32 : nm[i]);
-    while (nm[i] && nm[i] != '.') ++i;
+    while (!fcb_name_ends((unsigned char)nm[i]) && nm[i] != '.') ++i;
     if (nm[i] == '.') ++i;
-    for (k = 8; k < 11 && nm[i]; ++k, ++i)
+    for (k = 8; k < 11 && !fcb_name_ends((unsigned char)nm[i]); ++k, ++i)
         d[k] = (BYTE)(nm[i] >= 'a' && nm[i] <= 'z' ? nm[i] - 32 : nm[i]);
 }
 
@@ -209,6 +238,8 @@ void dos_int21_init(dos_machine_t *m, uint16_t first_mcb)
     m->dta_seg = DOS_PSP_SEG;
     m->dta_off = 0x0080;
     m->out_len = 0; m->out_trunc = 0;
+    m->line_active = 0; m->line_n = 0; m->line_seg = 0; m->line_off = 0;
+    m->std_open = 0x1F;                     /* stdin/stdout/stderr/aux/prn all open */
     { int _i; for (_i = 0; _i < 32; ++_i) { m->unimpl21[_i] = 0; m->noop21[_i] = 0; } }
     m->exit_code = 0;
     /* GH #28: default to 6.22 so we match the oracle. It is also the friendlier
@@ -261,10 +292,23 @@ int dos_int21(dos_machine_t *m)
     /* Dropping output silently once cost a wrong conclusion: a probe's dump was
        cut mid-line, the harness saw fewer results than it asked for, and the
        missing rows read as agreement. Record the drop so the log can say so. */
+    /* ── AH=02h/09h WRITE TO STANDARD OUTPUT, NOT TO THE SCREEN. ─────────────────
+         That distinction is invisible until something redirects, and then it is the
+         whole feature: ECHO does not use AH=40h, it prints with AH=02h, so a shell
+         doing `echo hello > hi.txt` sends the text through here. With this macro
+         hard-wired to the console sink the redirect was accepted, the file was
+         created, the text went to the SCREEN, and hi.txt was left empty at 0 bytes.
+         Fixing AH=40h alone did not move it -- measured, twice -- because ECHO never
+         goes near AH=40h.
+         A bound handle 1 is a file (see the note there); an unbound one is the
+         console, which is the ordinary case and behaves exactly as before. */
     #define OUTC(c)     do { uint8_t _ch = (uint8_t)(c); \
-        if (m->out_len < m->out_cap - 1) m->out[m->out_len++] = (char)_ch; \
-        else m->out_trunc = 1; \
-        if (m->conout) m->conout(m->conctx, _ch); } while (0)
+        if (m->fh[1]) { DWORD _w = 0; WriteFile(m->fh[1], &_ch, 1, &_w, NULL); } \
+        else { \
+            if (m->out_len < m->out_cap - 1) m->out[m->out_len++] = (char)_ch; \
+            else m->out_trunc = 1; \
+            if (m->conout) m->conout(m->conctx, _ch); \
+        } } while (0)
 
     /* CF is returned via the FLAGS the INT pushed on the V86 stack (SS:SP+4): the
        handler's IRET restores FLAGS from there, so the live EFlags get clobbered.
@@ -280,6 +324,27 @@ int dos_int21(dos_machine_t *m)
         : (volatile WORD *)(((VDM_REG(tib, VTIB_SS) & 0xFFFF) << 4)
                             + (((VDM_REG(tib, VTIB_ESP) & 0xFFFF) + 4) & 0xFFFF));
     ah = (R_AX >> 8) & 0xFF;
+
+    /* ── EVERY CALL, WHEN ASKED. ────────────────────────────────────────────────
+         Most handlers here trace only what they think is interesting, which is fine
+         until the question is "what does the guest do BETWEEN two calls we can see".
+         COMMAND.COM accepts `ver ` and rejects `ver`, with a provably identical line
+         buffer apart from one space -- so the answer is in the calls it makes after
+         reading the line, and those are exactly the ones nothing prints. Two traces
+         differing by one space is a DIFFERENTIAL experiment, which beats reasoning
+         about a parser we cannot see.
+       ⚠ AH=0Ah is excluded: it now polls via `retry`, so tracing it would bury the
+         log in thousands of identical lines -- it prints its completed line instead.
+         Gated by a flag file so no other run pays for this. */
+    if (m->trace_all && ah != 0x0A) {
+        tp = zput(tp, "  21:"); tp = zhexb(tp, (unsigned)ah);
+        tp = zput(tp, "/");     tp = zhexb(tp, (unsigned)(R_AX & 0xFF));
+        tp = zput(tp, " bx="); tp = zhexb(tp, (unsigned)((R_BX >> 8) & 0xFF));
+        tp = zhexb(tp, (unsigned)(R_BX & 0xFF));
+        tp = zput(tp, " dx="); tp = zhexb(tp, (unsigned)((R_DX >> 8) & 0xFF));
+        tp = zhexb(tp, (unsigned)(R_DX & 0xFF));
+        tp = zput(tp, "\r\n");
+    }
 
     if (ah == 0x4C) {                           /* terminate */
         m->exit_code = (int)(R_AX & 0xFF);      /* DOS errorlevel */
@@ -319,17 +384,65 @@ int dos_int21(dos_machine_t *m)
             SETAX((R_AX & 0xFF00) | (c & 0xFF)); OKCF();
         }
     } else if (ah == 0x0A) {                    /* buffered input DS:DX */
+        /* ── THE LAST INPUT CALL THAT PARKED THE EXEC THREAD, AND IT DEADLOCKS A SHELL.
+             This used to sit in a loop on the BLOCKING m->conin until it had a whole
+             line. AH=01/07/08 and INT 16h were both fixed years ago to poll via
+             `retry` (see the note on that field), and the reason is spelled out
+             there: blocking in C stops the GUEST dead. For a game that meant a frozen
+             screen. For COMMAND.COM it means never running at all, because the thing
+             it is waiting for CANNOT ARRIVE while it waits:
+                 COMMAND.COM -> INT 21h AH=0Ah -> we block on the BIOS key ring
+                 ...the BIOS key ring is filled by the guest's own INT 09h ISR
+                 ...which cannot run, because we are blocked inside its INT 21h call.
+             Measured exactly that way: the shell printed its banner and prompt, then
+             40 scancodes went into the FIFO and IRQ1 was attempted 691 times, EVERY
+             one refused as `not_in_exec`. The keys were there the whole time and the
+             guest was never running to take them.
+           ► SO COLLECT THE LINE ACROSS RETRIES. The characters accumulate in the
+             GUEST's buffer (untouched between retries) and we keep only our position
+             in it; a different DS:DX is a different call, not a continuation. Each
+             retry leaves EIP on the BOP, so the guest re-executes the INT and gets to
+             run its ISRs in between -- which is what a real DOS does, since the BIOS
+             spins in the guest with interrupts enabled. */
         volatile BYTE *buf = (volatile BYTE *)((R_DS << 4) + (R_DX & 0xFFFF));
-        int maxn = buf[0], n = 0, c;
-        while (n < maxn - 1) {
-            c = m->conin ? m->conin(m->cinctx) : 0x0D;
-            if (c == 0x0D) break;
-            if (c == 0x08) { if (n > 0) { --n; OUTC(0x08); OUTC(' '); OUTC(0x08); } continue; }
-            buf[2 + n++] = (BYTE)c; OUTC(c);
+        int maxn = buf[0], c;
+        if (!m->line_active || m->line_seg != (uint16_t)(R_DS & 0xFFFF)
+                            || m->line_off != (uint16_t)(R_DX & 0xFFFF)) {
+            m->line_active = 1; m->line_n = 0;
+            m->line_seg = (uint16_t)(R_DS & 0xFFFF);
+            m->line_off = (uint16_t)(R_DX & 0xFFFF);
         }
-        buf[1] = (BYTE)n; buf[2 + n] = 0x0D;
-        OUTC(0x0D); OUTC(0x0A);
-        OKCF();
+        for (;;) {
+            if (m->line_n >= maxn - 1) break;           /* buffer full -> take it as a line */
+            c = m->coninnb ? m->coninnb(m->cinctx) : 0x0D;
+            if (c < 0) { m->retry = 1; break; }         /* nothing yet -> let the guest run */
+            if (c == 0x0D) { m->line_active = 0; break; }
+            if (c == 0x08) {                            /* backspace: rub it out on screen */
+                if (m->line_n > 0) { --m->line_n; OUTC(0x08); OUTC(' '); OUTC(0x08); }
+                continue;
+            }
+            if (c == 0x00) continue;                    /* extended key: no ASCII, ignore  */
+            buf[2 + m->line_n++] = (BYTE)c; OUTC(c);
+        }
+        if (!m->retry) {
+            buf[1] = (BYTE)m->line_n; buf[2 + m->line_n] = 0x0D;
+            OUTC(0x0D); OUTC(0x0A);
+            m->line_active = 0;
+            /* WHAT THE SHELL ACTUALLY RECEIVES. `echo hi` works while a bare `ver`
+               comes back "Bad command or file name" -- and the difference between
+               them is a SPACE, i.e. whether the command word ends at a delimiter or
+               at our terminator. That points straight at these bytes, so print them
+               rather than reason about them. */
+            if (m->trace_all) { int k;
+              tp = zput(tp, "  INT21 AH=0A line max="); tp = zhexb(tp, (unsigned)maxn);
+              tp = zput(tp, " n="); tp = zhexb(tp, (unsigned)m->line_n);
+              tp = zput(tp, " [");
+              for (k = 0; k < m->line_n + 1 && k < 64; ++k) {
+                  tp = zhexb(tp, buf[2 + k]); tp = zput(tp, " ");
+              }
+              tp = zput(tp, "]\r\n"); }
+            OKCF();
+        }
     } else if (ah == 0x0B) {                    /* check input status */
         int ready = m->conpeek ? m->conpeek(m->cinctx) : 0;
         SETAX((R_AX & 0xFF00) | (ready ? 0xFF : 0x00));   /* FFh = char waiting */
@@ -350,10 +463,30 @@ int dos_int21(dos_machine_t *m)
     } else if (ah == 0x40) {                    /* write: BX=handle CX=cnt DS:DX=buf */
         DWORD h = R_BX & 0xFFFF, cnt = R_CX & 0xFFFF;
         const char *b = (const char *)((R_DS << 4) + (R_DX & 0xFFFF));
-        if (h == 1 || h == 2) { DWORD k; for (k = 0; k < cnt; ++k) OUTC(b[k]); SETAX(cnt); OKCF(); }
-        else if (h < 24 && m->fh[h]) { DWORD w = 0; WriteFile(m->fh[h], b, cnt, &w, NULL); SETAX(w); OKCF(); }
+        /* ── HANDLES 0-4 ARE TABLE ENTRIES, NOT A SPECIAL CASE. ──────────────────
+             DOS pre-opens stdin/stdout/stderr/aux/prn as ordinary slots in the same
+             handle table as everything else, and that is precisely WHY redirection
+             works: the shell opens the file, dup2s it over handle 1, runs the
+             command, then dup2s the saved copy back. Treating 1 and 2 as "the
+             console, always" accepted the redirect and then ignored it -- measured,
+             `echo hello world > hi.txt` printed to the screen and left an EMPTY
+             hi.txt on disk, which is the worst of both.
+             So: a BOUND handle is a file, whatever its number; only an unbound low
+             handle is the console. */
+        if (h < 64 && m->fh[h]) { DWORD w = 0; WriteFile(m->fh[h], b, cnt, &w, NULL); SETAX(w); OKCF(); }
+        else if (h == 1 || h == 2) { DWORD k; for (k = 0; k < cnt; ++k) OUTC(b[k]); SETAX(cnt); OKCF(); }
         else { SETAX(6); ERRCF(); }
     } else if (ah == 0x3C || ah == 0x3D) {      /* create / open: DS:DX=ASCIIZ name */
+        /* ── DOS HANDS OUT THE LOWEST FREE HANDLE, AND THAT IS HOW `>` WORKS. ─────
+             COMMAND.COM does not redirect with dup2. It CLOSES handle 1 and then
+             creates the target, relying on the new file landing in the slot the
+             console just vacated -- measured, the trace is `3Ch create` followed
+             immediately by `40h write to handle 1` with no 45h/46h anywhere.
+             Allocating from 5 upwards, as this did, makes that impossible: the file
+             got handle 5, handle 1 was still the console, so the text went to the
+             screen and the file stayed 0 bytes. Two earlier fixes (AH=40h, then
+             AH=02h) were aimed at the write end and neither moved it, because the
+             write end was never wrong -- the HANDLE NUMBER was. */
         char fn[300]; DWORD slot; HANDLE f;
         v86_str(R_DS, R_DX, fn, sizeof(fn));
         if (ah == 0x3C)
@@ -367,7 +500,11 @@ int dos_int21(dos_machine_t *m)
                             FILE_ATTRIBUTE_NORMAL, NULL);
         }
         if (f != INVALID_HANDLE_VALUE) {
-            for (slot = 5; slot < 64 && m->fh[slot]; ++slot) {}
+            for (slot = 0; slot < 64; ++slot) {
+                if (m->fh[slot]) continue;                    /* bound to a file    */
+                if (slot < 5 && (m->std_open & (1u << slot))) continue;  /* device  */
+                break;
+            }
             if (slot < 64) { m->fh[slot] = f; SETAX(slot); OKCF(); }
             else { CloseHandle(f); SETAX(4); ERRCF(); }
         } else { SETAX(2); ERRCF(); }
@@ -376,12 +513,15 @@ int dos_int21(dos_machine_t *m)
         tp = zhex(tp, R_AX & 0xFFFF); tp = zput(tp, (*pfl & 1) ? " (err)\r\n" : "\r\n");
     } else if (ah == 0x3E) {                    /* close: BX=handle */
         DWORD h = R_BX & 0xFFFF;
-        if (h >= 5 && h < 64 && m->fh[h]) { CloseHandle(m->fh[h]); m->fh[h] = 0; }
+        /* Any BOUND handle closes, including a low one the shell redirected -- see
+           the note at AH=40h. An unbound 0-4 is the console and closing it is a no-op. */
+        if (h < 64 && m->fh[h]) { CloseHandle(m->fh[h]); m->fh[h] = 0; }
+        else if (h < 5) m->std_open &= (uint8_t)~(1u << h);   /* free the device slot */
         OKCF();
     } else if (ah == 0x3F) {                    /* read: BX=handle CX=cnt -> DS:DX */
         DWORD h = R_BX & 0xFFFF, cnt = R_CX & 0xFFFF, rd = 0;
         void *b = (void *)((R_DS << 4) + (R_DX & 0xFFFF));
-        if (h >= 5 && h < 64 && m->fh[h]) {
+        if (h < 64 && m->fh[h]) {                /* bound -> a file, even if low */
             /* ► LOG THE FILE POSITION, THE COUNT AND THE FIRST BYTES. A DOS extender
                  loading an executable is doing nothing but seek+read, so if the image it
                  ends up with is wrong, the first question is whether WE handed it the
@@ -489,6 +629,17 @@ int dos_int21(dos_machine_t *m)
         }
         if (slot >= 0 && ok) {
             dta_fill(d, &fd);
+            /* DIR renders blank names, one impossible size repeated, and a 1980-ish
+               date -- i.e. it is reading fields we did not put where it looks. Print
+               the DTA we hand back, whole, and let the bytes settle it. */
+            if (m->trace_all) { int q;
+              tp = zput(tp, "  INT21 AH=4E/4F dta="); tp = zhexb(tp, (unsigned)((m->dta_seg >> 8) & 0xFF));
+              tp = zhexb(tp, (unsigned)(m->dta_seg & 0xFF)); tp = zput(tp, ":");
+              tp = zhexb(tp, (unsigned)((m->dta_off >> 8) & 0xFF));
+              tp = zhexb(tp, (unsigned)(m->dta_off & 0xFF));
+              tp = zput(tp, " [");
+              for (q = 0; q < 44; ++q) { tp = zhexb(tp, (unsigned)d[q]); tp = zput(tp, " "); }
+              tp = zput(tp, "]\r\n"); }
             SETAX(0); OKCF();                                /* oracle: AX=0000 */
         } else if (slot >= 0 && m->find_h[slot] && !ok) {
             FindClose(m->find_h[slot]); m->find_h[slot] = 0;
@@ -554,6 +705,43 @@ int dos_int21(dos_machine_t *m)
                COMMAND.COM, because "." has no 8.3 name to put in the field. */
             uint16_t fmask = (f != (volatile BYTE *)((R_DS << 4) + (R_DX & 0xFFFF)))
                            ? (uint16_t)f[-1] : 0;
+            /* ── A VOLUME-LABEL SEARCH IS NOT A FILE SEARCH. ────────────────────
+                 Attribute 08h means "return the volume label and nothing else", and
+                 it is how DIR fills in its header line. There is no file on disk to
+                 match, so FindFirstFile cannot answer it -- we used to run the
+                 ordinary search and hand back whatever came first, which is why DIR
+                 announced `Volume in drive C is COMMAND COM`, the first file in the
+                 directory wearing the label's clothes.
+                 The label is 11 bytes in the name+ext field, NOT an 8.3 name, so it
+                 is padded raw rather than through fcb_put_name. */
+            if (fmask == 0x08) {
+                if (ah == 0x11) {
+                    char vol[128]; int vi;
+                    volatile BYTE *e;
+                    int ext = (f != (volatile BYTE *)((R_DS << 4) + (R_DX & 0xFFFF))) ? 7 : 0;
+                    vol[0] = 0;
+                    if (!GetVolumeInformationA("C:\\", vol, sizeof vol,
+                                               NULL, NULL, NULL, NULL, 0) || !vol[0]) {
+                        if (m->fcb_find) { FindClose(m->fcb_find); m->fcb_find = 0; }
+                        m->last_err = 18;
+                        FCB_FAIL();                       /* no label: DIR says so   */
+                        goto fcb_done;
+                    }
+                    e = d + ext;
+                    if (ext) { int q; d[0] = 0xFF; for (q = 1; q <= 5; ++q) d[q] = 0; d[6] = 0x08; }
+                    e[0] = 3;                             /* drive C:                */
+                    for (vi = 0; vi < 11; ++vi) {
+                        char ch = vol[vi] ? vol[vi] : ' ';
+                        if (!vol[vi]) { e[1 + vi] = ' '; continue; }
+                        e[1 + vi] = (BYTE)(ch >= 'a' && ch <= 'z' ? ch - 32 : ch);
+                    }
+                    e[12] = 0x08;                         /* attribute: volume label */
+                    { int q; for (q = 13; q <= 32; ++q) e[q] = 0; }
+                    if (m->fcb_find) { FindClose(m->fcb_find); m->fcb_find = 0; }
+                    FCB_OK();
+                } else { m->last_err = 18; FCB_FAIL(); }  /* 12h: only ever one label */
+                goto fcb_done;
+            }
             if (ah == 0x11) {
                 HANDLE hf;
                 fcb_name(f, nm);
@@ -572,27 +760,56 @@ int dos_int21(dos_machine_t *m)
                 } while (!dta_match(fd.dwFileAttributes, fmask));
                 if (!got) { FindClose(m->fcb_find); m->fcb_find = 0; }
             }
-            if (!got) FCB_FAIL();
+            /* ── A FAILED SEARCH MUST SAY WHY, OR THE LAST FAILURE SPEAKS FOR IT. ──
+                 The extended error (AH=59h) is only recorded where CF comes back set,
+                 and FCB calls deliberately leave CF alone -- so an exhausted search
+                 left `last_err` holding whatever failed previously. In a shell that
+                 is COMMAND.COM's own startup probe: it asks AH=48h for 0xFFFF
+                 paragraphs to learn the largest block, which fails with code 8.
+                 DIR then ends its listing, asks AH=59h why, is told "insufficient
+                 memory", and prints exactly that instead of its summary line. The
+                 listing was RIGHT and the epitaph was three commands stale.
+                 18 = "no more files", which is what DOS reports here. */
+            if (!got) { m->last_err = 18; FCB_FAIL(); }
             else {
                 const char *bn = fd.cAlternateFileName[0] ? fd.cAlternateFileName
                                                           : fd.cFileName;
                 FILETIME lf; WORD fdt = 0, ftm = 0;
                 int k;
+                /* ── AN EXTENDED SEARCH RETURNS AN EXTENDED RESULT. ──────────────
+                     We already skip the 7-byte prefix on the way IN (fcb_at), and
+                     then wrote the answer back in the SHORT layout regardless -- so
+                     a caller that searched with an extended FCB read every field
+                     seven bytes early. DIR does exactly that (it must, to see
+                     directories and the volume label), which is why its listing came
+                     out with blank names, one impossible size repeated down the
+                     column, and a volume label of "COM" -- the tail of COMMAND.COM
+                     read as an 11-byte label.
+                     The prefix is FFh, five reserved bytes, then the attribute of
+                     the file found; the ordinary result follows it unchanged. */
+                int ext = (f != (volatile BYTE *)((R_DS << 4) + (R_DX & 0xFFFF))) ? 7 : 0;
+                volatile BYTE *e = d + ext;
                 if (FileTimeToLocalFileTime(&fd.ftLastWriteTime, &lf))
                     FileTimeToDosDateTime(&lf, &fdt, &ftm);
-                d[0] = 3;                                 /* drive C:          */
-                fcb_put_name(d + 1, bn);
-                d[12] = (BYTE)(fd.dwFileAttributes & 0x3F);
-                for (k = 13; k <= 22; ++k) d[k] = 0;
-                d[23] = (BYTE)(ftm & 0xFF); d[24] = (BYTE)(ftm >> 8);
-                d[25] = (BYTE)(fdt & 0xFF); d[26] = (BYTE)(fdt >> 8);
-                d[27] = 0; d[28] = 0;                     /* starting cluster  */
-                d[29] = (BYTE)( fd.nFileSizeLow        & 0xFF);
-                d[30] = (BYTE)((fd.nFileSizeLow >> 8)  & 0xFF);
-                d[31] = (BYTE)((fd.nFileSizeLow >> 16) & 0xFF);
-                d[32] = (BYTE)((fd.nFileSizeLow >> 24) & 0xFF);
+                if (ext) {
+                    d[0] = 0xFF;
+                    for (k = 1; k <= 5; ++k) d[k] = 0;
+                    d[6] = (BYTE)(fd.dwFileAttributes & 0x3F);
+                }
+                e[0] = 3;                                 /* drive C:          */
+                fcb_put_name(e + 1, bn);
+                e[12] = (BYTE)(fd.dwFileAttributes & 0x3F);
+                for (k = 13; k <= 22; ++k) e[k] = 0;
+                e[23] = (BYTE)(ftm & 0xFF); e[24] = (BYTE)(ftm >> 8);
+                e[25] = (BYTE)(fdt & 0xFF); e[26] = (BYTE)(fdt >> 8);
+                e[27] = 0; e[28] = 0;                     /* starting cluster  */
+                e[29] = (BYTE)( fd.nFileSizeLow        & 0xFF);
+                e[30] = (BYTE)((fd.nFileSizeLow >> 8)  & 0xFF);
+                e[31] = (BYTE)((fd.nFileSizeLow >> 16) & 0xFF);
+                e[32] = (BYTE)((fd.nFileSizeLow >> 24) & 0xFF);
                 FCB_OK();
             }
+            fcb_done: ;
         } else if (ah == 0x13) {                /* delete (wildcards allowed) */
             WIN32_FIND_DATAA fd; HANDLE hf; int any = 0;
             fcb_name(f, nm);
@@ -704,6 +921,22 @@ int dos_int21(dos_machine_t *m)
             SETAX((R_AX & 0xFF00) | (wild ? 1 : 0));
             SET16(R_SI, (uint16_t)((R_SI & 0xFFFF) + i2));
             OKCF();
+            /* THE CALL COMMAND.COM'S DISPATCH TURNS ON. `ver ` runs and `ver` does
+               not, and the traces diverge on the instruction after the third of
+               these -- so print what went in and what came out, both. Reasoning
+               about it from the handler's source has already produced two wrong
+               models this session. */
+            if (m->trace_all) { int q;
+              tp = zput(tp, "  INT21 AH=29 al="); tp = zhexb(tp, (unsigned)(R_AX & 0xFF));
+              tp = zput(tp, " ds:si="); tp = zhexb(tp, (unsigned)((R_DS >> 8) & 0xFF));
+              tp = zhexb(tp, (unsigned)(R_DS & 0xFF)); tp = zput(tp, ":");
+              tp = zhexb(tp, (unsigned)(((R_SI & 0xFFFF) >> 8) & 0xFF));
+              tp = zhexb(tp, (unsigned)(R_SI & 0xFF));
+              tp = zput(tp, " in=[");
+              for (q = 0; q < 12 && in[q]; ++q) tp = zhexb(tp, (unsigned)(BYTE)in[q]), tp = zput(tp, " ");
+              tp = zput(tp, "] fcb=[");
+              for (q = 0; q < 12; ++q) tp = zhexb(tp, (unsigned)dst[q]), tp = zput(tp, " ");
+              tp = zput(tp, "]\r\n"); }
         } else FCB_FAIL();
         #undef FCB_OK
         #undef FCB_FAIL
@@ -928,14 +1161,20 @@ int dos_int21(dos_machine_t *m)
                                  GetCurrentProcess(), &nh, 0, FALSE,
                                  DUPLICATE_SAME_ACCESS)) { SETAX(6); ERRCF(); }
             else if (ah == 0x45) {
-                for (dst = 5; dst < 64 && m->fh[dst]; ++dst) {}
+                for (dst = 0; dst < 64; ++dst) {              /* lowest free, as DOS */
+                    if (m->fh[dst]) continue;
+                    if (dst < 5 && (m->std_open & (1u << dst))) continue;
+                    break;
+                }
                 if (dst < 64) { m->fh[dst] = nh; SETAX(dst); OKCF(); }
                 else { CloseHandle(nh); SETAX(4); ERRCF(); }
             } else {
                 dst = R_CX & 0xFFFF;
                 if (dst >= 64) { CloseHandle(nh); SETAX(6); ERRCF(); }
                 else { if (m->fh[dst]) CloseHandle(m->fh[dst]);
-                       m->fh[dst] = nh; OKCF(); }
+                       m->fh[dst] = nh;
+                       if (dst < 5) m->std_open &= (uint8_t)~(1u << dst);
+                       OKCF(); }
             }
         }
     } else if (ah == 0x4D) {                    /* get child return code */

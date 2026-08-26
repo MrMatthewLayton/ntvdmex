@@ -107,6 +107,7 @@
 #define KEYIRQ_PATH      "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\keyirq.txt"
 #define MSENS_PATH       "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\msens.txt"
 #define DOSVER_PATH      "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\dosver.txt"
+#define DOSTRACE_FLAG    "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\dostrace.flag"
 /* Scripted synthetic keystrokes, on the share so a test sequence can be changed between
    runs without a rebuild. Whitespace-separated tokens, played once in order:
      4d     -- scancode 4D: make, brief hold, break
@@ -2412,6 +2413,30 @@ static DWORD WINAPI synthkey_thread(LPVOID pv)
                                                               is not stuck behind a long wait */
                     while (slept < v && g_running) { Sleep(v - slept > 100 ? 100 : v - slept);
                                                      slept += 100; } }
+                  continue;
+              }
+              /* ── A MODIFIER HAS TO BE HELD, AND EVERY TOKEN HERE WAS A TAP. ──────
+                   Each token below is sent as make-then-break, which is right for a
+                   character and useless for SHIFT: `2a 34 aa` released shift before
+                   the period arrived, so a test that typed `>` typed `.` instead --
+                   and the shell dutifully echoed `echo hello world . hi.txt`, i.e.
+                   the harness silently tested something other than redirection.
+                   `d` = make only, `u` = break only. `d2a 34 u2a` is a held shift. */
+              if (s[i] == 'd' || s[i] == 'D' || s[i] == 'u' || s[i] == 'U') {
+                  int up = (s[i] == 'u' || s[i] == 'U');
+                  ++i;
+                  if (i < rd && (s[i] == 'e' || s[i] == 'E')) { ext = 1; ++i; }
+                  while (i < rd && digits < 2) {
+                      char c = s[i]; int dg = -1;
+                      if (c >= '0' && c <= '9') dg = c - '0';
+                      else if (c >= 'a' && c <= 'f') dg = c - 'a' + 10;
+                      else if (c >= 'A' && c <= 'F') dg = c - 'A' + 10;
+                      if (dg < 0) break;
+                      v = (v << 4) | (DWORD)dg; ++i; ++digits;
+                  }
+                  if (!digits) continue;
+                  host_key_scancode((uint8_t)v, ext, up);
+                  Sleep(40);
                   continue;
               }
               if (s[i] == 'e' || s[i] == 'E') { ext = 1; ++i; }
@@ -9111,6 +9136,9 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     audio_wave_start(&g_wave, AUDIO_OUT_HZ, host_audio_fill, NULL);
     m.conout = host_conout; m.conctx = NULL;    /* DOS console out -> video      */
     m.conin  = host_conin;  m.cinctx = NULL;    /* DOS console in  <- keyboard   */
+    /* Full INT 21h call trace, opt-in per run: it is a differential instrument, not a
+       default. See the trace at the top of dos_int21(). */
+    m.trace_all = (GetFileAttributesA(DOSTRACE_FLAG) != INVALID_FILE_ATTRIBUTES);
     m.coninnb = host_coninnb;                   /* AH=06 DL=FF non-blocking read */
     m.conpeek = host_conpeek;                   /* AH=0B/06 non-blocking status  */
 

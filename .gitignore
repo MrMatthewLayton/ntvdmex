@@ -45,3 +45,7 @@ __pycache__/
 .vscode/
 .idea/
 .studio/*.user.json
+
+# Guest binaries extracted from the vendored MS-DOS images (see
+# tools/dostest/extract-dos-file.py) -- Microsoft's, not ours to redistribute unpacked.
+guest/

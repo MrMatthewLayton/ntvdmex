@@ -59,6 +59,20 @@ typedef struct {
        stays alive; now so do we. */
     int    retry;
     int    (*conpeek)(void *ctx); /* non-blocking status: 1 if a key is ready       */
+    /* AH=0Ah (buffered input) IS A BLOCKING SERVICE THAT SPANS MANY RETRIES, so the
+       line it is collecting has to survive them. The characters live in the GUEST's
+       buffer, which is untouched between retries; what we need to remember is how far
+       in we are, and WHICH buffer it was -- a different DS:DX means a different call,
+       not a continuation. See the handler. */
+    uint16_t line_seg, line_off;
+    int      line_n, line_active;
+    int      trace_all;        /* log EVERY INT 21h call -- see the trace at entry */
+    /* WHICH OF THE FIVE STANDARD HANDLES ARE STILL OPEN (bits 0-4, set at startup).
+       fh[0..4] are NULL because they are devices, not files, so "NULL" cannot also
+       mean "free" for them -- and the difference is load-bearing. DOS hands out the
+       LOWEST FREE handle, which is how `> file` works: the shell closes handle 1 and
+       opens the target, and the target BECOMES handle 1. See AH=3Ch. */
+    uint8_t  std_open;
 } dos_machine_t;
 
 /* Zero the handle table, set the MCB root, default DTA = PSP:0x80. */
