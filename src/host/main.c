@@ -2870,8 +2870,7 @@ static void host_ems(volatile BYTE *tib)
 }
 
 /* --- menu + status bar (scaffold; most items are stubs for now) ------------ */
-static char g_progname[64] = "(none)";      /* shown in the status bar          */
-static volatile int g_title_dirty = 1;      /* UI thread re-applies the caption  */
+static char g_progname[64] = "(none)";      /* left half of the status strip     */
 
 /* Mouse state shared UI thread -> V86 thread (INT 33h). Position is in guest
    pixels (mapped from the window client); buttons: bit0 L, bit1 R, bit2 M. */
@@ -2940,7 +2939,8 @@ static volatile LONG g_ms_hidden = 1;       /* INT 33h cursor hide-count; 0 => v
    exactly the behaviour that shipped, so no run changes unless it is asked for. */
 static volatile LONG g_cursor_show = 0;
 /* Input capture ("exclusivity") -- see input_capture_set. Declared up here because
-   set_window_title, which is defined above it, puts the release chord in the caption. */
+   status_update, which is defined above it, reports the capture state and the chord
+   that changes it on the right-hand half of the status strip. */
 static volatile LONG g_captured = 0;
 
 /* INT 33h mouse driver (functions DOS apps actually use). The host draws the
@@ -3089,8 +3089,16 @@ static void msep(HMENU m) { AppendMenuA(m, MF_SEPARATOR, 0, NULL); }
 static void msub(HMENU p, const char *s, HMENU c) { AppendMenuA(p, MF_POPUP, (UINT_PTR)c, s); }
 static HMENU mpop(void) { return CreatePopupMenu(); }
 
-/* Build the full menu tree (the structure is the scaffold; only a few items are
-   wired -- the rest carry IDM_STUB and no-op until they're implemented). */
+/* ── THE MENU BAR AFTER THE SETTINGS MOVE. ───────────────────────────────────────
+     CPU, Display, Audio, Input and Drive are GONE from the bar. Everything they held
+     that was configuration now lives on a tab of the Settings dialog, which is one
+     place to look instead of five menus deep in submenus, and one store instead of a
+     tick per item.
+   ► What stayed behind is what was never a setting: Fullscreen, Show Menu Bar, input
+     capture, the mount commands. Those are ACTIONS -- things you do once, now, and
+     usually by keystroke. A command you reach for mid-game does not belong behind an
+     OK button, so View and Machine keep them.
+   The rest is still scaffold: items carrying IDM_STUB no-op until they are wired. */
 static HMENU build_menu(void)
 {
     HMENU bar = CreateMenu(), m, s;
@@ -3101,12 +3109,11 @@ static HMENU build_menu(void)
     msub(m, "Save State", (s=mpop(), mi(s,"Quick-Save\tF5",IDM_STUB), mi(s,"Slot 1...9",IDM_STUB), s));
     msub(m, "Load State", (s=mpop(), mi(s,"Quick-Load\tF9",IDM_STUB), mi(s,"Slot 1...9",IDM_STUB), s));
     msep(m);
-    msub(m, "Configuration", (s=mpop(), mi(s,"Edit Config File...",IDM_STUB),
-        mi(s,"Reload Configuration",IDM_STUB), mi(s,"Save Current as Default",IDM_STUB),
-        mi(s,"Open Config Folder",IDM_STUB), mi(s,"Configuration Tool...",IDM_FILE_SETTINGS), s));
+    /* The old "Configuration" submenu (Edit Config File, Open Config Folder, ...)
+       described a config FILE that never existed; the store is HKCU and the dialog
+       is how you edit it. One entry, and it is this one. */
     mi(m, "Settings...", IDM_FILE_SETTINGS);
     msep(m);
-    mi(m, "Restart Machine", IDM_STUB);
     mi(m, "Close Program", IDM_FILE_CLOSEPROG);
     mi(m, "Exit\tAlt+F4", IDM_FILE_EXIT);
     msub(bar, "File", m);
@@ -3116,52 +3123,27 @@ static HMENU build_menu(void)
     mi(m,"Copy Whole Screen",IDM_STUB); mi(m,"Paste\tCtrl+V",IDM_STUB); mi(m,"Select All",IDM_STUB);
     msub(bar, "Edit", m);
 
-    m = mpop();                                                   /* CPU          */
-    msub(m,"CPU Type",(s=mpop(),mi(s,"8086",IDM_STUB),mi(s,"286",IDM_STUB),mi(s,"386",IDM_STUB),mi(s,"486",IDM_STUB),mi(s,"Pentium",IDM_STUB),s));
-    msub(m,"Core",(s=mpop(),mi(s,"Auto",IDM_STUB),mi(s,"Normal",IDM_STUB),mi(s,"Dynamic",IDM_STUB),mi(s,"Simple",IDM_STUB),s));
-    mi(m,"FPU",IDM_STUB); msep(m);
-    msub(m,"Speed",(s=mpop(),mi(s,"Auto",IDM_STUB),mi(s,"Max",IDM_STUB),mi(s,"Fixed cycles...",IDM_STUB),s));
-    mi(m,"Turbo",IDM_STUB); msep(m);
-    msub(m,"Memory",(s=mpop(),mi(s,"Conventional",IDM_STUB),mi(s,"XMS",IDM_STUB),mi(s,"EMS",IDM_STUB),mi(s,"UMB",IDM_STUB),mi(s,"A20",IDM_STUB),s));
-    msub(bar, "CPU", m);
-
-    m = mpop();                                                   /* Display      */
+    m = mpop();                                                   /* View         */
     mi(m,"Fullscreen\tAlt+Enter",IDM_DISP_FULLSCREEN);
-    msub(m,"Window Size",(s=mpop(),mi(s,"1x",IDM_STUB),mi(s,"2x",IDM_STUB),mi(s,"3x",IDM_STUB),mi(s,"Custom",IDM_STUB),s));
-    msub(m,"Renderer",(s=mpop(),mi(s,"GDI",IDM_STUB),mi(s,"DirectDraw",IDM_STUB),mi(s,"Direct3D9",IDM_STUB),mi(s,"OpenGL",IDM_STUB),s));
-    msub(m,"Scaler",(s=mpop(),mi(s,"None",IDM_STUB),mi(s,"Scale2x",IDM_STUB),mi(s,"hq2x",IDM_STUB),mi(s,"Scanlines",IDM_STUB),mi(s,"CRT",IDM_STUB),s));
-    msub(m,"Filtering",(s=mpop(),mi(s,"Nearest",IDM_STUB),mi(s,"Bilinear",IDM_STUB),s));
-    mi(m,"Aspect Ratio Correction",IDM_STUB);
-    msub(m,"Frame Skip",(s=mpop(),mi(s,"0",IDM_STUB),mi(s,"1",IDM_STUB),mi(s,"2",IDM_STUB),s));
-    mi(m,"VSync",IDM_STUB); msep(m);
+    msep(m);
     mi(m,"Show Menu Bar",IDM_DISP_SHOWMENU);
-    msub(bar, "Display", m);
+    mi(m,"Show Host Cursor\tCtrl+F8",IDM_INPUT_CURSOR);
+    msub(bar, "View", m);
 
-    m = mpop();                                                   /* Audio        */
-    mi(m,"Master Volume / Mute",IDM_STUB); msep(m);
-    msub(m,"Sound Blaster",(s=mpop(),mi(s,"SB16",IDM_STUB),mi(s,"AWE32",IDM_STUB),mi(s,"Address / IRQ / DMA",IDM_STUB),s));
-    msub(m,"AdLib / OPL",(s=mpop(),mi(s,"OPL2",IDM_STUB),mi(s,"OPL3",IDM_STUB),s));
-    msub(m,"MIDI",(s=mpop(),mi(s,"Host GM",IDM_STUB),mi(s,"MT-32",IDM_STUB),mi(s,"SoundFont...",IDM_STUB),s));
-    mi(m,"PC Speaker",IDM_STUB); msub(m,"Gravis Ultrasound",(s=mpop(),mi(s,"Enable",IDM_STUB),s));
-    msub(m,"Tandy / CMS",(s=mpop(),mi(s,"Enable",IDM_STUB),s)); msep(m);
-    msub(m,"Sample Rate / Buffer",(s=mpop(),mi(s,"22050",IDM_STUB),mi(s,"44100",IDM_STUB),s));
-    msub(bar, "Audio", m);
-
-    m = mpop();                                                   /* Input        */
-    msub(m,"Mouse",(s=mpop(),mi(s,"Capture\tWin+F10",IDM_INPUT_CAPTURE),
-        mi(s,"Show Host Cursor\tCtrl+F8",IDM_INPUT_CURSOR),
-        mi(s,"Seamless",IDM_STUB),mi(s,"Sensitivity",IDM_STUB),s));
-    msub(m,"Keyboard",(s=mpop(),mi(s,"Layout",IDM_STUB),mi(s,"Typematic rate",IDM_STUB),mi(s,"Send Ctrl+Alt+Del",IDM_STUB),s));
-    msub(m,"Joystick",(s=mpop(),mi(s,"Type",IDM_STUB),mi(s,"Map to gamepad",IDM_STUB),mi(s,"Calibrate",IDM_STUB),s));
-    msep(m); mi(m,"Key Mapper...",IDM_STUB);
-    msub(bar, "Input", m);
-
-    m = mpop();                                                   /* Drive        */
+    m = mpop();                                                   /* Machine      */
+    mi(m,"Restart Machine",IDM_STUB);
+    mi(m,"Pause / Resume\tPause",IDM_STUB);
+    msep(m);
+    mi(m,"Capture Input\tWin+F10",IDM_INPUT_CAPTURE);
+    mi(m,"Send Ctrl+Alt+Del",IDM_STUB);
+    mi(m,"Key Mapper...",IDM_STUB);
+    msep(m);
     mi(m,"Mount Folder as Drive...",IDM_STUB); mi(m,"Mount Disk / CD Image...",IDM_STUB);
-    mi(m,"Mount Physical Drive...",IDM_STUB); msub(m,"Unmount",(s=mpop(),mi(s,"(none)",IDM_STUB),s)); msep(m);
-    mi(m,"Boot from Drive / Image...",IDM_STUB); mi(m,"Swap Disk\tCtrl+F4",IDM_STUB); msep(m);
+    mi(m,"Mount Physical Drive...",IDM_STUB); msub(m,"Unmount",(s=mpop(),mi(s,"(none)",IDM_STUB),s));
+    msep(m);
+    mi(m,"Boot from Drive / Image...",IDM_STUB); mi(m,"Swap Disk\tCtrl+F4",IDM_STUB);
     mi(m,"Drive Status...",IDM_STUB);
-    msub(bar, "Drive", m);
+    msub(bar, "Machine", m);
 
     m = mpop();                                                   /* Capture      */
     mi(m,"Take Screenshot\tCtrl+F5",IDM_CAP_SHOT);
@@ -3172,7 +3154,7 @@ static HMENU build_menu(void)
     msub(bar, "Capture", m);
 
     m = mpop();                                                   /* Debug        */
-    mi(m,"Pause / Resume\tPause",IDM_STUB); mi(m,"Step Instruction",IDM_STUB);
+    mi(m,"Step Instruction",IDM_STUB);
     mi(m,"Debugger Console...",IDM_STUB); mi(m,"Registers / Memory / Disassembly",IDM_STUB); msep(m);
     msub(m,"Logging",(s=mpop(),mi(s,"Levels...",IDM_STUB),mi(s,"Log to file",IDM_STUB),s));
     mi(m,"Performance Overlay",IDM_STUB);
@@ -3187,43 +3169,87 @@ static HMENU build_menu(void)
 
 static HWND g_status;                        /* the native comctl32 status bar    */
 
-/* Create the native status bar child + set its text; record its height so the
-   video blit reserves that strip. */
-/* Window caption: "Windows XP Virtual DOS Machine" idle, "... - PROG.EXE" while a
-   program runs. Safe to call from the V86 thread (SetWindowText posts WM_SETTEXT). */
-#define VDM_WIN_TITLE "Windows XP Virtual DOS Machine"
-static void set_window_title(void)
+/* ── THE CAPTION IS A CONSTANT NOW. ──────────────────────────────────────────────
+     It used to carry the running program's name and, while captured, the release
+     chord. Both have moved to the status strip below, where they sit beside the
+     machine state they belong with -- and where a 63-character program name can no
+     longer push the release chord off the end of a caption the window manager is
+     free to truncate. The window is a DOS machine whatever happens to be running
+     inside it, so the title says exactly that and nothing else. */
+#define VDM_WIN_TITLE "Microsoft Windows XP Virtual DOS Machine"
+
+/* ── THE STATUS STRIP. ───────────────────────────────────────────────────────────
+     Left  : PROG.EXE   |   16-bit / 32-bit   |   Real mode / Protected mode
+     Right : the input-capture state, and the chord that changes it.
+   The mode pair is not decoration. A DPMI guest crossing into 32-bit protected mode
+   is the largest single change of behaviour this host has -- different interrupt
+   delivery, different pointer widths, a different service path for every INT -- and
+   until now the only way to know it had happened was to read the log afterwards.
+   ⚠ IN EXCLUSIVE FULLSCREEN NEITHER PART IS VISIBLE: the DirectDraw primary covers
+     the strip exactly as it covers the menu bar. Win+F10 still releases. */
+static int  g_status_right_w = 190;          /* pixels reserved for the right part  */
+static char g_status_l[128], g_status_r[64]; /* what is currently ON the strip      */
+
+static int zsame(const char *a, const char *b)
 {
-    /* ⚠ 192: the base title (30) + " - " + a 64-char program name already reaches ~97,
-       and the captured suffix adds 34 -> 131. At 128 this overflowed. Same class of bug
-       as the KEYLAT dump buffer earlier this session; do not trim the margin. */
-    char t[192]; char *p = t; const char *s = VDM_WIN_TITLE;
-    if (!g_hwnd) return;
-    while (*s) *p++ = *s++;
-    if (g_progname[0] && g_progname[0] != '(') {       /* not "(none)" */
-        const char *d = " - ", *b = g_progname;
-        while (*d) *p++ = *d++;
-        while (*b) *p++ = *b++;
-    }
-    /* While captured the caption is the ONLY place the release chord is written down --
-       the menu bar may be hidden and the pointer is clipped inside the window. */
-    if (g_captured) { const char *c = "   [captured -- Win+F10 releases]";
-                      while (*c) *p++ = *c++; }
-    *p = 0;
-    SetWindowTextA(g_hwnd, t);
+    while (*a && *a == *b) { ++a; ++b; }
+    return *a == *b;
 }
 
+static void status_set_parts(void)
+{
+    RECT rc; int parts[2];
+    if (!g_status) return;
+    GetClientRect(g_status, &rc);
+    parts[0] = rc.right - g_status_right_w;
+    if (parts[0] < 60) parts[0] = 60;        /* a narrow window still shows the name */
+    parts[1] = -1;                           /* ...and the right part runs to the edge */
+    SendMessageA(g_status, SB_SETPARTS, 2, (LPARAM)parts);
+    g_status_l[0] = g_status_r[0] = 0;       /* re-partitioning blanks it: re-push    */
+}
+
+/* Compose both parts, and push each only when it CHANGES.
+   ⚠ This is POLLED from the UI tick rather than driven by a dirty flag, deliberately.
+     Two of the three facts it reports -- g_dpmi_pm and g_dpmi_client32 -- are set on
+     the V86 thread deep inside the DPMI mode switch, and a flag there would be one
+     more thing every future site that changes mode has to remember. Comparing two
+     short strings once per frame costs nothing and cannot be forgotten. */
+static void status_update(void)
+{
+    char l[128], *p = l;
+    const char *r;
+    if (!g_status) return;
+    p = zput(p, g_progname);
+    p = zput(p, "   |   ");
+    p = zput(p, (g_dpmi_pm && g_dpmi_client32) ? "32-bit" : "16-bit");
+    p = zput(p, "   |   ");
+    p = zput(p, g_dpmi_pm ? "Protected mode" : "Real mode");
+    r = g_captured ? "Captured -- Win+F10 releases" : "Win+F10 captures input";
+    if (!zsame(l, g_status_l)) {
+        zput(g_status_l, l);
+        SendMessageA(g_status, SB_SETTEXTA, 0, (LPARAM)l);
+    }
+    if (!zsame(r, g_status_r)) {
+        zput(g_status_r, r);
+        SendMessageA(g_status, SB_SETTEXTA, 1, (LPARAM)r);
+    }
+}
+
+/* Create the native status bar child; record its height so the video blit reserves
+   that strip. */
 static void make_status(HWND parent, HINSTANCE hi)
 {
-    char line[96]; char *p = line; RECT sr;
-    const char *a = "NTVDMEX  -  ";
+    RECT sr;
     g_status = CreateWindowExA(0, STATUSCLASSNAME, NULL,
                                WS_CHILD | WS_VISIBLE | SBARS_SIZEGRIP,
                                0, 0, 0, 0, parent, NULL, hi, NULL);
     if (!g_status) return;
-    while (*a) *p++ = *a++;
-    { const char *b = g_progname; while (*b) *p++ = *b++; } *p = 0;
-    SendMessageA(g_status, SB_SETTEXTA, 0, (LPARAM)line);
+    /* Dock it to the parent's width BEFORE cutting the parts: a status bar created
+       at 0x0 has a zero client rect, so the split would be computed against nothing
+       and would stay wrong until the first user resize. */
+    SendMessageA(g_status, WM_SIZE, 0, 0);
+    status_set_parts();
+    status_update();
     GetWindowRect(g_status, &sr);
     if (sr.bottom > sr.top) g_pd.status_h = sr.bottom - sr.top;
 }
@@ -3329,7 +3355,9 @@ static void input_capture_set(HWND h, int on)
     { POINT pt;                          /* apply the pointer change now, not on next move */
       if (GetCursorPos(&pt) && WindowFromPoint(pt) == h)
           SetCursor((on || !g_cursor_show) ? NULL : LoadCursorA(NULL, IDC_ARROW)); }
-    g_title_dirty = 1;                   /* the caption says how to get back out */
+    /* The status strip says how to get back out. It is repainted from the UI tick,
+       which is where SendMessage to the control is safe -- input_capture_set is also
+       reached from the WM_KEYDOWN path, but the tick is the single writer. */
 }
 
 /* Show/hide the host arrow over the video. The immediate SetCursor matters:
@@ -3350,78 +3378,237 @@ static void host_cursor_set(HWND h, int on)
      g_set is the live copy. settings_apply() is deliberately the ONLY place that
      pushes a setting into the machine, so "what does this knob actually do" has one
      answer and the dialog cannot drift from startup.
-   ⚠ EVERY ONE OF THESE IS ALSO A TEXT FILE ON THE TEST SHARE, and the file wins --
-     see the precedence note in settings.h. settings_apply() therefore runs BEFORE
+   ⚠ THIS FUNCTION IS ALSO THE HONEST LIST OF WHAT WORKS. Forty-odd settings are
+     stored in HKCU; the eight touched here are the ones the emulator consults. The
+     rest arrived from the old menu scaffold, where they were IDM_STUB, and they now
+     round-trip faithfully and change nothing. Wiring one up means adding a line HERE,
+     not adding storage -- the storage is already there.
+   ⚠ EVERY LIVE ONE OF THESE IS ALSO A TEXT FILE ON THE TEST SHARE, and the file wins
+     -- see the precedence note in settings.h. settings_apply() therefore runs BEFORE
      the file-knob block in WinMain, never after. */
 static ntvdmex_settings g_set;
 static dos_machine_t   *g_dosm;          /* so the DOS version can be changed live */
 
 static void settings_apply(HWND h, const ntvdmex_settings *s, int live)
 {
-    g_ms_sens        = (int)s->mouse_sens;
-    g_pitpace_on     = (int)(s->pit_pace ? 1 : 0);
-    g_ui_tick_min_ms = (int)s->ui_tick_ms;
-    g_vid.cursor_blink = (uint8_t)(s->blink_text_cursor ? 1 : 0);
-    if (g_dosm) dos_int21_set_version(g_dosm, (uint8_t)s->dos_major, (uint8_t)s->dos_minor);
+    g_ms_sens        = (int)s->v[SET_MSENS];
+    g_pitpace_on     = (int)(s->v[SET_PITPACE] ? 1 : 0);
+    g_ui_tick_min_ms = (int)s->v[SET_UITICK];
+    g_vid.cursor_blink = (uint8_t)(s->v[SET_BLINKCURSOR] ? 1 : 0);
+    if (g_dosm) dos_int21_set_version(g_dosm, (uint8_t)s->v[SET_DOSMAJ],
+                                              (uint8_t)s->v[SET_DOSMIN]);
     /* The cursor is the one setting with a VISIBLE side effect, so it goes through
        the same helper the menu item and Ctrl+F8 use rather than poking the flag. */
-    if (live && h) host_cursor_set(h, (int)s->show_host_cursor);
-    else InterlockedExchange(&g_cursor_show, s->show_host_cursor ? 1 : 0);
+    if (live && h) host_cursor_set(h, (int)s->v[SET_HOSTCURSOR]);
+    else InterlockedExchange(&g_cursor_show, s->v[SET_HOSTCURSOR] ? 1 : 0);
 }
 
-static void settings_to_dialog(HWND dlg, const ntvdmex_settings *s)
+/* ── THE TABBED SETTINGS DIALOG. ─────────────────────────────────────────────────
+     IDD_SETTINGS is only a frame: a tab control, OK, Cancel, Restore Defaults. Each
+     tab is its OWN child dialog (IDD_PAGE_*), created here and parked in the tab's
+     display rectangle. Nothing below is written per-control -- every fill and every
+     read is a loop over SET_DEFS in settings.h, so adding a knob is one table row and
+     one line of .rc layout, not four edits in four functions that can disagree. */
+static const int SETTINGS_PAGES[NTVDMEX_PAGE_COUNT] = {
+    IDD_PAGE_GENERAL, IDD_PAGE_CPU, IDD_PAGE_DISPLAY,
+    IDD_PAGE_AUDIO,   IDD_PAGE_INPUT, IDD_PAGE_DRIVES
+};
+static const char *const SETTINGS_TABS[NTVDMEX_PAGE_COUNT] = {
+    "General", "CPU", "Display", "Audio", "Input", "Drives"
+};
+static HWND g_spage[NTVDMEX_PAGE_COUNT];
+
+/* Find a control by ID across every page. Control IDs are unique across the whole
+   dialog (see settings_ids.h) precisely so this can exist: the table then does not
+   have to carry a page column, and moving a control from one page to another is a
+   pure .rc edit. */
+static HWND settings_ctl(int id)
 {
-    char ver[16];
-    CheckDlgButton(dlg, IDC_S_HOSTCURSOR,  s->show_host_cursor  ? BST_CHECKED : BST_UNCHECKED);
-    CheckDlgButton(dlg, IDC_S_BLINKCURSOR, s->blink_text_cursor ? BST_CHECKED : BST_UNCHECKED);
-    CheckDlgButton(dlg, IDC_S_PITPACE,     s->pit_pace          ? BST_CHECKED : BST_UNCHECKED);
-    SetDlgItemInt(dlg, IDC_S_MSENS,  s->mouse_sens, FALSE);
-    SetDlgItemInt(dlg, IDC_S_UITICK, s->ui_tick_ms, FALSE);
-    /* "6.22", not "6.2200" -- two digits, zero-padded, which is how DOS says it. */
-    wsprintfA(ver, "%u.%02u", (unsigned)s->dos_major, (unsigned)s->dos_minor);
-    SetDlgItemTextA(dlg, IDC_S_DOSVER, ver);
+    int i;
+    for (i = 0; i < NTVDMEX_PAGE_COUNT; ++i) {
+        HWND c = g_spage[i] ? GetDlgItem(g_spage[i], id) : NULL;
+        if (c) return c;
+    }
+    return NULL;
 }
 
-static void settings_from_dialog(HWND dlg, ntvdmex_settings *s)
+static void settings_fill_combos(void)
 {
-    char ver[32];
-    BOOL ok = FALSE; UINT v;
-    s->show_host_cursor  = IsDlgButtonChecked(dlg, IDC_S_HOSTCURSOR)  == BST_CHECKED;
-    s->blink_text_cursor = IsDlgButtonChecked(dlg, IDC_S_BLINKCURSOR) == BST_CHECKED;
-    s->pit_pace          = IsDlgButtonChecked(dlg, IDC_S_PITPACE)     == BST_CHECKED;
-    v = GetDlgItemInt(dlg, IDC_S_MSENS, &ok, FALSE);
-    if (ok && v >= 10 && v <= 1000) s->mouse_sens = v;
-    v = GetDlgItemInt(dlg, IDC_S_UITICK, &ok, FALSE);
-    if (ok && v >= 1 && v <= 200) s->ui_tick_ms = v;
-    if (GetDlgItemTextA(dlg, IDC_S_DOSVER, ver, sizeof ver))
-        settings_parse_ver(ver, &s->dos_major, &s->dos_minor);
+    static const char *const VERS[] = { "6.22", "5.00", "4.01", "3.31", "7.10" };
+    char it[64]; int i, n;
+    HWND c;
+    for (i = 0; i < SET_COUNT; ++i) {
+        const set_def *d = &SET_DEFS[i];
+        if (d->kind != SK_COMBO || !d->ctl) continue;
+        c = settings_ctl(d->ctl);
+        if (!c) continue;
+        for (n = 0; settings_item(d->items, n, it, (int)sizeof it); ++n)
+            SendMessageA(c, CB_ADDSTRING, 0, (LPARAM)it);
+    }
+    /* The version list is a convenience, not a constraint: that combo is EDITABLE
+       (CBS_DROPDOWN) because the next guest to refuse to start will want some number
+       nobody has thought of yet. That is also why it is not an SK_COMBO index. */
+    c = settings_ctl(IDC_S_DOSVER);
+    if (c) for (i = 0; i < (int)(sizeof VERS / sizeof VERS[0]); ++i)
+        SendMessageA(c, CB_ADDSTRING, 0, (LPARAM)VERS[i]);
+}
+
+static void settings_to_dialog(const ntvdmex_settings *s)
+{
+    char t[NTVDMEX_PATH_MAX]; int i;
+    for (i = 0; i < SET_COUNT; ++i) {
+        const set_def *d = &SET_DEFS[i];
+        HWND c = d->ctl ? settings_ctl(d->ctl) : NULL;
+        if (!c) continue;
+        switch (d->kind) {
+        case SK_CHECK:
+            SendMessageA(c, BM_SETCHECK, s->v[i] ? BST_CHECKED : BST_UNCHECKED, 0);
+            break;
+        case SK_UINT:
+            wsprintfA(t, "%u", (unsigned)s->v[i]); SetWindowTextA(c, t);
+            break;
+        case SK_COMBO:
+            SendMessageA(c, CB_SETCURSEL, (WPARAM)s->v[i], 0);
+            break;
+        case SK_VER:
+            /* "6.22", not "6.2200" -- two digits, zero-padded, as DOS says it. The
+               minor is the NEXT row (SK_DERIVED); that adjacency is the contract. */
+            wsprintfA(t, "%u.%02u", (unsigned)s->v[i], (unsigned)s->v[i + 1]);
+            SetWindowTextA(c, t);
+            break;
+        default: break;                      /* SK_DERIVED has no control of its own */
+        }
+    }
+    for (i = 0; i < SET_STR_COUNT; ++i) {
+        HWND c = settings_ctl(SET_STR_DEFS[i].ctl);
+        if (c) SetWindowTextA(c, s->s[i]);
+    }
+}
+
+/* Read the pages back. A field that will not parse, or is out of range, LEAVES THE
+   PREVIOUS VALUE -- it does not fall back to the default. Half-typing a number and
+   clicking OK should not silently reset the knob you were adjusting. */
+static void settings_from_dialog(ntvdmex_settings *n)
+{
+    char t[NTVDMEX_PATH_MAX]; int i;
+    for (i = 0; i < SET_COUNT; ++i) {
+        const set_def *d = &SET_DEFS[i];
+        HWND c = d->ctl ? settings_ctl(d->ctl) : NULL;
+        if (!c) continue;
+        switch (d->kind) {
+        case SK_CHECK:
+            n->v[i] = (SendMessageA(c, BM_GETCHECK, 0, 0) == BST_CHECKED) ? 1u : 0u;
+            break;
+        case SK_UINT: {
+            DWORD v;
+            if (!GetWindowTextA(c, t, 32)) break;
+            if (!settings_atou(t, &v)) break;
+            if (v >= d->lo && v <= d->hi) n->v[i] = v;
+            break; }
+        case SK_COMBO: {
+            LRESULT sel = SendMessageA(c, CB_GETCURSEL, 0, 0);
+            if (sel != CB_ERR && (DWORD)sel <= d->hi) n->v[i] = (DWORD)sel;
+            break; }
+        case SK_VER:
+            if (GetWindowTextA(c, t, 32))
+                settings_parse_ver(t, &n->v[i], &n->v[i + 1]);
+            break;
+        default: break;
+        }
+    }
+    for (i = 0; i < SET_STR_COUNT; ++i) {
+        HWND c = settings_ctl(SET_STR_DEFS[i].ctl);
+        if (!c) continue;
+        GetWindowTextA(c, t, NTVDMEX_PATH_MAX);
+        settings_strcpy(n->s[i], t, NTVDMEX_PATH_MAX);
+    }
+}
+
+/* EnableThemeDialogTexture is what stops a page rendering as a grey slab on the
+   tab's themed background. It lives in uxtheme.dll (XP and later), so it is bound by
+   name; a box with no theming simply gets the old grey rather than a dialog that
+   fails to open. The module is loaded once and never freed -- the tab texture is
+   drawn by uxtheme on every later WM_ERASEBKGND, not just at init. */
+typedef HRESULT (WINAPI *pfn_etdt)(HWND, DWORD);
+static HMODULE   g_uxtheme;
+static pfn_etdt  g_etdt;
+
+static INT_PTR CALLBACK settings_pageproc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
+{
+    (void)wp; (void)lp;
+    if (msg == WM_INITDIALOG) {
+        if (!g_uxtheme) {
+            g_uxtheme = LoadLibraryA("uxtheme.dll");
+            if (g_uxtheme)
+                g_etdt = (pfn_etdt)GetProcAddress(g_uxtheme, "EnableThemeDialogTexture");
+        }
+        if (g_etdt) g_etdt(dlg, 0x00000006);   /* ETDT_ENABLE | ETDT_USETABTEXTURE */
+        return TRUE;
+    }
+    return FALSE;
+}
+
+static void settings_show_page(int idx)
+{
+    int i;
+    for (i = 0; i < NTVDMEX_PAGE_COUNT; ++i)
+        if (g_spage[i]) ShowWindow(g_spage[i], i == idx ? SW_SHOW : SW_HIDE);
 }
 
 static INT_PTR CALLBACK settings_dlgproc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
 {
-    (void)lp;
     switch (msg) {
     case WM_INITDIALOG: {
-        /* The list is a convenience, not a constraint: the combo is editable
-           (CBS_DROPDOWN) because the next guest to refuse to start will want some
-           number nobody has thought of yet. */
-        static const char *const VERS[] = { "6.22", "5.00", "4.01", "3.31", "7.10" };
-        int i;
-        for (i = 0; i < (int)(sizeof VERS / sizeof VERS[0]); ++i)
-            SendDlgItemMessageA(dlg, IDC_S_DOSVER, CB_ADDSTRING, 0, (LPARAM)VERS[i]);
-        settings_to_dialog(dlg, &g_set);
+        HWND tab = GetDlgItem(dlg, IDC_S_TAB);
+        HINSTANCE hi = GetModuleHandleA(NULL);
+        RECT rc; TCITEMA ti; int i;
+        for (i = 0; i < NTVDMEX_PAGE_COUNT; ++i) {
+            ti.mask = TCIF_TEXT; ti.pszText = (LPSTR)SETTINGS_TABS[i];
+            SendMessageA(tab, TCM_INSERTITEMA, (WPARAM)i, (LPARAM)&ti);
+        }
+        /* WHERE THE PAGES GO: the tab control's own rectangle in dialog coordinates,
+           less the strip the tabs themselves occupy. TCM_ADJUSTRECT computes the
+           second part and is the only sound way to get it -- the height of a tab row
+           belongs to the visual style, not to us, and hard-coding it is how a dialog
+           comes out right on one theme and clipped on the next. */
+        GetWindowRect(tab, &rc);
+        MapWindowPoints(NULL, dlg, (POINT *)&rc, 2);
+        SendMessageA(tab, TCM_ADJUSTRECT, FALSE, (LPARAM)&rc);
+        for (i = 0; i < NTVDMEX_PAGE_COUNT; ++i) {
+            g_spage[i] = CreateDialogParamA(hi, MAKEINTRESOURCEA(SETTINGS_PAGES[i]),
+                                            dlg, settings_pageproc, 0);
+            if (!g_spage[i]) continue;
+            /* HWND_TOP, not the tab: a page placed BELOW the tab control in z-order
+               is drawn over by the tab's own background and never seen. */
+            SetWindowPos(g_spage[i], HWND_TOP, rc.left, rc.top,
+                         rc.right - rc.left, rc.bottom - rc.top, SWP_HIDEWINDOW);
+        }
+        settings_fill_combos();
+        settings_to_dialog(&g_set);
+        settings_show_page(0);
         return TRUE; }
+    case WM_NOTIFY:
+        if (((NMHDR *)lp)->idFrom == IDC_S_TAB && ((NMHDR *)lp)->code == (UINT)TCN_SELCHANGE) {
+            settings_show_page((int)SendMessageA(GetDlgItem(dlg, IDC_S_TAB),
+                                                TCM_GETCURSEL, 0, 0));
+            return TRUE;
+        }
+        return FALSE;
     case WM_COMMAND:
         switch (LOWORD(wp)) {
         case IDC_S_DEFAULTS: {
+            /* EVERY page, not just the one on screen. A "Restore Defaults" that
+               silently meant "this tab only" would be the more surprising of the
+               two readings, and there is no second button to offer the other. */
             ntvdmex_settings d; settings_defaults(&d);
-            settings_to_dialog(dlg, &d);          /* shown, not applied -- OK commits */
+            settings_to_dialog(&d);           /* shown, not applied -- OK commits */
             return TRUE; }
         case IDOK: {
             ntvdmex_settings n = g_set;
-            settings_from_dialog(dlg, &n);
+            settings_from_dialog(&n);
+            settings_clamp(&n);
             g_set = n;
-            settings_save(&g_set);                /* the registry IS the store        */
+            settings_save(&g_set);            /* the registry IS the store        */
             settings_apply(GetParent(dlg), &g_set, 1);
             EndDialog(dlg, IDOK);
             return TRUE; }
@@ -3430,6 +3617,13 @@ static INT_PTR CALLBACK settings_dlgproc(HWND dlg, UINT msg, WPARAM wp, LPARAM l
             return TRUE;
         }
         return FALSE;
+    case WM_DESTROY: {
+        int i;                                /* so a second open cannot use stale HWNDs */
+        for (i = 0; i < NTVDMEX_PAGE_COUNT; ++i) {
+            if (g_spage[i]) DestroyWindow(g_spage[i]);
+            g_spage[i] = NULL;
+        }
+        return FALSE; }
     case WM_CLOSE:
         EndDialog(dlg, IDCANCEL);
         return TRUE;
@@ -3598,7 +3792,7 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
                     log_append(LOG_PATH, sb, sq);
                 }
             } }
-        if (g_title_dirty) { set_window_title(); g_title_dirty = 0; }  /* apply on UI thread */
+        status_update();          /* program name / width / mode / capture, on the UI thread */
         /* Drive the PIT from REAL elapsed time so the BIOS tick (0040:006C) and
            INT 1Ah track wall-clock regardless of WM_TIMER jitter; clamp after a
            stall so we don't flood a catch-up burst of ticks. */
@@ -3696,7 +3890,11 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
         EndPaint(h, &ps);
         return 0; }
     case WM_SIZE:
-        if (g_status) SendMessageA(g_status, WM_SIZE, 0, 0);  /* let it re-dock     */
+        if (g_status) {
+            SendMessageA(g_status, WM_SIZE, 0, 0);            /* let it re-dock     */
+            status_set_parts();      /* ...and re-cut the two parts to the new width */
+            status_update();         /* re-partitioning blanks them; fill them again */
+        }
         return 0;
     case WM_COMMAND:
         switch (LOWORD(wp)) {
@@ -8652,13 +8850,16 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
          what a headless measurement is measuring. */
     settings_load(&g_set);
     settings_apply(NULL, &g_set, 0);
-    p = zput(p, "STAGE0: settings cursor="); p = zhex(p, g_set.show_host_cursor);
-    p = zput(p, " blink=");   p = zhex(p, g_set.blink_text_cursor);
-    p = zput(p, " msens=");   p = zhex(p, g_set.mouse_sens);
-    p = zput(p, " dosver=");  p = zhex(p, g_set.dos_major);
-    p = zput(p, ".");         p = zhex(p, g_set.dos_minor);
-    p = zput(p, " pitpace="); p = zhex(p, g_set.pit_pace);
-    p = zput(p, " uitick=");  p = zhex(p, g_set.ui_tick_ms);
+    /* Log only the LIVE settings -- the ones settings_apply() actually pushes into
+       the machine. The stored-but-not-yet-honoured ones would make this line four
+       times longer and every value in it would be a claim the run cannot support. */
+    p = zput(p, "STAGE0: settings cursor="); p = zhex(p, g_set.v[SET_HOSTCURSOR]);
+    p = zput(p, " blink=");   p = zhex(p, g_set.v[SET_BLINKCURSOR]);
+    p = zput(p, " msens=");   p = zhex(p, g_set.v[SET_MSENS]);
+    p = zput(p, " dosver=");  p = zhex(p, g_set.v[SET_DOSMAJ]);
+    p = zput(p, ".");         p = zhex(p, g_set.v[SET_DOSMIN]);
+    p = zput(p, " pitpace="); p = zhex(p, g_set.v[SET_PITPACE]);
+    p = zput(p, " uitick=");  p = zhex(p, g_set.v[SET_UITICK]);
     p = zput(p, "\r\n");
 
     g_headless = (GetFileAttributesA(AUTOEXIT_PATH) != INVALID_FILE_ATTRIBUTES);
@@ -8894,7 +9095,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     { const char *bn = progpath, *q; int k = 0;
       for (q = progpath; *q; ++q) if (*q == '\\' || *q == '/') bn = q + 1;
       if (*bn) { while (bn[k] && k < 63) { g_progname[k] = bn[k]; ++k; } g_progname[k] = 0; } }
-    g_title_dirty = 1;                             /* UI thread sets the caption + prog name */
+    /* No flag to raise: the UI tick polls g_progname and repaints the strip when it
+       changes. See status_update. */
 
     /* If this is a bound linear executable (every DOS/4GW game is one), learn which of
        its objects are code before it starts asking us for memory to load them into. */
@@ -9042,7 +9244,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
        guest is running -- it is read per INT 21h AH=30h, so it takes effect at the
        guest's next version check with no restart. */
     g_dosm = &m;
-    dos_int21_set_version(&m, (uint8_t)g_set.dos_major, (uint8_t)g_set.dos_minor);
+    dos_int21_set_version(&m, (uint8_t)g_set.v[SET_DOSMAJ], (uint8_t)g_set.v[SET_DOSMIN]);
     /* ── THE REPORTED DOS VERSION IS A KNOB, BECAUSE IT IS A LIE THE GUEST CHOOSES.
          Real DOS ships SETVER for precisely this, and the number is not a fact about
          us: it is what a particular guest will accept. We default to 6.22 to match the
