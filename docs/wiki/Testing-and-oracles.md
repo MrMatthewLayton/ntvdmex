@@ -15,7 +15,7 @@ convention precisely so this is possible.
 ./tools/dostest/run.sh          # builds + runs everything; non-zero exit if anything fails
 ```
 
-**16 batteries, 630 checks, ~10 seconds** — verified from a clean clone. Covers MCB, XMS,
+**17 batteries, 630 checks, ~10 seconds** — verified from a clean clone. Covers MCB, XMS,
 EMS, DMA, PIC, PIT, SB, OPL, OPL synth, MPU, speaker, video, input, the PM interpreter, the
 instruction-length decoder, and the VDD bus. **This is the loop to develop against.**
 
