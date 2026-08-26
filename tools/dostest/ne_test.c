@@ -135,6 +135,9 @@ int main(void)
     m.seg[1].mem = segmem[1]; m.seg[1].seg = 0x2000;
 
     ok(ne_apply_relocs(&m, 0, NULL, NULL) == 0, "relocations apply");
+    /* 4 records, one of which is a 2-site chain -> 5 sites. "Success" with 0 sites
+       patched would otherwise be indistinguishable from success. */
+    ok(m.sites == 5, "5 sites patched (4 records, one a 2-link chain)");
     ok(ne_rd16(segmem[0] + 0x00) == 0x2000, "chained SEGMENT: first site patched");
     ok(ne_rd16(segmem[0] + 0x02) == 0x2000, "chained SEGMENT: SECOND site patched too");
     ok(ne_rd16(segmem[0] + 0x10) == 0x0040 && ne_rd16(segmem[0] + 0x12) == 0x2000,

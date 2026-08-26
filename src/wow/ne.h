@@ -72,6 +72,11 @@ typedef struct {
     uint8_t  target_os, other_flags;
     ne_seg   seg[NE_MAX_SEG];
     int      err;          /* 0 = ok; otherwise the __LINE__ that rejected it   */
+    /* ⚠ How many SITES were actually patched, accumulated across segments. A
+         relocation pass that returns "success" having done nothing is
+         indistinguishable from one that worked, and the guest only finds out
+         later and somewhere else. Count it, print it, and assert on it. */
+    uint32_t sites;
 } ne_module;
 
 /* Resolve an imported entry point. Returns 0 on success and fills seg:off.
@@ -246,6 +251,7 @@ static int ne_apply_relocs(ne_module *m, int idx, ne_import_fn imp, void *ctx)
             case NE_ADDR_LOBYTE:   s->mem[site] = (uint8_t)toff; break;
             default:               m->err = __LINE__; return -1;
             }
+            ++m->sites;
             if (rt & NE_REL_ADDITIVE) break;     /* additive records are not chained */
             if (next == 0xFFFF) break;
             site = next;

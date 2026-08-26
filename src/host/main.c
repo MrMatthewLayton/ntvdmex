@@ -20,6 +20,7 @@
 #include "log.h"
 #include "settings.h"   /* registry-backed knobs + the Settings dialog */
 #include "x86len.h"     /* which `CD nn` byte pairs are really INT instructions */
+#include "../wow/ne.h"  /* GH #128: 16-bit New Executable loader (WOW bootstrap) */
 #include "dos_mcb.h"
 #include "dos_loader.h"
 #include "dos_psp.h"
@@ -78,6 +79,10 @@
    the DEFAULT because the page trap demonstrably freezes the guest on real
    hardware; this knob exists so the old path is still one file away. */
 #define P12OFF_FLAG   "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\p12off.flag"
+/* GH #128: opt into the EXPERIMENTAL WOW load probe on a Win16 launch. Absent (the
+   default) the host still refuses Win16 loudly -- an experiment must never become the
+   shipped behaviour by accident. */
+#define WOWTRY_FLAG   "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\wowtry.flag"
 /* Dev-only: capture the exact OPL register stream a game sends, with timestamps,
    so it can be replayed offline through BOTH our synth and a reference core and
    the audio diffed. Counting register writes cannot say WHY an instrument sounds
@@ -3152,10 +3157,131 @@ static int launch_is_wow(const char *cmd)
      window would silently get stock -- which is why it has not been done casually.
    ► THE REAL ANSWER IS #128: implement WOW, and this becomes the dispatch point
      rather than a dead end. The detection above is what that will hang off. */
+/* Pull the `-a <path>` argument out of a WOW command line. Measured shape:
+     "…\ntvdm.exe" -f -i1 -w -a C:\WINDOWS\system32\krnl386.exe
+   That path is the module WOW is asked to bootstrap, so it is the loader's input. */
+static int wow_arg_a(const char *cmd, char *out, int cap)
+{
+    const char *a = cmdline_after_argv0(cmd);
+    int i = 0;
+    out[0] = 0;
+    while (*a) {
+        if ((a[0] == '-' || a[0] == '/') && a[1] == 'a' && (a[2] == 0 || a[2] == ' ')) {
+            a += 2;
+            while (*a == ' ') ++a;
+            if (*a == '"') { ++a; while (*a && *a != '"' && i < cap - 1) out[i++] = *a++; }
+            else           { while (*a && *a != ' '  && i < cap - 1) out[i++] = *a++; }
+            out[i] = 0;
+            return i ? 0 : -1;
+        }
+        if (*a == '"') { ++a; while (*a && *a != '"') ++a; if (*a) ++a; }
+        else           { while (*a && *a != ' ') ++a; }
+        while (*a == ' ') ++a;
+    }
+    return -1;
+}
+
+/* ── EXPERIMENTAL: load the WOW bootstrap module and report the layout. ─────────────
+     Gated on WOWTRY_FLAG, and it does NOT execute anything -- this answers "does the
+     loader work on the real binary, inside the real host, against real memory", which
+     is a different question from "does it parse on the build machine", and a much
+     smaller one than "does krnl386 initialise". Answering them one at a time is how
+     the DPMI work got anywhere.
+   ⚠ Segments are given HOST memory and placeholder segment values here. Real
+     execution needs LDT selectors from the DPMI layer and an entry into 16-bit
+     protected mode -- krnl386 is the 386 ENHANCED-mode kernel and does not run in
+     V86. That is the next step, deliberately not this one. */
+static void wow_probe_load(const char *cmd)
+{
+    char path[512], m[900], *q;
+    HANDLE f;
+    DWORD sz = 0, got = 0;
+    uint8_t *img = NULL;
+    ne_module ne;
+    int i;
+
+    q = m; q = zput(q, "WOWTRY: probe begins\r\n"); log_append(LOG_PATH, m, q);
+
+    if (wow_arg_a(cmd, path, sizeof path) != 0) {
+        q = m; q = zput(q, "WOWTRY: no -a argument on the command line\r\n");
+        log_append(LOG_PATH, m, q); return;
+    }
+    q = m; q = zput(q, "WOWTRY: bootstrap module = "); q = zput(q, path);
+    q = zput(q, "\r\n"); log_append(LOG_PATH, m, q);
+
+    f = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
+    if (f == INVALID_HANDLE_VALUE) {
+        q = m; q = zput(q, "WOWTRY: cannot open it, err=0x"); q = zhex(q, GetLastError());
+        q = zput(q, "\r\n"); log_append(LOG_PATH, m, q); return;
+    }
+    sz = GetFileSize(f, NULL);
+    img = (uint8_t *)VirtualAlloc(NULL, sz, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+    if (!img || !ReadFile(f, img, sz, &got, NULL) || got != sz) {
+        CloseHandle(f);
+        q = m; q = zput(q, "WOWTRY: read failed\r\n"); log_append(LOG_PATH, m, q); return;
+    }
+    CloseHandle(f);
+
+    if (ne_parse(&ne, img, sz) != 0) {
+        q = m; q = zput(q, "WOWTRY: ne_parse REJECTED it at ne.h line ");
+        q = zhex(q, (DWORD)ne.err); q = zput(q, "\r\n");
+        log_append(LOG_PATH, m, q); return;
+    }
+    q = m;
+    q = zput(q, "WOWTRY: parsed OK. segs=");   q = zhex(q, ne.n_seg);
+    q = zput(q, " mods=");                     q = zhex(q, ne.n_mod);
+    q = zput(q, " movable=");                  q = zhex(q, ne.n_movable);
+    q = zput(q, " align=");                    q = zhex(q, ne.align_shift);
+    q = zput(q, " autodata=");                 q = zhex(q, ne.autodata);
+    q = zput(q, "\r\n  CS:IP=");               q = zhex(q, ne.csip >> 16);
+    q = zput(q, ":");                          q = zhex(q, ne.csip & 0xFFFF);
+    q = zput(q, "  SS:SP=");                   q = zhex(q, ne.sssp >> 16);
+    q = zput(q, ":");                          q = zhex(q, ne.sssp & 0xFFFF);
+    q = zput(q, "  expects Win ");             q = zhex(q, ne.expect_ver);
+    q = zput(q, "\r\n"); log_append(LOG_PATH, m, q);
+
+    /* Give every segment real memory, load it, and fix it up. Placeholder segment
+       values (0x1000, 0x1100, ...) are enough to prove the relocation machinery
+       runs end to end on the real file; they are not what execution will use. */
+    for (i = 0; i < (int)ne.n_seg; ++i) {
+        ne_seg *s = &ne.seg[i];
+        uint32_t need = ne_seg_alloc_size(s);
+        s->mem = (uint8_t *)VirtualAlloc(NULL, need, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+        s->seg = (uint16_t)(0x1000 + i * 0x100);
+        if (!s->mem) { q = m; q = zput(q, "WOWTRY: seg alloc failed\r\n");
+                       log_append(LOG_PATH, m, q); return; }
+        if (s->sector) {
+            uint32_t k;
+            for (k = 0; k < s->length; ++k) s->mem[k] = img[s->file_off + k];
+        }
+        q = m;
+        q = zput(q, "  seg ");        q = zhex(q, (DWORD)(i + 1));
+        q = zput(q, " fileoff=0x");   q = zhex(q, s->file_off);
+        q = zput(q, " len=0x");       q = zhex(q, s->length);
+        q = zput(q, " alloc=0x");     q = zhex(q, need);
+        q = zput(q, " flags=0x");     q = zhex(q, s->flags);
+        q = zput(q, " -> seg 0x");    q = zhex(q, s->seg);
+        q = zput(q, "\r\n"); log_append(LOG_PATH, m, q);
+    }
+    for (i = 0; i < (int)ne.n_seg; ++i) {
+        int r = ne_apply_relocs(&ne, i, NULL, NULL);
+        q = m;
+        q = zput(q, "  relocs seg "); q = zhex(q, (DWORD)(i + 1));
+        q = zput(q, r == 0 ? " ok, cumulative sites patched=" : " FAILED at ne.h line ");
+        q = zhex(q, r == 0 ? ne.sites : (DWORD)ne.err);
+        q = zput(q, "\r\n"); log_append(LOG_PATH, m, q);
+    }
+    q = m; q = zput(q, "WOWTRY: probe complete -- module is loaded and relocated in "
+                       "host memory. Execution is the NEXT step (needs LDT selectors "
+                       "+ 16-bit PM entry).\r\n");
+    log_append(LOG_PATH, m, q);
+}
+
 static int wow_refuse(const char *cmd)
 {
     char m[256], *q = m;
-    (void)cmd;
+    if (GetFileAttributesA(WOWTRY_FLAG) != INVALID_FILE_ATTRIBUTES)
+        wow_probe_load(cmd);
     q = zput(q, "STAGE0: WIN16/WOW -- NOT SUPPORTED and cannot be handed back "
                 "(see GH #129). Refusing loudly.\r\n");
     log_append(LOG_PATH, m, q);

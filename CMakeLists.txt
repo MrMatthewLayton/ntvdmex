@@ -108,7 +108,7 @@ add_executable(ntvdmhost
     src/vdd/present_ddraw.c
     src/runtime.c
     res/ntvdmhost.rc)
-target_include_directories(ntvdmhost PRIVATE src/host src/vdm src/dos src/vdd)
+target_include_directories(ntvdmhost PRIVATE src/host src/vdm src/dos src/vdd src/wow)
 if(NOT NTVDMEX_EMBED_MANIFEST)
     target_compile_definitions(ntvdmhost PRIVATE NTVDMEX_NO_MANIFEST)
 endif()

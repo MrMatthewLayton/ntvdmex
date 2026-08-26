@@ -61,13 +61,22 @@ flawless sound.
 
 ## Next actions, in order
 
-1. **[#129] Win16 launch detection + passthrough to stock ntvdm.** The stopgap that makes
-   "leave it installed" safe long before WOW is written. Small change, highest value.
-2. **[#130] Installation & routing.** An installer that sets/clears the IFEO key, reports
-   which VDM a machine will actually use, and has a recovery path.
-3. **[#131] Console/stdio integration.** Without it, anything script-driven behaves
-   differently under NTVDMEX than under stock.
-4. **[#128] WOW/Win16.** The real answer, and the largest single chunk of the project.
+> ⚠️ **The plan changed on 2026-08-26.** #129 was going to make "leave it installed"
+> safe by handing Win16 launches back to stock ntvdm. **That is impossible** — measured
+> three ways (see #129). Windows validates the VDM image's identity, so a renamed copy is
+> refused outright, and the real name re-enters us through the IFEO hook. So there is no
+> safe install story until WOW exists, and #128 moved onto the critical path.
+
+1. **[#128] WOW / Win16 — IN PROGRESS.** NE loader done (`src/wow/ne.h`, 18th battery).
+   On the rig, **krnl386.exe loads and relocates inside NTVDMEX**: 4 segments, 13
+   relocation records expanding to **495 patched sites**, imports none. Next: give those
+   segments LDT selectors from the DPMI layer and enter 16-bit protected mode at
+   `seg1:0xc02b` — krnl386 is the 386 *enhanced-mode* kernel and does not run in V86.
+2. **[#131] Console/stdio integration.** Independent of WOW and needed regardless:
+   anything script-driven behaves differently under NTVDMEX than under stock.
+3. **[#130] Installation & routing.** Blocked on #128 — an installer is not useful while
+   installing breaks every 16-bit Windows program.
+4. **Known DOS defects** — #133 redirection, #134 the `$p` prompt, #47 MEM.EXE lying.
 
 ---
 
