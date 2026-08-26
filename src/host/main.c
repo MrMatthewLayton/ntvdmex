@@ -3160,12 +3160,25 @@ static int launch_is_wow(const char *cmd)
      window would silently get stock -- which is why it has not been done casually.
    ► THE REAL ANSWER IS #128: implement WOW, and this becomes the dispatch point
      rather than a dead end. The detection above is what that will hang off. */
-/* The loaded module, at file scope: selector allocation happens in a LATER stage of
+/* The loaded modules, at file scope: selector allocation happens in a LATER stage of
    WinMain -- dpmi_install and the LDT pool are defined further down, and entering
    protected mode needs the VDM registered first -- so the result of the load has to
-   outlive this call. */
-static ne_module g_wow_ne;
-static int       g_wow_loaded = 0;
+   outlive this call.
+
+   ⚠ TWO PHASES, AND THE ORDER IS FORCED. An import is patched as
+     target-selector:offset, so every module's selectors must be final before ANY
+     module is relocated. The earlier version of this code relocated at load time with
+     placeholder segment values and relocated AGAIN once selectors existed. That is
+     broken and tools/dostest/ne_test.c now proves it: a chained record finds its next
+     site by reading the word AT the current site, and the first pass has overwritten
+     exactly those words with addresses. The second pass follows garbage. So:
+        wow_load_modules()   -- parse, allocate, copy bytes.  NO relocation.
+        wow_bind_modules()   -- selectors for everything, then relocate ONCE. */
+#define WOW_MAX_MOD 6
+static ne_module g_wow_mod[WOW_MAX_MOD];
+static uint8_t  *g_wow_img[WOW_MAX_MOD];
+static char      g_wow_name[WOW_MAX_MOD][16];
+static int       g_wow_nmod = 0;
 
 /* Pull the `-a <path>` argument out of a WOW command line. Measured shape:
      "…\ntvdm.exe" -f -i1 -w -a C:\WINDOWS\system32\krnl386.exe
@@ -3191,24 +3204,109 @@ static int wow_arg_a(const char *cmd, char *out, int cap)
     return -1;
 }
 
-/* ── EXPERIMENTAL: load the WOW bootstrap module and report the layout. ─────────────
-     Gated on WOWTRY_FLAG, and it does NOT execute anything -- this answers "does the
-     loader work on the real binary, inside the real host, against real memory", which
-     is a different question from "does it parse on the build machine", and a much
-     smaller one than "does krnl386 initialise". Answering them one at a time is how
-     the DPMI work got anywhere.
-   ⚠ Segments are given HOST memory and placeholder segment values here. Real
-     execution needs LDT selectors from the DPMI layer and an entry into 16-bit
-     protected mode -- krnl386 is the 386 ENHANCED-mode kernel and does not run in
-     V86. That is the next step, deliberately not this one. */
-static void wow_probe_load(const char *cmd)
+/* Replace the file name in `path` with `leaf`, so the modules that live beside
+   krnl386.exe can be found without hard-coding %SystemRoot%\system32. */
+static void wow_sibling(const char *path, const char *leaf, char *out, int cap)
 {
-    char path[512], m[900], *q;
+    int i, cut = 0;
+    for (i = 0; path[i] && i < cap - 1; ++i) {
+        out[i] = path[i];
+        if (path[i] == '\\' || path[i] == '/') cut = i + 1;
+    }
+    for (i = 0; leaf[i] && cut < cap - 1; ++i) out[cut++] = leaf[i];
+    out[cut] = 0;
+}
+
+/* Parse one module and give its segments memory. NO relocation -- see the two-phase
+   note above. Returns the g_wow_mod index, or -1. */
+static int wow_load_one(const char *path)
+{
+    char m[700], *q;
     HANDLE f;
     DWORD sz = 0, got = 0;
-    uint8_t *img = NULL;
-    ne_module ne;
-    int i;
+    uint8_t *img;
+    ne_module *ne;
+    int slot = g_wow_nmod, i;
+
+    if (slot >= WOW_MAX_MOD) return -1;
+    ne = &g_wow_mod[slot];
+
+    f = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
+    if (f == INVALID_HANDLE_VALUE) {
+        q = m; q = zput(q, "WOWTRY: cannot open "); q = zput(q, path);
+        q = zput(q, " err=0x"); q = zhex(q, GetLastError());
+        q = zput(q, "\r\n"); log_append(LOG_PATH, m, q); return -1;
+    }
+    sz = GetFileSize(f, NULL);
+    img = (uint8_t *)VirtualAlloc(NULL, sz, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+    if (!img || !ReadFile(f, img, sz, &got, NULL) || got != sz) {
+        CloseHandle(f);
+        q = m; q = zput(q, "WOWTRY: read failed for "); q = zput(q, path);
+        q = zput(q, "\r\n"); log_append(LOG_PATH, m, q); return -1;
+    }
+    CloseHandle(f);
+
+    if (ne_parse(ne, img, sz) != 0) {
+        q = m; q = zput(q, "WOWTRY: ne_parse REJECTED "); q = zput(q, path);
+        q = zput(q, " at ne.h line "); q = zhex(q, (DWORD)ne->err);
+        q = zput(q, "\r\n"); log_append(LOG_PATH, m, q); return -1;
+    }
+    if (ne_own_name(ne, g_wow_name[slot], sizeof g_wow_name[slot]) != 0)
+        g_wow_name[slot][0] = 0;
+
+    q = m;
+    q = zput(q, "WOWTRY: "); q = zput(q, path);
+    q = zput(q, "\r\n  name=");                q = zput(q, g_wow_name[slot]);
+    q = zput(q, (ne->prog_flags & NE_PROG_LIBRARY) ? " LIBRARY" : " PROGRAM");
+    q = zput(q, " segs=");                     q = zhex(q, ne->n_seg);
+    q = zput(q, " imports-from=");             q = zhex(q, ne->n_mod);
+    q = zput(q, " movable=");                  q = zhex(q, ne->n_movable);
+    q = zput(q, "\r\n  CS:IP=");               q = zhex(q, ne->csip >> 16);
+    q = zput(q, ":");                          q = zhex(q, ne->csip & 0xFFFF);
+    q = zput(q, "  SS:SP=");                   q = zhex(q, ne->sssp >> 16);
+    q = zput(q, ":");                          q = zhex(q, ne->sssp & 0xFFFF);
+    q = zput(q, "  autodata=");                q = zhex(q, ne->autodata);
+    q = zput(q, "  heap=0x");                  q = zhex(q, ne->heap);
+    q = zput(q, "  stack=0x");                 q = zhex(q, ne->stack);
+    q = zput(q, "\r\n"); log_append(LOG_PATH, m, q);
+
+    for (i = 0; i < (int)ne->n_seg; ++i) {
+        ne_seg *s = &ne->seg[i];
+        uint32_t need = ne_seg_alloc_size(s), k;
+        s->mem = (uint8_t *)VirtualAlloc(NULL, need, MEM_COMMIT | MEM_RESERVE,
+                                         PAGE_READWRITE);
+        s->seg = 0;                          /* NO selector yet -- phase 2 assigns it */
+        if (!s->mem) {
+            q = m; q = zput(q, "WOWTRY: seg alloc failed\r\n");
+            log_append(LOG_PATH, m, q); return -1;
+        }
+        if (s->sector) for (k = 0; k < s->length; ++k) s->mem[k] = img[s->file_off + k];
+    }
+    g_wow_img[slot] = img;
+    ++g_wow_nmod;
+    return slot;
+}
+
+/* ── EXPERIMENTAL: load the WOW module set and report the layout. ───────────────────
+     Gated on WOWTRY_FLAG, and it does NOT execute anything. It answers "does the
+     loader work on the real binaries, inside the real host, against real memory",
+     which is a different question from "does it parse on the build machine", and a
+     much smaller one than "does krnl386 initialise". Answering them one at a time is
+     how the DPMI work got anywhere.
+
+     krnl386 alone is not enough any more: it imports from nothing, so it exercises
+     none of the import machinery. user.exe and gdi.exe both import from KERNEL by
+     ordinal (and user once BY NAME), which is the path every real program takes.
+   ⚠ Segments get HOST memory here and nothing else. Real execution needs LDT
+     selectors from the DPMI layer and an entry into 16-bit protected mode -- krnl386
+     is the 386 ENHANCED-mode kernel and does not run in V86. */
+static void wow_probe_load(const char *cmd)
+{
+    /* keyboard.drv / system.drv / shell.dll are NOT loaded: they are the next set,
+       and wowexec's KEYBOARD import is expected to be the first thing that stops. */
+    static const char *SIBLING[] = { "user.exe", "gdi.exe", "wowexec.exe" };
+    char path[512], sib[512], m[700], *q;
+    size_t j;
 
     q = m; q = zput(q, "WOWTRY: probe begins\r\n"); log_append(LOG_PATH, m, q);
 
@@ -3216,73 +3314,14 @@ static void wow_probe_load(const char *cmd)
         q = m; q = zput(q, "WOWTRY: no -a argument on the command line\r\n");
         log_append(LOG_PATH, m, q); return;
     }
-    q = m; q = zput(q, "WOWTRY: bootstrap module = "); q = zput(q, path);
-    q = zput(q, "\r\n"); log_append(LOG_PATH, m, q);
+    if (wow_load_one(path) < 0) return;
+    for (j = 0; j < sizeof SIBLING / sizeof SIBLING[0]; ++j) {
+        wow_sibling(path, SIBLING[j], sib, sizeof sib);
+        wow_load_one(sib);                    /* logs its own failure; keep going */
+    }
 
-    f = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
-    if (f == INVALID_HANDLE_VALUE) {
-        q = m; q = zput(q, "WOWTRY: cannot open it, err=0x"); q = zhex(q, GetLastError());
-        q = zput(q, "\r\n"); log_append(LOG_PATH, m, q); return;
-    }
-    sz = GetFileSize(f, NULL);
-    img = (uint8_t *)VirtualAlloc(NULL, sz, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
-    if (!img || !ReadFile(f, img, sz, &got, NULL) || got != sz) {
-        CloseHandle(f);
-        q = m; q = zput(q, "WOWTRY: read failed\r\n"); log_append(LOG_PATH, m, q); return;
-    }
-    CloseHandle(f);
-
-    if (ne_parse(&ne, img, sz) != 0) {
-        q = m; q = zput(q, "WOWTRY: ne_parse REJECTED it at ne.h line ");
-        q = zhex(q, (DWORD)ne.err); q = zput(q, "\r\n");
-        log_append(LOG_PATH, m, q); return;
-    }
-    q = m;
-    q = zput(q, "WOWTRY: parsed OK. segs=");   q = zhex(q, ne.n_seg);
-    q = zput(q, " mods=");                     q = zhex(q, ne.n_mod);
-    q = zput(q, " movable=");                  q = zhex(q, ne.n_movable);
-    q = zput(q, " align=");                    q = zhex(q, ne.align_shift);
-    q = zput(q, " autodata=");                 q = zhex(q, ne.autodata);
-    q = zput(q, "\r\n  CS:IP=");               q = zhex(q, ne.csip >> 16);
-    q = zput(q, ":");                          q = zhex(q, ne.csip & 0xFFFF);
-    q = zput(q, "  SS:SP=");                   q = zhex(q, ne.sssp >> 16);
-    q = zput(q, ":");                          q = zhex(q, ne.sssp & 0xFFFF);
-    q = zput(q, "  expects Win ");             q = zhex(q, ne.expect_ver);
-    q = zput(q, "\r\n"); log_append(LOG_PATH, m, q);
-
-    /* Give every segment real memory, load it, and fix it up. Placeholder segment
-       values (0x1000, 0x1100, ...) are enough to prove the relocation machinery
-       runs end to end on the real file; they are not what execution will use. */
-    for (i = 0; i < (int)ne.n_seg; ++i) {
-        ne_seg *s = &ne.seg[i];
-        uint32_t need = ne_seg_alloc_size(s);
-        s->mem = (uint8_t *)VirtualAlloc(NULL, need, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
-        s->seg = (uint16_t)(0x1000 + i * 0x100);
-        if (!s->mem) { q = m; q = zput(q, "WOWTRY: seg alloc failed\r\n");
-                       log_append(LOG_PATH, m, q); return; }
-        if (s->sector) {
-            uint32_t k;
-            for (k = 0; k < s->length; ++k) s->mem[k] = img[s->file_off + k];
-        }
-        q = m;
-        q = zput(q, "  seg ");        q = zhex(q, (DWORD)(i + 1));
-        q = zput(q, " fileoff=0x");   q = zhex(q, s->file_off);
-        q = zput(q, " len=0x");       q = zhex(q, s->length);
-        q = zput(q, " alloc=0x");     q = zhex(q, need);
-        q = zput(q, " flags=0x");     q = zhex(q, s->flags);
-        q = zput(q, " -> seg 0x");    q = zhex(q, s->seg);
-        q = zput(q, "\r\n"); log_append(LOG_PATH, m, q);
-    }
-    for (i = 0; i < (int)ne.n_seg; ++i) {
-        int r = ne_apply_relocs(&ne, i, NULL, NULL);
-        q = m;
-        q = zput(q, "  relocs seg "); q = zhex(q, (DWORD)(i + 1));
-        q = zput(q, r == 0 ? " ok, cumulative sites patched=" : " FAILED at ne.h line ");
-        q = zhex(q, r == 0 ? ne.sites : (DWORD)ne.err);
-        q = zput(q, "\r\n"); log_append(LOG_PATH, m, q);
-    }
-    g_wow_ne = ne; g_wow_loaded = 1;
-    q = m; q = zput(q, "WOWTRY: loaded + relocated in host memory; selector stage next\r\n");
+    q = m; q = zput(q, "WOWTRY: modules loaded=");  q = zhex(q, (DWORD)g_wow_nmod);
+    q = zput(q, "; NOT relocated yet (selectors first)\r\n");
     log_append(LOG_PATH, m, q);
 }
 
@@ -6192,70 +6231,90 @@ static void wow_probe_ldt_matrix(const char *tag)
      so these SHOULD install. "Should" is not "does", and v86_set_ldt_entries returns an
      NTSTATUS, so ask it rather than assume. A descriptor that silently fails to install
      leaves a selector that faults on first use -- a silent death, far from the cause. */
+static ne_registry g_wow_reg;
+
 static void wow_probe_selectors(void)
 {
-    char m[400], *q;
-    int i;
-    if (!g_wow_loaded) return;
-    q = m; q = zput(q, "WOWTRY: selector stage\r\n"); log_append(LDTLOG_PATH, m, q);
+    char m[600], *q;
+    int k, i;
+    if (!g_wow_nmod) return;
+    q = m; q = zput(q, "WOWTRY: selector stage, modules="); q = zhex(q, (DWORD)g_wow_nmod);
+    q = zput(q, "\r\n"); log_append(LDTLOG_PATH, m, q);
     wow_probe_ldt_matrix("wow-late");
 
+    /* ── PHASE 2a: a selector for EVERY segment of EVERY module, before any
+         relocation runs. ne_registry_resolve refuses a target whose selector is still
+         0, so getting this order wrong fails loudly instead of writing 0000:xxxx. */
+    for (k = 0; k < g_wow_nmod; ++k) {
+        ne_module *ne = &g_wow_mod[k];
+        for (i = 0; i < (int)ne->n_seg; ++i) {
+            ne_seg *sg = &ne->seg[i];
+            int is_code = !(sg->flags & NE_SEG_DATA);
+            uint32_t need = ne_seg_alloc_size(sg);
+            int idx;
+            if (g_ldt_next >= DPMI_LDT_MAX) {
+                q = m; q = zput(q, "  LDT POOL EXHAUSTED\r\n");
+                log_append(LDTLOG_PATH, m, q); return;
+            }
+            idx = g_ldt_next++;
+            g_ldt[idx].base   = (DWORD)(ULONG_PTR)sg->mem;
+            g_ldt[idx].limit  = need - 1;
+            g_ldt[idx].access = (BYTE)(is_code ? 0xFA : 0xF2);
+            g_ldt[idx].flags  = 0;                       /* 16-bit segments */
+            dpmi_install(idx);
+            sg->seg = (WORD)((idx << 3) | 7);            /* the REAL selector now */
 
-    for (i = 0; i < (int)g_wow_ne.n_seg; ++i) {
-        ne_seg *sg = &g_wow_ne.seg[i];
-        int is_code = !(sg->flags & NE_SEG_DATA);
-        uint32_t need = ne_seg_alloc_size(sg);
-        int idx;
-        if (g_ldt_next >= DPMI_LDT_MAX) {
-            q = m; q = zput(q, "  LDT POOL EXHAUSTED\r\n"); log_append(LDTLOG_PATH, m, q);
-            return;
+            q = m;
+            q = zput(q, "  "); q = zput(q, g_wow_name[k]);
+            q = zput(q, " seg ");      q = zhex(q, (DWORD)(i + 1));
+            q = zput(q, is_code ? " CODE" : " DATA");
+            q = zput(q, " base=0x");   q = zhex(q, g_ldt[idx].base);
+            q = zput(q, " limit=0x");  q = zhex(q, g_ldt[idx].limit);
+            q = zput(q, " -> sel 0x"); q = zhex(q, sg->seg);
+            /* Read the descriptor back through the CPU. LAR only succeeds on a
+               selector the processor can actually see, so this is the hardware
+               confirming the install rather than us believing our own bookkeeping. */
+            {   DWORD ar = 0; unsigned char zf = 0; WORD sel = sg->seg;
+                __asm__ __volatile__("lar %2, %0\n\tsetz %1"
+                                     : "=r"(ar), "=q"(zf) : "r"(sel) : "cc");
+                q = zput(q, zf ? "  LAR ok ar=0x" : "  LAR FAILED ar=0x");
+                q = zhex(q, zf ? ar : 0);
+            }
+            q = zput(q, "\r\n"); log_append(LDTLOG_PATH, m, q);
         }
-        idx = g_ldt_next++;
-        g_ldt[idx].base   = (DWORD)(ULONG_PTR)sg->mem;
-        g_ldt[idx].limit  = need - 1;
-        g_ldt[idx].access = (BYTE)(is_code ? 0xFA : 0xF2);
-        g_ldt[idx].flags  = 0;                       /* 16-bit segments */
-        dpmi_install(idx);
-        sg->seg = (WORD)((idx << 3) | 7);            /* the REAL selector now */
+        ne_registry_add(&g_wow_reg, ne);
+    }
 
+    /* ── PHASE 2b: relocate ONCE, resolving imports across the registry. ──────────
+         KERNEL imports from nothing, so it only proves the internal fixups. GDI and
+         USER are the real test: every call they make into KERNEL is patched here.
+         WOWEXEC is expected to STOP at KEYBOARD, which is simply not loaded yet --
+         a stop that names its module is a to-do list, not a failure. */
+    for (k = 0; k < g_wow_nmod; ++k) {
+        ne_module *ne = &g_wow_mod[k];
+        int rc = 0;
+        ne->sites = 0;
+        for (i = 0; i < (int)ne->n_seg && rc == 0; ++i)
+            rc = ne_apply_relocs(ne, i, ne_registry_resolve, &g_wow_reg);
         q = m;
-        q = zput(q, "  seg ");      q = zhex(q, (DWORD)(i + 1));
-        q = zput(q, is_code ? " CODE" : " DATA");
-        q = zput(q, " base=0x");    q = zhex(q, g_ldt[idx].base);
-        q = zput(q, " limit=0x");   q = zhex(q, g_ldt[idx].limit);
-        q = zput(q, " -> sel 0x");  q = zhex(q, sg->seg);
-        /* Read the descriptor back through the CPU. LAR only succeeds on a selector
-           the processor can actually see, so this is the hardware confirming the
-           install rather than us believing our own bookkeeping. */
-        {   DWORD ar = 0; unsigned char zf = 0; WORD sel = sg->seg;
-            __asm__ __volatile__("lar %2, %0\n\tsetz %1"
-                                 : "=r"(ar), "=q"(zf) : "r"(sel) : "cc");
-            q = zput(q, zf ? "  LAR ok ar=0x" : "  LAR FAILED ar=0x");
-            q = zhex(q, zf ? ar : 0);
+        q = zput(q, "  RELOC "); q = zput(q, g_wow_name[k]);
+        if (rc == 0) {
+            q = zput(q, " ALL RESOLVED sites=0x"); q = zhex(q, ne->sites);
+        } else {
+            q = zput(q, " STOPPED after 0x");     q = zhex(q, ne->sites);
+            q = zput(q, " sites, at ne.h line "); q = zhex(q, (DWORD)ne->err);
+            q = zput(q, ", needed ");             q = zput(q, g_wow_reg.fail_mod);
+            q = zput(q, ".");
+            if (g_wow_reg.fail_fn[0]) q = zput(q, g_wow_reg.fail_fn);
+            else                    { q = zput(q, "@"); q = zhex(q, g_wow_reg.fail_ord); }
         }
         q = zput(q, "\r\n"); log_append(LDTLOG_PATH, m, q);
     }
 
-    /* Relocations were applied with PLACEHOLDER segment values, so every patched site
-       now holds a number that means nothing. Redo them against the real selectors --
-       and say so, because "we relocated twice" is the sort of thing that looks like a
-       bug in six months if it is not written down. */
-    g_wow_ne.sites = 0;
-    for (i = 0; i < (int)g_wow_ne.n_seg; ++i) {
-        int r = ne_apply_relocs(&g_wow_ne, i, NULL, NULL);
-        if (r != 0) {
-            q = m; q = zput(q, "  RE-RELOC FAILED seg "); q = zhex(q, (DWORD)(i + 1));
-            q = zput(q, " at ne.h line "); q = zhex(q, (DWORD)g_wow_ne.err);
-            q = zput(q, "\r\n"); log_append(LDTLOG_PATH, m, q);
-            return;
-        }
-    }
     q = m;
-    q = zput(q, "WOWTRY: re-relocated against real selectors, sites=");
-    q = zhex(q, g_wow_ne.sites);
-    q = zput(q, "\r\n  entry would be CS:IP = sel 0x");
-    q = zhex(q, g_wow_ne.seg[(g_wow_ne.csip >> 16) - 1].seg);
-    q = zput(q, ":0x"); q = zhex(q, g_wow_ne.csip & 0xFFFF);
+    q = zput(q, "WOWTRY: bind stage done.\r\n  KERNEL init entry would be CS:IP = sel 0x");
+    q = zhex(q, g_wow_mod[0].seg[(g_wow_mod[0].csip >> 16) - 1].seg);
+    q = zput(q, ":0x"); q = zhex(q, g_wow_mod[0].csip & 0xFFFF);
     q = zput(q, "\r\nWOWTRY: NOT entering PM yet -- next step.\r\n");
     log_append(LDTLOG_PATH, m, q);
 }
@@ -9406,8 +9465,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
          Probe BOTH launch types at BOTH points and let the 2x2 say whether it is the
          launch type or the amount of VDM setup that matters. */
     if (GetFileAttributesA(WOWTRY_FLAG) != INVALID_FILE_ATTRIBUTES)
-        wow_probe_ldt_matrix(g_wow_loaded ? "wow-early" : "dos-early");
-    if (g_wow_loaded) {                       /* GH #128: WOW selector stage */
+        wow_probe_ldt_matrix(g_wow_nmod ? "wow-early" : "dos-early");
+    if (g_wow_nmod) {                        /* GH #128: WOW selector stage */
         log_append(LOG_PATH, report, p); p = report;
         /* The DOS bisection puts the flip between csrss_get_command() and
            v86_get_tib(). The latter is one call and costs nothing to try here, so
@@ -9960,10 +10019,10 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
          them in `p` so a log_write carries them. */
     {   DWORD fa = GetFileAttributesA(WOWTRY_FLAG);
         char m2[200], *q2 = m2;
-        q2 = zput(q2, "LDTARM: wow_loaded="); q2 = zhex(q2, (DWORD)g_wow_loaded);
+        q2 = zput(q2, "LDTARM: wow_mods="); q2 = zhex(q2, (DWORD)g_wow_nmod);
         q2 = zput(q2, " flag_attr=0x");      q2 = zhex(q2, fa);
         q2 = zput(q2, "\r\n"); log_append(LOG_PATH, m2, q2);
-        if (!g_wow_loaded && fa != INVALID_FILE_ATTRIBUTES)
+        if (!g_wow_nmod && fa != INVALID_FILE_ATTRIBUTES)
             wow_probe_ldt_matrix("dos-late");  /* the other corner of the 2x2 */
     }
     modey_remap_flush_report();     /* whatever the A0000 remap had to say, now it fits */

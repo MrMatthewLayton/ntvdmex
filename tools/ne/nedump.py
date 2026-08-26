@@ -33,6 +33,10 @@ RELOC_ADDR = {0: "LOBYTE", 2: "SEGMENT", 3: "FAR_ADDR(32)", 5: "OFFSET(16)",
               11: "FAR_ADDR(48)", 13: "OFFSET(32)"}
 RELOC_TYPE = {0: "INTERNALREF", 1: "IMPORTORDINAL", 2: "IMPORTNAME", 3: "OSFIXUP"}
 
+# Entry-table bundle segment indicators. 0xFE is NOT a segment number -- see entries().
+ENT_ABSOLUTE = 0xFE
+ENT_MOVEABLE = 0xFF
+
 
 def flags(v, table):
     out = [n for bit, n in table if v & bit]
@@ -108,6 +112,60 @@ class NE:
             out.append((ordv, s))
         return out
 
+    def nonresident_names(self):
+        """⚠ ABSOLUTE file offset and a DWORD, unlike every other table offset here.
+        Entry 0 is the module DESCRIPTION, not an export -- but the exports that ARE
+        here are real: krnl386 keeps 312 of them, including GETWOWCOMPATFLAGSEX,
+        which user.exe imports BY NAME. A by-name lookup that reads only the resident
+        table finds none of them."""
+        out, o, end = [], self.nonres_off, self.nonres_off + self.nonres_len
+        while o < end and o < len(self.d):
+            if self.d[o] == 0:
+                break
+            s, o = pstr(self.d, o)
+            out.append((struct.unpack_from("<H", self.d, o)[0], s))
+            o += 2
+        return out
+
+    def entries(self):
+        """The entry (export) table, ordinal -> (flags, kind, segment, value).
+
+        ⚠ THE INDICATOR BYTE HAS FOUR MEANINGS, NOT TWO, AND THE THIRD IS LOAD-BEARING:
+            0x00        a NULL bundle -- `count` ordinals that simply do not exist
+            0xFF        MOVEABLE -- 6 bytes, and the first two are an INT 3Fh thunk
+            0xFE        ABSOLUTE -- there is NO segment; the "offset" IS the value
+            otherwise   a fixed segment number
+          krnl386 has 30 absolutes: __AHSHIFT=3, __AHINCR=8, __A000H=0xA000, the
+          __MOD_* module handles. Read as "segment 254" against a 4-segment module
+          they are rejected, and gdi.exe -- which imports __MOD_GDI at 366 sites --
+          fails to relocate at all."""
+        out, o, end, cur = {}, self.off + self.entry_off, 0, 1
+        end = o + self.entry_len
+        while o + 2 <= end:
+            cnt, ind = self.d[o], self.d[o + 1]
+            if cnt == 0:
+                break
+            rec = o + 2
+            step = 6 if ind == ENT_MOVEABLE else (0 if ind == 0 else 3)
+            if step == 0:                       # null bundle: skip `cnt` ordinals
+                o, cur = rec, cur + cnt
+                continue
+            for i in range(cnt):
+                e = rec + i * step
+                if ind == ENT_MOVEABLE:
+                    v = (self.d[e], "MOVEABLE", self.d[e + 3],
+                         struct.unpack_from("<H", self.d, e + 4)[0])
+                elif ind == ENT_ABSOLUTE:
+                    v = (self.d[e], "ABSOLUTE", None,
+                         struct.unpack_from("<H", self.d, e + 1)[0])
+                else:
+                    v = (self.d[e], "FIXED", ind,
+                         struct.unpack_from("<H", self.d, e + 1)[0])
+                out[cur + i] = v
+            cur += cnt
+            o = rec + cnt * step
+        return out
+
     def relocs(self, seg):
         """Relocation records for a segment, if it has any."""
         if not (seg["flags"] & 0x0100):
@@ -173,17 +231,40 @@ def dump(path, summary=False):
         if len(rn) > 9:
             print(f"   ... and {len(rn) - 9} more")
 
+    ent = ne.entries()
+    nres = ne.nonresident_names()
+    kinds = {}
+    for _, k, _, _ in ent.values():
+        kinds[k] = kinds.get(k, 0) + 1
+    print(f"\n  -- {len(ent)} entry-table exports  "
+          + "  ".join(f"{k}={v}" for k, v in sorted(kinds.items()))
+          + f"   (+{max(len(nres) - 1, 0)} non-resident names)")
+    absolutes = {o: v for o, v in ent.items() if v[1] == "ABSOLUTE"}
+    if absolutes:
+        # These are VALUES, not addresses. Reading their indicator as a segment number
+        # is what made gdi.exe unrelocatable -- so print them, every time.
+        byord = {}
+        for o, s in ne.resident_names() + nres:
+            byord.setdefault(o, s)
+        print(f"   {len(absolutes)} ABSOLUTE (indicator 0xFE -- a constant, not a segment):")
+        for o in sorted(absolutes):
+            print(f"     @{o:<5} = 0x{absolutes[o][3]:04x}   {byord.get(o, '?')}")
+
     print("\n  -- relocation mix (what the loader must implement) --")
     tally = {}
     for s in segs:
         for r in ne.relocs(s):
             k = (RELOC_TYPE.get(r["rel_type"] & 3, r["rel_type"] & 3),
-                 RELOC_ADDR.get(r["addr_type"], r["addr_type"]))
+                 RELOC_ADDR.get(r["addr_type"], r["addr_type"]),
+                 # ADDITIVE means the fixup is ADDED to the word already at the site,
+                 # and that such a record is NOT the head of a chain. Both halves
+                 # matter: gdi/user have 810 additive sites holding live thunk indices.
+                 "ADDITIVE" if r["rel_type"] & 0x04 else "")
             tally[k] = tally.get(k, 0) + 1
     if not tally:
         print("   (none)")
-    for (rt, at), n in sorted(tally.items(), key=lambda kv: -kv[1]):
-        print(f"   {n:6}  {rt:<14} {at}")
+    for (rt, at, add), n in sorted(tally.items(), key=lambda kv: -kv[1]):
+        print(f"   {n:6}  {rt:<14} {at:<14} {add}")
 
 
 def main():
