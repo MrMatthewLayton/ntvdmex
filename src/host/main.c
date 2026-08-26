@@ -83,6 +83,9 @@
    default) the host still refuses Win16 loudly -- an experiment must never become the
    shipped behaviour by accident. */
 #define WOWTRY_FLAG   "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\wowtry.flag"
+/* A log NOTHING truncates. WinMain has three log_write calls and each wipes the file;
+   diagnostics that need to survive the whole run belong here instead. */
+#define LDTLOG_PATH   "C:\\ntvdmex\\ldtprobe.log"
 /* Dev-only: capture the exact OPL register stream a game sends, with timestamps,
    so it can be replayed offline through BOTH our synth and a reference core and
    the audio diffed. Counting register writes cannot say WHY an instrument sounds
@@ -6172,7 +6175,7 @@ static void wow_probe_ldt_matrix(const char *tag)
         q = zput(q, "] ");       q = zput(q, T[t].what);
         q = zput(q, " sel=0x");  q = zhex(q, sel);
         q = zput(q, " -> st=0x");q = zhex(q, (DWORD)st);
-        q = zput(q, "\r\n"); log_append(LOG_PATH, m, q);
+        q = zput(q, "\r\n"); log_append(LDTLOG_PATH, m, q);
     }
 }
 
@@ -6194,8 +6197,8 @@ static void wow_probe_selectors(void)
     char m[400], *q;
     int i;
     if (!g_wow_loaded) return;
-    q = m; q = zput(q, "WOWTRY: selector stage\r\n"); log_append(LOG_PATH, m, q);
-    wow_probe_ldt_matrix("wow");
+    q = m; q = zput(q, "WOWTRY: selector stage\r\n"); log_append(LDTLOG_PATH, m, q);
+    wow_probe_ldt_matrix("wow-late");
 
 
     for (i = 0; i < (int)g_wow_ne.n_seg; ++i) {
@@ -6204,7 +6207,7 @@ static void wow_probe_selectors(void)
         uint32_t need = ne_seg_alloc_size(sg);
         int idx;
         if (g_ldt_next >= DPMI_LDT_MAX) {
-            q = m; q = zput(q, "  LDT POOL EXHAUSTED\r\n"); log_append(LOG_PATH, m, q);
+            q = m; q = zput(q, "  LDT POOL EXHAUSTED\r\n"); log_append(LDTLOG_PATH, m, q);
             return;
         }
         idx = g_ldt_next++;
@@ -6230,7 +6233,7 @@ static void wow_probe_selectors(void)
             q = zput(q, zf ? "  LAR ok ar=0x" : "  LAR FAILED ar=0x");
             q = zhex(q, zf ? ar : 0);
         }
-        q = zput(q, "\r\n"); log_append(LOG_PATH, m, q);
+        q = zput(q, "\r\n"); log_append(LDTLOG_PATH, m, q);
     }
 
     /* Relocations were applied with PLACEHOLDER segment values, so every patched site
@@ -6243,7 +6246,7 @@ static void wow_probe_selectors(void)
         if (r != 0) {
             q = m; q = zput(q, "  RE-RELOC FAILED seg "); q = zhex(q, (DWORD)(i + 1));
             q = zput(q, " at ne.h line "); q = zhex(q, (DWORD)g_wow_ne.err);
-            q = zput(q, "\r\n"); log_append(LOG_PATH, m, q);
+            q = zput(q, "\r\n"); log_append(LDTLOG_PATH, m, q);
             return;
         }
     }
@@ -6254,7 +6257,7 @@ static void wow_probe_selectors(void)
     q = zhex(q, g_wow_ne.seg[(g_wow_ne.csip >> 16) - 1].seg);
     q = zput(q, ":0x"); q = zhex(q, g_wow_ne.csip & 0xFFFF);
     q = zput(q, "\r\nWOWTRY: NOT entering PM yet -- next step.\r\n");
-    log_append(LOG_PATH, m, q);
+    log_append(LDTLOG_PATH, m, q);
 }
 
 /* Plant the default PM interrupt handlers and point every vector at them. See the
@@ -9396,18 +9399,36 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     v86_setup_memory();
     st = v86_init();
     p = zput(p, "STAGE1: v86_init NTSTATUS=0x"); p = zhex(p, (unsigned)st); p = zput(p, "\r\n");
+    /* ── THE CLEAN 2x2. ─────────────────────────────────────────────────────────────
+         The first differential compared a WOW probe HERE against a DOS probe placed
+         ~500 lines later, after CSRSS and the whole DOS machine were built. That is two
+         variables, not one, so "WOW is refused, DOS succeeds" did not actually follow.
+         Probe BOTH launch types at BOTH points and let the 2x2 say whether it is the
+         launch type or the amount of VDM setup that matters. */
+    if (GetFileAttributesA(WOWTRY_FLAG) != INVALID_FILE_ATTRIBUTES)
+        wow_probe_ldt_matrix(g_wow_loaded ? "wow-early" : "dos-early");
     if (g_wow_loaded) {                       /* GH #128: WOW selector stage */
         log_append(LOG_PATH, report, p); p = report;
+        /* The DOS bisection puts the flip between csrss_get_command() and
+           v86_get_tib(). The latter is one call and costs nothing to try here, so
+           try it BEFORE concluding the blocker is the command fetch. */
+        {   void *t = v86_get_tib();
+            char m3[120], *q3 = m3;
+            q3 = zput(q3, "WOWTRY: v86_get_tib -> 0x"); q3 = zhex(q3, (DWORD)(ULONG_PTR)t);
+            q3 = zput(q3, "\r\n"); log_append(LDTLOG_PATH, m3, q3); }
+        wow_probe_ldt_matrix("wow-after-get-tib");
         wow_probe_selectors();
         return wow_refuse(GetCommandLineA());
     }
     /* EMS page frame must be mapped AFTER VdmInitialize (see v86_map_ems_frame). */
     g_ems_frame_lin = v86_map_ems_frame();
+    if (GetFileAttributesA(WOWTRY_FLAG) != INVALID_FILE_ATTRIBUTES) wow_probe_ldt_matrix("B-after-emsframe");
     p = zput(p, "STAGE1: ems_frame lin=0x"); p = zhex(p, g_ems_frame_lin);
     p = zput(p, " seg=0x"); p = zhex(p, g_ems_frame_lin >> 4); p = zput(p, "\r\n");
 
     /* CSRSS: register as the console VDM, then fetch the program to run. */
     csrss_register_console();
+    if (GetFileAttributesA(WOWTRY_FLAG) != INVALID_FILE_ATTRIBUTES) wow_probe_ldt_matrix("C-after-csrss-register");
     if (csrss_get_command(&g_ci, &err)) {
         p = zput(p, "STAGE1: program "); p = zput(p, g_cur);
         p = zput(p, "\\"); p = zput(p, g_title); p = zput(p, "\r\n");
@@ -9434,7 +9455,10 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
          ran the probe earlier and its output was silently erased by this very line,
          which looked exactly like "the probe never ran". Same stale/truncated-artefact
          trap this project keeps paying for, in a new costume. */
+    if (GetFileAttributesA(WOWTRY_FLAG) != INVALID_FILE_ATTRIBUTES)
+        wow_probe_ldt_matrix("D-after-getcommand");   /* before v86_get_tib */
     tib = v86_get_tib();
+    if (GetFileAttributesA(WOWTRY_FLAG) != INVALID_FILE_ATTRIBUTES) wow_probe_ldt_matrix("E-after-get-tib");
     g_tib_dbg = tib;                                    /* let the crash VEH dump guest state */
     if (!tib) {
         p = zput(p, "STAGE1: no VDM_TIB -- abort\r\n"); log_append(LOG_PATH, report, p);
@@ -9940,7 +9964,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         q2 = zput(q2, " flag_attr=0x");      q2 = zhex(q2, fa);
         q2 = zput(q2, "\r\n"); log_append(LOG_PATH, m2, q2);
         if (!g_wow_loaded && fa != INVALID_FILE_ATTRIBUTES)
-            wow_probe_ldt_matrix("dos");   /* the differential arm */
+            wow_probe_ldt_matrix("dos-late");  /* the other corner of the 2x2 */
     }
     modey_remap_flush_report();     /* whatever the A0000 remap had to say, now it fits */
     /* ── CAN THE A0000 WINDOW BE REMAPPED? THE ONE FACT THE REAL VIDEO FIX NEEDS. ────
