@@ -113,9 +113,64 @@ User requirements, all three delivered:
     the visual style; hard-coding it is how a dialog is right on one theme and clipped
     on the next.
 
-▶ WHAT IS STILL UNVERIFIED HERE: **nobody has opened this dialog either.** dlgcheck
-  proves the geometry, not the rendering, the tab switching, or the theming. That is
-  still open item 4 below, now with more surface.
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ ▶▶ ALL THREE VERIFIED ON THE BARE-METAL BOX, WITH PICTURES. AND THE RIG CAN  │
+│    NOW SEE ITS OWN WINDOW FOR THE FIRST TIME.                                │
+└──────────────────────────────────────────────────────────────────────────────┘
+★ **`scripts/bm/rigshot.c` (build: `scripts/build-rigshot.sh`) CLOSES A GAP THAT HAD
+  BEEN OPEN SINCE THE HOST GREW A WINDOW.** The host's own screenshot captures
+  `g_vid.frame` -- the GUEST FRAMEBUFFER -- which is right for "does Doom's status bar
+  render" and USELESS for anything about the host: the caption, the status strip, the
+  menu bar, a dialog. None of those are in the guest's framebuffer. So every UI change
+  this project ever made was verified by a human walking to the box, which is exactly
+  why "the settings dialog has never been opened by a human" survived a whole session.
+  rigshot BitBlts the real desktop to a .bmp on the share, plus enough remote poking to
+  get a dialog on screen:
+```
+    rigshot shot <out.bmp>    | rigshot cmd <n>    (PostMessage WM_COMMAND to the VDM)
+    rigshot click <x> <y>     | rigshot key <vk>   | rigshot fg <caption> | rigshot list
+```
+  Drive it through controld: `exec cmd /c ""<share>\uishot.bat""`.
+  ⚠ **CLICK, NOT `TCM_SETCURSEL`, to change a tab.** TCM_SETCURSEL crosses a process
+    boundary fine and does NOT raise TCN_SELCHANGE; the notification that would
+    (WM_NOTIFY) carries a pointer Windows will not marshal between processes. Setting
+    the selection without the page following would have "verified" a broken dialog.
+  ⚠ `-ffreestanding -fno-builtin` are load-bearing in the build script: without them
+    GCC recognises the hand-rolled `slen` loop as strlen and emits a CALL to it, which
+    does not exist in a `-nostdlib` link.
+  ⚠ **A MINIMIZED WINDOW IS STILL `WS_VISIBLE`.** It lists, it is found by
+    FindWindow, and it captures as bare desktop. `fg` uses SW_RESTORE now. Cost one
+    confusing screenshot where the host was provably running and simply not on screen.
+
+▶ MEASURED, ON 192.168.1.29, WITH THE BINARY MD5-MATCHED TO THE BUILD:
+```
+  COMMAND.COM guest : caption "Microsoft Windows XP Virtual DOS Machine" (no program
+                      name, no capture suffix); bar = File Edit View Machine Capture
+                      Debug Help; strip = "COMMAND.COM | 16-bit | Real mode"
+  DOOM.EXE guest    : strip = "DOOM.EXE | 32-bit | Protected mode"   <- THE MODE
+                      FIELDS FLIP, which is the whole point of adding them
+  capture toggled x4: right part alternates "Captured -- Win+F10 releases" /
+                      "Win+F10 captures input" every time, left part stable
+  Settings dialog   : OPENED AND PHOTOGRAPHED. All six tabs render themed, pages swap
+                      on click, values load. OK dismissed it cleanly and the host
+                      survived; `reg query HKCU\Software\NTVDMEX` came back with all
+                      47 values (43 DWORD + 4 REG_SZ) -- DosVersionMinor 0x16=22,
+                      Cycles 0xbb8=3000, ConventionalKB 0x280=640, SampleRate=44100.
+```
+  ► So **OPEN ITEM 4 IS EFFECTIVELY CLOSED**: the dialog renders, switches and commits.
+    A human still has not TYPED in it, so keyboard navigation across the page boundary
+    (the thing `DS_CONTROL` is for) is the one part still taken on trust.
+  ► The "window minimized itself on the first capture toggle" observation is **CLOSED,
+    and it was NOT the software: the user was at the box using the window.** Filed here
+    only because of the shape of the mistake -- I was driving a machine a person was
+    also driving, and read their input as the program's behaviour. Four clean toggles
+    afterwards said "not reproducible", which was the right conclusion for the wrong
+    reason. ⚠ THE RIG IS NOT NECESSARILY UNATTENDED. Before calling desktop-level
+    behaviour a defect, establish that nobody is touching it.
+
+▶ STILL UNVERIFIED: **Ctrl+Tab does not switch pages.** A real property sheet does;
+  this hand-rolled tab dialog has no handler for it. Not a defect against the spec,
+  but the first thing a keyboard user will try.
 
 ═══════════════════════════════════════════════════════════════════════════════
 ██ ▶▶▶ SESSION 28 (2026-08-26). A REAL DOS SHELL RUNS; SETTINGS ARE IN THE     ██
