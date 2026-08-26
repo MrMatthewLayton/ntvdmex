@@ -666,17 +666,105 @@ So the vendor API is the next blocker, and it is very likely the same object as
 `INT 31h 04F3`: an entry point into NTVDM's private WOW services, which a `168A` query
 for the vendor string `"MS-DOS"` is supposed to hand back.
 
+---
+
+## Part 10 — the vendor API, measured; krnl386 gets past its own error message
+
+Part 9 ended with krnl386 printing `NTVDM KERNEL: Inadequate DPMI Server` because we
+refuse `INT 2Fh 168A`. So: what does the real one say?
+
+### Asking stock ntvdm — with a DPMI client written for the purpose
+
+`tools/dostest/vendprobe.asm` probes **both modes**, because krnl386 only ever asks after
+it has switched and the answer might differ. It does:
+
+```
+-- INT 2Fh 168A in REAL mode --        AL=8A  ES:DI=0000:0000
+-- INT 2Fh 1687 DPMI check --          private paras: 0003
+-- switching to 16-bit PM --
+-- INT 2Fh 168A in PROTECTED mode --   AL=00  ES:DI=00C7:2037   LAR(ES)=FB00
+```
+
+**It is protected-mode only.** Dumping the 22 bytes at that entry:
+
+```
+cmp ax,0      / jnz +5 / mov ax,0x0100 / jmp +8
+cmp ax,0x0100 / jnz +5 / mov ax,0x0137
+clc / retf                                  <- a known function
+stc / retf                                  <- anything else
+```
+
+A two-function dispatcher returning constants. Nothing more.
+
+### ★ And krnl386 only needs it to EXIST
+
+Having stored the entry it calls it exactly once:
+
+```
+mov ax,0x0100 / call far [0x1726]
+jc  skip                  <- CF set: skip
+verw ax / jnz skip        <- not a WRITABLE selector: skip
+mov es,[0x598] / mov [es:0x32],ax
+```
+
+Both failure arms rejoin the normal path. So an honest *"that function is not provided"*
+is explicitly tolerated by the guest's own code — the mandatory part is the `AL != 0x8A`
+answer to `168A` itself.
+
+### What we implemented, and one thing we deliberately did not
+
+PM `168A` now matches `DS:SI` against `"MS-DOS"` and hands back our own far-callable stub.
+Function 0 mirrors the oracle exactly — copying a measured answer, not inventing one.
+
+⚠ **Function `0x0100` returns CF=1 on purpose.** Stock returns `0x0137`, and `verw` proves
+that is a *writable selector onto something ntvdm owns*. We do not know what. A selector
+onto an empty block of ours would pass `verw`, get stored at `[cs:0x32]`, and later be
+read as if it were that something — the "runs but lies" class, which this project treats
+as the most expensive kind of failure. Declining is truthful and costs nothing today, and
+the rig confirms it: krnl386's own `cmp word [cs:0x32],0 / jz` at `d767` skips the block.
+
+**On the rig:** `vendor=[MS-DOS] -> SUPPORTED`, the abort is gone, and krnl386 proceeds
+into `INT 31h 0002` (`seg 0x110 -> sel 0x147`) — the paragraph-to-selector call added in
+Part 5, doing exactly the job predicted for it.
+
+### ★ A general instrument: what did the patcher leave behind?
+
+The INT-site patcher now reports the **residual `CD nn` byte pairs** as a histogram by
+vector. Every one is a vector we did not claim, and a PM guest executing one is silently
+terminated — which is precisely how the INT 2Fh death happened, and finding *that* meant
+reading the patcher's constant list by hand afterwards.
+
+It is an upper bound: the region holds data, and `CD` precedes an opcode byte often
+enough. But **a vector absent from the list cannot kill the guest**, which makes it a real
+shortlist of suspects rather than a guess. It immediately named `41h ×6` — exactly the six
+kernel-debugger sites `neints.py` found — and `11h ×1`.
+
+Both are now claimed. `INT 11h` in PM answers `0x4021`, the **same** equipment word as the
+V86 arm: krnl386 does `test al,2` for a coprocessor at `c136` and sets a kernel flag from
+it, so the two modes disagreeing would mean the guest believes different hardware
+depending on when it asked. `INT 41h` returns registers untouched — which *is* the "no
+debugger present" answer — and exists to stop a silent death, not to provide a service.
+
+Residual `0x22` → `0x1b`.
+
+### Where it now stops
+
+krnl386 dies **later, and not on an unclaimed vector** — it never reaches an INT 41h or
+11h site. Last observed state is `0x0f:0xd715` (`mov si,ax / xor bx,bx / pop cx / ret`),
+returning into protected-mode execution at `c0c5`, which then calls `d762`, `0x6763`,
+`0x3021`. So it is a genuine fault somewhere in there, not a missing interrupt — a
+different class of problem from every death so far this session.
+
 ## Next actions
 
-1. **`INT 2Fh 168A` / the "MS-DOS" vendor API.** krnl386 will not proceed without it.
-   Find what stock ntvdm returns — `ES:DI` and then the code behind it. This is the same
-   rig-oracle shape that answered SysVars+0x6A, and probably answers `INT 31h 04F3` too.
-2. **Then re-run and read the next message off the table above** — the strings say what
-   each subsequent stage wants.
-3. **Plant a SysVars+0x6A table.** krnl386 got past it with our zeroed stub, so it is not
-   yet fatal, but its six pointers are read and stored.
+1. **Find the fault after `c0c5`.** It is not an unclaimed INT (the residual histogram
+   rules that out for the vectors it reaches). The host has a guest-breakpoint facility
+   (`PMBP_PATH`) that was built for exactly this; `d762`, `0x6763`, `0x3021` are the three
+   calls to bracket.
+2. **`INT 31h 04F3`** — still unknown, still NTVDM-private, and now the only other
+   measured-but-unanswered call in krnl386's list.
+3. **Plant a SysVars+0x6A table.** Shape measured off stock; not yet fatal.
 4. Independent of WOW: **#131 console/stdio**.
 
 **Rig left with:** IFEO `Debugger` **set**, `wowtry.flag` **present**, the WOW module set
-in `guest/ne/` on the build machine. DOS regression re-verified this session:
-`selftest.com` = **ALL TESTS PASSED**, 8/8 on real hardware.
+in `guest/ne/`. DOS regression verified this session: `selftest.com` **8/8 PASS**.
