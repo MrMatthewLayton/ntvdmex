@@ -350,13 +350,14 @@ them. The cheaper one is to find out which are actually load-bearing — and mos
 |---|---|---|
 | `1600h` | `cmp al,3` at `c14b` — and **discards the flags**; the `jmp` at `c157` skips the block the comparison would have chosen | steers nothing |
 | `1689h` | `c2f5f` jumps away without reading a register | fire-and-forget |
-| `168Ah` | `cmp al,0x8a / jz` at `d6e9` — it tests for AL **unchanged**, meaning "not supported", and carries on | tolerates refusal |
+| `168Ah` | `cmp al,0x8a / jz 0xd71b` at `d6e9` — tests for AL **unchanged** | ⚠️ **REFUTED in Part 9: `0xd71b` is the ABORT path** |
 | `1687h` | `or ax,ax / jnz` then `cmp cl,3` | already implemented |
 | `1684h` | `xor di,di / mov es,di` at `2814` *before* asking, `or ax,di / jz` after | safe, but see below |
 
 ★ **Its `168Ah` vendor string, at autodata:`0x172a`, is `"MS-DOS"`.** So what krnl386 is
-hunting for is NTVDM's private WOW API — and it **tolerates being refused**. That is why
-this work can start at all without reverse-engineering that API first.
+hunting for is NTVDM's private WOW API.
+
+⚠️ **THE TWO LINES ABOVE WERE WRONG, AND PART 9 REFUTES THEM ON HARDWARE.** They said krnl386 "tolerates being refused" and that this work could therefore start without the vendor API. It cannot: `0xd71b` is the **abort path** — the same one the failed-mode-switch and wrong-CS-RPL checks branch to — and it prints `NTVDM KERNEL: Inadequate DPMI Server`. I read the comparison and inferred the outcome from the *sense of the test* rather than following the **jump target**. The `168A` vendor API is **required**.
 
 `1684h` was the one worth changing, and *not* because krnl386 needs it. It is a
 pointer-returning call that was returning whatever happened to be in `ES:DI`, and the
