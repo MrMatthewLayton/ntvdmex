@@ -33,7 +33,7 @@
 #include <stdint.h>
 
 #define NE_MAX_SEG 96
-#define NE_MAX_MOD 16        /* modules held in one registry -- WOW needs about six  */
+#define NE_MAX_MOD 24        /* the whole XP WOW set is 15; leave room above it       */
 #define NE_MAX_NAME 32
 
 /* ne_module.prog_flags */

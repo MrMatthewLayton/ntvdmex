@@ -1043,6 +1043,10 @@ static BYTE  g_flt_tbl[8 * 0x10] __attribute__((aligned(16)));
    being stubbed is a RESOURCE.
    The table is also bigger: 512 was an arbitrary bound from the spike era. */
 #define DPMI_LDT_MAX 2048
+/* Indices below this belong to the host: 0 null, 1/2 the initial CS/DS, and 3 which
+   dpmi_install() force-types to writable data. INT 31h 0001 refuses to free them and
+   the WOW selector stage refuses to allocate them -- one constant so the two agree. */
+#define DPMI_LDT_RESERVED 6
 static struct dpmi_desc { DWORD base, limit; BYTE access, flags; } g_ldt[DPMI_LDT_MAX];
 static int   g_ldt_next = 3;
 static WORD  g_ldt_free[DPMI_LDT_MAX];   /* recycled indices, LIFO */
@@ -3174,7 +3178,7 @@ static int launch_is_wow(const char *cmd)
      exactly those words with addresses. The second pass follows garbage. So:
         wow_load_modules()   -- parse, allocate, copy bytes.  NO relocation.
         wow_bind_modules()   -- selectors for everything, then relocate ONCE. */
-#define WOW_MAX_MOD 6
+#define WOW_MAX_MOD 16       /* krnl386 + the ten siblings, with headroom */
 static ne_module g_wow_mod[WOW_MAX_MOD];
 static uint8_t  *g_wow_img[WOW_MAX_MOD];
 static char      g_wow_name[WOW_MAX_MOD][16];
@@ -3302,9 +3306,14 @@ static int wow_load_one(const char *path)
      is the 386 ENHANCED-mode kernel and does not run in V86. */
 static void wow_probe_load(const char *cmd)
 {
-    /* keyboard.drv / system.drv / shell.dll are NOT loaded: they are the next set,
-       and wowexec's KEYBOARD import is expected to be the first thing that stops. */
-    static const char *SIBLING[] = { "user.exe", "gdi.exe", "wowexec.exe" };
+    /* The whole graph, in dependency order. Everything imports from KERNEL, USER
+       also needs SYSTEM, and wowexec needs KEYBOARD -- so the drivers come before
+       the modules that bind to them. Measured: with these eleven present, every
+       import in the set resolves and nothing is left dangling. */
+    static const char *SIBLING[] = {
+        "system.drv", "keyboard.drv", "mouse.drv", "sound.drv", "comm.drv",
+        "gdi.exe", "user.exe", "shell.dll", "toolhelp.dll", "wowexec.exe"
+    };
     char path[512], sib[512], m[700], *q;
     size_t j;
 
@@ -6292,6 +6301,30 @@ static void wow_probe_selectors(void)
     q = zput(q, "\r\n"); log_append(LDTLOG_PATH, m, q);
     wow_probe_ldt_matrix("wow-late");
 
+    /* ── STEP PAST THE RESERVED LDT INDICES BEFORE ALLOCATING ANYTHING. ─────────────
+         `g_ldt_next` starts at 3, and dpmi_install() FORCES indices 2 and 3 to
+         writable data (0xF2) no matter what access we asked for -- a deliberate hack
+         for the DPMI path, where a client's first allocation is typically its stack
+         and i310102's C runtime retypes sel 0x1F to code and then #GPs on it.
+         WOW's first allocation is not a stack. It is krnl386's CODE segment 1, and it
+         was silently landing on index 3 and becoming a DATA descriptor.
+       ★ THE LOG SAID "CODE ... LAR ok". It was the LAR READBACK that caught it, by
+         reporting ar=0xf200 where segments 2 and 3 of the same module reported
+         0xfa00 -- i.e. the CPU disagreeing with our bookkeeping, which is the entire
+         reason that readback exists. The failure it prevents is the next step of this
+         work: jumping to sel 0x1F:0xC02B would have #GP'd instantly, with a log
+         claiming a code selector had installed cleanly.
+         6 is the same floor INT 31h 0001 calls "reserved", so a client cannot free
+         these either; keeping the two in step is why the constant is shared. */
+    if (g_ldt_next < DPMI_LDT_RESERVED) {
+        q = m; q = zput(q, "  skipping reserved LDT indices, next 0x");
+        q = zhex(q, (DWORD)g_ldt_next); q = zput(q, " -> 0x");
+        g_ldt_next = DPMI_LDT_RESERVED;
+        q = zhex(q, (DWORD)g_ldt_next);
+        q = zput(q, " (2 and 3 are forced to data by dpmi_install)\r\n");
+        log_append(LDTLOG_PATH, m, q);
+    }
+
     /* ── PHASE 2a: a selector for EVERY segment of EVERY module, before any
          relocation runs. ne_registry_resolve refuses a target whose selector is still
          0, so getting this order wrong fails loudly instead of writing 0000:xxxx. */
@@ -7666,7 +7699,7 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                                and environment descriptors, and the stubs/trampoline. A client
                                is entitled to free anything it was given, but it was not given
                                these, and handing one back out later would pull the floor up. */
-                            int reserved = (idx < 6)
+                            int reserved = (idx < DPMI_LDT_RESERVED)
                                 || fsel == g_dpmi_hdlr_sel || fsel == g_pmret_sel
                                 || fsel == g_dpmi_fault_sel || fsel == g_dpmi_flt_code_sel;
                             if (idx >= 1 && idx < DPMI_LDT_MAX && !reserved

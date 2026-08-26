@@ -369,18 +369,34 @@ int main(void)
 
          The whole set is loaded, given selectors, registered, and relocated in the
          order the registry documents -- which is the exact sequence the host will
-         run. `missing` is the module each one is EXPECTED to fail on, because the
-         drivers it names (SYSTEM, KEYBOARD, SHELL) are not part of this set; a
-         failure anywhere else is a real failure. */
+         run.
+
+       ★ THIS IS THE ENTIRE XP WOW MODULE GRAPH, and it CLOSES: 15 modules, every
+         import resolved, nothing missing. Earlier the set was five and USER,
+         WOWEXEC and SYSEDIT stopped at SYSTEM, KEYBOARD and SHELL -- so the loader
+         named the three files to go and fetch, and fetching them (off the rig, out
+         of %SystemRoot%\System32) closed every stop with no code change at all.
+         That is the payoff for making a failed import name its module instead of
+         just failing. */
     {
         static const struct {
             const char *path, *own; int segs, movable, mods; const char *missing;
         } REAL[] = {
-            { "guest/ne/krnl386.exe", "KERNEL",  4, 164, 0, NULL       },
-            { "guest/ne/gdi.exe",     "GDI",     2, 355, 1, NULL       },
-            { "guest/ne/user.exe",    "USER",    3,   0, 2, "SYSTEM"   },
-            { "guest/ne/wowexec.exe", "WOWEXEC", 2,   2, 4, "KEYBOARD" },
-            { "guest/ne/sysedit.exe", "SYSEDIT", 6,  21, 4, "SHELL"    },
+            { "guest/ne/krnl386.exe",   "KERNEL",    4, 164, 0, NULL },
+            { "guest/ne/system.drv",    "SYSTEM",    2,   0, 1, NULL },
+            { "guest/ne/keyboard.drv",  "KEYBOARD",  2,   0, 1, NULL },
+            { "guest/ne/mouse.drv",     "MOUSE",     2,   5, 0, NULL },
+            { "guest/ne/sound.drv",     "SOUND",     2,   0, 1, NULL },
+            { "guest/ne/comm.drv",      "COMM",      4,  21, 2, NULL },
+            { "guest/ne/gdi.exe",       "GDI",       2, 355, 1, NULL },
+            { "guest/ne/user.exe",      "USER",      3,   0, 2, NULL },
+            { "guest/ne/shell.dll",     "SHELL",     2,  36, 1, NULL },
+            { "guest/ne/toolhelp.dll",  "TOOLHELP",  2,   0, 2, NULL },
+            { "guest/ne/winnls.dll",    "WINNLS",    2,  38, 1, NULL },
+            { "guest/ne/wifeman.dll",   "WIFEMAN",   2,  86, 1, NULL },
+            { "guest/ne/commdlg.dll",   "COMMDLG",   6,  13, 3, NULL },
+            { "guest/ne/wowexec.exe",   "WOWEXEC",   2,   2, 4, NULL },
+            { "guest/ne/sysedit.exe",   "SYSEDIT",   6,  21, 4, NULL },
         };
         enum { NREAL = sizeof REAL / sizeof REAL[0] };
         static ne_module r[NREAL];
@@ -418,10 +434,12 @@ int main(void)
             ok(r[k].n_mod == REAL[k].mods, "  module reference count matches nedump");
             ok(ne_own_name(&r[k], nm, sizeof nm) == 0 && !strcmp(nm, REAL[k].own),
                "  own name (NOT the file name)");
-            /* LIBRARY vs PROGRAM decides whether its CS:IP may be jumped to at all. */
+            /* LIBRARY vs PROGRAM decides whether its CS:IP may be jumped to at all.
+               Across the whole set exactly two are PROGRAMs -- wowexec (the one WOW
+               actually runs) and sysedit (an ordinary app). Everything else, the
+               kernel included, is a library with SS:SP = 0:0. */
             ok(((r[k].prog_flags & NE_PROG_LIBRARY) != 0) ==
-               (!strcmp(REAL[k].own, "KERNEL") || !strcmp(REAL[k].own, "USER")
-                || !strcmp(REAL[k].own, "GDI")),
+               (strcmp(REAL[k].own, "WOWEXEC") != 0 && strcmp(REAL[k].own, "SYSEDIT") != 0),
                "  LIBRARY bit agrees with the bootstrap plan");
 
             for (i = 0; i < (int)r[k].n_seg; ++i) {
@@ -477,10 +495,21 @@ int main(void)
                          "did not load", REAL[k].own, REAL[k].missing);
                 ok(rc != 0 && !strcmp(reg.fail_mod, REAL[k].missing), what);
             } else {
+                /* "Resolved everything" is indistinguishable from "did nothing"
+                   unless the sites are counted -- but a module with no relocation
+                   records at all is legitimately zero. mouse.drv is exactly that:
+                   2 segments, no relocs, imports nothing. So ask the segments what
+                   to expect rather than assuming every module has fixups. */
+                int has_relocs = 0;
+                for (i = 0; i < (int)r[k].n_seg; ++i)
+                    if ((r[k].seg[i].flags & NE_SEG_RELOCS) && r[k].seg[i].sector)
+                        has_relocs = 1;
                 snprintf(what, sizeof what,
                          "%s: EVERY relocation resolved (%u sites)", REAL[k].own, r[k].sites);
                 ok(rc == 0, what);
-                ok(r[k].sites > 0, "  ...and it patched something");
+                ok(has_relocs ? r[k].sites > 0 : r[k].sites == 0,
+                   has_relocs ? "  ...and it patched something"
+                              : "  ...and it has no relocation records, so zero is right");
             }
         }
     }

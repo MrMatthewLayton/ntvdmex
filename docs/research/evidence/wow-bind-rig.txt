@@ -1,0 +1,56 @@
+LDTPROBE[wow-early] idx3  code small sel=0x0000001f -> st=0xc00000ef
+LDTPROBE[wow-early] idx8  code small sel=0x00000047 -> st=0xc00000ef
+LDTPROBE[wow-early] idx8  data small sel=0x00000047 -> st=0xc00000ef
+LDTPROBE[wow-early] idx9  data 64K sel=0x0000004f -> st=0xc00000ef
+WOWTRY: v86_get_tib -> 0x0f9bae70
+LDTPROBE[wow-after-get-tib] idx3  code small sel=0x0000001f -> st=0x00000000
+LDTPROBE[wow-after-get-tib] idx8  code small sel=0x00000047 -> st=0x00000000
+LDTPROBE[wow-after-get-tib] idx8  data small sel=0x00000047 -> st=0x00000000
+LDTPROBE[wow-after-get-tib] idx9  data 64K sel=0x0000004f -> st=0x00000000
+WOWTRY: selector stage, modules=0000000b
+LDTPROBE[wow-late] idx3  code small sel=0x0000001f -> st=0x00000000
+LDTPROBE[wow-late] idx8  code small sel=0x00000047 -> st=0x00000000
+LDTPROBE[wow-late] idx8  data small sel=0x00000047 -> st=0x00000000
+LDTPROBE[wow-late] idx9  data 64K sel=0x0000004f -> st=0x00000000
+  skipping reserved LDT indices, next 0x00000003 -> 0x00000006 (2 and 3 are forced to data by dpmi_install)
+  KERNEL seg 00000001 CODE base=0x02950000 limit=0x0000d7f9 -> sel 0x00000037  LAR ok ar=0x0000fa00
+  KERNEL seg 00000002 CODE base=0x02990000 limit=0x00003ee1 -> sel 0x0000003f  LAR ok ar=0x0000fa00
+  KERNEL seg 00000003 CODE base=0x029a0000 limit=0x00001277 -> sel 0x00000047  LAR ok ar=0x0000fa00
+  KERNEL seg 00000004 DATA base=0x029b0000 limit=0x00001ba1 -> sel 0x0000004f  LAR ok ar=0x0000f200
+  SYSTEM seg 00000001 CODE base=0x029d0000 limit=0x0000044a -> sel 0x00000057  LAR ok ar=0x0000fa00
+  SYSTEM seg 00000002 DATA base=0x029e0000 limit=0x00000068 -> sel 0x0000005f  LAR ok ar=0x0000f200
+  KEYBOARD seg 00000001 CODE base=0x02a00000 limit=0x000001f2 -> sel 0x00000067  LAR ok ar=0x0000fa00
+  KEYBOARD seg 00000002 DATA base=0x02a10000 limit=0x00000038 -> sel 0x0000006f  LAR ok ar=0x0000f200
+  MOUSE seg 00000001 CODE base=0x02a30000 limit=0x00000063 -> sel 0x00000077  LAR ok ar=0x0000fa00
+  MOUSE seg 00000002 DATA base=0x02a40000 limit=0x00000014 -> sel 0x0000007f  LAR ok ar=0x0000f200
+  SOUND seg 00000001 CODE base=0x02a60000 limit=0x000000f9 -> sel 0x00000087  LAR ok ar=0x0000fa00
+  SOUND seg 00000002 DATA base=0x02a70000 limit=0x00000023 -> sel 0x0000008f  LAR ok ar=0x0000f200
+  COMM seg 00000001 CODE base=0x02a90000 limit=0x00000122 -> sel 0x00000097  LAR ok ar=0x0000fa00
+  COMM seg 00000002 CODE base=0x02aa0000 limit=0x000013cd -> sel 0x0000009f  LAR ok ar=0x0000fa00
+  COMM seg 00000003 CODE base=0x02ab0000 limit=0x000005e4 -> sel 0x000000a7  LAR ok ar=0x0000fa00
+  COMM seg 00000004 DATA base=0x02ac0000 limit=0x000004d7 -> sel 0x000000af  LAR ok ar=0x0000f200
+  GDI seg 00000001 CODE base=0x02ae0000 limit=0x00002ce5 -> sel 0x000000b7  LAR ok ar=0x0000fa00
+  GDI seg 00000002 DATA base=0x02af0000 limit=0x00000045 -> sel 0x000000bf  LAR ok ar=0x0000f200
+  USER seg 00000001 CODE base=0x02b10000 limit=0x00007627 -> sel 0x000000c7  LAR ok ar=0x0000fa00
+  USER seg 00000002 CODE base=0x02b20000 limit=0x00000087 -> sel 0x000000cf  LAR ok ar=0x0000fa00
+  USER seg 00000003 DATA base=0x02b30000 limit=0x00000159 -> sel 0x000000d7  LAR ok ar=0x0000f200
+  SHELL seg 00000001 CODE base=0x02b50000 limit=0x00000251 -> sel 0x000000df  LAR ok ar=0x0000fa00
+  SHELL seg 00000002 DATA base=0x02b60000 limit=0x00000023 -> sel 0x000000e7  LAR ok ar=0x0000f200
+  TOOLHELP seg 00000001 CODE base=0x02b80000 limit=0x00002d4d -> sel 0x000000ef  LAR ok ar=0x0000fa00
+  TOOLHELP seg 00000002 DATA base=0x02b90000 limit=0x000001bf -> sel 0x000000f7  LAR ok ar=0x0000f200
+  WOWEXEC seg 00000001 CODE base=0x02bb0000 limit=0x0000148c -> sel 0x000000ff  LAR ok ar=0x0000fa00
+  WOWEXEC seg 00000002 DATA base=0x02bc0000 limit=0x0000028a -> sel 0x00000107  LAR ok ar=0x0000f200
+  RELOC KERNEL ALL RESOLVED sites=0x000001ef
+  RELOC SYSTEM ALL RESOLVED sites=0x00000010
+  RELOC KEYBOARD ALL RESOLVED sites=0x00000016
+  RELOC MOUSE ALL RESOLVED sites=0x00000000
+  RELOC SOUND ALL RESOLVED sites=0x00000024
+  RELOC COMM ALL RESOLVED sites=0x0000003a
+  RELOC GDI ALL RESOLVED sites=0x0000030d
+  RELOC USER ALL RESOLVED sites=0x000004f5
+  RELOC SHELL ALL RESOLVED sites=0x0000004a
+  RELOC TOOLHELP ALL RESOLVED sites=0x0000008a
+  RELOC WOWEXEC ALL RESOLVED sites=0x00000090
+WOWTRY: bind stage done.
+  KERNEL init entry would be CS:IP = sel 0x00000037:0x0000c02b
+WOWTRY: NOT entering PM yet -- next step.
