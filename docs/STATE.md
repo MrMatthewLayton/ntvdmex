@@ -90,10 +90,18 @@ flawless sound.
    **switches itself** — then redoes that same `cs:0x30` store through a DPMI `000A`
    alias. It is a V86 program that becomes a 16-bit DPMI client, which is why `0002`
    (paragraph → selector) is the function it calls most.
-   **Next: load krnl386 into V86 conventional memory, relocate against real-mode
-   PARAGRAPHS, and enter at seg1:0xC02B with `AX=0x4B4F`** — the same path DOS guests
-   take. The LDT selector stage is for after it switches, not before.
-   Remaining unknowns: what six **SysVars+0x6A** pointers mean, and **`INT 31h 04F3`**.
+   ★ **krnl386 RUNS.** On real hardware it is entered in V86 at `0141:c02b` with
+   `AX=0x4B4F`, reads the DOS list of lists, finds our DPMI host via `INT 2Fh 1687`,
+   **switches itself into 16-bit protected mode**, and takes a `000A` alias of its own
+   CS — every step matching the disassembly instruction for instruction.
+   It then stops with `NTVDM KERNEL: Inadequate DPMI Server` because we refuse
+   `INT 2Fh 168A`, the **"MS-DOS" vendor-specific API — which is REQUIRED**, not
+   optional (an earlier note in session 30 says otherwise and is corrected in Part 9).
+   ⚠️ **A PM guest cannot reach the IVT**, so any `INT nn` absent from the patcher's
+   list stays a raw `CD nn` and silently terminates the VDM. `0x2F` was missing.
+   **Next: work out what stock ntvdm returns for `INT 2Fh 168A` "MS-DOS"** — likely the
+   same object as the still-unknown `INT 31h 04F3`. krnl386's own error-string table
+   (`seg1:0xb9a9`) then names each subsequent stage's failure in order.
 
 2. **[#131] Console/stdio integration.** Independent of WOW and needed regardless:
    anything script-driven behaves differently under NTVDMEX than under stock.

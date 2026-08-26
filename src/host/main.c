@@ -3183,6 +3183,8 @@ static ne_module g_wow_mod[WOW_MAX_MOD];
 static uint8_t  *g_wow_img[WOW_MAX_MOD];
 static char      g_wow_name[WOW_MAX_MOD][16];
 static int       g_wow_nmod = 0;
+static WORD      g_wow_entry_ds = 0;   /* krnl386's autodata paragraph      */
+static int       g_wow_entering = 0;   /* the guest is krnl386, not DOS     */
 
 /* Pull the `-a <path>` argument out of a WOW command line. Measured shape:
      "…\ntvdm.exe" -f -i1 -w -a C:\WINDOWS\system32\krnl386.exe
@@ -6315,6 +6317,119 @@ static void wow_probe_ldt_matrix(const char *tag)
      leaves a selector that faults on first use -- a silent death, far from the cause. */
 static ne_registry g_wow_reg;
 
+/* ── WOW ENTRY STAGE: put krnl386 in CONVENTIONAL memory and relocate to PARAGRAPHS. ─
+     This, not the selector stage below, is how krnl386 is actually entered -- see the
+     refutation there. It runs in V86 first and switches itself to protected mode via
+     INT 2Fh 1687, so what it needs at entry is exactly what a DOS program needs: real
+     memory under 1MB and real-mode segment values.
+
+   ⚠ THE SEGMENT BYTES ARE RE-COPIED FROM THE FILE IMAGE, NOT MOVED FROM s->mem.
+     s->mem may already have been relocated once (against LDT selectors), and
+     relocation is NOT idempotent -- a chained record's next site is the word AT the
+     current site, which the first pass overwrote with an address. Copying fresh from
+     the untouched image is what makes a second, differently-based relocation legal at
+     all. Same rule as ne.h's registry note; this is the place it is easiest to break.
+
+   Returns 0 and fills the entry registers. krnl386 imports from nothing, so no
+   importer callback is needed here; user/gdi come later and will need one. */
+static int wow_place_v86(dos_machine_t *mp, WORD *ecs, WORD *eip,
+                         WORD *eds, WORD *ess, WORD *esp)
+{
+    /* krnl386 is a LIBRARY: SS:SP = 0:0 and stack = 0 in the header, so nothing tells
+       us how big a stack it wants. It pushes on its second instruction. 4K of
+       paragraphs is generous for an init path and cheap; if it ever overruns, that is
+       a stack overflow into the block below and it will look like one. */
+    enum { WOW_STACK_PARAS = 0x100 };            /* 4 KB */
+    ne_module *ne = &g_wow_mod[0];
+    uint8_t *img = g_wow_img[0];
+    char m[400], *q;
+    WORD sseg = 0, smax = 0;
+    int i;
+
+    if (!g_wow_nmod || !img) return -1;
+
+    /* ── SHRINK THE PROGRAM BLOCK FIRST, OR THERE IS NOTHING TO ALLOCATE. ───────────
+         dos_mcb_init lays out one 'Z' block covering all 0x9F00 paragraphs of
+         conventional memory, OWNED by the PSP -- which is faithful: real DOS gives a
+         .COM the entire arena and the program shrinks it before allocating. The first
+         run of this stage asked for krnl386's 0xD80 paragraphs and got
+             "no conventional memory for seg 1, largest free 0x0 paras"
+         which reads like exhaustion and is actually "everything is owned, nothing is
+         free". Exactly what a DOS program sees before it calls AH=4Ah.
+       On a WOW launch there is no DOS program -- the image loaded above is discarded
+       -- so the block can go back to just the PSP. Doing this through dos_resize()
+       rather than poking the chain keeps the MCB invariants (and dos_mcb_check) true. */
+    {   WORD rmax = 0;
+        int rr = dos_resize(NULL, DOS_PSP_SEG, 0x40, &rmax);
+        q = m;
+        q = zput(q, "WOWV86: shrink PSP block to 0x40 paras -> rc=");
+        q = zhex(q, (DWORD)rr); q = zput(q, " max=0x"); q = zhex(q, rmax);
+        q = zput(q, "\r\n"); log_append(LDTLOG_PATH, m, q);
+    }
+
+    for (i = 0; i < (int)ne->n_seg; ++i) {
+        ne_seg *s = &ne->seg[i];
+        uint32_t need = ne_seg_alloc_size(s), k;
+        WORD seg = 0, max = 0;
+        volatile BYTE *dst;
+        if (dos_alloc(NULL, mp->first_mcb, (WORD)((need + 15) >> 4), &seg, &max) || !seg) {
+            q = m; q = zput(q, "WOWV86: no conventional memory for seg ");
+            q = zhex(q, (DWORD)(i + 1)); q = zput(q, ", largest free 0x"); q = zhex(q, max);
+            q = zput(q, " paras\r\n"); log_append(LDTLOG_PATH, m, q);
+            return -1;
+        }
+        dst = (volatile BYTE *)(ULONG_PTR)((DWORD)seg << 4);
+        for (k = 0; k < need; ++k) dst[k] = 0;
+        if (s->sector) for (k = 0; k < s->length; ++k) dst[k] = img[s->file_off + k];
+        s->mem = (uint8_t *)(ULONG_PTR)((DWORD)seg << 4);   /* relocate in place */
+        s->seg = seg;                                        /* a PARAGRAPH now     */
+
+        q = m;
+        q = zput(q, "WOWV86: seg ");   q = zhex(q, (DWORD)(i + 1));
+        q = zput(q, (s->flags & NE_SEG_DATA) ? " DATA" : " CODE");
+        q = zput(q, " len=0x");        q = zhex(q, s->length);
+        q = zput(q, " alloc=0x");      q = zhex(q, need);
+        q = zput(q, " -> para 0x");    q = zhex(q, seg);
+        q = zput(q, " (linear 0x");    q = zhex(q, (DWORD)seg << 4);
+        q = zput(q, ")\r\n"); log_append(LDTLOG_PATH, m, q);
+    }
+
+    ne->sites = 0;
+    for (i = 0; i < (int)ne->n_seg; ++i) {
+        if (ne_apply_relocs(ne, i, NULL, NULL) != 0) {
+            q = m; q = zput(q, "WOWV86: RELOC FAILED seg "); q = zhex(q, (DWORD)(i + 1));
+            q = zput(q, " at ne.h line "); q = zhex(q, (DWORD)ne->err);
+            q = zput(q, "\r\n"); log_append(LDTLOG_PATH, m, q);
+            return -1;
+        }
+    }
+
+    if (dos_alloc(NULL, mp->first_mcb, WOW_STACK_PARAS, &sseg, &smax) || !sseg) {
+        q = m; q = zput(q, "WOWV86: no memory for a stack\r\n");
+        log_append(LDTLOG_PATH, m, q); return -1;
+    }
+
+    if (!ne->autodata || ne->autodata > ne->n_seg) {
+        q = m; q = zput(q, "WOWV86: autodata segment out of range\r\n");
+        log_append(LDTLOG_PATH, m, q); return -1;
+    }
+
+    *ecs = ne->seg[(ne->csip >> 16) - 1].seg;
+    *eip = (WORD)(ne->csip & 0xFFFF);
+    *eds = ne->seg[ne->autodata - 1].seg;
+    *ess = sseg;
+    *esp = (WORD)(WOW_STACK_PARAS << 4) - 2;
+
+    q = m;
+    q = zput(q, "WOWV86: relocated to paragraphs, sites=0x"); q = zhex(q, ne->sites);
+    q = zput(q, "\r\n  ENTRY CS:IP=");  q = zhex(q, *ecs); q = zput(q, ":"); q = zhex(q, *eip);
+    q = zput(q, "  DS=");               q = zhex(q, *eds);
+    q = zput(q, "  SS:SP=");            q = zhex(q, *ess); q = zput(q, ":"); q = zhex(q, *esp);
+    q = zput(q, "  AX=4b4f ('OK')\r\n");
+    log_append(LDTLOG_PATH, m, q);
+    return 0;
+}
+
 static void wow_probe_selectors(void)
 {
     char m[600], *q;
@@ -7668,6 +7783,45 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                         HOST_UNLOCK();
                         regs_store(&r, tib);
                         VDM_REG(tib, VTIB_EIP) += 2;
+                        return 1;
+                    }
+                    if (vec == 0x2F) {                             /* INT 2Fh, from PM */
+                        /* ── The PM twin of the V86 BOP2F arm. ──────────────────────
+                             Answers exactly what the V86 side answers and no more, so
+                             the two cannot drift into disagreeing about whether a DPMI
+                             host exists depending on which mode asked.
+                           Measured against krnl386, which is the only guest that has
+                           ever reached here (see the patch list): it queries 168A for
+                           the "MS-DOS" vendor API and tests `cmp al,0x8a / jz` -- i.e.
+                           for AL UNCHANGED, meaning "not supported" -- then carries on.
+                           So the correct answer to 168A is to touch nothing. 1689 (the
+                           kernel idle call) likewise: krnl386 jumps away from it
+                           without reading a register. 1684 must return ES:DI = 0:0
+                           because it returns a POINTER the caller far-calls. */
+                        p = zput(p, "INT2Fh(PM) AX=0x"); p = zhex(p, ax);
+                        p = zput(p, " BX=0x"); p = zhex(p, VDM_REG(tib, VTIB_EBX) & 0xFFFF);
+                        if (ax == 0x1687) {
+                            /* A DPMI client asking, from inside protected mode, whether
+                               a DPMI host exists. It does -- it is us, and it is already
+                               running this guest. Answer identically to the V86 arm. */
+                            VDM_SET16(tib, VTIB_EAX, 0);
+                            VDM_SET16(tib, VTIB_EBX, 1);
+                            VDM_SET16(tib, VTIB_ECX, (VDM_REG(tib, VTIB_ECX) & 0xFF00) | 0x03);
+                            VDM_SET16(tib, VTIB_EDX, 0x005A);      /* DPMI 0.90 */
+                            VDM_SET16(tib, VTIB_ESI, 0);
+                            VDM_SET16(tib, VTIB_ES,  DOS_HDLR_SEG);
+                            VDM_SET16(tib, VTIB_EDI, DPMI_ENTRY_OFF);
+                            p = zput(p, " -> DPMI present");
+                        } else if (ax == 0x1684) {
+                            VDM_SET16(tib, VTIB_ES, 0);
+                            VDM_REG(tib, VTIB_EDI) = 0;
+                            p = zput(p, " -> no device API (ES:DI=0)");
+                        } else {
+                            p = zput(p, " -> untouched (unchanged AX is the 'no' answer)");
+                        }
+                        p = zput(p, "\r\n");
+                        log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                        VDM_REG(tib, VTIB_EIP) += 2;               /* past the BOP */
                         return 1;
                     }
                     if (vec == 0x31) {                             /* DPMI INT 31h */
@@ -9599,7 +9753,15 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             q3 = zput(q3, "\r\n"); log_append(LDTLOG_PATH, m3, q3); }
         wow_probe_ldt_matrix("wow-after-get-tib");
         wow_probe_selectors();
-        return wow_refuse(GetCommandLineA());
+        /* ⚠ NO EARLY RETURN ANY MORE. This used to `return wow_refuse(...)` here,
+             which was correct while the plan was "enter in protected mode" -- there was
+             nothing further to do. It is not, krnl386 is entered in V86, and a V86
+             entry needs the whole DOS machine underneath it: conventional memory, an
+             INT 21h that answers AH=52h, the IVT, INT 2Fh. All of that is built a few
+             hundred lines below. So fall through and let it be built.
+           Everything WOW-specific past this point is gated on g_wow_nmod, which is 0
+           on a DOS launch -- so the DOS path, which is the half that WORKS, sees no
+           change at all. That gating is deliberate and worth preserving. */
     }
     /* EMS page frame must be mapped AFTER VdmInitialize (see v86_map_ems_frame). */
     g_ems_frame_lin = v86_map_ems_frame();
@@ -10095,7 +10257,36 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     if (g_qi_raise) { HANDLE hq = CreateThread(NULL, 0, qirq_probe_thread, NULL, 0, NULL);
                       if (hq) CloseHandle(hq); }
 
+    /* ── GH #128: on a WOW launch, the guest is krnl386, not a DOS program. ─────────
+         Placed HERE because this is the one point where the DOS machine is fully
+         built (conventional memory, INT 21h, the IVT, INT 2Fh) and the guest entry
+         has not yet been committed. krnl386 needs all of it: AH=52h ten instructions
+         in, then 2F/1687 to find our DPMI host and switch itself.
+         The DOS program load above still ran and is simply discarded -- it is
+         tolerant of a missing target and costs one wasted image. Overriding here
+         rather than short-circuiting there keeps the DOS path's spine untouched. */
+    {   WORD wcs = 0, wip = 0, wds = 0, wss = 0, wsp = 0;
+        if (g_wow_nmod && wow_place_v86(&m, &wcs, &wip, &wds, &wss, &wsp) == 0) {
+            img.cs = wcs; img.ip = wip; img.ss = wss; img.sp = wsp;
+            g_wow_entry_ds = wds;
+            g_wow_entering = 1;
+        }
+    }
     v86_set_entry(tib, img.cs, img.ip, img.ss, img.sp, DOS_PSP_SEG);
+    if (g_wow_entering) {
+        /* v86_set_entry points DS/ES/FS/GS at the PSP and zeroes AX, which is right
+           for a DOS program and wrong for this one. krnl386 wants DS = its automatic
+           data segment, and its very first instruction is `cmp ax,0x4b4f` -- 'OK' --
+           with `xor ax,ax / retf` as the else. Get AX wrong and it returns instantly,
+           which would read as "the entry did nothing" rather than "we failed a
+           handshake". Measured at seg1:0xc02b; see session 30 part 5. */
+        VDM_SET16(tib, VTIB_DS, g_wow_entry_ds);
+        VDM_REG(tib, VTIB_EAX) = 0x4B4F;
+        p = zput(p, "STAGE2: WOW entry -- krnl386 in V86 at 0x");
+        p = zhex(p, img.cs); p = zput(p, ":0x"); p = zhex(p, img.ip);
+        p = zput(p, " DS=0x"); p = zhex(p, g_wow_entry_ds);
+        p = zput(p, " AX=0x4b4f\r\n");
+    }
     /* ENTRY TRAMPOLINE: `STI` then a far jump to the program's real entry point.
        Under VME the CPU sets EFLAGS.VIF only when the guest EXECUTES sti -- and the
        kernel's whole notion of "this guest can take an interrupt" is VIF. Session 10
@@ -10951,8 +11142,25 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                 { volatile BYTE *cs = (volatile BYTE *)(ULONG_PTR)g_dpmi_code_base;
                   DWORD o, n = 0, last = 0;
                   for (o = 0; o < 0xFFFF; ++o) {
+                      /* ⚠ 0x2F IS HERE BECAUSE krnl386 DIED WITHOUT IT (GH #128).
+                           A PM guest cannot reach the IVT, so an INT this list does not
+                           name stays a raw `CD nn`, and executing it in protected mode
+                           goes to the kernel's #GP reflect -- which does not reflect,
+                           it SILENTLY TERMINATES THE VDM. That is the #18 signature:
+                           no exception, no log line, the process simply gone.
+                           krnl386 issues INT 2Fh from PM (168A, the "MS-DOS" vendor
+                           query, at seg1:0xd6e7 -- literally its next interrupt after
+                           the 000A alias) and it died there. No DOS/4GW-class client
+                           ever did that, which is why the list never needed 0x2F.
+                         ⚠ Every number added here widens the false-positive surface of
+                           what is a NAIVE byte-pair scan -- the same shape that once
+                           rewrote a `jle` displacement in Doom and cost five sessions.
+                           The narrow list is the mitigation. Add a vector only with a
+                           guest that provably needs it, and only with a service arm to
+                           receive it (see dpmi_service_pm_int). */
                       if (cs[o] == 0xCD && (cs[o+1] == 0x31 || cs[o+1] == 0x21 || cs[o+1] == 0x10
                                             || cs[o+1] == 0x16 || cs[o+1] == 0x33
+                                            || cs[o+1] == 0x2F
                                             || cs[o+1] == 0x1A || cs[o+1] == 0x08)) {
                           DWORD lin = g_dpmi_code_base + o;      /* map is linear-keyed now */
                           pmap_set(lin, cs[o+1]); cs[o] = 0xC4; cs[o+1] = 0xC4; ++n; last = o;

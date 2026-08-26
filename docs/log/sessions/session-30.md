@@ -561,19 +561,121 @@ enhanced-mode kernel, therefore it runs in protected mode" is a plausible infere
 what the thing *is*. It survived four parts of this session in the comments and the
 docs. What killed it was reading the instructions.
 
+---
+
+## Part 9 — ★ krnl386 RUNS, switches itself to protected mode, and names its own blocker
+
+Implemented the corrected model from Part 8 and ran it on the rig. It works.
+
+### The V86 placement
+
+Conventional memory is entirely **owned** at that point — `dos_mcb_init` lays one `Z`
+block over all `0x9F00` paragraphs, owned by the PSP, which is faithful (real DOS gives a
+`.COM` the whole arena and the program shrinks it). The first run said
+
+```
+WOWV86: no conventional memory for seg 1, largest free 0x0 paras
+```
+
+which reads like exhaustion and is actually *"everything is owned, nothing is free"* —
+precisely what a DOS program sees before it calls `AH=4Ah`. Shrinking the PSP block
+through `dos_resize()` (not by poking the chain, so the MCB invariants stay true) fixed it:
+
+```
+WOWV86: seg 1 CODE len=0xd7fa -> para 0x0141   seg 3 CODE -> para 0x12b2
+WOWV86: seg 2 CODE len=0x3ee2 -> para 0x0ec2   seg 4 DATA -> para 0x13db
+WOWV86: relocated to paragraphs, sites=0x1ef
+ENTRY CS:IP=0141:c02b  DS=13db  SS:SP=1597:0ffe  AX=4b4f ('OK')
+```
+
+**495 sites again** — the same count as against selectors, because a paragraph is just a
+different number to write.
+
+### It runs, and every step of the predicted model happens
+
+```
+STAGE2: WOW entry -- krnl386 in V86 at 0x141:0xc02b DS=0x13db AX=0x4b4f
+  INT21 AH=52 list-of-lists                          <- ten instructions in
+STAGE2: BOP2F ax=0x1687 ... from=0x50:0x40           <- finds the DPMI host
+STAGE2: DPMI 1687 -> AX=0 ES:DI=0x50:0x50
+STAGE3: DPMI_BOP far-call LANDED -- switching to PM (16-bit client)
+   ... -> PM ok (CS=0x000f:0xd6be) -> DPMI PM loop
+INT31h AX=0x000a BX=0x000f -> alias sel 0x0137       <- data alias of CS
+```
+
+And the bytes at the protected-mode landing address were
+`0f 82 84 00 / 8c c8 / 24 07 / 3c 07 / 75 51 / 8c cb / b8 0a` —
+`jc fail / mov ax,cs / and al,7 / cmp al,7 / jnz / mov bx,cs / mov ax,000A`. Exactly the
+post-switch verification read out of the binary in Part 8. **The prediction and the
+hardware agree instruction for instruction.**
+
+### The silent death, and why it was silent
+
+The first run then stopped dead: no more events, ever, and `tasklist` after 30 s showed
+**no host process at all** — terminated, not spinning. That distinction was worth the one
+extra round; "spinning" and "silently killed" need opposite next steps.
+
+Cause, found by reading our own code rather than another experiment: the INT-site patcher
+that converts `CD nn` into a BOP only recognises `31, 21, 10, 16, 33, 1A, 08`.
+**`2F` is not in the list.** A PM guest cannot reach the IVT, so an unlisted INT stays a
+raw `CD nn`, and executing it in protected mode goes to the kernel's #GP reflect — which
+does not reflect, it silently terminates the VDM. That is the #18 signature exactly. No
+DOS/4GW-class client ever issued INT 2Fh from protected mode, so the list never needed it;
+krnl386's **next interrupt after the alias** is `INT 2Fh` at `seg1:0xd6e7`.
+
+Added `0x2F` to the list plus a PM service arm mirroring the V86 one. ⚠ Every number
+added widens the false-positive surface of what is a *naive byte-pair scan* — the same
+shape that once rewrote a `jle` displacement in Doom and cost five sessions. The narrow
+list is the mitigation: add a vector only for a guest that provably needs it, and only
+with a service arm to receive it.
+
+**Result: the host survives.** Log 61 → 182 lines, process alive at 30 s.
+
+### ★ And then krnl386 says what is wrong, in English
+
+```
+INT2Fh(PM) AX=0x168a -> untouched
+INT31h AX=0x0301 -> callRM 0x141:0xd73e
+INT21h AH=4Ch -> client EXIT after 4 svc
+```
+
+That is not a crash — it is a **deliberate abort**. `0xd71b` builds an RMCS, calls back to
+real mode via DPMI `0301`, and the routine at `0xd73e` is `mov dx,0xb9a9 / mov ah,9 /
+int 21h / retf` — print a string. The string at `seg1:0xb9a9`:
+
+> **`NTVDM KERNEL: Inadequate DPMI Server`**
+
+first in a table that also holds `Unable to initialize heap`, `Unable to open KERNEL
+executable`, `Unable to load KERNEL EXE header`, `Win16 Subsystem Initialization Failure`
+— a roadmap of the next several failures, in the order we will meet them.
+
+### ⚠ CORRECTION TO PART 6: the "MS-DOS" vendor API is REQUIRED, not optional
+
+Part 6 said of `INT 2Fh 168A`: *"it tests for AL unchanged, meaning 'not supported', then
+carries on"* and concluded that this work could start without it. **That is wrong.** The
+test is `cmp al,0x8a / jz 0xd71b`, and I read the comparison without following the jump.
+`0xd71b` is the abort path — the same one the failed-mode-switch and wrong-CS-RPL checks
+branch to. Refusing `168A` *is* "Inadequate DPMI Server".
+
+The mistake is instructive and cheap to repeat: reading a conditional and inferring the
+outcome from the *sense of the test* rather than from **where it goes**. The fix is
+mechanical — follow the target.
+
+So the vendor API is the next blocker, and it is very likely the same object as
+`INT 31h 04F3`: an entry point into NTVDM's private WOW services, which a `168A` query
+for the vendor string `"MS-DOS"` is supposed to hand back.
+
 ## Next actions
 
-1. **Load krnl386 into V86 conventional memory** and relocate against **real-mode
-   paragraphs**, not selectors. ~83 KB across four segments; conventional memory has room.
-2. **Enter at seg1:0xC02B in V86** with `AX=0x4B4F`, `DS` = the autodata paragraph and a
-   supplied stack — the same path every DOS guest already takes.
-3. **Plant a SysVars+0x6A table.** Shape measured off stock ntvdm (eleven far pointers,
-   `+0x20` provably the first SFT); what six of them *mean* is still open. Identify before
-   inventing — but note krnl386 may survive garbage here long enough to reach step 4.
-4. Then it switches itself, and the DPMI host takes over. `INT 31h 04F3` is the last
-   unknown on that side.
+1. **`INT 2Fh 168A` / the "MS-DOS" vendor API.** krnl386 will not proceed without it.
+   Find what stock ntvdm returns — `ES:DI` and then the code behind it. This is the same
+   rig-oracle shape that answered SysVars+0x6A, and probably answers `INT 31h 04F3` too.
+2. **Then re-run and read the next message off the table above** — the strings say what
+   each subsequent stage wants.
+3. **Plant a SysVars+0x6A table.** krnl386 got past it with our zeroed stub, so it is not
+   yet fatal, but its six pointers are read and stored.
+4. Independent of WOW: **#131 console/stdio**.
 
-**Not blockers** — INT 2Fh `1600`/`1684`/`1689`/`168A`, and the "MS-DOS" vendor API.
-
-**Rig left with:** IFEO `Debugger` **set** and `wowtry.flag` **present**; the full WOW
-module set staged in `guest/ne/` on the build machine. Clear both to return to stock.
+**Rig left with:** IFEO `Debugger` **set**, `wowtry.flag` **present**, the WOW module set
+in `guest/ne/` on the build machine. DOS regression re-verified this session:
+`selftest.com` = **ALL TESTS PASSED**, 8/8 on real hardware.
