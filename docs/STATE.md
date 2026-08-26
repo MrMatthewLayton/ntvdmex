@@ -85,8 +85,12 @@ flawless sound.
    client** (`int 31h` fifteen instructions in) — not the documented Win16 `LibMain`
    convention. Measured by disassembling it; `tools/ne/neints.py` lists everything it
    calls.
-   **Next: extract `keyboard.drv` / `system.drv` / `shell.dll` from the rig, then enter
-   krnl386 with a stack, `DS`=autodata and `AX=0x4B4F`.**
+   ⚠️ **krnl386's init reads `[SysVars+0x6A]`, which is NOT a DOS field.** Genuine
+   MS-DOS 6.22 has DOS kernel *code* there (measured — `tools/dostest/lolprobe.com`,
+   baseline in `docs/research/evidence/`), so ntvdm plants a WOW block MS-DOS never had.
+   That, and `INT 31h 04F3`, are the only two blockers left in krnl386's init path, and
+   both are NTVDM contracts. INT 2Fh is **not** a blocker — every call site read.
+   **Next: run `lolprobe.com` under STOCK ntvdm on the rig and diff. One decisive round.**
 2. **[#131] Console/stdio integration.** Independent of WOW and needed regardless:
    anything script-driven behaves differently under NTVDMEX than under stock.
 3. **[#130] Installation & routing.** Blocked on #128 — an installer is not useful while

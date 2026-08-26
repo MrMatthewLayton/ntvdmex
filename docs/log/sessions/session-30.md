@@ -334,16 +334,100 @@ Both of this project's instrument-lied incidents were this exact shape (session 
 the raw `0xCD` byte count as an upper bound and declares itself desynced if it ever
 exceeds it — 122 found against 154 raw, so: an upper bound and a to-do list, not a census.
 
+---
+
+## Part 6 — asking what krnl386 needs, instead of building what it might
+
+Part 5 produced a list of services krnl386 calls. The obvious next move is to implement
+them. The cheaper one is to find out which are actually load-bearing — and most are not.
+
+### INT 2Fh: five calls, four already correct, and none a blocker
+
+`neints.py` found `1600`, `1684`, `1687`, `1689`, `168A`. Our handler answers exactly one
+(`1687`). That reads as four gaps. Reading the **call sites** says zero:
+
+| | krnl386's own code | verdict |
+|---|---|---|
+| `1600h` | `cmp al,3` at `c14b` — and **discards the flags**; the `jmp` at `c157` skips the block the comparison would have chosen | steers nothing |
+| `1689h` | `c2f5f` jumps away without reading a register | fire-and-forget |
+| `168Ah` | `cmp al,0x8a / jz` at `d6e9` — it tests for AL **unchanged**, meaning "not supported", and carries on | tolerates refusal |
+| `1687h` | `or ax,ax / jnz` then `cmp cl,3` | already implemented |
+| `1684h` | `xor di,di / mov es,di` at `2814` *before* asking, `or ax,di / jz` after | safe, but see below |
+
+★ **Its `168Ah` vendor string, at autodata:`0x172a`, is `"MS-DOS"`.** So what krnl386 is
+hunting for is NTVDM's private WOW API — and it **tolerates being refused**. That is why
+this work can start at all without reverse-engineering that API first.
+
+`1684h` was the one worth changing, and *not* because krnl386 needs it. It is a
+pointer-returning call that was returning whatever happened to be in `ES:DI`, and the
+caller far-calls the result. krnl386 pre-zeroes, so it was safe — but that is the
+**caller** being careful, and it is not something to rely on from callers we have not
+read. It now returns `ES:DI = 0:0` explicitly.
+
+### The SysVars question — answered by the MS-DOS 6.22 oracle, and it answered "not here"
+
+krnl386's init calls `INT 21h AH=52h` ten instructions in and then reads fields out of
+the returned segment. We plant a stub whose only real field is the first-MCB word at
+`BX-2` (#35, deliberately: a null pointer stops a memory walker where a garbage one sends
+it wandering). So what is supposed to be there?
+
+`tools/dostest/lolprobe.com` (new) asked genuine MS-DOS 6.22. Every documented field
+checks out, the literal `NUL     ` device name included:
+
+```
+ES=0116 BX=0026
+BX-02 first MCB  0x0253      BX+10 max bytes/block  512
+BX+00 first DPB  0116:136a   BX+12 disk buffers     0116:006d
+BX+04 first SFT  0116:00cc   BX+16 CDS array        0350:0000
+BX+08 CLOCK$     0070:0059   BX+1a FCB table        031e:0000
+BX+0c CON        0070:0023   BX+20/21  3 block devices, LASTDRIVE 5
+```
+
+⚠ **The dump is self-authenticating**, which matters on a project that has already lost a
+session to a stale artefact: the SFT entries at `0x1A0` and `0x1E0` contain
+`OUT     TXT` and `LOLPROBECOM` — the probe's own two files. It cannot be a leftover.
+
+★ **But the field krnl386 actually wants is not a DOS field.** It reads `[ES:BX+0x6A]`
+and treats the result as an offset to a structure holding six more offsets (`+00`, `+0C`,
+`+10`, `+18`, `+24`, `+28`), later pairing each with a selector made by DPMI `0002` over
+the SysVars segment. Under MS-DOS 6.22 `BX+0x6A` is `0x44B7` — past the documented list
+of lists — and what is *at* `0x44B7` disassembles as DOS kernel **code**:
+
+```
+or al,al / jz / mov ah,0x3a / cmp byte [0x214c],0 / mov di,[0x216f]
+```
+
+not a table of offsets. So this is an **NTVDM contract**: ntvdm's DOS plants a WOW block
+at SysVars+0x6A that MS-DOS never had. The oracle cannot answer it and it must not be
+guessed.
+
+### Where the blockers actually are
+
+Two, and both are NTVDM contracts that no amount of reading our own binaries will settle:
+
+1. **SysVars+0x6A** — what ntvdm plants there.
+2. **`INT 31h 04F3`** — the non-standard DPMI call from Part 5.
+
+Both fall out of **one cheap rig round**: run `lolprobe.com` under **stock ntvdm** (the box
+already has `stock <target>`) and diff against the MS-DOS 6.22 baseline now on disk at
+`docs/research/evidence/lolprobe-msdos622.txt`.
+
 ## Next actions
 
-1. **Extract `keyboard.drv`, `system.drv` and `shell.dll`** from the rig into `guest/ne/`.
-   Three named stops become zero, and wowexec becomes fully bindable.
-2. **Give krnl386 a stack and enter it with `AX=0x4B4F`, `DS`=autodata**, in 16-bit PM
-   as a DPMI client. The convention is measured now, not assumed.
-3. **Answer what it calls**: DPMI `0202`/`0203` (exception handlers, 27 sites) and
-   `INT 2Fh 1684/1689/168A`; work out `INT 31h 04F3`. `INT 41h` can safely be a no-op.
-4. Rig round: confirm the two-phase load + bind on real hardware and real selectors.
+1. **RIG, and it is the decisive one: run `tools/dostest/lolprobe.com` under STOCK
+   ntvdm** and diff against `docs/research/evidence/lolprobe-msdos622.txt`. Answers
+   SysVars+0x6A — the last thing krnl386's init reads that we cannot supply. Running it
+   under NTVDMEX in the same round gives the other side of the diff.
+2. **Extract `keyboard.drv`, `system.drv` and `shell.dll`** from the rig into `guest/ne/`.
+   USER / WOWEXEC / SYSEDIT stop exactly there; three named stops become zero.
+3. **Give krnl386 a stack and enter it with `AX=0x4B4F`, `DS`=autodata**, in 16-bit PM as
+   a DPMI client. The convention is measured now, not assumed.
+4. **`INT 31h 04F3`** — the other NTVDM contract. Kernel-RE, not a plausible guess.
+   `INT 41h` (kernel debugger, 6 sites) can safely be a no-op.
 5. Independent of WOW: **#131 console/stdio** (redirection/piping bypassed today).
+
+**Not blockers, established by reading the call sites** — INT 2Fh `1600`/`1684`/`1689`/
+`168A`, and the "MS-DOS" vendor API krnl386 asks for and tolerates being refused.
 
 **Rig left with:** IFEO `Debugger` **set** and `wowtry.flag` **present**. Clear both to
 return the box to stock.
