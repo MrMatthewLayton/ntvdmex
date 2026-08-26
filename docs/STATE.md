@@ -67,14 +67,22 @@ flawless sound.
 > refused outright, and the real name re-enters us through the IFEO hook. So there is no
 > safe install story until WOW exists, and #128 moved onto the critical path.
 
-1. **[#128] WOW / Win16 — IN PROGRESS.** NE loader done (`src/wow/ne.h`, 18th battery).
-   On the rig, **krnl386.exe loads and relocates inside NTVDMEX**: 4 segments, 13
-   relocation records expanding to **495 patched sites**, imports none. LDT selectors
-   are **unblocked** (call `v86_get_tib()` first — see session 30).
+1. **[#128] WOW / Win16 — IN PROGRESS.** NE loader **and cross-module import
+   resolution** done (`src/wow/ne.h`, 18th battery, 106 checks against all five real
+   binaries). On the rig, **krnl386.exe loads and relocates inside NTVDMEX**: 4 segments,
+   13 relocation records expanding to **495 patched sites**. Off-VM the host's whole
+   module set now binds: GDI resolves all **781** of its sites into KERNEL, while USER,
+   WOWEXEC and SYSEDIT stop precisely at **SYSTEM**, **KEYBOARD** and **SHELL** — the
+   three modules not extracted yet, each named by the failure. LDT selectors are
+   **unblocked** (call `v86_get_tib()` first — see session 30).
    ⚠️ **krnl386 is a LIBRARY, not a program** — no stack of its own, and its `CS:IP` is a
    DLL *init* entry. Do not jump to it. The bootstrap is: init krnl386 → init user + gdi
    → run **wowexec.exe** (the PROGRAM) → wowexec launches the app.
-   **Next: the DLL init calling convention, then import-by-ordinal resolution.**
+   ⚠️ **Load every module, assign every selector, then relocate ONCE.** Relocation is not
+   idempotent: a chained record's next site is the word *at* the current site, and the
+   first pass overwrites exactly those words.
+   **Next: extract `keyboard.drv` / `system.drv` / `shell.dll` from the rig, then the
+   DLL init calling convention.**
 2. **[#131] Console/stdio integration.** Independent of WOW and needed regardless:
    anything script-driven behaves differently under NTVDMEX than under stock.
 3. **[#130] Installation & routing.** Blocked on #128 — an installer is not useful while
@@ -90,7 +98,7 @@ flawless sound.
 ./scripts/build.sh                 # -> build/ntvdmhost.exe
 
 # Fast test loop -- no VM and no rig needed. Builds the batteries, then runs them.
-./tools/dostest/run.sh                 # 18 batteries, 664 checks, ~10s, non-zero on failure
+./tools/dostest/run.sh                 # 18 batteries, 736 checks, ~10s, non-zero on failure
 ```
 
 - The build is **no-CRT on purpose**: the toolchain is UCRT-default and UCRT is absent on

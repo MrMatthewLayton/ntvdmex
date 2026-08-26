@@ -152,12 +152,118 @@ is also why the launch says `-a …\krnl386.exe`: the first *library* to bootstr
 - **SMB attribute caching served a stale copied log** — again. Copy to a fresh name.
 - **`sips` crops from the CENTRE**, not the top-left. Two screenshots of grass.
 
+---
+
+## Part 4 — #128 imports: modules can now bind to each other
+
+Item 2 of the list below, done — and it found two defects that would have produced a
+guest that *starts* and then behaves like nothing on earth, which is the expensive kind.
+
+`src/wow/ne.h` gained the four name tables (resident, non-resident, module reference,
+imported names), export lookup by ordinal and by name, and an **`ne_registry`** that
+turns an import record into a target module's `selector:offset`.
+
+krnl386 was a poor test of any of this: **it imports from nothing.** `user.exe` and
+`gdi.exe` import from KERNEL at 810 sites between them, and that is where the defects
+were. All three findings below came from the binaries, not from the format documentation.
+
+### ★ 1. Entry-table indicator `0xFE` is not a segment number
+
+It is an **ABSOLUTE constant** — there is no segment, and the "offset" *is* the value.
+krnl386 has 30:
+
+```
+@113 = 0x0003  __AHSHIFT      @174 = 0xa000  __A000H      @193 = 0x0040  __0040H
+@114 = 0x0008  __AHINCR       @178 = 0x0001  __WINFLAGS   @574 = 0x0000  __MOD_GDI
+```
+
+Read as "segment 254" against a 4-segment module they are rejected — which is exactly
+how gdi.exe first failed to relocate here, because **366 of its records import
+`__MOD_GDI`**. `ne_export_by_ordinal` now returns segment number 0 to mean "no segment,
+the value is the whole answer"; segments are numbered from 1, so 0 was free.
+
+⚠ My first cross-check script said all of GDI's imports resolved. It was wrong in the
+same way the loader was — I had written the ordinal walk by copying the loader's logic,
+so the instrument inherited the defect. What caught it was the C failing where the
+Python passed, then asking *which ordinal*.
+
+### ★ 2. ADDITIVE means ADD, and we were replacing
+
+Every ADDITIVE record in the corpus targets a `__MOD_*` whose value is **0**, so the
+fixup itself is indistinguishable between add and replace. **The word already at each
+site is not.** gdi's 366 sites hold `0x7b`, `0x7c`, `0x7d`, `0x7e`, `0x97`, `0xaf`… all
+different. The bytes around one:
+
+```
+68 7e 00           push 0x007e          <- the site
+9a ff ff 00 00     call far <KERNEL>    <- an unrelocated FAR_ADDR import
+6a 06              push 6
+```
+
+A WOW thunk table whose pushed word is the **API index**. Replacing turns all 810 of
+gdi's and user's into `push 0` and sends every call to function zero. Adding leaves them
+alone, which is what a zero addend should do.
+
+⚠ **The synthetic test's expectation for this had been written from memory, and was
+wrong.** It asserted the site ended up holding the fixup value. The real binaries
+refuted it. The cardinal M9 rule applies to WOW too.
+
+### ★ 3. Import-by-name must search the NON-resident table
+
+`user.exe` imports `KERNEL.GETWOWCOMPATFLAGSEX` **by name**, and that export is only in
+krnl386's non-resident table (@521, one of **312** kept there). A lookup that stops at
+the resident table finds none of them and fails on the first real binary. Entry 0 of
+each table is skipped: resident entry 0 is the module's own name, non-resident entry 0
+is the description (`"Microsoft Windows Kernel Interface Version 4.00"`), and both carry
+ordinal 0.
+
+### ★ Relocation is not idempotent — the host was relocating twice
+
+Session 30's selector stage relocated with placeholder segment values at load time and
+**again** against real selectors. That cannot work: a chained record finds its next site
+by reading the word **at** the current site, and the first pass overwrites exactly those
+words with addresses. The second pass follows garbage. It was written down as a curiosity
+("we relocated twice"); it was a bug.
+
+The host is now two phases, and the order is forced by the data:
+
+1. `wow_load_modules()` — parse, allocate, copy bytes. **No relocation.**
+2. `wow_bind_modules()` — a selector for every segment of every module, **then**
+   relocate once through the registry.
+
+`ne_registry_resolve` refuses a target whose selector is still 0, so getting the order
+wrong fails loudly instead of writing `0000:xxxx`.
+
+### Where it stands
+
+The host loads **krnl386 + user + gdi + wowexec** together, from the directory of the
+`-a` argument. Off-VM, against the real binaries:
+
+| | |
+|---|---|
+| KERNEL | all relocations resolved, **495 sites** — matches the rig's `0x1ef` exactly |
+| GDI | all resolved, **781 sites** |
+| USER | stops at **SYSTEM** |
+| WOWEXEC | stops at **KEYBOARD** |
+| SYSEDIT | stops at **SHELL** |
+
+Those three stops are not failures — they are the modules not extracted yet, and each
+one **names itself** rather than dying somewhere unrelated. NE battery 35 → **106
+checks**; suite 18 batteries, **736 checks**, exit 0.
+
+Incidental, and worth remembering when the thunking work starts: krnl386 exports two
+*unnamed* absolutes, `@454 = 0x001b` and `@455 = 0x0023` — NT's flat user-mode code and
+data selectors.
+
 ## Next actions
 
-1. **DLL initialisation calling convention** for krnl386 (stack, `DS`=autodata, `DI`, `CX`).
-2. **Import-by-ordinal** resolution so user/gdi can bind to krnl386 — the gate to apps.
-3. Then, and only then, something worth executing.
-4. Independent of WOW: **#131 console/stdio** (redirection/piping bypassed today).
+1. **Extract `keyboard.drv`, `system.drv` and `shell.dll`** from the rig into `guest/ne/`.
+   Three named stops become zero, and wowexec becomes fully bindable.
+2. **DLL initialisation calling convention** for krnl386 (stack, `DS`=autodata, `DI`, `CX`).
+   krnl386 is a LIBRARY: no stack of its own, and its `CS:IP` is an *init* entry.
+3. Rig round: confirm the two-phase load + bind on real hardware and real selectors.
+4. Then, and only then, something worth executing.
+5. Independent of WOW: **#131 console/stdio** (redirection/piping bypassed today).
 
 **Rig left with:** IFEO `Debugger` **set** and `wowtry.flag` **present**. Clear both to
 return the box to stock.
