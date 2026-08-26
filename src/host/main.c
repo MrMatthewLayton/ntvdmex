@@ -10694,8 +10694,37 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                 p = zput(p, "STAGE2: DPMI 1687 -> AX=0 ES:DI=0x"); p = zhex(p, DOS_HDLR_SEG);
                 p = zput(p, ":0x"); p = zhex(p, DPMI_ENTRY_OFF); p = zput(p, " (guest must far-call this)\r\n");
                 log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+            } else if (ax == 0x1684) {                          /* get device API entry point */
+                /* ES:DI = 0:0 means "no API for that device ID", and we have none.
+                   ⚠ Leaving the registers alone would be a POINTER-RETURNING call
+                     that returns whatever was in ES:DI -- the caller then far-calls
+                     into it. krnl386 happens to be safe (it does `xor di,di / mov
+                     es,di` at seg1:0x2814 immediately before asking for device 9,
+                     then `or ax,di / jz` after), but that is the CALLER being
+                     careful, and it is not something to rely on from callers we
+                     have not read. */
+                VDM_SET16(tib, VTIB_ES, 0);
+                VDM_SET16(tib, VTIB_EDI, 0);
+                p = zput(p, "STAGE2: 2F/1684 device API -> none (ES:DI=0)\r\n");
+                log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
             }
-            /* other INT 2Fh multiplex functions: left to the guest (no-op pass) */
+            /* ── The rest of what krnl386 asks INT 2Fh, and why leaving it alone is
+                 the RIGHT answer rather than merely the easy one. Read off the
+                 binary (tools/ne/neints.py, then the call sites):
+
+                 1600h  "is enhanced-mode Windows running?" AL unchanged = 0x00 =
+                        no. Which is true. krnl386 then does `cmp al,3` at
+                        seg1:0xc14b and DISCARDS the flags -- there is no branch on
+                        it -- so this steers nothing anyway.
+                 1689h  kernel idle call. Fire-and-forget: seg1:0x2f5f jumps away
+                        immediately afterwards without reading a single register.
+                 168Ah  get vendor-specific API entry. AL unchanged = 0x8A, and
+                        krnl386 tests exactly that (`cmp al,0x8a / jz`) at
+                        seg1:0xd6e9 to mean "not supported", then carries on.
+                        Its vendor string at autodata:0x172a is "MS-DOS" -- so the
+                        thing it is looking for is NTVDM's private WOW API. It
+                        TOLERATES being refused, which is why WOW work can start
+                        without it. */
             VDM_REG(tib, VTIB_EIP) += 3;                        /* -> the IRET (CF) */
             continue;
         }
