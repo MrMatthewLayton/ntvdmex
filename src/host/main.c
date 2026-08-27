@@ -6173,6 +6173,7 @@ static DWORD WINAPI dpmi_watchdog(LPVOID param)
 }
 
 static void dpmi_install(int idx);           /* defined just below; used by the helper */
+static void wow_shadow_put(int idx);         /* GH #128: keep the descriptor shadow in step */
 
 /* A 16-bit CODE selector based on DOS_HDLR_SEG, so the host's own stubs (the 0306
    protected-to-real entry, the 0305 save/restore no-op) have a protected-mode address
@@ -6732,7 +6733,18 @@ static void dpmi_install(int idx)
            (~2GB); a base-0 ~2GB G=1 selector installs, a true 4GB one is REJECTED (Kernel RE
            session 7). Surface the NTSTATUS so a rejected flat/large descriptor is visible
            instead of silently leaving a stale selector that faults on first use (run 84). */
-        LONG st = v86_set_ldt_entries(sel, lo, hi, sel, lo, hi); /* idempotent single-entry */
+        LONG st;
+        /* ⚠ HOST-SIDE CHANGES MUST REACH THE SHADOW TOO, OR THE SYNC EATS THEM.
+             wow_shadow_sync() treats "shadow differs from g_ldt[]" as "the guest wrote
+             this". A descriptor WE allocate after the shadow was created is zero in the
+             shadow and non-zero in g_ldt[], which reads as the guest having zeroed it --
+             and the sync then pushes those zeros into the real LDT, destroying a live
+             descriptor. Measured on the rig the moment the shadow shipped: three
+             LDTSYNC lines saying "guest wrote base=0 limit=0 acc=0" for indices the
+             guest had never touched. Keeping both sides in step here is what makes the
+             difference test mean what it says. */
+        wow_shadow_put(idx);
+        st = v86_set_ldt_entries(sel, lo, hi, sel, lo, hi); /* idempotent single-entry */
         if (st != 0) {
             /* ── CLAMP AND RETRY, don't just report ────────────────────────────────
                DOS/4GW (Doom) allocates a base-0 4GB G=1 FLAT selector and XP rejects it
@@ -7734,33 +7746,140 @@ static void dpmi_rmcs_probe(volatile BYTE *tib, DWORD esb, unsigned slot, DWORD 
      inventing one. */
 static WORD g_wow_vendor_sel = 0;
 
+/* ── THE DESCRIPTOR-TABLE SHADOW. ───────────────────────────────────────────────────
+     krnl386 wants a writable window onto the descriptor table and uses it as its own
+     allocator: `0x5888` reads a free-list head through it, walks links stored IN the
+     descriptor bytes, and writes `[di+5] = 0x0F` (access byte, P=0) to claim a slot.
+     Stock ntvdm hands it the real table. We measured (session 30 part 12) that OUR
+     LDT is not mapped into our address space, so we cannot.
+
+     So: a shadow. A page-aligned block holding the same 8-byte encodings, handed out
+     as a writable data selector, seeded from g_ldt[] and RECONCILED into the real LDT
+     whenever krnl386 next talks to us.
+
+   ⚠ THE HONEST LIMIT OF THIS, STATED UP FRONT. A shadow is only equivalent to the
+     real thing if every write is pushed before it matters. We push on entry to any
+     protected-mode interrupt service, which covers the sequence krnl386 actually runs
+     -- claim a slot in the table, then call INT 31h to configure it -- but it does
+     NOT cover "write a descriptor and immediately load a selector for it" with no
+     intervening call. If that happens the guest gets a stale descriptor.
+     Rather than guess whether krnl386 does that, the reconcile is LOUD: it logs every
+     entry it finds changed. So the shadow is also the instrument that answers the
+     question. If the log shows krnl386 writing descriptors we did not already know
+     about, a page-protection trap (the A0000 planar pattern) is required and this is
+     not enough. If it only ever writes free-list links, this is exactly enough. */
+#define WOW_SHADOW_ENTRIES DPMI_LDT_MAX
+static BYTE *g_wow_shadow = NULL;
+static WORD  g_wow_shadow_sel = 0;
+static DWORD g_wow_sync_writes = 0;      /* how many entries krnl386 has changed */
+
+static void wow_shadow_put(int idx)      /* g_ldt[idx] -> shadow */
+{
+    DWORD lo, hi, *e;
+    if (!g_wow_shadow || idx < 0 || idx >= WOW_SHADOW_ENTRIES) return;
+    dpmi_build_desc(g_ldt[idx].base, g_ldt[idx].limit,
+                    g_ldt[idx].access, g_ldt[idx].flags, &lo, &hi);
+    e = (DWORD *)(g_wow_shadow + idx * 8);
+    e[0] = lo; e[1] = hi;
+}
+
+/* Push anything krnl386 changed in the shadow into the real LDT. Returns the count. */
+static int wow_shadow_sync(char **pp)
+{
+    int idx, top = g_ldt_next + 8, n = 0;
+    char *p = pp ? *pp : NULL;
+    if (!g_wow_shadow) return 0;
+    if (top > WOW_SHADOW_ENTRIES) top = WOW_SHADOW_ENTRIES;
+    for (idx = DPMI_LDT_RESERVED; idx < top; ++idx) {
+        DWORD lo, hi;
+        const DWORD *e = (const DWORD *)(g_wow_shadow + idx * 8);
+        dpmi_build_desc(g_ldt[idx].base, g_ldt[idx].limit,
+                        g_ldt[idx].access, g_ldt[idx].flags, &lo, &hi);
+        if (e[0] == lo && e[1] == hi) continue;      /* unchanged */
+        {   WORD sel = (WORD)((idx << 3) | 7);
+            DWORD nlo = e[0], nhi = e[1];
+            /* Install EXACTLY the bytes the guest wrote -- decoding and re-encoding
+               would quietly normalise anything we got wrong. Then decode purely for
+               our own bookkeeping so later host-side reads of g_ldt[] agree. */
+            LONG st = v86_set_ldt_entries(sel, nlo, nhi, sel, nlo, nhi);
+            g_ldt[idx].base   = (nhi & 0xFF000000u) | ((nhi & 0xFFu) << 16)
+                              | (nlo >> 16);
+            g_ldt[idx].limit  = (nlo & 0xFFFFu) | (nhi & 0x000F0000u);
+            g_ldt[idx].access = (BYTE)((nhi >> 8) & 0xFF);
+            g_ldt[idx].flags  = (BYTE)((nhi >> 20) & 0x0F);
+            ++n; ++g_wow_sync_writes;
+            if (p && n <= 6) {
+                p = zput(p, "  LDTSYNC idx 0x"); p = zhex(p, (DWORD)idx);
+                p = zput(p, " <- guest wrote base=0x"); p = zhex(p, g_ldt[idx].base);
+                p = zput(p, " limit=0x");               p = zhex(p, g_ldt[idx].limit);
+                p = zput(p, " acc=0x");                 p = zhexb(p, g_ldt[idx].access);
+                p = zput(p, st ? " INSTALL FAILED st=0x" : " ok st=0x");
+                p = zhex(p, (DWORD)st);
+                p = zput(p, "\r\n");
+            }
+        }
+    }
+    if (pp) *pp = p;
+    return n;
+}
+
+static WORD wow_shadow_selector(void)
+{
+    int idx, k;
+    if (g_wow_shadow_sel) return g_wow_shadow_sel;
+    if (g_ldt_next >= DPMI_LDT_MAX) return 0;
+    g_wow_shadow = (BYTE *)VirtualAlloc(NULL, WOW_SHADOW_ENTRIES * 8,
+                                        MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+    if (!g_wow_shadow) return 0;
+    for (k = 0; k < WOW_SHADOW_ENTRIES * 8; ++k) g_wow_shadow[k] = 0;
+    for (k = 0; k < WOW_SHADOW_ENTRIES; ++k) wow_shadow_put(k);
+    idx = g_ldt_next++;
+    g_ldt[idx].base   = (DWORD)(ULONG_PTR)g_wow_shadow;
+    g_ldt[idx].limit  = WOW_SHADOW_ENTRIES * 8 - 1;
+    g_ldt[idx].access = 0xF2;            /* present, DPL3, data R/W -- verw must pass */
+    g_ldt[idx].flags  = 0;               /* 16-bit                                    */
+    dpmi_install(idx);
+    g_wow_shadow_sel = (WORD)((idx << 3) | 7);
+    return g_wow_shadow_sel;
+}
+
 static int wow_vendor_api_entry(dos_machine_t *mp, WORD *sel, WORD *off)
 {
+    /* Byte-for-byte the shape stock ntvdm uses (measured, 22 bytes at 00C7:2037):
+       function 0 -> 0x0100, function 0x0100 -> a selector, anything else -> CF=1.
+       The immediate at +0x10 is patched with our shadow selector below. */
     static const BYTE stub[] = {
-        0x3D, 0x00, 0x00,        /* cmp ax,0x0000      */
-        0x75, 0x05,              /* jnz  +5            */
-        0xB8, 0x00, 0x01,        /* mov ax,0x0100      */
-        0xF8,                    /* clc                */
-        0xCB,                    /* retf               */
-        0xF9,                    /* stc  -- not provided */
-        0xCB                     /* retf               */
+        0x3D, 0x00, 0x00,        /* +00  cmp ax,0x0000            */
+        0x75, 0x05,              /* +03  jnz  +0x0A               */
+        0xB8, 0x00, 0x01,        /* +05  mov ax,0x0100            */
+        0xEB, 0x08,              /* +08  jmp  +0x12               */
+        0x3D, 0x00, 0x01,        /* +0A  cmp ax,0x0100            */
+        0x75, 0x05,              /* +0D  jnz  +0x14               */
+        0xB8, 0x00, 0x00,        /* +0F  mov ax,<shadow selector> */
+        0xF8,                    /* +12  clc                      */
+        0xCB,                    /* +13  retf                     */
+        0xF9,                    /* +14  stc  -- not provided     */
+        0xCB                     /* +15  retf                     */
     };
-    WORD seg = 0, max = 0;
+    WORD seg = 0, max = 0, shadow;
     volatile BYTE *b;
     int idx, i;
 
     *off = 0;
     if (g_wow_vendor_sel) { *sel = g_wow_vendor_sel; return 0; }
+    shadow = wow_shadow_selector();
+    if (!shadow) return -1;
     /* Its own paragraph rather than a corner of DOS_HDLR_SEG: that segment is at
        linear 0x500 and DOS_ENV_SEG starts at 0x600, so it has 0x100 bytes total and
        the map in the header shows them nearly all spoken for. */
     if (dos_alloc(NULL, mp->first_mcb, 1, &seg, &max) || !seg) return -1;
     b = (volatile BYTE *)(ULONG_PTR)((DWORD)seg << 4);
     for (i = 0; i < (int)sizeof stub; ++i) b[i] = stub[i];
+    b[0x10] = (BYTE)shadow; b[0x11] = (BYTE)(shadow >> 8);   /* the returned selector */
     if (g_ldt_next >= DPMI_LDT_MAX) return -1;
     idx = g_ldt_next++;
     g_ldt[idx].base   = (DWORD)seg << 4;
-    g_ldt[idx].limit  = 0x0F;
+    g_ldt[idx].limit  = 0x1F;
     g_ldt[idx].access = 0xFA;            /* present, DPL3, code, readable */
     g_ldt[idx].flags  = 0;               /* 16-bit                        */
     dpmi_install(idx);
@@ -7779,6 +7898,23 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
     (void)steps;
     /* First safe moment to re-plant anything the skip mode stepped over. */
     if (g_bp_n) dpmi_bp_rearm_pending(dpmi_sel_base((WORD)(VDM_REG(tib, VTIB_CS) & 0xFFFF)) + eip);
+    /* ── PUSH ANYTHING THE GUEST WROTE INTO THE DESCRIPTOR SHADOW. (GH #128) ────────
+         krnl386 claims descriptor slots by writing the table directly and then calls
+         INT 31h to configure them, so reconciling HERE -- before servicing anything --
+         puts its direct writes into the real LDT in the right order. The log line is
+         deliberate: it is how we find out whether a write-trapping shadow is needed
+         instead of this one. See wow_shadow_sync. */
+    if (g_wow_shadow) {
+        char *sp = p;
+        int nsync = wow_shadow_sync(&sp);
+        if (nsync) {
+            p = sp;
+            p = zput(p, "  LDTSYNC: "); p = zhex(p, (DWORD)nsync);
+            p = zput(p, " descriptor(s) pushed from the shadow (total 0x");
+            p = zhex(p, g_wow_sync_writes); p = zput(p, ")\r\n");
+            log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+        }
+    }
                     /* ── THE CLIENT'S OWN PM HANDLER WINS, IF IT INSTALLED ONE. ──────
                        Scoped to INT 21h ON PURPOSE, for now. DOS/4GW also installs PM
                        handlers for 10h/16h/1Ah/... and by the spec those should route to
@@ -8165,6 +8301,33 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                                 }
                             }
                             p = zput(p, " -> free (kept: reserved or not allocated)");
+                            break; }
+                        case 0x000D: {                             /* allocate SPECIFIC descriptor */
+                            /* DPMI 1.0. The client names the selector it wants rather
+                               than taking whatever 0000 hands out -- which is exactly
+                               what krnl386 does once it is managing the descriptor
+                               table itself through the vendor window: it picks a free
+                               slot out of its own free list and then asks us to make
+                               that one real.
+                             ⚠ "Free" has to mean free to US as well. Refusing a slot we
+                               have already given to a module segment is the difference
+                               between a failed allocation the client can handle and two
+                               owners of one descriptor, which is unfindable later. */
+                            WORD want = (WORD)(VDM_REG(tib, VTIB_EBX) & 0xFFFF);
+                            int widx = want >> 3;
+                            if (widx < DPMI_LDT_RESERVED || widx >= DPMI_LDT_MAX
+                                || g_ldt[widx].access != 0) {
+                                VDM_REG(tib, VTIB_EFLAGS) |= 1u;
+                                VDM_SET16(tib, VTIB_EAX, 0x8022);   /* invalid selector */
+                                p = zput(p, " -> REFUSED (reserved, out of range, or in use)");
+                            } else {
+                                g_ldt[widx].base = 0; g_ldt[widx].limit = 0;
+                                g_ldt[widx].access = 0xF2; g_ldt[widx].flags = 0;
+                                dpmi_install(widx);
+                                if (widx >= g_ldt_next) g_ldt_next = widx + 1;
+                                VDM_REG(tib, VTIB_EFLAGS) &= ~1u;
+                                p = zput(p, " -> allocated specific sel 0x"); p = zhex(p, want);
+                            }
                             break; }
                         case 0x0100: {                             /* allocate DOS memory: BX paras -> AX=seg, DX=sel */
                             uint16_t want = (uint16_t)(VDM_REG(tib, VTIB_EBX) & 0xFFFF), seg = 0, max = 0;
