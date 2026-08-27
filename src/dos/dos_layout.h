@@ -54,4 +54,57 @@
 #define DOS_DPB_OFF       0x0340   /* AH=1Fh/32h drive parameter block, 33 bytes */
 #define DOS_MEDIA_OFF     0x0364   /* AH=1Bh/1Ch media descriptor byte           */
 
+/* ── WOW: THE TABLE krnl386 READS AT SysVars+0x6A.  GH #128 ─────────────────
+   Before it does anything else, krnl386's init entry (seg1:0xc041) issues
+   INT 21h AH=52h, and then:
+
+       mov di, es:[bx+0x6a]        ; a WORD offset, in the SysVars segment
+       mov [0x26d], di / mov [0x26f], es
+       mov ax, es:[di+0x00] ...    ; and +0x0c, +0x10, +0x18, +0x24, +0x28
+
+   caching six pointers into DOS's data area, then converting the SysVars
+   segment to a selector with DPMI 0002 and pairing it with each offset.
+
+ ★ THE +0x6A WORD IS AN OFFSET, NOT A FAR POINTER, and the table it names holds
+   FAR pointers -- but krnl386 reads only the OFFSET half of each and supplies
+   the selector itself.  So every target must live in the SysVars segment.
+   Measured off stock ntvdm, not guessed: `lolprobe` recorded [ES:BX+6A]=0x1482
+   with a table of 4-byte entries whose segment half is the SysVars segment
+   every time (docs/research/evidence/lolprobe-stock-ntvdm.txt).
+
+ ⚠ WHY THIS IS NOT OPTIONAL AND WHY ITS ABSENCE WAS DANGEROUS.  The whole
+   SysVars block used to be zeroed except the MCB head, so [BX+0x6A] read 0 and
+   the six "pointers" became offsets 0x00, 0x0c, 0x10... into DOS_HDLR_SEG --
+   which is the INT 21h BOP stub and the DPMI entry points.  krnl386 does not
+   only read through them, it WRITES (seg1:0x52b5 stores a word through the
+   +0x24 one), so the previous state had the guest scribbling on our own
+   handler code.  It is scored as part of "Unable to initialize heap" because it
+   happens before the heap is built, but it would have corrupted the host
+   whatever came next.
+
+   Offsets below are within DOS_CTAB_SEG (linear 0x900), which is inside the
+   same MCB-reserved resident block, well clear of linear 0x714 (see above) and
+   above every other user of that block.  DOS_WOW_VARS is deliberately a small
+   private scratch area: krnl386 reads and writes these bytes and nothing in our
+   DOS consults them, so it stays self-consistent.  Two of the six ARE known and
+   are seeded for real -- see dos_wow_publish(). */
+/* How many drive letters DOS admits to. Reported through SysVars+0x21, which
+   krnl386 reads via the table below; the guest's own drive set comes from the
+   INT 21h surface, so this is a ceiling, not a claim that all of them exist. */
+#define DOS_LASTDRIVE     26
+#define DOS_WOW_TBL_OFF   0x0370   /* 11 far pointers = 44 bytes                */
+#define DOS_WOW_TBL_N     11
+#define DOS_WOW_VARS_OFF  0x03A0   /* the storage those pointers point AT        */
+#define DOS_WOW_VARS_LEN  0x20
+/* Which entries of the table krnl386 actually reads, and what each becomes.
+   Only these six are consulted; the rest are present so the table has stock's
+   shape rather than a shorter one that happens to be enough today. */
+#define DOS_WOW_E_LASTDRV 0x00     /* -> SysVars+0x21, the LASTDRIVE byte        */
+#define DOS_WOW_E_CURDRV  0x0C     /* -> current-drive byte (seg1:0x5343 returns *
+                                    *    it as INT 21h AH=19h's answer)          */
+#define DOS_WOW_E_C       0x10
+#define DOS_WOW_E_E       0x18
+#define DOS_WOW_E_D       0x24     /* krnl386 WRITES a word through this one     */
+#define DOS_WOW_E_F       0x28
+
 #endif /* DOS_LAYOUT_H */

@@ -21,6 +21,7 @@
 #include "settings.h"   /* registry-backed knobs + the Settings dialog */
 #include "x86len.h"     /* which `CD nn` byte pairs are really INT instructions */
 #include "../wow/ne.h"  /* GH #128: 16-bit New Executable loader (WOW bootstrap) */
+#include "../wow/wow32.h" /* GH #128: the 32-bit half -- krnl386's calls out to Win32 */
 #include "dos_mcb.h"
 #include "dos_loader.h"
 #include "dos_psp.h"
@@ -7768,6 +7769,24 @@ static WORD g_wow_vendor_sel = 0;
      question. If the log shows krnl386 writing descriptors we did not already know
      about, a page-protection trap (the A0000 planar pattern) is required and this is
      not enough. If it only ever writes free-list links, this is exactly enough. */
+/* ── WOW32 dispatch state (GH #128). See src/wow/wow32.h. ──────────────────
+     `serviced` and `unimpl` are kept apart on purpose: a run where krnl386 gets
+     further because we answered N calls reads very differently from one where it
+     got further having been LIED to N times by the step-over path, and a single
+     total could not tell them apart. */
+static wow32_dosdata_t g_wow_dosdata;
+static DWORD g_wow32_serviced = 0, g_wow32_unimpl = 0;
+
+/* Translate a guest selector to a host linear base, for far-pointer arguments.
+   ⚠ Goes through dpmi_sel_base rather than g_ldt[] directly so that a selector
+     krnl386 created by writing the descriptor shadow resolves the same way here
+     as everywhere else in the host. */
+static DWORD wow32_host_sel2lin(WORD sel, void *ctx)
+{
+    (void)ctx;
+    return dpmi_sel_base(sel);
+}
+
 #define WOW_SHADOW_ENTRIES DPMI_LDT_MAX
 static BYTE *g_wow_shadow = NULL;
 static WORD  g_wow_shadow_sel = 0;
@@ -7979,23 +7998,39 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                        Naming it here is what turns a wall of identical BOP lines into
                        a list of functions to implement. */
                     if (bcode == 0x51) {
-                        /* The per-function stub pushes <arg byte count>, 0, <ID>, so
-                           the frame reads: bp+2/+4 return into the stub, bp+6 ID,
-                           bp+10 argument byte count, bp+12.. the caller's arguments.
-                           Verified against tools/ne/wowthunks.py, which reads the same
-                           three pushes straight out of the binary. */
-                        DWORD fid  = (DWORD)(fb[6] | (fb[7] << 8));
-                        DWORD nby  = (DWORD)(fb[10] | (fb[11] << 8));
+                        /* ⚠ CORRECTED, AND THE CORRECTION IS THE WHOLE POINT.
+                             This used to read the arguments at bp+12 and so printed
+                             the CALLER's far return address as the first two argument
+                             words. That is why session 30 filed VirtualAlloc's argument
+                             ORDER as "not pinned down, two readings possible" -- there
+                             was only ever one reading, and the instrument was lying.
+                           The arguments are at bp+16. Proof is krnl386's own return
+                             path (seg1:0x2c1d): `mov bx,[bp+10] / shl bx,2 /
+                             add bx,0x2ab6 / jmp bx` lands in a table of
+                             `pop bx / pop bp / add sp,0xA / retf N` stubs. The
+                             `add sp,0xA` skips bp+2..bp+10, the `retf` consumes the
+                             far return at bp+12/+14, and `retf N` discards N bytes
+                             above it. So the arguments begin at bp+16. See wow32.h. */
+                        DWORD fid  = (DWORD)(fb[WOW32_OFF_ID]
+                                             | (fb[WOW32_OFF_ID + 1] << 8));
+                        DWORD nby  = (DWORD)(fb[WOW32_OFF_ARGB]
+                                             | (fb[WOW32_OFF_ARGB + 1] << 8));
                         DWORD na   = nby / 2, k;
+                        const char *nm = wow32_name((WORD)fid);
                         p = zput(p, " FUNC=0x"); p = zhex(p, fid);
+                        if (nm) { p = zput(p, " "); p = zput(p, nm); }
                         p = zput(p, " args=");   p = zhex(p, nby);
                         p = zput(p, "b retstub=0x");
                         p = zhex(p, (DWORD)(fb[2] | (fb[3] << 8)));
+                        p = zput(p, " from=0x");   /* who called the stub -- names the
+                                                      call site to disassemble next */
+                        p = zhex(p, (DWORD)(fb[12] | (fb[13] << 8)));
                         if (na && na <= 16) {
                             p = zput(p, " (");
                             for (k = 0; k < na; ++k) {
                                 if (k) p = zput(p, " ");
-                                p = zhex(p, (DWORD)(fb[12 + k * 2] | (fb[13 + k * 2] << 8)));
+                                p = zhex(p, (DWORD)(fb[WOW32_OFF_ARGS + k * 2]
+                                             | (fb[WOW32_OFF_ARGS + k * 2 + 1] << 8)));
                             }
                             p = zput(p, ")");
                         }
@@ -8017,6 +8052,39 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                             "per-call BOP path\r\n");
                 log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
                 return 1;
+            }
+            /* ── ★ SERVICE THE CALL, IF WE KNOW HOW. (GH #128) ────────────────
+                 0x51 is the generic 16->32 gateway, so everything interesting
+                 arrives here. wow32.h holds the frame layout, the argument
+                 convention and the services themselves; this is only the wiring.
+               ⚠ The return value goes in a HOLE ON THE GUEST STACK, not in AX/DX
+                 -- the thunk does `sub sp,4` before the BOP and `pop ax / pop dx`
+                 after it, so anything we put in registers is overwritten before
+                 the caller sees it. wow32_setret() is the only correct way. */
+            if (bcode == 0x51) {
+                DWORD ssb2 = dpmi_sel_base((WORD)(VDM_REG(tib, VTIB_SS) & 0xFFFF));
+                wow32_frame_t f;
+                f.bp      = (volatile BYTE *)(ULONG_PTR)
+                            (ssb2 + (VDM_REG(tib, VTIB_EBP) & 0xFFFF));
+                f.id      = wow32_peekw(f.bp + WOW32_OFF_ID);
+                f.argb    = wow32_peekw(f.bp + WOW32_OFF_ARGB);
+                f.sel2lin = wow32_host_sel2lin;
+                f.ctx     = NULL;
+                f.ret     = 0;
+                f.serviced = 0;
+                if (wow32_call(&f, &g_wow_dosdata)) {
+                    ++g_wow32_serviced;
+                    VDM_REG(tib, VTIB_EIP) += WOW32_BOP_LEN;
+                    p = zput(p, " -> SERVICED, returned 0x"); p = zhex(p, f.ret);
+                    if (f.id == WOW32_REGISTERDOSDATA) {
+                        p = zput(p, " (DOS data area at 0x");
+                        p = zhex(p, g_wow_dosdata.farptr); p = zput(p, ")");
+                    }
+                    p = zput(p, "\r\n");
+                    log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                    return 1;
+                }
+                ++g_wow32_unimpl;
             }
             /* ── STEP OVER AND KEEP GOING, RATHER THAN STOPPING THE GUEST. ─────
                  Returning -1 here halts the run at the first unimplemented service,
@@ -10095,6 +10163,60 @@ static int dpmi_run_pm_interp(dos_machine_t *mp, volatile BYTE *tib)
     return -1;
 }
 
+/* ── PUBLISH THE TABLE krnl386 READS AT SysVars+0x6A.  GH #128 ───────────────
+     Called with SysVars already planted. See the DOS_WOW_* block in
+     dos_layout.h for the evidence -- this is the code half of it.
+
+     The six entries krnl386 consults become far pointers whose SEGMENT half is
+     the SysVars segment. It ignores that half and pairs each OFFSET with a
+     selector it makes itself (DPMI 0002 on the SysVars segment), so what has to
+     be right is the offset -- and every target must therefore be reachable as
+     DOS_HDLR_SEG:<16-bit offset>. Both blocks live in the MCB-reserved resident
+     filler at DOS_CTAB_SEG, which is inside that window.
+
+   ⚠ Two of the six are seeded with real values and four are private scratch.
+     That distinction is the honest state of the evidence, not a shortcut:
+     LASTDRIVE and the current-drive byte are pinned (krnl386 returns the latter
+     as INT 21h AH=19h's answer at seg1:0x5343), and the other four are only
+     known to be read and written by krnl386 itself. Scratch keeps it
+     self-consistent; when one of them turns out to matter, it gets pointed at
+     the real variable and this comment shrinks by a line. */
+static void dos_wow_publish(volatile BYTE *hdlr, volatile BYTE *ct,
+                            unsigned cur_drive)
+{
+    /* Offsets of the two blocks as seen from DOS_HDLR_SEG, which is the segment
+       krnl386 will build its selector on. */
+    const WORD tbl  = (WORD)(((DOS_CTAB_SEG << 4) + DOS_WOW_TBL_OFF)
+                             - (DOS_HDLR_SEG << 4));
+    const WORD vars = (WORD)(((DOS_CTAB_SEG << 4) + DOS_WOW_VARS_OFF)
+                             - (DOS_HDLR_SEG << 4));
+    unsigned k;
+    volatile BYTE *t = ct + DOS_WOW_TBL_OFF;
+    volatile BYTE *v = ct + DOS_WOW_VARS_OFF;
+
+    for (k = 0; k < DOS_WOW_VARS_LEN; ++k) v[k] = 0;
+    v[0] = (BYTE)cur_drive;                        /* 0 = A:, as INT 21h AH=19h  */
+
+    /* Every entry points somewhere valid, not just the six that are read. An
+       unread entry left at 0:0 is a landmine for the next thing that reads it. */
+    for (k = 0; k < DOS_WOW_TBL_N; ++k) {
+        *(volatile WORD *)(t + k * 4 + 0) = vars;
+        *(volatile WORD *)(t + k * 4 + 2) = DOS_HDLR_SEG;
+    }
+    *(volatile WORD *)(t + DOS_WOW_E_LASTDRV) = (WORD)(DOS_SYSVARS_OFF + 0x21);
+    *(volatile WORD *)(t + DOS_WOW_E_CURDRV)  = (WORD)(vars + 0);
+    *(volatile WORD *)(t + DOS_WOW_E_C)       = (WORD)(vars + 2);
+    *(volatile WORD *)(t + DOS_WOW_E_E)       = (WORD)(vars + 4);
+    *(volatile WORD *)(t + DOS_WOW_E_D)       = (WORD)(vars + 6);
+    *(volatile WORD *)(t + DOS_WOW_E_F)       = (WORD)(vars + 8);
+
+    /* ⚠ THE WORD AT SysVars+0x6A LANDS AT DOS_HDLR_SEG:0x00FA, and that segment
+         only has 256 bytes before DOS_ENV_SEG. 0xD4-0xF3 is the swappable data
+         area, so 0xFA-0xFB is free -- but only just, and the next thing added
+         here will not fit. Checked, not assumed. */
+    *(volatile WORD *)(hdlr + DOS_SYSVARS_OFF + 0x6A) = tbl;
+}
+
 int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
 {
     char report[8192]; char *p = report; char *base;
@@ -10681,13 +10803,24 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
       for (k = 0; k < sizeof(dos_tab_fnterm);  ++k) ct[DOS_CTAB_FNTERM  + k] = dos_tab_fnterm[k];
       for (k = 0; k < sizeof(dos_tab_collate); ++k) ct[DOS_CTAB_COLLATE + k] = dos_tab_collate[k];
       for (k = 0; k < sizeof(dos_tab_dbcs);    ++k) ct[DOS_CTAB_DBCS    + k] = dos_tab_dbcs[k]; }
-    /* GH #35: plant SysVars for INT 21h AH=52h. Only the word at BX-2 (the first
-       MCB segment) is real; the remaining fields are deliberately left zero --
-       see the handler for why a null stub beats a plausible-looking one. */
+    /* GH #35: plant SysVars for INT 21h AH=52h. Most fields are deliberately
+       left zero -- see the handler for why a null stub beats a plausible-looking
+       one. Only fields with a caller that demonstrably reads them are filled:
+         BX-2   the first MCB segment (GH #35)
+         +0x21  LASTDRIVE -- krnl386 takes a pointer to this byte through the
+                SysVars+0x6A table below, so zero here means it believes there
+                are no drives at all.
+       ⚠ The clear stops at +0x40 ON PURPOSE: DOS_SDA_OFF (the AH=34h InDOS flag
+         and the AH=5D06h swappable data area) sits at +0x44 and is planted
+         elsewhere. Widening this loop wipes it. */
     { int k; for (k = -2; k < 0x40; ++k) hdlr[DOS_SYSVARS_OFF + k] = 0; }
     *(volatile WORD *)((DOS_HDLR_SEG << 4) + DOS_SYSVARS_OFF - 2) = m.first_mcb;
+    hdlr[DOS_SYSVARS_OFF + 0x20] = 1;                     /* block devices       */
+    hdlr[DOS_SYSVARS_OFF + 0x21] = DOS_LASTDRIVE;         /* LASTDRIVE           */
     m.sysvars_seg = DOS_HDLR_SEG;
     m.sysvars_off = DOS_SYSVARS_OFF;
+    /* GH #128: and the WOW extension krnl386 reads before it does anything else. */
+    dos_wow_publish(hdlr, (volatile BYTE *)(DOS_CTAB_SEG << 4), 2 /* C: */);
     xms_init(&g_xms, 16384, xms_host_alloc, xms_host_free, NULL);  /* M4: 16MB XMS pool */
     ems_init(&g_ems, (uint16_t)(g_ems_frame_lin >> 4), EMS_POOL_PAGES,
              (volatile BYTE *)g_ems_frame_lin,
