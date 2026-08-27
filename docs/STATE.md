@@ -136,31 +136,49 @@ and nothing has drawn a pixel. What works is the *bootstrap* — see #128 below.
    subsequent get-date and close calls. ⚠️ Only where the call site says so:
    `tools/ne/wowdecline.py` finds three IDs where `0xFFFF` is a plain error.
 
-   ### ⏹ Where it stops today
-   The guest is resumed at our default PM stub `0x14f:0x95` (the IRET of the INT 31h
-   vector) after an `04F2` descriptor commit and **does not come back**. Stable and
-   reproducible: every run without breakpoints ends at PM step `0x31` having serviced
-   9 WOW32 BOPs. The frame there (`IP=0x662f CS=0x000f`) decodes as krnl386's
-   chain-to-previous-handler site — `pushf / lcall cs:[0x7c]` at `seg1:0x662a` — so
-   the IRET returns to `0x662f` (`ret`) → `0x5cf8` (`pop ds / ret`) → `0x5a42`, whose
-   `pop es` / `pop ds` are **two segment loads off the stack immediately after the
-   descriptor `04F2` just committed**. A bad segment load in PM is a #GP, and an
-   unreflected PM #GP is exactly this shape: silent teardown, no VEH, no last line.
-   ⚠️ **THE EXECUTING krnl386 IS AT LINEAR `0x1410` (segment `0141`), NOT at the base
-   the bind stage logs.** Three runs of breakpoints were armed at `0x02950000+off`,
-   reported themselves ARMED with exactly the right displaced bytes, and never fired
-   — a second, dead copy. `csbase=` is printed on every PM heartbeat now.
-   ⚠️⚠️ **A PM BREAKPOINT INSIDE krnl386's LIVE IMAGE KILLS THE RUN AT PM STEP 1.**
-   Measured across all 13 runs of session 31 (no BPs → step `0x31`; BPs on the dead
-   copy → step `0x31`; BPs on the live copy → step `0x01`, zero WOW32 BOPs). **Cause
-   unknown.** This first produced a WRONG conclusion — "the breakpoints never fired,
-   therefore that code is never reached" — when the run had simply died forty entries
-   earlier. *The absence of a signal is only evidence if the instrument was alive to
-   produce it.* `pmbp.txt` worked in session 30, so this is a regression or a
-   guest-specific hazard, and it is the tool most likely to be reached for next.
+   ### ⏹ Where it stops today — the mechanism is now EXPLAINED
+   krnl386 dies in its **NE segment-table copy loop** at `seg1:0xd4e5..0xd4f3`,
+   whose trip count is `es:[0x1c]` = `ne_cseg`, read from an NE header it has just
+   copied in. The header is not a header: with the debugger resolving selectors,
+   `@ds:si` at that moment reads `c4 cf c4 c4 cf …` — **our own default PM handler
+   stubs**. So `ne_cseg` is nonsense, the loop's `stosw`/`movsw` walk off the
+   segment, and an unreflected PM #GP tears the VDM down silently — no VEH, no
+   watchdog line, no last log entry.
+   The whole route there is confirmed by breakpoint hits, not inference:
+   `0x662f → 0x5cf8 → 0x5a42 → ret 8 → 0x7ed4 → 0x63b4 → 0x7f11 → 0x4648 →
+   retf 6 → 0xd4c0 → 0xd4db`. The `pop es`/`pop ds` suspects were cleared the same
+   way: they execute fine.
+   ⇒ **The open question is now "why is the module image not where krnl386 thinks
+   it is", not "where does it die".** Two facts that bear on it: krnl386 **never
+   reads the file it opens** (zero INT 21h `AH=3Fh` in a whole run — it only stats
+   it), and it **is** using our `VirtualAlloc` block as its heap (`0007 setbase
+   0x03a70000`, `0008 setlimit 0x8807f`). Our NE loader puts module images in HOST
+   memory (`0x0295xxxx`) while krnl386 does its own loading — two loaders, two
+   copies, and that is the thing to reconcile.
+
+   ### ⚠️ Instrument hazards that cost this session, all now fixed
+   ⚠️ **A 2-byte BOP over a 1-byte instruction eats its neighbour.** Breakpoints on
+   `c3`/`1f`/`c9` silently changed what the guest did — the `c3` at `seg1:0x662f`
+   ate the first byte of the instruction at `0x6630`, which sets AX for krnl386's
+   first INT 31h, so it asked for `0x0000` instead of `0x000A` and died at PM step
+   1. `dpmi_bp_arm()` now measures the instruction with `x86len.h` and **REFUSES**.
+   *This also refuted an earlier conclusion in this same session* — "the breakpoints
+   never fired, therefore that code is never reached" — when the run had died forty
+   entries earlier.
+   ⚠️ **THE EXECUTING krnl386 IS AT LINEAR `0x1410` (segment `0141`), NOT at the
+   base the bind stage logs.** Breakpoints armed at `0x02950000+off` report
+   themselves ARMED with the right displaced bytes and never fire — a dead copy.
+   `csbase=` is printed on every PM heartbeat now.
+   ⚠️ **`target.txt` leaked between DOS and WOW runs.** `rt.bat` writes it for every
+   DOS test; `wowrun.bat` never set its own, so **every** WOW run of session 31 was
+   told to load `C:\test\selftest.com` — a DOS `.COM` — as its Win16 program.
+   `wowrun.bat` now establishes its input. No measurement taken while that was true
+   can be trusted.
    ⚠️ **The watchdog thread logs ONE sample per WOW run and then stops**, for reasons
-   not yet found; it is not a usable instrument here. The `PMHB` heartbeat comes from
-   the main loop, which is provably alive.
+   not yet found; it is not a usable instrument here. The `PMHB` heartbeat comes
+   from the main loop, which is provably alive, and `DPMI-BP HIT` now resolves DS/ES
+   and dumps `@ds:si` / `@es:di` — a debugger that makes you guess where a selector
+   points is most of the way to being no debugger.
    ⚠️ Before consulting any other NTVDM project, read
    [`reference-projects.md`](reference-projects.md).
    Still unknown: **`INT 31h 04F3`**, and what four of the six `SysVars+0x6A` pointers

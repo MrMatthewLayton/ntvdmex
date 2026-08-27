@@ -7,8 +7,13 @@ Continues [session 30](session-30.md). GH #128. Branch `m9/completeness`.
 82 function IDs were enumerated as bare integers and none were implemented.
 
 **Where it ended:** the heap error is gone, krnl386 **opens a real file through our own
-DOS layer and gets handle 5 back**, and the WOW32 calling convention is pinned to the byte
-and confirmed against the rig. It now stops somewhere new.
+DOS layer and gets handle 5 back**, the WOW32 calling convention is pinned to the byte and
+confirmed against the rig, and the next stop is **traced instruction by instruction and
+fully explained** — it dies in an NE segment-table copy loop whose header is our own PM
+stub table.
+
+⚠️ Three of the day's instruments were wrong and are corrected below, one of them twice.
+The corrections are the most useful part of this log.
 
 ---
 
@@ -157,54 +162,105 @@ so. `csbase=` is printed on every heartbeat now.
 ⚠️ **An instrument that reports success against the wrong copy of the thing is worse than
 one that fails.** Same shape as the stale-artefact and wrong-bytes findings before it.
 
-## Part 6 — ⚠️ REFUTED IN THE SAME SESSION: what the corrected breakpoints "proved"
+## Part 6 — ⚠️ REFUTED TWICE: the breakpoints were corrupting the guest
 
 Re-armed at the live base, the breakpoints at `0x662f`, `0x5cf8`, `0x5a42` and `0x5a4f`
-still never fired, and the first draft of this log concluded from that:
+still never fired, and a first draft of this log concluded from that:
 
 > *"Breakpoints prove it never reaches the addresses the stack frame there appears to
 > name, so that frame is stale and the naive reading of it is wrong."*
 
-**That is wrong.** Comparing the step counter across all thirteen runs of the day refutes
-it in one line:
+Comparing the step counter across the day's runs refuted that: **planting a PM breakpoint
+inside krnl386's live image killed the guest at PM step `0x01`**, forty entries before the
+watched code. So "it never fired" said nothing about whether that code executes.
 
-| runs | last PM step | WOW32 BOPs |
-|---|---|---|
-| no breakpoints (10 runs) | `0x31` | 9 |
-| breakpoints on the **dead** copy (2 runs) | `0x31` | 9 |
-| breakpoints on the **live** copy (1 run) | **`0x01`** | **0** |
+★ **And then the cause, which makes the second conclusion wrong as well.** A breakpoint is
+a two-byte `C4 C4`. Three of the four sat on **one-byte instructions** — `c3` (ret),
+`1f` (pop ds), `c9` (leave) — so each ate the first byte of its *neighbour*. The `c3` at
+`seg1:0x662f` ate the leading `2e` of
 
-**Planting a PM breakpoint inside krnl386's live image kills the guest at the very first
-PM entry.** The run never got within forty entries of the code being watched, so "it never
-fired" says nothing whatever about whether that code executes.
+```
+6630  2e 83 3e 32 00 00   cmp word ptr cs:[0x32], 0
+```
 
-**Why that is fatal to this guest is not known**, and is recorded as measured and
-unexplained rather than guessed at. It matters twice over: `pmbp.txt` is a tool the last
-session relied on (it bracketed `0x3021` successfully), and it is the tool most likely to
-be reached for next.
+which is on the path that sets AX for krnl386's **first** INT 31h. The guest asked for
+`AX=0x0000` (allocate descriptors) instead of `AX=0x000A` (create alias) — visible in one
+line of every log, twelve runs to one — and died immediately.
 
-★ **The lesson, and it is the project's own:** *the absence of a signal is only evidence if
-the instrument was alive to produce it.* Exactly the shape of the watchdog stopping after
-one sample, of breakpoints arming on a dead copy, and of session 16's watchdog samples
-that only ever went to COM1.
+⚠️ The code already warned about this from session 17 and concluded *"we cannot tell where
+instructions start, so we cannot prevent this in general."* That stopped being true in
+session 21, when `x86len.h` was written for the INT-site patcher's identical disease.
+`dpmi_bp_arm()` now measures the instruction and **REFUSES**, naming the byte.
 
-## Where it stops
+⇒ **With working breakpoints, the original reading of the stack frame was right all
+along**, and the whole route is confirmed by hits rather than inference:
 
-The guest is resumed at our default PM stub `0x14f:0x95` — the IRET of the INT 31h
-vector — after an `04F2` descriptor commit, and does not come back. This is stable and
-reproducible: **every** run without breakpoints ends at PM step `0x31` having serviced
-9 WOW32 BOPs.
+```
+0x662f → 0x5cf8 → 0x5a42 → ret 8 → 0x7ed4 → 0x63b4 → 0x7f11 → 0x4648
+       → retf 6 → 0xd4c0 → 0xd4db
+```
 
-The stack frame there reads `[IP=0x662f][CS=0x000f][FLAGS=0x0202]` and decodes cleanly as
-krnl386's chain-to-previous-handler site: it saved our default INT 31h stub and calls it
-with `pushf / lcall cs:[0x7c]` at `seg1:0x662a`, whose next instruction is `0x662f`. Per
-part 6 there is now **no evidence against** that reading, so the next thread starts from
-it: `0x662f` is `ret`, returning into `seg1:0x5cf8` (`pop ds / ret`), then `seg1:0x5a42`
-(`or si,7 / … / pop es / pop ds / … / ret 8`) — **two segment loads off the stack**,
-immediately after the descriptor `04F2` just committed (`base=0x1100 limit=0xaf7f
-acc=0xf3`, a selector over conventional memory that overlaps krnl386's own image at
-`0x1410`). A bad `pop ds`/`pop es` in protected mode is a #GP, and an unreflected PM #GP
-is exactly this failure shape: silent teardown, no VEH, no last log line.
+The `pop es` / `pop ds` suspects were cleared the same way: they execute fine.
+
+## Part 7 — ★ where it actually dies, and why
+
+`seg1:0xd4db` hits; `seg1:0xd4f5` does not. Between them is the **NE segment-table copy
+loop**:
+
+```
+d4db  mov cx, es:[0x1c]      ; ne_cseg, from the NE header just copied in
+d4e5  movsw / movsw / lodsw / and ax,0x11f9 / or ax,0xc000 / stosw / movsw / stosw
+d4f3  loop 0xd4e5
+```
+
+To see what `ne_cseg` really was, the debugger had to stop making the reader guess where a
+selector points — `pmbp.txt`'s dump column takes a fixed **linear** address, and two runs
+were spent dumping `0x1100` on the strength of an old `04F2 installed base=0x1100` line.
+`DPMI-BP HIT` now resolves DS/ES itself and dumps `@ds:si` and `@es:di`. The answer
+arrived on the next run:
+
+```
+dsbase=0x0001696e  esbase=0x00001100
+@ds:si=c4 cf c4 c4 cf c4 c4 cf c4 c4 cf c4 c4 cf c4 c4
+```
+
+**The "NE header" krnl386 copied is our own default PM handler stub table** (`C4 C4 CF`
+repeated). So `ne_cseg` is nonsense, the loop's `stosw`/`movsw` walk off the segment, and
+an unreflected PM #GP tears the VDM down exactly as observed: no VEH, no watchdog line, no
+last log entry.
+
+⇒ The open question is now **"why is the module image not where krnl386 thinks it is"**,
+not "where does it die". Two facts bear on it: krnl386 **never reads the file it opens**
+(zero INT 21h `AH=3Fh` in a whole run — it only stats it), and it **is** using our
+`VirtualAlloc` block as its heap (`INT 31h 0007 setbase 0x03a70000`, `0008 setlimit
+0x8807f`). Our NE loader puts module images in HOST memory at `0x0295xxxx` while krnl386
+does its own loading — two loaders, two copies, and that is the thing to reconcile.
+
+## Part 8 — ⚠️ the rig was feeding it a DOS `.COM`
+
+`STAGE2: target.txt loaded 0x5d3 from C:\test\selftest.com` appears in **every** WOW run
+of the session. `rt.bat` writes `target.txt` for each DOS test and `wowrun.bat` never set
+its own, so the WOW bootstrap was told to load whatever DOS program ran last — and
+krnl386 dutifully tried to parse a `.COM` file as a Win16 module.
+
+`wowrun.bat` now establishes its input instead of inheriting it. Pointing it at
+`SYSEDIT.EXE` does **not** by itself clear the wedge (the header krnl386 reads is still
+our stub table, so the fault is upstream of the filename), but no measurement taken while
+that was true can be trusted.
+
+## Part 9 — and one self-inflicted host crash, named by its own fault dump
+
+The REFUSED message added in part 6 is ~180 bytes; the log buffer in `dpmi_bp_arm` was
+128. The overflow corrupted the function's stack and took the **host** down with an access
+violation before the guest ran. The dump named it outright:
+
+```
+DPMI FATAL: exception code=0xc0000005 ... EDX=0x33746e69
+```
+
+`0x33746e69` is the ASCII `"int3"` — from that very string. `zput`/`zhex` are
+caller-sized and check nothing, so the buffer has to fit the **longest** line, not the
+usual one.
 
 ## Regression
 
@@ -212,25 +268,28 @@ is exactly this failure shape: silent teardown, no VEH, no last log line.
   the other class, run because a fix measured on one guest is a fix for none.
 - 209/209 NE checks and every `dostest` battery pass off-VM.
 - Imports still XP-safe.
+- Re-run after the breakpoint and buffer fixes: `selftest.com` **8/8 PASS** again.
 
 ## Rig left with
 
-IFEO `Debugger` **set**, `wowtry.flag` **present**, `pmbp.txt` **removed** (disarmed).
+IFEO `Debugger` **set**, `wowtry.flag` **present**, `pmbp.txt` **removed** (disarmed), and
+`wowrun.bat` **now writes `target.txt` itself** so a WOW run can no longer inherit the last
+DOS test's program.
 `scripts/bmwow.sh` drives a WOW run end to end through `controld` — the watcher path
 cannot, because `rt.bat` runs a DOS target out of `bm\tests` and a WOW run is "launch a
 16-bit Windows program and let the IFEO hook route it to us".
 
 ## Next actions
 
-1. **Resolve the `0x14f:0x95` wedge**, starting from the reading in "Where it stops" — the
-   segment loads at `seg1:0x5a49/0x5a4a`, right after the `04F2` commit, are the first
-   suspects.
-2. **Find out why a PM breakpoint in krnl386's live image kills the run at step 1.** It is
-   the obvious tool for item 1 and it is currently broken for this guest.
-3. **Work down [`wow32-call-surface.md`](../../research/wow32-call-surface.md)** as krnl386
+1. **Reconcile the two loaders.** krnl386 loads modules itself, into memory it manages
+   out of our `VirtualAlloc` heap; our NE loader has already put the images in host memory
+   at `0x0295xxxx`. At `seg1:0xd4db` krnl386 is copying an NE header out of a buffer that
+   holds our PM stub table, so it is reading a module image that was never put there.
+   Find what tells it where that image is — that is the next wall.
+2. **Work down [`wow32-call-surface.md`](../../research/wow32-call-surface.md)** as krnl386
    demands each ID — `tools/ne/nedis.py --wowfunc <id>` gives the whole story for one.
    `0xc4` (the fatal-error MessageBox), `0x86` (a packed date/time), `0x82`/`0xc9`/`0x71`
    (the three that may **not** be declined) are the ones already seen live.
-4. **Find out why the watchdog thread stops after one sample.** It is a diagnostic the
+3. **Find out why the watchdog thread stops after one sample.** It is a diagnostic the
    whole project leans on.
-5. Then: user/gdi's KERNEL-funnelled path, then `wowexec`, then an app.
+4. Then: user/gdi's KERNEL-funnelled path, then `wowexec`, then an app.
