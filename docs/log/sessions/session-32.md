@@ -282,6 +282,27 @@ Also checked and cleared: the residual-`CD nn` shortlist for the scanned region 
 byte pairs, and the histogram is all implausible vectors (`00h`, `01h`, `02h`, `74h`, `8bh`
 …) with **no `21h` and no `31h`**, so the plausible interrupts were all patched.
 
+## Part 10 — ★ and it is not a host crash either: the rig's own event log says so
+
+Free, and it should be the first thing asked of any process that vanishes. Driving
+`eventquery.vbs` on the rig through `controld` (`scripts/`-side one-shot, results in
+`wow_evt.txt`):
+
+```
+error  1000  8/25/2026 10:19:19 PM  Application Error  ... Faulting application ntvdmhost.exe
+error  1000  8/25/2026  9:51:34 PM  Application Error  ... Faulting application ntvdmhost.exe
+   ... twelve of them, all 8/19 - 8/25
+```
+
+**The most recent is two days old.** Today's WOW runs produced **no Application Error event
+at all** — so the host is not crashing with an unhandled exception, which would log event
+1000, and it is not dying through Windows' error-reporting path.
+
+⇒ Combined with Part 9, the remaining shape is: **the kernel's VDM support terminates the
+process deliberately**, silently, leaving no crash record and taking no fault-reflect. That
+is exactly the documented "silent VDM teardown", and it is now bounded by three independent
+exclusions rather than assumed.
+
 
 ## Regression
 
