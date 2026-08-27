@@ -6,10 +6,11 @@ Continues [session 30](session-30.md). GH #128. Branch `m9/completeness`.
 `NTVDM KERNEL: Unable to initialize heap`, having named three WOW32 functions it wanted.
 82 function IDs were enumerated as bare integers and none were implemented.
 
-**Where it ended:** the heap error is gone, krnl386 **opens a real file through our own
+**Where it ended:** two of krnl386's five errors are cleared — the heap error is gone, krnl386 **opens a real file through our own
 DOS layer and gets handle 5 back**, the WOW32 calling convention is pinned to the byte and
-confirmed against the rig, and the next stop is **traced instruction by instruction and
-fully explained** — it dies in an NE segment-table copy loop whose header is our own PM
+confirmed against the rig, krnl386 **opens both `SYSEDIT.EXE` and its own
+`KRNL386.EXE`** through our DOS layer, and the next stop is **traced instruction by
+instruction and fully explained** — it dies in an NE segment-table copy loop whose header is our own PM
 stub table.
 
 ⚠️ Three of the day's instruments were wrong and are corrected below, one of them twice.
@@ -312,6 +313,82 @@ krnl386 relocated to segment `0x542` and behaved identically — **its placement
 position-dependent**.
 
 
+## Part 11 — ★★ the memory model: krnl386 carves from `ES + 0x10` and never asks DOS
+
+Its DPMI bring-up at `seg1:0xd688` is unambiguous:
+
+```
+d688  push es                     ; ES as we entered it
+d68a  mov ax,0x1687 / int 2Fh     ; find the DPMI host
+d6b0  pop ax / add ax,0x10        ; ★ ES + 0x10
+d6b4  mov es,ax / add si,ax       ; the host's private data goes there,
+d6ba  lcall [0x1726]              ;   and SI becomes the next free paragraph
+```
+
+Everything it allocates afterwards grows upward from there, **without a single INT 21h
+`AH=48h`**. So whatever sits above `ES + 0x10` is memory krnl386 believes is its own.
+
+⚠️ **We were putting its own code there.** Entered with `ES = DOS_PSP_SEG` (0x100) it
+carved from paragraph `0x110`, and `dos_alloc` had already handed out `0x141` (the new
+transfer buffer) and `0x542`, `0x12c3`, `0x16b3`, `0x17dc` — **krnl386's own four
+segments** — out of that same region. Measured, not deduced: the descriptor it commits
+through `04F2` was `base=0x1100 limit=0xaf9f`, a window spanning its own code at `0x5420`.
+
+It now gets a real PSP block covering **all remaining conventional memory**, allocated
+last, so its carving happens inside an allocation DOS knows about — the relationship a
+real DOS program has with its PSP block. The same descriptor now lands at `0x1baa0`,
+inside its arena.
+
+⚠️ **Two regressions I caused and fixed in the same sitting, both the same shape:** handing
+krnl386 every free paragraph starved host structures allocated *later*.
+
+| starved | how it presented |
+|---|---|
+| INT 2Fh 168A vendor stub | `"no memory for the stub"` → **"Inadequate DPMI Server"** (error #1 — a regression all the way back to session 30) |
+| 256-vector default PM handler table | `AH=35h` reported vector `0x21` as `0000:0000`, so krnl386 saved a null previous handler |
+
+Both now come from a pool reserved **before** the arena goes. ★ **The rule for anything
+added later: on the WOW path host memory comes from `wow_host_alloc()`, not `dos_alloc()`.**
+A `dos_alloc()` after `wow_place_v86` will fail, and the failure will look like the
+guest's fault.
+
+## Part 12 — ★★ ERROR #3 CLEARED: krnl386 finds its own executable
+
+At `seg1:0xc257`:
+
+```
+c257  mov ds,[0x220]        ; krnl386's entry ES -- the PSP
+c25d  mov ds,[0x2c]         ; ★ PSP+0x2Ch: the ENVIRONMENT segment
+c264  lodsb/or al,al/jne    ; skip the strings...
+c269  lodsb/or al,al/jne    ; ...to the DOUBLE NUL
+c26e  lodsw                 ; the count WORD
+c26f  push ds / pop es      ; ES:SI now = the program's full pathname
+```
+
+**That is the MS-DOS 3.0+ convention, and it is the only channel krnl386 uses to learn
+where its own file is.** `dos_env_build` already implements it — but `dos_psp_build` zeroes
+the first three bytes of the env block, which is right when laying down a fresh PSP and
+destructive here, where the env is shared and already built. The scan walked into whatever
+followed and `OpenFile` got nothing.
+
+`wow_place_v86` rebuilds it, with **krnl386's own path** (the `-a` argument) rather than
+the Win16 app's — this is krnl386 asking where *it* lives.
+
+⇒ **Measured:** `INT21h AH=3D open "C:\WINDOWS\SYSTEM32\KRNL386.EXE"`, and
+`NTVDM KERNEL: Unable to open KERNEL executable` — error #3 of its five — is **gone**.
+**Two of the five are now cleared.**
+
+## Part 13 — WOW32 `0xc9` = GetCurrentDirectory, and it may not be declined
+
+`AX=0x4717` at the BOP names it outright: INT 21h `AH=47h`, arguments `(drive=3,
+selector=0x17, offset=0x0e03)`. Its call site (`seg1:0x53a2`) treats `DX=0xFFFF` as a hard
+error rather than "ask DOS instead" — one of the three `wowdecline.py` flagged — so
+stepping over it left krnl386 unable to learn the current directory and it never built a
+path to open. Serviced in `main.c` rather than `wow32.h` because it needs the DOS machine.
+
+**Unimplemented BOPs in a run: zero.**
+
+
 ## Regression
 
 - `selftest.com` **8/8 PASS on real hardware** after the SysVars change — the guest from
@@ -321,6 +398,8 @@ position-dependent**.
 - Re-run after the breakpoint and buffer fixes: `selftest.com` **8/8 PASS** again.
 - After the PM INT 21h thunk: `selftest.com` **8/8** and `dosver.com` both PASS on real
   hardware — the DOS path is gated off the WOW-only transfer buffer and is unchanged.
+- After the memory-model and environment changes (both WOW-path only): `selftest.com`
+  **8/8**, `cmdcom` and `dosver.com` all PASS on real hardware.
 
 ## Rig left with
 

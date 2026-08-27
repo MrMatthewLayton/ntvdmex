@@ -136,6 +136,33 @@ and nothing has drawn a pixel. What works is the *bootstrap* — see #128 below.
    subsequent get-date and close calls. ⚠️ Only where the call site says so:
    `tools/ne/wowdecline.py` finds three IDs where `0xFFFF` is a plain error.
 
+   ### ★★ THE MEMORY MODEL (session 31) — krnl386 carves from `ES + 0x10`
+   Its DPMI bring-up (`seg1:0xd688`) does `push es / int 2Fh 1687 / pop ax /
+   add ax,0x10`, puts the DPMI host's private data there and grows **every** later
+   allocation upward — **without a single INT 21h `AH=48h`**. So whatever sits above
+   `ES + 0x10` is memory krnl386 believes is its own.
+   ⚠️ Entered with `ES = DOS_PSP_SEG` it carved from `0x110`, where `dos_alloc` had
+   already put **its own four code segments**. It now gets a real PSP block covering
+   all remaining conventional memory, allocated last.
+   ⚠️ **On the WOW path host memory comes from `wow_host_alloc()`, not `dos_alloc()`.**
+   A `dos_alloc()` after `wow_place_v86` finds nothing, and the failure looks like the
+   guest's fault — it cost two regressions in one sitting (the 168A vendor stub →
+   "Inadequate DPMI Server"; the default PM handler table → `AH=35h` reporting vector
+   0x21 as `0000:0000`).
+
+   ### ★★ ERROR #3 CLEARED — krnl386 finds its own executable
+   At `seg1:0xc257` it reads `PSP+0x2Ch` (the environment segment), scans past the
+   strings to the **double NUL**, reads the count WORD and takes what follows as the
+   program's full pathname — the MS-DOS 3.0+ convention, and **the only channel it
+   uses**. `dos_psp_build` zeroes the first three bytes of the env block, which is
+   right for a fresh PSP and destructive here; `wow_place_v86` rebuilds it with
+   **krnl386's own path** (the `-a` argument).
+   ★ Measured: `INT21h AH=3D open "C:\WINDOWS\SYSTEM32\KRNL386.EXE"`.
+   **Two of krnl386's five errors are now cleared.**
+   ★ `0xc9` = `GetCurrentDirectory` (INT 21h `AH=47h`; `AX=0x4717` at the BOP names
+   it). One of the three that may **not** be declined. Unimplemented BOPs in a run:
+   **zero**.
+
    ### ⏹ Where it stops today — the mechanism is now EXPLAINED
    krnl386 dies in its **NE segment-table copy loop** at `seg1:0xd4e5..0xd4f3`,
    whose trip count is `es:[0x1c]` = `ne_cseg`, read from an NE header it has just
@@ -149,9 +176,11 @@ and nothing has drawn a pixel. What works is the *bootstrap* — see #128 below.
    retf 6 → 0xd4c0 → 0xd4db`. The `pop es`/`pop ds` suspects were cleared the same
    way: they execute fine.
    ⇒ **The open question is now "what was supposed to fill that buffer", not "where
-   does it die".** The buffer is `[0x5a0]`, a selector krnl386 allocates itself at
-   `seg1:0xc181`; `seg1:0x1812` turns out to be `OpenFile(name, &ofstruct, OF_EXIST)`,
-   an existence probe, which is why the file is opened and closed without being read.
+   does it die".** The buffer is `[0x5a0]`, a 64 KB selector krnl386 builds over **its
+   own stack** at `seg1:0xc17e` — scratch, not a mapped image. `seg1:0x1812` is
+   `OpenFile(name, &ofstruct, OF_EXIST)`, an existence probe, which is why the file is
+   opened and closed without being read, and `0xd02b` builds a structure rather than
+   reading. Something between `seg1:0xc181` and `seg1:0xc29f` is meant to fill it.
    krnl386 **is** using our `VirtualAlloc` block as its heap (`0007 setbase
    0x03a70000`, `0008 setlimit 0x8807f`). Our NE loader puts module images in HOST
    memory (`0x0295xxxx`) while krnl386 does its own loading — two loaders, two copies,
