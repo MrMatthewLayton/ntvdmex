@@ -237,6 +237,59 @@ typedef struct {
     DWORD farptr;                     /* the 16:16 the guest passed */
 } wow32_dosdata_t;
 
+/* ── ★ DECLINING IS A REAL ANSWER, AND krnl386 ALREADY HANDLES IT ───────────
+     krnl386 hooks INT 21h in protected mode and offers some functions to its
+     32-bit companion first. When the companion says no, it chains to the vector
+     it saved before hooking:
+
+         5507  cmp ax, 0xffff
+         550a  je  0x55a1     -> pop ax/bx/dx -> jmp 0x56c8 -> lcall cs:[0x3c]
+
+     `cs:[0x3c]` is the PREVIOUS INT 21h handler -- which in this host is our own
+     DOS layer, the one COMMAND.COM and Doom already use. So a sentinel return
+     hands file I/O to working code instead of to a parallel Win32 handle table
+     that would then disagree with every call that chains anyway.
+
+   ⚠ ONLY WHERE THE CALL SITE SAYS SO. `tools/ne/wowdecline.py` checks each site
+     and finds three (0x82, 0xc9, 0x71) where 0xFFFF is a plain ERROR and krnl386
+     reports failure to the app rather than chaining. Declining there would turn
+     "not implemented" into "the file does not exist" -- a wrong answer instead
+     of a missing one, which is the more expensive kind. They are NOT in the list
+     below, and the list is the tool's output, not a guess about the family.
+
+   ⚠ Some sites test AX and some test DX, so the sentinel has to be 0xFFFFFFFF
+     rather than either half.
+
+   ▸ THE HONEST TRADE. Real WOW routes these to Win32, so a Win16 app gets NT
+     file semantics (sharing modes, long names). Declining gives it our DOS
+     semantics instead. For loading and running a program that is the same thing,
+     and it is one line to change later -- but it IS a difference, so it is
+     written down rather than discovered. */
+#define WOW32_DECLINE 0xFFFFFFFFu
+
+/* Verified declinable, with the call site that proves it. All seven are the
+   INT 21h file family; declining 0x97 and 0x6f makes krnl386 re-issue a plain
+   AH=3Fh / AH=40h to DOS, which is visible in its own code at 0x55a7 / 0x56c6. */
+#define WOW32_FILE_OPEN        0xc1   /* seg1:0x5504  AH=3Dh                    */
+#define WOW32_FILE_READ        0x97   /* seg1:0x5570  -> AH=3Fh on decline      */
+#define WOW32_FILE_CLOSE       0xc2   /* seg1:0x558f  AH=3Eh                    */
+#define WOW32_FILE_GETATTR     0xc7   /* seg1:0x55c4  AH=43h AL=0               */
+#define WOW32_FILE_7E          0x7e   /* seg1:0x55df                            */
+#define WOW32_FILE_GETDATE     0x89   /* seg1:0x5609  AH=57h AL=0               */
+#define WOW32_FILE_WRITE       0x6f   /* seg1:0x56bc  -> AH=40h on decline      */
+
+static int wow32_may_decline(WORD id)
+{
+    switch (id) {
+    case WOW32_FILE_OPEN:  case WOW32_FILE_READ:    case WOW32_FILE_CLOSE:
+    case WOW32_FILE_GETATTR: case WOW32_FILE_7E:    case WOW32_FILE_GETDATE:
+    case WOW32_FILE_WRITE:
+        return 1;
+    default:
+        return 0;
+    }
+}
+
 /* ---- the services ------------------------------------------------------- */
 /*
  * Returns 1 if this ID was serviced (the caller then advances EIP past the BOP),
@@ -325,6 +378,15 @@ static int wow32_call(wow32_frame_t *f, wow32_dosdata_t *dd)
     case WOW32_REGISTERDOSDATA:
         if (dd) { dd->seen = 1; dd->farptr = wow32_argd(f, 0); }
         wow32_setret(f, 0);
+        return 1;
+
+    /* ── The INT 21h file family: decline, and let our own DOS layer serve it.
+         See the WOW32_DECLINE block above for why this is an answer rather than
+         a stub, and for the one behavioural difference it buys. */
+    case WOW32_FILE_OPEN:  case WOW32_FILE_READ:    case WOW32_FILE_CLOSE:
+    case WOW32_FILE_GETATTR: case WOW32_FILE_7E:    case WOW32_FILE_GETDATE:
+    case WOW32_FILE_WRITE:
+        wow32_setret(f, WOW32_DECLINE);
         return 1;
 
     default:

@@ -1060,14 +1060,31 @@ static HANDLE g_serial = INVALID_HANDLE_VALUE;
 static void serial_init(void)
 {
     DCB dcb;
+    COMMTIMEOUTS to;
     g_serial = CreateFileA("\\\\.\\COM1", GENERIC_WRITE, 0, NULL, OPEN_EXISTING, 0, NULL);
     if (g_serial == INVALID_HANDLE_VALUE) return;
     { unsigned i; char *q = (char *)&dcb; for (i = 0; i < sizeof dcb; ++i) q[i] = 0; }
     dcb.DCBlength = sizeof dcb;
     if (GetCommState(g_serial, &dcb)) {
         dcb.BaudRate = 115200; dcb.ByteSize = 8; dcb.Parity = 0; dcb.StopBits = 0;
+        /* ⚠ TURN FLOW CONTROL OFF EXPLICITLY. This used to keep whatever the driver's
+             default DCB said, and on a REAL serial port with no cable a handshake line
+             that never asserts makes WriteFile wait for a peer that does not exist.
+             The dev VM has COM1 captured by QEMU and never showed it; the bare-metal
+             rig has real hardware. A debug sink that can block the process it is
+             instrumenting is worse than no sink. */
+        dcb.fOutxCtsFlow = FALSE; dcb.fOutxDsrFlow = FALSE;
+        dcb.fDsrSensitivity = FALSE;
+        dcb.fOutX = FALSE; dcb.fInX = FALSE;
+        dcb.fRtsControl = RTS_CONTROL_ENABLE;
+        dcb.fDtrControl = DTR_CONTROL_ENABLE;
         SetCommState(g_serial, &dcb);
     }
+    /* And a hard write deadline, because the default comm timeouts are all zero,
+       which means "wait forever". */
+    { unsigned i; char *q = (char *)&to; for (i = 0; i < sizeof to; ++i) q[i] = 0; }
+    to.WriteTotalTimeoutConstant = 250;          /* ms, per write */
+    SetCommTimeouts(g_serial, &to);
 }
 /* Write [buf..end) to COM1 (and it's already in the file log via log_*). */
 static void serial_out(const char *buf, const char *end)
@@ -6138,7 +6155,23 @@ static DWORD WINAPI dpmi_watchdog(LPVOID param)
             if (frozen && g_dpmi_pm) {                   /* wedged: dump the guest bytes there */
                 base = dpmi_sel_base((WORD)en_cs);
                 ib = (const BYTE *)(ULONG_PTR)(base + (en_eip & 0xFFFF));
-                q = zput(q, " b@enter="); q = zdump(q, ib, 8);
+                /* ⚠ GUARD THE DEREFERENCE. This read is unguarded no longer, and the
+                     bug it caused is the exact shape this project keeps hitting: an
+                     instrument that dies at the moment it becomes useful. wd[0] has
+                     frozen==0 and skips this branch; wd[1] is the FIRST sample that
+                     takes it -- so if the selector does not resolve, the watchdog
+                     thread faults on its first frozen sample and is never heard from
+                     again. On the WOW runs that is precisely what the log showed:
+                     one wd[] line, then silence, then no wedge report at all, so the
+                     one question the watchdog exists to answer ("where is the guest
+                     stuck?") went unanswered while looking like "nothing was wrong".
+                   mem_readable() is already in this file for this reason. */
+                if (base && mem_readable((ULONG_PTR)ib, 8)) {
+                    q = zput(q, " b@enter="); q = zdump(q, ib, 8);
+                } else {
+                    q = zput(q, " b@enter=<cs 0x"); q = zhex(q, en_cs);
+                    q = zput(q, " does not resolve>");
+                }
             }
             q = zput(q, "\r\n");
             log_append(LOG_PATH, wb, q); serial_out(wb, q); q = wb;   /* COM1-only = invisible on bare metal */
@@ -7775,7 +7808,7 @@ static WORD g_wow_vendor_sel = 0;
      got further having been LIED to N times by the step-over path, and a single
      total could not tell them apart. */
 static wow32_dosdata_t g_wow_dosdata;
-static DWORD g_wow32_serviced = 0, g_wow32_unimpl = 0;
+static DWORD g_wow32_serviced = 0, g_wow32_unimpl = 0, g_wow32_declined = 0;
 
 /* Translate a guest selector to a host linear base, for far-pointer arguments.
    ⚠ Goes through dpmi_sel_base rather than g_ldt[] directly so that a selector
@@ -7792,6 +7825,23 @@ static BYTE *g_wow_shadow = NULL;
 static WORD  g_wow_shadow_sel = 0;
 static DWORD g_wow_sync_writes = 0;      /* how many entries krnl386 has changed */
 
+/* ── "WHAT DID THE SHADOW LAST LOOK LIKE" IS A DIFFERENT QUESTION FROM "WHAT IS
+     IN THE REAL LDT", AND CONFLATING THEM IS A BUG WE HAVE NOW MADE TWICE.
+     The sync wants to know which entries the GUEST changed, so it must diff the
+     shadow against the last shadow it saw -- not against g_ldt[], which is the
+     host's record of the REAL LDT.
+     Diffing against g_ldt[] forces a lie whenever the two cannot be made equal:
+     krnl386 writes free-list links with access byte 0x0F, the kernel rejects them
+     (`INSTALL FAILED st=0xc000011a`, four per run on the rig), and the old code
+     then updated g_ldt[] to match the shadow ANYWAY -- purely so the next pass
+     would not retry forever. From that moment g_ldt[] claimed a base and limit
+     the CPU had never been told about, and dpmi_sel_base() -- which every part of
+     the host uses to resolve a guest pointer, including the WOW32 argument
+     translation added this session -- would have answered from it.
+     With a separate `seen` copy, a failed install stops being retried without
+     anybody having to pretend it succeeded. */
+static BYTE *g_wow_seen = NULL;          /* last shadow contents we processed */
+
 static void wow_shadow_put(int idx)      /* g_ldt[idx] -> shadow */
 {
     DWORD lo, hi, *e;
@@ -7800,6 +7850,7 @@ static void wow_shadow_put(int idx)      /* g_ldt[idx] -> shadow */
                     g_ldt[idx].access, g_ldt[idx].flags, &lo, &hi);
     e = (DWORD *)(g_wow_shadow + idx * 8);
     e[0] = lo; e[1] = hi;
+    if (g_wow_seen) { e = (DWORD *)(g_wow_seen + idx * 8); e[0] = lo; e[1] = hi; }
 }
 
 /* Push anything krnl386 changed in the shadow into the real LDT. Returns the count. */
@@ -7807,32 +7858,41 @@ static int wow_shadow_sync(char **pp)
 {
     int idx, top = g_ldt_next + 8, n = 0;
     char *p = pp ? *pp : NULL;
-    if (!g_wow_shadow) return 0;
+    if (!g_wow_shadow || !g_wow_seen) return 0;
     if (top > WOW_SHADOW_ENTRIES) top = WOW_SHADOW_ENTRIES;
     for (idx = DPMI_LDT_RESERVED; idx < top; ++idx) {
         DWORD lo, hi;
         const DWORD *e = (const DWORD *)(g_wow_shadow + idx * 8);
-        dpmi_build_desc(g_ldt[idx].base, g_ldt[idx].limit,
-                        g_ldt[idx].access, g_ldt[idx].flags, &lo, &hi);
-        if (e[0] == lo && e[1] == hi) continue;      /* unchanged */
+        DWORD *sn = (DWORD *)(g_wow_seen + idx * 8);
+        lo = sn[0]; hi = sn[1];
+        if (e[0] == lo && e[1] == hi) continue;      /* the guest did not touch it */
+        sn[0] = e[0]; sn[1] = e[1];                  /* acknowledged either way */
         {   WORD sel = (WORD)((idx << 3) | 7);
             DWORD nlo = e[0], nhi = e[1];
             /* Install EXACTLY the bytes the guest wrote -- decoding and re-encoding
                would quietly normalise anything we got wrong. Then decode purely for
                our own bookkeeping so later host-side reads of g_ldt[] agree. */
             LONG st = v86_set_ldt_entries(sel, nlo, nhi, sel, nlo, nhi);
-            g_ldt[idx].base   = (nhi & 0xFF000000u) | ((nhi & 0xFFu) << 16)
-                              | (nlo >> 16);
-            g_ldt[idx].limit  = (nlo & 0xFFFFu) | (nhi & 0x000F0000u);
-            g_ldt[idx].access = (BYTE)((nhi >> 8) & 0xFF);
-            g_ldt[idx].flags  = (BYTE)((nhi >> 20) & 0x0F);
+            DWORD dbase = (nhi & 0xFF000000u) | ((nhi & 0xFFu) << 16) | (nlo >> 16);
+            DWORD dlim  = (nlo & 0xFFFFu) | (nhi & 0x000F0000u);
+            /* ★ ONLY RECORD IT IF THE CPU ACTUALLY TOOK IT. g_ldt[] is the host's
+                 record of the REAL LDT, and dpmi_sel_base() answers every guest
+                 pointer translation from it. Writing a descriptor the kernel just
+                 rejected would make it a record of what the guest WANTED, which is
+                 a different thing and silently wrong exactly where it matters. */
+            if (!st) {
+                g_ldt[idx].base   = dbase;
+                g_ldt[idx].limit  = dlim;
+                g_ldt[idx].access = (BYTE)((nhi >> 8) & 0xFF);
+                g_ldt[idx].flags  = (BYTE)((nhi >> 20) & 0x0F);
+            }
             ++n; ++g_wow_sync_writes;
             if (p && n <= 6) {
                 p = zput(p, "  LDTSYNC idx 0x"); p = zhex(p, (DWORD)idx);
-                p = zput(p, " <- guest wrote base=0x"); p = zhex(p, g_ldt[idx].base);
-                p = zput(p, " limit=0x");               p = zhex(p, g_ldt[idx].limit);
-                p = zput(p, " acc=0x");                 p = zhexb(p, g_ldt[idx].access);
-                p = zput(p, st ? " INSTALL FAILED st=0x" : " ok st=0x");
+                p = zput(p, " <- guest wrote base=0x"); p = zhex(p, dbase);
+                p = zput(p, " limit=0x");               p = zhex(p, dlim);
+                p = zput(p, " acc=0x");                 p = zhexb(p, (BYTE)((nhi >> 8) & 0xFF));
+                p = zput(p, st ? " INSTALL FAILED (g_ldt NOT updated) st=0x" : " ok st=0x");
                 p = zhex(p, (DWORD)st);
                 p = zput(p, "\r\n");
             }
@@ -7850,7 +7910,13 @@ static WORD wow_shadow_selector(void)
     g_wow_shadow = (BYTE *)VirtualAlloc(NULL, WOW_SHADOW_ENTRIES * 8,
                                         MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
     if (!g_wow_shadow) return 0;
-    for (k = 0; k < WOW_SHADOW_ENTRIES * 8; ++k) g_wow_shadow[k] = 0;
+    /* The `seen` copy is host-private and is NEVER handed to the guest -- that is
+       the point of it. See wow_shadow_sync for what went wrong without it. */
+    g_wow_seen = (BYTE *)VirtualAlloc(NULL, WOW_SHADOW_ENTRIES * 8,
+                                      MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+    if (!g_wow_seen) { VirtualFree(g_wow_shadow, 0, MEM_RELEASE);
+                       g_wow_shadow = NULL; return 0; }
+    for (k = 0; k < WOW_SHADOW_ENTRIES * 8; ++k) { g_wow_shadow[k] = 0; g_wow_seen[k] = 0; }
     for (k = 0; k < WOW_SHADOW_ENTRIES; ++k) wow_shadow_put(k);
     idx = g_ldt_next++;
     g_ldt[idx].base   = (DWORD)(ULONG_PTR)g_wow_shadow;
@@ -8073,9 +8139,17 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                 f.ret     = 0;
                 f.serviced = 0;
                 if (wow32_call(&f, &g_wow_dosdata)) {
-                    ++g_wow32_serviced;
+                    /* ⚠ A DECLINE IS NOT A SERVICE and the log must not blur
+                         them. "krnl386 got further because we answered 9 calls"
+                         and "because we told it 7 times to ask DOS instead" are
+                         different claims about the same run, and only separate
+                         counters can tell them apart afterwards. */
+                    int decl = (f.ret == WOW32_DECLINE && wow32_may_decline(f.id));
+                    if (decl) ++g_wow32_declined; else ++g_wow32_serviced;
                     VDM_REG(tib, VTIB_EIP) += WOW32_BOP_LEN;
-                    p = zput(p, " -> SERVICED, returned 0x"); p = zhex(p, f.ret);
+                    p = zput(p, decl ? " -> DECLINED (krnl386 will chain to real"
+                                       " DOS) 0x" : " -> SERVICED, returned 0x");
+                    p = zhex(p, f.ret);
                     if (f.id == WOW32_REGISTERDOSDATA) {
                         p = zput(p, " (DOS data area at 0x");
                         p = zhex(p, g_wow_dosdata.farptr); p = zput(p, ")");
@@ -8782,6 +8856,12 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                         case 0x0603:                               /* relock real-mode region */
                         case 0x0701:                               /* discard page contents (advisory) */
                         case 0x0702:                               /* mark pages demand-paging candidates (advisory) */
+                        /* 0703 is the same advisory family and krnl386 asks for it
+                           twice per heap it builds (GH #128). It was answered UNSUP,
+                           which for an advisory call is a worse answer than silence:
+                           the spec says the host may ignore it, so CF=1 tells the
+                           guest something failed when nothing did. */
+                        case 0x0703:                               /* discard page contents, DPMI 1.0 (advisory) */
                             VDM_REG(tib, VTIB_EFLAGS) &= ~1u;
                             p = zput(p, " -> paging no-op (no virtual memory here)");
                             break;
@@ -12068,6 +12148,88 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                         p = zput(p, " steps -> exiting (infinite/visual demo; watch it on the monitor)\r\n");
                         log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
                         break;
+                    }
+                    /* ── HEARTBEAT FROM THE THREAD THAT IS DEMONSTRABLY ALIVE. (GH #128)
+                         The watchdog thread is supposed to answer "where is the guest
+                         stuck", and on the WOW runs it logs its FIRST sample and then
+                         nothing -- twelve were asked for. So it is not a usable
+                         instrument here, whatever is wrong with it, and building on it
+                         would be building on something that has already been caught
+                         lying once. This line comes from the PM loop itself, which is
+                         provably still running because everything else in the log does.
+                       Sparse (every 4096 steps) so it cannot flood, and it prints the
+                         guest position and the last event -- which is the whole question
+                         when a run stops producing output but does not die. */
+                    /* Every 16 steps, not every 4096: a WOW run stops after only a few
+                       hundred PM entries, so a sparse heartbeat prints nothing at all --
+                       which is what the first attempt did. The LAST line before the log
+                       ends is the answer this exists for: the CS:EIP we handed to
+                       dpmi_enter_pm and never came back from. */
+                    /* EVERY step for the first 256, then sparsely. A WOW run wedges
+                       after a few dozen PM entries, so anything sparser prints the
+                       position before the interesting one and not the interesting one
+                       -- which is what both earlier attempts did. Doom does millions of
+                       entries, hence the fallback rate rather than "always". */
+                    if (steps && (steps < 256 || (steps & 0xFFF) == 0)) {
+                        p = zput(p, "PMHB steps=0x");  p = zhex(p, (DWORD)steps);
+                        p = zput(p, " cs:eip=0x");     p = zhex(p, VDM_REG(tib, VTIB_CS) & 0xFFFF);
+                        p = zput(p, ":0x");            p = zhex(p, dpmi_pm_eip(tib));
+                        p = zput(p, " lastev=0x");     p = zhex(p, g_dpmi_last_ev);
+                        p = zput(p, " lastvec=0x");    p = zhex(p, g_dpmi_last_vec);
+                        p = zput(p, " wow32{ok=0x");   p = zhex(p, g_wow32_serviced);
+                        p = zput(p, " decl=0x");       p = zhex(p, g_wow32_declined);
+                        p = zput(p, " unimpl=0x");     p = zhex(p, g_wow32_unimpl);
+                        p = zput(p, "}");
+                        /* ★ WHERE IS IT ABOUT TO GO, AND WHAT IS IT ABOUT TO RUN.
+                             The resume point alone is not enough. When we hand the
+                             guest back at one of our default PM stubs it is sitting on
+                             a `CF`, and the interesting address is the one that IRET
+                             pops -- so print the stack top as well, and the bytes at
+                             the resume point. When a run's last line is a PM entry that
+                             never returns, this turns "it died somewhere after the IRET"
+                             into an address to disassemble.
+                           ⚠ Both reads are guarded. An instrument that faults while
+                             reporting a wedge reports nothing, which is how the
+                             watchdog thread came to log one sample and stop. */
+                        {   DWORD cbase = dpmi_sel_base((WORD)(VDM_REG(tib, VTIB_CS) & 0xFFFF));
+                            DWORD sbase = dpmi_sel_base((WORD)(VDM_REG(tib, VTIB_SS) & 0xFFFF));
+                            DWORD spv   = VDM_REG(tib, VTIB_ESP) & 0xFFFF;
+                            ULONG_PTR cp = (ULONG_PTR)(cbase + dpmi_pm_eip(tib));
+                            ULONG_PTR sp2 = (ULONG_PTR)(sbase + spv);
+                            p = zput(p, " ss:sp=0x"); p = zhex(p, VDM_REG(tib, VTIB_SS) & 0xFFFF);
+                            p = zput(p, ":0x");       p = zhex(p, spv);
+                            /* ⚠ THE SELECTOR BASE, because a breakpoint is a LINEAR
+                                 address and guessing which copy of a module is the
+                                 executing one is how three runs got spent. The bind
+                                 stage loads the WOW module set and logs its bases;
+                                 those are not necessarily the bases the PM run uses,
+                                 and breakpoints armed against the wrong copy arm
+                                 SUCCESSFULLY (same bytes, real memory) and never fire.
+                                 Print it rather than infer it. */
+                            p = zput(p, " csbase=0x"); p = zhex(p, cbase);
+                            if (cbase && mem_readable(cp, 8)) {
+                                p = zput(p, " code="); p = zdump(p, (const BYTE *)cp, 8);
+                            }
+                            if (sbase && mem_readable(sp2, 24)) {
+                                const BYTE *s = (const BYTE *)sp2;
+                                int w;
+                                p = zput(p, " iret->0x");
+                                p = zhex(p, (DWORD)(s[2] | (s[3] << 8)));   /* CS  */
+                                p = zput(p, ":0x");
+                                p = zhex(p, (DWORD)(s[0] | (s[1] << 8)));   /* IP  */
+                                /* ...and the frames ABOVE it. The IRET target turned out
+                                   to be a bare `ret` (krnl386 chains INT 31h to us with
+                                   `pushf / lcall cs:[0x7c]`, so the interesting address
+                                   is one frame further up). Print the whole top of the
+                                   stack rather than coming back for it a third time. */
+                                p = zput(p, " stk");
+                                for (w = 0; w < 12; ++w) {
+                                    p = zput(p, " "); p = zhex(p, (DWORD)(s[w*2] | (s[w*2+1] << 8)));
+                                }
+                            }
+                        }
+                        p = zput(p, "\r\n");
+                        log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
                     }
                     /* run 52 heartbeat: publish where we're about to hand off + bump the
                        iteration counter BEFORE entering, so a watchdog sample taken while
