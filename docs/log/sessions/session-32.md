@@ -516,6 +516,37 @@ next thing to read is **the allocator itself** — `seg1:0x461f`, called from Lo
 `seg1:0x9257`, is what picks the block; and `seg1:0x63f3`, called from the compaction, is
 what tells it the block's size. Those two decide the range, and neither has been read yet.
 
+## Part 17 — the two routines that decide the compaction range
+
+Read, not run — the thread to pull next session.
+
+**`seg1:0x461f` is krnl386's global allocator**, and its tail *is* the `0x4648` block this
+session walked through: `push bp / ... / call 0x456c / call 0x7e95 / mov es,di / mov fs,di /
+call 0x67b9 / pop edi / pop esi / pop ds / leave / retf 6`. LoadSegment calls it at
+`seg1:0x9257`. So the whole walk — `0x5a42 -> 0x7f13 -> 0x4648 -> 0x67b9 -> retf 6 -> 0xc48d`
+— was one allocation returning, and the compaction at `0xc4dd` happens immediately after it
+in the `0xc4a3..0xc50a` loop.
+
+**`seg1:0x63f3` is selector -> block descriptor**, and it is where the compaction's size
+comes from:
+
+```
+bx = [bp+4]              ; a selector
+and bl,0xf8 / shr bx,1   ; -> (sel>>3)*4, a DWORD index
+cmp bx, es:[0x22e]       ; against the table's entry count
+add ebx, es:[0x230]      ; + the table base (a 32-bit pointer)
+eax = [ebx]              ; -> the block's descriptor
+```
+
+then the caller takes `[eax+0xc]` as the block size — the `0x84420` that becomes the 542 KB
+copy. So `es:[0x230]` is a table of **32-bit** pointers indexed by selector — krnl386's
+global-heap arena table — and the compaction range is whatever that table says the block is.
+
+▶ That is the thread: the range is not derived from CX (part 15) and not from the PSP block
+(part 16); it comes from this table. Reading how the entry for selector `0x01b7` gets its
+`base` and `+0xc` size is what will explain why the block spans `0x1bbe0..0xA0000` and why
+segment 1's copy is placed inside it.
+
 ## Regression
 
 - `selftest.com` **8/8 PASS on real hardware** — the other guest class, run because the
