@@ -7220,7 +7220,13 @@ static void dpmi_bp_arm(void)
     for (k = 0; k < g_bp_n; ++k) {
         DWORD lin = g_bp_lin[k];
         volatile BYTE *b;
-        char lb[128], *q = lb;
+        /* 320, not 128: the REFUSED-one-byte-instruction message below is ~180
+           bytes and overflowed the old buffer, corrupting this function's stack and
+           taking the host down with an access violation before the guest ever ran.
+           The fault dump named it outright -- EDX held 0x33746e69, the ASCII "int3"
+           from that very string. zput/zhex are caller-sized and check nothing, so
+           the buffer has to be big enough for the LONGEST line, not the usual one. */
+        char lb[320], *q = lb;
         if (lin < 0x600) continue;
         b = (volatile BYTE *)(ULONG_PTR)lin;
         /* ► THE TARGET NEED NOT EXIST YET, and reading it blindly faults in OUR OWN
@@ -7256,12 +7262,19 @@ static void dpmi_bp_arm(void)
              second half of our BOP, decoded as `LES DX,[BX+0x8b]`, read past the
              segment limit and killed the VDM -- a death the log presented as the
              client's, in the middle of a bisection hunting exactly that.
-             We cannot tell where instructions start, so we cannot prevent this in
-             general. What we CAN do is refuse the case that is definitely wrong -- two
-             requested breakpoints whose footprints overlap -- and say the footprint out
-             loud in every armed line, so the next reader places them knowing the rule:
-             PUT A BREAKPOINT ON AN INSTRUCTION OF AT LEAST TWO BYTES, or make sure the
-             following byte is not reachable before the breakpoint fires. */
+             ★ SESSION 31: WE CAN NOW PREVENT IT, and the note above saying we cannot
+             is out of date -- x86len.h arrived in session 21 (for the INT-site patcher,
+             which had the same disease) and it decodes instruction LENGTH. So measure
+             the instruction at the site and REFUSE a two-byte BOP over a one-byte one.
+             This is not hypothetical: three of four breakpoints placed on krnl386 this
+             session sat on `c3` (ret), `1f` (pop ds) and `c9` (leave). The `c3` at
+             seg1:0x662f ate the first byte of `2e 83 3e 32 00 00`
+             (cmp word cs:[0x32],0) at 0x6630 -- which is on the path that sets AX for
+             krnl386's FIRST INT 31h. The guest asked for 0x0000 instead of 0x000A and
+             died at PM step 1 instead of step 0x31, and it took a cross-run comparison
+             of the step counter to notice that the debugger was the bug.
+             Use mode 1 (a one-byte 0xCC) for a one-byte instruction, or move the
+             breakpoint. Either way the guest is no longer silently corrupted. */
         { int j, clash = 0;
           for (j = 0; j < g_bp_n; ++j)
               if (j != k && g_bp_armed[j] &&
@@ -7272,6 +7285,20 @@ static void dpmi_bp_arm(void)
               log_append(LOG_PATH, lb, q); serial_out(lb, q);
               continue;
           } }
+        if (g_bp_mode[k] != 1 && host_readable((const void *)(ULONG_PTR)lin, 16)) {
+            unsigned ilen = x86_insn_len((const unsigned char *)(ULONG_PTR)lin, 0, 16,
+                                         g_dpmi_client32);
+            if (ilen == 1) {
+                q = zput(q, "DPMI-BP: REFUSED 0x"); q = zhex(q, lin);
+                q = zput(q, " -- ONE-BYTE instruction (");
+                q = zdump(q, (const BYTE *)(ULONG_PTR)lin, 1);
+                q = zput(q, "); a 2-byte BOP would eat the NEXT instruction and "
+                            "silently change what the guest does. Use mode 1 (int3) "
+                            "or move it.\r\n");
+                log_append(LOG_PATH, lb, q); serial_out(lb, q);
+                continue;
+            }
+        }
         g_bp_orig[k][0] = b[0]; g_bp_orig[k][1] = b[1];
         if (g_bp_mode[k] == 1) {
             b[0] = 0xCC;                      /* INT3: one byte, fits over CLI/STI */
@@ -8332,6 +8359,32 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                         { const BYTE *sk = (const BYTE *)(ULONG_PTR)(sb + sp);
                           if (!host_readable(sk, 64)) p = zput(p, "<unreadable>");
                           else                        p = zdump(p, sk, 64); }
+                        /* ★ RESOLVE THE SELECTORS, and show what the instruction is
+                             about to touch. pmbp.txt's dump column takes a fixed
+                             LINEAR address, which cannot follow a segment register --
+                             so answering "what is at ES:DI" meant computing the base
+                             by hand from an older log line and hoping it still held.
+                             It did not: two runs were spent dumping linear 0x1100 on
+                             the strength of an `04F2 installed base=0x1100` line, and
+                             the bytes there were nothing to do with ES.
+                           A debugger that makes you guess where a selector points is
+                             most of the way to being no debugger. */
+                        {   WORD dsv = (WORD)(VDM_REG(tib, VTIB_DS) & 0xFFFF);
+                            WORD esv = (WORD)(VDM_REG(tib, VTIB_ES) & 0xFFFF);
+                            DWORD dsb = dpmi_sel_base(dsv), esb = dpmi_sel_base(esv);
+                            DWORD siv = VDM_REG(tib, VTIB_ESI) & 0xFFFF;
+                            DWORD div = VDM_REG(tib, VTIB_EDI) & 0xFFFF;
+                            p = zput(p, "\r\n  dsbase=0x"); p = zhex(p, dsb);
+                            p = zput(p, " esbase=0x");      p = zhex(p, esb);
+                            if (dsb && mem_readable((ULONG_PTR)(dsb + siv), 32)) {
+                                p = zput(p, "\r\n  @ds:si=");
+                                p = zdump(p, (const BYTE *)(ULONG_PTR)(dsb + siv), 32);
+                            }
+                            if (esb && mem_readable((ULONG_PTR)(esb + div), 32)) {
+                                p = zput(p, "\r\n  @es:di=");
+                                p = zdump(p, (const BYTE *)(ULONG_PTR)(esb + div), 32);
+                            }
+                        }
                         { int bk = dpmi_bp_disarm(lin);
                           if (bk >= 0 && g_bp_rep[bk]) g_bp_pending[bk] = 1;   /* repeating */
                           if (bk >= 0 && g_bp_skip[bk]) {
