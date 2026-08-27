@@ -94,24 +94,22 @@ flawless sound.
    `AX=0x4B4F`, reads the DOS list of lists, finds our DPMI host via `INT 2Fh 1687`,
    **switches itself into 16-bit protected mode**, and takes a `000A` alias of its own
    CS — every step matching the disassembly instruction for instruction.
-   It then stops with `NTVDM KERNEL: Inadequate DPMI Server` because we refuse
+   It used to stop with `NTVDM KERNEL: Inadequate DPMI Server` because we refused
    `INT 2Fh 168A`, the **"MS-DOS" vendor-specific API — which is REQUIRED**, not
    optional (an earlier note in session 30 says otherwise and is corrected in Part 9).
    ⚠️ **A PM guest cannot reach the IVT**, so any `INT nn` absent from the patcher's
    list stays a raw `CD nn` and silently terminates the VDM. `0x2F` was missing.
-   ★ The `168A` blocker is **CLEARED** (stock's vendor API is PM-only, measured with
-   `tools/dostest/vendprobe.asm`). krnl386 runs on into `INT 31h 0002`, then faults —
-   bracketed with `PMBP_PATH` breakpoints to **`d762`**, which never returns.
-   ★★ **THE CAUSE IS AN ARCHITECTURAL CONSTRAINT, NOT A MISSING STUB.** Vendor function
-   `0x0100` returns a **writable selector onto the LDT itself**: krnl386 takes a selector
-   from DPMI `0000`, masks it to a descriptor-table offset (`and al,0xf8`) and writes
-   descriptor bytes through it. We decline that function, so `[cs:0x32]` is 0, and
-   `0x5888` does `mov ds,[cs:0x32]` then dereferences — `#GP`, silent VDM kill.
-   NTVDM's WOW gives krnl386 **direct write access to the descriptor table**. Deciding how
-   to answer that is the largest open design question in this epic — and an empty writable
-   block is the one wrong answer (passes `verw`, then it manages descriptors that do not
-   exist).
-   Still unknown: **`INT 31h 04F3`**.
+   ★ **The vendor API is implemented and krnl386 runs on through it.** Measured off
+   stock: `168A` is PM-only and returns a **writable selector onto the descriptor
+   table** (verified two ways — the descriptor at `window[CS & 0xFFF8]` decodes to the
+   same base DPMI `0006` reports for CS, with the right access byte). Our own LDT is
+   **not** user-mapped, so we hand krnl386 a **shadow** that is reconciled into the real
+   LDT on entry to any PM interrupt service. Confirmed necessary and sufficient on
+   hardware: krnl386 writes a descriptor directly (`base=0x400`, the BDA) and the sync
+   installs it. `INT 31h 000D` (allocate specific descriptor) added for the same reason.
+   **Next frontier: an NTVDM-private INT 31h family — `04F1` (BX=0 CX=1), `04F2`
+   (BX=the freshly allocated selector, CX=1) and `04F3`.** None are in the DPMI spec or
+   RBIL; the rig oracle is the only source.
    ⚠️ Before consulting any other NTVDM project, read
    [`reference-projects.md`](reference-projects.md).
    for this). Still unknown: **`INT 31h 04F3`**.
