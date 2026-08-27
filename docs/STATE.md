@@ -138,14 +138,26 @@ and nothing has drawn a pixel. What works is the *bootstrap* — see #128 below.
 
    ### ⏹ Where it stops today
    The guest is resumed at our default PM stub `0x14f:0x95` (the IRET of the INT 31h
-   vector) after an `04F2` descriptor commit and **does not come back**. Breakpoints
-   prove it never reaches the addresses the stack frame there appears to name, so
-   **that frame is stale and the naive reading of it is wrong** — an open question,
-   not a conclusion.
+   vector) after an `04F2` descriptor commit and **does not come back**. Stable and
+   reproducible: every run without breakpoints ends at PM step `0x31` having serviced
+   9 WOW32 BOPs. The frame there (`IP=0x662f CS=0x000f`) decodes as krnl386's
+   chain-to-previous-handler site — `pushf / lcall cs:[0x7c]` at `seg1:0x662a` — so
+   the IRET returns to `0x662f` (`ret`) → `0x5cf8` (`pop ds / ret`) → `0x5a42`, whose
+   `pop es` / `pop ds` are **two segment loads off the stack immediately after the
+   descriptor `04F2` just committed**. A bad segment load in PM is a #GP, and an
+   unreflected PM #GP is exactly this shape: silent teardown, no VEH, no last line.
    ⚠️ **THE EXECUTING krnl386 IS AT LINEAR `0x1410` (segment `0141`), NOT at the base
    the bind stage logs.** Three runs of breakpoints were armed at `0x02950000+off`,
    reported themselves ARMED with exactly the right displaced bytes, and never fired
    — a second, dead copy. `csbase=` is printed on every PM heartbeat now.
+   ⚠️⚠️ **A PM BREAKPOINT INSIDE krnl386's LIVE IMAGE KILLS THE RUN AT PM STEP 1.**
+   Measured across all 13 runs of session 31 (no BPs → step `0x31`; BPs on the dead
+   copy → step `0x31`; BPs on the live copy → step `0x01`, zero WOW32 BOPs). **Cause
+   unknown.** This first produced a WRONG conclusion — "the breakpoints never fired,
+   therefore that code is never reached" — when the run had simply died forty entries
+   earlier. *The absence of a signal is only evidence if the instrument was alive to
+   produce it.* `pmbp.txt` worked in session 30, so this is a regression or a
+   guest-specific hazard, and it is the tool most likely to be reached for next.
    ⚠️ **The watchdog thread logs ONE sample per WOW run and then stops**, for reasons
    not yet found; it is not a usable instrument here. The `PMHB` heartbeat comes from
    the main loop, which is provably alive.

@@ -157,19 +157,54 @@ so. `csbase=` is printed on every heartbeat now.
 ⚠️ **An instrument that reports success against the wrong copy of the thing is worse than
 one that fails.** Same shape as the stale-artefact and wrong-bytes findings before it.
 
+## Part 6 — ⚠️ REFUTED IN THE SAME SESSION: what the corrected breakpoints "proved"
+
+Re-armed at the live base, the breakpoints at `0x662f`, `0x5cf8`, `0x5a42` and `0x5a4f`
+still never fired, and the first draft of this log concluded from that:
+
+> *"Breakpoints prove it never reaches the addresses the stack frame there appears to
+> name, so that frame is stale and the naive reading of it is wrong."*
+
+**That is wrong.** Comparing the step counter across all thirteen runs of the day refutes
+it in one line:
+
+| runs | last PM step | WOW32 BOPs |
+|---|---|---|
+| no breakpoints (10 runs) | `0x31` | 9 |
+| breakpoints on the **dead** copy (2 runs) | `0x31` | 9 |
+| breakpoints on the **live** copy (1 run) | **`0x01`** | **0** |
+
+**Planting a PM breakpoint inside krnl386's live image kills the guest at the very first
+PM entry.** The run never got within forty entries of the code being watched, so "it never
+fired" says nothing whatever about whether that code executes.
+
+**Why that is fatal to this guest is not known**, and is recorded as measured and
+unexplained rather than guessed at. It matters twice over: `pmbp.txt` is a tool the last
+session relied on (it bracketed `0x3021` successfully), and it is the tool most likely to
+be reached for next.
+
+★ **The lesson, and it is the project's own:** *the absence of a signal is only evidence if
+the instrument was alive to produce it.* Exactly the shape of the watchdog stopping after
+one sample, of breakpoints arming on a dead copy, and of session 16's watchdog samples
+that only ever went to COM1.
+
 ## Where it stops
 
 The guest is resumed at our default PM stub `0x14f:0x95` — the IRET of the INT 31h
-vector — after an `04F2` descriptor commit, and does not come back. The stack frame there
-reads `[IP=0x662f][CS=0x000f][FLAGS=0x0202]`, which decodes cleanly as krnl386's
-`lcall cs:[0x7c]` chain-to-host site. **Breakpoints at the correct linear addresses for
-`0x662f`, `0x5cf8`, `0x5a42` and `0x5a4f` never fire**, including on the two earlier passes
-that *survived*.
+vector — after an `04F2` descriptor commit, and does not come back. This is stable and
+reproducible: **every** run without breakpoints ends at PM step `0x31` having serviced
+9 WOW32 BOPs.
 
-⇒ **That frame is stale and the naive reading of it is wrong.** Recorded as an open
-question, not a conclusion. The next thread is how the guest arrives at `0x14f` and what
-IRET frame the host actually pushes for it (`dpmi_service_pm_int` pushes
-`FLAGS / g_pmret_sel / DPMI_PMRET_OFF`, which is *not* what the stack showed).
+The stack frame there reads `[IP=0x662f][CS=0x000f][FLAGS=0x0202]` and decodes cleanly as
+krnl386's chain-to-previous-handler site: it saved our default INT 31h stub and calls it
+with `pushf / lcall cs:[0x7c]` at `seg1:0x662a`, whose next instruction is `0x662f`. Per
+part 6 there is now **no evidence against** that reading, so the next thread starts from
+it: `0x662f` is `ret`, returning into `seg1:0x5cf8` (`pop ds / ret`), then `seg1:0x5a42`
+(`or si,7 / … / pop es / pop ds / … / ret 8`) — **two segment loads off the stack**,
+immediately after the descriptor `04F2` just committed (`base=0x1100 limit=0xaf7f
+acc=0xf3`, a selector over conventional memory that overlaps krnl386's own image at
+`0x1410`). A bad `pop ds`/`pop es` in protected mode is a #GP, and an unreflected PM #GP
+is exactly this failure shape: silent teardown, no VEH, no last log line.
 
 ## Regression
 
@@ -187,12 +222,15 @@ cannot, because `rt.bat` runs a DOS target out of `bm\tests` and a WOW run is "l
 
 ## Next actions
 
-1. **Resolve the `0x14f:0x95` wedge.** Read how the host places the guest on its default
-   PM stub and what frame it pushes; the stack dump and the code disagree.
-2. **Work down [`wow32-call-surface.md`](../../research/wow32-call-surface.md)** as krnl386
+1. **Resolve the `0x14f:0x95` wedge**, starting from the reading in "Where it stops" — the
+   segment loads at `seg1:0x5a49/0x5a4a`, right after the `04F2` commit, are the first
+   suspects.
+2. **Find out why a PM breakpoint in krnl386's live image kills the run at step 1.** It is
+   the obvious tool for item 1 and it is currently broken for this guest.
+3. **Work down [`wow32-call-surface.md`](../../research/wow32-call-surface.md)** as krnl386
    demands each ID — `tools/ne/nedis.py --wowfunc <id>` gives the whole story for one.
    `0xc4` (the fatal-error MessageBox), `0x86` (a packed date/time), `0x82`/`0xc9`/`0x71`
    (the three that may **not** be declined) are the ones already seen live.
-3. **Find out why the watchdog thread stops after one sample.** It is a diagnostic the
+4. **Find out why the watchdog thread stops after one sample.** It is a diagnostic the
    whole project leans on.
-4. Then: user/gdi's KERNEL-funnelled path, then `wowexec`, then an app.
+5. Then: user/gdi's KERNEL-funnelled path, then `wowexec`, then an app.
