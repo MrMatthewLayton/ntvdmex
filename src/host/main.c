@@ -7933,6 +7933,65 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                shows the first byte of the NEXT instruction and reads like data. */
             if (bcode == 0x53) { p = zput(p, " sub=0x"); p = zhexb(p, bsub); }
             p = zput(p, " at 0x");    p = zhex(p, eip);
+            /* ── WHICH 32-BIT CALL IS THIS? ────────────────────────────────────────
+                 0x51 is not a service, it is the generic 16->32 GATEWAY: the prologue
+                 at seg1:0x2bb6 saves everything, publishes the frame as SS:BP in
+                 [0x6a4]/[0x6a6], and then either far-calls a registered dispatcher or
+                 issues this BOP. 0x56 is the same idea inline -- every site is
+                 followed by `add sp,nn`, so its arguments are on the stack too.
+               So the useful question is never "implement 0x51", it is "WHICH function
+                 is being asked for", and that is on the guest stack. Dump it. This
+                 turns "implement wow32.dll" into a short, specific list. */
+            {   DWORD ssb = dpmi_sel_base((WORD)(VDM_REG(tib, VTIB_SS) & 0xFFFF));
+                DWORD sp16 = VDM_REG(tib, VTIB_ESP) & 0xFFFF;
+                const volatile BYTE *st = (const volatile BYTE *)(ULONG_PTR)(ssb + sp16);
+                int w;
+                p = zput(p, " ax=0x");  p = zhex(p, VDM_REG(tib, VTIB_EAX) & 0xFFFF);
+                p = zput(p, " bx=0x");  p = zhex(p, VDM_REG(tib, VTIB_EBX) & 0xFFFF);
+                p = zput(p, " cx=0x");  p = zhex(p, VDM_REG(tib, VTIB_ECX) & 0xFFFF);
+                p = zput(p, " dx=0x");  p = zhex(p, VDM_REG(tib, VTIB_EDX) & 0xFFFF);
+                p = zput(p, " si=0x");  p = zhex(p, VDM_REG(tib, VTIB_ESI) & 0xFFFF);
+                p = zput(p, " di=0x");  p = zhex(p, VDM_REG(tib, VTIB_EDI) & 0xFFFF);
+                p = zput(p, " bp=0x");  p = zhex(p, VDM_REG(tib, VTIB_EBP) & 0xFFFF);
+                p = zput(p, " ds=0x");  p = zhex(p, VDM_REG(tib, VTIB_DS) & 0xFFFF);
+                /* SP-relative lands in the prologue's saved-register block (every
+                   word of it accounts for a push at seg1:0x2bb6). The CALLER's
+                   arguments are above the frame, so dump from BP too -- and for the
+                   inline 0x56 sites, which have no such prologue, SP is the right
+                   end. Both, rather than choosing wrong. */
+                p = zput(p, "\r\n    @ss:sp");
+                for (w = 0; w < 10; ++w) {
+                    p = zput(p, " ");
+                    p = zhex(p, (DWORD)(st[w * 2] | (st[w * 2 + 1] << 8)));
+                }
+                {   DWORD bp16 = VDM_REG(tib, VTIB_EBP) & 0xFFFF;
+                    const volatile BYTE *fb =
+                        (const volatile BYTE *)(ULONG_PTR)(ssb + bp16);
+                    /* ★ THE FUNCTION ID. Every 32-bit call goes through one common
+                         thunk at seg1:0x2bb6, reached from a per-function stub that
+                         looks like
+                             push <args...> / push <ID> / push cs / call 0x2bb6
+                         (e.g. seg1:0xb35b pushes 0x78, 0xb42b pushes 0x9b, 0xb438
+                         pushes 0x9e). So the frame is a FAR call frame -- bp+2/bp+4
+                         are the return address back into the stub -- and bp+6 is the
+                         ID the stub pushed last.
+                       That is the whole WOW32 interface: a small integer namespace.
+                       Naming it here is what turns a wall of identical BOP lines into
+                       a list of functions to implement. */
+                    if (bcode == 0x51) {
+                        p = zput(p, " FUNC=0x");
+                        p = zhex(p, (DWORD)(fb[6] | (fb[7] << 8)));
+                        p = zput(p, " retstub=0x");
+                        p = zhex(p, (DWORD)(fb[2] | (fb[3] << 8)));
+                    }
+                    p = zput(p, "\r\n    @ss:bp");
+                    for (w = 0; w < 12; ++w) {
+                        p = zput(p, " ");
+                        p = zhex(p, (DWORD)(fb[w * 2] | (fb[w * 2 + 1] << 8)));
+                    }
+                }
+                p = zput(p, "\r\n   ");
+            }
             if (bcode == 0x53 && bsub == 0x03) {
                 VDM_SET16(tib, VTIB_EBX, 0);
                 VDM_SET16(tib, VTIB_EDX, 0);

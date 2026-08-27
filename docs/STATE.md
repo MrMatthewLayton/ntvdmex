@@ -111,13 +111,21 @@ flawless sound.
    selector BX"** (read off its eight call sites — so stock needs a flush as well, and
    our shadow is the *same* design, not a workaround) and **`04F1` = the private twin of
    `0000`**. Both implemented, plus `000D`. krnl386 now gets through `d762` and `0x6763`.
-   ★★ **NEXT, AND IT IS STRUCTURAL: krnl386 CALLS INTO A 32-BIT COMPANION VIA BOPs.**
-   It halts at `seg1:0x3026` on `C4 C4 53` — a **native** BOP (in the file, unrelocated,
-   not one our INT patcher planted). seg1 holds **13** of them: codes `0x51`×1, `0x53`×1,
-   `0x56`×10, `0xFE`×1. That is the WOW32 side of WOW, which real Windows implements in
-   `wow32.dll`. Our loop finds no patch-map entry, so `vec=0` and it reports "unexpected
-   PM stop" and stops the guest (host stays alive).
-   ⇒ WOW is not "NE loader + DPMI". It is that **plus a 32-bit BOP service API**.
+   ★★ **STRUCTURAL: krnl386 CALLS A 32-BIT COMPANION VIA BOPs — the WOW32 side.**
+   `C4 C4 nn` appears **natively** in krnl386 (in the file, unrelocated — *not* our INT
+   patcher, which writes the same two bytes). seg1 holds 13 sites: `0x51`×1, `0x53`×1,
+   `0x56`×10, `0xFE`×1. Now dispatched rather than falling through to "unexpected PM
+   stop".
+   ⚠️ **Lengths differ** — `0x53` carries a sub-function byte (4 bytes), the rest are 3.
+   Wrong length resumes the guest mid-instruction.
+   ★ **`0x53/03` = "give me the 32-bit dispatch entry"; NULL is the correct answer**, not
+   a stub — every `0x56` site is guarded by `call dword far [0x6ac]` *if set*, else BOP,
+   so NULL selects the per-call path krnl386 already implements.
+   ★ **`0x51` is the generic 16→32 GATEWAY, not a service.** Every call routes through one
+   thunk at `seg1:0x2bb6`, reached from a per-function stub shaped
+   `push <args> / push <ID> / push cs / call 0x2bb6`. **So the WOW32 interface is a small
+   integer ID namespace, and the ID is at `[ss:bp+6]`** — the host now logs it.
+   ⇒ WOW is "NE loader + DPMI + **a WOW32 dispatch on an integer function ID**".
    ⚠️ Before consulting any other NTVDM project, read
    [`reference-projects.md`](reference-projects.md).
    for this). Still unknown: **`INT 31h 04F3`**.
