@@ -3240,6 +3240,9 @@ static WORD wow_host_alloc(WORD paras)
 /* The `-a` argument of the WOW launch: the full path of krnl386.exe. krnl386 reads
    it back out of the DOS environment block to find its own file -- see wow_place_v86. */
 static char      g_wow_krnl_path[512];
+/* Bytes of usable memory above krnl386's stack, handed to it in CX at entry. See
+   the note at the entry setup and wow_place_v86. */
+static WORD      g_wow_entry_cx = 0;
 static WORD      g_wow_psp_seg  = 0;
 static WORD      g_pm_xfer_seg  = 0;
 static WORD      g_pm_xfer_para = 0;
@@ -6723,7 +6726,11 @@ static int wow_place_v86(dos_machine_t *mp, WORD *ecs, WORD *eip,
         q = zput(q, " + 0x1000 (0x"); q = zhex(q, hlen);
         q = zput(q, " bytes from file offset 0x"); q = zhex(q, ne->hdr);
         q = zput(q, ", ne_cseg=0x"); q = zhex(q, ne->n_seg);
-        q = zput(q, ")\r\n");
+        /* Everything in the 64 KB selector past the header image is krnl386's to
+           allocate from; it is told the size in CX at entry. */
+        g_wow_entry_cx = (WORD)(0xFFF0u - (WORD)((DWORD)WOW_HDRIMG_PARAS * 16u));
+        q = zput(q, ") arena above it = 0x"); q = zhex(q, g_wow_entry_cx);
+        q = zput(q, " bytes -> CX at entry\r\n");
         log_append(LDTLOG_PATH, m, q);
     }
 
@@ -11663,11 +11670,23 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
              +0x10 is where the (discarded) DOS image sat and where dos_alloc had
              already placed krnl386's own code. Point it at the arena block instead. */
         if (g_wow_psp_seg) VDM_SET16(tib, VTIB_ES, g_wow_psp_seg);
+        /* ★ CX = HOW MUCH MEMORY IS AVAILABLE ABOVE THE STACK, IN BYTES.
+             seg1:0xc164 does `mov ax,cx / shr ax,4 / mov [0x5a6],ax` -- CX turned into
+             a PARAGRAPH count and stored as the size of the block that [0x5a0] (the
+             selector built over base(SS)+SP) describes. Measured at three breakpoints,
+             CX was 0 all the way from entry to that instruction, so krnl386 believed
+             it had ZERO paragraphs and every allocation out of that arena failed --
+             including `call 0x22b2` inside LoadSegment, which is why it could not load
+             its own segment 1 and exited.
+           The selector has a 64 KB limit, so this is the whole of it minus the header
+           image we place at its base. Nothing else names this quantity to the guest. */
+        VDM_SET16(tib, VTIB_ECX, (WORD)g_wow_entry_cx);
         VDM_REG(tib, VTIB_EAX) = 0x4B4F;
         p = zput(p, "STAGE2: WOW entry -- krnl386 in V86 at 0x");
         p = zhex(p, img.cs); p = zput(p, ":0x"); p = zhex(p, img.ip);
         p = zput(p, " DS=0x"); p = zhex(p, g_wow_entry_ds);
         p = zput(p, " ES=0x"); p = zhex(p, g_wow_psp_seg);
+        p = zput(p, " CX=0x"); p = zhex(p, g_wow_entry_cx);
         p = zput(p, " (it will carve from 0x"); p = zhex(p, (DWORD)(g_wow_psp_seg + 0x10));
         p = zput(p, ") AX=0x4b4f\r\n");
     }
