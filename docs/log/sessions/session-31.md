@@ -626,6 +626,41 @@ rather than the second quietly replacing the first.
 **Next: read `seg1:0x8cb6` and find which relocation record it cannot resolve.**
 
 
+## Part 21 — ★ the relocation records were never copied into memory
+
+An NE segment with `NE_SEG_RELOCS` is followed **in the file** by a WORD count and that
+many 8-byte records. A conventional loader applies them and throws them away — and ours
+does exactly that, `ne_apply_relocs` reading them straight out of the file image. But
+krnl386 relocates its own copy **again**, and it reads the records back out of the *loaded
+segment*: `seg1:0x921b` does `mov es,dx / mov si,cx / lodsw` for the count, and
+`seg1:0x8d54` walks the records from there.
+
+With only `length` bytes copied it was reading whatever happened to follow the segment in
+conventional memory, decoding that as relocation records, and taking them for **imported**
+fixups — into the module-reference table at `es:[0x28]` of a module that imports from
+nothing. Hence `call 0x8cb6` returning 0.
+
+**Measured, and this is what makes it a fix rather than a guess.** With the records copied,
+the walk changes branch — breakpoints show `seg1:0x8dc7` (INTERNALREF) instead of
+`seg1:0x8d6a` (imported) — and a dump at `0x8dc7` confirms `@ds:si` is byte-for-byte the
+file's records:
+
+```
+@ds:si = 02 00 6d 57 01 00 00 00  02 00 6c b0 02 00 00 00 ...
+file   = 04 00 | 02 00 6d 57 01 00 00 00 | 02 00 6c b0 02 00 00 00 ...
+```
+
+SI = `length + 2`, the count word consumed, record 1 = address type 2 (SEGMENT), reloc type
+0 (INTERNALREF), target segment 1 — which resolves.
+
+⚠️ **It does not yet clear the wall.** The run still ends in `ExitKernelThunk(1)` at the
+same PM step, and `0x8dc7` is entered **once** rather than four times, so record 1's fixup
+still does not complete. The tail from `seg1:0x8e0e` (handle `0x0207`, `test al,1`, then
+the patch through `0x8e3f`) is the next thing to read. *Stated plainly, because a change
+that moves an internal path without moving the outcome is easy to write up as more than it
+is.*
+
+
 ## Regression
 
 - `selftest.com` **8/8 PASS on real hardware** after the SysVars change — the guest from

@@ -193,7 +193,18 @@ and nothing has drawn a pixel. What works is the *bootstrap* — see #128 below.
    breakpoint hits. ⇒ **This IS "two loaders, two copies"**, one step later than it
    looked: our NE loader already relocated the image that is *executing*, and krnl386
    loads its own segments a second time and relocates that copy itself.
-   ▸ Next: read `seg1:0x8cb6` and find which relocation record it cannot resolve.
+   ★ **The relocation records were never copied into memory.** An NE segment with
+   `NE_SEG_RELOCS` is followed *in the file* by a count word and 8-byte records; a
+   conventional loader applies and discards them, but krnl386 re-reads them out of the
+   LOADED segment (`seg1:0x921b`, then `0x8d54`). With only `length` bytes copied it was
+   decoding whatever followed as records and taking them for **imported** fixups.
+   `wow_place_v86` copies them now, and the walk measurably changes branch — `seg1:0x8dc7`
+   (INTERNALREF) instead of `0x8d6a` (imported), with `@ds:si` byte-for-byte the file's
+   records.
+   ⚠️ It does **not** yet clear the wall: `0x8dc7` is entered once rather than four times,
+   so record 1's fixup still does not complete.
+   ▸ Next: read `seg1:0x8e0e` onward — handle `0x0207`, `test al,1`, the patch via
+   `0x8e3f`.
 
    ★ **The module database it builds is WELL-FORMED** — dumped at `seg1:0x9145`
    (`esbase=0x1fca0`): starts `"NE"`, `ne_cseg=4`, `ne_segtab=0x40`, and all four ten-byte
