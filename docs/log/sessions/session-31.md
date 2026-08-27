@@ -467,6 +467,40 @@ line is what showed it — `c1 e9` where `8b 7c` was expected. ★ **Check the d
 against the disassembly every time; it is the cheapest guard in the toolkit.**
 
 
+## Part 16 — the alternatives are eliminated; the contract is the only way through
+
+krnl386 has a second way to obtain that buffer: `seg1:0xcf9f` takes a memory **handle**
+from `[0x59e]`, calls `0x48b4` (handle → selector) and stores the result in `[0x5a0]` at
+`seg1:0xd00a`. If that ran, `[0x5a0]` would name a real global block rather than a window
+over the stack. It does not run — measured, with breakpoints in execution order:
+
+| breakpoint | hit? |
+|---|---|
+| `seg1:0xc29f` — `push [0x5a0]` / `call 0xd45a` | ✅ |
+| `seg1:0xcfa1` — the handle → selector path | ❌ **never** |
+| `seg1:0xd471` — `0xd45a` parsing the header | ✅ |
+
+And the rest of `0xd02b` (read this sitting, `0xd087`–`0xd0e3`) is structure-building —
+filling a task/module record field by field. **No call anywhere in the bring-up reads the
+header.**
+
+⇒ So `[0x5a0]` stays the selector krnl386 built at `seg1:0xc17e` over `base(SS) + SP`, and
+the header has to be in the memory that selector covers. `0x59a0` was checked rather than
+assumed, and it is `(size, base) -> selector` with access byte `0xF3`; the call passes
+size `0xFFFF` and base `base(SS) + SP`, so the reading holds.
+
+⚠️ **And that is where it stops being straightforward.** Measured, `SP` at `0xc17e` is
+`0xFEE` — only `0x12` bytes below the top of the 4 KB stack block — but it is `0x10` lower
+than the entry `SP` because of krnl386's own call depth at that point. So the buffer's base
+is **call-depth dependent**, and no fixed placement by the loader can land on it. Either
+the entry `SS:SP` we hand krnl386 is wrong (it is `DGROUP=SINGLEDATA` and moves its own
+stack into DGROUP at `seg1:0xc1c9`, so a separate stack block may be the wrong choice), or
+there is a step before `seg1:0xc16d` that is meant to have filled that memory.
+
+**That is the next question, and it is now a narrow one** — everything else in the path has
+been read and ruled out.
+
+
 ## Regression
 
 - `selftest.com` **8/8 PASS on real hardware** after the SysVars change — the guest from

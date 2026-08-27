@@ -189,9 +189,15 @@ and nothing has drawn a pixel. What works is the *bootstrap* — see #128 below.
    guest dies in *exactly the same place*: the copy loop at `seg1:0xd4e5` ends in
    `loop` with no `jcxz` guard, so CX=0 decrements to `0xFFFF` and runs 65536 times.
    "Zero it and move on" is eliminated — it must be the real header.
-   ▸ Geometry to work from: `base(SS) + SP` there sits `0x12` bytes below the arena PSP,
-   i.e. near the TOP of the stack block, so "the loader puts the header image
-   immediately above krnl386's stack" is the first hypothesis to test.
+   ▸ ⚠️ The buffer's base is **call-depth dependent**: `SP` at `0xc17e` is `0xFEE`, only
+   `0x12` below the stack top but `0x10` below the *entry* `SP`. So no fixed placement by
+   the loader can land on it. Either the entry `SS:SP` we hand krnl386 is wrong (it is
+   `DGROUP=SINGLEDATA` and moves its own stack into DGROUP at `seg1:0xc1c9`, so a separate
+   stack block may be the wrong choice), or a step before `seg1:0xc16d` should have filled
+   that memory. Everything else in the path is read and ruled out: `0x59a0` is
+   `(size, base) -> selector` (checked, not assumed), the whole of `0xd02b` is
+   structure-building, and the handle → selector path at `seg1:0xcf9f`/`0xd00a` that would
+   replace `[0x5a0]` **never runs** (measured with breakpoints in execution order).
    ▸ Also fixed on the way: **DGROUP is bigger than the segment in the file** — a Win16
    loader adds `ne_heap` + `ne_stack` to the automatic data segment, and only the
    *header* says so. krnl386 asks for `heap 0x200` and got none.
