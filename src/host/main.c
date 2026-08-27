@@ -6315,6 +6315,133 @@ static void wow_probe_ldt_matrix(const char *tag)
      so these SHOULD install. "Should" is not "does", and v86_set_ldt_entries returns an
      NTSTATUS, so ask it rather than assume. A descriptor that silently fails to install
      leaves a selector that faults on first use -- a silent death, far from the cause. */
+/* ── WHERE IS OUR DESCRIPTOR TABLE? ─────────────────────────────────────────────────
+     krnl386 wants what NTVDM's "MS-DOS" vendor API gives it: a WRITABLE SELECTOR ONTO
+     THE DESCRIPTOR TABLE, so it can edit descriptors without a DPMI call each time.
+     Measured off stock (tools/dostest/vendprobe.asm): selector 0x0137, writable,
+     base 0x001140B0, limit 0x5FFF -- and the descriptor at window[CS & 0xFFF8] reads
+         FF FF D0 6D 00 FA 00 00   -> base 0x00006DD0, access 0xFA (code)
+     while DPMI 0006 reports CS's base as 0x00006DD0. Two independent routes, same
+     base, right type. It is the real table, and it lives at a USER-MODE address.
+
+   ⚠ WE CANNOT ASK THE CPU WHERE OURS IS. `SLDT` yields the GDT selector, and the GDT
+     is not readable from ring 3. So find it the only way available from user mode:
+     install descriptors whose contents are unique, then search our own address space
+     for those exact eight bytes. A hit is that descriptor's slot; the table base is
+     the hit minus (index * 8).
+
+     Clean-room by construction -- it uses only our own memory and the documented
+     descriptor encoding, and depends on no Windows internal we would have to be told.
+
+   ⚠ AND IT MUST NOT LIE, IN EITHER DIRECTION:
+       * one magic value could occur by chance in an unrelated buffer, so a candidate
+         is confirmed by a SECOND descriptor at a different index appearing at the
+         predicted offset. One match is a coincidence; two at the right stride is a
+         table.
+       * a "not found" is worthless unless the things searched for exist, so LAR/LSL
+         verify both probes installed before the search runs. Otherwise a refused
+         descriptor and an unmappable table produce the same log line -- and one of
+         those is a conclusion about Windows while the other is a bug in here. */
+static DWORD g_wow_ldt_base = 0;
+
+static int wow_ldt_peek(DWORD lin, DWORD lo, DWORD hi)
+{
+    const volatile DWORD *d = (const volatile DWORD *)(ULONG_PTR)lin;
+    return d[0] == lo && d[1] == hi;
+}
+
+static DWORD wow_find_ldt_base(void)
+{
+    MEMORY_BASIC_INFORMATION mbi;
+    DWORD lo1, hi1, lo2, hi2;
+    int i1, i2;
+    BYTE *addr = NULL;
+    char m[320], *q;
+
+    if (g_wow_ldt_base) return g_wow_ldt_base;
+    if (g_ldt_next + 2 >= DPMI_LDT_MAX) return 0;
+
+    /* Two probes, distinctive and different. ⚠ BOTH bases must sit under
+       XP_LDT_MAX_LINEAR (~2GB) or the validator refuses the descriptor outright and
+       the search can never find what was never installed. The first cut used
+       0xA5A52000 -- 2.77GB -- and reported "not found" for that reason alone: a false
+       negative dressed as a finding, with the cap documented a few hundred lines up. */
+    i1 = g_ldt_next++;
+    g_ldt[i1].base = 0x5A5A1000; g_ldt[i1].limit = 0x0123;
+    g_ldt[i1].access = 0xF2;     g_ldt[i1].flags = 0;
+    dpmi_install(i1);
+    /* ⚠ NOT CONSECUTIVE, AND THAT IS THE WHOLE POINT. The first cut used i1 and i1+1,
+       "confirmed" a hit, and reported a table base -- which MOVED between two runs
+       while the winning address stayed at 0x02219018. Two consecutive descriptors sit
+       8 bytes apart both in a real table AND in the buffer NtSetLdtEntries marshals
+       its two entries through, so that check could not tell them apart and was
+       matching the buffer. A five-slot gap is 40 bytes in a table and still 8 in the
+       buffer, so only a real table can satisfy it. */
+    g_ldt_next += 4;                        /* leave a gap between the two probes */
+    i2 = g_ldt_next++;
+    g_ldt[i2].base = 0x3C3C2000; g_ldt[i2].limit = 0x0456;
+    g_ldt[i2].access = 0xF2;     g_ldt[i2].flags = 0;
+    dpmi_install(i2);
+    dpmi_build_desc(g_ldt[i1].base, g_ldt[i1].limit, 0xF2, 0, &lo1, &hi1);
+    dpmi_build_desc(g_ldt[i2].base, g_ldt[i2].limit, 0xF2, 0, &lo2, &hi2);
+
+    {   WORD s1 = (WORD)((i1 << 3) | 7), s2 = (WORD)((i2 << 3) | 7);
+        DWORD a1 = 0, a2 = 0;
+        unsigned char z1 = 0, z2 = 0;
+        __asm__ __volatile__("lar %2, %0\n\tsetz %1" : "=r"(a1), "=q"(z1) : "r"(s1) : "cc");
+        __asm__ __volatile__("lar %2, %0\n\tsetz %1" : "=r"(a2), "=q"(z2) : "r"(s2) : "cc");
+        q = m;
+        q = zput(q, "WOWLDT: probes idx 0x"); q = zhex(q, (DWORD)i1);
+        q = zput(q, z1 ? " LAR ok ar=0x" : " LAR FAILED ar=0x"); q = zhex(q, a1);
+        q = zput(q, " | idx 0x"); q = zhex(q, (DWORD)i2);
+        q = zput(q, z2 ? " LAR ok ar=0x" : " LAR FAILED ar=0x"); q = zhex(q, a2);
+        q = zput(q, "\r\n"); log_append(LDTLOG_PATH, m, q);
+        if (!z1 || !z2) {
+            q = m; q = zput(q, "WOWLDT: a probe did NOT install -- search skipped, a "
+                               "'not found' would have meant nothing\r\n");
+            log_append(LDTLOG_PATH, m, q);
+            return 0;
+        }
+    }
+
+    while (VirtualQuery(addr, &mbi, sizeof mbi) == sizeof mbi) {
+        DWORD prot = mbi.Protect & 0xFF;
+        int readable = mbi.State == MEM_COMMIT && !(mbi.Protect & PAGE_GUARD)
+            && (prot == PAGE_READONLY || prot == PAGE_READWRITE
+                || prot == PAGE_WRITECOPY || prot == PAGE_EXECUTE_READ
+                || prot == PAGE_EXECUTE_READWRITE || prot == PAGE_EXECUTE_WRITECOPY);
+        if (readable) {
+            DWORD b = (DWORD)(ULONG_PTR)mbi.BaseAddress, n = (DWORD)mbi.RegionSize, o;
+            for (o = 0; o + 8 <= n; o += 8) {          /* descriptors are 8-aligned */
+                DWORD cand = b + o;
+                if (!wow_ldt_peek(cand, lo1, hi1)) continue;
+                {   DWORD tbase = cand - (DWORD)i1 * 8;
+                    DWORD other = tbase + (DWORD)i2 * 8;
+                    if (other < b || other + 8 > b + n) continue;   /* same region only */
+                    if (!wow_ldt_peek(other, lo2, hi2)) continue;   /* one hit is chance */
+                    g_wow_ldt_base = tbase;
+                    q = m;
+                    q = zput(q, "WOWLDT: descriptor table FOUND at linear 0x");
+                    q = zhex(q, tbase);
+                    q = zput(q, " (idx 0x"); q = zhex(q, (DWORD)i1);
+                    q = zput(q, " at 0x"); q = zhex(q, cand);
+                    q = zput(q, ", confirmed idx 0x"); q = zhex(q, (DWORD)i2);
+                    q = zput(q, " at 0x"); q = zhex(q, other);
+                    q = zput(q, ")\r\n"); log_append(LDTLOG_PATH, m, q);
+                    return tbase;
+                }
+            }
+        }
+        addr = (BYTE *)mbi.BaseAddress + mbi.RegionSize;
+        if ((DWORD)(ULONG_PTR)addr >= 0x7FFF0000u) break;
+    }
+    q = m; q = zput(q, "WOWLDT: descriptor table NOT in our own address space "
+                       "(probes verified installed) -- a real LDT window is not "
+                       "available this way\r\n");
+    log_append(LDTLOG_PATH, m, q);
+    return 0;
+}
+
 static ne_registry g_wow_reg;
 
 /* ── WOW ENTRY STAGE: put krnl386 in CONVENTIONAL memory and relocate to PARAGRAPHS. ─
@@ -6462,6 +6589,12 @@ static void wow_probe_selectors(void)
         q = zput(q, " (2 and 3 are forced to data by dpmi_install)\r\n");
         log_append(LDTLOG_PATH, m, q);
     }
+
+    /* Can krnl386 be given a real descriptor-table window? Asked AFTER the reserved
+       skip above, so the throwaway probes cannot land on indices 2/3 -- which
+       dpmi_install() force-types to data, i.e. the exact interaction that silently
+       turned krnl386's code segment into a data descriptor earlier this session. */
+    wow_find_ldt_base();
 
     /* ── PHASE 2a: a selector for EVERY segment of EVERY module, before any
          relocation runs. ne_registry_resolve refuses a target whose selector is still

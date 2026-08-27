@@ -105,6 +105,87 @@ start:      mov dx,m_rm
             inc si
             loop .db1
             call crlf
+
+            ; ---- call vendor function 0x0100 ---------------------------------
+            ; stock returns a selector; krnl386 `verw`s it and then writes
+            ; DESCRIPTOR BYTES through it.  Is it the real LDT or a shadow?
+            mov dx,m_f100
+            mov ah,9
+            int 0x21
+            mov ax,0x0100
+            call far [ep_off]
+            jnc .f100ok
+            mov dx,m_cf
+            mov ah,9
+            int 0x21
+            jmp done
+.f100ok:    mov [wsel],ax
+            call hex16
+            mov dx,m_verw
+            mov ah,9
+            int 0x21
+            verw word [wsel]
+            jnz .nowr
+            mov dx,m_yes
+            jmp .pw
+.nowr:      mov dx,m_no
+.pw:        mov ah,9
+            int 0x21
+
+            ; limit of the window, and its linear base via DPMI 0006
+            mov dx,m_lim
+            mov ah,9
+            int 0x21
+            mov bx,[wsel]
+            lsl ax,bx
+            call hex16
+            mov dx,m_base
+            mov ah,9
+            int 0x21
+            mov bx,[wsel]
+            mov ax,0x0006
+            int 0x31
+            mov ax,cx
+            call hex16
+            mov ax,dx
+            call hex16
+            call crlf
+
+            ; ---- THE DECISIVE TEST -------------------------------------------
+            ; Read the descriptor the window holds at offset (CS & 0xF8), and
+            ; separately ask DPMI 0006 for CS's real base.  If the window is the
+            ; LDT (or a faithful shadow) the two agree.
+            mov dx,m_cs
+            mov ah,9
+            int 0x21
+            mov bx,cs
+            mov ax,bx
+            call hex16
+            mov dx,m_csbase
+            mov ah,9
+            int 0x21
+            mov bx,cs
+            mov ax,0x0006
+            int 0x31
+            mov ax,cx
+            call hex16
+            mov ax,dx
+            call hex16
+            mov dx,m_desc
+            mov ah,9
+            int 0x21
+            mov ax,cs
+            and ax,0xfff8            ; krnl386 does `and al,0xf8` -- the HIGH byte
+            mov si,ax                ; survives, so this is selector & 0xFFF8
+            mov es,[wsel]
+            mov cx,8
+.dd:        mov al,[es:si]
+            call hex8
+            mov al,' '
+            call putc
+            inc si
+            loop .dd
+            call crlf
             jmp done
 
 .allocbad:  mov dx,m_allocbad
@@ -188,6 +269,17 @@ m_esdi      db '  ES:DI=$'
 m_nodpmi    db '  NO DPMI HOST',13,10,'$'
 m_allocbad  db '  private-area alloc FAILED',13,10,'$'
 m_swbad     db '  MODE SWITCH FAILED (CF)',13,10,'$'
+m_f100      db '-- vendor function 0x0100 --',13,10,'  returned AX=$'
+m_verw      db '  verw:$'
+m_yes       db 'WRITABLE$'
+m_no        db 'not writable$'
+m_lim       db '  limit=$'
+m_base      db '  base=$'
+m_cf        db '  CF=1 (function not provided)',13,10,'$'
+m_cs        db '  our CS=$'
+m_csbase    db '  CS base(0006)=$'
+m_desc      db 13,10,'  descriptor at window[CS&0xF8]: $'
+wsel        dw 0
 m_lar       db '  LAR(ES)=$'
 m_larbad    db '  LAR FAILED -- selector not readable',13,10,'$'
 m_bytes     db '  code at entry: $'
