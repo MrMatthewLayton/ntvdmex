@@ -840,22 +840,209 @@ selectors without a DPMI call per operation.
 That is a real architectural constraint, not a missing stub, and it is the largest open
 design question this epic has produced so far.
 
+---
+
+## Part 12 — the vendor window IS the descriptor table; ours is not reachable
+
+Measured what stock's `168A` actually hands back (`tools/dostest/vendprobe.asm`, extended
+to call the entry):
+
+```
+returned AX=0137  verw:WRITABLE  limit=5FFF  base=001140B0
+our CS=019F       CS base(0006)=00006DD0
+descriptor at window[CS & 0xFFF8]: FF FF D0 6D 00 FA 00 00
+```
+
+which decodes to base `0x00006DD0`, access `0xFA` (code, readable). Two independent routes
+agree on the base **and** the access byte is the right type for CS. It is the real
+descriptor table, 3072 entries, at a **user-mode** address.
+
+Then: is ours? Added a self-search — install descriptors with unique contents, hunt for
+those exact eight bytes in our own address space. **Not found.** So the "hand back a real
+LDT selector" option is not available to us the way it is to stock.
+
+⚠️ **THE INSTRUMENT WAS WRONG BOTH WAYS BEFORE IT WAS TRUSTWORTHY, AND THAT IS THE PART
+WORTH KEEPING.**
+
+1. **False negative.** The second probe base was `0xA5A52000` — 2.77 GB, above the ~2 GB
+   validator cap *documented in the same file a few hundred lines up*. The descriptor was
+   refused, so the search could never find what was never installed. Fixed, and `LAR`
+   verification added so a refused descriptor and an unmappable table can no longer
+   produce the same log line.
+2. **False positive.** It then reported a table at `0x02219000`. The two probes were
+   **consecutive** indices — and two consecutive descriptors sit 8 bytes apart both in a
+   real table *and* in the buffer `NtSetLdtEntries` marshals its two entries through. It
+   was matching the buffer.
+   ★ **Caught because the reported base MOVED between runs while the winning address did
+   not** — impossible for a table where index N lives at base + N×8. *A number that
+   changes when it shouldn't is the cheapest lie-detector this project has.* Fixed with a
+   five-slot gap: 40 bytes apart in a table, still 8 in a buffer.
+
+## Part 13 — the descriptor-table SHADOW, which validates itself
+
+Since we cannot hand over the real table: a page-aligned **shadow**, seeded from
+`g_ldt[]`, returned by vendor function `0x0100`, reconciled into the real LDT via
+`NtSetLdtEntries` on entry to any protected-mode interrupt service. Plus `INT 31h 000D`
+(allocate *specific* descriptor) — what a client asks once it manages the table itself.
+
+★ **The open question was whether a plain shadow suffices or writes must be TRAPPED** (the
+A0000 planar page-protection pattern). Rather than argue it, the reconcile logs every
+changed entry — so the shadow is also the instrument that answers it:
+
+```
+LDTSYNC idx 0x08 <- guest wrote base=0x00000400 limit=0x0 acc=0xf3  ok
+```
+
+krnl386 **does** write descriptors directly (base `0x400` = the BIOS data area), and
+reconcile-on-interrupt is sufficient for the sequence it actually runs: allocate via
+`000D`, write, then call `04F2` — both calls are sync points. A trapping shadow is not
+needed **unless the log ever shows a descriptor used before we saw it written**.
+
+⚠️ **A real bug, caught by the log being loud on the first run.** The sync reads "shadow
+differs from `g_ldt[]`" as "the guest wrote this" — so descriptors *we* allocate after the
+shadow exists look guest-zeroed, and it pushed those zeros into the real LDT, destroying
+live entries. Three lines said "guest wrote base=0 limit=0 acc=0" for indices the guest
+had never touched. Fixed by calling `wow_shadow_put()` from `dpmi_install()`:
+**both directions, or the difference test means nothing.**
+
+## Part 14 — the private `04Fx` family, decoded from its call sites
+
+- **`04F2` = "I modified CX descriptors from selector BX — commit them".** All eight call
+  sites are identical in shape:
+  ```
+  6089  mov byte [bx+0x5],0xf3   ; the ACCESS byte, written through the window
+  608d  or bl,0x7                ; -> a selector
+  6092  mov cx,0x1               ; how many
+  6095  mov ax,0x4f2 / int 31h   ; commit
+  ```
+  ⇒ **stock ntvdm needs a flush too**, so our shadow is not a workaround for lacking the
+  real LDT — it is the *same design*, and `04F2` is where the guest asks for the sync.
+- **`04F1` = the private twin of `0000`.** Reached through a dispatcher at `seg1:0x6638`
+  keyed on the DPMI function number in AL, where `AL=0x0B` (get descriptor) is served
+  **locally** by two `movsd` out of the window. The family is a fast path: reads from the
+  window, only what must reach the host becomes a call.
+
+Measured with the same PMBP breakpoints that bracketed the fault — before, only `c0c9`
+hit; after, `c0cc` (`d762` **returned**) and `c0d1` (`0x6763` returned) hit too.
+
+## Part 15 — ★★ krnl386 calls a 32-bit companion via BOPs, and the surface is 82 functions
+
+It then halted three instructions into `0x3021` with `unexpected PM stop`, on bytes
+`c4 c4 53`.
+
+**`C4 C4` is a BOP — and this one is krnl386's OWN.** Checked, not assumed: the bytes are
+in the **file**, there is no relocation record in range, and guest memory matches the file
+exactly. (Our INT-site patcher writes those same two bytes, so "it's our patch" was the
+easy and completely wrong answer.) seg1 holds 13 native sites: `0x51`×1, `0x53`×1,
+`0x56`×10, `0xFE`×1.
+
+⚠️ **Lengths differ** — `0x53` carries a sub-function byte (4 bytes), the rest are 3. Read
+it off what follows: after `0x56` comes `83 C4 nn` (`add sp,nn`, a cdecl cleanup, which
+also tells you `0x56` takes stack arguments). Wrong length resumes the guest
+mid-instruction.
+
+★ **`0x53/03` = "give me the 32-bit dispatch entry", and NULL is the CORRECT answer** —
+every `0x56` site is guarded by `call dword far [0x6ac]` *if set*, else BOP, so NULL
+selects the per-call path krnl386 already implements. Confirmed: `jz 0x3074` taken and
+`0x3021` **returns** to `c0d6`.
+
+★ **`0x51` is the generic 16→32 GATEWAY, not a service.** Its site is a thunk prologue
+(`seg1:0x2bb6`) that publishes the frame as SS:BP and BOPs. Every call arrives from a
+per-function stub of one fixed shape:
+
+```
+push word <arg byte count>
+push word 0
+push word <FUNCTION ID>
+nop / push cs / call 0x2bb6
+```
+
+matching the live frame exactly (`bp+6` ID, `bp+10` arg bytes, `bp+12..` args). **Static
+and dynamic agree, which is what makes either trustworthy.**
+
+⇒ `tools/ne/wowthunks.py` reads that out of any 16-bit module.
+[`docs/research/wow32-call-surface.md`](../../research/wow32-call-surface.md) is the
+result: **82 distinct function IDs with argument sizes — the whole API, enumerated before
+implementing any of it.** Six further stubs call a different thunk (`0xaae8`), listed
+separately rather than folded in.
+
+⚠️ **Only krnl386 has these stubs.** user.exe, gdi.exe, system.drv, keyboard.drv and
+wowexec have **none** — they funnel through KERNEL via the `push api-index / call far
+KERNEL / push argcount` tables behind gdi's 366 additive `__MOD_GDI` relocations (part 4,
+before we knew what they were for). **So the 16↔32 boundary lives in exactly one module.**
+
+Unimplemented BOPs now **step over and log** rather than halting the guest, which turns
+the wall into a trace — flagged in the log as the deliberate lie it is, because any
+finding downstream of a stepped-over BOP is suspect. Serviced calls went **4 → 38**, and
+krnl386 advanced to **message #2 of its own error table**:
+`NTVDM KERNEL: Unable to initialize heap`. On that path it asks for exactly three:
+
+```
+FUNC=0x78  args=4   (c123 000f)
+FUNC=0xcf  args=0
+FUNC=0xb8  args=16  (65ed 000f  0040 0000  3000 0000  8080 0008)
+```
+
+`0x3000` and `0x40` together are `MEM_COMMIT|MEM_RESERVE` and `PAGE_EXECUTE_READWRITE`,
+`0x88080` is ≈544 KB, and the call sits immediately before the heap failure — so `0xb8` is
+very likely the allocator. Recorded as the strong inference it is: the argument **order**
+is not pinned down and two readings are possible.
+
+## Part 16 — Win16 windows get Luna, measured
+
+Asked rather than assumed: ran `sysedit.exe` under **stock ntvdm** and captured the
+desktop ([evidence](../../research/evidence/win16-luna-stock.jpg),
+[title bar](../../research/evidence/win16-luna-titlebar.png)). Full Luna chrome — gradient
+caption, Tahoma-bold title, Luna frame and caption buttons, cream Luna menu bar (not
+classic `#C0C0C0`), a normal taskbar button, and themed MDI child captions.
+
+**Why:** XP's `user.exe` is a 47 KB **thunk stub with no drawing code** — which is exactly
+why it has no BOP stubs of its own and funnels through KERNEL. Every window it creates is
+a genuine HWND; `win32k` draws the non-client area and does not care that the caller is
+16-bit. Theming is applied below the point where bitness is visible.
+
+⇒ **If WOW32 is implemented by forwarding to the real `user32`/`gdi32`, Luna is free**,
+along with taskbar buttons, Alt-Tab and snapping. Reimplementing a window manager inside
+the VDM would mean drawing Luna ourselves *and* losing desktop integration — a fidelity
+regression, not a feature. Client-area *controls* stay classic 3-D (no comctl32 v6
+activation context); that is stock behaviour and the right target, since forcing v6 would
+change control metrics and break Win16 apps that hard-code sizes.
+
+---
+
+## ★ THE NORTH STAR FOR #128
+
+> **Run MS Paint and Notepad from Windows 3.x under NTVDMEX.**
+
+Chosen deliberately, and it is a good bar for the same reasons Doom was for the DOS side:
+they are small, iconic, and they exercise the whole stack honestly — NE loading, the
+KERNEL 16→32 boundary, USER windows and menus, GDI drawing, mouse and keyboard input.
+`PBRUSH.EXE` in particular cannot be faked: it has to paint.
+
+**Where that bar sits today: not started.** No Win16 program has run. `wowexec.exe` — the
+program that would launch an app — has never been executed, and nothing has drawn a pixel.
+What exists is the bootstrap: the module set loads, binds and gets selectors, and krnl386
+itself runs far enough to name what it wants next.
+
+**Distance to it, honestly.** 82 WOW32 functions, none documented anywhere, each needing
+the same reverse-engineering treatment that `168A`, `04F2` and `0x53` got — read the call
+sites, infer, implement, confirm the guest gets further. Then user/gdi's separate
+KERNEL-funnelled path, then wowexec, then the app. krnl386's error table names five
+milestones and one is cleared.
+
 ## Next actions
 
-1. **Decide how to answer vendor function `0x0100`.** krnl386 wants a writable window onto
-   the LDT. Options, none obviously right:
-   - find the LDT's linear address and hand back a real selector onto it — matches stock,
-     but XP owns the LDT and our bookkeeping (`g_ldt[]` + `NtSetLdtEntries`) would be
-     bypassed by every direct write;
-   - hand back a **shadow** table and reconcile it into the real LDT at the points krnl386
-     would have called DPMI anyway — safe, but needs to know when to sync;
-   - ⚠️ **not** an empty writable block: it passes `verw`, gets stored, and krnl386 then
-     manages descriptors that do not exist. Runs, and lies.
-2. **`INT 31h 04F3`** — still unknown, and now more interesting: it appears in the same
-   region as the mode-switch machinery and may be part of the same private contract.
-3. **Plant a SysVars+0x6A table.** Shape measured; still not fatal.
-4. Independent of WOW: **#131 console/stdio**.
+1. **Pin the argument order for `0xb8`**, then implement it with `0x78` and `0xcf` to
+   clear "Unable to initialize heap" — error #2 of five.
+2. **Then `0x56`** (10 sites; the `add sp,nn` after each gives its argument byte count).
+3. Work down [`wow32-call-surface.md`](../../research/wow32-call-surface.md) as krnl386
+   demands each ID; the error table orders the milestones.
+4. Still open, neither yet fatal: **`INT 31h 04F3`** and the **SysVars+0x6A** table.
+5. Independent of WOW: **#131 console/stdio**.
 
-**Rig left with:** IFEO `Debugger` set, `wowtry.flag` present, `pmbp.txt` **present** (five
-breakpoints — delete it to disarm). ⚠️ `ldtprobe.log` is an *untruncated* sink and now
-holds several runs; read the LAST run's lines, not the first.
+**Rig left with:** IFEO `Debugger` **set** (restored and verified after the stock
+screenshot), `wowtry.flag` **present**, `pmbp.txt` **present** (delete to disarm), and the
+WOW module set staged in `guest/ne/` on the build machine. DOS regression verified this
+session: `selftest.com` **8/8 PASS**.
+⚠️ `C:\ntvdmex\ldtprobe.log` is an **untruncated** sink holding many runs — read the LAST
+run's lines.

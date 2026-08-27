@@ -25,7 +25,21 @@ Protection territory — but by an Image File Execution Options `Debugger` value
 `ntvdm.exe`, which achieves the same routing and is reversible with one `reg delete`.
 
 **The bar it was built against:** run real DOS games well — Doom, Skyroads, ZAR — with
-flawless sound.
+flawless sound. **That bar is met** (Doom is fully playable, sound and mouse included).
+
+### ★ The north star now: **run MS Paint and Notepad from Windows 3.x**
+
+The DOS half works, so the goal moved to the Win16 half:
+
+> **Run MS Paint (`PBRUSH.EXE`) and Notepad (`NOTEPAD.EXE`) from Windows 3.x under
+> NTVDMEX.**
+
+A good bar for the same reasons Doom was: small, iconic, and impossible to fake. Between
+them they exercise the whole stack — NE loading, the KERNEL 16→32 boundary, USER windows
+and menus, GDI drawing, mouse and keyboard. Paint in particular has to actually paint.
+
+**Status: not started.** No Win16 program has run yet; `wowexec.exe` has never executed
+and nothing has drawn a pixel. What works is the *bootstrap* — see #128 below.
 
 ---
 
@@ -48,7 +62,7 @@ flawless sound.
 
 | | Why it matters |
 |---|---|
-| **Win16 / WOW — loader done, nothing executes yet** | `ntvdm.exe` is *also* the host for every 16-bit **Windows** program. The NE loader now loads, relocates and binds the **whole** XP WOW module set on real hardware — but nothing is executed yet, and there is no 16:16↔flat thunking. Since interception is an IFEO key on `ntvdm.exe`, and Win16 launches go through `ntvdm.exe` too, **installing NTVDMEX permanently would break every 16-bit Windows app today**. → [#128](https://github.com/MrMatthewLayton/ntvdmex/issues/128) |
+| **Win16 / WOW — bootstrap runs, no app yet** | `ntvdm.exe` is *also* the host for every 16-bit **Windows** program. The NE loader now loads, relocates and binds the **whole** XP WOW module set on real hardware — but nothing is executed yet, and there is no 16:16↔flat thunking. Since interception is an IFEO key on `ntvdm.exe`, and Win16 launches go through `ntvdm.exe` too, **installing NTVDMEX permanently would break every 16-bit Windows app today**. → [#128](https://github.com/MrMatthewLayton/ntvdmex/issues/128) |
 | **Console/stdio integration** | DOS output is buffered and flushed to `CONOUT$` at exit, so shell redirection and piping are bypassed and every DOS program pops a window. Blocks non-interactive use. |
 | **In-guest redirection** | `echo x > file` writes to the screen and leaves the file 0 bytes. Three fixes attempted, all at the wrong end. |
 | **No INT 13h / INT 25h / 26h** | No direct disk access. |
@@ -173,6 +187,7 @@ day on this project is to measure stock `ntvdm` by accident and believe the resu
 | [`docs/log/sessions/`](log/sessions/) | The day-by-day archive, verbatim, refutations included. |
 | [`docs/decisions/`](decisions/) | Architecture decision records. |
 | [`docs/research/`](research/) | Raw findings — disassembly, kernel RE, oracle disagreements, measurement runs. |
+| [`docs/research/wow32-call-surface.md`](research/wow32-call-surface.md) | **The 82 WOW32 functions krnl386 needs**, with argument sizes. The #128 work list. |
 | [`docs/research/evidence/`](research/evidence/) | Screen captures that back specific claims. |
 | [`docs/ROADMAP.md`](ROADMAP.md) | Milestones. |
 | [`docs/GLOSSARY.md`](GLOSSARY.md) | VDM, VDD, DPMI, WOW, thunk, BOP, IFEO… |
