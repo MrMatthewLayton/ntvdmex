@@ -424,6 +424,49 @@ DGROUP was exactly as large as its initialised data and any local allocation wou
 off the end. Now `0x1ba2 + 0x200 = 0x1da2`. It does not by itself move the frontier.
 
 
+## Part 15 — ★ there is no safe value: the buffer must hold the REAL header
+
+Two loader-hygiene fixes, made because they are right rather than because they were
+expected to help:
+
+- **The host pool now goes first**, as low as possible. Allocated late it landed at
+  `0x1ab9`, *inside* krnl386's 64 KB scratch window, so the host's own PM stub table sat
+  in the middle of the guest's scratch and was read back as an NE header. Host memory
+  belongs below the guest's, not in the middle of it.
+- **The stack block is zeroed.** A loader hands out clean memory, and here it is
+  load-bearing rather than tidy: krnl386's scratch starts inside that block and whatever
+  is left in it gets *parsed*. Uninitialised memory that is parsed is a bug that reads
+  like a guest fault.
+
+**Neither moved the frontier** — still PM step `0x31`. But the result settles the question
+they were meant to answer.
+
+With the region clean, `ne_cseg` reads **0** instead of `0xc4cf`, and the guest dies in
+**exactly the same place**. The copy loop at `seg1:0xd4e5` is terminated by `loop`, with no
+`jcxz` guard:
+
+```
+d4db  mov cx, es:[0x1c]     ; ne_cseg  -- now 0
+d4e0  mov es:[0x22], di
+d4e5  movsw / movsw / lodsw / and / or / stosw / movsw / stosw
+d4f3  loop 0xd4e5           ; ★ CX=0 decrements to 0xFFFF -> 65536 iterations
+```
+
+512 KB written through `ES:DI`, off the end of the segment, unreflected #GP, silent
+teardown. Confirmed by bisection both before and after: `seg1:0xd4db` hits, `seg1:0xd4f5`
+does not.
+
+⇒ **There is no safe value.** "Zero it and move on" is eliminated, and the loader contract
+from part 14 is the only way through: our NE loader has the file image in `g_wow_img[0]`
+and has to put the header and tables where krnl386 will read them.
+
+⚠️ One more run lost to the same old shape, and caught by the same guard: picking `csbase`
+by sorting the values in a log took the **default PM handler selector's** base rather than
+krnl386's, and armed a breakpoint `0x1410` bytes off. `dpmi_bp_arm`'s `displaced <bytes>`
+line is what showed it — `c1 e9` where `8b 7c` was expected. ★ **Check the displaced bytes
+against the disassembly every time; it is the cheapest guard in the toolkit.**
+
+
 ## Regression
 
 - `selftest.com` **8/8 PASS on real hardware** after the SysVars change — the guest from

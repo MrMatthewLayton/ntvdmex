@@ -184,6 +184,14 @@ and nothing has drawn a pixel. What works is the *bootstrap* — see #128 below.
    header and tables**. Our NE loader has the image in `g_wow_img[0]` and never puts it
    anywhere the guest can see. That is "two loaders, two copies" stated exactly, and it
    is the next piece of work.
+   ⚠️ **AND THERE IS NO SAFE VALUE FOR THAT BUFFER.** Cleaning the region (host pool
+   moved low, stack block zeroed) makes `ne_cseg` read 0 instead of `0xc4cf` and the
+   guest dies in *exactly the same place*: the copy loop at `seg1:0xd4e5` ends in
+   `loop` with no `jcxz` guard, so CX=0 decrements to `0xFFFF` and runs 65536 times.
+   "Zero it and move on" is eliminated — it must be the real header.
+   ▸ Geometry to work from: `base(SS) + SP` there sits `0x12` bytes below the arena PSP,
+   i.e. near the TOP of the stack block, so "the loader puts the header image
+   immediately above krnl386's stack" is the first hypothesis to test.
    ▸ Also fixed on the way: **DGROUP is bigger than the segment in the file** — a Win16
    loader adds `ne_heap` + `ne_stack` to the automatic data segment, and only the
    *header* says so. krnl386 asks for `heap 0x200` and got none.
