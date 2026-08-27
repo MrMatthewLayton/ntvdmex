@@ -11,6 +11,6 @@ Likelihood (L) and Impact (I): Low / Med / High. Ordered by severity.
 | R5 | Bare-metal vs VM device divergence (timers, sound, NIC, video) | Med | Med | Pluggable VDD model isolates host specifics; explicit bare-metal validation each device milestone (ADR-0005) | M3/M7 |
 | R6 | XP-targeting toolchain friction (WDK era vs modern, CRT compatibility) | Med | Low | Settle toolchain during Spike-001; document in spike notes | Spike-001 |
 | R7 | DPMI / DOS-extender protected-mode hosting (not V86) adds a second execution mode | Med | Med | Scope to M4; design address-space manager to handle both real-mode-in-V86 and PM descriptors | M4 |
-| R8 | Legal exposure if relying on leaked NT source | Low | High | Prefer behaviour/disassembly-for-interop; flag any questionable-provenance source before use | reference-projects.md |
+| R8 | Legal exposure if relying on leaked NT source | **Med** | High | Prefer behaviour/disassembly-for-interop; flag any questionable-provenance source before use. ⚠️ Re-rated Low→Med 2026-08-27: `leecher1337/ntvdmx64` is a near-exact match for our problem and its `ntvdmpatch/` is patches against the **leaked NT4 source** — i.e. the trap is attractive, discoverable, and specific to the subsystem we are building. Verdicts now recorded. | [reference-projects.md](reference-projects.md) |
 
 _Review cadence: re-rate at each milestone exit and after Spike-001._

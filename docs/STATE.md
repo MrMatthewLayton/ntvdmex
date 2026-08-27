@@ -148,6 +148,7 @@ day on this project is to measure stock `ntvdm` by accident and believe the resu
 | [`docs/ROADMAP.md`](ROADMAP.md) | Milestones. |
 | [`docs/GLOSSARY.md`](GLOSSARY.md) | VDM, VDD, DPMI, WOW, thunk, BOP, IFEO… |
 | [`docs/risks.md`](risks.md) | Standing risks. |
+| [`docs/reference-projects.md`](reference-projects.md) | **Read before consulting any other NTVDM project.** What we may and may not read, and why. |
 
 ---
 
