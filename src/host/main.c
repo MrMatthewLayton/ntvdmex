@@ -8302,6 +8302,84 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                             }
                             p = zput(p, " -> free (kept: reserved or not allocated)");
                             break; }
+                        case 0x04F1: {                             /* NTVDM-private: allocate */
+                            /* Private twin of 0000. krnl386 reaches it through a
+                               dispatcher at seg1:0x6638 keyed on the DPMI function
+                               number in AL -- AL=0 routes here, AL=0x0B is served
+                               locally by copying the descriptor straight out of the
+                               window (two `movsd`). So the private family is a fast
+                               path for descriptor management: reads come from the
+                               window, and only the operations that must reach the host
+                               become calls. Same contract as 0000: CX descriptors,
+                               base selector in AX. */
+                            DWORD cx4 = VDM_REG(tib, VTIB_ECX) & 0xFFFF; WORD bs;
+                            DWORD k4;
+                            if (!cx4) cx4 = 1;
+                            if (g_ldt_next + (int)cx4 > DPMI_LDT_MAX) {
+                                VDM_REG(tib, VTIB_EFLAGS) |= 1u;
+                                VDM_SET16(tib, VTIB_EAX, 0x8011);
+                                p = zput(p, " -> ENOMEM"); break;
+                            }
+                            bs = (WORD)((g_ldt_next << 3) | 7);
+                            for (k4 = 0; k4 < cx4; ++k4) {
+                                int a = g_ldt_next++;
+                                g_ldt[a].base = 0; g_ldt[a].limit = 0;
+                                g_ldt[a].access = 0xF2; g_ldt[a].flags = 0;
+                                dpmi_install(a);
+                            }
+                            VDM_REG(tib, VTIB_EFLAGS) &= ~1u;
+                            VDM_SET16(tib, VTIB_EAX, bs);
+                            p = zput(p, " -> private-alloc "); p = zhex(p, cx4);
+                            p = zput(p, " sel 0x"); p = zhex(p, bs);
+                            break; }
+                        case 0x04F2: {                             /* NTVDM-private: COMMIT */
+                            /* ★ THE SYNC POINT, AND IT IS THE GUEST TELLING US.
+                                 Every call site has the same shape: write a descriptor
+                                 through the vendor window, `or bl,7`, CX = how many,
+                                 then this. e.g. seg1:0x6089
+                                     mov byte [bx+5],0xf3 / or bl,7 / mov cx,1 / 04F2
+                                 i.e. "I have modified CX descriptors starting at BX --
+                                 make them real". Stock ntvdm needs this for the same
+                                 reason we do: writing the table's memory is not enough,
+                                 the kernel has to be told.
+                               So this REPLACES guesswork with the guest's own
+                               declaration. The blanket reconcile on interrupt entry
+                               stays as a backstop, and if it ever reports anything
+                               after this is implemented, that is a call site issuing a
+                               descriptor write WITHOUT a commit -- worth knowing. */
+                            WORD fsel = (WORD)(VDM_REG(tib, VTIB_EBX) & 0xFFFF);
+                            DWORD fcnt = VDM_REG(tib, VTIB_ECX) & 0xFFFF;
+                            int fidx = fsel >> 3, done = 0;
+                            if (!fcnt) fcnt = 1;
+                            p = zput(p, " commit "); p = zhex(p, fcnt);
+                            p = zput(p, " from sel 0x"); p = zhex(p, fsel);
+                            if (g_wow_shadow) {
+                                DWORD j;
+                                for (j = 0; j < fcnt; ++j) {
+                                    int a = fidx + (int)j;
+                                    const DWORD *e;
+                                    if (a < DPMI_LDT_RESERVED || a >= WOW_SHADOW_ENTRIES) continue;
+                                    e = (const DWORD *)(g_wow_shadow + a * 8);
+                                    v86_set_ldt_entries((WORD)((a << 3) | 7), e[0], e[1],
+                                                        (WORD)((a << 3) | 7), e[0], e[1]);
+                                    g_ldt[a].base   = (e[1] & 0xFF000000u)
+                                                    | ((e[1] & 0xFFu) << 16) | (e[0] >> 16);
+                                    g_ldt[a].limit  = (e[0] & 0xFFFFu) | (e[1] & 0x000F0000u);
+                                    g_ldt[a].access = (BYTE)((e[1] >> 8) & 0xFF);
+                                    g_ldt[a].flags  = (BYTE)((e[1] >> 20) & 0x0F);
+                                    if (a >= g_ldt_next) g_ldt_next = a + 1;
+                                    ++done;
+                                }
+                            }
+                            VDM_REG(tib, VTIB_EFLAGS) &= ~1u;
+                            p = zput(p, " -> installed "); p = zhex(p, (DWORD)done);
+                            if (done) {
+                                p = zput(p, " (idx 0x"); p = zhex(p, (DWORD)fidx);
+                                p = zput(p, " base=0x"); p = zhex(p, g_ldt[fidx].base);
+                                p = zput(p, " acc=0x");  p = zhexb(p, g_ldt[fidx].access);
+                                p = zput(p, ")");
+                            }
+                            break; }
                         case 0x000D: {                             /* allocate SPECIFIC descriptor */
                             /* DPMI 1.0. The client names the selector it wants rather
                                than taking whatever 0000 hands out -- which is exactly
