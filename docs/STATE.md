@@ -99,12 +99,21 @@ flawless sound.
    optional (an earlier note in session 30 says otherwise and is corrected in Part 9).
    ⚠️ **A PM guest cannot reach the IVT**, so any `INT nn` absent from the patcher's
    list stays a raw `CD nn` and silently terminates the VDM. `0x2F` was missing.
-   ★ The `168A` blocker is **CLEARED**: stock's vendor API is PM-only and is a
-   two-function stub (measured with `tools/dostest/vendprobe.asm`); ours matches
-   `DS:SI == "MS-DOS"` and hands back an equivalent. krnl386 now runs on into
-   `INT 31h 0002`. It dies later, at a **genuine fault** rather than an unclaimed
-   interrupt, somewhere in the calls `d762` / `0x6763` / `0x3021` made from `c0c5`.
-   **Next: bracket that fault** (the host's `PMBP_PATH` guest-breakpoint facility exists
+   ★ The `168A` blocker is **CLEARED** (stock's vendor API is PM-only, measured with
+   `tools/dostest/vendprobe.asm`). krnl386 runs on into `INT 31h 0002`, then faults —
+   bracketed with `PMBP_PATH` breakpoints to **`d762`**, which never returns.
+   ★★ **THE CAUSE IS AN ARCHITECTURAL CONSTRAINT, NOT A MISSING STUB.** Vendor function
+   `0x0100` returns a **writable selector onto the LDT itself**: krnl386 takes a selector
+   from DPMI `0000`, masks it to a descriptor-table offset (`and al,0xf8`) and writes
+   descriptor bytes through it. We decline that function, so `[cs:0x32]` is 0, and
+   `0x5888` does `mov ds,[cs:0x32]` then dereferences — `#GP`, silent VDM kill.
+   NTVDM's WOW gives krnl386 **direct write access to the descriptor table**. Deciding how
+   to answer that is the largest open design question in this epic — and an empty writable
+   block is the one wrong answer (passes `verw`, then it manages descriptors that do not
+   exist).
+   Still unknown: **`INT 31h 04F3`**.
+   ⚠️ Before consulting any other NTVDM project, read
+   [`reference-projects.md`](reference-projects.md).
    for this). Still unknown: **`INT 31h 04F3`**.
 
 2. **[#131] Console/stdio integration.** Independent of WOW and needed regardless:

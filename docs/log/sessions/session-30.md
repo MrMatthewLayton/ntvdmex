@@ -755,16 +755,107 @@ returning into protected-mode execution at `c0c5`, which then calls `d762`, `0x6
 `0x3021`. So it is a genuine fault somewhere in there, not a missing interrupt — a
 different class of problem from every death so far this session.
 
+---
+
+## Part 11 — the fault bracketed in one round, and a second correction I owe
+
+### Reference projects, first
+
+`leecher1337/ntvdmx64` came up. Verdict recorded in [`docs/reference-projects.md`](../../reference-projects.md)
+(the file `risks.md` R8 has always pointed at and which did not exist): **do not read
+`ntvdmpatch/`** — patches against the leaked NT4 source, no LICENSE, and a patch quotes
+its context, so reading one is reading leaked Microsoft source *for the exact subsystem we
+are implementing*. Worse than a licence problem, because provenance taint cannot be purged
+from history the way `DOOM1.WAD` was. Only the readme prose and directory listing were read.
+
+★ **And a useful negative result:** neither open unknown is publicly documented anywhere.
+`INT 31h 04F3` is absent from the DPMI 0.9 spec and RBIL; SysVars`+0x6A` is past the
+documented end of the list of lists; and Microsoft's own KB Q220155 *"Troubleshooting
+NTVDM and WOW Startup Errors"* documents **no message text at all**. The rig-as-oracle
+method is not a fallback here — it is the only source, and it has already answered three
+questions no external project could have.
+
+### The fault: three candidates to one, in a single rig round
+
+`PMBP_PATH` breakpoints at the return site of each call made from `c0c5`:
+
+```
+0D4D9  c0c9  about to call d762      <- HIT
+0D4DC  c0cc  d762 RETURNED           <- never fired
+0D4E1  c0d1  0x6763 RETURNED         <- never fired
+0D4E6  c0d6  0x3021 RETURNED         <- never fired
+```
+
+One hit, and it is the *entry*. **`d762` never returns.** That is what the breakpoint
+facility was built for and it cost one 30-second round.
+
+### ★ And the cause is the vendor function I declined
+
+Inside `d762`, `[cs:0x32]` is zero — we returned CF=1 for vendor function `0x0100`, so
+krnl386 never stored a selector there — and it takes the `jz d7c4` branch. That branch
+calls `0x5888` four times, and `0x5888` opens:
+
+```
+5890  mov si,[0x5ac]
+5894  mov ds,word [cs:0x32]     <- DS = 0
+5899  mov dx,cx
+589b  mov ax,[si]               <- dereference -> #GP -> VDM silently terminated
+```
+
+Loading a null DS is legal. Dereferencing it four bytes later is not.
+
+⚠️ **CORRECTION TO PART 10.** I wrote that both failure arms at the call site *"rejoin the
+normal path, so declining a function is explicitly tolerated by the guest's own code"*.
+That is true **locally** and false **globally**: krnl386 guards `[cs:0x32]` at `d767` and
+does **not** guard it at `5894`. I read the guard and generalised from it.
+
+This is the *same mistake shape* as the `168A` one two parts ago — reading a check and
+inferring the program's behaviour from it, rather than following through to everywhere the
+value is used. Twice in one session, on the same slot, from the same habit. The rule that
+would have caught both: **a guard proves the author considered one path, not that every
+path is guarded.** Grep for every reference to the address before concluding it is optional.
+
+### ★ What `[cs:0x32]` actually is — and why this is an architectural finding
+
+The block we skip initialises it:
+
+```
+d76f  mov es,word [cs:0x32]
+d777  mov ax,0 / call <INT 31h wrapper>   ; DPMI 0000: allocate 1 descriptor
+d77d  and al,0xf8                         ; selector -> descriptor-table BYTE OFFSET
+d77f  mov [0x5ac],ax
+d784  mov word [es:si],0xffff             ; write AT that offset, through [cs:0x32]
+d789  mov word [es:si+5],0x0f00           ; ...at descriptor byte 5, the access byte
+```
+
+krnl386 takes a selector from DPMI `0000`, converts it to a **table offset**, and writes
+descriptor bytes through `[cs:0x32]`. And `0x5888` then pops a free-list entry and writes
+`[di+5] = 0x0F` — access byte, P=0, i.e. *mark this descriptor not-present*.
+
+⇒ **The "MS-DOS" vendor API's function `0x0100` returns a writable selector onto the LDT
+itself.** That is why stock's `0x0137` must pass `verw`, and why the API is mandatory:
+NTVDM's WOW hands krnl386 **direct write access to the descriptor table** so it can manage
+selectors without a DPMI call per operation.
+
+That is a real architectural constraint, not a missing stub, and it is the largest open
+design question this epic has produced so far.
+
 ## Next actions
 
-1. **Find the fault after `c0c5`.** It is not an unclaimed INT (the residual histogram
-   rules that out for the vectors it reaches). The host has a guest-breakpoint facility
-   (`PMBP_PATH`) that was built for exactly this; `d762`, `0x6763`, `0x3021` are the three
-   calls to bracket.
-2. **`INT 31h 04F3`** — still unknown, still NTVDM-private, and now the only other
-   measured-but-unanswered call in krnl386's list.
-3. **Plant a SysVars+0x6A table.** Shape measured off stock; not yet fatal.
+1. **Decide how to answer vendor function `0x0100`.** krnl386 wants a writable window onto
+   the LDT. Options, none obviously right:
+   - find the LDT's linear address and hand back a real selector onto it — matches stock,
+     but XP owns the LDT and our bookkeeping (`g_ldt[]` + `NtSetLdtEntries`) would be
+     bypassed by every direct write;
+   - hand back a **shadow** table and reconcile it into the real LDT at the points krnl386
+     would have called DPMI anyway — safe, but needs to know when to sync;
+   - ⚠️ **not** an empty writable block: it passes `verw`, gets stored, and krnl386 then
+     manages descriptors that do not exist. Runs, and lies.
+2. **`INT 31h 04F3`** — still unknown, and now more interesting: it appears in the same
+   region as the mode-switch machinery and may be part of the same private contract.
+3. **Plant a SysVars+0x6A table.** Shape measured; still not fatal.
 4. Independent of WOW: **#131 console/stdio**.
 
-**Rig left with:** IFEO `Debugger` **set**, `wowtry.flag` **present**, the WOW module set
-in `guest/ne/`. DOS regression verified this session: `selftest.com` **8/8 PASS**.
+**Rig left with:** IFEO `Debugger` set, `wowtry.flag` present, `pmbp.txt` **present** (five
+breakpoints — delete it to disarm). ⚠️ `ldtprobe.log` is an *untruncated* sink and now
+holds several runs; read the LAST run's lines, not the first.
