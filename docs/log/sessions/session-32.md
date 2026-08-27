@@ -380,6 +380,78 @@ DPMI: residual CD nn SITES (linear, first 24): 0x77d3=01 0x8482=75 0x9218=99 0x9
 `0xcbfc` is `0x6430 + 0x67cc` — the very site, predicted before the run and confirmed by it.
 `0xa267=02`, `0xb729=03`, `0x96b7=30`, `0xcb84=2a` are the other plausible ones.
 
+## Part 13 — ★ the 64 KB scratch window was 48 KB of somebody else's memory
+
+Found while walking, and true regardless of the killer. krnl386 builds a **64 KB** selector
+over `base(SS) + SP` and treats everything above the header image as its scratch arena — we
+hand it the size in CX (`0xFFF0 - 0x4000 = 0xBFF0`). The block was allocated as stack +
+header image only:
+
+```
+SS                    para 0x1abf
+header selector base  para 0x1bbf   (64 KB window -> para 0x2bbf)
+our block ENDS        para 0x1fbf
+krnl386's PSP/arena   para 0x1fc0   ★ inside the window
+```
+
+So for 48 KB of its length the "scratch arena" we promised was krnl386's **own PSP and arena
+block**, which it carves from independently — two owners of one region, the exact failure the
+session-31 memory-model note was written about, reappearing one allocation later.
+
+Fixed by allocating the whole window (`WOW_WINDOW_PARAS = 0x1000`), which pushed the PSP block
+from para `0x1fc0` to `0x2bc0` — exactly 64 KB higher, no overlap. ⚠️ It did **not** move the
+wall: the run still ends in the same place. Recorded as a real defect closed, not as progress.
+
+⚠️ And it moved every address: krnl386's segment-1 PM copy went `0x20760` → `0x2c760`, so the
+armed breakpoints silently stopped hitting. *Derive the base per run from the `acc=0xfb` commit
+line; never carry it between runs.* The resume block says this and it still cost a round.
+
+## Part 14 — ★★★ THE KILLER: krnl386 overwrites the code it is executing
+
+The walk ended at `seg1:0xc4d8`, with the next armed site `0xc4e5` never reached. Exactly one
+call sits between them — `call 0xcf9e` at `seg1:0xc4dd` — and bisecting inside it puts the
+last hit on `seg1:0xcfe4`:
+
+```
+cfa1  mov  ax,[0x5a0]         ; the arena selector
+cfab  call 0x63f3             ; -> eax
+cfae  mov  edx,[eax+0xc]      ; its size
+cfb3  shr  edx,4              ;    ...in paragraphs
+cfc2  xchg [0x5a4],bx         ; bx = accumulated gap, and zero it
+cfca  sub  dx,bx
+cfd0  movzx esi,bx / shl esi,4 ; src = gap
+cfd8  xor  edi,edi             ; dst = 0
+cfdb  movzx ecx,dx / shl ecx,2
+cfe4  rep movsd                ★ ARENA COMPACTION
+```
+
+Registers at the fatal hit, which is the first time this session has had the faulting
+instruction *and* its operands:
+
+```
+ECX=0x000202e0  -> 0x202e0 dwords = 0x80B80 bytes = 514 KB
+ESI=0x000038a0  EDI=0x00000000  DS=ES=0x01b7
+```
+
+Selector `0x01b7` is `base=0x0001bbe0 limit=0x0008441f` — it spans `0x1bbe0 .. 0xA0000`,
+sized deliberately to the 640 KB line. So **the copy is entirely in bounds**:
+
+```
+dst 0x1bbe0..0x9c760      src 0x1f480..0xa0000      both legal
+```
+
+★★★ **And krnl386's own segment-1 PM copy — the code it is executing — is at CS base
+`0x2c760`, which lies inside that destination range.** The `rep movsd` overwrites itself
+mid-instruction. That kills it instantly, with no fault to reflect, no crash record and no
+surviving thread, which is every symptom this session has been chasing, in one instruction.
+
+The gap being closed is `bx = 0x38a` paragraphs (14 KB), accumulated at `seg1:0xc4a3`
+(`sub ax,[0x5a6]`) and `0xc4d8`. So the question for next time is **why our layout leaves a
+14 KB hole below live code**: real WOW must either compact before anything live is in the
+arena, or never accumulate that gap. `[0x5a6]` is the arena size we hand over in CX, so the
+CX/`[0x5a6]` contract and the order in which krnl386's segments are placed relative to the
+arena are the two things to examine.
+
 ## Regression
 
 - `selftest.com` **8/8 PASS on real hardware** — the other guest class, run because the

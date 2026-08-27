@@ -6668,6 +6668,35 @@ static int wow_place_v86(dos_machine_t *mp, WORD *ecs, WORD *eip,
     /* The NE header + its tables, copied in immediately above the stack. 16 KB is
        comfortably more than krnl386's tables need and is bounded by the file. */
     enum { WOW_HDRIMG_PARAS = 0x400 };
+    /* ── ★★★ AND THE WHOLE 64 KB OF IT MUST BE OURS TO GIVE. ───────────────────────
+         krnl386 builds a SIXTY-FOUR KILOBYTE selector over `base(SS) + SP` (seg1:0xc17e)
+         and treats everything above the header image as its scratch arena -- we even
+         hand it the size in CX (0xFFF0 - 0x4000 = 0xBFF0 bytes). But the block was
+         allocated as stack + header image only, 0x500 paragraphs, so the selector ran
+         0xBFFF bytes PAST the end of what DOS had given us:
+
+             SS                      para 0x1abf
+             header selector base    para 0x1bbf   (64 KB window -> para 0x2bbf)
+             our block ENDS          para 0x1fbf
+             krnl386's PSP/arena     para 0x1fc0   ★ inside the window
+
+         i.e. the scratch arena we promised it was, for 48 KB of its length, its OWN
+         PSP and arena block -- which it is independently carving from. Two owners of
+         one region, which is the exact failure the memory-model note above was written
+         about, reappearing one allocation later.
+
+       ⚠ HOW IT SURFACED. seg1:0xcfe4 is a `rep movsd` that COMPACTS that arena -- it
+         copies `dx` paragraphs from offset `bx*16` down to offset 0 inside the very
+         same selector. Walking the guest with breakpoints put the last hit at
+         seg1:0xc4d8 and the next armed site (0xc4e5) was never reached; between them
+         sits exactly one call, `call 0xcf9e` at seg1:0xc4dd, and that is the routine.
+         A block copy striding through memory a second owner is using explains a host
+         that dies with no VDM fault, no reflect and no crash record.
+
+       ⇒ So allocate the window, not just the header. WOW_HDRIMG_PARAS stays the size of
+         the header IMAGE (and the CX arithmetic above it is unchanged); this is the
+         size of the SELECTOR, and it is the thing that has to be real memory. */
+    enum { WOW_WINDOW_PARAS = 0x1000 };          /* 64 KB -- the whole scratch selector */
     ne_module *ne = &g_wow_mod[0];
     uint8_t *img = g_wow_img[0];
     char m[400], *q;
@@ -6863,7 +6892,7 @@ static int wow_place_v86(dos_machine_t *mp, WORD *ecs, WORD *eip,
          `base(SS) + 0x1000`. Allocated separately they came out one paragraph apart
          and the log said so ("NOT ADJACENT") rather than leaving it to be discovered
          downstream. Stack occupies [0, 0x1000); the NE header image follows it. */
-    if (dos_alloc(NULL, mp->first_mcb, WOW_STACK_PARAS + WOW_HDRIMG_PARAS,
+    if (dos_alloc(NULL, mp->first_mcb, WOW_STACK_PARAS + WOW_WINDOW_PARAS,
                   &sseg, &smax) || !sseg) {
         q = m; q = zput(q, "WOWV86: no memory for the stack + header image\r\n");
         log_append(LDTLOG_PATH, m, q); return -1;
@@ -6902,7 +6931,10 @@ static int wow_place_v86(dos_machine_t *mp, WORD *ecs, WORD *eip,
         volatile BYTE *hb = (volatile BYTE *)(ULONG_PTR)((DWORD)hseg << 4);
         DWORD k;
         if (hlen > (DWORD)WOW_HDRIMG_PARAS * 16u) hlen = (DWORD)WOW_HDRIMG_PARAS * 16u;
-        for (k = 0; k < (DWORD)WOW_HDRIMG_PARAS * 16u; ++k) hb[k] = 0;
+        /* Zero the WHOLE selector, not just the header image: everything above it is
+           krnl386's scratch arena, it is parsed as structured data, and uninitialised
+           memory that gets parsed is a bug that reads like a guest fault. */
+        for (k = 0; k < (DWORD)WOW_WINDOW_PARAS * 16u; ++k) hb[k] = 0;
         for (k = 0; k < hlen; ++k) hb[k] = img[ne->hdr + k];
 
         /* ⚠ NE_SEG_RELOCS IS LEFT SET HERE, AND THAT IS A CORRECTION. Clearing it in
