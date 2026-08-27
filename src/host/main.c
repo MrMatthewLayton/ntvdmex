@@ -6548,6 +6548,9 @@ static int wow_place_v86(dos_machine_t *mp, WORD *ecs, WORD *eip,
        paragraphs is generous for an init path and cheap; if it ever overruns, that is
        a stack overflow into the block below and it will look like one. */
     enum { WOW_STACK_PARAS = 0x100 };            /* 4 KB */
+    /* The NE header + its tables, copied in immediately above the stack. 16 KB is
+       comfortably more than krnl386's tables need and is bounded by the file. */
+    enum { WOW_HDRIMG_PARAS = 0x400 };
     ne_module *ne = &g_wow_mod[0];
     uint8_t *img = g_wow_img[0];
     char m[400], *q;
@@ -6668,8 +6671,14 @@ static int wow_place_v86(dos_machine_t *mp, WORD *ecs, WORD *eip,
         }
     }
 
-    if (dos_alloc(NULL, mp->first_mcb, WOW_STACK_PARAS, &sseg, &smax) || !sseg) {
-        q = m; q = zput(q, "WOWV86: no memory for a stack\r\n");
+    /* ⚠ ONE BLOCK FOR BOTH, because DOS puts a one-paragraph MCB header between any
+         two allocations and krnl386 needs the header image to be EXACTLY at
+         `base(SS) + 0x1000`. Allocated separately they came out one paragraph apart
+         and the log said so ("NOT ADJACENT") rather than leaving it to be discovered
+         downstream. Stack occupies [0, 0x1000); the NE header image follows it. */
+    if (dos_alloc(NULL, mp->first_mcb, WOW_STACK_PARAS + WOW_HDRIMG_PARAS,
+                  &sseg, &smax) || !sseg) {
+        q = m; q = zput(q, "WOWV86: no memory for the stack + header image\r\n");
         log_append(LDTLOG_PATH, m, q); return -1;
     }
     /* ZERO IT. A loader hands out clean memory, and here it is load-bearing rather
@@ -6678,6 +6687,45 @@ static int wow_place_v86(dos_machine_t *mp, WORD *ecs, WORD *eip,
        PARSED is a bug that reads like a guest fault. */
     {   volatile BYTE *sb = (volatile BYTE *)(ULONG_PTR)((DWORD)sseg << 4);
         DWORD k; for (k = 0; k < (DWORD)WOW_STACK_PARAS * 16u; ++k) sb[k] = 0; }
+
+    /* ── ★ THE NE HEADER GOES IMMEDIATELY ABOVE THE STACK. ─────────────────────────
+         krnl386 builds a selector at seg1:0xc17e over `base(SS) + SP` and hands it to
+         its own "load the KERNEL EXE header" routine (seg1:0xd45a) as the segment to
+         parse -- `mov ds,[bp+8]` then `ne_enttab` at DS:[4] and `ne_cseg` at DS:[0x1c].
+         NOTHING in its bring-up reads that header from disk: seg1:0x1812 is
+         OpenFile(..., OF_EXIST), the 0xd02b chain is structure-building, and the
+         handle->selector path at seg1:0xcf9f that could replace the selector never
+         runs (all three measured). So the LOADER has to put the header there.
+
+       ★ AND THE ADDRESS IS FIXED, WHICH IS WHAT MAKES THIS POSSIBLE. Measured on the
+         rig: SS:SP is 0x1f:0x0FFE at seg1:0xc0d6, 0xc123 AND 0xc164 -- the entry SP,
+         unchanged, because krnl386's calls up to that point are balanced. (An earlier
+         reading of a different layout suggested the base was call-depth dependent and
+         therefore unplaceable; it was not, and the three-point measurement is what
+         settled it.) So `base(SS) + SP` is the top of this stack block, and the header
+         belongs in the paragraph immediately after it -- with SP entering at the very
+         top rather than top-2, so the two coincide exactly.
+
+       ⚠ Copy from the NE HEADER, not from the start of the file: every table offset in
+         an NE (`enttab`, `segtab`, `rsrctab`, `restab`, `modtab`, `imptab`) is relative
+         to the header, so the header must land at offset 0 of the selector for any of
+         them to resolve. */
+    {   WORD hseg = (WORD)(sseg + WOW_STACK_PARAS);      /* same block, no MCB between */
+        DWORD hlen = ne->img_len > ne->hdr ? ne->img_len - ne->hdr : 0;
+        volatile BYTE *hb = (volatile BYTE *)(ULONG_PTR)((DWORD)hseg << 4);
+        DWORD k;
+        if (hlen > (DWORD)WOW_HDRIMG_PARAS * 16u) hlen = (DWORD)WOW_HDRIMG_PARAS * 16u;
+        for (k = 0; k < (DWORD)WOW_HDRIMG_PARAS * 16u; ++k) hb[k] = 0;
+        for (k = 0; k < hlen; ++k) hb[k] = img[ne->hdr + k];
+        q = m;
+        q = zput(q, "WOWV86: NE header image at para 0x"); q = zhex(q, hseg);
+        q = zput(q, " = SS 0x");  q = zhex(q, sseg);
+        q = zput(q, " + 0x1000 (0x"); q = zhex(q, hlen);
+        q = zput(q, " bytes from file offset 0x"); q = zhex(q, ne->hdr);
+        q = zput(q, ", ne_cseg=0x"); q = zhex(q, ne->n_seg);
+        q = zput(q, ")\r\n");
+        log_append(LDTLOG_PATH, m, q);
+    }
 
     if (!ne->autodata || ne->autodata > ne->n_seg) {
         q = m; q = zput(q, "WOWV86: autodata segment out of range\r\n");
@@ -6752,7 +6800,12 @@ static int wow_place_v86(dos_machine_t *mp, WORD *ecs, WORD *eip,
     *eip = (WORD)(ne->csip & 0xFFFF);
     *eds = ne->seg[ne->autodata - 1].seg;
     *ess = sseg;
-    *esp = (WORD)(WOW_STACK_PARAS << 4) - 2;
+    /* ⚠ THE VERY TOP, not top-2. `base(SS) + SP` is what krnl386 turns into its
+         header selector, and it must land exactly on the header image placed in the
+         next paragraph -- two bytes low and every table offset is two bytes out.
+         An empty 16-bit stack conventionally has SP at the top of the segment anyway;
+         the -2 was a nicety that is now load-bearing in the wrong direction. */
+    *esp = (WORD)(WOW_STACK_PARAS << 4);
 
     q = m;
     q = zput(q, "WOWV86: relocated to paragraphs, sites=0x"); q = zhex(q, ne->sites);
