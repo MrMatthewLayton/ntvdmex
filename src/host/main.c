@@ -701,6 +701,12 @@ static BYTE  g_bp_pending[DPMI_BP_MAX];  /* skipped -> needs re-arming once EIP 
 static DWORD g_bp_rep[DPMI_BP_MAX];
 static BYTE  g_bp_orig[DPMI_BP_MAX][2]; /* the two bytes we displaced                  */
 static BYTE  g_bp_armed[DPMI_BP_MAX];
+/* How many times each breakpoint has been PLANTED, and the ceiling. A repeating
+   breakpoint on a hot instruction is a log bomb: one mis-sequenced re-arm fired
+   340,808 times and produced a 268 MB log in a single run. Past the ceiling the site
+   is simply left unarmed -- it has stopped answering a question by then. */
+#define DPMI_BP_ARM_MAX 512
+static DWORD g_bp_arms[DPMI_BP_MAX];
 static int   g_bp_n = 0;
 
 /* --- run 52 hang-diagnostic telemetry (GH #2) ---------------------------------------
@@ -7671,6 +7677,24 @@ static void dpmi_bp_arm(void)
            the buffer has to be big enough for the LONGEST line, not the usual one. */
         char lb[320], *q = lb;
         if (lin < 0x600) continue;
+        /* ── ★★ NEVER RE-PLANT A BREAKPOINT THE GUEST IS STANDING ON. ──────────────
+             A hit removes the BOP and, for a repeating breakpoint, sets g_bp_pending;
+             dpmi_bp_rearm_pending() then clears that flag only once the guest's EIP has
+             moved off the site, and re-arms. That protocol is correct -- but it lived
+             entirely in the CALLER, so this function would happily re-plant the BOP
+             under a guest that has not executed the instruction yet.
+           ⚠ MEASURED, IMMEDIATELY: arming before every PM entry (needed because krnl386
+             loads its own segments late, so a breakpoint inside them is skipped at setup
+             while the memory still reads 00 00) hit seg1:0x5a42 **340,808 times** with
+             byte-identical registers and one millisecond on the clock, and wrote a
+             **268 MB** log. The guest was not looping; the debugger was holding it in
+             place. Honouring `pending` here makes dpmi_bp_arm() safe to call from
+             anywhere, which is what the late-loading case needs. */
+        if (g_bp_pending[k]) continue;
+        /* And a hard ceiling, because the failure above cost a run and a quarter of a
+           gigabyte before anything noticed. A breakpoint that has fired this often is
+           not answering a question any more. */
+        if (g_bp_arms[k] > DPMI_BP_ARM_MAX) continue;
         b = (volatile BYTE *)(ULONG_PTR)lin;
         /* ► THE TARGET NEED NOT EXIST YET, and reading it blindly faults in OUR OWN
              process. A breakpoint is usually placed on a module the client has not
@@ -7743,6 +7767,7 @@ static void dpmi_bp_arm(void)
             }
         }
         g_bp_orig[k][0] = b[0]; g_bp_orig[k][1] = b[1];
+        ++g_bp_arms[k];
         if (g_bp_mode[k] == 1) {
             b[0] = 0xCC;                      /* INT3: one byte, fits over CLI/STI */
         } else {
@@ -12835,6 +12860,29 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                       for (v = 0; v < 256; ++v) hist[v] = 0;
                       for (o2 = 0; o2 < 0xFFFF; ++o2)
                           if (cs[o2] == 0xCD) { ++hist[cs[o2 + 1]]; ++tot; }
+                      /* ── ★★ AND THE OFFSETS, NOT JUST THE HISTOGRAM. ──────────────────
+                           A histogram says a vector is a suspect; it does not say WHERE,
+                           so acting on it still means reading the binary by hand. Session
+                           32 needed exactly that: `INT 2` at seg1:0x67cc turned out to be
+                           REAL CODE the guest executes, left RAW by the boundary vote --
+                           proved by arming a breakpoint on it and reading back
+                           `displaced cd 02` (a patched site is an INT site, and
+                           dpmi_bp_arm refuses those, so it could not have armed at all).
+                         A raw `CD nn` in protected mode is not a warning, it is a silent
+                           VDM teardown waiting for the guest to take that branch. Print the
+                           addresses so the next one is a breakpoint away instead of a
+                           disassembly session. Bounded so a data-heavy region cannot flood. */
+                      {   DWORD shown = 0;
+                          p = zput(p, "DPMI: residual CD nn SITES (linear, first 24):");
+                          for (o2 = 0; o2 < 0xFFFF && shown < 24; ++o2)
+                              if (cs[o2] == 0xCD) {
+                                  p = zput(p, " 0x"); p = zhex(p, (DWORD)(ULONG_PTR)(cs + o2));
+                                  p = zput(p, "="); p = zhexb(p, cs[o2 + 1]);
+                                  ++shown;
+                              }
+                          p = zput(p, "\r\n");
+                          log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                      }
                       p = zput(p, "DPMI: residual CD nn in the region: "); p = zhex(p, tot);
                       p = zput(p, " (unclaimed vectors, upper bound)");
                       for (v = 0; v < 256; ++v) if (hist[v]) {
@@ -13442,6 +13490,23 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                              the stretch. */
                         LARGE_INTEGER t0, t1;
                         DWORD s_cs = VDM_REG(tib, VTIB_CS) & 0xFFFF, s_eip = dpmi_pm_eip(tib);
+                        /* ── ★★ RE-ARM BEFORE EVERY ENTRY, BECAUSE THE TARGET APPEARS LATE. ──
+                             dpmi_bp_arm() skips a site that still reads 00 00 -- correctly,
+                             since arming into memory the client has not loaded yet was a
+                             previous session's silent no-op. It is then only retried when a
+                             code region is patched, and that was enough while the CLIENT's
+                             own extender declared its modules.
+                           ⚠ It is NOT enough now. krnl386 LOADS ITS OWN SEGMENTS: it copies
+                             segment 1 to linear 0x20760 and installs the descriptor through
+                             04F2, and the copy may land after the last patch pass -- so a
+                             breakpoint inside it is skipped at setup (still zeroes) and never
+                             looked at again. Two breakpoints armed on `seg1:0x5a42`/`0x5a50`
+                             produced no "armed" line and no hit at all, which reads exactly
+                             like "the guest never got there" and means nothing of the sort.
+                           Cheap: a handful of entries, and only when a list was loaded. The
+                             guest is the ONLY thing still running when the process is killed,
+                             so this is the last instrument standing -- it has to actually arm. */
+                        if (g_bp_n) dpmi_bp_arm();
                         QueryPerformanceCounter(&t0);
                         dpmi_enter_pm(tib);
                         QueryPerformanceCounter(&t1);

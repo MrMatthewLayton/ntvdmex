@@ -304,6 +304,82 @@ is exactly the documented "silent VDM teardown", and it is now bounded by three 
 exclusions rather than assumed.
 
 
+## Part 11 — ★★ the breakpoint instrument, repaired, and then used
+
+With every host-side instrument dead at the moment of interest, one thing still runs: **the
+guest**. Breakpoints are planted in guest memory and hit by guest execution, so they need no
+host thread. They were also silently useless.
+
+**Why they never armed.** `dpmi_bp_arm()` skips a site that still reads `00 00` — correct,
+since arming into memory the client has not loaded was an earlier session's silent no-op —
+and then only retries when a *code region is patched*. That sufficed while the client's
+extender declared its modules. It does not now: krnl386 loads its own segments, and the copy
+at `0x20760` lands after the last patch pass, so a breakpoint inside it is skipped at setup
+and never looked at again. Two breakpoints produced **no "armed" line and no hit**, which
+reads exactly like "the guest never got there" and means nothing of the sort.
+
+**And why re-arming naively was worse.** Arming before every PM entry bypassed the
+`g_bp_pending` protocol — a hit removes the BOP and re-arms only once EIP has moved off the
+site — so the BOP was re-planted under a guest that had not executed the instruction yet.
+Result: `seg1:0x5a42` hit **340,808 times** with byte-identical registers on a single
+millisecond, and a **268 MB** log. The guest was not looping; the debugger was holding it in
+place. Fixed by honouring `pending` inside `dpmi_bp_arm()` itself (so it is safe to call from
+anywhere) plus a hard `DPMI_BP_ARM_MAX` ceiling, because that cost a run and a quarter of a
+gigabyte before anything noticed.
+
+**Then it worked, and the guest walked.** Five hops, each measured, each `displaced` field
+checked against `nedis.py`:
+
+```
+seg1:0x5a42 (or si,7)        hit   -- the selector allocator's epilogue
+seg1:0x5a50 (ret 8)          hit   -- returns selector 0x022f over base 0x03b14000
+   -> stack at SS:SP gives the caller: 48 46
+seg1:0x7ed4 ... 0x7f11       hit   -- and `call 0x63b4` RETURNS
+   -> stack gives the next caller: 0x4648
+seg1:0x4648 mov es,di        hit   -- di = 0
+seg1:0x464a mov fs,di        hit   -- ES now 0x0000; FS=NULL SURVIVES (a real suspect, cleared)
+seg1:0x464c call 0x67b9      hit
+seg1:0x67b9 / 0x67bf         hit TWICE
+```
+
+## Part 12 — ★★★ there ARE raw `INT nn` in the code krnl386 executes
+
+`seg1:0x67b9` is:
+
+```
+67b9  dec  word [0x1e]
+67bd  jne  0x67ce
+67bf  test word [0x44], 1
+67c5  je   0x67ce
+67c7  and  word [0x44], 0xfffe
+67cc  cd 02          ★ INT 2
+67ce  ret
+```
+
+A breakpoint on that `INT 2` **armed, reporting `displaced cd 02`**. That is proof, not
+inference: a patched site is an INT site, `dpmi_bp_arm()` refuses those outright
+(`if (pmap_get(lin)) continue`), so it could not have armed at all. **The site is raw.**
+
+⇒ The boundary vote in the INT→BOP scan produces **false negatives on real instructions**.
+Session 21 fixed the opposite error (the patcher rewriting a `jle` displacement it mistook
+for `CD nn`); this is the same decision failing the other way, and in protected mode the
+cost is a silent VDM teardown the moment the guest takes that branch.
+
+On this run it did not: `test word [0x44],1` fell through both times, so the `INT 2` was not
+executed and the run still ends at the same place. **So it is a proven defect and not yet
+proven to be *the* killer.**
+
+The residual scan now prints **addresses**, not just a histogram — a histogram names a
+suspect without saying where, which still means reading the binary by hand:
+
+```
+DPMI: residual CD nn SITES (linear, first 24): 0x77d3=01 0x8482=75 0x9218=99 0x96b7=30
+  0x9c6d=01 0x9eb0=c7 0x9ff0=3b 0xa267=02 0xadb0=8b 0xb729=03 0xcb84=2a 0xcbfc=02 ...
+```
+
+`0xcbfc` is `0x6430 + 0x67cc` — the very site, predicted before the run and confirmed by it.
+`0xa267=02`, `0xb729=03`, `0x96b7=30`, `0xcb84=2a` are the other plausible ones.
+
 ## Regression
 
 - `selftest.com` **8/8 PASS on real hardware** — the other guest class, run because the
