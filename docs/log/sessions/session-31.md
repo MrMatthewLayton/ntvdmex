@@ -262,6 +262,56 @@ DPMI FATAL: exception code=0xc0000005 ... EDX=0x33746e69
 caller-sized and check nothing, so the buffer has to fit the **longest** line, not the
 usual one.
 
+## Part 10 — ★ the real blocker: krnl386's PM DOS calls were never answered
+
+Turning on the INT 21h trace (`dostrace.flag` — it is **opt-in**, which is why the log
+had never shown ordinary DOS calls) named the problem in one line each:
+
+```
+INT21h AH=34 (PM thunk TODO)      INT21h AH=0e (PM thunk TODO)
+INT21h AH=dc (PM thunk TODO)      INT21h AH=43 (PM thunk TODO)
+INT21h AH=57 (PM thunk TODO)
+```
+
+⚠️ **This also refutes part 7's "krnl386 never reads the file it opens — zero INT 21h
+`AH=3Fh` in a whole run".** That was not evidence of anything. The log did not contain
+ordinary DOS calls because nothing was printing them. *An absent line in a log that does
+not print that line is not a measurement.*
+
+★ **Why the pointer-taking ones could not simply be whitelisted.** `dos_int21.c` resolves
+a guest pointer as `(DS << 4) + DX` — exactly right for V86, meaningless for a selector.
+DOS/4GW never exposed this because it services its own DOS calls internally; **krnl386 is
+the first guest to chain them to us.** `pm_int21_xfer()` bridges it through a
+conventional-memory transfer buffer — the same shape as DPMI's own translation buffer and
+for the same reason. `AH=34h` is special-cased because it returns a far pointer, which in
+PM must be a *selector*, not a paragraph.
+
+⚠️ The buffer is allocated **only on the WOW path** and every arm is gated on its presence,
+so a DOS or DOS/4GW run takes byte-identical paths to before.
+
+**Measured on the rig — the whole chain now works:**
+
+```
+FUNC=0xc7 -> DECLINED -> INT21h AH=43 name="C:\WINDOWS\SYSTEM32\SYSEDIT.EXE"
+FUNC=0xc1 -> DECLINED -> INT21h AH=3D open  "...SYSEDIT.EXE" -> AX=5
+FUNC=0x89 -> DECLINED -> INT21h AH=57 on handle 5
+FUNC=0xc2 -> DECLINED -> close
+```
+
+krnl386 asks its 32-bit companion, is declined, chains to real DOS, and our thunk turns its
+protected-mode pointer into a filename DOS can open. **"PM thunk TODO" is now zero for a
+whole run.** `seg1:0x1812` turns out to be `OpenFile(name, &ofstruct, OF_EXIST)`, which is
+why that sequence opens and closes without reading.
+
+The run still ends in the same segment-table loop: the NE header krnl386 parses comes from
+a buffer (`[0x5a0]`, a selector it allocates itself) that something else is supposed to
+fill, and finding what fills it is the next thread.
+
+▸ Incidental, and worth knowing: with the transfer buffer taking paragraph `0x141`,
+krnl386 relocated to segment `0x542` and behaved identically — **its placement is not
+position-dependent**.
+
+
 ## Regression
 
 - `selftest.com` **8/8 PASS on real hardware** after the SysVars change — the guest from
@@ -269,6 +319,8 @@ usual one.
 - 209/209 NE checks and every `dostest` battery pass off-VM.
 - Imports still XP-safe.
 - Re-run after the breakpoint and buffer fixes: `selftest.com` **8/8 PASS** again.
+- After the PM INT 21h thunk: `selftest.com` **8/8** and `dosver.com` both PASS on real
+  hardware — the DOS path is gated off the WOW-only transfer buffer and is unchanged.
 
 ## Rig left with
 
@@ -281,15 +333,18 @@ cannot, because `rt.bat` runs a DOS target out of `bm\tests` and a WOW run is "l
 
 ## Next actions
 
-1. **Reconcile the two loaders.** krnl386 loads modules itself, into memory it manages
+1. **Find what fills the NE-header buffer at `[0x5a0]`.** krnl386 allocates the selector
+   itself (`seg1:0xc181`, via `0x59a0`), `0x1812` is only an `OF_EXIST` probe, and by the
+   time `0xd45a` parses it the buffer still holds our PM stub table. That is the wedge.
+2. **Reconcile the two loaders.** krnl386 loads modules itself, into memory it manages
    out of our `VirtualAlloc` heap; our NE loader has already put the images in host memory
    at `0x0295xxxx`. At `seg1:0xd4db` krnl386 is copying an NE header out of a buffer that
    holds our PM stub table, so it is reading a module image that was never put there.
    Find what tells it where that image is — that is the next wall.
-2. **Work down [`wow32-call-surface.md`](../../research/wow32-call-surface.md)** as krnl386
+3. **Work down [`wow32-call-surface.md`](../../research/wow32-call-surface.md)** as krnl386
    demands each ID — `tools/ne/nedis.py --wowfunc <id>` gives the whole story for one.
    `0xc4` (the fatal-error MessageBox), `0x86` (a packed date/time), `0x82`/`0xc9`/`0x71`
    (the three that may **not** be declined) are the ones already seen live.
-3. **Find out why the watchdog thread stops after one sample.** It is a diagnostic the
+4. **Find out why the watchdog thread stops after one sample.** It is a diagnostic the
    whole project leans on.
-4. Then: user/gdi's KERNEL-funnelled path, then `wowexec`, then an app.
+5. Then: user/gdi's KERNEL-funnelled path, then `wowexec`, then an app.

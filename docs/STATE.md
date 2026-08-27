@@ -148,13 +148,37 @@ and nothing has drawn a pixel. What works is the *bootstrap* — see #128 below.
    `0x662f → 0x5cf8 → 0x5a42 → ret 8 → 0x7ed4 → 0x63b4 → 0x7f11 → 0x4648 →
    retf 6 → 0xd4c0 → 0xd4db`. The `pop es`/`pop ds` suspects were cleared the same
    way: they execute fine.
-   ⇒ **The open question is now "why is the module image not where krnl386 thinks
-   it is", not "where does it die".** Two facts that bear on it: krnl386 **never
-   reads the file it opens** (zero INT 21h `AH=3Fh` in a whole run — it only stats
-   it), and it **is** using our `VirtualAlloc` block as its heap (`0007 setbase
+   ⇒ **The open question is now "what was supposed to fill that buffer", not "where
+   does it die".** The buffer is `[0x5a0]`, a selector krnl386 allocates itself at
+   `seg1:0xc181`; `seg1:0x1812` turns out to be `OpenFile(name, &ofstruct, OF_EXIST)`,
+   an existence probe, which is why the file is opened and closed without being read.
+   krnl386 **is** using our `VirtualAlloc` block as its heap (`0007 setbase
    0x03a70000`, `0008 setlimit 0x8807f`). Our NE loader puts module images in HOST
-   memory (`0x0295xxxx`) while krnl386 does its own loading — two loaders, two
-   copies, and that is the thing to reconcile.
+   memory (`0x0295xxxx`) while krnl386 does its own loading — two loaders, two copies,
+   and that is the thing to reconcile.
+
+   ### ★ The PM INT 21h FILE API (session 31) — krnl386 opens SYSEDIT.EXE
+   The real blocker was not in the WOW32 layer: five of krnl386's protected-mode DOS
+   calls (`AH=34h/0Eh/DCh/43h/57h`) were landing in a **"PM thunk TODO"** arm and were
+   never answered.
+   ⚠️ **`dos_int21.c` resolves a guest pointer as `(DS << 4) + DX`** — right for V86,
+   meaningless for a selector — so every pointer-taking function was excluded from the
+   PM path. DOS/4GW never exposed this because it services its own DOS calls
+   internally; **krnl386 is the first guest to chain them to us.** `pm_int21_xfer()`
+   bridges it through a conventional-memory transfer buffer (the same shape as DPMI's
+   own translation buffer). `AH=34h` returns a far pointer, so it now builds a real
+   **selector** with `dpmi_seg_to_desc`.
+   ⚠️ The transfer buffer is allocated **only on the WOW path** and every arm is gated
+   on it, so a DOS or DOS/4GW run takes byte-identical paths to before.
+   ★ **Measured:** `FUNC=0xc1 → DECLINED → INT21h AH=3D open
+   "C:\WINDOWS\SYSTEM32\SYSEDIT.EXE" → AX=5`. krnl386 asks its 32-bit companion, is
+   declined, chains to real DOS, and our thunk turns its protected-mode pointer into a
+   filename DOS can open. "PM thunk TODO" is now **zero** for a whole run.
+
+   ⚠️ **THE INT 21h TRACE IS OPT-IN (`dostrace.flag`).** "Zero `AH=3Fh` in the log" was
+   filed as a finding earlier in the same session and meant nothing — the log did not
+   print ordinary DOS calls at all. *An absent line in a log that does not print that
+   line is not a measurement.*
 
    ### ⚠️ Instrument hazards that cost this session, all now fixed
    ⚠️ **A 2-byte BOP over a 1-byte instruction eats its neighbour.** Breakpoints on
