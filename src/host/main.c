@@ -7483,9 +7483,40 @@ static void dpmi_patch_code_region(DWORD base, DWORD limit, int d32)
                        are NEVER SERVICED, i.e. the guest never calls those thunks. Reverted
                        rather than left in as unverified scan surface. The guest enters the
                        table only at the `c3` tail of the already-patched INT 31h thunk. */
-                  if (mem[i] == 0xCD && (mem[i+1] == 0x31 || mem[i+1] == 0x21 || mem[i+1] == 0x10
-                                         || mem[i+1] == 0x16 || mem[i+1] == 0x33
-                                         || mem[i+1] == 0x1A || mem[i+1] == 0x08)) {
+                  /* ── ★★★ EVERY VECTOR, NOT A LIST OF THE ONES WE EXPECTED. ────────────
+                       This tested `mem[i+1]` against seven vectors -- 31h, 21h, 10h, 16h,
+                       33h, 1Ah, 08h -- which are the ones a DOS extender running a game
+                       uses. It is an ALLOW-LIST, and an allow-list of "interrupts we think
+                       the guest will use" is exactly the assumption a new guest breaks.
+
+                     ⚠ MEASURED, session 32. krnl386 executes `INT 2` at seg1:0x67cc, on the
+                       path `dec [0x1e] / jne / test [0x44],1 / je / and [0x44],0xfffe / cd 02`.
+                       A breakpoint armed on that site reported `displaced cd 02` -- proof it
+                       was RAW, because dpmi_bp_arm() refuses a site that is already an INT
+                       site (pmap_get), so it could not have armed at all otherwise. And a raw
+                       `CD nn` in protected mode is the one fault XP will not reflect: it tears
+                       the VDM down silently, which is precisely the death being chased.
+
+                     ⚠⚠ AND THE FIRST DIAGNOSIS OF THAT WAS WRONG, WHICH IS WHY THIS NOTE IS
+                       HERE. It was written up as "the boundary vote produces false negatives
+                       on real instructions". The vote never ran: 0x02 is not in the list, so
+                       the site was never a candidate. The vote is fine; the FILTER IN FRONT
+                       OF IT was the defect.
+
+                     ⇒ So test for `CD` alone and let x86_int_site_is_real() decide, which is
+                       what it exists for and what makes this safe -- it decodes forward from
+                       each of the preceding 48 bytes and counts how many instruction streams
+                       land here (measured separation: real sites 19-48 votes, false pairs
+                       0-3). The old allow-list was a second, cruder filter that predates the
+                       vote (x86len.h arrived in session 21) and was never revisited after it.
+                       Servicing is harmless for any vector: our default PM handlers cover all
+                       256 and simply IRET.
+
+                     ► The note below about 0x32/0x34/0x35/0x36 stands as history but no longer
+                       as policy: those were *reverted for lack of evidence*, and the evidence
+                       now exists. Watch the patched-site count and the "NOT an INT site"
+                       rejects across this change -- that is how a false positive would show. */
+                  if (mem[i] == 0xCD) {
                       DWORD lin = a + i;
                       if (pmap_get(lin)) continue;   /* already patched (aliased region) */
                       /* ── ONLY IF IT IS AN INSTRUCTION. ───────────────────────────────
@@ -12812,7 +12843,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                    self-synchronising; without a disassembler we can't prove a byte is code) -- the
                    map is the mitigation, and an unexpected-BOP path below logs any surprise. */
                 { volatile BYTE *cs = (volatile BYTE *)(ULONG_PTR)g_dpmi_code_base;
-                  DWORD o, n = 0, last = 0;
+                  DWORD o, n = 0, last = 0, nvoted = 0;
                   for (o = 0; o < 0xFFFF; ++o) {
                       /* ⚠ 0x2F IS HERE BECAUSE krnl386 DIED WITHOUT IT (GH #128).
                            A PM guest cannot reach the IVT, so an INT this list does not
@@ -12830,18 +12861,64 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                            The narrow list is the mitigation. Add a vector only with a
                            guest that provably needs it, and only with a service arm to
                            receive it (see dpmi_service_pm_int). */
-                      if (cs[o] == 0xCD && (cs[o+1] == 0x31 || cs[o+1] == 0x21 || cs[o+1] == 0x10
-                                            || cs[o+1] == 0x16 || cs[o+1] == 0x33
-                                            || cs[o+1] == 0x2F
-                                            || cs[o+1] == 0x11 || cs[o+1] == 0x41
-                                            || cs[o+1] == 0x1A || cs[o+1] == 0x08)) {
+                      /* ── ★★★ AND EVERY OTHER VECTOR, IF THE DECODER VOUCHES FOR IT. ──
+                           The list above is the vectors we EXPECTED, and the note beside
+                           it is right that widening a naive byte-pair scan is dangerous.
+                           But "naive" is the part that changed: x86len.h's vote arrived in
+                           session 21 and is already trusted to gate every site in
+                           dpmi_patch_code_region(). It was simply never wired in here.
+
+                         ⚠ MEASURED, session 32. krnl386 executes `INT 2` at seg1:0x67cc:
+                             dec [0x1e] / jne / test [0x44],1 / je / and [0x44],0xfffe / cd 02
+                           A breakpoint armed on that site reported `displaced cd 02`, which
+                           is proof it was RAW -- dpmi_bp_arm() refuses a site that is already
+                           an INT site, so it could not have armed otherwise. 0x02 is not on
+                           the list, so it was never even a candidate.
+
+                         ⚠⚠ AND THE FIRST DIAGNOSIS WAS WRONG: this was written up as "the
+                           boundary vote produces false negatives on real instructions". The
+                           vote never ran. The filter in front of it was the defect, and it
+                           is a different one in each of the two scanners.
+
+                         ⚠⚠⚠ AND "EVERY VECTOR, GATED BY THE VOTE" WAS TRIED AND IS WRONG.
+                           Measured: it patched 0x7d sites instead of 0x6c -- 17 unlisted ones
+                           the vote vouched for -- and the WOW run went BACKWARDS, dying at PM
+                           step 0x27 instead of 0x46. Residuals fell from 31 to 14 and the
+                           INT 2 was correctly claimed, so the widening did what it said; it
+                           also broke the guest earlier, which means at least one of those 17
+                           is data or mid-instruction that the vote waved through. The vote is
+                           good (real sites 19-48 votes, false pairs 0-3) but it is NOT good
+                           enough to underwrite all 256 vectors on this binary.
+
+                         ⇒ SO: EVIDENCE ONLY, which is what the note above already prescribed
+                           -- "add a vector only with a guest that provably needs it". The one
+                           vector with proof is 0x02, and it is still gated by the vote. A
+                           listed vector is patched exactly as before, unvoted, so no existing
+                           guest can change behaviour. `nvoted` is counted separately so the
+                           next widening is measurable rather than asserted. */
+                      if (cs[o] == 0xCD) {
+                          BYTE v = cs[o+1];
+                          int listed = (v == 0x31 || v == 0x21 || v == 0x10
+                                        || v == 0x16 || v == 0x33
+                                        || v == 0x2F
+                                        || v == 0x11 || v == 0x41
+                                        || v == 0x1A || v == 0x08);
                           DWORD lin = g_dpmi_code_base + o;      /* map is linear-keyed now */
-                          pmap_set(lin, cs[o+1]); cs[o] = 0xC4; cs[o+1] = 0xC4; ++n; last = o;
+                          if (!listed && v != 0x02) continue;    /* evidence only -- see above */
+                          if (!listed) {
+                              /* Initial mode-switch selectors are 16-bit even for a 32-bit
+                                 client (the RETF-on-failure proof, session 16), so d32=0. */
+                              if (!x86_int_site_is_real((const unsigned char *)(ULONG_PTR)cs,
+                                                        o, 0xFFFF, 0)) continue;
+                              ++nvoted;
+                          }
+                          pmap_set(lin, v); cs[o] = 0xC4; cs[o+1] = 0xC4; ++n; last = o;
                       }
                   }
                   p = zput(p, "DPMI: patched "); p = zhex(p, n);
                   p = zput(p, " INT sites -> BOP (full 64K scan, last off 0x"); p = zhex(p, last);
-                  p = zput(p, ")\r\n");
+                  p = zput(p, "), of which "); p = zhex(p, nvoted);
+                  p = zput(p, " were UNLISTED vectors vouched for by the x86len vote\r\n");
                   log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
                   /* ── WHAT DID THE PATCH LEAVE BEHIND? ────────────────────────────
                        Every `CD nn` still in this region is a vector we did not claim,
