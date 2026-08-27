@@ -6222,11 +6222,59 @@ static DWORD WINAPI dpmi_watchdog(LPVOID param)
                     q = zput(q, " does not resolve>");
                 }
             }
+            /* ── ★ AND WHERE IT ACTUALLY IS, NOT WHERE IT WENT IN. ─────────────────
+                 `enter=` is the CS:EIP we HANDED to dpmi_enter_pm. The PM heartbeat
+                 prints the same thing, so when a WOW run's log stops, all it licenses
+                 is "it went in there and did not come back" -- NOT "it stopped there".
+                 Those are different claims and only the first is measured. Session 31
+                 ended on exactly that ambiguity at seg1:0x662f.
+               A spinning PM guest never leaves PM, so the only way to see it is to
+                 freeze the thread running it and read the context -- the same
+                 SuspendThread / GetThreadContext round trip the async IRQ injector
+                 already does on g_hcpu.
+               ⚠ SAMPLE HELD, LOG RELEASED. Nothing is written to the log between
+                 SuspendThread and ResumeThread: log_append opens a file, and blocking
+                 there with the guest frozen is how a diagnostic becomes a deadlock. */
+            if (frozen && g_hcpu) {
+                CONTEXT cx;
+                DWORD gcs = 0, geip = 0, gss = 0, gesp = 0, gfl = 0;
+                int got = 0;
+                cx.ContextFlags = CONTEXT_CONTROL;
+                if (SuspendThread(g_hcpu) != (DWORD)-1) {
+                    if (GetThreadContext(g_hcpu, &cx)) {
+                        gcs = cx.SegCs; geip = cx.Eip; gss = cx.SegSs;
+                        gesp = cx.Esp;  gfl  = cx.EFlags; got = 1;
+                    }
+                    ResumeThread(g_hcpu);
+                }
+                if (!got) {
+                    q = zput(q, " LIVE=<thread sample failed>");
+                } else {
+                    DWORD lb = dpmi_sel_base((WORD)gcs);
+                    const BYTE *lp = (const BYTE *)(ULONG_PTR)(lb + (geip & 0xFFFF));
+                    q = zput(q, " LIVE cs:eip=");  q = zhex(q, gcs);
+                    q = zput(q, ":");              q = zhex(q, geip);
+                    q = zput(q, " ss:esp=");       q = zhex(q, gss);
+                    q = zput(q, ":");              q = zhex(q, gesp);
+                    q = zput(q, " efl=");          q = zhex(q, gfl);
+                    q = zput(q, " csbase=");       q = zhex(q, lb);
+                    if (lb && mem_readable((ULONG_PTR)lp, 8)) {
+                        q = zput(q, " b@live="); q = zdump(q, lp, 8);
+                    }
+                }
+            }
             q = zput(q, "\r\n");
             log_append(LOG_PATH, wb, q); serial_out(wb, q); q = wb;   /* COM1-only = invisible on bare metal */
         }
         prev = iter; ++n;
-        if (frozen >= 12) break;                         /* ~3s with NO progress -> real wedge */
+        /* ⚠ ON A WOW RUN A FREEZE IS THE MEASUREMENT, NOT A FAULT TO BE CLEANED UP.
+             12 frozen samples is 3 seconds, after which this thread TerminateProcess()es
+             the host -- fine for a DOS client that should never stall, and exactly wrong
+             for krnl386, which is being watched precisely BECAUSE it stops. Killing at
+             3s throws away every later sample, i.e. the whole trace of where it sits.
+             wowrun.bat already bounds the run (75s, then taskkill) and the headless
+             deadline bounds the rest, so nothing here is unbounded. */
+        if (frozen >= (g_wow_nmod ? 600u : 12u)) break;  /* 3s normally; 150s on a WOW run */
       }
     }
     q = zput(q, "STAGE3-DPMI: watchdog terminating (wedged)\r\n");
@@ -6702,15 +6750,47 @@ static int wow_place_v86(dos_machine_t *mp, WORD *ecs, WORD *eip,
         q = zput(q, ")\r\n"); log_append(LDTLOG_PATH, m, q);
     }
 
+    /* ── ★★★ WE DO NOT RELOCATE krnl386. IT RELOCATES ITSELF, AND ONLY IT CAN. ──────
+         This is the reversal of the obvious thing, so here is the whole argument.
+
+       ★ A CHAINED NE FIXUP CAN ONLY BE APPLIED ONCE. A non-additive record names one
+         site; the word AT that site is the offset of the next site, 0xFFFF ending it.
+         Segment 1's four records expand to 80 sites that way (3 -> seg 1, 58 -> seg 2,
+         8 -> seg 3, 11 -> seg 4). Applying them WRITES the target over the link, so
+         the chain is gone and a second pass is not "wasteful", it is impossible.
+
+       ★★ AND krnl386 RUNS THAT SECOND PASS ON PURPOSE, BECAUSE IT IS THE PASS THAT
+         MATTERS. Its bring-up calls LoadSegment on its OWN segments (seg1:0xc2f4 for
+         segment 1, seg1:0xc30e for segment 4), and the fixup at seg1:0x8e0e takes the
+         target's value from `es:[bx+8]` -- the in-memory segment table's HANDLE, i.e.
+         a PROTECTED-MODE SELECTOR. We enter krnl386 in V86 where a segment is a
+         paragraph; it switches itself to PM, moves segment 1 to linear 0x20760 and
+         builds a code selector (0x0207) over it. Every far reference inside that copy
+         has to become a selector, and LoadSegment is what does it.
+
+       ⚠ MEASURED, AND IT IS WHAT REFUTED THE EASY FIX. Clearing NE_SEG_RELOCS in the
+         placed header makes LoadSegment skip the pass and "succeed": the run cleared
+         the ExitKernelThunk(1) wall and got 10 PM steps further, into extended-memory
+         setup. But at step 0x44, code executing from selector 0x0207 pushed its own
+         far pointers as `0x0643:0x4ff2` and `0x18e2:0x024a` -- OUR PARAGRAPHS, in
+         protected mode, where 0x0643 and 0x18e2 are not valid selectors. The image
+         had been moved to PM with real-mode fixups baked in, and the 58 far calls to
+         segment 2 were all pointed at a paragraph. That run went further while being
+         MORE wrong, which is the reason this note is long.
+
+       ⇒ So the loader's job here is to LOAD, not to relocate: the segment bytes and
+         the relocation records go into memory verbatim (above), the header describes
+         them (below), and krnl386 does the one pass that is legal to do. Entry CS/DS/SS
+         are handed over directly and are not fixups, so nothing in the entry path
+         depends on this.
+
+       ⚠ ne_apply_relocs is UNCHANGED and still used for the selector-stage load and by
+         all 209 NE checks; it is only this V86 entry stage that must not run it. */
     ne->sites = 0;
-    for (i = 0; i < (int)ne->n_seg; ++i) {
-        if (ne_apply_relocs(ne, i, NULL, NULL) != 0) {
-            q = m; q = zput(q, "WOWV86: RELOC FAILED seg "); q = zhex(q, (DWORD)(i + 1));
-            q = zput(q, " at ne.h line "); q = zhex(q, (DWORD)ne->err);
-            q = zput(q, "\r\n"); log_append(LDTLOG_PATH, m, q);
-            return -1;
-        }
-    }
+    q = m;
+    q = zput(q, "WOWV86: NOT relocating -- the chains are left intact for krnl386's own "
+                "LoadSegment pass, which resolves to SELECTORS (see the note here)\r\n");
+    log_append(LDTLOG_PATH, m, q);
 
     /* ⚠ ONE BLOCK FOR BOTH, because DOS puts a one-paragraph MCB header between any
          two allocations and krnl386 needs the header image to be EXACTLY at
@@ -6758,6 +6838,13 @@ static int wow_place_v86(dos_machine_t *mp, WORD *ecs, WORD *eip,
         if (hlen > (DWORD)WOW_HDRIMG_PARAS * 16u) hlen = (DWORD)WOW_HDRIMG_PARAS * 16u;
         for (k = 0; k < (DWORD)WOW_HDRIMG_PARAS * 16u; ++k) hb[k] = 0;
         for (k = 0; k < hlen; ++k) hb[k] = img[ne->hdr + k];
+
+        /* ⚠ NE_SEG_RELOCS IS LEFT SET HERE, AND THAT IS A CORRECTION. Clearing it in
+             this copy makes seg1:0x9206 (`test bx,0x100`) fall through to 0x92bb and
+             LoadSegment return success without relocating -- which DID clear the
+             ExitKernelThunk(1) wall and is NOT the right answer; see the refutation
+             above ne_apply_relocs's call site. Recorded so it is not re-tried. */
+
         q = m;
         q = zput(q, "WOWV86: NE header image at para 0x"); q = zhex(q, hseg);
         q = zput(q, " = SS 0x");  q = zhex(q, sseg);
