@@ -547,6 +547,47 @@ global-heap arena table — and the compaction range is whatever that table says
 `base` and `+0xc` size is what will explain why the block spans `0x1bbe0..0xA0000` and why
 segment 1's copy is placed inside it.
 
+## Part 18 — ★★★ THE WALL MOVES: put the window HIGH and the compaction cannot reach the code
+
+Parts 15 and 16 eliminated the two inputs I thought controlled the compaction range. What
+was left is the only one we actually own: **where `base(SS) + SP` is**.
+
+krnl386's conventional arena is the region from `base(SS) + SP` to the 640 KB line. We were
+allocating the stack + window LOW, so that arena was 542 KB — big enough for segment 1
+(`0xd7fa`), which is exactly why krnl386 put its code copy at `0x2c760`, inside the block it
+then compacted across.
+
+Allocate the block HIGH instead — DOS has no "allocate high" here, so do it the way a DOS
+program would: take a filler that leaves exactly this block at the top, allocate, free the
+filler; the PSP block below then takes the freed region. (⚠️ the filler must be
+`fmax - want - 1`: without the paragraph for DOS's MCB header the second allocation fails
+outright, which is what the first attempt did.)
+
+Every prediction landed:
+
+| | before | after |
+|---|---|---|
+| SS / header image | para `0x1bbf` | para **`0x9000`** |
+| arena selector `0x1b7` | `base=0x1bbe0 limit=0x8441f` (542 KB) | **`base=0x90000 limit=0xffff`** (64 KB) |
+| segment 1's PM copy | `0x2c760` — *inside* the copy | `0x0001ad00`, and a second at **`0x03b10100`** (extended) |
+| PSP/arena block | para `0x2bc0` | para `0x1abf` (the freed low region) |
+| last PM step | `0x46` | **`0x4e`** |
+
+★ `0x1ad00` is **not** inside `0x90000..0x9ffff`, so the compaction cannot touch the executing
+code — and krnl386 has started using the extended heap it VirtualAlloc'd (`0x03b10100`) as
+well. The mechanism is confirmed by the addresses, not inferred.
+
+★★ **And the silent teardown is gone.** The run no longer vanishes: it ends with a
+*deliberate* `ExitKernelThunk(1)` — `FUNC=0x2 ... from=0x00009880 (00000001)` — i.e. krnl386
+reporting a LoadSegment failure for one of segments 2–4, out of the loop at `seg1:0xc4f6`
+(`or ax,ax / jne 0xc501 / pop es / jmp 0xc9db`). A reported error is a different universe from
+a process that disappears.
+
+▶ **Next: which of segments 2/3/4 fails, and why.** The conventional arena is now deliberately
+small, so an allocation failure is the obvious first suspect — LoadSegment's allocator is
+`seg1:0x461f`, already mapped in part 17, and the breakpoint walk is repeatable at
+`base + offset` with the base derived per run from the `acc=0xfb` commit line.
+
 ## Regression
 
 - `selftest.com` **8/8 PASS on real hardware** — the other guest class, run because the

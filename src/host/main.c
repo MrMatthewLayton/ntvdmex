@@ -6892,8 +6892,44 @@ static int wow_place_v86(dos_machine_t *mp, WORD *ecs, WORD *eip,
          `base(SS) + 0x1000`. Allocated separately they came out one paragraph apart
          and the log said so ("NOT ADJACENT") rather than leaving it to be discovered
          downstream. Stack occupies [0, 0x1000); the NE header image follows it. */
-    if (dos_alloc(NULL, mp->first_mcb, WOW_STACK_PARAS + WOW_WINDOW_PARAS,
-                  &sseg, &smax) || !sseg) {
+    /* ── ★★★ PUT THE STACK + WINDOW AT THE **TOP** OF CONVENTIONAL MEMORY. ─────────
+         krnl386's conventional arena is the region from `base(SS) + SP` to the 640 KB
+         line -- measured: its arena block is base=0x1bbe0 limit=0x8441f, i.e. its DATA
+         starts at exactly our header image and runs to 0xA0000. That is 542 KB, so
+         segment 1 (0xd7fa bytes) fits in it comfortably, which is why krnl386 puts its
+         own code copy at 0x2c760 -- INSIDE the block it later compacts across (part 14).
+       ⚠ Neither the arena size we declare (part 15) nor the size of the PSP block we
+         build (part 16) moves that: the block reaches 0xA0000 because 0xA0000 is where
+         conventional memory ends, not because of anything we hand over. The ONE input we
+         control is WHERE `base(SS) + SP` is.
+       ⇒ So allocate this block high. With the window at the top, the arena is the window
+         itself -- 64 KB, of which 48 KB is free after the header image -- and 48 KB is
+         SMALLER THAN SEGMENT 1. krnl386 then cannot place its code there and must use the
+         0x88080-byte global heap it already VirtualAlloc'd at 0x03a70000, which no
+         conventional compaction can reach.
+       DOS has no "allocate high" here, so do it the way a DOS program would: take a
+         filler that leaves exactly this block's worth at the top, allocate, free the
+         filler. The PSP block below then takes the freed region, as before. */
+    {   WORD fseg = 0, fmax = 0, want;
+        (void)dos_alloc(NULL, mp->first_mcb, 0xFFFF, &fseg, &fmax);   /* ask -> largest free */
+        want = (WORD)(WOW_STACK_PARAS + WOW_WINDOW_PARAS);
+        if (fmax > want + 2) {
+            /* -1 for the MCB header DOS puts in front of the second allocation: without
+               it the filler eats the paragraph the stack+window block needs and the
+               allocation fails outright ("no memory for the stack + header image"). */
+            WORD fill = (WORD)(fmax - want - 1);
+            if (dos_alloc(NULL, mp->first_mcb, fill, &fseg, &fmax) == 0 && fseg) {
+                q = m; q = zput(q, "WOWV86: filler 0x"); q = zhex(q, fill);
+                q = zput(q, " paras at 0x"); q = zhex(q, fseg);
+                q = zput(q, " so the stack+window lands HIGH (freed again below)\r\n");
+                log_append(LDTLOG_PATH, m, q);
+            } else fseg = 0;
+        } else fseg = 0;
+        if (dos_alloc(NULL, mp->first_mcb, WOW_STACK_PARAS + WOW_WINDOW_PARAS,
+                      &sseg, &smax) || !sseg) sseg = 0;
+        if (fseg) dos_free(NULL, fseg);          /* give the low region back */
+    }
+    if (!sseg) {
         q = m; q = zput(q, "WOWV86: no memory for the stack + header image\r\n");
         log_append(LDTLOG_PATH, m, q); return -1;
     }
