@@ -588,6 +588,56 @@ small, so an allocation failure is the obvious first suspect — LoadSegment's a
 `seg1:0x461f`, already mapped in part 17, and the breakpoint walk is repeatable at
 `base + offset` with the base derived per run from the `acc=0xfb` commit line.
 
+## Part 19 — ★★ the new wall: krnl386 believes the loader already placed segments 2-4
+
+With the compaction survived, the run reaches the loop at `seg1:0xc4a3` and fails there.
+Breakpoints on the loop name it exactly:
+
+```
+seg1:0xc4dd  compaction        ESI=2
+seg1:0xc4f6  call 0x90d9       ESI=2      -- LoadSegment(segment 2)
+seg1:0xc4f9  or ax,ax          EAX=0      -- ★ IT FAILED
+```
+
+and inside LoadSegment, breakpoints on the allocate path (all three armed, verified by their
+`displaced` bytes):
+
+```
+seg1:0x913d  call 0x9068   -- ALLOCATE      not hit
+seg1:0x9141  or ax,ax                       not hit
+seg1:0x9145  mov ax,es:[si+8]               HIT, with EBX = 0x0001d152
+```
+
+★ `0x9068` — the allocator — **is never called**. `seg1:0x9135 test bl,2 / jne 0x9145` is
+taken, because segment 2's **in-memory** flags are `0xd152` and bit 1 is set. The file says
+`0x1d50`, so krnl386 set that bit itself while building its module database. It does the same
+to segment 1 (file `0x0d40` → memory `0xc142`); the transform is consistent — bits 10/11 shift
+to 14/15 and **bit 1 is added** — and all four segments are marked `PRELOAD` (bit 6) in the
+file.
+
+⇒ **krnl386 marks a PRELOAD segment as already resident and expects the LOADER to have put a
+handle in the in-memory segment table at `+8`.** For segment 1 that handle is real (`0x0207`,
+later `0x01c7`) and LoadSegment succeeds. For segment 2 it is not, so LoadSegment returns 0,
+`seg1:0xc4f9` takes the failure jump and the exit stub reports error #1.
+
+That is a *loader contract* gap, and it is the same shape as the two already found this
+session (the header must be placed; the relocations must be left alone): **we copy all four
+segments into conventional memory and never tell krnl386 where three of them are.**
+
+▶ Two ways out, and they are worth weighing before coding:
+   1. **Fill the handle** — give each segment a selector at load time and write it into the
+      in-memory table's `+8`. Closest to what a real Win16 loader does for PRELOAD segments.
+   2. **Clear PRELOAD** in the placed header, so krnl386 does not believe they are resident,
+      calls `0x9068`, and loads them from `KRNL386.EXE` itself — it already has the file open
+      (session 31) and LoadSegment has the LSEEK+READ path at `seg1:0x9227`.
+   (2) is less code and hands the work to the component that knows how; (1) is more faithful.
+   Either way the answer is measurable in one run.
+
+⚠️ **Operational: the layout is not stable between runs.** `ES=0x01bf` resolved to base
+`0x0001ad00` in one run and `0x0002aec0` in the next, so a `dump` address computed from a
+previous log points at nothing. The HIT line now prints `dsbase=`/`esbase=` for exactly this
+reason — use those, and derive every address per run.
+
 ## Regression
 
 - `selftest.com` **8/8 PASS on real hardware** — the other guest class, run because the
