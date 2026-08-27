@@ -107,9 +107,17 @@ flawless sound.
    LDT on entry to any PM interrupt service. Confirmed necessary and sufficient on
    hardware: krnl386 writes a descriptor directly (`base=0x400`, the BDA) and the sync
    installs it. `INT 31h 000D` (allocate specific descriptor) added for the same reason.
-   **Next frontier: an NTVDM-private INT 31h family — `04F1` (BX=0 CX=1), `04F2`
-   (BX=the freshly allocated selector, CX=1) and `04F3`.** None are in the DPMI spec or
-   RBIL; the rig oracle is the only source.
+   The private `INT 31h` family is decoded too: **`04F2` = "commit CX descriptors from
+   selector BX"** (read off its eight call sites — so stock needs a flush as well, and
+   our shadow is the *same* design, not a workaround) and **`04F1` = the private twin of
+   `0000`**. Both implemented, plus `000D`. krnl386 now gets through `d762` and `0x6763`.
+   ★★ **NEXT, AND IT IS STRUCTURAL: krnl386 CALLS INTO A 32-BIT COMPANION VIA BOPs.**
+   It halts at `seg1:0x3026` on `C4 C4 53` — a **native** BOP (in the file, unrelocated,
+   not one our INT patcher planted). seg1 holds **13** of them: codes `0x51`×1, `0x53`×1,
+   `0x56`×10, `0xFE`×1. That is the WOW32 side of WOW, which real Windows implements in
+   `wow32.dll`. Our loop finds no patch-map entry, so `vec=0` and it reports "unexpected
+   PM stop" and stops the guest (host stays alive).
+   ⇒ WOW is not "NE loader + DPMI". It is that **plus a 32-bit BOP service API**.
    ⚠️ Before consulting any other NTVDM project, read
    [`reference-projects.md`](reference-projects.md).
    for this). Still unknown: **`INT 31h 04F3`**.
