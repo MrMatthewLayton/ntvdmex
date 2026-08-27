@@ -126,6 +126,12 @@ flawless sound.
    `push <args> / push <ID> / push cs / call 0x2bb6`. **So the WOW32 interface is a small
    integer ID namespace, and the ID is at `[ss:bp+6]`** — the host now logs it.
    ⇒ WOW is "NE loader + DPMI + **a WOW32 dispatch on an integer function ID**".
+   ★ **The whole surface is now enumerated: 82 function IDs with argument sizes**, in
+   [`docs/research/wow32-call-surface.md`](research/wow32-call-surface.md), read straight
+   off the binary by `tools/ne/wowthunks.py` (the static stub shape and the live frame
+   agree, which is what makes either trustworthy). ⚠️ **Only krnl386 has these stubs** —
+   user/gdi/drivers funnel through KERNEL via the `push api-index / call far KERNEL`
+   tables instead, so the 16↔32 boundary lives in exactly one module.
    ⚠️ Before consulting any other NTVDM project, read
    [`reference-projects.md`](reference-projects.md).
    for this). Still unknown: **`INT 31h 04F3`**.
