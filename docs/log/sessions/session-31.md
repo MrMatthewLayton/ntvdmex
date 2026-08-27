@@ -6,7 +6,7 @@ Continues [session 30](session-30.md). GH #128. Branch `m9/completeness`.
 `NTVDM KERNEL: Unable to initialize heap`, having named three WOW32 functions it wanted.
 82 function IDs were enumerated as bare integers and none were implemented.
 
-**Where it ended:** two of krnl386's five errors are cleared — the heap error is gone, krnl386 **opens a real file through our own
+**Where it ended:** two of krnl386's five errors are cleared, its NE header is placed where it expects it, and it now builds its own module database entry and reaches LoadSegment — the heap error is gone, krnl386 **opens a real file through our own
 DOS layer and gets handle 5 back**, the WOW32 calling convention is pinned to the byte and
 confirmed against the rig, krnl386 **opens both `SYSEDIT.EXE` and its own
 `KRNL386.EXE`** through our DOS layer, and the next stop is **traced instruction by
@@ -499,6 +499,54 @@ there is a step before `seg1:0xc16d` that is meant to have filled that memory.
 
 **That is the next question, and it is now a narrow one** — everything else in the path has
 been read and ruled out.
+
+
+## Part 17 — ★★ the header is PLACED, and the run moves again
+
+⚠️ **First, part 16's conclusion was wrong.** It recorded the buffer's base as
+"call-depth dependent, so no fixed placement can land on it". Breakpoints at
+`seg1:0xc0d6`, `0xc123` **and** `0xc164` all report `SS:SP = 0x1f:0x0FFE` — the **entry
+SP, unchanged**, because krnl386's calls up to that point are balanced. The base is fixed.
+The earlier reading came from a different layout and was never checked at three points;
+this one was. *Measuring the same quantity at three places is what turned an "impossible"
+into a one-line change.*
+
+So: krnl386's NE header + tables are copied into memory **immediately above its stack**,
+and it enters with `SP` at the very top of the stack block rather than top-2, so
+`base(SS) + SP` lands exactly on the header.
+
+⚠️ Copied from the **NE header**, not the start of the file — every table offset in an NE
+(`enttab`, `segtab`, `rsrctab`, `restab`, `modtab`, `imptab`) is relative to the header, so
+the header must be at offset 0 of that selector for any of them to resolve.
+⚠️ **One block for stack + header.** Allocated separately they came out one paragraph apart
+— DOS puts an MCB header between allocations — and the log said `NOT ADJACENT` rather than
+leaving it to be found downstream.
+
+**Result:** `ne_cseg` reads **4** instead of garbage, the copy loop runs four times instead
+of 65536, and the run moves for the first time in several sittings:
+
+| | before | after |
+|---|---|---|
+| last PM step | `0x31` | **`0x3a`** |
+| WOW32 calls serviced | 9 | **12** |
+| ends | silent teardown | **a deliberate, traceable exit** |
+
+## Part 18 — where it stops now: LoadSegment on its own segment 1
+
+krnl386 builds its module database entry, then calls `seg1:0x90d9` for segment 1 of
+itself. That returns 0, so it takes `mov al,1 / call 0x987a` → WOW32 `0x02`
+**ExitKernelThunk(1)** → `int3`. The frame names the caller exactly (`0000c9e3 0000000f`
+→ `seg1:0xc9e0`), which is how the path was found without a bisection.
+
+`0x90d9` is **LoadSegment**: `mov es,[bp+0xa]` (module handle), `mov si,[bp+8]` (segment
+number), `dec si`, `cmp es:[0x1c],si` (`ne_cseg`), then indexes `es:[0x22]` (`ne_segtab`)
+with **ten-byte** records — which is exactly what `0xd45a`'s copy loop builds (5 words per
+segment). The shapes agree, so the module entry is well-formed; the failure is further in.
+
+▸ Also decoded on the way: **BOP `0x56` is the per-call 16→32 gateway**, with its
+**sub-function on the stack at `SS:SP`** (`2` here) and `add sp,6` after it — three words.
+Its return is not tested at `seg1:0x14cc`, so that site is a notification; two of them are
+stepped over harmlessly.
 
 
 ## Regression

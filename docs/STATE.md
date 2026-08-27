@@ -163,71 +163,36 @@ and nothing has drawn a pixel. What works is the *bootstrap* — see #128 below.
    it). One of the three that may **not** be declined. Unimplemented BOPs in a run:
    **zero**.
 
-   ### ⏹ Where it stops today — the mechanism is now EXPLAINED
-   krnl386 dies in its **NE segment-table copy loop** at `seg1:0xd4e5..0xd4f3`,
-   whose trip count is `es:[0x1c]` = `ne_cseg`, read from an NE header it has just
-   copied in. The header is not a header: with the debugger resolving selectors,
-   `@ds:si` at that moment reads `c4 cf c4 c4 cf …` — **our own default PM handler
-   stubs**. So `ne_cseg` is nonsense, the loop's `stosw`/`movsw` walk off the
-   segment, and an unreflected PM #GP tears the VDM down silently — no VEH, no
-   watchdog line, no last log entry.
-   The whole route there is confirmed by breakpoint hits, not inference:
-   `0x662f → 0x5cf8 → 0x5a42 → ret 8 → 0x7ed4 → 0x63b4 → 0x7f11 → 0x4648 →
-   retf 6 → 0xd4c0 → 0xd4db`. The `pop es`/`pop ds` suspects were cleared the same
-   way: they execute fine.
-   ⇒ **★ THE LOADER CONTRACT, STATED EXACTLY.** Every call in krnl386's bring-up has
-   now been read and **none of them reads its NE header from disk**: `seg1:0x1812` is
-   `OpenFile(..., OF_EXIST)` (an existence probe), `0xd02b`→`0xd13c`→`0xd012`/`0x5d7f`
-   are heap and selector helpers, and `0xd45a` reads `ne_enttab` at `DS:[4]` and
-   `ne_cseg` at `DS:[0x1c]` **directly**. So `[0x5a0]` — a 64 KB selector krnl386 builds
-   over `base(SS) + SP` at `seg1:0xc17e` — is expected to **already contain krnl386's NE
-   header and tables**. Our NE loader has the image in `g_wow_img[0]` and never puts it
-   anywhere the guest can see. That is "two loaders, two copies" stated exactly, and it
-   is the next piece of work.
-   ⚠️ **AND THERE IS NO SAFE VALUE FOR THAT BUFFER.** Cleaning the region (host pool
-   moved low, stack block zeroed) makes `ne_cseg` read 0 instead of `0xc4cf` and the
-   guest dies in *exactly the same place*: the copy loop at `seg1:0xd4e5` ends in
-   `loop` with no `jcxz` guard, so CX=0 decrements to `0xFFFF` and runs 65536 times.
-   "Zero it and move on" is eliminated — it must be the real header.
-   ▸ ⚠️ The buffer's base is **call-depth dependent**: `SP` at `0xc17e` is `0xFEE`, only
-   `0x12` below the stack top but `0x10` below the *entry* `SP`. So no fixed placement by
-   the loader can land on it. Either the entry `SS:SP` we hand krnl386 is wrong (it is
-   `DGROUP=SINGLEDATA` and moves its own stack into DGROUP at `seg1:0xc1c9`, so a separate
-   stack block may be the wrong choice), or a step before `seg1:0xc16d` should have filled
-   that memory. Everything else in the path is read and ruled out: `0x59a0` is
-   `(size, base) -> selector` (checked, not assumed), the whole of `0xd02b` is
-   structure-building, and the handle → selector path at `seg1:0xcf9f`/`0xd00a` that would
-   replace `[0x5a0]` **never runs** (measured with breakpoints in execution order).
-   ▸ Also fixed on the way: **DGROUP is bigger than the segment in the file** — a Win16
-   loader adds `ne_heap` + `ne_stack` to the automatic data segment, and only the
-   *header* says so. krnl386 asks for `heap 0x200` and got none.
-   krnl386 **is** using our `VirtualAlloc` block as its heap (`0007 setbase
-   0x03a70000`, `0008 setlimit 0x8807f`). Our NE loader puts module images in HOST
-   memory (`0x0295xxxx`) while krnl386 does its own loading — two loaders, two copies,
-   and that is the thing to reconcile.
+   ### ★★ THE NE HEADER IS PLACED — and krnl386 reaches LoadSegment
+   Nothing in krnl386's bring-up reads its own NE header from disk (`seg1:0x1812` is
+   `OpenFile(..., OF_EXIST)`, the `0xd02b` chain is structure-building, and the
+   handle→selector path at `seg1:0xcf9f` never runs — all measured). It parses whatever
+   is at `[0x5a0]`, the selector it builds over `base(SS) + SP` at `seg1:0xc17e`.
+   ★ **That base is FIXED** — `SS:SP` is `0x1f:0x0FFE` at `seg1:0xc0d6`, `0xc123` **and**
+   `0xc164`, the entry SP unchanged. So the loader can place the header there, and does:
+   the header + tables are copied **immediately above krnl386's stack**, in the SAME DOS
+   block (allocated separately they come out one paragraph apart — DOS puts an MCB header
+   between allocations), and it enters with `SP` at the very top rather than top-2.
+   ⚠️ Copy from the **NE header**, not the start of the file: every table offset in an NE
+   is relative to the header, so it must be at offset 0 of that selector.
+   ⇒ `ne_cseg` reads **4**, the copy loop runs four times instead of 65536, and the run
+   goes from PM step `0x31` to **`0x3a`** with **12** WOW32 calls instead of 9.
 
-   ### ★ The PM INT 21h FILE API (session 31) — krnl386 opens SYSEDIT.EXE
-   The real blocker was not in the WOW32 layer: five of krnl386's protected-mode DOS
-   calls (`AH=34h/0Eh/DCh/43h/57h`) were landing in a **"PM thunk TODO"** arm and were
-   never answered.
-   ⚠️ **`dos_int21.c` resolves a guest pointer as `(DS << 4) + DX`** — right for V86,
-   meaningless for a selector — so every pointer-taking function was excluded from the
-   PM path. DOS/4GW never exposed this because it services its own DOS calls
-   internally; **krnl386 is the first guest to chain them to us.** `pm_int21_xfer()`
-   bridges it through a conventional-memory transfer buffer (the same shape as DPMI's
-   own translation buffer). `AH=34h` returns a far pointer, so it now builds a real
-   **selector** with `dpmi_seg_to_desc`.
-   ⚠️ The transfer buffer is allocated **only on the WOW path** and every arm is gated
-   on it, so a DOS or DOS/4GW run takes byte-identical paths to before.
-   ★ **Measured:** `FUNC=0xc1 → DECLINED → INT21h AH=3D open
-   "C:\WINDOWS\SYSTEM32\SYSEDIT.EXE" → AX=5`. krnl386 asks its 32-bit companion, is
-   declined, chains to real DOS, and our thunk turns its protected-mode pointer into a
-   filename DOS can open. "PM thunk TODO" is now **zero** for a whole run.
-
-   ⚠️ **THE INT 21h TRACE IS OPT-IN (`dostrace.flag`).** "Zero `AH=3Fh` in the log" was
-   filed as a finding earlier in the same session and meant nothing — the log did not
-   print ordinary DOS calls at all. *An absent line in a log that does not print that
-   line is not a measurement.*
+   ### ⏹ Where it stops today — LoadSegment on krnl386's own segment 1
+   krnl386 builds its module database entry, then calls `seg1:0x90d9` for segment 1 of
+   itself. It returns 0, so krnl386 takes `mov al,1 / call 0x987a` → WOW32 `0x02`
+   **ExitKernelThunk(1)** → `int3`: a deliberate, traceable exit rather than a silent
+   teardown. `0x90d9`'s early checks pass (`ne_cseg` = 4; it indexes `ne_segtab` at
+   `es:[0x22]` with **ten-byte** records, exactly what `0xd45a`'s copy loop builds), so
+   read on from `seg1:0x911d`.
+   ⇒ This is **"two loaders, two copies"** at its most concrete: our loader has already
+   placed krnl386's four segments in conventional memory, and the module entry krnl386
+   just built describes them by FILE offset. Whether it should read them itself (its file
+   handle and our PM `AH=3Fh` path both work now) or be told where they already are is the
+   question.
+   ▸ Also decoded: **BOP `0x56` is the per-call 16→32 gateway**, sub-function on the stack
+   at `SS:SP`, `add sp,6` after it. At `seg1:0x14cc` its return is not tested — a
+   notification, harmlessly stepped over.
 
    ### ⚠️ Instrument hazards that cost this session, all now fixed
    ⚠️ **A 2-byte BOP over a 1-byte instruction eats its neighbour.** Breakpoints on
