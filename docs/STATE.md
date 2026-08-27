@@ -175,12 +175,18 @@ and nothing has drawn a pixel. What works is the *bootstrap* — see #128 below.
    `0x662f → 0x5cf8 → 0x5a42 → ret 8 → 0x7ed4 → 0x63b4 → 0x7f11 → 0x4648 →
    retf 6 → 0xd4c0 → 0xd4db`. The `pop es`/`pop ds` suspects were cleared the same
    way: they execute fine.
-   ⇒ **The open question is now "what was supposed to fill that buffer", not "where
-   does it die".** The buffer is `[0x5a0]`, a 64 KB selector krnl386 builds over **its
-   own stack** at `seg1:0xc17e` — scratch, not a mapped image. `seg1:0x1812` is
-   `OpenFile(name, &ofstruct, OF_EXIST)`, an existence probe, which is why the file is
-   opened and closed without being read, and `0xd02b` builds a structure rather than
-   reading. Something between `seg1:0xc181` and `seg1:0xc29f` is meant to fill it.
+   ⇒ **★ THE LOADER CONTRACT, STATED EXACTLY.** Every call in krnl386's bring-up has
+   now been read and **none of them reads its NE header from disk**: `seg1:0x1812` is
+   `OpenFile(..., OF_EXIST)` (an existence probe), `0xd02b`→`0xd13c`→`0xd012`/`0x5d7f`
+   are heap and selector helpers, and `0xd45a` reads `ne_enttab` at `DS:[4]` and
+   `ne_cseg` at `DS:[0x1c]` **directly**. So `[0x5a0]` — a 64 KB selector krnl386 builds
+   over `base(SS) + SP` at `seg1:0xc17e` — is expected to **already contain krnl386's NE
+   header and tables**. Our NE loader has the image in `g_wow_img[0]` and never puts it
+   anywhere the guest can see. That is "two loaders, two copies" stated exactly, and it
+   is the next piece of work.
+   ▸ Also fixed on the way: **DGROUP is bigger than the segment in the file** — a Win16
+   loader adds `ne_heap` + `ne_stack` to the automatic data segment, and only the
+   *header* says so. krnl386 asks for `heap 0x200` and got none.
    krnl386 **is** using our `VirtualAlloc` block as its heap (`0007 setbase
    0x03a70000`, `0008 setlimit 0x8807f`). Our NE loader puts module images in HOST
    memory (`0x0295xxxx`) while krnl386 does its own loading — two loaders, two copies,

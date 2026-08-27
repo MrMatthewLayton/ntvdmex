@@ -389,6 +389,41 @@ path to open. Serviced in `main.c` rather than `wow32.h` because it needs the DO
 **Unimplemented BOPs in a run: zero.**
 
 
+## Part 14 — ★ the loader contract, stated exactly
+
+Every call in krnl386's own bring-up path has now been read, and **none of them reads its
+NE header from disk**:
+
+| call | what it actually is |
+|---|---|
+| `seg1:0x1812` | `OpenFile(lpName, lpReOpenBuff, wStyle)` — and the `wStyle` passed is `0x4000` = **OF_EXIST**, an existence probe |
+| `seg1:0xd02b` → `0xd13c` → `0xd012` / `0x5d7f` | heap sizing and selector helpers (`0xd012` is "selector → 32-bit linear base") |
+| `seg1:0xd45a` | the parser: `lds si,[bp+4]` is the name, `mov ds,[bp+8]` is the header segment, and it reads `ne_enttab` at `DS:[4]` and `ne_cseg` at `DS:[0x1c]` **directly** |
+
+⇒ `[0x5a0]` — a 64 KB selector krnl386 builds at `seg1:0xc17e` over `base(SS) + SP` — is
+expected to **already contain krnl386's NE header and tables** when `0xd45a` parses it.
+Confirmed by measurement: with the debugger resolving selectors, a breakpoint at
+`seg1:0xd471` (where `DS = [0x5a0]`, `SI = 0`) reports
+
+```
+dsbase=0x0001a97e  @ds:si=00 00 4d 00 01 00 01 00 00 00 ... c4 c4 cf c4 c4 cf
+```
+
+— the buffer straddles our own host pool at `0x1a990`, which is where the `c4 c4 cf`
+comes from.
+
+★ **That is a loader contract we are not honouring.** Our NE loader has the file image in
+host memory (`g_wow_img[0]`) and never puts it anywhere the guest can see. This is the
+"two loaders, two copies" problem stated exactly, and it is the next piece of work.
+
+▸ One correctness fix found on the way and made: **DGROUP is bigger than the segment in
+the file.** A Win16 loader allocates the automatic data segment's length PLUS `ne_heap`
+PLUS `ne_stack` — the local heap and stack live above the initialised data, and only the
+*header* says so, not the segment table. krnl386 asks for `heap 0x200` and got none, so its
+DGROUP was exactly as large as its initialised data and any local allocation would have run
+off the end. Now `0x1ba2 + 0x200 = 0x1da2`. It does not by itself move the frontier.
+
+
 ## Regression
 
 - `selftest.com` **8/8 PASS on real hardware** after the SysVars change — the guest from
