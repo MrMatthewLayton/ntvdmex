@@ -6620,6 +6620,15 @@ static int wow_place_v86(dos_machine_t *mp, WORD *ecs, WORD *eip,
         uint32_t need = ne_seg_alloc_size(s), k;
         WORD seg = 0, max = 0;
         volatile BYTE *dst;
+        /* Room for the relocation records copied in below -- krnl386 reads them back
+           out of the loaded segment, so they are part of what has to be resident. */
+        if (s->sector && (s->flags & NE_SEG_RELOCS)) {
+            uint32_t ro = s->file_off + s->length;
+            if (ro + 2 <= ne->img_len) {
+                uint32_t rb = 2 + (uint32_t)(img[ro] | (img[ro + 1] << 8)) * 8;
+                if (s->length + rb > need) need = s->length + rb;
+            }
+        }
         /* ── DGROUP IS BIGGER THAN THE SEGMENT IN THE FILE. ────────────────────────
              For the automatic data segment a Win16 loader allocates the segment's
              length PLUS ne_heap PLUS ne_stack -- the local heap and stack live above
@@ -6651,6 +6660,35 @@ static int wow_place_v86(dos_machine_t *mp, WORD *ecs, WORD *eip,
         dst = (volatile BYTE *)(ULONG_PTR)((DWORD)seg << 4);
         for (k = 0; k < need; ++k) dst[k] = 0;
         if (s->sector) for (k = 0; k < s->length; ++k) dst[k] = img[s->file_off + k];
+        /* ── ★ AND THE RELOCATION RECORDS, WHICH LIVE AFTER THE SEGMENT DATA. ──────
+             An NE segment with NE_SEG_RELOCS is followed in the FILE by a WORD count
+             and that many 8-byte records. A conventional loader applies them and
+             throws them away -- ours does too (ne_apply_relocs reads them straight
+             out of the image). But krnl386 relocates its own copy AGAIN: at
+             seg1:0x921b it does `mov es,dx / mov si,cx / lodsw` to read the count
+             from the LOADED SEGMENT, and at seg1:0x8d54 walks the records from
+             there. With only `length` bytes copied it was reading whatever followed,
+             decoding it as relocation records, and taking them for IMPORTED fixups --
+             which sent it into the module-reference table (`es:[0x28]`) of a module
+             that imports from nothing, so `call 0x8cb6` returned 0 and LoadSegment
+             failed. Measured to the instruction; see session 31 part 20.
+           So copy them too, and size the block to hold them. */
+        if (s->sector && (s->flags & NE_SEG_RELOCS)) {
+            uint32_t ro = s->file_off + s->length;
+            if (ro + 2 <= ne->img_len) {
+                uint32_t nrel = (uint32_t)(img[ro] | (img[ro + 1] << 8));
+                uint32_t rb   = 2 + nrel * 8;
+                if (ro + rb <= ne->img_len && s->length + rb <= need)
+                    for (k = 0; k < rb; ++k) dst[s->length + k] = img[ro + k];
+                q = m;
+                q = zput(q, "WOWV86:   + "); q = zhex(q, nrel);
+                q = zput(q, " relocation records ("); q = zhex(q, rb);
+                q = zput(q, " bytes) at segment offset 0x"); q = zhex(q, s->length);
+                q = zput(q, (s->length + rb <= need) ? "\r\n"
+                                                     : " -- ⚠ DOES NOT FIT\r\n");
+                log_append(LDTLOG_PATH, m, q);
+            }
+        }
         s->mem = (uint8_t *)(ULONG_PTR)((DWORD)seg << 4);   /* relocate in place */
         s->seg = seg;                                        /* a PARAGRAPH now     */
 
