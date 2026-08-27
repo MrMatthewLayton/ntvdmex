@@ -6599,6 +6599,28 @@ static int wow_place_v86(dos_machine_t *mp, WORD *ecs, WORD *eip,
         uint32_t need = ne_seg_alloc_size(s), k;
         WORD seg = 0, max = 0;
         volatile BYTE *dst;
+        /* ── DGROUP IS BIGGER THAN THE SEGMENT IN THE FILE. ────────────────────────
+             For the automatic data segment a Win16 loader allocates the segment's
+             length PLUS ne_heap PLUS ne_stack -- the local heap and stack live above
+             the initialised data, and nothing in the segment table says so.
+             ne_seg_alloc_size() only knows about the segment, so the header's own
+             fields have to be added here. krnl386 asks for heap 0x200 and got none,
+             which left its DGROUP exactly as large as its initialised data: any local
+             allocation would have run off the end of the segment. */
+        if (ne->autodata && i == (int)ne->autodata - 1) {
+            uint32_t dg = need + ne->heap + ne->stack;
+            if (dg > 0x10000u) dg = 0x10000u;
+            if (dg > need) {
+                q = m;
+                q = zput(q, "WOWV86: DGROUP (seg "); q = zhex(q, (DWORD)(i + 1));
+                q = zput(q, ") 0x");        q = zhex(q, need);
+                q = zput(q, " + heap 0x");  q = zhex(q, ne->heap);
+                q = zput(q, " + stack 0x"); q = zhex(q, ne->stack);
+                q = zput(q, " = 0x");       q = zhex(q, dg);
+                q = zput(q, "\r\n"); log_append(LDTLOG_PATH, m, q);
+                need = dg;
+            }
+        }
         if (dos_alloc(NULL, mp->first_mcb, (WORD)((need + 15) >> 4), &seg, &max) || !seg) {
             q = m; q = zput(q, "WOWV86: no conventional memory for seg ");
             q = zhex(q, (DWORD)(i + 1)); q = zput(q, ", largest free 0x"); q = zhex(q, max);
