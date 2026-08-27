@@ -7898,6 +7898,69 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
     (void)steps;
     /* First safe moment to re-plant anything the skip mode stepped over. */
     if (g_bp_n) dpmi_bp_rearm_pending(dpmi_sel_base((WORD)(VDM_REG(tib, VTIB_CS) & 0xFFFF)) + eip);
+    /* ── NATIVE BOPs: krnl386 CALLING ITS 32-BIT COMPANION. (GH #128) ──────────────
+         `C4 C4 nn` in krnl386's OWN code -- not one our INT-site patcher planted, so
+         dpmi_bop_vec() finds nothing in the patch map and hands us vec 0. That used to
+         fall through to "unexpected PM stop", which stopped the guest while leaving
+         the host alive: a hang, not a crash, and misleading to look at.
+
+         This is the WOW32 half of WOW -- what real Windows implements in wow32.dll --
+         reached exactly the way our own DOS layer uses BOPs in the other direction.
+         seg1 holds 13 sites: 0x51 x1, 0x53 x1, 0x56 x10, 0xFE x1.
+
+       ★ 0x53 SUB 0x03 IS THE ONE THAT MATTERS FIRST, AND ITS OWN CODE SAYS SO:
+             3021  push ds/ds/es/bx/dx
+             3026  C4 C4 53 03
+             302a  mov [0x6ac],bx / mov [0x6ae],dx / mov [0x6b0],es
+             3036  or bx,dx / jz 0x3074
+         It asks for a far pointer to the 32-bit dispatch routine and stores it. Every
+         BOP 0x56 site is then guarded by `call dword far [0x6ac]` -- use the pointer
+         if there is one, otherwise BOP. So answering NULL is not a stub: it selects
+         the per-call BOP path that krnl386 already implements, and is the honest
+         answer while no 32-bit companion exists.
+       ⚠ Note the LENGTHS DIFFER. 0x53 carries a sub-function byte (4 bytes total);
+         0x51/0x56/0xFE do not (3). Read off the following instructions: after 0x56
+         comes `83 C4 nn` (add sp,nn -- a cdecl cleanup, so 0x56 is a call with stack
+         arguments), and after 0x51 comes `2E 8E 1E 30 00` (mov ds,cs:[0x30]). Getting
+         a length wrong here resumes the guest mid-instruction. */
+    if (vec == 0 && ev == VDM_EVENT_BOP) {
+        DWORD blin = dpmi_sel_base((WORD)(VDM_REG(tib, VTIB_CS) & 0xFFFF)) + eip;
+        const volatile BYTE *bb = (const volatile BYTE *)(ULONG_PTR)blin;
+        if (bb[0] == 0xC4 && bb[1] == 0xC4) {
+            BYTE bcode = bb[2], bsub = bb[3];
+            p = zput(p, "WOWBOP 0x"); p = zhexb(p, bcode);
+            /* Only 0x53 carries a sub-function byte. Printing bb[3] for the others
+               shows the first byte of the NEXT instruction and reads like data. */
+            if (bcode == 0x53) { p = zput(p, " sub=0x"); p = zhexb(p, bsub); }
+            p = zput(p, " at 0x");    p = zhex(p, eip);
+            if (bcode == 0x53 && bsub == 0x03) {
+                VDM_SET16(tib, VTIB_EBX, 0);
+                VDM_SET16(tib, VTIB_EDX, 0);
+                VDM_SET16(tib, VTIB_ES,  0);
+                VDM_REG(tib, VTIB_EIP) += 4;
+                p = zput(p, " -> no 32-bit companion (BX:DX=0) => it will use the "
+                            "per-call BOP path\r\n");
+                log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                return 1;
+            }
+            /* ── STEP OVER AND KEEP GOING, RATHER THAN STOPPING THE GUEST. ─────
+                 Returning -1 here halts the run at the first unimplemented service,
+                 so each rig round reveals exactly one BOP. Stepping over turns the
+                 wall into a TRACE: one run lists every service krnl386 asks for, in
+                 order, which is the shape of the work rather than the next item of it.
+               ⚠ THIS IS A DELIBERATE LIE TO THE GUEST and it is logged as one. The
+                 call did not happen; whatever it returns is whatever was already in
+                 the registers. Findings that depend on execution AFTER an unimplemented
+                 BOP are suspect, and the log is what lets a reader tell. All the
+                 non-0x53 sites are 3 bytes -- see the length note above. */
+            VDM_REG(tib, VTIB_EIP) += 3;
+            p = zput(p, " -> UNIMPLEMENTED, STEPPED OVER (registers untouched -- the "
+                        "call did NOT happen)\r\n");
+            log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+            return 1;
+        }
+    }
+
     /* ── PUSH ANYTHING THE GUEST WROTE INTO THE DESCRIPTOR SHADOW. (GH #128) ────────
          krnl386 claims descriptor slots by writing the table directly and then calls
          INT 31h to configure them, so reconciling HERE -- before servicing anything --
