@@ -4,7 +4,7 @@
 > this file top to bottom and you will know where it is, what works, what does not, and
 > what to do next.
 
-- **Last updated:** 2026-08-26 (session 30)
+- **Last updated:** 2026-08-27 (session 31)
 - **Branch:** `m9/completeness`
 - **Tracker:** [140+ issues](https://github.com/MrMatthewLayton/ntvdmex/issues) — reconciled against the repo on 2026-08-26 (`tools/gh/backfill.py` is the manifest)
 - **Knowledge base:** the [wiki](https://github.com/MrMatthewLayton/ntvdmex/wiki)
@@ -81,74 +81,85 @@ and nothing has drawn a pixel. What works is the *bootstrap* — see #128 below.
 > refused outright, and the real name re-enters us through the IFEO hook. So there is no
 > safe install story until WOW exists, and #128 moved onto the critical path.
 
-1. **[#128] WOW / Win16 — IN PROGRESS, and the loader half is DONE.** On real
-   hardware the **entire XP WOW module set loads, gets LDT selectors and binds**:
-   krnl386 + system/keyboard/mouse/sound/comm drivers + gdi + user + shell + toolhelp +
-   wowexec. Every import resolves; 27 descriptors installed and confirmed by `LAR`
-   readback. Site counts match the off-VM battery to the digit (KERNEL 495, GDI 781,
-   USER 1269, WOWEXEC 144). Evidence in `docs/research/evidence/wow-bind-rig.txt`;
-   `src/wow/ne.h` + a 209-check battery over all 15 real binaries.
-   ⚠️ **krnl386 is a LIBRARY, not a program** — no stack of its own, and its `CS:IP` is a
-   DLL *init* entry. Do not jump to it. Bootstrap: init krnl386 → user + gdi → run
-   **wowexec.exe** (the PROGRAM) → wowexec launches the app.
-   ⚠️ **Load every module, assign every selector, then relocate ONCE.** Relocation is not
-   idempotent: a chained record's next site is the word *at* the current site.
-   ⚠️ **Its init entry demands `AX == 0x4B4F` ('OK')** and it is a **DPMI client** — not
-   the documented Win16 `LibMain` convention. Measured by disassembly.
-   ⚠️ **LDT indices below `DPMI_LDT_RESERVED` are force-typed to data by
-   `dpmi_install()`** — WOW's first allocation is a CODE segment and silently became
-   data until the `LAR` readback caught it.
-   ⚠️ **krnl386's init entry runs in V86, NOT protected mode.** Proven three ways from
-   its own code: it does `mov ax,es / shl ax,4` (a selector shifted by 4 is nonsense), it
-   stores through `cs:` (never legal in PM), and at `c0c2` it calls `INT 2Fh 1687` and
-   **switches itself** — then redoes that same `cs:0x30` store through a DPMI `000A`
-   alias. It is a V86 program that becomes a 16-bit DPMI client, which is why `0002`
-   (paragraph → selector) is the function it calls most.
-   ★ **krnl386 RUNS.** On real hardware it is entered in V86 at `0141:c02b` with
-   `AX=0x4B4F`, reads the DOS list of lists, finds our DPMI host via `INT 2Fh 1687`,
-   **switches itself into 16-bit protected mode**, and takes a `000A` alias of its own
-   CS — every step matching the disassembly instruction for instruction.
-   It used to stop with `NTVDM KERNEL: Inadequate DPMI Server` because we refused
-   `INT 2Fh 168A`, the **"MS-DOS" vendor-specific API — which is REQUIRED**, not
-   optional (an earlier note in session 30 says otherwise and is corrected in Part 9).
-   ⚠️ **A PM guest cannot reach the IVT**, so any `INT nn` absent from the patcher's
-   list stays a raw `CD nn` and silently terminates the VDM. `0x2F` was missing.
-   ★ **The vendor API is implemented and krnl386 runs on through it.** Measured off
-   stock: `168A` is PM-only and returns a **writable selector onto the descriptor
-   table** (verified two ways — the descriptor at `window[CS & 0xFFF8]` decodes to the
-   same base DPMI `0006` reports for CS, with the right access byte). Our own LDT is
-   **not** user-mapped, so we hand krnl386 a **shadow** that is reconciled into the real
-   LDT on entry to any PM interrupt service. Confirmed necessary and sufficient on
-   hardware: krnl386 writes a descriptor directly (`base=0x400`, the BDA) and the sync
-   installs it. `INT 31h 000D` (allocate specific descriptor) added for the same reason.
-   The private `INT 31h` family is decoded too: **`04F2` = "commit CX descriptors from
-   selector BX"** (read off its eight call sites — so stock needs a flush as well, and
-   our shadow is the *same* design, not a workaround) and **`04F1` = the private twin of
-   `0000`**. Both implemented, plus `000D`. krnl386 now gets through `d762` and `0x6763`.
-   ★★ **STRUCTURAL: krnl386 CALLS A 32-BIT COMPANION VIA BOPs — the WOW32 side.**
-   `C4 C4 nn` appears **natively** in krnl386 (in the file, unrelocated — *not* our INT
-   patcher, which writes the same two bytes). seg1 holds 13 sites: `0x51`×1, `0x53`×1,
-   `0x56`×10, `0xFE`×1. Now dispatched rather than falling through to "unexpected PM
-   stop".
-   ⚠️ **Lengths differ** — `0x53` carries a sub-function byte (4 bytes), the rest are 3.
-   Wrong length resumes the guest mid-instruction.
-   ★ **`0x53/03` = "give me the 32-bit dispatch entry"; NULL is the correct answer**, not
-   a stub — every `0x56` site is guarded by `call dword far [0x6ac]` *if set*, else BOP,
-   so NULL selects the per-call path krnl386 already implements.
-   ★ **`0x51` is the generic 16→32 GATEWAY, not a service.** Every call routes through one
-   thunk at `seg1:0x2bb6`, reached from a per-function stub shaped
-   `push <args> / push <ID> / push cs / call 0x2bb6`. **So the WOW32 interface is a small
-   integer ID namespace, and the ID is at `[ss:bp+6]`** — the host now logs it.
-   ⇒ WOW is "NE loader + DPMI + **a WOW32 dispatch on an integer function ID**".
-   ★ **The whole surface is now enumerated: 82 function IDs with argument sizes**, in
-   [`docs/research/wow32-call-surface.md`](research/wow32-call-surface.md), read straight
-   off the binary by `tools/ne/wowthunks.py` (the static stub shape and the live frame
-   agree, which is what makes either trustworthy). ⚠️ **Only krnl386 has these stubs** —
-   user/gdi/drivers funnel through KERNEL via the `push api-index / call far KERNEL`
-   tables instead, so the 16↔32 boundary lives in exactly one module.
+1. **[#128] WOW / Win16 — IN PROGRESS. The loader half is DONE and the WOW32 half
+   has STARTED: krnl386 is past its heap and doing real file I/O.**
+
+   ### The bootstrap (session 30, unchanged and still true)
+   On real hardware the **entire XP WOW module set loads, gets LDT selectors and
+   binds**: krnl386 + system/keyboard/mouse/sound/comm drivers + gdi + user + shell
+   + toolhelp + wowexec. Every import resolves; 27 descriptors installed and
+   confirmed by `LAR` readback. Site counts match the off-VM battery to the digit
+   (KERNEL 495, GDI 781, USER 1269, WOWEXEC 144). `src/wow/ne.h` + a 209-check
+   battery over all 15 real binaries.
+   ⚠️ **krnl386 is a LIBRARY, not a program** — no stack of its own, and its `CS:IP`
+   is a DLL *init* entry. Bootstrap: init krnl386 → user + gdi → run **wowexec.exe**
+   (the PROGRAM) → wowexec launches the app.
+   ⚠️ **Load every module, assign every selector, then relocate ONCE.** Relocation is
+   not idempotent. Entry indicator **`0xFE` is a CONSTANT**, and **ADDITIVE adds**.
+   ⚠️ **Its init entry demands `AX == 0x4B4F`**, runs in **V86** (not PM), and turns
+   itself into a 16-bit DPMI client. **LDT indices below `DPMI_LDT_RESERVED` are
+   force-typed to data.** **A PM guest cannot reach the IVT**, so any `INT nn` absent
+   from the patcher's list stays a raw `CD nn` and **silently terminates the VDM**.
+   The `INT 2Fh 168A` vendor API is **REQUIRED**; our LDT is not user-mapped, so
+   krnl386 gets a **descriptor-table shadow** reconciled on entry to any PM interrupt
+   service. `04F2` = "commit CX descriptors from selector BX"; `04F1` = the private
+   twin of `0000`.
+
+   ### ★ The WOW32 half (session 31) — the interface is PINNED and 5 functions run
+   The 16↔32 boundary lives in **exactly one module**: only krnl386 has these stubs,
+   user/gdi/drivers funnel through KERNEL. `0x51` is the generic gateway and the
+   whole interface is **82 integer function IDs**, now with **29 of them NAMED by
+   krnl386's own export table** — no inference at all. See
+   [`wow32-call-surface.md`](research/wow32-call-surface.md) for the frame diagram,
+   the argument convention and the work list, and `src/wow/wow32.h` for the code.
+
+   ⚠️ **Arguments are at `bp+16`, not `bp+12`.** Session 30's "VirtualAlloc's argument
+   order is not pinned down, two readings possible" was an **instrument that lied** —
+   the trace read four bytes low and printed the caller's far return address as the
+   first two arguments. There was only ever one reading.
+   ⚠️ **The return value is NOT a register.** The thunk does `sub sp,4` before the BOP
+   and `pop ax / pop dx` after it. It must be written into that stack hole at
+   `[bp-16]`. Getting this wrong is silent.
+   ⚠️ **`SysVars+0x6A` was zero, and krnl386 WRITES through what it finds there.** Its
+   init builds six far pointers into DOS's data area from a table named by that word;
+   with SysVars zeroed those became offsets into `DOS_HDLR_SEG` — our own INT 21h BOP
+   stub and DPMI entry points. `dos_wow_publish()` plants the table now, shaped like
+   the one `lolprobe` measured off stock. **Clearing "error #2: Unable to initialize
+   heap" needed this, not just the allocator.**
+   ★ **Implemented:** `0xb8` VirtualAlloc (krnl386 services **DPMI 0501** with it),
+   `0xb9` VirtualFree, `0xbc` GlobalMemoryStatus, `0xcf` GetSystemDefaultLangID,
+   `0x78` (record the DOS data area).
+   ★ **DECLINING IS A REAL ANSWER.** krnl386 hooks INT 21h in PM and chains to
+   `cs:[0x3c]` — real DOS, i.e. **our own working layer** — when the 32-bit side
+   returns `0xFFFF`. Seven file functions are declined and krnl386 now **opens a real
+   file and gets handle 5 back**, which then appears as the argument to its
+   subsequent get-date and close calls. ⚠️ Only where the call site says so:
+   `tools/ne/wowdecline.py` finds three IDs where `0xFFFF` is a plain error.
+
+   ### ⏹ Where it stops today
+   The guest is resumed at our default PM stub `0x14f:0x95` (the IRET of the INT 31h
+   vector) after an `04F2` descriptor commit and **does not come back**. Breakpoints
+   prove it never reaches the addresses the stack frame there appears to name, so
+   **that frame is stale and the naive reading of it is wrong** — an open question,
+   not a conclusion.
+   ⚠️ **THE EXECUTING krnl386 IS AT LINEAR `0x1410` (segment `0141`), NOT at the base
+   the bind stage logs.** Three runs of breakpoints were armed at `0x02950000+off`,
+   reported themselves ARMED with exactly the right displaced bytes, and never fired
+   — a second, dead copy. `csbase=` is printed on every PM heartbeat now.
+   ⚠️ **The watchdog thread logs ONE sample per WOW run and then stops**, for reasons
+   not yet found; it is not a usable instrument here. The `PMHB` heartbeat comes from
+   the main loop, which is provably alive.
    ⚠️ Before consulting any other NTVDM project, read
    [`reference-projects.md`](reference-projects.md).
-   for this). Still unknown: **`INT 31h 04F3`**.
+   Still unknown: **`INT 31h 04F3`**, and what four of the six `SysVars+0x6A` pointers
+   mean (two are pinned: LASTDRIVE and the current-drive byte).
+
+   ### Tools for this work
+   `tools/ne/nedis.py` (16-bit disassembly with the WOW32 stubs named inline;
+   `--wowfunc <id>` gives the stub, its callers and the argument-building code),
+   `tools/ne/wowmap.py` (names the surface from the export table),
+   `tools/ne/wowdecline.py` (which calls may be declined), `scripts/bmwow.sh` (drive a
+   WOW run on the rig through controld, which the watcher path cannot do).
 
 2. **[#131] Console/stdio integration.** Independent of WOW and needed regardless:
    anything script-driven behaves differently under NTVDMEX than under stock.
