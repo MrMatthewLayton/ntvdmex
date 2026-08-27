@@ -699,3 +699,99 @@ cannot, because `rt.bat` runs a DOS target out of `bm\tests` and a WOW run is "l
 4. **Find out why the watchdog thread stops after one sample.** It is a diagnostic the
    whole project leans on.
 5. Then: user/gdi's KERNEL-funnelled path, then `wowexec`, then an app.
+
+---
+
+## ▶ RESUME HERE — the operational detail a fresh context needs
+
+Everything below is how to *drive* the work, not what was learned; the findings are in the
+parts above and in [`docs/STATE.md`](../../STATE.md).
+
+### The loop
+
+```bash
+./scripts/build.sh                                    # -> build/ntvdmhost.exe
+ARCHIVE=build/wowruns ./scripts/bmwow.sh              # deploy + run a WOW round on the rig
+PMBP=1 ARCHIVE=build/wowruns ./scripts/bmwow.sh       # ...keeping pmbp.txt armed
+```
+
+`bmwow.sh` deploys, checksums, **deletes the destination logs**, drives the run through
+`controld` (the watcher path cannot launch a Win16 program), and waits for `wow_done.txt`.
+Results land in `/private/tmp/xpshare/wow_host.txt` and `wow_ldt.txt`; ~55 archived runs of
+this session are in `build/wowruns/`.
+
+⚠️ **SMB writes need `dangerouslyDisableSandbox: true`.** `/private/tmp/xpshare` is outside
+the sandbox's write allowlist, so every `cp`/`rm`/`printf >` to the share fails with
+"Operation not permitted" otherwise.
+
+### Breakpoints (`pmbp.txt` on the share, CRLF)
+
+Format, one per line: `<linear addr> <linear addr to DUMP> <skip> <mode> <rep>`.
+Set `rep`=1 to keep it armed after a hit. Absent file = no breakpoints.
+
+```
+0000F575 0001FCA0 0 0 1   # break, and dump 64 bytes at 0x1FCA0 on each hit
+```
+
+★ **THE ADDRESS IS LINEAR, so it is `csbase + segment offset`, and `csbase` MOVES whenever
+an allocation size changes.** Derive it from the run you are about to repeat, never from
+memory and never by sorting:
+
+```bash
+grep -oE "cs:eip=0x0000000f:[^ ]* .*csbase=0x[0-9a-f]*" wow_host.txt \
+  | grep -o "csbase=0x[0-9a-f]*" | sort -u | head -1
+```
+
+`0x0000000f` is krnl386's code selector. Sorting *all* `csbase` values instead picks the
+default PM handler selector and arms the breakpoint ~0x1410 bytes off — that cost a run.
+At the time of writing it is **`0x6430`**.
+
+★★ **ALWAYS CHECK THE `displaced <bytes>` IN THE ARMED LINE against
+`tools/ne/nedis.py guest/ne/krnl386.exe 1 <off> <len>`.** It is the cheapest guard in the
+toolkit and caught both the wrong-`csbase` and dead-copy mistakes. `dpmi_bp_arm` now also
+REFUSES a breakpoint on a one-byte instruction, naming the byte.
+
+### Tracing
+
+- `dostrace.flag` on the share turns on the **full INT 21h trace**. It is OPT-IN; without
+  it the log contains no ordinary DOS calls at all, and their absence means nothing.
+- `PMHB` lines come from the main PM loop (every step for the first 256) and carry
+  position, `csbase`, `ss:sp`, the code bytes, the IRET frame and the WOW32 counters.
+- `DPMI-BP HIT` resolves DS/ES itself and dumps `@ds:si` and `@es:di`.
+- The **watchdog thread is not usable here** — it logs one sample per WOW run and stops.
+
+### Reading the guest
+
+```bash
+tools/ne/nedis.py guest/ne/krnl386.exe 1 0x8e0e 0x60    # disassemble a window
+tools/ne/nedis.py guest/ne/krnl386.exe --wowfunc 0xc9   # stub + callers + arg-building code
+tools/ne/nedis.py guest/ne/krnl386.exe --callers 0xd45a
+tools/ne/wowmap.py guest/ne/krnl386.exe                 # name the 82 WOW32 IDs
+tools/ne/wowdecline.py guest/ne/krnl386.exe             # which may be declined
+```
+
+### Rig state as left
+
+IFEO `Debugger` **set**, `wowtry.flag` **present**, `pmbp.txt` and `dostrace.flag`
+**removed**. `wowrun.bat` writes `target.txt` itself (pointing at `SYSEDIT.EXE`) so a WOW
+run cannot inherit the last DOS test's program.
+
+### The immediate next step
+
+Read `seg1:0x8e0e` onward — the tail of krnl386's INTERNALREF fixup. Known: the target
+handle is `0x0207`, `test al,1` is taken, and the patch goes through `0x8e3f`, which loads
+`ds` from `[bp+0x10]` and calls `0x5d09` (selector → base). `0x8dc7` is entered **once**
+for four records, so record 1 does not complete. Breakpoint candidates with their expected
+first bytes: `0x8e0e` (`26 8b`), `0x8e3f` (`50 52`), `0x8e4c` (`8e d8`), `0x8f41` (the
+failure return), `0x92b5` (`eb 61`, the known failure jump).
+
+### Regression, every time
+
+```bash
+./tools/dostest/run.sh          # 209 NE checks + every battery, off-VM
+./scripts/check-imports.sh      # XP-safe imports
+TIMEOUT=150 ./scripts/bmqueue.sh selftest.com   # the OTHER guest class, on real hardware
+```
+
+The last is not optional: the WOW work touches `wow_place_v86`, the DOS environment and
+the PM INT 21h path, and *a fix measured on one guest is a fix for none*.

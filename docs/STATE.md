@@ -250,6 +250,17 @@ and nothing has drawn a pixel. What works is the *bootstrap* — see #128 below.
    Still unknown: **`INT 31h 04F3`**, and what four of the six `SysVars+0x6A` pointers
    mean (two are pinned: LASTDRIVE and the current-drive byte).
 
+   ### ▶ How to drive it
+   `ARCHIVE=build/wowruns ./scripts/bmwow.sh` deploys and runs a WOW round on the rig
+   (add `PMBP=1` to keep `pmbp.txt` armed). ⚠️ **SMB writes to `/private/tmp/xpshare`
+   need the sandbox disabled.** `dostrace.flag` turns on the INT 21h trace — it is
+   **opt-in**, so its absence is not evidence. **Breakpoint addresses are LINEAR =
+   `csbase + offset`, and `csbase` moves whenever an allocation size changes** — derive
+   it per run from a `cs:eip=0x0000000f:` line, and **always check the armed line's
+   `displaced <bytes>` against `nedis.py`**. Full operational detail, including the
+   immediate next breakpoints, is in
+   [`session-31.md`](log/sessions/session-31.md#-resume-here--the-operational-detail-a-fresh-context-needs).
+
    ### Tools for this work
    `tools/ne/nedis.py` (16-bit disassembly with the WOW32 stubs named inline;
    `--wowfunc <id>` gives the stub, its callers and the argument-building code),
