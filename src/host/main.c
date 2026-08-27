@@ -7979,10 +7979,26 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                        Naming it here is what turns a wall of identical BOP lines into
                        a list of functions to implement. */
                     if (bcode == 0x51) {
-                        p = zput(p, " FUNC=0x");
-                        p = zhex(p, (DWORD)(fb[6] | (fb[7] << 8)));
-                        p = zput(p, " retstub=0x");
+                        /* The per-function stub pushes <arg byte count>, 0, <ID>, so
+                           the frame reads: bp+2/+4 return into the stub, bp+6 ID,
+                           bp+10 argument byte count, bp+12.. the caller's arguments.
+                           Verified against tools/ne/wowthunks.py, which reads the same
+                           three pushes straight out of the binary. */
+                        DWORD fid  = (DWORD)(fb[6] | (fb[7] << 8));
+                        DWORD nby  = (DWORD)(fb[10] | (fb[11] << 8));
+                        DWORD na   = nby / 2, k;
+                        p = zput(p, " FUNC=0x"); p = zhex(p, fid);
+                        p = zput(p, " args=");   p = zhex(p, nby);
+                        p = zput(p, "b retstub=0x");
                         p = zhex(p, (DWORD)(fb[2] | (fb[3] << 8)));
+                        if (na && na <= 16) {
+                            p = zput(p, " (");
+                            for (k = 0; k < na; ++k) {
+                                if (k) p = zput(p, " ");
+                                p = zhex(p, (DWORD)(fb[12 + k * 2] | (fb[13 + k * 2] << 8)));
+                            }
+                            p = zput(p, ")");
+                        }
                     }
                     p = zput(p, "\r\n    @ss:bp");
                     for (w = 0; w < 12; ++w) {
