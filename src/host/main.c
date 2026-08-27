@@ -6154,7 +6154,21 @@ veh_fatal:
 static DWORD WINAPI dpmi_watchdog(LPVOID param)
 {
     static char wb[512]; char *q = wb; LONG prev = -1; (void)param;
-    q = zput(q, "STAGE3-DPMI: watchdog started; sampling host PM-loop heartbeat (run 52 diag)\r\n");
+    /* ── ★★ AN INSTRUMENT MUST BE ABLE TO PREEMPT WHAT IT INSTRUMENTS. ─────────────
+         The thread that RUNS THE GUEST is raised to THREAD_PRIORITY_ABOVE_NORMAL (or
+         HIGHEST with execprio>=2) so the audio pump cannot preempt guest code. This
+         thread was left at NORMAL -- and the rig is a SINGLE-CORE box. So the moment
+         the guest stops yielding, which is the only moment this thread exists for, it
+         is the lowest-priority runnable thread in the process and gets nothing.
+       ⚠ That is the shape of the one-sample bug: wd[0] lands during bring-up while the
+         guest is still returning to the host between PM events; from the first real
+         spin onward there are no more samples, no stand-down line and no wedge line --
+         the thread is not dead, it is starved. Session 31 read the same silence as the
+         thread dying and guarded a dereference that was never reached.
+       HIGHEST beats the guest at either execprio setting. Safe because this thread
+         sleeps 250 ms out of every 250 ms; it can never starve the guest back. */
+    SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST);
+    q = zput(q, "STAGE3-DPMI: watchdog started at THREAD_PRIORITY_HIGHEST; sampling host PM-loop heartbeat\r\n");
     /* ► LOG, don't just serial. serial_out writes COM1, which exists on the QEMU dev VM
          and NOT on the bare-metal box -- so on the rig these lines went nowhere. That
          cost us a wrong conclusion about Doom (session 15): the absence of wd[] samples
@@ -6188,6 +6202,16 @@ static DWORD WINAPI dpmi_watchdog(LPVOID param)
             log_append(LOG_PATH, wb, q); serial_out(wb, q);
             return 0;
         }
+        /* ⚠ A TICK MARKER, so "no samples" can be told apart from "never woke up".
+             Printed AFTER Sleep and BEFORE anything else, for the first 24 iterations.
+             If wd[0] is followed by tick 1 but no sample, the fault is below; if there
+             is no tick 1 at all, the thread never got the CPU back -- which is a
+             different bug with a different fix, and the two were indistinguishable in
+             every log so far. Cheap and self-retiring. */
+        if (n < 24) {
+            q = zput(q, "  wdtick "); q = zhex(q, n); q = zput(q, "\r\n");
+            log_append(LOG_PATH, wb, q); q = wb;
+        }
         iter   = g_dpmi_iter;
         frozen = (iter == prev) ? (frozen + 1) : 0;
         if (n < 12 || frozen) {                         /* diagnostic window + any freeze */
@@ -6201,7 +6225,33 @@ static DWORD WINAPI dpmi_watchdog(LPVOID param)
             q = zput(q, " vec="); q = zhex(q, g_dpmi_last_vec); q = zput(q, "}");
             q = zput(q, " veh{any="); q = zhex(q, (unsigned)g_veh_any);
             q = zput(q, " fatal="); q = zhex(q, (unsigned)g_veh_fatal); q = zput(q, "}");
-            if (frozen && g_dpmi_pm) {                   /* wedged: dump the guest bytes there */
+
+            /* ── ★ FLUSH THE CHEAP READING BEFORE ATTEMPTING THE EXPENSIVE ONE. ────
+                 Everything above is loads of our own globals and cannot fault. What
+                 follows resolves a guest selector, dereferences guest memory and
+                 suspends another thread -- any of which can fault or block, and if it
+                 does on the SAME line, the basic sample is lost with it.
+               ⚠ THIS IS THE ACTUAL SHAPE OF THE ONE-SAMPLE BUG. wd[0] has frozen==0
+                 and skips the enrichment entirely; wd[1] is the first sample to attempt
+                 it -- and on every WOW run the log has exactly wd[0] and then silence,
+                 with no stand-down line and no wedge line, i.e. the thread does not
+                 come back from iteration 1. Session 31 guarded the dereference and the
+                 symptom survived, so the guard was not the whole story. Splitting the
+                 line is what makes the NEXT run diagnostic instead of ambiguous: basic
+                 samples appearing without enrichment localises the fault to the
+                 enrichment; basic samples stopping too localises it to Sleep/log. */
+            q = zput(q, "\r\n");
+            log_append(LOG_PATH, wb, q); q = wb;
+
+            /* ⚠ AND NO serial_out IN THIS LOOP. FlushFileBuffers on a comm handle has
+                 no timeout (only WriteFile does), so it is the one unbounded call on
+                 this path -- and COM1 does not exist on the bare-metal rig, so these
+                 lines never went anywhere useful anyway. A debug sink that can block
+                 the thread it instruments is worse than no sink. */
+
+            if (frozen) {
+              q = zput(q, "  wd["); q = zhex(q, n); q = zput(q, "]+");
+              if (g_dpmi_pm) {                           /* wedged: dump the guest bytes there */
                 base = dpmi_sel_base((WORD)en_cs);
                 ib = (const BYTE *)(ULONG_PTR)(base + (en_eip & 0xFFFF));
                 /* ⚠ GUARD THE DEREFERENCE. This read is unguarded no longer, and the
@@ -6221,7 +6271,7 @@ static DWORD WINAPI dpmi_watchdog(LPVOID param)
                     q = zput(q, " b@enter=<cs 0x"); q = zhex(q, en_cs);
                     q = zput(q, " does not resolve>");
                 }
-            }
+              }
             /* ── ★ AND WHERE IT ACTUALLY IS, NOT WHERE IT WENT IN. ─────────────────
                  `enter=` is the CS:EIP we HANDED to dpmi_enter_pm. The PM heartbeat
                  prints the same thing, so when a WOW run's log stops, all it licenses
@@ -6235,7 +6285,7 @@ static DWORD WINAPI dpmi_watchdog(LPVOID param)
                ⚠ SAMPLE HELD, LOG RELEASED. Nothing is written to the log between
                  SuspendThread and ResumeThread: log_append opens a file, and blocking
                  there with the guest frozen is how a diagnostic becomes a deadlock. */
-            if (frozen && g_hcpu) {
+              if (g_hcpu) {
                 CONTEXT cx;
                 DWORD gcs = 0, geip = 0, gss = 0, gesp = 0, gfl = 0;
                 int got = 0;
@@ -6262,9 +6312,10 @@ static DWORD WINAPI dpmi_watchdog(LPVOID param)
                         q = zput(q, " b@live="); q = zdump(q, lp, 8);
                     }
                 }
+              }
+              q = zput(q, "\r\n");
+              log_append(LOG_PATH, wb, q); q = wb;    /* the enrichment, as its own line */
             }
-            q = zput(q, "\r\n");
-            log_append(LOG_PATH, wb, q); serial_out(wb, q); q = wb;   /* COM1-only = invisible on bare metal */
         }
         prev = iter; ++n;
         /* ⚠ ON A WOW RUN A FREEZE IS THE MEASUREMENT, NOT A FAULT TO BE CLEANED UP.
@@ -9260,6 +9311,43 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                                 p = zput(p, " base=0x"); p = zhex(p, g_ldt[fidx].base);
                                 p = zput(p, " acc=0x");  p = zhexb(p, g_ldt[fidx].access);
                                 p = zput(p, ")");
+                            }
+                            /* ── ★★★ AND PATCH ITS INT SITES, EXACTLY AS 0009 AND 000C DO. ──
+                                 Those two apply the rule "the client naming a region CODE is
+                                 the only notice we get that something it just loaded is about
+                                 to be executed" -- and this path did not, which made it a hole
+                                 exactly the size of krnl386.
+                               ⚠ WHY IT IS FATAL. Our INT->BOP scan runs over the image we
+                                 placed in conventional memory. krnl386 then LOADS ITS OWN
+                                 SEGMENTS: it copies segment 1 to linear 0x20760, relocates it,
+                                 writes a code descriptor through the vendor window and commits
+                                 it HERE (`04F2 ... base=0x00020760 acc=0xfb`). That copy is
+                                 memory we have never scanned, so every `CD nn` in it is raw --
+                                 and a PM guest cannot reach the IVT, so the first one silently
+                                 kills the VDM. WOW BOPs still work in the copy because `C4 C4 nn`
+                                 is literal in the binary, which is why the run looked healthy
+                                 right up to the moment it stopped.
+                               ⇒ MEASURED SHAPE OF THE STALL: the whole logged run is 282 ms
+                                 (read off the async thread's `ms=` stamps), and at the end BOTH
+                                 auxiliary threads fall silent in the same instant -- no watchdog
+                                 tick, no async tick, no further PM event. That is a process that
+                                 stopped, not a guest that is merely spinning, and session 31's
+                                 "the watchdog logs one sample and stops" was the instrument
+                                 reporting it correctly rather than failing. */
+                            if (done) {
+                                DWORD j;
+                                for (j = 0; j < fcnt; ++j) {
+                                    int a = fidx + (int)j;
+                                    if (a < DPMI_LDT_RESERVED || a >= WOW_SHADOW_ENTRIES) continue;
+                                    if (!DPMI_ACC_IS_CODE(g_ldt[a].access)) continue;
+                                    dpmi_patch_code_region(g_ldt[a].base, g_ldt[a].limit,
+                                                           (g_ldt[a].flags & 0x4) != 0);
+                                    need_scan = 1;
+                                    p = zput(p, " [CODE sel 0x"); p = zhex(p, (DWORD)((a << 3) | 7));
+                                    p = zput(p, " base=0x");   p = zhex(p, g_ldt[a].base);
+                                    p = zput(p, " limit=0x");  p = zhex(p, g_ldt[a].limit);
+                                    p = zput(p, " -> INT sites patched]");
+                                }
                             }
                             break; }
                         case 0x000D: {                             /* allocate SPECIFIC descriptor */

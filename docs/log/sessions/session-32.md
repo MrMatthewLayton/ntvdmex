@@ -127,7 +127,54 @@ The call chain out of that point is known from the logged stack:
 `ret 8`) → its caller.
 
 
-## Part 5 — ⚠️ the watchdog is still a one-sample instrument, and it is now the blocker
+## Part 5 — ★★ the run is 282 MILLISECONDS long, and that changes the question
+
+The `ASYNC-EARLY bail` lines carry a `ms=` stamp, and reading them is the most useful thing
+that happened after the relocation fix:
+
+```
+ms=0564a436  0564a475  0564a4a4  0564a4e2  0564a511 ... 0564a550
+deltas             63        47        62        47        63   ms
+```
+
+⇒ **The entire logged run spans 282 ms** — first line to last. `wowrun.bat` then waits out
+its remaining ~74 seconds and copies a log that has not been written to since.
+
+So "krnl386 loads and then stops" was never a long run that stalls; it is a **fifth of a
+second** of work followed by silence. Every earlier reading of the log's shape — including
+"the watchdog logs one sample and stops" — has to be re-read against that: the watchdog
+samples every 250 ms, so **wd[0] at ~250 ms is the only sample the run is long enough to
+contain**. Session 31 filed that as an instrument defect. It is not one.
+
+## Part 6 — ★ `04F2` installed code selectors without patching their INT sites
+
+A real hole, found by following the stall and worth closing regardless of whether it caused
+this one. `dpmi_patch_code_region` is called from INT 31h **0009** and **000C** on the rule
+"the client naming a region CODE is the only notice we get that something it just loaded is
+about to be executed". The **04F2** vendor-window commit — which is how krnl386 actually
+installs descriptors — did not.
+
+That matters because krnl386 **loads its own segments**: it copies segment 1 to linear
+`0x20760`, relocates it, and commits a code descriptor over it (`acc=0xfb`). Our INT→BOP
+scan ran over the image in conventional memory and has never seen that copy, so any raw
+`CD nn` in it would silently kill the VDM — a PM guest cannot reach the IVT. (WOW BOPs keep
+working in any copy, because `C4 C4 nn` is literal in the binary, which is why such a run
+looks healthy right up to the instant it stops.)
+
+Fixed: 04F2 now applies the same rule, and the log says so —
+
+```
+DPMI: code region 0x00020760..0x0002df5f -> patched 00000000 INT sites, rejected 00000000 ...
+INT31h AX=0x04f2 ... (idx 0x40 base=0x00020760 acc=0xfb) [CODE sel 0x0207 ... INT sites patched]
+```
+
+⚠️ **And it patched ZERO sites, so it is not this stall's cause.** krnl386 copied segment 1
+out of our *already patched* image, where all 108 `CD nn` had been rewritten to `C4 C4 nn`
+before it ever ran. The hole is real and now closed — it will bite the moment krnl386 loads
+a module from **disk** — but it is recorded here as a fix that did **not** move the wall,
+not as one that did.
+
+## Part 7 — ⚠️ the watchdog is still one-sample, and the ruling-out is not finished
 
 `dpmi_watchdog` logs `wd[0]` and nothing more, on every WOW run. This was investigated and
 **not solved**:
@@ -151,9 +198,30 @@ Two changes were made anyway, and both are sound on their own terms:
    *because* it stops. Now `600` samples (150 s) when `g_wow_nmod` is set; unchanged at 12
    otherwise. `wowrun.bat` already bounds the run at 75 s.
 
-Neither produced output, because the thread is gone before the first frozen sample. **This
-is the next thing to fix** — it is the instrument that answers "where is it spinning", and
-nothing else currently can.
+Two more were tried, and the second is decisive about what is *not* wrong:
+
+3. **`THREAD_PRIORITY_HIGHEST`.** The thread that runs the guest is raised to
+   `ABOVE_NORMAL` (`HIGHEST` at `execprio>=2`) and the rig is a **single-core** box, so this
+   thread was the lowest-priority runnable thread in the process at exactly the moment it
+   exists for. Raising it is correct on its own terms — an instrument must be able to
+   preempt what it instruments — and it is safe, since the thread sleeps 250 ms out of
+   every 250 ms.
+4. **An unconditional `wdtick <n>` marker**, printed after `Sleep` and before anything else,
+   for the first 24 iterations. This separates "woke up but the sample failed" from "never
+   woke up", which no previous log could.
+
+**Result: `wdtick 0`, `wd[0]`, and no `wdtick 1`** — at HIGHEST priority, over 75 seconds of
+wall clock. So it is not the enrichment (the basic line is now written first), not the
+logging gate, not `serial_out` (removed from this loop; `FlushFileBuffers` on a comm handle
+has no timeout, unlike `WriteFile`), and not priority. **The thread does not return from
+`Sleep`.**
+
+⚠️ **One claim I made too strongly, corrected.** I read the absence of later `ASYNC-EARLY`
+lines as "the other auxiliary thread fell silent too, so the whole process stops". That does
+not follow: `why=0x14` is the bail for *"the guest is not currently executing"*, so once it
+is, that thread stops **bailing** and takes the other path — which logs nothing on success.
+Its silence is consistent with it running normally. The watchdog tick is the only solid
+evidence here, and it says only that **the watchdog thread** does not run.
 
 
 ## Regression
@@ -167,8 +235,13 @@ nothing else currently can.
 
 ## Next actions
 
-1. **Fix the watchdog.** Find why the thread does not survive its first frozen sample.
-   Until then a spinning guest is invisible and every stall reads as "the log just ends".
+1. **Find out why nothing more is written after ~282 ms.** The sharpest remaining question,
+   and the tick marker has narrowed it to "the watchdog thread does not return from
+   `Sleep(250)`". Two things worth doing before theorising further: give the PM heartbeat a
+   `GetTickCount()` stamp so the whole run has a timeline rather than one borrowed from the
+   async bails, and have the watchdog write to its **own file** — if that file is also empty
+   the thread really is not running, and if it is not, `log_append` contention on a single
+   path is back in scope after all.
 2. **Implement WOW32 `0xc0`** — the only unimplemented call reached (`wow32{unimpl=1}`).
    28 arg bytes = seven far pointers: krnl386's INT 21h thunk (`seg1:0x4ff2`), five DGROUP
    variables (`0x024a`, `0x0228`, `0x06e2`, `0x022c`, `0x0297`) and the PSP (`0x013f:0`).
