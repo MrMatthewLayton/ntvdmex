@@ -224,6 +224,65 @@ Its silence is consistent with it running normally. The watchdog tick is the onl
 evidence here, and it says only that **the watchdog thread** does not run.
 
 
+## Part 8 — ★★★ CLOSED: the process is KILLED, and the watchdog was never broken
+
+Two more measurements settled it, and the second is the one that should have been taken
+five sessions ago.
+
+**The PM heartbeat now carries `GetTickCount()`.** All 71 steps of the run report the *same
+tick*: krnl386's entire logged execution — PM entry, its own segment load, relocation,
+descriptor commits — happens in **under one ~16 ms tick**. It was never a long run that
+stalls.
+
+**The watchdog was given its own log file** (`WDLOG_PATH`, collected as `wow_wd.txt`), so a
+shared-resource explanation could be excluded rather than merely doubted. It contains, in
+full:
+
+```
+STAGE3-DPMI: watchdog started at THREAD_PRIORITY_HIGHEST; ...
+  wdtick 00000000
+  wd[00000000] iter=00000001 advancing enter=0000000f:0000d6be ...
+```
+
+**And `wowrun.bat` now asks the rig whether the host is still there.** Four seconds into the
+run, and again at the end:
+
+```
+INFO: No tasks running with the specified criteria.
+```
+
+⇒ **`ntvdmhost.exe` is already gone.** The host process is *terminated*, silently, with no
+fault line, no teardown line and no exit path taken. That single fact explains every symptom
+at once: the log ends mid-flow, the 71 steps take no measurable time, and the watchdog
+records `wd[0]` at 250 ms because **there is no process left to record `wd[1]`**.
+
+★ So "the watchdog logs one sample and stops", on the books since session 31 and carried into
+this session as *the blocker*, is not a defect at all. It is the instrument reporting the
+process's death correctly, at the only resolution it has. **Closed.** The work spent on it —
+priority, the split line, dropping `serial_out`, its own file — is all defensible hardening,
+but none of it was ever going to produce a second sample.
+
+## Part 9 — ⚠️ it is not the fault-reflect path either
+
+`g_flt_tbl` is 8 fault classes at stride 0x10 and **only class 6 (#GP) was filled**. A class
+left zero is a class the kernel has nowhere to send, so it terminates the VDM — which made
+#GP the only fault we could ever see, while a not-present selector load, a stack fault or a
+page fault killed us invisibly. krnl386 has just started writing its own descriptors, which
+is exactly the code that produces those.
+
+All eight classes now point at the trampoline. It is a diagnostic widening, not a claim we
+can service them: the handler logs the reflect and dumps the TIB window, it does not resume.
+
+**Result: no `PM-FAULT REFLECTED` line, and the process still dies.** So the kill does not go
+through the VDM fault-reflect path at all. Kept anyway — a zeroed class is a silent kill
+waiting to happen, and `selftest.com` still passes 8/8 on real hardware with it in place —
+but recorded as another fix that did **not** move the wall.
+
+Also checked and cleared: the residual-`CD nn` shortlist for the scanned region lists 31
+byte pairs, and the histogram is all implausible vectors (`00h`, `01h`, `02h`, `74h`, `8bh`
+…) with **no `21h` and no `31h`**, so the plausible interrupts were all patched.
+
+
 ## Regression
 
 - `selftest.com` **8/8 PASS on real hardware** — the other guest class, run because the
@@ -235,13 +294,21 @@ evidence here, and it says only that **the watchdog thread** does not run.
 
 ## Next actions
 
-1. **Find out why nothing more is written after ~282 ms.** The sharpest remaining question,
-   and the tick marker has narrowed it to "the watchdog thread does not return from
-   `Sleep(250)`". Two things worth doing before theorising further: give the PM heartbeat a
-   `GetTickCount()` stamp so the whole run has a timeline rather than one borrowed from the
-   async bails, and have the watchdog write to its **own file** — if that file is also empty
-   the thread really is not running, and if it is not, `log_append` contention on a single
-   path is back in scope after all.
+1. **Find what terminates the process.** This is now the whole question, and it is a much
+   better one than "where does the guest spin": the host is killed while executing guest PM
+   code, within one 16 ms tick, and it is *not* the fault-reflect path. Ruled out so far:
+   every fault class (all eight now reflect, none fires), unpatched `INT nn` in krnl386's
+   own copy at `0x20760` (patched — zero sites, it was copied from our patched image), and
+   residual `CD nn` in the scanned region (no `21h`, no `31h`).
+   The cheap next measurements, in order:
+   - **Log immediately after `dpmi_enter_pm` returns** (rc + event), so "died inside
+     `NtVdmControl`" is distinguished from "died in our code just after it".
+   - **Arm a breakpoint** at `seg1:0x662f` and the return chain below it
+     (`0x5cf8`, `0x5a42`) with `rep=1`, linear = `0x20760 + offset`. Breakpoints are hit by
+     the *guest*, so they need no host thread and survive what killed every other
+     instrument. This is the one diagnostic left standing.
+   - Check the XP **Application event log** on the rig for a matching entry — free, and the
+     kernel may well be naming the reason we cannot see from inside.
 2. **Implement WOW32 `0xc0`** — the only unimplemented call reached (`wow32{unimpl=1}`).
    28 arg bytes = seven far pointers: krnl386's INT 21h thunk (`seg1:0x4ff2`), five DGROUP
    variables (`0x024a`, `0x0228`, `0x06e2`, `0x022c`, `0x0297`) and the PSP (`0x013f:0`).

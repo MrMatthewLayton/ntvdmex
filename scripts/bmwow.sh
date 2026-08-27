@@ -42,7 +42,7 @@ if [ "${PMBP:-0}" != "1" ] && [ -f "$SH/pmbp.txt" ]; then
   echo "disarmed pmbp.txt (PMBP=1 to keep it)"
 fi
 
-rm -f "$SH/wow_done.txt" "$SH/wow_host.txt" "$SH/wow_ldt.txt" "$SH/alive.txt"
+rm -f "$SH/wow_done.txt" "$SH/wow_host.txt" "$SH/wow_ldt.txt" "$SH/wow_wd.txt" "$SH/wow_alive.txt" "$SH/alive.txt"
 printf 'exec cmd /c "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\wowrun.bat"\r\n' \
   > "$SH/control.txt"
 echo "queued via controld; waiting up to ${TIMEOUT}s for wow_done.txt"

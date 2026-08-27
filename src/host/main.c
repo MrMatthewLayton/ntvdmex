@@ -87,6 +87,15 @@
 /* A log NOTHING truncates. WinMain has three log_write calls and each wipes the file;
    diagnostics that need to survive the whole run belong here instead. */
 #define LDTLOG_PATH   "C:\\ntvdmex\\ldtprobe.log"
+/* ── ★ THE WATCHDOG WRITES HERE, AND NOWHERE ELSE. ────────────────────────────────
+     It is the one instrument whose whole job is to speak when the main thread cannot,
+     so sharing a file with the main thread's firehose leaves a shared-resource
+     explanation alive for every silence it reports. On its own path, an empty file
+     means the THREAD did not run and a populated one means it did -- which is the
+     distinction session 32 could not make and spent four rig runs failing to settle.
+     log_append opens with FILE_SHARE_READ|FILE_SHARE_WRITE and appends, so this was
+     never likely; "never likely" is not the same as ruled out. */
+#define WDLOG_PATH    "C:\\ntvdmex\\wdprobe.log"
 /* Dev-only: capture the exact OPL register stream a game sends, with timestamps,
    so it can be replayed offline through BOTH our synth and a reference core and
    the audio diffed. Counting register writes cannot say WHY an instrument sounds
@@ -6175,7 +6184,7 @@ static DWORD WINAPI dpmi_watchdog(LPVOID param)
          in result_doom.log was read as "it died before the first 250 ms sample", when in
          fact the samples were never written anywhere. Every diagnostic must reach the
          file log or it does not exist on the machine we actually test on. */
-    log_append(LOG_PATH, wb, q); serial_out(wb, q); q = wb;
+    log_append(WDLOG_PATH, wb, q); serial_out(wb, q); q = wb;
     /* Sample the host PM loop concurrently while the main thread is (possibly) blocked
        inside dpmi_enter_pm(). Each line answers the run-51 wall question:
          iter ADVANCING  -> the `for steps` loop is cycling; last ev/cs/eip/vec show WHICH
@@ -6199,7 +6208,7 @@ static DWORD WINAPI dpmi_watchdog(LPVOID param)
         Sleep(250);
         if (g_dpmi_done) {                              /* client exited cleanly -> keep the window */
             q = zput(q, "STAGE3-DPMI: watchdog stand-down (client done)\r\n");
-            log_append(LOG_PATH, wb, q); serial_out(wb, q);
+            log_append(WDLOG_PATH, wb, q); serial_out(wb, q);
             return 0;
         }
         /* ⚠ A TICK MARKER, so "no samples" can be told apart from "never woke up".
@@ -6210,7 +6219,7 @@ static DWORD WINAPI dpmi_watchdog(LPVOID param)
              every log so far. Cheap and self-retiring. */
         if (n < 24) {
             q = zput(q, "  wdtick "); q = zhex(q, n); q = zput(q, "\r\n");
-            log_append(LOG_PATH, wb, q); q = wb;
+            log_append(WDLOG_PATH, wb, q); q = wb;
         }
         iter   = g_dpmi_iter;
         frozen = (iter == prev) ? (frozen + 1) : 0;
@@ -6241,7 +6250,7 @@ static DWORD WINAPI dpmi_watchdog(LPVOID param)
                  samples appearing without enrichment localises the fault to the
                  enrichment; basic samples stopping too localises it to Sleep/log. */
             q = zput(q, "\r\n");
-            log_append(LOG_PATH, wb, q); q = wb;
+            log_append(WDLOG_PATH, wb, q); q = wb;
 
             /* ⚠ AND NO serial_out IN THIS LOOP. FlushFileBuffers on a comm handle has
                  no timeout (only WriteFile does), so it is the one unbounded call on
@@ -6314,7 +6323,7 @@ static DWORD WINAPI dpmi_watchdog(LPVOID param)
                 }
               }
               q = zput(q, "\r\n");
-              log_append(LOG_PATH, wb, q); q = wb;    /* the enrichment, as its own line */
+              log_append(WDLOG_PATH, wb, q); q = wb;    /* the enrichment, as its own line */
             }
         }
         prev = iter; ++n;
@@ -6329,7 +6338,7 @@ static DWORD WINAPI dpmi_watchdog(LPVOID param)
       }
     }
     q = zput(q, "STAGE3-DPMI: watchdog terminating (wedged)\r\n");
-    log_append(LOG_PATH, wb, q);
+    log_append(WDLOG_PATH, wb, q);
     serial_out(wb, q);
     /* ► FLUSH WHAT THE PROGRAM PRINTED BEFORE KILLING IT. Same text the clean
          wind-down emits, in the one path that used to lose it. Written in bounded
@@ -6337,16 +6346,16 @@ static DWORD WINAPI dpmi_watchdog(LPVOID param)
     if (g_mach && g_mach->out_len > 0) {
         DWORD off = 0, total = (DWORD)g_mach->out_len;
         q = wb; q = zput(q, "  ==> DOS OUTPUT (wedged): [\r\n");
-        log_append(LOG_PATH, wb, q);
+        log_append(WDLOG_PATH, wb, q);
         while (off < total) {
             DWORD n2 = total - off; char sl[257];
             if (n2 > 256) n2 = 256;
             { DWORD k; for (k = 0; k < n2; ++k) sl[k] = g_mach->out[off + k]; }
-            log_append(LOG_PATH, sl, sl + n2);
+            log_append(WDLOG_PATH, sl, sl + n2);
             off += n2;
         }
         q = wb; q = zput(q, "\r\n]\r\n");
-        log_append(LOG_PATH, wb, q);
+        log_append(WDLOG_PATH, wb, q);
     }
     /* TerminateProcess (forceful) -- ExitProcess hangs trying to unwind the PM engine
        thread (un-terminable LDT context). */
@@ -7268,8 +7277,30 @@ static void dpmi_install_fault_trampoline(void)
     /* the per-fault-class handler table: entry N (stride 0x10) = {CS@+0 word, EIP@+4 dword}.
        Fill the #GP class (6) with our code selector + BOP offset; zero the rest. */
     for (i = 0; i < sizeof g_flt_tbl; ++i) g_flt_tbl[i] = 0;
-    *(WORD  *)(g_flt_tbl + DPMI_FLT_CLASS_GP * 0x10 + 0) = g_dpmi_flt_code_sel;
-    *(DWORD *)(g_flt_tbl + DPMI_FLT_CLASS_GP * 0x10 + 4) = DPMI_FAULT_COFF;
+    /* ── ★★★ EVERY CLASS, NOT JUST #GP. ────────────────────────────────────────────
+         Only class 6 was filled, and a class left ZERO is a class the kernel has
+         nowhere to send -- so it terminates the VDM instead. That is not a theory:
+         session 32 measured the WOW run stopping dead and then proved, by asking the
+         rig for a `tasklist` four seconds in, that **ntvdmhost.exe is already gone**.
+         The process is killed, silently, with no fault line and no teardown line --
+         which is also the whole explanation for the "watchdog logs one sample and
+         stops" that has been on the books since session 31: wd[0] lands at 250 ms and
+         there is no process left to log wd[1].
+
+       ⇒ A #GP was the only fault we could ever see. Anything else -- a not-present
+         selector load (#NP), a stack fault (#SS), an invalid TSS, a page fault --
+         killed us invisibly, and krnl386 has just started loading its own segments and
+         writing its own descriptors, which is exactly the code that produces those.
+
+       ⚠ THIS IS A DIAGNOSTIC WIDENING, NOT A CLAIM THAT WE CAN SERVICE THEM. The
+         handler logs the reflect and dumps the TIB window; it does not resume. Trading
+         a silent process kill for a logged stop is the whole point -- one of them can
+         be debugged. If a DOS guest regresses, this is the first thing to narrow, so
+         selftest.com is run against it deliberately. */
+    for (i = 0; i * 0x10 < sizeof g_flt_tbl; ++i) {
+        *(WORD  *)(g_flt_tbl + i * 0x10 + 0) = g_dpmi_flt_code_sel;
+        *(DWORD *)(g_flt_tbl + i * 0x10 + 4) = DPMI_FAULT_COFF;
+    }
 }
 
 /* GH #18 (run 67): arm the VDM_TIB PM-fault reflect state before each PM entry. The kernel
@@ -12929,7 +12960,15 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                        -- which is what both earlier attempts did. Doom does millions of
                        entries, hence the fallback rate rather than "always". */
                     if (steps && (steps < 256 || (steps & 0xFFF) == 0)) {
-                        p = zput(p, "PMHB steps=0x");  p = zhex(p, (DWORD)steps);
+                        /* ⚠ A TIMELINE OF ITS OWN. Session 32 had to borrow wall-clock from
+                             the async thread's `ms=` stamps to discover that the whole WOW
+                             run is 282 MILLISECONDS -- which is the fact that reframed "it
+                             loads and then stops" and cleared the watchdog of a bug it never
+                             had. A heartbeat that cannot say WHEN forces that reconstruction
+                             every time, and only works while some other instrument happens
+                             to be printing timestamps. */
+                        p = zput(p, "PMHB ms=0x");     p = zhex(p, GetTickCount());
+                        p = zput(p, " steps=0x");      p = zhex(p, (DWORD)steps);
                         p = zput(p, " cs:eip=0x");     p = zhex(p, VDM_REG(tib, VTIB_CS) & 0xFFFF);
                         p = zput(p, ":0x");            p = zhex(p, dpmi_pm_eip(tib));
                         p = zput(p, " lastev=0x");     p = zhex(p, g_dpmi_last_ev);
