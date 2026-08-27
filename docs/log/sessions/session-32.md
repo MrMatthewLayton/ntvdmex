@@ -485,6 +485,37 @@ the conventional arena instead?** If segment 1 lived in the extended heap it wou
 the compaction range entirely and this whole class of failure disappears. That is where to
 look: what LoadSegment uses to choose the target block.
 
+## Part 16 — ⚠️ capping the conventional arena: tried, no effect, reverted
+
+The obvious follow-on from part 15 was that krnl386 only puts its code in conventional
+memory because we hand it **all** of it — `dos_alloc(0xFFFF)` gives it `0x7440` paragraphs
+(476 KB) — so capping that should push its segments into the `0x88080` extended heap it
+already VirtualAlloc'd at `0x03a70000`, outside any compaction range.
+
+Capped to `0x1000` paragraphs (64 KB). Measured:
+
+```
+capping krnl386's conventional arena 0x00007440 -> 0x00001000 paras
+PSP/arena block at para 0x00002bc0 size 0x00001000
+segment-1 PM copy still at base=0x0002c760 acc=0xfb      <- unchanged
+arena selector 0x1b7: base=0x0001bbe0 limit=0x0008441f   <- unchanged
+```
+
+★ **The arena selector still reaches `0xA0000`** even though the PSP's top-of-memory field
+now says `0x3bc0`. So krnl386 does not derive that selector from the PSP block we build for
+it — it uses the 640 KB line directly. The cap changes nothing it can observe, and the
+segment still lands at `0x2c760`.
+
+Reverted. A change with a plausible mechanism and no measured effect does not stay in,
+especially one that walks back session 31's "claim ALL remaining conventional memory", which
+was itself the fix for krnl386 carving over our allocations.
+
+⇒ Which sharpens the question again: the block at `0x2c760` is chosen by krnl386's own
+allocator, and neither the arena size (part 15) nor the PSP block size (here) moves it. The
+next thing to read is **the allocator itself** — `seg1:0x461f`, called from LoadSegment at
+`seg1:0x9257`, is what picks the block; and `seg1:0x63f3`, called from the compaction, is
+what tells it the block's size. Those two decide the range, and neither has been read yet.
+
 ## Regression
 
 - `selftest.com` **8/8 PASS on real hardware** — the other guest class, run because the
