@@ -6949,9 +6949,41 @@ static int wow_place_v86(dos_machine_t *mp, WORD *ecs, WORD *eip,
         q = zput(q, " + 0x1000 (0x"); q = zhex(q, hlen);
         q = zput(q, " bytes from file offset 0x"); q = zhex(q, ne->hdr);
         q = zput(q, ", ne_cseg=0x"); q = zhex(q, ne->n_seg);
-        /* Everything in the 64 KB selector past the header image is krnl386's to
-           allocate from; it is told the size in CX at entry. */
-        g_wow_entry_cx = (WORD)(0xFFF0u - (WORD)((DWORD)WOW_HDRIMG_PARAS * 16u));
+        /* ── ★★★ CX IS THE WHOLE WINDOW, NOT "THE PART ABOVE THE HEADER". ────────────
+             This used to subtract the header image, on the reading that the header is
+             not krnl386's to allocate from. That reading is what kills the run, and the
+             guest's own bookkeeping says so:
+
+                 [0x5a6] = 0x0bff   the arena size we declare, in paragraphs (CX >> 4)
+                 [0x148e] = 0x0f88  the size of the selector it actually built
+                 [0x5a4] = 0x0389   the difference -- i.e. OUR HEADER IMAGE
+
+             krnl386 treats that difference as dead space at the BOTTOM of its arena and
+             reclaims it, at seg1:0xc4dd -> seg1:0xcfe4, by `rep movsd`-ing everything
+             above it DOWN by 0x389 paragraphs. Measured: ECX=0x202e0 dwords (514 KB)
+             through selector 0x01b7 (base 0x1bbe0, limit 0x8441f, i.e. up to the 640 KB
+             line). The copy is entirely in bounds -- and its destination range
+             0x1bbe0..0x9c760 CONTAINS krnl386's own segment-1 PM copy at 0x2c760, the
+             code executing the `rep movsd`. It overwrites itself mid-instruction: no
+             fault to reflect, no crash record, no surviving thread.
+
+           ⇒ Declaring the FULL window makes total == free, so the gap is zero and the
+             reclaim becomes a copy of zero bytes instead of a fatal one. The space is
+             krnl386's either way -- reclaiming it is precisely what it was trying to do;
+             we were just describing it in a way that made the reclaim run over live code.
+           ⚠ The header image still has to survive being PARSED before anything is
+             allocated over it. If that turns out to be the next wall it will show up as
+             a header-parse failure, which is a different and much louder failure than
+             this one. */
+        /* ⚠ 0xFFF0 (the full window) was tried and OVERSHOOTS: krnl386's own
+             [0x148e] came back 0x0f88 paragraphs in BOTH runs -- it is computed from
+             its arena, not from CX -- so declaring 0x0fff made the gap NEGATIVE
+             ([0x5a4] = 0xff89 = -0x77) and `movzx esi,bx / shl esi,4` then addressed
+             0xFF890, far outside the selector. A negative gap is not a smaller bug
+             than a positive one, it is a wilder one.
+           So declare exactly what it believes it has: gap = [0x148e] - [0x5a6] = 0,
+             which makes the reclaim copy src==dst and therefore harmless. */
+        g_wow_entry_cx = (WORD)0xF880u;
         q = zput(q, ") arena above it = 0x"); q = zhex(q, g_wow_entry_cx);
         q = zput(q, " bytes -> CX at entry\r\n");
         log_append(LDTLOG_PATH, m, q);

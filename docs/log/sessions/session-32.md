@@ -452,6 +452,39 @@ arena, or never accumulate that gap. `[0x5a6]` is the arena size we hand over in
 CX/`[0x5a6]` contract and the order in which krnl386's segments are placed relative to the
 arena are the two things to examine.
 
+## Part 15 — the arena contract, measured — and why tuning CX cannot fix it
+
+`[0x5a4]`, the compaction delta, is `[0x148e] - [0x5a6]` plus a selector-base correction.
+All three were read straight out of DGROUP with a breakpoint dump:
+
+| CX handed over | `[0x5a6]` (declared) | `[0x148e]` (its own) | gap `[0x5a4]` | `rep movsd` |
+|---|---|---|---|---|
+| `0xbff0` (window - header) | `0x0bff` | `0x0f88` | `0x0389` | 514 KB down by **14 KB** |
+| `0xfff0` (whole window) | `0x0fff` | `0x0f88` | `0xff89` (**-0x77**) | `ESI=0xFF890` — **outside the selector** |
+| `0xf880` (matched) | `0x0f88` | `0x0f88` | `0x0000` | 542 KB down by **16 bytes** |
+
+★ `[0x148e]` is `0x0f88` in **every** run — it is computed from krnl386's own arena, not
+from CX. So the old value was declaring `0x389` paragraphs (our 16 KB header image) as dead
+space for krnl386 to reclaim, and a negative gap is not a smaller bug than a positive one,
+it is a wilder one.
+
+`0xF880` ships: it is the value that makes the declared arena match what krnl386 believes it
+has, and it shrinks the move from 14 KB to 16 bytes. ⚠️ **It does not clear the wall.** The
+residual paragraph comes from `add [0x5a4],ax` at `seg1:0xc4d8`, where `ax` is the difference
+between our header-selector base (`0x1bbf0`) and the arena selector krnl386 reallocates
+(`0x1bbe0`) — 16 bytes. A 16-byte move of 542 KB is still a move of live code.
+
+⇒ **So the fix is not in CX.** The destination range is bounded by the *selector*, and
+krnl386 has grown `[0x5a0]` to `base=0x1bbe0 limit=0x8441f` — everything from just under our
+header image to the 640 KB line. Its own segment-1 PM copy sits inside that at `0x2c760`.
+
+▶ **The question for next time is placement, not size:** krnl386 VirtualAlloc'd a 0x88080-byte
+global heap at `0x03a70000` through WOW32 `0xb8`, and *also* a 0x30000 block at `0x03b00000` —
+extended memory, outside any conventional arena. **Why does it put its own code segments in
+the conventional arena instead?** If segment 1 lived in the extended heap it would be outside
+the compaction range entirely and this whole class of failure disappears. That is where to
+look: what LoadSegment uses to choose the target block.
+
 ## Regression
 
 - `selftest.com` **8/8 PASS on real hardware** — the other guest class, run because the
