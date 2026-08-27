@@ -6583,6 +6583,21 @@ static int wow_place_v86(dos_machine_t *mp, WORD *ecs, WORD *eip,
          -- and it is a plain DOS allocation so the MCB chain (and dos_mcb_check) stay
          true. 16 KB because that is the largest read krnl386 asks for; a bigger request
          is clamped and SAID SO rather than silently short-read. */
+    /* ⚠ THE HOST POOL GOES FIRST, i.e. as LOW as possible. krnl386 builds a 64 KB
+         scratch selector over `base(SS) + SP` (seg1:0xc17e) -- a window over everything
+         above its own stack -- and uses it as a working block. Allocated late, the pool
+         landed at 0x1ab9, INSIDE that window, so the host's own PM stub table appeared
+         in the middle of krnl386's scratch and was read back as an NE header. Host
+         memory belongs below the guest's, not in the middle of it. */
+    {   WORD hseg = 0, hmax = 0;
+        if (dos_alloc(NULL, mp->first_mcb, WOW_HOSTPOOL_PARAS, &hseg, &hmax) == 0 && hseg)
+            g_wow_pool_seg = hseg;
+        q = m; q = zput(q, "WOWV86: host pool reserved at para 0x");
+        q = zhex(q, g_wow_pool_seg); q = zput(q, " size 0x");
+        q = zhex(q, (DWORD)WOW_HOSTPOOL_PARAS);
+        q = zput(q, " paras (see wow_host_alloc)\r\n");
+        log_append(LDTLOG_PATH, m, q);
+    }
     {   WORD xseg = 0, xmax = 0;
         if (dos_alloc(NULL, mp->first_mcb, 0x400, &xseg, &xmax) == 0 && xseg) {
             g_pm_xfer_seg = xseg; g_pm_xfer_para = 0x400;
@@ -6657,6 +6672,12 @@ static int wow_place_v86(dos_machine_t *mp, WORD *ecs, WORD *eip,
         q = m; q = zput(q, "WOWV86: no memory for a stack\r\n");
         log_append(LDTLOG_PATH, m, q); return -1;
     }
+    /* ZERO IT. A loader hands out clean memory, and here it is load-bearing rather
+       than tidy: krnl386's scratch selector starts inside this block, and whatever
+       was left in it is read back as structured data. Uninitialised memory that gets
+       PARSED is a bug that reads like a guest fault. */
+    {   volatile BYTE *sb = (volatile BYTE *)(ULONG_PTR)((DWORD)sseg << 4);
+        DWORD k; for (k = 0; k < (DWORD)WOW_STACK_PARAS * 16u; ++k) sb[k] = 0; }
 
     if (!ne->autodata || ne->autodata > ne->n_seg) {
         q = m; q = zput(q, "WOWV86: autodata segment out of range\r\n");
@@ -6690,15 +6711,6 @@ static int wow_place_v86(dos_machine_t *mp, WORD *ecs, WORD *eip,
          which is exactly the relationship a real DOS program has with its PSP block.
        ⚠ It must be a REAL PSP, not a bare block: krnl386 stores through `es:[0x42]`
          and reads `es:[2]` (top of memory) at seg1:0xc227. dos_psp_build fills both. */
-    {   WORD hseg = 0, hmax = 0;
-        if (dos_alloc(NULL, mp->first_mcb, WOW_HOSTPOOL_PARAS, &hseg, &hmax) == 0 && hseg)
-            g_wow_pool_seg = hseg;
-        q = m; q = zput(q, "WOWV86: host pool reserved at para 0x");
-        q = zhex(q, g_wow_pool_seg); q = zput(q, " size 0x");
-        q = zhex(q, (DWORD)WOW_HOSTPOOL_PARAS);
-        q = zput(q, " paras (see wow_host_alloc)\r\n");
-        log_append(LDTLOG_PATH, m, q);
-    }
     {   WORD pseg = 0, pmax = 0;
         (void)dos_alloc(NULL, mp->first_mcb, 0xFFFF, &pseg, &pmax);  /* ask -> get max */
         if (!pmax || dos_alloc(NULL, mp->first_mcb, pmax, &pseg, &pmax) || !pseg) {
