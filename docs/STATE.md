@@ -185,6 +185,16 @@ and nothing has drawn a pixel. What works is the *bootstrap* — see #128 below.
    teardown. `0x90d9`'s early checks pass (`ne_cseg` = 4; it indexes `ne_segtab` at
    `es:[0x22]` with **ten-byte** records, exactly what `0xd45a`'s copy loop builds), so
    read on from `seg1:0x911d`.
+   ★ **The failure is krnl386's RELOCATION pass, traced to the instruction.** Every
+   step of `seg1:0x90d9` LoadSegment succeeds — `ne_cseg` check, self-load test,
+   `flags=0xc142` (loaded), `handle=0x0207`, `call 0x937e` returns the handle, the
+   relocation count is read off the segment — and then `call 0x8cb6` (**apply
+   relocations**) returns **0** and `0x92b5` jumps to the failure tail. Both are
+   breakpoint hits. ⇒ **This IS "two loaders, two copies"**, one step later than it
+   looked: our NE loader already relocated the image that is *executing*, and krnl386
+   loads its own segments a second time and relocates that copy itself.
+   ▸ Next: read `seg1:0x8cb6` and find which relocation record it cannot resolve.
+
    ★ **The module database it builds is WELL-FORMED** — dumped at `seg1:0x9145`
    (`esbase=0x1fca0`): starts `"NE"`, `ne_cseg=4`, `ne_segtab=0x40`, and all four ten-byte
    records carry both the loaded bit and a real handle (`0207/020e/0216/021f`), with

@@ -592,6 +592,40 @@ verified to survive to `0xc164`. It changed no observable behaviour, so it is re
 hypothesis with no measured effect rather than as a fix.
 
 
+## Part 20 — ★ the failure is krnl386's RELOCATION pass, traced to the instruction
+
+Every step of LoadSegment succeeds until the last one. All of these are breakpoint hits,
+not readings:
+
+```
+seg1:0x90d9  LoadSegment(module, seg 1)   entered, EAX=0xffff
+  0x9101     ne_cseg check                passes (4 > 0)
+  0x9120     self-load test               not self-load
+  0x9129     flags = es:[si+4] = 0xc142   bit 1 set -> already loaded
+  0x9145     handle = es:[si+8] = 0x0207  a real handle, not zero
+  0x91c3 ->  call 0x937e                  returns 0x0207 -- the segment IS loaded
+  0x9202     flags & 0x100                has relocation records
+  0x921b     lodsw es:[si]                reads the reloc count off the segment
+  0x929c     call 0x8cb6                  ★ APPLY RELOCATIONS -> returns 0
+  0x92b5     jmp 0x9318                   ★ the failure jump, measured
+-> 0x90d9 returns 0 -> seg1:0xc2fb -> the exit stub -> ExitKernelThunk(1) -> int3
+```
+
+`0x929f` reports `EAX=0` and `0x92b5` fires, so it is **the relocation pass** and not the
+other route into `0x9318`.
+
+⇒ **So it IS "two loaders, two copies" after all** — one step later than it looked. Our NE
+loader already relocated the krnl386 image that is *executing*; krnl386 then loads its own
+segments a second time and relocates that copy itself, and that pass fails.
+
+⚠️ Part 19 concluded "this is NOT the two-loaders problem" on the strength of `0x9068`
+never being called. That was correct about the **load** and wrong about the **conclusion** —
+the duplication shows up in the relocation step instead. Both readings are left in the log
+rather than the second quietly replacing the first.
+
+**Next: read `seg1:0x8cb6` and find which relocation record it cannot resolve.**
+
+
 ## Regression
 
 - `selftest.com` **8/8 PASS on real hardware** after the SysVars change — the guest from
