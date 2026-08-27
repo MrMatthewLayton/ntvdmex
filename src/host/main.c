@@ -3206,6 +3206,41 @@ static int       g_wow_entering = 0;   /* the guest is krnl386, not DOS     */
 /* The PM->V86 transfer buffer for pointer-taking INT 21h calls; allocated in
    wow_place_v86 and used by pm_int21_xfer. Declared here because the allocation
    site comes long before the use site. 0 = absent, and every arm checks. */
+/* The PSP/arena block krnl386 is entered with. It must be the LAST thing allocated:
+   krnl386 carves from ES+0x10 upward without asking DOS (see wow_place_v86), so
+   anything handed out after it would be memory krnl386 already believes it owns. */
+/* ── THE HOST POOL, AND WHY THERE HAS TO BE ONE. ────────────────────────────────
+     wow_place_v86 hands krnl386 every remaining paragraph of conventional memory,
+     because krnl386 carves from ES+0x10 upward without asking DOS and anything left
+     free would be handed out twice. The consequence is that EVERY host structure
+     allocated after that point finds nothing -- and two are, both lazily at the
+     mode switch:
+       * the INT 2Fh 168A vendor-API stub  -> "no memory for the stub", and krnl386
+         prints "Inadequate DPMI Server" and exits (error #1 of its table);
+       * the 256-vector default PM handler table -> INT 21h AH=35h then reports
+         vector 0x21 as 0000:0000, so krnl386 saves a null previous-handler and its
+         chain-to-DOS path calls into nothing.
+     Both were found this way, one run apart. So: reserve a pool BEFORE the arena
+     goes, and bump-allocate host structures out of it.
+   ▸ THE RULE FOR ANYTHING ADDED LATER: on the WOW path, host memory comes from
+     wow_host_alloc(), not dos_alloc(). A dos_alloc() after wow_place_v86 will fail,
+     and the failure will look like the guest's fault. */
+#define WOW_HOSTPOOL_PARAS 0x100          /* 4 KB: the handler table is 0x40 of it */
+static WORD      g_wow_pool_seg  = 0;
+static WORD      g_wow_pool_next = 0;     /* paragraphs handed out so far          */
+
+static WORD wow_host_alloc(WORD paras)
+{
+    WORD seg;
+    if (!g_wow_pool_seg || g_wow_pool_next + paras > WOW_HOSTPOOL_PARAS) return 0;
+    seg = (WORD)(g_wow_pool_seg + g_wow_pool_next);
+    g_wow_pool_next = (WORD)(g_wow_pool_next + paras);
+    return seg;
+}
+/* The `-a` argument of the WOW launch: the full path of krnl386.exe. krnl386 reads
+   it back out of the DOS environment block to find its own file -- see wow_place_v86. */
+static char      g_wow_krnl_path[512];
+static WORD      g_wow_psp_seg  = 0;
 static WORD      g_pm_xfer_seg  = 0;
 static WORD      g_pm_xfer_para = 0;
 
@@ -3348,6 +3383,12 @@ static void wow_probe_load(const char *cmd)
     if (wow_arg_a(cmd, path, sizeof path) != 0) {
         q = m; q = zput(q, "WOWTRY: no -a argument on the command line\r\n");
         log_append(LOG_PATH, m, q); return;
+    }
+    {   int pi = 0;                       /* keep it: krnl386 needs its own path */
+        while (path[pi] && pi < (int)sizeof g_wow_krnl_path - 1) {
+            g_wow_krnl_path[pi] = path[pi]; ++pi;
+        }
+        g_wow_krnl_path[pi] = 0;
     }
     if (wow_load_one(path) < 0) return;
     for (j = 0; j < sizeof SIBLING / sizeof SIBLING[0]; ++j) {
@@ -6600,6 +6641,79 @@ static int wow_place_v86(dos_machine_t *mp, WORD *ecs, WORD *eip,
         log_append(LDTLOG_PATH, m, q); return -1;
     }
 
+    /* ── ★ krnl386 CARVES FROM `ES + 0x10` AND NEVER ASKS DOS. ────────────────────
+         Its DPMI bring-up at seg1:0xd688 does, literally:
+
+             push es                     ; ES as we entered it
+             mov ax,0x1687 / int 2Fh     ; find the DPMI host
+             pop ax / add ax,0x10        ; ★ ES + 0x10
+             mov es,ax / add si,ax       ; the host's private data block goes there,
+             lcall [0x1726]              ;   and SI becomes the next free paragraph
+
+         and everything it allocates afterwards grows upward from there, WITHOUT a
+         single INT 21h AH=48h. So whatever sits above `ES + 0x10` is memory krnl386
+         believes is its own.
+
+       ⚠ WE WERE PUTTING ITS OWN CODE THERE. Entered with ES = DOS_PSP_SEG (0x100),
+         krnl386 carved from paragraph 0x110 — and dos_alloc had already handed out
+         0x141 (the transfer buffer) and 0x542, 0x12c3, 0x16b3, 0x17dc (krnl386's own
+         four segments) out of that same region. Measured, not deduced: the descriptor
+         it commits through 04F2 is base=0x1100 limit=0xaf9f, a window that spans its
+         own code segment at 0x5420.
+
+       ⇒ So ES must name a block whose NEXT paragraph-plus-0x10 is genuinely free.
+         Allocate everything else FIRST (above), then claim ALL remaining conventional
+         memory here and hand krnl386 that block. Its own carving then happens inside
+         an allocation DOS knows about, so nothing else can be given the same memory —
+         which is exactly the relationship a real DOS program has with its PSP block.
+       ⚠ It must be a REAL PSP, not a bare block: krnl386 stores through `es:[0x42]`
+         and reads `es:[2]` (top of memory) at seg1:0xc227. dos_psp_build fills both. */
+    {   WORD hseg = 0, hmax = 0;
+        if (dos_alloc(NULL, mp->first_mcb, WOW_HOSTPOOL_PARAS, &hseg, &hmax) == 0 && hseg)
+            g_wow_pool_seg = hseg;
+        q = m; q = zput(q, "WOWV86: host pool reserved at para 0x");
+        q = zhex(q, g_wow_pool_seg); q = zput(q, " size 0x");
+        q = zhex(q, (DWORD)WOW_HOSTPOOL_PARAS);
+        q = zput(q, " paras (see wow_host_alloc)\r\n");
+        log_append(LDTLOG_PATH, m, q);
+    }
+    {   WORD pseg = 0, pmax = 0;
+        (void)dos_alloc(NULL, mp->first_mcb, 0xFFFF, &pseg, &pmax);  /* ask -> get max */
+        if (!pmax || dos_alloc(NULL, mp->first_mcb, pmax, &pseg, &pmax) || !pseg) {
+            q = m; q = zput(q, "WOWV86: no arena left for krnl386's PSP block\r\n");
+            log_append(LDTLOG_PATH, m, q); return -1;
+        }
+        dos_psp_build(NULL, pseg, DOS_ENV_SEG, (WORD)(pseg + pmax));
+        /* ★ AND REBUILD THE ENVIRONMENT, because dos_psp_build ZEROES ITS FIRST
+             THREE BYTES -- correct when it is laying down a fresh PSP with a fresh
+             env block, destructive here, where the env was already built and is
+             shared. It matters more than it looks:
+           ★★ krnl386 FINDS ITS OWN EXECUTABLE THROUGH THE ENVIRONMENT. At
+             seg1:0xc257 it does `mov ds,[0x220] / mov ds,[0x2c]` -- PSP+0x2Ch, the
+             environment segment -- then scans past the strings to the double NUL,
+             reads the count WORD, and takes what follows as the full pathname of the
+             program. That is the MS-DOS 3.0+ convention and it is the ONLY thing it
+             uses; it never receives the path any other way. With the env wiped, the
+             scan walked off into whatever followed and OpenFile got nothing, which is
+             reported as "Unable to open KERNEL executable" -- error #3 of its table.
+           ⚠ And the path must be KRNL386's, not the Win16 app's: this is krnl386
+             asking where IT lives. g_wow_krnl_path is the `-a` argument the WOW
+             launch already carries. */
+        dos_env_build(NULL, DOS_ENV_SEG,
+                      g_wow_krnl_path[0] ? g_wow_krnl_path
+                                         : "C:\\WINDOWS\\SYSTEM32\\KRNL386.EXE");
+        q = m; q = zput(q, "WOWV86: env rebuilt, program path = ");
+        q = zput(q, g_wow_krnl_path[0] ? g_wow_krnl_path : "(default)");
+        q = zput(q, "\r\n"); log_append(LDTLOG_PATH, m, q);
+        g_wow_psp_seg = pseg;
+        q = m;
+        q = zput(q, "WOWV86: krnl386 PSP/arena block at para 0x"); q = zhex(q, pseg);
+        q = zput(q, " size 0x");        q = zhex(q, pmax);
+        q = zput(q, " paras -> it will carve from 0x"); q = zhex(q, (DWORD)(pseg + 0x10));
+        q = zput(q, " upward (top 0x");  q = zhex(q, (DWORD)(pseg + pmax));
+        q = zput(q, ")\r\n"); log_append(LDTLOG_PATH, m, q);
+    }
+
     *ecs = ne->seg[(ne->csip >> 16) - 1].seg;
     *eip = (WORD)(ne->csip & 0xFFFF);
     *eds = ne->seg[ne->autodata - 1].seg;
@@ -6740,8 +6854,12 @@ static void dpmi_install_default_pm_handlers(dos_machine_t *mp)
     volatile BYTE *stub;
     int v, idx;
     char lb[160], *q = lb;
-    /* 256 vectors x 3 bytes = 768; one 0x40-paragraph block covers it with room over. */
-    if (dos_alloc(NULL, mp->first_mcb, 0x40, &seg, &max) || !seg) return;
+    /* 256 vectors x 3 bytes = 768; one 0x40-paragraph block covers it with room over.
+       On the WOW path this MUST come from the host pool -- krnl386 owns the rest of
+       conventional memory by now, and a silent failure here shows up as INT 21h AH=35h
+       reporting vector 0x21 as 0000:0000, which reads like a guest bug. */
+    seg = wow_host_alloc(0x40);
+    if (!seg && (dos_alloc(NULL, mp->first_mcb, 0x40, &seg, &max) || !seg)) return;
     if (g_ldt_next >= DPMI_LDT_MAX) return;
     g_pm_defbase = (DWORD)seg << 4;
     stub = (volatile BYTE *)(ULONG_PTR)g_pm_defbase;
@@ -8008,7 +8126,12 @@ static int wow_vendor_api_entry(dos_machine_t *mp, WORD *sel, WORD *off)
     /* Its own paragraph rather than a corner of DOS_HDLR_SEG: that segment is at
        linear 0x500 and DOS_ENV_SEG starts at 0x600, so it has 0x100 bytes total and
        the map in the header shows them nearly all spoken for. */
-    if (dos_alloc(NULL, mp->first_mcb, 1, &seg, &max) || !seg) return -1;
+    /* Prefer the paragraph wow_place_v86 set aside. On a WOW launch krnl386 owns
+       every other free paragraph by the time this runs, so the fallback below can
+       only succeed on a non-WOW path -- and failing here is not cosmetic: krnl386
+       treats a missing vendor API as "Inadequate DPMI Server" and exits. */
+    seg = wow_host_alloc(1);
+    if (!seg && (dos_alloc(NULL, mp->first_mcb, 1, &seg, &max) || !seg)) return -1;
     b = (volatile BYTE *)(ULONG_PTR)((DWORD)seg << 4);
     for (i = 0; i < (int)sizeof stub; ++i) b[i] = stub[i];
     b[0x10] = (BYTE)shadow; b[0x11] = (BYTE)(shadow >> 8);   /* the returned selector */
@@ -8321,6 +8444,57 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                 f.ctx     = NULL;
                 f.ret     = 0;
                 f.serviced = 0;
+                /* ── DOS-DEPENDENT WOW32 SERVICES. (GH #128) ──────────────────
+                     Most of the surface is pure Win32 and lives in wow32.h. A few
+                     need the DOS machine, so they are answered here where it is in
+                     scope. 0xc9 is the first: krnl386's INT 21h AH=47h arm calls it
+                     with (drive, selector, offset) and, unlike the file family, it
+                     may NOT be declined -- its call site treats DX=0xFFFF as a hard
+                     error and reports failure to the caller rather than chaining to
+                     DOS (tools/ne/wowdecline.py). Leaving it unimplemented is what
+                     produced "Unable to open KERNEL executable": krnl386 could not
+                     learn the current directory, so it never built a path to open. */
+                if (f.id == WOW32_GETCURDIR && g_pm_xfer_seg) {
+                    DWORD gsi  = wow32_argw(&f, 0);
+                    WORD  gsel = wow32_argw(&f, 2);
+                    DWORD drv  = wow32_argw(&f, 4) & 0xFF;
+                    DWORD sax = VDM_REG(tib, VTIB_EAX), sdx = VDM_REG(tib, VTIB_EDX);
+                    DWORD sds = VDM_REG(tib, VTIB_DS),  ssi = VDM_REG(tib, VTIB_ESI);
+                    DWORD gbase = dpmi_sel_base(gsel);
+                    volatile BYTE *xb = (volatile BYTE *)(ULONG_PTR)
+                                        ((DWORD)g_pm_xfer_seg << 4);
+                    int k;
+                    for (k = 0; k < 68; ++k) xb[k] = 0;
+                    VDM_SET16(tib, VTIB_EAX, 0x4700);
+                    VDM_SET16(tib, VTIB_EDX, (WORD)drv);
+                    VDM_SET16(tib, VTIB_DS,  g_pm_xfer_seg);
+                    VDM_SET16(tib, VTIB_ESI, 0);
+                    m.tp = p; dos_int21_set_pm(1); dos_int21(&m); dos_int21_set_pm(0); p = m.tp;
+                    {   DWORD cf = VDM_REG(tib, VTIB_EFLAGS) & 1u;
+                        VDM_REG(tib, VTIB_EAX) = sax; VDM_REG(tib, VTIB_EDX) = sdx;
+                        VDM_REG(tib, VTIB_DS)  = sds; VDM_REG(tib, VTIB_ESI) = ssi;
+                        p = zput(p, "  WOW32 0xc9 GetCurrentDirectory drive=0x");
+                        p = zhex(p, drv);
+                        p = zput(p, " -> \""); p = zput(p, (const char *)xb);
+                        p = zput(p, "\" cf="); p = zhex(p, cf);
+                        if (!cf && gbase) {
+                            volatile BYTE *d = (volatile BYTE *)(ULONG_PTR)(gbase + gsi);
+                            if (mem_readable((ULONG_PTR)d, 68))
+                                for (k = 0; k < 68; ++k) d[k] = xb[k];
+                            else { cf = 1; p = zput(p, " (BUFFER UNREACHABLE)"); }
+                        }
+                        /* DX must not come back 0xFFFF -- that is this call site's
+                           failure sentinel, and it is checked before AX. */
+                        wow32_setret(&f, cf ? 0x0000000Fu : 0u);
+                        p = zput(p, "\r\n");
+                    }
+                    ++g_wow32_serviced;
+                    VDM_REG(tib, VTIB_EIP) += WOW32_BOP_LEN;
+                    p = zput(p, " -> SERVICED (DOS-backed), returned 0x");
+                    p = zhex(p, f.ret); p = zput(p, "\r\n");
+                    log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                    return 1;
+                }
                 if (wow32_call(&f, &g_wow_dosdata)) {
                     /* ⚠ A DECLINE IS NOT A SERVICE and the log must not blur
                          them. "krnl386 got further because we answered 9 calls"
@@ -11396,11 +11570,19 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
            which would read as "the entry did nothing" rather than "we failed a
            handshake". Measured at seg1:0xc02b; see session 30 part 5. */
         VDM_SET16(tib, VTIB_DS, g_wow_entry_ds);
+        /* ★ AND ES, WHICH IS NOT COSMETIC: krnl386 takes ES+0x10 as the base of the
+             DPMI host's private data and carves every later allocation upward from
+             there without asking DOS. v86_set_entry points ES at DOS_PSP_SEG, whose
+             +0x10 is where the (discarded) DOS image sat and where dos_alloc had
+             already placed krnl386's own code. Point it at the arena block instead. */
+        if (g_wow_psp_seg) VDM_SET16(tib, VTIB_ES, g_wow_psp_seg);
         VDM_REG(tib, VTIB_EAX) = 0x4B4F;
         p = zput(p, "STAGE2: WOW entry -- krnl386 in V86 at 0x");
         p = zhex(p, img.cs); p = zput(p, ":0x"); p = zhex(p, img.ip);
         p = zput(p, " DS=0x"); p = zhex(p, g_wow_entry_ds);
-        p = zput(p, " AX=0x4b4f\r\n");
+        p = zput(p, " ES=0x"); p = zhex(p, g_wow_psp_seg);
+        p = zput(p, " (it will carve from 0x"); p = zhex(p, (DWORD)(g_wow_psp_seg + 0x10));
+        p = zput(p, ") AX=0x4b4f\r\n");
     }
     /* ENTRY TRAMPOLINE: `STI` then a far jump to the program's real entry point.
        Under VME the CPU sets EFLAGS.VIF only when the guest EXECUTES sti -- and the

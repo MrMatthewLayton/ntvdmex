@@ -186,6 +186,10 @@ static void wow32_setret(wow32_frame_t *f, DWORD v)
 #define WOW32_WOWKILLREMOTETASK         0xbf
 #define WOW32_MESSAGEBOX                0xc4   /* the fatal-error box; see wowmap  */
 #define WOW32_WOWSHUTDOWNTIMER          0xcd
+/* Serviced in main.c, not here: it needs the DOS machine. Listed so the name table
+   below can print it, and so nobody adds a decline for it -- its call site
+   (seg1:0x53a2) treats DX=0xFFFF as a hard error, not as "ask DOS instead". */
+#define WOW32_GETCURDIR                 0xc9
 #define WOW32_GETSYSTEMDEFAULTLANGID    0xcf
 
 static const char *wow32_name(WORD id)
@@ -225,6 +229,7 @@ static const char *wow32_name(WORD id)
     case WOW32_WOWKILLREMOTETASK:      return "WowKillRemoteTask";
     case WOW32_MESSAGEBOX:             return "MessageBox?";
     case WOW32_WOWSHUTDOWNTIMER:       return "WowShutdownTimer";
+    case WOW32_GETCURDIR:              return "GetCurrentDirectory";
     case WOW32_GETSYSTEMDEFAULTLANGID: return "GetSystemDefaultLangID";
     default:                           return NULL;
     }
