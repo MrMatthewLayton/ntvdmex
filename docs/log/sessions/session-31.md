@@ -549,6 +549,49 @@ Its return is not tested at `seg1:0x14cc`, so that site is a notification; two o
 stepped over harmlessly.
 
 
+## Part 19 — ★ the module database is WELL-FORMED; the failure is inside LoadSegment
+
+Dumped the module entry krnl386 builds, at `seg1:0x9145`. The debugger resolves ES itself
+now, so `esbase=0x0001fca0` came out of the log rather than out of arithmetic:
+
+```
+4e 45 01 00 ...  ne_cseg=0x0004  ne_segtab=0x0040  csip=0001:c02b
+seg1 sector=0204 len=d7fa flags=c142 minalloc=d7fa handle=0207
+seg2 sector=0f88 len=3ee2 flags=d152 minalloc=3ee2 handle=020e
+seg3 sector=137a len=1278 flags=d152 minalloc=1278 handle=0216
+seg4 sector=14a6 len=1ba2 flags=c163 minalloc=29a2 handle=021f
+```
+
+It starts `"NE"`, every record is marked loaded (bit 1) **with a real handle**, and seg4's
+minalloc is `0x1ba2 + 0xe00` — krnl386 growing its own DGROUP at `seg1:0xc2bf`. **The header
+placement is doing exactly what it was meant to.**
+
+⚠️ **And that refutes two things I had reasoned my way into:**
+
+- *"bit 1 must be clear, so krnl386 will call `0x9068` to load the segment."* The mask at
+  `seg1:0xd4e8` does clear it, but something between `0xd45a` and `0x90d9` sets it again
+  along with the handles (`seg1:0xc2cc` `call 0xd5e0` is the candidate). Breakpoints at
+  `0x9069`/`0x90af`/`0x90b8` **never fire** — `0x9068` is not called at all.
+- *"the exit is via `seg1:0xc2fb`."* It is — but I had assumed it from three candidate
+  `jmp` sites rather than measuring. Now confirmed: `0x90d9` is entered with `EAX=0xffff`
+  and `0xc2fb` is the `jmp` that fires.
+
+So LoadSegment gets past `ne_cseg`, past the self-load test, reads `flags=0xc142` and
+`handle=0x0207`, takes the "already loaded" path to `seg1:0x9145` and reaches `0x9183` —
+all five bracket breakpoints hit — and returns 0 somewhere after that. **That is the next
+thing to read.**
+
+▸ Also decoded: `seg1:0x1493` is the segment-load **notification**, and is where the two
+`BOP 0x56` calls come from (its return is not tested). `seg1:0x22b2` is **GlobalAlloc**.
+
+▸ **CX at entry — kept but UNPROVEN.** `seg1:0xc164` does `mov ax,cx / shr ax,4 /
+mov [0x5a6],ax`, turning CX into a paragraph count for the arena the `[0x5a0]` selector
+describes, and CX measured as **0** from entry all the way to that instruction — "zero
+paragraphs". It is now handed the size of the 64 KB window past the header image, and
+verified to survive to `0xc164`. It changed no observable behaviour, so it is recorded as a
+hypothesis with no measured effect rather than as a fix.
+
+
 ## Regression
 
 - `selftest.com` **8/8 PASS on real hardware** after the SysVars change — the guest from

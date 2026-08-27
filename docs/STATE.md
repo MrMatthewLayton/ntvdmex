@@ -185,11 +185,18 @@ and nothing has drawn a pixel. What works is the *bootstrap* — see #128 below.
    teardown. `0x90d9`'s early checks pass (`ne_cseg` = 4; it indexes `ne_segtab` at
    `es:[0x22]` with **ten-byte** records, exactly what `0xd45a`'s copy loop builds), so
    read on from `seg1:0x911d`.
-   ⇒ This is **"two loaders, two copies"** at its most concrete: our loader has already
-   placed krnl386's four segments in conventional memory, and the module entry krnl386
-   just built describes them by FILE offset. Whether it should read them itself (its file
-   handle and our PM `AH=3Fh` path both work now) or be told where they already are is the
-   question.
+   ★ **The module database it builds is WELL-FORMED** — dumped at `seg1:0x9145`
+   (`esbase=0x1fca0`): starts `"NE"`, `ne_cseg=4`, `ne_segtab=0x40`, and all four ten-byte
+   records carry both the loaded bit and a real handle (`0207/020e/0216/021f`), with
+   seg4's minalloc grown to `0x1ba2+0xe00` by krnl386 itself. So the header placement is
+   doing its job, `0x9068` is **never called**, and this is NOT the "two loaders" problem
+   it looked like. Every check inside LoadSegment passes as far as `seg1:0x9183`; read on
+   from there.
+   ▸ `seg1:0x1493` is the segment-load **notification** (the source of the two `BOP 0x56`
+   calls); `seg1:0x22b2` is **GlobalAlloc**.
+   ▸ **CX at entry is a kept-but-UNPROVEN hypothesis**: `seg1:0xc164` turns CX into a
+   paragraph count for the `[0x5a0]` arena and it measured 0 from entry, so it is now
+   handed the window size. It changed nothing observable.
    ▸ Also decoded: **BOP `0x56` is the per-call 16→32 gateway**, sub-function on the stack
    at `SS:SP`, `add sp,6` after it. At `seg1:0x14cc` its return is not tested — a
    notification, harmlessly stepped over.
