@@ -3203,6 +3203,11 @@ static char      g_wow_name[WOW_MAX_MOD][16];
 static int       g_wow_nmod = 0;
 static WORD      g_wow_entry_ds = 0;   /* krnl386's autodata paragraph      */
 static int       g_wow_entering = 0;   /* the guest is krnl386, not DOS     */
+/* The PM->V86 transfer buffer for pointer-taking INT 21h calls; allocated in
+   wow_place_v86 and used by pm_int21_xfer. Declared here because the allocation
+   site comes long before the use site. 0 = absent, and every arm checks. */
+static WORD      g_pm_xfer_seg  = 0;
+static WORD      g_pm_xfer_para = 0;
 
 /* Pull the `-a <path>` argument out of a WOW command line. Measured shape:
      "…\ntvdm.exe" -f -i1 -w -a C:\WINDOWS\system32\krnl386.exe
@@ -6529,6 +6534,25 @@ static int wow_place_v86(dos_machine_t *mp, WORD *ecs, WORD *eip,
         q = zput(q, "\r\n"); log_append(LDTLOG_PATH, m, q);
     }
 
+    /* ── THE PM->V86 TRANSFER BUFFER, BEFORE krnl386 TAKES THE REST. ───────────────
+         krnl386 chains its declined INT 21h file calls to real DOS, and those calls
+         carry protected-mode pointers the V86 DOS layer cannot resolve. pm_int21_xfer()
+         copies through this block. It is claimed HERE, between the shrink and
+         krnl386's own segments, because after those allocations krnl386 owns the arena
+         -- and it is a plain DOS allocation so the MCB chain (and dos_mcb_check) stay
+         true. 16 KB because that is the largest read krnl386 asks for; a bigger request
+         is clamped and SAID SO rather than silently short-read. */
+    {   WORD xseg = 0, xmax = 0;
+        if (dos_alloc(NULL, mp->first_mcb, 0x400, &xseg, &xmax) == 0 && xseg) {
+            g_pm_xfer_seg = xseg; g_pm_xfer_para = 0x400;
+        }
+        q = m;
+        q = zput(q, "WOWV86: PM->V86 transfer buffer at para 0x"); q = zhex(q, g_pm_xfer_seg);
+        q = zput(q, " (0x"); q = zhex(q, (DWORD)g_pm_xfer_para * 16u);
+        q = zput(q, " bytes; largest free was 0x"); q = zhex(q, xmax);
+        q = zput(q, ")\r\n"); log_append(LDTLOG_PATH, m, q);
+    }
+
     for (i = 0; i < (int)ne->n_seg; ++i) {
         ne_seg *s = &ne->seg[i];
         uint32_t need = ne_seg_alloc_size(s), k;
@@ -7998,6 +8022,138 @@ static int wow_vendor_api_entry(dos_machine_t *mp, WORD *sel, WORD *off)
     g_wow_vendor_sel = (WORD)((idx << 3) | 7);
     *sel = g_wow_vendor_sel;
     return 0;
+}
+
+/* ── THE PM->V86 TRANSFER BUFFER FOR POINTER-TAKING INT 21h CALLS. (GH #128) ──────
+     dos_int21.c resolves a guest pointer as `(DS << 4) + DX`. That is exactly right
+     for a V86 guest and completely wrong for a protected-mode one, where DS is a
+     SELECTOR -- so every INT 21h function that takes a pointer was excluded from the
+     PM path and answered "PM thunk TODO". For DOS/4GW that was harmless, because the
+     extender services its own DOS calls internally. krnl386 is the first guest to
+     chain them to us, and it needs the whole file API.
+
+     So: a block of conventional memory the V86 DOS layer can address normally, into
+     which the caller's arguments are copied before the call and out of which its
+     results are copied after. This is the same shape as DPMI's own translation
+     buffer, and for the same reason.
+
+   ⚠ ALLOCATED ONLY ON THE WOW PATH (see wow_place_v86), and every arm below is gated
+     on it being present. A DOS or DOS/4GW run therefore takes byte-identical paths to
+     before -- which matters, because a fix measured on one guest is a fix for none and
+     this one is measured on krnl386. */
+/* Copy [len] bytes out of a PM guest pointer sel:off into the transfer buffer. */
+static int pm_xfer_in(WORD sel, DWORD off, DWORD len)
+{
+    DWORD b = dpmi_sel_base(sel);
+    const volatile BYTE *s = (const volatile BYTE *)(ULONG_PTR)(b + off);
+    volatile BYTE *d = (volatile BYTE *)(ULONG_PTR)((DWORD)g_pm_xfer_seg << 4);
+    DWORD k;
+    if (!b || len > (DWORD)g_pm_xfer_para * 16u) return -1;
+    if (!host_readable((const void *)s, len)) return -1;
+    for (k = 0; k < len; ++k) d[k] = s[k];
+    return 0;
+}
+
+static int pm_xfer_out(WORD sel, DWORD off, DWORD len)
+{
+    DWORD b = dpmi_sel_base(sel);
+    volatile BYTE *d = (volatile BYTE *)(ULONG_PTR)(b + off);
+    const volatile BYTE *s = (const volatile BYTE *)(ULONG_PTR)((DWORD)g_pm_xfer_seg << 4);
+    DWORD k;
+    if (!b || len > (DWORD)g_pm_xfer_para * 16u) return -1;
+    if (!host_readable((const void *)d, len)) return -1;
+    for (k = 0; k < len; ++k) d[k] = s[k];
+    return 0;
+}
+
+/* How long is the NUL-terminated string at sel:off? Bounded, and it never reads past
+   what the descriptor covers -- a filename we cannot read is a failure to report, not
+   a reason to walk off the end of a segment. */
+static DWORD pm_xfer_strlen(WORD sel, DWORD off, DWORD cap)
+{
+    DWORD b = dpmi_sel_base(sel), n = 0;
+    const volatile BYTE *s = (const volatile BYTE *)(ULONG_PTR)(b + off);
+    if (!b) return 0;
+    while (n < cap && host_readable((const void *)(s + n), 1) && s[n]) ++n;
+    return n + 1;                                     /* include the NUL */
+}
+
+/* Service one pointer-taking INT 21h call made from protected mode. Returns the log
+   cursor. EIP is advanced by the caller, as for every other arm. */
+static char *pm_int21_xfer(dos_machine_t *mp, volatile BYTE *tib, DWORD ah, char *p)
+{
+#define m (*mp)
+    WORD  dsv = (WORD)(VDM_REG(tib, VTIB_DS) & 0xFFFF);
+    DWORD dxv = VDM_REG(tib, VTIB_EDX) & 0xFFFF;
+    DWORD cxv = VDM_REG(tib, VTIB_ECX) & 0xFFFF;
+    DWORD sav_ds = VDM_REG(tib, VTIB_DS), sav_dx = VDM_REG(tib, VTIB_EDX);
+    DWORD cap = (DWORD)g_pm_xfer_para * 16u;
+    int rc = 0;
+
+    p = zput(p, "INT21h AH=0x"); p = zhex(p, ah);
+    p = zput(p, " (PM->V86 via xfer buf 0x"); p = zhex(p, g_pm_xfer_seg);
+    p = zput(p, ") ds:dx=0x"); p = zhex(p, dsv); p = zput(p, ":0x"); p = zhex(p, dxv);
+
+    switch (ah) {
+    /* A FILENAME IN. 3Dh open, 41h delete, 43h get/set attributes, 4Eh find-first,
+       39h/3Ah/3Bh mkdir/rmdir/chdir -- all DS:DX -> ASCIIZ path. */
+    case 0x3D: case 0x41: case 0x43: case 0x4E:
+    case 0x39: case 0x3A: case 0x3B: {
+        DWORD n = pm_xfer_strlen(dsv, dxv, cap < 260 ? cap - 1 : 259);
+        rc = pm_xfer_in(dsv, dxv, n);
+        if (!rc) {
+            const char *nm = (const char *)(ULONG_PTR)((DWORD)g_pm_xfer_seg << 4);
+            p = zput(p, " name=\""); p = zput(p, nm); p = zput(p, "\"");
+        }
+        break; }
+    /* A BUFFER OUT. 3Fh read CX bytes into DS:DX -- nothing to copy in. */
+    case 0x3F:
+        if (cxv > cap) {
+            /* Say so rather than silently short-reading: a caller that asked for
+               0x4000 and got 0x1000 with CF=0 would believe it had the whole file. */
+            p = zput(p, " READ 0x"); p = zhex(p, cxv);
+            p = zput(p, " EXCEEDS xfer buffer 0x"); p = zhex(p, cap);
+            p = zput(p, " -- CLAMPED (see wow_place_v86)");
+            cxv = cap;
+            VDM_SET16(tib, VTIB_ECX, (WORD)cxv);
+        }
+        break;
+    /* A BUFFER IN. 40h write CX bytes from DS:DX. */
+    case 0x40:
+        if (cxv > cap) { cxv = cap; VDM_SET16(tib, VTIB_ECX, (WORD)cxv); }
+        rc = pm_xfer_in(dsv, dxv, cxv);
+        break;
+    default:
+        rc = -1;
+        break;
+    }
+
+    if (rc) {
+        VDM_REG(tib, VTIB_EFLAGS) |= 1u;              /* CF=1 */
+        VDM_SET16(tib, VTIB_EAX, 0x0005);             /* access denied */
+        p = zput(p, " -> XFER FAILED (unreadable pointer or oversize) CF=1\r\n");
+        return p;
+    }
+
+    /* Point the DOS layer at the buffer, in the terms it understands. */
+    VDM_SET16(tib, VTIB_DS, g_pm_xfer_seg);
+    VDM_SET16(tib, VTIB_EDX, 0);
+    m.tp = p; dos_int21_set_pm(1); dos_int21(&m); dos_int21_set_pm(0); p = m.tp;
+    VDM_REG(tib, VTIB_DS) = sav_ds; VDM_REG(tib, VTIB_EDX) = sav_dx;
+
+    /* Results back out. A short read is what AX says, not what CX asked for. */
+    if (ah == 0x3F && !(VDM_REG(tib, VTIB_EFLAGS) & 1u)) {
+        DWORD got = VDM_REG(tib, VTIB_EAX) & 0xFFFF;
+        if (got > cxv) got = cxv;
+        if (got) pm_xfer_out(dsv, dxv, got);
+        p = zput(p, " read=0x"); p = zhex(p, got);
+    }
+    p = zput(p, " -> AX=0x"); p = zhex(p, VDM_REG(tib, VTIB_EAX) & 0xFFFF);
+    p = zput(p, " CX=0x");    p = zhex(p, VDM_REG(tib, VTIB_ECX) & 0xFFFF);
+    p = zput(p, " CF=");      p = zhex(p, VDM_REG(tib, VTIB_EFLAGS) & 1u);
+    p = zput(p, "\r\n");
+    return p;
+#undef m
 }
 
 static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
@@ -9775,8 +9931,56 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                            leaving it unimplemented is why "not enough memory for dispatcher
                            data" was invisible for a whole session and had to be
                            reconstructed character by character out of the TODO log lines. */
+                        /* ── THE PM FILE API. (GH #128) ────────────────────────────────
+                             krnl386 hooks INT 21h in protected mode, offers each call to
+                             its 32-bit companion, and chains the ones it declines to real
+                             DOS -- which is us. So its file I/O arrives HERE, and until
+                             now landed in "PM thunk TODO": AH=3Dh, 3Fh, 43h, 57h and the
+                             rest were simply not answered, which is why it read an NE
+                             header out of a buffer nothing had filled.
+                           Register-only calls just need the whitelist below. The ones that
+                             take a POINTER cannot use it, because dos_int21.c resolves a
+                             guest pointer as `(DS << 4) + DX` -- correct for V86 and
+                             meaningless for a selector. pm_int21_xfer() bridges that by
+                             copying through a conventional-memory buffer. */
+                        if (g_pm_xfer_seg && (ah == 0x3D || ah == 0x3F || ah == 0x40 ||
+                                              ah == 0x41 || ah == 0x43 || ah == 0x4E ||
+                                              ah == 0x39 || ah == 0x3A || ah == 0x3B)) {
+                            m.tp = p; p = pm_int21_xfer(&m, tib, ah, p);
+                            log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                            VDM_REG(tib, VTIB_EIP) += 2;
+                            return 1;
+                        }
+                        /* AH=34h hands back a FAR POINTER to the InDOS flag. In V86 that is
+                           a segment; a PM caller needs a SELECTOR over the same linear
+                           address, which is exactly what INT 31h 0002 builds -- so build one
+                           and answer with it rather than handing back a paragraph the guest
+                           would shift by four and miss by a megabyte. */
+                        if (ah == 0x34) {
+                            WORD sel34;
+                            m.tp = p; dos_int21_set_pm(1); dos_int21(&m); dos_int21_set_pm(0); p = m.tp;
+                            sel34 = dpmi_seg_to_desc((WORD)(VDM_REG(tib, VTIB_ES) & 0xFFFF));
+                            p = zput(p, "INT21h AH=34 (PM) InDOS flag at V86 0x");
+                            p = zhex(p, VDM_REG(tib, VTIB_ES) & 0xFFFF);
+                            p = zput(p, ":0x"); p = zhex(p, VDM_REG(tib, VTIB_EBX) & 0xFFFF);
+                            if (sel34) {
+                                VDM_SET16(tib, VTIB_ES, sel34);
+                                p = zput(p, " -> sel 0x"); p = zhex(p, sel34);
+                            } else p = zput(p, " -> NO DESCRIPTOR AVAILABLE (left as a segment)");
+                            p = zput(p, "\r\n");
+                            log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                            VDM_REG(tib, VTIB_EIP) += 2;
+                            return 1;
+                        }
+                        /* 0Eh select disk, 3Eh close, 42h seek, 45h dup, 46h dup2, 57h
+                           get/set file date-time and DCh get-logical-drive-map are all
+                           register-only in both directions -- krnl386 asks for 0Eh, 57h and
+                           DCh within the first dozen calls, and every one of them was
+                           landing in the TODO arm for want of an entry in this list. */
                         if (ah == 0x19 || ah == 0x2A || ah == 0x2C || ah == 0x30 ||
-                            ah == 0x33 || ah == 0x58 || ah == 0x06 || ah == 0x44) {
+                            ah == 0x33 || ah == 0x58 || ah == 0x06 || ah == 0x44 ||
+                            ah == 0x0E || ah == 0x3E || ah == 0x42 || ah == 0x45 ||
+                            ah == 0x46 || ah == 0x57 || ah == 0xDC) {
                             m.tp = p; dos_int21_set_pm(1); dos_int21(&m); dos_int21_set_pm(0); p = m.tp;
                             p = zput(p, "INT21h AH=0x"); p = zhex(p, ah);
                             p = zput(p, " (PM, register-only -> V86 DOS) -> AX=0x");
