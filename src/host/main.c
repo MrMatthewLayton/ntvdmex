@@ -9098,6 +9098,11 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
         const volatile BYTE *bb = (const volatile BYTE *)(ULONG_PTR)blin;
         if (bb[0] == 0xC4 && bb[1] == 0xC4) {
             BYTE bcode = bb[2], bsub = bb[3];
+            /* What a stepped-over 0x51 will hand back -- see the step-over note below.
+               Captured while the frame is still in scope. A separate flag, because
+               every 32-bit value is a possible hole value (0xFFFF is DECLINE) and a
+               sentinel that collides with real data is how an instrument starts lying. */
+            DWORD wow_stale = 0; int wow_stale_ok = 0;
             p = zput(p, "WOWBOP 0x"); p = zhexb(p, bcode);
             /* Only 0x53 carries a sub-function byte. Printing bb[3] for the others
                shows the first byte of the NEXT instruction and reads like data. */
@@ -9423,6 +9428,7 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                     return 1;
                 }
                 ++g_wow32_unimpl;
+                wow_stale = wow32_peekret(&f); wow_stale_ok = 1;
             }
             /* ── STEP OVER AND KEEP GOING, RATHER THAN STOPPING THE GUEST. ─────
                  Returning -1 here halts the run at the first unimplemented service,
@@ -9436,7 +9442,15 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                  non-0x53 sites are 3 bytes -- see the length note above. */
             VDM_REG(tib, VTIB_EIP) += 3;
             p = zput(p, " -> UNIMPLEMENTED, STEPPED OVER (registers untouched -- the "
-                        "call did NOT happen)\r\n");
+                        "call did NOT happen)");
+            /* ⚠ NOT inert: krnl386 pops this hole into AX:DX and BRANCHES on it. Print
+                 it, so a later reader can tell a guest decision from our stack litter. */
+            if (wow_stale_ok) {
+                p = zput(p, "; guest will read 0x");
+                p = zhex(p, wow_stale);
+                p = zput(p, " from the return hole");
+            }
+            p = zput(p, "\r\n");
             log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
             return 1;
         }

@@ -52,6 +52,37 @@ def seg_bytes(ne, n):
     return s, ne.d[s["file_off"]:s["file_off"] + s["length"]]
 
 
+def _disasm_resync(md, d, start, end, lines):
+    """Yield instructions from `start` to `end`, stepping over undecodable bytes.
+
+    capstone stops dead at the first byte it cannot decode. This walks the window,
+    restarting one byte past every stall and recording a `db` line (into `lines`, in
+    order -- the consumer appends each instruction as it is yielded, so laziness keeps
+    the interleaving right) so a stall is VISIBLE rather than being an empty window.
+    """
+    # Feed capstone up to 15 bytes PAST the window so the instruction straddling the end
+    # still decodes; stop yielding at `end`. Without the overrun the last instruction is
+    # truncated, fails to decode, and gets reported as `db ... not decodable` -- a window
+    # edge masquerading as a data byte, which is the same lie one level down.
+    lim = min(end + 15, len(d))
+    pos = start
+    while pos < end:
+        progressed = False
+        for ins in md.disasm(bytes(d[pos:lim]), pos):
+            if ins.address >= end:
+                return
+            progressed = True
+            yield ins
+            pos = ins.address + ins.size
+        if not progressed:
+            b = d[pos]
+            ch = chr(b) if 0x20 <= b < 0x7F else "."
+            lines.append("  %04x  %-20s %-8s 0x%02x%s"
+                         % (pos, "%02x" % b, "db", b,
+                            "   ; '%s' -- not decodable, resyncing" % ch))
+            pos += 1
+
+
 def disasm(ne, segno, start, count, stubs=None, out=None):
     """Print `count` bytes of segment `segno` from `start`, annotated."""
     s, d = seg_bytes(ne, segno)
@@ -60,7 +91,14 @@ def disasm(ne, segno, start, count, stubs=None, out=None):
     md.detail = False
     end = min(start + count, len(d))
     lines = []
-    for ins in md.disasm(bytes(d[start:end]), start):
+    # ⚠ RESYNC ON UNDECODABLE BYTES, AND SAY SO. capstone's disasm() STOPS at the first
+    #   byte it cannot decode and returns what it had. So a start offset that lands mid
+    #   instruction -- or a segment with strings embedded in it, which krnl386's seg2 has
+    #   at offset 0 -- produced SILENCE, and silence from a disassembler reads as "there
+    #   is no code here" rather than "I gave up on byte one". Session 35 lost time to
+    #   exactly that on seg2:0x0f30 before dumping the bytes by hand. Emit `db` and step
+    #   one byte on instead, so the output always spans the window it was asked for.
+    for ins in _disasm_resync(md, d, start, end, lines):
         note = ""
         # ⚠ MASK BRANCH TARGETS TO 16 BITS. capstone computes target = address + rel
         #   and does not wrap, so disassembling from a high offset prints
@@ -120,14 +158,23 @@ def wowfunc(ne, path, fid, back=0x50):
               % (fid, a, nby, nby // 2))
         print("--- the stub itself")
         disasm(ne, 1, a, 0x14, stubs)
-        cs = callers(ne, 1, a)
-        print("--- %d caller(s)" % len(cs))
-        for c in cs:
-            # Show the run-up: the pushes ARE the argument list, and how each pushed
-            # value was computed is the only thing that says what it means.
-            print("  -- caller at seg1:0x%04x (showing 0x%x bytes before through 0x10 after)"
-                  % (c, back))
-            disasm(ne, 1, max(0, c - back), back + 0x10, stubs)
+        # ⚠ SCAN EVERY SEGMENT, NOT JUST SEGMENT 1. The stubs all live in seg1, but the
+        #   code that CALLS them does not: WowLoadModule (0x2d) is called once, from
+        #   seg2:0x0f6d, and scanning seg1 alone reported "0 caller(s)" -- a tool saying
+        #   an ID is never used when it is the very call the run stops on. Session 34
+        #   already lost time to a call site printed without its segment; this is the
+        #   same mistake one level up.
+        total = 0
+        for seg in ne.segments():
+            n = seg["i"]
+            for c in callers(ne, n, a):
+                total += 1
+                # Show the run-up: the pushes ARE the argument list, and how each pushed
+                # value was computed is the only thing that says what it means.
+                print("  -- caller at seg%d:0x%04x (0x%x bytes before through 0x10 after)"
+                      % (n, c, back))
+                disasm(ne, n, max(0, c - back), back + 0x10, stubs)
+        print("--- %d caller(s)" % total)
     return 0
 
 

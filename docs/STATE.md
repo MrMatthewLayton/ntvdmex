@@ -4,7 +4,7 @@
 > this file top to bottom and you will know where it is, what works, what does not, and
 > what to do next.
 
-- **Last updated:** 2026-08-28 (session 34)
+- **Last updated:** 2026-08-28 (session 35)
 - **Branch:** `m9/completeness`
 - **Tracker:** [140+ issues](https://github.com/MrMatthewLayton/ntvdmex/issues) — reconciled against the repo on 2026-08-26 (`tools/gh/backfill.py` is the manifest)
 - **Knowledge base:** the [wiki](https://github.com/MrMatthewLayton/ntvdmex/wiki)
@@ -88,10 +88,34 @@ own words in the log rather than vanishing. See #128 below.
 1. **[#128] WOW / Win16 — IN PROGRESS. krnl386 TAKES AND RETURNS FROM ITS OWN DPMI
    EXCEPTIONS, LOADS SYSTEM.DRV, AND REPORTS ITS OWN FAILURES.**
 
-   ### ▶ START HERE: [session 34](log/sessions/session-34.md#-resume-here--session-34-handoff)
+   ### ▶ START HERE: [session 35](log/sessions/session-35.md#-resume-here--session-35-handoff)
    That block is the live handoff — where it is, the leads already **ruled out**
    (do not re-try them), the next run, the instruments, and the standing hazards.
    Everything below it is background.
+
+   **Session 35 in one paragraph.** No new wall — this one bought *understanding*, and
+   corrected the plan. The harness logged an unimplemented WOW32 call as "registers
+   untouched — the call did NOT happen", which is true of the registers and **false of the
+   result**: the thunk does `sub sp,4` before the BOP and `pop ax / pop dx` after it, so a
+   stepped-over call hands krnl386 a **stack hole nobody wrote**, and it branches on the
+   litter. Printing that value settled two questions in a single run. `0xc6` handed back
+   `0x01b7`, and its caller does `or ax,ax / jne <failure>` — so that failure was **ours**,
+   not a decision. `0x2d` handed back `0x2714`, which is `>= 0x21`, so `LoadModule` took its
+   **success** path into `les si,[bp+6] / mov es:[si+2],di` with a NULL parameter block —
+   which *is* the terminal `#GP` session 34 deduced and warned against chasing, now measured.
+   ⇒ **`WowLoadModule` is not the frontier**: it is only ever called because `LoadModule`
+   already failed with `AX = 0x17` (the path is exact — `cmp ax,0x17` at `seg2:0x0f26`, and
+   `0x0f28` then *overwrites* `lpModuleName` with `FFFF:FFFF`, which is why the call carries
+   no module name), so implementing `0x2d` first would have been writing the handler for a
+   failure we cause. The enclosing function meanwhile **names itself**: its own
+   `"LoadStart = "` / `"LoadSuccess = "` / `"LoadFail = "` strings make `seg2:0x051c` Win16
+   **`LoadModule`**, `retf 8`, `lpModuleName` at `[bp+0xc]:[bp+0xa]` and `lpParameterBlock`
+   at `[bp+8]:[bp+6]` — and its narration is switched off only by a zero at `ds:[0x12b0]`,
+   which is the cheapest way to find where `0x17` is really generated. Two lies were also
+   fixed in `nedis.py`: capstone **stops dead at the first undecodable byte**, so a
+   misaligned start produced a *silent empty window* (seg2 opens with a string), and
+   `--wowfunc` scanned segment 1 only — it reported **`0 caller(s)`** for `0x2d`, the very
+   call the run stops on, when there are **two**, the second a `WINOLDAP.MOD` fallback.
 
    **Session 34 in one paragraph.** DPMI exception delivery works, and nine walls behind
    it fell — every one of them ours. The first was never a missing frame: **NT builds the

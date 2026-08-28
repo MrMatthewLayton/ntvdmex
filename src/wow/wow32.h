@@ -149,6 +149,21 @@ static void wow32_setret(wow32_frame_t *f, DWORD v)
     f->ret = v;
 }
 
+/* ★ What the guest WILL READ out of the return hole if nobody writes it.
+   A stepped-over call leaves the `sub sp,4` hole holding whatever the stack last
+   had there, and krnl386 pops it into AX:DX and branches on it -- so an
+   unimplemented call is not inert, it answers at random. Two walls in this project
+   were that value and not the guest: the null-`ES` fault after `WowLoadModule`
+   (a stale slot passing a `cmp ax,0x21` it should have failed) and, upstream of
+   it, a stale non-zero failing `or ax,ax / jne` inside LoadModule. Reading the
+   hole back and PRINTING it is what lets a later reader tell "krnl386 decided
+   this" from "our litter decided this". */
+static DWORD wow32_peekret(const wow32_frame_t *f)
+{
+    return (DWORD)wow32_peekw(f->bp + WOW32_OFF_RET)
+         | ((DWORD)wow32_peekw(f->bp + WOW32_OFF_RET + 2) << 16);
+}
+
 /* ---- the function IDs we can name -------------------------------------- */
 /* Names for the 28 that krnl386's export table names outright, plus the ones
    worked out from their call sites. An ID with no name here is not a gap in the
