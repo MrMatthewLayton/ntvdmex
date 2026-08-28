@@ -1073,3 +1073,92 @@ reachable through the arena, but it is one data point and not a mechanism.
 
 The operational detail (the rig loop, breakpoints, tracing, reading the guest) is unchanged:
 see [`▶ RESUME HERE` in session 31](session-31.md#-resume-here--the-operational-detail-a-fresh-context-needs).
+
+---
+
+## ▶ RESUME HERE — session 32 handoff
+
+### Where it actually is
+
+krnl386 loads and relocates **segment 1** correctly, executes from it in PM, survives its own
+arena compaction, and reaches the loop at `seg1:0xc4a3` that loads segments 2-4. There it
+fails: `LoadSegment(segment 2)` returns 0 and the exit stub reports **`ExitKernelThunk(1)`** —
+the same error number the session opened with, for a different segment. Last PM step ~`0x4e`.
+
+**The cause is known and is a loader-contract gap** (parts 19-31): `seg1:0xd5e0` gives segment 1
+a real `GlobalAlloc([si+6])` but every other segment a **`GlobalAlloc(size 0)` placeholder**;
+`seg1:0x937e` later resizes that placeholder to the exact right size via `GlobalReAlloc` and
+**nothing ever fills it**. So the record walker reads code as relocation records, `call 0x8cb6`
+returns 0, `seg1:0x92b5` fires.
+
+### What is ruled out — do not re-try these
+
+| lead | verdict |
+|---|---|
+| Clear `NE_SEG_PRELOAD` on segments 2-4 | flags `0xd152`→`0xd112`, **bit 1 still set**; reverted |
+| WOW32 id `0x7c` (inside `GlobalReAlloc`) | breakpoint on `seg1:0x4697` **not hit** |
+| `seg1:0x647a` as the byte copy | it is **SetOwner** (`[eax+0x12]`), copies nothing |
+| Tuning CX / the arena size | gap 0 still leaves a 1-paragraph delta; not the lever |
+| Capping the conventional arena | arena selector unchanged, still reaches `0xA0000`; reverted |
+| Every-vector INT patching + the vote | run went **backwards** (`0x46`→`0x27`); reverted |
+
+### The one reading left
+
+`[bp+6]` into LoadSegment is **`0x01B7`, the arena selector** (measured properly at
+`seg1:0x918a`), and the file-open path at `seg1:0x9191` is confirmed never taken. So the
+segment images are expected to be reachable **through the arena**, placed by the loader — us.
+Proving it needs to know what a correct loader puts there.
+
+★ **The cheapest way to know is to ask stock ntvdm**, which is the only implementation of this
+exact contract (same `krnl386.exe`, same WOW32 interface, both on the rig). Plan:
+
+1. Build a small XP-safe dumper: `OpenProcess` + `ReadProcessMemory` on a running stock
+   `ntvdm.exe`, dumping the VDM's low megabyte — module database, segment table (`+8` handles),
+   arena descriptors — in the usual log shape.
+2. **Log the IFEO value, then remove it** (it is currently
+   `HKLM\...\Image File Execution Options\ntvdm.exe  Debugger = C:\ntvdmex\ntvdmhost.exe`,
+   so *everything* routes to our host until it is removed).
+3. Launch `SYSEDIT.EXE`, let it settle, dump.
+4. **Restore the IFEO key and verify it is back** — bracket 2-4 in one script.
+5. Diff stock's segment table against ours.
+
+`ntsd.exe` is on the rig if a debugger is wanted instead. **`kd.exe` is NOT on the rig** — the
+"KD confirmed" note in the project memory refers to the QEMU dev VM (its recovery step is
+`system_reset`, a QMP command).
+
+### ⚠️ Three method traps that each cost a run this session
+
+1. **A breakpoint ON an instruction reads the registers BEFORE it executes.** Break *after* the
+   load. This produced a fabricated `[bp+6] = 0x01ce`.
+2. **The furthest breakpoint hit is a floor, not a location.** `seg1:0x9145` was read as a wall
+   when it is an ordinary fall-through.
+3. **The layout is not stable between runs.** `ES=0x01bf` was base `0x1ad00` in one run and
+   `0x2aec0` in the next. Derive every address per run from the `acc=0xfb` commit line or the
+   `dsbase=`/`esbase=` the HIT line prints; never carry one between runs.
+
+### The loop
+
+```bash
+./scripts/build.sh
+ARCHIVE=build/wowruns ./scripts/bmwow.sh              # a WOW round
+PMBP=1 ARCHIVE=build/wowruns ./scripts/bmwow.sh       # ...keeping pmbp.txt armed
+```
+
+`pmbp.txt` format: `<linear> <dump linear> <skip> <mode> <rep>`, CRLF, `rep=1` to stay armed,
+`mode=1` for a one-byte `0xCC` on a one-byte instruction. Always check the armed line's
+`displaced` bytes against `tools/ne/nedis.py`. SMB writes to `/private/tmp/xpshare` need
+`dangerouslyDisableSandbox: true`.
+
+### Regression, every time
+
+```bash
+./tools/dostest/run.sh                          # 209 NE checks + batteries, off-VM
+./scripts/check-imports.sh                      # XP-safe imports
+TIMEOUT=200 ./scripts/bmqueue.sh selftest.com   # the OTHER guest class, real hardware
+```
+
+### Rig left as
+
+IFEO `Debugger` **set**, `wowtry.flag` **present**, `pmbp.txt` **removed**, `dostrace.flag`
+**absent**. `wowrun.bat` now also collects `wdprobe.log` → `wow_wd.txt` and writes
+`wow_alive.txt` (a `tasklist` for `ntvdmhost.exe` at ~4 s and at the end).
