@@ -816,6 +816,62 @@ compaction that runs once per loop iteration is the mechanism for reclaiming eac
 use. `seg1:0x8b3f` (open module) and `seg1:0x647a` (the segment-1 copy) are the two routines
 that decide it, and neither has been read.
 
+## Part 25 — ⚠️ correction: `seg1:0x647a` is SetOwner, not a byte copy
+
+Part 24 said segment 1's byte copy is `call 0x647a` at `seg1:0xd612`. Reading it says
+otherwise:
+
+```
+647a  push bp / mov bp,sp / push ds/es/esi/edi
+6483  call 0x67a8               ; enter the critical section
+648a  push [bp+6] / call 0x63f3 ; selector -> block descriptor, in EAX
+6490  push [bp+4]
+6493  pop word [eax+0x12]       ; ★ store [bp+4] into the descriptor at +0x12
+649d  call 0x67b9               ; leave it
+64a7  ret 4
+```
+
+`seg1:0xd610` pushes `ax` (the handle just allocated) then `ds` (the module database), so the
+call is `SetOwner(block, module)` — it writes the **owner** field, and copies nothing. There is
+no byte copy in `0xd5e0` for *any* segment, including segment 1. The inference in part 24 was
+built on an unread routine and it was wrong; the question "what fills the block" is still open,
+for all four segments.
+
+## Part 26 — `seg1:0x8b3f` is a module→file-handle CACHE, and it works
+
+The other unread routine, and it is in good order:
+
+```
+8b5e  cx = [0x5da]        ; entry count
+8b62  di = 0x5dc          ; the table, 4 bytes per entry {handle, module}
+8b65  bx = [di+2]         ; this entry's module
+8b68  cmp ax,bx / je      ; already open for this module -> reuse it
+8b6e  or bx,bx / ...      ; else remember the first free slot
+8b7a  add di,4 / loop
+...
+8b8d  cx = [0x5d6]        ; round-robin victim pointer, bounded by [0x5d8]
+8ba5  cmp bx,[bp+6] / je  ; never evict the module we are opening for
+8bae  mov ah,0x3E / call 0x4ff2   ; ★ INT 21h CLOSE the victim
+8bb5  [bp-2] = di         ; reuse that slot
+```
+
+So krnl386 keeps a small ring of open file handles keyed by module, closes the least recently
+used when it needs a slot, and refuses to evict the caller's own. That is exactly the
+machinery a loader needs to page segments in from disk on demand — and session 31 already
+proved the DOS side of it works (krnl386 opens `KRNL386.EXE` and gets handle 5 through our
+layer).
+
+⇒ **The capability is present and functional; it is simply never invoked for segments 2-4**,
+because `[bp+6]` at `seg1:0x9183` is a valid selector (`0x01ce`) rather than `0xFFFF`. Every
+piece of the on-demand load path exists except the one input that would trigger it.
+
+▶ So the remaining question is sharper than before and is about **one word**: what makes
+`call 0x48b4([0x59e])` at `seg1:0xc4e9` yield `0xFFFF`. `0x48b4` validates its argument with
+`lar ss:[bx+2]`, tests the AVL/high bit and falls through to `call 0x63f3`; its failure exits
+are `seg1:0x48e8` / `0x48eb`. Reading what it returns on each, against what `[0x59e]`'s
+selector actually looks like in our run, is the next measurement — and it is a static read plus
+one breakpoint, not a redesign.
+
 ## Regression
 
 - `selftest.com` **8/8 PASS on real hardware** — the other guest class, run because the
