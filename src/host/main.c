@@ -236,6 +236,20 @@
 #define DPMI_FAULT_BOP     0x57      /* BOP number planted at the handler code:COFF        */
 #define DPMI_FLT_CLASS_GP  6         /* KiTrap0D's fault class for a #GP (push 6)           */
 #define DPMI_TIB_FLTTBL    0x08      /* VDM_TIB offset holding the handler-table pointer    */
+/* Offset, WITHIN g_dpmi_flt_code_sel (base DOS_HDLR_SEG<<4), of fault class i's own BOP
+   site. The sites themselves live at DOS_CTAB_SEG:DOS_FLTSITE_OFF -- see dos_layout.h for
+   why the class has to be distinguishable at all. The handler segment cannot host them:
+   it is 256 bytes with 16 free, and eight 3-byte BOPs do not fit. */
+#define DPMI_FAULT_SITE(i) (((DOS_CTAB_SEG << 4) - (DOS_HDLR_SEG << 4)) \
+                            + DOS_FLTSITE_OFF + (i) * 4)
+/* Where the client's exception handler's FAR RETURN lands. DPMI 0.9 puts a return CS:IP
+   at the bottom of the exception frame and the handler exits through it with a `retf`
+   -- krnl386's handler at seg1:0xc5f2 ends in exactly that, having first rewritten the
+   frame's CS:IP slots to say where it wants execution to resume. The kernel leaves those
+   two words ZERO for the host to fill (measured, session 34), so this is the address we
+   fill them with, and the arm that catches it completes the resume. */
+#define DPMI_FLTRET_BOP    0x5A
+#define DPMI_FLTRET_COFF   (((DOS_CTAB_SEG << 4) - (DOS_HDLR_SEG << 4)) + DOS_FLTRET_OFF)
 
 /* EMS (M4): the LIM page frame is a 64KB RAM window in the UMA. v86_map_ems_frame
    scans the conventional page-frame segments AFTER VdmInitialize for a free 64KB
@@ -673,6 +687,19 @@ static unsigned g_dpmi_cp_max = 8;
 #define DPMI_BP_VEC  0xEE               /* sentinel in g_int_vec[]: not a real vector */
 #define DPMI_BP_MAX  32
 static DWORD g_bp_lin[DPMI_BP_MAX];     /* requested linear addresses (from PMBP_PATH) */
+/* ── ★ WHERE krnl386's SEGMENT 1 ENDED UP IN PROTECTED MODE. ────────────────────────
+     krnl386 copies its own segment 1 out of conventional memory, relocates it, and
+     commits a code selector over the copy -- and the base of that copy is DIFFERENT
+     EVERY RUN (0x1ad00 and 0x2aec0 were measured one run apart). Every interesting
+     address in this investigation is `seg1:0xNNNN`, so a breakpoint list of absolute
+     linear addresses is a list that is wrong by the next run: session 32 lost readings
+     to exactly that. This is filled in when the selector is committed, and mode bit 1
+     in pmbp.txt means "the address column is an OFFSET IN THIS SEGMENT". */
+static DWORD g_wow_pmseg1_base = 0;
+/* And the same for every segment: krnl386 copies each one to a block of its own and
+   commits a code selector over it. Indexed by segment number - 1; 0 = not seen yet. */
+#define WOW_PMBASE_MAX 8
+static DWORD g_wow_pmbase[WOW_PMBASE_MAX];
 static DWORD g_bp_dump[DPMI_BP_MAX];    /* optional 2nd column: linear addr to dump on hit */
 /* Optional 3rd column: bytes to SKIP on hit instead of re-executing the instruction.
    This turns a breakpoint into a one-instruction PATCH, which is how you test "would
@@ -1042,11 +1069,12 @@ static WORD  g_pmret_sel = 0;
 /* GH #18: the PM-fault reflect selectors (0 = not installed). Run 67 corrected model:
    g_dpmi_fault_sel = the handler STACK selector (writable-data) written to [TIB+0x638];
    g_dpmi_flt_code_sel = the handler CODE selector (with a BOP at DPMI_FAULT_COFF) whose
-   {sel,off} we plant in the class table; g_flt_tbl = the 8-entry handler table (stride
-   0x10) the kernel reads via [VDM_TIB+8], indexed by fault class. */
+   {sel,off} we plant in the class table; g_flt_tbl = the handler table (stride 0x10) the
+   kernel reads via [VDM_TIB+8], indexed by fault class -- DOS_FLTSITE_N entries, each
+   pointing at its OWN BOP so the index survives the reflect (see dos_layout.h). */
 static WORD  g_dpmi_fault_sel = 0;
 static WORD  g_dpmi_flt_code_sel = 0;
-static BYTE  g_flt_tbl[8 * 0x10] __attribute__((aligned(16)));
+static BYTE  g_flt_tbl[DOS_FLTSITE_N * 0x10] __attribute__((aligned(16)));
 /* DPMI LDT descriptor allocator. Indices 0=null,1=code(0x0F),2=data(0x17) are the
    switch's; DPMI clients allocate from 3+. We keep base/limit/access so INT 31h
    06/07/08/09 can get/modify them and reinstall via svc 10 (NtSetLdtEntries). */
@@ -3240,7 +3268,14 @@ static int       g_wow_entering = 0;   /* the guest is krnl386, not DOS     */
    ▸ THE RULE FOR ANYTHING ADDED LATER: on the WOW path, host memory comes from
      wow_host_alloc(), not dos_alloc(). A dos_alloc() after wow_place_v86 will fail,
      and the failure will look like the guest's fault. */
-#define WOW_HOSTPOOL_PARAS 0x100          /* 4 KB: the handler table is 0x40 of it */
+/* 16 KB. Was 4 KB (0x100) with 0x41 in use, and the SFT block is 0x1D9 paragraphs on
+   its own -- a 128-entry table of 59-byte entries. Sized at 0x200 first, and THAT IS
+   THE REGRESSION THIS COMMENT EXISTS FOR: the SFT is claimed in wow_place_v86 and the
+   256-vector handler table lazily at the mode switch, so the SFT fitted, the handler
+   table did not, and wow_host_alloc's failure is SILENT at that call site. The run
+   died at PM step 0x0d with no error -- precisely the failure the note above predicts,
+   walked into one release after writing it down. Leave the slack. */
+#define WOW_HOSTPOOL_PARAS 0x400          /* 16 KB: SFT 0x1d9, handler table 0x40  */
 static WORD      g_wow_pool_seg  = 0;
 static WORD      g_wow_pool_next = 0;     /* paragraphs handed out so far          */
 
@@ -5938,6 +5973,24 @@ static int host_readable(const void *addr, SIZE_T len)
     return (a + len) <= ((ULONG_PTR)mbi.BaseAddress + mbi.RegionSize);
 }
 
+/* The same question for a destination we are about to WRITE. Same reasoning and the
+   same reason not to use IsBadWritePtr -- see the note above. Used before filling a
+   guest buffer on the guest's behalf (WOW32 0x97), where getting the selector wrong
+   would otherwise scribble on whatever the bad base happened to name. */
+static int host_writable(void *addr, SIZE_T len)
+{
+    MEMORY_BASIC_INFORMATION mbi;
+    ULONG_PTR a = (ULONG_PTR)addr;
+    if (!a || len == 0) return 0;
+    if (VirtualQuery((LPCVOID)a, &mbi, sizeof(mbi)) != sizeof(mbi)) return 0;
+    if (mbi.State != MEM_COMMIT) return 0;
+    if (mbi.Protect & (PAGE_NOACCESS | PAGE_GUARD)) return 0;
+    if (!(mbi.Protect & (PAGE_READWRITE | PAGE_WRITECOPY |
+                         PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY)))
+        return 0;
+    return (a + len) <= ((ULONG_PTR)mbi.BaseAddress + mbi.RegionSize);
+}
+
 /* Crash diagnostic (DPMI spike): the PM switch works but VdmStartExecution faults
    inside the monitor when it runs PM, crashing the host with no info. This VEH
    catches the fault, dumps the exception (code/addr/params) + the host CONTEXT +
@@ -6665,9 +6718,26 @@ static int wow_place_v86(dos_machine_t *mp, WORD *ecs, WORD *eip,
        paragraphs is generous for an init path and cheap; if it ever overruns, that is
        a stack overflow into the block below and it will look like one. */
     enum { WOW_STACK_PARAS = 0x100 };            /* 4 KB */
-    /* The NE header + its tables, copied in immediately above the stack. 16 KB is
-       comfortably more than krnl386's tables need and is bounded by the file. */
-    enum { WOW_HDRIMG_PARAS = 0x400 };
+    /* ── ★★★ THE WHOLE FILE IMAGE IS STAGED, NOT JUST THE HEADER. ─────────────────
+         This used to be `enum { WOW_HDRIMG_PARAS = 0x400 }` -- 16 KB, "comfortably
+         more than krnl386's tables need". It is comfortably more than the TABLES need
+         and far less than the LOADER needs, and session 33 measured the difference in
+         stock ntvdm's own memory:
+
+             stock: the file from the NE header on, 0x16440 bytes, resident at linear
+                    0x899f0, with a 64 KB selector (0x01ef) over it -- and segments 2,
+                    3 and 4 recoverable there byte-for-byte at 0x895f0 + file_offset.
+             ours:  the first 0x4000 bytes, and nothing else.
+
+         krnl386's own LoadSegment reads a segment's image out of memory (its file-open
+         path at seg1:0x9191 is confirmed never taken -- session 32). Segment 1 lives at
+         file 0x2040, inside what we kept; segments 2, 3 and 4 live at 0xf880, 0x137a0
+         and 0x14a60 -- ALL PAST THE CUT. So LoadSegment(1) worked and LoadSegment(2)
+         read whatever followed and decoded it as relocation records, which is exactly
+         the failure session 32 bracketed to the instruction.
+       ⇒ Stage all of it. The size is the file's, so it is computed, not a constant. */
+    WORD  hdrimg_paras;                          /* whole image, in paragraphs */
+    WORD  window_paras;                          /* what the block must really cover */
     /* ── ★★★ AND THE WHOLE 64 KB OF IT MUST BE OURS TO GIVE. ───────────────────────
          krnl386 builds a SIXTY-FOUR KILOBYTE selector over `base(SS) + SP` (seg1:0xc17e)
          and treats everything above the header image as its scratch arena -- we even
@@ -6693,17 +6763,23 @@ static int wow_place_v86(dos_machine_t *mp, WORD *ecs, WORD *eip,
          A block copy striding through memory a second owner is using explains a host
          that dies with no VDM fault, no reflect and no crash record.
 
-       ⇒ So allocate the window, not just the header. WOW_HDRIMG_PARAS stays the size of
-         the header IMAGE (and the CX arithmetic above it is unchanged); this is the
-         size of the SELECTOR, and it is the thing that has to be real memory. */
-    enum { WOW_WINDOW_PARAS = 0x1000 };          /* 64 KB -- the whole scratch selector */
+       ⇒ So allocate the window, not just the header. This is the size of the SELECTOR,
+         and it is the thing that has to be real memory; the staged image may now be
+         LARGER than it (krnl386's is 0x1644 paragraphs), in which case the image wins. */
+    enum { WOW_SELECTOR_PARAS = 0x1000 };        /* 64 KB -- the whole scratch selector */
     ne_module *ne = &g_wow_mod[0];
     uint8_t *img = g_wow_img[0];
     char m[400], *q;
     WORD sseg = 0, smax = 0;
+    DWORD imglen;
     int i;
 
     if (!g_wow_nmod || !img) return -1;
+
+    imglen        = ne->img_len > ne->hdr ? ne->img_len - ne->hdr : 0;
+    hdrimg_paras  = (WORD)((imglen + 15u) >> 4);
+    window_paras  = hdrimg_paras > (WORD)WOW_SELECTOR_PARAS
+                  ? hdrimg_paras : (WORD)WOW_SELECTOR_PARAS;
 
     /* ── SHRINK THE PROGRAM BLOCK FIRST, OR THERE IS NOTHING TO ALLOCATE. ───────────
          dos_mcb_init lays out one 'Z' block covering all 0x9F00 paragraphs of
@@ -6745,6 +6821,38 @@ static int wow_place_v86(dos_machine_t *mp, WORD *ecs, WORD *eip,
         q = zhex(q, g_wow_pool_seg); q = zput(q, " size 0x");
         q = zhex(q, (DWORD)WOW_HOSTPOOL_PARAS);
         q = zput(q, " paras (see wow_host_alloc)\r\n");
+        log_append(LDTLOG_PATH, m, q);
+    }
+    /* ── ★ THE SFT CHAIN, OR krnl386 WALKS THE IVT FOREVER. (GH #128) ─────────────
+         See the DOS_SFT_* block in dos_layout.h for the disassembly this is built
+         from. One block, `next` = FFFF:FFFF so the walk terminates, and an entry
+         count equal to what our INT 21h layer can really open. The entries
+         themselves are zeroed -- which is not a stub, it is what a free SFT entry
+         looks like; nothing has been opened yet at this point in the bootstrap.
+       ▸ WOW-only on purpose. It comes out of the host pool because by here krnl386
+         owns every remaining paragraph (see wow_host_alloc), and a DOS guest still
+         gets SysVars+4 = 0 -- unchanged, and the reason no DOS guest has ever been
+         affected by this. When a DOS program needs the SFT, this moves. */
+    {   WORD sft = wow_host_alloc(DOS_SFT_PARAS);
+        volatile BYTE *sv = (volatile BYTE *)(ULONG_PTR)
+                            (((DWORD)DOS_HDLR_SEG << 4) + DOS_SYSVARS_OFF);
+        q = m; q = zput(q, "WOWV86: SFT ");
+        if (!sft) {
+            q = zput(q, "NOT ALLOCATED -- host pool exhausted; krnl386 will spin on "
+                        "SysVars+4 = 0000:0000\r\n");
+        } else {
+            volatile BYTE *b = (volatile BYTE *)(ULONG_PTR)((DWORD)sft << 4);
+            unsigned k;
+            for (k = 0; k < (unsigned)DOS_SFT_BYTES; ++k) b[k] = 0;
+            *(volatile WORD *)(b + 0) = 0xFFFF;              /* next offset: last block */
+            *(volatile WORD *)(b + 2) = 0xFFFF;              /* next segment            */
+            *(volatile WORD *)(b + 4) = DOS_SFT_ENTRIES;     /* entries in this block   */
+            *(volatile WORD *)(sv + 4) = 0;                  /* SysVars+4 = offset      */
+            *(volatile WORD *)(sv + 6) = sft;                /* SysVars+6 = segment     */
+            q = zput(q, "at 0x"); q = zhex(q, sft);
+            q = zput(q, ":0000, "); q = zhex(q, (DWORD)DOS_SFT_ENTRIES);
+            q = zput(q, " entries, next=FFFF:FFFF -> SysVars+4\r\n");
+        }
         log_append(LDTLOG_PATH, m, q);
     }
     {   WORD xseg = 0, xmax = 0;
@@ -6912,7 +7020,7 @@ static int wow_place_v86(dos_machine_t *mp, WORD *ecs, WORD *eip,
          filler. The PSP block below then takes the freed region, as before. */
     {   WORD fseg = 0, fmax = 0, want;
         (void)dos_alloc(NULL, mp->first_mcb, 0xFFFF, &fseg, &fmax);   /* ask -> largest free */
-        want = (WORD)(WOW_STACK_PARAS + WOW_WINDOW_PARAS);
+        want = (WORD)(WOW_STACK_PARAS + window_paras);
         if (fmax > want + 2) {
             /* -1 for the MCB header DOS puts in front of the second allocation: without
                it the filler eats the paragraph the stack+window block needs and the
@@ -6925,7 +7033,7 @@ static int wow_place_v86(dos_machine_t *mp, WORD *ecs, WORD *eip,
                 log_append(LDTLOG_PATH, m, q);
             } else fseg = 0;
         } else fseg = 0;
-        if (dos_alloc(NULL, mp->first_mcb, WOW_STACK_PARAS + WOW_WINDOW_PARAS,
+        if (dos_alloc(NULL, mp->first_mcb, (WORD)(WOW_STACK_PARAS + window_paras),
                       &sseg, &smax) || !sseg) sseg = 0;
         if (fseg) dos_free(NULL, fseg);          /* give the low region back */
     }
@@ -6966,13 +7074,37 @@ static int wow_place_v86(dos_machine_t *mp, WORD *ecs, WORD *eip,
         DWORD hlen = ne->img_len > ne->hdr ? ne->img_len - ne->hdr : 0;
         volatile BYTE *hb = (volatile BYTE *)(ULONG_PTR)((DWORD)hseg << 4);
         DWORD k;
-        if (hlen > (DWORD)WOW_HDRIMG_PARAS * 16u) hlen = (DWORD)WOW_HDRIMG_PARAS * 16u;
-        /* Zero the WHOLE selector, not just the header image: everything above it is
-           krnl386's scratch arena, it is parsed as structured data, and uninitialised
-           memory that gets parsed is a bug that reads like a guest fault. */
-        for (k = 0; k < (DWORD)WOW_WINDOW_PARAS * 16u; ++k) hb[k] = 0;
+        /* Zero the WHOLE block, not just what the image fills: anything the image
+           does not cover is krnl386's scratch, it is parsed as structured data, and
+           uninitialised memory that gets parsed is a bug that reads like a guest
+           fault. Then stage the file -- ALL of it; see the note on hdrimg_paras. */
+        for (k = 0; k < (DWORD)window_paras * 16u; ++k) hb[k] = 0;
         for (k = 0; k < hlen; ++k) hb[k] = img[ne->hdr + k];
 
+        /* ── ⚠ DO NOT WIDEN THE SEGMENT TABLE HERE. TRIED, MEASURED, REFUTED. ──────
+             krnl386's LoadSegment indexes the in-memory segment table with a stride of
+             TEN (seg1:0x910b, `shl si,1 / mov bx,si / shl si,1 / shl si,1 / add si,bx`)
+             and reads the handle at `es:[si+8]` -- the two bytes the file's 8-byte entry
+             does not have. Stock's KERNEL module database confirms it: at linear
+             0x196c0, read with stride 10, it reproduces krnl386's file segment table
+             sector-for-sector and carries 0x01ff / 0x0206 / 0x020e / 0x0217 at +8 --
+             its four segment selectors.
+
+           ⇒ The obvious conclusion is that the LOADER must widen the entries. It is
+             wrong, and one run said so. krnl386 BUILDS ITS OWN MODULE DATABASE from the
+             header we stage: it allocates a block, copies the header in, and widens the
+             table itself. The number that proves it is the selector limit --
+
+                 without widening   idx 0x38 base=0x0001ad00 limit=0x00000a5f
+                 stock              sel 0x01f7 base=0x000196c0 limit=0x00000a5f  ★ same
+                 with widening      idx 0x38 base=0x0001ad00 limit=0x00000a7f
+
+             -- our module block is already byte-identical in size to stock's, and
+             pre-widening made krnl386 widen an already-widened table: the run died
+             EARLIER (PM step 0x32 against 0x4f) with no error message at all.
+
+             Same shape as the relocation lesson above: the loader's job is to stage the
+             file's header, not to pre-chew it. */
         /* ⚠ NE_SEG_RELOCS IS LEFT SET HERE, AND THAT IS A CORRECTION. Clearing it in
              this copy makes seg1:0x9206 (`test bx,0x100`) fall through to 0x92bb and
              LoadSegment return success without relocating -- which DID clear the
@@ -6985,6 +7117,31 @@ static int wow_place_v86(dos_machine_t *mp, WORD *ecs, WORD *eip,
         q = zput(q, " + 0x1000 (0x"); q = zhex(q, hlen);
         q = zput(q, " bytes from file offset 0x"); q = zhex(q, ne->hdr);
         q = zput(q, ", ne_cseg=0x"); q = zhex(q, ne->n_seg);
+        q = zput(q, ")\r\n  staged 0x"); q = zhex(q, hlen);
+        q = zput(q, " of 0x");            q = zhex(q, imglen);
+        q = zput(q, " bytes = 0x");       q = zhex(q, (DWORD)window_paras);
+        q = zput(q, " paras");
+        q = zput(q, hlen == imglen ? " (WHOLE FILE)\r\n" : " -- ⚠ STILL TRUNCATED\r\n");
+        log_append(LDTLOG_PATH, m, q);
+
+        /* Say where each segment's image landed inside the staged copy: that is the
+           address krnl386's own LoadSegment has to be able to reach, and the old
+           truncation was INVISIBLE in the line above, which only ever printed the
+           already-clamped length. A number that cannot show the fault it is there to
+           catch is not an instrument. */
+        for (i = 0; i < (int)ne->n_seg; ++i) {
+            uint32_t fo = ne->seg[i].file_off;
+            int resident = fo >= ne->hdr && (DWORD)(fo - ne->hdr) < hlen;
+            q = m;
+            q = zput(q, "WOWV86:   seg "); q = zhex(q, (DWORD)(i + 1));
+            q = zput(q, " file 0x");       q = zhex(q, fo);
+            q = zput(q, " -> staged linear 0x");
+            q = zhex(q, ((DWORD)hseg << 4) + (fo - ne->hdr));
+            q = zput(q, resident ? " RESIDENT\r\n" : " ⚠ NOT RESIDENT\r\n");
+            log_append(LDTLOG_PATH, m, q);
+        }
+
+        q = m;
         /* ── ★★★ CX IS THE WHOLE WINDOW, NOT "THE PART ABOVE THE HEADER". ────────────
              This used to subtract the header image, on the reading that the header is
              not krnl386's to allocate from. That reading is what kills the run, and the
@@ -7019,9 +7176,58 @@ static int wow_place_v86(dos_machine_t *mp, WORD *ecs, WORD *eip,
              than a positive one, it is a wilder one.
            So declare exactly what it believes it has: gap = [0x148e] - [0x5a6] = 0,
              which makes the reclaim copy src==dst and therefore harmless. */
-        g_wow_entry_cx = (WORD)0xF880u;
-        q = zput(q, ") arena above it = 0x"); q = zhex(q, g_wow_entry_cx);
-        q = zput(q, " bytes -> CX at entry\r\n");
+        /* ── ★★★ THE GAP IS NOT WASTE. IT IS HOW THE SEGMENT IMAGES ADVANCE. ────────
+             Session 33 part 11. The note above declares the FULL window so the gap is
+             zero and krnl386's reclaim copies nothing -- which fixed a crash and broke
+             the load, because that reclaim is the mechanism that walks the staged image:
+
+               seg1:0xc4a3  sub ax,[0x5a6]     ; ax = the size krnl386 computes (0xf88)
+               seg1:0xc4a7  mov [0x5a4],ax     ; the GAP, in paragraphs
+               seg1:0xc4dd  call 0xcf9e        ; rep movsd everything above the gap DOWN
+               seg1:0xc4e5  push [0x59e] ...   ; then LoadSegment from that block
+               seg1:0x947f  mov ds,bx / rep movsd   ; copies the segment from DS:0000
+
+             With the gap zero the block never advances, so every segment is copied from
+             OFFSET ZERO of the staged image -- which is the NE header. Measured directly:
+             at seg1:0x947f, `dsbase=0x00089bc0` and our staged header is at para 0x89bc.
+             LoadSegment(2) was copying 0x3ee2 bytes of header and calling it segment 2.
+
+           ⇒ Declare the window MINUS the header and tables, so the first reclaim
+             discards exactly them and segment 1's image lands at offset 0; krnl386's own
+             bookkeeping then advances the block by each segment it consumes.
+           ⚠ The crash that motivated gap=0 was the reclaim's destination range containing
+             krnl386's own PM code copy. That was with the block spanning the whole arena
+             (base 0x1bbe0, limit 0x8441f). It no longer does: the block is the staged
+             image (0x89bc0 + 0xf880), and the PM copy is at 0x1ad00 -- outside it. */
+        /* ⚠ AND THE GAP IS MEASURED TO THE FIRST SEGMENT THE **LOOP** LOADS, WHICH IS
+             SEGMENT 2. Segment 1 is loaded by seg1:0xc2f4, before the loop at 0xc4a3 and
+             without its compaction step, so it never consumes from the staged block: with
+             the gap set to the header alone, the loop's first iteration copied segment
+             1's image and called it segment 2 (measured -- `@ds:si` was seg1+0x4a). The
+             loop's own per-iteration arithmetic (0xc4b8..0xc4d8) advances it after that. */
+        {   DWORD first = ne->n_seg > 1 ? ne->seg[1].file_off
+                                        : ne->seg[0].file_off;
+            DWORD gap   = (first > ne->hdr) ? ((first - ne->hdr) + 15u) & ~15u : 0;
+            DWORD full  = 0xF880u;
+            g_wow_entry_cx = (WORD)(gap < full ? full - gap : full);
+            q = zput(q, "WOWV86: arena gap = 0x"); q = zhex(q, gap);
+            q = zput(q, " bytes (the header and tables, header+0x0 .. +0x");
+            q = zhex(q, first - ne->hdr);
+            q = zput(q, ") -- the first reclaim discards them so segment 1 lands at "
+                        "offset 0\r\n");
+            log_append(LDTLOG_PATH, m, q);
+            q = m;
+        }
+        q = zput(q, "WOWV86: arena declared to krnl386 = 0x"); q = zhex(q, g_wow_entry_cx);
+        q = zput(q, " bytes -> CX at entry");
+        /* ⚠ UNCHANGED WHILE THE STAGED IMAGE GREW, DELIBERATELY -- one change per run.
+             It is now a claim about memory the staged image also occupies (the image is
+             0x16440 bytes and this declares 0xf880 of scratch above the header), so if
+             the run gets past LoadSegment and then dies in the arena, THIS is the next
+             thing to look at, not a new mystery. Stock's arena is a separate block
+             below its staged image (session 33 part 7). */
+        q = zput(q, (DWORD)g_wow_entry_cx > hlen ? "\r\n"
+                                                 : " -- ⚠ OVERLAPS THE STAGED IMAGE\r\n");
         log_append(LDTLOG_PATH, m, q);
     }
 
@@ -7243,9 +7449,24 @@ static void dpmi_install_default_pm_handlers(dos_machine_t *mp)
        On the WOW path this MUST come from the host pool -- krnl386 owns the rest of
        conventional memory by now, and a silent failure here shows up as INT 21h AH=35h
        reporting vector 0x21 as 0000:0000, which reads like a guest bug. */
+    /* ⚠ AND SAY SO WHEN IT FAILS. Both of these used to `return` in silence, which is
+         how the note above got to be true twice: growing the host pool's other tenant
+         pushed this allocation out, the table was never built, and the run died at PM
+         step 0x0d with nothing in the log pointing here. A silent return from the
+         function that installs 256 interrupt vectors is not a small omission. */
     seg = wow_host_alloc(0x40);
-    if (!seg && (dos_alloc(NULL, mp->first_mcb, 0x40, &seg, &max) || !seg)) return;
-    if (g_ldt_next >= DPMI_LDT_MAX) return;
+    if (!seg && (dos_alloc(NULL, mp->first_mcb, 0x40, &seg, &max) || !seg)) {
+        q = zput(q, "DPMI: NO MEMORY for the 256-vector default PM handler table "
+                    "(host pool exhausted AND dos_alloc failed) -- every PM vector will "
+                    "read back 0000:0000\r\n");
+        log_append(LOG_PATH, lb, q); serial_out(lb, q);
+        return;
+    }
+    if (g_ldt_next >= DPMI_LDT_MAX) {
+        q = zput(q, "DPMI: NO LDT SLOT for the default PM handler table\r\n");
+        log_append(LOG_PATH, lb, q); serial_out(lb, q);
+        return;
+    }
     g_pm_defbase = (DWORD)seg << 4;
     stub = (volatile BYTE *)(ULONG_PTR)g_pm_defbase;
     idx = g_ldt_next++;
@@ -7403,9 +7624,25 @@ static void dpmi_install_fault_trampoline(void)
          a silent process kill for a logged stop is the whole point -- one of them can
          be debugged. If a DOS guest regresses, this is the first thing to narrow, so
          selftest.com is run against it deliberately. */
+    /* ── ★ ONE SITE PER CLASS, SO THE CLASS SURVIVES THE REFLECT. ────────────────
+         Filling every entry with the same {selector, offset} stopped the silent
+         kills, and threw away the only thing that says WHICH exception fired.
+         Give class i its own 4-byte BOP; the reflected EIP then names it. */
+    { volatile BYTE *sites = (volatile BYTE *)(ULONG_PTR)((DWORD)DOS_CTAB_SEG << 4);
+      for (i = 0; i < DOS_FLTSITE_N; ++i) {
+          sites[DOS_FLTSITE_OFF + i * 4 + 0] = VDM_BOP0;
+          sites[DOS_FLTSITE_OFF + i * 4 + 1] = VDM_BOP1;
+          sites[DOS_FLTSITE_OFF + i * 4 + 2] = DPMI_FAULT_BOP;
+          sites[DOS_FLTSITE_OFF + i * 4 + 3] = 0xCB;      /* RETF, never reached  */
+      }
+      sites[DOS_FLTRET_OFF + 0] = VDM_BOP0;               /* the handler's retf lands here */
+      sites[DOS_FLTRET_OFF + 1] = VDM_BOP1;
+      sites[DOS_FLTRET_OFF + 2] = DPMI_FLTRET_BOP;
+      sites[DOS_FLTRET_OFF + 3] = 0xCB; }
     for (i = 0; i * 0x10 < sizeof g_flt_tbl; ++i) {
         *(WORD  *)(g_flt_tbl + i * 0x10 + 0) = g_dpmi_flt_code_sel;
-        *(DWORD *)(g_flt_tbl + i * 0x10 + 4) = DPMI_FAULT_COFF;
+        *(DWORD *)(g_flt_tbl + i * 0x10 + 4) = (i < DOS_FLTSITE_N)
+                                             ? (DWORD)DPMI_FAULT_SITE(i) : DPMI_FAULT_COFF;
     }
 }
 
@@ -7457,9 +7694,52 @@ static int dpmi_sel_desc(uint16_t sel, uint32_t *ar, uint32_t *limit)
      0x969C -- and an EIP-keyed lookup asks for g_int_vec[0x558c], finds nothing, and
      the run dies as "unexpected PM stop". Resolve through the LINEAR address so any
      alias of the patched memory maps back to the right vector. */
+/* ── ★★★ A PATCH MAP KEYED BY ADDRESS CANNOT SURVIVE THE GUEST COPYING THE CODE. ──
+     We rewrite `CD nn` (two bytes) as `C4 C4` (two bytes) and keep the vector in a side
+     map keyed by LINEAR ADDRESS -- there is nowhere else to put it, the instruction is
+     the same length. That is sound until the guest MOVES the patched bytes, and krnl386
+     does exactly that: it copies each of its segments to a block of its own. The C4 C4
+     travels; the map entry stays behind at the address it was patched at.
+
+     The symptom is an unrecognised BOP whose code byte is really the NEXT instruction's
+     first byte -- measured twice in one run, both of them krnl386 installing its INT 10h
+     handler:
+
+         WOWBOP 0xb8 at seg1:0xc59b   file: cd 21   (AX=0x3510, get vector 10h)
+         WOWBOP 0x1f at seg1:0xc5ae   file: cd 21   (AX=0x2510, set vector 10h)
+
+     -- i.e. two INT 21h calls silently swallowed, and the "BOP codes" 0xb8 and 0x1f were
+     `mov ax,` and `pop ds`.
+
+   ⇒ Recover the vector from the MODULE'S OWN FILE IMAGE, which is the one copy of those
+     bytes nothing has rewritten. Self-verifying, and it fires only when all three hold:
+     the memory really is C4 C4, the address really is inside a segment we know the base
+     of, and the file really has CD there. Then record it, so it costs one lookup once. */
 static DWORD dpmi_bop_vec(DWORD csv, DWORD eip)
 {
-    return pmap_get(dpmi_sel_base((WORD)csv) + eip);
+    DWORD base = dpmi_sel_base((WORD)csv);
+    DWORD lin  = base + eip;
+    BYTE  v    = pmap_get(lin);
+    int   sg;
+
+    if (v) return v;
+    if (!g_wow_nmod || !g_wow_img[0]) return 0;
+    if (!host_readable((const void *)(ULONG_PTR)lin, 2)) return 0;
+    {   const volatile BYTE *b = (const volatile BYTE *)(ULONG_PTR)lin;
+        if (b[0] != 0xC4 || b[1] != 0xC4) return 0;
+    }
+    for (sg = 0; sg < (int)g_wow_mod[0].n_seg && sg < WOW_PMBASE_MAX; ++sg) {
+        ne_seg *s = &g_wow_mod[0].seg[sg];
+        if (!s->sector || eip + 1 >= s->length) continue;
+        if (base != g_wow_pmbase[sg] && base != ((DWORD)s->seg << 4)) continue;
+        if (s->file_off + eip + 1 >= g_wow_mod[0].img_len) continue;
+        {   const BYTE *f = g_wow_img[0] + s->file_off + eip;
+            if (f[0] != 0xCD) return 0;
+            pmap_set(lin, f[1]);                     /* one lookup, once */
+            return f[1];
+        }
+    }
+    return 0;
 }
 
 /* ── AN EIP IS ONLY 16 BITS WIDE WHEN ITS CODE SELECTOR IS. ───────────────────────
@@ -7503,7 +7783,8 @@ static void dpmi_patch_code_region(DWORD base, DWORD limit, int d32)
 {
     volatile BYTE *mem;
     DWORD end, n = 0, rej = 0;
-    char lb[192], *q = lb;
+    DWORD po[12], npo = 0;               /* the first few patched offsets, for the log */
+    char lb[320], *q = lb;
     /* ► NEVER PATCH THE IVT / BIOS DATA AREA, even when the client declares a base-0
          code selector -- and Doom does exactly that (sel 0x67, base 0, limit 0xFFFF),
          which made the first version of this scan rewrite 16 sites in linear 0..0xFFFF.
@@ -7619,6 +7900,11 @@ static void dpmi_patch_code_region(DWORD base, DWORD limit, int d32)
                   if (mem[i] == 0xCD) {
                       DWORD lin = a + i;
                       if (pmap_get(lin)) continue;   /* already patched (aliased region) */
+                      /* Record WHERE, not just how many. "patched 2 INT sites" in a 55 KB
+                         code segment is either a correct count or a broken scan, and the
+                         count alone cannot tell you which -- the offsets can, because they
+                         are checkable against a disassembly of the same bytes. */
+                      if (npo < 12) po[npo++] = lin - base;
                       /* ── ONLY IF IT IS AN INSTRUCTION. ───────────────────────────────
                            This scan used to take the byte pair as proof, and in Doom's
                            code object that is wrong in three places -- one of them
@@ -7660,7 +7946,13 @@ static void dpmi_patch_code_region(DWORD base, DWORD limit, int d32)
     q = zput(q, "DPMI: code region 0x"); q = zhex(q, base);
     q = zput(q, "..0x"); q = zhex(q, end);
     q = zput(q, " -> patched "); q = zhex(q, n); q = zput(q, " INT sites, rejected ");
-    q = zhex(q, rej); q = zput(q, " mid-instruction byte pairs\r\n");
+    q = zhex(q, rej); q = zput(q, " mid-instruction byte pairs");
+    if (npo) {
+        DWORD z;
+        q = zput(q, " at +0x");
+        for (z = 0; z < npo; ++z) { if (z) q = zput(q, " +0x"); q = zhex(q, po[z]); }
+    }
+    q = zput(q, "\r\n");
     log_append(LOG_PATH, lb, q); serial_out(lb, q);
     dpmi_bp_arm();          /* a module that has just appeared may hold a requested BP */
 }
@@ -7743,6 +8035,13 @@ static void dpmi_scan_code_blocks(void)
 #define DPMI_ACC_IS_CODE(a) (((a) & 0x18) == 0x18)
 
 /* Read PMBP_PATH. One line per breakpoint:
+       <addr>  [dump linear]  [skip bytes]  [mode]  [rep]   # comment
+   mode is a bit field: bit 0 (1) = the site is a ONE-BYTE instruction, so plant a
+   one-byte 0xCC rather than the two-byte BOP; bit 2 (4) = the DUMP column is an offset
+   from DS's base rather than a linear address; bit 1 (2) = <addr> is an OFFSET INTO
+   krnl386's protected-mode copy of segment 1, resolved when that selector is committed
+   (see dpmi_bp_resolve_seg1 -- the copy moves between runs, so `seg1:0x93dc` is the only
+   form of that address worth writing down).
        <hex linear addr to break on>  [hex linear addr to DUMP on hit]   # comment
    The optional second column is what makes this a debugger rather than a tracer:
    "stop here and show me that memory" is the question you actually have when a
@@ -7788,6 +8087,29 @@ static void dpmi_bp_load(void)
             g_bp_rep[g_bp_n]  = (col >= 5) ? v[4] : 0;
             ++g_bp_n;
         }
+    }
+}
+
+/* Turn `seg1:0xNNNN` breakpoints into linear ones, now that we know where krnl386 put
+   its protected-mode copy of segment 1. Rewrites the entry in place and clears the flag,
+   so everything downstream (arming, hit matching, disarming) stays absolute and unchanged.
+   Logged, because a breakpoint that silently lands somewhere else is worse than none. */
+static void dpmi_bp_resolve_seg1(DWORD base)
+{
+    char lb[200], *q;
+    int k;
+    for (k = 0; k < g_bp_n; ++k) {
+        DWORD off;
+        if (!(g_bp_mode[k] & 2)) continue;
+        off = g_bp_lin[k] & 0xFFFF;
+        g_bp_lin[k]   = base + off;
+        g_bp_mode[k] &= ~2u;
+        q = lb;
+        q = zput(q, "DPMI-BP: seg1:0x");  q = zhex(q, off);
+        q = zput(q, " -> linear 0x");     q = zhex(q, g_bp_lin[k]);
+        q = zput(q, " (krnl386's PM copy of segment 1 is at 0x"); q = zhex(q, base);
+        q = zput(q, ")\r\n");
+        log_append(LOG_PATH, lb, q);
     }
 }
 
@@ -8781,6 +9103,40 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                shows the first byte of the NEXT instruction and reads like data. */
             if (bcode == 0x53) { p = zput(p, " sub=0x"); p = zhexb(p, bsub); }
             p = zput(p, " at 0x");    p = zhex(p, eip);
+            /* ── ★ IS THIS ACTUALLY A PATCHED `INT nn` WHOSE VECTOR WE LOST? ───────────
+                 Our patcher rewrites `CD nn` (two bytes) as `C4 C4` (two bytes) and keeps
+                 the vector in a side map keyed by LINEAR ADDRESS. A BOP whose code byte we
+                 do not recognise is therefore ambiguous: it may be a real native BOP, or it
+                 may be a patched INT site read one byte too far -- bb[2] is then the NEXT
+                 instruction's first byte. seg1:0xc5ae reported "BOP 0x1f" and the file has
+                 `cd 21 1f 07` there: an INT 21h, and the 0x1f is `pop ds`.
+               So ask the module's own file image what those bytes are. It is the one
+                 source that cannot have been rewritten, and it turns "unimplemented BOP
+                 0x1f" into "a swallowed INT 21h", which is a different bug entirely. */
+            if (g_wow_nmod && g_wow_img[0]) {
+                int mi;
+                DWORD csb = dpmi_sel_base((WORD)(VDM_REG(tib, VTIB_CS) & 0xFFFF));
+                for (mi = 0; mi < (int)g_wow_mod[0].n_seg; ++mi) {
+                    ne_seg *sg = &g_wow_mod[0].seg[mi];
+                    if (!sg->sector || eip + 1 >= sg->length) continue;
+                    /* Only the segment this CS actually is: match the PM copy's base
+                       against the code selector we recognised for segment 1, and the
+                       V86 paragraph for the rest. */
+                    if (mi == 0 && csb != g_wow_pmseg1_base &&
+                        csb != (DWORD)sg->seg << 4) continue;
+                    if (mi != 0 && csb != (DWORD)sg->seg << 4) continue;
+                    {   const BYTE *f = g_wow_img[0] + sg->file_off + eip;
+                        p = zput(p, " [file seg"); p = zhex(p, (DWORD)(mi + 1));
+                        p = zput(p, "+0x"); p = zhex(p, eip);
+                        p = zput(p, " = "); p = zhexb(p, f[0]);
+                        p = zput(p, " "); p = zhexb(p, f[1]);
+                        if (f[0] == 0xCD)
+                            p = zput(p, " -- ★ A PATCHED INT, NOT A BOP; vector lost");
+                        p = zput(p, "]");
+                    }
+                    break;
+                }
+            }
             /* ── WHICH 32-BIT CALL IS THIS? ────────────────────────────────────────
                  0x51 is not a service, it is the generic 16->32 GATEWAY: the prologue
                  at seg1:0x2bb6 saves everything, publishes the frame as SS:BP in
@@ -8851,8 +9207,17 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                         p = zput(p, " args=");   p = zhex(p, nby);
                         p = zput(p, "b retstub=0x");
                         p = zhex(p, (DWORD)(fb[2] | (fb[3] << 8)));
-                        p = zput(p, " from=0x");   /* who called the stub -- names the
-                                                      call site to disassemble next */
+                        /* ⚠ A CALL SITE IS A SEGMENT AND AN OFFSET. This printed the
+                             offset alone, and every reader (including this session)
+                             assumed segment 1 -- krnl386's main segment, where most of
+                             them are. Session 34 chased `from=0x09bf` into seg1, found
+                             it landing in the MIDDLE of a 6-byte `test`, and only then
+                             looked at the frame word above it: the caller was 0x01d7,
+                             a DIFFERENT krnl386 segment. An instrument that names half
+                             an address invites disassembling the wrong module. */
+                        p = zput(p, " from=0x");
+                        p = zhex(p, (DWORD)(fb[14] | (fb[15] << 8)));
+                        p = zput(p, ":0x");
                         p = zhex(p, (DWORD)(fb[12] | (fb[13] << 8)));
                         if (na && na <= 16) {
                             p = zput(p, " (");
@@ -8862,6 +9227,43 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                                              | (fb[WOW32_OFF_ARGS + k * 2 + 1] << 8)));
                             }
                             p = zput(p, ")");
+                            /* ── ★★ krnl386 SAYS WHY IT IS GIVING UP, AND WE NEVER READ IT. ──
+                                 Its last act before ExitKernelThunk is WOW32 0xc4 -- the fatal
+                                 error box -- and two of the words in this frame are a far
+                                 pointer to the message. Session 34 got "NTVDM KERNEL: Missing
+                                 16-bit system module" only by taking the offset out of the log
+                                 by hand and reading it out of the file. There are seven such
+                                 strings in seg1 at 0xb937..0xba54 and they name FIVE DIFFERENT
+                                 failures; guessing which one from surrounding behaviour is
+                                 exactly the reasoning-instead-of-measuring this project keeps
+                                 paying for. Print it.
+                               ⚠ NO ASSUMED FRAME. Which words hold the pointer is not fixed by
+                                 anything we have measured -- only that some adjacent pair does.
+                                 So try every (offset, segment) pair, and print only the ones
+                                 that resolve to a real selector AND look like text. A pair that
+                                 is not a string prints nothing rather than a plausible lie. */
+                            if (fid == WOW32_MESSAGEBOX) {
+                                for (k = 0; k + 1 < na; ++k) {
+                                    DWORD aoff = (DWORD)(fb[WOW32_OFF_ARGS + k * 2]
+                                                  | (fb[WOW32_OFF_ARGS + k * 2 + 1] << 8));
+                                    DWORD asel = (DWORD)(fb[WOW32_OFF_ARGS + k * 2 + 2]
+                                                  | (fb[WOW32_OFF_ARGS + k * 2 + 3] << 8));
+                                    DWORD abase = asel ? dpmi_sel_base((WORD)asel) : 0;
+                                    const volatile BYTE *s;
+                                    unsigned n2 = 0;
+                                    if (!asel || !abase) continue;
+                                    s = (const volatile BYTE *)(ULONG_PTR)(abase + aoff);
+                                    if (!host_readable((const void *)s, 8)) continue;
+                                    while (n2 < 120 && s[n2] >= 0x20 && s[n2] < 0x7F) ++n2;
+                                    if (n2 < 6 || s[n2] != 0) continue;   /* not a C string */
+                                    p = zput(p, "\r\n    ★ arg["); p = zhex(p, k);
+                                    p = zput(p, "] 0x"); p = zhex(p, asel);
+                                    p = zput(p, ":0x"); p = zhex(p, aoff);
+                                    p = zput(p, " = \"");
+                                    { unsigned j; for (j = 0; j < n2; ++j) *p++ = (char)s[j]; }
+                                    p = zput(p, "\"");
+                                }
+                            }
                         }
                     }
                     p = zput(p, "\r\n    @ss:bp");
@@ -8897,6 +9299,7 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                             (ssb2 + (VDM_REG(tib, VTIB_EBP) & 0xFFFF));
                 f.id      = wow32_peekw(f.bp + WOW32_OFF_ID);
                 f.argb    = wow32_peekw(f.bp + WOW32_OFF_ARGB);
+                f.from    = wow32_peekw(f.bp + WOW32_OFF_FROM);
                 f.sel2lin = wow32_host_sel2lin;
                 f.ctx     = NULL;
                 f.ret     = 0;
@@ -8911,6 +9314,52 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                      DOS (tools/ne/wowdecline.py). Leaving it unimplemented is what
                      produced "Unable to open KERNEL executable": krnl386 could not
                      learn the current directory, so it never built a path to open. */
+                /* ── ★ THE READ THAT CANNOT BE DECLINED. (GH #128, session 34) ────
+                     krnl386 calls 0x97 (read) from two places. At seg1:0x5570 the
+                     sentinel means "ask real DOS" and declining is the whole answer.
+                     At seg1:0x8a4e it does NOT chain -- `xor dx,dx / or ax,0xffff /
+                     dec dx / retf` returns the failure to its own caller -- so here
+                     the read has to actually happen.
+                     That is the read of SYSTEM.DRV's segment data, and stepping it
+                     over is what left krnl386 saying "Missing 16-bit system module"
+                     after it had opened the file successfully.
+                   The argument layout is measured, not assumed: two calls in one run,
+                     `(.. 0x40 0 0x0eaa 0x1f 5)` and `(.. 0x560 0 0 0x17 5)`, and the
+                     first was followed by the chained `AH=3Fh` reading exactly 0x40
+                     bytes into that same buffer. So words 4-5 are a DWORD count, 6-7 a
+                     16:16 buffer pointer, 8 the handle.
+                   ⚠ DX:AX IS A 32-BIT BYTE COUNT, not a flag. The failure path builds
+                     0xFFFFFFFF in DX:AX, so a short read must return the SHORT COUNT
+                     and only a real failure may return the sentinel. */
+                if (f.id == WOW32_FILE_READ && !wow32_may_decline(f.id, f.from)) {
+                    DWORD cnt  = (DWORD)wow32_argw(&f, 8)
+                               | ((DWORD)wow32_argw(&f, 10) << 16);
+                    DWORD boff = wow32_argw(&f, 12);
+                    WORD  bsel = wow32_argw(&f, 14);
+                    DWORD h    = wow32_argw(&f, 16);
+                    DWORD bbase = dpmi_sel_base(bsel);
+                    DWORD rd = 0;
+                    int ok = 0;
+                    p = zput(p, "\n     WOW32 0x97 read (site 0x"); p = zhex(p, f.from);
+                    p = zput(p, ", may NOT decline) h="); p = zhex(p, h);
+                    p = zput(p, " cnt=0x"); p = zhex(p, cnt);
+                    p = zput(p, " -> 0x"); p = zhex(p, bsel);
+                    p = zput(p, ":0x"); p = zhex(p, boff);
+                    p = zput(p, " lin=0x"); p = zhex(p, bbase + boff);
+                    if (h < DOS_MAX_FILES && m.fh[h] && bbase
+                        && host_writable((void *)(ULONG_PTR)(bbase + boff), cnt)) {
+                        ok = ReadFile(m.fh[h], (void *)(ULONG_PTR)(bbase + boff),
+                                      cnt, &rd, NULL) ? 1 : 0;
+                    }
+                    if (ok) { wow32_setret(&f, rd); ++g_wow32_serviced;
+                              p = zput(p, " -> read 0x"); p = zhex(p, rd); p = zput(p, "b"); }
+                    else    { wow32_setret(&f, 0xFFFFFFFFu); ++g_wow32_unimpl;
+                              p = zput(p, " -> FAILED (bad handle/selector/buffer)"); }
+                    p = zput(p, "\r\n");
+                    log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                    VDM_REG(tib, VTIB_EIP) += WOW32_BOP_LEN;
+                    return 1;
+                }
                 if (f.id == WOW32_GETCURDIR && g_pm_xfer_seg) {
                     DWORD gsi  = wow32_argw(&f, 0);
                     WORD  gsel = wow32_argw(&f, 2);
@@ -8958,7 +9407,8 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                          and "because we told it 7 times to ask DOS instead" are
                          different claims about the same run, and only separate
                          counters can tell them apart afterwards. */
-                    int decl = (f.ret == WOW32_DECLINE && wow32_may_decline(f.id));
+                    int decl = (f.ret == WOW32_DECLINE
+                                && wow32_may_decline(f.id, f.from));
                     if (decl) ++g_wow32_declined; else ++g_wow32_serviced;
                     VDM_REG(tib, VTIB_EIP) += WOW32_BOP_LEN;
                     p = zput(p, decl ? " -> DECLINED (krnl386 will chain to real"
@@ -9171,6 +9621,21 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                                 p = zput(p, "\r\n  @es:di=");
                                 p = zdump(p, (const BYTE *)(ULONG_PTR)(esb + div), 32);
                             }
+                            /* ★ AND THE OTHER TWO PAIRINGS. ds:si/es:di is the string-move
+                                 convention, and it is the wrong pair for the code this is
+                                 pointed at: a routine that walks a structure does
+                                 `les si,[bp+x]` and then reads es:[si+n] -- krnl386's
+                                 segment-table walker (seg1:0x9393, 0x9415) does exactly
+                                 that. Dumping only ds:si and es:di answered a question
+                                 nobody had while hiding the one on the screen. */
+                            if (esb && mem_readable((ULONG_PTR)(esb + siv), 32)) {
+                                p = zput(p, "\r\n  @es:si=");
+                                p = zdump(p, (const BYTE *)(ULONG_PTR)(esb + siv), 32);
+                            }
+                            if (dsb && mem_readable((ULONG_PTR)(dsb + div), 32)) {
+                                p = zput(p, "\r\n  @ds:di=");
+                                p = zdump(p, (const BYTE *)(ULONG_PTR)(dsb + div), 32);
+                            }
                         }
                         { int bk = dpmi_bp_disarm(lin);
                           if (bk >= 0 && g_bp_rep[bk]) g_bp_pending[bk] = 1;   /* repeating */
@@ -9190,8 +9655,27 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                           }
                           if (bk < 0) p = zput(p, " [WARN: no BP record here]");
                           else if (g_bp_dump[bk]) {
-                              const BYTE *dm = (const BYTE *)(ULONG_PTR)g_bp_dump[bk];
-                              p = zput(p, "\r\n  dump@0x"); p = zhex(p, g_bp_dump[bk]);
+                              /* ★ mode bit 2 (4): the dump column is an offset from DS's
+                                   BASE, not a linear address. The variables worth watching
+                                   in krnl386 are DGROUP variables -- its arena bookkeeping
+                                   lives at [0x59e], [0x5a4], [0x5a6], [0x148e] -- and
+                                   DGROUP's base moves between runs, so a linear dump column
+                                   means computing it by hand from an older log line and
+                                   hoping. Two runs were lost to exactly that (see the
+                                   selector-resolution note above); this closes the same gap
+                                   for the dump column. */
+                              DWORD da = g_bp_dump[bk];
+                              const BYTE *dm;
+                              if (g_bp_mode[bk] & 4) {
+                                  DWORD dsb2 = dpmi_sel_base((WORD)(VDM_REG(tib, VTIB_DS)
+                                                                    & 0xFFFF));
+                                  p = zput(p, "\r\n  dump@ds:0x"); p = zhex(p, da);
+                                  da += dsb2;
+                                  p = zput(p, " (linear 0x"); p = zhex(p, da); p = zput(p, ")");
+                              } else {
+                                  p = zput(p, "\r\n  dump@0x"); p = zhex(p, da);
+                              }
+                              dm = (const BYTE *)(ULONG_PTR)da;
                               p = zput(p, "=");
                               if (!host_readable(dm, 64)) p = zput(p, "<unreadable from host>");
                               else                        p = zdump(p, dm, 64);
@@ -9478,8 +9962,49 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                                 for (j = 0; j < fcnt; ++j) {
                                     int a = fidx + (int)j;
                                     const DWORD *e;
-                                    if (a < DPMI_LDT_RESERVED || a >= WOW_SHADOW_ENTRIES) continue;
+                                    if (a < 1 || a >= WOW_SHADOW_ENTRIES) continue;
                                     e = (const DWORD *)(g_wow_shadow + a * 8);
+                                    /* ── ★★ A RESERVED INDEX IS NOT A READ-ONLY ONE. ────────
+                                         This used to `continue` for every index below
+                                         DPMI_LDT_RESERVED, so a commit naming selector 0x17
+                                         (index 2) installed NOTHING and said so -- "installed
+                                         00000000" -- with no other complaint.
+                                       ⚠ AND krnl386 STAGES THROUGH THOSE SELECTORS. Session
+                                         34: it re-bases 0x17, reads SYSTEM.DRV's segment 1 +
+                                         relocation records into 0x17:0000, then walks the
+                                         records through a selector it bases at the segment's
+                                         real home. With the re-base dropped, the read landed
+                                         at the STALE base and the walk read whatever was at
+                                         the new one -- `mov bx,es:[bx]` with bx=0x38a from a
+                                         garbage module index, #GP, and krnl386's own handler
+                                         turning that into ExitKernelThunk(1). The module
+                                         database was provably fine (`NE`, cseg=2, cmod=1,
+                                         modtab=0x7c); only the image was in the wrong place.
+                                       The reason the guard exists is the ACCESS byte, not the
+                                         base: a client that retypes the initial DS/SS to code
+                                         faults on its next stack write (GH #18 run 69). So
+                                         take the base and limit, and let dpmi_install() apply
+                                         its existing idx-2/3 force-to-writable-data rule --
+                                         which is where that rule already lives. Index 0 is the
+                                         null selector and stays untouchable. */
+                                    if (a < DPMI_LDT_RESERVED) {
+                                        /* ⚠ ONLY A PRESENT DESCRIPTOR IS A RE-BASE. An empty
+                                             shadow slot commits as base=0 access=0, and honouring
+                                             THAT would hand the initial DS a base of zero -- the
+                                             log shows two such commits (idx 1 and idx 2) before
+                                             krnl386 has written anything real. A blank entry is
+                                             not the guest asking for anything; it is the guest
+                                             having asked for a slot. Require the present bit. */
+                                        if (!(((e[1] >> 8) & 0xFF) & 0x80)) continue;
+                                        g_ldt[a].base   = (e[1] & 0xFF000000u)
+                                                        | ((e[1] & 0xFFu) << 16) | (e[0] >> 16);
+                                        g_ldt[a].limit  = (e[0] & 0xFFFFu) | (e[1] & 0x000F0000u);
+                                        g_ldt[a].access = (BYTE)((e[1] >> 8) & 0xFF);
+                                        g_ldt[a].flags  = (BYTE)((e[1] >> 20) & 0x0F);
+                                        dpmi_install(a);       /* force-types idx 2 and 3 */
+                                        ++done;
+                                        continue;
+                                    }
                                     v86_set_ldt_entries((WORD)((a << 3) | 7), e[0], e[1],
                                                         (WORD)((a << 3) | 7), e[0], e[1]);
                                     g_ldt[a].base   = (e[1] & 0xFF000000u)
@@ -9525,7 +10050,18 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                                 DWORD j;
                                 for (j = 0; j < fcnt; ++j) {
                                     int a = fidx + (int)j;
-                                    if (a < DPMI_LDT_RESERVED || a >= WOW_SHADOW_ENTRIES) continue;
+                                    /* ⚠ THE SAME GUARD, AND THE SAME BUG. The commit loop above
+                                         used to skip low indices; this one did too, and fixing
+                                         only the first half installs a CODE descriptor whose
+                                         `CD nn` sites are still raw. Measured: krnl386 loads
+                                         SYSTEM.DRV into the block WOW32 0xb8 VirtualAlloc'd and
+                                         re-bases the INITIAL CS (index 1, selector 0x0f) over it
+                                         -- `04F2 ... installed idx 1 base=0x03b30000 acc=0xfb` --
+                                         then executes there. The first INT 21h in that code
+                                         faulted at 0x000f:0x01f7 with #GP err=0x010a, whose IDT
+                                         bit and index 0x21 name the vector exactly. A region the
+                                         client declares CODE must be patched wherever it lands. */
+                                    if (a < 1 || a >= WOW_SHADOW_ENTRIES) continue;
                                     if (!DPMI_ACC_IS_CODE(g_ldt[a].access)) continue;
                                     dpmi_patch_code_region(g_ldt[a].base, g_ldt[a].limit,
                                                            (g_ldt[a].flags & 0x4) != 0);
@@ -9534,6 +10070,28 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                                     p = zput(p, " base=0x");   p = zhex(p, g_ldt[a].base);
                                     p = zput(p, " limit=0x");  p = zhex(p, g_ldt[a].limit);
                                     p = zput(p, " -> INT sites patched]");
+                                    /* ★ Is this krnl386's own segment 1? Match on the
+                                         LIMIT against the segment's length rounded up to
+                                         a paragraph (0xd7fa -> 0xd7ff), which no other
+                                         KERNEL segment comes near, and hand the base to
+                                         any seg1-relative breakpoint waiting for it. */
+                                    if (g_wow_nmod) {
+                                        int sg;
+                                        for (sg = 0; sg < (int)g_wow_mod[0].n_seg &&
+                                                     sg < WOW_PMBASE_MAX; ++sg) {
+                                            DWORD ln = g_wow_mod[0].seg[sg].length;
+                                            if (!ln || g_ldt[a].limit < ln - 1 ||
+                                                g_ldt[a].limit >= ln + 16) continue;
+                                            g_wow_pmbase[sg] = g_ldt[a].base;
+                                            if (sg == 0 && g_wow_pmseg1_base != g_ldt[a].base) {
+                                                g_wow_pmseg1_base = g_ldt[a].base;
+                                                dpmi_bp_resolve_seg1(g_ldt[a].base);
+                                            }
+                                            p = zput(p, " [= krnl386 seg ");
+                                            p = zhex(p, (DWORD)(sg + 1)); p = zput(p, "]");
+                                            break;
+                                        }
+                                    }
                                 }
                             }
                             break; }
@@ -10297,7 +10855,7 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                                 op = zput(op, "\"\r\n");
                                 log_append(LOG_PATH, ob, op); serial_out(ob, op);
                                 VDM_SET16(tib, VTIB_EAX, cnt);     /* AX = bytes written */
-                            } else if (bh < 24 && m.fh[bh]) {      /* file handle */
+                            } else if (bh < DOS_MAX_FILES && m.fh[bh]) {      /* file handle */
                                 DWORD w = 0; WriteFile(m.fh[bh], (const void *)b, cnt, &w, NULL);
                                 VDM_SET16(tib, VTIB_EAX, w);
                                 p = zput(p, "INT21h AH=40 file write "); p = zhex(p, w); p = zput(p, "b\r\n");
@@ -10318,7 +10876,7 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                                               FILE_ATTRIBUTE_NORMAL, NULL);
                             VDM_REG(tib, VTIB_EFLAGS) &= ~1u;
                             if (f == INVALID_HANDLE_VALUE) { VDM_REG(tib, VTIB_EFLAGS) |= 1u; VDM_SET16(tib, VTIB_EAX, 2); }
-                            else { int slot; for (slot = 5; slot < 24 && m.fh[slot]; ++slot) {}
+                            else { int slot; for (slot = 5; slot < DOS_MAX_FILES && m.fh[slot]; ++slot) {}
                                    if (slot < 24) { m.fh[slot] = f; VDM_SET16(tib, VTIB_EAX, slot); }
                                    else { CloseHandle(f); VDM_REG(tib, VTIB_EFLAGS) |= 1u; VDM_SET16(tib, VTIB_EAX, 4); } }
                             p = zput(p, "INT21h AH="); p = zhex(p, ah); p = zput(p, " open \"");
@@ -10328,7 +10886,7 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                         }
                         if (ah == 0x3E) {                          /* close: BX=handle */
                             DWORD h = VDM_REG(tib, VTIB_EBX) & 0xFFFF;
-                            if (h >= 5 && h < 24 && m.fh[h]) { CloseHandle(m.fh[h]); m.fh[h] = 0; }
+                            if (h >= 5 && h < DOS_MAX_FILES && m.fh[h]) { CloseHandle(m.fh[h]); m.fh[h] = 0; }
                             VDM_REG(tib, VTIB_EFLAGS) &= ~1u;
                             VDM_REG(tib, VTIB_EIP) += 2; return 1;
                         }
@@ -10337,9 +10895,28 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                             DWORD dsb = dpmi_sel_base((WORD)VDM_REG(tib, VTIB_DS));
                             void *b = (void *)(ULONG_PTR)(dsb + (VDM_REG(tib, VTIB_EDX) & 0xFFFF));
                             VDM_REG(tib, VTIB_EFLAGS) &= ~1u;
-                            if (h < 24 && m.fh[h]) { ReadFile(m.fh[h], b, cnt, &rd, NULL); VDM_SET16(tib, VTIB_EAX, rd); }
+                            if (h < DOS_MAX_FILES && m.fh[h]) { ReadFile(m.fh[h], b, cnt, &rd, NULL); VDM_SET16(tib, VTIB_EAX, rd); }
                             else { VDM_REG(tib, VTIB_EFLAGS) |= 1u; VDM_SET16(tib, VTIB_EAX, 6); }
-                            p = zput(p, "INT21h AH=3F read "); p = zhex(p, rd); p = zput(p, "b\r\n");
+                            /* ── WHERE IT LANDED, NOT JUST HOW MUCH. ─────────────────────
+                                 "read 0x40b" cannot distinguish a read that filled the
+                                 buffer the guest meant from one that filled a different
+                                 one, and session 34 needed exactly that distinction: the
+                                 selector krnl386 later parsed as an NE header held
+                                 ne_modtab = 0x38a instead of 0x78, and the only way to
+                                 tell a mis-delivered read from a mis-parsed one is to
+                                 print the destination and the bytes. */
+                            p = zput(p, "INT21h AH=3F read "); p = zhex(p, rd);
+                            p = zput(p, "b h="); p = zhex(p, h);
+                            p = zput(p, " -> 0x"); p = zhex(p, VDM_REG(tib, VTIB_DS) & 0xFFFF);
+                            p = zput(p, ":0x"); p = zhex(p, VDM_REG(tib, VTIB_EDX) & 0xFFFF);
+                            p = zput(p, " lin=0x"); p = zhex(p, (DWORD)(ULONG_PTR)b);
+                            p = zput(p, " pos=0x");
+                            p = zhex(p, (h < DOS_MAX_FILES && m.fh[h])
+                                        ? SetFilePointer(m.fh[h], 0, NULL, FILE_CURRENT) : 0);
+                            p = zput(p, " first=");
+                            if (rd && host_readable(b, 8)) p = zdump(p, b, 8);
+                            else                           p = zput(p, "-");
+                            p = zput(p, "\r\n");
                             log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
                             VDM_REG(tib, VTIB_EIP) += 2; return 1;
                         }
@@ -10347,10 +10924,22 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                             DWORD h = VDM_REG(tib, VTIB_EBX) & 0xFFFF, meth = ax & 0xFF;
                             LONG dist = (LONG)(((VDM_REG(tib, VTIB_ECX) & 0xFFFF) << 16) | (VDM_REG(tib, VTIB_EDX) & 0xFFFF));
                             VDM_REG(tib, VTIB_EFLAGS) &= ~1u;
-                            if (h >= 5 && h < 24 && m.fh[h]) {
+                            if (h >= 5 && h < DOS_MAX_FILES && m.fh[h]) {
                                 DWORD np = SetFilePointer(m.fh[h], dist, NULL, meth);
                                 VDM_SET16(tib, VTIB_EDX, np >> 16); VDM_SET16(tib, VTIB_EAX, np & 0xFFFF);
-                            } else VDM_REG(tib, VTIB_EFLAGS) |= 1u;
+                                p = zput(p, "INT21h AH=42 seek h="); p = zhex(p, h);
+                                p = zput(p, " org="); p = zhex(p, meth);
+                                p = zput(p, " dist=0x"); p = zhex(p, (DWORD)dist);
+                                p = zput(p, " -> pos=0x"); p = zhex(p, np);
+                            } else { VDM_REG(tib, VTIB_EFLAGS) |= 1u;
+                                p = zput(p, "INT21h AH=42 seek BAD HANDLE "); p = zhex(p, h); }
+                            /* ⚠ THIS ARM LOGGED NOTHING AT ALL, and that cost a run: the
+                                 seek WAS being serviced and the log's silence read exactly
+                                 like it never happened, which sent the search after the
+                                 chain-to-DOS path instead of after the real blocker. Every
+                                 other file arm here prints; this one did not. */
+                            p = zput(p, "\r\n");
+                            log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
                             VDM_REG(tib, VTIB_EIP) += 2; return 1;
                         }
                         /* ── REGISTER-ONLY INT 21h: DELEGATE TO THE V86 DOS IMPLEMENTATION ──
@@ -10624,11 +11213,22 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                            address, which is exactly what INT 31h 0002 builds -- so build one
                            and answer with it rather than handing back a paragraph the guest
                            would shift by four and miss by a megabyte. */
-                        if (ah == 0x34) {
+                        /* ── AH=52h IS THE SAME SHAPE, AND IT #GP'd THE RUN. (GH #128) ──
+                             krnl386 calls it from PROTECTED MODE at seg1:0xbf97, having just
+                             allocated one descriptor for the answer, and then immediately
+                             does `mov cx, es:[bx+2]`. In the TODO arm ES was left at 0 -- the
+                             null selector -- so that read was a #GP, which is the fault
+                             session 34 first delivered to krnl386's own handler and watched
+                             it turn into ExitKernelThunk(2). It is not a mysterious fault:
+                             it is this function not answering. Same treatment as 34h --
+                             the V86 handler fills ES:BX with the SysVars segment, and the
+                             segment becomes a selector over the same linear address. */
+                        if (ah == 0x34 || ah == 0x52) {
                             WORD sel34;
                             m.tp = p; dos_int21_set_pm(1); dos_int21(&m); dos_int21_set_pm(0); p = m.tp;
                             sel34 = dpmi_seg_to_desc((WORD)(VDM_REG(tib, VTIB_ES) & 0xFFFF));
-                            p = zput(p, "INT21h AH=34 (PM) InDOS flag at V86 0x");
+                            p = zput(p, "INT21h AH=0x"); p = zhex(p, ah);
+                            p = zput(p, " (PM) far pointer at V86 0x");
                             p = zhex(p, VDM_REG(tib, VTIB_ES) & 0xFFFF);
                             p = zput(p, ":0x"); p = zhex(p, VDM_REG(tib, VTIB_EBX) & 0xFFFF);
                             if (sel34) {
@@ -13834,7 +14434,15 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                     /* GH #18: the raw-PM-#GP reflect landed on our handler code selector. THIS
                        is the proof point: the kernel reflected a fault it used to swallow. */
                     if (ev == VDM_EVENT_BOP && csv == (g_dpmi_flt_code_sel & 0xFFFF)
-                        && eip == DPMI_FAULT_COFF) {
+                        && (eip == DPMI_FAULT_COFF
+                            || (eip >= DPMI_FAULT_SITE(0)
+                                && eip <  DPMI_FAULT_SITE(DOS_FLTSITE_N)
+                                && ((eip - DPMI_FAULT_SITE(0)) & 3) == 0))) {
+                        /* Which class the kernel dispatched through -- the site it landed on
+                           names it. -1 = the legacy shared site, which now means "a class we
+                           did not fill", not "we do not know". */
+                        int fclass = (eip == DPMI_FAULT_COFF)
+                                   ? -1 : (int)((eip - DPMI_FAULT_SITE(0)) / 4);
                         DWORD fcs  = *(volatile WORD  *)(tib + VTIB_FLT_SAVCS);
                         DWORD feip = *(volatile DWORD *)(tib + VTIB_FLT_SAVEIP);
                         DWORD fss3 = *(volatile DWORD *)(tib + VTIB_FLT_SAV3);
@@ -13849,10 +14457,41 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                              the slots are calibrated against a fault at a KNOWN address --
                              pmfault's HLT/INT3 cannot do it (they die without reflecting),
                              so that needs a new variant that loads a bad selector. */
-                        p = zput(p, "GH#18: PM-FAULT REFLECTED to trampoline -- savSS:savESP=0x");
+                        p = zput(p, "GH#18: PM-FAULT REFLECTED class=");
+                        if (fclass < 0) p = zput(p, "SHARED-SITE");
+                        else            p = zhex(p, (DWORD)fclass);
+                        p = zput(p, " -- savSS:savESP=0x");
                         p = zhex(p, fcs); p = zput(p, ":0x"); p = zhex(p, feip);
                         p = zput(p, " (MISNAMED VTIB_FLT_SAVCS/SAVEIP) sav3=0x"); p = zhex(p, fss3);
                         p = zput(p, " nest=0x"); p = zhex(p, *(volatile WORD *)(tib + VTIB_FLT_NEST));
+                        /* ── ★ THE KERNEL BUILDS A FRAME AND WE HAVE NEVER LOOKED AT IT. ──
+                             The reflect sets SS:ESP = [TIB+0x638]:0x1000 and then PUSHES:
+                             session 33's run came out of it with liveESP = ...0x0fd0, i.e.
+                             0x30 bytes below the top. That frame is the only place the
+                             faulting CS, the flags and the trap/error code can be -- the
+                             VTIB_FLT_SAV* slots hold three values and we need six.
+                           ⚠ THIS IS A DUMP, NOT A DECODE. Nothing here claims to know the
+                             layout. It is printed against a fault whose every field is
+                             already known independently -- krnl386's deliberate `0f ff`
+                             (UD0) at seg1:0xc5f0, CS=0x01cf, SS:SP=0x001f:0x0fea, #UD =
+                             DPMI exception 6 -- so each slot can be identified by the value
+                             in it rather than by a guess about the shape. Offsets are
+                             printed with the dwords for exactly that reason: a dump whose
+                             columns you have to count is half an instrument.
+                             Read it, THEN write the decode. */
+                        { DWORD stkb = (DWORD)DPMI_FAULT_STK_SEG << 4;
+                          const volatile DWORD *fr = (const volatile DWORD *)(ULONG_PTR)(stkb + 0x0FC0);
+                          int fi;
+                          p = zput(p, "\r\n  FLTSTK sel=0x"); p = zhex(p, g_dpmi_fault_sel);
+                          p = zput(p, " lin=0x"); p = zhex(p, stkb);
+                          p = zput(p, " top=0x1000 espNOW=0x");
+                          p = zhex(p, VDM_REG(tib, VTIB_ESP));
+                          if (!host_readable((const void *)fr, 0x40)) p = zput(p, " <unreadable>");
+                          else for (fi = 0; fi < 16; ++fi) {
+                              p = zput(p, "\r\n    +0x"); p = zhex(p, 0x0FC0 + fi * 4);
+                              p = zput(p, " = 0x"); p = zhex(p, fr[fi]);
+                          }
+                          p = zput(p, "\r\n "); }
                         /* ► READ THE LAYOUT OFF THE TIB INSTEAD OF TRUSTING THE OFFSETS.
                              VTIB_FLT_SAVCS/SAVEIP were reverse-engineered in an earlier
                              session, and what they return does not look like a code
@@ -13868,25 +14507,231 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                         p = zput(p, " liveCS=0x"); p = zhex(p, VDM_REG(tib, VTIB_CS) & 0xFFFF);
                         p = zput(p, " liveSS=0x"); p = zhex(p, VDM_REG(tib, VTIB_SS) & 0xFFFF);
                         p = zput(p, " liveESP=0x"); p = zhex(p, VDM_REG(tib, VTIB_ESP));
-                        p = zput(p, " -- REAL-CPU PM #GP reflect WORKS\r\n");
+                        p = zput(p, " -- REAL-CPU PM fault reflect WORKS\r\n");
                         log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
-                        /* ⚠⚠ **THIS `break` IS WHY "DOS/4GW QUITS" ON A COMMAND-LINE ARGUMENT.**
-                             It was right for run 59, whose deliverable was the reflect FIRING.
-                             But it means ANY real PM fault ends the run with a tidy
-                             `STAGE2: exec loop exited -> flushing` and `STAGE2: complete`,
-                             which reads exactly like the client choosing to exit -- and that
-                             is how the argument bug was described for two sessions. The guest
-                             is not quitting; we are stopping it.
-                             ▶ THE FIX IS DPMI-STANDARD AND THE PLUMBING EXISTS: a client
-                               registers exception handlers with INT 31h 0203, and DOS/4GW
-                               registers THIRTEEN of them (measured). A reflected fault should
-                               be dispatched to g_pm_exc[n] for its exception number, exactly
-                               as dpmi_dispatch_to_pm_handler() does for interrupts; only if
-                               none is registered should the run end -- and then with a
-                               message saying so, not a clean `complete`.
-                               Blocked on identifying the exception number and the faulting
-                               CS:EIP -- see the misnaming note above. */
+                        /* ── ★★ DELIVER IT TO THE CLIENT'S INT 31h 0203 HANDLER. ────────────
+                             This `break` used to end the run here, which is why "DOS/4GW quits
+                             on a command-line argument": ANY real PM fault produced a tidy
+                             `exec loop exited -> flushing` that read exactly like the client
+                             choosing to exit. It was not quitting; we were stopping it.
+
+                           ★ THE FRAME IS ALREADY BUILT, AND NOT BY US. Measured on the rig
+                             (session 34, against krnl386's deliberate `0f ff` at seg1:0xc5f0
+                             whose every field was known in advance): the kernel switches to
+                             [TIB+0x638]:0x1000, pushes 0x10 bytes, and what it pushes IS the
+                             DPMI 0.9 16-bit exception frame --
+
+                               SS:SP+0x00  return IP   } LEFT ZERO for the host to fill
+                               SS:SP+0x02  return CS   }
+                               SS:SP+0x04  error code        0000
+                               SS:SP+0x06  faulting IP       c5f0   <- the UD0
+                               SS:SP+0x08  faulting CS       01cf
+                               SS:SP+0x0a  FLAGS             3246
+                               SS:SP+0x0c  faulting SP       0fea
+                               SS:SP+0x0e  faulting SS       001f
+
+                             -- which is not a coincidence: this machinery exists in NT FOR
+                             ntvdm's DPMI, so it emits the shape DPMI specifies. krnl386's own
+                             handler confirms the layout independently: at seg1:0xc5f2 it does
+                             `push bp / mov bp,sp`, writes a resume address into `[bp+8]` and
+                             its CS into `[bp+0xa]`, and leaves by `retf`. Those are the
+                             faulting IP and CS slots exactly.
+                             ⇒ So delivery is: fill the two return words with a BOP of ours,
+                               point CS:EIP at the registered handler, and leave the kernel's
+                               SS:ESP alone. The handler runs on the host stack the kernel
+                               chose, and its `retf` comes back to us at DPMI_FLTRET_COFF.
+
+                           ⚠ THE EXCEPTION NUMBER IS THE TABLE INDEX, AND THAT IS A READING,
+                             NOT A MEASUREMENT. The frame carries no trap number; the only
+                             channel is which entry of g_flt_tbl the kernel dispatched
+                             through. #UD (vector 6) arrived at index 6 -- consistent with
+                             "index == vector", and equally consistent with "index == an NT
+                             fault class that happens to cover #UD as well as the #GP this
+                             table was first built for". Hence the guard below: deliver ONLY
+                             to an exception the client has actually registered a handler
+                             for. krnl386 registers one at a time and faults immediately, so
+                             a wrong reading stops the run with a line that says which index
+                             had no handler -- it does not call the wrong handler. */
+                        {
+                            int exc = fclass;
+                            DWORD sb  = dpmi_sel_base(g_dpmi_fault_sel);
+                            DWORD esp = VDM_REG(tib, VTIB_ESP) & 0xFFFF;
+                            volatile WORD *fr = (volatile WORD *)(ULONG_PTR)(sb + esp);
+                            /* ── ★★ A #GP THROUGH AN IDT GATE IS AN UNSERVICED `INT nn`. ────
+                                 Not an exception the client asked for -- a software interrupt
+                                 the host failed to intercept. The #GP error code says so
+                                 exactly: bit 1 (IDT) set and bits 3..15 the vector.
+
+                               ⚠ WHY PATCHING ON COMMIT CANNOT COVER THIS. Our INT->BOP scan
+                                 runs when the client declares a region CODE, and krnl386
+                                 declares it BEFORE it copies the code in: measured, `04F2 ...
+                                 installed idx 1 base=0x03b30000 acc=0xfb` is preceded by
+                                 `code region 0x03b30000..0x03b3045f -> patched 00000000 INT
+                                 sites` -- the region was empty at declaration time. It then
+                                 copies SYSTEM.DRV in and executes a raw `cd 21` at
+                                 0x000f:0x01f7. No commit-time hook can see content that has
+                                 not arrived, and session 33 hit the mirror image of this
+                                 (krnl386 copying code we HAD patched, carrying the `C4 C4`
+                                 but leaving the address-keyed vector behind).
+
+                               ⇒ So service it HERE, where the CPU has just told us both the
+                                 vector and the address, and confirm against the instruction
+                                 bytes before believing the error code. This retires the whole
+                                 class: any `CD nn` in protected mode, in any code we never
+                                 scanned, becomes serviceable instead of fatal. It is also what
+                                 a DPMI host is supposed to do -- reflect the interrupt -- and
+                                 it is strictly better than a scan, which can only ever cover
+                                 memory it was pointed at while the content was there.
+                                 The site is patched on the way past, so the second execution
+                                 takes the fast BOP path: `C4 C4` in place (same length, as
+                                 always) plus the vector in the address-keyed map. That patch
+                                 needs no length heuristic -- the CPU just executed these two
+                                 bytes AS an interrupt, which is the strongest evidence the
+                                 x86len vote was ever trying to approximate. */
+                            if ((fr[2] & 0x2) && host_readable((const void *)fr, 0x10)) {
+                                DWORD gvec = (DWORD)(fr[2] >> 3) & 0xFF;
+                                DWORD gcb  = dpmi_sel_base(fr[4]);
+                                volatile BYTE *gi = (volatile BYTE *)(ULONG_PTR)(gcb + fr[3]);
+                                if (gcb && host_readable((const void *)gi, 2)
+                                    && gi[0] == 0xCD && gi[1] == (BYTE)gvec) {
+                                    int grc;
+                                    p = zput(p, "  EXC: #GP(IDT) is a RAW INT 0x"); p = zhex(p, gvec);
+                                    p = zput(p, " at 0x"); p = zhex(p, fr[4]);
+                                    p = zput(p, ":0x"); p = zhex(p, fr[3]);
+                                    p = zput(p, " lin=0x"); p = zhex(p, gcb + fr[3]);
+                                    p = zput(p, " -- servicing + patching\r\n");
+                                    log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                                    /* put the guest back where it faulted, EIP ON the INT */
+                                    VDM_SET16(tib, VTIB_SS, fr[7]); VDM_REG(tib, VTIB_ESP) = fr[6];
+                                    VDM_SET16(tib, VTIB_CS, fr[4]); VDM_REG(tib, VTIB_EIP) = fr[3];
+                                    VDM_SET16(tib, VTIB_EFLAGS, fr[5]);
+                                    if (host_writable((void *)(ULONG_PTR)gi, 2)) {
+                                        gi[0] = VDM_BOP0; gi[1] = VDM_BOP1;
+                                        pmap_set(gcb + fr[3], (BYTE)gvec);
+                                    }
+                                    grc = dpmi_service_pm_int(&m, tib, gvec, steps);
+                                    if (grc > 0) continue;      /* serviced -> keep running */
+                                    if (grc == 0) { g_dpmi_done = 1; }
+                                    break;
+                                }
+                            }
+                            if (exc < 0 || exc > 0x1F) {
+                                p = zput(p, "  EXC: no class (shared site) -- cannot name the "
+                                            "exception, stopping\r\n");
+                            } else if (!host_readable((const void *)fr, 0x10)) {
+                                p = zput(p, "  EXC: frame at SS:SP is not readable, stopping\r\n");
+                            } else if (!g_pm_exc[exc].set) {
+                                p = zput(p, "  EXC: exception 0x"); p = zhex(p, (DWORD)exc);
+                                p = zput(p, " has NO client handler (INT 31h 0203 never called "
+                                            "for it) -- stopping rather than guessing\r\n");
+                            } else {
+                                fr[0] = (WORD)DPMI_FLTRET_COFF;      /* return IP */
+                                fr[1] = g_dpmi_flt_code_sel;         /* return CS */
+                                VDM_SET16(tib, VTIB_CS,  g_pm_exc[exc].sel);
+                                VDM_REG(tib, VTIB_EIP) = g_pm_exc[exc].off;
+                                p = zput(p, "  EXC: -> client handler for 0x"); p = zhex(p, (DWORD)exc);
+                                p = zput(p, " at 0x"); p = zhex(p, g_pm_exc[exc].sel);
+                                p = zput(p, ":0x"); p = zhex(p, g_pm_exc[exc].off);
+                                p = zput(p, " frame{err=0x"); p = zhex(p, fr[2]);
+                                p = zput(p, " cs:ip=0x"); p = zhex(p, fr[4]);
+                                p = zput(p, ":0x"); p = zhex(p, fr[3]);
+                                p = zput(p, " fl=0x"); p = zhex(p, fr[5]);
+                                p = zput(p, " ss:sp=0x"); p = zhex(p, fr[7]);
+                                p = zput(p, ":0x"); p = zhex(p, fr[6]);
+                                p = zput(p, "} retf-> 0x"); p = zhex(p, g_dpmi_flt_code_sel);
+                                p = zput(p, ":0x"); p = zhex(p, (DWORD)DPMI_FLTRET_COFF);
+                                /* ── ★ WHAT THE FAULTING INSTRUCTION WAS LOOKING AT. ─────
+                                     The frame says WHERE it faulted; on a #GP that is half
+                                     the question, because the other half is always "which
+                                     selector, and did the offset fit inside it". Session 34
+                                     spent a run on `mov bx, es:[bx]` at seg1:0x8d80 unable to
+                                     say whether ES was the wrong selector or the right one
+                                     with too small a limit -- from a log that had already
+                                     printed the address. The reflect leaves the guest's GPRs
+                                     and DS/ES alone (only CS/SS/ESP move), so this is free.
+                                     Print the bytes at the fault too: a fault you can decode
+                                     is a fault you can attribute without a second run. */
+                                p = zput(p, "\r\n       fault regs: eax=0x"); p = zhex(p, VDM_REG(tib, VTIB_EAX));
+                                p = zput(p, " ebx=0x"); p = zhex(p, VDM_REG(tib, VTIB_EBX));
+                                p = zput(p, " ecx=0x"); p = zhex(p, VDM_REG(tib, VTIB_ECX));
+                                p = zput(p, " edx=0x"); p = zhex(p, VDM_REG(tib, VTIB_EDX));
+                                p = zput(p, " esi=0x"); p = zhex(p, VDM_REG(tib, VTIB_ESI));
+                                p = zput(p, " edi=0x"); p = zhex(p, VDM_REG(tib, VTIB_EDI));
+                                p = zput(p, " ebp=0x"); p = zhex(p, VDM_REG(tib, VTIB_EBP));
+                                { WORD sels[2]; const char *nm[2] = { " ds", " es" }; int si2;
+                                  sels[0] = (WORD)(VDM_REG(tib, VTIB_DS) & 0xFFFF);
+                                  sels[1] = (WORD)(VDM_REG(tib, VTIB_ES) & 0xFFFF);
+                                  for (si2 = 0; si2 < 2; ++si2) {
+                                      uint32_t ar = 0, lim = 0;
+                                      p = zput(p, nm[si2]); p = zput(p, "=0x"); p = zhex(p, sels[si2]);
+                                      if (dpmi_sel_desc(sels[si2], &ar, &lim)) {
+                                          p = zput(p, "{base=0x"); p = zhex(p, dpmi_sel_base(sels[si2]));
+                                          p = zput(p, " lim=0x"); p = zhex(p, lim);
+                                          p = zput(p, " ar=0x"); p = zhex(p, ar); p = zput(p, "}");
+                                      } else p = zput(p, "{NO DESCRIPTOR}");
+                                  } }
+                                /* ── AND WHAT ES POINTS AT. On a #GP through a selector,
+                                     the object is the evidence. Session 34's fault reads
+                                     `es:[0x28]` -- the in-memory module database's
+                                     ne_modtab -- and got 0x38a where the layout says 0x7c;
+                                     whether that database is malformed or simply is not at
+                                     ES cannot be decided from a register dump, only from
+                                     the bytes. 0x40 of them is the whole NE header. */
+                                { DWORD eb = dpmi_sel_base((WORD)(VDM_REG(tib, VTIB_ES) & 0xFFFF));
+                                  const volatile BYTE *eo = (const volatile BYTE *)(ULONG_PTR)eb;
+                                  p = zput(p, "\r\n       @es:0000 = ");
+                                  if (eb && host_readable((const void *)eo, 0x40))
+                                       p = zdump(p, (const void *)eo, 0x40);
+                                  else p = zput(p, "<unreadable>"); }
+                                { DWORD fb2 = dpmi_sel_base(fr[4]);
+                                  const volatile BYTE *fi2 =
+                                      (const volatile BYTE *)(ULONG_PTR)(fb2 + fr[3]);
+                                  p = zput(p, " bytes@fault=");
+                                  if (host_readable((const void *)fi2, 8)) p = zdump(p, (const void *)fi2, 8);
+                                  else                                     p = zput(p, "<unreadable>"); }
+                                p = zput(p, "\r\n");
+                                log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                                continue;                 /* re-arm + re-enter, now in the handler */
+                            }
+                            log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                        }
                         break;
+                    }
+                    /* ── The client's exception handler has finished: its `retf` landed here. ──
+                         DPMI 0.9: the handler returns through the CS:IP at the bottom of the
+                         frame, having optionally rewritten the CS:IP / FLAGS / SS:SP above it
+                         to say where execution should resume. krnl386's handler does exactly
+                         that -- it points the resume at seg1:0xc61d rather than back at its own
+                         invalid opcode, which is the whole reason it raised one. After the
+                         `retf` popped two words, SS:SP is at the error code, so what is left is
+                             +0x00 error code   +0x02 IP   +0x04 CS
+                             +0x06 FLAGS        +0x08 SP   +0x0a SS
+                         and the resume is: take those, drop the error code, run.
+                       ⚠ FLAGS IS SIXTEEN BITS. Assigning it to EFLAGS whole would clear the
+                         high half -- VM, IOPL's neighbours, the lot -- so merge it. */
+                    if (ev == VDM_EVENT_BOP && csv == (g_dpmi_flt_code_sel & 0xFFFF)
+                        && eip == DPMI_FLTRET_COFF) {
+                        DWORD sb  = dpmi_sel_base(g_dpmi_fault_sel);
+                        DWORD esp = VDM_REG(tib, VTIB_ESP) & 0xFFFF;
+                        volatile WORD *fr = (volatile WORD *)(ULONG_PTR)(sb + esp);
+                        if (!host_readable((const void *)fr, 0x0C)) {
+                            p = zput(p, "GH#128: EXC RETURN but the frame at SS:SP is unreadable "
+                                        "-- stopping\r\n");
+                            log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                            break;
+                        }
+                        p = zput(p, "GH#128: EXC RETURN -> resume 0x"); p = zhex(p, fr[2]);
+                        p = zput(p, ":0x"); p = zhex(p, fr[1]);
+                        p = zput(p, " fl=0x"); p = zhex(p, fr[3]);
+                        p = zput(p, " ss:sp=0x"); p = zhex(p, fr[5]);
+                        p = zput(p, ":0x"); p = zhex(p, fr[4]);
+                        p = zput(p, " err=0x"); p = zhex(p, fr[0]);
+                        p = zput(p, "\r\n");
+                        log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                        VDM_SET16(tib, VTIB_SS,  fr[5]); VDM_REG(tib, VTIB_ESP) = fr[4];
+                        VDM_SET16(tib, VTIB_CS,  fr[2]); VDM_REG(tib, VTIB_EIP) = fr[1];
+                        VDM_SET16(tib, VTIB_EFLAGS, fr[3]);
+                        continue;
                     }
                     /* GH#18 run 72: a real-CPU PROTECTED-MODE I/O insn (IN/OUT) reflects as
                        event 0 -- the SAME VDD-trap event as V86 (VM-confirmed by outprobe.com,

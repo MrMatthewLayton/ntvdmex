@@ -12,11 +12,13 @@
 #include <windows.h>
 #include <stdint.h>
 #include "ntvdm.h"
+#include "dos_layout.h"   /* DOS_MAX_FILES -- the capacity fh[] must match */
+
 
 /* DOS-machine state the INT 21h surface owns. */
 typedef struct {
     volatile BYTE *tib;        /* guest CONTEXT (registers via VDM_REG)            */
-    HANDLE   fh[64];           /* DOS handle -> Win32 (0..4 console; files in 5+)  */
+    HANDLE   fh[DOS_MAX_FILES]; /* DOS handle -> Win32 (0..4 console; files in 5+) */
     uint16_t first_mcb;        /* MCB chain root (AH=48/49/4A)                     */
     uint16_t dta_seg, dta_off; /* Disk Transfer Area (AH=1A/2F)                    */
     uint8_t  ver_major, ver_minor;  /* reported DOS version -- GH #28, default 6.22 */

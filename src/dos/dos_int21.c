@@ -225,7 +225,7 @@ static void v86_str(DWORD seg, DWORD off, char *dst, int max)
 void dos_int21_init(dos_machine_t *m, uint16_t first_mcb)
 {
     int i;
-    for (i = 0; i < 64; ++i) m->fh[i] = 0;
+    for (i = 0; i < DOS_MAX_FILES; ++i) m->fh[i] = 0;
     for (i = 0; i < 8; ++i) m->find_h[i] = 0;
     m->last_err = 0;
     m->verify = 0;
@@ -473,7 +473,7 @@ int dos_int21(dos_machine_t *m)
              hi.txt on disk, which is the worst of both.
              So: a BOUND handle is a file, whatever its number; only an unbound low
              handle is the console. */
-        if (h < 64 && m->fh[h]) { DWORD w = 0; WriteFile(m->fh[h], b, cnt, &w, NULL); SETAX(w); OKCF(); }
+        if (h < DOS_MAX_FILES && m->fh[h]) { DWORD w = 0; WriteFile(m->fh[h], b, cnt, &w, NULL); SETAX(w); OKCF(); }
         else if (h == 1 || h == 2) { DWORD k; for (k = 0; k < cnt; ++k) OUTC(b[k]); SETAX(cnt); OKCF(); }
         else { SETAX(6); ERRCF(); }
     } else if (ah == 0x3C || ah == 0x3D) {      /* create / open: DS:DX=ASCIIZ name */
@@ -500,12 +500,12 @@ int dos_int21(dos_machine_t *m)
                             FILE_ATTRIBUTE_NORMAL, NULL);
         }
         if (f != INVALID_HANDLE_VALUE) {
-            for (slot = 0; slot < 64; ++slot) {
+            for (slot = 0; slot < DOS_MAX_FILES; ++slot) {
                 if (m->fh[slot]) continue;                    /* bound to a file    */
                 if (slot < 5 && (m->std_open & (1u << slot))) continue;  /* device  */
                 break;
             }
-            if (slot < 64) { m->fh[slot] = f; SETAX(slot); OKCF(); }
+            if (slot < DOS_MAX_FILES) { m->fh[slot] = f; SETAX(slot); OKCF(); }
             else { CloseHandle(f); SETAX(4); ERRCF(); }
         } else { SETAX(2); ERRCF(); }
         tp = zput(tp, "  INT21 AH=0x"); tp = zhex(tp, ah);
@@ -515,13 +515,13 @@ int dos_int21(dos_machine_t *m)
         DWORD h = R_BX & 0xFFFF;
         /* Any BOUND handle closes, including a low one the shell redirected -- see
            the note at AH=40h. An unbound 0-4 is the console and closing it is a no-op. */
-        if (h < 64 && m->fh[h]) { CloseHandle(m->fh[h]); m->fh[h] = 0; }
+        if (h < DOS_MAX_FILES && m->fh[h]) { CloseHandle(m->fh[h]); m->fh[h] = 0; }
         else if (h < 5) m->std_open &= (uint8_t)~(1u << h);   /* free the device slot */
         OKCF();
     } else if (ah == 0x3F) {                    /* read: BX=handle CX=cnt -> DS:DX */
         DWORD h = R_BX & 0xFFFF, cnt = R_CX & 0xFFFF, rd = 0;
         void *b = (void *)((R_DS << 4) + (R_DX & 0xFFFF));
-        if (h < 64 && m->fh[h]) {                /* bound -> a file, even if low */
+        if (h < DOS_MAX_FILES && m->fh[h]) {                /* bound -> a file, even if low */
             /* ► LOG THE FILE POSITION, THE COUNT AND THE FIRST BYTES. A DOS extender
                  loading an executable is doing nothing but seek+read, so if the image it
                  ends up with is wrong, the first question is whether WE handed it the
@@ -543,7 +543,7 @@ int dos_int21(dos_machine_t *m)
     } else if (ah == 0x42) {                    /* lseek: AL=org BX=h CX:DX=off */
         DWORD h = R_BX & 0xFFFF, meth = R_AX & 0xFF;
         LONG dist = (LONG)(((R_CX & 0xFFFF) << 16) | (R_DX & 0xFFFF));
-        if (h >= 5 && h < 64 && m->fh[h]) {
+        if (h >= 5 && h < DOS_MAX_FILES && m->fh[h]) {
             DWORD np = SetFilePointer(m->fh[h], dist, NULL, meth);
             SETAX(np & 0xFFFF);
             R_DX = (R_DX & 0xFFFF0000u) | ((np >> 16) & 0xFFFF); OKCF();
@@ -663,8 +663,8 @@ int dos_int21(dos_machine_t *m)
             else {
                 FILETIME ft, lf; WORD fdt = 0, ftm = 0;
                 DWORD sz = GetFileSize(fh2, NULL);
-                for (slot = 5; slot < 64 && m->fh[slot]; ++slot) {}
-                if (slot >= 64) { CloseHandle(fh2); FCB_FAIL(); }
+                for (slot = 5; slot < DOS_MAX_FILES && m->fh[slot]; ++slot) {}
+                if (slot >= DOS_MAX_FILES) { CloseHandle(fh2); FCB_FAIL(); }
                 else {
                     m->fh[slot] = fh2;
                     if (GetFileTime(fh2, NULL, NULL, &ft)
@@ -691,7 +691,7 @@ int dos_int21(dos_machine_t *m)
                 }
             }
         } else if (ah == 0x10) {                /* close */
-            if (f[24] == FCB_MAGIC && f[25] < 64 && m->fh[f[25]]) {
+            if (f[24] == FCB_MAGIC && f[25] < DOS_MAX_FILES && m->fh[f[25]]) {
                 CloseHandle(m->fh[f[25]]); m->fh[f[25]] = 0; f[24] = 0; FCB_OK();
             } else FCB_FAIL();
         } else if (ah == 0x11 || ah == 0x12) {  /* find first / find next */
@@ -845,7 +845,7 @@ int dos_int21(dos_machine_t *m)
             else rec = (DWORD)f[33] | ((DWORD)f[34] << 8)
                      | ((DWORD)f[35] << 16) | ((DWORD)f[36] << 24);
             if (ah == 0x27 || ah == 0x28) count = R_CX & 0xFFFF;
-            if (f[24] != FCB_MAGIC || f[25] >= 64 || !m->fh[f[25]]) SETAX((R_AX & 0xFF00) | 1);
+            if (f[24] != FCB_MAGIC || f[25] >= DOS_MAX_FILES || !m->fh[f[25]]) SETAX((R_AX & 0xFF00) | 1);
             else {
                 HANDLE hh = m->fh[f[25]];
                 DWORD n = 0;
@@ -1154,23 +1154,23 @@ int dos_int21(dos_machine_t *m)
         }
     } else if (ah == 0x45 || ah == 0x46) {      /* dup / dup2 */
         DWORD src = R_BX & 0xFFFF, dst;
-        if (src >= 64 || !m->fh[src]) { SETAX(6); ERRCF(); }
+        if (src >= DOS_MAX_FILES || !m->fh[src]) { SETAX(6); ERRCF(); }
         else {
             HANDLE nh = 0;
             if (!DuplicateHandle(GetCurrentProcess(), m->fh[src],
                                  GetCurrentProcess(), &nh, 0, FALSE,
                                  DUPLICATE_SAME_ACCESS)) { SETAX(6); ERRCF(); }
             else if (ah == 0x45) {
-                for (dst = 0; dst < 64; ++dst) {              /* lowest free, as DOS */
+                for (dst = 0; dst < DOS_MAX_FILES; ++dst) {              /* lowest free, as DOS */
                     if (m->fh[dst]) continue;
                     if (dst < 5 && (m->std_open & (1u << dst))) continue;
                     break;
                 }
-                if (dst < 64) { m->fh[dst] = nh; SETAX(dst); OKCF(); }
+                if (dst < DOS_MAX_FILES) { m->fh[dst] = nh; SETAX(dst); OKCF(); }
                 else { CloseHandle(nh); SETAX(4); ERRCF(); }
             } else {
                 dst = R_CX & 0xFFFF;
-                if (dst >= 64) { CloseHandle(nh); SETAX(6); ERRCF(); }
+                if (dst >= DOS_MAX_FILES) { CloseHandle(nh); SETAX(6); ERRCF(); }
                 else { if (m->fh[dst]) CloseHandle(m->fh[dst]);
                        m->fh[dst] = nh;
                        if (dst < 5) m->std_open &= (uint8_t)~(1u << dst);
@@ -1190,7 +1190,7 @@ int dos_int21(dos_machine_t *m)
     } else if (ah == 0x57) {                    /* get/set file date and time */
         DWORD h57 = R_BX & 0xFFFF;
         uint8_t al57 = (uint8_t)(R_AX & 0xFF);
-        if (h57 >= 64 || !m->fh[h57]) { SETAX(6); ERRCF(); }
+        if (h57 >= DOS_MAX_FILES || !m->fh[h57]) { SETAX(6); ERRCF(); }
         else if (al57 == 0x00) {
             FILETIME ft, lf; WORD fdate = 0, ftime = 0;
             if (GetFileTime(m->fh[h57], NULL, NULL, &ft)
@@ -1231,15 +1231,15 @@ int dos_int21(dos_machine_t *m)
             SETAX((uint16_t)(e == ERROR_FILE_EXISTS || e == ERROR_ALREADY_EXISTS ? 80 : 3));
             ERRCF();
         } else {
-            for (slot = 5; slot < 64 && m->fh[slot]; ++slot) {}
-            if (slot < 64) { m->fh[slot] = f; SETAX(slot); OKCF(); }
+            for (slot = 5; slot < DOS_MAX_FILES && m->fh[slot]; ++slot) {}
+            if (slot < DOS_MAX_FILES) { m->fh[slot] = f; SETAX(slot); OKCF(); }
             else { CloseHandle(f); SETAX(4); ERRCF(); }
         }
     } else if (ah == 0x5C) {                    /* lock / unlock a byte range */
         DWORD h5c = R_BX & 0xFFFF;
         DWORD off = ((DWORD)(R_CX & 0xFFFF) << 16) | (DWORD)(R_DX & 0xFFFF);
         DWORD len = ((DWORD)(R_SI & 0xFFFF) << 16) | (DWORD)(R_DI & 0xFFFF);
-        if (h5c >= 64 || !m->fh[h5c]) { SETAX(6); ERRCF(); }
+        if (h5c >= DOS_MAX_FILES || !m->fh[h5c]) { SETAX(6); ERRCF(); }
         else {
             BOOL ok5 = ((R_AX & 0xFF) == 0)
                      ? LockFile(m->fh[h5c], off, 0, len, 0)
@@ -1247,16 +1247,16 @@ int dos_int21(dos_machine_t *m)
             if (ok5) OKCF(); else { SETAX(0x21); ERRCF(); }   /* 33 = lock violation */
         }
     } else if (ah == 0x67) {                    /* set maximum handle count */
-        /* We keep a fixed 64-entry table, so anything up to that succeeds.
+        /* We keep a fixed DOS_MAX_FILES-entry table, so anything up to that succeeds.
            NOTE the oracle FAILED this with AX=8 (insufficient memory) when asked
            for 30 -- that is a property of ITS memory state at that moment, not a
            rule about DOS, which is why the probe treats the result as
            informational rather than comparable. */
-        if ((R_BX & 0xFFFF) <= 64) OKCF();
+        if ((R_BX & 0xFFFF) <= DOS_MAX_FILES) OKCF();
         else { SETAX(8); ERRCF(); }
     } else if (ah == 0x68 || ah == 0x6A) {      /* commit file (flush) */
         DWORD h68 = R_BX & 0xFFFF;
-        if (h68 >= 64 || !m->fh[h68]) { SETAX(6); ERRCF(); }
+        if (h68 >= DOS_MAX_FILES || !m->fh[h68]) { SETAX(6); ERRCF(); }
         else { FlushFileBuffers(m->fh[h68]); OKCF(); }
     } else if (ah == 0x6C) {                    /* extended open/create */
         /* BX=mode, CX=attributes, DX=action, DS:SI=name.
@@ -1283,8 +1283,8 @@ int dos_int21(dos_machine_t *m)
             uint16_t res = (disp == CREATE_NEW) ? 2
                          : (disp == TRUNCATE_EXISTING || disp == CREATE_ALWAYS) ? 3 : 1;
             if (disp == OPEN_ALWAYS && GetLastError() != ERROR_ALREADY_EXISTS) res = 2;
-            for (slot = 5; slot < 64 && m->fh[slot]; ++slot) {}
-            if (slot < 64) { m->fh[slot] = f; SETAX(slot); SET16(R_CX, res); OKCF(); }
+            for (slot = 5; slot < DOS_MAX_FILES && m->fh[slot]; ++slot) {}
+            if (slot < DOS_MAX_FILES) { m->fh[slot] = f; SETAX(slot); SET16(R_CX, res); OKCF(); }
             else { CloseHandle(f); SETAX(4); ERRCF(); }
         }
     } else if (ah == 0x59) {                    /* get extended error */

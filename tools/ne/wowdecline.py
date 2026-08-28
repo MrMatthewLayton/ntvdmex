@@ -89,8 +89,22 @@ def main():
                 reg = ins.op_str.split(",")[0].strip()
             elif ins.mnemonic == "inc":                 # inc dx / jne == test dx==0xffff
                 reg = ins.op_str.strip()
-            elif ins.mnemonic in ("je", "jz") and ins.op_str.startswith("0x") and reg:
-                t = int(ins.op_str, 16) & 0xFFFF
+            elif ins.mnemonic in ("je", "jz", "jne", "jnz") and reg:
+                # ⚠ THE SENTINEL CASE IS NOT ALWAYS THE BRANCH TARGET, and assuming it
+                #   was made this tool UNDER-REPORT -- silently, which for a tool whose
+                #   whole job is "which calls may be declined" is the worst failure mode
+                #   it has. Session 34: WOW32 0x98 (the file SEEK) reads
+                #       549e  inc dx / 549f  jne 0x54a4 / 54a1  jmp 0x55a1
+                #   so 0xFFFF (inc -> ZF) FALLS THROUGH to the chain and the taken branch
+                #   is the serviced path -- the mirror image of the `je` sites. It was
+                #   reported as not-a-decline-site by omission, sat in the unimplemented
+                #   list, and cost a session's worth of "Missing 16-bit system module".
+                if not ins.op_str.startswith("0x"):
+                    break
+                if ins.mnemonic in ("je", "jz"):
+                    t = int(ins.op_str, 16) & 0xFFFF        # sentinel takes the branch
+                else:
+                    t = ins.address + ins.size              # sentinel falls through
                 verdict = ("DECLINE -> real DOS" if reaches_dos_chain(d, md, t)
                            else "0xffff is an ERROR here, not a decline")
                 break

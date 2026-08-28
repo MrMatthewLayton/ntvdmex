@@ -79,6 +79,7 @@
 /* Where each field sits relative to the thunk's BP. See the frame diagram above. */
 #define WOW32_OFF_ID    6
 #define WOW32_OFF_ARGB  10
+#define WOW32_OFF_FROM  12           /* return address into krnl386 -- WHICH call site */
 #define WOW32_OFF_ARGS  16
 #define WOW32_OFF_RET   (-16)        /* the `sub sp,4` hole: low word, then high */
 
@@ -92,6 +93,7 @@ typedef struct {
     volatile BYTE   *bp;             /* linear address of SS:BP inside the thunk */
     WORD             id;
     WORD             argb;
+    WORD             from;           /* return address in krnl386 seg 1 -- the CALL SITE */
     wow32_sel2lin_fn sel2lin;        /* selector -> linear base (host's LDT view) */
     void            *ctx;
     /* Filled in by the host so a service can talk back about what it did. */
@@ -282,17 +284,73 @@ typedef struct {
 #define WOW32_FILE_7E          0x7e   /* seg1:0x55df                            */
 #define WOW32_FILE_GETDATE     0x89   /* seg1:0x5609  AH=57h AL=0               */
 #define WOW32_FILE_WRITE       0x6f   /* seg1:0x56bc  -> AH=40h on decline      */
+/* ── ★ THE SEEK, AND WHY IT WAS MISSED. (GH #128, session 34) ─────────────────
+     `tools/ne/wowdecline.py` finds decline sites by the shape of the test after
+     the call -- `test dx` or `cmp ax,0xffff`. THIS site tests neither:
 
-static int wow32_may_decline(WORD id)
+         549b  call 0xb211        ; WOW32 0x98
+         549e  inc  dx            ; 0xffff + 1 == 0 -> ZF
+         549f  jne  0x54a4        ; serviced
+         54a1  jmp  0x55a1        ; -> pop ax/bx/dx -> 0x56c8 -> lcall cs:[0x3c]
+
+     so the tool reported ten declinable sites and never mentioned 0x98, and 0x98
+     sat in the "unimplemented, stepped over" list looking like work rather than
+     like a one-line answer.
+   ★ IT IS THE FILE SEEK, and leaving it unanswered is what produced "NTVDM
+     KERNEL: Missing 16-bit system module". krnl386 reads SYSTEM.DRV's first 0x40
+     bytes, calls 0x98 with offset 0x0400 -- which is that file's e_lfanew, checked
+     against the bytes on disk, not assumed -- and reads the NE header. Stepping the
+     seek over left the file position where the MZ read had left it, so every
+     subsequent read returned the wrong part of the file and the NE header it
+     parsed was whatever followed the MZ stub.
+     Declining restores the original AX (AH=42h) and chains to real DOS, which our
+     PM thunk already serves. */
+#define WOW32_FILE_SEEK        0x98   /* seg1:0x549b  -> AH=42h on decline      */
+
+/* ── ★★ DECLINING IS A PROPERTY OF THE CALL SITE, NOT OF THE ID. ───────────────
+     This was keyed by ID, and that is measurably wrong: krnl386 calls 0x97 (read)
+     from TWO places with OPPOSITE meanings --
+
+       seg1:0x5570  inc dx / je 0x55a7  -> mov ah,0x3f / jmp 0x56c8 -> lcall cs:[0x3c]
+                    ⇒ 0xFFFF means "ask real DOS". A decline is a true statement.
+       seg1:0x8a4e  inc dx / jne 0x8a59 -> xor dx,dx / or ax,0xffff / dec dx / ret
+                    ⇒ 0xFFFF is RETURNED TO THE CALLER as a failure. A decline here
+                      turns "we did not implement this" into "the read failed",
+                      which is a WRONG ANSWER rather than a missing one.
+
+     Session 34's failing run declined at `from=0x8a51` -- the second site -- and the
+     log shows what that looks like: no `INT21h AH=3F` follows it, unlike every other
+     read in the run. 0x6f (write) has the same split, at 0x56bc and 0x8aa1.
+
+   The list is the output of `tools/ne/wowdecline.py`, which reads each site's test
+     and asks whether its sentinel path reaches `lcall cs:[0x3c]`. Values are the
+     RETURN address (call site + 3), because that is what the thunk frame carries at
+     WOW32_OFF_FROM. Anything not listed is not declined -- an unknown site gets the
+     honest "unimplemented" rather than a guess. */
+typedef struct { WORD id; WORD from; } wow32_decline_site_t;
+
+static const wow32_decline_site_t wow32_decline_sites[] = {
+    { 0xb7,                0x52e5 },
+    { WOW32_FILE_SEEK,     0x549e },   /* 0x98 -> AH=42h */
+    { 0x77,                0x54d3 },
+    { WOW32_FILE_OPEN,     0x5507 },   /* 0xc1 -> AH=3Dh */
+    { WOW32_FILE_READ,     0x5573 },   /* 0x97 -> AH=3Fh */
+    { WOW32_FILE_CLOSE,    0x5592 },   /* 0xc2 -> AH=3Eh */
+    { WOW32_FILE_GETATTR,  0x55c7 },   /* 0xc7 -> AH=43h */
+    { WOW32_FILE_7E,       0x55e2 },   /* 0x7e             */
+    { WOW32_FILE_GETDATE,  0x560c },   /* 0x89 -> AH=57h */
+    { 0x76,                0x5634 },
+    { 0x71,                0x565e },
+    { WOW32_FILE_WRITE,    0x56bf },   /* 0x6f -> AH=40h */
+};
+
+static int wow32_may_decline(WORD id, WORD from)
 {
-    switch (id) {
-    case WOW32_FILE_OPEN:  case WOW32_FILE_READ:    case WOW32_FILE_CLOSE:
-    case WOW32_FILE_GETATTR: case WOW32_FILE_7E:    case WOW32_FILE_GETDATE:
-    case WOW32_FILE_WRITE:
-        return 1;
-    default:
-        return 0;
-    }
+    unsigned i;
+    for (i = 0; i < sizeof wow32_decline_sites / sizeof wow32_decline_sites[0]; ++i)
+        if (wow32_decline_sites[i].id == id && wow32_decline_sites[i].from == from)
+            return 1;
+    return 0;
 }
 
 /* ---- the services ------------------------------------------------------- */
@@ -387,14 +445,16 @@ static int wow32_call(wow32_frame_t *f, wow32_dosdata_t *dd)
 
     /* ── The INT 21h file family: decline, and let our own DOS layer serve it.
          See the WOW32_DECLINE block above for why this is an answer rather than
-         a stub, and for the one behavioural difference it buys. */
-    case WOW32_FILE_OPEN:  case WOW32_FILE_READ:    case WOW32_FILE_CLOSE:
-    case WOW32_FILE_GETATTR: case WOW32_FILE_7E:    case WOW32_FILE_GETDATE:
-    case WOW32_FILE_WRITE:
-        wow32_setret(f, WOW32_DECLINE);
-        return 1;
-
+         a stub, and for the one behavioural difference it buys.
+       ⚠ ONLY AT A SITE THAT CHAINS. The same IDs are called from places where
+         0xFFFF is returned to the app as a failure -- see wow32_may_decline. At
+         one of those, fall through to "unimplemented", which is honest, and which
+         the log distinguishes. */
     default:
+        if (wow32_may_decline(f->id, f->from)) {
+            wow32_setret(f, WOW32_DECLINE);
+            return 1;
+        }
         return 0;
     }
 }

@@ -62,17 +62,29 @@ def disasm(ne, segno, start, count, stubs=None, out=None):
     lines = []
     for ins in md.disasm(bytes(d[start:end]), start):
         note = ""
+        # ⚠ MASK BRANCH TARGETS TO 16 BITS. capstone computes target = address + rel
+        #   and does not wrap, so disassembling from a high offset prints
+        #   `call 0x11493` for what the CPU executes as `call 0x1493` -- an address
+        #   that does not exist in the segment, in a tool whose entire job is to name
+        #   addresses. Session 32 lost a few minutes to it; session 33 fixed it.
+        op_str = ins.op_str
+        if (ins.mnemonic[0] == "j" or ins.mnemonic.startswith(("call", "loop"))) \
+                and op_str.startswith("0x"):
+            try:
+                op_str = "0x%04x" % (int(op_str, 16) & 0xFFFF)
+            except ValueError:
+                pass
         # ★ Name the WOW32 call in place. `call 0xb48e` means nothing; "WOW32 id 0xb8
         #   (16 arg bytes)" is the thing you are actually looking at.
-        if ins.mnemonic == "call" and ins.op_str.startswith("0x"):
-            t = int(ins.op_str, 16)
+        if ins.mnemonic == "call" and op_str.startswith("0x"):
+            t = int(op_str, 16)
             if t in stubs:
                 note = "   ; ★ WOW32 id 0x%02x (%d arg bytes)" % stubs[t]
         # A native BOP -- krnl386's own 16->32 escape. Same reason.
         if ins.bytes[:2] == b"\xc4\xc4":
             note = "   ; ★ NATIVE BOP 0x%02x" % ins.bytes[2] if len(ins.bytes) > 2 else ""
         lines.append("  %04x  %-20s %-8s %s%s"
-                     % (ins.address, ins.bytes.hex(), ins.mnemonic, ins.op_str, note))
+                     % (ins.address, ins.bytes.hex(), ins.mnemonic, op_str, note))
     text = "\n".join(lines)
     if out is None:
         print(text)

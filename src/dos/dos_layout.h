@@ -50,6 +50,36 @@
 /* BIOS entry stubs (INT 11h/12h/13h/14h/15h/17h/25h/26h), 4 bytes each:
    BOP <int> ; IRET.  They live here rather than in DOS_HDLR_SEG because that
    segment is down to scattered free bytes and these want 32 contiguous. */
+/* ── GH #128: the PM-fault reflect's PER-CLASS BOP sites. ───────────────────
+   The kernel picks the reflect's CS:EIP out of a table indexed by FAULT CLASS
+   (see dpmi_install_fault_trampoline).  Session 32 filled all eight entries so
+   that no fault could kill the VDM silently -- but it filled them with the SAME
+   {selector, offset}, which throws away the class, and the class is the only
+   channel that carries WHICH exception fired.  The kernel's frame does not say:
+   it carries the error code, CS:IP, FLAGS and SS:SP of the faulting instruction
+   and nothing else (measured, session 34).
+   ⚠ AND THE OBVIOUS GUESS IS A TRAP: the RE'd class for a #GP is 6, and #UD --
+     the exception krnl386 actually raises -- is x86 vector 6 as well.  Any
+     reading that conflates them is unfalsifiable.  So give each class its own
+     4-byte site and let the reflected EIP name it.
+   Lives in the MCB-reserved resident block, in the gap between the AH=65h
+   character tables (which end at 0x254) and the BIOS entry stubs (0x300).
+   ★ THIRTY-TWO, not eight.  Eight was the size of the table we happened to
+     declare, not a fact about the kernel.  Session 34 measured krnl386's
+     deliberate `0f ff` (#UD, x86 vector 6) arriving at index 6 -- which is
+     equally consistent with "index == vector" and with "index == NT class, and
+     class 6 covers #UD as well as #GP".  Those two readings diverge the first
+     time a NON-6 exception fires, and only if the table is wide enough to have
+     an entry for it.  Eight entries can never tell them apart; thirty-two can,
+     and cost 384 bytes of a static array.
+   The DPMI dispatch reads the index AS the exception number.  That is the only
+   reading under which delivery is defined at all, it is consistent with the one
+   measurement there is, and it is guarded: we deliver only if the client has
+   actually registered a handler for that exception, so a wrong reading stops
+   the run and says so rather than calling the wrong handler. */
+#define DOS_FLTSITE_OFF   0x0260   /* 32 sites x 4 bytes = 0x260..0x2DF */
+#define DOS_FLTSITE_N     32
+#define DOS_FLTRET_OFF    0x02E0   /* the client handler's far-return catcher   */
 #define DOS_BIOS_STUBS    0x0300
 #define DOS_DPB_OFF       0x0340   /* AH=1Fh/32h drive parameter block, 33 bytes */
 #define DOS_MEDIA_OFF     0x0364   /* AH=1Bh/1Ch media descriptor byte           */
@@ -106,5 +136,50 @@
 #define DOS_WOW_E_E       0x18
 #define DOS_WOW_E_D       0x24     /* krnl386 WRITES a word through this one     */
 #define DOS_WOW_E_F       0x28
+
+/* ── THE SYSTEM FILE TABLE.  krnl386 COUNTS FILE HANDLES BEFORE IT WILL START. ──
+     At seg1:0xbf97 krnl386 calls INT 21h AH=52h, steps to SysVars+4, and walks the
+     SFT chain adding up each block's entry count:
+
+         bfaf  xor bx,bx
+         bfb1  mov cx, es:[bx+4]        ; entries in this block
+         bfb5  add ah, cl               ; running total
+         bfb7  cmp word ptr es:[bx], -1 ; offset FFFFh == end of chain
+         bfbb  je  0xbfcb
+         bfbd  mov cx, es:[bx+2]        ; next segment
+         bfc1  mov dx, es:[bx]          ; next offset
+         bfc6  call 0xbfde              ; re-base its scratch selector on it
+         bfc9  jmp  0xbfaf
+         bfcb  cmp ah, [bp-5] / jb -> the error exit at 0x987a
+
+   ⚠ SysVars+4 WAS ZERO, AND A ZERO CHAIN HEAD IS NOT AN EMPTY CHAIN.  It re-based
+     the scratch selector on 0000:0000 and read the IVT as an SFT header: word 0
+     there is not FFFFh, so it followed the "next" pointer into the ROM and round a
+     three-address cycle -- 0x00000000 -> 0x000fa357 -> 0x000bc370 -> 0x00000000 --
+     forever.  Measured: 117 MB of INT 31h 0007/0008 in one run.  The terminator is
+     the point of this structure at least as much as the count is.
+   The shape is MS-DOS's and is confirmed against stock ntvdm rather than recalled:
+     lolprobe-stock-ntvdm.txt has SysVars+4 = A7:00CE and the block at 00CE reads
+     `00 00 | 2A 03 | 05 00` -- next 032A:0000, five entries.  Ours is one block,
+     terminated, and its entry count is what our INT 21h layer can ACTUALLY open
+     (dos_machine_t::fh[]), not a number chosen to pass the check. */
+/* ── HOW MANY FILES DOS CAN HAVE OPEN AT ONCE. ─────────────────────────────────
+     Was 64, and 64 is a number krnl386 measurably refuses to start on: it walks
+     the SFT chain (see DOS_SFT_* in dos_layout.h), totals the entries and demands
+     at least `[bp-5]` of them -- 0x7f (127), or 0x64 (100) on one branch, both
+     read straight out of seg1 at 0xbf7a/0xbf8b. With 64 advertised it exited via
+     ExitKernelThunk carrying 0x40, i.e. quoting our own count back at us.
+   ⚠ THIS IS THE REAL TABLE, NOT A NUMBER TO SATISFY A CHECK. The SFT block
+     advertises exactly DOS_SFT_ENTRIES == this, so raising what we claim also
+     raises what we can actually open -- claiming 128 while keeping 64 slots is
+     the "runs but lies" failure this project has paid for before. 128 clears both
+     thresholds and stays inside the byte accumulator krnl386 sums into
+     (`add ah,cl`, so a single block may not exceed 255). */
+#define DOS_MAX_FILES 128
+
+#define DOS_SFT_ENTRIES   DOS_MAX_FILES   /* == the size of dos_machine_t::fh[]  */
+#define DOS_SFT_ENTSZ     0x3B      /* DOS 4.0+ SFT entry: 59 bytes              */
+#define DOS_SFT_BYTES     (6 + DOS_SFT_ENTRIES * DOS_SFT_ENTSZ)
+#define DOS_SFT_PARAS     ((DOS_SFT_BYTES + 15) / 16)
 
 #endif /* DOS_LAYOUT_H */

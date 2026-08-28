@@ -4,7 +4,7 @@
 > this file top to bottom and you will know where it is, what works, what does not, and
 > what to do next.
 
-- **Last updated:** 2026-08-27 (session 31)
+- **Last updated:** 2026-08-28 (session 34)
 - **Branch:** `m9/completeness`
 - **Tracker:** [140+ issues](https://github.com/MrMatthewLayton/ntvdmex/issues) — reconciled against the repo on 2026-08-26 (`tools/gh/backfill.py` is the manifest)
 - **Knowledge base:** the [wiki](https://github.com/MrMatthewLayton/ntvdmex/wiki)
@@ -39,7 +39,11 @@ them they exercise the whole stack — NE loading, the KERNEL 16→32 boundary, 
 and menus, GDI drawing, mouse and keyboard. Paint in particular has to actually paint.
 
 **Status: not started.** No Win16 program has run yet; `wowexec.exe` has never executed
-and nothing has drawn a pixel. What works is the *bootstrap* — see #128 below.
+and nothing has drawn a pixel. What works is the *bootstrap*, and as of session 34 it runs
+a long way: krnl386 loads three of its four segments, installs its interrupt handlers,
+**takes and returns from its own DPMI exceptions**, loads `SYSTEM.DRV`, and gets as far as
+asking the 32-bit half to load a Win16 module — and when it does fail, it now says so in its
+own words in the log rather than vanishing. See #128 below.
 
 ---
 
@@ -62,7 +66,7 @@ and nothing has drawn a pixel. What works is the *bootstrap* — see #128 below.
 
 | | Why it matters |
 |---|---|
-| **Win16 / WOW — bootstrap runs, no app yet** | `ntvdm.exe` is *also* the host for every 16-bit **Windows** program. The NE loader now loads, relocates and binds the **whole** XP WOW module set on real hardware — but nothing is executed yet, and there is no 16:16↔flat thunking. Since interception is an IFEO key on `ntvdm.exe`, and Win16 launches go through `ntvdm.exe` too, **installing NTVDMEX permanently would break every 16-bit Windows app today**. → [#128](https://github.com/MrMatthewLayton/ntvdmex/issues/128) |
+| **Win16 / WOW — bootstrap runs, no app yet** | `ntvdm.exe` is *also* the host for every 16-bit **Windows** program. The NE loader loads, relocates and binds the **whole** XP WOW module set on real hardware, and **krnl386 executes**: it switches itself to protected mode, loads its own segments 2 and 3, installs its interrupt handlers, takes and returns from its own DPMI exceptions, and reaches the point of loading the other 16-bit system modules. No Win16 *application* runs yet, and there is no 16:16↔flat thunking. Since interception is an IFEO key on `ntvdm.exe`, and Win16 launches go through `ntvdm.exe` too, **installing NTVDMEX permanently would break every 16-bit Windows app today**. → [#128](https://github.com/MrMatthewLayton/ntvdmex/issues/128) |
 | **Console/stdio integration** | DOS output is buffered and flushed to `CONOUT$` at exit, so shell redirection and piping are bypassed and every DOS program pops a window. Blocks non-interactive use. |
 | **In-guest redirection** | `echo x > file` writes to the screen and leaves the file 0 bytes. Three fixes attempted, all at the wrong end. |
 | **No INT 13h / INT 25h / 26h** | No direct disk access. |
@@ -81,25 +85,60 @@ and nothing has drawn a pixel. What works is the *bootstrap* — see #128 below.
 > refused outright, and the real name re-enters us through the IFEO hook. So there is no
 > safe install story until WOW exists, and #128 moved onto the critical path.
 
-1. **[#128] WOW / Win16 — IN PROGRESS. krnl386 now LOADS AND RELOCATES ITS OWN
-   SEGMENT 1 AND RUNS FROM IT IN PROTECTED MODE.**
+1. **[#128] WOW / Win16 — IN PROGRESS. krnl386 TAKES AND RETURNS FROM ITS OWN DPMI
+   EXCEPTIONS, LOADS SYSTEM.DRV, AND REPORTS ITS OWN FAILURES.**
 
-   ### ▶ START HERE: [session 32](log/sessions/session-32.md#-resume-here--session-32-handoff)
-   That block is the live handoff — where it is, the six leads already **ruled out**
-   (do not re-try them), the one reading left, and three method traps that each cost
-   a run. Everything below it is background.
+   ### ▶ START HERE: [session 34](log/sessions/session-34.md#-resume-here--session-34-handoff)
+   That block is the live handoff — where it is, the leads already **ruled out**
+   (do not re-try them), the next run, the instruments, and the standing hazards.
+   Everything below it is background.
 
-   **Session 32 in one paragraph.** Our NE loader must **not** relocate krnl386 — a
-   chained NE fixup can only be applied once, and krnl386's own pass is the one that
-   converts real-mode paragraphs into PM selectors. With that corrected it loads
-   segment 1, relocates it, executes from it, and survives its own arena compaction
-   (which needed the stack+header window allocated **high**, or krnl386 places its code
-   inside the block it later `rep movsd`s across — that was a silent VDM teardown, now
-   gone). It stops at `LoadSegment(segment 2)` with `ExitKernelThunk(1)`: `seg1:0xd5e0`
-   gives segment 1 real memory but every other segment a **zero-size placeholder**,
-   `seg1:0x937e` resizes it correctly, and **nothing ever fills it**. The next move is
-   to diff our module database against **stock ntvdm's** — same `krnl386.exe`, same
-   WOW32 interface, both already on the rig.
+   **Session 34 in one paragraph.** DPMI exception delivery works, and nine walls behind
+   it fell — every one of them ours. The first was never a missing frame: **NT builds the
+   DPMI 0.9 16-bit exception frame itself** and leaves only the return `CS:IP` zero for the
+   host to fill, measured against krnl386's deliberate `UD0` (an exception whose every
+   field was known in advance) and confirmed independently by its own handler's writes to
+   `[bp+8]`/`[bp+0xa]`. **The kernel's fault table is indexed by the x86 exception vector,
+   not an NT "class"** — #UD arrives at 6 and #GP at `0x0d`, refuting session 19 and
+   showing the 8-entry table could never reach a #GP at all. Then, in order: `INT 21h
+   AH=52h` had no PM thunk (so `ES` was the null selector — that *was* the #GP);
+   `SysVars+4`, the SFT chain head, was zero, and **a zero head is not an empty chain**, so
+   krnl386 read the IVT as an SFT header and cycled forever (117 MB in one run); it counts
+   file handles and **refuses 64** (it wants 100 or 127, both literals in its code), so the
+   real table is 128; growing the SFT then starved the 256-vector PM handler table out of
+   the host pool, silently, exactly as that function's own comment warned; WOW32 `0x98` is
+   the file **seek** and was unimplemented, so every read after the first landed at the
+   wrong file offset; `wowdecline.py` was **under-reporting** declinable sites because it
+   only understood `je`, not the `jne` fall-through; **declining turned out to be a property
+   of the CALL SITE, not the ID** — `0x97` has one site that chains to DOS and one that
+   returns the failure to the app, and we were declining at both; and finally **a reserved
+   LDT index is not a read-only one**: `INT 31h 04F2` discarded krnl386's re-base of
+   selector `0x17`, so an image it staged there was read to a stale address while it walked
+   the relocations at the new one. Finally, **a raw `INT nn` in protected mode is retired as
+   a class**: krnl386 re-bases the initial CS over a block it fills *after* declaring it, so
+   no commit-time scan can ever patch it — but a `#GP` whose error code has the IDT bit set
+   IS that interrupt, and servicing it there (vector from the error code, confirmed against
+   the `CD nn` bytes) turns the project's oldest silent VDM killer into an ordinary serviced
+   call. PM step `0x63` → **`0xd9`**; "Missing 16-bit system module" cleared; SYSTEM.DRV
+   loads. **Next: WOW32 `0x2d` WowLoadModule** — krnl386 handing a module to the 32-bit
+   half, which is the 16→32 boundary itself rather than another one-line gap.
+
+   ### Session 33 in one paragraph
+   Stock ntvdm was used as an oracle for the first time *from the outside*: `tools/vdmdump` reads a live VDM's memory and its whole LDT
+   (`ProcessLdtInformation` works on XP against another process), and
+   `tools/ne/dumpscan.py` locates an NE's segments in the dump. That settled the
+   layout — and then two hypotheses drawn from it were **tested and refuted**, which is
+   how the real cause surfaced: `LoadSegment` never reads the file, it `rep movsd`s each
+   segment in from a **staged image block** that is walked by *reclaiming* what has been
+   consumed. Session 32 had set that reclaim's gap to zero on purpose (to stop it
+   overwriting live code), so every segment was copied from offset 0 — the NE header.
+   With the gap restored, segments 2 and 3 load, at the same heap offsets stock uses.
+   The next wall, an "unimplemented native BOP", was a **swallowed `INT 21h`**: our
+   patch map is keyed by linear address and krnl386 *copies* its patched code, so the
+   `C4 C4` travels and the vector is lost — recovered now from the module's own file
+   image. krnl386 then installs its INT 10h handler, registers a DPMI exception-6
+   handler, and executes `0F FF` (UD0) **on purpose** to check it is reached. It waits
+   there. **Next: DPMI exception reflection.**
 
    ### The bootstrap (session 30, unchanged and still true)
    On real hardware the **entire XP WOW module set loads, gets LDT selectors and
@@ -195,7 +234,11 @@ and nothing has drawn a pixel. What works is the *bootstrap* — see #128 below.
    ⇒ `ne_cseg` reads **4**, the copy loop runs four times instead of 65536, and the run
    goes from PM step `0x31` to **`0x3a`** with **12** WOW32 calls instead of 9.
 
-   ### ⏹ Where it stops today — LoadSegment on krnl386's own segment 1
+   ### ⏹ SUPERSEDED (sessions 33-34) — the LoadSegment wall, kept for the method
+   > This section describes where the run stopped in session 32. It is **no longer where
+   > it stops**: segments 1-3 load and krnl386 now fails much later, on the *other*
+   > system modules. Kept because the reasoning below is how the arena was understood,
+   > and because two of its conclusions were later refuted.
    krnl386 builds its module database entry, then calls `seg1:0x90d9` for segment 1 of
    itself. It returns 0, so krnl386 takes `mov al,1 / call 0x987a` → WOW32 `0x02`
    **ExitKernelThunk(1)** → `int3`: a deliberate, traceable exit rather than a silent
