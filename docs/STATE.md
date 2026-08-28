@@ -81,8 +81,25 @@ and nothing has drawn a pixel. What works is the *bootstrap* — see #128 below.
 > refused outright, and the real name re-enters us through the IFEO hook. So there is no
 > safe install story until WOW exists, and #128 moved onto the critical path.
 
-1. **[#128] WOW / Win16 — IN PROGRESS. The loader half is DONE and the WOW32 half
-   has STARTED: krnl386 is past its heap and doing real file I/O.**
+1. **[#128] WOW / Win16 — IN PROGRESS. krnl386 now LOADS AND RELOCATES ITS OWN
+   SEGMENT 1 AND RUNS FROM IT IN PROTECTED MODE.**
+
+   ### ▶ START HERE: [session 32](log/sessions/session-32.md#-resume-here--session-32-handoff)
+   That block is the live handoff — where it is, the six leads already **ruled out**
+   (do not re-try them), the one reading left, and three method traps that each cost
+   a run. Everything below it is background.
+
+   **Session 32 in one paragraph.** Our NE loader must **not** relocate krnl386 — a
+   chained NE fixup can only be applied once, and krnl386's own pass is the one that
+   converts real-mode paragraphs into PM selectors. With that corrected it loads
+   segment 1, relocates it, executes from it, and survives its own arena compaction
+   (which needed the stack+header window allocated **high**, or krnl386 places its code
+   inside the block it later `rep movsd`s across — that was a silent VDM teardown, now
+   gone). It stops at `LoadSegment(segment 2)` with `ExitKernelThunk(1)`: `seg1:0xd5e0`
+   gives segment 1 real memory but every other segment a **zero-size placeholder**,
+   `seg1:0x937e` resizes it correctly, and **nothing ever fills it**. The next move is
+   to diff our module database against **stock ntvdm's** — same `krnl386.exe`, same
+   WOW32 interface, both already on the rig.
 
    ### The bootstrap (session 30, unchanged and still true)
    On real hardware the **entire XP WOW module set loads, gets LDT selectors and
