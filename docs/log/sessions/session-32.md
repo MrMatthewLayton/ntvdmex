@@ -933,6 +933,42 @@ everything in parts 15-18, it does not require guessing at a memory layout.
 `0x937e`, then read what our dispatcher does with it. `tools/ne/nedis.py --wowfunc 0x7c` gives
 the callers and the argument-building code.
 
+## Part 29 — ⚠️ `0x7c` refuted, and the resize is measured working
+
+Breakpoints on the realloc path (all four armed, `displaced` verified):
+
+```
+seg1:0x93d9  call 0x4658    HIT   EBX=0x3ee4  ECX=0x49
+seg1:0x4683  call 0x5fd2    HIT   (twice)
+seg1:0x4697  call 0xb38a    NOT HIT      ★ WOW32 0x7c is never called
+seg1:0x93dd  cmp [bp-2],ax  HIT   EAX=0x01ce
+```
+
+★ **Part 28's lead is refuted by measurement.** The `or ch,ch / test cl,1` guard at
+`seg1:0x4686`/`0x468a` is not satisfied, so `0x7c` is skipped entirely. It is not the missing
+step on this path, and the log's `unimpl` tally never rises to include it. Recorded rather
+than quietly dropped, because "a plausible unimplemented call sitting exactly where the gap
+is" is precisely the kind of lead that gets believed without being checked.
+
+★★ **And the resize demonstrably works.** `EBX=0x3ee4` is segment 2's length (`0x3ee2`) plus
+the 2 that `seg1:0x93cb` adds, so `0x937e` asks for exactly the right size; `EAX=0x01ce` comes
+back and the handle is preserved, so `seg1:0x93dd`'s `je 0x93f7` takes the success path. What
+follows (`0x93f7` → `0x940b` → `lsl eax,eax`) only establishes the address and limit.
+
+⇒ **So it is now measured, not inferred, that krnl386 allocates a placeholder, resizes it to
+the segment's exact size, and never fills it.** Nothing in its bring-up copies segment bytes
+for any segment — part 25 removed the last candidate — and part 27 showed the file path is
+structurally unreachable from this loop.
+
+▶ **Which leaves one reading standing, and it is architectural.** krnl386 is being handed a
+raw NE header and asked to build its own module database (`call 0xd02b` at `seg1:0xc233`),
+which then allocates its own segment memory (`seg1:0xd5e0`) — and that path only ever gives
+segment 1 real memory. A real WOW loader plausibly hands krnl386 a **module database that is
+already populated**, with a real handle per segment and the images already in place, so that
+neither `0xd02b`'s build nor `0xd5e0`'s placeholder allocation has to invent anything.
+Testing that means reading `seg1:0xd02b` — the one routine in this chain still unread — to see
+what it accepts and what it assumes.
+
 ## Regression
 
 - `selftest.com` **8/8 PASS on real hardware** — the other guest class, run because the
