@@ -969,6 +969,71 @@ neither `0xd02b`'s build nor `0xd5e0`'s placeholder allocation has to invent any
 Testing that means reading `seg1:0xd02b` — the one routine in this chain still unread — to see
 what it accepts and what it assumes.
 
+## Part 30 — ⚠️ two of my own claims corrected, and the value finally measured
+
+**A breakpoint ON an instruction reads the registers BEFORE it executes.** Part 27 said
+`[bp+6]` was "measured as `0x01ce`" from a breakpoint at `seg1:0x9183` — which is
+`mov ax,[bp+6]`. `EAX` there is whatever it was *before* the load. That was never a
+measurement of `[bp+6]` at all; it was a stale register reported as a fact. The same trap as
+"the furthest hit is a location" (part 20) and "the last `PMHB` line is where it stopped"
+(part 5), in a third costume.
+
+Done correctly — break at `seg1:0x9187` (`AX = [bp+6]+1`) and `seg1:0x918a` (`AX = [bp+6]`):
+
+```
+seg1:0x9187  EAX=0x000001b8
+seg1:0x918a  EAX=0x000001b7      ⇒ [bp+6] = 0x01B7
+seg1:0x9191  NOT HIT             ⇒ the file open really is skipped
+```
+
+★ **`0x01B7` is the arena selector** — LDT index `0x36`, the block that spans krnl386's
+conventional arena (parts 21-22). So LoadSegment is handed *the arena*, not a file handle,
+and the branch is confirmed by the un-hit `0x9191` rather than by inference.
+
+**And the "can never return `0xFFFF`" argument was over-stated.** `seg1:0x48b4` has three
+exits, not two: `0x48bf` and `0x48dc` both return `AX = 0`, but the third — `0x48c4 je 0x48eb`,
+taken when the descriptor's present bit is clear — falls into `seg1:0x4860`'s body, where
+`0xFFFF` is an explicit **sentinel meaning "use the current DS"**:
+
+```
+4863  ax = ss:[bx+4]
+4867  cmp ax,0xffff / jne 0x486e
+486c  mov ax,ds            ; 0xFFFF means "me"
+```
+
+and returns through a far tail at `seg1:0x4983` that I have not traced. So the structural
+claim is proven for two paths out of three. It does not matter for the conclusion — the
+measurement above settles it directly — but the argument as written in part 27 was stronger
+than the evidence.
+
+## Part 31 — `seg1:0xd02b` is not the module-database builder
+
+Read at last, and it does not do what part 24 assumed. It calls `seg1:0xd13c` (which rounds a
+size up to a 0x20 boundary and allocates through `seg1:0x5d7f`, stashing the selector at
+`[0x5aa]`), then initialises a structure at `DS:0` with the shape of a **task/instance block** —
+`+0x1e`, `+0x20`, `+0x24`, `+0x26`, `+0x2a`, `+0x2e`, `+0x34`..`+0x3e`, and `0xFFFF` in
+`+0x30`, `+0x32`, `+0x40` — links three arena descriptors to each other through their `+0x18`
+/ `+0x1c` fields, and finally returns:
+
+```
+d0c1  bx = [esi+0x10]      ; esi = [edx+4]
+d0c5  dec bx
+d0c6  [esi+0x10] = bx
+d0ca  [bp-4] = bx
+...
+d131  ax = [bp-4] / clc
+```
+
+i.e. **a value derived from an arena descriptor's `+0x10`, decremented** — the same `+0x10`
+field `seg1:0x48b4` reads as the block's handle. So `[0x59e]` is an arena block reference, and
+part 24's "`[0x59e]` is the module handle" is not established.
+
+⇒ Net for this stretch: **no forward progress on the guest**, one value properly measured
+(`[bp+6] = 0x01B7`), and three of my own assertions corrected or weakened. Recording it as
+that rather than dressing it up — the arena selector arriving where a file handle could have
+gone is a genuine data point for reading (b), that the segment images are expected to be
+reachable through the arena, but it is one data point and not a mechanism.
+
 ## Regression
 
 - `selftest.com` **8/8 PASS on real hardware** — the other guest class, run because the
