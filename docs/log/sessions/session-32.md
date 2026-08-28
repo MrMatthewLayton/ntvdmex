@@ -724,6 +724,55 @@ Segment 1 has a real one (`0x0207`, later `0x01c7`), so **finding what populated
 to run for 2-4 as well. `seg1:0x937e` (address-of-segment) and `seg1:0x9068` (allocate) are
 the two routines already mapped that touch it.
 
+## Part 23 — ★★★ found it: `seg1:0xd5e0` gives segment 1 memory and the rest a PLACEHOLDER
+
+Part 22 said the task was "find what populated segment 1's `+8`". Byte-scanning krnl386 for
+stores of the ALLOCATED bit finds three sites, all in the bring-up region — `seg1:0xd60c`,
+`0xd63b`, `0xd674` — and they are one routine:
+
+```
+d5e7  mov ds,[bp+4]          ; the module database
+d5ea  mov si,[0x22]          ; -> its segment table
+d5ee  mov di,[si+6]          ; segment 1's MINALLOC
+d5f3  mov bx,0x1200
+d5f6  push bx / push 0 / push di
+d5fb  call 0x1461f           ; ★ GlobalAlloc(flags=0x1200, size = 0:di)
+d5fe  or ax,ax / je 0xd67f   ; failed -> bail out
+d605  mov [si+8],ax          ; ★★ STORE THE HANDLE
+d608  and byte [si+4],0xfb   ;    clear bit 2
+d60c  or  byte [si+4],2      ; ★  set bit 1 = ALLOCATED
+d615  add si,0xa             ;    next segment (10-byte stride)
+...
+d624  mov bh,0x23 / mov bl,0x0a
+d628  push bx / push ax / push ax      ; ax = 0
+d62d  call 0x1461f           ; ★ GlobalAlloc(flags=0x230a, size = 0:0)
+d634  mov [si+8],ax          ;    same store...
+d63b  or  byte [si+4],2      ;    ...and the same ALLOCATED bit
+```
+
+★ **Segment 1 gets a real allocation of `[si+6]` bytes. Every other segment gets
+`GlobalAlloc(size = 0)`** — a placeholder handle with no memory behind it, flags `0x230a`
+instead of `0x1200`. Both paths then set bit 1, which is why part 20's PRELOAD experiment
+was a dead end and why `seg1:0x9068` is never called: krnl386 *has* allocated something for
+every segment, just nothing of any size for segments 2-4.
+
+⇒ **That is the whole chain, and it closes on itself.** The placeholder handle is why
+`seg1:0x937e` hands back an address that lands in our header window (part 22), why the record
+walker reads code instead of relocation records, why `call 0x8cb6` returns 0, and why
+`seg1:0x92b5` fires. One cause, four measured symptoms.
+
+▶ **Next: the deferred fill.** A placeholder is meant to be filled later, and LoadSegment has
+exactly one path that does it — the file path at `seg1:0x9191` (`call 0x8b3f`, open the module)
+feeding the LSEEK+READ at `seg1:0x9227`. It is not taken: `seg1:0x9183` tests `[bp+6]`, which
+the caller sets from `call 0x48b4([0x59e])` at `seg1:0xc4e9` — a *selector*, not `0xFFFF` — so
+the open is skipped and control reaches the in-memory path at `seg1:0x921b` instead.
+
+So the question is now narrow and concrete: **what has to be true for `[bp+6]` to arrive as
+`0xFFFF`** (making krnl386 read its own segments from `KRNL386.EXE`, which it has open), **or
+alternatively what is supposed to be staged at `[0x59e]`'s selector** — the same window the
+compaction reclaims, which would explain why that loop compacts once per segment. Those are
+the two readings; `seg1:0x48b4` and `[0x59e]` decide between them.
+
 ## Regression
 
 - `selftest.com` **8/8 PASS on real hardware** — the other guest class, run because the
