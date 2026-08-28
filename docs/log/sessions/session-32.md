@@ -687,6 +687,43 @@ dump `0x03b13ee2` and compare against the file's record block for segment 2 (`04
 then 8-byte records, at file offset `0xf880 + 0x3ee2`). If it is not there, that is the whole
 answer and the fix is the same shape as session 31 part 21.
 
+## Part 22 — ★★★ proven end to end: segment 2's address is our header window
+
+`seg1:0x8d56` is where the record walker has `DS:SI` on record 1, and the HIT line resolves
+and dumps it. For segment 2:
+
+```
+krnl386 reads:  16 0c 00 81 e2 00 20 5f 5e 1f c9 ca 02 00 55 8b   dsbase=0x00090000
+the file says:  02 00 df 3e 01 00 00 00
+```
+
+Two things settle it at once.
+
+★ **Those bytes are code, not records.** `5f 5e 1f c9 ca 02 00 55 8b ec` disassembles as
+`pop di / pop si / pop ds / leave / retf 2 / push bp / mov bp,sp` — a function epilogue
+followed by the next function's prologue. krnl386 is walking machine code as if it were an
+8-byte relocation table, which is why `call 0x8cb6` returns 0 and `seg1:0x92b5` fires.
+
+★★ **And `dsbase=0x00090000` names the place.** That is our 64 KB header/scratch window
+(part 18 moved it there), not segment 2's image. `DX:CX` at `seg1:0x921b` comes from
+`call 0x937e` — "where is this segment" — so the address krnl386 holds for segment 2 points
+at the window.
+
+⇒ This is part 19's gap, proven from the other end and unified with part 21: **segments 2-4
+have no valid handle, so every consumer of that handle reads whatever the stale selector
+happens to cover.** The relocation failure is a symptom, not a second bug — the same shape as
+the header placement and the relocation chains, and the third instance this session of "we
+did the work and never told krnl386 where the result is".
+
+▶ **So it has to be option 1 after all: supply a real address for segments 2-4.** Option 2
+(clear PRELOAD) is already refuted in part 20 — bit 1 is not derived from it. The open
+question is *where* krnl386 takes that address from, since it builds the in-memory segment
+table itself from our placed header and the file's 8-byte entries carry no handle field.
+Segment 1 has a real one (`0x0207`, later `0x01c7`), so **finding what populated segment 1's
+`+8` is the whole task** — it is the one worked example, and whatever wrote it is what needs
+to run for 2-4 as well. `seg1:0x937e` (address-of-segment) and `seg1:0x9068` (allocate) are
+the two routines already mapped that touch it.
+
 ## Regression
 
 - `selftest.com` **8/8 PASS on real hardware** — the other guest class, run because the
