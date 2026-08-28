@@ -638,6 +638,55 @@ segments into conventional memory and never tell krnl386 where three of them are
 previous log points at nothing. The HIT line now prints `dsbase=`/`esbase=` for exactly this
 reason — use those, and derive every address per run.
 
+## Part 20 — ⚠️ PRELOAD is not the bit, and `0x9145` is not the failure
+
+Two corrections to part 19, both from one run.
+
+**Clearing `NE_SEG_PRELOAD` on segments 2-4 does not change the outcome.** It propagates
+(segment 2's in-memory flags go `0xd152` → `0xd112`, exactly bit 6) but **bit 1 is still set**,
+so `seg1:0x9135 test bl,2 / jne 0x9145` is still taken and the allocator at `seg1:0x9068` is
+still never called. So bit 1 is not derived from PRELOAD; krnl386 sets it regardless. The
+change was reverted — no measured effect.
+
+**And `seg1:0x9145` was never the failure.** With `bl=0xd112`, `test bl,4 / je 0x9183` falls
+straight through: reading the handle at `+8` is the normal path, not an error path. Part 19
+read a branch as a wall because it was the last breakpoint that hit, which is the same mistake
+as reading the last `PMHB` line as where the guest stopped. **The furthest hit is a floor, not
+a location.**
+
+## Part 21 — ★★★ segment 2 fails the SAME WAY segment 1 did on the first morning
+
+A spread of eight breakpoints across LoadSegment's tail names it without ambiguity:
+
+```
+seg1:0x9183  EAX=0x01ce      the branch
+seg1:0x91c3  EAX=0x01b7      call 0x937e -- and it reports the segment IS loaded
+seg1:0x9202  EAX=0x01d0      flags & 0x100 -- it has relocation records
+seg1:0x929c  EAX=0x8b26      call 0x8cb6 -- APPLY RELOCATIONS      EBX=0x03b10000
+seg1:0x92b5  EAX=0x00000000  ★ THE FAILURE JUMP
+```
+
+`call 0x8cb6` returns 0. **That is precisely the failure this session opened with** — the one
+that produced `ExitKernelThunk(1)` for segment 1, whose cause was that the relocation records
+were not in memory after the segment (session 31 part 21).
+
+And the mechanism is the same. `[bp-2]` is `0xFFFF` (no file handle: `seg1:0x9191`, which opens
+the module file, was **not** hit), so `seg1:0x9215 inc bx / jne 0x9227` is not taken and control
+reaches `seg1:0x921b` — `mov es,dx / mov si,cx / lodsw` — which reads the record **count off
+the end of the loaded segment**. Whoever placed the segment has to have put the records there.
+
+★ `EBX=0x03b10000` at the fatal call: segment 2 is in the **extended heap**, not in our
+conventional copy. `wow_place_v86` copies each segment's records immediately after its bytes,
+but that is at *our* address; segment 2's copy at `0x03b10000` needs its records at
+`0x03b10000 + 0x3ee2 = 0x03b13ee2`.
+
+▶ **So the next question is who moved segment 2 into extended memory and whether the records
+came with it.** `seg1:0x937e` reported it loaded, so a handle already existed — the same
+"loader was here" assumption as part 19, one level down. Worth checking first, and cheap:
+dump `0x03b13ee2` and compare against the file's record block for segment 2 (`04 00` count
+then 8-byte records, at file offset `0xf880 + 0x3ee2`). If it is not there, that is the whole
+answer and the fix is the same shape as session 31 part 21.
+
 ## Regression
 
 - `selftest.com` **8/8 PASS on real hardware** — the other guest class, run because the
