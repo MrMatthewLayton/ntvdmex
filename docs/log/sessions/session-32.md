@@ -773,6 +773,49 @@ alternatively what is supposed to be staged at `[0x59e]`'s selector** — the sa
 compaction reclaims, which would explain why that loop compacts once per segment. Those are
 the two readings; `seg1:0x48b4` and `[0x59e]` decide between them.
 
+## Part 24 — the deferred fill resizes the block but never fills it
+
+Three routines close the loop from part 23.
+
+**`[0x59e]` is the module handle.** `seg1:0xc233` calls `0xd02b` — the database builder —
+with the PSP's **top-of-memory** (`es:[2]`), `[0x5cc]`, `[0x5a0]` (the window selector) and
+`0x200`; on failure it prints from `0xb9ce` and does `INT 21h AX=4CFF`. The handle it returns
+is stored at `seg1:0xc24a`.
+
+**`seg1:0x93bd`, inside `0x937e`, is the deferred fill** — and it only fixes the size:
+
+```
+93c0  bx = es:[si+6]            ; the segment's MINALLOC
+93c6  cmp bx,1 / adc dx,dx      ; dx:bx = size
+93cb  add bx,2 / adc dx,0
+93d1  push [bp-2]               ; the PLACEHOLDER handle from part 23
+93d9  call 0x4658               ; ★ GlobalReAlloc(handle, size)
+93dd  cmp [bp-2],ax / je 0x93f7 ; same handle back -> success
+```
+
+So the zero-size placeholder is grown to the segment's real size. The block then exists, is
+correctly sized, and is **empty** — which is exactly what the record walker reads (part 22).
+
+**Nothing copies the bytes.** For segment 1 that copy is `call 0x647a` at `seg1:0xd612`,
+issued immediately after its handle is stored. Segments 2-4 have no equivalent, so the only
+remaining source is LoadSegment's file read at `seg1:0x9227` — gated on `[bp-2] != 0xFFFF`,
+which requires `seg1:0x9191` (`call 0x8b3f`, open the module file), which is reached only when
+`[bp+6] == 0xFFFF` at `seg1:0x9183`.
+
+★ And it never is. Both call sites pass `[bp+4] = 0xFFFF` but neither passes `[bp+6] = 0xFFFF`:
+segment 1's caller (`seg1:0xc2f2`) passes `CS`, and the loop (`seg1:0xc4ef`) passes
+`call 0x48b4([0x59e])` — the module-database selector, measured as `0x01ce`. A valid selector
+there means "the data is already available", so the open is skipped and the empty block is
+relocated.
+
+▶ **Two readings, and they are distinguishable.** Either `0x48b4([0x59e])` is *supposed* to
+fail here (returning `0xFFFF`, sending krnl386 to its own file — it has `KRNL386.EXE` open
+already), in which case the module handle or its selector state is wrong; or the loader is
+expected to have staged each segment's image where `0x937e` points, in which case the
+compaction that runs once per loop iteration is the mechanism for reclaiming each one after
+use. `seg1:0x8b3f` (open module) and `seg1:0x647a` (the segment-1 copy) are the two routines
+that decide it, and neither has been read.
+
 ## Regression
 
 - `selftest.com` **8/8 PASS on real hardware** — the other guest class, run because the
