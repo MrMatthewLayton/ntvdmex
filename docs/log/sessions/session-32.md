@@ -872,6 +872,67 @@ are `seg1:0x48e8` / `0x48eb`. Reading what it returns on each, against what `[0x
 selector actually looks like in our run, is the next measurement — and it is a static read plus
 one breakpoint, not a redesign.
 
+## Part 27 — ⚠️ option (a) is dead: `0x48b4` cannot return `0xFFFF`
+
+Read in full, `seg1:0x48b4` is not "handle → selector" — it is the inverse, and it never
+produces the value the file path needs:
+
+```
+48b4  bx = sp
+48ba  lar ax, ss:[bx+2]        ; validate the ARGUMENT as a selector
+48bf  jne 0x48e8               ; invalid -> return with AX = 0
+48c1  test ah,0x80             ; the descriptor's present bit
+48c4  je  0x48eb
+48cc  ds = [0x21a]             ; the arena-info selector
+48d0  push ss:[bx+2] / call 0x63f3   ; selector -> block descriptor, in EAX
+48d7  or eax,eax / jne 0x48df
+48dc  pop ds / jmp 0x48e8      ; no descriptor -> return with AX = 0
+48df  ax = [eax+0x10]          ; the descriptor's +0x10
+48e6  or al,1                  ; make it odd: a HANDLE
+48e8  ret 2
+```
+
+`AX` is zeroed at `seg1:0x48b6` and every failure exit returns it unchanged, so the result is
+either a valid odd handle or **0** — never `0xFFFF`.
+
+⇒ `seg1:0x9183`'s `inc ax / je 0x9191` therefore **cannot fire from this call site**, so
+LoadSegment in the `seg1:0xc4a3` loop is *never intended* to open the module file. Part 24
+offered two readings and this eliminates the first: the segment image is expected to be **in
+memory already**, reachable through the block `0x937e` resizes.
+
+## Part 28 — ★★ and the reload is a WOW32 call we do not implement: id `0x7c`
+
+`seg1:0x93bd` calls `0x4658` (GlobalReAlloc) to grow the placeholder. Reading `0x4658`:
+
+```
+4683  call 0x5fd2              ; the real reallocation
+4686  or ch,ch / je 0x469a
+468a  test cl,1 / je 0x469a    ; ...on a particular result
+468f  push [bp+0xc]
+4692  push 0x3e9
+4697  call 0xb38a              ; ★ a WOW32 stub
+```
+
+and `seg1:0xb38a` is the thunk for **WOW32 id `0x7c`** (4 argument bytes):
+
+```
+b38a  push 4 / push 0 / push 0x7c / push cs / call 0x12bb6
+```
+
+`0x7c` is **not implemented** by our WOW32 layer and is not among the ids seen live so far
+(`0x78`, `0x89`, `0xb8`, `0xc0`-`0xc2`, `0xc7`, `0xcf`). It is called from inside the memory
+manager, with a constant `0x3E9` (1001) and the reallocation's flags — the shape of a
+notification to the 32-bit side that a block moved or needs backing.
+
+⇒ That is a concrete, checkable lead and it sits exactly where the missing step must be: the
+block gets resized, `0x7c` is invoked and stepped over as unimplemented, and the segment's
+bytes never arrive. **Implementing or at least tracing `0x7c` is the next move** — and unlike
+everything in parts 15-18, it does not require guessing at a memory layout.
+
+▶ First measurement: breakpoint `seg1:0x4697` and confirm `0x7c` is reached during segment 2's
+`0x937e`, then read what our dispatcher does with it. `tools/ne/nedis.py --wowfunc 0x7c` gives
+the callers and the argument-building code.
+
 ## Regression
 
 - `selftest.com` **8/8 PASS on real hardware** — the other guest class, run because the
