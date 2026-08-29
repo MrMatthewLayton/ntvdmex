@@ -12654,6 +12654,33 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     g_in.bda = (uint8_t *)0x400;
     g_in_dev = vdd_input_device(&g_in);
     vdd_bus_add(&g_bus, &g_in_dev);             /* keyboard: claims INT 16h      */
+    /* ── ★★ THE BDA's PORT BASE-ADDRESS TABLE, WHICH WE HAD LEFT AT ZERO. (GH #128) ──
+         0040:0000..0007 are the COM1..COM4 I/O bases and 0040:0008..000F the LPT1..LPT4
+         bases. Nothing ever wrote them, so every one read as 0 -- while our INT 11h
+         equipment word (0x4021) says bits 14-15 = 01 = ONE PARALLEL PORT. Our own BIOS
+         was contradicting itself: a port declared present in the equipment word whose
+         base address is 0.
+       ★ THAT INCONSISTENCY IS WHY COMM.DRV FAILS TO LOAD, measured end to end this
+         session. Its LibMain (comm.drv seg1:0x002a) ends with
+             00f1  mov cx,<__0040H> / mov es,cx    ; the BDA selector
+             00f9  mov si,0x2a0 / mov bx,[si+0x26] ; = 8, i.e. 0040:0008 -- LPT1
+             0103  mov ax,es:[bx]                  ; AX = that base address
+             ...   retf                            ; and AX IS the return value
+         -- so it returns whatever is at 0040:0008. Zero means "DLL initialisation
+         failed", krnl386's `or ax,ax / je` at seg2:0x2da6 keeps the 0, LoadModule
+         returns 0, and the boot dies with "NTVDM KERNEL: Missing 16-bit system module
+         ... COMM.DRV". Five drivers whose LibMain returns 1 load; this one does not.
+       ⚠ SO WRITE ONLY WHAT THE EQUIPMENT WORD ALREADY CLAIMS -- one parallel port at
+         the standard LPT1 base, and NO serial ports. Filling in COM1..COM4 as well
+         would be inventing hardware nothing answers for, which is the "runs but lies"
+         class this project treats as its most expensive kind of bug. The equipment
+         word is the declaration; this table just stops disagreeing with it.
+       ⚠ AFTER the input VDD is on the bus: it initialises the keyboard ring through
+         the same 0040:0000 pointer, and doing this first would be overwritten. */
+    { volatile WORD *bda = (volatile WORD *)(ULONG_PTR)0x400;
+      bda[0] = 0; bda[1] = 0; bda[2] = 0; bda[3] = 0;   /* COM1..COM4: none fitted   */
+      bda[4] = 0x0378;                                  /* LPT1, per the 0x4021 word */
+      bda[5] = 0; bda[6] = 0; bda[7] = 0; }             /* LPT2..LPT4: none fitted   */
     g_spk.pit = &g_pit;                         /* speaker tone <- PIT channel 2 */
     g_spk_dev = vdd_speaker_device(&g_spk);
     vdd_bus_add(&g_bus, &g_spk_dev);            /* PC speaker: claims port 0x61  */

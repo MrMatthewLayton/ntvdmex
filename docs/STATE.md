@@ -41,9 +41,10 @@ and menus, GDI drawing, mouse and keyboard. Paint in particular has to actually 
 **Status: not started.** No Win16 program has run yet; `wowexec.exe` has never executed
 and nothing has drawn a pixel. What works is the *bootstrap*, and as of session 36 it runs
 a long way: krnl386 loads three of its four segments, installs its interrupt handlers,
-**takes and returns from its own DPMI exceptions**, and loads **five** of the 16-bit system
-drivers — `SYSTEM.DRV`, `KEYBOARD.DRV`, `MOUSE.DRV`, `VGA.DRV`, `SOUND.DRV` — before failing
-on the sixth, `COMM.DRV`, which it **names in its own words in the log**. See #128 below.
+**takes and returns from its own DPMI exceptions**, and loads **seven** of the 16-bit system
+modules — `SYSTEM.DRV`, `KEYBOARD.DRV`, `MOUSE.DRV`, `VGA.DRV`, `SOUND.DRV`, `COMM.DRV` and
+**`USER.EXE`** — before failing on `GDI.EXE`, which it **names in its own words in the log**.
+See #128 below.
 
 ---
 
@@ -66,7 +67,7 @@ on the sixth, `COMM.DRV`, which it **names in its own words in the log**. See #1
 
 | | Why it matters |
 |---|---|
-| **Win16 / WOW — bootstrap runs, no app yet** | `ntvdm.exe` is *also* the host for every 16-bit **Windows** program. The NE loader loads, relocates and binds the **whole** XP WOW module set on real hardware, and **krnl386 executes**: it switches itself to protected mode, loads its own segments 2 and 3, installs its interrupt handlers, takes and returns from its own DPMI exceptions, and loads five of the 16-bit system drivers before failing on `COMM.DRV`. No Win16 *application* runs yet, and there is no 16:16↔flat thunking. Since interception is an IFEO key on `ntvdm.exe`, and Win16 launches go through `ntvdm.exe` too, **installing NTVDMEX permanently would break every 16-bit Windows app today**. → [#128](https://github.com/MrMatthewLayton/ntvdmex/issues/128) |
+| **Win16 / WOW — bootstrap runs, no app yet** | `ntvdm.exe` is *also* the host for every 16-bit **Windows** program. The NE loader loads, relocates and binds the **whole** XP WOW module set on real hardware, and **krnl386 executes**: it switches itself to protected mode, loads its own segments 2 and 3, installs its interrupt handlers, takes and returns from its own DPMI exceptions, and loads seven of the 16-bit system modules (`USER.EXE` included) before failing on `GDI.EXE`. No Win16 *application* runs yet, and there is no 16:16↔flat thunking. Since interception is an IFEO key on `ntvdm.exe`, and Win16 launches go through `ntvdm.exe` too, **installing NTVDMEX permanently would break every 16-bit Windows app today**. → [#128](https://github.com/MrMatthewLayton/ntvdmex/issues/128) |
 | **Console/stdio integration** | DOS output is buffered and flushed to `CONOUT$` at exit, so shell redirection and piping are bypassed and every DOS program pops a window. Blocks non-interactive use. |
 | **In-guest redirection** | `echo x > file` writes to the screen and leaves the file 0 bytes. Three fixes attempted, all at the wrong end. |
 | **No INT 13h / INT 25h / 26h** | No direct disk access. |
@@ -85,8 +86,8 @@ on the sixth, `COMM.DRV`, which it **names in its own words in the log**. See #1
 > refused outright, and the real name re-enters us through the IFEO hook. So there is no
 > safe install story until WOW exists, and #128 moved onto the critical path.
 
-1. **[#128] WOW / Win16 — IN PROGRESS. krnl386 LOADS FIVE SYSTEM DRIVERS AND NAMES THE
-   ONE IT CANNOT: `COMM.DRV`.**
+1. **[#128] WOW / Win16 — IN PROGRESS. krnl386 LOADS SEVEN SYSTEM MODULES, `USER.EXE`
+   INCLUDED, AND NAMES THE ONE IT CANNOT: `GDI.EXE`.**
 
    ### ▶ START HERE: [session 36](log/sessions/session-36.md#-resume-here--session-36-handoff)
    That block is the live handoff — where it is, the leads already **ruled out**
@@ -124,9 +125,18 @@ on the sixth, `COMM.DRV`, which it **names in its own words in the log**. See #1
    relocation pass, the segment loads and COMM.DRV's own `LibMain` are all **closed by
    measurement**, and the `#NP` everyone would chase turns out to be krnl386 calling
    **`WEP`** — teardown, *after* the verdict. What is left is structural and visible in the
-   files: **all five modules that load have two PRELOAD segments and nothing else, while
-   COMM.DRV has four and its segment 2 is the only NON-PRELOAD segment in the set.** The
-   first module with a demand-loaded segment is the first module that fails.
+   files. **Part 3 closed it.** The bisect ran down through `LoadModule` — five stages, then
+   an untested sixth, then the entry-point call — to `seg2:0x2da6 or ax,ax`, where AX is
+   **the DLL entry point's return value**: `1` for all five that load, **`0` for COMM.DRV**,
+   whose module handle was perfectly good. And COMM.DRV's own `LibMain` ends by returning
+   **the word at `0040:0008`** — LPT1's base address in the BIOS data area. Nothing had ever
+   written that table, **while our INT 11h equipment word (`0x4021`) declares one parallel
+   port**: our own BIOS contradicting itself. Writing only what the equipment word already
+   claims — LPT1 at `0x0378`, no serial ports, rather than inventing hardware nothing answers
+   for — makes **COMM.DRV load, and `USER.EXE` behind it**. ⚠ One lead was **wrongly closed**
+   on the way: "LibMain runs and takes this branch" was written up as "LibMain is not the
+   cause", and it was the cause. *A measurement that something happens is not a measurement
+   of what it returns.*
 
    **Session 35 in one paragraph.** No new wall — this one bought *understanding*, and
    corrected the plan. The harness logged an unimplemented WOW32 call as "registers

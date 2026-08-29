@@ -1,17 +1,23 @@
-# Session 36 — the bootstrap loads six system modules, and names the seventh
+# Session 36 — seven system modules load, and the wall was our own BIOS data area
 
 **Date:** 2026-08-29 · **Branch:** `m9/completeness` · **Issue:** [#128](https://github.com/MrMatthewLayton/ntvdmex/issues/128)
 
-**In one paragraph.** The frontier moved from an address to a **module name**. Session 35's
-deterministic `WOW32_UNIMPL_RET = 0` — written but never run — turned out to be the largest
-single step this epic has taken: krnl386 goes from loading **one** system module to **six**.
-Behind it were two walls that were both ours and both instruments rather than mechanisms: a
-protected-mode `INT 15h` with no arm at all, and a fatal-message decoder that stopped at the
-first `\r` and so printed the one part of krnl386's complaint that is identical for every
-module. With those cleared, krnl386 says in its own words that **`COMM.DRV`** is the module it
-cannot load, and one repeating breakpoint reads back the loader's return code for all six.
-A third instrument defect was found on the way and cost a run: **a one-shot breakpoint was the
-only kind that re-planted itself under a standing guest.**
+**In one paragraph.** The frontier moved from an address to a module name, and then the
+module loaded. Session 35's deterministic `WOW32_UNIMPL_RET = 0` — written but never run —
+turned out to be the largest single step this epic has taken: krnl386 went from loading
+**one** system module to **six**. Behind it were two walls that were both ours and both
+*instruments* rather than mechanisms: a protected-mode `INT 15h` with no arm at all, and a
+fatal-message decoder that stopped at the first `\r` and so printed the one part of
+krnl386's complaint that is identical for every module. With those cleared krnl386 named
+**`COMM.DRV`** in its own words, and a bisect down through `LoadModule` — five stages, then
+the untested sixth, then the entry-point call — put the failure on **COMM.DRV's own
+`LibMain`, which returns the word at `0040:0008`**. Nothing had ever written the BIOS data
+area's port base-address table, **while our own INT 11h equipment word declared a parallel
+port**: our BIOS contradicting itself. Writing only what that word already claims makes
+COMM.DRV load, and **USER.EXE** behind it. **Seven modules now load; the frontier is
+`GDI.EXE`.** Four instrument defects were found on the way, one of which cost a run, and one
+lead was **wrongly closed and had to be corrected** — the correction is the most useful thing
+in this log.
 
 ---
 
@@ -281,7 +287,12 @@ relocations) returns success every time, for every module.
 
 ### Leads closed by measurement this part
 - **The relocation pass.** AX=1 at `seg1:0x929f` on every call, COMM.DRV included.
-- **COMM.DRV's own `LibMain` failing.** Its entry point is `seg1:0x002a` (the NE header's
+- ~~**COMM.DRV's own `LibMain` failing.**~~ ⚠ **THIS ENTRY WAS WRONG — see Part 3.** What
+  was actually measured is that LibMain *runs* and *which branch* it takes; "therefore it
+  is not the cause" did not follow, and it **was** the cause. The claim is left here rather
+  than deleted because the reasoning error is the point: a measurement that a thing happens
+  is not a measurement of what it returns. The facts below all stand.
+  Its entry point is `seg1:0x002a` (the NE header's
   CS:IP) and it does run — the raw `INT 15h` at `0x2f7:0x0005` and `INT 2Fh` at
   `0x2f7:0x006b` are exactly its offsets 0x0005 and 0x006b. It takes the
   "no Virtual COMM Device, and not standard mode" path: `INT 2Fh AX=1684h BX=3` correctly
@@ -322,52 +333,160 @@ relocations) returns success every time, for every module.
   len+0x1d) where segments 1 and 3 round to a paragraph, so seg 2 — the one the whole
   module-load path lives in — had never been identified. The delta is logged now.
 
+## ★★★ Part 3 — ROOT CAUSE, FIXED: our own BIOS data area contradicted our own BIOS
+
+**COMM.DRV and USER.EXE now load. Seven system modules load. The frontier is GDI.EXE.**
+
+### The chain, measured end to end
+Continuing the bisect down from `LoadModule`:
+
+```
+seg2:0x0676  call 0x0c69        the last stage -- and its result is NEVER `cmp ax,0x20`-
+                                tested before the tail, which is why the five-stage sweep
+                                showed every stage passing while the module still failed
+seg2:0x0ccf  call 0x0369    ->  0 for COMM.DRV, a handle for the other five
+seg2:0x03c9  test es:[0xc],0x8000 / jne 0x03ed      the LIBRARY bit -- set for all of them
+seg2:0x0406  call 0x2c9d
+seg2:0x2d52  push 0x2da5         the return address for the far call into the entry point
+seg2:0x2da6  or ax,ax        ★  AX IS THE DLL ENTRY POINT'S RETURN VALUE
+seg2:0x2da8  je 0x2dac           zero -> AX stays 0
+seg2:0x2daa  mov ax,di           non-zero -> AX = the module handle (success)
+```
+
+One breakpoint at `seg2:0x2da6` settles the whole thing:
+
+| module | LibMain returns | module handle (DI) | LoadModule |
+|---|---|---|---|
+| SYSTEM.DRV | `1` | 0x01b7 | 0x01b7 |
+| KEYBOARD.DRV | `1` | 0x0277 | 0x0277 |
+| MOUSE.DRV | `1` | 0x0297 | 0x0297 |
+| VGA.DRV | `1` | 0x02b6 | 0x02b6 |
+| SOUND.DRV | `1` | 0x02df | 0x02df |
+| **COMM.DRV** | **`0`** | **0x030f** — perfectly good | **`0`** |
+
+**The module handle was never the problem. The DLL itself said no.**
+
+### ★★ And COMM.DRV's LibMain returns a BIOS DATA AREA WORD
+Reading its own code, the tail of `comm.drv seg1:0x002a` is:
+
+```
+00f1  mov cx,<KERNEL.193 = __0040H> / mov es,cx    ; the BDA selector
+00f6  mov cx,3
+00f9  mov si,0x2a0
+00fc  mov bx,[si+0x26]                            ; = 0x0008, from seg4:0x2c6
+00ff  or bx,bx / je 0x0115
+0103  mov ax,es:[bx]                              ; ★ AX = the word at 0040:0008
+0106  or ah,ah / je 0x0115
+010a  cmp bx,8 / je 0x0115
+0115  mov [si+0x1c],ax
+0118  loop 0x00fc
+011a  ...  retf                                   ; and AX IS the return value
+```
+
+`0040:0008` is **LPT1's I/O base address** in the BIOS data area. Nothing in NTVDMEX had
+ever written that table — `0040:0000..0007` (COM1..COM4) and `0040:0008..000F`
+(LPT1..LPT4) all read as zero — **while our own INT 11h equipment word, `0x4021`, has bits
+14-15 = 01, declaring ONE PARALLEL PORT.** Our BIOS was contradicting itself: a port
+declared present whose base address is 0. COMM.DRV read the 0 and returned it, which means
+"DLL initialisation failed".
+
+⇒ **Fix: write only what the equipment word already claims** — LPT1 at the standard
+`0x0378`, and no serial ports. Filling in COM1..COM4 as well would be inventing hardware
+nothing answers for, which is the "runs but lies" class this project treats as its most
+expensive kind of bug. The equipment word is the declaration; the table just stops
+disagreeing with it. Placed **after** the input VDD is on the bus, because that
+initialises the keyboard ring through the same `0040:0000` pointer.
+
+### Measured after the fix
+```
+COMM.DRV  LibMain -> 0x0378   loader -> 0x030f   ✓ LOADS
+USER.EXE  LibMain -> 0x0001   loader -> 0x0336   ✓ LOADS  (and pulls in a dependency
+                                                   whose LibMain also returns 1)
+GDI.EXE                       loader -> 0x0000   ✗ the new wall
+```
+
+Nine files are now opened: KRNL386, SYSTEM.DRV, KEYBOARD.DRV, MOUSE.DRV, VGA.DRV,
+SOUND.DRV, COMM.DRV, **USER.EXE**, **GDI.EXE**.
+
+### ⚠ A correction to Part 2, and it is the lesson
+Part 2 listed "COMM.DRV's own LibMain" under **closed by measurement**. That was wrong,
+and it was wrong in a specific, repeatable way: what had been measured is that LibMain
+*runs* and *which branch* it takes. "Therefore it is not the cause" did not follow — and
+it **was** the cause. **A measurement that something happens is not a measurement of what
+it returns.** The entry is struck through rather than deleted, because the shape of the
+error is worth more than a tidy list.
+
+### ▸ The new frontier: GDI.EXE, and it fails EARLIER
+Its LibMain is never reached. The five-stage sweep names the stage on the first run:
+
+```
+seg2:0x05b3  AX = 0x036f     already-loaded lookup FINDS it (USER.EXE imports GDI, so
+                             loading USER pulled GDI in first, as handle 0x36f)
+seg2:0x0642  AX = 0x000b   ★ `call 0x218a` -- the NE header open/read/validate stage --
+                             returns 0x0B = ERROR_BAD_FORMAT
+seg1:0xcca4  AX = 0x0000     "Missing 16-bit system module ... GDI.EXE"
+```
+
+⚠ **The reads themselves are correct.** The MZ header comes back
+`4d 5a 25 00 13 00 00 00` and the NE header `4e 45 05 3c 86 00 0d 09`, both byte-for-byte
+identical to `guest/ne/gdi.exe`, whose `e_lfanew` really is `0x400`. So this is not a bad
+file and not a bad read — krnl386 is *rejecting* a header it read correctly, on the
+**second** load of a module it already holds. Note the flow: at `seg2:0x05bb` a NULL
+`lpParameterBlock` sends it to `0x05cd` to re-open and re-read even when the module is
+already loaded, and only at `seg2:0x0647` (`cmp [bp-0x26],0 / je 0x0656`) does the
+already-loaded short-circuit apply — which requires reaching `0x0642` with AX >= 0x20.
+▸ Next: bisect inside `seg2:0x218a` the same way. The question is why a header it just read
+correctly is rejected on the second pass.
+
 ## ▶ RESUME HERE — session 36 handoff
 
-**State:** krnl386 loads `SYSTEM.DRV`, `KEYBOARD.DRV`, `MOUSE.DRV`, `VGA.DRV`, `SOUND.DRV` and
-fails on `COMM.DRV` with loader `AX = 0`. No Win16 application has run.
+**State:** krnl386 loads **seven** 16-bit system modules — `SYSTEM.DRV`, `KEYBOARD.DRV`,
+`MOUSE.DRV`, `VGA.DRV`, `SOUND.DRV`, `COMM.DRV`, `USER.EXE` — and fails on **`GDI.EXE`**.
+No Win16 application has run yet.
 
-**The next question:** `LoadModule` returns **0** ("out of memory"), and AX is already 0 by
-`seg2:0x0e25`, so the origin is **upstream of `seg2:0x0e0b`**. Bisect earlier in
-`LoadModule` (`seg2:0x051d` onwards) the same way — repeating breakpoints on verified
-`cmp ax,0x20` boundaries, comparing COMM.DRV against SOUND.DRV.
+**The next question:** `GDI.EXE` fails at stage 2, `seg2:0x218a` (open + read + validate
+the NE header), which returns **`0x0B` = ERROR_BAD_FORMAT** — on the **second** load of a
+module krnl386 already holds (USER.EXE imports GDI, so the already-loaded lookup at
+`seg2:0x05b3` correctly finds handle `0x36f`). The bytes it reads are byte-for-byte
+identical to `guest/ne/gdi.exe`. Bisect inside `seg2:0x218a` the same way this session
+bisected `LoadModule`.
 
-**The hypothesis to test first, and it is well supported:** COMM.DRV is the first module
-with a **non-PRELOAD segment**. All five that load have two PRELOAD segments and nothing
-else; COMM.DRV has four, and segment 2 is `CODE,MOVEABLE,RELOCS,DISCARDABLE` with no
-PRELOAD bit. krnl386 correctly loads only segments 1, 3 and 4 and leaves segment 2 as a
-not-present placeholder — so look at the **placeholder/allocation** path for a
-demand-loaded segment, not at the loading of the three that do load.
-
-**Ruled out — do not re-try (all by measurement, see Part 2):**
+**Ruled out — do not re-try (all by measurement):**
+- A bad file or a bad read for GDI.EXE. MZ `4d 5a 25 00 13 00 00 00` and NE
+  `4e 45 05 3c 86 00 0d 09` both match the file exactly; `e_lfanew` really is `0x400`.
 - The relocation pass. `seg1:0x8cb6` returns AX=1 for every segment of every module.
-- The segment loads. LoadSegment(1), (3), (4) all succeed for COMM.DRV.
-- COMM.DRV's own `LibMain` (`seg1:0x002a`). It runs, takes the "no VCD, not standard mode"
-  branch, and the `INT 31h` on the other branch is provably never executed.
-- The `#NP` demand-load of segment 2 — that is `WEP`, i.e. **teardown**, after the verdict.
-- A missing export. All ten of segment 2's imports exist, `WOWCLOSECOMPORT` included.
-- Error 2 / 4 / 0x0B / 0x0F, and the `WowLoadModule` retry. AX=0 skips the retry entirely.
-- `USER.EXE`/`GDI.EXE` being absent. The run never reaches them; COMM.DRV is earlier.
-- `WIFEMAN.DLL`/`WINNLS.DLL` being skipped. That is correct for an English locale.
+- Error 2 / 4 / 0x0F, and the `WowLoadModule` retry — but note **0x0B DOES reach the retry
+  triage** at `seg2:0x0f16` (`cmp ax,0xf / jae` is not taken for 0x0B, `cmp ax,0xa / jbe`
+  is not either), unlike the AX=0 that COMM.DRV produced. So `WowLoadModule` (WOW32 `0x2d`)
+  may now genuinely be on the path — check the log before assuming otherwise.
+- `WIFEMAN.DLL`/`WINNLS.DLL` being skipped. Correct for an English locale.
 - krnl386's `/B` boot log, the `[0x12b0]` poke, and the `seg2:0x0ed3` narration branch.
-  All three are the same self-disabling flag.
 
-**How to drive it:**
+**The instruments that work, and the traps:**
 ```bash
 PMBP=1 ARCHIVE=build/wowruns ./scripts/bmwow.sh      # deploy, run, collect
 ```
 ⚠ SMB writes to `/private/tmp/xpshare` need the sandbox disabled. `pmbp.txt` columns are
 `<addr> [dump] [skip] [mode] [rep]`; **mode bit 1 = the address is an offset into a krnl386
-segment** (bits 4..7 name it: `2` = seg 1, `0x22` = seg 2), which moves every run, and
-**rep 1 for anything reached more than once**. ⚠ **Only use addresses you have seen as
-instruction boundaries in an aligned disassembly** — a byte search will hand you the middle
-of an instruction. The working list:
+segment**, bits 4..7 naming it (`2` = seg 1, `0x22` = seg 2), and **`rep` 1 for anything
+reached more than once** — a one-shot fires on the first pass, which is never the
+interesting one.
+⚠ **Only use addresses seen as instruction boundaries in an ALIGNED disassembly.** A byte
+search will hand you the middle of an instruction, and `nedis.py` started one screen too
+early invents instructions that are not there.
+⚠ **A measurement that something happens is not a measurement of what it returns.** That
+mistake cost this session a wrongly-closed lead — see the correction in Part 3.
+
+The working breakpoint list, which localises any module's failure in one run:
 
 ```
-# addr   dump  skip  mode  rep
-0e25     0     0     22    1
-0e55     0     0     22    1
-0e88     0     0     22    1
-0f16     0     0     22    1
-cca4     0     0     2     1
+# addr   dump  skip  mode  rep   -- the LoadModule pipeline
+05b3     0     0     22    1     #   already-loaded lookup
+0642     0     0     22    1     #   NE header open/read/validate  <- GDI fails here
+0659     0     0     22    1
+0661     0     0     22    1
+0669     0     0     22    1
+0671     0     0     22    1
+2da6     0     0     22    1     #   the DLL entry point's RETURN VALUE
+cca4     0     0     2     1     #   seg1 anchor: DI names the module
 ```
