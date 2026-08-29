@@ -4,7 +4,7 @@
 > this file top to bottom and you will know where it is, what works, what does not, and
 > what to do next.
 
-- **Last updated:** 2026-08-28 (session 35)
+- **Last updated:** 2026-08-29 (session 36)
 - **Branch:** `m9/completeness`
 - **Tracker:** [140+ issues](https://github.com/MrMatthewLayton/ntvdmex/issues) — reconciled against the repo on 2026-08-26 (`tools/gh/backfill.py` is the manifest)
 - **Knowledge base:** the [wiki](https://github.com/MrMatthewLayton/ntvdmex/wiki)
@@ -39,11 +39,11 @@ them they exercise the whole stack — NE loading, the KERNEL 16→32 boundary, 
 and menus, GDI drawing, mouse and keyboard. Paint in particular has to actually paint.
 
 **Status: not started.** No Win16 program has run yet; `wowexec.exe` has never executed
-and nothing has drawn a pixel. What works is the *bootstrap*, and as of session 34 it runs
+and nothing has drawn a pixel. What works is the *bootstrap*, and as of session 36 it runs
 a long way: krnl386 loads three of its four segments, installs its interrupt handlers,
-**takes and returns from its own DPMI exceptions**, loads `SYSTEM.DRV`, and gets as far as
-asking the 32-bit half to load a Win16 module — and when it does fail, it now says so in its
-own words in the log rather than vanishing. See #128 below.
+**takes and returns from its own DPMI exceptions**, and loads **five** of the 16-bit system
+drivers — `SYSTEM.DRV`, `KEYBOARD.DRV`, `MOUSE.DRV`, `VGA.DRV`, `SOUND.DRV` — before failing
+on the sixth, `COMM.DRV`, which it **names in its own words in the log**. See #128 below.
 
 ---
 
@@ -66,7 +66,7 @@ own words in the log rather than vanishing. See #128 below.
 
 | | Why it matters |
 |---|---|
-| **Win16 / WOW — bootstrap runs, no app yet** | `ntvdm.exe` is *also* the host for every 16-bit **Windows** program. The NE loader loads, relocates and binds the **whole** XP WOW module set on real hardware, and **krnl386 executes**: it switches itself to protected mode, loads its own segments 2 and 3, installs its interrupt handlers, takes and returns from its own DPMI exceptions, and reaches the point of loading the other 16-bit system modules. No Win16 *application* runs yet, and there is no 16:16↔flat thunking. Since interception is an IFEO key on `ntvdm.exe`, and Win16 launches go through `ntvdm.exe` too, **installing NTVDMEX permanently would break every 16-bit Windows app today**. → [#128](https://github.com/MrMatthewLayton/ntvdmex/issues/128) |
+| **Win16 / WOW — bootstrap runs, no app yet** | `ntvdm.exe` is *also* the host for every 16-bit **Windows** program. The NE loader loads, relocates and binds the **whole** XP WOW module set on real hardware, and **krnl386 executes**: it switches itself to protected mode, loads its own segments 2 and 3, installs its interrupt handlers, takes and returns from its own DPMI exceptions, and loads five of the 16-bit system drivers before failing on `COMM.DRV`. No Win16 *application* runs yet, and there is no 16:16↔flat thunking. Since interception is an IFEO key on `ntvdm.exe`, and Win16 launches go through `ntvdm.exe` too, **installing NTVDMEX permanently would break every 16-bit Windows app today**. → [#128](https://github.com/MrMatthewLayton/ntvdmex/issues/128) |
 | **Console/stdio integration** | DOS output is buffered and flushed to `CONOUT$` at exit, so shell redirection and piping are bypassed and every DOS program pops a window. Blocks non-interactive use. |
 | **In-guest redirection** | `echo x > file` writes to the screen and leaves the file 0 bytes. Three fixes attempted, all at the wrong end. |
 | **No INT 13h / INT 25h / 26h** | No direct disk access. |
@@ -85,13 +85,39 @@ own words in the log rather than vanishing. See #128 below.
 > refused outright, and the real name re-enters us through the IFEO hook. So there is no
 > safe install story until WOW exists, and #128 moved onto the critical path.
 
-1. **[#128] WOW / Win16 — IN PROGRESS. krnl386 TAKES AND RETURNS FROM ITS OWN DPMI
-   EXCEPTIONS, LOADS SYSTEM.DRV, AND REPORTS ITS OWN FAILURES.**
+1. **[#128] WOW / Win16 — IN PROGRESS. krnl386 LOADS FIVE SYSTEM DRIVERS AND NAMES THE
+   ONE IT CANNOT: `COMM.DRV`.**
 
-   ### ▶ START HERE: [session 35](log/sessions/session-35.md#-resume-here--session-35-handoff)
+   ### ▶ START HERE: [session 36](log/sessions/session-36.md#-resume-here--session-36-handoff)
    That block is the live handoff — where it is, the leads already **ruled out**
    (do not re-try them), the next run, the instruments, and the standing hazards.
    Everything below it is background.
+
+   **Session 36 in one paragraph.** The frontier moved from an address to a **module
+   name**. Session 35's `WOW32_UNIMPL_RET = 0` — written but never run — turned out to be
+   the largest single step of this epic: krnl386 goes from loading **one** system module
+   to **six** (`SYSTEM.DRV`, `KEYBOARD.DRV`, `MOUSE.DRV`, `VGA.DRV`, `SOUND.DRV`, then
+   `COMM.DRV`). Behind it were two walls, both ours and both *instruments* rather than
+   mechanisms. First, **protected-mode `INT 15h` had no arm at all**: a COMM.DRV segment
+   runs `mov ah,0C0h / int 15h`, every other BIOS vector krnl386 uses had a PM twin, and
+   the raw `CD 15` was correctly identified as a raw INT, handed to a function with no arm
+   for it, and fell out of the bottom as *"unexpected PM stop event=0x4"* — the run died
+   two bytes into a driver, naming an address rather than a cause. It now answers exactly
+   what the V86 arm answers, and `AH=C0h` is deliberately **refused** rather than stubbed,
+   because the caller's next instructions read a **model byte** out of a table we would
+   have to invent. Second, the WOW32 MessageBox decoder accepted only `0x20..0x7E`, so it
+   printed the caption (identical for every module) and rejected the body —
+   `"Please re-install the following module…\r\n\t\tCOMM.DRV"` — as "not a C string": **it
+   named the class of failure and withheld the instance**. With both fixed, one repeating
+   breakpoint at `seg1:0xcca4` reads the loader's return code per module, and `COMM.DRV`
+   comes back **`AX = 0`** — not `2`/`4`/`0x0B`/`0x0F`, so "file not found / bad EXE / too
+   many handles" are excluded by measurement. `COMM.DRV` is also the **only** one of the
+   six that takes a `#NP` demand-load fault, and all ten of its segment-2 imports **exist**
+   in krnl386/SYSTEM.DRV — checked, so that lead is closed before it was chased. A third
+   defect cost a run on the way: **a one-shot breakpoint was the only kind that re-planted
+   itself under a standing guest**, firing 512 times with byte-identical registers and then
+   retiring before the pass it existed to observe. krnl386's own `/B` boot log was tried
+   and **removed** — it self-disables silently, and so does the `[0x12b0]` poke.
 
    **Session 35 in one paragraph.** No new wall — this one bought *understanding*, and
    corrected the plan. The harness logged an unimplemented WOW32 call as "registers

@@ -84,6 +84,22 @@
    default) the host still refuses Win16 loudly -- an experiment must never become the
    shipped behaviour by accident. */
 #define WOWTRY_FLAG   "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\wowtry.flag"
+/* ── ⚠ `/B` BOOT LOGGING WAS TRIED AND DOES NOT WORK HERE. (GH #128, session 36) ──
+     krnl386 has a stock `WIN /B` switch: its command-line parser at seg1:0xc941 reads
+     the PSP command tail, and on `/b` calls seg1:0xb148, which builds a path from the
+     Windows directory cached at [0x504]:[0x50c], creates BOOTLOG.TXT and sets
+     [0x12b0]=1; the printer at seg1:0xb0d9 then appends every `LoadStart = ` /
+     `LoadSuccess = ` / `LoadFail = ` line, failure CODE included.
+   ▶ MEASURED AND REMOVED. `/B` was placed in the tail (confirmed in the LDT log) and
+     NO BOOTLOG.TXT appeared at any of four candidate paths. The likely reason is that
+     [0x504]:[0x50c] is not filled this early, so 0xb148's open fails -- and its failure
+     path runs `mov word [0x12b0],0` at seg1:0xb12d, switching krnl386's own logging off
+     for the rest of the run, SILENTLY. One failed open, then nothing.
+   ★ Do not re-try the obvious `[0x12b0]` poke either: the printer opens the filename at
+     ds:0x12be, which only 0xb148 ever fills, so a hand-set flag opens an EMPTY name and
+     takes that same self-disabling path.
+   ⇒ The breakpoint at seg1:0xcca4 answers the same question and DOES work -- it reads
+     the loader's return code per module directly. See the session-36 log. */
 /* A log NOTHING truncates. WinMain has three log_write calls and each wipes the file;
    diagnostics that need to survive the whole run belong here instead. */
 #define LDTLOG_PATH   "C:\\ntvdmex\\ldtprobe.log"
@@ -734,6 +750,20 @@ static BYTE  g_bp_armed[DPMI_BP_MAX];
    is simply left unarmed -- it has stopped answering a question by then. */
 #define DPMI_BP_ARM_MAX 512
 static DWORD g_bp_arms[DPMI_BP_MAX];
+/* ── ★★ A ONE-SHOT BREAKPOINT IS RETIRED BY ITS HIT, AND NOTHING SAID SO. ──────────
+     dpmi_bp_arm() runs before every PM entry and re-plants anything not currently
+     armed. The "never re-plant a site the guest is standing on" guard keys off
+     g_bp_pending, and g_bp_pending is set ONLY for repeating and skip breakpoints --
+     so the ONE kind with no protection was the plain one-shot, which is the kind you
+     reach for first. Measured (session 36): a one-shot at seg1:0xcca4 fired 512 times
+     with byte-identical registers and one millisecond on the clock, hit the arm
+     ceiling, and was then never re-planted -- so the SECOND time the guest reached
+     that site, which was the pass the breakpoint existed to observe, there was no
+     breakpoint there. The log showed 512 confident hits and answered nothing.
+   ⇒ Retire it explicitly. `pending` now means "the guest is standing on this
+     footprint" for EVERY kind of hit, and `done` means "this one-shot has fired".
+     The two were conflated, and the conflation is what let a one-shot loop. */
+static BYTE  g_bp_done[DPMI_BP_MAX];
 static int   g_bp_n = 0;
 
 /* --- run 52 hang-diagnostic telemetry (GH #2) ---------------------------------------
@@ -8144,6 +8174,7 @@ static void dpmi_bp_arm(void)
              place. Honouring `pending` here makes dpmi_bp_arm() safe to call from
              anywhere, which is what the late-loading case needs. */
         if (g_bp_pending[k]) continue;
+        if (g_bp_done[k]) continue;              /* one-shot, already fired -- see g_bp_done */
         /* And a hard ceiling, because the failure above cost a run and a quarter of a
            gigabyte before anything noticed. A breakpoint that has fired this often is
            not answering a question any more. */
@@ -9259,13 +9290,42 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                                     if (!asel || !abase) continue;
                                     s = (const volatile BYTE *)(ULONG_PTR)(abase + aoff);
                                     if (!host_readable((const void *)s, 8)) continue;
-                                    while (n2 < 120 && s[n2] >= 0x20 && s[n2] < 0x7F) ++n2;
+                                    /* ── ⚠ TAB AND CRLF ARE PART OF THE MESSAGE, NOT THE END
+                                           OF IT. (session 36) ────────────────────────────
+                                         This scan accepted only 0x20..0x7E, and the ONE
+                                         string in this frame that names the actual fault --
+                                         the formatted body, "Please re-install the following
+                                         module to your system32 directory:\r\n\t\t<NAME>" --
+                                         has a `\r` at offset 66. So the walk stopped there,
+                                         `s[n2] != 0` rejected it as "not a C string", and the
+                                         log printed only the CAPTION, which is the one part of
+                                         the message that is the same for every missing module.
+                                         The run named the class of failure and withheld the
+                                         instance -- and the instance is the whole question.
+                                       ⚠ Accept them in the SCAN, escape them in the OUTPUT: a
+                                         raw CRLF here would split one log line into three and
+                                         make the message look like unrelated records. */
+                                    while (n2 < 120 && ((s[n2] >= 0x20 && s[n2] < 0x7F)
+                                                        || s[n2] == '\t' || s[n2] == '\r'
+                                                        || s[n2] == '\n')) ++n2;
                                     if (n2 < 6 || s[n2] != 0) continue;   /* not a C string */
+                                    /* Escaping can double a 120-char string, and several args
+                                       can match. Stop before `report[2048]` overflows -- an
+                                       instrument that corrupts its own stack to print one more
+                                       message is worse than one that prints fewer. */
+                                    if ((size_t)(p - base) > sizeof(report) - 400) break;
                                     p = zput(p, "\r\n    ★ arg["); p = zhex(p, k);
                                     p = zput(p, "] 0x"); p = zhex(p, asel);
                                     p = zput(p, ":0x"); p = zhex(p, aoff);
                                     p = zput(p, " = \"");
-                                    { unsigned j; for (j = 0; j < n2; ++j) *p++ = (char)s[j]; }
+                                    { unsigned j;
+                                      for (j = 0; j < n2; ++j) {
+                                          BYTE c2 = s[j];
+                                          if      (c2 == '\t') { *p++ = '\\'; *p++ = 't'; }
+                                          else if (c2 == '\r') { *p++ = '\\'; *p++ = 'r'; }
+                                          else if (c2 == '\n') { *p++ = '\\'; *p++ = 'n'; }
+                                          else                   *p++ = (char)c2;
+                                      } }
                                     p = zput(p, "\"");
                                 }
                             }
@@ -9428,7 +9488,10 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                     return 1;
                 }
                 ++g_wow32_unimpl;
+                /* Read the litter FIRST, then overwrite it -- the value that would
+                   have been used is evidence, and it is gone a line later. */
                 wow_stale = wow32_peekret(&f); wow_stale_ok = 1;
+                wow32_setret(&f, WOW32_UNIMPL_RET);   /* ★ see WOW32_UNIMPL_RET */
             }
             /* ── STEP OVER AND KEEP GOING, RATHER THAN STOPPING THE GUEST. ─────
                  Returning -1 here halts the run at the first unimplemented service,
@@ -9441,14 +9504,19 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                  BOP are suspect, and the log is what lets a reader tell. All the
                  non-0x53 sites are 3 bytes -- see the length note above. */
             VDM_REG(tib, VTIB_EIP) += 3;
-            p = zput(p, " -> UNIMPLEMENTED, STEPPED OVER (registers untouched -- the "
-                        "call did NOT happen)");
-            /* ⚠ NOT inert: krnl386 pops this hole into AX:DX and BRANCHES on it. Print
-                 it, so a later reader can tell a guest decision from our stack litter. */
+            p = zput(p, " -> UNIMPLEMENTED, STEPPED OVER (the call did NOT happen)");
+            /* ⚠ BUT IT IS STILL ANSWERED, because krnl386 pops the hole into AX:DX and
+                 BRANCHES on it whether we wrote it or not. Print BOTH numbers: what was
+                 lying in the hole, and what we put there instead. The first is what
+                 previous sessions were unknowingly measuring; the second is what this
+                 run actually decided on, and a reader must be able to tell them apart.
+                 They are only equal by coincidence. */
             if (wow_stale_ok) {
-                p = zput(p, "; guest will read 0x");
+                p = zput(p, "; hole held 0x");
                 p = zhex(p, wow_stale);
-                p = zput(p, " from the return hole");
+                p = zput(p, ", ANSWERED 0x");
+                p = zhex(p, (DWORD)WOW32_UNIMPL_RET);
+                p = zput(p, " (harness sentinel, NOT krnl386's answer)");
             }
             p = zput(p, "\r\n");
             log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
@@ -9652,7 +9720,18 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                             }
                         }
                         { int bk = dpmi_bp_disarm(lin);
-                          if (bk >= 0 && g_bp_rep[bk]) g_bp_pending[bk] = 1;   /* repeating */
+                          /* ★ EVERY hit leaves the guest standing on the footprint we
+                               just restored, so EVERY hit is pending -- not only the
+                               repeating ones. A one-shot is additionally retired, so
+                               that clearing `pending` does not silently turn it into a
+                               repeating breakpoint. See g_bp_done for what this cost. */
+                          if (bk >= 0) {
+                              g_bp_pending[bk] = 1;
+                              /* Skip mode implies repeating -- its own note below says a
+                                 skipped site is a loop or a shared wrapper, so retiring
+                                 it after one pass would defeat the point. */
+                              if (!g_bp_rep[bk] && !g_bp_skip[bk]) g_bp_done[bk] = 1;
+                          }
                           if (bk >= 0 && g_bp_skip[bk]) {
                               /* SKIP MODE: step over the instruction entirely. The bytes are
                                  already restored, so advancing EIP lands on whatever follows
@@ -9753,6 +9832,57 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                         VDM_SET16(tib, VTIB_EAX, 0x4021);
                         p = zput(p, "INT11h(PM) equipment -> 0x4021\r\n");
                         log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                        VDM_REG(tib, VTIB_EIP) += 2;
+                        return 1;
+                    }
+                    if (vec == 0x15) {                             /* BIOS misc/system, in PM */
+                        /* ── ★★ THE SESSION-36 WALL, AND IT IS A MISSING ARM, NOT A BUG. ──
+                             A Win16 driver segment runs `b4 c0 / cd 15` -- INT 15h AH=C0h,
+                             "get system configuration table" -- in protected mode. Every
+                             other BIOS vector krnl386 uses has a PM twin here; 15h did not,
+                             so the raw `CD 15` reached the #GP reflect, was correctly
+                             identified as a raw INT, was serviced... by a function with no
+                             arm for it, and fell through to "unexpected PM stop event=0x4".
+                             The run died two bytes into a driver, naming an address rather
+                             than a cause.
+                           ★ ANSWER EXACTLY WHAT THE V86 ARM ANSWERS -- the same reason the
+                             INT 11h twin above shares its constant. These are statements
+                             about OUR virtual machine's configuration, and a guest that
+                             gets a different machine depending on which mode it asked from
+                             is a guest we cannot reason about.
+                               AH=88h -> 0x3C00 KB extended, matching the XMS pool.
+                               AH=86h -> wait: the PIT already paces us, so CF=0 and return.
+                               anything else, C0h INCLUDED -> AH=86h, CF=1, "unsupported".
+                           ⚠ AH=C0h IS DELIBERATELY REFUSED, not stubbed with a table. The
+                             caller's very next instructions are `jc +0x1d` and, on the
+                             no-carry path, `cmp byte es:[bx+2],0xf8` -- it reads a MODEL
+                             BYTE out of the table we would have to invent. CF=1 sends it
+                             down the path a real PC/AT without the call takes; a fabricated
+                             table sends it down a path chosen by a number we made up.
+                             If a later run shows a driver needs the table, build it from the
+                             oracle, not from memory. */
+                        { DWORD ah15 = (VDM_REG(tib, VTIB_EAX) >> 8) & 0xFF;
+                          if (ah15 == 0x88) {
+                              VDM_SET16(tib, VTIB_EAX, 0x3C00);
+                              VDM_REG(tib, VTIB_EFLAGS) &= ~1u;
+                          } else if (ah15 == 0x86) {
+                              VDM_REG(tib, VTIB_EFLAGS) &= ~1u;
+                          } else {
+                              VDM_SET16(tib, VTIB_EAX,
+                                        (WORD)((VDM_REG(tib, VTIB_EAX) & 0xFF) | 0x8600));
+                              VDM_REG(tib, VTIB_EFLAGS) |= 1u;
+                              g_bios_unimpl[0x15] = 1;
+                          }
+                          /* Log the REQUEST as it arrived, which means capturing AX before
+                             the arms above overwrite AH -- the V86 twin shipped with that
+                             exact defect and printed its own write-back as the guest's
+                             request. `ax` was read at function entry, so it is already the
+                             guest's; use it and not VTIB_EAX. */
+                          p = zput(p, "INT15h(PM) ax=0x"); p = zhex(p, ax);
+                          p = zput(p, " -> ax=0x"); p = zhex(p, VDM_REG(tib, VTIB_EAX) & 0xFFFF);
+                          p = zput(p, " cf="); p = zhex(p, VDM_REG(tib, VTIB_EFLAGS) & 1u);
+                          p = zput(p, "\r\n");
+                          log_append(LOG_PATH, base, p); serial_out(base, p); p = base; }
                         VDM_REG(tib, VTIB_EIP) += 2;
                         return 1;
                     }

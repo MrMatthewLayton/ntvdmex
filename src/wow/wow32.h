@@ -164,6 +164,31 @@ static DWORD wow32_peekret(const wow32_frame_t *f)
          | ((DWORD)wow32_peekw(f->bp + WOW32_OFF_RET + 2) << 16);
 }
 
+/* ── ★★ WHAT AN UNIMPLEMENTED CALL ANSWERS. (GH #128, session 36) ─────────────
+     Session 35 measured that a stepped-over call is not inert: krnl386 pops the
+     `sub sp,4` hole into AX:DX and branches on it. Leaving the hole unwritten
+     therefore does not mean "no answer", it means "an answer drawn from whatever
+     the stack last held" -- which made two separate runs stop for reasons that
+     were OURS, and which no amount of re-running can reproduce or rule out.
+   ★ SO ANSWER THE SAME WAY EVERY TIME. This does not make the answer TRUE -- it is
+     still a call we have not implemented, and the log says so on every line. It
+     makes the run REPRODUCIBLE, which is the property every other conclusion in
+     this investigation rests on. A deterministic wrong answer can be traced from
+     the wall back to its cause; a random one cannot.
+   ★ AND ZERO IS THE BETTER CONSTANT, at both sites measured so far -- chosen from
+     the two call sites' own tests, not from taste:
+       0xc6  seg1:0x4795  `or ax,ax / jne <failure>`  -> litter 0x01b7 took the
+             FAILURE path. Zero does not. That failure was ours.
+       0x2d  seg2:0x0f16  `cmp ax,0x21 / jb`          -> litter 0x2714 passed as a
+             MODULE HANDLE and ran on into the terminal #GP with a NULL parameter
+             block. Zero is below 0x21, so LoadModule takes its error path and
+             REPORTS, instead of faulting somewhere else.
+     In both cases zero fails nearer the cause, which is the whole point.
+   ⚠ NOT 0xFFFFFFFF: that is WOW32_DECLINE, and a decline is a different statement
+     ("ask real DOS instead") that only holds at the sites in wow32_decline_sites.
+     Reusing it here would make every unimplemented call claim to be one. */
+#define WOW32_UNIMPL_RET 0u
+
 /* ---- the function IDs we can name -------------------------------------- */
 /* Names for the 28 that krnl386's export table names outright, plus the ones
    worked out from their call sites. An ID with no name here is not a gap in the
