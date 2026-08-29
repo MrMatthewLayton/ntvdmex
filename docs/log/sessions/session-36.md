@@ -219,32 +219,155 @@ The code is removed; the finding is kept as a comment beside `WOWTRY_FLAG` and h
 
 ---
 
+## ★★ Part 2 — COMM.DRV is the first module with a NON-PRELOAD segment
+
+After the first handoff was written the bisect continued, and it has narrowed the failure
+to a structural difference that is visible in the files themselves.
+
+### `LoadModule` returns 0, which is "out of memory", not "not found"
+`seg1:0xcc9f` is `lcall seg2:0x190a`, a thunk that tails into **`LoadModule`** at
+`seg2:0x051d` (`jmp 0x051d` after pushing the `retf 8` at `seg2:0x193b`) — confirming
+session 35's identification. `lpParameterBlock` is NULL here (the caller pushes
+`xor ax,ax` twice), so the `or bx,cx / je` at `0x1926` skips the parameter-block work.
+**AX = 0** then walks the error triage at `seg2:0x0f16` — `cmp ax,0x20 / jb`, `cmp ax,0x15`,
+`cmp ax,0x17`, `cmp ax,0xf / jae`, `cmp ax,0xa / jbe` — and falls to the give-up exit
+**without** the `WowLoadModule` retry, which is why WOW32 `0x2d` is never called in this
+run (session 35 saw it only because stack litter made AX look like `0x17`).
+
+### Where the 0 first appears
+krnl386 carries the result in AX and re-tests it with `cmp ax,0x20` at each stage. Six
+verified checkpoints, all repeating, in one run:
+
+| checkpoint | SYSTEM | KEYBOARD | MOUSE | VGA | SOUND | **COMM** |
+|---|---|---|---|---|---|---|
+| `seg2:0x0e25` | 0x01b7 | 0x0277 | 0x0297 | 0x02b6 | 0x02df | **0x0000** |
+| `seg2:0x0e55` | " | " | " | " | " | **0x0000** |
+| `seg2:0x0e88` | " | " | " | " | " | **0x0000** |
+| `seg2:0x0f16` | " | " | " | " | " | **0x0000** |
+| `seg1:0xcca4` | " | " | " | " | " | **0x0000** |
+
+`seg2:0x0e11` never fires — `cmp [bp-0x24],0 / je 0x0e24` skips it. **So AX arrives at
+`0x0e25` already 0**, and the origin is upstream of `seg2:0x0e0b`.
+
+★ At every one of those checkpoints **`DI = 2` for all five successes and `DI = 4` for
+COMM.DRV** — which turns out to be the segment count.
+
+### ★ The structural difference, from the files
+| module | segs | segment flags |
+|---|---|---|
+| SYSTEM.DRV | 2 | CODE,PRELOAD,RELOCS + DATA,PRELOAD |
+| KEYBOARD.DRV | 2 | CODE,PRELOAD,RELOCS + DATA,PRELOAD |
+| MOUSE.DRV | 2 | CODE,MOVEABLE,PRELOAD,DISCARDABLE + DATA,PRELOAD |
+| VGA.DRV | 2 | (same shape) |
+| SOUND.DRV | 2 | CODE,PRELOAD,RELOCS + DATA,PRELOAD |
+| **COMM.DRV** | **4** | seg1 CODE,MOVEABLE,**PRELOAD**,RELOCS,DISCARDABLE · **seg2 CODE,MOVEABLE,RELOCS,DISCARDABLE — NOT PRELOAD** · seg3 CODE,PRELOAD,RELOCS · seg4 DATA,PRELOAD,RELOCS |
+
+**COMM.DRV's segment 2 is the only non-PRELOAD segment in the entire set.** Every module
+that loads has nothing but PRELOAD segments; the first module with a demand-loaded segment
+is the first module that fails. That is not a coincidence worth ignoring.
+
+Consistent with it, the LoadSegment trace shows krnl386 loading COMM.DRV's segments
+**1, 3 and 4 only** — segment 2 is correctly left as a not-present placeholder — and each
+one's relocation pass returns AX=1:
+
+```
+seg1:0x90d9 LoadSegment(DI=1) -> seg1:0x929f AX=1     (relocations applied)
+seg1:0x90d9 LoadSegment(DI=3) -> seg1:0x929f AX=1
+seg1:0x90d9 LoadSegment(DI=4) -> seg1:0x929f AX=1
+```
+
+⇒ **Neither the segment loads nor the relocation pass fails.** `seg1:0x8cb6` (apply
+relocations) returns success every time, for every module.
+
+### Leads closed by measurement this part
+- **The relocation pass.** AX=1 at `seg1:0x929f` on every call, COMM.DRV included.
+- **COMM.DRV's own `LibMain` failing.** Its entry point is `seg1:0x002a` (the NE header's
+  CS:IP) and it does run — the raw `INT 15h` at `0x2f7:0x0005` and `INT 2Fh` at
+  `0x2f7:0x006b` are exactly its offsets 0x0005 and 0x006b. It takes the
+  "no Virtual COMM Device, and not standard mode" path: `INT 2Fh AX=1684h BX=3` correctly
+  answers ES:DI=0, and the `jne` at `0x0090` is taken — proved by the **absence** of a raw
+  `INT 31h` at `0x2f7:0x0095`, which the other branch would have executed two instructions
+  later. ⚠ `WF_ENHANCED` is `0x20` and `WF_STANDARD` is `0x10`, not the other way round;
+  `seg1:0xc152` (`or byte [0x464],0x21`) is the enhanced-mode arm and it is the
+  **fall-through** — `cmp al,3` at `seg1:0xc14b` has no branch after it.
+- **`seg2:0x04b2 lcall [bp-8]`**, which is where the `#NP` demand-load of segment 2 fires,
+  is krnl386 calling **`WEP`** — the string `57 45 50 00` is on the stack at the call. That
+  is the *unload* path, so the `#NP` and the segment-2 read are part of **teardown**, not
+  of the load. It returns AX=1 and its wrapper discards it (`popaw` then `xor ax,ax`).
+- **A missing export.** All ten of COMM.DRV segment 2's imports exist, including
+  `KERNEL.509 = WOWCLOSECOMPORT`, which confirms this is the WOW-aware COMM.DRV.
+- **krnl386's own narration.** `seg2:0x0ed3` was armed at the right bytes and never fired:
+  the block is guarded by `cmp word [0x12b0],0 / je` at `seg2:0x0e9f`, the same `/B` flag
+  that could not be turned on. Independent confirmation that the boot-log route is dead.
+
+### ⚠ Two more instrument defects, both found the hard way
+- **A byte-pattern search is not a disassembly.** Sweeping seg2 for `3d 20 00` found 15
+  sites, and `0x0aa1` was the middle of an instruction (`5f`, a one-byte `pop di`). The
+  arm-time length check **refused** it — which is the only reason that run merely died
+  instead of corrupting krnl386 invisibly. Only boundaries seen in an *aligned* listing
+  are addresses. Related: disassembling from `seg2:0x0ed0` lands mid-instruction and
+  invents a `push cs`; `0x0ec4` and `0x0ed3` are real.
+- **★ `dpmi_bp_arm()` armed unresolved segment-relative addresses as linear ones.** Mode
+  bit 1 means "offset into a krnl386 segment", resolved when that selector is committed —
+  and until then the field holds a bare offset like `0x0e11`, which this loop happily
+  planted a BOP at. Sixteen of them landed in **conventional memory**, over our own DOS
+  kernel and krnl386's V86 image, and the guest died in its own bring-up with zero
+  breakpoint hits. It had gone unnoticed because only one such breakpoint had ever been
+  used at a time, and that one happened to land where the `b[0]==0 && b[1]==0` guard
+  skipped it. Now: not armed until resolved.
+- Also fixed so the above could be measured at all: `dpmi_bp_resolve_seg()` handles **every**
+  krnl386 segment, not just segment 1 (mode bits 4..7 name it — `0x22` is segment 2), and
+  the segment-identification window was widened from `[len-1, len+16)` to
+  `[len-1, len+0x100)`. **Segment 2 rounds to a 0x100 boundary** (`0x3ee2 -> 0x3eff`, i.e.
+  len+0x1d) where segments 1 and 3 round to a paragraph, so seg 2 — the one the whole
+  module-load path lives in — had never been identified. The delta is logged now.
+
 ## ▶ RESUME HERE — session 36 handoff
 
 **State:** krnl386 loads `SYSTEM.DRV`, `KEYBOARD.DRV`, `MOUSE.DRV`, `VGA.DRV`, `SOUND.DRV` and
 fails on `COMM.DRV` with loader `AX = 0`. No Win16 application has run.
 
-**The next question, and it is binary:** COMM.DRV is the only module of the six that takes a
-`#NP` demand-load. Is the **demand-load** wrong, or the **relocation pass** over the
-demand-loaded segment? Put breakpoints either side of the fixup walk and read the answer;
-do not reason about it.
+**The next question:** `LoadModule` returns **0** ("out of memory"), and AX is already 0 by
+`seg2:0x0e25`, so the origin is **upstream of `seg2:0x0e0b`**. Bisect earlier in
+`LoadModule` (`seg2:0x051d` onwards) the same way — repeating breakpoints on verified
+`cmp ax,0x20` boundaries, comparing COMM.DRV against SOUND.DRV.
 
-**Ruled out — do not re-try:**
-- A missing export. All ten of COMM.DRV seg 2's imports exist in krnl386/SYSTEM.DRV.
-- Error 2 / 4 / 0x0B / 0x0F. The loader returns plain `0`.
+**The hypothesis to test first, and it is well supported:** COMM.DRV is the first module
+with a **non-PRELOAD segment**. All five that load have two PRELOAD segments and nothing
+else; COMM.DRV has four, and segment 2 is `CODE,MOVEABLE,RELOCS,DISCARDABLE` with no
+PRELOAD bit. krnl386 correctly loads only segments 1, 3 and 4 and leaves segment 2 as a
+not-present placeholder — so look at the **placeholder/allocation** path for a
+demand-loaded segment, not at the loading of the three that do load.
+
+**Ruled out — do not re-try (all by measurement, see Part 2):**
+- The relocation pass. `seg1:0x8cb6` returns AX=1 for every segment of every module.
+- The segment loads. LoadSegment(1), (3), (4) all succeed for COMM.DRV.
+- COMM.DRV's own `LibMain` (`seg1:0x002a`). It runs, takes the "no VCD, not standard mode"
+  branch, and the `INT 31h` on the other branch is provably never executed.
+- The `#NP` demand-load of segment 2 — that is `WEP`, i.e. **teardown**, after the verdict.
+- A missing export. All ten of segment 2's imports exist, `WOWCLOSECOMPORT` included.
+- Error 2 / 4 / 0x0B / 0x0F, and the `WowLoadModule` retry. AX=0 skips the retry entirely.
 - `USER.EXE`/`GDI.EXE` being absent. The run never reaches them; COMM.DRV is earlier.
 - `WIFEMAN.DLL`/`WINNLS.DLL` being skipped. That is correct for an English locale.
-- krnl386's `/B` boot log, and the `[0x12b0]` poke. Both self-disable, above.
+- krnl386's `/B` boot log, the `[0x12b0]` poke, and the `seg2:0x0ed3` narration branch.
+  All three are the same self-disabling flag.
 
 **How to drive it:**
 ```bash
 PMBP=1 ARCHIVE=build/wowruns ./scripts/bmwow.sh      # deploy, run, collect
 ```
 ⚠ SMB writes to `/private/tmp/xpshare` need the sandbox disabled. `pmbp.txt` columns are
-`<addr> [dump] [skip] [mode] [rep]`; **mode bit 1 = the address is an offset into seg1's PM
-copy**, which moves every run, and **rep 1 for anything in a guest loop**. The working list:
+`<addr> [dump] [skip] [mode] [rep]`; **mode bit 1 = the address is an offset into a krnl386
+segment** (bits 4..7 name it: `2` = seg 1, `0x22` = seg 2), which moves every run, and
+**rep 1 for anything reached more than once**. ⚠ **Only use addresses you have seen as
+instruction boundaries in an aligned disassembly** — a byte search will hand you the middle
+of an instruction. The working list:
 
 ```
 # addr   dump  skip  mode  rep
+0e25     0     0     22    1
+0e55     0     0     22    1
+0e88     0     0     22    1
+0f16     0     0     22    1
 cca4     0     0     2     1
 ```

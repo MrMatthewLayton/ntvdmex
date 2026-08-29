@@ -118,6 +118,15 @@ on the sixth, `COMM.DRV`, which it **names in its own words in the log**. See #1
    itself under a standing guest**, firing 512 times with byte-identical registers and then
    retiring before the pass it existed to observe. krnl386's own `/B` boot log was tried
    and **removed** — it self-disables silently, and so does the `[0x12b0]` poke.
+   **Part 2 of the same session** narrowed it further: `LoadModule` (`seg2:0x051d`) returns
+   **0**, which in Win16 is *"out of memory"*, not "not found" — and AX is already 0 at the
+   earliest instrumented checkpoint, so the origin is upstream of `seg2:0x0e0b`. The
+   relocation pass, the segment loads and COMM.DRV's own `LibMain` are all **closed by
+   measurement**, and the `#NP` everyone would chase turns out to be krnl386 calling
+   **`WEP`** — teardown, *after* the verdict. What is left is structural and visible in the
+   files: **all five modules that load have two PRELOAD segments and nothing else, while
+   COMM.DRV has four and its segment 2 is the only NON-PRELOAD segment in the set.** The
+   first module with a demand-loaded segment is the first module that fails.
 
    **Session 35 in one paragraph.** No new wall — this one bought *understanding*, and
    corrected the plan. The harness logged an unimplemented WOW32 call as "registers

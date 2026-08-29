@@ -8069,9 +8069,10 @@ static void dpmi_scan_code_blocks(void)
    mode is a bit field: bit 0 (1) = the site is a ONE-BYTE instruction, so plant a
    one-byte 0xCC rather than the two-byte BOP; bit 2 (4) = the DUMP column is an offset
    from DS's base rather than a linear address; bit 1 (2) = <addr> is an OFFSET INTO
-   krnl386's protected-mode copy of segment 1, resolved when that selector is committed
-   (see dpmi_bp_resolve_seg1 -- the copy moves between runs, so `seg1:0x93dc` is the only
-   form of that address worth writing down).
+   krnl386's protected-mode copy of a segment, resolved when that selector is committed
+   (see dpmi_bp_resolve_seg -- the copies move between runs, so `seg1:0x93dc` is the only
+   form of that address worth writing down), with mode bits 4..7 naming WHICH segment:
+   `2` = seg 1 (0 reads as 1, so old lists still work), `0x22` = seg 2, `0x32` = seg 3.
        <hex linear addr to break on>  [hex linear addr to DUMP on hit]   # comment
    The optional second column is what makes this a debugger rather than a tracer:
    "stop here and show me that memory" is the question you actually have when a
@@ -8124,20 +8125,35 @@ static void dpmi_bp_load(void)
    its protected-mode copy of segment 1. Rewrites the entry in place and clears the flag,
    so everything downstream (arming, hit matching, disarming) stays absolute and unchanged.
    Logged, because a breakpoint that silently lands somewhere else is worse than none. */
-static void dpmi_bp_resolve_seg1(DWORD base)
+/* ── ★ AND THE SAME FOR krnl386's OTHER SEGMENTS. (session 36) ────────────────────
+     Bit 1 alone meant "segment 1", which was enough while everything interesting was
+     in seg1. It is not any more: the module-load path runs in **segment 2** --
+     `seg2:0x04b2 lcall [bp-8]` is krnl386 calling a module's entry point, and the
+     COMM.DRV investigation needs the register file either side of it. `g_wow_pmbase[]`
+     has recorded every segment's base all along; only the resolver was seg1-only.
+   ⇒ Mode bits 4..7 now carry the SEGMENT NUMBER when bit 1 is set. `2` still means
+     segment 1 (0 is read as 1, so every existing pmbp.txt keeps working); `0x22` is
+     segment 2, `0x32` segment 3, and so on. */
+static void dpmi_bp_resolve_seg(unsigned segno, DWORD base)
 {
     char lb[200], *q;
     int k;
     for (k = 0; k < g_bp_n; ++k) {
         DWORD off;
+        unsigned want;
         if (!(g_bp_mode[k] & 2)) continue;
+        want = (g_bp_mode[k] >> 4) & 0xF;
+        if (!want) want = 1;                       /* bare `2` is segment 1, as before */
+        if (want != segno) continue;
         off = g_bp_lin[k] & 0xFFFF;
         g_bp_lin[k]   = base + off;
         g_bp_mode[k] &= ~2u;
         q = lb;
-        q = zput(q, "DPMI-BP: seg1:0x");  q = zhex(q, off);
-        q = zput(q, " -> linear 0x");     q = zhex(q, g_bp_lin[k]);
-        q = zput(q, " (krnl386's PM copy of segment 1 is at 0x"); q = zhex(q, base);
+        q = zput(q, "DPMI-BP: seg");    q = zhex(q, (DWORD)segno);
+        q = zput(q, ":0x");             q = zhex(q, off);
+        q = zput(q, " -> linear 0x");   q = zhex(q, g_bp_lin[k]);
+        q = zput(q, " (krnl386's PM copy of segment "); q = zhex(q, (DWORD)segno);
+        q = zput(q, " is at 0x"); q = zhex(q, base);
         q = zput(q, ")\r\n");
         log_append(LOG_PATH, lb, q);
     }
@@ -8160,6 +8176,19 @@ static void dpmi_bp_arm(void)
            the buffer has to be big enough for the LONGEST line, not the usual one. */
         char lb[320], *q = lb;
         if (lin < 0x600) continue;
+        /* ── ⚠★ AN UNRESOLVED SEGMENT-RELATIVE ADDRESS IS NOT A LINEAR ADDRESS. ────
+             Mode bit 1 means "<addr> is an OFFSET into krnl386's PM copy of a
+             segment", and dpmi_bp_resolve_seg() rewrites it to a linear address when
+             that selector is committed. Until then the field holds a bare offset like
+             0x0e11 -- and this loop was arming it AS a linear address, planting BOPs
+             into CONVENTIONAL MEMORY: our own DOS kernel and krnl386's V86 image.
+           ⚠ MEASURED, and it killed a run: sixteen seg2-relative breakpoints armed at
+             linear 0x0642..0x0f99 before krnl386 had committed segment 2, and the guest
+             died in its own bring-up with zero breakpoint hits. It went unnoticed while
+             only ONE such breakpoint was ever used, because a single stray BOP happened
+             to land where `b[0]==0 && b[1]==0` skipped it.
+           ⇒ Not armed until resolved. An address we cannot place yet is not an address. */
+        if (g_bp_mode[k] & 2) continue;
         /* ── ★★ NEVER RE-PLANT A BREAKPOINT THE GUEST IS STANDING ON. ──────────────
              A hit removes the BOP and, for a repeating breakpoint, sets g_bp_pending;
              dpmi_bp_rearm_pending() then clears that flag only once the guest's EIP has
@@ -10214,25 +10243,45 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                                     p = zput(p, " base=0x");   p = zhex(p, g_ldt[a].base);
                                     p = zput(p, " limit=0x");  p = zhex(p, g_ldt[a].limit);
                                     p = zput(p, " -> INT sites patched]");
-                                    /* ★ Is this krnl386's own segment 1? Match on the
-                                         LIMIT against the segment's length rounded up to
-                                         a paragraph (0xd7fa -> 0xd7ff), which no other
-                                         KERNEL segment comes near, and hand the base to
-                                         any seg1-relative breakpoint waiting for it. */
+                                    /* ★ Is this one of krnl386's OWN segments? Match the
+                                         LIMIT against the segment's length rounded up, and
+                                         hand the base to any seg-relative breakpoint
+                                         waiting for it.
+                                       ⚠ THE ROUNDING IS NOT A PARAGRAPH. This window was
+                                         `[ln-1, ln+16)` on the evidence of segments 1 and 3
+                                         (0xd7fa -> 0xd7ff, 0x1278 -> 0x127f) -- and
+                                         SEGMENT 2 ROUNDS TO 0x100: 0x3ee2 -> 0x3eff, which
+                                         is ln+0x1d and fell outside. So seg 2 was never
+                                         identified, and it is the segment the module-load
+                                         path lives in. Widened to the next 0x100 boundary,
+                                         which is the largest round-up observed.
+                                       ⚠ Widening a match is a licence to mis-identify, so
+                                         check it stays unambiguous: krnl386's four segment
+                                         lengths are 0xd7fa, 0x3ee2, 0x1278, 0x1ba2 and the
+                                         windows [ln-1, ln+0x100) do not overlap. The delta
+                                         is logged, so a fit that stops looking like a
+                                         round-up is visible rather than assumed. */
                                     if (g_wow_nmod) {
                                         int sg;
                                         for (sg = 0; sg < (int)g_wow_mod[0].n_seg &&
                                                      sg < WOW_PMBASE_MAX; ++sg) {
                                             DWORD ln = g_wow_mod[0].seg[sg].length;
                                             if (!ln || g_ldt[a].limit < ln - 1 ||
-                                                g_ldt[a].limit >= ln + 16) continue;
-                                            g_wow_pmbase[sg] = g_ldt[a].base;
-                                            if (sg == 0 && g_wow_pmseg1_base != g_ldt[a].base) {
-                                                g_wow_pmseg1_base = g_ldt[a].base;
-                                                dpmi_bp_resolve_seg1(g_ldt[a].base);
+                                                g_ldt[a].limit >= ln + 0x100) continue;
+                                            if (g_wow_pmbase[sg] != g_ldt[a].base) {
+                                                g_wow_pmbase[sg] = g_ldt[a].base;
+                                                /* Every segment, not just seg 1 -- the
+                                                   module-load path is in seg 2. */
+                                                dpmi_bp_resolve_seg((unsigned)sg + 1,
+                                                                    g_ldt[a].base);
                                             }
+                                            if (sg == 0) g_wow_pmseg1_base = g_ldt[a].base;
                                             p = zput(p, " [= krnl386 seg ");
-                                            p = zhex(p, (DWORD)(sg + 1)); p = zput(p, "]");
+                                            p = zhex(p, (DWORD)(sg + 1));
+                                            p = zput(p, " len=0x"); p = zhex(p, ln);
+                                            p = zput(p, " limit-len=0x");
+                                            p = zhex(p, g_ldt[a].limit - ln);
+                                            p = zput(p, "]");
                                             break;
                                         }
                                     }
