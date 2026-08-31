@@ -388,27 +388,54 @@ seg1:0x22a2  mov dx,es:[0x0c]   ;   +0x0c = ne_flags, and
 seg1:0x22a7  and dx,0x2000      ;   0x2000 = the link-error bit
 ```
 
-and it is bracketed one level further already. `AX = 0x0000FFFF` at the fault (error code
-`0xfffc`, the selector index), and `seg1:0x2200` — which is `GetExePtr`-shaped — **never
-returns `-1`**: its failure path is `xor ax,ax` at `0x2281`. `0xFFFF` therefore came out of
-one of its two `mov ax, es:[0x1e]` reads, and a breakpoint on both says which:
+and it is now traced to the end. `AX = 0x0000FFFF` at the fault (error code `0xfffc`), and
+`seg1:0x2200` — which is `GetExePtr` — **never returns `-1`**: its failure path is
+`xor ax,ax` at `0x2281`. Breakpoints on both its `mov ax, es:[0x1e]` reads say where the
+`0xFFFF` came from:
 
 ```
-2233 ax=es:[1e]  AX(in)=0x03d6  ES=0x03b7      <- ordinary lookups, fine
-2233 ax=es:[1e]  AX(in)=0x0000  ES=0x01ef      <- this one
-2298 or ax,ax    AX=0xffff                     <- and this is what it produced
+2233 ax=es:[1e]  AX(in)=0x03d6  ES=0x03b7   <- ordinary lookups, fine
+2233 ax=es:[1e]  AX(in)=0x0000  ES=0x01ef   <- this one
+2298 or ax,ax    AX=0xffff                  <- and this is what it produced
 ```
 
-So krnl386's module list (head at DGROUP `0x226`, chained through `+0x00`, keyed on `+0x1c`,
-value at `+0x1e`) contains an entry at **selector `0x01ef`** whose key is `0` and whose value
-is `0xFFFF`. `0x01ef` is the selector our own loader puts over the **staged file image** —
-session 33's "the file from the NE header on … with a 64 KB selector (0x01ef) over it". A raw
-file image is not a module database, and `+0x1c`/`+0x1e` read as `0`/`0xFFFF` rather than
-krnl386's real `ne_cseg`/`ne_cmod` of `4`/`0`.
-▸ **So the list has an entry it should not have, or that entry is ours and malformed.** Find
-what links `0x01ef` into the chain at DGROUP `0x226`. Note the fault happens with
-`DS=0x0337`, `SS=0x03d7:0x2024` — WOWEXEC's own data and stack, so the program really is
-running its own code when it asks.
+`[0x226]` in krnl386's DGROUP is the head of its **task list** — written at `seg1:0xc51c`
+during bring-up and inserted into, sorted on `[+8]`, at `seg1:0x99ed`. Selector `0x01ef` has
+limit `0x21f` (544 bytes) and holds `+0x02/+0x04 = 0x0fea/0x001f`, which is `SS:SP` on
+krnl386's own stack — so it is **krnl386's own boot task database**, and the fields
+`GetExePtr` uses are `+0x1c` (the instance handle it matches) and `+0x1e` (the module handle
+it returns). That boot TDB's are **`0` and `0xFFFF`**.
+
+⚠ *An earlier reading of this said `0x01ef` was the 64 KB selector our loader puts over the
+staged file image (session 33 recorded stock using that number for exactly that). It is not
+— the limit is 544 bytes and the contents are a task database. Same number, different thing,
+and it was a whole wrong lead until the descriptor was actually read.*
+
+### And the caller is the most ordinary call in Win16
+
+The stack at the fault reaches back through USER into WOWEXEC, `0x03cf:0x081e`, and the
+instruction before it is:
+
+```
+wowexec seg1:0x0812  push 0        \
+        seg1:0x0814  push 0         > LoadCursor(hInstance = NULL, IDC_ARROW)
+        seg1:0x0816  push 0x7f00   /
+        seg1:0x0819  lcall <USER>
+```
+
+`0x7F00` is `IDC_ARROW`, and **`hInstance = NULL` is not a bug — it is the documented way to
+ask for a system cursor.** USER passes it straight to `GetExpWinVer` (`seg1:0x228a`, which
+reads `ne_expver` at `+0x3e` of the module database), krnl386's `GetExePtr(0)` walks the task
+list, **matches its own boot TDB because that TDB's instance handle is `0`**, and hands back
+`0xFFFF`, which USER loads into `ES`.
+
+⇒ **The defect is that krnl386's boot task database has instance handle `0`.** On real
+Windows nothing can match a NULL, `GetExePtr` returns `0`, and the caller's own
+`or ax,ax / je 0x22ab` supplies a default. Ours matches, so the most ordinary call in Win16
+takes the program down. ▸ Find what should have put krnl386's own instance (its DGROUP
+selector, `0x01e7`) in `TDB+0x1c`, and why it is zero. The `0xFF` bytes in that block are
+present from the earliest PM events (`pmchg` on linear `0x2cc5e`), so the block is not being
+zeroed and krnl386 is only filling the fields it thinks it needs.
 
 ### Next, in order
 
@@ -416,7 +443,8 @@ running its own code when it asks.
    from a just-completed allocation; `seg1:0x574d` (the other half of the loop) does
    `lsl ecx,[bp+6]`, so these are selectors and the question is about their limits. The
    return is a boolean on the first-call path and a value on the retry path.
-2. **The `#GP` at `seg1:0x229c`** above.
+2. **The boot TDB's zero instance handle** above — the `#GP` at `seg1:0x229c` is only
+   what it causes.
 3. `NETWORK.DRV` / `wfwnet.drv` — krnl386 looks for both and neither is on the box's search
    path. Probably harmless; check before assuming.
 4. **Oracle the `AH=44h` trio** against MS-DOS 6.22 (#24). The register contract used is from
