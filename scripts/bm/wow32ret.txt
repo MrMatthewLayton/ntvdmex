@@ -1,0 +1,27 @@
+7d 00000001
+#
+# wow32ret.txt -- ANSWER AN UNIMPLEMENTED WOW32 CALL DIFFERENTLY. GH #128.
+#
+# One `<hex id> <hex dword>` per line. Every overridden call is logged as
+#   `** wow32ret.txt OVERRIDE -- an EXPERIMENT, not a service **`
+# so no reader can mistake a measurement for an implementation. 53 of the 82
+# WOW32 ids are not named by krnl386's export table, and the sentinel we answer
+# them with is load-bearing: 0 is right for "declined / not present" and WRONG
+# for a caller that loops until the answer is non-zero.
+#
+# ** THIS FILE IS LOAD-BEARING FOR THE CURRENT MILESTONE. **
+# seg2:0x2a08 is a retry loop -- allocate, ask 0x7d whether the result is
+# acceptable, and on 0 allocate another and ask again. It also does `push ax` at
+# seg2:0x2a14 without popping on the loop-back edge, so every iteration leaks two
+# bytes of stack. With 0x7d answered 0 it ran 1884 times and took krnl386's 4 KB
+# stack out with a #SS. With this line present it runs ONCE, and WOWEXEC.EXE --
+# the first Win16 program this project has executed -- loads and runs.
+#
+# It is still an EXPERIMENT and not a service: 0x7d's return is used only as a
+# boolean on the first-call path (seg2:0x29fe), and as a VALUE on the retry path
+# (seg2:0x2a22), so 1 is enough to test and not enough to ship. Pinning the real
+# semantics is the first item in the session-37 handoff.
+#
+# DATA LINES FIRST, COMMENTS BELOW -- the same rule pmbp.txt learned the hard
+# way, and that this file then broke by putting its one data line at the end of
+# 1350 bytes of explanation. Nothing that matters goes below a comment.

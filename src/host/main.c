@@ -8491,11 +8491,23 @@ static void wow32_ret_load(void)
 {
     HANDLE h = CreateFileA(WOW32RET_PATH, GENERIC_READ,
                            FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, 0, NULL);
-    char buf[1024]; DWORD rd = 0, i = 0;
-    char lb[200], *q = lb;
+    /* ⚠⚠ 8 KB, AND SAY SO WHEN IT IS NOT ENOUGH. This was `char buf[1024]` for
+         exactly as long as it took to write a file with a comment block explaining
+         why the one data line matters -- 1375 bytes, data line last, silently
+         truncated, and the run regressed to the stack overflow with NOTHING in the
+         log to say why. That is dpmi_bp_load's bug from earlier the same session,
+         reproduced in the loader written after fixing it. The rule is the same in
+         both places and it is now enforced in both: read enough, and shout when the
+         file was longer than the buffer. */
+    char buf[8192]; DWORD rd = 0, i = 0;
+    char lb[256], *q = lb;
     if (h == INVALID_HANDLE_VALUE) return;
     ReadFile(h, buf, sizeof buf - 1, &rd, NULL);
     CloseHandle(h);
+    if (rd >= sizeof buf - 1) {
+        q = zput(q, "WOW32RET: !! wow32ret.txt TRUNCATED AT THE BUFFER -- LINES DROPPED\r\n");
+        log_append(LOG_PATH, lb, q); serial_out(lb, q); q = lb;
+    }
     while (i < rd && g_w32ret_n < WOW32RET_MAX) {
         DWORD v[2] = { 0, 0 }; int col = 0;
         while (i < rd && (buf[i] == '\r' || buf[i] == '\n')) ++i;
