@@ -43,8 +43,9 @@ and nothing has drawn a pixel. What works is the *bootstrap*, and as of session 
 a long way: krnl386 loads three of its four segments, installs its interrupt handlers,
 **takes and returns from its own DPMI exceptions**, and loads **all eight** of the 16-bit
 system modules — `SYSTEM.DRV`, `KEYBOARD.DRV`, `MOUSE.DRV`, `VGA.DRV`, `SOUND.DRV`,
-`COMM.DRV`, `USER.EXE` and `GDI.EXE` — then runs on past the boot module list and dies in a
-Win16 `OpenFile` whose `OFSTRUCT` pointer is outside its own segment. See #128 below.
+`COMM.DRV`, `USER.EXE` and `GDI.EXE` — then runs on past the boot module list to the
+call where it asks the 32-bit half **what Win16 program to launch** — WOW32 `0x080`,
+unimplemented, two instructions from `LoadModule`. See #128 below.
 
 ---
 

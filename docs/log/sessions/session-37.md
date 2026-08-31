@@ -185,7 +185,11 @@ as progress.
 list. 237 WOW32 calls in a run (was 179). No Win16 application has run yet, and `wowexec`
 has not been reached.
 
-**Where it stops:** a `#GP` reflected to krnl386's own handler, at **`seg1:0x1d69`**:
+**Where it stops — and read the section below before chasing the address.** The visible
+death is a `#GP`, but the cause is two calls upstream: **WOW32 `0x080`, unimplemented,
+which is krnl386 asking the 32-bit half what Win16 program to launch.**
+
+The `#GP` is reflected to krnl386's own handler, at **`seg1:0x1d69`**:
 
 ```
 1d63  c47610      les si, ptr [bp+0x10]     ; ES:SI = the caller's OFSTRUCT
@@ -216,15 +220,73 @@ and the enclosing function (`retf 0xa` = `lpFileName`, `lpReOpenBuff`, `uStyle` 
 `OpenFile`'s exact signature) takes that pointer from **its own** `[bp+8]`. It reaches the
 failure tail because `call 0x1c17` at `0x194a` returned CF=1, i.e. **the open failed first**.
 
-**So there are two questions, and they are separate:**
-1. Who calls `OpenFile` with an `lpReOpenBuff` of `SS:0x15f1`, and where did that offset
-   come from? The stepped-over IDs immediately before it are `0xc8` (25 calls), `0x087`,
-   `0x080` and `0x006` — and a stepped-over call answers at random.
-2. **What file did it fail to open, and why?** The path is at `ds:0x0e00` in krnl386's
-   DGROUP and the trace already logs every `AH=3Dh`. Answer this one first: it is free, and
-   an `OpenFile` that succeeded would never reach the faulting instruction at all.
+### ★★ …but the OpenFile is not the frontier. **WOW32 `0x080` is.**
+
+The free question — *what file failed to open* — was answered off the log already on the
+desk, and the answer is **none**. The last `AH=3Dh` in the run is `GDI.EXE` succeeding;
+the faulting `OpenFile` never issued a DOS open at all. So the failure is upstream of the
+file system, and the trace says exactly where.
+
+Three calls happen between the module list ending and the fault, and two are stepped over:
+
+```
+FUNC=0x080  from=seg1:0xcc0b  args=0x16 (11 words)
+   (0x1593 0x01e7  0x0050  0x15f1 0x01e7  0x16a6 0x01e7  0x16b2 0x01e7  0x158e 0x01e7)
+   -> UNIMPLEMENTED, STEPPED OVER; hole held 0x00020000, ANSWERED 0
+FUNC=0x006  from=seg1:0xcc30  -> UNIMPLEMENTED, STEPPED OVER
+FUNC=0x0c9  GetCurrentDirectory  drive=0xf0  -> "" cf=1     then the #GP
+```
+
+`0x01e7:0x15f1` is **the pointer the faulting instruction used** — right offset, wrong
+selector (it arrives as `0x1f`, the stack). And the argument list matches the call site
+word for word:
+
+```
+cbee  mov ax,0x16b2
+cbf1  push ds / push 0x158e      ; ptr A
+cbf5  push ds / push ax          ; ptr B = ds:0x16b2
+cbf7  push ds / push [0x1492]    ; ptr C = ds:0x16a6 (measured)
+cbfc  push ds / push 0x15f1      ; ptr D
+cc00  push 0x50                  ; cbBuf = 80
+cc02  push ds / push 0x1593      ; the output buffer
+cc08  call 0xb544                ; ★ WOW32 0x80, 22 arg bytes
+```
+
+Its return is **not** tested here (`cc0b` tests `[0x3f2]`, a function pointer resolved
+earlier), so this is a pure **out-parameter** call: fill an 80-byte buffer and four more.
+And what krnl386 does with them, thirty bytes later, is **launch the program**:
+
+```
+cc3b  mov ax,0x1496
+cc3e  cmp byte [0x24c],1
+cc43  je 0xcc56
+cc45  push [0x1494] / push [0x1492] / push ds / push ax
+cc4f  lcall <reloc>              ; -> seg2:0x190a = the LoadModule thunk
+cc54  jmp 0xcc6b
+cc56  push [0x242] / call 0x8c0a
+cc5f  mov di,0x15f1              ; ★ the buffer 0x080 was to have filled
+cc62  push ds / push di / push ds / push ax
+cc66  lcall <reloc>              ; -> LoadModule again
+cc6b  cmp ax,0x20 / jbe 0xcc7c   ; <= 0x20 == failed to launch
+```
+
+⇒ **`0x080` is krnl386 asking the 32-bit half what Win16 program to run**, and the `#GP` is
+simply what happens when `LoadModule` is handed buffers nobody filled. This is the
+`GetNextVDMCommand` boundary the epic has been walking towards, not another one-line gap.
+
+**Next, in order:**
+1. Pin `0x080`'s signature. It is **not** self-named by krnl386's export table
+   (`wowmap.py` prints `id 0x80 args=22 seg1:0xb544 -`), so it must be pinned from its
+   three call sites — `seg1:0xca6d`, `0xcc08`, `0xcd2d` — and, better, from **stock ntvdm
+   as an oracle**: `tools/vdmdump` can read a live stock VDM's memory, and those five
+   buffers are at fixed DGROUP offsets. Read what stock put in them.
+   At `0xca6d` the return IS tested (`or ax,ax / je`, then `cmp ax,0x4e`), and `0x4e` is
+   `0x50 - 2` — consistent with "length written to the buffer".
+2. Only then the `SS:0x15f1` far pointer. It is a *consequence*; do not chase it first.
 
 **Ruled out — do not re-try (all by measurement):**
+- **A failed file open as the cause of the `#GP`.** The faulting `OpenFile` issues no
+  `AH=3Dh` at all; the last open in the run is `GDI.EXE` succeeding.
 - `GDI.EXE`'s file, its header, its relocations, its allocation and its table read. All
   measured good; the module loads.
 - `pm_int21_xfer`'s clamp as a cause of any short read — the cap is `0x4000` and the
