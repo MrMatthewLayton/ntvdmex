@@ -7315,12 +7315,28 @@ static int wow_place_v86(dos_machine_t *mp, WORD *ecs, WORD *eip,
            ⚠ And the path must be KRNL386's, not the Win16 app's: this is krnl386
              asking where IT lives. g_wow_krnl_path is the `-a` argument the WOW
              launch already carries. */
-        dos_env_build(NULL, DOS_ENV_SEG,
-                      g_wow_krnl_path[0] ? g_wow_krnl_path
-                                         : "C:\\WINDOWS\\SYSTEM32\\KRNL386.EXE");
-        q = m; q = zput(q, "WOWV86: env rebuilt, program path = ");
-        q = zput(q, g_wow_krnl_path[0] ? g_wow_krnl_path : "(default)");
-        q = zput(q, "\r\n"); log_append(LDTLOG_PATH, m, q);
+        /* ★★ AND THE PATH, because krnl386 SEARCHES IT for the Win16 program.
+             `[boot] WOWSHELL` in SYSTEM.INI yields a bare "WOWEXEC.EXE" with no
+             directory, and krnl386's search (seg1:0x1dad) walks `PATH=` out of this
+             very block. With the DOS default of `C:\` it can never find it, and says
+             so: "Missing 16-bit system module ... WOWEXEC.EXE". Ask the host where
+             Windows actually is rather than hardcoding it -- a real WOW launch
+             inherits the NT environment, which is exactly these two directories. */
+        {   char pv[MAX_PATH * 2 + 2]; UINT n;
+            n = GetSystemDirectoryA(pv, MAX_PATH);
+            if (n && n < MAX_PATH) { pv[n] = ';';
+                if (!GetWindowsDirectoryA(pv + n + 1, MAX_PATH)) pv[n] = 0; }
+            else pv[0] = 0;
+            dos_env_build_path(NULL, DOS_ENV_SEG,
+                          g_wow_krnl_path[0] ? g_wow_krnl_path
+                                             : "C:\\WINDOWS\\SYSTEM32\\KRNL386.EXE",
+                          pv[0] ? pv : "C:\\WINDOWS\\SYSTEM32;C:\\WINDOWS");
+            q = m; q = zput(q, "WOWV86: env rebuilt, PATH=");
+            q = zput(q, pv[0] ? pv : "(fallback)");
+            q = zput(q, " program path = ");
+            q = zput(q, g_wow_krnl_path[0] ? g_wow_krnl_path : "(default)");
+            q = zput(q, "\r\n"); log_append(LDTLOG_PATH, m, q);
+        }
         g_wow_psp_seg = pseg;
         q = m;
         q = zput(q, "WOWV86: krnl386 PSP/arena block at para 0x"); q = zhex(q, pseg);

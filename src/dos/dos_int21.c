@@ -1423,12 +1423,41 @@ int dos_int21(dos_machine_t *m)
         uint8_t dl47 = (uint8_t)(R_DX & 0xFF);
         uint8_t curdrv = (n >= 2 && cwd[1] == ':')
                        ? (uint8_t)((cwd[0] | 0x20) - 'a' + 1) : 3;
-        if (n == 0 || (dl47 != 0 && dl47 != curdrv)) {
-            /* Per-drive current directories are real DOS behaviour and we keep
-               only one, so say so rather than answer for the wrong drive. */
+        /* ── ★ 0xF0 IS krnl386 TALKING TO ntvdm, AND WE ARE ntvdm. (#128, s37) ──
+             krnl386 keeps a per-drive byte table at its DGROUP 0x2a2 and, for any
+             drive flagged there, re-issues this call through seg1:0x0834, which is
+             literally `mov dl,0xF0 / call <dispatcher>`. 0xF0 is not a drive under
+             any DOS convention -- it is a sentinel between the two halves of one
+             product, and the 16-bit half is readable, so answering it is
+             implementing a protocol rather than guessing at one. It is what stops
+             WOWEXEC.EXE resolving: the path build at seg1:0x1f55 needs a current
+             directory, this call fails, and `jae` at seg1:0x1fd5 takes the error
+             exit before the PATH search is ever reached.
+           ⚠ Only the EXACT sentinel, never "any invalid drive". A DOS program that
+             passes garbage in DL still gets the error DOS gives it -- turning that
+             into a plausible answer would be the "runs but lies" class. */
+        if (dl47 == 0xF0) {
+            tp = zput(tp, "  INT21 AH=47 drive 0xF0 (WOW sentinel) -> current drive\r\n");
+            dl47 = 0;
+        }
+        /* ── ★ AND PER-DRIVE CURRENT DIRECTORIES ARE REAL DOS BEHAVIOUR. ─────────
+             This answered only for the drive we happened to be on and returned
+             "invalid drive" for every other, with a note saying so. Win32 keeps a
+             current directory per drive too -- that is what the hidden `=C:`
+             environment variables are -- and GetFullPathNameA("X:") reads it. So
+             ask for the drive the caller named, and keep the honest refusal for a
+             drive that genuinely is not there (GetLogicalDrives), which is the
+             error DOS itself returns. GH #32. */
+        if (n && dl47 && dl47 != curdrv && dl47 <= 26) {
+            if (GetLogicalDrives() & (1u << (dl47 - 1))) {
+                char spec[4]; spec[0] = (char)('A' + dl47 - 1); spec[1] = ':';
+                spec[2] = 0;
+                n = GetFullPathNameA(spec, sizeof(cwd), cwd, NULL);
+            } else n = 0;
+        }
+        if (n == 0 || n >= sizeof(cwd)) {
             tp = zput(tp, "  INT21 AH=47 drive 0x"); tp = zhex(tp, dl47);
-            tp = zput(tp, " UNIMPLEMENTED (only the current drive is tracked)\r\n");
-            m->unimpl21[0x47 >> 3] |= (uint8_t)(1u << (0x47 & 7));
+            tp = zput(tp, " -> invalid drive\r\n");
             SETAX(0x0F); ERRCF();
         } else {
             volatile BYTE *dst = (volatile BYTE *)((R_DS << 4) + (R_SI & 0xFFFF));

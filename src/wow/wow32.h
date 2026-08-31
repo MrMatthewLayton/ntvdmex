@@ -141,6 +141,20 @@ static volatile BYTE *wow32_argptr(const wow32_frame_t *f, int off)
     return (volatile BYTE *)(ULONG_PTR)(base + (fp & 0xFFFF));
 }
 
+/* Copy a NUL-terminated guest string at a far-pointer argument into a host buffer.
+   Returns 1 if there was a string to copy, 0 for a null/unreadable pointer -- and the
+   difference matters: the profile API gives `lpAppName == NULL` its own meaning
+   ("enumerate"), so "no pointer" must not arrive at Win32 as an empty string. */
+static int wow32_argstr(const wow32_frame_t *f, int off, char *out, int cap)
+{
+    volatile BYTE *s = wow32_argptr(f, off);
+    int k = 0;
+    if (!s) { if (cap) out[0] = 0; return 0; }
+    while (k < cap - 1 && s[k]) { out[k] = (char)s[k]; ++k; }
+    out[k] = 0;
+    return 1;
+}
+
 /* ★ The return value goes in the stack hole, NOT in AX/DX -- see the header note. */
 static void wow32_setret(wow32_frame_t *f, DWORD v)
 {
@@ -205,10 +219,12 @@ static DWORD wow32_peekret(const wow32_frame_t *f)
 #define WOW32_SETPRIORITY               0x20
 #define WOW32_LOCKCURRENTTASK           0x21
 #define WOW32_WOWLOADMODULE             0x2d
+#define WOW32_GETPROFILEINT             0x39   /* pinned from DGROUP, see below    */
 #define WOW32_WOWGETNEXTVDMCOMMAND      0x70
 #define WOW32_OLDYIELD                  0x75
 #define WOW32_REGISTERDOSDATA           0x78   /* named from its call site, below */
 #define WOW32_GETSHORTPATHNAME          0x7b
+#define WOW32_GETPRIVATEPROFILESTRING   0x80   /* pinned from DGROUP, see below    */
 #define WOW32_WOWWAITFORMSGANDEVENT     0x83
 #define WOW32_WOWMSGBOX                 0x84
 #define WOW32_GETDATETIME               0x86   /* call site unpacks a packed date  */
@@ -273,6 +289,8 @@ static const char *wow32_name(WORD id)
     case WOW32_WOWSHUTDOWNTIMER:       return "WowShutdownTimer";
     case WOW32_GETCURDIR:              return "GetCurrentDirectory";
     case WOW32_GETSYSTEMDEFAULTLANGID: return "GetSystemDefaultLangID";
+    case WOW32_GETPROFILEINT:          return "GetProfileInt";
+    case WOW32_GETPRIVATEPROFILESTRING: return "GetPrivateProfileString";
     default:                           return NULL;
     }
 }
@@ -465,6 +483,79 @@ static int wow32_call(wow32_frame_t *f, wow32_dosdata_t *dd)
     case WOW32_GETSYSTEMDEFAULTLANGID:
         wow32_setret(f, (DWORD)GetSystemDefaultLangID());
         return 1;
+
+    /* ── ★★★ 0x80 GetPrivateProfileString, AND IT IS THE PROGRAM LAUNCH ───
+         Neither this ID nor 0x39 is self-named by krnl386's export table, so both
+         were pinned from the call sites and from the DGROUP the arguments point
+         into -- which turns out to name them outright. `seg1:0xcc08`:
+
+           push ds / push 0x158e     ; ds:0x158e = "BOOT"          lpAppName
+           push ds / push 0x16b2     ; ds:0x16b2 = "WOWSHELL"      lpKeyName
+           push ds / push [0x1492]   ; measured ds:0x16a6 =
+                                     ;   "WOWEXEC.EXE"             lpDefault
+           push ds / push 0x15f1     ; an empty 0x50-byte buffer   lpReturnedString
+           push 0x50                 ;                             nSize
+           push ds / push 0x1593     ; ds:0x1593 = "SYSTEM.INI"    lpFileName
+           call 0xb544               ; 22 arg bytes = 4+4+4+4+2+4  ✓
+
+         and thirty bytes later krnl386 does `mov di,0x15f1` and lcalls the
+         LoadModule thunk at `seg2:0x190a`, then `cmp ax,0x20 / jbe` -- Win16's
+         "failed to launch". So this call is krnl386 asking **what Win16 program
+         to run**, and answering it is the launch itself.
+       ★ The second site, `seg1:0xca6d`, is the same signature over
+         `[DEBUG] OUTPUTTO` with an empty default, and it DOES test the result:
+         `or ax,ax / je`, then `cmp ax,0x4e` -- and `0x4e` is `nSize - 2`, which is
+         GetPrivateProfileString's own "the answer did not fit" convention. Two
+         independent sites agreeing on six arguments and a return convention is
+         what makes this a reading rather than a guess.
+       ⚠ Arguments are Pascal order: FIRST pushed is the HIGHEST offset, so
+         lpFileName (pushed last) is at 0, lpAppName at 18.
+       ★ Answer it with the REAL Win32 call against the REAL file. On this rig
+         `C:\WINDOWS\SYSTEM.INI` has no `[boot]` section at all (measured), so the
+         default is what comes back -- `WOWEXEC.EXE`, which is present. That is
+         the right answer for the right reason, and a box that DOES set WOWSHELL
+         gets its own shell rather than ours. A bare filename resolves against the
+         Windows directory, which is exactly the 16-bit convention. */
+    case WOW32_GETPRIVATEPROFILESTRING: {
+        char app[128], key[128], def[260], file[260], buf[512];
+        volatile BYTE *dst = wow32_argptr(f, 6);
+        WORD   n   = wow32_argw(f, 4);
+        int    ha  = wow32_argstr(f, 18, app,  sizeof app);
+        int    hk  = wow32_argstr(f, 14, key,  sizeof key);
+        int    hd  = wow32_argstr(f, 10, def,  sizeof def);
+        DWORD  got;
+        unsigned k;
+        wow32_argstr(f, 0, file, sizeof file);
+        if (n > sizeof buf) n = sizeof buf;
+        got = GetPrivateProfileStringA(ha ? app : NULL, hk ? key : NULL,
+                                       hd ? def : "", buf, n, file);
+        if (dst) for (k = 0; k <= got && k < n; ++k) dst[k] = (BYTE)buf[k];
+        wow32_setret(f, got);
+        return 1;
+    }
+
+    /* ── 0x39 GetProfileInt(lpAppName, lpKeyName, nDefault) ───────────────
+         10 arg bytes = 4 + 4 + 2, no filename -- so it is the SYSTEM profile
+         twin of 0x80 rather than a private one. Both its call sites read as
+         that, and both name themselves out of DGROUP:
+           seg1:0xca4f  ("KERNEL", "GPCONTINUE", [0x53c])
+           seg2:0x09bc  ("ModuleCompatibility", <the module's own name>, 0)
+         -- one per module just loaded, which is exactly what that section is for.
+       ⚠ WHICH FILE IS UNPROVEN. Win16 `GetProfileInt` means WIN.INI, and
+         `[ModuleCompatibility]` is conventionally a SYSTEM.INI section; the two
+         readings are not distinguishable from krnl386's side because the call
+         carries no filename. It is recorded rather than hidden, and it costs
+         nothing today: this rig's SYSTEM.INI and WIN.INI have NEITHER section
+         (measured), so both readings return the caller's default. Revisit if a
+         module ever needs a compatibility flag. */
+    case WOW32_GETPROFILEINT: {
+        char app[128], key[128];
+        int ha = wow32_argstr(f, 6, app, sizeof app);
+        int hk = wow32_argstr(f, 2, key, sizeof key);
+        WORD def = wow32_argw(f, 0);
+        wow32_setret(f, (DWORD)GetProfileIntA(ha ? app : "", hk ? key : "", (INT)def));
+        return 1;
+    }
 
     /* ── 0x88 GetDriveType(nDrive) ────────────────────────────────────────
          Named by krnl386's export table, and its ONE caller pins the semantics
