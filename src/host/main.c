@@ -8462,6 +8462,78 @@ static void dpmi_sync_defsel_width(void)
     dpmi_install(g_pm_defidx);
 }
 
+/* ── ★ ANSWER AN UNIMPLEMENTED WOW32 CALL DIFFERENTLY, WITHOUT CLAIMING TO KNOW
+     WHAT IT MEANS. (GH #128, session 37) ──────────────────────────────────────────
+     53 of the 82 IDs are not named by krnl386's export table, and the sentinel we
+     answer them with is load-bearing: `0` is right for "declined / not present" and
+     WRONG for a caller that loops until the answer is non-zero. seg2:0x2a08 is
+     exactly that -- allocate, ask WOW32 0x7d whether the result is acceptable, and
+     on 0 allocate another and ask again. It ran 1884 times and took the stack out.
+     Guessing the semantics and writing a `case` for it is what this project keeps
+     paying for. So: a FILE, like pmbp.txt -- one `<hex id> <hex dword>` per line --
+     that changes the answer for one run. The log marks every overridden call as an
+     EXPERIMENT rather than a service, so no reader can mistake a measurement for an
+     implementation. Absent file = the sentinel, unchanged, and no cost. */
+#define WOW32RET_PATH "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\wow32ret.txt"
+#define WOW32RET_MAX 16
+static WORD  g_w32ret_id[WOW32RET_MAX];
+static DWORD g_w32ret_val[WOW32RET_MAX];
+static int   g_w32ret_n = 0;
+
+static DWORD wow32_ret_override(WORD id)
+{
+    int k;
+    for (k = 0; k < g_w32ret_n; ++k) if (g_w32ret_id[k] == id) return g_w32ret_val[k];
+    return (DWORD)WOW32_UNIMPL_RET;
+}
+
+static void wow32_ret_load(void)
+{
+    HANDLE h = CreateFileA(WOW32RET_PATH, GENERIC_READ,
+                           FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, 0, NULL);
+    char buf[1024]; DWORD rd = 0, i = 0;
+    char lb[200], *q = lb;
+    if (h == INVALID_HANDLE_VALUE) return;
+    ReadFile(h, buf, sizeof buf - 1, &rd, NULL);
+    CloseHandle(h);
+    while (i < rd && g_w32ret_n < WOW32RET_MAX) {
+        DWORD v[2] = { 0, 0 }; int col = 0;
+        while (i < rd && (buf[i] == '\r' || buf[i] == '\n')) ++i;
+        if (i >= rd) break;
+        if (buf[i] == '#') { while (i < rd && buf[i] != '\n') ++i; continue; }
+        while (i < rd && buf[i] != '\r' && buf[i] != '\n' && col < 2) {
+            int dg = 0;
+            while (i < rd && (buf[i] == ' ' || buf[i] == '\t')) ++i;
+            if (i >= rd || buf[i] == '\r' || buf[i] == '\n' || buf[i] == '#') break;
+            while (i < rd) {
+                char c = buf[i];
+                int t = (c >= '0' && c <= '9') ? c - '0'
+                      : (c >= 'a' && c <= 'f') ? c - 'a' + 10
+                      : (c >= 'A' && c <= 'F') ? c - 'A' + 10 : -1;
+                if (t < 0) break;
+                v[col] = (v[col] << 4) | (DWORD)t; ++dg; ++i;
+            }
+            if (dg) ++col; else ++i;
+        }
+        while (i < rd && buf[i] != '\n') ++i;
+        if (col >= 2) {
+            g_w32ret_id[g_w32ret_n]  = (WORD)v[0];
+            g_w32ret_val[g_w32ret_n] = v[1];
+            ++g_w32ret_n;
+        }
+    }
+    if (g_w32ret_n) {
+        int k;
+        q = zput(q, "WOW32RET: ** EXPERIMENT ** overriding");
+        for (k = 0; k < g_w32ret_n; ++k) {
+            q = zput(q, " 0x"); q = zhexb(q, (BYTE)g_w32ret_id[k]);
+            q = zput(q, "->0x"); q = zhex(q, g_w32ret_val[k]);
+        }
+        q = zput(q, "\r\n");
+        log_append(LOG_PATH, lb, q); serial_out(lb, q);
+    }
+}
+
 static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec, unsigned steps);
 static void dpmi_ensure_pmret_sel(void);   /* fwd: shared PM-return catcher installer (#2b + 0303) */
 
@@ -9277,6 +9349,7 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                every 32-bit value is a possible hole value (0xFFFF is DECLINE) and a
                sentinel that collides with real data is how an instrument starts lying. */
             DWORD wow_stale = 0; int wow_stale_ok = 0;
+            DWORD wow_ans = (DWORD)WOW32_UNIMPL_RET;
             p = zput(p, "WOWBOP 0x"); p = zhexb(p, bcode);
             /* Only 0x53 carries a sub-function byte. Printing bb[3] for the others
                shows the first byte of the NEXT instruction and reads like data. */
@@ -9421,7 +9494,18 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                                  So try every (offset, segment) pair, and print only the ones
                                  that resolve to a real selector AND look like text. A pair that
                                  is not a string prints nothing rather than a plausible lie. */
-                            if (fid == WOW32_MESSAGEBOX) {
+                            /* ── ⚠ AND NOT ONLY FOR ID 0xc4. (session 37) ──────────
+                                 This was gated on krnl386's MessageBox, and the very
+                                 next message the guest tried to show came through a
+                                 DIFFERENT id from a DIFFERENT module (0x140, same
+                                 7-word frame, same 0x8008 style) -- so the run printed
+                                 seven hex words where it could have printed
+                                 "Application Error". A string argument is worth
+                                 decoding whoever is passing it; the scan already
+                                 refuses anything that is not a NUL-terminated run of
+                                 text through a selector that resolves, so a non-string
+                                 still prints nothing rather than a plausible lie. */
+                            if (na >= 2) {
                                 for (k = 0; k + 1 < na; ++k) {
                                     DWORD aoff = (DWORD)(fb[WOW32_OFF_ARGS + k * 2]
                                                   | (fb[WOW32_OFF_ARGS + k * 2 + 1] << 8));
@@ -9634,7 +9718,8 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                 /* Read the litter FIRST, then overwrite it -- the value that would
                    have been used is evidence, and it is gone a line later. */
                 wow_stale = wow32_peekret(&f); wow_stale_ok = 1;
-                wow32_setret(&f, WOW32_UNIMPL_RET);   /* ★ see WOW32_UNIMPL_RET */
+                wow_ans = wow32_ret_override(f.id);   /* wow32ret.txt, if any */
+                wow32_setret(&f, wow_ans);            /* ★ see WOW32_UNIMPL_RET */
             }
             /* ── STEP OVER AND KEEP GOING, RATHER THAN STOPPING THE GUEST. ─────
                  Returning -1 here halts the run at the first unimplemented service,
@@ -9658,8 +9743,10 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                 p = zput(p, "; hole held 0x");
                 p = zhex(p, wow_stale);
                 p = zput(p, ", ANSWERED 0x");
-                p = zhex(p, (DWORD)WOW32_UNIMPL_RET);
-                p = zput(p, " (harness sentinel, NOT krnl386's answer)");
+                p = zhex(p, wow_ans);
+                p = zput(p, (wow_ans == (DWORD)WOW32_UNIMPL_RET)
+                          ? " (harness sentinel, NOT krnl386's answer)"
+                          : " (** wow32ret.txt OVERRIDE -- an EXPERIMENT, not a service **)");
             }
             p = zput(p, "\r\n");
             log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
@@ -14070,6 +14157,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                    has not loaded yet simply arms later. */
                 dpmi_bp_load();
                 dpmi_bp_arm();
+                wow32_ret_load();
                 /* pmchg.txt: `<hex offset> [segment]`, segment defaulting to 4
                    (krnl386's DGROUP). Absent file = no watch and no cost. */
                 { HANDLE hc = CreateFileA(PMCHG_PATH, GENERIC_READ,
