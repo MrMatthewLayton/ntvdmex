@@ -473,11 +473,45 @@ stock live DGROUP @0x0162a0   head=0x1707  current=0x038f
 zero-`hInstance` task in stock's list at all.** Ours has one — krnl386's own bring-up record,
 still linked — and that is precisely what a `LoadCursor(NULL, …)` matches.
 
-⇒ **The defect is structural and named: our run leaves a task in the list that a correct WOW
-session does not have.** ▸ Either stock's first real task REUSES that bring-up record (so
-there is only ever one), or it is unlinked when the first task starts. `seg1:0xc51c` plants
-it; `seg1:0x99ed` is the sorted insert that later prepends WOWEXEC's. Read what happens to
-`[0x226]`/`[0x228]` between those two points.
+⇒ **Our run has a task in the list that a settled WOW session does not.**
+⚠ **But that dump is the STEADY state, not the transient**, and the distinction matters: it
+was taken with WOWEXEC *and* SYSEDIT running, long after boot. It does not say what the list
+held at WOWEXEC's first instruction, which is the moment that matters.
+
+### And krnl386 unlinks that record itself — we just never get there
+
+`seg1:0x9a3e` is "remove from the list at `[0x226]`" (`mov es,[bp+4] / mov bx,0x226 /
+mov dx,0 / call 0x8ab2`). It has three callers, and one of them is in the boot path:
+
+```
+cd2d  call 0xb544         ; WOW32 0x80 -- [boot] 386GRABBER from SYSTEM.INI
+cd30  mov es,[0x228]      ; ★ the CURRENT task -- krnl386's own bring-up record
+cd36  call 0x9a3e         ; ★ UNLINK IT
+```
+
+So krnl386 takes itself out of the task list, by design, shortly after loading the shell.
+**We never reach it**, and the reason is exact:
+
+```
+seg1:0xcc66  lcall LoadModule("WOWEXEC.EXE")   svc=628   <- entered
+seg1:0xcc6b  cmp ax,0x20                                 <- NEVER FIRES
+seg1:0x229c  mov es,ax                          svc=970   AX=0x03a7  (fine)
+seg1:0x229c  mov es,ax                          svc=979   AX=0xffff  (the #GP)
+```
+
+**Control never returns from `LoadModule`.** WOWEXEC's task is created *and runs* inside it —
+342 services later it is executing its own code and faulting — so the boot task never gets
+to `0xcd01`, never reads `[boot] 386GRABBER`, and never unlinks itself.
+
+▸ **That forks the next step cleanly, and only one measurement decides it:**
+1. If real `LoadModule` **returns before** the new task runs, then the ordering is ours to
+   fix — we switch to the new task too early — and the unlink then happens on time.
+2. If real `LoadModule` **also switches**, then the boot record's instance handle must be
+   non-zero at that moment, and the question goes back to what should have filled
+   `TDB+0x1c`.
+
+The `0x229c` hit at svc 970 is worth carrying: `GetExpWinVer` is called twice, and the FIRST
+call succeeds with a real handle. Only the `LoadCursor(NULL, …)` one fails.
 
 ⚠ **The oracle needed fixing before it could answer.** `vdmdump`'s LDT dump was
 `LDT_ENTRY LdtEntries[512]`, which covers selectors `0x0000..0x0FFF` — and stock's task-list
@@ -491,9 +525,9 @@ went from 512 entries to 773.
    from a just-completed allocation; `seg1:0x574d` (the other half of the loop) does
    `lsl ecx,[bp+6]`, so these are selectors and the question is about their limits. The
    return is a boolean on the first-call path and a value on the retry path.
-2. **The extra task in our list** above — the `#GP` at `seg1:0x229c` is only what it causes,
-   and stock's list is the reference: two tasks, both with real handles, no zero-`hInstance`
-   entry.
+2. **Why `LoadModule` never returns** — the fork above. krnl386 unlinks its own boot record
+   at `seg1:0xcd36`, and it never gets there because WOWEXEC runs and faults inside
+   `LoadModule`. The `#GP` at `seg1:0x229c` is only what that causes.
 3. `NETWORK.DRV` / `wfwnet.drv` — krnl386 looks for both and neither is on the box's search
    path. Probably harmless; check before assuming.
 4. **Oracle the `AH=44h` trio** against MS-DOS 6.22 (#24). The register contract used is from
