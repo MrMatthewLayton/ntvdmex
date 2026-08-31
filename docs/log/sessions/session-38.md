@@ -40,10 +40,65 @@ and WOWEXEC's own code says where it got to:
 byte-for-byte the committed behaviour — 258 calls, the same histogram, the same GP fault,
 re-measured after every change. DOS batteries 209/209.
 
-⚠ **The run now dies HOST-side**: `DPMI FATAL: exception code=0xc0000005 at 0x7c912c16`,
-`CS=0x1b`, `bytes@fault = 88 1c 01` (`mov [ecx+eax],bl`) — an access violation inside
-`ntdll`, ours not the guest's. That, and the unimplemented USER ids the window path calls
-(`0x57`, `0xad`, `0x16c`, `0x217`), are the new frontier.
+★ **And then two host defects fell** (below): a read-only string literal handed to
+`GetProfileIntA`, which was killing the run at `0xc0000005` in `ntdll`, and — much more
+serious — **dispatching WOW32 calls on the id alone when the id space is per module**, which
+had us answering WOWEXEC's `RegisterClass` with `GetProfileIntA`. With both fixed WOWEXEC
+makes **1112 calls** and reaches `RegisterClass` honestly.
+
+⚠ **The new frontier is USER's own thunk table.** `RegisterClass` returns 0 because it is
+not implemented, WOWEXEC takes its error path at `wowexec:0x0849` (`push 0x8f`), the task
+exits, and krnl386 relaunches it — ~155 times until the log cap. That loop is the correct
+shape of "the window class cannot be registered yet".
+
+### ★★★ AND THEN TWO HOST DEFECTS, BOTH OF THEM OURS
+
+**1. We handed Windows a read-only string literal.** With the scheduler on the run died
+host-side, deterministically, at `0xc0000005` in `ntdll` — `mov [ecx+eax],bl`. A frame walk
+added to the fatal dump gave `ourbase=0x0f000000`, which turned two "random" numbers into
+addresses in our own image: the caller at `+0xc3bf` and, in `EAX`, the *target of the write*.
+`objdump` at that address:
+
+```
+f00c39f:  mov  $0xf09a9f6,%eax      ; a string literal
+f00c3aa:  cmove %eax,%ecx           ; hk ? key : ""
+f00c3af:  cmovne %esi,%eax          ; ha ? app : ""
+f00c3b9:  call *...                 ; GetProfileIntA(app, key, def)
+```
+
+XP's profile code **writes to the name buffers it is given**, and `""` lives in a read-only
+page. It survived ten calls in every earlier run because all of them had both names
+non-empty; the scheduler simply let the guest get as far as asking with one missing. Both
+`0x39` and `0x80` now pass writable buffers. ⇒ WOWEXEC went from **28 calls to 1112**.
+
+⚠ And the log could not name the crashing call: the `WOWBOP` line is accumulated and only
+flushed *with its result*, so a crash inside a service loses the header too and the log ends
+at the last call that **succeeded**. My first reading blamed `0x57`, which was fine. The fatal
+dump now records the last id entered, and says that it may have completed.
+
+**2. ★★★ THE ID SPACE IS PER MODULE, AND WE WERE DISPATCHING ON THE ID ALONE.**
+
+WOWEXEC's `RegisterClass(&WNDCLASS)` arrives as **id `0x39`** — `retstub=0x0c25`, **4** argument
+bytes, stub in USER's segment. krnl386's `0x39` is `GetProfileInt` — `retstub=0xb537`, **10**
+argument bytes. We serviced the first with `GetProfileIntA` and handed WOWEXEC the answer:
+**a function answered by an unrelated function**, the "runs but lies" class this project
+treats as the most expensive kind. Every id in `wow32.h` was read out of krnl386; USER, GDI
+and the drivers have their own tables reaching the same BOP with their own numbering.
+
+The discriminator is exact and needs nothing external: **the BOP lives inside krnl386's own
+common thunk (`seg1:0x2bf1`), so the executing `CS` at a BOP *is* krnl386's code segment, and
+a stub in that same segment is krnl386's stub.** Every service, every decline and the
+scheduler hooks are gated on it, and the log prints `[krnl]` or
+`[FOREIGN TABLE, id is NOT krnl386's] stub=0x....` instead of putting krnl386's name on
+something it has not identified.
+
+⚠ The first attempt gated on `g_wow_pmbase[]`, which is filled by a descriptor-limit match
+that has not fired when the earliest calls arrive — **the baseline collapsed from 258 calls to
+3**. Measured, not reasoned about, and that is the only reason it was caught.
+
+★ **The gate changes nothing that worked**: baseline 42 serviced / 114 declined / 97
+unimplemented, before and after, identical. All 45 foreign calls in a baseline run were
+already unimplemented. It only stops the wrong answer.
 
 ### How the scheduler works — and why it is small
 
@@ -545,14 +600,13 @@ quarter-gigabyte file. Budget for it before setting a knob.
 
 **The scheduler is built and the wall is down** (see the headline). What is left:
 
-1. **The host-side crash.** `DPMI FATAL: exception code=0xc0000005 at 0x7c912c16`, `CS=0x1b`,
-   `bytes@fault = 88 1c 01` (`mov [ecx+eax],bl`) — an access violation in `ntdll`, in OUR
-   process, right after WOWEXEC's `0x57` call is stepped over. This is a host bug, not a guest
-   one, and it is the thing actually ending the run now. Start here.
-2. **The USER ids the window path needs**: `0x57` (a stock object, from `wowexec:0x0823`),
-   `0xad` ×2, `0x16c`, `0x217` — all called from USER's segment `0x0327` or WOWEXEC's
-   `0x03cf`, all currently stepped over. `RegisterClass` and `CreateWindow` are immediately
-   behind them. `tools/ne/nedis.py --wowfunc` on each, the same way `0x7d` was pinned.
+1. ~~The host-side crash.~~ **FIXED** — a read-only `""` literal passed to `GetProfileIntA`.
+2. **USER's OWN THUNK TABLE.** This is the frontier now. `RegisterClass` is id `0x39` *in
+   USER's numbering* (`stub=0x0327`, 4 arg bytes, a far `&WNDCLASS`), and everything in
+   `wow32.h` is krnl386's numbering, so none of it applies. The work is to map USER's table
+   the way `wowthunks.py`/`wowmap.py` mapped krnl386's — **against `guest/ne/user.exe`, not
+   krnl386** — and then implement `RegisterClass`, `CreateWindow` and the rest against it.
+   The log already separates the two (`[krnl]` vs `[FOREIGN TABLE] stub=0x....`).
 3. **Park the creator instead of truncating it.** At (C) the boot task had retired but was
    still freeing selectors when the host took the machine away. Saving its context there and
    giving it the rest of its turn is a small change and removes a known leak.

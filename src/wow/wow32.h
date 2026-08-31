@@ -140,8 +140,24 @@ typedef struct {
     WORD             id;
     WORD             argb;
     WORD             from;           /* return address in krnl386 seg 1 -- the CALL SITE */
+    WORD             stubseg;        /* [bp+4]: the SEGMENT of the per-function stub    */
     wow32_sel2lin_fn sel2lin;        /* selector -> linear base (host's LDT view) */
     void            *ctx;
+    /* ── ★★★ THE ID SPACE IS PER MODULE, AND THIS SAYS WHOSE. (session 38) ──────
+         Every id in this file was read out of krnl386's thunk table. USER, GDI and
+         the drivers have their OWN tables, with their own numbering, reaching the
+         same BOP -- so an id is only meaningful together with the table it came
+         through, and the table is named by `stubseg`.
+       ⚠ MEASURED, AFTER GETTING IT WRONG. WOWEXEC's `RegisterClass(&WNDCLASS)`
+         arrives as id `0x39` with `retstub=0x0c25` and **4** argument bytes, from
+         USER's segment. krnl386's `0x39` is `GetProfileInt`, `retstub=0xb537`, **10**
+         argument bytes. We serviced the first with `GetProfileIntA` and handed
+         WOWEXEC the answer -- a function answered by an unrelated function, which is
+         the "runs but lies" class this project treats as the most expensive kind.
+       ⇒ 1 only when the stub lives in krnl386 itself. Everything in this file is
+         gated on it; a foreign call gets the honest "unimplemented", which is a
+         missing answer instead of a wrong one. */
+    int              krnl;
     /* Filled in by the host so a service can talk back about what it did. */
     DWORD            ret;
     int              serviced;
@@ -471,6 +487,8 @@ static int wow32_may_decline(WORD id, WORD from)
  */
 static int wow32_call(wow32_frame_t *f, wow32_dosdata_t *dd)
 {
+    /* ★ NOT OUR ID SPACE, NOT OUR ANSWER. See `krnl` in wow32_frame_t. */
+    if (!f->krnl) return 0;
     switch (f->id) {
 
     /* ── 0xb8 VirtualAlloc(lpAddress, dwSize, flAllocationType, flProtect) ──
@@ -570,13 +588,16 @@ static int wow32_call(wow32_frame_t *f, wow32_dosdata_t *dd)
         WORD   n   = wow32_argw(f, 4);
         int    ha  = wow32_argstr(f, 18, app,  sizeof app);
         int    hk  = wow32_argstr(f, 14, key,  sizeof key);
-        int    hd  = wow32_argstr(f, 10, def,  sizeof def);
         DWORD  got;
         unsigned k;
+        /* ⚠ Same trap as 0x39 next door: `hd ? def : ""` would hand a READ-ONLY
+             literal to a call that writes to its arguments. NULL is documented and
+             safe for the two names; the default has to be a writable buffer. */
+        if (!wow32_argstr(f, 10, def, sizeof def)) def[0] = 0;
         wow32_argstr(f, 0, file, sizeof file);
         if (n > sizeof buf) n = sizeof buf;
         got = GetPrivateProfileStringA(ha ? app : NULL, hk ? key : NULL,
-                                       hd ? def : "", buf, n, file);
+                                       def, buf, n, file);
         if (dst) for (k = 0; k <= got && k < n; ++k) dst[k] = (BYTE)buf[k];
         wow32_setret(f, got);
         return 1;
@@ -596,12 +617,23 @@ static int wow32_call(wow32_frame_t *f, wow32_dosdata_t *dd)
          nothing today: this rig's SYSTEM.INI and WIN.INI have NEITHER section
          (measured), so both readings return the caller's default. Revisit if a
          module ever needs a compatibility flag. */
+    /* ⚠⚠ NEVER HAND A STRING LITERAL TO THESE. (session 38) This read
+           `GetProfileIntA(ha ? app : "", hk ? key : "", def)`, and the `""` is in
+           .rdata -- a READ-ONLY page. XP's profile code writes to the name buffers
+           it is given, so the moment krnl386 asked with an empty section or key the
+           host died: `0xc0000005` in ntdll at `mov [ecx+eax],bl`, with EAX holding
+           the literal's own address. It survived ten calls in every earlier run
+           because every one of them had both names non-empty; the task scheduler
+           simply let the guest get as far as asking with one missing.
+         ⇒ The locals are writable and already the right size, so pass them always
+           and make "absent" an empty *buffer* rather than an empty literal. */
     case WOW32_GETPROFILEINT: {
         char app[128], key[128];
-        int ha = wow32_argstr(f, 6, app, sizeof app);
-        int hk = wow32_argstr(f, 2, key, sizeof key);
-        WORD def = wow32_argw(f, 0);
-        wow32_setret(f, (DWORD)GetProfileIntA(ha ? app : "", hk ? key : "", (INT)def));
+        WORD def;
+        if (!wow32_argstr(f, 6, app, sizeof app)) app[0] = 0;
+        if (!wow32_argstr(f, 2, key, sizeof key)) key[0] = 0;
+        def = wow32_argw(f, 0);
+        wow32_setret(f, (DWORD)GetProfileIntA(app, key, (INT)def));
         return 1;
     }
 

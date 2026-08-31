@@ -6009,6 +6009,23 @@ static long host_interp(volatile BYTE *tib, long cap)
    VirtualQuery answers the same question by asking the memory manager instead of the
    CPU, so it cannot raise. Committed + readable (any of the four read-capable
    protections) + the whole span inside one region is the test. */
+/* The thread that RUNS THE GUEST (the main one). Recorded so the fatal dump can say
+   whether a host-side crash happened on it or on one of the worker threads -- audio,
+   present, watchdog. Those are different bugs and the dump used to name neither. */
+static DWORD g_guest_tid = 0;
+
+/* ── ★ WHICH WOW32 CALL WAS THE HOST INSIDE? (session 38) ─────────────────────────
+     The WOWBOP log line is accumulated into `p` and only flushed WITH its result, so
+     a host-side crash inside a service loses the whole line -- header included. The
+     log then ends at the last call that SUCCEEDED, and the crashing one is invisible.
+     That cost a wrong first reading of the GetProfileIntA crash: the tail named 0x57,
+     stepped over and harmless, while the fault was in the call after it.
+   ⇒ Record the id and call site on entry. This is "the last call ENTERED", not "the
+     call in flight" -- if the run ended cleanly it names a call that completed. The
+     fatal dump says so rather than implying more than it knows. */
+static WORD g_wow_last_id   = 0xFFFF;
+static WORD g_wow_last_from = 0;
+
 static int host_readable(const void *addr, SIZE_T len)
 {
     MEMORY_BASIC_INFORMATION mbi;
@@ -6261,6 +6278,51 @@ veh_fatal:
     p = zput(p, "\r\n");
     { const BYTE *fb = (const BYTE *)(ULONG_PTR)(er->ExceptionAddress);
       p = zput(p, "  bytes@fault: "); p = zdump(p, fb, 16); }
+    /* ── ★★ WHO CALLED INTO THIS? (GH #128, session 38) ───────────────────────────
+         A fault inside ntdll or kernel32 is OUR bug at one remove -- some host call
+         passed a bad pointer -- and the registers name the *instruction* while saying
+         nothing about the caller. "An access violation in ntdll at 0x7c912c16" is not
+         an actionable line; the first return address inside our own image is.
+       ⚠ Guarded at every step and bounded: this runs inside a VEH on a process that is
+         already broken, so it may not allocate, may not lock, and must not fault. A
+         frame chain that does not ascend is not a frame chain, and we stop rather than
+         printing plausible-looking rubbish -- an instrument that invents its own frame
+         is this project's most expensive recurring mistake. */
+    p = zput(p, "  last WOW32 call ENTERED: id=0x"); p = zhex(p, g_wow_last_id);
+    { const char *nm = wow32_name(g_wow_last_id);
+      if (nm) { p = zput(p, " "); p = zput(p, nm); } }
+    p = zput(p, " from=0x"); p = zhex(p, g_wow_last_from);
+    p = zput(p, " (it may have COMPLETED -- the log line is only written with the result,\r\n"
+                "    so a crash inside a service loses the header and the log ends one call short)\r\n");
+    p = zput(p, "  tid=0x"); p = zhex(p, GetCurrentThreadId());
+    p = zput(p, (GetCurrentThreadId() == g_guest_tid)
+              ? " (THE GUEST THREAD)" : " (a WORKER thread, NOT the guest)");
+    p = zput(p, " ourbase=0x");
+    p = zhex(p, (DWORD)(ULONG_PTR)GetModuleHandleA(NULL));
+    p = zput(p, "\r\n  frames:");
+    {   DWORD fp = cx->Ebp; int k;
+        for (k = 0; k < 12 && fp; ++k) {
+            const DWORD *fr = (const DWORD *)(ULONG_PTR)fp;
+            if (!host_readable(fr, 8)) { p = zput(p, " <unreadable>"); break; }
+            p = zput(p, " 0x"); p = zhex(p, fr[1]);
+            if (fr[0] <= fp) { p = zput(p, " <chain ends>"); break; }
+            fp = fr[0];
+        }
+        p = zput(p, "\r\n");
+    }
+    /* ★ AND THE RAW STACK, because the frame chain is only as good as EBP. A leaf
+         function that has not built a frame, or one compiled without one, breaks the
+         walk above and the walk cannot tell you that it did. Twenty-four words from
+         ESP will contain the return address whether EBP is trustworthy or not -- the
+         reader looks for one near `ourbase`. */
+    {   const DWORD *sp = (const DWORD *)(ULONG_PTR)cx->Esp; int k;
+        p = zput(p, "  @esp:");
+        for (k = 0; k < 24; ++k) {
+            if (!host_readable(sp + k, 4)) { p = zput(p, " <unreadable>"); break; }
+            p = zput(p, " 0x"); p = zhex(p, sp[k]);
+        }
+        p = zput(p, "\r\n");
+    }
     log_append(LOG_PATH, cb, p);
     serial_out(cb, p);
     ExitProcess(0xDE0);                                 /* clean exit; batch dumps the log */
@@ -9618,9 +9680,20 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                         DWORD nby  = (DWORD)(fb[WOW32_OFF_ARGB]
                                              | (fb[WOW32_OFF_ARGB + 1] << 8));
                         DWORD na   = nby / 2, k;
-                        const char *nm = wow32_name((WORD)fid);
+                        /* ★ AN ID IS ONLY MEANINGFUL WITH ITS TABLE. The stub lives
+                             in the module that owns the numbering, so print that
+                             segment and only apply krnl386's names when the stub is
+                             krnl386's. This log said "GetProfileInt" over WOWEXEC's
+                             RegisterClass for one run, which is how the whole per-module
+                             id space came to light -- an instrument must not put a name
+                             on something it has not identified. */
+                        DWORD sseg = (DWORD)(fb[4] | (fb[5] << 8));
+                        int   kt   = sseg == (VDM_REG(tib, VTIB_CS) & 0xFFFF);
+                        const char *nm = kt ? wow32_name((WORD)fid) : NULL;
                         p = zput(p, " FUNC=0x"); p = zhex(p, fid);
                         if (nm) { p = zput(p, " "); p = zput(p, nm); }
+                        p = zput(p, kt ? " [krnl]" : " [FOREIGN TABLE, id is NOT krnl386's]");
+                        p = zput(p, " stub=0x"); p = zhex(p, sseg);
                         /* ── ★ WHICH TASK IS CALLING. (GH #128, session 38) ───────────
                              krnl386 keeps the current task's TDB selector in DGROUP
                              `[0x228]`, and the common thunk sets DS to DGROUP two
@@ -9798,10 +9871,27 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                 f.id      = wow32_peekw(f.bp + WOW32_OFF_ID);
                 f.argb    = wow32_peekw(f.bp + WOW32_OFF_ARGB);
                 f.from    = wow32_peekw(f.bp + WOW32_OFF_FROM);
+                f.stubseg = wow32_peekw(f.bp + 4);          /* the stub's own segment */
+                /* ★ WHOSE ID SPACE IS THIS? The per-function stub lives in the module
+                     that owns the numbering, so resolving its segment against
+                     krnl386's own segment bases answers it exactly. Everything we
+                     know about this interface came out of krnl386, so a call that did
+                     NOT come through krnl386's table gets the honest "unimplemented"
+                     rather than an answer from the wrong function. */
+                /* ⚠ NOT via g_wow_pmbase[]: that table is filled by a descriptor-limit
+                     match that has not fired yet when the earliest calls arrive, so a
+                     gate keyed on it rejected EVERYTHING and the run collapsed from 258
+                     calls to 3. Measured, not reasoned about.
+                   ⇒ The BOP itself is the reference. It lives in krnl386's own common
+                     thunk (`seg1:0x2bf1`), so the executing CS at a BOP IS krnl386's
+                     code segment -- and a stub in that same segment is krnl386's stub.
+                     Exact, self-contained, and true from the first call onward. */
+                f.krnl = (f.stubseg == (WORD)(VDM_REG(tib, VTIB_CS) & 0xFFFF));
                 f.sel2lin = wow32_host_sel2lin;
                 f.ctx     = NULL;
                 f.ret     = 0;
                 f.serviced = 0;
+                g_wow_last_id = (WORD)f.id; g_wow_last_from = f.from;
                 /* ── ★★ THE EPILOGUE-MODE EXPERIMENT (wowmode.txt). ────────────
                      Written BEFORE anything is serviced, because the guest reads
                      the mode after the BOP whatever we do here -- a stepped-over
@@ -9825,7 +9915,7 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                      unconditionally -- it costs nothing and the fault hook, which
                      runs where DS is anybody's, depends on having it. */
                 g_wow_dgsel = (WORD)(VDM_REG(tib, VTIB_DS) & 0xFFFF);
-                if (g_wowsched_on) {
+                if (g_wowsched_on && f.krnl) {
                     DWORD modelin = (DWORD)(ULONG_PTR)(f.bp + WOW32_OFF_MODE);
                     WORD  cur     = wowsched_curtask();
                     /* (A) THE LAUNCH -- AND THE SWITCH HAS TO HAPPEN HERE.
@@ -9903,7 +9993,7 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                    ⚠ DX:AX IS A 32-BIT BYTE COUNT, not a flag. The failure path builds
                      0xFFFFFFFF in DX:AX, so a short read must return the SHORT COUNT
                      and only a real failure may return the sentinel. */
-                if (f.id == WOW32_FILE_READ && !wow32_may_decline(f.id, f.from)) {
+                if (f.krnl && f.id == WOW32_FILE_READ && !wow32_may_decline(f.id, f.from)) {
                     DWORD cnt  = (DWORD)wow32_argw(&f, 8)
                                | ((DWORD)wow32_argw(&f, 10) << 16);
                     DWORD boff = wow32_argw(&f, 12);
@@ -9932,7 +10022,7 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                     VDM_REG(tib, VTIB_EIP) += WOW32_BOP_LEN;
                     return 1;
                 }
-                if (f.id == WOW32_GETCURDIR && g_pm_xfer_seg) {
+                if (f.krnl && f.id == WOW32_GETCURDIR && g_pm_xfer_seg) {
                     DWORD gsi  = wow32_argw(&f, 0);
                     WORD  gsel = wow32_argw(&f, 2);
                     DWORD drv  = wow32_argw(&f, 4) & 0xFF;
@@ -12566,6 +12656,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     char dosout[16384];   /* M9 probe dumps run to several KB; 1024 truncated them */
     char progpath[768]; char args[256];
     unsigned i; int guard;
+    g_guest_tid = GetCurrentThreadId();
     static const BYTE bop[] = { VDM_BOP0, VDM_BOP1, 0x20, 0xCF };  /* BOP 0x20 ; iret */
     static const BYTE bop10[] = { VDM_BOP0, VDM_BOP1, 0x10, 0xCF }; /* BOP 0x10 ; iret */
     static const BYTE bop16[] = { VDM_BOP0, VDM_BOP1, 0x16, 0xCF }; /* BOP 0x16 ; iret */
