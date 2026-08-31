@@ -548,8 +548,11 @@ went from 512 entries to 773.
    `LoadModule`. The `#GP` at `seg1:0x229c` is only what that causes.
 3. `NETWORK.DRV` / `wfwnet.drv` — krnl386 looks for both and neither is on the box's search
    path. Probably harmless; check before assuming.
-4. **Oracle the `AH=44h` trio** against MS-DOS 6.22 (#24). The register contract used is from
-   the documented interface, not from a run — the `AL=09h` DX bits beyond bit 12 especially.
+4. ~~Oracle the `AH=44h` trio against MS-DOS 6.22 (#24).~~ **DONE** —
+   `tools/dostest/p_ioctl.asm`, and the field that matters is not disputed: `4409h`'s remote
+   bit reads `0` on MS-DOS 6.22, DOSBox-X and us alike. The three DISPUTED rows all have one
+   cause — the 6.22 oracle boots from a floppy, so its default drive is A: — and the rationale
+   is recorded in [`oracle-disagreements.md`](../../research/oracle-disagreements.md).
 
 ### Ruled out — do not re-try (all by measurement)
 
@@ -563,6 +566,15 @@ went from 512 entries to 773.
   its own stack selector to a `0x0fff` limit with `INT 31h 0x0C`. The bigger entry stack is
   kept because we are the ones who choose it, but it fixed nothing.
 - GDI.EXE's file, header, relocations, allocation and table read.
+
+### The DOS side was re-validated on real hardware, not just off-VM
+
+`dos_int21.c` and `dos_env.h` both changed this session, and *a fix measured on one guest is
+a fix for none*. On the rig: `selftest.com` **8/8** (DOS memory, File I/O, XMS, EMS, PIT,
+mouse, keyboard, video), and `dpmitest.com` for the other guest class. Against the oracle
+panel, `p_dir`, `p_file`, `p_misc` and `p_err` all report **no disputes, no mismatches** —
+including `int21.4700` (the current-directory call that now answers for any drive) and the
+`AX=0002 / CF=1` open-failure codes that the sharing fix went through.
 
 ### How to drive it
 
