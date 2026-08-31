@@ -142,18 +142,38 @@ module KRNL386.EXE at 0001:229C."* See #128 below.
    came through a different id from a different module. Two instruments were built on the
    way: **`pmchg.txt`** (which byte changed, and at which PM event — it named the drive-table
    write in one run) and **`wow32ret.txt`**.
-   ⚠ **The furthest point depends on an EXPERIMENT**: `wow32ret.txt` must contain
-   `7d 00000001` — it now ships in `scripts/bm/` and `bmwow.sh` deploys it, so a clean clone
-   reproduces rather than silently regressing. Pinning `0x7d` properly is the first item in
-   the session-37 handoff.
+   ~~⚠ The furthest point depends on an EXPERIMENT (`wow32ret.txt` must contain
+   `7d 00000001`).~~ **CLOSED in session 38** — `0x7d` is a service now. Both its call sites
+   are inside krnl386's task-database creator (`seg2:0x2984`, which allocates `0x320` bytes
+   and stamps `"TD"` into them); the retry loop offers **aliases of the same memory**, so the
+   question can only be about the selector's numeric value, and `seg2:0x2a22` uses the return
+   **as** the selector — so the answer is to **echo the argument**. Measured: the one call is
+   asked about `0x03b7` and the next LDT write gives that selector `limit=0x31f`.
+   `wow32ret.txt` ships **empty** and `0 override(s)` is the correct deploy line.
    **What kills WOWEXEC is `LoadCursor(NULL, IDC_ARROW)`** — a NULL instance is the
    documented way to ask for a system cursor. USER passes it to `GetExpWinVer`, krnl386's
    `GetExePtr(0)` walks its task list and **matches krnl386's own bring-up record, whose
    instance handle is `0`**, then returns that record's module-handle field, `0xFFFF`, which
-   USER loads into `ES`. **The stock oracle settles what is wrong with that**: a live stock
-   WOW session's task list (read out of the low-megabyte dump plus the LDT, after widening
-   `vdmdump`'s 512-entry LDT limit that was hiding the answer) has **two tasks, both with
-   real handles and no zero-`hInstance` entry at all**. Ours has one that stock does not.
+   USER loads into `ES` — `mov es,ax` at `seg1:0x229c`, `#GP` with `err=0xfffc`.
+   **Session 38 resolved the fork, and the obvious branch is refuted.** `TDB+0x1c` has
+   **exactly one writer in the whole of krnl386** — `seg2:0x2e02`, inside `InitTask`, from
+   the module's own DGROUP — and the bring-up record never goes through `InitTask`. So its
+   `hInstance` is zero on real Windows too and there is nothing there to fix; session 37's
+   expected `0x001e` came from the stock pattern `hInst == SS` bar the low bits, and the
+   bring-up record's `SS = 0x001f` is **our host's entry stack**, not a Win16 DGROUP.
+   What is wrong is that the record is still **in the list**: krnl386 unlinks it itself at
+   `seg1:0xcd36`, after `LoadModule` returns — and `LoadModule` never returns, because the
+   new task runs to its fault inside it. ⇒ **an ordering defect, not a value defect.**
+   Measured with two repeating breakpoints (`seg1:0x2225`, `seg1:0x9a16`): the list is
+   `0x03b7 -> 0x01ef -> 0`, i.e. **WOWEXEC's task IS linked, at the head**, and `GetExePtr`
+   skips it (`+0x1c = 0x03d7`) and matches the record behind it. The fault dump alone could
+   not tell that from a one-element list, and an inference drawn from it was wrong.
+   The task launch is also mapped end to end now — `seg1:0x97c2` parks the creating task's
+   `SS:SP` in `DI:CX`, switches `SS:SP` to the new stack, calls WOW32 `0x74` (which carries
+   `wExpWinVer = 0x030a`, read out of `ne_expver`), pops the Win16 entry frame and **`iret`s
+   into the task at `seg1:0x9879`** — so the switch is **krnl386's**, and the host's job is
+   to make the call that should yield stop returning immediately, not to invent a scheduler.
+   See [`session-38.md`](log/sessions/session-38.md) for the resume-here list.
 
    **Session 36 in one paragraph.** The frontier moved from an address to a **module
    name**. Session 35's `WOW32_UNIMPL_RET = 0` — written but never run — turned out to be
