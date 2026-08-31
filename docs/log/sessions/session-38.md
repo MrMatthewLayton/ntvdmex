@@ -199,35 +199,92 @@ disassembly and the hardware agree to the byte.
 
 ---
 
+## ★★★ krnl386 HAS NO SCHEDULER. WE ARE THE SCHEDULER.
+
+This is the finding that says what the remaining work *is*. Every Win16 scheduling
+primitive is a **pure exported pass-through** to WOW32 — a stub that BOPs and returns, with
+no 16-bit body and **no near call, near jmp, short jmp, far call or far jmp to it anywhere
+in the binary**:
+
+| export | id | stub | reached from krnl386 |
+|---|---|---|---|
+| `Yield` | `0x1d` | `seg1:0xb503` | nothing |
+| `OldYield` | `0x75` | `seg1:0xb510` | nothing |
+| `DirectedYield` | `0x96` | `seg1:0xb592` | nothing |
+| `WaitEvent` | `0x1e` | `seg1:0xb578` | nothing |
+| `PostEvent` | `0x1f` | `seg1:0xb56b` | nothing |
+| `SetPriority` | `0x20` | `seg1:0xb585` | nothing |
+| `LockCurrentTask` | `0x21` | `seg1:0xb59f` | nothing |
+
+krnl386 keeps the *state* — the task list, and each parked task's `SS:SP` at `TDB+0x02/+0x04`
+— and hands every scheduling **decision** to the 32-bit side. On real WOW that side runs each
+16-bit task on its own Win32 thread and blocks it. We answer all seven with the harness
+sentinel and return immediately, which is why a task, once entered, never gives control back.
+
+★ **WOWEXEC's startup names the handshake.** Its entry is the textbook Win16 `__astart`:
+
+```
+11b7  xor bp,bp / push bp / lcall InitTask
+11c9  save cx,si,di,bx,es,dx into [0xe0..0xea]   ; the entry frame
+11e1  xor ax,ax / push ax / lcall WaitEvent(0)   ; ★ from=0x03cf:0x11e9 in the log
+11e9  push [0xe4] / lcall InitApp(hInstance)
+11f6  push hInstance,hPrev,PSP,...,nCmdShow / call the WinMain wrapper
+```
+
+`WaitEvent(0)` sits exactly between `InitTask` and `InitApp`, which is where a new task hands
+control back to its creator.
+
+### ⚠ An instrument that lied, and one reading refuted
+
+- **`nedis.py --callers` counted `call` only.** It reported "0 caller(s)" for WOW32 `0x74`,
+  which reads as *nothing calls this* — and `0x74` **is** called, from `seg1:0x9822 jmp
+  0xb1d0`, preceded by `push cs / push 0x985c`: a hand-built far call whose return address is
+  deliberately not the next instruction. That shape is normal here, not an oddity. The scan
+  now takes `e9`, `eb` and `ea` as well, and the zeros in the table above were re-measured
+  with the fixed one.
+- **REFUTED: "the creating task resumes at `seg1:0x9827`."** The switch-back
+  (`mov ss,di / mov sp,cx`, with `DI:CX` holding the creating task's parked stack) is
+  unreachable by any control flow the binary shows, and the two `nop`s at `0x9825/0x9826`
+  looked like a landing pad. A scan of every segment for the word `0x9827` — as a call, a
+  jump, or a datum — finds **nothing**: WOW32 is never told that address. The NOPs are
+  padding.
+
+---
+
 ## ▶ RESUME HERE
 
-The question is now narrow and it is an **ordering** question: *between WOWEXEC's first
-instruction and its `LoadCursor`, where is control supposed to go back to the boot task?*
+**The next piece of work is a scheduler, in the host.** That is not a guess about scope: the
+seven scheduling exports above have no 16-bit body and no internal caller, so there is no
+other place for the decision to live. The concrete shape:
 
-The candidates are the calls the run makes in that window, in order:
+1. **Suspend at `0x74`.** `seg1:0x9822` is the one call made with the new task's `SS:SP`
+   already installed and the creating task's parked in `DI:CX`. Save the guest context there
+   as the creating task's, then let the flow continue into the `iret` as it does today.
+2. **Switch at the yielding calls** — `WaitEvent`, `Yield`, `OldYield`, `DirectedYield` —
+   by restoring another task's saved context instead of returning. `PostEvent` and
+   `SetPriority` feed the choice; `LockCurrentTask` forbids it.
+3. **The list is already right**: krnl386 links every task at `seg1:0x99ed` keyed on the
+   signed priority at `TDB+0x08`, and `[0x228]` names the current task, so a host scheduler
+   can read its policy out of the guest rather than invent one.
 
-```
-0x1e  WaitEvent(0)   from=0x03cf:0x11e9   ★ WOWEXEC's own, 0x32 bytes past its entry
-0x80  GetPrivateProfileString  from=0x0327:0x582f   (USER's)
-0xc5, 0xc9, 0x06, 0x05, 0xc7, 0xc1, 0x88, 0x97, 0xc2, 0x217, 0x98, 0x16c, 0xad
-0x140 MessageBox -- the fatal dialog
-```
+The first checkpoint is small and specific: with `WaitEvent(0)` yielding back, krnl386's boot
+task should return from `LoadModule`, take `seg1:0xcc6b (cmp ax,0x20)`, read
+`[boot] 386GRABBER`, and **unlink its own record at `seg1:0xcd36`** — none of which fires
+today. Breakpoint those three and the fix is measurable before WOWEXEC is asked to draw
+anything.
 
-`WaitEvent(0)` immediately after `InitTask` is the standard Win16 startup handshake, which
-makes it the first suspect — **but** classic Win16 `WaitEvent` returns at once when the task
-already has a posted event, so "it must block" is a hypothesis and not yet a reading. Read
-its call site in WOWEXEC (`0x03cf:0x11e9`) and krnl386's stub before assuming.
-
-⚠ Whatever the answer, it implies the host has to be able to **suspend one 16-bit task and
-resume another**. The switch itself is krnl386's (`seg1:0x97e9` / `seg1:0x9827`, and
-`TDB+0x02/+0x04` hold each parked task's `SS:SP`), so the host's part is to make the call
-that should yield not simply return — not to invent a scheduler.
+⚠ Do not skip step 1. Without a saved context for the creating task there is nothing to
+switch *to*: `seg1:0x97c2` parks its `SS:SP` in `DI:CX` and then clobbers both at
+`seg1:0x9871/0x9873`, and `TDB+0x02/+0x04` alone gives a stack but no `CS:IP`.
 
 ### Ruled out this session — do not re-try
 
 - **Writing the bring-up record's `hInstance`.** One writer, in `InitTask`, which that
   record never enters. `0x001e` was pattern-matching on a stack selector that is ours.
 - **"WOWEXEC's TDB is never linked."** It is linked, at the head, and measured to be.
+- **"The creating task resumes at `seg1:0x9827`."** The address is referenced nowhere in the
+  binary, in any form.
+- **Looking for a 16-bit scheduler inside krnl386.** There is not one.
 - `wow32ret.txt` as a load-bearing file. It ships empty and must stay that way.
 
 ### How to drive it

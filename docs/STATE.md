@@ -171,8 +171,16 @@ module KRNL386.EXE at 0001:229C."* See #128 below.
    The task launch is also mapped end to end now — `seg1:0x97c2` parks the creating task's
    `SS:SP` in `DI:CX`, switches `SS:SP` to the new stack, calls WOW32 `0x74` (which carries
    `wExpWinVer = 0x030a`, read out of `ne_expver`), pops the Win16 entry frame and **`iret`s
-   into the task at `seg1:0x9879`** — so the switch is **krnl386's**, and the host's job is
-   to make the call that should yield stop returning immediately, not to invent a scheduler.
+   into the task at `seg1:0x9879`**.
+   ★★ **And the next piece of work has a name: krnl386 HAS NO SCHEDULER — we are the
+   scheduler.** All seven Win16 scheduling primitives — `Yield`, `OldYield`, `DirectedYield`,
+   `WaitEvent`, `PostEvent`, `SetPriority`, `LockCurrentTask` — are **pure exported
+   pass-throughs** to WOW32 with no 16-bit body and *no call or jump to them anywhere in the
+   binary*. krnl386 keeps the state (the task list, each parked task's `SS:SP` at
+   `TDB+0x02/+0x04`) and hands every decision to the 32-bit side, which on real WOW runs each
+   task on its own thread and blocks it. We answer all seven with the harness sentinel, so a
+   task that has been entered never gives control back. WOWEXEC's entry is the textbook Win16
+   `__astart` and its `WaitEvent(0)` sits exactly between `InitTask` and `InitApp`.
    See [`session-38.md`](log/sessions/session-38.md) for the resume-here list.
 
    **Session 36 in one paragraph.** The frontier moved from an address to a **module

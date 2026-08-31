@@ -130,15 +130,27 @@ def disasm(ne, segno, start, count, stubs=None, out=None):
 
 
 def callers(ne, segno, target):
-    """Every near/far call to `target` within a segment. Returns offsets."""
+    """Every near/far call OR JUMP to `target` within a segment. Returns offsets.
+
+    ⚠ THIS USED TO COUNT `call` ONLY, AND THAT MADE IT LIE. WOW32 id 0x74 is
+      reached from `seg1:0x9822 jmp 0xb1d0`, preceded by `push cs / push 0x985c` --
+      a hand-built far call whose return address is deliberately NOT the next
+      instruction. The tool reported "0 caller(s)", which reads as "nothing calls
+      this", and the truth was "something calls this in the one way I did not
+      look for". A tail-jump into a thunk is the normal shape here, not an oddity.
+    """
     s, d = seg_bytes(ne, segno)
     hits = []
     for i in range(len(d) - 3):
-        if d[i] == 0xE8:
+        if d[i] == 0xE8 or d[i] == 0xE9:                     # near call / near jmp
             rel = struct.unpack_from("<h", d, i + 1)[0]
             if ((i + 3 + rel) & 0xFFFF) == target:
                 hits.append(i)
-        elif d[i] == 0x9A:
+        elif d[i] == 0xEB:                                   # short jmp
+            rel = struct.unpack_from("<b", d, i + 1)[0]
+            if ((i + 2 + rel) & 0xFFFF) == target:
+                hits.append(i)
+        elif d[i] == 0x9A or d[i] == 0xEA:                   # far call / far jmp
             if struct.unpack_from("<H", d, i + 1)[0] == target:
                 hits.append(i)
     return hits
