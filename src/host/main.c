@@ -669,6 +669,17 @@ static void pmap_clear(DWORD lin)
                                                  that increments it: a different bug
    Absent file = no watch and no cost, like every other knob here. */
 #define PMWATCH_PATH "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\pmwatch.txt"
+/* ── ★ WHO WROTE THIS BYTE? (GH #128, session 37) ─────────────────────────────
+     pmbp.txt answers "what is there when I stop here", which needs you to know
+     where to stop. The expensive question is the other one, and it has no
+     instrument: krnl386's per-drive flag table at DGROUP 0x2a2 is READ from two
+     places in its own code and WRITTEN from none, and it is wrong anyway.
+     One line: `<hex offset> [segment]`, segment defaulting to 4 (DGROUP), because
+     the addresses worth watching are data whose base moves every run. Sampled at
+     every PM event, so it cannot name the instruction -- it brackets the write
+     between two events that name themselves, which is a bisect's first step for
+     one run instead of five. Absent file = no watch and no cost. */
+#define PMCHG_PATH   "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\pmchg.txt"
 /* ── RUN PROTECTED MODE UNDER THE KERNEL MONITOR INSTEAD OF IN-PROCESS. ──────────
    This host far-jmps into PM (dpmi_enter.S) because an early spike found
    VdmStartExecution faulting when it ran PM -- and everything expensive we have
@@ -716,6 +727,15 @@ static DWORD g_wow_pmseg1_base = 0;
    commits a code selector over it. Indexed by segment number - 1; 0 = not seen yet. */
 #define WOW_PMBASE_MAX 8
 static DWORD g_wow_pmbase[WOW_PMBASE_MAX];
+/* ── ★ THE CHANGE DETECTOR (pmchg.txt). One line: `<hex offset> [segment]`, the
+     segment defaulting to 4 (krnl386's DGROUP), because the addresses worth watching
+     are data whose base moves every run. Resolved lazily, the first PM event after
+     that segment's selector is committed. See the sampler in dpmi_service_pm_int. */
+static DWORD g_pmwatch_off = 0;      /* offset within the segment; 0 = disabled     */
+static unsigned g_pmwatch_seg = 4;
+static DWORD g_pmwatch_lin = 0;      /* resolved linear address, 0 = not yet        */
+static BYTE  g_pmwatch_last = 0;
+static BYTE  g_pmwatch_have = 0;
 static DWORD g_bp_dump[DPMI_BP_MAX];    /* optional 2nd column: linear addr to dump on hit */
 /* Optional 3rd column: bytes to SKIP on hit instead of re-executing the instruction.
    This turns a breakpoint into a one-instruction PATCH, which is how you test "would
@@ -6746,8 +6766,19 @@ static int wow_place_v86(dos_machine_t *mp, WORD *ecs, WORD *eip,
     /* krnl386 is a LIBRARY: SS:SP = 0:0 and stack = 0 in the header, so nothing tells
        us how big a stack it wants. It pushes on its second instruction. 4K of
        paragraphs is generous for an init path and cheap; if it ever overruns, that is
-       a stack overflow into the block below and it will look like one. */
-    enum { WOW_STACK_PARAS = 0x100 };            /* 4 KB */
+       a stack overflow into the block below and it will look like one.
+     ★ IT OVERRAN, AND IT LOOKED EXACTLY LIKE ONE. (GH #128, session 37) The first
+       run in which krnl386 got far enough to OPEN the Win16 program ended in a #SS
+       at `ss:sp = 0x1f:0x0002` with `bytes@fault = 66 55` -- a `push ebp` two bytes
+       from the bottom. 4 KB covered the bring-up and does not cover loading a
+       program: that path recurses through the module loader, the relocation walk and
+       the descriptor commit. 32 KB, because the block is conventional memory we hand
+       to krnl386 anyway and the header image sits immediately above it either way.
+     ⚠ SP IS 16-BIT, so this cannot exceed 0xFFF paragraphs -- the entry SP is
+       `WOW_STACK_PARAS << 4` and the NE header image is placed at
+       `sseg + WOW_STACK_PARAS` precisely so that `base(SS) + SP` lands on it. Both
+       derive from this constant; do not pin either by hand. */
+    enum { WOW_STACK_PARAS = 0x800 };            /* 32 KB */
     /* ── ★★★ THE WHOLE FILE IMAGE IS STAGED, NOT JUST THE HEADER. ─────────────────
          This used to be `enum { WOW_HDRIMG_PARAS = 0x400 }` -- 16 KB, "comfortably
          more than krnl386's tables need". It is comfortably more than the TABLES need
@@ -9165,6 +9196,52 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
     (void)steps;
     /* First safe moment to re-plant anything the skip mode stepped over. */
     if (g_bp_n) dpmi_bp_rearm_pending(dpmi_sel_base((WORD)(VDM_REG(tib, VTIB_CS) & 0xFFFF)) + eip);
+    /* ── ★ A CHANGE DETECTOR, NOT A DUMP. (GH #128, session 37) ────────────────────
+         pmbp.txt's dump column answers "what is there when I stop here", which needs
+         you to already know where to stop. The question that costs sessions is the
+         other one: "WHO WROTE THIS", for a byte whose writer is not in the guest's
+         own code -- krnl386's per-drive flag table at DGROUP 0x2a2 is read from two
+         places in its segments 1-3 and written from none, and it is nonetheless wrong
+         by the time the Win16 program is loaded.
+         Sampling one byte at every PM event cannot name the instruction, but it
+         brackets the write between two events that DO name themselves, which is the
+         whole of a bisect's first step and costs one run instead of five. */
+    /* ⚠ Segment 0 means "the offset IS a linear address". krnl386 GROWS its DGROUP,
+       so the descriptor-limit match that records g_wow_pmbase[] never fires for
+       segment 4 -- the watch printed "watching" and never "armed", which is the
+       silent-instrument failure this project keeps paying for, one level down. Take
+       the linear address by hand off a `dsbase=` line when that happens. */
+    if (g_pmwatch_off && !g_pmwatch_lin && g_pmwatch_seg == 0) g_pmwatch_lin = g_pmwatch_off;
+    if (g_pmwatch_off && !g_pmwatch_lin && g_pmwatch_seg >= 1 &&
+        g_pmwatch_seg <= WOW_PMBASE_MAX && g_wow_pmbase[g_pmwatch_seg - 1]) {
+        char wb[160], *wq = wb;
+        g_pmwatch_lin = g_wow_pmbase[g_pmwatch_seg - 1] + g_pmwatch_off;
+        wq = zput(wq, "PMWATCH armed: seg "); wq = zhex(wq, g_pmwatch_seg);
+        wq = zput(wq, " + 0x"); wq = zhex(wq, g_pmwatch_off);
+        wq = zput(wq, " = linear 0x"); wq = zhex(wq, g_pmwatch_lin);
+        wq = zput(wq, "\r\n"); log_append(LOG_PATH, wb, wq); serial_out(wb, wq);
+    }
+    if (g_pmwatch_lin) {
+        const volatile BYTE *w = (const volatile BYTE *)(ULONG_PTR)g_pmwatch_lin;
+        if (mem_readable((ULONG_PTR)w, 1)) {
+            BYTE now = *w;
+            if (!g_pmwatch_have) { g_pmwatch_have = 1; g_pmwatch_last = now; }
+            else if (now != g_pmwatch_last) {
+                char wb[200], *wq = wb;
+                wq = zput(wq, "PMWATCH linear 0x"); wq = zhex(wq, g_pmwatch_lin);
+                wq = zput(wq, " CHANGED 0x"); wq = zhexb(wq, g_pmwatch_last);
+                wq = zput(wq, " -> 0x"); wq = zhexb(wq, now);
+                wq = zput(wq, " -- first seen at cs:eip=0x");
+                wq = zhex(wq, VDM_REG(tib, VTIB_CS) & 0xFFFF);
+                wq = zput(wq, ":0x"); wq = zhex(wq, eip);
+                wq = zput(wq, " ev=0x"); wq = zhex(wq, ev);
+                wq = zput(wq, " ax=0x"); wq = zhex(wq, ax);
+                wq = zput(wq, "\r\n");
+                log_append(LOG_PATH, wb, wq); serial_out(wb, wq);
+                g_pmwatch_last = now;
+            }
+        }
+    }
     /* ── NATIVE BOPs: krnl386 CALLING ITS 32-BIT COMPANION. (GH #128) ──────────────
          `C4 C4 nn` in krnl386's OWN code -- not one our INT-site patcher planted, so
          dpmi_bop_vec() finds nothing in the patch map and hands us vec 0. That used to
@@ -11459,8 +11536,18 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                            buffer and stays loud -- the whitelist rule, applied within a
                            function rather than to it. */
                         if (ah == 0x44) {
+                            /* ⚠ THE WHITELIST'S COMMENT WAS WRONG ABOUT 08/09/0E.
+                               "Everything else takes a DS:DX buffer" is true of most
+                               of AH=44h and false of exactly these three, which are
+                               the drive-classification trio (removable? remote? drive
+                               map?) and answer purely in registers. Excluding them
+                               sent krnl386's per-drive probe loop into the TODO arm
+                               once per drive -- see the note in dos_int21.c for what
+                               that cost. */
                             DWORD al = ax & 0xFF;
-                            if (al != 0x00 && al != 0x06 && al != 0x07) goto pm_int21_unhandled;
+                            if (al != 0x00 && al != 0x06 && al != 0x07 &&
+                                al != 0x08 && al != 0x09 && al != 0x0E)
+                                goto pm_int21_unhandled;
                         }
                         /* AH=06h direct console I/O is register-only in BOTH directions
                            (DL=char out, DL=FFh -> AL=char in, ZF), so it thunks with no
@@ -13983,6 +14070,38 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                    has not loaded yet simply arms later. */
                 dpmi_bp_load();
                 dpmi_bp_arm();
+                /* pmchg.txt: `<hex offset> [segment]`, segment defaulting to 4
+                   (krnl386's DGROUP). Absent file = no watch and no cost. */
+                { HANDLE hc = CreateFileA(PMCHG_PATH, GENERIC_READ,
+                                          FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
+                                          OPEN_EXISTING, 0, NULL);
+                  if (hc != INVALID_HANDLE_VALUE) {
+                      char cb[128]; DWORD cn = 0, ci = 0, v[2] = { 0, 0 }; int col = 0;
+                      ReadFile(hc, cb, sizeof cb - 1, &cn, NULL); CloseHandle(hc);
+                      while (ci < cn && col < 2) {
+                          int dg = 0;
+                          while (ci < cn && (cb[ci] == ' ' || cb[ci] == '\t')) ++ci;
+                          while (ci < cn) {
+                              char c = cb[ci];
+                              int t = (c >= '0' && c <= '9') ? c - '0'
+                                    : (c >= 'a' && c <= 'f') ? c - 'a' + 10
+                                    : (c >= 'A' && c <= 'F') ? c - 'A' + 10 : -1;
+                              if (t < 0) break;
+                              v[col] = (v[col] << 4) | (DWORD)t; ++dg; ++ci;
+                          }
+                          if (dg) ++col; else break;
+                      }
+                      if (col >= 1) {
+                          g_pmwatch_off = v[0];
+                          if (col >= 2 && v[1] <= WOW_PMBASE_MAX)
+                              g_pmwatch_seg = (unsigned)v[1];   /* 0 = already linear */
+                          p = zput(p, "PMWATCH: watching seg "); p = zhex(p, g_pmwatch_seg);
+                          p = zput(p, " + 0x"); p = zhex(p, g_pmwatch_off);
+                          p = zput(p, " for changes\r\n");
+                          log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                      }
+                  }
+                }
                 if (GetFileAttributesA(PMVERBOSE_PATH) != INVALID_FILE_ATTRIBUTES)
                     g_dpmi_cp_max = 0x100000;   /* verbose: trace a whole startup */
                 { HANDLE hw = CreateFileA(PMWATCH_PATH, GENERIC_READ,

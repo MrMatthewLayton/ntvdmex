@@ -1553,9 +1553,63 @@ int dos_int21(dos_machine_t *m)
         WORD bx = (WORD)(R_BX & 0xFFFF);
         if (al == 0x00)        { SET16(R_DX, (bx < 5) ? 0x80D3 : 0x0002); OKCF(); }
         else if (al == 0x06 || al == 0x07) { SETAX((R_AX & 0xFF00) | 0xFF); OKCF(); }
+        /* ── ★★ THE DRIVE-CLASSIFICATION TRIO. (GH #32, #128, session 37) ─────────
+             AL = 08h "is this block device removable", 09h "is it remote", 0Eh "get
+             the logical drive map". BL is the drive (0 = default, 1 = A) and all
+             three answer in REGISTERS -- no buffer anywhere near them.
+           ⚠ They used to fall into the `else { OKCF(); }` below, which is the worst
+             answer available: carry clear, meaning success, with the registers the
+             caller happened to be holding. That is the "runs but lies" class, and it
+             is what krnl386 uses to decide whether a drive is local. It probes every
+             drive with 44/08, 44/09 and 44/0E in a loop (measured: once per drive,
+             descending), and with all three lying it marked drive C: in its own
+             per-drive flag table at DGROUP 0x2a2 -- which routes every later
+             INT 21h AH=47h for C: through a pre-handler that forces CF, which makes
+             its path canonicaliser fail, which makes LoadModule("WOWEXEC.EXE")
+             report "file not found" without ever opening a file.
+           ▸ Answered from the host, which is where the guest's drives really are.
+           ▸ NOT yet checked against the MS-DOS 6.22 oracle -- the register contract
+             here is from the documented interface, not from a run. Worth a panel
+             (#24) since the whole point of M9 is that we do not write these from
+             memory. The DX bits beyond 12 are the ones to confirm. */
+        else if (al == 0x08 || al == 0x09 || al == 0x0E) {
+            BYTE drv = (BYTE)(bx & 0xFF);            /* 0 = default drive           */
+            UINT ty = 0;
+            if (!drv) {
+                char cw[300];
+                DWORD n = GetCurrentDirectoryA(sizeof(cw), cw);
+                drv = (n >= 2 && cw[1] == ':') ? (BYTE)((cw[0] | 0x20) - 'a' + 1) : 3;
+            }
+            if (drv >= 1 && drv <= 26 && (GetLogicalDrives() & (1u << (drv - 1)))) {
+                char root[4]; root[0] = (char)('A' + drv - 1); root[1] = ':';
+                root[2] = '\\'; root[3] = 0;
+                ty = GetDriveTypeA(root);
+            }
+            if (!ty || ty == 1) { SETAX(0x000F); ERRCF(); }   /* invalid drive      */
+            else if (al == 0x08) {
+                /* AX = 0 removable, 1 fixed. A CD is removable media. */
+                SETAX((ty == DRIVE_REMOVABLE || ty == DRIVE_CDROM) ? 0 : 1); OKCF();
+            } else if (al == 0x09) {
+                /* DX = the device attribute word; bit 12 = the drive is remote.
+                   Nothing else in it is load-bearing for the callers we have. */
+                SET16(R_DX, (ty == DRIVE_REMOTE) ? 0x1000 : 0x0000); OKCF();
+            } else {
+                /* AL = 0 when only one letter maps to the block device, which is
+                   true of every drive we can see (we do not emulate a SUBST). */
+                SETAX(R_AX & 0xFF00); OKCF();
+            }
+            tp = zput(tp, "  INT21 AH=44 AL=0x"); tp = zhex(tp, al);
+            tp = zput(tp, " drive 0x"); tp = zhex(tp, drv);
+            tp = zput(tp, " type "); tp = zhex(tp, ty);
+            tp = zput(tp, " -> AX=0x"); tp = zhex(tp, R_AX & 0xFFFF);
+            tp = zput(tp, " DX=0x"); tp = zhex(tp, R_DX & 0xFFFF);
+            tp = zput(tp, (*pfl & 1) ? " (err)\r\n" : "\r\n");
+        }
         else                   { OKCF(); }
-        tp = zput(tp, "  INT21 AH=44 ioctl AL=0x"); tp = zhex(tp, al);
-        tp = zput(tp, " BX=0x"); tp = zhex(tp, bx); tp = zput(tp, "\r\n");
+        if (al != 0x08 && al != 0x09 && al != 0x0E) {
+            tp = zput(tp, "  INT21 AH=44 ioctl AL=0x"); tp = zhex(tp, al);
+            tp = zput(tp, " BX=0x"); tp = zhex(tp, bx); tp = zput(tp, "\r\n");
+        }
     } else if (ah == 0x63) {                    /* get DBCS lead-byte table */
         if ((R_AX & 0xFF) == 0) { SET16(R_DS, DOS_HDLR_SEG); SET16(R_SI, DOS_DBCS_OFF); }
         SETAX(R_AX & 0xFF00); OKCF();
