@@ -418,11 +418,44 @@ logs every use as an experiment. With `74 19`:
 The checkpoint set earlier in this document is therefore **met**: the boot task can be given
 control back, and when it has it, it goes exactly where the disassembly said it would.
 
-⚠ **It is a probe, not a fix, and the second run says so loudly.** We told krnl386 a task had
-started and then never ran it, so it walks on into a half-built world and takes a `#GP` at
-`seg1:0x3223` (`test word ptr es:[0x18],2`, `err=0`) whose own handler at `seg1:0x3689`
-resumes at the faulting instruction — an infinite fault loop and a **268 MB log**. The right
-answer is not a fabricated hInstance; it is to run the child *after* the creator returns.
+### ★★★ AND THE FAULT AT THE END OF IT IS NOT A BUG — IT IS THE BOOT TASK RETIRING
+
+The second run ends in a `#GP` loop, and I assumed that was the fabricated hInstance catching
+up with us. It is not. There are **no further WOW32 calls** after the `386GRABBER` read, so
+the boot task died inside the very code that read follows — and that code says exactly what
+it is doing:
+
+```
+cd36  call 0x9a3e             ; ★ THE UNLINK -- take this task out of the list
+cd3c  mov es:[0xfa],dx        ; ★ zero the "TD" signature: no longer a task database
+cd41  mov [0x228],dx          ; ★★ CURRENT TASK = 0
+cd66  mov ss,cs:[0x30]        ; ★ a private kernel stack
+cd6b  mov sp,0x210
+```
+
+**krnl386's boot task ends itself.** It unlinks its record, unsigns it, sets the current task
+to **zero**, and moves onto a fixed kernel stack. From that instruction the machine belongs to
+the scheduler — and there isn't one, so the next code to touch the current task,
+
+```
+321f  mov es,[0x228]          ; = 0
+3223  test word ptr es:[0x18],2
+```
+
+dereferences a **null selector**. `#GP` with `err=0x00000000`, which is precisely the error
+code in every record of the loop, and krnl386's own handler resumes at the faulting
+instruction, hence the **268 MB**.
+
+So the run did not fail early — it ran the boot task **to completion** and stopped at the one
+place this host has never had anything to put. That is the frontier stated as a single fact:
+
+> **`[0x228] == 0` means "no task is current; schedule one", and nothing does.**
+
+⚠ The probe is still a probe: WOWEXEC never ran, so its `hInstance` was fabricated and
+everything the boot task did with it after `LoadModule` is suspect. What the run establishes
+is the *shape* — creator resumes, runs to its own retirement, and the machine falls idle with
+a runnable task nobody starts.
+★ And the host already logs `[0x228]` on every call, so the cue needs no new instrument.
 
 ⚠ **The log cap does not bound a fault loop.** Second time this has produced a
 quarter-gigabyte file. Budget for it before setting a knob.
@@ -445,10 +478,14 @@ a thread. We have one CPU, so the host must interleave them itself:
 - **At `0x74`**: record the frame — `SS:BP` of the thunk call, which lives on the *new* task's
   stack and holds its `DI`/`CX` — then return mode 25 with a real launch result, so the
   creator carries on and `LoadModule` completes.
-- **When the creator next yields** (`Yield`/`WaitEvent`/`DirectedYield`, or when it ends its
-  own turn), resume the recorded frame: `SS:SP`, `BP` and `CS:EIP` just past that `0x74` BOP,
-  with mode **0** this time — and krnl386 runs the `seg1:0x985c` continuation and `iret`s into
-  the task exactly as it does today.
+- **When the creator gives the machine up**, resume the recorded frame: `SS:SP`, `BP` and
+  `CS:EIP` just past that `0x74` BOP, with mode **0** this time — and krnl386 runs the
+  `seg1:0x985c` continuation and `iret`s into the task exactly as it does today. The frame is
+  the context: the mode-0 epilogue pops `di, si, ax, dx, ds, gs, fs, cx, es, bx` off it, so
+  only `SS`, `ESP`, `EBP`, `CS`, `EIP` and flags have to be restored by hand.
+- **And the cue is unambiguous**: `[0x228] == 0`, which krnl386 writes at `seg1:0xcd41` when
+  the boot task retires. The host reads that word at every WOW32 call already. (A yield
+  primitive — `Yield`/`WaitEvent`/`DirectedYield` — is the *other* cue, for the steady state.)
 - Neither step invents a frame. Both resume one krnl386 built, which is why the register file
   being one contiguous TIB block (`VTIB_GS 0x364` .. `VTIB_SS 0x3A0`, a `0x40`-byte copy) is
   enough machinery.
