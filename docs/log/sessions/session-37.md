@@ -513,6 +513,36 @@ to `0xcd01`, never reads `[boot] 386GRABBER`, and never unlinks itself.
 The `0x229c` hit at svc 970 is worth carrying: `GetExpWinVer` is called twice, and the FIRST
 call succeeds with a real handle. Only the `LoadCursor(NULL, …)` one fails.
 
+### The fatal dialog is a symptom, and answering it proves that
+
+krnl386's `MessageBox` (`0x140` here, from USER) is stepped over and answered `0`. Two runs
+through the `wow32ret.txt` knob settle what that answer does, without claiming to know the
+interface:
+
+| answer | what happens |
+|---|---|
+| `0` (default) | the run stops at the dialog. No `EXC RETURN`, nothing after. |
+| `1` | `EXC RETURN -> resume 0x1cf:0x229c` — krnl386 resumes **at the faulting instruction**, which faults again. Infinite loop; **268 MB of log** before the cap. |
+
+So the answer chooses between "resume" and "do not", and neither gets past the fault. The
+dialog is downstream of the defect, not a way around it. It is also a reminder that the knob
+is a loaded weapon: one wrong value produced a quarter-gigabyte log.
+
+### ★ And the bring-up record is the WRONG SIZE for a task
+
+| | selector | limit |
+|---|---|---|
+| stock task 1 | `0x1707` | `0x31f` |
+| stock task 2 | `0x038f` | `0x31f` |
+| ours: WOWEXEC's task | `0x03b7` | `0x31f` |
+| **ours: the bring-up record** | **`0x01ef`** | **`0x21f`** |
+
+Every real task database in the panel is `0x320` bytes. The record that answers
+`GetExePtr(NULL)` and kills `LoadCursor` is `0x100` bytes **shorter** — so it is either a
+bootstrap structure a correct run never leaves in that list, or one krnl386 finishes later
+and we interrupt. Either way, **"is the thing in the list a full-sized TDB?" is a one-line
+check** that separates the two readings of the fork.
+
 ★ **And the oracle gives the value the field should hold.** In both of stock's tasks the
 instance handle is the task's own stack selector with a different RPL:
 
