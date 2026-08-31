@@ -4,7 +4,7 @@
 > this file top to bottom and you will know where it is, what works, what does not, and
 > what to do next.
 
-- **Last updated:** 2026-08-29 (session 36)
+- **Last updated:** 2026-08-31 (session 37)
 - **Branch:** `m9/completeness`
 - **Tracker:** [140+ issues](https://github.com/MrMatthewLayton/ntvdmex/issues) — reconciled against the repo on 2026-08-26 (`tools/gh/backfill.py` is the manifest)
 - **Knowledge base:** the [wiki](https://github.com/MrMatthewLayton/ntvdmex/wiki)
@@ -39,12 +39,12 @@ them they exercise the whole stack — NE loading, the KERNEL 16→32 boundary, 
 and menus, GDI drawing, mouse and keyboard. Paint in particular has to actually paint.
 
 **Status: not started.** No Win16 program has run yet; `wowexec.exe` has never executed
-and nothing has drawn a pixel. What works is the *bootstrap*, and as of session 36 it runs
+and nothing has drawn a pixel. What works is the *bootstrap*, and as of session 37 it runs
 a long way: krnl386 loads three of its four segments, installs its interrupt handlers,
-**takes and returns from its own DPMI exceptions**, and loads **seven** of the 16-bit system
-modules — `SYSTEM.DRV`, `KEYBOARD.DRV`, `MOUSE.DRV`, `VGA.DRV`, `SOUND.DRV`, `COMM.DRV` and
-**`USER.EXE`** — before failing on `GDI.EXE`, which it **names in its own words in the log**.
-See #128 below.
+**takes and returns from its own DPMI exceptions**, and loads **all eight** of the 16-bit
+system modules — `SYSTEM.DRV`, `KEYBOARD.DRV`, `MOUSE.DRV`, `VGA.DRV`, `SOUND.DRV`,
+`COMM.DRV`, `USER.EXE` and `GDI.EXE` — then runs on past the boot module list and dies in a
+Win16 `OpenFile` whose `OFSTRUCT` pointer is outside its own segment. See #128 below.
 
 ---
 
@@ -67,7 +67,7 @@ See #128 below.
 
 | | Why it matters |
 |---|---|
-| **Win16 / WOW — bootstrap runs, no app yet** | `ntvdm.exe` is *also* the host for every 16-bit **Windows** program. The NE loader loads, relocates and binds the **whole** XP WOW module set on real hardware, and **krnl386 executes**: it switches itself to protected mode, loads its own segments 2 and 3, installs its interrupt handlers, takes and returns from its own DPMI exceptions, and loads seven of the 16-bit system modules (`USER.EXE` included) before failing on `GDI.EXE`. No Win16 *application* runs yet, and there is no 16:16↔flat thunking. Since interception is an IFEO key on `ntvdm.exe`, and Win16 launches go through `ntvdm.exe` too, **installing NTVDMEX permanently would break every 16-bit Windows app today**. → [#128](https://github.com/MrMatthewLayton/ntvdmex/issues/128) |
+| **Win16 / WOW — bootstrap runs, no app yet** | `ntvdm.exe` is *also* the host for every 16-bit **Windows** program. The NE loader loads, relocates and binds the **whole** XP WOW module set on real hardware, and **krnl386 executes**: it switches itself to protected mode, loads its own segments 2 and 3, installs its interrupt handlers, takes and returns from its own DPMI exceptions, and loads **all eight** of the 16-bit system modules (`USER.EXE` and `GDI.EXE` included) before dying past the boot list in a Win16 `OpenFile`. No Win16 *application* runs yet, and there is no 16:16↔flat thunking. Since interception is an IFEO key on `ntvdm.exe`, and Win16 launches go through `ntvdm.exe` too, **installing NTVDMEX permanently would break every 16-bit Windows app today**. → [#128](https://github.com/MrMatthewLayton/ntvdmex/issues/128) |
 | **Console/stdio integration** | DOS output is buffered and flushed to `CONOUT$` at exit, so shell redirection and piping are bypassed and every DOS program pops a window. Blocks non-interactive use. |
 | **In-guest redirection** | `echo x > file` writes to the screen and leaves the file 0 bytes. Three fixes attempted, all at the wrong end. |
 | **No INT 13h / INT 25h / 26h** | No direct disk access. |
@@ -86,13 +86,37 @@ See #128 below.
 > refused outright, and the real name re-enters us through the IFEO hook. So there is no
 > safe install story until WOW exists, and #128 moved onto the critical path.
 
-1. **[#128] WOW / Win16 — IN PROGRESS. krnl386 LOADS SEVEN SYSTEM MODULES, `USER.EXE`
-   INCLUDED, AND NAMES THE ONE IT CANNOT: `GDI.EXE`.**
+1. **[#128] WOW / Win16 — IN PROGRESS. krnl386 LOADS ALL EIGHT SYSTEM MODULES AND RUNS
+   PAST THE BOOT LIST.**
 
-   ### ▶ START HERE: [session 36](log/sessions/session-36.md#-resume-here--session-36-handoff)
+   ### ▶ START HERE: [session 37](log/sessions/session-37.md#-resume-here--session-37-handoff)
    That block is the live handoff — where it is, the leads already **ruled out**
    (do not re-try them), the next run, the instruments, and the standing hazards.
    Everything below it is background.
+
+   **Session 37 in one paragraph.** `GDI.EXE` was never rejected — we could not **open**
+   it. `seg2:0x218a` has exactly two instructions that return `0x0B` over its whole
+   `0x570` bytes, a breakpoint on each named `0x2242` (validation), and the first `0x40`-byte
+   read there came back `AX = 6` — **ERROR_INVALID_HANDLE**, not six bytes — from file handle
+   `2`. Handle 2 was never a handle: the open had failed and `2` is the DOS code the host
+   returned for *every* open failure, so `-> AX=0x0002` in the trace meant two opposite
+   things and the wall had been read the wrong way round off that one line. **`AL` in a DOS
+   open is a bit field, not a number** — bits 0-2 access, bits 4-6 the SHARE.EXE sharing
+   mode, bit 7 no-inherit — and the protected-mode arm compared the whole byte against 0 and
+   1, so krnl386's `al = 0x80` fell through to "anything else" and asked Windows for
+   `GENERIC_READ | GENERIC_WRITE`. USER.EXE imports GDI, so `GDI.EXE` was **already open and
+   never closed**; a second open asking for WRITE against a `FILE_SHARE_READ` handle is
+   `ERROR_SHARING_VIOLATION` (`gle=0x20`, measured), and GDI was the only module ever open
+   twice at once. Access now comes from `AL & 7` on both arms, **we stopped enforcing a
+   SHARE.EXE we do not emulate** (both arms share read *and* write, because bare DOS locks
+   nothing), and a failed open reports the failure it actually suffered instead of "file not
+   found". Two instruments had to be fixed first: `dpmi_bp_load()` read `char buf[1024]` and
+   **silently dropped six of eleven breakpoints** behind a header comment, showing five
+   confident arms and 42 hits while answering nothing; and the open trace printed AX without
+   `AL`, `CF` or the Win32 error, while `AH=3E close` printed nothing at all. WOW32 `0x88
+   GetDriveType` was also implemented — 26 stepped-over calls sweeping A: to Z:, whose only
+   caller does `cmp al,2` — and it is a **closed gap, not a moved wall**: the run still ends
+   in the same place.
 
    **Session 36 in one paragraph.** The frontier moved from an address to a **module
    name**. Session 35's `WOW32_UNIMPL_RET = 0` — written but never run — turned out to be
