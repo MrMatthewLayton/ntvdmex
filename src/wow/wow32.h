@@ -466,6 +466,29 @@ static int wow32_call(wow32_frame_t *f, wow32_dosdata_t *dd)
         wow32_setret(f, (DWORD)GetSystemDefaultLangID());
         return 1;
 
+    /* ── 0x88 GetDriveType(nDrive) ────────────────────────────────────────
+         Named by krnl386's export table, and its ONE caller pins the semantics
+         to the byte: `push di / call 0xb4b5 / pop dx / cmp al,2` at seg1:0x1ea7
+         -- i.e. "is drive nDrive REMOVABLE", and 2 is Win32's DRIVE_REMOVABLE.
+         So this is a straight pass-through of the Win32 call, not a WOW-private
+         encoding, and the host's answer is the guest's answer: our DOS layer
+         opens real paths on the real filesystem, so its drives ARE these drives.
+       ★ MEASURED, not assumed: krnl386 calls it 26 times in a row with nDrive
+         0x00..0x19 -- A: through Z: -- which is what fixes 0 = A: rather than
+         0 = "the default drive". Every one of those was previously stepped over
+         and answered with the harness sentinel, and a drive table built from 26
+         identical answers is what fed 0xf0 to the GetCurrentDirectory that
+         followed and #GP'd the run.
+       ⚠ GetDriveTypeA wants a ROOT PATH ("A:\"), not a letter. */
+    case WOW32_GETDRIVETYPE: {
+        WORD n = wow32_argw(f, 0);
+        char root[4];
+        if (n > 25) { wow32_setret(f, 1 /* DRIVE_NO_ROOT_DIR */); return 1; }
+        root[0] = (char)('A' + n); root[1] = ':'; root[2] = '\\'; root[3] = 0;
+        wow32_setret(f, (DWORD)GetDriveTypeA(root));
+        return 1;
+    }
+
     /* ── 0x78: krnl386 hands us its view of the DOS data area ─────────────
          The argument is a 16:16 pointer to the structure whose address it read
          from SysVars+0x6A moments earlier (seg1:0xc05b), which is also where it
