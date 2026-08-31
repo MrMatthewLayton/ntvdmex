@@ -1,6 +1,85 @@
-# Session 38 — the boot task's `hInstance` cannot be fixed; the boot task has to leave
+# Session 38 — the `0001:229C` wall is down: WOWEXEC registers a window class
 
 **Date:** 2026-08-31 · **Branch:** `m9/completeness` · **Issue:** [#128](https://github.com/MrMatthewLayton/ntvdmex/issues/128)
+
+---
+
+## ★★★★ THE HEADLINE: WOWEXEC RUNS PAST `LoadCursor`, AND WE ARE THE SCHEDULER
+
+The fault that ended session 37 — *"WOWEXEC caused a General Protection Fault in module
+KRNL386.EXE at 0001:229C"* — **is gone**, and it was never a value that needed fixing. It was
+an **ordering** defect: krnl386 has no scheduler, so the task it launched never gave control
+back, its own boot task never returned from `LoadModule`, and the bring-up record that
+`GetExePtr(NULL)` matches was never unlinked. With a ~70-line cooperative scheduler in the
+host, on real hardware:
+
+```
+task histogram   9 task=0x00000000     before the bring-up record exists
+                222 task=0x000001ef    krnl386's boot task
+                  1 task=0x000003b7    the launch BOP
+                  3 task=0x000001ef    ★ the creator, resumed -- LoadModule returns
+                 28 task=0x000003b7    ★ WOWEXEC, restarted after the creator retires
+```
+
+and WOWEXEC's own code says where it got to:
+
+```
+0812  push 0 / push 0 / push 0x7f00
+0819  lcall LoadCursor      ; ★★ THE OLD WALL -- it RETURNS now
+081e  mov [bp-0xc],ax       ;    and the cursor handle is stored
+0823  lcall <stock object>  ;    WOW32 0x57, the last call of the run
+0828  mov [bp-0xa],ax
+082b  mov word [bp-4],0x82  ; ★ style
+0830  mov [bp-2],ds         ; ★ hInstance
+083b  lea ax,[bp-0x1a] / push ss / push ax   ; ★ &WNDCLASS
+```
+
+**WOWEXEC is filling in a `WNDCLASS`.** No Win16 fault, no fatal dialog, 263 WOW32 calls.
+
+⚠ **The scheduler is OPT-IN** (`wowsched.txt` on the share) and a run without it is
+byte-for-byte the committed behaviour — 258 calls, the same histogram, the same GP fault,
+re-measured after every change. DOS batteries 209/209.
+
+⚠ **The run now dies HOST-side**: `DPMI FATAL: exception code=0xc0000005 at 0x7c912c16`,
+`CS=0x1b`, `bytes@fault = 88 1c 01` (`mov [ecx+eax],bl`) — an access violation inside
+`ntdll`, ours not the guest's. That, and the unimplemented USER ids the window path calls
+(`0x57`, `0xad`, `0x16c`, `0x217`), are the new frontier.
+
+### How the scheduler works — and why it is small
+
+`src/wow/wowsched.h`. Three moments, and it never invents a frame:
+
+| | |
+|---|---|
+| **(A) at WOW32 `0x74`** | the launch. Save the guest context, answer with the new task's instance handle, and set the epilogue mode to **25** — so the creator goes home through `seg1:0x9827` and the new task is parked at its launch instruction. |
+| **(C) at `[0x228] == 0`** | the creator has retired (`seg1:0xcd41`) and the first code to touch the current task takes a null-selector `#GP`. That fault is the cue: restore the parked context with mode **0**, and krnl386 runs the `seg1:0x985c` continuation and `iret`s into the task exactly as it always did. |
+
+The context is a `0x40`-byte copy of the TIB register block (`VTIB_GS`..`VTIB_SS`); krnl386's
+own thunk epilogue pops `di, si, ax, dx, ds, gs, fs, cx, es, bx` back off the frame, and its
+re-entrancy guard (`seg1:0x2c05`) notices `[0x228]` is 0 and makes the resumed task current
+by itself. **The host chooses; krnl386 does the work.**
+
+### ⚠ Two things measured the hard way
+
+- **(B) does not exist, and the first cut assumed it did.** The obvious ordering — let the new
+  task run first, hand the creator back at the task's `WaitEvent` — **faulted in
+  `SwitchToTask`**, because *the launch frame's memory is the new task's own stack*. The
+  epilogue pops it, SP moves up, and the task pushes straight back over it; by `WaitEvent` the
+  frame is gone. Switching at `0x74` is the only ordering that works — and it is also the one
+  that leaves the new task's stack **frozen and untouched** while the creator runs, which is
+  what makes resuming it sound rather than lucky.
+- **The launch result is read, not guessed.** `TDB+0x1c` already holds `0x03d6` at the `0x74`
+  call, so the host reads it. There is a fallback (`SS & ~1`, Win16's `SS == DS` invariant,
+  which the stock oracle shows twice and our own task a third time) and it is **verified at
+  the resume and logged**, because an earlier probe hardcoded `0x03d6` and that is exactly the
+  kind of thing that stops reproducing.
+- ⚠ **It truncates the creator.** At (C) the boot task had retired but was still freeing
+  selectors; we take the machine away and those leak. The honest fix is to park the creator
+  too and give it the rest of its turn. Logged as the truncation it is.
+
+---
+
+**The rest of this document is how the wall was understood, in the order it happened.**
 
 **In one paragraph.** Two things. First, **WOW32 `0x7d` is pinned and shipped**: the
 furthest point this project has reached had been depending on a line in a text file
@@ -464,36 +543,49 @@ quarter-gigabyte file. Budget for it before setting a knob.
 
 ## ▶ RESUME HERE
 
-**The next piece of work is a scheduler, in the host** — and it is a *policy*, not a context
-switcher. The seven scheduling exports have no 16-bit body and no internal caller, so there
-is nowhere else for the decision to live; and krnl386 performs the switch itself when it sees
-`[0x228]` change across a WOW32 BOP. The concrete shape:
+**The scheduler is built and the wall is down** (see the headline). What is left:
 
-**The contract is now known, and the remaining work is an ORDER.** krnl386 launches a task by
-switching to its stack and calling WOW32 `0x74`; the 32-bit side either lets that call return
-into the new task (mode 0, what we do today, and the task never comes back) or sends the
-creator home first (mode 25, measured above). Real WOW does **both**, because the new task is
-a thread. We have one CPU, so the host must interleave them itself:
+1. **The host-side crash.** `DPMI FATAL: exception code=0xc0000005 at 0x7c912c16`, `CS=0x1b`,
+   `bytes@fault = 88 1c 01` (`mov [ecx+eax],bl`) — an access violation in `ntdll`, in OUR
+   process, right after WOWEXEC's `0x57` call is stepped over. This is a host bug, not a guest
+   one, and it is the thing actually ending the run now. Start here.
+2. **The USER ids the window path needs**: `0x57` (a stock object, from `wowexec:0x0823`),
+   `0xad` ×2, `0x16c`, `0x217` — all called from USER's segment `0x0327` or WOWEXEC's
+   `0x03cf`, all currently stepped over. `RegisterClass` and `CreateWindow` are immediately
+   behind them. `tools/ne/nedis.py --wowfunc` on each, the same way `0x7d` was pinned.
+3. **Park the creator instead of truncating it.** At (C) the boot task had retired but was
+   still freeing selectors when the host took the machine away. Saving its context there and
+   giving it the rest of its turn is a small change and removes a known leak.
+4. **A second task.** Everything so far is one launch. `WOW32_WAITEVENT`/`Yield` still return
+   immediately, which is right while only one task can run and wrong the moment two can.
 
-- **At `0x74`**: record the frame — `SS:BP` of the thunk call, which lives on the *new* task's
-  stack and holds its `DI`/`CX` — then return mode 25 with a real launch result, so the
-  creator carries on and `LoadModule` completes.
-- **When the creator gives the machine up**, resume the recorded frame: `SS:SP`, `BP` and
-  `CS:EIP` just past that `0x74` BOP, with mode **0** this time — and krnl386 runs the
-  `seg1:0x985c` continuation and `iret`s into the task exactly as it does today. The frame is
-  the context: the mode-0 epilogue pops `di, si, ax, dx, ds, gs, fs, cx, es, bx` off it, so
-  only `SS`, `ESP`, `EBP`, `CS`, `EIP` and flags have to be restored by hand.
-- **And the cue is unambiguous**: `[0x228] == 0`, which krnl386 writes at `seg1:0xcd41` when
-  the boot task retires. The host reads that word at every WOW32 call already. (A yield
-  primitive — `Yield`/`WaitEvent`/`DirectedYield` — is the *other* cue, for the steady state.)
-- Neither step invents a frame. Both resume one krnl386 built, which is why the register file
-  being one contiguous TIB block (`VTIB_GS 0x364` .. `VTIB_SS 0x3A0`, a `0x40`-byte copy) is
-  enough machinery.
+### Ruled out — do not re-try (all by measurement)
 
-Then the first real checkpoint: the boot task reaching `seg1:0xcd36` **and unlinking its own
-record**, with WOWEXEC still alive to be resumed — at which point `GetExePtr(NULL)` finds
-nothing, returns `0`, and `LoadCursor(NULL, IDC_ARROW)` takes the `je 0x22ab` path it was
-always supposed to.
+- **Writing the bring-up record's `hInstance`.** One writer, in `InitTask`, which that record
+  never enters. `0x001e` was pattern-matching on a stack selector that is ours.
+- **"WOWEXEC's TDB is never linked."** It is linked, at the head, and measured to be.
+- **Writing `[0x228]` to yield.** `seg1:0x2c05`'s branch is a re-entrancy guard; its incoming
+  task is the caller's own.
+- **Letting the new task run first and switching at its `WaitEvent`.** Built, run, faulted:
+  the launch frame's memory *is* that task's stack and is gone by then.
+- **Looking for a 16-bit scheduler inside krnl386.** There is not one — but there IS a 16-bit
+  task *switcher* (`seg1:0x98ab`), driven by the epilogue mode.
+- `wow32ret.txt` as a load-bearing file. It ships empty and must stay that way.
+
+### How to drive it
+
+```bash
+ARCHIVE=build/wowruns ./scripts/bmwow.sh              # deploy, run, collect
+ARCHIVE=build/wowruns ./scripts/bmwow.sh --no-deploy  # re-run what is on the box
+```
+Knobs on the share, none of them deployed by the script except `wow32ret.txt`:
+`wowsched.txt` (presence = scheduler ON), `wowmode.txt` (⚠ the most dangerous file in the
+tree), `pmbp.txt`, `pmchg.txt`.
+⚠ SMB writes to `/private/tmp/xpshare` need the sandbox disabled.
+⚠ **Always re-run with the scheduler OFF** and confirm 258 calls / the `0001:229C` fault /
+`9-222-27`: that is the committed baseline and it must not move.
+
+### The instrument log, for the record
 
 1. ~~Instrument first.~~ **DONE — every WOW32 call line now carries `task=0x....`**, read
    from `[0x228]` through the guest's own `DS` (DGROUP there by construction,

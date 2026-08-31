@@ -4,7 +4,7 @@
 > this file top to bottom and you will know where it is, what works, what does not, and
 > what to do next.
 
-- **Last updated:** 2026-08-31 (session 37)
+- **Last updated:** 2026-08-31 (session 38)
 - **Branch:** `m9/completeness`
 - **Tracker:** [140+ issues](https://github.com/MrMatthewLayton/ntvdmex/issues) — reconciled against the repo on 2026-08-26 (`tools/gh/backfill.py` is the manifest)
 - **Knowledge base:** the [wiki](https://github.com/MrMatthewLayton/ntvdmex/wiki)
@@ -38,15 +38,20 @@ A good bar for the same reasons Doom was: small, iconic, and impossible to fake.
 them they exercise the whole stack — NE loading, the KERNEL 16→32 boundary, USER windows
 and menus, GDI drawing, mouse and keyboard. Paint in particular has to actually paint.
 
-**Status: a Win16 program EXECUTES.** `wowexec.exe` — the WOW shell — is found, loaded and
-run, and nothing has drawn a pixel yet. What works is the *bootstrap*, and as of session 37 it runs
+**Status: a Win16 program RUNS, AND IS BUILDING A WINDOW CLASS.** `wowexec.exe` — the WOW
+shell — is found, loaded and run, and nothing has drawn a pixel yet. What works is the
+*bootstrap*, and as of session 38 it runs
 a long way: krnl386 loads three of its four segments, installs its interrupt handlers,
 **takes and returns from its own DPMI exceptions**, and loads **all eight** of the 16-bit
 system modules — `SYSTEM.DRV`, `KEYBOARD.DRV`, `MOUSE.DRV`, `VGA.DRV`, `SOUND.DRV`,
 `COMM.DRV`, `USER.EXE` and `GDI.EXE` — completes its bootstrap, reads `[boot] WOWSHELL` out of
-`SYSTEM.INI`, finds and opens `C:\WINDOWS\SYSTEM32\WOWEXEC.EXE`, loads it and **runs it** —
-and then reports, in Windows' own words, *"WOWEXEC caused a General Protection Fault in
-module KRNL386.EXE at 0001:229C."* See #128 below.
+`SYSTEM.INI`, finds and opens `C:\WINDOWS\SYSTEM32\WOWEXEC.EXE`, loads it and **runs it**.
+As of session 38 the `0001:229C` general-protection fault is
+**gone** — it was an *ordering* defect, not a value one, and behind it was the fact that
+**krnl386 has no scheduler and we are it**. With a ~70-line cooperative scheduler in the host
+(`src/wow/wowsched.h`, opt-in), krnl386's boot task returns from `LoadModule`, retires itself,
+and WOWEXEC restarts and runs on past `LoadCursor` into **filling in a `WNDCLASS`**. The run
+now dies HOST-side, in `ntdll`. See #128 below.
 
 ---
 
@@ -69,7 +74,7 @@ module KRNL386.EXE at 0001:229C."* See #128 below.
 
 | | Why it matters |
 |---|---|
-| **Win16 / WOW — a program runs, but nothing draws** | `ntvdm.exe` is *also* the host for every 16-bit **Windows** program. The NE loader loads, relocates and binds the **whole** XP WOW module set on real hardware, **krnl386 executes** — protected mode, its own segments, its interrupt handlers, its own DPMI exceptions, and all eight 16-bit system modules — and it then finds, loads and **runs `WOWEXEC.EXE`**, which dies in `LoadCursor(NULL, IDC_ARROW)` because our task list holds an entry stock's does not. So a Win16 program executes; none has drawn a pixel, and there is no 16:16↔flat thunking. Since interception is an IFEO key on `ntvdm.exe`, and Win16 launches go through `ntvdm.exe` too, **installing NTVDMEX permanently would break every 16-bit Windows app today**. → [#128](https://github.com/MrMatthewLayton/ntvdmex/issues/128) |
+| **Win16 / WOW — a program runs, but nothing draws** | `ntvdm.exe` is *also* the host for every 16-bit **Windows** program. The NE loader loads, relocates and binds the **whole** XP WOW module set on real hardware, **krnl386 executes** — protected mode, its own segments, its interrupt handlers, its own DPMI exceptions, and all eight 16-bit system modules — and it then finds, loads and **runs `WOWEXEC.EXE`** — which, since session 38's host-side task scheduler, gets past `LoadCursor` and is **filling in a `WNDCLASS`** when the run ends host-side in `ntdll`. So a Win16 program executes and is setting up a window; none has drawn a pixel, and there is no 16:16↔flat thunking. Since interception is an IFEO key on `ntvdm.exe`, and Win16 launches go through `ntvdm.exe` too, **installing NTVDMEX permanently would break every 16-bit Windows app today**. → [#128](https://github.com/MrMatthewLayton/ntvdmex/issues/128) |
 | **Console/stdio integration** | DOS output is buffered and flushed to `CONOUT$` at exit, so shell redirection and piping are bypassed and every DOS program pops a window. Blocks non-interactive use. |
 | **In-guest redirection** | `echo x > file` writes to the screen and leaves the file 0 bytes. Three fixes attempted, all at the wrong end. |
 | **No INT 13h / INT 25h / 26h** | No direct disk access. |
@@ -88,10 +93,10 @@ module KRNL386.EXE at 0001:229C."* See #128 below.
 > refused outright, and the real name re-enters us through the IFEO hook. So there is no
 > safe install story until WOW exists, and #128 moved onto the critical path.
 
-1. **[#128] WOW / Win16 — IN PROGRESS. ★ A WIN16 PROGRAM EXECUTES: `WOWEXEC.EXE` IS
-   FOUND, LOADED AND RUN.**
+1. **[#128] WOW / Win16 — IN PROGRESS. ★★ `WOWEXEC.EXE` RUNS PAST `LoadCursor` AND IS
+   REGISTERING A WINDOW CLASS.**
 
-   ### ▶ START HERE: [session 37](log/sessions/session-37.md#-resume-here--session-37-handoff)
+   ### ▶ START HERE: [session 38](log/sessions/session-38.md#-resume-here)
    That block is the live handoff — where it is, the leads already **ruled out**
    (do not re-try them), the next run, the instruments, and the standing hazards.
    Everything below it is background.

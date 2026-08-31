@@ -22,6 +22,7 @@
 #include "x86len.h"     /* which `CD nn` byte pairs are really INT instructions */
 #include "../wow/ne.h"  /* GH #128: 16-bit New Executable loader (WOW bootstrap) */
 #include "../wow/wow32.h" /* GH #128: the 32-bit half -- krnl386's calls out to Win32 */
+#include "../wow/wowsched.h" /* GH #128: ...and the Win16 task scheduler, which is also ours */
 #include "dos_mcb.h"
 #include "dos_loader.h"
 #include "dos_psp.h"
@@ -8656,6 +8657,48 @@ static void wow32_ret_load(void)
     }
 }
 
+/* ── ★★★ THE WIN16 TASK SCHEDULER (GH #128, session 38). ──────────────────────
+     The mechanism, the evidence for it and what this first cut does NOT do are
+     all in src/wow/wowsched.h; this is the state and the wiring.
+   ⚠ OPT-IN, and deliberately so. Turning it on changes the ORDER in which two
+     16-bit tasks run, which is the largest behavioural change this host has made
+     since it started executing Win16 code at all. A default run must still
+     reproduce the committed result exactly, so the switch is a file on the share
+     and its absence costs nothing. */
+#define WOWSCHED_PATH "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\wowsched.txt"
+static int   g_wowsched_on = 0;
+static WORD  g_wow_dgsel   = 0;      /* krnl386's DGROUP selector, learned at a BOP */
+static wowsched_slot_t g_ws_task;    /* the task parked at its own launch BOP       */
+static DWORD g_ws_switches = 0;
+
+/* krnl386's current-task word. 0xFFFF means "we do not know yet", which is NOT
+   the same as 0 -- 0 is krnl386 saying "no task is current", and acting on the
+   two as if they were the same would switch tasks before the guest has one. */
+static WORD wowsched_curtask(void)
+{
+    DWORD b;
+    const volatile BYTE *d;
+    if (!g_wow_dgsel) return 0xFFFF;
+    b = dpmi_sel_base(g_wow_dgsel);
+    if (!b) return 0xFFFF;
+    d = (const volatile BYTE *)(ULONG_PTR)b;
+    return (WORD)(d[0x228] | (d[0x229] << 8));
+}
+
+static void wowsched_load(void)
+{
+    HANDLE h = CreateFileA(WOWSCHED_PATH, GENERIC_READ,
+                           FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, 0, NULL);
+    char lb[192], *q = lb;
+    if (h == INVALID_HANDLE_VALUE) return;
+    CloseHandle(h);
+    g_wowsched_on = 1;
+    q = zput(q, "WOWSCHED: ** ON ** -- Win16 tasks will be interleaved by the host "
+                "(0x74 saves the launch frame, WaitEvent hands the creator back "
+                "through epilogue mode 25, [0x228]==0 starts the parked task)\r\n");
+    log_append(LOG_PATH, lb, q); serial_out(lb, q);
+}
+
 static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec, unsigned steps);
 static void dpmi_ensure_pmret_sel(void);   /* fwd: shared PM-return catcher installer (#2b + 0303) */
 
@@ -9773,6 +9816,64 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                                     " through epilogue mode ");
                         p = zhex(p, (DWORD)md);
                         p = zput(p, " -- an EXPERIMENT, not a service **");
+                    }
+                }
+                /* ── ★★★ THE SCHEDULER'S TWO BOP HOOKS. See src/wow/wowsched.h. ──
+                     DS is krnl386's DGROUP at every WOW32 BOP by construction
+                     (`seg1:0x2bc9 mov ds,cs:[0x30]`), which is the only reason the
+                     current-task word is reachable from outside a call. Learn it
+                     unconditionally -- it costs nothing and the fault hook, which
+                     runs where DS is anybody's, depends on having it. */
+                g_wow_dgsel = (WORD)(VDM_REG(tib, VTIB_DS) & 0xFFFF);
+                if (g_wowsched_on) {
+                    DWORD modelin = (DWORD)(ULONG_PTR)(f.bp + WOW32_OFF_MODE);
+                    WORD  cur     = wowsched_curtask();
+                    /* (A) THE LAUNCH -- AND THE SWITCH HAS TO HAPPEN HERE.
+                         ⚠ MEASURED THE HARD WAY. The first cut saved this frame,
+                           let the new task run first (as it does today) and meant to
+                           hand the creator back at the task's WaitEvent. It faulted
+                           in SwitchToTask, because THE FRAME'S MEMORY IS THE NEW
+                           TASK'S OWN STACK: the epilogue pops it, SP moves up, and
+                           the task pushes straight back over it. By WaitEvent the
+                           frame is gone. Switching HERE is the only ordering that
+                           works, and it is also the one that leaves the new task's
+                           stack frozen and untouched while the creator runs -- which
+                           is exactly what makes resuming it later sound.
+                         So: park the new task at this instruction, and send the
+                           creator home through epilogue mode 25. */
+                    if (f.id == 0x74 && !g_ws_task.used) {
+                        DWORD tb = dpmi_sel_base(cur);
+                        WORD  hinst = 0;
+                        int   fromtdb = 0;
+                        if (tb) {
+                            const volatile BYTE *t = (const volatile BYTE *)(ULONG_PTR)tb;
+                            hinst = (WORD)(t[0x1c] | (t[0x1d] << 8));
+                            fromtdb = hinst != 0;
+                        }
+                        /* ★ LoadModule's result is the new task's instance handle, and
+                             InitTask has NOT run yet, so TDB+0x1c is still zero here.
+                             The fallback is Win16's own invariant, not a guess about
+                             this one program: a task's SS and DS are two aliases of one
+                             descriptor, so its instance handle is its stack selector
+                             with the low bits clear. The stock oracle shows it twice
+                             (SS=0x16bf/hInst=0x16be, SS=0x03af/hInst=0x03ae) and our
+                             own task a third time. It is VERIFIED at (C) below against
+                             the value krnl386 itself writes, and a mismatch is loud. */
+                        if (!hinst) hinst = (WORD)(VDM_REG(tib, VTIB_SS) & 0xFFFE);
+                        wowsched_save(&g_ws_task, tib, modelin, cur, WOW32_BOP_LEN);
+                        wow32_setret(&f, hinst);
+                        wow32_pokew(f.bp + WOW32_OFF_MODE, WOW32_MODE_SWITCHBACK);
+                        ++g_ws_switches;
+                        p = zput(p, "\n     WOWSCHED: task 0x"); p = zhex(p, cur);
+                        p = zput(p, " parked at its launch; creator sent home through"
+                                    " epilogue mode 25 with LoadModule result 0x");
+                        p = zhex(p, hinst);
+                        p = zput(p, fromtdb ? " (TDB+0x1c)" : " (SS&~1 -- verified at the"
+                                                              " resume)");
+                        p = zput(p, "\r\n");
+                        log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                        VDM_REG(tib, VTIB_EIP) += WOW32_BOP_LEN;
+                        return 1;
                     }
                 }
                 /* ── DOS-DEPENDENT WOW32 SERVICES. (GH #128) ──────────────────
@@ -14338,6 +14439,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                 dpmi_bp_arm();
                 wow32_ret_load();
                 wow32_mode_load();
+                wowsched_load();
                 /* pmchg.txt: `<hex offset> [segment]`, segment defaulting to 4
                    (krnl386's DGROUP). Absent file = no watch and no cost. */
                 { HANDLE hc = CreateFileA(PMCHG_PATH, GENERIC_READ,
@@ -15308,6 +15410,52 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                                     if (grc == 0) { g_dpmi_done = 1; }
                                     break;
                                 }
+                            }
+                            /* ── ★★★ (C) THE MACHINE FELL IDLE: START THE PARKED TASK.
+                                 krnl386's creating task ends itself at seg1:0xcd36 --
+                                 unlink, unsign the record, `[0x228] = 0`, move to a
+                                 private kernel stack -- and from that instruction the
+                                 machine belongs to the scheduler. The first code to
+                                 touch the current task (seg1:0x321f `mov es,[0x228]` /
+                                 `test es:[0x18],2`) then dereferences a NULL SELECTOR,
+                                 which is a #GP with err=0. That fault is not a defect,
+                                 it is the cue: nobody is running and somebody is
+                                 waiting. Resume them instead of reflecting.
+                               ⚠ THIS TRUNCATES THE CREATOR. It had already retired, but
+                                 it was still freeing selectors when we took the machine
+                                 away, and those leak. Logged as the truncation it is,
+                                 because the honest fix is to park the creator too and
+                                 give it the rest of its turn later. */
+                            if (g_wowsched_on && g_ws_task.used
+                                && wowsched_curtask() == 0) {
+                                p = zput(p, "  WOWSCHED: [0x228]==0 -- the creator retired "
+                                            "(seg1:0xcd41) and task 0x");
+                                p = zhex(p, g_ws_task.task);
+                                p = zput(p, " is parked. Resuming it INSTEAD of reflecting this "
+                                            "fault; the creator's remaining teardown is "
+                                            "ABANDONED (selectors leak).\r\n");
+                                /* ★ VERIFY THE LAUNCH RESULT WE INVENTED AT (A). By now
+                                     InitTask has NOT run for this task (it runs after we
+                                     resume), so TDB+0x1c is still zero -- but the moment
+                                     it is not, this line proves or breaks the SS&~1
+                                     invariant, and a wrong hInstance is exactly the kind
+                                     of thing that would otherwise fail three walls later
+                                     with no trace back to here. */
+                                {   DWORD tb = dpmi_sel_base(g_ws_task.task);
+                                    if (tb) {
+                                        const volatile BYTE *t =
+                                            (const volatile BYTE *)(ULONG_PTR)tb;
+                                        WORD h = (WORD)(t[0x1c] | (t[0x1d] << 8));
+                                        p = zput(p, "  WOWSCHED: TDB+0x1c now reads 0x");
+                                        p = zhex(p, h);
+                                        p = zput(p, " (0 = InitTask has not run yet)\r\n");
+                                    }
+                                }
+                                log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                                wowsched_poke(g_ws_task.modelin, WOW32_MODE_ORDINARY);
+                                wowsched_restore(&g_ws_task, tib);
+                                ++g_ws_switches;
+                                continue;
                             }
                             if (exc < 0 || exc > 0x1F) {
                                 p = zput(p, "  EXC: no class (shared site) -- cannot name the "
