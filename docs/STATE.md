@@ -181,7 +181,14 @@ module KRNL386.EXE at 0001:229C."* See #128 below.
    task on its own thread and blocks it. We answer all seven with the harness sentinel, so a
    task that has been entered never gives control back. WOWEXEC's entry is the textbook Win16
    `__astart` and its `WaitEvent(0)` sits exactly between `InitTask` and `InitApp`.
-   See [`session-38.md`](log/sessions/session-38.md) for the resume-here list.
+   ★★★ **And krnl386 says how to schedule it: CHANGE `[0x228]`.** The common thunk
+   (`seg1:0x2bb6`) pushes `[0x228]` before the BOP, parks the frame's `SS`/`BP` in
+   `[0x6a4]`/`[0x6a6]`, and afterwards does `cmp ax,[0x228] / jne` — **it branches on whether
+   the 32-bit side changed the current task**, into `seg1:0x98ab`, which writes the outgoing
+   task's `SS:SP` into its own `TDB+0x04/+0x02` and reloads the incoming one. ⇒ **the host
+   needs no context save/restore at all**: it writes one word, through the guest's own `DS`,
+   which `seg1:0x2bc9` guarantees is DGROUP at every WOW32 BOP. The remaining work is a
+   *policy*, not a machine. See [`session-38.md`](log/sessions/session-38.md).
 
    **Session 36 in one paragraph.** The frontier moved from an address to a **module
    name**. Session 35's `WOW32_UNIMPL_RET = 0` — written but never run — turned out to be

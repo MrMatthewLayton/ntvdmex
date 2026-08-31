@@ -242,49 +242,110 @@ control back to its creator.
   deliberately not the next instruction. That shape is normal here, not an oddity. The scan
   now takes `e9`, `eb` and `ea` as well, and the zeros in the table above were re-measured
   with the fixed one.
-- **REFUTED: "the creating task resumes at `seg1:0x9827`."** The switch-back
-  (`mov ss,di / mov sp,cx`, with `DI:CX` holding the creating task's parked stack) is
-  unreachable by any control flow the binary shows, and the two `nop`s at `0x9825/0x9826`
-  looked like a landing pad. A scan of every segment for the word `0x9827` — as a call, a
-  jump, or a datum — finds **nothing**: WOW32 is never told that address. The NOPs are
-  padding.
+- **And then the SAME MISTAKE AGAIN, twenty minutes later.** I wrote up "the creating task
+  resumes at `seg1:0x9827`" as **refuted**, on the strength of a scan of every segment for
+  the *word* `0x9827` that came back empty. A near jump encodes a **relative displacement**,
+  not the target — so the scan could not have found it however many times I ran it. It is
+  reached, from `seg1:0x2c61`, and the section below is what it does. Twice in one session,
+  the same shape: *a search that cannot express the thing it is looking for reports zero, and
+  zero reads like an answer.*
+
+---
+
+## ★★★ AND krnl386 SAYS HOW TO SCHEDULE IT: **CHANGE `[0x228]`**
+
+The common WOW32 thunk, `seg1:0x2bb6`, is not a plain call gate. It brackets every BOP with
+task bookkeeping:
+
+```
+2bc9  mov ds,cs:[0x30]         ; ★ DS is krnl386's DGROUP at EVERY WOW32 BOP
+2bce  push [0x228]             ; ★ remember which task is making this call
+2bd2  mov di,ss
+2bd4  mov [0x6a4],di           ; ★ park this frame's SS
+2bd8  mov [0x6a6],bp           ;    and BP
+2bf1  C4 C4 51                 ; the BOP
+2c04  pop ax
+2c05  cmp ax,[0x228]           ; ★★ DID THE CURRENT TASK CHANGE ACROSS THE CALL?
+2c09  jne 0x2c4b               ; ★★ yes -> switch
+2c0b  ...                      ; no  -> the ordinary epilogue
+```
+
+`seg1:0x2c4b jmp 0x98ab` is `SwitchToTask`, and it does exactly what the name implies:
+
+```
+98ab  inc [0x24b]                    ; switch depth
+98bf  es = [0x228]                   ; the outgoing task
+98cb  ax=[0x6a4] / es:[4]=ax         ; ★ TDB+0x04 = its SS, from the parked word
+98d2  ax=[0x6a6] / sub ax,0x10
+98d8  es:[2]=ax                      ; ★ TDB+0x02 = its SP
+98e7  cmp es:[0xfa],0x4454           ; "TD" -- only for a real task database
+9902  es:[0x228] = di                ; ★ current task = the incoming one
+9923  ...                            ; per-task bookkeeping
+9964  jmp 0x2c0b                     ; back into the thunk's epilogue
+```
+
+and the epilogue's jump table (`2c41 jmp word ptr cs:[bx+0x2a36]`) reaches `seg1:0x2c4e`,
+which pops the saved registers, **zeroes the return-value hole at `[bp-0x18]`**, and
+
+```
+2c61  jmp 0x9827                     ; -> mov ss,di / mov sp,cx
+```
+
+— the launcher's switch-back, with `DI:CX` still holding the creating task's `SS:SP` because
+the thunk saved and restored them across the BOP. That is what `seg1:0x9827` is for, and why
+`0x9825/0x9826` are NOPs: it is the tail of a routine that is *jumped into*, not fallen into.
+
+### What this means for the host — and it is much less work than it looked
+
+**We do not need to save or restore CPU contexts.** krnl386 parks and reloads every task's
+stack itself; the 32-bit side's entire job is to *choose*. To yield during a WOW32 call, the
+host writes **one word**: krnl386's `[0x228]`.
+
+And it is trivially reachable. `seg1:0x2bc9` sets `DS` to DGROUP two instructions before the
+BOP, so at **every** WOW32 BOP the guest's own `DS` selects krnl386's data segment — the run
+logs `ds=0x000001e7` on every one of them. The host already resolves selectors; no new
+plumbing, no literal-linear mode, no dependence on a base that moves.
 
 ---
 
 ## ▶ RESUME HERE
 
-**The next piece of work is a scheduler, in the host.** That is not a guess about scope: the
-seven scheduling exports above have no 16-bit body and no internal caller, so there is no
-other place for the decision to live. The concrete shape:
+**The next piece of work is a scheduler, in the host** — and it is a *policy*, not a context
+switcher. The seven scheduling exports have no 16-bit body and no internal caller, so there
+is nowhere else for the decision to live; and krnl386 performs the switch itself when it sees
+`[0x228]` change across a WOW32 BOP. The concrete shape:
 
-1. **Suspend at `0x74`.** `seg1:0x9822` is the one call made with the new task's `SS:SP`
-   already installed and the creating task's parked in `DI:CX`. Save the guest context there
-   as the creating task's, then let the flow continue into the `iret` as it does today.
-2. **Switch at the yielding calls** — `WaitEvent`, `Yield`, `OldYield`, `DirectedYield` —
-   by restoring another task's saved context instead of returning. `PostEvent` and
-   `SetPriority` feed the choice; `LockCurrentTask` forbids it.
-3. **The list is already right**: krnl386 links every task at `seg1:0x99ed` keyed on the
-   signed priority at `TDB+0x08`, and `[0x228]` names the current task, so a host scheduler
-   can read its policy out of the guest rather than invent one.
+1. **Track the current task.** Read `[0x228]` through the guest's own `DS` at each WOW32 BOP
+   — it is DGROUP there by construction (`seg1:0x2bc9`). Keep the sequence: it tells you who
+   is running, and `seg1:0x9822` (WOW32 `0x74`) marks each launch, so the creator of a task
+   is simply the value of `[0x228]` before that call.
+2. **Yield by writing `[0x228]`** at `WaitEvent`, `Yield`, `OldYield` and `DirectedYield`.
+   `PostEvent` and `SetPriority` feed the choice; `LockCurrentTask` forbids it. Nothing else
+   is needed: krnl386 saves the outgoing task's `SS:SP` into its own TDB and reloads the
+   incoming one.
+3. **The policy can be read out of the guest.** krnl386 links every task at `seg1:0x99ed`
+   keyed on the signed priority byte at `TDB+0x08`, so a scheduler can walk the list it
+   already maintains rather than invent an order.
 
-The first checkpoint is small and specific: with `WaitEvent(0)` yielding back, krnl386's boot
-task should return from `LoadModule`, take `seg1:0xcc6b (cmp ax,0x20)`, read
+The first checkpoint is small and specific: with `WaitEvent(0)` yielding to the creator,
+krnl386's boot task should return from `LoadModule`, take `seg1:0xcc6b (cmp ax,0x20)`, read
 `[boot] 386GRABBER`, and **unlink its own record at `seg1:0xcd36`** — none of which fires
 today. Breakpoint those three and the fix is measurable before WOWEXEC is asked to draw
 anything.
 
-⚠ Do not skip step 1. Without a saved context for the creating task there is nothing to
-switch *to*: `seg1:0x97c2` parks its `SS:SP` in `DI:CX` and then clobbers both at
-`seg1:0x9871/0x9873`, and `TDB+0x02/+0x04` alone gives a stack but no `CS:IP`.
+⚠ **The return-value hole is zeroed on the switch path** (`seg1:0x2c5c`,
+`mov word ptr [bp-0x18],0`), so a switching call's return value is not the host's to choose —
+do not try to answer *and* switch on the same call and expect both to land.
 
 ### Ruled out this session — do not re-try
 
 - **Writing the bring-up record's `hInstance`.** One writer, in `InitTask`, which that
   record never enters. `0x001e` was pattern-matching on a stack selector that is ours.
 - **"WOWEXEC's TDB is never linked."** It is linked, at the head, and measured to be.
-- **"The creating task resumes at `seg1:0x9827`."** The address is referenced nowhere in the
-  binary, in any form.
-- **Looking for a 16-bit scheduler inside krnl386.** There is not one.
+- **Looking for a 16-bit scheduler inside krnl386.** There is not one — but there IS a
+  16-bit task *switcher* (`seg1:0x98ab`), and it is driven by `[0x228]`.
+- ~~"The creating task resumes at `seg1:0x9827`."~~ **This "refutation" was wrong** — see the
+  correction above. It resumes there, from `seg1:0x2c61`.
 - `wow32ret.txt` as a load-bearing file. It ships empty and must stay that way.
 
 ### How to drive it
