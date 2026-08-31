@@ -513,6 +513,24 @@ to `0xcd01`, never reads `[boot] 386GRABBER`, and never unlinks itself.
 The `0x229c` hit at svc 970 is worth carrying: `GetExpWinVer` is called twice, and the FIRST
 call succeeds with a real handle. Only the `LoadCursor(NULL, …)` one fails.
 
+★ **And the oracle gives the value the field should hold.** In both of stock's tasks the
+instance handle is the task's own stack selector with a different RPL:
+
+```
+sel 0x1707  SS=0x16bf  hInst=0x16be
+sel 0x038f  SS=0x03af  hInst=0x03ae
+```
+
+i.e. `hInstance == SS` bar the low bits — which is Win16's `SS == DS` for a task, seen
+through two aliases of one descriptor. Our boot record has `SS = 0x001f` and `hInst = 0`;
+by that pattern it should be `0x001e`. That is a concrete expected value to aim a fix at, and
+a concrete thing to check first if the fork above lands on branch 2.
+
+⚠ Note also that the `WaitEvent` in this window is **WOWEXEC's own** (`from=0x03cf:0x11e9`),
+not krnl386's scheduler, and the third `GetPrivateProfileString` is **USER's**
+(`from=0x0327:0x582f`) — not the `seg1:0xcd2d` one. Both were tempting to misread as krnl386
+getting further than it does; the `from=` field is what settles it.
+
 ⚠ **The oracle needed fixing before it could answer.** `vdmdump`'s LDT dump was
 `LDT_ENTRY LdtEntries[512]`, which covers selectors `0x0000..0x0FFF` — and stock's task-list
 head is `0x1707`, index 736. The first walk stopped at "NOT IN LDT" with nothing to say that
