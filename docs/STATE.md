@@ -142,8 +142,18 @@ module KRNL386.EXE at 0001:229C."* See #128 below.
    came through a different id from a different module. Two instruments were built on the
    way: **`pmchg.txt`** (which byte changed, and at which PM event — it named the drive-table
    write in one run) and **`wow32ret.txt`**.
-   ⚠ **The furthest point depends on an EXPERIMENT**: `wow32ret.txt` on the rig must contain
-   `7d 00000001`. Pinning `0x7d` properly is the first item in the session-37 handoff.
+   ⚠ **The furthest point depends on an EXPERIMENT**: `wow32ret.txt` must contain
+   `7d 00000001` — it now ships in `scripts/bm/` and `bmwow.sh` deploys it, so a clean clone
+   reproduces rather than silently regressing. Pinning `0x7d` properly is the first item in
+   the session-37 handoff.
+   **What kills WOWEXEC is `LoadCursor(NULL, IDC_ARROW)`** — a NULL instance is the
+   documented way to ask for a system cursor. USER passes it to `GetExpWinVer`, krnl386's
+   `GetExePtr(0)` walks its task list and **matches krnl386's own bring-up record, whose
+   instance handle is `0`**, then returns that record's module-handle field, `0xFFFF`, which
+   USER loads into `ES`. **The stock oracle settles what is wrong with that**: a live stock
+   WOW session's task list (read out of the low-megabyte dump plus the LDT, after widening
+   `vdmdump`'s 512-entry LDT limit that was hiding the answer) has **two tasks, both with
+   real handles and no zero-`hInstance` entry at all**. Ours has one that stock does not.
 
    **Session 36 in one paragraph.** The frontier moved from an address to a **module
    name**. Session 35's `WOW32_UNIMPL_RET = 0` — written but never run — turned out to be
