@@ -117,8 +117,33 @@ module KRNL386.EXE at 0001:229C."* See #128 below.
    confident arms and 42 hits while answering nothing; and the open trace printed AX without
    `AL`, `CF` or the Win32 error, while `AH=3E close` printed nothing at all. WOW32 `0x88
    GetDriveType` was also implemented — 26 stepped-over calls sweeping A: to Z:, whose only
-   caller does `cmp al,2` — and it is a **closed gap, not a moved wall**: the run still ends
-   in the same place.
+   caller does `cmp al,2` — and it is a **closed gap, not a moved wall**.
+   **Then WOW32 `0x080` turned out to be `GetPrivateProfileString`**, named not by inference
+   but by its own arguments, which point at the DGROUP strings `"BOOT"`, `"WOWSHELL"`,
+   `"WOWEXEC.EXE"` and `"SYSTEM.INI"`; thirty bytes later krnl386 hands that buffer to
+   `LoadModule`. With it and `0x039 GetProfileInt` answered, krnl386 **completes its
+   bootstrap and names the program it wants**. Three more walls then fell. `LoadModule`
+   was failing on **one wrong byte** — `0x0e` in krnl386's per-drive flag table at DGROUP
+   `0x2a2`, which routes every `AH=47h` for C: through a pre-handler that forces `CF` on
+   every path — and that byte was written because our protected-mode `AH=44h` whitelist
+   admitted `AL=00/06/07` and sent the rest to the TODO arm *"because everything else takes a
+   DS:DX buffer"*: true of most of `AH=44h` and **false of exactly the three that classify a
+   drive** (`08h` removable? `09h` remote? `0Eh` drive map?), which are register-only and
+   which the V86 side answered with an `else { OKCF(); }` — *success*, with the caller's own
+   registers as the answer. With them answered **`WOWEXEC.EXE` opens**, and WOW32 calls go
+   237 → 2116. That run died in a **1884-iteration retry loop** (`seg2:0x2a08`: allocate, ask
+   WOW32 `0x7d` whether the result is acceptable, on `0` allocate another — leaking two bytes
+   of stack per iteration). `0x7d` is one of the 53 unnamed ids, so instead of guessing it a
+   **knob** was built (`wow32ret.txt`, which changes an unimplemented answer for one run and
+   logs every use as an experiment); with `0x7d → 1` the loop runs **once** and
+   **`WOWEXEC.EXE` loads and executes**. It then takes a GP fault and krnl386 says so in
+   Windows' own words — visible only because the string decoder, which had been gated on
+   krnl386's own MessageBox id, now decodes *any* call's string arguments: the next message
+   came through a different id from a different module. Two instruments were built on the
+   way: **`pmchg.txt`** (which byte changed, and at which PM event — it named the drive-table
+   write in one run) and **`wow32ret.txt`**.
+   ⚠ **The furthest point depends on an EXPERIMENT**: `wow32ret.txt` on the rig must contain
+   `7d 00000001`. Pinning `0x7d` properly is the first item in the session-37 handoff.
 
    **Session 36 in one paragraph.** The frontier moved from an address to a **module
    name**. Session 35's `WOW32_UNIMPL_RET = 0` — written but never run — turned out to be
