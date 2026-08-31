@@ -1,4 +1,3 @@
-7d 00000001
 #
 # wow32ret.txt -- ANSWER AN UNIMPLEMENTED WOW32 CALL DIFFERENTLY. GH #128.
 #
@@ -9,18 +8,19 @@
 # them with is load-bearing: 0 is right for "declined / not present" and WRONG
 # for a caller that loops until the answer is non-zero.
 #
-# ** THIS FILE IS LOAD-BEARING FOR THE CURRENT MILESTONE. **
-# seg2:0x2a08 is a retry loop -- allocate, ask 0x7d whether the result is
-# acceptable, and on 0 allocate another and ask again. It also does `push ax` at
-# seg2:0x2a14 without popping on the loop-back edge, so every iteration leaks two
-# bytes of stack. With 0x7d answered 0 it ran 1884 times and took krnl386's 4 KB
-# stack out with a #SS. With this line present it runs ONCE, and WOWEXEC.EXE --
-# the first Win16 program this project has executed -- loads and runs.
+# ** THIS FILE IS DELIBERATELY EMPTY, AND THAT IS THE MILESTONE. **
+# It used to carry one line, `7d 00000001`, without which krnl386 spun 1884
+# times in the retry loop at seg2:0x2a08 -- allocate, ask 0x7d whether the
+# result is acceptable, on 0 allocate another -- leaking two bytes of stack per
+# iteration until a #SS. With the line, WOWEXEC.EXE loaded and ran, and the
+# furthest point this project has reached depended on a text file.
 #
-# It is still an EXPERIMENT and not a service: 0x7d's return is used only as a
-# boolean on the first-call path (seg2:0x29fe), and as a VALUE on the retry path
-# (seg2:0x2a22), so 1 is enough to test and not enough to ship. Pinning the real
-# semantics is the first item in the session-37 handoff.
+# 0x7d IS NOW A SERVICE (src/wow/wow32.h). Its two call sites are both inside
+# krnl386's task-database creator, the retry offers ALIASES of the same memory
+# so the question can only be about the selector's numeric value, and the retry
+# path uses the return AS the selector -- so the answer is to echo the argument,
+# not to say 1. A run with this file empty must reach exactly as far as a run
+# with the old line in it; if it does not, the reading above is wrong.
 #
 # DATA LINES FIRST, COMMENTS BELOW -- the same rule pmbp.txt learned the hard
 # way, and that this file then broke by putting its one data line at the end of

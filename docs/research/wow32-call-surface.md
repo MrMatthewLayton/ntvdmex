@@ -70,6 +70,11 @@ answer.
 | `0xbc` | `GlobalMemoryStatus` | 32-byte buffer, `dwAvailPhys+dwAvailPageFile` vs `dwAvailVirtual` |
 | `0xcf` | `GetSystemDefaultLangID` | export table **and** call site |
 | `0x78` | record the DOS data area | far pointer to the `SysVars+0x6A` table |
+| `0x80` | `GetPrivateProfileString` | its own arguments: `"BOOT"`, `"WOWSHELL"`, `"WOWEXEC.EXE"`, `"SYSTEM.INI"` — **and answering it is the program launch** |
+| `0x39` | `GetProfileInt` | the same shape with no filename; `("KERNEL","GPCONTINUE")` and `("ModuleCompatibility",<module>)` |
+| `0x88` | `GetDriveType` | export table, and its one caller does `cmp al,2` (`DRIVE_REMOVABLE`) |
+| `0x7d` | approve a task-database selector — **echo the argument** | both call sites are inside the TDB creator `seg2:0x2984`; the retry offers **aliases of the same memory**, so the question is about the selector's value, and `seg2:0x2a22` uses the return **as** the selector |
+| `0xc9` | `GetCurrentDirectory` | serviced in `main.c`, because it needs the DOS machine |
 | `0xc1 0x97 0xc2 0xc7 0x7e 0x89 0x6f` | **declined** → real DOS | `wowdecline.py`, spot-checked by hand |
 
 ## The full surface

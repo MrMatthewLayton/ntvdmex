@@ -224,6 +224,7 @@ static DWORD wow32_peekret(const wow32_frame_t *f)
 #define WOW32_OLDYIELD                  0x75
 #define WOW32_REGISTERDOSDATA           0x78   /* named from its call site, below */
 #define WOW32_GETSHORTPATHNAME          0x7b
+#define WOW32_ACCEPTTASKSELECTOR        0x7d   /* pinned from its call sites, below */
 #define WOW32_GETPRIVATEPROFILESTRING   0x80   /* pinned from DGROUP, see below    */
 #define WOW32_WOWWAITFORMSGANDEVENT     0x83
 #define WOW32_WOWMSGBOX                 0x84
@@ -268,6 +269,7 @@ static const char *wow32_name(WORD id)
     case WOW32_OLDYIELD:               return "OldYield";
     case WOW32_REGISTERDOSDATA:        return "RegisterDosData?";
     case WOW32_GETSHORTPATHNAME:       return "GetShortPathName";
+    case WOW32_ACCEPTTASKSELECTOR:     return "AcceptTaskSelector?";
     case WOW32_WOWWAITFORMSGANDEVENT:  return "WowWaitForMsgAndEvent";
     case WOW32_WOWMSGBOX:              return "WowMsgBox";
     case WOW32_GETDATETIME:            return "GetDateTime?";
@@ -579,6 +581,53 @@ static int wow32_call(wow32_frame_t *f, wow32_dosdata_t *dd)
         wow32_setret(f, (DWORD)GetDriveTypeA(root));
         return 1;
     }
+
+    /* ── ★ 0x7d: approve the selector about to become a TASK DATABASE ──────
+         Not named by the export table, so it comes from its call sites -- both
+         of which are inside ONE function, `seg2:0x2984`, and that function is
+         the TDB creator:
+
+           2984  enter 4,0                      ; the whole of it
+           29b5  mov si,0x100                   ; room for a PSP
+           29d5  add si,0x223 / and si,0xfff0   ; -> 0x320
+           29e6  lcall seg1:0x4e81              ; GlobalAlloc(that many bytes)
+           29f6  push ax / lcall 0xb397         ; 0x7d: "is THIS one acceptable?"
+           29fc  or ax,ax / je 0x2a04           ; no -> the retry loop
+           2c02  mov word ptr [0xfa],0x4454     ; "TD", the TDB signature
+
+         and `0x320` is exactly limit+1 of every task database in the stock
+         panel (session-37), including the two of a live stock WOW session.
+
+       ★ THE RETRY LOOP IS WHAT PINS THE SEMANTICS. On a `0` the caller does not
+         go and allocate different memory -- it calls `seg1:0x574d`, which is
+         AllocSelector: `lsl ecx,<sel>` for the limit, take LDT entries, copy the
+         source DESCRIPTOR onto them, `or si,7`. Every retry therefore offers an
+         ALIAS OF THE SAME BYTES, and the only thing that differs between one
+         attempt and the next is the NUMERIC VALUE OF THE SELECTOR. The question
+         can only be "may this selector value be a task handle?", and the rejects
+         are freed again (`seg1:0x5a53`) as soon as one is accepted.
+
+       ★ AND THE ANSWER IS THE SELECTOR, NOT A BOOLEAN. `seg2:0x29fe` merely
+         tests it, but `seg2:0x2a22` does `mov si,ax` and si goes on to BE the
+         TDB selector (`mov es,ax`, then the block is zeroed through it). A
+         32-bit companion cannot conjure an LDT selector, so the only value it
+         can return is one it was offered: ECHO THE ARGUMENT. A bare `1` -- what
+         the `wow32ret.txt` experiment answered to get WOWEXEC.EXE running -- is
+         right only because the first call is accepted and the second path is
+         never taken; it would install `0x0001` as a task's selector if it were.
+
+       ★ ACCEPTING IS THE RIGHT ANSWER FOR THIS HOST, and that is a reading, not
+         a shrug: whatever the real 32-bit side checks against, we keep no
+         parallel handle table, the LDT krnl386 allocates from is the one we gave
+         it, and each TDB gets a distinct selector by construction. Nothing here
+         could make one selector unacceptable and the next one acceptable.
+       ⚠ If a task ever does need rejecting, this is where it goes -- and the
+         guest's loop is a trap. `seg2:0x2a14` pushes and does not pop on the
+         loop-back edge, so every rejection leaks two bytes of krnl386's stack;
+         1884 of them is the #SS that led here in the first place. */
+    case WOW32_ACCEPTTASKSELECTOR:
+        wow32_setret(f, (DWORD)wow32_argw(f, 0));
+        return 1;
 
     /* ── 0x78: krnl386 hands us its view of the DOS data area ─────────────
          The argument is a 16:16 pointer to the structure whose address it read

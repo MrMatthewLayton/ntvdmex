@@ -34,14 +34,14 @@ if [ "${1:-}" != "--no-deploy" ]; then
   echo "deployed ntvdmhost.exe  md5=$L"
 fi
 
-# ── ★ DEPLOY THE WOW32 ANSWER OVERRIDES, because the milestone depends on them.
-#   `wow32ret.txt` changes what an UNIMPLEMENTED WOW32 id answers, and one line in
-#   it (0x7d) is the difference between WOWEXEC.EXE running and krnl386 spinning
-#   1884 times in seg2:0x2a08 until its stack is gone. Leaving it on the rig only
-#   makes the project's furthest point depend on a file no clone has -- and a run
-#   that silently regresses is exactly the class of failure this script's other
-#   comments exist for. It ships from the repo, and every call it changes is logged
-#   as an EXPERIMENT rather than a service. WOW32RET=0 to run without it.
+# ── DEPLOY THE WOW32 ANSWER OVERRIDES.
+#   `wow32ret.txt` changes what an UNIMPLEMENTED WOW32 id answers, and every call
+#   it changes is logged as an EXPERIMENT rather than a service.
+# ★ IT IS NO LONGER LOAD-BEARING. It used to carry `7d 00000001`, which was the
+#   difference between WOWEXEC.EXE running and krnl386 spinning 1884 times in
+#   seg2:0x2a08 until its stack was gone. 0x7d is now a real service (it echoes
+#   the task selector it is offered -- see wow32.h), so the file ships EMPTY and a
+#   deploy line reading "0 override(s)" is the correct state. WOW32RET=0 skips it.
 if [ "${WOW32RET:-1}" = "1" ] && [ -f scripts/bm/wow32ret.txt ]; then
   cp scripts/bm/wow32ret.txt "$SH/wow32ret.txt" || exit 2
   echo "deployed wow32ret.txt ($(grep -cv '^#' scripts/bm/wow32ret.txt) override(s))"
