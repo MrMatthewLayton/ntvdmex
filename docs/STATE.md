@@ -181,14 +181,17 @@ module KRNL386.EXE at 0001:229C."* See #128 below.
    task on its own thread and blocks it. We answer all seven with the harness sentinel, so a
    task that has been entered never gives control back. WOWEXEC's entry is the textbook Win16
    `__astart` and its `WaitEvent(0)` sits exactly between `InitTask` and `InitApp`.
-   ★★★ **And krnl386 says how to schedule it: CHANGE `[0x228]`.** The common thunk
-   (`seg1:0x2bb6`) pushes `[0x228]` before the BOP, parks the frame's `SS`/`BP` in
-   `[0x6a4]`/`[0x6a6]`, and afterwards does `cmp ax,[0x228] / jne` — **it branches on whether
-   the 32-bit side changed the current task**, into `seg1:0x98ab`, which writes the outgoing
-   task's `SS:SP` into its own `TDB+0x04/+0x02` and reloads the incoming one. ⇒ **the host
-   needs no context save/restore at all**: it writes one word, through the guest's own `DS`,
-   which `seg1:0x2bc9` guarantees is DGROUP at every WOW32 BOP. The remaining work is a
-   *policy*, not a machine. See [`session-38.md`](log/sessions/session-38.md).
+   The common thunk (`seg1:0x2bb6`) pushes `[0x228]` before the BOP, parks the frame's
+   `SS`/`BP` in `[0x6a4]`/`[0x6a6]`, and afterwards does `cmp ax,[0x228] / jne` into
+   `seg1:0x98ab`. ⚠ **That is a RE-ENTRANCY GUARD, not a scheduling lever** — `0x98ab`'s
+   *incoming* task is `AX`, the caller's own, so the sequence means *"someone else became
+   current while I was in the 32-bit side; park them and put me back."* Writing `[0x228]`
+   from the host does **not** yield; it parks the wrong stack in the wrong TDB and undoes
+   itself. (This entry said the opposite for one commit — the correction is in the session
+   log, with the instruction that settles it.) What survives is the **addressing**:
+   `seg1:0x2bc9` makes the guest's `DS` krnl386's DGROUP at every WOW32 BOP, so `[0x228]` is
+   readable for free — **logging it per BOP turns a run into a task timeline, and that is the
+   next instrument.** See [`session-38.md`](log/sessions/session-38.md).
 
    **Session 36 in one paragraph.** The frontier moved from an address to a **module
    name**. Session 35's `WOW32_UNIMPL_RET = 0` — written but never run — turned out to be

@@ -9500,6 +9500,37 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                         const char *nm = wow32_name((WORD)fid);
                         p = zput(p, " FUNC=0x"); p = zhex(p, fid);
                         if (nm) { p = zput(p, " "); p = zput(p, nm); }
+                        /* ── ★ WHICH TASK IS CALLING. (GH #128, session 38) ───────────
+                             krnl386 keeps the current task's TDB selector in DGROUP
+                             `[0x228]`, and the common thunk sets DS to DGROUP two
+                             instructions before the BOP (`seg1:0x2bc9 mov ds,cs:[0x30]`)
+                             -- so at EVERY WOW32 call the guest's own DS already selects
+                             the segment this lives in. No base to resolve, nothing that
+                             moves between runs, and it costs one read.
+                           ★ IT TURNS THE LOG INTO A TASK TIMELINE, which is the thing
+                             the frontier needs. WOWEXEC executes, calls WaitEvent(0) --
+                             the handshake between InitTask and InitApp in every Win16
+                             startup -- and never gives control back, so krnl386's boot
+                             task never returns from LoadModule and never unlinks its own
+                             bring-up record at seg1:0xcd36. That record is what
+                             GetExePtr(NULL) then matches, and the #GP at seg1:0x229c is
+                             the consequence. Every one of those claims is about WHO WAS
+                             RUNNING, and until now the log could not say.
+                           ⚠ It is a READING, not a lever. `seg1:0x2c05` compares this
+                             word across the BOP and switches on a difference, which
+                             reads like an invitation to schedule by writing it -- but
+                             `seg1:0x98ab`'s INCOMING task is the caller's own, so that
+                             path restores the caller after someone else ran. Writing it
+                             here would park the wrong stack in the wrong TDB. */
+                        {   DWORD dgb = dpmi_sel_base((WORD)(VDM_REG(tib, VTIB_DS)
+                                                             & 0xFFFF));
+                            if (dgb) {
+                                const volatile BYTE *dg =
+                                    (const volatile BYTE *)(ULONG_PTR)dgb;
+                                p = zput(p, " task=0x");
+                                p = zhex(p, (DWORD)(dg[0x228] | (dg[0x229] << 8)));
+                            }
+                        }
                         p = zput(p, " args=");   p = zhex(p, nby);
                         p = zput(p, "b retstub=0x");
                         p = zhex(p, (DWORD)(fb[2] | (fb[3] << 8)));
