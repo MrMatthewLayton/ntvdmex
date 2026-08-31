@@ -310,10 +310,17 @@ typedef LONG (WINAPI *PFN_NTQIP)(HANDLE, ULONG, PVOID, ULONG, PULONG);
 
 #define ProcessLdtInformation 10
 
+/* ⚠ 512 ENTRIES COVERS SELECTORS 0x0000..0x0FFF, AND THE INTERESTING ONES ARE
+     PAST IT. (session 37) A stock WOW session's task-list head, read out of
+     krnl386's live DGROUP, was selector 0x1707 -- LDT index 736 -- so the walk that
+     dump existed to support stopped at "NOT IN LDT" with nothing to say it was the
+     tool's limit rather than the guest's state. 8192 entries is 64 KB and covers
+     the whole 16-bit selector space. */
+#define VDMDUMP_LDT_ENTRIES 8192
 typedef struct {
     ULONG     Start;                    /* byte offset of the first entry wanted */
     ULONG     Length;                   /* bytes of entries wanted */
-    LDT_ENTRY LdtEntries[512];
+    LDT_ENTRY LdtEntries[VDMDUMP_LDT_ENTRIES];
 } PROCESS_LDT_INFO;
 
 static PROCESS_LDT_INFO g_ldt;
@@ -342,7 +349,7 @@ static void dump_ldt(HANDLE proc)
         return;
     }
     n = (ret > 8 ? (ret - 8) : 0) / sizeof(LDT_ENTRY);
-    if (n > 512) n = 512;
+    if (n > VDMDUMP_LDT_ENTRIES) n = VDMDUMP_LDT_ENTRIES;
     p = zput(line, "  returned "); p = zdec(p, ret);
     p = zput(p, " bytes = "); p = zdec(p, n); p = zput(p, " entries");
     sayline(line);

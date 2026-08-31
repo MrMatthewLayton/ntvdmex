@@ -444,14 +444,46 @@ selector, `0x01e7`) in `TDB+0x1c`, and why it is zero.
   uninitialised memory that gets parsed) and **the field is still `0xFFFF`**. So krnl386
   puts it there on purpose for its own boot task, and the defect is the other field.
 
-So krnl386 never sets `+0x1c`, which rules out "we corrupted it" and "it was set and then
-cleared". What is left is that the code which *should* set it is not being reached, or that
-the boot TDB is not supposed to be in the list `GetExePtr` walks. `seg1:0xc51c` is where the
-list head and `[0x228]` (the current task) are both set to that selector during bring-up;
-`seg1:0x99ed` is the sorted insert. ▸ Start at `seg1:0xc51c` and work backwards to where that
-selector's block is allocated — if it is allocated from a pool we hand krnl386, zeroing it is
-worth testing on its own, since `0` in `+0x1e` would make `GetExePtr` fail cleanly and
-`seg1:0x22ab` supply a default.
+So krnl386 never sets `+0x1c`. A breakpoint at `seg1:0xc51c` — where the list head and
+`[0x228]` (the current task) are both set to that selector during bring-up — dumps the block
+as krnl386 registers it:
+
+```
+TDB base=0x2cc40, from +0x10:
+  +0x10  00 00 00 00 00 00 00 00 00 00 00 04 00 00 ff ff
+```
+
+`+0x1a = 0x0400`, `+0x1c = 0`, `+0x1e = 0xFFFF`, everything else zero. So krnl386 writes
+that record on purpose and registers it with a zero instance handle.
+
+### ★★ AND STOCK ntvdm SETTLES IT: IT HAS NO SUCH TASK
+
+`stockdump.bat` runs SYSEDIT under stock ntvdm with the IFEO key dropped and dumps the live
+VDM from outside (`tools/vdmdump`). krnl386's **live** DGROUP is identifiable in that dump —
+of the four copies of segment 4 in the low megabyte, exactly one has a non-zero task-list
+head — and from there the list resolves through the dumped LDT:
+
+```
+stock live DGROUP @0x0162a0   head=0x1707  current=0x038f
+  sel 0x1707 base 0x014360 | next=0x038f  SS:SP=0x16bf:0x245a  hInst=0x16be  hMod=0x171f
+  sel 0x038f base 0x018ca0 | next=0x0000  SS:SP=0x03af:0x2066  hInst=0x03ae  hMod=0x037f
+```
+
+**Two tasks, and both have a real instance handle and a real module handle. There is no
+zero-`hInstance` task in stock's list at all.** Ours has one — krnl386's own bring-up record,
+still linked — and that is precisely what a `LoadCursor(NULL, …)` matches.
+
+⇒ **The defect is structural and named: our run leaves a task in the list that a correct WOW
+session does not have.** ▸ Either stock's first real task REUSES that bring-up record (so
+there is only ever one), or it is unlinked when the first task starts. `seg1:0xc51c` plants
+it; `seg1:0x99ed` is the sorted insert that later prepends WOWEXEC's. Read what happens to
+`[0x226]`/`[0x228]` between those two points.
+
+⚠ **The oracle needed fixing before it could answer.** `vdmdump`'s LDT dump was
+`LDT_ENTRY LdtEntries[512]`, which covers selectors `0x0000..0x0FFF` — and stock's task-list
+head is `0x1707`, index 736. The first walk stopped at "NOT IN LDT" with nothing to say that
+was the tool's limit rather than the guest's state. It is 8192 entries now, and the same run
+went from 512 entries to 773.
 
 ### Next, in order
 
@@ -459,8 +491,9 @@ worth testing on its own, since `0` in `+0x1e` would make `GetExePtr` fail clean
    from a just-completed allocation; `seg1:0x574d` (the other half of the loop) does
    `lsl ecx,[bp+6]`, so these are selectors and the question is about their limits. The
    return is a boolean on the first-call path and a value on the retry path.
-2. **The boot TDB's zero instance handle** above — the `#GP` at `seg1:0x229c` is only
-   what it causes.
+2. **The extra task in our list** above — the `#GP` at `seg1:0x229c` is only what it causes,
+   and stock's list is the reference: two tasks, both with real handles, no zero-`hInstance`
+   entry.
 3. `NETWORK.DRV` / `wfwnet.drv` — krnl386 looks for both and neither is on the box's search
    path. Probably harmless; check before assuming.
 4. **Oracle the `AH=44h` trio** against MS-DOS 6.22 (#24). The register contract used is from
