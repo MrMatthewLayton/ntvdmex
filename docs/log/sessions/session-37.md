@@ -513,6 +513,40 @@ to `0xcd01`, never reads `[boot] 386GRABBER`, and never unlinks itself.
 The `0x229c` hit at svc 970 is worth carrying: `GetExpWinVer` is called twice, and the FIRST
 call succeeds with a real handle. Only the `LoadCursor(NULL, …)` one fails.
 
+### ★★ krnl386 hands WOWEXEC a CORRECT Win16 entry frame
+
+A linear breakpoint on WOWEXEC's own entry point (`0x03b0d820 + 0x11b7`, its code selector's
+base taken from the LDT-sync log) catches its first instruction:
+
+```
+cs:eip=0x03cf:0x11b7  after 689 svc
+  DI=0x03d6  SI=0x0000  BX=0x2000  CX=0x0800
+  DS=0x03d7  ES=0x03bf  BP=0  SS:SP=0x03d7:0x228a   stack= all zeros
+```
+
+That is the Win16 application entry convention exactly: **DI = hInstance, SI =
+hPrevInstance (0, no previous instance), BX = stack size, CX = heap size, ES = the PSP, DS =
+the automatic data segment**, on a clean stack with no return address — so krnl386 did not
+*call* into it, it performed a proper task switch.
+
+⇒ **Everything on the application side is right.** WOWEXEC knows its own instance handle;
+its `LoadCursor(NULL, …)` passes `0` deliberately, as the interface says to. The loader, the
+module, the task and the entry frame are all correct — the only thing wrong in the whole
+picture is the stale bring-up task still sitting in the list.
+
+★ It also dates the switch: `LoadModule` is entered at **svc 628** and WOWEXEC's first
+instruction runs at **svc 689** — 61 services in, and `seg1:0xcd36` (the unlink) is hundreds
+of services further on, after a return that never happens.
+
+### The bring-up record IS a signed task database
+
+The "is it a full-sized TDB?" check came back **yes, it is a real one**: `+0xFA` holds
+`0x4454` — `"TD"`, the signature `seg2:0x2c02` writes. So the `0x100`-byte size difference is
+not "it is a different kind of structure"; the likeliest reading is that a real task's block
+carries a PSP the kernel's own does not need. That branch of the fork is closed, and the
+defect stays where it was: `+0x1c` is `0`, and the record is still in the list when it
+should not be.
+
 ### The fatal dialog is a symptom, and answering it proves that
 
 krnl386's `MessageBox` (`0x140` here, from USER) is stepped over and answered `0`. Two runs
