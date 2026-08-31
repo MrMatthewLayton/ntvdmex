@@ -116,3 +116,50 @@ lost:
 - **`DH` from `AX=3306h`** — bit 4 means "DOS is in the HMA", a property of the
   host's `CONFIG.SYS` (this oracle boots `DOS=HIGH`), not of the DOS version.
   Asserting on it would report a configuration difference as a defect.
+
+---
+
+## `p_ioctl` (INT 21h AH=44h, session 37) — three disputes, one cause
+
+`AL = 08h` "is this block device removable", `09h` "is it remote" and `0Eh` "get the
+logical drive map" were implemented in session 37 because krnl386 probes **every drive
+with all three** and our host was answering the worst thing available: carry clear —
+meaning success — with the caller's own registers as the answer. That lie made krnl386
+flag drive C: in its own per-drive table, which is what stopped `WOWEXEC.EXE` loading.
+
+They were written from the documented interface, not from a run, so `tools/dostest/p_ioctl.asm`
+asks the panel. It reports three DISPUTED fields, and **all three have the same cause**:
+
+```
+case                 msdos622  dosbox-x  ntvdmex
+int21.19.curdrive    0000 (A:) 0002 (C:) 0002 (C:)
+int21.4408.default   0000      0001      0001       removable / fixed
+int21.4409.default   0000      0000      0000       AGREE -- not remote
+int21.440E.default   0001      0000      0000       drive-letter alias
+```
+
+**The 6.22 oracle boots from a floppy image, so its default drive is A: — and every
+case says "the default drive".** That is host geometry, not DOS behaviour:
+
+- `4408h` — A: *is* removable, so `AX=0` is the right answer there, and C: is fixed, so
+  `AX=1` is the right answer on the other two. Both are the same rule applied to
+  different hardware.
+- `440Eh` — a floppy-boot 6.22 has A: and B: aliasing one physical drive, so the drive
+  map reports which letter is current (`AL=1`); a fixed C: with no alias reports `AL=0`.
+  Again one rule, two configurations.
+- `int21.19.curdrive` is in the probe **for this reason** — the first run of it had no
+  such row, and there was no way to tell geometry from a behaviour difference. An
+  instrument that makes you guess which drive it asked about is most of the way to
+  being no instrument.
+
+★ **The field that matters is not disputed.** `4409h`'s remote bit reads `0` on all
+three hosts, and that is the one thing any caller — krnl386 included — actually asks.
+
+⚠ A like-for-like comparison of `4408h`/`440Eh` would need a drive letter that exists on
+every host in the panel, which it does not currently share. Worth revisiting if a floppy
+is ever mounted on all three; not worth manufacturing one now.
+
+⚠ `AH` is masked off in the probe for `19h` and `440Eh` — RBIL documents it as destroyed,
+and the panel duly differs on it. The first run compared the whole `AX` for `440Eh` and
+reported ours as `4400` against the oracles' `07xx`, which is a disagreement about a byte
+the interface does not define. Same discipline as `p_dir.asm`'s note on `47h`.
