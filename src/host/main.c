@@ -8519,6 +8519,84 @@ static DWORD wow32_ret_override(WORD id)
     return (DWORD)WOW32_UNIMPL_RET;
 }
 
+/* ── ★★★ AND THE SAME LEVER FOR THE EPILOGUE MODE. (GH #128, session 38) ──────
+     `wow32ret.txt` chooses what a call ANSWERS. `wowmode.txt` chooses HOW IT
+     RETURNS -- the word at bp-24 that picks one of krnl386's 38 return paths (see
+     WOW32_OFF_MODE in wow32.h). krnl386 pushes 0 there and never sets it, so all
+     37 non-zero modes exist for the 32-bit side and none of them has ever been
+     exercised on this host. Mode 25 is the task switch-back.
+   ⚠ THIS IS THE MOST DANGEROUS KNOB IN THE TREE. A mode selects a code path that
+     pops a specific stack shape; the wrong one at the wrong call site resumes the
+     guest with SS:SP loaded from whatever two registers happened to hold, which is
+     not a crash so much as a random jump. One line, one id, one run, and read the
+     log -- the same discipline wow32ret.txt earned the hard way, for higher stakes.
+   Format: `<hex id> <hex mode>`, data lines first, `#` comments below. */
+#define WOWMODE_PATH "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\wowmode.txt"
+#define WOWMODE_MAX 8
+static WORD g_w32mode_id[WOWMODE_MAX];
+static WORD g_w32mode_val[WOWMODE_MAX];
+static int  g_w32mode_n = 0;
+
+/* -1 = no override for this id (0 is a legal mode, so it cannot be the sentinel). */
+static int wow32_mode_override(WORD id)
+{
+    int k;
+    for (k = 0; k < g_w32mode_n; ++k)
+        if (g_w32mode_id[k] == id) return (int)g_w32mode_val[k];
+    return -1;
+}
+
+static void wow32_mode_load(void)
+{
+    HANDLE h = CreateFileA(WOWMODE_PATH, GENERIC_READ,
+                           FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, 0, NULL);
+    char buf[8192]; DWORD rd = 0, i = 0;
+    char lb[256], *q = lb;
+    if (h == INVALID_HANDLE_VALUE) return;
+    ReadFile(h, buf, sizeof buf - 1, &rd, NULL);
+    CloseHandle(h);
+    if (rd >= sizeof buf - 1) {
+        q = zput(q, "WOWMODE: !! wowmode.txt TRUNCATED AT THE BUFFER -- LINES DROPPED\r\n");
+        log_append(LOG_PATH, lb, q); serial_out(lb, q); q = lb;
+    }
+    while (i < rd && g_w32mode_n < WOWMODE_MAX) {
+        DWORD v[2] = { 0, 0 }; int col = 0;
+        while (i < rd && (buf[i] == '\r' || buf[i] == '\n')) ++i;
+        if (i >= rd) break;
+        if (buf[i] == '#') { while (i < rd && buf[i] != '\n') ++i; continue; }
+        while (i < rd && buf[i] != '\r' && buf[i] != '\n' && col < 2) {
+            int dg = 0;
+            while (i < rd && (buf[i] == ' ' || buf[i] == '\t')) ++i;
+            if (i >= rd || buf[i] == '\r' || buf[i] == '\n' || buf[i] == '#') break;
+            while (i < rd) {
+                char c = buf[i];
+                int t = (c >= '0' && c <= '9') ? c - '0'
+                      : (c >= 'a' && c <= 'f') ? c - 'a' + 10
+                      : (c >= 'A' && c <= 'F') ? c - 'A' + 10 : -1;
+                if (t < 0) break;
+                v[col] = (v[col] << 4) | (DWORD)t; ++dg; ++i;
+            }
+            if (dg) ++col; else ++i;
+        }
+        while (i < rd && buf[i] != '\n') ++i;
+        if (col >= 2) {
+            g_w32mode_id[g_w32mode_n]  = (WORD)v[0];
+            g_w32mode_val[g_w32mode_n] = (WORD)v[1];
+            ++g_w32mode_n;
+        }
+    }
+    if (g_w32mode_n) {
+        int k;
+        q = zput(q, "WOWMODE: ** EXPERIMENT ** returning");
+        for (k = 0; k < g_w32mode_n; ++k) {
+            q = zput(q, " 0x"); q = zhexb(q, (BYTE)g_w32mode_id[k]);
+            q = zput(q, " through epilogue mode "); q = zhex(q, g_w32mode_val[k]);
+        }
+        q = zput(q, "\r\n");
+        log_append(LOG_PATH, lb, q); serial_out(lb, q);
+    }
+}
+
 static void wow32_ret_load(void)
 {
     HANDLE h = CreateFileA(WOW32RET_PATH, GENERIC_READ,
@@ -9531,6 +9609,16 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                                 p = zhex(p, (DWORD)(dg[0x228] | (dg[0x229] << 8)));
                             }
                         }
+                        /* ── ★ AND WHICH EPILOGUE THIS CALL WILL RETURN THROUGH.
+                             The mode word at bp-24 picks one of 38 return paths
+                             (see WOW32_OFF_MODE in wow32.h). krnl386 always pushes
+                             0 and never sets it, so this MUST read `mode=0` on
+                             every line -- and the day something writes it, the log
+                             says so instead of the guest quietly returning
+                             somewhere else. Predict the number before the run. */
+                        p = zput(p, " mode=");
+                        p = zhex(p, (DWORD)(fb[WOW32_OFF_MODE]
+                                            | (fb[WOW32_OFF_MODE + 1] << 8)));
                         p = zput(p, " args=");   p = zhex(p, nby);
                         p = zput(p, "b retstub=0x");
                         p = zhex(p, (DWORD)(fb[2] | (fb[3] << 8)));
@@ -9671,6 +9759,22 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                 f.ctx     = NULL;
                 f.ret     = 0;
                 f.serviced = 0;
+                /* ── ★★ THE EPILOGUE-MODE EXPERIMENT (wowmode.txt). ────────────
+                     Written BEFORE anything is serviced, because the guest reads
+                     the mode after the BOP whatever we do here -- a stepped-over
+                     call returns through it just as a serviced one does, and the
+                     one call this exists for (0x74, the task launch) is stepped
+                     over. See WOW32_OFF_MODE in wow32.h for what the modes are and
+                     why krnl386 itself never sets one. */
+                {   int md = wow32_mode_override((WORD)f.id);
+                    if (md >= 0) {
+                        wow32_pokew(f.bp + WOW32_OFF_MODE, (WORD)md);
+                        p = zput(p, "\n     ** wowmode.txt OVERRIDE: returning"
+                                    " through epilogue mode ");
+                        p = zhex(p, (DWORD)md);
+                        p = zput(p, " -- an EXPERIMENT, not a service **");
+                    }
+                }
                 /* ── DOS-DEPENDENT WOW32 SERVICES. (GH #128) ──────────────────
                      Most of the surface is pure Win32 and lives in wow32.h. A few
                      need the DOS machine, so they are answered here where it is in
@@ -14233,6 +14337,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                 dpmi_bp_load();
                 dpmi_bp_arm();
                 wow32_ret_load();
+                wow32_mode_load();
                 /* pmchg.txt: `<hex offset> [segment]`, segment defaulting to 4
                    (krnl386's DGROUP). Absent file = no watch and no cost. */
                 { HANDLE hc = CreateFileA(PMCHG_PATH, GENERIC_READ,

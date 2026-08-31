@@ -234,7 +234,12 @@ sentinel and return immediately, which is why a task, once entered, never gives 
 `WaitEvent(0)` sits exactly between `InitTask` and `InitApp`, which is where a new task hands
 control back to its creator.
 
-### ⚠ An instrument that lied, and one reading refuted
+### ⚠⚠ THE SAME MISTAKE THREE TIMES: A SEARCH THAT CANNOT EXPRESS ITS TARGET RETURNS ZERO
+
+The third is further down — I dumped **sixteen** entries of a **thirty-eight** entry jump
+table and concluded the switch-back "is not in it". Every one of these produced a confident
+negative finding, and two of them reached a commit before I caught them. **When a scan comes
+back empty, the first question is what encodings it can see — not what the guest does.**
 
 - **`nedis.py --callers` counted `call` only.** It reported "0 caller(s)" for WOW32 `0x74`,
   which reads as *nothing calls this* — and `0x74` **is** called, from `seg1:0x9822 jmp
@@ -361,12 +366,97 @@ cheap next instrument regardless of which scheduling reading turns out to be rig
 
 ---
 
+## ★★★ THE GATE IS ANSWERED: THE THUNK HAS 38 RETURN PATHS, AND WE PICK ONE
+
+`seg1:0x2c4e` **is** in the epilogue table — at index **25**. I had dumped sixteen entries of
+a thirty-eight entry table and written "not in it". *(Third time this session; see the method
+note below.)* The full picture:
+
+```
+2bc7  push 0                        ; ★ THE MODE WORD, at bp-24
+2bf1  C4 C4 51                      ; the BOP
+2c0b  pop bx                        ; ★ read it back
+2c0d  cmp bx,0 / jne 0x2c32         ; 0 = the ordinary epilogue
+2c41  jmp word ptr cs:[bx+0x2a36]   ; ★ 38 entries, 0x2c12 .. 0x2f43
+```
+
+★ **krnl386 itself never sets it.** A scan of every segment for a store to `[bp-0x18]` finds
+one site inside the thunk — `seg1:0x2c5c`, which *clears* it. Thirty-seven epilogues the guest
+can never select are not dead code; **they are a menu for the other side.**
+
+★★ **Mode 25 is the task switch-back, and it pairs with the launcher instruction for
+instruction.** `seg1:0x97be` (the launcher's real entry — `--callers 0x97c2` found nothing
+because the function starts four bytes earlier):
+
+```
+97be  push [0x228] / push bp     ; on the CREATOR's stack
+97c3  mov di,ss / mov cx,sp      ; its stack, kept in registers
+97e9  mov ss,[bp+8] / mov sp,si  ; switch to the new task
+9822  jmp 0xb1d0                 ; WOW32 0x74, through the thunk -- which pushes
+                                 ;   DI and CX into its frame on the NEW stack
+```
+
+and mode 25 lands at `seg1:0x2c4e`, which pops that frame (DI and CX come back) and jumps to
+
+```
+9827  mov ss,di / mov sp,cx / pop bp / pop [0x228]
+```
+
+— the creator back on its own stack, its `BP` restored, **and current again**. The two are a
+matched pair: `push [0x228] / push bp` at one end, `pop bp / pop [0x228]` at the other.
+
+### MEASURED ON HARDWARE, in two runs
+
+A new knob, `wowmode.txt` (`<hex id> <hex mode>`), returns one id through a chosen epilogue and
+logs every use as an experiment. With `74 19`:
+
+| | result |
+|---|---|
+| **mode 25, answer `0` (the sentinel)** | control returns to task `0x01ef` — **the creator, on its own stack** — WOWEXEC never runs, and the `0001:229C` GP fault is **gone**. krnl386 then says, in its own words, *"NTVDM KERNEL: Missing 16-bit system module … WOWEXEC.EXE"* and calls `ExitKernelThunk(1)`. ⇒ **the return value at that call is the launch result**, and `0` means failure. |
+| **mode 25, answer `0x03d6`** (WOWEXEC's measured hInstance) | the boot task **runs on**, into two sites no run of this project had ever reached: `seg1:0xcd0b GetProfileInt("KERNEL","EnableEMSDebug")` and `seg1:0xcd30 GetPrivateProfileString("SYSTEM.INI", …, "386GRABBER")` — **the read that sits immediately before the unlink at `seg1:0xcd36`.** |
+
+The checkpoint set earlier in this document is therefore **met**: the boot task can be given
+control back, and when it has it, it goes exactly where the disassembly said it would.
+
+⚠ **It is a probe, not a fix, and the second run says so loudly.** We told krnl386 a task had
+started and then never ran it, so it walks on into a half-built world and takes a `#GP` at
+`seg1:0x3223` (`test word ptr es:[0x18],2`, `err=0`) whose own handler at `seg1:0x3689`
+resumes at the faulting instruction — an infinite fault loop and a **268 MB log**. The right
+answer is not a fabricated hInstance; it is to run the child *after* the creator returns.
+
+⚠ **The log cap does not bound a fault loop.** Second time this has produced a
+quarter-gigabyte file. Budget for it before setting a knob.
+
+---
+
 ## ▶ RESUME HERE
 
 **The next piece of work is a scheduler, in the host** — and it is a *policy*, not a context
 switcher. The seven scheduling exports have no 16-bit body and no internal caller, so there
 is nowhere else for the decision to live; and krnl386 performs the switch itself when it sees
 `[0x228]` change across a WOW32 BOP. The concrete shape:
+
+**The contract is now known, and the remaining work is an ORDER.** krnl386 launches a task by
+switching to its stack and calling WOW32 `0x74`; the 32-bit side either lets that call return
+into the new task (mode 0, what we do today, and the task never comes back) or sends the
+creator home first (mode 25, measured above). Real WOW does **both**, because the new task is
+a thread. We have one CPU, so the host must interleave them itself:
+
+- **At `0x74`**: record the frame — `SS:BP` of the thunk call, which lives on the *new* task's
+  stack and holds its `DI`/`CX` — then return mode 25 with a real launch result, so the
+  creator carries on and `LoadModule` completes.
+- **When the creator next yields** (`Yield`/`WaitEvent`/`DirectedYield`, or when it ends its
+  own turn), resume the recorded frame: `SS:SP`, `BP` and `CS:EIP` just past that `0x74` BOP,
+  with mode **0** this time — and krnl386 runs the `seg1:0x985c` continuation and `iret`s into
+  the task exactly as it does today.
+- Neither step invents a frame. Both resume one krnl386 built, which is why the register file
+  being one contiguous TIB block (`VTIB_GS 0x364` .. `VTIB_SS 0x3A0`, a `0x40`-byte copy) is
+  enough machinery.
+
+Then the first real checkpoint: the boot task reaching `seg1:0xcd36` **and unlinking its own
+record**, with WOWEXEC still alive to be resumed — at which point `GetExePtr(NULL)` finds
+nothing, returns `0`, and `LoadCursor(NULL, IDC_ARROW)` takes the `je 0x22ab` path it was
+always supposed to.
 
 1. ~~Instrument first.~~ **DONE — every WOW32 call line now carries `task=0x....`**, read
    from `[0x228]` through the guest's own `DS` (DGROUP there by construction,
@@ -382,13 +472,12 @@ is nowhere else for the decision to live; and krnl386 performs the switch itself
    launcher sets `[0x228]` at `seg1:0x97ee` before calling it. One `uniq -c` now says what
    took this session to establish: **control enters WOWEXEC and never returns to the boot
    task.** Anything about who was running is a grep away from here on.
-2. **Settle the epilogue question** flagged above — how `bx` is ever non-zero at
-   `seg1:0x2c0d`, which is the only route to the `jmp 0x9827` switch-back. Until that is
-   answered, *how* a yield is supposed to come out of a WOW32 call is not known.
-3. **Then the switch.** If it turns out the host must carry the context, the whole guest
-   register file is one contiguous block in the TIB (`VTIB_GS 0x364` .. `VTIB_SS 0x3A0`), so
-   saving and restoring a task is a `0x40`-byte copy — the machinery is not the hard part,
-   the contract is.
+2. ~~Settle the epilogue question.~~ **DONE, and measured on hardware** — the mode word at
+   `bp-0x18`, 38 epilogues, mode 25 = the switch-back. `mode=` is on every log line and reads
+   `0` on all 258 calls of a stock run, so the day something sets one, the log says so.
+3. **Then the interleave**, per the plan above. `wowmode.txt` is the knob to prototype it
+   with; ⚠ it is the most dangerous file in the tree, because a mode selects a code path that
+   pops a specific stack shape.
 4. **The policy can be read out of the guest** either way: krnl386 links every task at
    `seg1:0x99ed` keyed on the signed priority byte at `TDB+0x08`, so a scheduler can walk the
    list it already maintains rather than invent an order.

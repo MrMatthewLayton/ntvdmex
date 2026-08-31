@@ -83,6 +83,52 @@
 #define WOW32_OFF_ARGS  16
 #define WOW32_OFF_RET   (-16)        /* the `sub sp,4` hole: low word, then high */
 
+/* ── ★★★ THE SECOND RETURN CHANNEL: THE EPILOGUE MODE. (GH #128, session 38) ──
+     The thunk does not have one return path, it has THIRTY-EIGHT, and which one
+     it takes is a word on the guest stack that the 32-bit side is expected to
+     write. Reading up from SP, the prologue at seg1:0x2bb6 lays down
+
+       bp-2 bx | -4 es | -6 cx | -8 fs | -10 gs | -12 ds | -16 the RETURN HOLE
+       | -18 si | -20 di | -22 bp | -24 ★ THE MODE (`push 0`) | -26 [0x228]
+
+     and afterwards:
+
+       2c04  pop ax / cmp ax,[0x228] / jne   ; the re-entrancy guard (NOT a lever)
+       2c0b  pop bx                          ; ★ THE MODE
+       2c0d  cmp bx,0 / jne 0x2c32           ; 0 = the ordinary epilogue
+       2c3f  add bx,bx
+       2c41  jmp word ptr cs:[bx+0x2a36]     ; ★ a 38-entry table of epilogues
+
+   ★ krnl386 ITSELF NEVER SETS IT. `seg1:0x2bc7 push 0` is the only writer of the
+     slot other than `seg1:0x2c5c`, which CLEARS it -- checked by scanning every
+     segment for a store to `[bp-0x18]`. Thirty-seven epilogues that the guest
+     can never select are not dead code; they are a menu for the other side.
+   ★★ MODE 25 IS THE TASK SWITCH-BACK, and it is a matched pair with the task
+     launcher. `seg1:0x97be` starts a task with
+
+       97be  push [0x228] / push bp      ; on the CREATOR's stack
+       97c3  mov di,ss / mov cx,sp       ; its stack, kept in registers
+       97e9  mov ss,[bp+8] / mov sp,si   ; switch to the new task
+       9822  jmp 0xb1d0                  ; WOW32 0x74, through the thunk
+                                         ;   -- which pushes DI and CX into its
+                                         ;      frame, on the NEW task's stack
+
+     and mode 25 lands at `seg1:0x2c4e`, which pops that frame (so DI and CX come
+     back) and jumps to `seg1:0x9827`:
+
+       9827  mov ss,di / mov sp,cx / pop bp / pop [0x228]
+
+     -- the creator back on its own stack, with its BP and its current-task word
+     restored. So "this task's turn is over, put its creator back" is one word.
+   ⚠ IT IS ONLY VALID AT THE FRAME THAT STARTED THE TASK. DI and CX are a stack
+     only in the `0x74` call; at any other call site they are just the caller's
+     registers, and mode 25 would load SS:SP from whatever they happened to hold.
+   ⚠ AND NOTHING HERE WRITES IT YET. This is a reading of the interface, not a
+     scheduler; see docs/log/sessions/session-38.md for what is still unknown. */
+#define WOW32_OFF_MODE  (-24)
+#define WOW32_MODE_ORDINARY   0
+#define WOW32_MODE_SWITCHBACK 25
+
 /* The BOP is `C4 C4 51`. Resuming the guest anywhere but past all three bytes
    restarts it mid-instruction. */
 #define WOW32_BOP_LEN   3

@@ -190,8 +190,22 @@ module KRNL386.EXE at 0001:229C."* See #128 below.
    itself. (This entry said the opposite for one commit — the correction is in the session
    log, with the instruction that settles it.) What survives is the **addressing**:
    `seg1:0x2bc9` makes the guest's `DS` krnl386's DGROUP at every WOW32 BOP, so `[0x228]` is
-   readable for free — **logging it per BOP turns a run into a task timeline, and that is the
-   next instrument.** See [`session-38.md`](log/sessions/session-38.md).
+   readable for free — every call line now carries `task=0x....` and a run is a task timeline
+   (`9 task=0 | 222 task=0x01ef | 27 task=0x03b7`, and never back).
+   ★★★ **THE REAL LEVER IS THE EPILOGUE MODE.** The thunk does not have one return path, it
+   has **38**: a mode word at `bp-0x18`, `push 0`ed at `seg1:0x2bc7`, popped at `seg1:0x2c0b`
+   and dispatched through the table at `cs:0x2a36`. **krnl386 never sets it** (the only other
+   access clears it), so 37 epilogues exist for the 32-bit side. **Mode 25 is the task
+   switch-back**, pairing instruction-for-instruction with the launcher: `seg1:0x97be push
+   [0x228] / push bp / mov di,ss / mov cx,sp` … `seg1:0x9827 mov ss,di / mov sp,cx / pop bp /
+   pop [0x228]`. ★ **MEASURED**: returning `0x74` through mode 25 puts the creating task back
+   on its own stack, current again — the `0001:229C` GP fault disappears — and with a non-zero
+   launch result the boot task runs on to `seg1:0xcd0b` and `seg1:0xcd30`
+   (`[boot] 386GRABBER`), **the read immediately before the unlink**, which no run had ever
+   reached. ⚠ A probe, not a fix: the child never runs, so krnl386 walks into a `#GP` loop
+   (268 MB log). The remaining work is the **order** — return the creator first, resume the
+   recorded `0x74` frame with mode 0 when it yields. New knob `wowmode.txt` (⚠ the most
+   dangerous file in the tree). See [`session-38.md`](log/sessions/session-38.md).
 
    **Session 36 in one paragraph.** The frontier moved from an address to a **module
    name**. Session 35's `WOW32_UNIMPL_RET = 0` — written but never run — turned out to be
