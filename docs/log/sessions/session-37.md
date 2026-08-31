@@ -254,72 +254,169 @@ traceable exit.
 
 ---
 
+---
+
+## ★★★ AND THEN WOWEXEC.EXE RAN
+
+Three more walls fell after the profile calls, and the last of them put a Win16 program
+on the CPU.
+
+### The drive-classification trio, and a whitelist whose comment was wrong
+
+The remaining failure was traced link by link from `LoadModule("WOWEXEC.EXE") -> 2` down to
+a single byte: `0x0e` in krnl386's per-drive flag table at DGROUP `0x2a2`, drive C:'s slot.
+A flagged drive routes every later `AH=47h` through a pre-handler (`seg1:0x0728`) that ends
+in `or byte [bp+6],1` — it **forces CF on every path through it** — so the path
+canonicaliser `seg1:0x1f55` returned 0, `OpenFile` failed, and `LoadModule` reported "file
+not found" *without ever touching the disk*.
+
+krnl386 reads that table from two places in its own code and writes it from none, so a new
+instrument was needed — see `pmchg.txt` below. It named the write in one run, and the
+answer was ours:
+
+```
+if (ah == 0x44) {
+    DWORD al = ax & 0xFF;
+    if (al != 0x00 && al != 0x06 && al != 0x07) goto pm_int21_unhandled;
+}
+```
+
+on the stated grounds that *"everything else takes a DS:DX buffer"*. True of most of
+`AH=44h` and **false of exactly three**:
+
+| | |
+|---|---|
+| `AL=08h` | is this block device removable |
+| `AL=09h` | is it remote |
+| `AL=0Eh` | get the logical drive map |
+
+all register-only, and all three are how krnl386 classifies drives — it probes every drive
+with all three in a loop. The V86 side had them too, in an `else { OKCF(); }` catch-all:
+carry clear, meaning *success*, with the caller's own registers as the answer. The
+*runs but lies* class. All three are answered from the host now. ⚠ Not yet checked against
+the MS-DOS 6.22 oracle; the comment says so and names the fields to confirm.
+
+**Result:** `open "C:\WINDOWS\SYSTEM32\WOWEXEC.EXE" -> AX=5 CF=0`. WOW32 calls in a run:
+**237 → 2116**.
+
+### A 1884-iteration loop, and a knob instead of a guess
+
+That run ended in a `#SS` at `ss:sp = 0x1f:0x0002` — `push ebp` two bytes from the bottom
+of the stack. `seg2:0x2a08` is a *retry* loop: allocate, ask **WOW32 `0x7d`** whether the
+result is acceptable, and on `0` allocate another and ask again. It ran **1884 times**, and
+`push ax` at `0x2a14` is not popped on the loop-back edge — two bytes per iteration, which
+is the 4 KB stack exactly.
+
+`0x7d` is one of the **53 ids krnl386's export table does not name**, so writing a `case`
+for it would have been a guess. Instead: **`wow32ret.txt`**, one `<hex id> <hex dword>` per
+line, changing the answer for one run, with every overridden call logged as
+`** wow32ret.txt OVERRIDE -- an EXPERIMENT, not a service **`.
+
+*Predicted before the run:* a non-zero `0x7d` makes the first call succeed at `seg2:0x29fe`,
+the loop never runs, and the `#SS` disappears. *Measured:* `0x7d` called **once** instead of
+1884, no `#SS`, and the run goes further than it ever has.
+
+⚠ **The furthest point therefore depends on `7d 00000001` being in that file on the rig.**
+It is an experiment, not an implementation, and the next session should pin the semantics
+(the return is used only as a boolean on the first-call path at `seg1:0x29fe`, and as a
+*value* on the retry path at `seg2:0x2a22` — which is why `1` is enough to test and not
+enough to ship).
+
+### The decoder was gated on one id, and the answer came through another
+
+krnl386's own `MessageBox` is `0xc4`, and the string decoder was tied to it. The very next
+message the guest tried to show came through **`0x140`, from a different module**, with the
+same 7-word frame and the same `0x8008` style — so the run printed seven hex words where it
+could have printed a sentence. Any argument that resolves through a selector and reads as a
+NUL-terminated string is now decoded whoever passes it. That one change turned the run from
+an address into this:
+
+```
+"Application Error"
+"WOWEXEC caused a General Protection Fault in\r\nmodule KRNL386.EXE at 0001:229C.
+ \r\n\r\nChoose close. WOWEXEC will close."
+```
+
+**That sentence is krnl386's, about the first Win16 program this project has executed.**
+The same change also made visible, in one run, krnl386's full per-module search order and
+its attempts to load `NETWORK.DRV` and `wfwnet.drv`.
+
+---
+
+## ★ `pmchg.txt` — who wrote this byte?
+
+`pmbp.txt`'s dump column answers *"what is there when I stop here"*, which needs you to
+already know where to stop. The question that cost this investigation is the other one, and
+it had no instrument. `pmchg.txt` holds one line, `<hex offset> [segment]`, and logs the
+first PM event at which that byte changed:
+
+```
+PMWATCH linear 0x0002b7a4 CHANGED 0x00 -> 0x0e -- first seen at cs:eip=0x1cf:0x2bf1 ax=0x0e02
+```
+
+`0x0e02` is `AH=0Eh / AL=2` — Select Disk C: — which put the whole drive-probe loop on the
+screen. Sampling at PM events cannot name the instruction; it brackets the write between two
+events that name themselves, which is a bisect's first step for one run instead of five.
+
+⚠ It failed silently first, printing `watching` and never `armed`, because krnl386 **grows**
+its DGROUP so the descriptor-limit match that fills `g_wow_pmbase[]` never fires for segment
+4. Hence segment `0` = "the offset is already linear", taken by hand off a `dsbase=` line.
+
+---
+
 ## ▶ RESUME HERE — session 37 handoff
 
-**State:** all eight 16-bit system modules load, krnl386 completes its bootstrap, reads
-`[boot] WOWSHELL` out of `SYSTEM.INI`, and calls `LoadModule("WOWEXEC.EXE")`. That call
-returns **2**, `ERROR_FILE_NOT_FOUND`, and krnl386 exits cleanly saying so. No Win16
-application has run yet.
+**State: a Win16 program executes.** All eight system modules load, krnl386 completes its
+bootstrap, reads `[boot] WOWSHELL` from `SYSTEM.INI`, finds and opens
+`C:\WINDOWS\SYSTEM32\WOWEXEC.EXE`, loads it, and runs it — and then reports, in its own
+words, that **WOWEXEC took a GP fault in KRNL386.EXE at `0001:229C`**. Nothing has drawn a
+pixel yet.
 
-### ★★★ The causal chain is complete, and every link is measured
+⚠ **This depends on an EXPERIMENT.** `wow32ret.txt` on the rig must contain `7d 00000001`.
+Without it krnl386 spins 1884 times in `seg2:0x2a08` and dies of a stack overflow. Pinning
+`0x7d` properly is the first item below, not an optional tidy-up.
 
-```
-LoadModule("WOWEXEC.EXE")                                  -> 2, and says so
-  seg2:0x0812   the boot-time load ([0x46c] != 0 skips its own OpenFile)
-  seg1:0x2193 -> seg1:0x1812   OpenFile
-  seg1:0x1a4c   resolve the name
-  seg1:0x1f55   CANONICALISE -- returns 0 (measured at seg1:0x185e: AX=0 for
-                WOWEXEC, AX=1 for all nine others)
-  seg1:0x1fd5   because INT 21h AH=47h came back CF=1
-  seg1:0x0728   because the AH=47h PRE-HANDLER ran, and it ends in
-  seg1:0x075e   `or byte [bp+6],1` -- it FORCES CF into the caller's saved flags,
-                unconditionally, on every path through it
-  seg1:0x0728   which it reached because seg1:0x083c said "this drive is flagged":
-  seg1:0x0848   `add bx,0x2a2` + `cmp byte [bx],0` -- a per-drive byte table in
-                krnl386's DGROUP at 0x2a2, indexed by DL-1
-```
-
-### ▸ THE ONE QUESTION LEFT: who writes `0x0e` to krnl386's DGROUP `0x2a4`?
-
-That byte is drive **C:**'s slot. Dumped through a whole run with
-`pmbp.txt` mode `6` (address is a segment offset, dump column is DS-relative):
+### The frontier, to the instruction
 
 ```
-seg1:cca4  DI=1641..1693   table[0..7] = 00 00 00 00 00 00 00 00   <- all eight modules
-seg1:0848  DI=15f1         table[0..7] = 00 00 0e 00 00 00 00 00   <- the WOWEXEC load
+seg1:0x2290  push [bp+6]
+seg1:0x2295  call 0x2200        ; -> AX = a module handle
+seg1:0x2298  or ax,ax / je      ; non-zero, so it is a handle
+seg1:0x229c  mov es,ax          ; ★ #GP -- the handle is NOT a valid selector
+seg1:0x229e  mov ax,es:[0x3e]   ; and what it wants is an NE module database:
+seg1:0x22a2  mov dx,es:[0x0c]   ;   +0x0c = ne_flags, and
+seg1:0x22a7  and dx,0x2000      ;   0x2000 = the link-error bit
 ```
 
-so it is **zero for the entire module boot and non-zero by the time WOWEXEC is loaded**, and
-the file image of DGROUP is zero there too. A flagged drive can only ever fail, so on real
-WOW C: is not flagged — **this byte is wrong, and the write happens in that window.**
+So `seg1:0x2200` hands back a module handle we produced that is not installed in the LDT, or
+is installed with a descriptor `mov es` will not take. ▸ Read `seg1:0x2200`, then find where
+that handle was created — it is almost certainly one of ours, since krnl386's own module
+handles (`0x01b7`…`0x0386`) load fine everywhere else in the run.
 
-- krnl386's own segments 1-3 contain exactly **two** references to `0x2a2`, `seg1:0x0848` and
-  `seg1:0x51ae`, and **both are reads** (scanned by decoding every occurrence of the
-  immediate). So the writer is not an ordinary `[0x2a2+n]` store in krnl386.
-- ▸ **The strongest hypothesis: DOS's own Current Directory Structure.** `seg1:0x5343` reads
-  the current-drive byte through `[0x275]`, which is one of the six far pointers krnl386
-  builds from `SysVars+0x6A` — the table `dos_wow_publish()` plants (session 31). If the CDS
-  or one of those six pointers is wrong, krnl386 will classify C: from garbage. Two of the
-  six are pinned (LASTDRIVE, the current-drive byte); **four are still unknown**, and this is
-  the first thing that has depended on them.
-- ▸ Second: WOW32 `0xc8`, called **25 times** from `seg1:0x538a` — the `AH=0Eh` Select Disk
-  arm — with drives `0x19..0x01` descending, all stepped over. Its answer is stored at
-  `[0x2a0]`, two bytes below the table. Unnamed by the export table; pin it from that arm.
+### Next, in order
+
+1. **Pin WOW32 `0x7d`** and replace the override with a service. Its one word is a handle
+   from a just-completed allocation; `seg1:0x574d` (the other half of the loop) does
+   `lsl ecx,[bp+6]`, so these are selectors and the question is about their limits. The
+   return is a boolean on the first-call path and a value on the retry path.
+2. **The `#GP` at `seg1:0x229c`** above.
+3. `NETWORK.DRV` / `wfwnet.drv` — krnl386 looks for both and neither is on the box's search
+   path. Probably harmless; check before assuming.
+4. **Oracle the `AH=44h` trio** against MS-DOS 6.22 (#24). The register contract used is from
+   the documented interface, not from a run — the `AL=09h` DX bits beyond bit 12 especially.
 
 ### Ruled out — do not re-try (all by measurement)
 
-- **The `PATH` search, the `OFSTRUCT` pointer, and the `#GP` at `seg1:0x1d69`.** All were
-  session-37 leads and all are gone: breakpoints at `seg1:0x1dad`, `0x1c40`, `0x194d` and
-  `0x1965` never fire, the run no longer faults, and the failure is upstream of the file
-  system entirely — **no `AH=3Dh` is ever attempted for WOWEXEC.EXE**.
-- **`DL = 0xF0` as the cause.** It is a real gap and it is fixed (it is krnl386's sentinel,
-  emitted by `seg1:0x0834`, `mov dl,0xF0`), and the inner call now succeeds — but
-  `seg1:0x075e` forces CF anyway, so **it did not move the wall.** Said plainly.
-- **WOW32 `0x88 GetDriveType` as the source of the flag.** The flag was already `0x0e` in
-  runs where `0x88` was stepped over *and* in runs where it answers truthfully.
-- **A bad `SYSTEM.INI`.** XP maps it into the registry; editing the file changes nothing,
-  for us or for real WOW.
-- **GDI.EXE's file, header, relocations, allocation and table read.** It loads.
+- **The `PATH` search, the `OFSTRUCT` pointer and the `#GP` at `seg1:0x1d69`.** Raised and
+  killed in this same session: those breakpoints never fire and the fault is gone.
+- **`DL = 0xF0` as the cause of anything.** It is a real gap and it is fixed, and it did not
+  move the wall — `seg1:0x075e` forced CF regardless.
+- **`0x88 GetDriveType` as the source of the drive flag**, and **a hand-edited `SYSTEM.INI`**
+  (XP maps it into the registry, for us and for real WOW alike).
+- **Growing krnl386's entry stack.** 4 KB → 32 KB, and the `#SS` was unchanged: krnl386 sets
+  its own stack selector to a `0x0fff` limit with `INT 31h 0x0C`. The bigger entry stack is
+  kept because we are the ones who choose it, but it fixed nothing.
+- GDI.EXE's file, header, relocations, allocation and table read.
 
 ### How to drive it
 
@@ -328,11 +425,14 @@ PMBP=1 ARCHIVE=build/wowruns ./scripts/bmwow.sh      # deploy, run, collect
 ```
 ⚠ SMB writes to `/private/tmp/xpshare` need the sandbox disabled; remount with
 `mount_smbfs -N //guest@192.168.1.29/ntvdmex /private/tmp/xpshare` after any drop.
-⚠ `pmbp.txt` columns are `<addr> [dump] [skip] [mode] [rep]`. Mode bit 1 = the address is a
-segment offset (bits 4..7 name the segment: `2` = seg 1, `0x22` = seg 2); **bit 2 (`4`) makes
-the dump column DS-relative**, which is what makes a DGROUP table readable without knowing
-the run's base — mode `6` for seg 1, `0x26` for seg 2. `rep` 1 for anything reached more than
-once. **Data lines first, comments below.**
+
+The three files on the share that drive a run, none of which is in the repo:
+
+| file | what it does |
+|---|---|
+| `pmbp.txt` | breakpoints: `<addr> [dump] [skip] [mode] [rep]`. Mode bit 1 = the address is a segment offset (bits 4..7 name it: `2` = seg 1, `0x22` = seg 2); **bit 2 (`4`) makes the dump column DS-relative** — mode `6`, `0x26`. `rep` 1 for anything hit twice. **Data lines first, comments below.** |
+| `pmchg.txt` | `<hex offset> [segment]`, segment `4` = DGROUP, `0` = already linear. Logs the first PM event at which that byte changes. |
+| `wow32ret.txt` | `<hex id> <hex dword>`, the answer for an unimplemented WOW32 id. **An experiment. Currently must contain `7d 00000001`.** |
+
 ⚠ Only use addresses seen as instruction boundaries in an **aligned** disassembly, and never
-one shorter than two bytes — `dpmi_bp_arm` refuses those, silently as far as the run is
-concerned.
+one shorter than two bytes — `dpmi_bp_arm` refuses those.

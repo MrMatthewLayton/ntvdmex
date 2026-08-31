@@ -38,14 +38,15 @@ A good bar for the same reasons Doom was: small, iconic, and impossible to fake.
 them they exercise the whole stack — NE loading, the KERNEL 16→32 boundary, USER windows
 and menus, GDI drawing, mouse and keyboard. Paint in particular has to actually paint.
 
-**Status: not started.** No Win16 program has run yet; `wowexec.exe` has never executed
-and nothing has drawn a pixel. What works is the *bootstrap*, and as of session 37 it runs
+**Status: a Win16 program EXECUTES.** `wowexec.exe` — the WOW shell — is found, loaded and
+run, and nothing has drawn a pixel yet. What works is the *bootstrap*, and as of session 37 it runs
 a long way: krnl386 loads three of its four segments, installs its interrupt handlers,
 **takes and returns from its own DPMI exceptions**, and loads **all eight** of the 16-bit
 system modules — `SYSTEM.DRV`, `KEYBOARD.DRV`, `MOUSE.DRV`, `VGA.DRV`, `SOUND.DRV`,
 `COMM.DRV`, `USER.EXE` and `GDI.EXE` — completes its bootstrap, reads `[boot] WOWSHELL` out of
-`SYSTEM.INI` and **calls `LoadModule("WOWEXEC.EXE")`** — which returns `2`, file not found,
-for a reason now traced link by link to a single wrong byte. See #128 below.
+`SYSTEM.INI`, finds and opens `C:\WINDOWS\SYSTEM32\WOWEXEC.EXE`, loads it and **runs it** —
+and then reports, in Windows' own words, *"WOWEXEC caused a General Protection Fault in
+module KRNL386.EXE at 0001:229C."* See #128 below.
 
 ---
 
@@ -87,8 +88,8 @@ for a reason now traced link by link to a single wrong byte. See #128 below.
 > refused outright, and the real name re-enters us through the IFEO hook. So there is no
 > safe install story until WOW exists, and #128 moved onto the critical path.
 
-1. **[#128] WOW / Win16 — IN PROGRESS. krnl386 LOADS ALL EIGHT SYSTEM MODULES AND RUNS
-   PAST THE BOOT LIST.**
+1. **[#128] WOW / Win16 — IN PROGRESS. ★ A WIN16 PROGRAM EXECUTES: `WOWEXEC.EXE` IS
+   FOUND, LOADED AND RUN.**
 
    ### ▶ START HERE: [session 37](log/sessions/session-37.md#-resume-here--session-37-handoff)
    That block is the live handoff — where it is, the leads already **ruled out**
