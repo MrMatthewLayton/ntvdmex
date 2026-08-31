@@ -388,10 +388,27 @@ seg1:0x22a2  mov dx,es:[0x0c]   ;   +0x0c = ne_flags, and
 seg1:0x22a7  and dx,0x2000      ;   0x2000 = the link-error bit
 ```
 
-So `seg1:0x2200` hands back a module handle we produced that is not installed in the LDT, or
-is installed with a descriptor `mov es` will not take. ▸ Read `seg1:0x2200`, then find where
-that handle was created — it is almost certainly one of ours, since krnl386's own module
-handles (`0x01b7`…`0x0386`) load fine everywhere else in the run.
+and it is bracketed one level further already. `AX = 0x0000FFFF` at the fault (error code
+`0xfffc`, the selector index), and `seg1:0x2200` — which is `GetExePtr`-shaped — **never
+returns `-1`**: its failure path is `xor ax,ax` at `0x2281`. `0xFFFF` therefore came out of
+one of its two `mov ax, es:[0x1e]` reads, and a breakpoint on both says which:
+
+```
+2233 ax=es:[1e]  AX(in)=0x03d6  ES=0x03b7      <- ordinary lookups, fine
+2233 ax=es:[1e]  AX(in)=0x0000  ES=0x01ef      <- this one
+2298 or ax,ax    AX=0xffff                     <- and this is what it produced
+```
+
+So krnl386's module list (head at DGROUP `0x226`, chained through `+0x00`, keyed on `+0x1c`,
+value at `+0x1e`) contains an entry at **selector `0x01ef`** whose key is `0` and whose value
+is `0xFFFF`. `0x01ef` is the selector our own loader puts over the **staged file image** —
+session 33's "the file from the NE header on … with a 64 KB selector (0x01ef) over it". A raw
+file image is not a module database, and `+0x1c`/`+0x1e` read as `0`/`0xFFFF` rather than
+krnl386's real `ne_cseg`/`ne_cmod` of `4`/`0`.
+▸ **So the list has an entry it should not have, or that entry is ours and malformed.** Find
+what links `0x01ef` into the chain at DGROUP `0x226`. Note the fault happens with
+`DS=0x0337`, `SS=0x03d7:0x2024` — WOWEXEC's own data and stack, so the program really is
+running its own code when it asks.
 
 ### Next, in order
 
