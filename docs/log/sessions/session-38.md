@@ -282,11 +282,25 @@ into the wrong TDB and then undo itself. Do not build on it.
 earns its keep if a *concurrent* task can leave itself current. Which means the host's part
 is a context save/restore after all — the thing the section below claims is unnecessary.
 
-⚠ One loose end, for whoever picks this up: the `jmp 0x9827` epilogue is selected by
-`2c0d cmp bx,0 / 2c10 jne 0x2c32`, and `bx` comes from `2bc7 push 0` — so on this path it is
-always zero and that epilogue is never reached. Either there is a second entry into the thunk
-that pushes a non-zero mode, or `0x2c0b` is re-entered on a different stack. **Find that
-before writing any scheduler code.**
+⚠ **And the switch-back is not reached from that path either.** The epilogue is chosen by
+`2c0d cmp bx,0 / 2c10 jne 0x2c32` and then `2c3f add bx,bx / 2c41 jmp word ptr cs:[bx+0x2a36]`
+— a word table which reads
+
+```
+bx= 0 -> 0x2c12   1 -> 0x2c46   2 -> 0x2fba   3 -> 0x2c6f   4 -> 0x2c86 ...
+```
+
+and **`0x2c4e` — the entry that jumps to `0x9827` — is not in it.** `bx` is the word pushed
+by `2bc7 push 0`; `seg1:0x98ab` reads that same word (`9932 mov bx,sp / 9934 cmp ss:[bx],1`)
+but never changes it, and returns to `2c0b jmp` where it is popped as `0`. So on the
+task-changed path `bx` is zero, the table is skipped, and control goes to the ordinary
+epilogue at `0x2c12`.
+
+⇒ **How `seg1:0x2c4e` is ever entered is unknown.** It is not a table entry, nothing jumps or
+calls to it, and the byte before it (`0x2c48 cc`) is an `int3` in the middle of straight-line
+code — which smells like a site krnl386 patches at run time. **Answer that before writing any
+scheduler code**; it is the only route to the switch-back, and the switch-back is the only
+thing in the binary that puts a creating task back on its own stack.
 
 ---
 
