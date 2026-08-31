@@ -487,16 +487,24 @@ int dos_int21(dos_machine_t *m)
              screen and the file stayed 0 bytes. Two earlier fixes (AH=40h, then
              AH=02h) were aimed at the write end and neither moved it, because the
              write end was never wrong -- the HANDLE NUMBER was. */
+        /* ── WE DO NOT EMULATE SHARE.EXE, SO WE MUST NOT ENFORCE IT. (session 37) ──
+             FILE_SHARE_READ here means a second open of a file this VDM already holds
+             for writing fails with ERROR_SHARING_VIOLATION -- a lock bare DOS does not
+             have, reported back as DOS error 2 "file not found", which sends the guest
+             looking for a file that is there. The protected-mode twin of this call cost
+             the GDI.EXE wall exactly that way. Share everything; the access mode below
+             still comes from the guest. */
         char fn[300]; DWORD slot; HANDLE f;
+        DWORD shr = FILE_SHARE_READ | FILE_SHARE_WRITE;
         v86_str(R_DS, R_DX, fn, sizeof(fn));
         if (ah == 0x3C)
-            f = CreateFileA(fn, GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ,
+            f = CreateFileA(fn, GENERIC_READ | GENERIC_WRITE, shr,
                             NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
         else {
-            DWORD mode = R_AX & 3;
+            DWORD mode = R_AX & 7;
             DWORD acc = (mode == 1) ? GENERIC_WRITE
                       : (mode == 2) ? (GENERIC_READ | GENERIC_WRITE) : GENERIC_READ;
-            f = CreateFileA(fn, acc, FILE_SHARE_READ, NULL, OPEN_EXISTING,
+            f = CreateFileA(fn, acc, shr, NULL, OPEN_EXISTING,
                             FILE_ATTRIBUTE_NORMAL, NULL);
         }
         if (f != INVALID_HANDLE_VALUE) {

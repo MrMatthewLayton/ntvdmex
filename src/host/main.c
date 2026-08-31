@@ -8078,12 +8078,24 @@ static void dpmi_scan_code_blocks(void)
    "stop here and show me that memory" is the question you actually have when a
    register holds a value you cannot explain -- as BX=0x8b17 did, read from a PSP
    field whose contents nothing in the log could show. '#' comments, blanks ignored.
-   Absent file = no breakpoints and no cost, like every other knob here. */
+   Absent file = no breakpoints and no cost, like every other knob here.
+   ── ⚠ THE BUFFER IS PART OF THE INSTRUMENT, AND IT LIED. (session 37) ────────────
+     This read `char buf[1024]` and said nothing about what did not fit. A list of
+     eleven breakpoints whose header comment explained the two 0x0B sites it was
+     bisecting came to ~740 bytes of comment, so the first FIVE entries were parsed
+     and the other six -- including every site the run existed to observe -- were
+     silently dropped. The log showed five confident arms and 42 hits, and answered
+     nothing: the same shape as the one-shot that fired 512 times.
+   ⇒ 8 KB, and SAY what was loaded: the count, and a loud line if the file was longer
+     than the buffer or if DPMI_BP_MAX was reached. A parser that discards input
+     without a word is not an instrument. */
 static void dpmi_bp_load(void)
 {
     HANDLE h = CreateFileA(PMBP_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
                            NULL, OPEN_EXISTING, 0, NULL);
-    char buf[1024]; DWORD rd = 0, i = 0;
+    char buf[8192]; DWORD rd = 0, i = 0;
+    char lb[256], *q = lb;
+    int n0 = g_bp_n;
     if (h == INVALID_HANDLE_VALUE) return;
     ReadFile(h, buf, sizeof buf - 1, &rd, NULL);
     CloseHandle(h);
@@ -8119,6 +8131,15 @@ static void dpmi_bp_load(void)
             ++g_bp_n;
         }
     }
+    q = zput(q, "DPMI-BP: pmbp.txt read 0x"); q = zhex(q, rd);
+    q = zput(q, " bytes, loaded "); q = zhex(q, (DWORD)(g_bp_n - n0));
+    q = zput(q, " entries (total "); q = zhex(q, (DWORD)g_bp_n); q = zput(q, ")");
+    if (rd >= sizeof buf - 1)
+        q = zput(q, "  !! FILE TRUNCATED AT THE BUFFER -- ENTRIES WERE DROPPED");
+    if (g_bp_n >= DPMI_BP_MAX && i < rd)
+        q = zput(q, "  !! DPMI_BP_MAX REACHED -- REMAINING LINES IGNORED");
+    q = zput(q, "\r\n");
+    log_append(LOG_PATH, lb, q); serial_out(lb, q);
 }
 
 /* Turn `seg1:0xNNNN` breakpoints into linear ones, now that we know where krnl386 put
@@ -11060,27 +11081,77 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                         if (ah == 0x3C || ah == 0x3D) {            /* create / open: DS:DX = ASCIIZ name */
                             DWORD dsb = dpmi_sel_base((WORD)VDM_REG(tib, VTIB_DS));
                             const char *fn = (const char *)(ULONG_PTR)(dsb + (VDM_REG(tib, VTIB_EDX) & 0xFFFF));
-                            DWORD acc = ((ax & 0xFF) == 0) ? GENERIC_READ
-                                       : ((ax & 0xFF) == 1) ? GENERIC_WRITE : (GENERIC_READ | GENERIC_WRITE);
+                            /* ── ★★ AL IS A BIT FIELD, NOT A NUMBER. (#128, session 37) ──
+                                 DOS open mode: bits 0-2 = access (0 read, 1 write, 2 r/w),
+                                 bits 4-6 = the SHARE.EXE sharing mode, bit 7 = no-inherit.
+                                 This compared the WHOLE byte against 0 and 1, so krnl386's
+                                 `al = 0x80` -- read access with the inheritance bit, the
+                                 most ordinary open there is -- fell through to "anything
+                                 else" and asked Windows for GENERIC_READ | GENERIC_WRITE.
+                                 That is what cost GDI.EXE: USER.EXE imports GDI, so the
+                                 file was ALREADY open (handle 7, never closed) when the
+                                 boot list loaded it by name, and a second open asking for
+                                 WRITE against a FILE_SHARE_READ handle is
+                                 ERROR_SHARING_VIOLATION. It came back as DOS error 2, which
+                                 krnl386 read as a short header read and reported as 0x0B
+                                 ERROR_BAD_FORMAT -- so the module it could not open looked
+                                 like a module it had rejected. Access now comes from AL & 7.
+                               ⚠ AND WE DO NOT EMULATE SHARE.EXE. Bare DOS enforces no
+                                 locking at all, so imposing FILE_SHARE_READ invented a
+                                 restriction the guest's DOS does not have. Share everything
+                                 and let the guest be as reckless as DOS lets it be. */
+                            DWORD mode = ax & 7;
+                            DWORD acc = (mode == 1) ? GENERIC_WRITE
+                                      : (mode == 2) ? (GENERIC_READ | GENERIC_WRITE) : GENERIC_READ;
+                            DWORD shr = FILE_SHARE_READ | FILE_SHARE_WRITE;
                             HANDLE f = (ah == 0x3C)
-                                ? CreateFileA(fn, GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ, NULL,
+                                ? CreateFileA(fn, GENERIC_READ | GENERIC_WRITE, shr, NULL,
                                               CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL)
-                                : CreateFileA(fn, acc, FILE_SHARE_READ, NULL, OPEN_EXISTING,
+                                : CreateFileA(fn, acc, shr, NULL, OPEN_EXISTING,
                                               FILE_ATTRIBUTE_NORMAL, NULL);
+                            DWORD gle = (f == INVALID_HANDLE_VALUE) ? GetLastError() : 0;
                             VDM_REG(tib, VTIB_EFLAGS) &= ~1u;
-                            if (f == INVALID_HANDLE_VALUE) { VDM_REG(tib, VTIB_EFLAGS) |= 1u; VDM_SET16(tib, VTIB_EAX, 2); }
+                            /* Report the failure the guest actually suffered. Answering 2
+                               "file not found" to an access or sharing failure is the
+                               "runs but lies" class: the caller retries a path that is
+                               right and concludes the file is missing. */
+                            if (f == INVALID_HANDLE_VALUE) { VDM_REG(tib, VTIB_EFLAGS) |= 1u;
+                                   VDM_SET16(tib, VTIB_EAX,
+                                       (gle == ERROR_PATH_NOT_FOUND)     ? 3 :
+                                       (gle == ERROR_ACCESS_DENIED)      ? 5 :
+                                       (gle == ERROR_SHARING_VIOLATION)  ? 0x20 :
+                                       (gle == ERROR_TOO_MANY_OPEN_FILES)? 4 : 2); }
                             else { int slot; for (slot = 5; slot < DOS_MAX_FILES && m.fh[slot]; ++slot) {}
                                    if (slot < 24) { m.fh[slot] = f; VDM_SET16(tib, VTIB_EAX, slot); }
                                    else { CloseHandle(f); VDM_REG(tib, VTIB_EFLAGS) |= 1u; VDM_SET16(tib, VTIB_EAX, 4); } }
+                            /* ── ⚠ "-> AX=0x2" MEANT TWO OPPOSITE THINGS. (session 37) ──
+                                 This printed AX and nothing else, so a failed open reading
+                                 "AX=0x0002" (error 2, file not found) was indistinguishable
+                                 from a successful open that returned handle 2 -- and the
+                                 whole GDI.EXE wall was read the wrong way round off this one
+                                 line. Print the REQUEST (AL carries the access mode AND the
+                                 DOS sharing mode), the VERDICT (CF), and, when it failed,
+                                 the Win32 error, which is the only thing that says WHY. */
                             p = zput(p, "INT21h AH="); p = zhex(p, ah); p = zput(p, " open \"");
-                            p = zput(p, fn); p = zput(p, "\" -> AX=0x"); p = zhex(p, VDM_REG(tib, VTIB_EAX) & 0xFFFF);
+                            p = zput(p, fn); p = zput(p, "\" al=0x"); p = zhexb(p, (BYTE)(ax & 0xFF));
+                            p = zput(p, " -> AX=0x"); p = zhex(p, VDM_REG(tib, VTIB_EAX) & 0xFFFF);
+                            p = zput(p, " CF="); p = zhex(p, VDM_REG(tib, VTIB_EFLAGS) & 1u);
+                            if (gle) { p = zput(p, " FAILED gle="); p = zhex(p, gle); }
                             p = zput(p, "\r\n"); log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
                             VDM_REG(tib, VTIB_EIP) += 2; return 1;
                         }
                         if (ah == 0x3E) {                          /* close: BX=handle */
                             DWORD h = VDM_REG(tib, VTIB_EBX) & 0xFFFF;
+                            int was = (h < DOS_MAX_FILES && m.fh[h]) ? 1 : 0;
                             if (h >= 5 && h < DOS_MAX_FILES && m.fh[h]) { CloseHandle(m.fh[h]); m.fh[h] = 0; }
                             VDM_REG(tib, VTIB_EFLAGS) &= ~1u;
+                            /* Silent until session 37, which needed to know whether a handle
+                               was still open when the NEXT open of the same file failed --
+                               "who still holds it" is unanswerable from a trace that logs
+                               every open and no close. */
+                            p = zput(p, "INT21h AH=3E close h=0x"); p = zhex(p, h);
+                            p = zput(p, was ? " (was open)\r\n" : " (was NOT open)\r\n");
+                            log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
                             VDM_REG(tib, VTIB_EIP) += 2; return 1;
                         }
                         if (ah == 0x3F) {                          /* read: BX=handle CX=cnt -> DS:DX */
