@@ -179,131 +179,160 @@ as progress.
 
 ---
 
-## ▶ RESUME HERE — session 37 handoff
 
-**State:** krnl386 loads **all eight** 16-bit system modules and runs past the boot module
-list. 237 WOW32 calls in a run (was 179). No Win16 application has run yet, and `wowexec`
-has not been reached.
+---
 
-**Where it stops — and read the section below before chasing the address.** The visible
-death is a `#GP`, but the cause is two calls upstream: **WOW32 `0x080`, unimplemented,
-which is krnl386 asking the 32-bit half what Win16 program to launch.**
+## ★★★ WOW32 `0x80` IS `GetPrivateProfileString`, AND IT IS THE PROGRAM LAUNCH
 
-The `#GP` is reflected to krnl386's own handler, at **`seg1:0x1d69`**:
-
-```
-1d63  c47610      les si, ptr [bp+0x10]     ; ES:SI = the caller's OFSTRUCT
-1d66  8b4604      mov ax, word ptr [bp+4]
-1d69  26894402    mov word ptr es:[si+2], ax   <- #GP
-```
-
-with `ES = 0x001f{base=0x0002ce70 lim=0x0fff}` and `SI = 0x15f1`. `0x1f` is krnl386's
-**stack** selector, and `0x15f1` is past its 4 KB limit — so the fault is an ordinary limit
-violation on a pointer that was handed in, not a bad descriptor.
-
-**What that function is.** `seg1:0x1d33`, `ret 0x10`, is the failure tail of Win16
-**`OpenFile`**: it writes the error code to `OFSTRUCT+2` and copies the path to
-`OFSTRUCT+8` via `seg1:0x1f06`. Its callers are `seg1:0x187a` and `seg1:0x1978`; the one on
-this path is `0x1978`, whose argument build is exact —
-
-```
-1965  les si,[bp+8]        ; the OFSTRUCT the ENCLOSING function was given
-1968  mov bx,0x0e00
-196b  push es / push si    ; -> 0x1d33's [bp+0x10] far pointer
-196d  push ds / push bx    ; -> [bp+0xc], a string at ds:0x0e00
-196f  push ds / push [0xe80]
-1974  push [bp+6] / push ax
-1978  call 0x1d33
-```
-
-and the enclosing function (`retf 0xa` = `lpFileName`, `lpReOpenBuff`, `uStyle` — Win16
-`OpenFile`'s exact signature) takes that pointer from **its own** `[bp+8]`. It reaches the
-failure tail because `call 0x1c17` at `0x194a` returned CF=1, i.e. **the open failed first**.
-
-### ★★ …but the OpenFile is not the frontier. **WOW32 `0x080` is.**
-
-The free question — *what file failed to open* — was answered off the log already on the
-desk, and the answer is **none**. The last `AH=3Dh` in the run is `GDI.EXE` succeeding;
-the faulting `OpenFile` never issued a DOS open at all. So the failure is upstream of the
-file system, and the trace says exactly where.
-
-Three calls happen between the module list ending and the fault, and two are stepped over:
-
-```
-FUNC=0x080  from=seg1:0xcc0b  args=0x16 (11 words)
-   (0x1593 0x01e7  0x0050  0x15f1 0x01e7  0x16a6 0x01e7  0x16b2 0x01e7  0x158e 0x01e7)
-   -> UNIMPLEMENTED, STEPPED OVER; hole held 0x00020000, ANSWERED 0
-FUNC=0x006  from=seg1:0xcc30  -> UNIMPLEMENTED, STEPPED OVER
-FUNC=0x0c9  GetCurrentDirectory  drive=0xf0  -> "" cf=1     then the #GP
-```
-
-`0x01e7:0x15f1` is **the pointer the faulting instruction used** — right offset, wrong
-selector (it arrives as `0x1f`, the stack). And the argument list matches the call site
-word for word:
+Neither `0x80` nor `0x39` is self-named by krnl386's export table, so both were read off
+their call sites — and the arguments point into DGROUP, which names them outright.
+`seg1:0xcc08`:
 
 ```
 cbee  mov ax,0x16b2
-cbf1  push ds / push 0x158e      ; ptr A
-cbf5  push ds / push ax          ; ptr B = ds:0x16b2
-cbf7  push ds / push [0x1492]    ; ptr C = ds:0x16a6 (measured)
-cbfc  push ds / push 0x15f1      ; ptr D
-cc00  push 0x50                  ; cbBuf = 80
-cc02  push ds / push 0x1593      ; the output buffer
-cc08  call 0xb544                ; ★ WOW32 0x80, 22 arg bytes
+cbf1  push ds / push 0x158e      ; ds:0x158e = "BOOT"           lpAppName
+cbf5  push ds / push ax          ; ds:0x16b2 = "WOWSHELL"       lpKeyName
+cbf7  push ds / push [0x1492]    ; measured ds:0x16a6 =
+                                 ;   "WOWEXEC.EXE"              lpDefault
+cbfc  push ds / push 0x15f1      ; an empty 0x50-byte buffer    lpReturnedString
+cc00  push 0x50                  ;                              nSize
+cc02  push ds / push 0x1593      ; ds:0x1593 = "SYSTEM.INI"     lpFileName
+cc08  call 0xb544                ; 22 arg bytes = 4+4+4+4+2+4   ✓
 ```
 
-Its return is **not** tested here (`cc0b` tests `[0x3f2]`, a function pointer resolved
-earlier), so this is a pure **out-parameter** call: fill an 80-byte buffer and four more.
-And what krnl386 does with them, thirty bytes later, is **launch the program**:
+and thirty bytes later krnl386 does `mov di,0x15f1` and `lcall`s the LoadModule thunk at
+`seg2:0x190a`, then `cmp ax,0x20 / jbe` — Win16's "failed to launch". **So this call is
+krnl386 asking what Win16 program to run, and answering it is the launch itself.**
+
+The second site, `seg1:0xca6d`, is the same signature over `[DEBUG] OUTPUTTO` with an empty
+default, and it *does* test the result: `or ax,ax / je`, then `cmp ax,0x4e` — and `0x4e` is
+`nSize - 2`, which is `GetPrivateProfileString`'s own "the answer did not fit" convention.
+Two independent sites agreeing on six arguments and a return convention is a reading, not a
+guess.
+
+`0x39` is `GetProfileInt`: 10 arg bytes = 4 + 4 + 2, no filename, and its two sites read
+`("KERNEL", "GPCONTINUE")` and `("ModuleCompatibility", <the module's own name>)` — one per
+module just loaded, which is exactly what that section is for. **Which file it means is
+unproven** and is recorded as such: this rig has neither section in `SYSTEM.INI` or
+`WIN.INI` (fetched off the box and read), so both readings answer the caller's default.
+
+⚠ The rig's `SYSTEM.INI` has **no `[boot]` section at all**, so the default wins —
+`WOWEXEC.EXE`, which is present (10,368 bytes). Adding a `[boot] WOWSHELL=` line to the file
+by hand changes nothing, because XP maps `SYSTEM.INI` reads through
+`HKLM\...\CurrentVersion\IniFileMapping` into the registry. That is also what real WOW sees,
+so the host's `GetPrivateProfileStringA` is right for the right reason. (The rig's file was
+backed up and restored.)
+
+**Result:** krnl386 completes its whole bootstrap and asks for the program **by name**:
 
 ```
-cc3b  mov ax,0x1496
-cc3e  cmp byte [0x24c],1
-cc43  je 0xcc56
-cc45  push [0x1494] / push [0x1492] / push ds / push ax
-cc4f  lcall <reloc>              ; -> seg2:0x190a = the LoadModule thunk
-cc54  jmp 0xcc6b
-cc56  push [0x242] / call 0x8c0a
-cc5f  mov di,0x15f1              ; ★ the buffer 0x080 was to have filled
-cc62  push ds / push di / push ds / push ax
-cc66  lcall <reloc>              ; -> LoadModule again
-cc6b  cmp ax,0x20 / jbe 0xcc7c   ; <= 0x20 == failed to launch
+"Please re-install the following module to your system32 directory:\r\n\t\tWOWEXEC.EXE"
 ```
 
-⇒ **`0x080` is krnl386 asking the 32-bit half what Win16 program to run**, and the `#GP` is
-simply what happens when `LoadModule` is handed buffers nobody filled. This is the
-`GetNextVDMCommand` boundary the epic has been walking towards, not another one-line gap.
+The run no longer `#GP`s — it ends in `MessageBox` + `ExitKernelThunk(1)`, a deliberate,
+traceable exit.
 
-**Next, in order:**
-1. Pin `0x080`'s signature. It is **not** self-named by krnl386's export table
-   (`wowmap.py` prints `id 0x80 args=22 seg1:0xb544 -`), so it must be pinned from its
-   three call sites — `seg1:0xca6d`, `0xcc08`, `0xcd2d` — and, better, from **stock ntvdm
-   as an oracle**: `tools/vdmdump` can read a live stock VDM's memory, and those five
-   buffers are at fixed DGROUP offsets. Read what stock put in them.
-   At `0xca6d` the return IS tested (`or ax,ax / je`, then `cmp ax,0x4e`), and `0x4e` is
-   `0x50 - 2` — consistent with "length written to the buffer".
-2. Only then the `SS:0x15f1` far pointer. It is a *consequence*; do not chase it first.
+---
 
-**Ruled out — do not re-try (all by measurement):**
-- **A failed file open as the cause of the `#GP`.** The faulting `OpenFile` issues no
-  `AH=3Dh` at all; the last open in the run is `GDI.EXE` succeeding.
-- `GDI.EXE`'s file, its header, its relocations, its allocation and its table read. All
-  measured good; the module loads.
-- `pm_int21_xfer`'s clamp as a cause of any short read — the cap is `0x4000` and the
-  largest read in the set is `0x953`.
-- WOW32 `0x88` as the source of the `0xf0` drive number that reaches
-  `GetCurrentDirectory` just before the fault. It is implemented and truthful now, and the
-  `0xf0` is unchanged.
-- The `0xf0` being our argument extraction: nine of eleven `0xc9` calls in the same run
-  read `drive = 3` and return `"Documents and Settings\Matthew"` correctly.
+## ★ Two DOS-side gaps closed on the way
 
-**How to drive it:**
+- **`PATH` is not decoration.** krnl386's search at `seg1:0x1dad` walks `PATH=` out of the
+  environment block *we* build, and the module it looks for that way is the Win16 program,
+  which arrives as a bare filename. `PATH=C:\` could never find it. The WOW path now passes
+  the host's real `GetSystemDirectoryA` + `GetWindowsDirectoryA`; `dos_env_build` keeps the
+  old value so a DOS guest is byte-identical.
+  ⚠ And the block is now **bounded**, which it never was. It is `0x10` paragraphs, and
+  linear `0x714` — a few bytes past its end — is the NT kernel's VDM interrupt-state dword
+  that `dos_layout.h` records as breaking every guest. Unbounded was survivable while every
+  string was a literal; it stopped being so the moment PATH and the program path became
+  host-supplied.
+- **`INT 21h AH=47h` now answers for any drive.** It answered only for the drive we happened
+  to be on and returned "invalid drive" for every other, with a note saying so. Real DOS
+  keeps a current directory per drive and so does Win32 — `GetFullPathNameA("X:")` reads it —
+  so it now answers for the drive the caller named, and keeps the honest refusal (checked
+  against `GetLogicalDrives`) for one that is not there.
+
+---
+
+## ▶ RESUME HERE — session 37 handoff
+
+**State:** all eight 16-bit system modules load, krnl386 completes its bootstrap, reads
+`[boot] WOWSHELL` out of `SYSTEM.INI`, and calls `LoadModule("WOWEXEC.EXE")`. That call
+returns **2**, `ERROR_FILE_NOT_FOUND`, and krnl386 exits cleanly saying so. No Win16
+application has run yet.
+
+### ★★★ The causal chain is complete, and every link is measured
+
+```
+LoadModule("WOWEXEC.EXE")                                  -> 2, and says so
+  seg2:0x0812   the boot-time load ([0x46c] != 0 skips its own OpenFile)
+  seg1:0x2193 -> seg1:0x1812   OpenFile
+  seg1:0x1a4c   resolve the name
+  seg1:0x1f55   CANONICALISE -- returns 0 (measured at seg1:0x185e: AX=0 for
+                WOWEXEC, AX=1 for all nine others)
+  seg1:0x1fd5   because INT 21h AH=47h came back CF=1
+  seg1:0x0728   because the AH=47h PRE-HANDLER ran, and it ends in
+  seg1:0x075e   `or byte [bp+6],1` -- it FORCES CF into the caller's saved flags,
+                unconditionally, on every path through it
+  seg1:0x0728   which it reached because seg1:0x083c said "this drive is flagged":
+  seg1:0x0848   `add bx,0x2a2` + `cmp byte [bx],0` -- a per-drive byte table in
+                krnl386's DGROUP at 0x2a2, indexed by DL-1
+```
+
+### ▸ THE ONE QUESTION LEFT: who writes `0x0e` to krnl386's DGROUP `0x2a4`?
+
+That byte is drive **C:**'s slot. Dumped through a whole run with
+`pmbp.txt` mode `6` (address is a segment offset, dump column is DS-relative):
+
+```
+seg1:cca4  DI=1641..1693   table[0..7] = 00 00 00 00 00 00 00 00   <- all eight modules
+seg1:0848  DI=15f1         table[0..7] = 00 00 0e 00 00 00 00 00   <- the WOWEXEC load
+```
+
+so it is **zero for the entire module boot and non-zero by the time WOWEXEC is loaded**, and
+the file image of DGROUP is zero there too. A flagged drive can only ever fail, so on real
+WOW C: is not flagged — **this byte is wrong, and the write happens in that window.**
+
+- krnl386's own segments 1-3 contain exactly **two** references to `0x2a2`, `seg1:0x0848` and
+  `seg1:0x51ae`, and **both are reads** (scanned by decoding every occurrence of the
+  immediate). So the writer is not an ordinary `[0x2a2+n]` store in krnl386.
+- ▸ **The strongest hypothesis: DOS's own Current Directory Structure.** `seg1:0x5343` reads
+  the current-drive byte through `[0x275]`, which is one of the six far pointers krnl386
+  builds from `SysVars+0x6A` — the table `dos_wow_publish()` plants (session 31). If the CDS
+  or one of those six pointers is wrong, krnl386 will classify C: from garbage. Two of the
+  six are pinned (LASTDRIVE, the current-drive byte); **four are still unknown**, and this is
+  the first thing that has depended on them.
+- ▸ Second: WOW32 `0xc8`, called **25 times** from `seg1:0x538a` — the `AH=0Eh` Select Disk
+  arm — with drives `0x19..0x01` descending, all stepped over. Its answer is stored at
+  `[0x2a0]`, two bytes below the table. Unnamed by the export table; pin it from that arm.
+
+### Ruled out — do not re-try (all by measurement)
+
+- **The `PATH` search, the `OFSTRUCT` pointer, and the `#GP` at `seg1:0x1d69`.** All were
+  session-37 leads and all are gone: breakpoints at `seg1:0x1dad`, `0x1c40`, `0x194d` and
+  `0x1965` never fire, the run no longer faults, and the failure is upstream of the file
+  system entirely — **no `AH=3Dh` is ever attempted for WOWEXEC.EXE**.
+- **`DL = 0xF0` as the cause.** It is a real gap and it is fixed (it is krnl386's sentinel,
+  emitted by `seg1:0x0834`, `mov dl,0xF0`), and the inner call now succeeds — but
+  `seg1:0x075e` forces CF anyway, so **it did not move the wall.** Said plainly.
+- **WOW32 `0x88 GetDriveType` as the source of the flag.** The flag was already `0x0e` in
+  runs where `0x88` was stepped over *and* in runs where it answers truthfully.
+- **A bad `SYSTEM.INI`.** XP maps it into the registry; editing the file changes nothing,
+  for us or for real WOW.
+- **GDI.EXE's file, header, relocations, allocation and table read.** It loads.
+
+### How to drive it
+
 ```bash
 PMBP=1 ARCHIVE=build/wowruns ./scripts/bmwow.sh      # deploy, run, collect
 ```
 ⚠ SMB writes to `/private/tmp/xpshare` need the sandbox disabled; remount with
 `mount_smbfs -N //guest@192.168.1.29/ntvdmex /private/tmp/xpshare` after any drop.
-⚠ `pmbp.txt` columns are `<addr> [dump] [skip] [mode] [rep]`; mode bit 1 = the address is
-an offset into a krnl386 segment, bits 4..7 naming it (`2` = seg 1, `0x22` = seg 2), and
-`rep` 1 for anything reached more than once. **Data lines first, comments below.**
-⚠ Only use addresses seen as instruction boundaries in an **aligned** disassembly.
+⚠ `pmbp.txt` columns are `<addr> [dump] [skip] [mode] [rep]`. Mode bit 1 = the address is a
+segment offset (bits 4..7 name the segment: `2` = seg 1, `0x22` = seg 2); **bit 2 (`4`) makes
+the dump column DS-relative**, which is what makes a DGROUP table readable without knowing
+the run's base — mode `6` for seg 1, `0x26` for seg 2. `rep` 1 for anything reached more than
+once. **Data lines first, comments below.**
+⚠ Only use addresses seen as instruction boundaries in an **aligned** disassembly, and never
+one shorter than two bytes — `dpmi_bp_arm` refuses those, silently as far as the run is
+concerned.

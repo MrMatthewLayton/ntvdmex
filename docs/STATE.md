@@ -43,9 +43,9 @@ and nothing has drawn a pixel. What works is the *bootstrap*, and as of session 
 a long way: krnl386 loads three of its four segments, installs its interrupt handlers,
 **takes and returns from its own DPMI exceptions**, and loads **all eight** of the 16-bit
 system modules — `SYSTEM.DRV`, `KEYBOARD.DRV`, `MOUSE.DRV`, `VGA.DRV`, `SOUND.DRV`,
-`COMM.DRV`, `USER.EXE` and `GDI.EXE` — then runs on past the boot module list to the
-call where it asks the 32-bit half **what Win16 program to launch** — WOW32 `0x080`,
-unimplemented, two instructions from `LoadModule`. See #128 below.
+`COMM.DRV`, `USER.EXE` and `GDI.EXE` — completes its bootstrap, reads `[boot] WOWSHELL` out of
+`SYSTEM.INI` and **calls `LoadModule("WOWEXEC.EXE")`** — which returns `2`, file not found,
+for a reason now traced link by link to a single wrong byte. See #128 below.
 
 ---
 
