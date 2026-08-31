@@ -435,12 +435,16 @@ Windows nothing can match a NULL, `GetExePtr` returns `0`, and the caller's own
 takes the program down. ▸ Find what should have put krnl386's own instance (its DGROUP
 selector, `0x01e7`) in `TDB+0x1c`, and why it is zero.
 
-**Two `pmchg` runs narrow that a long way, and both results are negative in a useful way:**
-- `TDB+0x1e` (the `0xFFFF`) is `0xFF` **from the earliest PM events** — the block is simply
-  not zeroed, and krnl386 fills only the fields it thinks it needs.
+**Two `pmchg` runs and one experiment narrow that a long way:**
+- `TDB+0x1e` (the `0xFFFF`) is written early, at the first PM events.
 - `TDB+0x1c` (the instance handle) is **never written at all**, for the whole run.
+- ⚠ The first of those was initially read as *"the block simply is not zeroed"* — wrong: a
+  `pmchg` line says **CHANGED**, and a change is a **write**. The arena krnl386 carves from
+  was zeroed to test it (it is now, on its own merits — this project has already paid for
+  uninitialised memory that gets parsed) and **the field is still `0xFFFF`**. So krnl386
+  puts it there on purpose for its own boot task, and the defect is the other field.
 
-So krnl386 never sets it, which rules out "we corrupted it" and "it was set and then
+So krnl386 never sets `+0x1c`, which rules out "we corrupted it" and "it was set and then
 cleared". What is left is that the code which *should* set it is not being reached, or that
 the boot TDB is not supposed to be in the list `GetExePtr` walks. `seg1:0xc51c` is where the
 list head and `[0x228]` (the current task) are both set to that selector during bring-up;

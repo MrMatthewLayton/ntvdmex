@@ -7330,6 +7330,38 @@ static int wow_place_v86(dos_machine_t *mp, WORD *ecs, WORD *eip,
             q = m; q = zput(q, "WOWV86: no arena left for krnl386's PSP block\r\n");
             log_append(LDTLOG_PATH, m, q); return -1;
         }
+        /* ── ★ ZERO THE ARENA. The same rule the header-image block already states,
+             applied where it was measurably needed: krnl386 carves everything from
+             `ES + 0x10` upward without asking DOS, and it PARSES what it finds there
+             as structured data -- so uninitialised memory here is a bug that reads
+             like a guest fault, and did.
+           ★ MEASURED (session 37): krnl386's own boot task database lands in this
+             arena, and `pmchg` says the instance-handle field at `TDB+0x1c` is NEVER
+             written for a whole run while `TDB+0x1e` holds `0xFF` from the earliest
+             PM events. krnl386 fills only the fields it thinks it needs and leaves
+             the rest as whatever the block already held. `GetExePtr` (seg1:0x2200)
+             matches `+0x1c` and returns `+0x1e`, so a NULL instance -- which is the
+             DOCUMENTED way to ask for a system cursor, and exactly what WOWEXEC's
+             `LoadCursor(NULL, IDC_ARROW)` passes -- matched that task and got
+             `0xFFFF` back, which USER loaded into ES. Zeroed, the same lookup yields
+             `0`, which is the failure the caller already handles at seg1:0x22ab.
+           ⚠ AND IT DID NOT MOVE THAT WALL, which is worth more than the change is.
+             The `pmchg` line said `CHANGED 0x00 -> 0xff`, and a CHANGE is a WRITE --
+             read as "the block simply contains it", which was wrong. With the arena
+             zeroed the field is still `0xFFFF`, so krnl386 puts it there on purpose
+             for its own boot task, and the defect is the OTHER field: `+0x1c`, the
+             instance handle, which is never written by anything.
+           ▸ Kept anyway, on its own merits and not as a fix: this project has already
+             paid for uninitialised memory that gets parsed (see the header-image block
+             a few lines up), and a deterministic arena makes the next such bug
+             reproducible instead of intermittent.
+           ▸ Skips the PSP itself: dos_psp_build lays that down immediately after. */
+        {   volatile BYTE *ab = (volatile BYTE *)(ULONG_PTR)((DWORD)pseg << 4);
+            DWORD nb = (DWORD)pmax * 16u, k2;
+            for (k2 = 0x100; k2 < nb; ++k2) ab[k2] = 0;
+            q = m; q = zput(q, "WOWV86: arena zeroed, 0x"); q = zhex(q, nb - 0x100);
+            q = zput(q, " bytes above the PSP\r\n"); log_append(LDTLOG_PATH, m, q);
+        }
         dos_psp_build(NULL, pseg, DOS_ENV_SEG, (WORD)(pseg + pmax));
         /* ★ AND REBUILD THE ENVIRONMENT, because dos_psp_build ZEROES ITS FIRST
              THREE BYTES -- correct when it is laying down a fresh PSP with a fresh
