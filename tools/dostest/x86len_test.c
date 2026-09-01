@@ -175,8 +175,44 @@ int main(void)
       CHECK(b[128] == 0xCD && b[129] == 0x21, "fixture holds DOS/4GW's version-check int 21h");
       CHECK(!x86_is_insn_start(b, 128, sizeof b, 0),
             "DOS/4GW +0x2c65: the vote alone CANNOT see it (ASCII before it)");
-      CHECK(x86_int_site_is_real(b, 128, sizeof b, 0),
-            "...and its `owner` is a xor, not a branch, so the patcher KEEPS it"); }
+      /* ★★ SESSION 39: THIS ASSERTION IS INVERTED ON PURPOSE.  It used to read
+           `x86_int_site_is_real(...)` -- KEEP -- because refusing a real site left a
+           raw `CD nn` in protected mode and that was fatal.  It is not fatal any
+           more: since session 34 a #GP with the IDT bit set IS the interrupt, and the
+           host services it and patches the site from the fault, where the CPU has
+           already proved the bytes are an instruction.  So a false reject now costs
+           one #GP and a false accept still costs silent code corruption -- see
+           x86len.h.  This site is REJECTED now, faults once, and is patched correctly.
+         ⚠ Flipping this back without also removing the #GP(IDT) arm would restore
+           the krnl386 corruption the next fixture pins. */
+      CHECK(!x86_int_site_is_real(b, 128, sizeof b, 0),
+            "...and it is now REJECTED, to be serviced from the #GP instead"); }
+
+    /* ── ★★★ THE FALSE POSITIVE THAT KILLED THE WIN16 LAUNCH (session 39, GH #128).
+         Real bytes, krnl386.exe seg1 0x201a..0x2058, candidate at index 56 = 0x2052:
+             3a cd   cmp cl,ch
+             75 50   jne +0x50
+         The `cd 75` spans them.  The vote fails, the owner IS named -- and it is a
+         `cmp`, not a relative branch, so the old rule kept it.  `cd 75` became
+         `c4 c4`, the `jne` at 0x2053 became `les dx,[bx+si+0x0b]`, and WOWEXEC died
+         with "General Protection Fault in module KRNL386.EXE at 0001:2053" the moment
+         it tried to launch an application.  The owner test is what has to catch this,
+         and "owner exists" is the only property that separates it -- the owning
+         instruction class does not. */
+    { static const unsigned char b[] = {
+        0xAC,0x3A,0xC3,0x74,0x07,0x3A,0xC7,0x74,
+        0x03,0xE9,0x88,0x00,0x83,0x7E,0xFC,0x00,
+        0x75,0x0D,0x83,0x7E,0xFA,0x00,0x74,0x07,
+        0xAA,0xAC,0xFF,0x46,0xFC,0xEB,0x15,0x38,
+        0x1C,0x74,0x04,0x38,0x3C,0x75,0x03,0x46,
+        0xEB,0xF5,0xFF,0x4E,0xF8,0x79,0x05,0xC7,
+        0x46,0xF8,0x00,0x00,0xFF,0x46,0xFE,0x3A,
+        0xCD,0x75,0x50,0x0B,0xC9,0x75 };
+      CHECK(b[56] == 0xCD && b[57] == 0x75, "fixture holds krnl386's CD 75 byte pair");
+      CHECK(!x86_is_insn_start(b, 56, sizeof b, 0),
+            "krnl386 seg1:0x2052: the vote correctly says it is no instruction start");
+      CHECK(!x86_int_site_is_real(b, 56, sizeof b, 0),
+            "krnl386 seg1:0x2052: `cmp cl,ch` owns it -- REJECT (was the 0001:2053 GP)"); }
 
     /* DOS/4GW's `jmp short` displacement, in both its 16-bit modules: `eb cd` reads as
        a `cd 33` byte pair. Same class as Doom's, different branch, 16-bit code. */

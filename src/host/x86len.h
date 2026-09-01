@@ -232,50 +232,58 @@ static int x86_is_insn_start(const unsigned char *b, unsigned off, unsigned n, i
     return votes * 4 >= tries;
 }
 
-/* Is the instruction at b[c] a RELATIVE branch (jcc/jmp/call/loop, rel8 or rel16/32)? */
-static int xl_is_rel_branch(const unsigned char *b, unsigned c, unsigned n)
-{
-    unsigned char o;
-    while (c < n && xl_is_prefix(b[c])) ++c;
-    if (c >= n) return 0;
-    o = b[c];
-    if (o >= 0x70 && o <= 0x7F) return 1;                /* jcc rel8            */
-    if (o >= 0xE0 && o <= 0xE3) return 1;                /* loop/jecxz rel8     */
-    if (o == 0xEB || o == 0xE8 || o == 0xE9) return 1;   /* jmp/call rel        */
-    if (o == 0x0F && c + 1 < n && b[c+1] >= 0x80 && b[c+1] <= 0x8F) return 1;   /* jcc rel16/32 */
-    return 0;
-}
-
 /* May the `CD nn` at b[off] be rewritten to a BOP?
  *
- * ► THE TWO ERRORS ARE NOT SYMMETRIC, AND THE RULE IS SHAPED BY THAT.
- *   Rewriting a byte pair that is NOT an instruction corrupts somebody else's operand.
- *   But REFUSING a real one leaves a raw `CD nn` in protected mode -- the one fault XP
- *   will not reflect -- and that is fatal too, and sooner.  Both were measured on the
- *   rig, one after the other:
+ * ► THE TWO ERRORS USED TO BE SYMMETRIC. THEY ARE NOT ANY MORE, AND THAT IS THE
+ *   WHOLE OF THIS RULE.  Both failures were measured on the rig, one after the other:
  *       accepted a false one  -> Doom died in R_InitTextureMapping (five sessions lost)
  *       refused a real one    -> the run died inside DOS/4GW's own startup, at its
  *                                `mov ah,30h / int 21h` DOS-version check, 54,000 log
  *                                lines earlier
+ *   Because refusing was ALSO fatal, this rule was deliberately narrow: it rejected a
+ *   site only when it could name the owning instruction AND that instruction was a
+ *   RELATIVE BRANCH -- the class that provably rewrites a jump target.  Everything
+ *   else was kept.  "Reject anything a confirmed instruction covers" was tried and
+ *   reverted, because DOS/4GW's version check is preceded by the string
+ *   "requires DOS/16M\n\r$": every backward anchor decodes ASCII, the real site scores
+ *   1 vote in 48, and the ASCII stream's `30 cd` (xor ch,cl) "covers" it with 47.  By
+ *   coverage alone that was indistinguishable from Doom's `jle`.
  *
- * ► SO THE RULE IS DELIBERATELY NARROW: reject a site ONLY when we can name the
- *   instruction whose operand it is AND that instruction is a RELATIVE BRANCH.  That is
- *   the class that is both provably harmful (it rewrites a jump target, so control flow
- *   goes somewhere arbitrary -- exactly Doom's death) and unambiguous.  Everything else
- *   is kept, which is what the scan has always done.
+ * ► ★★★ SESSION 39: THE SECOND HALF OF THAT PREMISE IS NO LONGER TRUE.  A raw `CD nn`
+ *   in protected mode is not fatal any more.  Since session 34 a #GP whose error code
+ *   has the IDT bit set IS that interrupt: the host takes the vector out of the error
+ *   code, CONFIRMS it against the two bytes at the faulting address, services it, and
+ *   patches the site on the way past (see the `#GP(IDT) is a RAW INT` arm in main.c).
+ *   That patch needs no heuristic at all -- the CPU has just executed those two bytes
+ *   AS an interrupt, which is the strongest possible evidence, and it is exactly what
+ *   this vote has only ever been trying to approximate.
  *
- * ► WHY NOT "reject anything a confirmed instruction covers".  Tried, and it is wrong:
- *   DOS/4GW's version check is preceded by the string "requires DOS/16M\n\r$", so every
- *   backward anchor decodes ASCII, the site scores 1 vote in 48, and the ASCII stream's
- *   `30 cd` (xor ch,cl) "covers" it with 47 votes.  By coverage alone that is
- *   indistinguishable from Doom's `jle` -- and rejecting it killed the run.  Text
- *   rarely decodes into a relative branch AND the site is only ever consulted when the
- *   vote has already failed, so the branch test is what carries the separation.
+ *   ⇒ So the costs have INVERTED:
+ *       false accept -> silent code corruption, fatal, and hard to find
+ *       false reject -> one extra #GP, serviced, then patched correctly and for good
+ *   and the rule must follow the premise: WHEN IN DOUBT, REJECT.
  *
- *   Measured over Doom's 32-bit code object and DOS/4GW's two 16-bit modules
- *   (242 candidate byte pairs):
- *       rejected 5, every one a jmp/jle/call displacement, hand-checked
- *       kept every byte pair that is a real INT instruction
+ * ► WHAT FORCED IT (session 39, GH #128).  krnl386 seg1 has, at 0x2051:
+ *       3a cd     cmp cl,ch
+ *       75 50     jne +0x50
+ *   The `cd 75` spanning those two instructions is not an instruction; the vote for
+ *   starting at 0x2052 failed, the owner was correctly named as the `cmp` -- and the
+ *   `cmp` is not a relative branch, so the old rule KEPT it.  `cd 75` became `c4 c4`,
+ *   krnl386's `jne` became `les dx,[bx+si+0x0b]`, and WOWEXEC died with
+ *   "General Protection Fault in module KRNL386.EXE at 0001:2053" the moment it tried
+ *   to launch an application.  Found by the method that found Doom's: when a guest
+ *   dies at an address, diff the bytes there against the file on disk -- one byte
+ *   differed, and the scan's own log line already named the offset it had patched.
+ *
+ * ► THE DOS/4GW SITE IS NOW REJECTED TOO, AND THAT IS THE INTENDED OUTCOME rather
+ *   than a regression this rule tolerates: it is a real `int 21h`, it is left raw, the
+ *   first execution faults, and the #GP(IDT) arm services and patches it.  One fault,
+ *   once.
+ * ⚠ THE ONE CASE THAT STILL NEEDS THE SCAN is a code selector whose base is 0: the
+ *   #GP(IDT) arm guards on `gcb &&`, so it declines to service there.  A flat base-0
+ *   code region is not scanned as a range either, so those sites were already raw
+ *   before this change -- it makes nothing worse -- but that is the gap to close if a
+ *   guest is ever seen dying on a raw INT after this.
  */
 static int x86_int_site_is_real(const unsigned char *b, unsigned off, unsigned n, int d32)
 {
@@ -284,9 +292,9 @@ static int x86_int_site_is_real(const unsigned char *b, unsigned off, unsigned n
     for (j = 1; j < 16u && j <= off; ++j) {
         unsigned len = x86_insn_len(b, off - j, n, d32);
         if (len > j && x86_is_insn_start(b, off - j, n, d32))
-            return !xl_is_rel_branch(b, off - j, n);     /* named the owner: branch? */
+            return 0;               /* an instruction owns it -> it is an OPERAND */
     }
-    return 1;                                            /* nothing owns it -> keep  */
+    return 1;                       /* nothing owns it -> keep */
 }
 
 #endif /* HOST_X86LEN_H */
