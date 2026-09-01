@@ -103,11 +103,19 @@ def wrapper_target(ne, seg, off, stubs):
         if ins.mnemonic in ("call", "jmp") and ins.op_str.startswith("0x"):
             t = int(ins.op_str, 16) & 0xFFFF
             if (seg, t) not in stubs:
-                # A jump to something that is not a stub ends the body; a CALL to
-                # something else means this is not a thin wrapper at all.
+                # ⚠ A CALL to a non-stub is NOT disqualifying here, and treating it
+                #   as such lost CreateWindow. USER's wrappers marshal their
+                #   arguments through helpers before dispatching:
+                #       1e4d  push bp / mov bp,sp / push 0x1e73   ; trampoline in DX
+                #       1e53  ...three `call`s that convert arguments...
+                #       1e70  jmp 0x038d                          ; ★ the stub
+                #       1e73  retf 0x1e                           ; 30 arg bytes
+                #   The TAIL-JUMP is the dispatch -- the pushed trampoline proves the
+                #   body ends there -- so a preceding call is bookkeeping, not another
+                #   destination. A jump elsewhere still ends the body.
                 if ins.mnemonic == "jmp":
                     break
-                return None
+                continue
             if hit is not None:
                 return None                  # more than one -- ambiguous, say nothing
             hit = t

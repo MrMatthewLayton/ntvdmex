@@ -1,6 +1,6 @@
 # The WOW32 call surface krnl386 requires
 
-**82 function IDs, 29 of them NAMED by krnl386's own export table.** GH #128.
+**82 function IDs, 34 of them NAMED by krnl386's own export table.** GH #128.
 
 krnl386.exe cannot call Win32, so it reaches a 32-bit companion (real Windows:
 wow32.dll inside ntvdm.exe) through a native `C4 C4 51` BOP. Every call goes through
@@ -51,8 +51,22 @@ missing one.
 
 - **DIRECT** — an entry-table export points *at* a stub, so the export's name in the
   (non-)resident name table **is** the function's name. No inference.
-- **WRAPPER** — an export's body calls exactly one stub before returning. An
+- **WRAPPER** — an export's body reaches exactly one stub before returning. An
   inference, labelled as one.
+  ⚠ **Not just `call`.** USER's and GDI's exports **tail-jump** to their stubs, after
+  marshalling arguments through helper calls:
+  `push bp / mov bp,sp / push <trampoline> / …calls… / jmp <stub> / retf N`.
+  The pushed trampoline proves the body ends at that jump, so a preceding call is
+  bookkeeping rather than another destination. Following jumps and tolerating those
+  calls took USER from 190 named to **385 of 441**, GDI to 325 of 365 — and krnl386
+  itself from 29 to 34, which is where `GETPROFILESTRING`, `WRITEPROFILESTRING`,
+  `GETPRIVATEPROFILEINT` and `WRITEPRIVATEPROFILESTRING` below came from.
+  ★ It also confirms an earlier reading by a second method: `0x39` was pinned in
+  session 37 from the DGROUP strings at its call site (`"KERNEL"`, `"GPCONTINUE"`),
+  and the export table now says `GETPROFILEINT` outright.
+  ⚠ `0x7d`, `0x80` and `0x74` are still **not** named here, which is consistent with
+  what this project claims about them: they are reached only from internal code, and
+  their readings rest on their call sites alone.
 - **—** — reached only from internal code. `tools/ne/nedis.py --wowfunc <id>` prints
   the stub, its callers and the code that builds the arguments. This is the work list.
 
@@ -83,7 +97,6 @@ Regenerate with `tools/ne/wowmap.py guest/ne/krnl386.exe --md`.
 
 | ID | args | stub | name | evidence |
 |---|---|---|---|---|
-| `0x00` | 1 | `seg1:0x7f51` | — | internal only — read the call site |
 | `0x01` | 2 | `seg1:0xb5c6` | **FATALEXIT** | WRAPPER |
 | `0x02` | 2 | `seg1:0xb5b9` | **EXITKERNELTHUNK** | DIRECT |
 | `0x03` | 0 | `seg1:0xb5ac` | **WRITEOUTPROFILES** | DIRECT |
@@ -99,9 +112,9 @@ Regenerate with `tools/ne/wowmap.py guest/ne/krnl386.exe --md`.
 | `0x2d` | 12 | `seg1:0xb40c` | **WOWLOADMODULE** | DIRECT |
 | `0x2f` | 4 | `seg1:0xb5e0` | — | internal only — read the call site |
 | `0x31` | 8 | `seg1:0xb5d3` | — | internal only — read the call site |
-| `0x39` | 10 | `seg1:0xb52a` | — | internal only — read the call site |
-| `0x3a` | 18 | `seg1:0xb51d` | — | internal only — read the call site |
-| `0x3b` | 12 | `seg1:0xb55e` | — | internal only — read the call site |
+| `0x39` | 10 | `seg1:0xb52a` | **GETPROFILEINT** | WRAPPER |
+| `0x3a` | 18 | `seg1:0xb51d` | **GETPROFILESTRING** | WRAPPER |
+| `0x3b` | 12 | `seg1:0xb55e` | **WRITEPROFILESTRING** | WRAPPER |
 | `0x6e` | 0 | `seg1:0xb1dd` | — | internal only — read the call site |
 | `0x6f` | 18 | `seg1:0xb204` | — | internal only — read the call site |
 | `0x70` | 4 | `seg1:0xb3f2` | **WOWGETNEXTVDMCOMMAND** | DIRECT |
@@ -119,9 +132,9 @@ Regenerate with `tools/ne/wowmap.py guest/ne/krnl386.exe --md`.
 | `0x7c` | 4 | `seg1:0xb38a` | — | internal only — read the call site |
 | `0x7d` | 2 | `seg1:0xb397` | — | internal only — read the call site |
 | `0x7e` | 6 | `seg1:0xb32f` | — | internal only — read the call site |
-| `0x7f` | 14 | `seg1:0xb537` | — | internal only — read the call site |
+| `0x7f` | 14 | `seg1:0xb537` | **GETPRIVATEPROFILEINT** | WRAPPER |
 | `0x80` | 22 | `seg1:0xb544` | — | internal only — read the call site |
-| `0x81` | 16 | `seg1:0xb551` | — | internal only — read the call site |
+| `0x81` | 16 | `seg1:0xb551` | **WRITEPRIVATEPROFILESTRING** | WRAPPER |
 | `0x82` | 4 | `seg1:0xb2ee` | — | internal only — read the call site |
 | `0x83` | 2 | `seg1:0xb2fb` | **WOWWAITFORMSGANDEVENT** | DIRECT |
 | `0x84` | 12 | `seg1:0xb308` | **WOWMSGBOX** | DIRECT |

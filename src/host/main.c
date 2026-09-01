@@ -23,6 +23,7 @@
 #include "../wow/ne.h"  /* GH #128: 16-bit New Executable loader (WOW bootstrap) */
 #include "../wow/wow32.h" /* GH #128: the 32-bit half -- krnl386's calls out to Win32 */
 #include "../wow/wowsched.h" /* GH #128: ...and the Win16 task scheduler, which is also ours */
+#include "../wow/wowuser.h" /* GH #128: USER.EXE's id space -- a DIFFERENT one; see the file */
 #include "dos_mcb.h"
 #include "dos_loader.h"
 #include "dos_psp.h"
@@ -3295,6 +3296,49 @@ static ne_module g_wow_mod[WOW_MAX_MOD];
 static uint8_t  *g_wow_img[WOW_MAX_MOD];
 static char      g_wow_name[WOW_MAX_MOD][16];
 static int       g_wow_nmod = 0;
+
+/* ── ★ WHICH MODULE OWNS THIS SELECTOR? (GH #128, session 38) ─────────────────
+     Needed because the WOW32 id space is per module: a call's stub segment names
+     the table it belongs to, and the table decides whose numbering applies. The
+     loader already records every module's runtime selectors, so this is a lookup
+     rather than an inference. -1 = not one of ours. */
+static int wow_module_of_sel(WORD sel)
+{
+    int k, i;
+    if (!sel) return -1;
+    for (k = 0; k < g_wow_nmod; ++k)
+        for (i = 0; i < (int)g_wow_mod[k].n_seg; ++i)
+            if (g_wow_mod[k].seg[i].seg == sel) return k;
+    return -1;
+}
+
+/* ── ★★ WHICH SELECTOR IS USER'S CODE SEGMENT? LEARN IT FROM A STUB. ──────────
+     wow_module_of_sel() cannot answer this. g_wow_mod[] is the BIND-STAGE view --
+     the host's own NE load, used to verify and relocate -- and the modules that
+     matter at run time are loaded by krnl386 itself, which allocates their
+     selectors through `INT 31h 0x0501`. USER's segment 1 is 0x0327 in the run and
+     appears nowhere in g_wow_mod[]. Measured: the first cut used the module lookup
+     and the dispatcher never fired once.
+   ⇒ Identify the TABLE by a stub in it. Each entry is `push argb / push 0 / push
+     id / lcall`, 13 bytes, at a fixed offset in USER's segment 1, so the triple
+     (id, argument bytes, return-into-stub offset) pins one specific stub. Two
+     anchors, either of which is enough, both named by USER's own export table and
+     both seen in real runs:
+        id 0x190  0 args  retstub 0x0659   FINALUSERINIT  (krnl386 calls it at
+                                           task startup via `lcall [0x414]`)
+        id 0x039  4 args  retstub 0x0c25   REGISTERCLASS
+   ⚠ The offsets are this USER.EXE's. Regenerate with
+     `tools/ne/wowmap.py guest/ne/user.exe` if the box's USER.EXE ever differs --
+     and note that a WRONG anchor cannot silently mis-fire: all three fields have
+     to agree, and if none ever matches the dispatcher simply never engages and
+     every USER call stays honestly unimplemented. */
+static WORD g_wow_user_seg = 0;
+
+static int wow_user_anchor(WORD id, WORD argb, WORD retstub)
+{
+    return (id == 0x190 && argb == 0 && retstub == 0x0659)
+        || (id == 0x039 && argb == 4 && retstub == 0x0c25);
+}
 static WORD      g_wow_entry_ds = 0;   /* krnl386's autodata paragraph      */
 static int       g_wow_entering = 0;   /* the guest is krnl386, not DOS     */
 /* The PM->V86 transfer buffer for pointer-taking INT 21h calls; allocated in
@@ -9692,7 +9736,13 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                         const char *nm = kt ? wow32_name((WORD)fid) : NULL;
                         p = zput(p, " FUNC=0x"); p = zhex(p, fid);
                         if (nm) { p = zput(p, " "); p = zput(p, nm); }
-                        p = zput(p, kt ? " [krnl]" : " [OTHER TABLE -- not the id space wow32.h describes]");
+                        if (kt) p = zput(p, " [krnl]");
+                        else {
+                            int mk = wow_module_of_sel((WORD)sseg);
+                            p = zput(p, " [");
+                            p = zput(p, mk >= 0 ? g_wow_name[mk] : "?");
+                            p = zput(p, "'s table -- a DIFFERENT id space]");
+                        }
                         p = zput(p, " stub=0x"); p = zhex(p, sseg);
                         /* ── ★ WHICH TASK IS CALLING. (GH #128, session 38) ───────────
                              krnl386 keeps the current task's TDB selector in DGROUP
@@ -10062,6 +10112,31 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                     p = zhex(p, f.ret); p = zput(p, "\r\n");
                     log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
                     return 1;
+                }
+                /* ── ★★★ USER'S OWN ID SPACE. See src/wow/wowuser.h. ──────────
+                     Deliberately a separate dispatcher behind a separate check:
+                     `0x39` is GetProfileInt in krnl386's table and RegisterClass
+                     in USER's, and one switch holding both id spaces is exactly
+                     how this host came to answer the second with the first. */
+                if (!f.krnl && !g_wow_user_seg
+                    && wow_user_anchor(f.id, f.argb, wow32_peekw(f.bp + 2))) {
+                    g_wow_user_seg = f.stubseg;
+                    p = zput(p, "\n     WOWUSER: USER's code segment is 0x");
+                    p = zhex(p, g_wow_user_seg);
+                    p = zput(p, " (learned from its own stub, not from the module table)");
+                }
+                if (!f.krnl && f.stubseg == g_wow_user_seg && g_wow_user_seg) {
+                    char note[96];
+                    if (wowuser_call(&f, note, sizeof note)) {
+                        ++g_wow32_serviced;
+                        VDM_REG(tib, VTIB_EIP) += WOW32_BOP_LEN;
+                        p = zput(p, " -> SERVICED (USER), returned 0x");
+                        p = zhex(p, f.ret);
+                        if (note[0]) { p = zput(p, " -- "); p = zput(p, note); }
+                        p = zput(p, "\r\n");
+                        log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                        return 1;
+                    }
                 }
                 if (wow32_call(&f, &g_wow_dosdata)) {
                     /* ⚠ A DECLINE IS NOT A SERVICE and the log must not blur
