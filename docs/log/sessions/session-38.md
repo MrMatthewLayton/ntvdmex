@@ -89,8 +89,9 @@ The discriminator is exact and needs nothing external: **the BOP lives inside kr
 common thunk (`seg1:0x2bf1`), so the executing `CS` at a BOP *is* krnl386's code segment, and
 a stub in that same segment is krnl386's stub.** Every service, every decline and the
 scheduler hooks are gated on it, and the log prints `[krnl]` or
-`[FOREIGN TABLE, id is NOT krnl386's] stub=0x....` instead of putting krnl386's name on
-something it has not identified.
+`[OTHER TABLE -- not the id space wow32.h describes] stub=0x....` instead of putting
+krnl386's name on something it has not identified. (krnl386's *seg2* table is not foreign
+either — it is simply a different numbering, which is why the wording is about the TABLE.)
 
 ⚠ The first attempt gated on `g_wow_pmbase[]`, which is filled by a descriptor-limit match
 that has not fired when the earliest calls arrive — **the baseline collapsed from 258 calls to
