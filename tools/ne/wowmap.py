@@ -27,15 +27,39 @@ import capstone
 
 sys.path.insert(0, __file__.rsplit("/", 1)[0])
 from nedump import NE                                   # noqa: E402
-from wowthunks import scan                              # noqa: E402
+from wowthunks import scan, IMPORTED_THUNK             # noqa: E402
 
 WRAPPER_WINDOW = 0x40          # how far into an export body to look for the call
 
 
-def stub_table(path):
-    """{(seg, off) -> (id, argbytes)} for every WOW32 stub in the module."""
+def stub_tables(path):
+    """{(segment, thunk) -> {(seg, off) -> (id, argbytes)}} -- ONE ENTRY PER TABLE.
+
+    ⚠ A MODULE CAN HAVE MORE THAN ONE, AND THEY DO NOT SHARE A NUMBERING. This
+      used to return a single flat dict, which was right only while krnl386 seg1
+      was the only table anyone had looked at. Measured (session 38):
+
+        krnl386  seg1 -> its own thunk 0x2bb6   82 stubs   <- the documented surface
+                 seg1 -> a second thunk 0xaae8   6 stubs
+                 seg2 -> an imported thunk     121 stubs
+        user     seg1 -> an imported thunk     457 stubs
+        gdi      seg1 -> an imported thunk     367 stubs
+
+      Pooling them reported "krnl386 has 201 WOW32 function IDs", which silently
+      merges three id spaces into one and would put a name from one table on a
+      function in another. That is exactly the mistake the host was making at
+      run time when it answered USER's RegisterClass with GetProfileIntA."""
     _ne, hits, _t = scan(path)
-    return {(s, o): (f, c) for s, o, f, c, _tgt in hits}
+    out = {}
+    for s, o, f, c, tgt in hits:
+        out.setdefault((s, tgt), {})[(s, o)] = (f, c)
+    return out
+
+
+def table_name(key):
+    seg, tgt = key
+    return ("seg%d -> imported thunk" % seg) if tgt == IMPORTED_THUNK \
+        else ("seg%d -> own thunk 0x%04x" % (seg, tgt))
 
 
 def export_names(ne):
@@ -51,7 +75,22 @@ def export_names(ne):
 
 
 def wrapper_target(ne, seg, off, stubs):
-    """If this export body calls exactly one stub before returning, which one?"""
+    """If this export body reaches exactly one stub before returning, which one?
+
+    ⚠ `call` IS NOT THE ONLY WAY IN, and assuming it was made this function report
+      "no wrappers" for a module built entirely out of them. USER.EXE's exports are
+      TAIL-JUMPS:
+
+          1dbd  push bp / mov bp,sp
+          1dc0  push 0x1dc8 / pop dx      ; the return trampoline, in DX
+          1dc4  pop bp
+          1dc5  jmp 0x0c18                ; ★ the stub -- a JUMP, not a call
+          1dc8  retf 4                    ; ...and the trampoline sits right after it
+
+      That is `RegisterClass` (ordinal 57), and the stub at 0x0c18 is id 0x39 -- the
+      call this project spent a run answering with `GetProfileIntA`. Every export in
+      the module has this shape, so a call-only scan named none of them.
+      (session 38; the same blind spot as nedis.py --callers, found the same day.)"""
     s = [x for x in ne.segments() if x["i"] == seg]
     if not s or s[0]["flags"] & 0x0001 or not s[0]["sector"]:
         return None
@@ -61,19 +100,26 @@ def wrapper_target(ne, seg, off, stubs):
     for ins in md.disasm(bytes(d[off:off + WRAPPER_WINDOW]), off):
         if ins.mnemonic in ("ret", "retf"):
             break
-        if ins.mnemonic == "call" and ins.op_str.startswith("0x"):
+        if ins.mnemonic in ("call", "jmp") and ins.op_str.startswith("0x"):
             t = int(ins.op_str, 16) & 0xFFFF
             if (seg, t) not in stubs:
-                return None                  # calls something else -- not a thin wrapper
+                # A jump to something that is not a stub ends the body; a CALL to
+                # something else means this is not a thin wrapper at all.
+                if ins.mnemonic == "jmp":
+                    break
+                return None
             if hit is not None:
                 return None                  # more than one -- ambiguous, say nothing
             hit = t
+            if ins.mnemonic == "jmp":
+                break                        # a tail-jump IS the end of the body
     return hit
 
 
-def build(path):
-    ne = NE(path)
-    stubs = stub_table(path)
+def build(path, stubs=None, ne=None):
+    ne = ne or NE(path)
+    stubs = stubs if stubs is not None else \
+        max(stub_tables(path).values(), key=len)
     names = export_names(ne)
     byid = {}                                # id -> dict(args, off, name, how)
     for (seg, off), (fid, cnt) in stubs.items():
@@ -101,7 +147,31 @@ def main():
     if not a:
         print(__doc__)
         return 2
-    ne, byid = build(a[0])
+    tables = stub_tables(a[0])
+    ne0 = NE(a[0])
+    if "--md" not in sys.argv and len(tables) > 1:
+        print("%s has %d SEPARATE stub tables; each has its own id space:" % (a[0], len(tables)))
+        for k in sorted(tables, key=lambda k: -len(tables[k])):
+            print("   %-28s %3d stubs" % (table_name(k), len(tables[k])))
+        print()
+    # ★ DEFAULT: the table this module's OWN thunk serves, if it has one. krnl386
+    #   owns the common thunk, so its native surface is `seg1 -> own thunk 0x2bb6`
+    #   -- the 82 ids wow32.h implements -- and picking "the biggest" instead would
+    #   silently hand back seg2's 121 and redefine the documented surface under a
+    #   reader who did not ask. Modules that only IMPORT the thunk have one table
+    #   and get it. `--table=...` overrides.
+    own = [k for k in tables if k[1] != IMPORTED_THUNK]
+    pool = own or list(tables)
+    key = max(pool, key=lambda k: len(tables[k])) if pool else None
+    for opt in sys.argv[1:]:
+        if opt.startswith("--table="):
+            sel = opt.split("=", 1)[1]
+            for k in tables:
+                if table_name(k).replace(" ", "") == sel.replace(" ", ""):
+                    key = k
+    if key is None:
+        print("%s: no WOW32 stub tables" % a[0]); return 1
+    ne, byid = build(a[0], tables[key], ne0)
     named = [f for f in byid if byid[f]["name"]]
     direct = [f for f in named if byid[f]["how"] == "DIRECT"]
     if "--md" in sys.argv:
@@ -114,9 +184,9 @@ def main():
                      "**%s**" % e["name"] if e["name"] else "—",
                      e["how"] or "internal only — read the call site"))
         return 0
-    print("%s: %d WOW32 function IDs -- %d NAMED (%d direct, %d wrapper), %d unnamed"
-          % (a[0], len(byid), len(named), len(direct), len(named) - len(direct),
-             len(byid) - len(named)))
+    print("%s [%s]: %d WOW32 function IDs -- %d NAMED (%d direct, %d wrapper), %d unnamed"
+          % (a[0], table_name(key), len(byid), len(named), len(direct),
+             len(named) - len(direct), len(byid) - len(named)))
     for fid in sorted(byid):
         e = byid[fid]
         print("  id 0x%02x  args=%2d  seg%d:0x%04x  %-9s %s"

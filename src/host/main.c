@@ -9692,7 +9692,7 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                         const char *nm = kt ? wow32_name((WORD)fid) : NULL;
                         p = zput(p, " FUNC=0x"); p = zhex(p, fid);
                         if (nm) { p = zput(p, " "); p = zput(p, nm); }
-                        p = zput(p, kt ? " [krnl]" : " [FOREIGN TABLE, id is NOT krnl386's]");
+                        p = zput(p, kt ? " [krnl]" : " [OTHER TABLE -- not the id space wow32.h describes]");
                         p = zput(p, " stub=0x"); p = zhex(p, sseg);
                         /* ── ★ WHICH TASK IS CALLING. (GH #128, session 38) ───────────
                              krnl386 keeps the current task's TDB selector in DGROUP

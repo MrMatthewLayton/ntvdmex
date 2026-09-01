@@ -32,6 +32,9 @@ import struct
 import sys
 
 
+IMPORTED_THUNK = -1      # "the common thunk, in another module"
+
+
 def push_imm(d, i):
     """Decode a push-immediate at i. Returns (value, next_index) or (None, None)."""
     if d[i] == 0x6A:                                  # push imm8, sign-extended
@@ -51,10 +54,25 @@ def scan(path):
         d = ne.d[s['file_off']:s['file_off'] + s['length']]
         i = 0
         while i < len(d) - 8:
-            # anchor on the distinctive tail: nop / push cs / call rel16
+            # ── TWO STUB SHAPES, because the thunk may be in ANOTHER MODULE.
+            #    krnl386 OWNS the common thunk, so its own stubs reach it with a
+            #    manufactured far call -- `nop / push cs / call rel16`. USER, GDI and
+            #    the drivers IMPORT it, so theirs end in a real far call, `9a off seg`,
+            #    whose target words are a RELOCATION CHAIN and mean nothing until the
+            #    loader patches them.
+            #  ⚠ Scanning only for krnl386's shape reported "no WOW32 thunk stubs
+            #    found" for USER.EXE, which has 457 of them. A tool that can only see
+            #    one module's idiom says "none" about every other module and sounds
+            #    like an answer. (session 38)
+            tail = None
             if d[i] == 0x90 and d[i + 1] == 0x0E and d[i + 2] == 0xE8:
                 rel = struct.unpack_from('<h', d, i + 3)[0]
-                tgt = (i + 5 + rel) & 0xFFFF
+                tail, tgt = i, (i + 5 + rel) & 0xFFFF
+            elif d[i] == 0x9A:
+                # imported far call: the target is a chain link, so all stubs in a
+                # module share ONE logical target. Fold them under a single key.
+                tail, tgt = i, IMPORTED_THUNK
+            if tail is not None:
                 # walk back over three pushes: <count> <0> <id>
                 for idw in (3, 2):                    # push imm16 / push imm8
                     ids = i - idw

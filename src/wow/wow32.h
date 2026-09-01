@@ -123,8 +123,10 @@
    ⚠ IT IS ONLY VALID AT THE FRAME THAT STARTED THE TASK. DI and CX are a stack
      only in the `0x74` call; at any other call site they are just the caller's
      registers, and mode 25 would load SS:SP from whatever they happened to hold.
-   ⚠ AND NOTHING HERE WRITES IT YET. This is a reading of the interface, not a
-     scheduler; see docs/log/sessions/session-38.md for what is still unknown. */
+   ★ AND THE HOST NOW USES IT. src/wow/wowsched.h returns the `0x74` launch call
+     through mode 25, which is what lets krnl386's creating task carry on and
+     `LoadModule` finish. Opt-in; see that file for the two moments and the one
+     ordering that works. */
 #define WOW32_OFF_MODE  (-24)
 #define WOW32_MODE_ORDINARY   0
 #define WOW32_MODE_SWITCHBACK 25
@@ -154,9 +156,12 @@ typedef struct {
          argument bytes. We serviced the first with `GetProfileIntA` and handed
          WOWEXEC the answer -- a function answered by an unrelated function, which is
          the "runs but lies" class this project treats as the most expensive kind.
-       ⇒ 1 only when the stub lives in krnl386 itself. Everything in this file is
-         gated on it; a foreign call gets the honest "unimplemented", which is a
-         missing answer instead of a wrong one. */
+       ⇒ 1 only when the stub lives in the segment the BOP is executing in, which is
+         krnl386's seg1 -- the table this file describes. krnl386 has a SECOND table
+         of its own in seg2 (121 stubs, far-calling the same thunk) whose numbering is
+         also not this one, so "not ours" is about the TABLE, not about the module.
+         Everything here is gated on it; anything else gets the honest
+         "unimplemented", which is a missing answer instead of a wrong one. */
     int              krnl;
     /* Filled in by the host so a service can talk back about what it did. */
     DWORD            ret;

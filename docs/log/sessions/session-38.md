@@ -601,17 +601,65 @@ quarter-gigabyte file. Budget for it before setting a knob.
 **The scheduler is built and the wall is down** (see the headline). What is left:
 
 1. ~~The host-side crash.~~ **FIXED** — a read-only `""` literal passed to `GetProfileIntA`.
-2. **USER's OWN THUNK TABLE.** This is the frontier now. `RegisterClass` is id `0x39` *in
-   USER's numbering* (`stub=0x0327`, 4 arg bytes, a far `&WNDCLASS`), and everything in
-   `wow32.h` is krnl386's numbering, so none of it applies. The work is to map USER's table
-   the way `wowthunks.py`/`wowmap.py` mapped krnl386's — **against `guest/ne/user.exe`, not
-   krnl386** — and then implement `RegisterClass`, `CreateWindow` and the rest against it.
-   The log already separates the two (`[krnl]` vs `[FOREIGN TABLE] stub=0x....`).
+2. ~~Map USER's thunk table.~~ **DONE — [`wow-user-surface.md`](../../research/wow-user-surface.md)**:
+   457 stubs, 441 distinct ids, **262 named from USER's own export table**, and `0x39` is
+   confirmed `REGISTERCLASS`. What is left is to IMPLEMENT against it. The natural first
+   set is what WOWEXEC's window path actually calls, in order: `0x39 RegisterClass`,
+   then `CreateWindow` / `ShowWindow` / `GetMessage` / `DefWindowProc`, plus the ids the run
+   already hits (`0xad`, `0xc5`, `0x140`, `0x29` — still unnamed, read their call sites).
+   ⚠ A second dispatch table will be needed in the host: `wow32.h` is krnl386-seg1-only by
+   construction, and the gate now says so. USER's services belong in their own file keyed on
+   the stub segment, not bolted into the same switch.
 3. **Park the creator instead of truncating it.** At (C) the boot task had retired but was
    still freeing selectors when the host took the machine away. Saving its context there and
    giving it the rest of its turn is a small change and removes a known leak.
 4. **A second task.** Everything so far is one launch. `WOW32_WAITEVENT`/`Yield` still return
    immediately, which is right while only one task can run and wrong the moment two can.
+
+### ★★★ USER'S TABLE, MAPPED AND NAMED
+
+`wowthunks.py` said **"no WOW32 thunk stubs found"** for USER.EXE, which has **457** of them.
+It only knew krnl386's stub shape — `nop / push cs / call rel16`, a manufactured far call,
+which krnl386 can use because it OWNS the thunk. USER, GDI and the drivers IMPORT it, so
+their stubs end in a real `9a` far call whose target words are a relocation chain. *A tool
+that can only see one module's idiom says "none" about every other module, and it sounds like
+an answer.*
+
+With both shapes, the modules separate into tables — and a module can have more than one:
+
+| module | table | stubs |
+|---|---|---|
+| krnl386 | `seg1 -> own thunk 0x2bb6` | **82** — the surface `wow32.h` implements |
+| krnl386 | `seg1 -> own thunk 0xaae8` | 6 |
+| krnl386 | `seg2 -> imported thunk` | 121 |
+| USER | `seg1 -> imported thunk` | **457** (441 ids) |
+| GDI | `seg1 -> imported thunk` | 367 (365 ids) |
+
+⚠ Pooling them reported *"krnl386 has 201 WOW32 function IDs"* — three id spaces merged into
+one, the same mistake the host was making at run time. `wowmap.py` now reports each table
+separately and **defaults to the table the module's own thunk serves**, so krnl386 still
+answers 82/29-named exactly as documented.
+
+★ And `wowmap`'s wrapper detection only followed `call`. USER's exports reach their stubs by
+**tail-jump**:
+
+```
+1dbd  push bp / mov bp,sp
+1dc0  push 0x1dc8 / pop dx      ; the return trampoline, in DX
+1dc4  pop bp
+1dc5  jmp 0x0c18                ; ★ the stub -- a JUMP, not a call
+1dc8  retf 4
+```
+
+That is ordinal 57, `REGISTERCLASS`, and `seg1:0x0c18` is id `0x39`, 4 argument bytes — the
+call this host spent a run answering with `GetProfileIntA`. Following jumps took USER from
+190 named to **262 of 441** (GDI: 249 of 365). *Third instance this session of a scan that
+could only express one encoding.*
+
+★ **Cross-validated by the run itself**: `0x190` names as `FINALUSERINIT`, and the log shows
+krnl386 calling exactly that id at task startup through `lcall [0x414]`. `0x217` is
+`NOTIFYWOW`, `0x73` `REPLYMESSAGE`, `0x13a` `SIGNALPROC` — all on-path for what WOWEXEC is
+doing. Two independent methods, one answer.
 
 ### Ruled out — do not re-try (all by measurement)
 
