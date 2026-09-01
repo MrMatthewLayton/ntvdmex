@@ -4,7 +4,7 @@
 > this file top to bottom and you will know where it is, what works, what does not, and
 > what to do next.
 
-- **Last updated:** 2026-08-31 (session 38)
+- **Last updated:** 2026-09-01 (session 39)
 - **Branch:** `m9/completeness`
 - **Tracker:** [140+ issues](https://github.com/MrMatthewLayton/ntvdmex/issues) — reconciled against the repo on 2026-08-26 (`tools/gh/backfill.py` is the manifest)
 - **Knowledge base:** the [wiki](https://github.com/MrMatthewLayton/ntvdmex/wiki)
@@ -38,9 +38,9 @@ A good bar for the same reasons Doom was: small, iconic, and impossible to fake.
 them they exercise the whole stack — NE loading, the KERNEL 16→32 boundary, USER windows
 and menus, GDI drawing, mouse and keyboard. Paint in particular has to actually paint.
 
-**Status: a Win16 program RUNS, AND IS BUILDING A WINDOW CLASS.** `wowexec.exe` — the WOW
-shell — is found, loaded and run, and nothing has drawn a pixel yet. What works is the
-*bootstrap*, and as of session 38 it runs
+**Status: a Win16 program RUNS, OPENS TWO WINDOWS, AND IS PUMPING MESSAGES.**
+`wowexec.exe` — the WOW shell — is found, loaded and run, and nothing has drawn a pixel
+yet. What works is the *bootstrap*, and as of session 39 it runs
 a long way: krnl386 loads three of its four segments, installs its interrupt handlers,
 **takes and returns from its own DPMI exceptions**, and loads **all eight** of the 16-bit
 system modules — `SYSTEM.DRV`, `KEYBOARD.DRV`, `MOUSE.DRV`, `VGA.DRV`, `SOUND.DRV`,
@@ -51,12 +51,20 @@ As of session 38 the `0001:229C` general-protection fault is
 **krnl386 has no scheduler and we are it**. With a ~70-line cooperative scheduler in the host
 (`src/wow/wowsched.h`, opt-in), krnl386's boot task returns from `LoadModule`, retires itself,
 and WOWEXEC restarts and runs on past `LoadCursor` into **filling in a `WNDCLASS`** and **registering it: `RegisterClass "WOWExecClass"`**, the first time this project has read
-what a Win16 program is putting on screen. The next call is `CreateWindow`. Two host defects fell behind that: a **read-only string literal** handed
+what a Win16 program is putting on screen. Two host defects fell behind that: a **read-only string literal** handed
 to `GetProfileIntA` (a deterministic `0xc0000005` in `ntdll`), and — the serious one —
 **dispatching WOW32 calls on the id alone when the id space is PER MODULE**, which had us
 answering WOWEXEC's `RegisterClass` with `GetProfileIntA`. USER's table is now mapped
 (`docs/research/wow-user-surface.md`, 441 ids, 385 named) and has its own dispatcher.
-The frontier is **`CreateWindow`**. See #128 below.
+
+★★ **As of session 39 `CreateWindow` is answered**, so WOWEXEC creates a window
+(`"WOWExec"`, `WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN`), registers a *second* class,
+creates a second window, reads `SYSTEM.INI`'s `[drivers]`, and arrives at **its own
+message loop** — `WowWaitForMsgAndEvent` / `PeekMessage` / `TranslateMessage` /
+`DispatchMessage`, every one of them named out of the import table rather than
+inferred. The task-relaunch loop is gone. **The frontier is the message loop**, and
+behind it the first thing that is not an *answer*: `DispatchMessage` has to **call** a
+16-bit window procedure. See #128 below.
 
 ---
 
@@ -79,7 +87,7 @@ The frontier is **`CreateWindow`**. See #128 below.
 
 | | Why it matters |
 |---|---|
-| **Win16 / WOW — a program runs, but nothing draws** | `ntvdm.exe` is *also* the host for every 16-bit **Windows** program. The NE loader loads, relocates and binds the **whole** XP WOW module set on real hardware, **krnl386 executes** — protected mode, its own segments, its interrupt handlers, its own DPMI exceptions, and all eight 16-bit system modules — and it then finds, loads and **runs `WOWEXEC.EXE`** — which, since session 38's host-side task scheduler, gets past `LoadCursor`, fills in a `WNDCLASS` and **registers it** (`RegisterClass "WOWExecClass"`), then asks for `CreateWindow`, which is not implemented. So a Win16 program executes and is setting up a window; none has drawn a pixel, and there is no 16:16↔flat thunking. Since interception is an IFEO key on `ntvdm.exe`, and Win16 launches go through `ntvdm.exe` too, **installing NTVDMEX permanently would break every 16-bit Windows app today**. → [#128](https://github.com/MrMatthewLayton/ntvdmex/issues/128) |
+| **Win16 / WOW — a program runs and opens windows, but nothing draws** | `ntvdm.exe` is *also* the host for every 16-bit **Windows** program. The NE loader loads, relocates and binds the **whole** XP WOW module set on real hardware, **krnl386 executes** — protected mode, its own segments, its interrupt handlers, its own DPMI exceptions, and all eight 16-bit system modules — and it then finds, loads and **runs `WOWEXEC.EXE`** — which, since session 38's host-side task scheduler and session 39's `CreateWindow`, registers two window classes, **creates two windows** and sits in **its message loop**. But a window here is a host-side *object* — a handle, a class, a rectangle — with no pixels behind it; `PeekMessage` has no queue to read; `DispatchMessage` has never called a 16-bit window procedure; and there is no 16:16↔flat thunking. Since interception is an IFEO key on `ntvdm.exe`, and Win16 launches go through `ntvdm.exe` too, **installing NTVDMEX permanently would break every 16-bit Windows app today**. → [#128](https://github.com/MrMatthewLayton/ntvdmex/issues/128) |
 | **Console/stdio integration** | DOS output is buffered and flushed to `CONOUT$` at exit, so shell redirection and piping are bypassed and every DOS program pops a window. Blocks non-interactive use. |
 | **In-guest redirection** | `echo x > file` writes to the screen and leaves the file 0 bytes. Three fixes attempted, all at the wrong end. |
 | **No INT 13h / INT 25h / 26h** | No direct disk access. |
@@ -98,13 +106,44 @@ The frontier is **`CreateWindow`**. See #128 below.
 > refused outright, and the real name re-enters us through the IFEO hook. So there is no
 > safe install story until WOW exists, and #128 moved onto the critical path.
 
-1. **[#128] WOW / Win16 — IN PROGRESS. ★★ `WOWEXEC.EXE` RUNS PAST `LoadCursor` AND IS
-   REGISTERING A WINDOW CLASS.**
+1. **[#128] WOW / Win16 — IN PROGRESS. ★★ `WOWEXEC.EXE` OPENS TWO WINDOWS AND IS
+   PUMPING MESSAGES.**
 
-   ### ▶ START HERE: [session 38](log/sessions/session-38.md#-resume-here)
+   ### ▶ START HERE: [session 39](log/sessions/session-39.md#-resume-here)
    That block is the live handoff — where it is, the leads already **ruled out**
    (do not re-try them), the next run, the instruments, and the standing hazards.
    Everything below it is background.
+
+   **Session 39 in one paragraph.** `CreateWindow` is `USER.41`, id `0x29`, 30 argument
+   bytes — and it was named without a single inference, because **a call site can name
+   itself**. `nedis.py` prints every imported call as `lcall 0, 0xffff`, which is what
+   is genuinely in the file: an unlinked NE stores a **chain** in the operand words and
+   `0:0xffff` is the *end* of one. So the disassembly of a program that is almost
+   entirely API calls names none of them, and the only method available was to read the
+   pushes and recognise the shape — inference, which this project has twice written up
+   wrongly. But each relocation record carries *(module, ordinal)* and the chain it
+   heads lists **every site that takes that import**, so one walk names every `lcall` in
+   the module (`tools/ne/neimports.py`, new). ⚠ **The relocation points at the OPERAND,
+   not the instruction.** The argument block then had to be read the other way round
+   from the parameter list — the base (`bp+16`) is the **lowest** address and holds the
+   **last** word pushed, so a DWORD's high word is at the *lower* offset — and the data
+   cross-validates that four times: `ds:0x00ae` decodes to `"WOWExecClass"`, `+18` reads
+   `0x02CF0000` (`WS_OVERLAPPEDWINDOW|WS_CLIPCHILDREN`, where the other reading is not a
+   style at all), `+10..+16` hold four copies of `CW_USEDEFAULT`, and `+4` is the same
+   word that went into `WNDCLASS.hInstance`. A wrong assignment produces none of them.
+   The window is **deliberately not a real `HWND`**: a host window would drag in a real
+   queue, a real `WM_CREATE` and the thunk back into the window procedure, all of them
+   half-built and lying by the time the call returned, so what exists is an object —
+   class, rectangle, style, text — and a synthetic handle that says it is synthetic. An
+   unregistered class still **fails**, because a host that made a window for any name
+   would hide a broken `RegisterClass` behind a working `CreateWindow`. Measured: two
+   classes, two windows, `[drivers]` read, and WOWEXEC in **its message loop**, spinning
+   because neither `WowWaitForMsgAndEvent` nor `PeekMessage` has anything to return.
+   One correction to session 38: `wowexec:0x0849` is `RegisterClass`'s error path, not
+   `CreateWindow`'s — the string it pushes says so. One defect filed and not chased:
+   krnl386 resolves bare module names against the **current directory**
+   (`"C:\Documents and Settings\Matthew\MMSYSTEM.DLL"`), not the Windows/system
+   directories.
 
    **Session 37 in one paragraph.** `GDI.EXE` was never rejected — we could not **open**
    it. `seg2:0x218a` has exactly two instructions that return `0x0B` over its whole
@@ -519,6 +558,8 @@ The frontier is **`CreateWindow`**. See #128 below.
    [`session-31.md`](log/sessions/session-31.md#-resume-here--the-operational-detail-a-fresh-context-needs).
 
    ### Tools for this work
+   `tools/ne/neimports.py` (**names every imported call site** from the relocation
+   chains — the only non-inferential way to say what an `lcall 0, 0xffff` calls),
    `tools/ne/nedis.py` (16-bit disassembly with the WOW32 stubs named inline;
    `--wowfunc <id>` gives the stub, its callers and the argument-building code),
    `tools/ne/wowmap.py` (names the surface from the export table),
