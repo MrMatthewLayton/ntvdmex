@@ -61,10 +61,16 @@ answering WOWEXEC's `RegisterClass` with `GetProfileIntA`. USER's table is now m
 (`"WOWExec"`, `WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN`), registers a *second* class,
 creates a second window, reads `SYSTEM.INI`'s `[drivers]`, and arrives at **its own
 message loop** — `WowWaitForMsgAndEvent` / `PeekMessage` / `TranslateMessage` /
-`DispatchMessage`, every one of them named out of the import table rather than
-inferred. The task-relaunch loop is gone. **The frontier is the message loop**, and
-behind it the first thing that is not an *answer*: `DispatchMessage` has to **call** a
-16-bit window procedure. See #128 below.
+`DispatchMessage`, every one named out of the import table rather than inferred.
+
+★★★ **And then it is told what to run.** `WowGetNextVDMCommand` is *"which 16-bit
+program do I run?"*; we were answering the harness sentinel, which WOWEXEC reads as a
+hard error and reports as *"Can't run 16-bit Windows program"*. Answered, **krnl386
+opens `C:\WINDOWS\SYSTEM32\SYSEDIT.EXE` and reads its `MZ` header** — a real Win16
+application being loaded, not a shell with nothing to do. Behind that, one more wall
+fell and it was ours: **our own INT-site patcher had corrupted krnl386's code**, turning
+a `jne` into a `les` and killing every launch at `0001:2053`. The frontier is now
+krnl386 id **`0x82`**, the last call before the load gives up. See #128 below.
 
 ---
 
@@ -106,8 +112,8 @@ behind it the first thing that is not an *answer*: `DispatchMessage` has to **ca
 > refused outright, and the real name re-enters us through the IFEO hook. So there is no
 > safe install story until WOW exists, and #128 moved onto the critical path.
 
-1. **[#128] WOW / Win16 — IN PROGRESS. ★★ `WOWEXEC.EXE` OPENS TWO WINDOWS AND IS
-   PUMPING MESSAGES.**
+1. **[#128] WOW / Win16 — IN PROGRESS. ★★ `WOWEXEC.EXE` OPENS TWO WINDOWS, AND krnl386
+   OPENS AND READS A REAL WIN16 APPLICATION (`SYSEDIT.EXE`).**
 
    ### ▶ START HERE: [session 39](log/sessions/session-39.md#-resume-here)
    That block is the live handoff — where it is, the leads already **ruled out**
@@ -144,6 +150,32 @@ behind it the first thing that is not an *answer*: `DispatchMessage` has to **ca
    krnl386 resolves bare module names against the **current directory**
    (`"C:\Documents and Settings\Matthew\MMSYSTEM.DLL"`), not the Windows/system
    directories.
+
+   ★★ **Then the frontier moved off the message loop entirely, because the run said so.**
+   WOWEXEC asks `WowGetNextVDMCommand` (`0x70`) exactly once — *"which 16-bit program do
+   I run?"* — and the very next call after our sentinel `0` was
+   `WowMsgBox("Can't run 16-bit Windows program", "Insufficient memory…")`. The message
+   pump is what it does **after giving up**, and the program it wanted was in
+   `target.txt` all along. ⚠ `0` is a HARD ERROR, not "nothing to do": `ret != 0` with
+   `cbCmdLine == 0` is the quiet answer, so the sentinel was making WOWEXEC report a
+   failure that had not happened. The command structure was read off WOWEXEC's own
+   frame, and `+0x04` is the module name **because the success path pushes it into
+   `KERNEL.LoadModule`** — named from the relocation chain. ⚠⚠ The command line is a
+   **Pascal tail**, and the guest's `lstrlen - 2` means the delivered string must be
+   `<tail text> CR LF`; an empty string makes the count byte `0xFE` and the program
+   reads 254 bytes of stack as its arguments. ★★★ Behind that, one more wall, and ours:
+   **the INT-site patcher had corrupted krnl386's code.** At `seg1:0x2051` the bytes are
+   `3a cd 75 50` (`cmp cl,ch` / `jne`); the spanning `cd 75` was patched to `c4 c4`, the
+   `jne` became `les dx,[bx+si+0xb]`, and every launch died at `0001:2053`. Found by
+   diffing memory against the file (**one byte**), ruling out relocations, and then
+   finding **the offset already printed in our own patch log** — a line read once and
+   dismissed, because it rendered *candidates* under the words "patched N INT sites"
+   (fixed). `x86len.h`'s narrow rule was right for its premises and **session 34 inverted
+   them**: a raw `INT nn` in PM is now serviced from the `#GP`, with no heuristic at all,
+   so a false reject costs one fault and a false accept still costs silent corruption.
+   ⇒ **when in doubt, REJECT.** With both fixed, krnl386 opens `SYSEDIT.EXE` and reads
+   `4d 5a`. The frontier is krnl386 id **`0x82`**, the last call before the load gives
+   up. ⚠ `x86len.h` is a shared path and **Doom was not re-measured**.
 
    **Session 37 in one paragraph.** `GDI.EXE` was never rejected — we could not **open**
    it. `seg2:0x218a` has exactly two instructions that return `0x0B` over its whole

@@ -1,4 +1,4 @@
-# Session 39 — WOWEXEC opens two windows and reaches its message loop
+# Session 39 — WOWEXEC opens two windows, and krnl386 opens a real Win16 application
 
 - **Branch:** `m9/completeness`
 - **Issue:** [#128](https://github.com/MrMatthewLayton/ntvdmex/issues/128)
@@ -235,16 +235,219 @@ artefact read twice. The baseline has not moved.
 
 ---
 
+## ★★★★ PART 2: THE MESSAGE LOOP WAS THE WRONG FRONTIER
+
+The plan above said "build a message queue". The **run** said something else, and it
+said it in one line. WOWEXEC asks `WowGetNextVDMCommand` (WOW32 `0x70`) exactly **once**,
+we answered the harness sentinel `0`, and the very next call in the log is:
+
+```
+FUNC=0x84 WowMsgBox
+  ★ arg[2] = "Can't run 16-bit Windows program"
+  ★ arg[4] = "Insufficient memory to run this application. Quit one or more
+              Windows applications and then try again."
+```
+
+**`WowGetNextVDMCommand` is "which 16-bit program do I run?"** — and the program it
+wanted is the one this VDM was launched for. `wowrun.bat` writes
+`C:\WINDOWS\SYSTEM32\SYSEDIT.EXE` into `target.txt`; the host had it in `progpath` the
+whole time and never offered it. The message-loop spin is simply **what WOWEXEC does
+after it has given up**.
+
+*A histogram of one run answered a question that a plan had got wrong.*
+
+### ★ AND `0` IS A HARD ERROR, NOT "NOTHING TO DO"
+
+The caller distinguishes them, and we were sending the wrong one:
+
+| answer | what WOWEXEC does |
+|---|---|
+| `ret == 0` | error box — `seg1:0x0bf8` |
+| `ret != 0`, `cbCmdLine == 0` | **quiet** cleanup — `seg1:0x0c1a / je 0x0c05` |
+
+So the sentinel was making WOWEXEC report a failure that had not happened. "No command"
+is `1` with a zero length, and it is silent.
+
+### The structure, off WOWEXEC's own frame (`seg1:0x0b20`)
+
+0x20 bytes at `ss:bp-0x34a`: three 0x10d-byte buffers, a `GlobalAlloc`'d environment,
+their lengths, a 0-based drive, and `nCmdShow`. Every field is either written by the
+caller before the call or read by it after — none is inferred. Full table in
+[`wow32.h`](../../../src/wow/wow32.h).
+
+★ **`+0x04` is the module name, and that is measured.** The success path reaches
+`seg1:0x01c0`, which pushes that far pointer and a `LOADPARMS` block into
+`KERNEL.LoadModule` — named from the relocation chain, not from the shape of the call.
+`wEnvSeg` comes from `+0x0a` and `nCmdShow` from `+0x1e`, which is what identifies the
+rest of the fields.
+
+⚠⚠ **The command line is a Pascal tail and the `-2` is the whole puzzle.**
+`seg1:0x0173` does `lstrlen(lpCmdLine)`, **subtracts 2**, stores that as the count byte
+of the DOS command tail, then `lstrcpy`s our buffer to the byte *after* it. So the
+delivered string must be exactly two bytes longer than the tail text it represents, and
+the only shape that works in every case is **`<tail text> CR LF`**. With no arguments
+we deliver `"\r\n"`: `lstrlen` 2, count byte 0, tail `<0><CR><LF>` — correct. Deliver an
+empty string instead and `0 - 2` makes the count byte **0xFE**, and the program reads
+254 bytes of somebody's stack as its arguments.
+
+⚠ **Deliver once.** The caller loops on this while `[0x18]` is set (`seg1:0x0791`), so a
+host that answered every time would relaunch the program forever.
+
+---
+
+## ★★★★ PART 3: AND THEN THE PATCHER CORRUPTED krnl386 — THE DOOM BUG, AGAIN
+
+With the launch answered, the run died differently:
+
+> `WOWEXEC caused a General Protection Fault in module KRNL386.EXE at 0001:2053.`
+
+The fatal address **moved** from `0001:229C`, which is progress, and the new one was
+ours. Found by the method that found Doom's, in three steps and no runs:
+
+1. **Diff the bytes there against the file on disk.** Memory `c4 50 0b c9 …`, file
+   `75 50 0b c9 …`. **Exactly one byte.**
+2. **Rule out a legitimate difference.** Walk krnl386's own relocation records —
+   including chains — over `0x2040..0x2060`: **none**. So it was a *write*.
+3. **Ask the log who wrote it.** `DPMI: code region 0x0001dd00..0x000295bf -> patched
+   0000000c INT sites … at +0x000013a3 +0x00002052 …` — **the offset was already in the
+   log**, in a line this session had read once and dismissed.
+
+krnl386 seg1 at `0x2051`:
+
+```
+2051  3a cd     cmp cl,ch
+2053  75 50     jne +0x50
+```
+
+The `cd 75` spanning them is not an instruction. We turned it into `c4 c4`, so the `jne`
+became `les dx,[bx+si+0x0b]` — the exact fault at the exact address.
+
+### ★★★ The rule was right for its premises. The premises changed in session 34.
+
+`x86len.h` rejected a candidate only when it could name the owning instruction **and
+that owner was a relative branch**, because refusing a *real* site left a raw `CD nn` in
+protected mode, and that was fatal too — both halves measured (Doom's
+`R_InitTextureMapping` death; DOS/4GW's version check dying 54,000 lines earlier).
+"Reject anything a confirmed instruction covers" had been tried and reverted for exactly
+that reason.
+
+**Session 34 killed the second half.** A `#GP` whose error code has the IDT bit set *is*
+that interrupt: the host takes the vector from the error code, confirms it against the
+two bytes at the faulting address, services it, and patches the site — with **no
+heuristic at all**, because the CPU has just executed those bytes *as* an interrupt.
+`main.c`'s own comment already said it is *"strictly better than a scan"*.
+
+⇒ The costs have **inverted**:
+
+| | cost, today |
+|---|---|
+| false accept | silent code corruption, fatal, hard to find |
+| false reject | one extra `#GP`, serviced, then patched correctly and for good |
+
+So the rule follows the premise: **when in doubt, reject.** An owner is enough. Its
+*class* never could have carried the separation anyway — krnl386's owner is a `cmp`
+(`3a cd`) and DOS/4GW's is a `xor` (`30 cd`), structurally identical byte-pair forms.
+
+The test keeps **both** fixtures: the DOS/4GW assertion is inverted on purpose with the
+reason attached, and krnl386's real bytes are added, so the regression is pinned from
+both sides.
+
+### Measured
+
+| | before | after |
+|---|---|---|
+| `0001:2053` GP | present, fatal | **gone** (0 occurrences, no error box) |
+| krnl386 seg1 rejects | 0 / 8 | 1 / 16 |
+| krnl386 seg1 patched | 2 / 12 | 1 / 4 |
+| baseline (scheduler off) | 265 / 42 / `9·222·27` / `229C` | **identical** |
+
+⚠ **NOT re-measured: Doom and the DOS extenders.** This is a shared path and the
+standing rule is that a fix measured on one guest is a fix for none. The safety argument
+is that a declined site is now serviced from the fault — but the `#GP(IDT)` arm guards
+on a non-zero selector base, so a **base-0 code region would not be covered**. Such
+regions are not scanned as a range either, so nothing is made worse; that is the gap to
+close if a guest is ever seen dying on a raw INT after this.
+
+---
+
+## ★★★ WHERE IT ACTUALLY GETS TO NOW
+
+With both fixes, in one run:
+
+```
+-> SERVICED, returned 0x00000001 -- LAUNCH [C:\WINDOWS\SYSTEM32\SYSEDIT.EXE]
+...
+INT21h AH=43 attributes "C:\WINDOWS\SYSTEM32\SYSEDIT.EXE" -> AX=0x20 CF=0
+INT21h AH=3d open       "C:\WINDOWS\SYSTEM32\SYSEDIT.EXE" al=0x80 -> AX=0x06
+INT21h AH=3F read 0x40 h=6 -> first= 4d 5a ae 01 03 00 00 00      ★ "MZ"
+```
+
+**krnl386 opens a real Win16 application and reads its header.** It then seeks to
+`0x400`, and the load does not complete: the last call before the verdict is krnl386
+id **`0x82`** (4 argument bytes, one far pointer, from `seg1:0x53c0`), unimplemented,
+after which `WowFailedExec` and the same *"Insufficient memory"* box. No third task is
+ever created.
+
+⚠ **A defect seen in passing, still not chased** (it is on this path now): krnl386
+resolves bare module names against the **current directory** —
+`"C:\Documents and Settings\Matthew\MMSYSTEM.DLL"` — instead of the Windows and system
+directories. `SYSEDIT.EXE` was given as a full path, so it is unaffected; the
+`[drivers]` modules are not.
+
+---
+
 ## ▶ RESUME HERE
 
-**Where it stands:** WOWEXEC is fully initialised. It has two window classes, two
-windows, and it is sitting in its message loop asking for messages that do not exist.
-Every call in that loop is named. Nothing draws.
+**Where it stands:** WOWEXEC is fully initialised, has two windows, and — since this
+session — is **told what to run**. krnl386 opens `SYSEDIT.EXE` and reads its `MZ`
+header. The load then fails and WOWEXEC puts up *"Insufficient memory to run this
+application"*. Nothing has drawn a pixel.
 
-**The next wall is `DispatchMessage` calling 16-bit code**, and it is a different kind
-of work from everything in sessions 34–39: so far the host has only ever *answered* the
-guest, and a window procedure means the host must *call* it. `g_wu_win[].wndproc` is a
-16:16 far pointer that has been sitting there since `CreateWindow`, unused.
+### 1. ★ krnl386 id `0x82` — the last call before the launch fails
+
+4 argument bytes, one far pointer (`0x3d7:0x0100`), called from `seg1:0x53c0`,
+immediately before `WowFailedExec` (`0x9d`) and the error box. Not in
+`wow32-call-surface.md`'s named set. Read its call site with
+`tools/ne/nedis.py guest/ne/krnl386.exe --wowfunc 0x82`, the way `0x7d` and `0xc5` were
+read — the argument-building code names these far more reliably than the ordinal tables.
+
+⚠ Do not assume `0x82` is the *only* thing missing. It is the last call before the
+verdict, which is where to start, not proof of sufficiency — session 36's lesson was
+that *a measurement that something happens is not a measurement of what it returns*.
+
+### 2. The message loop (was #1 last time, still real, now second)
+
+`wowexec seg1:0x0798` — `WowWaitForMsgAndEvent` / `PeekMessage` / `TranslateMessage` /
+`DispatchMessage`, all four named from the import table. Both the wait and the peek are
+unimplemented, so the pump spins and fills the log to its 268 MB cap. Behind it is the
+first work in this epic that is not *answering* the guest: **`DispatchMessage` means the
+host must CALL 16-bit code**, and `g_wu_win[].wndproc` has been holding a 16:16 far
+pointer since `CreateWindow`.
+
+### 3. Module search path
+
+Bare module names resolve against the current directory. Real, filed, and now on the
+launch path.
+
+### 4. ⚠ Re-measure Doom and a DOS extender
+
+The `x86len.h` change touches every DPMI guest and was validated only against krnl386
+and the off-VM batteries. See the caveat in Part 3.
+
+### How to drive it
+
+```bash
+ARCHIVE=build/wowruns ./scripts/bmwow.sh              # deploy, run, collect
+ARCHIVE=build/wowruns ./scripts/bmwow.sh --no-deploy  # re-run what is on the box
+```
+- The scheduler is **opt-in**: `touch /private/tmp/xpshare/wowsched.txt` to arm it.
+  **Without it you are measuring the baseline, not the frontier.**
+- ⚠ SMB writes to `/private/tmp/xpshare` need the sandbox disabled.
+- ⚠⚠ **Always re-run with the scheduler off and confirm 265 / 42 / `9 · 222 · 27` /
+  `0001:229C`.** Unmoved as of this session, across the patcher change.
+- ⚠ The spinning pump fills the log to its 268 MB cap in seconds. `grep` it; do not open
+  it. `grep -c 'CreateWindow "'` is 2 in a healthy run.
+- ★ `grep -m1 'LAUNCH \['` says whether the program was handed over, and which.
 
 ### How to drive it
 
