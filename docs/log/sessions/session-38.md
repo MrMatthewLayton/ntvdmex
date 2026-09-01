@@ -28,13 +28,19 @@ and WOWEXEC's own code says where it got to:
 0819  lcall LoadCursor      ; ★★ THE OLD WALL -- it RETURNS now
 081e  mov [bp-0xc],ax       ;    and the cursor handle is stored
 0823  lcall <stock object>  ;    WOW32 0x57, the last call of the run
-0828  mov [bp-0xa],ax
-082b  mov word [bp-4],0x82  ; ★ style
-0830  mov [bp-2],ds         ; ★ hInstance
-083b  lea ax,[bp-0x1a] / push ss / push ax   ; ★ &WNDCLASS
+0828  mov [bp-0xa],ax       ;    -> +0x10 hbrBackground
+082b  mov word [bp-4],0x82  ; ★ +0x16 lpszClassName OFFSET
+0830  mov [bp-2],ds         ; ★ +0x18 lpszClassName SEGMENT
+083b  lea ax,[bp-0x1a] / push ss / push ax   ; ★ &WNDCLASS (0x1a = 26 bytes)
 ```
 
 **WOWEXEC is filling in a `WNDCLASS`.** No Win16 fault, no fatal dialog, 263 WOW32 calls.
+⚠ I first read `mov word [bp-4],0x82 / mov [bp-2],ds` as *"style 0x82, hInstance=ds"*. It is
+the **class-name far pointer** — the offsets come from the 26-byte struct size the program
+itself declares with that `lea`, and every other store lands where they say too.
+
+★★ **And it now REGISTERS**: `-> SERVICED (USER), returned 0x0000c001 -- RegisterClass
+"WOWExecClass"`. The next call is USER id `0x29`, 30 argument bytes — `CreateWindow`.
 
 ⚠ **The scheduler is OPT-IN** (`wowsched.txt` on the share) and a run without it is
 byte-for-byte the committed behaviour — 258 calls, the same histogram, the same GP fault,

@@ -50,8 +50,8 @@ As of session 38 the `0001:229C` general-protection fault is
 **gone** — it was an *ordering* defect, not a value one, and behind it was the fact that
 **krnl386 has no scheduler and we are it**. With a ~70-line cooperative scheduler in the host
 (`src/wow/wowsched.h`, opt-in), krnl386's boot task returns from `LoadModule`, retires itself,
-and WOWEXEC restarts and runs on past `LoadCursor` into **filling in a `WNDCLASS`** and asking
-USER to register it. Two host defects fell behind that: a **read-only string literal** handed
+and WOWEXEC restarts and runs on past `LoadCursor` into **filling in a `WNDCLASS`** and **registering it: `RegisterClass "WOWExecClass"`**, the first time this project has read
+what a Win16 program is putting on screen. The next call is `CreateWindow`. Two host defects fell behind that: a **read-only string literal** handed
 to `GetProfileIntA` (a deterministic `0xc0000005` in `ntdll`), and — the serious one —
 **dispatching WOW32 calls on the id alone when the id space is PER MODULE**, which had us
 answering WOWEXEC's `RegisterClass` with `GetProfileIntA`. The frontier is now **USER's own
