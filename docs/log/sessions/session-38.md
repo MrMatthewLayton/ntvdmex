@@ -605,23 +605,73 @@ quarter-gigabyte file. Budget for it before setting a knob.
 
 ## ▶ RESUME HERE
 
-**The scheduler is built and the wall is down** (see the headline). What is left:
+**Where it stands:** the `0001:229C` wall is down, WOWEXEC runs, and it has **registered its
+window class**. Everything below is what is left, in the order the guest asks for it.
 
-1. ~~The host-side crash.~~ **FIXED** — a read-only `""` literal passed to `GetProfileIntA`.
-2. ~~Map USER's thunk table.~~ **DONE — [`wow-user-surface.md`](../../research/wow-user-surface.md)**:
-   457 stubs, 441 distinct ids, **262 named from USER's own export table**, and `0x39` is
-   confirmed `REGISTERCLASS`. What is left is to IMPLEMENT against it. The natural first
-   set is what WOWEXEC's window path actually calls, in order: `0x39 RegisterClass`,
-   then `CreateWindow` / `ShowWindow` / `GetMessage` / `DefWindowProc`, plus the ids the run
-   already hits (`0xad`, `0xc5`, `0x140`, `0x29` — still unnamed, read their call sites).
-   ⚠ A second dispatch table will be needed in the host: `wow32.h` is krnl386-seg1-only by
-   construction, and the gate now says so. USER's services belong in their own file keyed on
-   the stub segment, not bolted into the same switch.
-3. **Park the creator instead of truncating it.** At (C) the boot task had retired but was
-   still freeing selectors when the host took the machine away. Saving its context there and
-   giving it the rest of its turn is a small change and removes a known leak.
-4. **A second task.** Everything so far is one launch. `WOW32_WAITEVENT`/`Yield` still return
-   immediately, which is right while only one task can run and wrong the moment two can.
+### 1. ★ `CreateWindow` — USER id `0x29`, 30 argument bytes
+
+The very next call after `RegisterClass`, and the reason the run still loops: it returns 0,
+WOWEXEC takes its error path at `wowexec:0x0849` (`push 0x8f`), the task exits and krnl386
+relaunches it (~155× to the log cap). Confirmed as `CREATEWINDOW` two ways — ordinal 41
+tail-jumps to `seg1:0x038d` with `retf 0x1e`, and 30 bytes is exactly Win16's
+`(lpClassName, lpWindowName, dwStyle, x, y, w, h, hWndParent, hMenu, hInstance, lpParam)`.
+
+⚠ **This one is not a table entry like `RegisterClass` was.** A window implies a real window
+and a message loop behind it. Decide the shape before writing code: WOWEXEC's own window is
+the WOW shell's and is normally hidden, so the cheapest honest first cut may be a host-side
+window *object* (an hWnd, its class, its rect) with no pixels at all — enough for
+`ShowWindow`/`UpdateWindow`/`GetMessage` to be answerable — rather than a real HWND.
+The class it needs is already stored: `g_wu_class[]` in `src/wow/wowuser.h` keeps the
+wndproc, styles and extra-byte counts from `RegisterClass`.
+
+### 2. The other ids the window path hits
+
+`0xad` (20 args), `0xc5` = `GETTABBEDTEXTEXTENT`, `0x140` (14 args), `0x57`, `0x13a` =
+`SIGNALPROC`, `0x217` = `NOTIFYWOW`, `0x73` = `REPLYMESSAGE`. Names come from
+[`wow-user-surface.md`](../../research/wow-user-surface.md) (385 of 441 named); the unnamed
+ones need `tools/ne/nedis.py --wowfunc` **against `guest/ne/user.exe`**, not krnl386.
+
+### 3. Park the creator instead of truncating it
+
+At the scheduler's moment (C) the boot task had retired but was still freeing selectors when
+the host took the machine away, and those leak. Saving its context there and giving it the
+rest of its turn is a small change against a known defect.
+
+### 4. A second task
+
+Everything so far is one launch. `WaitEvent`/`Yield` still return immediately — right while
+only one task can run, wrong the moment two can.
+
+### How to drive it
+
+```bash
+ARCHIVE=build/wowruns ./scripts/bmwow.sh              # deploy, run, collect
+ARCHIVE=build/wowruns ./scripts/bmwow.sh --no-deploy  # re-run what is on the box
+```
+Knobs live on the share and none is deployed by the script except `wow32ret.txt`:
+`wowsched.txt` (presence = the scheduler is ON), `wowmode.txt` (⚠ the most dangerous file in
+the tree), `pmbp.txt`, `pmchg.txt`.
+⚠ SMB writes to `/private/tmp/xpshare` need the sandbox disabled.
+⚠⚠ **Always re-run with the scheduler OFF and confirm the baseline: 258 calls, 42 serviced,
+the `0001:229C` fault, `9 / 222 / 27`.** That is the committed behaviour and it must not move.
+A gate keyed on the wrong thing once collapsed it from 258 calls to 3, and this check is the
+only reason it was caught.
+⚠ A guest fault loop still fills the log to its 268 MB cap. Budget for it.
+
+### Ruled out — do not re-try (all by measurement)
+
+- **Writing the bring-up record's `hInstance`.** One writer, in `InitTask`, which that record
+  never enters. `0x001e` was pattern-matching on a stack selector that is ours.
+- **"WOWEXEC's TDB is never linked."** It is linked, at the head, and measured to be.
+- **Writing `[0x228]` to yield.** `seg1:0x2c05`'s branch is a re-entrancy guard; its incoming
+  task is the caller's own.
+- **Letting the new task run first and switching at its `WaitEvent`.** Built, run, faulted:
+  the launch frame's memory *is* that task's stack and is gone by then.
+- **Looking for a 16-bit scheduler inside krnl386.** There is not one — but there IS a 16-bit
+  task *switcher* (`seg1:0x98ab`), driven by the epilogue mode.
+- **`wow_module_of_sel()` for USER.** `g_wow_mod[]` is the bind-stage view; krnl386 allocates
+  the runtime selectors itself. The dispatcher never fired once.
+- `wow32ret.txt` as a load-bearing file. It ships empty and must stay that way.
 
 ### ★★★ USER'S TABLE, MAPPED AND NAMED
 
@@ -668,32 +718,6 @@ krnl386 calling exactly that id at task startup through `lcall [0x414]`. `0x217`
 `NOTIFYWOW`, `0x73` `REPLYMESSAGE`, `0x13a` `SIGNALPROC` — all on-path for what WOWEXEC is
 doing. Two independent methods, one answer.
 
-### Ruled out — do not re-try (all by measurement)
-
-- **Writing the bring-up record's `hInstance`.** One writer, in `InitTask`, which that record
-  never enters. `0x001e` was pattern-matching on a stack selector that is ours.
-- **"WOWEXEC's TDB is never linked."** It is linked, at the head, and measured to be.
-- **Writing `[0x228]` to yield.** `seg1:0x2c05`'s branch is a re-entrancy guard; its incoming
-  task is the caller's own.
-- **Letting the new task run first and switching at its `WaitEvent`.** Built, run, faulted:
-  the launch frame's memory *is* that task's stack and is gone by then.
-- **Looking for a 16-bit scheduler inside krnl386.** There is not one — but there IS a 16-bit
-  task *switcher* (`seg1:0x98ab`), driven by the epilogue mode.
-- `wow32ret.txt` as a load-bearing file. It ships empty and must stay that way.
-
-### How to drive it
-
-```bash
-ARCHIVE=build/wowruns ./scripts/bmwow.sh              # deploy, run, collect
-ARCHIVE=build/wowruns ./scripts/bmwow.sh --no-deploy  # re-run what is on the box
-```
-Knobs on the share, none of them deployed by the script except `wow32ret.txt`:
-`wowsched.txt` (presence = scheduler ON), `wowmode.txt` (⚠ the most dangerous file in the
-tree), `pmbp.txt`, `pmchg.txt`.
-⚠ SMB writes to `/private/tmp/xpshare` need the sandbox disabled.
-⚠ **Always re-run with the scheduler OFF** and confirm 258 calls / the `0001:229C` fault /
-`9-222-27`: that is the committed baseline and it must not move.
-
 ### The instrument log, for the record
 
 1. ~~Instrument first.~~ **DONE — every WOW32 call line now carries `task=0x....`**, read
@@ -730,21 +754,6 @@ anything.
 `mov word ptr [bp-0x18],0`), so a switching call's return value is not the host's to choose —
 do not try to answer *and* switch on the same call and expect both to land.
 
-### Ruled out this session — do not re-try
-
-- **Writing the bring-up record's `hInstance`.** One writer, in `InitTask`, which that
-  record never enters. `0x001e` was pattern-matching on a stack selector that is ours.
-- **"WOWEXEC's TDB is never linked."** It is linked, at the head, and measured to be.
-- **Looking for a 16-bit scheduler inside krnl386.** There is not one — but there IS a
-  16-bit task *switcher* (`seg1:0x98ab`), and it is driven by `[0x228]`.
-- ~~"The creating task resumes at `seg1:0x9827`."~~ **This "refutation" was wrong** — see the
-  correction above. It resumes there, from `seg1:0x2c61`.
-- `wow32ret.txt` as a load-bearing file. It ships empty and must stay that way.
-
-### How to drive it
-
-```bash
-PMBP=1 ARCHIVE=build/wowruns ./scripts/bmwow.sh              # deploy, run, collect
-PMBP=1 ARCHIVE=build/wowruns ./scripts/bmwow.sh --no-deploy  # re-run what is on the box
-```
-⚠ SMB writes to `/private/tmp/xpshare` need the sandbox disabled.
+*(The live handoff — what is left, what is ruled out, and how to drive it — is under
+[▶ RESUME HERE](#-resume-here) above. It was written last and supersedes anything
+earlier in this file that reads like a plan.)*
