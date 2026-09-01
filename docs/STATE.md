@@ -54,8 +54,9 @@ and WOWEXEC restarts and runs on past `LoadCursor` into **filling in a `WNDCLASS
 what a Win16 program is putting on screen. The next call is `CreateWindow`. Two host defects fell behind that: a **read-only string literal** handed
 to `GetProfileIntA` (a deterministic `0xc0000005` in `ntdll`), and — the serious one —
 **dispatching WOW32 calls on the id alone when the id space is PER MODULE**, which had us
-answering WOWEXEC's `RegisterClass` with `GetProfileIntA`. The frontier is now **USER's own
-thunk table**. See #128 below.
+answering WOWEXEC's `RegisterClass` with `GetProfileIntA`. USER's table is now mapped
+(`docs/research/wow-user-surface.md`, 441 ids, 385 named) and has its own dispatcher.
+The frontier is **`CreateWindow`**. See #128 below.
 
 ---
 
@@ -78,7 +79,7 @@ thunk table**. See #128 below.
 
 | | Why it matters |
 |---|---|
-| **Win16 / WOW — a program runs, but nothing draws** | `ntvdm.exe` is *also* the host for every 16-bit **Windows** program. The NE loader loads, relocates and binds the **whole** XP WOW module set on real hardware, **krnl386 executes** — protected mode, its own segments, its interrupt handlers, its own DPMI exceptions, and all eight 16-bit system modules — and it then finds, loads and **runs `WOWEXEC.EXE`** — which, since session 38's host-side task scheduler, gets past `LoadCursor` and is **filling in a `WNDCLASS`** when the run ends host-side in `ntdll`. So a Win16 program executes and is setting up a window; none has drawn a pixel, and there is no 16:16↔flat thunking. Since interception is an IFEO key on `ntvdm.exe`, and Win16 launches go through `ntvdm.exe` too, **installing NTVDMEX permanently would break every 16-bit Windows app today**. → [#128](https://github.com/MrMatthewLayton/ntvdmex/issues/128) |
+| **Win16 / WOW — a program runs, but nothing draws** | `ntvdm.exe` is *also* the host for every 16-bit **Windows** program. The NE loader loads, relocates and binds the **whole** XP WOW module set on real hardware, **krnl386 executes** — protected mode, its own segments, its interrupt handlers, its own DPMI exceptions, and all eight 16-bit system modules — and it then finds, loads and **runs `WOWEXEC.EXE`** — which, since session 38's host-side task scheduler, gets past `LoadCursor`, fills in a `WNDCLASS` and **registers it** (`RegisterClass "WOWExecClass"`), then asks for `CreateWindow`, which is not implemented. So a Win16 program executes and is setting up a window; none has drawn a pixel, and there is no 16:16↔flat thunking. Since interception is an IFEO key on `ntvdm.exe`, and Win16 launches go through `ntvdm.exe` too, **installing NTVDMEX permanently would break every 16-bit Windows app today**. → [#128](https://github.com/MrMatthewLayton/ntvdmex/issues/128) |
 | **Console/stdio integration** | DOS output is buffered and flushed to `CONOUT$` at exit, so shell redirection and piping are bypassed and every DOS program pops a window. Blocks non-interactive use. |
 | **In-guest redirection** | `echo x > file` writes to the screen and leaves the file 0 bytes. Three fixes attempted, all at the wrong end. |
 | **No INT 13h / INT 25h / 26h** | No direct disk access. |
