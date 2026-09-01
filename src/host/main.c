@@ -8116,11 +8116,12 @@ static void dpmi_patch_code_region(DWORD base, DWORD limit, int d32)
                   if (mem[i] == 0xCD) {
                       DWORD lin = a + i;
                       if (pmap_get(lin)) continue;   /* already patched (aliased region) */
-                      /* Record WHERE, not just how many. "patched 2 INT sites" in a 55 KB
-                         code segment is either a correct count or a broken scan, and the
-                         count alone cannot tell you which -- the offsets can, because they
-                         are checkable against a disassembly of the same bytes. */
-                      if (npo < 12) po[npo++] = lin - base;
+                      /* Record WHERE, not just how many -- see the push further down,
+                         which happens AFTER the vote so the list and the count describe
+                         the same set. "patched 2 INT sites" in a 55 KB code segment is
+                         either a correct count or a broken scan, and the count alone
+                         cannot tell you which; the offsets can, because they are
+                         checkable against a disassembly of the same bytes. */
                       /* ── ONLY IF IT IS AN INSTRUCTION. ───────────────────────────────
                            This scan used to take the byte pair as proof, and in Doom's
                            code object that is wrong in three places -- one of them
@@ -8151,6 +8152,15 @@ static void dpmi_patch_code_region(DWORD base, DWORD limit, int d32)
                           }
                           continue;
                       }
+                      /* ⚠ RECORDED HERE, AFTER THE VOTE, NOT AT CANDIDATE TIME.
+                           This push used to sit next to the `mem[i] == 0xCD` test, so
+                           the line below read "patched 4 INT sites, rejected 16 ... at
+                           +0x13a3 +0x2052 ..." with TWELVE offsets -- candidates
+                           rendered as if they were the patched ones. Session 39 spent
+                           a step ruling out the patcher on exactly that line while the
+                           offset it needed was sitting in it. The count and the list
+                           have to be claims about the same set. */
+                      if (npo < 12) po[npo++] = lin - base;
                       pmap_set(lin, mem[i+1]);
                       mem[i] = 0xC4; mem[i+1] = 0xC4;
                       ++n;
@@ -9619,7 +9629,7 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                Captured while the frame is still in scope. A separate flag, because
                every 32-bit value is a possible hole value (0xFFFF is DECLINE) and a
                sentinel that collides with real data is how an instrument starts lying. */
-            DWORD wow_stale = 0; int wow_stale_ok = 0;
+            DWORD wow_stale = 0; int wow_stale_ok = 0; int cmd_taken_before = 0;
             DWORD wow_ans = (DWORD)WOW32_UNIMPL_RET;
             p = zput(p, "WOWBOP 0x"); p = zhexb(p, bcode);
             /* Only 0x53 carries a sub-function byte. Printing bb[3] for the others
@@ -10138,6 +10148,10 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                         return 1;
                     }
                 }
+                /* Snapshot before the dispatch: the handler sets this when it
+                   hands the program over, and "delivered now" and "delivered
+                   earlier" are different events that must not read the same. */
+                cmd_taken_before = g_wow_cmd_taken;
                 if (wow32_call(&f, &g_wow_dosdata)) {
                     /* ⚠ A DECLINE IS NOT A SERVICE and the log must not blur
                          them. "krnl386 got further because we answered 9 calls"
@@ -10154,6 +10168,24 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                     if (f.id == WOW32_REGISTERDOSDATA) {
                         p = zput(p, " (DOS data area at 0x");
                         p = zhex(p, g_wow_dosdata.farptr); p = zput(p, ")");
+                    }
+                    /* ★ SAY WHAT WAS HANDED OVER, not just that something was.
+                         This one call decides which program the VDM runs, and a
+                         line reading "returned 0x1" would leave the single most
+                         important fact of the run unrecorded. */
+                    if (f.id == WOW32_WOWGETNEXTVDMCOMMAND) {
+                        if (g_wow_cmd_prog[0]) {
+                            p = zput(p, " -- LAUNCH ["); p = zput(p, g_wow_cmd_prog);
+                            if (g_wow_cmd_args[0]) {
+                                p = zput(p, "] args["); p = zput(p, g_wow_cmd_args);
+                            }
+                            p = zput(p, "]");
+                            if (cmd_taken_before) p = zput(p, " -- ALREADY DELIVERED,"
+                                                              " answered \"nothing more\"");
+                        } else {
+                            p = zput(p, " -- no command (this VDM was not told what"
+                                        " Win16 program to run)");
+                        }
                     }
                     p = zput(p, "\r\n");
                     log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
@@ -13099,6 +13131,13 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                 if (hf != INVALID_HANDLE_VALUE) { ReadFile(hf, filebuf, sizeof(filebuf), &nread, NULL); CloseHandle(hf); }
                 zput(progpath, tpath);                  /* env argv[0] */
                 if (a) zput(args, a);                   /* PSP command tail */
+                /* ★ GH #128: on a WOW launch this same path is the WIN16 program,
+                     and WOW32 0x70 is how WOWEXEC asks for it. The DOS image
+                     loaded just below is discarded there (see wow_place_v86), but
+                     the NAME is the one thing the WOW path still needs -- Windows
+                     does not put it on the VDM's command line. */
+                zput(g_wow_cmd_prog, tpath);
+                if (a) zput(g_wow_cmd_args, a);
                 p = zput(p, "STAGE2: target.txt loaded 0x"); p = zhex(p, nread);
                 p = zput(p, " from "); p = zput(p, tpath);
                 if (a && a[0]) { p = zput(p, " args=["); p = zput(p, a); p = zput(p, "]"); }

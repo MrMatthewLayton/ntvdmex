@@ -222,6 +222,44 @@ static int wow32_argstr(const wow32_frame_t *f, int off, char *out, int cap)
     return 1;
 }
 
+/* ---- writing back through a far pointer the guest gave us --------------- */
+
+/* Resolve a 16:16 far pointer stored INSIDE a guest structure (rather than in
+   the argument block) to a host address. Same null-selector rule as
+   wow32_argptr: 0 rather than the LDT base, so a missing check cannot scribble
+   at the bottom of the address space. */
+static volatile BYTE *wow32_farat(const wow32_frame_t *f, volatile BYTE *base, int off)
+{
+    DWORD fp  = (DWORD)wow32_peekw(base + off)
+              | ((DWORD)wow32_peekw(base + off + 2) << 16);
+    WORD  sel = (WORD)(fp >> 16);
+    DWORD lin;
+    if (!sel || !f->sel2lin) return NULL;
+    lin = f->sel2lin(sel, f->ctx);
+    if (!lin) return NULL;
+    return (volatile BYTE *)(ULONG_PTR)(lin + (fp & 0xFFFF));
+}
+
+/* Copy a host string into a guest buffer described by a POINTER/CAPACITY PAIR,
+   and write the length actually stored back over the capacity.
+   ⚠ THE CAPACITY IS THE GUEST'S CLAIM ABOUT ITS OWN STACK, and it is the only
+     bound there is -- these buffers sit inside the caller's frame, a few bytes
+     below its return address, so overrunning one does not corrupt data, it
+     corrupts control flow. Never write more than the guest declared.
+   Returns the length written, or -1 if there was nowhere to write. */
+static int wow32_farput(const wow32_frame_t *f, volatile BYTE *base,
+                        int lpoff, int cboff, const char *s)
+{
+    volatile BYTE *d = wow32_farat(f, base, lpoff);
+    WORD cap = wow32_peekw(base + cboff);
+    int k = 0;
+    if (!d || !cap) return -1;
+    while (s[k] && k < (int)cap - 1) { d[k] = (BYTE)s[k]; ++k; }
+    d[k] = 0;
+    wow32_pokew(base + cboff, (WORD)k);
+    return k;
+}
+
 /* ★ The return value goes in the stack hole, NOT in AX/DX -- see the header note. */
 static void wow32_setret(wow32_frame_t *f, DWORD v)
 {
@@ -370,6 +408,34 @@ typedef struct {
     int   seen;
     DWORD farptr;                     /* the 16:16 the guest passed */
 } wow32_dosdata_t;
+
+/* ── THE WIN16 PROGRAM THIS VDM EXISTS TO RUN ─────────────────────────────────
+     Filled in by the host once it knows what it was launched for, and handed to
+     the guest by WOW32 0x70 (WowGetNextVDMCommand) -- see that case for the
+     structure and for why this is the call that launches an application.
+   ⚠ A WOW LAUNCH DOES NOT CARRY THE PROGRAM ON ITS COMMAND LINE. Windows starts
+     the VDM as `ntvdm -f -i1 -w -a <krnl386>` and the application is delivered
+     out of band; real ntvdm gets it from the Win32 GetNextVDMCommand, which
+     returns FALSE/0x57 for us (measured -- see docs/research/). On the rig it
+     comes from target.txt, which is the harness's channel for the same fact.
+   ★ EMPTY IS A LEGITIMATE STATE and it has a correct answer: "no command", which
+     is NOT the same as an error. See the 0x70 case. */
+static char g_wow_cmd_prog[512] = { 0 };   /* full path of the Win16 program   */
+static char g_wow_cmd_args[192] = { 0 };   /* its arguments, without a leading space */
+static int  g_wow_cmd_taken     = 0;       /* delivered already -- deliver once */
+
+/* Field offsets of the command structure -- derived in the 0x70 case, which is
+   the only place they are used and the only place the derivation makes sense. */
+#define WOWCMD_LPCMDLINE   0x00
+#define WOWCMD_LPAPPNAME   0x04
+#define WOWCMD_LPENV       0x08
+#define WOWCMD_CBCMDLINE   0x10
+#define WOWCMD_CBAPPNAME   0x12
+#define WOWCMD_CBENV       0x14
+#define WOWCMD_CURDRIVE    0x16
+#define WOWCMD_LPBUFC      0x18
+#define WOWCMD_CBBUFC      0x1c
+#define WOWCMD_NCMDSHOW    0x1e
 
 /* ── ★ DECLINING IS A REAL ANSWER, AND krnl386 ALREADY HANDLES IT ───────────
      krnl386 hooks INT 21h in protected mode and offers some functions to its
@@ -711,6 +777,135 @@ static int wow32_call(wow32_frame_t *f, wow32_dosdata_t *dd)
     case WOW32_ACCEPTTASKSELECTOR:
         wow32_setret(f, (DWORD)wow32_argw(f, 0));
         return 1;
+
+    /* ── ★★★★ 0x70 WowGetNextVDMCommand -- "WHICH 16-BIT PROGRAM DO I RUN?" ────
+         This is the call that launches a Win16 application, and answering it is
+         the difference between a WOW bootstrap and a running program.
+
+       ★ HOW IT WAS FOUND. Not by working down a list: the run said so. WOWEXEC
+         asks this once, we answered the harness sentinel `0`, and the VERY NEXT
+         call was `WowMsgBox("Can't run 16-bit Windows program", "Insufficient
+         memory to run this application...")`. The program it wanted is the one
+         the host was launched for -- on the rig, `SYSEDIT.EXE`.
+
+       ★ AND `0` IS A HARD ERROR, NOT "NOTHING TO DO". The caller distinguishes:
+             ret == 0                  -> error box, `wowexec seg1:0x0bf8`
+             ret != 0, cbCmdLine == 0  -> quiet cleanup, `seg1:0x0c1a / je 0x0c05`
+         So the sentinel was making WOWEXEC report a failure that had not
+         happened. "No command" is `1` with a zero length, and it is silent.
+
+       ── THE STRUCTURE, READ OFF WOWEXEC'S OWN FRAME (seg1:0x0b20 onward) ──────
+         The one argument is a 16:16 pointer to 0x20 bytes at `ss:bp-0x34a`, and
+         every field below is either written by the caller before the call or read
+         by it after -- there is no field here that was not observed being used.
+
+           +0x00 DWORD lpCmdLine   -> a 0x10d-byte buffer at bp-0x10e
+           +0x04 DWORD lpAppName   -> a 0x10d-byte buffer at bp-0x21c
+           +0x08 DWORD lpEnv       -> GlobalAlloc(2, cbEnv*2), then GlobalLock
+           +0x0c WORD  (caller zeroes; never read back)
+           +0x0e WORD  (caller zeroes; never read back)
+           +0x10 WORD  cbCmdLine   in 0x10d -- ★ OUT MUST BE NON-ZERO OR NO LAUNCH
+           +0x12 WORD  cbAppName   in 0x10d
+           +0x14 WORD  cbEnv       in 0x1000 -- in/out, see the retry note below
+           +0x16 WORD  CurDrive    0-based: the caller does `add al,0x41`
+           +0x18 DWORD lpBufC      -> a third 0x10d-byte buffer at bp-0x32a
+           +0x1c WORD  cbBufC      in 0x10d
+           +0x1e WORD  nCmdShow    -> becomes lpCmdShow[1] of the LOADPARMS
+
+       ★ +0x04 IS THE MODULE NAME, AND THAT IS MEASURED, NOT ASSUMED. The success
+         path reaches `seg1:0x01c0`:
+             push [bx+6] / push [bx+4]      ; the far pointer at +0x04
+             lea ax,[bp-0x10] / push ss / push ax
+             lcall  KERNEL.LoadModule       ; named from the relocation chain
+         -- Win16 `LoadModule(lpModuleName, lpParameterBlock)`, 8 argument bytes.
+         The parameter block it builds beside it is the standard LOADPARMS, and it
+         is what identifies the other fields: `wEnvSeg` comes from +0x0a (the
+         SEGMENT half of lpEnv), and `nCmdShow` from +0x1e.
+
+       ⚠⚠ THE COMMAND LINE IS A PASCAL TAIL, AND THE `-2` IS THE WHOLE PUZZLE.
+         `seg1:0x0173` does `lstrlen(lpCmdLine)`, then `sub al,2`, and stores THAT
+         as the count byte of the DOS command tail it hands to LoadModule -- then
+         `lstrcpy`s our buffer to the byte AFTER it. So the delivered string must
+         be exactly two bytes longer than the tail text it represents, and the
+         only shape that makes every case come out right is
+                            <tail text> CR LF
+         Check it: with no arguments the text is empty, we deliver "\r\n",
+         `lstrlen` is 2, the count byte is 0, and the tail reads <0><CR><LF> --
+         a correct empty tail. With text " FOO" we deliver " FOO\r\n", the count
+         is 4, and the tail is <4>' ''F''O''O'<CR><LF>. Both the count and the
+         terminator land where DOS expects them.
+       ⚠ Deliver an EMPTY string and `0 - 2` makes the count byte 0xFE, and the
+         program reads 254 bytes of somebody's stack as its arguments. The two
+         trailing bytes are load-bearing.
+
+       ⚠ cbEnv (+0x14) IS DELIBERATELY NOT WRITTEN. It is an in/out "the buffer
+         was too small" field -- the caller saves it, and if the callee returns a
+         LARGER value it frees the block, reallocates and asks again
+         (`seg1:0x0be4`, `jae`). Leaving it alone is the only value that cannot
+         start that loop. The environment itself is built by the caller from its
+         own PSP (`seg1:0x02da`, GetCurrentTask -> TDB -> PSP+0x2c); we write a
+         valid empty block so the buffer is never uninitialised, and no more.
+
+       ★ DELIVER ONCE. The caller loops on this while `[0x18]` is set
+         (`seg1:0x0791`), so a host that answered every time would relaunch the
+         program forever. `[0x18]` is only set when WowRegisterShellWindowHandle
+         succeeds, which it does not yet -- so this guard is not load-bearing
+         today, and it is here because the day it becomes load-bearing the symptom
+         is a fork bomb inside the VDM rather than a wrong answer in a log. */
+    case WOW32_WOWGETNEXTVDMCOMMAND: {
+        volatile BYTE *ci = wow32_argptr(f, 0);
+        const char *prog = g_wow_cmd_prog;
+        char tail[192];
+        int n;
+
+        /* An unreachable structure is the one case that really is a hard error:
+           there is nowhere to put the answer, so `0` is the truth. */
+        if (!ci) { wow32_setret(f, 0); return 1; }
+
+        if (!prog[0] || g_wow_cmd_taken) {         /* nothing (more) to run */
+            wow32_pokew(ci + WOWCMD_CBCMDLINE, 0);
+            wow32_setret(f, 1);
+            return 1;
+        }
+
+        /* The tail: <text> CR LF, per the note above. DOS tails conventionally
+           begin with the separating space, so the text is " " + args. */
+        n = 0;
+        if (g_wow_cmd_args[0]) {
+            int j;
+            tail[n++] = ' ';
+            for (j = 0; g_wow_cmd_args[j] && n < (int)sizeof tail - 3; ++j)
+                tail[n++] = g_wow_cmd_args[j];
+        }
+        tail[n++] = '\r'; tail[n++] = '\n'; tail[n] = 0;
+
+        n = wow32_farput(f, ci, WOWCMD_LPAPPNAME, WOWCMD_CBAPPNAME, prog);
+        if (n <= 0) { wow32_setret(f, 0); return 1; }   /* no name, no launch */
+        if (wow32_farput(f, ci, WOWCMD_LPCMDLINE, WOWCMD_CBCMDLINE, tail) <= 0) {
+            wow32_setret(f, 0); return 1;
+        }
+        /* A valid empty environment, so the caller never walks uninitialised
+           stack looking for its double NUL. */
+        { volatile BYTE *e = wow32_farat(f, ci, WOWCMD_LPENV);
+          if (e) { e[0] = 0; e[1] = 0; } }
+        /* The third buffer is uninitialised stack in the caller's frame and it is
+           passed on unconditionally -- terminate it rather than let it travel. */
+        { volatile BYTE *c = wow32_farat(f, ci, WOWCMD_LPBUFC);
+          if (c) c[0] = 0; }
+        wow32_pokew(ci + WOWCMD_CBBUFC, 0);
+
+        /* Drive letter of the program's own path, 0-based -- the caller turns it
+           back into a letter with `add al,0x41`. Default to C: when the path is
+           not drive-qualified, because there is no "unknown" in a byte. */
+        { char d = (prog[0] && prog[1] == ':') ? prog[0] : 'C';
+          if (d >= 'a' && d <= 'z') d = (char)(d - 32);
+          wow32_pokew(ci + WOWCMD_CURDRIVE, (WORD)(d - 'A')); }
+        wow32_pokew(ci + WOWCMD_NCMDSHOW, 1);          /* SW_SHOWNORMAL */
+
+        g_wow_cmd_taken = 1;
+        wow32_setret(f, 1);
+        return 1;
+    }
 
     /* ── 0x78: krnl386 hands us its view of the DOS data area ─────────────
          The argument is a 16:16 pointer to the structure whose address it read
