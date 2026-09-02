@@ -175,7 +175,21 @@ krnl386 id **`0x82`**, the last call before the load gives up. See #128 below.
    so a false reject costs one fault and a false accept still costs silent corruption.
    ⇒ **when in doubt, REJECT.** With both fixed, krnl386 opens `SYSEDIT.EXE` and reads
    `4d 5a`. The frontier is krnl386 id **`0x82`**, the last call before the load gives
-   up. ⚠ `x86len.h` is a shared path and **Doom was not re-measured**.
+   up. ★★★ **And Doom was re-measured — the change does not regress it, it FIXES it.**
+   A/B on that one file, everything else identical: pre-fix Doom reaches **no** startup
+   stage and loops in a `#GP` to a 268 MB log; post-fix it completes **all eleven**
+   (`V_Init` → `ST_Init`) in 3.5 MB, reproduced twice. The prediction landed on the exact
+   address it was made about — `#GP(IDT) is a RAW INT 0x21 at 0x0097:0x2c65`, DOS/4GW's
+   version check, the one real site the old rule was shaped around keeping, now rejected
+   by the scanner and serviced from the fault. ⚠ `dpmitest.com`/`pm32flat.com` pass but
+   are **not** evidence: they never declare a code region, so they never take the changed
+   decision — reporting them as "DPMI green" would have been another instrument that
+   lies. ⚠ Still open: the `#GP(IDT)` arm does not cover a **base-0** code selector.
+   ⚠ Also refuted this session: **`0x82` was NOT the blocker** — it is `INT 21h AH=3Bh`
+   (`chdir`) and its call site already returns success (`clc`) on our sentinel. The real
+   abort is krnl386 **seg2** id `0xd1` (`seg2:0x2c84`), read right after SYSEDIT's first
+   code segment loads — and seg2 is a **third id space** (121 stubs) that this host does
+   not dispatch at all.
 
    **Session 37 in one paragraph.** `GDI.EXE` was never rejected — we could not **open**
    it. `seg2:0x218a` has exactly two instructions that return `0x0B` over its whole

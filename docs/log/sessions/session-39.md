@@ -361,12 +361,62 @@ both sides.
 | krnl386 seg1 patched | 2 / 12 | 1 / 4 |
 | baseline (scheduler off) | 265 / 42 / `9·222·27` / `229C` | **identical** |
 
-⚠ **NOT re-measured: Doom and the DOS extenders.** This is a shared path and the
-standing rule is that a fix measured on one guest is a fix for none. The safety argument
-is that a declined site is now serviced from the fault — but the `#GP(IDT)` arm guards
-on a non-zero selector base, so a **base-0 code region would not be covered**. Such
-regions are not scanned as a range either, so nothing is made worse; that is the gap to
-close if a guest is ever seen dying on a raw INT after this.
+### ★★★★ AND THEN DOOM WAS RE-MEASURED — IT DOES NOT REGRESS IT, IT **FIXES** IT
+
+The section above originally ended "⚠ NOT re-measured: Doom and the DOS extenders", on
+the standing rule that *a fix measured on one guest is a fix for none*. It has now been
+measured, and the result inverts the caveat.
+
+**First, two runs that turned out to prove nothing.** `dpmitest.com` passes every one of
+its five own checkpoints (`0300 simulate-real-mode-int OK!`, `0301 real-mode far-call
+OK (sentinel BEEF)!`, `0303 real-mode callback OK`, the nested `INT 31h`), and
+`pm32flat.com` completes. Both are worth having — the DPMI host still works — but
+**neither is a regression check for this change**, because neither logs a single
+`code region … -> patched` line: they never declare a code region, so
+`dpmi_patch_code_region` never runs and the changed decision is never taken. Reporting
+those two as "DPMI: green" would have been precisely the instrument-that-lies shape this
+project keeps falling into.
+
+**Doom does exercise it** — 19 code regions, 196 rejected byte pairs — so Doom is the
+measurement. A/B on the single file, everything else identical, `result_doom.log`
+deleted before each run and the deployed binary checksummed:
+
+| | `x86len.h` at `1c0d215` | `x86len.h` at HEAD |
+|---|---|---|
+| log | **268 MB** (the runaway cap) | **3.5 MB** |
+| Doom startup stages reached | **none** | **all eleven**, `V_Init` → `ST_Init` |
+| code regions scanned | 2 | 19 |
+| sites rejected | 16 | 196 |
+| raw INTs serviced from `#GP` | 0 | 2 |
+| end state | `#GP` loop, `ds=0000{NO DESCRIPTOR}` | clean, `STAGE2: complete` |
+
+Reproduced: the post-fix run was repeated after restoring the file and rebuilt from
+scratch, giving 3,506,020 bytes against the first run's 3,508,409 — same nineteen
+regions, same 196 rejects, same two serviced raw INTs, same eleven stages.
+
+★★★ **And the prediction landed on the exact address it was made about.** The argument
+for the change was that DOS/4GW's version check — the *one* real site the old rule was
+shaped around keeping — would now be rejected, left raw, fault once, and be serviced
+from the `#GP`. That is what the log says, at the address `x86len.h`'s own comment
+names:
+
+```
+EXC: #GP(IDT) is a RAW INT 0x21 at 0x0097:0x00002c65 -- servicing + patching
+```
+
+`0x2c65` is DOS/4GW's `mov ah,30h / int 21h`. The mechanism the argument depended on is
+observed doing exactly the job it was claimed to do.
+
+⇒ **The flagged risk is closed, and it was pointing the wrong way.** Doom was broken
+*before* this change and completes its startup after it — so the old rule was costing
+the guest it was written to protect, and nobody had re-measured. (⚠ "Completes its
+startup" is not "playable": per the headless-rig rule, feel and picture need a human at
+the box. What is measured here is that it initialises fully and does not fault.)
+
+⚠ One thing still unclosed: the `#GP(IDT)` arm guards on a non-zero selector base, so a
+**base-0 code region would not be covered**. Such regions are not scanned as a range
+either, so nothing is made worse — but that is the gap to close if a guest is ever seen
+dying on a raw INT.
 
 ---
 
@@ -403,17 +453,65 @@ session — is **told what to run**. krnl386 opens `SYSEDIT.EXE` and reads its `
 header. The load then fails and WOWEXEC puts up *"Insufficient memory to run this
 application"*. Nothing has drawn a pixel.
 
-### 1. ★ krnl386 id `0x82` — the last call before the launch fails
+### 1. ★★★ krnl386 **seg2** id `0xd1` — the call whose failure abandons the load
 
-4 argument bytes, one far pointer (`0x3d7:0x0100`), called from `seg1:0x53c0`,
-immediately before `WowFailedExec` (`0x9d`) and the error box. Not in
-`wow32-call-surface.md`'s named set. Read its call site with
-`tools/ne/nedis.py guest/ne/krnl386.exe --wowfunc 0x82`, the way `0x7d` and `0xc5` were
-read — the argument-building code names these far more reliably than the ordinal tables.
+⚠ **`0x82` IS REFUTED, AND IT WAS MY OWN HANDOFF THAT NAMED IT.** Part 3 above said the
+frontier was `0x82`, "the last call before the verdict", with a warning attached that
+this is where to *start* rather than proof. The warning was the right one:
 
-⚠ Do not assume `0x82` is the *only* thing missing. It is the last call before the
-verdict, which is where to start, not proof of sufficiency — session 36's lesson was
-that *a measurement that something happens is not a measurement of what it returns*.
+- `0x82` is **`INT 21h AH=3Bh`** — `chdir`, the twin of `0xc9 GetCurrentDirectory`.
+  Named the cheap way: the WOWBOP line records `ax=0x3b1a` at the call, and `AH` names
+  the DOS function outright. No disassembly needed.
+- And it is **already succeeding**. Its call site's fall-through (`seg1:0x53c5`) is
+  `mov al,0 / jmp 0x5577`, and `0x5577` is `pop ds / popf / **clc** / ret` — *carry
+  clear*, the DOS success convention. The `je` that our sentinel does not take leads to
+  the chain-to-DOS path. So answering `0` already makes krnl386 report the chdir as
+  done, and implementing it would have changed nothing.
+
+**The real abort is one call earlier**, and it is in a table the host does not dispatch
+at all. Tracing the whole load rather than its last line:
+
+```
+AH=3d open  "…\SYSEDIT.EXE"          -> handle 6
+AH=3F read 0x40 @0                   -> 4d 5a …            "MZ"
+AH=42 seek 0x400
+AH=3F read 0x40 @0x400               -> 4e 45 05 14 …      "NE"
+AH=3F read 0x1c3  -> sel 0xbcf:0x60                        the NE tables
+AH=42 seek 0x6c0
+   0x97 read 0x1580 -> sel 0xbc7:0    (serviced)           ★ the first CODE SEGMENT
+   0xd1  from seg2:0x2c84             UNIMPLEMENTED -> 0   ★ and here it stops
+AH=3E close h=6
+AH=3E close h=6                      (was NOT open)        -- a double close
+   0x9d WowFailedExec  ->  WowMsgBox "Insufficient memory…"
+```
+
+krnl386 reads SYSEDIT's **first code segment** and then asks `0xd1`. The call site says
+exactly what a zero means:
+
+```
+2c66  test byte [0x46c],1 / je            ; a gate: set -> return 0 without asking
+2c72  push [0x293] / push [bp+6] / push [bp+4] / push [bp+8]   ; 8 arg bytes
+2c81  call <0xd1 stub>
+2c84  or ax,ax
+2c86  je 0x2c93
+2c93  mov ax,0xffff                       ; ★ 0 from us -> this function returns 0xFFFF
+```
+
+Measured arguments: `(0xbcf, 0x3d7:0x1ce4, 0x13f)` — the module's own selector, a far
+pointer that is **not** a C string (the decoder printed nothing for it, so it is a
+structure), and the global `[0x293]`.
+
+⚠⚠ **`0xd1` IS IN A THIRD ID SPACE, AND THE HOST HAS NO DISPATCHER FOR IT.** The stub
+lives in krnl386's **seg2** (`stubseg=0x1d7`), not seg1 (`0x1cf`), so `f.krnl` — which
+is `stubseg == CS` — is false, `wow32_call()` returns 0 immediately, and the log prints
+`[?'s table -- a DIFFERENT id space]`. Session 38's table already counted it: *krnl386
+seg2 → imported thunk, **121 stubs***. `0xc5` (session 39, the path canonicaliser) is in
+the same table. Nothing in this host answers any of them.
+
+▶ So the next step is not one function, it is **a dispatcher for krnl386 seg2's table**,
+and `0xd1` is its first customer. `tools/ne/nedis.py guest/ne/krnl386.exe 2 <off>` reads
+those call sites; `[0x46c]` gates at least `0xc5` and `0xd1`, so it is worth knowing what
+sets it.
 
 ### 2. The message loop (was #1 last time, still real, now second)
 
@@ -429,10 +527,13 @@ pointer since `CreateWindow`.
 Bare module names resolve against the current directory. Real, filed, and now on the
 launch path.
 
-### 4. ⚠ Re-measure Doom and a DOS extender
+### 4. ~~Re-measure Doom and a DOS extender~~ — **DONE, and it fixed Doom**
 
-The `x86len.h` change touches every DPMI guest and was validated only against krnl386
-and the off-VM batteries. See the caveat in Part 3.
+See Part 3. A/B on the single file: pre-fix, Doom reaches **no** startup stage and loops
+in a `#GP` to a 268 MB log; post-fix it completes **all eleven** stages in 3.5 MB, twice.
+⚠ `dpmitest.com`/`pm32flat.com` pass but are **not** evidence here — they never declare a
+code region, so they never take the changed decision. Doom does (19 regions, 196 rejects).
+⚠ Still open: the `#GP(IDT)` arm does not cover a **base-0** code selector.
 
 ### How to drive it
 
