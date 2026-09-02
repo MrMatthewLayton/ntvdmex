@@ -47,6 +47,21 @@
 #define WOWUSER_SENDMESSAGE     0x6f
 #define WOWUSER_GETWINDOWWORD   0x85
 #define WOWUSER_SETWINDOWWORD   0x86
+/* The message loop. Every id here is named by USER's own export table
+   (docs/research/wow-user-surface.md) and every one of them is a call this run
+   already makes -- see the frontier note in src/wow/wowmsg.h. */
+#define WOWUSER_POSTQUITMESSAGE 0x06
+#define WOWUSER_SETFOCUS        0x16
+#define WOWUSER_GETMESSAGE      0x6c
+#define WOWUSER_PEEKMESSAGE     0x6d
+#define WOWUSER_POSTMESSAGE     0x6e
+/* ★ These four the export table could NOT name -- they are four of its 56
+   unnamed ids, and they are named here by their call sites in SYSEDIT's own
+   message loop, which the relocation chain names in turn. See wowmsg.h. */
+#define WOWUSER_TRANSLATEMESSAGE 0x71
+#define WOWUSER_DISPATCHMESSAGE  0x72
+#define WOWUSER_TRANSLATEACCEL   0xb2
+#define WOWUSER_TRANSLATEMDISYS  0x1c3
 
 /* Get/SetWindowWord argument blocks, reversed as always (base = last push):
      GetWindowWord(hWnd, nIndex)               -> +0 nIndex, +2 hWnd
@@ -1009,6 +1024,260 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
            own (seg1:0x3e37). 1 rather than a number that looks like a handle,
            so nothing downstream can mistake it for one. */
         wow32_setret(f, 1);
+        return 1;
+    }
+
+    /* ── ★★★★★ 0x6c GetMessage / 0x6d PeekMessage -- THE LOOP TURNS ───────────
+         The host's job here is exactly to FILL AN 18-BYTE STRUCTURE. It does not
+         dispatch anything, because USER.EXE's own 16-bit `DispatchMessage` walks
+         the MSG and makes the call itself -- see the note at the top of
+         src/wow/wowmsg.h, where both the layout and that fact are read out of
+         `user.exe seg1:0x1c37`.
+
+       ★ THE RETURN VALUES ARE READ OFF THE CALL SITE, NOT FROM A HEADER.
+         `sysedit seg1:0x0112 or ax,ax / jne 0x00c6`: non-zero keeps the loop, and
+         **0 is WM_QUIT**. So 0 is not "nothing to report" -- there is no such
+         answer to GetMessage, which blocks -- it is "this application is over".
+         PeekMessage's 0 IS "nothing to report", and that is the whole difference
+         between them.
+       ⚠ WHEN THE QUEUE IS EMPTY, GetMessage BLOCKS, and the host does the waiting
+         BEFORE this service is entered (wowmsg_host_wait in main.c, where the
+         keyboard event handle lives). By the time we are here the wait is over,
+         so an empty queue at this point means the wait expired -- nothing is ever
+         going to arrive -- and answering WM_QUIT is then the truthful answer as
+         well as the one that lets a harness run end. The log says which it was. */
+    case WOWUSER_GETMESSAGE:
+    case WOWUSER_PEEKMESSAGE: {
+        int peek = (f->id == WOWUSER_PEEKMESSAGE);
+        volatile BYTE *lp = wow32_argptr(f, peek ? PM_ARG_LPMSG : GM_ARG_LPMSG);
+        WORD hwndf = wow32_argw(f, peek ? PM_ARG_HWND : GM_ARG_HWND);
+        WORD minf  = wow32_argw(f, peek ? PM_ARG_MIN  : GM_ARG_MIN);
+        WORD maxf  = wow32_argw(f, peek ? PM_ARG_MAX  : GM_ARG_MAX);
+        WORD rem   = peek ? wow32_argw(f, PM_ARG_REMOVE) : PM_REMOVE16;
+        wowmsg_t m;
+        int k = 0;
+        if (!lp) {
+            wu_puts(note, notecap, &k, peek ? "PeekMessage" : "GetMessage");
+            wu_puts(note, notecap, &k, ": unreadable lpMsg -- answered 0");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        if (wowmsg_take(hwndf, minf, maxf, (rem & PM_REMOVE16) != 0, &m)) {
+            wowmsg_write(lp, &m);
+            wu_puts(note, notecap, &k, peek ? "PeekMessage -> hwnd=0x"
+                                            : "GetMessage -> hwnd=0x");
+            wu_puthex(note, notecap, &k, m.hwnd, 4);
+            wu_puts(note, notecap, &k, " msg=0x");
+            wu_puthex(note, notecap, &k, m.msg, 4);
+            wu_puts(note, notecap, &k, " wParam=0x");
+            wu_puthex(note, notecap, &k, m.wparam, 4);
+            wu_puts(note, notecap, &k, " lParam=0x");
+            wu_puthex(note, notecap, &k, m.lparam, 8);
+            wu_puts(note, notecap, &k, (rem & PM_REMOVE16) ? " [removed]" : " [left]");
+            wu_puts(note, notecap, &k, ", ");
+            wu_puthex(note, notecap, &k, (DWORD)g_wm_count, 2);
+            wu_puts(note, notecap, &k, " still queued");
+            /* ⚠ WM_QUIT is delivered AND reported as the end. A loop that got a
+                 non-zero for it would dispatch a message meant to stop it. */
+            wow32_setret(f, (m.msg == WM_QUIT16 && !peek) ? 0 : 1);
+            return 1;
+        }
+        if (!peek && g_wm_quit) {
+            m.hwnd = 0; m.msg = WM_QUIT16; m.wparam = g_wm_quitcode;
+            m.lparam = 0; m.time = 0; m.ptx = m.pty = 0;
+            wowmsg_write(lp, &m);
+            wu_puts(note, notecap, &k, "GetMessage -> WM_QUIT (PostQuitMessage 0x");
+            wu_puthex(note, notecap, &k, g_wm_quitcode, 4);
+            wu_puts(note, notecap, &k, ") -- the loop ends");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        if (peek) {
+            wu_puts(note, notecap, &k, "PeekMessage: queue empty -> 0 (correct:"
+                                       " peek does not block)");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        /* Nothing, and the host has already waited. Say so in full: a reader who
+           sees `GetMessage -> 0` without this sentence would read it as WM_QUIT
+           having been posted, which is a different fact entirely. */
+        wu_puts(note, notecap, &k, "GetMessage: the queue is EMPTY and the host's"
+                                   " input wait expired -- no message can arrive,"
+                                   " so the application is told to quit. Posted 0x");
+        wu_puthex(note, notecap, &k, g_wm_posted, 4);
+        wu_puts(note, notecap, &k, " taken 0x");
+        wu_puthex(note, notecap, &k, g_wm_taken, 4);
+        wu_puts(note, notecap, &k, " this run");
+        wow32_setret(f, 0);
+        return 1;
+    }
+
+    /* ── 0x6e PostMessage(hWnd, msg, wParam, lParam) ───────────────────────────
+         The same 10-byte block SendMessage uses, and the difference between them
+         is the whole point of having a queue: SendMessage IS the call and returns
+         the procedure's answer; PostMessage returns whether it got into the ring.
+       ⚠ hWnd 0 is a THREAD message, not an error -- USER's DispatchMessage
+         `jcxz`es it and the loop drops it, which is correct behaviour and not
+         ours to prevent. */
+    case WOWUSER_POSTMESSAGE: {
+        WORD  hwnd = wow32_argw(f, PSM_ARG_HWND);
+        WORD  msg  = wow32_argw(f, PSM_ARG_MSG);
+        WORD  wp   = wow32_argw(f, PSM_ARG_WPARAM);
+        DWORD lp   = wow32_argd(f, PSM_ARG_LPARAM);
+        int ok, k = 0;
+        ok = wowmsg_post(hwnd, msg, wp, lp, 0, 0, 0);
+        wu_puts(note, notecap, &k, "PostMessage 0x");
+        wu_puthex(note, notecap, &k, hwnd, 4);
+        wu_puts(note, notecap, &k, " msg=0x");
+        wu_puthex(note, notecap, &k, msg, 4);
+        wu_puts(note, notecap, &k, ok ? " -> queued" : " -> ★ RING FULL, DROPPED");
+        wow32_setret(f, (DWORD)ok);
+        return 1;
+    }
+
+    /* ── 0x06 PostQuitMessage(nExitCode) ───────────────────────────────────────
+         Not a queue entry: Win16 sets a flag on the task and GetMessage
+         manufactures WM_QUIT only once everything else has drained. Queueing it
+         would let it overtake messages already posted. */
+    case WOWUSER_POSTQUITMESSAGE: {
+        int k = 0;
+        g_wm_quit = 1;
+        g_wm_quitcode = wow32_argw(f, PQM_ARG_EXITCODE);
+        wu_puts(note, notecap, &k, "PostQuitMessage 0x");
+        wu_puthex(note, notecap, &k, g_wm_quitcode, 4);
+        wu_puts(note, notecap, &k, " -- the next drained queue ends the loop");
+        wow32_setret(f, 0);
+        return 1;
+    }
+
+    /* ── ★★★★★ 0x72 DispatchMessage(lpMsg) -- THE LAST LINK IN THE LOOP ───────
+         The message the host queued, the application took out of GetMessage and
+         is now handing back to be delivered. Everything a window procedure needs
+         is in those 18 bytes, which is why this call takes nothing else -- and
+         the delivery itself is `wowcall_enter`, built in session 40 and used here
+         without a line of new machinery.
+       ★ THE RETURN IS THE PROCEDURE'S, exactly as for SendMessage, so it goes
+         back through WOWCALL_RET_RESULT rather than being invented.
+       ⚠ hwnd 0 IS NOT AN ERROR -- it is a thread message, and USER's own
+         DispatchMessage `jcxz`es one. Answering 0 is what that means. */
+    case WOWUSER_DISPATCHMESSAGE: {
+        volatile BYTE *lp = wow32_argptr(f, DM_ARG_LPMSG);
+        wowmsg_t m;
+        wowuser_win_t *w;
+        int k = 0;
+        if (!lp) {
+            wu_puts(note, notecap, &k, "DispatchMessage: unreadable lpMsg");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        wowmsg_read(lp, &m);
+        wu_puts(note, notecap, &k, "DispatchMessage hwnd=0x");
+        wu_puthex(note, notecap, &k, m.hwnd, 4);
+        wu_puts(note, notecap, &k, " msg=0x");
+        wu_puthex(note, notecap, &k, m.msg, 4);
+        if (!m.hwnd) {
+            wu_puts(note, notecap, &k, " -- a thread message, nowhere to dispatch");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        w = wowuser_findwin(m.hwnd);
+        if (!w) {
+            wu_puts(note, notecap, &k, " -- NO SUCH WINDOW");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        if (w->wndproc) {
+            if (!f->cbok) {
+                wu_puts(note, notecap, &k, " -- its own window procedure, but"
+                                           " callbacks are not armed");
+                wow32_setret(f, 0);
+                return 1;
+            }
+            wu_puts(note, notecap, &k, " -> its own window procedure");
+            wow32_setret(f, 0);
+            wowuser_want_msg(f, w, w->hinst ? w->hinst : g_wu_class[w->cls].hinst,
+                             m.msg, m.wparam, m.lparam, WOWCALL_RET_RESULT);
+            return 1;
+        }
+        wu_puts(note, notecap, &k, " -> ");
+        wow32_setret(f, (DWORD)wowuser_defproc(f, w, m.msg, m.wparam, m.lparam,
+                                               note + k, notecap - k));
+        return 1;
+    }
+
+    /* ── 0x71 TranslateMessage(lpMsg) ──────────────────────────────────────────
+         Its job is to turn a WM_KEYDOWN into a WM_CHAR and post that, and its
+         return says whether it did. ⚠ THIS HOST DOES NOT, and 0 is therefore the
+         TRUE answer rather than a stub: producing a character from a virtual key
+         means a keyboard STATE (shift, caps, the dead-key buffer) that nothing
+         here keeps, and inventing one would put wrong characters into an edit
+         control -- the "runs but lies" class, in the one place a user would see
+         it. Answered explicitly rather than left unimplemented so the line says
+         so, and so the caller never reads the harness sentinel for a decision.
+       ⇒ The day this returns 1 it will be because the host keeps that state and
+         calls the OS (`ToAscii`) with it, the same way the virtual key itself
+         comes from `MapVirtualKey` rather than from a table. */
+    case WOWUSER_TRANSLATEMESSAGE: {
+        volatile BYTE *lp = wow32_argptr(f, TA_ARG_LPMSG);
+        wowmsg_t m;
+        int k = 0;
+        wu_puts(note, notecap, &k, "TranslateMessage msg=0x");
+        if (lp) { wowmsg_read(lp, &m); wu_puthex(note, notecap, &k, m.msg, 4); }
+        else      wu_puts(note, notecap, &k, "?");
+        wu_puts(note, notecap, &k, " -> 0: this host produces no WM_CHAR (no"
+                                   " keyboard state to translate with)");
+        wow32_setret(f, 0);
+        return 1;
+    }
+
+    /* ── 0xb2 TranslateAccelerator / 0x1c3 TranslateMDISysAccel ────────────────
+         Both are asked BEFORE TranslateMessage and both are tested (`or ax,ax /
+         jne`), so their answer decides whether the message reaches the window at
+         all. 0 = "no accelerator matched", which is the truth: this host has no
+         accelerator table -- `NotifyWow` deliberately does not keep the resource
+         it is shown, because `GlobalUnlock` is the next instruction after it.
+       ⚠ They were previously answered by the harness sentinel, which happens to
+         be the same 0. Same value, different status: this one is a decision. */
+    case WOWUSER_TRANSLATEACCEL:
+    case WOWUSER_TRANSLATEMDISYS: {
+        int mdi = (f->id == WOWUSER_TRANSLATEMDISYS);
+        int k = 0;
+        wu_puts(note, notecap, &k, mdi ? "TranslateMDISysAccel hwnd=0x"
+                                       : "TranslateAccelerator hwnd=0x");
+        wu_puthex(note, notecap, &k,
+                  wow32_argw(f, mdi ? TMSA_ARG_HWND : TA_ARG_HWND), 4);
+        if (!mdi) {
+            wu_puts(note, notecap, &k, " hAccel=0x");
+            wu_puthex(note, notecap, &k, wow32_argw(f, TA_ARG_HACCEL), 4);
+        }
+        wu_puts(note, notecap, &k, " -> 0 (no accelerator table in this host)");
+        wow32_setret(f, 0);
+        return 1;
+    }
+
+    /* ── 0x16 SetFocus(hWnd) ───────────────────────────────────────────────────
+         Implemented because a keystroke has to be ADDRESSED, and Win16 addresses
+         it to the focus window. SYSEDIT calls this once per MDI child it builds
+         (`sysedit seg1:0x02d8`), so the target of a key is the guest's own
+         decision rather than a choice this host makes.
+       ⚠ An unknown handle is refused rather than recorded: focus on a window we
+         never made would send every later key into nothing, silently. */
+    case WOWUSER_SETFOCUS: {
+        WORD hwnd = wow32_argw(f, SF_ARG_HWND);
+        WORD prev = g_wm_focus;
+        int k = 0;
+        wu_puts(note, notecap, &k, "SetFocus 0x");
+        wu_puthex(note, notecap, &k, hwnd, 4);
+        if (hwnd && !wowuser_findwin(hwnd)) {
+            wu_puts(note, notecap, &k, " -- NO SUCH WINDOW, focus unchanged");
+            wow32_setret(f, prev);
+            return 1;
+        }
+        g_wm_focus = hwnd;
+        wu_puts(note, notecap, &k, " (was 0x");
+        wu_puthex(note, notecap, &k, prev, 4);
+        wu_puts(note, notecap, &k, ") -- keyboard messages now go here");
+        wow32_setret(f, prev);
         return 1;
     }
 
