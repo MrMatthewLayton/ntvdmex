@@ -545,11 +545,38 @@ a selector too**, because the guest's next instruction is `mov es,` that word.
 ★ **Fixed and confirmed: the `krnl386 seg1:0x259f` fault is gone** — WOWEXEC's own
 environment walk works.
 
-⚠ **SYSEDIT's `0x09f0` fault survives, and the next question is named.** WOWEXEC's
-launcher does `or al,1` at `seg1:0x0500` immediately before `mov es:[bx+0x2c],ax`, so a
-source value of **0** becomes exactly the **1** still being read. Its own environment
-build now works; **what it hands the child does not**. Read `seg2/seg1:0x04??`–`0x0500`
-for where that AX comes from (a `GlobalAlloc`/`GlobalLock` pair inside `seg1:0x02aa`).
+⚠ **SYSEDIT's `0x09f0` fault survives — and it was WATCHED, not reasoned about.** Every
+PSP the host builds is now recorded, and `+0x2c` is sampled at **every WOW32 BOP and
+every PM `INT 21h`**. The sampling interval *is* the resolution: sampling only at WOW32
+calls put the whole of WOWEXEC's launcher, `LoadModule` included, inside one window,
+which names a suspect rather than a writer. Three lines then replaced a page of
+speculation:
+
+```
+sel 0x03bf (WOWEXEC) +0x2c 0x03c7 -> 0x0aff   its launcher installs its new env
+sel 0x0adf (SYSEDIT) +0x2c 0x03c7 -> 0x0001   ★ clobbered
+sel 0x03bf (WOWEXEC) +0x2c 0x0aff -> 0x03c7   its launcher restores its own
+```
+
+⇒ **WOWEXEC's environment build works** — `0x0aff` is a real selector and the
+save/restore around `LoadModule` is visible in the log. The **child's** field is
+separately written to `1`, in a tight window: between our `AH=55h` returning and the next
+WOW32 call (`0x8a`), i.e. **inside krnl386's own caller**. `1` is `0|1`, so some source
+of it is zero.
+
+⚠⚠ **AND THE INSTRUMENT HAD TO WATCH THE SELECTOR, NOT A LINEAR ADDRESS.** The first cut
+froze `dpmi_sel_base()` at `AH=55h` time — and the log three lines earlier says why that
+is wrong: krnl386 **re-bases** these selectors (`INT31h 04F2` moved `0x0adf` from
+`0x297c0` to `0x299e0` within three lines). A frozen address stops pointing at the PSP the
+moment it moves, and the instrument would then report whatever now lives at the old
+address as if it were the field — the same mechanism that once had krnl386 reading a
+staged image at a stale address while it walked relocations at the new one. It resolves
+per sample now and logs a `PSPENV REBASED` line. ★ With that hardening the suspicion was
+**refuted**: no rebase happens after `AH=55h`, so the reading is sound.
+
+⚠ **Eliminated, so nobody re-chases it:** the `or al,1` at `wowexec seg1:0x0500` is *not*
+the source. Its operand `[bp-0x1c]` is the `GlobalAlloc` handle, and a zero there is
+guarded at `seg1:0x045b` and aborts the launch with the error box we no longer see.
 
 ⚠ Also live, and not yet looked at: a `#NP` at `0x0b47:0x00b2` with `err=0x0b34` — a
 demand-load fault for one of SYSEDIT's own segments — and a `#GP` at `krnl386
