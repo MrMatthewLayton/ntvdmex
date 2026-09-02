@@ -107,16 +107,38 @@
           left exactly as the service left it.
    RESULT the PROCEDURE's return IS the answer. SendMessage is defined as
           "whatever the window procedure returned", so the host must not invent
-          one, and the DWORD in DX:AX goes into the hole verbatim. */
+          one, and the LONG in DX:AX goes into the hole verbatim.
+   RESULTW the same, but the callee returns a WORD in AX and ★ DX IS LITTER.
+          Measured the moment the first non-wndproc call was made: LocalAlloc
+          returned `0x00422502`, whose low word is the handle and whose high word
+          is the `0x42` we had pushed as its FLAGS. The guest read AX and was
+          unharmed, but the log printed a 32-bit number that was not a value --
+          an instrument lying about a call the host itself made. A Win16 function
+          that returns a WORD does not set DX, so the width has to be declared. */
 #define WOWCALL_RET_KEEP    0
 #define WOWCALL_RET_RESULT  1
+#define WOWCALL_RET_RESULTW 2
+
+/* Six words is not a guess about Win16 -- it is what the two things this host
+   calls actually push: a window procedure's 5 (hwnd, msg, wParam, lParam hi+lo)
+   and LocalAlloc's 2. Anything wider gets caught here rather than overrunning. */
+#define WOWCALL_MAX_ARGW  6
 
 typedef struct {
     wowsched_slot_t saved;   /* the interrupted context, verbatim               */
     DWORD retlin;            /* the originating WOW32 frame's return hole, or 0 */
     DWORD proc;              /* what we called -- for the log and the failure    */
-    WORD  hwnd, msg;
+    WORD  hwnd, msg;         /* for the log; 0/0 when the call is not a message  */
     int   retmode;           /* WOWCALL_RET_* -- see above                       */
+    /* ★ WHERE THE ANSWER ALSO GOES. A call the host makes for its OWN reasons
+         (LocalAlloc, to get an edit control a text handle) has a result the host
+         must keep, and the result only exists when the guest returns -- long
+         after the service that asked for it has finished. One pointer into the
+         static object it belongs to closes that gap without a completion queue.
+       ⚠ It must point into storage that outlives the call. Everything it is used
+         for is a static array, and it must stay that way. */
+    WORD *sink;
+    DWORD written;           /* what actually went into the hole, for the log   */
 } wowcall_frame_t;
 
 static wowcall_frame_t g_wc[WOWCALL_MAX_DEPTH];
@@ -146,13 +168,16 @@ static void wowcall_push(DWORD ssbase, WORD *sp, WORD v)
  * Returns 1 if the guest is now standing at the procedure's first instruction.
  */
 static int wowcall_enter(volatile BYTE *tib, DWORD ssbase, WORD retsel,
-                         DWORD proc, WORD ds, WORD hwnd, WORD msg,
-                         WORD wparam, DWORD lparam, DWORD retlin, int retmode)
+                         DWORD proc, WORD ds, const WORD *argw, int nargw,
+                         DWORD retlin, int retmode, WORD *sink,
+                         WORD hwnd, WORD msg)
 {
     wowcall_frame_t *fr;
     WORD sp;
+    int i;
     if (g_wc_depth >= WOWCALL_MAX_DEPTH) return 0;
     if (!ssbase || !retsel || !(proc >> 16)) return 0;
+    if (nargw < 0 || nargw > WOWCALL_MAX_ARGW) return 0;
 
     fr = &g_wc[g_wc_depth++];
     wowsched_save(&fr->saved, tib, 0, 0, 0);
@@ -161,16 +186,15 @@ static int wowcall_enter(volatile BYTE *tib, DWORD ssbase, WORD retsel,
     fr->hwnd    = hwnd;
     fr->msg     = msg;
     fr->retmode = retmode;
+    fr->sink    = sink;
 
-    /* Pascal order: first declared argument pushed first, so it ends up at the
-       highest address -- which is what [bp+0x0e] == hwnd in the disassembly
-       says it must be. A DWORD goes high word first for the same reason. */
+    /* Pascal order: the FIRST declared argument is pushed FIRST, so it ends up
+       at the highest address -- which is what `[bp+0x0e] == hwnd` in a window
+       procedure and `[bp+8] == uFlags` in krnl386's own LocalAlloc both say it
+       must be. A DWORD is two words, high first, for the same reason. The caller
+       hands them in declared order and this pushes them in that order. */
     sp = (WORD)(VDM_REG(tib, VTIB_ESP) & 0xFFFF);
-    wowcall_push(ssbase, &sp, hwnd);
-    wowcall_push(ssbase, &sp, msg);
-    wowcall_push(ssbase, &sp, wparam);
-    wowcall_push(ssbase, &sp, (WORD)(lparam >> 16));
-    wowcall_push(ssbase, &sp, (WORD)(lparam & 0xFFFF));
+    for (i = 0; i < nargw; ++i) wowcall_push(ssbase, &sp, argw[i]);
     wowcall_push(ssbase, &sp, retsel);       /* the far return address: CS ... */
     wowcall_push(ssbase, &sp, 0);            /* ... then IP, at offset 0       */
     VDM_SET16(tib, VTIB_ESP, sp);
@@ -200,6 +224,8 @@ static wowcall_frame_t *wowcall_leave(volatile BYTE *tib, DWORD result)
     if (g_wc_depth <= 0) return NULL;
     fr = &g_wc[--g_wc_depth];
     wowsched_restore(&fr->saved, tib);
+    if (fr->sink) *fr->sink = (WORD)result;
+    fr->written = 0;
     if (fr->retlin) {
         volatile BYTE *h = (volatile BYTE *)(ULONG_PTR)fr->retlin;
         DWORD v = 0;
@@ -212,9 +238,14 @@ static wowcall_frame_t *wowcall_leave(volatile BYTE *tib, DWORD result)
         if (fr->retmode == WOWCALL_RET_KEEP) {
             if (fr->msg == WM_CREATE16 && (WORD)result == 0xFFFF) write = 1;
         } else {
-            v = result; write = 1;      /* SendMessage: the procedure's answer */
+            /* ⚠ MASK A WORD RETURN. DX is not the high half of a WORD result --
+                 see WOWCALL_RET_RESULTW above, and the LocalAlloc call that
+                 proved it. */
+            v = (fr->retmode == WOWCALL_RET_RESULTW) ? (result & 0xFFFF) : result;
+            write = 1;                  /* SendMessage: the procedure's answer */
         }
         if (write) {
+            fr->written = v;
             h[0] = (BYTE)(v & 0xFF);        h[1] = (BYTE)((v >> 8)  & 0xFF);
             h[2] = (BYTE)((v >> 16) & 0xFF); h[3] = (BYTE)((v >> 24) & 0xFF);
         }

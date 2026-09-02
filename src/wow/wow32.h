@@ -178,10 +178,12 @@ typedef struct {
     int              cbok;           /* 1 = the host can call 16-bit code now   */
     DWORD            cbproc;         /* 16:16 procedure to call; 0 = none asked */
     WORD             cbds;           /* the DS it must be entered with          */
-    WORD             cbhwnd, cbmsg, cbwparam;
-    DWORD            cblparam;
+    WORD             cbarg[6];       /* words to push, in DECLARED order        */
+    int              cbnarg;
     int              cbret;          /* WOWCALL_RET_KEEP / _RESULT -- whose
                                         answer the caller's return value is    */
+    WORD            *cbsink;         /* optional: where the host keeps the answer */
+    WORD             cbhwnd, cbmsg;  /* for the log; 0/0 when not a message     */
 } wow32_frame_t;
 
 /* ---- frame accessors ---------------------------------------------------- */

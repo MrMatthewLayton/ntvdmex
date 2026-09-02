@@ -36,8 +36,8 @@ Three walls fell behind it, each one named by the run that hit it rather than gu
    32-bit side, and the 32-bit side is us.
 2. **`LoadAccelerators` needs `USER` id `0x217` `NotifyWow`** — and that call does not
    return a handle, it returns permission.
-3. And with both answered, **`SYSEDIT.EXE` shows its window, updates it, and opens
-   `C:\CONFIG.SYS` and `C:\AUTOEXEC.BAT`** — the thing the program exists to do.
+3. And with both answered, **`SYSEDIT.EXE` shows its window and opens `C:\CONFIG.SYS`
+   and `C:\AUTOEXEC.BAT`** — the thing the program exists to do.
 
 And then the other half of the same mechanism went in — `SendMessage` and the default
 window procedure a system class needs — and **SYSEDIT builds its entire user interface**:
@@ -50,9 +50,18 @@ WM_MDICREATE "mpchild" "C:\WINDOWS\SYSTEM.INI" in client 0x0160 -> hwnd=0x0180
 ```
 
 **Four MDI children, each with its own EDIT control, each child's window procedure run by
-this host.** It stops at `EM_SETHANDLE` (`0x040D`) — the message that hands the edit
-control the text — because an EDIT control's behaviour is the 32-bit side's, and the
-32-bit side is us. See [▶ RESUME HERE](#-resume-here).
+this host.** And then the last piece: an edit control's text is a handle in the
+**application's own local heap**, which the host cannot make and the guest's KERNEL can —
+so the host **calls `KERNEL.5 LocalAlloc` in the application's DGROUP**, and
+
+```
+C:\WINDOWS\SYSTEM.INI  0x00e7 bytes -> loaded
+C:\WINDOWS\WIN.INI     0x01dd bytes -> loaded
+```
+
+**two of the four files are in memory**, in blocks the application allocated, grew, filled
+and owns. SYSEDIT then sits in `GetMessage`, and we tell it `WM_QUIT`. See
+[▶ RESUME HERE](#-resume-here).
 
 ⚠ **The baseline moved by exactly one call, and it has a name.** With both switches off
 the same build gives **270 / 45 / 122 / 97 · `9 · 222 · 39` · `0001:229C`** against
@@ -367,19 +376,99 @@ asks it during its own bootstrap.
 
 ---
 
+## ★★★★★ PART 6: THE HOST ASKS THE GUEST'S KERNEL FOR MEMORY — AND FILES LOAD
+
+`0x040D` was written up in Part 5 as `EM_SETHANDLE`. **It is `EM_GETHANDLE`**, and the
+correction matters, because the run was stopping on the *first* of a pair, not the second.
+SYSEDIT's file loader (`seg3`) reads end to end, every call named from the relocation
+chain:
+
+```
+00cf  OPENFILE                          ; < 0 -> "Cannot open this file"
+00f8  _LLSEEK(h, 0, 2)  -> [bp-4]       ; ★ the file's SIZE
+010a  _LLSEEK(h, 0, 0)                  ; back to the start
+011b  SendMessage(hEdit, 0x40D, 0, 0)   ; ★ takes NO parameters...
+0124  push ax / push [bp-4]+1 / push 0x42
+012c  LOCALREALLOC                      ; ★ ...and RETURNS A LOCAL HANDLE
+0148  LOCALLOCK                         ; a far pointer to the bytes
+015a  _LREAD(h, that, size)             ; the file goes straight in
+017b  mov byte es:[bx+si],0             ; the guest NUL-terminates it itself
+0183  LOCALUNLOCK
+018b  SendMessage(hEdit, 0x40C, hMem,0) ; ★ 0x40C TAKES the handle
+```
+
+### ★★ And the handle has to be one the GUEST'S KERNEL made
+
+Not an assumption about how Windows implements edit controls — **what this program
+demonstrably requires**. It hands the answer straight to `LocalReAlloc` and `LocalLock`,
+which operate on the local heap of the **current DS**, and DS throughout that routine is
+SYSEDIT's own DGROUP (its window procedure's prologue put it there). A handle this host
+invented would be a number `LocalReAlloc` rejects — and rejecting it is exactly what
+produced *"Cannot open this file."*
+
+So the host asks: **`KERNEL.5 LOCALALLOC`**, which krnl386's own entry table places at
+`FIXED, segment 1, offset 0x3ddb` — and krnl386's segment 1 is *the segment every WOW32
+BOP executes in*, so its runtime address is `<the BOP's CS>:0x3ddb` with **no resolution
+machinery at all**. The disassembly there confirms the signature to the byte:
+`test ax,0xf08d` against `[bp+8]` (LocalAlloc's own flag validation) and `retf 4`.
+
+```
+WOWCALL: -> 0x01cf:0x3ddb(0042 0020) ds=0x0a9e [hwnd=0x01a0 msg=0x040d] -- ENTERED
+WOWCALL: <- returned 0x00422502 ... -- ★ the caller returns 0x00002502
+        -> EM_SETHANDLE 0x2502 -- the control now holds the file's text
+```
+
+★ **This is the first time the host has called 16-bit code for its own reasons** rather
+than to deliver a message, and it needed three small generalisations, each of which is a
+statement about the interface rather than plumbing:
+
+1. **An argument list, not a message.** `wowcall_enter` takes N words in *declared* order;
+   a window procedure's 5 and `LocalAlloc`'s 2 are the same mechanism.
+2. **A sink.** A call the host makes for its own reasons has a result the host must keep,
+   and the result only exists when the guest returns — long after the service that asked
+   for it finished. One pointer into the static object it belongs to, no completion queue.
+3. ⚠ **A declared RETURN WIDTH, and this one was a defect caught by its own log.**
+   `LocalAlloc` came back `0x00422502`, whose low word is the handle and whose high word
+   is **the `0x42` we had pushed as its flags**. The guest reads AX and was unharmed, but
+   the log printed a 32-bit number that was not a value — an instrument lying about a call
+   the host itself made. A Win16 function returning a WORD does not set DX, so the width
+   is now declared (`WOWCALL_RET_RESULTW`) and the log says when DX was discarded.
+
+### Measured: two of the four files load, and the other two are 0 bytes
+
+```
+C:\WINDOWS\SYSTEM.INI  seek-to-end -> 0x00e7   loads, no message
+C:\WINDOWS\WIN.INI     seek-to-end -> 0x01dd   loads, no message
+C:\CONFIG.SYS          seek-to-end -> 0x0000   "Cannot read this file."
+C:\AUTOEXEC.BAT        seek-to-end -> 0x0000   "Cannot read this file."
+```
+
+⚠ **A perfect correlation on four samples is a lead, not a cause, and it is recorded as
+one.** *"Cannot open"* has become *"Cannot read"*, which is a different message from a
+different site (`seg3:0x0164`, error code 2) reached from `cmp ax,[bp-4] / jne` after
+`_LREAD` — so `_lread` returned something other than the 0 that a 0-byte file's size
+implies. Our own `AH=3Fh` arm returns `AX = 0` with CF clear for a zero-length read
+(read, not assumed), so the discrepancy is somewhere between that and `_lread`'s return.
+**It is not yet attributed, and the test that settles it is the oracle**: run `SYSEDIT`
+under *stock* ntvdm on the same box and see whether it says the same thing about the same
+two empty files. Empty `CONFIG.SYS`/`AUTOEXEC.BAT` are the normal state on XP, so "the
+application is right" is a live possibility and must be excluded rather than assumed.
+
+---
+
 ## ★★★★ WHERE IT ACTUALLY GETS TO NOW
 
 With `wowsched.txt` **and** `wowcall.txt` armed, one run:
 
 | | |
 |---|---|
-| WOW32 BOPs | **596** (baseline 270) |
-| serviced / declined / unimplemented | **129 / 290 / 159** |
-| task histogram | `9 · 225 · 203 · 159` — **four**, the last being SYSEDIT's |
-| 16-bit calls made by the host | **7**, all returned |
+| WOW32 BOPs | **606** (baseline 270) |
+| serviced / declined / unimplemented | **133 / 298 / 157** |
+| task histogram | `9 · 225 · 203 · 169` — **four**, the last being SYSEDIT's |
+| 16-bit calls made by the host | **11**, all returned — 7 window procedures and 4 `LocalAlloc` |
 | windows created | **8** — 2 WOWEXEC, `mpframe`, `MDICLIENT`, and 4 `EDIT` controls |
-| MDI children | **4** |
-| ends at | `★ ExitKernelThunk(0x00000000)`, 885 KB |
+| MDI children | **4**, of which **2 hold a file's text** |
+| ends at | `★ ExitKernelThunk(0x00000000)`, 888 KB |
 
 and in the middle of it, `SYSEDIT.EXE`:
 
@@ -391,52 +480,67 @@ and in the middle of it, `SYSEDIT.EXE`:
 6. sends `WM_MDICREATE` to the MDI client, which **makes an `mpchild` window and runs its
    window procedure**, which **creates an `EDIT` control** and stores its handle in the
    child's own extra bytes;
-7. opens the file, sizes it, and sends the control `EM_SETHANDLE` (`0x040D`);
-8. gets 0 from our default procedure, and says
-   `"C:\WINDOWS\SYSTEM.INI\nCannot open this file."`;
-9. **does all of that four times** — `SYSTEM.INI`, `WIN.INI`, `CONFIG.SYS`,
-   `AUTOEXEC.BAT` — and exits.
+7. opens the file, sizes it, asks the control for its text handle (`EM_GETHANDLE`) — which
+   **the host gets by calling the guest's own `KERNEL.5 LocalAlloc`** — grows it,
+   **reads the file into it**, and hands it back with `EM_SETHANDLE`;
+8. **does all of that four times** — `SYSTEM.INI`, `WIN.INI`, `CONFIG.SYS`,
+   `AUTOEXEC.BAT` — and then sits in `GetMessage`;
+9. is told 0, which is `WM_QUIT`, and exits.
 
-Step 8 is the program being **right**, one whole layer deeper than it was this morning.
-Nothing has drawn a pixel.
+**Two of the four files are actually in memory**, in blocks the application allocated,
+grew, filled and now owns. Nothing has drawn a pixel.
 
 ---
 
 ## ▶ RESUME HERE
 
-### 1. ★★★★★ THE FRONTIER: THE `EDIT` CONTROL'S OWN BEHAVIOUR
+### 1. ★★★★★ THE FRONTIER: THE MESSAGE QUEUE
+
+SYSEDIT's interface is built and its files are loaded. The last thing it does is
 
 ```
--> SERVICED (USER), returned 0x00000000 -- default procedure: msg 0x040d not implemented
+FUNC=0x6c [USER] args=10b from=0x0ac7:0x0112     -- USER.108 GETMESSAGE
 ```
 
-`0x040D` is `WM_USER + 13`, sent by SYSEDIT to the `EDIT` control it made, immediately
-after it has opened the file and sized it, and with a local memory handle as its
-parameter. It is the message that hands an edit control its text. Answered 0, SYSEDIT
-reports *"Cannot open this file."*, which is correct — it has been told the control did
-not take the text.
+at `sysedit seg1:0x010d`, whose very next instructions are `or ax,ax / jne 0x00c6` —
+**non-zero keeps the loop, 0 is `WM_QUIT`**. We answer the harness sentinel, so the
+application is told to quit and does, cleanly. It is not failing; it is being dismissed.
 
-**And this is a different KIND of frontier from everything before it.** Every wall this
-session was a *call* that was missing. This one is a **control**: `EDIT` under WOW is the
-32-bit side's, so implementing it means implementing an editable text control — storage,
-selection, the `EM_*` message surface — and, before very long, **pixels**, which is the
-one thing this project still has none of.
+⇒ **The frontier is a message queue**, and it is the last structural piece of the USER
+surface before drawing. What it needs:
 
-What to do first, in order, and none of it is a guess:
+1. **A queue per task**, and the two ways in: `SendMessage` (built — it calls the window
+   procedure directly and is *not* queued) and `PostMessage` (USER `0x6e`, seen in
+   `sysedit seg4:0x014e`).
+2. **`GetMessage` / `PeekMessage`** to take from it, and ⚠ `GetMessage` returning 0 must
+   keep meaning `WM_QUIT` — an empty queue is *block and yield*, which is what
+   `wowsched.h`'s `WowWaitForMsgAndEvent` moment already does.
+3. **`DispatchMessage`** — which is `wowcall_enter` into the window's procedure, i.e.
+   already built. That is the point of having done the callback first.
+4. **Input has to come from somewhere.** There is no keyboard or mouse feeding a Win16
+   queue yet, and the host window that would supply it does not exist.
 
-1. **Read what SYSEDIT actually sends.** `sysedit seg3` is the file-loading routine and
-   it is short: `OPENFILE` at `0x00cf`, two `_LLSEEK`s, `SENDMESSAGE` at `0x011b`,
-   `LOCALREALLOC`, `_LCLOSE`, `LOCALLOCK`, `_LREAD`, `LOCALUNLOCK`. That sequence is
-   `EM_GETHANDLE`/`EM_SETHANDLE` around a local block the program grows and fills itself
-   — so the control's *text storage* is a Win16 local handle the guest owns, not
-   something the host has to allocate. Read the exact messages off those call sites
-   before implementing anything.
-2. **Decide what an `EDIT` control IS in this host**, the way `wowuser_win_t` decided what
-   a window is: an object with real content and a synthetic handle. That is a decision
-   worth writing down before code, because it is the first host-side *control*.
-3. ⚠ **`lParam` for `WM_CREATE` stops being optional soon.** An MDI child reads its
-   `MDICREATESTRUCT` back out of `CREATESTRUCT.lpCreateParams`; SYSEDIT's does not, but
-   the next application will.
+⚠ Do not fabricate a message to keep the loop alive. The 0 is currently *correct* for an
+empty queue with no `WM_QUIT` posted — what is missing is the queue, not the answer.
+
+### 1b. ⚠ OPEN, AND BOUNDED: the two 0-byte files
+
+`CONFIG.SYS` and `AUTOEXEC.BAT` are 0 bytes on this rig (measured: `seek org=2 -> 0`) and
+both get *"Cannot read this file."*; the two non-empty files load silently. The message
+comes from `sysedit seg3:0x0164` (code 2), reached from `cmp ax,[bp-4] / jne` after
+`_LREAD` — so `_lread` returned something other than the 0 that a 0-byte size implies.
+Our own `AH=3Fh` arm returns `AX = 0`, CF clear, for a zero-length read (read, not
+assumed), so the discrepancy is between that and `_lread`'s return.
+
+**The test that settles it is the oracle, not more reading:** run `SYSEDIT` under *stock*
+`ntvdm` on the same box and see whether it says the same thing about the same two files.
+Empty `CONFIG.SYS`/`AUTOEXEC.BAT` are the normal state on XP, so "the application is
+right" is a live possibility that has to be excluded rather than assumed.
+
+### 1c. ⚠ `lParam` for `WM_CREATE` stops being optional soon
+
+An MDI child reads its `MDICREATESTRUCT` back out of `CREATESTRUCT.lpCreateParams`.
+SYSEDIT's does not, but the next application will.
 
 ### 2. Closed this session
 
@@ -448,6 +552,11 @@ What to do first, in order, and none of it is a guess:
 - **Window extra bytes.** `Get/SetWindowWord`, bounded by the guest's own `cbWndExtra`.
 - **krnl386 `0xd0` is unnamed.** It is `GetWindowsDirectory`, and answering it fixed four
   wrong window titles.
+- **The host can only call 16-bit code to deliver a message.** It can call any far
+  function, with an argument list, a result sink and a declared return width -- and it
+  calls `KERNEL.5 LocalAlloc` for the edit controls' text.
+- **`0x040D` is EM_SETHANDLE.** It is **EM_GETHANDLE**; `0x040C` is EM_SETHANDLE. The
+  correction is in Part 6 and it moved the wall by one message.
 
 ### How to drive it
 
@@ -477,10 +586,10 @@ ARCHIVE=build/wowruns ./scripts/bmwow.sh --no-deploy  # re-run what is on the bo
   ```
   The one-call change is `GetWindowsDirectory` and it is at **line 615** of both logs;
   anything else moving is a regression.
-- ★ In a healthy **frontier** run: `grep -c WOWCALL` is **15** (the ON line + seven
+- ★ In a healthy **frontier** run: `grep -c WOWCALL` is **23** (the ON line + eleven
   call/return pairs), `grep -c 'CreateWindow "'` is **8**, `grep -c WM_MDICREATE` is
-  **4**, `grep -c NotifyWow` is **1**, and the run ends on
-  `★ ExitKernelThunk(0x00000000)` at ~885 KB.
+  **4**, `grep -c EM_SETHANDLE` is **4**, `grep -c NotifyWow` is **1**, and the run ends
+  on `★ ExitKernelThunk(0x00000000)` at ~888 KB.
 - ⚠ A fault loop still fills the log to its 268 MB cap in seconds. `grep` it; do not open
   it.
 
@@ -499,3 +608,8 @@ plus:
 - **Treating a `?` in the id-space label as "not USER".** It meant
   "`wow_module_of_sel` could not name this selector", which is true of every runtime
   selector.
+- **Inventing a handle for `EM_GETHANDLE`.** The guest hands it straight to
+  `LocalReAlloc`/`LocalLock` against its OWN local heap, so only the guest's KERNEL can
+  make one. Part 6.
+- **Reading a WORD-returning Win16 function's result as DX:AX.** DX is litter; LocalAlloc
+  proved it by returning the flags we had pushed in the high word.

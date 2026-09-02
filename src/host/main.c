@@ -9896,8 +9896,17 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
             p = zput(p, " msg=0x");   p = zhex(p, fr->msg);
             p = zput(p, ", depth now "); p = zhex(p, (DWORD)g_wc_depth);
             p = zput(p, ")");
-            if (fr->retmode == WOWCALL_RET_RESULT)
-                p = zput(p, " -- ★ and THAT is what the caller returns");
+            if (fr->retmode == WOWCALL_RET_RESULT
+                || fr->retmode == WOWCALL_RET_RESULTW) {
+                p = zput(p, " -- ★ the caller returns 0x");
+                p = zhex(p, fr->written);
+                /* ⚠ Say when DX was DISCARDED. A WORD-returning Win16 function
+                     leaves DX holding whatever it happened to hold, and printing
+                     the raw DX:AX made LocalAlloc's handle read as 0x00422502 --
+                     a 32-bit number that was not a value. */
+                if (fr->retmode == WOWCALL_RET_RESULTW && (res >> 16))
+                    p = zput(p, " (WORD result; DX was litter and is discarded)");
+            }
             else if (fr->retlin && fr->msg == WM_CREATE16 && (WORD)res == 0xFFFF)
                 p = zput(p, " -- ★ WM_CREATE REFUSED: the call that made the window"
                             " now returns 0");
@@ -10259,9 +10268,14 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                 f.cbok    = g_wowcall_on;
                 f.cbproc  = 0;
                 f.cbds    = 0;
-                f.cbhwnd  = 0; f.cbmsg = 0; f.cbwparam = 0;
-                f.cblparam = 0;
+                f.cbnarg  = 0; f.cbsink = NULL;
+                f.cbhwnd  = 0; f.cbmsg = 0;
                 f.cbret   = WOWCALL_RET_KEEP;
+                /* ★ krnl386's segment 1 as a LIVE selector, for the day a
+                     service needs to call a KERNEL export. The WOW32 common
+                     thunk is IN that segment, so the CS at this BOP is it --
+                     exact, free, and true from the first call onward. */
+                if (f.krnl) g_wu_krnl_seg = (WORD)(VDM_REG(tib, VTIB_CS) & 0xFFFF);
                 g_wow_last_id = (WORD)f.id; g_wow_last_from = f.from;
                 /* ── ★★ THE EPILOGUE-MODE EXPERIMENT (wowmode.txt). ────────────
                      Written BEFORE anything is serviced, because the guest reads
@@ -10772,14 +10786,21 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                             WORD  rsel = wow_callback_selector();
                             DWORD ssb3 = dpmi_sel_base(
                                 (WORD)(VDM_REG(tib, VTIB_SS) & 0xFFFF));
+                            int ai;
                             p = zput(p, "WOWCALL: -> 0x");
                             p = zhex(p, f.cbproc >> 16);
                             p = zput(p, ":0x"); p = zhex(p, f.cbproc & 0xFFFF);
-                            p = zput(p, "(hwnd=0x"); p = zhex(p, f.cbhwnd);
-                            p = zput(p, ", msg=0x"); p = zhex(p, f.cbmsg);
-                            p = zput(p, ", wp=0x"); p = zhex(p, f.cbwparam);
-                            p = zput(p, ", lp=0x"); p = zhex(p, f.cblparam);
+                            p = zput(p, "(");
+                            for (ai = 0; ai < f.cbnarg; ++ai) {
+                                if (ai) p = zput(p, " ");
+                                p = zhex(p, f.cbarg[ai]);
+                            }
                             p = zput(p, ") ds=0x"); p = zhex(p, f.cbds);
+                            if (f.cbmsg) {
+                                p = zput(p, " [hwnd=0x"); p = zhex(p, f.cbhwnd);
+                                p = zput(p, " msg=0x"); p = zhex(p, f.cbmsg);
+                                p = zput(p, "]");
+                            }
                             p = zput(p, " ss=0x");
                             p = zhex(p, VDM_REG(tib, VTIB_SS) & 0xFFFF);
                             p = zput(p, ":0x");
@@ -10791,17 +10812,17 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                                  LPCREATESTRUCT and this host has never built one.
                                  Saying so on the line is what stops a later reader
                                  taking the zero for a measurement. */
-                            if (!f.cblparam && f.cbmsg == WM_CREATE16)
+                            if (f.cbmsg == WM_CREATE16)
                                 p = zput(p, " [lParam=0: no CREATESTRUCT yet]");
                             if (!rsel)
                                 p = zput(p, " -- NO RETURN SELECTOR (LDT full);"
                                             " the call was NOT made");
                             else if (!wowcall_enter(tib, ssb3, rsel, f.cbproc,
-                                                    f.cbds, f.cbhwnd, f.cbmsg,
-                                                    f.cbwparam, f.cblparam,
+                                                    f.cbds, f.cbarg, f.cbnarg,
                                                     (DWORD)(ULONG_PTR)
                                                         (f.bp + WOW32_OFF_RET),
-                                                    f.cbret))
+                                                    f.cbret, f.cbsink,
+                                                    f.cbhwnd, f.cbmsg))
                                 p = zput(p, " -- REFUSED (depth, or an unusable"
                                             " stack/procedure); the call was NOT"
                                             " made and the guest keeps the answer"

@@ -74,6 +74,54 @@
    `seg3:0x0074`, and its lParam is an MDICREATESTRUCT -- see below. */
 #define WM_MDICREATE16  0x0220
 
+/*
+ * ── ★★★★ AN EDIT CONTROL'S TEXT IS A HANDLE IN THE APPLICATION'S OWN HEAP ────
+ * `0x040C` and `0x040D` are `WM_USER + 12` and `WM_USER + 13`, and which is
+ * which is settled by SYSEDIT's file-loading routine rather than from memory --
+ * `sysedit seg3`, and every call in it is named from the relocation chain:
+ *
+ *   00cf  OPENFILE                       ; < 0 -> "Cannot open this file"
+ *   00f8  _LLSEEK(h, 0, 2)  -> [bp-4]    ; ★ the file's SIZE
+ *   010a  _LLSEEK(h, 0, 0)               ; back to the start
+ *   011b  SendMessage(hEdit, 0x40D, 0,0) ; ★ so 0x40D takes NO parameters...
+ *   0124  push ax / push [bp-4]+1 / push 0x42
+ *   012c  LOCALREALLOC                   ; ★ ...and RETURNS A LOCAL HANDLE
+ *   0148  LOCALLOCK -> [bp-0x96]         ; a far pointer to the bytes
+ *   015a  _LREAD(h, that, size)          ; the file goes straight in
+ *   017b  mov byte es:[bx+si],0          ; the guest NUL-terminates it itself
+ *   0183  LOCALUNLOCK
+ *   018b  SendMessage(hEdit, 0x40C, hMem, 0)  ; ★ 0x40C TAKES the handle
+ *
+ * ⇒ `0x040D` is **EM_GETHANDLE** and `0x040C` is **EM_SETHANDLE**, and the run
+ *   that stopped here was stopping on the FIRST of the pair, not the second.
+ *
+ * ★★ AND THE HANDLE MUST BE VALID IN THE APPLICATION'S OWN LOCAL HEAP. That is
+ *   not an assumption about how Windows implements edit controls -- it is what
+ *   this program demonstrably requires: it hands the answer straight to
+ *   `LocalReAlloc` and `LocalLock`, which operate on the local heap of the
+ *   CURRENT DS, and DS throughout this routine is SYSEDIT's own DGROUP (its
+ *   window procedure's prologue put it there). A handle this host invented would
+ *   be a number `LocalReAlloc` rejects, and rejecting it is exactly what produced
+ *   *"Cannot open this file."*
+ * ⇒ The host cannot make this handle. The GUEST'S KERNEL has to, and since
+ *   session 40 the host can ask it: `KERNEL.5 LOCALALLOC` is entry-table
+ *   `FIXED, segment 1, offset 0x3ddb`, and krnl386's segment 1 is the segment
+ *   every WOW32 BOP executes in -- so its runtime address is `<the BOP's CS>:
+ *   0x3ddb`, with no resolution machinery at all. The disassembly there confirms
+ *   the signature to the byte: `test ax,0xf08d` against `[bp+8]` (LocalAlloc's
+ *   own flag validation) and `retf 4` -- two words, far.
+ */
+#define EM_SETHANDLE16  0x040C
+#define EM_GETHANDLE16  0x040D
+#define KRNL_LOCALALLOC_OFF 0x3ddb
+/* LMEM_MOVEABLE | LMEM_ZEROINIT -- the same flags SYSEDIT itself passes to
+   LocalReAlloc at `seg3:0x012a` (`push 0x42`), so the block it grows is the kind
+   it expects to be growing. */
+#define LMEM_MOVEABLE_ZEROINIT 0x0042
+/* Small on purpose: the guest reallocs it to the file's size before using it, so
+   anything bigger would be memory the application immediately replaces. */
+#define WOWUSER_EDIT_INITIAL   0x20
+
 /* ── ★★★ NOTIFYWOW: "HERE IS A 16-BIT RESOURCE I HAVE JUST LOADED." ───────────
      Named by USER's own export table (`wowmap.py`: id 0x217, 6 argument bytes,
      stub `seg1:0x12dd`, NOTIFYWOW) and pinned to the byte by its one caller,
@@ -298,10 +346,22 @@ typedef struct {
          `SendMessage: no such window 0x0000 msg 0x040d` -- EM_SETHANDLE to a
          window handle the program had just been told to forget. */
     WORD  extra[WOWUSER_MAX_EXTRA];
+    /* An EDIT control's text: a Win16 LOCAL handle in the APPLICATION's own
+       heap, allocated by the guest's own KERNEL. See EM_GETHANDLE16. */
+    WORD  hmem;
 } wowuser_win_t;
 
 static wowuser_win_t g_wu_win[WOWUSER_MAX_WIN];
 static int           g_wu_nwin = 0;
+
+/* ── krnl386's SEGMENT 1, AS A LIVE SELECTOR. ─────────────────────────────────
+     Needed to call KERNEL exports (see EM_GETHANDLE16), and it costs nothing to
+     know: the WOW32 common thunk lives in krnl386's segment 1, so the CS at
+     every WOW32 BOP IS that selector. The host records it there rather than
+     looking it up -- `wow_module_of_sel()` is a bind-stage table and cannot name
+     a selector krnl386 allocated at run time, which is the same trap that made
+     the id-space label print `?` about a segment the dispatcher had identified. */
+static WORD g_wu_krnl_seg = 0;
 
 /* A free window slot with its synthetic handle assigned, or NULL. Factored out
    of CreateWindow the moment a SECOND thing started making windows -- the MDI
@@ -431,17 +491,30 @@ static void wu_putq(char *b, int cap, int *k, const char *s)
      entry conditions. See wowcall.h for what the fields mean and for why the
      return mode is KEEP: the caller has already written the handle it made, and
      the procedure's answer only gets a veto. */
+/* Fill in a window-procedure call: five words, in DECLARED order. */
+static void wowuser_want_msg(wow32_frame_t *f, const wowuser_win_t *w, WORD ds,
+                             WORD msg, WORD wparam, DWORD lparam, int retmode)
+{
+    f->cbproc   = w->wndproc;
+    f->cbds     = ds;
+    f->cbarg[0] = w->hwnd;
+    f->cbarg[1] = msg;
+    f->cbarg[2] = wparam;
+    f->cbarg[3] = (WORD)(lparam >> 16);
+    f->cbarg[4] = (WORD)(lparam & 0xFFFF);
+    f->cbnarg   = 5;
+    f->cbret    = retmode;
+    f->cbhwnd   = w->hwnd;
+    f->cbmsg    = msg;
+}
+
 static void wowuser_want_create(wow32_frame_t *f, const wowuser_class_t *c,
                                 const wowuser_win_t *w)
 {
     if (!f->cbok || !w->wndproc) return;
-    f->cbproc   = w->wndproc;
-    f->cbds     = w->hinst ? w->hinst : c->hinst;
-    f->cbhwnd   = w->hwnd;
-    f->cbmsg    = WM_CREATE16;
-    f->cbwparam = 0;
-    f->cblparam = 0;                       /* ⚠ no CREATESTRUCT yet -- see wowcall.h */
-    f->cbret    = WOWCALL_RET_KEEP;
+    /* ⚠ lParam 0: no CREATESTRUCT yet -- see wowcall.h. */
+    wowuser_want_msg(f, w, w->hinst ? w->hinst : c->hinst,
+                     WM_CREATE16, 0, 0, WOWCALL_RET_KEEP);
 }
 
 /*
@@ -547,6 +620,63 @@ static LONG wowuser_defproc(wow32_frame_t *f, wowuser_win_t *w, WORD msg,
         wowuser_want_create(f, c, ch);
         return (LONG)ch->hwnd;
     }
+
+    /* ── ★★★★ EM_GETHANDLE: THE HOST ASKS THE GUEST'S KERNEL FOR MEMORY ───────
+         See the note on EM_GETHANDLE16 for why the answer has to be a real local
+         handle in the application's own heap, and why that means calling
+         `KERNEL.5 LocalAlloc` rather than inventing a number.
+       ★ THE CALL'S RESULT IS THIS MESSAGE'S RESULT, so it goes back through
+         WOWCALL_RET_RESULT -- the same path SendMessage-to-a-window-procedure
+         uses, and for the same reason: the host must not invent the value.
+       ★ AND THE HOST KEEPS A COPY, through the sink, because the control owns
+         this handle from now on and the next EM_GETHANDLE must return the SAME
+         one rather than allocating again.
+       ⚠ `f->cbds` is the CONTROL'S OWN hInstance, not the caller's. LocalAlloc
+         allocates from the local heap of whatever DS it is entered with, and the
+         heap this handle has to be valid in is the one the application will call
+         LocalReAlloc against -- which is its own. */
+    case EM_GETHANDLE16: {
+        if (w->hmem) {
+            wu_puts(note, notecap, &k, "EM_GETHANDLE -> 0x");
+            wu_puthex(note, notecap, &k, w->hmem, 4);
+            wu_puts(note, notecap, &k, " (already allocated)");
+            return (LONG)w->hmem;
+        }
+        if (!f->cbok || !w->hinst || !g_wu_krnl_seg) {
+            wu_puts(note, notecap, &k, "EM_GETHANDLE: cannot allocate (no callback,"
+                                       " no instance, or krnl386's segment is not"
+                                       " known yet), answered 0");
+            return 0;
+        }
+        wu_puts(note, notecap, &k, "EM_GETHANDLE -> asking the guest's own "
+                                   "KERNEL.5 LocalAlloc in DGROUP 0x");
+        wu_puthex(note, notecap, &k, w->hinst, 4);
+        f->cbproc   = ((DWORD)g_wu_krnl_seg << 16) | KRNL_LOCALALLOC_OFF;
+        f->cbds     = w->hinst;
+        f->cbarg[0] = LMEM_MOVEABLE_ZEROINIT;
+        f->cbarg[1] = WOWUSER_EDIT_INITIAL;
+        f->cbnarg   = 2;
+        f->cbret    = WOWCALL_RET_RESULTW;   /* LocalAlloc returns a WORD in AX */
+        f->cbsink   = &w->hmem;
+        f->cbhwnd   = w->hwnd;
+        f->cbmsg    = msg;
+        return 0;                    /* replaced by LocalAlloc's own answer */
+    }
+
+    /* ── EM_SETHANDLE: the application hands the control its text. ────────────
+         The block is the GUEST'S -- it allocated the growth, locked it, read the
+         file into it and NUL-terminated it itself -- so there is nothing to copy
+         and nothing to own. Recording which handle the control now holds is the
+         whole of the work, and it is what a later EM_GETHANDLE must return.
+       ⚠ THIS IS WHERE THE TEXT BECOMES READABLE, and the day windows have pixels
+         it is the hook: LocalLock that handle through the app's DGROUP and the
+         file's contents are right there. */
+    case EM_SETHANDLE16:
+        w->hmem = wparam;
+        wu_puts(note, notecap, &k, "EM_SETHANDLE 0x");
+        wu_puthex(note, notecap, &k, wparam, 4);
+        wu_puts(note, notecap, &k, " -- the control now holds the file's text");
+        return 0;
 
     default:
         wu_puts(note, notecap, &k, "default procedure: msg 0x");
@@ -780,13 +910,8 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
             /* Written so the hole is never uninitialised if the call is
                refused; wowcall.h overwrites it with the real answer. */
             wow32_setret(f, 0);
-            f->cbproc   = w->wndproc;
-            f->cbds     = w->hinst ? w->hinst : g_wu_class[w->cls].hinst;
-            f->cbhwnd   = hwnd;
-            f->cbmsg    = msg;
-            f->cbwparam = wp;
-            f->cblparam = lp;
-            f->cbret    = WOWCALL_RET_RESULT;
+            wowuser_want_msg(f, w, w->hinst ? w->hinst : g_wu_class[w->cls].hinst,
+                             msg, wp, lp, WOWCALL_RET_RESULT);
             return 1;
         }
         wow32_setret(f, (DWORD)wowuser_defproc(f, w, msg, wp, lp, note, notecap));
