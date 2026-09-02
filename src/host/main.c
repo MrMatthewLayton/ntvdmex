@@ -12515,8 +12515,21 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                                  ne_modtab = 0x38a instead of 0x78, and the only way to
                                  tell a mis-delivered read from a mis-parsed one is to
                                  print the destination and the bytes. */
+                            /* ⚠ AND WHAT THE GUEST WILL SEE. This printed the byte
+                                 count and not the ANSWER -- half an instrument, by
+                                 this project's own rule -- and it cost a reading:
+                                 SYSEDIT reports "Cannot read this file" about a
+                                 0-byte file, which the stock-ntvdm oracle shows it
+                                 does NOT do, and the whole question is what `_lread`
+                                 came back with. `rd` and `AX` are the same number
+                                 today and printing only one of them is a claim that
+                                 they always will be. */
                             p = zput(p, "INT21h AH=3F read "); p = zhex(p, rd);
-                            p = zput(p, "b h="); p = zhex(p, h);
+                            p = zput(p, "b of "); p = zhex(p, cnt);
+                            p = zput(p, " -> AX=0x");
+                            p = zhex(p, VDM_REG(tib, VTIB_EAX) & 0xFFFF);
+                            p = zput(p, " CF="); p = zhex(p, VDM_REG(tib, VTIB_EFLAGS) & 1u);
+                            p = zput(p, " h="); p = zhex(p, h);
                             p = zput(p, " -> 0x"); p = zhex(p, VDM_REG(tib, VTIB_DS) & 0xFFFF);
                             p = zput(p, ":0x"); p = zhex(p, VDM_REG(tib, VTIB_EDX) & 0xFFFF);
                             p = zput(p, " lin=0x"); p = zhex(p, (DWORD)(ULONG_PTR)b);

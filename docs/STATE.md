@@ -258,10 +258,18 @@ silently is worth more attention than its size suggests.
    ⚠ a declared **return width** — `LocalAlloc` came back `0x00422502`, whose high word
    was *the flags we had pushed*, an instrument lying about a call the host itself made.
    ⇒ **`C:\WINDOWS\SYSTEM.INI` and `WIN.INI` are read into memory**, in blocks the
-   application allocated, grew, filled and owns. ⚠ Open and bounded: the other two files
-   are **0 bytes** on this rig and get *"Cannot read this file."*; the test that settles
-   whether that is ours or the application's is the **stock-ntvdm oracle**, not more
-   reading. ★ **The baseline moved by
+   application allocated, grew, filled and owns. ★★ **And the oracle then located a host defect that had always been there.** The other
+   two files are **0 bytes** and get *"Cannot read this file."* — so `SYSEDIT` was run
+   under **stock ntvdm on the same box**, and it opens all four with **no message box**
+   (`docs/research/evidence/stock-sysedit-four-files.png`). ⇒ the message is **ours**.
+   krnl386's own `_lread` says how: `jcxz` sends a zero-length read *past* the buffer
+   probe at `seg1:0x4114` — whose `or` is what **clears CF** — straight to the
+   `pushf / push cs / call` at `0x4530`, and `0x4549 jae` turns a set CF into `-1`. Every
+   other read had CF cleared for the guest's own reasons, which is why a defect that was
+   always there needed an empty file to expose it. ⚠ **Located, not fixed** — the fix has
+   to know which flags image the guest restores from, and inventing that is how a host
+   corrupts a stack. The next experiment is **one instruction wide**: a PM breakpoint at
+   `krnl386 seg1:0x4549` to read CF at the `jae` that decides. ★ **The baseline moved by
    exactly one call and it has a name**: **270 / 45 / 122 / 97 · `9·222·39` · `0001:229C`**
    against session 39's 270/44/122/98 — `GetWindowsDirectory`, at line 615 of both logs,
    which krnl386 asks during its own bootstrap. Everything else is unchanged.

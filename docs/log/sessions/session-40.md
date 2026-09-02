@@ -456,6 +456,69 @@ application is right" is a live possibility and must be excluded rather than ass
 
 ---
 
+## ★★★★ PART 7: THE ORACLE ANSWERED, AND THE DEFECT IS OURS
+
+Part 6 left *"Cannot read this file."* about the two 0-byte files as a **lead, not a
+cause**, with the test named: run `SYSEDIT` under stock `ntvdm` on the same box. Done
+(`scripts/bm/stocksysedit.bat`, and ⚠ it restores the IFEO Debugger key on every exit
+path). The answer is a picture —
+[`stock-sysedit-four-files.png`](../../research/evidence/stock-sysedit-four-files.png):
+
+> **"System Configuration Editor" with FOUR MDI children** — `C:\WINDOWS\SYSTEM.INI`,
+> `C:\WINDOWS\WIN.INI`, `C:\CONFIG.SYS`, `C:\AUTOEXEC.BAT` — SYSTEM.INI's text visible in
+> the leftmost, `AUTOEXEC.BAT` on top and correctly **empty**, and **no message box
+> anywhere**.
+
+⇒ **Stock opens a 0-byte file without complaint. The message is ours.** The same run
+printed the sizes from the box's own directory listing — `system.ini 231`, `win.ini 477`,
+`CONFIG.SYS 0`, `AUTOEXEC.BAT 0` — which matches our seeks exactly (`0xe7`, `0x1dd`, `0`,
+`0`), so the file sizes were never in question; only the verdict was.
+
+### ★★★ And krnl386's own code says exactly how a zero-length read goes wrong
+
+`_lread` is `KERNEL.82`, entry-table `FIXED, segment 1, offset 0x3d7e`:
+
+```
+3d93  mov cx,[bp+8]        ; wBytes
+3d96  jcxz 0x3da4          ; ★★ ZERO -> skip the buffer probe entirely
+3d98  mov ax,[bp+0xa] / mov cx,[bp+0xc] / mov bx,1
+3da1  call 0x4114          ;    the probe: `or byte es:[bx],0` -- ★ CLEARS CF
+...
+3da4  pop dx / pop bp / pop es / jmp 0x4530
+4530  mov cl,0x3f / ... / pushf / push cs / call 0x4ff2   ; ★ pushf captures CF HERE
+4548  pop ds
+4549  jae 0x454e           ; ★★★ CF CLEAR -> keep AX
+454b  mov ax,0xffff        ; ★★★ CF SET   -> -1
+454e  retf 8
+```
+
+⇒ **`_lread` returns `-1` if CF is set on return**, and the zero-length path is the one
+that skips `0x4114` — the instruction that would otherwise have cleared CF. SYSEDIT then
+does `cmp ax,[bp-4]`, `0xFFFF != 0`, and reports the failure. Every piece of the symptom
+is accounted for: **two of four files, exactly the two that are empty.**
+
+★ **So the host's CF is not reaching the guest.** Our PM `AH=3Fh` arm sets `AX = 0` and
+clears CF in the live EFLAGS (verified by reading it, and the log now prints both — see
+below), so the loss is downstream, in how the flags a DOS service returns are restored
+through krnl386's own `pushf / push cs / call` dispatcher. On every other path the guest
+had *already* cleared CF for its own reasons, which is why a defect that has been there
+all along took a zero-byte file to expose.
+
+⚠ **Not fixed in this session, and deliberately not guessed at.** The fix has to know
+*which* flags image the guest restores from, and inventing an answer to that is how a host
+corrupts a stack. **The next experiment is one instruction wide**: a PM breakpoint at
+`krnl386 seg1:0x4549` reads CF and AX at the `jae` that decides, and says whether CF is
+set on arrival (our flags are lost) or clear (and the fault is elsewhere).
+
+### ⚠ One instrument fixed on the way, by this project's own rule
+
+`INT21h AH=3F` printed the byte count and **not the answer** — half an instrument, when
+the entire question was what `_lread` came back with. It now prints the requested count,
+`AX` and `CF`. `rd` and `AX` are the same number today, and printing only one of them was
+a claim that they always would be.
+
+---
+
 ## ★★★★ WHERE IT ACTUALLY GETS TO NOW
 
 With `wowsched.txt` **and** `wowcall.txt` armed, one run:
@@ -523,19 +586,26 @@ surface before drawing. What it needs:
 ⚠ Do not fabricate a message to keep the loop alive. The 0 is currently *correct* for an
 empty queue with no `WM_QUIT` posted — what is missing is the queue, not the answer.
 
-### 1b. ⚠ OPEN, AND BOUNDED: the two 0-byte files
+### 1b. ★★ A HOST DEFECT, LOCATED BUT NOT FIXED: CF DOES NOT REACH THE GUEST
 
-`CONFIG.SYS` and `AUTOEXEC.BAT` are 0 bytes on this rig (measured: `seek org=2 -> 0`) and
-both get *"Cannot read this file."*; the two non-empty files load silently. The message
-comes from `sysedit seg3:0x0164` (code 2), reached from `cmp ax,[bp-4] / jne` after
-`_LREAD` — so `_lread` returned something other than the 0 that a 0-byte size implies.
-Our own `AH=3Fh` arm returns `AX = 0`, CF clear, for a zero-length read (read, not
-assumed), so the discrepancy is between that and `_lread`'s return.
+Part 7. The oracle has ruled: **stock SYSEDIT opens both 0-byte files with no message
+box**, so *"Cannot read this file."* is ours. And krnl386's own `_lread` says how:
+`jcxz` sends a zero-length read past `0x4114` — the buffer probe whose `or` **clears CF**
+— straight to the `pushf / push cs / call` at `0x4530`, and `0x4549 jae` turns a set CF
+into `-1`. Every other read had CF cleared for the guest's own reasons, which is why a
+defect that was always there needed an empty file to show itself.
 
-**The test that settles it is the oracle, not more reading:** run `SYSEDIT` under *stock*
-`ntvdm` on the same box and see whether it says the same thing about the same two files.
-Empty `CONFIG.SYS`/`AUTOEXEC.BAT` are the normal state on XP, so "the application is
-right" is a live possibility that has to be excluded rather than assumed.
+▶ **The next experiment is one instruction wide.** Arm a PM breakpoint at
+`krnl386 seg1:0x4549` (linear = krnl386 seg1 csbase + 0x4549) and read CF and AX at the
+`jae` that decides:
+- **CF set** ⇒ the flags our DOS service returns are being discarded on the way back
+  through krnl386's dispatcher, and the fix is to write CF into the image the guest
+  actually restores from — ⚠ which must be *found*, not assumed; inventing a frame shape
+  is how a host corrupts a stack.
+- **CF clear** ⇒ the fault is elsewhere and `_lread` is not the culprit.
+
+⚠ Do not "fix" this by making a zero-length read return something else. The guest's logic
+is correct at every step.
 
 ### 1c. ⚠ `lParam` for `WM_CREATE` stops being optional soon
 
