@@ -453,7 +453,78 @@ session — is **told what to run**. krnl386 opens `SYSEDIT.EXE` and reads its `
 header. The load then fails and WOWEXEC puts up *"Insufficient memory to run this
 application"*. Nothing has drawn a pixel.
 
-### 1. ★★★ krnl386 **seg2** id `0xd1` — the call whose failure abandons the load
+### 0. ★★★★★ PART 4: SYSEDIT GETS A TASK DATABASE, AND THE REAL BLOCKER IS `0xc5`
+
+`0xd1` was run as an **experiment**, not implemented — `wow32ret.txt` with `d1 00000001`,
+which the log stamps `** an EXPERIMENT, not a service **` on every use. (⚠ id-space
+checked first: `0xd1` does not exist in krnl386's seg1 table, so the override cannot
+collide.) Prediction written before the run: *if the abort is the only obstacle, the TDB
+creator proceeds and a third task id appears.*
+
+**Half right, and the half that failed is the more useful half.** No third task appeared
+— but krnl386 went a long way further:
+
+```
+INT31h 0007 setbase ×3                       SYSEDIT's segment descriptors
+0x7d AcceptTaskSelector -> 0x0bbf            ★ A TASK DATABASE SELECTOR FOR SYSEDIT
+INT21h AH=55h  (PM thunk TODO)               ★ create-PSP, unimplemented in our PM thunk
+GetProfileInt("ModuleCompatibility","SYSEDIT")  ★ krnl386 KNOWS THE MODULE BY NAME
+```
+
+So `0xd1`'s only job, as far as this path is concerned, is *not returning zero*: with any
+non-zero answer krnl386 builds SYSEDIT's task database, approves its selector, and
+registers the module. **What stops it next is not a missing WOW32 id at all.**
+
+#### ★★★ It is the module search path — the defect filed two sections ago as "not chased"
+
+krnl386 goes on to resolve SYSEDIT's imports. SYSEDIT imports `SHELL.DLL`, and:
+
+```
+0xc5 (krnl)  arg[2] = "SHELL.DLL"            -> UNIMPLEMENTED, answered 0
+GetCurrentDirectory -> "Documents and Settings\Matthew"
+AH=43 attributes "C:\Documents and Settings\Matthew\SHELL.DLL" -> CF=1
+AH=3d open       "C:\Documents and Settings\Matthew\SHELL.DLL" -> FAILED gle=2
+```
+
+⇒ **`0xc5` is the module-path resolver, and answering it `0` is what makes krnl386 fall
+back to composing the name against the current directory.** The defect recorded earlier
+as cosmetic is the launch blocker.
+
+#### The semantics are pinned by the two call sites, and by their symmetry
+
+```
+0848  … push src.seg / push src.off / push ss / push bx     ; bx = [bp-0x1e]
+0856  lcall 0xc5
+085b  mov [bp-0x20],ax / cmp ax,0 / je 0x0875               ; 0 -> fall back
+0864  push [bp-0x1c] / push [bp-0x1e] / push ss / push si / push ax / lcall  ; RESOLVED
+0875  push [bp+0x0c] / push [bp+0x0a] / push ss / push si / push ax / lcall  ; ORIGINAL
+```
+
+★ **The two tails are the same five-word call with one substitution**: the resolved far
+pointer in place of the original one. That is what proves `dst` receives a **16:16 far
+pointer to a path string**, not a string copied into a buffer — a much stronger argument
+than reading the pushes alone.
+
+★ And the **second** call site (`seg2:0x08ba`) calls `0xc5(dst, NULL)`, gated on the
+first call having returned non-zero, and ignores the result. So the pair is
+**resolve / release**, and a host implementation owns the storage in between.
+
+⚠⚠ **THIS IS WHY `0xc5` IS NOT A ONE-LINER.** The answer has to be a far pointer the
+guest can dereference *in protected mode*, so the host needs guest-visible scratch with
+a **selector**. `g_pm_xfer_seg` is a V86 paragraph, not a selector, and is reused by
+every PM→V86 `INT 21h` — it cannot hold a string across the resolve/release window. The
+next step is therefore a small **WOW scratch selector** allocated at bring-up, with
+`0xc5` writing the path into it and returning `sel:0`, and the release call a no-op
+while only one is outstanding (which the guest's own pairing guarantees). ⚠ The LDT
+machinery is delicate — see the standing notes about reserved indices and force-typing.
+
+⇒ **Resolution itself is not a guess**: "find this module the way Windows does" is the
+Windows and system directories then the path, which is `SearchPathA`. The only open
+question is where to put the answer.
+
+---
+
+### 1. ★★★ krnl386 **seg2** id `0xd1` — the call that must not return zero
 
 ⚠ **`0x82` IS REFUTED, AND IT WAS MY OWN HANDOFF THAT NAMED IT.** Part 3 above said the
 frontier was `0x82`, "the last call before the verdict", with a warning attached that
@@ -508,10 +579,23 @@ is `stubseg == CS` — is false, `wow32_call()` returns 0 immediately, and the l
 seg2 → imported thunk, **121 stubs***. `0xc5` (session 39, the path canonicaliser) is in
 the same table. Nothing in this host answers any of them.
 
-▶ So the next step is not one function, it is **a dispatcher for krnl386 seg2's table**,
-and `0xd1` is its first customer. `tools/ne/nedis.py guest/ne/krnl386.exe 2 <off>` reads
-those call sites; `[0x46c]` gates at least `0xc5` and `0xd1`, so it is worth knowing what
-sets it.
+▶ So `0xd1` needs **a dispatcher for krnl386 seg2's table**, which does not exist.
+`tools/ne/nedis.py guest/ne/krnl386.exe 2 <off>` reads those call sites, and
+`tools/ne/wowmap.py guest/ne/krnl386.exe "--table=seg2 -> imported thunk"` lists all 119
+ids with 50 of them already named by the export table (`0xd1` is not one of them).
+`[0x46c]` gates at least `0xc5` and `0xd1`, so it is worth knowing what sets it.
+
+★ **Its one caller names what it is for.** `seg2:0x29a5`, twenty-one bytes into the
+task-database creator (`seg2:0x2984`), and it is skipped entirely when its far-pointer
+argument is null (`cmp si,[bp+0xc] / je`). Arguments, measured:
+`(hModule = 0xbcf, lpParameterBlock = 0x3d7:0x1ce4, [0x293] = 0x13f)` — and the creator
+dereferences that same pointer at `+2` (`les di,es:[di+2]`), which is Win16 `LOADPARMS`'s
+`lpCmdLine`. So `0xd1` is *"32-bit side, take a record of this new task"*, returning a
+handle the wrapper converts to a DWORD.
+
+⚠ **But it is NOT the frontier — see Part 4 above.** Any non-zero answer gets past it,
+and what stops the run next is `0xc5`. Implement `0xd1` for real only after the module
+path is fixed, or the next run measures the same wall through a different id.
 
 ### 2. The message loop (was #1 last time, still real, now second)
 

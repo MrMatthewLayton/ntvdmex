@@ -190,6 +190,24 @@ krnl386 id **`0x82`**, the last call before the load gives up. See #128 below.
    abort is krnl386 **seg2** id `0xd1` (`seg2:0x2c84`), read right after SYSEDIT's first
    code segment loads — and seg2 is a **third id space** (121 stubs) that this host does
    not dispatch at all.
+   ★★★★ **And an experiment then took it much further.** Answering `0xd1` non-zero
+   through `wow32ret.txt` (logged as an EXPERIMENT, never committed) makes krnl386 set up
+   SYSEDIT's segment descriptors, **approve a task-database selector for it**
+   (`0x7d -> 0x0bbf`) and look up `GetProfileInt("ModuleCompatibility", "SYSEDIT")` — it
+   knows the module by name. ⇒ `0xd1` only has to *not be zero*, and **it is not the
+   frontier.** What stops it next is the **module search path**: SYSEDIT imports
+   `SHELL.DLL`, and `0xc5` — *the module-path resolver* — is unimplemented, so krnl386
+   falls back to composing the name against the current directory and opens
+   `C:\Documents and Settings\Matthew\SHELL.DLL`, which does not exist. The defect filed
+   two sessions ago as cosmetic **is the launch blocker.** `0xc5`'s semantics are pinned
+   by its two call sites: `(dst, src)` resolves and `(dst, NULL)` releases, and the
+   success and fallback tails are *the same five-word call with the resolved far pointer
+   substituted for the original* — which proves `dst` receives a **16:16 far pointer**,
+   not a copied string. ⚠ That is why it is not a one-liner: the answer must be
+   dereferenceable in protected mode, so it needs a **WOW scratch selector**
+   (`g_pm_xfer_seg` is a V86 paragraph and is reused by every PM→V86 `INT 21h`).
+   Resolution itself is not a guess — Windows/system directories then the path, i.e.
+   `SearchPathA`.
 
    **Session 37 in one paragraph.** `GDI.EXE` was never rejected — we could not **open**
    it. `seg2:0x218a` has exactly two instructions that return `0x0B` over its whole
