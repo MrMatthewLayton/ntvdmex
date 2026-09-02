@@ -4,7 +4,7 @@
 > this file top to bottom and you will know where it is, what works, what does not, and
 > what to do next.
 
-- **Last updated:** 2026-09-02 (session 40)
+- **Last updated:** 2026-09-02 (session 41)
 - **Branch:** `m9/completeness`
 - **Tracker:** [140+ issues](https://github.com/MrMatthewLayton/ntvdmex/issues) — reconciled against the repo on 2026-08-26 (`tools/gh/backfill.py` is the manifest)
 - **Knowledge base:** the [wiki](https://github.com/MrMatthewLayton/ntvdmex/wiki)
@@ -106,6 +106,23 @@ MDI client for a child window (`SendMessage(WM_MDICREATE)`) and **the MDI client
 procedure is the 32-bit side's, i.e. ours, and does not exist yet**. Nothing has drawn a
 pixel. See #128 below.
 
+★★★★★ **And as of session 41 the MESSAGE LOOP TURNS, on a real keystroke.** SYSEDIT's
+`GetMessage` used to get the harness sentinel, which its own `or ax,ax / jne` reads as
+`WM_QUIT` — so the application was not failing, it was being dismissed. There is now a
+**message queue**, and the host's own keyboard feeds it: a key pressed on the rig becomes
+`WM_KEYDOWN` (the virtual key from `MapVirtualKey`, i.e. the OS, not a table), is taken by
+`GetMessage`, survives `TranslateMDISysAccel` / `TranslateAccelerator` /
+`TranslateMessage`, and is handed to **`DispatchMessage`, which calls the window procedure
+of the window the guest itself gave the focus to**. Twelve messages delivered and
+dispatched in a run. Four ids the export table could not name were named by the run —
+`0x71` TranslateMessage, `0x72` DispatchMessage, `0xb2` TranslateAccelerator, `0x1c3`
+TranslateMDISysAccel. And a defect session 40 located but deliberately left unfixed is
+fixed: our protected-mode DOS services returned `CF` in **live EFLAGS**, and the three-byte
+handler stub the guest returns through (`C4 C4 CF` — the BOP, then an **IRET**) restored
+the caller's flags over the top of it, so `SYSEDIT` was told two 0-byte files could not be
+read. `SYSEDIT.EXE` now **reads all four of its files and shows no message box**. Still no
+pixel. ⇒ **the frontier is pixels.**
+
 ---
 
 ## How far along is this, honestly
@@ -118,14 +135,16 @@ Win16 push, and should not be quoted.)
 | Bar | Where it is | Est. |
 |---|---|---|
 | **The original DOS games bar** — Doom / Skyroads / ZAR, flawless sound | Two of three fully playable and confirmed by hand. ZAR is the gap (VBE 2.0 hi-colour + linear framebuffer). | **~85%** |
-| **★ The north star** — MS Paint + Notepad from Windows 3.x | Bootstrap, NE loader, krnl386, the WOW32 boundary, the scheduler, the launch and — since session 40 — **calling into 16-bit code in both shapes** (window procedures, and any far export) all work; `SYSEDIT.EXE` builds its whole MDI interface and **loads two files into memory**. **Nothing has drawn a pixel** and there is no thunking; what it stops on is the **message queue**, and behind that, input and pixels. | **~47%** |
+| **★ The north star** — MS Paint + Notepad from Windows 3.x | Bootstrap, NE loader, krnl386, the WOW32 boundary, the scheduler, the launch, **calling into 16-bit code in both shapes** (session 40) and — since session 41 — **a message queue fed by real keyboard input, dispatched into the guest's own window procedures**. `SYSEDIT.EXE` builds its whole MDI interface and loads **all four** of its files. **Nothing has drawn a pixel** and there is no thunking; what it stops on now is **pixels**, and the GDI id space behind them. | **~52%** |
 | **The full vision** — an `ntvdm` superset on XP-32 | Everything above, plus the host UI, minus the standing DOS defects and M7/M8. | **~60%** |
 
 **Read the north-star number carefully.** The hard *unknowns* are largely behind us — what is
 left is mostly known work, but there is a lot of it, and **M6 is one line on the roadmap and
 probably the largest single body of work remaining**: 16:16↔flat thunking, USER/GDI object
 mapping, and message bridging. *Calling into 16-bit code* was on that list until session 40
-and is now a working mechanism (`src/wow/wowcall.h`) that has run three times.
+and is now a working mechanism (`src/wow/wowcall.h`); *message bridging* was on it until
+session 41 and is now `src/wow/wowmsg.h`, with the host's own keyboard on one end of it and
+a Win16 window procedure on the other.
 
 ⚠ And the standing DOS defects below are small individually but sit in the **"runs but lies"**
 class this project treats as the most expensive kind — `MEM.EXE` reporting wrong figures
@@ -152,7 +171,7 @@ silently is worth more attention than its size suggests.
 
 | | Why it matters |
 |---|---|
-| **Win16 / WOW — an application launches and its task runs, but nothing draws** | `ntvdm.exe` is *also* the host for every 16-bit **Windows** program. The NE loader loads, relocates and binds the **whole** XP WOW module set on real hardware, **krnl386 executes** — protected mode, its own segments, its interrupt handlers, its own DPMI exceptions, and all eight 16-bit system modules — and it then finds, loads and **runs `WOWEXEC.EXE`** — which, since session 38's host-side task scheduler and session 39's `CreateWindow`, registers two window classes, **creates two windows** and sits in **its message loop** — and, since session 39's `WowGetNextVDMCommand` + `0xc5` + the yield point, **launches `SYSEDIT.EXE`, which runs its startup, registers its own classes and creates its own main window** — and, since session 40, **receives `WM_CREATE` in its own window procedure**, because the host can now call 16-bit code. It goes on to create its MDI client, load its accelerators, show and update its main window, and build **four MDI children, each with its own `EDIT` control**, titled `C:\WINDOWS\SYSTEM.INI`, `WIN.INI`, `C:\CONFIG.SYS` and `C:\AUTOEXEC.BAT`, and **read the first two into memory**. But a window here is a host-side *object* — a handle, a class, a rectangle — with no pixels behind it; there is **no message queue**, so `GetMessage` answers 0, which the application correctly reads as `WM_QUIT`; nothing feeds input to a Win16 program; and there is no 16:16↔flat thunking. Since interception is an IFEO key on `ntvdm.exe`, and Win16 launches go through `ntvdm.exe` too, **installing NTVDMEX permanently would break every 16-bit Windows app today**. → [#128](https://github.com/MrMatthewLayton/ntvdmex/issues/128) |
+| **Win16 / WOW — an application launches and its task runs, but nothing draws** | `ntvdm.exe` is *also* the host for every 16-bit **Windows** program. The NE loader loads, relocates and binds the **whole** XP WOW module set on real hardware, **krnl386 executes** — protected mode, its own segments, its interrupt handlers, its own DPMI exceptions, and all eight 16-bit system modules — and it then finds, loads and **runs `WOWEXEC.EXE`** — which, since session 38's host-side task scheduler and session 39's `CreateWindow`, registers two window classes, **creates two windows** and sits in **its message loop** — and, since session 39's `WowGetNextVDMCommand` + `0xc5` + the yield point, **launches `SYSEDIT.EXE`, which runs its startup, registers its own classes and creates its own main window** — and, since session 40, **receives `WM_CREATE` in its own window procedure**, because the host can now call 16-bit code. It goes on to create its MDI client, load its accelerators, show and update its main window, and build **four MDI children, each with its own `EDIT` control**, titled `C:\WINDOWS\SYSTEM.INI`, `WIN.INI`, `C:\CONFIG.SYS` and `C:\AUTOEXEC.BAT`, and — since session 41's CF fix — **reads all four into memory**. Since session 41 it also **runs its message loop**: a key pressed on the host reaches the window procedure of the window the guest gave the focus to. But a window here is a host-side *object* — a handle, a class, a rectangle — **with no pixels behind it**, so nothing draws, `WM_PAINT` has nowhere honest to come from, GDI's id space is not dispatched at all, and there is no 16:16↔flat thunking. Since interception is an IFEO key on `ntvdm.exe`, and Win16 launches go through `ntvdm.exe` too, **installing NTVDMEX permanently would break every 16-bit Windows app today**. → [#128](https://github.com/MrMatthewLayton/ntvdmex/issues/128) |
 | **Console/stdio integration** | DOS output is buffered and flushed to `CONOUT$` at exit, so shell redirection and piping are bypassed and every DOS program pops a window. Blocks non-interactive use. |
 | **In-guest redirection** | `echo x > file` writes to the screen and leaves the file 0 bytes. Three fixes attempted, all at the wrong end. |
 | **No INT 13h / INT 25h / 26h** | No direct disk access. |
@@ -171,28 +190,68 @@ silently is worth more attention than its size suggests.
 > refused outright, and the real name re-enters us through the IFEO hook. So there is no
 > safe install story until WOW exists, and #128 moved onto the critical path.
 
-1. **[#128] WOW / Win16 — IN PROGRESS. ★★★★★ THE HOST CALLS 16-BIT CODE, AND
-   `SYSEDIT.EXE` BUILDS ITS WHOLE MDI INTERFACE AND READS TWO FILES INTO MEMORY.**
+1. **[#128] WOW / Win16 — IN PROGRESS. ★★★★★ THE MESSAGE LOOP TURNS ON A REAL
+   KEYSTROKE, AND `SYSEDIT.EXE` READS ALL FOUR OF ITS FILES.**
 
-   ### ▶ START HERE: [session 40](log/sessions/session-40.md#-resume-here)
+   ### ▶ START HERE: [session 41](log/sessions/session-41.md#-resume-here)
    That block is the live handoff — where it is, the leads already **ruled out**
    (do not re-try them), the next run, the instruments, and the standing hazards.
    Everything below it is background.
 
-   ### ▶ AND THE FRONTIER IS THE MESSAGE QUEUE
-   SYSEDIT's interface is built and **two of its four files are loaded into memory**. The
-   last thing it does is `GetMessage` (`USER.108`, `sysedit seg1:0x010d`), whose next
-   instructions are `or ax,ax / jne` — non-zero keeps the loop, **0 is `WM_QUIT`**. We
-   answer the harness sentinel, so the application is told to quit and does, cleanly. It
-   is not failing; it is being dismissed.
-   ⇒ What is needed is a **message queue** — the last structural piece of the USER surface
-   before drawing: a queue per task, `PostMessage` into it, `GetMessage`/`PeekMessage` out
-   of it (an empty queue is *block and yield*, which `wowsched.h` already knows how to do),
-   and `DispatchMessage`, which is `wowcall_enter` and therefore already built. ⚠ And
-   **input has to come from somewhere**: nothing feeds a Win16 queue, and the host window
-   that would is the same work as pixels.
-   ⚠ Do not fabricate a message to keep the loop alive — 0 is currently *correct* for an
-   empty queue; what is missing is the queue, not the answer.
+   ### ▶ AND THE FRONTIER IS PIXELS
+   The loop turns, so the two things it exists for are the only things missing, and they
+   are the same piece of work. A window here is a class, a rectangle, a style and a text
+   behind a handle that says it is synthetic — **deliberately**, since session 39, because
+   a half-built window that claimed pixels would lie about every question asked of it.
+   Giving it a real host window is what makes `WM_PAINT` honest (a window that has been
+   shown and never painted has an update region; one with no pixels does not), and
+   `WM_PAINT` is what drags in `BeginPaint`/`EndPaint` and therefore **GDI's id space**,
+   which this host does not dispatch at all. The nearest concrete steps: `ShowWindow`
+   (`0x2a`) and `UpdateWindow` (`0x7c`), both called by SYSEDIT and both unimplemented;
+   then `DefFrameProc` (`0x1bd`), where everything SYSEDIT does not handle goes.
+   ⚠ Do **not** synthesise a `WM_PAINT` before there is something to paint on — a window
+   that reports an update region it does not have is the same lie one level down.
+
+   **Session 41 in one paragraph.** Two things, and the first was staged by session 40 as
+   *"the next experiment, one instruction wide"*. A PM breakpoint at `krnl386
+   seg1:0x4549` — the `jae` in `_lread`'s tail whose other arm is `mov ax,0xffff` — gave
+   an **A/B inside one run**: `SYSTEM.INI` (0xe7 bytes) and `WIN.INI` (0x1dd) reach it
+   with `efl=0x...206`, and the two **0-byte** files with `efl=0x...207`, i.e. **CF set**,
+   while our `AH=3Fh` had answered `AX=0 CF=0` for all four. So the CF we return had
+   *never* reached the guest, and the reason the other two worked is that `_lread`'s
+   buffer probe (skipped on a zero-length read by `seg1:0x3d96 jcxz`) clears CF for the
+   guest's own reasons. Where it went is three bytes: our default protected-mode handler
+   for all 256 vectors is **`C4 C4 CF`** — the BOP, and then an **IRET** — so the very
+   next instruction after a serviced call restores the flags krnl386 pushed at
+   `seg1:0x5238` and discards ours. The answer now goes where a real `INT 21h` handler
+   puts it, the caller's own flags image, which the **V86** arm has always done and the
+   PM arm never did. ⚠ **CF only**: the other status flags in live EFLAGS are the guest's
+   leftovers, and copying them would be inventing an answer in the one place a wrong bit
+   cannot be seen. ⇒ *"Cannot read this file."* 2 → 0. ★★★★★ **Then the frontier.**
+   SYSEDIT's loop is six calls and every one is named from its own relocation chain;
+   `GetMessage` returning 0 is `WM_QUIT`, so the application was being *dismissed*, not
+   failing. `src/wow/wowmsg.h` is the queue, and the host's own keyboard is what fills it
+   — hung off `host_key_scancode`, the single choke point a scripted probe and a human
+   press already share, with the **virtual key from `MapVirtualKey`**, i.e. the OS's own
+   answer rather than a table written from memory. ★ **Four ids the export table could
+   not name were named by the run**: with `GetMessage` answered they arrive as ordinary
+   BOPs and their call sites name them — `0x71` TranslateMessage, `0x72` DispatchMessage,
+   `0xb2` TranslateAccelerator, `0x1c3` TranslateMDISysAccel — and the `from` address is
+   the *application's* rather than USER's because USER's exports reach their stubs by
+   **tail-jump, not by call**. So the host dispatches too, and `DispatchMessage` is
+   `wowcall_enter` with no new machinery under it. ★ The **MSG is 18 bytes** and both
+   sides say so (`sysedit seg1:0x0102 lea ax,[bp-0x12]`, `user seg1:0x1c43 mov bx,0x12`).
+   ⇒ **12 messages delivered and dispatched**, into the window procedure of the window
+   the guest itself gave the focus to (`SetFocus`, four times, its own decision).
+   ⚠ `TranslateMessage` returns **0** and that is the true answer, not a stub: a `WM_CHAR`
+   needs keyboard state nothing here keeps, and guessing it would put *wrong characters*
+   into an edit control. ⚠ **One queue, not one per task**, and the file says why.
+   ⚠ `GetMessage`'s block is **bounded at 6 s** because a harness run has to end, and when
+   it expires the log says *the wait expired* so that is never confused with a quit.
+   ★ Measured three ways: frontier `661/186/308/150` ending on `ExitKernelThunk(0)`;
+   **baseline exactly unchanged at `270/45/122/97 · 9·222·39 · 0001:229C`**; Doom's eleven
+   startup stages, 3.51 MB, with the CF fix firing 0 times in it — predicted before the
+   run, because DOS/4GW's `INT 21h` are patched sites in its own code.
 
    **Session 40 in one paragraph.** The host now **calls 16-bit code**, and the mechanism
    is small because three of its four pieces already existed: a saveable context (the
