@@ -3394,6 +3394,58 @@ static WORD      g_pm_xfer_seg  = 0;
    paragraph, and separate from the transfer buffer above on purpose -- see the
    allocation site and the 0xc5 service. */
 static WORD      g_wow_path_seg = 0;
+/* ── ★ EVERY PSP THIS HOST BUILDS, SO ITS ENVIRONMENT FIELD CAN BE RE-READ LATER.
+     `PSP+0x2c` is the field two separate faults turned on, and the question that
+     could not be answered from a fault dump is not "what is it now" but "who
+     changed it after we wrote it". One selector and one linear address per task is
+     enough to print the answer at every fault, which is the difference between
+     watching the field and inferring it from the code that might write it. */
+#define WOW_PSP_TRACK 4
+static WORD      g_wow_psp_sel[WOW_PSP_TRACK];
+static DWORD     g_wow_psp_lin[WOW_PSP_TRACK];
+static WORD      g_wow_psp_env[WOW_PSP_TRACK];   /* last seen +0x2c, for the change log */
+static int       g_wow_psp_n = 0;
+
+static int host_readable(const void *addr, SIZE_T len);   /* fwd: defined with the
+                                                             other memory probes */
+
+/* Report any change to a tracked PSP's environment field. Called at every WOW32 BOP
+   AND every protected-mode INT 21h, because the resolution of the answer is exactly
+   the spacing of the sampler: sampling only at WOW32 calls put the whole of WOWEXEC's
+   launcher -- LoadModule included -- inside one window, which names a suspect rather
+   than a writer. */
+static char *wow_psp_env_check(char *p, const char *where)
+{
+    int z;
+    for (z = 0; z < g_wow_psp_n; ++z) {
+        /* ⚠⚠ RESOLVE THE SELECTOR EVERY TIME. A LINEAR ADDRESS IS NOT A PSP.
+             krnl386 RE-BASES these selectors -- measured, twice in three log lines
+             for 0x0adf (`INT31h 04F2 ... base=0x000297c0` then `base=0x000299e0`)
+             -- so a frozen linear address stops pointing at the guest's PSP the
+             moment it moves, and this instrument would then report whatever now
+             lives at the old address as if it were the field. Watch what the GUEST
+             watches: the selector. */
+        DWORD lin = dpmi_sel_base(g_wow_psp_sel[z]);
+        const volatile BYTE *pe = (const volatile BYTE *)(ULONG_PTR)lin;
+        WORD now;
+        if (!lin || !host_readable((const void *)pe, 0x2e)) continue;
+        if (lin != g_wow_psp_lin[z]) {
+            p = zput(p, "PSPENV REBASED: sel 0x"); p = zhex(p, g_wow_psp_sel[z]);
+            p = zput(p, " 0x"); p = zhex(p, g_wow_psp_lin[z]);
+            p = zput(p, " -> 0x"); p = zhex(p, lin);
+            p = zput(p, " (the PSP we built is at the OLD address)\r\n");
+            g_wow_psp_lin[z] = lin;
+        }
+        now = (WORD)(pe[0x2c] | (pe[0x2d] << 8));
+        if (g_wow_psp_env[z] == now) continue;
+        p = zput(p, "PSPENV CHANGED: sel 0x"); p = zhex(p, g_wow_psp_sel[z]);
+        p = zput(p, " +0x2c 0x"); p = zhex(p, g_wow_psp_env[z]);
+        p = zput(p, " -> 0x"); p = zhex(p, now);
+        p = zput(p, " (seen at "); p = zput(p, where); p = zput(p, ")\r\n");
+        g_wow_psp_env[z] = now;
+    }
+    return p;
+}
 static WORD      g_pm_xfer_para = 0;
 
 /* Pull the `-a <path>` argument out of a WOW command line. Measured shape:
@@ -9677,6 +9729,13 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                sentinel that collides with real data is how an instrument starts lying. */
             DWORD wow_stale = 0; int wow_stale_ok = 0; int cmd_taken_before = 0;
             DWORD wow_ans = (DWORD)WOW32_UNIMPL_RET;
+            /* ★ WATCH PSP+0x2c ACROSS EVERY WOW32 CALL, AND REPORT ONLY CHANGES.
+                 Knowing the field ends up wrong is not knowing who wrote it. Sampling
+                 it here names the call the change happened across, which is as close
+                 to the writer as a host-side instrument gets without single-stepping
+                 -- and it is the same move `pmchg.txt` makes for module segments,
+                 which cannot reach a selector krnl386 allocated at run time. */
+            p = wow_psp_env_check(p, "a WOW32 BOP");
             p = zput(p, "WOWBOP 0x"); p = zhexb(p, bcode);
             /* Only 0x53 carries a sub-function byte. Printing bb[3] for the others
                shows the first byte of the NEXT instruction and reads like data. */
@@ -12311,6 +12370,7 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                              guest pointer as `(DS << 4) + DX` -- correct for V86 and
                              meaningless for a selector. pm_int21_xfer() bridges that by
                              copying through a conventional-memory buffer. */
+                        p = wow_psp_env_check(p, "a PM INT 21h");
                         if (g_pm_xfer_seg && (ah == 0x3D || ah == 0x3F || ah == 0x40 ||
                                               ah == 0x41 || ah == 0x43 || ah == 0x4E ||
                                               ah == 0x39 || ah == 0x3A || ah == 0x3B)) {
@@ -12423,8 +12483,20 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                                     dst[0x02] = (BYTE)(si & 0xFF);
                                     dst[0x03] = (BYTE)(si >> 8);
                                 }
+                                /* What was there BEFORE we wrote -- if krnl386 had
+                                   already filled the field, overwriting it would be
+                                   the defect rather than the fix. */
+                                p = zput(p, " (+0x2c was 0x");
+                                p = zhex(p, (DWORD)(dst[0x2c] | (dst[0x2d] << 8)));
+                                p = zput(p, ")");
                                 dst[0x2c] = (BYTE)(esel & 0xFF);           /* env SELECTOR */
                                 dst[0x2d] = (BYTE)(esel >> 8);
+                                if (g_wow_psp_n < WOW_PSP_TRACK) {
+                                    g_wow_psp_sel[g_wow_psp_n] = dsel;
+                                    g_wow_psp_lin[g_wow_psp_n] = dlin;
+                                    g_wow_psp_env[g_wow_psp_n] = esel;
+                                    ++g_wow_psp_n;
+                                }
                                 VDM_REG(tib, VTIB_EFLAGS) &= ~1u;          /* CF = ok      */
                                 p = zput(p, " lin=0x"); p = zhex(p, dlin);
                                 p = zput(p, " env sel=0x"); p = zhex(p, esel);
@@ -15875,6 +15947,25 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                                  away, and those leak. Logged as the truncation it is,
                                  because the honest fix is to park the creator too and
                                  give it the rest of its turn later. */
+                            /* ★ Every PSP we built, and what its environment field
+                                 holds NOW. Two faults in this epic were that field;
+                                 printing it at the fault turns "who wrote 1 there"
+                                 from a reading of candidate code into a reading of
+                                 the log. */
+                            if (g_wow_psp_n) {
+                                int z;
+                                p = zput(p, "  PSPENV:");
+                                for (z = 0; z < g_wow_psp_n; ++z) {
+                                    const volatile BYTE *pe = (const volatile BYTE *)
+                                        (ULONG_PTR)dpmi_sel_base(g_wow_psp_sel[z]);
+                                    p = zput(p, " sel 0x"); p = zhex(p, g_wow_psp_sel[z]);
+                                    p = zput(p, "->+0x2c=0x");
+                                    if (host_readable((const void *)pe, 0x2e))
+                                        p = zhex(p, (DWORD)(pe[0x2c] | (pe[0x2d] << 8)));
+                                    else p = zput(p, "??unreadable");
+                                }
+                                p = zput(p, "\r\n");
+                            }
                             if (g_wowsched_on && g_ws_task.used
                                 && wowsched_curtask() == 0) {
                                 p = zput(p, "  WOWSCHED: [0x228]==0 -- the creator retired "
