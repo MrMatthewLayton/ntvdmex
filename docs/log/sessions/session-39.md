@@ -446,12 +446,110 @@ directories. `SYSEDIT.EXE` was given as a full path, so it is unaffected; the
 
 ---
 
+## ★★★★★ PART 5: SYSEDIT.EXE's WIN16 TASK RUNS
+
+With `0xc5` answered, the launch gets all the way through: krnl386 binds SYSEDIT's
+imports (`SHELL.DLL` now **opens**), creates its task database, and reaches the task
+launch —
+
+```
+FUNC=0x74 ... task=0x00000adf ... (wExpWinVer 0x030a)
+WOWSCHED: task 0x00000adf parked at its launch; creator sent home through
+          epilogue mode 25 with LoadModule result 0x00000a96 (TDB+0x1c)
+```
+
+**A real Win16 application has a task id, a task database and a launch frame.** And then
+it sat there, because nothing resumed it.
+
+### The missing moment: a task that waits is a task that yields
+
+Moment (C) resumes a parked task when the creator **retires**. WOWEXEC never retires — it
+opens its windows and settles into its message loop, so `[0x228]` never reaches 0.
+`WowWaitForMsgAndEvent` is the Win16 *"I have nothing to do"* primitive and the only
+thing that pump calls when the queue is empty, so **a task blocking on it is a task
+offering the CPU**. That is moment (D), and it needs no new lever: the frame is already
+a WOW32 frame with a mode word and a return hole.
+
+★ **The wait returns 0, and that is read rather than chosen**: `wowexec seg1:0x07a1` is
+`or ax,ax / jne 0x0798` — non-zero loops back to wait again, zero falls through to
+`PeekMessage`. Zero is "carry on and look", which is what a task just handed its turn
+back should do.
+
+### ★★ `[0x228]` IS PART OF THE CONTEXT, NOT A LEVER
+
+The register file is not the whole of a switch. The launch sequence sets krnl386's
+current-task word (`seg1:0x97ee mov [0x228],es`) **before** the `0x74` BOP we park at,
+and mode 25's epilogue pops it back to the creator. Restoring registers alone resumes the
+new task's code with krnl386 still believing somebody else is current.
+
+⚠ **This is the opposite of the ruled-out "write `[0x228]` to yield".** That used the word
+as a *lever* to make krnl386 switch, and it does not work — `seg1:0x2c05`'s branch is a
+re-entrancy guard whose incoming task is the caller's own. Here the host has already
+switched, and this makes the guest's bookkeeping agree with the context it is about to
+run, using the value the word held when that frame was parked. Moment (C) had the same
+hole and is fixed with it.
+
+⚠ **Two tasks only, and the code says so.** `g_ws_task` means *"the task that is not
+running"* — complete for two, wrong the moment there is a third. A third needs a real run
+queue, and krnl386 already maintains one (every task linked at `seg1:0x99ed` by the signed
+priority at `TDB+0x08`): walk that rather than invent an order.
+
+### Measured
+
+```
+WOWSCHED: task 0x000003b7 waited for a message -- YIELDING to parked task 0x00000adf
+```
+
+and **SYSEDIT's task executes** — on its own stack (`SS:SP=0x0a97:0x24a8`), calling into
+krnl386. The 268 MB message-loop spin is **gone**: the run is 735 KB and ends at a `#GP`
+in code at `0x0abf:0x09f0`, `cmp byte es:[di],0`, with a **null `ES`**.
+
+⚠⚠ **That fault is NOT caused by the `0xd2` call in front of it, and I nearly filed it
+that way.** `0xd2` (seg2 table, 0 args, from `seg1:0x99be`) is a **poll loop** — `0` means
+done, `>0` means call again, `<0` means handle-then-done — and its routine pops `ES` back
+off the stack at `seg1:0x99d1`. So the null `ES` predates the call. *A measurement that
+something happens is not a measurement of what it returns*, one more time.
+
+---
+
 ## ▶ RESUME HERE
 
-**Where it stands:** WOWEXEC is fully initialised, has two windows, and — since this
-session — is **told what to run**. krnl386 opens `SYSEDIT.EXE` and reads its `MZ`
-header. The load then fails and WOWEXEC puts up *"Insufficient memory to run this
-application"*. Nothing has drawn a pixel.
+**Where it stands:** the whole chain works. WOWEXEC is told what to run, krnl386 resolves
+and opens SYSEDIT's modules, builds its task database, launches it — and **SYSEDIT.EXE's
+Win16 task executes on its own stack.** It faults early, and nothing has drawn a pixel.
+
+### 1. ★★★ The `#GP` inside SYSEDIT's task — `0x0abf:0x09f0`, null `ES`
+
+`cmp byte es:[di],0` with `ES = 0x0000` and `EDI = 0`. `CS = 0x0abf` is **not** krnl386
+seg1, so this is the application's (or a driver's) own code, reached after a krnl386
+helper returned.
+⚠ **Do not blame the `0xd2` in front of it** — poll loop, restores `ES` from the stack,
+so the null predates it (see Part 5). The question is what was supposed to put a selector
+in `ES` before `0x0abf:0x09f0`, and the way in is to find what `0x0abf` is: match it
+against the selectors krnl386 hands SYSEDIT's segments (`INT31h 0007 setbase` lines
+around the load) rather than guessing.
+
+### 2. `0xd1` and `0xd2` — krnl386 seg2's id space, still undispatched
+
+`0xd1` is answered only by the `wow32ret.txt` **experiment** and must not be mistaken for
+a service. It only has to be non-zero (see Part 4), but "non-zero" is a measurement of
+the abort, not of what the value means: the wrapper hands it to `f(AX, hModule)` whose
+result becomes a DWORD the TDB creator keeps. `0xd2` is a poll loop whose `0` we answer,
+which is at worst premature.
+▶ Both need **a dispatcher for krnl386 seg2's table** — 121 stubs, 50 already named by
+the export table, listed with
+`tools/ne/wowmap.py guest/ne/krnl386.exe "--table=seg2 -> imported thunk"`.
+
+### 3. The second CWD-relative path site
+
+`0xc5` fixed the module lookups, but two opens still compose against the current
+directory — `MMSYSTEM.DLL` and `TIMER.DRV`, both with `al=0x40` rather than `0x80`, i.e.
+a different open site that does not go through `0xc5`.
+
+### 4. Still true, and still the big one
+
+`DispatchMessage` means the host must **call** 16-bit code. `g_wu_win[].wndproc` has held
+a 16:16 far pointer since `CreateWindow` and nothing has ever used it.
 
 ### 0. ★★★★★ PART 4: SYSEDIT GETS A TASK DATABASE, AND THE REAL BLOCKER IS `0xc5`
 
@@ -628,8 +726,11 @@ ARCHIVE=build/wowruns ./scripts/bmwow.sh --no-deploy  # re-run what is on the bo
 - The scheduler is **opt-in**: `touch /private/tmp/xpshare/wowsched.txt` to arm it.
   **Without it you are measuring the baseline, not the frontier.**
 - ⚠ SMB writes to `/private/tmp/xpshare` need the sandbox disabled.
-- ⚠⚠ **Always re-run with the scheduler off and confirm 265 / 42 / `9 · 222 · 27` /
-  `0001:229C`.** Unmoved as of this session, across the patcher change.
+- ⚠⚠ **Always re-run with the scheduler off and confirm 277 / 44 / `9 · 222 · 39` /
+  `0001:229C`.** ⚠ That is the baseline **as of `0xc5`** — it was 265 / 42 / `9·222·27`
+  before, and it moved because `0xc5` resolves module paths with the scheduler off too,
+  carrying WOWEXEC twelve calls further into the same wall. A baseline that moves for a
+  reason you can name is fine; one that moves silently is not. Unmoved as of this session, across the patcher change.
 - ⚠ The spinning pump fills the log to its 268 MB cap in seconds. `grep` it; do not open
   it. `grep -c 'CreateWindow "'` is 2 in a healthy run.
 - ★ `grep -m1 'LAUNCH \['` says whether the program was handed over, and which.
@@ -643,8 +744,11 @@ ARCHIVE=build/wowruns ./scripts/bmwow.sh --no-deploy  # re-run what is on the bo
 - The scheduler is **opt-in**: `touch /private/tmp/xpshare/wowsched.txt` to arm it.
   **Without it you are measuring the baseline, not the frontier.**
 - ⚠ SMB writes to `/private/tmp/xpshare` need the sandbox disabled.
-- ⚠⚠ **Always re-run with the scheduler off and confirm 265 / 42 / `9 · 222 · 27` /
-  `0001:229C`.**
+- ⚠⚠ **Always re-run with the scheduler off and confirm 277 / 44 / `9 · 222 · 39` /
+  `0001:229C`.** ⚠ That is the baseline **as of `0xc5`** — it was 265 / 42 / `9·222·27`
+  before, and it moved because `0xc5` resolves module paths with the scheduler off too,
+  carrying WOWEXEC twelve calls further into the same wall. A baseline that moves for a
+  reason you can name is fine; one that moves silently is not.
 - ⚠ The spinning message pump fills the log to its 268 MB cap in seconds. `grep` it;
   do not open it. `grep -c "CreateWindow \""` is 2 in a healthy run — if it climbs, the
   task-relaunch loop is back.
