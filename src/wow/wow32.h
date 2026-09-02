@@ -349,6 +349,23 @@ static DWORD wow32_peekret(const wow32_frame_t *f)
 #define WOW32_GLOBALMEMORYSTATUS        0xbc
 #define WOW32_WOWKILLREMOTETASK         0xbf
 #define WOW32_MESSAGEBOX                0xc4   /* the fatal-error box; see wowmap  */
+/* ── ★★★ 0xc5: RESOLVE A MODULE NAME TO A FULL PATH. (session 39) ─────────────
+     Serviced in main.c, not here: the answer is a 16:16 far pointer, so it needs
+     guest-visible memory and a selector, and both live over there.
+   ★ NAMED BY ITS TWO CALL SITES, and the second is what makes it unambiguous:
+       seg2:0x0856   0xc5(dst, src)    -- resolve; `cmp ax,0 / je` picks the tail
+       seg2:0x08ba   0xc5(dst, NULL)   -- release, gated on the first having
+                                          succeeded, and its result ignored
+     so the pair is resolve/release and the host owns the storage between them.
+   ★★ AND `dst` RECEIVES A FAR POINTER, NOT A COPIED STRING -- proved by symmetry
+     rather than by reading the pushes. The success tail (seg2:0x0864) and the
+     fallback tail (0x0875) are THE SAME five-word call, with `[bp-0x1c]:[bp-0x1e]`
+     substituted for the caller's own `[bp+0x0c]:[bp+0x0a]`. One is the resolved
+     path, the other is the name we were given; they must be the same kind of
+     thing.
+   ⇒ Answering 0 is what made krnl386 compose module names against the CURRENT
+     DIRECTORY and fail to open `C:\Documents and Settings\<user>\SHELL.DLL`. */
+#define WOW32_RESOLVEMODULEPATH         0xc5
 #define WOW32_WOWSHUTDOWNTIMER          0xcd
 /* Serviced in main.c, not here: it needs the DOS machine. Listed so the name table
    below can print it, and so nobody adds a decline for it -- its call site
@@ -393,6 +410,7 @@ static const char *wow32_name(WORD id)
     case WOW32_GLOBALMEMORYSTATUS:     return "GlobalMemoryStatus";
     case WOW32_WOWKILLREMOTETASK:      return "WowKillRemoteTask";
     case WOW32_MESSAGEBOX:             return "MessageBox?";
+    case WOW32_RESOLVEMODULEPATH:      return "ResolveModulePath";
     case WOW32_WOWSHUTDOWNTIMER:       return "WowShutdownTimer";
     case WOW32_GETCURDIR:              return "GetCurrentDirectory";
     case WOW32_GETSYSTEMDEFAULTLANGID: return "GetSystemDefaultLangID";

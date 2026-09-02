@@ -3390,6 +3390,10 @@ static char      g_wow_krnl_path[512];
 static WORD      g_wow_entry_cx = 0;
 static WORD      g_wow_psp_seg  = 0;
 static WORD      g_pm_xfer_seg  = 0;
+/* Where WOW32 0xc5 puts a resolved module path so the guest can point at it. Its own
+   paragraph, and separate from the transfer buffer above on purpose -- see the
+   allocation site and the 0xc5 service. */
+static WORD      g_wow_path_seg = 0;
 static WORD      g_pm_xfer_para = 0;
 
 /* Pull the `-a <path>` argument out of a WOW command line. Measured shape:
@@ -7033,6 +7037,21 @@ static int wow_place_v86(dos_machine_t *mp, WORD *ecs, WORD *eip,
         q = zput(q, " bytes; largest free was 0x"); q = zhex(q, xmax);
         q = zput(q, ")\r\n"); log_append(LDTLOG_PATH, m, q);
     }
+    /* ── ★ A SEPARATE PARAGRAPH FOR RESOLVED MODULE PATHS (WOW32 0xc5). ─────────
+         Deliberately NOT the transfer buffer above. 0xc5 hands krnl386 a far
+         pointer that it keeps across a resolve/release window -- and inside that
+         window it opens the file, which is a PM->V86 INT 21h, which reuses the
+         transfer buffer. Sharing them would hand the guest a pointer to a path
+         that the very next call overwrites, and the corruption would surface as
+         a wrong filename somewhere far from here. One paragraph, one purpose. */
+    {   WORD pseg = 0, pmax = 0;
+        if (dos_alloc(NULL, mp->first_mcb, 0x20, &pseg, &pmax) == 0 && pseg)
+            g_wow_path_seg = pseg;
+        q = m;
+        q = zput(q, "WOWV86: module-path scratch at para 0x"); q = zhex(q, g_wow_path_seg);
+        q = zput(q, " (0x200 bytes; largest free was 0x"); q = zhex(q, pmax);
+        q = zput(q, ")\r\n"); log_append(LDTLOG_PATH, m, q);
+    }
 
     for (i = 0; i < (int)ne->n_seg; ++i) {
         ne_seg *s = &ne->seg[i];
@@ -10119,6 +10138,85 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                     ++g_wow32_serviced;
                     VDM_REG(tib, VTIB_EIP) += WOW32_BOP_LEN;
                     p = zput(p, " -> SERVICED (DOS-backed), returned 0x");
+                    p = zhex(p, f.ret); p = zput(p, "\r\n");
+                    log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                    return 1;
+                }
+                /* ── ★★★ 0xc5 ResolveModulePath -- WHERE IS THIS MODULE? ─────────
+                     Serviced here rather than in wow32.h because the answer is a
+                     16:16 far pointer: it needs memory the guest can reach and a
+                     selector for it, and both live on this side. See the note on
+                     WOW32_RESOLVEMODULEPATH for how the two call sites pin the
+                     resolve/release pair and prove `dst` takes a POINTER.
+
+                   ★ WHAT IT FIXES, MEASURED. krnl386 asks this about `SHELL.DLL`
+                     while binding SYSEDIT's imports. Answered 0, it falls back to
+                     composing the bare name against the CURRENT DIRECTORY and
+                     opens `C:\Documents and Settings\Matthew\SHELL.DLL`, gle=2 --
+                     and the whole launch fails there. The same thing happened
+                     earlier to MMSYSTEM.DLL and WFWNET.DRV out of SYSTEM.INI's
+                     [drivers].
+
+                   ⚠ NOT-FOUND MUST STILL ANSWER 0. The fallback tail is the
+                     guest's own handling for "I could not resolve this", and a
+                     host that invented a path for a module that is not there
+                     would turn a clean failure into a wrong filename.
+
+                   ⚠ SearchPathA IS THE WIN32 ORDER, NOT WIN16'S. Close enough for
+                     what krnl386 needs -- it reaches the Windows and system
+                     directories, which is where the 16-bit modules are, and this
+                     rig's own WOWEXEC/KRNL386 were found there. It also consults
+                     the current directory, which Win16 did too. Recorded as a
+                     difference rather than claimed as equivalence. */
+                if (f.krnl && f.id == WOW32_RESOLVEMODULEPATH && g_wow_path_seg) {
+                    volatile BYTE *src = wow32_argptr(&f, 4);
+                    volatile BYTE *dst = wow32_argptr(&f, 0);
+                    char name[300], full[300];
+                    int k;
+                    p = zput(p, "  WOW32 0xc5 ResolveModulePath ");
+                    if (!src) {
+                        /* (dst, NULL) is the RELEASE half of the pair. Nothing to
+                           free -- the scratch is a fixed paragraph -- but it must
+                           still be answered, and it must say so in the log rather
+                           than look like a resolve that found nothing. */
+                        p = zput(p, "RELEASE");
+                        wow32_setret(&f, 1);
+                    } else {
+                        DWORD n = 0; char *fp = 0;
+                        for (k = 0; k < (int)sizeof name - 1 && src[k]; ++k)
+                            name[k] = (char)src[k];
+                        name[k] = 0;
+                        p = zput(p, "\""); p = zput(p, name); p = zput(p, "\" -> ");
+                        if (name[0])
+                            n = SearchPathA(NULL, name, NULL, sizeof full, full, &fp);
+                        if (!n || n >= sizeof full || !dst) {
+                            p = zput(p, "NOT FOUND (krnl386 will fall back to its own"
+                                        " name, as it does today)");
+                            wow32_setret(&f, 0);
+                        } else {
+                            volatile BYTE *pb = (volatile BYTE *)(ULONG_PTR)
+                                                ((DWORD)g_wow_path_seg << 4);
+                            WORD sel = dpmi_seg_to_desc(g_wow_path_seg);
+                            for (k = 0; k <= (int)n && k < 0x1FF; ++k)
+                                pb[k] = (BYTE)full[k];
+                            pb[k < 0x1FF ? k : 0x1FF] = 0;
+                            if (!sel) {
+                                p = zput(p, "NO SELECTOR (LDT full)");
+                                wow32_setret(&f, 0);
+                            } else {
+                                wow32_pokew(dst,     0);        /* offset  */
+                                wow32_pokew(dst + 2, sel);      /* segment */
+                                p = zput(p, "\""); p = zput(p, full);
+                                p = zput(p, "\" at 0x"); p = zhex(p, sel);
+                                p = zput(p, ":0000");
+                                wow32_setret(&f, 1);
+                            }
+                        }
+                    }
+                    p = zput(p, "\r\n");
+                    ++g_wow32_serviced;
+                    VDM_REG(tib, VTIB_EIP) += WOW32_BOP_LEN;
+                    p = zput(p, " -> SERVICED (host path search), returned 0x");
                     p = zhex(p, f.ret); p = zput(p, "\r\n");
                     log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
                     return 1;
