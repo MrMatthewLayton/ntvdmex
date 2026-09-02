@@ -12371,6 +12371,70 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                             VDM_REG(tib, VTIB_EIP) += 2;
                             return 1;
                         }
+                        /* ── ★★★★ AH=55h / 26h: CREATE A PSP, IN PROTECTED MODE. ────────
+                             krnl386 builds one of these per Win16 task -- measured, two
+                             per run: DX=0x03bf for WOWEXEC and DX=0x0ad7 for SYSEDIT --
+                             and BOTH were landing in the TODO arm, so neither task ever
+                             got a PSP at all.
+
+                           ★ AND THAT IS THE NULL-ES FAULT, TRACED END TO END. SYSEDIT
+                             seg1:0x09e1 does
+                                 mov es,[0x1ae]        ; its PSP
+                                 mov cx,es:[0x2c]      ; the ENVIRONMENT segment
+                                 jcxz done             ; 0 is handled...
+                                 mov es,cx             ; ...1 is not
+                                 cmp byte es:[di],0    ; #GP -- selector index 0
+                             With no PSP built, +0x2c held whatever was in that memory:
+                             0 for WOWEXEC (whose launcher then read lstrlen(0000:0000) and
+                             took a reflected #GP inside krnl386) and 1 for SYSEDIT, which
+                             is past the `jcxz` guard and loads the null descriptor. Same
+                             field, same cause, two different symptoms.
+
+                           ⚠ DX IS A SELECTOR HERE, NOT A PARAGRAPH. The V86 arm in
+                             dos_int21.c writes to `(DX & 0xFFFF) << 4`, which is right
+                             there and meaningless here -- it would build the PSP a
+                             megabyte away from where krnl386 is about to read it.
+
+                           ⚠⚠ AND +0x2c MUST BE A SELECTOR TOO. dos_psp_build stores the
+                             environment as a PARAGRAPH, which is correct for a DOS program
+                             and wrong for this one: the guest's very next instruction is
+                             `mov es,` that word. So the copied PSP gets a descriptor over
+                             the same environment instead -- the same treatment AH=34h and
+                             AH=52h already get, for the same reason. */
+                        if (ah == 0x55 || ah == 0x26) {
+                            WORD  dsel = (WORD)(VDM_REG(tib, VTIB_EDX) & 0xFFFF);
+                            DWORD dlin = dpmi_sel_base(dsel);
+                            const volatile BYTE *src =
+                                (const volatile BYTE *)(ULONG_PTR)((DWORD)DOS_PSP_SEG << 4);
+                            WORD esel = dpmi_seg_to_desc((WORD)DOS_ENV_SEG);
+                            p = zput(p, "INT21h AH=0x"); p = zhex(p, ah);
+                            p = zput(p, " (PM) create PSP at sel 0x"); p = zhex(p, dsel);
+                            if (!dlin || !host_writable((void *)(ULONG_PTR)dlin, 256)) {
+                                p = zput(p, " -- NO/UNWRITABLE BASE, refusing");
+                                VDM_REG(tib, VTIB_EFLAGS) |= 1u;          /* CF = failure */
+                            } else {
+                                volatile BYTE *dst = (volatile BYTE *)(ULONG_PTR)dlin;
+                                int k;
+                                for (k = 0; k < 256; ++k) dst[k] = src[k];
+                                dst[0x16] = (BYTE)(DOS_PSP_SEG & 0xFF);   /* parent PSP   */
+                                dst[0x17] = (BYTE)(DOS_PSP_SEG >> 8);
+                                if (ah == 0x55) {                          /* memory top   */
+                                    WORD si = (WORD)(VDM_REG(tib, VTIB_ESI) & 0xFFFF);
+                                    dst[0x02] = (BYTE)(si & 0xFF);
+                                    dst[0x03] = (BYTE)(si >> 8);
+                                }
+                                dst[0x2c] = (BYTE)(esel & 0xFF);           /* env SELECTOR */
+                                dst[0x2d] = (BYTE)(esel >> 8);
+                                VDM_REG(tib, VTIB_EFLAGS) &= ~1u;          /* CF = ok      */
+                                p = zput(p, " lin=0x"); p = zhex(p, dlin);
+                                p = zput(p, " env sel=0x"); p = zhex(p, esel);
+                                if (!esel) p = zput(p, " (NO DESCRIPTOR -- env unusable)");
+                            }
+                            p = zput(p, "\r\n");
+                            log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                            VDM_REG(tib, VTIB_EIP) += 2;
+                            return 1;
+                        }
                     pm_int21_unhandled:
                         /* ── UNHANDLED INT 21h FROM PM: SAY ENOUGH TO IDENTIFY IT ────────
                            The session-16 trace reported five calls with "AH=0xff", which is
