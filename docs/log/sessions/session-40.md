@@ -614,7 +614,8 @@ SYSEDIT's does not, but the next application will.
 
 ### 2. Closed this session
 
-- **The host cannot call 16-bit code.** It can. `src/wow/wowcall.h`, 7 calls in a run.
+- **The host cannot call 16-bit code.** It can. `src/wow/wowcall.h`, **11 calls in a
+  run** — seven window procedures and four `LocalAlloc`s.
 - **`MDICLIENT` / `EDIT` do not exist.** They do, as system classes.
 - **`LoadAccelerators` fails.** `NotifyWow` (USER `0x217`) is answered.
 - **`SendMessage` is unimplemented.** It is a real service, both halves.
@@ -641,9 +642,14 @@ ARCHIVE=build/wowruns ./scripts/bmwow.sh --no-deploy  # re-run what is on the bo
   touch /private/tmp/xpshare/wowcall.txt    # ★ calling 16-bit code   (session 40)
   ```
   Without them you are measuring the baseline, not the frontier.
+- ⚠ **The share is not mounted in a fresh session.** Nothing above works until
+  `mkdir -p /tmp/xpshare && mount_smbfs -N //guest@192.168.1.29/ntvdmex /tmp/xpshare`,
+  and both that and every later write to it need the sandbox disabled. A missing mount
+  looks like a missing rig.
 - ⚠ SMB writes to `/private/tmp/xpshare` need the sandbox disabled.
-- ⚠⚠ **Always re-run with both switches OFF and confirm the baseline**, which is
-  unchanged from session 39:
+- ⚠⚠ **Always re-run with both switches OFF and confirm the baseline.** It MOVED this
+  session, by exactly one call with a name (see the headline), so compare against these
+  and not against session 39's:
 
   ```bash
   L=build/wowruns/<the run>.log
@@ -662,6 +668,13 @@ ARCHIVE=build/wowruns ./scripts/bmwow.sh --no-deploy  # re-run what is on the bo
   on `★ ExitKernelThunk(0x00000000)` at ~888 KB.
 - ⚠ A fault loop still fills the log to its 268 MB cap in seconds. `grep` it; do not open
   it.
+- ★ **The stock oracle for a Win16 GUI app** is `scripts/bm/stocksysedit.bat` (copy it to
+  the share, then `printf 'exec cmd /c "<RES>\\stocksysedit.bat"\r\n' > control.txt`).
+  It drops the IFEO Debugger key, runs SYSEDIT under stock ntvdm, screenshots the desktop
+  with `rigshot`, and **restores the key on every exit path** — check
+  `stocksysedit_state.txt` says `IFEO Debugger RESTORED` before trusting any later run.
+  ⚠ `rigshot list` wrote an empty file (it is a GUI image, so its stdout does not
+  redirect); the screenshot is the evidence, not the window list.
 
 ### Ruled out — do not re-try
 
