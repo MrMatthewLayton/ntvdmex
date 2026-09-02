@@ -38,7 +38,7 @@ A good bar for the same reasons Doom was: small, iconic, and impossible to fake.
 them they exercise the whole stack — NE loading, the KERNEL 16→32 boundary, USER windows
 and menus, GDI drawing, mouse and keyboard. Paint in particular has to actually paint.
 
-**Status: a Win16 APPLICATION IS LAUNCHED, AND ITS TASK EXECUTES.**
+**Status: a Win16 APPLICATION RUNS ITS STARTUP AND OPENS ITS OWN MAIN WINDOW.**
 `wowexec.exe` — the WOW shell — is found, loaded and run, and nothing has drawn a pixel
 yet. What works is the *bootstrap*, and as of session 39 it runs
 a long way: krnl386 loads three of its four segments, installs its interrupt handlers,
@@ -79,8 +79,18 @@ and krnl386 **creates its task database and launches it**. The last missing piec
 scheduler moment: WOWEXEC never retires, so a task parked at its launch waited forever.
 `WowWaitForMsgAndEvent` is the Win16 *"I have nothing to do"* primitive, so a task
 blocking on it is a task yielding — and with that, **SYSEDIT.EXE's Win16 task executes on
-its own stack.** It faults early (`0x0abf:0x09f0`, a null `ES`) and nothing has drawn a
-pixel. See #128 below.
+its own stack.**
+
+★★★★★ **And then it runs its whole startup.** The last thing in its way was its
+*environment*: `PSP+0x2c` held `1`, which turned out to be **our own `wow32ret.txt`
+experiment value** for krnl386 seg2 id `0xd1` — the call that *creates a launched task's
+environment*, whose answer krnl386 stores into the child's PSP at `seg2:0x2b55`. Answered
+properly (a **copy**, because the parent frees the block it lends the child),
+`SYSEDIT.EXE` registers **its own** two window classes, `mpframe` and `mpchild`, and
+creates its main window — **"System Configuration Editor"**. It then exits *correctly*:
+its `WM_CREATE` handler is what creates the MDI client window, and **nothing has ever
+called a 16-bit window procedure**, so the frame has no client and `WinMain` gives up.
+Nothing has drawn a pixel. See #128 below.
 
 ---
 
@@ -94,7 +104,7 @@ Win16 push, and should not be quoted.)
 | Bar | Where it is | Est. |
 |---|---|---|
 | **The original DOS games bar** — Doom / Skyroads / ZAR, flawless sound | Two of three fully playable and confirmed by hand. ZAR is the gap (VBE 2.0 hi-colour + linear framebuffer). | **~85%** |
-| **★ The north star** — MS Paint + Notepad from Windows 3.x | Bootstrap, NE loader, krnl386, the WOW32 boundary, the scheduler and the launch all work; `SYSEDIT.EXE`'s task executes. **Nothing has drawn a pixel**, there is no thunking, and `DispatchMessage` has never called 16-bit code. | **~35%** |
+| **★ The north star** — MS Paint + Notepad from Windows 3.x | Bootstrap, NE loader, krnl386, the WOW32 boundary, the scheduler and the launch all work; `SYSEDIT.EXE` runs its startup and creates its own main window. **Nothing has drawn a pixel**, there is no thunking, and **nothing has ever called 16-bit code** — which is now precisely what the application stops on. | **~38%** |
 | **The full vision** — an `ntvdm` superset on XP-32 | Everything above, plus the host UI, minus the standing DOS defects and M7/M8. | **~60%** |
 
 **Read the north-star number carefully.** The hard *unknowns* are largely behind us — what is
@@ -127,7 +137,7 @@ silently is worth more attention than its size suggests.
 
 | | Why it matters |
 |---|---|
-| **Win16 / WOW — an application launches and its task runs, but nothing draws** | `ntvdm.exe` is *also* the host for every 16-bit **Windows** program. The NE loader loads, relocates and binds the **whole** XP WOW module set on real hardware, **krnl386 executes** — protected mode, its own segments, its interrupt handlers, its own DPMI exceptions, and all eight 16-bit system modules — and it then finds, loads and **runs `WOWEXEC.EXE`** — which, since session 38's host-side task scheduler and session 39's `CreateWindow`, registers two window classes, **creates two windows** and sits in **its message loop** — and, since session 39's `WowGetNextVDMCommand` + `0xc5` + the yield point, **launches `SYSEDIT.EXE`, whose Win16 task executes on its own stack**. But a window here is a host-side *object* — a handle, a class, a rectangle — with no pixels behind it; `PeekMessage` has no queue to read; `DispatchMessage` has never called a 16-bit window procedure; the application faults early in its own startup; and there is no 16:16↔flat thunking. Since interception is an IFEO key on `ntvdm.exe`, and Win16 launches go through `ntvdm.exe` too, **installing NTVDMEX permanently would break every 16-bit Windows app today**. → [#128](https://github.com/MrMatthewLayton/ntvdmex/issues/128) |
+| **Win16 / WOW — an application launches and its task runs, but nothing draws** | `ntvdm.exe` is *also* the host for every 16-bit **Windows** program. The NE loader loads, relocates and binds the **whole** XP WOW module set on real hardware, **krnl386 executes** — protected mode, its own segments, its interrupt handlers, its own DPMI exceptions, and all eight 16-bit system modules — and it then finds, loads and **runs `WOWEXEC.EXE`** — which, since session 38's host-side task scheduler and session 39's `CreateWindow`, registers two window classes, **creates two windows** and sits in **its message loop** — and, since session 39's `WowGetNextVDMCommand` + `0xc5` + the yield point, **launches `SYSEDIT.EXE`, which runs its startup, registers its own classes and creates its own main window**. But a window here is a host-side *object* — a handle, a class, a rectangle — with no pixels behind it; `PeekMessage` has no queue to read; **nothing has ever called a 16-bit window procedure**, so `WM_CREATE` never runs and SYSEDIT exits for want of its MDI client; and there is no 16:16↔flat thunking. Since interception is an IFEO key on `ntvdm.exe`, and Win16 launches go through `ntvdm.exe` too, **installing NTVDMEX permanently would break every 16-bit Windows app today**. → [#128](https://github.com/MrMatthewLayton/ntvdmex/issues/128) |
 | **Console/stdio integration** | DOS output is buffered and flushed to `CONOUT$` at exit, so shell redirection and piping are bypassed and every DOS program pops a window. Blocks non-interactive use. |
 | **In-guest redirection** | `echo x > file` writes to the screen and leaves the file 0 bytes. Three fixes attempted, all at the wrong end. |
 | **No INT 13h / INT 25h / 26h** | No direct disk access. |
@@ -146,13 +156,20 @@ silently is worth more attention than its size suggests.
 > refused outright, and the real name re-enters us through the IFEO hook. So there is no
 > safe install story until WOW exists, and #128 moved onto the critical path.
 
-1. **[#128] WOW / Win16 — IN PROGRESS. ★★★ `SYSEDIT.EXE` — A REAL WIN16 APPLICATION —
-   IS LAUNCHED AND ITS TASK EXECUTES ON ITS OWN STACK.**
+1. **[#128] WOW / Win16 — IN PROGRESS. ★★★★★ `SYSEDIT.EXE` — A REAL WIN16 APPLICATION —
+   RUNS ITS STARTUP AND CREATES ITS OWN MAIN WINDOW, *"System Configuration Editor"*.**
 
    ### ▶ START HERE: [session 39](log/sessions/session-39.md#-resume-here)
    That block is the live handoff — where it is, the leads already **ruled out**
    (do not re-try them), the next run, the instruments, and the standing hazards.
    Everything below it is background.
+
+   ### ▶ AND THE FRONTIER IS NOW ONE SENTENCE
+   **The host must CALL 16-bit code.** SYSEDIT stops at `sysedit seg2:0x0114`, where it
+   tests `[0x22]` — the MDI client window that its **own window procedure** creates while
+   handling `WM_CREATE`, at `seg1:0x01cf`. Our `CreateWindow` returns a handle without
+   ever calling the procedure, so the field is zero and `WinMain` correctly gives up.
+   ⚠ Do not make `[0x22]` non-zero. The check is right; the call is missing.
 
    **Session 39 in one paragraph.** `CreateWindow` is `USER.41`, id `0x29`, 30 argument
    bytes — and it was named without a single inference, because **a call site can name

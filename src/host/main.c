@@ -3339,6 +3339,47 @@ static int wow_user_anchor(WORD id, WORD argb, WORD retstub)
     return (id == 0x190 && argb == 0 && retstub == 0x0659)
         || (id == 0x039 && argb == 4 && retstub == 0x0c25);
 }
+
+/* ── ★★★ krnl386's SECOND TABLE -- A THIRD ID SPACE, AND NOW IDENTIFIED. ──────
+     krnl386's segment 2 carries 121 stubs of its own, far-calling the same common
+     thunk with their own numbering. `f.krnl` is false for every one of them (the
+     stub is not in the segment the thunk executes in, which is what that flag
+     tests), and wow_module_of_sel() cannot name the selector either, because
+     krnl386 loads its own segments at run time and allocates their selectors
+     through `INT 31h 0501` -- so these calls have been logged as
+     "?'s table -- a DIFFERENT id space" and answered by nobody.
+   ⇒ Identify the table the way USER's was identified -- by a stub in it -- but
+     with a stronger check, because for krnl386 we HAVE the file. The stub that
+     made the call sits at a known offset in seg2's file image, and its own bytes
+     must agree with the id and the return address the call carries:
+         retstub-8:  68 <id lo> <id hi>     push <id>
+         retstub-5:  9a <thunk offset><seg> lcall the common thunk
+     Read off `seg2:0x3ec7`, the stub for `0xd1`:
+         3ec7 6a08 push 8 / 3ec9 680000 push 0 / 3ecc 68d100 push 0xd1
+         3ecf 9ab62b.... lcall seg1:0x2bb6 / 3ed4 <- the retstub the call carries
+     Nothing is inferred; a wrong segment cannot pass, because the file would have
+     to hold a `push <this id>` at exactly the offset this call returns to. And if
+     it never matches, the dispatcher simply never engages and every seg2 call
+     stays honestly unimplemented -- the same failure mode as USER's anchor. */
+static WORD g_wow_krnl2_seg = 0;
+
+static int wow_krnl2_stub(WORD id, WORD retstub)
+{
+    const ne_seg *s;
+    const uint8_t *img;
+    DWORD o;
+    if (g_wow_nmod < 1 || !g_wow_img[0] || g_wow_mod[0].n_seg < 2) return 0;
+    s = &g_wow_mod[0].seg[1];
+    if (!s->sector || retstub < 8 || (DWORD)retstub > s->length) return 0;
+    img = g_wow_img[0] + s->file_off;
+    o   = (DWORD)retstub - 8;
+    return img[o] == 0x68
+        && (WORD)(img[o + 1] | (img[o + 2] << 8)) == id
+        && img[o + 3] == 0x9A;
+}
+
+/* seg2 ids. Numbered in THEIR OWN space -- 0xd1 here is not 0xd1 in wow32.h. */
+#define WOW32K2_TASKENV   0x00d1     /* the new task's environment; see the service */
 static WORD      g_wow_entry_ds = 0;   /* krnl386's autodata paragraph      */
 static int       g_wow_entering = 0;   /* the guest is krnl386, not DOS     */
 /* The PM->V86 transfer buffer for pointer-taking INT 21h calls; allocated in
@@ -3394,6 +3435,17 @@ static WORD      g_pm_xfer_seg  = 0;
    paragraph, and separate from the transfer buffer above on purpose -- see the
    allocation site and the 0xc5 service. */
 static WORD      g_wow_path_seg = 0;
+/* ── ★ WHERE A LAUNCHED TASK'S ENVIRONMENT LIVES. (seg2 0xd1, session 39 part 8) ──
+     A COPY, and the copy is the whole point: the parent hands its child an
+     environment through its own PSP and then FREES that block the moment
+     LoadModule returns -- measured, `LDTSYNC idx 0x15f <- base=0 acc=0x00` one line
+     before `PSPENV CHANGED: sel 0x03bf +0x2c 0x0aff -> 0x03c7`. A child pointed at
+     the parent's block therefore holds a selector that stops being present a few
+     calls later, which is exactly the `#GP` the first cut of the service produced.
+     Its own paragraph for the same reason as the path scratch: the child keeps this
+     pointer for its whole life, so it cannot share a buffer anything else reuses. */
+static WORD      g_wow_env_seg  = 0;
+#define WOW_ENV_PARAS  0x100                 /* 4 KB -- a DOS environment and then some */
 /* ── ★ EVERY PSP THIS HOST BUILDS, SO ITS ENVIRONMENT FIELD CAN BE RE-READ LATER.
      `PSP+0x2c` is the field two separate faults turned on, and the question that
      could not be answered from a fault dump is not "what is it now" but "who
@@ -7104,6 +7156,20 @@ static int wow_place_v86(dos_machine_t *mp, WORD *ecs, WORD *eip,
         q = zput(q, " (0x200 bytes; largest free was 0x"); q = zhex(q, pmax);
         q = zput(q, ")\r\n"); log_append(LDTLOG_PATH, m, q);
     }
+    /* ── ★ AND ONE FOR A LAUNCHED TASK'S ENVIRONMENT (WOW32 seg2 0xd1). ────────
+         Allocated here, with the others, because after this function hands the
+         arena to krnl386 there is nothing left to allocate FROM -- see
+         wow_host_alloc. Separate again: this one is held by the child for its
+         whole life, and both buffers above are reused on the very next call. */
+    {   WORD eseg = 0, emax = 0;
+        if (dos_alloc(NULL, mp->first_mcb, WOW_ENV_PARAS, &eseg, &emax) == 0 && eseg)
+            g_wow_env_seg = eseg;
+        q = m;
+        q = zput(q, "WOWV86: task-environment block at para 0x"); q = zhex(q, g_wow_env_seg);
+        q = zput(q, " (0x"); q = zhex(q, (DWORD)WOW_ENV_PARAS * 16u);
+        q = zput(q, " bytes; largest free was 0x"); q = zhex(q, emax);
+        q = zput(q, ")\r\n"); log_append(LDTLOG_PATH, m, q);
+    }
 
     for (i = 0; i < (int)ne->n_seg; ++i) {
         ne_seg *s = &ne->seg[i];
@@ -10361,6 +10427,178 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                     p = zhex(p, f.ret); p = zput(p, "\r\n");
                     log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
                     return 1;
+                }
+                /* ── ★ ExitKernelThunk: krnl386 SAYS IT IS DONE, SO STOP. ──────
+                     `seg1:0x0da0` calls this and the very next instruction is
+                     `0f ff` -- UD0, on purpose -- so krnl386 does not expect to be
+                     returned to. Stepped over, that UD0 is reflected to its own
+                     handler, which sets the vector again and faults again: a run
+                     that has ENDED then fills the log to its 268 MB cap, and every
+                     one of those bytes is after the last thing that happened.
+                   ⇒ End the run where the guest ended it, and say which code. */
+                if (f.krnl && f.id == WOW32_EXITKERNELTHUNK) {
+                    p = zput(p, "\n     ★ ExitKernelThunk(0x");
+                    p = zhex(p, wow32_argw(&f, 0));
+                    p = zput(p, ") -- krnl386 is shutting the VDM down; ending the run"
+                                " here rather than looping on the UD0 behind it\r\n");
+                    log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                    return -1;
+                }
+                /* ── ★★★ krnl386 seg2's TABLE. Learn its segment from a stub. ──
+                     Same shape as USER's anchor below, and for the same reason:
+                     the id space is per TABLE, so nothing here may be answered
+                     until the table has identified itself. See wow_krnl2_stub. */
+                if (!f.krnl && !g_wow_krnl2_seg && f.stubseg != g_wow_user_seg
+                    && wow_krnl2_stub(f.id, wow32_peekw(f.bp + 2))) {
+                    g_wow_krnl2_seg = f.stubseg;
+                    p = zput(p, "\n     WOWKRNL2: krnl386's SECOND stub table is in"
+                                " segment 0x");
+                    p = zhex(p, g_wow_krnl2_seg);
+                    p = zput(p, " (learned from the stub's own bytes in the file)");
+                }
+                /* ── ★★★★ seg2 0xd1: THE NEW TASK'S ENVIRONMENT. ───────────────
+                     ★ WHAT IT IS, AND HOW THAT IS KNOWN. The stub is `seg2:0x3ec7`
+                       and its one caller is `seg2:0x2c60`, whose result travels a
+                       short, entirely visible road:
+                         2c81  call 0x3ec7          -- this call
+                         2c84  or ax,ax / je        -- 0 becomes 0xffff, the FAILURE
+                         2c88  push ax / push [bp+8] / lcall <seg1:0x6468>
+                         ...
+                         29a5  call 0x2c60          -- from the task creator
+                         29a8  inc ax / jne / dec ax
+                         29af  mov [bp-2],ax        -- kept across the whole launch
+                         2b18  call seg2:0x016e     -- BuildPDB: `mov ah,55h / int 21h`
+                         2b4e  mov ax,[bp-2] / or ax,ax / je
+                         2b55  mov es:[0x2c],ax     -- ★ INTO THE NEW TASK'S PSP
+                       So the value this call returns IS the environment field of the
+                       PSP of the task about to run, and `seg1:0x6468` (which the
+                       success tail hands it to, with [eax+0x12] as the destination)
+                       is a global-arena owner write -- i.e. the value is a real
+                       global object of krnl386's, not a token.
+
+                     ★★ AND THAT CLOSES A FAULT WE CAUSED OURSELVES. Session 39 ran
+                       `0xd1` as an EXPERIMENT (`wow32ret.txt`, `d1 00000001`) on the
+                       reading that "it only has to be non-zero", and SYSEDIT then
+                       died at `0x0abf:0x09f0` -- `mov es,cx` with `cx = 1`, the null
+                       descriptor -- reading its own `PSP+0x2c`. The 1 in that field
+                       was OUR OWN EXPERIMENT VALUE, stored by `seg2:0x2b55`, and the
+                       run log says so without any new measurement: the `0xd1` answer
+                       (`ANSWERED 0x00000001`, from `seg2:0x2c84`), then AH=55h, then
+                       `PSPENV CHANGED: sel 0x0adf +0x2c 0x03c7 -> 0x00000001`, then
+                       the next call in from `seg2:0x2b93` -- past the store.
+                       "Non-zero" was a measurement of the abort, not of the meaning.
+
+                     ⚠ SO THE ANSWER MUST BE A SELECTOR THE GUEST CAN LOAD, and one
+                       krnl386 owns. Two sources, in the DOS EXEC order, and the log
+                       says which one was taken:
+                         1. LOADPARMS.segEnv -- the far pointer at args +2/+4 is the
+                            parameter block (`0x03df:0x1ce4` in the run, WOWEXEC's own
+                            stack), and its first word is the environment.
+                         2. Zero there means INHERIT, and the parent is the current
+                            task -- whose PSP is the last one this host built, because
+                            the child's does not exist yet (`AH=55h` for it comes
+                            AFTER this call: log lines 5355 then 5376).
+                       ⚠ And WOWEXEC's launcher is visibly playing exactly that
+                         protocol: it installs 0x0aff into its OWN PSP+0x2c before the
+                         launch and restores 0x03c7 after it, which is the DOS way of
+                         handing an environment to a child and is why (2) is not a
+                         guess.
+                     ⚠ IF NEITHER SOURCE YIELDS A SELECTOR THAT RESOLVES, SAY SO AND
+                       DO NOT ANSWER. Inventing a value here is how the 1 got in.
+
+                     ⚠⚠ AND IT MUST BE A **COPY**. The first cut handed the source
+                       selector straight back, and the run said no: `mov es,cx` with
+                       `cx = 0x0aff` now faulted at the LOAD (`err=0x0afc`, the
+                       selector's own index) instead of at the first use, because
+                       WOWEXEC's launcher FREES the block as soon as LoadModule
+                       returns -- `LDTSYNC idx 0x15f <- base=0 acc=0x00` one line
+                       before `PSPENV CHANGED: sel 0x03bf +0x2c 0x0aff -> 0x03c7`.
+                       That is the DOS EXEC protocol played out in full: build an
+                       environment for the child, launch, free it, restore your own.
+                       The child's copy is what the call is FOR -- on real WOW the
+                       32-bit side allocates a Win16 global and copies into it. This
+                       host cannot call GlobalAlloc (nothing here has ever called
+                       INTO 16-bit code), so the copy lives in a host paragraph with
+                       a host selector, which over-lives rather than under-lives.
+                     ⚠ THE DIFFERENCE THAT LEAVES: the block is not in krnl386's
+                       global arena, so the `FarSetOwner` at `seg2:0x2c88` will not
+                       find an arena entry for it. Recorded, not hidden. */
+                if (!f.krnl && g_wow_krnl2_seg && f.stubseg == g_wow_krnl2_seg
+                    && f.id == WOW32K2_TASKENV) {
+                    WORD  pbsel = wow32_argw(&f, 4), pboff = wow32_argw(&f, 2);
+                    DWORD pblin = pbsel ? dpmi_sel_base(pbsel) : 0;
+                    WORD  env = 0;
+                    const char *src = "";
+                    p = zput(p, "\n     WOW32 seg2 0xd1 task environment: parmblock 0x");
+                    p = zhex(p, pbsel); p = zput(p, ":0x"); p = zhex(p, pboff);
+                    if (pblin && host_readable((const void *)(ULONG_PTR)(pblin + pboff), 2)) {
+                        const volatile BYTE *pb =
+                            (const volatile BYTE *)(ULONG_PTR)(pblin + pboff);
+                        env = (WORD)(pb[0] | (pb[1] << 8));
+                        src = "LOADPARMS.segEnv";
+                    }
+                    if (!env && g_wow_psp_n > 0) {
+                        WORD  psel = g_wow_psp_sel[g_wow_psp_n - 1];
+                        DWORD plin = dpmi_sel_base(psel);
+                        p = zput(p, " segEnv=0 (inherit) parent PSP 0x");
+                        p = zhex(p, psel);
+                        if (plin && host_readable((const void *)(ULONG_PTR)plin, 0x2e)) {
+                            const volatile BYTE *pe =
+                                (const volatile BYTE *)(ULONG_PTR)plin;
+                            env = (WORD)(pe[0x2c] | (pe[0x2d] << 8));
+                            src = "the parent PSP's +0x2c";
+                        }
+                    }
+                    {   DWORD elin = env ? dpmi_sel_base(env) : 0;
+                        DWORD cap  = (DWORD)WOW_ENV_PARAS * 16u;
+                        p = zput(p, " src 0x"); p = zhex(p, env);
+                        p = zput(p, " ("); p = zput(p, src[0] ? src : "nothing");
+                        p = zput(p, ")");
+                        if (elin && g_wow_env_seg &&
+                            host_readable((const void *)(ULONG_PTR)elin, cap)) {
+                            const volatile BYTE *s =
+                                (const volatile BYTE *)(ULONG_PTR)elin;
+                            volatile BYTE *d = (volatile BYTE *)(ULONG_PTR)
+                                               ((DWORD)g_wow_env_seg << 4);
+                            DWORD i = 0, k;
+                            WORD  sel;
+                            /* The MS-DOS 3.0+ block: the strings, the empty string
+                               that ends them, a WORD count, then the program's own
+                               pathname. krnl386 finds its OWN exe through exactly
+                               this tail (see wow_place_v86), so it is part of the
+                               environment and not an optional extra. */
+                            while (i < cap && s[i]) {
+                                while (i < cap && s[i]) ++i;
+                                ++i;                          /* the string's NUL   */
+                            }
+                            ++i;                              /* the empty string   */
+                            if (i + 2 <= cap) {
+                                i += 2;                       /* the WORD count     */
+                                while (i < cap && s[i]) ++i;
+                                ++i;                          /* the pathname's NUL */
+                            }
+                            if (i > cap) i = cap;
+                            for (k = 0; k < i; ++k) d[k] = s[k];
+                            sel = dpmi_seg_to_desc(g_wow_env_seg);
+                            p = zput(p, " -> copied 0x"); p = zhex(p, i);
+                            p = zput(p, " bytes to 0x"); p = zhex(p, g_wow_env_seg);
+                            p = zput(p, ":0000 as sel 0x"); p = zhex(p, sel);
+                            if (sel) {
+                                wow32_setret(&f, sel);
+                                ++g_wow32_serviced;
+                                VDM_REG(tib, VTIB_EIP) += WOW32_BOP_LEN;
+                                p = zput(p, "\r\n -> SERVICED (task environment),"
+                                            " returned 0x");
+                                p = zhex(p, f.ret); p = zput(p, "\r\n");
+                                log_append(LOG_PATH, base, p); serial_out(base, p);
+                                p = base;
+                                return 1;
+                            }
+                            p = zput(p, " -- NO SELECTOR (LDT full)");
+                        }
+                        p = zput(p, " -> NO ENVIRONMENT TO COPY -- left unimplemented"
+                                    " rather than invented");
+                    }
                 }
                 /* ── ★★★ USER'S OWN ID SPACE. See src/wow/wowuser.h. ──────────
                      Deliberately a separate dispatcher behind a separate check:

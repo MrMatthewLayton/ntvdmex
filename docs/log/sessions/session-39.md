@@ -512,13 +512,253 @@ something happens is not a measurement of what it returns*, one more time.
 
 ---
 
+## ★★★★★ PART 7: THE `1` IN `PSP+0x2c` WAS OUR OWN EXPERIMENT — `0xd1` IS THE ENVIRONMENT
+
+**No new run was needed to establish this. It is in the log we already had.**
+
+Part 6 left the question as *"who writes `1` into SYSEDIT's `PSP+0x2c`, in the window
+between our `AH=55h` returning and the next WOW32 call"*, with the note that `1` is `0|1`
+so some source of it is zero. That framing was wrong in an instructive way: **nothing
+`or`s anything. The writer stores a value it was handed, and we handed it.**
+
+### The road the value travels, entirely in krnl386's own code
+
+`grep`ping krnl386 for `mov ah,0x55` finds **one** site — `seg2:0x0188`, inside
+`seg2:0x016e`, which is `BuildPDB` (it copies the command line to `PSP+0x80` and stamps
+`+0x16`, `+0x02`, `+0x0a`, `+0x0c`). It does **not** touch `+0x2c`. Its caller does:
+
+```
+2984  enter 4,0                 ; ★ the task creator
+298f  xor si,si / mov [bp-2],si ; the environment, defaulted to 0
+29a5  call 0x2c60               ; ← ask for the new task's environment
+29a8  inc ax / jne / dec ax     ; 0xffff is the failure
+29af  mov [bp-2],ax             ; ...and it is kept across the whole launch
+ ...
+2b18  call 0x016e               ; BuildPDB -> `mov ah,55h / int 21h` -> US
+ ...
+2b4e  mov ax,[bp-2]
+2b51  or ax,ax / je 0x2b59      ; zero = leave the field alone
+2b55  mov es:[0x2c],ax          ; ★★ INTO THE NEW TASK'S PSP
+```
+
+and `seg2:0x2c60` is a five-line wrapper whose whole body is **WOW32 seg2 id `0xd1`**
+(the stub is `seg2:0x3ec7`: `push 8 / push 0 / push 0xd1 / lcall seg1:0x2bb6`), with
+`or ax,ax / je` turning a zero answer into `0xffff` — *the abort session 39 part 3 filed
+as "the real blocker at `seg2:0x2c84`"*. So the value `0xd1` returns **is** the
+environment field of the PSP of the task that is about to run.
+
+### The run log confirms it end to end, in four lines already on disk
+
+```
+FUNC=0x000000d1 [?'s table] ... from=0x000001d7:0x00002c84  retstub=0x00003ed4
+   -> ANSWERED 0x00000001 (** wow32ret.txt OVERRIDE -- an EXPERIMENT, not a service **)
+INT21h AH=0x55 (PM) create PSP at sel 0x00000adf ... env sel=0x000003c7
+PSPENV CHANGED: sel 0x00000adf +0x2c 0x000003c7 -> 0x00000001
+FUNC=0x0000008a ... from=0x000001d7:0x00002b93          ← the next call is PAST 0x2b55
+```
+
+The call site is `seg2:0x2c84` and the return stub `0x3ed4` — exactly the two addresses
+the static read predicts — and the next call in comes from `seg2:0x2b93`, so execution
+went through the store at `0x2b55` in between. ⇒ **`1` is `wow32ret.txt`'s
+`d1 00000001`.** The null-`ES` `#GP` at `0x0abf:0x09f0` is a fault this host caused,
+one session after choosing the value, and *"`0xd1` only has to be non-zero"* was a
+measurement of the abort mistaken for a measurement of the meaning.
+
+⚠ **This is the `wowmode.txt`/`wow32ret.txt` hazard arriving exactly as advertised.** An
+experiment is a good instrument and a bad answer, and the run that used it reported
+itself honestly on every line — the mistake was reading "krnl386 got further" as
+"the value was right".
+
+### What `0xd1` must return, and where the host gets it
+
+Not a token: `seg2:0x2c88` hands the answer to `seg1:0x6468`, which resolves it through
+`seg1:0x63f3` (`and bl,0xf8 / shr bx,1`, bounds-checked against `es:[0x22e]`, indexing
+the arena-pointer table at `es:[0x230]`) and writes an owner word at `[eax+0x12]` — a
+**global-arena owner write**, so the value is a real global object of krnl386's, and the
+guest's very next use of it is `mov es,cx`. Two sources, in the DOS EXEC order:
+
+1. **`LOADPARMS.segEnv`** — args `+2`/`+4` are the parameter block far pointer
+   (`0x03df:0x1ce4` in the run, on WOWEXEC's own stack), whose first word is the
+   environment;
+2. **zero there means INHERIT**, and the parent is the current task — whose PSP is the
+   last one this host built, because *the child's does not exist yet* (its `AH=55h` comes
+   after this call: log lines 5355 then 5376).
+
+★ And (2) is not a guess, because WOWEXEC's launcher is visibly playing that protocol:
+`PSPENV CHANGED: sel 0x03bf +0x2c 0x03c7 -> 0x0aff` immediately after the LAUNCH answer,
+and `0x0aff -> 0x03c7` immediately after `LoadModule` returns. `0x0aff` is a real
+selector krnl386 allocated (`INT31h 04F2 ... idx 0x15f base=0x00057ae0 limit=0x0000103f`)
+— install an environment for the child, launch, restore. Exactly DOS's EXEC convention.
+
+### And krnl386's seg2 table now identifies itself
+
+`f.krnl` is false for every seg2 stub and `wow_module_of_sel()` cannot name the selector
+(krnl386 loads its own segments at run time), so the 121-stub table has never been
+dispatched. USER's table was identified by *(id, argbytes, retstub)* anchors; krnl386's
+can do better, because **we have the file**: the stub that made the call is at a known
+offset in seg2's file image and its own bytes must agree with the call —
+`retstub-8: 68 <id>` and `retstub-5: 9a`. Nothing inferred, and if it never matches the
+dispatcher never engages and every seg2 call stays honestly unimplemented.
+
+### ▶ THE PREDICTION, WRITTEN BEFORE THE RUN
+
+1. `WOWKRNL2: krnl386's SECOND stub table is in segment 0x01d7`, learned before `0xd1`.
+2. `0xd1` is serviced **once**, from `seg2:0x2c84`, and returns **`0x0aff`** — via
+   `LOADPARMS.segEnv` if WOWEXEC put it there, otherwise via the parent PSP `0x03bf`.
+   The log says which, and either route must give the same number.
+3. `PSPENV CHANGED: sel 0x0adf +0x2c 0x000003c7 -> 0x00000aff`, and **never to `1`**.
+4. The `#GP` at `0x0abf:0x09f0` (`mov es,cx` with a null selector) is **gone**; SYSEDIT
+   walks its environment strings instead.
+5. **No `EXPERIMENT` line anywhere in the run** — `wow32ret.txt` ships empty and stays
+   empty. If the run needs it again, this reading is wrong.
+
+⚠ Selector numbers are per-run; what must hold is the *identity* (the parent's env
+selector), not the literal `0x0aff`.
+
+### Measured — all five, and then a second-order fault
+
+```
+WOWKRNL2: krnl386's SECOND stub table is in segment 0x000001d7 (learned from the
+          stub's own bytes in the file)
+WOW32 seg2 0xd1 task environment: parmblock 0x000003df:0x00001ce4 -> 0x00000aff
+          from LOADPARMS.segEnv
+PSPENV CHANGED: sel 0x00000adf +0x2c 0x000003c7 -> 0x00000aff
+```
+
+No `EXPERIMENT` line anywhere. `LOADPARMS.segEnv` held it, so the inherit path was not
+needed — and it would have given the same selector, which is the cross-check.
+
+⚠ **And the `#GP` moved one instruction earlier, which is the whole answer.** It was
+`0x09f0 cmp byte es:[di],0` with a null `ES`; it became `0x09ec mov es,cx` with
+`cx = 0x0aff` and `err=0x0afc` — *the selector's own LDT index*. A selector that faults
+on the LOAD is a selector that is **not present**, and the log says who did that, two
+lines before WOWEXEC restores its own field:
+
+```
+LDTSYNC idx 0x0000015f <- guest wrote base=0x00000000 limit=0x000f0ac8 acc=0x00
+INT31h AX=0x04f2 BX=0x00000aff ... installed (idx 0x15f base=0x00000000 acc=0x00)
+PSPENV CHANGED: sel 0x000003bf +0x2c 0x00000aff -> 0x000003c7
+```
+
+**WOWEXEC frees the environment as soon as `LoadModule` returns.** Build one for the
+child, launch, free it, restore your own — the DOS EXEC protocol in four log lines. So
+`0xd1` is not *"hand me the parent's environment"*, it is **"make the child one"**: on
+real WOW the 32-bit side allocates a Win16 global and copies into it. This host has
+never called *into* 16-bit code, so the copy goes into a host paragraph
+(`WOWV86: task-environment block`, allocated with the other scratch buffers before
+krnl386 takes the arena) with a host selector. It over-lives rather than under-lives, and
+the difference that leaves is recorded at the service: the block is not in krnl386's
+global arena, so the `FarSetOwner` at `seg2:0x2c88` has no arena entry to find.
+
+---
+
+## ★★★★★ PART 8: A REAL WIN16 APPLICATION OPENS ITS OWN MAIN WINDOW
+
+With the environment copied, SYSEDIT's task runs its whole startup:
+
+```
+-> SERVICED (USER), returned 0x0000c003 -- RegisterClass "mpframe"
+-> SERVICED (USER), returned 0x0000c004 -- RegisterClass "mpchild"
+-> SERVICED (USER), returned 0x00000140 -- CreateWindow "mpframe"
+                    "System Configuration Editor" style=0x02cf0000 -> hwnd=0x0140
+```
+
+`mpframe` / `mpchild` are **SYSEDIT's own** classes (it is an MDI application: a frame
+and its children), and *"System Configuration Editor"* is its own title, read out of its
+own stack. Every previous window in this project belonged to `WOWEXEC`, the shell.
+
+### And then it exits — cleanly, at an instruction that names the frontier
+
+`neimports` names the call site without inference: **`sysedit seg2:0x00fe
+USER.41 CREATEWINDOW`**, return `0x0103`, which is exactly the `from=0x0abf:0x0103` the
+BOP carries. What follows it is six instructions long:
+
+```
+0103  mov [0x20],ax           ; the frame window -- 0x0140, fine
+0106  or ax,ax / jne 0x010f
+010f  cmp word [0x22],0
+0114  je 0x010a               ; ★ zero -> give up
+010a  sub ax,ax / jmp 0x021a  ;   WinMain returns 0, the task ends
+```
+
+and `[0x22]` has exactly one writer, in the **frame's own window procedure**:
+
+```
+seg1:0x01ac  push 0x4230 / push 0 ...   ; WS_CHILD|WS_VISIBLE|WS_CLIPCHILDREN
+seg1:0x01ca  lcall USER.41 CREATEWINDOW ; the MDI CLIENT
+seg1:0x01cf  mov [0x22],ax
+seg1:0x01d5  lcall USER.42 SHOWWINDOW
+```
+
+That code runs while `CreateWindow` is on the stack, because it is the **`WM_CREATE`
+handler**. ⇒ **SYSEDIT does not fail. It is told, correctly, that its window has no
+client area — because nothing has ever called a 16-bit window procedure.** The frontier
+is no longer a missing service; it is the missing *direction*, and it is the one this
+project has never done once: **the host must CALL into 16-bit code.**
+
+⚠ **A segment's SELECTOR NUMBER is not its identity across runs.** The fault in part 6
+was `0x0abf:0x09f0` and part 6 matched it to SYSEDIT **seg1**; this run's CreateWindow
+call is `0x0abf:0x0103` and that is SYSEDIT **seg2**. Both readings are right — krnl386
+allocates selectors in whatever order the run takes. Identify a segment by matching the
+offset against the file (`neimports` / a byte compare), never by remembering a selector.
+
+### One more thing fixed, because it made every log unreadable
+
+`ExitKernelThunk` was stepped over, and the instruction behind it at `seg1:0x0da4` is
+`0f ff` — **UD0, executed on purpose**, because krnl386 does not expect to be returned
+to. Reflected, it sets its own vector and faults again: a run that had *already ended*
+filled the log to its **268 MB** cap, every byte of it after the last thing that
+happened. The host now ends the run where the guest ended it — **762 KB**, same content.
+
+### The baseline, re-confirmed after all of it
+
+Scheduler off, `--no-deploy`: **270 WOWBOP / 44 SERVICED / 122 DECLINED / 98 unimplemented
+/ `9 · 222 · 39` / `0001:229C`** — *identical, count for count*, to the last baseline run
+taken before this session's changes. Nothing here touches a path a V86 or DPMI guest
+takes (the allocation is inside `wow_place_v86`; the two services are gated on krnl386's
+own stub tables), and the 209-check off-VM battery passes.
+
+---
+
 ## ▶ RESUME HERE
 
 **Where it stands:** the whole chain works. WOWEXEC is told what to run, krnl386 resolves
-and opens SYSEDIT's modules, builds its task database, launches it — and **SYSEDIT.EXE's
-Win16 task executes on its own stack.** It faults early, and nothing has drawn a pixel.
+and opens SYSEDIT's modules, builds its task database, launches it, and **SYSEDIT.EXE
+runs its startup to completion**: it registers `mpframe` and `mpchild` and creates its
+main window, *"System Configuration Editor"*. Then it exits, on purpose, because
+`WM_CREATE` never reached its window procedure. Nothing has drawn a pixel.
 
-### 1. ★★★ The environment a task inherits — `PSP+0x2c`
+### 1. ★★★★★ THE FRONTIER: CALL 16-BIT CODE (`WM_CREATE`, then `DispatchMessage`)
+
+Named to the instruction by part 8: `sysedit seg2:0x0114` gives up because `[0x22]` is
+zero, and `[0x22]` is written at `seg1:0x01cf` inside the frame's **window procedure**,
+which only runs if something calls it. `g_wu_win[].wndproc` has held a 16:16 far pointer
+since `CreateWindow` and nothing has ever used it.
+
+This is M6, and it is the largest single body of work left. What it needs, in order:
+
+1. **A way to enter 16-bit code from the host.** The launch path already does the
+   inverse trick — `seg1:0x97c2` parks `SS:SP`, switches stacks and `iret`s into a task
+   — so the machinery to build a far frame and let the guest run it exists; what is new
+   is doing it *from inside a serviced call* and getting the return value back.
+   ⚠ Re-entrancy: we would be inside a WOW32 BOP, on the guest's own stack, and the
+   window procedure will itself call WOW32 (its `CreateWindow` for the MDI client is
+   the very first thing it does). The epilogue-mode table (`WOW32_OFF_MODE`) and
+   `wowsched.h` are the two places that already know about nesting.
+2. **`WM_CREATE` from inside `CreateWindow`**, which is what SYSEDIT is waiting for.
+3. **A message queue**, so `PeekMessage`/`GetMessage` have something to return, and
+   `DispatchMessage` has somewhere to send it.
+
+⚠ Do not "fix" SYSEDIT by making `[0x22]` non-zero. The check is correct and the
+application is right to fail; the missing thing is the call.
+
+### 2. Closed this session, kept for the reasoning
+
+**The environment a task inherits — `PSP+0x2c`.** Parts 6, 7 and 8. `0xd1` is the
+task-environment call; the `1` was our own `wow32ret.txt` experiment; the answer must be
+a **copy**, because the parent frees the block it lends the child.
+
+### 3. The old text on `PSP+0x2c`, for the record
 
 **Part 6 traced and half-fixed this.** The fault bytes were matched against every guest
 module at that offset: an exact hit in **`sysedit.exe` seg1**, identical to the file, so
@@ -582,27 +822,26 @@ guarded at `seg1:0x045b` and aborts the launch with the error box we no longer s
 demand-load fault for one of SYSEDIT's own segments — and a `#GP` at `krnl386
 seg1:0xc5f0`.
 
-### 2. `0xd1` and `0xd2` — krnl386 seg2's id space, still undispatched
+### 3b. ~~`0xd1` and `0xd2` — krnl386 seg2's id space, still undispatched~~ — **`0xd1` DONE**
 
-`0xd1` is answered only by the `wow32ret.txt` **experiment** and must not be mistaken for
-a service. It only has to be non-zero (see Part 4), but "non-zero" is a measurement of
-the abort, not of what the value means: the wrapper hands it to `f(AX, hModule)` whose
-result becomes a DWORD the TDB creator keeps. `0xd2` is a poll loop whose `0` we answer,
-which is at worst premature.
-▶ Both need **a dispatcher for krnl386 seg2's table** — 121 stubs, 50 already named by
-the export table, listed with
+~~`0xd1` is answered only by the `wow32ret.txt` **experiment**~~ — **part 7 replaced it
+with a service.** The seg2 table now identifies itself (`wow_krnl2_stub`, from the stub's
+own bytes in krnl386's file image) and `0xd1` is the task environment. **`0xd2` is still
+a poll loop whose `0` we answer**, which is at worst premature; the other 119 stubs are
+still undispatched, listed with
 `tools/ne/wowmap.py guest/ne/krnl386.exe "--table=seg2 -> imported thunk"`.
 
-### 3. The second CWD-relative path site
+### 3c. The second CWD-relative path site
 
 `0xc5` fixed the module lookups, but two opens still compose against the current
 directory — `MMSYSTEM.DLL` and `TIMER.DRV`, both with `al=0x40` rather than `0x80`, i.e.
 a different open site that does not go through `0xc5`.
 
-### 4. Still true, and still the big one
+### 3d. Still true, and now measured — see item 1 above
 
 `DispatchMessage` means the host must **call** 16-bit code. `g_wu_win[].wndproc` has held
-a 16:16 far pointer since `CreateWindow` and nothing has ever used it.
+a 16:16 far pointer since `CreateWindow` and nothing has ever used it. As of part 8 this
+is no longer the *next-but-one* item: it is what SYSEDIT stops on.
 
 ### 0. ★★★★★ PART 4: SYSEDIT GETS A TASK DATABASE, AND THE REAL BLOCKER IS `0xc5`
 
