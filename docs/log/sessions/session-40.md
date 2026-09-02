@@ -1,4 +1,4 @@
-# Session 40 — the host CALLS 16-bit code, and SYSEDIT opens CONFIG.SYS
+# Session 40 — the host CALLS 16-bit code, and SYSEDIT builds its whole MDI window
 
 - **Branch:** `m9/completeness`
 - **Issue:** [#128](https://github.com/MrMatthewLayton/ntvdmex/issues/128)
@@ -39,15 +39,29 @@ Three walls fell behind it, each one named by the run that hit it rather than gu
 3. And with both answered, **`SYSEDIT.EXE` shows its window, updates it, and opens
    `C:\CONFIG.SYS` and `C:\AUTOEXEC.BAT`** — the thing the program exists to do.
 
-It then says, in its own words, `"C:\CONFIG.SYS\nCannot open this file."`, and that
-message is exactly right: it asked its MDI client to make a child window
-(`SendMessage(0x0160, WM_MDICREATE, ...)`) and our MDI client has no window procedure to
-send it to. **The new frontier is the other half of the same mechanism** — see
-[▶ RESUME HERE](#-resume-here).
+And then the other half of the same mechanism went in — `SendMessage` and the default
+window procedure a system class needs — and **SYSEDIT builds its entire user interface**:
 
-⚠ **The baseline is untouched.** With both switches off, the same build gives
-**270 / 44 / 122 / 98 · `9 · 222 · 39` · `0001:229C`** — identical, count for count, to
-the figure recorded at the end of session 39.
+```
+WM_MDICREATE "mpchild" "C:\WINDOWS\SYSTEM.INI" in client 0x0160 -> hwnd=0x0180
+  -> WOWCALL into mpchild's own procedure, which creates
+     CreateWindow "EDIT" style=0x513000c4 -> hwnd=0x01a0
+... four times: SYSTEM.INI, WIN.INI, CONFIG.SYS, AUTOEXEC.BAT
+```
+
+**Four MDI children, each with its own EDIT control, each child's window procedure run by
+this host.** It stops at `EM_SETHANDLE` (`0x040D`) — the message that hands the edit
+control the text — because an EDIT control's behaviour is the 32-bit side's, and the
+32-bit side is us. See [▶ RESUME HERE](#-resume-here).
+
+⚠ **The baseline moved by exactly one call, and it has a name.** With both switches off
+the same build gives **270 / 45 / 122 / 97 · `9 · 222 · 39` · `0001:229C`** against
+session 39's 270 / 44 / 122 / 98. The BOP count, the declines, the task histogram and the
+GP box are unchanged; one call moved from *unimplemented* to *serviced*, and it is
+`GetWindowsDirectory` at **line 615 of both logs** — krnl386's own bootstrap call from
+`seg1:0xc91a`, which happens on every run including a default one (Part 5). A baseline
+that moves for a reason you can point at in the diff is fine; one that moves silently is
+not. **270 / 45 / 122 / 97 is the figure to compare against from here.**
 
 ---
 
@@ -258,18 +272,114 @@ The two tables that identify themselves now say their names.
 
 ---
 
+## ★★★★★ PART 4: `SendMessage`, AND A DEFAULT WINDOW PROCEDURE THAT IS OURS
+
+`SendMessage` is USER id `0x6f` (10 argument bytes, named from SYSEDIT's own relocation
+chain at `seg3:0x007e`), and it is **two mechanisms, not two cases of one**:
+
+- **to a window with a 16-bit procedure** — this *is* the call. Hand it to `wowcall.h`
+  with the caller's own arguments, and ★ **the procedure's return value IS SendMessage's**.
+  That needed a second return mode in `wowcall.h`: `KEEP` (the service wrote the answer;
+  the procedure only gets a `WM_CREATE == -1` veto) versus `RESULT` (the procedure's DX:AX
+  goes into the hole verbatim). Conflating them would have been silent — *"whatever the
+  window procedure returned"* is the entire definition of `SendMessage`.
+- **to a SYSTEM-class window** — the procedure is **ours**, for the same reason the class
+  is. `wowuser_defproc` is deliberately tiny: the one message a run has ever sent, and a
+  named 0 for everything else.
+
+⚠ The whole service is gated on callbacks being armed. A `WM_MDICREATE` that made a child
+window whose `WM_CREATE` never ran would be a half-built object the guest would then use —
+worse than a missing answer — and the gate is also what keeps a default run identical.
+
+### The MDICREATESTRUCT, read off SYSEDIT's own stores
+
+`sysedit seg3:0x0046` builds one at `ss:[bp-0x1e]`; every offset below is a store in that
+window, so none of it comes from a header:
+
+| off | field | the store |
+|---|---|---|
+| `+0x00` | `szClass` | `mov [bp-0x1e],0x4a` / `mov [bp-0x1c],ds` |
+| `+0x04` | `szTitle` | `mov [bp-0x1a],ax` / `mov [bp-0x18],ds` |
+| `+0x08` | `hOwner` | `mov ax,[0x2e0]` |
+| `+0x0a`…`+0x10` | `x, y, cx, cy` | four stores of `0x8000` (`CW_USEDEFAULT`) |
+| `+0x12` | `style` (DWORD) | `mov ax,[0x28] / mov dx,[0x2a]` |
+
+★ **And the reading is confirmed from outside the code.** `ds:0x004a` in SYSEDIT's DGROUP
+— segment 6, read out of the file on disk — is the string `"mpchild"`, the class SYSEDIT
+registered two calls earlier. A wrong offset for `szClass` does not decode to a class this
+program has registered. The same read gives `ds:0x0030 = "mdiclient"` (what the frame
+procedure creates, which a run had already asked for) and `ds:0x003a = "edit"`.
+
+⚠ **The struct ends at `+0x16`.** `[bp-8]` is the SendMessage result, not a field, so the
+slot where a `lParam` member would sit is never written by this program and is not read.
+
+### `EDIT` went in because the guest binary named it, not because it is on a list
+
+`sysedit seg1:0x0281` — inside `mpchild`'s own `WM_CREATE` handler — pushes `ds:0x003a` as
+a `CreateWindow` class name, and that offset is `"edit"` in the file. **Reading the guest
+binary is stronger evidence than waiting for the run line, not weaker**, and the run then
+agreed: four `CreateWindow "EDIT" style=0x513000c4` in a row, one per MDI child.
+
+---
+
+## ★★★ PART 5: TWO DEFECTS THE NEW REACH EXPOSED, BOTH "RUNS BUT LIES"
+
+Getting this far is what made both visible; neither could have been seen before.
+
+### `SendMessage: no such window 0x0000 msg 0x040d` — the extra bytes were missing
+
+`mpchild`'s `WM_CREATE` creates its EDIT control and then stores its handle **in the
+window's own extra bytes** (`SetWindowWord`), and reads it back later to address the
+control. With no storage behind them every read answered 0, so the program sent
+`EM_SETHANDLE` to window handle **zero** — it had been told to forget its own control.
+
+`Get/SetWindowWord` are USER `0x85`/`0x86`, and the bound is **the guest's own
+declaration**: `sysedit seg2:0x0091 mov word [bp-0x14],8` is `+0x08` from the WNDCLASS base
+at `bp-0x1c`, i.e. **`cbWndExtra = 8`** — exactly the four words at indices 0/2/4/6 that
+its `WM_CREATE` writes. That same read puts `"mpchild"` at `+0x16`, so `wowuser.h`'s
+WNDCLASS layout is confirmed a second time by a second program's own code.
+
+⚠ **A negative index is a standard field (`GWW_*`) and this host does not answer those.**
+The constants would be written from memory, which is the one thing this project has a
+cardinal rule against. A run that needs one names the index in the log, and then it can be
+read off the guest that asked.
+
+### The window titles were wrong, and nothing had said so
+
+The first run with MDI children titled them `"REGISTERPENAPP\SYSTEM.INI"` — a path built
+by `lstrcat`ing `\SYSTEM.INI` onto **another module's leftover string**, because
+`GetWindowsDirectory` was unimplemented and the buffer kept whatever was in it. Not a
+failure; a **wrong name**, silently.
+
+**krnl386 id `0xd0` is `GetWindowsDirectory`**, and two independent readings agree:
+
+- krnl386's own call site says what shape it is, to the byte —
+  `seg1:0xc910 push ds / push di / push 0x80`, then `or ax,ax / je`, then `repne scasb` to
+  measure the string it wrote, then `mov [0x506],ds / [0x504],0x624 / [0x50c],cx` to cache
+  the pointer **and its length**. That is a `Get<something>Directory` and nothing else.
+- SYSEDIT says *which* directory, and it is a count rather than a guess: it imports
+  `KERNEL.134 GETWINDOWSDIRECTORY` and **not** `KERNEL.135 GETSYSTEMDIRECTORY`, from
+  exactly two sites, and its task makes exactly **two** calls to this id.
+
+Answered, the titles read `C:\WINDOWS\SYSTEM.INI`, `C:\WINDOWS\WIN.INI`, `C:\CONFIG.SYS`,
+`C:\AUTOEXEC.BAT`. ⚠ This is also the one call that moves the baseline, because krnl386
+asks it during its own bootstrap.
+
+---
+
 ## ★★★★ WHERE IT ACTUALLY GETS TO NOW
 
 With `wowsched.txt` **and** `wowcall.txt` armed, one run:
 
 | | |
 |---|---|
-| WOW32 BOPs | **546** (baseline 270) |
-| serviced / declined / unimplemented | **89 / 266 / 173** |
-| task histogram | `9 · 225 · 203 · 109` — **four**, the last being SYSEDIT's |
-| 16-bit calls made by the host | **3**, all returned |
-| windows created | 4 (`WOWExec`, `WOWFaxClass`, `mpframe`, `MDICLIENT`) |
-| ends at | `★ ExitKernelThunk(0x00000000)`, 842 KB |
+| WOW32 BOPs | **596** (baseline 270) |
+| serviced / declined / unimplemented | **129 / 290 / 159** |
+| task histogram | `9 · 225 · 203 · 159` — **four**, the last being SYSEDIT's |
+| 16-bit calls made by the host | **7**, all returned |
+| windows created | **8** — 2 WOWEXEC, `mpframe`, `MDICLIENT`, and 4 `EDIT` controls |
+| MDI children | **4** |
+| ends at | `★ ExitKernelThunk(0x00000000)`, 885 KB |
 
 and in the middle of it, `SYSEDIT.EXE`:
 
@@ -277,71 +387,67 @@ and in the middle of it, `SYSEDIT.EXE`:
 2. creates its **MDI client**;
 3. loads its **accelerator table**;
 4. `ShowWindow(0x0140, ...)` and `UpdateWindow(0x0140)` — **it shows its main window**;
-5. opens `C:\CONFIG.SYS`, seeks to the end for the size, seeks back;
-6. sends `WM_MDICREATE` to the MDI client;
-7. gets 0, closes the file, and says `"C:\CONFIG.SYS\nCannot open this file."`;
-8. does the identical thing for `C:\AUTOEXEC.BAT`, and exits.
+5. asks where Windows is, and builds `C:\WINDOWS\SYSTEM.INI`;
+6. sends `WM_MDICREATE` to the MDI client, which **makes an `mpchild` window and runs its
+   window procedure**, which **creates an `EDIT` control** and stores its handle in the
+   child's own extra bytes;
+7. opens the file, sizes it, and sends the control `EM_SETHANDLE` (`0x040D`);
+8. gets 0 from our default procedure, and says
+   `"C:\WINDOWS\SYSTEM.INI\nCannot open this file."`;
+9. **does all of that four times** — `SYSTEM.INI`, `WIN.INI`, `CONFIG.SYS`,
+   `AUTOEXEC.BAT` — and exits.
 
-Step 7 is the program being **right**. Nothing has drawn a pixel.
+Step 8 is the program being **right**, one whole layer deeper than it was this morning.
+Nothing has drawn a pixel.
 
 ---
 
 ## ▶ RESUME HERE
 
-### 1. ★★★★★ THE FRONTIER: THE MDI CLIENT'S WINDOW PROCEDURE (`WM_MDICREATE`)
-
-Named to the message by the run, and it is the other half of the mechanism this session
-built rather than a new kind of problem.
+### 1. ★★★★★ THE FRONTIER: THE `EDIT` CONTROL'S OWN BEHAVIOUR
 
 ```
-FUNC=0x6f [USER] from=0x0ab7:0x0083  (0x2378 0x0a9f 0x0000 0x0220 0x0160)
+-> SERVICED (USER), returned 0x00000000 -- default procedure: msg 0x040d not implemented
 ```
 
-`wowmap.py`: USER id `0x6f`, 10 argument bytes, **`SENDMESSAGE`**. Reversed (the block
-base is the last push):
+`0x040D` is `WM_USER + 13`, sent by SYSEDIT to the `EDIT` control it made, immediately
+after it has opened the file and sized it, and with a local memory handle as its
+parameter. It is the message that hands an edit control its text. Answered 0, SYSEDIT
+reports *"Cannot open this file."*, which is correct — it has been told the control did
+not take the text.
 
-```
-SendMessage(hWnd = 0x0160,        ★ the MDICLIENT window
-            msg  = 0x0220,        ★ WM_MDICREATE
-            wParam = 0,
-            lParam = 0x0a9f:0x2378)   -> an MDICREATESTRUCT on SYSEDIT's own stack
-```
+**And this is a different KIND of frontier from everything before it.** Every wall this
+session was a *call* that was missing. This one is a **control**: `EDIT` under WOW is the
+32-bit side's, so implementing it means implementing an editable text control — storage,
+selection, the `EM_*` message surface — and, before very long, **pixels**, which is the
+one thing this project still has none of.
 
-On real Windows the MDI client's window procedure lives in USER and creates a child of
-the class named in the `MDICREATESTRUCT`. Under WOW that procedure is the 32-bit side's,
-which is **ours** — the same conclusion as the system classes, one level further in.
+What to do first, in order, and none of it is a guess:
 
-What it needs, in order:
+1. **Read what SYSEDIT actually sends.** `sysedit seg3` is the file-loading routine and
+   it is short: `OPENFILE` at `0x00cf`, two `_LLSEEK`s, `SENDMESSAGE` at `0x011b`,
+   `LOCALREALLOC`, `_LCLOSE`, `LOCALLOCK`, `_LREAD`, `LOCALUNLOCK`. That sequence is
+   `EM_GETHANDLE`/`EM_SETHANDLE` around a local block the program grows and fills itself
+   — so the control's *text storage* is a Win16 local handle the guest owns, not
+   something the host has to allocate. Read the exact messages off those call sites
+   before implementing anything.
+2. **Decide what an `EDIT` control IS in this host**, the way `wowuser_win_t` decided what
+   a window is: an object with real content and a synthetic handle. That is a decision
+   worth writing down before code, because it is the first host-side *control*.
+3. ⚠ **`lParam` for `WM_CREATE` stops being optional soon.** An MDI child reads its
+   `MDICREATESTRUCT` back out of `CREATESTRUCT.lpCreateParams`; SYSEDIT's does not, but
+   the next application will.
 
-1. **`SendMessage` (USER `0x6f`)** as a real service: to a window with a 16-bit
-   procedure it is `wowcall_enter` with the caller's own arguments — the machinery exists
-   and has run three times. To a **system-class** window it is a host-side default
-   procedure.
-2. **The `MDICREATESTRUCT` layout**, read off SYSEDIT the way every other structure in
-   this investigation was read — its own stores into `ss:0x2378` are in `sysedit
-   seg1`, just above the `SendMessage` at `seg1:0x0083`.
-3. **`WM_MDICREATE` itself**: create a window of the class the structure names
-   (`mpchild`, already registered), send *it* `WM_CREATE`, return its handle.
-   ⇒ **This is where `lParam` stops being optional.** An MDI child reads its
-   `MDICREATESTRUCT` back out of `WM_CREATE`'s `CREATESTRUCT.lpCreateParams`, so the
-   `CREATESTRUCT` gap named in Part 1 is the very next thing to close.
+### 2. Closed this session
 
-⚠ Do not make `SendMessage` return non-zero to get past this. The check is correct: a
-zero from `WM_MDICREATE` means no child window, and SYSEDIT is right to say so.
-
-### 2. The next system classes will be named by the run, not by a list
-
-`mpchild` is SYSEDIT's own, but an MDI child that holds a file's text needs an **`EDIT`**
-control, and `EDIT` is USER's. Expect it immediately after (1) works — and add it *then*,
-with whatever the run shows it being asked for.
-
-### 3. Closed this session
-
-- **The host cannot call 16-bit code.** It can. `src/wow/wowcall.h`.
-- **`MDICLIENT` does not exist.** It does, as a system class.
-- **`LoadAccelerators` fails.** `NotifyWow` is answered.
-- **`0x217` is unnamed.** It is `NOTIFYWOW`, and its semantics are pinned by its only
-  call site.
+- **The host cannot call 16-bit code.** It can. `src/wow/wowcall.h`, 7 calls in a run.
+- **`MDICLIENT` / `EDIT` do not exist.** They do, as system classes.
+- **`LoadAccelerators` fails.** `NotifyWow` (USER `0x217`) is answered.
+- **`SendMessage` is unimplemented.** It is a real service, both halves.
+- **`WM_MDICREATE` has nowhere to go.** It makes the child and runs its procedure.
+- **Window extra bytes.** `Get/SetWindowWord`, bounded by the guest's own `cbWndExtra`.
+- **krnl386 `0xd0` is unnamed.** It is `GetWindowsDirectory`, and answering it fixed four
+  wrong window titles.
 
 ### How to drive it
 
@@ -363,15 +469,18 @@ ARCHIVE=build/wowruns ./scripts/bmwow.sh --no-deploy  # re-run what is on the bo
   ```bash
   L=build/wowruns/<the run>.log
   grep -c "WOWBOP 0x51" $L                              # 270
-  grep -c SERVICED $L                                   #  44
+  grep -c SERVICED $L                                   #  45  <- was 44
   grep -c DECLINED $L                                   # 122
-  grep -c "UNIMPLEMENTED, STEPPED OVER" $L              #  98
+  grep -c "UNIMPLEMENTED, STEPPED OVER" $L              #  97  <- was 98
   grep -o "task=0x[0-9a-f]*" $L | sort | uniq -c        # 9 · 222 · 39
   grep -c 0001:229C $L                                  # the WOWEXEC GP box
   ```
-- ★ In a healthy **frontier** run: `grep -c WOWCALL` is **7** (the ON line, then three
-  call/return pairs), `grep -c 'CreateWindow "'` is **4**, `grep -c NotifyWow` is **1**,
-  and the run ends on `★ ExitKernelThunk(0x00000000)` at ~840 KB.
+  The one-call change is `GetWindowsDirectory` and it is at **line 615** of both logs;
+  anything else moving is a regression.
+- ★ In a healthy **frontier** run: `grep -c WOWCALL` is **15** (the ON line + seven
+  call/return pairs), `grep -c 'CreateWindow "'` is **8**, `grep -c WM_MDICREATE` is
+  **4**, `grep -c NotifyWow` is **1**, and the run ends on
+  `★ ExitKernelThunk(0x00000000)` at ~885 KB.
 - ⚠ A fault loop still fills the log to its 268 MB cap in seconds. `grep` it; do not open
   it.
 

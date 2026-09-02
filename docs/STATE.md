@@ -118,7 +118,7 @@ Win16 push, and should not be quoted.)
 | Bar | Where it is | Est. |
 |---|---|---|
 | **The original DOS games bar** — Doom / Skyroads / ZAR, flawless sound | Two of three fully playable and confirmed by hand. ZAR is the gap (VBE 2.0 hi-colour + linear framebuffer). | **~85%** |
-| **★ The north star** — MS Paint + Notepad from Windows 3.x | Bootstrap, NE loader, krnl386, the WOW32 boundary, the scheduler, the launch and — since session 40 — **calling into 16-bit code** all work; `SYSEDIT.EXE` shows its main window and opens `CONFIG.SYS`. **Nothing has drawn a pixel** and there is no thunking; what it stops on is the USER surface itself (window procedures for the system classes, `SendMessage`, a message queue). | **~42%** |
+| **★ The north star** — MS Paint + Notepad from Windows 3.x | Bootstrap, NE loader, krnl386, the WOW32 boundary, the scheduler, the launch and — since session 40 — **calling into 16-bit code** all work; `SYSEDIT.EXE` builds its whole MDI interface, four children and four `EDIT` controls, with correct titles. **Nothing has drawn a pixel** and there is no thunking; what it stops on is the **controls** — an `EDIT` under WOW is the 32-bit side's, so it is ours to implement, and behind that come pixels. | **~45%** |
 | **The full vision** — an `ntvdm` superset on XP-32 | Everything above, plus the host UI, minus the standing DOS defects and M7/M8. | **~60%** |
 
 **Read the north-star number carefully.** The hard *unknowns* are largely behind us — what is
@@ -152,7 +152,7 @@ silently is worth more attention than its size suggests.
 
 | | Why it matters |
 |---|---|
-| **Win16 / WOW — an application launches and its task runs, but nothing draws** | `ntvdm.exe` is *also* the host for every 16-bit **Windows** program. The NE loader loads, relocates and binds the **whole** XP WOW module set on real hardware, **krnl386 executes** — protected mode, its own segments, its interrupt handlers, its own DPMI exceptions, and all eight 16-bit system modules — and it then finds, loads and **runs `WOWEXEC.EXE`** — which, since session 38's host-side task scheduler and session 39's `CreateWindow`, registers two window classes, **creates two windows** and sits in **its message loop** — and, since session 39's `WowGetNextVDMCommand` + `0xc5` + the yield point, **launches `SYSEDIT.EXE`, which runs its startup, registers its own classes and creates its own main window** — and, since session 40, **receives `WM_CREATE` in its own window procedure**, because the host can now call 16-bit code. It goes on to create its MDI client, load its accelerators, show and update its main window, and open `C:\CONFIG.SYS` and `C:\AUTOEXEC.BAT`. But a window here is a host-side *object* — a handle, a class, a rectangle — with no pixels behind it; `PeekMessage` has no queue to read; the **system classes have no window procedures**, so `SendMessage(WM_MDICREATE)` has nowhere to go and SYSEDIT correctly reports *"Cannot open this file"*; and there is no 16:16↔flat thunking. Since interception is an IFEO key on `ntvdm.exe`, and Win16 launches go through `ntvdm.exe` too, **installing NTVDMEX permanently would break every 16-bit Windows app today**. → [#128](https://github.com/MrMatthewLayton/ntvdmex/issues/128) |
+| **Win16 / WOW — an application launches and its task runs, but nothing draws** | `ntvdm.exe` is *also* the host for every 16-bit **Windows** program. The NE loader loads, relocates and binds the **whole** XP WOW module set on real hardware, **krnl386 executes** — protected mode, its own segments, its interrupt handlers, its own DPMI exceptions, and all eight 16-bit system modules — and it then finds, loads and **runs `WOWEXEC.EXE`** — which, since session 38's host-side task scheduler and session 39's `CreateWindow`, registers two window classes, **creates two windows** and sits in **its message loop** — and, since session 39's `WowGetNextVDMCommand` + `0xc5` + the yield point, **launches `SYSEDIT.EXE`, which runs its startup, registers its own classes and creates its own main window** — and, since session 40, **receives `WM_CREATE` in its own window procedure**, because the host can now call 16-bit code. It goes on to create its MDI client, load its accelerators, show and update its main window, and build **four MDI children, each with its own `EDIT` control**, titled `C:\WINDOWS\SYSTEM.INI`, `WIN.INI`, `C:\CONFIG.SYS` and `C:\AUTOEXEC.BAT`. But a window here is a host-side *object* — a handle, a class, a rectangle — with no pixels behind it; `PeekMessage` has no queue to read; an `EDIT` control has no behaviour, so `EM_SETHANDLE` is answered 0 and SYSEDIT correctly reports *"Cannot open this file"*; and there is no 16:16↔flat thunking. Since interception is an IFEO key on `ntvdm.exe`, and Win16 launches go through `ntvdm.exe` too, **installing NTVDMEX permanently would break every 16-bit Windows app today**. → [#128](https://github.com/MrMatthewLayton/ntvdmex/issues/128) |
 | **Console/stdio integration** | DOS output is buffered and flushed to `CONOUT$` at exit, so shell redirection and piping are bypassed and every DOS program pops a window. Blocks non-interactive use. |
 | **In-guest redirection** | `echo x > file` writes to the screen and leaves the file 0 bytes. Three fixes attempted, all at the wrong end. |
 | **No INT 13h / INT 25h / 26h** | No direct disk access. |
@@ -172,25 +172,26 @@ silently is worth more attention than its size suggests.
 > safe install story until WOW exists, and #128 moved onto the critical path.
 
 1. **[#128] WOW / Win16 — IN PROGRESS. ★★★★★ THE HOST CALLS 16-BIT CODE, AND
-   `SYSEDIT.EXE` SHOWS ITS MAIN WINDOW AND OPENS `C:\CONFIG.SYS`.**
+   `SYSEDIT.EXE` BUILDS ITS WHOLE MDI INTERFACE — FOUR CHILDREN, FOUR EDIT CONTROLS.**
 
    ### ▶ START HERE: [session 40](log/sessions/session-40.md#-resume-here)
    That block is the live handoff — where it is, the leads already **ruled out**
    (do not re-try them), the next run, the instruments, and the standing hazards.
    Everything below it is background.
 
-   ### ▶ AND THE FRONTIER IS THE OTHER HALF OF THE SAME MECHANISM
-   **The MDI client's window procedure.** SYSEDIT sends
-   `SendMessage(0x0160, WM_MDICREATE, 0, <MDICREATESTRUCT>)` — USER id `0x6f`, named from
-   its own export table — to the `MDICLIENT` window this host created. On real Windows
-   that procedure lives in USER; under WOW it is the 32-bit side's, which is **ours**, and
-   it does not exist. So the child window is never made and SYSEDIT correctly reports
-   *"Cannot open this file."* ⚠ Do not make `SendMessage` return non-zero to get past it.
-   Next, in order: `SendMessage` as a real service (to a 16-bit procedure it is
-   `wowcall_enter`; to a system class it is a host default procedure), the
-   `MDICREATESTRUCT` layout read off SYSEDIT's own stores, and then `WM_CREATE` with a
-   real `CREATESTRUCT` — the gap named in session 40 part 1, which an MDI child is the
-   first thing to need.
+   ### ▶ AND THE FRONTIER IS NOW A DIFFERENT KIND OF THING
+   **The `EDIT` control's own behaviour.** SYSEDIT builds its whole interface — four MDI
+   children, each with an `EDIT` control — and then sends the control `EM_SETHANDLE`
+   (`0x040D`) with the local memory handle holding the file's text. Under WOW an `EDIT` is
+   the 32-bit side's, which is **ours**, and our default window procedure answers 0, so
+   SYSEDIT correctly reports *"Cannot open this file."* Every wall before this one was a
+   missing *call*; this one is a missing **control** — storage, selection, the `EM_*`
+   surface, and before long **pixels**, which this project still has none of.
+   ▸ Start by reading what SYSEDIT actually sends: `sysedit seg3` is the file-loading
+   routine and it is short (`OPENFILE`, two `_LLSEEK`s, `SENDMESSAGE`, `LOCALREALLOC`,
+   `_LCLOSE`, `LOCALLOCK`, `_LREAD`, `LOCALUNLOCK`) — the control's text storage is a
+   Win16 local handle **the guest owns**, not something the host allocates.
+   ⚠ Do not make the default procedure return non-zero to get past it.
 
    **Session 40 in one paragraph.** The host now **calls 16-bit code**, and the mechanism
    is small because three of its four pieces already existed: a saveable context (the
@@ -218,15 +219,32 @@ silently is worth more attention than its size suggests.
    application `[bp-4]`, krnl386's own — it returns *permission*, so the answer is `1` and
    deliberately not something that looks like a handle. ⚠⚠ Its `lpResource` is stale one
    instruction later (`GlobalUnlock` at `seg1:0x3e23`), so it is **logged, not kept**.
-   With those, SYSEDIT `ShowWindow`s and `UpdateWindow`s its frame, opens `C:\CONFIG.SYS`
-   and `C:\AUTOEXEC.BAT`, and stops on `WM_MDICREATE`. ⚠ **`WM_CREATE`'s `lParam` is 0
-   and the log says so on every line** — a `CREATESTRUCT` has never been built from
-   measurement, and inventing one is how a wrong layout becomes a fact. ⚠ One more
-   instrument was lying quietly: every USER call printed `[?'s table]` because
+   ★★ **Then the other half of the same mechanism went in and SYSEDIT built its whole
+   interface.** `SendMessage` (USER `0x6f`) is **two mechanisms, not two cases of one** —
+   to a window with a 16-bit procedure it *is* the call, and ★ the procedure's return
+   value IS `SendMessage`'s (a second return mode in `wowcall.h`, `RESULT` vs `KEEP`;
+   conflating them would be silent); to a **system-class** window the procedure is ours.
+   The `MDICREATESTRUCT` was read off SYSEDIT's own stores at `seg3:0x0046`, and the
+   reading confirms itself from outside the code: `ds:0x004a` in its DGROUP — read from
+   the file — is `"mpchild"`, the class it registered two calls earlier. Measured: **four
+   MDI children, each with its own `EDIT` control, each child's window procedure run by
+   this host.** ★ `EDIT` went in because **the guest binary named it** (`seg1:0x0281`
+   pushes `ds:0x003a`, which is `"edit"` in segment 6 on disk) — reading the guest binary
+   is stronger evidence than waiting for the run line, not weaker. Two "runs but lies"
+   defects only the new reach could expose: **the window extra bytes** (`Get/SetWindowWord`,
+   bounded by the guest's own `cbWndExtra` — `mpchild` declares 8, exactly the four words
+   its `WM_CREATE` writes; without them SYSEDIT sent `EM_SETHANDLE` to handle **zero**,
+   having been told to forget its own control), and **krnl386 `0xd0` = `GetWindowsDirectory`**
+   (unimplemented, the buffer kept another module's leftover string and SYSEDIT titled a
+   window `"REGISTERPENAPP\SYSTEM.INI"` — not a failure, a *wrong name*). ⚠ **`WM_CREATE`'s
+   `lParam` is 0 and the log says so on every line** — a `CREATESTRUCT` has never been
+   built from measurement, and inventing one is how a wrong layout becomes a fact. ⚠ One
+   more instrument was lying quietly: every USER call printed `[?'s table]` because
    `wow_module_of_sel` is bind-stage-only and cannot name a runtime selector — about a
-   segment the dispatcher had identified and was routing on. ★ Baseline re-confirmed on
-   the same build with both switches off: **270 / 44 / 122 / 98 · `9·222·39` ·
-   `0001:229C`**, identical count for count.
+   segment the dispatcher had identified and was routing on. ★ **The baseline moved by
+   exactly one call and it has a name**: **270 / 45 / 122 / 97 · `9·222·39` · `0001:229C`**
+   against session 39's 270/44/122/98 — `GetWindowsDirectory`, at line 615 of both logs,
+   which krnl386 asks during its own bootstrap. Everything else is unchanged.
 
    **Session 39 in one paragraph.** `CreateWindow` is `USER.41`, id `0x29`, 30 argument
    bytes — and it was named without a single inference, because **a call site can name

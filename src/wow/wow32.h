@@ -180,6 +180,8 @@ typedef struct {
     WORD             cbds;           /* the DS it must be entered with          */
     WORD             cbhwnd, cbmsg, cbwparam;
     DWORD            cblparam;
+    int              cbret;          /* WOWCALL_RET_KEEP / _RESULT -- whose
+                                        answer the caller's return value is    */
 } wow32_frame_t;
 
 /* ---- frame accessors ---------------------------------------------------- */
@@ -380,6 +382,32 @@ static DWORD wow32_peekret(const wow32_frame_t *f)
    ⇒ Answering 0 is what made krnl386 compose module names against the CURRENT
      DIRECTORY and fail to open `C:\Documents and Settings\<user>\SHELL.DLL`. */
 #define WOW32_RESOLVEMODULEPATH         0xc5
+/* ── ★★ 0xd0: GetWindowsDirectory(lpBuffer, uSize). (session 40) ──────────────
+     Not named by krnl386's export table, so it comes from its two call sites and
+     from what the answer is USED for -- and the two agree.
+
+   ★ krnl386's own (seg1:0xc917) says what SHAPE it is, to the byte:
+       c90d  mov di,0x624
+       c910  push ds / push di / push 0x80     ; (lpBuffer = ds:0x624, uSize=128)
+       c917  call 0xb3e5                       ; this id, 6 argument bytes
+       c91a  or ax,ax / je                     ; 0 is failure
+       c920  repne scasb ...                   ; measure the string it wrote
+       c92a  mov [0x506],ds / [0x504],0x624 / [0x50c],cx   ; cache ptr + LENGTH
+     So it fills the caller's buffer with a NUL-terminated path and returns
+     non-zero on success. That is a Get<something>Directory and nothing else.
+
+   ★ SYSEDIT says WHICH directory, and it is a count rather than a guess:
+     `sysedit` imports `KERNEL.134 GETWINDOWSDIRECTORY` and NOT
+     `KERNEL.135 GETSYSTEMDIRECTORY` (`neimports.py`: seg2:0x017c and
+     seg2:0x01c6 -- exactly two sites), and in a run SYSEDIT's task makes
+     exactly TWO calls to this id. It then `lstrcat`s `\SYSTEM.INI` and
+     `\WIN.INI` onto the answer, which is where those files live.
+   ⚠ WHAT LEAVING IT UNIMPLEMENTED LOOKED LIKE: not an error, but a WRONG NAME.
+     The buffer kept whatever was in it, so SYSEDIT opened -- and titled a
+     window -- `"REGISTERPENAPP\SYSTEM.INI"`, a path built from another module's
+     leftover string. The "runs but lies" class, and it took the callback work to
+     get far enough to see it. */
+#define WOW32_GETWINDOWSDIRECTORY       0xd0
 #define WOW32_WOWSHUTDOWNTIMER          0xcd
 /* Serviced in main.c, not here: it needs the DOS machine. Listed so the name table
    below can print it, and so nobody adds a decline for it -- its call site
@@ -428,6 +456,7 @@ static const char *wow32_name(WORD id)
     case WOW32_WOWSHUTDOWNTIMER:       return "WowShutdownTimer";
     case WOW32_GETCURDIR:              return "GetCurrentDirectory";
     case WOW32_GETSYSTEMDEFAULTLANGID: return "GetSystemDefaultLangID";
+    case WOW32_GETWINDOWSDIRECTORY:    return "GetWindowsDirectory";
     case WOW32_GETPROFILEINT:          return "GetProfileInt";
     case WOW32_GETPRIVATEPROFILESTRING: return "GetPrivateProfileString";
     default:                           return NULL;
@@ -652,6 +681,26 @@ static int wow32_call(wow32_frame_t *f, wow32_dosdata_t *dd)
     case WOW32_GETSYSTEMDEFAULTLANGID:
         wow32_setret(f, (DWORD)GetSystemDefaultLangID());
         return 1;
+
+    /* ── ★★ 0xd0 GetWindowsDirectory(lpBuffer, uSize) -- see the note above.
+         The real Win32 call against the real directory, for the same reason
+         GetDriveType is a pass-through: our DOS layer opens real paths on the
+         real filesystem, so the host's Windows directory IS the guest's.
+       ⚠ uSize is the GUEST'S claim about its own buffer and the only bound
+         there is -- krnl386's is 0x80 bytes inside its DGROUP. Never write more
+         than it declared. */
+    case WOW32_GETWINDOWSDIRECTORY: {
+        volatile BYTE *dst = wow32_argptr(f, 2);
+        WORD cap = wow32_argw(f, 0);
+        char dir[MAX_PATH];
+        UINT n;
+        if (!dst || !cap) { wow32_setret(f, 0); return 1; }
+        n = GetWindowsDirectoryA(dir, sizeof dir);
+        if (!n || n >= sizeof dir || n + 1 > (UINT)cap) { wow32_setret(f, 0); return 1; }
+        { UINT k; for (k = 0; k <= n; ++k) dst[k] = (BYTE)dir[k]; }
+        wow32_setret(f, n);
+        return 1;
+    }
 
     /* ── ★★★ 0x80 GetPrivateProfileString, AND IT IS THE PROGRAM LAUNCH ───
          Neither this ID nor 0x39 is self-named by krnl386's export table, so both

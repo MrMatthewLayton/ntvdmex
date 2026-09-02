@@ -98,11 +98,25 @@
    would be looping rather than working. */
 #define WOWCALL_MAX_DEPTH 8
 
+/* ── WHOSE ANSWER IS THE CALL'S ANSWER ────────────────────────────────────────
+     Two different things are called "the return value" here and conflating them
+     would be silent:
+   KEEP   the SERVICE already wrote the answer (CreateWindow wrote the handle it
+          made) and the procedure's return only gets a veto -- WM_CREATE == -1
+          means "abandon this window", so the hole is revised to 0 and otherwise
+          left exactly as the service left it.
+   RESULT the PROCEDURE's return IS the answer. SendMessage is defined as
+          "whatever the window procedure returned", so the host must not invent
+          one, and the DWORD in DX:AX goes into the hole verbatim. */
+#define WOWCALL_RET_KEEP    0
+#define WOWCALL_RET_RESULT  1
+
 typedef struct {
     wowsched_slot_t saved;   /* the interrupted context, verbatim               */
     DWORD retlin;            /* the originating WOW32 frame's return hole, or 0 */
     DWORD proc;              /* what we called -- for the log and the failure    */
     WORD  hwnd, msg;
+    int   retmode;           /* WOWCALL_RET_* -- see above                       */
 } wowcall_frame_t;
 
 static wowcall_frame_t g_wc[WOWCALL_MAX_DEPTH];
@@ -133,7 +147,7 @@ static void wowcall_push(DWORD ssbase, WORD *sp, WORD v)
  */
 static int wowcall_enter(volatile BYTE *tib, DWORD ssbase, WORD retsel,
                          DWORD proc, WORD ds, WORD hwnd, WORD msg,
-                         WORD wparam, DWORD lparam, DWORD retlin)
+                         WORD wparam, DWORD lparam, DWORD retlin, int retmode)
 {
     wowcall_frame_t *fr;
     WORD sp;
@@ -142,10 +156,11 @@ static int wowcall_enter(volatile BYTE *tib, DWORD ssbase, WORD retsel,
 
     fr = &g_wc[g_wc_depth++];
     wowsched_save(&fr->saved, tib, 0, 0, 0);
-    fr->retlin = retlin;
-    fr->proc   = proc;
-    fr->hwnd   = hwnd;
-    fr->msg    = msg;
+    fr->retlin  = retlin;
+    fr->proc    = proc;
+    fr->hwnd    = hwnd;
+    fr->msg     = msg;
+    fr->retmode = retmode;
 
     /* Pascal order: first declared argument pushed first, so it ends up at the
        highest address -- which is what [bp+0x0e] == hwnd in the disassembly
@@ -185,14 +200,24 @@ static wowcall_frame_t *wowcall_leave(volatile BYTE *tib, DWORD result)
     if (g_wc_depth <= 0) return NULL;
     fr = &g_wc[--g_wc_depth];
     wowsched_restore(&fr->saved, tib);
-    /* ★ WM_CREATE MAY REFUSE. Returning -1 from WM_CREATE is the documented way
-         for a window procedure to abort its own creation, and the host must
-         honour it: the CreateWindow that sent the message has to come back 0.
-         The return hole is guest memory and outlives the context switch, so
-         revising it here is a two-byte write, not a special case. */
-    if (fr->retlin && fr->msg == WM_CREATE16 && (WORD)result == 0xFFFF) {
+    if (fr->retlin) {
         volatile BYTE *h = (volatile BYTE *)(ULONG_PTR)fr->retlin;
-        h[0] = 0; h[1] = 0; h[2] = 0; h[3] = 0;
+        DWORD v = 0;
+        int write = 0;
+        /* ★ WM_CREATE MAY REFUSE. Returning -1 from WM_CREATE is the documented
+             way for a window procedure to abort its own creation, and the host
+             must honour it: the call that made the window comes back 0. The
+             return hole is guest memory and outlives the context switch, so
+             revising it is a four-byte write, not a special case. */
+        if (fr->retmode == WOWCALL_RET_KEEP) {
+            if (fr->msg == WM_CREATE16 && (WORD)result == 0xFFFF) write = 1;
+        } else {
+            v = result; write = 1;      /* SendMessage: the procedure's answer */
+        }
+        if (write) {
+            h[0] = (BYTE)(v & 0xFF);        h[1] = (BYTE)((v >> 8)  & 0xFF);
+            h[2] = (BYTE)((v >> 16) & 0xFF); h[3] = (BYTE)((v >> 24) & 0xFF);
+        }
     }
     return fr;
 }

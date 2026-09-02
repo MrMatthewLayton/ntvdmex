@@ -44,6 +44,35 @@
 #define WOWUSER_REGISTERCLASS   0x39
 #define WOWUSER_CREATEWINDOW    0x29
 #define WOWUSER_NOTIFYWOW       0x217
+#define WOWUSER_SENDMESSAGE     0x6f
+#define WOWUSER_GETWINDOWWORD   0x85
+#define WOWUSER_SETWINDOWWORD   0x86
+
+/* Get/SetWindowWord argument blocks, reversed as always (base = last push):
+     GetWindowWord(hWnd, nIndex)               -> +0 nIndex, +2 hWnd
+     SetWindowWord(hWnd, nIndex, wNewWord)     -> +0 value, +2 nIndex, +4 hWnd
+   Confirmed against the run: SYSEDIT's `mpchild` WM_CREATE calls
+   `push si / push 2 / push 0` and the frame carries `(0x0000 0x0002 <hwnd>)`. */
+#define GWW_ARG_INDEX   0
+#define GWW_ARG_HWND    2
+#define SWW_ARG_VALUE   0
+#define SWW_ARG_INDEX   2
+#define SWW_ARG_HWND    4
+
+/* ── ★★★ SendMessage(hWnd, msg, wParam, lParam) -- 10 argument bytes ──────────
+     `USER.111 SENDMESSAGE`, named from SYSEDIT's own relocation chain at
+     `seg3:0x007e`. The block is REVERSED from the parameter list as always (the
+     base is the LAST push), and the run confirms every offset in one line:
+     `args=(0x2378 0x0a9f 0x0000 0x0220 0x0160)` against the pushes
+     `push [0x22] / push 0x220 / push 0 / push ss / push ax`. */
+#define SM_ARG_LPARAM   0
+#define SM_ARG_WPARAM   4
+#define SM_ARG_MSG      6
+#define SM_ARG_HWND     8
+
+/* The messages this host names. `0x0220` is what SYSEDIT pushes at
+   `seg3:0x0074`, and its lParam is an MDICREATESTRUCT -- see below. */
+#define WM_MDICREATE16  0x0220
 
 /* ── ★★★ NOTIFYWOW: "HERE IS A 16-BIT RESOURCE I HAVE JUST LOADED." ───────────
      Named by USER's own export table (`wowmap.py`: id 0x217, 6 argument bytes,
@@ -196,7 +225,17 @@ static int             g_wu_nclass = 0;
  *   nothing to send it to. That is a stated gap, and it is the next thing an MDI
  *   application will feel: WM_MDICREATE has nowhere to go yet.
  */
-static const char *const g_wu_sysclass[] = { "MDICLIENT" };
+/* ⚠ `EDIT` IS HERE BECAUSE THE GUEST BINARY NAMES IT, not because it is on a
+     list of system classes. `sysedit seg1:0x0281` -- inside `mpchild`'s own
+     WM_CREATE handler, four instructions after the message dispatch reaches
+     msg == 1 -- pushes `ds:0x003a` as a CreateWindow class name, and segment 6
+     (SYSEDIT's DGROUP) holds `"edit"` at that offset in the file on disk. Two
+     more offsets from the same read confirm the reading rather than resting on
+     it: `ds:0x0030` is `"mdiclient"`, which the frame procedure creates and a
+     run has already been seen to ask for, and `ds:0x004a` is `"mpchild"`, which
+     is the class named in the MDICREATESTRUCT below. Reading the guest binary
+     is stronger evidence than waiting for the run line, not weaker. */
+static const char *const g_wu_sysclass[] = { "MDICLIENT", "EDIT" };
 static int               g_wu_sysdone = 0;
 
 static void wowuser_ensure_sysclasses(void)
@@ -234,6 +273,7 @@ static void wowuser_ensure_sysclasses(void)
  *   into USER's local heap; ours is a counter. Nothing may infer memory from it.
  */
 #define WOWUSER_MAX_WIN   32
+#define WOWUSER_MAX_EXTRA 16            /* words -- 32 bytes of cbWndExtra */
 #define WOWUSER_HWND_BASE 0x0100        /* first synthetic handle */
 #define WOWUSER_HWND_STEP 0x0020        /* spaced so a stray +n is not a hit    */
 
@@ -247,10 +287,61 @@ typedef struct {
     int   x, y, cx, cy;
     WORD  parent, menu, hinst;
     char  text[64];
+    /* ── ★★★ THE WINDOW'S EXTRA BYTES -- cbWndExtra, AND THEY ARE LOAD-BEARING.
+         Not storage for its own sake: SYSEDIT keeps its EDIT control's handle
+         and its file state in them. `mpchild`'s WNDCLASS declares
+         `cbWndExtra = 8` (`sysedit seg2:0x0091 mov word [bp-0x14],8`, which is
+         +0x08 from the struct base at `bp-0x1c` -- the same read that puts
+         `"mpchild"` at +0x16, so the layout confirms itself), its WM_CREATE
+         writes indices 0/2/4/6, and it reads them back to address the control.
+         With no store behind them every read answered 0 and the run reached
+         `SendMessage: no such window 0x0000 msg 0x040d` -- EM_SETHANDLE to a
+         window handle the program had just been told to forget. */
+    WORD  extra[WOWUSER_MAX_EXTRA];
 } wowuser_win_t;
 
 static wowuser_win_t g_wu_win[WOWUSER_MAX_WIN];
 static int           g_wu_nwin = 0;
+
+/* A free window slot with its synthetic handle assigned, or NULL. Factored out
+   of CreateWindow the moment a SECOND thing started making windows -- the MDI
+   client's WM_MDICREATE -- because two copies of a handle formula is how two
+   windows come to share a handle. */
+static wowuser_win_t *wowuser_newwin(void)
+{
+    wowuser_win_t *w = NULL;
+    int i;
+    for (i = 0; i < g_wu_nwin; ++i) if (!g_wu_win[i].hwnd) { w = &g_wu_win[i]; break; }
+    if (!w) {
+        if (g_wu_nwin >= WOWUSER_MAX_WIN) return NULL;
+        w = &g_wu_win[g_wu_nwin++];
+    }
+    w->hwnd = (WORD)(WOWUSER_HWND_BASE + (w - g_wu_win) * WOWUSER_HWND_STEP);
+    return w;
+}
+
+static wowuser_win_t *wowuser_findwin(WORD hwnd)
+{
+    int i;
+    if (!hwnd) return NULL;
+    for (i = 0; i < g_wu_nwin; ++i)
+        if (g_wu_win[i].hwnd == hwnd) return &g_wu_win[i];
+    return NULL;
+}
+
+/* Resolve a 16:16 far pointer that is NOT an argument -- one we found inside a
+   structure the guest handed us. Same null-selector rule as wow32_argptr: 0
+   rather than the LDT base, so a missing check cannot scribble at the bottom of
+   the address space. */
+static volatile BYTE *wowuser_farp(const wow32_frame_t *f, DWORD fp)
+{
+    WORD sel = (WORD)(fp >> 16);
+    DWORD base;
+    if (!sel || !f->sel2lin) return NULL;
+    base = f->sel2lin(sel, f->ctx);
+    if (!base) return NULL;
+    return (volatile BYTE *)(ULONG_PTR)(base + (fp & 0xFFFF));
+}
 
 /* Read a NUL-terminated guest string through a 16:16 far pointer. */
 static int wowuser_farstr(const wow32_frame_t *f, DWORD fp, char *out, int cap)
@@ -332,6 +423,138 @@ static void wu_putq(char *b, int cap, int *k, const char *s)
     wu_puts(b, cap, k, "\"");
     wu_puts(b, cap, k, s);
     wu_puts(b, cap, k, "\"");
+}
+
+/* ── ★ ASK FOR THE WM_CREATE. One helper, because there are now TWO places that
+     make a window with a 16-bit procedure behind it (CreateWindow, and the MDI
+     client's WM_MDICREATE) and they must send the same message with the same
+     entry conditions. See wowcall.h for what the fields mean and for why the
+     return mode is KEEP: the caller has already written the handle it made, and
+     the procedure's answer only gets a veto. */
+static void wowuser_want_create(wow32_frame_t *f, const wowuser_class_t *c,
+                                const wowuser_win_t *w)
+{
+    if (!f->cbok || !w->wndproc) return;
+    f->cbproc   = w->wndproc;
+    f->cbds     = w->hinst ? w->hinst : c->hinst;
+    f->cbhwnd   = w->hwnd;
+    f->cbmsg    = WM_CREATE16;
+    f->cbwparam = 0;
+    f->cblparam = 0;                       /* ⚠ no CREATESTRUCT yet -- see wowcall.h */
+    f->cbret    = WOWCALL_RET_KEEP;
+}
+
+/*
+ * ── ★★★ THE MDICREATESTRUCT, READ OFF SYSEDIT'S OWN STORES ───────────────────
+ * `sysedit seg3:0x0046` builds one on its stack at `ss:[bp-0x1e]` and hands it
+ * to `SendMessage(hwndMDIClient, WM_MDICREATE, 0, &it)` at `seg3:0x007e` --
+ * `USER.111 SENDMESSAGE`, named from the relocation chain, not inferred. Every
+ * offset below is a store in that window, so nothing here is taken from a
+ * header:
+ *
+ *   0046  mov [bp-0x1e],0x4a  / 004b mov [bp-0x1c],ds   -> +0x00 szClass  ds:0x4a
+ *   0040  mov [bp-0x1a],ax    / 0043 mov [bp-0x18],ds   -> +0x04 szTitle
+ *   004e  mov ax,[0x2e0] / 0051 mov [bp-0x16],ax        -> +0x08 hOwner
+ *   0054  mov ax,0x8000  ... [bp-0x14]/[bp-0x12]/       -> +0x0a x   +0x0c y
+ *                            [bp-0x10]/[bp-0x0e]        -> +0x0e cx  +0x10 cy
+ *   0063  mov ax,[0x28] / mov dx,[0x2a] -> [bp-0xc]/[bp-0xa] -> +0x12 style DWORD
+ *
+ * ★ AND THE READING IS CONFIRMED FROM OUTSIDE THE CODE. `ds:0x004a` in
+ *   SYSEDIT's DGROUP (segment 6, in the file on disk) is the string `"mpchild"`
+ *   -- the class SYSEDIT registered two calls earlier. A wrong offset for
+ *   szClass does not decode to a class this program has registered.
+ * ⚠ THE STRUCT ENDS AT +0x16. The slot at `[bp-8]` is the SendMessage result,
+ *   not a field, so `+0x16` (where a `lParam` member would sit) is NOT written
+ *   by this program and must not be read.
+ */
+#define MCS_SZCLASS   0x00
+#define MCS_SZTITLE   0x04
+#define MCS_HOWNER    0x08
+#define MCS_X         0x0a
+#define MCS_Y         0x0c
+#define MCS_CX        0x0e
+#define MCS_CY        0x10
+#define MCS_STYLE     0x12
+
+/*
+ * ── ★★★★ THE DEFAULT WINDOW PROCEDURE FOR A SYSTEM-CLASS WINDOW ─────────────
+ * A window made from `MDICLIENT` has no 16-bit procedure, because under WOW the
+ * system classes belong to the 32-bit side -- so when something sends it a
+ * message, WE are the procedure. This is that procedure, and it is deliberately
+ * tiny: the ONE message any run has ever sent, and 0 for everything else.
+ *
+ * ⚠ 0 IS NOT A STUB HERE, IT IS THE HONEST ANSWER for a message we do not
+ *   implement, and the log names the message so the next one can be read off a
+ *   run rather than guessed at from a list of MDI messages.
+ */
+static LONG wowuser_defproc(wow32_frame_t *f, wowuser_win_t *w, WORD msg,
+                            WORD wparam, DWORD lparam, char *note, int notecap)
+{
+    int k = 0;
+    switch (msg) {
+
+    /* ── ★★★★★ WM_MDICREATE: MAKE THE CHILD WINDOW ────────────────────────────
+         The message SYSEDIT stops on. lParam is a far pointer to the
+         MDICREATESTRUCT above; the answer is the child's handle, and 0 means
+         "no child", which is what the program has been correctly reporting as
+         *"Cannot open this file."* */
+    case WM_MDICREATE16: {
+        volatile BYTE *m = wowuser_farp(f, lparam);
+        char cname[64], tname[64];
+        wowuser_class_t *c;
+        wowuser_win_t *ch;
+        int i;
+        if (!m) { wu_puts(note, notecap, &k, "WM_MDICREATE: unreadable "
+                                             "MDICREATESTRUCT"); return 0; }
+        wowuser_farstr(f, (DWORD)wowuser_peek(m, MCS_SZCLASS)
+                          | ((DWORD)wowuser_peek(m, MCS_SZCLASS + 2) << 16),
+                       cname, sizeof cname);
+        wowuser_farstr(f, (DWORD)wowuser_peek(m, MCS_SZTITLE)
+                          | ((DWORD)wowuser_peek(m, MCS_SZTITLE + 2) << 16),
+                       tname, sizeof tname);
+        c = cname[0] ? wowuser_find(cname) : NULL;
+        if (!c) {
+            wu_puts(note, notecap, &k, "WM_MDICREATE: no such class ");
+            wu_putq(note, notecap, &k, cname);
+            return 0;
+        }
+        ch = wowuser_newwin();
+        if (!ch) { wu_puts(note, notecap, &k, "WM_MDICREATE: no window slot");
+                   return 0; }
+        ch->cls     = (WORD)(c - g_wu_class);
+        ch->wndproc = c->wndproc;             /* per WINDOW, as at CreateWindow */
+        ch->style   = (DWORD)wowuser_peek(m, MCS_STYLE)
+                    | ((DWORD)wowuser_peek(m, MCS_STYLE + 2) << 16);
+        ch->parent  = w->hwnd;                /* ★ the MDI CLIENT is the parent */
+        ch->menu    = 0;
+        ch->hinst   = wowuser_peek(m, MCS_HOWNER);
+        {   WORD x  = wowuser_peek(m, MCS_X),  y  = wowuser_peek(m, MCS_Y);
+            WORD cx = wowuser_peek(m, MCS_CX), cy = wowuser_peek(m, MCS_CY);
+            ch->x  = (x  == CW_USEDEFAULT16) ? 0 : (int)(short)x;
+            ch->y  = (y  == CW_USEDEFAULT16) ? 0 : (int)(short)y;
+            ch->cx = (cx == CW_USEDEFAULT16) ? WOWUSER_DESK_CX : (int)(short)cx;
+            ch->cy = (cy == CW_USEDEFAULT16) ? WOWUSER_DESK_CY : (int)(short)cy;
+        }
+        for (i = 0; i < (int)sizeof ch->text; ++i) ch->text[i] = tname[i];
+        wu_puts(note, notecap, &k, "WM_MDICREATE ");
+        wu_putq(note, notecap, &k, c->name);
+        wu_puts(note, notecap, &k, " ");
+        wu_putq(note, notecap, &k, ch->text);
+        wu_puts(note, notecap, &k, " in client 0x");
+        wu_puthex(note, notecap, &k, w->hwnd, 4);
+        wu_puts(note, notecap, &k, " -> hwnd=0x");
+        wu_puthex(note, notecap, &k, ch->hwnd, 4);
+        wowuser_want_create(f, c, ch);
+        return (LONG)ch->hwnd;
+    }
+
+    default:
+        wu_puts(note, notecap, &k, "default procedure: msg 0x");
+        wu_puthex(note, notecap, &k, msg, 4);
+        wu_puts(note, notecap, &k, " not implemented, answered 0");
+        (void)wparam;
+        return 0;
+    }
 }
 
 /*
@@ -449,13 +672,8 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
             return 1;
         }
 
-        w = NULL;
-        for (i = 0; i < g_wu_nwin; ++i) if (!g_wu_win[i].hwnd) { w = &g_wu_win[i]; break; }
-        if (!w) {
-            if (g_wu_nwin >= WOWUSER_MAX_WIN) { wow32_setret(f, 0); return 1; }
-            w = &g_wu_win[g_wu_nwin++];
-        }
-        w->hwnd    = (WORD)(WOWUSER_HWND_BASE + (w - g_wu_win) * WOWUSER_HWND_STEP);
+        w = wowuser_newwin();
+        if (!w) { wow32_setret(f, 0); return 1; }
         w->cls     = (WORD)(c - g_wu_class);
         w->style   = wow32_argd(f, CW_ARG_STYLE);
         w->wndproc = c->wndproc;
@@ -510,13 +728,132 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
              segment rather than ours.
            ⚠ lParam SHOULD BE AN LPCREATESTRUCT and is 0 -- a gap this host names
              rather than fakes. See wowcall.h. */
-        if (f->cbok && w->wndproc) {
+        wowuser_want_create(f, c, w);
+        return 1;
+    }
+
+    /* ── ★★★★★ 0x6f SendMessage(hWnd, msg, wParam, lParam) ────────────────────
+         The call that moved the frontier, and the two halves of it are two
+         different mechanisms rather than two cases of one:
+
+           to a window with a 16-bit procedure  -> ★ THIS IS THE CALL. Hand it
+             straight to wowcall.h with the caller's own arguments, and the
+             procedure's return value IS SendMessage's (WOWCALL_RET_RESULT) --
+             the host must not invent one, because "whatever the window
+             procedure returned" is the entire definition of this function.
+           to a SYSTEM-class window            -> the procedure is OURS, because
+             under WOW the system classes belong to the 32-bit side. See
+             wowuser_defproc.
+
+       ⚠ GATED ON cbok, ALL OF IT. With callbacks off this falls through to the
+         honest "unimplemented" rather than half-servicing: a WM_MDICREATE that
+         made a child window whose WM_CREATE never ran would be a half-built
+         object that the guest would then use, which is worse than a missing
+         answer. It also keeps a default run byte-identical.
+       ⚠ AN UNKNOWN hWnd IS AN ERROR, NOT A NO-OP. Our handles are synthetic and
+         we issued every one of them, so a handle we do not recognise means the
+         guest is talking about a window we never made -- and 0 with a named
+         handle in the log is how that gets found. */
+    case WOWUSER_SENDMESSAGE: {
+        WORD  hwnd = wow32_argw(f, SM_ARG_HWND);
+        WORD  msg  = wow32_argw(f, SM_ARG_MSG);
+        WORD  wp   = wow32_argw(f, SM_ARG_WPARAM);
+        DWORD lp   = wow32_argd(f, SM_ARG_LPARAM);
+        wowuser_win_t *w;
+        int k = 0;
+        if (!f->cbok) return 0;
+        w = wowuser_findwin(hwnd);
+        if (!w) {
+            wu_puts(note, notecap, &k, "SendMessage: no such window 0x");
+            wu_puthex(note, notecap, &k, hwnd, 4);
+            wu_puts(note, notecap, &k, " msg 0x");
+            wu_puthex(note, notecap, &k, msg, 4);
+            wow32_setret(f, 0);
+            return 1;
+        }
+        if (w->wndproc) {
+            wu_puts(note, notecap, &k, "SendMessage 0x");
+            wu_puthex(note, notecap, &k, hwnd, 4);
+            wu_puts(note, notecap, &k, " msg 0x");
+            wu_puthex(note, notecap, &k, msg, 4);
+            wu_puts(note, notecap, &k, " -> its own window procedure");
+            /* Written so the hole is never uninitialised if the call is
+               refused; wowcall.h overwrites it with the real answer. */
+            wow32_setret(f, 0);
             f->cbproc   = w->wndproc;
-            f->cbds     = w->hinst ? w->hinst : c->hinst;
-            f->cbhwnd   = w->hwnd;
-            f->cbmsg    = WM_CREATE16;
-            f->cbwparam = 0;
-            f->cblparam = 0;
+            f->cbds     = w->hinst ? w->hinst : g_wu_class[w->cls].hinst;
+            f->cbhwnd   = hwnd;
+            f->cbmsg    = msg;
+            f->cbwparam = wp;
+            f->cblparam = lp;
+            f->cbret    = WOWCALL_RET_RESULT;
+            return 1;
+        }
+        wow32_setret(f, (DWORD)wowuser_defproc(f, w, msg, wp, lp, note, notecap));
+        return 1;
+    }
+
+    /* ── ★★★ 0x85 GetWindowWord / 0x86 SetWindowWord -- cbWndExtra ────────────
+         Both named by USER's own export table. A window's extra words are where
+         a Win16 program keeps its per-window state, and SYSEDIT keeps the handle
+         of the EDIT control it created there -- so without these, its own child
+         cannot find its own control, which is what
+         `SendMessage: no such window 0x0000 msg 0x040d` was.
+       ★ THE BOUND IS THE GUEST'S OWN DECLARATION. `cbWndExtra` comes from the
+         WNDCLASS the program registered, so an out-of-range index is the program
+         asking for storage it never asked to have -- refuse it, and say the
+         declared size on the line so a refusal is self-explaining rather than a
+         silent zero.
+       ⚠ A NEGATIVE INDEX IS A STANDARD FIELD (Win16's GWW_*), and this host does
+         NOT answer those. The constants would be written from memory, which is
+         the one thing this project has a cardinal rule against; a run that needs
+         one will name the index in the log, and then it can be read off the
+         guest that asked. Until then it is an honest 0 that says so. */
+    case WOWUSER_GETWINDOWWORD:
+    case WOWUSER_SETWINDOWWORD: {
+        int set = (f->id == WOWUSER_SETWINDOWWORD);
+        WORD hwnd = wow32_argw(f, set ? SWW_ARG_HWND  : GWW_ARG_HWND);
+        short idx = (short)wow32_argw(f, set ? SWW_ARG_INDEX : GWW_ARG_INDEX);
+        WORD val  = set ? wow32_argw(f, SWW_ARG_VALUE) : 0;
+        wowuser_win_t *w = wowuser_findwin(hwnd);
+        int k = 0;
+        wu_puts(note, notecap, &k, set ? "SetWindowWord 0x" : "GetWindowWord 0x");
+        wu_puthex(note, notecap, &k, hwnd, 4);
+        wu_puts(note, notecap, &k, " index ");
+        if (idx < 0) { wu_puts(note, notecap, &k, "-0x");
+                       wu_puthex(note, notecap, &k, (DWORD)(-idx), 2); }
+        else         { wu_puts(note, notecap, &k, "0x");
+                       wu_puthex(note, notecap, &k, (DWORD)idx, 2); }
+        if (!w) {
+            wu_puts(note, notecap, &k, " -- NO SUCH WINDOW");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        if (idx < 0) {
+            wu_puts(note, notecap, &k, " -- a STANDARD field; this host does not"
+                                       " answer those yet, returning 0");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        {   const wowuser_class_t *c = &g_wu_class[w->cls];
+            if (idx + 2 > (int)c->wndextra || idx + 2 > (int)sizeof w->extra) {
+                wu_puts(note, notecap, &k, " -- OUT OF RANGE, class declared"
+                                           " cbWndExtra=0x");
+                wu_puthex(note, notecap, &k, c->wndextra, 4);
+                wow32_setret(f, 0);
+                return 1;
+            }
+        }
+        if (set) {
+            wu_puts(note, notecap, &k, " <- 0x");
+            wu_puthex(note, notecap, &k, val, 4);
+            /* Win16 returns the PREVIOUS value, so read before writing. */
+            wow32_setret(f, w->extra[idx / 2]);
+            w->extra[idx / 2] = val;
+        } else {
+            wu_puts(note, notecap, &k, " -> 0x");
+            wu_puthex(note, notecap, &k, w->extra[idx / 2], 4);
+            wow32_setret(f, w->extra[idx / 2]);
         }
         return 1;
     }

@@ -9896,8 +9896,10 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
             p = zput(p, " msg=0x");   p = zhex(p, fr->msg);
             p = zput(p, ", depth now "); p = zhex(p, (DWORD)g_wc_depth);
             p = zput(p, ")");
-            if (fr->retlin && fr->msg == WM_CREATE16 && (WORD)res == 0xFFFF)
-                p = zput(p, " -- ★ WM_CREATE REFUSED: the CreateWindow that sent it"
+            if (fr->retmode == WOWCALL_RET_RESULT)
+                p = zput(p, " -- ★ and THAT is what the caller returns");
+            else if (fr->retlin && fr->msg == WM_CREATE16 && (WORD)res == 0xFFFF)
+                p = zput(p, " -- ★ WM_CREATE REFUSED: the call that made the window"
                             " now returns 0");
             p = zput(p, "\r\n");
             log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
@@ -10259,6 +10261,7 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                 f.cbds    = 0;
                 f.cbhwnd  = 0; f.cbmsg = 0; f.cbwparam = 0;
                 f.cblparam = 0;
+                f.cbret   = WOWCALL_RET_KEEP;
                 g_wow_last_id = (WORD)f.id; g_wow_last_from = f.from;
                 /* ── ★★ THE EPILOGUE-MODE EXPERIMENT (wowmode.txt). ────────────
                      Written BEFORE anything is serviced, because the guest reads
@@ -10797,7 +10800,8 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                                                     f.cbds, f.cbhwnd, f.cbmsg,
                                                     f.cbwparam, f.cblparam,
                                                     (DWORD)(ULONG_PTR)
-                                                        (f.bp + WOW32_OFF_RET)))
+                                                        (f.bp + WOW32_OFF_RET),
+                                                    f.cbret))
                                 p = zput(p, " -- REFUSED (depth, or an unusable"
                                             " stack/procedure); the call was NOT"
                                             " made and the guest keeps the answer"
