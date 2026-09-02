@@ -9781,8 +9781,8 @@ static char *pm_int21_xfer(dos_machine_t *mp, volatile BYTE *tib, DWORD ah, char
 #undef m
 }
 
-static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
-                               unsigned steps)
+static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
+                                    unsigned steps)
 {
 #define m (*mp)
     char report[2048]; char *base = report; char *p = report;
@@ -13051,6 +13051,104 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                     log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
                     return -1;
 #undef m
+}
+
+/* ── ★★★ THE HANDLER'S ANSWER IS ON THE STACK, NOT IN EFLAGS. (GH #128, session 41)
+     Every DOS service above reports failure the way DOS does -- `CF` -- and writes it
+     into the guest's LIVE EFLAGS before stepping EIP past the BOP. For a client that
+     reached us through a PATCHED INT SITE in its own code, or through the `#GP` on a
+     raw `INT nn`, that is the only channel there is and it is right: no interrupt
+     frame was ever built, so the instruction after the call reads the flags register.
+
+     It is WRONG for the other way in, and that way is the whole of WOW. Our default
+     protected-mode handler for all 256 vectors is THREE BYTES -- `C4 C4 CF`: the BOP,
+     and then an **IRET**. krnl386 hooks INT 21h in protected mode, asks its 32-bit
+     companion first, and when the companion declines it chains to the vector it saved,
+     which is that stub:
+
+         seg1:0x5238  pushf                    ; ★ the flags image the IRET will restore
+               0x5239  push ds
+               ...
+         seg1:0x56d2  pop ds
+               0x56d3  lcall cs:[0x3c]         ; ★ -> our stub: BOP, then IRET
+               0x56e5  pushf                   ; krnl386 then PRESERVES what came back
+               0x5706  popf                    ;   across its own bookkeeping
+
+     So the very next instruction the guest executes after we advance past the BOP
+     throws our CF away and restores the caller's. A real INT 21h handler does not have
+     that problem, because on real hardware it answers by writing the flags image the
+     caller pushed -- which is exactly what the V86 arm of this host already does
+     (`*pfl |= 1`, at SS:SP+4) and what the protected-mode arm never did.
+
+   ★ MEASURED, and the measurement is an A/B inside one run. A breakpoint at
+     `krnl386 seg1:0x4549` -- the `jae` in `_lread`'s tail that turns a set CF into
+     `AX = -1` -- across SYSEDIT loading its four files:
+         SYSTEM.INI   0x0e7 bytes   efl=0x00010206   CF=0
+         WIN.INI      0x1dd bytes   efl=0x00010206   CF=0
+         CONFIG.SYS   0x000 bytes   efl=0x00010207   CF=1   -> AX=0xffff
+         AUTOEXEC.BAT 0x000 bytes   efl=0x00010207   CF=1   -> AX=0xffff
+     Our AH=3Fh answered `AX=0 CF=0` for all four. The two zeroes are the ones whose CF
+     never reached the guest: `_lread` skips its buffer probe on a zero-length read
+     (`seg1:0x3d96 jcxz`), and that probe's `or byte es:[bx],0` is the only thing that
+     had been clearing the CF left by its own `cmp ax,0xffff` two instructions earlier.
+     ⇒ a defect that was ALWAYS here needed an empty file to expose it, and the stock
+     oracle -- SYSEDIT under stock ntvdm opening all four with no message box -- is what
+     ruled out "the application is right".
+
+   ⚠ CF ONLY, AND THAT IS NOT TIMIDITY. CF is the flag these services compute; ZF, SF,
+     OF, AF and PF in live EFLAGS at this moment are the GUEST's, left over from
+     whatever krnl386 executed on its way to the BOP. Copying those into the frame
+     would not be returning an answer, it would be inventing one -- and it would do it
+     silently, in the one place a wrong bit cannot be seen.
+   ⚠ Keyed on the guest STANDING IN THE STUB with the IRET as its next instruction, not
+     on the vector or on how we were entered. Both facts are exact and read out of the
+     live machine: a service that parked a different context (a wowcall.h callback, an
+     EXEC) is no longer in the stub and is correctly skipped.
+   ⚠ The IRET's width follows the STUB's D bit (dpmi_sync_defsel_width makes it track
+     the client), and the stack's address width follows SS's -- the same "frame width
+     and descriptor width are the same question" this host has paid for three times. */
+#define DPMI_PMFRAME_CF 0x1u
+static void dpmi_pm_cf_to_frame(volatile BYTE *tib)
+{
+    WORD  cs = (WORD)(VDM_REG(tib, VTIB_CS) & 0xFFFF);
+    WORD  ss;
+    DWORD base, eip, sp, lin, img, now;
+    const volatile BYTE *ip;
+    volatile BYTE *fl;
+
+    if (!g_pm_defsel || cs != g_pm_defsel) return;      /* not in our stub at all */
+    base = dpmi_sel_base(cs);
+    if (!base) return;
+    eip = VDM_REG(tib, VTIB_EIP);
+    ip  = (const volatile BYTE *)(ULONG_PTR)(base + eip);
+    if (!mem_readable((ULONG_PTR)ip, 1) || *ip != 0xCF) return;   /* not about to IRET */
+
+    ss  = (WORD)(VDM_REG(tib, VTIB_SS) & 0xFFFF);
+    sp  = dpmi_sel_is32(ss) ? VDM_REG(tib, VTIB_ESP) : (VDM_REG(tib, VTIB_ESP) & 0xFFFF);
+    lin = dpmi_sel_base(ss) + sp + (dpmi_sel_is32(cs) ? 8u : 4u);
+    if (!mem_readable((ULONG_PTR)lin, 2)) return;
+    fl  = (volatile BYTE *)(ULONG_PTR)lin;
+
+    img = (DWORD)fl[0] | ((DWORD)fl[1] << 8);
+    now = (img & ~DPMI_PMFRAME_CF) | (VDM_REG(tib, VTIB_EFLAGS) & DPMI_PMFRAME_CF);
+    if (now == img) return;                    /* the frame already says what we do */
+    fl[0] = (BYTE)(now & 0xFF); fl[1] = (BYTE)((now >> 8) & 0xFF);
+    {   char lb[192], *q = lb;
+        q = zput(q, "PM CF -> IRET frame at 0x"); q = zhex(q, lin);
+        q = zput(q, ": 0x"); q = zhex(q, img); q = zput(q, " -> 0x"); q = zhex(q, now);
+        q = zput(q, " (the stub's IRET would have restored the caller's CF)\r\n");
+        log_append(LOG_PATH, lb, q); serial_out(lb, q); }
+}
+
+/* The service, and then the one thing it cannot say in a register. Kept as a wrapper
+   rather than repeated at the ~90 `return 1` sites above, because a rule enforced in
+   one place is a rule and a rule repeated ninety times is a lottery. */
+static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
+                               unsigned steps)
+{
+    int rc = dpmi_service_pm_int_body(mp, tib, vec, steps);
+    if (rc == 1) dpmi_pm_cf_to_frame(tib);
+    return rc;
 }
 
 /* Lazily install the PM-return catcher selector (g_pmret_sel): a code selector based
