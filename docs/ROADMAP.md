@@ -181,7 +181,7 @@ Per-step exit criteria:
   DirectDraw window, driven entirely through the pluggable VDD interface (timer, video, input, speaker),
   with a live timer IRQ and a working mouse. **M3 DONE.**
 
-## M4 — Memory extensions 🟡 IN PROGRESS
+## M4 — Memory extensions ✅ DONE
 - [x] **XMS 3.0** (HIMEM.SYS) — `src/dos/dos_xms.h` + host wiring (`INT 2Fh AX=4300/4310`
   install/entry, a FAR-CALL API entry BOP, `host_xms()`). Extended memory is host-heap-backed
   (above the 1 MB V86 map); Move (0Bh) memcpys between an EMB and the conventional window.
@@ -191,29 +191,54 @@ Per-step exit criteria:
   shadowing** (write-back + read-in memcpy) so the guest's direct frame accesses need no trap.
   "EMMXXXX0" device name parked for detection. Off-VM battery **30/30** (`tools/dostest/ems_test.c`).
   VM gate `emstest.com` (menu #15) pending.
-- [ ] **DPMI** (protected-mode DOS extenders, e.g. DOS/4GW) — **Researched** (feasible by reusing
-  the kernel monitor's PM support: services 10/11 `VdmSetLdtEntries`/`VdmSetProcessLdtInfo`, 13
-  `VdmPMCliControl`; the same VDM runs PM, distinguished by the MSW PE bit — see
-  [research/dpmi-under-ntvdmcontrol.md](research/dpmi-under-ntvdmcontrol.md)). Next is a **16-bit
-  DPMI spike** (the real→PM mode-switch round-trip). DPMI is intentionally **not advertised**
-  (`INT 2Fh AX=1687h` left unhandled) until the switch is proven.
-- **Exit:** a DPMI/DOS-extender game or tool runs. *(XMS/EMS met for their own programs; the
-  DPMI exit awaits the spike.)*
+- [x] **DPMI** (protected-mode DOS extenders, e.g. DOS/4GW) — **DONE.** A DPMI 0.9 host running
+  unmodified third-party clients, in **real-CPU protected mode** (not the interpreter), including
+  32-bit DOS/4GW. `INT 2Fh AX=1687h` is advertised and **required**. Exception reflection works:
+  NT builds the DPMI 0.9 frame itself and the fault table is indexed by the x86 vector. A raw
+  `INT nn` in PM is serviced from the `#GP` (the IDT bit in the error code names the vector),
+  which retired the project's oldest silent VDM killer.
+- **Exit: MET** — Doom runs its own 32-bit code through DOS/4GW on real silicon.
+- **Still open here:** ZAR needs VBE 2.0 hi-colour + a linear framebuffer.
 
-## M5 — Win16 / WOW foundation ⬜
-- [ ] WOW bootstrap (`wowexec` analog), 16-bit `krnl386`/`user`/`gdi` hosting
-- [ ] NE loader, 16-bit module/segment management
-- **Exit:** a trivial Win16 .EXE loads and reaches its message loop.
+## M5 — Win16 / WOW foundation 🟡 EXIT MET, foundation uneven
+- [x] NE loader, 16-bit module/segment management — loads, relocates and binds the whole XP WOW
+  module set on real hardware (209-check battery over all 15 real binaries).
+- [x] WOW bootstrap — **XP's own `krnl386` executes**: protected mode, its own segments, its
+  interrupt handlers, its own DPMI exceptions, and all eight 16-bit system modules. It reads
+  `[boot] WOWSHELL` out of `SYSTEM.INI`, finds `WOWEXEC.EXE`, loads and **runs** it.
+- [x] The 16↔32 boundary — the WOW32 call interface is pinned to the byte and partly implemented.
+  ⚠ **The id space is PER MODULE** (krnl386 seg1 / krnl386 seg2 / USER / GDI are four different
+  numberings); krnl386's **seg2 table, 121 stubs, has no dispatcher at all**.
+- [x] A host-side **Win16 task scheduler** (`src/wow/wowsched.h`, opt-in) — krnl386 has none.
+- **Exit: MET** — `WOWEXEC.EXE` reaches its message loop, and `SYSEDIT.EXE` is launched and its
+  task executes on its own stack.
+- ⚠ **Not a finished foundation.** Several ids are answered only as `wow32ret.txt` EXPERIMENTS
+  (`0xd1`), the scheduler handles exactly two tasks, and the application faults early in its own
+  startup. See [`STATE.md`](STATE.md) and the session-39 handoff.
 
-## M6 — Win16 thunking ⬜
-- [ ] 16:16 ↔ flat pointer translation; generic/flat thunks
+## M6 — Win16 thunking ⬜ — **THE BIG ONE, AND BARELY STARTED**
+- [ ] 16:16 ↔ flat pointer translation; generic/flat thunks — **none of this exists**
 - [ ] USER/GDI 16-bit objects mapped to Win32 handles; message bridging
-- **Exit:** a real Win16 GUI app runs and paints.
+- [ ] **The host calling INTO 16-bit code.** Every WOW32 service so far *answers* the guest;
+  `DispatchMessage` requires the opposite direction, and the host has never done it once.
+  `g_wu_win[].wndproc` has held a 16:16 far pointer since `CreateWindow`, unused.
+- **Exit:** a real Win16 GUI app runs and **paints**. **Nothing has drawn a pixel.**
+- Windows today are host-side *objects* (a synthetic handle, a class, a rectangle), which is
+  deliberate — see `src/wow/wowuser.h` for why a half-built real HWND would have been worse.
 
-## M7 — Peripheral VDDs ⬜
-- [ ] Sound, networking, serial/parallel, etc., as pluggable VDDs (host-backed)
+## M7 — Peripheral VDDs 🟡 IN PROGRESS
+- [x] **Sound — DONE and confirmed by ear.** SB16 PCM at 99.999% delivery, clean-room MIT
+  OPL2/OPL3 FM (Nuked used only as a black-box oracle), MPU-401 MIDI, PC speaker.
+- [x] **Video/input** — text, mode 13h, mode 12h planar, VESA banked; keyboard and mouse.
+- [ ] Networking, serial/parallel
 - [ ] Bare-metal vs virtualized device strategy per [risks.md](risks.md)
 
 ## M8 — Polish & SDK ⬜
+- [x] Host UI shell — menu bar, status strip, six-tab Settings dialog backed by the registry,
+  windowed GDI + exclusive-fullscreen DirectDraw, Luna-themed.
+- [ ] **40 of the 46 settings are stored and honoured by nothing.** `settings_apply()` in
+  `src/host/main.c` is the honest list of what actually works.
 - [ ] Pluggable VDD/driver SDK + docs for third-party developers
-- [ ] Luna theming pass, full-screen story, installer/registration tooling
+- [ ] Installer/registration tooling — **blocked on M6**: installing today would break every
+  16-bit Windows program, and handing Win16 launches back to stock `ntvdm` is impossible
+  (measured three ways, see #129).

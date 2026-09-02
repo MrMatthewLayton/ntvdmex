@@ -4,7 +4,7 @@
 > this file top to bottom and you will know where it is, what works, what does not, and
 > what to do next.
 
-- **Last updated:** 2026-09-01 (session 39)
+- **Last updated:** 2026-09-02 (session 39)
 - **Branch:** `m9/completeness`
 - **Tracker:** [140+ issues](https://github.com/MrMatthewLayton/ntvdmex/issues) — reconciled against the repo on 2026-08-26 (`tools/gh/backfill.py` is the manifest)
 - **Knowledge base:** the [wiki](https://github.com/MrMatthewLayton/ntvdmex/wiki)
@@ -81,6 +81,30 @@ scheduler moment: WOWEXEC never retires, so a task parked at its launch waited f
 blocking on it is a task yielding — and with that, **SYSEDIT.EXE's Win16 task executes on
 its own stack.** It faults early (`0x0abf:0x09f0`, a null `ES`) and nothing has drawn a
 pixel. See #128 below.
+
+---
+
+## How far along is this, honestly
+
+⚠ A single percentage is a judgement, not a measurement, so here are three against three
+different bars, with the basis stated. (The last recorded figure, *~40% of the full vision*,
+is from the **2026-08-05** review — it predates working sound, working DPMI and the entire
+Win16 push, and should not be quoted.)
+
+| Bar | Where it is | Est. |
+|---|---|---|
+| **The original DOS games bar** — Doom / Skyroads / ZAR, flawless sound | Two of three fully playable and confirmed by hand. ZAR is the gap (VBE 2.0 hi-colour + linear framebuffer). | **~85%** |
+| **★ The north star** — MS Paint + Notepad from Windows 3.x | Bootstrap, NE loader, krnl386, the WOW32 boundary, the scheduler and the launch all work; `SYSEDIT.EXE`'s task executes. **Nothing has drawn a pixel**, there is no thunking, and `DispatchMessage` has never called 16-bit code. | **~35%** |
+| **The full vision** — an `ntvdm` superset on XP-32 | Everything above, plus the host UI, minus the standing DOS defects and M7/M8. | **~60%** |
+
+**Read the north-star number carefully.** The hard *unknowns* are largely behind us — what is
+left is mostly known work, but there is a lot of it, and **M6 is one line on the roadmap and
+probably the largest single body of work remaining**: 16:16↔flat thunking, USER/GDI object
+mapping, message bridging, and calling *into* 16-bit code, which this host has never done once.
+
+⚠ And the standing DOS defects below are small individually but sit in the **"runs but lies"**
+class this project treats as the most expensive kind — `MEM.EXE` reporting wrong figures
+silently is worth more attention than its size suggests.
 
 ---
 
