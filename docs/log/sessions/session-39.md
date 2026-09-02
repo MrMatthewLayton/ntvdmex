@@ -518,16 +518,42 @@ something happens is not a measurement of what it returns*, one more time.
 and opens SYSEDIT's modules, builds its task database, launches it — and **SYSEDIT.EXE's
 Win16 task executes on its own stack.** It faults early, and nothing has drawn a pixel.
 
-### 1. ★★★ The `#GP` inside SYSEDIT's task — `0x0abf:0x09f0`, null `ES`
+### 1. ★★★ The environment a task inherits — `PSP+0x2c`
 
-`cmp byte es:[di],0` with `ES = 0x0000` and `EDI = 0`. `CS = 0x0abf` is **not** krnl386
-seg1, so this is the application's (or a driver's) own code, reached after a krnl386
-helper returned.
-⚠ **Do not blame the `0xd2` in front of it** — poll loop, restores `ES` from the stack,
-so the null predates it (see Part 5). The question is what was supposed to put a selector
-in `ES` before `0x0abf:0x09f0`, and the way in is to find what `0x0abf` is: match it
-against the selectors krnl386 hands SYSEDIT's segments (`INT31h 0007 setbase` lines
-around the load) rather than guessing.
+**Part 6 traced and half-fixed this.** The fault bytes were matched against every guest
+module at that offset: an exact hit in **`sysedit.exe` seg1**, identical to the file, so
+nothing had corrupted it. The code is
+
+```
+09e1  mov es,[0x1ae]        ; its PSP
+09e5  mov cx,es:[0x2c]      ; the ENVIRONMENT segment
+09ea  jcxz done             ; 0 is handled...
+09ec  mov es,cx             ; ...1 is not
+09f0  cmp byte es:[di],0    ; #GP -- selector index 0 is the null descriptor
+```
+
+so the whole fault is one field. **`INT 21h AH=55h` (create PSP) had no PM arm** —
+measured, exactly two calls per run, one per task — so neither task ever got a PSP and
+`+0x2c` held whatever was in that memory: **0** for WOWEXEC (whose launcher then read
+`lstrlen(0000:0000)` and took a reflected `#GP` inside krnl386) and **1** for SYSEDIT,
+which walks past the `jcxz` guard. One cause, two symptoms.
+
+`AH=55h`/`26h` were already implemented for V86 and merely unreachable, and the V86 code
+could not be reused: **`DX` is a selector here, not a paragraph**, and **`+0x2c` must be
+a selector too**, because the guest's next instruction is `mov es,` that word.
+
+★ **Fixed and confirmed: the `krnl386 seg1:0x259f` fault is gone** — WOWEXEC's own
+environment walk works.
+
+⚠ **SYSEDIT's `0x09f0` fault survives, and the next question is named.** WOWEXEC's
+launcher does `or al,1` at `seg1:0x0500` immediately before `mov es:[bx+0x2c],ax`, so a
+source value of **0** becomes exactly the **1** still being read. Its own environment
+build now works; **what it hands the child does not**. Read `seg2/seg1:0x04??`–`0x0500`
+for where that AX comes from (a `GlobalAlloc`/`GlobalLock` pair inside `seg1:0x02aa`).
+
+⚠ Also live, and not yet looked at: a `#NP` at `0x0b47:0x00b2` with `err=0x0b34` — a
+demand-load fault for one of SYSEDIT's own segments — and a `#GP` at `krnl386
+seg1:0xc5f0`.
 
 ### 2. `0xd1` and `0xd2` — krnl386 seg2's id space, still undispatched
 
