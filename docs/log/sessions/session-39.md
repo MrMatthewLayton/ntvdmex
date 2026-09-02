@@ -1018,32 +1018,30 @@ ARCHIVE=build/wowruns ./scripts/bmwow.sh --no-deploy  # re-run what is on the bo
 - The scheduler is **opt-in**: `touch /private/tmp/xpshare/wowsched.txt` to arm it.
   **Without it you are measuring the baseline, not the frontier.**
 - ⚠ SMB writes to `/private/tmp/xpshare` need the sandbox disabled.
-- ⚠⚠ **Always re-run with the scheduler off and confirm 277 / 44 / `9 · 222 · 39` /
-  `0001:229C`.** ⚠ That is the baseline **as of `0xc5`** — it was 265 / 42 / `9·222·27`
-  before, and it moved because `0xc5` resolves module paths with the scheduler off too,
-  carrying WOWEXEC twelve calls further into the same wall. A baseline that moves for a
-  reason you can name is fine; one that moves silently is not. Unmoved as of this session, across the patcher change.
-- ⚠ The spinning pump fills the log to its 268 MB cap in seconds. `grep` it; do not open
-  it. `grep -c 'CreateWindow "'` is 2 in a healthy run.
-- ★ `grep -m1 'LAUNCH \['` says whether the program was handed over, and which.
+- ⚠⚠ **Always re-run with the scheduler OFF and confirm the baseline.** Measured
+  end of session 39, and the commands that produce the numbers, so the next reader
+  compares like with like:
 
-### How to drive it
+  ```bash
+  L=build/wowruns/<the run>.log
+  grep -c "WOWBOP 0x51" $L                              # 270
+  grep -c SERVICED $L                                   #  44
+  grep -c DECLINED $L                                   # 122
+  grep -c "UNIMPLEMENTED, STEPPED OVER" $L              #  98
+  grep -o "task=0x[0-9a-f]*" $L | sort | uniq -c        # 9 · 222 · 39
+  grep -c 0001:229C $L                                  # the WOWEXEC GP box
+  ```
 
-```bash
-ARCHIVE=build/wowruns ./scripts/bmwow.sh              # deploy, run, collect
-ARCHIVE=build/wowruns ./scripts/bmwow.sh --no-deploy  # re-run what is on the box
-```
-- The scheduler is **opt-in**: `touch /private/tmp/xpshare/wowsched.txt` to arm it.
-  **Without it you are measuring the baseline, not the frontier.**
-- ⚠ SMB writes to `/private/tmp/xpshare` need the sandbox disabled.
-- ⚠⚠ **Always re-run with the scheduler off and confirm 277 / 44 / `9 · 222 · 39` /
-  `0001:229C`.** ⚠ That is the baseline **as of `0xc5`** — it was 265 / 42 / `9·222·27`
-  before, and it moved because `0xc5` resolves module paths with the scheduler off too,
-  carrying WOWEXEC twelve calls further into the same wall. A baseline that moves for a
-  reason you can name is fine; one that moves silently is not.
-- ⚠ The spinning message pump fills the log to its 268 MB cap in seconds. `grep` it;
-  do not open it. `grep -c "CreateWindow \""` is 2 in a healthy run — if it climbs, the
-  task-relaunch loop is back.
+  ⚠ Older entries in this file quote **"277 / 44"**; the 277 counted something else
+  and 270 is what `WOWBOP 0x51` actually gives — on the *same* run those entries
+  described, re-checked. The histogram and the 44 are unchanged from session 38.
+  A baseline that moves for a reason you can name is fine; one that moves silently
+  is not.
+- ★ In a healthy **frontier** run (scheduler on): `grep -m1 'LAUNCH \['` names the
+  program handed over, `grep -c 'CreateWindow "'` is **3** (two WOWEXEC, one SYSEDIT),
+  and the run ends on `★ ExitKernelThunk(0x00000000)` at ~760 KB.
+- ⚠ A fault loop still fills the log to its 268 MB cap in seconds. `grep` it; do not
+  open it.
 
 ### Ruled out — do not re-try
 
@@ -1054,6 +1052,15 @@ still holds, plus:
   chain terminator. Use `tools/ne/neimports.py`.
 - **Breakpointing `wowexec:0x0849` to catch a `CreateWindow` failure.** That is
   `RegisterClass`'s error path — see the correction above.
+- **`0xd1` "only has to be non-zero".** Refuted by part 7: its return is the child's
+  environment selector and the guest loads it into `ES`. An experiment value is a
+  measurement, never an answer.
+- **Handing the child the parent's environment selector.** Part 7: the parent frees it
+  the moment `LoadModule` returns.
+- **Identifying a guest segment by a selector number remembered from another run.**
+  Part 8: `0x0abf` was seg1 in one run and seg2 in the next.
+- **Chasing SYSEDIT's exit as a failure.** Part 8: it is the documented behaviour of a
+  frame window with no MDI client, and the client is made in `WM_CREATE`.
 
 ### Tools
 
