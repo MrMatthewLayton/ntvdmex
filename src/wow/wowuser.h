@@ -43,6 +43,49 @@
 
 #define WOWUSER_REGISTERCLASS   0x39
 #define WOWUSER_CREATEWINDOW    0x29
+#define WOWUSER_NOTIFYWOW       0x217
+
+/* ── ★★★ NOTIFYWOW: "HERE IS A 16-BIT RESOURCE I HAVE JUST LOADED." ───────────
+     Named by USER's own export table (`wowmap.py`: id 0x217, 6 argument bytes,
+     stub `seg1:0x12dd`, NOTIFYWOW) and pinned to the byte by its one caller,
+     which is USER's whole implementation of `LoadAccelerators`:
+
+       3dcc  push 0 / push 9      \
+       3dce  lcall FindResource   /  ★ lpType = 9 = RT_ACCELERATOR
+       3dde  lcall LoadResource      -> [bp-4] = hResData
+       3df4  lcall LockResource      -> [bp-0xc] = the bytes, 16:16
+       3e05  lcall SizeofResource    -> [bp-8]  = how many
+       3e10  push 3 / lea ax,[bp-0x10] / push ss / push ax
+       3e17  lcall <the 0x217 stub>  ★ THIS CALL
+       3e1c  or dx,ax / je 0x3e2a    -> 0 frees the resource and returns NULL
+       3e37  mov ax,[bp-4] / retf 6  ★ AND THE HANDLE IT RETURNS IS ITS OWN
+
+   ★ SO THE RETURN IS NOT A HANDLE. `seg1:0x3e37` hands the application
+     `[bp-4]` -- krnl386's global handle for the resource -- whichever way this
+     call goes. All this answer decides is whether LoadAccelerators SUCCEEDS.
+     Returning a fabricated handle here would be inventing a value nobody reads;
+     the honest answer is "noted", which is what the function's name says.
+
+   ── The 12-byte block at ss:[bp-0x10], every field from a store above ────────
+       +0x00 WORD  hInstance    ( [bp+0x0a], the caller's module )
+       +0x02 WORD  hResData     ( LoadResource's handle )
+       +0x04 DWORD lpResource   ( LockResource's 16:16 -- the bytes themselves )
+       +0x08 DWORD cbResource   ( SizeofResource )
+
+   ⚠⚠ AND lpResource IS STALE THE MOMENT WE RETURN. `seg1:0x3e23` calls
+     GlobalUnlock on the very next instruction, so a host that recorded that
+     pointer for a later TranslateAccelerator would be keeping an address the
+     guest has already released -- an instrument that lies later, which is this
+     project's most expensive shape. It is LOGGED, not kept. When accelerators
+     are actually implemented, the bytes must be COPIED here, while they are
+     locked, or asked for again through FindResource/LoadResource. */
+#define WOWNOTIFY_ACCEL         3
+#define NOTIFY_ARG_BLOCK        0
+#define NOTIFY_ARG_KIND         4
+#define NOTIFY_HINSTANCE        0x00
+#define NOTIFY_HRESDATA         0x02
+#define NOTIFY_LPRESOURCE       0x04
+#define NOTIFY_CBRESOURCE       0x08
 
 /*
  * ── ★★★ CreateWindow's ARGUMENT BLOCK, READ OFF WOWEXEC'S OWN PUSHES ─────────
@@ -119,10 +162,60 @@ typedef struct {
     WORD  hinst;
     WORD  hicon, hcursor, hbrback;
     WORD  clsextra, wndextra;
+    int   sysclass;                  /* 1 = the SYSTEM provides it, not a program */
 } wowuser_class_t;
 
 static wowuser_class_t g_wu_class[WOWUSER_MAX_CLASS];
 static int             g_wu_nclass = 0;
+
+/*
+ * ── ★★★ THE SYSTEM CLASSES ARE THE 32-BIT SIDE'S, WHICH MEANS THEY ARE OURS ──
+ * Measured, not assumed. Under WOW, `USER.EXE` is a THUNK MODULE: every export
+ * funnels to the 32-bit half, which is why `RegisterClass` reaches this host at
+ * all. So the classes Windows itself provides -- the ones no application ever
+ * registers because they are already there -- have nowhere else to come from.
+ * The run says so directly: in a whole SYSEDIT launch there are exactly four
+ * RegisterClass calls, and all four are a program's own (`WOWExecClass`,
+ * `WOWFaxClass`, `mpframe`, `mpchild`). USER never registers one, because in
+ * this architecture it cannot.
+ *
+ * ★ AND THIS IS THE WALL THE FIRST 16-BIT CALLBACK UNCOVERED. With WM_CREATE
+ *   delivered, SYSEDIT's frame procedure runs and does the one thing it exists
+ *   to do -- `CreateWindow("MDICLIENT", ...)` at `sysedit seg1:0x01ca` -- and
+ *   this host answered "no such class", because nothing had ever registered it.
+ *   `[0x22]` stayed zero for a NEW reason, one step further on.
+ *
+ * ⚠ THE LIST IS WHAT THE RUN ASKED FOR, NOT A LIST OF SYSTEM CLASSES. Windows
+ *   provides BUTTON, EDIT, STATIC, LISTBOX, COMBOBOX, SCROLLBAR and the numbered
+ *   dialog/menu classes too, and seeding all of them would be answering questions
+ *   nothing has asked -- every one would be a class that exists and does nothing,
+ *   which is the "runs but lies" shape. They go in when a run names them.
+ * ⚠ AND A SYSTEM CLASS HAS NO 16-BIT WINDOW PROCEDURE HERE, deliberately. On real
+ *   Windows MDICLIENT's procedure lives in USER; ours is a host object with no
+ *   behaviour, so a window made from it gets a handle and no WM_CREATE -- there is
+ *   nothing to send it to. That is a stated gap, and it is the next thing an MDI
+ *   application will feel: WM_MDICREATE has nowhere to go yet.
+ */
+static const char *const g_wu_sysclass[] = { "MDICLIENT" };
+static int               g_wu_sysdone = 0;
+
+static void wowuser_ensure_sysclasses(void)
+{
+    unsigned i;
+    int k;
+    if (g_wu_sysdone) return;
+    g_wu_sysdone = 1;
+    for (i = 0; i < sizeof g_wu_sysclass / sizeof g_wu_sysclass[0]; ++i) {
+        wowuser_class_t *c;
+        if (g_wu_nclass >= WOWUSER_MAX_CLASS) return;
+        c = &g_wu_class[g_wu_nclass++];
+        for (k = 0; k < (int)sizeof c->name - 1 && g_wu_sysclass[i][k]; ++k)
+            c->name[k] = g_wu_sysclass[i][k];
+        c->name[k]   = 0;
+        c->atom      = (WORD)(0xC000 + g_wu_nclass);
+        c->sysclass  = 1;
+    }
+}
 
 /*
  * ── ★★ A WINDOW, AS AN OBJECT, WITH NO PIXELS BEHIND IT ─────────────────────
@@ -252,6 +345,7 @@ static void wu_putq(char *b, int cap, int *k, const char *s)
 static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
 {
     if (notecap) note[0] = 0;
+    wowuser_ensure_sysclasses();
     switch (f->id) {
 
     /* ── ★★★ 0x39 RegisterClass(const WNDCLASS FAR*) ──────────────────────────
@@ -278,6 +372,18 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
                        cname, sizeof cname);
         if (!cname[0]) { wow32_setret(f, 0); return 1; } /* no name, no class */
         c = wowuser_find(cname);
+        /* ⚠ A SYSTEM CLASS MAY NOT BE OVERWRITTEN. Re-registering an app's own
+             class is allowed above (WOWEXEC does it once per relaunch), but the
+             same code path would let a program point MDICLIENT at its own
+             procedure and quietly take the system's class away from every other
+             window made from it. Real Windows fails the call; so do we. */
+        if (c && c->sysclass) {
+            int k2 = 0;
+            wu_puts(note, notecap, &k2, "RegisterClass REFUSED (system class) ");
+            wu_putq(note, notecap, &k2, cname);
+            wow32_setret(f, 0);
+            return 1;
+        }
         if (!c) {
             if (g_wu_nclass >= WOWUSER_MAX_CLASS) { wow32_setret(f, 0); return 1; }
             c = &g_wu_class[g_wu_nclass++];
@@ -321,14 +427,27 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
         wowuser_win_t *w;
         int i, k = 0;
 
+        cname[0] = 0;
         if ((WORD)(clsfp >> 16) == 0)                    /* an ATOM, not a string */
             c = wowuser_find_atom((WORD)clsfp);
         else {
             wowuser_farstr(f, clsfp, cname, sizeof cname);
             c = cname[0] ? wowuser_find(cname) : NULL;
         }
-        if (!c) { wow32_setret(f, 0); wu_puts(note, notecap, &k,
-                                              "CreateWindow: no such class"); return 1; }
+        /* ⚠ SAY WHAT WAS ASKED FOR. This read "CreateWindow: no such class" and
+             nothing else, and the one run where it mattered -- SYSEDIT's frame
+             procedure asking for MDICLIENT -- was therefore a line that named the
+             class of failure and withheld the instance, which is the exact shape
+             this project has been caught by before. An atom prints as an atom,
+             because a lookup that failed on an atom did not have a name to fail on. */
+        if (!c) {
+            wow32_setret(f, 0);
+            wu_puts(note, notecap, &k, "CreateWindow: no such class ");
+            if (cname[0]) wu_putq(note, notecap, &k, cname);
+            else { wu_puts(note, notecap, &k, "atom 0x");
+                   wu_puthex(note, notecap, &k, clsfp & 0xFFFF, 4); }
+            return 1;
+        }
 
         w = NULL;
         for (i = 0; i < g_wu_nwin; ++i) if (!g_wu_win[i].hwnd) { w = &g_wu_win[i]; break; }
@@ -364,7 +483,70 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
         wu_puthex(note, notecap, &k, w->style, 8);
         wu_puts(note, notecap, &k, " -> hwnd=0x");
         wu_puthex(note, notecap, &k, w->hwnd, 4);
+        /* A window made from a system class has no 16-bit procedure behind it, so
+           it gets no WM_CREATE. Say which kind of window this is on the line that
+           creates it, or the ABSENCE of the callback below reads like a defect. */
+        if (c->sysclass) wu_puts(note, notecap, &k, " [system class: no wndproc]");
         wow32_setret(f, w->hwnd);
+
+        /* ── ★★★★★ AND NOW SEND IT WM_CREATE. (GH #128, session 40) ───────────
+             This is the whole point of the window, and until this session it was
+             the one thing this host had never done in either direction. SYSEDIT's
+             frame procedure creates its MDI client while handling WM_CREATE
+             (`sysedit seg1:0x01ca`, then `mov [0x22],ax`), and `[0x22]` is what
+             `seg2:0x0114` tests before deciding whether it has a usable window.
+             So a CreateWindow that does not send WM_CREATE is not a window that
+             is missing a message -- it is a window the application will correctly
+             refuse to use.
+           ★ THE PROCEDURE IS THE WINDOW'S, NOT THE CLASS'S. Win16 copies
+             lpfnWndProc into the window at creation, which is why w->wndproc
+             exists; sending to the class would be wrong the moment anything
+             subclasses.
+           ★ AND DS IS THE WINDOW'S hInstance. sysedit.exe is MULTIPLEDATA, so its
+             exported prologue is the unpatched `push ds / pop ax`, which takes DS
+             from its caller -- see the contract in wowcall.h. `hinst` is the same
+             word the program put in WNDCLASS.hInstance and passed to
+             CreateWindow, so it is the guest's own statement about its data
+             segment rather than ours.
+           ⚠ lParam SHOULD BE AN LPCREATESTRUCT and is 0 -- a gap this host names
+             rather than fakes. See wowcall.h. */
+        if (f->cbok && w->wndproc) {
+            f->cbproc   = w->wndproc;
+            f->cbds     = w->hinst ? w->hinst : c->hinst;
+            f->cbhwnd   = w->hwnd;
+            f->cbmsg    = WM_CREATE16;
+            f->cbwparam = 0;
+            f->cblparam = 0;
+        }
+        return 1;
+    }
+
+    /* ── ★★★ 0x217 NotifyWow(lpBlock, wKind) -- see the note above. ───────────
+         ⚠ ONLY THE KIND THAT HAS BEEN READ. `wKind == 3` is what LoadAccelerators
+           passes, and that call site is the only one this run has ever taken.
+           Answering every kind would be claiming to have understood a namespace
+           of which exactly one member has been measured -- so anything else falls
+           through to the honest "unimplemented", and the log says which kind. */
+    case WOWUSER_NOTIFYWOW: {
+        volatile BYTE *b = wow32_argptr(f, NOTIFY_ARG_BLOCK);
+        WORD kind = wow32_argw(f, NOTIFY_ARG_KIND);
+        int k = 0;
+        if (kind != WOWNOTIFY_ACCEL || !b) return 0;
+        wu_puts(note, notecap, &k, "NotifyWow(RT_ACCELERATOR) hInst=0x");
+        wu_puthex(note, notecap, &k, wowuser_peek(b, NOTIFY_HINSTANCE), 4);
+        wu_puts(note, notecap, &k, " hRes=0x");
+        wu_puthex(note, notecap, &k, wowuser_peek(b, NOTIFY_HRESDATA), 4);
+        wu_puts(note, notecap, &k, " at 0x");
+        wu_puthex(note, notecap, &k, wowuser_peek(b, NOTIFY_LPRESOURCE + 2), 4);
+        wu_puts(note, notecap, &k, ":0x");
+        wu_puthex(note, notecap, &k, wowuser_peek(b, NOTIFY_LPRESOURCE), 4);
+        wu_puts(note, notecap, &k, " cb=0x");
+        wu_puthex(note, notecap, &k, (DWORD)wowuser_peek(b, NOTIFY_CBRESOURCE)
+                  | ((DWORD)wowuser_peek(b, NOTIFY_CBRESOURCE + 2) << 16), 8);
+        /* Non-zero is "noted"; the handle the application gets is the guest's
+           own (seg1:0x3e37). 1 rather than a number that looks like a handle,
+           so nothing downstream can mistake it for one. */
+        wow32_setret(f, 1);
         return 1;
     }
 

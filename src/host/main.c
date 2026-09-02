@@ -23,6 +23,7 @@
 #include "../wow/ne.h"  /* GH #128: 16-bit New Executable loader (WOW bootstrap) */
 #include "../wow/wow32.h" /* GH #128: the 32-bit half -- krnl386's calls out to Win32 */
 #include "../wow/wowsched.h" /* GH #128: ...and the Win16 task scheduler, which is also ours */
+#include "../wow/wowcall.h" /* GH #128: ...and the OTHER direction -- calling 16-bit code */
 #include "../wow/wowuser.h" /* GH #128: USER.EXE's id space -- a DIFFERENT one; see the file */
 #include "dos_mcb.h"
 #include "dos_loader.h"
@@ -3446,6 +3447,15 @@ static WORD      g_wow_path_seg = 0;
      pointer for its whole life, so it cannot share a buffer anything else reuses. */
 static WORD      g_wow_env_seg  = 0;
 #define WOW_ENV_PARAS  0x100                 /* 4 KB -- a DOS environment and then some */
+/* ── ★ THE WAY BACK OUT OF 16-BIT CODE. (GH #128, session 40) ─────────────────────
+     One paragraph holding `C4 C4 57`, and a 16-bit CODE selector over it. It is the
+     far return address every host-made call to a Win16 procedure is given, and it is
+     dispatched by its LINEAR ADDRESS rather than by the BOP code byte -- the byte is
+     for the reader, the address is ours by construction and cannot be collided with
+     by our own INT-site patcher, which also writes `C4 C4`. See src/wow/wowcall.h. */
+static WORD      g_wow_cbk_seg = 0;
+static DWORD     g_wow_cbk_lin = 0;
+static WORD      g_wow_cbk_sel = 0;          /* built at the first callback */
 /* ── ★ EVERY PSP THIS HOST BUILDS, SO ITS ENVIRONMENT FIELD CAN BE RE-READ LATER.
      `PSP+0x2c` is the field two separate faults turned on, and the question that
      could not be answered from a fault dump is not "what is it now" but "who
@@ -6748,6 +6758,26 @@ static WORD dpmi_seg_to_desc(WORD seg)
     return (WORD)((idx << 3) | 7);
 }
 
+/* ── ★★★ A 16-BIT CODE SELECTOR OVER THE CALLBACK RETURN STUB. (session 40) ────────
+     Not `dpmi_seg_to_desc`: that builds a DATA descriptor, and the guest has to
+     EXECUTE these three bytes. The limit is one paragraph on purpose -- the stub is
+     three bytes and nothing may ever be reached past it, so a stray branch into this
+     selector faults here rather than running off into whatever follows. */
+static WORD wow_callback_selector(void)
+{
+    int idx;
+    if (g_wow_cbk_sel) return g_wow_cbk_sel;
+    if (!g_wow_cbk_seg || g_ldt_next >= DPMI_LDT_MAX) return 0;
+    idx = g_ldt_next++;
+    g_ldt[idx].base   = g_wow_cbk_lin;
+    g_ldt[idx].limit  = 0x0F;
+    g_ldt[idx].access = 0xFA;                /* present, DPL3, code, readable */
+    g_ldt[idx].flags  = 0;                   /* 16-bit                        */
+    dpmi_install(idx);
+    g_wow_cbk_sel = (WORD)((idx << 3) | 7);
+    return g_wow_cbk_sel;
+}
+
 static void dpmi_s2d_forget(WORD sel)
 {
     int i;
@@ -7168,6 +7198,31 @@ static int wow_place_v86(dos_machine_t *mp, WORD *ecs, WORD *eip,
         q = zput(q, "WOWV86: task-environment block at para 0x"); q = zhex(q, g_wow_env_seg);
         q = zput(q, " (0x"); q = zhex(q, (DWORD)WOW_ENV_PARAS * 16u);
         q = zput(q, " bytes; largest free was 0x"); q = zhex(q, emax);
+        q = zput(q, ")\r\n"); log_append(LDTLOG_PATH, m, q);
+    }
+    /* ── ★★★ THREE BYTES THAT LET THE HOST CALL 16-BIT CODE. (session 40) ──────
+         The whole of the return path is `C4 C4 57`: we push its address as the
+         far return address of a window procedure, the procedure's own `retf`
+         lands on it, and the BOP arrives here like any other. It needs a
+         paragraph of its own -- not a corner of one of the buffers above -- for
+         the plainest reason there is: a callback can be in flight across any
+         number of other calls, and both buffers above are overwritten by the
+         next one. See src/wow/wowcall.h.
+       ⚠ The SELECTOR is not made here. This runs before the guest exists, and a
+         code descriptor over it is only useful once there is an LDT to put it
+         in, so it is built at the first callback and cached. */
+    {   WORD cseg = 0, cmax = 0;
+        if (dos_alloc(NULL, mp->first_mcb, 1, &cseg, &cmax) == 0 && cseg) {
+            volatile BYTE *cb = (volatile BYTE *)(ULONG_PTR)((DWORD)cseg << 4);
+            g_wow_cbk_seg = cseg;
+            g_wow_cbk_lin = (DWORD)cseg << 4;
+            cb[0] = 0xC4; cb[1] = 0xC4; cb[2] = WOWCALL_BOP_CODE;
+        }
+        q = m;
+        q = zput(q, "WOWV86: 16-bit callback return stub at para 0x");
+        q = zhex(q, g_wow_cbk_seg);
+        q = zput(q, " (C4 C4 "); q = zhexb(q, WOWCALL_BOP_CODE);
+        q = zput(q, "; largest free was 0x"); q = zhex(q, cmax);
         q = zput(q, ")\r\n"); log_append(LDTLOG_PATH, m, q);
     }
 
@@ -8979,6 +9034,29 @@ static void wowsched_load(void)
     log_append(LOG_PATH, lb, q); serial_out(lb, q);
 }
 
+/* ── ★★★★★ CALLING 16-BIT CODE: THE SWITCH. (GH #128, session 40) ─────────────
+     Opt-in for the same reason the scheduler is, and the reason is stronger here:
+     this makes the host execute guest code that nothing has ever executed, on a
+     stack it did not build the frame for. A default run must still reproduce the
+     committed baseline (270 / 44 / 122 / 98) count for count, so the switch is a
+     file on the share and its absence costs nothing. See src/wow/wowcall.h. */
+#define WOWCALL_PATH "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\wowcall.txt"
+static int g_wowcall_on = 0;
+
+static void wowcall_load(void)
+{
+    HANDLE h = CreateFileA(WOWCALL_PATH, GENERIC_READ,
+                           FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, 0, NULL);
+    char lb[224], *q = lb;
+    if (h == INVALID_HANDLE_VALUE) return;
+    CloseHandle(h);
+    g_wowcall_on = 1;
+    q = zput(q, "WOWCALL: ** ON ** -- the host will CALL 16-bit code: CreateWindow "
+                "sends WM_CREATE to the window's own procedure and waits for it to "
+                "return through the C4 C4 stub\r\n");
+    log_append(LOG_PATH, lb, q); serial_out(lb, q);
+}
+
 static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec, unsigned steps);
 static void dpmi_ensure_pmret_sel(void);   /* fwd: shared PM-return catcher installer (#2b + 0303) */
 
@@ -9787,6 +9865,44 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
     if (vec == 0 && ev == VDM_EVENT_BOP) {
         DWORD blin = dpmi_sel_base((WORD)(VDM_REG(tib, VTIB_CS) & 0xFFFF)) + eip;
         const volatile BYTE *bb = (const volatile BYTE *)(ULONG_PTR)blin;
+        /* ── ★★★★★ A 16-BIT PROCEDURE THIS HOST CALLED HAS RETURNED. ───────────
+             The one BOP in the whole VDM that is not the guest asking us for
+             something -- it is the guest finishing something we asked IT for.
+             Matched on the LINEAR ADDRESS of our own three bytes, which is exact:
+             the code byte would be a guess about a namespace our own INT-site
+             patcher also writes into. See src/wow/wowcall.h.
+           ★ THE RESULT IS DX:AX, and that is the Win16 convention for a LONG,
+             not a reading of this one procedure: `sysedit seg1:0x0216
+             sub ax,ax / cdq` sets both halves before its `retf 0x0a`.
+           ⚠ AN UNEXPECTED ARRIVAL IS NOT INERT. If nothing is in flight, some
+             guest reached our stub on its own, and the honest thing is to say so
+             and stop -- resuming would run whatever context happened to be live. */
+        if (bb[0] == 0xC4 && bb[1] == 0xC4 && g_wow_cbk_lin && blin == g_wow_cbk_lin) {
+            DWORD res = (VDM_REG(tib, VTIB_EAX) & 0xFFFF)
+                      | ((VDM_REG(tib, VTIB_EDX) & 0xFFFF) << 16);
+            wowcall_frame_t *fr = wowcall_leave(tib, res);
+            p = zput(p, "WOWCALL: <- returned 0x"); p = zhex(p, res);
+            if (!fr) {
+                p = zput(p, " -- ★ NOTHING WAS IN FLIGHT. Something reached the "
+                            "callback return stub that this host did not send "
+                            "there; ending the run rather than resuming a context "
+                            "we did not park.\r\n");
+                log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                return -1;
+            }
+            p = zput(p, " from 0x");  p = zhex(p, fr->proc >> 16);
+            p = zput(p, ":0x");       p = zhex(p, fr->proc & 0xFFFF);
+            p = zput(p, " (hwnd=0x"); p = zhex(p, fr->hwnd);
+            p = zput(p, " msg=0x");   p = zhex(p, fr->msg);
+            p = zput(p, ", depth now "); p = zhex(p, (DWORD)g_wc_depth);
+            p = zput(p, ")");
+            if (fr->retlin && fr->msg == WM_CREATE16 && (WORD)res == 0xFFFF)
+                p = zput(p, " -- ★ WM_CREATE REFUSED: the CreateWindow that sent it"
+                            " now returns 0");
+            p = zput(p, "\r\n");
+            log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+            return 1;
+        }
         if (bb[0] == 0xC4 && bb[1] == 0xC4) {
             BYTE bcode = bb[2], bsub = bb[3];
             /* What a stepped-over 0x51 will hand back -- see the step-over note below.
@@ -9921,7 +10037,21 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                         else {
                             int mk = wow_module_of_sel((WORD)sseg);
                             p = zput(p, " [");
-                            p = zput(p, mk >= 0 ? g_wow_name[mk] : "?");
+                            /* ⚠ `?` MEANT TWO DIFFERENT THINGS AND THAT COST A
+                                 READING. wow_module_of_sel is a BIND-STAGE table:
+                                 it cannot name a selector krnl386 allocated at run
+                                 time, so USER's own calls printed as "?'s table"
+                                 even though the dispatcher had identified that very
+                                 segment from a stub and was routing them to
+                                 wowuser.h. A line saying "unknown" about something
+                                 the host knows is an instrument lying quietly.
+                                 The two tables we HAVE identified say so by name. */
+                            if (g_wow_user_seg && sseg == g_wow_user_seg)
+                                p = zput(p, "USER");
+                            else if (g_wow_krnl2_seg && sseg == g_wow_krnl2_seg)
+                                p = zput(p, "krnl386 seg2");
+                            else
+                                p = zput(p, mk >= 0 ? g_wow_name[mk] : "?");
                             p = zput(p, "'s table -- a DIFFERENT id space]");
                         }
                         p = zput(p, " stub=0x"); p = zhex(p, sseg);
@@ -10122,6 +10252,13 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                 f.ctx     = NULL;
                 f.ret     = 0;
                 f.serviced = 0;
+                /* A service may ASK for a 16-bit call; whether one happens is the
+                   host's decision, and `cbok` is where that decision is made. */
+                f.cbok    = g_wowcall_on;
+                f.cbproc  = 0;
+                f.cbds    = 0;
+                f.cbhwnd  = 0; f.cbmsg = 0; f.cbwparam = 0;
+                f.cblparam = 0;
                 g_wow_last_id = (WORD)f.id; g_wow_last_from = f.from;
                 /* ── ★★ THE EPILOGUE-MODE EXPERIMENT (wowmode.txt). ────────────
                      Written BEFORE anything is serviced, because the guest reads
@@ -10621,6 +10758,56 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                         p = zhex(p, f.ret);
                         if (note[0]) { p = zput(p, " -- "); p = zput(p, note); }
                         p = zput(p, "\r\n");
+                        /* ── ★★★★★ AND NOW THE OTHER DIRECTION. (session 40) ────
+                             The answer is already in the return hole and EIP is
+                             already past the BOP, so what gets parked here is the
+                             guest EXACTLY as it will be resumed -- see the ordering
+                             note in wowcall_enter. Everything after this point in
+                             the run belongs to the 16-bit procedure until its
+                             `retf` reaches our stub. */
+                        if (f.cbproc) {
+                            WORD  rsel = wow_callback_selector();
+                            DWORD ssb3 = dpmi_sel_base(
+                                (WORD)(VDM_REG(tib, VTIB_SS) & 0xFFFF));
+                            p = zput(p, "WOWCALL: -> 0x");
+                            p = zhex(p, f.cbproc >> 16);
+                            p = zput(p, ":0x"); p = zhex(p, f.cbproc & 0xFFFF);
+                            p = zput(p, "(hwnd=0x"); p = zhex(p, f.cbhwnd);
+                            p = zput(p, ", msg=0x"); p = zhex(p, f.cbmsg);
+                            p = zput(p, ", wp=0x"); p = zhex(p, f.cbwparam);
+                            p = zput(p, ", lp=0x"); p = zhex(p, f.cblparam);
+                            p = zput(p, ") ds=0x"); p = zhex(p, f.cbds);
+                            p = zput(p, " ss=0x");
+                            p = zhex(p, VDM_REG(tib, VTIB_SS) & 0xFFFF);
+                            p = zput(p, ":0x");
+                            p = zhex(p, VDM_REG(tib, VTIB_ESP) & 0xFFFF);
+                            p = zput(p, " ret=0x"); p = zhex(p, rsel);
+                            p = zput(p, ":0000");
+                            /* ⚠ lParam is 0 and that is a NAMED GAP, not an
+                                 oversight -- WM_CREATE's lParam is an
+                                 LPCREATESTRUCT and this host has never built one.
+                                 Saying so on the line is what stops a later reader
+                                 taking the zero for a measurement. */
+                            if (!f.cblparam && f.cbmsg == WM_CREATE16)
+                                p = zput(p, " [lParam=0: no CREATESTRUCT yet]");
+                            if (!rsel)
+                                p = zput(p, " -- NO RETURN SELECTOR (LDT full);"
+                                            " the call was NOT made");
+                            else if (!wowcall_enter(tib, ssb3, rsel, f.cbproc,
+                                                    f.cbds, f.cbhwnd, f.cbmsg,
+                                                    f.cbwparam, f.cblparam,
+                                                    (DWORD)(ULONG_PTR)
+                                                        (f.bp + WOW32_OFF_RET)))
+                                p = zput(p, " -- REFUSED (depth, or an unusable"
+                                            " stack/procedure); the call was NOT"
+                                            " made and the guest keeps the answer"
+                                            " above");
+                            else {
+                                p = zput(p, " -- ENTERED, depth ");
+                                p = zhex(p, (DWORD)g_wc_depth);
+                            }
+                            p = zput(p, "\r\n");
+                        }
                         log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
                         return 1;
                     }
@@ -15199,6 +15386,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                 wow32_ret_load();
                 wow32_mode_load();
                 wowsched_load();
+                wowcall_load();
                 /* pmchg.txt: `<hex offset> [segment]`, segment defaulting to 4
                    (krnl386's DGROUP). Absent file = no watch and no cost. */
                 { HANDLE hc = CreateFileA(PMCHG_PATH, GENERIC_READ,

@@ -166,6 +166,20 @@ typedef struct {
     /* Filled in by the host so a service can talk back about what it did. */
     DWORD            ret;
     int              serviced;
+    /* ── ★★★ A 16-BIT CALL THE SERVICE WANTS MADE. (GH #128, session 40) ────────
+         A service cannot make one itself: entering guest code means replacing the
+         whole guest context, which only the BOP handler is in a position to do
+         and undo. So a service ASKS, by filling these in, and the handler acts on
+         the request after the service has returned and its answer is already in
+         the return hole. See src/wow/wowcall.h.
+       ⚠ `cbok` is the host's permission, not the service's opinion: the machinery
+         is opt-in (wowcall.txt), and a service that requested a callback the host
+         will not make must not then describe one in its log note. */
+    int              cbok;           /* 1 = the host can call 16-bit code now   */
+    DWORD            cbproc;         /* 16:16 procedure to call; 0 = none asked */
+    WORD             cbds;           /* the DS it must be entered with          */
+    WORD             cbhwnd, cbmsg, cbwparam;
+    DWORD            cblparam;
 } wow32_frame_t;
 
 /* ---- frame accessors ---------------------------------------------------- */
