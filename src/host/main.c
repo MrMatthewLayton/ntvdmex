@@ -8820,6 +8820,33 @@ static WORD wowsched_curtask(void)
     return (WORD)(d[0x228] | (d[0x229] << 8));
 }
 
+/* ── ★★ [0x228] IS PART OF THE CONTEXT, NOT A LEVER. (session 39) ─────────────
+     The register file is not the whole of a task switch: krnl386 keeps "who is
+     current" in one word of its DGROUP, and the launch sequence sets it
+     (`seg1:0x97ee mov [0x228],es`) BEFORE the 0x74 BOP we park at. Mode 25's
+     epilogue then pops it back to the creator. So a frame parked at that BOP is
+     only self-consistent if the word is put back with it -- restoring registers
+     alone resumes the new task's code with krnl386 still believing the creator
+     is current.
+   ⚠ THIS IS NOT "WRITE [0x228] TO YIELD", WHICH IS RULED OUT AND STAYS RULED
+     OUT. That was using the word as a lever to make krnl386 switch, and it does
+     not work -- `seg1:0x2c05`'s branch is a re-entrancy guard whose incoming task
+     is the caller's own. This is the opposite direction: the host has already
+     switched, and this makes the guest's own bookkeeping agree with the context
+     it is about to run. The value is not invented; it is the one the word held
+     when that frame was parked (`slot->task`). */
+static void wowsched_setcur(WORD task)
+{
+    DWORD b;
+    volatile BYTE *d;
+    if (!g_wow_dgsel) return;
+    b = dpmi_sel_base(g_wow_dgsel);
+    if (!b) return;
+    d = (volatile BYTE *)(ULONG_PTR)b;
+    d[0x228] = (BYTE)(task & 0xFF);
+    d[0x229] = (BYTE)(task >> 8);
+}
+
 static void wowsched_load(void)
 {
     HANDLE h = CreateFileA(WOWSCHED_PATH, GENERIC_READ,
@@ -10042,6 +10069,61 @@ static int dpmi_service_pm_int(dos_machine_t *mp, volatile BYTE *tib, DWORD vec,
                         p = zput(p, "\r\n");
                         log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
                         VDM_REG(tib, VTIB_EIP) += WOW32_BOP_LEN;
+                        return 1;
+                    }
+                    /* ── (D) ★★★ A TASK ASKS TO WAIT FOR A MESSAGE. THAT IS THE
+                           YIELD, AND IT IS THE MOMENT THAT WAS MISSING. ────────
+                         Moment (C) resumes the parked task when the creator
+                         RETIRES. WOWEXEC never retires -- it registers its
+                         classes, opens its windows and settles into its message
+                         loop (`wowexec seg1:0x0798`), so `[0x228]` never reaches
+                         0 and a task parked at its launch waits forever. That is
+                         exactly what SYSEDIT.EXE does today: it gets a task
+                         database, a launch frame and a task id, and never runs.
+
+                       ★ WowWaitForMsgAndEvent IS the Win16 "I have nothing to do"
+                         primitive -- krnl386 export 262, and the only thing
+                         WOWEXEC's pump calls when the queue is empty. A task
+                         blocking on it is a task offering the CPU, so this is
+                         where a cooperative scheduler is supposed to act, and it
+                         needs no new lever: the frame is already a WOW32 frame
+                         with a mode word and a return hole.
+
+                       ★ THE WAIT RETURNS 0, AND THAT IS READ FROM THE CALL SITE,
+                         not chosen: `seg1:0x07a1 or ax,ax / jne 0x0798` loops back
+                         to wait again on non-zero, and falls through to
+                         PeekMessage on zero. So 0 is "carry on and look", which
+                         is what a task that has just been given its turn back
+                         should do.
+
+                       ⚠ TWO TASKS ONLY, and the code says so rather than
+                         pretending otherwise: `g_ws_task` holds "the task that is
+                         not running", which is a complete description of a
+                         two-task system and a wrong one the moment there is a
+                         third. A third task would need a real run queue, and
+                         krnl386 already maintains one (it links every task at
+                         `seg1:0x99ed` by the signed priority at TDB+0x08) -- walk
+                         that rather than inventing an order. */
+                    else if (f.id == WOW32_WOWWAITFORMSGANDEVENT
+                             && g_ws_task.used && g_ws_task.task != cur
+                             && cur != 0 && cur != 0xFFFF) {
+                        WORD to = g_ws_task.task;
+                        /* Written into the WAITING task's frame now; its epilogue
+                           reads them whenever it is resumed, off its own stack. */
+                        wow32_setret(&f, 0);
+                        wow32_pokew(f.bp + WOW32_OFF_MODE, WOW32_MODE_ORDINARY);
+                        wowsched_poke(g_ws_task.modelin, WOW32_MODE_ORDINARY);
+                        wowsched_swap(&g_ws_task, tib, modelin, cur, WOW32_BOP_LEN);
+                        wowsched_setcur(to);
+                        ++g_ws_switches;
+                        p = zput(p, "\n     WOWSCHED: task 0x"); p = zhex(p, cur);
+                        p = zput(p, " waited for a message -- YIELDING to parked task 0x");
+                        p = zhex(p, to);
+                        p = zput(p, " ([0x228] follows the context)\r\n");
+                        log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                        /* EIP is NOT advanced here: the whole context has been
+                           replaced, and the resumed one already points where it
+                           should. Advancing would step the OTHER task's EIP. */
                         return 1;
                     }
                 }
@@ -15756,7 +15838,19 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                                 }
                                 log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
                                 wowsched_poke(g_ws_task.modelin, WOW32_MODE_ORDINARY);
-                                wowsched_restore(&g_ws_task, tib);
+                                {   WORD to = g_ws_task.task;
+                                    wowsched_restore(&g_ws_task, tib);
+                                    /* ★ AND PUT THE CURRENT-TASK WORD BACK WITH IT.
+                                         The creator zeroed it on its way out; the
+                                         frame we are resuming was parked when it
+                                         held this task. Restoring registers alone
+                                         resumed the new task's code with krnl386
+                                         still believing nobody is current -- see
+                                         wowsched_setcur for why that is part of the
+                                         context and not the ruled-out "write
+                                         [0x228] to yield". */
+                                    wowsched_setcur(to);
+                                }
                                 ++g_ws_switches;
                                 continue;
                             }

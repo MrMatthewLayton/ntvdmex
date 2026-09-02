@@ -99,6 +99,25 @@ static void wowsched_restore(wowsched_slot_t *s, volatile BYTE *tib)
     s->used = 0;
 }
 
+/* ── ★★★ SWAP: PARK THE RUNNING TASK WHERE THE OTHER ONE WAS. (session 39) ────
+     `g_ws_task` means "the one task that is not running". With two tasks that is
+     a complete description, so a round-robin needs no extra slot -- take a copy
+     of the parked one, overwrite the slot with the running one, then restore the
+     copy. The alternative (a second named slot) has to answer "which slot is the
+     other one" at every site, and that question has no stable answer.
+   ⚠ THIS IS ONLY SOUND BECAUSE EACH TASK'S FRAME IS ON ITS OWN STACK. The frame
+     we park stays exactly where it is in guest memory while the other task runs,
+     because a Win16 task's SS is its own. That is the same property moment (A)
+     relies on, and it is why the mode and return-value words can be written into
+     a frame now and read by the guest's epilogue much later. */
+static void wowsched_swap(wowsched_slot_t *s, volatile BYTE *tib,
+                          DWORD modelin, WORD cur, int eipadj)
+{
+    wowsched_slot_t resume = *s;                 /* the one we are going back to */
+    wowsched_save(s, tib, modelin, cur, eipadj); /* the running one takes its place */
+    wowsched_restore(&resume, tib);
+}
+
 /* The two words the host writes into a saved frame before resuming it: the
    epilogue mode (bp-24) and the return-value hole (bp-16), which sit 8 bytes
    apart, so one recorded address locates both. */
