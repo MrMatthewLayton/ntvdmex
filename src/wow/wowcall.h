@@ -128,6 +128,16 @@
      leaving the BOP handler to guess from a sink's address what it was for. */
 #define WOWCALL_ACT_NONE     0
 #define WOWCALL_ACT_EDITTEXT 1   /* actarg = the Win16 hwnd of an EDIT control */
+/* ── ★★ THE SAVE DIRECTION, AS A CHAIN. (session 44) EM_GETHANDLE has to hand
+     back a block containing the control's CURRENT text, and only the guest's
+     KERNEL can touch the guest's heap -- so it takes three calls, each one
+     issued by the action of the one before:
+       EDITLOCK: the allocator has returned a handle; LocalLock it.
+       EDITFILL: the lock has returned a near offset; write the text there and
+                 LocalUnlock.
+     Both carry the EDIT control's Win16 hwnd in `actarg`, as EDITTEXT does. */
+#define WOWCALL_ACT_EDITLOCK 2
+#define WOWCALL_ACT_EDITFILL 3
 
 /* Six words is not a guess about Win16 -- it is what the two things this host
    calls actually push: a window procedure's 5 (hwnd, msg, wParam, lParam hi+lo)

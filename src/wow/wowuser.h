@@ -406,6 +406,12 @@ static HICON wowuser_sysres_hicon(WORD token, int *picked)
    Both of the ones used here disassemble to `push bp / mov bp,sp / mov bx,[bp+6]
    / call 0x406f / ... / retf 2` -- one WORD argument, far, which is what
    `LocalLock(HLOCAL)` and `LocalUnlock(HLOCAL)` take. */
+/* ★ And LocalReAlloc, from the same non-resident name table: `6 LOCALREALLOC`
+     at 0x3e1f. `HLOCAL LocalReAlloc(HLOCAL, WORD cbNew, WORD flags)` -- three
+     words, far, and SYSEDIT's own call site pushes them in exactly that order
+     (`push ax / push [bp-4]+1 / push 0x42` at seg3:0x0124), which is what pins
+     the argument order rather than a header. */
+#define KRNL_LOCALREALLOC_OFF 0x3e1f
 #define KRNL_LOCALLOCK_OFF   0x3e0b
 #define KRNL_LOCALUNLOCK_OFF 0x3e55
 /* LMEM_MOVEABLE | LMEM_ZEROINIT -- the same flags SYSEDIT itself passes to
@@ -950,6 +956,27 @@ static void wowuser_want_create(wow32_frame_t *f, const wowuser_class_t *c,
  *   implement, and the log names the message so the next one can be read off a
  *   run rather than guessed at from a list of MDI messages.
  */
+/* The three text messages, named because this host now handles them. Win16 and
+   Win32 agree on all three numbers -- Win32 inherited them, the same claim the
+   keyboard messages already travel on. */
+#define WM_SETTEXT16        0x000C
+#define WM_GETTEXT16        0x000D
+#define WM_GETTEXTLENGTH16  0x000E
+
+/* Resolve a 16:16 far pointer VALUE (as carried in an lParam) to a host address.
+   ⚠ Null selector yields NULL rather than the LDT base, the same rule
+     wow32_argptr follows, so a forgotten check cannot scribble at the bottom of
+     the address space. */
+static volatile BYTE *wowuser_lin(const wow32_frame_t *f, DWORD fp)
+{
+    WORD  sel = (WORD)(fp >> 16);
+    DWORD base;
+    if (!sel || !f->sel2lin) return NULL;
+    base = f->sel2lin(sel, f->ctx);
+    if (!base) return NULL;
+    return (volatile BYTE *)(ULONG_PTR)(base + (fp & 0xFFFF));
+}
+
 static LONG wowuser_defproc(wow32_frame_t *f, wowuser_win_t *w, WORD msg,
                             WORD wparam, DWORD lparam, char *note, int notecap)
 {
@@ -1093,32 +1120,74 @@ static LONG wowuser_defproc(wow32_frame_t *f, wowuser_win_t *w, WORD msg,
          allocates from the local heap of whatever DS it is entered with, and the
          heap this handle has to be valid in is the one the application will call
          LocalReAlloc against -- which is its own. */
+    /* ── ★★★★★ AND IT MUST CARRY THE CONTROL'S **CURRENT** TEXT. (session 44) ──
+         Returning the same handle a second time -- what this did until now, as
+         "(already allocated)" -- is what made File > Save write the wrong bytes.
+         The block holds whatever was put in it when the file was LOADED; every
+         keystroke since then went into the real Win32 EDIT control, which is
+         where the text actually lives. Notepad's save path is
+         `WM_GETTEXTLENGTH` (answered correctly, 0x41) then EM_GETHANDLE,
+         LocalLock and `_lwrite` of that many bytes -- so it wrote the right
+         LENGTH from the wrong BUFFER, and the file came back as the old text
+         followed by five bytes of heap litter. Measured, byte for byte.
+       ⇒ EM_GETHANDLE now REFRESHES the block from the real control, which is
+         the exact mirror of what EM_SETHANDLE already does in the other
+         direction, and it is a three-call chain into the guest's own KERNEL
+         because only the guest's KERNEL can touch the guest's local heap:
+             LocalAlloc/LocalReAlloc  -> a block big enough for the text
+               -> ACT_EDITLOCK: LocalLock  -> a near offset into its DGROUP
+                 -> ACT_EDITFILL: write the text there, then LocalUnlock
+         Chaining is not new machinery: EM_SETHANDLE's ACT_EDITTEXT already
+         issues a follow-up LocalUnlock from inside an action.
+       ⚠ THE HANDLE CAN MOVE. LocalReAlloc may return a different handle, so the
+         sink updates `w->hmem` before the action runs (the return path applies
+         the sink first) and every later step uses the NEW one.
+       ⚠ `f->cbds` is the CONTROL'S OWN hInstance, not the caller's: LocalAlloc
+         allocates from the local heap of whatever DS it is entered with, and the
+         heap this handle must be valid in is the application's own. */
     case EM_GETHANDLE16: {
-        if (w->hmem) {
-            wu_puts(note, notecap, &k, "EM_GETHANDLE -> 0x");
+        int  n    = w->hwnd32 ? GetWindowTextLengthA(w->hwnd32) : 0;
+        WORD need = (WORD)(n + 1);
+        if (need < WOWUSER_EDIT_INITIAL) need = WOWUSER_EDIT_INITIAL;
+        if (!f->cbok || !w->hinst || !g_wu_krnl_seg) {
+            wu_puts(note, notecap, &k, "EM_GETHANDLE: cannot reach the guest's heap"
+                                       " (no callback, no instance, or krnl386's"
+                                       " segment is not known yet), answered 0x");
             wu_puthex(note, notecap, &k, w->hmem, 4);
-            wu_puts(note, notecap, &k, " (already allocated)");
             return (LONG)w->hmem;
         }
-        if (!f->cbok || !w->hinst || !g_wu_krnl_seg) {
-            wu_puts(note, notecap, &k, "EM_GETHANDLE: cannot allocate (no callback,"
-                                       " no instance, or krnl386's segment is not"
-                                       " known yet), answered 0");
-            return 0;
+        wu_puts(note, notecap, &k, "EM_GETHANDLE: the real control holds 0x");
+        wu_puthex(note, notecap, &k, (DWORD)n, 4);
+        wu_puts(note, notecap, &k, " char(s); ");
+        if (w->hmem) {
+            wu_puts(note, notecap, &k, "LocalReAlloc 0x");
+            wu_puthex(note, notecap, &k, w->hmem, 4);
+            wu_puts(note, notecap, &k, " to 0x");
+            wu_puthex(note, notecap, &k, need, 4);
+            f->cbproc   = ((DWORD)g_wu_krnl_seg << 16) | KRNL_LOCALREALLOC_OFF;
+            f->cbarg[0] = w->hmem;
+            f->cbarg[1] = need;
+            f->cbarg[2] = LMEM_MOVEABLE_ZEROINIT;
+            f->cbnarg   = 3;
+        } else {
+            wu_puts(note, notecap, &k, "LocalAlloc 0x");
+            wu_puthex(note, notecap, &k, need, 4);
+            f->cbproc   = ((DWORD)g_wu_krnl_seg << 16) | KRNL_LOCALALLOC_OFF;
+            f->cbarg[0] = LMEM_MOVEABLE_ZEROINIT;
+            f->cbarg[1] = need;
+            f->cbnarg   = 2;
         }
-        wu_puts(note, notecap, &k, "EM_GETHANDLE -> asking the guest's own "
-                                   "KERNEL.5 LocalAlloc in DGROUP 0x");
+        wu_puts(note, notecap, &k, " in DGROUP 0x");
         wu_puthex(note, notecap, &k, w->hinst, 4);
-        f->cbproc   = ((DWORD)g_wu_krnl_seg << 16) | KRNL_LOCALALLOC_OFF;
+        wu_puts(note, notecap, &k, ", then lock and fill it from the control");
         f->cbds     = w->hinst;
-        f->cbarg[0] = LMEM_MOVEABLE_ZEROINIT;
-        f->cbarg[1] = WOWUSER_EDIT_INITIAL;
-        f->cbnarg   = 2;
-        f->cbret    = WOWCALL_RET_RESULTW;   /* LocalAlloc returns a WORD in AX */
+        f->cbret    = WOWCALL_RET_RESULTW;   /* a WORD handle in AX */
         f->cbsink   = &w->hmem;
+        f->cbact    = WOWCALL_ACT_EDITLOCK;
+        f->cbactarg = w->hwnd;
         f->cbhwnd   = w->hwnd;
         f->cbmsg    = msg;
-        return 0;                    /* replaced by LocalAlloc's own answer */
+        return 0;                    /* replaced by the allocator's own answer */
     }
 
     /* ── EM_SETHANDLE: the application hands the control its text. ────────────
@@ -1167,6 +1236,107 @@ static LONG wowuser_defproc(wow32_frame_t *f, wowuser_win_t *w, WORD msg,
                                        " krnl386's segment is unknown)");
         }
         return 0;
+
+    /* ── ★★★★★ THE TEXT MESSAGES -- AND THIS IS WHY SAVE SAVED NOTHING. ──────
+         Notepad's File > Save asks its edit control how much text it holds, and
+         this procedure answered 0 for every message it did not know. So Notepad
+         put up, in its own words:
+
+           "C:\DOCUME~1\Matthew\MYDOCU~1\test.txt
+            This file is empty and will be deleted. This file cannot be saved
+            because it is empty."
+
+         -- with the text plainly visible in the control on screen. The control
+         is a REAL Win32 EDIT and its text lives in the OS, so the only thing
+         that ever knew the answer was the OS, and we were not asking it.
+       ★ These three forward to the real control, which is the same argument as
+         everywhere else in this file: the window is real, so the OS's answer IS
+         the answer. Nothing is cached here -- a copy would be a second version
+         of the text that goes stale the moment the user types.
+       ⚠⚠ THE POINTER ONES MUST BE TRANSLATED, WHICH IS WHY THIS IS NOT A BLANKET
+         FORWARD OF EVERY UNKNOWN MESSAGE. `WM_GETTEXT`/`WM_SETTEXT` carry a
+         16:16 far pointer in lParam; handing that to Win32 as a flat address
+         would read or WRITE at an arbitrary place in our own address space. A
+         message whose parameters this host has not read stays unimplemented and
+         says so, exactly as before.
+       ⚠ WM_GETTEXT's wParam is the buffer size the CALLER declared, and it is
+         the only bound there is -- passed straight to the OS, which respects it. */
+    /* ── ★★★★★ AND THIS IS WHERE THE GUEST'S COPY IS BROUGHT UP TO DATE. ─────
+         ⚠ EM_GETHANDLE IS NOT ENOUGH, AND THE RUN SAYS SO: it is called ONCE, at
+           LOAD time, when the control is still empty. Notepad then allocates its
+           own block, fills it from the file, hands it over with EM_SETHANDLE --
+           and KEEPS THE HANDLE. At save time it never asks again; it asks the
+           LENGTH and writes that many bytes straight out of the block it
+           remembers. So the refresh has to happen here, at the last moment the
+           guest touches the control before writing.
+         ⇒ Measured before this: the file came back the right LENGTH (0x40) and
+           the WRONG BYTES -- the text as it was when loaded, plus five bytes of
+           heap litter where the new characters should have been.
+       ★ The answer goes back first and the chain runs behind it: the return hole
+         is written before wowcall_enter is reached, and the chain uses RET_KEEP
+         so nothing overwrites it. The sink still fires, because a handle that
+         moved must still be recorded.
+       ⚠ A Win16 LOCAL handle is STABLE across LocalReAlloc (the memory moves,
+         the handle does not), which is what makes this safe -- Notepad is still
+         holding that handle and will write through it a moment from now.
+       ⚠ Only when there is a block to refresh. Before EM_SETHANDLE there is
+         nothing the guest owns and nothing to update. */
+    case WM_GETTEXTLENGTH16: {
+        int n = w->hwnd32 ? GetWindowTextLengthA(w->hwnd32) : 0;
+        wu_puts(note, notecap, &k, "WM_GETTEXTLENGTH -> 0x");
+        wu_puthex(note, notecap, &k, (DWORD)n, 4);
+        wu_puts(note, notecap, &k, w->hwnd32 ? " (the real control's)"
+                                             : " -- no real control");
+        if (n > 0 && w->hmem && w->hwnd32 && f->cbok && w->hinst
+            && g_wu_krnl_seg) {
+            f->cbproc   = ((DWORD)g_wu_krnl_seg << 16) | KRNL_LOCALREALLOC_OFF;
+            f->cbds     = w->hinst;
+            f->cbarg[0] = w->hmem;
+            f->cbarg[1] = (WORD)(n + 1);
+            f->cbarg[2] = LMEM_MOVEABLE_ZEROINIT;
+            f->cbnarg   = 3;
+            f->cbret    = WOWCALL_RET_KEEP;   /* the LENGTH is the answer */
+            f->cbsink   = &w->hmem;
+            f->cbact    = WOWCALL_ACT_EDITLOCK;
+            f->cbactarg = w->hwnd;
+            f->cbhwnd   = w->hwnd;
+            f->cbmsg    = msg;
+            wu_puts(note, notecap, &k, "; refreshing the guest's block 0x");
+            wu_puthex(note, notecap, &k, w->hmem, 4);
+            wu_puts(note, notecap, &k, " from the control before it writes");
+        }
+        return (LONG)n;
+    }
+
+    case WM_GETTEXT16: {
+        volatile BYTE *dst = wowuser_lin(f, lparam);
+        int n = 0;
+        wu_puts(note, notecap, &k, "WM_GETTEXT max=0x");
+        wu_puthex(note, notecap, &k, wparam, 4);
+        if (!dst || !w->hwnd32 || !wparam) {
+            wu_puts(note, notecap, &k, " -- no buffer or no real control;"
+                                       " answered 0");
+            return 0;
+        }
+        n = GetWindowTextA(w->hwnd32, (LPSTR)dst, (int)wparam);
+        wu_puts(note, notecap, &k, " -> 0x");
+        wu_puthex(note, notecap, &k, (DWORD)n, 4);
+        wu_puts(note, notecap, &k, " char(s) into the guest's own buffer");
+        return (LONG)n;
+    }
+
+    case WM_SETTEXT16: {
+        volatile BYTE *src = wowuser_lin(f, lparam);
+        wu_puts(note, notecap, &k, "WM_SETTEXT ");
+        if (!src || !w->hwnd32) {
+            wu_puts(note, notecap, &k, "-- no string or no real control;"
+                                       " answered 0");
+            return 0;
+        }
+        wu_putq(note, notecap, &k, (const char *)src);
+        SetWindowTextA(w->hwnd32, (LPCSTR)src);
+        return 1;
+    }
 
     default:
         wu_puts(note, notecap, &k, "default procedure: msg 0x");

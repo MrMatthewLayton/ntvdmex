@@ -10094,6 +10094,8 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
             DWORD res = (VDM_REG(tib, VTIB_EAX) & 0xFFFF)
                       | ((VDM_REG(tib, VTIB_EDX) & 0xFFFF) << 16);
             wowcall_frame_t *fr = wowcall_leave(tib, res);
+            int  act = WOWCALL_ACT_NONE;   /* copied out of fr -- see below */
+            WORD actarg = 0;
             p = zput(p, "WOWCALL: <- returned 0x"); p = zhex(p, res);
             if (!fr) {
                 p = zput(p, " -- ★ NOTHING WAS IN FLIGHT. Something reached the "
@@ -10103,6 +10105,22 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                 log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
                 return -1;
             }
+            /* ── ⚠⚠ COPY THE ACTION OUT BEFORE ACTING ON IT. ──────────────────
+                 `wowcall_leave` POPS the frame and hands back a pointer to the
+                 slot it just vacated. An action that issues a follow-up call --
+                 which is the whole mechanism the EDIT chain is built on --
+                 pushes a new frame into THAT SAME SLOT, so setting the new
+                 frame's action through `g_wc[g_wc_depth - 1]` also rewrites
+                 `fr->action` underneath us. Measured: the LocalLock step armed
+                 EDITFILL and the very next `if` in this function fired
+                 immediately, with `res` still holding LocalAlloc's handle rather
+                 than LocalLock's offset -- so the block was "filled" at offset
+                 0x2e72 (a handle, not an address), the text never arrived, and
+                 the block was left in a state LocalReAlloc then refused, which
+                 Notepad reports as "the file is too large for Notepad".
+               ⇒ The dispatch below reads these locals, never the frame. */
+            act    = fr->action;
+            actarg = fr->actarg;
             p = zput(p, " from 0x");  p = zhex(p, fr->proc >> 16);
             p = zput(p, ":0x");       p = zhex(p, fr->proc & 0xFFFF);
             p = zput(p, " (hwnd=0x"); p = zhex(p, fr->hwnd);
@@ -10137,8 +10155,8 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                  application's heap. The unlock is a second call made from here,
                  which is sound for exactly the reason the first one was: the guest
                  is parked at our stub with its own stack under it. */
-            if (fr->action == WOWCALL_ACT_EDITTEXT) {
-                wowuser_win_t *ew = wowuser_findwin(fr->actarg);
+            if (act == WOWCALL_ACT_EDITTEXT) {
+                wowuser_win_t *ew = wowuser_findwin(actarg);
                 DWORD off = res & 0xFFFF;
                 DWORD dgb = ew ? dpmi_sel_base(ew->hinst) : 0;
                 p = zput(p, " -- EDIT text at 0x"); p = zhex(p, ew ? ew->hinst : 0);
@@ -10161,6 +10179,87 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                         p = zput(p, " (★ TRUNCATED at the host's buffer)");
                 }
                 /* Release the lock we took, whatever came of the read. */
+                if (ew && ew->hmem && g_wu_krnl_seg) {
+                    WORD  rsel2 = wow_callback_selector();
+                    DWORD ssb4  = dpmi_sel_base(
+                                    (WORD)(VDM_REG(tib, VTIB_SS) & 0xFFFF));
+                    WORD  uarg  = ew->hmem;
+                    if (rsel2 && ssb4
+                        && wowcall_enter(tib, ssb4, rsel2,
+                                         ((DWORD)g_wu_krnl_seg << 16)
+                                             | KRNL_LOCALUNLOCK_OFF,
+                                         ew->hinst, &uarg, 1, 0,
+                                         WOWCALL_RET_KEEP, NULL, ew->hwnd, 0))
+                        p = zput(p, "; LocalUnlock in flight");
+                    else
+                        p = zput(p, "; ★ LocalUnlock REFUSED -- the block stays"
+                                    " locked");
+                }
+            }
+            /* ── ★★★★★ THE SAVE DIRECTION, STEP 2: LOCK WHAT WE JUST GOT. ─────
+                 The allocator has answered with a local handle (already stored
+                 through the sink, so `ew->hmem` is the NEW one even if
+                 LocalReAlloc moved the block). Locking it is the only way to get
+                 an address to write the text at, and only the guest's KERNEL can
+                 do it -- the same call, in the same DGROUP, as the load path. */
+            if (act == WOWCALL_ACT_EDITLOCK) {
+                wowuser_win_t *ew = wowuser_findwin(actarg);
+                p = zput(p, " -- EDIT block 0x"); p = zhex(p, ew ? ew->hmem : 0);
+                if (!ew || !ew->hmem || !ew->hwnd32 || !g_wu_krnl_seg) {
+                    p = zput(p, " -- ★ NOT USABLE; the control's text is NOT saved");
+                } else {
+                    WORD  rsel2 = wow_callback_selector();
+                    DWORD ssb4  = dpmi_sel_base(
+                                    (WORD)(VDM_REG(tib, VTIB_SS) & 0xFFFF));
+                    WORD  larg  = ew->hmem;
+                    if (rsel2 && ssb4
+                        && wowcall_enter(tib, ssb4, rsel2,
+                                         ((DWORD)g_wu_krnl_seg << 16)
+                                             | KRNL_LOCALLOCK_OFF,
+                                         ew->hinst, &larg, 1, 0,
+                                         WOWCALL_RET_KEEP, NULL, ew->hwnd, 0)) {
+                        if (g_wc_depth > 0) {
+                            g_wc[g_wc_depth - 1].action = WOWCALL_ACT_EDITFILL;
+                            g_wc[g_wc_depth - 1].actarg = ew->hwnd;
+                        }
+                        p = zput(p, "; LocalLock in flight, then fill");
+                    } else {
+                        p = zput(p, "; ★ LocalLock REFUSED -- text NOT saved");
+                    }
+                }
+            }
+            /* ── ★★★★★ STEP 3: WRITE THE CONTROL'S TEXT INTO THE GUEST'S BLOCK.
+                 This is the exact mirror of ACT_EDITTEXT. There the block was
+                 read and handed to the control; here the control is read and the
+                 bytes are handed to the block, which is what the application is
+                 about to `_lwrite` to its file.
+               ⚠ BOUNDED BY WHAT WAS ALLOCATED. The block was sized from
+                 GetWindowTextLength at EM_GETHANDLE time and the text is fetched
+                 again here, so a keystroke landing between the two would
+                 overflow -- GetWindowTextA is therefore given the SAME bound the
+                 allocation used, and the log says if it had to truncate.
+               ⚠ AND UNLOCK. We took the lock, we owe the release. */
+            if (act == WOWCALL_ACT_EDITFILL) {
+                wowuser_win_t *ew = wowuser_findwin(actarg);
+                DWORD off = res & 0xFFFF;
+                DWORD dgb = ew ? dpmi_sel_base(ew->hinst) : 0;
+                p = zput(p, " -- EDIT block at 0x"); p = zhex(p, ew ? ew->hinst : 0);
+                p = zput(p, ":0x"); p = zhex(p, off);
+                if (!ew || !ew->hwnd32 || !dgb || !off) {
+                    p = zput(p, " -- ★ UNWRITABLE; the control's text is NOT saved");
+                } else {
+                    static char stext[16384];
+                    volatile BYTE *d = (volatile BYTE *)(ULONG_PTR)(dgb + off);
+                    int cap = GetWindowTextLengthA(ew->hwnd32) + 1;
+                    int n, i;
+                    if (cap > (int)sizeof stext) cap = (int)sizeof stext;
+                    n = GetWindowTextA(ew->hwnd32, stext, cap);
+                    for (i = 0; i <= n; ++i) d[i] = (BYTE)stext[i];
+                    p = zput(p, " <- 0x"); p = zhex(p, (DWORD)n);
+                    p = zput(p, " byte(s) from the real control");
+                    if (n == cap - 1 && cap == (int)sizeof stext)
+                        p = zput(p, " (★ TRUNCATED at the host's buffer)");
+                }
                 if (ew && ew->hmem && g_wu_krnl_seg) {
                     WORD  rsel2 = wow_callback_selector();
                     DWORD ssb4  = dpmi_sel_base(
