@@ -65,6 +65,10 @@
 /* Visibility -- and with a real window behind it, this is the OS's job. */
 #define WOWUSER_SHOWWINDOW       0x2a
 #define WOWUSER_UPDATEWINDOW     0x7c
+/* A name in the system-wide clipboard atom table. CARDFILE and WRITE both stop
+   without it -- see the case. One argument: a far pointer to the name. */
+#define WOWUSER_REGCLIPFORMAT    0x91
+#define RCF_ARG_NAME             0
 
 /* ShowWindow(hWnd, nCmdShow) -- 4 bytes, reversed as always, and confirmed by the
    run: `(0x0005 0x0160)` from sysedit seg1:0x01da and `(0x0001 0x0140)` from
@@ -1570,6 +1574,47 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
                               wu_puts(note, notecap, &k, " -> the OS's"); }
         else                  wu_puts(note, notecap, &k, " -- no real window");
         wow32_setret(f, 0);
+        return 1;
+    }
+
+    /* ── ★★ 0x91 RegisterClipboardFormat(lpszName) ────────────────────────────
+         Named by USER's own export table, and the run names the callers: CARDFILE
+         and WRITE both register the OLE 1.0 set -- "ObjectLink", "OwnerLink",
+         "Native", "Binary", "FileName", "NetworkName" -- and then EXIT. Answered
+         with the harness sentinel they get 0, which is the documented failure
+         value, so a program that checks is entitled to give up. Two guests are
+         stopped by one missing service.
+       ★ THE ANSWER IS THE OS's. A clipboard format is a name in a system-wide
+         atom table, and Win32 has that exact table with that exact call --
+         including the same "an existing name returns the SAME id" contract, which
+         matters because two Win16 programs must agree about "Native" the way two
+         Win32 ones do. Registering our own would be a second table that agrees
+         with nothing.
+       ⚠ Win16's return is a WORD, Win32's a UINT. Registered formats live at
+         0xC000..0xFFFF, so the value fits -- but the mask is explicit, because a
+         silent truncation is how a host starts handing out ids that collide. */
+    case WOWUSER_REGCLIPFORMAT: {
+        char name[128];
+        UINT fmt = 0;
+        int k = 0;
+        wu_puts(note, notecap, &k, "RegisterClipboardFormat ");
+        if (!wow32_argstr(f, RCF_ARG_NAME, name, sizeof name) || !name[0]) {
+            wu_puts(note, notecap, &k, "-- no name, answered 0");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        wu_putq(note, notecap, &k, name);
+        fmt = RegisterClipboardFormatA(name);
+        wu_puts(note, notecap, &k, " -> 0x");
+        wu_puthex(note, notecap, &k, fmt, 4);
+        if (fmt > 0xFFFF) {
+            wu_puts(note, notecap, &k, " -- ★ THE OS RETURNED AN ID THAT DOES NOT"
+                                       " FIT IN A WORD; answered 0 rather than a"
+                                       " truncation");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        wow32_setret(f, fmt);
         return 1;
     }
 

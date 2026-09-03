@@ -62,7 +62,7 @@ rm -f "$SH/wow_done.txt" "$SH/wow_host.txt" "$SH/wow_ldt.txt" "$SH/wow_wd.txt" "
 # The Win16 program to run. Empty = wowrun.bat's default (SYSEDIT.EXE), so the
 # baseline invocation is unchanged; TARGET=C:\\WINDOWS\\winhelp.exe runs another.
 printf 'exec cmd /c "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\wowrun.bat" %s\r\n' \
-  "${TARGET:-}" > "$SH/control.txt"
+  "${TARGET:-} ${WOWWAIT:-}" > "$SH/control.txt"
 echo "queued via controld; waiting up to ${TIMEOUT}s for wow_done.txt"
 
 for ((i=0; i<30; i++)); do [ -f "$SH/control.txt" ] || break; sleep 2; done

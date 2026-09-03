@@ -15,6 +15,15 @@ rem    Win16 program this harness could run, which made "does WOW work" and
 rem    "does SYSEDIT work" the same question. The default is unchanged, so
 rem    every previous invocation still means exactly what it meant.
 set TARGET=%1
+rem -- HOW LONG TO WATCH. A triage pass over a dozen guests does not want 70
+rem    seconds each, and a guest that is going to fail does it in the first few.
+rem    %2 = seconds before the first screenshot, %3 = seconds before the second
+rem    (0 = do not take a second one). Defaults are the old numbers exactly, so
+rem    an invocation without them measures what it always measured.
+set W1=%2
+if "%W1%"=="" set W1=20
+set W2=%3
+if "%W2%"=="" set W2=51
 if "%TARGET%"=="" set TARGET=C:\WINDOWS\SYSTEM32\SYSEDIT.EXE
 echo %TARGET%> C:\ntvdmex\target.txt
 rem -- (session 36) krnl386's own BOOTLOG.TXT narration, armed by wowbootlog.flag.
@@ -38,11 +47,13 @@ rem    DELETE FIRST -- a stale BMP is a silent wrong answer, a missing one is lo
 del /q "%RES%\wow_shot1.bmp" >nul 2>&1
 del /q "%RES%\wow_shot2.bmp" >nul 2>&1
 del /q "%RES%\wow_shot.txt" >nul 2>&1
-ping -n 20 127.0.0.1 >nul
+ping -n %W1% 127.0.0.1 >nul
 "%BM%\rigshot.exe" shot "%RES%\wow_shot1.bmp" > "%RES%\wow_shot.txt" 2>&1
 "%BM%\rigshot.exe" list >> "%RES%\wow_shot.txt" 2>&1
-ping -n 51 127.0.0.1 >nul
+if "%W2%"=="0" goto noshot2
+ping -n %W2% 127.0.0.1 >nul
 "%BM%\rigshot.exe" shot "%RES%\wow_shot2.bmp" >> "%RES%\wow_shot.txt" 2>&1
+:noshot2
 echo ---- at end of run ---- >> "%RES%\wow_alive.txt"
 tasklist /fi "imagename eq ntvdmhost.exe" >> "%RES%\wow_alive.txt" 2>&1
 copy /y C:\ntvdmex\ldtprobe.log "%RES%\wow_ldt.txt" >nul 2>&1
