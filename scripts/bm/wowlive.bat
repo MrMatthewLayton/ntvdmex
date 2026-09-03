@@ -32,7 +32,14 @@ rem    C:\ntvdmex\ntvdmhost.exe -- and `copy ... >nul` then fails SILENTLY and t
 rem    OLD binary runs. That happened, and the run reported a fix that was not in
 rem    the file. The wait, the errorlevel and the two directory listings are all
 rem    here so it cannot happen quietly again.
+rem ⚠⚠ AND KILL STOCK'S ntvdm.exe TOO -- XP's WOW VDM IS **SHARED**. If an
+rem    ntvdm.exe is already running (e.g. left by wowcompare.bat), Windows hands a
+rem    new Win16 launch to THAT VDM instead of creating a fresh ntvdm.exe -- so the
+rem    IFEO Debugger hook never fires, our host never starts, and the program comes
+rem    up under STOCK while this script cheerfully reports success. That happened,
+rem    and it is what "it's only running stock NTVDM" looked like from the outside.
 taskkill /f /im ntvdmhost.exe >nul 2>&1
+taskkill /f /im ntvdm.exe     >nul 2>&1
 ping -n 4 127.0.0.1 >nul
 copy /y "%BM%\ntvdmhost.exe" C:\ntvdmex\ > "%RES%\wowlive.txt" 2>&1
 if errorlevel 1 echo [wowlive] !! COPY FAILED -- THE OLD HOST IS ABOUT TO RUN >> "%RES%\wowlive.txt"
@@ -46,6 +53,17 @@ rem    first cut wrote an EMPTY file, the host kept its 6-second default, and th
 rem    guest quit while this script reported success. Parenthesise it.
 (echo 0)> "%RES%\wowidle.txt"
 
+rem ⚠ AND THE TWO SWITCHES, because a guest CANNOT launch without them and this
+rem   script exists to leave one running. The baseline is measured with them OFF
+rem   (`270/46/122/96`), so anything that deletes them for a baseline run leaves
+rem   the box unable to start a guest — and the symptom is our host starting,
+rem   stopping at `0001:229C` and exiting, which from outside looks exactly like
+rem   "the guest went to stock". That is a lap I have already run.
+rem   wowrun.bat deliberately does NOT do this: it is the MEASURING launcher.
+if not exist "%RES%\wowsched.txt" type nul > "%RES%\wowsched.txt"
+if not exist "%RES%\wowcall.txt"  type nul > "%RES%\wowcall.txt"
+echo [wowlive] wowsched.txt + wowcall.txt ensured (a guest cannot launch without them) >> "%RES%\wowlive.txt"
+
 echo %TARGET%> C:\ntvdmex\target.txt
 echo [wowlive] target = %TARGET%          >> "%RES%\wowlive.txt"
 echo [wowlive] wowidle.txt = 0 (no timeout) >> "%RES%\wowlive.txt"
@@ -55,7 +73,17 @@ start "" "%TARGET%"
 rem -- Give it time to build its window, then say what is on the screen. This is
 rem    the ONLY report; there is no completion marker because nothing completes.
 ping -n 12 127.0.0.1 >nul
+rem ⚠ AND SAY SO LOUDLY IF IT IS NOT OURS. `tasklist` alone prints "INFO: No tasks
+rem   running" and the script then reports STILL RUNNING regardless -- another tool
+rem   succeeding while doing nothing. The `find` makes the absence an ERRORLEVEL.
 tasklist /fi "imagename eq ntvdmhost.exe" >> "%RES%\wowlive.txt" 2>&1
+tasklist /fi "imagename eq ntvdmhost.exe" | find "ntvdmhost" >nul
+if errorlevel 1 (
+    echo [wowlive] !! OUR HOST IS NOT RUNNING -- the guest went to STOCK ntvdm. >> "%RES%\wowlive.txt"
+    echo [wowlive] !! Usual cause: a stock ntvdm.exe was already up and XP's WOW  >> "%RES%\wowlive.txt"
+    echo [wowlive] !! VDM is SHARED, so the launch joined it and the IFEO hook     >> "%RES%\wowlive.txt"
+    echo [wowlive] !! never fired. Kill ntvdm.exe and re-run.                      >> "%RES%\wowlive.txt"
+)
 "%BM%\rigshot.exe" shot "%RES%\wowlive.bmp" >> "%RES%\wowlive.txt" 2>&1
 copy /y C:\ntvdmex\ntvdmhost.log "%RES%\wowlive_host.txt" >nul 2>&1
 echo [wowlive] STILL RUNNING -- stop it from the tray icon, the guest's own >> "%RES%\wowlive.txt"
