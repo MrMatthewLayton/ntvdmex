@@ -67,7 +67,7 @@ if(NOT NTVDMEX_EMBED_MANIFEST)
     target_compile_definitions(ntvdmex PRIVATE NTVDMEX_NO_MANIFEST)
 endif()
 ntvdmex_configure_xp_target(ntvdmex)
-target_link_libraries(ntvdmex PRIVATE kernel32 user32 gdi32 comctl32 gcc)
+target_link_libraries(ntvdmex PRIVATE kernel32 user32 gdi32 comctl32 shell32 gcc)
 
 # --- wowprobe.exe: Spike-002 harness (WOW registry repoint) --------------------
 # A throwaway stub that proves XP launches us as the VDM support process and
@@ -122,7 +122,7 @@ target_link_options(ntvdmhost PRIVATE
     -Wl,--subsystem,console -Wl,--entry,_WinMainCRTStartup
     -Wl,--major-subsystem-version,4 -Wl,--minor-subsystem-version,0
     -Wl,--disable-nxcompat -Wl,--disable-dynamicbase)
-target_link_libraries(ntvdmhost PRIVATE kernel32 user32 gdi32 comctl32 advapi32 gcc)
+target_link_libraries(ntvdmhost PRIVATE kernel32 user32 gdi32 comctl32 advapi32 shell32 gcc)
 
 # --- present_demo.exe: standalone DirectDraw presentation exerciser (M3 slice-3)
 # A GUI app that drives src/vdd/present_ddraw.c with an animated test frame, to

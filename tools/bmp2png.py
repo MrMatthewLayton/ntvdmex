@@ -39,9 +39,14 @@ def main():
         return 2
     src, dst = a[0], a[1]
     scale = 1
+    zoom = 1
     crop = None
     if "--scale" in a:
         scale = int(a[a.index("--scale") + 1])
+    if "--zoom" in a:
+        # Nearest-neighbour magnification. A 16x16 tray icon is unreadable at 1:1
+        # in any viewer, and blurring it to read it would be inventing pixels.
+        zoom = int(a[a.index("--zoom") + 1])
     if "--crop" in a:
         crop = [int(v) for v in a[a.index("--crop") + 1].split(",")]
 
@@ -59,11 +64,14 @@ def main():
         if bottom_up:
             sy = h - 1 - sy
         base = off + sy * stride
-        out = bytearray(b"\x00")
+        line = bytearray()
         for x in range(ow):
             p = base + (cx + x * scale) * px
-            out += bytes((d[p + 2], d[p + 1], d[p]))     # BGR -> RGB
-        rows.append(bytes(out))
+            line += bytes((d[p + 2], d[p + 1], d[p])) * zoom     # BGR -> RGB
+        for _ in range(zoom):
+            rows.append(b"\x00" + bytes(line))
+    ow *= zoom
+    oh *= zoom
 
     def chunk(t, data):
         c = t + data

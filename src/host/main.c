@@ -3216,7 +3216,8 @@ enum {                                       /* wired command IDs               
     IDM_INPUT_CURSOR, IDM_INPUT_CAPTURE,
     IDM_FILE_SETTINGS,
     IDM_CAP_SHOT,
-    IDM_HELP_ABOUT
+    IDM_HELP_ABOUT,
+    IDM_TRAY_SHOW                            /* bring the hidden host window back  */
 };
 
 static void mi (HMENU m, const char *s, UINT id) { AppendMenuA(m, MF_STRING, id, s); }
@@ -3771,6 +3772,89 @@ static HMENU build_menu(void)
     mi(m,"About",IDM_HELP_ABOUT);
     msub(bar, "Help", m);
     return bar;
+}
+
+/*
+ * ── ★★ A WIN16 GUEST HAS NO VDM WINDOW, AND NOW NEITHER DO WE. (#128, s.42) ──
+ * On real XP a 16-bit Windows program shows no VDM window at all: it puts its own
+ * windows on the desktop and the machine hosting it is invisible. Ours used to
+ * sit on top of the guest's own windows showing a BLACK TEXT SCREEN -- not merely
+ * redundant but misleading, because there is nothing for a Win16 guest to draw
+ * there. krnl386 never sets a video mode.
+ *
+ * ⇒ For a `-w` launch the window is created and never shown. But the menu behind
+ *   it is not useless -- Settings, Close Program, About and the screenshot are all
+ *   still things you might want during a Win16 run -- so it goes to the SYSTEM
+ *   TRAY, which is where a running-but-invisible machine belongs.
+ *
+ * ⚠ THE WINDOW IS CREATED EITHER WAY, and that is deliberate rather than lazy: it
+ *   owns the present surface, the raw-input registration, the frame timer and the
+ *   tray callbacks. Hidden is a state; absent would be a second code path through
+ *   everything the UI thread does.
+ * ► A DOS guest keeps its window and gets no icon. Whether it should have one too
+ *   is an open question (the user's, and a fair one) -- the only thing that would
+ *   change is the condition on this flag, which is why it is one flag.
+ */
+#define WM_TRAY (WM_APP + 1)
+#define TRAY_ID 1
+static int  g_wow_launch = 0;                /* `-w`: this VDM hosts Win16        */
+static int  g_tray_on    = 0;                /* the icon is currently installed   */
+
+static void tray_add(HINSTANCE hi, HWND h)
+{
+    NOTIFYICONDATAA nid;
+    const char *tip = "NTVDMEX - 16-bit Windows";
+    int i;
+    if (g_tray_on) return;
+    ZeroMemory(&nid, sizeof nid);
+    nid.cbSize           = sizeof nid;
+    nid.hWnd             = h;
+    nid.uID              = TRAY_ID;
+    nid.uFlags           = NIF_ICON | NIF_MESSAGE | NIF_TIP;
+    nid.uCallbackMessage = WM_TRAY;
+    nid.hIcon            = LoadIconA(hi, MAKEINTRESOURCEA(101));
+    if (!nid.hIcon) nid.hIcon = LoadIconA(NULL, IDI_APPLICATION);
+    for (i = 0; tip[i] && i < (int)sizeof nid.szTip - 1; ++i) nid.szTip[i] = tip[i];
+    nid.szTip[i] = 0;
+    g_tray_on = Shell_NotifyIconA(NIM_ADD, &nid) ? 1 : 0;
+}
+
+static void tray_remove(HWND h)
+{
+    NOTIFYICONDATAA nid;
+    if (!g_tray_on) return;
+    ZeroMemory(&nid, sizeof nid);
+    nid.cbSize = sizeof nid; nid.hWnd = h; nid.uID = TRAY_ID;
+    Shell_NotifyIconA(NIM_DELETE, &nid);
+    g_tray_on = 0;
+}
+
+/* The tray's context menu: the items from the menu bar that still MEAN something
+   when there is no window to look at. Deliberately short -- a tray menu that
+   mirrored the whole bar would offer Fullscreen and Capture Input for a machine
+   with no screen and no focus. */
+static void tray_menu(HWND h)
+{
+    HMENU m = CreatePopupMenu();
+    POINT pt;
+    if (!m) return;
+    AppendMenuA(m, MF_STRING, IDM_TRAY_SHOW,      "Show NTVDMEX Window");
+    AppendMenuA(m, MF_SEPARATOR, 0, NULL);
+    AppendMenuA(m, MF_STRING, IDM_FILE_SETTINGS,  "Settings...");
+    AppendMenuA(m, MF_STRING, IDM_CAP_SHOT,       "Take Screenshot");
+    AppendMenuA(m, MF_STRING, IDM_HELP_ABOUT,     "About");
+    AppendMenuA(m, MF_SEPARATOR, 0, NULL);
+    AppendMenuA(m, MF_STRING, IDM_FILE_CLOSEPROG, "Close Program");
+    AppendMenuA(m, MF_STRING, IDM_FILE_EXIT,      "Exit");
+    GetCursorPos(&pt);
+    /* ⚠ SetForegroundWindow FIRST and a stray post AFTER: without them a tray
+         menu does not dismiss when you click away from it. This is the documented
+         dance and it is not optional -- a menu that will not close is worse than
+         no menu. */
+    SetForegroundWindow(h);
+    TrackPopupMenu(m, TPM_RIGHTBUTTON, pt.x, pt.y, 0, h, NULL);
+    PostMessageA(h, WM_NULL, 0, 0);
+    DestroyMenu(m);
 }
 
 static HWND g_status;                        /* the native comctl32 status bar    */
@@ -4524,8 +4608,23 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
             MessageBoxA(h, "NTVDMEX -- New Technology Virtual DOS Manager, Extended\n"
                           "A from-scratch ntvdm.exe for Windows XP (DOS on the real CPU in V86).",
                           "About NTVDMEX", MB_OK | MB_ICONINFORMATION); return 0;
+        /* ★ The way back to a window that was never shown. Not a toggle: "hide it
+             again" is what the close button already means for a machine whose
+             icon is in the tray, and two ways to do one thing is how a UI starts
+             disagreeing with itself. */
+        case IDM_TRAY_SHOW:
+            ShowWindow(h, SW_SHOW); SetForegroundWindow(h); return 0;
         default: return 0;               /* IDM_STUB / not-yet-wired items: no-op      */
         }
+    /* ── ★ THE TRAY ICON'S OWN MESSAGES. ─────────────────────────────────────────
+         Right-click (or the keyboard's context key) opens the menu; double-click
+         shows the window, which is what a tray icon is expected to do everywhere
+         else on this desktop. */
+    case WM_TRAY:
+        if (lp == WM_RBUTTONUP || lp == WM_CONTEXTMENU) { tray_menu(h); return 0; }
+        if (lp == WM_LBUTTONDBLCLK) { ShowWindow(h, SW_SHOW);
+                                      SetForegroundWindow(h); return 0; }
+        return 0;
     case WM_SYSKEYDOWN:                  /* F10 / Alt / Alt+key -- see input_capture_set */
         /* ── WIN+F10 IS THE HOST KEY. ────────────────────────────────────────────────
              It has to be handled HERE and not in WM_KEYDOWN, because F10 is a SYSTEM key
@@ -4707,9 +4806,14 @@ static DWORD WINAPI ui_thread(LPVOID arg)
     menu_check(g_hwnd, IDM_INPUT_CURSOR, g_cursor_show);  /* tick reflects the state  */
     present_ddraw_init(&g_pd, g_hwnd);          /* GDI windowed; DDraw for fullscreen */
     make_status(g_hwnd, hi);                     /* native themed status bar          */
-    ShowWindow(g_hwnd, SW_SHOW); UpdateWindow(g_hwnd);
+    /* ★ A WIN16 GUEST GETS NO VDM WINDOW -- see the note by tray_add. The window
+         is built either way (it owns the present surface, the raw input, the frame
+         timer and the tray callbacks); only whether anyone sees it changes. */
+    if (g_wow_launch) { tray_add(hi, g_hwnd); }
+    else              { ShowWindow(g_hwnd, SW_SHOW); UpdateWindow(g_hwnd); }
     SetTimer(g_hwnd, 1, VID_PRESENT_TICK_MS, NULL);  /* fast tick; present is PHASE-gated */
     while (GetMessageA(&msg, NULL, 0, 0) > 0) { TranslateMessage(&msg); DispatchMessageA(&msg); }
+    tray_remove(g_hwnd);            /* or the icon outlives the process */
     present_ddraw_shutdown(&g_pd);
     return 0;
 }
@@ -13839,6 +13943,10 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
        ► NOT a throwaway. When the WOW epic (#128) lands, this same detection becomes
          the dispatch point -- the `-w` arm routes to our WOW layer. */
     if (launch_is_wow(GetCommandLineA())) {
+        /* ★ Latched HERE because this is where the answer is known, and the UI
+             thread -- which decides whether to show a window -- is started later.
+             See the note by tray_add for why a Win16 guest gets no window. */
+        g_wow_launch = 1;
         p = zput(p, "STAGE0: WIN16/WOW launch detected -> refusing (see GH #129)\r\n");
         p = zput(p, "STAGE0: cmdline=["); p = zput(p, GetCommandLineA()); p = zput(p, "]\r\n");
         log_append(LOG_PATH, report, p); serial_out(report, p);
