@@ -6658,7 +6658,7 @@ static DWORD WINAPI dpmi_watchdog(LPVOID param)
        Stand down entirely once the client has exited cleanly (g_dpmi_done). Log the
        first 12 samples (the run-51/52 wedge diagnostic) + any frozen streak, and stay
        quiet while healthy so a long run doesn't flood COM1. */
-    { unsigned n = 0, frozen = 0;
+    { unsigned n = 0, frozen = 0; int wd_said_wait = 0;
       for (;;) {
         LONG iter; DWORD en_cs, en_eip, base; const BYTE *ib;
         Sleep(250);
@@ -6679,6 +6679,28 @@ static DWORD WINAPI dpmi_watchdog(LPVOID param)
         }
         iter   = g_dpmi_iter;
         frozen = (iter == prev) ? (frozen + 1) : 0;
+        /* ── ★★★ A Win16 TASK WAITING FOR THE USER IS NOT WEDGED. ─────────────
+             The exec thread parks the guest inside Win16 `GetMessage` when its
+             queue is empty, which is where a Win16 task is SUPPOSED to wait --
+             and while it is parked `g_dpmi_iter` does not advance, so this
+             watchdog counted it as frozen and TerminateProcess'd the host 150 s
+             later. That is what killed an idle Notepad the user had been left to
+             click around in, and the only record went to THIS log rather than the
+             main one, so `ntvdmhost.log` just stopped.
+           ⇒ The host knows the difference and says so; sampling never could.
+             See g_wm_inwait in wowmsg.h. The streak is RESET rather than the
+             sample skipped, so a guest that wakes, wedges and is not in the wait
+             still gets the full 150 s from the moment it stopped advancing. */
+        if (g_wm_inwait && frozen) {
+            if (!wd_said_wait) {
+                wd_said_wait = 1;
+                q = zput(q, "  wd: the guest is PARKED IN Win16 GetMessage -- waiting"
+                            " for input, not wedged; the freeze counter is held at 0"
+                            " for as long as it waits\r\n");
+                log_append(WDLOG_PATH, wb, q); serial_out(wb, q); q = wb;
+            }
+            frozen = 0;
+        }
         if (n < 12 || frozen) {                         /* diagnostic window + any freeze */
             en_cs  = g_dpmi_enter_cs;  en_eip = g_dpmi_enter_eip;
             q = zput(q, "  wd["); q = zhex(q, n);
@@ -6795,6 +6817,11 @@ static DWORD WINAPI dpmi_watchdog(LPVOID param)
     }
     q = zput(q, "STAGE3-DPMI: watchdog terminating (wedged)\r\n");
     log_append(WDLOG_PATH, wb, q);
+    /* ⚠ AND SAY IT IN THE MAIN LOG TOO. This used to go only to wdprobe.log, so a
+         host killed here left `ntvdmhost.log` ending mid-sentence with no reason --
+         indistinguishable from a crash, and it cost a wrong diagnosis. Whoever
+         reads the log the run was writing must be told what stopped it. */
+    log_append(LOG_PATH, wb, q);
     serial_out(wb, q);
     /* ► FLUSH WHAT THE PROGRAM PRINTED BEFORE KILLING IT. Same text the clean
          wind-down emits, in the one path that used to lose it. Written in bounded
@@ -11021,6 +11048,12 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                                  filling the log. */
                             DWORD beat = t0; unsigned beats = 0;
                             DWORD pumped0 = g_ww_pumped;
+                            /* ★ Tell the freeze watchdog this stall is deliberate --
+                                 see g_wm_inwait in wowmsg.h. Set BEFORE the loop and
+                                 cleared after it on every exit path, because the
+                                 alternative is a flag that stays set once and
+                                 disables the watchdog for the rest of the run. */
+                            g_wm_inwait = 1;
                             while (g_running && !g_wm_count && !g_wm_quit
                                    && (!g_wowmsg_wait_ms
                                        || GetTickCount() - t0 < g_wowmsg_wait_ms)) {
@@ -11043,6 +11076,7 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                                     log_append(LOG_PATH, hb, hq); serial_out(hb, hq);
                                 }
                             }
+                            g_wm_inwait = 0;
                         }
                         waited = GetTickCount() - t0;
                         p = zput(p, "\n     WOWMSG: GetMessage with an empty queue"

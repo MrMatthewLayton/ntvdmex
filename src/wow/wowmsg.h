@@ -153,6 +153,23 @@
 static DWORD g_wowmsg_wait_ms = WOWMSG_WAIT_MS;
 static int   g_wm_saidwait    = 0;   /* the setting is announced once, at first use */
 
+/* ── ★★★ "THE GUEST IS PARKED HERE ON PURPOSE", FOR THE FREEZE WATCHDOG. ──────
+     Non-zero while the exec thread is inside the blocking GetMessage wait.
+   ⚠⚠ THIS EXISTS BECAUSE THE WATCHDOG KILLED AN IDLE Win16 APPLICATION. The
+     DPMI watchdog samples `g_dpmi_iter` every 250 ms and calls a run WEDGED when
+     it stops advancing -- 600 samples, i.e. **150 seconds**, on a WOW run. That
+     bound was written when `wowrun.bat` bounded every run at 75 s, and session
+     43's `wowidle.txt`=0 ("a blocked GetMessage waits FOREVER") broke the
+     premise without anyone telling the watchdog. So a guest left on the desktop
+     for a human to use was TerminateProcess'd 150 s after it went idle, and the
+     only note went to `wdprobe.log` -- the main log simply stopped mid-heartbeat.
+     Found because the user looked at the box and said "it's only running stock".
+   ★ AND A PARKED GUEST GENUINELY LOOKS FROZEN: it sits at one EIP inside our own
+     wait, which is exactly what a Win16 task waiting for input IS. The watchdog
+     cannot tell that from a wedge by sampling, and it does not have to -- the
+     host put it there and can simply say so. */
+static volatile LONG g_wm_inwait = 0;
+
 typedef struct {
     WORD  hwnd, msg, wparam;
     DWORD lparam;
