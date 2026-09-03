@@ -70,6 +70,72 @@
 #define WOWUSER_REGCLIPFORMAT    0x91
 #define RCF_ARG_NAME             0
 
+/* ── ★★★ 0xad -- "BUILD ME A CURSOR OR AN ICON". ─────────────────────────────
+     One of the 56 ids USER's export table cannot name, and the reason it matters
+     is NOTEPAD: `notepad seg2:0x02d0` calls `LoadCursor(NULL, 0x7f02)` and
+     `seg2:0x02ee cmp [0xb14],0 / je` returns 0 from its whole initialisation if
+     the answer is 0 -- so `WinMain` (`seg1:0x0c38 or ax,ax / jne`) returns
+     without ever registering a class. No cursor, no Notepad.
+
+     USER's 16-bit LoadCursor/LoadIcon do the resource lookup themselves and then
+     ask the 32-bit side to build the object. The call site is exact
+     (`user seg1:0x49e2`, the arm taken when the module handle came back 0, i.e.
+     hInstance was NULL):
+
+         49e2  push ax(0)      -> +18
+         49e3  push [bp+8]     -> +16   lpName HIGH word (0 => MAKEINTRESOURCE)
+         49e6  push [bp+6]     -> +14   lpName LOW word  = the ORDINAL
+         49e9  push ax(0) x5   -> +12..+4
+         49ee  push [bp-0x14]  -> +2
+         49f1  push 1          -> +0    ★ KIND: a PREDEFINED system object
+         49f3  lcall <id 0xad>
+
+     and the run agrees field for field: Notepad's call arrives as
+     `(1 0 0 0 0 0 0 0x7f02 0 0)`. The sibling site (`seg1:0x4998`) pushes kind 3
+     with a real resource pointer -- a module's OWN icon -- and is NOT answered
+     here; the log names the kind so the next run can read that site instead of
+     this one being widened by guesswork.
+
+   ★★ WHY THE HOST DOES NOT HAVE TO KNOW WHETHER IT IS A CURSOR OR AN ICON.
+     Win16's predefined cursor and icon ordinals share one numeric range, and both
+     LoadCursor and LoadIcon reach this same stub -- so the id and its arguments
+     genuinely cannot tell them apart, and the two USER exports that would are
+     reached through relocation chains rather than fixed call targets. But the
+     GUEST says which it is a moment later, when it puts the handle into
+     `WNDCLASS.hCursor` or `WNDCLASS.hIcon`. So this returns a TOKEN that remembers
+     the ordinal, and the real `LoadCursorA`/`LoadIconA` happens at the point of
+     use, where the answer is not a guess. Same shape as every other handle here:
+     synthetic to the guest, a real OS object behind it. */
+#define WOWUSER_LOADSYSOBJ       0xad
+#define AD_ARG_KIND              0
+#define AD_ARG_NAMELO            14
+#define AD_ARG_NAMEHI            16
+#define AD_KIND_PREDEFINED       1
+
+/* Tokens live well above the window handles (0x0100 + n*0x20) so a stray one is
+   never mistaken for a window, and vice versa. */
+#define WOWUSER_SYSRES_BASE      0x8000
+#define WOWUSER_SYSRES_STEP      0x0008
+#define WOWUSER_MAX_SYSRES       16
+
+typedef struct {
+    WORD h;                          /* 0 = free */
+    WORD ord;                        /* the predefined ordinal the guest asked for */
+} wowuser_sysres_t;
+
+static wowuser_sysres_t g_wu_sysres[WOWUSER_MAX_SYSRES];
+static int              g_wu_nsysres = 0;
+
+/* The ordinal behind a token, or 0 if this is not one of ours. */
+static WORD wowuser_sysres_ord(WORD h)
+{
+    int i;
+    if (!h) return 0;
+    for (i = 0; i < g_wu_nsysres; ++i)
+        if (g_wu_sysres[i].h == h) return g_wu_sysres[i].ord;
+    return 0;
+}
+
 /* ShowWindow(hWnd, nCmdShow) -- 4 bytes, reversed as always, and confirmed by the
    run: `(0x0005 0x0160)` from sysedit seg1:0x01da and `(0x0001 0x0140)` from
    seg2:0x0149. UpdateWindow(hWnd) -- 2 bytes. */
@@ -307,6 +373,10 @@ typedef struct {
          already exist and reimplementing them would be the whole mistake again. */
     char  cls32[96];
     int   reg32;                     /* 1 = a real Win32 class is behind this */
+    /* The predefined ordinals resolved out of hCursor/hIcon at registration --
+       kept only so the log can say what the class actually got. */
+    WORD  curord, icoord;
+    int   curfell;                   /* the OS did not know that cursor ordinal */
 } wowuser_class_t;
 
 static wowuser_class_t g_wu_class[WOWUSER_MAX_CLASS];
@@ -980,7 +1050,18 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
              window is a real window on the real desktop, so its class has to be a
              real class -- and it is OUR window procedure that goes in it, because
              the guest's is 16-bit and can only be entered through wowcall.h. */
-        if (!c->reg32) c->reg32 = wowwin_register(c->name, c->cls32, sizeof c->cls32);
+        {   /* ★ THE TOKEN BECOMES A REAL OBJECT HERE, because this is where the
+                 guest says which field it belongs in. A value that is not one of
+                 our tokens yields 0 and the OS default is used -- an app's OWN
+                 icon is a module resource (kind 3) and is not built yet. */
+            WORD curord = wowuser_sysres_ord(c->hcursor);
+            WORD icoord = wowuser_sysres_ord(c->hicon);
+            int  fell   = 0;
+            if (!c->reg32)
+                c->reg32 = wowwin_register(c->name, c->cls32, sizeof c->cls32,
+                                           curord, icoord, &fell);
+            c->curord = curord; c->icoord = icoord; c->curfell = fell;
+        }
         /* The note is the whole point of servicing this: it is the first time this
            project can say WHAT a Win16 program is trying to put on the screen. */
         {   int k = 0;
@@ -989,6 +1070,13 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
             wu_puts(note, notecap, &k, c->reg32 ? " -> Win32 class " : " -- ★ Win32 "
                                                   "RegisterClass FAILED for ");
             wu_puts(note, notecap, &k, c->cls32);
+            if (c->curord) { wu_puts(note, notecap, &k, " cursor=0x");
+                             wu_puthex(note, notecap, &k, c->curord, 4); }
+            if (c->icoord) { wu_puts(note, notecap, &k, " icon=0x");
+                             wu_puthex(note, notecap, &k, c->icoord, 4); }
+            if (c->curfell)
+                wu_puts(note, notecap, &k, " -- ★ THE OS DID NOT KNOW THAT CURSOR"
+                                           " ORDINAL; fell back to IDC_ARROW");
         }
         wow32_setret(f, c->atom);
         return 1;
@@ -1615,6 +1703,64 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
             return 1;
         }
         wow32_setret(f, fmt);
+        return 1;
+    }
+
+    /* ── ★★★★ 0xad LoadSystemObject -- see the long note above. ───────────────
+         ⚠ ONLY THE KIND THAT HAS BEEN READ. `1` is what a NULL-instance
+           LoadCursor/LoadIcon passes and it is the only call site any run has
+           taken; kind 3 carries a module's own resource and needs its own site
+           read rather than this one widened. Anything else falls through to the
+           honest 0 and the log says which kind asked. */
+    case WOWUSER_LOADSYSOBJ: {
+        WORD kind = wow32_argw(f, AD_ARG_KIND);
+        WORD lo   = wow32_argw(f, AD_ARG_NAMELO);
+        WORD hi   = wow32_argw(f, AD_ARG_NAMEHI);
+        int k = 0, i;
+        wu_puts(note, notecap, &k, "LoadSystemObject kind=0x");
+        wu_puthex(note, notecap, &k, kind, 4);
+        if (kind != AD_KIND_PREDEFINED) {
+            wu_puts(note, notecap, &k, " -- not the predefined kind; this host has"
+                                       " only read that call site, answered 0");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        if (hi) {
+            /* A far pointer to a NAME rather than MAKEINTRESOURCE. Real, and not
+               something a run has shown us, so it is refused by name. */
+            wu_puts(note, notecap, &k, " -- a NAMED resource (0x");
+            wu_puthex(note, notecap, &k, hi, 4);
+            wu_puts(note, notecap, &k, ":0x");
+            wu_puthex(note, notecap, &k, lo, 4);
+            wu_puts(note, notecap, &k, "), not an ordinal; answered 0");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        wu_puts(note, notecap, &k, " ordinal=0x");
+        wu_puthex(note, notecap, &k, lo, 4);
+        /* One token per ordinal: the guest asks for IDC_ARROW in twenty classes
+           and should get one answer, the way the OS gives one HCURSOR. */
+        for (i = 0; i < g_wu_nsysres; ++i)
+            if (g_wu_sysres[i].ord == lo) {
+                wu_puts(note, notecap, &k, " -> 0x");
+                wu_puthex(note, notecap, &k, g_wu_sysres[i].h, 4);
+                wu_puts(note, notecap, &k, " (already issued)");
+                wow32_setret(f, g_wu_sysres[i].h);
+                return 1;
+            }
+        if (g_wu_nsysres >= WOWUSER_MAX_SYSRES) {
+            wu_puts(note, notecap, &k, " -- ★ NO TOKEN LEFT, answered 0");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        i = g_wu_nsysres++;
+        g_wu_sysres[i].ord = lo;
+        g_wu_sysres[i].h   = (WORD)(WOWUSER_SYSRES_BASE + i * WOWUSER_SYSRES_STEP);
+        wu_puts(note, notecap, &k, " -> token 0x");
+        wu_puthex(note, notecap, &k, g_wu_sysres[i].h, 4);
+        wu_puts(note, notecap, &k, "; the OS object is fetched when the guest says"
+                                   " whether it is a cursor or an icon");
+        wow32_setret(f, g_wu_sysres[i].h);
         return 1;
     }
 

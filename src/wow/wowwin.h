@@ -162,8 +162,18 @@ static int wowwin_pump(int budget)
 /* Register a real Win32 class for a Win16 one. Returns 1 if the class is usable.
    ⚠ cbWndExtra is ZERO on purpose: the guest's window words are kept in
      wowuser_win_t (session 40), bounded by the class's own declaration, and
-     giving Win32 a second copy would create two answers to one question. */
-static int wowwin_register(const char *name16, char *out32, int cap)
+     giving Win32 a second copy would create two answers to one question.
+   ★ `curord` / `icoord` are the PREDEFINED ORDINALS the guest put in its
+     WNDCLASS, or 0. This is the moment the token minted by USER id 0xad becomes a
+     real object: the guest has just said which field it belongs in, so cursor and
+     icon can finally be told apart -- see the note by WOWUSER_LOADSYSOBJ.
+   ⚠ THE ORDINAL IS PASSED TO THE OS UNCHANGED, on the same claim as the WS_*
+     bits: Win32 inherited the predefined cursor and icon ordinals from Win16. If
+     that is ever wrong the OS returns NULL, so the fallback below is not belt and
+     braces -- it is what turns a wrong assumption into a visible line instead of
+     a window with no cursor. */
+static int wowwin_register(const char *name16, char *out32, int cap,
+                           WORD curord, WORD icoord, int *curfell)
 {
     WNDCLASSA wc;
     int i = 0, k;
@@ -173,7 +183,12 @@ static int wowwin_register(const char *name16, char *out32, int cap)
     ZeroMemory(&wc, sizeof wc);
     wc.lpfnWndProc   = wowwin_proc;
     wc.hInstance     = GetModuleHandleA(NULL);
-    wc.hCursor       = LoadCursorA(NULL, IDC_ARROW);
+    wc.hCursor       = curord ? LoadCursorA(NULL, MAKEINTRESOURCEA(curord)) : NULL;
+    if (!wc.hCursor) {
+        if (curord && curfell) *curfell = 1;
+        wc.hCursor = LoadCursorA(NULL, IDC_ARROW);
+    }
+    if (icoord) wc.hIcon = LoadIconA(NULL, MAKEINTRESOURCEA(icoord));
     wc.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1);
     wc.lpszClassName = out32;
     if (RegisterClassA(&wc)) return 1;
