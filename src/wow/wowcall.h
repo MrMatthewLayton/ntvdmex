@@ -192,14 +192,18 @@ static void wowcall_push(DWORD ssbase, WORD *sp, WORD v)
 static int wowcall_enter(volatile BYTE *tib, DWORD ssbase, WORD retsel,
                          DWORD proc, WORD ds, const WORD *argw, int nargw,
                          DWORD retlin, int retmode, WORD *sink,
-                         WORD hwnd, WORD msg)
+                         WORD hwnd, WORD msg,
+                         const BYTE *blob, int blobn, int blobarg)
 {
     wowcall_frame_t *fr;
+    WORD arg[WOWCALL_MAX_ARGW];
     WORD sp;
     int i;
     if (g_wc_depth >= WOWCALL_MAX_DEPTH) return 0;
     if (!ssbase || !retsel || !(proc >> 16)) return 0;
     if (nargw < 0 || nargw > WOWCALL_MAX_ARGW) return 0;
+    if (blobn < 0 || blobn > 256) return 0;
+    for (i = 0; i < nargw; ++i) arg[i] = argw[i];
 
     fr = &g_wc[g_wc_depth++];
     wowsched_save(&fr->saved, tib, 0, 0, 0);
@@ -218,7 +222,33 @@ static int wowcall_enter(volatile BYTE *tib, DWORD ssbase, WORD retsel,
        must be. A DWORD is two words, high first, for the same reason. The caller
        hands them in declared order and this pushes them in that order. */
     sp = (WORD)(VDM_REG(tib, VTIB_ESP) & 0xFFFF);
-    for (i = 0; i < nargw; ++i) wowcall_push(ssbase, &sp, argw[i]);
+
+    /* ── ★★★ THE STRUCTURE GOES DOWN FIRST, BELOW THE ARGUMENTS. ─────────────
+         A pointer argument has to point at memory the GUEST can address, and the
+         only such memory this host can hand out for the duration of one call is
+         the guest's own stack. So the bytes are placed below the current SP and
+         the far pointer that names them is written into the argument that was
+         reserved for it -- which cannot be done by the caller, because SS:SP is
+         only known here.
+       ⚠ IT MUST GO BELOW THE ARGUMENTS, NOT ABOVE. The procedure returns with
+         `retf 0x0a`, which discards exactly the argument bytes; anything placed
+         above them would still be on the stack afterwards and would silently
+         move SP for whoever we interrupted.
+       ⚠ SP IS KEPT EVEN. A 16-bit stack that goes odd costs an access penalty on
+         every push for the rest of the call and is a trap for the next reader.
+       ⚠ AND IT IS THE SELECTOR, NOT THE BASE, THAT THE GUEST NEEDS: `ssbase` is
+         a host linear address and means nothing to 16-bit code. */
+    if (blob && blobn > 0 && blobarg >= 0 && blobarg + 1 < nargw) {
+        WORD ss = (WORD)(VDM_REG(tib, VTIB_SS) & 0xFFFF);
+        int  n  = (blobn + 1) & ~1;
+        sp = (WORD)(sp - n);
+        for (i = 0; i < blobn; ++i)
+            *(volatile BYTE *)(ULONG_PTR)(ssbase + (DWORD)(WORD)(sp + i)) = blob[i];
+        arg[blobarg]     = ss;                       /* the far pointer's HIGH */
+        arg[blobarg + 1] = sp;                       /* ... and its offset     */
+    }
+
+    for (i = 0; i < nargw; ++i) wowcall_push(ssbase, &sp, arg[i]);
     wowcall_push(ssbase, &sp, retsel);       /* the far return address: CS ... */
     wowcall_push(ssbase, &sp, 0);            /* ... then IP, at offset 0       */
     VDM_SET16(tib, VTIB_ESP, sp);

@@ -186,7 +186,53 @@ typedef struct {
     int              cbact;          /* WOWCALL_ACT_* -- what to DO with it      */
     WORD             cbactarg;       /* what that action is about                */
     WORD             cbhwnd, cbmsg;  /* for the log; 0/0 when not a message     */
+    /* ── ★★★ A STRUCTURE TO PUT WHERE THE GUEST CAN REACH IT. ────────────────
+         Some messages carry a POINTER, not a value -- WM_CREATE's lParam is an
+         LPCREATESTRUCT -- and a 16-bit program can only follow a pointer that
+         lives behind a selector it already has. The host has no 16-bit heap of
+         its own, so the structure is placed on the GUEST'S OWN STACK just below
+         the arguments, which is where real USER puts it and which needs no
+         allocator: the stack selector is already valid for the guest, and the
+         bytes die with the call, which is exactly their lifetime.
+       `cbblobarg` is the index in cbarg[] of the HIGH word of the far pointer
+         that should be made to point at it -- filled in by wowcall_enter, which
+         is the first code that knows what SS:SP will be. -1 = no blob. */
+    BYTE             cbblob[64];
+    int              cbblobn;        /* bytes of cbblob to place; 0 = none      */
+    int              cbblobarg;      /* cbarg[] index to receive SEG:OFF, or -1  */
 } wow32_frame_t;
+
+/* ---- note building (shared by EVERY id space's dispatcher) --------------
+   These live here rather than in wowuser.h because five module files build
+   notes with them -- USER, SHELL, COMMDLG, KEYBOARD and GDI -- and their old
+   home forced an include order in which wowgdi.h had to come LAST. That order
+   is wrong now that USER's GetDC has to mint a GDI token, so the helpers moved
+   to the header everything already includes instead of the dependency being
+   worked around with forward declarations. */
+static void wu_puts(char *b, int cap, int *k, const char *s)
+{
+    while (*s && *k < cap - 1) b[(*k)++] = *s++;
+    b[*k] = 0;
+}
+
+static void wu_puthex(char *b, int cap, int *k, DWORD v, int digits)
+{
+    static const char hx[] = "0123456789abcdef";
+    int i;
+    for (i = digits - 1; i >= 0; --i) {
+        if (*k >= cap - 1) break;
+        b[(*k)++] = hx[(v >> (i * 4)) & 0xF];
+    }
+    b[*k] = 0;
+}
+
+/* A quoted string, with the quotes, truncated rather than dropped. */
+static void wu_putq(char *b, int cap, int *k, const char *s)
+{
+    wu_puts(b, cap, k, "\"");
+    wu_puts(b, cap, k, s);
+    wu_puts(b, cap, k, "\"");
+}
 
 /* ---- frame accessors ---------------------------------------------------- */
 

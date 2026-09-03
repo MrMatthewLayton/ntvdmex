@@ -22,16 +22,21 @@
 #include "x86len.h"     /* which `CD nn` byte pairs are really INT instructions */
 #include "../wow/ne.h"  /* GH #128: 16-bit New Executable loader (WOW bootstrap) */
 #include "../wow/wow32.h" /* GH #128: the 32-bit half -- krnl386's calls out to Win32 */
+#include "../wow/wowanchors.h" /* GH #128: ...and how a thunk module's segment is RECOGNISED */
 #include "../wow/wowsched.h" /* GH #128: ...and the Win16 task scheduler, which is also ours */
 #include "../wow/wowcall.h" /* GH #128: ...and the OTHER direction -- calling 16-bit code */
 #include "../wow/wowmsg.h" /* GH #128: ...and the MESSAGE QUEUE the loop turns on */
 #include "../wow/wowres.h" /* GH #128: ...and the guest's OWN menu and icons */
 #include "../wow/wowwin.h" /* GH #128: ...and a Win16 window IS a real Win32 window */
+/* ⚠ wowgdi.h COMES BEFORE wowuser.h, and the order is load-bearing: USER's
+     GetDC/GetWindowDC issue a GDI token, so the object map has to be in scope by
+     the time USER's dispatcher is compiled. It used to be last only because it
+     borrowed USER's note helpers, and those now live in wow32.h. */
+#include "../wow/wowgdi.h" /* GH #128: GDI.EXE's id space -- where MS Paint begins */
 #include "../wow/wowuser.h" /* GH #128: USER.EXE's id space -- a DIFFERENT one; see the file */
 #include "../wow/wowshell.h" /* GH #128: ...and SHELL.DLL's, which is a THIRD one again */
 #include "../wow/wowcommdlg.h" /* GH #128: ...and COMMDLG.DLL's -- File > Open */
 #include "../wow/wowkbd.h" /* GH #128: ...and KEYBOARD.DRV's -- ANSI/OEM conversion */
-#include "../wow/wowgdi.h" /* GH #128: ...and GDI.EXE's -- where MS Paint begins */
 #include "dos_mcb.h"
 #include "dos_loader.h"
 #include "dos_psp.h"
@@ -3375,18 +3380,24 @@ static int wow_user_anchor(WORD id, WORD argb, WORD retstub)
      -- ordinal 22 in the non-resident name table, entry table offset 0x00ba, and
      the bytes there are `6a 0c / 68 00 00 / 68 16 00 / 9a ...`, i.e. the stub
      declares those 12 bytes and that id itself.
-   ★ ANCHORING ON THE ONE CALL WE SERVICE IS DELIBERATE, not laziness: the table
-     is identified by the first call that needs it, in the same BOP, so nothing is
-     answered before the table has named itself.
-   ⚠ The offset is this SHELL.DLL's. Regenerate with
-     `tools/ne/wowthunks.py guest/ne/shell.dll` if the box's ever differs -- and a
-     wrong anchor cannot mis-fire quietly: all three fields must agree, or the
-     dispatcher never engages and every SHELL call stays honestly unimplemented. */
+   ★★★ AND ANCHORING ON THE ONE CALL WE SERVICE WAS WRONG. It was written down as
+     deliberate -- "the table is identified by the first call that needs it" --
+     and it holds only while every guest that needs SHELL calls `ShellAbout`.
+     Notepad does. MS PAINT DOES NOT: it calls `RegCreateKey`, `RegSetValue`,
+     `RegQueryValue` and `DragAcceptFiles`, so SHELL was never identified at all,
+     all four were logged as "?'s table -- a DIFFERENT id space", and
+     `DragAcceptFiles` -- implemented since session 44 -- went unanswered. In the
+     log a module nobody identified and a service nobody wrote look the same.
+   ⇒ The anchor is now the module's WHOLE stub table, generated from the file by
+     `tools/ne/wowthunks.py --anchor`. See src/wow/wowanchors.h for why matching
+     any row is still safe, and regenerate there if the box's SHELL.DLL differs. */
 static WORD g_wow_shell_seg = 0;
 
 static int wow_shell_anchor(WORD id, WORD argb, WORD retstub)
 {
-    return id == 0x016 && argb == 12 && retstub == 0x00c7;
+    return wow_anchor_hit(g_shell_anchors,
+                          (int)(sizeof g_shell_anchors / sizeof g_shell_anchors[0]),
+                          id, argb, retstub);
 }
 
 /* ── ★★★ COMMDLG.DLL's TABLE -- A FIFTH ID SPACE. See src/wow/wowcommdlg.h. ───
@@ -3434,11 +3445,17 @@ static int wow_kbd_anchor(WORD id, WORD argb, WORD retstub)
    ⚠ Regenerate with `tools/ne/neneeds.py` if the box's GDI.EXE ever differs. */
 static WORD g_wow_gdi_seg = 0;
 
+/* ⚠ WIDENED FOR THE SAME REASON SHELL'S WAS, and before it could cost anything:
+     this used to be the three calls wowgdi.h services (`GetDeviceCaps`,
+     `DeleteObject`, `DeleteDC`), so GDI's segment would only ever have been
+     learned from a guest that happened to DESTROY something before it drew
+     anything. Paint's first GDI calls are `CreateCompatibleDC`/`SelectObject`.
+     The table is now all 367 stubs in GDI.EXE -- see src/wow/wowanchors.h. */
 static int wow_gdi_anchor(WORD id, WORD argb, WORD retstub)
 {
-    return (id == 0x050 && argb == 4 && retstub == 0x05de)
-        || (id == 0x045 && argb == 2 && retstub == 0x0354)
-        || (id == 0x044 && argb == 2 && retstub == 0x033a);
+    return wow_anchor_hit(g_gdi_anchors,
+                          (int)(sizeof g_gdi_anchors / sizeof g_gdi_anchors[0]),
+                          id, argb, retstub);
 }
 
 /* ── ★★★ krnl386's SECOND TABLE -- A THIRD ID SPACE, AND NOW IDENTIFIED. ──────
@@ -10206,7 +10223,8 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                                          ((DWORD)g_wu_krnl_seg << 16)
                                              | KRNL_LOCALUNLOCK_OFF,
                                          ew->hinst, &uarg, 1, 0,
-                                         WOWCALL_RET_KEEP, NULL, ew->hwnd, 0))
+                                         WOWCALL_RET_KEEP, NULL, ew->hwnd, 0,
+                                         NULL, 0, -1))
                         p = zput(p, "; LocalUnlock in flight");
                     else
                         p = zput(p, "; ★ LocalUnlock REFUSED -- the block stays"
@@ -10234,7 +10252,8 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                                          ((DWORD)g_wu_krnl_seg << 16)
                                              | KRNL_LOCALLOCK_OFF,
                                          ew->hinst, &larg, 1, 0,
-                                         WOWCALL_RET_KEEP, NULL, ew->hwnd, 0)) {
+                                         WOWCALL_RET_KEEP, NULL, ew->hwnd, 0,
+                                         NULL, 0, -1)) {
                         if (g_wc_depth > 0) {
                             g_wc[g_wc_depth - 1].action = WOWCALL_ACT_EDITFILL;
                             g_wc[g_wc_depth - 1].actarg = ew->hwnd;
@@ -10287,7 +10306,8 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                                          ((DWORD)g_wu_krnl_seg << 16)
                                              | KRNL_LOCALUNLOCK_OFF,
                                          ew->hinst, &uarg, 1, 0,
-                                         WOWCALL_RET_KEEP, NULL, ew->hwnd, 0))
+                                         WOWCALL_RET_KEEP, NULL, ew->hwnd, 0,
+                                         NULL, 0, -1))
                         p = zput(p, "; LocalUnlock in flight");
                     else
                         p = zput(p, "; ★ LocalUnlock REFUSED -- the block stays"
@@ -10654,6 +10674,7 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                 f.cbds    = 0;
                 f.cbnarg  = 0; f.cbsink = NULL;
                 f.cbhwnd  = 0; f.cbmsg = 0;
+                f.cbblobn = 0; f.cbblobarg = -1;
                 f.cbret   = WOWCALL_RET_KEEP;
                 /* ⚠ AND THESE TWO, WHICH COST A RUN BY BEING LEFT OUT. `f` is a
                      stack local, so an un-set field is whatever was there before
@@ -11324,8 +11345,12 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                                  LPCREATESTRUCT and this host has never built one.
                                  Saying so on the line is what stops a later reader
                                  taking the zero for a measurement. */
-                            if (f.cbmsg == WM_CREATE16)
-                                p = zput(p, " [lParam=0: no CREATESTRUCT yet]");
+                            if (f.cbmsg == WM_CREATE16 && f.cbblobn)
+                                p = zput(p, " [lParam -> a CREATESTRUCT on the"
+                                            " guest's own stack]");
+                            else if (f.cbmsg == WM_CREATE16)
+                                p = zput(p, " [lParam=0: NO CREATESTRUCT -- a"
+                                            " procedure that reads it will fault]");
                             if (!rsel)
                                 p = zput(p, " -- NO RETURN SELECTOR (LDT full);"
                                             " the call was NOT made");
@@ -11334,7 +11359,9 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                                                     (DWORD)(ULONG_PTR)
                                                         (f.bp + WOW32_OFF_RET),
                                                     f.cbret, f.cbsink,
-                                                    f.cbhwnd, f.cbmsg))
+                                                    f.cbhwnd, f.cbmsg,
+                                                    f.cbblob, f.cbblobn,
+                                                    f.cbblobarg))
                                 p = zput(p, " -- REFUSED (depth, or an unusable"
                                             " stack/procedure); the call was NOT"
                                             " made and the guest keeps the answer"

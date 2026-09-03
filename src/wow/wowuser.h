@@ -296,6 +296,41 @@ static WORD wowuser_sysres_kind(WORD h)
 #define WOWUSER_ENUMCLIPFMT      0x0090
 #define ECF_ARG_FORMAT   0
 
+/* ── ★★★★★ THE DEVICE-CONTEXT TRIO -- WHERE MS PAINT ACTUALLY STOPS. ─────────
+     Session 44 left a note saying the next thing for Paint was GDI's producers
+     (`CreateDC`, `CreateCompatibleDC`, `GetStockObject`). A run of PBRUSH.EXE
+     says otherwise, and the program said it in English: it puts up
+
+         Paintbrush: "Not enough memory to perform this operation."
+
+     and the call immediately before that box is USER id 0x42, 2 argument bytes,
+     argument 0x0140 -- the hwnd Paint had just created. That is `GetDC`, it was
+     answered 0, and Paint reads a null DC as being out of memory.
+   ★★ SO THE FIRST DC THIS HOST EVER ISSUES COMES OUT OF **USER**, NOT GDI. That
+     is worth stating plainly because it inverts the plan that was written down:
+     the three GDI calls already implemented (`GetDeviceCaps`, `DeleteDC`,
+     `DeleteObject`) could only ever answer "not one of our GDI tokens" until
+     something produced one, and the producer was in another id space all along.
+   ★ The ids and their argument counts are from `tools/ne/neneeds.py --stubs`,
+     resolved through USER's own entry table, and the retstubs it computes from
+     the file match the ones the run printed to the digit:
+         66 GETDC        id 0x42   2 args  retstub 0x076a   (the run: 0x076a)
+         67 GETWINDOWDC  id 0x43   2 args  retstub 0x090a
+         68 RELEASEDC    id 0x44   4 args  retstub 0x0c5c
+     2 = (HWND); 4 = (HWND, HDC). Both add up to what the stubs declare.
+   ⚠ 0x44 IS `DeleteDC` IN GDI'S NUMBERING AND `ReleaseDC` HERE -- the same
+     collision this file exists to prevent, and a reason the dispatcher must
+     never reach this switch with another module's stub segment. */
+#define WOWUSER_GETDC            0x0042
+#define WOWUSER_GETWINDOWDC      0x0043
+#define GDC_ARG_HWND16   0
+#define WOWUSER_RELEASEDC        0x0044
+#define RDC_ARG_HDC      0
+#define RDC_ARG_HWND     2
+
+/* ★ USER's DC calls MINT A GDI TOKEN out of the map in wowgdi.h, which main.c
+   now includes BEFORE this file for exactly that reason. */
+
 /* ── ★★★ MENUS AND DIALOG ITEMS -- THE LAST TWO CLUSTERS. ────────────────────
      Both from `neneeds.py`'s list, and both blocked on the same missing piece: a
      16-bit name for an `HMENU`. A Win32 menu handle is 32 bits and a Win16
@@ -956,35 +991,6 @@ static wowuser_class_t *wowuser_find_atom(WORD atom)
     return NULL;
 }
 
-/* ---- note building ------------------------------------------------------
-   The note is what the run log says a call DID, and it is the only channel this
-   project has for reading a Win16 program's intent. It is built with a running
-   cursor rather than a formatter because there is no CRT here (see runtime.c). */
-static void wu_puts(char *b, int cap, int *k, const char *s)
-{
-    while (*s && *k < cap - 1) b[(*k)++] = *s++;
-    b[*k] = 0;
-}
-
-static void wu_puthex(char *b, int cap, int *k, DWORD v, int digits)
-{
-    static const char hx[] = "0123456789abcdef";
-    int i;
-    for (i = digits - 1; i >= 0; --i) {
-        if (*k >= cap - 1) break;
-        b[(*k)++] = hx[(v >> (i * 4)) & 0xF];
-    }
-    b[*k] = 0;
-}
-
-/* A quoted string, with the quotes, truncated rather than dropped. */
-static void wu_putq(char *b, int cap, int *k, const char *s)
-{
-    wu_puts(b, cap, k, "\"");
-    wu_puts(b, cap, k, s);
-    wu_puts(b, cap, k, "\"");
-}
-
 /* ── ★ ASK FOR THE WM_CREATE. One helper, because there are now TWO places that
      make a window with a 16-bit procedure behind it (CreateWindow, and the MDI
      client's WM_MDICREATE) and they must send the same message with the same
@@ -1008,13 +1014,80 @@ static void wowuser_want_msg(wow32_frame_t *f, const wowuser_win_t *w, WORD ds,
     f->cbmsg    = msg;
 }
 
+/*
+ * ── ★★★★★ THE CREATESTRUCT, AND IT WAS READ OFF A RUN, NOT A HEADER ─────────
+ * WM_CREATE's lParam is an LPCREATESTRUCT. This host passed 0 and said so, and
+ * that stayed harmless until MS PAINT: its canvas procedure GP-faults on the
+ * spot, reading through the null pointer to find out how big it is. From
+ * `nedis.py guest/win16/PBRUSH.EXE 3 0x0720`, with `es:bx` = lParam:
+ *
+ *     0746  mov es, dx            ; es:bx <- lParam
+ *     0748  mov bx, ax
+ *     074a  mov cx, es:[bx+0xc]   ; ★ THE FAULT -- CREATESTRUCT.cx
+ *     074e  mov [0x4e0a], cx
+ *     0752  mov cx, es:[bx+0xa]   ;   CREATESTRUCT.cy
+ *
+ * ── ★★★ THE LAYOUT IS THE CreateWindow ARGUMENT BLOCK, UNCHANGED ────────────
+ * Which is why this needs no header and no guesswork. Paint's own call carried
+ *     (0000 0000 | 09c6 | 0001 | 0160 | 0002 | 0002 | 0002 | 00ac | 0000 40b0
+ *      | 0000 0000 | 08bd 09c7)
+ * and the CW_ARG_* offsets this file already uses -- named from earlier runs and
+ * cross-checked against the 30 bytes the stub declares -- read that as
+ * lpParam@0, hInstance@4, hMenu@6, hwndParent@8, cy@10, cx@12, y@14, x@16,
+ * style@18 (0x40b00000, exactly what the log printed), lpszName@22,
+ * lpszClass@26 ("pbPaint"). Those are the CREATESTRUCT's members, in order, at
+ * those offsets -- and PBRUSH reading cx at +0x0c and cy at +0x0a agrees with it
+ * independently. So the structure is the argument block COPIED, plus a
+ * `dwExStyle` of 0 at +30 to make up the 34 bytes.
+ * ⇒ Nothing here is taken on trust: two readings of two different binaries.
+ *
+ * ⚠ CW_USEDEFAULT IS SUBSTITUTED, NOT COPIED. A guest may pass 0x8000 for any of
+ *   x/y/cx/cy and then read the field expecting a number it can compute with --
+ *   Paint passes real values, so this is not what fixed it, but Notepad does not
+ *   and a copied 0x8000 would be a size of -32768. The real window's own
+ *   geometry is used instead, which is what the guest would have got on Windows.
+ * ⚠ ONE THING IS STILL NOT MEASURED: whether real Windows shows a guest the
+ *   REQUESTED or the RESOLVED geometry for the fields it did not default. This
+ *   copies what was requested. No run has yet distinguished the two.
+ */
 static void wowuser_want_create(wow32_frame_t *f, const wowuser_class_t *c,
                                 const wowuser_win_t *w)
 {
+    BYTE *b = f->cbblob;
+    int i;
+    WORD g[4];
+    static const int GEO[4] = { CW_ARG_HEIGHT, CW_ARG_WIDTH,
+                                CW_ARG_Y, CW_ARG_X };
     if (!f->cbok || !w->wndproc) return;
-    /* ⚠ lParam 0: no CREATESTRUCT yet -- see wowcall.h. */
+
+    /* The 30 argument bytes, verbatim -- they ARE the first eleven members. */
+    for (i = 0; i < 30; ++i) b[i] = f->bp[WOW32_OFF_ARGS + i];
+    b[30] = b[31] = b[32] = b[33] = 0;               /* dwExStyle, always 0 here */
+
+    /* ⚠ CW_USEDEFAULT is 0x8000 in Win16 (it is 0x80000000 in Win32 -- the trap
+         this host has already been caught by once). Where the guest defaulted a
+         field, tell it what it actually got. */
+    if (w->hwnd32) {
+        RECT r;
+        if (GetWindowRect(w->hwnd32, &r)) {
+            g[0] = (WORD)(r.bottom - r.top);         /* cy, cx, y, x -- GEO order */
+            g[1] = (WORD)(r.right - r.left);
+            g[2] = (WORD)r.top;
+            g[3] = (WORD)r.left;
+            for (i = 0; i < 4; ++i)
+                if (wow32_argw(f, GEO[i]) == 0x8000) {
+                    b[GEO[i]]     = (BYTE)(g[i] & 0xFF);
+                    b[GEO[i] + 1] = (BYTE)(g[i] >> 8);
+                }
+        }
+    }
+    f->cbblobn = 34;
+
     wowuser_want_msg(f, w, w->hinst ? w->hinst : c->hinst,
                      WM_CREATE16, 0, 0, WOWCALL_RET_KEEP);
+    /* cbarg[3] is lParam's HIGH word (see wowuser_want_msg); wowcall_enter fills
+       both halves once it knows where on the stack the structure landed. */
+    f->cbblobarg = 3;
 }
 
 /*
@@ -2506,6 +2579,106 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
         wu_puts(note, notecap, &k, "; answered 0x");
         wu_puthex(note, notecap, &k, (DWORD)rc, 4);
         wow32_setret(f, (DWORD)(WORD)rc);
+        return 1;
+    }
+
+    /* ── ★★★★★ 0x42 GetDC(hWnd) / 0x43 GetWindowDC(hWnd) ────────────────────
+         The call MS Paint stops on, and the first producer of a device context
+         anywhere in this host. The real one, on the guest's real window: the DC
+         a Win16 program draws through has to be a DC for the actual pixels on
+         the actual desktop, and ours are real HWNDs (session 42).
+       ★ THE ANSWER IS A TOKEN, NOT THE HDC. An HDC is 32 bits and the guest has
+         16 to keep it in, and it travels back to us through ReleaseDC and every
+         GDI call, so it goes through the same map the menus, icons and windows
+         use. It is minted as WINDC, which is what makes a later `DeleteDC` on it
+         refusable -- see wowgdi.h for why that distinction is not pedantry.
+       ⚠ hWnd == NULL IS LEGAL AND MEANS THE SCREEN, so a null handle is passed
+         through as NULL rather than rejected as "no such window". A guest that
+         asks for the screen DC and is told no would be being lied to.
+       ⚠ EVERY GetDC MUST BE MATCHED BY A ReleaseDC. Windows keeps a small cache
+         of common DCs and a guest that leaks them will eventually be refused by
+         the OS, not by us -- so the note carries the token and the count, and a
+         run that stops painting can be read back to whichever call stopped
+         returning one. */
+    case WOWUSER_GETDC:
+    case WOWUSER_GETWINDOWDC: {
+        int  wantwin = (f->id == WOWUSER_GETWINDOWDC);
+        WORD hwnd = wow32_argw(f, GDC_ARG_HWND16);
+        wowuser_win_t *w = hwnd ? wowuser_findwin(hwnd) : NULL;
+        HDC  dc;
+        WORD tok;
+        int  k = 0;
+        wu_puts(note, notecap, &k, wantwin ? "GetWindowDC 0x" : "GetDC 0x");
+        wu_puthex(note, notecap, &k, hwnd, 4);
+        if (hwnd && (!w || !w->hwnd32)) {
+            wu_puts(note, notecap, &k, " -- ★ NO SUCH WINDOW; answered 0 (a guest"
+                                       " reads a null DC as out of memory)");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        if (!hwnd) wu_puts(note, notecap, &k, " (the SCREEN)");
+        dc = wantwin ? GetWindowDC(w ? w->hwnd32 : NULL)
+                     : GetDC(w ? w->hwnd32 : NULL);
+        if (!dc) {
+            wu_puts(note, notecap, &k, " -- ★ THE OS REFUSED THE DC; answered 0");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        tok = wowgdi_h16((HGDIOBJ)dc, WOWGDI_KIND_WINDC);
+        if (!tok) {
+            /* ⚠ Do not hand back a DC we cannot name later: it could never be
+                 released, which is the leak this map exists to prevent.
+                 GetWindowDC's result goes back through ReleaseDC too. */
+            ReleaseDC(w ? w->hwnd32 : NULL, dc);
+            wu_puts(note, notecap, &k, " -- ★ THE GDI TOKEN MAP IS FULL; the DC was"
+                                       " given straight back and 0 answered");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        wu_puts(note, notecap, &k, " -> DC token 0x");
+        wu_puthex(note, notecap, &k, tok, 4);
+        wow32_setret(f, tok);
+        return 1;
+    }
+
+    /* ── ★★ 0x44 ReleaseDC(hWnd, hDC) ───────────────────────────────────────
+       ⚠ 0x44 IS `DeleteDC` IN GDI'S TABLE. Same number, different call, which is
+         why the dispatcher gates on the stub's segment before reaching here.
+       ⚠ THE TOKEN IS FORGOTTEN AS WELL AS THE DC RELEASED -- a released DC goes
+         straight back into the window's cache and will be handed out again, so a
+         token left pointing at it would name somebody else's DC.
+       ⚠ A DC THAT IS NOT BORROWED IS REFUSED rather than passed on: ReleaseDC on
+         a CreateCompatibleDC result silently does nothing on Win32 and leaks it,
+         and a guest doing that is worth seeing. */
+    case WOWUSER_RELEASEDC: {
+        WORD hdc  = wow32_argw(f, RDC_ARG_HDC);
+        WORD hwnd = wow32_argw(f, RDC_ARG_HWND);
+        wowuser_win_t *w = hwnd ? wowuser_findwin(hwnd) : NULL;
+        int kind = -1;
+        HGDIOBJ o = wowgdi_h32(hdc, &kind);
+        int k = 0, ok;
+        wu_puts(note, notecap, &k, "ReleaseDC dc=0x");
+        wu_puthex(note, notecap, &k, hdc, 4);
+        wu_puts(note, notecap, &k, " hwnd=0x");
+        wu_puthex(note, notecap, &k, hwnd, 4);
+        if (!o) {
+            wu_puts(note, notecap, &k, " -- ★ NOT ONE OF OUR GDI TOKENS;"
+                                       " answered 0");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        if (kind != WOWGDI_KIND_WINDC) {
+            wu_puts(note, notecap, &k, " -- ★ THAT DC WAS NOT BORROWED FROM A"
+                                       " WINDOW; it must go through DeleteDC."
+                                       " Refused");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        ok = ReleaseDC(w ? w->hwnd32 : NULL, (HDC)o) ? 1 : 0;
+        if (ok) wowgdi_forget(hdc);
+        wu_puts(note, notecap, &k, ok ? " -> released, token freed"
+                                      : " -- ★ the OS refused the release");
+        wow32_setret(f, (DWORD)ok);
         return 1;
     }
 

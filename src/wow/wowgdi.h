@@ -43,41 +43,131 @@
 #define GDC_ARG_HDC     2
 #define DOBJ_ARG_HANDLE 0
 
+/* ── ★★★ THE PRODUCERS -- WHAT MS PAINT ASKS FOR ONCE IT HAS A WINDOW. ───────
+     With `GetDC` in place (it is USER's call, not GDI's -- see wowuser.h) Paint
+     gets as far as needing a canvas, and says so in its own words when it does
+     not get one: "Not enough memory to edit image."
+
+   ★★ 0x57 IS `GetStockObject`, AND ONLY A RUN COULD HAVE SAID SO. Its export
+     (GDI ordinal 87) is `native16` -- 16-bit code that reaches a WOW32 stub from
+     inside its own body -- so `neneeds.py` cannot see the stub and correctly
+     classifies the import as free. Session 44 wrote down that its id would have
+     to come from a run; this is that run, 24 calls of it, and the file agrees
+     afterwards: the stub at seg1:0x06a4 is `6a 02 / 68 00 00 / 68 57 00 / 9a`,
+     the neighbouring stub at 0x06b1 is id 0x58 = GDI.88 GETSTRETCHBLTMODE, and
+     the ids run with the ordinals either side of 87.
+
+     The rest are ordinary exports, from `neneeds.py --stubs`:
+       ord 45 SELECTOBJECT           id 0x2d   4 args  retstub 0x0a0b
+       ord 51 CREATECOMPATIBLEBITMAP id 0x33   6 args  retstub 0x01db
+       ord 52 CREATECOMPATIBLEDC     id 0x34   2 args  retstub 0x01e8
+       ord 66 CREATESOLIDBRUSH       id 0x42   4 args  retstub 0x0306
+     Blocks reversed as always, and each adds up to what its stub declares:
+     (HDC)=2, (HDC,HGDIOBJ)=4, (COLORREF)=4, (HDC,int,int)=6. */
+#define WOWGDI_SELECTOBJECT     0x002d
+#define SEL_ARG_OBJ     0
+#define SEL_ARG_HDC     2
+
+#define WOWGDI_CREATECOMPATBM   0x0033
+#define CCB_ARG_HEIGHT  0
+#define CCB_ARG_WIDTH   2
+#define CCB_ARG_HDC     4
+
+#define WOWGDI_CREATECOMPATDC   0x0034
+#define CCD_ARG_HDC     0
+
+#define WOWGDI_CREATESOLIDBRUSH 0x0042
+#define CSB_ARG_COLOR   0
+
+#define WOWGDI_GETSTOCKOBJECT   0x0057
+#define GSO_ARG_INDEX   0
+
+/* ── ★★★ 0x99 CreateDC, AND ITS ID IS NOT ITS ORDINAL ───────────────────────
+     `CreateDC` is GDI ordinal 53, and its export is `native16` -- 16-bit code
+     that reaches a WOW32 stub from inside its own body -- so `neneeds.py` cannot
+     see the stub and the id had to come from a run. It did, and the call named
+     itself completely:
+
+       FUNC=0x00000099 stub=0x037f args=0x10 retstub=0x026a from=0x09df:0x13bb
+         (0000 0000 | 0000 0000 | 0000 0000 | 0880 09c6)
+         ★ arg[6] 0x09c6:0x0880 = "display"
+
+     Sixteen argument bytes is four far pointers, which is exactly
+     `CreateDC(lpszDriver, lpszDevice, lpszOutput, lpInitData)`, and reversed as
+     always the driver -- pushed first -- is at +12. So this is
+     `CreateDC("display", NULL, NULL, NULL)`: MS Paint asking for a screen DC to
+     size its canvas against.
+   ⚠ NOTE THE ID IS 0x99 AND THE ORDINAL IS 53. Wherever a wrapper reaches a stub
+     from inside itself, the two numbering schemes part company, so an id here
+     must never be inferred from an ordinal the way the direct exports' can be. */
+#define WOWGDI_CREATEDC         0x0099
+#define CDC_ARG_INITDATA 0
+#define CDC_ARG_OUTPUT   4
+#define CDC_ARG_DEVICE   8
+#define CDC_ARG_DRIVER  12
+
 /* GDI tokens sit below the menu tokens (0x4000) and above the window handles,
    so a stray handle of any kind is recognisable on sight in a log. */
 #define WOWGDI_BASE      0x2000
 #define WOWGDI_STEP      0x0008
 #define WOWGDI_MAX       256
 
-typedef struct { WORD h; HGDIOBJ o; int isdc; } wowgdi_obj_t;
+/* ── ★★ THREE KINDS, NOT TWO -- AND THE THIRD IS WHY THIS IS NOT A BOOLEAN. ──
+     A handle's kind decides which call is allowed to dispose of it, and getting
+     that wrong is not a loud failure, it is a leak or a corrupted DC cache:
+
+       OBJ    a brush/pen/bitmap/font        -> DeleteObject
+       DC     from CreateDC/CreateCompatibleDC -> DeleteDC
+       WINDC  BORROWED from GetDC/GetWindowDC  -> ReleaseDC, and ONLY ReleaseDC
+
+     The third kind arrived with `GetDC`, which is USER's call and not GDI's --
+     so the first thing that ever hands this host a DC is in another id space
+     entirely. `DeleteDC` on a borrowed DC is a documented bug (the DC belongs to
+     the window's cache, not to the caller), and this map is the only place that
+     can still tell the difference, so it records it rather than reconstructing
+     it later from which call happens to arrive. */
+#define WOWGDI_KIND_OBJ    0
+#define WOWGDI_KIND_DC     1
+#define WOWGDI_KIND_WINDC  2
+/* A fourth: the system's own objects, which belong to nobody and must not be
+   destroyed. Win32 tolerates DeleteObject on one silently; a guest doing it is
+   still worth seeing, and it costs one value in this enum to be able to say so. */
+#define WOWGDI_KIND_STOCK  3
+
+typedef struct { WORD h; HGDIOBJ o; int kind; } wowgdi_obj_t;
 static wowgdi_obj_t g_wg_obj[WOWGDI_MAX];
 static int          g_wg_nobj = 0;
 
-/* One token per object. `isdc` is kept because DeleteDC and DeleteObject are
-   different calls with different rules, and handing one to the other is a defect
-   this map can catch instead of passing on to Win32. */
-static WORD wowgdi_h16(HGDIOBJ o, int isdc)
+/* One token per object. `kind` is kept because DeleteDC, DeleteObject and
+   ReleaseDC are three different calls with three different rules, and handing an
+   object to the wrong one is a defect this map can catch instead of passing on
+   to Win32. */
+static WORD wowgdi_h16(HGDIOBJ o, int kind)
 {
     int i;
     if (!o) return 0;
     for (i = 0; i < g_wg_nobj; ++i)
         if (g_wg_obj[i].o == o) return g_wg_obj[i].h;
-    if (g_wg_nobj >= WOWGDI_MAX) return 0;
-    i = g_wg_nobj++;
+    for (i = 0; i < g_wg_nobj; ++i)                    /* reuse a freed slot */
+        if (!g_wg_obj[i].h && !g_wg_obj[i].o) break;
+    if (i == g_wg_nobj) {
+        if (g_wg_nobj >= WOWGDI_MAX) return 0;
+        i = g_wg_nobj++;
+    }
     g_wg_obj[i].o = o;
-    g_wg_obj[i].isdc = isdc;
+    g_wg_obj[i].kind = kind;
     g_wg_obj[i].h = (WORD)(WOWGDI_BASE + i * WOWGDI_STEP);
     return g_wg_obj[i].h;
 }
 
-static HGDIOBJ wowgdi_h32(WORD h, int *isdc)
+static HGDIOBJ wowgdi_h32(WORD h, int *kind)
 {
     int i;
-    if (isdc) *isdc = 0;
+    if (kind) *kind = -1;
     if (!h) return NULL;
     for (i = 0; i < g_wg_nobj; ++i)
         if (g_wg_obj[i].h == h) {
-            if (isdc) *isdc = g_wg_obj[i].isdc;
+            if (kind) *kind = g_wg_obj[i].kind;
             return g_wg_obj[i].o;
         }
     return NULL;
@@ -85,7 +175,15 @@ static HGDIOBJ wowgdi_h32(WORD h, int *isdc)
 
 /* Forget a token whose object has been destroyed. ⚠ The slot is cleared rather
    than compacted: a token is its INDEX, so compacting would silently rename
-   every object above it. */
+   every object above it.
+ ⚠ A CLEARED SLOT IS REUSED, and that is a deliberate trade. Paint takes a DC and
+   releases it on every single paint, so 256 slots without reuse are gone in
+   seconds and the map would start refusing handles -- a certain failure traded
+   for a possible one. The possible one is real and is named here rather than
+   left to be discovered: a guest that keeps a token past its ReleaseDC will,
+   after a reuse, name a DIFFERENT object instead of failing. That is exactly
+   what Win32 does with its own handles, so a guest that does it is already
+   broken on real Windows. */
 static void wowgdi_forget(WORD h)
 {
     int i;
@@ -113,9 +211,10 @@ static int wowgdi_call(wow32_frame_t *f, char *note, int notecap)
     case WOWGDI_GETDEVICECAPS: {
         WORD hdc = wow32_argw(f, GDC_ARG_HDC);
         WORD idx = wow32_argw(f, GDC_ARG_INDEX);
-        int  isdc = 0;
-        HGDIOBJ o = wowgdi_h32(hdc, &isdc);
+        int  kind = -1;
+        HGDIOBJ o = wowgdi_h32(hdc, &kind);
         int k = 0, v;
+        int isdc = (kind == WOWGDI_KIND_DC || kind == WOWGDI_KIND_WINDC);
         wu_puts(note, notecap, &k, "GetDeviceCaps(0x");
         wu_puthex(note, notecap, &k, hdc, 4);
         wu_puts(note, notecap, &k, ", 0x");
@@ -135,6 +234,285 @@ static int wowgdi_call(wow32_frame_t *f, char *note, int notecap)
         return 1;
     }
 
+    /* ── ★★ 0x57 GetStockObject(nIndex) ─────────────────────────────────────
+         Straight through, on the same claim the SM_* indices and the DC
+         capability indices travel on: Win32 inherited the stock-object indices
+         from Win16 unchanged (WHITE_BRUSH 0 .. SYSTEM_FIXED_FONT 16). Win16
+         stopped at 16, so an index above that is a guest asking for something
+         its own Windows never had, and it is refused rather than quietly given
+         a Win32-only object.
+       ⚠ THE TOKEN IS MINTED AS STOCK so that a later DeleteObject on it can say
+         what it is instead of asking Win32 to destroy something the system owns.
+       ★ The map de-duplicates by object, so the same stock object always comes
+         back as the same token -- which matters, because guests compare them. */
+    case WOWGDI_GETSTOCKOBJECT: {
+        WORD idx = wow32_argw(f, GSO_ARG_INDEX);
+        HGDIOBJ o;
+        WORD tok;
+        int k = 0;
+        wu_puts(note, notecap, &k, "GetStockObject(0x");
+        wu_puthex(note, notecap, &k, idx, 4);
+        wu_puts(note, notecap, &k, ")");
+        if (idx > 16) {
+            wu_puts(note, notecap, &k, " -- ★ NOT A Win16 STOCK OBJECT (they stop"
+                                       " at 16); answered 0");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        o = GetStockObject((int)idx);
+        tok = wowgdi_h16(o, WOWGDI_KIND_STOCK);
+        if (!tok) {
+            wu_puts(note, notecap, &k, " -- ★ THE GDI TOKEN MAP IS FULL;"
+                                       " answered 0");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        wu_puts(note, notecap, &k, " -> token 0x");
+        wu_puthex(note, notecap, &k, tok, 4);
+        wow32_setret(f, tok);
+        return 1;
+    }
+
+    /* ── ★★★ 0x99 CreateDC(lpszDriver, lpszDevice, lpszOutput, lpInitData) ──
+       ★ ONLY "DISPLAY" IS ANSWERED, and that is a decision rather than a
+         shortcut. The screen is a device this host really does have, and Win32's
+         own `CreateDCA("DISPLAY", NULL, NULL, NULL)` is the same request for the
+         same thing. A printer driver name is not: it would name a Windows 3.1
+         driver that does not exist on XP, and handing the string to Win32 would
+         either fail obscurely or -- worse -- succeed against some unrelated
+         printer the user did not ask to be drawn on. Refused, by name, in the
+         log.
+       ⚠ lpInitData IS IGNORED WHEN IT IS NULL, WHICH IS THE ONLY CASE SEEN. It
+         carries a DEVMODE for printers; if one ever arrives here it will be
+         reported rather than silently dropped, because a DEVMODE that is not
+         honoured changes what gets drawn. */
+    case WOWGDI_CREATEDC: {
+        char drv[64], dev[64];
+        HDC dc;
+        WORD tok;
+        int  k = 0, isdisp, i;
+        DWORD init = wow32_argd(f, CDC_ARG_INITDATA);
+        wow32_argstr(f, CDC_ARG_DRIVER, drv, sizeof drv);
+        wow32_argstr(f, CDC_ARG_DEVICE, dev, sizeof dev);
+        wu_puts(note, notecap, &k, "CreateDC driver=");
+        wu_putq(note, notecap, &k, drv);
+        if (dev[0]) { wu_puts(note, notecap, &k, " device="); wu_putq(note, notecap, &k, dev); }
+        /* Case-insensitively "DISPLAY" -- the guest writes it lower case. */
+        isdisp = 1;
+        for (i = 0; i < 7; ++i) {
+            char c = drv[i];
+            if (c >= 'a' && c <= 'z') c = (char)(c - 32);
+            if (c != "DISPLAY"[i]) { isdisp = 0; break; }
+        }
+        if (isdisp && drv[7]) isdisp = 0;
+        if (!isdisp) {
+            wu_puts(note, notecap, &k, " -- ★ NOT THE DISPLAY. That names a"
+                                       " Windows 3.1 device driver which does not"
+                                       " exist here, so it is refused rather than"
+                                       " resolved against one of the host's own"
+                                       " devices; answered 0");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        if (init)
+            wu_puts(note, notecap, &k, " -- ⚠ lpInitData IS NOT NULL and is being"
+                                       " ignored (it carries a DEVMODE)");
+        dc = CreateDCA("DISPLAY", NULL, NULL, NULL);
+        tok = dc ? wowgdi_h16((HGDIOBJ)dc, WOWGDI_KIND_DC) : 0;
+        if (!tok) {
+            if (dc) DeleteDC(dc);
+            wu_puts(note, notecap, &k, dc ? " -- ★ THE GDI TOKEN MAP IS FULL; the"
+                                            " DC was deleted again and 0 answered"
+                                          : " -- ★ THE OS REFUSED IT; answered 0");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        wu_puts(note, notecap, &k, " -> screen DC token 0x");
+        wu_puthex(note, notecap, &k, tok, 4);
+        wow32_setret(f, tok);
+        return 1;
+    }
+
+    /* ── ★★ 0x34 CreateCompatibleDC(hDC) ────────────────────────────────────
+         The memory DC a paint program draws its canvas into. hDC == 0 is legal
+         and means "compatible with the screen", so a null token is passed
+         through as NULL rather than refused -- the same rule GetDC follows.
+       ⚠ MINTED AS DC, not WINDC: this one is OWNED by the guest and goes back
+         through DeleteDC. That distinction is the whole reason the map records a
+         kind (see the header). */
+    case WOWGDI_CREATECOMPATDC: {
+        WORD src = wow32_argw(f, CCD_ARG_HDC);
+        int  kind = -1;
+        HGDIOBJ o = src ? wowgdi_h32(src, &kind) : NULL;
+        HDC dc;
+        WORD tok;
+        int k = 0;
+        wu_puts(note, notecap, &k, "CreateCompatibleDC(0x");
+        wu_puthex(note, notecap, &k, src, 4);
+        wu_puts(note, notecap, &k, ")");
+        if (src && (!o || (kind != WOWGDI_KIND_DC && kind != WOWGDI_KIND_WINDC))) {
+            wu_puts(note, notecap, &k, " -- ★ THAT IS NOT ONE OF OUR DC TOKENS;"
+                                       " answered 0");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        if (!src) wu_puts(note, notecap, &k, " (compatible with the SCREEN)");
+        dc = CreateCompatibleDC(src ? (HDC)o : NULL);
+        tok = dc ? wowgdi_h16((HGDIOBJ)dc, WOWGDI_KIND_DC) : 0;
+        if (!tok) {
+            if (dc) DeleteDC(dc);         /* never issue a DC we cannot name */
+            wu_puts(note, notecap, &k, dc ? " -- ★ THE GDI TOKEN MAP IS FULL; the"
+                                            " DC was deleted again and 0 answered"
+                                          : " -- ★ THE OS REFUSED IT; answered 0");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        wu_puts(note, notecap, &k, " -> DC token 0x");
+        wu_puthex(note, notecap, &k, tok, 4);
+        wow32_setret(f, tok);
+        return 1;
+    }
+
+    /* ── ★★★ 0x33 CreateCompatibleBitmap(hDC, nWidth, nHeight) ──────────────
+         MS Paint's canvas itself, and the allocation whose failure it reports as
+         "Not enough memory to edit image".
+       ⚠ THE DIMENSIONS ARE SIGNED 16-BIT. A Win16 program passes ints, and a
+         negative or zero one must not be widened into a huge Win32 request --
+         that would either fail obscurely or succeed at a size nobody asked for.
+       ⚠ AND IT IS COMPATIBLE WITH THE hDC IT IS GIVEN, which is why passing NULL
+         here is NOT the harmless default it is for CreateCompatibleDC: a bitmap
+         compatible with nothing is a 1x1 monochrome one, and a guest that drew
+         into it would get a black-and-white canvas and no explanation. So a null
+         or unknown DC is refused. */
+    case WOWGDI_CREATECOMPATBM: {
+        WORD hdc = wow32_argw(f, CCB_ARG_HDC);
+        int  w   = (int)(short)wow32_argw(f, CCB_ARG_WIDTH);
+        int  h   = (int)(short)wow32_argw(f, CCB_ARG_HEIGHT);
+        int  kind = -1;
+        HGDIOBJ o = wowgdi_h32(hdc, &kind);
+        HBITMAP bm;
+        WORD tok;
+        int k = 0;
+        wu_puts(note, notecap, &k, "CreateCompatibleBitmap(0x");
+        wu_puthex(note, notecap, &k, hdc, 4);
+        wu_puts(note, notecap, &k, ", ");
+        wu_puthex(note, notecap, &k, (DWORD)w, 4);
+        wu_puts(note, notecap, &k, "x");
+        wu_puthex(note, notecap, &k, (DWORD)h, 4);
+        wu_puts(note, notecap, &k, ")");
+        if (!o || (kind != WOWGDI_KIND_DC && kind != WOWGDI_KIND_WINDC)) {
+            wu_puts(note, notecap, &k, " -- ★ THAT IS NOT ONE OF OUR DC TOKENS;"
+                                       " answered 0");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        if (w <= 0 || h <= 0) {
+            wu_puts(note, notecap, &k, " -- ★ A DIMENSION IS NOT POSITIVE;"
+                                       " answered 0 rather than widening it into"
+                                       " a size nobody asked for");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        bm = CreateCompatibleBitmap((HDC)o, w, h);
+        tok = bm ? wowgdi_h16((HGDIOBJ)bm, WOWGDI_KIND_OBJ) : 0;
+        if (!tok) {
+            if (bm) DeleteObject((HGDIOBJ)bm);
+            wu_puts(note, notecap, &k, bm ? " -- ★ THE GDI TOKEN MAP IS FULL; the"
+                                            " bitmap was freed and 0 answered"
+                                          : " -- ★ THE OS REFUSED IT; answered 0");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        wu_puts(note, notecap, &k, " -> bitmap token 0x");
+        wu_puthex(note, notecap, &k, tok, 4);
+        wow32_setret(f, tok);
+        return 1;
+    }
+
+    /* ── ★ 0x42 CreateSolidBrush(crColor) ───────────────────────────────────
+         A COLORREF is a DWORD and means the same thing in both worlds. */
+    case WOWGDI_CREATESOLIDBRUSH: {
+        DWORD col = wow32_argd(f, CSB_ARG_COLOR);
+        HBRUSH br = CreateSolidBrush((COLORREF)col);
+        WORD tok = br ? wowgdi_h16((HGDIOBJ)br, WOWGDI_KIND_OBJ) : 0;
+        int k = 0;
+        wu_puts(note, notecap, &k, "CreateSolidBrush(0x");
+        wu_puthex(note, notecap, &k, col, 8);
+        wu_puts(note, notecap, &k, ")");
+        if (!tok) {
+            if (br) DeleteObject((HGDIOBJ)br);
+            wu_puts(note, notecap, &k, " -- ★ refused or the token map is full;"
+                                       " answered 0");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        wu_puts(note, notecap, &k, " -> brush token 0x");
+        wu_puthex(note, notecap, &k, tok, 4);
+        wow32_setret(f, tok);
+        return 1;
+    }
+
+    /* ── ★★★ 0x2d SelectObject(hDC, hObject) ────────────────────────────────
+         The call that puts the canvas bitmap into the memory DC, and the reason
+         the two above are worth anything.
+       ⚠ IT RETURNS THE OBJECT THAT WAS THERE BEFORE, and that has to come back
+         as a token too -- guests keep it and select it back before deleting the
+         DC, which is the documented way to avoid destroying a bitmap that is
+         still selected. A truncated HGDIOBJ here would be handed straight back
+         to us later and would name nothing.
+       ★ The previous object is usually one we never issued (the 1x1 bitmap a new
+         memory DC starts with), so it is minted on the spot as an ordinary
+         object. That is correct: from the guest's side it is simply a handle to
+         give back, and the map now knows it if it returns. */
+    case WOWGDI_SELECTOBJECT: {
+        WORD hdc = wow32_argw(f, SEL_ARG_HDC);
+        WORD hob = wow32_argw(f, SEL_ARG_OBJ);
+        int  dkind = -1, okind = -1;
+        HGDIOBJ d = wowgdi_h32(hdc, &dkind);
+        HGDIOBJ o = wowgdi_h32(hob, &okind);
+        HGDIOBJ prev;
+        WORD tok;
+        int k = 0;
+        wu_puts(note, notecap, &k, "SelectObject(dc 0x");
+        wu_puthex(note, notecap, &k, hdc, 4);
+        wu_puts(note, notecap, &k, ", obj 0x");
+        wu_puthex(note, notecap, &k, hob, 4);
+        wu_puts(note, notecap, &k, ")");
+        if (!d || (dkind != WOWGDI_KIND_DC && dkind != WOWGDI_KIND_WINDC)) {
+            wu_puts(note, notecap, &k, " -- ★ THE DC IS NOT ONE OF OUR TOKENS;"
+                                       " answered 0");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        if (!o) {
+            wu_puts(note, notecap, &k, " -- ★ THE OBJECT IS NOT ONE OF OUR TOKENS;"
+                                       " answered 0");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        if (okind == WOWGDI_KIND_DC || okind == WOWGDI_KIND_WINDC) {
+            wu_puts(note, notecap, &k, " -- ★ THAT IS A DC, NOT A DRAWING OBJECT;"
+                                       " refused");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        prev = SelectObject((HDC)d, o);
+        if (!prev) {
+            wu_puts(note, notecap, &k, " -- ★ THE OS REFUSED THE SELECTION;"
+                                       " answered 0");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        tok = wowgdi_h16(prev, WOWGDI_KIND_OBJ);
+        wu_puts(note, notecap, &k, " -> previous 0x");
+        wu_puthex(note, notecap, &k, tok, 4);
+        if (!tok)
+            wu_puts(note, notecap, &k, " -- ⚠ THE MAP IS FULL, so the guest cannot"
+                                       " select it back");
+        wow32_setret(f, tok);
+        return 1;
+    }
+
     /* ── ★ 0x44 DeleteDC / 0x45 DeleteObject ────────────────────────────────
        ⚠ THE TOKEN IS FORGOTTEN AS WELL AS THE OBJECT DELETED. A Win32 handle is
          reusable once freed, so a token left pointing at a dead HGDIOBJ would
@@ -147,9 +525,10 @@ static int wowgdi_call(wow32_frame_t *f, char *note, int notecap)
     case WOWGDI_DELETEOBJECT: {
         int  wantdc = (f->id == WOWGDI_DELETEDC);
         WORD h = wow32_argw(f, DOBJ_ARG_HANDLE);
-        int  isdc = 0;
-        HGDIOBJ o = wowgdi_h32(h, &isdc);
+        int  kind = -1;
+        HGDIOBJ o = wowgdi_h32(h, &kind);
         int k = 0, ok;
+        int want = wantdc ? WOWGDI_KIND_DC : WOWGDI_KIND_OBJ;
         wu_puts(note, notecap, &k, wantdc ? "DeleteDC 0x" : "DeleteObject 0x");
         wu_puthex(note, notecap, &k, h, 4);
         if (!o) {
@@ -158,11 +537,30 @@ static int wowgdi_call(wow32_frame_t *f, char *note, int notecap)
             wow32_setret(f, 0);
             return 1;
         }
-        if (wantdc != isdc) {
-            wu_puts(note, notecap, &k, isdc ? " -- ★ THAT IS A DC AND THIS IS"
-                                              " DeleteObject; refused"
-                                            : " -- ★ THAT IS NOT A DC AND THIS IS"
-                                              " DeleteDC; refused");
+        /* ⚠ A STOCK OBJECT IS NOT DESTROYED, AND THE CALL STILL SUCCEEDS. The
+             system owns it; Windows makes DeleteObject on one a no-op that
+             reports success, and answering anything else would make a guest
+             think its cleanup had failed. The token is KEPT, because the object
+             is still there and the guest may well ask for it again. */
+        if (kind == WOWGDI_KIND_STOCK) {
+            wu_puts(note, notecap, &k, " -- ★ that is a STOCK object; the system"
+                                       " owns it, so nothing was destroyed and"
+                                       " success answered (as Windows does)");
+            wow32_setret(f, 1);
+            return 1;
+        }
+        /* ⚠ A BORROWED DC IS THE INTERESTING REFUSAL. DeleteDC on a DC that came
+             from GetDC does not fail visibly on Win32 -- it damages the window's
+             DC cache and the symptom surfaces somewhere else entirely. Say which
+             call it should have been. */
+        if (kind != want) {
+            wu_puts(note, notecap, &k,
+                    kind == WOWGDI_KIND_WINDC
+                        ? " -- ★ THAT DC WAS BORROWED FROM A WINDOW (GetDC);"
+                          " it must go back through ReleaseDC, not this. Refused"
+                    : kind == WOWGDI_KIND_DC
+                        ? " -- ★ THAT IS A DC AND THIS IS DeleteObject; refused"
+                        : " -- ★ THAT IS NOT A DC AND THIS IS DeleteDC; refused");
             wow32_setret(f, 0);
             return 1;
         }
