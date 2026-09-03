@@ -70,6 +70,26 @@
 #define WOWUSER_REGCLIPFORMAT    0x91
 #define RCF_ARG_NAME             0
 
+/* ── ★★★ 0x76 RegisterWindowMessage(lpString) ────────────────────────────────
+     Another of the ids USER's export table cannot name, and NOTEPAD names it by
+     what it passes. `notepad seg2:0x05d1` and `seg2:0x05e4` call it twice with
+     strings out of its own DGROUP --
+
+         ds:0x0201 = "commdlg_FindReplace"
+         ds:0x0215 = "commdlg_help"
+
+     -- which are the two message names the common dialogs are documented to
+     register, and each call is followed by `or ax,ax / jne` falling through to
+     `jmp 0x02cb`, the `sub ax,ax / ret` that abandons the whole initialisation.
+     So Notepad shows its window and then throws it away, twice over, for want of
+     a message id.
+   ★ THE ANSWER IS THE OS's, for the same reason RegisterClipboardFormat's is: a
+     registered window message is a name in a SYSTEM-WIDE atom table, and its
+     whole purpose is that two programs which register the same string get the
+     same number. Our own table would agree with nothing. */
+#define WOWUSER_REGWINMSG        0x76
+#define RWM_ARG_NAME             0
+
 /* ── ★★★ 0xad -- "BUILD ME A CURSOR OR AN ICON". ─────────────────────────────
      One of the 56 ids USER's export table cannot name, and the reason it matters
      is NOTEPAD: `notepad seg2:0x02d0` calls `LoadCursor(NULL, 0x7f02)` and
@@ -1681,18 +1701,21 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
        ⚠ Win16's return is a WORD, Win32's a UINT. Registered formats live at
          0xC000..0xFFFF, so the value fits -- but the mask is explicit, because a
          silent truncation is how a host starts handing out ids that collide. */
+    case WOWUSER_REGWINMSG:
     case WOWUSER_REGCLIPFORMAT: {
+        int isclip = (f->id == WOWUSER_REGCLIPFORMAT);
         char name[128];
         UINT fmt = 0;
         int k = 0;
-        wu_puts(note, notecap, &k, "RegisterClipboardFormat ");
+        wu_puts(note, notecap, &k, isclip ? "RegisterClipboardFormat "
+                                          : "RegisterWindowMessage ");
         if (!wow32_argstr(f, RCF_ARG_NAME, name, sizeof name) || !name[0]) {
             wu_puts(note, notecap, &k, "-- no name, answered 0");
             wow32_setret(f, 0);
             return 1;
         }
         wu_putq(note, notecap, &k, name);
-        fmt = RegisterClipboardFormatA(name);
+        fmt = isclip ? RegisterClipboardFormatA(name) : RegisterWindowMessageA(name);
         wu_puts(note, notecap, &k, " -> 0x");
         wu_puthex(note, notecap, &k, fmt, 4);
         if (fmt > 0xFFFF) {

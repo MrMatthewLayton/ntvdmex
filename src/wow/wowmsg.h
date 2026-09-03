@@ -144,6 +144,14 @@
      host that has crashed. Long enough that a scripted keystroke (keys.txt) can
      land inside it, short enough that a run without one still finishes. */
 #define WOWMSG_WAIT_MS  6000
+/* ★ AND IT IS A KNOB NOW (session 43, `wowidle.txt`): **0 means forever**, which
+     is what a real Win16 task does and what an interactive session needs. A
+     program sitting in GetMessage with its window on the desktop is not stuck, it
+     is waiting for the user -- and quitting it after six seconds makes it
+     impossible to type into. The bound stays the default so an unattended run
+     still finishes. */
+static DWORD g_wowmsg_wait_ms = WOWMSG_WAIT_MS;
+static int   g_wm_saidwait    = 0;   /* the setting is announced once, at first use */
 
 typedef struct {
     WORD  hwnd, msg, wparam;

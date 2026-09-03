@@ -144,6 +144,14 @@
 #define PITPRIO_PATH     "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\pitprio.txt"
 #define PITINJ_PATH      "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\pitinj.txt"
 #define UITICK_PATH      "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\uitick.txt"
+/* ── ★ HOW LONG A BLOCKED Win16 TASK WAITS. (GH #128, session 43) ────────────────
+     Milliseconds, decimal; **0 means FOREVER**, which is what a real Win16 task
+     does and what an INTERACTIVE session needs -- a program sitting in GetMessage
+     with its window on the desktop is not stuck, it is waiting for the user, and
+     a host that quits it after six seconds makes it impossible to type into.
+     Absent = WOWMSG_WAIT_MS, the bound a harness run needs so that a guest which
+     will never receive anything still lets the run finish. */
+#define WOWIDLE_PATH     "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\wowidle.txt"
 #define KEYIRQ_PATH      "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\keyirq.txt"
 #define MSENS_PATH       "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\msens.txt"
 #define DOSVER_PATH      "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\dosver.txt"
@@ -10970,6 +10978,24 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                          make the thing we are waiting for impossible. */
                     if (f.id == WOWUSER_GETMESSAGE && !g_wm_count && !g_wm_quit) {
                         DWORD t0 = GetTickCount(), waited;
+                        /* ★ SAY THE SETTING AT THE POINT OF USE, ONCE. The startup
+                             knob-read logs where the answer is decided, which is
+                             not where it matters and -- measured -- did not reach
+                             the log at all. Here it cannot be missed: the first
+                             task that blocks prints what it is waiting for, so
+                             "the guest quit after six seconds" and "the guest is
+                             waiting for you" are never the same line. */
+                        if (!g_wm_saidwait) {
+                            char sb2[128], *sq = sb2;
+                            g_wm_saidwait = 1;
+                            sq = zput(sq, "\n     WOWMSG: a blocked GetMessage waits ");
+                            if (g_wowmsg_wait_ms) { sq = zhex(sq, g_wowmsg_wait_ms);
+                                                    sq = zput(sq, " ms then answers"
+                                                                  " WM_QUIT"); }
+                            else sq = zput(sq, "FOREVER (wowidle.txt = 0)");
+                            sq = zput(sq, "\r\n");
+                            log_append(LOG_PATH, sb2, sq); serial_out(sb2, sq);
+                        }
                         /* ── ★★★ A BLOCKED Win16 TASK IS A Win32 MESSAGE PUMP.
                              (session 42, replacing session 41's keyboard-event
                              wait.) The input no longer comes from the DOS 8042
@@ -10984,7 +11010,8 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                              instant a message arrives, so a keystroke is not
                              delayed by the poll interval, and it does not spin. */
                         while (g_running && !g_wm_count && !g_wm_quit
-                               && GetTickCount() - t0 < WOWMSG_WAIT_MS) {
+                               && (!g_wowmsg_wait_ms
+                                   || GetTickCount() - t0 < g_wowmsg_wait_ms)) {
                             if (!wowwin_pump(64))
                                 MsgWaitForMultipleObjects(0, NULL, FALSE, 50,
                                                           QS_ALLINPUT);
@@ -14658,6 +14685,26 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
               v = v * 10 + (c[i] - '0');
           }
           if (rd && c[0] >= '0' && c[0] <= '9' && v <= 100) g_ui_tick_min_ms = v;
+      } }
+    /* wowidle.txt -- how long a Win16 task blocked in GetMessage waits. 0 = forever. */
+    { HANDLE hpw = CreateFileA(WOWIDLE_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                               NULL, OPEN_EXISTING, 0, NULL);
+      if (hpw != INVALID_HANDLE_VALUE) {
+          char c[12]; DWORD rd = 0, v = 0; int i;
+          ReadFile(hpw, c, sizeof c, &rd, NULL); CloseHandle(hpw);
+          for (i = 0; i < (int)rd; ++i) {
+              if (c[i] < '0' || c[i] > '9') break;
+              v = v * 10 + (DWORD)(c[i] - '0');
+          }
+          if (rd && c[0] >= '0' && c[0] <= '9') {
+              char wb[160], *wq = wb;
+              g_wowmsg_wait_ms = v;
+              wq = zput(wq, "WOWMSG: GetMessage idle wait = ");
+              if (v) { wq = zhex(wq, v); wq = zput(wq, " ms"); }
+              else     wq = zput(wq, "FOREVER (interactive: the guest is waiting "
+                                     "for the user, not stuck)");
+              wq = zput(wq, "\r\n"); log_append(LOG_PATH, wb, wq); serial_out(wb, wq);
+          }
       } }
     /* keyirq.txt -- the knob 5b6a4a6's message promises. It was lost in that session's
        revert, so the escape hatch documented at the retry site did not actually exist. */
