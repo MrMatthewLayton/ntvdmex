@@ -26,13 +26,19 @@
  * as the windows, the menus and the cursor/icon tokens, and for the same reason:
  * a truncated pointer would name the wrong object and would not fail loudly.
  *
- * ⚠⚠ AND THIS IS WHERE THE HONEST GAP IS TODAY. The calls that PRODUCE a DC or
- *   an object are not serviced yet (`CreateDC` and `GetStockObject` are native16
- *   wrappers whose internal stubs no run has named), so a handle arriving here
- *   will usually be one this host never issued. That is reported as exactly
- *   that -- "not one of our GDI tokens" -- and answered with GDI's own failure
- *   value, rather than guessed at. When the producers go in, these three already
- *   work; until then they say what is missing instead of pretending.
+ * ── ★★ THE PRODUCERS ARRIVED IN SESSION 45, AND THE FIRST ONE WAS NOT HERE ──
+ * Session 44 left this file saying the honest gap was that nothing yet PRODUCED
+ * a DC or an object, so a handle arriving here would be one this host never
+ * issued. That is now closed, and the way it closed is worth keeping: the first
+ * device context this host ever issued came out of **USER's `GetDC`**, not out
+ * of GDI at all (see wowuser.h). The plan on record had GDI's own `CreateDC`
+ * first; a run of MS Paint said otherwise.
+ * The producers here now are `CreateDC` (0x99), `CreateCompatibleDC` (0x34),
+ * `CreateBitmap` (0x30), `CreateCompatibleBitmap` (0x33), `CreateSolidBrush`
+ * (0x42) and `GetStockObject` (0x57) -- and three of those six are `native16`
+ * wrappers whose ids NO amount of reading the export table could give. Each was
+ * named from the call it actually made, and each is written up where it is
+ * implemented.
  */
 
 #define WOWGDI_DELETEDC       0x0044
@@ -104,6 +110,43 @@
 
 #define WOWGDI_GETSTOCKOBJECT   0x0057
 #define GSO_ARG_INDEX   0
+
+/* ── ★★★ 0x52 GetObject(hObject, nCount, lpObject) ──────────────────────────
+     GDI ordinal 82, `native16`, so the id came from the run again:
+
+       FUNC=0x00000052 args=0x08 retstub=0x062c (4ee4 09c7 | 0032 | 2060)
+
+     Eight argument bytes reversed give lpObject at +0 (a far pointer into
+     Paint's own data), nCount at +4 and the object at +6 -- and 0x2060 is one of
+     OUR GDI tokens, which is the confirmation that the last field is the handle.
+
+   ⚠⚠ EVERY ONE OF THESE STRUCTURES IS A DIFFERENT SIZE IN Win16, so this is a
+     CONVERSION and not a copy -- the same trap OPENFILENAME was. Win16 keeps
+     coordinates and dimensions in `int` (2 bytes) where Win32 uses `LONG`:
+         BITMAP    14 bytes here, 24 on Win32
+         LOGFONT   50            , 60
+         LOGPEN    10            , 16
+         LOGBRUSH   8            , 16
+     ★ Paint's `nCount` of 0x32 = 50 is exactly Win16's LOGFONT (5 ints + 8 bytes
+       + a 32-byte face name), which is what makes the reading self-checking
+       rather than a size recalled from somewhere.
+   ⚠ THE TYPE COMES FROM THE OBJECT, NOT FROM nCount. Dispatching on the byte
+     count would be guessing at what the guest meant and would break the moment
+     one asked for a partial structure -- which Win16 explicitly allows. The OS
+     is asked what the handle actually is, the full Win16 form is built, and then
+     `min(nCount, that)` bytes are handed over, which is what Windows does.
+   ⚠ ONLY THE FONT CASE HAS BEEN SEEN IN A RUN. The other three are written from
+     the same size arithmetic and are marked in the log as they go, so the first
+     run that exercises one says so rather than passing silently. */
+#define WOWGDI_GETOBJECT        0x0052
+#define GOB_ARG_BUF     0
+#define GOB_ARG_COUNT   4
+#define GOB_ARG_HANDLE  6
+
+#define WOW16_BITMAP_CB    14
+#define WOW16_LOGFONT_CB   50
+#define WOW16_LOGPEN_CB    10
+#define WOW16_LOGBRUSH_CB   8
 
 /* ── ★★★ 0x99 CreateDC, AND ITS ID IS NOT ITS ORDINAL ───────────────────────
      `CreateDC` is GDI ordinal 53, and its export is `native16` -- 16-bit code
@@ -594,6 +637,118 @@ static int wowgdi_call(wow32_frame_t *f, char *note, int notecap)
             wu_puts(note, notecap, &k, " -- ⚠ THE MAP IS FULL, so the guest cannot"
                                        " select it back");
         wow32_setret(f, tok);
+        return 1;
+    }
+
+    /* ── ★★★ 0x52 GetObject -- see the long note above. ─────────────────────*/
+    case WOWGDI_GETOBJECT: {
+        WORD h    = wow32_argw(f, GOB_ARG_HANDLE);
+        WORD want = wow32_argw(f, GOB_ARG_COUNT);
+        volatile BYTE *dst = wow32_argptr(f, GOB_ARG_BUF);
+        int kind = -1;
+        HGDIOBJ o = wowgdi_h32(h, &kind);
+        BYTE b[WOW16_LOGFONT_CB];
+        DWORD type;
+        int n = 0, k = 0, i;
+        const char *what = "?";
+
+        wu_puts(note, notecap, &k, "GetObject 0x");
+        wu_puthex(note, notecap, &k, h, 4);
+        wu_puts(note, notecap, &k, " cb=0x");
+        wu_puthex(note, notecap, &k, want, 4);
+        if (!o) {
+            wu_puts(note, notecap, &k, " -- ★ NOT ONE OF OUR GDI TOKENS;"
+                                       " answered 0");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        for (i = 0; i < (int)sizeof b; ++i) b[i] = 0;
+        type = GetObjectType(o);
+        if (type == OBJ_BITMAP) {
+            BITMAP bm;
+            if (!GetObject(o, (int)sizeof bm, &bm)) type = 0;
+            else {
+                what = "BITMAP";
+                n = WOW16_BITMAP_CB;
+                wow32_pokew(b + 0,  (WORD)(short)bm.bmType);
+                wow32_pokew(b + 2,  (WORD)(short)bm.bmWidth);
+                wow32_pokew(b + 4,  (WORD)(short)bm.bmHeight);
+                wow32_pokew(b + 6,  (WORD)(short)bm.bmWidthBytes);
+                b[8]  = (BYTE)bm.bmPlanes;
+                b[9]  = (BYTE)bm.bmBitsPixel;
+                /* ⚠ bmBits STAYS NULL, and that is correct rather than lazy: it
+                     is a 32-bit host pointer with no 16-bit address, and Windows
+                     itself returns NULL here for a device-dependent bitmap. */
+            }
+        } else if (type == OBJ_FONT) {
+            LOGFONTA lf;
+            if (!GetObjectA(o, (int)sizeof lf, &lf)) type = 0;
+            else {
+                what = "LOGFONT";
+                n = WOW16_LOGFONT_CB;
+                wow32_pokew(b + 0,  (WORD)(short)lf.lfHeight);
+                wow32_pokew(b + 2,  (WORD)(short)lf.lfWidth);
+                wow32_pokew(b + 4,  (WORD)(short)lf.lfEscapement);
+                wow32_pokew(b + 6,  (WORD)(short)lf.lfOrientation);
+                wow32_pokew(b + 8,  (WORD)(short)lf.lfWeight);
+                b[10] = lf.lfItalic;        b[11] = lf.lfUnderline;
+                b[12] = lf.lfStrikeOut;     b[13] = lf.lfCharSet;
+                b[14] = lf.lfOutPrecision;  b[15] = lf.lfClipPrecision;
+                b[16] = lf.lfQuality;       b[17] = lf.lfPitchAndFamily;
+                for (i = 0; i < 32 && lf.lfFaceName[i]; ++i)
+                    b[18 + i] = (BYTE)lf.lfFaceName[i];
+            }
+        } else if (type == OBJ_PEN || type == OBJ_EXTPEN) {
+            LOGPEN lp;
+            if (!GetObject(o, (int)sizeof lp, &lp)) type = 0;
+            else {
+                what = "LOGPEN";
+                n = WOW16_LOGPEN_CB;
+                wow32_pokew(b + 0, (WORD)lp.lopnStyle);
+                wow32_pokew(b + 2, (WORD)(short)lp.lopnWidth.x);
+                wow32_pokew(b + 4, (WORD)(short)lp.lopnWidth.y);
+                wow32_pokew(b + 6, (WORD)(lp.lopnColor & 0xFFFF));
+                wow32_pokew(b + 8, (WORD)(lp.lopnColor >> 16));
+            }
+        } else if (type == OBJ_BRUSH) {
+            LOGBRUSH lb;
+            if (!GetObject(o, (int)sizeof lb, &lb)) type = 0;
+            else {
+                what = "LOGBRUSH";
+                n = WOW16_LOGBRUSH_CB;
+                wow32_pokew(b + 0, (WORD)lb.lbStyle);
+                wow32_pokew(b + 2, (WORD)(lb.lbColor & 0xFFFF));
+                wow32_pokew(b + 4, (WORD)(lb.lbColor >> 16));
+                wow32_pokew(b + 6, (WORD)lb.lbHatch);
+            }
+        } else {
+            type = 0;
+        }
+        if (!type || !n) {
+            wu_puts(note, notecap, &k, " -- ★ THE OS WILL NOT DESCRIBE THAT OBJECT"
+                                       " (not a bitmap, font, pen or brush);"
+                                       " answered 0");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        wu_puts(note, notecap, &k, " -> ");
+        wu_puts(note, notecap, &k, what);
+        wu_puts(note, notecap, &k, " (Win16 form is 0x");
+        wu_puthex(note, notecap, &k, (DWORD)n, 2);
+        wu_puts(note, notecap, &k, " bytes)");
+        /* ★ A NULL buffer is a legal QUERY: Win16 answers the size needed. */
+        if (!dst) {
+            wu_puts(note, notecap, &k, " -- lpObject is NULL, so this is a size"
+                                       " query");
+            wow32_setret(f, (DWORD)n);
+            return 1;
+        }
+        if ((int)want < n) {
+            n = (int)want;                 /* a partial read is allowed */
+            wu_puts(note, notecap, &k, " -- PARTIAL, the guest asked for less");
+        }
+        for (i = 0; i < n; ++i) dst[i] = b[i];
+        wow32_setret(f, (DWORD)n);
         return 1;
     }
 
