@@ -70,6 +70,9 @@
    pump on the wrong thread can be refused rather than silently doing nothing. */
 static DWORD g_ww_thread = 0;
 static DWORD g_ww_created = 0, g_ww_msgs = 0;
+/* Win32 messages this thread has dispatched for the guest's windows. The answer to
+   "is the window hung", which cannot be read off anything else. */
+static DWORD g_ww_pumped = 0;
 
 /* Forward: the window table this proc maps through. All defined in wowuser.h,
    which owns the table and is included after this file. */
@@ -116,6 +119,25 @@ static LRESULT CALLBACK wowwin_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
         if (h16) { wowmsg_post(h16, (WORD)msg, 0, 0, GetTickCount(), 0, 0);
                    ++g_ww_msgs; return 0; }
         break;
+    /* ── ★ FOCUS AND SIZE, BECAUSE THE GUEST ACTS ON THEM. ────────────────────
+         A Win16 application puts the caret where it belongs by handling
+         WM_SETFOCUS -- Notepad's answer to it is `SetFocus(its edit control)` --
+         so a host that never delivers one leaves a window nobody can type into
+         and no caret anywhere. WM_SIZE is the same shape: the guest lays its
+         children out in response to it.
+       ⚠ ON REAL WINDOWS THESE ARE **SENT**, NOT POSTED, and here they are posted:
+         the guest sees them at its next GetMessage rather than immediately.
+         Delivering them synchronously means re-entering the guest from inside a
+         Win32 callback, which needs the nested run this host has not built yet.
+         The ordering is therefore slightly wrong and is written down rather than
+         discovered -- it is invisible for a program that only uses them to move
+         focus and lay out children, which is what these two do.
+       ⚠ DefWindowProc still runs afterwards, so the OS keeps its own idea of
+         focus and size; the guest is being told, not put in charge. */
+    case WM_SETFOCUS: case WM_KILLFOCUS: case WM_SIZE:
+        if (h16) { wowmsg_post(h16, (WORD)msg, (WORD)wp, (DWORD)lp,
+                               GetTickCount(), 0, 0); ++g_ww_msgs; }
+        break;
     default: break;
     }
     /* ── ★ THE RIGHT DEFAULT PROCEDURE, WHICH IS WHAT MAKES MDI WORK ──────────
@@ -154,7 +176,7 @@ static int wowwin_pump(int budget)
     while (n < budget && PeekMessageA(&m, NULL, 0, 0, PM_REMOVE)) {
         TranslateMessage(&m);
         DispatchMessageA(&m);
-        ++n;
+        ++n; ++g_ww_pumped;
     }
     return n;
 }
@@ -173,7 +195,7 @@ static int wowwin_pump(int budget)
      braces -- it is what turns a wrong assumption into a visible line instead of
      a window with no cursor. */
 static int wowwin_register(const char *name16, char *out32, int cap,
-                           WORD curord, WORD icoord, int *curfell)
+                           WORD curord, HICON hico, int *curfell)
 {
     WNDCLASSA wc;
     int i = 0, k;
@@ -188,7 +210,7 @@ static int wowwin_register(const char *name16, char *out32, int cap,
         if (curord && curfell) *curfell = 1;
         wc.hCursor = LoadCursorA(NULL, IDC_ARROW);
     }
-    if (icoord) wc.hIcon = LoadIconA(NULL, MAKEINTRESOURCEA(icoord));
+    wc.hIcon = hico;          /* built by the caller: predefined, or the app's own */
     wc.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1);
     wc.lpszClassName = out32;
     if (RegisterClassA(&wc)) return 1;

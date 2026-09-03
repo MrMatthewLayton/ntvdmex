@@ -25,6 +25,7 @@
 #include "../wow/wowsched.h" /* GH #128: ...and the Win16 task scheduler, which is also ours */
 #include "../wow/wowcall.h" /* GH #128: ...and the OTHER direction -- calling 16-bit code */
 #include "../wow/wowmsg.h" /* GH #128: ...and the MESSAGE QUEUE the loop turns on */
+#include "../wow/wowres.h" /* GH #128: ...and the guest's OWN menu and icons */
 #include "../wow/wowwin.h" /* GH #128: ...and a Win16 window IS a real Win32 window */
 #include "../wow/wowuser.h" /* GH #128: USER.EXE's id space -- a DIFFERENT one; see the file */
 #include "dos_mcb.h"
@@ -11009,12 +11010,39 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                            ⚠ MsgWaitForMultipleObjects, not Sleep: it wakes the
                              instant a message arrives, so a keystroke is not
                              delayed by the poll interval, and it does not spin. */
-                        while (g_running && !g_wm_count && !g_wm_quit
-                               && (!g_wowmsg_wait_ms
-                                   || GetTickCount() - t0 < g_wowmsg_wait_ms)) {
-                            if (!wowwin_pump(64))
-                                MsgWaitForMultipleObjects(0, NULL, FALSE, 50,
-                                                          QS_ALLINPUT);
+                        {   /* ── ★ A HEARTBEAT, BECAUSE "NOT RESPONDING" IS A
+                                 QUESTION ABOUT THIS LOOP. (session 43) The windows
+                                 belong to this thread, so if XP calls the guest's
+                                 window "Not Responding" the answer is either "this
+                                 loop is not running" or "it is running and
+                                 dispatching nothing" -- and those need completely
+                                 different fixes. One line every two seconds says
+                                 which, and a bounded count keeps a long idle from
+                                 filling the log. */
+                            DWORD beat = t0; unsigned beats = 0;
+                            DWORD pumped0 = g_ww_pumped;
+                            while (g_running && !g_wm_count && !g_wm_quit
+                                   && (!g_wowmsg_wait_ms
+                                       || GetTickCount() - t0 < g_wowmsg_wait_ms)) {
+                                if (!wowwin_pump(64))
+                                    MsgWaitForMultipleObjects(0, NULL, FALSE, 50,
+                                                              QS_ALLINPUT);
+                                if (beats < 20 && GetTickCount() - beat >= 2000) {
+                                    char hb[160], *hq = hb;
+                                    beat = GetTickCount(); ++beats;
+                                    hq = zput(hq, "     WOWMSG: blocked 0x");
+                                    hq = zhex(hq, beat - t0);
+                                    hq = zput(hq, " ms; Win32 messages dispatched on"
+                                                  " this thread since blocking 0x");
+                                    hq = zhex(hq, g_ww_pumped - pumped0);
+                                    hq = zput(hq, " (total 0x");
+                                    hq = zhex(hq, g_ww_pumped);
+                                    hq = zput(hq, "), Win16 queued 0x");
+                                    hq = zhex(hq, (DWORD)g_wm_count);
+                                    hq = zput(hq, "\r\n");
+                                    log_append(LOG_PATH, hb, hq); serial_out(hb, hq);
+                                }
+                            }
                         }
                         waited = GetTickCount() - t0;
                         p = zput(p, "\n     WOWMSG: GetMessage with an empty queue"

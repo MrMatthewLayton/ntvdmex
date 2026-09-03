@@ -90,6 +90,15 @@
 #define WOWUSER_REGWINMSG        0x76
 #define RWM_ARG_NAME             0
 
+/* SetWindowText(hWnd, lpString) -- 6 bytes, reversed: +0/+2 the string's far
+   pointer, +4 the window. Without it a window's caption stays whatever
+   CreateWindow was given, which for NOTEPAD is the empty string -- so its title
+   bar and its taskbar button are blank and it looks like a window with no name
+   rather than a program that has not been told to say one. */
+#define WOWUSER_SETWINDOWTEXT    0x25
+#define SWT_ARG_TEXT             0
+#define SWT_ARG_HWND             4
+
 /* ── ★★★ 0xad -- "BUILD ME A CURSOR OR AN ICON". ─────────────────────────────
      One of the 56 ids USER's export table cannot name, and the reason it matters
      is NOTEPAD: `notepad seg2:0x02d0` calls `LoadCursor(NULL, 0x7f02)` and
@@ -131,6 +140,7 @@
 #define AD_ARG_NAMELO            14
 #define AD_ARG_NAMEHI            16
 #define AD_KIND_PREDEFINED       1
+#define AD_KIND_MODULERES        3
 
 /* Tokens live well above the window handles (0x0100 + n*0x20) so a stray one is
    never mistaken for a window, and vice versa. */
@@ -140,7 +150,9 @@
 
 typedef struct {
     WORD h;                          /* 0 = free */
-    WORD ord;                        /* the predefined ordinal the guest asked for */
+    WORD ord;                        /* the ordinal the guest asked for */
+    WORD kind;                       /* 1 = predefined system object, 3 = the
+                                        MODULE's own resource */
 } wowuser_sysres_t;
 
 static wowuser_sysres_t g_wu_sysres[WOWUSER_MAX_SYSRES];
@@ -153,6 +165,16 @@ static WORD wowuser_sysres_ord(WORD h)
     if (!h) return 0;
     for (i = 0; i < g_wu_nsysres; ++i)
         if (g_wu_sysres[i].h == h) return g_wu_sysres[i].ord;
+    return 0;
+}
+
+/* Which kind of thing the token stands for -- 0 if it is not one of ours. */
+static WORD wowuser_sysres_kind(WORD h)
+{
+    int i;
+    if (!h) return 0;
+    for (i = 0; i < g_wu_nsysres; ++i)
+        if (g_wu_sysres[i].h == h) return g_wu_sysres[i].kind;
     return 0;
 }
 
@@ -395,8 +417,14 @@ typedef struct {
     int   reg32;                     /* 1 = a real Win32 class is behind this */
     /* The predefined ordinals resolved out of hCursor/hIcon at registration --
        kept only so the log can say what the class actually got. */
-    WORD  curord, icoord;
+    WORD  curord, icoord, icokind;
     int   curfell;                   /* the OS did not know that cursor ordinal */
+    int   icobits;                   /* colour depth of the icon actually built  */
+    /* What the class said its menu was -- a name, or an ordinal. Recorded and
+       logged; not yet turned into a real HMENU (that needs the guest's own MENU
+       resource, which lives in its NE file). */
+    char  menuname[64];
+    WORD  menuord;
 } wowuser_class_t;
 
 static wowuser_class_t g_wu_class[WOWUSER_MAX_CLASS];
@@ -515,6 +543,7 @@ typedef struct wowuser_win_s {
     /* An EDIT control's text: a Win16 LOCAL handle in the APPLICATION's own
        heap, allocated by the guest's own KERNEL. See EM_GETHANDLE16. */
     WORD  hmem;
+    int   menuitems;                 /* how many entries its class menu produced */
     /* ★★★★★ THE REAL WINDOW. Session 42: a Win16 window IS a Win32 window on the
          XP desktop, and this is it. The Win16 handle above stays synthetic and
          16-bit because that is what the guest can hold; this is what the OS
@@ -1066,6 +1095,20 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
         c->hicon    = wowuser_peek(wc, WNDCLASS_HICON);
         c->hcursor  = wowuser_peek(wc, WNDCLASS_HCURSOR);
         c->hbrback  = wowuser_peek(wc, WNDCLASS_HBRBACKGROUND);
+        /* ★ THE MENU THE CLASS NAMES. A Win16 program does not have to call
+             LoadMenu -- it can put the resource's NAME in the WNDCLASS and let
+             CreateWindow attach it, which is what Notepad appears to do (it calls
+             LoadMenu never, and it certainly has a File menu). Read and LOGGED
+             before it is used, because "the class named a menu and we ignored it"
+             and "the class named no menu" are different facts and the window looks
+             identical either way. */
+        c->menuname[0] = 0;
+        {   DWORD mn = (DWORD)wowuser_peek(wc, WNDCLASS_MENUNAME)
+                     | ((DWORD)wowuser_peek(wc, WNDCLASS_MENUNAME + 2) << 16);
+            c->menuord = 0;
+            if ((WORD)(mn >> 16) == 0) c->menuord = (WORD)mn;    /* MAKEINTRESOURCE */
+            else wowuser_farstr(f, mn, c->menuname, sizeof c->menuname);
+        }
         /* ★★★★★ AND REGISTER A REAL Win32 CLASS BEHIND IT. (session 42) A Win16
              window is a real window on the real desktop, so its class has to be a
              real class -- and it is OUR window procedure that goes in it, because
@@ -1076,11 +1119,20 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
                  icon is a module resource (kind 3) and is not built yet. */
             WORD curord = wowuser_sysres_ord(c->hcursor);
             WORD icoord = wowuser_sysres_ord(c->hicon);
-            int  fell   = 0;
+            WORD icokind = wowuser_sysres_kind(c->hicon);
+            HICON hico  = NULL;
+            int  fell   = 0, bits = 0;
+            if (icoord && icokind == AD_KIND_MODULERES) {
+                /* The application's own icon, out of its own file. */
+                if (wowres_open(g_wow_cmd_prog)) hico = wowres_icon(icoord, &bits);
+            } else if (icoord) {
+                hico = LoadIconA(NULL, MAKEINTRESOURCEA(icoord));
+            }
             if (!c->reg32)
                 c->reg32 = wowwin_register(c->name, c->cls32, sizeof c->cls32,
-                                           curord, icoord, &fell);
+                                           curord, hico, &fell);
             c->curord = curord; c->icoord = icoord; c->curfell = fell;
+            c->icobits = bits; c->icokind = icokind;
         }
         /* The note is the whole point of servicing this: it is the first time this
            project can say WHAT a Win16 program is trying to put on the screen. */
@@ -1092,8 +1144,24 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
             wu_puts(note, notecap, &k, c->cls32);
             if (c->curord) { wu_puts(note, notecap, &k, " cursor=0x");
                              wu_puthex(note, notecap, &k, c->curord, 4); }
-            if (c->icoord) { wu_puts(note, notecap, &k, " icon=0x");
-                             wu_puthex(note, notecap, &k, c->icoord, 4); }
+            if (c->menuname[0]) { wu_puts(note, notecap, &k, " MENU=");
+                                  wu_putq(note, notecap, &k, c->menuname); }
+            else if (c->menuord) { wu_puts(note, notecap, &k, " MENU=#");
+                                   wu_puthex(note, notecap, &k, c->menuord, 4); }
+            else wu_puts(note, notecap, &k, " (no menu named)");
+            if (c->icoord) {
+                wu_puts(note, notecap, &k, " icon=0x");
+                wu_puthex(note, notecap, &k, c->icoord, 4);
+                if (c->icokind == AD_KIND_MODULERES) {
+                    wu_puts(note, notecap, &k, c->icobits ? " (the app's own, "
+                                                            : " (the app's own -- "
+                                                              "★ NOT BUILT");
+                    if (c->icobits) { wu_puthex(note, notecap, &k,
+                                                (DWORD)c->icobits, 2);
+                                      wu_puts(note, notecap, &k, " bpp)"); }
+                    else wu_puts(note, notecap, &k, ")");
+                }
+            }
             if (c->curfell)
                 wu_puts(note, notecap, &k, " -- ★ THE OS DID NOT KNOW THAT CURSOR"
                                            " ORDINAL; fell back to IDC_ARROW");
@@ -1190,6 +1258,21 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
             }
             if ((w->style & WS_CHILD16) && w->menu)
                 hm = (HMENU)(ULONG_PTR)w->menu;
+            /* ── ★★★ THE CLASS'S OWN MENU, BUILT FROM THE GUEST'S RESOURCE.
+                 A Win16 program does not have to call LoadMenu: it can name the
+                 resource in its WNDCLASS and let CreateWindow attach it, which is
+                 exactly what NOTEPAD does (`MENU=#0001`, and it calls LoadMenu
+                 never). The bytes are in its own file, so the host reads them --
+                 see wowres.h, whose decoding was confirmed against the data before
+                 any of this existed.
+               ⚠ A CHILD WINDOW HAS NO MENU: its hMenu slot is a control id, which
+                 is why this is inside the else. */
+            else if (!(w->style & WS_CHILD16) && cc->menuord) {
+                int nitems = 0;
+                if (wowres_open(g_wow_cmd_prog))
+                    hm = wowres_menu(cc->menuord, &nitems);
+                w->menuitems = nitems;
+            }
             if (cc->reg32) {
                 w->hwnd32 = CreateWindowExA(0, cc->cls32, w->text, w->style,
                                             wowwin_coord(wow32_argw(f, CW_ARG_X)),
@@ -1222,6 +1305,13 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
         if (w->hwnd32) {
             wu_puts(note, notecap, &k, " HWND=0x");
             wu_puthex(note, notecap, &k, (DWORD)(ULONG_PTR)w->hwnd32, 8);
+            if (w->menuitems) { wu_puts(note, notecap, &k, " MENU=");
+                                wu_puthex(note, notecap, &k, (DWORD)w->menuitems, 2);
+                                wu_puts(note, notecap, &k, " items from the guest's"
+                                                           " own resource"); }
+            else if (g_wu_class[w->cls].menuord)
+                wu_puts(note, notecap, &k, " -- \u2605 ITS CLASS NAMED A MENU AND"
+                                           " NONE WAS BUILT");
         } else {
             wu_puts(note, notecap, &k, " -- ★ NO REAL WINDOW (Win32 gle=0x");
             wu_puthex(note, notecap, &k, GetLastError(), 8);
@@ -1742,9 +1832,14 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
         int k = 0, i;
         wu_puts(note, notecap, &k, "LoadSystemObject kind=0x");
         wu_puthex(note, notecap, &k, kind, 4);
-        if (kind != AD_KIND_PREDEFINED) {
-            wu_puts(note, notecap, &k, " -- not the predefined kind; this host has"
-                                       " only read that call site, answered 0");
+        /* ★ KIND 3 IS THE MODULE'S OWN RESOURCE, and it arrives with the same
+             name fields at the same offsets -- the two call sites differ only in
+             what they put in the middle. So an ordinal is enough to find the
+             resource in the application's own file (see wowres.h), and the token
+             carries the kind so RegisterClass knows which way to resolve it. */
+        if (kind != AD_KIND_PREDEFINED && kind != AD_KIND_MODULERES) {
+            wu_puts(note, notecap, &k, " -- a kind no call site has been read for;"
+                                       " answered 0");
             wow32_setret(f, 0);
             return 1;
         }
@@ -1764,7 +1859,7 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
         /* One token per ordinal: the guest asks for IDC_ARROW in twenty classes
            and should get one answer, the way the OS gives one HCURSOR. */
         for (i = 0; i < g_wu_nsysres; ++i)
-            if (g_wu_sysres[i].ord == lo) {
+            if (g_wu_sysres[i].ord == lo && g_wu_sysres[i].kind == kind) {
                 wu_puts(note, notecap, &k, " -> 0x");
                 wu_puthex(note, notecap, &k, g_wu_sysres[i].h, 4);
                 wu_puts(note, notecap, &k, " (already issued)");
@@ -1777,13 +1872,39 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
             return 1;
         }
         i = g_wu_nsysres++;
-        g_wu_sysres[i].ord = lo;
+        g_wu_sysres[i].ord  = lo;
+        g_wu_sysres[i].kind = kind;
         g_wu_sysres[i].h   = (WORD)(WOWUSER_SYSRES_BASE + i * WOWUSER_SYSRES_STEP);
         wu_puts(note, notecap, &k, " -> token 0x");
         wu_puthex(note, notecap, &k, g_wu_sysres[i].h, 4);
         wu_puts(note, notecap, &k, "; the OS object is fetched when the guest says"
                                    " whether it is a cursor or an icon");
         wow32_setret(f, g_wu_sysres[i].h);
+        return 1;
+    }
+
+    /* ── ★ 0x25 SetWindowText(hWnd, lpString) -- straight to the OS. ───────────
+         The caption belongs to the real window, so there is nothing here to keep;
+         the copy in wowuser_win_t is updated only so the host's own log keeps
+         saying which window is which. */
+    case WOWUSER_SETWINDOWTEXT: {
+        WORD hwnd = wow32_argw(f, SWT_ARG_HWND);
+        wowuser_win_t *w = wowuser_findwin(hwnd);
+        char txt[128];
+        int k = 0, i;
+        wow32_argstr(f, SWT_ARG_TEXT, txt, sizeof txt);
+        wu_puts(note, notecap, &k, "SetWindowText 0x");
+        wu_puthex(note, notecap, &k, hwnd, 4);
+        wu_puts(note, notecap, &k, " ");
+        wu_putq(note, notecap, &k, txt);
+        if (!w) { wu_puts(note, notecap, &k, " -- NO SUCH WINDOW");
+                  wow32_setret(f, 0); return 1; }
+        for (i = 0; i < (int)sizeof w->text - 1 && txt[i]; ++i) w->text[i] = txt[i];
+        w->text[i] = 0;
+        if (w->hwnd32) { SetWindowTextA(w->hwnd32, txt);
+                         wu_puts(note, notecap, &k, " -> the OS's"); }
+        else             wu_puts(note, notecap, &k, " -- no real window");
+        wow32_setret(f, 0);
         return 1;
     }
 
@@ -1797,15 +1918,21 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
     case WOWUSER_SETFOCUS: {
         WORD hwnd = wow32_argw(f, SF_ARG_HWND);
         WORD prev = g_wm_focus;
+        wowuser_win_t *w = wowuser_findwin(hwnd);
         int k = 0;
         wu_puts(note, notecap, &k, "SetFocus 0x");
         wu_puthex(note, notecap, &k, hwnd, 4);
-        if (hwnd && !wowuser_findwin(hwnd)) {
+        if (hwnd && !w) {
             wu_puts(note, notecap, &k, " -- NO SUCH WINDOW, focus unchanged");
             wow32_setret(f, prev);
             return 1;
         }
         g_wm_focus = hwnd;
+        /* ★ AND THE OS's FOCUS TOO. The Win16 handle decides where this host
+             posts a keystroke, but the CARET belongs to the real control and only
+             the real SetFocus creates one -- a window the OS has not focused is a
+             window with no cursor blinking in it, however right our own table is. */
+        if (w && w->hwnd32) SetFocus(w->hwnd32);
         wu_puts(note, notecap, &k, " (was 0x");
         wu_puthex(note, notecap, &k, prev, 4);
         wu_puts(note, notecap, &k, ") -- keyboard messages now go here");
