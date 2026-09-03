@@ -4,7 +4,7 @@
 > this file top to bottom and you will know where it is, what works, what does not, and
 > what to do next.
 
-- **Last updated:** 2026-09-02 (session 41)
+- **Last updated:** 2026-09-03 (session 42)
 - **Branch:** `m9/completeness`
 - **Tracker:** [140+ issues](https://github.com/MrMatthewLayton/ntvdmex/issues) — reconciled against the repo on 2026-08-26 (`tools/gh/backfill.py` is the manifest)
 - **Knowledge base:** the [wiki](https://github.com/MrMatthewLayton/ntvdmex/wiki)
@@ -38,7 +38,7 @@ A good bar for the same reasons Doom was: small, iconic, and impossible to fake.
 them they exercise the whole stack — NE loading, the KERNEL 16→32 boundary, USER windows
 and menus, GDI drawing, mouse and keyboard. Paint in particular has to actually paint.
 
-**Status: a Win16 APPLICATION RUNS ITS STARTUP AND OPENS ITS OWN MAIN WINDOW.**
+**Status: a Win16 APPLICATION IS ON THE WINDOWS XP DESKTOP.**
 `wowexec.exe` — the WOW shell — is found, loaded and run, and nothing has drawn a pixel
 yet. What works is the *bootstrap*, and as of session 39 it runs
 a long way: krnl386 loads three of its four segments, installs its interrupt handlers,
@@ -135,7 +135,7 @@ Win16 push, and should not be quoted.)
 | Bar | Where it is | Est. |
 |---|---|---|
 | **The original DOS games bar** — Doom / Skyroads / ZAR, flawless sound | Two of three fully playable and confirmed by hand. ZAR is the gap (VBE 2.0 hi-colour + linear framebuffer). | **~85%** |
-| **★ The north star** — MS Paint + Notepad from Windows 3.x | Bootstrap, NE loader, krnl386, the WOW32 boundary, the scheduler, the launch, **calling into 16-bit code in both shapes** (session 40) and — since session 41 — **a message queue fed by real keyboard input, dispatched into the guest's own window procedures**. `SYSEDIT.EXE` builds its whole MDI interface and loads **all four** of its files. **Nothing has drawn a pixel** and there is no thunking; what it stops on now is **pixels**, and the GDI id space behind them. | **~52%** |
+| **★ The north star** — MS Paint + Notepad from Windows 3.x | Bootstrap, NE loader, krnl386, the WOW32 boundary, the scheduler, the launch, calling into 16-bit code (s40), a message queue (s41) and — since session 42 — **real Win32 windows on the real desktop**. `SYSEDIT.EXE` runs as itself: a frame, four cascaded MDI children, the files' text in real `EDIT` controls, a taskbar button, no VDM window. What is left for an app that paints its OWN client area is **GDI**, whose id space this host does not dispatch at all. | **~60%** |
 | **The full vision** — an `ntvdm` superset on XP-32 | Everything above, plus the host UI, minus the standing DOS defects and M7/M8. | **~60%** |
 
 **Read the north-star number carefully.** The hard *unknowns* are largely behind us — what is
@@ -190,10 +190,28 @@ silently is worth more attention than its size suggests.
 > refused outright, and the real name re-enters us through the IFEO hook. So there is no
 > safe install story until WOW exists, and #128 moved onto the critical path.
 
-1. **[#128] WOW / Win16 — IN PROGRESS. ★★★★★ THE MESSAGE LOOP TURNS ON A REAL
-   KEYSTROKE, AND `SYSEDIT.EXE` READS ALL FOUR OF ITS FILES.**
+1. **[#128] WOW / Win16 — IN PROGRESS. ★★★★★ `SYSEDIT.EXE` IS ON THE WINDOWS XP
+   DESKTOP, AS ITSELF.**
 
-   ### ▶ START HERE: [session 41](log/sessions/session-41.md#-resume-here)
+   ### ▶ START HERE: [session 42](log/sessions/session-42.md#-resume-here)
+   That block is the live handoff. Everything below it is background.
+
+   ### ▶ AND THE FRONTIER IS GDI
+   A frame titled *"System Configuration Editor"*, four cascaded MDI children titled
+   `C:\WINDOWS\SYSTEM.INI`, `WIN.INI`, `C:\CONFIG.SYS` and `C:\AUTOEXEC.BAT`, each
+   with a real `EDIT` control holding the file's text, a taskbar button, and **no VDM
+   window** — an NTVDMEX icon in the tray instead. Every window there is a real Win32
+   `HWND`, because that is what WOW *is*: `wow32.dll` gives every Win16 window one, and
+   that is why a 16-bit app on XP gets a real title bar, real focus and real clipping.
+   ⚠ **The first attempt drew a Windows 3.x desktop INSIDE the NTVDMEX window and was
+   thrown away** — see session 42 Part 0. If an answer involves inventing a desktop, a
+   caption bar or a font for chrome, it is the DOSBox-shaped answer and it is wrong.
+   ⇒ SYSEDIT works because almost nothing it shows is its own drawing. **MS Paint is not
+   like that**: it paints its own client area, which needs `WM_PAINT` forwarded to the
+   guest, `BeginPaint`/`EndPaint` on the real window, and **GDI's id space — 367 stubs,
+   dispatched nowhere at all today**.
+
+   ### ▶ Session 41's handoff: [session 41](log/sessions/session-41.md#-resume-here)
    That block is the live handoff — where it is, the leads already **ruled out**
    (do not re-try them), the next run, the instruments, and the standing hazards.
    Everything below it is background.
