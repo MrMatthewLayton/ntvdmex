@@ -125,18 +125,18 @@ def classify(ne, segs, seg, off, depth):
       report it as a thunk we have to write. It is not; we already proved that
       by never seeing one as a BOP in a whole run."""
     if depth > 3 or not (1 <= seg <= len(segs)):
-        return ("native16", None, None)
+        return ("native16", None, None, None)
     fo = segs[seg - 1]["file_off"]
     ln = segs[seg - 1]["length"]
     if off >= ln:
-        return ("native16", None, None)
+        return ("native16", None, None, None)
     b = ne.d[fo + off: fo + off + 16]
 
     # push <argbytes> / push 0 / push <id> / lcall <the common thunk>
     if len(b) >= 9 and b[0] == 0x6A and b[2] == 0x68 and b[5] == 0x68 and b[8] == 0x9A:
-        return ("wow32", b[6] | (b[7] << 8), b[1])
+        return ("wow32", b[6] | (b[7] << 8), b[1], (off + 13) & 0xFFFF)
     if len(b) >= 11 and b[0] == 0x68 and b[3] == 0x68 and b[6] == 0x68 and b[9] == 0x9A:
-        return ("wow32", b[7] | (b[8] << 8), b[1] | (b[2] << 8))
+        return ("wow32", b[7] | (b[8] << 8), b[1] | (b[2] << 8), (off + 14) & 0xFFFF)
 
     # COMMDLG's export prologue: a far call, then the stub.
     if len(b) >= 6 and b[0] == 0x9A:
@@ -148,7 +148,7 @@ def classify(ne, segs, seg, off, depth):
         rel = struct.unpack_from("<h", b, 9)[0]
         return classify(ne, segs, seg, (off + 8 + 3 + rel) & 0xFFFF, depth + 1)
 
-    return ("native16", None, None)
+    return ("native16", None, None, None)
 
 
 _MIDX = {}
@@ -186,8 +186,8 @@ def module_index(directory, module):
             continue
         if seg < 1 or seg > len(segs):
             continue
-        kind, fid, argb = classify(ne, segs, seg, off, 0)
-        out[o] = (names.get(o, "?"), kind, fid, argb, seg, off)
+        kind, fid, argb, rets = classify(ne, segs, seg, off, 0)
+        out[o] = (names.get(o, "?"), kind, fid, argb, seg, off, rets)
     _MIDX[key] = out
     return out
 
@@ -217,6 +217,7 @@ def imports_of(path):
 def main():
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
     todo_only = "--todo" in sys.argv
+    show_stubs = "--stubs" in sys.argv
     if not args:
         print(__doc__)
         return 2
@@ -253,10 +254,10 @@ def main():
                 per.setdefault(m, []).append((o, "?", "absent", None, None))
                 continue
             if o not in idx:
-                per.setdefault(m, []).append((o, "?", "no-entry", None, None))
+                per.setdefault(m, []).append((o, "?", "no-entry", None, None, None))
                 continue
             nm, kind, fid, argb = idx[o][0], idx[o][1], idx[o][2], idx[o][3]
-            per.setdefault(m, []).append((o, nm, kind, fid, argb))
+            per.setdefault(m, []).append((o, nm, kind, fid, argb, idx[o][6]))
 
         for m in sorted(per):
             done = serviced_ids(DISPATCHERS.get(m, ""))
@@ -267,10 +268,21 @@ def main():
             print("  %-8s %3d imported | %3d need us | %3d free (16-bit) | "
                   "%3d SERVICED | %3d TO DO"
                   % (m, len(rows), len(w32), len(nat), len(w32) - len(miss), len(miss)))
-            for o, nm, kind, fid, argb in (miss if todo_only else w32):
+            for o, nm, kind, fid, argb, rets in (miss if todo_only else w32):
                 mark = " " if fid in done else "*"
-                print("      %s %-24s ord %-4d id 0x%03x  %2d args"
-                      % (mark, nm, o, fid, argb))
+                # ★ THE RETSTUB IS AN ANCHOR, AND IT COMES FROM THE FILE.
+                #   A module's id space is only dispatched once the host has
+                #   LEARNED that module's code segment, and it learns it by
+                #   recognising one (id, argbytes, retstub) triple. Anchoring on
+                #   a single call is a trap: SHELL's anchor was `ShellAbout`
+                #   alone, so MS Paint -- which calls four of SHELL's Reg*
+                #   functions and never calls ShellAbout -- had every one of them
+                #   logged as "?'s table" and answered by nobody. Printing the
+                #   retstub lets the anchor be widened from the binary instead of
+                #   waiting for a run to show one.
+                print("      %s %-24s ord %-4d id 0x%03x  %2d args%s"
+                      % (mark, nm, o, fid, argb,
+                         "  retstub 0x%04x" % rets if (show_stubs and rets is not None) else ""))
                 grand.setdefault(m, set()).add((fid, nm, argb))
     if len(args) > 1:
         print("\n=== union across %d programs ===" % len(args))

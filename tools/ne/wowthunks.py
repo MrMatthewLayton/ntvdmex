@@ -108,9 +108,47 @@ def scan(path):
     return ne, out, targets
 
 
+def emit_anchor(own, hits, main_tgt):
+    """A C table of every (id, argbytes, retstub) this module's stubs can carry.
+
+    ── ★★★ WHY AN ANCHOR MUST BE THE WHOLE TABLE AND NOT ONE CALL ─────────────
+    The host does not know which selector a thunk module got -- krnl386 allocates
+    those at run time -- so it LEARNS a module's code segment by recognising one
+    call that could only have come from it, and dispatches that id space
+    afterwards. Anchoring on a single function makes that recognition depend on
+    the guest making that particular call.
+
+    It does not, and the cost was measured: `wow_shell_anchor()` matched
+    `ShellAbout` alone, MS Paint never calls ShellAbout, and so every one of
+    Paint's `RegCreateKey`/`RegSetValue`/`RegQueryValue` calls -- and its
+    `DragAcceptFiles`, which was already implemented -- was logged as "?'s table
+    -- a DIFFERENT id space" and answered by nobody. The module was never
+    identified at all.
+
+    A stub is 13 bytes (`6a AA / 68 00 00 / 68 II II / 9a xx xx ss ss`), so the
+    return address a call carries is its stub + 13, and all three fields come
+    straight out of the file. Matching any row still cannot mis-fire quietly: a
+    wrong segment would have to hold a `push <this id>` with `push <these arg
+    bytes>` at exactly the offset the call returns to."""
+    byid = {}
+    for seg, off, fid, cnt, tgt in hits:
+        if tgt != main_tgt:
+            continue
+        byid.setdefault((fid, cnt), set()).add(off + 13)
+    rows = sorted((fid, cnt, r) for (fid, cnt), rs in byid.items() for r in rs)
+    print("/* ── %s: every stub in the module, generated. ──────────────────────" % own)
+    print("     Regenerate with `tools/ne/wowthunks.py --anchor <the module>`. */")
+    print("static const wow_anchor_t g_%s_anchors[] = {" % own.lower())
+    for fid, cnt, ret in rows:
+        print("    { 0x%03x, %3d, 0x%04x }," % (fid, cnt, ret))
+    print("};")
+    return len(rows)
+
+
 def main():
     sys.path.insert(0, __file__.rsplit('/', 1)[0])
-    args = sys.argv[1:]
+    args = [a for a in sys.argv[1:] if not a.startswith("--")]
+    anchor = "--anchor" in sys.argv
     if not args:
         print(__doc__)
         return 2
@@ -121,11 +159,14 @@ def main():
             print(f"{path}: {e}")
             continue
         own = ne.resident_names()[0][1].upper()
-        print(f"\n=== {path}  ({own})")
         if not hits:
-            print("   no WOW32 thunk stubs found")
+            print(f"\n=== {path}  ({own})\n   no WOW32 thunk stubs found")
             continue
         main_tgt, main_n = targets.most_common(1)[0]
+        if anchor:
+            emit_anchor(own, hits, main_tgt)
+            continue
+        print(f"\n=== {path}  ({own})")
         print(f"   {len(hits)} stubs; common thunk at 0x{main_tgt:04x} "
               f"({main_n} of them)")
         odd = [h for h in hits if h[4] != main_tgt]
