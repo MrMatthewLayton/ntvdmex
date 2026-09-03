@@ -116,6 +116,77 @@ static DWORD wowres_find(WORD type, WORD id, DWORD *len)
     return 0;
 }
 
+/*
+ * ── ★★★ A RESOURCE CAN BE NAMED RATHER THAN NUMBERED, AND MS PAINT'S IS ─────
+ * `wowres_find` above looks up INTEGER ids, and said so. Notepad's menu is
+ * `#0001`, so that was enough to give Notepad a working menu bar and the gap sat
+ * there unexercised. PBRUSH.EXE registers `pbParent` with `MENU="PBrush2"` and
+ * its resource table holds `MENU PBRUSH2` -- a NAMED resource -- so the lookup
+ * could never match and Paint came up with no menu at all, silently.
+ *
+ * In an NE resource table a type or id word with the high bit CLEAR is not a
+ * number: it is a byte OFFSET FROM THE START OF THE RESOURCE TABLE to a
+ * length-prefixed (Pascal) string in the table's own string pool.
+ * ⚠ THE COMPARISON IS CASE-INSENSITIVE, and that is not a nicety. The names are
+ *   stored UPPER CASE (`PBRUSH2`) and the program asks for the case it wrote in
+ *   its source (`PBrush2`); an exact compare finds nothing, which is exactly the
+ *   failure that was on screen.
+ * ⚠ AND THE STRING POOL IS BOUNDS-CHECKED like everything else here: the offset
+ *   comes out of a file, so a corrupt one must fail to match rather than read
+ *   past the image.
+ */
+static int wowres_name_is(DWORD rt, WORD idw, const char *want)
+{
+    DWORD sp;
+    BYTE  n;
+    int   i;
+    if (idw & 0x8000) return 0;                  /* an integer, not a name    */
+    sp = rt + idw;
+    if (sp + 1 > g_wr_len) return 0;
+    n = g_wr_img[sp];
+    if (!n || sp + 1 + n > g_wr_len) return 0;
+    for (i = 0; i < (int)n; ++i) {
+        char a = (char)g_wr_img[sp + 1 + i], b = want[i];
+        if (a >= 'a' && a <= 'z') a = (char)(a - 32);
+        if (b >= 'a' && b <= 'z') b = (char)(b - 32);
+        if (!b || a != b) return 0;
+    }
+    return want[n] == 0;                         /* and no trailing extra     */
+}
+
+/* Locate a resource of integer type `type` whose id is the NAME `name`.
+   0 = not found. Mirrors wowres_find, which handles the numbered case. */
+static DWORD wowres_find_named(WORD type, const char *name, DWORD *len)
+{
+    DWORD h, rt, p;
+    WORD shift;
+    if (!g_wr_img || !name || !name[0]) return 0;
+    h = (DWORD)(g_wr_img[0x3C] | (g_wr_img[0x3D] << 8)
+              | (g_wr_img[0x3E] << 16) | ((DWORD)g_wr_img[0x3F] << 24));
+    if (h + 0x40 > g_wr_len || g_wr_img[h] != 'N' || g_wr_img[h + 1] != 'E') return 0;
+    rt = h + wr_w(h + 0x24);
+    if (rt + 2 > g_wr_len) return 0;
+    shift = wr_w(rt);
+    if (shift > 16) return 0;
+    p = rt + 2;
+    while (p + 8 <= g_wr_len) {
+        WORD tid = wr_w(p), cnt = wr_w(p + 2), k;
+        if (!tid) break;
+        p += 8;
+        for (k = 0; k < cnt && p + 12 <= g_wr_len; ++k, p += 12) {
+            if (tid != (WORD)(0x8000 | type)) continue;
+            if (!wowres_name_is(rt, wr_w(p + 6), name)) continue;
+            {   DWORD off = (DWORD)wr_w(p) << shift;
+                DWORD ln  = (DWORD)wr_w(p + 2) << shift;
+                if (off + ln > g_wr_len) return 0;
+                if (len) *len = ln;
+                return off;
+            }
+        }
+    }
+    return 0;
+}
+
 /* Build one level of a menu, returning the offset just past it. `into` may be
    NULL, which walks the template without building -- used to count items so an
    empty or unreadable menu is never attached to a window. */
@@ -156,9 +227,8 @@ static DWORD wowres_menu_level(HMENU into, DWORD p, DWORD end, int depth, int *n
  *   builds a fresh one every time rather than caching -- a cached menu attached
  *   twice is a menu that vanishes from the first window.
  */
-static HMENU wowres_menu(WORD id, int *items)
+static HMENU wowres_menu_at(DWORD off, DWORD len, int *items)
 {
-    DWORD len = 0, off = wowres_find(WOWRES_RT_MENU, id, &len);
     DWORD p;
     HMENU m;
     int n = 0;
@@ -171,6 +241,20 @@ static HMENU wowres_menu(WORD id, int *items)
     if (items) *items = n;
     if (!n) { DestroyMenu(m); return NULL; }
     return m;
+}
+
+static HMENU wowres_menu(WORD id, int *items)
+{
+    DWORD len = 0, off = wowres_find(WOWRES_RT_MENU, id, &len);
+    return wowres_menu_at(off, len, items);
+}
+
+/* ★ The same menu, asked for by NAME -- see wowres_find_named. MS Paint's is
+   "PBrush2"; Notepad's is #1, and both paths end in the same builder. */
+static HMENU wowres_menu_byname(const char *name, int *items)
+{
+    DWORD len = 0, off = wowres_find_named(WOWRES_RT_MENU, name, &len);
+    return wowres_menu_at(off, len, items);
 }
 
 /*

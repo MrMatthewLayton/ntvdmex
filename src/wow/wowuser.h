@@ -1803,10 +1803,19 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
                  any of this existed.
                ⚠ A CHILD WINDOW HAS NO MENU: its hMenu slot is a control id, which
                  is why this is inside the else. */
-            else if (!(w->style & WS_CHILD16) && cc->menuord) {
+            /* ⚠ AND THE MENU CAN BE NAMED RATHER THAN NUMBERED. Notepad's is
+                 `#0001`, so the integer path alone was enough to give it a menu
+                 bar and this gap went unnoticed for two sessions. MS PAINT
+                 registers `pbParent` with `MENU="PBrush2"`, and its window came
+                 up with no menu at all -- silently, because a class that names a
+                 menu we cannot find is indistinguishable from a class with no
+                 menu. Both forms end in the same builder; see wowres.h. */
+            else if (!(w->style & WS_CHILD16)
+                     && (cc->menuord || cc->menuname[0])) {
                 int nitems = 0;
                 if (wowres_open(g_wow_cmd_prog))
-                    hm = wowres_menu(cc->menuord, &nitems);
+                    hm = cc->menuord ? wowres_menu(cc->menuord, &nitems)
+                                     : wowres_menu_byname(cc->menuname, &nitems);
                 w->menuitems = nitems;
             }
             if (cc->reg32) {
