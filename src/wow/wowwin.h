@@ -104,7 +104,6 @@ static LRESULT CALLBACK wowwin_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
     WORD h16 = wowwin_hwnd16(h);
     switch (msg) {
     case WM_KEYDOWN: case WM_KEYUP: case WM_CHAR:
-    case WM_SYSKEYDOWN: case WM_SYSKEYUP:
         /* ★ RELAYED VERBATIM. Win16 and Win32 agree on the message number, on
              wParam being the virtual key, and on the lParam bit field -- Win32
              inherited all three -- so the honest thing is to hand across exactly
@@ -113,6 +112,27 @@ static LRESULT CALLBACK wowwin_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
             wowmsg_post(h16, (WORD)msg, (WORD)wp, (DWORD)lp, GetTickCount(), 0, 0);
             ++g_ww_msgs;
             return 0;
+        }
+        break;
+    /* ── ★★ THE SYSTEM KEYS ARE THE SYSTEM'S, AND SWALLOWING THEM BROKE THE MENU.
+         (session 44) These were in the case above, relayed to the guest and then
+         returned as HANDLED -- so DefWindowProc never saw them. But "Sys" in
+         WM_SYSKEYDOWN means exactly *"this key belongs to the system"*: it is the
+         message Alt arrives in, and DefWindowProc's response to Alt is TO OPEN THE
+         MENU BAR. With it swallowed, an application could have a perfect menu and
+         no keyboard would ever reach it -- Alt did nothing, so Alt+H, Alt+F4 and
+         F10 did nothing either. Win16's own DefWindowProc does the same job, so
+         handing these to the real one is not a Win32 concession; it is the same
+         behaviour, implemented by the OS we are already running on.
+       ⚠ STILL POSTED TO THE GUEST AS WELL, because a Win16 program may look at
+         WM_SYSKEYDOWN before passing it on, and this host cannot ask it whether it
+         did. The duplication is the price of an asynchronous queue and is written
+         down rather than left to be discovered: an application that ACTS on a
+         system key will see the OS act too. Nothing measured does. */
+    case WM_SYSKEYDOWN: case WM_SYSKEYUP:
+        if (h16) {
+            wowmsg_post(h16, (WORD)msg, (WORD)wp, (DWORD)lp, GetTickCount(), 0, 0);
+            ++g_ww_msgs;
         }
         break;
     case WM_CLOSE:
@@ -137,6 +157,45 @@ static LRESULT CALLBACK wowwin_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
     case WM_SETFOCUS: case WM_KILLFOCUS: case WM_SIZE:
         if (h16) { wowmsg_post(h16, (WORD)msg, (WORD)wp, (DWORD)lp,
                                GetTickCount(), 0, 0); ++g_ww_msgs; }
+        break;
+    /* ── ★★★ WM_COMMAND -- THE MENU STOPS BEING DECORATION. (session 44) ──────
+         The menu bar is the application's OWN resource on a real Win32 window,
+         so clicking it already produces a real WM_COMMAND carrying the
+         application's own item id -- `0x000b` is `&About Notepad...` out of
+         NOTEPAD.EXE's `MENU 1`. Until now this procedure dropped it, so the menu
+         was real and inert.
+
+       ⚠ THE TWO PACKINGS ARE DIFFERENT, AND TRANSLATING THEM IS THE WHOLE JOB.
+         Win32 puts the notification code in the HIGH half of wParam and the
+         control's window handle in lParam; Win16 puts the id alone in wParam and
+         packs (hwndCtl, notifyCode) into lParam. Relaying a Win32 WM_COMMAND
+         unchanged gets a MENU command right by luck -- both are "id in the low
+         half, everything else zero" -- and gets every CONTROL notification wrong
+         in both parameters. So it is composed, not relayed.
+       ★ And the control's handle has to become a WIN16 one: a guest comparing it
+         against the handle its own CreateWindow returned must find them equal.
+       ⚠ THE lParam FORM FOR A CONTROL IS NOT CONFIRMED BY A RUN. The menu form
+         is -- `sysedit seg1:0x0477` sends itself `(0x111, <id>, 0)` -- and that
+         is the form Help > About travels. The control form is written here
+         because leaving it as the Win32 packing would be knowingly wrong, and
+         the log prints both halves so the first guest that uses it can say.
+
+       ⚠ FALLS THROUGH TO THE DEFAULT PROCEDURE ON PURPOSE. The guest is told
+         asynchronously and has no way to answer "I did not handle that", and on
+         an MDI frame DefFrameProc's own WM_COMMAND arm is what activates a child
+         from the Window menu. Posting and then letting the OS have it keeps both
+         -- DefWindowProc does nothing with a WM_COMMAND, so the non-MDI case
+         costs nothing. */
+    case WM_COMMAND:
+        if (h16) {
+            WORD id     = (WORD)LOWORD(wp);
+            WORD notify = (WORD)HIWORD(wp);
+            WORD ctl16  = lp ? wowwin_hwnd16((HWND)(ULONG_PTR)lp) : 0;
+            wowmsg_post(h16, (WORD)WM_COMMAND16, id,
+                        (DWORD)ctl16 | ((DWORD)notify << 16),
+                        GetTickCount(), 0, 0);
+            ++g_ww_msgs;
+        }
         break;
     default: break;
     }

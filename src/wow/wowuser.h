@@ -178,6 +178,88 @@ static WORD wowuser_sysres_kind(WORD h)
     return 0;
 }
 
+/* ── ★★★ THE LAYOUT CLUSTER -- WHAT MAKES NOTEPAD USABLE. (session 44) ────────
+     Every id here was named by the RUN and confirmed against USER's own export
+     table (`docs/research/wow-user-surface.md`), not chosen from a list: the host
+     log records each unimplemented USER call with the return address it came
+     from, `from - 5` is the call site, and `tools/ne/neimports.py` names it out
+     of NOTEPAD.EXE's own relocation chain. Four agreed both ways:
+
+        0x38  12 args  MOVEWINDOW          notepad seg1:0x0061
+        0x7d   8 args  INVALIDATERECT      notepad seg1:0x0044
+        0xb3   2 args  GETSYSTEMMETRICS    notepad seg1:0x0c04
+        0x1f   2 args  ISICONIC            notepad seg1:0x0aba
+
+   ★ AND NOTEPAD'S RESIZE HELPER READS STRAIGHT OFF THE DISASSEMBLY, which is
+     where the argument order below comes from rather than from a parameter list:
+
+        0037  push bp / mov bp,sp
+        003a  push [0x12] / push 0 / push 0 / push 1
+        0044  lcall  InvalidateRect(hEdit, NULL, TRUE)
+        0049  push [0x12]                  ; hWnd  = its EDIT control
+        004d  push 8 / push 2              ; X, Y
+        0051  mov ax,[bp+6] / sub ax,0x0f / push ax   ; nWidth
+        0058  mov ax,[bp+4] / sub ax,4    / push ax   ; nHeight
+        005f  push 1                       ; bRepaint
+        0061  lcall  MoveWindow
+        0069  ret 4
+
+     -- 12 bytes and 8 bytes exactly, which is what each stub declares. The block
+     is REVERSED as always (the base is the LAST push).
+   ⚠ `DefWindowProc` is NOT here and must not be added: `USER.107` resolves to
+     entry-table `FIXED, segment 1, offset 0x1d5e`, and the bytes there are
+     `55 8b ec 68 86 1d ...` -- ordinary 16-bit code, not a `6a XX 68 00 00 68`
+     WOW32 stub. USER implements it ITSELF, which is why a whole run of Notepad
+     never produced one as a BOP. `DefFrameProc` (0x1bd) and `DefMDIChildProc`
+     (0x1bf) ARE stubs; nothing has called them yet. */
+#define WOWUSER_MOVEWINDOW       0x0038
+#define MW_ARG_REPAINT   0
+#define MW_ARG_CY        2
+#define MW_ARG_CX        4
+#define MW_ARG_Y         6
+#define MW_ARG_X         8
+#define MW_ARG_HWND     10
+
+#define WOWUSER_INVALIDATERECT   0x007d
+#define IR_ARG_ERASE     0
+#define IR_ARG_RECT      2
+#define IR_ARG_HWND      6
+
+#define WOWUSER_GETSYSTEMMETRICS 0x00b3
+#define GSM_ARG_INDEX    0
+
+#define WOWUSER_ISICONIC         0x001f
+#define II_ARG_HWND      0
+
+/* ⚠⚠ A Win16 RECT IS FOUR **WORDS**; A Win32 RECT IS FOUR **LONGS**. Eight bytes
+     against sixteen, and nothing about a wrong reading looks wrong -- it just
+     produces coordinates off by whatever the neighbouring field held. Anywhere a
+     RECT crosses this boundary it is converted field by field, and this is the
+     only place that says so. */
+#define WOW_RECT16_SIZE  8
+
+/* ── ★ AND HERE IS WHERE A TOKEN BECOMES A REAL HICON. ───────────────────────
+     0xad can only hand back a token, because at that moment nothing knows whether
+     the guest wants a cursor or an icon (see the long note above). The moment it
+     USES one as an icon, this resolves it -- predefined ordinals through the OS,
+     the application's own through its own file.
+   ⚠ ONE IMPLEMENTATION, TWO CALLERS. `RegisterClass` puts the result in a Win32
+     class and `ShellAbout` puts it in the About box, and the two resolving a token
+     differently is exactly the kind of drift that shows up as "the icon is right
+     in one place and wrong in the other".
+   `picked` receives the colour depth chosen out of the application's own icon
+     group, or 0, so a log line can say which image the OS was given. */
+static HICON wowuser_sysres_hicon(WORD token, int *picked)
+{
+    WORD ord  = wowuser_sysres_ord(token);
+    WORD kind = wowuser_sysres_kind(token);
+    if (picked) *picked = 0;
+    if (!ord) return NULL;
+    if (kind == AD_KIND_MODULERES)
+        return wowres_open(g_wow_cmd_prog) ? wowres_icon(ord, picked) : NULL;
+    return LoadIconA(NULL, MAKEINTRESOURCEA(ord));
+}
+
 /* ShowWindow(hWnd, nCmdShow) -- 4 bytes, reversed as always, and confirmed by the
    run: `(0x0005 0x0160)` from sysedit seg1:0x01da and `(0x0001 0x0140)` from
    seg2:0x0149. UpdateWindow(hWnd) -- 2 bytes. */
@@ -1120,14 +1202,8 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
             WORD curord = wowuser_sysres_ord(c->hcursor);
             WORD icoord = wowuser_sysres_ord(c->hicon);
             WORD icokind = wowuser_sysres_kind(c->hicon);
-            HICON hico  = NULL;
             int  fell   = 0, bits = 0;
-            if (icoord && icokind == AD_KIND_MODULERES) {
-                /* The application's own icon, out of its own file. */
-                if (wowres_open(g_wow_cmd_prog)) hico = wowres_icon(icoord, &bits);
-            } else if (icoord) {
-                hico = LoadIconA(NULL, MAKEINTRESOURCEA(icoord));
-            }
+            HICON hico  = wowuser_sysres_hicon(c->hicon, &bits);
             if (!c->reg32)
                 c->reg32 = wowwin_register(c->name, c->cls32, sizeof c->cls32,
                                            curord, hico, &fell);
@@ -1937,6 +2013,129 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
         wu_puthex(note, notecap, &k, prev, 4);
         wu_puts(note, notecap, &k, ") -- keyboard messages now go here");
         wow32_setret(f, prev);
+        return 1;
+    }
+
+    /* ── ★★★★ 0x38 MoveWindow(hWnd, X, Y, nWidth, nHeight, bRepaint) ─────────
+         THE call that makes Notepad usable: its window procedure answers every
+         WM_SIZE by moving its EDIT control to fit, and with this unimplemented
+         the control kept whatever size CreateWindow gave it -- which is why ours
+         showed a stray scrollbar hard right and stock's edit control filled the
+         frame. Straight through to the real one, because the window IS real.
+       ⚠ COORDINATES ARE SIGNED. They arrive as WORDs and a window at x = -4 is
+         ordinary (Windows positions a maximised frame slightly off-screen), so
+         they are sign-extended rather than taken as unsigned -- otherwise a small
+         negative becomes ~65000 and the control lands off the desktop.
+       ⚠ NO CW_USEDEFAULT TRANSLATION HERE, deliberately: CW_USEDEFAULT is a
+         CreateWindow convention and MoveWindow has no such value. 0x8000 is a
+         legitimate (if large) coordinate to this call. */
+    case WOWUSER_MOVEWINDOW: {
+        WORD hwnd = wow32_argw(f, MW_ARG_HWND);
+        int  x  = (int)(short)wow32_argw(f, MW_ARG_X);
+        int  y  = (int)(short)wow32_argw(f, MW_ARG_Y);
+        int  cx = (int)(short)wow32_argw(f, MW_ARG_CX);
+        int  cy = (int)(short)wow32_argw(f, MW_ARG_CY);
+        WORD rep = wow32_argw(f, MW_ARG_REPAINT);
+        wowuser_win_t *w = wowuser_findwin(hwnd);
+        int k = 0;
+        wu_puts(note, notecap, &k, "MoveWindow 0x");
+        wu_puthex(note, notecap, &k, hwnd, 4);
+        wu_puts(note, notecap, &k, " to ("); wu_puthex(note, notecap, &k, (DWORD)x, 4);
+        wu_puts(note, notecap, &k, ",");     wu_puthex(note, notecap, &k, (DWORD)y, 4);
+        wu_puts(note, notecap, &k, ") ");    wu_puthex(note, notecap, &k, (DWORD)cx, 4);
+        wu_puts(note, notecap, &k, "x");     wu_puthex(note, notecap, &k, (DWORD)cy, 4);
+        if (!w) { wu_puts(note, notecap, &k, " -- NO SUCH WINDOW");
+                  wow32_setret(f, 0); return 1; }
+        w->x = x; w->y = y; w->cx = cx; w->cy = cy;
+        if (w->hwnd32) {
+            MoveWindow(w->hwnd32, x, y, cx, cy, rep ? TRUE : FALSE);
+            wu_puts(note, notecap, &k, " -> the OS's");
+        } else {
+            wu_puts(note, notecap, &k, " -- no real window; recorded only");
+        }
+        wow32_setret(f, 1);
+        return 1;
+    }
+
+    /* ── ★ 0x7d InvalidateRect(hWnd, lpRect, bErase) ─────────────────────────
+         Notepad calls it on its EDIT control just before moving it. The rect is
+         a FAR POINTER and NULL means "the whole client area" -- a real
+         distinction, so a null pointer is passed through as NULL rather than
+         turned into an empty rectangle, which would invalidate nothing.
+       ⚠ THE Win16 RECT IS 8 BYTES, FOUR WORDS -- see WOW_RECT16_SIZE. Handing
+         the guest's 8 bytes to Win32 as a RECT would read four LONGs, i.e. this
+         rectangle and eight bytes of whatever follows it. */
+    case WOWUSER_INVALIDATERECT: {
+        WORD hwnd = wow32_argw(f, IR_ARG_HWND);
+        WORD er   = wow32_argw(f, IR_ARG_ERASE);
+        volatile BYTE *rp = wow32_argptr(f, IR_ARG_RECT);
+        wowuser_win_t *w = wowuser_findwin(hwnd);
+        RECT r; int k = 0, haver = 0;
+        wu_puts(note, notecap, &k, "InvalidateRect 0x");
+        wu_puthex(note, notecap, &k, hwnd, 4);
+        if (rp) {
+            r.left   = (LONG)(short)wow32_peekw(rp + 0);
+            r.top    = (LONG)(short)wow32_peekw(rp + 2);
+            r.right  = (LONG)(short)wow32_peekw(rp + 4);
+            r.bottom = (LONG)(short)wow32_peekw(rp + 6);
+            haver = 1;
+            wu_puts(note, notecap, &k, " rect(");
+            wu_puthex(note, notecap, &k, (DWORD)r.left, 4);  wu_puts(note, notecap, &k, ",");
+            wu_puthex(note, notecap, &k, (DWORD)r.top, 4);   wu_puts(note, notecap, &k, ",");
+            wu_puthex(note, notecap, &k, (DWORD)r.right, 4); wu_puts(note, notecap, &k, ",");
+            wu_puthex(note, notecap, &k, (DWORD)r.bottom, 4);
+            wu_puts(note, notecap, &k, ")");
+        } else {
+            wu_puts(note, notecap, &k, " whole client area (lpRect NULL)");
+        }
+        wu_puts(note, notecap, &k, er ? " erase" : " no erase");
+        if (!w || !w->hwnd32) { wu_puts(note, notecap, &k, " -- no real window");
+                                wow32_setret(f, 0); return 1; }
+        InvalidateRect(w->hwnd32, haver ? &r : NULL, er ? TRUE : FALSE);
+        wow32_setret(f, 1);
+        return 1;
+    }
+
+    /* ── ★ 0xb3 GetSystemMetrics(nIndex) ─────────────────────────────────────
+         Straight through to the OS, on the same claim the WS_* style bits and the
+         predefined cursor ordinals are passed on: Win32 inherited the SM_*
+         indices from Win16 unchanged.
+       ⚠ THAT CLAIM IS NOT FREE HERE, and unlike a style bit a wrong metric does
+         not fail visibly -- it lays a window out slightly wrong. So the index and
+         the answer are BOTH logged on every call: if a guest's arithmetic ever
+         looks wrong, the line says exactly what it was told. */
+    case WOWUSER_GETSYSTEMMETRICS: {
+        WORD idx = wow32_argw(f, GSM_ARG_INDEX);
+        int  v   = GetSystemMetrics((int)idx);
+        int  k = 0;
+        wu_puts(note, notecap, &k, "GetSystemMetrics(0x");
+        wu_puthex(note, notecap, &k, idx, 4);
+        wu_puts(note, notecap, &k, ") = 0x");
+        wu_puthex(note, notecap, &k, (DWORD)v, 4);
+        wu_puts(note, notecap, &k, " (the OS's own, SM_* assumed common to Win16/32)");
+        wow32_setret(f, (DWORD)(WORD)v);
+        return 1;
+    }
+
+    /* ── ★ 0x1f IsIconic(hWnd) -- ask the real window. ───────────────────────
+         Notepad asks before laying anything out, because a minimised window has
+         no useful client area. Answering 0 unconditionally (what an unimplemented
+         call did) is the "runs but lies" shape: it is the right answer most of the
+         time, which is exactly why the wrong one would never be noticed. */
+    case WOWUSER_ISICONIC: {
+        WORD hwnd = wow32_argw(f, II_ARG_HWND);
+        wowuser_win_t *w = wowuser_findwin(hwnd);
+        int k = 0, ic = 0;
+        wu_puts(note, notecap, &k, "IsIconic 0x");
+        wu_puthex(note, notecap, &k, hwnd, 4);
+        if (!w || !w->hwnd32) {
+            wu_puts(note, notecap, &k, " -- no real window; answered 0");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        ic = IsIconic(w->hwnd32) ? 1 : 0;
+        wu_puts(note, notecap, &k, ic ? " -> MINIMISED" : " -> not minimised");
+        wow32_setret(f, (DWORD)ic);
         return 1;
     }
 

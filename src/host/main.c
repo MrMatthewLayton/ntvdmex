@@ -28,6 +28,8 @@
 #include "../wow/wowres.h" /* GH #128: ...and the guest's OWN menu and icons */
 #include "../wow/wowwin.h" /* GH #128: ...and a Win16 window IS a real Win32 window */
 #include "../wow/wowuser.h" /* GH #128: USER.EXE's id space -- a DIFFERENT one; see the file */
+#include "../wow/wowshell.h" /* GH #128: ...and SHELL.DLL's, which is a THIRD one again */
+#include "../wow/wowcommdlg.h" /* GH #128: ...and COMMDLG.DLL's -- File > Open */
 #include "dos_mcb.h"
 #include "dos_loader.h"
 #include "dos_psp.h"
@@ -3358,6 +3360,52 @@ static int wow_user_anchor(WORD id, WORD argb, WORD retstub)
 {
     return (id == 0x190 && argb == 0 && retstub == 0x0659)
         || (id == 0x039 && argb == 4 && retstub == 0x0c25);
+}
+
+/* ── ★★★ SHELL.DLL's TABLE -- A FOURTH ID SPACE. See src/wow/wowshell.h. ──────
+     Identified exactly the way USER's is, and for the same reason: krnl386 loads
+     SHELL.DLL itself through our DOS layer, so it is not in g_wow_mod[] and there
+     is no file image on this side to check bytes against -- but the triple
+     (id, argument bytes, return-into-stub offset) still pins one specific stub,
+     because a stub is 13 fixed-shape bytes at a fixed offset in the module's own
+     segment 1. The one anchor is `ShellAbout` itself, read out of SHELL.DLL:
+        id 0x016  12 args  retstub 0x00c7   SHELLABOUT
+     -- ordinal 22 in the non-resident name table, entry table offset 0x00ba, and
+     the bytes there are `6a 0c / 68 00 00 / 68 16 00 / 9a ...`, i.e. the stub
+     declares those 12 bytes and that id itself.
+   ★ ANCHORING ON THE ONE CALL WE SERVICE IS DELIBERATE, not laziness: the table
+     is identified by the first call that needs it, in the same BOP, so nothing is
+     answered before the table has named itself.
+   ⚠ The offset is this SHELL.DLL's. Regenerate with
+     `tools/ne/wowthunks.py guest/ne/shell.dll` if the box's ever differs -- and a
+     wrong anchor cannot mis-fire quietly: all three fields must agree, or the
+     dispatcher never engages and every SHELL call stays honestly unimplemented. */
+static WORD g_wow_shell_seg = 0;
+
+static int wow_shell_anchor(WORD id, WORD argb, WORD retstub)
+{
+    return id == 0x016 && argb == 12 && retstub == 0x00c7;
+}
+
+/* ── ★★★ COMMDLG.DLL's TABLE -- A FIFTH ID SPACE. See src/wow/wowcommdlg.h. ───
+     Identified the same way, and both anchors are the calls we service:
+        id 0x001   4 args  retstub 0x0012   GETOPENFILENAME (stub seg1:0x0005)
+        id 0x002   4 args  retstub 0x0024   GETSAVEFILENAME (stub seg1:0x0017)
+     A stub is 13 bytes, so 0x0005+13 = 0x0012 and 0x0017+13 = 0x0024 -- and the
+     run that drove Alt-F-O on a live Notepad reported `id 0x01 ... retstub=0x0012`
+     from a table this host had never seen. The anchor was written to match a
+     measurement, not the other way round.
+   ⚠ `0x01` is MessageBox in USER's numbering (12 args) and GetOpenFileName here
+     (4), which is exactly why the argument count is part of the anchor and why
+     the guard below excludes every table already identified.
+   ⚠ Regenerate with `tools/ne/wowthunks.py guest/ne/commdlg.dll` if the box's
+     COMMDLG ever differs. */
+static WORD g_wow_cdlg_seg = 0;
+
+static int wow_cdlg_anchor(WORD id, WORD argb, WORD retstub)
+{
+    return (id == 0x001 && argb == 4 && retstub == 0x0012)
+        || (id == 0x002 && argb == 4 && retstub == 0x0024);
 }
 
 /* ── ★★★ krnl386's SECOND TABLE -- A THIRD ID SPACE, AND NOW IDENTIFIED. ──────
@@ -11160,6 +11208,92 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                             }
                             p = zput(p, "\r\n");
                         }
+                        log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                        return 1;
+                    }
+                }
+                /* ── ★★★ SHELL.DLL'S OWN ID SPACE. See src/wow/wowshell.h. ────
+                     A fourth table, behind a fourth check, for the reason the
+                     third one exists: `0x16` is SetFocus in USER's numbering and
+                     ShellAbout in SHELL's, and the two must never meet. The
+                     anchor and the service are the SAME call -- the table names
+                     itself with the first thing we are asked to do out of it. */
+                if (!f.krnl && !g_wow_shell_seg
+                    && f.stubseg != g_wow_user_seg && f.stubseg != g_wow_krnl2_seg
+                    && wow_shell_anchor(f.id, f.argb, wow32_peekw(f.bp + 2))) {
+                    g_wow_shell_seg = f.stubseg;
+                    p = zput(p, "\n     WOWSHELL: SHELL.DLL's code segment is 0x");
+                    p = zhex(p, g_wow_shell_seg);
+                    p = zput(p, " (learned from its own stub, not from the module"
+                                " table)");
+                }
+                if (!f.krnl && g_wow_shell_seg && f.stubseg == g_wow_shell_seg) {
+                    char note[320];
+                    /* The About box runs a modal loop on this thread, so drain
+                       what is already queued for the guest's windows first --
+                       same reason the USER branch pumps. */
+                    wowwin_pump(32);
+                    /* ── ⚠ SAY IT BEFORE IT BLOCKS, NOT AFTER. ────────────────
+                         A modal service does not return until a human dismisses
+                         it, and the "SERVICED" line is written afterwards -- so
+                         while the box is up the log's last line is the LoadIcon
+                         before it, and a reader collecting the log at that moment
+                         sees a run that appears to have STOPPED at a call that
+                         completed fine. Measured, on the first run that opened
+                         one. This line is written and flushed first, so the log
+                         says what the host is waiting for while it waits. */
+                    if (f.id == WOWSHELL_SHELLABOUT) {
+                        p = zput(p, "\n     WOWSHELL: ShellAbout is MODAL -- the VDM"
+                                    " stops here until the box is dismissed; the"
+                                    " SERVICED line follows when it is\r\n");
+                        log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                    }
+                    if (wowshell_call(&f, note, sizeof note)) {
+                        ++g_wow32_serviced;
+                        VDM_REG(tib, VTIB_EIP) += WOW32_BOP_LEN;
+                        p = zput(p, " -> SERVICED (SHELL), returned 0x");
+                        p = zhex(p, f.ret);
+                        if (note[0]) { p = zput(p, " -- "); p = zput(p, note); }
+                        p = zput(p, "\r\n");
+                        log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                        return 1;
+                    }
+                }
+                /* ── ★★★ COMMDLG.DLL'S OWN ID SPACE. See src/wow/wowcommdlg.h. ─
+                     The fifth table, behind the fifth check. Same shape as
+                     SHELL's: the anchor and the service are the same call, so
+                     nothing is answered before the table has named itself. */
+                if (!f.krnl && !g_wow_cdlg_seg
+                    && f.stubseg != g_wow_user_seg && f.stubseg != g_wow_krnl2_seg
+                    && f.stubseg != g_wow_shell_seg
+                    && wow_cdlg_anchor(f.id, f.argb, wow32_peekw(f.bp + 2))) {
+                    g_wow_cdlg_seg = f.stubseg;
+                    p = zput(p, "\n     WOWCOMMDLG: COMMDLG.DLL's code segment is 0x");
+                    p = zhex(p, g_wow_cdlg_seg);
+                    p = zput(p, " (learned from its own stub, not from the module"
+                                " table)");
+                }
+                if (!f.krnl && g_wow_cdlg_seg && f.stubseg == g_wow_cdlg_seg) {
+                    char note[416];
+                    wowwin_pump(32);
+                    /* ⚠ Same reason as ShellAbout: a modal service does not return
+                         until a human dismisses it, and the SERVICED line is
+                         written afterwards. Say it before it blocks, or the log
+                         looks like a run that stopped at the call before. */
+                    if (f.id == WOWCDLG_GETOPENFILENAME
+                        || f.id == WOWCDLG_GETSAVEFILENAME) {
+                        p = zput(p, "\n     WOWCOMMDLG: the file dialog is MODAL --"
+                                    " the VDM stops here until it is dismissed;"
+                                    " the SERVICED line follows when it is\r\n");
+                        log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                    }
+                    if (wowcommdlg_call(&f, note, sizeof note)) {
+                        ++g_wow32_serviced;
+                        VDM_REG(tib, VTIB_EIP) += WOW32_BOP_LEN;
+                        p = zput(p, " -> SERVICED (COMMDLG), returned 0x");
+                        p = zhex(p, f.ret);
+                        if (note[0]) { p = zput(p, " -- "); p = zput(p, note); }
+                        p = zput(p, "\r\n");
                         log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
                         return 1;
                     }

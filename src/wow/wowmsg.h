@@ -78,6 +78,20 @@
 #define WM_QUIT16       0x0012
 #define WM_KEYDOWN16    0x0100
 #define WM_KEYUP16      0x0101
+/* ── ★★★ WM_COMMAND, READ OUT OF THE GUESTS RATHER THAN OUT OF A HEADER ───────
+     Two independent readings, neither of them Notepad's:
+       `commdlg seg3:0x0966`  cmp ax,0x110 / jne / jmp
+                     0x096e   cmp ax,0x111 / jne / jmp
+         -- a dialog procedure's message chain, and 0x110 immediately before
+            0x111 is WM_INITDIALOG immediately before WM_COMMAND. No other pair
+            of adjacent numbers is the pair every dialog procedure handles.
+       `sysedit seg1:0x0477`  push [0x24] / push 0x111 / push 0x7d8
+                              / push 0 / push 0 / lcall <SendMessage>
+         -- a program sending ITSELF one, with a menu item id in wParam.
+   ★ AND THAT SECOND SITE PINS THE PACKING TOO, which is the part that differs
+     between Win16 and Win32: for a MENU command Win16 puts the id alone in
+     wParam and ZERO in lParam. See the translation in wowwin.h. */
+#define WM_COMMAND16    0x0111
 
 /* MSG field offsets -- see the note above. */
 #define MSG_HWND        0x00
