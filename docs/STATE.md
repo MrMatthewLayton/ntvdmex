@@ -4,7 +4,7 @@
 > this file top to bottom and you will know where it is, what works, what does not, and
 > what to do next.
 
-- **Last updated:** 2026-09-03 (session 43)
+- **Last updated:** 2026-09-03 (session 44)
 - **Branch:** `m9/completeness`
 - **Tracker:** [140+ issues](https://github.com/MrMatthewLayton/ntvdmex/issues) — reconciled against the repo on 2026-08-26 (`tools/gh/backfill.py` is the manifest)
 - **Knowledge base:** the [wiki](https://github.com/MrMatthewLayton/ntvdmex/wiki)
@@ -135,7 +135,7 @@ Win16 push, and should not be quoted.)
 | Bar | Where it is | Est. |
 |---|---|---|
 | **The original DOS games bar** — Doom / Skyroads / ZAR, flawless sound | Two of three fully playable and confirmed by hand. ZAR is the gap (VBE 2.0 hi-colour + linear framebuffer). | **~85%** |
-| **★ The north star** — MS Paint + Notepad from Windows 3.x | **NOTEPAD FROM WINDOWS 3.11 RUNS** on the XP desktop — real Win32 window, **its own menu bar and icon out of its own resources**, its own caption, its own message loop, and it stays up. Windows Terminal shows a window too; SYSEDIT runs as a full MDI application with its files' text. ⚠ Not yet *usable*: `MoveWindow` and `WM_COMMAND` are missing, so the edit control does not follow the window and the menu does nothing; and an app that paints its own client area (Paint) still needs **GDI**, whose 367-stub id space is dispatched nowhere. | **~70%** |
+| **★ The north star** — MS Paint + Notepad from Windows 3.x | **NOTEPAD IS A WORKING TEXT EDITOR** on the XP desktop: it opens a file through the real XP file dialog, you type into it, and **File > Save writes the text you typed** (verified byte for byte on disk). Help > About opens; its menus grey and check their own items; own icon, caption and message loop. **32 of the 34 imports NOTEPAD.EXE makes into the 32-bit side are serviced** — the two left are Find and printing. ⚠ MS Paint still needs **GDI: 41 calls reach us, 3 serviced** — and before those matter, `WM_PAINT` is a message Win32 **SENDS** and this host can only **POST**, which is the next architectural wall. | **~78%** |
 | **The full vision** — an `ntvdm` superset on XP-32 | Everything above, plus the host UI, minus the standing DOS defects and M7/M8. | **~60%** |
 
 **Read the north-star number carefully.** The hard *unknowns* are largely behind us — what is
@@ -195,7 +195,46 @@ silently is worth more attention than its size suggests.
 
    ### ▶ Session 42's handoff (background): [session 42](log/sessions/session-42.md#-resume-here)
 
-   ### ▶ START HERE: [session 43](log/sessions/session-43.md#-resume-here)
+   ### ▶ START HERE: [session 44](log/sessions/session-44.md#-resume-here)
+
+   ### ▶ Session 43's handoff (background): [session 43](log/sessions/session-43.md#-resume-here)
+
+   ### ▶ ★★★★★ NOTEPAD IS A WORKING TEXT EDITOR (session 44)
+   It **opens a file through the real XP file dialog, you type into it, and
+   File > Save writes the text you typed** — verified byte for byte on disk.
+   Help > About opens (`SHELL.22 ShellAbout`, its own icon). Its menus grey
+   and check their own items. **32 of the 34 imports NOTEPAD.EXE makes into
+   the 32-bit side are serviced**; the two left are Find and printing.
+
+   ### ▶ ★★★ THE METHOD CHANGED — ENUMERATE WHAT ONE BINARY CALLS
+   `tools/ne/neneeds.py` reads a program's import table and resolves each
+   ordinal through the exporting module's own entry table to the bytes it
+   lands on: a WOW32 stub is **our job**, anything else is the module's own
+   16-bit code and is **free**. That turns *"what is next?"* into *"what is
+   left?"* — a list with an end. ⚠⚠ An export does **not** point at its stub
+   (COMMDLG prefixes a far call, USER/GDI **tail-jump**), and ⚠⚠ `native16`
+   does **not** mean free: `MessageBox`, `LoadIcon`, `EnableMenuItem` and
+   `CheckMenuItem` are wrappers reaching stubs the tool cannot see. **The run
+   still finds those.** ★ The whole 19-guest shelf is ~**158** services against
+   the ~1000 thunked entry points those modules define — which is why you
+   enumerate per PROGRAM, not per API. ⚠ This also retires the *"GDI is 367
+   stubs"* figure: **MS Paint needs 41.**
+
+   ### ▶ ★★★★★ IMPLEMENT `MessageBox` FIRST ON ANY NEW GUEST
+   It is how a Win16 program tells you what is wrong. Implemented, Notepad
+   diagnosed its own failures in English three times in one session — *"Cannot
+   open the … file"*, *"This file is empty and will be deleted"*, *"too large
+   for Notepad"* (about a 59-byte file). All three had presented for hours as
+   "nothing happens". Two sessions of guesswork ended on the first sentence.
+
+   ### ▶ AND THE NEXT WALL IS ARCHITECTURAL: **SENT vs POSTED MESSAGES**
+   Win32 **sends** `WM_INITMENUPOPUP` and `WM_PAINT` and expects an answer
+   before it proceeds; this host can only **post**. ⚠ Measured consequence:
+   the menu-state calls are correct and do **not** take effect while a menu is
+   open, because Win32 runs the menu's modal loop **nested on the exec thread**
+   and the guest cannot run until it returns. ⚠⚠ **`WM_PAINT` is a sent
+   message, so this blocks GDI and therefore Paint** — implementing more GDI
+   calls first will hit the same wall the moment Paint tries to paint.
 
    ### ▶ ★★★★★ NOTEPAD FROM WINDOWS 3.11 RUNS ON THE XP DESKTOP (session 43)
    One of the two north-star applications, **with its own menu bar (File / Edit /
