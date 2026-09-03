@@ -10,7 +10,13 @@ rem -- ESTABLISH THE INPUT, DO NOT INHERIT IT. target.txt is written by rt.bat f
 rem    every DOS test, and a WOW run that leaves it alone gets whatever DOS program
 rem    ran last. Session 31: every WOW run was handed C:\test\selftest.com and
 rem    krnl386 dutifully tried to load a .COM file as a Win16 module.
-echo C:\WINDOWS\SYSTEM32\SYSEDIT.EXE> C:\ntvdmex\target.txt
+rem -- THE TARGET IS AN ARGUMENT NOW (#128, session 43). SYSEDIT was the only
+rem    Win16 program this harness could run, which made "does WOW work" and
+rem    "does SYSEDIT work" the same question. The default is unchanged, so
+rem    every previous invocation still means exactly what it meant.
+set TARGET=%1
+if "%TARGET%"=="" set TARGET=C:\WINDOWS\SYSTEM32\SYSEDIT.EXE
+echo %TARGET%> C:\ntvdmex\target.txt
 rem -- (session 36) krnl386's own BOOTLOG.TXT narration, armed by wowbootlog.flag.
 rem    DELETE EVERY CANDIDATE FIRST: the guest APPENDS (it seeks to end), so a stale
 rem    file would carry a previous run's lines and read as this run's evidence.
@@ -20,7 +26,7 @@ del /q "C:\WINDOWS\SYSTEM32\BOOTLOG.TXT" >nul 2>&1
 del /q "C:\ntvdmex\BOOTLOG.TXT" >nul 2>&1
 del /q "%RES%\wow_bootlog.txt" >nul 2>&1
 del /q "%RES%\wow_bootlog_where.txt" >nul 2>&1
-start "" C:\WINDOWS\SYSTEM32\sysedit.exe
+start "" "%TARGET%"
 ping -n 4 127.0.0.1 >nul
 tasklist /fi "imagename eq ntvdmhost.exe" > "%RES%\wow_alive.txt" 2>&1
 rem -- SEE THE SCREEN. (#128, session 42) The rig has no VNC and the host's own
