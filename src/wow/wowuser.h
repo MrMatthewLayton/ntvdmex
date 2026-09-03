@@ -62,6 +62,16 @@
 #define WOWUSER_DISPATCHMESSAGE  0x72
 #define WOWUSER_TRANSLATEACCEL   0xb2
 #define WOWUSER_TRANSLATEMDISYS  0x1c3
+/* Visibility -- and with a real window behind it, this is the OS's job. */
+#define WOWUSER_SHOWWINDOW       0x2a
+#define WOWUSER_UPDATEWINDOW     0x7c
+
+/* ShowWindow(hWnd, nCmdShow) -- 4 bytes, reversed as always, and confirmed by the
+   run: `(0x0005 0x0160)` from sysedit seg1:0x01da and `(0x0001 0x0140)` from
+   seg2:0x0149. UpdateWindow(hWnd) -- 2 bytes. */
+#define SW_ARG_CMDSHOW  0
+#define SW_ARG_HWND     2
+#define UW_ARG_HWND     0
 
 /* Get/SetWindowWord argument blocks, reversed as always (base = last push):
      GetWindowWord(hWnd, nIndex)               -> +0 nIndex, +2 hWnd
@@ -223,13 +233,30 @@
 #define CW_ARG_WINDOWNAME   22
 #define CW_ARG_CLASSNAME    26
 
-/* Win16's CW_USEDEFAULT, and what this host resolves it to. ⚠ THE SIZE IS
-   NOMINAL: there is no desktop yet, so there is no honest answer -- it is a
-   placeholder that must become the real metric the day windows have pixels, and
-   it is a constant here so that day is a one-line change rather than a hunt. */
-#define CW_USEDEFAULT16     0x8000
+/* Win16's CW_USEDEFAULT, and what this host resolves it to.
+   ★ SESSION 42: IT RESOLVES TO Win32's. This used to be a stated placeholder --
+     "there is no desktop yet, so there is no honest answer" -- and the answer
+     turned out not to be a better number but a better question: the window is a
+     REAL Win32 window on the real desktop, so `CW_USEDEFAULT` is handed to the
+     OS's own window manager, which is what it means. ⚠ The two constants are NOT
+     the same value (`0x8000` here, `0x80000000` there); see wowwin_coord.
+   The DESK_* numbers survive only as the fallback for a rectangle asked about
+   before a window exists. */
+/* ⚠ CW_USEDEFAULT16 lives in wowwin.h, beside the Win32 value it is NOT. */
 #define WOWUSER_DESK_CX     640
 #define WOWUSER_DESK_CY     480
+
+/* ── TWO STYLE BITS, BELIEVED BECAUSE FOUR WINDOWS AGREE ──────────────────────
+     WS_VISIBLE  `mpframe` (0x02cf0000) does NOT have it, and is the one window
+                 SYSEDIT calls ShowWindow on (`seg2:0x0149`). `MDICLIENT`
+                 (0x42300000) and `EDIT` (0x513000c4) DO have it and are never
+                 shown explicitly, yet both must be visible.
+     WS_CHILD    `EDIT` and `MDICLIENT` have 0x40000000; `mpframe` does not.
+   ★ The Win16 and Win32 WS_* bits are the SAME VALUES -- Win32 inherited them --
+     which is why a style word can be handed straight to CreateWindowEx while a
+     CW_USEDEFAULT cannot. */
+#define WS_VISIBLE16        0x10000000u
+#define WS_CHILD16          0x40000000u
 
 /* Win16 WNDCLASS field offsets -- see the note above. */
 #define WNDCLASS_STYLE          0x00
@@ -244,6 +271,11 @@
 #define WNDCLASS_CLASSNAME      0x16
 #define WNDCLASS_SIZE           0x1a
 
+/* The control id Win32 gives an MDI client's first child. Any value works as long
+   as it is above the ids a program uses for its own controls; this is the one
+   Win32's own MDI samples use and it is above SYSEDIT's 0x0cac. */
+#define WOWUSER_MDI_FIRSTCHILD 0xFF00
+
 #define WOWUSER_MAX_CLASS 32
 
 typedef struct {
@@ -255,6 +287,12 @@ typedef struct {
     WORD  hicon, hcursor, hbrback;
     WORD  clsextra, wndextra;
     int   sysclass;                  /* 1 = the SYSTEM provides it, not a program */
+    /* ★ The REAL Win32 class this one is made from. For a program's class that is
+         a prefixed clone of its name registered against our own window procedure;
+         for a system class it is the OS's own name, because MDICLIENT and EDIT
+         already exist and reimplementing them would be the whole mistake again. */
+    char  cls32[96];
+    int   reg32;                     /* 1 = a real Win32 class is behind this */
 } wowuser_class_t;
 
 static wowuser_class_t g_wu_class[WOWUSER_MAX_CLASS];
@@ -316,6 +354,15 @@ static void wowuser_ensure_sysclasses(void)
         c->name[k]   = 0;
         c->atom      = (WORD)(0xC000 + g_wu_nclass);
         c->sysclass  = 1;
+        /* ★ A SYSTEM CLASS IS THE OS's OWN, AND WE USE IT AS-IS. `MDICLIENT` and
+             `EDIT` are real Win32 classes on this machine; registering clones of
+             them against our procedure would be reimplementing an edit control
+             and an MDI client that already exist -- which is the same mistake as
+             drawing our own window frames. No prefix, no registration. */
+        for (k = 0; k < (int)sizeof c->cls32 - 1 && c->name[k]; ++k)
+            c->cls32[k] = c->name[k];
+        c->cls32[k] = 0;
+        c->reg32 = 1;
     }
 }
 
@@ -340,7 +387,7 @@ static void wowuser_ensure_sysclasses(void)
 #define WOWUSER_HWND_BASE 0x0100        /* first synthetic handle */
 #define WOWUSER_HWND_STEP 0x0020        /* spaced so a stray +n is not a hit    */
 
-typedef struct {
+typedef struct wowuser_win_s {
     WORD  hwnd;                      /* 0 = free slot */
     WORD  cls;                       /* index into g_wu_class */
     DWORD style;
@@ -364,6 +411,11 @@ typedef struct {
     /* An EDIT control's text: a Win16 LOCAL handle in the APPLICATION's own
        heap, allocated by the guest's own KERNEL. See EM_GETHANDLE16. */
     WORD  hmem;
+    /* ★★★★★ THE REAL WINDOW. Session 42: a Win16 window IS a Win32 window on the
+         XP desktop, and this is it. The Win16 handle above stays synthetic and
+         16-bit because that is what the guest can hold; this is what the OS
+         holds, and the pair of them is the whole of the bridge. */
+    HWND  hwnd32;
 } wowuser_win_t;
 
 static wowuser_win_t g_wu_win[WOWUSER_MAX_WIN];
@@ -401,6 +453,49 @@ static wowuser_win_t *wowuser_findwin(WORD hwnd)
     if (!hwnd) return NULL;
     for (i = 0; i < g_wu_nwin; ++i)
         if (g_wu_win[i].hwnd == hwnd) return &g_wu_win[i];
+    return NULL;
+}
+
+/* The other direction: the OS hands our window procedure a real HWND and we have
+   to say which Win16 window that is. Declared in wowwin.h, defined here because
+   this is where the table lives. 0 means "not one of ours", which is not an error
+   -- DefWindowProc gets it, as it should. */
+static WORD wowwin_hwnd16(HWND h)
+{
+    int i;
+    if (!h) return 0;
+    for (i = 0; i < g_wu_nwin; ++i)
+        if (g_wu_win[i].hwnd && g_wu_win[i].hwnd32 == h) return g_wu_win[i].hwnd;
+    return 0;
+}
+
+/* The real window behind a Win16 handle, or NULL. */
+static HWND wowuser_hwnd32(WORD hwnd)
+{
+    const wowuser_win_t *w = wowuser_findwin(hwnd);
+    return w ? w->hwnd32 : NULL;
+}
+
+/* Is this window's parent an MDI client? Decides which default procedure the OS
+   should run for it -- see wowwin_proc. */
+static int wowuser_is_mdichild(const wowuser_win_t *w)
+{
+    const wowuser_win_t *p = w->parent ? wowuser_findwin(w->parent) : NULL;
+    return p && g_wu_class[p->cls].sysclass
+             && g_wu_class[p->cls].name[0] == 'M';       /* MDICLIENT */
+}
+
+/* The MDI client owned by this window, if it has one -- a frame window has to
+   pass it to DefFrameProc, which is how Win32 makes an MDI frame behave. */
+static HWND wowuser_mdiclient_of(const wowuser_win_t *w)
+{
+    int i;
+    for (i = 0; i < g_wu_nwin; ++i) {
+        const wowuser_win_t *k = &g_wu_win[i];
+        if (k->hwnd && k->parent == w->hwnd && k->hwnd32
+            && g_wu_class[k->cls].sysclass && g_wu_class[k->cls].name[0] == 'M')
+            return k->hwnd32;
+    }
     return NULL;
 }
 
@@ -624,6 +719,53 @@ static LONG wowuser_defproc(wow32_frame_t *f, wowuser_win_t *w, WORD msg,
             ch->cy = (cy == CW_USEDEFAULT16) ? WOWUSER_DESK_CY : (int)(short)cy;
         }
         for (i = 0; i < (int)sizeof ch->text; ++i) ch->text[i] = tname[i];
+        /* ── ★★★★★ AND THE REAL MDI CLIENT MAKES THE REAL CHILD. (session 42) ──
+             The first cut created it with a plain CreateWindowEx, and the run
+             said why that is not the same thing: SYSEDIT passes **style 0**, and
+             `MCS_STYLE == 0` is not "no style", it is *"give me the MDI
+             defaults"* -- which only an MDI client can supply. Four borderless
+             children stacked at (0,0) filling the whole client area is what
+             "style 0" means to CreateWindowEx, and it is what the desktop showed.
+           ⇒ Forward the message. Win32's MDI client then applies the default
+             child style, CASCADES the children, gives each one a caption, a
+             system menu and a place in the window list, and hands back the HWND
+             -- all of which is the same argument as using the real `EDIT` class
+             rather than drawing a text box.
+           ⚠ The Win32 MDICREATESTRUCT is NOT the Win16 one -- different field
+             widths and a different `lParam` -- so it is BUILT here from the
+             fields read above rather than passed through.
+           ⚠ Win32 sends its own WM_CREATE to `wowwin_proc` from inside this
+             SendMessage, before `ch->hwnd32` is set, so the child is momentarily
+             unknown to `wowwin_hwnd16`. That is correct and harmless: an unknown
+             HWND falls through to DefWindowProc, and the message that matters to
+             the guest is the WIN16 WM_CREATE requested below. */
+        if (c->reg32 && w->hwnd32) {
+            MDICREATESTRUCTA mcs;
+            ZeroMemory(&mcs, sizeof mcs);
+            mcs.szClass = c->cls32;
+            mcs.szTitle = ch->text;
+            mcs.hOwner  = GetModuleHandleA(NULL);
+            mcs.x       = wowwin_coord(wowuser_peek(m, MCS_X));
+            mcs.y       = wowwin_coord(wowuser_peek(m, MCS_Y));
+            mcs.cx      = wowwin_coord(wowuser_peek(m, MCS_CX));
+            mcs.cy      = wowwin_coord(wowuser_peek(m, MCS_CY));
+            mcs.style   = ch->style;
+            ch->hwnd32  = (HWND)(ULONG_PTR)SendMessageA(w->hwnd32, WM_MDICREATE16,
+                                                        0, (LPARAM)&mcs);
+            if (ch->hwnd32) {
+                RECT r;
+                ++g_ww_created;
+                /* Take the rectangle back FROM the MDI client rather than keeping
+                   the one we asked for: it chose, and every later answer this
+                   host gives about this window has to agree with the screen. */
+                if (GetWindowRect(ch->hwnd32, &r)) {
+                    POINT p; p.x = r.left; p.y = r.top;
+                    ScreenToClient(w->hwnd32, &p);
+                    ch->x = p.x; ch->y = p.y;
+                    ch->cx = r.right - r.left; ch->cy = r.bottom - r.top;
+                }
+            }
+        }
         wu_puts(note, notecap, &k, "WM_MDICREATE ");
         wu_putq(note, notecap, &k, c->name);
         wu_puts(note, notecap, &k, " ");
@@ -632,6 +774,27 @@ static LONG wowuser_defproc(wow32_frame_t *f, wowuser_win_t *w, WORD msg,
         wu_puthex(note, notecap, &k, w->hwnd, 4);
         wu_puts(note, notecap, &k, " -> hwnd=0x");
         wu_puthex(note, notecap, &k, ch->hwnd, 4);
+        /* ★ SAY WHETHER THE REAL WINDOW EXISTS, for the same reason CreateWindow
+             does: a Win16 handle and a window on the desktop are two different
+             achievements and only one of them can be seen. */
+        if (ch->hwnd32) {
+            wu_puts(note, notecap, &k, " HWND=0x");
+            wu_puthex(note, notecap, &k, (DWORD)(ULONG_PTR)ch->hwnd32, 8);
+            wu_puts(note, notecap, &k, " @");
+            wu_puthex(note, notecap, &k, (DWORD)(short)ch->x, 4);
+            wu_puts(note, notecap, &k, ",");
+            wu_puthex(note, notecap, &k, (DWORD)(short)ch->y, 4);
+            wu_puts(note, notecap, &k, " ");
+            wu_puthex(note, notecap, &k, (DWORD)(short)ch->cx, 4);
+            wu_puts(note, notecap, &k, "x");
+            wu_puthex(note, notecap, &k, (DWORD)(short)ch->cy, 4);
+            wu_puts(note, notecap, &k, " style=0x");
+            wu_puthex(note, notecap, &k, ch->style, 8);
+        } else {
+            wu_puts(note, notecap, &k, " -- ★ NO REAL WINDOW (Win32 gle=0x");
+            wu_puthex(note, notecap, &k, GetLastError(), 8);
+            wu_puts(note, notecap, &k, ")");
+        }
         wowuser_want_create(f, c, ch);
         return (LONG)ch->hwnd;
     }
@@ -767,11 +930,19 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
         c->hicon    = wowuser_peek(wc, WNDCLASS_HICON);
         c->hcursor  = wowuser_peek(wc, WNDCLASS_HCURSOR);
         c->hbrback  = wowuser_peek(wc, WNDCLASS_HBRBACKGROUND);
+        /* ★★★★★ AND REGISTER A REAL Win32 CLASS BEHIND IT. (session 42) A Win16
+             window is a real window on the real desktop, so its class has to be a
+             real class -- and it is OUR window procedure that goes in it, because
+             the guest's is 16-bit and can only be entered through wowcall.h. */
+        if (!c->reg32) c->reg32 = wowwin_register(c->name, c->cls32, sizeof c->cls32);
         /* The note is the whole point of servicing this: it is the first time this
            project can say WHAT a Win16 program is trying to put on the screen. */
         {   int k = 0;
             wu_puts(note, notecap, &k, "RegisterClass ");
             wu_putq(note, notecap, &k, cname);
+            wu_puts(note, notecap, &k, c->reg32 ? " -> Win32 class " : " -- ★ Win32 "
+                                                  "RegisterClass FAILED for ");
+            wu_puts(note, notecap, &k, c->cls32);
         }
         wow32_setret(f, c->atom);
         return 1;
@@ -838,6 +1009,46 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
         if (wowuser_farstr(f, wow32_argd(f, CW_ARG_WINDOWNAME), wname, sizeof wname))
             for (i = 0; i < (int)sizeof w->text; ++i) w->text[i] = wname[i];
 
+        /* ── ★★★★★ AND NOW MAKE A REAL WINDOW ON THE REAL DESKTOP. (session 42)
+             This is what WOW is. Everything above stays -- the guest needs a
+             16-bit handle it can hold, its window words, its class -- and the
+             thing the USER sees is now the OS's own window, with the OS's title
+             bar, border, taskbar button, focus and clipping.
+           ⚠ THE COORDINATES ARE TRANSLATED, NOT PASSED. Win16's CW_USEDEFAULT is
+             0x8000 and Win32's is 0x80000000. The STYLE word IS passed straight
+             across, because Win32 inherited the WS_* values unchanged.
+           ⚠ `hMenu` is a control ID for a child and a menu handle for a
+             top-level, and this host has no menus, so it is only used for the
+             child case -- a top-level gets NULL rather than a 16-bit number cast
+             to a HMENU, which would be a handle from another address space.
+           ⚠ MDICLIENT REQUIRES A CLIENTCREATESTRUCT and fails without one. That
+             is not a workaround: it is the documented contract of the class we
+             just chose to use rather than reimplement. */
+        {   const wowuser_class_t *cc = &g_wu_class[w->cls];
+            HWND parent32 = w->parent ? wowuser_hwnd32(w->parent) : NULL;
+            CLIENTCREATESTRUCT ccs;
+            void *param = NULL;
+            HMENU hm = NULL;
+            if (cc->sysclass && cc->name[0] == 'M') {     /* MDICLIENT */
+                ccs.hWindowMenu  = NULL;
+                ccs.idFirstChild = WOWUSER_MDI_FIRSTCHILD;
+                param = &ccs;
+            }
+            if ((w->style & WS_CHILD16) && w->menu)
+                hm = (HMENU)(ULONG_PTR)w->menu;
+            if (cc->reg32) {
+                w->hwnd32 = CreateWindowExA(0, cc->cls32, w->text, w->style,
+                                            wowwin_coord(wow32_argw(f, CW_ARG_X)),
+                                            wowwin_coord(wow32_argw(f, CW_ARG_Y)),
+                                            wowwin_coord(wow32_argw(f, CW_ARG_WIDTH)),
+                                            wowwin_coord(wow32_argw(f, CW_ARG_HEIGHT)),
+                                            parent32, hm, GetModuleHandleA(NULL),
+                                            param);
+                if (w->hwnd32) { ++g_ww_created;
+                                 if (!g_ww_thread) g_ww_thread = GetCurrentThreadId(); }
+            }
+        }
+
         wu_puts(note, notecap, &k, "CreateWindow ");
         wu_putq(note, notecap, &k, c->name);
         wu_puts(note, notecap, &k, " ");
@@ -850,6 +1061,18 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
            it gets no WM_CREATE. Say which kind of window this is on the line that
            creates it, or the ABSENCE of the callback below reads like a defect. */
         if (c->sysclass) wu_puts(note, notecap, &k, " [system class: no wndproc]");
+        /* ★ SAY WHETHER IT IS REALLY THERE. A Win16 handle that answers questions
+             about itself and a WINDOW ON THE DESKTOP are different achievements,
+             and only one of them is visible -- so the line has to distinguish
+             them, or a failed CreateWindowEx reads as a success. */
+        if (w->hwnd32) {
+            wu_puts(note, notecap, &k, " HWND=0x");
+            wu_puthex(note, notecap, &k, (DWORD)(ULONG_PTR)w->hwnd32, 8);
+        } else {
+            wu_puts(note, notecap, &k, " -- ★ NO REAL WINDOW (Win32 gle=0x");
+            wu_puthex(note, notecap, &k, GetLastError(), 8);
+            wu_puts(note, notecap, &k, ")");
+        }
         wow32_setret(f, w->hwnd);
 
         /* ── ★★★★★ AND NOW SEND IT WM_CREATE. (GH #128, session 40) ───────────
@@ -1251,6 +1474,59 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
             wu_puthex(note, notecap, &k, wow32_argw(f, TA_ARG_HACCEL), 4);
         }
         wu_puts(note, notecap, &k, " -> 0 (no accelerator table in this host)");
+        wow32_setret(f, 0);
+        return 1;
+    }
+
+    /* ── ★★★ 0x2a ShowWindow(hWnd, nCmdShow) / 0x7c UpdateWindow(hWnd) ────────
+         Both go straight to the OS, because the window is the OS's. That is the
+         whole difference between this and the version of this host that drew its
+         own frames: there is nothing here to decide.
+       ★ THE ARGUMENTS ARE CONFIRMED BY THE RUN: `(0x0005 0x0160)` from
+         `sysedit seg1:0x01da` -- the MDI client, from inside the frame's
+         WM_CREATE -- and `(0x0001 0x0140)` from `seg2:0x0149`, the frame window,
+         from WinMain. So `+0` is nCmdShow and `+2` is hWnd.
+       ★ AND THE `1` IS OUR OWN VALUE COMING BACK: WinMain's `nCmdShow` is what
+         this host put in the WOW command structure (`WOWCMD_NCMDSHOW`), handed to
+         the application at launch and handed straight back here.
+       ⚠ nCmdShow IS PASSED THROUGH UNTRANSLATED, and that is a claim worth
+         making explicitly: the SW_* values are the same in Win16 and Win32, as
+         the WS_* bits are. If a run ever shows a window doing the wrong thing,
+         this is the line to doubt. */
+    case WOWUSER_SHOWWINDOW: {
+        WORD hwnd = wow32_argw(f, SW_ARG_HWND);
+        WORD cmd  = wow32_argw(f, SW_ARG_CMDSHOW);
+        wowuser_win_t *w = wowuser_findwin(hwnd);
+        int k = 0;
+        wu_puts(note, notecap, &k, "ShowWindow 0x");
+        wu_puthex(note, notecap, &k, hwnd, 4);
+        wu_puts(note, notecap, &k, " nCmdShow=0x");
+        wu_puthex(note, notecap, &k, cmd, 4);
+        if (!w) {
+            wu_puts(note, notecap, &k, " -- NO SUCH WINDOW");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        if (!w->hwnd32) {
+            wu_puts(note, notecap, &k, " -- no real window behind it");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        wow32_setret(f, ShowWindow(w->hwnd32, (int)(short)cmd) ? 1 : 0);
+        wu_puts(note, notecap, &k, " -> the OS's ShowWindow on HWND=0x");
+        wu_puthex(note, notecap, &k, (DWORD)(ULONG_PTR)w->hwnd32, 8);
+        return 1;
+    }
+
+    case WOWUSER_UPDATEWINDOW: {
+        WORD hwnd = wow32_argw(f, UW_ARG_HWND);
+        wowuser_win_t *w = wowuser_findwin(hwnd);
+        int k = 0;
+        wu_puts(note, notecap, &k, "UpdateWindow 0x");
+        wu_puthex(note, notecap, &k, hwnd, 4);
+        if (w && w->hwnd32) { UpdateWindow(w->hwnd32);
+                              wu_puts(note, notecap, &k, " -> the OS's"); }
+        else                  wu_puts(note, notecap, &k, " -- no real window");
         wow32_setret(f, 0);
         return 1;
     }

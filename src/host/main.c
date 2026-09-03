@@ -25,6 +25,7 @@
 #include "../wow/wowsched.h" /* GH #128: ...and the Win16 task scheduler, which is also ours */
 #include "../wow/wowcall.h" /* GH #128: ...and the OTHER direction -- calling 16-bit code */
 #include "../wow/wowmsg.h" /* GH #128: ...and the MESSAGE QUEUE the loop turns on */
+#include "../wow/wowwin.h" /* GH #128: ...and a Win16 window IS a real Win32 window */
 #include "../wow/wowuser.h" /* GH #128: USER.EXE's id space -- a DIFFERENT one; see the file */
 #include "dos_mcb.h"
 #include "dos_loader.h"
@@ -2408,45 +2409,18 @@ static void host_screenshot(void)
    aimed at the keyboard was dead code for actual keys, and the synthetic probe tested a path
    real keys do not take. Everything goes through here now, so the probe and a human press
    the same button. */
-/* ── ★★★ AND THE SAME KEYSTROKE, FOR A WIN16 GUEST. (GH #128, session 41) ─────
-     A DOS guest reads the 8042 FIFO; a Win16 program reads a MESSAGE QUEUE, and
-     nothing had ever fed one. This is the other end of src/wow/wowmsg.h and it
-     hangs off the SAME single path, deliberately: "one keystroke, one path,
-     whoever produced it" is what makes the scripted probe and a human press test
-     the same thing, and a second tap for real keys only would have broken that
-     the first time keys.txt was used to drive a Win16 run.
-
-   ★ THE VIRTUAL KEY CODE IS THE OS's ANSWER, NOT A TABLE. `MapVirtualKey` is
-     what Windows uses on its own keyboard path, so it follows the machine's
-     actual layout and nothing here is written from memory -- which for a project
-     whose cardinal rule is exactly that, is the difference between a mapping and
-     a guess. A scancode it cannot map yields VK 0, and that is posted as it is
-     rather than being turned into some other key.
-   ⚠ THE lParam BIT FIELD IS COMPOSED, and only these bits: repeat count 1
-     (0-15), the OEM scan code (16-23), the extended flag (24), and for a break
-     the previous-state and transition bits (30, 31). Bit 29 -- the ALT context
-     code -- is left 0 because this host does not track modifier state, so a
-     program keying off Alt+key from lParam will read no Alt. That is a stated
-     gap, not a silent one. */
-static void wowmsg_host_key(uint8_t rawsc, int ext, int is_break)
-{
-    UINT  vk;
-    DWORD lp;
-    if (!g_wm_focus) return;             /* nowhere to send it; see wowmsg.h */
-    vk = MapVirtualKey((UINT)rawsc | (ext ? 0xE000u : 0u), 3 /* VSC_TO_VK_EX */);
-    if (!vk) vk = MapVirtualKey((UINT)rawsc, 1 /* VSC_TO_VK */);
-    lp = 1u | ((DWORD)rawsc << 16) | (ext ? 0x01000000u : 0u);
-    if (is_break) lp |= 0xC0000000u;
-    wowmsg_post(g_wm_focus, is_break ? WM_KEYUP16 : WM_KEYDOWN16,
-                (WORD)vk, lp, GetTickCount(), 0, 0);
-}
-
+/* ⚠ THE Win16 SIDE IS NO LONGER FED FROM HERE. (session 42) Session 41 hung a
+   Win16 WM_KEYDOWN off this function, on the reasoning that one keystroke should
+   have one path. That was right about the DOS path and wrong about the other one:
+   a Win16 window is a REAL Win32 window now, so its keyboard input arrives as real
+   Win32 messages addressed to it, with the OS's own focus deciding which window
+   gets them -- see wowwin_proc. Feeding the Win16 queue from the 8042 as well
+   would deliver every key twice and to a window the OS had not focused. */
 static void host_key_scancode(uint8_t rawsc, int ext, int is_break)
 {
     HOST_LOCK();
     if (ext) vdd_input_push_scancode(&g_in, 0xE0);
     vdd_input_push_scancode(&g_in, is_break ? (uint8_t)(rawsc | 0x80) : rawsc);
-    wowmsg_host_key(rawsc, ext, is_break);      /* ...and the Win16 queue */
     HOST_UNLOCK();
     keylat_push();                  /* start the clock on this keystroke's delivery */
     /* The VDD raises IRQ1 itself now, on the 8042's empty->full transition and again as the
@@ -10803,6 +10777,14 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                 }
                 if (!f.krnl && f.stubseg == g_wow_user_seg && g_wow_user_seg) {
                     char note[224];
+                    /* ── ★★ KEEP THE REAL WINDOWS ALIVE. (GH #128, session 42) ──
+                         They belong to this thread, so nothing about them happens
+                         -- no paint, no move, no click, no title bar -- unless
+                         this thread dispatches, and a WOW32 BOP is the only
+                         regular moment it is not inside the guest. Bounded, so a
+                         flood of mouse moves cannot starve the thing we are here
+                         to run. */
+                    wowwin_pump(32);
                     /* ── ★★★ GetMessage BLOCKS, AND THIS IS THE BLOCK. ─────────
                          There is no "no message" answer to GetMessage: a task with
                          an empty queue waits. The waiting is done HERE rather than
@@ -10820,9 +10802,25 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                          make the thing we are waiting for impossible. */
                     if (f.id == WOWUSER_GETMESSAGE && !g_wm_count && !g_wm_quit) {
                         DWORD t0 = GetTickCount(), waited;
+                        /* ── ★★★ A BLOCKED Win16 TASK IS A Win32 MESSAGE PUMP.
+                             (session 42, replacing session 41's keyboard-event
+                             wait.) The input no longer comes from the DOS 8042
+                             path -- it comes from the REAL WINDOW, and the real
+                             window's messages arrive on this thread's Win32
+                             queue. So "the Win16 queue is empty" and "wait for
+                             something to happen" are the same statement as
+                             "dispatch Win32 messages until one of them turns into
+                             a Win16 message", which is exactly what a Win16 task
+                             blocking in GetMessage is FOR.
+                           ⚠ MsgWaitForMultipleObjects, not Sleep: it wakes the
+                             instant a message arrives, so a keystroke is not
+                             delayed by the poll interval, and it does not spin. */
                         while (g_running && !g_wm_count && !g_wm_quit
-                               && GetTickCount() - t0 < WOWMSG_WAIT_MS)
-                            WaitForSingleObject(g_key_event, 50);
+                               && GetTickCount() - t0 < WOWMSG_WAIT_MS) {
+                            if (!wowwin_pump(64))
+                                MsgWaitForMultipleObjects(0, NULL, FALSE, 50,
+                                                          QS_ALLINPUT);
+                        }
                         waited = GetTickCount() - t0;
                         p = zput(p, "\n     WOWMSG: GetMessage with an empty queue"
                                     " -- BLOCKED for 0x");
