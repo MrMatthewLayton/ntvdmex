@@ -135,7 +135,7 @@ Win16 push, and should not be quoted.)
 | Bar | Where it is | Est. |
 |---|---|---|
 | **The original DOS games bar** — Doom / Skyroads / ZAR, flawless sound | Two of three fully playable and confirmed by hand. ZAR is the gap (VBE 2.0 hi-colour + linear framebuffer). | **~85%** |
-| **★ The north star** — MS Paint + Notepad from Windows 3.x | **NOTEPAD FROM WINDOWS 3.11 SHOWS ITS WINDOW** on the XP desktop — a real Win32 frame with its `EDIT` control and a taskbar button — as does Windows Terminal; SYSEDIT runs as a full MDI application with its files' text. Not yet *usable*: no captions, no menus, and an app that paints its own client area (Paint) still needs **GDI**, whose 367-stub id space is dispatched nowhere. | **~65%** |
+| **★ The north star** — MS Paint + Notepad from Windows 3.x | **NOTEPAD FROM WINDOWS 3.11 RUNS** on the XP desktop — real Win32 window, **its own menu bar and icon out of its own resources**, its own caption, its own message loop, and it stays up. Windows Terminal shows a window too; SYSEDIT runs as a full MDI application with its files' text. ⚠ Not yet *usable*: `MoveWindow` and `WM_COMMAND` are missing, so the edit control does not follow the window and the menu does nothing; and an app that paints its own client area (Paint) still needs **GDI**, whose 367-stub id space is dispatched nowhere. | **~70%** |
 | **The full vision** — an `ntvdm` superset on XP-32 | Everything above, plus the host UI, minus the standing DOS defects and M7/M8. | **~60%** |
 
 **Read the north-star number carefully.** The hard *unknowns* are largely behind us — what is
@@ -193,24 +193,27 @@ silently is worth more attention than its size suggests.
 1. **[#128] WOW / Win16 — IN PROGRESS. ★★★★★ `SYSEDIT.EXE` IS ON THE WINDOWS XP
    DESKTOP, AS ITSELF.**
 
-   ### ▶ START HERE: [session 42](log/sessions/session-42.md#-resume-here)
-   That block is the live handoff. Everything below it is background.
+   ### ▶ Session 42's handoff (background): [session 42](log/sessions/session-42.md#-resume-here)
 
-   ### ▶ ★★★★★ AND NOTEPAD FROM WINDOWS 3.11 IS ON THE DESKTOP (session 43)
-   One of the two north-star applications now **shows its window**: a real Win32
-   frame with its `EDIT` control filling the client area and a taskbar button. It
-   was one service away -- `LoadCursor(NULL, 0x7f02)` returned 0, and Notepad's own
-   initialisation returns 0 when it does (`notepad seg2:0x02ee`), so `WinMain`
-   returned without ever registering a class. USER id `0xad` is *"build me a
-   predefined system cursor or icon"*, named by its call site; the host answers
-   with a **token** and fetches the real `LoadCursorA`/`LoadIconA` at
-   `RegisterClass`, because that is where the guest finally says which of the two
-   it is. ⚠ Not usable yet: no caption, no menus, and it exits when the message
-   wait expires.
-   ★ The Windows 3.11 disks are extracted to `C:\WIN16` on the rig and
-   `scripts/wowtriage.sh` runs twelve of them and prints how far each gets --
-   TERMINAL also shows a window, PBRUSH builds ten classes, and the failures name
-   themselves.
+   ### ▶ START HERE: [session 43](log/sessions/session-43.md#-resume-here)
+
+   ### ▶ ★★★★★ NOTEPAD FROM WINDOWS 3.11 RUNS ON THE XP DESKTOP (session 43)
+   One of the two north-star applications, **with its own menu bar (File / Edit /
+   Search / Help), its own icon on the taskbar, the caption its program gives it
+   ("Notepad - (Untitled)"), and its own message loop** — and it stays running
+   until it is closed. Three services made it possible, each named by a call site
+   rather than guessed: `0xad` *"build me a predefined cursor or icon"* (Notepad's
+   init returns 0 if `LoadCursor` does), `0x76` `RegisterWindowMessage` (it
+   registers the two `commdlg_*` names and abandons its init if either fails), and
+   `0x91` `RegisterClipboardFormat`. ★ The **menu and the icon come out of the
+   application's own NE file** (`src/wow/wowres.h`), and both layouts were decoded
+   by an offline tool (`tools/ne/neres.py`) and confirmed against the data before
+   any host code existed — a wrong offset does not spell *"&About Notepad..."*.
+   ★ **Twelve Windows 3.11 guests are on the rig** (`C:\WIN16`, extracted with
+   `tools/fat12.py`) and `scripts/wowtriage.sh` prints how far each one gets:
+   TERMINAL also shows a window, PBRUSH builds ten classes, and every failure names
+   itself. ⚠ Still missing: `MoveWindow`, so Notepad's edit control does not follow
+   the window; `WM_COMMAND`, so the menu does not *do* anything yet.
 
    ### ▶ AND THE FRONTIER IS GDI
    A frame titled *"System Configuration Editor"*, four cascaded MDI children titled
