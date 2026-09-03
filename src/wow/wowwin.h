@@ -81,6 +81,7 @@ static WORD  wowwin_hwnd16(HWND h);
 static wowuser_win_t *wowuser_findwin(WORD hwnd);
 static int   wowuser_is_mdichild(const wowuser_win_t *w);
 static HWND  wowuser_mdiclient_of(const wowuser_win_t *w);
+static WORD  wowuser_menu16(HMENU m);   /* the 16-bit name for a real menu */
 
 /*
  * ── OUR WINDOW PROCEDURE FOR EVERY Win16 WINDOW ─────────────────────────────
@@ -186,6 +187,35 @@ static LRESULT CALLBACK wowwin_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
          from the Window menu. Posting and then letting the OS have it keeps both
          -- DefWindowProc does nothing with a WM_COMMAND, so the non-MDI case
          costs nothing. */
+    /* ── ★★★ WM_INITMENU / WM_INITMENUPOPUP -- WHERE A MENU GETS ITS STATE. ──
+         (session 44) An application does not grey and check its menu items when
+         it feels like it; it does so when the OS tells it a menu is ABOUT TO BE
+         SHOWN. Notepad greys Edit > Undo, Cut, Copy, Paste and checks Word Wrap
+         from here -- so with these dropped it never called GetMenu at all, and
+         the whole menu-state cluster looked unused when it was simply never
+         asked for. Found by driving Alt+E on the live guest and watching nothing
+         happen.
+       ⚠⚠ wParam IS AN HMENU AND MUST BECOME A TOKEN. A real menu handle is 32
+         bits and a Win16 program has 16 to hold it in; worse, it hands that
+         handle straight back to EnableMenuItem, which is 16-bit code inside
+         USER, so the value has to survive a round trip and still name the right
+         menu. Truncating a pointer would do neither, and would not fail loudly.
+       ★ lParam is the same shape in both: the popup's index in the low half and
+         "this is the system menu" in the high half. Composed rather than
+         relayed, because the Win32 value is what we have and the Win16 value is
+         what the guest reads. */
+    case WM_INITMENU:
+    case WM_INITMENUPOPUP:
+        if (h16) {
+            WORD hm = wowuser_menu16((HMENU)wp);
+            wowmsg_post(h16, (WORD)msg, hm,
+                        (msg == WM_INITMENUPOPUP)
+                            ? ((DWORD)LOWORD(lp) | ((DWORD)HIWORD(lp) << 16))
+                            : 0,
+                        GetTickCount(), 0, 0);
+            ++g_ww_msgs;
+        }
+        break;
     case WM_COMMAND:
         if (h16) {
             WORD id     = (WORD)LOWORD(wp);

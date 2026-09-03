@@ -296,6 +296,110 @@ static WORD wowuser_sysres_kind(WORD h)
 #define WOWUSER_ENUMCLIPFMT      0x0090
 #define ECF_ARG_FORMAT   0
 
+/* ── ★★★ MENUS AND DIALOG ITEMS -- THE LAST TWO CLUSTERS. ────────────────────
+     Both from `neneeds.py`'s list, and both blocked on the same missing piece: a
+     16-bit name for an `HMENU`. A Win32 menu handle is 32 bits and a Win16
+     program has 16 to hold it in, so the same answer as everywhere else in this
+     file -- a TOKEN the guest can carry, with the real object behind it.
+
+   ★★ AND IT HAS TO BE A TOKEN, NOT A TRUNCATION, BECAUSE THE HANDLE GOES BACK
+     THROUGH 16-BIT CODE. `USER.154 CHECKMENUITEM` and `USER.155 ENABLEMENUITEM`
+     are `native16` -- USER implements them in its own code, which will hand the
+     handle to a stub of its own later. So whatever `GetMenu` returns must
+     survive a round trip through USER and still name the right menu when it
+     comes back. A truncated pointer would not, and would not fail loudly either.
+
+     0x9c  GETSYSTEMMENU   4 bytes  (hWnd, bRevert)
+     0x9d  GETMENU         2 bytes  (hWnd)
+     0x9f  GETSUBMENU      4 bytes  (hMenu, nPos)
+     0x58  ENDDIALOG       4 bytes  (hDlg, nResult)
+     0x5b  GETDLGITEM      4 bytes  (hDlg, nIDDlgItem)
+     0x5d  GETDLGITEMTEXT 10 bytes  (hDlg, nID, lpString, nMaxCount)  2+2+4+2
+     0x5e  SETDLGITEMINT   8 bytes  (hDlg, nID, wValue, bSigned)      2+2+2+2
+     0x65  SENDDLGITEMMSG 12 bytes  (hDlg, nID, wMsg, wParam, lParam) 2+2+2+2+4
+   Every one adds up to the byte count its own stub declares. */
+/* ★★ AND THE TWO THAT ACTUALLY CHANGE A MENU, found the way MessageBox was:
+     `USER.154 CHECKMENUITEM` and `USER.155 ENABLEMENUITEM` are `native16`, so
+     neneeds.py cannot see them -- but they are WRAPPERS that reach stubs of
+     their own, and the run named both the moment WM_INITMENUPOPUP started
+     arriving: `0x9a` and `0x9b`, 6 argument bytes each, six calls in one opening
+     of Notepad's Edit menu. That is the THIRD time today a native16 wrapper has
+     turned out to be real work (MessageBox and LoadIcon are the others), which
+     is exactly the limit the tool documents.
+     (hMenu, wID, wFlags) = 2+2+2 = 6, reversed as always. */
+#define WOWUSER_CHECKMENUITEM    0x009a
+#define WOWUSER_ENABLEMENUITEM   0x009b
+#define MI_ARG_FLAGS     0
+#define MI_ARG_ID        2
+#define MI_ARG_HMENU     4
+
+#define WOWUSER_GETSYSTEMMENU    0x009c
+#define GSYM_ARG_REVERT  0
+#define GSYM_ARG_HWND    2
+#define WOWUSER_GETMENU          0x009d
+#define GM2_ARG_HWND     0
+#define WOWUSER_GETSUBMENU       0x009f
+#define GSM2_ARG_POS     0
+#define GSM2_ARG_HMENU   2
+
+#define WOWUSER_ENDDIALOG        0x0058
+#define ED_ARG_RESULT    0
+#define ED_ARG_HDLG      2
+#define WOWUSER_GETDLGITEM       0x005b
+#define GDI2_ARG_ID      0
+#define GDI2_ARG_HDLG    2
+#define WOWUSER_GETDLGITEMTEXT   0x005d
+#define GDIT_ARG_MAX     0
+#define GDIT_ARG_BUF     2
+#define GDIT_ARG_ID      6
+#define GDIT_ARG_HDLG    8
+#define WOWUSER_SETDLGITEMINT    0x005e
+#define SDII_ARG_SIGNED  0
+#define SDII_ARG_VALUE   2
+#define SDII_ARG_ID      4
+#define SDII_ARG_HDLG    6
+#define WOWUSER_SENDDLGITEMMSG   0x0065
+#define SDIM_ARG_LPARAM  0
+#define SDIM_ARG_WPARAM  4
+#define SDIM_ARG_MSG     6
+#define SDIM_ARG_ID      8
+#define SDIM_ARG_HDLG   10
+
+/* Menu tokens live between the window handles (0x0100 + n*0x20) and the
+   cursor/icon tokens (0x8000 + n*8), so a stray one of any kind is recognisable
+   on sight in a log rather than being mistaken for another kind of object. */
+#define WOWUSER_MENU_BASE   0x4000
+#define WOWUSER_MENU_STEP   0x0008
+#define WOWUSER_MAX_MENU    64
+
+typedef struct { WORD h; HMENU m; } wowuser_menu_t;
+static wowuser_menu_t g_wu_menu[WOWUSER_MAX_MENU];
+static int            g_wu_nmenu = 0;
+
+/* One token per HMENU: the OS hands back the same handle for the same menu, and
+   a program that asks twice must get one answer, the way it does for a cursor. */
+static WORD wowuser_menu16(HMENU m)
+{
+    int i;
+    if (!m) return 0;
+    for (i = 0; i < g_wu_nmenu; ++i)
+        if (g_wu_menu[i].m == m) return g_wu_menu[i].h;
+    if (g_wu_nmenu >= WOWUSER_MAX_MENU) return 0;
+    i = g_wu_nmenu++;
+    g_wu_menu[i].m = m;
+    g_wu_menu[i].h = (WORD)(WOWUSER_MENU_BASE + i * WOWUSER_MENU_STEP);
+    return g_wu_menu[i].h;
+}
+
+static HMENU wowuser_menu32(WORD h)
+{
+    int i;
+    if (!h) return NULL;
+    for (i = 0; i < g_wu_nmenu; ++i)
+        if (g_wu_menu[i].h == h) return g_wu_menu[i].m;
+    return NULL;
+}
+
 /* ⚠⚠ A Win16 RECT IS FOUR **WORDS**; A Win32 RECT IS FOUR **LONGS**. Eight bytes
      against sixteen, and nothing about a wrong reading looks wrong -- it just
      produces coordinates off by whatever the neighbouring field held. Anywhere a
@@ -2554,6 +2658,277 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
         wu_puthex(note, notecap, &k, (DWORD)nxt, 4);
         if (!nxt) wu_puts(note, notecap, &k, " (end)");
         wow32_setret(f, (DWORD)(WORD)nxt);
+        return 1;
+    }
+
+    /* ── ★★★ EnableMenuItem / CheckMenuItem -- WHERE THE GREYING LANDS. ─────
+         Without these the run looked finished: GetMenu and GetSubMenu answered,
+         USER's own 16-bit code ran, no error anywhere -- and every item in the
+         menu stayed enabled, because the calls that change one were being
+         stepped over. A menu that renders is not a menu that is RIGHT.
+       ⚠ MF_* ARE THE SAME VALUES IN BOTH (MF_BYCOMMAND 0, MF_BYPOSITION 0x400,
+         MF_GRAYED 1, MF_DISABLED 2, MF_CHECKED 8), so the flags go straight
+         across -- but they are LOGGED, because MF_BYCOMMAND vs MF_BYPOSITION
+         decides whether the second argument is an id or an index, and getting
+         that wrong greys the wrong line rather than failing. */
+    case WOWUSER_ENABLEMENUITEM:
+    case WOWUSER_CHECKMENUITEM: {
+        int   chk  = (f->id == WOWUSER_CHECKMENUITEM);
+        WORD  hm   = wow32_argw(f, MI_ARG_HMENU);
+        WORD  id   = wow32_argw(f, MI_ARG_ID);
+        WORD  fl   = wow32_argw(f, MI_ARG_FLAGS);
+        HMENU m    = wowuser_menu32(hm);
+        int k = 0;
+        DWORD prev;
+        wu_puts(note, notecap, &k, chk ? "CheckMenuItem 0x" : "EnableMenuItem 0x");
+        wu_puthex(note, notecap, &k, hm, 4);
+        wu_puts(note, notecap, &k, (fl & 0x400) ? " byPOSITION " : " byCOMMAND ");
+        wu_puthex(note, notecap, &k, id, 4);
+        wu_puts(note, notecap, &k, " flags=0x");
+        wu_puthex(note, notecap, &k, fl, 4);
+        if (!m) {
+            wu_puts(note, notecap, &k, " -- ★ NOT ONE OF OUR MENU TOKENS;"
+                                       " answered -1");
+            wow32_setret(f, 0xFFFFFFFF);   /* Win16's "no such item" */
+            return 1;
+        }
+        prev = chk ? (DWORD)CheckMenuItem(m, (UINT)id, (UINT)fl)
+                   : (DWORD)EnableMenuItem(m, (UINT)id, (UINT)fl);
+        wu_puts(note, notecap, &k, " -> previous state 0x");
+        wu_puthex(note, notecap, &k, prev, 4);
+        wow32_setret(f, prev);
+        return 1;
+    }
+
+    /* ── ★★ THE MENU TRIO. Real menus, named by tokens. ─────────────────────
+         Notepad greys and checks its own menu items (Edit > Undo, Word Wrap),
+         and to do that it first has to GET the menu. It reads its own window's
+         menu bar, walks into a popup, and works on that -- so all three are the
+         same operation with the real HMENU behind a token. */
+    case WOWUSER_GETMENU: {
+        WORD hwnd = wow32_argw(f, GM2_ARG_HWND);
+        wowuser_win_t *w = wowuser_findwin(hwnd);
+        WORD t = 0;
+        int k = 0;
+        wu_puts(note, notecap, &k, "GetMenu 0x");
+        wu_puthex(note, notecap, &k, hwnd, 4);
+        if (!w || !w->hwnd32) { wu_puts(note, notecap, &k, " -- no real window");
+                                wow32_setret(f, 0); return 1; }
+        t = wowuser_menu16(GetMenu(w->hwnd32));
+        wu_puts(note, notecap, &k, t ? " -> token 0x" : " -- NO MENU (or no token"
+                                                        " left) 0x");
+        wu_puthex(note, notecap, &k, t, 4);
+        wow32_setret(f, t);
+        return 1;
+    }
+
+    case WOWUSER_GETSUBMENU: {
+        WORD hm  = wow32_argw(f, GSM2_ARG_HMENU);
+        WORD pos = wow32_argw(f, GSM2_ARG_POS);
+        HMENU m  = wowuser_menu32(hm);
+        WORD t = 0;
+        int k = 0;
+        wu_puts(note, notecap, &k, "GetSubMenu 0x");
+        wu_puthex(note, notecap, &k, hm, 4);
+        wu_puts(note, notecap, &k, " pos 0x");
+        wu_puthex(note, notecap, &k, pos, 4);
+        if (!m) { wu_puts(note, notecap, &k, " -- ★ NOT ONE OF OUR MENU TOKENS");
+                  wow32_setret(f, 0); return 1; }
+        t = wowuser_menu16(GetSubMenu(m, (int)(short)pos));
+        wu_puts(note, notecap, &k, " -> token 0x");
+        wu_puthex(note, notecap, &k, t, 4);
+        wow32_setret(f, t);
+        return 1;
+    }
+
+    /* ⚠ bRevert TRUE DESTROYS the application's copy and rebuilds the default,
+         which is a real side effect and not a query -- passed through as given,
+         and logged, because a guest that passes TRUE by accident would otherwise
+         lose its own system-menu customisations invisibly. */
+    case WOWUSER_GETSYSTEMMENU: {
+        WORD hwnd = wow32_argw(f, GSYM_ARG_HWND);
+        WORD rev  = wow32_argw(f, GSYM_ARG_REVERT);
+        wowuser_win_t *w = wowuser_findwin(hwnd);
+        WORD t = 0;
+        int k = 0;
+        wu_puts(note, notecap, &k, "GetSystemMenu 0x");
+        wu_puthex(note, notecap, &k, hwnd, 4);
+        wu_puts(note, notecap, &k, rev ? " REVERT (rebuilds the default menu)"
+                                       : " (query)");
+        if (!w || !w->hwnd32) { wu_puts(note, notecap, &k, " -- no real window");
+                                wow32_setret(f, 0); return 1; }
+        t = wowuser_menu16(GetSystemMenu(w->hwnd32, rev ? TRUE : FALSE));
+        wu_puts(note, notecap, &k, " -> token 0x");
+        wu_puthex(note, notecap, &k, t, 4);
+        wow32_setret(f, t);
+        return 1;
+    }
+
+    /* ── ★★ THE DIALOG-ITEM HELPERS. ────────────────────────────────────────
+         Every one of these is "find the child control with this id and do
+         something to it", and the child IS a real Win32 window -- USER's own
+         16-bit DialogBox builds a dialog by calling CreateWindow, which comes
+         through this host, so the controls are ours and the OS can find them by
+         id exactly as it would for any dialog.
+       ⚠ The Win16 handle for a control that came back from the OS is looked up
+         rather than invented; a control this host did not create yields 0 and
+         says so. */
+    case WOWUSER_GETDLGITEM: {
+        WORD hdlg = wow32_argw(f, GDI2_ARG_HDLG);
+        WORD id   = wow32_argw(f, GDI2_ARG_ID);
+        wowuser_win_t *w = wowuser_findwin(hdlg);
+        WORD h16 = 0;
+        int k = 0;
+        wu_puts(note, notecap, &k, "GetDlgItem dlg 0x");
+        wu_puthex(note, notecap, &k, hdlg, 4);
+        wu_puts(note, notecap, &k, " id 0x");
+        wu_puthex(note, notecap, &k, id, 4);
+        if (!w || !w->hwnd32) { wu_puts(note, notecap, &k, " -- no real window");
+                                wow32_setret(f, 0); return 1; }
+        h16 = wowwin_hwnd16(GetDlgItem(w->hwnd32, (int)(short)id));
+        wu_puts(note, notecap, &k, h16 ? " -> 0x" : " -- NOT FOUND (or not a window"
+                                                    " this host made) 0x");
+        wu_puthex(note, notecap, &k, h16, 4);
+        wow32_setret(f, h16);
+        return 1;
+    }
+
+    case WOWUSER_GETDLGITEMTEXT: {
+        WORD hdlg = wow32_argw(f, GDIT_ARG_HDLG);
+        WORD id   = wow32_argw(f, GDIT_ARG_ID);
+        WORD cap  = wow32_argw(f, GDIT_ARG_MAX);
+        volatile BYTE *dst = wow32_argptr(f, GDIT_ARG_BUF);
+        wowuser_win_t *w = wowuser_findwin(hdlg);
+        UINT n = 0;
+        int k = 0;
+        wu_puts(note, notecap, &k, "GetDlgItemText dlg 0x");
+        wu_puthex(note, notecap, &k, hdlg, 4);
+        wu_puts(note, notecap, &k, " id 0x");
+        wu_puthex(note, notecap, &k, id, 4);
+        if (!w || !w->hwnd32 || !dst || !cap) {
+            wu_puts(note, notecap, &k, " -- no window or no buffer; answered 0");
+            wow32_setret(f, 0); return 1;
+        }
+        /* ⚠ `cap` is the caller's claim about its own buffer and the only bound
+             there is -- handed to the OS, which respects it. */
+        n = GetDlgItemTextA(w->hwnd32, (int)(short)id, (LPSTR)dst, (int)cap);
+        wu_puts(note, notecap, &k, " -> ");
+        wu_putq(note, notecap, &k, (const char *)dst);
+        wow32_setret(f, (DWORD)(WORD)n);
+        return 1;
+    }
+
+    case WOWUSER_SETDLGITEMINT: {
+        WORD hdlg = wow32_argw(f, SDII_ARG_HDLG);
+        WORD id   = wow32_argw(f, SDII_ARG_ID);
+        WORD val  = wow32_argw(f, SDII_ARG_VALUE);
+        WORD sgn  = wow32_argw(f, SDII_ARG_SIGNED);
+        wowuser_win_t *w = wowuser_findwin(hdlg);
+        int k = 0;
+        wu_puts(note, notecap, &k, "SetDlgItemInt dlg 0x");
+        wu_puthex(note, notecap, &k, hdlg, 4);
+        wu_puts(note, notecap, &k, " id 0x");
+        wu_puthex(note, notecap, &k, id, 4);
+        wu_puts(note, notecap, &k, " = 0x");
+        wu_puthex(note, notecap, &k, val, 4);
+        if (!w || !w->hwnd32) { wu_puts(note, notecap, &k, " -- no real window");
+                                wow32_setret(f, 0); return 1; }
+        /* ⚠ SIGNEDNESS IS THE CALLER'S, and it changes the text: -1 or 65535.
+             The Win16 value is a WORD, so it is widened the way the caller says
+             rather than the way C would. */
+        SetDlgItemInt(w->hwnd32, (int)(short)id,
+                      sgn ? (UINT)(int)(short)val : (UINT)val,
+                      sgn ? TRUE : FALSE);
+        wow32_setret(f, 0);
+        return 1;
+    }
+
+    case WOWUSER_SENDDLGITEMMSG: {
+        WORD hdlg = wow32_argw(f, SDIM_ARG_HDLG);
+        WORD id   = wow32_argw(f, SDIM_ARG_ID);
+        WORD m    = wow32_argw(f, SDIM_ARG_MSG);
+        WORD wp   = wow32_argw(f, SDIM_ARG_WPARAM);
+        DWORD lp  = wow32_argd(f, SDIM_ARG_LPARAM);
+        wowuser_win_t *w = wowuser_findwin(hdlg);
+        WORD ch16 = 0;
+        int k = 0;
+        wu_puts(note, notecap, &k, "SendDlgItemMessage dlg 0x");
+        wu_puthex(note, notecap, &k, hdlg, 4);
+        wu_puts(note, notecap, &k, " id 0x");
+        wu_puthex(note, notecap, &k, id, 4);
+        wu_puts(note, notecap, &k, " msg 0x");
+        wu_puthex(note, notecap, &k, m, 4);
+        if (!w || !w->hwnd32) { wu_puts(note, notecap, &k, " -- no real window");
+                                wow32_setret(f, 0); return 1; }
+        /* ★ ROUTED THROUGH THIS HOST'S OWN SendMessage PATH, not straight to
+             Win32: the control may be one whose window procedure is the GUEST'S,
+             and it may carry a 16:16 pointer that Win32 must never see. Turning
+             it into (hwnd16, msg, wParam, lParam) and reusing the machinery that
+             already decides between those two worlds is the only answer that is
+             right in both. */
+        ch16 = wowwin_hwnd16(GetDlgItem(w->hwnd32, (int)(short)id));
+        if (!ch16) {
+            wu_puts(note, notecap, &k, " -- NO SUCH ITEM; answered 0");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        wu_puts(note, notecap, &k, " -> control 0x");
+        wu_puthex(note, notecap, &k, ch16, 4);
+        {   wowuser_win_t *cw = wowuser_findwin(ch16);
+            if (!cw) { wu_puts(note, notecap, &k, " -- not in our table");
+                       wow32_setret(f, 0); return 1; }
+            if (cw->wndproc) {
+                if (!f->cbok) { wu_puts(note, notecap, &k, " -- its procedure is"
+                                                           " 16-bit and callbacks"
+                                                           " are off");
+                                wow32_setret(f, 0); return 1; }
+                wu_puts(note, notecap, &k, " -> its own window procedure");
+                wow32_setret(f, 0);
+                wowuser_want_msg(f, cw,
+                                 cw->hinst ? cw->hinst : g_wu_class[cw->cls].hinst,
+                                 m, wp, lp, WOWCALL_RET_RESULT);
+                return 1;
+            }
+            wow32_setret(f, (DWORD)wowuser_defproc(f, cw, m, wp, lp,
+                                                   note, notecap));
+            return 1;
+        }
+    }
+
+    /* ── ★★ EndDialog(hDlg, nResult) ────────────────────────────────────────
+       ⚠⚠ WHAT ENDS HERE IS THE WINDOW, AND POSSIBLY NOT THE LOOP. USER's
+         `DialogBox` is 16-bit code (entry seg1:0x208e) and runs its own modal
+         message loop; on real WOW this call tells the 32-bit side to end a real
+         dialog and the loop notices. Our "dialog" is a plain window that USER
+         built by calling CreateWindow through this host, so Win32's EndDialog
+         has nothing to end -- it is called anyway, because if the window ever IS
+         a real dialog that is the correct thing, and its failure is reported
+         rather than hidden. The window is then hidden so the user is not left
+         looking at a dead dialog.
+       ⇒ IF A RUN SHOWS USER'S LOOP SPINNING AFTER THIS, that is the measurement
+         that says how the loop learns it is over, and it will be in the log. */
+    case WOWUSER_ENDDIALOG: {
+        WORD hdlg = wow32_argw(f, ED_ARG_HDLG);
+        WORD res  = wow32_argw(f, ED_ARG_RESULT);
+        wowuser_win_t *w = wowuser_findwin(hdlg);
+        int k = 0, ok = 0;
+        wu_puts(note, notecap, &k, "EndDialog 0x");
+        wu_puthex(note, notecap, &k, hdlg, 4);
+        wu_puts(note, notecap, &k, " result 0x");
+        wu_puthex(note, notecap, &k, res, 4);
+        if (!w || !w->hwnd32) { wu_puts(note, notecap, &k, " -- no real window");
+                                wow32_setret(f, 0); return 1; }
+        ok = EndDialog(w->hwnd32, (INT_PTR)(short)res) ? 1 : 0;
+        if (!ok) {
+            ShowWindow(w->hwnd32, SW_HIDE);
+            wu_puts(note, notecap, &k, " -- Win32 EndDialog refused it (this is a"
+                                       " window, not a real dialog); HIDDEN"
+                                       " instead. ★ If USER's own modal loop keeps"
+                                       " spinning, THAT is the next thing to read");
+        } else {
+            wu_puts(note, notecap, &k, " -> ended");
+        }
+        wow32_setret(f, 1);
         return 1;
     }
 
