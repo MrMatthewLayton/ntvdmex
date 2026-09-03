@@ -30,6 +30,7 @@
 #include "../wow/wowuser.h" /* GH #128: USER.EXE's id space -- a DIFFERENT one; see the file */
 #include "../wow/wowshell.h" /* GH #128: ...and SHELL.DLL's, which is a THIRD one again */
 #include "../wow/wowcommdlg.h" /* GH #128: ...and COMMDLG.DLL's -- File > Open */
+#include "../wow/wowkbd.h" /* GH #128: ...and KEYBOARD.DRV's -- ANSI/OEM conversion */
 #include "dos_mcb.h"
 #include "dos_loader.h"
 #include "dos_psp.h"
@@ -3406,6 +3407,21 @@ static int wow_cdlg_anchor(WORD id, WORD argb, WORD retstub)
 {
     return (id == 0x001 && argb == 4 && retstub == 0x0012)
         || (id == 0x002 && argb == 4 && retstub == 0x0024);
+}
+
+/* ── ★★ KEYBOARD.DRV's TABLE -- A SIXTH ID SPACE. See src/wow/wowkbd.h. ──────
+     Two anchors, both the calls we service, both read out of keyboard.drv:
+        id 0x005  8 args  retstub 0x0079   ANSITOOEM  (stub seg1:0x006c)
+        id 0x006  8 args  retstub 0x0086   OEMTOANSI  (stub seg1:0x0079)
+   ⚠ `0x05` is CHOOSECOLOR in COMMDLG's numbering and something else again in
+     USER's, which is why all three fields are matched and why the guard below
+     excludes every table already identified. */
+static WORD g_wow_kbd_seg = 0;
+
+static int wow_kbd_anchor(WORD id, WORD argb, WORD retstub)
+{
+    return (id == 0x005 && argb == 8 && retstub == 0x0079)
+        || (id == 0x006 && argb == 8 && retstub == 0x0086);
 }
 
 /* ── ★★★ krnl386's SECOND TABLE -- A THIRD ID SPACE, AND NOW IDENTIFIED. ──────
@@ -11135,6 +11151,19 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                         p = zput(p, " message(s) arrived\r\n");
                         log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
                     }
+                    /* ⚠ Same rule as ShellAbout and the file dialog: a modal
+                         service does not return until a human dismisses it, and
+                         the SERVICED line carrying its text is written
+                         afterwards. Announce it first, or a log collected while
+                         the box is up stops dead at the call before it -- which
+                         has already misled a reading twice this session. */
+                    if (f.id == WOWUSER_MESSAGEBOX) {
+                        p = zput(p, "\n     WOWUSER: MessageBox is MODAL -- the VDM"
+                                    " stops here until it is dismissed; the"
+                                    " SERVICED line carries its TEXT and follows"
+                                    " when it is\r\n");
+                        log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                    }
                     if (wowuser_call(&f, note, sizeof note)) {
                         ++g_wow32_serviced;
                         VDM_REG(tib, VTIB_EIP) += WOW32_BOP_LEN;
@@ -11291,6 +11320,32 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                         ++g_wow32_serviced;
                         VDM_REG(tib, VTIB_EIP) += WOW32_BOP_LEN;
                         p = zput(p, " -> SERVICED (COMMDLG), returned 0x");
+                        p = zhex(p, f.ret);
+                        if (note[0]) { p = zput(p, " -- "); p = zput(p, note); }
+                        p = zput(p, "\r\n");
+                        log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                        return 1;
+                    }
+                }
+                /* ── ★★ KEYBOARD.DRV'S OWN ID SPACE. See src/wow/wowkbd.h. ────
+                     The sixth table, behind the sixth check, same shape as the
+                     two before it. */
+                if (!f.krnl && !g_wow_kbd_seg
+                    && f.stubseg != g_wow_user_seg && f.stubseg != g_wow_krnl2_seg
+                    && f.stubseg != g_wow_shell_seg && f.stubseg != g_wow_cdlg_seg
+                    && wow_kbd_anchor(f.id, f.argb, wow32_peekw(f.bp + 2))) {
+                    g_wow_kbd_seg = f.stubseg;
+                    p = zput(p, "\n     WOWKBD: KEYBOARD.DRV's code segment is 0x");
+                    p = zhex(p, g_wow_kbd_seg);
+                    p = zput(p, " (learned from its own stub, not from the module"
+                                " table)");
+                }
+                if (!f.krnl && g_wow_kbd_seg && f.stubseg == g_wow_kbd_seg) {
+                    char note[320];
+                    if (wowkbd_call(&f, note, sizeof note)) {
+                        ++g_wow32_serviced;
+                        VDM_REG(tib, VTIB_EIP) += WOW32_BOP_LEN;
+                        p = zput(p, " -> SERVICED (KEYBOARD), returned 0x");
                         p = zhex(p, f.ret);
                         if (note[0]) { p = zput(p, " -- "); p = zput(p, note); }
                         p = zput(p, "\r\n");

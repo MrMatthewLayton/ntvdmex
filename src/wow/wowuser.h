@@ -231,6 +231,71 @@ static WORD wowuser_sysres_kind(WORD h)
 #define WOWUSER_ISICONIC         0x001f
 #define II_ARG_HWND      0
 
+/* ── ★★★ THE ENUMERATED BATCH -- FROM `tools/ne/neneeds.py`, NOT FROM A RUN ───
+     Everything above was named by a guest stopping on it. These were named by
+     reading NOTEPAD.EXE's import table and resolving each ordinal through USER's
+     own entry table to the bytes it lands on -- so they are calls the program
+     provably can make, including the ones that would have failed QUIETLY. See
+     the tool for why an import is not automatically work, and for the two export
+     prologues that have to be seen through to tell a thunk from 16-bit code.
+
+     Every argument block below is the standard reversal (the base is the LAST
+     word pushed), and every one is cross-checked against the argument-byte count
+     the stub itself declares -- which is what makes the layout a reading rather
+     than a parameter list copied from somewhere:
+
+       0x17  GETFOCUS               0 bytes   ()
+       0x22  ENABLEWINDOW           4 bytes   (hWnd, bEnable)          2+2
+       0x35  DESTROYWINDOW          2 bytes   (hWnd)                   2
+       0x3b  SETACTIVEWINDOW        2 bytes   (hWnd)                   2
+       0x68  MESSAGEBEEP            2 bytes   (uType)                  2
+       0x89  OPENCLIPBOARD          2 bytes   (hWnd)                   2
+       0x8a  CLOSECLIPBOARD         0 bytes   ()
+       0x90  ENUMCLIPBOARDFORMATS   2 bytes   (wFormat)                2
+     A parameter list that did not add up to the declared count would mean the
+     reading is wrong, and all eight add up. */
+/* ── ★★★★ 0x01 MessageBox -- AND IT IS NOT IN THE IMPORT-DERIVED LIST ────────
+     `neneeds.py` classifies `USER.1 MESSAGEBOX` as native16, and it is RIGHT:
+     the export at seg1:0x29e3 is 16-bit code. It is a WRAPPER, and it reaches
+     the WOW32 stub at seg1:0x0b62 from inside its own body -- exactly the
+     `LoadIcon`/`0xad` shape the tool's own header warns about. So this is the
+     first thing the enumeration could not see, found the old way: a run stopped
+     on it.
+   ★★ AND IT IS THE MOST VALUABLE ONE IN THE FILE, because it is how the program
+     TALKS. Notepad reached this immediately after reading the file it was asked
+     to open, with `uType = 0x30` (an exclamation) and the caption "Notepad" --
+     i.e. it had already decided something was wrong and was trying to say what.
+     Dropping the call threw the sentence away and left "nothing happened", which
+     is why two sessions of this have been guesswork. An implemented MessageBox
+     turns every future failure of this kind into a sentence on the screen and in
+     the log.
+   ★ The block, from the arguments the run itself printed (`0x0030 0x265a 0x0a9e
+     ...`, where `0x0a9e:0x265a` decoded to "Notepad"): reversed as always, so
+     uType is at +0 and hWnd -- pushed first -- is at +10. 2+4+4+2 = 12, which is
+     what the stub declares.
+   ⚠ MODAL, on the exec thread, like ShellAbout and the file dialog. */
+#define WOWUSER_MESSAGEBOX       0x0001
+#define MSGB_ARG_TYPE    0
+#define MSGB_ARG_CAPTION 2
+#define MSGB_ARG_TEXT    6
+#define MSGB_ARG_HWND   10
+
+#define WOWUSER_GETFOCUS         0x0017
+#define WOWUSER_ENABLEWINDOW     0x0022
+#define EW_ARG_ENABLE    0
+#define EW_ARG_HWND      2
+#define WOWUSER_DESTROYWINDOW    0x0035
+#define DW_ARG_HWND      0
+#define WOWUSER_SETACTIVEWINDOW  0x003b
+#define SAW_ARG_HWND     0
+#define WOWUSER_MESSAGEBEEP      0x0068
+#define MB_ARG_TYPE      0
+#define WOWUSER_OPENCLIPBOARD    0x0089
+#define OC_ARG_HWND      0
+#define WOWUSER_CLOSECLIPBOARD   0x008a
+#define WOWUSER_ENUMCLIPFMT      0x0090
+#define ECF_ARG_FORMAT   0
+
 /* ⚠⚠ A Win16 RECT IS FOUR **WORDS**; A Win32 RECT IS FOUR **LONGS**. Eight bytes
      against sixteen, and nothing about a wrong reading looks wrong -- it just
      produces coordinates off by whatever the neighbouring field held. Anywhere a
@@ -2136,6 +2201,189 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
         ic = IsIconic(w->hwnd32) ? 1 : 0;
         wu_puts(note, notecap, &k, ic ? " -> MINIMISED" : " -> not minimised");
         wow32_setret(f, (DWORD)ic);
+        return 1;
+    }
+
+    /* ── ★★★★ 0x01 MessageBox(hWnd, lpText, lpCaption, uType) ───────────────
+         The real one, on the guest's own window. Win16 and Win32 agree on the
+         MB_* bits and on the ID* return values, so the pass-through is exact --
+         and unlike a metric or a style, a wrong answer here is impossible to
+         miss, because the box is on the screen with the guest's own words in it.
+       ★ The TEXT IS ALSO LOGGED, and that is half the point: a headless run
+         cannot see a dialog, and this is how a program reports the failures it
+         has already diagnosed for us. */
+    case WOWUSER_MESSAGEBOX: {
+        WORD hwnd = wow32_argw(f, MSGB_ARG_HWND);
+        WORD type = wow32_argw(f, MSGB_ARG_TYPE);
+        wowuser_win_t *w = hwnd ? wowuser_findwin(hwnd) : NULL;
+        char text[512], cap[128];
+        int k = 0, rc;
+        wow32_argstr(f, MSGB_ARG_TEXT,    text, sizeof text);
+        wow32_argstr(f, MSGB_ARG_CAPTION, cap,  sizeof cap);
+        wu_puts(note, notecap, &k, "★ MessageBox ");
+        wu_putq(note, notecap, &k, cap);
+        wu_puts(note, notecap, &k, ": ");
+        wu_putq(note, notecap, &k, text);
+        wu_puts(note, notecap, &k, " type=0x");
+        wu_puthex(note, notecap, &k, type, 4);
+        wu_puts(note, notecap, &k, " -- ★ MODAL: the VDM stops until it is"
+                                   " dismissed");
+        rc = MessageBoxA(w ? w->hwnd32 : NULL, text, cap, (UINT)type);
+        wu_puts(note, notecap, &k, "; answered 0x");
+        wu_puthex(note, notecap, &k, (DWORD)rc, 4);
+        wow32_setret(f, (DWORD)(WORD)rc);
+        return 1;
+    }
+
+    /* ── ★ 0x17 GetFocus() -- ask the OS, not our own bookkeeping. ───────────
+         g_wm_focus is where this host POSTS a keystroke; the OS's focus is where
+         one actually goes, and a caret only blinks in the second. They agree
+         because SetFocus sets both, and if they ever disagree that is a defect
+         worth seeing rather than papering over -- so the OS answers, and a
+         mismatch is printed instead of being silently preferred either way. */
+    case WOWUSER_GETFOCUS: {
+        WORD h = wowwin_hwnd16(GetFocus());
+        int k = 0;
+        wu_puts(note, notecap, &k, "GetFocus -> 0x");
+        wu_puthex(note, notecap, &k, h, 4);
+        if (h != g_wm_focus) {
+            wu_puts(note, notecap, &k, " -- ⚠ the OS says this and our queue says 0x");
+            wu_puthex(note, notecap, &k, g_wm_focus, 4);
+        }
+        wow32_setret(f, h);
+        return 1;
+    }
+
+    /* ── ★ 0x22 EnableWindow(hWnd, bEnable) ─────────────────────────────────
+         Notepad disables its window while a modal thing is up. Straight through:
+         a disabled real window stops taking real input, which is the whole
+         behaviour being asked for and not something this host could imitate. */
+    case WOWUSER_ENABLEWINDOW: {
+        WORD hwnd = wow32_argw(f, EW_ARG_HWND);
+        WORD en   = wow32_argw(f, EW_ARG_ENABLE);
+        wowuser_win_t *w = wowuser_findwin(hwnd);
+        int k = 0;
+        wu_puts(note, notecap, &k, en ? "EnableWindow ENABLE 0x" : "EnableWindow DISABLE 0x");
+        wu_puthex(note, notecap, &k, hwnd, 4);
+        if (!w || !w->hwnd32) { wu_puts(note, notecap, &k, " -- no real window");
+                                wow32_setret(f, 0); return 1; }
+        wow32_setret(f, (DWORD)(EnableWindow(w->hwnd32, en ? TRUE : FALSE) ? 1 : 0));
+        return 1;
+    }
+
+    /* ── ★★ 0x35 DestroyWindow(hWnd) ────────────────────────────────────────
+       ⚠ THE SLOT MUST BE RELEASED, and that is the whole reason this is not a
+         one-liner. Destroying the real window while leaving our record pointing
+         at it leaves a dangling HWND that every later lookup would hand to
+         Win32 -- and a destroyed HWND is not merely invalid, it can be REUSED,
+         so the failure would not even be a clean one. Clearing `hwnd` frees the
+         slot and makes a later reference fail honestly as "NO SUCH WINDOW".
+       ⚠ The real DestroyWindow destroys child windows too, so their Win16
+         records are stale the moment this returns. They are cleared here rather
+         than left for whoever notices, and the count is logged. */
+    case WOWUSER_DESTROYWINDOW: {
+        WORD hwnd = wow32_argw(f, DW_ARG_HWND);
+        wowuser_win_t *w = wowuser_findwin(hwnd);
+        int k = 0, i, kids = 0;
+        HWND h32;
+        wu_puts(note, notecap, &k, "DestroyWindow 0x");
+        wu_puthex(note, notecap, &k, hwnd, 4);
+        if (!w) { wu_puts(note, notecap, &k, " -- NO SUCH WINDOW");
+                  wow32_setret(f, 0); return 1; }
+        h32 = w->hwnd32;
+        for (i = 0; i < g_wu_nwin; ++i) {
+            wowuser_win_t *c = &g_wu_win[i];
+            if (c->hwnd && c != w && c->hwnd32 && h32 && IsChild(h32, c->hwnd32)) {
+                c->hwnd = 0; c->hwnd32 = NULL; ++kids;
+            }
+        }
+        w->hwnd = 0; w->hwnd32 = NULL;
+        if (g_wm_focus == hwnd) g_wm_focus = 0;
+        if (h32) DestroyWindow(h32);
+        wu_puts(note, notecap, &k, " -> destroyed");
+        if (kids) { wu_puts(note, notecap, &k, ", with 0x");
+                    wu_puthex(note, notecap, &k, (DWORD)kids, 2);
+                    wu_puts(note, notecap, &k, " child record(s) released too"); }
+        wow32_setret(f, 1);
+        return 1;
+    }
+
+    /* ── ★ 0x3b SetActiveWindow(hWnd) -- returns the PREVIOUS active window. ── */
+    case WOWUSER_SETACTIVEWINDOW: {
+        WORD hwnd = wow32_argw(f, SAW_ARG_HWND);
+        wowuser_win_t *w = wowuser_findwin(hwnd);
+        int k = 0;
+        WORD prev = 0;
+        wu_puts(note, notecap, &k, "SetActiveWindow 0x");
+        wu_puthex(note, notecap, &k, hwnd, 4);
+        if (!w || !w->hwnd32) { wu_puts(note, notecap, &k, " -- no real window");
+                               wow32_setret(f, 0); return 1; }
+        prev = wowwin_hwnd16(SetActiveWindow(w->hwnd32));
+        wu_puts(note, notecap, &k, " (was 0x");
+        wu_puthex(note, notecap, &k, prev, 4);
+        wu_puts(note, notecap, &k, ")");
+        wow32_setret(f, prev);
+        return 1;
+    }
+
+    /* ── ★ 0x68 MessageBeep(uType) ──────────────────────────────────────────
+       ⚠ Win16's only documented argument is 0 and Win32's MB_OK is also 0, so
+         the pass-through is exact for the one value a Win16 program can pass.
+         Notepad beeps at a failed search. */
+    case WOWUSER_MESSAGEBEEP: {
+        WORD t = wow32_argw(f, MB_ARG_TYPE);
+        int k = 0;
+        wu_puts(note, notecap, &k, "MessageBeep(0x");
+        wu_puthex(note, notecap, &k, t, 4);
+        wu_puts(note, notecap, &k, ")");
+        MessageBeep((UINT)t);
+        wow32_setret(f, 0);
+        return 1;
+    }
+
+    /* ── ★★ THE CLIPBOARD -- 0x89 / 0x8a / 0x90 ─────────────────────────────
+         The REAL clipboard, deliberately: this host already registers the
+         guest's private formats in the OS's own atom table (0x91
+         RegisterClipboardFormat), so a format number the guest holds IS a Win32
+         format number and the two halves cannot disagree. A private clipboard
+         here would be a second, invisible one that never talked to anything.
+       ★ It also means Win16 Notepad and Win32 programs share a clipboard, which
+         is what a user would expect of a program on this desktop and is what
+         real WOW does. */
+    case WOWUSER_OPENCLIPBOARD: {
+        WORD hwnd = wow32_argw(f, OC_ARG_HWND);
+        wowuser_win_t *w = hwnd ? wowuser_findwin(hwnd) : NULL;
+        int k = 0, ok;
+        ok = OpenClipboard(w ? w->hwnd32 : NULL) ? 1 : 0;
+        wu_puts(note, notecap, &k, "OpenClipboard owner=0x");
+        wu_puthex(note, notecap, &k, hwnd, 4);
+        wu_puts(note, notecap, &k, ok ? " -> opened (the OS's own)"
+                                      : " -> REFUSED (someone else has it open)");
+        wow32_setret(f, (DWORD)ok);
+        return 1;
+    }
+
+    case WOWUSER_CLOSECLIPBOARD: {
+        int k = 0;
+        int ok = CloseClipboard() ? 1 : 0;
+        wu_puts(note, notecap, &k, ok ? "CloseClipboard -> closed"
+                                      : "CloseClipboard -> it was not open");
+        wow32_setret(f, (DWORD)ok);
+        return 1;
+    }
+
+    /* Enumerate from `wFormat`, 0 to start. Returns 0 at the end, which is the
+       loop's termination condition, so a wrong answer here spins a guest. */
+    case WOWUSER_ENUMCLIPFMT: {
+        WORD fmt = wow32_argw(f, ECF_ARG_FORMAT);
+        UINT nxt = EnumClipboardFormats((UINT)fmt);
+        int k = 0;
+        wu_puts(note, notecap, &k, "EnumClipboardFormats(0x");
+        wu_puthex(note, notecap, &k, fmt, 4);
+        wu_puts(note, notecap, &k, ") -> 0x");
+        wu_puthex(note, notecap, &k, (DWORD)nxt, 4);
+        if (!nxt) wu_puts(note, notecap, &k, " (end)");
+        wow32_setret(f, (DWORD)(WORD)nxt);
         return 1;
     }
 

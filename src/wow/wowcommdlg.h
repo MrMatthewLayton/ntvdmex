@@ -231,6 +231,44 @@ static int wowcommdlg_call(wow32_frame_t *f, char *note, int notecap)
         ok = save ? GetSaveFileNameA(&w32) : GetOpenFileNameA(&w32);
 
         if (ok) {
+            /* ── ★★★★ THE ANSWER MUST BE A **SHORT (8.3)** PATH. ─────────────
+                 The dialog hands back `C:\Documents and Settings\Matthew\My
+                 Documents\test.txt`, and the caller is a 1993 program: it passes
+                 that straight to `KERNEL.74 OpenFile`, whose Win16 path parser
+                 cannot take components like "Documents and Settings". The open
+                 fails inside krnl386, before our DOS layer -- which would have
+                 opened the long path perfectly well -- is ever asked.
+               ★ AND THE GUEST SAID SO ITSELF, once it could speak. With
+                 MessageBox implemented, Notepad puts up "Cannot open the
+                 C:\Documents and Settings\Matthew\My Documents\test.txt file."
+                 That sentence is the measurement; before it, two sessions of
+                 this looked like "nothing happens".
+               ⚠ THIS IS A CONVERSION, NOT A DIFFERENT ANSWER. The short form
+                 names the same file, and it is what a 16-bit program on a real
+                 XP box gets, for exactly this reason.
+               ⚠ IF THE VOLUME HAS NO 8.3 NAMES the conversion fails, and the
+                 long path is left alone rather than replaced by something
+                 shorter and wrong -- the caller then fails the way it does
+                 today, and the log says which case it was. */
+            char shortp[MAX_PATH];
+            DWORD sn = GetShortPathNameA(w32.lpstrFile, shortp, sizeof shortp);
+            if (sn && sn < sizeof shortp && sn + 1 <= w32.nMaxFile) {
+                DWORD i, slash = 0, dot = 0;
+                for (i = 0; i <= sn; ++i) w32.lpstrFile[i] = shortp[i];
+                for (i = 0; shortp[i]; ++i) {
+                    if (shortp[i] == '\\' || shortp[i] == ':') slash = i + 1;
+                    if (shortp[i] == '.') dot = i + 1;
+                }
+                w32.nFileOffset    = (WORD)slash;
+                w32.nFileExtension = (WORD)(dot > slash ? dot : 0);
+                wu_puts(note, notecap, &k, " -> SHORTENED for a Win16 caller: ");
+                wu_putq(note, notecap, &k, shortp);
+            } else {
+                wu_puts(note, notecap, &k, " -- ★ NO 8.3 NAME for this path"
+                                           " (or it does not fit the caller's"
+                                           " buffer); left LONG, and a Win16"
+                                           " OpenFile will probably refuse it");
+            }
             /* Only the scalars Win32 keeps in its OWN structure need carrying
                back; the strings were written straight into the guest's buffers. */
             wow32_pokew(o + OFN16_FILEOFFSET,    w32.nFileOffset);
