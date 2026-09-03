@@ -31,6 +31,7 @@
 #include "../wow/wowshell.h" /* GH #128: ...and SHELL.DLL's, which is a THIRD one again */
 #include "../wow/wowcommdlg.h" /* GH #128: ...and COMMDLG.DLL's -- File > Open */
 #include "../wow/wowkbd.h" /* GH #128: ...and KEYBOARD.DRV's -- ANSI/OEM conversion */
+#include "../wow/wowgdi.h" /* GH #128: ...and GDI.EXE's -- where MS Paint begins */
 #include "dos_mcb.h"
 #include "dos_loader.h"
 #include "dos_psp.h"
@@ -3422,6 +3423,22 @@ static int wow_kbd_anchor(WORD id, WORD argb, WORD retstub)
 {
     return (id == 0x005 && argb == 8 && retstub == 0x0079)
         || (id == 0x006 && argb == 8 && retstub == 0x0086);
+}
+
+/* ── ★★ GDI.EXE's TABLE -- A SEVENTH ID SPACE. See src/wow/wowgdi.h. ─────────
+     GDI's exports are TAIL-JUMPS like USER's, so these are the stubs one hop
+     past the entry points, resolved by the same walk neneeds.py does:
+        id 0x044  2 args  retstub 0x033a   DELETEDC       (stub seg1:0x032d)
+        id 0x045  2 args  retstub 0x0354   DELETEOBJECT   (stub seg1:0x0347)
+        id 0x050  4 args  retstub 0x05de   GETDEVICECAPS  (stub seg1:0x05d1)
+   ⚠ Regenerate with `tools/ne/neneeds.py` if the box's GDI.EXE ever differs. */
+static WORD g_wow_gdi_seg = 0;
+
+static int wow_gdi_anchor(WORD id, WORD argb, WORD retstub)
+{
+    return (id == 0x050 && argb == 4 && retstub == 0x05de)
+        || (id == 0x045 && argb == 2 && retstub == 0x0354)
+        || (id == 0x044 && argb == 2 && retstub == 0x033a);
 }
 
 /* ── ★★★ krnl386's SECOND TABLE -- A THIRD ID SPACE, AND NOW IDENTIFIED. ──────
@@ -11445,6 +11462,32 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                         ++g_wow32_serviced;
                         VDM_REG(tib, VTIB_EIP) += WOW32_BOP_LEN;
                         p = zput(p, " -> SERVICED (KEYBOARD), returned 0x");
+                        p = zhex(p, f.ret);
+                        if (note[0]) { p = zput(p, " -- "); p = zput(p, note); }
+                        p = zput(p, "\r\n");
+                        log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                        return 1;
+                    }
+                }
+                /* ── ★★ GDI.EXE'S OWN ID SPACE. See src/wow/wowgdi.h. ────────
+                     The seventh table, and the one MS Paint lives behind. */
+                if (!f.krnl && !g_wow_gdi_seg
+                    && f.stubseg != g_wow_user_seg && f.stubseg != g_wow_krnl2_seg
+                    && f.stubseg != g_wow_shell_seg && f.stubseg != g_wow_cdlg_seg
+                    && f.stubseg != g_wow_kbd_seg
+                    && wow_gdi_anchor(f.id, f.argb, wow32_peekw(f.bp + 2))) {
+                    g_wow_gdi_seg = f.stubseg;
+                    p = zput(p, "\n     WOWGDI: GDI.EXE's code segment is 0x");
+                    p = zhex(p, g_wow_gdi_seg);
+                    p = zput(p, " (learned from its own stub, not from the module"
+                                " table)");
+                }
+                if (!f.krnl && g_wow_gdi_seg && f.stubseg == g_wow_gdi_seg) {
+                    char note[320];
+                    if (wowgdi_call(&f, note, sizeof note)) {
+                        ++g_wow32_serviced;
+                        VDM_REG(tib, VTIB_EIP) += WOW32_BOP_LEN;
+                        p = zput(p, " -> SERVICED (GDI), returned 0x");
                         p = zhex(p, f.ret);
                         if (note[0]) { p = zput(p, " -- "); p = zput(p, note); }
                         p = zput(p, "\r\n");

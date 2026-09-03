@@ -66,6 +66,19 @@
 
 /* SHELL's ids. Numbered in THEIR OWN space -- 0x16 here is not 0x16 in USER's. */
 #define WOWSHELL_SHELLABOUT   0x0016
+/* ── ★ DRAG AND DROP, from neneeds.py's list. Notepad accepts dropped files.
+     `9 DRAGACCEPTFILES` -> id 0x09, 4 args (HWND, BOOL); `11 DRAGQUERYFILE` ->
+     id 0x0b, 10 args (HDROP, UINT, LPSTR, UINT) = 2+2+4+2. Both add up to what
+     their own stubs declare, and both were already named in the header above as
+     part of what made "the ids are the ordinals" a reading rather than a guess. */
+#define WOWSHELL_DRAGACCEPTFILES 0x0009
+#define DAF_ARG_ACCEPT  0
+#define DAF_ARG_HWND    2
+#define WOWSHELL_DRAGQUERYFILE   0x000b
+#define DQF_ARG_CCH     0
+#define DQF_ARG_BUF     2
+#define DQF_ARG_INDEX   6
+#define DQF_ARG_HDROP   8
 
 #define SA_ARG_HICON          0
 #define SA_ARG_OTHER          2
@@ -148,6 +161,56 @@ static int wowshell_call(wow32_frame_t *f, char *note, int notecap)
         wu_puts(note, notecap, &k, "; dismissed, rc=0x");
         wu_puthex(note, notecap, &k, (DWORD)rc, 4);
         wow32_setret(f, (DWORD)rc);
+        return 1;
+    }
+
+    /* ── ★ 0x09 DragAcceptFiles(hWnd, fAccept) ──────────────────────────────
+         The real one, on the real window: accepting drops is a property the
+         window manager enforces, and ours is the OS's. A guest that asks for it
+         and then gets no WM_DROPFILES would be a lie one level down.
+       ⚠ WM_DROPFILES IS NOT FORWARDED YET, and this says so rather than leaving
+         it to be discovered: the message carries an HDROP, which needs a token
+         of its own, and no run has produced one. What this call does today is
+         make the window accept a drop that nothing yet delivers. */
+    case WOWSHELL_DRAGACCEPTFILES: {
+        WORD hwnd = wow32_argw(f, DAF_ARG_HWND);
+        WORD acc  = wow32_argw(f, DAF_ARG_ACCEPT);
+        wowuser_win_t *w = wowuser_findwin(hwnd);
+        int k = 0;
+        wu_puts(note, notecap, &k, acc ? "DragAcceptFiles ACCEPT 0x"
+                                       : "DragAcceptFiles REFUSE 0x");
+        wu_puthex(note, notecap, &k, hwnd, 4);
+        if (!w || !w->hwnd32) {
+            wu_puts(note, notecap, &k, " -- no real window");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        DragAcceptFiles(w->hwnd32, acc ? TRUE : FALSE);
+        wu_puts(note, notecap, &k, " -> the OS's -- ⚠ but WM_DROPFILES is not"
+                                   " forwarded yet, so nothing will arrive");
+        wow32_setret(f, 0);
+        return 1;
+    }
+
+    /* ── ★ 0x0b DragQueryFile(hDrop, iFile, lpszFile, cch) ──────────────────
+       ⚠ REFUSED, NOT GUESSED. An HDROP can only have come from a WM_DROPFILES
+         this host has never delivered, so any handle arriving here is one we did
+         not issue. Answering 0 is the honest "no files", and the alternative --
+         handing an arbitrary 16-bit number to Win32 as an HDROP -- would read
+         somebody else's memory. */
+    case WOWSHELL_DRAGQUERYFILE: {
+        WORD hdrop = wow32_argw(f, DQF_ARG_HDROP);
+        WORD idx   = wow32_argw(f, DQF_ARG_INDEX);
+        int k = 0;
+        wu_puts(note, notecap, &k, "DragQueryFile drop 0x");
+        wu_puthex(note, notecap, &k, hdrop, 4);
+        wu_puts(note, notecap, &k, " index 0x");
+        wu_puthex(note, notecap, &k, idx, 4);
+        wu_puts(note, notecap, &k, " -- ★ no HDROP has ever been issued by this"
+                                   " host (WM_DROPFILES is not forwarded);"
+                                   " answered 0 rather than handing Win32 a"
+                                   " handle we did not make");
+        wow32_setret(f, 0);
         return 1;
     }
 
