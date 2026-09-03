@@ -142,6 +142,54 @@
 #define AD_KIND_PREDEFINED       1
 #define AD_KIND_MODULERES        3
 
+/* ── ★★★★★ 0xaf -- "BUILD ME A BITMAP FROM THESE RESOURCE BYTES". ────────────
+     MS Paint's second-to-last wall: with the registration, the DCs and the
+     CREATESTRUCT in place it gets as far as building its toolbox, fails to load
+     the bitmap for it, and says "Not enough memory to edit image."
+
+     Another id USER's export table cannot name, found the same way `0xad` was --
+     by reading USER's own call site. `user.exe seg1:0x4732`:
+
+         4732  push [bp+0x0a]   -> +12   hInstance
+         4735  push [bp+0x08]   -> +10 } lpszName, far  (SEG at +10, OFF at +8)
+         4738  push [bp+0x06]   -> +8  }
+         473b  push [bp-0x0a]   -> +6  } the resource's BYTES, far
+         473e  push [bp-0x0c]   -> +4  }  (set from the DX:AX at 0x4728)
+         4741  push [bp-0x06]   -> +2  } its SIZE, a DWORD
+         4744  push [bp-0x08]   -> +0  }
+         4747  lcall <id 0xaf>
+     Seven pushes = the 14 argument bytes the stub declares.
+
+   ★★★ AND IT IS `LoadBitmap`, PROVEN THREE WAYS RATHER THAN INFERRED:
+     1. `USER.175 LOADBITMAP` (seg1:0x2e78) is `native16`, and it ENDS in
+        `2e8f jmp 0x46b8` -- a tail-jump into the function this call site is in.
+        Its return thunk is `retf 6`, i.e. exactly (HINSTANCE + LPCSTR).
+     2. The names that arrive are "pToolbox" and "pArrow".
+     3. PBRUSH's own resource table has `BITMAP PTOOLBOX 9040` and
+        `BITMAP PARROW 208` -- and the SIZE at +0 arrives as 0x2350 and 0x00d0.
+     A wrong reading does not produce three agreements.
+
+   ★★ WHAT THE BYTES ARE, MEASURED AND NOT ASSUMED. Read straight out of
+     PBRUSH.EXE at the offsets `neres.py list` gives:
+        PTOOLBOX  28 00 00 00 | 3a 00 00 00 | 17 01 00 00 | 01 00 | 04 00 | ...
+        PARROW    28 00 00 00 | 0c 00 00 00 | 0d 00 00 00 | 01 00 | 04 00 | ...
+     `biSize` = 0x28 = 40, so these are BITMAPINFOHEADER (Windows 3.0) DIBs --
+     58x279 and 12x13, 4bpp -- NOT the 12-byte BITMAPCOREHEADER form. A packed
+     DIB is header + palette + pixels, which is precisely what `CreateDIBitmap`
+     consumes, so USER's 16-bit half has already done all the resource work and
+     this is the one call it cannot make.
+     ⚠ PARROW's `biSizeImage` is 8, which is junk (12px at 4bpp padded is 8 bytes
+       per ROW, and 13 rows is 104 -- and 40 + 16*4 + 104 = 208, the whole
+       resource). It is ignored for BI_RGB, and this zeroes it in its own copy of
+       the header rather than trusting GDI to overlook it.
+   ⚠ THE CORE-HEADER FORM IS REFUSED, NOT GUESSED AT. No guest has produced one
+     here, so there is nothing to check a reading against. */
+#define WOWUSER_LOADBITMAPRES    0x00af
+#define LBM_ARG_SIZE     0
+#define LBM_ARG_BITS     4
+#define LBM_ARG_NAME     8
+#define LBM_ARG_HINST   12
+
 /* Tokens live well above the window handles (0x0100 + n*0x20) so a stray one is
    never mistaken for a window, and vice versa. */
 #define WOWUSER_SYSRES_BASE      0x8000
@@ -2304,6 +2352,110 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
             return 1;
         }
         wow32_setret(f, fmt);
+        return 1;
+    }
+
+    /* ── ★★★★★ 0xaf LoadBitmap's 32-bit half -- see the long note above. ─────
+       ⚠ THE DIB IS READ WHERE THE GUEST PUT IT, but its HEADER is copied out
+         first. Two reasons, and neither is tidiness: the copy is where
+         `biSizeImage` gets its junk cleared without writing into guest memory,
+         and it means the only thing handed to GDI as a pointer-into-the-guest is
+         the PIXEL array, whose length this host can actually check against the
+         size the guest declared.
+       ⚠ EVERY FIELD IS BOUNDS-CHECKED AGAINST THAT DECLARED SIZE. The pointer
+         comes from 16-bit code and the header is data from a file; a palette
+         count or a header size read out of it could send the pixel pointer
+         anywhere, and GDI would read it. A resource that does not add up is
+         refused with the arithmetic in the log.
+       ★ The handle is a GDI token, not a USER one -- the guest will hand it
+         straight to SelectObject and DeleteObject. */
+    case WOWUSER_LOADBITMAPRES: {
+        static BYTE hdr[40 + 256 * 4];        /* header + palette, our own copy */
+        DWORD size = wow32_argd(f, LBM_ARG_SIZE);
+        volatile BYTE *p = wow32_argptr(f, LBM_ARG_BITS);
+        char name[64];
+        DWORD bisize, pal, off, i;
+        int   bits, k = 0;
+        HDC   dc;
+        HBITMAP bm;
+        WORD  tok;
+
+        wow32_argstr(f, LBM_ARG_NAME, name, sizeof name);
+        wu_puts(note, notecap, &k, "LoadBitmap ");
+        wu_putq(note, notecap, &k, name);
+        wu_puts(note, notecap, &k, " size=0x");
+        wu_puthex(note, notecap, &k, size, 4);
+
+        if (!p || size < 40 || size > 0x10000) {
+            wu_puts(note, notecap, &k, " -- ★ NO BYTES, or a length that cannot be"
+                                       " a packed DIB; answered 0");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        bisize = (DWORD)wow32_peekw(p) | ((DWORD)wow32_peekw(p + 2) << 16);
+        if (bisize != 40) {
+            wu_puts(note, notecap, &k, " -- ★ biSize IS 0x");
+            wu_puthex(note, notecap, &k, bisize, 4);
+            wu_puts(note, notecap, &k, ", NOT 40. Only the BITMAPINFOHEADER form"
+                                       " has been measured; the 12-byte core"
+                                       " header is refused rather than guessed"
+                                       " at; answered 0");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        bits = (int)wow32_peekw(p + 14);                     /* biBitCount     */
+        pal  = (DWORD)wow32_peekw(p + 32)                    /* biClrUsed      */
+             | ((DWORD)wow32_peekw(p + 34) << 16);
+        if (!pal && bits <= 8) pal = 1ul << bits;
+        wu_puts(note, notecap, &k, " ");
+        wu_puthex(note, notecap, &k, (DWORD)wow32_peekw(p + 4), 4);
+        wu_puts(note, notecap, &k, "x");
+        wu_puthex(note, notecap, &k, (DWORD)wow32_peekw(p + 8), 4);
+        wu_puts(note, notecap, &k, " ");
+        wu_puthex(note, notecap, &k, (DWORD)bits, 2);
+        wu_puts(note, notecap, &k, "bpp pal=0x");
+        wu_puthex(note, notecap, &k, pal, 4);
+
+        off = 40 + pal * 4;                        /* where the pixels start   */
+        if (pal > 256 || off >= size) {
+            wu_puts(note, notecap, &k, " -- ★ THE HEADER DOES NOT ADD UP (pixels"
+                                       " would start at 0x");
+            wu_puthex(note, notecap, &k, off, 4);
+            wu_puts(note, notecap, &k, " in 0x");
+            wu_puthex(note, notecap, &k, size, 4);
+            wu_puts(note, notecap, &k, " bytes); answered 0");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        for (i = 0; i < off; ++i) hdr[i] = p[i];
+        hdr[20] = hdr[21] = hdr[22] = hdr[23] = 0;           /* biSizeImage    */
+
+        /* ⚠ A SCREEN DC, TAKEN AND GIVEN BACK HERE. CreateDIBitmap needs a DC to
+             be compatible with, and this one is the host's own business -- it is
+             never shown to the guest, so it takes no token. */
+        dc = GetDC(NULL);
+        if (!dc) {
+            wu_puts(note, notecap, &k, " -- ★ NO SCREEN DC; answered 0");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        bm = CreateDIBitmap(dc, (const BITMAPINFOHEADER *)hdr, CBM_INIT,
+                            (const void *)(const BYTE *)(p + off),
+                            (const BITMAPINFO *)hdr, DIB_RGB_COLORS);
+        ReleaseDC(NULL, dc);
+        tok = bm ? wowgdi_h16((HGDIOBJ)bm, WOWGDI_KIND_OBJ) : 0;
+        if (!tok) {
+            if (bm) DeleteObject((HGDIOBJ)bm);
+            wu_puts(note, notecap, &k, bm ? " -- ★ THE GDI TOKEN MAP IS FULL; the"
+                                            " bitmap was freed and 0 answered"
+                                          : " -- ★ GDI REFUSED THE DIB;"
+                                            " answered 0");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        wu_puts(note, notecap, &k, " -> bitmap token 0x");
+        wu_puthex(note, notecap, &k, tok, 4);
+        wow32_setret(f, tok);
         return 1;
     }
 

@@ -68,6 +68,29 @@
 #define SEL_ARG_OBJ     0
 #define SEL_ARG_HDC     2
 
+/* ── ★★★ 0x30 CreateBitmap, named from the call it actually made ────────────
+     GDI ordinal 48 `CREATEBITMAP` is `native16`, so -- as with `CreateDC` and
+     `GetStockObject` -- only a run could give its internal id. It arrived as
+
+       FUNC=0x00000030 args=0x0c retstub=0x01b4 (0000 0000 | 0001 | 0001 | 03ce | 0690)
+
+     Twelve argument bytes is `(int, int, BYTE, BYTE, const void FAR*)`, which is
+     CreateBitmap's list and nothing else's, and reversed it reads
+     `CreateBitmap(0x0690, 0x03ce, 1, 1, NULL)` -- 1680 x 974, monochrome. ★ The
+     numbers are the confirmation: Paint had just read `width`=0x0690 and
+     `height`=0x03ce out of WIN.INI's [Paintbrush] section, four calls earlier in
+     the same log. The ids run with the ordinals here (0x30 = 48) and the two
+     direct exports either side agree -- 51 -> 0x33, 52 -> 0x34 -- so the
+     numbering is continuous across native16 and wow32 entries alike.
+   ⚠ Which is NOT a rule to lean on: `CreateDC` is ordinal 53 and id 0x99. Name
+     each internal stub from its own call, never from arithmetic. */
+#define WOWGDI_CREATEBITMAP     0x0030
+#define CBM_ARG_BITS    0        /* const void FAR* -- NULL = uninitialised */
+#define CBM_ARG_BPP     4
+#define CBM_ARG_PLANES  6
+#define CBM_ARG_HEIGHT  8
+#define CBM_ARG_WIDTH  10
+
 #define WOWGDI_CREATECOMPATBM   0x0033
 #define CCB_ARG_HEIGHT  0
 #define CCB_ARG_WIDTH   2
@@ -368,6 +391,67 @@ static int wowgdi_call(wow32_frame_t *f, char *note, int notecap)
             return 1;
         }
         wu_puts(note, notecap, &k, " -> DC token 0x");
+        wu_puthex(note, notecap, &k, tok, 4);
+        wow32_setret(f, tok);
+        return 1;
+    }
+
+    /* ── ★★★ 0x30 CreateBitmap(nWidth, nHeight, cPlanes, cBitsPixel, lpvBits) ─
+         Unlike CreateCompatibleBitmap this one names its own format, so it needs
+         no DC at all.
+       ⚠ lpvBits IS OPTIONAL AND IS BOUNDS-CHECKED WHEN PRESENT. Paint passes
+         NULL (an uninitialised bitmap), but a non-null pointer means GDI will
+         read `((width*planes*bpp + 15)/16)*2 * height` bytes out of a 16-bit
+         segment -- so the arithmetic is done here, in 32 bits, and a bitmap
+         whose bits would run past a 64K segment is refused rather than handed to
+         GDI to read whatever follows.
+       ⚠ THE DIMENSIONS ARE SIGNED 16-BIT, as in CreateCompatibleBitmap. */
+    case WOWGDI_CREATEBITMAP: {
+        int  w  = (int)(short)wow32_argw(f, CBM_ARG_WIDTH);
+        int  h  = (int)(short)wow32_argw(f, CBM_ARG_HEIGHT);
+        WORD pl = wow32_argw(f, CBM_ARG_PLANES);
+        WORD bp = wow32_argw(f, CBM_ARG_BPP);
+        volatile BYTE *bits = wow32_argptr(f, CBM_ARG_BITS);
+        HBITMAP bm;
+        WORD tok;
+        int  k = 0;
+        wu_puts(note, notecap, &k, "CreateBitmap ");
+        wu_puthex(note, notecap, &k, (DWORD)w, 4);
+        wu_puts(note, notecap, &k, "x");
+        wu_puthex(note, notecap, &k, (DWORD)h, 4);
+        wu_puts(note, notecap, &k, " planes=");
+        wu_puthex(note, notecap, &k, pl, 2);
+        wu_puts(note, notecap, &k, " bpp=");
+        wu_puthex(note, notecap, &k, bp, 2);
+        wu_puts(note, notecap, &k, bits ? " with bits" : " uninitialised");
+        if (w <= 0 || h <= 0 || !pl || !bp) {
+            wu_puts(note, notecap, &k, " -- ★ A DIMENSION OR FORMAT IS NOT"
+                                       " POSITIVE; answered 0");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        if (bits) {
+            DWORD stride = ((((DWORD)w * pl * bp) + 15) / 16) * 2;
+            if (stride * (DWORD)h > 0x10000ul) {
+                wu_puts(note, notecap, &k, " -- ★ THE BITS WOULD RUN PAST A 64K"
+                                           " SEGMENT; refused rather than letting"
+                                           " GDI read past them; answered 0");
+                wow32_setret(f, 0);
+                return 1;
+            }
+        }
+        bm = CreateBitmap(w, h, (UINT)pl, (UINT)bp,
+                          bits ? (const void *)(const BYTE *)bits : NULL);
+        tok = bm ? wowgdi_h16((HGDIOBJ)bm, WOWGDI_KIND_OBJ) : 0;
+        if (!tok) {
+            if (bm) DeleteObject((HGDIOBJ)bm);
+            wu_puts(note, notecap, &k, bm ? " -- ★ THE GDI TOKEN MAP IS FULL; the"
+                                            " bitmap was freed and 0 answered"
+                                          : " -- ★ THE OS REFUSED IT; answered 0");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        wu_puts(note, notecap, &k, " -> bitmap token 0x");
         wu_puthex(note, notecap, &k, tok, 4);
         wow32_setret(f, tok);
         return 1;
