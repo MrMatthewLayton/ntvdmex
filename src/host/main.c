@@ -9919,6 +9919,61 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
             else if (fr->retlin && fr->msg == WM_CREATE16 && (WORD)res == 0xFFFF)
                 p = zput(p, " -- ★ WM_CREATE REFUSED: the call that made the window"
                             " now returns 0");
+            /* ── ★★★★★ FOLLOW THE POINTER THE GUEST JUST HANDED BACK. ─────────
+                 `LocalLock` answered with a near offset into the application's own
+                 data segment, and the text an EDIT control is supposed to show is
+                 there. This is the moment it can be read -- the guest has
+                 returned, its DGROUP is still what it was, and the block is
+                 locked, which is the whole reason for having locked it.
+               ⚠ THE SELECTOR IS THE CONTROL'S OWN hInstance, which in Win16 IS
+                 the instance's DGROUP selector -- the same one the call was
+                 entered with, so the offset and the segment come from one place.
+               ⚠ AND UNLOCK IT AGAIN. We took the lock, so we owe the release, and
+                 leaving a moveable block permanently locked would quietly pin the
+                 application's heap. The unlock is a second call made from here,
+                 which is sound for exactly the reason the first one was: the guest
+                 is parked at our stub with its own stack under it. */
+            if (fr->action == WOWCALL_ACT_EDITTEXT) {
+                wowuser_win_t *ew = wowuser_findwin(fr->actarg);
+                DWORD off = res & 0xFFFF;
+                DWORD dgb = ew ? dpmi_sel_base(ew->hinst) : 0;
+                p = zput(p, " -- EDIT text at 0x"); p = zhex(p, ew ? ew->hinst : 0);
+                p = zput(p, ":0x"); p = zhex(p, off);
+                if (!ew || !ew->hwnd32 || !dgb || !off) {
+                    p = zput(p, " -- ★ UNREADABLE, the control keeps no text");
+                } else {
+                    static char etext[16384];
+                    const volatile BYTE *s =
+                        (const volatile BYTE *)(ULONG_PTR)(dgb + off);
+                    int n = 0;
+                    while (n < (int)sizeof etext - 1
+                           && mem_readable((ULONG_PTR)(s + n), 1) && s[n])
+                        { etext[n] = (char)s[n]; ++n; }
+                    etext[n] = 0;
+                    SetWindowTextA(ew->hwnd32, etext);
+                    p = zput(p, " -> 0x"); p = zhex(p, (DWORD)n);
+                    p = zput(p, " bytes into the real control");
+                    if (n == (int)sizeof etext - 1)
+                        p = zput(p, " (★ TRUNCATED at the host's buffer)");
+                }
+                /* Release the lock we took, whatever came of the read. */
+                if (ew && ew->hmem && g_wu_krnl_seg) {
+                    WORD  rsel2 = wow_callback_selector();
+                    DWORD ssb4  = dpmi_sel_base(
+                                    (WORD)(VDM_REG(tib, VTIB_SS) & 0xFFFF));
+                    WORD  uarg  = ew->hmem;
+                    if (rsel2 && ssb4
+                        && wowcall_enter(tib, ssb4, rsel2,
+                                         ((DWORD)g_wu_krnl_seg << 16)
+                                             | KRNL_LOCALUNLOCK_OFF,
+                                         ew->hinst, &uarg, 1, 0,
+                                         WOWCALL_RET_KEEP, NULL, ew->hwnd, 0))
+                        p = zput(p, "; LocalUnlock in flight");
+                    else
+                        p = zput(p, "; ★ LocalUnlock REFUSED -- the block stays"
+                                    " locked");
+                }
+            }
             p = zput(p, "\r\n");
             log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
             return 1;
@@ -10280,6 +10335,15 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                 f.cbnarg  = 0; f.cbsink = NULL;
                 f.cbhwnd  = 0; f.cbmsg = 0;
                 f.cbret   = WOWCALL_RET_KEEP;
+                /* ⚠ AND THESE TWO, WHICH COST A RUN BY BEING LEFT OUT. `f` is a
+                     stack local, so an un-set field is whatever was there before
+                     -- and `cbact` is read as a DECISION about what the host does
+                     with a returned value. Uninitialised, it made a WM_CREATE
+                     callback and a LocalAlloc callback both run the EDIT-text
+                     action, following a pointer that was never a pointer and
+                     issuing a LocalUnlock against a lock nobody had taken. Every
+                     field of this frame is initialised here for that reason. */
+                f.cbact   = WOWCALL_ACT_NONE; f.cbactarg = 0;
                 /* ★ krnl386's segment 1 as a LIVE selector, for the day a
                      service needs to call a KERNEL export. The WOW32 common
                      thunk is IN that segment, so the CS at this BOP is it --
@@ -10890,6 +10954,14 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                                             " made and the guest keeps the answer"
                                             " above");
                             else {
+                                /* The action belongs to the frame we have just
+                                   pushed; setting it here rather than through
+                                   wowcall_enter's argument list keeps that list
+                                   about the CALL and not about what follows it. */
+                                if (g_wc_depth > 0) {
+                                    g_wc[g_wc_depth - 1].action = f.cbact;
+                                    g_wc[g_wc_depth - 1].actarg = f.cbactarg;
+                                }
                                 p = zput(p, " -- ENTERED, depth ");
                                 p = zhex(p, (DWORD)g_wc_depth);
                             }

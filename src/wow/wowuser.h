@@ -139,6 +139,16 @@
 #define EM_SETHANDLE16  0x040C
 #define EM_GETHANDLE16  0x040D
 #define KRNL_LOCALALLOC_OFF 0x3ddb
+/* ★ AND ITS NEIGHBOURS, NAMED BY krnl386's OWN NON-RESIDENT NAME TABLE -- so
+     these are its names for its own ordinals, not a list from memory:
+        5 LOCALALLOC   0x3ddb      7 LOCALFREE    0x3df7
+        6 LOCALREALLOC 0x3e1f      8 LOCALLOCK    0x3e0b
+                                   9 LOCALUNLOCK  0x3e55
+   Both of the ones used here disassemble to `push bp / mov bp,sp / mov bx,[bp+6]
+   / call 0x406f / ... / retf 2` -- one WORD argument, far, which is what
+   `LocalLock(HLOCAL)` and `LocalUnlock(HLOCAL)` take. */
+#define KRNL_LOCALLOCK_OFF   0x3e0b
+#define KRNL_LOCALUNLOCK_OFF 0x3e55
 /* LMEM_MOVEABLE | LMEM_ZEROINIT -- the same flags SYSEDIT itself passes to
    LocalReAlloc at `seg3:0x012a` (`push 0x42`), so the block it grows is the kind
    it expects to be growing. */
@@ -853,7 +863,39 @@ static LONG wowuser_defproc(wow32_frame_t *f, wowuser_win_t *w, WORD msg,
         w->hmem = wparam;
         wu_puts(note, notecap, &k, "EM_SETHANDLE 0x");
         wu_puthex(note, notecap, &k, wparam, 4);
-        wu_puts(note, notecap, &k, " -- the control now holds the file's text");
+        /* ── ★★★★★ AND THE REAL CONTROL HAS TO BE GIVEN THE TEXT. (session 42) ─
+             The control is a real Win32 `EDIT` now, so "the control holds the
+             text" stopped being a thing this host could just record. Real WOW has
+             the same problem and solves it the same way: the Win16 handle names a
+             block in the APPLICATION's local heap, which the 32-bit side cannot
+             address, so the text is READ OUT of it and given to the real control.
+           ★ Reading it means locking it, and only the guest's KERNEL can:
+             `KERNEL.8 LOCALLOCK` at `<the BOP's CS>:0x3e0b`, entered with
+             DS = the control's own hInstance, exactly as LocalAlloc was.
+           ⚠ The answer is a near OFFSET, and following it is work that can only
+             happen after the guest returns -- hence WOWCALL_ACT_EDITTEXT rather
+             than a sink. The BOP handler does the read, the SetWindowText and the
+             matching LocalUnlock.
+           ⚠ EM_SETHANDLE's own answer stays 0: RET_KEEP, because the value the
+             application gets back is the message's, not LocalLock's. */
+        if (f->cbok && w->hwnd32 && w->hinst && g_wu_krnl_seg && wparam) {
+            f->cbproc   = ((DWORD)g_wu_krnl_seg << 16) | KRNL_LOCALLOCK_OFF;
+            f->cbds     = w->hinst;
+            f->cbarg[0] = wparam;
+            f->cbnarg   = 1;
+            f->cbret    = WOWCALL_RET_KEEP;
+            f->cbsink   = NULL;
+            f->cbact    = WOWCALL_ACT_EDITTEXT;
+            f->cbactarg = w->hwnd;
+            f->cbhwnd   = w->hwnd;
+            f->cbmsg    = msg;
+            wu_puts(note, notecap, &k, " -- asking the guest's KERNEL.8 LocalLock"
+                                       " for its text");
+        } else {
+            wu_puts(note, notecap, &k, " -- recorded, but nothing can read it"
+                                       " (no callback, no real control, or"
+                                       " krnl386's segment is unknown)");
+        }
         return 0;
 
     default:

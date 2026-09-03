@@ -119,6 +119,16 @@
 #define WOWCALL_RET_RESULT  1
 #define WOWCALL_RET_RESULTW 2
 
+/* ── ★ WHAT THE HOST DOES ONCE THE ANSWER ARRIVES. (session 42) ───────────────
+     A sink is enough when the result is a value to keep. It is not enough when
+     the result is a POINTER the host then has to follow -- `LocalLock` hands back
+     an offset into the application's own data segment, and reading the text there
+     is work that can only happen after the guest has returned. Naming the action
+     on the frame keeps that decision with the call that asked for it, instead of
+     leaving the BOP handler to guess from a sink's address what it was for. */
+#define WOWCALL_ACT_NONE     0
+#define WOWCALL_ACT_EDITTEXT 1   /* actarg = the Win16 hwnd of an EDIT control */
+
 /* Six words is not a guess about Win16 -- it is what the two things this host
    calls actually push: a window procedure's 5 (hwnd, msg, wParam, lParam hi+lo)
    and LocalAlloc's 2. Anything wider gets caught here rather than overrunning. */
@@ -139,6 +149,8 @@ typedef struct {
          for is a static array, and it must stay that way. */
     WORD *sink;
     DWORD written;           /* what actually went into the hole, for the log   */
+    int   action;            /* WOWCALL_ACT_* -- see above                      */
+    WORD  actarg;            /* what the action is about                        */
 } wowcall_frame_t;
 
 static wowcall_frame_t g_wc[WOWCALL_MAX_DEPTH];
@@ -187,6 +199,8 @@ static int wowcall_enter(volatile BYTE *tib, DWORD ssbase, WORD retsel,
     fr->msg     = msg;
     fr->retmode = retmode;
     fr->sink    = sink;
+    fr->action  = WOWCALL_ACT_NONE;   /* the caller sets it after we succeed */
+    fr->actarg  = 0;
 
     /* Pascal order: the FIRST declared argument is pushed FIRST, so it ends up
        at the highest address -- which is what `[bp+0x0e] == hwnd` in a window

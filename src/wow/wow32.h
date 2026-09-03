@@ -183,6 +183,8 @@ typedef struct {
     int              cbret;          /* WOWCALL_RET_KEEP / _RESULT -- whose
                                         answer the caller's return value is    */
     WORD            *cbsink;         /* optional: where the host keeps the answer */
+    int              cbact;          /* WOWCALL_ACT_* -- what to DO with it      */
+    WORD             cbactarg;       /* what that action is about                */
     WORD             cbhwnd, cbmsg;  /* for the log; 0/0 when not a message     */
 } wow32_frame_t;
 
