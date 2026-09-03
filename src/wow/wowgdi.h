@@ -70,6 +70,37 @@
        ord 66 CREATESOLIDBRUSH       id 0x42   4 args  retstub 0x0306
      Blocks reversed as always, and each adds up to what its stub declares:
      (HDC)=2, (HDC,HGDIOBJ)=4, (COLORREF)=4, (HDC,int,int)=6. */
+/* ── ★★★★ THE FIRST DRAWING CALLS. ──────────────────────────────────────────
+     Named by the run in which WM_PAINT was relayed to a guest for the first
+     time (session 45): MS Paint answered it with ten MoveTo/LineTo pairs and two
+     PatBlts. All three are ordinary exports, and `neneeds.py --stubs` agrees
+     with the return addresses the run printed:
+       ord 19 LINETO   id 0x13   6 args  retstub 0x07dc
+       ord 20 MOVETO   id 0x14   6 args  retstub 0x0810
+       ord 29 PATBLT   id 0x1d  14 args  retstub 0x0885
+     Reversed as always: (HDC,int,int) puts y at +0, x at +2 and the DC at +4;
+     PatBlt's (HDC,int,int,int,int,DWORD) puts the 4-byte rop at +0 and the DC at
+     +12, which is the 14 bytes its stub declares.
+   ⚠ THE COORDINATES ARE SIGNED 16-BIT and must be sign-extended, not widened:
+     a Win16 program draws at negative coordinates routinely (scrolled content),
+     and 0xFFF0 read as 65520 would put the line off the far edge instead of 16
+     pixels to the left.
+   ★ MoveTo RETURNS THE PREVIOUS POSITION packed as y:x in a DWORD, which is why
+     it is not simply a void call -- guests save and restore it. */
+#define WOWGDI_LINETO           0x0013
+#define WOWGDI_MOVETO           0x0014
+#define XY_ARG_Y        0
+#define XY_ARG_X        2
+#define XY_ARG_HDC      4
+
+#define WOWGDI_PATBLT           0x001d
+#define PB_ARG_ROP      0
+#define PB_ARG_HEIGHT   4
+#define PB_ARG_WIDTH    6
+#define PB_ARG_Y        8
+#define PB_ARG_X       10
+#define PB_ARG_HDC     12
+
 #define WOWGDI_SELECTOBJECT     0x002d
 #define SEL_ARG_OBJ     0
 #define SEL_ARG_HDC     2
@@ -297,6 +328,78 @@ static int wowgdi_call(wow32_frame_t *f, char *note, int notecap)
         wu_puts(note, notecap, &k, " = 0x");
         wu_puthex(note, notecap, &k, (DWORD)v, 4);
         wow32_setret(f, (DWORD)(WORD)v);
+        return 1;
+    }
+
+    /* ── ★★★★ 0x13 LineTo / 0x14 MoveTo -- see the note above. ──────────────*/
+    case WOWGDI_LINETO:
+    case WOWGDI_MOVETO: {
+        int  isline = (f->id == WOWGDI_LINETO);
+        WORD hdc = wow32_argw(f, XY_ARG_HDC);
+        int  x = (int)(short)wow32_argw(f, XY_ARG_X);
+        int  y = (int)(short)wow32_argw(f, XY_ARG_Y);
+        int  kind = -1;
+        HGDIOBJ o = wowgdi_h32(hdc, &kind);
+        int  k = 0;
+        POINT prev;
+        wu_puts(note, notecap, &k, isline ? "LineTo(0x" : "MoveTo(0x");
+        wu_puthex(note, notecap, &k, hdc, 4);
+        wu_puts(note, notecap, &k, ", ");
+        wu_puthex(note, notecap, &k, (DWORD)x, 4);
+        wu_puts(note, notecap, &k, ",");
+        wu_puthex(note, notecap, &k, (DWORD)y, 4);
+        wu_puts(note, notecap, &k, ")");
+        if (!o || (kind != WOWGDI_KIND_DC && kind != WOWGDI_KIND_WINDC)) {
+            wu_puts(note, notecap, &k, " -- ★ NOT ONE OF OUR DC TOKENS;"
+                                       " answered 0");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        if (isline) {
+            wow32_setret(f, (DWORD)(LineTo((HDC)o, x, y) ? 1 : 0));
+            return 1;
+        }
+        prev.x = prev.y = 0;
+        MoveToEx((HDC)o, x, y, &prev);
+        /* ★ y in the HIGH word, x in the LOW -- Win16's MAKELONG order. */
+        wow32_setret(f, ((DWORD)(WORD)(short)prev.y << 16)
+                        | (DWORD)(WORD)(short)prev.x);
+        return 1;
+    }
+
+    /* ── ★★★ 0x1d PatBlt(hDC, x, y, nWidth, nHeight, dwRop) ─────────────────
+         The raster ops are the same numbers in both worlds (PATCOPY, PATINVERT,
+         DSTINVERT, BLACKNESS, WHITENESS), so the rop travels unchanged. */
+    case WOWGDI_PATBLT: {
+        WORD  hdc = wow32_argw(f, PB_ARG_HDC);
+        int   x = (int)(short)wow32_argw(f, PB_ARG_X);
+        int   y = (int)(short)wow32_argw(f, PB_ARG_Y);
+        int   cx = (int)(short)wow32_argw(f, PB_ARG_WIDTH);
+        int   cy = (int)(short)wow32_argw(f, PB_ARG_HEIGHT);
+        DWORD rop = wow32_argd(f, PB_ARG_ROP);
+        int   kind = -1;
+        HGDIOBJ o = wowgdi_h32(hdc, &kind);
+        int   k = 0;
+        wu_puts(note, notecap, &k, "PatBlt(0x");
+        wu_puthex(note, notecap, &k, hdc, 4);
+        wu_puts(note, notecap, &k, ", ");
+        wu_puthex(note, notecap, &k, (DWORD)x, 4);
+        wu_puts(note, notecap, &k, ",");
+        wu_puthex(note, notecap, &k, (DWORD)y, 4);
+        wu_puts(note, notecap, &k, " ");
+        wu_puthex(note, notecap, &k, (DWORD)cx, 4);
+        wu_puts(note, notecap, &k, "x");
+        wu_puthex(note, notecap, &k, (DWORD)cy, 4);
+        wu_puts(note, notecap, &k, " rop=0x");
+        wu_puthex(note, notecap, &k, rop, 8);
+        wu_puts(note, notecap, &k, ")");
+        if (!o || (kind != WOWGDI_KIND_DC && kind != WOWGDI_KIND_WINDC)) {
+            wu_puts(note, notecap, &k, " -- ★ NOT ONE OF OUR DC TOKENS;"
+                                       " answered 0");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        wow32_setret(f, (DWORD)(PatBlt((HDC)o, x, y, cx, cy, rop) ? 1 : 0));
         return 1;
     }
 

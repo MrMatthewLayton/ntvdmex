@@ -100,6 +100,53 @@ static WORD  wowuser_menu16(HMENU m);   /* the 16-bit name for a real menu */
  *   way to yet -- GDI's id space is not dispatched. The day it is, WM_PAINT
  *   starts being translated here and the guest's BeginPaint gets the real HDC.
  */
+/* ── ★ THE PENDING-PAINT RECORD ──────────────────────────────────────────────
+     One rectangle per window, because the OS's update region is consumed in
+     wowwin_proc (see WM_PAINT there) and the guest asks for it later, out of its
+     own message loop. A second WM_PAINT arriving before the guest has answered
+     the first UNIONS with what is already pending rather than replacing it --
+     replacing would silently drop the area from the earlier one, which is the
+     kind of loss that shows up as "it only redraws sometimes". */
+#define WOWWIN_MAXPAINT 32
+typedef struct { WORD h16; RECT r; int erase; int pending; } wowwin_paint_t;
+static wowwin_paint_t g_ww_paint[WOWWIN_MAXPAINT];
+
+static void wowwin_paint_want(WORD h16, const RECT *r, int erase)
+{
+    int i, free = -1;
+    for (i = 0; i < WOWWIN_MAXPAINT; ++i) {
+        if (g_ww_paint[i].pending && g_ww_paint[i].h16 == h16) {
+            if (r->left   < g_ww_paint[i].r.left)   g_ww_paint[i].r.left   = r->left;
+            if (r->top    < g_ww_paint[i].r.top)    g_ww_paint[i].r.top    = r->top;
+            if (r->right  > g_ww_paint[i].r.right)  g_ww_paint[i].r.right  = r->right;
+            if (r->bottom > g_ww_paint[i].r.bottom) g_ww_paint[i].r.bottom = r->bottom;
+            if (erase) g_ww_paint[i].erase = 1;
+            return;
+        }
+        if (!g_ww_paint[i].pending && free < 0) free = i;
+    }
+    if (free < 0) return;                  /* full: the guest still gets the
+                                              message, just no rectangle */
+    g_ww_paint[free].h16 = h16;
+    g_ww_paint[free].r = *r;
+    g_ww_paint[free].erase = erase;
+    g_ww_paint[free].pending = 1;
+}
+
+/* Take the pending rectangle for a window, or 0 if there is none. */
+static int wowwin_paint_take(WORD h16, RECT *out, int *erase)
+{
+    int i;
+    for (i = 0; i < WOWWIN_MAXPAINT; ++i)
+        if (g_ww_paint[i].pending && g_ww_paint[i].h16 == h16) {
+            *out = g_ww_paint[i].r;
+            if (erase) *erase = g_ww_paint[i].erase;
+            g_ww_paint[i].pending = 0;
+            return 1;
+        }
+    return 0;
+}
+
 static LRESULT CALLBACK wowwin_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
 {
     WORD h16 = wowwin_hwnd16(h);
@@ -134,6 +181,40 @@ static LRESULT CALLBACK wowwin_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
         if (h16) {
             wowmsg_post(h16, (WORD)msg, (WORD)wp, (DWORD)lp, GetTickCount(), 0, 0);
             ++g_ww_msgs;
+        }
+        break;
+    /* ── ★★★ WM_PAINT, WHICH THIS FILE SAID IT WOULD RELAY "THE DAY" GDI'S ID
+         SPACE WAS DISPATCHED. That day is session 45: GDI is anchored, USER's
+         GetDC issues real device contexts, and MS Paint's window is on screen
+         and empty because nothing has ever asked it to draw.
+
+       ⚠⚠ THE REGION IS VALIDATED HERE, AND NOT DOING SO IS A LIVE-LOCK. Win32
+         does not queue WM_PAINT -- it SYNTHESISES one for as long as the window
+         has an update region. Relaying it to the guest and returning 0 leaves
+         that region dirty, so the real pump hands us another WM_PAINT
+         immediately and the host spins at 100% delivering paints the guest never
+         gets a turn to answer. So the OS's BeginPaint/EndPaint pair runs here:
+         it erases the background and clears the region, which stops the storm,
+         and the rectangle it reports is carried to the guest.
+       ⚠ WHAT THAT COSTS, STATED RATHER THAN DISCOVERED: the guest's own
+         BeginPaint can no longer inherit a real update region, because this
+         already consumed it. The rectangle is therefore remembered per window
+         and handed back when the guest asks -- see the paint record below. A
+         guest that paints only what it is told to will paint the right area; one
+         that relies on the DC being CLIPPED to that area is relying on something
+         this does not yet reproduce, and that is a known gap rather than a
+         surprise waiting to happen. */
+    case WM_PAINT:
+        if (h16) {
+            PAINTSTRUCT ps;
+            HDC dc = BeginPaint(h, &ps);
+            if (dc) {
+                wowwin_paint_want(h16, &ps.rcPaint, ps.fErase);
+                EndPaint(h, &ps);
+            }
+            wowmsg_post(h16, WM_PAINT16, 0, 0, GetTickCount(), 0, 0);
+            ++g_ww_msgs;
+            return 0;
         }
         break;
     case WM_CLOSE:

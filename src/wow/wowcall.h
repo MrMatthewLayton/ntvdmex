@@ -92,6 +92,10 @@
 /* Win16 messages this host sends. Kept here rather than in wowuser.h because
    the callback is what makes them meaningful. */
 #define WM_CREATE16       0x0001
+/* ★ Win16 and Win32 agree on the number, as they do for the keyboard messages.
+   Relayed from wowwin_proc since session 45; see the long note there for why the
+   OS's update region has to be consumed before it is handed on. */
+#define WM_PAINT16        0x000f
 
 /* Eight is not a guess about depth, it is a bound: SYSEDIT nests two
    (frame WM_CREATE -> MDI client), and a host that recursed deeper than this

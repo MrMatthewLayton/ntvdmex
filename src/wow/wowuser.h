@@ -369,6 +369,44 @@ static WORD wowuser_sysres_kind(WORD h)
    ⚠ 0x44 IS `DeleteDC` IN GDI'S NUMBERING AND `ReleaseDC` HERE -- the same
      collision this file exists to prevent, and a reason the dispatcher must
      never reach this switch with another module's stub segment. */
+/* ── ★★★★★ 0x27 BeginPaint / 0x28 EndPaint -- WHERE A GUEST DRAWS. ──────────
+     Both are internal stubs (their exports are native16), so the ids came from
+     the run that first relayed WM_PAINT to a guest -- see wowwin.h. Each carries
+     6 argument bytes and the same block: a far `lpPaint` at +0 and the hWnd at
+     +4, and the hWnd that arrived was 0x0180, MS Paint's CANVAS window.
+
+   ★★ THE PAINTSTRUCT LAYOUT IS READ OFF PAINT'S OWN CODE, not a header.
+     `nedis.py guest/win16/PBRUSH.EXE 3 0x08f8` shows the whole bracket, and the
+     structure is at `bp-0x2a`:
+
+        0905  push [bp+0x0e]      ; hWnd, the window procedure's own parameter
+        0908  lea ax,[bp-0x2a]    ; &ps
+        090b  push ss / push ax
+        090d  lcall <BeginPaint>
+        0919  push [bp-0x2a]      ; ★ ps+0  -- and it is pushed as the HDC
+        092f  mov ax,[bp-0x24]    ;   ps+6
+        0938  mov cx,[bp-0x26]    ;   ps+4
+        0940  sub cx,[bp-0x22]    ;   ps+8   -> right-left, negated and +1
+        0947  sub ax,[bp-0x20]    ;   ps+10  -> the height, the same way
+     ⇒ hdc at +0, fErase at +2, rcPaint at +4 as four `int`s, and the guest
+       computing `right - left + 1` is what identifies which pair is which.
+       Win16's PAINTSTRUCT is 32 bytes (16 of them a reserved tail); Win32's is
+       64 with LONGs, so this is a conversion like every other structure here.
+
+   ⚠⚠ THE UPDATE REGION HAS ALREADY BEEN CONSUMED by the time the guest gets
+     here -- wowwin_proc had to validate it to stop Win32 re-synthesising
+     WM_PAINT forever. So the rectangle comes out of the pending-paint record
+     that kept it. A window with no record still gets a DC and its whole client
+     rectangle, which is correct-but-wasteful rather than wrong. */
+#define WOWUSER_BEGINPAINT       0x0027
+#define WOWUSER_ENDPAINT         0x0028
+#define BP_ARG_PS        0
+#define BP_ARG_HWND      4
+#define WOW16_PS_HDC     0
+#define WOW16_PS_ERASE   2
+#define WOW16_PS_RECT    4
+#define WOW16_PS_CB     32
+
 #define WOWUSER_GETDC            0x0042
 #define WOWUSER_GETWINDOWDC      0x0043
 #define GDC_ARG_HWND16   0
@@ -2740,6 +2778,86 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
         wu_puts(note, notecap, &k, "; answered 0x");
         wu_puthex(note, notecap, &k, (DWORD)rc, 4);
         wow32_setret(f, (DWORD)(WORD)rc);
+        return 1;
+    }
+
+    /* ── ★★★★★ 0x27 BeginPaint / 0x28 EndPaint -- see the long note above. ──*/
+    case WOWUSER_BEGINPAINT: {
+        WORD hwnd = wow32_argw(f, BP_ARG_HWND);
+        volatile BYTE *ps = wow32_argptr(f, BP_ARG_PS);
+        wowuser_win_t *w = wowuser_findwin(hwnd);
+        RECT r;
+        HDC  dc;
+        WORD tok;
+        int  k = 0, erase = 1, have, i;
+        wu_puts(note, notecap, &k, "BeginPaint 0x");
+        wu_puthex(note, notecap, &k, hwnd, 4);
+        if (!w || !w->hwnd32 || !ps) {
+            wu_puts(note, notecap, &k, !ps ? " -- ★ NO PAINTSTRUCT; answered 0"
+                                           : " -- ★ NO SUCH WINDOW; answered 0");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        have = wowwin_paint_take(hwnd, &r, &erase);
+        if (!have) {
+            GetClientRect(w->hwnd32, &r);
+            erase = 1;
+        }
+        dc = GetDC(w->hwnd32);
+        tok = dc ? wowgdi_h16((HGDIOBJ)dc, WOWGDI_KIND_WINDC) : 0;
+        if (!tok) {
+            if (dc) ReleaseDC(w->hwnd32, dc);
+            wu_puts(note, notecap, &k, " -- ★ NO DC (or the token map is full);"
+                                       " answered 0");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        /* ★ The whole 32 bytes are cleared first: fRestore, fIncUpdate and the
+             16-byte reserved tail are all part of what the guest declared, and
+             leaving them as stack litter is how a guest ends up branching on
+             something nobody wrote. */
+        for (i = 0; i < WOW16_PS_CB; ++i) ps[i] = 0;
+        wow32_pokew(ps + WOW16_PS_HDC,   tok);
+        wow32_pokew(ps + WOW16_PS_ERASE, (WORD)(erase ? 1 : 0));
+        wow32_pokew(ps + WOW16_PS_RECT + 0, (WORD)(short)r.left);
+        wow32_pokew(ps + WOW16_PS_RECT + 2, (WORD)(short)r.top);
+        wow32_pokew(ps + WOW16_PS_RECT + 4, (WORD)(short)r.right);
+        wow32_pokew(ps + WOW16_PS_RECT + 6, (WORD)(short)r.bottom);
+        wu_puts(note, notecap, &k, have ? " rect(" : " whole client rect(");
+        wu_puthex(note, notecap, &k, (DWORD)r.left, 4);   wu_puts(note, notecap, &k, ",");
+        wu_puthex(note, notecap, &k, (DWORD)r.top, 4);    wu_puts(note, notecap, &k, ",");
+        wu_puthex(note, notecap, &k, (DWORD)r.right, 4);  wu_puts(note, notecap, &k, ",");
+        wu_puthex(note, notecap, &k, (DWORD)r.bottom, 4);
+        wu_puts(note, notecap, &k, ") -> DC token 0x");
+        wu_puthex(note, notecap, &k, tok, 4);
+        wow32_setret(f, tok);
+        return 1;
+    }
+
+    case WOWUSER_ENDPAINT: {
+        WORD hwnd = wow32_argw(f, BP_ARG_HWND);
+        volatile BYTE *ps = wow32_argptr(f, BP_ARG_PS);
+        wowuser_win_t *w = wowuser_findwin(hwnd);
+        WORD tok = ps ? wow32_peekw(ps + WOW16_PS_HDC) : 0;
+        int  kind = -1;
+        HGDIOBJ o = wowgdi_h32(tok, &kind);
+        int  k = 0;
+        wu_puts(note, notecap, &k, "EndPaint 0x");
+        wu_puthex(note, notecap, &k, hwnd, 4);
+        wu_puts(note, notecap, &k, " dc=0x");
+        wu_puthex(note, notecap, &k, tok, 4);
+        /* ⚠ THE DC MUST GO BACK EVEN IF THE WINDOW HAS GONE. A guest that
+             destroys a window inside its own WM_PAINT is rare but legal, and a
+             leaked cache DC would eventually stop the OS handing out any. */
+        if (o && kind == WOWGDI_KIND_WINDC) {
+            ReleaseDC(w ? w->hwnd32 : NULL, (HDC)o);
+            wowgdi_forget(tok);
+            wu_puts(note, notecap, &k, " -> released");
+        } else {
+            wu_puts(note, notecap, &k, " -- ★ THAT IS NOT A DC THIS BeginPaint"
+                                       " issued; nothing released");
+        }
+        wow32_setret(f, 1);
         return 1;
     }
 
