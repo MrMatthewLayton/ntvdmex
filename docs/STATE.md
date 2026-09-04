@@ -4,7 +4,7 @@
 > this file top to bottom and you will know where it is, what works, what does not, and
 > what to do next.
 
-- **Last updated:** 2026-09-03 (session 44)
+- **Last updated:** 2026-09-04 (session 45)
 - **Branch:** `m9/completeness`
 - **Tracker:** [140+ issues](https://github.com/MrMatthewLayton/ntvdmex/issues) — reconciled against the repo on 2026-08-26 (`tools/gh/backfill.py` is the manifest)
 - **Knowledge base:** the [wiki](https://github.com/MrMatthewLayton/ntvdmex/wiki)
@@ -38,9 +38,18 @@ A good bar for the same reasons Doom was: small, iconic, and impossible to fake.
 them they exercise the whole stack — NE loading, the KERNEL 16→32 boundary, USER windows
 and menus, GDI drawing, mouse and keyboard. Paint in particular has to actually paint.
 
-**Status: a Win16 APPLICATION IS ON THE WINDOWS XP DESKTOP.**
-`wowexec.exe` — the WOW shell — is found, loaded and run, and nothing has drawn a pixel
-yet. What works is the *bootstrap*, and as of session 39 it runs
+**Status: ★★★★★ BOTH NORTH-STAR PROGRAMS RUN, AND ONE OF THEM PAINTS.**
+As of **session 45**, `PBRUSH.EXE` from Windows 3.11 is a real sized, titled window on
+the XP desktop with its own menu bar (which opens), and it answers its own `WM_PAINT`
+with `MoveTo`/`LineTo`/`PatBlt` — **a Win16 program's own drawing code now reaches the
+screen**. `NOTEPAD.EXE` has been a working text editor since session 44 (open, type,
+save, menus, Help > About). ⚠ Paint is not yet *correct*: its toolbox, line-size box
+and palette are ~1.35× too large so two of them fall below the bottom of the window,
+and the tool icons are not blitted — see
+[session 45's resume block](log/sessions/session-45.md#-resume-here).
+
+Below is how the bootstrap got there, kept because it is still the reference for the
+loader and the scheduler. As of session 39 it runs
 a long way: krnl386 loads three of its four segments, installs its interrupt handlers,
 **takes and returns from its own DPMI exceptions**, and loads **all eight** of the 16-bit
 system modules — `SYSTEM.DRV`, `KEYBOARD.DRV`, `MOUSE.DRV`, `VGA.DRV`, `SOUND.DRV`,
@@ -193,11 +202,55 @@ silently is worth more attention than its size suggests.
 1. **[#128] WOW / Win16 — IN PROGRESS. ★★★★★ `SYSEDIT.EXE` IS ON THE WINDOWS XP
    DESKTOP, AS ITSELF.**
 
-   ### ▶ Session 42's handoff (background): [session 42](log/sessions/session-42.md#-resume-here)
+   ### ▶ START HERE: [session 45](log/sessions/session-45.md#-resume-here)
 
-   ### ▶ START HERE: [session 44](log/sessions/session-44.md#-resume-here)
+   ### ▶ Session 44's handoff (background): [session 44](log/sessions/session-44.md#-resume-here)
 
    ### ▶ Session 43's handoff (background): [session 43](log/sessions/session-43.md#-resume-here)
+
+   ### ▶ ★★★★★ MS PAINT RUNS, HAS ITS MENU, AND PAINTS (session 45)
+   **Both north-star programs now run.** `PBRUSH.EXE` is a real sized, titled
+   window on the XP desktop — its own icon, its own taskbar button, its **real
+   menu bar** (File/Edit/View/Text/Pick/Options/Help, 62 items from its own
+   resource) which **opens on Alt-F** — and it **paints**: it answers its own
+   `WM_PAINT` with `MoveTo`/`LineTo`/`PatBlt`. It registers itself as an OLE
+   server, reads WIN.INI, creates all five of its windows, takes and releases
+   real DCs, loads its toolbox bitmaps, and its canvas has working scrollbars.
+   ⚠ **Not yet correct** — the toolbox, line-size box and palette are ~1.35×
+   too large so two of them fall below the bottom of the window, and the tool
+   icons are not blitted. See the resume block.
+
+   ### ▶ ★★★ THE PLAN ON RECORD PREDICTED NONE OF THE SIX WALLS
+   Session 44 said Paint's next step was GDI's remaining calls **or** the
+   sent-vs-posted split. Neither was the blocker. With `MessageBox` already in,
+   Paint named its own walls: *"Failed to register server"* (SHELL's `Reg*` —
+   and the anchor), *"Not enough memory to perform this operation"* (`GetDC`
+   = 0), a GP fault (null `CREATESTRUCT`), *"Not enough memory to edit image"*
+   (`LoadBitmap`), another GP fault (`GetObject` = 0), and finally the layout
+   (`GetClientRect`). **Implement `MessageBox` first on any new guest** paid for
+   itself a third session running.
+
+   ### ▶ ★★★★★ AN ANCHOR MUST BE THE WHOLE STUB TABLE
+   SHELL was anchored on `ShellAbout` **alone**. Paint never calls it, so SHELL
+   was never identified at all and every `Reg*` — plus `DragAcceptFiles`, which
+   had been **implemented since session 44** — was logged as *"?'s table"* and
+   answered by nobody. ⚠⚠ **In a log, "nobody wrote this service" and "nobody
+   identified this module" are the same line.** Anchors are now generated from
+   the binary: `tools/ne/wowthunks.py --anchor` → `src/wow/wowanchors.h`.
+
+   ### ▶ ★★★ STOCK ntvdm ON THE XP BOX IS THE ORACLE — NOT A Win3.1 INSTALL
+   `wowcompare.bat` runs the **same** `PBRUSH.EXE` under ours and under stock at
+   the same time on the same desktop, and `rigshot tree` (new verb) prints every
+   matching window **and its children** with exact rectangles. That turned "it
+   paints wrong" into a table, and the table named `GetClientRect`: Paint asked
+   how big it was, got nothing, and laid itself out from WIN.INI's 1680×974 in a
+   1252×688 client. **Nothing was wrong with the drawing** — it drew the right
+   picture at the wrong size in a window it could not measure.
+
+   ### ▶ ⚠ THE GATE MOVED: **`81 / 122 / 61 · 0001:229C`**
+   Was `64/122/78`. Declined unchanged, total identical; the delta is exactly
+   **17 `GetStockObject`** calls krnl386's bootstrap already made and the widened
+   GDI anchor now lets us answer. Improvement, not drift.
 
    ### ▶ ★★★★★ NOTEPAD IS A WORKING TEXT EDITOR (session 44)
    It **opens a file through the real XP file dialog, you type into it, and
