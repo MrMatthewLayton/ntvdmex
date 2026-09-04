@@ -629,7 +629,31 @@ static WORD wowgdi_h16(HGDIOBJ o, int kind)
     int i;
     if (!o) return 0;
     for (i = 0; i < g_wg_nobj; ++i)
-        if (g_wg_obj[i].o == o) return g_wg_obj[i].h;
+        if (g_wg_obj[i].o == o) {
+            if (g_wg_obj[i].kind == kind) return g_wg_obj[i].h;
+            /* ── ★★★★★ SAME ADDRESS, DIFFERENT KIND: THE ENTRY IS STALE, AND
+                 THIS WAS SOLITAIRE'S BLACK CARDS. Win32 RECYCLES HGDIOBJ VALUES.
+                 A memory DC is deleted, a bitmap is created, and the OS hands
+                 back the SAME pointer -- so this loop found the dead DC's entry
+                 and gave the new BITMAP the DC's token. The log shows one token
+                 living both lives within a few calls:
+
+                     SetTextColor(0x20e0, ...)            ; used as a DC
+                     GetTextExtent(0x20e0, ...)           ; used as a DC
+                     PatBlt(0x20e0, ...)                  ; used as a DC
+                     CreateCompatibleDC -> 0x20e8
+                     SelectObject(dc 0x20e8, obj 0x20e0)  ; now used as a BITMAP
+
+                 Selecting it put no real bitmap in the memory DC, so the DC kept
+                 its default 1x1 monochrome one and every 71x96 card blitted out
+                 of it came through BLACK. The blit SUCCEEDED and said so -- there
+                 was nothing in the log that looked like a failure.
+               ⚠ The kind is not decoration: it is the only thing that can tell a
+                 recycled handle from the object that used to live there. Retire
+                 the dead entry and mint a fresh token below. */
+            g_wg_obj[i].o = NULL;
+            g_wg_obj[i].h = 0;
+        }
     for (i = 0; i < g_wg_nobj; ++i)                    /* reuse a freed slot */
         if (!g_wg_obj[i].h && !g_wg_obj[i].o) break;
     if (i == g_wg_nobj) {
