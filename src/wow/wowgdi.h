@@ -47,6 +47,10 @@
 
 #define GDC_ARG_INDEX   0
 #define GDC_ARG_HDC     2
+/* The capability index Win32 inherited from Win16 unchanged -- "how many entries
+   in this device's colour table". It is the one index whose Win32 answer a Win16
+   caller cannot read; see the handler. */
+#define WOWGDI_CAP_NUMCOLORS  24
 #define DOBJ_ARG_HANDLE 0
 
 /* ── ★★★ THE PRODUCERS -- WHAT MS PAINT ASKS FOR ONCE IT HAS A WINDOW. ───────
@@ -705,17 +709,51 @@ static int wowgdi_call(wow32_frame_t *f, char *note, int notecap)
             return 1;
         }
         v = GetDeviceCaps((HDC)o, (int)idx);
-        /* ⚠ REFUTED, session 45 -- recorded so it is not re-tried. Win32
-             answers NUMCOLORS with -1 for any device deeper than 8bpp, which
-             reaches a Win16 program as 0xffff, and MS Paint asks for NUMCOLORS
-             four times and never asks BITSPIXEL or PLANES -- so it looked
-             certain that -1 was why every bitmap it makes is `planes=1 bpp=1`.
-             Substituting 256 (the deepest a Win3.1 driver ever reported) changed
-             NOTHING: the log shows `= 0x0100` and the very same 33 monochrome
-             bitmaps. The 1bpp bitmaps are MASKS -- the Win16 idiom is a
-             monochrome pattern plus SetTextColor/SetBkColor at blit time, and
-             this run makes 34 of each -- so they are not evidence of a
-             mis-detected display at all. The answer is left as the OS gives it. */
+
+        /* ── ★★★★★ NUMCOLORS: -1 IS A Win32 SENTINEL AND NO Win16 PROGRAM HAS
+             EVER SEEN ONE. (session 51 -- MINESWEEPER RENDERED IN BLACK AND
+             WHITE, and stock ntvdm runs the same binary in colour.)
+             Win32 answers NUMCOLORS with -1 for any device deeper than 8bpp.
+             That reaches the guest as 0xffff, and WINMINE.EXE's own code -- read
+             out of the binary at seg1:0x1820, not guessed -- does this with it:
+
+                 1820  push  0x18          ; NUMCOLORS
+                 1822  lcall 0, 0xffff     ; GetDeviceCaps
+                 1827  cmp   ax, 2
+                 182a  jle   0x1831        ; ★ SIGNED
+                 182c  mov   ax, 1         ;   colour
+                 1831  sub   ax, ax        ;   MONOCHROME
+                 1833  mov   [0x380], ax   ;   the global colour flag
+
+             `jle` is the SIGNED branch, so -1 <= 2 is TRUE and Minesweeper sets
+             its monochrome flag -- after which every DIB it builds and hands to
+             SetDIBitsToDevice really is 1bpp, and this host draws it faithfully.
+             Nothing downstream was wrong. The wrong answer was here.
+
+           ★ SO IT IS ANSWERED IN Win16's OWN TERMS: the size of a colour table,
+             which is what the index MEANS. <= 8bpp gives the exact count; deeper
+             than that has no table at all, and 256 is both the largest a Windows
+             3.1 driver ever reported and the largest a program of this era was
+             built to read. Every Win16 caller tests it for ">2" or "==2".
+
+           ⚠⚠ AND THE SESSION-45 REFUTATION STILL STANDS -- it was about a
+             DIFFERENT GUEST and it is not contradicted. MS Paint asks NUMCOLORS
+             four times and never asks BITSPIXEL or PLANES, so -1 looked certain
+             to be why every bitmap it makes is `planes=1 bpp=1`; substituting
+             256 changed NOTHING, because Paint's 1bpp bitmaps are MASKS (the
+             Win16 idiom is a monochrome pattern plus SetTextColor/SetBkColor at
+             blit time, and that run made 34 of each). Both are true: 256 is not
+             the lever for Paint's masks, AND -1 is the wrong answer to give a
+             16-bit caller. What was refuted was a hypothesis about Paint, not
+             the value. ⇒ Re-run Paint after touching this. */
+        if (idx == WOWGDI_CAP_NUMCOLORS && v < 0) {
+            int bpp = GetDeviceCaps((HDC)o, BITSPIXEL)
+                    * GetDeviceCaps((HDC)o, PLANES);
+            v = (bpp > 0 && bpp <= 8) ? (1 << bpp) : 256;
+            wu_puts(note, notecap, &k, " [NUMCOLORS -1 -> ");
+            wu_puthex(note, notecap, &k, (DWORD)v, 4);
+            wu_puts(note, notecap, &k, "; a Win16 caller reads -1 as MONOCHROME]");
+        }
         /* ⚠ REFUTED, session 45, and recorded so it is not re-tried: forcing
              HORZRES/HORZSIZE to stock's 2.0 (from our 2.625) changed MS Paint's
              toolbox by NOTHING -- pbTool stayed 163x731 to the pixel. Paint
