@@ -1,6 +1,6 @@
 # Session 45 — MS Paint runs, has its menu, and paints
 
-> Seven commits, `7830d92` … `268ddfa`. Branch `m9/completeness`.
+> Eleven commits, `7830d92` … `3a6035c`. Branch `m9/completeness`.
 
 ## ★★★★★ THE HEADLINE
 
@@ -23,9 +23,16 @@ Evidence:
 [`-vs-stock`](../../research/evidence/session45-pbrush-vs-stock.png),
 [`-after-getclientrect`](../../research/evidence/session45-pbrush-after-getclientrect.png).
 
-⚠ **It is not yet correct.** See [what is still wrong](#-what-is-still-wrong) —
-the toolbox, line-size box and palette are ~1.35× too large, so two of them are
-laid out below the bottom of the window, and the tool icons are not blitted.
+★★ **And after a comparison against stock ntvdm, its whole UI is right**: the
+toolbox with its colour tool icons, the line-size box, the colour palette bar and
+the canvas with its scrollbars are all present and **geometrically
+pixel-identical to the oracle**. See
+[`-toolbox-icons`](../../research/evidence/session45-pbrush-toolbox-icons.png) and
+[`-layout-matches-stock`](../../research/evidence/session45-pbrush-layout-matches-stock.png).
+
+⚠ **Two content differences remain** — the palette swatches render dithered
+black-and-white rather than in colour, and the line-size box shows its arrow but
+not its bars. See the resume block.
 
 ---
 
