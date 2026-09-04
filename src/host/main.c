@@ -11392,6 +11392,32 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                             while (g_running && !g_wm_count && !g_wm_quit
                                    && (!g_wowmsg_wait_ms
                                        || GetTickCount() - t0 < g_wowmsg_wait_ms)) {
+                                /* ── ★★ THE IDLE WAIT, AND ITS TIMEOUT IS A
+                                     LATENCY FLOOR. A WM_PAINT arriving while the
+                                     guest is parked here should wake the wait
+                                     through QS_ALLINPUT, and usually does --
+                                     measured paint latency is 0 ms three times
+                                     in five. But MsgWaitForMultipleObjects has a
+                                     documented race: a message that arrives
+                                     between the PeekMessage above and the wait
+                                     below can leave the queue state already
+                                     "seen", and the wait then sleeps the FULL
+                                     timeout. The other two measurements were
+                                     47 ms and 94 ms -- one and two timeouts.
+                                   ⚠⚠ REFUTED, and the timeout is left at 50.
+                                     Dropping it to 10 ms was tried and MEASURED:
+                                     the same workload produced 0, 0, 0, 46, 93 ms
+                                     against the 50 ms build's 0, 0, 0, 47, 94.
+                                     Identical. So the two slow paints are NOT
+                                     this wait sleeping through a lost wake-up --
+                                     the guest is simply not parked here when they
+                                     arrive, and the delay is its own work
+                                     (raising a window also delivers WM_ACTIVATE
+                                     and WM_SETFOCUS, each of which re-enters
+                                     16-bit code). A shorter timeout would cost an
+                                     idle guest ~100 wake-ups a second and buy
+                                     nothing, so it was reverted rather than kept
+                                     on the grounds that it "should" help. */
                                 if (!wowwin_pump(64))
                                     MsgWaitForMultipleObjects(0, NULL, FALSE, 50,
                                                               QS_ALLINPUT);
