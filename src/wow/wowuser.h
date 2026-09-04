@@ -3913,6 +3913,12 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
 
     /* ── ★★★★★ 0x27 BeginPaint / 0x28 EndPaint -- see the long note above. ──*/
     case WOWUSER_BEGINPAINT: {
+        /* ── ★ PAINT LATENCY: how long the guest left the WM_PAINT sitting. ──
+             Reported here because this is the moment the guest finally answers
+             it. Large numbers mean the redraw is LATE, not slow; small ones mean
+             any remaining sluggishness is in the drawing, which is measured
+             separately by WOWPERF. */
+        DWORD wu_paint_lat = g_ww_paint_ms ? (GetTickCount() - g_ww_paint_ms) : 0;
         WORD hwnd = wow32_argw(f, BP_ARG_HWND);
         volatile BYTE *ps = wow32_argptr(f, BP_ARG_PS);
         wowuser_win_t *w = wowuser_findwin(hwnd);
@@ -3921,6 +3927,9 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
         WORD tok;
         int  k = 0, erase = 1, have, i;
         wu_puts(note, notecap, &k, "BeginPaint 0x");
+        wu_puts(note, notecap, &k, " [waited 0x");
+        wu_puthex(note, notecap, &k, wu_paint_lat, 4);
+        wu_puts(note, notecap, &k, " ms]");
         wu_puthex(note, notecap, &k, hwnd, 4);
         if (!w || !w->hwnd32 || !ps) {
             wu_puts(note, notecap, &k, !ps ? " -- ★ NO PAINTSTRUCT; answered 0"

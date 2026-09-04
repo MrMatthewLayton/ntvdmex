@@ -9351,6 +9351,10 @@ static void wowsched_setcur(WORD task)
      gated by this flag, so it looked like the answer. `mode` on the rig lists
      only `CON:` -- THERE IS NO COM1 -- so g_serial is INVALID_HANDLE_VALUE and
      serial_out has been a no-op all along. Measured before it was believed. */
+/* BOPs serviced, and when the last WOWPERF line was printed. See the note at the
+   emission site. */
+static DWORD g_wow_bops = 0, g_wow_perf_ms = 0;
+
 #define WOWQUIET_PATH "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\wowquiet.txt"
 static void wowquiet_load(void)
 {
@@ -10434,6 +10438,32 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                  -- and it is the same move `pmchg.txt` makes for module segments,
                  which cannot reach a selector krnl386 allocated at run time. */
             p = wow_psp_env_check(p, "a WOW32 BOP");
+            /* ── ★★★ WHERE THE TIME ACTUALLY GOES, EVERY 4096 BOPs. ─────────
+                 The user has reported the Win16 guests as slow twice, and both
+                 times the cause was GUESSED and both guesses were wrong (the
+                 file trace -- refuted by a wowquiet.txt A/B; the serial port --
+                 refuted by `mode`, there is no COM1). So this stops guessing and
+                 prints the apportionment: how many BOPs, over how long, and how
+                 much of that was spent writing the log and pumping Win32.
+               ⚠ ONE LINE PER 4096 BOPs, so the instrument cannot become the
+                 thing it is measuring -- which is the exact trap it exists to
+                 investigate. */
+            if ((++g_wow_bops & 0x3FF) == 0) {
+                DWORD now = GetTickCount();
+                LARGE_INTEGER fq;
+                QueryPerformanceFrequency(&fq);
+                p = zput(p, "WOWPERF: bops=0x");      p = zhex(p, g_wow_bops);
+                p = zput(p, " ms_since_last=0x");     p = zhex(p, now - g_wow_perf_ms);
+                p = zput(p, " log_calls=0x");         p = zhex(p, g_log_calls);
+                p = zput(p, " log_kb=0x");            p = zhex(p, g_log_bytes >> 10);
+                p = zput(p, " log_ms=0x");
+                p = zhex(p, fq.QuadPart ? (DWORD)(g_log_qpc * 1000 / fq.QuadPart) : 0);
+                p = zput(p, " pump_calls=0x");        p = zhex(p, g_ww_pumpcalls);
+                p = zput(p, " pump_ms=0x");
+                p = zhex(p, fq.QuadPart ? (DWORD)(g_ww_qpc * 1000 / fq.QuadPart) : 0);
+                p = zput(p, "\r\n");
+                g_wow_perf_ms = now;
+            }
             p = zput(p, "WOWBOP 0x"); p = zhexb(p, bcode);
             /* Only 0x53 carries a sub-function byte. Printing bb[3] for the others
                shows the first byte of the NEXT instruction and reads like data. */

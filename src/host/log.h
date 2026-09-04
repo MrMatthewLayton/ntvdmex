@@ -123,10 +123,23 @@ static inline void log_write(const char *path, const char *buf, const char *end)
      writing a kilobyte per BOP in the first place. */
 static int g_log_quiet = 0;
 
+/* ── ★ THE COST OF THE INSTRUMENT, MEASURED BY THE INSTRUMENT. ───────────────
+     Two sessions have now blamed the trace for the guests feeling slow, and both
+     times it was a guess. These are the numbers that settle it: ticks spent
+     inside log_append, and how many calls and bytes that was. QPC, not
+     GetTickCount -- a 15 ms clock cannot see a call that costs microseconds, and
+     summing 15 ms quanta over 100k calls is how a measurement invents a
+     bottleneck. */
+static LONGLONG g_log_qpc = 0;
+static DWORD    g_log_calls = 0, g_log_bytes = 0;
+
 static inline void log_append(const char *path, const char *buf, const char *end) {
     DWORD n = (DWORD)(end - buf);
     HANDLE h;
+    LARGE_INTEGER t0, t1;
     if (g_log_quiet) return;
+    QueryPerformanceCounter(&t0);
+    ++g_log_calls; g_log_bytes += n;
     if (g_log_capped) return;
     if (g_log_total + n > LOG_MAX_BYTES) {
         static const char mark[] = "\r\n[log capped at LOG_MAX_BYTES: runaway guest output suppressed]\r\n";
@@ -155,6 +168,8 @@ static inline void log_append(const char *path, const char *buf, const char *end
         g_log_h = h; g_log_h_path = path;
     }
     {   DWORD wr; WriteFile(g_log_h, buf, n, &wr, NULL); }
+    QueryPerformanceCounter(&t1);
+    g_log_qpc += t1.QuadPart - t0.QuadPart;
 }
 
 #endif /* HOST_LOG_H */

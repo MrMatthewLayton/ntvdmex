@@ -115,6 +115,8 @@ static DWORD wowuser_timer_proc(WORD hwnd, WORD id);  /* 0 if none installed */
 #define WOWWIN_MAXPAINT 32
 typedef struct { WORD h16; RECT r; int erase; int pending; } wowwin_paint_t;
 static wowwin_paint_t g_ww_paint[WOWWIN_MAXPAINT];
+/* Tick at which the most recent WM_PAINT was posted to the Win16 queue. */
+static DWORD g_ww_paint_ms = 0;
 
 static void wowwin_paint_want(WORD h16, const RECT *r, int erase)
 {
@@ -235,6 +237,12 @@ static LRESULT CALLBACK wowwin_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
             HDC dc = BeginPaint(h, &ps);
             if (dc) {
                 wowwin_paint_want(h16, &ps.rcPaint, ps.fErase);
+                /* ★ WHEN the paint was handed to the guest, so BeginPaint can say
+                     how long it sat there. Throughput was measured and is fine
+                     (~260 GDI calls, ~10 ms, for a full Solitaire repaint); if a
+                     redraw still LOOKS slow the cost is the wait, not the work,
+                     and this is the only number that separates them. */
+                g_ww_paint_ms = GetTickCount();
                 EndPaint(h, &ps);
             }
             wowmsg_post(h16, WM_PAINT16, 0, 0, GetTickCount(), ptx, pty);
@@ -429,16 +437,26 @@ static LRESULT CALLBACK wowwin_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
  * ⚠ BOUNDED. A pump that drained without limit would let a flood of mouse moves
  *   starve the guest, and the guest is the thing we are here to run.
  */
+/* Ticks spent in here, and how many times it was entered -- the other half of
+   the per-BOP cost. See the note in log.h. */
+static LONGLONG g_ww_qpc = 0;
+static DWORD    g_ww_pumpcalls = 0;
+
 static int wowwin_pump(int budget)
 {
     MSG m;
     int n = 0;
+    LARGE_INTEGER t0, t1;
     if (!g_ww_created) return 0;
+    QueryPerformanceCounter(&t0);
+    ++g_ww_pumpcalls;
     while (n < budget && PeekMessageA(&m, NULL, 0, 0, PM_REMOVE)) {
         TranslateMessage(&m);
         DispatchMessageA(&m);
         ++n; ++g_ww_pumped;
     }
+    QueryPerformanceCounter(&t1);
+    g_ww_qpc += t1.QuadPart - t0.QuadPart;
     return n;
 }
 
