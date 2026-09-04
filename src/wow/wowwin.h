@@ -95,10 +95,11 @@ static WORD  wowuser_menu16(HMENU m);   /* the 16-bit name for a real menu */
  *   ring with mouse moves the guest never asked for and would hide the ones it
  *   did. Keyboard and close are what a run has needed; the rest goes to
  *   DefWindowProc, and the log names anything that turns out to matter.
- * ⚠ WM_PAINT IS LEFT TO DefWindowProc ON PURPOSE. It validates the region, so
- *   there is no repaint storm; the guest is not asked to paint because it has no
- *   way to yet -- GDI's id space is not dispatched. The day it is, WM_PAINT
- *   starts being translated here and the guest's BeginPaint gets the real HDC.
+ * ★ WM_PAINT IS NOW TRANSLATED (session 45) -- this note used to say it was left
+ *   to DefWindowProc "until GDI's id space is dispatched", and that day came.
+ *   ⚠⚠ But the region is STILL validated here, and that is not optional: Win32
+ *   SYNTHESISES WM_PAINT for as long as the window has an update region, so
+ *   relaying it and returning 0 live-locks the host. See the case itself.
  */
 /* ── ★ THE PENDING-PAINT RECORD ──────────────────────────────────────────────
      One rectangle per window, because the OS's update region is consumed in
@@ -236,6 +237,11 @@ static LRESULT CALLBACK wowwin_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
          focus and lay out children, which is what these two do.
        ⚠ DefWindowProc still runs afterwards, so the OS keeps its own idea of
          focus and size; the guest is being told, not put in charge. */
+    /* ⚠ REFUTED, session 45: "MS Paint lays its children out too big because it
+         is never told its size" -- WM_SIZE has been relayed here since session
+         43, in this very case. Do not re-add it below; it is a duplicate case
+         value and the compiler says so. The over-sized toolbox is something
+         else. */
     case WM_SETFOCUS: case WM_KILLFOCUS: case WM_SIZE:
         if (h16) { wowmsg_post(h16, (WORD)msg, (WORD)wp, (DWORD)lp,
                                GetTickCount(), 0, 0); ++g_ww_msgs; }

@@ -325,6 +325,11 @@ static int wowgdi_call(wow32_frame_t *f, char *note, int notecap)
             return 1;
         }
         v = GetDeviceCaps((HDC)o, (int)idx);
+        /* ⚠ REFUTED, session 45, and recorded so it is not re-tried: forcing
+             HORZRES/HORZSIZE to stock's 2.0 (from our 2.625) changed MS Paint's
+             toolbox by NOTHING -- pbTool stayed 163x731 to the pixel. Paint
+             reads all four of HORZRES/HORZSIZE/VERTRES/VERTSIZE, and the ratio
+             matched the over-scale exactly, and it is still not the lever. */
         wu_puts(note, notecap, &k, " = 0x");
         wu_puthex(note, notecap, &k, (DWORD)v, 4);
         wow32_setret(f, (DWORD)(WORD)v);

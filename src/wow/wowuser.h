@@ -404,6 +404,41 @@ static WORD wowuser_sysres_kind(WORD h)
 #define GCR_ARG_RECT     0
 #define GCR_ARG_HWND     4
 
+/* ── ★★★★★ 0x2f IsWindow / 0x31 IsWindowVisible -- WHY THE TOOLBOX NEVER MOVED.
+     Two of the smallest calls in USER, and between them they were the whole of
+     the second half of "the way it paints is completely wrong".
+
+     After `GetClientRect` went in, Paint's WM_SIZE handler did exactly one thing:
+     `MoveWindow(pbPaint, (3,2) 1251x687)` -- it gave the CANVAS the entire client
+     and moved nothing else, while stock puts the canvas at (128,2) 1100x604 and
+     leaves room around it. Paint had decided there was no toolbox and no palette
+     to leave room for, and it decided that by ASKING:
+
+         IsWindowVisible(0x01a0)   x2   -- pbTool,  the toolbox
+         IsWindowVisible(0x01e0)        -- pbColor, the palette
+         IsWindow(0x0180)          x2   -- pbPaint, the canvas
+
+     all stepped over, all answered 0. ⇒ Paint believed its own toolbox and
+     palette were hidden -- so it never resized them, and they kept the size they
+     were CREATED at, which came from Paint's fallback window height of 974
+     (`SM_CYFULLSCREEN - SM_CYMENU`, the default it passes to `GetProfileInt`
+     because this rig's WIN.INI has no `[Paintbrush] height`). That is why they
+     were ~1.35x too large and fell below the bottom of a 688-tall client.
+
+   ★ Windows 3.1 Paintbrush can genuinely hide both (View > Tools and Linesize,
+     View > Palette), so "is it visible" is a real question with a real answer,
+     and answering 0 was not a harmless default -- it was a lie about the state
+     of windows this host had itself created and shown.
+   ⚠ TWO REFUTED HYPOTHESES ARE BURIED HERE, both plausible and both wrong:
+     `GetDeviceCaps(HORZSIZE/VERTSIZE)` (forcing the ratio to stock's 2.0 changed
+     the toolbox by nothing) and "the guest is never told its size" (WM_SIZE has
+     been relayed since session 43, and the log shows it arriving with the
+     correct 1252x688). The layout was not mis-computed; it was never
+     re-computed. */
+#define WOWUSER_ISWINDOW         0x002f
+#define WOWUSER_ISWINDOWVISIBLE  0x0031
+#define IW_ARG_HWND      0
+
 #define WOWUSER_SETSCROLLPOS     0x003e
 #define SSP_ARG_REDRAW   0
 #define SSP_ARG_POS      2
@@ -2829,6 +2864,33 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
         wu_puts(note, notecap, &k, "; answered 0x");
         wu_puthex(note, notecap, &k, (DWORD)rc, 4);
         wow32_setret(f, (DWORD)(WORD)rc);
+        return 1;
+    }
+
+    /* ── ★★★★★ 0x2f IsWindow / 0x31 IsWindowVisible -- see the note above. ──
+       ⚠ THE OS IS ASKED, NOT OUR OWN TABLE. Our record says what we intended;
+         the real window says what is true, and a guest that has hidden something
+         through DefWindowProc or had it hidden by its parent must get the truth.
+         A window we have no record of is genuinely not a window of the guest's,
+         so that answers FALSE for both -- which is also the right answer for a
+         handle it has already destroyed. */
+    case WOWUSER_ISWINDOW:
+    case WOWUSER_ISWINDOWVISIBLE: {
+        int  wantvis = (f->id == WOWUSER_ISWINDOWVISIBLE);
+        WORD hwnd = wow32_argw(f, IW_ARG_HWND);
+        wowuser_win_t *w = wowuser_findwin(hwnd);
+        int  k = 0, r;
+        wu_puts(note, notecap, &k, wantvis ? "IsWindowVisible 0x" : "IsWindow 0x");
+        wu_puthex(note, notecap, &k, hwnd, 4);
+        if (!w || !w->hwnd32) {
+            wu_puts(note, notecap, &k, " -- ★ NOT A WINDOW OF OURS; FALSE");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        r = wantvis ? (IsWindowVisible(w->hwnd32) ? 1 : 0)
+                    : (IsWindow(w->hwnd32) ? 1 : 0);
+        wu_puts(note, notecap, &k, r ? " -> TRUE" : " -> FALSE");
+        wow32_setret(f, (DWORD)r);
         return 1;
     }
 
