@@ -43,10 +43,20 @@ As of **session 45**, `PBRUSH.EXE` from Windows 3.11 is a real sized, titled win
 the XP desktop with its own menu bar (which opens), and it answers its own `WM_PAINT`
 with `MoveTo`/`LineTo`/`PatBlt` — **a Win16 program's own drawing code now reaches the
 screen**. `NOTEPAD.EXE` has been a working text editor since session 44 (open, type,
-save, menus, Help > About). ⚠ Paint is not yet *correct*: its toolbox, line-size box
-and palette are ~1.35× too large so two of them fall below the bottom of the window,
-and the tool icons are not blitted — see
-[session 45's resume block](log/sessions/session-45.md#-resume-here).
+save, menus, Help > About).
+
+★★ Paint's whole UI is now **pixel-identical to stock ntvdm**, measured child by
+child: the toolbox with its real colour tool icons, the line-size box, the colour
+palette bar, the canvas and its scrollbars. Its menu bar opens, and **mouse and
+keyboard input reach it** — a drag on the canvas runs Paint's entire stroke loop
+and blits the brush along the right path.
+
+⚠ **Two defects remain, and they are probably one bug**: the stroke does not
+persist, and the palette renders grey — because Paint believes it is in its
+**black-and-white image mode** (its palette brushes are already grey when created
+and its off-screen canvas is 1bpp). Five plausible causes are REFUTED and
+recorded. See [session 45's resume block](log/sessions/session-45.md#-resume-here),
+which leads with the located call chain.
 
 Below is how the bootstrap got there, kept because it is still the reference for the
 loader and the scheduler. As of session 39 it runs
@@ -246,6 +256,17 @@ silently is worth more attention than its size suggests.
    how big it was, got nothing, and laid itself out from WIN.INI's 1680×974 in a
    1252×688 client. **Nothing was wrong with the drawing** — it drew the right
    picture at the wrong size in a window it could not measure.
+
+   ### ▶ ★★★ THE ORACLE IS STOCK ntvdm, AND THE MOUSE NOW REACHES A GUEST
+   `wowcompare.bat` runs the **same** `PBRUSH.EXE` under ours and under stock at
+   once on the same desktop, and `rigshot tree` prints every matching window AND
+   its children with exact rectangles — that turned "it paints wrong" into a
+   table. ★ Two of the smallest calls in USER (`IsWindow`, `IsWindowVisible`,
+   both answered 0) were why Paint never *re*-computed its layout; answering them
+   made every child match stock to the pixel. ★★ And `wowwin_proc` relayed no
+   mouse messages at all, which is why a paint program could be looked at but not
+   used — now relayed, with `WM_MOUSEMOVE` **coalescing** so the ring cannot
+   flood.
 
    ### ▶ ⚠ THE GATE MOVED: **`81 / 122 / 61 · 0001:229C`**
    Was `64/122/78`. Declined unchanged, total identical; the delta is exactly
