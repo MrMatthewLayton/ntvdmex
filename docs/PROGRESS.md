@@ -9,6 +9,12 @@ NOTE="what moved today" ./tools/score/score.py --append
 
 **Target:** +1–2%/day, ≤1 month of solid work remaining (set 2026-09-04).
 
+**Baseline, 2026-09-04:** overall **60.8** (DOS 63.6 · WoW16 65.7 · Product 26.2).
+The table keeps ONE ROW PER DAY — a re-run replaces that day's row rather than
+adding a second, so a day scored three times cannot read as three days of work.
+That means the baseline row is overwritten by the day's final score; it is
+recorded here so the first day's delta is not lost.
+
 > ⚠ **Read the number as a rate, not a verdict.** Two of the fourteen Win16 items
 > are measured from the binaries every run; everything else is a human attestation
 > with its evidence recorded next to it in `model.json`. The score is exactly as
@@ -26,4 +32,4 @@ NOTE="what moved today" ./tools/score/score.py --append
 | Date | Overall | DOS | WoW16 | Product | What moved |
 |---|---|---|---|---|---|
 <!-- SCORES -->
-| 2026-09-04 | **60.8** | 63.6 | 65.7 | 26.2 | Baseline. Scoring model established; one bar for all three sections. |
+| 2026-09-04 | **61.7** | 63.6 | 67.7 | 26.2 | Solitaire + Minesweeper RUN. GetPrivateProfileInt, BITMAPCOREHEADER, TIMERPROC, InvalidateRect offset collision. Breadth 56.4->61.1%. |

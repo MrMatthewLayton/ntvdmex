@@ -280,10 +280,16 @@ silently is worth more attention than its size suggests.
 
    ### ▶ ⚠ STANDING HAZARDS (each of these has cost a session)
 
-   * **The regression gate is `82 / 122 / 60 · 0001:229C`**, and it must be run
-     with `wowsched.txt` and `wowcall.txt` **moved aside** — `wowlive.bat`
-     creates them, and a gate run that leaves them in place measures a guest
-     running much further (`238/308/101`) and reads as catastrophic drift.
+   * **The regression gate is `85 / 113 / 57 · 0001:229C`** (session 50; was
+     `82 / 122 / 60`), and it must be run with `wowsched.txt` and `wowcall.txt`
+     **moved aside** — `wowlive.bat` creates them, and a gate run that leaves
+     them in place measures a guest running much further (`238/308/101`) and
+     reads as catastrophic drift.
+     ★ **The session-50 move is ONE cause and the arithmetic closes on it.**
+     `0x7f GetPrivateProfileInt` is now serviced, so three calls moved
+     stepped→serviced (60→57, 82→85), and nine redundant `0xc2 _lclose`
+     declines stopped happening (122→113) because the profile machinery no
+     longer re-opens the file after being told 0. Improvement, not drift.
    * **Doom is the other half of every DPMI change.** The known-good signature
      is **all eleven startup stages `V_Init`…`ST_Init` in ~3.5 MB**
      (`./scripts/bmqueue.sh doom DOOM.EXE`).
@@ -491,7 +497,7 @@ silently is worth more attention than its size suggests.
    used — now relayed, with `WM_MOUSEMOVE` **coalescing** so the ring cannot
    flood.
 
-   ### ▶ ⚠ THE GATE IS **`82 / 122 / 60 · 0001:229C`**
+   ### ▶ ⚠ THE GATE IS **`85 / 113 / 57 · 0001:229C`** (session 50)
    Was `81/122/61` (session 45), and `64/122/78` before that. Declined unchanged
    at 122, total identical at 264; the session-46 delta is **exactly one call and
    it has a name** — `GetProfileString(…, "NwcsInstalled", …)`, which the
