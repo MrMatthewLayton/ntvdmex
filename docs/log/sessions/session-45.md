@@ -1,6 +1,6 @@
 # Session 45 — MS Paint runs, has its menu, and paints
 
-> Eleven commits, `7830d92` … `3a6035c`. Branch `m9/completeness`.
+> Fifteen commits, `7830d92` … `202fb30`. Branch `m9/completeness`.
 
 ## ★★★★★ THE HEADLINE
 
@@ -400,77 +400,164 @@ Ten more GDI calls, each confirming its own reading out of its own arguments:
 
 ---
 
+## ★★★ THE THIRD ROUND: THE USER'S THREE DEFECTS
+
+The user tried it and reported three things. They are worth keeping as written,
+because two of them were more fundamental than anything on the plan:
+
+> 1. Palette still appears black/white instead of color
+> 2. Menu clicks crash the app
+> 3. I can't actually paint anything
+
+### ★★★★★ (3) THE MOUSE WAS NEVER RELAYED AT ALL
+
+`wowwin_proc` translated keys, system keys, close, size, focus and paint — and
+**nothing from the mouse**. So MS Paint could be looked at but not used: no
+stroke on the canvas, no tool picked out of the toolbox, no colour picked out of
+the palette. The window was a photograph.
+
+The file had left it out on purpose, and its reason was sound: *"posting every
+message would fill the ring with mouse moves the guest never asked for and would
+hide the ones it did"*. The answer is not to drop the mouse, it is what Windows
+itself does — **coalesce**:
+
+> ★ Only the NEWEST pending `WM_MOUSEMOVE` per window is kept
+> (`wowmsg_post_move`). **A position is not a history**; an old one is worthless
+> the moment a newer one exists, and a button press is never folded away.
+> ⚠ Only a move already at the TAIL is folded. Folding one that sits BEHIND a
+> button press would reorder input and show the guest a click at a position the
+> pointer had not reached yet.
+
+Measured end to end: 73 messages relayed; the toolbox click arriving at (90,182)
+in toolbox coordinates and the canvas press at (135,173) — exactly the drag
+origin — and Paint answering with `SetCapture`, `GetDC`, `CreateSolidBrush`,
+`GetClientRect` and then its stroke loop, blitting the brush along the correct
+diagonal from (485,272) to (590,314). **The "Not enough memory for this
+operation" box that ended every stroke is gone**, and the line-size box now draws
+its bars.
+
+Fourteen services went in to get there, each named from the call it made — and
+the ids track USER's and GDI's ordinals, with the neighbours proving it rather
+than it being assumed (ord 30 → `0x1e`, ord 31 → `0x1f`, ord 33 `GETCLIENTRECT`
+→ `0x21` which was *already* implemented, ord 35 `STRETCHBLT` → `0x23`):
+
+| module | ids |
+|---|---|
+| USER | `0x12 SetCapture`, `0x13 ReleaseCapture`, `0x1c ClientToScreen`, `0x20 GetWindowRect`, `0x3c GetActiveWindow`, `0x51 FillRect` |
+| GDI | `0x63 LPtoDP`, `0x24 Polygon`, `0x9c CreateDiscardableBitmap`, `0x94 SetBrushOrg`, `0x67 PtVisible`, `0x4f GetDCOrg`, `0x95 GetBrushOrg`, `0x96 UnrealizeObject` |
+
+★ `LPtoDP` and `Polygon` share the same 8-byte block `(HDC, LPPOINT, int)` and
+part company on data flow — one transforms in place, the other draws and writes
+nothing back. `FillRect`'s call site was named by `neimports.py` and the block
+confirmed by the run.
+
+⚠⚠ **`ClipCursor` (USER `0x10`) IS ACCEPTED AND DELIBERATELY NOT APPLIED.** Paint
+uses it to pen the pointer inside its canvas for the duration of a stroke — a
+nicety it does not need to draw correctly. But the clip is **system-wide**, and
+this VDM is killed with `taskkill` several times a session; a guest terminated
+mid-stroke while holding one would leave the user's real pointer confined to a
+rectangle on their own desktop. A stated deviation, not an oversight. A later
+session that wants it should apply it and release it on `WM_KILLFOCUS`, capture
+loss and task exit.
+
+### ⚠ (2) THE MENU CRASH DID NOT REPRODUCE
+
+Driving Alt-F / Down / Enter opened **File > Open**, which is a COMMDLG modal
+dialog — and a modal call runs on the exec thread, so the whole VDM parks until
+it is dismissed. From outside that is indistinguishable from a hang or a dead
+app, and it is a known consequence of the modal-on-exec-thread design. ⇒ The
+report may be this, or may be something else; it needs the user's exact menu
+item. **Not closed, and not reproduced.**
+
+### ★ (1) AND (3) ARE PROBABLY ONE BUG
+
+The stroke is blitted to the canvas window's DC at the right coordinates and is
+then lost — which points at the repaint path, and Paint's off-screen canvas is
+the **1bpp bitmap it creates because it believes it is in black-and-white mode**.
+That is the same belief that makes the palette grey. One root cause, two
+symptoms.
+
+### tools
+
+`rigshot` gains **`drag x1 y1 x2 y2`** — press, move IN STEPS, release, with
+pauses so a cooperatively-scheduled guest can actually run between them. ★ A
+`click` verb cannot test drawing at all: a paint program draws on the moves
+BETWEEN the press and the release. The argument parser now takes four arguments.
+
+---
+
 ## ▶ RESUME HERE
 
-### What is still wrong
+### Where MS Paint actually is
 
-★ The window, the menu (which opens), the toolbox with its colour icons, the
-line-size box, the palette bar, the canvas and its scrollbars are all present and
-**geometrically pixel-identical to stock ntvdm**. Two content differences remain:
+It **runs, is laid out pixel-identically to stock ntvdm, draws its whole UI, and
+takes mouse and keyboard input.** Its menu bar opens, its toolbox shows the real
+colour tool icons, its line-size box draws its bars, its canvas has scrollbars,
+and a drag on the canvas runs Paint's entire stroke loop with no error.
 
-1. **MS Paint is running in its BLACK-AND-WHITE image mode.** The user's
-   observation split the problem exactly: *"the tool palette renders the right
-   colors, but the color palette is shades of grey"*, and that is the whole
-   diagnosis in one sentence — the toolbox is a colour DIB `StretchBlt`ed
-   straight to the screen and never round-trips, while everything Paint
-   *composes* is monochrome.
+### The three open defects, in the order worth attacking
 
-   ★★★ **AND THE COLOUR IS NOT LOST IN THE BLIT — PAINT NEVER HAS IT.** The
-   brushes it creates are already grey when created: `0x00090909`, `0x00121212`,
-   `0x00212121`, `0x00323232`, `0x00404040`, … — 32 of them, **every one with
-   R = G = B**, which is the luminance of the standard palette. Paint is drawing
-   a greyscale palette on purpose, into 1bpp bitmaps, because it believes it is
-   in black-and-white mode.
+1. ★★★★★ **THE STROKE DOES NOT PERSIST, AND THE PALETTE IS GREY — PROBABLY ONE
+   BUG.** Paint believes it is in its **black-and-white image mode**:
+   * its palette brushes are already grey when created (32 of them, every one
+     R = G = B — the luminance of the standard palette), and
+   * its off-screen canvas is a 1680×974 `planes=1 bpp=1` bitmap,
+   so a stroke blitted correctly to the canvas window's DC (measured: along the
+   right diagonal, (485,272)→(590,314)) is lost the moment the window repaints
+   from that image.
+   ⚠⚠ **REFUTED — do not re-try:** `NUMCOLORS` at **-1, 256 AND 16** (identical
+   1bpp output every time; it is `PBRUSH.DLL`'s *only* device query, three times
+   a run, and no value changes anything); `GetObject`'s `bmBitsPixel` (we report
+   the OS's `0x20`, 32bpp is a depth Win16 never had, and it is the only pixel
+   format Paint can see — 24 changed nothing); `GetNearestColor` (never called);
+   a WIN.INI colour/format key (none exists).
+   ▶ **The chain is located.** `PBRUSH.DLL seg1:0x09c1` is the `CreateBitmap`
+   (`neimports.py` names it; `0x09c1+5` = the `0x09c6` the log carries). Its
+   `cPlanes`/`cBitsPixel` are BYTE parameters at `[bp+6]`/`[bp+4]`; its one
+   caller is `seg1:0x00e8`, which threads them from `[bp+0x0c]`/`[bp+0x0a]` —
+   i.e. from further up still. **Read that chain back to the global that holds
+   the mode, and find who sets it.** The decision is in PBRUSH.EXE, not the DLL.
 
-   ── WHAT IS ESTABLISHED ────────────────────────────────────────────────────
-   * `PBRUSH.DLL` is what creates every 1bpp bitmap, and its **only** device
-     query in a whole run is `GetDeviceCaps(NUMCOLORS)`, three times.
-   * The call chain is located: `PBRUSH.DLL seg1:0x09c1` is the `CreateBitmap`
-     (confirmed by `neimports.py`, and `0x09c1+5 = 0x09c6` is the `from=` the log
-     carries). Its `cPlanes`/`cBitsPixel` are **parameters** read as BYTEs from
-     `[bp+6]`/`[bp+4]`; its one caller is `seg1:0x00e8`, which passes them from
-     `[bp+0x0c]`/`[bp+0x0a]` — i.e. threaded down from further up still.
-   * ⚠ Selector `0x09b7` is **PBRUSH.DLL's** segment 1, not a PBRUSH.EXE segment.
-     A pass was wasted mapping it by segment ordering; `neimports.py` names call
-     sites directly and should have been the first tool reached for.
+2. **"Menu clicks crash the app" — NOT REPRODUCED.** Alt-F/Down/Enter opens
+   File > Open, a COMMDLG modal dialog that parks the whole VDM on the exec
+   thread until dismissed — which looks exactly like a hang from outside. Ask
+   the user which menu item, or drive every item with `rigshot click` and watch
+   for a real fault.
 
-   ── ⚠⚠ REFUTED — DO NOT RE-TRY ─────────────────────────────────────────────
-   * `NUMCOLORS` at **-1, 256 and 16** — all three give byte-identical 1bpp
-     output. It is the DLL's only device input and **no value changes anything**.
-   * `GetObject`'s `bmBitsPixel`. We report the OS's `0x20`, and 32bpp is a depth
-     Win16 never had (1/4/8/16/24), and it is the only pixel format Paint can
-     see — so 24 looked certain. It changed nothing.
-   * `GetNearestColor` — never called in a whole run.
-   * A WIN.INI colour/format key — Paint reads `OmitPictureFormat`, `width`,
-     `height`, `extensions` and the `[intl]` keys, and nothing about colour.
-   * `GetDeviceCaps(HORZSIZE/VERTSIZE)` — see the table above.
+3. Unanswered and not on the drawing path: USER `0x10c GlobalAddAtom` (25
+   calls), `0x82`, `0x87 GetWindowLong`, `0x88 SetWindowLong`, and the WOW
+   plumbing `0x13a`/`0x217`/`0x16c`.
 
-   ▶ Next step: the mode is decided in **PBRUSH.EXE**, not the DLL, and passed
-   down. Untested inputs it reads: `NUMPENS` (-1, deliberately left alone) and
-   `LOGPIXELSX/Y` (both 96). Better: read the caller chain above `seg1:0x00e8`
-   in PBRUSH.DLL back to the global that holds the mode, and find who sets it.
-2. Unanswered, none of them on the drawing path: USER `0x10c GlobalAddAtom` (25
-   calls), `0x51`, `0x87 GetWindowLong`, `0x88`, and the WOW plumbing `0x13a`,
-   `0x217`, `0x16c`.
+### ⚠ The regression gate is **`81 / 122 / 61 · 0001:229C`**
+
+Not `64/122/78`. Re-run with the switches **off** and confirm it before
+believing any later measurement.
 
 ### How to drive it
 
 ```bash
-# Paint, left running for a human to use
 SH=/private/tmp/xpshare
-printf 'exec cmd /c ""C:\\...\\ntvdmex\\wowlive.bat" C:\\WIN16\\PBRUSH.EXE"\r\n' > $SH/control.txt
+RES='C:\Documents and Settings\All Users\Documents\ntvdmex'
+
+# Paint, left running for a human
+printf 'exec cmd /c ""%s\\wowlive.bat" C:\\WIN16\\PBRUSH.EXE"\r\n' "$RES" > $SH/control.txt
 
 # ★ THE ORACLE: ours and stock ntvdm side by side, same binary, same box
-printf 'exec cmd /c ""C:\\...\\ntvdmex\\wowcompare.bat" C:\\WIN16\\PBRUSH.EXE"\r\n' > $SH/control.txt
-# then, for exact geometry of BOTH:
-rigshot.exe tree "Paintbrush - (Untitled)"
+printf 'exec cmd /c ""%s\\wowcompare.bat" C:\\WIN16\\PBRUSH.EXE"\r\n' "$RES" > $SH/control.txt
+rigshot.exe tree "Paintbrush - (Untitled)"   # exact child rects for BOTH
+rigshot.exe drag 400 400 900 600             # a real stroke (click cannot test drawing)
 
-# the enumerated list, and the anchors
-python3 tools/ne/neneeds.py guest/win16/PBRUSH.EXE --todo --stubs
+python3 tools/ne/neimports.py guest/win16/PBRUSH.DLL   # ★ NAMES CALL SITES
+python3 tools/ne/neneeds.py  guest/win16/PBRUSH.EXE --todo --stubs
 python3 tools/ne/wowthunks.py --anchor guest/win16/gdi.exe
 ```
 
-⚠ Always re-run the gate with the switches **off** and confirm **`81/122/61`**.
+⚠ **Gate the deploy on the build.** A shell one-liner here `cp`'d a stale binary
+because the build had failed and `cp` ran anyway; check `grep -q '^Built:'`.
+⚠ **`bmwow.sh` overwrites `C:\ntvdmex\ntvdmhost.log`**, so a log fetched after a
+gate run is the *baseline's*, not the guest's. It read convincingly as "GDI is
+fully answered" — from a 3976-line log ending at WOWEXEC's `0001:229C`.
+`grep -c pbParent` before believing a Paint log.
 
 ### Ruled out — do not re-try
 
@@ -478,14 +565,17 @@ Everything in [session 44's list](session-44.md#ruled-out--do-not-re-try) still
 holds, plus:
 
 * **"Paint's blocker is GDI's remaining calls"** and **"Paint's blocker is the
-  sent-vs-posted split"**. Both were on record; neither was true. Six other
-  things were.
-* **Installing Windows 3.1 on the DOS 6.22 QEMU box to get an oracle.** Not
-  needed for app-level behaviour — stock `ntvdm` on the XP rig runs the same
-  binary on the same screen and is already wired up. (It would still be the right
-  oracle for something XP's own WOW reimplements.)
-* **The menu bar being wrong.** It matches stock exactly; the Font/Style/Size
-  reference is a different Paintbrush build.
-* **The system font as the cause of the toolbox scale.** Measured: it matches.
-* **Anchoring a module on one call.** See above — it silently un-implements
-  everything else in that module.
+  sent-vs-posted split"**. Both were on record; neither was true.
+* **Installing Windows 3.1 on the DOS 6.22 QEMU box for an oracle.** Not needed
+  for app-level behaviour — stock `ntvdm` on the XP rig runs the same binary on
+  the same screen and `wowcompare.bat` already drives both.
+* **The menu bar being wrong.** It matches stock exactly; a reference screenshot
+  showing Font/Style/Size is a *different Paintbrush build*.
+* **`GetDeviceCaps(HORZSIZE/VERTSIZE)`** as the toolbox scale; **"the guest is
+  never told its size"** (`WM_SIZE` has been relayed since session 43 — re-adding
+  it is a duplicate case value); the system font (measured, matches Win3.1).
+* **Anchoring a module on one call.** It silently un-implements everything else
+  in that module.
+* **Mapping a `from=` selector to a segment by ordering.** Selector `0x09b7` is
+  **PBRUSH.DLL's** segment 1, not a PBRUSH.EXE segment. `neimports.py` names call
+  sites directly and should be the first tool reached for.
