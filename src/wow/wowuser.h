@@ -1,5 +1,6 @@
 #ifndef WOWUSER_H
 #define WOWUSER_H
+#include "wowconv.h"   /* the Win16/Win32 semantic deltas, pinned by tools/dostest/wow_test.c */
 /*
  * wowuser.h -- USER.EXE's half of the WOW32 interface. GH #128, session 38.
  *
@@ -476,11 +477,17 @@ static const char *wowuser_sysres_name(WORD h)
 #define FW_ARG_NAME      0               /* far */
 #define FW_ARG_CLASS     4               /* far */
 
-/* int FrameRect(HDC, LPRECT, HBRUSH) = 8 */
+/* int FrameRect(HDC, LPRECT, HBRUSH) = 8
+ ⚠ `FRAMER_`, NOT `FR_`: FillRect (0x0051) already owns that prefix further down
+   this file. The two prototypes happen to be identical, so the values coincide
+   and this collision was harmless -- which is exactly why it survived. If either
+   ever gained an argument, the later definition would silently win and one of
+   them would read the other's layout. Caught by tools/dostest/wow_test.c on its
+   first run, not by anybody reading the build output. */
 #define WOWUSER_FRAMERECT        0x0053
-#define FR_ARG_BRUSH     0
-#define FR_ARG_RECT      2               /* far */
-#define FR_ARG_HDC       6
+#define FRAMER_ARG_BRUSH 0
+#define FRAMER_ARG_RECT  2               /* far */
+#define FRAMER_ARG_HDC   6
 
 /* int DrawText(HDC, LPCSTR, int nCount, LPRECT, UINT uFormat) = 14 */
 #define WOWUSER_DRAWTEXT         0x0055
@@ -2276,12 +2283,17 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
                ★ Solitaire creates a green brush and names it here; it used to be
                  read and thrown away, so its table was erased WHITE. */
             HBRUSH  hbrcls = NULL;
-            if (c->hbrback) {
+            switch (wowconv_hbrback_kind(c->hbrback)) {   /* ★ tested in wow_test.c */
+            case WOWCONV_HBR_NONE:                        /* 0 = no erase; keep 0 */
+                break;
+            case WOWCONV_HBR_SYSCOLOR:
+                hbrcls = (HBRUSH)(ULONG_PTR)c->hbrback;   /* COLOR_* + 1 */
+                break;
+            default: {
                 int bkind = -1;
                 HGDIOBJ bo = wowgdi_h32(c->hbrback, &bkind);
                 if (bo && bkind == WOWGDI_KIND_OBJ) hbrcls = (HBRUSH)bo;
-                else if (c->hbrback <= WOWUSER_COLOR_MAX + 1)
-                    hbrcls = (HBRUSH)(ULONG_PTR)c->hbrback;   /* COLOR_* + 1 */
+                break; }
             }
             if (!c->reg32)
                 c->reg32 = wowwin_register(c->name, c->cls32, sizeof c->cls32,
@@ -3125,21 +3137,24 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
             for (i = 0; i < off; ++i) hdr[i] = p[i];
             hdr[20] = hdr[21] = hdr[22] = hdr[23] = 0;       /* biSizeImage    */
         } else {
-            /* Build the 40-byte header the modern API wants, then widen the
-               colour table RGBTRIPLE -> RGBQUAD. Both are B,G,R order, so only
-               the fourth (reserved) byte is new. */
-            for (i = 0; i < 40; ++i) hdr[i] = 0;
-            hdr[0] = 40;                                     /* biSize         */
-            hdr[4] = (BYTE)(wid & 0xff);  hdr[5] = (BYTE)((wid >> 8) & 0xff);
-            hdr[8] = (BYTE)(hgt & 0xff);  hdr[9] = (BYTE)((hgt >> 8) & 0xff);
-            hdr[12] = 1;                                     /* biPlanes       */
-            hdr[14] = (BYTE)(bits & 0xff);
-            hdr[15] = (BYTE)((bits >> 8) & 0xff);            /* biBitCount     */
-            for (i = 0; i < pal; ++i) {
-                hdr[40 + i * 4 + 0] = p[12 + i * 3 + 0];     /* blue           */
-                hdr[40 + i * 4 + 1] = p[12 + i * 3 + 1];     /* green          */
-                hdr[40 + i * 4 + 2] = p[12 + i * 3 + 2];     /* red            */
-                hdr[40 + i * 4 + 3] = 0;                     /* reserved       */
+            /* ★ THE CONVERSION ITSELF LIVES IN wowconv.h AND IS TESTED THERE.
+                 It is a pure function of bytes, so it is pinned off-VM by
+                 tools/dostest/wow_test.c -- the stride change (RGBTRIPLE ->
+                 RGBQUAD) and the two UNSIGNED 16-bit dimensions are exactly the
+                 details that a cast gets wrong and a screenshot cannot show.
+               ⚠ THE GUEST'S BYTES ARE COPIED FIRST. wowconv takes plain memory
+                 on purpose: the moment it touched a `volatile` guest pointer it
+                 would stop being testable without a rig, which is the whole
+                 point of the file. */
+            static BYTE srcbuf[12 + 256 * 3];
+            DWORD need = 12 + pal * 3, j;
+            if (need > sizeof srcbuf) need = sizeof srcbuf;
+            for (j = 0; j < need; ++j) srcbuf[j] = p[j];
+            if (!wowconv_dib_core_to_info(srcbuf, need + 1, hdr, sizeof hdr, NULL)) {
+                wu_puts(note, notecap, &k, " -- ★ THE CORE HEADER DID NOT CONVERT;"
+                                           " answered 0");
+                wow32_setret(f, 0);
+                return 1;
             }
         }
 
@@ -5548,9 +5563,9 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
     }
 
     case WOWUSER_FRAMERECT: {
-        WORD  hdc = wow32_argw(f, FR_ARG_HDC);
-        volatile BYTE *rp = wow32_argptr(f, FR_ARG_RECT);
-        WORD  hbr = wow32_argw(f, FR_ARG_BRUSH);
+        WORD  hdc = wow32_argw(f, FRAMER_ARG_HDC);
+        volatile BYTE *rp = wow32_argptr(f, FRAMER_ARG_RECT);
+        WORD  hbr = wow32_argw(f, FRAMER_ARG_BRUSH);
         int   dk = -1, bk = -1;
         HGDIOBJ o = wowgdi_h32(hdc, &dk);
         HGDIOBJ b = wowgdi_h32(hbr, &bk);

@@ -1,5 +1,6 @@
 #ifndef WOWGDI_H
 #define WOWGDI_H
+#include "wowconv.h"   /* the Win16/Win32 semantic deltas, pinned by tools/dostest/wow_test.c */
 /*
  * wowgdi.h -- ★★ GDI.EXE's OWN ID SPACE.  GH #128, session 44.
  *
@@ -749,7 +750,7 @@ static int wowgdi_call(wow32_frame_t *f, char *note, int notecap)
         if (idx == WOWGDI_CAP_NUMCOLORS && v < 0) {
             int bpp = GetDeviceCaps((HDC)o, BITSPIXEL)
                     * GetDeviceCaps((HDC)o, PLANES);
-            v = (bpp > 0 && bpp <= 8) ? (1 << bpp) : 256;
+            v = wowconv_numcolors(bpp);       /* ★ tested in wow_test.c part 3 */
             wu_puts(note, notecap, &k, " [NUMCOLORS -1 -> ");
             wu_puthex(note, notecap, &k, (DWORD)v, 4);
             wu_puts(note, notecap, &k, "; a Win16 caller reads -1 as MONOCHROME]");

@@ -153,3 +153,16 @@ cc -std=c99 -Wall -Wextra -Wno-unused-function -O0 -g \
    -o "$DIR/ne_test" "$DIR/ne_test.c"
 
 "$DIR/ne_test"
+
+# GH #128: the WOW32 TRANSLATION LAYER -- the part this host actually writes, and
+# until session 51 the only major subsystem with no off-VM coverage at all. Three
+# parts: duplicate `*_ARG_*` macro detection (a collision there is a SILENT wrong
+# answer, and two shipped), argument-offset tables checked against the widths
+# tools/ne/neneeds.py reads out of the real Microsoft binaries, and the
+# Win16/Win32 semantic deltas in src/wow/wowconv.h.
+#
+# ⚠ It reads the headers as TEXT, so it needs the repo root; $DIR/../.. is it.
+cc -std=c99 -Wall -Wextra -Wno-unused-function -O0 -g \
+   -o "$DIR/wow_test" "$DIR/wow_test.c"
+
+"$DIR/wow_test" "$DIR/../.."
