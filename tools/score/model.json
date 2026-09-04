@@ -1,0 +1,128 @@
+{
+  "_README": [
+    "THE SCORING MODEL. Edit this file, not the score.",
+    "",
+    "Every item is one concrete deliverable with a WEIGHT in body-of-work units",
+    "(roughly: how much of this project's effort it is/was) and a VALUE in 0..1.",
+    "A section's score is the weighted mean of its items. The overall score is the",
+    "weighted mean of the sections.",
+    "",
+    "An item's value comes from exactly one of two places, and the difference is",
+    "the whole point of this file:",
+    "  \"value\": n      -- ATTESTED. A human confirmed it. `evidence` must say how.",
+    "  \"probe\": \"...\"  -- MEASURED. score.py computes it from the tree every run.",
+    "",
+    "⚠ THE ONE RULE: never raise an attested value because something LOOKS done.",
+    "Raise it when a run on real hardware confirmed it, and put the run in",
+    "`evidence`. This project's most expensive bugs have all been things that",
+    "read as working -- see docs/STATE.md, `a stepped-over call still answers`.",
+    "",
+    "⚠ THE BAR IS 'ntvdm SUPERSET ON XP-32', ONE BAR, FOR EVERY SECTION. It is NOT",
+    "the DOS games bar. Doom and Skyroads being playable is two items here, not a",
+    "score of 85. Scoring the halves against different bars is how the 2026-09-04",
+    "review got a headline of 65 that its own components did not support."
+  ],
+
+  "sections": {
+    "dos": {
+      "weight": 0.45,
+      "title": "MS-DOS",
+      "items": [
+        { "id": "int21-surface",  "w": 6, "value": 1.0,  "what": "INT 21h service surface",              "evidence": "103/103, TDD'd against the MS-DOS 6.22 oracle panel (#24)" },
+        { "id": "bios-layer",     "w": 5, "value": 0.9,  "what": "BIOS: INT 10h/16h/1Ah/15h",            "evidence": "epic #24 'BIOS complete', 15 probes clean; INT 13h scored separately" },
+        { "id": "dpmi",           "w": 6, "value": 1.0,  "what": "DPMI 0.9 host, real-CPU protected mode","evidence": "unmodified 32-bit DOS/4GW clients; Doom runs its own code on real silicon" },
+        { "id": "memory-ext",     "w": 3, "value": 1.0,  "what": "XMS 3.0 + EMS (LIM 4.0)",              "evidence": "batteries 36/36 and 30/30" },
+        { "id": "video-core",     "w": 5, "value": 0.85, "what": "Text / 13h / 12h planar / VESA banked","evidence": "10 QuickBASIC demos, zero pixel defects; GAP: arbitrary MOV/ModRM store decoder (#15)" },
+        { "id": "sound",          "w": 5, "value": 0.95, "what": "SB16 PCM, OPL2/3 FM, MPU-401, speaker","evidence": "user-confirmed by ear; GAP: snare/hi-hat/cymbal phase generator (#139)" },
+        { "id": "host-present",   "w": 3, "value": 1.0,  "what": "Windowed GDI + fullscreen DirectDraw", "evidence": "VM-confirmed, tear-free flip path" },
+        { "id": "guest-doom",     "w": 2, "value": 1.0,  "what": "Doom fully playable",                  "evidence": "user-confirmed: video, PCM+MIDI, keyboard and mouse" },
+        { "id": "guest-skyroads", "w": 2, "value": 1.0,  "what": "Skyroads fully playable",              "evidence": "user-confirmed: menus, controls, in-game" },
+        { "id": "guest-command",  "w": 2, "value": 0.7,  "what": "MS-DOS 6.22 COMMAND.COM as a guest",   "evidence": "runs, EXECs and returns; GAPS: $p prompt (#134), XP's COMMAND.COM exits (#135)" },
+        { "id": "guest-zar",      "w": 3, "value": 0.0,  "what": "ZAR (VBE 2.0 hi-colour + LFB)",        "evidence": "#23 -- the third of the three original games, not started" },
+        { "id": "stdio",          "w": 3, "value": 0.0,  "what": "Console/stdio + shell redirection",    "evidence": "#131, #133 -- `echo x > file` writes to screen, file 0 bytes. Blocks non-interactive use" },
+        { "id": "mem-accuracy",   "w": 2, "value": 0.0,  "what": "MEM.EXE reports correct figures",      "evidence": "#47 -- runs but LIES, the most expensive defect class here" },
+        { "id": "error-model",    "w": 2, "value": 0.0,  "what": "59h extended error, INT 24h, InDOS",   "evidence": "#34" },
+        { "id": "disk-int13",     "w": 2, "value": 0.0,  "what": "INT 13h + INT 25h/26h absolute disk",  "evidence": "#44 -- no direct disk access at all" },
+        { "id": "tsr",            "w": 1, "value": 0.0,  "what": "TSR residency (AH=31h, INT 27h)",      "evidence": "#49 -- handled but residency explicitly not honoured" },
+        { "id": "exec-overlay",   "w": 1, "value": 0.0,  "what": "EXEC 4Bh AL=01/03",                    "evidence": "#50" },
+        { "id": "sysvars",        "w": 1, "value": 0.0,  "what": "AH=52h real DPB/SFT/device chains",    "evidence": "#48" },
+        { "id": "int14-17",       "w": 1, "value": 0.0,  "what": "INT 14h serial + INT 17h printer",     "evidence": "#45" },
+        { "id": "dos-version",    "w": 1, "value": 0.0,  "what": "Configurable DOS version",            "evidence": "#28" },
+        { "id": "user-fonts",     "w": 1, "value": 0.0,  "what": "INT 10h 11h user-defined fonts",       "evidence": "#52" },
+        { "id": "vesa-pm",        "w": 1, "value": 0.0,  "what": "VESA 4F0A PM bank switching",          "evidence": "#53" }
+      ]
+    },
+
+    "wow16": {
+      "weight": 0.45,
+      "title": "WoW / Win16",
+      "items": [
+        { "id": "ne-loader",     "w": 5,  "value": 1.0,  "what": "NE loader + segment/module management", "evidence": "209/209 checks over all 15 real XP WOW binaries; every relocation resolved" },
+        { "id": "krnl386",       "w": 5,  "value": 1.0,  "what": "XP's own krnl386 hosted and executing", "evidence": "protected mode, own segments, own interrupt handlers, own DPMI exceptions" },
+        { "id": "wow32-iface",   "w": 4,  "value": 1.0,  "what": "The 16<->32 call boundary",             "evidence": "frame pinned to the byte; krnl386 seg1/seg2, USER, GDI, SHELL, COMMDLG id spaces dispatched" },
+        { "id": "scheduler",     "w": 2,  "value": 1.0,  "what": "Host-side Win16 task scheduler",        "evidence": "src/wow/wowsched.h -- krnl386 has none and we are it" },
+        { "id": "callback-16",   "w": 4,  "value": 1.0,  "what": "The host CALLS 16-bit code",            "evidence": "C4 C4 57 + a 16-bit code selector as the far return address" },
+        { "id": "msg-bridge",    "w": 4,  "value": 1.0,  "what": "Message queue + bridging",              "evidence": "a host keystroke reaches the guest's own window procedure" },
+        { "id": "real-hwnds",    "w": 4,  "value": 1.0,  "what": "Win16 windows are real Win32 HWNDs",    "evidence": "captions, menus, taskbar buttons on the XP desktop" },
+        { "id": "resources",     "w": 2,  "value": 1.0,  "what": "Icons/cursors/menus, named + numbered", "evidence": "session 47; PBRUSH's GROUP_ICON is the NAMED resource \"PBRUSH\"" },
+        { "id": "commdlg",       "w": 2,  "value": 1.0,  "what": "Common dialogs (File Open / Save As)",  "evidence": "Paint's Save As and Notepad's Open drive the real XP dialogs" },
+        { "id": "gdi-drawing",   "w": 4,  "value": 0.8,  "what": "GDI drawing: blits, pens, brushes, DIBs","evidence": "Paint draws every shape tool + flood fill; GAPS: metafiles, DIB-to-device, LineDDA" },
+        { "id": "flat-thunks",   "w": 4,  "value": 0.25, "what": "Generic 16:16<->flat thunking (#5)",     "evidence": "per-service and ad hoc; no generic mechanism. Fine at 2 guests, not at 20" },
+        { "id": "menu-defect",   "w": 2,  "value": 0.0,  "what": "Alt-menu route survives mouse drags",   "evidence": "LIVE DEFECT: after 3 canvas drags Alt-F-A stops opening the menu" },
+        { "id": "breadth",       "w": 12, "probe": "win16_breadth",
+          "what": "Service breadth across the guest shelf",
+          "evidence": "MEASURED: distinct WOW32 ids serviced / (serviced + to-do), unioned over guest/win16" },
+        { "id": "guests",        "w": 15, "probe": "win16_guests",
+          "what": "Guests confirmed running on real hardware",
+          "evidence": "MEASURED from the `guests` map below -- the honest outcome number" }
+      ]
+    },
+
+    "product": {
+      "weight": 0.10,
+      "title": "Product / packaging",
+      "items": [
+        { "id": "host-ui",       "w": 4, "value": 1.0,  "what": "Host UI shell",                     "evidence": "menu bar, status strip, six-tab Settings dialog, Luna-themed" },
+        { "id": "settings-live", "w": 4, "value": 0.13, "what": "Settings actually honoured",        "evidence": "#136 -- 6 of 46; settings_apply() is the honest list" },
+        { "id": "install",       "w": 6, "value": 0.3,  "what": "Install / routing, reversibly",     "evidence": "#130 -- IFEO routing works, but leaving it installed breaks Win16 until breadth lands" },
+        { "id": "launch-matrix", "w": 3, "value": 0.0,  "what": "Verified against the launch matrix","evidence": "#140" },
+        { "id": "sdk",           "w": 3, "value": 0.0,  "what": "Pluggable VDD/driver SDK + docs",   "evidence": "#11" },
+        { "id": "net-vdd",       "w": 2, "value": 0.0,  "what": "Networking VDD",                    "evidence": "#8" },
+        { "id": "serial-vdd",    "w": 2, "value": 0.0,  "what": "Serial/parallel VDDs",              "evidence": "#9" },
+        { "id": "recovery",      "w": 1, "value": 0.0,  "what": "Recovery path when it won't start", "evidence": "#132" },
+        { "id": "theming",       "w": 1, "value": 0.5,  "what": "Luna theming + fullscreen story",   "evidence": "#12 -- windowed done, fullscreen story partial" }
+      ]
+    }
+  },
+
+  "_guests_README": [
+    "THE SHELF. `state` is the ONLY place a guest is credited, and it moves only",
+    "on a confirmed run on real hardware. 'launches' is not 'works' -- Paint",
+    "launched and drew for four sessions while silently saving to the wrong",
+    "directory. Use `partial` for that, and say what is missing.",
+    "  done    = does the thing the program exists to do, user-confirmed",
+    "  partial = launches and does some of its job (counts half)",
+    "  todo    = never launched under NTVDMEX"
+  ],
+  "guests": {
+    "NOTEPAD.EXE":  { "state": "done",    "note": "edits and saves text; byte-for-byte verified" },
+    "PBRUSH.EXE":   { "state": "done",    "note": "draws in colour, persists, saves a valid 24-bit BMP" },
+    "SYSEDIT.EXE":  { "state": "partial", "note": "MDI frame, 4 children, reads all 4 files; not driven further" },
+    "SOL.EXE":      { "state": "todo",    "note": "9 services to do" },
+    "WINMINE.EXE":  { "state": "todo",    "note": "15 to do, 6 of them the optional SOUND driver" },
+    "CLOCK.EXE":    { "state": "todo",    "note": "7" },
+    "CALC.EXE":     { "state": "todo",    "note": "7" },
+    "TASKMAN.EXE":  { "state": "todo",    "note": "3" },
+    "CHARMAP.EXE":  { "state": "todo",    "note": "16" },
+    "RECORDER.EXE": { "state": "todo",    "note": "16" },
+    "MPLAYER.EXE":  { "state": "todo",    "note": "19; MMSYSTEM imports are all 16-bit code" },
+    "SOUNDREC.EXE": { "state": "todo",    "note": "25" },
+    "PACKAGER.EXE": { "state": "todo",    "note": "28" },
+    "CARDFILE.EXE": { "state": "todo",    "note": "29" },
+    "WINFILE.EXE":  { "state": "todo",    "note": "32" },
+    "WRITE.EXE":    { "state": "todo",    "note": "36" },
+    "PROGMAN.EXE":  { "state": "todo",    "note": "43" },
+    "TERMINAL.EXE": { "state": "todo",    "note": "45" },
+    "WOWEXEC.EXE":  { "state": "partial", "note": "runs its message loop and launches other tasks" }
+  }
+}

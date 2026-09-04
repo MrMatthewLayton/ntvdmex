@@ -53,6 +53,7 @@ points those modules define between them. That gap -- 158 against 1000 -- is the
 argument for enumerating per PROGRAM rather than per API.
 """
 
+import json
 import os
 import re
 import struct
@@ -290,10 +291,17 @@ def main():
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
     todo_only = "--todo" in sys.argv
     show_stubs = "--stubs" in sys.argv
+    as_json = "--json" in sys.argv
     if not args:
         print(__doc__)
         return 2
     grand = {}
+    # ★ THE MACHINE-READABLE VIEW EXISTS SO A SCORE CAN BE COMPUTED, NOT JUDGED.
+    #   `tools/score/score.py` reads this to derive the Win16 breadth number
+    #   daily. It is DISTINCT IDS per module, unioned over the shelf, because a
+    #   service implemented once serves every program that imports it -- counting
+    #   per-program would credit the same work fifteen times.
+    doc = {"programs": {}, "union": {}}
     for path in args:
         directory = os.path.dirname(os.path.abspath(path))
         # ⚠ NAME THE FILE IT COULD NOT READ. This is meant to be pointed at a
@@ -340,6 +348,14 @@ def main():
             print("  %-8s %3d imported | %3d need us | %3d free (16-bit) | "
                   "%3d SERVICED | %3d TO DO"
                   % (m, len(rows), len(w32), len(nat), len(w32) - len(miss), len(miss)))
+            pj = doc["programs"].setdefault(os.path.basename(path), {})
+            pj[m] = {"imported": len(rows), "need_us": len(w32),
+                     "free16": len(nat), "serviced": len(w32) - len(miss),
+                     "todo": len(miss)}
+            u = doc["union"].setdefault(m, {"serviced": [], "todo": []})
+            u["serviced"] = sorted(set(u["serviced"]) |
+                                   {r[3] for r in w32 if r[3] in done})
+            u["todo"] = sorted(set(u["todo"]) | {r[3] for r in miss})
             for o, nm, kind, fid, argb, rets in (miss if todo_only else w32):
                 mark = " " if fid in done else "*"
                 # ★ THE RETSTUB IS AN ANCHOR, AND IT COMES FROM THE FILE.
@@ -360,6 +376,14 @@ def main():
         print("\n=== union across %d programs ===" % len(args))
         for m in sorted(grand):
             print("  %-8s %d distinct ids still to do" % (m, len(grand[m])))
+    if as_json:
+        tot_s = sum(len(v["serviced"]) for v in doc["union"].values())
+        tot_t = sum(len(v["todo"]) for v in doc["union"].values())
+        doc["totals"] = {"serviced": tot_s, "todo": tot_t,
+                         "programs": len(doc["programs"])}
+        sys.stderr.write("\n")
+        print("---JSON---")
+        print(json.dumps(doc, indent=1, sort_keys=True))
     return 0
 
 
