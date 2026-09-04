@@ -439,6 +439,66 @@ static WORD wowuser_sysres_kind(WORD h)
 #define WOWUSER_ISWINDOWVISIBLE  0x0031
 #define IW_ARG_HWND      0
 
+/* ── ★★★★ 0x12 SetCapture / 0x13 ReleaseCapture -- WHAT MAKES A DRAG A STROKE.
+     From `neneeds.py`'s list for PBRUSH (ord 18 and 19, 2 and 0 argument bytes).
+     A paint program takes the capture on button-down so that the rest of the
+     stroke arrives even when the pointer leaves the canvas, and gives it back on
+     button-up. Without it a stroke ends at the window edge -- or, worse, the
+     button-up is delivered to whatever window the pointer happens to be over and
+     the guest never learns the stroke finished, so it keeps drawing.
+   ★ The real Win32 capture is the right mechanism, exactly as the real menu and
+     the real caption are: these windows ARE Win32 windows.
+   ⚠ SetCapture RETURNS THE PREVIOUS CAPTURE WINDOW, and it has to come back as a
+     16-bit handle -- a guest that restores it would otherwise be handed a
+     truncated HWND. A previous window that is not one of ours answers 0, which
+     is what "nobody had it" looks like to the guest. */
+#define WOWUSER_SETCAPTURE       0x0012
+#define WOWUSER_RELEASECAPTURE   0x0013
+#define CAP_ARG_HWND     0
+
+/* ── ★★★★ THE REST OF THE DRAWING PATH. ─────────────────────────────────────
+     Named from the run in which the mouse first reached MS Paint. Paint answers
+     a button-down on its canvas with `SetCapture`, `GetDC`, `CreateSolidBrush`,
+     `GetClientRect` -- all of which worked -- and then a loop that was stepped
+     over 21 times per stroke. Their ids track USER's ordinals, and the
+     neighbours prove the mapping rather than assuming it: ord 30 -> 0x1e, ord 31
+     -> 0x1f, and ord 33 GETCLIENTRECT -> 0x21, which is the id this file already
+     implements.
+       ord 16 CLIPCURSOR      id 0x10   4 args  (LPRECT)
+       ord 28 CLIENTTOSCREEN  id 0x1c   6 args  (HWND, LPPOINT)
+       ord 32 GETWINDOWRECT   id 0x20   6 args  (HWND, LPRECT)
+       ord 60 GETACTIVEWINDOW id 0x3c   0 args  ()
+     ⚠ A Win16 POINT is two `int`s = 4 bytes and a RECT is four = 8, against
+       Win32's 8 and 16. Same conversion as everywhere else in this file.
+
+   ⚠⚠ CLIPCURSOR IS DELIBERATELY NOT APPLIED, and this is a stated deviation
+     rather than an oversight. Paint uses it to pen the pointer inside its canvas
+     for the duration of a stroke, which is a nicety it does not need to draw
+     correctly -- but `ClipCursor` is SYSTEM-WIDE, and this host is a VDM the
+     harness kills with `taskkill` several times a session. A guest that is
+     terminated mid-stroke while holding a clip would leave the user's real
+     pointer confined to a rectangle on their own desktop. The call is accepted
+     and logged; a later session that wants it can apply it and release it on
+     WM_KILLFOCUS, capture loss and task exit. */
+#define WOWUSER_CLIPCURSOR       0x0010
+#define CC_ARG_RECT      0
+#define WOWUSER_CLIENTTOSCREEN   0x001c
+#define C2S_ARG_POINT    0
+#define C2S_ARG_HWND     4
+#define WOWUSER_GETWINDOWRECT    0x0020
+#define GWR_ARG_RECT     0
+#define GWR_ARG_HWND     4
+#define WOWUSER_GETACTIVEWINDOW  0x003c
+
+/* ★ 0x51 FillRect(hDC, lprc, hbr) -- USER ordinal 81, 8 argument bytes
+     (2 + 4 + 2), and `neimports.py` names the call site in PBRUSH.EXE outright.
+     The run confirms the order: `(2020 | 6ed6 09c7 | 20c0)` is a stock-object
+     BRUSH token at +0, a far RECT at +2 and one of our DC tokens at +6. */
+#define WOWUSER_FILLRECT         0x0051
+#define FR_ARG_BRUSH     0
+#define FR_ARG_RECT      2
+#define FR_ARG_HDC       6
+
 #define WOWUSER_SETSCROLLPOS     0x003e
 #define SSP_ARG_REDRAW   0
 #define SSP_ARG_POS      2
@@ -2864,6 +2924,168 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
         wu_puts(note, notecap, &k, "; answered 0x");
         wu_puthex(note, notecap, &k, (DWORD)rc, 4);
         wow32_setret(f, (DWORD)(WORD)rc);
+        return 1;
+    }
+
+    /* ── ★ 0x51 FillRect(hDC, lprc, hbr) -- see the note above. ─────────────*/
+    case WOWUSER_FILLRECT: {
+        WORD hdc = wow32_argw(f, FR_ARG_HDC);
+        WORD hbr = wow32_argw(f, FR_ARG_BRUSH);
+        volatile BYTE *p = wow32_argptr(f, FR_ARG_RECT);
+        int  dk = -1, bk = -1;
+        HGDIOBJ d = wowgdi_h32(hdc, &dk);
+        HGDIOBJ b = wowgdi_h32(hbr, &bk);
+        RECT r;
+        int  k = 0, ok;
+        wu_puts(note, notecap, &k, "FillRect(dc 0x");
+        wu_puthex(note, notecap, &k, hdc, 4);
+        wu_puts(note, notecap, &k, ", brush 0x");
+        wu_puthex(note, notecap, &k, hbr, 4);
+        wu_puts(note, notecap, &k, ")");
+        if (!p || !d || (dk != WOWGDI_KIND_DC && dk != WOWGDI_KIND_WINDC)) {
+            wu_puts(note, notecap, &k, " -- ★ NO RECT, or not one of our DC"
+                                       " tokens; answered 0");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        /* ⚠ A brush we cannot name is refused rather than substituted: filling
+             with the wrong colour is worse than not filling, because it looks
+             like it worked. */
+        if (!b || bk == WOWGDI_KIND_DC || bk == WOWGDI_KIND_WINDC) {
+            wu_puts(note, notecap, &k, " -- ★ NOT ONE OF OUR BRUSH TOKENS;"
+                                       " answered 0");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        r.left   = (int)(short)wow32_peekw(p);
+        r.top    = (int)(short)wow32_peekw(p + 2);
+        r.right  = (int)(short)wow32_peekw(p + 4);
+        r.bottom = (int)(short)wow32_peekw(p + 6);
+        wu_puts(note, notecap, &k, " ");
+        wu_puthex(note, notecap, &k, (DWORD)r.left, 4);
+        wu_puts(note, notecap, &k, ",");
+        wu_puthex(note, notecap, &k, (DWORD)r.top, 4);
+        wu_puts(note, notecap, &k, " ");
+        wu_puthex(note, notecap, &k, (DWORD)(r.right - r.left), 4);
+        wu_puts(note, notecap, &k, "x");
+        wu_puthex(note, notecap, &k, (DWORD)(r.bottom - r.top), 4);
+        ok = FillRect((HDC)d, &r, (HBRUSH)b) ? 1 : 0;
+        wu_puts(note, notecap, &k, ok ? " -> filled" : " -- ★ the OS refused it");
+        wow32_setret(f, (DWORD)ok);
+        return 1;
+    }
+
+    /* ── ★★★★ THE DRAWING PATH: 0x1c, 0x20, 0x3c, 0x10 -- see the note above. */
+    case WOWUSER_CLIENTTOSCREEN: {
+        WORD hwnd = wow32_argw(f, C2S_ARG_HWND);
+        volatile BYTE *p = wow32_argptr(f, C2S_ARG_POINT);
+        wowuser_win_t *w = wowuser_findwin(hwnd);
+        POINT pt;
+        int k = 0;
+        wu_puts(note, notecap, &k, "ClientToScreen 0x");
+        wu_puthex(note, notecap, &k, hwnd, 4);
+        if (!p || !w || !w->hwnd32) {
+            wu_puts(note, notecap, &k, " -- ★ NO WINDOW OR NO POINT; unchanged");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        pt.x = (int)(short)wow32_peekw(p);
+        pt.y = (int)(short)wow32_peekw(p + 2);
+        ClientToScreen(w->hwnd32, &pt);
+        wow32_pokew(p,     (WORD)(short)pt.x);
+        wow32_pokew(p + 2, (WORD)(short)pt.y);
+        wu_puts(note, notecap, &k, " -> ");
+        wu_puthex(note, notecap, &k, (DWORD)pt.x, 4);
+        wu_puts(note, notecap, &k, ",");
+        wu_puthex(note, notecap, &k, (DWORD)pt.y, 4);
+        wow32_setret(f, 0);
+        return 1;
+    }
+
+    case WOWUSER_GETWINDOWRECT: {
+        WORD hwnd = wow32_argw(f, GWR_ARG_HWND);
+        volatile BYTE *r = wow32_argptr(f, GWR_ARG_RECT);
+        wowuser_win_t *w = wowuser_findwin(hwnd);
+        RECT rc;
+        int k = 0, i;
+        wu_puts(note, notecap, &k, "GetWindowRect 0x");
+        wu_puthex(note, notecap, &k, hwnd, 4);
+        if (!r) { wu_puts(note, notecap, &k, " -- ★ NULL lpRect");
+                  wow32_setret(f, 0); return 1; }
+        if (!w || !w->hwnd32 || !GetWindowRect(w->hwnd32, &rc)) {
+            for (i = 0; i < WOW_RECT16_SIZE; ++i) r[i] = 0;
+            wu_puts(note, notecap, &k, " -- ★ NO SUCH WINDOW; zeroed");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        wow32_pokew(r + 0, (WORD)(short)rc.left);
+        wow32_pokew(r + 2, (WORD)(short)rc.top);
+        wow32_pokew(r + 4, (WORD)(short)rc.right);
+        wow32_pokew(r + 6, (WORD)(short)rc.bottom);
+        wu_puts(note, notecap, &k, " -> ");
+        wu_puthex(note, notecap, &k, (DWORD)rc.left, 4);
+        wu_puts(note, notecap, &k, ",");
+        wu_puthex(note, notecap, &k, (DWORD)rc.top, 4);
+        wu_puts(note, notecap, &k, " ");
+        wu_puthex(note, notecap, &k, (DWORD)(rc.right - rc.left), 4);
+        wu_puts(note, notecap, &k, "x");
+        wu_puthex(note, notecap, &k, (DWORD)(rc.bottom - rc.top), 4);
+        wow32_setret(f, 0);
+        return 1;
+    }
+
+    case WOWUSER_GETACTIVEWINDOW: {
+        HWND a = GetActiveWindow();
+        WORD h16 = a ? wowwin_hwnd16(a) : 0;
+        int  k = 0;
+        wu_puts(note, notecap, &k, "GetActiveWindow -> 0x");
+        wu_puthex(note, notecap, &k, h16, 4);
+        if (a && !h16)
+            wu_puts(note, notecap, &k, " (active window is not the guest's)");
+        wow32_setret(f, (DWORD)h16);
+        return 1;
+    }
+
+    /* ⚠ ACCEPTED AND NOT APPLIED -- see the note above for why a system-wide
+         cursor clip must not outlive a VDM the harness kills at will. */
+    case WOWUSER_CLIPCURSOR: {
+        volatile BYTE *r = wow32_argptr(f, CC_ARG_RECT);
+        int k = 0;
+        wu_puts(note, notecap, &k, r ? "ClipCursor(rect)" : "ClipCursor(NULL)");
+        wu_puts(note, notecap, &k, " -- ★ ACCEPTED BUT NOT APPLIED ON PURPOSE:"
+                                   " the clip is system-wide and this VDM is"
+                                   " killed at will, which would leave the user's"
+                                   " pointer penned on their own desktop");
+        wow32_setret(f, 0);
+        return 1;
+    }
+
+    /* ── ★★★★ 0x12 SetCapture / 0x13 ReleaseCapture -- see the note above. ──*/
+    case WOWUSER_SETCAPTURE: {
+        WORD hwnd = wow32_argw(f, CAP_ARG_HWND);
+        wowuser_win_t *w = wowuser_findwin(hwnd);
+        HWND prev;
+        int  k = 0;
+        wu_puts(note, notecap, &k, "SetCapture 0x");
+        wu_puthex(note, notecap, &k, hwnd, 4);
+        if (!w || !w->hwnd32) {
+            wu_puts(note, notecap, &k, " -- ★ NO SUCH WINDOW; answered 0");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        prev = SetCapture(w->hwnd32);
+        wu_puts(note, notecap, &k, " -> the OS's; previous 0x");
+        wu_puthex(note, notecap, &k, prev ? wowwin_hwnd16(prev) : 0, 4);
+        wow32_setret(f, (DWORD)(prev ? wowwin_hwnd16(prev) : 0));
+        return 1;
+    }
+
+    case WOWUSER_RELEASECAPTURE: {
+        int k = 0;
+        int ok = ReleaseCapture() ? 1 : 0;
+        wu_puts(note, notecap, &k, ok ? "ReleaseCapture -> released"
+                                      : "ReleaseCapture -- ★ nobody held it");
+        wow32_setret(f, (DWORD)ok);
         return 1;
     }
 

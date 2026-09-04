@@ -92,9 +92,12 @@ static WORD  wowuser_menu16(HMENU m);   /* the 16-bit name for a real menu */
  * the guest takes it out of its own GetMessage.
  *
  * ⚠ ONLY WHAT THE GUEST CAN ACTUALLY USE. Posting every message would fill the
- *   ring with mouse moves the guest never asked for and would hide the ones it
- *   did. Keyboard and close are what a run has needed; the rest goes to
- *   DefWindowProc, and the log names anything that turns out to matter.
+ *   ring and hide the ones that matter, so the set here is deliberate and the
+ *   log names anything that turns out to be missing.
+ * ★ THE MOUSE IS RELAYED (session 45) and the flooding hazard above is answered
+ *   the way Windows answers it: WM_MOUSEMOVE COALESCES -- only the newest
+ *   pending move per window is kept (wowmsg_post_move). Leaving the mouse out
+ *   was why a paint program could be looked at but not used.
  * ★ WM_PAINT IS NOW TRANSLATED (session 45) -- this note used to say it was left
  *   to DefWindowProc "until GDI's id space is dispatched", and that day came.
  *   ⚠⚠ But the region is STILL validated here, and that is not optional: Win32
@@ -214,6 +217,47 @@ static LRESULT CALLBACK wowwin_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
                 EndPaint(h, &ps);
             }
             wowmsg_post(h16, WM_PAINT16, 0, 0, GetTickCount(), 0, 0);
+            ++g_ww_msgs;
+            return 0;
+        }
+        break;
+    /* ── ★★★★★ THE MOUSE. WITHOUT THIS A PAINT PROGRAM CANNOT PAINT. ────────
+         This procedure relayed keys, system keys, close, size, focus and paint,
+         and NOTHING from the mouse -- so MS Paint could be looked at but not
+         used: no stroke on the canvas, no tool picked out of the toolbox, no
+         colour picked out of the palette. The header note above explains why it
+         was left out ("posting every message would fill the ring with mouse
+         moves the guest never asked for and would hide the ones it did"), and
+         that hazard is real. The answer is not to drop the mouse, it is to
+         COALESCE the moves the way Windows does -- see wowmsg_post_move.
+
+       ★ RELAYED VERBATIM, like the keyboard. Win16 and Win32 agree on the
+         message numbers (0x200..0x209), on wParam being the MK_* button/modifier
+         bits (MK_LBUTTON 1, MK_RBUTTON 2, MK_SHIFT 4, MK_CONTROL 8, MK_MBUTTON
+         0x10 in both), and on lParam being the x in the low word and y in the
+         high, in CLIENT coordinates. Composing anything here would be inventing.
+       ⚠ THESE MUST STILL REACH DefWindowProc for the non-client cases, but the
+         ones handled here are all CLIENT-area messages, which DefWindowProc does
+         nothing with. Returning 0 is what a window procedure that handled them
+         does.
+       ⚠ A DOUBLE-CLICK ONLY ARRIVES IF THE CLASS ASKED FOR IT (CS_DBLCLKS). We
+         register the guest's own class style, so a guest that did not ask gets
+         two ordinary clicks -- which is correct, not a gap. */
+    case WM_MOUSEMOVE:
+        if (h16) {
+            if (!wowmsg_post_move(h16, (WORD)msg, (WORD)wp, (DWORD)lp,
+                                  GetTickCount(), 0, 0))
+                wowmsg_post(h16, (WORD)msg, (WORD)wp, (DWORD)lp,
+                            GetTickCount(), 0, 0);
+            ++g_ww_msgs;
+            return 0;
+        }
+        break;
+    case WM_LBUTTONDOWN: case WM_LBUTTONUP: case WM_LBUTTONDBLCLK:
+    case WM_RBUTTONDOWN: case WM_RBUTTONUP: case WM_RBUTTONDBLCLK:
+    case WM_MBUTTONDOWN: case WM_MBUTTONUP: case WM_MBUTTONDBLCLK:
+        if (h16) {
+            wowmsg_post(h16, (WORD)msg, (WORD)wp, (DWORD)lp, GetTickCount(), 0, 0);
             ++g_ww_msgs;
             return 0;
         }

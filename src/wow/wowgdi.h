@@ -172,6 +172,53 @@
 #define BB_ARG_X       16
 #define BB_ARG_DSTDC   18
 
+/* ── ★★★★ THE STROKE LOOP. ──────────────────────────────────────────────────
+     Named from the run in which the mouse first reached MS Paint: a single drag
+     across the canvas stepped over these 21 times each.
+       0x63 LPtoDP                 8 args  (HDC, LPPOINT, int)  -- internal stub,
+            named by its own call: `(0001 | 6df6 09c7 | 20c0)` is count 1, a far
+            LPPOINT, and one of OUR DC tokens, which is what pins the order.
+       0x9c CreateDiscardableBitmap ord 156, 6 args (HDC, int, int)
+       0x94 SetBrushOrg            ord 148, 6 args (HDC, int, int)
+   ⚠ A Win16 POINT is two `int`s = 4 bytes against Win32's 8, so LPtoDP is a
+     conversion in BOTH directions -- it transforms in place, so every point has
+     to be read out, converted, and written back narrowed. */
+/* ★ 0x67 PtVisible(hDC, x, y) -- ord 103, 6 args, and the brush loop asks it
+     eight times per stroke: "is this point inside the clip region?". Answered 0
+     it means "no", so a guest politely declines to draw. */
+/* ★ Three one-argument calls the brush loop makes, all direct exports:
+     ord  79 GETDCORG        id 0x4f  (HDC)  -> the DC's origin, packed y:x
+     ord 149 GETBRUSHORG     id 0x95  (HDC)  -> the brush origin, packed y:x
+     ord 150 UNREALIZEOBJECT id 0x96  (HGDIOBJ) -> reset a brush's origin
+   ⚠ UnrealizeObject takes an OBJECT, not a DC -- it is how a guest tells GDI to
+     re-align a pattern brush before the next fill, which is exactly what a paint
+     program does between strokes. */
+#define WOWGDI_GETDCORG         0x004f
+#define WOWGDI_GETBRUSHORG      0x0095
+#define WOWGDI_UNREALIZEOBJ     0x0096
+#define ONE_ARG_HANDLE  0
+
+#define WOWGDI_PTVISIBLE        0x0067
+#define PV_ARG_Y        0
+#define PV_ARG_X        2
+#define PV_ARG_HDC      4
+
+/* ★ 0x24 Polygon(hDC, lpPoints, nCount) -- GDI ordinal 36, native16, so the id
+     came from the run: `(0006 | 38fa 09c6 | 20d8)` is six points, a far LPPOINT
+     and one of our DC tokens -- the same block shape as LPtoDP, which is what
+     8 argument bytes buys you. ord 35 STRETCHBLT -> 0x23 either side confirms
+     the numbering. ⚠ Polyline is ordinal 37 and would be 0x25 by the same
+     reading; no run has produced one, so it is not written on that basis. */
+#define WOWGDI_POLYGON          0x0024
+
+#define WOWGDI_LPTODP           0x0063
+#define LDP_ARG_COUNT   0
+#define LDP_ARG_POINTS  2
+#define LDP_ARG_HDC     6
+
+#define WOWGDI_CREATEDISCARDBM  0x009c
+#define WOWGDI_SETBRUSHORG      0x0094
+
 #define WOWGDI_LINETO           0x0013
 #define WOWGDI_MOVETO           0x0014
 #define XY_ARG_Y        0
@@ -547,6 +594,196 @@ static int wowgdi_call(wow32_frame_t *f, char *note, int notecap)
                                       : " -- ★ the OS refused it");
         wow32_setret(f, (DWORD)ok);
         return 1;
+    }
+
+    /* ── ★ 0x4f GetDCOrg / 0x95 GetBrushOrg / 0x96 UnrealizeObject ──────────*/
+    case WOWGDI_GETDCORG:
+    case WOWGDI_GETBRUSHORG:
+    case WOWGDI_UNREALIZEOBJ: {
+        WORD h = wow32_argw(f, ONE_ARG_HANDLE);
+        int  kind = -1;
+        HGDIOBJ o = wowgdi_h32(h, &kind);
+        int  isdc = (f->id != WOWGDI_UNREALIZEOBJ);
+        int  k = 0;
+        POINT pt;
+        wu_puts(note, notecap, &k,
+                f->id == WOWGDI_GETDCORG    ? "GetDCOrg(0x" :
+                f->id == WOWGDI_GETBRUSHORG ? "GetBrushOrg(0x"
+                                            : "UnrealizeObject(0x");
+        wu_puthex(note, notecap, &k, h, 4);
+        wu_puts(note, notecap, &k, ")");
+        if (!o) {
+            wu_puts(note, notecap, &k, " -- ★ NOT ONE OF OUR GDI TOKENS;"
+                                       " answered 0");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        if (isdc && kind != WOWGDI_KIND_DC && kind != WOWGDI_KIND_WINDC) {
+            wu_puts(note, notecap, &k, " -- ★ THAT IS NOT A DC; answered 0");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        if (f->id == WOWGDI_UNREALIZEOBJ) {
+            int r = UnrealizeObject(o) ? 1 : 0;
+            wu_puts(note, notecap, &k, r ? " -> unrealized" : " -- ★ refused");
+            wow32_setret(f, (DWORD)r);
+            return 1;
+        }
+        pt.x = pt.y = 0;
+        if (f->id == WOWGDI_GETBRUSHORG) GetBrushOrgEx((HDC)o, &pt);
+        else                             GetDCOrgEx((HDC)o, &pt);
+        wu_puts(note, notecap, &k, " -> ");
+        wu_puthex(note, notecap, &k, (DWORD)pt.x, 4);
+        wu_puts(note, notecap, &k, ",");
+        wu_puthex(note, notecap, &k, (DWORD)pt.y, 4);
+        wow32_setret(f, ((DWORD)(WORD)(short)pt.y << 16)
+                        | (DWORD)(WORD)(short)pt.x);
+        return 1;
+    }
+
+    /* ── ★ 0x67 PtVisible(hDC, x, y) ────────────────────────────────────────*/
+    case WOWGDI_PTVISIBLE: {
+        WORD hdc = wow32_argw(f, PV_ARG_HDC);
+        int  x = (int)(short)wow32_argw(f, PV_ARG_X);
+        int  y = (int)(short)wow32_argw(f, PV_ARG_Y);
+        int  kind = -1;
+        HGDIOBJ o = wowgdi_h32(hdc, &kind);
+        int  k = 0, r;
+        wu_puts(note, notecap, &k, "PtVisible(0x");
+        wu_puthex(note, notecap, &k, hdc, 4);
+        wu_puts(note, notecap, &k, ", ");
+        wu_puthex(note, notecap, &k, (DWORD)x, 4);
+        wu_puts(note, notecap, &k, ",");
+        wu_puthex(note, notecap, &k, (DWORD)y, 4);
+        wu_puts(note, notecap, &k, ")");
+        if (!o || (kind != WOWGDI_KIND_DC && kind != WOWGDI_KIND_WINDC)) {
+            wu_puts(note, notecap, &k, " -- ★ NOT ONE OF OUR DC TOKENS;"
+                                       " answered 0");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        r = PtVisible((HDC)o, x, y) ? 1 : 0;
+        wu_puts(note, notecap, &k, r ? " -> visible" : " -> NOT visible");
+        wow32_setret(f, (DWORD)r);
+        return 1;
+    }
+
+    /* ── ★★★★ 0x63 LPtoDP(hDC, lpPoints, nCount) -- see the note above. ─────*/
+    case WOWGDI_POLYGON:
+    case WOWGDI_LPTODP: {
+        WORD hdc = wow32_argw(f, LDP_ARG_HDC);
+        WORD n   = wow32_argw(f, LDP_ARG_COUNT);
+        volatile BYTE *p = wow32_argptr(f, LDP_ARG_POINTS);
+        int  kind = -1;
+        HGDIOBJ o = wowgdi_h32(hdc, &kind);
+        POINT pt[64];
+        int  k = 0, i, cnt = (int)n;
+        int ispoly = (f->id == WOWGDI_POLYGON);
+        wu_puts(note, notecap, &k, ispoly ? "Polygon(0x" : "LPtoDP(0x");
+        wu_puthex(note, notecap, &k, hdc, 4);
+        wu_puts(note, notecap, &k, ", ");
+        wu_puthex(note, notecap, &k, (DWORD)n, 4);
+        wu_puts(note, notecap, &k, " points)");
+        if (!o || (kind != WOWGDI_KIND_DC && kind != WOWGDI_KIND_WINDC) || !p) {
+            wu_puts(note, notecap, &k, " -- ★ NOT ONE OF OUR DC TOKENS, or no"
+                                       " points; answered 0");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        /* ⚠ BOUNDED. The count comes from the guest and the scratch array does
+             not grow; a longer run is refused rather than overrunning. */
+        if (cnt <= 0 || cnt > (int)(sizeof pt / sizeof pt[0])) {
+            wu_puts(note, notecap, &k, " -- ★ COUNT OUT OF RANGE; answered 0");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        for (i = 0; i < cnt; ++i) {
+            pt[i].x = (int)(short)wow32_peekw(p + i * 4);
+            pt[i].y = (int)(short)wow32_peekw(p + i * 4 + 2);
+        }
+        /* ★ Polygon DRAWS and writes nothing back; LPtoDP TRANSFORMS IN PLACE.
+             Same block, opposite data flow -- so they share the read and part
+             company here. */
+        if (ispoly) {
+            int r = Polygon((HDC)o, pt, cnt) ? 1 : 0;
+            wu_puts(note, notecap, &k, r ? " -> drawn" : " -- ★ the OS refused it");
+            wow32_setret(f, (DWORD)r);
+            return 1;
+        }
+        if (!LPtoDP((HDC)o, pt, cnt)) {
+            wu_puts(note, notecap, &k, " -- ★ the OS refused it; answered 0");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        for (i = 0; i < cnt; ++i) {
+            wow32_pokew(p + i * 4,     (WORD)(short)pt[i].x);
+            wow32_pokew(p + i * 4 + 2, (WORD)(short)pt[i].y);
+        }
+        wu_puts(note, notecap, &k, " -> ");
+        wu_puthex(note, notecap, &k, (DWORD)pt[0].x, 4);
+        wu_puts(note, notecap, &k, ",");
+        wu_puthex(note, notecap, &k, (DWORD)pt[0].y, 4);
+        wow32_setret(f, 1);
+        return 1;
+    }
+
+    /* ── ★★ 0x9c CreateDiscardableBitmap / 0x94 SetBrushOrg ─────────────────
+       ★ "Discardable" was a Win16 memory-pressure hint; Win32 keeps the call and
+         ignores the hint, which is the right answer -- the guest gets a real
+         bitmap and the hint had no observable semantics to preserve. */
+    case WOWGDI_CREATEDISCARDBM:
+    case WOWGDI_SETBRUSHORG: {
+        int  isbm = (f->id == WOWGDI_CREATEDISCARDBM);
+        WORD hdc = wow32_argw(f, CCB_ARG_HDC);      /* same block shape as   */
+        int  a = (int)(short)wow32_argw(f, CCB_ARG_WIDTH);   /* CreateCompat- */
+        int  b = (int)(short)wow32_argw(f, CCB_ARG_HEIGHT);  /* ibleBitmap    */
+        int  kind = -1;
+        HGDIOBJ o = wowgdi_h32(hdc, &kind);
+        int  k = 0;
+        wu_puts(note, notecap, &k, isbm ? "CreateDiscardableBitmap(0x"
+                                        : "SetBrushOrg(0x");
+        wu_puthex(note, notecap, &k, hdc, 4);
+        wu_puts(note, notecap, &k, ", ");
+        wu_puthex(note, notecap, &k, (DWORD)a, 4);
+        wu_puts(note, notecap, &k, ",");
+        wu_puthex(note, notecap, &k, (DWORD)b, 4);
+        wu_puts(note, notecap, &k, ")");
+        if (!o || (kind != WOWGDI_KIND_DC && kind != WOWGDI_KIND_WINDC)) {
+            wu_puts(note, notecap, &k, " -- ★ NOT ONE OF OUR DC TOKENS;"
+                                       " answered 0");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        if (!isbm) {
+            POINT prev;
+            prev.x = prev.y = 0;
+            SetBrushOrgEx((HDC)o, a, b, &prev);
+            wow32_setret(f, ((DWORD)(WORD)(short)prev.y << 16)
+                            | (DWORD)(WORD)(short)prev.x);
+            return 1;
+        }
+        {   HBITMAP bm;
+            WORD tok;
+            if (a <= 0 || b <= 0) {
+                wu_puts(note, notecap, &k, " -- ★ A DIMENSION IS NOT POSITIVE;"
+                                           " answered 0");
+                wow32_setret(f, 0);
+                return 1;
+            }
+            bm = CreateDiscardableBitmap((HDC)o, a, b);
+            tok = bm ? wowgdi_h16((HGDIOBJ)bm, WOWGDI_KIND_OBJ) : 0;
+            if (!tok) {
+                if (bm) DeleteObject((HGDIOBJ)bm);
+                wu_puts(note, notecap, &k, " -- ★ refused, or the token map is"
+                                           " full; answered 0");
+                wow32_setret(f, 0);
+                return 1;
+            }
+            wu_puts(note, notecap, &k, " -> bitmap token 0x");
+            wu_puthex(note, notecap, &k, tok, 4);
+            wow32_setret(f, tok);
+            return 1;
+        }
     }
 
     /* ── ★★ 0x1b Rectangle(hDC, left, top, right, bottom) ───────────────────*/

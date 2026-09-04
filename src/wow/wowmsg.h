@@ -224,6 +224,38 @@ static int wowmsg_post(WORD hwnd, WORD msg, WORD wparam, DWORD lparam,
     return 1;
 }
 
+/* ── ★★★★★ MOUSE MOVES COALESCE. ────────────────────────────────────────────
+     wowwin.h used to relay no mouse input at all, and said why: "posting every
+     message would fill the ring with mouse moves the guest never asked for and
+     would hide the ones it did". That is a real hazard and it is the reason a
+     Win16 program cannot draw without this -- but the answer is not to drop the
+     mouse, it is what Windows itself does: keep only the NEWEST pending
+     WM_MOUSEMOVE per window. A position is not a history; an old one is
+     worthless the moment a newer one exists, and a button press is never
+     coalesced away because only moves are folded.
+   ⚠ ONLY A MOVE ALREADY AT THE TAIL IS REPLACED. Folding a move that sits
+     BEHIND a button press would reorder input -- the guest would see the click
+     at a position the pointer had not reached yet -- so the scan stops at the
+     newest entry for that window.
+   Returns 1 if it folded into an existing entry. */
+static int wowmsg_post_move(WORD hwnd, WORD msg, WORD wparam, DWORD lparam,
+                            DWORD time, WORD ptx, WORD pty)
+{
+    int i;
+    if (g_wm_count) {
+        i = (g_wm_tail + WOWMSG_MAX - 1) % WOWMSG_MAX;    /* the newest entry */
+        if (g_wm_ring[i].hwnd == hwnd && g_wm_ring[i].msg == msg) {
+            g_wm_ring[i].wparam = wparam;
+            g_wm_ring[i].lparam = lparam;
+            g_wm_ring[i].time = time;
+            g_wm_ring[i].ptx = ptx;
+            g_wm_ring[i].pty = pty;
+            return 1;
+        }
+    }
+    return 0;
+}
+
 /* Take the oldest message matching the filter, or return 0.
    `hwnd` 0 means "any window", which is what every loop this host has read
    passes. `remove` 0 is PeekMessage's look-without-taking.

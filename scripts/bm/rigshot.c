@@ -250,7 +250,7 @@ static BOOL CALLBACK enum_tree_cb(HWND h, LPARAM lp)
 int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show)
 {
     char *a = GetCommandLineA();
-    char verb[32], arg1[300], arg2[32];
+    char verb[32], arg1[300], arg2[32], arg3[32], arg4[32];
     int i = 0, n = 0;
     (void)inst; (void)prev; (void)cmdline; (void)show;
 
@@ -273,7 +273,15 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show)
     }
     while (*a == ' ') ++a;
     for (i = 0; a[i] && a[i] != ' ' && i < 31; ++i) arg2[i] = a[i];
-    arg2[i] = 0;
+    arg2[i] = 0; a += i;
+    /* ★ Two more, for `drag x1 y1 x2 y2`. Parsed the same way and defaulted to
+       empty, so every existing verb sees exactly what it saw before. */
+    while (*a == ' ') ++a;
+    for (i = 0; a[i] && a[i] != ' ' && i < 31; ++i) arg3[i] = a[i];
+    arg3[i] = 0; a += i;
+    while (*a == ' ') ++a;
+    for (i = 0; a[i] && a[i] != ' ' && i < 31; ++i) arg4[i] = a[i];
+    arg4[i] = 0;
 
     if (seq(verb, "shot"))
         return do_shot(arg1[0] ? arg1 : (SHARE "\\rigshot.bmp"));
@@ -389,6 +397,35 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show)
         mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0);
         p = sput(p, "click: "); p = sput(p, arg1);
         p = sput(p, ","); p = sput(p, arg2);
+        logline(m);
+        return 0;
+    }
+
+    /* ★ `drag x1 y1 x2 y2` -- press, MOVE IN STEPS, release. A paint program
+         draws on the moves BETWEEN the press and the release, so a click verb
+         cannot test drawing at all: it produces a down and an up at one point
+         and nothing in between. The steps are what makes this a stroke, and the
+         pauses are what lets a cooperatively-scheduled guest actually run
+         between them -- the host only pumps at a BOP. */
+    if (seq(verb, "drag")) {
+        char m[220], *p = m;
+        int x1 = satoi(arg1), y1 = satoi(arg2);
+        int x2 = satoi(arg3), y2 = satoi(arg4);
+        int steps = 24, i2;
+        SetCursorPos(x1, y1);
+        Sleep(120);
+        mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0);
+        Sleep(120);
+        for (i2 = 1; i2 <= steps; ++i2) {
+            SetCursorPos(x1 + (x2 - x1) * i2 / steps,
+                         y1 + (y2 - y1) * i2 / steps);
+            Sleep(40);
+        }
+        Sleep(120);
+        mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0);
+        p = sput(p, "drag: "); p = sput(p, arg1); p = sput(p, ",");
+        p = sput(p, arg2); p = sput(p, " -> "); p = sput(p, arg3);
+        p = sput(p, ","); p = sput(p, arg4);
         logline(m);
         return 0;
     }
