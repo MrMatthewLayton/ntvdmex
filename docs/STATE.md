@@ -290,6 +290,14 @@ silently is worth more attention than its size suggests.
      stepped→serviced (60→57, 82→85), and nine redundant `0xc2 _lclose`
      declines stopped happening (122→113) because the profile machinery no
      longer re-opens the file after being told 0. Improvement, not drift.
+   * ⚠⚠ **KILL EVERY `ntvdmhost.exe` BEFORE A GATE RUN.** All hosts append to
+     the *same* `C:\ntvdmex\ntvdmhost.log`, and the gate copies that file — so a
+     guest left running by `wowlive.bat`/`playtest.bat` writes into the gate's
+     own artefact. Session 51 read **`6680 / 400 / 133`** off a 6.7 MB log and it
+     was Solitaire and Minesweeper's output mixed into the gate's; killed first,
+     the same binary measured `85 / 113 / 57` exactly. ⚠ A contaminated gate does
+     not look like contamination — it looks like a guest running spectacularly
+     further.
    * ⚠⚠ **`C:\ntvdmex\target.txt` IS AN UNCONDITIONAL OVERRIDE, AND IT DECIDES
      WHICH Win16 PROGRAM RUNS.** On a WOW launch the host takes the program name
      from that file (`main.c`, STAGE2) because Windows does not put it on the

@@ -9323,6 +9323,37 @@ static void wowsched_setcur(WORD task)
     d[0x229] = (BYTE)(task >> 8);
 }
 
+/* ── ★★★ wowquiet.txt -- SILENCE THE TRACE, TO MEASURE WHAT IT COSTS. ────────
+     Session 51, from a user report that both Win16 games feel "laggy, like an
+     early 486" and that GDI redraw is visibly slow when windows overlap.
+   ★ THE SUSPECT IS THE INSTRUMENT, AND THIS PROJECT HAS ALREADY BEEN HERE ONCE:
+     per-line log_append under the device lock cost SKYROADS 24% of its delivered
+     timer ticks, and only a player's ear caught it (see host_irq_sink). On the
+     WOW path every BOP writes a multi-line block -- a Solitaire startup is 2.7 MB
+     -- so the same shape is back, on a path nobody has costed.
+   ⚠ The dev machine CANNOT settle this: the headless rig cannot see input lag.
+     So it is a one-file A/B for the person who can feel it -- `touch wowquiet.txt`
+     for the fast run, delete it for the instrumented one, same binary both times.
+   ⚠ AND IT IS NOT A FIX. If the trace is the whole difference, the answer is to
+     stop writing a kilobyte per BOP, not to ship with the trace off -- every
+     session's debugging depends on it. */
+#define WOWQUIET_PATH "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\wowquiet.txt"
+static void wowquiet_load(void)
+{
+    HANDLE h = CreateFileA(WOWQUIET_PATH, GENERIC_READ,
+                           FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, 0, NULL);
+    char lb[192], *q = lb;
+    if (h == INVALID_HANDLE_VALUE) return;
+    CloseHandle(h);
+    /* Say so BEFORE going quiet, or the run leaves no evidence of why it is
+       silent -- a log that just stops looks like a crash. */
+    q = zput(q, "WOWQUIET: ** ON ** -- the trace is SILENCED from here for an A/B "
+                "measurement. This is not a product mode; delete wowquiet.txt to "
+                "get the instrumented run back.\r\n");
+    log_append(LOG_PATH, lb, q); serial_out(lb, q);
+    g_log_quiet = 1;
+}
+
 static void wowsched_load(void)
 {
     HANDLE h = CreateFileA(WOWSCHED_PATH, GENERIC_READ,
@@ -16298,6 +16329,9 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                 wow32_mode_load();
                 wowsched_load();
                 wowcall_load();
+                /* LAST of the switches, so everything above still gets to say
+                   what it armed before the trace goes quiet. */
+                wowquiet_load();
                 /* pmchg.txt: `<hex offset> [segment]`, segment defaulting to 4
                    (krnl386's DGROUP). Absent file = no watch and no cost. */
                 { HANDLE hc = CreateFileA(PMCHG_PATH, GENERIC_READ,
