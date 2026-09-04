@@ -290,6 +290,16 @@ silently is worth more attention than its size suggests.
      stepped→serviced (60→57, 82→85), and nine redundant `0xc2 _lclose`
      declines stopped happening (122→113) because the profile machinery no
      longer re-opens the file after being told 0. Improvement, not drift.
+   * ⚠⚠ **`C:\ntvdmex\target.txt` IS AN UNCONDITIONAL OVERRIDE, AND IT DECIDES
+     WHICH Win16 PROGRAM RUNS.** On a WOW launch the host takes the program name
+     from that file (`main.c`, STAGE2) because Windows does not put it on the
+     VDM's command line — so **every** Win16 launch on the box runs whatever it
+     names, whatever was actually double-clicked. `start SOL.EXE` with
+     target.txt still saying WINMINE starts a **second Minesweeper**, cheerfully
+     and with no error (session 50). To run two guests, rewrite target.txt
+     between the launches — `scripts/bm/playtest.bat` does. ⇒ This is also the
+     reason a real install cannot work yet: without target.txt the WOW path has
+     no program name at all.
    * **Doom is the other half of every DPMI change.** The known-good signature
      is **all eleven startup stages `V_Init`…`ST_Init` in ~3.5 MB**
      (`./scripts/bmqueue.sh doom DOOM.EXE`).
