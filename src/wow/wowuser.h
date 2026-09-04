@@ -1257,6 +1257,11 @@ static HCURSOR wowuser_sysres_hcursor(WORD token, int *fell)
 #define WNDCLASS_HICON          0x0c
 #define WNDCLASS_HCURSOR        0x0e
 #define WNDCLASS_HBRBACKGROUND  0x10
+/* The highest COLOR_* index a Win16 class can name in hbrBackground. Win 3.1 had
+   COLOR_BTNHIGHLIGHT = 20 as its last; anything above that is a real brush
+   handle, not a system colour. `mingw` has no COLOR_ENDCOLORS, and hard-coding
+   Win32's larger set would let a stray handle pass as a colour index. */
+#define WOWUSER_COLOR_MAX       20
 #define WNDCLASS_MENUNAME       0x12
 #define WNDCLASS_CLASSNAME      0x16
 #define WNDCLASS_SIZE           0x1a
@@ -2259,9 +2264,28 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
                                                 GetSystemMetrics(SM_CXSMICON),
                                                 GetSystemMetrics(SM_CYSMICON));
             HCURSOR hcur = wowuser_sysres_hcursor(c->hcursor, NULL);
+            /* ── ★★★★ THE CLASS'S BACKGROUND BRUSH -- TWO FORMS, AND BOTH ARE
+                 REAL. Win16's `hbrBackground` is EITHER a real HBRUSH the program
+                 made, OR a COLOR_* system index BIASED BY ONE (so that 0 can mean
+                 "no background"). The two are told apart the way Windows tells
+                 them apart: a value that is not one of our GDI tokens and is
+                 small enough to be a colour index is one.
+               ⚠ 0 MEANS "NO BACKGROUND ERASE", and it must stay 0 rather than
+                 become a default -- a program that says it paints its own
+                 background is telling us not to paint over it.
+               ★ Solitaire creates a green brush and names it here; it used to be
+                 read and thrown away, so its table was erased WHITE. */
+            HBRUSH  hbrcls = NULL;
+            if (c->hbrback) {
+                int bkind = -1;
+                HGDIOBJ bo = wowgdi_h32(c->hbrback, &bkind);
+                if (bo && bkind == WOWGDI_KIND_OBJ) hbrcls = (HBRUSH)bo;
+                else if (c->hbrback <= WOWUSER_COLOR_MAX + 1)
+                    hbrcls = (HBRUSH)(ULONG_PTR)c->hbrback;   /* COLOR_* + 1 */
+            }
             if (!c->reg32)
                 c->reg32 = wowwin_register(c->name, c->cls32, sizeof c->cls32,
-                                           hcur, hico, hsm, &fell);
+                                           hcur, hico, hsm, &fell, hbrcls);
             c->curord = curord; c->icoord = icoord; c->curfell = fell;
             c->icobits = bits; c->icokind = icokind;
         }

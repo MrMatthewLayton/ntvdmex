@@ -442,7 +442,8 @@ static int wowwin_pump(int budget)
      One asymmetry removed: whoever knows the token resolves it, and this only
      decides what to do when there is nothing. */
 static int wowwin_register(const char *name16, char *out32, int cap,
-                           HCURSOR hcur, HICON hico, HICON hsm, int *curfell)
+                           HCURSOR hcur, HICON hico, HICON hsm, int *curfell,
+                           HBRUSH hbr)
 {
     /* ⚠ WNDCLASSEX, NOT WNDCLASS, AND FOR ONE REASON: `hIconSm`. A class with no
          small icon makes Windows derive one, and the derived one measured
@@ -464,7 +465,22 @@ static int wowwin_register(const char *name16, char *out32, int cap,
     }
     wc.hIcon   = hico;        /* built by the caller: predefined, or the app's own */
     wc.hIconSm = hsm;         /* ★ and the 16x16 built at 16x16, not shrunk later */
-    wc.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1);
+    /* ── ★★★★ THE CLASS'S OWN BACKGROUND BRUSH, AND IT USED TO BE THROWN AWAY.
+         This was hard-coded to COLOR_WINDOW+1 -- WHITE -- for every Win16 class
+         ever registered, while the guest's real `hbrBackground` was read into
+         `c->hbrback` and then ignored. Windows erases with this brush on every
+         BeginPaint that asks for one, so any region the guest did not repaint
+         itself came out WHITE.
+       ★ IT LOOKED FINE FOR EIGHT SESSIONS BECAUSE ANOTHER BUG WAS HIDING IT.
+         InvalidateRect had its `lpRect` offset clobbered (session 50) and so
+         invalidated the WHOLE CLIENT AREA on every call -- the guest therefore
+         repainted everything, every time, and painted over the white. Fixing
+         InvalidateRect to honour the rectangle is what exposed this: SOLITAIRE's
+         green table grew white patches wherever a card had been moved.
+       ⚠ TWO BUGS, ONE SYMPTOM, AND THE SECOND ONE WAS OLDER. Recorded because
+         the obvious reading -- "the InvalidateRect fix broke Solitaire" -- is
+         wrong and would have led to reverting a correct fix. */
+    wc.hbrBackground = hbr ? hbr : (HBRUSH)(COLOR_WINDOW + 1);
     wc.lpszClassName = out32;
     if (RegisterClassExA(&wc)) return 1;
     /* Already registered is success: a program may register a class name twice

@@ -9336,7 +9336,21 @@ static void wowsched_setcur(WORD task)
      for the fast run, delete it for the instrumented one, same binary both times.
    ⚠ AND IT IS NOT A FIX. If the trace is the whole difference, the answer is to
      stop writing a kilobyte per BOP, not to ship with the trace off -- every
-     session's debugging depends on it. */
+     session's debugging depends on it.
+
+   ── ⚠⚠ RESULT: **REFUTED.** The user played both games with this ON -- log I/O
+     for a Solitaire run fell from 2.7 MB to 10 KB -- and reported the redraw
+     "still slow". So the FILE trace is not the cost, and the remaining suspects
+     are the per-BOP work that happens either way: this flag gates the WRITE, not
+     the ~1.3 KB of string FORMATTING each BOP still does, nor wow_psp_env_check
+     reading guest memory on every one, nor wowwin_pump's PeekMessage, nor the
+     BOP round trip itself.
+   ── ⚠ ALSO REFUTED, same round: `serial_out` does WriteFile + FlushFileBuffers
+     per line at 115200 baud, which would block until the bytes were physically
+     out of the UART and would have been a spectacular per-line cost. It is NOT
+     gated by this flag, so it looked like the answer. `mode` on the rig lists
+     only `CON:` -- THERE IS NO COM1 -- so g_serial is INVALID_HANDLE_VALUE and
+     serial_out has been a no-op all along. Measured before it was believed. */
 #define WOWQUIET_PATH "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\wowquiet.txt"
 static void wowquiet_load(void)
 {
