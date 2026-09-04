@@ -142,11 +142,83 @@ def classify(ne, segs, seg, off, depth):
     if len(b) >= 6 and b[0] == 0x9A:
         return classify(ne, segs, seg, off + 5, depth + 1)
 
+    # ★ A NEAR CALL BEFORE THE STUB. `gdi.87 GETSTOCKOBJECT` tail-jumps to
+    #   `seg1:0x06a1`, which is `e8 97 f9  call 0x003b` and only THEN the stub at
+    #   0x06a4. Following it is safe for the same reason as everything else here:
+    #   the destination has to be a stub or the export stays native16.
+    if len(b) >= 4 and b[0] == 0xE8:
+        r = classify(ne, segs, seg, off + 3, depth + 1)
+        if r[0] == "wow32":
+            return r
+
+    # ★ A LEADING `jmp` -- `gdi.53 CREATEDC` begins `eb 00`, a jump to the very
+    #   next byte (a linker artefact), and the real prologue follows it.
+    if len(b) >= 2 and b[0] == 0xEB:
+        return classify(ne, segs, seg, (off + 2 + b[1] - (0x100 if b[1] > 0x7F else 0)) & 0xFFFF,
+                        depth + 1)
+
     # USER's export thunk: push bp / mov bp,sp / push imm16 / pop dx / pop bp / jmp
     if (len(b) >= 11 and b[0] == 0x55 and b[1] == 0x8B and b[2] == 0xEC
             and b[3] == 0x68 and b[6] == 0x5A and b[7] == 0x5D and b[8] == 0xE9):
         rel = struct.unpack_from("<h", b, 9)[0]
         return classify(ne, segs, seg, (off + 8 + 3 + rel) & 0xFFFF, depth + 1)
+
+    # ── ★★★★★ A VALIDATING WRAPPER IS THE SAME THUNK WITH CODE IN THE MIDDLE.
+    #   (session 46) The exact rule above requires the `pop dx / pop bp / jmp` to
+    #   follow the pushed return stub IMMEDIATELY, and several of GDI's exports
+    #   check an argument first:
+    #
+    #     gdi.372 EXTFLOODFILL -> seg1:0x1b77
+    #       55 8b ec              push bp / mov bp,sp
+    #       68 90 1b              push 0x1b90            <- the return stub
+    #       8b 46 06 3d 01 00     mov ax,[bp+6] / cmp ax,1     ) validate the
+    #       76 06                 jbe +6                       ) fill TYPE
+    #       bb 01 e0 e8 88 0b     mov bx,0xe001 / call 0x2713  ) ...or complain
+    #       5a 5d e9 fc e8        pop dx / pop bp / JMP 0x048c <- the SAME epilogue
+    #     0x048c: 6a 0c 68 00 00 68 74 01 9a   -> id 0x174, 12 argument bytes
+    #
+    #   Classified as native16, `ExtFloodFill` and `CreatePen` were both reported
+    #   FREE -- and they are the two calls that stood between MS Paint and a
+    #   working fill tool and working shape tools. `SetDIBits` hides behind 0x58
+    #   bytes of the same shape and is what File > Save needs.
+    #
+    # ⚠ THIS IS THE LOOSE MATCH THE NOTE ABOVE WARNS ABOUT, MADE SAFE BY ITS
+    #   DESTINATION. Scanning for a `5a 5d e9` inside a function body could
+    #   follow a jump in genuinely 16-bit code -- so the target must ITSELF be a
+    #   stub, which is nine specific bytes, and anything else is rejected and the
+    #   export stays native16. `KERNEL.128 MULDIV` and `USER.107 DEFWINDOWPROC`
+    #   both survive that test as native16, which is the right answer for both.
+    # ⚠ AND DISAGREEMENT IS REPORTED, NOT RESOLVED. If a body has two such
+    #   epilogues reaching two DIFFERENT stubs, this returns native16 rather than
+    #   picking the first -- a wrong id is worse than a missing one, because it
+    #   is a service written against the wrong argument block.
+    # ⚠⚠ AND THE SCAN IS BOUNDED BY THE EXPORT'S OWN `retf`, NOT BY A WINDOW.
+    #   The first cut used `off + 0x200` and reported almost everything as
+    #   native16, because these wrappers are 0x20-0x60 bytes apart: a 0x200-byte
+    #   window walks over the NEXT SIX EXPORTS, collects their epilogues too, and
+    #   the disagreement check then (correctly, for what it was given) refused to
+    #   choose. `TEXTOUT` classified only because it happens to sit near the end
+    #   of the segment. ⇒ **a guard that fails safe still gives a wrong answer if
+    #   you feed it the wrong function.**
+    #   The bound is in the binary: `push imm16` at +3 is the address of this
+    #   export's own `retf N`, which is the instruction AFTER its tail jump. So
+    #   the body is exactly [off, that imm16) and the scan cannot leave it.
+    if len(b) >= 6 and b[0] == 0x55 and b[1] == 0x8B and b[2] == 0xEC and b[3] == 0x68:
+        seen = {}
+        end = b[4] | (b[5] << 8)
+        lim = min(ln, end) if off < end <= off + 0x200 else min(ln, off + 0x40)
+        q = off + 6
+        while q + 5 <= lim:
+            w = ne.d[fo + q: fo + q + 5]
+            if w[0] == 0x5A and w[1] == 0x5D and w[2] == 0xE9:
+                rel = struct.unpack_from("<h", w, 3)[0]
+                tgt = (q + 5 + rel) & 0xFFFF
+                r = classify(ne, segs, seg, tgt, depth + 1)
+                if r[0] == "wow32":
+                    seen[(r[1], r[2])] = r
+            q += 1
+        if len(seen) == 1:
+            return next(iter(seen.values()))
 
     return ("native16", None, None, None)
 
