@@ -1157,7 +1157,29 @@ static int wowgdi_call(wow32_frame_t *f, char *note, int notecap)
                 wow32_pokew(b + 4,  (WORD)(short)bm.bmHeight);
                 wow32_pokew(b + 6,  (WORD)(short)bm.bmWidthBytes);
                 b[8]  = (BYTE)bm.bmPlanes;
+                /* ⚠ REFUTED, session 45. We report bmBitsPixel as the OS
+                     gives it -- 0x20 on this rig -- and 32bpp is a depth Win16
+                     never had (it knew 1/4/8/16/24), and this is the ONLY
+                     pixel-format number MS Paint can see. Reporting 24 instead
+                     changed NOTHING: still 33 bitmaps at `planes=1 bpp=1`. So
+                     Paint's monochrome off-screen bitmaps do not come from here
+                     either. The answer is left as the OS gives it. */
                 b[9]  = (BYTE)bm.bmBitsPixel;
+                /* ★ THE FORMAT, NOT JUST THE TYPE. A guest can only learn a
+                     pixel format from here (MS Paint never asks GetDeviceCaps
+                     for BITSPIXEL or PLANES), so these two numbers are the only
+                     thing that can tell it whether to make a colour or a
+                     monochrome off-screen bitmap -- which is exactly the open
+                     question about its colour palette. */
+                {   wu_puts(note, notecap, &k, " ");
+                    wu_puthex(note, notecap, &k, (DWORD)(WORD)bm.bmWidth, 4);
+                    wu_puts(note, notecap, &k, "x");
+                    wu_puthex(note, notecap, &k, (DWORD)(WORD)bm.bmHeight, 4);
+                    wu_puts(note, notecap, &k, " planes=");
+                    wu_puthex(note, notecap, &k, (DWORD)bm.bmPlanes, 2);
+                    wu_puts(note, notecap, &k, " bpp=");
+                    wu_puthex(note, notecap, &k, (DWORD)bm.bmBitsPixel, 2);
+                }
                 /* ⚠ bmBits STAYS NULL, and that is correct rather than lazy: it
                      is a 32-bit host pointer with no 16-bit address, and Windows
                      itself returns NULL here for a device-dependent bitmap. */

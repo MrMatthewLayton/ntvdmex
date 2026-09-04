@@ -408,21 +408,47 @@ Ten more GDI calls, each confirming its own reading out of its own arguments:
 line-size box, the palette bar, the canvas and its scrollbars are all present and
 **geometrically pixel-identical to stock ntvdm**. Two content differences remain:
 
-1. **The palette swatches render as dithered black-and-white rather than
-   colours**, and the line-size box shows its arrow but not its bars. Paint
-   builds its canvas and its swatch cells as `planes=1 bpp=1` — the canvas is a
-   1680x974 monochrome bitmap that `PatBlt` fills white — so a solid colour brush
-   dithers into it.
-   ⚠ **`NUMCOLORS` is REFUTED as the cause** (see above), and so is the idea that
-   1bpp implies a mis-detected display: 1bpp masks + `SetTextColor`/`SetBkColor`
-   is the normal Win16 idiom and the tool icons come out correct in colour
-   through exactly that path. What is NOT yet known is what Paint branches on to
-   choose a monochrome CANVAS. It queries only `NUMCOLORS` (4x), `HORZ/VERTRES`,
-   `HORZ/VERTSIZE`, `LOGPIXELSX/Y` (both 96) and `NUMPENS` (-1, left untouched
-   deliberately — no evidence any guest reads it).
-   ▶ Next step: find the `CreateBitmap` call site properly. ⚠ Do NOT map the
-   `from=` selector to a segment by ordering — this session wasted a pass doing
-   that, and selector numbers are not segment identities.
+1. **MS Paint is running in its BLACK-AND-WHITE image mode.** The user's
+   observation split the problem exactly: *"the tool palette renders the right
+   colors, but the color palette is shades of grey"*, and that is the whole
+   diagnosis in one sentence — the toolbox is a colour DIB `StretchBlt`ed
+   straight to the screen and never round-trips, while everything Paint
+   *composes* is monochrome.
+
+   ★★★ **AND THE COLOUR IS NOT LOST IN THE BLIT — PAINT NEVER HAS IT.** The
+   brushes it creates are already grey when created: `0x00090909`, `0x00121212`,
+   `0x00212121`, `0x00323232`, `0x00404040`, … — 32 of them, **every one with
+   R = G = B**, which is the luminance of the standard palette. Paint is drawing
+   a greyscale palette on purpose, into 1bpp bitmaps, because it believes it is
+   in black-and-white mode.
+
+   ── WHAT IS ESTABLISHED ────────────────────────────────────────────────────
+   * `PBRUSH.DLL` is what creates every 1bpp bitmap, and its **only** device
+     query in a whole run is `GetDeviceCaps(NUMCOLORS)`, three times.
+   * The call chain is located: `PBRUSH.DLL seg1:0x09c1` is the `CreateBitmap`
+     (confirmed by `neimports.py`, and `0x09c1+5 = 0x09c6` is the `from=` the log
+     carries). Its `cPlanes`/`cBitsPixel` are **parameters** read as BYTEs from
+     `[bp+6]`/`[bp+4]`; its one caller is `seg1:0x00e8`, which passes them from
+     `[bp+0x0c]`/`[bp+0x0a]` — i.e. threaded down from further up still.
+   * ⚠ Selector `0x09b7` is **PBRUSH.DLL's** segment 1, not a PBRUSH.EXE segment.
+     A pass was wasted mapping it by segment ordering; `neimports.py` names call
+     sites directly and should have been the first tool reached for.
+
+   ── ⚠⚠ REFUTED — DO NOT RE-TRY ─────────────────────────────────────────────
+   * `NUMCOLORS` at **-1, 256 and 16** — all three give byte-identical 1bpp
+     output. It is the DLL's only device input and **no value changes anything**.
+   * `GetObject`'s `bmBitsPixel`. We report the OS's `0x20`, and 32bpp is a depth
+     Win16 never had (1/4/8/16/24), and it is the only pixel format Paint can
+     see — so 24 looked certain. It changed nothing.
+   * `GetNearestColor` — never called in a whole run.
+   * A WIN.INI colour/format key — Paint reads `OmitPictureFormat`, `width`,
+     `height`, `extensions` and the `[intl]` keys, and nothing about colour.
+   * `GetDeviceCaps(HORZSIZE/VERTSIZE)` — see the table above.
+
+   ▶ Next step: the mode is decided in **PBRUSH.EXE**, not the DLL, and passed
+   down. Untested inputs it reads: `NUMPENS` (-1, deliberately left alone) and
+   `LOGPIXELSX/Y` (both 96). Better: read the caller chain above `seg1:0x00e8`
+   in PBRUSH.DLL back to the global that holds the mode, and find who sets it.
 2. Unanswered, none of them on the drawing path: USER `0x10c GlobalAddAtom` (25
    calls), `0x51`, `0x87 GetWindowLong`, `0x88`, and the WOW plumbing `0x13a`,
    `0x217`, `0x16c`.
