@@ -92,6 +92,9 @@
      between Win16 and Win32: for a MENU command Win16 puts the id alone in
      wParam and ZERO in lParam. See the translation in wowwin.h. */
 #define WM_COMMAND16    0x0111
+/* ⚠ WM_TIMER's lParam is the guest's TIMERPROC when it installed one, and
+   DispatchMessage calls that INSTEAD of the window procedure -- see wowuser.h. */
+#define WM_TIMER16      0x0113
 
 /* MSG field offsets -- see the note above. */
 #define MSG_HWND        0x00

@@ -553,6 +553,36 @@
 #define SDI_ARG_DSTX   28
 #define SDI_ARG_HDC    30
 
+/* ── ★ MINESWEEPER'S TWO. It keeps its digits, mines and smiley faces as DIBs in
+     its own resources and puts them on screen with these; nothing else it draws
+     needs GDI at all.
+   HBITMAP CreateDIBitmap(HDC, LPBITMAPINFOHEADER, DWORD dwInit, LPSTR lpbInit,
+                          LPBITMAPINFO, UINT wUsage)                     = 20 */
+#define WOWGDI_CREATEDIBITMAP   0x01ba   /* ord 442, 20 args */
+#define CDIB_ARG_USAGE   0
+#define CDIB_ARG_BMI     2               /* far */
+#define CDIB_ARG_BITS    6               /* far */
+#define CDIB_ARG_INIT   10               /* DWORD */
+#define CDIB_ARG_BMIH   14               /* far */
+#define CDIB_ARG_HDC    18
+
+/* int SetDIBitsToDevice(HDC, int xDest, int yDest, WORD wWidth, WORD wHeight,
+                         int XSrc, int YSrc, UINT nStartScan, UINT nNumScans,
+                         LPSTR lpBits, LPBITMAPINFO, UINT wUsage)        = 28 */
+#define WOWGDI_SETDIBITSTODEV   0x01bb   /* ord 443, 28 args */
+#define SDD_ARG_USAGE    0
+#define SDD_ARG_BMI      2               /* far */
+#define SDD_ARG_BITS     6               /* far */
+#define SDD_ARG_NSCANS  10
+#define SDD_ARG_START   12
+#define SDD_ARG_SRCY    14
+#define SDD_ARG_SRCX    16
+#define SDD_ARG_H       18
+#define SDD_ARG_W       20
+#define SDD_ARG_DSTY    22
+#define SDD_ARG_DSTX    24
+#define SDD_ARG_HDC     26
+
 /* GDI tokens sit below the menu tokens (0x4000) and above the window handles,
    so a stray handle of any kind is recognisable on sight in a log. */
 #define WOWGDI_BASE      0x2000
@@ -2625,6 +2655,113 @@ static int wowgdi_call(wow32_frame_t *f, char *note, int notecap)
         r = StretchDIBits((HDC)o, dx, dy, dw, dh, sx, sy, sw, sh,
                           (const void *)(ULONG_PTR)bits,
                           (const BITMAPINFO *)(ULONG_PTR)bmi, usage, rop);
+        wu_puts(note, notecap, &k, " -> ");
+        wu_puthex(note, notecap, &k, (DWORD)r, 4);
+        wow32_setret(f, (DWORD)(WORD)r);
+        return 1;
+    }
+
+    /* ── CreateDIBitmap: a DIB in the guest's memory becomes a real DDB. ──────
+         Like SetDIBits/GetDIBits above, the BITMAPINFOHEADER is 40 bytes and
+         byte-identical in both worlds and both the header and the bits live in
+         guest memory this host can address, so nothing is converted -- only the
+         DC token resolved and the new bitmap tokenised on the way out.
+       ⚠ `dwInit` DECIDES WHETHER lpbInit IS READ AT ALL (CBM_INIT = 4). With it
+         clear, Win32 must be handed NULLs: passing a pointer alongside a zero
+         flag is how a caller ends up with an uninitialised bitmap that looks
+         initialised. */
+    case WOWGDI_CREATEDIBITMAP: {
+        WORD  hdc   = wow32_argw(f, CDIB_ARG_HDC);
+        volatile BYTE *bmih = wow32_argptr(f, CDIB_ARG_BMIH);
+        DWORD init  = wow32_argd(f, CDIB_ARG_INIT);
+        volatile BYTE *bits = wow32_argptr(f, CDIB_ARG_BITS);
+        volatile BYTE *bmi  = wow32_argptr(f, CDIB_ARG_BMI);
+        WORD  usage = wow32_argw(f, CDIB_ARG_USAGE);
+        int   kind = -1;
+        HGDIOBJ o = wowgdi_h32(hdc, &kind);
+        HBITMAP bm;
+        WORD  tok;
+        int   k = 0;
+        wu_puts(note, notecap, &k, "CreateDIBitmap(dc 0x");
+        wu_puthex(note, notecap, &k, hdc, 4);
+        wu_puts(note, notecap, &k, ", init 0x");
+        wu_puthex(note, notecap, &k, init, 8);
+        wu_puts(note, notecap, &k, ")");
+        if (!o || (kind != WOWGDI_KIND_DC && kind != WOWGDI_KIND_WINDC) || !bmih) {
+            wu_puts(note, notecap, &k, " -- ★ NOT ONE OF OUR DC TOKENS, or no"
+                                       " BITMAPINFOHEADER; answered 0");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        bm = CreateDIBitmap((HDC)o,
+                            (const BITMAPINFOHEADER *)(ULONG_PTR)bmih, init,
+                            (init && bits) ? (const void *)(ULONG_PTR)bits : NULL,
+                            (init && bmi)  ? (const BITMAPINFO *)(ULONG_PTR)bmi : NULL,
+                            usage);
+        if (!bm) {
+            wu_puts(note, notecap, &k, " -- ★ GDI REFUSED; answered 0");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        tok = wowgdi_h16((HGDIOBJ)bm, WOWGDI_KIND_OBJ);
+        if (!tok) {
+            /* ⚠ NO TOKEN LEFT MEANS THE BITMAP LEAKS IF WE JUST RETURN 0 -- the
+                 guest never learns of it, so nobody will ever DeleteObject it.
+                 Destroy it here and fail honestly. */
+            DeleteObject(bm);
+            wu_puts(note, notecap, &k, " -- ★ HANDLE MAP FULL; destroyed and"
+                                       " answered 0");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        wu_puts(note, notecap, &k, " -> 0x");
+        wu_puthex(note, notecap, &k, tok, 4);
+        wow32_setret(f, (DWORD)tok);
+        return 1;
+    }
+
+    case WOWGDI_SETDIBITSTODEV: {
+        WORD  hdc = wow32_argw(f, SDD_ARG_HDC);
+        int   dx = (int)(short)wow32_argw(f, SDD_ARG_DSTX);
+        int   dy = (int)(short)wow32_argw(f, SDD_ARG_DSTY);
+        /* ⚠ w/h ARE `WORD`s IN THE Win16 PROTOTYPE, not ints -- a bitmap is never
+             negative-width, and sign-extending one over 32767 would turn a blit
+             into a negative and draw nothing. Widened UNSIGNED, unlike the
+             coordinates either side of them, which are genuinely signed. */
+        DWORD w  = (DWORD)wow32_argw(f, SDD_ARG_W);
+        DWORD h  = (DWORD)wow32_argw(f, SDD_ARG_H);
+        int   sx = (int)(short)wow32_argw(f, SDD_ARG_SRCX);
+        int   sy = (int)(short)wow32_argw(f, SDD_ARG_SRCY);
+        WORD  start  = wow32_argw(f, SDD_ARG_START);
+        WORD  nscans = wow32_argw(f, SDD_ARG_NSCANS);
+        volatile BYTE *bits = wow32_argptr(f, SDD_ARG_BITS);
+        volatile BYTE *bmi  = wow32_argptr(f, SDD_ARG_BMI);
+        WORD  usage = wow32_argw(f, SDD_ARG_USAGE);
+        int   kind = -1;
+        HGDIOBJ o = wowgdi_h32(hdc, &kind);
+        int   k = 0, r;
+        wu_puts(note, notecap, &k, "SetDIBitsToDevice(dc 0x");
+        wu_puthex(note, notecap, &k, hdc, 4);
+        wu_puts(note, notecap, &k, " dst(");
+        wu_puthex(note, notecap, &k, (DWORD)dx, 4);
+        wu_puts(note, notecap, &k, ",");
+        wu_puthex(note, notecap, &k, (DWORD)dy, 4);
+        wu_puts(note, notecap, &k, ") ");
+        wu_puthex(note, notecap, &k, (DWORD)w, 4);
+        wu_puts(note, notecap, &k, "x");
+        wu_puthex(note, notecap, &k, (DWORD)h, 4);
+        wu_puts(note, notecap, &k, ")");
+        if (!o || (kind != WOWGDI_KIND_DC && kind != WOWGDI_KIND_WINDC)
+               || !bmi || !bits) {
+            wu_puts(note, notecap, &k, " -- ★ NOT ONE OF OUR DC TOKENS, or no"
+                                       " bits/BITMAPINFO; answered 0");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        r = SetDIBitsToDevice((HDC)o, dx, dy, w, h,
+                              sx, sy, start, nscans,
+                              (const void *)(ULONG_PTR)bits,
+                              (const BITMAPINFO *)(ULONG_PTR)bmi, usage);
         wu_puts(note, notecap, &k, " -> ");
         wu_puthex(note, notecap, &k, (DWORD)r, 4);
         wow32_setret(f, (DWORD)(WORD)r);

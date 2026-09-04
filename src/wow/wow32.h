@@ -399,6 +399,22 @@ static DWORD wow32_peekret(const wow32_frame_t *f)
 #define WOW32_SETCURRENTDIR             0x82   /* ★ WHERE File > Save As PUT THE FILE */
 #define WOW32_ACCEPTTASKSELECTOR        0x7d   /* pinned from its call sites, below */
 #define WOW32_GETPRIVATEPROFILESTRING   0x80   /* pinned from DGROUP, see below    */
+/* ── ★★★ 0x7f GetPrivateProfileInt -- NAMED BY MINESWEEPER'S FIRST RUN. ──────
+     14 arg bytes = 4 + 4 + 2 + 4, and the fourth is a FILENAME, so it is the
+     private twin of 0x39 exactly as 0x80 is of the string form. WINMINE.EXE
+     asks it for "Height", "Width", "Mines", "Difficulty", "Xpos" and "Ypos" out
+     of `winmine.ini`, 37 times in one startup.
+   ★ AND UNIMPLEMENTED IT ANSWERED 0, WHICH THE CALL SITE READS AS A REAL
+     ANSWER -- the fifth time this exact shape has cost this project a session.
+     `nDefault` is right there in the arguments (8, for "Height") and we were
+     throwing it away, so Minesweeper laid itself out with every stored value 0
+     and created its window at (-2,-48): its caption and menu bar OFF THE TOP OF
+     THE SCREEN. Nothing looked broken in the log. */
+#define WOW32_GETPRIVATEPROFILEINT      0x7f
+#define GPPI_ARG_FILE     0                    /* far */
+#define GPPI_ARG_DEFAULT  4
+#define GPPI_ARG_KEY      6                    /* far */
+#define GPPI_ARG_APP     10                    /* far */
 #define WOW32_WOWWAITFORMSGANDEVENT     0x83
 #define WOW32_WOWMSGBOX                 0x84
 #define WOW32_GETDATETIME               0x86   /* call site unpacks a packed date  */
@@ -513,6 +529,7 @@ static const char *wow32_name(WORD id)
     case WOW32_GETPROFILESTRING:       return "GetProfileString";
     case WOW32_SETCURRENTDIR:          return "SetCurrentDirectory";
     case WOW32_GETPRIVATEPROFILESTRING: return "GetPrivateProfileString";
+    case WOW32_GETPRIVATEPROFILEINT:    return "GetPrivateProfileInt";
     default:                           return NULL;
     }
 }
@@ -806,6 +823,28 @@ static int wow32_call(wow32_frame_t *f, wow32_dosdata_t *dd)
                                        def, buf, n, file);
         if (dst) for (k = 0; k <= got && k < n; ++k) dst[k] = (BYTE)buf[k];
         wow32_setret(f, got);
+        return 1;
+    }
+
+    /* Answered with the REAL Win32 call against the REAL file, like 0x80 above.
+       ⚠ nDefault IS THE WHOLE POINT: it is what the guest gets when the key is
+         absent, and it is what this call answered with 0 instead of. Passing it
+         through means a missing winmine.ini gives Minesweeper its OWN defaults,
+         which is what it would get on real Windows.
+       ⚠ `hd ? app : NULL` -- NULL is documented for the two names; never a
+         string literal, which is read-only and XP's profile code WRITES to these
+         buffers (session 38, and it killed the host). */
+    case WOW32_GETPRIVATEPROFILEINT: {
+        char app[128], key[128], file[260];
+        int  ha = wow32_argstr(f, GPPI_ARG_APP, app, sizeof app);
+        int  hk = wow32_argstr(f, GPPI_ARG_KEY, key, sizeof key);
+        WORD def = wow32_argw(f, GPPI_ARG_DEFAULT);
+        UINT got;
+        wow32_argstr(f, GPPI_ARG_FILE, file, sizeof file);
+        got = GetPrivateProfileIntA(ha ? app : NULL, hk ? key : NULL,
+                                    (INT)def, file);
+        /* Win16 returns a UINT; the value is a WORD on the guest's side. */
+        wow32_setret(f, (DWORD)(WORD)got);
         return 1;
     }
 

@@ -82,6 +82,7 @@ static wowuser_win_t *wowuser_findwin(WORD hwnd);
 static int   wowuser_is_mdichild(const wowuser_win_t *w);
 static HWND  wowuser_mdiclient_of(const wowuser_win_t *w);
 static WORD  wowuser_menu16(HMENU m);   /* the 16-bit name for a real menu */
+static DWORD wowuser_timer_proc(WORD hwnd, WORD id);  /* 0 if none installed */
 
 /*
  * ── OUR WINDOW PROCEDURE FOR EVERY Win16 WINDOW ─────────────────────────────
@@ -265,6 +266,26 @@ static LRESULT CALLBACK wowwin_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
     case WM_CLOSE:
         if (h16) { wowmsg_post(h16, (WORD)msg, 0, 0, GetTickCount(), 0, 0);
                    ++g_ww_msgs; return 0; }
+        break;
+    /* ── ★★ WM_TIMER. THE OS IS THE TIMER ENGINE; THIS IS THE WHOLE RELAY. ───
+         The real HWND belongs to this thread, so the OS's own timer already
+         delivers WM_TIMER here on schedule with the id in wParam, exactly where
+         Win16 puts it.
+       ★ lParam CARRIES THE 16-BIT TIMERPROC WHEN THE GUEST INSTALLED ONE, which
+         is what Win16 does -- and DispatchMessage, not this relay, is what calls
+         it. See the timer table in wowuser.h for why that ordering is the
+         difference between a faithful implementation and re-entering the guest
+         from inside a Win32 callback.
+       ⚠ A guest that installed NO proc gets lParam 0 and must: it would
+         otherwise receive a pointer it never supplied. */
+    case WM_TIMER:
+        if (h16) {
+            wowmsg_post(h16, (WORD)msg, (WORD)wp,
+                        wowuser_timer_proc(h16, (WORD)wp),
+                        GetTickCount(), 0, 0);
+            ++g_ww_msgs;
+            return 0;
+        }
         break;
     /* ── ★ FOCUS AND SIZE, BECAUSE THE GUEST ACTS ON THEM. ────────────────────
          A Win16 application puts the caret where it belongs by handling

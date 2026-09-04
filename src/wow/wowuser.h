@@ -436,6 +436,110 @@ static const char *wowuser_sysres_name(WORD h)
 #define GCR_ARG_RECT     0
 #define GCR_ARG_HWND     4
 
+/* ── ★ SOLITAIRE AND MINESWEEPER -- ENUMERATED, NOT DISCOVERED. ──────────────
+     Every id below came out of `tools/ne/neneeds.py --todo` run on the two
+     binaries, so each is a call one of them really makes, and the argument-BYTE
+     count the tool prints is what pins each offset table. The rule, and it is
+     the one that has been got wrong most often here:
+
+       THE ARGUMENT BLOCK IS REVERSED. Win16 is FAR PASCAL, so arguments are
+       pushed LEFT TO RIGHT and the block's base is the LAST push -- offset 0 is
+       the RIGHTMOST parameter. A far pointer is 4 bytes, an int/HWND/HDC is 2.
+
+     Each table below is annotated with the prototype it was derived from and
+     adds up to the byte count neneeds reported; if a call misbehaves, check the
+     sum first -- an offset table that does not total the reported width is
+     wrong by construction. */
+
+/* UINT SetTimer(HWND, UINT nIDEvent, UINT wElapse, FARPROC lpTimerFunc) = 10 */
+#define WOWUSER_SETTIMER         0x000a
+#define ST_ARG_PROC      0               /* far */
+#define ST_ARG_ELAPSE    4
+#define ST_ARG_ID        6
+#define ST_ARG_HWND      8
+
+/* BOOL KillTimer(HWND, UINT nIDEvent) = 4
+ ⚠ NOT in either program's TO-DO list -- KillTimer resolves to 16-bit code in
+   USER, which then calls DOWN to this id. neneeds cannot see that call (it is
+   not an import), which is exactly the `native16 does not mean free` trap in its
+   own header. Arming a timer with no way to disarm it is a leak per game, so it
+   is implemented alongside SetTimer rather than waiting for a run to show it. */
+#define WOWUSER_KILLTIMER        0x000b
+#define KT_ARG_ID        0
+#define KT_ARG_HWND      2
+
+/* DWORD GetCurrentTime(void) = 0 */
+#define WOWUSER_GETCURRENTTIME   0x000f
+
+/* HWND FindWindow(LPCSTR lpClassName, LPCSTR lpWindowName) = 8 */
+#define WOWUSER_FINDWINDOW       0x0032
+#define FW_ARG_NAME      0               /* far */
+#define FW_ARG_CLASS     4               /* far */
+
+/* int FrameRect(HDC, LPRECT, HBRUSH) = 8 */
+#define WOWUSER_FRAMERECT        0x0053
+#define FR_ARG_BRUSH     0
+#define FR_ARG_RECT      2               /* far */
+#define FR_ARG_HDC       6
+
+/* int DrawText(HDC, LPCSTR, int nCount, LPRECT, UINT uFormat) = 14 */
+#define WOWUSER_DRAWTEXT         0x0055
+#define DT_ARG_FORMAT    0
+#define DT_ARG_RECT      2               /* far */
+#define DT_ARG_COUNT     6
+#define DT_ARG_STR       8               /* far */
+#define DT_ARG_HDC      12
+
+/* void SetDlgItemText(HWND hDlg, int nIDDlgItem, LPCSTR) = 8 */
+#define WOWUSER_SETDLGITEMTEXT   0x005c
+#define SDIT_ARG_TEXT    0               /* far */
+#define SDIT_ARG_ID      4
+#define SDIT_ARG_HDLG    6
+
+/* UINT GetDlgItemInt(HWND, int nIDDlgItem, BOOL FAR *lpTranslated, BOOL) = 10 */
+#define WOWUSER_GETDLGITEMINT    0x005f
+#define GDII_ARG_SIGNED  0
+#define GDII_ARG_XLATED  2               /* far */
+#define GDII_ARG_ID      6
+#define GDII_ARG_HDLG    8
+
+/* void CheckRadioButton(HWND, int nIDFirst, int nIDLast, int nIDCheck) = 8 */
+#define WOWUSER_CHECKRADIOBUTTON 0x0060
+#define CRB_ARG_CHECK    0
+#define CRB_ARG_LAST     2
+#define CRB_ARG_FIRST    4
+#define CRB_ARG_HDLG     6
+
+/* void CheckDlgButton(HWND, int nIDButton, UINT uCheck) = 6 */
+#define WOWUSER_CHECKDLGBUTTON   0x0061
+#define CDB_ARG_CHECK    0
+#define CDB_ARG_ID       2
+#define CDB_ARG_HDLG     4
+
+/* UINT IsDlgButtonChecked(HWND, int nIDButton) = 4 */
+#define WOWUSER_ISDLGBUTTONCHECKED 0x0062
+#define IDBC_ARG_ID      0
+#define IDBC_ARG_HDLG    2
+
+/* void AdjustWindowRect(LPRECT, DWORD dwStyle, BOOL bMenu) = 10 */
+#define WOWUSER_ADJUSTWINDOWRECT 0x0066
+#define AWR_ARG_MENU     0
+#define AWR_ARG_STYLE    2               /* DWORD */
+#define AWR_ARG_RECT     6               /* far */
+
+/* BOOL SetMenu(HWND, HMENU) = 4
+ ⚠ NOT `SM_ARG_*`: SendMessage already owns that prefix further down this file
+   and redefines it to 8. The LAST definition before the use wins, so a SetMenu
+   written with `SM_ARG_HWND` silently reads SendMessage's offset and the
+   compiler says only "redefined". Prefixes here are a namespace, not a habit. */
+#define WOWUSER_SETMENU          0x009e
+#define SETMENU_ARG_MENU 0
+#define SETMENU_ARG_HWND 2
+
+/* HWND GetLastActivePopup(HWND hwndOwner) = 2 */
+#define WOWUSER_GETLASTACTIVEPOPUP 0x011f
+#define GLAP_ARG_HWND    0
+
 /* ── ★★★★★ 0x2f IsWindow / 0x31 IsWindowVisible -- WHY THE TOOLBOX NEVER MOVED.
      Two of the smallest calls in USER, and between them they were the whole of
      the second half of "the way it paints is completely wrong".
@@ -585,9 +689,21 @@ static const char *wowuser_sysres_name(WORD h)
 #define STC_ARG_POINT    0
 #define STC_ARG_HWND     4
 
+/* ⚠⚠ `INVR_`, NOT `IR_` -- AND THAT RENAME IS A BUG FIX, NOT TIDYING.
+     InvalidateRect above already owns `IR_ARG_RECT` and sets it to **2**. This
+     block used to redefine it to **0**, and because the preprocessor takes the
+     last definition before the use, BOTH handlers read offset 0 -- so every
+     InvalidateRect in this host has been fetching its `lpRect` out of `bErase`,
+     getting a junk far pointer, and falling into the NULL path that invalidates
+     THE WHOLE CLIENT AREA. It never looked broken because over-invalidating
+     still repaints correctly; it just repaints everything, every time.
+   ★ The only evidence was a `warning: 'IR_ARG_RECT' redefined` that had been in
+     the build output all along. A prefix here is a namespace, and a collision in
+     it is a silent wrong answer -- exactly the class this project treats as most
+     expensive. (found while adding SetMenu, which collided the same way) */
 #define WOWUSER_INVERTRECT       0x0052  /* 6 args (hDC, lpRect) */
-#define IR_ARG_RECT      0
-#define IR_ARG_HDC       4
+#define INVR_ARG_RECT    0
+#define INVR_ARG_HDC     4
 
 #define WOWUSER_GLOBALADDATOM    0x010c  /* 4 args, far LPCSTR */
 #define WOWUSER_GLOBALDELATOM    0x010d  /* 2 args             */
@@ -1457,6 +1573,66 @@ static wowuser_class_t *wowuser_find_atom(WORD atom)
      entry conditions. See wowcall.h for what the fields mean and for why the
      return mode is KEEP: the caller has already written the handle it made, and
      the procedure's answer only gets a veto. */
+/* ── ★★★ THE TIMER TABLE, AND WHY A TIMERPROC IS NOT A NESTED CALL. ──────────
+     Solitaire's first run named this: it arms `SetTimer(hWnd, 0x029a, 250ms,
+     lpTimerFunc)` with a REAL procedure at 0x0b9f:0x00ba, and a host that
+     refuses the call gets **"Out of memory"** -- Win16 timers were a scarce
+     system-wide resource, so failing to get one is genuinely how a program of
+     this era reports it.
+   ★ THE TRAP TO AVOID: calling that procedure from inside a Win32 timer
+     callback, which would mean re-entering the guest from a place the host is
+     not running it -- the nested run this project has not built. It is not
+     needed, because WIN16 DOES NOT CALL A TIMERPROC FROM THE TIMER EITHER. It
+     posts WM_TIMER with the procedure in lParam, and **DispatchMessage** calls
+     it instead of the window procedure. DispatchMessage is already a place this
+     host calls 16-bit code from, on the guest's own thread, with its own stack.
+     So the faithful implementation and the safe one are the same implementation.
+   ⇒ This table exists only so the WM_TIMER relay in wowwin.h can put the right
+     procedure in lParam; the OS keeps the actual timing. */
+#define WOWUSER_MAXTIMER 32
+typedef struct { WORD hwnd; WORD id; DWORD proc; int used; } wowuser_timer_t;
+static wowuser_timer_t g_wu_timer[WOWUSER_MAXTIMER];
+
+static void wowuser_timer_set(WORD hwnd, WORD id, DWORD proc)
+{
+    int i, free = -1;
+    for (i = 0; i < WOWUSER_MAXTIMER; ++i) {
+        if (g_wu_timer[i].used && g_wu_timer[i].hwnd == hwnd
+                               && g_wu_timer[i].id == id) {
+            g_wu_timer[i].proc = proc;      /* re-arming replaces the proc */
+            return;
+        }
+        if (!g_wu_timer[i].used && free < 0) free = i;
+    }
+    if (free < 0) return;                   /* full: the timer still runs, but
+                                               with no proc -- WM_TIMER reaches
+                                               the window procedure instead */
+    g_wu_timer[free].hwnd = hwnd;
+    g_wu_timer[free].id   = id;
+    g_wu_timer[free].proc = proc;
+    g_wu_timer[free].used = 1;
+}
+
+static void wowuser_timer_clear(WORD hwnd, WORD id)
+{
+    int i;
+    for (i = 0; i < WOWUSER_MAXTIMER; ++i)
+        if (g_wu_timer[i].used && g_wu_timer[i].hwnd == hwnd
+                               && g_wu_timer[i].id == id)
+            { g_wu_timer[i].used = 0; g_wu_timer[i].proc = 0; return; }
+}
+
+/* Declared in wowwin.h, which is included first and relays WM_TIMER. */
+static DWORD wowuser_timer_proc(WORD hwnd, WORD id)
+{
+    int i;
+    for (i = 0; i < WOWUSER_MAXTIMER; ++i)
+        if (g_wu_timer[i].used && g_wu_timer[i].hwnd == hwnd
+                               && g_wu_timer[i].id == id)
+            return g_wu_timer[i].proc;
+    return 0;
+}
+
 /* Fill in a window-procedure call: five words, in DECLARED order. */
 static void wowuser_want_msg(wow32_frame_t *f, const wowuser_win_t *w, WORD ds,
                              WORD msg, WORD wparam, DWORD lparam, int retmode)
@@ -2628,6 +2804,31 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
             wow32_setret(f, 0);
             return 1;
         }
+        /* ── ★★★ A WM_TIMER CARRYING A TIMERPROC GOES TO THE PROC, NOT THE
+             WINDOW. That is Win16's rule (and Win32 kept it), and it is the
+             ONLY place a TIMERPROC is ever called from -- see the timer table
+             above. The signature is the same five words as a window procedure,
+             `(hwnd, WM_TIMER, idTimer, dwTime)`, so the same call shape carries
+             it; only the target address differs.
+           ⚠ dwTime IS THE SYSTEM TIME THE MESSAGE WAS POSTED, not now: it is
+             carried in the queued message, and a timer proc that measures
+             elapsed time with it would drift if this substituted the current
+             tick at dispatch. */
+        if (m.msg == WM_TIMER16 && m.lparam) {
+            if (!f->cbok) {
+                wu_puts(note, notecap, &k, " -- a TIMERPROC, but callbacks are"
+                                           " not armed");
+                wow32_setret(f, 0);
+                return 1;
+            }
+            wu_puts(note, notecap, &k, " -> its TIMERPROC 0x");
+            wu_puthex(note, notecap, &k, m.lparam, 8);
+            wow32_setret(f, 0);
+            wowuser_want_msg(f, w, w->hinst ? w->hinst : g_wu_class[w->cls].hinst,
+                             m.msg, m.wparam, m.time, WOWCALL_RET_RESULT);
+            f->cbproc = m.lparam;             /* ...but to the PROC, not w->wndproc */
+            return 1;
+        }
         if (w->wndproc) {
             if (!f->cbok) {
                 wu_puts(note, notecap, &k, " -- its own window procedure, but"
@@ -2813,8 +3014,8 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
         DWORD size = wow32_argd(f, LBM_ARG_SIZE);
         volatile BYTE *p = wow32_argptr(f, LBM_ARG_BITS);
         char name[64];
-        DWORD bisize, pal, off, i;
-        int   bits, k = 0;
+        DWORD bisize, pal, off, i, wid = 0, hgt = 0;
+        int   bits, k = 0, core = 0;
         HDC   dc;
         HBITMAP bm;
         WORD  tok;
@@ -2825,37 +3026,66 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
         wu_puts(note, notecap, &k, " size=0x");
         wu_puthex(note, notecap, &k, size, 4);
 
-        if (!p || size < 40 || size > 0x10000) {
+        if (!p || size < 12 || size > 0x10000) {
             wu_puts(note, notecap, &k, " -- ★ NO BYTES, or a length that cannot be"
                                        " a packed DIB; answered 0");
             wow32_setret(f, 0);
             return 1;
         }
         bisize = (DWORD)wow32_peekw(p) | ((DWORD)wow32_peekw(p + 2) << 16);
-        if (bisize != 40) {
+
+        /* ── ★★★ TWO DIB HEADERS EXIST, AND WINDOWS 3.x RESOURCES USE THE OLD
+             ONE. This used to accept only `biSize == 40` (BITMAPINFOHEADER) and
+             refuse everything else -- deliberately, because guessing at a format
+             is worse than declining it. Solitaire named the missing one on its
+             first run: every card face in SOL.EXE is a **BITMAPCOREHEADER**
+             DIB, `biSize == 12`, the Windows 3.0 / OS-2 form. It got 0 back for
+             all of them and put up **"Out of memory"**.
+           ★ THE TWO DIFFER IN MORE THAN LENGTH, which is why this converts
+             rather than casts:
+               core: bcWidth/bcHeight are **unsigned 16-bit**, and the colour
+                     table is **RGBTRIPLE** -- 3 bytes per entry.
+               info: biWidth/biHeight are 32-bit, table is RGBQUAD -- 4 bytes.
+             A cast would read the width as a 32-bit value spanning bcWidth and
+             bcHeight, and walk the palette at the wrong stride. So the core form
+             is unpacked field by field into a real BITMAPINFOHEADER below, and
+             the palette is widened a triple at a time.
+           ⚠ There is no `biClrUsed` in the core header: the table is always the
+             full 2^bcBitCount entries for <= 8bpp, and absent above it. */
+        if (bisize == 40) {
+            bits = (int)wow32_peekw(p + 14);                 /* biBitCount     */
+            pal  = (DWORD)wow32_peekw(p + 32)                /* biClrUsed      */
+                 | ((DWORD)wow32_peekw(p + 34) << 16);
+            if (!pal && bits <= 8) pal = 1ul << bits;
+            wid = (DWORD)wow32_peekw(p + 4);
+            hgt = (DWORD)wow32_peekw(p + 8);
+            off = 40 + pal * 4;
+        } else if (bisize == 12) {
+            core = 1;
+            wid  = (DWORD)wow32_peekw(p + 4);                /* bcWidth        */
+            hgt  = (DWORD)wow32_peekw(p + 6);                /* bcHeight       */
+            bits = (int)wow32_peekw(p + 10);                 /* bcBitCount     */
+            pal  = (bits <= 8) ? (1ul << bits) : 0;
+            off  = 12 + pal * 3;
+        } else {
             wu_puts(note, notecap, &k, " -- ★ biSize IS 0x");
             wu_puthex(note, notecap, &k, bisize, 4);
-            wu_puts(note, notecap, &k, ", NOT 40. Only the BITMAPINFOHEADER form"
-                                       " has been measured; the 12-byte core"
-                                       " header is refused rather than guessed"
-                                       " at; answered 0");
+            wu_puts(note, notecap, &k, ", neither 40 (BITMAPINFOHEADER) nor 12"
+                                       " (BITMAPCOREHEADER). Refused rather than"
+                                       " guessed at; answered 0");
             wow32_setret(f, 0);
             return 1;
         }
-        bits = (int)wow32_peekw(p + 14);                     /* biBitCount     */
-        pal  = (DWORD)wow32_peekw(p + 32)                    /* biClrUsed      */
-             | ((DWORD)wow32_peekw(p + 34) << 16);
-        if (!pal && bits <= 8) pal = 1ul << bits;
-        wu_puts(note, notecap, &k, " ");
-        wu_puthex(note, notecap, &k, (DWORD)wow32_peekw(p + 4), 4);
+
+        wu_puts(note, notecap, &k, core ? " CORE " : " ");
+        wu_puthex(note, notecap, &k, wid, 4);
         wu_puts(note, notecap, &k, "x");
-        wu_puthex(note, notecap, &k, (DWORD)wow32_peekw(p + 8), 4);
+        wu_puthex(note, notecap, &k, hgt, 4);
         wu_puts(note, notecap, &k, " ");
         wu_puthex(note, notecap, &k, (DWORD)bits, 2);
         wu_puts(note, notecap, &k, "bpp pal=0x");
         wu_puthex(note, notecap, &k, pal, 4);
 
-        off = 40 + pal * 4;                        /* where the pixels start   */
         if (pal > 256 || off >= size) {
             wu_puts(note, notecap, &k, " -- ★ THE HEADER DOES NOT ADD UP (pixels"
                                        " would start at 0x");
@@ -2866,8 +3096,28 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
             wow32_setret(f, 0);
             return 1;
         }
-        for (i = 0; i < off; ++i) hdr[i] = p[i];
-        hdr[20] = hdr[21] = hdr[22] = hdr[23] = 0;           /* biSizeImage    */
+
+        if (!core) {
+            for (i = 0; i < off; ++i) hdr[i] = p[i];
+            hdr[20] = hdr[21] = hdr[22] = hdr[23] = 0;       /* biSizeImage    */
+        } else {
+            /* Build the 40-byte header the modern API wants, then widen the
+               colour table RGBTRIPLE -> RGBQUAD. Both are B,G,R order, so only
+               the fourth (reserved) byte is new. */
+            for (i = 0; i < 40; ++i) hdr[i] = 0;
+            hdr[0] = 40;                                     /* biSize         */
+            hdr[4] = (BYTE)(wid & 0xff);  hdr[5] = (BYTE)((wid >> 8) & 0xff);
+            hdr[8] = (BYTE)(hgt & 0xff);  hdr[9] = (BYTE)((hgt >> 8) & 0xff);
+            hdr[12] = 1;                                     /* biPlanes       */
+            hdr[14] = (BYTE)(bits & 0xff);
+            hdr[15] = (BYTE)((bits >> 8) & 0xff);            /* biBitCount     */
+            for (i = 0; i < pal; ++i) {
+                hdr[40 + i * 4 + 0] = p[12 + i * 3 + 0];     /* blue           */
+                hdr[40 + i * 4 + 1] = p[12 + i * 3 + 1];     /* green          */
+                hdr[40 + i * 4 + 2] = p[12 + i * 3 + 2];     /* red            */
+                hdr[40 + i * 4 + 3] = 0;                     /* reserved       */
+            }
+        }
 
         /* ⚠ A SCREEN DC, TAKEN AND GIVEN BACK HERE. CreateDIBitmap needs a DC to
              be compatible with, and this one is the host's own business -- it is
@@ -4494,8 +4744,8 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
 
     /* ── ★ 0x52 InvertRect -- USER's call, GDI's DC. ─────────────────────────*/
     case WOWUSER_INVERTRECT: {
-        WORD hdc = wow32_argw(f, IR_ARG_HDC);
-        volatile BYTE *p = wow32_argptr(f, IR_ARG_RECT);
+        WORD hdc = wow32_argw(f, INVR_ARG_HDC);
+        volatile BYTE *p = wow32_argptr(f, INVR_ARG_RECT);
         int  dk = -1;
         HGDIOBJ d = wowgdi_h32(hdc, &dk);
         RECT r;
@@ -4892,6 +5142,421 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
             return 1;
         }
         wow32_setret(f, (DWORD)(WORD)(short)GetScrollPos(h, (int)(short)bar));
+        return 1;
+    }
+
+    /* ══ THE THIRD AND FOURTH GUESTS: SOLITAIRE AND MINESWEEPER ═══════════════
+       Enumerated from the two binaries with `tools/ne/neneeds.py --todo`, not
+       found one-per-run by watching where they stop. Every one below is a call
+       one of them really makes.
+     ⚠ THE DIALOG CALLS ARE PASS-THROUGHS ON PURPOSE. `DialogBox` is 16-bit code
+       inside USER (neneeds classifies it native16 and it is right), so by the
+       time any of these runs, USER's own code has already been round this host's
+       `CreateWindow` for the dialog and for each of its controls -- which means
+       the controls ARE real Win32 windows under real ids, and the OS's own
+       CheckDlgButton/GetDlgItemInt do exactly the right thing. There is nothing
+       here for this host to reimplement, only handles to translate. */
+
+    /* ── ★★ SetTimer -- THE OS KEEPS TIME, DispatchMessage CALLS THE PROC. ───
+         The engine is the OS's own timer on the real HWND (see wowwin.h's
+         WM_TIMER relay); this only records the 16-bit TIMERPROC, if there is
+         one, so the relay can put it in the message's lParam where Win16 puts
+         it. Nothing here calls into the guest -- see the timer table above for
+         why that is faithful rather than a shortcut. */
+    case WOWUSER_SETTIMER: {
+        WORD  hwnd  = wow32_argw(f, ST_ARG_HWND);
+        WORD  id    = wow32_argw(f, ST_ARG_ID);
+        WORD  ms    = wow32_argw(f, ST_ARG_ELAPSE);
+        DWORD proc  = wow32_argd(f, ST_ARG_PROC);
+        HWND  h     = wowuser_hwnd32(hwnd);
+        int   k = 0;
+        UINT_PTR r;
+        wu_puts(note, notecap, &k, "SetTimer(0x");
+        wu_puthex(note, notecap, &k, hwnd, 4);
+        wu_puts(note, notecap, &k, ", id ");
+        wu_puthex(note, notecap, &k, id, 4);
+        wu_puts(note, notecap, &k, ", ");
+        wu_puthex(note, notecap, &k, ms, 4);
+        wu_puts(note, notecap, &k, "ms");
+        if (proc) {
+            wu_puts(note, notecap, &k, ", proc 0x");
+            wu_puthex(note, notecap, &k, proc, 8);
+        }
+        wu_puts(note, notecap, &k, ")");
+        if (!hwnd || !h) {
+            /* ⚠ A NULL hWnd TIMER HAS NOWHERE TO BE DELIVERED HERE. Win16 sends
+                 those to the task's queue, which only a TIMERPROC or a message
+                 loop that tolerates hwnd 0 can collect; ours keys on a window. */
+            wu_puts(note, notecap, &k, " -- ★ REFUSED: no window to deliver"
+                                       " WM_TIMER to; answered 0");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        r = SetTimer(h, (UINT_PTR)id, (UINT)ms, NULL);
+        if (r) wowuser_timer_set(hwnd, id, proc);
+        wu_puts(note, notecap, &k, r ? (proc ? " -> armed, proc via DispatchMessage"
+                                             : " -> armed")
+                                     : " -> ★ OS REFUSED");
+        /* Win16 returns the id it armed, 0 on failure. */
+        wow32_setret(f, r ? (DWORD)id : 0);
+        return 1;
+    }
+
+    case WOWUSER_KILLTIMER: {
+        WORD hwnd = wow32_argw(f, KT_ARG_HWND);
+        WORD id   = wow32_argw(f, KT_ARG_ID);
+        HWND h    = wowuser_hwnd32(hwnd);
+        int  k = 0, r;
+        wu_puts(note, notecap, &k, "KillTimer(0x");
+        wu_puthex(note, notecap, &k, hwnd, 4);
+        wu_puts(note, notecap, &k, ", id ");
+        wu_puthex(note, notecap, &k, id, 4);
+        wu_puts(note, notecap, &k, ")");
+        if (!h) { wu_puts(note, notecap, &k, " -- ★ NOT ONE OF OUR WINDOWS;"
+                                             " answered 0");
+                  wow32_setret(f, 0); return 1; }
+        r = KillTimer(h, (UINT_PTR)id) ? 1 : 0;
+        wowuser_timer_clear(hwnd, id);
+        wu_puts(note, notecap, &k, r ? " -> killed" : " -> not armed");
+        wow32_setret(f, (DWORD)r);
+        return 1;
+    }
+
+    /* GetCurrentTime is Win16's name for GetTickCount -- same milliseconds since
+       boot, same DWORD. Minesweeper times its game with it. */
+    case WOWUSER_GETCURRENTTIME: {
+        DWORD t = GetTickCount();
+        int   k = 0;
+        wu_puts(note, notecap, &k, "GetCurrentTime -> 0x");
+        wu_puthex(note, notecap, &k, t, 8);
+        wow32_setret(f, t);
+        return 1;
+    }
+
+    /* ── AdjustWindowRect: pure arithmetic on a rectangle, no handles at all.
+         ⚠ A Win16 RECT IS FOUR `int`s = 8 BYTES against Win32's four LONGs = 16,
+           so it is unpacked and repacked rather than cast. Solitaire sizes its
+           card table with this: it computes the client area it wants and asks
+           what frame that needs. Getting it wrong gives a window whose felt is
+           the wrong size by exactly the border. */
+    case WOWUSER_ADJUSTWINDOWRECT: {
+        volatile BYTE *rp = wow32_argptr(f, AWR_ARG_RECT);
+        DWORD style = wow32_argd(f, AWR_ARG_STYLE);
+        WORD  menu  = wow32_argw(f, AWR_ARG_MENU);
+        RECT  r;
+        int   k = 0;
+        wu_puts(note, notecap, &k, "AdjustWindowRect(style 0x");
+        wu_puthex(note, notecap, &k, style, 8);
+        wu_puts(note, notecap, &k, menu ? ", with menu)" : ", no menu)");
+        if (!rp) {
+            wu_puts(note, notecap, &k, " -- ★ NULL lpRect; nothing written");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        r.left   = (short)wow32_peekw(rp + 0);
+        r.top    = (short)wow32_peekw(rp + 2);
+        r.right  = (short)wow32_peekw(rp + 4);
+        r.bottom = (short)wow32_peekw(rp + 6);
+        AdjustWindowRect(&r, style, menu ? TRUE : FALSE);
+        wow32_pokew(rp + 0, (WORD)(short)r.left);
+        wow32_pokew(rp + 2, (WORD)(short)r.top);
+        wow32_pokew(rp + 4, (WORD)(short)r.right);
+        wow32_pokew(rp + 6, (WORD)(short)r.bottom);
+        wu_puts(note, notecap, &k, " -> ");
+        wu_puthex(note, notecap, &k, (DWORD)(r.right - r.left), 4);
+        wu_puts(note, notecap, &k, "x");
+        wu_puthex(note, notecap, &k, (DWORD)(r.bottom - r.top), 4);
+        wow32_setret(f, 0);
+        return 1;
+    }
+
+    case WOWUSER_GETLASTACTIVEPOPUP: {
+        WORD hwnd = wow32_argw(f, GLAP_ARG_HWND);
+        HWND h    = wowuser_hwnd32(hwnd);
+        int  k = 0;
+        WORD out;
+        wu_puts(note, notecap, &k, "GetLastActivePopup(0x");
+        wu_puthex(note, notecap, &k, hwnd, 4);
+        wu_puts(note, notecap, &k, ")");
+        if (!h) {
+            /* ⚠ ANSWER THE OWNER, NOT 0. The documented return for a window with
+                 no popup is the window ITSELF, and every caller uses the result
+                 as a window to activate -- so 0 here is the sentinel-means-yes
+                 shape that has cost this project four sessions. */
+            wu_puts(note, notecap, &k, " -- not one of ours; echoed the owner back");
+            wow32_setret(f, (DWORD)hwnd);
+            return 1;
+        }
+        out = wowwin_hwnd16(GetLastActivePopup(h));
+        if (!out) out = hwnd;
+        wu_puts(note, notecap, &k, " -> 0x");
+        wu_puthex(note, notecap, &k, out, 4);
+        wow32_setret(f, (DWORD)out);
+        return 1;
+    }
+
+    case WOWUSER_FINDWINDOW: {
+        char cls[128], nam[128];
+        DWORD fcls = wow32_argd(f, FW_ARG_CLASS);
+        DWORD fnam = wow32_argd(f, FW_ARG_NAME);
+        int   hascls = fcls && wowuser_farstr(f, fcls, cls, sizeof cls);
+        int   hasnam = fnam && wowuser_farstr(f, fnam, nam, sizeof nam);
+        HWND  h;
+        WORD  out;
+        int   k = 0;
+        wu_puts(note, notecap, &k, "FindWindow(");
+        wu_puts(note, notecap, &k, hascls ? cls : "(null)");
+        wu_puts(note, notecap, &k, ", ");
+        wu_puts(note, notecap, &k, hasnam ? nam : "(null)");
+        wu_puts(note, notecap, &k, ")");
+        /* ★ SEARCHED OVER THE WHOLE DESKTOP, WHICH IS THE HONEST ANSWER HERE:
+             our guest windows ARE real top-level windows on it, so the OS's own
+             search sees exactly what a Win16 FindWindow would have seen, plus
+             the host's other windows. Minesweeper uses this to find a previous
+             instance of itself; a stale 32-bit window of ours cannot match its
+             class name, so the extra scope costs nothing measurable. */
+        h = FindWindowA(hascls ? cls : NULL, hasnam ? nam : NULL);
+        out = h ? wowwin_hwnd16(h) : 0;
+        if (h && !out) {
+            /* Found something that is not a guest window: the guest cannot be
+               handed a handle it has no token for, and saying so beats inventing
+               one. */
+            wu_puts(note, notecap, &k, " -- found a NON-GUEST window; answered 0");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        wu_puts(note, notecap, &k, out ? " -> 0x" : " -> not found");
+        if (out) wu_puthex(note, notecap, &k, out, 4);
+        wow32_setret(f, (DWORD)out);
+        return 1;
+    }
+
+    case WOWUSER_SETMENU: {
+        WORD hwnd = wow32_argw(f, SETMENU_ARG_HWND);
+        WORD hm   = wow32_argw(f, SETMENU_ARG_MENU);
+        HWND h    = wowuser_hwnd32(hwnd);
+        HMENU m   = hm ? wowuser_menu32(hm) : NULL;
+        int   k = 0, r;
+        wu_puts(note, notecap, &k, "SetMenu(0x");
+        wu_puthex(note, notecap, &k, hwnd, 4);
+        wu_puts(note, notecap, &k, ", menu 0x");
+        wu_puthex(note, notecap, &k, hm, 4);
+        wu_puts(note, notecap, &k, ")");
+        if (!h) { wu_puts(note, notecap, &k, " -- ★ NOT ONE OF OUR WINDOWS;"
+                                             " answered 0");
+                  wow32_setret(f, 0); return 1; }
+        if (hm && !m) { wu_puts(note, notecap, &k, " -- ★ NOT ONE OF OUR MENU"
+                                                   " TOKENS; answered 0");
+                        wow32_setret(f, 0); return 1; }
+        r = SetMenu(h, m) ? 1 : 0;
+        if (r) DrawMenuBar(h);        /* the bar's height changed; Win16 redraws */
+        wu_puts(note, notecap, &k, r ? " -> set" : " -> ★ OS REFUSED");
+        wow32_setret(f, (DWORD)r);
+        return 1;
+    }
+
+    case WOWUSER_SETDLGITEMTEXT: {
+        WORD  hdlg = wow32_argw(f, SDIT_ARG_HDLG);
+        WORD  id   = wow32_argw(f, SDIT_ARG_ID);
+        DWORD fp   = wow32_argd(f, SDIT_ARG_TEXT);
+        HWND  h    = wowuser_hwnd32(hdlg);
+        char  buf[256];
+        int   k = 0;
+        wu_puts(note, notecap, &k, "SetDlgItemText dlg 0x");
+        wu_puthex(note, notecap, &k, hdlg, 4);
+        wu_puts(note, notecap, &k, " id 0x");
+        wu_puthex(note, notecap, &k, id, 4);
+        if (!h) { wu_puts(note, notecap, &k, " -- no real window");
+                  wow32_setret(f, 0); return 1; }
+        if (!fp || !wowuser_farstr(f, fp, buf, sizeof buf)) buf[0] = 0;
+        wu_puts(note, notecap, &k, " = \"");
+        wu_puts(note, notecap, &k, buf);
+        wu_puts(note, notecap, &k, "\"");
+        SetDlgItemTextA(h, (int)(short)id, buf);
+        wow32_setret(f, 0);
+        return 1;
+    }
+
+    case WOWUSER_GETDLGITEMINT: {
+        WORD  hdlg = wow32_argw(f, GDII_ARG_HDLG);
+        WORD  id   = wow32_argw(f, GDII_ARG_ID);
+        WORD  sgn  = wow32_argw(f, GDII_ARG_SIGNED);
+        volatile BYTE *tp = wow32_argptr(f, GDII_ARG_XLATED);
+        HWND  h = wowuser_hwnd32(hdlg);
+        BOOL  ok = FALSE;
+        UINT  v;
+        int   k = 0;
+        wu_puts(note, notecap, &k, "GetDlgItemInt dlg 0x");
+        wu_puthex(note, notecap, &k, hdlg, 4);
+        wu_puts(note, notecap, &k, " id 0x");
+        wu_puthex(note, notecap, &k, id, 4);
+        if (!h) {
+            /* ⚠ lpTranslated MUST BE WRITTEN FALSE, not left alone. It is the
+                 caller's only way to tell "the box said 0" from "the box was not
+                 a number", and leaving it as stack litter makes a failure read
+                 as a valid 0. */
+            if (tp) wow32_pokew(tp, 0);
+            wu_puts(note, notecap, &k, " -- no real window; 0, not translated");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        v = GetDlgItemInt(h, (int)(short)id, &ok, sgn ? TRUE : FALSE);
+        if (tp) wow32_pokew(tp, (WORD)(ok ? 1 : 0));
+        wu_puts(note, notecap, &k, ok ? " -> 0x" : " -> NOT A NUMBER, 0x");
+        wu_puthex(note, notecap, &k, (DWORD)v, 4);
+        wow32_setret(f, (DWORD)(WORD)v);
+        return 1;
+    }
+
+    case WOWUSER_CHECKDLGBUTTON: {
+        WORD hdlg = wow32_argw(f, CDB_ARG_HDLG);
+        WORD id   = wow32_argw(f, CDB_ARG_ID);
+        WORD chk  = wow32_argw(f, CDB_ARG_CHECK);
+        HWND h    = wowuser_hwnd32(hdlg);
+        int  k = 0;
+        wu_puts(note, notecap, &k, "CheckDlgButton dlg 0x");
+        wu_puthex(note, notecap, &k, hdlg, 4);
+        wu_puts(note, notecap, &k, " id 0x");
+        wu_puthex(note, notecap, &k, id, 4);
+        wu_puts(note, notecap, &k, chk ? " = CHECKED" : " = clear");
+        if (!h) { wu_puts(note, notecap, &k, " -- no real window");
+                  wow32_setret(f, 0); return 1; }
+        CheckDlgButton(h, (int)(short)id, (UINT)chk);
+        wow32_setret(f, 0);
+        return 1;
+    }
+
+    case WOWUSER_CHECKRADIOBUTTON: {
+        WORD hdlg  = wow32_argw(f, CRB_ARG_HDLG);
+        WORD first = wow32_argw(f, CRB_ARG_FIRST);
+        WORD last  = wow32_argw(f, CRB_ARG_LAST);
+        WORD chk   = wow32_argw(f, CRB_ARG_CHECK);
+        HWND h     = wowuser_hwnd32(hdlg);
+        int  k = 0;
+        wu_puts(note, notecap, &k, "CheckRadioButton dlg 0x");
+        wu_puthex(note, notecap, &k, hdlg, 4);
+        wu_puts(note, notecap, &k, " ids ");
+        wu_puthex(note, notecap, &k, first, 4);
+        wu_puts(note, notecap, &k, "..");
+        wu_puthex(note, notecap, &k, last, 4);
+        wu_puts(note, notecap, &k, " check ");
+        wu_puthex(note, notecap, &k, chk, 4);
+        if (!h) { wu_puts(note, notecap, &k, " -- no real window");
+                  wow32_setret(f, 0); return 1; }
+        CheckRadioButton(h, (int)(short)first, (int)(short)last,
+                         (int)(short)chk);
+        wow32_setret(f, 0);
+        return 1;
+    }
+
+    case WOWUSER_ISDLGBUTTONCHECKED: {
+        WORD hdlg = wow32_argw(f, IDBC_ARG_HDLG);
+        WORD id   = wow32_argw(f, IDBC_ARG_ID);
+        HWND h    = wowuser_hwnd32(hdlg);
+        int  k = 0;
+        UINT r;
+        wu_puts(note, notecap, &k, "IsDlgButtonChecked dlg 0x");
+        wu_puthex(note, notecap, &k, hdlg, 4);
+        wu_puts(note, notecap, &k, " id 0x");
+        wu_puthex(note, notecap, &k, id, 4);
+        if (!h) { wu_puts(note, notecap, &k, " -- no real window; answered 0");
+                  wow32_setret(f, 0); return 1; }
+        r = IsDlgButtonChecked(h, (int)(short)id);
+        wu_puts(note, notecap, &k, r ? " -> CHECKED" : " -> clear");
+        wow32_setret(f, (DWORD)(WORD)r);
+        return 1;
+    }
+
+    /* ── DrawText and FrameRect: USER calls that take a GDI DC. ───────────────
+         ⚠ THE DC TOKEN IS GDI'S ID SPACE, NOT USER'S, and this is the seam where
+           that matters: the handle arrives in a USER call and only wowgdi_h32
+           can resolve it. Solitaire draws its status line with DrawText and its
+           drag outline with FrameRect. */
+    case WOWUSER_DRAWTEXT: {
+        WORD  hdc   = wow32_argw(f, DT_ARG_HDC);
+        DWORD fp    = wow32_argd(f, DT_ARG_STR);
+        WORD  cnt   = wow32_argw(f, DT_ARG_COUNT);
+        volatile BYTE *rp = wow32_argptr(f, DT_ARG_RECT);
+        WORD  fmt   = wow32_argw(f, DT_ARG_FORMAT);
+        int   kind = -1;
+        HGDIOBJ o = wowgdi_h32(hdc, &kind);
+        char  buf[512];
+        RECT  r;
+        int   k = 0, n, res;
+        wu_puts(note, notecap, &k, "DrawText(dc 0x");
+        wu_puthex(note, notecap, &k, hdc, 4);
+        wu_puts(note, notecap, &k, ", fmt 0x");
+        wu_puthex(note, notecap, &k, fmt, 4);
+        wu_puts(note, notecap, &k, ")");
+        if (!o || (kind != WOWGDI_KIND_DC && kind != WOWGDI_KIND_WINDC) || !rp) {
+            wu_puts(note, notecap, &k, " -- ★ NOT ONE OF OUR DC TOKENS, or no"
+                                       " lpRect; answered 0");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        if (!fp || !wowuser_farstr(f, fp, buf, sizeof buf)) buf[0] = 0;
+        /* ⚠ nCount = -1 MEANS "NUL-TERMINATED" and is the usual call. Anything
+             else is a byte count, and it is clamped to what was actually
+             copied -- handing Win32 a longer count than the buffer holds reads
+             off the end of OUR memory, not the guest's. */
+        n = (int)(short)cnt;
+        if (n >= 0) { int have = 0; while (have < (int)sizeof buf && buf[have]) ++have;
+                      if (n > have) n = have; }
+        else n = -1;
+        r.left   = (short)wow32_peekw(rp + 0);
+        r.top    = (short)wow32_peekw(rp + 2);
+        r.right  = (short)wow32_peekw(rp + 4);
+        r.bottom = (short)wow32_peekw(rp + 6);
+        res = DrawTextA((HDC)o, buf, n, &r, (UINT)fmt);
+        /* DT_CALCRECT asks for the rectangle BACK, so it is always written out:
+           for every other format the values are unchanged and writing them is a
+           no-op. */
+        wow32_pokew(rp + 0, (WORD)(short)r.left);
+        wow32_pokew(rp + 2, (WORD)(short)r.top);
+        wow32_pokew(rp + 4, (WORD)(short)r.right);
+        wow32_pokew(rp + 6, (WORD)(short)r.bottom);
+        wu_puts(note, notecap, &k, " \"");
+        wu_puts(note, notecap, &k, buf);
+        wu_puts(note, notecap, &k, "\" -> h=");
+        wu_puthex(note, notecap, &k, (DWORD)res, 4);
+        wow32_setret(f, (DWORD)(WORD)res);
+        return 1;
+    }
+
+    case WOWUSER_FRAMERECT: {
+        WORD  hdc = wow32_argw(f, FR_ARG_HDC);
+        volatile BYTE *rp = wow32_argptr(f, FR_ARG_RECT);
+        WORD  hbr = wow32_argw(f, FR_ARG_BRUSH);
+        int   dk = -1, bk = -1;
+        HGDIOBJ o = wowgdi_h32(hdc, &dk);
+        HGDIOBJ b = wowgdi_h32(hbr, &bk);
+        RECT  r;
+        int   k = 0, res;
+        wu_puts(note, notecap, &k, "FrameRect(dc 0x");
+        wu_puthex(note, notecap, &k, hdc, 4);
+        wu_puts(note, notecap, &k, ", brush 0x");
+        wu_puthex(note, notecap, &k, hbr, 4);
+        wu_puts(note, notecap, &k, ")");
+        if (!o || (dk != WOWGDI_KIND_DC && dk != WOWGDI_KIND_WINDC) || !rp) {
+            wu_puts(note, notecap, &k, " -- ★ NOT ONE OF OUR DC TOKENS, or no"
+                                       " lpRect; answered 0");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        if (!b) {
+            wu_puts(note, notecap, &k, " -- ★ NOT ONE OF OUR BRUSH TOKENS;"
+                                       " answered 0");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        r.left   = (short)wow32_peekw(rp + 0);
+        r.top    = (short)wow32_peekw(rp + 2);
+        r.right  = (short)wow32_peekw(rp + 4);
+        r.bottom = (short)wow32_peekw(rp + 6);
+        res = FrameRect((HDC)o, &r, (HBRUSH)b);
+        wu_puts(note, notecap, &k, " -> ");
+        wu_puthex(note, notecap, &k, (DWORD)res, 4);
+        wow32_setret(f, (DWORD)(WORD)res);
         return 1;
     }
 
