@@ -32,4 +32,4 @@ recorded here so the first day's delta is not lost.
 | Date | Overall | DOS | WoW16 | Product | What moved |
 |---|---|---|---|---|---|
 <!-- SCORES -->
-| 2026-09-04 | **61.7** | 63.6 | 67.7 | 26.2 | Minesweeper menu + Game>New reset. LoadMenu downcall, filtered-take deadlock, accelerators. 893 checks. |
+| 2026-09-04 | **61.7** | 63.6 | 67.7 | 26.2 | Solitaire card backs (GDI token/kind collision), Minesweeper smiley (MSG.pt was 0,0), menu + accelerators. |
