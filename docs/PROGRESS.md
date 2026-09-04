@@ -32,4 +32,4 @@ recorded here so the first day's delta is not lost.
 | Date | Overall | DOS | WoW16 | Product | What moved |
 |---|---|---|---|---|---|
 <!-- SCORES -->
-| 2026-09-04 | **61.7** | 63.6 | 67.7 | 26.2 | Solitaire card backs (GDI token/kind collision), Minesweeper smiley (MSG.pt was 0,0), menu + accelerators. |
+| 2026-09-04 | **61.7** | 63.6 | 67.7 | 26.2 | Measured the redraw: log 9%, pump 0%, repaint ~10ms. Latency hypothesis refuted. |
