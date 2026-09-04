@@ -152,9 +152,29 @@ static int wowwin_paint_take(WORD h16, RECT *out, int *erase)
     return 0;
 }
 
+/* ── ★★★★ MSG.pt IS THE CURSOR IN *SCREEN* COORDINATES, AND IT WAS ALWAYS 0,0.
+     Every wowmsg_post here passed `0, 0` for it, because nothing this host had
+     watched read the field -- wowmsg.h says exactly that, and says it was filled
+     with the cursor position, which it was not.
+   ★ MINESWEEPER'S SMILEY IS THE PROGRAM THAT READS IT. Pressing the face does
+     SetCapture and then converts the button's rectangle to SCREEN coordinates
+     (two ClientToScreen calls, 0x385..0x39d = 901..925 on this display). Its
+     tracking loop then hit-tests the release against that rectangle using the
+     message's OWN `pt` -- and (0,0) is outside it, so the game concluded the
+     button was released off the face and correctly declined to start a new one.
+     The release WAS delivered and the code WAS reached; the message was just
+     carrying a position no cursor has ever been at.
+   ⚠ SCREEN, NOT CLIENT. lParam already carries the client point; `pt` is the
+     other one, and filling it from lParam would be a plausible-looking value
+     that fails the same test. */
 static LRESULT CALLBACK wowwin_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
 {
     WORD h16 = wowwin_hwnd16(h);
+    POINT wwpt;
+    WORD  ptx, pty;
+    GetCursorPos(&wwpt);
+    ptx = (WORD)(short)wwpt.x;
+    pty = (WORD)(short)wwpt.y;
     switch (msg) {
     case WM_KEYDOWN: case WM_KEYUP: case WM_CHAR:
         /* ★ RELAYED VERBATIM. Win16 and Win32 agree on the message number, on
@@ -162,7 +182,7 @@ static LRESULT CALLBACK wowwin_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
              inherited all three -- so the honest thing is to hand across exactly
              what the OS handed us rather than compose anything. */
         if (h16) {
-            wowmsg_post(h16, (WORD)msg, (WORD)wp, (DWORD)lp, GetTickCount(), 0, 0);
+            wowmsg_post(h16, (WORD)msg, (WORD)wp, (DWORD)lp, GetTickCount(), ptx, pty);
             ++g_ww_msgs;
             return 0;
         }
@@ -184,7 +204,7 @@ static LRESULT CALLBACK wowwin_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
          system key will see the OS act too. Nothing measured does. */
     case WM_SYSKEYDOWN: case WM_SYSKEYUP:
         if (h16) {
-            wowmsg_post(h16, (WORD)msg, (WORD)wp, (DWORD)lp, GetTickCount(), 0, 0);
+            wowmsg_post(h16, (WORD)msg, (WORD)wp, (DWORD)lp, GetTickCount(), ptx, pty);
             ++g_ww_msgs;
         }
         break;
@@ -217,7 +237,7 @@ static LRESULT CALLBACK wowwin_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
                 wowwin_paint_want(h16, &ps.rcPaint, ps.fErase);
                 EndPaint(h, &ps);
             }
-            wowmsg_post(h16, WM_PAINT16, 0, 0, GetTickCount(), 0, 0);
+            wowmsg_post(h16, WM_PAINT16, 0, 0, GetTickCount(), ptx, pty);
             ++g_ww_msgs;
             return 0;
         }
@@ -247,9 +267,9 @@ static LRESULT CALLBACK wowwin_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
     case WM_MOUSEMOVE:
         if (h16) {
             if (!wowmsg_post_move(h16, (WORD)msg, (WORD)wp, (DWORD)lp,
-                                  GetTickCount(), 0, 0))
+                                  GetTickCount(), ptx, pty))
                 wowmsg_post(h16, (WORD)msg, (WORD)wp, (DWORD)lp,
-                            GetTickCount(), 0, 0);
+                            GetTickCount(), ptx, pty);
             ++g_ww_msgs;
             return 0;
         }
@@ -258,13 +278,13 @@ static LRESULT CALLBACK wowwin_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
     case WM_RBUTTONDOWN: case WM_RBUTTONUP: case WM_RBUTTONDBLCLK:
     case WM_MBUTTONDOWN: case WM_MBUTTONUP: case WM_MBUTTONDBLCLK:
         if (h16) {
-            wowmsg_post(h16, (WORD)msg, (WORD)wp, (DWORD)lp, GetTickCount(), 0, 0);
+            wowmsg_post(h16, (WORD)msg, (WORD)wp, (DWORD)lp, GetTickCount(), ptx, pty);
             ++g_ww_msgs;
             return 0;
         }
         break;
     case WM_CLOSE:
-        if (h16) { wowmsg_post(h16, (WORD)msg, 0, 0, GetTickCount(), 0, 0);
+        if (h16) { wowmsg_post(h16, (WORD)msg, 0, 0, GetTickCount(), ptx, pty);
                    ++g_ww_msgs; return 0; }
         break;
     /* ── ★★ WM_TIMER. THE OS IS THE TIMER ENGINE; THIS IS THE WHOLE RELAY. ───
@@ -282,7 +302,7 @@ static LRESULT CALLBACK wowwin_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
         if (h16) {
             wowmsg_post(h16, (WORD)msg, (WORD)wp,
                         wowuser_timer_proc(h16, (WORD)wp),
-                        GetTickCount(), 0, 0);
+                        GetTickCount(), ptx, pty);
             ++g_ww_msgs;
             return 0;
         }
@@ -309,7 +329,7 @@ static LRESULT CALLBACK wowwin_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
          else. */
     case WM_SETFOCUS: case WM_KILLFOCUS: case WM_SIZE:
         if (h16) { wowmsg_post(h16, (WORD)msg, (WORD)wp, (DWORD)lp,
-                               GetTickCount(), 0, 0); ++g_ww_msgs; }
+                               GetTickCount(), ptx, pty); ++g_ww_msgs; }
         break;
     /* ── ★★★ WM_COMMAND -- THE MENU STOPS BEING DECORATION. (session 44) ──────
          The menu bar is the application's OWN resource on a real Win32 window,
@@ -364,7 +384,7 @@ static LRESULT CALLBACK wowwin_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
                         (msg == WM_INITMENUPOPUP)
                             ? ((DWORD)LOWORD(lp) | ((DWORD)HIWORD(lp) << 16))
                             : 0,
-                        GetTickCount(), 0, 0);
+                        GetTickCount(), ptx, pty);
             ++g_ww_msgs;
         }
         break;
@@ -375,7 +395,7 @@ static LRESULT CALLBACK wowwin_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
             WORD ctl16  = lp ? wowwin_hwnd16((HWND)(ULONG_PTR)lp) : 0;
             wowmsg_post(h16, (WORD)WM_COMMAND16, id,
                         (DWORD)ctl16 | ((DWORD)notify << 16),
-                        GetTickCount(), 0, 0);
+                        GetTickCount(), ptx, pty);
             ++g_ww_msgs;
         }
         break;
