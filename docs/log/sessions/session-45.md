@@ -325,25 +325,100 @@ shape as session 44's `OemToAnsi`/`AnsiToOem` move.
 
 ---
 
+## ★★★ THE SECOND HALF: THE ORACLE, AND THREE REFUTED HYPOTHESES
+
+After the user compared the screen against a real Paintbrush, the session turned
+into a measured chase. It is worth reading as a sequence, because three of the
+four leads were wrong and each was wrong in an instructive way.
+
+**The oracle** — `wowcompare.bat` + the new `rigshot tree` verb — turned "it
+paints wrong" into a table of exact child rectangles against stock ntvdm running
+the same binary. That table named `GetClientRect`, and fixing it corrected the
+canvas but not the toolbox.
+
+| # | Hypothesis | Verdict |
+|---|---|---|
+| 1 | `GetDeviceCaps(HORZSIZE/VERTSIZE)` — our 1680/640 = 2.625 matched the over-scale against stock's 2.0 *exactly* | **REFUTED.** Forcing the ratio to 2.0 changed the toolbox by nothing, `163x731` to the pixel. |
+| 2 | "the guest is never told its size" | **REFUTED.** `WM_SIZE` had been relayed since session 43; re-adding it was a duplicate case value and the compiler said so. The log shows it arriving with the correct `lParam 0x02b004e4` = 1252x688. |
+| 3 | `IsWindow` / `IsWindowVisible` answered 0 | ★ **CORRECT.** |
+| 4 | `GetDeviceCaps(NUMCOLORS)` = -1 causes the monochrome bitmaps | **REFUTED.** Substituting 256 logged `= 0x0100` and produced the same 33 1bpp bitmaps. |
+
+★★★ **The layout bug was two of the smallest calls in USER.** Paint asks
+`IsWindowVisible(pbTool)` and `IsWindowVisible(pbColor)` — Windows 3.1 Paintbrush
+can genuinely hide both — got 0 for each, concluded its own toolbox and palette
+were hidden, gave the canvas the whole client and **never resized them**. They
+kept the size they were created at, from Paint's fallback height of 974
+(`SM_CYFULLSCREEN - SM_CYMENU`, the default it passes to `GetProfileInt` because
+this rig's WIN.INI has no `[Paintbrush] height`).
+
+> **The layout was never mis-computed. It was never RE-computed.**
+
+Answering those two truthfully made every child **pixel-identical to stock**:
+`pbPaint at(128,2) 1100x604`, `pbTool at(3,2) 121x516`,
+`pbSize at(3,521) 121x164`, `pbColor at(128,608) 1099x66`.
+
+★ **And #4 refuted itself usefully**: the 1bpp bitmaps are **masks**. The Win16
+idiom for a coloured icon is a monochrome pattern plus `SetTextColor`/`SetBkColor`
+at blit time, and the run makes 34 of each. They were never evidence of a
+mis-detected display.
+
+## ★★★ THE DRAWING SET, AND THE TOOLBOX
+
+Ten more GDI calls, each confirming its own reading out of its own arguments:
+
+* `0x22 BitBlt` — rop `0x00CC0020` = SRCCOPY, both DC fields our own tokens.
+* `0x23 StretchBlt` — `(dst 0x79 x 0x204) <- (src 0x3a x 0x117)`. ★ 58x279 is
+  exactly the `pToolbox` DIB this host loads and 121x516 is exactly the toolbox
+  measured against stock — **two numbers the session already knew
+  independently, both turning up in one argument block.** This single call is
+  the tool icons.
+* `0x1b Rectangle` — `Rectangle(hdc,0,0,121,516)`, the toolbox's own border.
+* `0x04 SetROP2` (13 = R2_COPYPEN) and `0x07 SetStretchBltMode`
+  (3 = COLORONCOLOR) — both internal stubs, so only a run could name them, and
+  the two constants are what make it a reading rather than a guess at an ordinal.
+* `0x01 SetBkColor`, `0x09 SetTextColor`, `0x0b SetWindowOrg`, `0x1e SaveDC`,
+  `0x27 RestoreDC`.
+
+**GDI's id space is now answered for everything MS Paint calls.**
+
+## ⚠ TWO HARNESS TRAPS HIT AGAIN
+
+* **A stale artefact nearly produced a wrong conclusion.** `bmwow.sh` (the gate)
+  overwrites `C:\ntvdmex\ntvdmhost.log`, so a log fetched after a gate run is
+  the *baseline's*, not the guest's. It read as "GDI is fully answered, only four
+  USER ids left" — from a 3976-line log ending at the WOWEXEC `0001:229C` fault.
+  Check `grep -c pbParent` before believing a Paint log.
+* **A shell one-liner deployed a stale binary** because `cp` ran even though the
+  build had failed. Gate the deploy on `grep -q '^Built:'`.
+
+---
+
 ## ▶ RESUME HERE
 
 ### What is still wrong
 
-1. **`pbTool` / `pbSize` / `pbColor` are ~1.35× too large in both axes**, so the
-   palette and line-size box are still laid out below the bottom of the window.
-   Each tool cell is ~79×72 against stock's ~58×51. The `pToolbox` DIB is 58×279
-   = 2×10 cells of 29×28, so **stock scales them ~2× and we scale ~2.6×**.
-   ★ **2.625 is exactly `HORZRES/HORZSIZE` (1680/640)**, and Paint reads both —
-   so the leading hypothesis is that stock's WOW answers `GetDeviceCaps`
-   `HORZSIZE`/`VERTSIZE` with **Win16-compatible** values rather than the
-   display's real millimetres. ⚠ **Hypothesis, not a finding.** Ruled out
-   already: the system font (`h=16 w=7 wt=700 "System"` matches Win3.1) and the
-   frame size (identical to stock's, 1252×688).
-2. **The tool icons are not drawn** — needs `BitBlt`/`StretchBlt` (GDI
-   `0x22`/`0x23`) blitting `pToolbox` through a memory DC.
-3. **The colour palette is not painted at all.**
-4. Unanswered on the paint path: GDI `0x0b SetWindowOrg`; USER `0x10c
-   GlobalAddAtom` (25 calls), `0x13a`, `0x217`, `0x16c`.
+★ The window, the menu (which opens), the toolbox with its colour icons, the
+line-size box, the palette bar, the canvas and its scrollbars are all present and
+**geometrically pixel-identical to stock ntvdm**. Two content differences remain:
+
+1. **The palette swatches render as dithered black-and-white rather than
+   colours**, and the line-size box shows its arrow but not its bars. Paint
+   builds its canvas and its swatch cells as `planes=1 bpp=1` — the canvas is a
+   1680x974 monochrome bitmap that `PatBlt` fills white — so a solid colour brush
+   dithers into it.
+   ⚠ **`NUMCOLORS` is REFUTED as the cause** (see above), and so is the idea that
+   1bpp implies a mis-detected display: 1bpp masks + `SetTextColor`/`SetBkColor`
+   is the normal Win16 idiom and the tool icons come out correct in colour
+   through exactly that path. What is NOT yet known is what Paint branches on to
+   choose a monochrome CANVAS. It queries only `NUMCOLORS` (4x), `HORZ/VERTRES`,
+   `HORZ/VERTSIZE`, `LOGPIXELSX/Y` (both 96) and `NUMPENS` (-1, left untouched
+   deliberately — no evidence any guest reads it).
+   ▶ Next step: find the `CreateBitmap` call site properly. ⚠ Do NOT map the
+   `from=` selector to a segment by ordering — this session wasted a pass doing
+   that, and selector numbers are not segment identities.
+2. Unanswered, none of them on the drawing path: USER `0x10c GlobalAddAtom` (25
+   calls), `0x51`, `0x87 GetWindowLong`, `0x88`, and the WOW plumbing `0x13a`,
+   `0x217`, `0x16c`.
 
 ### How to drive it
 
