@@ -266,19 +266,46 @@ static int wowmsg_post_move(WORD hwnd, WORD msg, WORD wparam, DWORD lparam,
      non-matching message at the head, this answers "nothing", which is what a
      single-consumer queue with one producer can honestly say. A run that needs
      better will show a filtered call in the log, and there is not one yet. */
+/* ── ★★★★★ A FILTERED TAKE MUST SCAN THE WHOLE QUEUE, NOT JUST THE HEAD. ─────
+     This used to look at `g_wm_ring[g_wm_head]` ALONE and give up if it did not
+     match the filter -- which is not a slow PeekMessage, it is a DEADLOCK. A
+     Win16 program that captures the mouse pumps
+     `PeekMessage(hwnd, WM_MOUSEFIRST, WM_MOUSELAST)` waiting for its button-up,
+     and nothing else is draining the queue; so if the head holds anything that
+     does not match -- a WM_TIMER, a WM_PAINT, a move for another window -- the
+     head can only be removed by a matching take, and no take can ever match.
+     The loop spins forever.
+   ★ MINESWEEPER'S SMILEY IS EXACTLY THAT LOOP. It presses (SetCapture, draws the
+     pressed face, ClientToScreen twice) and then peeks for the button-up that is
+     sitting in the ring behind a message it will not accept. The game never
+     resets, which is what the user reported; the host looked idle and the log
+     said "queue empty" while `g_wm_count` was not zero.
+   ⚠ AND THAT LOG LINE WAS PART OF THE PROBLEM -- it asserted "empty" for what
+     was really "nothing matched", so the one number that would have named this
+     was never printed. It says both now.
+     Removing from the middle keeps ORDER: shift the entries ahead of the match
+     up one slot and advance the head, which is a rotate of the prefix rather
+     than a swap -- a swap would deliver messages out of order, and message order
+     is the one thing a Win16 program is entitled to assume. */
 static int wowmsg_take(WORD hwnd, WORD minf, WORD maxf, int remove, wowmsg_t *out)
 {
-    wowmsg_t *e;
+    int n, i;
     if (!g_wm_count) return 0;
-    e = &g_wm_ring[g_wm_head];
-    if (hwnd && e->hwnd != hwnd) return 0;
-    if ((minf || maxf) && (e->msg < minf || e->msg > maxf)) return 0;
-    *out = *e;
-    if (remove) {
-        g_wm_head = (g_wm_head + 1) % WOWMSG_MAX;
-        --g_wm_count; ++g_wm_taken;
+    for (n = 0; n < g_wm_count; ++n) {
+        wowmsg_t *e = &g_wm_ring[(g_wm_head + n) % WOWMSG_MAX];
+        if (hwnd && e->hwnd != hwnd) continue;
+        if ((minf || maxf) && (e->msg < minf || e->msg > maxf)) continue;
+        *out = *e;
+        if (remove) {
+            for (i = n; i > 0; --i)
+                g_wm_ring[(g_wm_head + i) % WOWMSG_MAX] =
+                    g_wm_ring[(g_wm_head + i - 1) % WOWMSG_MAX];
+            g_wm_head = (g_wm_head + 1) % WOWMSG_MAX;
+            --g_wm_count; ++g_wm_taken;
+        }
+        return 1;
     }
-    return 1;
+    return 0;
 }
 
 /* Read an 18-byte MSG back out of guest memory -- the guest owns this one; it is

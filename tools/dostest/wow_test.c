@@ -182,6 +182,10 @@ static const svc_t SVC[] = {
     { {"IDBC_ARG_ID",2}, {"IDBC_ARG_HDLG",2}, {0,0} } },
   { "USER AdjustWindowRect(lpRect, dwStyle, bMenu)", 10,
     { {"AWR_ARG_MENU",2}, {"AWR_ARG_STYLE",4}, {"AWR_ARG_RECT",4}, {0,0} } },
+  { "USER LoadMenu downcall (0x96, read off USER.EXE seg1:0x480a)", 16,
+    { {"LOADMENU_ARG_LOCAL0",2}, {"LOADMENU_ARG_LOCAL2",2},
+      {"LOADMENU_ARG_LOCAL4",2}, {"LOADMENU_ARG_RES",4},
+      {"LOADMENU_ARG_NAME",4}, {"LOADMENU_ARG_HINST",2}, {0,0} } },
   { "USER GetLastActivePopup(hwndOwner)", 2,
     { {"GLAP_ARG_HWND",2}, {0,0} } },
 

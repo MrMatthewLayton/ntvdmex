@@ -534,6 +534,39 @@ static const char *wowuser_sysres_name(WORD h)
 #define AWR_ARG_STYLE    2               /* DWORD */
 #define AWR_ARG_RECT     6               /* far */
 
+/* ── ★★★ 0x96 -- USER's OWN DOWNCALL FOR LoadMenu. 16 arg bytes. ────────────
+     NOT the exported LoadMenu, which is 16-bit code and never reaches us. This
+     is what that code calls DOWN to once it has found and locked the resource,
+     the same shape as 0xad for icons -- so it is invisible to neneeds.py, which
+     only sees a program's imports. WINMINE's USER surface reads 41/41 COMPLETE
+     and it still had no menu. **native16 does not mean free.**
+
+     Read off USER.EXE seg1:0x480a (`lcall 0x486c, 0xad2`), eight pushes:
+
+         47f2  push [bp+0x0a]   ; hInstance          -> offset 14
+         47f5  push [bp+0x08]   ; lpMenuName, high   -> offset 12
+         47f8  push [bp+0x06]   ; lpMenuName, low    -> offset 10
+         47fb  push [bp-0x0a]   ; locked resource, seg  -> offset 8
+         47fe  push [bp-0x0c]   ; locked resource, off  -> offset 6
+         4801  push [bp-0x06]                        -> offset 4
+         4804  push [bp-0x08]                        -> offset 2
+         4807  push [bp-0x10]   ; last push = base   -> offset 0
+
+     Minesweeper's live call carries hInstance 0x0b86 and lpMenuName 0x000001f4
+     -- a MAKEINTRESOURCE whose high word is 0, so an ORDINAL -- and
+     `neres.py list WINMINE.EXE` says `MENU 500`. 0x1f4 IS 500. The id was in the
+     arguments the whole time.
+   ⚠ Offsets 0/2/4 are pushed from locals this host does not need and are NOT
+     named as anything: guessing at them would put three inventions in a header
+     that is otherwise all measurement. They are covered so the block tiles. */
+#define WOWUSER_LOADMENU         0x0096
+#define LOADMENU_ARG_LOCAL0  0
+#define LOADMENU_ARG_LOCAL2  2
+#define LOADMENU_ARG_LOCAL4  4
+#define LOADMENU_ARG_RES     6            /* far -- the locked resource */
+#define LOADMENU_ARG_NAME   10            /* MAKEINTRESOURCE, or a far string */
+#define LOADMENU_ARG_HINST  14
+
 /* BOOL SetMenu(HWND, HMENU) = 4
  ⚠ NOT `SM_ARG_*`: SendMessage already owns that prefix further down this file
    and redefines it to 8. The LAST definition before the use wins, so a SetMenu
@@ -2747,8 +2780,14 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
             return 1;
         }
         if (peek) {
-            wu_puts(note, notecap, &k, "PeekMessage: queue empty -> 0 (correct:"
-                                       " peek does not block)");
+            /* ⚠ "empty" AND "nothing matched" ARE DIFFERENT FACTS, and saying
+                 the first for both is how a filtered-peek deadlock hid: the
+                 depth is the number that names it. */
+            wu_puts(note, notecap, &k, g_wm_count
+                        ? "PeekMessage: nothing matched the filter -> 0; queued 0x"
+                        : "PeekMessage: queue empty -> 0 (correct: peek does not"
+                          " block); queued 0x");
+            wu_puthex(note, notecap, &k, (DWORD)g_wm_count, 2);
             wow32_setret(f, 0);
             return 1;
         }
@@ -2929,7 +2968,65 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
             wu_puts(note, notecap, &k, " hAccel=0x");
             wu_puthex(note, notecap, &k, wow32_argw(f, TA_ARG_HACCEL), 4);
         }
-        wu_puts(note, notecap, &k, " -> 0 (no accelerator table in this host)");
+        /* ── ★★★ AND NOW THERE IS ONE. (session 51) ─────────────────────────
+             The user's report was "clicking the smiley does not reset the game";
+             the same reset is Game > New, whose accelerator is F2, and the F2
+             keystroke was reaching the guest and dying HERE -- this returned 0
+             and the message went on to the window procedure as an ordinary key,
+             which Minesweeper does not handle. WINMINE's ACCELERATOR 501 is two
+             entries: VK_F1 -> 591 and VK_F2 -> 510.
+           ⚠ MDI SYS ACCELERATORS ARE STILL 0, deliberately -- those are the
+             OS's own (Ctrl+F4 and friends) against an MDI client, and nothing
+             measured needs them. */
+        if (!mdi) {
+            static wowres_accel_t acc[WOWRES_MAX_ACCEL];
+            static int nacc = -1;            /* -1 = not looked for yet */
+            static WORD accres = 0;
+            volatile BYTE *lp = wow32_argptr(f, TA_ARG_LPMSG);
+            wowmsg_t m;
+            if (nacc < 0) {
+                nacc = wowres_open(g_wow_cmd_prog)
+                     ? wowres_accel_first(acc, WOWRES_MAX_ACCEL, &accres) : 0;
+            }
+            if (nacc > 0 && lp) {
+                wowmsg_read(lp, &m);
+                if (m.msg == WM_KEYDOWN16 || m.msg == 0x0104 /* WM_SYSKEYDOWN */) {
+                    int shift = (GetKeyState(VK_SHIFT)   & 0x8000) != 0;
+                    int ctrl  = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
+                    int alt   = (GetKeyState(VK_MENU)    & 0x8000) != 0;
+                    int i;
+                    for (i = 0; i < nacc; ++i) {
+                        if (!(acc[i].flags & WOWRES_ACCEL_VIRTKEY)) continue;
+                        if (acc[i].key != m.wparam) continue;
+                        if (!!(acc[i].flags & WOWRES_ACCEL_SHIFT)   != shift) continue;
+                        if (!!(acc[i].flags & WOWRES_ACCEL_CONTROL) != ctrl)  continue;
+                        if (!!(acc[i].flags & WOWRES_ACCEL_ALT)     != alt)   continue;
+                        /* ★ A MATCH IS A WM_COMMAND, and the caller's `or ax,ax /
+                             jne` must see non-zero so it does NOT also translate
+                             and dispatch the keystroke. */
+                        wowmsg_post(wow32_argw(f, TA_ARG_HWND), WM_COMMAND16,
+                                    acc[i].id, 0, GetTickCount(), 0, 0);
+                        wu_puts(note, notecap, &k, " -> ACCELERATOR #");
+                        wu_puthex(note, notecap, &k, accres, 4);
+                        wu_puts(note, notecap, &k, " matched vk 0x");
+                        wu_puthex(note, notecap, &k, m.wparam, 4);
+                        wu_puts(note, notecap, &k, " -> WM_COMMAND 0x");
+                        wu_puthex(note, notecap, &k, acc[i].id, 4);
+                        wow32_setret(f, 1);
+                        return 1;
+                    }
+                }
+            }
+            if (nacc <= 0)
+                wu_puts(note, notecap, &k, " -> 0 (this module has no ACCELERATOR"
+                                           " resource)");
+            else
+                wu_puts(note, notecap, &k, " -> 0 (no entry matched)");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        wu_puts(note, notecap, &k, " -> 0 (MDI system accelerators are the OS's,"
+                                   " and nothing measured needs them)");
         wow32_setret(f, 0);
         return 1;
     }
@@ -5367,6 +5464,63 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
         wu_puts(note, notecap, &k, out ? " -> 0x" : " -> not found");
         if (out) wu_puthex(note, notecap, &k, out, 4);
         wow32_setret(f, (DWORD)out);
+        return 1;
+    }
+
+    /* ★ THE MENU IS BUILT FROM THE PROGRAM'S OWN RESOURCE, by the same builder
+         the class-menu path already uses -- so Minesweeper's Game/Help bar comes
+         out of WINMINE.EXE exactly the way Solitaire's comes out of SOL.EXE.
+       ⚠ ONLY THE LAUNCHED PROGRAM'S RESOURCES ARE SEARCHED. A LoadMenu against a
+         DLL's hInstance would need that module's file, which this host does not
+         track per-instance yet; it is refused loudly rather than answered with
+         the program's menu, because the wrong menu is worse than none. */
+    case WOWUSER_LOADMENU: {
+        DWORD name  = wow32_argd(f, LOADMENU_ARG_NAME);
+        WORD  hinst = wow32_argw(f, LOADMENU_ARG_HINST);
+        char  nbuf[64];
+        int   nitems = 0, k = 0;
+        HMENU hm = NULL;
+        WORD  tok;
+        wu_puts(note, notecap, &k, "LoadMenu(hInst 0x");
+        wu_puthex(note, notecap, &k, hinst, 4);
+        wu_puts(note, notecap, &k, ", ");
+        if (!wowres_open(g_wow_cmd_prog)) {
+            wu_puts(note, notecap, &k, "?) -- ★ CANNOT OPEN THE PROGRAM'S OWN"
+                                       " FILE; answered 0");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        if ((name >> 16) == 0) {
+            /* MAKEINTRESOURCE: the high word is 0, so the low word is an ordinal. */
+            wu_puts(note, notecap, &k, "#");
+            wu_puthex(note, notecap, &k, name & 0xFFFF, 4);
+            hm = wowres_menu((WORD)(name & 0xFFFF), &nitems);
+        } else if (wowuser_farstr(f, name, nbuf, sizeof nbuf)) {
+            wu_putq(note, notecap, &k, nbuf);
+            hm = wowres_menu_byname(nbuf, &nitems);
+        } else {
+            wu_puts(note, notecap, &k, "?");
+        }
+        wu_puts(note, notecap, &k, ")");
+        if (!hm) {
+            wu_puts(note, notecap, &k, " -- ★ NO SUCH MENU RESOURCE; answered 0");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        tok = wowuser_menu16(hm);
+        if (!tok) {
+            DestroyMenu(hm);          /* no token = the guest never learns of it */
+            wu_puts(note, notecap, &k, " -- ★ MENU TOKEN TABLE FULL; destroyed"
+                                       " and answered 0");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        wu_puts(note, notecap, &k, " -> menu 0x");
+        wu_puthex(note, notecap, &k, tok, 4);
+        wu_puts(note, notecap, &k, ", ");
+        wu_puthex(note, notecap, &k, (DWORD)nitems, 4);
+        wu_puts(note, notecap, &k, " items");
+        wow32_setret(f, (DWORD)tok);
         return 1;
     }
 

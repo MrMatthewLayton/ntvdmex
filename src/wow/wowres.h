@@ -42,6 +42,7 @@
 
 #define WOWRES_MAX_FILE   (2u * 1024u * 1024u)
 #define WOWRES_RT_MENU    4
+#define WOWRES_RT_ACCEL   9
 #define WOWRES_MF_POPUP   0x0010
 #define WOWRES_MF_END     0x0080
 
@@ -83,6 +84,31 @@ static int wowres_open(const char *path)
     return 1;
 }
 
+/* ── ★★★ THE ACCELERATOR TABLE, AND WHY IT IS READ FROM THE FILE ────────────
+     `LoadAccelerators` is USER's own 16-bit code: it loads the resource itself
+     and all this host is asked for is PERMISSION (NotifyWow, wKind == 3), so the
+     hAccel a guest later hands to TranslateAccelerator is a Win16 global handle
+     to data we never saw. Rather than chase that handle, the table is read out
+     of the program's own file -- the same source, and the same route the menu
+     already takes.
+   ⚠ THE ASSUMPTION IS STATED: this takes the FIRST accelerator resource in the
+     module, because the hAccel cannot be mapped back to a resource id. Every
+     program measured has exactly one (WINMINE has ACCELERATOR 501 and nothing
+     else), and the log says which id was used so a program with two is visible
+     rather than silently half-working.
+     A Win16 ACCELTABLE entry is FIVE bytes, and the last has 0x80 set:
+       BYTE fFlags   0x01 VIRTKEY  0x02 NOINVERT  0x04 SHIFT
+                     0x08 CONTROL  0x10 ALT       0x80 LAST
+       WORD wEvent   the key (a virtual key when VIRTKEY, else a character)
+       WORD wId      the command id posted as WM_COMMAND's wParam */
+#define WOWRES_ACCEL_VIRTKEY  0x01
+#define WOWRES_ACCEL_SHIFT    0x04
+#define WOWRES_ACCEL_CONTROL  0x08
+#define WOWRES_ACCEL_ALT      0x10
+#define WOWRES_ACCEL_LAST     0x80
+#define WOWRES_MAX_ACCEL      64
+typedef struct { unsigned char flags; WORD key, id; } wowres_accel_t;
+
 /* Locate a resource by integer type and integer id. 0 = not found. */
 static DWORD wowres_find(WORD type, WORD id, DWORD *len)
 {
@@ -114,6 +140,55 @@ static DWORD wowres_find(WORD type, WORD id, DWORD *len)
         }
     }
     return 0;
+}
+
+/* The first resource of a type, whatever its id -- see the accelerator note. */
+static DWORD wowres_find_any(WORD type, WORD *idout, DWORD *len)
+{
+    DWORD h, rt, p;
+    WORD shift;
+    if (!g_wr_img) return 0;
+    h = (DWORD)(g_wr_img[0x3C] | (g_wr_img[0x3D] << 8)
+              | (g_wr_img[0x3E] << 16) | ((DWORD)g_wr_img[0x3F] << 24));
+    if (h + 0x40 > g_wr_len || g_wr_img[h] != 'N' || g_wr_img[h + 1] != 'E') return 0;
+    rt = h + wr_w(h + 0x24);
+    if (rt + 2 > g_wr_len) return 0;
+    shift = wr_w(rt);
+    if (shift > 16) return 0;
+    p = rt + 2;
+    while (p + 8 <= g_wr_len) {
+        WORD tid = wr_w(p), cnt = wr_w(p + 2), k;
+        if (!tid) break;
+        p += 8;
+        for (k = 0; k < cnt && p + 12 <= g_wr_len; ++k, p += 12) {
+            if (tid == (WORD)(0x8000 | type)) {
+                DWORD off = (DWORD)wr_w(p) << shift;
+                DWORD ln  = (DWORD)wr_w(p + 2) << shift;
+                if (off + ln > g_wr_len) return 0;
+                if (idout) *idout = (WORD)(wr_w(p + 6) & 0x7FFF);
+                if (len) *len = ln;
+                return off;
+            }
+        }
+    }
+    return 0;
+}
+
+/* Parse the module's accelerator table. Returns the number of entries. */
+static int wowres_accel_first(wowres_accel_t *out, int max, WORD *resid)
+{
+    DWORD len = 0, off = wowres_find_any(WOWRES_RT_ACCEL, resid, &len);
+    int n = 0;
+    if (!off || !out) return 0;
+    while (n < max && (DWORD)(n * 5 + 5) <= len) {
+        const unsigned char *e = g_wr_img + off + n * 5;
+        out[n].flags = e[0];
+        out[n].key   = (WORD)(e[1] | (e[2] << 8));
+        out[n].id    = (WORD)(e[3] | (e[4] << 8));
+        ++n;
+        if (e[0] & WOWRES_ACCEL_LAST) break;
+    }
+    return n;
 }
 
 /*
