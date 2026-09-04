@@ -4,7 +4,9 @@
 > this file top to bottom and you will know where it is, what works, what does not, and
 > what to do next.
 
-- **Last updated:** 2026-09-04 (session 45)
+- **Last updated:** 2026-09-04 (session 49)
+- **Sessions 46-49 are committed and pushed** on this branch — the whole WOW service
+  batch, the LDT pool and the `tools/ne/neneeds.py` fix.
 - **Branch:** `m9/completeness`
 - **Tracker:** [140+ issues](https://github.com/MrMatthewLayton/ntvdmex/issues) — reconciled against the repo on 2026-08-26 (`tools/gh/backfill.py` is the manifest)
 - **Knowledge base:** the [wiki](https://github.com/MrMatthewLayton/ntvdmex/wiki)
@@ -38,25 +40,30 @@ A good bar for the same reasons Doom was: small, iconic, and impossible to fake.
 them they exercise the whole stack — NE loading, the KERNEL 16→32 boundary, USER windows
 and menus, GDI drawing, mouse and keyboard. Paint in particular has to actually paint.
 
-**Status: ★★★★★ BOTH NORTH-STAR PROGRAMS RUN, AND ONE OF THEM PAINTS.**
-As of **session 45**, `PBRUSH.EXE` from Windows 3.11 is a real sized, titled window on
-the XP desktop with its own menu bar (which opens), and it answers its own `WM_PAINT`
-with `MoveTo`/`LineTo`/`PatBlt` — **a Win16 program's own drawing code now reaches the
-screen**. `NOTEPAD.EXE` has been a working text editor since session 44 (open, type,
-save, menus, Help > About).
+**Status: ★★★★★ BOTH NORTH-STAR PROGRAMS RUN, AND MS PAINT IS A PAINT PROGRAM
+THAT SAVES FILES — USER-CONFIRMED (session 49).**
+`PBRUSH.EXE` from Windows 3.11 draws **in colour** with the box, rounded-box,
+ellipse and brush tools, its **flood fill stops at the border it should**,
+everything **survives a minimise and restore** (so it is in Paint's own image,
+not merely on the screen), and **`File > Save As` writes a valid 24-bit `.BMP`
+to the directory you choose** — 4,909,014 bytes, 1680×974, headers verified on
+disk, and confirmed by hand by the user. `NOTEPAD.EXE` has been a working text
+editor since session 44 (open, type, save, menus, Help > About).
 
-★★ Paint's whole UI is now **pixel-identical to stock ntvdm**, measured child by
+★★ Paint's whole UI is **pixel-identical to stock ntvdm**, measured child by
 child: the toolbox with its real colour tool icons, the line-size box, the colour
 palette bar, the canvas and its scrollbars. Its menu bar opens, and **mouse and
-keyboard input reach it** — a drag on the canvas runs Paint's entire stroke loop
-and blits the brush along the right path.
+keyboard input reach it**.
 
-⚠ **Two defects remain, and they are probably one bug**: the stroke does not
-persist, and the palette renders grey — because Paint believes it is in its
-**black-and-white image mode** (its palette brushes are already grey when created
-and its off-screen canvas is 1bpp). Five plausible causes are REFUTED and
-recorded. See [session 45's resume block](log/sessions/session-45.md#-resume-here),
-which leads with the located call chain.
+★★★ The user's three defects from session 45 are closed, and two of them were
+**one call**: `GetProfileString` (krnl386 id `0x3a`) was unimplemented, so Paint's
+`GetProfileString("Paintbrush", "clear", "COLOR", …)` returned nothing, and eleven
+instructions later it selected its **black-and-white** palette and a 1bpp canvas.
+⚠ Session 45's note that WIN.INI has no colour key was *correct and led away from
+the answer* — **the default is `COLOR`, and an unimplemented call cannot return a
+default.** The third defect ("fill does not work") was `ExtFloodFill` plus
+**`CreatePen`**, both of which `neneeds.py` reports as *free*. See
+[session 46's resume block](log/sessions/session-46.md#-resume-here).
 
 Below is how the bootstrap got there, kept because it is still the reference for the
 loader and the scheduler. As of session 39 it runs
@@ -154,7 +161,7 @@ Win16 push, and should not be quoted.)
 | Bar | Where it is | Est. |
 |---|---|---|
 | **The original DOS games bar** — Doom / Skyroads / ZAR, flawless sound | Two of three fully playable and confirmed by hand. ZAR is the gap (VBE 2.0 hi-colour + linear framebuffer). | **~85%** |
-| **★ The north star** — MS Paint + Notepad from Windows 3.x | **NOTEPAD IS A WORKING TEXT EDITOR** on the XP desktop: it opens a file through the real XP file dialog, you type into it, and **File > Save writes the text you typed** (verified byte for byte on disk). Help > About opens; its menus grey and check their own items; own icon, caption and message loop. **32 of the 34 imports NOTEPAD.EXE makes into the 32-bit side are serviced** — the two left are Find and printing. ⚠ MS Paint still needs **GDI: 41 calls reach us, 3 serviced** — and before those matter, `WM_PAINT` is a message Win32 **SENDS** and this host can only **POST**, which is the next architectural wall. | **~78%** |
+| **★ The north star** — MS Paint + Notepad from Windows 3.x | **BOTH RUN AND BOTH DO THEIR JOB, USER-CONFIRMED.** **NOTEPAD IS A WORKING TEXT EDITOR**: opens through the real XP file dialog, you type into it, File > Save writes the text (verified byte for byte). **MS PAINT DRAWS IN COLOUR, KEEPS WHAT IT DRAWS, AND SAVES IT** — every shape tool, the flood fill, persistence across a repaint, and `File > Save As` writing a valid 1680×974 24-bit `.BMP` to the chosen directory; UI pixel-identical to stock ntvdm. **Paint's GDI surface is 67/76 and its USER surface 88/92; PBRUSH.DLL is 16/16.** ⚠ Not yet exercised: the Text tool, the cutout tools, Edit > Paste, printing. ⚠ And one live defect: after mouse drags the Alt-key menu route stops responding. | **~90%** |
 | **The full vision** — an `ntvdm` superset on XP-32 | Everything above, plus the host UI, minus the standing DOS defects and M7/M8. | **~60%** |
 
 **Read the north-star number carefully.** The hard *unknowns* are largely behind us — what is
@@ -190,7 +197,7 @@ silently is worth more attention than its size suggests.
 
 | | Why it matters |
 |---|---|
-| **Win16 / WOW — an application launches and its task runs, but nothing draws** | `ntvdm.exe` is *also* the host for every 16-bit **Windows** program. The NE loader loads, relocates and binds the **whole** XP WOW module set on real hardware, **krnl386 executes** — protected mode, its own segments, its interrupt handlers, its own DPMI exceptions, and all eight 16-bit system modules — and it then finds, loads and **runs `WOWEXEC.EXE`** — which, since session 38's host-side task scheduler and session 39's `CreateWindow`, registers two window classes, **creates two windows** and sits in **its message loop** — and, since session 39's `WowGetNextVDMCommand` + `0xc5` + the yield point, **launches `SYSEDIT.EXE`, which runs its startup, registers its own classes and creates its own main window** — and, since session 40, **receives `WM_CREATE` in its own window procedure**, because the host can now call 16-bit code. It goes on to create its MDI client, load its accelerators, show and update its main window, and build **four MDI children, each with its own `EDIT` control**, titled `C:\WINDOWS\SYSTEM.INI`, `WIN.INI`, `C:\CONFIG.SYS` and `C:\AUTOEXEC.BAT`, and — since session 41's CF fix — **reads all four into memory**. Since session 41 it also **runs its message loop**: a key pressed on the host reaches the window procedure of the window the guest gave the focus to. But a window here is a host-side *object* — a handle, a class, a rectangle — **with no pixels behind it**, so nothing draws, `WM_PAINT` has nowhere honest to come from, GDI's id space is not dispatched at all, and there is no 16:16↔flat thunking. Since interception is an IFEO key on `ntvdm.exe`, and Win16 launches go through `ntvdm.exe` too, **installing NTVDMEX permanently would break every 16-bit Windows app today**. → [#128](https://github.com/MrMatthewLayton/ntvdmex/issues/128) |
+| **Win16 / WOW — two applications work, the other seventeen on the shelf are untested** | ⚠ **This row's detail below is the 2026-08 bootstrap history, kept for the loader and the scheduler; it predates sessions 42-49 and its "nothing draws" framing is long out of date.** Notepad edits and saves text; MS Paint draws in colour and saves bitmaps. **What is unproven is everything else** — the shelf has been *measured* (Solitaire needs 9 services, Minesweeper 15, Media Player 20) but not one of them has been launched. Until they have, "WOW works" is a claim about two programs. And installing NTVDMEX permanently still routes *every* 16-bit Windows launch through us. `ntvdm.exe` is *also* the host for every 16-bit **Windows** program. The NE loader loads, relocates and binds the **whole** XP WOW module set on real hardware, **krnl386 executes** — protected mode, its own segments, its interrupt handlers, its own DPMI exceptions, and all eight 16-bit system modules — and it then finds, loads and **runs `WOWEXEC.EXE`** — which, since session 38's host-side task scheduler and session 39's `CreateWindow`, registers two window classes, **creates two windows** and sits in **its message loop** — and, since session 39's `WowGetNextVDMCommand` + `0xc5` + the yield point, **launches `SYSEDIT.EXE`, which runs its startup, registers its own classes and creates its own main window** — and, since session 40, **receives `WM_CREATE` in its own window procedure**, because the host can now call 16-bit code. It goes on to create its MDI client, load its accelerators, show and update its main window, and build **four MDI children, each with its own `EDIT` control**, titled `C:\WINDOWS\SYSTEM.INI`, `WIN.INI`, `C:\CONFIG.SYS` and `C:\AUTOEXEC.BAT`, and — since session 41's CF fix — **reads all four into memory**. Since session 41 it also **runs its message loop**: a key pressed on the host reaches the window procedure of the window the guest gave the focus to. But a window here is a host-side *object* — a handle, a class, a rectangle — **with no pixels behind it**, so nothing draws, `WM_PAINT` has nowhere honest to come from, GDI's id space is not dispatched at all, and there is no 16:16↔flat thunking. Since interception is an IFEO key on `ntvdm.exe`, and Win16 launches go through `ntvdm.exe` too, **installing NTVDMEX permanently would break every 16-bit Windows app today**. → [#128](https://github.com/MrMatthewLayton/ntvdmex/issues/128) |
 | **Console/stdio integration** | DOS output is buffered and flushed to `CONOUT$` at exit, so shell redirection and piping are bypassed and every DOS program pops a window. Blocks non-interactive use. |
 | **In-guest redirection** | `echo x > file` writes to the screen and leaves the file 0 bytes. Three fixes attempted, all at the wrong end. |
 | **No INT 13h / INT 25h / 26h** | No direct disk access. |
@@ -209,14 +216,230 @@ silently is worth more attention than its size suggests.
 > refused outright, and the real name re-enters us through the IFEO hook. So there is no
 > safe install story until WOW exists, and #128 moved onto the critical path.
 
-1. **[#128] WOW / Win16 — IN PROGRESS. ★★★★★ `SYSEDIT.EXE` IS ON THE WINDOWS XP
-   DESKTOP, AS ITSELF.**
+1. **[#128] WOW / Win16 — IN PROGRESS. ★★★★★ THE NORTH STAR IS MET: NOTEPAD
+   EDITS AND SAVES TEXT, AND MS PAINT DRAWS IN COLOUR AND SAVES A BITMAP.**
+   ⚠ **And that is a claim about TWO programs** the host has been shaped around
+   for eight sessions. The shelf is measured and unlaunched; a third guest is
+   the next step, and it is also the honest correction for *a fix measured on
+   one guest is a fix for none*.
 
-   ### ▶ START HERE: [session 45](log/sessions/session-45.md#-resume-here)
+   ### ▶ START HERE: [session 49](log/sessions/session-49.md#-resume-here)
+
+   ---
+
+   ### ▶ ★ WHERE IT IS, IN ONE BLOCK (read this before the session notes)
+
+   **Working and confirmed by hand:** Notepad edits and saves text files. MS
+   Paint draws in colour with every shape tool and the flood fill, keeps what it
+   draws across a repaint, and **saves a valid `.BMP` where you tell it to**.
+   Both have their own icons, menus, captions and taskbar buttons, and both are
+   real `HWND`s on the XP desktop.
+
+   **The service surface, measured** (`tools/ne/neneeds.py`, fixed in session 47
+   so it sees through validating export wrappers — it under-reported by half
+   before):
+
+   | | needs us | serviced | left |
+   |---|---|---|---|
+   | MS Paint — GDI | 76 | 67 | 9 |
+   | MS Paint — USER | 92 | 88 | 4 |
+   | PBRUSH.DLL | 16 | 16 | **0** |
+   | Notepad — GDI + USER | 56 | 52 | 4 |
+
+   ### ▶ THE NEXT THREE THINGS, IN ORDER
+
+   1. ⚠ **After mouse drags, the Alt-key menu route stops opening the menu.**
+      On a freshly launched Paint, `Alt`,`F`,`A` opens Save As reliably — that is
+      how the verified save was driven. After three `rigshot drag`s on the canvas
+      the same sequence does nothing and `rigshot fg "Save As"` reports NOT
+      FOUND. Drawing still works; it is the *menu* that stops responding.
+      ★ **This is probably the user's standing "menu clicks crash the app"
+      report seen from another angle**, and it is the last thing between Paint
+      and "use it like a program". ▶ Test in order: mouse **capture** left set
+      after a drag (check `SetCapture`/`ReleaseCapture` pair); focus parked on
+      the `pbPaint` child so `WM_SYSKEYDOWN` never reaches the frame;
+      `ClipCursor` accepted-but-not-applied.
+   2. **Broaden to the shelf — the user's call, and the numbers back it.**
+      Solitaire **9** services, Minesweeper **15** (6 are the optional SOUND
+      driver), Clock 7, Charmap 16, Media Player **20**, Sound Recorder 26.
+      ★★ **Media Player's MMSYSTEM imports all resolve to 16-bit code inside
+      MMSYSTEM.DLL — none reach a WOW32 thunk**, so WinMM is not a wall in
+      front of it; the work sits *below* MMSYSTEM.DLL and only a run can name
+      it. ★★★ The guests overlap so heavily (`SetTimer`, `DrawText`,
+      `FrameRect`, `GetParent`, `IsDialogMessage`, `DefDlgProc`, `ExtTextOut`,
+      the menu trio) that **~35 distinct services cover all six**. ⚠ `SetTimer`
+      is the only one that is not a pass-through: it needs `WM_TIMER` posted
+      into the Win16 queue, and both games want it.
+   3. **The 22 ids still unserviced**, all enumerated and named: GDI `Escape`,
+      `EnumObjects`, `LineDDA`, `CreatePolygonRgn`, `GetCharABCWidths`,
+      `GetPaletteEntries`, the metafile trio; USER `IsDialogMessage`,
+      `SetDlgItemText`, `GetDlgItemInt`, the three dialog-button calls,
+      `ModifyMenu`, `GetMenuState`, `TabbedTextOut`, `ScrollWindow`, the three
+      clipboard calls. ⚠ `EnumObjects` and `LineDDA` take **16-bit callbacks**
+      and need `wowcall`, not a pass-through.
+
+   ### ▶ ⚠ STANDING HAZARDS (each of these has cost a session)
+
+   * **The regression gate is `82 / 122 / 60 · 0001:229C`**, and it must be run
+     with `wowsched.txt` and `wowcall.txt` **moved aside** — `wowlive.bat`
+     creates them, and a gate run that leaves them in place measures a guest
+     running much further (`238/308/101`) and reads as catastrophic drift.
+   * **Doom is the other half of every DPMI change.** The known-good signature
+     is **all eleven startup stages `V_Init`…`ST_Init` in ~3.5 MB**
+     (`./scripts/bmqueue.sh doom DOOM.EXE`).
+   * ⚠⚠⚠ **The guest loads XP's `system32` copies** of OLESVR, OLECLI, SHELL,
+     MMSYSTEM, COMMDLG and VER — *not* the Windows 3.11 ones in `guest/win16/`.
+     Same sizes, different md5, different code. Disassembling the wrong one
+     wasted part of session 49. They belong in **`guest/wow/`**, which is
+     `.gitignore`d like the rest of `guest/`, so **a fresh checkout has to fetch
+     them off the rig**:
+     ```bash
+     RES='C:\Documents and Settings\All Users\Documents\ntvdmex'
+     printf 'exec cmd /c "copy /y C:\\WINDOWS\\SYSTEM32\\OLESVR.DLL "%s\\wowdrv_olesvr.dll""\r\n' "$RES" > $SH/control.txt
+     mkdir -p guest/wow && cp $SH/wowdrv_olesvr.dll guest/wow/OLESVR.DLL
+     ```
+     (same for `MMSYSTEM.DLL`, `SHELL.DLL`, `OLECLI.DLL`, `COMMDLG.DLL`, `VER.DLL`).
+   * **`neneeds.py`'s "free (16-bit)" column is a lower bound, not a statement
+     about work.** It was wrong for 40 services before session 47 fixed it, and
+     `native16` still does not mean free where a module calls down on the
+     program's behalf.
+   * **A stepped-over call answers, and its answer is load-bearing.** Three of
+     the last four bugs were a sentinel `0` that the call site reads as
+     *success* — `GetProfileString`, `GetParent`, `SetCurrentDirectory`.
+
+   ### ▶ HOW TO DRIVE IT (all through `controld` on the share)
+
+   ```bash
+   SH=/private/tmp/xpshare
+   RES='C:\Documents and Settings\All Users\Documents\ntvdmex'
+   cp build/ntvdmhost.exe $SH/bm/ntvdmhost.exe          # ⚠ md5 both ends
+
+   printf 'exec cmd /c ""%s\\wowlive.bat" C:\\WIN16\\PBRUSH.EXE"\r\n' "$RES" > $SH/control.txt
+   printf 'exec cmd /c ""%s\\savetest.bat""\r\n'   "$RES" > $SH/control.txt  # clean+launch+SaveAs+verify
+   printf 'exec cmd /c ""%s\\pbtools.bat""\r\n'    "$RES" > $SH/control.txt  # box+fill+ellipse+stroke
+   printf 'exec cmd /c ""%s\\pbmin.bat""\r\n'      "$RES" > $SH/control.txt  # minimise/restore = persistence
+   printf 'exec cmd /c ""%s\\wowcompare.bat" C:\\WIN16\\NOTEPAD.EXE"\r\n' "$RES" > $SH/control.txt  # vs STOCK
+   ./scripts/bmwow.sh            # the WOW gate  (switches moved aside first)
+   ./scripts/bmqueue.sh doom DOOM.EXE
+
+   python3 tools/ne/neneeds.py   guest/win16/PBRUSH.EXE --todo --stubs
+   python3 tools/ne/neimports.py guest/win16/PBRUSH.EXE --seg 3
+   ```
+   ⚠ **A multi-step rig test must be ONE batch.** Driving clean/launch/keys/check
+   as separate `exec`s raced and deleted the evidence in session 49;
+   `savetest.bat` exists because of that.
+   ⚠ `rigshot` logs to `rigshot.txt`, **not stdout** — redirecting it captures an
+   empty file.
+
+   ---
+
+   > ⏹ **Everything below is the session-by-session record.** It is kept because
+   > it is still the reference for the loader, the scheduler and the message
+   > loop — but the newest blocks are at the top, and anything below session 45
+   > describes a frontier that has since moved. Do not read an old
+   > *"and the frontier is …"* heading as current.
+
+   ### ▶ ★★★★★ MS PAINT SAVES A FILE (session 49)
+   `File > Save As` writes a valid **4,909,014-byte, 1680×974, 24-bit .BMP** to
+   the directory the user chose, and Paint stays running. Verified by reading the
+   file's own headers off the rig. Two bugs, both the same shape — **a
+   stepped-over call whose sentinel answer means "yes"**:
+   ★ **`USER.46 GetParent`** unimplemented ⇒ OLESVR asked window **0** for its
+   window long and dereferenced the zero (`OLESVR seg3:0x1548`,
+   `cmp es:[bx+0xe]` with `ES:BX = 0:0`). The right answer was knowable before
+   the run: window `0x200` is `WS_CHILD` of `0x140`, and OLESVR had stored its
+   server object on `0x140` thirty log lines earlier.
+   ★ **krnl386 `0x82 SetCurrentDirectory`** unimplemented ⇒ the whole .BMP was
+   written correctly *to the wrong directory*. ⚠⚠ Its call site reads our
+   sentinel 0 as **success**, so krnl386 told the app the directory had changed.
+   ⚠ Not declinable — `wowdecline.py` already listed it; declining was tried
+   twice and only moves the fault.
+   ⚠⚠ **AND THE WRONG BINARY WAS BEING DISASSEMBLED**: the guest loads XP's
+   `system32` copies of OLESVR/OLECLI/SHELL/MMSYSTEM/COMMDLG, not the Win3.11
+   ones in `guest/win16/`. Same size, different md5. They now live in `guest/wow/`.
+   ⚠ **NEW, unexplained**: after mouse drags the **Alt-key menu route stops
+   opening the menu** (fresh instance: reliable). Probably the user's "menu
+   clicks" report from another angle — see the resume block for the three
+   hypotheses to test.
+
+   ### ▶ Session 48's handoff (background): [session 48](log/sessions/session-48.md#-resume-here)
+
+   ### ▶ ★★★★★ TWO ALLOCATORS, ONE LDT — AND IT BLOCKED EVERY GUEST (session 48)
+   `File > Save As` crashed MS Paint **and Notepad** with a #GP in
+   `KRNL386.EXE at 0001:5349`. krnl386 caches the DOS structures at boot and
+   turns their segment into a selector with **DPMI Segment-to-Descriptor**; that
+   selector has to live for the life of the VDM, and **krnl386 kept its own idea
+   of which LDT entries were free and repointed ours** (`DPMI 000C`, and direct
+   descriptor-shadow writes). Our counter started at 6 and grew up; krnl386's
+   arena starts at `0x30`; **they grew into each other.**
+   ⇒ A **host-private LDT pool at `0x09..0x2b`**, and the client-facing counter
+   now starts above it. ★★★ **The pool is MEASURED, from logs already on disk**:
+   348 distinct indices the guest touches, dense from `0x30` up, largest
+   untouched run 35 entries, against 11 host selectors a run.
+   ⇒ **Paint's save now reads its whole canvas** (`GetDIBits … -> 03ce scan
+   lines`); the next wall is elsewhere — `OLESVR.DLL at 0003:1548`.
+   ⚠ Verified three ways because it is a shared path: **gate unchanged
+   `82/122/60`**, **Doom's eleven startup stages at 3.51 MB**, pool never spilled.
+   ⚠⚠ **Two earlier explanations were wrong** (declining `0x82`/`0xc1`; "freed
+   and recycled" — refuted by `grep -c recycled` = 0). Both were reasoning from a
+   mechanism that fit rather than from the log.
+
+   ### ▶ Session 47's handoff (background): [session 47](log/sessions/session-47.md#-resume-here)
+
+   ### ▶ ★★★★★ THE ENUMERATOR WAS UNDER-REPORTING THE JOB BY HALF (session 47)
+   `tools/ne/neneeds.py` knew two export shapes and GDI/USER have four, so
+   every **validating wrapper** — an export that checks an argument before its
+   tail jump — was reported *free*. Fixed (the scan is bounded by the export's
+   own pushed `retf`), Paint's GDI surface went **41 → 76** and USER **52 → 92**,
+   and **40 services went in**: `SetDIBits`/`GetDIBits`/`StretchDIBits`,
+   `TextOut`/`GetTextMetrics`/`CreateFontIndirect`, `CreateDC`, `DefWindowProc`,
+   `SetClassWord`, `GlobalAddAtom`, the caret, and the rest. **PBRUSH.DLL is now
+   100% serviced.** ⚠ Gate unchanged at `82/122/60`.
+   ★★ **`0x99` is `CreateIC` (ord 153), NOT `CreateDC` (ord 53 = `0x35`)** — a
+   recorded fact corrected; the id tracked the ordinal all along.
+   ★★ **Both icon defects fixed and confirmed against stock pixel by pixel.**
+   Paint's `GROUP_ICON` is the NAMED resource `"PBRUSH"` and `0xad` refused
+   named resources — ⚠ **the third time this same gap has been found** (menus in
+   session 45); its seven cursors are named too. Notepad's *taskbar* icon
+   measured **0 cyan pixels against stock's 59** because a class with no
+   `hIconSm` makes Windows derive one — now `WNDCLASSEXA` with a real 16×16.
+   ⚠ **`File > Save As` is NOT fixed and is diagnosed to the instruction**: a
+   DPMI selector minted for krnl386's SysVars cache is **recycled** and
+   redefined 64 bytes long, so `krnl386 seg1:0x5349` faults. The fix is in the
+   DPMI allocator, which is Doom's shared path — see the resume block.
+
+   ### ▶ ★★★★★ MS PAINT DRAWS, IN COLOUR, AND IT STAYS DRAWN (session 46)
+   A red-outlined box, a flood fill bounded by that border, a green ellipse and
+   a brush stroke — then Paint minimised (its window's pixels genuinely
+   destroyed) and restored, and the whole picture repaints from **Paint's own
+   image**. All three of the user's defects are closed.
+   ★★★ **The palette and the persistence were ONE CALL.** `GetProfileString`
+   (krnl386 `0x3a`) was unimplemented, so
+   `GetProfileString("Paintbrush", "clear", "COLOR", buf, 9)` returned 0
+   characters, `cmp [bp-8],2 / jbe` took the short arm, and `seg2:0x08de`
+   pointed Paint at the **28 greys** at DGROUP `0x09a2` instead of the 28
+   colours at `0x0932` — and a black-and-white image gets a 1bpp canvas, which
+   is why a correctly-blitted stroke vanished on the next repaint.
+   ⚠⚠ **The default is `COLOR`.** Session 45 checked WIN.INI, found no colour
+   key, and ruled the profile out — correctly and fatally. **An unimplemented
+   call cannot return a default**, so "the key is absent" became "the key says
+   something that is not COLOR".
+   ★★ **And the fill was `ExtFloodFill` + `CreatePen`, both reported as
+   *free*.** GDI's ordinal-372 export validates the fill type before its
+   tail-jump, so the stub scanner cannot see it; the shape tools' 48 successful
+   `Ellipse` calls per drag were all `R2_XORPEN` rubber band, and the commit
+   asked for a `PS_INSIDEFRAME` pen, got 0, and declined to draw. ⇒ **the
+   static TO-DO list is not the definition of what is missing.**
+
+   ### ▶ Session 45's handoff (background): [session 45](log/sessions/session-45.md#-resume-here)
 
    ### ▶ Session 44's handoff (background): [session 44](log/sessions/session-44.md#-resume-here)
 
    ### ▶ Session 43's handoff (background): [session 43](log/sessions/session-43.md#-resume-here)
+
+   ### ⏹ ---- FROM HERE DOWN IS SESSION 45 AND OLDER: BACKGROUND ONLY ----
+   Every *"the frontier is …"* heading below was true when written and is not
+   now. Paint's frontier went pixels → GDI → colour → save → the menu route.
 
    ### ▶ ★★★★★ MS PAINT RUNS, HAS ITS MENU, AND PAINTS (session 45)
    **Both north-star programs now run.** `PBRUSH.EXE` is a real sized, titled
@@ -268,10 +491,15 @@ silently is worth more attention than its size suggests.
    used — now relayed, with `WM_MOUSEMOVE` **coalescing** so the ring cannot
    flood.
 
-   ### ▶ ⚠ THE GATE MOVED: **`81 / 122 / 61 · 0001:229C`**
-   Was `64/122/78`. Declined unchanged, total identical; the delta is exactly
-   **17 `GetStockObject`** calls krnl386's bootstrap already made and the widened
-   GDI anchor now lets us answer. Improvement, not drift.
+   ### ▶ ⚠ THE GATE IS **`82 / 122 / 60 · 0001:229C`**
+   Was `81/122/61` (session 45), and `64/122/78` before that. Declined unchanged
+   at 122, total identical at 264; the session-46 delta is **exactly one call and
+   it has a name** — `GetProfileString(…, "NwcsInstalled", …)`, which the
+   bootstrap asks during its NetWare-shim probe. Improvement, not drift.
+   ⚠ **Run it with `wowsched.txt` and `wowcall.txt` MOVED ASIDE.** `wowlive.bat`
+   creates them, and a gate run that leaves them in place measures a guest that
+   runs much further (`238/308/101` over 663 BOPs) — which reads exactly like
+   catastrophic drift and is a different configuration.
 
    ### ▶ ★★★★★ NOTEPAD IS A WORKING TEXT EDITOR (session 44)
    It **opens a file through the real XP file dialog, you type into it, and
