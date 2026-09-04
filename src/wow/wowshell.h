@@ -321,7 +321,9 @@ static int wowshell_call(wow32_frame_t *f, char *note, int notecap)
         wowuser_win_t *w = wowuser_findwin(hwnd);
         char app[160], other[320];
         int  k = 0, bits = 0, rc;
-        HICON hico = wowuser_sysres_hicon(htok, &bits);
+        /* The About box wants the full-size icon, so the size is the system's
+           default -- the small-icon variant exists for the taskbar. */
+        HICON hico = wowuser_sysres_hicon(htok, &bits, 0, 0);
         HWND  owner = w ? w->hwnd32 : NULL;
 
         wow32_argstr(f, SA_ARG_APP,   app,   sizeof app);

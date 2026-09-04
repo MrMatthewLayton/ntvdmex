@@ -277,9 +277,84 @@ static HMENU wowres_menu_byname(const char *name, int *items)
 #define WOWRES_RT_ICON        3
 #define WOWRES_RT_GROUP_ICON  14
 
-static HICON wowres_icon(WORD groupid, int *picked)
+/* ── ★★★★★ AND THE GROUP CAN BE NAMED. (session 47) ─────────────────────────
+     MS Paint showed no icon at all -- Windows fell back to the generic
+     application icon -- and the cause is the one session 45 already found for
+     MENUS and did not carry across to icons:
+
+       NOTEPAD.EXE   RT_GROUP_ICON  #1          <- an ordinal, so it worked
+       PBRUSH.EXE    RT_GROUP_ICON  "PBRUSH"    <- a NAME, so it was refused
+
+     ⚠ Read straight out of the two resource tables, not inferred: PBRUSH's
+     RT_CURSOR entries are named too ("FLOOD", "CROSSH", "PICK", "TEXT",
+     "SIDEAROW"), and so is its accelerator table. **A Win16 program is as likely
+     to name a resource as to number it, and this host only understood numbers.**
+   ⇒ one lookup each way, and the caller passes whichever the guest gave it. */
+static HICON wowres_icon_at(DWORD goff, DWORD glen, int *picked, int cx, int cy);
+
+static HICON wowres_icon_named(const char *name, int *picked, int cx, int cy)
+{
+    DWORD glen = 0, goff = wowres_find_named(WOWRES_RT_GROUP_ICON, name, &glen);
+    return wowres_icon_at(goff, glen, picked, cx, cy);
+}
+
+static HICON wowres_icon(WORD groupid, int *picked, int cx, int cy)
 {
     DWORD glen = 0, goff = wowres_find(WOWRES_RT_GROUP_ICON, groupid, &glen);
+    return wowres_icon_at(goff, glen, picked, cx, cy);
+}
+
+/* ── ★ AND THE SAME DIRECTORY SHAPE FOR CURSORS. ─────────────────────────────
+     `RT_GROUP_CURSOR` (12) indexes `RT_CURSOR` (1) exactly as GROUP_ICON indexes
+     ICON, and `CreateIconFromResourceEx` takes a cursor resource with `fIcon =
+     FALSE` -- the 4-byte hotspot at the front of the resource is part of what it
+     expects, so nothing has to be parsed here either.
+   ★ MS Paint ships SEVEN of them and every one is NAMED: "FLOOD", "CROSSH",
+     "PICK", "TEXT", "SIDEAROW", "DUMMY", "XDUMMY" -- read out of its resource
+     table. A paint program whose pointer never changes shape is using none of
+     them. ⚠ A cursor group's entries record the hotspot where an icon group
+     records planes/bits, so the "richest depth wins" rule is NOT reused: a
+     cursor group in practice holds one entry, and the first is taken. */
+#define WOWRES_RT_CURSOR        1
+#define WOWRES_RT_GROUP_CURSOR 12
+
+static HCURSOR wowres_cursor_named(const char *name)
+{
+    DWORD glen = 0, goff = wowres_find_named(WOWRES_RT_GROUP_CURSOR, name, &glen);
+    DWORD clen = 0, coff;
+    WORD cnt, id;
+    if (!goff || glen < 6 + 14) return NULL;
+    if (wr_w(goff + 2) != 2) return NULL;              /* type 2 = cursors */
+    cnt = wr_w(goff + 4);
+    if (!cnt) return NULL;
+    id = wr_w(goff + 6 + 12);
+    if (!id) return NULL;
+    coff = wowres_find(WOWRES_RT_CURSOR, id, &clen);
+    if (!coff || !clen) return NULL;
+    return (HCURSOR)CreateIconFromResourceEx(g_wr_img + coff, clen, FALSE,
+                                             0x00030000, 0, 0, LR_DEFAULTCOLOR);
+}
+
+/* ── ★★★★ AND THE SIZE IS AN ARGUMENT, BECAUSE THE TASKBAR ASKS FOR A SMALL
+     ONE. (session 47) ────────────────────────────────────────────────────────
+     Measured against stock ntvdm running the same NOTEPAD.EXE on the same
+     desktop, pixel for pixel out of one screenshot:
+
+       our CAPTION icon   53 cyan-ish pixels   -- right
+       our TASKBAR icon    0 cyan-ish pixels   -- 89 silver, 48 black, 23 grey
+       stock's TASKBAR    59 cyan-ish pixels   -- right
+
+     Same window, same `HICON`, two different renderings -- so the taskbar was
+     not drawing the icon we built. A `WNDCLASSA` has one icon field, and when a
+     window has no SMALL icon Windows produces one for itself; what came out was
+     a washed-out monochrome version of the right picture.
+   ⇒ Do not leave it to be derived. `CreateIconFromResourceEx` scales properly
+     when it is told the size it is scaling to, so the class gets a real 16x16
+     built from the same group as the 32x32, and neither the taskbar nor the
+     caption has to guess. ⚠ 0 means "the system's default size", which is what
+     the big icon still asks for -- passing 32 would ignore SM_CXICON. */
+static HICON wowres_icon_at(DWORD goff, DWORD glen, int *picked, int cx, int cy)
+{
     DWORD ilen = 0, ioff;
     WORD cnt, i, bestid = 0;
     int bestbits = -1;
@@ -300,7 +375,7 @@ static HICON wowres_icon(WORD groupid, int *picked)
     if (!ioff || !ilen) return NULL;
     if (picked) *picked = bestbits;
     return CreateIconFromResourceEx(g_wr_img + ioff, ilen, TRUE, 0x00030000,
-                                    0, 0, LR_DEFAULTCOLOR);
+                                    cx, cy, LR_DEFAULTCOLOR);
 }
 
 #endif /* WOWRES_H */

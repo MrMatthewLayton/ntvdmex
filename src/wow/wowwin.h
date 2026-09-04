@@ -414,26 +414,38 @@ static int wowwin_pump(int budget)
      that is ever wrong the OS returns NULL, so the fallback below is not belt and
      braces -- it is what turns a wrong assumption into a visible line instead of
      a window with no cursor. */
+/* ⚠ THE CURSOR IS NOW BUILT BY THE CALLER TOO, like the icon. (session 47) It
+     used to be an ordinal resolved here, which could only ever name one of the
+     OS's predefined cursors -- and MS Paint's seven cursors are all NAMED
+     resources in its own file, so a paint program's pointer never changed shape.
+     One asymmetry removed: whoever knows the token resolves it, and this only
+     decides what to do when there is nothing. */
 static int wowwin_register(const char *name16, char *out32, int cap,
-                           WORD curord, HICON hico, int *curfell)
+                           HCURSOR hcur, HICON hico, HICON hsm, int *curfell)
 {
-    WNDCLASSA wc;
+    /* ⚠ WNDCLASSEX, NOT WNDCLASS, AND FOR ONE REASON: `hIconSm`. A class with no
+         small icon makes Windows derive one, and the derived one measured
+         MONOCHROME against stock ntvdm on the taskbar while the caption was
+         correct -- same window, same HICON, two renderings. See wowres.h. */
+    WNDCLASSEXA wc;
     int i = 0, k;
     for (k = 0; WOWWIN_CLASS_PREFIX[k] && i < cap - 1; ++k) out32[i++] = WOWWIN_CLASS_PREFIX[k];
     for (k = 0; name16[k] && i < cap - 1; ++k) out32[i++] = name16[k];
     out32[i] = 0;
     ZeroMemory(&wc, sizeof wc);
+    wc.cbSize        = sizeof wc;
     wc.lpfnWndProc   = wowwin_proc;
     wc.hInstance     = GetModuleHandleA(NULL);
-    wc.hCursor       = curord ? LoadCursorA(NULL, MAKEINTRESOURCEA(curord)) : NULL;
+    wc.hCursor       = hcur;
     if (!wc.hCursor) {
-        if (curord && curfell) *curfell = 1;
+        if (curfell) *curfell = 1;
         wc.hCursor = LoadCursorA(NULL, IDC_ARROW);
     }
-    wc.hIcon = hico;          /* built by the caller: predefined, or the app's own */
+    wc.hIcon   = hico;        /* built by the caller: predefined, or the app's own */
+    wc.hIconSm = hsm;         /* ★ and the 16x16 built at 16x16, not shrunk later */
     wc.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1);
     wc.lpszClassName = out32;
-    if (RegisterClassA(&wc)) return 1;
+    if (RegisterClassExA(&wc)) return 1;
     /* Already registered is success: a program may register a class name twice
        across two instances, and Win32 says so with ERROR_CLASS_ALREADY_EXISTS. */
     return GetLastError() == ERROR_CLASS_ALREADY_EXISTS;

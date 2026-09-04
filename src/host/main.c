@@ -1164,8 +1164,15 @@ static BYTE  g_flt_tbl[DOS_FLTSITE_N * 0x10] __attribute__((aligned(16)));
    dpmi_install() force-types to writable data. INT 31h 0001 refuses to free them and
    the WOW selector stage refuses to allocate them -- one constant so the two agree. */
 #define DPMI_LDT_RESERVED 6
+/* ★★★ The host's private LDT pool sits between the reserved entries and the
+     client's arena; see the long note at dpmi_host_idx(). The range is MEASURED
+     (the guest never touches 0x09..0x2b across three full runs), and the
+     client-facing counter starts ABOVE it so the two can never meet. */
+#define DPMI_HOSTPOOL_LO  0x09
+#define DPMI_HOSTPOOL_HI  0x2b
+#define DPMI_LDT_FIRSTFREE (DPMI_HOSTPOOL_HI + 1)
 static struct dpmi_desc { DWORD base, limit; BYTE access, flags; } g_ldt[DPMI_LDT_MAX];
-static int   g_ldt_next = 3;
+static int   g_ldt_next = DPMI_LDT_FIRSTFREE;
 static WORD  g_ldt_free[DPMI_LDT_MAX];   /* recycled indices, LIFO */
 static int   g_ldt_nfree = 0;
 static volatile BYTE *g_tib_dbg = 0;        /* VDM_TIB, for the crash VEH to dump guest state */
@@ -6947,17 +6954,60 @@ static DWORD WINAPI dpmi_watchdog(LPVOID param)
 static void dpmi_install(int idx);           /* defined just below; used by the helper */
 static void wow_shadow_put(int idx);         /* GH #128: keep the descriptor shadow in step */
 
+/* ── ★★★★★ A HOST-PRIVATE LDT POOL, BECAUSE krnl386 IS A SECOND ALLOCATOR. ────
+     (session 48) MS Paint and Notepad both died on `File > Save As` with a #GP in
+     `KRNL386.EXE at 0001:5349` -- `les di,[0x275] / mov al,es:[di]`, reading the
+     current-drive byte out of the DOS structures krnl386 cached at boot. It
+     caches them as OFFSETS and fills in the segment halves at `seg1:0xc0fd` with
+     `mov ax,2 / int 31h` -- DPMI Segment-to-Descriptor. That call succeeded:
+
+       INT31h AX=0002 BX=0x50    -> sel 0x018f          ; idx 0x31, limit 0xFFFF
+       INT31h AX=000C BX=0x018f  <- base=0x0002a800 limit=0x031f
+       INT31h AX=000C BX=0x018f  <- base=0x03b4c1c0 limit=0x003f
+       LDTSYNC idx 0x31 <- guest wrote ... INSTALL FAILED
+
+     ⇒ **krnl386 reuses the index we took.** It never asked for it: it keeps its
+     own idea of which LDT entries are free, reaches them through `DPMI 000C` and
+     by writing the descriptor shadow directly, and cannot know `g_ldt_next` had
+     already handed 0x31 out. Two allocators over one table.
+   ⚠⚠ NOT "freed and recycled". That was the first explanation and it is refuted
+     by the same logs: `grep -c recycled` is 0 across three full runs and there is
+     no `DPMI 0001` on that selector anywhere. Nothing was freed.
+
+   ★★★ THE POOL IS MEASURED, NOT CHOSEN. Every LDT index the guest touches was
+     harvested out of three logs already on disk (a WOW bootstrap, a Paint
+     session, a Save As) -- 348 distinct indices, `0x001..0x189`, dense from
+     `0x30` upward with a few singletons at `0x1`, `0x2`, `0x3`, `0x8`, `0x2c`.
+     The largest untouched run is **`0x09..0x2b`, 35 entries**, and a whole run
+     mints only **11** host selectors, so the headroom is 3x.
+   ★ And it explains why this took until now to bite: `g_ldt_next` starts at 6 and
+     krnl386's arena starts at 0x30, so the two only collide for the handful of
+     allocations made while the counter is passing through the low 0x30s. The
+     SysVars selector was one; `seg 0x1ef3 -> sel 0x17f` (idx 0x2f) missed by one.
+   ⚠ ON EXHAUSTION IT FALLS BACK to the shared counter and says so, because a
+     host that stops minting selectors is worse than one that risks the old bug. */
+static int g_hostpool_next = DPMI_HOSTPOOL_LO;
+static int g_hostpool_spill = 0;
+
+static int dpmi_host_idx(void)
+{
+    if (g_hostpool_next <= DPMI_HOSTPOOL_HI) return g_hostpool_next++;
+    if (g_ldt_next >= DPMI_LDT_MAX) return -1;
+    g_hostpool_spill = 1;
+    return g_ldt_next++;
+}
+
 /* A 16-bit CODE selector based on DOS_HDLR_SEG, so the host's own stubs (the 0306
    protected-to-real entry, the 0305 save/restore no-op) have a protected-mode address
-   to hand the client. Allocated once, from the same LDT pool the client allocates from,
-   and cached -- 0305 and 0306 both want it and a client may call either more than once. */
+   to hand the client. Allocated once, from the host-private pool above, and cached --
+   0305 and 0306 both want it and a client may call either more than once. */
 static WORD g_dpmi_hdlr_sel = 0;
 static WORD dpmi_hdlr_code_sel(void)
 {
     int idx;
     if (g_dpmi_hdlr_sel) return g_dpmi_hdlr_sel;
-    if (g_ldt_next >= DPMI_LDT_MAX) return 0;
-    idx = g_ldt_next++;
+    idx = dpmi_host_idx();
+    if (idx < 0) return 0;
     g_ldt[idx].base   = (DWORD)DOS_HDLR_SEG << 4;
     g_ldt[idx].limit  = 0xFFFF;
     g_ldt[idx].access = 0xFA;                 /* present, DPL3, code, readable        */
@@ -6990,8 +7040,10 @@ static WORD dpmi_seg_to_desc(WORD seg)
 {
     int i, idx;
     for (i = 0; i < g_s2d_n; ++i) if (g_s2d_seg[i] == seg) return g_s2d_sel[i];
-    if (g_ldt_next >= DPMI_LDT_MAX) return 0;
-    idx = g_ldt_next++;
+    /* ★ THE HOST-PRIVATE POOL, and this is the call that proved it necessary --
+         krnl386 keeps the selector this returns for the life of the VDM. */
+    idx = dpmi_host_idx();
+    if (idx < 0) return 0;
     g_ldt[idx].base   = (DWORD)seg << 4;
     g_ldt[idx].limit  = 0xFFFF;
     g_ldt[idx].access = 0xF2;                /* present, DPL3, data, read/write */
@@ -7014,8 +7066,9 @@ static WORD wow_callback_selector(void)
 {
     int idx;
     if (g_wow_cbk_sel) return g_wow_cbk_sel;
-    if (!g_wow_cbk_seg || g_ldt_next >= DPMI_LDT_MAX) return 0;
-    idx = g_ldt_next++;
+    if (!g_wow_cbk_seg) return 0;
+    idx = dpmi_host_idx();       /* host-private: the guest returns THROUGH this */
+    if (idx < 0) return 0;
     g_ldt[idx].base   = g_wow_cbk_lin;
     g_ldt[idx].limit  = 0x0F;
     g_ldt[idx].access = 0xFA;                /* present, DPL3, code, readable */
@@ -7999,11 +8052,14 @@ static void wow_probe_selectors(void)
          work: jumping to sel 0x1F:0xC02B would have #GP'd instantly, with a log
          claiming a code selector had installed cleanly.
          6 is the same floor INT 31h 0001 calls "reserved", so a client cannot free
-         these either; keeping the two in step is why the constant is shared. */
-    if (g_ldt_next < DPMI_LDT_RESERVED) {
-        q = m; q = zput(q, "  skipping reserved LDT indices, next 0x");
+         these either; keeping the two in step is why the constant is shared.
+       ★ SINCE SESSION 48 the floor is `DPMI_LDT_FIRSTFREE`, above the host's own
+         private pool, so a client allocation can never land on a selector the host
+         has handed out and the guest is holding forever. */
+    if (g_ldt_next < DPMI_LDT_FIRSTFREE) {
+        q = m; q = zput(q, "  skipping reserved + host-pool LDT indices, next 0x");
         q = zhex(q, (DWORD)g_ldt_next); q = zput(q, " -> 0x");
-        g_ldt_next = DPMI_LDT_RESERVED;
+        g_ldt_next = DPMI_LDT_FIRSTFREE;
         q = zhex(q, (DWORD)g_ldt_next);
         q = zput(q, " (2 and 3 are forced to data by dpmi_install)\r\n");
         log_append(LDTLOG_PATH, m, q);
@@ -10499,6 +10555,9 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                                     (const volatile BYTE *)(ULONG_PTR)dgb;
                                 p = zput(p, " task=0x");
                                 p = zhex(p, (DWORD)(dg[0x228] | (dg[0x229] << 8)));
+                                /* ★ And keep it where USER's GetWindowTask can
+                                     see it -- the same word, read once. */
+                                g_wu_curtask = (WORD)(dg[0x228] | (dg[0x229] << 8));
                             }
                         }
                         /* ── ★ AND WHICH EPILOGUE THIS CALL WILL RETURN THROUGH.
@@ -12650,6 +12709,13 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                             VDM_REG(tib, VTIB_EFLAGS) &= ~1u;
                             p = zput(p, " -> seg 0x");  p = zhex(p, rseg);
                             p = zput(p, " = sel 0x");   p = zhex(p, s2d);
+                            /* ⚠ Say so the moment the host-private pool overflows:
+                                 past that point host selectors come from the client's
+                                 arena again and the collision this pool exists to
+                                 prevent is back, silently. */
+                            if (g_hostpool_spill)
+                                p = zput(p, " ** HOST LDT POOL EXHAUSTED -- minting from"
+                                            " the client arena, collisions possible **");
                             break; }
                         case 0x0003:                               /* get selector increment value */
                             /* The amount to add to a selector to reach the next one in a block

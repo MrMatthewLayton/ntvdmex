@@ -198,9 +198,15 @@
 
 typedef struct {
     WORD h;                          /* 0 = free */
-    WORD ord;                        /* the ordinal the guest asked for */
+    WORD ord;                        /* the ordinal the guest asked for, or 0 */
     WORD kind;                       /* 1 = predefined system object, 3 = the
                                         MODULE's own resource */
+    /* ★★ A RESOURCE CAN BE NAMED, AND MS PAINT'S ALL ARE. (session 47) Its icon
+         group is "PBRUSH" and its seven cursors are "FLOOD", "CROSSH", "PICK"…,
+         so a token that can only carry an ORDINAL cannot name any of them --
+         which is why Paint had no icon at all and never changed its pointer.
+         `ord` and `name` are alternatives: exactly one is set. */
+    char name[32];
 } wowuser_sysres_t;
 
 static wowuser_sysres_t g_wu_sysres[WOWUSER_MAX_SYSRES];
@@ -224,6 +230,32 @@ static WORD wowuser_sysres_kind(WORD h)
     for (i = 0; i < g_wu_nsysres; ++i)
         if (g_wu_sysres[i].h == h) return g_wu_sysres[i].kind;
     return 0;
+}
+
+/* Case-insensitive compare, for the same reason `wowuser_find` is: a Win16
+   resource name is stored upper-cased and asked for however the source wrote it
+   ("PBRUSH2" stored, "PBrush2" asked -- session 45). */
+static int wowuser_streq_ci(const char *a, const char *b)
+{
+    int k;
+    for (k = 0; ; ++k) {
+        char ca = a[k], cb = b[k];
+        if (ca >= 'a' && ca <= 'z') ca = (char)(ca - 32);
+        if (cb >= 'a' && cb <= 'z') cb = (char)(cb - 32);
+        if (ca != cb) return 0;
+        if (!ca) return 1;
+    }
+}
+
+/* The resource NAME behind a token, or NULL if it was asked for by ordinal. */
+static const char *wowuser_sysres_name(WORD h)
+{
+    int i;
+    if (!h) return NULL;
+    for (i = 0; i < g_wu_nsysres; ++i)
+        if (g_wu_sysres[i].h == h)
+            return g_wu_sysres[i].name[0] ? g_wu_sysres[i].name : NULL;
+    return NULL;
 }
 
 /* ── ★★★ THE LAYOUT CLUSTER -- WHAT MAKES NOTEPAD USABLE. (session 44) ────────
@@ -494,6 +526,171 @@ static WORD wowuser_sysres_kind(WORD h)
      (2 + 4 + 2), and `neimports.py` names the call site in PBRUSH.EXE outright.
      The run confirms the order: `(2020 | 6ed6 09c7 | 20c0)` is a stock-object
      BRUSH token at +0, a far RECT at +2 and one of our DC tokens at +6. */
+/* ── ★★★★★ THE SECOND USER SWEEP (session 47). ──────────────────────────────
+     With `neneeds.py` able to see through USER's validating export wrappers, the
+     surface these two programs actually reach went from 52 to 92 calls, and
+     everything below is on that list with its id and argument count read out of
+     `user.exe`'s own entry table. The constants are read out of the GUEST, not
+     out of a header:
+
+       SetClassWord  `PBRUSH seg3:0x09b8`  push [bp+0xe] / push -0x0c / …
+                     ⇒ index -12 = GCW_HCURSOR, and the value is
+                       LoadCursor(0, 0x7f00) = IDC_ARROW. **This is how MS Paint
+                       changes its pointer per tool** -- eighteen calls a run,
+                       every one of them stepped over until now.
+       GetWindowLong `PBRUSH seg3:0x0241`  push [0x2ce8] / push -0x10
+                     ⇒ index -16 = GWL_STYLE, read and written back through
+                       SetWindowLong at seg3:0x0308.
+       GetKeyState   `PBRUSH seg3:0x1341`  … / and ax,0x8000
+                     ⇒ it tests the HIGH BIT, i.e. "is the key down now", which is
+                       Win32's convention unchanged.
+   ⚠ Win16's negative indices are the same numbers as Win32's for the fields that
+     exist in both, which is what the two readings above independently confirm --
+     but only for those two. Anything else is refused by name rather than passed
+     through on the strength of a pattern. */
+#define WOWUSER_DEFWINDOWPROC    0x006b
+#define DWP_ARG_LPARAM   0               /* DWORD */
+#define DWP_ARG_WPARAM   4
+#define DWP_ARG_MSG      6
+#define DWP_ARG_HWND     8
+
+#define WOWUSER_SETCLASSWORD     0x0082
+#define SCW_ARG_VALUE    0
+#define SCW_ARG_INDEX    2
+#define SCW_ARG_HWND     4
+#define WOW16_GCW_HCURSOR  (-12)
+
+#define WOWUSER_GETWINDOWLONG    0x0087
+#define GWL_ARG_INDEX    0
+#define GWL_ARG_HWND     2
+#define WOWUSER_SETWINDOWLONG    0x0088
+#define SWL_ARG_VALUE    0               /* DWORD */
+#define SWL_ARG_INDEX    4
+#define SWL_ARG_HWND     6
+#define WOW16_GWL_WNDPROC  (-4)
+#define WOW16_GWL_STYLE   (-16)
+#define WOW16_GWL_EXSTYLE (-20)
+
+#define WOWUSER_GETKEYSTATE      0x006a
+#define WOWUSER_GETSYSCOLOR      0x00b4
+#define WOWUSER_GETMESSAGEPOS    0x0077
+#define WOWUSER_GETMSGEXTRAINFO  0x0120
+#define WOWUSER_GETDESKTOPWINDOW 0x011e
+#define WOWUSER_BRINGWINDOWTOTOP 0x002d
+#define WOWUSER_DRAWMENUBAR      0x00a0
+#define WOWUSER_SHOWCURSOR       0x0047
+#define WOWUSER_GETCURSORPOS     0x0011  /* 4 args, far LPPOINT */
+#define WOWUSER_SETCURSORPOS     0x0046  /* 4 args (x, y)       */
+#define WOWUSER_SCREENTOCLIENT   0x001d  /* 6 args              */
+#define STC_ARG_POINT    0
+#define STC_ARG_HWND     4
+
+#define WOWUSER_INVERTRECT       0x0052  /* 6 args (hDC, lpRect) */
+#define IR_ARG_RECT      0
+#define IR_ARG_HDC       4
+
+#define WOWUSER_GLOBALADDATOM    0x010c  /* 4 args, far LPCSTR */
+#define WOWUSER_GLOBALDELATOM    0x010d  /* 2 args             */
+
+#define WOWUSER_SELECTPALETTE    0x011a  /* 6 args (hDC, hPal, bForce) */
+#define SPL_ARG_FORCE    0
+#define SPL_ARG_PAL      2
+#define SPL_ARG_HDC      4
+#define WOWUSER_REALIZEPALETTE   0x011b  /* 2 args (hDC) */
+
+/* The caret -- five calls that stand or fall together, which is why they are one
+   group here. MS Paint's Text tool needs all of them. */
+#define WOWUSER_CREATECARET      0x00a3  /* 8 args */
+#define CC_ARG_HEIGHT    0
+#define CC_ARG_WIDTH     2
+#define CC_ARG_BITMAP    4
+#define CC_ARG_HWND      6
+#define WOWUSER_DESTROYCARET     0x00a4  /* 0 args */
+#define WOWUSER_SETCARETPOS      0x00a5  /* 4 args */
+#define WOWUSER_HIDECARET        0x00a6  /* 2 args */
+#define WOWUSER_SHOWCARET        0x00a7  /* 2 args */
+
+#define WOWUSER_SETWINDOWPOS     0x00e8  /* 14 args */
+#define SWP_ARG_FLAGS    0
+#define SWP_ARG_CY       2
+#define SWP_ARG_CX       4
+#define SWP_ARG_Y        6
+#define SWP_ARG_X        8
+#define SWP_ARG_AFTER   10
+#define SWP_ARG_HWND    12
+
+#define WOWUSER_GETSCROLLPOS     0x003f  /* 4 args (hWnd, nBar) */
+#define GSP_ARG_BAR      0
+#define GSP_ARG_HWND     2
+
+/* ── ★★★★★ THE OLE CLUSTER -- WHAT `File > Save As` DIES ON NOW. (session 49) ─
+     With the LDT collision fixed, MS Paint's save runs, reads its whole canvas
+     with `GetDIBits`, and then dies in **OLESVR.DLL at 0003:1548** -- because
+     Paint registers itself as an OLE server and OLESVR notifies its clients that
+     the document changed. The fault frame names the instruction and the reason:
+
+       bytes@fault = 26 83 7f 0e 00     cmp word ptr es:[bx+0x0e], 0
+       fault regs  = ... es=0x0000{NO DESCRIPTOR} ebx=0x0000
+
+     i.e. a NULL far pointer dereferenced without a check. Three lines of log
+     before it say where the null came from:
+
+       FUNC=0x2e from=OLESVR seg3:0x1528 (0x0200) -> UNIMPLEMENTED, answered 0
+       FUNC=0x35 ... DestroyWindow 0x0200 -> destroyed
+       FUNC=0x87 from=OLESVR seg3:0x153e (0,0) -> GetWindowLong(0x0000,0)
+                                                  ★ NOT ONE OF OUR WINDOWS; 0
+
+     `USER.46 GetParent` was stepped over, so OLESVR asked window 0 for its
+     window long, got 0, and dereferenced it. ⇒ **`GetParent` is the whole bug.**
+   ★ AND THE ANSWER IS KNOWN TO BE RIGHT BEFORE THE RUN. Window `0x0200` is
+     `CreateWindow("DocWndClass","Doc", style=0x40000000 = WS_CHILD)` and its
+     argument block carries `hwndParent = 0x0140` -- and thirty lines earlier the
+     log has `SetWindowLong(0x0140, 0000, 0x09b70000)`, which is OLESVR storing
+     its server object on exactly that window. So `GetParent(0x200) -> 0x140`
+     makes `GetWindowLong(0x140,0)` hand back the pointer it stored itself.
+   ⚠ The rest of this cluster is everything else OLESVR reaches that is still
+     stepped over, because a null from any of them lands the same way. */
+#define WOWUSER_GETPARENT        0x002e  /* ord 46,  2 args  ★ THE FIX */
+#define WOWUSER_GETWINDOW        0x0106  /* ord 262, 4 args            */
+#define GW_ARG_CMD       0
+#define GW_ARG_HWND      2
+#define WOWUSER_GETCLASSNAME     0x003a  /* ord 58,  8 args            */
+#define GCN_ARG_MAX      0
+#define GCN_ARG_BUF      2               /* far */
+#define GCN_ARG_HWND     6
+#define WOWUSER_GETWINDOWTASK    0x00e0  /* ord 224, 2 args            */
+
+/* The window property list. ⚠ A property NAME is either a far string or an ATOM
+   in the low word of a far pointer whose SELECTOR IS ZERO (MAKEINTATOM) -- so a
+   lookup that only understands strings finds nothing and a store that only
+   understands strings keeps nothing, which is the same null-pointer ending. Both
+   forms are canonicalised to one key here, atoms as "#nnnn". */
+#define WOWUSER_REMOVEPROP       0x0018  /* ord 24,  6 args */
+#define WOWUSER_GETPROP          0x0019  /* ord 25,  6 args */
+#define WOWUSER_SETPROP          0x001a  /* ord 26,  8 args */
+#define PROP_ARG_NAME_G  0               /* Get/Remove: far name @0, hWnd @4 */
+#define PROP_ARG_HWND_G  4
+#define PROP_ARG_DATA_S  0               /* Set: data @0, far name @2, hWnd @6 */
+#define PROP_ARG_NAME_S  2
+#define PROP_ARG_HWND_S  6
+
+#define WOWUSER_GLOBALFINDATOM   0x010e  /* ord 270, 4 args */
+#define WOWUSER_GLOBALATOMNAME   0x010f  /* ord 271, 8 args */
+#define GAN_ARG_SIZE     0
+#define GAN_ARG_BUF      2               /* far */
+#define GAN_ARG_ATOM     6
+
+#define WOWUSER_MAX_PROP 64
+typedef struct { WORD hwnd; WORD data; char name[32]; } wowuser_prop_t;
+static wowuser_prop_t g_wu_prop[WOWUSER_MAX_PROP];
+static int            g_wu_nprop = 0;
+
+/* The Win16 task that is running right now. ⚠ NOT invented and not derived here:
+   it is krnl386's own current-task word at DGROUP `[0x228]` (session 38), which
+   the dispatcher already reads at every BOP for the log -- this just keeps the
+   last value where `GetWindowTask` can see it. 0 until the first BOP. */
+static WORD g_wu_curtask = 0;
+
 #define WOWUSER_FILLRECT         0x0051
 #define FR_ARG_BRUSH     0
 #define FR_ARG_RECT      2
@@ -685,15 +882,46 @@ static HMENU wowuser_menu32(WORD h)
      in one place and wrong in the other".
    `picked` receives the colour depth chosen out of the application's own icon
      group, or 0, so a log line can say which image the OS was given. */
-static HICON wowuser_sysres_hicon(WORD token, int *picked)
+static HICON wowuser_sysres_hicon(WORD token, int *picked, int cx, int cy)
 {
     WORD ord  = wowuser_sysres_ord(token);
     WORD kind = wowuser_sysres_kind(token);
+    const char *nm = wowuser_sysres_name(token);
     if (picked) *picked = 0;
+    if (nm)
+        return wowres_open(g_wow_cmd_prog) ? wowres_icon_named(nm, picked, cx, cy)
+                                           : NULL;
     if (!ord) return NULL;
     if (kind == AD_KIND_MODULERES)
-        return wowres_open(g_wow_cmd_prog) ? wowres_icon(ord, picked) : NULL;
+        return wowres_open(g_wow_cmd_prog) ? wowres_icon(ord, picked, cx, cy) : NULL;
+    /* ⚠ A PREDEFINED icon at an explicit size needs LoadImage, not LoadIcon --
+         LoadIcon always gives SM_CXICON and the small one would be derived
+         again, which is the defect this parameter exists to remove. */
+    if (cx || cy)
+        return (HICON)LoadImageA(NULL, MAKEINTRESOURCEA(ord), IMAGE_ICON,
+                                 cx, cy, LR_SHARED | LR_DEFAULTCOLOR);
     return LoadIconA(NULL, MAKEINTRESOURCEA(ord));
+}
+
+/* ── ★ THE SAME TOKEN, RESOLVED AS A CURSOR. ────────────────────────────────
+     The mirror of the function above, and it exists for the same reason: only
+     the guest knows which of the two a token is, and it says so by which
+     WNDCLASS field it drops it into. ⚠ `fell` reports "the OS did not know that
+     predefined ordinal", which is a different failure from "this application has
+     no such named cursor" -- the caller logs them differently because one is our
+     assumption being wrong and the other is the guest's resource missing. */
+static HCURSOR wowuser_sysres_hcursor(WORD token, int *fell)
+{
+    WORD ord  = wowuser_sysres_ord(token);
+    const char *nm = wowuser_sysres_name(token);
+    HCURSOR c;
+    if (fell) *fell = 0;
+    if (nm)
+        return wowres_open(g_wow_cmd_prog) ? wowres_cursor_named(nm) : NULL;
+    if (!ord) return NULL;
+    c = LoadCursorA(NULL, MAKEINTRESOURCEA(ord));
+    if (!c && fell) *fell = 1;
+    return c;
 }
 
 /* ShowWindow(hWnd, nCmdShow) -- 4 bytes, reversed as always, and confirmed by the
@@ -1847,10 +2075,17 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
             WORD icoord = wowuser_sysres_ord(c->hicon);
             WORD icokind = wowuser_sysres_kind(c->hicon);
             int  fell   = 0, bits = 0;
-            HICON hico  = wowuser_sysres_hicon(c->hicon, &bits);
+            HICON   hico = wowuser_sysres_hicon(c->hicon, &bits, 0, 0);
+            /* ★ AND AN EXPLICIT SMALL ONE -- see the note in wowres.h. Built
+                 from the same group at 16x16 rather than left to be derived,
+                 because the derived one measured monochrome against stock. */
+            HICON   hsm  = wowuser_sysres_hicon(c->hicon, NULL,
+                                                GetSystemMetrics(SM_CXSMICON),
+                                                GetSystemMetrics(SM_CYSMICON));
+            HCURSOR hcur = wowuser_sysres_hcursor(c->hcursor, NULL);
             if (!c->reg32)
                 c->reg32 = wowwin_register(c->name, c->cls32, sizeof c->cls32,
-                                           curord, hico, &fell);
+                                           hcur, hico, hsm, &fell);
             c->curord = curord; c->icoord = icoord; c->curfell = fell;
             c->icobits = bits; c->icokind = icokind;
         }
@@ -1864,14 +2099,23 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
             wu_puts(note, notecap, &k, c->cls32);
             if (c->curord) { wu_puts(note, notecap, &k, " cursor=0x");
                              wu_puthex(note, notecap, &k, c->curord, 4); }
+            else if (wowuser_sysres_name(c->hcursor)) {
+                wu_puts(note, notecap, &k, " cursor=");
+                wu_putq(note, notecap, &k, wowuser_sysres_name(c->hcursor));
+            }
             if (c->menuname[0]) { wu_puts(note, notecap, &k, " MENU=");
                                   wu_putq(note, notecap, &k, c->menuname); }
             else if (c->menuord) { wu_puts(note, notecap, &k, " MENU=#");
                                    wu_puthex(note, notecap, &k, c->menuord, 4); }
             else wu_puts(note, notecap, &k, " (no menu named)");
-            if (c->icoord) {
-                wu_puts(note, notecap, &k, " icon=0x");
-                wu_puthex(note, notecap, &k, c->icoord, 4);
+            if (c->icoord || wowuser_sysres_name(c->hicon)) {
+                if (c->icoord) {
+                    wu_puts(note, notecap, &k, " icon=0x");
+                    wu_puthex(note, notecap, &k, c->icoord, 4);
+                } else {
+                    wu_puts(note, notecap, &k, " icon=");
+                    wu_putq(note, notecap, &k, wowuser_sysres_name(c->hicon));
+                }
                 if (c->icokind == AD_KIND_MODULERES) {
                     wu_puts(note, notecap, &k, c->icobits ? " (the app's own, "
                                                             : " (the app's own -- "
@@ -1883,8 +2127,10 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
                 }
             }
             if (c->curfell)
-                wu_puts(note, notecap, &k, " -- ★ THE OS DID NOT KNOW THAT CURSOR"
-                                           " ORDINAL; fell back to IDC_ARROW");
+                wu_puts(note, notecap, &k, " -- ★ NO CURSOR WAS BUILT (an ordinal"
+                                           " the OS does not know, or a named"
+                                           " resource not in this module); fell"
+                                           " back to IDC_ARROW");
         }
         wow32_setret(f, c->atom);
         return 1;
@@ -2676,15 +2922,61 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
             wow32_setret(f, 0);
             return 1;
         }
+        /* ── ★★★★★ A NAMED RESOURCE IS NOT AN EXOTIC CASE. (session 47) ──────
+             This used to answer 0 here and say so, on the grounds that no run
+             had shown one. One had -- MS Paint, every time, in silence: its icon
+             group is `"PBRUSH"` and its seven cursors are `"FLOOD"`, `"CROSSH"`,
+             `"PICK"`, `"TEXT"`, `"SIDEAROW"`, `"DUMMY"`, `"XDUMMY"`, all read
+             out of its own resource table. **The window came up with the generic
+             application icon and the pointer never changed shape**, which is
+             exactly what "answered 0" looks like from the desktop and does not
+             look like an error anywhere.
+           ⚠ THIS IS THE THIRD TIME THE SAME GAP HAS BEEN FOUND. Session 45 hit
+             it on MENUS (`MENU="PBrush2"`) and fixed `wowres_find` for menus
+             only; the icon and cursor paths kept the integer-only lookup. **A
+             fix that is not carried to every lookup of the same kind is half a
+             fix**, so both are named here and both resolve through the same
+             `wowres_find_named`. */
         if (hi) {
-            /* A far pointer to a NAME rather than MAKEINTRESOURCE. Real, and not
-               something a run has shown us, so it is refused by name. */
-            wu_puts(note, notecap, &k, " -- a NAMED resource (0x");
-            wu_puthex(note, notecap, &k, hi, 4);
-            wu_puts(note, notecap, &k, ":0x");
-            wu_puthex(note, notecap, &k, lo, 4);
-            wu_puts(note, notecap, &k, "), not an ordinal; answered 0");
-            wow32_setret(f, 0);
+            char nm[32];
+            wow32_argstr(f, AD_ARG_NAMELO, nm, sizeof nm);
+            wu_puts(note, notecap, &k, " name=");
+            wu_putq(note, notecap, &k, nm);
+            if (!nm[0]) {
+                wu_puts(note, notecap, &k, " -- ★ an unreadable name pointer;"
+                                           " answered 0");
+                wow32_setret(f, 0);
+                return 1;
+            }
+            for (i = 0; i < g_wu_nsysres; ++i)
+                if (g_wu_sysres[i].kind == kind
+                    && wowuser_streq_ci(g_wu_sysres[i].name, nm)) {
+                    wu_puts(note, notecap, &k, " -> 0x");
+                    wu_puthex(note, notecap, &k, g_wu_sysres[i].h, 4);
+                    wu_puts(note, notecap, &k, " (already issued)");
+                    wow32_setret(f, g_wu_sysres[i].h);
+                    return 1;
+                }
+            if (g_wu_nsysres >= WOWUSER_MAX_SYSRES) {
+                wu_puts(note, notecap, &k, " -- ★ NO TOKEN LEFT, answered 0");
+                wow32_setret(f, 0);
+                return 1;
+            }
+            i = g_wu_nsysres++;
+            g_wu_sysres[i].ord  = 0;
+            g_wu_sysres[i].kind = kind;
+            {   int j = 0;
+                while (nm[j] && j < (int)sizeof g_wu_sysres[i].name - 1) {
+                    g_wu_sysres[i].name[j] = nm[j]; ++j;
+                }
+                g_wu_sysres[i].name[j] = 0;
+            }
+            g_wu_sysres[i].h = (WORD)(WOWUSER_SYSRES_BASE + i * WOWUSER_SYSRES_STEP);
+            wu_puts(note, notecap, &k, " -> token 0x");
+            wu_puthex(note, notecap, &k, g_wu_sysres[i].h, 4);
+            wu_puts(note, notecap, &k, "; the OS object is fetched when the guest"
+                                       " says whether it is a cursor or an icon");
+            wow32_setret(f, g_wu_sysres[i].h);
             return 1;
         }
         wu_puts(note, notecap, &k, " ordinal=0x");
@@ -2692,7 +2984,8 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
         /* One token per ordinal: the guest asks for IDC_ARROW in twenty classes
            and should get one answer, the way the OS gives one HCURSOR. */
         for (i = 0; i < g_wu_nsysres; ++i)
-            if (g_wu_sysres[i].ord == lo && g_wu_sysres[i].kind == kind) {
+            if (g_wu_sysres[i].ord == lo && g_wu_sysres[i].kind == kind
+                && !g_wu_sysres[i].name[0]) {
                 wu_puts(note, notecap, &k, " -> 0x");
                 wu_puthex(note, notecap, &k, g_wu_sysres[i].h, 4);
                 wu_puts(note, notecap, &k, " (already issued)");
@@ -2707,6 +3000,7 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
         i = g_wu_nsysres++;
         g_wu_sysres[i].ord  = lo;
         g_wu_sysres[i].kind = kind;
+        g_wu_sysres[i].name[0] = 0;
         g_wu_sysres[i].h   = (WORD)(WOWUSER_SYSRES_BASE + i * WOWUSER_SYSRES_STEP);
         wu_puts(note, notecap, &k, " -> token 0x");
         wu_puthex(note, notecap, &k, g_wu_sysres[i].h, 4);
@@ -3831,6 +4125,773 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
             wu_puts(note, notecap, &k, " -> ended");
         }
         wow32_setret(f, 1);
+        return 1;
+    }
+
+    /* ── ★★★★★ 0x6b DefWindowProc -- AND USER.107 IS *NOT* PURELY 16-BIT. ────
+       ⚠⚠ **A NOTE EARLIER IN THIS FILE SAID THE OPPOSITE AND IT IS CORRECTED
+         HERE.** It read USER.107's first bytes (`55 8b ec 68 86 1d …`), saw
+         ordinary 16-bit code rather than a stub, and concluded "USER implements
+         it ITSELF". The prologue is 16-bit; the FUNCTION is not:
+
+           user seg1:0x1d5e  push bp / mov bp,sp / push 0x1d86   ; its return stub
+                             push the five arguments
+                 0x1d73      lcall 0x1d37:0x38fe                 ; USER's own half
+                 0x1d78      or ax,ax / jne 0x1d81
+                 0x1d7c      pop bx / pop bp / cdq / jmp bx      ; handled -> return
+                 0x1d81      pop dx / pop bp / jmp 0x03e8        ; NOT handled ->
+                 0x03e8      call 0x013c
+                             push 0xa / push 0 / push 0x6b       ; ← WOW32, id 0x6b
+
+         So USER answers what it can in 16-bit code and **forwards the rest to
+         us**, and everything it forwarded has been getting the harness sentinel.
+       ⇒ The evidence that supported the old note -- "a whole run of Notepad never
+         produced one as a BOP" -- was true and did not mean what it was taken to
+         mean: it showed that USER's own half had handled everything Notepad
+         passed on, not that the 32-bit half did not exist.
+       ★ THE RIGHT ANSWER IS THE OS's. Our windows are real `HWND`s, so a message
+         the guest declines belongs to `DefWindowProcA` on the real window --
+         which is where non-client painting, sizing, activation and the system
+         menu all come from. A window whose defaults are answered `0` is a window
+         that looks right until someone uses it. */
+    case WOWUSER_DEFWINDOWPROC: {
+        WORD  hwnd = wow32_argw(f, DWP_ARG_HWND);
+        WORD  msg  = wow32_argw(f, DWP_ARG_MSG);
+        WORD  wp   = wow32_argw(f, DWP_ARG_WPARAM);
+        DWORD lp   = wow32_argd(f, DWP_ARG_LPARAM);
+        HWND  h    = wowuser_hwnd32(hwnd);
+        int   k = 0;
+        LRESULT r;
+        wu_puts(note, notecap, &k, "DefWindowProc(0x");
+        wu_puthex(note, notecap, &k, hwnd, 4);
+        wu_puts(note, notecap, &k, " msg=0x");
+        wu_puthex(note, notecap, &k, msg, 4);
+        wu_puts(note, notecap, &k, " wParam=0x");
+        wu_puthex(note, notecap, &k, wp, 4);
+        wu_puts(note, notecap, &k, " lParam=0x");
+        wu_puthex(note, notecap, &k, lp, 8);
+        wu_puts(note, notecap, &k, ")");
+        if (!h) {
+            wu_puts(note, notecap, &k, " -- ★ NOT ONE OF OUR WINDOWS; answered 0");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        r = DefWindowProcA(h, msg, (WPARAM)wp, (LPARAM)lp);
+        wu_puts(note, notecap, &k, " -> 0x");
+        wu_puthex(note, notecap, &k, (DWORD)r, 8);
+        wow32_setret(f, (DWORD)r);
+        return 1;
+    }
+
+    /* ── ★★★ 0x82 SetClassWord -- HOW MS PAINT CHANGES ITS POINTER. ──────────
+         Its own call site pins both the index and the intent (see the note by
+         the defines): `push -0x0c` is GCW_HCURSOR, and the value is a cursor
+         token minted by 0xad. Eighteen of these a run, and with all of them
+         stepped over a paint program showed an arrow over every tool.
+       ⚠ ONLY GCW_HCURSOR. The other class words -- the background brush, the icon,
+         the class style, the extra-byte counts -- change things this host either
+         mirrors elsewhere or would have to re-register a Win32 class to honour,
+         and a silent partial answer is how a guest comes to believe it changed
+         something it did not. Anything else is logged by index and refused. */
+    case WOWUSER_SETCLASSWORD: {
+        WORD hwnd = wow32_argw(f, SCW_ARG_HWND);
+        int  idx  = (int)(short)wow32_argw(f, SCW_ARG_INDEX);
+        WORD val  = wow32_argw(f, SCW_ARG_VALUE);
+        HWND h    = wowuser_hwnd32(hwnd);
+        int  k = 0, fell = 0;
+        HCURSOR c;
+        wu_puts(note, notecap, &k, "SetClassWord(0x");
+        wu_puthex(note, notecap, &k, hwnd, 4);
+        wu_puts(note, notecap, &k, ", ");
+        wu_puthex(note, notecap, &k, (DWORD)idx, 4);
+        wu_puts(note, notecap, &k, ", 0x");
+        wu_puthex(note, notecap, &k, val, 4);
+        wu_puts(note, notecap, &k, ")");
+        if (!h) {
+            wu_puts(note, notecap, &k, " -- ★ NOT ONE OF OUR WINDOWS; answered 0");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        if (idx != WOW16_GCW_HCURSOR) {
+            wu_puts(note, notecap, &k, " -- ★ ONLY GCW_HCURSOR (-12) is answered;"
+                                       " this index is logged and refused rather"
+                                       " than half-applied");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        c = wowuser_sysres_hcursor(val, &fell);
+        if (!c) {
+            wu_puts(note, notecap, &k, " -- ★ that is not a cursor this host"
+                                       " built (an unknown token, or a named"
+                                       " resource not in this module); refused");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        {   const char *nm = wowuser_sysres_name(val);
+            if (nm) { wu_puts(note, notecap, &k, " cursor="); wu_putq(note, notecap, &k, nm); }
+        }
+        SetClassLongA(h, GCL_HCURSOR, (LONG)(LONG_PTR)c);
+        /* ⚠ The class cursor only takes effect on the next WM_SETCURSOR, and a
+             guest that changed it mid-stroke expects it NOW -- which is what the
+             OS does for its own programs because the mouse is inside the window. */
+        SetCursor(c);
+        wu_puts(note, notecap, &k, " -> applied to the class and to the pointer now");
+        wow32_setret(f, val);
+        return 1;
+    }
+
+    /* ── ★ 0x87 GetWindowLong / 0x88 SetWindowLong ──────────────────────────
+         MS Paint reads and writes GWL_STYLE (-16); the positive indices are the
+         window's own extra bytes, which this host already keeps (as WORDs, per
+         the class's `cbWndExtra`) and which a LONG spans two of.
+       ★ GWL_WNDPROC IS ANSWERABLE AND IS ANSWERED: the guest's own 16:16 window
+         procedure is recorded at creation, so this hands back the value the guest
+         itself supplied rather than a host address it could not call.
+       ⚠ SETTING GWL_WNDPROC IS REFUSED. Subclassing would have to re-point a
+         procedure this host calls through `wowcall`, and answering "done" without
+         doing it is the failure mode this project treats as the most expensive. */
+    case WOWUSER_GETWINDOWLONG:
+    case WOWUSER_SETWINDOWLONG: {
+        int   isset = (f->id == WOWUSER_SETWINDOWLONG);
+        WORD  hwnd  = wow32_argw(f, isset ? SWL_ARG_HWND  : GWL_ARG_HWND);
+        int   idx   = (int)(short)wow32_argw(f, isset ? SWL_ARG_INDEX : GWL_ARG_INDEX);
+        DWORD val   = isset ? wow32_argd(f, SWL_ARG_VALUE) : 0;
+        wowuser_win_t *w = wowuser_findwin(hwnd);
+        HWND  h = w ? w->hwnd32 : NULL;
+        int   k = 0;
+        DWORD prev = 0;
+        wu_puts(note, notecap, &k, isset ? "SetWindowLong(0x" : "GetWindowLong(0x");
+        wu_puthex(note, notecap, &k, hwnd, 4);
+        wu_puts(note, notecap, &k, ", ");
+        wu_puthex(note, notecap, &k, (DWORD)idx, 4);
+        if (isset) { wu_puts(note, notecap, &k, ", 0x");
+                     wu_puthex(note, notecap, &k, val, 8); }
+        wu_puts(note, notecap, &k, ")");
+        if (!w) {
+            wu_puts(note, notecap, &k, " -- ★ NOT ONE OF OUR WINDOWS; answered 0");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        if (idx == WOW16_GWL_STYLE || idx == WOW16_GWL_EXSTYLE) {
+            int g32 = (idx == WOW16_GWL_STYLE) ? GWL_STYLE : GWL_EXSTYLE;
+            prev = h ? (DWORD)GetWindowLongA(h, g32) : w->style;
+            if (isset) {
+                if (h) SetWindowLongA(h, g32, (LONG)val);
+                if (idx == WOW16_GWL_STYLE) w->style = val;
+            }
+        } else if (idx == WOW16_GWL_WNDPROC) {
+            prev = w->wndproc;
+            if (isset) {
+                wu_puts(note, notecap, &k, " -- ★ SUBCLASSING IS REFUSED: the"
+                                           " procedure is 16-bit and is entered"
+                                           " through wowcall, so reporting"
+                                           " success without re-pointing it would"
+                                           " be a lie");
+                wow32_setret(f, 0);
+                return 1;
+            }
+        } else if (idx >= 0 && idx + 3 < (int)(WOWUSER_MAX_EXTRA * 2)) {
+            prev = (DWORD)w->extra[idx / 2] | ((DWORD)w->extra[idx / 2 + 1] << 16);
+            if (isset) {
+                w->extra[idx / 2]     = (WORD)(val & 0xFFFF);
+                w->extra[idx / 2 + 1] = (WORD)(val >> 16);
+            }
+        } else {
+            wu_puts(note, notecap, &k, " -- ★ an index this host does not keep;"
+                                       " answered 0");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        wu_puts(note, notecap, &k, " -> 0x");
+        wu_puthex(note, notecap, &k, prev, 8);
+        wow32_setret(f, prev);
+        return 1;
+    }
+
+    /* ── ★ The answers that are the OS's own, with nothing to translate. ──────
+         Each of these is one call with one number in it, and grouping them is
+         what keeps the id-to-call mapping readable rather than spread over two
+         hundred lines of identical shape.
+       ⚠ `GetKeyState` returns the state at the last message retrieved, NOT the
+         live keyboard -- and that is the right one: MS Paint tests the high bit
+         (`and ax,0x8000` at seg3:0x1346) to decide whether SHIFT constrains the
+         shape it is drawing, and it must be the SHIFT that was down when the
+         mouse message was posted, not whenever the guest got round to asking. */
+    case WOWUSER_GETKEYSTATE:
+    case WOWUSER_GETSYSCOLOR:
+    case WOWUSER_SHOWCURSOR:
+    case WOWUSER_GETMESSAGEPOS:
+    case WOWUSER_GETMSGEXTRAINFO:
+    case WOWUSER_GETDESKTOPWINDOW: {
+        WORD a = wow32_argw(f, 0);
+        int  k = 0;
+        DWORD r = 0;
+        switch (f->id) {
+        case WOWUSER_GETKEYSTATE:
+            wu_puts(note, notecap, &k, "GetKeyState(0x");
+            wu_puthex(note, notecap, &k, a, 4);
+            wu_puts(note, notecap, &k, ")");
+            r = (DWORD)(WORD)GetKeyState((int)(short)a);
+            break;
+        case WOWUSER_GETSYSCOLOR:
+            wu_puts(note, notecap, &k, "GetSysColor(0x");
+            wu_puthex(note, notecap, &k, a, 4);
+            wu_puts(note, notecap, &k, ")");
+            r = (DWORD)GetSysColor((int)(short)a);
+            break;
+        case WOWUSER_SHOWCURSOR:
+            wu_puts(note, notecap, &k, "ShowCursor(");
+            wu_puthex(note, notecap, &k, a, 4);
+            wu_puts(note, notecap, &k, ")");
+            r = (DWORD)(WORD)(short)ShowCursor(a ? TRUE : FALSE);
+            break;
+        case WOWUSER_GETMESSAGEPOS:
+            wu_puts(note, notecap, &k, "GetMessagePos()");
+            r = (DWORD)GetMessagePos();
+            break;
+        case WOWUSER_GETMSGEXTRAINFO:
+            wu_puts(note, notecap, &k, "GetMessageExtraInfo()");
+            r = 0;
+            break;
+        default:
+            /* ⚠ ANSWERED 0, AND THAT IS THE USEFUL ANSWER RATHER THAN A REFUSAL.
+                 This host mints a Win16 handle only for a window it created, and
+                 the desktop is not one; but a NULL hWnd is what both Win16 and
+                 Win32 accept to mean "the screen" in `GetDC`, which is what a
+                 guest asks the desktop window for. So 0 travels correctly. */
+            wu_puts(note, notecap, &k, "GetDesktopWindow() -- answered 0 (NULL),"
+                                       " which is what GetDC reads as the screen");
+            r = 0;
+            break;
+        }
+        wu_puts(note, notecap, &k, " = 0x");
+        wu_puthex(note, notecap, &k, r, 8);
+        wow32_setret(f, r);
+        return 1;
+    }
+
+    /* ── ★ Two window verbs and the caret, all straight through. ──────────────
+       ⚠ The caret is per THREAD, and every Win16 window here belongs to the exec
+         thread, so the OS's own caret is the guest's caret with nothing to map. */
+    case WOWUSER_BRINGWINDOWTOTOP:
+    case WOWUSER_DRAWMENUBAR:
+    case WOWUSER_HIDECARET:
+    case WOWUSER_SHOWCARET: {
+        WORD hwnd = wow32_argw(f, 0);
+        HWND h = wowuser_hwnd32(hwnd);
+        int  k = 0, r = 0;
+        wu_puts(note, notecap, &k,
+                f->id == WOWUSER_BRINGWINDOWTOTOP ? "BringWindowToTop(0x" :
+                f->id == WOWUSER_DRAWMENUBAR      ? "DrawMenuBar(0x" :
+                f->id == WOWUSER_HIDECARET        ? "HideCaret(0x" : "ShowCaret(0x");
+        wu_puthex(note, notecap, &k, hwnd, 4);
+        wu_puts(note, notecap, &k, ")");
+        /* A null hWnd is legal for the caret calls -- it means "the window that
+           owns the caret" -- and is not for the other two. */
+        if (!h && !(hwnd == 0 && (f->id == WOWUSER_HIDECARET
+                                  || f->id == WOWUSER_SHOWCARET))) {
+            wu_puts(note, notecap, &k, " -- ★ NOT ONE OF OUR WINDOWS; answered 0");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        switch (f->id) {
+        case WOWUSER_BRINGWINDOWTOTOP: r = BringWindowToTop(h) ? 1 : 0; break;
+        case WOWUSER_DRAWMENUBAR:      DrawMenuBar(h); r = 1;           break;
+        case WOWUSER_HIDECARET:        r = HideCaret(h) ? 1 : 0;        break;
+        default:                       r = ShowCaret(h) ? 1 : 0;        break;
+        }
+        wow32_setret(f, (DWORD)r);
+        return 1;
+    }
+
+    case WOWUSER_CREATECARET: {
+        WORD hwnd = wow32_argw(f, CC_ARG_HWND);
+        WORD hbm  = wow32_argw(f, CC_ARG_BITMAP);
+        int  cw   = (int)(short)wow32_argw(f, CC_ARG_WIDTH);
+        int  ch   = (int)(short)wow32_argw(f, CC_ARG_HEIGHT);
+        HWND h    = wowuser_hwnd32(hwnd);
+        int  bk = -1;
+        HGDIOBJ b = hbm ? wowgdi_h32(hbm, &bk) : NULL;
+        int  k = 0;
+        wu_puts(note, notecap, &k, "CreateCaret(0x");
+        wu_puthex(note, notecap, &k, hwnd, 4);
+        wu_puts(note, notecap, &k, ", ");
+        wu_puthex(note, notecap, &k, (DWORD)cw, 4);
+        wu_puts(note, notecap, &k, "x");
+        wu_puthex(note, notecap, &k, (DWORD)ch, 4);
+        wu_puts(note, notecap, &k, ")");
+        if (!h) {
+            wu_puts(note, notecap, &k, " -- ★ NOT ONE OF OUR WINDOWS; answered 0");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        /* ⚠ hBitmap 0 = a solid caret and 1 = a grey one; only a real bitmap is
+             passed through, and a token we cannot name becomes a solid caret
+             rather than a wrong pattern. */
+        wow32_setret(f, (DWORD)(CreateCaret(h, (HBITMAP)(bk == WOWGDI_KIND_OBJ ? b : NULL),
+                                            cw, ch) ? 1 : 0));
+        return 1;
+    }
+
+    case WOWUSER_DESTROYCARET: {
+        int k = 0;
+        wu_puts(note, notecap, &k, "DestroyCaret()");
+        wow32_setret(f, (DWORD)(DestroyCaret() ? 1 : 0));
+        return 1;
+    }
+
+    case WOWUSER_SETCARETPOS:
+    case WOWUSER_SETCURSORPOS: {
+        int iscar = (f->id == WOWUSER_SETCARETPOS);
+        int x = (int)(short)wow32_argw(f, 2);
+        int y = (int)(short)wow32_argw(f, 0);
+        int k = 0, r;
+        wu_puts(note, notecap, &k, iscar ? "SetCaretPos(" : "SetCursorPos(");
+        wu_puthex(note, notecap, &k, (DWORD)x, 4);
+        wu_puts(note, notecap, &k, ",");
+        wu_puthex(note, notecap, &k, (DWORD)y, 4);
+        wu_puts(note, notecap, &k, ")");
+        r = iscar ? (SetCaretPos(x, y) ? 1 : 0) : (SetCursorPos(x, y) ? 1 : 0);
+        wow32_setret(f, (DWORD)r);
+        return 1;
+    }
+
+    /* ── ★ 0x11 GetCursorPos / 0x1d ScreenToClient -- a Win16 POINT is 4 bytes. */
+    case WOWUSER_GETCURSORPOS:
+    case WOWUSER_SCREENTOCLIENT: {
+        int  isstc = (f->id == WOWUSER_SCREENTOCLIENT);
+        volatile BYTE *p = wow32_argptr(f, isstc ? STC_ARG_POINT : 0);
+        WORD hwnd = isstc ? wow32_argw(f, STC_ARG_HWND) : 0;
+        HWND h    = isstc ? wowuser_hwnd32(hwnd) : NULL;
+        POINT pt;
+        int  k = 0;
+        wu_puts(note, notecap, &k, isstc ? "ScreenToClient(0x" : "GetCursorPos(0x");
+        wu_puthex(note, notecap, &k, hwnd, 4);
+        wu_puts(note, notecap, &k, ")");
+        if (!p || (isstc && !h)) {
+            wu_puts(note, notecap, &k, " -- ★ no POINT, or not one of our windows;"
+                                       " answered 0");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        if (isstc) {
+            pt.x = (int)(short)wow32_peekw(p);
+            pt.y = (int)(short)wow32_peekw(p + 2);
+            ScreenToClient(h, &pt);
+        } else {
+            pt.x = pt.y = 0;
+            GetCursorPos(&pt);
+        }
+        wow32_pokew(p,     (WORD)(short)pt.x);
+        wow32_pokew(p + 2, (WORD)(short)pt.y);
+        wu_puts(note, notecap, &k, " -> ");
+        wu_puthex(note, notecap, &k, (DWORD)(WORD)(short)pt.x, 4);
+        wu_puts(note, notecap, &k, ",");
+        wu_puthex(note, notecap, &k, (DWORD)(WORD)(short)pt.y, 4);
+        wow32_setret(f, 1);
+        return 1;
+    }
+
+    /* ── ★ 0x52 InvertRect -- USER's call, GDI's DC. ─────────────────────────*/
+    case WOWUSER_INVERTRECT: {
+        WORD hdc = wow32_argw(f, IR_ARG_HDC);
+        volatile BYTE *p = wow32_argptr(f, IR_ARG_RECT);
+        int  dk = -1;
+        HGDIOBJ d = wowgdi_h32(hdc, &dk);
+        RECT r;
+        int  k = 0;
+        wu_puts(note, notecap, &k, "InvertRect(dc 0x");
+        wu_puthex(note, notecap, &k, hdc, 4);
+        wu_puts(note, notecap, &k, ")");
+        if (!p || !d || (dk != WOWGDI_KIND_DC && dk != WOWGDI_KIND_WINDC)) {
+            wu_puts(note, notecap, &k, " -- ★ NO RECT, or not one of our DC"
+                                       " tokens; answered 0");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        r.left   = (int)(short)wow32_peekw(p);
+        r.top    = (int)(short)wow32_peekw(p + 2);
+        r.right  = (int)(short)wow32_peekw(p + 4);
+        r.bottom = (int)(short)wow32_peekw(p + 6);
+        wow32_setret(f, (DWORD)(InvertRect((HDC)d, &r) ? 1 : 0));
+        return 1;
+    }
+
+    /* ── ★ 0x10c GlobalAddAtom / 0x10d GlobalDeleteAtom -- 25 calls a run. ────
+         The system atom table is the OS's and an ATOM is a WORD in both worlds,
+         so this is the rare pair with nothing between the guest and Windows.
+       ⚠ These are what OLE and DDE names go through, which is why MS Paint --
+         which registers itself as an OLE server -- makes so many of them. */
+    case WOWUSER_GLOBALADDATOM:
+    case WOWUSER_GLOBALDELATOM: {
+        int  isadd = (f->id == WOWUSER_GLOBALADDATOM);
+        int  k = 0;
+        DWORD r;
+        if (isadd) {
+            char s[256];
+            if (!wow32_argstr(f, 0, s, sizeof s)) {
+                wu_puts(note, notecap, &k, "GlobalAddAtom(NULL) -- answered 0");
+                wow32_setret(f, 0);
+                return 1;
+            }
+            wu_puts(note, notecap, &k, "GlobalAddAtom(");
+            wu_putq(note, notecap, &k, s);
+            wu_puts(note, notecap, &k, ")");
+            r = (DWORD)GlobalAddAtomA(s);
+        } else {
+            WORD a = wow32_argw(f, 0);
+            wu_puts(note, notecap, &k, "GlobalDeleteAtom(0x");
+            wu_puthex(note, notecap, &k, a, 4);
+            wu_puts(note, notecap, &k, ")");
+            r = (DWORD)GlobalDeleteAtom(a);
+        }
+        wu_puts(note, notecap, &k, " = 0x");
+        wu_puthex(note, notecap, &k, r, 4);
+        wow32_setret(f, r);
+        return 1;
+    }
+
+    /* ── ★ 0x11a SelectPalette / 0x11b RealizePalette -- USER's, not GDI's. ───
+         Win16 puts both in USER.EXE (ordinals 282 and 283), which is why they are
+         here rather than next to the other palette calls.
+       ⚠ On this rig's 32bpp display a realized palette changes nothing, and that
+         is exactly why they are worth answering rather than leaving to the
+         sentinel: MS Paint calls them before nearly every drawing operation and a
+         guest whose SelectPalette "fails" may take a different path. */
+    case WOWUSER_SELECTPALETTE:
+    case WOWUSER_REALIZEPALETTE: {
+        int  issel = (f->id == WOWUSER_SELECTPALETTE);
+        WORD hdc = wow32_argw(f, issel ? SPL_ARG_HDC : 0);
+        WORD hp  = issel ? wow32_argw(f, SPL_ARG_PAL) : 0;
+        int  dk = -1, pk = -1;
+        HGDIOBJ d = wowgdi_h32(hdc, &dk);
+        HGDIOBJ p = hp ? wowgdi_h32(hp, &pk) : NULL;
+        int  k = 0;
+        wu_puts(note, notecap, &k, issel ? "SelectPalette(0x" : "RealizePalette(0x");
+        wu_puthex(note, notecap, &k, hdc, 4);
+        if (issel) { wu_puts(note, notecap, &k, ", pal 0x");
+                     wu_puthex(note, notecap, &k, hp, 4); }
+        wu_puts(note, notecap, &k, ")");
+        if (!d || (dk != WOWGDI_KIND_DC && dk != WOWGDI_KIND_WINDC)) {
+            wu_puts(note, notecap, &k, " -- ★ NOT ONE OF OUR DC TOKENS; answered 0");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        if (!issel) {
+            wow32_setret(f, (DWORD)RealizePalette((HDC)d));
+            return 1;
+        }
+        if (!p || (pk != WOWGDI_KIND_OBJ && pk != WOWGDI_KIND_STOCK)) {
+            wu_puts(note, notecap, &k, " -- ★ NOT ONE OF OUR PALETTE TOKENS;"
+                                       " answered 0");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        {   HPALETTE prev = SelectPalette((HDC)d, (HPALETTE)p,
+                                          wow32_argw(f, SPL_ARG_FORCE) ? TRUE : FALSE);
+            WORD tok = prev ? wowgdi_h16((HGDIOBJ)prev, WOWGDI_KIND_OBJ) : 0;
+            wu_puts(note, notecap, &k, " -> previous 0x");
+            wu_puthex(note, notecap, &k, tok, 4);
+            wow32_setret(f, tok);
+        }
+        return 1;
+    }
+
+    /* ── ★ 0xe8 SetWindowPos / 0x3d-adjacent 0x3f GetScrollPos ───────────────
+       ⚠ `hWndInsertAfter` is one of the FOUR SPECIAL VALUES (HWND_TOP = 0,
+         HWND_BOTTOM = 1, HWND_TOPMOST = -1, HWND_NOTOPMOST = -2) far more often
+         than it is a window, and those are the same numbers in both worlds -- so
+         a value that is not one of our tokens is passed through as itself rather
+         than refused, and the log says which reading was taken. */
+    case WOWUSER_SETWINDOWPOS: {
+        WORD hwnd  = wow32_argw(f, SWP_ARG_HWND);
+        WORD after = wow32_argw(f, SWP_ARG_AFTER);
+        int  x  = (int)(short)wow32_argw(f, SWP_ARG_X);
+        int  y  = (int)(short)wow32_argw(f, SWP_ARG_Y);
+        int  cx = (int)(short)wow32_argw(f, SWP_ARG_CX);
+        int  cy = (int)(short)wow32_argw(f, SWP_ARG_CY);
+        WORD fl = wow32_argw(f, SWP_ARG_FLAGS);
+        HWND h  = wowuser_hwnd32(hwnd);
+        HWND ha = wowuser_hwnd32(after);
+        int  k = 0;
+        wu_puts(note, notecap, &k, "SetWindowPos(0x");
+        wu_puthex(note, notecap, &k, hwnd, 4);
+        wu_puts(note, notecap, &k, ", after 0x");
+        wu_puthex(note, notecap, &k, after, 4);
+        wu_puts(note, notecap, &k, ", ");
+        wu_puthex(note, notecap, &k, (DWORD)x, 4);
+        wu_puts(note, notecap, &k, ",");
+        wu_puthex(note, notecap, &k, (DWORD)y, 4);
+        wu_puts(note, notecap, &k, " ");
+        wu_puthex(note, notecap, &k, (DWORD)cx, 4);
+        wu_puts(note, notecap, &k, "x");
+        wu_puthex(note, notecap, &k, (DWORD)cy, 4);
+        wu_puts(note, notecap, &k, " flags=0x");
+        wu_puthex(note, notecap, &k, fl, 4);
+        wu_puts(note, notecap, &k, ")");
+        if (!h) {
+            wu_puts(note, notecap, &k, " -- ★ NOT ONE OF OUR WINDOWS; answered 0");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        if (!ha) {
+            ha = (HWND)(LONG_PTR)(short)after;      /* HWND_TOP / BOTTOM / … */
+            wu_puts(note, notecap, &k, " [insert-after read as a CONSTANT]");
+        }
+        wow32_setret(f, (DWORD)(SetWindowPos(h, ha, x, y, cx, cy, fl) ? 1 : 0));
+        return 1;
+    }
+
+    /* ── ★★★★★ 0x2e GetParent -- see the long note by the defines. ───────────
+       ⚠ Win16's GetParent returns the parent of a child window AND THE OWNER of
+         an owned popup; both arrive in `hwndParent` at CreateWindow and this host
+         records exactly that field, so one answer serves both without the host
+         having to decide which kind of relationship it was. */
+    case WOWUSER_GETPARENT: {
+        WORD hwnd = wow32_argw(f, 0);
+        const wowuser_win_t *w = wowuser_findwin(hwnd);
+        int  k = 0;
+        wu_puts(note, notecap, &k, "GetParent(0x");
+        wu_puthex(note, notecap, &k, hwnd, 4);
+        wu_puts(note, notecap, &k, ")");
+        if (!w) {
+            wu_puts(note, notecap, &k, " -- ★ NOT ONE OF OUR WINDOWS; answered 0");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        wu_puts(note, notecap, &k, " -> 0x");
+        wu_puthex(note, notecap, &k, w->parent, 4);
+        if (!w->parent)
+            wu_puts(note, notecap, &k, " (a top-level window with no owner --"
+                                       " which is a real answer, not a failure)");
+        wow32_setret(f, w->parent);
+        return 1;
+    }
+
+    /* ── ★ 0x106 GetWindow(hWnd, uCmd) ──────────────────────────────────────
+         The OS knows the real relationships, so the walk is done on the real
+         windows and the answer translated back. ⚠ A real window that is not one
+         of ours -- the desktop, or a control the OS owns -- has no Win16 handle
+         to give, and 0 is the honest answer rather than a synthetic one. */
+    case WOWUSER_GETWINDOW: {
+        WORD hwnd = wow32_argw(f, GW_ARG_HWND);
+        WORD cmd  = wow32_argw(f, GW_ARG_CMD);
+        HWND h    = wowuser_hwnd32(hwnd);
+        int  k = 0;
+        WORD out = 0;
+        wu_puts(note, notecap, &k, "GetWindow(0x");
+        wu_puthex(note, notecap, &k, hwnd, 4);
+        wu_puts(note, notecap, &k, ", cmd ");
+        wu_puthex(note, notecap, &k, cmd, 4);
+        wu_puts(note, notecap, &k, ")");
+        if (!h) {
+            wu_puts(note, notecap, &k, " -- ★ NOT ONE OF OUR WINDOWS; answered 0");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        out = wowwin_hwnd16(GetWindow(h, cmd));
+        wu_puts(note, notecap, &k, " -> 0x");
+        wu_puthex(note, notecap, &k, out, 4);
+        wow32_setret(f, out);
+        return 1;
+    }
+
+    /* ── ★ 0x3a GetClassName -- the Win16 name, not the mangled Win32 one. ───
+       ⚠⚠ THIS MUST NOT RETURN THE REAL CLASS NAME. Every Win32 class this host
+         registers is prefixed (`NTVDMEX16.pbParent`), and a guest comparing what
+         it gets against the name it registered would never match -- OLE looks its
+         own server window up by class name. The Win16 name is the one in our own
+         class record, and that is what goes back. */
+    case WOWUSER_GETCLASSNAME: {
+        WORD hwnd = wow32_argw(f, GCN_ARG_HWND);
+        WORD cap  = wow32_argw(f, GCN_ARG_MAX);
+        volatile BYTE *dst = wow32_argptr(f, GCN_ARG_BUF);
+        const wowuser_win_t *w = wowuser_findwin(hwnd);
+        int  k = 0, n = 0;
+        wu_puts(note, notecap, &k, "GetClassName(0x");
+        wu_puthex(note, notecap, &k, hwnd, 4);
+        wu_puts(note, notecap, &k, ")");
+        if (!w || !dst || !cap) {
+            wu_puts(note, notecap, &k, " -- ★ NOT ONE OF OUR WINDOWS, or no"
+                                       " buffer; answered 0");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        {   const char *s = g_wu_class[w->cls].name;
+            while (s[n] && n < (int)cap - 1) { dst[n] = (BYTE)s[n]; ++n; }
+            dst[n] = 0;
+            wu_puts(note, notecap, &k, " -> ");
+            wu_putq(note, notecap, &k, s);
+        }
+        wow32_setret(f, (DWORD)n);
+        return 1;
+    }
+
+    /* ── ★ 0xe0 GetWindowTask -- which Win16 task owns this window. ──────────
+         Every window this host makes is created by the guest running on the exec
+         thread, so the owner is the current task and the frame carries it.
+       ⚠ A window that is not ours gets 0 rather than the current task: "I do not
+         know" and "it belongs to you" are different answers and OLE branches on
+         the difference. */
+    case WOWUSER_GETWINDOWTASK: {
+        WORD hwnd = wow32_argw(f, 0);
+        const wowuser_win_t *w = wowuser_findwin(hwnd);
+        int  k = 0;
+        wu_puts(note, notecap, &k, "GetWindowTask(0x");
+        wu_puthex(note, notecap, &k, hwnd, 4);
+        wu_puts(note, notecap, &k, ")");
+        if (!w) {
+            wu_puts(note, notecap, &k, " -- ★ NOT ONE OF OUR WINDOWS; answered 0");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        wu_puts(note, notecap, &k, " -> the current task 0x");
+        wu_puthex(note, notecap, &k, g_wu_curtask, 4);
+        wow32_setret(f, g_wu_curtask);
+        return 1;
+    }
+
+    /* ── ★★ 0x18/0x19/0x1a RemoveProp / GetProp / SetProp ───────────────────
+         A small global table rather than a list per window: the whole point is
+         that a guest stores a handful of pointers and reads them back, and one
+         table keeps the (hwnd, name) key in one place.
+       ⚠ THE NAME MAY BE AN ATOM. `MAKEINTATOM` is a far pointer with a NULL
+         selector and the atom in the offset, which `wow32_argstr` correctly
+         refuses to read -- so an implementation that only handled strings would
+         store nothing and find nothing, and hand back the same null OLESVR just
+         died on. Atoms are keyed as "#nnnn". */
+    case WOWUSER_REMOVEPROP:
+    case WOWUSER_GETPROP:
+    case WOWUSER_SETPROP: {
+        int  isset = (f->id == WOWUSER_SETPROP);
+        WORD hwnd  = wow32_argw(f, isset ? PROP_ARG_HWND_S : PROP_ARG_HWND_G);
+        int  noff  = isset ? PROP_ARG_NAME_S : PROP_ARG_NAME_G;
+        DWORD fp   = wow32_argd(f, noff);
+        char key[32];
+        int  k = 0, i, slot = -1;
+        if (!wow32_argstr(f, noff, key, sizeof key)) {
+            /* a null selector: the offset IS the atom */
+            WORD a = (WORD)(fp & 0xFFFF);
+            int  j = 0, d;
+            key[j++] = '#';
+            for (d = 12; d >= 0; d -= 4) {
+                int nib = (a >> d) & 0xF;
+                key[j++] = (char)(nib < 10 ? '0' + nib : 'a' + nib - 10);
+            }
+            key[j] = 0;
+        }
+        wu_puts(note, notecap, &k,
+                isset ? "SetProp(0x" : f->id == WOWUSER_GETPROP ? "GetProp(0x"
+                                                                : "RemoveProp(0x");
+        wu_puthex(note, notecap, &k, hwnd, 4);
+        wu_puts(note, notecap, &k, ", ");
+        wu_putq(note, notecap, &k, key);
+        wu_puts(note, notecap, &k, ")");
+        for (i = 0; i < g_wu_nprop; ++i)
+            if (g_wu_prop[i].hwnd == hwnd
+                && wowuser_streq_ci(g_wu_prop[i].name, key)) { slot = i; break; }
+        if (isset) {
+            WORD data = wow32_argw(f, PROP_ARG_DATA_S);
+            if (slot < 0) {
+                if (g_wu_nprop >= WOWUSER_MAX_PROP) {
+                    wu_puts(note, notecap, &k, " -- ★ THE PROPERTY TABLE IS FULL;"
+                                               " answered 0");
+                    wow32_setret(f, 0);
+                    return 1;
+                }
+                slot = g_wu_nprop++;
+                g_wu_prop[slot].hwnd = hwnd;
+                { int j = 0; while (key[j] && j < (int)sizeof g_wu_prop[slot].name - 1)
+                    { g_wu_prop[slot].name[j] = key[j]; ++j; }
+                  g_wu_prop[slot].name[j] = 0; }
+            }
+            g_wu_prop[slot].data = data;
+            wu_puts(note, notecap, &k, " = 0x");
+            wu_puthex(note, notecap, &k, data, 4);
+            wow32_setret(f, 1);
+            return 1;
+        }
+        if (slot < 0) {
+            wu_puts(note, notecap, &k, " -> 0 (no such property)");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        wu_puts(note, notecap, &k, " -> 0x");
+        wu_puthex(note, notecap, &k, g_wu_prop[slot].data, 4);
+        wow32_setret(f, g_wu_prop[slot].data);
+        if (f->id == WOWUSER_REMOVEPROP) {
+            g_wu_prop[slot] = g_wu_prop[g_wu_nprop - 1];
+            --g_wu_nprop;
+            wu_puts(note, notecap, &k, " (removed)");
+        }
+        return 1;
+    }
+
+    /* ── ★ 0x10e GlobalFindAtom / 0x10f GlobalGetAtomName -- the OS's table. */
+    case WOWUSER_GLOBALFINDATOM: {
+        char s[256];
+        int  k = 0;
+        DWORD r;
+        if (!wow32_argstr(f, 0, s, sizeof s)) {
+            wu_puts(note, notecap, &k, "GlobalFindAtom(NULL) -- answered 0");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        wu_puts(note, notecap, &k, "GlobalFindAtom(");
+        wu_putq(note, notecap, &k, s);
+        wu_puts(note, notecap, &k, ") = 0x");
+        r = (DWORD)GlobalFindAtomA(s);
+        wu_puthex(note, notecap, &k, r, 4);
+        wow32_setret(f, r);
+        return 1;
+    }
+
+    case WOWUSER_GLOBALATOMNAME: {
+        WORD a   = wow32_argw(f, GAN_ARG_ATOM);
+        WORD cap = wow32_argw(f, GAN_ARG_SIZE);
+        volatile BYTE *dst = wow32_argptr(f, GAN_ARG_BUF);
+        char s[256];
+        UINT n;
+        int  k = 0, i;
+        wu_puts(note, notecap, &k, "GlobalGetAtomName(0x");
+        wu_puthex(note, notecap, &k, a, 4);
+        wu_puts(note, notecap, &k, ")");
+        if (!dst || !cap) {
+            wu_puts(note, notecap, &k, " -- ★ no buffer; answered 0");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        n = GlobalGetAtomNameA(a, s, sizeof s);
+        if (!n) {
+            wu_puts(note, notecap, &k, " -- ★ no such atom; answered 0");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        if (n > (UINT)cap - 1) n = (UINT)cap - 1;
+        for (i = 0; i < (int)n; ++i) dst[i] = (BYTE)s[i];
+        dst[n] = 0;
+        wu_puts(note, notecap, &k, " -> ");
+        wu_putq(note, notecap, &k, s);
+        wow32_setret(f, n);
+        return 1;
+    }
+
+    case WOWUSER_GETSCROLLPOS: {
+        WORD hwnd = wow32_argw(f, GSP_ARG_HWND);
+        WORD bar  = wow32_argw(f, GSP_ARG_BAR);
+        HWND h    = wowuser_hwnd32(hwnd);
+        int  k = 0;
+        wu_puts(note, notecap, &k, "GetScrollPos(0x");
+        wu_puthex(note, notecap, &k, hwnd, 4);
+        wu_puts(note, notecap, &k, ", bar ");
+        wu_puthex(note, notecap, &k, bar, 4);
+        wu_puts(note, notecap, &k, ")");
+        if (!h) {
+            wu_puts(note, notecap, &k, " -- ★ NOT ONE OF OUR WINDOWS; answered 0");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        wow32_setret(f, (DWORD)(WORD)(short)GetScrollPos(h, (int)(short)bar));
         return 1;
     }
 

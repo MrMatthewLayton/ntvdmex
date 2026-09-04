@@ -250,8 +250,59 @@ static int wowcommdlg_call(wow32_frame_t *f, char *note, int notecap)
                  long path is left alone rather than replaced by something
                  shorter and wrong -- the caller then fails the way it does
                  today, and the log says which case it was. */
+            /* ── ★★★★★ AND FOR A **SAVE** THE FILE DOES NOT EXIST YET. ───────
+                 `GetShortPathNameA` resolves a path by looking it up, so it
+                 fails outright on a name that is not on disk -- which is every
+                 `GetSaveFileName`. That is not a rare corner: it is the normal
+                 case for File > Save As, and it left MS Paint holding
+                 `C:\Documents and Settings\Matthew\Desktop\test.BMP` -- 46
+                 characters into krnl386's DOS path code. This host's own log
+                 said so at the time (*"NO 8.3 NAME … a Win16 OpenFile will
+                 probably refuse it"*) and the sentence was read as a note rather
+                 than as the defect it was.
+               ⇒ Shorten the part that DOES exist -- the directory -- and put the
+                 leaf back on. The directory is what carries the long names
+                 (`Documents and Settings`, `Matthew`); the leaf came out of an
+                 8.3-shaped filter in the first place.
+               ⚠ ONLY IF THE LEAF ITSELF FITS 8.3. A guest handed
+                 `C:\DOCUME~1\MATTHE~1\Desktop\my long name.bmp` is no better
+                 off, so that case falls through to the honest "left LONG" arm
+                 rather than producing a path that is short in the middle and
+                 impossible at the end. */
             char shortp[MAX_PATH];
             DWORD sn = GetShortPathNameA(w32.lpstrFile, shortp, sizeof shortp);
+            if (!sn) {
+                char dir[MAX_PATH];
+                int  cut = -1, i2, n2 = 0, base = 0, ext = 0, okleaf = 1;
+                while (n2 < (int)sizeof dir - 1 && w32.lpstrFile[n2]) {
+                    dir[n2] = w32.lpstrFile[n2];
+                    if (dir[n2] == '\\') cut = n2;
+                    ++n2;
+                }
+                dir[n2] = 0;
+                if (cut > 0) {
+                    DWORD dn;
+                    dir[cut] = 0;
+                    /* the leaf must be 8.3 for this to be worth doing */
+                    for (i2 = cut + 1; w32.lpstrFile[i2]; ++i2) {
+                        if (w32.lpstrFile[i2] == '.') { ext = 0; base = -1; }
+                        else if (base < 0) ++ext; else ++base;
+                    }
+                    if (base < 0) base = 0;
+                    { int b = 0; for (i2 = cut + 1; w32.lpstrFile[i2]
+                                       && w32.lpstrFile[i2] != '.'; ++i2) ++b;
+                      if (b > 8 || ext > 3) okleaf = 0; }
+                    dn = okleaf ? GetShortPathNameA(dir, shortp, sizeof shortp) : 0;
+                    if (dn && dn + 1 + (DWORD)(n2 - cut) < sizeof shortp) {
+                        DWORD j = dn;
+                        for (i2 = cut; w32.lpstrFile[i2]; ++i2) shortp[j++] = w32.lpstrFile[i2];
+                        shortp[j] = 0;
+                        sn = j;
+                        wu_puts(note, notecap, &k, " [directory shortened, leaf kept"
+                                                   " -- the file does not exist yet]");
+                    }
+                }
+            }
             if (sn && sn < sizeof shortp && sn + 1 <= w32.nMaxFile) {
                 DWORD i, slash = 0, dot = 0;
                 for (i = 0; i <= sn; ++i) w32.lpstrFile[i] = shortp[i];

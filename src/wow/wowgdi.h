@@ -311,11 +311,21 @@
 #define WOW16_LOGPEN_CB    10
 #define WOW16_LOGBRUSH_CB   8
 
-/* ── ★★★ 0x99 CreateDC, AND ITS ID IS NOT ITS ORDINAL ───────────────────────
-     `CreateDC` is GDI ordinal 53, and its export is `native16` -- 16-bit code
-     that reaches a WOW32 stub from inside its own body -- so `neneeds.py` cannot
-     see the stub and the id had to come from a run. It did, and the call named
-     itself completely:
+/* ── ★★★ 0x99 -- AND IT IS `CreateIC`, NOT `CreateDC`. ──────────────────────
+   ⚠⚠⚠ **THIS BLOCK'S ORIGINAL CONCLUSION WAS WRONG AND IS CORRECTED IN PLACE**
+     (session 47). The call below is real and every argument reading of it holds;
+     what was wrong was the NAME. `0x99` is `CreateIC`, **GDI ordinal 153**, and
+     153 IS 0x99 -- the id tracked the ordinal all along. `CreateDC` is ordinal 53
+     and its id is `0x35`, which is now answered next to it.
+     The mistake survived because it is invisible: an information context and a
+     device context answer every query identically, so servicing an IC as a DC
+     works perfectly and only a name in a log was wrong. It was found by teaching
+     `neneeds.py` to see through GDI's export wrappers, which resolves BOTH
+     ordinals from the binary and puts 53 -> 0x35 and 153 -> 0x99 side by side.
+   ⇒ **A wrong name is not harmless: the paragraph below drew a general rule
+     ("the id is not the ordinal") from a case where it was not true.**
+
+     The original reading, which stands except for the name:
 
        FUNC=0x00000099 stub=0x037f args=0x10 retstub=0x026a from=0x09df:0x13bb
          (0000 0000 | 0000 0000 | 0000 0000 | 0880 09c6)
@@ -326,14 +336,222 @@
      always the driver -- pushed first -- is at +12. So this is
      `CreateDC("display", NULL, NULL, NULL)`: MS Paint asking for a screen DC to
      size its canvas against.
-   ⚠ NOTE THE ID IS 0x99 AND THE ORDINAL IS 53. Wherever a wrapper reaches a stub
-     from inside itself, the two numbering schemes part company, so an id here
-     must never be inferred from an ordinal the way the direct exports' can be. */
-#define WOWGDI_CREATEDC         0x0099
+   ★ AND THE ARGUMENT BLOCK IS SHARED, which is why one case answers both: an IC
+     and a DC take the same four far pointers in the same order. */
+#define WOWGDI_CREATEDC         0x0099   /* ← ord 153 CreateIC (see above)        */
 #define CDC_ARG_INITDATA 0
 #define CDC_ARG_OUTPUT   4
 #define CDC_ARG_DEVICE   8
 #define CDC_ARG_DRIVER  12
+
+/* ── ★★★★★ THE TOOLS THAT DID NOT WORK -- READ OUT OF GDI.EXE, NOT GUESSED. ──
+     "Some drawing functions work, others (like fill) do not" is not a mystery
+     once you enumerate what PBRUSH.EXE imports and resolve each ordinal through
+     GDI.EXE's own entry table to the WOW32 stub it lands on. The pattern for a
+     tail-jumped export is fixed --
+
+       ELLIPSE (ord 24) = seg1:0x1b15   push 0x1b20 / pop dx / pop bp / jmp 0x040a
+       0x040a                           push 0xa / push 0 / push 0x18   <- THE ID
+
+     -- so the id and the argument byte count come out of the binary together,
+     and `neneeds.py`'s independent `retstub 0x0417` for the same ordinal lands
+     on the instruction after that stub's own `lcall`, i.e. on the SAME stub by
+     a different route. Every id below was read that way.
+
+   ★★★ THE FILL IS `ExtFloodFill`, GDI ordinal 372, and its export is NOT a bare
+     tail-jump: `seg1:0x1b77` validates `[bp+6] <= 1` (the fill TYPE) and only
+     then jumps to `0x048c`, which pushes 12 bytes and **id 0x174**. That extra
+     hop is why a scan for tail-jumps calls it `native16` and reports it "free":
+     it is not free, it is one instruction further away. Paint's fill tool is
+     `seg4:0x1560..0x16e0` and it calls ExtFloodFill TWICE -- once for a solid
+     colour and once after `CreatePatternBrush` -- which is why the pattern
+     brush is in this batch and not a later one.
+
+   ⚠ A Win16 fill type is Win32's fill type (0 = FLOODFILLBORDER, 1 = SURFACE),
+     the same claim the ROPs and COLORREFs already travel on. */
+#define WOWGDI_ELLIPSE          0x0018   /* ord 24, 10 args -- RC_ARG_* layout */
+#define WOWGDI_EXCLUDECLIPRECT  0x0015   /* ord 21, 10 args -- RC_ARG_* layout */
+
+#define WOWGDI_ROUNDRECT        0x001c   /* ord 28, 14 args                    */
+#define RR_ARG_EH       0
+#define RR_ARG_EW       2
+#define RR_ARG_BOTTOM   4
+#define RR_ARG_RIGHT    6
+#define RR_ARG_TOP      8
+#define RR_ARG_LEFT    10
+#define RR_ARG_HDC     12
+
+#define WOWGDI_EXTFLOODFILL     0x0174   /* ord 372, 12 args -- ★ THE FILL     */
+#define FF_ARG_TYPE     0
+#define FF_ARG_COLOR    2                /* DWORD                              */
+#define FF_ARG_Y        6
+#define FF_ARG_X        8
+#define FF_ARG_HDC     10
+
+#define WOWGDI_CREATEPATTERNBRUSH 0x003c /* ord 60,  2 args (HBITMAP)          */
+#define WOWGDI_GETPIXEL         0x0053   /* ord 83,  6 args -- XY_ARG_* layout */
+#define WOWGDI_GETBKCOLOR       0x004b   /* ord 75,  2 args -- PBRUSH.DLL's    */
+#define WOWGDI_GETROP2          0x0055   /* ord 85,  2 args                    */
+#define WOWGDI_UPDATECOLORS     0x016e   /* ord 366, 2 args                    */
+
+#define WOWGDI_CREATERECTRGN    0x0040   /* ord 64,  8 args                    */
+#define RGN_ARG_BOTTOM  0
+#define RGN_ARG_RIGHT   2
+#define RGN_ARG_TOP     4
+#define RGN_ARG_LEFT    6
+
+#define WOWGDI_SELECTCLIPRGN    0x002c   /* ord 44,  4 args                    */
+#define SCR_ARG_RGN     0
+#define SCR_ARG_HDC     2
+
+/* The three mapping-mode setters. All 6 args, all the same (hDC, x, y) block as
+   SetWindowOrg, and all returning the PREVIOUS pair packed y:x in a DWORD. */
+#define WOWGDI_SETWINDOWEXT     0x000c   /* ord 12 */
+#define WOWGDI_SETVIEWPORTORG   0x000d   /* ord 13 */
+#define WOWGDI_SETVIEWPORTEXT   0x000e   /* ord 14 */
+#define WOWGDI_SETBITMAPDIM     0x00a3   /* ord 163 -- same block, but a BITMAP */
+
+#define WOWGDI_GETNEARESTCOLOR  0x009a   /* ord 154, 6 args -- COL_ARG_* layout */
+#define WOWGDI_GETNEARESTPALIDX 0x0172   /* ord 370, 6 args -- HPALETTE + COLORREF */
+
+/* ── ★★★★★ AND THIS IS WHY THE BOX AND THE ELLIPSE DREW NOTHING. ────────────
+     The tools were selected, the rubber band tracked the drag in `R2_XORPEN`
+     and the guest then set `R2_COPYPEN` to commit -- and the commit is six
+     calls, of which the run showed TWO stepped over:
+
+       SetBkMode(0x20c0, 0002)          id 0x02, 4 args   -- UNIMPLEMENTED
+       SetROP2(0x20c0, 000d)            id 0x04           -- serviced
+       SelectObject(0x20c0, 0x2028)     id 0x2d           -- serviced (the brush)
+       CreatePen(006, 0002, 0x000000ff) id 0x3d, 8 args   -- UNIMPLEMENTED
+       SelectObject(0x20c0, 0x2000)     ...               -- and it gave up
+
+     ⇒ Paint asked for a 2-pixel `PS_INSIDEFRAME` pen in the colour it had been
+     given, got 0, and correctly declined to draw with a pen that does not
+     exist. Nothing was wrong with Ellipse or Rectangle -- 48 Ellipse calls in
+     that same drag returned 1. **A tool that cannot make a pen has nothing to
+     draw with.**
+   ★ TWO INDEPENDENT READINGS AGREE ON 0x3d. The run logged
+     `FUNC=0x3d ... (0000ff00 00000000 00000002 00000006)` -- a green pen for the
+     ellipse and a red one for the box -- and GDI.EXE's own ordinal 61 wrapper at
+     `seg1:0x177f` tail-jumps to `0x0284`, which pushes 8 argument bytes and the
+     id `0x3d`. ⚠ Here the id happens to EQUAL the ordinal; elsewhere it does not
+     (CreateDC is ordinal 53 and id 0x99), so each of these was resolved through
+     the entry table rather than assumed.
+   ⚠ `neneeds.py` calls all of these "free (16-bit)", because GDI's export is a
+     validating wrapper rather than a bare tail-jump and the scan cannot see one
+     instruction further. That is the `native16` trap again: **the run finds
+     them, the static list does not.** */
+#define WOWGDI_CREATEPEN        0x003d   /* ord 61,  8 args (style, width, colour) */
+#define CP_ARG_COLOR    0                /* DWORD                                  */
+#define CP_ARG_WIDTH    4
+#define CP_ARG_STYLE    6
+
+#define WOWGDI_CREATEHATCHBRUSH 0x003a   /* ord 58,  6 args (index, colour)         */
+#define CH_ARG_COLOR    0                /* DWORD                                  */
+#define CH_ARG_INDEX    4
+
+#define WOWGDI_SETBKMODE        0x0002   /* ord 2,   4 args -- MODE_ARG_* layout    */
+#define WOWGDI_SETMAPMODE       0x0003   /* ord 3,   4 args                         */
+#define WOWGDI_SETPOLYFILLMODE  0x0006   /* ord 6,   4 args                         */
+
+#define WOWGDI_SETPIXEL         0x001f   /* ord 31, 10 args                         */
+#define SP_ARG_COLOR    0                /* DWORD                                  */
+#define SP_ARG_Y        4
+#define SP_ARG_X        6
+#define SP_ARG_HDC      8
+
+#define WOWGDI_POLYLINE         0x0025   /* ord 37,  8 args -- LDP_ARG_* layout     */
+
+/* ── ★★★★★ THE SECOND SWEEP: EVERYTHING ELSE THESE TWO PROGRAMS IMPORT. ─────
+     Session 47 taught `tools/ne/neneeds.py` to see through GDI's validating
+     export wrappers (it now bounds the scan by the export's OWN `retf`, which
+     the wrapper pushes at +3), and the list of what MS Paint and Notepad reach
+     went from "41 need us" to **76**. Everything below is on that list, and every
+     id and argument count is read out of `gdi.exe`'s entry table -- no id here
+     was inferred from an ordinal, and several of them differ from it.
+   ★★ THE CORRECTION IT FORCED: **`0x99` IS `CreateIC` (ordinal 153), NOT
+     `CreateDC`.** `CreateDC` is ordinal 53 and its id is `0x35`. Session 45 named
+     `0x99` from a run, and 153 = 0x99 -- the id tracked the ordinal after all,
+     just not the ordinal we thought. It went unnoticed because an information
+     context and a device context answer every query identically, so servicing an
+     IC as a DC works and only the NAME was wrong. ⇒ both are answered here, and
+     the log says which one the guest asked for. */
+#define WOWGDI_CREATEDC2        0x0035   /* ord 53,  16 args -- the REAL CreateDC  */
+
+#define WOWGDI_TEXTOUT          0x0021   /* ord 33,  12 args */
+#define TO_ARG_COUNT    0
+#define TO_ARG_STR      2                /* far */
+#define TO_ARG_Y        6
+#define TO_ARG_X        8
+#define TO_ARG_HDC     10
+
+#define WOWGDI_GETTEXTEXTENT    0x005b   /* ord 91,   8 args */
+#define TE_ARG_COUNT    0
+#define TE_ARG_STR      2                /* far */
+#define TE_ARG_HDC      6
+
+/* ── ★ 0x5d GetTextMetrics, and the Win16 TEXTMETRIC READ OFF NOTEPAD. ───────
+     Its fields are `short` where Win32's are `LONG`, in the same order, and the
+     order is not taken from a header -- `NOTEPAD.EXE seg1:0x1192` calls it with
+     the structure at `ss:[bp-0xb4]` and then does, in the next nine
+     instructions:
+       mov ax,[bp-0xac] / add ax,[bp-0xb4]   -> tm+8 + tm+0   = the LINE HEIGHT
+       mov ax,[bp-0xaa] / shl ax,3           -> tm+10 x 8     = the TAB STOP
+     i.e. tm+0 is tmHeight, tm+8 is tmExternalLeading and tm+10 is
+     tmAveCharWidth, which pins the first six fields and therefore the whole
+     `short` prefix. Two independent uses, one layout. */
+#define WOWGDI_GETTEXTMETRICS   0x005d   /* ord 93,   6 args */
+#define TM_ARG_BUF      0                /* far */
+#define TM_ARG_HDC      4
+#define WOW16_TEXTMETRIC_CB  31
+
+#define WOWGDI_SETTEXTALIGN     0x015a   /* ord 346,  4 args -- MODE_ARG_* layout */
+#define WOWGDI_CREATEFONTIND    0x0039   /* ord 57,   4 args (far LOGFONT)        */
+#define WOWGDI_CREATEPALETTE    0x0168   /* ord 360,  4 args (far LOGPALETTE)     */
+
+#define WOWGDI_DPTOLP           0x0043   /* ord 67,   8 args -- LDP_ARG_* layout  */
+
+/* ── ★ 0x4a GetBitmapBits / 0x6a SetBitmapBits -- PBRUSH.DLL's OWN PAIR. ─────
+     (hBitmap, dwCount, lpBits): 2 + 4 + 4 = 10 bytes. The "virtual bitmap
+     manager" DLL that owns MS Paint's off-screen image is built on these two,
+     which is why they are the only thing it still needed. */
+#define WOWGDI_GETBITMAPBITS    0x004a
+#define WOWGDI_SETBITMAPBITS    0x006a
+#define BB2_ARG_BITS    0                /* far */
+#define BB2_ARG_COUNT   4                /* DWORD */
+#define BB2_ARG_HBM     8
+
+/* ── ★★★★★ THE DIB TRIO -- WHAT `File > Save As` DIES ON. ───────────────────
+     A `BITMAPINFOHEADER` is 40 bytes and byte-identical in both worlds, and the
+     bits and the header both live in guest memory this host can address
+     directly, so these are the rare calls that need NO conversion at all -- only
+     the handles and the signed 16-bit coordinates.
+   ⚠ THE ARGUMENT BLOCK IS THE ONLY PLACE TO GET WRONG, and the counts pin it:
+     SetDIBits/GetDIBits declare 18 bytes = 2+2+2+2+4+4+2 and StretchDIBits 32. */
+#define WOWGDI_SETDIBITS        0x01b8   /* ord 440, 18 args */
+#define WOWGDI_GETDIBITS        0x01b9   /* ord 441, 18 args */
+#define DIB_ARG_USAGE   0
+#define DIB_ARG_BMI     2                /* far */
+#define DIB_ARG_BITS    6                /* far */
+#define DIB_ARG_LINES  10
+#define DIB_ARG_START  12
+#define DIB_ARG_HBM    14
+#define DIB_ARG_HDC    16
+
+#define WOWGDI_STRETCHDIBITS    0x01b7   /* ord 439, 32 args */
+#define SDI_ARG_ROP     0                /* DWORD */
+#define SDI_ARG_USAGE   4
+#define SDI_ARG_BMI     6                /* far */
+#define SDI_ARG_BITS   10                /* far */
+#define SDI_ARG_SRCH   14
+#define SDI_ARG_SRCW   16
+#define SDI_ARG_SRCY   18
+#define SDI_ARG_SRCX   20
+#define SDI_ARG_DSTH   22
+#define SDI_ARG_DSTW   24
+#define SDI_ARG_DSTY   26
+#define SDI_ARG_DSTX   28
+#define SDI_ARG_HDC    30
 
 /* GDI tokens sit below the menu tokens (0x4000) and above the window handles,
    so a stray handle of any kind is recognisable on sight in a log. */
@@ -670,6 +888,8 @@ static int wowgdi_call(wow32_frame_t *f, char *note, int notecap)
 
     /* ── ★★★★ 0x63 LPtoDP(hDC, lpPoints, nCount) -- see the note above. ─────*/
     case WOWGDI_POLYGON:
+    case WOWGDI_POLYLINE:
+    case WOWGDI_DPTOLP:
     case WOWGDI_LPTODP: {
         WORD hdc = wow32_argw(f, LDP_ARG_HDC);
         WORD n   = wow32_argw(f, LDP_ARG_COUNT);
@@ -678,8 +898,11 @@ static int wowgdi_call(wow32_frame_t *f, char *note, int notecap)
         HGDIOBJ o = wowgdi_h32(hdc, &kind);
         POINT pt[64];
         int  k = 0, i, cnt = (int)n;
-        int ispoly = (f->id == WOWGDI_POLYGON);
-        wu_puts(note, notecap, &k, ispoly ? "Polygon(0x" : "LPtoDP(0x");
+        int isline = (f->id == WOWGDI_POLYLINE);
+        int ispoly = (f->id == WOWGDI_POLYGON) || isline;
+        wu_puts(note, notecap, &k,
+                isline ? "Polyline(0x" : ispoly ? "Polygon(0x"
+                : f->id == WOWGDI_DPTOLP ? "DPtoLP(0x" : "LPtoDP(0x");
         wu_puthex(note, notecap, &k, hdc, 4);
         wu_puts(note, notecap, &k, ", ");
         wu_puthex(note, notecap, &k, (DWORD)n, 4);
@@ -705,12 +928,16 @@ static int wowgdi_call(wow32_frame_t *f, char *note, int notecap)
              Same block, opposite data flow -- so they share the read and part
              company here. */
         if (ispoly) {
-            int r = Polygon((HDC)o, pt, cnt) ? 1 : 0;
+            int r = (isline ? Polyline((HDC)o, pt, cnt)
+                            : Polygon((HDC)o, pt, cnt)) ? 1 : 0;
             wu_puts(note, notecap, &k, r ? " -> drawn" : " -- ★ the OS refused it");
             wow32_setret(f, (DWORD)r);
             return 1;
         }
-        if (!LPtoDP((HDC)o, pt, cnt)) {
+        /* ★ DPtoLP is LPtoDP's inverse and nothing else differs -- same block,
+             same in-place write-back, opposite transform. */
+        if (!(f->id == WOWGDI_DPTOLP ? DPtoLP((HDC)o, pt, cnt)
+                                     : LPtoDP((HDC)o, pt, cnt))) {
             wu_puts(note, notecap, &k, " -- ★ the OS refused it; answered 0");
             wow32_setret(f, 0);
             return 1;
@@ -846,16 +1073,31 @@ static int wowgdi_call(wow32_frame_t *f, char *note, int notecap)
         return 1;
     }
 
-    /* ── ★ 0x04 SetROP2 / 0x07 SetStretchBltMode -- one int, same numbering. */
+    /* ── ★ The (hDC, int mode) family -- one int, same numbering both sides. ──
+         0x04 SetROP2, 0x07 SetStretchBltMode, 0x02 SetBkMode, 0x03 SetMapMode,
+         0x06 SetPolyFillMode. All 4 argument bytes, all returning the previous
+         mode. ⚠ The last three arrived with MS Paint's shape tools: SetBkMode
+         is the first call of the commit sequence and SetMapMode goes with the
+         SetWindowExt/SetViewportExt pair, which is MM_ANISOTROPIC (8) being set
+         up. */
     case WOWGDI_SETROP2:
-    case WOWGDI_SETSTRETCHMODE: {
-        int  isrop = (f->id == WOWGDI_SETROP2);
+    case WOWGDI_SETSTRETCHMODE:
+    case WOWGDI_SETBKMODE:
+    case WOWGDI_SETMAPMODE:
+    case WOWGDI_SETTEXTALIGN:
+    case WOWGDI_SETPOLYFILLMODE: {
         WORD hdc  = wow32_argw(f, MODE_ARG_HDC);
         int  mode = (int)(short)wow32_argw(f, MODE_ARG_MODE);
         int  kind = -1;
         HGDIOBJ o = wowgdi_h32(hdc, &kind);
         int  k = 0, prev;
-        wu_puts(note, notecap, &k, isrop ? "SetROP2(0x" : "SetStretchBltMode(0x");
+        wu_puts(note, notecap, &k,
+                f->id == WOWGDI_SETROP2         ? "SetROP2(0x" :
+                f->id == WOWGDI_SETSTRETCHMODE  ? "SetStretchBltMode(0x" :
+                f->id == WOWGDI_SETBKMODE       ? "SetBkMode(0x" :
+                f->id == WOWGDI_SETMAPMODE      ? "SetMapMode(0x" :
+                f->id == WOWGDI_SETTEXTALIGN    ? "SetTextAlign(0x"
+                                                : "SetPolyFillMode(0x");
         wu_puthex(note, notecap, &k, hdc, 4);
         wu_puts(note, notecap, &k, ", ");
         wu_puthex(note, notecap, &k, (DWORD)mode, 4);
@@ -866,7 +1108,12 @@ static int wowgdi_call(wow32_frame_t *f, char *note, int notecap)
             wow32_setret(f, 0);
             return 1;
         }
-        prev = isrop ? SetROP2((HDC)o, mode) : SetStretchBltMode((HDC)o, mode);
+        prev = f->id == WOWGDI_SETROP2        ? SetROP2((HDC)o, mode)
+             : f->id == WOWGDI_SETSTRETCHMODE ? SetStretchBltMode((HDC)o, mode)
+             : f->id == WOWGDI_SETBKMODE      ? SetBkMode((HDC)o, mode)
+             : f->id == WOWGDI_SETMAPMODE     ? SetMapMode((HDC)o, mode)
+             : f->id == WOWGDI_SETTEXTALIGN   ? (int)SetTextAlign((HDC)o, (UINT)mode)
+                                              : SetPolyFillMode((HDC)o, mode);
         wow32_setret(f, (DWORD)(WORD)prev);
         return 1;
     }
@@ -1071,15 +1318,17 @@ static int wowgdi_call(wow32_frame_t *f, char *note, int notecap)
          carries a DEVMODE for printers; if one ever arrives here it will be
          reported rather than silently dropped, because a DEVMODE that is not
          honoured changes what gets drawn. */
-    case WOWGDI_CREATEDC: {
+    case WOWGDI_CREATEDC:
+    case WOWGDI_CREATEDC2: {
         char drv[64], dev[64];
         HDC dc;
         WORD tok;
         int  k = 0, isdisp, i;
+        int  isic = (f->id == WOWGDI_CREATEDC);
         DWORD init = wow32_argd(f, CDC_ARG_INITDATA);
         wow32_argstr(f, CDC_ARG_DRIVER, drv, sizeof drv);
         wow32_argstr(f, CDC_ARG_DEVICE, dev, sizeof dev);
-        wu_puts(note, notecap, &k, "CreateDC driver=");
+        wu_puts(note, notecap, &k, isic ? "CreateIC driver=" : "CreateDC driver=");
         wu_putq(note, notecap, &k, drv);
         if (dev[0]) { wu_puts(note, notecap, &k, " device="); wu_putq(note, notecap, &k, dev); }
         /* Case-insensitively "DISPLAY" -- the guest writes it lower case. */
@@ -1102,7 +1351,12 @@ static int wowgdi_call(wow32_frame_t *f, char *note, int notecap)
         if (init)
             wu_puts(note, notecap, &k, " -- ⚠ lpInitData IS NOT NULL and is being"
                                        " ignored (it carries a DEVMODE)");
-        dc = CreateDCA("DISPLAY", NULL, NULL, NULL);
+        /* ★ An INFORMATION context is asked for by name and answered with one:
+             it is cheaper than a DC and a guest that draws on one is doing
+             something Windows would refuse too, so the distinction is kept
+             rather than flattened into CreateDC. */
+        dc = isic ? CreateICA("DISPLAY", NULL, NULL, NULL)
+                  : CreateDCA("DISPLAY", NULL, NULL, NULL);
         tok = dc ? wowgdi_h16((HGDIOBJ)dc, WOWGDI_KIND_DC) : 0;
         if (!tok) {
             if (dc) DeleteDC(dc);
@@ -1564,6 +1818,816 @@ static int wowgdi_call(wow32_frame_t *f, char *note, int notecap)
         wu_puts(note, notecap, &k, ok ? " -> deleted, token released"
                                       : " -- ★ the OS refused the delete");
         wow32_setret(f, (DWORD)ok);
+        return 1;
+    }
+
+    /* ── ★★ 0x18 Ellipse / 0x15 ExcludeClipRect -- Rectangle's block, twice. ──
+         Both are (hDC, left, top, right, bottom) in 10 bytes, which is what lets
+         them share RC_ARG_*. ⚠ They are NOT the same kind of call and the note
+         says which is which: Ellipse draws, ExcludeClipRect changes what any
+         later call is allowed to touch, and its answer is a region COMPLEXITY
+         code (NULLREGION/SIMPLEREGION/COMPLEXREGION), not a boolean. */
+    case WOWGDI_ELLIPSE:
+    case WOWGDI_EXCLUDECLIPRECT: {
+        int  isell = (f->id == WOWGDI_ELLIPSE);
+        WORD hdc = wow32_argw(f, RC_ARG_HDC);
+        int  l = (int)(short)wow32_argw(f, RC_ARG_LEFT);
+        int  t = (int)(short)wow32_argw(f, RC_ARG_TOP);
+        int  r = (int)(short)wow32_argw(f, RC_ARG_RIGHT);
+        int  b = (int)(short)wow32_argw(f, RC_ARG_BOTTOM);
+        int  kind = -1;
+        HGDIOBJ o = wowgdi_h32(hdc, &kind);
+        int  k = 0;
+        wu_puts(note, notecap, &k, isell ? "Ellipse(0x" : "ExcludeClipRect(0x");
+        wu_puthex(note, notecap, &k, hdc, 4);
+        wu_puts(note, notecap, &k, ", ");
+        wu_puthex(note, notecap, &k, (DWORD)l, 4);
+        wu_puts(note, notecap, &k, ",");
+        wu_puthex(note, notecap, &k, (DWORD)t, 4);
+        wu_puts(note, notecap, &k, " ");
+        wu_puthex(note, notecap, &k, (DWORD)r, 4);
+        wu_puts(note, notecap, &k, ",");
+        wu_puthex(note, notecap, &k, (DWORD)b, 4);
+        wu_puts(note, notecap, &k, ")");
+        if (!o || (kind != WOWGDI_KIND_DC && kind != WOWGDI_KIND_WINDC)) {
+            wu_puts(note, notecap, &k, " -- ★ NOT ONE OF OUR DC TOKENS;"
+                                       " answered 0");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        if (isell) {
+            wow32_setret(f, (DWORD)(Ellipse((HDC)o, l, t, r, b) ? 1 : 0));
+        } else {
+            int rc = ExcludeClipRect((HDC)o, l, t, r, b);
+            wu_puts(note, notecap, &k, " -> region complexity ");
+            wu_puthex(note, notecap, &k, (DWORD)rc, 4);
+            wow32_setret(f, (DWORD)(WORD)rc);
+        }
+        return 1;
+    }
+
+    /* ── ★ 0x1c RoundRect(hDC, l, t, r, b, ellipseW, ellipseH) -- 14 bytes. ──*/
+    case WOWGDI_ROUNDRECT: {
+        WORD hdc = wow32_argw(f, RR_ARG_HDC);
+        int  l  = (int)(short)wow32_argw(f, RR_ARG_LEFT);
+        int  t  = (int)(short)wow32_argw(f, RR_ARG_TOP);
+        int  r  = (int)(short)wow32_argw(f, RR_ARG_RIGHT);
+        int  b  = (int)(short)wow32_argw(f, RR_ARG_BOTTOM);
+        int  ew = (int)(short)wow32_argw(f, RR_ARG_EW);
+        int  eh = (int)(short)wow32_argw(f, RR_ARG_EH);
+        int  kind = -1;
+        HGDIOBJ o = wowgdi_h32(hdc, &kind);
+        int  k = 0;
+        wu_puts(note, notecap, &k, "RoundRect(0x");
+        wu_puthex(note, notecap, &k, hdc, 4);
+        wu_puts(note, notecap, &k, ", ");
+        wu_puthex(note, notecap, &k, (DWORD)l, 4);
+        wu_puts(note, notecap, &k, ",");
+        wu_puthex(note, notecap, &k, (DWORD)t, 4);
+        wu_puts(note, notecap, &k, " ");
+        wu_puthex(note, notecap, &k, (DWORD)r, 4);
+        wu_puts(note, notecap, &k, ",");
+        wu_puthex(note, notecap, &k, (DWORD)b, 4);
+        wu_puts(note, notecap, &k, " corner ");
+        wu_puthex(note, notecap, &k, (DWORD)ew, 4);
+        wu_puts(note, notecap, &k, "x");
+        wu_puthex(note, notecap, &k, (DWORD)eh, 4);
+        wu_puts(note, notecap, &k, ")");
+        if (!o || (kind != WOWGDI_KIND_DC && kind != WOWGDI_KIND_WINDC)) {
+            wu_puts(note, notecap, &k, " -- ★ NOT ONE OF OUR DC TOKENS;"
+                                       " answered 0");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        wow32_setret(f, (DWORD)(RoundRect((HDC)o, l, t, r, b, ew, eh) ? 1 : 0));
+        return 1;
+    }
+
+    /* ── ★★★★★ 0x174 ExtFloodFill -- THE FILL TOOL. ─────────────────────────
+       ⚠ THE FAILURE MODE THIS REPLACES IS SILENCE. Unimplemented, the call was
+         stepped over and answered with the harness sentinel 0 -- which is
+         ExtFloodFill's own "I filled nothing", so Paint had no way to tell a
+         host that cannot fill from a fill that had nothing to do. The tool
+         appeared to be selected, appeared to take the click, and did nothing.
+       ★ Paint calls it twice per fill: once with a solid brush selected and once
+         with a pattern brush from `CreatePatternBrush` (seg4:0x164f), which is
+         how a Win16 program fills with one of the palette's patterns. */
+    case WOWGDI_EXTFLOODFILL: {
+        WORD  hdc  = wow32_argw(f, FF_ARG_HDC);
+        int   x    = (int)(short)wow32_argw(f, FF_ARG_X);
+        int   y    = (int)(short)wow32_argw(f, FF_ARG_Y);
+        DWORD col  = wow32_argd(f, FF_ARG_COLOR);
+        WORD  type = wow32_argw(f, FF_ARG_TYPE);
+        int   kind = -1;
+        HGDIOBJ o = wowgdi_h32(hdc, &kind);
+        int   k = 0, ok;
+        wu_puts(note, notecap, &k, "ExtFloodFill(0x");
+        wu_puthex(note, notecap, &k, hdc, 4);
+        wu_puts(note, notecap, &k, ", ");
+        wu_puthex(note, notecap, &k, (DWORD)x, 4);
+        wu_puts(note, notecap, &k, ",");
+        wu_puthex(note, notecap, &k, (DWORD)y, 4);
+        wu_puts(note, notecap, &k, " colour 0x");
+        wu_puthex(note, notecap, &k, col, 8);
+        wu_puts(note, notecap, &k, type ? " SURFACE)" : " BORDER)");
+        if (!o || (kind != WOWGDI_KIND_DC && kind != WOWGDI_KIND_WINDC)) {
+            wu_puts(note, notecap, &k, " -- ★ NOT ONE OF OUR DC TOKENS;"
+                                       " answered 0");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        ok = ExtFloodFill((HDC)o, x, y, (COLORREF)col, (UINT)type) ? 1 : 0;
+        wu_puts(note, notecap, &k, ok ? " -> filled" : " -> the OS filled NOTHING");
+        wow32_setret(f, (DWORD)ok);
+        return 1;
+    }
+
+    /* ── ★★★★★ 0x3d CreatePen -- THE CALL EVERY SHAPE TOOL WAITED ON. ───────
+         (nPenStyle, nWidth, crColor), 8 bytes, and the two the run made say so:
+         `(000000ff 0002 0006)` for the red box and `(0000ff00 0002 0006)` for
+         the green ellipse -- style 6 is `PS_INSIDEFRAME`, which is exactly what
+         a paint program wants so a thick outline stays inside the rectangle the
+         user dragged. ⚠ Both the style numbering and the COLORREF are unchanged
+         between Win16 and Win32, so nothing here is a translation.
+       ★ 0x3a CreateHatchBrush(nIndex, crColor) is its sibling in every respect
+         and is what the filled-shape and pattern tools ask for next; same
+         indices (HS_HORIZONTAL..HS_DIAGCROSS), same COLORREF. */
+    case WOWGDI_CREATEPEN:
+    case WOWGDI_CREATEHATCHBRUSH: {
+        int   ispen = (f->id == WOWGDI_CREATEPEN);
+        DWORD col   = wow32_argd(f, ispen ? CP_ARG_COLOR : CH_ARG_COLOR);
+        int   a     = (int)(short)wow32_argw(f, ispen ? CP_ARG_WIDTH : CH_ARG_INDEX);
+        int   style = ispen ? (int)(short)wow32_argw(f, CP_ARG_STYLE) : 0;
+        int   k = 0;
+        HGDIOBJ obj;
+        WORD tok;
+        wu_puts(note, notecap, &k, ispen ? "CreatePen(style " : "CreateHatchBrush(index ");
+        wu_puthex(note, notecap, &k, (DWORD)(ispen ? style : a), 4);
+        if (ispen) {
+            wu_puts(note, notecap, &k, ", width ");
+            wu_puthex(note, notecap, &k, (DWORD)a, 4);
+        }
+        wu_puts(note, notecap, &k, ", 0x");
+        wu_puthex(note, notecap, &k, col, 8);
+        wu_puts(note, notecap, &k, ")");
+        obj = ispen ? (HGDIOBJ)CreatePen(style, a, (COLORREF)col)
+                    : (HGDIOBJ)CreateHatchBrush(a, (COLORREF)col);
+        tok = obj ? wowgdi_h16(obj, WOWGDI_KIND_OBJ) : 0;
+        if (!tok) {
+            if (obj) DeleteObject(obj);
+            wu_puts(note, notecap, &k, " -- ★ the OS refused it (or the token map"
+                                       " is full); answered 0");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        wu_puts(note, notecap, &k, ispen ? " -> pen token 0x" : " -> brush token 0x");
+        wu_puthex(note, notecap, &k, tok, 4);
+        wow32_setret(f, tok);
+        return 1;
+    }
+
+    /* ── ★ 0x1f SetPixel(hDC, x, y, crColor) -- GetPixel's twin, 10 bytes. ───
+       ⚠ The answer is the colour ACTUALLY set, which on a device that cannot
+         represent the request is not the colour asked for -- so it is returned
+         as the OS gives it rather than echoed. */
+    case WOWGDI_SETPIXEL: {
+        WORD  hdc = wow32_argw(f, SP_ARG_HDC);
+        int   x = (int)(short)wow32_argw(f, SP_ARG_X);
+        int   y = (int)(short)wow32_argw(f, SP_ARG_Y);
+        DWORD col = wow32_argd(f, SP_ARG_COLOR);
+        int   kind = -1;
+        HGDIOBJ o = wowgdi_h32(hdc, &kind);
+        int   k = 0;
+        COLORREF got;
+        wu_puts(note, notecap, &k, "SetPixel(0x");
+        wu_puthex(note, notecap, &k, hdc, 4);
+        wu_puts(note, notecap, &k, ", ");
+        wu_puthex(note, notecap, &k, (DWORD)x, 4);
+        wu_puts(note, notecap, &k, ",");
+        wu_puthex(note, notecap, &k, (DWORD)y, 4);
+        wu_puts(note, notecap, &k, " 0x");
+        wu_puthex(note, notecap, &k, col, 8);
+        wu_puts(note, notecap, &k, ")");
+        if (!o || (kind != WOWGDI_KIND_DC && kind != WOWGDI_KIND_WINDC)) {
+            wu_puts(note, notecap, &k, " -- ★ NOT ONE OF OUR DC TOKENS;"
+                                       " answered CLR_INVALID");
+            wow32_setret(f, 0xFFFFFFFFu);
+            return 1;
+        }
+        got = SetPixel((HDC)o, x, y, (COLORREF)col);
+        wow32_setret(f, (DWORD)got);
+        return 1;
+    }
+
+    /* ── ★ 0x3c CreatePatternBrush(hBitmap) -- one of OUR bitmap tokens. ─────*/
+    case WOWGDI_CREATEPATTERNBRUSH: {
+        WORD hbm = wow32_argw(f, ONE_ARG_HANDLE);
+        int  kind = -1;
+        HGDIOBJ o = wowgdi_h32(hbm, &kind);
+        int  k = 0;
+        HBRUSH br;
+        WORD tok;
+        wu_puts(note, notecap, &k, "CreatePatternBrush(0x");
+        wu_puthex(note, notecap, &k, hbm, 4);
+        wu_puts(note, notecap, &k, ")");
+        if (!o || (kind != WOWGDI_KIND_OBJ && kind != WOWGDI_KIND_STOCK)) {
+            wu_puts(note, notecap, &k, " -- ★ NOT ONE OF OUR BITMAP TOKENS;"
+                                       " answered 0");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        br = CreatePatternBrush((HBITMAP)o);
+        tok = br ? wowgdi_h16((HGDIOBJ)br, WOWGDI_KIND_OBJ) : 0;
+        if (!tok) {
+            if (br) DeleteObject((HGDIOBJ)br);
+            wu_puts(note, notecap, &k, " -- ★ no brush (or the token map is"
+                                       " full); answered 0");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        wu_puts(note, notecap, &k, " -> brush token 0x");
+        wu_puthex(note, notecap, &k, tok, 4);
+        wow32_setret(f, tok);
+        return 1;
+    }
+
+    /* ── ★ 0x53 GetPixel(hDC, x, y) ─────────────────────────────────────────
+       ⚠ CLR_INVALID IS 0xFFFFFFFF AND IT IS NOT AN ERROR CODE THE GUEST CAN
+         MISREAD AS A COLOUR -- Win16 uses the same value for the same reason, so
+         a point outside the clip region travels through unchanged. */
+    case WOWGDI_GETPIXEL: {
+        WORD hdc = wow32_argw(f, XY_ARG_HDC);
+        int  x = (int)(short)wow32_argw(f, XY_ARG_X);
+        int  y = (int)(short)wow32_argw(f, XY_ARG_Y);
+        int  kind = -1;
+        HGDIOBJ o = wowgdi_h32(hdc, &kind);
+        int  k = 0;
+        COLORREF c;
+        wu_puts(note, notecap, &k, "GetPixel(0x");
+        wu_puthex(note, notecap, &k, hdc, 4);
+        wu_puts(note, notecap, &k, ", ");
+        wu_puthex(note, notecap, &k, (DWORD)x, 4);
+        wu_puts(note, notecap, &k, ",");
+        wu_puthex(note, notecap, &k, (DWORD)y, 4);
+        wu_puts(note, notecap, &k, ")");
+        if (!o || (kind != WOWGDI_KIND_DC && kind != WOWGDI_KIND_WINDC)) {
+            wu_puts(note, notecap, &k, " -- ★ NOT ONE OF OUR DC TOKENS;"
+                                       " answered CLR_INVALID");
+            wow32_setret(f, 0xFFFFFFFFu);
+            return 1;
+        }
+        c = GetPixel((HDC)o, x, y);
+        wu_puts(note, notecap, &k, " = 0x");
+        wu_puthex(note, notecap, &k, (DWORD)c, 8);
+        wow32_setret(f, (DWORD)c);
+        return 1;
+    }
+
+    /* ── ★ Three one-DC questions: 0x4b GetBkColor, 0x55 GetROP2,
+         0x16e UpdateColors. ⚠ GetBkColor's answer is a DWORD COLORREF and the
+         other two are ints, which is the only difference between them here. */
+    case WOWGDI_GETBKCOLOR:
+    case WOWGDI_GETROP2:
+    case WOWGDI_UPDATECOLORS: {
+        WORD hdc = wow32_argw(f, ONE_ARG_HANDLE);
+        int  kind = -1;
+        HGDIOBJ o = wowgdi_h32(hdc, &kind);
+        int  k = 0;
+        wu_puts(note, notecap, &k,
+                f->id == WOWGDI_GETBKCOLOR ? "GetBkColor(0x" :
+                f->id == WOWGDI_GETROP2    ? "GetROP2(0x"
+                                           : "UpdateColors(0x");
+        wu_puthex(note, notecap, &k, hdc, 4);
+        wu_puts(note, notecap, &k, ")");
+        if (!o || (kind != WOWGDI_KIND_DC && kind != WOWGDI_KIND_WINDC)) {
+            wu_puts(note, notecap, &k, " -- ★ NOT ONE OF OUR DC TOKENS;"
+                                       " answered 0");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        if (f->id == WOWGDI_GETBKCOLOR) {
+            COLORREF c = GetBkColor((HDC)o);
+            wu_puts(note, notecap, &k, " = 0x");
+            wu_puthex(note, notecap, &k, (DWORD)c, 8);
+            wow32_setret(f, (DWORD)c);
+        } else if (f->id == WOWGDI_GETROP2) {
+            int v = GetROP2((HDC)o);
+            wu_puts(note, notecap, &k, " = ");
+            wu_puthex(note, notecap, &k, (DWORD)v, 4);
+            wow32_setret(f, (DWORD)(WORD)v);
+        } else {
+            wow32_setret(f, (DWORD)(UpdateColors((HDC)o) ? 1 : 0));
+        }
+        return 1;
+    }
+
+    /* ── ★ 0x40 CreateRectRgn / 0x2c SelectClipRgn -- clipping, as a pair. ───
+       ⚠ A REGION IS AN ORDINARY GDI OBJECT and goes in the same token map with
+         KIND_OBJ, so the guest's own `DeleteObject` disposes of it with no new
+         case. ⚠ `SelectClipRgn(hDC, NULL)` is the documented way to REMOVE the
+         clip region, so a zero handle is not an error here -- it is the call
+         doing its other job, and passing our "not one of our tokens" refusal for
+         it would leave a guest permanently clipped. */
+    case WOWGDI_CREATERECTRGN: {
+        int  l = (int)(short)wow32_argw(f, RGN_ARG_LEFT);
+        int  t = (int)(short)wow32_argw(f, RGN_ARG_TOP);
+        int  r = (int)(short)wow32_argw(f, RGN_ARG_RIGHT);
+        int  b = (int)(short)wow32_argw(f, RGN_ARG_BOTTOM);
+        int  k = 0;
+        HRGN rgn = CreateRectRgn(l, t, r, b);
+        WORD tok = rgn ? wowgdi_h16((HGDIOBJ)rgn, WOWGDI_KIND_OBJ) : 0;
+        wu_puts(note, notecap, &k, "CreateRectRgn(");
+        wu_puthex(note, notecap, &k, (DWORD)l, 4);
+        wu_puts(note, notecap, &k, ",");
+        wu_puthex(note, notecap, &k, (DWORD)t, 4);
+        wu_puts(note, notecap, &k, " ");
+        wu_puthex(note, notecap, &k, (DWORD)r, 4);
+        wu_puts(note, notecap, &k, ",");
+        wu_puthex(note, notecap, &k, (DWORD)b, 4);
+        wu_puts(note, notecap, &k, ")");
+        if (!tok) {
+            if (rgn) DeleteObject((HGDIOBJ)rgn);
+            wu_puts(note, notecap, &k, " -- ★ no region (or the token map is"
+                                       " full); answered 0");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        wu_puts(note, notecap, &k, " -> region token 0x");
+        wu_puthex(note, notecap, &k, tok, 4);
+        wow32_setret(f, tok);
+        return 1;
+    }
+
+    case WOWGDI_SELECTCLIPRGN: {
+        WORD hdc  = wow32_argw(f, SCR_ARG_HDC);
+        WORD hrgn = wow32_argw(f, SCR_ARG_RGN);
+        int  dkind = -1, rkind = -1;
+        HGDIOBJ d = wowgdi_h32(hdc, &dkind);
+        HGDIOBJ r = wowgdi_h32(hrgn, &rkind);
+        int  k = 0, rc;
+        wu_puts(note, notecap, &k, "SelectClipRgn(0x");
+        wu_puthex(note, notecap, &k, hdc, 4);
+        wu_puts(note, notecap, &k, ", 0x");
+        wu_puthex(note, notecap, &k, hrgn, 4);
+        wu_puts(note, notecap, &k, ")");
+        if (!d || (dkind != WOWGDI_KIND_DC && dkind != WOWGDI_KIND_WINDC)) {
+            wu_puts(note, notecap, &k, " -- ★ NOT ONE OF OUR DC TOKENS;"
+                                       " answered 0");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        if (hrgn && !r) {
+            wu_puts(note, notecap, &k, " -- ★ NOT ONE OF OUR REGION TOKENS;"
+                                       " answered 0 rather than clearing the"
+                                       " clip region, which is what NULL means");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        if (!hrgn) wu_puts(note, notecap, &k, " -- NULL = remove the clip region");
+        rc = SelectClipRgn((HDC)d, (HRGN)r);
+        wu_puts(note, notecap, &k, " -> region complexity ");
+        wu_puthex(note, notecap, &k, (DWORD)rc, 4);
+        wow32_setret(f, (DWORD)(WORD)rc);
+        return 1;
+    }
+
+    /* ── ★ 0x0c SetWindowExt / 0x0d SetViewportOrg / 0x0e SetViewportExt /
+         0xa3 SetBitmapDimension -- one (handle, x, y) block, four calls. ──────
+       ⚠ THREE TAKE A DC AND THE FOURTH TAKES A BITMAP, which is exactly the kind
+         of difference that a shared case hides. It is checked per-id here rather
+         than assumed, because handing a bitmap to SetViewportOrgEx would fail
+         quietly and leave a guest drawing at the wrong origin.
+       ★ All four answer with the PREVIOUS pair packed y:x in a DWORD, which is
+         the same convention SetWindowOrg already uses next door. */
+    case WOWGDI_SETWINDOWEXT:
+    case WOWGDI_SETVIEWPORTORG:
+    case WOWGDI_SETVIEWPORTEXT:
+    case WOWGDI_SETBITMAPDIM: {
+        WORD h = wow32_argw(f, ORG_ARG_HDC);
+        int  x = (int)(short)wow32_argw(f, ORG_ARG_X);
+        int  y = (int)(short)wow32_argw(f, ORG_ARG_Y);
+        int  isbm = (f->id == WOWGDI_SETBITMAPDIM);
+        int  kind = -1;
+        HGDIOBJ o = wowgdi_h32(h, &kind);
+        int  k = 0;
+        SIZE sz; POINT pt;
+        wu_puts(note, notecap, &k,
+                f->id == WOWGDI_SETWINDOWEXT   ? "SetWindowExt(0x" :
+                f->id == WOWGDI_SETVIEWPORTORG ? "SetViewportOrg(0x" :
+                f->id == WOWGDI_SETVIEWPORTEXT ? "SetViewportExt(0x"
+                                               : "SetBitmapDimension(0x");
+        wu_puthex(note, notecap, &k, h, 4);
+        wu_puts(note, notecap, &k, ", ");
+        wu_puthex(note, notecap, &k, (DWORD)x, 4);
+        wu_puts(note, notecap, &k, ",");
+        wu_puthex(note, notecap, &k, (DWORD)y, 4);
+        wu_puts(note, notecap, &k, ")");
+        if (!o || (isbm ? (kind != WOWGDI_KIND_OBJ && kind != WOWGDI_KIND_STOCK)
+                        : (kind != WOWGDI_KIND_DC && kind != WOWGDI_KIND_WINDC))) {
+            wu_puts(note, notecap, &k, isbm
+                        ? " -- ★ NOT ONE OF OUR BITMAP TOKENS; answered 0"
+                        : " -- ★ NOT ONE OF OUR DC TOKENS; answered 0");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        sz.cx = sz.cy = 0; pt.x = pt.y = 0;
+        if (f->id == WOWGDI_SETWINDOWEXT)        SetWindowExtEx((HDC)o, x, y, &sz);
+        else if (f->id == WOWGDI_SETVIEWPORTEXT) SetViewportExtEx((HDC)o, x, y, &sz);
+        else if (f->id == WOWGDI_SETVIEWPORTORG) {
+            SetViewportOrgEx((HDC)o, x, y, &pt);
+            sz.cx = pt.x; sz.cy = pt.y;
+        } else {
+            SetBitmapDimensionEx((HBITMAP)o, x, y, &sz);
+        }
+        wow32_setret(f, ((DWORD)(WORD)(short)sz.cy << 16)
+                        | (DWORD)(WORD)(short)sz.cx);
+        return 1;
+    }
+
+    /* ── ★ 0x9a GetNearestColor(hDC, crColor) / 0x172 GetNearestPaletteIndex ─
+       ⚠ THE FIRST ARGUMENT IS A DC IN ONE AND A PALETTE IN THE OTHER, and this
+         host has never made a palette -- Paint's `CreatePalette` reaches a stub
+         no run has yet named. So the palette arm answers 0 and SAYS SO, rather
+         than pretending an index; a wrong index is a wrong colour with no way to
+         tell afterwards that it was invented. */
+    case WOWGDI_GETNEARESTCOLOR:
+    case WOWGDI_GETNEARESTPALIDX: {
+        int   isidx = (f->id == WOWGDI_GETNEARESTPALIDX);
+        WORD  h   = wow32_argw(f, COL_ARG_HDC);
+        DWORD col = wow32_argd(f, COL_ARG_COLOR);
+        int   kind = -1;
+        HGDIOBJ o = wowgdi_h32(h, &kind);
+        int   k = 0;
+        wu_puts(note, notecap, &k, isidx ? "GetNearestPaletteIndex(0x"
+                                         : "GetNearestColor(0x");
+        wu_puthex(note, notecap, &k, h, 4);
+        wu_puts(note, notecap, &k, ", 0x");
+        wu_puthex(note, notecap, &k, col, 8);
+        wu_puts(note, notecap, &k, ")");
+        /* ⚠ Session 46 answered this 0 because nothing could make a palette.
+             `CreatePalette` (0x168) is serviced now, so it is a real lookup --
+             and a handle that is still not ours is still refused rather than
+             answered with an invented index. */
+        if (isidx) {
+            if (!o || (kind != WOWGDI_KIND_OBJ && kind != WOWGDI_KIND_STOCK)) {
+                wu_puts(note, notecap, &k, " -- ★ NOT ONE OF OUR PALETTE TOKENS;"
+                                           " answered 0 rather than inventing an"
+                                           " index");
+                wow32_setret(f, 0);
+                return 1;
+            }
+            wow32_setret(f, (DWORD)GetNearestPaletteIndex((HPALETTE)o, (COLORREF)col));
+            return 1;
+        }
+        if (!o || (kind != WOWGDI_KIND_DC && kind != WOWGDI_KIND_WINDC)) {
+            wu_puts(note, notecap, &k, " -- ★ NOT ONE OF OUR DC TOKENS;"
+                                       " answered the colour unchanged");
+            wow32_setret(f, col);
+            return 1;
+        }
+        col = (DWORD)GetNearestColor((HDC)o, (COLORREF)col);
+        wu_puts(note, notecap, &k, " = 0x");
+        wu_puthex(note, notecap, &k, col, 8);
+        wow32_setret(f, col);
+        return 1;
+    }
+
+    /* ── ★★ 0x21 TextOut / 0x5b GetTextExtent -- the same (string, count). ────
+       ⚠ THE STRING IS COUNTED, NOT TERMINATED. Both take an explicit length and
+         a Win16 program is entitled to hand over a fragment of a larger buffer,
+         so this must NOT stop at a NUL the way `wow32_argstr` does -- it copies
+         exactly the count it was given, bounded by the scratch buffer. */
+    case WOWGDI_TEXTOUT:
+    case WOWGDI_GETTEXTEXTENT: {
+        int  isout = (f->id == WOWGDI_TEXTOUT);
+        WORD hdc = wow32_argw(f, isout ? TO_ARG_HDC   : TE_ARG_HDC);
+        WORD n   = wow32_argw(f, isout ? TO_ARG_COUNT : TE_ARG_COUNT);
+        volatile BYTE *s = wow32_argptr(f, isout ? TO_ARG_STR : TE_ARG_STR);
+        int  x = isout ? (int)(short)wow32_argw(f, TO_ARG_X) : 0;
+        int  y = isout ? (int)(short)wow32_argw(f, TO_ARG_Y) : 0;
+        int  kind = -1;
+        HGDIOBJ o = wowgdi_h32(hdc, &kind);
+        char buf[512];
+        int  k = 0, i, cnt = (int)n;
+        SIZE sz;
+        wu_puts(note, notecap, &k, isout ? "TextOut(0x" : "GetTextExtent(0x");
+        wu_puthex(note, notecap, &k, hdc, 4);
+        if (isout) {
+            wu_puts(note, notecap, &k, ", ");
+            wu_puthex(note, notecap, &k, (DWORD)x, 4);
+            wu_puts(note, notecap, &k, ",");
+            wu_puthex(note, notecap, &k, (DWORD)y, 4);
+        }
+        wu_puts(note, notecap, &k, ", ");
+        wu_puthex(note, notecap, &k, (DWORD)n, 4);
+        wu_puts(note, notecap, &k, " chars)");
+        if (!o || (kind != WOWGDI_KIND_DC && kind != WOWGDI_KIND_WINDC) || !s) {
+            wu_puts(note, notecap, &k, " -- ★ NOT ONE OF OUR DC TOKENS, or no"
+                                       " string; answered 0");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        if (cnt < 0) cnt = 0;
+        if (cnt > (int)sizeof buf) cnt = (int)sizeof buf;
+        for (i = 0; i < cnt; ++i) buf[i] = (char)s[i];
+        if (isout) {
+            int r = TextOutA((HDC)o, x, y, buf, cnt) ? 1 : 0;
+            wu_puts(note, notecap, &k, r ? " -> drawn" : " -- ★ the OS refused it");
+            wow32_setret(f, (DWORD)r);
+            return 1;
+        }
+        sz.cx = sz.cy = 0;
+        GetTextExtentPoint32A((HDC)o, buf, cnt, &sz);
+        wu_puts(note, notecap, &k, " = ");
+        wu_puthex(note, notecap, &k, (DWORD)sz.cx, 4);
+        wu_puts(note, notecap, &k, "x");
+        wu_puthex(note, notecap, &k, (DWORD)sz.cy, 4);
+        wow32_setret(f, ((DWORD)(WORD)sz.cy << 16) | (DWORD)(WORD)sz.cx);
+        return 1;
+    }
+
+    /* ── ★★ 0x5d GetTextMetrics -- 31 bytes of `short`, layout read off
+         NOTEPAD.EXE itself (see the note by the defines). ─────────────────────
+       ⚠ THE WHOLE STRUCTURE IS WRITTEN, INCLUDING THE FIELDS NOTEPAD DOES NOT
+         READ. A guest that finds a stale byte at tmPitchAndFamily picks a font
+         for reasons nothing in the log explains. */
+    case WOWGDI_GETTEXTMETRICS: {
+        WORD hdc = wow32_argw(f, TM_ARG_HDC);
+        volatile BYTE *dst = wow32_argptr(f, TM_ARG_BUF);
+        int  kind = -1;
+        HGDIOBJ o = wowgdi_h32(hdc, &kind);
+        TEXTMETRICA tm;
+        int k = 0, i;
+        BYTE b[WOW16_TEXTMETRIC_CB];
+        wu_puts(note, notecap, &k, "GetTextMetrics(0x");
+        wu_puthex(note, notecap, &k, hdc, 4);
+        wu_puts(note, notecap, &k, ")");
+        if (!o || (kind != WOWGDI_KIND_DC && kind != WOWGDI_KIND_WINDC) || !dst) {
+            wu_puts(note, notecap, &k, " -- ★ NOT ONE OF OUR DC TOKENS, or no"
+                                       " buffer; answered 0");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        if (!GetTextMetricsA((HDC)o, &tm)) {
+            wu_puts(note, notecap, &k, " -- ★ the OS refused it; answered 0");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        for (i = 0; i < (int)sizeof b; ++i) b[i] = 0;
+        wow32_pokew(b +  0, (WORD)(short)tm.tmHeight);
+        wow32_pokew(b +  2, (WORD)(short)tm.tmAscent);
+        wow32_pokew(b +  4, (WORD)(short)tm.tmDescent);
+        wow32_pokew(b +  6, (WORD)(short)tm.tmInternalLeading);
+        wow32_pokew(b +  8, (WORD)(short)tm.tmExternalLeading);
+        wow32_pokew(b + 10, (WORD)(short)tm.tmAveCharWidth);
+        wow32_pokew(b + 12, (WORD)(short)tm.tmMaxCharWidth);
+        wow32_pokew(b + 14, (WORD)(short)tm.tmWeight);
+        wow32_pokew(b + 16, (WORD)(short)tm.tmOverhang);
+        wow32_pokew(b + 18, (WORD)(short)tm.tmDigitizedAspectX);
+        wow32_pokew(b + 20, (WORD)(short)tm.tmDigitizedAspectY);
+        b[22] = tm.tmFirstChar;       b[23] = tm.tmLastChar;
+        b[24] = tm.tmDefaultChar;     b[25] = tm.tmBreakChar;
+        b[26] = tm.tmItalic;          b[27] = tm.tmUnderlined;
+        b[28] = tm.tmStruckOut;       b[29] = tm.tmPitchAndFamily;
+        b[30] = tm.tmCharSet;
+        for (i = 0; i < (int)sizeof b; ++i) dst[i] = b[i];
+        wu_puts(note, notecap, &k, " h=");
+        wu_puthex(note, notecap, &k, (DWORD)(WORD)(short)tm.tmHeight, 4);
+        wu_puts(note, notecap, &k, " extlead=");
+        wu_puthex(note, notecap, &k, (DWORD)(WORD)(short)tm.tmExternalLeading, 4);
+        wu_puts(note, notecap, &k, " avew=");
+        wu_puthex(note, notecap, &k, (DWORD)(WORD)(short)tm.tmAveCharWidth, 4);
+        wow32_setret(f, 1);
+        return 1;
+    }
+
+    /* ── ★ 0x39 CreateFontIndirect -- the Win16 LOGFONT, read the other way. ──
+         The 50-byte layout is the one `GetObject` already writes: 18 bytes of
+         header and a 32-byte face name. This is the same table used backwards,
+         which is why there is no second reading of it to get wrong. */
+    case WOWGDI_CREATEFONTIND: {
+        volatile BYTE *p = wow32_argptr(f, 0);
+        LOGFONTA lf;
+        int k = 0, i;
+        HFONT fn;
+        WORD tok;
+        wu_puts(note, notecap, &k, "CreateFontIndirect(");
+        if (!p) {
+            wu_puts(note, notecap, &k, "NULL) -- ★ no LOGFONT; answered 0");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        for (i = 0; i < (int)sizeof lf; ++i) ((BYTE *)&lf)[i] = 0;
+        lf.lfHeight     = (LONG)(short)wow32_peekw(p + 0);
+        lf.lfWidth      = (LONG)(short)wow32_peekw(p + 2);
+        lf.lfEscapement = (LONG)(short)wow32_peekw(p + 4);
+        lf.lfOrientation= (LONG)(short)wow32_peekw(p + 6);
+        lf.lfWeight     = (LONG)(short)wow32_peekw(p + 8);
+        lf.lfItalic     = p[10]; lf.lfUnderline     = p[11];
+        lf.lfStrikeOut  = p[12]; lf.lfCharSet       = p[13];
+        lf.lfOutPrecision = p[14]; lf.lfClipPrecision = p[15];
+        lf.lfQuality      = p[16]; lf.lfPitchAndFamily = p[17];
+        for (i = 0; i < 31; ++i) {
+            BYTE c = p[18 + i];
+            lf.lfFaceName[i] = (CHAR)c;
+            if (!c) break;
+        }
+        lf.lfFaceName[31] = 0;
+        wu_putq(note, notecap, &k, lf.lfFaceName);
+        wu_puts(note, notecap, &k, " h=");
+        wu_puthex(note, notecap, &k, (DWORD)(WORD)(short)lf.lfHeight, 4);
+        wu_puts(note, notecap, &k, ")");
+        fn = CreateFontIndirectA(&lf);
+        tok = fn ? wowgdi_h16((HGDIOBJ)fn, WOWGDI_KIND_OBJ) : 0;
+        if (!tok) {
+            if (fn) DeleteObject((HGDIOBJ)fn);
+            wu_puts(note, notecap, &k, " -- ★ no font (or the token map is full);"
+                                       " answered 0");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        wu_puts(note, notecap, &k, " -> font token 0x");
+        wu_puthex(note, notecap, &k, tok, 4);
+        wow32_setret(f, tok);
+        return 1;
+    }
+
+    /* ── ★ 0x4a GetBitmapBits / 0x6a SetBitmapBits -- PBRUSH.DLL's own pair. ─
+       ⚠ THE COUNT IS A DWORD AND IT IS THE GUEST'S. It is passed through
+         unchanged and Windows bounds it against the bitmap; clamping it here
+         would silently truncate an image the guest believes it wrote. What IS
+         checked is that the far pointer resolves, because a bad selector is our
+         problem rather than the guest's. */
+    case WOWGDI_GETBITMAPBITS:
+    case WOWGDI_SETBITMAPBITS: {
+        int   isget = (f->id == WOWGDI_GETBITMAPBITS);
+        WORD  hbm   = wow32_argw(f, BB2_ARG_HBM);
+        DWORD cnt   = wow32_argd(f, BB2_ARG_COUNT);
+        volatile BYTE *bits = wow32_argptr(f, BB2_ARG_BITS);
+        int   kind = -1;
+        HGDIOBJ o = wowgdi_h32(hbm, &kind);
+        int   k = 0;
+        LONG  got;
+        wu_puts(note, notecap, &k, isget ? "GetBitmapBits(0x" : "SetBitmapBits(0x");
+        wu_puthex(note, notecap, &k, hbm, 4);
+        wu_puts(note, notecap, &k, ", ");
+        wu_puthex(note, notecap, &k, cnt, 8);
+        wu_puts(note, notecap, &k, " bytes)");
+        if (!o || (kind != WOWGDI_KIND_OBJ && kind != WOWGDI_KIND_STOCK) || !bits) {
+            wu_puts(note, notecap, &k, " -- ★ NOT ONE OF OUR BITMAP TOKENS, or no"
+                                       " buffer; answered 0");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        got = isget ? GetBitmapBits((HBITMAP)o, (LONG)cnt, (LPVOID)(ULONG_PTR)bits)
+                    : SetBitmapBits((HBITMAP)o, (DWORD)cnt, (const void *)(ULONG_PTR)bits);
+        wu_puts(note, notecap, &k, " -> ");
+        wu_puthex(note, notecap, &k, (DWORD)got, 8);
+        wow32_setret(f, (DWORD)got);
+        return 1;
+    }
+
+    /* ── ★★★★★ 0x1b8 SetDIBits / 0x1b9 GetDIBits / 0x1b7 StretchDIBits ───────
+         **This is what `File > Save As` needs.** MS Paint shows the common
+         dialog, gets a filename back, and then has to turn its off-screen
+         bitmap into the rows of a .BMP -- which is `GetDIBits`, and it was
+         answered with the harness sentinel.
+       ★ NO CONVERSION IS NEEDED AND THAT IS A READING, NOT AN ASSUMPTION. A
+         `BITMAPINFOHEADER` is 40 bytes with the same fields in the same order in
+         both worlds (Win16 wrote the format Win32 inherited), the colour table
+         that follows it is RGBQUADs either way, and the bits are bytes. Both
+         pointers are into the VDM's own memory, which this host can address
+         directly, so they go to Win32 as they are.
+       ⚠ `lpvBits == NULL` IS A QUERY, not an error: GetDIBits with a null bits
+         pointer fills in the header and returns the scan-line count, and a guest
+         uses that to size its buffer. Refusing it would break the call BEFORE
+         the one that matters. */
+    case WOWGDI_SETDIBITS:
+    case WOWGDI_GETDIBITS: {
+        int   isget = (f->id == WOWGDI_GETDIBITS);
+        WORD  hdc   = wow32_argw(f, DIB_ARG_HDC);
+        WORD  hbm   = wow32_argw(f, DIB_ARG_HBM);
+        WORD  start = wow32_argw(f, DIB_ARG_START);
+        WORD  lines = wow32_argw(f, DIB_ARG_LINES);
+        WORD  usage = wow32_argw(f, DIB_ARG_USAGE);
+        volatile BYTE *bits = wow32_argptr(f, DIB_ARG_BITS);
+        volatile BYTE *bmi  = wow32_argptr(f, DIB_ARG_BMI);
+        int   dk = -1, bk = -1;
+        HGDIOBJ d = wowgdi_h32(hdc, &dk);
+        HGDIOBJ b = wowgdi_h32(hbm, &bk);
+        int   k = 0, r;
+        wu_puts(note, notecap, &k, isget ? "GetDIBits(dc 0x" : "SetDIBits(dc 0x");
+        wu_puthex(note, notecap, &k, hdc, 4);
+        wu_puts(note, notecap, &k, ", bm 0x");
+        wu_puthex(note, notecap, &k, hbm, 4);
+        wu_puts(note, notecap, &k, ", scan ");
+        wu_puthex(note, notecap, &k, (DWORD)start, 4);
+        wu_puts(note, notecap, &k, "+");
+        wu_puthex(note, notecap, &k, (DWORD)lines, 4);
+        wu_puts(note, notecap, &k, bits ? ")" : ", bits=NULL = a size QUERY)");
+        if (!d || (dk != WOWGDI_KIND_DC && dk != WOWGDI_KIND_WINDC)
+               || !b || (bk != WOWGDI_KIND_OBJ && bk != WOWGDI_KIND_STOCK) || !bmi) {
+            wu_puts(note, notecap, &k, " -- ★ NOT OUR DC/BITMAP TOKENS, or no"
+                                       " BITMAPINFO; answered 0");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        r = isget
+            ? GetDIBits((HDC)d, (HBITMAP)b, start, lines,
+                        (LPVOID)(ULONG_PTR)bits, (BITMAPINFO *)(ULONG_PTR)bmi, usage)
+            : SetDIBits((HDC)d, (HBITMAP)b, start, lines,
+                        (const void *)(ULONG_PTR)bits, (const BITMAPINFO *)(ULONG_PTR)bmi,
+                        usage);
+        wu_puts(note, notecap, &k, " -> ");
+        wu_puthex(note, notecap, &k, (DWORD)r, 4);
+        wu_puts(note, notecap, &k, " scan lines");
+        wow32_setret(f, (DWORD)(WORD)r);
+        return 1;
+    }
+
+    /* ── ★ 0x168 CreatePalette -- and it is what makes SelectPalette real. ────
+         A `LOGPALETTE` is `{WORD palVersion; WORD palNumEntries; PALETTEENTRY
+         palPalEntry[];}` with a 4-byte entry, and every field is the same width
+         in both worlds, so the guest's own structure goes to Win32 unconverted.
+       ⚠ Session 46 answered `GetNearestPaletteIndex` with 0 "because this host
+         has no palette objects". It has now, so that refusal is a real lookup
+         again -- which is the point of implementing the producer before the
+         consumers. */
+    case WOWGDI_CREATEPALETTE: {
+        volatile BYTE *p = wow32_argptr(f, 0);
+        int k = 0;
+        HPALETTE pal;
+        WORD tok;
+        wu_puts(note, notecap, &k, "CreatePalette(");
+        if (!p) {
+            wu_puts(note, notecap, &k, "NULL) -- ★ no LOGPALETTE; answered 0");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        wu_puthex(note, notecap, &k, (DWORD)wow32_peekw(p + 2), 4);
+        wu_puts(note, notecap, &k, " entries)");
+        pal = CreatePalette((const LOGPALETTE *)(ULONG_PTR)p);
+        tok = pal ? wowgdi_h16((HGDIOBJ)pal, WOWGDI_KIND_OBJ) : 0;
+        if (!tok) {
+            if (pal) DeleteObject((HGDIOBJ)pal);
+            wu_puts(note, notecap, &k, " -- ★ the OS refused it (or the token map"
+                                       " is full); answered 0");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        wu_puts(note, notecap, &k, " -> palette token 0x");
+        wu_puthex(note, notecap, &k, tok, 4);
+        wow32_setret(f, tok);
+        return 1;
+    }
+
+    case WOWGDI_STRETCHDIBITS: {
+        WORD  hdc = wow32_argw(f, SDI_ARG_HDC);
+        int   dx = (int)(short)wow32_argw(f, SDI_ARG_DSTX);
+        int   dy = (int)(short)wow32_argw(f, SDI_ARG_DSTY);
+        int   dw = (int)(short)wow32_argw(f, SDI_ARG_DSTW);
+        int   dh = (int)(short)wow32_argw(f, SDI_ARG_DSTH);
+        int   sx = (int)(short)wow32_argw(f, SDI_ARG_SRCX);
+        int   sy = (int)(short)wow32_argw(f, SDI_ARG_SRCY);
+        int   sw = (int)(short)wow32_argw(f, SDI_ARG_SRCW);
+        int   sh = (int)(short)wow32_argw(f, SDI_ARG_SRCH);
+        WORD  usage = wow32_argw(f, SDI_ARG_USAGE);
+        DWORD rop = wow32_argd(f, SDI_ARG_ROP);
+        volatile BYTE *bits = wow32_argptr(f, SDI_ARG_BITS);
+        volatile BYTE *bmi  = wow32_argptr(f, SDI_ARG_BMI);
+        int   kind = -1;
+        HGDIOBJ o = wowgdi_h32(hdc, &kind);
+        int   k = 0, r;
+        wu_puts(note, notecap, &k, "StretchDIBits(0x");
+        wu_puthex(note, notecap, &k, hdc, 4);
+        wu_puts(note, notecap, &k, " dst(");
+        wu_puthex(note, notecap, &k, (DWORD)dx, 4);
+        wu_puts(note, notecap, &k, ",");
+        wu_puthex(note, notecap, &k, (DWORD)dy, 4);
+        wu_puts(note, notecap, &k, ") ");
+        wu_puthex(note, notecap, &k, (DWORD)dw, 4);
+        wu_puts(note, notecap, &k, "x");
+        wu_puthex(note, notecap, &k, (DWORD)dh, 4);
+        wu_puts(note, notecap, &k, " <- src ");
+        wu_puthex(note, notecap, &k, (DWORD)sw, 4);
+        wu_puts(note, notecap, &k, "x");
+        wu_puthex(note, notecap, &k, (DWORD)sh, 4);
+        wu_puts(note, notecap, &k, " rop=0x");
+        wu_puthex(note, notecap, &k, rop, 8);
+        wu_puts(note, notecap, &k, ")");
+        if (!o || (kind != WOWGDI_KIND_DC && kind != WOWGDI_KIND_WINDC)
+               || !bmi || !bits) {
+            wu_puts(note, notecap, &k, " -- ★ NOT ONE OF OUR DC TOKENS, or no"
+                                       " bits/BITMAPINFO; answered 0");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        r = StretchDIBits((HDC)o, dx, dy, dw, dh, sx, sy, sw, sh,
+                          (const void *)(ULONG_PTR)bits,
+                          (const BITMAPINFO *)(ULONG_PTR)bmi, usage, rop);
+        wu_puts(note, notecap, &k, " -> ");
+        wu_puthex(note, notecap, &k, (DWORD)r, 4);
+        wow32_setret(f, (DWORD)(WORD)r);
         return 1;
     }
 

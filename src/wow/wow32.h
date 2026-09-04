@@ -391,10 +391,12 @@ static DWORD wow32_peekret(const wow32_frame_t *f)
 #define WOW32_LOCKCURRENTTASK           0x21
 #define WOW32_WOWLOADMODULE             0x2d
 #define WOW32_GETPROFILEINT             0x39   /* pinned from DGROUP, see below    */
+#define WOW32_GETPROFILESTRING          0x3a   /* ★ IT DECIDES PAINT'S COLOUR MODE */
 #define WOW32_WOWGETNEXTVDMCOMMAND      0x70
 #define WOW32_OLDYIELD                  0x75
 #define WOW32_REGISTERDOSDATA           0x78   /* named from its call site, below */
 #define WOW32_GETSHORTPATHNAME          0x7b
+#define WOW32_SETCURRENTDIR             0x82   /* ★ WHERE File > Save As PUT THE FILE */
 #define WOW32_ACCEPTTASKSELECTOR        0x7d   /* pinned from its call sites, below */
 #define WOW32_GETPRIVATEPROFILESTRING   0x80   /* pinned from DGROUP, see below    */
 #define WOW32_WOWWAITFORMSGANDEVENT     0x83
@@ -508,6 +510,8 @@ static const char *wow32_name(WORD id)
     case WOW32_GETSYSTEMDEFAULTLANGID: return "GetSystemDefaultLangID";
     case WOW32_GETWINDOWSDIRECTORY:    return "GetWindowsDirectory";
     case WOW32_GETPROFILEINT:          return "GetProfileInt";
+    case WOW32_GETPROFILESTRING:       return "GetProfileString";
+    case WOW32_SETCURRENTDIR:          return "SetCurrentDirectory";
     case WOW32_GETPRIVATEPROFILESTRING: return "GetPrivateProfileString";
     default:                           return NULL;
     }
@@ -836,6 +840,108 @@ static int wow32_call(wow32_frame_t *f, wow32_dosdata_t *dd)
         if (!wow32_argstr(f, 2, key, sizeof key)) key[0] = 0;
         def = wow32_argw(f, 0);
         wow32_setret(f, (DWORD)GetProfileIntA(app, key, (INT)def));
+        return 1;
+    }
+
+    /* ── ★★★★★ 0x3a GetProfileString -- AND IT IS WHY MS PAINT WAS BLACK AND
+         WHITE. ────────────────────────────────────────────────────────────────
+         The string twin of 0x39, 18 argument bytes = 4 + 4 + 4 + 4 + 2 and no
+         filename, so it is WIN.INI. Both the layout and the identity come from
+         one call site rather than from arithmetic on the id:
+
+           PBRUSH.EXE seg2:0x089f   (relocation chain says KERNEL.58)
+             args as logged   (0009 | 6f0a 09c7 | 012a 09c7 | 090e 09c7 |
+                                                              08f4 09c7)
+             ds:0x08f4 = "Paintbrush"   ds:0x090e = "clear"
+             ds:0x012a = "COLOR"        nSize = 9
+
+         ⇒ nSize@0, lpReturnedString@2, lpDefault@6, lpKeyName@10, lpAppName@14.
+
+       ★★★ WHY IT MATTERS. Four instructions later Paint decides what kind of
+         image it is editing, and this call is the whole input:
+
+           08a4  cmp word ptr [bp-8], 2      ; the returned LENGTH
+           08a8  jbe  0x08c1                 ; too short -> AX = 0
+           08aa  lstrcmpi(ds:0x130 "COLOR", the buffer)
+           08b8  cmp ax,1 / sbb ax,ax / neg ax   ; AX = (equal) ? 1 : 0
+           08c6  or ax,ax / je  0x08d2
+           08ca  mov word ptr [0x499a], 0x4cf2   ; -> the COLOUR palette
+           08de  mov word ptr [0x499a], 0x2c60   ; -> the 28 GREYS
+
+         DGROUP 0x0932 is a table of 28 COLORREFs (ffffff, 000000, c0c0c0,
+         808080, 0000ff, ...) and DGROUP 0x09a2 is the same 28 as luminances
+         (ffffff, 000000, fafafa, 090909, f2f2f2, ...); seg2:0x071f copies both
+         into 0x4cf2 and 0x2c60 and this branch picks which one is live. Every
+         grey brush a run has ever logged -- 0x00090909, 0x00121212, 0x00212121
+         -- is an entry of that second table, so Paint was never losing colour in
+         a blit. **It was told to be monochrome, by us, by answering 0.**
+       ⚠ THE DEFAULT IS "COLOR", so a rig with no `[Paintbrush] clear` key gets
+         colour -- which is why searching WIN.INI for a colour key found nothing
+         and the key still turned out to be the answer. The bug was never in the
+         profile, it was that an unimplemented call cannot return a default.
+       ⚠ Same read-only-literal trap as its two neighbours: XP's profile code
+         writes into the name buffers it is given, so the locals are passed
+         always and "absent" is an empty *buffer*.
+       ⚠ Win32 truncates to nSize-1 and returns the character count without the
+         NUL, which is Win16's own convention -- the guest's `cmp ax,2` reads it
+         that way, and "COLOR" is 5. */
+    case WOW32_GETPROFILESTRING: {
+        char app[128], key[128], def[260], buf[512];
+        volatile BYTE *dst = wow32_argptr(f, 2);
+        WORD  n = wow32_argw(f, 0);
+        DWORD got;
+        unsigned i;
+        if (!wow32_argstr(f, 14, app, sizeof app)) app[0] = 0;
+        if (!wow32_argstr(f, 10, key, sizeof key)) key[0] = 0;
+        if (!wow32_argstr(f,  6, def, sizeof def)) def[0] = 0;
+        if (n > sizeof buf) n = (WORD)sizeof buf;
+        if (!n) { wow32_setret(f, 0); return 1; }
+        got = GetProfileStringA(app, key, def, buf, n);
+        if (dst) for (i = 0; i <= got && i < n; ++i) dst[i] = (BYTE)buf[i];
+        wow32_setret(f, got);
+        return 1;
+    }
+
+    /* ── ★★★★★ 0x82 SetCurrentDirectory -- AND IT IS WHERE `Save As` PUT THE
+         FILE. (session 49) ──────────────────────────────────────────────────
+         With the LDT collision and OLESVR's null pointer fixed, MS Paint's save
+         RAN -- the log shows the whole .BMP being written: six `AH=40h` writes of
+         0xF000 and 0xD7A0 bytes, a seek to end reporting **0x004AE7D6**
+         (4,908,502 = 1680x974x3 + headers), a seek back to 0, then 14 bytes and
+         40 bytes (the BITMAPFILEHEADER and BITMAPINFOHEADER) and a close.
+         **It just wrote it in the wrong directory** -- `C:\Documents and
+         Settings\Matthew\TEST.BMP`, one level above the Desktop the user chose.
+
+         Three calls of this id explain it, and the third names itself:
+
+           FUNC=0x82 from=seg1:0x53c0  arg = "C:\WINDOWS"
+           FUNC=0x82 from=seg1:0x53c0  arg = "C:\DOCUME~1\Matthew\Desktop"
+             -> UNIMPLEMENTED, STEPPED OVER ... ANSWERED 0
+
+       ⚠⚠ AND THE SENTINEL IS "SUCCESS" HERE, WHICH IS WHY IT WAS SILENT. The
+         call site is `inc dx / je <error>`; our 0 makes DX 1, so krnl386 takes
+         the *success* arm (`pop ax / mov al,0`) and tells the application the
+         directory changed. It never did, so the subsequent create resolved
+         against the old current directory. **A stepped-over call that answers
+         "yes" is worse than one that answers "no".** Same family as
+         [[stepped-over-call-answers-at-random]].
+       ⚠ IT IS NOT DECLINABLE, and this file already said so before the bug:
+         `tools/ne/wowdecline.py` lists 0x82 among the three sites where 0xFFFF
+         is a plain ERROR krnl386 reports to the app rather than chaining to DOS.
+         Declining was tried anyway in session 47 and moved the fault rather than
+         fixing it. So it is PERFORMED here.
+       ★ And the host's own current directory is the right place to perform it:
+         our DOS layer resolves relative paths against it (`SetCurrentDirectoryA
+         (g_cur)` in main.c), so one CWD serves the DOS side and this.
+       ⚠ A genuine failure returns 0xFFFFFFFF -- which at THIS site means "error",
+         and an error is the true answer when the directory does not exist. */
+    case WOW32_SETCURRENTDIR: {
+        char dir[MAX_PATH];
+        if (!wow32_argstr(f, 0, dir, sizeof dir) || !dir[0]) {
+            wow32_setret(f, 0xFFFFFFFFu);
+            return 1;
+        }
+        wow32_setret(f, SetCurrentDirectoryA(dir) ? 0 : 0xFFFFFFFFu);
         return 1;
     }
 
