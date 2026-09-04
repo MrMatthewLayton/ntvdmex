@@ -32,4 +32,4 @@ recorded here so the first day's delta is not lost.
 | Date | Overall | DOS | WoW16 | Product | What moved |
 |---|---|---|---|---|---|
 <!-- SCORES -->
-| 2026-09-04 | **61.7** | 63.6 | 67.7 | 26.2 | Solitaire + Minesweeper RUN. GetPrivateProfileInt, BITMAPCOREHEADER, TIMERPROC, InvalidateRect offset collision. Breadth 56.4->61.1%. |
+| 2026-09-04 | **61.7** | 63.6 | 67.7 | 26.2 | WOW translation-layer battery: 842 -> 892 checks. Found a live FR_ARG_* collision on first run. |
