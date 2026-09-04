@@ -429,6 +429,19 @@ static int wowgdi_call(wow32_frame_t *f, char *note, int notecap)
             return 1;
         }
         o = GetStockObject((int)idx);
+        /* ⚠ "NO SUCH OBJECT" AND "NO ROOM" ARE DIFFERENT FACTS, and the first
+             cut of this printed the second for both -- so a run reported "THE
+             GDI TOKEN MAP IS FULL" with nine of 256 slots used, because index 9
+             is a hole in the stock-object numbering (it sits between NULL_PEN
+             and OEM_FIXED_FONT) and the OS correctly returned NULL. A counter's
+             message is a claim; this one was false. */
+        if (!o) {
+            wu_puts(note, notecap, &k, " -- ★ THE OS HAS NO SUCH STOCK OBJECT"
+                                       " (index 9 is a hole in the numbering);"
+                                       " answered 0");
+            wow32_setret(f, 0);
+            return 1;
+        }
         tok = wowgdi_h16(o, WOWGDI_KIND_STOCK);
         if (!tok) {
             wu_puts(note, notecap, &k, " -- ★ THE GDI TOKEN MAP IS FULL;"
@@ -800,6 +813,21 @@ static int wowgdi_call(wow32_frame_t *f, char *note, int notecap)
                 b[16] = lf.lfQuality;       b[17] = lf.lfPitchAndFamily;
                 for (i = 0; i < 32 && lf.lfFaceName[i]; ++i)
                     b[18 + i] = (BYTE)lf.lfFaceName[i];
+                /* ★ THE FIELDS, NOT JUST THE TYPE. MS Paint sizes its whole
+                     toolbox from the system font's metrics, so lfHeight is
+                     load-bearing geometry and a log that only says "LOGFONT"
+                     cannot be compared against an oracle. */
+                {   int j = 0;
+                    for (j = 0; j < 32 && lf.lfFaceName[j]; ++j) { }
+                    wu_puts(note, notecap, &k, " h=");
+                    wu_puthex(note, notecap, &k, (DWORD)(WORD)(short)lf.lfHeight, 4);
+                    wu_puts(note, notecap, &k, " w=");
+                    wu_puthex(note, notecap, &k, (DWORD)(WORD)(short)lf.lfWidth, 4);
+                    wu_puts(note, notecap, &k, " wt=");
+                    wu_puthex(note, notecap, &k, (DWORD)(WORD)(short)lf.lfWeight, 4);
+                    wu_puts(note, notecap, &k, " ");
+                    wu_putq(note, notecap, &k, lf.lfFaceName);
+                }
             }
         } else if (type == OBJ_PEN || type == OBJ_EXTPEN) {
             LOGPEN lp;

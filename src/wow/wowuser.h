@@ -369,6 +369,57 @@ static WORD wowuser_sysres_kind(WORD h)
    ⚠ 0x44 IS `DeleteDC` IN GDI'S NUMBERING AND `ReleaseDC` HERE -- the same
      collision this file exists to prevent, and a reason the dispatcher must
      never reach this switch with another module's stub segment. */
+/* ── ★★★★★ 0x21 GetClientRect -- WHY MS PAINT LAID ITSELF OUT WRONG. ────────
+     The single call behind "the way it paints is completely wrong". Measured
+     against STOCK ntvdm running the SAME PBRUSH.EXE on the SAME box, via
+     `rigshot tree`, with both frames at an identical 1252x688 client:
+
+         child      stock (the oracle)     ours
+         pbPaint    at(128,2) 1100x604     at(7,4)    1682x976
+         pbTool     at(3,2)    121x516     at(4,2)     163x731
+         pbSize     at(3,521)  121x164     at(4,736)   163x235
+         pbColor    at(128,608)1099x66     at(172,860)1475x94
+
+     Ours are laid out for a 1680x974 client -- which is exactly the `width` and
+     `height` Paint reads from WIN.INI's [Paintbrush] section. It falls back to
+     those because it asked how big it actually was and nobody answered: USER
+     id 0x21, 6 argument bytes, `(lpRect far, hWnd=0x0160)` = GetClientRect on
+     its own frame, stepped over. So the palette and the line-size box were laid
+     out BELOW THE BOTTOM of the window and the toolbox was taller than its own
+     parent -- which is why the only thing on screen was a column of stray lines.
+   ★ Nothing was wrong with the drawing. The drawing was faithful; it was drawing
+     the right picture at the wrong size, in a window the guest had been given no
+     way to measure.
+   ⚠ A Win16 RECT IS FOUR `int`s = 8 BYTES, against Win32's four LONGs = 16.
+
+   ── AND THE THREE THAT CAME WITH IT, each named from its own call ───────────
+     0x3e  8 args  (bRedraw=1, nPos=0, nBar=0, hWnd=0x180)      SetScrollPos
+     0x40 10 args  (0, nMax=0x68e, nMin=0, nBar=0, hWnd=0x180)  SetScrollRange
+     0x45  2 args  (hCursor)                                     SetCursor
+     ★ `nMax = 0x68e` = 1678 is the canvas width, which is what identifies 0x40:
+       a scroll RANGE over the image. These two are the missing scrollbars the
+       oracle shows on the canvas and ours does not have. SB_HORZ/SB_VERT/SB_CTL
+       are 0/1/2 in both worlds. */
+#define WOWUSER_GETCLIENTRECT    0x0021
+#define GCR_ARG_RECT     0
+#define GCR_ARG_HWND     4
+
+#define WOWUSER_SETSCROLLPOS     0x003e
+#define SSP_ARG_REDRAW   0
+#define SSP_ARG_POS      2
+#define SSP_ARG_BAR      4
+#define SSP_ARG_HWND     6
+
+#define WOWUSER_SETSCROLLRANGE   0x0040
+#define SSR_ARG_REDRAW   0
+#define SSR_ARG_MAX      2
+#define SSR_ARG_MIN      4
+#define SSR_ARG_BAR      6
+#define SSR_ARG_HWND     8
+
+#define WOWUSER_SETCURSOR        0x0045
+#define SC_ARG_HCURSOR   0
+
 /* ── ★★★★★ 0x27 BeginPaint / 0x28 EndPaint -- WHERE A GUEST DRAWS. ──────────
      Both are internal stubs (their exports are native16), so the ids came from
      the run that first relayed WM_PAINT to a guest -- see wowwin.h. Each carries
@@ -2778,6 +2829,121 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
         wu_puts(note, notecap, &k, "; answered 0x");
         wu_puthex(note, notecap, &k, (DWORD)rc, 4);
         wow32_setret(f, (DWORD)(WORD)rc);
+        return 1;
+    }
+
+    /* ── ★★★★★ 0x21 GetClientRect(hWnd, lpRect) -- see the long note above. ─*/
+    case WOWUSER_GETCLIENTRECT: {
+        WORD hwnd = wow32_argw(f, GCR_ARG_HWND);
+        volatile BYTE *r = wow32_argptr(f, GCR_ARG_RECT);
+        wowuser_win_t *w = wowuser_findwin(hwnd);
+        RECT c;
+        int k = 0;
+        wu_puts(note, notecap, &k, "GetClientRect 0x");
+        wu_puthex(note, notecap, &k, hwnd, 4);
+        if (!r) {
+            wu_puts(note, notecap, &k, " -- ★ NULL lpRect; nothing written");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        if (!w || !w->hwnd32 || !GetClientRect(w->hwnd32, &c)) {
+            /* ⚠ ZERO IT RATHER THAN LEAVE IT. An unwritten RECT is the caller's
+                 stack litter, and a guest laying out from litter is worse than
+                 one laying out from an empty rectangle -- the second is at least
+                 visibly wrong. */
+            int i;
+            for (i = 0; i < WOW_RECT16_SIZE; ++i) r[i] = 0;
+            wu_puts(note, notecap, &k, " -- ★ NO SUCH WINDOW; zeroed");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        wow32_pokew(r + 0, (WORD)(short)c.left);
+        wow32_pokew(r + 2, (WORD)(short)c.top);
+        wow32_pokew(r + 4, (WORD)(short)c.right);
+        wow32_pokew(r + 6, (WORD)(short)c.bottom);
+        wu_puts(note, notecap, &k, " -> ");
+        wu_puthex(note, notecap, &k, (DWORD)c.right, 4);
+        wu_puts(note, notecap, &k, "x");
+        wu_puthex(note, notecap, &k, (DWORD)c.bottom, 4);
+        wow32_setret(f, 0);
+        return 1;
+    }
+
+    /* ── ★★ 0x40 SetScrollRange / 0x3e SetScrollPos -- the canvas scrollbars. */
+    case WOWUSER_SETSCROLLRANGE: {
+        WORD hwnd = wow32_argw(f, SSR_ARG_HWND);
+        WORD bar  = wow32_argw(f, SSR_ARG_BAR);
+        int  lo   = (int)(short)wow32_argw(f, SSR_ARG_MIN);
+        int  hi   = (int)(short)wow32_argw(f, SSR_ARG_MAX);
+        WORD rdw  = wow32_argw(f, SSR_ARG_REDRAW);
+        wowuser_win_t *w = wowuser_findwin(hwnd);
+        int k = 0;
+        wu_puts(note, notecap, &k, "SetScrollRange 0x");
+        wu_puthex(note, notecap, &k, hwnd, 4);
+        wu_puts(note, notecap, &k, bar == 0 ? " SB_HORZ " : bar == 1 ? " SB_VERT "
+                                                                     : " SB_CTL ");
+        wu_puthex(note, notecap, &k, (DWORD)lo, 4);
+        wu_puts(note, notecap, &k, "..");
+        wu_puthex(note, notecap, &k, (DWORD)hi, 4);
+        if (!w || !w->hwnd32) {
+            wu_puts(note, notecap, &k, " -- ★ NO SUCH WINDOW");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        SetScrollRange(w->hwnd32, (int)bar, lo, hi, rdw ? TRUE : FALSE);
+        wu_puts(note, notecap, &k, " -> the OS's");
+        wow32_setret(f, 0);
+        return 1;
+    }
+
+    case WOWUSER_SETSCROLLPOS: {
+        WORD hwnd = wow32_argw(f, SSP_ARG_HWND);
+        WORD bar  = wow32_argw(f, SSP_ARG_BAR);
+        int  pos  = (int)(short)wow32_argw(f, SSP_ARG_POS);
+        WORD rdw  = wow32_argw(f, SSP_ARG_REDRAW);
+        wowuser_win_t *w = wowuser_findwin(hwnd);
+        int k = 0, prev = 0;
+        wu_puts(note, notecap, &k, "SetScrollPos 0x");
+        wu_puthex(note, notecap, &k, hwnd, 4);
+        wu_puts(note, notecap, &k, bar == 0 ? " SB_HORZ " : bar == 1 ? " SB_VERT "
+                                                                     : " SB_CTL ");
+        wu_puthex(note, notecap, &k, (DWORD)pos, 4);
+        if (!w || !w->hwnd32) {
+            wu_puts(note, notecap, &k, " -- ★ NO SUCH WINDOW");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        prev = SetScrollPos(w->hwnd32, (int)bar, pos, rdw ? TRUE : FALSE);
+        wu_puts(note, notecap, &k, " -> previous ");
+        wu_puthex(note, notecap, &k, (DWORD)prev, 4);
+        wow32_setret(f, (DWORD)(WORD)(short)prev);
+        return 1;
+    }
+
+    /* ── ★ 0x45 SetCursor(hCursor) ──────────────────────────────────────────
+       ⚠ NULL IS A REAL ARGUMENT and means "no cursor", which is what Paint
+         passes while it is busy. It is passed through rather than treated as a
+         missing token. */
+    case WOWUSER_SETCURSOR: {
+        WORD tok = wow32_argw(f, SC_ARG_HCURSOR);
+        int  k = 0;
+        HCURSOR cur = NULL;
+        wu_puts(note, notecap, &k, "SetCursor 0x");
+        wu_puthex(note, notecap, &k, tok, 4);
+        if (tok) {
+            WORD ord  = wowuser_sysres_ord(tok);
+            WORD kind = wowuser_sysres_kind(tok);
+            if (ord && kind != AD_KIND_MODULERES)
+                cur = LoadCursorA(NULL, MAKEINTRESOURCEA(ord));
+            if (!cur)
+                wu_puts(note, notecap, &k, " -- ★ NOT A SYSTEM CURSOR TOKEN"
+                                           " (a module's own cursor is not built"
+                                           " yet); the cursor is left alone");
+        } else {
+            wu_puts(note, notecap, &k, " (NULL -- hide)");
+        }
+        if (cur || !tok) SetCursor(cur);
+        wow32_setret(f, 0);
         return 1;
     }
 

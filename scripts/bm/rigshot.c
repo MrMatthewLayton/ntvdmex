@@ -166,7 +166,84 @@ static BOOL CALLBACK enum_cb(HWND h, LPARAM lp)
     if (!cap[0]) return TRUE;
     p = sput(p, "  win: ");
     p = sput(p, cap);
+    /* ★ AND ITS GEOMETRY, because "the toolbox is the wrong size" is a claim
+         about NUMBERS and this tool was only ever printing names. Comparing our
+         Paintbrush with stock ntvdm's meant estimating rectangles off a scaled
+         screenshot, which is exactly the kind of inferred measurement that has
+         produced wrong root causes in this project before. Both rects are here:
+         the window's, and the CLIENT's, which is what a guest lays out inside. */
+    {
+        RECT w, c;
+        char num[16];
+        if (GetWindowRect(h, &w)) {
+            p = sput(p, "  win=(");
+            wsprintfA(num, "%d", (int)w.left);            p = sput(p, num);
+            p = sput(p, ",");
+            wsprintfA(num, "%d", (int)w.top);             p = sput(p, num);
+            p = sput(p, ") ");
+            wsprintfA(num, "%d", (int)(w.right - w.left)); p = sput(p, num);
+            p = sput(p, "x");
+            wsprintfA(num, "%d", (int)(w.bottom - w.top)); p = sput(p, num);
+        }
+        if (GetClientRect(h, &c)) {
+            p = sput(p, "  client=");
+            wsprintfA(num, "%d", (int)(c.right - c.left)); p = sput(p, num);
+            p = sput(p, "x");
+            wsprintfA(num, "%d", (int)(c.bottom - c.top)); p = sput(p, num);
+        }
+    }
     logline(line);
+    return TRUE;
+}
+
+/* ── ★ THE CHILDREN TOO. A Win16 program's toolbox, palette and canvas are
+     CHILD windows, and every question about "why does it look wrong" is a
+     question about where they are. EnumWindows only walks top-level windows, so
+     this walks one window's children by handle. Captions are usually empty on
+     these, so the CLASS is printed instead -- that is what names them
+     (NTVDMEX16.pbTool and so on). */
+static BOOL CALLBACK enum_child_cb(HWND h, LPARAM lp)
+{
+    char cls[128], line[400], num[16], *p = line;
+    RECT r;
+    (void)lp;
+    cls[0] = 0;
+    GetClassNameA(h, cls, sizeof cls);
+    p = sput(p, "    child: ");
+    p = sput(p, cls[0] ? cls : "(no class)");
+    p = sput(p, IsWindowVisible(h) ? "  VISIBLE" : "  hidden");
+    if (GetWindowRect(h, &r)) {
+        HWND par = GetParent(h);
+        POINT tl; tl.x = r.left; tl.y = r.top;
+        if (par) ScreenToClient(par, &tl);
+        p = sput(p, "  at(");
+        wsprintfA(num, "%d", (int)tl.x);              p = sput(p, num);
+        p = sput(p, ",");
+        wsprintfA(num, "%d", (int)tl.y);              p = sput(p, num);
+        p = sput(p, ") ");
+        wsprintfA(num, "%d", (int)(r.right - r.left)); p = sput(p, num);
+        p = sput(p, "x");
+        wsprintfA(num, "%d", (int)(r.bottom - r.top)); p = sput(p, num);
+    }
+    logline(line);
+    return TRUE;
+}
+
+static const char *g_tree_want = 0;
+static int         g_tree_hits = 0;
+
+static BOOL CALLBACK enum_tree_cb(HWND h, LPARAM lp)
+{
+    char cap[256];
+    (void)lp;
+    if (!IsWindowVisible(h)) return TRUE;
+    cap[0] = 0;
+    GetWindowTextA(h, cap, sizeof cap);
+    if (!cap[0] || !seq(cap, (char *)g_tree_want)) return TRUE;
+    ++g_tree_hits;
+    logline("  ---- match ----");
+    enum_cb(h, 0);
+    EnumChildWindows(h, enum_child_cb, 0);
     return TRUE;
 }
 
@@ -204,6 +281,22 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show)
     if (seq(verb, "list")) {
         logline("list: visible top-level windows");
         EnumWindows(enum_cb, 0);
+        return 0;
+    }
+
+    /* ★ `tree "<caption>"` -- EVERY top-level window with that caption, and every
+         child under each, with the child's position IN ITS PARENT'S CLIENT
+         coordinates -- the frame a Win16 program actually lays out in.
+       ⚠ EVERY match, not the first. The whole point of this verb is comparing
+         our Paintbrush against stock ntvdm's, and both are on the same desktop
+         with the SAME caption; FindWindow would silently pick one of them and
+         the comparison would be of one window with itself. */
+    if (seq(verb, "tree")) {
+        g_tree_want = arg1;
+        g_tree_hits = 0;
+        logline("tree: every window with that caption, and its children");
+        EnumWindows(enum_tree_cb, 0);
+        if (!g_tree_hits) { logline("tree: NO SUCH CAPTION"); return 1; }
         return 0;
     }
 
