@@ -87,6 +87,91 @@
      pixels to the left.
    ★ MoveTo RETURNS THE PREVIOUS POSITION packed as y:x in a DWORD, which is why
      it is not simply a void call -- guests save and restore it. */
+/* ── ★★★★ THE REST OF PAINT'S DRAWING SET. ──────────────────────────────────
+     Named from the calls themselves, and every one of them confirms its own
+     reading out of the values it carried:
+
+       0x22 BITBLT      20 args  (0020 00cc | 0000 | 0000 | 2090 | 029d | 04d1 |
+                                  0000 | 0000 | 20c0)
+            ★ the rop is 0x00CC0020 = SRCCOPY, and the two DC fields are both
+              tokens of ours -- which is what pins which end is source.
+       0x1b RECTANGLE   10 args  (0204 | 0079 | 0000 | 0000 | 20c0)
+            ★ = Rectangle(hdc, 0,0, 121, 516) -- exactly the toolbox's own size,
+              so this is its border.
+       0x04 SETROP2      4 args  (000d | 20c0)  -- 13 = R2_COPYPEN
+       0x07 SETSTRETCHBLTMODE  4 (0003 | 20c0)  -- 3 = COLORONCOLOR
+       0x01 SETBKCOLOR   6 args      0x09 SETTEXTCOLOR  6 args
+       0x0b SETWINDOWORG 6 args      0x1e SAVEDC 2       0x27 RESTOREDC 4
+     ⚠ 0x04 and 0x07 are internal stubs (their exports are native16), so only the
+       run could name them -- and the two constants are what makes it a reading
+       rather than a guess at the ordinal.
+   ★ The raster ops, the ROP2 codes, the stretch modes and COLORREF all mean the
+     same thing in both worlds, so those travel unchanged; only the handles and
+     the signed 16-bit coordinates need work. */
+#define WOWGDI_SETBKCOLOR       0x0001
+#define WOWGDI_SETTEXTCOLOR     0x0009
+#define COL_ARG_COLOR   0
+#define COL_ARG_HDC     4
+
+#define WOWGDI_SETROP2          0x0004
+#define WOWGDI_SETSTRETCHMODE   0x0007
+#define MODE_ARG_MODE   0
+#define MODE_ARG_HDC    2
+
+#define WOWGDI_SETWINDOWORG     0x000b
+#define ORG_ARG_Y       0
+#define ORG_ARG_X       2
+#define ORG_ARG_HDC     4
+
+#define WOWGDI_RECTANGLE        0x001b
+#define RC_ARG_BOTTOM   0
+#define RC_ARG_RIGHT    2
+#define RC_ARG_TOP      4
+#define RC_ARG_LEFT     6
+#define RC_ARG_HDC      8
+
+#define WOWGDI_SAVEDC           0x001e
+#define SDC_ARG_HDC     0
+#define WOWGDI_RESTOREDC        0x0027
+#define RDC2_ARG_LEVEL  0
+#define RDC2_ARG_HDC    2
+
+/* ── ★★★★★ 0x23 StretchBlt -- THE TOOL ICONS THEMSELVES. ────────────────────
+     GDI ordinal 35, a direct export, 24 argument bytes, and its own call names
+     every field:
+
+       (0020 00cc | 0117 | 003a | 0000 | 0000 | 20c8 |
+                    0204 | 0079 | 0000 | 0000 | 20c0)
+
+     = StretchBlt(dst, 0,0, 0x79 x 0x204, src, 0,0, 0x3a x 0x117, SRCCOPY)
+     -- 58x279 stretched into 121x516. ★ 58x279 is exactly the pToolbox DIB this
+     host loads, and 121x516 is exactly the toolbox window's size as measured
+     against stock. Two numbers this session already knew independently, both
+     turning up in one argument block. */
+#define WOWGDI_STRETCHBLT       0x0023
+#define SB_ARG_ROP      0        /* DWORD */
+#define SB_ARG_SRCH     4
+#define SB_ARG_SRCW     6
+#define SB_ARG_SRCY     8
+#define SB_ARG_SRCX    10
+#define SB_ARG_SRCDC   12
+#define SB_ARG_DSTH    14
+#define SB_ARG_DSTW    16
+#define SB_ARG_DSTY    18
+#define SB_ARG_DSTX    20
+#define SB_ARG_DSTDC   22
+
+#define WOWGDI_BITBLT           0x0022
+#define BB_ARG_ROP      0        /* DWORD */
+#define BB_ARG_SRCY     4
+#define BB_ARG_SRCX     6
+#define BB_ARG_SRCDC    8
+#define BB_ARG_HEIGHT  10
+#define BB_ARG_WIDTH   12
+#define BB_ARG_Y       14
+#define BB_ARG_X       16
+#define BB_ARG_DSTDC   18
+
 #define WOWGDI_LINETO           0x0013
 #define WOWGDI_MOVETO           0x0014
 #define XY_ARG_Y        0
@@ -325,6 +410,17 @@ static int wowgdi_call(wow32_frame_t *f, char *note, int notecap)
             return 1;
         }
         v = GetDeviceCaps((HDC)o, (int)idx);
+        /* ⚠ REFUTED, session 45 -- recorded so it is not re-tried. Win32
+             answers NUMCOLORS with -1 for any device deeper than 8bpp, which
+             reaches a Win16 program as 0xffff, and MS Paint asks for NUMCOLORS
+             four times and never asks BITSPIXEL or PLANES -- so it looked
+             certain that -1 was why every bitmap it makes is `planes=1 bpp=1`.
+             Substituting 256 (the deepest a Win3.1 driver ever reported) changed
+             NOTHING: the log shows `= 0x0100` and the very same 33 monochrome
+             bitmaps. The 1bpp bitmaps are MASKS -- the Win16 idiom is a
+             monochrome pattern plus SetTextColor/SetBkColor at blit time, and
+             this run makes 34 of each -- so they are not evidence of a
+             mis-detected display at all. The answer is left as the OS gives it. */
         /* ⚠ REFUTED, session 45, and recorded so it is not re-tried: forcing
              HORZRES/HORZSIZE to stock's 2.0 (from our 2.625) changed MS Paint's
              toolbox by NOTHING -- pbTool stayed 163x731 to the pixel. Paint
@@ -333,6 +429,271 @@ static int wowgdi_call(wow32_frame_t *f, char *note, int notecap)
         wu_puts(note, notecap, &k, " = 0x");
         wu_puthex(note, notecap, &k, (DWORD)v, 4);
         wow32_setret(f, (DWORD)(WORD)v);
+        return 1;
+    }
+
+    /* ── ★★★★★ 0x22 BitBlt -- THE TOOL ICONS. ───────────────────────────────
+       ⚠ BOTH DCs ARE TOKENS and both must resolve, which is the whole reason a
+         blit could not work before the producers went in: the source is almost
+         always a memory DC with the toolbox bitmap selected into it. */
+    case WOWGDI_BITBLT: {
+        WORD hdst = wow32_argw(f, BB_ARG_DSTDC);
+        WORD hsrc = wow32_argw(f, BB_ARG_SRCDC);
+        int  x  = (int)(short)wow32_argw(f, BB_ARG_X);
+        int  y  = (int)(short)wow32_argw(f, BB_ARG_Y);
+        int  cx = (int)(short)wow32_argw(f, BB_ARG_WIDTH);
+        int  cy = (int)(short)wow32_argw(f, BB_ARG_HEIGHT);
+        int  sx = (int)(short)wow32_argw(f, BB_ARG_SRCX);
+        int  sy = (int)(short)wow32_argw(f, BB_ARG_SRCY);
+        DWORD rop = wow32_argd(f, BB_ARG_ROP);
+        int  dk = -1, sk = -1;
+        HGDIOBJ d = wowgdi_h32(hdst, &dk);
+        HGDIOBJ s = wowgdi_h32(hsrc, &sk);
+        int  k = 0, ok;
+        wu_puts(note, notecap, &k, "BitBlt dst 0x");
+        wu_puthex(note, notecap, &k, hdst, 4);
+        wu_puts(note, notecap, &k, " (");
+        wu_puthex(note, notecap, &k, (DWORD)x, 4);
+        wu_puts(note, notecap, &k, ",");
+        wu_puthex(note, notecap, &k, (DWORD)y, 4);
+        wu_puts(note, notecap, &k, ") ");
+        wu_puthex(note, notecap, &k, (DWORD)cx, 4);
+        wu_puts(note, notecap, &k, "x");
+        wu_puthex(note, notecap, &k, (DWORD)cy, 4);
+        wu_puts(note, notecap, &k, " <- src 0x");
+        wu_puthex(note, notecap, &k, hsrc, 4);
+        wu_puts(note, notecap, &k, " (");
+        wu_puthex(note, notecap, &k, (DWORD)sx, 4);
+        wu_puts(note, notecap, &k, ",");
+        wu_puthex(note, notecap, &k, (DWORD)sy, 4);
+        wu_puts(note, notecap, &k, ") rop=0x");
+        wu_puthex(note, notecap, &k, rop, 8);
+        if (!d || (dk != WOWGDI_KIND_DC && dk != WOWGDI_KIND_WINDC)) {
+            wu_puts(note, notecap, &k, " -- ★ THE DESTINATION IS NOT ONE OF OUR"
+                                       " DC TOKENS; answered 0");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        /* ⚠ A NULL SOURCE IS LEGAL for the rops that do not read one (BLACKNESS,
+             WHITENESS, PATCOPY...), so a zero handle is passed through as NULL
+             rather than refused; a NON-zero handle that we cannot name is a
+             different thing and is refused. */
+        if (hsrc && (!s || (sk != WOWGDI_KIND_DC && sk != WOWGDI_KIND_WINDC))) {
+            wu_puts(note, notecap, &k, " -- ★ THE SOURCE IS NOT ONE OF OUR DC"
+                                       " TOKENS; answered 0");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        ok = BitBlt((HDC)d, x, y, cx, cy, hsrc ? (HDC)s : NULL, sx, sy, rop)
+             ? 1 : 0;
+        wu_puts(note, notecap, &k, ok ? " -> blitted" : " -- ★ the OS refused it");
+        wow32_setret(f, (DWORD)ok);
+        return 1;
+    }
+
+    /* ── ★★★★★ 0x23 StretchBlt -- see the note above. ───────────────────────
+       ⚠ THE STRETCH MODE IS THE DC'S, and Paint sets it (SetStretchBltMode,
+         COLORONCOLOR) before getting here -- which is why that call had to go in
+         with this one rather than after it. */
+    case WOWGDI_STRETCHBLT: {
+        WORD hdst = wow32_argw(f, SB_ARG_DSTDC);
+        WORD hsrc = wow32_argw(f, SB_ARG_SRCDC);
+        int  x  = (int)(short)wow32_argw(f, SB_ARG_DSTX);
+        int  y  = (int)(short)wow32_argw(f, SB_ARG_DSTY);
+        int  cx = (int)(short)wow32_argw(f, SB_ARG_DSTW);
+        int  cy = (int)(short)wow32_argw(f, SB_ARG_DSTH);
+        int  sx = (int)(short)wow32_argw(f, SB_ARG_SRCX);
+        int  sy = (int)(short)wow32_argw(f, SB_ARG_SRCY);
+        int  sw = (int)(short)wow32_argw(f, SB_ARG_SRCW);
+        int  sh = (int)(short)wow32_argw(f, SB_ARG_SRCH);
+        DWORD rop = wow32_argd(f, SB_ARG_ROP);
+        int  dk = -1, sk = -1;
+        HGDIOBJ d = wowgdi_h32(hdst, &dk);
+        HGDIOBJ s = wowgdi_h32(hsrc, &sk);
+        int  k = 0, ok;
+        wu_puts(note, notecap, &k, "StretchBlt dst 0x");
+        wu_puthex(note, notecap, &k, hdst, 4);
+        wu_puts(note, notecap, &k, " (");
+        wu_puthex(note, notecap, &k, (DWORD)x, 4);
+        wu_puts(note, notecap, &k, ",");
+        wu_puthex(note, notecap, &k, (DWORD)y, 4);
+        wu_puts(note, notecap, &k, ") ");
+        wu_puthex(note, notecap, &k, (DWORD)cx, 4);
+        wu_puts(note, notecap, &k, "x");
+        wu_puthex(note, notecap, &k, (DWORD)cy, 4);
+        wu_puts(note, notecap, &k, " <- src 0x");
+        wu_puthex(note, notecap, &k, hsrc, 4);
+        wu_puts(note, notecap, &k, " ");
+        wu_puthex(note, notecap, &k, (DWORD)sw, 4);
+        wu_puts(note, notecap, &k, "x");
+        wu_puthex(note, notecap, &k, (DWORD)sh, 4);
+        wu_puts(note, notecap, &k, " rop=0x");
+        wu_puthex(note, notecap, &k, rop, 8);
+        if (!d || (dk != WOWGDI_KIND_DC && dk != WOWGDI_KIND_WINDC)) {
+            wu_puts(note, notecap, &k, " -- ★ THE DESTINATION IS NOT ONE OF OUR"
+                                       " DC TOKENS; answered 0");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        if (hsrc && (!s || (sk != WOWGDI_KIND_DC && sk != WOWGDI_KIND_WINDC))) {
+            wu_puts(note, notecap, &k, " -- ★ THE SOURCE IS NOT ONE OF OUR DC"
+                                       " TOKENS; answered 0");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        ok = StretchBlt((HDC)d, x, y, cx, cy, hsrc ? (HDC)s : NULL,
+                        sx, sy, sw, sh, rop) ? 1 : 0;
+        wu_puts(note, notecap, &k, ok ? " -> stretched"
+                                      : " -- ★ the OS refused it");
+        wow32_setret(f, (DWORD)ok);
+        return 1;
+    }
+
+    /* ── ★★ 0x1b Rectangle(hDC, left, top, right, bottom) ───────────────────*/
+    case WOWGDI_RECTANGLE: {
+        WORD hdc = wow32_argw(f, RC_ARG_HDC);
+        int  l = (int)(short)wow32_argw(f, RC_ARG_LEFT);
+        int  t = (int)(short)wow32_argw(f, RC_ARG_TOP);
+        int  r = (int)(short)wow32_argw(f, RC_ARG_RIGHT);
+        int  b = (int)(short)wow32_argw(f, RC_ARG_BOTTOM);
+        int  kind = -1;
+        HGDIOBJ o = wowgdi_h32(hdc, &kind);
+        int  k = 0;
+        wu_puts(note, notecap, &k, "Rectangle(0x");
+        wu_puthex(note, notecap, &k, hdc, 4);
+        wu_puts(note, notecap, &k, ", ");
+        wu_puthex(note, notecap, &k, (DWORD)l, 4);
+        wu_puts(note, notecap, &k, ",");
+        wu_puthex(note, notecap, &k, (DWORD)t, 4);
+        wu_puts(note, notecap, &k, " ");
+        wu_puthex(note, notecap, &k, (DWORD)r, 4);
+        wu_puts(note, notecap, &k, ",");
+        wu_puthex(note, notecap, &k, (DWORD)b, 4);
+        wu_puts(note, notecap, &k, ")");
+        if (!o || (kind != WOWGDI_KIND_DC && kind != WOWGDI_KIND_WINDC)) {
+            wu_puts(note, notecap, &k, " -- ★ NOT ONE OF OUR DC TOKENS;"
+                                       " answered 0");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        wow32_setret(f, (DWORD)(Rectangle((HDC)o, l, t, r, b) ? 1 : 0));
+        return 1;
+    }
+
+    /* ── ★ 0x01 SetBkColor / 0x09 SetTextColor -- a COLORREF is a COLORREF. ──
+       ⚠ The PREVIOUS colour is the return value and it is a DWORD, so this is
+         one of the calls where the 32-bit return really is 32 bits. */
+    case WOWGDI_SETBKCOLOR:
+    case WOWGDI_SETTEXTCOLOR: {
+        int  istext = (f->id == WOWGDI_SETTEXTCOLOR);
+        WORD hdc = wow32_argw(f, COL_ARG_HDC);
+        DWORD col = wow32_argd(f, COL_ARG_COLOR);
+        int  kind = -1;
+        HGDIOBJ o = wowgdi_h32(hdc, &kind);
+        int  k = 0;
+        COLORREF prev;
+        wu_puts(note, notecap, &k, istext ? "SetTextColor(0x" : "SetBkColor(0x");
+        wu_puthex(note, notecap, &k, hdc, 4);
+        wu_puts(note, notecap, &k, ", 0x");
+        wu_puthex(note, notecap, &k, col, 8);
+        wu_puts(note, notecap, &k, ")");
+        if (!o || (kind != WOWGDI_KIND_DC && kind != WOWGDI_KIND_WINDC)) {
+            wu_puts(note, notecap, &k, " -- ★ NOT ONE OF OUR DC TOKENS;"
+                                       " answered 0");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        prev = istext ? SetTextColor((HDC)o, (COLORREF)col)
+                      : SetBkColor((HDC)o, (COLORREF)col);
+        wow32_setret(f, (DWORD)prev);
+        return 1;
+    }
+
+    /* ── ★ 0x04 SetROP2 / 0x07 SetStretchBltMode -- one int, same numbering. */
+    case WOWGDI_SETROP2:
+    case WOWGDI_SETSTRETCHMODE: {
+        int  isrop = (f->id == WOWGDI_SETROP2);
+        WORD hdc  = wow32_argw(f, MODE_ARG_HDC);
+        int  mode = (int)(short)wow32_argw(f, MODE_ARG_MODE);
+        int  kind = -1;
+        HGDIOBJ o = wowgdi_h32(hdc, &kind);
+        int  k = 0, prev;
+        wu_puts(note, notecap, &k, isrop ? "SetROP2(0x" : "SetStretchBltMode(0x");
+        wu_puthex(note, notecap, &k, hdc, 4);
+        wu_puts(note, notecap, &k, ", ");
+        wu_puthex(note, notecap, &k, (DWORD)mode, 4);
+        wu_puts(note, notecap, &k, ")");
+        if (!o || (kind != WOWGDI_KIND_DC && kind != WOWGDI_KIND_WINDC)) {
+            wu_puts(note, notecap, &k, " -- ★ NOT ONE OF OUR DC TOKENS;"
+                                       " answered 0");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        prev = isrop ? SetROP2((HDC)o, mode) : SetStretchBltMode((HDC)o, mode);
+        wow32_setret(f, (DWORD)(WORD)prev);
+        return 1;
+    }
+
+    /* ── ★ 0x0b SetWindowOrg(hDC, x, y) ─────────────────────────────────────*/
+    case WOWGDI_SETWINDOWORG: {
+        WORD hdc = wow32_argw(f, ORG_ARG_HDC);
+        int  x = (int)(short)wow32_argw(f, ORG_ARG_X);
+        int  y = (int)(short)wow32_argw(f, ORG_ARG_Y);
+        int  kind = -1;
+        HGDIOBJ o = wowgdi_h32(hdc, &kind);
+        int  k = 0;
+        POINT prev;
+        wu_puts(note, notecap, &k, "SetWindowOrg(0x");
+        wu_puthex(note, notecap, &k, hdc, 4);
+        wu_puts(note, notecap, &k, ", ");
+        wu_puthex(note, notecap, &k, (DWORD)x, 4);
+        wu_puts(note, notecap, &k, ",");
+        wu_puthex(note, notecap, &k, (DWORD)y, 4);
+        wu_puts(note, notecap, &k, ")");
+        if (!o || (kind != WOWGDI_KIND_DC && kind != WOWGDI_KIND_WINDC)) {
+            wu_puts(note, notecap, &k, " -- ★ NOT ONE OF OUR DC TOKENS;"
+                                       " answered 0");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        prev.x = prev.y = 0;
+        SetWindowOrgEx((HDC)o, x, y, &prev);
+        wow32_setret(f, ((DWORD)(WORD)(short)prev.y << 16)
+                        | (DWORD)(WORD)(short)prev.x);
+        return 1;
+    }
+
+    /* ── ★ 0x1e SaveDC / 0x27 RestoreDC -- the guest's own nesting level. ────
+       ⚠ THE LEVEL IS THE GUEST'S NUMBER AND IT TRAVELS UNCHANGED. Win32 keeps
+         its own stack per DC and uses the same convention (positive = absolute,
+         negative = relative), and our DCs are the ones the guest saved on, so
+         the level it hands back is meaningful without translation. */
+    case WOWGDI_SAVEDC:
+    case WOWGDI_RESTOREDC: {
+        int  issave = (f->id == WOWGDI_SAVEDC);
+        WORD hdc = issave ? wow32_argw(f, SDC_ARG_HDC)
+                          : wow32_argw(f, RDC2_ARG_HDC);
+        int  lvl = issave ? 0 : (int)(short)wow32_argw(f, RDC2_ARG_LEVEL);
+        int  kind = -1;
+        HGDIOBJ o = wowgdi_h32(hdc, &kind);
+        int  k = 0, r;
+        wu_puts(note, notecap, &k, issave ? "SaveDC(0x" : "RestoreDC(0x");
+        wu_puthex(note, notecap, &k, hdc, 4);
+        if (!issave) {
+            wu_puts(note, notecap, &k, ", level ");
+            wu_puthex(note, notecap, &k, (DWORD)lvl, 4);
+        }
+        wu_puts(note, notecap, &k, ")");
+        if (!o || (kind != WOWGDI_KIND_DC && kind != WOWGDI_KIND_WINDC)) {
+            wu_puts(note, notecap, &k, " -- ★ NOT ONE OF OUR DC TOKENS;"
+                                       " answered 0");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        r = issave ? SaveDC((HDC)o) : (RestoreDC((HDC)o, lvl) ? 1 : 0);
+        wu_puts(note, notecap, &k, " -> ");
+        wu_puthex(note, notecap, &k, (DWORD)r, 4);
+        wow32_setret(f, (DWORD)(WORD)r);
         return 1;
     }
 
