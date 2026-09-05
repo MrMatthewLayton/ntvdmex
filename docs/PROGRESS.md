@@ -32,5 +32,5 @@ recorded here so the first day's delta is not lost.
 | Date | Overall | DOS | WoW16 | Product | What moved |
 |---|---|---|---|---|---|
 <!-- SCORES -->
-| 2026-09-05 | **63.6** | 67.9 | 67.7 | 26.2 | #133 CLOSED (oracle+rig agree on all six cases); AH=59h classes measured; suite 893->986. SysVars measured but unscored -- rig wedged. |
+| 2026-09-05 | **64.0** | 68.8 | 67.7 | 26.2 | #133 CLOSED (oracle+rig agree, 6/6); AH=59h classes measured; SysVars DPB+NUL chain rig-gated; suite 893->986. |
 | 2026-09-04 | **61.7** | 63.6 | 67.7 | 26.2 | Measured the redraw: log 9%, pump 0%, repaint ~10ms. Latency hypothesis refuted. |

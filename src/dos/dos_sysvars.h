@@ -113,7 +113,21 @@ static void sv_far(unsigned char *p, unsigned o, unsigned seg, unsigned off)
 
 /* Build one DPB. `next_seg/next_off` link it on; pass 0xFFFF/0xFFFF to end the
    chain -- a chain that does not terminate is how krnl386 once walked the IVT
-   forever (see DOS_SFT_* in dos_layout.h), and a DPB chain can do the same. */
+   forever (see DOS_SFT_* in dos_layout.h), and a DPB chain can do the same.
+ ⚠ WHICH FIELDS ARE REAL, AND WHICH ARE NOT. Say it here rather than let a
+   caller discover it. GetDiskFreeSpace gives us bytes/sector, sectors/cluster
+   and the cluster count, so DPB_SECSIZE, DPB_CLUSTMAX, DPB_CLUSTSHIFT and
+   DPB_CLUSTHIGH are MEASURED off the real volume. The rest of the FAT geometry
+   -- DPB_RESERVED, DPB_NFATS, DPB_ROOTENTS, DPB_DATASTART, DPB_FATSECS -- is
+   only in the boot sector, which we cannot read: this host exposes no raw
+   sectors at all (INT 13h and INT 25h/26h both report absent, GH #44). So
+   DATASTART and FATSECS are left ZERO and the others take FAT16 defaults.
+   That is a real limitation, not a rounding: a program that walks a DPB to
+   locate the FAT gets nothing usable. It cannot do anything with the answer
+   either, having no way to read the sectors, so the chain is useful for what
+   actually walks it (memory and drive enumeration) and honest about the rest.
+   Filling DATASTART/FATSECS with plausible numbers would be strictly worse --
+   that is the MEM.EXE failure (GH #47) in a different structure. */
 static void dos_dpb_build(unsigned char *p, unsigned drive,
                           unsigned bytes_per_sec, unsigned secs_per_clust,
                           unsigned root_ents, unsigned highest_clust,
