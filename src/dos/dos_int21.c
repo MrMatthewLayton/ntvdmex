@@ -1566,8 +1566,30 @@ int dos_int21(dos_machine_t *m)
         uint8_t al58 = (uint8_t)(R_AX & 0xFF);
         if (al58 == 0x00)      { SETAX(m->alloc_strat); OKCF(); }
         else if (al58 == 0x01) { m->alloc_strat = (uint8_t)(R_BX & 0xFF); OKCF(); }
+        /* Oracle: AL=02 returns the state in AL and LEAVES AH ALONE -- 6.22
+           answered AX=5800 to a call made with AX=5802. */
         else if (al58 == 0x02) { SETAX((R_AX & 0xFF00) | m->umb_link); OKCF(); }
-        else if (al58 == 0x03) { m->umb_link = (uint8_t)(R_BX & 0xFF); OKCF(); }
+        else if (al58 == 0x03) {
+            /* ── ★ YOU CANNOT LINK A UMB CHAIN THAT DOES NOT EXIST. (GH #47) ───
+                 This accepted the call and stored the flag, and that is why
+                 MEM.EXE reported 1,664K of "Upper" memory on a machine with
+                 none, and counted the free tail of conventional memory as an
+                 upper block -- leaving Conventional free at 0K and "Largest
+                 executable program size" at -16 bytes.
+                 MEM's own trace is what named it: `21:58/03 bx=0001`, set UMB
+                 link ON, immediately before it walks the chain.
+               Oracle, tools/dostest/p_umb.asm on MS-DOS 6.22 booted with no
+               EMM386 and no DOS=UMB -- the same configuration we present:
+                 CASE=int21.5803.link.on  AX=0001 CF=1
+                 CASE=int21.5802.after.on AX=5800          (still not linked)
+                 CASE=int21.5803.link.off AX=0001 CF=1
+               i.e. real DOS REFUSES, in both directions, with error 1. We
+               provide no upper memory blocks at all, so refusing is not a
+               limitation being papered over -- it is the true answer. */
+            tp = zput(tp, "  INT21 AH=5803 UMB link refused: no UMB provider "
+                          "(oracle: AX=0001 CF=1)\r\n");
+            SETAX(1); ERRCF();
+        }
         else {
             tp = zput(tp, "  INT21 AH=58 AL=0x"); tp = zhex(tp, al58);
             tp = zput(tp, " UNIMPLEMENTED subfunction\r\n");
