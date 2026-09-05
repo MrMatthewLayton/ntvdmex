@@ -44,6 +44,7 @@
 #include "dos_int21.h"
 #include "dos_layout.h"
 #include "dos_disk.h"       /* GH #44: image geometry + CHS<->LBA */
+#include "dos_recovery.h"   /* GH #132: what to do when we will not start */
 #include "dos_sysvars.h"   /* GH #48: the List of Lists, built to the measured 6.22 layout */
 #include "dos_ctab.h"
 #include "dos_xms.h"
@@ -2198,6 +2199,67 @@ static int dos_terminate(dos_machine_t *m, void *tib, char **pp, char *base)
     VDM_REG(tib, VTIB_EIP) += 3;
     log_append(LOG_PATH, base, *pp); *pp = base;
     return 0;                        /* top-level program: the run is over */
+}
+
+/* ── THE RECOVERY PATH: A MACHINE MUST NOT LOSE ITS VDM. (GH #132) ───────────
+     We install by pointing ntvdm.exe's IFEO Debugger value at ourselves, so a
+     host that wedges on startup breaks EVERY DOS and Win16 launch on the box,
+     and the fix needs a registry edit with no working VDM to make it from.
+     Session 52 wedged the rig twice in one day, both on a blocking Win32 call
+     before the host had a window; neither could be recovered remotely.
+   The counter is raised on every start and cleared only when a run ENDS CLEANLY,
+   so a hang or a crash leaves it raised. Three strikes and we drop the IFEO
+   value: better to hand the machine back to Microsoft's ntvdm than to leave it
+   with no working 16-bit subsystem at all. See src/dos/dos_recovery.h. */
+#define STARTFAIL_PATH "C:\\ntvdmex\\startfail.txt"
+static dos_start_mode g_start_mode = DOS_START_NORMAL;
+
+static unsigned recovery_read(void)
+{
+    char b[16]; DWORD n = 0; unsigned v = 0;
+    HANDLE h = CreateFileA(STARTFAIL_PATH, GENERIC_READ, FILE_SHARE_READ, NULL,
+                           OPEN_EXISTING, 0, NULL);
+    if (h == INVALID_HANDLE_VALUE) return 0;
+    if (ReadFile(h, b, sizeof(b) - 1, &n, NULL)) v = dos_recovery_parse(b, n);
+    CloseHandle(h);
+    return v;
+}
+
+static void recovery_write(unsigned v)
+{
+    char b[16]; int i = 0; DWORD w = 0;
+    HANDLE h = CreateFileA(STARTFAIL_PATH, GENERIC_WRITE, FILE_SHARE_READ, NULL,
+                           CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (h == INVALID_HANDLE_VALUE) return;
+    if (v >= 10) b[i++] = (char)('0' + (v / 10) % 10);
+    b[i++] = (char)('0' + v % 10);
+    b[i++] = '\r'; b[i++] = '\n';
+    WriteFile(h, b, (DWORD)i, &w, NULL);
+    FlushFileBuffers(h);                /* the next start may be after a crash */
+    CloseHandle(h);
+}
+
+/* Cleared only from the clean-exit path: an aborted run must leave it raised. */
+static void recovery_ok(void) { DeleteFileA(STARTFAIL_PATH); }
+
+/* Take ourselves out of the launch path. Needs the privilege the installer had;
+   if it fails, SAY SO -- a recovery step that silently does nothing is worse
+   than none, because the next start believes it was handled. */
+static void recovery_uninstall(char **pp)
+{
+    HKEY k; LONG rc;
+    rc = RegOpenKeyExA(HKEY_LOCAL_MACHINE,
+        "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Image File "
+        "Execution Options\\ntvdm.exe", 0, KEY_SET_VALUE, &k);
+    if (rc == ERROR_SUCCESS) {
+        rc = RegDeleteValueA(k, "Debugger");
+        RegCloseKey(k);
+    }
+    *pp = zput(*pp, rc == ERROR_SUCCESS
+        ? "STAGE0: RECOVERY -- IFEO Debugger REMOVED, the machine's own ntvdm "
+          "takes over. Re-install when the fault is fixed. (GH #132)\r\n"
+        : "STAGE0: RECOVERY -- could NOT remove the IFEO Debugger value (no "
+          "privilege?); the machine still routes here. (GH #132)\r\n");
 }
 
 /* ── DISK IMAGES BEHIND INT 13h / INT 25h. (GH #44) ──────────────────────────
@@ -14811,6 +14873,15 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     log_write(LOG_PATH, report, p);
     serial_init();                                      /* DPMI harness: COM1 log sink */
     g_stdio_how = stdio_init();                         /* GH #131; reported at exit */
+    {   unsigned fails = recovery_read();               /* GH #132 */
+        g_start_mode = dos_recovery_decide(fails);
+        recovery_write(fails + 1);                      /* cleared only on a clean exit */
+        p = zput(p, "STAGE0: consecutive failed starts = "); p = zhexb(p, fails);
+        p = zput(p, g_start_mode == DOS_START_UNINSTALL ? " -> UNINSTALL\r\n"
+                  : g_start_mode == DOS_START_SAFE      ? " -> SAFE MODE\r\n"
+                                                        : " -> normal\r\n");
+        if (g_start_mode == DOS_START_UNINSTALL) recovery_uninstall(&p);
+        log_append(LOG_PATH, report, p); serial_out(report, p); p = report; }
     serial_out(report, p);
 
     /* ── IS THIS A WIN16 (WOW) LAUNCH? IF SO, HAND IT STRAIGHT BACK. (GH #129) ──
@@ -18316,6 +18387,14 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
        the line buffer instead. The log copy below is unconditional either way:
        it is a different sink and the one the rig harness reads. */
     stdio_flush();
+    /* ⚠ REPORTED AT EXIT, not at startup. The startup line is written before a
+       later log_write(LOG_PATH,...) TRUNCATES the file, so it never survived to
+       be read -- exactly as #131's stdout line did not. Same trap, same day. */
+    p = zput(p, "STAGE2: start mode was ");
+    p = zput(p, g_start_mode == DOS_START_UNINSTALL ? "UNINSTALL"
+             : g_start_mode == DOS_START_SAFE       ? "SAFE" : "normal");
+    p = zput(p, "; clean exit -> failure counter cleared (GH #132)\r\n");
+    recovery_ok();                       /* GH #132: this run ended cleanly */
     p = zput(p, "STAGE2: stdout -> "); p = zput(p, g_stdio_how);
     p = zput(p, g_stdio != INVALID_HANDLE_VALUE ? " [LIVE]\r\n" : " [buffered only]\r\n");
     {

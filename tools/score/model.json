@@ -89,7 +89,7 @@
         { "id": "sdk",           "w": 3, "value": 0.0,  "what": "Pluggable VDD/driver SDK + docs",   "evidence": "#11" },
         { "id": "net-vdd",       "w": 2, "value": 0.0,  "what": "Networking VDD",                    "evidence": "#8" },
         { "id": "serial-vdd",    "w": 2, "value": 0.0,  "what": "Serial/parallel VDDs",              "evidence": "#9" },
-        { "id": "recovery",      "w": 1, "value": 0.0,  "what": "Recovery path when it won't start", "evidence": "#132" },
+        { "id": "recovery",      "w": 1, "value": 0.9,  "what": "Recovery path when it won't start", "evidence": "#132 CLOSED-but-for-safe-mode s52, PROVEN END TO END ON THE RIG: consecutive failed starts are counted and cleared only on a clean exit; at 3 the host DROPS ITS OWN IFEO Debugger value and hands the machine back to Microsoft`s ntvdm. Forced the counter to 3 and confirmed the key was genuinely gone by reg query, then restored it. 17 off-VM checks incl. `a corrupt counter must never be able to uninstall us`. GAP: SAFE mode is decided at 2 failures but does not yet skip anything" },
         { "id": "theming",       "w": 1, "value": 0.5,  "what": "Luna theming + fullscreen story",   "evidence": "#12 -- windowed done, fullscreen story partial" }
       ]
     }

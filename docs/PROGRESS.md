@@ -32,5 +32,5 @@ recorded here so the first day's delta is not lost.
 | Date | Overall | DOS | WoW16 | Product | What moved |
 |---|---|---|---|---|---|
 <!-- SCORES -->
-| 2026-09-05 | **71.7** | 83.7 | 67.7 | 35.5 | #44 INT13h/25h CLOSED on real images; #15 REFUTED (all ModRM forms work); INT 20h child-exit no longer kills the VDM; #130 target.txt no longer overrides; #47 root cause found (SDA sat on SysVars+0x45) - Extended (XMS) now reports; launch matrix + hazards. Suite 893->1019. |
+| 2026-09-05 | **72.0** | 83.7 | 67.7 | 38.9 | #44 INT13h CLOSED; #15 REFUTED; #132 self-uninstall PROVEN on hardware; #130 target.txt precedence; INT 20h child-exit fixed; #47 root cause (SDA on SysVars+0x45). Suite 893->1036. |
 | 2026-09-04 | **61.7** | 63.6 | 67.7 | 26.2 | Measured the redraw: log 9%, pump 0%, repaint ~10ms. Latency hypothesis refuted. |

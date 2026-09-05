@@ -214,3 +214,13 @@ cc -std=c99 -Wall -Wextra -Wno-unused-function -O0 -g \
    -o "$DIR/disk_test" "$DIR/disk_test.c"
 
 "$DIR/disk_test"
+
+# GH #132: the startup-failure recovery policy (src/dos/dos_recovery.h). Its value
+# is entirely in the edges -- too eager and a machine loses its VDM after one bad
+# day, too lazy and a wedged host leaves every 16-bit program broken until someone
+# edits the registry by hand. A CORRUPT counter must never be able to uninstall us.
+cc -std=c99 -Wall -Wextra -Wno-unused-function -O0 -g \
+   -I "$DIR/../../src/dos" \
+   -o "$DIR/recovery_test" "$DIR/recovery_test.c"
+
+"$DIR/recovery_test"
