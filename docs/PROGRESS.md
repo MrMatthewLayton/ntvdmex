@@ -32,5 +32,5 @@ recorded here so the first day's delta is not lost.
 | Date | Overall | DOS | WoW16 | Product | What moved |
 |---|---|---|---|---|---|
 <!-- SCORES -->
-| 2026-09-05 | **66.2** | 73.6 | 67.7 | 26.2 | #133 CLOSED; #50 EXEC AL=01/03 CLOSED; #45 INT 14h/17h CLOSED; #34 INT 24h contract; SysVars DPB; 3 memory lies fixed (#47 still open). Suite 893->986. |
+| 2026-09-05 | **67.8** | 77.1 | 67.7 | 26.2 | #133,#50,#45,#49,#52 CLOSED; #34 INT24h contract; SysVars DPB; 3 memory lies fixed; #131 both handle routes eliminated. Suite 893->993. |
 | 2026-09-04 | **61.7** | 63.6 | 67.7 | 26.2 | Measured the redraw: log 9%, pump 0%, repaint ~10ms. Latency hypothesis refuted. |
