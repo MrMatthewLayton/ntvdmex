@@ -26,7 +26,13 @@
 
 #define XMS_MAX_HANDLES   64       /* EMB handles 1..XMS_MAX_HANDLES            */
 #define XMS_VERSION       0x0300   /* XMS spec version, BCD (3.0)              */
-#define XMS_REVISION      0x0300   /* driver internal revision (cosmetic)      */
+/* Driver internal revision. ⚠ 0x0310 (what HIMEM.SYS reports, measured by
+   p_xms.asm on 6.22) WAS TRIED AND REFUTED for GH #47: MEM's own version
+   wrapper returns BX rather than AX --
+       3CBB: xor ah,ah / call far [XMS entry] / mov dx,bx / ret
+   -- so the revision is a value it actually propagates, which made it a
+   well-founded suspect. It changed nothing. Fifth refuted hypothesis. */
+#define XMS_REVISION      0x0300
 
 /* XMS error codes (returned in BL when AX=0). */
 #define XMSERR_NOTIMPL    0x80     /* function not implemented                 */
