@@ -15142,11 +15142,28 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         return 1;
     }
 
-    /* Load the program: C:\ntvdmex\target.txt override, else CurDir\Title, else a
-       tiny exit stub. (target.txt decouples DOS-kernel tests from Title recovery.) */
+    /* Load the program: what CSRSS asked for, else C:\ntvdmex\target.txt, else a
+       tiny exit stub.
+     ⚠⚠ THAT ORDER USED TO BE THE OTHER WAY ROUND, AND IT IS A BLOCKER ON #130.
+       target.txt won UNCONDITIONALLY, so with NTVDMEX installed as the machine's
+       VDM *every* DOS and Win16 launch ran whatever that file happened to name,
+       whatever the user double-clicked. It also silently corrupted our own
+       measurements: the launch matrix's stock column reported DPMI output under
+       `p_ver.com` because a run had reused a stale target.
+     ► THE TEST HARNESS IS UNAFFECTED, and that is measured rather than hoped:
+       on the rig CSRSS hands back `title=[]` with no program name at all
+       (STAGE1: program C:\test\ -- an empty tail), so the override still
+       applies there. It stops applying exactly when someone actually asked for
+       a program, which is the only case that was ever wrong. */
     {
-        HANDLE ht = CreateFileA(TARGET_PATH, GENERIC_READ, FILE_SHARE_READ, NULL,
+        int csrss_named = (g_cur[0] && g_title[0]);
+        HANDLE ht = csrss_named ? INVALID_HANDLE_VALUE
+                  : CreateFileA(TARGET_PATH, GENERIC_READ, FILE_SHARE_READ, NULL,
                                 OPEN_EXISTING, 0, NULL);
+        if (csrss_named) {
+            p = zput(p, "STAGE2: CSRSS named a program -- target.txt NOT consulted "
+                        "(GH #130)\r\n");
+        }
         if (ht != INVALID_HANDLE_VALUE) {
             char tpath[512]; DWORD tn = 0; char *q; char *a = 0;
             ReadFile(ht, tpath, sizeof(tpath) - 1, &tn, NULL); CloseHandle(ht);

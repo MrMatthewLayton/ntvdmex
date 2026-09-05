@@ -84,7 +84,7 @@
       "items": [
         { "id": "host-ui",       "w": 4, "value": 1.0,  "what": "Host UI shell",                     "evidence": "menu bar, status strip, six-tab Settings dialog, Luna-themed" },
         { "id": "settings-live", "w": 4, "value": 0.13, "what": "Settings actually honoured",        "evidence": "#136 -- 6 of 46; settings_apply() is the honest list" },
-        { "id": "install",       "w": 6, "value": 0.3,  "what": "Install / routing, reversibly",     "evidence": "#130 -- IFEO routing works, but leaving it installed breaks Win16 until breadth lands" },
+        { "id": "install",       "w": 6, "value": 0.5,  "what": "Install / routing, reversibly",     "evidence": "#130 s52: the documented blocker is GONE -- target.txt no longer overrides UNCONDITIONALLY, so an installed NTVDMEX runs what the user launched instead of whatever that file last named. CSRSS wins when it names a program; the rig harness is unaffected because there CSRSS returns title=[] (measured). GAPS: no verified install/uninstall flow (#132 recovery), and Win16 coverage is 5 guests not all of them" },
         { "id": "launch-matrix", "w": 3, "value": 0.0,  "what": "Verified against the launch matrix","evidence": "#140" },
         { "id": "sdk",           "w": 3, "value": 0.0,  "what": "Pluggable VDD/driver SDK + docs",   "evidence": "#11" },
         { "id": "net-vdd",       "w": 2, "value": 0.0,  "what": "Networking VDD",                    "evidence": "#8" },

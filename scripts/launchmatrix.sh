@@ -54,17 +54,30 @@ run_one() {   # $1 = host tag (ex|stock), $2 = target
     # reports NO-RESULT for a run that in fact succeeded, which reads as "stock
     # cannot do this either" and would have made half the matrix meaningless.
     if [ "$tag" = stock ]; then res="$SH/result_stock_$t.txt"; else res="$SH/result_$t.log"; fi
-    rm -f "$res"
+    # ⚠⚠ WAIT ON THE MTIME MOVING, NOT ON THE FILE EXISTING. `rm -f` over SMB does
+    #   not always take, and a leftover result then satisfies an existence test
+    #   INSTANTLY -- so the row reports OK for a run that never happened and
+    #   summarises the previous target's output. That is exactly what this script
+    #   did: all five stock rows reported OK against one stale DPMI log from a
+    #   wedge fifteen minutes earlier. bmqueue.sh has always compared mtimes for
+    #   this reason; this now does too.
+    local before after i
+    before=$(stat -f '%m' "$res" 2>/dev/null || echo 0)
+    rm -f "$res" 2>/dev/null
     if [ "$tag" = stock ]; then
         printf 'stock %s\r\n' "$t" > "$SH/cmd.txt"
     else
         printf '%s\r\n' "$t" > "$SH/cmd.txt"
     fi
-    local i
     for ((i=0; i<40; i++)); do [ -f "$SH/cmd.txt" ] || break; sleep 2; done
     if [ -f "$SH/cmd.txt" ]; then echo "WATCHER-DEAD"; return; fi
-    for ((i=0; i<90; i++)); do [ -f "$res" ] && { sleep 3; break; }; sleep 2; done
-    if [ ! -f "$res" ]; then echo "NO-RESULT"; return; fi
+    for ((i=0; i<90; i++)); do
+        after=$(stat -f '%m' "$res" 2>/dev/null || echo 0)
+        if [ "$after" != "0" ] && [ "$after" != "$before" ]; then sleep 3; break; fi
+        sleep 2
+    done
+    after=$(stat -f '%m' "$res" 2>/dev/null || echo 0)
+    if [ "$after" = "0" ] || [ "$after" = "$before" ]; then echo "NO-RESULT"; return; fi
     echo "OK:$res"
 }
 
@@ -96,7 +109,9 @@ summarise() {  # $1 = result path
 identity_ok() {   # $1 = result path, $2 = target
     local f="$1" t="$2" stem
     case "$t" in p_*.com) stem="${t%.com}"; stem="${stem#p_}" ;; *) return 0 ;; esac
-    LC_ALL=C grep -aq "#PROBE" "$f" || return 0        # not a probe run at all
+    # ⚠ A file with no #PROBE banner at all is NOT "fine, not a probe" -- for a
+    #   p_*.com target it means we are looking at something else entirely. The
+    #   first cut returned success here and let a stale DPMI log through.
     LC_ALL=C grep -aq "#PROBE .*$stem" "$f"
 }
 
