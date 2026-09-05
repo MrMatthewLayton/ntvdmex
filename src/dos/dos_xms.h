@@ -86,7 +86,16 @@ static inline void xms_init(xms_state *x, uint32_t total_kb,
                             void  (*free)(void *, void *, uint32_t),
                             void *ctx) {
     int i;
-    x->a20 = 0;
+    /* ── A20 IS ON, AND SAYING OTHERWISE WAS A LIE ABOUT OUR OWN MACHINE. ─────
+         This started masked, so AH=07h (query A20) answered "disabled" until a
+         guest happened to call AH=03h. But an NT VDM does not wrap at 1 MB --
+         the line is effectively always open -- and extended memory is
+         unreachable with A20 masked, so a memory reporter that asks first and
+         allocates second is told the pool it can see is unusable.
+       Oracle, tools/dostest/p_xms.asm on MS-DOS 6.22 with HIMEM.SYS loaded:
+         CASE=xms.07.query.a20 SIG=AX,BX AX=0001 BX=B100
+       i.e. enabled. Ours answered AX=0000. (GH #47) */
+    x->a20 = 1;
     x->hma_used = 0;
     x->total_kb = total_kb;
     x->used_kb = 0;

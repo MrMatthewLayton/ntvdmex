@@ -35,7 +35,15 @@ int main(void)
     xms_init(&x, 1024, t_alloc, t_free, NULL);
 
     /* T1: fresh state ----------------------------------------------------- */
-    CHECK(x.a20 == 0 && x.hma_used == 0, "init: A20 masked, HMA free");
+    /* ── A20 STARTS OPEN, AND THIS CHECK USED TO PIN THE LIE. ─────────────────
+         It asserted a20 == 0, i.e. AH=07h answers "A20 disabled" until some
+         guest happens to call AH=03h. An NT VDM does not wrap at 1 MB, so the
+         line is effectively always open, and extended memory is unreachable
+         while it is reported masked.
+       Oracle, tools/dostest/p_xms.asm on 6.22 with HIMEM.SYS:
+         CASE=xms.07.query.a20 SIG=AX,BX AX=0001    (enabled)
+       Ours answered AX=0000. (GH #47) */
+    CHECK(x.a20 == 1 && x.hma_used == 0, "init: A20 open (as the VDM really is), HMA free");
     xms_query_free(&x, &largest, &totfree);
     CHECK(largest == 1024 && totfree == 1024, "fn08: whole pool free initially");
 

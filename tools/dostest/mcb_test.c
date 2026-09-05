@@ -49,11 +49,26 @@ int main(void) {
 
     printf("== M2.4 MCB allocator battery ==\n");
 
+    /* ── SIZES ARE DERIVED FROM DOS_MEM_TOP, NOT TYPED IN. ────────────────────
+         They were literals (0x9F00, 0x8EFF, 0x8E7E, 0x7EFF), every one of them a
+         restatement of "conventional memory ends at 0xA000" -- so moving the top
+         to the real EBDA boundary broke six checks that were not testing the
+         allocator at all. Derived, they follow the map instead of contradicting
+         it, and a future move of DOS_MEM_TOP changes one line.
+       The top itself is MEASURED: MS-DOS 6.22's own chain ends at 0x9FC0 and its
+       PSP+0x02 reads 0x9FC0 (tools/dostest/p_mcb.asm, p_psp.asm) -- 640K less the
+       1KB Extended BIOS Data Area, which is why real MEM reports 639K. */
+    {
+    const unsigned PROG  = DOS_MEM_TOP - DOS_PSP_SEG;   /* the program block      */
+    const unsigned TAIL  = PROG - 0x1000 - 1;           /* after a 0x1000 shrink  */
+    const unsigned SPLIT = TAIL - 0x80 - 1;             /* after a 0x80 alloc     */
+    const unsigned GROWN = PROG - 0x2000 - 1;           /* after growing to 0x2000 */
+
     /* T0: initial chain ---------------------------------------------------- */
     CHECK(first == 0x5F, "init: chain root at 0x5F");
     CHECK(dos_mcb_check(mem, first, DOS_MEM_TOP) == 0, "init: chain consistent");
-    CHECK(sig_of(0xFF) == 'Z' && own_of(0xFF) == DOS_PSP_SEG && sz_of(0xFF) == 0x9F00,
-          "init: program block = Z / PSP / 0x9F00");
+    CHECK(sig_of(0xFF) == 'Z' && own_of(0xFF) == DOS_PSP_SEG && sz_of(0xFF) == PROG,
+          "init: program block = Z / PSP / DOS_MEM_TOP-PSP");
     CHECK(sig_of(0x5F) == 'M' && own_of(0x5F) == DOS_PSP_SEG && sz_of(0x5F) == 0x10,
           "init: env block = M / PSP / 0x10");
     CHECK(sig_of(0x70) == 'M' && own_of(0x70) == 0x0008 && sz_of(0x70) == 0x8E,
@@ -66,10 +81,10 @@ int main(void) {
 
     /* T2: program shrinks its own block -- the .EXE-startup pattern --------- */
     rc = dos_resize(mem, 0x100, 0x1000, &max);
-    CHECK(rc == 0, "resize: program shrinks 0x9F00 -> 0x1000");
+    CHECK(rc == 0, "resize: program shrinks to 0x1000");
     CHECK(sig_of(0xFF) == 'M' && sz_of(0xFF) == 0x1000, "shrink: block now M / 0x1000");
-    CHECK(sig_of(0x1100) == 'Z' && own_of(0x1100) == 0 && sz_of(0x1100) == 0x8EFF,
-          "shrink: freed tail = Z / free / 0x8EFF");
+    CHECK(sig_of(0x1100) == 'Z' && own_of(0x1100) == 0 && sz_of(0x1100) == TAIL,
+          "shrink: freed tail = Z / free / derived");
     CHECK(dos_mcb_check(mem, first, DOS_MEM_TOP) == 0, "after shrink: chain consistent");
 
     /* T3: allocate from the freed tail (split) ----------------------------- */
@@ -77,28 +92,28 @@ int main(void) {
     CHECK(rc == 0 && seg == 0x1101, "alloc 0x80 -> seg 0x1101");
     CHECK(sig_of(0x1100) == 'M' && own_of(0x1100) == DOS_PSP_SEG && sz_of(0x1100) == 0x80,
           "alloc: block = M / PSP / 0x80");
-    CHECK(sig_of(0x1181) == 'Z' && own_of(0x1181) == 0 && sz_of(0x1181) == 0x8E7E,
-          "alloc: split tail = Z / free / 0x8E7E");
+    CHECK(sig_of(0x1181) == 'Z' && own_of(0x1181) == 0 && sz_of(0x1181) == SPLIT,
+          "alloc: split tail = Z / free / derived");
     CHECK(dos_mcb_check(mem, first, DOS_MEM_TOP) == 0, "after alloc: chain consistent");
 
     /* T3b: a too-large alloc fails and reports the largest free block ------ */
     max = 0;
     rc = dos_alloc(mem, first, 0xFFFF, &seg, &max);
-    CHECK(rc == 8 && max == 0x8E7E, "alloc 0xFFFF fails, max = largest free 0x8E7E");
+    CHECK(rc == 8 && max == SPLIT, "alloc 0xFFFF fails, max = largest free block");
 
     /* T4: free + forward coalesce back to one free block ------------------- */
     rc = dos_free(mem, 0x1101);
     CHECK(rc == 0, "free seg 0x1101 ok");
-    CHECK(sig_of(0x1100) == 'Z' && own_of(0x1100) == 0 && sz_of(0x1100) == 0x8EFF,
-          "free: forward-coalesced to Z / free / 0x8EFF");
+    CHECK(sig_of(0x1100) == 'Z' && own_of(0x1100) == 0 && sz_of(0x1100) == TAIL,
+          "free: forward-coalesced to Z / free / derived");
     CHECK(dos_mcb_check(mem, first, DOS_MEM_TOP) == 0, "after free: chain consistent");
 
     /* T5: resize grow into the free neighbour ------------------------------ */
     rc = dos_resize(mem, 0x100, 0x2000, &max);
     CHECK(rc == 0, "resize grow 0x1000 -> 0x2000 into free neighbour");
     CHECK(sig_of(0xFF) == 'M' && sz_of(0xFF) == 0x2000, "grow: block now 0x2000");
-    CHECK(sig_of(0x2100) == 'Z' && own_of(0x2100) == 0 && sz_of(0x2100) == 0x7EFF,
-          "grow: remaining free = Z / 0x7EFF");
+    CHECK(sig_of(0x2100) == 'Z' && own_of(0x2100) == 0 && sz_of(0x2100) == GROWN,
+          "grow: remaining free = Z / derived");
     CHECK(dos_mcb_check(mem, first, DOS_MEM_TOP) == 0, "after grow: chain consistent");
 
     /* T6: grow blocked by an owned neighbour ------------------------------- */
@@ -220,6 +235,8 @@ int main(void) {
         CHECK(psp[0x80] == 0 && psp[0x81] == 0x0D, "cmdtail: empty -> len 0, 0x0D");
         dos_cmdtail_build(g, 0x0100, (const char *)0);
         CHECK(psp[0x80] == 0 && psp[0x81] == 0x0D, "cmdtail: NULL -> len 0, 0x0D");
+    }
+
     }
 
     dump_chain(first);

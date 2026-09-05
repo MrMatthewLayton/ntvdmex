@@ -16096,7 +16096,13 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                 BSETAX(0x4021);
                 BCF_CLR();
             } else if (bn == 0x12) {
-                BSETAX(640);                       /* KB of conventional memory */
+                /* KB of conventional memory. 640 CONTRADICTED OUR OWN MEMORY MAP
+                   once DOS_MEM_TOP moved to the real EBDA boundary: the MCB chain
+                   ends at 0x9FC0 and the PSP says 0x9FC0, which is 639K, while
+                   this still claimed 640. Real DOS reports 639 for exactly that
+                   reason -- the top 1KB is the Extended BIOS Data Area. Derived
+                   from the map rather than typed, so the two cannot drift. */
+                BSETAX((WORD)((DOS_MEM_TOP * 16u) / 1024u));
                 BCF_CLR();
             } else if (bn == 0x15) {
                 unsigned ah15 = (VDM_REG(tib, VTIB_EAX) >> 8) & 0xFF;

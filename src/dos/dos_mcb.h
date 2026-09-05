@@ -23,7 +23,16 @@
 #include <stdint.h>
 
 #define DOS_PSP_SEG 0x0100u     /* matches vdmhost.c enum PSP_SEG */
-#define DOS_MEM_TOP 0xA000u     /* 640KB conventional top, in paragraphs */
+/* ── WHERE CONVENTIONAL MEMORY ACTUALLY ENDS. (GH #47) ────────────────────────
+   0xA000 is 640KB, and it is NOT where a real PC's MCB chain stops. MS-DOS 6.22,
+   walked directly (tools/dostest/p_mcb.asm):
+       CASE=mcb.chain.ends.at SIG=AX AX=9FC0
+       CASE=psp.02.memtop     SIG=AX AX=9FC0
+   The top 1KB (0x9FC0..0x9FFF) is the Extended BIOS Data Area, which the BIOS
+   reserves and DOS never hands out -- which is exactly why MEM reports 639K and
+   not 640K. Ours ran the last block all the way to 0xA000 and reported 640K.
+   Both numbers are measured; this is the one a real machine gives. */
+#define DOS_MEM_TOP 0x9FC0u     /* conventional top in paragraphs: 640K - 1K EBDA */
 
 /* --- raw MCB field access over base + paragraph addressing ----------------- */
 
@@ -54,11 +63,12 @@ static inline void mcb_lay(volatile uint8_t *base, uint16_t seg,
  *   0x0070 DOS resident -> filler standing in for resident DOS (owner 8)
  *   0x00FF program block-> 'Z' (last), owns ALL remaining memory; .EXEs shrink
  *                          this via AH=4Ah at startup to free the tail.
- * (0x5F+1+0x10=0x70; 0x70+1+0x8E=0xFF; 0xFF+1+0x9F00=0xA000.) */
+ * (0x5F+1+0x10=0x70; 0x70+1+0x8E=0xFF; 0xFF+1+0x9EC0=0x9FC0 -- the EBDA
+ * boundary, not 640K; see DOS_MEM_TOP.) */
 static inline uint16_t dos_mcb_init(volatile uint8_t *base) {
     mcb_lay(base, 0x005F, 'M', DOS_PSP_SEG, 0x0010);
     mcb_lay(base, 0x0070, 'M', 0x0008,      0x008E);
-    mcb_lay(base, 0x00FF, 'Z', DOS_PSP_SEG, 0x9F00);
+    mcb_lay(base, 0x00FF, 'Z', DOS_PSP_SEG, (uint16_t)(DOS_MEM_TOP - 0x0100));
     return 0x005F;
 }
 
