@@ -1221,6 +1221,17 @@ static volatile BYTE *g_tib_dbg = 0;        /* VDM_TIB, for the crash VEH to dum
 /* Serial debug sink (DPMI harness): COM1 is captured by QEMU (-serial file:vm/serial.log)
    so the host reads the log directly -- no GUI screendump, no stale-host ambiguity. */
 static HANDLE g_serial = INVALID_HANDLE_VALUE;
+/* GH #45: LPT1 is a spool file. Opened lazily on the first byte printed, so a
+   run that never prints leaves no file behind to confuse the next one.
+ ⚠ DO NOT CALL IT LPT1.PRN. `LPT1` is a RESERVED WIN32 DEVICE NAME -- reserved
+   with any extension, in any directory -- so CreateFileA("C:\ntvdmex\LPT1.PRN")
+   opens the actual parallel port rather than a file, and fails when nothing is
+   attached. Measured on the rig: INT 17h reported ready, the probe passed every
+   status check, and no file existed. Same list bites CON, PRN, AUX, NUL and
+   COM1-9. The name below is deliberately not on it. */
+static HANDLE g_lpt = INVALID_HANDLE_VALUE;
+static int    g_lpt_failed = 0;      /* opened once and could not: stop retrying */
+#define LPT_SPOOL_PATH "C:\\ntvdmex\\PRINTOUT.TXT"
 static void serial_init(void)
 {
     DCB dcb;
@@ -16119,14 +16130,97 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                          until here, DOS/4GW takes this CF=1, and exits CLEANLY in 328 ms
                          (STAGE2: complete, run_ms=0x148) without printing a character. */
                 }
-            } else if (bn == 0x14) {               /* serial: no port fitted */
-                BSETAX(0x0000);                    /* status: not ready       */
-                BCF_CLR();
-                g_bios_unimpl[0x14] = 1;
-            } else if (bn == 0x17) {               /* printer: none fitted    */
-                BSETAX((WORD)((VDM_REG(tib, VTIB_EAX) & 0x00FF) | 0x3000));
-                BCF_CLR();                         /* AH bit4=selected, bit5=out of paper */
-                g_bios_unimpl[0x17] = 1;
+            } else if (bn == 0x14) {               /* SERIAL, COM1.  GH #45   */
+                /* ── "NOT FITTED" CONTRADICTED OUR OWN EQUIPMENT WORD. ───────
+                     INT 11h above reports one serial and one parallel port (bit
+                     pattern 0x4021), and then this returned status 0x0000 --
+                     every bit clear, meaning a port that is fitted but will
+                     never be ready. A guest that believes INT 11h and polls
+                     here waits forever.
+                   The model: transmit is REAL (it goes to the same COM1 handle
+                   serial_out uses when the host has one), receive reports the
+                   line as idle with the TIMEOUT bit set, which is what a real
+                   UART with nothing on the other end does. That cannot hang a
+                   guest the way a permanently-not-ready port can.
+                   ⚠ The 6.22 oracle is NOT truth here -- QEMU runs SeaBIOS, so
+                     its answer is another reimplementation's opinion (epic #24).
+                     These bits are a statement about OUR virtual machine. */
+                unsigned ah14 = (VDM_REG(tib, VTIB_EAX) >> 8) & 0xFF;
+                /* AH bit7 timeout, 6 TX shift empty, 5 TX holding empty,
+                   0 data ready.  AL (in the status word's low half for AH=03)
+                   is the modem status: DSR+CTS+CD asserted. */
+                WORD line_idle = 0x6000;           /* both TX registers empty  */
+                if (ah14 == 0x00) {                /* initialise: AL = params  */
+                    BSETAX((WORD)(line_idle | 0x0030));
+                    BCF_CLR();
+                } else if (ah14 == 0x01) {         /* send AL                  */
+                    char c = (char)(VDM_REG(tib, VTIB_EAX) & 0xFF);
+                    if (g_serial != INVALID_HANDLE_VALUE) {
+                        DWORD w = 0; WriteFile(g_serial, &c, 1, &w, NULL);
+                    }
+                    /* AH keeps the line status, AL keeps the character sent;
+                       bit 7 of AH clear = no error. */
+                    BSETAX((WORD)(line_idle | (VDM_REG(tib, VTIB_EAX) & 0xFF)));
+                    BCF_CLR();
+                } else if (ah14 == 0x02) {         /* receive -> AL            */
+                    /* Nothing attached: TIMEOUT (bit 7), which is the answer a
+                       real port gives and a polling guest is written to expect. */
+                    BSETAX(0x8000);
+                    BCF_CLR();
+                } else if (ah14 == 0x03) {         /* status                   */
+                    BSETAX((WORD)(line_idle | 0x0030));   /* AL: DSR+CTS       */
+                    BCF_CLR();
+                } else {
+                    BSETAX(0x8000); BCF_CLR();
+                    g_bios_unimpl[0x14] = 1;
+                }
+            } else if (bn == 0x17) {               /* PRINTER, LPT1.  GH #45  */
+                /* Printed output goes to a SPOOL FILE, which is a real printer
+                   as far as a DOS program can tell and is inspectable afterwards
+                   -- the alternative was reporting "selected, out of paper"
+                   forever, which is a port that exists and can never be used.
+                   Status bits: 7 not busy, 6 acknowledge, 4 selected, 3 I/O
+                   error, 0 timeout. 0x90 = not busy + selected = ready. */
+                unsigned ah17 = (VDM_REG(tib, VTIB_EAX) >> 8) & 0xFF;
+                if (ah17 == 0x00) {                /* print AL                 */
+                    char c = (char)(VDM_REG(tib, VTIB_EAX) & 0xFF);
+                    DWORD w = 0;
+                    if (g_lpt == INVALID_HANDLE_VALUE && !g_lpt_failed) {
+                        g_lpt = CreateFileA(LPT_SPOOL_PATH, GENERIC_WRITE,
+                                            FILE_SHARE_READ, NULL, CREATE_ALWAYS,
+                                            FILE_ATTRIBUTE_NORMAL, NULL);
+                        if (g_lpt == INVALID_HANDLE_VALUE) {
+                            char lb[128], *lq = lb;
+                            g_lpt_failed = 1;
+                            lq = zput(lq, "  INT17 spool OPEN FAILED err=0x");
+                            lq = zhex(lq, GetLastError());
+                            lq = zput(lq, " -> reporting I/O error, not ready\r\n");
+                            log_append(LOG_PATH, lb, lq); serial_out(lb, lq);
+                        }
+                    }
+                    if (g_lpt != INVALID_HANDLE_VALUE) {
+                        WriteFile(g_lpt, &c, 1, &w, NULL);
+                        FlushFileBuffers(g_lpt);   /* the run may be killed, not exited */
+                        BSETAX((WORD)(0x9000 | (VDM_REG(tib, VTIB_EAX) & 0xFF)));
+                    } else {
+                        /* ── DO NOT REPORT READY WHEN THE BYTE WENT NOWHERE. ──
+                             The first cut did exactly that: status 0x90 on every
+                             call while no file was ever created, so the probe
+                             passed every check and the feature did not work.
+                             Bit 3 is I/O ERROR and bit 5 is OUT OF PAPER; a
+                             program that checks either can now tell. */
+                        BSETAX((WORD)(0x2800 | (VDM_REG(tib, VTIB_EAX) & 0xFF)));
+                        g_bios_unimpl[0x17] = 1;
+                    }
+                    BCF_CLR();
+                } else if (ah17 == 0x01 || ah17 == 0x02) {  /* init / status   */
+                    BSETAX((WORD)((g_lpt_failed ? 0x2800 : 0x9000)
+                                  | (VDM_REG(tib, VTIB_EAX) & 0xFF)));
+                    BCF_CLR();
+                } else {
+                    BSETAX(0x9000); BCF_CLR();
+                    g_bios_unimpl[0x17] = 1;
+                }
             } else if (bn == 0x13) {               /* disk services           */
                 unsigned ah13 = (VDM_REG(tib, VTIB_EAX) >> 8) & 0xFF;
                 if (ah13 == 0x00) { BSETAX(0); BCF_CLR(); }      /* reset: ok  */
