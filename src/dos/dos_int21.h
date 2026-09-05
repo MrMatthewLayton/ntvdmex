@@ -37,6 +37,12 @@ typedef struct {
        guest's register frame all live there.  See exec_begin() in main.c. */
     int      exec_pending;
     uint8_t  exec_mode;        /* AL: 00 load+go, 01 load only, 03 overlay          */
+    /* AL=01 and AL=03 both ANSWER through the caller's parameter block, so the
+       host needs to find it again after the load. AL=01 writes the entry SS:SP
+       and CS:IP back into it; AL=03 reads the load segment and relocation
+       factor out of it. (GH #50) */
+    uint16_t exec_pb_seg, exec_pb_off;
+    uint16_t exec_ovl_seg, exec_ovl_reloc;
     char     exec_path[128];
     uint16_t exec_env;         /* 0 = inherit the parent's environment               */
     uint16_t exec_tail_seg, exec_tail_off;

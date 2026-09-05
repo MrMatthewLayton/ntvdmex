@@ -68,4 +68,48 @@ static inline dos_image_t dos_load(volatile uint8_t *base, const uint8_t *file,
     return e;
 }
 
+/* ── AH=4Bh AL=03: LOAD AN OVERLAY. (GH #50) ──────────────────────────────────
+   Not a process: no PSP, no memory allocated, no transfer of control. The caller
+   says WHERE to put it (load_seg) and, separately, WHAT TO RELOCATE BY
+   (reloc_factor) -- and those two are not the same number. A large program swaps
+   overlays into one buffer it already owns, so the relocation factor is the
+   buffer's segment while the load segment may differ.
+ ★ THE FACTOR, NOT THE LOAD SEGMENT. tools/dostest/p_ovl.asm passes a factor of
+   0x1234 that is deliberately NOT the load segment, and MS-DOS 6.22 relocates by
+   the factor:
+       CASE=ovl.relocated.word SIG=AX AX=1234
+   which separates the three ways to be wrong -- 0 (never relocated), the load
+   segment (relocated by the wrong value), or their sum (relocated twice). */
+static inline uint32_t dos_load_overlay(volatile uint8_t *base, const uint8_t *file,
+                                        uint32_t nread, uint16_t load_seg,
+                                        uint16_t reloc_factor) {
+    uint32_t i, hdrsize, e_crlc, e_lfarlc, totalused, imgsize;
+    uint16_t e_cblp, e_cp;
+    volatile uint8_t *img;
+    if (nread < 0x1C || file[0] != 'M' || file[1] != 'Z') {
+        /* A .COM overlay is the file, verbatim, with nothing to relocate. */
+        img = mcb_at(base, load_seg);
+        for (i = 0; i < nread; ++i) img[i] = file[i];
+        return nread;
+    }
+    hdrsize  = (uint32_t)dos_ld_rd16(file + 8) * 16;
+    e_crlc   = dos_ld_rd16(file + 6);
+    e_lfarlc = dos_ld_rd16(file + 24);
+    e_cblp   = dos_ld_rd16(file + 2);
+    e_cp     = dos_ld_rd16(file + 4);
+    totalused = e_cp ? ((uint32_t)(e_cp - 1) * 512 + (e_cblp ? e_cblp : 512)) : nread;
+    if (totalused > nread) totalused = nread;
+    imgsize = totalused > hdrsize ? totalused - hdrsize : 0;
+    img = mcb_at(base, load_seg);
+    for (i = 0; i < imgsize; ++i) img[i] = file[hdrsize + i];
+    for (i = 0; i < e_crlc; ++i) {
+        uint32_t ro = dos_ld_rd16(file + e_lfarlc + i * 4);
+        uint32_t rs = dos_ld_rd16(file + e_lfarlc + i * 4 + 2);
+        volatile uint8_t *loc = (volatile uint8_t *)((uintptr_t)base
+                                + (((uint32_t)(load_seg + rs)) << 4) + ro);
+        mcb_wr16(loc, (uint16_t)(mcb_rd16(loc) + reloc_factor));
+    }
+    return imgsize;
+}
+
 #endif /* DOS_LOADER_H */

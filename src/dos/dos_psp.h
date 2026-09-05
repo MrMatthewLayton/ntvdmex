@@ -52,4 +52,39 @@ static inline void dos_cmdtail_build(volatile uint8_t *base, uint16_t psp_seg,
     psp[0x81 + n] = 0x0D;
 }
 
+/* ── SAVE THE LIVE INT 22h/23h/24h VECTORS INTO THE PSP. (GH #34) ─────────────
+   DOS does this as part of building a PSP, and restores them on termination.
+   Reads the IVT directly (segment 0), so it must run AFTER the host has planted
+   its handlers -- saving a vector that is still 0000:0000 stores a null that the
+   program will happily restore later.
+   Measured on MS-DOS 6.22 (tools/dostest/p_psp.asm): the PSP's copy of all three
+   EQUALS the live vector at program entry, which is the host-independent
+   invariant the probe asserts. */
+static inline void dos_psp_save_vectors(volatile uint8_t *base, uint16_t psp_seg,
+                                        uint16_t parent_psp) {
+    static const uint8_t vec[3] = { 0x22, 0x23, 0x24 };
+    static const uint8_t at[3]  = { 0x0A, 0x0E, 0x12 };
+    volatile uint8_t *psp = mcb_at(base, psp_seg);
+    volatile uint8_t *ivt = mcb_at(base, 0);
+    unsigned k, b;
+    for (k = 0; k < 3; ++k)
+        for (b = 0; b < 4; ++b)
+            psp[at[k] + b] = ivt[vec[k] * 4 + b];
+    mcb_wr16(psp + 0x16, parent_psp);          /* the parent's PSP segment */
+}
+
+/* The other half of the contract: put them back. A program that installed its
+   own INT 24h must not leave it installed after it exits -- that is how one
+   guest's critical-error handler ends up servicing the next one's failure. */
+static inline void dos_psp_restore_vectors(volatile uint8_t *base, uint16_t psp_seg) {
+    static const uint8_t vec[3] = { 0x22, 0x23, 0x24 };
+    static const uint8_t at[3]  = { 0x0A, 0x0E, 0x12 };
+    volatile uint8_t *psp = mcb_at(base, psp_seg);
+    volatile uint8_t *ivt = mcb_at(base, 0);
+    unsigned k, b;
+    for (k = 0; k < 3; ++k)
+        for (b = 0; b < 4; ++b)
+            ivt[vec[k] * 4 + b] = psp[at[k] + b];
+}
+
 #endif /* DOS_PSP_H */

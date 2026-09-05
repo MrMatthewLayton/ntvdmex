@@ -1076,6 +1076,24 @@ static char *exec_begin(dos_machine_t *m, volatile BYTE *tib, char *p)
     ReadFile(hf, exec_filebuf, sizeof(exec_filebuf), &nread, NULL);
     CloseHandle(hf);
 
+    /* ── AL=03, THE OVERLAY: BRANCH BEFORE ANY OF THE PROCESS MACHINERY. ───────
+         It is not a process. No memory is allocated, no PSP is built, no parent
+         frame is snapshotted and control does not transfer -- the caller already
+         owns the buffer and only wants the image put in it and relocated by the
+         factor IT supplies. Running it through the code below would allocate a
+         block and hand the child the CPU, which is a different function. (#50) */
+    if (m->exec_mode == 0x03) {
+        uint32_t n = dos_load_overlay(NULL, exec_filebuf, nread,
+                                      m->exec_ovl_seg, m->exec_ovl_reloc);
+        p = zput(p, "  EXEC: AL=03 overlay -> seg=0x"); p = zhex(p, m->exec_ovl_seg);
+        p = zput(p, " reloc=0x"); p = zhex(p, m->exec_ovl_reloc);
+        p = zput(p, " bytes=0x"); p = zhex(p, n); p = zput(p, "\r\n");
+        VDM_REG(tib, VTIB_EAX) &= 0xFFFF0000u;
+        *pfl &= (WORD)~1;
+        VDM_REG(tib, VTIB_EIP) += 3;
+        return p;
+    }
+
     /* Ask for everything: DOS gives a .COM all of free memory, and an .EXE at
        least its minalloc. Probe the largest block by asking for too much. */
     if (dos_alloc(NULL, m->first_mcb, 0xFFFF, &child, &maxpara) == 0) maxpara = 0;
@@ -1102,6 +1120,10 @@ static char *exec_begin(dos_machine_t *m, volatile BYTE *tib, char *p)
     /* Build the child's PSP and copy in its command tail, then load the image. */
     dos_psp_build(NULL, child, m->exec_env ? m->exec_env : DOS_ENV_SEG,
                   (uint16_t)(child + want));
+    /* The child gets the vectors as they stand NOW, so whatever it installs is
+       unwound to the parent's when it exits -- that is the whole contract, and it
+       matters most for INT 24h. (GH #34) */
+    dos_psp_save_vectors(NULL, child, m->psp_seg);
     { volatile BYTE *dpsp = (volatile BYTE *)(child << 4);
       const volatile BYTE *tail = (const volatile BYTE *)
           ((m->exec_tail_seg << 4) + m->exec_tail_off);
@@ -1114,14 +1136,32 @@ static char *exec_begin(dos_machine_t *m, volatile BYTE *tib, char *p)
     img = dos_load(NULL, exec_filebuf, nread, child);
 
     if (m->exec_mode == 0x01) {
-        /* Load without executing: DOS hands the entry point back in the caller's
-           parameter block and returns. We have not wired that back, so say so
-           rather than pretend the program ran. */
-        p = zput(p, "  EXEC: AL=01 load-without-execute UNIMPLEMENTED\r\n");
-        m->unimpl21[0x4B >> 3] |= (uint8_t)(1u << (0x4B & 7));
-        dos_free(NULL, child);
-        VDM_REG(tib, VTIB_EAX) = (VDM_REG(tib, VTIB_EAX) & 0xFFFF0000u) | 1;
-        *pfl |= 1; VDM_REG(tib, VTIB_EIP) += 3;
+        /* ── LOAD WITHOUT EXECUTING. DOS builds the PSP and loads the image, then
+             ANSWERS THROUGH THE PARAMETER BLOCK instead of transferring control:
+             +0x0E gets the initial SS:SP and +0x12 the entry CS:IP. The memory
+             STAYS ALLOCATED -- the caller is going to jump into it, and freeing
+             the child here (as this used to) hands back a pointer to a block that
+             is on the free list. (GH #50)
+           ⚠ SP IS e_sp MINUS TWO, and that is measured, not derived.
+             tools/dostest/p_ovl.asm builds an image whose header declares
+             e_sp = 0x0100 and MS-DOS 6.22 returns:
+               CASE=ovl.4B01.entry  CS=14F4 IP=0000 SS=14F4 SP=00FE
+             One image, one data point: a second image with a different e_sp
+             would confirm the rule rather than the instance. Recorded as a
+             single-point measurement rather than dressed up as a law. */
+        volatile BYTE *pbo = (volatile BYTE *)
+            (((DWORD)m->exec_pb_seg << 4) + m->exec_pb_off);
+        WORD sp01 = (WORD)(img.sp - 2);
+        pbo[0x0E] = (BYTE)(sp01 & 0xFF);       pbo[0x0F] = (BYTE)(sp01 >> 8);
+        pbo[0x10] = (BYTE)(img.ss & 0xFF);     pbo[0x11] = (BYTE)(img.ss >> 8);
+        pbo[0x12] = (BYTE)(img.ip & 0xFF);     pbo[0x13] = (BYTE)(img.ip >> 8);
+        pbo[0x14] = (BYTE)(img.cs & 0xFF);     pbo[0x15] = (BYTE)(img.cs >> 8);
+        p = zput(p, "  EXEC: AL=01 loaded, not run -- entry=");
+        p = zhex(p, img.cs); p = zput(p, ":"); p = zhex(p, img.ip);
+        p = zput(p, " stack="); p = zhex(p, img.ss); p = zput(p, ":");
+        p = zhex(p, sp01); p = zput(p, " (block KEPT)\r\n");
+        VDM_REG(tib, VTIB_EAX) &= 0xFFFF0000u;
+        *pfl &= (WORD)~1; VDM_REG(tib, VTIB_EIP) += 3;
         return p;
     }
 
@@ -15004,6 +15044,33 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
           *(volatile WORD *)(bios_ints[bi][0] * 4 + 2) = DOS_CTAB_SEG;
       } }
 
+    /* ── INT 22h / 23h / 24h: REAL VECTORS, SO THE PSP CAN SAVE SOMETHING. (#34) ──
+         Every PSP stores the live copies of these three and restores them at exit.
+         They were whatever the IVT happened to hold, and the PSP fields were zero
+         -- which passes "the saved copy matches the live vector" trivially when
+         both are 0000:0000, so the gap could not be seen from that test alone.
+       ▸ INT 24h returns AL=3, FAIL THE CALL. Real DOS's default lives in
+         COMMAND.COM and prompts Abort/Retry/Ignore/Fail; there is no shell here to
+         prompt with, and of the four answers FAIL is the only one that hands the
+         error back to the program that can report it. IGNORE would corrupt data
+         and RETRY would spin forever. Documented rather than chosen silently.
+       ▸ INT 23h (Ctrl-Break) is a bare IRET: returning with CF clear means
+         "carry on", which is what a host with no shell to return to should do.
+       ▸ INT 22h (terminate address) routes to the same BOP as INT 20h, so a guest
+         that jumps there actually exits instead of falling through the IVT. */
+    {   volatile BYTE *bs = (volatile BYTE *)(DOS_CTAB_SEG << 4);
+        unsigned o = DOS_CRIT_STUBS;
+        bs[o+0] = VDM_BOP0; bs[o+1] = VDM_BOP1; bs[o+2] = 0x30; bs[o+3] = 0xCF;
+        *(volatile WORD *)(0x22 * 4)     = (WORD)o;              /* INT 22h */
+        *(volatile WORD *)(0x22 * 4 + 2) = DOS_CTAB_SEG;
+        bs[o+4] = 0xCF;                                          /* INT 23h: IRET */
+        *(volatile WORD *)(0x23 * 4)     = (WORD)(o + 4);
+        *(volatile WORD *)(0x23 * 4 + 2) = DOS_CTAB_SEG;
+        bs[o+8] = 0xB0; bs[o+9] = 0x03; bs[o+10] = 0xCF;         /* mov al,3 ; iret */
+        *(volatile WORD *)(0x24 * 4)     = (WORD)(o + 8);        /* INT 24h */
+        *(volatile WORD *)(0x24 * 4 + 2) = DOS_CTAB_SEG;
+    }
+
     /* GH #27 -- THE NULL-VECTOR LANDMINE. A vector left at 0000:0000 sends a guest
        that INTs it to 0000:0000, where it executes the interrupt vector table
        itself as code. Point any such vector at the shared IRET stub.
@@ -15032,6 +15099,10 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
       p = zput(p, "\r\n"); }
 
     dos_psp_build(NULL, DOS_PSP_SEG, DOS_ENV_SEG, DOS_MEM_TOP);
+    /* AFTER the vectors above are planted, never before: saving a vector that is
+       still 0000:0000 stores a null the program restores on the way out. Parent
+       PSP = our own, since nothing launched us from inside the VDM. (GH #34) */
+    dos_psp_save_vectors(NULL, DOS_PSP_SEG, DOS_PSP_SEG);
     dos_env_build(NULL, DOS_ENV_SEG, progpath[0] ? progpath : "C:\\PROGRAM.COM");  /* M2.5: env */
     dos_cmdtail_build(NULL, DOS_PSP_SEG, args);                                    /* M2.5: args */
     /* ► DUMP THE TAIL AS THE GUEST WILL SEE IT. Passing ANY argument makes DOS/4GW
@@ -17709,6 +17780,15 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                 int d = --g_exec_depth;
                 volatile WORD *pfl2;
                 m.child_rc = (WORD)(m.exit_code & 0xFF);
+                /* ── UNWIND THE CHILD'S INTERRUPT VECTORS. (GH #34) ───────────
+                     The other half of the PSP contract: INT 22h/23h/24h go back
+                     to what they were when the child started, from the copies
+                     dos_psp_save_vectors put in its PSP. Without this a child
+                     that installed its own critical-error handler leaves it
+                     servicing the PARENT's failures, pointing into memory that
+                     is freed on the very next line. */
+                if (g_exec[d].child_seg)
+                    dos_psp_restore_vectors(NULL, g_exec[d].child_seg);
                 if (g_exec[d].child_seg) dos_free(NULL, g_exec[d].child_seg);
                 VDM_REG(tib, VTIB_EAX) = g_exec[d].eax; VDM_REG(tib, VTIB_EBX) = g_exec[d].ebx;
                 VDM_REG(tib, VTIB_ECX) = g_exec[d].ecx; VDM_REG(tib, VTIB_EDX) = g_exec[d].edx;

@@ -140,6 +140,19 @@
    (resident DOS grows, DOS_PSP_SEG moves up) and gets its own pass. */
 #define DOS_DPBCHAIN_OFF  0x03C0
 #define DOS_DPBCHAIN_MAX  8
+/* ── GH #34: INT 22h / 23h / 24h, the three vectors a PSP SAVES. ───────────────
+   DOS stores the live copies of these into every PSP it builds (at +0x0A, +0x0E
+   and +0x12) and restores them when the program ends -- which is why a child
+   cannot leave a parent's handlers broken, and what a program installing its own
+   INT 24h relies on. They were left at whatever the IVT already held, and the
+   PSP fields were ZERO.
+ ⚠ ZERO IS THE DANGEROUS VALUE HERE, because "the PSP copy matches the live
+   vector" is trivially true when BOTH are 0000:0000 -- a host that never fills
+   them in passes that check by accident. tools/dostest/p_psp.asm therefore
+   asserts the live INT 24h separately, and it must point at real code.
+   Oracle, MS-DOS 6.22: all three match (SI=1) and INT 24h lives at 03E7:0155,
+   inside COMMAND.COM. */
+#define DOS_CRIT_STUBS    0x04D0   /* 3 stubs x 4 bytes: INT 22h, 23h, 24h */
 /* Which entries of the table krnl386 actually reads, and what each becomes.
    Only these six are consulted; the rest are present so the table has stock's
    shape rather than a shorter one that happens to be enough today. */

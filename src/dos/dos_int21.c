@@ -968,6 +968,9 @@ int dos_int21(dos_machine_t *m)
         if (al4b == 0x00 || al4b == 0x01) {
             const volatile BYTE *pb =
                 (const volatile BYTE *)((R_ES << 4) + (R_BX & 0xFFFF));
+            /* AL=01 answers THROUGH this block, so remember where it is. */
+            m->exec_pb_seg = (uint16_t)(R_ES & 0xFFFF);
+            m->exec_pb_off = (uint16_t)(R_BX & 0xFFFF);
             v86_str(R_DS, R_DX, m->exec_path, sizeof(m->exec_path));
             m->exec_env      = (uint16_t)(pb[0] | (pb[1] << 8));
             m->exec_tail_off = (uint16_t)(pb[2] | (pb[3] << 8));
@@ -979,9 +982,23 @@ int dos_int21(dos_machine_t *m)
             m->exec_mode = al4b;
             m->exec_pending = 1;                /* the host does the rest */
             OKCF();
+        } else if (al4b == 0x03) {
+            /* ── THE OVERLAY. Two words of parameter block and nothing else:
+                 where to put it, and what to relocate by -- and those are NOT
+                 the same number (oracle: relocation uses the FACTOR, measured
+                 with a factor deliberately unequal to the load segment). No PSP,
+                 no allocation, no transfer of control, so the host's normal EXEC
+                 path is wrong for it and it branches early. (GH #50) */
+            const volatile BYTE *pb =
+                (const volatile BYTE *)((R_ES << 4) + (R_BX & 0xFFFF));
+            v86_str(R_DS, R_DX, m->exec_path, sizeof(m->exec_path));
+            m->exec_ovl_seg   = (uint16_t)(pb[0] | (pb[1] << 8));
+            m->exec_ovl_reloc = (uint16_t)(pb[2] | (pb[3] << 8));
+            m->exec_mode = 0x03;
+            m->exec_pending = 1;
+            OKCF();
         } else {
-            /* AL=03 loads an overlay into a caller-supplied segment with no PSP
-               and no transfer of control.  Not wired up; say so. */
+            /* AL=02/04/05 are not DOS 6.22 functions we have measured. */
             tp = zput(tp, "  INT21 AH=4B AL=0x"); tp = zhexb(tp, al4b);
             tp = zput(tp, " UNIMPLEMENTED (overlay load)\r\n");
             m->unimpl21[0x4B >> 3] |= (uint8_t)(1u << (0x4B & 7));
