@@ -2998,7 +2998,12 @@ static void host_xms(volatile BYTE *tib)
 
     switch (ah) {
     case 0x00:                                  /* get version */
-        X_SETAX(XMS_VERSION); X_SETBX(XMS_REVISION); X_SETDX(0);  /* DX=0: no HMA */
+        /* DX=0: no HMA. ⚠ REPORTING 1 HERE WAS TRIED AS A DIAGNOSTIC AND
+           REFUTED (GH #47): MEM.EXE still asked the version twice and stopped,
+           still reported Extended (XMS) 0K. So the HMA flag is not what gates
+           it, and claiming an HMA we do not provide would have been a lie for
+           nothing. Fourth refuted hypothesis on that issue. */
+        X_SETAX(XMS_VERSION); X_SETBX(XMS_REVISION); X_SETDX(0);
         break;
     case 0x01: X_FAIL(XMSERR_HMA_NONE);   break; /* request HMA (none provided) */
     case 0x02: X_FAIL(XMSERR_HMA_NOTALL); break; /* release HMA */
@@ -15338,14 +15343,32 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             dos_nul_build(nul, 0xFFFF, 0xFFFF);
             for (k = 0; k < SV_NUL_LEN; ++k)
                 hdlr[DOS_SYSVARS_OFF + SV_NUL + k] = nul[k]; }
-        /* ⚠ SysVars+0x16, the CDS array, is left at 0000:0000 ON PURPOSE -- see
-             DOS_DPBCHAIN_OFF in dos_layout.h. It must be LASTDRIVE entries long
-             and there is not room for that here; a short array is worse than
-             none, because a walker reads LASTDRIVE of them regardless. */
+        /* ---- the CDS array. ONE ENTRY PER DRIVE LETTER, LASTDRIVE of them,
+               because it is INDEXED by drive and a walker reads all of them
+               whatever we populate. Entries for drives that exist carry flags
+               0x4000 (physical) and a pointer to that drive's DPB; the rest are
+               zeroed with a terminated DPB pointer rather than one dangling at
+               the array's base. Measured layout: path at +0, flags at +0x43,
+               DPB far pointer at +0x45, backslash offset at +0x4F, stride 88. */
+        {   unsigned di2, seen2 = 0;
+            for (di2 = 0; di2 < DOS_LASTDRIVE; ++di2) {
+                BYTE cds[CDS_LEN]; unsigned k;
+                int have = 0, j;
+                for (j = 0; j < (int)nd; ++j) if (slot[j] == di2) have = 1;
+                dos_cds_build(cds, di2, have, DOS_CTAB_SEG,
+                              (WORD)(DOS_DPBCHAIN_OFF + seen2 * DPB_LEN));
+                if (have) ++seen2;
+                for (k = 0; k < CDS_LEN; ++k)
+                    ct[DOS_CDS_OFF + di2 * CDS_LEN + k] = cds[k];
+            }
+            *(volatile WORD *)(hdlr + DOS_SYSVARS_OFF + SV_CDS)     = DOS_CDS_OFF;
+            *(volatile WORD *)(hdlr + DOS_SYSVARS_OFF + SV_CDS + 2) = DOS_CTAB_SEG;
+        }
         q = zput(q, "DOS: SysVars ");     q = zhex(q, nd);
         q = zput(q, " DPBs at 0x");       q = zhex(q, DOS_CTAB_SEG);
         q = zput(q, ":");                 q = zhex(q, DOS_DPBCHAIN_OFF);
-        q = zput(q, " (terminated), NUL header inline, CDS still absent (GH #48)\r\n");
+        q = zput(q, " (terminated), NUL header inline, "); q = zhex(q, DOS_LASTDRIVE);
+        q = zput(q, " CDS entries (GH #48)\r\n");
         SetErrorMode(oldmode);
         log_append(LOG_PATH, report, q); serial_out(report, q);
     }

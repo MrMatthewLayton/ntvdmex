@@ -116,6 +116,18 @@ start:
         call    farcopy
         EMIT_BUF "sysvars.cds0", cbuf, 60h
 
+        ; ---- and the entry for C:, index 2, which is the drive that actually
+        ; EXISTS. Entry 0 is A: and is the absent case on most machines, so
+        ; dumping only that proves the zeroed path and never the populated one.
+        ; 2 * 88 = 176 = 0B0h into the array.
+        mov     si, sbuf + 18h
+        call    setptr
+        add     word [fptr], 0B0h
+        mov     di, cbuf
+        mov     cx, 58h
+        call    farcopy
+        EMIT_BUF "sysvars.cds2", cbuf, 58h
+
         ; ---- the device driver chain.  The NUL device header is INLINE in
         ; SysVars (not a pointer to one), so this is a dump of where it starts
         ; and the name field that identifies it -- the check that we have the

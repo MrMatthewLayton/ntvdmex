@@ -121,7 +121,18 @@
 /* How many drive letters DOS admits to. Reported through SysVars+0x21, which
    krnl386 reads via the table below; the guest's own drive set comes from the
    INT 21h surface, so this is a ceiling, not a claim that all of them exist. */
-#define DOS_LASTDRIVE     26
+/* ── LASTDRIVE IS 5, WHICH IS WHAT REAL DOS REPORTS. (GH #48) ──────────────────
+   It was 26, chosen as a generous ceiling. MS-DOS 6.22 says 5 -- measured,
+   SysVars+0x21 in tools/dostest/p_sysvar.asm -- and 5 is not an arbitrary
+   smaller number: the CDS array is INDEXED BY DRIVE LETTER and must be exactly
+   LASTDRIVE entries of 88 bytes, so the ceiling decides whether the array can
+   exist at all. At 26 it needs 2288 bytes and the resident block has ~500 free;
+   at 5 it needs 440 and fits, so the choice was between a truthful ceiling with
+   a real CDS array and an inflated one with none.
+ ⚠ A: through E: covers every drive this host exposes (C: is index 2), and
+   krnl386 only needs the byte to be non-zero -- it reads it through the
+   SysVars+0x6A table to decide there are drives at all. */
+#define DOS_LASTDRIVE     5
 #define DOS_WOW_TBL_OFF   0x0370   /* 11 far pointers = 44 bytes                */
 #define DOS_WOW_TBL_N     11
 #define DOS_WOW_VARS_OFF  0x03A0   /* the storage those pointers point AT        */
@@ -153,6 +164,13 @@
    Oracle, MS-DOS 6.22: all three match (SI=1) and INT 24h lives at 03E7:0155,
    inside COMMAND.COM. */
 #define DOS_CRIT_STUBS    0x04D0   /* 3 stubs x 4 bytes: INT 22h, 23h, 24h */
+/* ── GH #48: THE CDS ARRAY, one entry per drive letter DOS admits to. ──────────
+   88 bytes each (measured: 6.22's second entry, "B:\", begins exactly 88 bytes
+   after the first), LASTDRIVE of them, indexed by drive. It has to be the FULL
+   length whatever we populate -- a walker reads LASTDRIVE entries regardless, so
+   a short array is worse than none, which is why this waited for LASTDRIVE to
+   become truthful. 5 x 88 = 440 bytes, ending at 0x697, inside the block. */
+#define DOS_CDS_OFF       0x04E0
 /* Which entries of the table krnl386 actually reads, and what each becomes.
    Only these six are consulted; the rest are present so the table has stock's
    shape rather than a shorter one that happens to be enough today. */
