@@ -2116,12 +2116,71 @@ static void inject_int(volatile BYTE *tib, unsigned vec)
     VDM_SET16(tib, VTIB_CS,  peekw(vec * 4 + 2));  /* IVT[vec].segment */
 }
 
-/* DOS console output (INT 21h AH=02/09/40) -> the video VDD teletype. */
+/* ── THE REAL STANDARD OUTPUT, IF WE WERE LAUNCHED FROM ONE. (GH #131) ───────
+     Everything a DOS guest printed went to the video VDD and, at exit, to
+     CONOUT$ -- so `myprog.exe > out.txt` from cmd.exe captured NOTHING, and
+     nothing appeared until the program ended. That is the blocker on leaving
+     NTVDMEX installed as the machine's VDM: anything script-driven changes
+     behaviour.
+   ► THE IFEO HOOK IS WHY THIS CAN WORK AT ALL. Windows launches us IN PLACE of
+     ntvdm.exe, so our parent is whatever ran ntvdm -- cmd.exe -- and we inherit
+     ITS standard handles. If the user redirected, the inherited handle is
+     already the file: no console involved, and nothing to attach to.
+   ► TWO CASES, IN THIS ORDER:
+       1. an inherited handle that is a FILE or a PIPE -- redirection. Use it.
+       2. otherwise AttachConsole(ATTACH_PARENT_PROCESS) and open CONOUT$, so an
+          unredirected run prints inline in the console it was started from.
+     A GUI-subsystem process has no console of its own, which is exactly why (2)
+     is needed and why it must not be attempted before (1) -- attaching would
+     hand us a console handle and hide the redirect. */
+static HANDLE g_stdio = INVALID_HANDLE_VALUE;
+/* ⚠ Reported at EXIT, not at init. The early-startup log line was written
+   before a later log_write(LOG_PATH,...) TRUNCATES the file, so it never
+   survived to be read -- which looked exactly like the code not running. */
+static const char *g_stdio_how = "(not initialised)";
+static char   g_stdio_buf[512];
+static unsigned g_stdio_n = 0;
+
+static void stdio_flush(void)
+{
+    DWORD w = 0;
+    if (g_stdio != INVALID_HANDLE_VALUE && g_stdio_n)
+        WriteFile(g_stdio, g_stdio_buf, g_stdio_n, &w, NULL);
+    g_stdio_n = 0;
+}
+
+static const char *stdio_init(void)
+{
+    HANDLE h = GetStdHandle(STD_OUTPUT_HANDLE);
+    DWORD ty = (h && h != INVALID_HANDLE_VALUE) ? GetFileType(h) : FILE_TYPE_UNKNOWN;
+    if (ty == FILE_TYPE_DISK || ty == FILE_TYPE_PIPE) {
+        g_stdio = h;                       /* redirected: write straight to it  */
+        return "inherited (redirected)";
+    }
+    if (ty == FILE_TYPE_CHAR) { g_stdio = h; return "inherited console"; }
+    if (AttachConsole(ATTACH_PARENT_PROCESS)) {
+        g_stdio = CreateFileA("CONOUT$", GENERIC_WRITE, FILE_SHARE_WRITE, NULL,
+                              OPEN_EXISTING, 0, NULL);
+        if (g_stdio != INVALID_HANDLE_VALUE) return "attached parent console";
+    }
+    return "none (no console, no redirect)";
+}
+
+/* DOS console output (INT 21h AH=02/09/40) -> the video VDD teletype, AND the
+   real standard output when there is one.
+ ⚠ BUFFERED, AND FLUSHED ON EVERY NEWLINE. One WriteFile per character is the
+   same shape as the per-line CreateFile that cost Skyroads 24% of its timer
+   ticks; flushing per line keeps `| more` and an interactive prompt responsive
+   without paying a syscall per byte. */
 static void host_conout(void *ctx, uint8_t ch)
 {
     (void)ctx;
     HOST_LOCK();
     vdd_video_putc(&g_vid, ch);
+    if (g_stdio != INVALID_HANDLE_VALUE) {
+        if (g_stdio_n < sizeof(g_stdio_buf)) g_stdio_buf[g_stdio_n++] = (char)ch;
+        if (ch == '\n' || g_stdio_n >= sizeof(g_stdio_buf)) stdio_flush();
+    }
     HOST_UNLOCK();
 }
 
@@ -14590,6 +14649,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     p = zput(p, "NTVDMEX clean host\r\nSTAGE0: WinMain entered [build dpmi-harness-v180]\r\n");
     log_write(LOG_PATH, report, p);
     serial_init();                                      /* DPMI harness: COM1 log sink */
+    g_stdio_how = stdio_init();                         /* GH #131; reported at exit */
     serial_out(report, p);
 
     /* ── IS THIS A WIN16 (WOW) LAUNCH? IF SO, HAND IT STRAIGHT BACK. (GH #129) ──
@@ -14878,6 +14938,30 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         p = zput(p, " state=0x");              p = zhex(p, g_ci.VDMState);
         p = zput(p, " taskid=0x");             p = zhex(p, g_ci.TaskId);
         p = zput(p, " codepage=0x");           p = zhex(p, g_ci.CodePage);
+        p = zput(p, "\r\n");
+        /* ── ★ THE VDM'S STANDARD HANDLES COME FROM CSRSS, NOT FROM INHERITANCE.
+             (GH #131) Measured on the rig: an IFEO-substituted process gets NO
+             inherited handles at all -- GetStdHandle reports FILE_TYPE_UNKNOWN
+             and AttachConsole(ATTACH_PARENT_PROCESS) fails -- so the obvious
+             route ("we are cmd's child, use its stdout") simply does not work
+             and reported `none (no console, no redirect)`.
+             CSRSS hands them over here instead, in the STARTUPINFO it fills in
+             for GetNextVDMCommand, already duplicated into this process. That is
+             how stock ntvdm gets them, and it is the only channel that carries
+             a redirect the user typed at cmd. */
+        if ((g_ci.StartupInfo.dwFlags & STARTF_USESTDHANDLES)
+            && g_ci.StartupInfo.hStdOutput
+            && g_ci.StartupInfo.hStdOutput != INVALID_HANDLE_VALUE) {
+            DWORD ty2 = GetFileType(g_ci.StartupInfo.hStdOutput);
+            if (ty2 != FILE_TYPE_UNKNOWN) {
+                g_stdio = g_ci.StartupInfo.hStdOutput;
+                g_stdio_how = (ty2 == FILE_TYPE_DISK) ? "CSRSS StdOutput (redirected to a file)"
+                            : (ty2 == FILE_TYPE_PIPE) ? "CSRSS StdOutput (pipe)"
+                                                      : "CSRSS StdOutput (console)";
+            }
+        }
+        p = zput(p, "STAGE1: stdout -> "); p = zput(p, g_stdio_how);
+        p = zput(p, " sf=0x"); p = zhex(p, g_ci.StartupInfo.dwFlags);
         p = zput(p, "\r\n");
     } else {
         p = zput(p, "STAGE1: GetNextVDMCommand FALSE err=0x"); p = zhex(p, err); p = zput(p, "\r\n");
@@ -17972,10 +18056,21 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
 
     g_ci.ExitCode = (ULONG)m.exit_code;             /* M2.5: errorlevel (shell notify = best-effort TODO) */
 
-    /* Flush captured DOS output to the console + the log. */
+    /* Flush captured DOS output to the console + the log.
+     ► IF WE STREAMED IT LIVE, DO NOT PRINT IT AGAIN. g_stdio carries the output
+       as the guest produces it now (GH #131), so the historical bulk write to
+       CONOUT$ would DOUBLE every line -- and would do it into the redirect
+       target, where it is not merely ugly but wrong. Flush whatever is still in
+       the line buffer instead. The log copy below is unconditional either way:
+       it is a different sink and the one the rig harness reads. */
+    stdio_flush();
+    p = zput(p, "STAGE2: stdout -> "); p = zput(p, g_stdio_how);
+    p = zput(p, g_stdio != INVALID_HANDLE_VALUE ? " [LIVE]\r\n" : " [buffered only]\r\n");
     {
-        HANDLE hcon = CreateFileA("CONOUT$", GENERIC_WRITE, FILE_SHARE_WRITE, NULL,
-                                  OPEN_EXISTING, 0, NULL);
+        HANDLE hcon = (g_stdio == INVALID_HANDLE_VALUE)
+            ? CreateFileA("CONOUT$", GENERIC_WRITE, FILE_SHARE_WRITE, NULL,
+                          OPEN_EXISTING, 0, NULL)
+            : INVALID_HANDLE_VALUE;
         if (m.out_len > 0) {
             m.out[m.out_len] = 0;
             if (hcon != INVALID_HANDLE_VALUE) { DWORD w; WriteFile(hcon, m.out, m.out_len, &w, NULL); }
