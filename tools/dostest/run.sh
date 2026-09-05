@@ -166,3 +166,39 @@ cc -std=c99 -Wall -Wextra -Wno-unused-function -O0 -g \
    -o "$DIR/wow_test" "$DIR/wow_test.c"
 
 "$DIR/wow_test" "$DIR/../.."
+
+# GH #133/#131: the DOS handle table's TWO RULES (src/dos/dos_fh.h). Allocation is
+# the lowest FREE slot -- which is the entire mechanism by which `>` works -- and a
+# BOUND handle is a file whatever its number, which is what lets `>>` seek to
+# end-of-file on handle 1. Both rules were spelled five different ways across
+# dos_int21.c and four of the spellings were wrong; they are one function now, and
+# every expectation below is a CASE= line from tools/dostest/p_redir.asm run on the
+# genuine MS-DOS 6.22 oracle rather than a memory of what DOS does.
+cc -std=c99 -Wall -Wextra -Wno-unused-function -O0 -g \
+   -I "$DIR/../../src/dos" \
+   -o "$DIR/fh_test" "$DIR/fh_test.c"
+
+"$DIR/fh_test"
+
+# GH #34: INT 21h AH=59h's class/action/locus table (src/dos/dos_err.h). Only the
+# error CODE is obvious; class, action and locus are exactly the values that get
+# written from memory and are wrong, so every row is a CASE= line from
+# tools/dostest/p_err.asm run on the 6.22 oracle. The last check is the one that
+# keeps it honest: a code we have NOT provoked must report UNMEASURED and zero the
+# fields rather than offer a plausible guess.
+cc -std=c99 -Wall -Wextra -Wno-unused-function -O0 -g \
+   -I "$DIR/../../src/dos" \
+   -o "$DIR/err_test" "$DIR/err_test.c"
+
+"$DIR/err_test"
+
+# GH #48: the AH=52h List of Lists layout (src/dos/dos_sysvars.h). Every offset and
+# every structure size is decoded from a BUF= line that tools/dostest/p_sysvar.asm
+# brought back from genuine MS-DOS 6.22 -- the raw dump is embedded in the test so
+# the decoding can be re-checked rather than trusted. The DPB being 33 bytes, for
+# instance, is arithmetic on the oracle's own chain pointer, not a recollection.
+cc -std=c99 -Wall -Wextra -Wno-unused-function -O0 -g \
+   -I "$DIR/../../src/dos" \
+   -o "$DIR/sysvars_test" "$DIR/sysvars_test.c"
+
+"$DIR/sysvars_test"

@@ -126,6 +126,20 @@
 #define DOS_WOW_TBL_N     11
 #define DOS_WOW_VARS_OFF  0x03A0   /* the storage those pointers point AT        */
 #define DOS_WOW_VARS_LEN  0x20
+/* ── GH #48: the DPB CHAIN. ────────────────────────────────────────────────────
+   One 33-byte drive parameter block per drive that exists, linked and
+   terminated, in the same MCB-reserved resident block as everything else here.
+   The block runs to linear 0xFEF, i.e. offset 0x6EF within DOS_CTAB_SEG, so
+   0x3C0 upwards is free and eight drives (264 bytes) fit with room over.
+ ⚠ THE CDS ARRAY IS NOT HERE, AND THAT IS DELIBERATE. It is indexed by drive
+   letter and must therefore be LASTDRIVE (26) entries of 88 bytes = 2288 --
+   more than this block has left. Building a shorter one would be worse than
+   having none: a walker reads LASTDRIVE entries whatever we allocate, so it
+   would run off the end into whatever follows, which is precisely the silent
+   wander the AH=52h stub was written to prevent. It needs a memory-map change
+   (resident DOS grows, DOS_PSP_SEG moves up) and gets its own pass. */
+#define DOS_DPBCHAIN_OFF  0x03C0
+#define DOS_DPBCHAIN_MAX  8
 /* Which entries of the table krnl386 actually reads, and what each becomes.
    Only these six are consulted; the rest are present so the table has stock's
    shape rather than a shorter one that happens to be enough today. */

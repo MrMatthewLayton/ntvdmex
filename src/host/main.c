@@ -43,6 +43,7 @@
 #include "dos_env.h"
 #include "dos_int21.h"
 #include "dos_layout.h"
+#include "dos_sysvars.h"   /* GH #48: the List of Lists, built to the measured 6.22 layout */
 #include "dos_ctab.h"
 #include "dos_xms.h"
 #include "dos_ems.h"
@@ -15096,6 +15097,92 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     hdlr[DOS_SYSVARS_OFF + 0x21] = DOS_LASTDRIVE;         /* LASTDRIVE           */
     m.sysvars_seg = DOS_HDLR_SEG;
     m.sysvars_off = DOS_SYSVARS_OFF;
+    /* ── ★ THE REAL CHAINS: DPB, CDS AND THE DEVICE HEADER. (GH #48) ────────────
+         Until now everything above +0x20 was deliberately zero, and that choice was
+         right while there was nothing truthful to put there: a walker that follows
+         a garbage DPB pointer wanders into nonsense, whereas a null one stops.
+         But it caps what memory- and disk-aware software can do, and #47 names it
+         as a likely reason MEM.EXE lies.
+       ▸ EVERY OFFSET AND EVERY STRUCTURE SIZE HERE WAS DUMPED OFF MS-DOS 6.22 by
+         tools/dostest/p_sysvar.asm and decoded in src/dos/dos_sysvars.h -- which is
+         what #48 asks for in as many words, because "the layout dumps have twice
+         caught errors that a plausible reading would have missed". The DPB being 33
+         bytes, for instance, is not recalled: 6.22's first DPB is at 0116:136A and
+         its own `next` pointer says 0116:138B, and 0x138B - 0x136A = 0x21.
+       ▸ The structures live in a block taken from the MCB chain rather than in the
+         resident filler, which has under 800 bytes free and cannot hold a
+         LASTDRIVE-long CDS array. Real DOS's are resident too, so the memory it
+         costs is honest rather than an accounting trick. */
+    {   volatile BYTE *ct = (volatile BYTE *)(DOS_CTAB_SEG << 4);
+        DWORD drives = GetLogicalDrives();
+        unsigned d, n = 0, slot[DOS_DPBCHAIN_MAX], nd = 0;
+        char *q = report;
+        /* Which drive letters exist, capped at what the reserved space holds.
+           Counted FIRST, because each DPB's `next` pointer has to name the one
+           after it and the last must terminate -- and a chain that does not
+           terminate is not a cosmetic fault. The same mistake on the SFT chain
+           had krnl386 reading the IVT as an SFT header and looping through
+           117 MB of DPMI calls (see DOS_SFT_* in dos_layout.h). */
+        /* ⚠ SUPPRESS THE HARDWARE-ERROR DIALOG FIRST, AND SKIP REMOVABLES.
+             GetDiskFreeSpaceA("A:\\") on a machine whose floppy drive is empty
+             raises XP's "There is no disk in drive A:" box and BLOCKS on it --
+             at host startup, with no window up and nothing in the log, so it
+             presents as a hang and not as an error. It wedged the rig on the
+             first run of this code. SEM_FAILCRITICALERRORS makes the call fail
+             instead of asking, and DRIVE_REMOVABLE is skipped outright: a DPB
+             for a drive whose media can vanish is not worth the risk here. */
+        UINT oldmode = SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOOPENFILEERRORBOX);
+        for (d = 0; d < 26 && nd < DOS_DPBCHAIN_MAX; ++d) {
+            char rt[4];
+            UINT ty;
+            if (!(drives & (1u << d))) continue;
+            rt[0] = (char)('A' + d); rt[1] = ':'; rt[2] = '\\'; rt[3] = 0;
+            ty = GetDriveTypeA(rt);
+            if (ty != DRIVE_FIXED && ty != DRIVE_RAMDISK) continue;
+            slot[nd++] = d;
+        }
+        for (n = 0; n < nd; ++n) {
+            DWORD spc = 0, bps = 0, freec = 0, totc = 0;
+            char root[4]; unsigned k; BYTE dp[DPB_LEN];
+            int last = (n + 1 == nd);
+            root[0] = (char)('A' + slot[n]); root[1] = ':'; root[2] = '\\'; root[3] = 0;
+            if (!GetDiskFreeSpaceA(root, &spc, &bps, &freec, &totc))
+                { spc = 8; bps = 512; totc = 0xFFF0; }
+            dos_dpb_build(dp, slot[n], bps ? bps : 512, spc ? spc : 1, 512,
+                          (totc > 0xFFFE) ? 0xFFFE : totc + 1, 0xF8,
+                          DOS_HDLR_SEG, DOS_SYSVARS_OFF + SV_NUL,
+                          last ? 0xFFFF : DOS_CTAB_SEG,
+                          last ? 0xFFFF : (WORD)(DOS_DPBCHAIN_OFF + (n + 1) * DPB_LEN));
+            for (k = 0; k < DPB_LEN; ++k)
+                ct[DOS_DPBCHAIN_OFF + n * DPB_LEN + k] = dp[k];
+        }
+        if (nd) {
+            *(volatile WORD *)(hdlr + DOS_SYSVARS_OFF + SV_DPB)     = DOS_DPBCHAIN_OFF;
+            *(volatile WORD *)(hdlr + DOS_SYSVARS_OFF + SV_DPB + 2) = DOS_CTAB_SEG;
+        } else {                                  /* no chain is better than a bad one */
+            *(volatile WORD *)(hdlr + DOS_SYSVARS_OFF + SV_DPB)     = 0xFFFF;
+            *(volatile WORD *)(hdlr + DOS_SYSVARS_OFF + SV_DPB + 2) = 0xFFFF;
+        }
+        *(volatile WORD *)(hdlr + DOS_SYSVARS_OFF + SV_MAXSEC) = 512;
+        hdlr[DOS_SYSVARS_OFF + SV_NBLOCKDEV] = (BYTE)nd;
+        /* ---- the device chain. The NUL header is INLINE at +0x22, not a pointer
+               to one (measured on 6.22), and it TERMINATES: we install no block or
+               character drivers, so FFFF:FFFF is the truthful end of the chain. */
+        {   BYTE nul[SV_NUL_LEN]; unsigned k;
+            dos_nul_build(nul, 0xFFFF, 0xFFFF);
+            for (k = 0; k < SV_NUL_LEN; ++k)
+                hdlr[DOS_SYSVARS_OFF + SV_NUL + k] = nul[k]; }
+        /* ⚠ SysVars+0x16, the CDS array, is left at 0000:0000 ON PURPOSE -- see
+             DOS_DPBCHAIN_OFF in dos_layout.h. It must be LASTDRIVE entries long
+             and there is not room for that here; a short array is worse than
+             none, because a walker reads LASTDRIVE of them regardless. */
+        q = zput(q, "DOS: SysVars ");     q = zhex(q, nd);
+        q = zput(q, " DPBs at 0x");       q = zhex(q, DOS_CTAB_SEG);
+        q = zput(q, ":");                 q = zhex(q, DOS_DPBCHAIN_OFF);
+        q = zput(q, " (terminated), NUL header inline, CDS still absent (GH #48)\r\n");
+        SetErrorMode(oldmode);
+        log_append(LOG_PATH, report, q); serial_out(report, q);
+    }
     /* GH #128: and the WOW extension krnl386 reads before it does anything else. */
     dos_wow_publish(hdlr, (volatile BYTE *)(DOS_CTAB_SEG << 4), 2 /* C: */);
     xms_init(&g_xms, 16384, xms_host_alloc, xms_host_free, NULL);  /* M4: 16MB XMS pool */
