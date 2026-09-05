@@ -68,6 +68,12 @@ int main(void)
        the silent wrong branch this table exists to prevent. */
     row("code 5  access denied   [3D write on a read-only file]", 0x05, 0x0303, 0x02);
     row("code 80 file exists     [5Bh over an existing file]", 0x50, 0x0C03, 0x02);
+    /* CASE=err.after.47.baddrive AX=000F BX=0803 CX=02C1
+       ⚠ Provoked through AH=47h, NOT through an open: "Y:\..." to 3Dh returns 3
+       (path not found). A code can need a particular door, and picking the wrong
+       one is how it stays "unprovokable" and unmeasured. */
+    row("code 15 invalid drive    [47h on a drive with nothing behind it]",
+        0x0F, 0x0803, 0x02);
 
     /* ── CODE 0 IS NOT AN ERROR. 59h after a successful call reports AX=0 with
        class and locus zero, so it must be classified (return 1), not reported

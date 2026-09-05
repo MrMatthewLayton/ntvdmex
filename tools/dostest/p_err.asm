@@ -121,6 +121,18 @@ start:
         int     21h
         ASKERR  "err.after.3D.baddrive"
 
+        ; ---- INVALID DRIVE (15). Provoked through AH=47h, which is where it
+        ; actually turns up: asking for the current directory of a drive letter
+        ; with nothing behind it. (The 3Dh route above returns 3, path-not-found,
+        ; so this code needed a different door -- measured, not assumed.)
+        push    ds
+        pop     es
+        mov     si, pathbuf     ; ⚠ 47h writes up to 64 bytes; `scratch` is 4
+        mov     ah, 47h
+        mov     dl, 25                          ; Y:
+        int     21h
+        ASKERR  "err.after.47.baddrive"
+
         ; ---- AH=34h: THE InDOS FLAG. Returns ES:BX pointing at it.
         ; The ADDRESS is host-specific and means nothing across hosts, so it is
         ; not in the signature; what is comparable is the SHAPE around it. The
@@ -156,3 +168,4 @@ rofile   db 'ZZRDONLY.TMP', 0
 baddrv   db 'Y:\ZZNOSUCH.XYZ', 0
 indos    dw 0
 scratch  db 0, 0, 0, 0
+pathbuf  times 80 db 0

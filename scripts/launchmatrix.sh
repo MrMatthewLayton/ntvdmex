@@ -77,13 +77,27 @@ summarise() {  # $1 = result path
     local f="$1"
     if [ ! -f "$f" ]; then echo "(absent)"; return; fi
     if LC_ALL=C grep -aq "DOS OUTPUT" "$f" 2>/dev/null; then
-        LC_ALL=C grep -a -A4 "DOS OUTPUT" "$f" 2>/dev/null | tr -d '\r' \
-          | grep -avE "^ *==> DOS OUTPUT|^\]|^--$" | head -3 | tr '\n' ' ' \
+        LC_ALL=C grep -a -A4 "DOS OUTPUT" "$f" 2>/dev/null | LC_ALL=C tr -d '\r' \
+          | grep -avE "^ *==> DOS OUTPUT|^\]|^--$" | head -3 | LC_ALL=C tr '\n' ' ' \
           | sed 's/  */ /g;s/^ //;s/ $//' | cut -c1-110
     else
-        tr -d '\r' < "$f" | grep -av "^\[stock\]" | head -3 | tr '\n' ' ' \
-          | sed 's/  */ /g;s/^ //;s/ $//' | cut -c1-110
+        LC_ALL=C tr -d '\r' < "$f" | grep -av "^\[stock\]" | head -3 \
+          | LC_ALL=C tr '\n' ' ' | sed 's/  */ /g;s/^ //;s/ $//' | cut -c1-110
     fi
+    return 0
+}
+
+# ⚠⚠ DID THIS RESULT COME FROM THE PROGRAM WE ASKED FOR? `C:\ntvdmex\target.txt`
+#   is an UNCONDITIONAL OVERRIDE, so a run whose target file was not rewritten
+#   executes whatever it last named -- and the result file still appears, still
+#   looks plausible, and is about a different program entirely. Caught here: a
+#   probe's output must carry its own `#PROBE <name>` banner. Without this check
+#   the stock column of this table was reporting DPMI output under `p_ver.com`.
+identity_ok() {   # $1 = result path, $2 = target
+    local f="$1" t="$2" stem
+    case "$t" in p_*.com) stem="${t%.com}"; stem="${stem#p_}" ;; *) return 0 ;; esac
+    LC_ALL=C grep -aq "#PROBE" "$f" || return 0        # not a probe run at all
+    LC_ALL=C grep -aq "#PROBE .*$stem" "$f"
 }
 
 echo "running the launch matrix -- $(date '+%H:%M:%S')"
@@ -112,8 +126,18 @@ done
   for r in "${RESULTS[@]}"; do
       IFS='|' read -r n target desc a b <<< "$r"
       af="${a#OK:}"; bf="${b#OK:}"
-      [ "${a%%:*}" = OK ] && as=$(summarise "$af") || as="**$a**"
-      [ "${b%%:*}" = OK ] && bs=$(summarise "$bf") || bs="**$b**"
+      # if/else, NOT `test && x=$(...) || y=...`: an assignment takes the exit
+      # status of the command substitution, so a summariser whose last pipeline
+      # stage returns non-zero silently falls into the `||` branch. That is how
+      # this table first printed raw file paths in the stock column.
+      if [ "${a%%:*}" = OK ]; then
+          as=$(summarise "$af")
+          identity_ok "$af" "$target" || as="**WRONG TARGET RAN** -- $as"
+      else as="**$a**"; fi
+      if [ "${b%%:*}" = OK ]; then
+          bs=$(summarise "$bf")
+          identity_ok "$bf" "$target" || bs="**WRONG TARGET RAN** -- $bs"
+      else bs="**$b**"; fi
       echo "| $n | $desc | \`$target\` | $as | $bs |"
   done
 } > "$OUT"

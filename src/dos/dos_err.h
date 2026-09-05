@@ -68,6 +68,11 @@ static const dos_err_row_t dos_err_table[] = {
     { 0x06, 0x0704, 0x01, "err.after.3F.badhandle" },
     { 0x05, 0x0303, 0x02, "err.after.3D.readonly"  },
     { 0x50, 0x0C03, 0x02, "err.after.5B.exists"    },
+    /* Invalid drive. ⚠ IT NEEDED A DIFFERENT DOOR: opening "Y:\..." returns 3
+       (path not found), not 15, so the code only turns up through AH=47h asking
+       for the current directory of a drive with nothing behind it. Provoked, not
+       reasoned about -- err.after.47.baddrive AX=000F BX=0803 CX=02C1. */
+    { 0x0F, 0x0803, 0x02, "err.after.47.baddrive"  },
 };
 #define DOS_ERR_ROWS (sizeof(dos_err_table) / sizeof(dos_err_table[0]))
 
