@@ -30,6 +30,13 @@ echo [stock] IFEO Debugger removed > "%RES%\stock_state.txt"
 
 if not exist C:\test md C:\test
 copy /y "%BM%\tests\%T%" C:\test\ >nul
+rem !! A FRESH FILE PER RUN, because a fixed name gets LOCKED. A stock run that
+rem    wedges leaves an ntvdm.exe -- and the cmd.exe holding the redirect --
+rem    alive with C:\test\stock_out.txt open, after which `del` fails silently,
+rem    the copy succeeds against STALE CONTENT, and every later row reports the
+rem    wedged run output as its own. Five targets once reported one identical
+rem    736-byte log that way, and reported it as success.
+set STOCKOUT=C:\test\stock_%RANDOM%.txt
 del /q C:\test\stock_out.txt >nul 2>&1
 cd /d C:\test
 
@@ -40,9 +47,18 @@ echo   HOLD THE UP ARROW DOWN and keep holding for ~8 seconds.
 echo   Output goes to a file, so the window closing is harmless.
 echo ============================================================
 echo.
-start /wait "" cmd /c "C:\test\%T% > C:\test\stock_out.txt 2>&1"
+start /wait "" cmd /c "C:\test\%T% > %STOCKOUT% 2>&1"
 
-copy /y C:\test\stock_out.txt "%RES%\result_stock_%T%.txt" >nul 2>&1
+rem !! AND VERIFY THE COPY. It was `>nul 2>&1` with no check, so a missing source
+rem    left the PREVIOUS row result file untouched, to be summarised as this row
+rem    answer. An absent result must read as absent.
+del /q "%RES%\result_stock_%T%.txt" >nul 2>&1
+if exist %STOCKOUT% (
+  copy /y %STOCKOUT% "%RES%\result_stock_%T%.txt" >nul 2>&1
+) else (
+  echo [stock] NO OUTPUT FILE -- the run produced nothing > "%RES%\result_stock_%T%.txt"
+)
+del /q %STOCKOUT% >nul 2>&1
 
 reg add "%IFEO%" /v Debugger /t REG_SZ /d "C:\ntvdmex\ntvdmhost.exe" /f >nul
 echo [stock] IFEO Debugger restored >> "%RES%\stock_state.txt"
