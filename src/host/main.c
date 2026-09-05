@@ -43,6 +43,7 @@
 #include "dos_env.h"
 #include "dos_int21.h"
 #include "dos_layout.h"
+#include "dos_disk.h"       /* GH #44: image geometry + CHS<->LBA */
 #include "dos_sysvars.h"   /* GH #48: the List of Lists, built to the measured 6.22 layout */
 #include "dos_ctab.h"
 #include "dos_xms.h"
@@ -2117,6 +2118,158 @@ static void inject_int(volatile BYTE *tib, unsigned vec)
     VDM_REG(tib, VTIB_EFLAGS) &= ~(0x300u | EFLAGS_VIF_BIT);
     VDM_SET16(tib, VTIB_EIP, peekw(vec * 4));      /* IVT[vec].offset */
     VDM_SET16(tib, VTIB_CS,  peekw(vec * 4 + 2));  /* IVT[vec].segment */
+}
+
+/* ── A GUEST ASKED TO TERMINATE. FOUR DOORS, ONE ANSWER. (GH #134) ───────────
+     AH=4Ch, AH=00h, INT 20h and INT 27h all end a program, and this decides
+     whether that ends the RUN or merely returns a child to its parent.
+   ★ IT IS A FUNCTION BECAUSE IT USED TO BE INLINE IN THE INT 21h BRANCH ONLY.
+     The BIOS stubs for INT 20h and INT 27h called dos_int21, threw away its
+     "stop" answer and took their own `break` -- so a .COM child exiting through
+     INT 20h, which is THE classic .COM exit, tore down the whole VDM instead of
+     returning to whatever EXEC'd it. Measured: tools/dostest/p_curdir.asm's
+     two-byte child (CD 20) killed the probe mid-run, and every case after the
+     EXEC simply never reported.
+   Returns 1 if a child exited and the parent has been restored (the exec loop
+   carries on), 0 if this was the top-level program and the run is over. */
+static int dos_terminate(dos_machine_t *m, void *tib, char **pp, char *base)
+{
+    char *p = *pp;
+    (void)p;
+            if (g_exec_depth > 0) {
+        /* A CHILD terminated, not the program we were asked to run.
+           Put the parent's frame back and let it continue. */
+        int d = --g_exec_depth;
+        volatile WORD *pfl2;
+        m->child_rc = (WORD)(m->exit_code & 0xFF);
+        if (m->tsr_pending) {
+            /* ── TERMINATE AND STAY RESIDENT. (GH #49) ────────────────
+                 The block is RESIZED, not freed, and the vectors are
+                 deliberately NOT unwound -- the whole point of a TSR is
+                 that the handlers it installed outlive it. So this skips
+                 both dos_psp_restore_vectors and dos_free, which is
+                 precisely the difference between exiting and staying.
+               DX counted paragraphs from the PSP; a request for less
+               than a PSP is nonsense, so floor it at 16 rather than
+               hand back a block that does not contain its own header. */
+            WORD keep = m->tsr_keep < 0x10 ? 0x10 : m->tsr_keep, tmax = 0;
+            int rrc = dos_resize(NULL, g_exec[d].child_seg, keep, &tmax);
+            *pp = zput(*pp, "  TSR: seg=0x"); *pp = zhex(*pp, g_exec[d].child_seg);
+            *pp = zput(*pp, " stays resident, 0x"); *pp = zhex(*pp, keep);
+            *pp = zput(*pp, " paras");
+            if (rrc) *pp = zput(*pp, " -- RESIZE FAILED, block kept whole");
+            *pp = zput(*pp, ", vectors left installed\r\n");
+            m->tsr_pending = 0; m->tsr_keep = 0;
+        } else {
+        /* ── UNWIND THE CHILD'S INTERRUPT VECTORS. (GH #34) ───────────
+             The other half of the PSP contract: INT 22h/23h/24h go back
+             to what they were when the child started, from the copies
+             dos_psp_save_vectors put in its PSP. Without this a child
+             that installed its own critical-error handler leaves it
+             servicing the PARENT's failures, pointing into memory that
+             is freed on the very next line. */
+        if (g_exec[d].child_seg)
+            dos_psp_restore_vectors(NULL, g_exec[d].child_seg);
+        if (g_exec[d].child_seg) dos_free(NULL, g_exec[d].child_seg);
+        }
+        VDM_REG(tib, VTIB_EAX) = g_exec[d].eax; VDM_REG(tib, VTIB_EBX) = g_exec[d].ebx;
+        VDM_REG(tib, VTIB_ECX) = g_exec[d].ecx; VDM_REG(tib, VTIB_EDX) = g_exec[d].edx;
+        VDM_REG(tib, VTIB_ESI) = g_exec[d].esi; VDM_REG(tib, VTIB_EDI) = g_exec[d].edi;
+        VDM_REG(tib, VTIB_EBP) = g_exec[d].ebp; VDM_REG(tib, VTIB_ESP) = g_exec[d].esp;
+        VDM_REG(tib, VTIB_EIP) = g_exec[d].eip; VDM_REG(tib, VTIB_EFLAGS) = g_exec[d].efl;
+        VDM_REG(tib, VTIB_CS)  = g_exec[d].cs;  VDM_REG(tib, VTIB_SS) = g_exec[d].ss;
+        VDM_REG(tib, VTIB_DS)  = g_exec[d].ds;  VDM_REG(tib, VTIB_ES) = g_exec[d].es;
+        m->psp_seg = g_exec[d].psp;
+        m->dta_seg = g_exec[d].dta_seg; m->dta_off = g_exec[d].dta_off;
+        /* EXEC succeeded, so clear the carry the parent's IRET will
+           restore, and set AX=0 as DOS does. */
+        pfl2 = (volatile WORD *)(((VDM_REG(tib, VTIB_SS) & 0xFFFF) << 4)
+                + (((VDM_REG(tib, VTIB_ESP) & 0xFFFF) + 4) & 0xFFFF));
+        *pfl2 &= (WORD)~1;
+        VDM_REG(tib, VTIB_EAX) &= 0xFFFF0000u;
+        VDM_REG(tib, VTIB_EIP) += 3;        /* past the BOP -> the IRET */
+        m->exit_code = 0;
+        *pp = zput(*pp, "  EXEC: child exited rc=0x"); *pp = zhexb(*pp, m->child_rc);
+        *pp = zput(*pp, ", parent resumed (depth="); *pp = zhexb(*pp, (unsigned)g_exec_depth);
+        *pp = zput(*pp, ")\r\n");
+        log_append(LOG_PATH, base, *pp); *pp = base;
+        return 1;                    /* the parent is back: carry on */
+    }
+    VDM_REG(tib, VTIB_EIP) += 3;
+    log_append(LOG_PATH, base, *pp); *pp = base;
+    return 0;                        /* top-level program: the run is over */
+}
+
+/* ── DISK IMAGES BEHIND INT 13h / INT 25h. (GH #44) ──────────────────────────
+     A drive is an image FILE or it is absent -- see src/dos/dos_disk.h for why
+     nothing is synthesised. Drive 0 (A:) comes from FLOPPY_IMG_PATH.
+   ⚠ OPENED LAZILY, ON THE FIRST DISK CALL, AND NEVER AT STARTUP. Opening media
+     at startup is how the LPT1 spool wedged the rig this morning: a blocking
+     Win32 call before the host has a window presents as a hang, not an error.
+     SetErrorMode for the same reason. A guest that never touches INT 13h never
+     pays for this and never risks it. */
+#define FLOPPY_IMG_PATH "C:\\ntvdmex\\FLOPPY.IMG"
+static HANDLE        g_disk_h[1] = { INVALID_HANDLE_VALUE };
+static dos_disk_geom g_disk_g[1];
+static int           g_disk_tried[1];
+static unsigned      g_disk_count = 1;   /* AH=08h's DL: how many floppy drives */
+static unsigned      g_disk_status;      /* AH=01h's last-status byte           */
+
+static dos_disk_geom *disk_for(unsigned drive)
+{
+    BYTE boot[512];
+    DWORD got = 0, sz;
+    UINT om;
+    if (drive != 0) return NULL;                 /* only A: is backed today     */
+    if (g_disk_g[0].valid) return &g_disk_g[0];
+    if (g_disk_tried[0]) return NULL;
+    g_disk_tried[0] = 1;
+    om = SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOOPENFILEERRORBOX);
+    g_disk_h[0] = CreateFileA(FLOPPY_IMG_PATH, GENERIC_READ | GENERIC_WRITE,
+                              FILE_SHARE_READ, NULL, OPEN_EXISTING,
+                              FILE_ATTRIBUTE_NORMAL, NULL);
+    SetErrorMode(om);
+    if (g_disk_h[0] == INVALID_HANDLE_VALUE) return NULL;
+    sz = GetFileSize(g_disk_h[0], NULL);
+    if (!ReadFile(g_disk_h[0], boot, 512, &got, NULL) || got != 512
+        || !dos_disk_geom_from_bpb(boot, sz, &g_disk_g[0])) {
+        /* An image we cannot read the geometry of is treated as ABSENT. A
+           guessed cylinder count returns the WRONG SECTOR and reports success,
+           which is strictly worse than no drive. */
+        char db[160], *dq = db;
+        dq = zput(dq, "  INT13 image present but its BPB is not usable -- "
+                      "treating drive 0 as ABSENT (GH #44)\r\n");
+        log_append(LOG_PATH, db, dq); serial_out(db, dq);
+        CloseHandle(g_disk_h[0]); g_disk_h[0] = INVALID_HANDLE_VALUE;
+        return NULL;
+    }
+    { char db[200], *dq = db;
+      dq = zput(dq, "  INT13 drive 0 = " FLOPPY_IMG_PATH ", ");
+      dq = zhex(dq, g_disk_g[0].cylinders); dq = zput(dq, " cyl x ");
+      dq = zhex(dq, g_disk_g[0].heads);     dq = zput(dq, " head x ");
+      dq = zhex(dq, g_disk_g[0].sectors);   dq = zput(dq, " sec, type 0x");
+      dq = zhexb(dq, g_disk_g[0].drive_type); dq = zput(dq, "\r\n");
+      log_append(LOG_PATH, db, dq); serial_out(db, dq); }
+    return &g_disk_g[0];
+}
+
+/* Move `count` sectors between the image and guest memory. Returns 1 on a FULL
+   transfer only: a short read is a failure, not a partial success, because the
+   caller reports sectors-transferred in AL and a guest trusts it. */
+static int disk_io(unsigned drive, uint32_t lba, unsigned count,
+                   BYTE *guest, int write)
+{
+    DWORD moved = 0, want = count * 512u;
+    if (drive != 0 || g_disk_h[0] == INVALID_HANDLE_VALUE || !count) return 0;
+    if (SetFilePointer(g_disk_h[0], (LONG)(lba * 512u), NULL, FILE_BEGIN)
+        == INVALID_SET_FILE_POINTER) return 0;
+    if (write) {
+        if (!WriteFile(g_disk_h[0], guest, want, &moved, NULL)) return 0;
+        FlushFileBuffers(g_disk_h[0]);
+    } else {
+        if (!ReadFile(g_disk_h[0], guest, want, &moved, NULL)) return 0;
+    }
+    return moved == want;
 }
 
 /* ── THE REAL STANDARD OUTPUT, IF WE WERE LAUNCHED FROM ONE. (GH #131) ───────
@@ -15148,7 +15301,17 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
       for (bi = 0; bi < sizeof(bios_ints)/sizeof(bios_ints[0]); ++bi) {
           unsigned off = DOS_BIOS_STUBS + bi * 4;
           bs[off + 0] = VDM_BOP0; bs[off + 1] = VDM_BOP1;
-          bs[off + 2] = bios_ints[bi][1]; bs[off + 3] = 0xCF;   /* IRET */
+          bs[off + 2] = bios_ints[bi][1];
+          /* ── INT 25h/26h RETURN WITH THE CALLER'S FLAGS STILL PUSHED. ───────
+               Every other vector here ends in IRET. DOS's absolute disk read and
+               write do NOT: they return by RETF, deliberately leaving the FLAGS
+               word the INT pushed on the caller's stack, which the caller then
+               discards itself (`add sp,2`). Ending them with IRET pops that word
+               and the caller's `add sp,2` then eats its own return address --
+               corruption that surfaces later, somewhere else. (GH #44) */
+          bs[off + 3] = (bios_ints[bi][0] == 0x25 || bios_ints[bi][0] == 0x26)
+                        ? 0xCB   /* RETF */
+                        : 0xCF;  /* IRET */
           *(volatile WORD *)(bios_ints[bi][0] * 4)     = (WORD)off;
           *(volatile WORD *)(bios_ints[bi][0] * 4 + 2) = DOS_CTAB_SEG;
       } }
@@ -16360,15 +16523,57 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                     BSETAX(0x9000); BCF_CLR();
                     g_bios_unimpl[0x17] = 1;
                 }
-            } else if (bn == 0x13) {               /* disk services           */
+            } else if (bn == 0x13) {               /* disk services  GH #44   */
                 unsigned ah13 = (VDM_REG(tib, VTIB_EAX) >> 8) & 0xFF;
-                if (ah13 == 0x00) { BSETAX(0); BCF_CLR(); }      /* reset: ok  */
-                else if (ah13 == 0x01) { BSETAX(0); BCF_CLR(); } /* last status*/
-                else {
-                    /* We expose no raw sectors. Say so -- AH=01 "bad command"
-                       with CF -- rather than returning success and no data,
-                       which would look to the guest like an empty disk. */
-                    BSETAX(0x0100); BCF_SET();
+                unsigned dl13 = VDM_REG(tib, VTIB_EDX) & 0xFF;
+                dos_disk_geom *g13 = disk_for(dl13);
+                if (ah13 == 0x00) { BSETAX(0); g_disk_status = 0; BCF_CLR(); }
+                else if (ah13 == 0x01) { BSETAX((WORD)(g_disk_status << 8)); BCF_CLR(); }
+                else if (!g13) {
+                    /* No image behind this drive letter. AH=80 is "drive not
+                       ready", which is what a real machine says for a floppy
+                       bay with nothing in it -- and is distinguishable from
+                       AH=01 "bad command", which would mean the SERVICE does
+                       not exist. Those are different answers to a guest. */
+                    BSETAX(0x8000); g_disk_status = 0x80; BCF_SET();
+                    g_bios_unimpl[0x13] = 1;
+                } else if (ah13 == 0x08) {          /* get drive parameters    */
+                    /* BH is ZEROED, not preserved: 6.22 answered BX=0004 to a
+                       call made with BX poisoned to B1B1. Keeping the caller's
+                       BH would hand back its own junk in half the register. */
+                    VDM_SET16(tib, VTIB_EBX, (WORD)g13->drive_type);
+                    VDM_SET16(tib, VTIB_ECX, dos_disk_pack_cx(g13));
+                    VDM_SET16(tib, VTIB_EDX,
+                              (WORD)(((g13->heads - 1) << 8) | g_disk_count));
+                    BSETAX(0); g_disk_status = 0; BCF_CLR();
+                } else if (ah13 == 0x15) {          /* get disk type           */
+                    /* AH=01: floppy WITHOUT change-line support, which is what
+                       6.22 answered (AX=0100) and is the truthful claim -- we
+                       cannot detect a media swap under an image file. */
+                    BSETAX(0x0100); BCF_CLR();
+                } else if (ah13 == 0x02 || ah13 == 0x03 || ah13 == 0x04) {
+                    unsigned nsec = VDM_REG(tib, VTIB_EAX) & 0xFF;
+                    unsigned cx13 = VDM_REG(tib, VTIB_ECX) & 0xFFFF;
+                    unsigned sec  = cx13 & 0x3F;
+                    unsigned cyl  = ((cx13 >> 8) & 0xFF) | ((cx13 & 0xC0) << 2);
+                    unsigned head = (VDM_REG(tib, VTIB_EDX) >> 8) & 0xFF;
+                    uint32_t lba = 0;
+                    if (!dos_disk_chs_to_lba(g13, (WORD)cyl, (WORD)head, (WORD)sec, &lba)
+                        || lba + nsec > g13->total_sectors) {
+                        BSETAX(0x0400); g_disk_status = 0x04;  /* sector not found */
+                        BCF_SET();
+                    } else if (ah13 == 0x04) {      /* verify: bounds only     */
+                        BSETAX((WORD)nsec); g_disk_status = 0; BCF_CLR();
+                    } else {
+                        DWORD lin = ((VDM_REG(tib, VTIB_ES) & 0xFFFF) << 4)
+                                  + (VDM_REG(tib, VTIB_EBX) & 0xFFFF);
+                        int ok = disk_io(dl13, lba, nsec, (BYTE *)(ULONG_PTR)lin,
+                                         ah13 == 0x03);
+                        if (ok) { BSETAX((WORD)nsec); g_disk_status = 0; BCF_CLR(); }
+                        else    { BSETAX(0x0400); g_disk_status = 0x04; BCF_SET(); }
+                    }
+                } else {
+                    BSETAX(0x0100); BCF_SET();      /* bad command             */
                     g_bios_unimpl[0x13] = 1;
                 }
             } else if (bn == 0x30) {               /* INT 20h: terminate       */
@@ -16377,7 +16582,11 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                    way actually exits, instead of returning into itself. */
                 VDM_REG(tib, VTIB_EAX) &= 0xFFFF0000u;
                 m.tp = p; dos_int21(&m); p = m.tp;   /* AH=00 -> terminate       */
-                handled = 2;
+                /* ★ AND IF THIS WAS A CHILD, GO BACK TO ITS PARENT. (GH #134)
+                     This used to set handled = 2, which `break`s the exec loop
+                     and ends the whole VDM -- so a .COM child exiting the normal
+                     .COM way took the host down with it. */
+                handled = dos_terminate(&m, tib, &p, base) ? 3 : 2;
             } else if (bn == 0x27) {               /* TSR, CP/M style          */
                 /* ── THE OLD FORM OF AH=31h, AND IT KEEPS MEMORY TOO. (GH #49) ─
                      DX is a BYTE OFFSET past the PSP here, not a paragraph
@@ -16393,7 +16602,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                 p = zput(p, " bytes), vectors LEFT INSTALLED\r\n");
                 VDM_REG(tib, VTIB_EAX) &= 0xFFFF0000u;
                 m.tp = p; dos_int21(&m); p = m.tp;
-                handled = 2;
+                handled = dos_terminate(&m, tib, &p, base) ? 3 : 2;
             } else if (bn == 0x28) {               /* DOS idle                 */
                 BCF_CLR();                         /* nothing to yield to      */
             } else if (bn == 0x29) {               /* fast console output      */
@@ -16402,13 +16611,27 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                 vdd_video_putc(&g_vid, (uint8_t)(VDM_REG(tib, VTIB_EAX) & 0xFF));
                 BCF_CLR();
             } else if (bn == 0x25 || bn == 0x26) { /* absolute disk read/write */
-                BSETAX(0x0207); BCF_SET();         /* AL=07 drive param error  */
-                g_bios_unimpl[bn] = 1;
+                /* AL = drive (0 = A:), CX = sector count, DX = first sector,
+                   DS:BX = buffer. LBA directly -- no CHS, which is the whole
+                   point of this pair. The stub RETFs, leaving the caller's
+                   pushed FLAGS for it to discard; see the stub planting. */
+                unsigned drv = VDM_REG(tib, VTIB_EAX) & 0xFF;
+                unsigned cnt = VDM_REG(tib, VTIB_ECX) & 0xFFFF;
+                uint32_t sec = VDM_REG(tib, VTIB_EDX) & 0xFFFF;
+                dos_disk_geom *g25 = disk_for(drv);
+                DWORD lin = ((VDM_REG(tib, VTIB_DS) & 0xFFFF) << 4)
+                          + (VDM_REG(tib, VTIB_EBX) & 0xFFFF);
+                if (!g25) { BSETAX(0x0201); BCF_SET(); g_bios_unimpl[bn] = 1; }
+                else if (sec + cnt > g25->total_sectors) { BSETAX(0x0208); BCF_SET(); }
+                else if (disk_io(drv, sec, cnt, (BYTE *)(ULONG_PTR)lin, bn == 0x26))
+                     { BSETAX(0); BCF_CLR(); }
+                else { BSETAX(0x0208); BCF_SET(); }  /* AL=08 sector not found */
             } else handled = 0;
             #undef BCF_SET
             #undef BCF_CLR
             #undef BSETAX
-            if (handled == 2) break;               /* terminate: leave the loop */
+            if (handled == 2) break;               /* terminate: the run is over  */
+            if (handled == 3) continue;            /* a child exited: parent is back */
             if (handled) { VDM_REG(tib, VTIB_EIP) += 3; continue; }
         }
         if ((VDM_REG(tib, VTIB_EVENT_INFO) & 0xFF) == 0x1A) {   /* INT 1Ah BIOS time */
@@ -18039,67 +18262,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         m.retry = 0;
         if (!dos_int21(&m)) {                       /* AH=4Ch -> terminate */
             p = m.tp;
-            if (g_exec_depth > 0) {
-                /* A CHILD terminated, not the program we were asked to run.
-                   Put the parent's frame back and let it continue. */
-                int d = --g_exec_depth;
-                volatile WORD *pfl2;
-                m.child_rc = (WORD)(m.exit_code & 0xFF);
-                if (m.tsr_pending) {
-                    /* ── TERMINATE AND STAY RESIDENT. (GH #49) ────────────────
-                         The block is RESIZED, not freed, and the vectors are
-                         deliberately NOT unwound -- the whole point of a TSR is
-                         that the handlers it installed outlive it. So this skips
-                         both dos_psp_restore_vectors and dos_free, which is
-                         precisely the difference between exiting and staying.
-                       DX counted paragraphs from the PSP; a request for less
-                       than a PSP is nonsense, so floor it at 16 rather than
-                       hand back a block that does not contain its own header. */
-                    WORD keep = m.tsr_keep < 0x10 ? 0x10 : m.tsr_keep, tmax = 0;
-                    int rrc = dos_resize(NULL, g_exec[d].child_seg, keep, &tmax);
-                    p = zput(p, "  TSR: seg=0x"); p = zhex(p, g_exec[d].child_seg);
-                    p = zput(p, " stays resident, 0x"); p = zhex(p, keep);
-                    p = zput(p, " paras");
-                    if (rrc) p = zput(p, " -- RESIZE FAILED, block kept whole");
-                    p = zput(p, ", vectors left installed\r\n");
-                    m.tsr_pending = 0; m.tsr_keep = 0;
-                } else {
-                /* ── UNWIND THE CHILD'S INTERRUPT VECTORS. (GH #34) ───────────
-                     The other half of the PSP contract: INT 22h/23h/24h go back
-                     to what they were when the child started, from the copies
-                     dos_psp_save_vectors put in its PSP. Without this a child
-                     that installed its own critical-error handler leaves it
-                     servicing the PARENT's failures, pointing into memory that
-                     is freed on the very next line. */
-                if (g_exec[d].child_seg)
-                    dos_psp_restore_vectors(NULL, g_exec[d].child_seg);
-                if (g_exec[d].child_seg) dos_free(NULL, g_exec[d].child_seg);
-                }
-                VDM_REG(tib, VTIB_EAX) = g_exec[d].eax; VDM_REG(tib, VTIB_EBX) = g_exec[d].ebx;
-                VDM_REG(tib, VTIB_ECX) = g_exec[d].ecx; VDM_REG(tib, VTIB_EDX) = g_exec[d].edx;
-                VDM_REG(tib, VTIB_ESI) = g_exec[d].esi; VDM_REG(tib, VTIB_EDI) = g_exec[d].edi;
-                VDM_REG(tib, VTIB_EBP) = g_exec[d].ebp; VDM_REG(tib, VTIB_ESP) = g_exec[d].esp;
-                VDM_REG(tib, VTIB_EIP) = g_exec[d].eip; VDM_REG(tib, VTIB_EFLAGS) = g_exec[d].efl;
-                VDM_REG(tib, VTIB_CS)  = g_exec[d].cs;  VDM_REG(tib, VTIB_SS) = g_exec[d].ss;
-                VDM_REG(tib, VTIB_DS)  = g_exec[d].ds;  VDM_REG(tib, VTIB_ES) = g_exec[d].es;
-                m.psp_seg = g_exec[d].psp;
-                m.dta_seg = g_exec[d].dta_seg; m.dta_off = g_exec[d].dta_off;
-                /* EXEC succeeded, so clear the carry the parent's IRET will
-                   restore, and set AX=0 as DOS does. */
-                pfl2 = (volatile WORD *)(((VDM_REG(tib, VTIB_SS) & 0xFFFF) << 4)
-                        + (((VDM_REG(tib, VTIB_ESP) & 0xFFFF) + 4) & 0xFFFF));
-                *pfl2 &= (WORD)~1;
-                VDM_REG(tib, VTIB_EAX) &= 0xFFFF0000u;
-                VDM_REG(tib, VTIB_EIP) += 3;        /* past the BOP -> the IRET */
-                m.exit_code = 0;
-                p = zput(p, "  EXEC: child exited rc=0x"); p = zhexb(p, m.child_rc);
-                p = zput(p, ", parent resumed (depth="); p = zhexb(p, (unsigned)g_exec_depth);
-                p = zput(p, ")\r\n");
-                log_append(LOG_PATH, base, p); p = base;
-                continue;
-            }
-            VDM_REG(tib, VTIB_EIP) += 3;
-            log_append(LOG_PATH, base, p); p = base;
+            if (dos_terminate(&m, tib, &p, base)) continue;
             break;
         }
         p = m.tp;

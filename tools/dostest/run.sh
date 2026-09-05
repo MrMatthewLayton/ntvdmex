@@ -202,3 +202,15 @@ cc -std=c99 -Wall -Wextra -Wno-unused-function -O0 -g \
    -o "$DIR/sysvars_test" "$DIR/sysvars_test.c"
 
 "$DIR/sysvars_test"
+
+# GH #44: INT 13h geometry and CHS<->LBA (src/dos/dos_disk.h). The arithmetic is
+# where this interface goes wrong -- sector numbers are 1-BASED while cylinder and
+# head are not -- so every conversion is pinned, along with the refusals: sector 0,
+# a head or cylinder past the geometry, and an image whose BPB cannot be trusted.
+# Expectations are from tools/dostest/p_disk.asm on the 6.22 oracle (CX=0x4F12,
+# BL=4 for a real 1.44MB floppy).
+cc -std=c99 -Wall -Wextra -Wno-unused-function -O0 -g \
+   -I "$DIR/../../src/dos" \
+   -o "$DIR/disk_test" "$DIR/disk_test.c"
+
+"$DIR/disk_test"
