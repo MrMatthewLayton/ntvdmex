@@ -23,7 +23,15 @@
 /* AH=34h hands the guest a FAR pointer to the InDOS flag, and AH=5D06h a pointer
    to the swappable data area whose first bytes are the critical-error flag and
    that same InDOS byte. Both point here. */
-#define DOS_SDA_OFF     0x00D4      /* [0]=crit-err flag, [1]=InDOS, then zeros */
+/* ⚠⚠ 0x00D4 WAS DOS_SYSVARS_OFF + 0x44, SO THE SDA SAT ON TOP OF SYSVARS.
+     That made DOS_INDOS_OFF (0xD5) literally SysVars+0x45 -- and MEM.EXE reads
+     the word at SysVars+0x45 to decide whether to report extended memory at all
+     (disassembled: 07B5 cmp word [es:bx+0x45],0 / jz 0x907). InDOS is zero while
+     a program runs, so MEM read zero and skipped the whole report. That is GH
+     #47's "Extended (XMS) 0K", and it was a LAYOUT COLLISION, not a driver bug.
+   0x6C..0x8B is clear: past the IRET stub (0x58), the case-map (0x59) and the
+   opt-in VIF trampoline (0x60..0x65), and below the MCB-head word at 0x8E. */
+#define DOS_SDA_OFF     0x006C      /* [0]=crit-err flag, [1]=InDOS, then zeros */
 #define DOS_SDA_LEN     0x20
 #define DOS_INDOS_OFF   (DOS_SDA_OFF + 1)
 

@@ -181,6 +181,9 @@
    Lives just past the INT 1Ah stub (which ends at 0x40) and the INT 2Fh stub (4 bytes
    at 0x40). INT 2Fh AX=4310 hands the guest DOS_HDLR_SEG:XMS_ENTRY_OFF to far-call. */
 #define XMS_ENTRY_OFF 0x0044
+/* The XMS pool, in KB. Named because SysVars+0x45 must report the SAME
+   number to MEM.EXE (GH #47) -- two literals would drift. */
+#define XMS_POOL_KB   16384
 
 /* DPMI (M4 slice 3, spike): the mode-switch entry far-called by a client after it
    detects DPMI via INT 2Fh AX=1687h. Lives past the INT 67h stub (0x48..0x4B).
@@ -15341,6 +15344,18 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             *(volatile WORD *)(hdlr + DOS_SYSVARS_OFF + SV_DPB + 2) = 0xFFFF;
         }
         *(volatile WORD *)(hdlr + DOS_SYSVARS_OFF + SV_MAXSEC) = 512;
+        /* ── ★ SYSVARS+0x45: EXTENDED MEMORY, IN KB. THE ANSWER TO GH #47. ────
+             MEM.EXE does not get this from the XMS driver. It reads it straight
+             out of SysVars and skips its entire extended-memory report when the
+             word is zero:
+                 07B5  les bx,[..] / cmp word [es:bx+0x45],0 / jz 0x907
+             Measured on 6.22: SysVars+0x45 = 0x3B80 = 15232, and MEM prints
+             "Extended (XMS) 15,232K" -- the same number, which is what
+             identifies the field. Ours read zero because the swappable data
+             area used to be planted at SysVars+0x44, so the InDOS byte WAS
+             this field. The SDA has moved; see DOS_SDA_OFF.
+           The value is the XMS pool, so the two cannot disagree. */
+        *(volatile WORD *)(hdlr + DOS_SYSVARS_OFF + 0x45) = (WORD)XMS_POOL_KB;
         hdlr[DOS_SYSVARS_OFF + SV_NBLOCKDEV] = (BYTE)nd;
         /* ---- the device chain. The NUL header is INLINE at +0x22, not a pointer
                to one (measured on 6.22), and it TERMINATES: we install no block or
@@ -15380,7 +15395,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     }
     /* GH #128: and the WOW extension krnl386 reads before it does anything else. */
     dos_wow_publish(hdlr, (volatile BYTE *)(DOS_CTAB_SEG << 4), 2 /* C: */);
-    xms_init(&g_xms, 16384, xms_host_alloc, xms_host_free, NULL);  /* M4: 16MB XMS pool */
+    xms_init(&g_xms, XMS_POOL_KB, xms_host_alloc, xms_host_free, NULL);  /* M4: XMS pool */
     ems_init(&g_ems, (uint16_t)(g_ems_frame_lin >> 4), EMS_POOL_PAGES,
              (volatile BYTE *)g_ems_frame_lin,
              ems_host_alloc, ems_host_free, NULL);             /* M4: 8MB EMS pool   */
