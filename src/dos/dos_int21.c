@@ -236,6 +236,7 @@ void dos_int21_init(dos_machine_t *m, uint16_t first_mcb)
     m->switch_char = '/';   /* oracle-confirmed 6.22 default */
     m->psp_seg = DOS_PSP_SEG;
     m->exec_pending = 0;
+    m->tsr_pending = 0; m->tsr_keep = 0;
     m->first_mcb = first_mcb;
     m->dta_seg = DOS_PSP_SEG;
     m->dta_off = 0x0080;
@@ -1084,11 +1085,21 @@ int dos_int21(dos_machine_t *m)
         }
         OKCF();
     } else if (ah == 0x31) {                    /* terminate and stay resident */
-        /* We run one program at a time, so nothing can stay resident behind it.
-           Say so rather than pretend: a TSR that believes it installed and did
-           not is the silent-failure class #27 exists to remove. */
-        tp = zput(tp, "  INT21 AH=31 TSR: residency NOT honoured (single-program host)\r\n");
-        m->unimpl21[0x31 >> 3] |= (uint8_t)(1u << (0x31 & 7));
+        /* ── STAY RESIDENT. (GH #49) ──────────────────────────────────────────
+             DX is the paragraph count to KEEP, counted from the PSP. Residency
+             is three things, and the host does all three on this flag:
+               the memory block is RESIZED, not freed;
+               the interrupt vectors it installed are NOT unwound; and
+               control returns to whatever EXEC'd it, with the image intact.
+           ⚠ AT DEPTH 0 THERE IS NOTHING TO RETURN TO. A top-level program that
+             TSRs has no parent inside this VDM, so the run ends either way --
+             but say which, because "resident" and "exited" look identical in a
+             log and a TSR that believes it installed and did not is exactly the
+             silent failure #27 exists to remove. */
+        m->tsr_keep = (uint16_t)(R_DX & 0xFFFF);
+        m->tsr_pending = 1;
+        tp = zput(tp, "  INT21 AH=31 TSR: keep 0x"); tp = zhex(tp, m->tsr_keep);
+        tp = zput(tp, " paragraphs, vectors LEFT INSTALLED\r\n");
         m->exit_code = (int)(R_AX & 0xFF);
         cont = 0;
     } else if (ah == 0x53) {                    /* translate a BPB into a DPB */

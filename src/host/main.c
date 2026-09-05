@@ -16246,9 +16246,18 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                 m.tp = p; dos_int21(&m); p = m.tp;   /* AH=00 -> terminate       */
                 handled = 2;
             } else if (bn == 0x27) {               /* TSR, CP/M style          */
-                p = zput(p, "  INT27 TSR: residency NOT honoured "
-                            "(single-program host)\r\n");
-                g_bios_unimpl[0x27] = 1;
+                /* ── THE OLD FORM OF AH=31h, AND IT KEEPS MEMORY TOO. (GH #49) ─
+                     DX is a BYTE OFFSET past the PSP here, not a paragraph
+                     count -- that is the one thing this call does differently
+                     and the easy thing to get wrong. Round UP to paragraphs so
+                     the last partial one is kept rather than cut off.
+                     CS is the resident program's PSP for an INT 27h caller. */
+                DWORD dx27 = VDM_REG(tib, VTIB_EDX) & 0xFFFF;
+                m.tsr_keep = (WORD)((dx27 + 15) >> 4);
+                m.tsr_pending = 1;
+                p = zput(p, "  INT27 TSR: keep 0x"); p = zhex(p, m.tsr_keep);
+                p = zput(p, " paras (DX=0x"); p = zhex(p, dx27);
+                p = zput(p, " bytes), vectors LEFT INSTALLED\r\n");
                 VDM_REG(tib, VTIB_EAX) &= 0xFFFF0000u;
                 m.tp = p; dos_int21(&m); p = m.tp;
                 handled = 2;
@@ -17880,6 +17889,25 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                 int d = --g_exec_depth;
                 volatile WORD *pfl2;
                 m.child_rc = (WORD)(m.exit_code & 0xFF);
+                if (m.tsr_pending) {
+                    /* ── TERMINATE AND STAY RESIDENT. (GH #49) ────────────────
+                         The block is RESIZED, not freed, and the vectors are
+                         deliberately NOT unwound -- the whole point of a TSR is
+                         that the handlers it installed outlive it. So this skips
+                         both dos_psp_restore_vectors and dos_free, which is
+                         precisely the difference between exiting and staying.
+                       DX counted paragraphs from the PSP; a request for less
+                       than a PSP is nonsense, so floor it at 16 rather than
+                       hand back a block that does not contain its own header. */
+                    WORD keep = m.tsr_keep < 0x10 ? 0x10 : m.tsr_keep, tmax = 0;
+                    int rrc = dos_resize(NULL, g_exec[d].child_seg, keep, &tmax);
+                    p = zput(p, "  TSR: seg=0x"); p = zhex(p, g_exec[d].child_seg);
+                    p = zput(p, " stays resident, 0x"); p = zhex(p, keep);
+                    p = zput(p, " paras");
+                    if (rrc) p = zput(p, " -- RESIZE FAILED, block kept whole");
+                    p = zput(p, ", vectors left installed\r\n");
+                    m.tsr_pending = 0; m.tsr_keep = 0;
+                } else {
                 /* ── UNWIND THE CHILD'S INTERRUPT VECTORS. (GH #34) ───────────
                      The other half of the PSP contract: INT 22h/23h/24h go back
                      to what they were when the child started, from the copies
@@ -17890,6 +17918,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                 if (g_exec[d].child_seg)
                     dos_psp_restore_vectors(NULL, g_exec[d].child_seg);
                 if (g_exec[d].child_seg) dos_free(NULL, g_exec[d].child_seg);
+                }
                 VDM_REG(tib, VTIB_EAX) = g_exec[d].eax; VDM_REG(tib, VTIB_EBX) = g_exec[d].ebx;
                 VDM_REG(tib, VTIB_ECX) = g_exec[d].ecx; VDM_REG(tib, VTIB_EDX) = g_exec[d].edx;
                 VDM_REG(tib, VTIB_ESI) = g_exec[d].esi; VDM_REG(tib, VTIB_EDI) = g_exec[d].edi;

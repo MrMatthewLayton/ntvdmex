@@ -40,3 +40,9 @@ nasm -f bin "$DIR/pm32flat.asm" -o "$DIR/pm32flat.com"     # GH#18 run 84: base-
 for f in vgademo.com vga12.com vesademo.com blitfast.com timertst.com mousetst.com xmstest.com emstest.com selftest.com modeswitch.com dpmitest.com dpmiexe.exe pmfault.com; do
     echo "  $f  ($(wc -c < "$DIR/$f") bytes)"
 done
+# GH #49: the TSR pair. ORDER MATTERS -- p_tsr.asm `incbin`s the child, so the
+# child must exist before the parent is assembled. That is deliberate: it makes
+# the probe self-contained at run time (it writes the child to disk itself), so
+# nothing has to be staged next to it on the rig or under DOSBox.
+nasm -f bin "$DIR/p_tsrc.asm" -o "$DIR/p_tsrc.com"   # hooks INT 60h, then TSRs
+nasm -f bin "$DIR/p_tsr.asm"  -o "$DIR/p_tsr.com"    # EXECs it, then calls INT 60h

@@ -36,6 +36,13 @@ typedef struct {
        load and the control transfer, because the loader, the file I/O and the
        guest's register frame all live there.  See exec_begin() in main.c. */
     int      exec_pending;
+    /* ── GH #49: TSR RESIDENCY. AH=31h and INT 27h terminate the program but
+         must NOT free its memory or unwind its interrupt vectors -- that is the
+         whole of "stay resident". `tsr_keep` is the paragraph count the program
+         asked to keep; `tsr_pending` tells the host to take the resident exit
+         path instead of the ordinary one. */
+    int      tsr_pending;
+    uint16_t tsr_keep;
     uint8_t  exec_mode;        /* AL: 00 load+go, 01 load only, 03 overlay          */
     /* AL=01 and AL=03 both ANSWER through the caller's parameter block, so the
        host needs to find it again after the load. AL=01 writes the entry SS:SP
