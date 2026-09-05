@@ -1313,3 +1313,42 @@ The habits that actually work, learned the expensive way:
 - **A trace that prints the request but not the answer is half an instrument.**
 - **Predict the number before the run.**
 - A fix measured on one guest is a fix for none — re-run the other class (V86 vs DPMI).
+
+---
+
+## Session 52 (2026-09-05) — the completeness push, 61.7 → 72
+
+**Score 61.7 → 72.0** (`./tools/score/score.py`). Suite **893 → 1036** checks.
+
+### Closed, each rig-gated against the MS-DOS 6.22 oracle
+| | |
+|---|---|
+| **#133** `echo x > file` | oracle, rig AND stock ntvdm agree on all six cases |
+| **#50** EXEC `AL=01`/`AL=03` | probe builds its own relocatable `.EXE`; `SP = e_sp-2`, measured |
+| **#45** INT 14h/17h | ports now agree with the equipment word; printed bytes read back as `Hi` |
+| **#49** TSR residency | child hooks INT 60h, TSRs, parent calls it: `AX=BEEF` |
+| **#52** user fonts | `AH=11h AL=x0` glyphs are actually drawn |
+| **#44** INT 13h/25h/26h | real disk images; every oracle field matches |
+| **#132** recovery | 3 failed starts and the host **removes its own IFEO key** — proven on hardware |
+| **#15** | **REFUTED**: all seven ModRM store forms already work |
+
+### ★ #47's root cause was ours, and it was a layout collision
+MEM.EXE does not ask the XMS driver how much extended memory exists — it reads
+`SysVars+0x45`. `DOS_SDA_OFF` was `0xD4` = `SysVars+0x44`, so **`DOS_INDOS_OFF`
+WAS `SysVars+0x45`**: MEM read the InDOS flag, saw zero, and skipped the whole
+report. Seven driver-side hypotheses died before the binary was read.
+
+**Still open**: `Total` is off by exactly the phantom `Upper 1,663K`. MEM's MCB
+walk is at image `0x1759`; the segment map is cracked (**CS = load segment, so
+IP == image offset**) — see [[mem-exe-segment-map]].
+
+### ⚠ Hazards this session paid for
+* **The rig cannot be recovered remotely from a modal dialog.** Wedged twice:
+  `GetDiskFreeSpaceA` on an empty floppy, and stock ntvdm's "cannot find the
+  file" box. `kill`, `reboot`, `shutdown` all failed; only `exec runwatch.bat`.
+* **A wedged stock run leaves the IFEO Debugger key REMOVED**, after which every
+  later run silently measures stock ntvdm. Check `stock_state.txt` + `reg query`.
+* **`copy` preserves mtime**, so a stale result defeats even an mtime check —
+  `rt_stock.bat` reported one wedged run's output as five different rows' answers.
+* Two host-log lines written at startup never survived: a later
+  `log_write(LOG_PATH,…)` **truncates**. Report at exit.
