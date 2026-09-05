@@ -3,6 +3,8 @@
 #include "dos_int21.h"
 #include "dos_mcb.h"
 #include "dos_layout.h"
+#include "dos_fh.h"       /* the handle table's two rules -- allocation + classification */
+#include "dos_err.h"      /* AH=59h class/action/locus, measured on the oracle */
 #include "log.h"          /* zput / zhex */
 #include "dos_ctab.h"     /* CP437 tables dumped from the 6.22 oracle */
 
@@ -473,8 +475,14 @@ int dos_int21(dos_machine_t *m)
              hi.txt on disk, which is the worst of both.
              So: a BOUND handle is a file, whatever its number; only an unbound low
              handle is the console. */
-        if (h < DOS_MAX_FILES && m->fh[h]) { DWORD w = 0; WriteFile(m->fh[h], b, cnt, &w, NULL); SETAX(w); OKCF(); }
-        else if (h == 1 || h == 2) { DWORD k; for (k = 0; k < cnt; ++k) OUTC(b[k]); SETAX(cnt); OKCF(); }
+        if (dos_fh_is_file((void *const *)m->fh, h)) { DWORD w = 0; WriteFile(m->fh[h], b, cnt, &w, NULL); SETAX(w); OKCF(); }
+        /* ⚠ ANY device slot, not just 1 and 2 -- after AH=45h the console can be
+             sitting in slot 5. Handles 3/4 stay out: they are AUX and PRN, which
+             AH=04h/05h already accept and discard. A duplicate loses which device
+             it was, so a dup of AUX would print here; nothing does that, and the
+             alternative is a per-slot identity byte we have no caller for. */
+        else if (dos_fh_is_device((void *const *)m->fh, m->std_open, h) && h != 3 && h != 4)
+             { DWORD k; for (k = 0; k < cnt; ++k) OUTC(b[k]); SETAX(cnt); OKCF(); }
         else { SETAX(6); ERRCF(); }
     } else if (ah == 0x3C || ah == 0x3D) {      /* create / open: DS:DX=ASCIIZ name */
         /* ── DOS HANDS OUT THE LOWEST FREE HANDLE, AND THAT IS HOW `>` WORKS. ─────
@@ -508,11 +516,7 @@ int dos_int21(dos_machine_t *m)
                             FILE_ATTRIBUTE_NORMAL, NULL);
         }
         if (f != INVALID_HANDLE_VALUE) {
-            for (slot = 0; slot < DOS_MAX_FILES; ++slot) {
-                if (m->fh[slot]) continue;                    /* bound to a file    */
-                if (slot < 5 && (m->std_open & (1u << slot))) continue;  /* device  */
-                break;
-            }
+            slot = dos_fh_alloc((void *const *)m->fh, m->std_open);
             if (slot < DOS_MAX_FILES) { m->fh[slot] = f; SETAX(slot); OKCF(); }
             else { CloseHandle(f); SETAX(4); ERRCF(); }
         } else { SETAX(2); ERRCF(); }
@@ -523,13 +527,13 @@ int dos_int21(dos_machine_t *m)
         DWORD h = R_BX & 0xFFFF;
         /* Any BOUND handle closes, including a low one the shell redirected -- see
            the note at AH=40h. An unbound 0-4 is the console and closing it is a no-op. */
-        if (h < DOS_MAX_FILES && m->fh[h]) { CloseHandle(m->fh[h]); m->fh[h] = 0; }
-        else if (h < 5) m->std_open &= (uint8_t)~(1u << h);   /* free the device slot */
+        if (dos_fh_is_file((void *const *)m->fh, h)) { CloseHandle(m->fh[h]); m->fh[h] = 0; }
+        else dos_fh_set_device(&m->std_open, h, 0);         /* free the device slot */
         OKCF();
     } else if (ah == 0x3F) {                    /* read: BX=handle CX=cnt -> DS:DX */
         DWORD h = R_BX & 0xFFFF, cnt = R_CX & 0xFFFF, rd = 0;
         void *b = (void *)((R_DS << 4) + (R_DX & 0xFFFF));
-        if (h < DOS_MAX_FILES && m->fh[h]) {                /* bound -> a file, even if low */
+        if (dos_fh_is_file((void *const *)m->fh, h)) {      /* bound -> a file, even if low */
             /* ► LOG THE FILE POSITION, THE COUNT AND THE FIRST BYTES. A DOS extender
                  loading an executable is doing nothing but seek+read, so if the image it
                  ends up with is wrong, the first question is whether WE handed it the
@@ -546,12 +550,23 @@ int dos_int21(dos_machine_t *m)
             tp = zput(tp, " first="); tp = zdump(tp, (const BYTE *)b, (rd >= 8) ? 8 : 0);
             tp = zput(tp, "\r\n");
         }
-        else if (h == 0) { SETAX(0); OKCF(); }  /* stdin: EOF for now */
+        else if (dos_fh_is_device((void *const *)m->fh, m->std_open, h))
+             { SETAX(0); OKCF(); }              /* an unredirected device: EOF for now */
         else { SETAX(6); ERRCF(); }
     } else if (ah == 0x42) {                    /* lseek: AL=org BX=h CX:DX=off */
         DWORD h = R_BX & 0xFFFF, meth = R_AX & 0xFF;
         LONG dist = (LONG)(((R_CX & 0xFFFF) << 16) | (R_DX & 0xFFFF));
-        if (h >= 5 && h < DOS_MAX_FILES && m->fh[h]) {
+        /* ── A BOUND HANDLE IS A FILE, WHATEVER ITS NUMBER. (GH #133) ─────────
+             This read `h >= 5`, and that is how `>>` was broken while `>` worked:
+             the shell redirects stdout by closing handle 1 and opening the
+             target into the slot it vacates, then seeks to end-of-file before
+             appending. Excluding handles below 5 refused that seek with error 6
+             on a handle that IS a file -- the last survivor of #133, after the
+             create and both write paths had been fixed.
+             Oracle, tools/dostest/p_redir.asm on MS-DOS 6.22:
+               CASE=int21.42.end.on.h1 SIG=AX,DX,CF AX=0004 DX=0000 CF=0
+             i.e. real DOS seeks handle 1 to the end and reports 4 bytes. */
+        if (dos_fh_is_file((void *const *)m->fh, h)) {
             DWORD np = SetFilePointer(m->fh[h], dist, NULL, meth);
             SETAX(np & 0xFFFF);
             R_DX = (R_DX & 0xFFFF0000u) | ((np >> 16) & 0xFFFF); OKCF();
@@ -671,7 +686,7 @@ int dos_int21(dos_machine_t *m)
             else {
                 FILETIME ft, lf; WORD fdt = 0, ftm = 0;
                 DWORD sz = GetFileSize(fh2, NULL);
-                for (slot = 5; slot < DOS_MAX_FILES && m->fh[slot]; ++slot) {}
+                slot = dos_fh_alloc((void *const *)m->fh, m->std_open);
                 if (slot >= DOS_MAX_FILES) { CloseHandle(fh2); FCB_FAIL(); }
                 else {
                     m->fh[slot] = fh2;
@@ -1161,27 +1176,51 @@ int dos_int21(dos_machine_t *m)
             SETAX(1); ERRCF();
         }
     } else if (ah == 0x45 || ah == 0x46) {      /* dup / dup2 */
+        /* ── ★ A DEVICE IS DUPLICABLE, AND THAT IS THE WHOLE POINT OF 45h. ────
+             This refused anything that was not a FILE, so `dup(1)` -- the first
+             step of every save-redirect-restore sequence a shell performs --
+             came back error 6 and the restore could never happen. Found by
+             running tools/dostest/p_redir.asm on the rig against the same probe
+             on the oracle; the two disagreed on one line:
+               oracle : CASE=int21.45.dup.stdout AX=0005 CF=0
+               NTVDMEX: CASE=int21.45.dup.stdout AX=0006 CF=1
+             The failure was not even visible as itself: the probe's LATER output
+             vanished into the test file, because with stdout never restored the
+             next open took handle 1. A wrong answer that eats the evidence of
+             itself is why this is measured against an oracle rather than read.
+           Duplicating a device produces another handle ON THAT DEVICE -- no
+           Win32 handle exists to duplicate, so the copy is a device slot too. */
         DWORD src = R_BX & 0xFFFF, dst;
-        if (src >= DOS_MAX_FILES || !m->fh[src]) { SETAX(6); ERRCF(); }
+        int src_dev = dos_fh_is_device((void *const *)m->fh, m->std_open, src);
+        if (!src_dev && !dos_fh_is_file((void *const *)m->fh, src)) { SETAX(6); ERRCF(); }
         else {
             HANDLE nh = 0;
-            if (!DuplicateHandle(GetCurrentProcess(), m->fh[src],
-                                 GetCurrentProcess(), &nh, 0, FALSE,
-                                 DUPLICATE_SAME_ACCESS)) { SETAX(6); ERRCF(); }
+            if (!src_dev
+                && !DuplicateHandle(GetCurrentProcess(), m->fh[src],
+                                    GetCurrentProcess(), &nh, 0, FALSE,
+                                    DUPLICATE_SAME_ACCESS)) { SETAX(6); ERRCF(); }
             else if (ah == 0x45) {
-                for (dst = 0; dst < DOS_MAX_FILES; ++dst) {              /* lowest free, as DOS */
-                    if (m->fh[dst]) continue;
-                    if (dst < 5 && (m->std_open & (1u << dst))) continue;
-                    break;
-                }
-                if (dst < DOS_MAX_FILES) { m->fh[dst] = nh; SETAX(dst); OKCF(); }
-                else { CloseHandle(nh); SETAX(4); ERRCF(); }
+                dst = dos_fh_alloc((void *const *)m->fh, m->std_open);
+                if (dst >= DOS_MAX_FILES) {
+                    if (nh) CloseHandle(nh); SETAX(4); ERRCF();
+                } else if (src_dev && !dos_fh_set_device(&m->std_open, dst, 1)) {
+                    /* Past the device mask. Refuse LOUDLY rather than hand back a
+                       slot that would read as a file -- see DOS_DEV_SLOTS. */
+                    tp = zput(tp, "  INT21 AH=45 device dup past slot 0x");
+                    tp = zhex(tp, DOS_DEV_SLOTS); tp = zput(tp, " -- refused\r\n");
+                    SETAX(4); ERRCF();
+                } else { m->fh[dst] = nh; SETAX(dst); OKCF(); }
             } else {
                 dst = R_CX & 0xFFFF;
-                if (dst >= DOS_MAX_FILES) { CloseHandle(nh); SETAX(6); ERRCF(); }
+                if (dst >= DOS_MAX_FILES) { if (nh) CloseHandle(nh); SETAX(6); ERRCF(); }
+                else if (src_dev && !dos_fh_set_device(&m->std_open, dst, 1)) {
+                    tp = zput(tp, "  INT21 AH=46 device dup2 past slot 0x");
+                    tp = zhex(tp, DOS_DEV_SLOTS); tp = zput(tp, " -- refused\r\n");
+                    SETAX(4); ERRCF();
+                }
                 else { if (m->fh[dst]) CloseHandle(m->fh[dst]);
-                       m->fh[dst] = nh;
-                       if (dst < 5) m->std_open &= (uint8_t)~(1u << dst);
+                       m->fh[dst] = nh;                 /* 0 when src is a device */
+                       if (!src_dev) dos_fh_set_device(&m->std_open, dst, 0);
                        OKCF(); }
             }
         }
@@ -1198,7 +1237,7 @@ int dos_int21(dos_machine_t *m)
     } else if (ah == 0x57) {                    /* get/set file date and time */
         DWORD h57 = R_BX & 0xFFFF;
         uint8_t al57 = (uint8_t)(R_AX & 0xFF);
-        if (h57 >= DOS_MAX_FILES || !m->fh[h57]) { SETAX(6); ERRCF(); }
+        if (!dos_fh_is_file((void *const *)m->fh, h57)) { SETAX(6); ERRCF(); }
         else if (al57 == 0x00) {
             FILETIME ft, lf; WORD fdate = 0, ftime = 0;
             if (GetFileTime(m->fh[h57], NULL, NULL, &ft)
@@ -1239,7 +1278,7 @@ int dos_int21(dos_machine_t *m)
             SETAX((uint16_t)(e == ERROR_FILE_EXISTS || e == ERROR_ALREADY_EXISTS ? 80 : 3));
             ERRCF();
         } else {
-            for (slot = 5; slot < DOS_MAX_FILES && m->fh[slot]; ++slot) {}
+            slot = dos_fh_alloc((void *const *)m->fh, m->std_open);
             if (slot < DOS_MAX_FILES) { m->fh[slot] = f; SETAX(slot); OKCF(); }
             else { CloseHandle(f); SETAX(4); ERRCF(); }
         }
@@ -1247,7 +1286,7 @@ int dos_int21(dos_machine_t *m)
         DWORD h5c = R_BX & 0xFFFF;
         DWORD off = ((DWORD)(R_CX & 0xFFFF) << 16) | (DWORD)(R_DX & 0xFFFF);
         DWORD len = ((DWORD)(R_SI & 0xFFFF) << 16) | (DWORD)(R_DI & 0xFFFF);
-        if (h5c >= DOS_MAX_FILES || !m->fh[h5c]) { SETAX(6); ERRCF(); }
+        if (!dos_fh_is_file((void *const *)m->fh, h5c)) { SETAX(6); ERRCF(); }
         else {
             BOOL ok5 = ((R_AX & 0xFF) == 0)
                      ? LockFile(m->fh[h5c], off, 0, len, 0)
@@ -1264,7 +1303,7 @@ int dos_int21(dos_machine_t *m)
         else { SETAX(8); ERRCF(); }
     } else if (ah == 0x68 || ah == 0x6A) {      /* commit file (flush) */
         DWORD h68 = R_BX & 0xFFFF;
-        if (h68 >= DOS_MAX_FILES || !m->fh[h68]) { SETAX(6); ERRCF(); }
+        if (!dos_fh_is_file((void *const *)m->fh, h68)) { SETAX(6); ERRCF(); }
         else { FlushFileBuffers(m->fh[h68]); OKCF(); }
     } else if (ah == 0x6C) {                    /* extended open/create */
         /* BX=mode, CX=attributes, DX=action, DS:SI=name.
@@ -1291,7 +1330,7 @@ int dos_int21(dos_machine_t *m)
             uint16_t res = (disp == CREATE_NEW) ? 2
                          : (disp == TRUNCATE_EXISTING || disp == CREATE_ALWAYS) ? 3 : 1;
             if (disp == OPEN_ALWAYS && GetLastError() != ERROR_ALREADY_EXISTS) res = 2;
-            for (slot = 5; slot < DOS_MAX_FILES && m->fh[slot]; ++slot) {}
+            slot = dos_fh_alloc((void *const *)m->fh, m->std_open);
             if (slot < DOS_MAX_FILES) { m->fh[slot] = f; SETAX(slot); SET16(R_CX, res); OKCF(); }
             else { CloseHandle(f); SETAX(4); ERRCF(); }
         }
@@ -1303,12 +1342,16 @@ int dos_int21(dos_machine_t *m)
              code  6         -> BX=0704, CH=01   (bad handle)
            CL is left ALONE -- the oracle returns it still holding the caller's
            value, so writing it would be an invention. */
-        uint16_t e = m->last_err, bx59 = 0, ch59 = 0;
-        if (e == 2 || e == 3 || e == 18) { bx59 = 0x0803; ch59 = 0x02; }
-        else if (e == 6)                 { bx59 = 0x0704; ch59 = 0x01; }
-        else if (e) {
+        uint16_t e = m->last_err, bx59 = 0;
+        uint8_t ch59 = 0;
+        /* The table moved to src/dos/dos_err.h so the off-VM battery can pin it
+           (tools/dostest/err_test.c) and so there is exactly one place a row can
+           be added. Rows 5 (access denied) and 0x50 (file exists) were provoked
+           and measured in session 52; before that both fell into the UNMEASURED
+           arm below. */
+        if (!dos_err_classify(e, &bx59, &ch59)) {
             /* Rather than fabricate a class for a code we have not provoked on
-               real DOS, say so. Extend p_err.asm and this table together. */
+               real DOS, say so. Extend p_err.asm and dos_err.h together. */
             tp = zput(tp, "  INT21 AH=59 class/action/locus UNMEASURED for code 0x");
             tp = zhex(tp, e); tp = zput(tp, "\r\n");
         }

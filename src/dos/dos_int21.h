@@ -74,7 +74,10 @@ typedef struct {
        mean "free" for them -- and the difference is load-bearing. DOS hands out the
        LOWEST FREE handle, which is how `> file` works: the shell closes handle 1 and
        opens the target, and the target BECOMES handle 1. See AH=3Ch. */
-    uint8_t  std_open;
+    /* 32 bits, not 8: a device handle is not confined to slots 0-4. AH=45h can
+       duplicate the console into any free slot, which is how a shell saves stdout
+       before redirecting -- see DOS_DEV_SLOTS in dos_fh.h. */
+    uint32_t std_open;
 } dos_machine_t;
 
 /* Zero the handle table, set the MCB root, default DTA = PSP:0x80. */
