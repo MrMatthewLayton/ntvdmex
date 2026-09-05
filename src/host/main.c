@@ -15098,6 +15098,12 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     *(volatile WORD *)(0x2F * 4)     = 0x0040;              /* IVT[0x2F].offset    */
     *(volatile WORD *)(0x2F * 4 + 2) = DOS_HDLR_SEG;        /* IVT[0x2F].segment   */
     for (i = 0; i < sizeof(bopxms); ++i) hdlr[XMS_ENTRY_OFF + i] = bopxms[i];  /* XMS far-call entry */
+    /* ⚠ GH #47: a non-zero word at XMS_ENTRY_OFF+0x45 WAS TRIED AND REFUTED.
+       MEM.EXE at 07B5 does `cmp word [es:bx+0x45],0` and skips the whole
+       extended-memory report when it is zero, and ES:BX looked like the XMS
+       entry -- [0x2ab0]:[0x2532] is the same pair it far-calls. But the lookup
+       at 07:9F overwrites that pair first, so ES:BX is something else. Planting
+       HIMEM's own bytes (EB 50) there changed nothing. Sixth refutation. */
     for (i = 0; i < sizeof(bop67); ++i) hdlr[0x48 + i] = bop67[i];  /* INT 67h (EMM) stub */
     *(volatile WORD *)(0x67 * 4)     = 0x0048;              /* IVT[0x67].offset    */
     *(volatile WORD *)(0x67 * 4 + 2) = DOS_HDLR_SEG;        /* IVT[0x67].segment   */
@@ -16472,7 +16478,30 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             continue;
         }
         if ((VDM_REG(tib, VTIB_EVENT_INFO) & 0xFF) == 0x43) {   /* XMS API far-call entry */
-            p = zput(p, " XMS AH=0x"); p = zhex(p, (VDM_REG(tib, VTIB_EAX) >> 8) & 0xFF); p = zput(p, "\r\n");
+            /* ── LOG WHO CALLED, NOT JUST WHAT THEY ASKED. (GH #47) ───────────
+                 This printed AH and nothing else, so "MEM asks the version twice
+                 and stops" was all we could see -- not WHERE it stops, which is
+                 the actual question. The entry is reached by FAR CALL, so the
+                 return address is sitting on the guest stack at SS:SP: offset
+                 first, then segment.
+               ★ IT ALSO CRACKS THE SEGMENT MAP. MEM.EXE is relocation-free
+                 (e_crlc=0) and computes its own segment bases at run time, so
+                 static analysis cannot place the code -- a scan for callers of
+                 its AH=08h wrappers found only coincidences. One logged CS:IP
+                 pins the base, because we know which wrapper that return
+                 address follows. */
+            {   DWORD sp43 = ((VDM_REG(tib, VTIB_SS) & 0xFFFF) << 4)
+                           + (VDM_REG(tib, VTIB_ESP) & 0xFFFF);
+                const volatile BYTE *st43 = (const volatile BYTE *)(ULONG_PTR)sp43;
+                p = zput(p, " XMS AH=0x");
+                p = zhexb(p, (unsigned)((VDM_REG(tib, VTIB_EAX) >> 8) & 0xFF));
+                p = zput(p, " BL=0x"); p = zhexb(p, (unsigned)(VDM_REG(tib, VTIB_EBX) & 0xFF));
+                p = zput(p, " DX=0x"); p = zhex(p, VDM_REG(tib, VTIB_EDX) & 0xFFFF);
+                p = zput(p, " <- caller ");
+                p = zhex(p, (DWORD)(st43[2] | (st43[3] << 8)));   /* return CS */
+                p = zput(p, ":");
+                p = zhex(p, (DWORD)(st43[0] | (st43[1] << 8)));   /* return IP */
+                p = zput(p, "\r\n"); }
             log_append(LOG_PATH, base, p); p = base;
             host_xms(tib);
             VDM_REG(tib, VTIB_EIP) += 3;                        /* -> the RETF      */
