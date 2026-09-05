@@ -15356,6 +15356,11 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
              this field. The SDA has moved; see DOS_SDA_OFF.
            The value is the XMS pool, so the two cannot disagree. */
         *(volatile WORD *)(hdlr + DOS_SYSVARS_OFF + 0x45) = (WORD)XMS_POOL_KB;
+        /* ⚠ GH #47: SysVars +0x43 = 0x0103, +0x49 = 0xFFFF and +0x4B = 0x0001
+           (6.22's values, where ours are zero) were planted together as a
+           diagnostic and REFUTED -- the phantom "Upper 1,663K" did not move.
+           +0x49 was the prime suspect on the theory that zero reads as "the UMB
+           chain starts at segment 0". It does not. Seventh refutation. */
         hdlr[DOS_SYSVARS_OFF + SV_NBLOCKDEV] = (BYTE)nd;
         /* ---- the device chain. The NUL header is INLINE at +0x22, not a pointer
                to one (measured on 6.22), and it TERMINATES: we install no block or
