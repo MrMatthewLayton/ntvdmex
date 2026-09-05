@@ -44,6 +44,7 @@
 #include "dos_int21.h"
 #include "dos_layout.h"
 #include "dos_disk.h"       /* GH #44: image geometry + CHS<->LBA */
+#include <tlhelp32.h>
 #include "dos_recovery.h"   /* GH #132: what to do when we will not start */
 #include "dos_sysvars.h"   /* GH #48: the List of Lists, built to the measured 6.22 layout */
 #include "dos_ctab.h"
@@ -2356,6 +2357,7 @@ static HANDLE g_stdio = INVALID_HANDLE_VALUE;
    before a later log_write(LOG_PATH,...) TRUNCATES the file, so it never
    survived to be read -- which looked exactly like the code not running. */
 static const char *g_stdio_how = "(not initialised)";
+static DWORD g_stdio_ppid;   /* GH #131: whose child we turned out to be */
 static char   g_stdio_buf[512];
 static unsigned g_stdio_n = 0;
 
@@ -2380,6 +2382,30 @@ static const char *stdio_init(void)
         g_stdio = CreateFileA("CONOUT$", GENERIC_WRITE, FILE_SHARE_WRITE, NULL,
                               OPEN_EXISTING, 0, NULL);
         if (g_stdio != INVALID_HANDLE_VALUE) return "attached parent console";
+    }
+    /* ── ATTACH_PARENT_PROCESS FAILED. FIND THE PARENT OURSELVES. (GH #131) ───
+         That constant asks the kernel for "the process that created me", and an
+         IFEO-substituted image is not created the way a normal child is -- which
+         is one explanation for why it fails here while stock ntvdm has a console.
+         So walk the process list, find whose child we are, and attach to THAT
+         pid explicitly. If the answer is the same, this fails the same way and
+         we have eliminated a second route rather than assumed one. */
+    {   HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+        DWORD me = GetCurrentProcessId(), ppid = 0;
+        if (snap != INVALID_HANDLE_VALUE) {
+            PROCESSENTRY32 pe; pe.dwSize = sizeof(pe);
+            if (Process32First(snap, &pe)) {
+                do { if (pe.th32ProcessID == me) { ppid = pe.th32ParentProcessID; break; } }
+                while (Process32Next(snap, &pe));
+            }
+            CloseHandle(snap);
+        }
+        if (ppid && AttachConsole(ppid)) {
+            g_stdio = CreateFileA("CONOUT$", GENERIC_WRITE, FILE_SHARE_WRITE, NULL,
+                                  OPEN_EXISTING, 0, NULL);
+            if (g_stdio != INVALID_HANDLE_VALUE) return "attached console by parent pid";
+        }
+        g_stdio_ppid = ppid;              /* reported at exit either way */
     }
     return "none (no console, no redirect)";
 }
@@ -18396,7 +18422,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     p = zput(p, "; clean exit -> failure counter cleared (GH #132)\r\n");
     recovery_ok();                       /* GH #132: this run ended cleanly */
     p = zput(p, "STAGE2: stdout -> "); p = zput(p, g_stdio_how);
-    p = zput(p, g_stdio != INVALID_HANDLE_VALUE ? " [LIVE]\r\n" : " [buffered only]\r\n");
+    p = zput(p, g_stdio != INVALID_HANDLE_VALUE ? " [LIVE]" : " [buffered only]");
+    p = zput(p, " ppid=0x"); p = zhex(p, g_stdio_ppid); p = zput(p, "\r\n");
     {
         HANDLE hcon = (g_stdio == INVALID_HANDLE_VALUE)
             ? CreateFileA("CONOUT$", GENERIC_WRITE, FILE_SHARE_WRITE, NULL,
