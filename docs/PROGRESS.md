@@ -32,5 +32,5 @@ recorded here so the first day's delta is not lost.
 | Date | Overall | DOS | WoW16 | Product | What moved |
 |---|---|---|---|---|---|
 <!-- SCORES -->
-| 2026-09-05 | **72.2** | 83.7 | 67.7 | 41.2 | #44,#49,#50,#45,#52,#132 CLOSED; #15 REFUTED; #47 root cause found (SDA on SysVars+0x45); #130 target.txt precedence; INT 20h child-exit fixed; stock-oracle harness fixed. Suite 893->1036. |
+| 2026-09-05 | **72.4** | 83.7 | 67.7 | 43.0 | #44,#49,#50,#45,#52,#132 CLOSED; #15 REFUTED; #47 root cause (SDA on SysVars+0x45); #130 target.txt precedence; INT 20h child-exit; launch matrix comparison real -- stock REFUSES MEM.EXE. Suite 893->1036. |
 | 2026-09-04 | **61.7** | 63.6 | 67.7 | 26.2 | Measured the redraw: log 9%, pump 0%, repaint ~10ms. Latency hypothesis refuted. |
