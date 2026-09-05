@@ -146,6 +146,18 @@ typedef struct video_state {
        misaligns every glyph after the first, which looks exactly like garbled text.
        Recorded per call so the log says which table Skyroads wants. */
     struct { uint8_t al, bh; uint16_t seg, off, cx; } font_q[4];
+    /* ── GH #52: A USER-LOADED TEXT FONT, AND THE RENDERER READS IT. ──────────
+         INT 10h AH=11h AL=00h/10h loads a caller-supplied character generator.
+         We used to accept those calls, announce them as unimplemented and draw
+         from the ROM table anyway -- so a program that loaded its own glyphs got
+         the stock ones and no error. `user_font_rows` is bytes per character as
+         the caller declared it; rows beyond it are blanked, because a cell is
+         VID_CELL_H tall whatever the font supplies.
+         `user_font_on` stays 0 until a load actually lands, so the ordinary case
+         costs one branch and draws from the ROM exactly as before. */
+    uint8_t  user_font[256 * 16];
+    uint8_t  user_font_rows;
+    uint8_t  user_font_on;
     uint8_t  font_qn;
     /* Every mode set, with what it RESOLVED TO. Added after a mode-table change
        silently altered mode 12h rendering: the STAGE2 line said "modes

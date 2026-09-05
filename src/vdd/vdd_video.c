@@ -565,12 +565,50 @@ static void int10(void *self, ntvdd_regs *r)
                 st->font_qn++;
             }
         } else if ((al & 0x0F) <= 0x04 && (al <= 0x04 || (al >= 0x10 && al <= 0x14))) {
-            /* Load a user-supplied or ROM font.  We render from our own tables,
-               so a user font cannot change what is drawn -- and pretending
-               otherwise would silently give the caller the wrong glyphs. Accept
-               the ROM-font selections (AL=x1/x2/x3/x4), which only pick between
-               tables we DO have, and announce the user-font loads (AL=x0). */
-            if ((al & 0x0F) == 0x00) VID_UNIMPL_SET(st->unimpl_fn, 0x11);
+            /* ── AL=x0 LOADS THE CALLER'S OWN GLYPHS, AND NOW THEY GET DRAWN. ──
+                 This used to accept the call, mark it unimplemented and keep
+                 drawing from the ROM table -- so a program that loaded a custom
+                 character set saw the stock font and no error at all. That is
+                 the silent-wrong-output class: the call succeeded, the screen
+                 was wrong, and nothing said so.
+                 ES:BP = the table, CX = how many characters, DX = the first
+                 character, BH = bytes per character, BL = the font block.
+                 AL=x1/x2/x3/x4 select ROM fonts, which is a request to go BACK
+                 to our own tables -- so they clear the override rather than
+                 leaving a stale user font in place. (GH #52) */
+            if ((al & 0x0F) == 0x00) {
+                uint16_t fseg = r->es, foff = (uint16_t)(r->ebp & 0xFFFF);
+                uint16_t cnt = (uint16_t)r_cx(r), first = (uint16_t)r_dx(r);
+                uint8_t  bpc = (uint8_t)((r_bx(r) >> 8) & 0xFF);
+                const uint8_t *src = (const uint8_t *)vdd_map_flat(st->bus, fseg, foff);
+                if (!src || bpc == 0 || bpc > VID_CELL_H) {
+                    /* Cannot represent it -- a cell is VID_CELL_H tall. Say so
+                       rather than store something the renderer would misread. */
+                    VID_UNIMPL_SET(st->unimpl_fn, 0x11);
+                } else {
+                    unsigned i, y;
+                    if (!st->user_font_on) {       /* seed from ROM so characters
+                                                      the caller does NOT supply
+                                                      still draw as themselves */
+                        unsigned c2;
+                        for (c2 = 0; c2 < 256; ++c2)
+                            for (y = 0; y < VID_CELL_H; ++y)
+                                st->user_font[c2 * VID_CELL_H + y] = vga_font_8x16[c2][y];
+                    }
+                    for (i = 0; i < cnt && (first + i) < 256; ++i) {
+                        unsigned ch2 = first + i;
+                        for (y = 0; y < VID_CELL_H; ++y)
+                            st->user_font[ch2 * VID_CELL_H + y] =
+                                (y < bpc) ? src[i * bpc + y] : 0;
+                    }
+                    st->user_font_rows = bpc;
+                    st->user_font_on = 1;
+                    st->dirty = 1;
+                }
+            } else {
+                st->user_font_on = 0;              /* back to the ROM tables */
+                st->dirty = 1;
+            }
             s_dx(r, (uint16_t)(st->rows ? st->rows - 1 : 24));
         } else if (al >= 0x20 && al <= 0x24) {
             /* Set the graphics-mode font pointer used by INT 43h / INT 1Fh. */
@@ -1149,7 +1187,10 @@ void vdd_video_render(video_state *st)                 /* text glyph render     
             uint8_t *p = cell(st, r, c);
             uint8_t ch = p[0], attr = p[1];
             uint8_t fg = attr & 0x0F, bg = (uint8_t)((attr >> 4) & 0x07);
-            const uint8_t *gl = vga_font_8x16[ch];
+            /* GH #52: a loaded user font wins; otherwise the ROM table, which
+               is the ordinary case and one predictable branch. */
+            const uint8_t *gl = st->user_font_on ? &st->user_font[ch * VID_CELL_H]
+                                                 : vga_font_8x16[ch];
             for (gy = 0; gy < VID_CELL_H; ++gy) {
                 uint8_t bits = gl[gy];
                 uint8_t *row = &st->fb[(r*VID_CELL_H + gy) * VID_FB_W + c*VID_CELL_W];

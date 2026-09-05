@@ -96,6 +96,74 @@ int main(void)
           uint8_t e=(gl[gy]&(0x80>>gx))?15:0; if(vid.fb[gy*VID_FB_W+gx]!=e)mism++; }
       CHECK(mism==0, "render: text cell matches font glyph 'A'"); }
 
+    /* T4b: A USER-LOADED FONT MUST CHANGE WHAT IS DRAWN.  GH #52 -----------
+       INT 10h AH=11h AL=00h loads the caller's own character generator. It used
+       to be accepted, marked unimplemented, and IGNORED -- the ROM glyphs were
+       drawn anyway, so a program that installed a custom character set got the
+       stock font and no error. Silent wrong output, which is the whole point of
+       GH #27. The check is deliberately a RENDER, not a "did the call return
+       ok": the old code returned ok too. */
+    { uint16_t fseg = 0x4000, foff = 0x0000;
+      uint8_t *fb2 = &g_flat[(fseg << 4) + foff];
+      int gy, gx, solid = 1;
+      memset(fb2, 0xFF, 16);                       /* one glyph: every pixel set */
+      memset(&r,0,sizeof r);
+      s_ah(&r,0x11); s_al(&r,0x00);
+      s_bx(&r,(uint16_t)(16 << 8));                /* BH = 16 bytes per char     */
+      s_cx(&r,1);                                  /* one character              */
+      s_dx(&r,'A');                                /* starting at 'A'            */
+      r.es = fseg; r.ebp = foff;
+      vdd_bus_deliver_int(&bus,0x10,&r);
+      CHECK(vid.user_font_on == 1, "int10/11/00: a user font load is recorded");
+      vdd_video_render(&vid);
+      for(gy=0;gy<VID_CELL_H;++gy)for(gx=0;gx<VID_CELL_W;++gx)
+          if(vid.fb[gy*VID_FB_W+gx] != 15) solid = 0;
+      CHECK(solid, "int10/11/00: the USER glyph is drawn, not the ROM one");
+
+      /* A character the caller did NOT supply must still draw as itself --
+         the table is seeded from ROM, so loading one glyph cannot blank the
+         other 255. */
+      memset(&r,0,sizeof r); s_ah(&r,0x02); s_dx(&r,(uint16_t)((0<<8)|1));
+      vdd_bus_deliver_int(&bus,0x10,&r);
+      memset(&r,0,sizeof r); s_ah(&r,0x09); s_al(&r,'B'); s_bx(&r,0x0F); s_cx(&r,1);
+      vdd_bus_deliver_int(&bus,0x10,&r);
+      /* Park the cursor off in the corner FIRST. vdd_video_render draws the text
+         cursor over the cell it sits on, so leaving it here compares a glyph
+         against a glyph-plus-cursor -- which is what made this check fail on its
+         first run, in the TEST and not in the code. T4 above moves it to
+         (24,79) for exactly the same reason. */
+      memset(&r,0,sizeof r); s_ah(&r,0x02); s_dx(&r,(uint16_t)((24<<8)|79));
+      vdd_bus_deliver_int(&bus,0x10,&r);
+      vdd_video_render(&vid);
+      CHECK(cchar(0,1)=='B', "int10/09: 'B' landed at row 0 col 1");
+      { int mism2=0; const uint8_t *gl2=vga_font_8x16['B'];
+        for(gy=0;gy<VID_CELL_H;++gy)for(gx=0;gx<VID_CELL_W;++gx){
+            uint8_t e=(gl2[gy]&(0x80>>gx))?15:0;
+            if(vid.fb[gy*VID_FB_W + VID_CELL_W + gx]!=e) mism2++; }
+        CHECK(mism2==0, "int10/11/00: unsupplied chars keep their ROM glyphs"); }
+
+      /* AL=02h selects a ROM font, which is a request to go BACK -- it must
+         clear the override rather than leave a stale user font installed. */
+      memset(&r,0,sizeof r); s_ah(&r,0x11); s_al(&r,0x02); s_bx(&r,0);
+      vdd_bus_deliver_int(&bus,0x10,&r);
+      CHECK(vid.user_font_on == 0, "int10/11/02: a ROM-font select clears the override");
+      vdd_video_render(&vid);
+      { int mism3=0; const uint8_t *gl3=vga_font_8x16['A'];
+        for(gy=0;gy<VID_CELL_H;++gy)for(gx=0;gx<VID_CELL_W;++gx){
+            uint8_t e=(gl3[gy]&(0x80>>gx))?15:0;
+            if(vid.fb[gy*VID_FB_W+gx]!=e) mism3++; }
+        CHECK(mism3==0, "int10/11/02: ...and 'A' is the ROM glyph again"); }
+
+      /* A cell is VID_CELL_H tall, so a font taller than that cannot be drawn.
+         REFUSE it and mark the function unimplemented rather than store rows
+         the renderer would silently truncate. */
+      memset(&r,0,sizeof r);
+      s_ah(&r,0x11); s_al(&r,0x00); s_bx(&r,(uint16_t)(32 << 8));
+      s_cx(&r,1); s_dx(&r,'A'); r.es = fseg; r.ebp = foff;
+      vdd_bus_deliver_int(&bus,0x10,&r);
+      CHECK(vid.user_font_on == 0, "int10/11/00: a font taller than the cell is REFUSED");
+    }
+
     /* T5: text frame is 640x400x8 --------------------------------------- */
     vid.dirty=1; vdd_bus_frame(&bus);
     CHECK(vid.frame.w==640 && vid.frame.h==400 && vid.frame.bpp==8,
