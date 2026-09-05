@@ -14,3 +14,31 @@ regression for every program on the box, not just the one under test.
 | 3 | DOS program that EXECs a child | `p_exec.com` | [child ran] CASE=int21.4B.exec SIG=CF AX=0000 BX=03C0 CX=C1C1 DX=03A7 SI=02C9 DI=0000 DS=0100 ES=0100 FL=3246  |  |
 | 4 | DPMI / protected-mode client | `dpmitest.com` | DPMI present -> far-calling the mode-switch entry... [printed via INT 31h 0300 -> real-mode INT 21h AH=09] DPM |  |
 | 5 | handle redirection inside the guest | `p_redir.com` | CASE=int21.3c.baseline SIG=AX,CF AX=0005 BX=0000 CX=0000 DX=04BF SI=02E1 DI=0000 DS=0100 ES=0100 FL=3246 CF=0  |  |
+
+## ⚠ The stock column is NOT trustworthy yet, and that is the finding
+
+The NTVDMEX column above is real: each cell is that program's own output from a
+run whose result file's mtime moved past the moment it was queued, and whose
+`#PROBE` banner names the target we asked for.
+
+**The stock column is blank because the comparison could not be obtained**, not
+because stock ntvdm printed nothing. Two faults, both in the harness:
+
+* `rt_stock.bat` copies `C:\test\stock_out.txt` to the share **and does not check
+  that the copy succeeded**. When a stock run produces no output the copy fails
+  and the PREVIOUS row's result file survives untouched — so five different
+  targets reported one identical 736-byte DPMI log, and reported it as success.
+* Redirecting a 16-bit program's output under stock ntvdm (`start /wait cmd /c
+  "prog > file"`) worked once and then stopped, which is the thing to diagnose
+  before this table can mean anything.
+
+Until that is fixed, **this table answers "what does NTVDMEX do" and not the
+question #140 actually asks**, which is "does it do what stock does". Recorded
+rather than quietly presented as a comparison, because a matrix with a
+plausible-looking empty column is worse than no matrix.
+
+**Row 6 of #140 — "a program that fails to load" — is deliberately absent.**
+Automating it wedged the rig: stock ntvdm raises a modal dialog for a missing
+image, blocking `rt_stock.bat` in `start /wait` with no exit path, and the IFEO
+Debugger key it removes on entry is then never restored — after which every run
+silently measures stock ntvdm. That row needs a human at the box.
