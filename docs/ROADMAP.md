@@ -18,8 +18,8 @@ foundation as everything before it.
 
 ## Where it is, as of session 54 (2026-09-06)
 
-`./tools/score/score.py` says **79.7%** of the full vision — MS-DOS **85.4%**,
-WOW/Win16 **78.7%**, Product/Packaging **57.5%**. Against the two narrower bars:
+`./tools/score/score.py` says **80.2%** of the full vision — MS-DOS **85.9%**,
+WOW/Win16 **78.7%**, Product/Packaging **61.6%**. Against the two narrower bars:
 
 - **The DOS games bar** (Doom / Skyroads / ZAR, flawless sound) — two of three fully
   playable and user-confirmed by hand and by ear. ZAR is the gap.
@@ -296,9 +296,7 @@ sessions 39–53.
   out above `settings_apply()` in `src/host/main.c`, which is the honest list. The largest
   remaining piece is the **CPU page**, which needs a duty-cycle throttle on the exec loop (#56).
 - [ ] Pluggable VDD/driver SDK + docs for third-party developers (#11) — **not started**
-- [ ] Installer/registration tooling (#13) — **no longer blocked on M6.** Installing means
-  `reg add` by hand today; a product needs a command or a UI that does it, checks for an
-  existing value and can put it back.
+- [x] Installer/registration tooling (#13) — done as a command and a menu; see M10.
 
 ## M9 — DOS/BIOS completeness (TDD) 🟡 IN PROGRESS
 **The method, and it is the point of the milestone:** close every DOS/BIOS gap **test-first
@@ -367,6 +365,14 @@ Making NTVDMEX the machine's VDM, **reversibly**. This is what turns a host into
   ► And the target is proven reachable by the oracle rather than by argument: `hello.com >
   out.txt` typed at `cmd` writes **136 bytes under stock ntvdm and 0 under ours**, same box,
   same command.
-- [ ] An actual **installer** (#13, shared with M8) — see above.
+- [x] **An installer** (#13, shared with M8) — `ntvdmhost.exe /install`, `/uninstall`,
+  `/status`, and the same three on the File menu behind a confirmation. It **checks for
+  an existing value and can put it back**: a `Debugger` belonging to another program is
+  saved before we displace it and restored on uninstall, and one we never installed is
+  **refused** rather than deleted. Every claim is verified by reading the value back,
+  not by a return code. Rig-gated behaviourally on all six cases.
+  ⚠ Remaining: there is no **package** — nothing that copies the exe somewhere sensible,
+  makes a Start Menu entry, or uninstalls through Add/Remove Programs. The routing half
+  is done; the shipping half is not.
 - **Exit:** the box can be left with NTVDMEX installed as its VDM, and nothing a user or a
   batch file does behaves differently except for being better.

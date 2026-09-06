@@ -124,6 +124,16 @@ cc -std=c99 -Wall -Wextra -Wno-unused-function -O0 -g \
 
 "$DIR/present_test"
 
+# GH #13/#130: the install/uninstall DECISION -- is that Debugger value ours, and
+# what should be done about it. The registry calls need a machine; every failure
+# mode of the decision is silent and expensive on a real box (reporting "installed"
+# on one that is not, refusing to remove our own value, deleting somebody else's).
+cc -std=c99 -Wall -Wextra -Wno-unused-function -O0 -g \
+   -I "$DIR/../../src/host" \
+   -o "$DIR/install_test" "$DIR/install_test.c"
+
+"$DIR/install_test"
+
 # GH #56: the CPU-speed throttle's arithmetic -- the duty cycle, the millisecond
 # Bresenham behind it, and the interpreter's instruction budget. The throttle needs
 # a suspended thread and a real guest; what it is MADE OF is integer arithmetic, and

@@ -339,6 +339,50 @@ int main(void)
         CHECK(a != b, "3DA: with no clock injected the legacy toggle remains"); }
     }
 
+
+    /* ── ★ THE CURSOR'S SHAPE, IN THE UNITS DOS ACTUALLY ASKS IN. ────────────────
+         DOS sets its cursor in SCAN LINES of an 8-line character cell, because that
+         is the machine it was written for. Our cell is 16 lines, so honouring those
+         numbers literally puts the underline halfway up -- rendered as "ABC123-"
+         where a real DOS box shows "ABC123_". These are the exact shapes DOS uses,
+         so a regression here is visible on every prompt. */
+    {   unsigned st0 = 99, en = 99; int hid = 9;
+
+        vdd_cursor_lines(0x0607, 16, &st0, &en, &hid);
+        CHECK(st0 == 14 && en == 15 && !hid,
+              "cursor 6-7 (DOS overwrite underline) scales to 14-15: the BOTTOM two lines");
+
+        vdd_cursor_lines(0x0007, 16, &st0, &en, &hid);
+        CHECK(st0 == 1 && en == 15 && !hid,
+              "cursor 0-7 (DOS INSERT mode) scales to 1-15: a full block");
+
+        /* ⚠ The two-line branch. Scaling both ends the ordinary way would give
+             13-15 -- three lines -- and the underline would be visibly fat. */
+        CHECK((0x0607 >> 8) + 1 == (0x0607 & 0x1f),
+              "...and 6-7 IS the adjacent-line case that branch exists for");
+
+        vdd_cursor_lines(0x0507, 16, &st0, &en, &hid);
+        CHECK(st0 == 11 && en == 15 && !hid, "cursor 5-7 (half block) scales to 11-15");
+
+        /* A shape that already knows about 16-line cells must NOT be scaled again. */
+        vdd_cursor_lines(0x0D0F, 16, &st0, &en, &hid);
+        CHECK(st0 == 13 && en == 15 && !hid,
+              "cursor 13-15 is already in 16-line units and is left alone");
+
+        /* Hiding, both idioms. */
+        vdd_cursor_lines(0x2607, 16, &st0, &en, &hid);
+        CHECK(hid, "CH bit 5 hides the cursor, and is not mistaken for a scan line");
+        vdd_cursor_lines(0x0F0E, 16, &st0, &en, &hid);
+        CHECK(hid, "start past end is the other 'no cursor' idiom");
+
+        /* An 8-line cell must pass through untouched -- that is what the guard is for. */
+        vdd_cursor_lines(0x0607, 8, &st0, &en, &hid);
+        CHECK(st0 == 6 && en == 7 && !hid, "on a real 8-line cell nothing is scaled");
+
+        /* Never off the end of the cell, whatever is asked for. */
+        vdd_cursor_lines(0x1F1F, 16, &st0, &en, &hid);
+        CHECK(st0 < 16 && en < 16, "an out-of-range shape is clamped inside the cell"); }
+
     printf("\n%d checks, %d failed\n", total, fails);
     return fails ? 1 : 0;
 }

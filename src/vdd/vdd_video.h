@@ -203,6 +203,23 @@ static inline ntvdd vdd_video_device(video_state *st)
   d.shutdown = 0; d.self = st; return d; }
 
 void vdd_video_render(video_state *st);                /* text glyph render        */
+/* ── ★ CURSOR EMULATION: AN 8-LINE SHAPE ON A 16-LINE CELL. ─────────────────────
+     DOS asks for its cursor in SCAN LINES, and it asks in the units of the machine
+     it was written for -- an 8-line character cell, where an underline is lines 6-7
+     and the insert-mode block is 0-7. Our cell is 16 lines (an 8x16 VGA font), so
+     honouring those numbers literally puts the underline HALFWAY UP THE CELL, which
+     is what "ABC123-" instead of "ABC123_" looks like. It was our own default doing
+     it too: cur_shape starts at 0x0607.
+   ► Real VGA BIOSes solve this with CURSOR EMULATION, and this is their rule (the
+     IBM/Bochs/SeaBIOS one, followed exactly rather than approximated): when the cell
+     is taller than 8 and the request is in 8-line units, scale it up. Which is also
+     what gives MS-DOS's insert/overwrite cursors for free -- 6-7 becomes 14-15, a
+     bottom underline, and 0-7 becomes 1-15, a full block -- because those are the
+     two shapes DOS sets when you press Insert.
+   Pure arithmetic on the shape word, so tools/dostest/video_test.c can pin the exact
+   shapes DOS uses. `hidden` is set for the two idioms that mean "no cursor". */
+void vdd_cursor_lines(uint16_t shape, unsigned cell_h,
+                      unsigned *start, unsigned *end, int *hidden);
 void vdd_video_putc(video_state *st, uint8_t ch);      /* console teletype sink    */
 
 /* Planar A0000 access (mode 12h): the host calls these from the memory-write trap

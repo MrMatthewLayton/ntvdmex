@@ -20,6 +20,7 @@
 #include "log.h"
 #include "settings.h"   /* registry-backed knobs + the Settings dialog */
 #include "pcspeaker.h"  /* the OTHER speaker: the one on the motherboard */
+#include "install.h"    /* GH #13: becoming the machine's VDM, reversibly */
 #include "x86len.h"     /* which `CD nn` byte pairs are really INT instructions */
 #include "../wow/ne.h"  /* GH #128: 16-bit New Executable loader (WOW bootstrap) */
 #include "../wow/wow32.h" /* GH #128: the 32-bit half -- krnl386's calls out to Win32 */
@@ -2278,6 +2279,230 @@ static void recovery_write(unsigned v)
 /* Cleared only from the clean-exit path: an aborted run must leave it raised. */
 static void recovery_ok(void) { DeleteFileA(STARTFAIL_PATH); }
 
+/* ── ★ THE INSTALLER. (GH #13) ───────────────────────────────────────────────────
+     Everything above install.h's line is decision-making with no Windows in it and
+     is tested off the VM; this is the half that touches the machine.
+   ⚠ HKLM, SO IT NEEDS ADMINISTRATOR. On XP the logged-in user usually is one, but
+     "usually" is not "always" and a failed write must say WHY rather than reporting
+     a success the machine did not perform -- that is the failure this whole feature
+     exists to remove. Every function here returns the Win32 error so the caller can. */
+
+/* Read the current Debugger value. Returns 1 if a value was read (into buf). */
+static int install_read(char *buf, DWORD cap)
+{
+    HKEY k; DWORD ty = 0, n = cap;
+    LONG rc = RegOpenKeyExA(HKEY_LOCAL_MACHINE, INSTALL_KEY, 0, KEY_QUERY_VALUE, &k);
+    buf[0] = 0;
+    if (rc != ERROR_SUCCESS) return 0;
+    rc = RegQueryValueExA(k, INSTALL_VAL, NULL, &ty, (LPBYTE)buf, &n);
+    RegCloseKey(k);
+    if (rc != ERROR_SUCCESS || ty != REG_SZ) { buf[0] = 0; return 0; }
+    if (n >= cap) n = cap - 1;
+    buf[n] = 0;
+    return 1;
+}
+
+/* The displaced value, kept beside our own settings. */
+static int install_prev_read(char *buf, DWORD cap)
+{
+    HKEY k; DWORD ty = 0, n = cap;
+    LONG rc = RegOpenKeyExA(HKEY_CURRENT_USER, NTVDMEX_REG_KEY, 0, KEY_QUERY_VALUE, &k);
+    buf[0] = 0;
+    if (rc != ERROR_SUCCESS) return 0;
+    rc = RegQueryValueExA(k, INSTALL_PREV_VAL, NULL, &ty, (LPBYTE)buf, &n);
+    RegCloseKey(k);
+    if (rc != ERROR_SUCCESS || ty != REG_SZ || !buf[0]) { buf[0] = 0; return 0; }
+    if (n >= cap) n = cap - 1;
+    buf[n] = 0;
+    return 1;
+}
+
+static void install_prev_write(const char *v)
+{
+    HKEY k; DWORD disp;
+    if (RegCreateKeyExA(HKEY_CURRENT_USER, NTVDMEX_REG_KEY, 0, NULL, 0,
+                        KEY_SET_VALUE, NULL, &k, &disp) != ERROR_SUCCESS) return;
+    if (v && v[0]) {
+        DWORD n = 0; while (v[n]) ++n;
+        RegSetValueExA(k, INSTALL_PREV_VAL, 0, REG_SZ, (const BYTE *)v, n + 1);
+    } else {
+        RegDeleteValueA(k, INSTALL_PREV_VAL);
+    }
+    RegCloseKey(k);
+}
+
+/* Set (v non-NULL) or delete (v NULL) the IFEO Debugger value. Returns a Win32
+   error code; ERROR_SUCCESS means the machine now says what we asked it to. */
+static LONG install_write(const char *v)
+{
+    HKEY k; DWORD disp; LONG rc;
+    rc = RegCreateKeyExA(HKEY_LOCAL_MACHINE, INSTALL_KEY, 0, NULL, 0,
+                         KEY_SET_VALUE, NULL, &k, &disp);
+    if (rc != ERROR_SUCCESS) return rc;
+    if (v) { DWORD n = 0; while (v[n]) ++n;
+             rc = RegSetValueExA(k, INSTALL_VAL, 0, REG_SZ, (const BYTE *)v, n + 1); }
+    else   { rc = RegDeleteValueA(k, INSTALL_VAL);
+             if (rc == ERROR_FILE_NOT_FOUND) rc = ERROR_SUCCESS; }
+    RegCloseKey(k);
+    return rc;
+}
+
+/* Our own full path, which is what the value has to contain. */
+static void install_self_path(char *buf, DWORD cap)
+{
+    if (!GetModuleFileNameA(NULL, buf, cap)) buf[0] = 0;
+}
+
+/* ── DO IT, AND REPORT WHAT ACTUALLY HAPPENED. ───────────────────────────────────
+     `want` is 1 to install, 0 to uninstall. The message is composed here rather
+     than by the caller so the same words are used from the command line and from
+     the menu -- and so a refusal names the program it is refusing to disturb.
+   ★ IT VERIFIES BY READING BACK. This project has been bitten more than once by a
+     registry value that reads correctly and does not route, and by a write that
+     silently did nothing; reporting success on the strength of a return code alone
+     is the same class of claim. Read it again and classify it again. */
+static int install_perform(int want, char *msg, DWORD cap)
+{
+    char self[NTVDMEX_PATH_MAX], cur[NTVDMEX_PATH_MAX], prev[NTVDMEX_PATH_MAX];
+    char *p = msg;
+    install_state st;
+    install_action act;
+    LONG rc = ERROR_SUCCESS;
+    int have_prev;
+    (void)cap;
+
+    install_self_path(self, sizeof self);
+    install_read(cur, sizeof cur);
+    have_prev = install_prev_read(prev, sizeof prev);
+    st  = install_classify(cur[0] ? cur : NULL, self);
+    act = install_plan(st, want, have_prev);
+
+    switch (act) {
+    case INSTALL_ACT_NOTHING:
+        p = zput(p, want ? "NTVDMEX is already installed as this machine's VDM.\r\n"
+                         : "NTVDMEX is not installed; nothing to remove.\r\n");
+        break;
+    case INSTALL_ACT_REFUSE:
+        p = zput(p, "REFUSED: the ntvdm.exe Debugger value points at another "
+                    "program, not at NTVDMEX:\r\n    ");
+        p = zput(p, cur);
+        p = zput(p, "\r\nRemoving it would break whatever that is. Nothing changed.\r\n");
+        return 0;
+    case INSTALL_ACT_WRITE:
+        /* Save what we are about to displace, so uninstall can put it back. Only
+           when it is somebody else's -- overwriting our own path with our own path
+           must not record US as the thing to restore. */
+        if (st == INSTALL_OTHER) install_prev_write(cur);
+        rc = install_write(self);
+        break;
+    case INSTALL_ACT_RESTORE:
+        rc = install_write(prev);
+        if (rc == ERROR_SUCCESS) install_prev_write(NULL);
+        break;
+    case INSTALL_ACT_DELETE:
+        rc = install_write(NULL);
+        break;
+    }
+
+    if (rc != ERROR_SUCCESS) {
+        p = zput(p, rc == ERROR_ACCESS_DENIED
+            ? "FAILED: access denied writing HKEY_LOCAL_MACHINE.\r\n"
+              "Installing changes a machine-wide setting, so it needs an "
+              "Administrator account.\r\n"
+            : "FAILED: could not write the registry (error 0x");
+        if (rc != ERROR_ACCESS_DENIED) { p = zhex(p, (DWORD)rc); p = zput(p, ").\r\n"); }
+        return 0;
+    }
+    if (act == INSTALL_ACT_NOTHING) return 1;
+
+    /* ── THE READ-BACK. */
+    install_read(cur, sizeof cur);
+    st = install_classify(cur[0] ? cur : NULL, self);
+    if (want && st != INSTALL_OURS) {
+        p = zput(p, "FAILED: the value was written but does not read back as ours.\r\n");
+        return 0;
+    }
+    if (!want && st == INSTALL_OURS) {
+        p = zput(p, "FAILED: the value was removed but still reads back as ours.\r\n");
+        return 0;
+    }
+    if (want) {
+        p = zput(p, "INSTALLED. Every MS-DOS and 16-bit Windows launch on this "
+                    "machine now runs through NTVDMEX:\r\n    ");
+        p = zput(p, self);
+        p = zput(p, "\r\nUninstall with:  ntvdmhost.exe /uninstall\r\n");
+    } else {
+        p = zput(p, act == INSTALL_ACT_RESTORE
+            ? "UNINSTALLED, and the Debugger value we displaced has been put back:\r\n    "
+            : "UNINSTALLED. This machine uses its own ntvdm.exe again.\r\n");
+        if (act == INSTALL_ACT_RESTORE) { p = zput(p, cur); p = zput(p, "\r\n"); }
+    }
+    return 1;
+}
+
+/* Where we stand right now, in words, for `/status` and for the menu. */
+static void install_status_text(char *msg, DWORD cap)
+{
+    char self[NTVDMEX_PATH_MAX], cur[NTVDMEX_PATH_MAX];
+    char *p = msg;
+    install_state st;
+    (void)cap;
+    install_self_path(self, sizeof self);
+    install_read(cur, sizeof cur);
+    st = install_classify(cur[0] ? cur : NULL, self);
+    p = zput(p, "This executable:\r\n    "); p = zput(p, self); p = zput(p, "\r\n\r\n");
+    switch (st) {
+    case INSTALL_OURS:
+        p = zput(p, "INSTALLED -- MS-DOS and 16-bit Windows launches on this machine "
+                    "run through NTVDMEX.\r\n"); break;
+    case INSTALL_OTHER:
+        p = zput(p, "NOT INSTALLED, and the ntvdm.exe Debugger value belongs to "
+                    "another program:\r\n    ");
+        p = zput(p, cur); p = zput(p, "\r\n"); break;
+    default:
+        p = zput(p, "NOT INSTALLED -- this machine uses its own ntvdm.exe.\r\n"); break;
+    }
+}
+
+/* Which verb, if any, this command line asks for: 0 install, 1 uninstall,
+   2 status, -1 none. The verb must be the FIRST argument -- see the call site. */
+static int install_verb(const char *cmd)
+{
+    static const char *const V[3] = { "install", "uninstall", "status" };
+    int i, k;
+    if (!cmd) return -1;
+    /* Step over argv[0], quoted or not. */
+    if (*cmd == '"') { ++cmd; while (*cmd && *cmd != '"') ++cmd; if (*cmd) ++cmd; }
+    else             { while (*cmd && *cmd != ' ' && *cmd != '\t') ++cmd; }
+    while (*cmd == ' ' || *cmd == '\t') ++cmd;
+    if (*cmd != '/' && *cmd != '-') return -1;
+    while (*cmd == '/' || *cmd == '-') ++cmd;
+    for (i = 0; i < 3; ++i) {
+        for (k = 0; V[i][k]; ++k) {
+            char c = cmd[k];
+            if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a');
+            if (c != V[i][k]) break;
+        }
+        if (!V[i][k] && (!cmd[k] || cmd[k] == ' ' || cmd[k] == '\t')) return i;
+    }
+    return -1;
+}
+
+/* stdout if we have one, a message box if we do not. */
+static void install_report(const char *msg, int ok)
+{
+    HANDLE h = GetStdHandle(STD_OUTPUT_HANDLE);
+    DWORD ty = (h && h != INVALID_HANDLE_VALUE) ? GetFileType(h) : FILE_TYPE_UNKNOWN;
+    if (ty != FILE_TYPE_UNKNOWN) {
+        DWORD n = 0, w;
+        while (msg[n]) ++n;
+        WriteFile(h, msg, n, &w, NULL);
+        return;
+    }
+    MessageBoxA(NULL, msg, "NTVDMEX",
+                MB_OK | (ok ? MB_ICONINFORMATION : MB_ICONERROR));
+}
+
 /* Take ourselves out of the launch path. Needs the privilege the installer had;
    if it fails, SAY SO -- a recovery step that silently does nothing is worse
    than none, because the next start believes it was handled. */
@@ -3865,7 +4090,8 @@ enum {                                       /* wired command IDs               
     IDM_CAP_SHOT,
     IDM_HELP_ABOUT,
     IDM_TRAY_SHOW,                           /* bring the hidden host window back  */
-    /* The View menu's three CHECKBOX settings (the combos are ranges, below). */
+    IDM_FILE_INSTALL, IDM_FILE_UNINSTALL, IDM_FILE_STATUS,   /* GH #13 */
+    /* The View menu's two CHECKBOX settings (the combos are ranges, below). */
     IDM_VIEW_VSYNC, IDM_VIEW_BLINK,
 
     /* ── ★ ONE CONTIGUOUS RANGE PER DROPDOWN SETTING. ────────────────────────────
@@ -4510,6 +4736,15 @@ static HMENU build_menu(void)
        described a config FILE that never existed; the store is HKCU and the dialog
        is how you edit it. One entry, and it is this one. */
     mi(m, "Settings...", IDM_FILE_SETTINGS);
+    msep(m);
+    /* ── ★ INSTALLING IS AN ACTION, SO IT IS ON A MENU AND NOT A SETTINGS PAGE.
+         It changes a machine-wide registry value, needs Administrator, and is the
+         one thing here that outlives the process -- none of which belongs behind a
+         tab of checkboxes. The same three verbs exist on the command line
+         (/install, /uninstall, /status) for scripted use. */
+    mi(m, "Install as System VDM...", IDM_FILE_INSTALL);
+    mi(m, "Uninstall...", IDM_FILE_UNINSTALL);
+    mi(m, "Installation Status...", IDM_FILE_STATUS);
     msep(m);
     mi(m, "Close Program", IDM_FILE_CLOSEPROG);
     mi(m, "Exit\tAlt+F4", IDM_FILE_EXIT);
@@ -5872,6 +6107,34 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
             if (cur) { g_savedmenu = cur; SetMenu(h, NULL); } else SetMenu(h, g_savedmenu);
             return 0; }
         case IDM_INPUT_CURSOR: host_cursor_set(h, !g_cursor_show); return 0;
+        /* ⚠ CONFIRM FIRST. Both of these change how EVERY DOS and Win16 program on
+             the machine starts, and both outlive this process -- an accidental
+             click on a menu is not consent for that. */
+        case IDM_FILE_INSTALL:
+        case IDM_FILE_UNINSTALL: {
+            char msg[1024]; int want = (LOWORD(wp) == IDM_FILE_INSTALL), ok;
+            if (MessageBoxA(h, want
+                    ? "Make NTVDMEX this machine's virtual DOS machine?\n\n"
+                      "Every MS-DOS and 16-bit Windows program will then start "
+                      "through NTVDMEX instead of Microsoft's ntvdm.exe.\n\n"
+                      "This changes a machine-wide setting and needs Administrator. "
+                      "It is reversible from this menu."
+                    : "Remove NTVDMEX from the launch path?\n\n"
+                      "This machine will go back to using its own ntvdm.exe for "
+                      "MS-DOS and 16-bit Windows programs.",
+                    "NTVDMEX", MB_OKCANCEL | MB_ICONQUESTION) != IDOK)
+                return 0;
+            msg[0] = 0;
+            ok = install_perform(want, msg, sizeof msg);
+            MessageBoxA(h, msg, "NTVDMEX",
+                        MB_OK | (ok ? MB_ICONINFORMATION : MB_ICONERROR));
+            return 0; }
+        case IDM_FILE_STATUS: {
+            char msg[1024];
+            msg[0] = 0;
+            install_status_text(msg, sizeof msg);
+            MessageBoxA(h, msg, "NTVDMEX", MB_OK | MB_ICONINFORMATION);
+            return 0; }
         case IDM_FILE_SETTINGS:
             /* Modal, on the UI thread. The guest keeps running throughout -- it lives
                on the exec thread, and the PIT is paced by its own thread -- so this
@@ -15751,6 +16014,35 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
 
     (void)hInst; (void)hPrev; (void)lpCmd; (void)nShow;
     progpath[0] = 0; args[0] = 0;
+
+    /* ── ★ THE INSTALL VERBS, BEFORE ANYTHING ELSE EXISTS. (GH #13) ─────────────
+         `ntvdmhost.exe /install`, `/uninstall`, `/status`. They run and exit without
+         touching the VDM, the log, COM1 or the recovery counter -- none of which
+         should move because somebody asked whether we are installed.
+       ⚠ THE VERB MUST BE THE FIRST ARGUMENT, and that is what makes this safe to put
+         ahead of every other launch shape. Windows hands an IFEO-substituted VDM the
+         ORIGINAL command line, whose first argument is always the path to ntvdm.exe,
+         so a real VDM launch can never look like a verb -- while a token matched
+         anywhere on the line could be, one day, a DOS program's argument.
+       ⚠ Output goes to stdout when there is one and a message box when there is not,
+         because this is the one part of the host that is run BOTH from a prompt and
+         by double-clicking. Reporting into a console nobody can see is how an
+         installer becomes "it did nothing". */
+    {   char vmsg[1024];
+        int verb = install_verb(GetCommandLineA());
+        if (verb >= 0) {
+            /* ⚠ `verb == 0`, NOT `verb != 2`. The first cut wrote the latter, which
+                 makes INSTALL and UNINSTALL both ask to be installed -- and it
+                 reported "INSTALLED" cheerfully while doing it, because the message
+                 is composed from the same wrong flag. Caught on the rig by the
+                 BEHAVIOURAL half of the gate, not by the registry read. */
+            int ok, want = (verb == 0);
+            vmsg[0] = 0;
+            if (verb == 2) install_status_text(vmsg, sizeof vmsg), ok = 1;
+            else           ok = install_perform(want, vmsg, sizeof vmsg);
+            install_report(vmsg, ok);
+            return ok ? 0 : 1;
+        } }
 
     p = zput(p, "NTVDMEX clean host\r\nSTAGE0: WinMain entered [build dpmi-harness-v180]\r\n");
     log_write(LOG_PATH, report, p);

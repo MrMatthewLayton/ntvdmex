@@ -1197,7 +1197,7 @@ void vdd_video_render(video_state *st)                 /* text glyph render     
                 for (gx = 0; gx < VID_CELL_W; ++gx) row[gx] = (bits & (0x80 >> gx)) ? fg : bg;
             }
         }
-    /* ── THE TEXT CURSOR: SHAPE FROM THE GUEST, BLINK FROM THE CLOCK. ────────────
+    /* ── THE TEXT CURSOR: SHAPE FROM THE GUEST, SCALED, BLINK FROM THE CLOCK. ────
          This used to be two hard-coded scan lines, always lit. Two things were wrong
          with that and only one of them is cosmetic:
            * A REAL CURSOR BLINKS. On VGA the CRTC blinks it at the vertical rate
@@ -1213,14 +1213,9 @@ void vdd_video_render(video_state *st)                 /* text glyph render     
          uses, so this stays pure C and off-VM testable: with no clock injected the
          cursor is simply steady, which is what the existing battery expects. */
     if (st->cur_row < st->rows && st->cur_col < st->cols) {
-        unsigned start = (st->cur_shape >> 8) & 0x1F;    /* CH bits 0-4: first line  */
-        unsigned end   =  st->cur_shape       & 0x1F;    /* CL bits 0-4: last line   */
-        int hidden     = ((st->cur_shape >> 8) & 0x20) != 0;   /* CH bit 5: cursor off */
-        int lit = 1;
-        if (st->cur_shape == 0) { start = VID_CELL_H - 2; end = VID_CELL_H - 1; }
-        if (start >= VID_CELL_H) start = VID_CELL_H - 2;
-        if (end   >= VID_CELL_H) end   = VID_CELL_H - 1;
-        if (start > end) hidden = 1;                     /* the other "off" idiom    */
+        unsigned start, end;
+        int hidden, lit = 1;
+        vdd_cursor_lines(st->cur_shape, VID_CELL_H, &start, &end, &hidden);
         if (st->cursor_blink && st->time_us) {
             /* 16 frames on / 16 off at 60 Hz = a 533 ms period, lit for the first
                half. Integer maths only; no floating point in a VDD. */
@@ -1235,6 +1230,42 @@ void vdd_video_render(video_state *st)                 /* text glyph render     
                            + st->cur_col*VID_CELL_W + gx] = fg;
         }
     }
+}
+
+/* ── ★ CURSOR EMULATION. See the note in vdd_video.h for WHY. ────────────────────
+     The rule is the VGA BIOS's own (IBM's, as carried by Bochs/SeaBIOS), reproduced
+     rather than approximated -- an approximation here shows up as a cursor a pixel
+     or two out of place on every DOS prompt in existence:
+
+         CH &= 0x3f;  CL &= 0x1f;
+         if (cell > 8 && CL < 8 && CH < 0x20) {
+             CH = (CL == CH + 1) ? ((CL + 1) * cell / 8) - 2
+                                 : ((CH + 1) * cell / 8) - 1;
+             CL = ((CL + 1) * cell / 8) - 1;
+         }
+
+     ⚠ THE `CL == CH + 1` BRANCH IS THE ONE THAT MATTERS and it looks like a special
+       case for nothing. It is not: a two-line cursor (6-7) is DOS's UNDERLINE, and
+       scaling both ends the ordinary way would give 13-15, a three-line smear. The
+       branch keeps it two lines tall at the bottom of the cell.
+     ⚠ `CL < 8` is what stops a shape that ALREADY knows about 16-line cells from
+       being scaled twice; `CH < 0x20` leaves the hide bit alone. */
+void vdd_cursor_lines(uint16_t shape, unsigned cell_h,
+                      unsigned *start, unsigned *end, int *hidden)
+{
+    unsigned ch = (shape >> 8) & 0x3Fu;
+    unsigned cl =  shape       & 0x1Fu;
+    *hidden = (ch & 0x20u) != 0;                 /* CH bit 5: cursor off        */
+    ch &= 0x1Fu;
+    if (cell_h > 8u && cl < 8u && !*hidden) {
+        ch = (cl == ch + 1u) ? ((cl + 1u) * cell_h / 8u) - 2u
+                             : ((ch + 1u) * cell_h / 8u) - 1u;
+        cl = ((cl + 1u) * cell_h / 8u) - 1u;
+    }
+    if (ch >= cell_h) ch = cell_h - 1u;
+    if (cl >= cell_h) cl = cell_h - 1u;
+    if (ch > cl) *hidden = 1;                    /* the other "off" idiom       */
+    *start = ch; *end = cl;
 }
 
 /* combine the 4 bit-planes into fb (16-colour indices) -- mode 12h. */
