@@ -1355,9 +1355,10 @@ IP == image offset**) — see [[mem-exe-segment-map]].
 
 ---
 
-## Session 53 (2026-09-06) — the settings page stopped being a scaffold, 72.4 → 73.0
+## Session 53 (2026-09-06) — settings, #47, the menu defect, and the guest shelf: 72.4 → 79.6
 
-**Score 72.4 → 73.7.** Suite **1036 → 1086** checks. All green, and rig-gated.
+**Score 72.4 → 79.6** in one day. Suite **1036 → 1086** checks, all green, all rig-gated.
+Morning: settings, #47, the PC speaker. Afternoon: the menu defect and the guest shelf.
 
 ### ★ The PC speaker made no sound at all
 
@@ -1545,3 +1546,94 @@ distinguishable in a single run — which no host-side counter can do alone.
   request (33/66/100/200 MHz) and it is the largest remaining piece of `settings-live`.
 - `ConventionalKB`/`Umb` need `DOS_MEM_TOP` to stop being a compile-time constant (#47).
 - `Renderer` needs a windowed DirectDraw blit that does not exist.
+
+---
+
+## Session 53, afternoon — the guest shelf, 75.1 → 79.6
+
+### ★ The menu defect (#136) — closed, and the fix is what stock DOES
+
+MS Paint takes the mouse capture on button-down and **never gives it back** —
+nine `SetCapture`, **zero** `ReleaseCapture` in one measured session, and it
+*re-takes* it after every button-up. That is legal Win16. But **USER32 refuses
+`SC_KEYMENU` while the calling thread holds a capture** (menus deliberately do
+not open mid-drag), so `DefWindowProc` did nothing with Alt and the menu bar was
+dead for the rest of the session.
+
+The fix is not an invention. A new `rigshot capture` verb reads another thread's
+capture cross-process (`GetGUIThreadInfo` — `GetCapture` is per-THREAD and would
+have answered "nobody" from another process no matter what):
+
+| after three drags | ours (before) | stock |
+|---|---|---|
+| `hwndCapture` | canvas | canvas — **same** |
+| then Alt | unchanged, no menu | moves to the top-level, `GUI_INMENUMODE` |
+
+⚠ **Stock gets it free because its thread reports `GUI_16BITTASK` (flags 0x20)
+and ours reports 0.** USER32 gives its own WOW threads special menu handling and
+that flag is not settable from outside. Reproducing the *behaviour* is the route.
+
+### ★★ The shelf: four service batches, ~80 services, four new guests
+
+The loop that worked, four times: **`neneeds.py` prices a guest by name and
+ordinal → implement a batch chosen for OVERLAP across guests → launch → THE RUN
+NAMES THE REAL BLOCKER.**
+
+| | |
+|---|---|
+| **done** (user-confirmed by hand) | NOTEPAD, PBRUSH, **SOL**, **WINMINE**, **CHARMAP** |
+| **partial** (launches, job unproven) | SYSEDIT, **CLOCK**, **MPLAYER**, **RECORDER**, WOWEXEC |
+| guests 21% → 39%, breadth 61% → 83% | |
+
+⚠⚠ **`neneeds` SAID CALC WAS 0 TO DO AND THE RUN SAID OTHERWISE.** It classifies
+`CREATEDIALOG`/`DIALOGBOXPARAM`/`CREATEDIALOGPARAM` as **`native16`** — USER
+implements them in its own 16-bit code — and **native16 is not free**: that code
+calls out to a 32-bit helper at **USER thunk id `0xEF`, an id NO EXPORT MAPS TO**
+(USER's wow32 id space skips exactly the native16 gaps). ⇒ **The run is the
+oracle; neneeds is a hint.**
+
+▶ **DIALOGS ARE TOMORROW'S FIRST JOB and the entry point is pinned.** USER has
+already done `FindResource`/`LoadResource`/`LockResource` by the time it calls us,
+so the locked `DLGTEMPLATE` is handed over. Args at thunk `0xEF` (22 bytes):
+`+16/18` template far pointer, `+10/12` dialog proc, `+14` parent, `+6/8`
+init param, `+20` hInstance. It unlocks **TASKMAN, CALC, Solitaire's Options and
+Deck, and Minesweeper's preferences** — the user named the last two unprompted.
+
+### ★★★ THE SENTINEL-IS-AN-ANSWER SHAPE, TWICE MORE
+
+* **`SPI_GETICONTITLELOGFONT`** — MPLAYER produced no window. I had
+  `SystemParametersInfo` answer FALSE and deliberately *not* touch the buffer;
+  MPLAYER called `CreateFontIndirect` **on that buffer anyway**, building a font
+  from stack litter. *The return value was not what it acted on; the buffer was.*
+  ⚠ A Win16 `LOGFONT` is **50 bytes, not 60** — every metric a WORD, face name at
+  18 not 28.
+* **The dialog create returning 0** — CALC's log then reads `ShowWindow 0x0000`
+  and every `CheckDlgButton`/`SetDlgItemText` on window `0`, forever.
+
+### ⚠ THREE USER-REPORTED DEFECTS, SETTLED BY RUNNING THE SAME PROGRAM UNDER STOCK
+
+1. **"Our Win16 chrome is flat, stock is bevelled"** — **refuted**. Character Map
+   diffed against stock: font row **0** of 13,440 pixels differ, character grid
+   **0** of 78,400, same Luna caption. The flat look is what a Win16 app gets from
+   *both* hosts; a bevelled one ships `CTL3D.DLL`.
+2. **"Recorder's window is massive and blank"** — **refuted**. Stock gives it the
+   identical 1260×742. It sizes itself from the screen; on a 640×480 display that
+   was the small window we remember.
+3. **"Alt stops opening the menu"** — **real**, and fixed above.
+
+⚠ And on (1): the title-bar *region* diffed 15.7% and that was **desktop
+wallpaper at the rounded corners**, not chrome. A percentage over a region that
+includes the background is not a claim about the foreground.
+
+### Still open, in the order I would take them
+
+1. **Dialogs** (thunk `0xEF`) — 2 guests + 2 confirmed sub-dialogs. Entry pinned.
+2. **CLOCK's blank face** — a paint→invalidate→paint loop at ~555/s (19,929
+   `WM_PAINT`, 9,964 `InvalidateRect`, one per paint, 50 `WM_TIMER`). It never
+   calls `GetCurrentTime`, and **the BDA tick rate is correct** (816 ticks over
+   ~45 s of guest time = 18.1 Hz), so both obvious hypotheses are dead.
+3. **`MEM /C` reports MSDOS as 1,028K** — a per-module row that contradicts the
+   summary in the same report, and 1,028K is 1024K + 4K: the same phantom-megabyte
+   signature as the Upper bug fixed this morning.
+4. `CallWindowProc`, `CreateWindowEx`, `ShellExecute`, `EnumTaskWindows` — one
+   each blocks CARDFILE, WINFILE and PACKAGER.
