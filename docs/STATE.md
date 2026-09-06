@@ -5,8 +5,9 @@
 > what to do next.
 
 - **Last updated:** 2026-09-06 (session 53)
-- **Sessions 46-49 are committed and pushed** on this branch — the whole WOW service
-  batch, the LDT pool and the `tools/ne/neneeds.py` fix.
+- **Everything through session 53 is committed and pushed** on this branch.
+- **Score: 79.6%** (`./tools/score/score.py` — run it, do not quote this line).
+  Session 53 alone moved it 72.4 → 79.6.
 - **Branch:** `m9/completeness`
 - **Tracker:** [140+ issues](https://github.com/MrMatthewLayton/ntvdmex/issues) — reconciled against the repo on 2026-08-26 (`tools/gh/backfill.py` is the manifest)
 - **Knowledge base:** the [wiki](https://github.com/MrMatthewLayton/ntvdmex/wiki)
@@ -161,8 +162,8 @@ Win16 push, and should not be quoted.)
 | Bar | Where it is | Est. |
 |---|---|---|
 | **The original DOS games bar** — Doom / Skyroads / ZAR, flawless sound | Two of three fully playable and confirmed by hand. ZAR is the gap (VBE 2.0 hi-colour + linear framebuffer). | **~85%** |
-| **★ The north star** — MS Paint + Notepad from Windows 3.x | **BOTH RUN AND BOTH DO THEIR JOB, USER-CONFIRMED.** **NOTEPAD IS A WORKING TEXT EDITOR**: opens through the real XP file dialog, you type into it, File > Save writes the text (verified byte for byte). **MS PAINT DRAWS IN COLOUR, KEEPS WHAT IT DRAWS, AND SAVES IT** — every shape tool, the flood fill, persistence across a repaint, and `File > Save As` writing a valid 1680×974 24-bit `.BMP` to the chosen directory; UI pixel-identical to stock ntvdm. **Paint's GDI surface is 67/76 and its USER surface 88/92; PBRUSH.DLL is 16/16.** ⚠ Not yet exercised: the Text tool, the cutout tools, Edit > Paste, printing. ⚠ And one live defect: after mouse drags the Alt-key menu route stops responding. | **~90%** |
-| **The full vision** — an `ntvdm` superset on XP-32 | Everything above, plus the host UI, minus the standing DOS defects and M7/M8. | **~60%** |
+| **★ The north star** — MS Paint + Notepad from Windows 3.x | **BOTH RUN AND BOTH DO THEIR JOB, USER-CONFIRMED.** **NOTEPAD IS A WORKING TEXT EDITOR**: opens through the real XP file dialog, you type into it, File > Save writes the text (verified byte for byte). **MS PAINT DRAWS IN COLOUR, KEEPS WHAT IT DRAWS, AND SAVES IT** — every shape tool, the flood fill, persistence across a repaint, and `File > Save As` writing a valid 1680×974 24-bit `.BMP` to the chosen directory; UI pixel-identical to stock ntvdm. **Paint's GDI surface is 67/76 and its USER surface 88/92; PBRUSH.DLL is 16/16.** ⚠ Not yet exercised: the Text tool, the cutout tools, Edit > Paste, printing. **The Alt-menu defect is CLOSED (session 53)** — Paint holds the mouse capture and USER32 will not open a menu while one is held. | **~90%** |
+| **The full vision** — an `ntvdm` superset on XP-32 | Everything above, plus the host UI, minus the standing DOS defects and M7/M8. **This is the bar `tools/score/score.py` measures, and it is the only one of the three with a model behind it rather than a judgement.** | **79.6%** |
 
 **Read the north-star number carefully.** The hard *unknowns* are largely behind us — what is
 left is mostly known work, but there is a lot of it, and **M6 is one line on the roadmap and
@@ -173,8 +174,9 @@ session 41 and is now `src/wow/wowmsg.h`, with the host's own keyboard on one en
 a Win16 window procedure on the other.
 
 ⚠ And the standing DOS defects below are small individually but sit in the **"runs but lies"**
-class this project treats as the most expensive kind — `MEM.EXE` reporting wrong figures
-silently is worth more attention than its size suggests.
+class this project treats as the most expensive kind. **`MEM.EXE`'s main report is now correct
+and matches the 6.22 oracle row for row (session 53)** — but `MEM /C` still reports MSDOS as
+1,028K, contradicting its own summary in the same report, so the class is not closed.
 
 ---
 
@@ -223,7 +225,10 @@ silently is worth more attention than its size suggests.
    the next step, and it is also the honest correction for *a fix measured on
    one guest is a fix for none*.
 
-   ### ▶ START HERE: [session 49](log/sessions/session-49.md#-resume-here)
+   ### ▶ START HERE: **[Session 53, afternoon](#session-53-afternoon--the-guest-shelf-751--796)**
+   at the bottom of this file — it names the next job, the entry point for it,
+   and the two hypotheses already killed. Sessions 51-53 are recorded here rather
+   than in `log/sessions/`; session 50 is the last one with its own file.
 
    ---
 
