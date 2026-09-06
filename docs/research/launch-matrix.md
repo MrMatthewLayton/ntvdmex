@@ -12,7 +12,10 @@ regression for every program on the box, not just the one under test.
 | 1 | DOS .COM, plain launch | `p_ver.com` | CASE=int21.30 SIG=AX,BX,CX AX=1606 BX=FF00 CX=0000 DX=D1D1 SI=02C9 DI=0000 DS=0100 ES=0100 FL=3246 CF=0 CASE=i | #PROBE dosver CASE=int21.30 SIG=AX,BX,CX AX=0005 BX=FF00 CX=0000 DX=D1D1 SI=02C9 DI=FFFE DS=06E0 ES=06E0 FL=32 |
 | 2 | DOS .EXE, plain launch | `MEM.EXE` | Memory Type Total = Used + Free ---------------- ------- ------- ------- Conventional 639K 639K 0K | Incorrect DOS version |
 | 3 | DOS program that EXECs a child | `p_exec.com` | [child ran] CASE=int21.4B.exec SIG=CF AX=0000 BX=03C0 CX=C1C1 DX=03A7 SI=02C9 DI=0000 DS=0100 ES=0100 FL=3246  | #PROBE exec [child ran] CASE=int21.4B.exec SIG=CF AX=3E00 BX=88D1 CX=C1C1 DX=0000 SI=02C9 DI=FFFE DS=06E0 ES=0 |
-## Reading the three rows
+| 6 | **Win16 GUI app, plain launch** | `CHARMAP.EXE` | Real 611x220 `HWND` on the XP desktop: font list on Symbol, full character grid rendered in that font, Select and Copy working (user-confirmed) | Real 611x220 `HWND`, same layout |
+
+## Reading the rows
+
 
 **Row 1 — the version differs, deliberately.** We report `AX=1606` (DOS 6.22);
 stock ntvdm reports `AX=0005` (DOS 5.0). That is our version knob's default, not
@@ -28,6 +31,27 @@ follows directly from row 1, which is why the version knob is not cosmetic.
 **Row 3 — an EXEC'd child behaves the same on both.** Both hosts run the child
 and return to the parent with CF=0. (`AX` differs and is not significant for
 AH=4Bh; the probe's SIG says so.)
+
+**Row 6 — ★ A WIN16 LAUNCH, AND THE CLIENT AREA IS PIXEL-IDENTICAL.** This is a
+different launch SHAPE from rows 1-3: a 16-bit *Windows* program, routed through
+the same IFEO hook into the shared WOW VDM. Both hosts were given
+`C:\WIN16\CHARMAP.EXE` and screenshotted, and the two images diffed rather than
+compared by eye:
+
+| region | pixels differing |
+|---|---|
+| font row | **0** of 13,440 |
+| character grid | **0** of 78,400 |
+| title bar | same Luna caption, icon and text |
+
+⚠ The title bar *region* diffed 15.7% and that is NOT chrome — it is desktop
+wallpaper showing through at the rounded corners, the two windows having landed
+at different positions. A percentage over a region that includes the background
+is not a claim about the foreground.
+
+That answers a question a user asked directly ("is our Win16 chrome wrong?"): the
+flat 3.x control look is what a Win16 application gets on XP from **both** hosts.
+A bevelled Win16 app is one shipping `CTL3D.DLL`, which draws its own controls.
 
 ### Rows still to do
 Rows 4 (DPMI client) and 5 (in-guest redirection) have a green NTVDMEX half and
