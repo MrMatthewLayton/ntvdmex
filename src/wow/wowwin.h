@@ -70,6 +70,10 @@
    pump on the wrong thread can be refused rather than silently doing nothing. */
 static DWORD g_ww_thread = 0;
 static DWORD g_ww_created = 0, g_ww_msgs = 0;
+/* Times Alt/F10 had to take the mouse capture off a guest window so the menu
+   could open. Non-zero is normal for a paint program; zero on a session where
+   the menu is dead means the cause is something else. */
+static DWORD g_ww_menu_uncapture = 0;
 /* Win32 messages this thread has dispatched for the guest's windows. The answer to
    "is the window hung", which cannot be read off anything else. */
 static DWORD g_ww_pumped = 0;
@@ -205,6 +209,39 @@ static LRESULT CALLBACK wowwin_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
          down rather than left to be discovered: an application that ACTS on a
          system key will see the OS act too. Nothing measured does. */
     case WM_SYSKEYDOWN: case WM_SYSKEYUP:
+        /* ── ★★★ AND ALT MUST TAKE THE MOUSE CAPTURE, OR THE MENU NEVER OPENS.
+             (session 53, the "Alt stops working after a few canvas drags" defect)
+             MS Paint takes the capture on button-down and DOES NOT GIVE IT BACK --
+             measured, nine SetCapture and zero ReleaseCapture in one session, and
+             it re-takes it after every button-up. That is legal Win16: capture was
+             the app's to hold. But USER32 REFUSES SC_KEYMENU WHILE THE CALLING
+             THREAD HOLDS A CAPTURE -- menus deliberately do not open mid-drag --
+             so DefWindowProc did nothing with Alt and the whole menu bar went dead
+             for the rest of the session.
+           ★ STOCK ntvdm WAS MEASURED DOING EXACTLY THIS. Same program, same three
+             drags, cross-process GetGUIThreadInfo (`rigshot capture`):
+               after the drags   stock hwndCapture = the CANVAS   (same as ours)
+               after Alt         stock hwndCapture = the TOP-LEVEL, menuowner set,
+                                 GUI_INMENUMODE   (ours: unchanged, no menu)
+             So stock ALSO leaves it held, and Alt moves it. This is not us being
+             unfaithful by releasing it -- it is us reproducing what the reference
+             implementation is observed to do.
+           ⚠ WHY STOCK GETS IT FREE AND WE DO NOT: its thread reports
+             GUI_16BITTASK (flags 0x20) and ours reports 0. USER32 knows stock's
+             thread is a WOW task and gives it WOW-specific menu handling; that
+             flag is internal to USER32's WOW support and there is no supported way
+             for us to set it. Reproducing the BEHAVIOUR is the available route.
+           ⚠ ONLY ON ALT/F10 GOING DOWN, and only when one of OUR windows holds
+             it. Releasing on the way up would fight the menu loop for the capture
+             it has just taken, and releasing a capture that belongs to some other
+             application would be reaching outside this VDM entirely. */
+        if (msg == WM_SYSKEYDOWN && (wp == VK_MENU || wp == VK_F10)) {
+            HWND cap = GetCapture();
+            if (cap && wowwin_hwnd16(cap)) {
+                ReleaseCapture();
+                ++g_ww_menu_uncapture;
+            }
+        }
         if (h16) {
             wowmsg_post(h16, (WORD)msg, (WORD)wp, (DWORD)lp, GetTickCount(), ptx, pty);
             ++g_ww_msgs;

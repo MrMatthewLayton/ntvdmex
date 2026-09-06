@@ -43,6 +43,24 @@ static int slen(const char *s) { int n = 0; while (s[n]) ++n; return n; }
 
 static char *sput(char *p, const char *s) { while (*s) *p++ = *s++; *p = 0; return p; }
 
+/* Unsigned decimal and 8-digit hex, for the `capture` verb's report. Written out
+   rather than borrowed: this file is a -nostdlib link with no wsprintf import. */
+static char *sputu(char *p, unsigned v)
+{
+    char t[12]; int n = 0;
+    if (!v) { *p++ = '0'; *p = 0; return p; }
+    while (v) { t[n++] = (char)('0' + v % 10); v /= 10; }
+    while (n--) *p++ = t[n];
+    *p = 0; return p;
+}
+static char *sputx(char *p, unsigned v)
+{
+    static const char H[] = "0123456789ABCDEF";
+    int i;
+    for (i = 28; i >= 0; i -= 4) *p++ = H[(v >> i) & 0xF];
+    *p = 0; return p;
+}
+
 static int seq(const char *a, const char *b)
 {
     while (*a && *a == *b) { ++a; ++b; }
@@ -285,6 +303,43 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show)
 
     if (seq(verb, "shot"))
         return do_shot(arg1[0] ? arg1 : (SHARE "\\rigshot.bmp"));
+
+    /* ── ★★★ `capture "<caption>"` -- WHO HOLDS THE MOUSE CAPTURE, AND THE FOCUS.
+         The Win16 menu defect ("after three canvas drags, Alt-F-A stops opening
+         the menu") has a prime suspect: a mouse capture that was taken on
+         button-down and never given back. A held capture blocks Win32 menu
+         tracking outright, which is exactly the symptom.
+       ⚠ GetCapture() CANNOT ANSWER THIS FROM HERE. It is per-THREAD and returns
+         NULL for any thread but the caller's, so from this process it would say
+         "nobody" no matter what -- a measurement that always reads clean is worse
+         than none. GetGUIThreadInfo() reports another thread's capture, focus,
+         active and menu-mode state, which is the whole question in one call.
+       The host's own log says what the GUEST asked for (SetCapture/ReleaseCapture);
+       this says what the OS actually has. Two different claims, and the defect
+       lives in the gap between them. */
+    if (seq(verb, "capture")) {
+        char m[256], *p2 = m;
+        HWND w = FindWindowA(NULL, arg1);
+        GUITHREADINFO gti;
+        DWORD tid;
+        if (!w) { logline("capture: NO SUCH CAPTION"); return 1; }
+        tid = GetWindowThreadProcessId(w, NULL);
+        gti.cbSize = sizeof gti;
+        if (!GetGUIThreadInfo(tid, &gti)) {
+            p2 = sput(p2, "capture: GetGUIThreadInfo FAILED err=");
+            p2 = sputu(p2, GetLastError());
+            logline(m);
+            return 1;
+        }
+        p2 = sput(p2, "capture: hwndCapture=0x"); p2 = sputx(p2, (unsigned)(ULONG_PTR)gti.hwndCapture);
+        p2 = sput(p2, " focus=0x");   p2 = sputx(p2, (unsigned)(ULONG_PTR)gti.hwndFocus);
+        p2 = sput(p2, " active=0x");  p2 = sputx(p2, (unsigned)(ULONG_PTR)gti.hwndActive);
+        p2 = sput(p2, " menuowner=0x");p2 = sputx(p2, (unsigned)(ULONG_PTR)gti.hwndMenuOwner);
+        p2 = sput(p2, " flags=0x");   p2 = sputx(p2, gti.flags);
+        p2 = sput(p2, "  (flags bit0=INMENUMODE bit4=INMOVESIZE)");
+        logline(m);
+        return 0;
+    }
 
     if (seq(verb, "list")) {
         logline("list: visible top-level windows");
