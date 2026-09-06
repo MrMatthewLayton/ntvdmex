@@ -858,6 +858,24 @@ static DWORD          g_irqn_refuse_total = 0;
 static volatile LONG  g_wound_down    = 0;  /* exec loop exited: clean shutdown in progress */
 #define IO_HOT_MAX 48   /* 12 filled up before the hottest port was even seen */
 static uint16_t g_io_last_port = 0;      /* port the last serviced access touched */
+/* ── ⚠ AN INTERMITTENT I/O STORM, NOT YET EXPLAINED (session 53). ────────────
+     Some runs of tools/dostest/spktest.com report 1.87 MILLION serviced I/O
+     events for a program that issues EIGHTY-SIX, take 8.7 s where a clean run
+     takes 4.6, and log the SAME SIX guest CS:IP sites either way -- so the same
+     handful of instructions are being serviced ~21,700 times each while the
+     guest still completes correctly. Four consecutive runs on the build that
+     followed would not reproduce it, so it is not the binary and not the
+     settings; it is a race with something.
+   ▶ THESE THREE COUNTERS ARE THE DIAGNOSIS, PRE-PLACED. The two service paths
+     differ in exactly the way that matters: host_try_io() ADVANCES EIP past the
+     instruction, host_try_io_retro() deliberately DOES NOT (the real-hardware
+     event reports CS:IP already past the I/O). A storm that is all `retro` is a
+     guest that is not being stepped; a storm that is all `direct` is the kernel
+     re-reporting an event we already retired. The event histogram says which
+     kernel event is arriving. One dirty run now answers the question. */
+static DWORD g_io_via_direct = 0, g_io_via_retro = 0;
+#define EV_HIST_MAX 16
+static DWORD g_ev_hist[EV_HIST_MAX];
 static struct { uint16_t port; DWORD n; } g_io_hot[IO_HOT_MAX];
 static int   g_io_hot_n = 0;
 static DWORD g_io_site_logged = 0;
@@ -16500,6 +16518,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         }
         InterlockedExchange(&g_in_exec, 1);
         ev = v86_run(tib, &st);
+        g_ev_hist[ev < EV_HIST_MAX ? ev : EV_HIST_MAX - 1]++;
         InterlockedExchange(&g_in_exec, 0);
         /* SPIKE: once in protected mode, stop at the FIRST PM event and dump the raw
            taxonomy (event/info/selectors) -- this is how the spike learns how the
@@ -16564,14 +16583,14 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             HOST_LOCK();
             handled = host_try_io(tib, &g_bus);     /* single port op (no logging)     */
             HOST_UNLOCK();
-            if (handled) { g_ev_io++; io_hot_note(g_io_last_port, VDM_REG(tib, VTIB_CS) & 0xFFFF, VDM_REG(tib, VTIB_EIP) & 0xFFFF); continue; }
+            if (handled) { g_ev_io++; g_io_via_direct++; io_hot_note(g_io_last_port, VDM_REG(tib, VTIB_CS) & 0xFFFF, VDM_REG(tib, VTIB_EIP) & 0xFFFF); continue; }
             /* real-HW event 3 reports CS:IP AFTER the faulting IN/OUT -> retro-decode the
                I/O instruction ending at CS:IP and service it (Skyroads' vblank IN AL,DX). */
             if (ev == VDM_EVENT_IO_HW) {
                 HOST_LOCK();
                 handled = host_try_io_retro(tib, &g_bus);
                 HOST_UNLOCK();
-                if (handled) { g_ev_io++; io_hot_note(g_io_last_port, VDM_REG(tib, VTIB_CS) & 0xFFFF, VDM_REG(tib, VTIB_EIP) & 0xFFFF); continue; }
+                if (handled) { g_ev_io++; g_io_via_retro++; io_hot_note(g_io_last_port, VDM_REG(tib, VTIB_CS) & 0xFFFF, VDM_REG(tib, VTIB_EIP) & 0xFFFF); continue; }
             }
             if ((g_a000_prot || (g_interp12 && vdd_video_planar_active(&g_vid)))
                 && host_interp(tib, 1) > 0) continue;   /* single A0000 access */
@@ -19207,6 +19226,14 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
          reaching the VDD, the mixer not fitted to it, a frequency it refuses, or
          a fault downstream of the mixer entirely. Each counter is taken where the
          decision is made, so the first zero names the stage. */
+    { int e; p = zput(p, "STAGE2: events: direct_io="); p = zhex(p, g_io_via_direct);
+      p = zput(p, " retro_io=");  p = zhex(p, g_io_via_retro);
+      p = zput(p, " by_event=");
+      for (e = 0; e < EV_HIST_MAX; ++e) {
+          if (!g_ev_hist[e]) continue;
+          p = zput(p, " "); p = zhex(p, (DWORD)e); p = zput(p, ":"); p = zhex(p, g_ev_hist[e]);
+      }
+      p = zput(p, "\r\n"); }
     p = zput(p, "STAGE2: pcspk: want=");   p = zhex(p, (DWORD)g_spk_real);
     p = zput(p, " opened=");               p = zhex(p, (DWORD)g_pcspk.tried);
     p = zput(p, " open_err=");             p = zhex(p, g_pcspk.open_err);
