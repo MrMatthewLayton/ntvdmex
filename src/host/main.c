@@ -19,6 +19,7 @@
 #include "csrss.h"
 #include "log.h"
 #include "settings.h"   /* registry-backed knobs + the Settings dialog */
+#include "pcspeaker.h"  /* the OTHER speaker: the one on the motherboard */
 #include "x86len.h"     /* which `CD nn` byte pairs are really INT instructions */
 #include "../wow/ne.h"  /* GH #128: 16-bit New Executable loader (WOW bootstrap) */
 #include "../wow/wow32.h" /* GH #128: the 32-bit half -- krnl386's calls out to Win32 */
@@ -325,6 +326,11 @@ static pic_state    g_pic;       static ntvdd g_pic_dev;
 static video_state  g_vid;       static ntvdd g_vid_dev;
 static input_state  g_in;        static ntvdd g_in_dev;
 static speaker_state g_spk;      static ntvdd g_spk_dev;
+/* The REAL speaker, and whether the setting wants it. g_spk drives the mixer;
+   this drives Beep.sys. They are independent -- "Both" means both. */
+static pcspk  g_pcspk = { INVALID_HANDLE_VALUE, 0, 0, 0, 0, 0 };
+static int    g_spk_real;
+static DWORD  g_spk_real_hz;   /* sampled under the lock, applied outside it */
 static dma_state    g_dma;       static ntvdd g_dma_dev;
 static opl_state    g_opl;       static ntvdd g_opl_dev;
 static sb_state     g_sb;        static ntvdd g_sb_dev;
@@ -4651,7 +4657,15 @@ static void settings_apply_devices(const ntvdmex_settings *s)
     /* The speaker VDD stays on the bus either way: port 0x61 must keep answering
        because guests time delay loops off its refresh bit. The setting decides
        only whether anything is audible. */
-    vdd_audio_set_speaker(&g_audio, &g_spk, (int)(s->v[SET_SPEAKER] ? 1 : 0));
+    /* ── TWO OUTPUTS, ONE SETTING. The mixer's square wave goes out of the SOUND
+         CARD; Beep.sys drives the transducer on the MOTHERBOARD. "Both" is both,
+         and they are genuinely independent -- a machine can have speakers plugged
+         in, a case speaker, neither, or both, and only the person at it knows. */
+    vdd_audio_set_speaker(&g_audio, &g_spk, SPKOUT_TO_CARD(s->v[SET_SPEAKER]));
+    g_spk_real = SPKOUT_TO_REAL(s->v[SET_SPEAKER]);
+    /* ⚠ Switching the real speaker OFF has to silence it, not merely stop driving
+         it: the driver keeps sounding whatever it was last told to sound. */
+    if (!g_spk_real) pcspk_set(&g_pcspk, 0);
     settings_apply_present(&g_pd, s);
 }
 
@@ -5086,6 +5100,16 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
         host_key_typematic();       /* pumped from BOTH threads, like the PIT */
         HOST_LOCK();
         vdd_bus_frame(&g_bus);          /* tick PIT + render into g_vid.frame       */
+        /* ── THE REAL PC SPEAKER, SAMPLED HERE AND DRIVEN BELOW. ─────────────────
+             The gate and the tone are read UNDER the lock, because the exec thread
+             writes both; the driver call happens OUTSIDE it, because a
+             DeviceIoControl held across the bus lock would stall the guest and the
+             audio pump behind a kernel transition. This tick is 5 ms, which is
+             finer than any tone a human hears as a separate note, and pcspk_set()
+             sends nothing unless the tone actually changed -- so a guest that is
+             not beeping costs one comparison per tick. */
+        if (g_spk_real)
+            g_spk_real_hz = vdd_speaker_active(&g_spk) ? vdd_speaker_hz(&g_spk) : 0;
         /* PRESENT IN PHASE WITH THE GUEST'S FRAME, not on our own timer.
            This tick used to run at 30 Hz and snapshot whenever it happened to fire.
            Once the guest was correctly paced to 60/70 Hz that meant sampling once
@@ -5123,6 +5147,7 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
                 HOST_UNLOCK();  /* not our phase: keep the last frame up */
             }
         }
+        if (g_spk_real) pcspk_set(&g_pcspk, g_spk_real_hz);   /* outside the lock */
         /* Headless remote visual capture (session-9): the host screenshots ITSELF to
            C:\ntvdmex\shotNN.bmp every ~2s so a graphical run (Skyroads, the PM demos)
            is verifiable off the SMB share -- VNC capture is dead on the real box. The
@@ -5353,6 +5378,11 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
            is torn down underneath it. Only then silence the chip. Doing it the
            other way round races the callback for the state it is reading. */
         audio_wave_stop(&g_wave);
+        /* ⚠ AND THE OTHER SPEAKER, WHICH IS NOT OURS TO LEAVE RUNNING. Beep.sys
+             keeps sounding after the process that started it exits -- the note
+             under the cursor would outlive the host and only a reboot would clear
+             it. Same failure the OPL had, on a device we do not even own. */
+        pcspk_close(&g_pcspk);
         HOST_LOCK();
         vdd_opl_reset(&g_opl);                    /* all voices off, registers clear */
         HOST_UNLOCK();
@@ -18606,6 +18636,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     p = zput(p, g_start_mode == DOS_START_UNINSTALL ? "UNINSTALL"
              : g_start_mode == DOS_START_SAFE       ? "SAFE" : "normal");
     p = zput(p, "; clean exit -> failure counter cleared (GH #132)\r\n");
+    pcspk_close(&g_pcspk);               /* ⚠ a headless run never sees WM_DESTROY,
+                                            and Beep.sys outlives the process */
     recovery_ok();                       /* GH #132: this run ended cleanly */
     p = zput(p, "STAGE2: stdout -> "); p = zput(p, g_stdio_how);
     p = zput(p, g_stdio != INVALID_HANDLE_VALUE ? " [LIVE]" : " [buffered only]");
@@ -19175,6 +19207,14 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
          reaching the VDD, the mixer not fitted to it, a frequency it refuses, or
          a fault downstream of the mixer entirely. Each counter is taken where the
          decision is made, so the first zero names the stage. */
+    p = zput(p, "STAGE2: pcspk: want=");   p = zhex(p, (DWORD)g_spk_real);
+    p = zput(p, " opened=");               p = zhex(p, (DWORD)g_pcspk.tried);
+    p = zput(p, " open_err=");             p = zhex(p, g_pcspk.open_err);
+    p = zput(p, " via=");                  p = zhex(p, (DWORD)g_pcspk.via);
+    p = zput(p, " ioctls=");               p = zhex(p, g_pcspk.sets);
+    p = zput(p, " refused=");              p = zhex(p, g_pcspk.fails);
+    p = zput(p, " last_hz=");              p = zhex(p, g_pcspk.cur_hz);
+    p = zput(p, "\r\n");
     p = zput(p, "STAGE2: wave: dev_volume_ok="); p = zhex(p, (DWORD)g_wave.dev_volume_ok);
     p = zput(p, " dev_volume=0x");               p = zhex(p, g_wave.dev_volume);
     p = zput(p, " silent=");                     p = zhex(p, (DWORD)g_wave.silent);

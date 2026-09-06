@@ -214,12 +214,13 @@ BEGIN
     EDITTEXT        IDC_S_SOUNDFONT, 62, 126, 216, 13, ES_AUTOHSCROLL | WS_TABSTOP
 
     GROUPBOX        "Other devices", -1, 4, 144, 284, 32
-    CONTROL         "PC Spea&ker", IDC_S_SPEAKER, "Button",
-                    BS_AUTOCHECKBOX | WS_TABSTOP | WS_GROUP, 14, 158, 68, 10
+    LTEXT           "PC spea&ker:", -1, 14, 160, 42, 8
+    COMBOBOX        IDC_S_SPEAKER, 58, 158, 80, 80,
+                    CBS_DROPDOWNLIST | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP | WS_GROUP
     CONTROL         "&Gravis Ultrasound", IDC_S_GUS, "Button",
-                    BS_AUTOCHECKBOX | WS_TABSTOP, 92, 158, 84, 10
+                    BS_AUTOCHECKBOX | WS_TABSTOP, 146, 159, 76, 10
     CONTROL         "&Tandy / CMS", IDC_S_TANDY, "Button",
-                    BS_AUTOCHECKBOX | WS_TABSTOP, 186, 158, 80, 10
+                    BS_AUTOCHECKBOX | WS_TABSTOP, 228, 159, 56, 10
 END
 
 /* ── PAGE: INPUT ────────────────────────────────────────────────────────────────

@@ -66,6 +66,14 @@ typedef enum {
     SET_STR_COUNT
 } set_str_id;
 
+/* PcSpeaker's values. Named, because `s->v[SET_SPEAKER] == 2` at a call site is
+   a number nobody can check against the item list four hundred lines away. */
+enum {
+    SPKOUT_OFF = 0, SPKOUT_CARD, SPKOUT_REAL, SPKOUT_BOTH
+};
+#define SPKOUT_TO_CARD(v) ((v) == SPKOUT_CARD || (v) == SPKOUT_BOTH)
+#define SPKOUT_TO_REAL(v) ((v) == SPKOUT_REAL || (v) == SPKOUT_BOTH)
+
 enum {
     SK_CHECK = 0,   /* checkbox -> 0 or 1                                        */
     SK_UINT,        /* edit box -> unsigned, clamped to [lo,hi]                  */
@@ -135,7 +143,16 @@ static const set_def SET_DEFS[SET_COUNT] = {
 { "SbDma",             IDC_S_SBDMA,       SK_COMBO,      0,  0,   2, "1|3|5" },
 { "Opl",               IDC_S_OPL,         SK_COMBO,      1,  0,   1, "OPL2|OPL3" },
 { "Midi",              IDC_S_MIDI,        SK_COMBO,      0,  0,   2, "Host GM|MT-32|SoundFont" },
-{ "PcSpeaker",         IDC_S_SPEAKER,     SK_CHECK,      1,  0,   1, NULL },
+/* ── ⚠ THE PC SPEAKER HAS TWO PLACES TO COME OUT OF, AND THEY ARE NOT THE SAME
+     DEVICE. The emulated one is a square wave in the mixer, out of the SOUND
+     CARD -- which is what DOSBox does, is the only path that can be attenuated
+     by the volume above or summed with FM and PCM, and is completely inaudible
+     on a machine with nothing plugged into its line out. The other is the
+     transducer soldered to the motherboard, driven through Beep.sys (see
+     src/host/pcspeaker.h). Neither is right for everyone, so it is a choice.
+   ★ THE OLD VALUES MIGRATE FOR FREE. This was a checkbox: 0 = off, 1 = on. As
+     indices those are exactly Off and Sound card, which is what they meant. */
+{ "PcSpeaker",         IDC_S_SPEAKER,     SK_COMBO,      1,  0,   3, "Off|Sound card|Real PC speaker|Both" },
 { "Gus",               IDC_S_GUS,         SK_CHECK,      0,  0,   1, NULL },
 { "Tandy",             IDC_S_TANDY,       SK_CHECK,      0,  0,   1, NULL },
 
