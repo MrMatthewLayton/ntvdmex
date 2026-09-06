@@ -7,6 +7,7 @@
 #include <windows.h>
 #include <ddraw.h>
 #include "present_ddraw.h"
+#include "present_scale.h"
 
 /* IID_IDirectDraw7 = 15e65ec0-3b9c-11d2-b92f-00609797ea5b (inline -> no dxguid). */
 static const GUID IID_IDirectDraw7_local =
@@ -19,13 +20,40 @@ typedef HRESULT (WINAPI *PFN_DDCREATEEX)(GUID *, LPVOID *, REFIID, IUnknown *);
 /* time a blit near the monitor's vertical blank (reduces tearing). */
 static void wait_vblank(present_ddraw *pd)
 {
-    if (pd->dd) IDirectDraw7_WaitForVerticalBlank(DD, DDWAITVB_BLOCKBEGIN, NULL);
+    if (pd->vsync && pd->dd) IDirectDraw7_WaitForVerticalBlank(DD, DDWAITVB_BLOCKBEGIN, NULL);
+}
+
+/* ── THE SCALE2X TARGET, AS ONE STATIC BUFFER. ───────────────────────────────────
+     640x480 doubled is 1.2 MB. It lives here rather than in present_ddraw so the
+     struct stays something a caller can hold by value (present_demo does), and it
+     is static rather than allocated because the present path runs on the UI thread
+     at video rate and must never wait on the heap. */
+static uint8_t s_scaled[1280 * 960];
+
+/* The scanline mask: an 8x8 monochrome pattern, black on every other row. ANDed
+   over the destination it darkens alternate PHYSICAL rows -- which is where a
+   scanline lives, on the screen, not in the frame. Built once and kept: a brush
+   per present would be a GDI object churned sixty times a second. */
+static HBRUSH scanline_brush(void)
+{
+    static HBRUSH s_br = NULL;
+    static const WORD rows[8] = { 0xFFFF, 0x0000, 0xFFFF, 0x0000,
+                                  0xFFFF, 0x0000, 0xFFFF, 0x0000 };
+    HBITMAP bm;
+    if (s_br) return s_br;
+    bm = CreateBitmap(8, 8, 1, 1, rows);
+    if (!bm) return NULL;
+    s_br = CreatePatternBrush(bm);
+    DeleteObject(bm);
+    return s_br;
 }
 
 /* ---- windowed: GDI StretchDIBits from the snapshot ---------------------- */
 static void gdi_present(present_ddraw *pd)
 {
-    HDC hdc; RECT rc; int cw, ch; unsigned i;
+    HDC hdc; RECT rc; int cw, ch, dx, dy, dw, dh; unsigned i;
+    const uint8_t *pix = pd->snap;
+    int sw = pd->snap_w, sh = pd->snap_h;
     struct { BITMAPINFOHEADER h; RGBQUAD c[256]; } bi;
     hdc = GetDC(pd->hwnd);
     if (!hdc) return;
@@ -33,19 +61,45 @@ static void gdi_present(present_ddraw *pd)
     cw = rc.right; ch = rc.bottom - (pd->status_h ? pd->status_h : PRESENT_STATUS_H);
     if (cw < 1) cw = 1;
     if (ch < 1) ch = 1;
+
+    /* Scale2x first: it is a property of the FRAME, so it happens before the
+       stretch and the stretch then works from a source with twice the detail. */
+    if (present_scaler_doubles(pd->scaler) && sw > 0 && sh > 0
+        && sw * 2 <= 1280 && sh * 2 <= 960) {
+        present_scale2x_8(pd->snap, sw, sh, sw, s_scaled);
+        pix = s_scaled; sw *= 2; sh *= 2;
+    }
+
     ZeroMemory(&bi, sizeof bi);
     bi.h.biSize = sizeof(BITMAPINFOHEADER);
-    bi.h.biWidth = (LONG)pd->snap_w; bi.h.biHeight = -(LONG)pd->snap_h;  /* top-down */
+    bi.h.biWidth = (LONG)sw; bi.h.biHeight = -(LONG)sh;                  /* top-down */
     bi.h.biPlanes = 1; bi.h.biBitCount = 8; bi.h.biCompression = BI_RGB;
     for (i = 0; i < 256; ++i) {
         uint32_t a = pd->snap_pal[i];
         bi.c[i].rgbRed = (BYTE)(a >> 16); bi.c[i].rgbGreen = (BYTE)(a >> 8);
         bi.c[i].rgbBlue = (BYTE)a; bi.c[i].rgbReserved = 0;
     }
+    present_fit(cw, ch, pd->aspect, &dx, &dy, &dw, &dh);
     wait_vblank(pd);
-    SetStretchBltMode(hdc, COLORONCOLOR);
-    StretchDIBits(hdc, 0, 0, cw, ch, 0, 0, pd->snap_w, pd->snap_h,
-                  pd->snap, (BITMAPINFO *)&bi, DIB_RGB_COLORS, SRCCOPY);
+    /* Letterboxing leaves bars, and they must be PAINTED: the client area is ours
+       (WM_ERASEBKGND returns 1), so whatever was there last -- the previous mode's
+       frame, at the previous size -- would otherwise stay on screen forever. */
+    if (dx || dy) {
+        RECT full; full.left = 0; full.top = 0; full.right = cw; full.bottom = ch;
+        FillRect(hdc, &full, (HBRUSH)GetStockObject(BLACK_BRUSH));
+    }
+    SetStretchBltMode(hdc, pd->filter ? HALFTONE : COLORONCOLOR);
+    if (pd->filter) SetBrushOrgEx(hdc, 0, 0, NULL);   /* HALFTONE requires this */
+    StretchDIBits(hdc, dx, dy, dw, dh, 0, 0, sw, sh,
+                  pix, (BITMAPINFO *)&bi, DIB_RGB_COLORS, SRCCOPY);
+    if (present_scaler_scanlines(pd->scaler)) {
+        HBRUSH br = scanline_brush();
+        if (br) {
+            HGDIOBJ old = SelectObject(hdc, br);
+            PatBlt(hdc, dx, dy, dw, dh, 0x00A000C9L);    /* PATAND */
+            SelectObject(hdc, old);
+        }
+    }
     ReleaseDC(pd->hwnd, hdc);
 }
 
@@ -119,6 +173,10 @@ int present_ddraw_init(present_ddraw *pd, HWND hwnd)
     PFN_DDCREATEEX create; LPDIRECTDRAW7 dd = 0;
     ZeroMemory(pd, sizeof *pd);
     pd->hwnd = hwnd; pd->fs_w = 640; pd->fs_h = 480; pd->status_h = PRESENT_STATUS_H;
+    /* The struct was just zeroed, and zero is the WRONG default for exactly one of
+       these: this host has always waited for vblank. The other three (nearest, fill
+       the client, no scaler) are what it has always done, so zero is right. */
+    pd->vsync = 1;
     pd->ddmod = LoadLibraryA("ddraw.dll");          /* for fullscreen (optional)   */
     if (pd->ddmod) {
         create = (PFN_DDCREATEEX)GetProcAddress(pd->ddmod, "DirectDrawCreateEx");

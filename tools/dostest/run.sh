@@ -104,15 +104,25 @@ cc -std=c99 -Wall -Wextra -Wno-unused-function -O0 -g \
 
 "$DIR/mpu_test"
 
-# Sound epic slice-4: the audio mixer (resampling + SB transport).
+# Sound epic slice-4: the audio mixer (resampling + SB transport + PC speaker +
+# the master attenuator the Audio settings page drives).
 cc -std=c99 -Wall -Wextra -Wno-unused-function -O0 -g \
    -I "$DIR/../../src/vdd" \
    -o "$DIR/audio_test" "$DIR/audio_test.c" \
    "$DIR/../../src/vdd/vdd_audio.c" "$DIR/../../src/vdd/vdd_sb.c" \
    "$DIR/../../src/vdd/vdd_dma.c" "$DIR/../../src/vdd/vdd_opl.c" \
-   "$DIR/../../src/vdd/vdd_opl_synth.c" "$DIR/../../src/vdd/vdd_bus.c"
+   "$DIR/../../src/vdd/vdd_opl_synth.c" "$DIR/../../src/vdd/vdd_bus.c" \
+   "$DIR/../../src/vdd/vdd_pit.c" "$DIR/../../src/vdd/vdd_speaker.c"
 
 "$DIR/audio_test"
+
+# GH #136: the Display settings page's arithmetic -- aspect-ratio fit and the
+# Scale2x scaler. present_ddraw.c itself needs a desktop; this half does not.
+cc -std=c99 -Wall -Wextra -Wno-unused-function -O0 -g \
+   -I "$DIR/../../src/vdd" \
+   -o "$DIR/present_test" "$DIR/present_test.c"
+
+"$DIR/present_test"
 
 # M3 mode-12h fill-loop interpreter battery (src/host/v86interp.h, flat memory).
 cc -std=c99 -Wall -Wextra -Wno-unused-function -O0 -g \

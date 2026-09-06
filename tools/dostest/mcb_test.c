@@ -11,6 +11,7 @@
  * itself before anything can be allocated -- exactly what mem.exe did on the VM.
  */
 #include <stdio.h>
+#include <string.h>
 #include "dos_mcb.h"
 #include "dos_loader.h"
 #include "dos_psp.h"
@@ -221,6 +222,55 @@ int main(void) {
         CHECK(g[L - 1 - plen - 2] == 0x01 && g[L - 1 - plen - 1] == 0x00,
               "env: WORD count 0x0001 precedes the program path");
         CHECK(g[L - 1 - plen - 3] == 0x00, "env: trailing NUL ends the variable list");
+    }
+
+    /* T13b: BLASTER tracks the card, because the Audio page can move it -------
+       ⚠ Telling a guest the wrong port/IRQ/DMA is worse than telling it nothing:
+         a driver that believes the string masks the line it was told about and
+         waits for an interrupt that arrives somewhere else. So the string is
+         built from the same numbers vdd_sb is configured with, and the DEFAULT
+         must still come out byte-for-byte as the literal it replaced. */
+    {
+        static uint8_t g[0x1000];
+        dos_sbcfg sb;
+        int i, found;
+        /* Find "BLASTER=" in the built block and compare the rest of that string. */
+        found = 0;
+        dos_env_build(g, 0x0000, "C:\\T.COM");
+        for (i = 0; i < (int)sizeof g - 8; ++i)
+            if (memcmp(g + i, "BLASTER=", 8) == 0) { found = i; break; }
+        CHECK(found > 0, "BLASTER: the variable is in the block");
+        CHECK(found > 0 && strcmp((char *)g + found, "BLASTER=A220 I5 D1 T3") == 0,
+              "BLASTER: no card supplied -> the literal this host always claimed");
+
+        sb.base = 0x240; sb.irq = 7; sb.dma8 = 3; sb.dma16 = 0; sb.type = 3;
+        memset(g, 0, sizeof g);
+        dos_env_build_card(g, 0x0000, "C:\\T.COM", "C:\\", &sb);
+        for (i = 0, found = 0; i < (int)sizeof g - 8; ++i)
+            if (memcmp(g + i, "BLASTER=", 8) == 0) { found = i; break; }
+        CHECK(found > 0 && strcmp((char *)g + found, "BLASTER=A240 I7 D3 T3") == 0,
+              "BLASTER: a moved card is reported at its real port, IRQ and channel");
+
+        /* A 16-bit channel is advertised as H, and ONLY when one is set -- the
+           default card has one and has never mentioned it, and Doom's audio is
+           user-confirmed against the string without it. */
+        sb.base = 0x220; sb.irq = 5; sb.dma8 = 1; sb.dma16 = 5; sb.type = 3;
+        memset(g, 0, sizeof g);
+        dos_env_build_card(g, 0x0000, "C:\\T.COM", "C:\\", &sb);
+        for (i = 0, found = 0; i < (int)sizeof g - 8; ++i)
+            if (memcmp(g + i, "BLASTER=", 8) == 0) { found = i; break; }
+        CHECK(found > 0 && strcmp((char *)g + found, "BLASTER=A220 I5 D1 H5 T3") == 0,
+              "BLASTER: a 16-bit channel appears as H, and only when it is set");
+
+        /* Two digits must not be truncated to one, and a base is three hex
+           digits with no 0x -- both are how a driver parses it. */
+        sb.base = 0x280; sb.irq = 10; sb.dma8 = 1; sb.dma16 = 0; sb.type = 6;
+        memset(g, 0, sizeof g);
+        dos_env_build_card(g, 0x0000, "C:\\T.COM", "C:\\", &sb);
+        for (i = 0, found = 0; i < (int)sizeof g - 8; ++i)
+            if (memcmp(g + i, "BLASTER=", 8) == 0) { found = i; break; }
+        CHECK(found > 0 && strcmp((char *)g + found, "BLASTER=A280 I10 D1 T6") == 0,
+              "BLASTER: a two-digit IRQ survives, and the base is three hex digits");
     }
 
     /* T14: PSP command-tail builder (src/dos/dos_psp.h) --------------------- */

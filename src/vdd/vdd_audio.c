@@ -75,6 +75,19 @@ void vdd_audio_init(audio_state *st, opl_state *opl, sb_state *sb, uint32_t out_
     st->opl = opl;
     st->sb  = sb;
     st->out_hz = out_hz ? out_hz : AUDIO_OUT_HZ;
+    st->master = 100;                 /* the struct is zeroed above: 0 would be silence */
+}
+
+void vdd_audio_set_speaker(audio_state *st, const speaker_state *spk, int enable)
+{
+    st->spk = spk;
+    st->spk_level = enable ? AUDIO_SPK_LEVEL : 0;
+}
+
+void vdd_audio_set_master(audio_state *st, uint32_t percent, int muted)
+{
+    st->master = percent > 100 ? 100 : percent;
+    st->muted  = muted ? 1 : 0;
 }
 
 void vdd_audio_mix(audio_state *st, int16_t *out, uint32_t frames)
@@ -116,6 +129,31 @@ void vdd_audio_mix(audio_state *st, int16_t *out, uint32_t frames)
                           + ((rs_step(&st->r_sb, st->scratch, need, &idx) * g) >> 8);
                 out[done + i] = (int16_t)(v > 32767 ? 32767 : (v < -32768 ? -32768 : v));
             }
+        }
+
+        /* --- PC speaker --------------------------------------------------- */
+        /* Gated by port 0x61 bits 0+1 -- both, which is why a program that only
+           sets the data bit to click the cone makes no tone here either. */
+        if (st->spk && st->spk_level && vdd_speaker_active(st->spk)) {
+            uint32_t hz = vdd_speaker_hz(st->spk);
+            if (hz >= AUDIO_SPK_HZ_MIN && hz <= AUDIO_SPK_HZ_MAX) {
+                uint32_t step = (uint32_t)(((uint64_t)hz << 16) / st->out_hz);
+                for (i = 0; i < n; ++i) {
+                    int32_t v = out[done + i]
+                              + ((st->spk_phase & 0x8000u) ? st->spk_level : -st->spk_level);
+                    out[done + i] = (int16_t)(v > 32767 ? 32767 : (v < -32768 ? -32768 : v));
+                    st->spk_phase = (uint16_t)(st->spk_phase + step);
+                }
+            }
+        }
+
+        /* --- master attenuator -------------------------------------------- */
+        if (st->muted) {
+            for (i = 0; i < n; ++i) out[done + i] = 0;
+        } else if (st->master < 100) {
+            int32_t g = (int32_t)((st->master * 256u) / 100u);   /* 0..256 */
+            for (i = 0; i < n; ++i)
+                out[done + i] = (int16_t)((out[done + i] * g) >> 8);
         }
 
         st->frames_mixed += n;

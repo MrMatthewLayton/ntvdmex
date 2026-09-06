@@ -49,8 +49,75 @@ static inline volatile uint8_t *dos_env_putv(volatile uint8_t *p,
     return p;
 }
 
-static inline uint32_t dos_env_build_path(volatile uint8_t *base, uint16_t env_seg,
-                                          const char *progpath, const char *pathvar) {
+/* ── THE CARD THE BLASTER VARIABLE DESCRIBES. ───────────────────────────────────
+     The Audio settings page can move the Sound Blaster's port, IRQ and DMA
+     channel, and the moment it can, a hard-coded BLASTER string becomes a LIE
+     told to every guest that reads it -- the exact failure the note below warns
+     about, just arriving from the dialog instead of from a typo. So the string is
+     built from the same numbers vdd_sb is configured with, and there is one
+     struct that carries them.
+   ⚠ `dma16` is advertised as H only when it is set. The default card has a 16-bit
+     channel (5) that this string has never mentioned, and Doom's audio was tuned
+     against the string as it stands; adding H unasked would change what DMX sees
+     on the one guest whose sound is user-confirmed. */
+typedef struct dos_sbcfg {
+    uint16_t base;      /* I/O base, e.g. 0x220 -> "A220"                        */
+    uint8_t  irq;
+    uint8_t  dma8;      /* 8-bit DMA channel -> "D"                              */
+    uint8_t  dma16;     /* 16-bit channel -> "H"; 0 = do not advertise one       */
+    uint8_t  type;      /* BLASTER "T" value                                     */
+} dos_sbcfg;
+
+/* T3 = an SB 2.0-class card. ⚠ THAT DISAGREES WITH THE DSP VERSION WE REPORT
+   (4.05, an SB16, which would be T6) and it has done since the string was
+   written. It is left alone deliberately: Doom's sound is user-confirmed against
+   this exact string, T is not what a driver uses to find the card, and changing
+   it is a measurement to make on the rig, not a tidy-up to slip into a change
+   that cannot be gated there. Recorded, not silently corrected. */
+#define DOS_SB_DEFAULT_TYPE 3
+
+static inline volatile uint8_t *dos_env_put_u(volatile uint8_t *p, volatile uint8_t *end,
+                                              unsigned v) {
+    char t[12]; int n = 0;
+    if (!v) { if (p < end) *p++ = '0'; return p; }
+    while (v && n < (int)sizeof t) { t[n++] = (char)('0' + v % 10); v /= 10; }
+    while (n-- > 0 && p < end) *p++ = (uint8_t)t[n];
+    return p;
+}
+
+/* Three hex digits, upper case: every base a Sound Blaster can sit at (0x220 to
+   0x280) is three, and that is how every BLASTER string in the wild spells it. */
+static inline volatile uint8_t *dos_env_put_x3(volatile uint8_t *p, volatile uint8_t *end,
+                                               unsigned v) {
+    static const char HEX[] = "0123456789ABCDEF";
+    int i;
+    for (i = 8; i >= 0; i -= 4) if (p < end) *p++ = (uint8_t)HEX[(v >> i) & 0xF];
+    return p;
+}
+
+/* Emit "BLASTER=A220 I5 D1 T3" for `sb`, or exactly that literal when sb is NULL
+   -- so a caller that has no configuration to offer gets the card this host has
+   always claimed, byte for byte. */
+static inline volatile uint8_t *dos_env_blaster(volatile uint8_t *p, volatile uint8_t *end,
+                                                const dos_sbcfg *sb) {
+    dos_sbcfg dflt;
+    if (!sb) {
+        dflt.base = 0x220; dflt.irq = 5; dflt.dma8 = 1; dflt.dma16 = 0;
+        dflt.type = DOS_SB_DEFAULT_TYPE;
+        sb = &dflt;
+    }
+    p = dos_env_putv(p, end, "BLASTER=A");
+    p = dos_env_put_x3(p, end, sb->base);
+    p = dos_env_putv(p, end, " I");   p = dos_env_put_u(p, end, sb->irq);
+    p = dos_env_putv(p, end, " D");   p = dos_env_put_u(p, end, sb->dma8);
+    if (sb->dma16) { p = dos_env_putv(p, end, " H"); p = dos_env_put_u(p, end, sb->dma16); }
+    p = dos_env_putv(p, end, " T");   p = dos_env_put_u(p, end, sb->type);
+    return p;
+}
+
+static inline uint32_t dos_env_build_card(volatile uint8_t *base, uint16_t env_seg,
+                                          const char *progpath, const char *pathvar,
+                                          const dos_sbcfg *sb) {
     volatile uint8_t *e = mcb_at(base, env_seg);
     volatile uint8_t *p = e;
     /* Leave room for the trailing NUL, the count WORD, the program path and its
@@ -64,13 +131,13 @@ static inline uint32_t dos_env_build_path(volatile uint8_t *base, uint16_t env_s
          Every Sound Blaster install sets it, so every DOS sound driver reads it and
          only falls back to probing when it is absent -- and a fallback probe is a
          WORSE test of our card than being told where it is, because it also has to
-         guess the IRQ and DMA channel. The values are the ones vdd_sb is actually
-         configured with (SB_DEFAULT_BASE / SB_DEFAULT_IRQ / channel 1); T3 = an
-         SB 2.0-class card, which matches the DSP version the VDD reports.
+         guess the IRQ and DMA channel.
          ⚠ THESE MUST TRACK vdd_sb.h. Telling the guest I7 while the VDD raises IRQ5
            is worse than saying nothing: a driver that believes the string masks the
-           line it was told about and waits on an interrupt that arrives elsewhere. */
-    p = dos_env_putv(p, vend, "BLASTER=A220 I5 D1 T3"); *p++ = 0;
+           line it was told about and waits on an interrupt that arrives elsewhere.
+           That is why the numbers now come in as an argument rather than being
+           typed here twice -- see dos_sbcfg. */
+    p = dos_env_blaster(p, vend, sb); *p++ = 0;
     *p++ = 0;                                       /* trailing \0 ends the var list */
     *p++ = 0x01; *p++ = 0x00;                       /* WORD: one string follows */
     p = dos_env_putv(p, e + DOS_ENV_CAP - 1,
@@ -79,9 +146,16 @@ static inline uint32_t dos_env_build_path(volatile uint8_t *base, uint16_t env_s
     return (uint32_t)(p - e);
 }
 
+/* The historical shapes, kept so every existing caller reads the same: no card
+   supplied means the card this host has always claimed. */
+static inline uint32_t dos_env_build_path(volatile uint8_t *base, uint16_t env_seg,
+                                          const char *progpath, const char *pathvar) {
+    return dos_env_build_card(base, env_seg, progpath, pathvar, NULL);
+}
+
 static inline uint32_t dos_env_build(volatile uint8_t *base, uint16_t env_seg,
                                      const char *progpath) {
-    return dos_env_build_path(base, env_seg, progpath, "C:\\");
+    return dos_env_build_card(base, env_seg, progpath, "C:\\", NULL);
 }
 
 #endif /* DOS_ENV_H */

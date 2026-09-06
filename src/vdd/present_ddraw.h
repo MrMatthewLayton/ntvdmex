@@ -38,6 +38,14 @@ typedef struct present_ddraw {
     int   fullscreen;
     int   fs_w, fs_h;   /* exclusive-fullscreen mode size (default 640x480)     */
     int   status_h;     /* reserved bottom strip for the status bar (windowed)  */
+    /* ── THE DISPLAY PAGE, AS FOUR FIELDS. ───────────────────────────────────
+         Set by settings_apply() in the host; read on every present. All four
+         default to what this host did before they existed, so a machine with no
+         stored settings behaves exactly as it always has. */
+    int   vsync;        /* 1 = time the blit near vblank (the historical default)*/
+    int   filter;       /* 0 = nearest, 1 = bilinear (GDI HALFTONE)             */
+    int   aspect;       /* 1 = letterbox to 4:3 rather than fill the client     */
+    int   scaler;       /* PRESENT_SCALER_* (present_scale.h)                   */
     /* double-buffer snapshot: filled under the caller's lock by _snapshot(),
        blitted (vsync'd) outside it by _present(). Removes the concurrent-write
        tearing of the live framebuffer. 8bpp + palette (all our frames). */

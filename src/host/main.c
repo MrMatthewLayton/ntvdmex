@@ -2272,6 +2272,16 @@ static void recovery_uninstall(char **pp)
      SetErrorMode for the same reason. A guest that never touches INT 13h never
      pays for this and never risks it. */
 #define FLOPPY_IMG_PATH "C:\\ntvdmex\\FLOPPY.IMG"
+/* ── AND THE DRIVES PAGE CAN POINT IT SOMEWHERE ELSE. ────────────────────────
+     settings_apply() aims this at the FloppyAImage setting when one is stored.
+     ⚠ IT IS A POINTER, NOT A COPY, AND IT POINTS INTO g_set -- which lives for
+       the process. A copy here would be a second place for the path to be, and
+       the first thing a second place does is go stale.
+     ⚠ THE HARNESS PATH STAYS THE FALLBACK. The rig drops FLOPPY.IMG at the
+       literal above and re-launches; if an empty setting overrode that, every
+       headless disk measurement would start reporting "drive not ready" on a
+       machine where nothing had changed. */
+static const char   *g_floppy_img = FLOPPY_IMG_PATH;
 static HANDLE        g_disk_h[1] = { INVALID_HANDLE_VALUE };
 static dos_disk_geom g_disk_g[1];
 static int           g_disk_tried[1];
@@ -2288,7 +2298,7 @@ static dos_disk_geom *disk_for(unsigned drive)
     if (g_disk_tried[0]) return NULL;
     g_disk_tried[0] = 1;
     om = SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOOPENFILEERRORBOX);
-    g_disk_h[0] = CreateFileA(FLOPPY_IMG_PATH, GENERIC_READ | GENERIC_WRITE,
+    g_disk_h[0] = CreateFileA(g_floppy_img, GENERIC_READ | GENERIC_WRITE,
                               FILE_SHARE_READ, NULL, OPEN_EXISTING,
                               FILE_ATTRIBUTE_NORMAL, NULL);
     SetErrorMode(om);
@@ -2307,7 +2317,7 @@ static dos_disk_geom *disk_for(unsigned drive)
         return NULL;
     }
     { char db[200], *dq = db;
-      dq = zput(dq, "  INT13 drive 0 = " FLOPPY_IMG_PATH ", ");
+      dq = zput(dq, "  INT13 drive 0 = "); dq = zput(dq, g_floppy_img); dq = zput(dq, ", ");
       dq = zhex(dq, g_disk_g[0].cylinders); dq = zput(dq, " cyl x ");
       dq = zhex(dq, g_disk_g[0].heads);     dq = zput(dq, " head x ");
       dq = zhex(dq, g_disk_g[0].sectors);   dq = zput(dq, " sec, type 0x");
@@ -4539,19 +4549,61 @@ static void host_cursor_set(HWND h, int on)
 }
 
 /* ── SETTINGS: THE STORE, AND WHAT APPLYING THEM MEANS. ──────────────────────────
-     g_set is the live copy. settings_apply() is deliberately the ONLY place that
-     pushes a setting into the machine, so "what does this knob actually do" has one
-     answer and the dialog cannot drift from startup.
-   ⚠ THIS FUNCTION IS ALSO THE HONEST LIST OF WHAT WORKS. Forty-odd settings are
-     stored in HKCU; the eight touched here are the ones the emulator consults. The
-     rest arrived from the old menu scaffold, where they were IDM_STUB, and they now
-     round-trip faithfully and change nothing. Wiring one up means adding a line HERE,
-     not adding storage -- the storage is already there.
-   ⚠ EVERY LIVE ONE OF THESE IS ALSO A TEXT FILE ON THE TEST SHARE, and the file wins
-     -- see the precedence note in settings.h. settings_apply() therefore runs BEFORE
-     the file-knob block in WinMain, never after. */
+     g_set is the live copy, and the three settings_apply* functions below are
+     deliberately the ONLY places a setting reaches the machine, so "what does this
+     knob actually do" has one answer and the dialog cannot drift from startup.
+     They are split by WHEN they can run, not by what they configure:
+
+       settings_apply()          -- knobs that exist before anything is built.
+                                    ⚠ Every one of these is ALSO a text file on the
+                                      test share and THE FILE WINS (see settings.h),
+                                      so this runs BEFORE the file-knob block in
+                                      WinMain and never again afterwards.
+       settings_apply_devices()  -- the mixer and the presenter. Both zero their own
+                                    struct when they initialise, so pushing into them
+                                    any earlier writes into a struct that is about to
+                                    be wiped. None of these has a file-knob twin, so
+                                    running it late costs the precedence rule nothing.
+       settings_apply_present()  -- the display half of the above on its own, for the
+                                    UI thread, which builds its presenter later still.
+
+   ⚠ THESE FUNCTIONS ARE ALSO THE HONEST LIST OF WHAT WORKS. What is NOT here is not
+     honoured, however faithfully it round-trips through HKCU:
+       CPU page     -- CpuType/CpuCore/Fpu/SpeedMode/Cycles/Turbo. This host runs
+                       16-bit code on the REAL CPU; there are no cycles to count and
+                       a speed control has to be a duty cycle on the exec loop. It is
+                       a feature, not a line here.
+       ConventionalKB, Umb -- DOS_MEM_TOP is a compile-time constant and there are no
+                       upper memory blocks to link. See GH #47.
+       Renderer, Filtering -- the windowed path is GDI StretchDIBits; a DirectDraw
+                       windowed blit does not exist yet (the clipper field is unused).
+                       Filtering IS pushed, and GDI honours it in the stretch.
+       Opl (OPL2/OPL3)     -- vdd_opl is a 9-channel OPL2. There is no OPL3 to select.
+       SbModel, Midi, Gus, Tandy, joystick, KeyboardLayout, Typematic, SeamlessMouse,
+       A20, BootFrom, DriveCPath, CdRomImage, SoundFontPath -- no consumer yet.
+       (FloppyAImage IS live: it is what INT 13h opens.) */
 static ntvdmex_settings g_set;
 static dos_machine_t   *g_dosm;          /* so the DOS version can be changed live */
+
+/* Frames the presenter drops between the ones it shows. 0 = every frame, which is
+   what this host has always done. Read on the UI thread's timer tick. */
+static int g_frameskip;
+
+/* ── THE CARD, IN ONE PLACE, BECAUSE THREE THINGS HAVE TO AGREE ABOUT IT. ────────
+     vdd_sb answers at this port and raises this IRQ; the DMA controller moves the
+     bytes on this channel; and the guest is TOLD all three in BLASTER. Telling it
+     one thing while doing another is worse than saying nothing at all -- a driver
+     that believes the string waits on an interrupt that arrives elsewhere -- so the
+     numbers exist once and every consumer reads them from here. */
+static dos_sbcfg g_sbcfg = { SB_DEFAULT_BASE, SB_DEFAULT_IRQ, SB_DEFAULT_DMA8,
+                             0 /* H is not advertised by default -- see dos_env.h */,
+                             DOS_SB_DEFAULT_TYPE };
+
+/* Whether the extended/expanded memory managers announce themselves at all. Off
+   means INT 2Fh AX=4300 does not answer and there is no INT 67h vector, which is
+   the state a real machine is in with no HIMEM/EMM386 line in CONFIG.SYS -- and
+   which some games specifically want. */
+static int g_xms_on = 1, g_ems_on = 1;
 
 static void settings_apply(HWND h, const ntvdmex_settings *s, int live)
 {
@@ -4559,12 +4611,57 @@ static void settings_apply(HWND h, const ntvdmex_settings *s, int live)
     g_pitpace_on     = (int)(s->v[SET_PITPACE] ? 1 : 0);
     g_ui_tick_min_ms = (int)s->v[SET_UITICK];
     g_vid.cursor_blink = (uint8_t)(s->v[SET_BLINKCURSOR] ? 1 : 0);
+    g_frameskip      = (int)s->v[SET_FRAMESKIP];
+    g_xms_on         = (int)(s->v[SET_XMS] ? 1 : 0);
+    g_ems_on         = (int)(s->v[SET_EMS] ? 1 : 0);
+    g_floppy_img     = s->s[SET_STR_FLOPPYA][0] ? s->s[SET_STR_FLOPPYA] : FLOPPY_IMG_PATH;
+    /* The SbDma list is 1|3|5, and 5 is not an 8-bit channel on any real 8237 --
+       on an SB16 it is the SIXTEEN-bit one. Selecting it therefore moves H and
+       leaves D where it was, rather than pointing the 8-bit engine at a channel
+       whose registers live at completely different ports. */
+    g_sbcfg.base = (uint16_t)(0x220 + 0x20 * (s->v[SET_SBADDR] & 3));
+    { static const uint8_t IRQS[4] = { 5, 7, 10, 11 };
+      static const uint8_t DMAS[3] = { 1, 3, 5 };
+      uint8_t ch = DMAS[s->v[SET_SBDMA] < 3 ? s->v[SET_SBDMA] : 0];
+      g_sbcfg.irq = IRQS[s->v[SET_SBIRQ] & 3];
+      if (ch < 4) { g_sbcfg.dma8 = ch; g_sbcfg.dma16 = 0; }
+      else        { g_sbcfg.dma8 = SB_DEFAULT_DMA8; g_sbcfg.dma16 = ch; } }
     if (g_dosm) dos_int21_set_version(g_dosm, (uint8_t)s->v[SET_DOSMAJ],
                                               (uint8_t)s->v[SET_DOSMIN]);
     /* The cursor is the one setting with a VISIBLE side effect, so it goes through
        the same helper the menu item and Ctrl+F8 use rather than poking the flag. */
     if (live && h) host_cursor_set(h, (int)s->v[SET_HOSTCURSOR]);
     else InterlockedExchange(&g_cursor_show, s->v[SET_HOSTCURSOR] ? 1 : 0);
+}
+
+/* The display half. Separate because the UI thread builds its presenter long after
+   WinMain reads the registry, and present_ddraw_init() zeroes its own struct. */
+static void settings_apply_present(present_ddraw *pd, const ntvdmex_settings *s)
+{
+    pd->vsync  = (int)(s->v[SET_VSYNC]  ? 1 : 0);
+    pd->filter = (int)(s->v[SET_FILTER] ? 1 : 0);
+    pd->aspect = (int)(s->v[SET_ASPECT] ? 1 : 0);
+    pd->scaler = (int)s->v[SET_SCALER];
+}
+
+static void settings_apply_devices(const ntvdmex_settings *s)
+{
+    vdd_audio_set_master(&g_audio, s->v[SET_VOLUME], (int)s->v[SET_MUTE]);
+    /* The speaker VDD stays on the bus either way: port 0x61 must keep answering
+       because guests time delay loops off its refresh bit. The setting decides
+       only whether anything is audible. */
+    vdd_audio_set_speaker(&g_audio, &g_spk, (int)(s->v[SET_SPEAKER] ? 1 : 0));
+    settings_apply_present(&g_pd, s);
+}
+
+/* The output rate is a CONSTRUCTION parameter, not something to push: the mixer
+   and the waveOut device must be opened at the same rate or every sample is
+   resampled to a clock nothing is running at. One function so the two callers
+   cannot disagree. */
+static uint32_t settings_out_hz(const ntvdmex_settings *s)
+{
+    static const uint32_t RATES[3] = { 22050u, 44100u, 48000u };
+    return RATES[s->v[SET_RATE] < 3 ? s->v[SET_RATE] : 1];
 }
 
 /* ── THE TABBED SETTINGS DIALOG. ─────────────────────────────────────────────────
@@ -4774,6 +4871,13 @@ static INT_PTR CALLBACK settings_dlgproc(HWND dlg, UINT msg, WPARAM wp, LPARAM l
             g_set = n;
             settings_save(&g_set);            /* the registry IS the store        */
             settings_apply(GetParent(dlg), &g_set, 1);
+            settings_apply_devices(&g_set);   /* the mixer + the presenter exist by now */
+            /* ⚠ The construction-time ones (the card's port/IRQ/DMA, the output
+                 rate, the window scale, the memory managers) are stored and take
+                 effect at the NEXT launch. That is not a gap to hide: a Sound
+                 Blaster that changes port while a game is mid-transfer, or an XMS
+                 driver that vanishes from under a program that holds handles, is a
+                 crash dressed up as a feature. */
             EndDialog(dlg, IDOK);
             return TRUE; }
         case IDCANCEL:
@@ -5004,7 +5108,16 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
                                    (int)g_vid.frame.stride, g_ms_x, g_ms_y);  /* driver cursor */
                 present_ddraw_snapshot(&g_pd, &g_vid.frame); /* consistent copy UNDER lock */
                 HOST_UNLOCK();
-                present_ddraw_present(&g_pd);   /* vsync'd blit OUTSIDE the lock         */
+                /* ── FRAME SKIP DROPS THE BLIT, NOT THE SNAPSHOT. ────────────────
+                     The snapshot is what keeps our copy of the frame current, and
+                     WM_PAINT blits that copy on every expose -- so skipping the
+                     snapshot too would leave a stale picture on screen after a
+                     window move, which is a bug, not a setting. Skipping only the
+                     blit gives back exactly what the blit costs. */
+                {   static unsigned s_fs;
+                    if (g_frameskip <= 0 || (s_fs++ % (unsigned)(g_frameskip + 1)) == 0)
+                        present_ddraw_present(&g_pd);  /* vsync'd blit OUTSIDE the lock */
+                }
             } else {
                 HOST_UNLOCK();  /* not our phase: keep the last frame up */
             }
@@ -5264,7 +5377,16 @@ static DWORD WINAPI ui_thread(LPVOID arg)
     wc.hIcon = LoadIconA(hi, MAKEINTRESOURCEA(101));    /* IDI_MAINICON: title bar + taskbar */
     wc.lpszClassName = "NtvdmexHostWindow";
     if (!RegisterClassA(&wc)) return 1;
-    rc.left = 0; rc.top = 0; rc.right = VID_FB_W; rc.bottom = VID_FB_H + PRESENT_STATUS_H;
+    /* ── WINDOW SIZE IS A CONSTRUCTION PARAMETER. ──────────────────────────────
+         1x/2x/3x scale the CLIENT AREA -- the framebuffer -- not the whole window,
+         so the chrome, the menu and the status bar keep their real sizes at every
+         scale and "2x" means the picture is twice as big, not the window. "Custom"
+         (index 3) means whatever the user last dragged it to, and until there is
+         somewhere to remember that it is the same as 1x. */
+    {   int scale = (int)g_set.v[SET_WINSIZE] + 1;
+        if (scale < 1 || scale > 3) scale = 1;          /* Custom -> the default   */
+        rc.left = 0; rc.top = 0;
+        rc.right = VID_FB_W * scale; rc.bottom = VID_FB_H * scale + PRESENT_STATUS_H; }
     AdjustWindowRect(&rc, WS_OVERLAPPEDWINDOW, TRUE);   /* TRUE: window has a menu  */
     g_hwnd = CreateWindowA(wc.lpszClassName, VDM_WIN_TITLE, WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
                            CW_USEDEFAULT, CW_USEDEFAULT, rc.right - rc.left, rc.bottom - rc.top,
@@ -5279,6 +5401,7 @@ static DWORD WINAPI ui_thread(LPVOID arg)
     SetMenu(g_hwnd, build_menu());
     menu_check(g_hwnd, IDM_INPUT_CURSOR, g_cursor_show);  /* tick reflects the state  */
     present_ddraw_init(&g_pd, g_hwnd);          /* GDI windowed; DDraw for fullscreen */
+    settings_apply_present(&g_pd, &g_set);      /* ...which zeroes its own struct     */
     make_status(g_hwnd, hi);                     /* native themed status bar          */
     /* ★ A WIN16 GUEST GETS NO VDM WINDOW -- see the note by tray_add. The window
          is built either way (it owns the present surface, the raw input, the frame
@@ -8349,10 +8472,10 @@ static int wow_place_v86(dos_machine_t *mp, WORD *ecs, WORD *eip,
             if (n && n < MAX_PATH) { pv[n] = ';';
                 if (!GetWindowsDirectoryA(pv + n + 1, MAX_PATH)) pv[n] = 0; }
             else pv[0] = 0;
-            dos_env_build_path(NULL, DOS_ENV_SEG,
+            dos_env_build_card(NULL, DOS_ENV_SEG,
                           g_wow_krnl_path[0] ? g_wow_krnl_path
                                              : "C:\\WINDOWS\\SYSTEM32\\KRNL386.EXE",
-                          pv[0] ? pv : "C:\\WINDOWS\\SYSTEM32;C:\\WINDOWS");
+                          pv[0] ? pv : "C:\\WINDOWS\\SYSTEM32;C:\\WINDOWS", &g_sbcfg);
             q = m; q = zput(q, "WOWV86: env rebuilt, PATH=");
             q = zput(q, pv[0] ? pv : "(fallback)");
             q = zput(q, " program path = ");
@@ -14953,9 +15076,10 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
          what a headless measurement is measuring. */
     settings_load(&g_set);
     settings_apply(NULL, &g_set, 0);
-    /* Log only the LIVE settings -- the ones settings_apply() actually pushes into
-       the machine. The stored-but-not-yet-honoured ones would make this line four
-       times longer and every value in it would be a claim the run cannot support. */
+    /* Log only the LIVE settings -- the ones the settings_apply* functions actually
+       push into the machine. The stored-but-not-yet-honoured ones would make this
+       line four times longer and every value in it would be a claim the run cannot
+       support. Two lines because there are now enough of them to wrap. */
     p = zput(p, "STAGE0: settings cursor="); p = zhex(p, g_set.v[SET_HOSTCURSOR]);
     p = zput(p, " blink=");   p = zhex(p, g_set.v[SET_BLINKCURSOR]);
     p = zput(p, " msens=");   p = zhex(p, g_set.v[SET_MSENS]);
@@ -14963,6 +15087,23 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     p = zput(p, ".");         p = zhex(p, g_set.v[SET_DOSMIN]);
     p = zput(p, " pitpace="); p = zhex(p, g_set.v[SET_PITPACE]);
     p = zput(p, " uitick=");  p = zhex(p, g_set.v[SET_UITICK]);
+    p = zput(p, "\r\n");
+    p = zput(p, "STAGE0: settings vol=");  p = zhex(p, g_set.v[SET_VOLUME]);
+    p = zput(p, " mute=");      p = zhex(p, g_set.v[SET_MUTE]);
+    p = zput(p, " spk=");       p = zhex(p, g_set.v[SET_SPEAKER]);
+    p = zput(p, " outhz=");     p = zhex(p, settings_out_hz(&g_set));
+    p = zput(p, " sb=A");       p = zhex(p, g_sbcfg.base);
+    p = zput(p, " I");          p = zhex(p, g_sbcfg.irq);
+    p = zput(p, " D");          p = zhex(p, g_sbcfg.dma8);
+    p = zput(p, " H");          p = zhex(p, g_sbcfg.dma16);
+    p = zput(p, " xms=");       p = zhex(p, (DWORD)g_xms_on);
+    p = zput(p, " ems=");       p = zhex(p, (DWORD)g_ems_on);
+    p = zput(p, " winsize=");   p = zhex(p, g_set.v[SET_WINSIZE]);
+    p = zput(p, " scaler=");    p = zhex(p, g_set.v[SET_SCALER]);
+    p = zput(p, " aspect=");    p = zhex(p, g_set.v[SET_ASPECT]);
+    p = zput(p, " filter=");    p = zhex(p, g_set.v[SET_FILTER]);
+    p = zput(p, " vsync=");     p = zhex(p, g_set.v[SET_VSYNC]);
+    p = zput(p, " frameskip="); p = zhex(p, g_set.v[SET_FRAMESKIP]);
     p = zput(p, "\r\n");
 
     g_headless = (GetFileAttributesA(AUTOEXIT_PATH) != INVALID_FILE_ATTRIBUTES);
@@ -15375,8 +15516,17 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
        at 07:9F overwrites that pair first, so ES:BX is something else. Planting
        HIMEM's own bytes (EB 50) there changed nothing. Sixth refutation. */
     for (i = 0; i < sizeof(bop67); ++i) hdlr[0x48 + i] = bop67[i];  /* INT 67h (EMM) stub */
-    *(volatile WORD *)(0x67 * 4)     = 0x0048;              /* IVT[0x67].offset    */
-    *(volatile WORD *)(0x67 * 4 + 2) = DOS_HDLR_SEG;        /* IVT[0x67].segment   */
+    /* ⚠ NO EMS MEANS NO INT 67h VECTOR AND NO DEVICE NAME. Both halves, because
+         a program detects EMM by either following the vector to the "EMMXXXX0"
+         header OR by opening the device; leaving one of them behind is a manager
+         that half-exists, which is worse for a guest than one that does not. */
+    if (g_ems_on) {
+        *(volatile WORD *)(0x67 * 4)     = 0x0048;          /* IVT[0x67].offset    */
+        *(volatile WORD *)(0x67 * 4 + 2) = DOS_HDLR_SEG;    /* IVT[0x67].segment   */
+    } else {
+        *(volatile WORD *)(0x67 * 4)     = 0;
+        *(volatile WORD *)(0x67 * 4 + 2) = 0;
+    }
     /* DPMI mode-switch entry (far-called): BOP 0x50 ; RETF. The host services the
        BOP by switching to PM; the RETF only executes if the switch fails. */
     hdlr[DPMI_ENTRY_OFF + 0] = VDM_BOP0; hdlr[DPMI_ENTRY_OFF + 1] = VDM_BOP1;
@@ -15408,7 +15558,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
        DPMI_FAULT_COFF by dpmi_install_fault_trampoline(), not here.) */
     /* EMS detection method 2: programs read the INT 67h vector's segment:000Ah for
        the device-driver name "EMMXXXX0". Park it in the handler segment. */
-    for (i = 0; i < sizeof(emmname); ++i) hdlr[DOS_EMM_NAME_OFF + i] = emmname[i];
+    if (g_ems_on)
+        for (i = 0; i < sizeof(emmname); ++i) hdlr[DOS_EMM_NAME_OFF + i] = emmname[i];
 
     { unsigned bi;
       volatile BYTE *bs = (volatile BYTE *)(DOS_CTAB_SEG << 4);
@@ -15489,7 +15640,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
        still 0000:0000 stores a null the program restores on the way out. Parent
        PSP = our own, since nothing launched us from inside the VDM. (GH #34) */
     dos_psp_save_vectors(NULL, DOS_PSP_SEG, DOS_PSP_SEG);
-    dos_env_build(NULL, DOS_ENV_SEG, progpath[0] ? progpath : "C:\\PROGRAM.COM");  /* M2.5: env */
+    dos_env_build_card(NULL, DOS_ENV_SEG, progpath[0] ? progpath : "C:\\PROGRAM.COM",
+                       "C:\\", &g_sbcfg);                                          /* M2.5: env */
     dos_cmdtail_build(NULL, DOS_PSP_SEG, args);                                    /* M2.5: args */
     /* ► DUMP THE TAIL AS THE GUEST WILL SEE IT. Passing ANY argument makes DOS/4GW
          quit before printing a single character, with a DPMI/INT 21h trace identical
@@ -15748,7 +15900,11 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     g_opl_dev = vdd_opl_device(&g_opl);
     vdd_bus_add(&g_bus, &g_opl_dev);            /* AdLib/OPL2: ports 0x388/0x389 */
     g_sb.dma = &g_dma; g_sb.opl = &g_opl;       /* SB pulls PCM via DMA, mirrors FM */
-    g_sb.base = SB_DEFAULT_BASE; g_sb.irq = SB_DEFAULT_IRQ;
+    /* ⚠ THE SAME NUMBERS THAT GO INTO BLASTER (dos_env.h). If these two ever come
+         from different places, a driver is told one port and finds another. */
+    g_sb.base = g_sbcfg.base; g_sb.irq = g_sbcfg.irq;
+    g_sb.dma8 = g_sbcfg.dma8;
+    if (g_sbcfg.dma16) g_sb.dma16 = g_sbcfg.dma16;   /* 0 = keep vdd_sb's default */
     /* Opt-in raw PCM capture -- see sb_state.cap_buf. 4 MB is ~3 minutes of Doom's
        11025 Hz stereo, and it is a static buffer so the audio thread never allocates. */
     if (GetFileAttributesA(SBDUMP_FLAG) != INVALID_FILE_ATTRIBUTES) {
@@ -15772,7 +15928,9 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
        walks the SB's DMA buffer and raises the block-completion IRQ, so it must
        run even if no sound device opens (audio_wave falls back to silent
        pumping) -- otherwise every SB game hangs on a machine without audio. */
-    vdd_audio_init(&g_audio, &g_opl, &g_sb, AUDIO_OUT_HZ);
+    vdd_audio_init(&g_audio, &g_opl, &g_sb, settings_out_hz(&g_set));
+    settings_apply_devices(&g_set);   /* master volume, mute, speaker -- the mixer
+                                         zeroes its own struct, so not one line earlier */
     /* ── THE AUDIO LEAD, AS A CONTROLLED VARIABLE (awbufs.txt). ──────────────────────
          Each queued waveOut buffer is ~11.6 ms that our DMA read pointer runs ahead of
          what is audible, and the guest must refill a block before we reach it. Doom's
@@ -15899,7 +16057,10 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                   if (tbp) tbp(1); }
         g_pitpace_thread = CreateThread(NULL, 0, pit_pacer_thread, NULL, 0, NULL);
     }
-    audio_wave_start(&g_wave, AUDIO_OUT_HZ, host_audio_fill, NULL);
+    /* ⚠ THE SAME RATE THE MIXER WAS BUILT AT. Opening the device at one rate and
+         mixing at another silently resamples everything to a clock nothing runs
+         on -- audible as a pitch error, not as an error message. */
+    audio_wave_start(&g_wave, settings_out_hz(&g_set), host_audio_fill, NULL);
     m.conout = host_conout; m.conctx = NULL;    /* DOS console out -> video      */
     m.conin  = host_conin;  m.cinctx = NULL;    /* DOS console in  <- keyboard   */
     /* Full INT 21h call trace, opt-in per run: it is a differential instrument, not a
@@ -16781,9 +16942,15 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             p = zput(p, ":0x");     p = zhex(p, VDM_REG(tib, VTIB_EIP) & 0xFFFF);
             p = zput(p, "\r\n");
             log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
-            if (ax == 0x4300) {                                 /* XMS installation check */
+            /* ── "NO XMS" MEANS NOT ANSWERING, NOT ANSWERING BADLY. ────────────
+                 A machine with no HIMEM.SYS does not reply to 4300 at all, so AL
+                 keeps whatever the caller put there and the caller reads "not
+                 80h" -- which is exactly what a real one sees. Returning an entry
+                 point that then refuses every call would be a driver that lies
+                 about being installed. */
+            if (ax == 0x4300 && g_xms_on) {                     /* XMS installation check */
                 VDM_SET16(tib, VTIB_EAX, (VDM_REG(tib, VTIB_EAX) & 0xFF00) | 0x80);  /* AL=80h installed */
-            } else if (ax == 0x4310) {                          /* get XMS entry -> ES:BX */
+            } else if (ax == 0x4310 && g_xms_on) {              /* get XMS entry -> ES:BX */
                 VDM_SET16(tib, VTIB_ES, DOS_HDLR_SEG);
                 VDM_SET16(tib, VTIB_EBX, XMS_ENTRY_OFF);
             } else if (ax == 0x1687) {                           /* DPMI installation check (SPIKE) */
