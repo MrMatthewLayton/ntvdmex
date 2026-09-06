@@ -4,7 +4,7 @@
 > this file top to bottom and you will know where it is, what works, what does not, and
 > what to do next.
 
-- **Last updated:** 2026-09-04 (session 49)
+- **Last updated:** 2026-09-06 (session 53)
 - **Sessions 46-49 are committed and pushed** on this branch — the whole WOW service
   batch, the LDT pool and the `tools/ne/neneeds.py` fix.
 - **Branch:** `m9/completeness`
@@ -204,7 +204,7 @@ silently is worth more attention than its size suggests.
 | **No TSRs** | AH=31h is handled but residency is explicitly *not* honoured (and says so, rather than pretending). |
 | **`MEM.EXE` reports wrong figures silently** | The "runs but lies" class — the most expensive kind. |
 | **ZAR** | Needs VBE 2.0 hi-colour + linear framebuffer. |
-| **40 of 46 settings** | Stored in the registry, honoured by nothing. `settings_apply()` in `src/host/main.c` is the honest list of what actually works. |
+| **24 of 47 settings** | Stored in the registry, honoured by nothing (was 40 of 46 before session 53). The three `settings_apply*` functions in `src/host/main.c` are the honest list of what actually works, and the comment above them now names *why* each remaining one is not there. |
 
 ---
 
@@ -1352,3 +1352,107 @@ IP == image offset**) — see [[mem-exe-segment-map]].
   `rt_stock.bat` reported one wedged run's output as five different rows' answers.
 * Two host-log lines written at startup never survived: a later
   `log_write(LOG_PATH,…)` **truncates**. Report at exit.
+
+---
+
+## Session 53 (2026-09-06) — the settings page stopped being a scaffold, 72.4 → 73.0
+
+**Score 72.4 → 73.0.** Suite **1036 → 1080** checks. All green, and this time
+**rig-gated**.
+
+### ★ The PC speaker made no sound at all
+
+`vdd_speaker.c` has modelled port 0x61 and reported PIT channel 2's tone since M3,
+and **nothing ever turned that into a sample** — while the score line read
+"SB16 PCM, OPL2/3 FM, MPU-401, speaker" throughout. It is a square wave gated by
+two bits, so it is a dozen lines in the mixer: phase as a 16-bit fraction of a
+cycle (the top bit *is* the half-cycle), amplitude well below full scale, and
+tones past 20 kHz refused rather than aliased. Measured back out of the mix at the
+frequency the PIT was programmed to.
+
+**The same line also claimed OPL3 and never had one** — `vdd_opl` is a 9-channel
+OPL2. Corrected in `tools/score/model.json` rather than left flattering, and the
+`Opl` combo is deliberately **not** wired for the same reason.
+
+### Sixteen more settings do something (7 → 23 of 47 rows)
+
+| Page | Now live |
+|---|---|
+| Audio | `MasterVolume`, `Mute`, `SampleRate`, `PcSpeaker`, `SbAddress`, `SbIrq`, `SbDma` |
+| Display | `WindowSize`, `Scaler`, `AspectRatio`, `Filtering`, `VSync`, `FrameSkip` |
+| Memory | `Xms`, `Ems` |
+| Drives | `FloppyAImage` |
+
+⚠ **`BLASTER` had to move with the card.** The moment the Audio page can change the
+Sound Blaster's port, a hard-coded `BLASTER=A220 I5 D1 T3` is a **lie told to every
+guest that reads it** — a driver that believes the string masks the line it was told
+about and waits for an interrupt that arrives elsewhere. `dos_env.h` builds the string
+from a `dos_sbcfg`, `main.c` configures `vdd_sb` from the same struct, and with no card
+supplied the output is byte-for-byte the literal it replaced.
+
+⚠ **The `SbDma` list contains a channel that is not an 8-bit channel.** "5" is the
+*sixteen*-bit channel on an SB16; selecting it moves `H` and leaves `D` alone.
+
+⚠ **Recorded, not silently fixed:** the string says `T3` (an SB 2.0) while the DSP
+reports 4.05 (an SB16, i.e. `T6`). That predates this change, Doom's audio is
+user-confirmed against the string as it stands, and correcting it is a measurement
+to make on the rig — not a tidy-up.
+
+### ★ The apply function had to split three ways, and the reason is a real trap
+
+The mixer and the presenter **zero their own struct when they initialise**, so a
+setting pushed into them at the top of `WinMain` is written into a struct that is
+about to be wiped. But `settings_apply()` cannot simply move later — every knob in it
+also has a text file on the test share and **the file wins**, which only works because
+it runs *before* the file-knob block. So:
+
+- `settings_apply()` — before anything is built, before the file knobs.
+- `settings_apply_devices()` — after the mixer exists.
+- `settings_apply_present()` — on the UI thread, after `present_ddraw_init()`.
+
+None of the late ones has a file-knob twin, so the precedence rule costs nothing.
+
+### ⚠⚠ THE RIG WAS UP THE WHOLE TIME AND I FILED IT AS DEAD
+
+The first commit of the day says *"not rig-gated — the bare-metal box did not
+answer"*. It answered fine: **LAN access from the build machine needs
+`dangerouslyDisableSandbox`**, and the first probe ran inside the sandbox, so a
+silent connection failure read as a dead box. Half a session's worth of work was
+planned around a constraint that did not exist. ▶ **Before concluding the rig is
+down, re-probe with the sandbox off.**
+
+### What the rig then found, and what it proved
+
+**Found:** `WindowSize` defaulted to index 1 = **2x**, harmless for as long as it did
+nothing and a 1280×800 client area the moment it became live. The rule in
+`settings.h` is that *the defaults are the shipped behaviour*. Fixed to 1x, plus a
+work-area clamp so 3x on a small desktop steps down instead of hanging its status bar
+off the bottom edge.
+
+**Proved** (each run's own log confirms the settings it ran under):
+
+| | |
+|---|---|
+| `selftest.com` | 8/8 with the new build |
+| `p_disk.com` | every oracle field unchanged; the floppy path is a variable now and still resolves to the harness fallback |
+| `Xms=0` | guest reports **XMS FAIL @1** — `INT 2Fh 4300` does not answer, like a box with no `HIMEM.SYS`. Not an entry point that then refuses every call |
+| `Ems=0` | **EMS FAIL @1** — no `INT 67h` vector *and* no `EMMXXXX0` name |
+| card moved | `A240 I7 D3`, selftest still 8/8 |
+| `p_mcb.com` | MCB chain byte-identical — the rebuilt `BLASTER` is the same length, so the env block did not move |
+| `AspectRatio=1` | black bars of **exactly 54 px** each side, 532 px of picture between them; `present_fit` predicts 53/533 |
+| `Scaler=Scanlines` | alternate **physical** rows exactly 0: `0.0, 156.5, 0.0, 164.7, 0.0, 119.5 …` |
+
+Both registry knobs were restored afterwards and **proven restored by `reg query`** —
+the same shape as `rt_stock.bat` leaving the IFEO key absent.
+
+Evidence: `docs/research/evidence/session53-display-{aspect,scanlines}.png`.
+
+### Still open, and honest about it
+
+- **The PC speaker's sound has not been listened to.** The synthesis is measured;
+  the audibility is not. That needs ears, not a rig.
+- The **CPU page** needs a duty-cycle throttle on the exec loop — there are no cycles
+  to count on a real CPU. This is the user's standing "approximate CPU speed"
+  request (33/66/100/200 MHz) and it is the largest remaining piece of `settings-live`.
+- `ConventionalKB`/`Umb` need `DOS_MEM_TOP` to stop being a compile-time constant (#47).
+- `Renderer` needs a windowed DirectDraw blit that does not exist.
