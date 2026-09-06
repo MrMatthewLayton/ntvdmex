@@ -5,10 +5,30 @@ something runnable/observable. Win16 is intentionally late: it is built on the s
 foundation as everything before it.
 
 > **Open work now lives in [GitHub Issues](https://github.com/MrMatthewLayton/ntvdmex/issues)** —
-> epics are **milestones** (M4–M8), plus unmilestoned bugs/follow-ups. This file is the narrative
-> roadmap + stage-history; the Issues tracker is the source of truth for *what's open*. Re-run
+> epics are **milestones** (M4–M10), plus unmilestoned bugs/follow-ups. This file is the narrative
+> roadmap + stage-history. Re-run
 > [`scripts/gh-bootstrap-issues.sh`](../scripts/gh-bootstrap-issues.sh) to sync newly-added items
 > (idempotent).
+>
+> ⚠ **The tracker is not the source of truth for "what's done".** Several M9 issues are still
+> open there against work that has since been finished and gated on hardware (#44, #45, #47,
+> #49, #50, #52 among them). Where this file and the tracker disagree, the arbiter is
+> **`./tools/score/score.py`** — the one number in this project with a model behind it rather
+> than a judgement. **Run it; do not quote a figure from any document, including this one.**
+
+## Where it is, as of session 54 (2026-09-06)
+
+`./tools/score/score.py` says **79.7%** of the full vision — MS-DOS **85.4%**,
+WOW/Win16 **78.7%**, Product/Packaging **57.5%**. Against the two narrower bars:
+
+- **The DOS games bar** (Doom / Skyroads / ZAR, flawless sound) — two of three fully
+  playable and user-confirmed by hand and by ear. ZAR is the gap.
+- **The Win16 north star** (MS Paint + Notepad from Windows 3.x) — **met**. Notepad edits
+  and saves text; Paint draws in colour and writes a valid 24-bit `.BMP`. Nine Win16
+  guests are routed and windowed, five user-confirmed doing their job.
+
+The live detail — what works, what does not, and what to do next — is
+[`STATE.md`](STATE.md). This file is the shape of the programme.
 
 ## How each step is tracked
 
@@ -200,45 +220,153 @@ Per-step exit criteria:
 - **Exit: MET** — Doom runs its own 32-bit code through DOS/4GW on real silicon.
 - **Still open here:** ZAR needs VBE 2.0 hi-colour + a linear framebuffer.
 
-## M5 — Win16 / WOW foundation 🟡 EXIT MET, foundation uneven
+## M5 — Win16 / WOW foundation ✅ DONE
 - [x] NE loader, 16-bit module/segment management — loads, relocates and binds the whole XP WOW
   module set on real hardware (209-check battery over all 15 real binaries).
 - [x] WOW bootstrap — **XP's own `krnl386` executes**: protected mode, its own segments, its
   interrupt handlers, its own DPMI exceptions, and all eight 16-bit system modules. It reads
   `[boot] WOWSHELL` out of `SYSTEM.INI`, finds `WOWEXEC.EXE`, loads and **runs** it.
-- [x] The 16↔32 boundary — the WOW32 call interface is pinned to the byte and partly implemented.
-  ⚠ **The id space is PER MODULE** (krnl386 seg1 / krnl386 seg2 / USER / GDI are four different
-  numberings); krnl386's **seg2 table, 121 stubs, has no dispatcher at all**.
-- [x] A host-side **Win16 task scheduler** (`src/wow/wowsched.h`, opt-in) — krnl386 has none.
-- **Exit: MET** — `WOWEXEC.EXE` reaches its message loop, and `SYSEDIT.EXE` is launched and its
-  task executes on its own stack.
-- ⚠ **Not a finished foundation.** Several ids are answered only as `wow32ret.txt` EXPERIMENTS
-  (`0xd1`), the scheduler handles exactly two tasks, and the application faults early in its own
-  startup. See [`STATE.md`](STATE.md) and the session-39 handoff.
+- [x] The 16↔32 boundary — the WOW32 call interface is pinned to the byte (**args at `bp+16`,
+  return value in a stack hole at `bp-16`**) and dispatched. ⚠ **The id space is PER MODULE**
+  — krnl386 seg1, krnl386 seg2, USER, GDI, COMMDLG, SHELL and MMSYSTEM are **seven** different
+  numberings, gated on the BOP's own CS. krnl386's seg2 table has its own dispatcher now.
+- [x] A host-side **Win16 task scheduler** (`src/wow/wowsched.h`) — krnl386 has none and we are it.
+- **Exit: MET, and the caveats that qualified it are gone.** `WOWEXEC.EXE` reaches its message
+  loop; `SYSEDIT.EXE` is a full MDI app with four `EDIT` children; the `0xd1` experiment value
+  is a real implementation; and nine real applications have been launched through the same path.
+- ⚠ **Two standing hazards from this layer.** An *implemented* service can be unreachable
+  because its module was never identified, which is indistinguishable from unimplemented in a
+  log — so anchors are generated from the binary (`tools/ne/wowthunks.py --anchor`), never by
+  hand. And an export does **not** point at its stub: COMMDLG prefixes a far call, USER/GDI
+  tail-jump, and some validate first.
 
-## M6 — Win16 thunking ⬜ — **THE BIG ONE, AND BARELY STARTED**
-- [ ] 16:16 ↔ flat pointer translation; generic/flat thunks — **none of this exists**
-- [ ] USER/GDI 16-bit objects mapped to Win32 handles; message bridging
-- [ ] **The host calling INTO 16-bit code.** Every WOW32 service so far *answers* the guest;
-  `DispatchMessage` requires the opposite direction, and the host has never done it once.
-  `g_wu_win[].wndproc` has held a 16:16 far pointer since `CreateWindow`, unused.
-- **Exit:** a real Win16 GUI app runs and **paints**. **Nothing has drawn a pixel.**
-- Windows today are host-side *objects* (a synthetic handle, a class, a rectangle), which is
-  deliberate — see `src/wow/wowuser.h` for why a half-built real HWND would have been worse.
+## M6 — Win16 thunking ✅ EXIT MET — a real Win16 GUI app runs and paints
+The line that used to read *"nothing has drawn a pixel"* is retired. It was written before
+sessions 39–53.
+
+- [x] **Win16 windows are real Win32 `HWND`s on the XP desktop** — not a framebuffer drawn
+  inside the NTVDMEX window. ⚠ That was a **user correction** and it cost a whole VGA-renderer:
+  drawing Win16 windows ourselves is the DOSBox-shaped answer. HWNDs belong to the exec thread,
+  which is the reason threading is the design rather than an implementation detail.
+- [x] **USER/GDI 16-bit objects mapped to Win32 handles; message bridging** (#6) — the queue
+  and the 18-byte `MSG`, `PeekMessage`/`GetMessage`/`TranslateMessage`/`DispatchMessage`,
+  keyboard and mouse from the host reaching a 16-bit window procedure. System classes
+  (`MDICLIENT`, `EDIT`, `BUTTON`, `LISTBOX`, …) map to the real Win32 class.
+- [x] **The host calls INTO 16-bit code** (`src/wow/wowcall.h`) — `C4 C4 57` plus a 16-bit CODE
+  selector as the far return address, dispatched by linear address. ⚠ **`DS` on entry is the
+  contract**: `DS = AX = the window's hInstance`.
+- [x] **GDI drawing** — pens, brushes, blits, DIBs, fonts, clipping and metafiles. MS Paint
+  draws every shape tool including flood fill, keeps it across a repaint, and saves it.
+- [x] **Common dialogs** — the real XP File Open / Save As, driven from a Win16 guest.
+- [x] **Resources** — icons, cursors and menus, **named as well as numbered** (that gap was
+  found three separate times).
+- [ ] **16:16 ↔ flat pointer translation — generic/flat thunks (#5) — ~25%.** Translation is
+  real but it is **per-service and ad hoc**; there is no generic mechanism. That is fine at two
+  guests and it is not fine at twenty, which is the honest reason this milestone is not closed.
+- **Exit: MET** — Notepad is a working text editor and MS Paint is a paint program that saves
+  files, both user-confirmed on real hardware.
+- **Next unlock, and the entry point is pinned, not guessed:** dialogs. USER implements them in
+  its own 16-bit code and calls a 32-bit helper at thunk `0xEF`, an id no export maps to; it has
+  already done `FindResource`/`LoadResource`/`LockResource` and hands us the locked
+  `DLGTEMPLATE`. That is TASKMAN, CALC, Solitaire's Options/Deck and Minesweeper's preferences.
 
 ## M7 — Peripheral VDDs 🟡 IN PROGRESS
 - [x] **Sound — DONE and confirmed by ear.** SB16 PCM at 99.999% delivery, clean-room MIT
-  OPL2/OPL3 FM (Nuked used only as a black-box oracle), MPU-401 MIDI, PC speaker.
+  **OPL2** FM (Nuked used only as a black-box oracle), MPU-401 MIDI, PC speaker.
+  ⚠ *This line used to say OPL2/OPL3 and that was never true* — `vdd_opl` is a 9-channel OPL2.
+  Remaining sound gaps: OPL3, and the snare/hi-hat/cymbal phase generator (#139).
+- [x] **The PC speaker actually makes a sound, on both possible outputs** — the emulated square
+  wave through the mixer *and* the transducer soldered to the motherboard, via Beep.sys.
+  `PcSpeaker` is a four-way setting: Off / Sound card / Real PC speaker / Both.
+  ⚠ `\\.\Beep` does not exist even when the service is running; the path is
+  `\\?\GLOBALROOT\Device\Beep`, and `Beep()` itself is unusable here because it blocks and wants
+  a duration up front.
 - [x] **Video/input** — text, mode 13h, mode 12h planar, VESA banked; keyboard and mouse.
-- [ ] Networking, serial/parallel
-- [ ] Bare-metal vs virtualized device strategy per [risks.md](risks.md)
+- [ ] Networking (#8), serial/parallel (#9)
+- [ ] Bare-metal vs virtualized device strategy per [risks.md](risks.md) (#10)
 
-## M8 — Polish & SDK ⬜
+## M8 — Polish & SDK 🟡 IN PROGRESS
 - [x] Host UI shell — menu bar, status strip, six-tab Settings dialog backed by the registry,
   windowed GDI + exclusive-fullscreen DirectDraw, Luna-themed.
-- [ ] **40 of the 46 settings are stored and honoured by nothing.** `settings_apply()` in
-  `src/host/main.c` is the honest list of what actually works.
-- [ ] Pluggable VDD/driver SDK + docs for third-party developers
-- [ ] Installer/registration tooling — **blocked on M6**: installing today would break every
-  16-bit Windows program, and handing Win16 launches back to stock `ntvdm` is impossible
-  (measured three ways, see #129).
+- [x] **Theming measured rather than eyeballed** — our Win16 client area is **pixel-identical to
+  stock ntvdm** running the same program. The flat 3.x control look is what a Win16 app gets on
+  XP from *both* hosts; a bevelled one ships `CTL3D.DLL` and draws its own. Gap: the fullscreen
+  story (#12).
+- [ ] **23 of the 47 settings are live** (#136) — up from 7. What is missing and why is written
+  out above `settings_apply()` in `src/host/main.c`, which is the honest list. The largest
+  remaining piece is the **CPU page**, which needs a duty-cycle throttle on the exec loop (#56).
+- [ ] Pluggable VDD/driver SDK + docs for third-party developers (#11) — **not started**
+- [ ] Installer/registration tooling (#13) — **no longer blocked on M6.** Installing means
+  `reg add` by hand today; a product needs a command or a UI that does it, checks for an
+  existing value and can put it back.
+
+## M9 — DOS/BIOS completeness (TDD) 🟡 IN PROGRESS
+**The method, and it is the point of the milestone:** close every DOS/BIOS gap **test-first
+against a real MS-DOS 6.22 oracle** (`./scripts/oracle.sh`), then gate it on the bare-metal XP
+box. **Cardinal rule: never write a test expectation from memory.** The oracle is a panel, and
+NTVDMEX is not ground truth.
+
+- [x] INT 21h service surface (103 functions), EXEC 4Bh AL=01/03, TSR residency (AH=31h/INT 27h)
+- [x] BIOS INT 10h/16h/1Ah/15h; INT 13h + INT 25h/26h absolute disk; INT 14h serial +
+  INT 17h printer; INT 10h 11h user-defined fonts
+- [x] The error model — 59h extended error, INT 24h critical error, InDOS/SDA adjacency (#34, 90%)
+- [x] AH=52h SysVars — real DPB chain, NUL device header, CDS array (#48, 80%)
+- [x] **`MEM.EXE` reports correct figures and matches the 6.22 oracle row for row** (#47).
+  ★ Root cause was the bug shape that has now bitten this project twice: **a guest reads a fixed
+  absolute offset in a segment we handed it** — `<SysVars segment>:0x008C` — with no call to
+  intercept and nothing in any log. Wrong number plus a clean trace ⇒ disassemble the guest.
+- [x] MS-DOS 6.22 `COMMAND.COM` runs as a guest, EXECs and returns (70%)
+- [x] **Approximate CPU speed (#56)** — a menu dropdown under Machine, and the Settings CPU
+  page's "Speed:" combo, both backed by one registry value: Unlimited / 200 / 100 / 66 / 33 /
+  16 / 8 MHz. **Load-bearing, not cosmetic**: after the retrace fix, two of the five
+  speed-affected demos pace on a software delay loop or on nothing at all, so no vsync fix can
+  reach them even in principle. A real CPU cannot be clocked down, so the lever is a **duty
+  cycle** — the exec thread is suspended for a share of each period, reusing the machinery the
+  IRQ injector has used for twenty sessions. Calibrated against a probe whose loop costs 12
+  cycles on a 486 (`tools/dostest/cpubench.asm`): the rig presents **3665 MHz** unthrottled,
+  and 100 MHz measures 103. ⚠ **Two caveats, both in the log rather than hidden**: the slowest
+  settings *saturate* on a host this fast, so the host reports `delivered_mhz` beside the
+  requested one; and a slow setting is **chunky**, because 1 ms is the smallest slice `Sleep`
+  can hand out. **Still to do:** the user's own acceptance bar — whether the five demos *feel*
+  period-correct, judged on the box.
+- [ ] Configurable DOS version (#28); VESA 4F0A PM bank switching (#53); INT 15h C0h/87h (#54)
+- [ ] `$p` prompt degrades after an EXEC (#134); XP's own `COMMAND.COM` exits during init (#135)
+- [ ] Verify the BIOS layer against real hardware end to end (#51)
+- **Exit:** a DOS program cannot tell us from MS-DOS 6.22 without looking for the difference.
+
+## M10 — Installation & routing 🟡 IN PROGRESS
+Making NTVDMEX the machine's VDM, **reversibly**. This is what turns a host into a product.
+
+> ⚠ **The plan changed on 2026-08-26.** #129 was going to make "leave it installed" safe by
+> detecting Win16 launches and handing them back to stock `ntvdm`. **That is impossible** —
+> measured three ways: Windows validates the VDM image's identity, so a renamed copy is refused
+> outright and the real name re-enters us through the IFEO hook. There is therefore no safe
+> install story until WOW works, which is what put M6 on the critical path.
+
+- [x] **Routing verified behaviourally, not by the registry value** (#130) — a key that reads
+  correctly and does not route is exactly the failure this project has been bitten by. So:
+  delete the `Debugger` value, run a program, confirm **no** host log (stock ran it); add it
+  back, run the same program, confirm the host log appears; then delete and re-add again.
+- [x] **Recovery path** (#132) — consecutive failed starts are counted and cleared only on a
+  clean exit; at three the host **drops its own IFEO value** and hands the machine back to
+  Microsoft's `ntvdm`. Gap: SAFE mode is decided at two failures but does not skip anything yet.
+- [x] **The launch matrix** (#140) — six rows across three DOS shapes and a Win16 GUI launch,
+  each with a real two-host comparison and screenshots **diffed rather than eyeballed**. Row 2
+  is a genuine superset result: stock refuses 6.22's `MEM.EXE` with `Incorrect DOS version`.
+  Gap: rows 4–5 (DPMI client, in-guest redirection) have no stock half.
+- [ ] **Console/stdio integration (#131)** — a DOS program launched from `cmd.exe` should run
+  *inline in that console*, so `myprog.exe > out.txt` behaves. **Located, not fixed.** Five
+  routes to the handle are eliminated by measurement (inheritance, `ATTACH_PARENT_PROCESS`,
+  explicit parent pid, CSRSS's `STARTUPINFO`, and `VDM_COMMAND_INFO`'s own
+  `StdIn/StdOut/StdErr`). The instrument that killed the fifth **named the real defect**:
+  `GetNextVDMCommand` returns TRUE and populates *nothing* — the whole struct is constant
+  garbage — because our command line arrives as `… -f` with **no `-i<taskid>`**, so CSRSS
+  cannot tell which queued task we are asking about. ⇒ **#131 is the same defect as M2.5's
+  "recover the real command line from CSRSS's multi-call protocol"**; fixing one fixes both.
+  ⚠ *Not* a subsystem problem — this binary is already CUI, like `ntvdm.exe`.
+  ► And the target is proven reachable by the oracle rather than by argument: `hello.com >
+  out.txt` typed at `cmd` writes **136 bytes under stock ntvdm and 0 under ours**, same box,
+  same command.
+- [ ] An actual **installer** (#13, shared with M8) — see above.
+- **Exit:** the box can be left with NTVDMEX installed as its VDM, and nothing a user or a
+  batch file does behaves differently except for being better.
