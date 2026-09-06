@@ -136,7 +136,10 @@ void vdd_audio_mix(audio_state *st, int16_t *out, uint32_t frames)
            sets the data bit to click the cone makes no tone here either. */
         if (st->spk && st->spk_level && vdd_speaker_active(st->spk)) {
             uint32_t hz = vdd_speaker_hz(st->spk);
+            st->spk_gated += n;
+            st->spk_hz = hz;
             if (hz >= AUDIO_SPK_HZ_MIN && hz <= AUDIO_SPK_HZ_MAX) {
+                st->spk_frames += n;
                 uint32_t step = (uint32_t)(((uint64_t)hz << 16) / st->out_hz);
                 for (i = 0; i < n; ++i) {
                     int32_t v = out[done + i]

@@ -19170,7 +19170,23 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         p = zput(p, "STAGE2: opl: trace=");   p = zhex(p, g_opltrace_n);
         p = zput(p, " tdrop=");               p = zhex(p, g_opltrace_drop);
         p = zput(p, "\r\n");
-        p = zput(p, "STAGE2: opl: writes=");  p = zhex(p, g_opl.prof_writes);
+        /* ── THE SPEAKER PATH, END TO END, IN ONE LINE. "I heard nothing" has four
+         causes and until now no log told them apart: the guest's port writes not
+         reaching the VDD, the mixer not fitted to it, a frequency it refuses, or
+         a fault downstream of the mixer entirely. Each counter is taken where the
+         decision is made, so the first zero names the stage. */
+    p = zput(p, "STAGE2: spk: fitted=");    p = zhex(p, (DWORD)(g_audio.spk ? 1 : 0));
+    p = zput(p, " level=");                 p = zhex(p, (DWORD)g_audio.spk_level);
+    p = zput(p, " port61=0x");              p = zhex(p, (DWORD)g_spk.port61);
+    p = zput(p, " ch2_reload=");            p = zhex(p, (DWORD)g_pit.ch2_reload);
+    p = zput(p, " gated_frames=");          p = zhex(p, g_audio.spk_gated);
+    p = zput(p, " emitted_frames=");        p = zhex(p, g_audio.spk_frames);
+    p = zput(p, " last_hz=");               p = zhex(p, g_audio.spk_hz);
+    p = zput(p, " mixed_frames=");          p = zhex(p, g_audio.frames_mixed);
+    p = zput(p, " master=");                p = zhex(p, g_audio.master);
+    p = zput(p, " muted=");                 p = zhex(p, (DWORD)g_audio.muted);
+    p = zput(p, "\r\n");
+    p = zput(p, "STAGE2: opl: writes=");  p = zhex(p, g_opl.prof_writes);
         p = zput(p, " keyons=");              p = zhex(p, g_opl.prof_keyons);
         p = zput(p, " bd_writes=");           p = zhex(p, g_opl.prof_bd_writes);
         p = zput(p, " bd_or=");               p = zhexb(p, g_opl.prof_bd_or);

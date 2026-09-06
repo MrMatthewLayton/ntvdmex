@@ -72,6 +72,16 @@ typedef struct audio_state {
     int        muted;
     int16_t    scratch[AUDIO_SRC_MAX];
     uint32_t   frames_mixed;  /* diagnostics: total output frames produced       */
+    /* ── AND WHAT THE SPEAKER PATH ACTUALLY DID, BECAUSE "I HEARD NOTHING" HAS
+         FOUR CAUSES AND NO LOG DISTINGUISHED THEM. Counted where the decision is
+         made, so each one separates a different failure:
+           spk_gated  -- frames where port 0x61 said SOUNDING
+           spk_frames -- frames actually emitted (gated AND a usable frequency)
+           spk_hz     -- the last frequency asked for, in Hz
+         gated=0 means the guest's port writes never reached this struct;
+         gated>0 with frames=0 means the frequency was refused; both non-zero
+         means we produced samples and the fault is downstream of the mixer. */
+    uint32_t   spk_gated, spk_frames, spk_hz;
 } audio_state;
 
 /* Set up the mixer for its two sources. Safe to call again after a device's rate
