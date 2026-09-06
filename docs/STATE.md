@@ -1357,8 +1357,7 @@ IP == image offset**) — see [[mem-exe-segment-map]].
 
 ## Session 53 (2026-09-06) — the settings page stopped being a scaffold, 72.4 → 73.0
 
-**Score 72.4 → 73.0.** Suite **1036 → 1080** checks. All green, and this time
-**rig-gated**.
+**Score 72.4 → 73.7.** Suite **1036 → 1086** checks. All green, and rig-gated.
 
 ### ★ The PC speaker made no sound at all
 
@@ -1446,6 +1445,48 @@ Both registry knobs were restored afterwards and **proven restored by `reg query
 the same shape as `rt_stock.bat` leaving the IFEO key absent.
 
 Evidence: `docs/research/evidence/session53-display-{aspect,scanlines}.png`.
+
+### ★ #47 CLOSED — and it was the SAME BUG SHAPE AS ITS OWN ROOT CAUSE
+
+Session 52 found that MEM reads `SysVars+0x45` for extended memory and our SDA sat
+on it. The **remaining** half — the phantom `Upper 1,663K` — was a *second*
+absolute-offset read, and the giveaway was in the report all along: `Largest free
+upper memory block 548K (561,264 bytes)` was **our own free conventional block**,
+one MCB header away from its real size.
+
+**MEM asks `AH=52h` for SysVars, keeps the SEGMENT, throws the OFFSET away, and
+reads `<SysVars segment>:0x008C`** (mem.exe image `0F88`/`0F8E`/`0F95`). That word
+is the conventional/upper line; every block in the walk is bucketed by
+`segment >= it` (`0x1304`, `0x31DB`). We left it **zero**, so every segment
+compared `>= 0` and the entire chain was filed as upper memory.
+
+MS-DOS 6.22 has **`0xFFFF`** there — and it was in a dump this project had already
+taken: `lolprobe-msdos622.txt`, offset `0x8C` = `FF FF`, with `0x0253` at `0x8E`
+which is *also* what 6.22 reports at `SysVars-2`. So `0x8C`/`0x8E` are "first
+UMB" / "first MCB", and our MCB head already landed on `0x8E` by luck.
+
+| | before | after (rig) |
+|---|---|---|
+| Conventional | 639K = 639K + **0K** | 639K = 4K + **635K** |
+| Upper | **1,663K** = 1,028K + 635K | **0K** |
+| Extended (XMS) | 14,721K, used `4,192,6` | 16,384K = 0K + 16,384K |
+| Largest executable | **0K** (4,294,967,280 bytes) | **635K** (650,240 bytes) |
+
+Every row is now self-consistent, and the Extended row **corrected itself** — MEM
+derives one row from the grand total, so the phantom had been stealing 1,663K from
+it. ★ `./scripts/oracle.sh --batch MEM` on genuine 6.22 prints the **same seven
+rows with the same labels**; the numbers differ honestly (our resident DOS is 4K
+where 6.22's is 19K).
+
+`DOS_SYSVARS_OFF` moved from `main.c` into `dos_layout.h`: **two fixed addresses in
+that segment are load-bearing for MEM**, and the constant they are measured against
+belongs beside them. Six off-VM checks assert the relationships, including a guard
+that InDOS has not drifted back onto `SysVars+0x45`.
+
+▶ **The general lesson, now paid for twice:** *a guest can read a fixed address in a
+segment we handed it, with no call to intercept and nothing in any log.* When a
+guest reports a wrong number and the trace is clean, **disassemble it and look for
+absolute offsets in our own segments.**
 
 ### Still open, and honest about it
 
