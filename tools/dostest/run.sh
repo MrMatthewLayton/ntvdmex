@@ -124,6 +124,16 @@ cc -std=c99 -Wall -Wextra -Wno-unused-function -O0 -g \
 
 "$DIR/present_test"
 
+# GH #56: the CPU-speed throttle's arithmetic -- the duty cycle, the millisecond
+# Bresenham behind it, and the interpreter's instruction budget. The throttle needs
+# a suspended thread and a real guest; what it is MADE OF is integer arithmetic, and
+# every one of its failure modes looks like "the setting does nothing" on the rig.
+cc -std=c99 -Wall -Wextra -Wno-unused-function -O0 -g \
+   -I "$DIR/../../src/host" \
+   -o "$DIR/cpuspeed_test" "$DIR/cpuspeed_test.c"
+
+"$DIR/cpuspeed_test"
+
 # M3 mode-12h fill-loop interpreter battery (src/host/v86interp.h, flat memory).
 cc -std=c99 -Wall -Wextra -Wno-unused-function -O0 -g \
    -o "$DIR/interp_test" "$DIR/interp_test.c"

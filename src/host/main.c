@@ -169,6 +169,16 @@
 #define WOWIDLE_PATH     "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\wowidle.txt"
 #define KEYIRQ_PATH      "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\keyirq.txt"
 #define MSENS_PATH       "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\msens.txt"
+/* ── ★ THE CPU-SPEED CALIBRATION, AS A FILE. (GH #56) ────────────────────────────
+     Decimal MHz: how fast an UNTHROTTLED host looks to a DOS program on THIS box.
+     Every speed on the menu is a fraction of it, so it is the one number that makes
+     "33 MHz" mean 33 MHz here, and it is wrong on somebody else's machine by
+     construction -- a faster box presents more. Measured by cpubench.asm; absent =
+     CPUSPEED_REF_MHZ_DEFAULT. A knob, so re-calibrating is a run rather than a build. */
+#define CPUREF_PATH      "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\cpuref.txt"
+/* Decimal index into CPUSPEED_MHZ, overriding the registry for one run. This is how
+   the rig sweeps every speed in a single batch without touching HKCU. */
+#define CPUSPD_PATH      "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\cpuspd.txt"
 #define DOSVER_PATH      "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\dosver.txt"
 #define DOSTRACE_FLAG    "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\dostrace.flag"
 /* Scripted synthetic keystrokes, on the share so a test sequence can be changed between
@@ -2386,12 +2396,51 @@ static int disk_io(unsigned drive, uint32_t lba, unsigned count,
           unredirected run prints inline in the console it was started from.
      A GUI-subsystem process has no console of its own, which is exactly why (2)
      is needed and why it must not be attempted before (1) -- attaching would
-     hand us a console handle and hide the redirect. */
+     hand us a console handle and hide the redirect.
+   ⚠ BOTH OF THOSE ARE MEASURED DEAD (session 53), along with two more: CSRSS
+     leaves StartupInfo.dwFlags at 0, and attaching to the REAL parent pid found
+     by hand through Toolhelp fails the same way ATTACH_PARENT_PROCESS does.
+     The premise above is simply wrong: an IFEO-substituted VDM is not created
+     the way a child is, so there is nothing to inherit and nothing to attach to.
+   ⚠⚠ AND THE FIFTH ROUTE IS DEAD TOO, MEASURED THE SAME DAY. VDM_COMMAND_INFO
+     carries StdIn/StdOut/StdErr at +0x10, filled by GetNextVDMCommand and already
+     duplicated into this process by CSRSS -- which is how stock ntvdm gets a
+     console it never inherited. It is tried in stdio_init_vdm() below and the
+     three fields come back as NON-HANDLES: 0x02341fc0 / 0x7c867f23 / 0x65470000,
+     the same values every run, all three FILE_TYPE_UNKNOWN.
+   ★★ THE INSTRUMENT THAT SAID SO NAMED THE REAL BUG, AND IT IS NOT A STDIO BUG.
+     Those fields are junk because the WHOLE STRUCT is: CreationFlags reads
+     0x4d445674 and CodePage 0x78654e74 -- ASCII, identical on every run --
+     AppName is garbage, CmdLine is "\", and TaskId is 0. GetNextVDMCommand
+     returns TRUE and populates nothing. We have never noticed because the launch
+     does not depend on it: the program comes from target.txt or from our own
+     command line.
+     ⇒ And the command line says why: `ntvdmhost.exe "…\ntvdm.exe" -f`. There is
+       NO `-i<taskid>`, so csrss_parse_taskid() yields 0, so CSRSS cannot tell
+       which queued task we are asking about, so it answers with nothing. The
+       shape that DOES carry `-i` (anything launched through `start`, which is
+       every run rt.bat has ever done) reports TaskId 0x18 -- and that is exactly
+       the shape whose console we do inherit, which is how this stayed invisible.
+   ⇒ SO #131 IS THE SAME DEFECT AS THE M2.5 OPEN ITEM `recover the real command
+     line from CSRSS's undocumented multi-call GetNextVDMCommand protocol`. Not a
+     Win32 handle problem, not a subsystem problem: we are not participating in
+     the VDM handshake, and the handles and the command line are both on the far
+     side of it. Fixing one fixes the other.
+   ⚠ NOT a subsystem problem -- that hypothesis is REFUTED, not doubted. This
+     binary is already CUI/console, pinned deliberately in CMakeLists.txt, exactly
+     like ntvdm.exe.
+   ► And the target is known to be reachable, because stock ntvdm was asked on the
+     same box with the same program and the same command: `hello.com > out.txt`
+     under stock writes 136 bytes into the file and under NTVDMEX writes 0.
+     The code below stays: it costs nothing, it upgrades if a handle ever does
+     arrive, and the raw-handle line it prints at STAGE1 is the instrument that
+     turned four sessions of hypotheses into one located bug. */
 static HANDLE g_stdio = INVALID_HANDLE_VALUE;
 /* ⚠ Reported at EXIT, not at init. The early-startup log line was written
    before a later log_write(LOG_PATH,...) TRUNCATES the file, so it never
    survived to be read -- which looked exactly like the code not running. */
 static const char *g_stdio_how = "(not initialised)";
+static const char *g_stdio_src = "";   /* which channel it came down, if any */
 static DWORD g_stdio_ppid;   /* GH #131: whose child we turned out to be */
 static char   g_stdio_buf[512];
 static unsigned g_stdio_n = 0;
@@ -2443,6 +2492,51 @@ static const char *stdio_init(void)
         g_stdio_ppid = ppid;              /* reported at exit either way */
     }
     return "none (no console, no redirect)";
+}
+
+/* ── THE FIFTH ROUTE: THE HANDLES CSRSS HANDS THE VDM. (GH #131) ─────────────
+     Runs after GetNextVDMCommand, because that is what fills the fields. Only
+     ever UPGRADES: if stdio_init() already found something at startup we keep
+     it, because an inherited redirect is the user's own and outranks anything
+     we go looking for.
+   ► TWO SOURCES, IN THE ORDER STOCK ntvdm READS THEM:
+       1. VDM_COMMAND_INFO.StdOut  -- the dedicated field, +0x14 in the struct.
+       2. StartupInfo.hStdOutput   -- the same handles by another road.
+     ⚠ (2) IS NO LONGER GATED ON STARTF_USESTDHANDLES. That flag is what the
+       previous cut tested, CSRSS leaves dwFlags at 0, and so a handle that was
+       sitting right there was refused on the strength of a flag about how a
+       Win32 CreateProcess would have been called. GetFileType is the real test:
+       a handle we can name the type of is a handle we can write to, and one we
+       cannot is rejected either way.
+   ⚠ NOT CLOSED HERE, and deliberately: stdin. A guest reading INT 21h AH=01
+     from a pipe needs host_conin to read StdIn instead of the keyboard VDD,
+     which is a different mechanism (blocking, on the exec thread). The value is
+     logged so the next session starts from a measurement rather than a guess. */
+/* Adopt h as the real stdout if it is writable at all, and say what it turned out
+   to be. NULL = not usable, so the caller falls through to the next source. */
+static const char *stdio_adopt(HANDLE h)
+{
+    DWORD ty;
+    if (!h || h == INVALID_HANDLE_VALUE) return NULL;
+    ty = GetFileType(h) & ~FILE_TYPE_REMOTE;
+    if (ty == FILE_TYPE_UNKNOWN) return NULL;
+    g_stdio = h;
+    return (ty == FILE_TYPE_DISK) ? "redirected to a file"
+         : (ty == FILE_TYPE_PIPE) ? "a pipe"
+                                  : "the console";
+}
+
+static const char *stdio_init_vdm(void)
+{
+    const char *what;
+    if (g_stdio != INVALID_HANDLE_VALUE) return g_stdio_how;   /* never downgrade */
+    if ((what = stdio_adopt(g_ci.StdOut)) != NULL) {
+        g_stdio_src = "CSRSS VDM StdOut"; return what;
+    }
+    if ((what = stdio_adopt(g_ci.StartupInfo.hStdOutput)) != NULL) {
+        g_stdio_src = "CSRSS StartupInfo"; return what;
+    }
+    return g_stdio_how;
 }
 
 /* DOS console output (INT 21h AH=02/09/40) -> the video VDD teletype, AND the
@@ -2703,6 +2797,139 @@ static DWORD WINAPI pit_pacer_thread(LPVOID param)
         }
         ++g_pitpace_calls;
         Sleep((DWORD)g_pitpace_ms);
+    }
+    return 0;
+}
+
+/* ── ★ APPROXIMATE CPU SPEED: THE V86 HALF. (GH #56) ─────────────────────────────
+     The arithmetic and the whole argument for it are in src/host/cpuspeed.h. This
+     is the mechanism: a thread that, for the milliseconds the Bresenham says the
+     guest does not get, HOLDS THE EXEC THREAD WHERE IT STANDS.
+
+   ► WHY SUSPENSION RATHER THAN A WAIT AT A CONTROL POINT. The obvious cheaper
+     design is to sleep at the top of the exec loop, and it covers most guests --
+     but not the ones this feature exists for. A program doing pure computation
+     with no I/O never faults, never BOPs and never returns from VdmStartExecution
+     at all (the headless watchdog has a whole essay about that shape), so the exec
+     loop never gets a turn to throttle at. Suspension is the only lever that
+     reaches it, and the machinery is proven: async_inject_irq() has suspended this
+     same thread on every timer tick for twenty sessions.
+
+   ⚠ THE ONE RULE: NEVER SUSPEND A LOCK HOLDER. Hold the exec thread while it owns
+     g_lock and the audio pump blocks behind it, which is a dropout you can hear.
+     g_in_exec is exactly the flag that says otherwise -- it is set only around
+     VdmStartExecution, where the thread holds nothing -- but reading it and then
+     suspending is a race: the guest can trap in between and the thread be inside
+     host code by the time the suspend lands.
+     So READ IT AGAIN AFTER THE SUSPEND HAS TAKEN EFFECT. That is sound because of
+     the ORDER in the exec loop: v86_run() returns, and the very next statement
+     clears g_in_exec, before any HOST_LOCK. A 1 observed on a thread that is
+     already stopped therefore means the thread is still inside the kernel call.
+   ⚠ GetThreadContext is what makes "has taken effect" true. SuspendThread only
+     REQUESTS the suspend; on a multiprocessor box the thread may still be running
+     when it returns, and reading its context is the documented way to wait for it.
+
+   ⚠ NESTING WITH THE IRQ INJECTOR IS FINE AND IS NOT AN ACCIDENT. Suspend counts
+     nest, both sides balance their own Suspend/Resume, and a context written into
+     a thread we are holding simply takes effect when we let go -- so an interrupt
+     raised during a held millisecond is delivered late rather than lost. That is
+     also the CORRECT semantics for this feature: the PIT still advances by real
+     elapsed wall time, so a throttled guest gets the same 18.2 ticks a second it
+     would on a slow real machine, rather than a compressed clock. Session 22
+     proved that compressing game time is catastrophic; this deliberately does not. */
+static int    g_cpuspd_idx      = 0;      /* CPUSPEED_* index; 0 = unlimited      */
+static unsigned g_cpuspd_ref_mhz = CPUSPEED_REF_MHZ_DEFAULT;  /* cpuref.txt       */
+static volatile LONG g_cpuspd_duty = 10000;   /* basis points, read by the thread */
+static HANDLE g_cpuspd_thread;
+static DWORD  g_cpuspd_run_ms, g_cpuspd_held_ms;   /* what the throttle really did */
+static DWORD  g_cpuspd_missed;   /* held millisecond the guest was not in exec for */
+/* ★ THE MEASURED RUN PHASE, in microseconds, and it is the number that made this
+     feature work. We ASK for a 1 ms run; what the guest actually gets is that plus
+     Sleep's inaccuracy plus whatever it costs the kernel to stop a thread inside
+     VdmStartExecution -- and the hold is priced off this, not off the 1 ms. */
+static DWORD  g_cpuspd_ran_us;
+/* Hold time run up but not yet paid -- see cpuspeed.h. Nonzero at exit means the
+   setting is beyond what this host can deliver, which is a fact worth logging. */
+static DWORD  g_cpuspd_owed_ms;
+
+/* Recompute the duty from the setting. One function so the menu, the dialog and
+   the file knob cannot each arrive at a different answer. */
+static void cpuspd_recompute(void)
+{
+    InterlockedExchange(&g_cpuspd_duty,
+                        (LONG)cpuspeed_duty_bp((unsigned)g_cpuspd_idx, g_cpuspd_ref_mhz));
+}
+
+static DWORD WINAPI cpuspeed_thread(LPVOID param)
+{
+    LARGE_INTEGER t_go;                  /* when the guest was last let go */
+    unsigned long owed_us = 0ul;         /* hold time run up but not yet paid */
+    (void)param;
+    /* Above the guest, so a hold is actually a hold; below the audio pump and the
+       PIT pacer, so throttling can never starve the clock or the mixer. */
+    SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_ABOVE_NORMAL);
+    QueryPerformanceCounter(&t_go);
+    while (g_running) {
+        unsigned duty = (unsigned)InterlockedCompareExchange(&g_cpuspd_duty, 0, 0);
+        /* ⚠ THE IDLE ARM DOES NOT COUNT MILLISECONDS. It sleeps four at a time, and
+             booking those as "the guest ran" would make run_ms mean two different
+             things depending on the setting -- the counter-layout trap this project
+             has already paid for once. Unlimited simply does not report. */
+        /* ⚠ UNLIMITED FORGIVES THE DEBT. Arrears run up at 8 MHz must not go on
+             freezing the guest after the user has put the speed back. */
+        if (duty >= 10000u) { owed_us = 0ul; Sleep(4);
+                              QueryPerformanceCounter(&t_go); continue; }
+        Sleep(CPUSPEED_WAIT_MS);            /* let it run before reaching for it   */
+        /* ── THE HOLD, AND IT MUST BE HELD TIME, NOT ELAPSED TIME. ──────────────
+             ⚠⚠ AN EARLIER CUT SLEPT THE OFF PERIOD WHETHER OR NOT THE HOLD LANDED,
+               and that is a leak, not a rounding error: if the guest happened to be
+               inside a host service call at that instant we could not suspend it,
+               so we slept 226 ms while it RAN FREE. Measured on the rig, half of
+               every period leaked that way and the sweep came out NON-MONOTONIC --
+               16 MHz ran faster than 66 MHz. A guest that BOPs tens of thousands of
+               times a second is in host code a great deal of the time, so this is
+               the common case, not an edge one.
+             ⇒ So retry until the hold actually lands, and only then sleep. Once the
+               thread is suspended and confirmed in exec it cannot leave, so the
+               whole hold can go in a single Sleep.
+             ⚠ BOUNDED, because a guest blocked in a host key-read is never
+               suspendable and would spin this loop forever. Give up after a fixed
+               window -- and not throttling a guest that is BLOCKED is correct
+               anyway: it is not executing, so there is nothing to slow down. */
+        {   DWORD started = GetTickCount();
+            int done = 0;
+            while (!done && g_running && GetTickCount() - started < 400u) {
+                CONTEXT cx;
+                if (!g_hcpu || g_in_exec == 0) { g_cpuspd_missed++; Sleep(1); continue; }
+                if (SuspendThread(g_hcpu) == (DWORD)-1) { g_cpuspd_missed++; Sleep(1); continue; }
+                cx.ContextFlags = CONTEXT_CONTROL;
+                if (GetThreadContext(g_hcpu, &cx) && g_in_exec != 0) {
+                    /* ── HELD. And NOW is when we know how long it really ran: from
+                         the last resume to this instant, wall clock, including the
+                         Sleep's inaccuracy and whatever it cost the kernel to stop a
+                         thread that was inside VdmStartExecution. Price the hold off
+                         THAT rather than off the millisecond we asked for. */
+                    LARGE_INTEGER now;
+                    unsigned long ran_us;
+                    unsigned hold;
+                    QueryPerformanceCounter(&now);
+                    ran_us = (unsigned long)qpc_us(now.QuadPart - t_go.QuadPart);
+                    if (!ran_us) ran_us = 1ul;
+                    g_cpuspd_ran_us = (DWORD)ran_us;      /* reported at STAGE2 */
+                    owed_us += cpuspeed_hold_us(duty, ran_us);
+                    hold = cpuspeed_pay_ms(&owed_us);
+                    g_cpuspd_run_ms  += (DWORD)((ran_us + 500ul) / 1000ul);
+                    g_cpuspd_held_ms += hold;
+                    g_cpuspd_owed_ms  = (DWORD)(owed_us / 1000ul);
+                    if (hold) Sleep(hold);
+                    done = 1;
+                }
+                ResumeThread(g_hcpu);
+                QueryPerformanceCounter(&t_go);           /* the run phase restarts */
+                if (!done) { g_cpuspd_missed++; Sleep(1); }
+            }
+            if (!done) QueryPerformanceCounter(&t_go);    /* gave up: not its fault */
+        }
     }
     return 0;
 }
@@ -3637,7 +3864,11 @@ enum {                                       /* wired command IDs               
     IDM_FILE_SETTINGS,
     IDM_CAP_SHOT,
     IDM_HELP_ABOUT,
-    IDM_TRAY_SHOW                            /* bring the hidden host window back  */
+    IDM_TRAY_SHOW,                           /* bring the hidden host window back  */
+    /* ── GH #56: one id per approximate CPU speed, contiguous, so the handler is a
+         subtraction rather than a switch. Must stay LAST in this enum: the range
+         check below is `id - IDM_SPEED_0 < CPUSPEED_COUNT`. */
+    IDM_SPEED_0
 };
 
 static void mi (HMENU m, const char *s, UINT id) { AppendMenuA(m, MF_STRING, id, s); }
@@ -4250,6 +4481,15 @@ static HMENU build_menu(void)
     mi(m,"Restart Machine",IDM_STUB);
     mi(m,"Pause / Resume\tPause",IDM_STUB);
     msep(m);
+    /* ── ★ THE APPROXIMATE-SPEED DROPDOWN. (GH #56) ──────────────────────────────
+         The user asked for this in the MENU, and the menu is where it belongs: it
+         is a knob you reach for while watching something run too fast, not one you
+         set up before launching. The Settings CPU page carries the same value --
+         they are one registry key and one live variable, so neither can be stale. */
+    { HMENU sp = mpop(); int k;
+      for (k = 0; k < CPUSPEED_COUNT; ++k) mi(sp, CPUSPEED_NAMES[k], IDM_SPEED_0 + k);
+      msub(m, "CPU Speed", sp); }
+    msep(m);
     mi(m,"Capture Input\tWin+F10",IDM_INPUT_CAPTURE);
     mi(m,"Send Ctrl+Alt+Del",IDM_STUB);
     mi(m,"Key Mapper...",IDM_STUB);
@@ -4463,6 +4703,20 @@ static void menu_check(HWND h, UINT id, int on)
     if (m) CheckMenuItem(m, id, MF_BYCOMMAND | (UINT)(on ? MF_CHECKED : MF_UNCHECKED));
 }
 
+/* ── GH #56: the CPU Speed submenu shows WHICH speed is set. ─────────────────────
+     CheckMenuRadioItem rather than a tick, because these are exclusive and a bullet
+     is what Windows uses to say so. It also unchecks the others in one call, which
+     is the difference between a menu that reports the setting and one that
+     accumulates ticks -- and a menu that shows two speeds at once is worse than one
+     that shows none, because it looks authoritative. */
+static void menu_speed_check(HWND h)
+{
+    HMENU m = GetMenu(h);
+    if (!m) m = g_savedmenu;
+    if (m) CheckMenuRadioItem(m, IDM_SPEED_0, IDM_SPEED_0 + CPUSPEED_COUNT - 1,
+                              IDM_SPEED_0 + (UINT)g_cpuspd_idx, MF_BYCOMMAND);
+}
+
 /* ── INPUT CAPTURE ("exclusivity"). ─────────────────────────────────────────────────
      Two different things are stealing the guest's keys, and they need different fixes.
    1. WINDOWS' OWN MENU KEYS. F10 and Alt do not arrive as WM_KEYDOWN at all -- they are
@@ -4594,10 +4848,12 @@ static void host_cursor_set(HWND h, int on)
 
    ⚠ THESE FUNCTIONS ARE ALSO THE HONEST LIST OF WHAT WORKS. What is NOT here is not
      honoured, however faithfully it round-trips through HKCU:
-       CPU page     -- CpuType/CpuCore/Fpu/SpeedMode/Cycles/Turbo. This host runs
-                       16-bit code on the REAL CPU; there are no cycles to count and
-                       a speed control has to be a duty cycle on the exec loop. It is
-                       a feature, not a line here.
+       CPU page     -- CpuType/CpuCore/Fpu/Cycles/Turbo. This host runs 16-bit code
+                       on the REAL CPU, so there is no core to choose and no cycles
+                       to count. ★ SpeedMode IS NOW LIVE (GH #56): it is the
+                       approximate-speed dropdown, and because a real CPU cannot be
+                       clocked down it is a DUTY CYCLE -- see src/host/cpuspeed.h,
+                       which also carries the one calibration constant.
        ConventionalKB, Umb -- DOS_MEM_TOP is a compile-time constant and there are no
                        upper memory blocks to link. See GH #47.
        Renderer, Filtering -- the windowed path is GDI StretchDIBits; a DirectDraw
@@ -4639,6 +4895,11 @@ static void settings_apply(HWND h, const ntvdmex_settings *s, int live)
     g_frameskip      = (int)s->v[SET_FRAMESKIP];
     g_xms_on         = (int)(s->v[SET_XMS] ? 1 : 0);
     g_ems_on         = (int)(s->v[SET_EMS] ? 1 : 0);
+    /* GH #56. Live: the throttle thread re-reads the duty every millisecond and the
+       interpreter re-reads the budget every slice, so changing the speed in the
+       dialog bites on the next millisecond rather than at the next launch. */
+    g_cpuspd_idx     = (int)(s->v[SET_SPEEDMODE] < CPUSPEED_COUNT ? s->v[SET_SPEEDMODE] : 0);
+    cpuspd_recompute();
     g_floppy_img     = s->s[SET_STR_FLOPPYA][0] ? s->s[SET_STR_FLOPPYA] : FLOPPY_IMG_PATH;
     /* The SbDma list is 1|3|5, and 5 is not an 8-bit channel on any real 8237 --
        on an SB16 it is the SIXTEEN-bit one. Selecting it therefore moves H and
@@ -4905,6 +5166,10 @@ static INT_PTR CALLBACK settings_dlgproc(HWND dlg, UINT msg, WPARAM wp, LPARAM l
             settings_save(&g_set);            /* the registry IS the store        */
             settings_apply(GetParent(dlg), &g_set, 1);
             settings_apply_devices(&g_set);   /* the mixer + the presenter exist by now */
+            /* The CPU Speed submenu shows the same value this page just set, so it
+               has to move with it -- two places to read one setting is only an
+               improvement while they agree (GH #56). */
+            menu_speed_check(GetParent(dlg));
             /* ⚠ The construction-time ones (the card's port/IRQ/DMA, the output
                  rate, the window scale, the memory managers) are stored and take
                  effect at the NEXT launch. That is not a gap to hide: a Sound
@@ -5218,6 +5483,20 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
         }
         return 0;
     case WM_COMMAND:
+        /* ── GH #56: the speed items are a contiguous RANGE, so they are handled
+             before the switch rather than as CPUSPEED_COUNT near-identical cases.
+             Setting it does three things and all three are the point: the throttle
+             bites on the next millisecond, the tick moves, and it is WRITTEN TO THE
+             REGISTRY -- a speed chosen from the menu that did not survive the run
+             would be a knob you have to set twice. */
+        if ((UINT)LOWORD(wp) >= IDM_SPEED_0 &&
+            (UINT)LOWORD(wp) <  IDM_SPEED_0 + CPUSPEED_COUNT) {
+            g_set.v[SET_SPEEDMODE] = (DWORD)(LOWORD(wp) - IDM_SPEED_0);
+            settings_apply(h, &g_set, 1);
+            settings_save(&g_set);
+            menu_speed_check(h);
+            return 0;
+        }
         switch (LOWORD(wp)) {
         case IDM_FILE_EXIT: DestroyWindow(h); return 0;
         case IDM_DISP_FULLSCREEN: present_ddraw_set_fullscreen(&g_pd, !g_pd.fullscreen); return 0;
@@ -5461,6 +5740,7 @@ static DWORD WINAPI ui_thread(LPVOID arg)
     }
     SetMenu(g_hwnd, build_menu());
     menu_check(g_hwnd, IDM_INPUT_CURSOR, g_cursor_show);  /* tick reflects the state  */
+    menu_speed_check(g_hwnd);                             /* ...and so does the speed */
     present_ddraw_init(&g_pd, g_hwnd);          /* GDI windowed; DDraw for fullscreen */
     settings_apply_present(&g_pd, &g_set);      /* ...which zeroes its own struct     */
     make_status(g_hwnd, hi);                     /* native themed status bar          */
@@ -6929,6 +7209,37 @@ static long host_interp(volatile BYTE *tib, long cap)
     /* update only the low 16 flag bits (arith + DF); keep VM/IOPL/IF etc. */
     VDM_REG(tib, VTIB_EFLAGS) = (VDM_REG(tib, VTIB_EFLAGS) & 0xFFFF0000u) | (c.flags & 0xFFFFu);
     return iters;
+}
+
+/* ── ★ APPROXIMATE CPU SPEED: THE INTERPRETER HALF. (GH #56) ─────────────────────
+     Here we know exactly how much work was done, so the throttle is precise rather
+     than statistical: time the slice, charge the instructions against the budget the
+     setting allows, and sleep the difference. cpuspeed.h carries the arithmetic and
+     the reason the microsecond remainder has to be kept.
+   ⚠ EVERY host_interp CALL GOES THROUGH HERE, including the single-instruction one.
+     A one-instruction slice owes a fraction of a microsecond, which is exactly the
+     debt that must accumulate rather than round to nothing -- and A0000 stores in
+     mode 12h arrive one at a time in their thousands, so it is not a rounding
+     detail, it is most of the guest's execution in that mode.
+   ⚠ SLEEPING HERE IS SAFE AND SLEEPING INSIDE host_interp WOULD NOT BE: this is
+     outside the HOST_LOCK, so a throttled guest does not hold the bus lock while it
+     waits and the audio pump is untouched. */
+static long host_interp_paced(volatile BYTE *tib, long cap)
+{
+    static cpuspeed_pace s_pace;              /* exec thread only -- no lock needed */
+    unsigned long ips = cpuspeed_ips((unsigned)g_cpuspd_idx);
+    LARGE_INTEGER a, b;
+    long ran;
+    int ms;
+    if (!ips) return host_interp(tib, cap);           /* Unlimited: not one branch  */
+    QueryPerformanceCounter(&a);
+    ran = host_interp(tib, cap);
+    QueryPerformanceCounter(&b);
+    if (ran <= 0) return ran;
+    ms = cpuspeed_charge(&s_pace, (unsigned long)ran, ips,
+                         (long long)qpc_us(b.QuadPart - a.QuadPart));
+    if (ms > 0) { g_cpuspd_held_ms += (DWORD)ms; Sleep((DWORD)ms); }
+    return ran;
 }
 
 /* ── PROBE A GUEST POINTER WITHOUT FAULTING. Session 17, and it cost a run. ────────
@@ -15409,19 +15720,32 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
              for GetNextVDMCommand, already duplicated into this process. That is
              how stock ntvdm gets them, and it is the only channel that carries
              a redirect the user typed at cmd. */
-        if ((g_ci.StartupInfo.dwFlags & STARTF_USESTDHANDLES)
-            && g_ci.StartupInfo.hStdOutput
-            && g_ci.StartupInfo.hStdOutput != INVALID_HANDLE_VALUE) {
-            DWORD ty2 = GetFileType(g_ci.StartupInfo.hStdOutput);
-            if (ty2 != FILE_TYPE_UNKNOWN) {
-                g_stdio = g_ci.StartupInfo.hStdOutput;
-                g_stdio_how = (ty2 == FILE_TYPE_DISK) ? "CSRSS StdOutput (redirected to a file)"
-                            : (ty2 == FILE_TYPE_PIPE) ? "CSRSS StdOutput (pipe)"
-                                                      : "CSRSS StdOutput (console)";
+        /* ► PRINT THE RAW HANDLES AND THEIR TYPES **BEFORE** DECIDING ANYTHING.
+             Four routes have been eliminated here already, and each cost a run
+             because the log said which route was CHOSEN and never what the
+             candidates actually WERE. A handle value with a file type beside it
+             settles "is there a redirect on this VDM at all" in one line, for
+             every one of the three streams, whether or not we end up using it. */
+        {   const char *nms[5]; HANDLE hs[5]; int k;
+            nms[0] = "vdm.StdIn";   hs[0] = g_ci.StdIn;
+            nms[1] = "vdm.StdOut";  hs[1] = g_ci.StdOut;
+            nms[2] = "vdm.StdErr";  hs[2] = g_ci.StdErr;
+            nms[3] = "si.hStdOut";  hs[3] = g_ci.StartupInfo.hStdOutput;
+            nms[4] = "si.hStdIn";   hs[4] = g_ci.StartupInfo.hStdInput;
+            p = zput(p, "STAGE1: vdm handles");
+            for (k = 0; k < 5; ++k) {
+                DWORD ty3 = (hs[k] && hs[k] != INVALID_HANDLE_VALUE)
+                            ? GetFileType(hs[k]) : 0xFFFFFFFFu;
+                p = zput(p, " "); p = zput(p, nms[k]);
+                p = zput(p, "=0x"); p = zhex(p, (DWORD)(ULONG_PTR)hs[k]);
+                p = zput(p, "/t"); p = zhex(p, ty3);
             }
-        }
-        p = zput(p, "STAGE1: stdout -> "); p = zput(p, g_stdio_how);
-        p = zput(p, " sf=0x"); p = zhex(p, g_ci.StartupInfo.dwFlags);
+            p = zput(p, " sf=0x"); p = zhex(p, g_ci.StartupInfo.dwFlags);
+            p = zput(p, "\r\n"); }
+        g_stdio_how = stdio_init_vdm();
+        p = zput(p, "STAGE1: stdout -> ");
+        if (g_stdio_src[0]) { p = zput(p, g_stdio_src); p = zput(p, " -> "); }
+        p = zput(p, g_stdio_how);
         p = zput(p, "\r\n");
     } else {
         p = zput(p, "STAGE1: GetNextVDMCommand FALSE err=0x"); p = zhex(p, err); p = zput(p, "\r\n");
@@ -16117,6 +16441,29 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                                           v2 = v2 * 10 + (c[j] - '0'); }
           if (v2 >= 10 && v2 <= 1000) g_ms_sens = v2;
       } }
+    /* ── GH #56: the calibration and a one-run speed override, both from the share.
+         ⚠ THESE RUN BEFORE cpuspd_recompute() BELOW, which is the whole point: the
+           duty is computed once from whatever the registry and these two agree on,
+           and re-computed only when the setting changes. Reading them after would
+           leave the thread running on the registry's answer for the whole session,
+           which is exactly the shape of a knob that silently does nothing. */
+    { HANDLE hp8 = CreateFileA(CPUREF_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                               NULL, OPEN_EXISTING, 0, NULL);
+      if (hp8 != INVALID_HANDLE_VALUE) {
+          char c[12]; DWORD rd = 0; unsigned v3 = 0; int j;
+          ReadFile(hp8, c, sizeof c, &rd, NULL); CloseHandle(hp8);
+          for (j = 0; j < (int)rd; ++j) { if (c[j] < '0' || c[j] > '9') break;
+                                          v3 = v3 * 10u + (unsigned)(c[j] - '0'); }
+          if (v3 >= 1u && v3 <= 100000u) g_cpuspd_ref_mhz = v3;
+      } }
+    { HANDLE hp9 = CreateFileA(CPUSPD_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                               NULL, OPEN_EXISTING, 0, NULL);
+      if (hp9 != INVALID_HANDLE_VALUE) {
+          char c[8]; DWORD rd = 0;
+          ReadFile(hp9, c, sizeof c, &rd, NULL); CloseHandle(hp9);
+          if (rd && c[0] >= '0' && c[0] < ('0' + CPUSPEED_COUNT))
+              g_cpuspd_idx = c[0] - '0';
+      } }
     if (g_pitpace_on) {
         HMODULE mm = LoadLibraryA("winmm.dll");
         if (mm) { PFN_timeBeginPeriod tbp =
@@ -16124,6 +16471,26 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                   if (tbp) tbp(1); }
         g_pitpace_thread = CreateThread(NULL, 0, pit_pacer_thread, NULL, 0, NULL);
     }
+    /* ── ★ THE CPU-SPEED THROTTLE. (GH #56) ──────────────────────────────────────
+         Started unconditionally, even at Unlimited: the setting is live, and a
+         thread that has to be created before it can bite would make the menu work
+         only on machines that started throttled. It idles in 4 ms sleeps when
+         there is nothing to do.
+       ⚠ IT NEEDS THE 1 ms TIMER RESOLUTION, and the block above only raises it when
+         the PIT pacer is on. Without timeBeginPeriod(1) a Sleep(1) is XP's default
+         ~15.6 ms, which would turn every held millisecond into fifteen and make the
+         guest fifteen times slower than the label on the menu. So raise it here too
+         -- the call nests, and pitpace=0 must not silently change what "33 MHz"
+         means. Bound by name, like every other winmm use, so the import allowlist
+         is unaffected. */
+    if (!g_pitpace_on) {
+        HMODULE mm2 = LoadLibraryA("winmm.dll");
+        if (mm2) { PFN_timeBeginPeriod tbp2 =
+                       (PFN_timeBeginPeriod)GetProcAddress(mm2, "timeBeginPeriod");
+                   if (tbp2) tbp2(1); }
+    }
+    cpuspd_recompute();
+    g_cpuspd_thread = CreateThread(NULL, 0, cpuspeed_thread, NULL, 0, NULL);
     /* ⚠ THE SAME RATE THE MIXER WAS BUILT AT. Opening the device at one rate and
          mixing at another silently resamples everything to a clock nothing runs
          on -- audible as a pitch error, not as an error message. */
@@ -16498,7 +16865,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
          * before -- so a DOS call still reaches the kernel as a BOP event, and an
          * unmodeled opcode still executes on the real CPU. */
         if (g_p12_interp && !g_dpmi_pm) {
-            long ran = host_interp(tib, P12_SLICE);
+            long ran = host_interp_paced(tib, P12_SLICE);
             if (ran > 0) { g_p12_batches++; g_p12_instrs += (DWORD)ran; continue; }
             /* NAME THE OPCODE. Every bail is guest execution we cannot see, so the
                list of declined opcodes IS the to-do list for this path (#27). */
@@ -16565,7 +16932,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             if ((g_a000_prot || (g_interp12 && vdd_video_planar_active(&g_vid)))
                 && s_storm >= STORM_GATE) {
                 DWORD bc = VDM_REG(tib, VTIB_CS) & 0xFFFF, bi = VDM_REG(tib, VTIB_EIP) & 0xFFFF;
-                long ran = host_interp(tib, TIER1_CAP);
+                long ran = host_interp_paced(tib, TIER1_CAP);
                 if (ran > 0) {
                     static int s_bud_bat = 10;
                     if (s_bud_bat > 0) {            /* is the batch ADVANCING the guest? */
@@ -16593,7 +16960,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                 if (handled) { g_ev_io++; g_io_via_retro++; io_hot_note(g_io_last_port, VDM_REG(tib, VTIB_CS) & 0xFFFF, VDM_REG(tib, VTIB_EIP) & 0xFFFF); continue; }
             }
             if ((g_a000_prot || (g_interp12 && vdd_video_planar_active(&g_vid)))
-                && host_interp(tib, 1) > 0) continue;   /* single A0000 access */
+                && host_interp_paced(tib, 1) > 0) continue;   /* single A0000 access */
             /* The interpreter refused the very first opcode. With A0000 trapped that
                is a LIVELOCK, not a miss: we resume at the same EIP, the guest
                re-faults on the same store, forever. Name the opcode -- this is the
@@ -18658,7 +19025,9 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     pcspk_close(&g_pcspk);               /* ⚠ a headless run never sees WM_DESTROY,
                                             and Beep.sys outlives the process */
     recovery_ok();                       /* GH #132: this run ended cleanly */
-    p = zput(p, "STAGE2: stdout -> "); p = zput(p, g_stdio_how);
+    p = zput(p, "STAGE2: stdout -> ");
+    if (g_stdio_src[0]) { p = zput(p, g_stdio_src); p = zput(p, " -> "); }
+    p = zput(p, g_stdio_how);
     p = zput(p, g_stdio != INVALID_HANDLE_VALUE ? " [LIVE]" : " [buffered only]");
     p = zput(p, " ppid=0x"); p = zhex(p, g_stdio_ppid); p = zput(p, "\r\n");
     {
@@ -18712,6 +19081,31 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
       p = zput(p, " inject="); p = zhex(p, (DWORD)g_pitpace_inject);
       p = zput(p, " uitick_min_ms="); p = zhex(p, (DWORD)g_ui_tick_min_ms);
       p = zput(p, " uitick_skipped="); p = zhex(p, g_ui_tick_skips);
+      /* ── GH #56: DID THE THROTTLE ACTUALLY BITE? ──────────────────────────────
+           run/held are the milliseconds the Bresenham handed out, and held/(run+
+           held) must come out at 1 - duty or the mechanism is not doing what the
+           setting says. `missed` is the one to watch: a held millisecond where the
+           guest was NOT inside VdmStartExecution, which we cannot hold. A large
+           missed against a small held means the guest spends its time in host code
+           -- our own service calls -- and the throttle is reaching a fraction of
+           its execution. That is a real limit of the mechanism and it should be
+           legible in the log rather than inferred from a stopwatch. */
+      p = zput(p, "\r\nSTAGE2: cpuspeed idx="); p = zhex(p, (DWORD)g_cpuspd_idx);
+      p = zput(p, " mhz="); p = zhex(p, g_cpuspd_idx < CPUSPEED_COUNT
+                                        ? CPUSPEED_MHZ[g_cpuspd_idx] : 0u);
+      p = zput(p, " ref_mhz="); p = zhex(p, g_cpuspd_ref_mhz);
+      /* ⚠ DELIVERED, NOT REQUESTED, AND BOTH. The hold is capped, so the slowest
+           settings cannot be reached on a fast host -- and a throttle that quietly
+           delivers 14 MHz where the menu says 8 is the "runs but lies" class. */
+      p = zput(p, " delivered_mhz=");
+      p = zhex(p, cpuspeed_delivered_mhz((unsigned)g_cpuspd_idx, g_cpuspd_ref_mhz,
+                                         g_cpuspd_ran_us));
+      p = zput(p, " ran_us="); p = zhex(p, g_cpuspd_ran_us);
+      p = zput(p, " owed_ms="); p = zhex(p, g_cpuspd_owed_ms);
+      p = zput(p, " duty_bp="); p = zhex(p, (DWORD)g_cpuspd_duty);
+      p = zput(p, " run_ms="); p = zhex(p, g_cpuspd_run_ms);
+      p = zput(p, " held_ms="); p = zhex(p, g_cpuspd_held_ms);
+      p = zput(p, " missed="); p = zhex(p, g_cpuspd_missed);
       /* THE KEYSTROKE ITSELF, both halves. ms buckets [0,1,2,4,8,16,32,64+]. */
       p = zput(p, "\r\nSTAGE2: KEYLAT msgq_ms[0,1,2,4,8,16,32,64+]=");
       { unsigned kb; for (kb = 0; kb < 8; ++kb) { p = zput(p, kb ? "," : "");

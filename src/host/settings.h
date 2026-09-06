@@ -39,6 +39,7 @@
 
 #include <windows.h>
 #include "../../res/settings_ids.h"
+#include "cpuspeed.h"          /* GH #56: the speed list SET_SPEEDMODE selects from */
 
 #define NTVDMEX_REG_KEY "Software\\NTVDMEX"
 #define NTVDMEX_PATH_MAX 260
@@ -111,7 +112,19 @@ static const set_def SET_DEFS[SET_COUNT] = {
 { "CpuType",           IDC_S_CPUTYPE,     SK_COMBO,      2,  0,   4, "8086|286|386|486|Pentium" },
 { "CpuCore",           IDC_S_CPUCORE,     SK_COMBO,      0,  0,   3, "Auto|Normal|Dynamic|Simple" },
 { "Fpu",               IDC_S_FPU,         SK_CHECK,      1,  0,   1, NULL },
-{ "SpeedMode",         IDC_S_SPEEDMODE,   SK_COMBO,      0,  0,   2, "Auto|Maximum|Fixed cycles" },
+/* ── ⚠ THIS ROW CHANGED MEANING, AND THE MIGRATION IS THE REASON IT IS SHAPED
+     LIKE THIS. It used to read "Auto|Maximum|Fixed cycles" -- DOSBox's vocabulary,
+     for a host that has no cycles to count because it runs on the real CPU -- and
+     it did nothing at all. It is now the approximate-speed dropdown (GH #56), the
+     only lever this emulator has over software that paces itself with a delay loop
+     or with nothing at all.
+   ★ OLD VALUES SURVIVE. Index 0 was "Auto" and is now "Unlimited"; both mean do
+     not throttle, and 0 is the default, so every machine with this key already set
+     keeps the behaviour it had. The list runs fastest-first so the other two old
+     indices land somewhere defensible rather than at the slow end: "Maximum" (1)
+     becomes 200 MHz. See src/host/cpuspeed.h for the list and the calibration. */
+{ "SpeedMode",         IDC_S_SPEEDMODE,   SK_COMBO,      0,  0,
+                                          CPUSPEED_COUNT - 1, CPUSPEED_ITEMS },
 { "Cycles",            IDC_S_CYCLES,      SK_UINT,    3000, 100, 1000000, NULL },
 { "Turbo",             IDC_S_TURBO,       SK_CHECK,      0,  0,   1, NULL },
 { "ConventionalKB",    IDC_S_CONVKB,      SK_UINT,     640, 64,  640, NULL },
