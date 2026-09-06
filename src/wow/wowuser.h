@@ -833,6 +833,42 @@ static const char *wowuser_sysres_name(WORD h)
 #define SSB_ARG_BAR      2
 #define SSB_ARG_HWND     4
 
+/* ── ★★ BATCH FOUR: what CARDFILE and WINFILE still want that is answerable. ──
+   ⚠⚠ THE COMM FAMILY ANSWERS "NO SUCH PORT", AND THAT IS THE TRUTH, NOT A STUB.
+     This host's BIOS equipment word claims ONE parallel port and NO serial ports
+     -- deliberately, because writing COM1..COM4 into the BDA would be inventing
+     hardware nothing answers for, and COMM.DRV's LibMain returns whatever is at
+     that BDA slot (docs/STATE.md, session 36). So there is no port to open, and
+     IE_BADID (-2) is exactly what Windows returns for a port id that does not
+     exist. CARDFILE uses these to AUTODIAL; it gets a clean refusal and works
+     without a modem, which is the same thing a real machine with no COM port
+     would give it. */
+#define WOWUSER_SETCOMMSTATE   0x00c9
+#define WOWUSER_GETCOMMSTATE   0x00ca
+#define WOWUSER_GETCOMMERROR   0x00cb
+#define WOWUSER_WRITECOMM      0x00cd
+#define WOWUSER_FLUSHCOMM      0x00d7
+
+#define WOWUSER_SETWINDOWPLACEMENT 0x0173
+#define WOWUSER_EXITWINDOWS        0x0007
+#define WOWUSER_DEFFRAMEPROC       0x01bd
+#define DFP_ARG_LPARAM   0
+#define DFP_ARG_WPARAM   4
+#define DFP_ARG_MSG      6
+#define DFP_ARG_HCLIENT  8
+#define DFP_ARG_HWND    10
+#define WOWUSER_DEFMDICHILDPROC    0x01bf
+
+#define WOWUSER_TABBEDTEXTOUT      0x00c4
+#define TTO_ARG_TABORG   0
+#define TTO_ARG_TABPOS   2
+#define TTO_ARG_TABCNT   6
+#define TTO_ARG_COUNT    8
+#define TTO_ARG_STR     10
+#define TTO_ARG_Y       14
+#define TTO_ARG_X       16
+#define TTO_ARG_HDC     18
+
 #define WOWUSER_ISWINDOWVISIBLE  0x0031
 #define IW_ARG_HWND      0
 
@@ -4965,6 +5001,130 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
         ShowScrollBar(w->hwnd32, (int)(short)bar, show ? TRUE : FALSE);
         wu_puts(note, notecap, &k, show ? " -> shown" : " -> hidden");
         wow32_setret(f, 1);
+        return 1;
+    }
+
+    /* ── ⚠⚠ NO SERIAL PORT EXISTS HERE. See the note by the ids: the equipment
+         word claims none, so IE_BADID is the TRUE answer rather than a stub. ── */
+    case WOWUSER_SETCOMMSTATE:
+    case WOWUSER_GETCOMMSTATE:
+    case WOWUSER_GETCOMMERROR:
+    case WOWUSER_WRITECOMM:
+    case WOWUSER_FLUSHCOMM: {
+        int k = 0;
+        wu_puts(note, notecap, &k, "COMM call id=0x");
+        wu_puthex(note, notecap, &k, f->id, 4);
+        wu_puts(note, notecap, &k, " -- ★ THIS VDM HAS NO SERIAL PORT (the BIOS "
+                                   "equipment word claims none, on purpose); "
+                                   "answered IE_BADID (-2), which is what a real "
+                                   "machine with no COM port returns");
+        wow32_setret(f, 0xFFFE);          /* IE_BADID */
+        return 1;
+    }
+
+    case WOWUSER_SETWINDOWPLACEMENT: {
+        WORD hwnd = wow32_argw(f, GWP_ARG_HWND);
+        volatile BYTE *p16 = wow32_argptr(f, GWP_ARG_PL);
+        wowuser_win_t *w = wowuser_findwin(hwnd);
+        WINDOWPLACEMENT wp;
+        int k = 0, r;
+        wu_puts(note, notecap, &k, "SetWindowPlacement 0x");
+        wu_puthex(note, notecap, &k, hwnd, 4);
+        if (!w || !w->hwnd32 || !p16) {
+            wu_puts(note, notecap, &k, " -- no real window or no struct; FALSE");
+            wow32_setret(f, 0); return 1;
+        }
+        /* ⚠ 22 bytes of WORDs in, 44 bytes of LONGs out. Same conversion as
+             GetWindowPlacement, in the other direction. */
+        wp.length           = sizeof wp;
+        wp.flags            = wow32_peekw(p16 +  2);
+        wp.showCmd          = wow32_peekw(p16 +  4);
+        wp.ptMinPosition.x  = (short)wow32_peekw(p16 +  6);
+        wp.ptMinPosition.y  = (short)wow32_peekw(p16 +  8);
+        wp.ptMaxPosition.x  = (short)wow32_peekw(p16 + 10);
+        wp.ptMaxPosition.y  = (short)wow32_peekw(p16 + 12);
+        wp.rcNormalPosition.left   = (short)wow32_peekw(p16 + 14);
+        wp.rcNormalPosition.top    = (short)wow32_peekw(p16 + 16);
+        wp.rcNormalPosition.right  = (short)wow32_peekw(p16 + 18);
+        wp.rcNormalPosition.bottom = (short)wow32_peekw(p16 + 20);
+        r = SetWindowPlacement(w->hwnd32, &wp) ? 1 : 0;
+        wu_puts(note, notecap, &k, r ? " -> placed" : " -> REFUSED");
+        wow32_setret(f, (DWORD)r);
+        return 1;
+    }
+
+    /* ── ⚠⚠⚠ ExitWindows IS REFUSED, ALWAYS. A Win16 guest asking to end the
+         Windows session must NOT be able to log the user out or restart the real
+         machine -- that is the whole desktop, not this VDM, and the guest cannot
+         tell the difference between "refused" and "the user said no", which is a
+         documented outcome of this call. Returning FALSE is a legal answer that
+         every caller already handles. */
+    case WOWUSER_EXITWINDOWS: {
+        int k = 0;
+        wu_puts(note, notecap, &k, "ExitWindows -- ★ REFUSED. This would end the "
+                                   "REAL user's session, not the VDM. FALSE is a "
+                                   "documented outcome (the user declined)");
+        wow32_setret(f, 0);
+        return 1;
+    }
+
+    case WOWUSER_DEFFRAMEPROC:
+    case WOWUSER_DEFMDICHILDPROC: {
+        int  frame = (f->id == WOWUSER_DEFFRAMEPROC);
+        WORD hwnd  = wow32_argw(f, frame ? DFP_ARG_HWND : DDP_ARG_HDLG);
+        WORD hcli  = frame ? wow32_argw(f, DFP_ARG_HCLIENT) : 0;
+        WORD msg   = wow32_argw(f, frame ? DFP_ARG_MSG    : DDP_ARG_MSG);
+        WORD wp16  = wow32_argw(f, frame ? DFP_ARG_WPARAM : DDP_ARG_WPARAM);
+        DWORD lp32 = wow32_argd(f, frame ? DFP_ARG_LPARAM : DDP_ARG_LPARAM);
+        wowuser_win_t *w = wowuser_findwin(hwnd);
+        wowuser_win_t *c = hcli ? wowuser_findwin(hcli) : NULL;
+        LRESULT r;
+        int k = 0;
+        wu_puts(note, notecap, &k, frame ? "DefFrameProc 0x" : "DefMDIChildProc 0x");
+        wu_puthex(note, notecap, &k, hwnd, 4);
+        wu_puts(note, notecap, &k, " msg=0x"); wu_puthex(note, notecap, &k, msg, 4);
+        if (!w || !w->hwnd32) { wu_puts(note, notecap, &k, " -- no real window; 0");
+                                wow32_setret(f, 0); return 1; }
+        /* The OS's own MDI defaults, on the real windows -- the same argument as
+           using the real MDICLIENT rather than drawing one. */
+        r = frame ? DefFrameProcA(w->hwnd32, c ? c->hwnd32 : NULL, msg, wp16, (LPARAM)lp32)
+                  : DefMDIChildProcA(w->hwnd32, msg, wp16, (LPARAM)lp32);
+        wu_puts(note, notecap, &k, " -> 0x"); wu_puthex(note, notecap, &k, (DWORD)r, 8);
+        wow32_setret(f, (DWORD)r);
+        return 1;
+    }
+
+    case WOWUSER_TABBEDTEXTOUT: {
+        WORD tok = wow32_argw(f, TTO_ARG_HDC);
+        int  x   = (int)(short)wow32_argw(f, TTO_ARG_X);
+        int  y   = (int)(short)wow32_argw(f, TTO_ARG_Y);
+        int  n   = (int)(short)wow32_argw(f, TTO_ARG_COUNT);
+        int  ntab= (int)(short)wow32_argw(f, TTO_ARG_TABCNT);
+        int  torg= (int)(short)wow32_argw(f, TTO_ARG_TABORG);
+        volatile BYTE *sp = wow32_argptr(f, TTO_ARG_STR);
+        volatile BYTE *tp = wow32_argptr(f, TTO_ARG_TABPOS);
+        int  kind = -1;
+        HGDIOBJ o = wowgdi_h32(tok, &kind);
+        char buf[512];
+        INT  tabs[64];
+        LONG r;
+        int  k = 0, i;
+        wu_puts(note, notecap, &k, "TabbedTextOut(0x");
+        wu_puthex(note, notecap, &k, tok, 4);
+        if (!o || (kind != WOWGDI_KIND_DC && kind != WOWGDI_KIND_WINDC)) {
+            wu_puts(note, notecap, &k, ") -- ★ NOT ONE OF OUR DC TOKENS; 0");
+            wow32_setret(f, 0); return 1;
+        }
+        if (n < 0) n = 0;
+        if (n > (int)sizeof buf) n = (int)sizeof buf;
+        for (i = 0; i < n; ++i) buf[i] = sp ? (char)sp[i] : ' ';
+        if (ntab < 0) ntab = 0;
+        if (ntab > 64) ntab = 64;
+        for (i = 0; i < ntab; ++i)
+            tabs[i] = tp ? (int)(short)wow32_peekw(tp + i * 2) : 0;
+        r = TabbedTextOutA((HDC)o, x, y, buf, n, ntab, (ntab && tp) ? tabs : NULL, torg);
+        wu_puts(note, notecap, &k, ") -> extent 0x"); wu_puthex(note, notecap, &k, (DWORD)r, 8);
+        wow32_setret(f, (DWORD)r);
         return 1;
     }
 
