@@ -998,6 +998,50 @@ static int wow32_call(wow32_frame_t *f, wow32_dosdata_t *dd)
          identical answers is what fed 0xf0 to the GetCurrentDirectory that
          followed and #GP'd the run.
        ⚠ GetDriveTypeA wants a ROOT PATH ("A:\"), not a letter. */
+    /* ── ★★★★★ 0x86 GetDateTime -- AND IT IS WHY THE CLOCK'S FACE IS BLANK.
+         (session 54) ──────────────────────────────────────────────────────────
+         CLOCK.EXE asks DOS for the date the ordinary way -- `INT 21h AH=2Ah` in
+         protected mode. krnl386 owns that vector inside a WOW VDM (there is no DOS
+         underneath to answer it), and its handler thunks straight out to here. We
+         did not implement it, so it was STEPPED OVER and answered 0 -- and CLOCK
+         got no date, drew nothing, invalidated its window and asked again:
+         **10,317 times in a fourteen-second run.**
+
+       ⚠⚠ AND IT CORRECTS A RECORDED CONCLUSION. The standing note said Clock's
+         time "comes from krnl386's own 16-bit code, so there is no thunk to
+         observe", and that both obvious hypotheses were dead (it never calls
+         GetCurrentTime; the BDA tick is correct). The first two were right. The
+         third was an inference, not a measurement -- there IS a thunk, this is it,
+         and one grep of the run for UNIMPLEMENTED found it in a minute.
+
+       ★ THE SIGNATURE BUG SHAPE, AGAIN: a stepped-over call whose sentinel answer
+         is read as data. Fifth instance in this project. When something is blank,
+         wrong or grey and the log shows no error, grep the run for the stepped-over
+         lines and read each CALL SITE.
+
+       ⚠ THE PACKING IS THE FAT/MS-DOS ONE, and it is a JUDGEMENT from the call
+         site's own note ("unpacks a packed date") rather than from disassembly:
+         date in the HIGH word, time in the LOW -- the order a DOS directory entry
+         stores them in, so a little-endian DWORD read gives exactly this.
+             date: bits 15-9 year-1980, 8-5 month, 4-0 day
+             time: bits 15-11 hour, 10-5 minute, 4-0 seconds/2
+         If that is wrong the clock shows a WRONG time rather than no time, which is
+         a different and much louder symptom than the one being fixed -- so the next
+         run distinguishes them without any further instrumentation. */
+    case WOW32_GETDATETIME: {
+        SYSTEMTIME st;
+        DWORD date, time;
+        GetLocalTime(&st);
+        date = (DWORD)(((st.wYear - 1980) & 0x7F) << 9)
+             | (DWORD)((st.wMonth & 0x0F) << 5)
+             | (DWORD)(st.wDay & 0x1F);
+        time = (DWORD)((st.wHour & 0x1F) << 11)
+             | (DWORD)((st.wMinute & 0x3F) << 5)
+             | (DWORD)((st.wSecond / 2) & 0x1F);
+        wow32_setret(f, (date << 16) | time);
+        return 1;
+    }
+
     case WOW32_GETDRIVETYPE: {
         WORD n = wow32_argw(f, 0);
         char root[4];
