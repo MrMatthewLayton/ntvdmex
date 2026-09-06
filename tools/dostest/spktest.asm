@@ -42,6 +42,16 @@ start:
     mov [dur], ax
     add word [idx], 4
 
+    ; ⚠ ONE DOT PER NOTE. The host counted 1.8 MILLION I/O traps for a program
+    ;   that issues about 86, and every logged IO-SITE was inside this file.
+    ;   Twelve dots means the loop is right and that counter is not counting
+    ;   what its name says; a flood means the loop is spinning. The program says
+    ;   which -- no host-side instrument can, because both readings produce the
+    ;   same host-side numbers.
+    mov ah, 0x02
+    mov dl, '.'
+    int 0x21
+
     ; --- PIT channel 2, mode 3 (square wave), lo/hi divisor -------------------
     mov al, 0xB6
     out 0x43, al

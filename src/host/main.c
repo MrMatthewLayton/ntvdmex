@@ -19175,6 +19175,10 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
          reaching the VDD, the mixer not fitted to it, a frequency it refuses, or
          a fault downstream of the mixer entirely. Each counter is taken where the
          decision is made, so the first zero names the stage. */
+    p = zput(p, "STAGE2: wave: dev_volume_ok="); p = zhex(p, (DWORD)g_wave.dev_volume_ok);
+    p = zput(p, " dev_volume=0x");               p = zhex(p, g_wave.dev_volume);
+    p = zput(p, " silent=");                     p = zhex(p, (DWORD)g_wave.silent);
+    p = zput(p, "\r\n");
     p = zput(p, "STAGE2: spk: fitted=");    p = zhex(p, (DWORD)(g_audio.spk ? 1 : 0));
     p = zput(p, " level=");                 p = zhex(p, (DWORD)g_audio.spk_level);
     p = zput(p, " port61=0x");              p = zhex(p, (DWORD)g_spk.port61);

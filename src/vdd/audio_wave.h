@@ -84,6 +84,16 @@ typedef struct audio_wave {
     uint32_t  starved;                  /* passes with EVERY buffer handed back    */
     uint32_t  drain_max;                /* worst simultaneous handed-back count    */
     uint32_t  drain_hist[AW_BUFFERS + 1];
+    /* ── ⚠ THE DEVICE HAS ITS OWN VOLUME, AND IT IS NOT OURS. ────────────────
+         Everything this struct measures can be perfect -- buffers written,
+         handed back, never starved -- while the machine is silent, because the
+         WAVE slider in Windows' own volume control attenuates AFTER us. That is
+         indistinguishable from a broken mixer in every counter we had, so ASK
+         THE DRIVER and print the answer. 0xFFFF is full scale per channel.
+       ⚠ We only READ it. Turning a user's volume up because our test wants to be
+         heard is not a fix, it is a surprise. */
+    uint32_t  dev_volume;               /* waveOutGetVolume: right<<16 | left      */
+    int       dev_volume_ok;            /* 0 = the driver would not tell us        */
     uint32_t  nbufs;                    /* buffers actually queued: the LEAD     */
     uint32_t  nframes;                  /* frames per buffer: the GRANULARITY    */
 

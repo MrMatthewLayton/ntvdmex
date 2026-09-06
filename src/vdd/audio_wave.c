@@ -22,6 +22,7 @@ typedef UINT (WINAPI *PFN_waveOutOpen)(void **, UINT, const AW_WAVEFORMATEX *,
                                        DWORD_PTR, DWORD_PTR, DWORD);
 typedef UINT (WINAPI *PFN_waveOutHdr)(void *, AW_WAVEHDR *, UINT);
 typedef UINT (WINAPI *PFN_waveOutOne)(void *);
+typedef UINT (WINAPI *PFN_waveOutVol)(void *, DWORD *);
 typedef UINT (WINAPI *PFN_midiOutOpen)(void **, UINT, DWORD_PTR, DWORD_PTR, DWORD);
 typedef UINT (WINAPI *PFN_midiOutShort)(void *, DWORD);
 typedef UINT (WINAPI *PFN_midiOutClose)(void *);
@@ -29,6 +30,7 @@ typedef UINT (WINAPI *PFN_midiOutClose)(void *);
 static PFN_waveOutOpen   p_waveOutOpen;
 static PFN_waveOutHdr    p_waveOutPrepare, p_waveOutUnprepare, p_waveOutWrite;
 static PFN_waveOutOne    p_waveOutReset, p_waveOutClose;
+static PFN_waveOutVol    p_waveOutGetVolume;
 static PFN_midiOutOpen   p_midiOutOpen;
 static PFN_midiOutShort  p_midiOutShortMsg;
 static PFN_midiOutClose  p_midiOutClose;
@@ -107,6 +109,7 @@ static int aw_bind(audio_wave *aw)
     p_waveOutPrepare    = (PFN_waveOutHdr)  GetProcAddress(aw->mod, "waveOutPrepareHeader");
     p_waveOutUnprepare  = (PFN_waveOutHdr)  GetProcAddress(aw->mod, "waveOutUnprepareHeader");
     p_waveOutWrite      = (PFN_waveOutHdr)  GetProcAddress(aw->mod, "waveOutWrite");
+    p_waveOutGetVolume  = (PFN_waveOutVol)  GetProcAddress(aw->mod, "waveOutGetVolume");
     p_waveOutReset      = (PFN_waveOutOne)  GetProcAddress(aw->mod, "waveOutReset");
     p_waveOutClose      = (PFN_waveOutOne)  GetProcAddress(aw->mod, "waveOutClose");
     p_midiOutOpen       = (PFN_midiOutOpen) GetProcAddress(aw->mod, "midiOutOpen");
@@ -152,6 +155,15 @@ int audio_wave_start(audio_wave *aw, uint32_t hz, aw_fill_fn fill, void *ctx)
         if (p_waveOutOpen(&aw->hwo, WAVE_MAPPER, &fmt,
                           (DWORD_PTR)aw->event, 0, CALLBACK_EVENT) == 0)
             aw->silent = 0;
+        /* ⚠ ASK THE DRIVER WHAT ITS VOLUME IS. Every other counter here can read
+             perfect while the machine is silent, because Windows' own WAVE slider
+             attenuates after us. Read, never written -- see audio_wave.h. */
+        if (!aw->silent && p_waveOutGetVolume) {
+            DWORD v = 0;
+            if (p_waveOutGetVolume(aw->hwo, &v) == 0) {
+                aw->dev_volume = (uint32_t)v; aw->dev_volume_ok = 1;
+            }
+        }
         /* MIDI is optional and independent: XP's GS Wavetable synth is device 0. */
         if (p_midiOutOpen) p_midiOutOpen(&aw->hmidi, 0, 0, 0, 0);
     }
