@@ -110,7 +110,7 @@
     "SYSEDIT.EXE":  { "state": "partial", "note": "MDI frame, 4 children, reads all 4 files; not driven further" },
     "SOL.EXE":      { "state": "partial", "note": "s50: RUNS -- full card table, dealt tableau, real card faces, Game/Help menus, own icon. Its 250ms TIMERPROC is dispatched into its own code. NOT yet driven interactively, so not `done`" },
     "WINMINE.EXE":  { "state": "partial", "note": "s50: RUNS AND PLAYS -- a synthetic click cascades a reveal with correct numbers (before/after md5s differ, fresh launch). GAP: no menu bar, so no new game and no difficulty" },
-    "CLOCK.EXE":    { "state": "todo",    "note": "7" },
+    "CLOCK.EXE":    { "state": "partial", "note": "s53: LAUNCHES -- a real top-level window on the desktop, 336x361, with its Settings menu, and its 5 missing services (GDI ExtTextOut + 4 USER) implemented so neneeds.py now reports 0 to do. Its ExtTextOut calls arrive with correct digit rects and return drawn. NOT done: THE FACE IS BLANK, and the cause is measured -- a paint storm. 19,929 WM_PAINT and 9,964 InvalidateRect(NULL, erase) in 18 s, exactly one invalidate per paint, against only 50 WM_TIMER. Clock is a Win3.1 IDLE-LOOP program: it recomputes the time when the queue is empty and invalidates only if the displayed time CHANGED, so it believes the time changes on every iteration. Its clock reads through krnl386 16-bit code (KERNEL: 18 of 19 imports are free), so there is no thunk to watch and the next step is the BDA tick it ultimately reads" },
     "CALC.EXE":     { "state": "todo",    "note": "7" },
     "TASKMAN.EXE":  { "state": "todo",    "note": "3" },
     "CHARMAP.EXE":  { "state": "todo",    "note": "16" },

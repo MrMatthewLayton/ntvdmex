@@ -484,6 +484,27 @@
 #define WOWGDI_CREATEDC2        0x0035   /* ord 53,  16 args -- the REAL CreateDC  */
 
 #define WOWGDI_TEXTOUT          0x0021   /* ord 33,  12 args */
+/* ── ★★ ExtTextOut(hdc, x, y, opts, lprc, str, count, lpDx) -- ord 351, 22 args.
+     CLOCK's only outstanding GDI service, and the one TextOut cannot stand in
+     for: the digital face draws each string CLIPPED and OPAQUE to a rectangle so
+     the previous second is erased in the same call, and the analogue face uses
+     the same entry with no rect. Substituting TextOut would drop the clip and the
+     background fill, which is a wrong picture rather than a missing one.
+   ⚠ THE RECT POINTER IS OPTIONAL AND OFTEN NULL, and it must stay null: passing
+     an empty RECT with ETO_CLIPPED clips everything away, i.e. draws nothing at
+     all -- silently, and looking exactly like "the guest never called us".
+   ⚠ lpDx (per-character spacing) is honoured only when the guest supplies it.
+     Fabricating even spacing would be inventing a layout the program did not ask
+     for; NULL means "use the font's own", which is what Win32 does too. */
+#define WOWGDI_EXTTEXTOUT       0x015f
+#define ETO_ARG_DX       0
+#define ETO_ARG_COUNT    4
+#define ETO_ARG_STR      6
+#define ETO_ARG_RECT    10
+#define ETO_ARG_OPTS    14
+#define ETO_ARG_Y       16
+#define ETO_ARG_X       18
+#define ETO_ARG_HDC     20
 #define TO_ARG_COUNT    0
 #define TO_ARG_STR      2                /* far */
 #define TO_ARG_Y        6
@@ -2390,6 +2411,65 @@ static int wowgdi_call(wow32_frame_t *f, char *note, int notecap)
          a Win16 program is entitled to hand over a fragment of a larger buffer,
          so this must NOT stop at a NUL the way `wow32_argstr` does -- it copies
          exactly the count it was given, bounded by the scratch buffer. */
+    case WOWGDI_EXTTEXTOUT: {
+        WORD hdc  = wow32_argw(f, ETO_ARG_HDC);
+        int  x    = (int)(short)wow32_argw(f, ETO_ARG_X);
+        int  y    = (int)(short)wow32_argw(f, ETO_ARG_Y);
+        WORD opts = wow32_argw(f, ETO_ARG_OPTS);
+        WORD n    = wow32_argw(f, ETO_ARG_COUNT);
+        volatile BYTE *sp = wow32_argptr(f, ETO_ARG_STR);
+        volatile BYTE *rp = wow32_argptr(f, ETO_ARG_RECT);
+        volatile BYTE *dp = wow32_argptr(f, ETO_ARG_DX);
+        int  kind = -1;
+        HGDIOBJ o = wowgdi_h32(hdc, &kind);
+        char buf[512];
+        INT  dx[512];
+        RECT rc, *prc = NULL;
+        int  k = 0, i, cnt = (int)n, ok;
+        wu_puts(note, notecap, &k, "ExtTextOut(0x");
+        wu_puthex(note, notecap, &k, hdc, 4);
+        wu_puts(note, notecap, &k, ", "); wu_puthex(note, notecap, &k, (DWORD)x, 4);
+        wu_puts(note, notecap, &k, ",");  wu_puthex(note, notecap, &k, (DWORD)y, 4);
+        wu_puts(note, notecap, &k, " opts=0x"); wu_puthex(note, notecap, &k, opts, 4);
+        wu_puts(note, notecap, &k, " n="); wu_puthex(note, notecap, &k, (DWORD)n, 4);
+        if (!o || (kind != WOWGDI_KIND_DC && kind != WOWGDI_KIND_WINDC)) {
+            wu_puts(note, notecap, &k, " -- ★ NOT ONE OF OUR DC TOKENS; answered 0");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        if (cnt < 0) cnt = 0;
+        if (cnt > (int)sizeof buf) cnt = (int)sizeof buf;
+        for (i = 0; i < cnt; ++i) buf[i] = sp ? (char)sp[i] : ' ';
+        if (rp) {
+            unsigned char r8[8];
+            for (i = 0; i < 8; ++i) r8[i] = (unsigned char)rp[i];
+            rc.left   = wowconv_rect16_get(r8, 0);
+            rc.top    = wowconv_rect16_get(r8, 1);
+            rc.right  = wowconv_rect16_get(r8, 2);
+            rc.bottom = wowconv_rect16_get(r8, 3);
+            prc = &rc;
+            wu_puts(note, notecap, &k, " rect=");
+            wu_puthex(note, notecap, &k, (DWORD)rc.left, 4);
+            wu_puts(note, notecap, &k, ",");
+            wu_puthex(note, notecap, &k, (DWORD)rc.top, 4);
+            wu_puts(note, notecap, &k, "-");
+            wu_puthex(note, notecap, &k, (DWORD)rc.right, 4);
+            wu_puts(note, notecap, &k, ",");
+            wu_puthex(note, notecap, &k, (DWORD)rc.bottom, 4);
+        }
+        if (dp && cnt) {
+            for (i = 0; i < cnt; ++i)
+                dx[i] = (int)(short)((WORD)dp[i * 2] | ((WORD)dp[i * 2 + 1] << 8));
+            wu_puts(note, notecap, &k, " +spacing");
+        }
+        ok = ExtTextOutA((HDC)o, x, y, (UINT)opts, prc,
+                         cnt ? buf : NULL, (UINT)cnt,
+                         (dp && cnt) ? dx : NULL) ? 1 : 0;
+        wu_puts(note, notecap, &k, ok ? " -> drawn" : " -> REFUSED by GDI");
+        wow32_setret(f, (DWORD)ok);
+        return 1;
+    }
+
     case WOWGDI_TEXTOUT:
     case WOWGDI_GETTEXTEXTENT: {
         int  isout = (f->id == WOWGDI_TEXTOUT);

@@ -612,6 +612,74 @@ static const char *wowuser_sysres_name(WORD h)
      correct 1252x688). The layout was not mis-computed; it was never
      re-computed. */
 #define WOWUSER_ISWINDOW         0x002f
+/* ── ★★★ THE SHELF, BATCH ONE: TASKMAN, CLOCK AND CALC. (session 53) ──────────
+     `tools/ne/neneeds.py` says these three programs are 2, 5 and 4 services away
+     from launching -- not "roughly", but by name, from their own import tables.
+     Ten of them are here and ExtTextOut is in wowgdi.h.
+   ⚠ EVERY ONE OF THESE IS THE REAL WIN32 CALL ON THE GUEST'S REAL WINDOW, for the
+     same reason the menu and the caption are: these ARE Win32 windows, and an
+     answer composed here would be a second opinion about state the OS already
+     owns. Where that is NOT possible it is said so at the call, loudly, rather
+     than answered plausibly -- see the clipboard pair. */
+
+/* UINT ArrangeIconicWindows(HWND) -- TASKMAN's whole reason to exist. */
+#define WOWUSER_ARRANGEICONICWINDOWS 0x00aa
+#define AIW_ARG_HWND     0
+
+/* void SwitchToThisWindow(HWND, BOOL fAltTab) -- TASKMAN's "Switch To" button.
+   ⚠ USER32 exports it undocumented and no import library declares it, so this is
+     the documented pair that does the same job: restore it if minimised, then put
+     it in front. A guest cannot tell the difference; a linker can. */
+#define WOWUSER_SWITCHTOTHISWINDOW   0x00ac
+#define STW_ARG_ALTTAB   0
+#define STW_ARG_HWND     2
+
+/* DWORD GetDialogBaseUnits(void) -- LOWORD x, HIWORD y. */
+#define WOWUSER_GETDIALOGBASEUNITS   0x00f3
+
+/* SHORT GetAsyncKeyState(int vk) -- Win16 and Win32 agree on the shape: bit 15
+   is "down now", bit 0 "pressed since the last call". */
+#define WOWUSER_GETASYNCKEYSTATE     0x00f9
+#define GAKS_ARG_VK      0
+
+/* BOOL IsZoomed(HWND). Same family as IsIconic, and the same reason to ask the
+   OS rather than to answer 0: the wrong answer is right most of the time. */
+#define WOWUSER_ISZOOMED             0x0110
+#define IZ_ARG_HWND      0
+
+/* BOOL AppendMenu(HMENU, UINT flags, UINT id, LPCSTR item) -- CLOCK builds its
+   own menu at run time rather than from a resource. */
+#define WOWUSER_APPENDMENU           0x019b
+#define AM_ARG_ITEM      0
+#define AM_ARG_ID        4
+#define AM_ARG_FLAGS     6
+#define AM_ARG_HMENU     8
+
+/* BOOL IsDialogMessage(HWND hDlg, LPMSG lpMsg) -- CALC's message loop. */
+#define WOWUSER_ISDIALOGMESSAGE      0x005a
+#define IDM_ARG_MSG      0
+#define IDM_ARG_HDLG     4
+
+/* void MapDialogRect(HWND hDlg, LPRECT lprc) -- dialog units to client pixels. */
+#define WOWUSER_MAPDIALOGRECT        0x0067
+#define MDR_ARG_RECT     0
+#define MDR_ARG_HDLG     4
+
+/* ── ⚠⚠ THE CLIPBOARD PAIR, AND WHY BOTH ANSWER "NOTHING". ────────────────────
+     GetClipboardData must hand back a handle the GUEST can lock -- a 16-bit
+     global handle in its own address space. The real Win32 handle is not that,
+     and there is no bridge yet that copies the host clipboard into guest global
+     memory. So the honest pair is: report NO format available, and return NO
+     data. A guest then greys its Paste and never asks, which is consistent.
+   ⚠ THE TEMPTING VERSION IS WORSE: answering IsClipboardFormatAvailable
+     truthfully from the host while GetClipboardData returns 0 tells the guest
+     "there is text" and then hands it nothing -- available-but-empty is a state
+     no real clipboard is ever in, and CALC would paste garbage or fault. Say
+     "empty" with one voice until the bridge exists. */
+#define WOWUSER_GETCLIPBOARDDATA     0x008e
+#define WOWUSER_ISCLIPBOARDFORMATAVAILABLE 0x00c1
+#define CB_ARG_FORMAT    0
+
 #define WOWUSER_ISWINDOWVISIBLE  0x0031
 #define IW_ARG_HWND      0
 
@@ -3777,6 +3845,203 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
          so that answers FALSE for both -- which is also the right answer for a
          handle it has already destroyed. */
     case WOWUSER_ISWINDOW:
+    /* ── ★★ TASKMAN: ARRANGE THE ICONS, AND SWITCH TO A TASK. ─────────────── */
+    case WOWUSER_ARRANGEICONICWINDOWS: {
+        WORD hwnd = wow32_argw(f, AIW_ARG_HWND);
+        wowuser_win_t *w = wowuser_findwin(hwnd);
+        int k = 0; UINT r;
+        wu_puts(note, notecap, &k, "ArrangeIconicWindows 0x");
+        wu_puthex(note, notecap, &k, hwnd, 4);
+        if (!w || !w->hwnd32) {
+            wu_puts(note, notecap, &k, " -- no real window; answered 0");
+            wow32_setret(f, 0); return 1;
+        }
+        r = ArrangeIconicWindows(w->hwnd32);
+        wu_puts(note, notecap, &k, " -> row height "); wu_puthex(note, notecap, &k, r, 4);
+        wow32_setret(f, (DWORD)r);
+        return 1;
+    }
+
+    case WOWUSER_SWITCHTOTHISWINDOW: {
+        WORD hwnd = wow32_argw(f, STW_ARG_HWND);
+        WORD alt  = wow32_argw(f, STW_ARG_ALTTAB);
+        wowuser_win_t *w = wowuser_findwin(hwnd);
+        int k = 0;
+        wu_puts(note, notecap, &k, "SwitchToThisWindow 0x");
+        wu_puthex(note, notecap, &k, hwnd, 4);
+        wu_puts(note, notecap, &k, alt ? " (alt-tab style)" : "");
+        if (!w || !w->hwnd32) {
+            wu_puts(note, notecap, &k, " -- no real window; nothing to switch to");
+            wow32_setret(f, 0); return 1;
+        }
+        /* ⚠ Restore BEFORE raising: a minimised window is still WS_VISIBLE, and
+             SetForegroundWindow on one leaves an icon in front. Same trap
+             rigshot hit (SW_RESTORE, not SW_SHOW). */
+        if (IsIconic(w->hwnd32)) ShowWindow(w->hwnd32, SW_RESTORE);
+        SetForegroundWindow(w->hwnd32);
+        wu_puts(note, notecap, &k, " -> restored + foregrounded");
+        wow32_setret(f, 0);
+        return 1;
+    }
+
+    /* ── ★★ CLOCK: BASE UNITS, ASYNC KEYS, IsZoomed, AND A MENU IT BUILDS ITSELF. */
+    case WOWUSER_GETDIALOGBASEUNITS: {
+        DWORD u = (DWORD)GetDialogBaseUnits();
+        int k = 0;
+        wu_puts(note, notecap, &k, "GetDialogBaseUnits -> x=");
+        wu_puthex(note, notecap, &k, u & 0xFFFF, 4);
+        wu_puts(note, notecap, &k, " y=");
+        wu_puthex(note, notecap, &k, (u >> 16) & 0xFFFF, 4);
+        wow32_setret(f, u);
+        return 1;
+    }
+
+    case WOWUSER_GETASYNCKEYSTATE: {
+        WORD vk = wow32_argw(f, GAKS_ARG_VK);
+        SHORT st = GetAsyncKeyState((int)vk);
+        int k = 0;
+        wu_puts(note, notecap, &k, "GetAsyncKeyState vk=0x");
+        wu_puthex(note, notecap, &k, vk, 2);
+        wu_puts(note, notecap, &k, (st & 0x8000) ? " -> DOWN" : " -> up");
+        wow32_setret(f, (DWORD)(WORD)st);
+        return 1;
+    }
+
+    case WOWUSER_ISZOOMED: {
+        WORD hwnd = wow32_argw(f, IZ_ARG_HWND);
+        wowuser_win_t *w = wowuser_findwin(hwnd);
+        int k = 0, z;
+        wu_puts(note, notecap, &k, "IsZoomed 0x");
+        wu_puthex(note, notecap, &k, hwnd, 4);
+        if (!w || !w->hwnd32) {
+            wu_puts(note, notecap, &k, " -- no real window; answered 0");
+            wow32_setret(f, 0); return 1;
+        }
+        z = IsZoomed(w->hwnd32) ? 1 : 0;
+        wu_puts(note, notecap, &k, z ? " -> MAXIMISED" : " -> not maximised");
+        wow32_setret(f, (DWORD)z);
+        return 1;
+    }
+
+    case WOWUSER_APPENDMENU: {
+        WORD hm    = wow32_argw(f, AM_ARG_HMENU);
+        WORD flags = wow32_argw(f, AM_ARG_FLAGS);
+        WORD id    = wow32_argw(f, AM_ARG_ID);
+        HMENU m    = wowuser_menu32(hm);
+        char  txt[128];
+        int   k = 0, ok;
+        wu_puts(note, notecap, &k, "AppendMenu 0x");
+        wu_puthex(note, notecap, &k, hm, 4);
+        wu_puts(note, notecap, &k, " flags=0x"); wu_puthex(note, notecap, &k, flags, 4);
+        wu_puts(note, notecap, &k, " id=0x");    wu_puthex(note, notecap, &k, id, 4);
+        if (!m) {
+            wu_puts(note, notecap, &k, " -- ★ NOT ONE OF OUR MENUS; FALSE");
+            wow32_setret(f, 0); return 1;
+        }
+        /* MF_SEPARATOR 0x800: the item pointer is meaningless and must not be
+           read. MF_BITMAP/MF_OWNERDRAW would carry a handle rather than text and
+           are refused rather than guessed at -- neither is in these guests. */
+        if (flags & 0x0800u) {
+            ok = AppendMenuA(m, MF_SEPARATOR, 0, NULL) ? 1 : 0;
+            wu_puts(note, notecap, &k, " [separator]");
+        } else if (flags & (0x0004u | 0x0100u)) {   /* MF_BITMAP | MF_OWNERDRAW */
+            wu_puts(note, notecap, &k, " -- ★ BITMAP/OWNERDRAW item NOT SUPPORTED; FALSE");
+            wow32_setret(f, 0); return 1;
+        } else {
+            txt[0] = 0;
+            wow32_argstr(f, AM_ARG_ITEM, txt, (int)sizeof txt);
+            wu_puts(note, notecap, &k, " \"");
+            wu_puts(note, notecap, &k, txt);
+            wu_puts(note, notecap, &k, "\"");
+            ok = AppendMenuA(m, (UINT)(flags & ~0x0800u), (UINT_PTR)id, txt) ? 1 : 0;
+        }
+        wu_puts(note, notecap, &k, ok ? " -> appended" : " -> REFUSED by the OS");
+        wow32_setret(f, (DWORD)ok);
+        return 1;
+    }
+
+    /* ── ★★ CALC: THE DIALOG HELPERS. ────────────────────────────────────────
+         ⚠ IsDialogMessage DISPATCHES what it handles. That is not a side effect
+           to be avoided -- it is the whole function -- and it lands in our own
+           window procedure, which relays to the guest queue like any other
+           message. The guest skipping TranslateMessage/DispatchMessage when we
+           answer TRUE is exactly the contract. */
+    case WOWUSER_ISDIALOGMESSAGE: {
+        WORD hdlg = wow32_argw(f, IDM_ARG_HDLG);
+        volatile BYTE *m16 = wow32_argptr(f, IDM_ARG_MSG);
+        wowuser_win_t *w = wowuser_findwin(hdlg);
+        wowuser_win_t *mw;
+        MSG m32;
+        int k = 0, r;
+        wu_puts(note, notecap, &k, "IsDialogMessage 0x");
+        wu_puthex(note, notecap, &k, hdlg, 4);
+        if (!w || !w->hwnd32 || !m16) {
+            wu_puts(note, notecap, &k, " -- no window or no MSG; FALSE");
+            wow32_setret(f, 0); return 1;
+        }
+        mw = wowuser_findwin(wow32_peekw(m16 + MSG_HWND));
+        m32.hwnd    = mw ? mw->hwnd32 : w->hwnd32;
+        m32.message = wow32_peekw(m16 + MSG_MESSAGE);
+        m32.wParam  = wow32_peekw(m16 + MSG_WPARAM);
+        m32.lParam  = (LPARAM)((DWORD)wow32_peekw(m16 + MSG_LPARAM)
+                             | ((DWORD)wow32_peekw(m16 + MSG_LPARAM + 2) << 16));
+        m32.time    = GetTickCount();
+        m32.pt.x = 0; m32.pt.y = 0;
+        wu_puts(note, notecap, &k, " msg=0x"); wu_puthex(note, notecap, &k, m32.message, 4);
+        r = IsDialogMessageA(w->hwnd32, &m32) ? 1 : 0;
+        wu_puts(note, notecap, &k, r ? " -> TRUE (the dialog took it)" : " -> FALSE");
+        wow32_setret(f, (DWORD)r);
+        return 1;
+    }
+
+    case WOWUSER_MAPDIALOGRECT: {
+        WORD hdlg = wow32_argw(f, MDR_ARG_HDLG);
+        volatile BYTE *rp = wow32_argptr(f, MDR_ARG_RECT);
+        wowuser_win_t *w = wowuser_findwin(hdlg);
+        unsigned char r8[8];
+        RECT r;
+        int k = 0, i;
+        wu_puts(note, notecap, &k, "MapDialogRect 0x");
+        wu_puthex(note, notecap, &k, hdlg, 4);
+        if (!w || !w->hwnd32 || !rp) {
+            wu_puts(note, notecap, &k, " -- no window or no RECT; left alone");
+            wow32_setret(f, 0); return 1;
+        }
+        for (i = 0; i < 8; ++i) r8[i] = (unsigned char)rp[i];
+        r.left   = wowconv_rect16_get(r8, 0);
+        r.top    = wowconv_rect16_get(r8, 1);
+        r.right  = wowconv_rect16_get(r8, 2);
+        r.bottom = wowconv_rect16_get(r8, 3);
+        MapDialogRect(w->hwnd32, &r);
+        wowconv_rect16_put(r8, 0, (int)r.left);
+        wowconv_rect16_put(r8, 1, (int)r.top);
+        wowconv_rect16_put(r8, 2, (int)r.right);
+        wowconv_rect16_put(r8, 3, (int)r.bottom);
+        for (i = 0; i < 8; ++i) rp[i] = r8[i];
+        wu_puts(note, notecap, &k, " -> ");
+        wu_puthex(note, notecap, &k, (DWORD)(r.right - r.left), 4);
+        wu_puts(note, notecap, &k, "x");
+        wu_puthex(note, notecap, &k, (DWORD)(r.bottom - r.top), 4);
+        wow32_setret(f, 0);
+        return 1;
+    }
+
+    /* ── ⚠⚠ THE CLIPBOARD, WITH ONE VOICE: EMPTY. See the note by the ids. ──── */
+    case WOWUSER_ISCLIPBOARDFORMATAVAILABLE:
+    case WOWUSER_GETCLIPBOARDDATA: {
+        WORD fmt = wow32_argw(f, CB_ARG_FORMAT);
+        int  k = 0;
+        wu_puts(note, notecap, &k, (f->id == WOWUSER_GETCLIPBOARDDATA)
+                ? "GetClipboardData fmt=0x" : "IsClipboardFormatAvailable fmt=0x");
+        wu_puthex(note, notecap, &k, fmt, 4);
+        wu_puts(note, notecap, &k, " -- ★ NO HOST->GUEST CLIPBOARD BRIDGE YET, so "
+                                   "NOTHING is available AND nothing is returned. "
+                                   "Answering `available` here and 0 there would be "
+                                   "available-but-empty, a state no clipboard is in.");
+        wow32_setret(f, 0);
+        return 1;
+    }
+
     case WOWUSER_ISWINDOWVISIBLE: {
         int  wantvis = (f->id == WOWUSER_ISWINDOWVISIBLE);
         WORD hwnd = wow32_argw(f, IW_ARG_HWND);
