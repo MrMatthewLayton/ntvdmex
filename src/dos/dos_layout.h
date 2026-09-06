@@ -35,6 +35,45 @@
 #define DOS_SDA_LEN     0x20
 #define DOS_INDOS_OFF   (DOS_SDA_OFF + 1)
 
+/* ── ⚠⚠ THE SECOND ABSOLUTE-OFFSET READ MEM.EXE MAKES, AND IT IS NOT A SYSVARS
+     FIELD EITHER. (GH #47) ───────────────────────────────────────────────────
+     MEM asks AH=52h for SysVars, keeps the SEGMENT, THROWS THE OFFSET AWAY, and
+     reads the word at <SysVars segment>:0x008C:
+
+        0F72  call 0x55cc              ; AH=52h -> ES:BX
+        0F88  mov word [bp-0x126],0x8c ; offset 0x008C, ABSOLUTE
+        0F8E  les bx,[bp-0x126]        ; ES = the SysVars SEGMENT
+        0F92  mov ax,[es:bx]
+        0F95  mov [0x2b46],ax          ; ...and that is the conventional/upper LINE
+
+     Every block in the MCB walk is then bucketed by `segment >= [0x2b46]`
+     (mem.exe image 0x1304 and 0x31DB). We left 0x008C at ZERO, so EVERY block
+     compared >= 0 and the ENTIRE chain was filed as UPPER MEMORY -- which is the
+     phantom `Upper 1,663K` with our real free block sitting in it as `Largest
+     free upper memory block 548K`, and `Conventional Free 0K` underneath.
+
+     MS-DOS 6.22 has **0xFFFF** here (`docs/research/evidence/lolprobe-msdos622.txt`,
+     dump offset 0x8C = FF FF), i.e. "no block is upper", which is the truth on a
+     machine with no UMB provider. It is the truth here too: we refuse AH=5803 for
+     exactly that reason.
+
+   ★ AND THE ADJACENT WORD EXPLAINS THE PAIR. 6.22 has the FIRST MCB SEGMENT at
+     0x008E as well as at SysVars-2 -- the same 0x0253 in both places. So 0x8C/0x8E
+     are "first UMB" / "first MCB", and our MCB head already lands on 0x8E because
+     DOS_SYSVARS_OFF is 0x90. That was luck, not design; this makes the pair
+     deliberate.
+   ⚠ SO DOS_SYSVARS_OFF IS NOT FREE TO MOVE. Two absolute offsets in this segment
+     are load-bearing for MEM (0x8C here, and the SDA collision at SysVars+0x45
+     that #47 already cost a session to find). Moving SysVars moves neither. */
+#define DOS_UMBHEAD_OFF 0x008C      /* first UMB segment; 0xFFFF = there are none */
+#define DOS_UMBHEAD_NONE 0xFFFF
+
+/* AH=52h hands back DOS_HDLR_SEG:this. It lived in main.c until GH #47 showed
+   that two FIXED addresses in this segment are load-bearing for MEM.EXE, at
+   which point the constant they are measured against belongs in the file that
+   documents the segment map -- and can be asserted against them off-VM. */
+#define DOS_SYSVARS_OFF 0x0090      /* MCB head at -2 (GH #35)                  */
+
 /* AH=65h character tables (GH #38) live inside the DOS-resident filler block the
    MCB chain reserves at paragraph 0x0070 (0x8E paragraphs, owner 8 = "DOS").
    That block exists to stand in for resident DOS, so no guest allocates over it,

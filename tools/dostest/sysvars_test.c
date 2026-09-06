@@ -12,6 +12,7 @@
 #include <stdio.h>
 #include <string.h>
 #include "dos_sysvars.h"
+#include "dos_layout.h"
 
 static int checks, fails;
 
@@ -147,6 +148,46 @@ int main(void)
     }
     eq("built NUL attribute = 0x8004", buf[4] | (buf[5] << 8), 0x8004);
     eq("built NUL chain terminates", buf[2] | (buf[3] << 8), 0xFFFF);
+
+    /* ── ⚠⚠ THE TWO ABSOLUTE OFFSETS MEM.EXE READS IN THE SYSVARS SEGMENT. ──────
+         Neither is a List-of-Lists field: MEM keeps the SEGMENT AH=52h returns,
+         throws the OFFSET away, and reads fixed addresses in it. Both have cost a
+         session already, and both are pinned here because a future edit to
+         DOS_SYSVARS_OFF or DOS_SDA_OFF would silently break them again.
+
+         Byte-for-byte from MS-DOS 6.22 (docs/research/evidence/lolprobe-msdos622.txt,
+         a dump of the SysVars SEGMENT from offset 0, where SysVars itself is at
+         0x0026):
+           0080: 00 FF FF 00 00 00 00 00 00 00 00 00 FF FF 53 02
+                                                    ^^^^^ 0x8C = FFFF, no UMBs
+                                                          ^^^^^ 0x8E = first MCB
+         and 0x0253 is ALSO what 6.22 reports at SysVars-2 -- the same value in
+         both places, which is what says 0x8C/0x8E are the "first UMB"/"first MCB"
+         pair rather than two unrelated words. */
+    eq("MEM's conventional/upper line lives at absolute 0x8C in the SysVars segment",
+       DOS_UMBHEAD_OFF, 0x8C);
+    eq("...and 0xFFFF there means NO block is upper (6.22's own value)",
+       DOS_UMBHEAD_NONE, 0xFFFF);
+    eq("...with the first-MCB word immediately above it, as on 6.22",
+       DOS_SYSVARS_OFF - 2, DOS_UMBHEAD_OFF + 2);
+    ++checks;
+    if (DOS_UMBHEAD_OFF < DOS_SDA_OFF + DOS_SDA_LEN) {
+        ++fails;
+        printf("  FAIL %-54s\n", "the UMB word must not land inside the SDA");
+    }
+    ++checks;
+    if (DOS_SDA_OFF + DOS_SDA_LEN > DOS_SYSVARS_OFF) {
+        ++fails;
+        printf("  FAIL %-54s\n", "the SDA must not land on SysVars (this WAS GH #47)");
+    }
+    /* ⚠ THE SDA'S OLD HOME IS THE OTHER HALF OF THE SAME BUG. MEM reads
+         SysVars+0x45 for the extended-memory size; DOS_SDA_OFF was SysVars+0x44,
+         so the InDOS byte WAS that word's low half and MEM read zero. */
+    ++checks;
+    if (DOS_INDOS_OFF == DOS_SYSVARS_OFF + 0x45) {
+        ++fails;
+        printf("  FAIL %-54s\n", "InDOS is back on SysVars+0x45 (GH #47 regressed)");
+    }
 
     printf("== %d checks, %d failed\n", checks, fails);
     return fails ? 1 : 0;

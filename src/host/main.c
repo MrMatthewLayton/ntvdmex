@@ -257,7 +257,8 @@
  *   0x80       DPMI fault BOP (code selector)
  */
 #define DOS_IRET_STUB_OFF 0x0058
-#define DOS_SYSVARS_OFF   0x0090      /* AH=52h list of lists; MCB head at -2 (GH #35) */
+/* DOS_SYSVARS_OFF lives in dos_layout.h with the rest of this segment map -- the
+   MCB head at -2 and MEM.EXE's UMB word at 0x8C are both measured against it. */
 
 /* GH #18 real-CPU PM-fault trampoline. When a raw (non-BOP) protected-mode #GP faults,
    the kernel reflect path jumps the guest to [VDM_TIB+0x638]:0x1000 (see ntvdm.h
@@ -15714,6 +15715,12 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
          elsewhere. Widening this loop wipes it. */
     { int k; for (k = -2; k < 0x40; ++k) hdlr[DOS_SYSVARS_OFF + k] = 0; }
     *(volatile WORD *)((DOS_HDLR_SEG << 4) + DOS_SYSVARS_OFF - 2) = m.first_mcb;
+    /* ⚠⚠ AND THE "FIRST UMB" WORD AT ABSOLUTE 0x008C -- see DOS_UMBHEAD_OFF. MEM
+         keeps the SysVars SEGMENT, discards the offset, and reads this word as the
+         line between conventional and upper memory. Zero means "everything is
+         upper", which is what it has been reporting. 0xFFFF means "nothing is",
+         which is the truth on a machine that refuses AH=5803. */
+    *(volatile WORD *)((DOS_HDLR_SEG << 4) + DOS_UMBHEAD_OFF) = DOS_UMBHEAD_NONE;
     hdlr[DOS_SYSVARS_OFF + 0x20] = 1;                     /* block devices       */
     hdlr[DOS_SYSVARS_OFF + 0x21] = DOS_LASTDRIVE;         /* LASTDRIVE           */
     m.sysvars_seg = DOS_HDLR_SEG;
