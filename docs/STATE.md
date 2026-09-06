@@ -1488,6 +1488,54 @@ segment we handed it, with no call to intercept and nothing in any log.* When a
 guest reports a wrong number and the trace is clean, **disassemble it and look for
 absolute offsets in our own segments.**
 
+### ★ The PC speaker, end to end — and the question that found the real gap
+
+The synthesis was measured off-VM and rig-gated, and the user then asked the
+question no counter had: **which speaker?** It was the sound card — a square wave
+summed into `waveOut` — and that was a choice made silently. On a box with
+nothing plugged into line out, that is inaudible and *indistinguishable from a
+broken emulator in every counter the host had.*
+
+`PcSpeaker` is now **Off / Sound card / Real PC speaker / Both** (the old checkbox
+values migrate for free: 0 and 1 were already those first two).
+
+⚠ **The real speaker is NOT driven with `Beep()`.** It blocks the calling thread
+and wants the duration up front; a guest opens the port-0x61 gate and closes it
+whenever it likes, so no `(frequency, duration)` pair expresses "sound this until
+I say stop" — and 1-bit sample playback through the speaker would be
+unrepresentable. The driver underneath *does* have that shape:
+`IOCTL_BEEP_SET` with `Duration = 0xFFFFFFFF` sounds until told otherwise and
+returns immediately.
+
+⚠⚠ **AND THERE IS NO `\\.\Beep`.** The obvious spelling returns
+`ERROR_FILE_NOT_FOUND` on a box where `sc query beep` reports the driver
+**RUNNING**: Beep.sys creates `\Device\Beep` and publishes **no `\DosDevices`
+symlink**, so the `\\.\` prefix has nothing to resolve — `Beep()` itself opens the
+native path. `\\?\GLOBALROOT\Device\Beep` is the way in.
+
+⚠ Stopped on **every** exit path, including the headless one that never sees
+`WM_DESTROY`: the driver keeps sounding after the process that started it dies.
+
+**USER-CONFIRMED BY EAR, both paths** — the scale and arpeggio play correctly out
+of the motherboard speaker *and* out of the sound card. The original "nothing at
+all" was environmental (muted or unplugged at the time), not a defect: every
+counter in between read healthy throughout, which is exactly why the counters were
+added rather than trusted.
+
+### ⚠ OPEN: ~21,700 I/O TRAPS PER INSTRUCTION, INTERMITTENTLY
+
+Some runs of `spktest.com` report `io_events` of **1.87 million** for a program
+that issues **86**, and those runs take **8.7 s** where the clean ones take 4.6 s.
+The `IO-SITE` log shows the **same six CS:IP sites** in both cases, all inside the
+guest — so the exec loop is re-servicing an I/O event the guest already retired,
+about 21,700 times per instruction, and burning ~4 s doing it. The guest still
+completes correctly (12 dots, right note durations), which is why nothing ever
+caught it.
+
+▶ The instrument for it already exists: `spktest.asm` prints one dot per note, so
+"the loop is spinning" and "that counter is not counting what its name says" are
+distinguishable in a single run — which no host-side counter can do alone.
+
 ### Still open, and honest about it
 
 - **The PC speaker's sound has not been listened to.** The synthesis is measured;
