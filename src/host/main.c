@@ -5384,7 +5384,19 @@ static DWORD WINAPI ui_thread(LPVOID arg)
          (index 3) means whatever the user last dragged it to, and until there is
          somewhere to remember that it is the same as 1x. */
     {   int scale = (int)g_set.v[SET_WINSIZE] + 1;
+        RECT wa;
         if (scale < 1 || scale > 3) scale = 1;          /* Custom -> the default   */
+        /* ⚠ AND IT MUST FIT ON THE SCREEN. 3x is 1920x1200 of client area, and the
+             rig's desktop is 1024x768: a window larger than the desktop opens with
+             its status bar and half its picture off the bottom edge, which reads as
+             "the scaler broke the display" rather than as a setting. Step down
+             until it fits; 1x always does. */
+        if (SystemParametersInfoA(SPI_GETWORKAREA, 0, &wa, 0)) {
+            while (scale > 1
+                   && (VID_FB_W * scale > wa.right - wa.left
+                       || VID_FB_H * scale + PRESENT_STATUS_H > wa.bottom - wa.top))
+                --scale;
+        }
         rc.left = 0; rc.top = 0;
         rc.right = VID_FB_W * scale; rc.bottom = VID_FB_H * scale + PRESENT_STATUS_H; }
     AdjustWindowRect(&rc, WS_OVERLAPPEDWINDOW, TRUE);   /* TRUE: window has a menu  */

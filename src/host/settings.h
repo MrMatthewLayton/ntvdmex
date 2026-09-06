@@ -112,7 +112,12 @@ static const set_def SET_DEFS[SET_COUNT] = {
 { "Umb",               IDC_S_UMB,         SK_CHECK,      1,  0,   1, NULL },
 { "A20",               IDC_S_A20,         SK_CHECK,      1,  0,   1, NULL },
 
-{ "WindowSize",        IDC_S_WINSIZE,     SK_COMBO,      1,  0,   3, "1x|2x|3x|Custom" },
+/* ⚠ 1x, NOT 2x. This defaulted to "2x" for as long as it did nothing; the moment
+     it became live that default would have made every clean machine open a
+     1280x800 client -- wider than the 1024x768 desktop the test rig runs. The
+     rule at the top of this file is that THE DEFAULTS ARE THE SHIPPED BEHAVIOUR,
+     and the shipped behaviour is one pixel per pixel. */
+{ "WindowSize",        IDC_S_WINSIZE,     SK_COMBO,      0,  0,   3, "1x|2x|3x|Custom" },
 { "Renderer",          IDC_S_RENDERER,    SK_COMBO,      0,  0,   3, "GDI|DirectDraw|Direct3D 9|OpenGL" },
 { "Scaler",            IDC_S_SCALER,      SK_COMBO,      0,  0,   4, "None|Scale2x|hq2x|Scanlines|CRT" },
 { "Filtering",         IDC_S_FILTER,      SK_COMBO,      0,  0,   1, "Nearest|Bilinear" },
