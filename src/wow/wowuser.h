@@ -771,6 +771,68 @@ static const char *wowuser_sysres_name(WORD h)
 #define DDP_ARG_MSG      6
 #define DDP_ARG_HDLG     8
 
+/* ── ★★★ THE SHELF, BATCH THREE. (session 53) ────────────────────────────────
+     SOUNDREC is six services away and four of the remaining guests share most of
+     them -- the menu family in particular is wanted by CARDFILE, PACKAGER and
+     WINFILE as well, so these are chosen for OVERLAP rather than for one guest. */
+#define WOWUSER_DRAWICON             0x0054
+#define DI2_ARG_HICON    0
+#define DI2_ARG_Y        2
+#define DI2_ARG_X        4
+#define DI2_ARG_HDC      6
+
+#define WOWUSER_GETCLIPBOARDOWNER    0x008c
+#define WOWUSER_GETDOUBLECLICKTIME   0x0015
+#define WOWUSER_CREATEPOPUPMENU      0x019f
+#define WOWUSER_DESTROYMENU          0x0098
+#define WOWUSER_DESTROYICON          0x01c9
+#define WOWUSER_GETMENUITEMCOUNT     0x0107
+#define WOWUSER_GETTOPWINDOW         0x00e5
+
+/* ModifyMenu and InsertMenu share a signature exactly, so they share a case;
+   the id decides which of the two the OS is asked for. */
+#define WOWUSER_MODIFYMENU           0x019e
+#define WOWUSER_INSERTMENU           0x019a
+#define MI2_ARG_ITEM     0
+#define MI2_ARG_IDNEW    4
+#define MI2_ARG_FLAGS    6
+#define MI2_ARG_POS      8
+#define MI2_ARG_HMENU   10
+
+#define WOWUSER_GETMENUITEMID        0x0108
+#define GMII_ARG_POS     0
+#define GMII_ARG_HMENU   2
+
+#define WOWUSER_GETMENUSTATE         0x00fa
+#define GMS_ARG_FLAGS    0
+#define GMS_ARG_ID       2
+#define GMS_ARG_HMENU    4
+
+#define WOWUSER_GETMENUSTRING        0x00a1
+#define GMSTR_ARG_FLAGS  0
+#define GMSTR_ARG_MAX    2
+#define GMSTR_ARG_BUF    4
+#define GMSTR_ARG_ID     8
+#define GMSTR_ARG_HMENU 10
+
+#define WOWUSER_SCROLLWINDOW         0x003d
+#define SW2_ARG_CLIP     0
+#define SW2_ARG_RECT     4
+#define SW2_ARG_DY       8
+#define SW2_ARG_DX      10
+#define SW2_ARG_HWND    12
+
+#define WOWUSER_GETSCROLLRANGE       0x0041
+#define GSR_ARG_MAX      0
+#define GSR_ARG_MIN      4
+#define GSR_ARG_BAR      8
+#define GSR_ARG_HWND    10
+
+#define WOWUSER_SHOWSCROLLBAR        0x010b
+#define SSB_ARG_SHOW     0
+#define SSB_ARG_BAR      2
+#define SSB_ARG_HWND     4
+
 #define WOWUSER_ISWINDOWVISIBLE  0x0031
 #define IW_ARG_HWND      0
 
@@ -4628,6 +4690,281 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
                                    " keyboard defaults) = 0x");
         wu_puthex(note, notecap, &k, (DWORD)r, 8);
         wow32_setret(f, (DWORD)r);
+        return 1;
+    }
+
+    case WOWUSER_GETCLIPBOARDOWNER: {
+        HWND o = GetClipboardOwner();
+        WORD h16 = o ? wowwin_hwnd16(o) : 0;
+        int k = 0;
+        wu_puts(note, notecap, &k, "GetClipboardOwner -> 0x");
+        wu_puthex(note, notecap, &k, h16, 4);
+        if (o && !h16) wu_puts(note, notecap, &k, " (owned OUTSIDE this VDM; 0)");
+        wow32_setret(f, (DWORD)h16);
+        return 1;
+    }
+
+    case WOWUSER_GETDOUBLECLICKTIME: {
+        UINT t = GetDoubleClickTime();
+        int k = 0;
+        wu_puts(note, notecap, &k, "GetDoubleClickTime -> ");
+        wu_puthex(note, notecap, &k, t, 4);
+        wow32_setret(f, (DWORD)t);
+        return 1;
+    }
+
+    case WOWUSER_GETTOPWINDOW: {
+        WORD hwnd = wow32_argw(f, W1_ARG_HWND);
+        wowuser_win_t *w = hwnd ? wowuser_findwin(hwnd) : NULL;
+        HWND t = GetTopWindow(w ? w->hwnd32 : NULL);
+        WORD h16 = t ? wowwin_hwnd16(t) : 0;
+        int k = 0;
+        wu_puts(note, notecap, &k, "GetTopWindow 0x");
+        wu_puthex(note, notecap, &k, hwnd, 4);
+        wu_puts(note, notecap, &k, " -> 0x"); wu_puthex(note, notecap, &k, h16, 4);
+        wow32_setret(f, (DWORD)h16);
+        return 1;
+    }
+
+    case WOWUSER_DRAWICON: {
+        WORD tok  = wow32_argw(f, DI2_ARG_HDC);
+        int  x    = (int)(short)wow32_argw(f, DI2_ARG_X);
+        int  y    = (int)(short)wow32_argw(f, DI2_ARG_Y);
+        WORD hic  = wow32_argw(f, DI2_ARG_HICON);
+        int  kind = -1;
+        HGDIOBJ o = wowgdi_h32(tok, &kind);
+        HICON   ic = wowuser_sysres_hicon(hic, NULL, 0, 0);
+        int  k = 0, r;
+        wu_puts(note, notecap, &k, "DrawIcon(dc=0x");
+        wu_puthex(note, notecap, &k, tok, 4);
+        wu_puts(note, notecap, &k, ", icon=0x"); wu_puthex(note, notecap, &k, hic, 4);
+        if (!o || (kind != WOWGDI_KIND_DC && kind != WOWGDI_KIND_WINDC)) {
+            wu_puts(note, notecap, &k, ") -- ★ NOT ONE OF OUR DC TOKENS; FALSE");
+            wow32_setret(f, 0); return 1;
+        }
+        if (!ic) {
+            wu_puts(note, notecap, &k, ") -- ★ NOT ONE OF OUR ICONS; FALSE");
+            wow32_setret(f, 0); return 1;
+        }
+        r = DrawIcon((HDC)o, x, y, ic) ? 1 : 0;
+        wu_puts(note, notecap, &k, r ? ") -> drawn" : ") -> REFUSED");
+        wow32_setret(f, (DWORD)r);
+        return 1;
+    }
+
+    case WOWUSER_CREATEPOPUPMENU: {
+        HMENU m = CreatePopupMenu();
+        WORD h16 = m ? wowuser_menu16(m) : 0;
+        int k = 0;
+        wu_puts(note, notecap, &k, "CreatePopupMenu -> 0x");
+        wu_puthex(note, notecap, &k, h16, 4);
+        if (m && !h16) { DestroyMenu(m);
+            wu_puts(note, notecap, &k, " -- ★ TOKEN MAP FULL; menu destroyed"); }
+        wow32_setret(f, (DWORD)h16);
+        return 1;
+    }
+
+    case WOWUSER_DESTROYMENU: {
+        WORD hm = wow32_argw(f, W1_ARG_HWND);
+        HMENU m = wowuser_menu32(hm);
+        int k = 0, r;
+        wu_puts(note, notecap, &k, "DestroyMenu 0x");
+        wu_puthex(note, notecap, &k, hm, 4);
+        if (!m) { wu_puts(note, notecap, &k, " -- ★ NOT ONE OF OUR MENUS; FALSE");
+                  wow32_setret(f, 0); return 1; }
+        r = DestroyMenu(m) ? 1 : 0;
+        wu_puts(note, notecap, &k, r ? " -> destroyed" : " -> REFUSED");
+        wow32_setret(f, (DWORD)r);
+        return 1;
+    }
+
+    case WOWUSER_DESTROYICON: {
+        WORD hic = wow32_argw(f, W1_ARG_HWND);
+        HICON ic = wowuser_sysres_hicon(hic, NULL, 0, 0);
+        int k = 0, r = 0;
+        wu_puts(note, notecap, &k, "DestroyIcon 0x");
+        wu_puthex(note, notecap, &k, hic, 4);
+        if (ic) r = DestroyIcon(ic) ? 1 : 0;
+        wu_puts(note, notecap, &k, r ? " -> destroyed"
+                                     : " -- ★ NOT ONE OF OUR ICONS; FALSE");
+        wow32_setret(f, (DWORD)r);
+        return 1;
+    }
+
+    case WOWUSER_GETMENUITEMCOUNT: {
+        WORD hm = wow32_argw(f, W1_ARG_HWND);
+        HMENU m = wowuser_menu32(hm);
+        int k = 0, n;
+        wu_puts(note, notecap, &k, "GetMenuItemCount 0x");
+        wu_puthex(note, notecap, &k, hm, 4);
+        if (!m) { wu_puts(note, notecap, &k, " -- ★ NOT ONE OF OUR MENUS; -1");
+                  wow32_setret(f, 0xFFFF); return 1; }
+        n = GetMenuItemCount(m);
+        wu_puts(note, notecap, &k, " -> "); wu_puthex(note, notecap, &k, (DWORD)n, 4);
+        wow32_setret(f, (DWORD)(WORD)n);
+        return 1;
+    }
+
+    case WOWUSER_GETMENUITEMID: {
+        WORD hm  = wow32_argw(f, GMII_ARG_HMENU);
+        WORD pos = wow32_argw(f, GMII_ARG_POS);
+        HMENU m = wowuser_menu32(hm);
+        int k = 0; UINT id;
+        wu_puts(note, notecap, &k, "GetMenuItemID 0x");
+        wu_puthex(note, notecap, &k, hm, 4);
+        if (!m) { wu_puts(note, notecap, &k, " -- ★ NOT ONE OF OUR MENUS; -1");
+                  wow32_setret(f, 0xFFFF); return 1; }
+        id = GetMenuItemID(m, (int)(short)pos);
+        wu_puts(note, notecap, &k, " pos="); wu_puthex(note, notecap, &k, pos, 4);
+        wu_puts(note, notecap, &k, " -> "); wu_puthex(note, notecap, &k, id, 4);
+        wow32_setret(f, (DWORD)(WORD)id);
+        return 1;
+    }
+
+    case WOWUSER_GETMENUSTATE: {
+        WORD hm = wow32_argw(f, GMS_ARG_HMENU);
+        WORD id = wow32_argw(f, GMS_ARG_ID);
+        WORD fl = wow32_argw(f, GMS_ARG_FLAGS);
+        HMENU m = wowuser_menu32(hm);
+        int k = 0; UINT st;
+        wu_puts(note, notecap, &k, "GetMenuState 0x");
+        wu_puthex(note, notecap, &k, hm, 4);
+        if (!m) { wu_puts(note, notecap, &k, " -- ★ NOT ONE OF OUR MENUS; -1");
+                  wow32_setret(f, 0xFFFF); return 1; }
+        st = GetMenuState(m, id, fl);
+        wu_puts(note, notecap, &k, " -> 0x"); wu_puthex(note, notecap, &k, st, 4);
+        wow32_setret(f, (DWORD)(WORD)st);
+        return 1;
+    }
+
+    case WOWUSER_GETMENUSTRING: {
+        WORD hm  = wow32_argw(f, GMSTR_ARG_HMENU);
+        WORD id  = wow32_argw(f, GMSTR_ARG_ID);
+        WORD max = wow32_argw(f, GMSTR_ARG_MAX);
+        WORD fl  = wow32_argw(f, GMSTR_ARG_FLAGS);
+        volatile BYTE *bp = wow32_argptr(f, GMSTR_ARG_BUF);
+        HMENU m = wowuser_menu32(hm);
+        char buf[256];
+        int k = 0, n, i;
+        wu_puts(note, notecap, &k, "GetMenuString 0x");
+        wu_puthex(note, notecap, &k, hm, 4);
+        if (!m || !bp || !max) {
+            wu_puts(note, notecap, &k, " -- ★ NOT ONE OF OUR MENUS, or no buffer; 0");
+            wow32_setret(f, 0); return 1;
+        }
+        if (max > sizeof buf) max = (WORD)sizeof buf;
+        n = GetMenuStringA(m, id, buf, (int)max, fl);
+        for (i = 0; i < n && i < (int)max - 1; ++i) bp[i] = (BYTE)buf[i];
+        bp[(i < (int)max) ? i : (int)max - 1] = 0;
+        wu_puts(note, notecap, &k, " -> \""); wu_puts(note, notecap, &k, buf);
+        wu_puts(note, notecap, &k, "\"");
+        wow32_setret(f, (DWORD)(WORD)n);
+        return 1;
+    }
+
+    case WOWUSER_MODIFYMENU:
+    case WOWUSER_INSERTMENU: {
+        int  ins  = (f->id == WOWUSER_INSERTMENU);
+        WORD hm   = wow32_argw(f, MI2_ARG_HMENU);
+        WORD pos  = wow32_argw(f, MI2_ARG_POS);
+        WORD fl   = wow32_argw(f, MI2_ARG_FLAGS);
+        WORD idn  = wow32_argw(f, MI2_ARG_IDNEW);
+        HMENU m   = wowuser_menu32(hm);
+        char txt[128];
+        int  k = 0, r;
+        txt[0] = 0;
+        wow32_argstr(f, MI2_ARG_ITEM, txt, (int)sizeof txt);
+        wu_puts(note, notecap, &k, ins ? "InsertMenu 0x" : "ModifyMenu 0x");
+        wu_puthex(note, notecap, &k, hm, 4);
+        wu_puts(note, notecap, &k, " flags=0x"); wu_puthex(note, notecap, &k, fl, 4);
+        if (!m) { wu_puts(note, notecap, &k, " -- ★ NOT ONE OF OUR MENUS; FALSE");
+                  wow32_setret(f, 0); return 1; }
+        /* ⚠ A SEPARATOR HAS NO TEXT, and reading the pointer for one would read
+             whatever the guest happened to leave there. Same rule as AppendMenu. */
+        if (fl & 0x0800u) {
+            r = ins ? (InsertMenuA(m, pos, (UINT)fl, (UINT_PTR)idn, NULL) ? 1 : 0)
+                    : (ModifyMenuA(m, pos, (UINT)fl, (UINT_PTR)idn, NULL) ? 1 : 0);
+            wu_puts(note, notecap, &k, " [separator]");
+        } else if (fl & (0x0004u | 0x0100u)) {
+            wu_puts(note, notecap, &k, " -- ★ BITMAP/OWNERDRAW NOT SUPPORTED; FALSE");
+            wow32_setret(f, 0); return 1;
+        } else {
+            r = ins ? (InsertMenuA(m, pos, (UINT)fl, (UINT_PTR)idn, txt) ? 1 : 0)
+                    : (ModifyMenuA(m, pos, (UINT)fl, (UINT_PTR)idn, txt) ? 1 : 0);
+            wu_puts(note, notecap, &k, " \""); wu_puts(note, notecap, &k, txt);
+            wu_puts(note, notecap, &k, "\"");
+        }
+        wu_puts(note, notecap, &k, r ? " -> ok" : " -> REFUSED by the OS");
+        wow32_setret(f, (DWORD)r);
+        return 1;
+    }
+
+    case WOWUSER_SCROLLWINDOW: {
+        WORD hwnd = wow32_argw(f, SW2_ARG_HWND);
+        int  dx = (int)(short)wow32_argw(f, SW2_ARG_DX);
+        int  dy = (int)(short)wow32_argw(f, SW2_ARG_DY);
+        volatile BYTE *rp = wow32_argptr(f, SW2_ARG_RECT);
+        volatile BYTE *cp = wow32_argptr(f, SW2_ARG_CLIP);
+        wowuser_win_t *w = wowuser_findwin(hwnd);
+        RECT r, c, *pr = NULL, *pc = NULL;
+        unsigned char b8[8];
+        int k = 0, i;
+        wu_puts(note, notecap, &k, "ScrollWindow 0x");
+        wu_puthex(note, notecap, &k, hwnd, 4);
+        if (!w || !w->hwnd32) { wu_puts(note, notecap, &k, " -- no real window");
+                                wow32_setret(f, 0); return 1; }
+        /* ⚠ BOTH RECTS ARE OPTIONAL AND NULL MEANS SOMETHING: a null scroll rect
+             scrolls the whole client area, and a null clip rect clips to none.
+             Substituting an empty RECT would scroll nothing, silently. */
+        if (rp) { for (i = 0; i < 8; ++i) b8[i] = (unsigned char)rp[i];
+                  r.left = wowconv_rect16_get(b8,0); r.top = wowconv_rect16_get(b8,1);
+                  r.right = wowconv_rect16_get(b8,2); r.bottom = wowconv_rect16_get(b8,3);
+                  pr = &r; }
+        if (cp) { for (i = 0; i < 8; ++i) b8[i] = (unsigned char)cp[i];
+                  c.left = wowconv_rect16_get(b8,0); c.top = wowconv_rect16_get(b8,1);
+                  c.right = wowconv_rect16_get(b8,2); c.bottom = wowconv_rect16_get(b8,3);
+                  pc = &c; }
+        ScrollWindow(w->hwnd32, dx, dy, pr, pc);
+        wu_puts(note, notecap, &k, " -> scrolled ");
+        wu_puthex(note, notecap, &k, (DWORD)dx, 4); wu_puts(note, notecap, &k, ",");
+        wu_puthex(note, notecap, &k, (DWORD)dy, 4);
+        wow32_setret(f, 1);
+        return 1;
+    }
+
+    case WOWUSER_GETSCROLLRANGE: {
+        WORD hwnd = wow32_argw(f, GSR_ARG_HWND);
+        WORD bar  = wow32_argw(f, GSR_ARG_BAR);
+        volatile BYTE *mn = wow32_argptr(f, GSR_ARG_MIN);
+        volatile BYTE *mx = wow32_argptr(f, GSR_ARG_MAX);
+        wowuser_win_t *w = wowuser_findwin(hwnd);
+        int k = 0, lo = 0, hi = 0;
+        wu_puts(note, notecap, &k, "GetScrollRange 0x");
+        wu_puthex(note, notecap, &k, hwnd, 4);
+        if (!w || !w->hwnd32) { wu_puts(note, notecap, &k, " -- no real window");
+                                wow32_setret(f, 0); return 1; }
+        GetScrollRange(w->hwnd32, (int)(short)bar, &lo, &hi);
+        if (mn) wow32_pokew(mn, (WORD)(short)lo);
+        if (mx) wow32_pokew(mx, (WORD)(short)hi);
+        wu_puts(note, notecap, &k, " -> "); wu_puthex(note, notecap, &k, (DWORD)lo, 4);
+        wu_puts(note, notecap, &k, ".."); wu_puthex(note, notecap, &k, (DWORD)hi, 4);
+        wow32_setret(f, 1);
+        return 1;
+    }
+
+    case WOWUSER_SHOWSCROLLBAR: {
+        WORD hwnd = wow32_argw(f, SSB_ARG_HWND);
+        WORD bar  = wow32_argw(f, SSB_ARG_BAR);
+        WORD show = wow32_argw(f, SSB_ARG_SHOW);
+        wowuser_win_t *w = wowuser_findwin(hwnd);
+        int k = 0;
+        wu_puts(note, notecap, &k, "ShowScrollBar 0x");
+        wu_puthex(note, notecap, &k, hwnd, 4);
+        if (!w || !w->hwnd32) { wu_puts(note, notecap, &k, " -- no real window");
+                                wow32_setret(f, 0); return 1; }
+        ShowScrollBar(w->hwnd32, (int)(short)bar, show ? TRUE : FALSE);
+        wu_puts(note, notecap, &k, show ? " -> shown" : " -> hidden");
+        wow32_setret(f, 1);
         return 1;
     }
 

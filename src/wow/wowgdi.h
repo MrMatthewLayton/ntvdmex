@@ -523,6 +523,26 @@
 #define GCW_ARG_FIRST    6
 #define GCW_ARG_HDC      8
 
+/* ── ★★ METAFILES: SOUNDREC's last three, and PACKAGER wants them too. ───────
+     A metafile DC is a recording, not a surface: CreateMetaFile hands back a DC
+     that remembers calls, CloseMetaFile turns the recording into a metafile
+     handle, DeleteMetaFile throws it away. All three are real Win32 calls; the
+     only work here is that a DC token and a METAFILE token are different kinds
+     and must not be confused -- closing a metafile DC yields an object that is
+     NOT a DC, and handing it back under a DC token would let the guest pass it
+     to TextOut.
+   ⚠ lpszFile is usually NULL (a memory metafile). NULL is not "missing", it is
+     the common case, and passing "" instead would try to create a file called
+     nothing in the current directory. */
+#define WOWGDI_CREATEMETAFILE   0x007d
+#define CMF_ARG_FILE     0
+#define WOWGDI_CLOSEMETAFILE    0x007e
+#define WOWGDI_DELETEMETAFILE   0x007f
+#define WOWGDI_COPYMETAFILE     0x0097
+#define MF1_ARG_H        0
+#define CPMF_ARG_FILE    0
+#define CPMF_ARG_HMF     4
+
 #define WOWGDI_TEXTOUT          0x0021   /* ord 33,  12 args */
 /* ── ★★ ExtTextOut(hdc, x, y, opts, lprc, str, count, lpDx) -- ord 351, 22 args.
      CLOCK's only outstanding GDI service, and the one TextOut cannot stand in
@@ -2560,6 +2580,87 @@ static int wowgdi_call(wow32_frame_t *f, char *note, int notecap)
         wu_puts(note, notecap, &k, ") -> "); wu_puthex(note, notecap, &k, (DWORD)n, 4);
         wu_puts(note, notecap, &k, " widths, one WORD each");
         wow32_setret(f, 1);
+        return 1;
+    }
+
+    case WOWGDI_CREATEMETAFILE: {
+        char path[260];
+        HDC  mdc;
+        WORD tok;
+        int  k = 0, named;
+        path[0] = 0;
+        named = wow32_argstr(f, CMF_ARG_FILE, path, (int)sizeof path);
+        mdc = CreateMetaFileA(named && path[0] ? path : NULL);
+        tok = mdc ? wowgdi_h16((HGDIOBJ)mdc, WOWGDI_KIND_DC) : 0;
+        wu_puts(note, notecap, &k, "CreateMetaFile(");
+        wu_puts(note, notecap, &k, (named && path[0]) ? path : "in memory");
+        wu_puts(note, notecap, &k, ") -> DC token 0x");
+        wu_puthex(note, notecap, &k, tok, 4);
+        wow32_setret(f, (DWORD)tok);
+        return 1;
+    }
+
+    case WOWGDI_CLOSEMETAFILE: {
+        WORD tok = wow32_argw(f, MF1_ARG_H);
+        int  kind = -1;
+        HGDIOBJ o = wowgdi_h32(tok, &kind);
+        HMETAFILE mf;
+        WORD out;
+        int  k = 0;
+        wu_puts(note, notecap, &k, "CloseMetaFile(0x");
+        wu_puthex(note, notecap, &k, tok, 4);
+        if (!o || kind != WOWGDI_KIND_DC) {
+            wu_puts(note, notecap, &k, ") -- ★ NOT A METAFILE DC TOKEN; 0");
+            wow32_setret(f, 0); return 1;
+        }
+        mf = CloseMetaFile((HDC)o);
+        wowgdi_forget(tok);              /* the DC is gone whatever happened */
+        /* ⚠ A METAFILE IS NOT A DC. It gets an OBJ token so that a guest which
+             passes it to a DC call is refused rather than obeyed. */
+        out = mf ? wowgdi_h16((HGDIOBJ)mf, WOWGDI_KIND_OBJ) : 0;
+        wu_puts(note, notecap, &k, ") -> metafile token 0x");
+        wu_puthex(note, notecap, &k, out, 4);
+        wow32_setret(f, (DWORD)out);
+        return 1;
+    }
+
+    case WOWGDI_DELETEMETAFILE: {
+        WORD tok = wow32_argw(f, MF1_ARG_H);
+        int  kind = -1;
+        HGDIOBJ o = wowgdi_h32(tok, &kind);
+        int  k = 0, r = 0;
+        wu_puts(note, notecap, &k, "DeleteMetaFile(0x");
+        wu_puthex(note, notecap, &k, tok, 4);
+        if (o && kind == WOWGDI_KIND_OBJ) {
+            r = DeleteMetaFile((HMETAFILE)o) ? 1 : 0;
+            wowgdi_forget(tok);
+        }
+        wu_puts(note, notecap, &k, r ? ") -> deleted"
+                                     : ") -- ★ NOT ONE OF OUR METAFILE TOKENS; FALSE");
+        wow32_setret(f, (DWORD)r);
+        return 1;
+    }
+
+    case WOWGDI_COPYMETAFILE: {
+        WORD tok = wow32_argw(f, CPMF_ARG_HMF);
+        int  kind = -1;
+        HGDIOBJ o = wowgdi_h32(tok, &kind);
+        char path[260];
+        HMETAFILE mf;
+        WORD out;
+        int  k = 0, named;
+        path[0] = 0;
+        named = wow32_argstr(f, CPMF_ARG_FILE, path, (int)sizeof path);
+        wu_puts(note, notecap, &k, "CopyMetaFile(0x");
+        wu_puthex(note, notecap, &k, tok, 4);
+        if (!o || kind != WOWGDI_KIND_OBJ) {
+            wu_puts(note, notecap, &k, ") -- ★ NOT ONE OF OUR METAFILE TOKENS; 0");
+            wow32_setret(f, 0); return 1;
+        }
+        mf  = CopyMetaFileA((HMETAFILE)o, (named && path[0]) ? path : NULL);
+        out = mf ? wowgdi_h16((HGDIOBJ)mf, WOWGDI_KIND_OBJ) : 0;
+        wu_puts(note, notecap, &k, ") -> 0x"); wu_puthex(note, notecap, &k, out, 4);
+        wow32_setret(f, (DWORD)out);
         return 1;
     }
 
