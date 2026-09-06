@@ -680,6 +680,97 @@ static const char *wowuser_sysres_name(WORD h)
 #define WOWUSER_ISCLIPBOARDFORMATAVAILABLE 0x00c1
 #define CB_ARG_FORMAT    0
 
+/* ── ★★★ THE SHELF, BATCH TWO: RECORDER, MPLAYER AND CHARMAP. (session 53) ────
+     Priced by neneeds.py at 9, 11 and 13 services. Most are a Win32 call with a
+     handle translated at each end, and they are written out plainly rather than
+     wrapped in a macro: the ones that are NOT plain (a 256-byte key array, a
+     RECT that is 8 bytes not 16, a hook chain we do not own) are the ones worth
+     seeing, and a macro would hide them among the ones that are.
+   ⚠ NONE of these composes an answer. Where the OS cannot be asked, the call
+     says so at the site instead of returning something plausible. */
+#define WOWUSER_ISWINDOWENABLED      0x0023
+#define WOWUSER_GETWINDOWTEXTLENGTH  0x0026
+#define WOWUSER_WINDOWFROMPOINT      0x001e
+#define WOWUSER_FLASHWINDOW          0x0069
+#define WOWUSER_GETCAPTURE           0x00ec
+#define WOWUSER_GETKEYBOARDSTATE     0x00de
+#define WOWUSER_SETKEYBOARDSTATE     0x00df
+#define WOWUSER_VKKEYSCAN            0x0081
+#define WOWUSER_MAPVIRTUALKEY        0x0083
+#define WOWUSER_EMPTYCLIPBOARD       0x008b
+#define WOWUSER_GETUPDATERECT        0x00be
+#define WOWUSER_GETNEXTDLGTABITEM    0x00e4
+#define WOWUSER_GETDLGCTRLID         0x0115
+#define WOWUSER_DRAWFOCUSRECT        0x01d2
+#define WOWUSER_DELETEMENU           0x019d
+#define WOWUSER_GETWINDOWPLACEMENT   0x0172
+#define WOWUSER_UNHOOKWINDOWSHOOK    0x00ea
+#define WOWUSER_DEFHOOKPROC          0x00eb
+#define WOWUSER_SYSTEMPARAMETERSINFO 0x01e3
+
+#define W1_ARG_HWND      0      /* every one-word (HWND) call                    */
+#define WFP_ARG_Y        0      /* WindowFromPoint(POINT) -- y then x, reversed  */
+#define WFP_ARG_X        2
+#define FW_ARG_INVERT    0
+#define FW_ARG_HWND      2
+#define KS_ARG_BUF       0      /* far pointer to 256 bytes                      */
+#define VKS_ARG_CHAR     0
+#define MVK_ARG_TYPE     0
+#define MVK_ARG_CODE     2
+#define GUR_ARG_ERASE    0
+#define GUR_ARG_RECT     2
+#define GUR_ARG_HWND     6
+#define GNDTI_ARG_PREV   0
+#define GNDTI_ARG_CTL    2
+#define GNDTI_ARG_HDLG   4
+#define DFR_ARG_RECT     0
+#define DFR_ARG_HDC      4
+#define DM_ARG_FLAGS     0
+#define DM_ARG_POS       2
+#define DM_ARG_HMENU     4
+#define GWP_ARG_PL       0
+#define GWP_ARG_HWND     4
+#define SPI_ARG_WINI     0
+#define SPI_ARG_PARAM    2
+#define SPI_ARG_UIPARAM  6
+#define SPI_ARG_ACTION   8
+
+#define WOWUSER_DLGDIRLIST           0x0064
+#define DDL_ARG_FILETYPE 0
+#define DDL_ARG_IDSTATIC 2
+#define DDL_ARG_IDLIST   4
+#define DDL_ARG_SPEC     6
+#define DDL_ARG_HDLG    10
+
+/* ⚠ ChangeMenu IS FIVE FUNCTIONS BEHIND ONE ORDINAL -- the Win16 legacy
+     multiplexer that predates Append/Insert/Modify/Delete/Remove. The action is
+     in the FLAGS, not in the name, so dispatching on them is the whole job; a
+     version that only appended would silently do the wrong thing four times out
+     of five. */
+#define WOWUSER_CHANGEMENU           0x0099
+#define CM_ARG_CHANGE    0
+#define CM_ARG_IDNEW     2
+#define CM_ARG_ITEM      4
+#define CM_ARG_IDCHANGE  8
+#define CM_ARG_HMENU    10
+
+#define WOWUSER_GRAYSTRING           0x00b9
+#define GS_ARG_HEIGHT    0
+#define GS_ARG_WIDTH     2
+#define GS_ARG_Y         4
+#define GS_ARG_X         6
+#define GS_ARG_COUNT     8
+#define GS_ARG_DATA     10
+#define GS_ARG_OUTFUNC  14
+#define GS_ARG_HBRUSH   18
+#define GS_ARG_HDC      20
+
+#define WOWUSER_DEFDLGPROC           0x0134
+#define DDP_ARG_LPARAM   0
+#define DDP_ARG_WPARAM   4
+#define DDP_ARG_MSG      6
+#define DDP_ARG_HDLG     8
+
 #define WOWUSER_ISWINDOWVISIBLE  0x0031
 #define IW_ARG_HWND      0
 
@@ -1449,7 +1540,16 @@ static int             g_wu_nclass = 0;
      run has already been seen to ask for, and `ds:0x004a` is `"mpchild"`, which
      is the class named in the MDICREATESTRUCT below. Reading the guest binary
      is stronger evidence than waiting for the run line, not weaker. */
-static const char *const g_wu_sysclass[] = { "MDICLIENT", "EDIT" };
+/* ⚠ `LISTBOX` JOINED THE LIST IN SESSION 53 BECAUSE A RUN NAMED IT, which is
+     the rule two paragraphs up and not an exception to it: RECORDER.EXE stopped
+     dead with `CreateWindow: no such class "ListBox"` and produced no window at
+     all. The remaining standard classes (BUTTON, STATIC, COMBOBOX, SCROLLBAR,
+     the numbered dialog classes) are still absent for the same reason as before
+     -- nothing has asked -- and each is one string when something does.
+   ★ The "a class that exists and does nothing" objection does NOT apply to these:
+     a system class here resolves to the OS's OWN Win32 class, so a window made
+     from it is a real listbox with real behaviour, not a stub. */
+static const char *const g_wu_sysclass[] = { "MDICLIENT", "EDIT", "LISTBOX" };
 static int               g_wu_sysdone = 0;
 
 static void wowuser_ensure_sysclasses(void)
@@ -4039,6 +4139,495 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
                                    "Answering `available` here and 0 there would be "
                                    "available-but-empty, a state no clipboard is in.");
         wow32_setret(f, 0);
+        return 1;
+    }
+
+    /* ── BATCH TWO: the plain ones. Handle in, OS asked, handle out. ────────── */
+    case WOWUSER_ISWINDOWENABLED:
+    case WOWUSER_GETWINDOWTEXTLENGTH: {
+        WORD hwnd = wow32_argw(f, W1_ARG_HWND);
+        wowuser_win_t *w = wowuser_findwin(hwnd);
+        int k = 0; DWORD r;
+        wu_puts(note, notecap, &k, (f->id == WOWUSER_ISWINDOWENABLED)
+                ? "IsWindowEnabled 0x" : "GetWindowTextLength 0x");
+        wu_puthex(note, notecap, &k, hwnd, 4);
+        if (!w || !w->hwnd32) { wu_puts(note, notecap, &k, " -- no real window; 0");
+                                wow32_setret(f, 0); return 1; }
+        r = (f->id == WOWUSER_ISWINDOWENABLED)
+            ? (DWORD)(IsWindowEnabled(w->hwnd32) ? 1 : 0)
+            : (DWORD)GetWindowTextLengthA(w->hwnd32);
+        wu_puts(note, notecap, &k, " -> "); wu_puthex(note, notecap, &k, r, 4);
+        wow32_setret(f, r);
+        return 1;
+    }
+
+    case WOWUSER_GETCAPTURE: {
+        HWND c = GetCapture();
+        WORD h16 = c ? wowwin_hwnd16(c) : 0;
+        int k = 0;
+        wu_puts(note, notecap, &k, "GetCapture -> 0x");
+        wu_puthex(note, notecap, &k, h16, 4);
+        /* ⚠ A capture held by a window that is not one of ours answers 0, which
+             is what "nobody has it" looks like from inside the VDM -- the guest
+             cannot be handed a handle from another address space. */
+        if (c && !h16) wu_puts(note, notecap, &k, " (held OUTSIDE this VDM; 0)");
+        wow32_setret(f, (DWORD)h16);
+        return 1;
+    }
+
+    case WOWUSER_WINDOWFROMPOINT: {
+        POINT pt;
+        HWND  hw;
+        WORD  h16;
+        int   k = 0;
+        pt.x = (int)(short)wow32_argw(f, WFP_ARG_X);
+        pt.y = (int)(short)wow32_argw(f, WFP_ARG_Y);
+        hw   = WindowFromPoint(pt);
+        h16  = hw ? wowwin_hwnd16(hw) : 0;
+        wu_puts(note, notecap, &k, "WindowFromPoint ");
+        wu_puthex(note, notecap, &k, (DWORD)pt.x, 4); wu_puts(note, notecap, &k, ",");
+        wu_puthex(note, notecap, &k, (DWORD)pt.y, 4);
+        wu_puts(note, notecap, &k, " -> 0x"); wu_puthex(note, notecap, &k, h16, 4);
+        wow32_setret(f, (DWORD)h16);
+        return 1;
+    }
+
+    case WOWUSER_FLASHWINDOW: {
+        WORD hwnd = wow32_argw(f, FW_ARG_HWND);
+        WORD inv  = wow32_argw(f, FW_ARG_INVERT);
+        wowuser_win_t *w = wowuser_findwin(hwnd);
+        int k = 0, r;
+        wu_puts(note, notecap, &k, "FlashWindow 0x");
+        wu_puthex(note, notecap, &k, hwnd, 4);
+        if (!w || !w->hwnd32) { wu_puts(note, notecap, &k, " -- no real window; 0");
+                                wow32_setret(f, 0); return 1; }
+        r = FlashWindow(w->hwnd32, inv ? TRUE : FALSE) ? 1 : 0;
+        wu_puts(note, notecap, &k, r ? " -> was active" : " -> was inactive");
+        wow32_setret(f, (DWORD)r);
+        return 1;
+    }
+
+    /* ── ⚠ THE KEY-STATE ARRAY IS 256 BYTES AND THE GUEST OWNS THE BUFFER. ─────
+         Win16 and Win32 agree on the shape exactly: one byte per virtual key,
+         high bit down, low bit toggled. So it is a copy, not a conversion -- but
+         it is a copy of 256 bytes into guest memory, so the pointer is checked. */
+    case WOWUSER_GETKEYBOARDSTATE:
+    case WOWUSER_SETKEYBOARDSTATE: {
+        volatile BYTE *p16 = wow32_argptr(f, KS_ARG_BUF);
+        BYTE st[256];
+        int  k = 0, i, get = (f->id == WOWUSER_GETKEYBOARDSTATE);
+        wu_puts(note, notecap, &k, get ? "GetKeyboardState" : "SetKeyboardState");
+        if (!p16) { wu_puts(note, notecap, &k, " -- ★ NO BUFFER; nothing done");
+                    wow32_setret(f, 0); return 1; }
+        if (get) {
+            if (!GetKeyboardState(st)) {
+                wu_puts(note, notecap, &k, " -- the OS refused; nothing written");
+                wow32_setret(f, 0); return 1;
+            }
+            for (i = 0; i < 256; ++i) p16[i] = st[i];
+            wu_puts(note, notecap, &k, " -> 256 bytes written");
+        } else {
+            for (i = 0; i < 256; ++i) st[i] = (BYTE)p16[i];
+            SetKeyboardState(st);
+            wu_puts(note, notecap, &k, " -> 256 bytes taken");
+        }
+        wow32_setret(f, 1);
+        return 1;
+    }
+
+    case WOWUSER_VKKEYSCAN: {
+        WORD ch = wow32_argw(f, VKS_ARG_CHAR);
+        SHORT r = VkKeyScanA((CHAR)(ch & 0xFF));
+        int k = 0;
+        wu_puts(note, notecap, &k, "VkKeyScan '");
+        { char c1[2]; c1[0] = (char)(ch & 0xFF); c1[1] = 0;
+          wu_puts(note, notecap, &k, c1); }
+        wu_puts(note, notecap, &k, "' -> 0x"); wu_puthex(note, notecap, &k, (WORD)r, 4);
+        wow32_setret(f, (DWORD)(WORD)r);
+        return 1;
+    }
+
+    case WOWUSER_MAPVIRTUALKEY: {
+        WORD code = wow32_argw(f, MVK_ARG_CODE);
+        WORD type = wow32_argw(f, MVK_ARG_TYPE);
+        UINT r = MapVirtualKeyA(code, type);
+        int k = 0;
+        wu_puts(note, notecap, &k, "MapVirtualKey code=0x");
+        wu_puthex(note, notecap, &k, code, 4);
+        wu_puts(note, notecap, &k, " type="); wu_puthex(note, notecap, &k, type, 2);
+        wu_puts(note, notecap, &k, " -> 0x"); wu_puthex(note, notecap, &k, r, 4);
+        wow32_setret(f, (DWORD)r);
+        return 1;
+    }
+
+    case WOWUSER_EMPTYCLIPBOARD: {
+        int k = 0, r = EmptyClipboard() ? 1 : 0;
+        wu_puts(note, notecap, &k, r ? "EmptyClipboard -> emptied"
+                                     : "EmptyClipboard -- ★ REFUSED (not open?)");
+        wow32_setret(f, (DWORD)r);
+        return 1;
+    }
+
+    case WOWUSER_GETUPDATERECT: {
+        WORD hwnd = wow32_argw(f, GUR_ARG_HWND);
+        WORD er   = wow32_argw(f, GUR_ARG_ERASE);
+        volatile BYTE *rp = wow32_argptr(f, GUR_ARG_RECT);
+        wowuser_win_t *w = wowuser_findwin(hwnd);
+        unsigned char r8[8];
+        RECT r;
+        int k = 0, any, i;
+        wu_puts(note, notecap, &k, "GetUpdateRect 0x");
+        wu_puthex(note, notecap, &k, hwnd, 4);
+        if (!w || !w->hwnd32) { wu_puts(note, notecap, &k, " -- no real window; FALSE");
+                                wow32_setret(f, 0); return 1; }
+        any = GetUpdateRect(w->hwnd32, &r, er ? TRUE : FALSE) ? 1 : 0;
+        if (rp) {
+            wowconv_rect16_put(r8, 0, (int)r.left);   wowconv_rect16_put(r8, 1, (int)r.top);
+            wowconv_rect16_put(r8, 2, (int)r.right);  wowconv_rect16_put(r8, 3, (int)r.bottom);
+            for (i = 0; i < 8; ++i) rp[i] = r8[i];
+        }
+        wu_puts(note, notecap, &k, any ? " -> dirty" : " -> clean");
+        wow32_setret(f, (DWORD)any);
+        return 1;
+    }
+
+    case WOWUSER_GETNEXTDLGTABITEM: {
+        WORD hdlg = wow32_argw(f, GNDTI_ARG_HDLG);
+        WORD ctl  = wow32_argw(f, GNDTI_ARG_CTL);
+        WORD prev = wow32_argw(f, GNDTI_ARG_PREV);
+        wowuser_win_t *w = wowuser_findwin(hdlg);
+        wowuser_win_t *c = wowuser_findwin(ctl);
+        HWND n; WORD h16;
+        int k = 0;
+        wu_puts(note, notecap, &k, "GetNextDlgTabItem dlg 0x");
+        wu_puthex(note, notecap, &k, hdlg, 4);
+        if (!w || !w->hwnd32) { wu_puts(note, notecap, &k, " -- no real window; 0");
+                                wow32_setret(f, 0); return 1; }
+        n = GetNextDlgTabItem(w->hwnd32, c ? c->hwnd32 : NULL, prev ? TRUE : FALSE);
+        h16 = n ? wowwin_hwnd16(n) : 0;
+        wu_puts(note, notecap, &k, " -> 0x"); wu_puthex(note, notecap, &k, h16, 4);
+        wow32_setret(f, (DWORD)h16);
+        return 1;
+    }
+
+    case WOWUSER_GETDLGCTRLID: {
+        WORD hwnd = wow32_argw(f, W1_ARG_HWND);
+        wowuser_win_t *w = wowuser_findwin(hwnd);
+        int k = 0, id;
+        wu_puts(note, notecap, &k, "GetDlgCtrlID 0x");
+        wu_puthex(note, notecap, &k, hwnd, 4);
+        if (!w || !w->hwnd32) { wu_puts(note, notecap, &k, " -- no real window; 0");
+                                wow32_setret(f, 0); return 1; }
+        id = GetDlgCtrlID(w->hwnd32);
+        wu_puts(note, notecap, &k, " -> "); wu_puthex(note, notecap, &k, (DWORD)id, 4);
+        wow32_setret(f, (DWORD)(WORD)id);
+        return 1;
+    }
+
+    case WOWUSER_DRAWFOCUSRECT: {
+        WORD tok = wow32_argw(f, DFR_ARG_HDC);
+        volatile BYTE *rp = wow32_argptr(f, DFR_ARG_RECT);
+        int kind = -1;
+        HGDIOBJ o = wowgdi_h32(tok, &kind);
+        unsigned char r8[8];
+        RECT r;
+        int k = 0, i;
+        wu_puts(note, notecap, &k, "DrawFocusRect dc=0x");
+        wu_puthex(note, notecap, &k, tok, 4);
+        if (!o || (kind != WOWGDI_KIND_DC && kind != WOWGDI_KIND_WINDC) || !rp) {
+            wu_puts(note, notecap, &k, " -- ★ NOT ONE OF OUR DC TOKENS, or no rect");
+            wow32_setret(f, 0); return 1;
+        }
+        for (i = 0; i < 8; ++i) r8[i] = (unsigned char)rp[i];
+        r.left   = wowconv_rect16_get(r8, 0); r.top    = wowconv_rect16_get(r8, 1);
+        r.right  = wowconv_rect16_get(r8, 2); r.bottom = wowconv_rect16_get(r8, 3);
+        DrawFocusRect((HDC)o, &r);
+        wu_puts(note, notecap, &k, " -> drawn");
+        wow32_setret(f, 1);
+        return 1;
+    }
+
+    case WOWUSER_DELETEMENU: {
+        WORD hm    = wow32_argw(f, DM_ARG_HMENU);
+        WORD pos   = wow32_argw(f, DM_ARG_POS);
+        WORD flags = wow32_argw(f, DM_ARG_FLAGS);
+        HMENU m = wowuser_menu32(hm);
+        int k = 0, r;
+        wu_puts(note, notecap, &k, "DeleteMenu 0x");
+        wu_puthex(note, notecap, &k, hm, 4);
+        wu_puts(note, notecap, &k, " pos="); wu_puthex(note, notecap, &k, pos, 4);
+        if (!m) { wu_puts(note, notecap, &k, " -- ★ NOT ONE OF OUR MENUS; FALSE");
+                  wow32_setret(f, 0); return 1; }
+        r = DeleteMenu(m, pos, flags) ? 1 : 0;
+        wu_puts(note, notecap, &k, r ? " -> deleted" : " -> REFUSED");
+        wow32_setret(f, (DWORD)r);
+        return 1;
+    }
+
+    /* ── ⚠ WINDOWPLACEMENT IS A DIFFERENT STRUCTURE IN 16 BITS. Win16's is 22
+         bytes of WORDs (length, flags, showCmd, ptMin, ptMax, rcNormal); Win32's
+         is 44 with LONGs. Built field by field rather than copied. */
+    case WOWUSER_GETWINDOWPLACEMENT: {
+        WORD hwnd = wow32_argw(f, GWP_ARG_HWND);
+        volatile BYTE *p16 = wow32_argptr(f, GWP_ARG_PL);
+        wowuser_win_t *w = wowuser_findwin(hwnd);
+        WINDOWPLACEMENT wp;
+        int k = 0;
+        wu_puts(note, notecap, &k, "GetWindowPlacement 0x");
+        wu_puthex(note, notecap, &k, hwnd, 4);
+        if (!w || !w->hwnd32 || !p16) {
+            wu_puts(note, notecap, &k, " -- no real window or no struct; FALSE");
+            wow32_setret(f, 0); return 1;
+        }
+        wp.length = sizeof wp;
+        if (!GetWindowPlacement(w->hwnd32, &wp)) {
+            wu_puts(note, notecap, &k, " -- the OS refused; nothing written");
+            wow32_setret(f, 0); return 1;
+        }
+        wow32_pokew(p16 +  0, 22);
+        wow32_pokew(p16 +  2, (WORD)wp.flags);
+        wow32_pokew(p16 +  4, (WORD)wp.showCmd);
+        wow32_pokew(p16 +  6, (WORD)(short)wp.ptMinPosition.x);
+        wow32_pokew(p16 +  8, (WORD)(short)wp.ptMinPosition.y);
+        wow32_pokew(p16 + 10, (WORD)(short)wp.ptMaxPosition.x);
+        wow32_pokew(p16 + 12, (WORD)(short)wp.ptMaxPosition.y);
+        wow32_pokew(p16 + 14, (WORD)(short)wp.rcNormalPosition.left);
+        wow32_pokew(p16 + 16, (WORD)(short)wp.rcNormalPosition.top);
+        wow32_pokew(p16 + 18, (WORD)(short)wp.rcNormalPosition.right);
+        wow32_pokew(p16 + 20, (WORD)(short)wp.rcNormalPosition.bottom);
+        wu_puts(note, notecap, &k, " -> showCmd ");
+        wu_puthex(note, notecap, &k, (DWORD)wp.showCmd, 2);
+        wow32_setret(f, 1);
+        return 1;
+    }
+
+    /* ── ⚠⚠ HOOKS: WE INSTALL NONE, AND SAYING SO IS THE HONEST ANSWER. ───────
+         SetWindowsHook is not serviced, so no guest hook is ever in a chain
+         here. UnhookWindowsHook therefore has nothing to remove (FALSE is what
+         Windows returns for a hook it does not hold) and DefHookProc has no NEXT
+         hook to call, which is exactly the case its own contract covers: with a
+         null next-hook it returns 0. Both are TRUE statements about this VDM
+         rather than stubs, and if hooks are ever implemented these are where the
+         chain gets walked. */
+    case WOWUSER_UNHOOKWINDOWSHOOK: {
+        int k = 0;
+        wu_puts(note, notecap, &k, "UnhookWindowsHook -- no hook chain exists in "
+                                   "this VDM (SetWindowsHook is not serviced); FALSE");
+        wow32_setret(f, 0);
+        return 1;
+    }
+    case WOWUSER_DEFHOOKPROC: {
+        int k = 0;
+        wu_puts(note, notecap, &k, "DefHookProc -- no NEXT hook to pass to; 0, "
+                                   "which is what a null chain returns");
+        wow32_setret(f, 0);
+        return 1;
+    }
+
+    /* ── ⚠⚠ SystemParametersInfo IS SYSTEM-WIDE, so a SET is REFUSED. ─────────
+         A VDM that can be killed at any moment must not leave the user's
+         desktop reconfigured -- same rule as ClipCursor above. Queries are
+         answered from the real OS; anything that WRITES is declined and said so. */
+    case WOWUSER_SYSTEMPARAMETERSINFO: {
+        WORD action = wow32_argw(f, SPI_ARG_ACTION);
+        WORD ui     = wow32_argw(f, SPI_ARG_UIPARAM);
+        volatile BYTE *pv = wow32_argptr(f, SPI_ARG_PARAM);
+        WORD wini   = wow32_argw(f, SPI_ARG_WINI);
+        int  k = 0;
+        wu_puts(note, notecap, &k, "SystemParametersInfo action=0x");
+        wu_puthex(note, notecap, &k, action, 4);
+        (void)ui; (void)pv;
+        if (wini) {
+            wu_puts(note, notecap, &k, " -- ★ WRITES REFUSED: this is a SYSTEM-WIDE"
+                                       " setting and the VDM can be killed at will");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        /* ── ⚠⚠ SPI_GETICONTITLELOGFONT (0x1F): ANSWERING "FALSE" IS NOT ENOUGH.
+             MPLAYER asks for it and then calls CreateFontIndirect ON THE BUFFER
+             REGARDLESS -- measured: with FALSE returned and the buffer untouched,
+             the next log line is CreateFontIndirect with a face name of stack
+             litter. The return value was not the answer it acted on; the BUFFER
+             was. So fill it, or the guest builds a font out of rubbish.
+           ⚠ AND A WIN16 LOGFONT IS 50 BYTES, NOT 60. Every metric is a WORD here
+             and a LONG in Win32, and the 32-byte face name starts at 18 rather
+             than 28 -- copying the Win32 structure across would put the typeface
+             where the guest reads lfWeight. */
+        if (action == 0x001Fu && pv) {
+            LOGFONTA lf;
+            if (SystemParametersInfoA(0x001F, 0, &lf, 0)) {
+                int i2;
+                wow32_pokew(pv +  0, (WORD)(short)lf.lfHeight);
+                wow32_pokew(pv +  2, (WORD)(short)lf.lfWidth);
+                wow32_pokew(pv +  4, (WORD)(short)lf.lfEscapement);
+                wow32_pokew(pv +  6, (WORD)(short)lf.lfOrientation);
+                wow32_pokew(pv +  8, (WORD)(short)lf.lfWeight);
+                pv[10] = lf.lfItalic;        pv[11] = lf.lfUnderline;
+                pv[12] = lf.lfStrikeOut;     pv[13] = lf.lfCharSet;
+                pv[14] = lf.lfOutPrecision;  pv[15] = lf.lfClipPrecision;
+                pv[16] = lf.lfQuality;       pv[17] = lf.lfPitchAndFamily;
+                for (i2 = 0; i2 < 32; ++i2)
+                    pv[18 + i2] = (BYTE)((i2 < LF_FACESIZE) ? lf.lfFaceName[i2] : 0);
+                wu_puts(note, notecap, &k, " -> icon-title LOGFONT written (50 bytes) \"");
+                { char fn[LF_FACESIZE + 1]; int j2;
+                  for (j2 = 0; j2 < LF_FACESIZE && lf.lfFaceName[j2]; ++j2) fn[j2] = lf.lfFaceName[j2];
+                  fn[j2] = 0; wu_puts(note, notecap, &k, fn); }
+                wu_puts(note, notecap, &k, "\"");
+                wow32_setret(f, 1);
+                return 1;
+            }
+        }
+        /* SPI_GETWORKAREA (0x30) is the one MPLAYER wants, and its RECT is the
+           only structure involved -- answered in 16-bit RECT form. */
+        if (action == 0x0030 && pv) {
+            RECT wa; unsigned char r8[8]; int i;
+            if (SystemParametersInfoA(SPI_GETWORKAREA, 0, &wa, 0)) {
+                wowconv_rect16_put(r8, 0, (int)wa.left);  wowconv_rect16_put(r8, 1, (int)wa.top);
+                wowconv_rect16_put(r8, 2, (int)wa.right); wowconv_rect16_put(r8, 3, (int)wa.bottom);
+                for (i = 0; i < 8; ++i) pv[i] = r8[i];
+                wu_puts(note, notecap, &k, " -> work area written");
+                wow32_setret(f, 1);
+                return 1;
+            }
+        }
+        wu_puts(note, notecap, &k, " -- ★ QUERY NOT IMPLEMENTED; answered FALSE "
+                                   "rather than leaving the guest's buffer as litter");
+        wow32_setret(f, 0);
+        return 1;
+    }
+
+    case WOWUSER_DLGDIRLIST: {
+        WORD hdlg = wow32_argw(f, DDL_ARG_HDLG);
+        WORD idl  = wow32_argw(f, DDL_ARG_IDLIST);
+        WORD ids  = wow32_argw(f, DDL_ARG_IDSTATIC);
+        WORD ft   = wow32_argw(f, DDL_ARG_FILETYPE);
+        wowuser_win_t *w = wowuser_findwin(hdlg);
+        char spec[260];
+        int  k = 0, r;
+        spec[0] = 0;
+        wow32_argstr(f, DDL_ARG_SPEC, spec, (int)sizeof spec);
+        wu_puts(note, notecap, &k, "DlgDirList 0x");
+        wu_puthex(note, notecap, &k, hdlg, 4);
+        wu_puts(note, notecap, &k, " \""); wu_puts(note, notecap, &k, spec);
+        wu_puts(note, notecap, &k, "\"");
+        if (!w || !w->hwnd32) { wu_puts(note, notecap, &k, " -- no real window; 0");
+                                wow32_setret(f, 0); return 1; }
+        r = DlgDirListA(w->hwnd32, spec, idl, ids, ft) ? 1 : 0;
+        wu_puts(note, notecap, &k, r ? " -> filled" : " -> REFUSED (bad spec or no listbox)");
+        wow32_setret(f, (DWORD)r);
+        return 1;
+    }
+
+    case WOWUSER_CHANGEMENU: {
+        WORD hm   = wow32_argw(f, CM_ARG_HMENU);
+        WORD idc  = wow32_argw(f, CM_ARG_IDCHANGE);
+        WORD idn  = wow32_argw(f, CM_ARG_IDNEW);
+        WORD chg  = wow32_argw(f, CM_ARG_CHANGE);
+        HMENU m   = wowuser_menu32(hm);
+        char  txt[128];
+        int   k = 0, r = 0;
+        txt[0] = 0;
+        wow32_argstr(f, CM_ARG_ITEM, txt, (int)sizeof txt);
+        wu_puts(note, notecap, &k, "ChangeMenu 0x");
+        wu_puthex(note, notecap, &k, hm, 4);
+        wu_puts(note, notecap, &k, " change=0x"); wu_puthex(note, notecap, &k, chg, 4);
+        if (!m) { wu_puts(note, notecap, &k, " -- ★ NOT ONE OF OUR MENUS; FALSE");
+                  wow32_setret(f, 0); return 1; }
+        /* MF_APPEND 0x0100, MF_DELETE 0x0200, MF_CHANGE 0x0080, MF_REMOVE 0x1000;
+           anything else is an INSERT, which is what a zero `change` means. */
+        if (chg & 0x0200u) {
+            r = DeleteMenu(m, idc, (UINT)(chg & 0x0400u ? MF_BYPOSITION : MF_BYCOMMAND)) ? 1 : 0;
+            wu_puts(note, notecap, &k, " [delete]");
+        } else if (chg & 0x1000u) {
+            r = RemoveMenu(m, idc, (UINT)(chg & 0x0400u ? MF_BYPOSITION : MF_BYCOMMAND)) ? 1 : 0;
+            wu_puts(note, notecap, &k, " [remove]");
+        } else if (chg & 0x0080u) {
+            r = ModifyMenuA(m, idc, (UINT)(chg & ~0x0080u), (UINT_PTR)idn,
+                            txt[0] ? txt : NULL) ? 1 : 0;
+            wu_puts(note, notecap, &k, " [change]");
+        } else if (chg & 0x0100u) {
+            r = AppendMenuA(m, (UINT)(chg & ~0x0100u), (UINT_PTR)idn,
+                            txt[0] ? txt : NULL) ? 1 : 0;
+            wu_puts(note, notecap, &k, " [append]");
+        } else {
+            r = InsertMenuA(m, idc, (UINT)chg, (UINT_PTR)idn,
+                            txt[0] ? txt : NULL) ? 1 : 0;
+            wu_puts(note, notecap, &k, " [insert]");
+        }
+        wu_puts(note, notecap, &k, r ? " -> ok" : " -> REFUSED by the OS");
+        wow32_setret(f, (DWORD)r);
+        return 1;
+    }
+
+    /* ── ⚠ GrayString's OUTPUT FUNCTION IS A 16-BIT CALLBACK WE DO NOT RUN HERE.
+         Passing NULL is not a shortcut: NULL is a DOCUMENTED value meaning "use
+         TextOut", which is what every caller that supplies no proc gets anyway.
+         A guest that DID supply one is told so in the log rather than having its
+         proc silently ignored -- the string still draws, greyed, in the right
+         place, which is the visible contract. */
+    case WOWUSER_GRAYSTRING: {
+        WORD dtok = wow32_argw(f, GS_ARG_HDC);
+        WORD btok = wow32_argw(f, GS_ARG_HBRUSH);
+        DWORD outfn = wow32_argd(f, GS_ARG_OUTFUNC);
+        volatile BYTE *sp = wow32_argptr(f, GS_ARG_DATA);
+        int  n  = (int)(short)wow32_argw(f, GS_ARG_COUNT);
+        int  x  = (int)(short)wow32_argw(f, GS_ARG_X);
+        int  y  = (int)(short)wow32_argw(f, GS_ARG_Y);
+        int  cx = (int)(short)wow32_argw(f, GS_ARG_WIDTH);
+        int  cy = (int)(short)wow32_argw(f, GS_ARG_HEIGHT);
+        int  dk = -1, bk = -1;
+        HGDIOBJ d = wowgdi_h32(dtok, &dk);
+        HGDIOBJ b = btok ? wowgdi_h32(btok, &bk) : NULL;
+        char buf[512];
+        int  k = 0, i, r;
+        wu_puts(note, notecap, &k, "GrayString(0x");
+        wu_puthex(note, notecap, &k, dtok, 4);
+        if (!d || (dk != WOWGDI_KIND_DC && dk != WOWGDI_KIND_WINDC)) {
+            wu_puts(note, notecap, &k, ") -- ★ NOT ONE OF OUR DC TOKENS; FALSE");
+            wow32_setret(f, 0); return 1;
+        }
+        if (n < 0) n = 0;
+        if (n > (int)sizeof buf - 1) n = (int)sizeof buf - 1;
+        for (i = 0; i < n; ++i) buf[i] = sp ? (char)sp[i] : ' ';
+        buf[n] = 0;
+        if (outfn) wu_puts(note, notecap, &k, ") ★ the guest supplied an OUTPUT PROC "
+                                              "and we do not call it; drawn with TextOut");
+        r = GrayStringA((HDC)d, (HBRUSH)b, NULL, (LPARAM)(LONG_PTR)buf, n,
+                        x, y, cx, cy) ? 1 : 0;
+        wu_puts(note, notecap, &k, r ? " -> greyed" : " -> REFUSED");
+        wow32_setret(f, (DWORD)r);
+        return 1;
+    }
+
+    /* ── ⚠⚠ DefDlgProc GOES TO DefWindowProc, AND THAT IS A REAL DIFFERENCE. ──
+         The real DefDlgProc runs the dialog manager's default behaviour on a
+         window created by the dialog manager -- it reads DWL_MSGRESULT and the
+         dialog class's extra bytes, which a window WE created with CreateWindow
+         does not have. Calling the OS's DefDlgProc on one is undefined, so this
+         forwards to DefWindowProc, which handles everything except the
+         dialog-specific parts (default button, ESC to cancel, tab order).
+       ⇒ WHAT THIS COSTS, SAID OUT LOUD: a guest dialog gets the right answers to
+         ordinary messages and loses keyboard defaults. That is a degradation, not
+         a lie, and it disappears when real dialog creation lands (USER thunk
+         0xEF). */
+    case WOWUSER_DEFDLGPROC: {
+        WORD hdlg = wow32_argw(f, DDP_ARG_HDLG);
+        WORD msg  = wow32_argw(f, DDP_ARG_MSG);
+        WORD wp16 = wow32_argw(f, DDP_ARG_WPARAM);
+        DWORD lp32 = wow32_argd(f, DDP_ARG_LPARAM);
+        wowuser_win_t *w = wowuser_findwin(hdlg);
+        LRESULT r;
+        int k = 0;
+        wu_puts(note, notecap, &k, "DefDlgProc 0x");
+        wu_puthex(note, notecap, &k, hdlg, 4);
+        wu_puts(note, notecap, &k, " msg=0x"); wu_puthex(note, notecap, &k, msg, 4);
+        if (!w || !w->hwnd32) { wu_puts(note, notecap, &k, " -- no real window; 0");
+                                wow32_setret(f, 0); return 1; }
+        r = DefWindowProcA(w->hwnd32, msg, wp16, (LPARAM)lp32);
+        wu_puts(note, notecap, &k, " -> DefWindowProc (see the note: no dialog"
+                                   " keyboard defaults) = 0x");
+        wu_puthex(note, notecap, &k, (DWORD)r, 8);
+        wow32_setret(f, (DWORD)r);
         return 1;
     }
 

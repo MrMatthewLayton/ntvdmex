@@ -483,6 +483,46 @@
      the log says which one the guest asked for. */
 #define WOWGDI_CREATEDC2        0x0035   /* ord 53,  16 args -- the REAL CreateDC  */
 
+/* ── ★★ THE SHELF, BATCH TWO: what MPLAYER and CHARMAP still want from GDI. ── */
+#define WOWGDI_INTERSECTCLIPRECT 0x0016
+#define ICR_ARG_BOTTOM   0
+#define ICR_ARG_RIGHT    2
+#define ICR_ARG_TOP      4
+#define ICR_ARG_LEFT     6
+#define ICR_ARG_HDC      8
+
+#define WOWGDI_RECTVISIBLE       0x0068
+#define RV_ARG_RECT      0
+#define RV_ARG_HDC       4
+
+/* CreateFont's fourteen parameters, LAST push first. CHARMAP's whole job is
+   showing one face at a large size, so this is the call it lives or dies on. */
+#define WOWGDI_CREATEFONT        0x0038
+#define CF_ARG_FACE      0
+#define CF_ARG_PITCH     4
+#define CF_ARG_QUALITY   6
+#define CF_ARG_CLIPPREC  8
+#define CF_ARG_OUTPREC  10
+#define CF_ARG_CHARSET  12
+#define CF_ARG_STRIKE   14
+#define CF_ARG_UNDER    16
+#define CF_ARG_ITALIC   18
+#define CF_ARG_WEIGHT   20
+#define CF_ARG_ORIENT   22
+#define CF_ARG_ESCAPE   24
+#define CF_ARG_WIDTH    26
+#define CF_ARG_HEIGHT   28
+
+/* ⚠ GetCharWidth writes ONE WORD PER CHARACTER into the guest's buffer. Win32's
+     writes an INT each; converting is not optional -- handing back 32-bit values
+     would overrun the guest's array by a factor of two, silently, into whatever
+     it declared next. */
+#define WOWGDI_GETCHARWIDTH      0x015e
+#define GCW_ARG_BUF      0
+#define GCW_ARG_LAST     4
+#define GCW_ARG_FIRST    6
+#define GCW_ARG_HDC      8
+
 #define WOWGDI_TEXTOUT          0x0021   /* ord 33,  12 args */
 /* ── ★★ ExtTextOut(hdc, x, y, opts, lprc, str, count, lpDx) -- ord 351, 22 args.
      CLOCK's only outstanding GDI service, and the one TextOut cannot stand in
@@ -2411,6 +2451,118 @@ static int wowgdi_call(wow32_frame_t *f, char *note, int notecap)
          a Win16 program is entitled to hand over a fragment of a larger buffer,
          so this must NOT stop at a NUL the way `wow32_argstr` does -- it copies
          exactly the count it was given, bounded by the scratch buffer. */
+    case WOWGDI_INTERSECTCLIPRECT: {
+        WORD tok = wow32_argw(f, ICR_ARG_HDC);
+        int  l = (int)(short)wow32_argw(f, ICR_ARG_LEFT);
+        int  t = (int)(short)wow32_argw(f, ICR_ARG_TOP);
+        int  r = (int)(short)wow32_argw(f, ICR_ARG_RIGHT);
+        int  b = (int)(short)wow32_argw(f, ICR_ARG_BOTTOM);
+        int  kind = -1, rc;
+        HGDIOBJ o = wowgdi_h32(tok, &kind);
+        int  k = 0;
+        wu_puts(note, notecap, &k, "IntersectClipRect(0x");
+        wu_puthex(note, notecap, &k, tok, 4);
+        if (!o || (kind != WOWGDI_KIND_DC && kind != WOWGDI_KIND_WINDC)) {
+            wu_puts(note, notecap, &k, ") -- ★ NOT ONE OF OUR DC TOKENS; 0");
+            wow32_setret(f, 0); return 1;
+        }
+        rc = IntersectClipRect((HDC)o, l, t, r, b);
+        wu_puts(note, notecap, &k, ") -> region kind ");
+        wu_puthex(note, notecap, &k, (DWORD)rc, 2);
+        wow32_setret(f, (DWORD)rc);
+        return 1;
+    }
+
+    case WOWGDI_RECTVISIBLE: {
+        WORD tok = wow32_argw(f, RV_ARG_HDC);
+        volatile BYTE *rp = wow32_argptr(f, RV_ARG_RECT);
+        int kind = -1, i, vis;
+        HGDIOBJ o = wowgdi_h32(tok, &kind);
+        unsigned char r8[8];
+        RECT r;
+        int k = 0;
+        wu_puts(note, notecap, &k, "RectVisible(0x");
+        wu_puthex(note, notecap, &k, tok, 4);
+        if (!o || (kind != WOWGDI_KIND_DC && kind != WOWGDI_KIND_WINDC) || !rp) {
+            wu_puts(note, notecap, &k, ") -- ★ NOT ONE OF OUR DC TOKENS, or no rect; 0");
+            wow32_setret(f, 0); return 1;
+        }
+        for (i = 0; i < 8; ++i) r8[i] = (unsigned char)rp[i];
+        r.left  = wowconv_rect16_get(r8, 0); r.top    = wowconv_rect16_get(r8, 1);
+        r.right = wowconv_rect16_get(r8, 2); r.bottom = wowconv_rect16_get(r8, 3);
+        vis = RectVisible((HDC)o, &r) ? 1 : 0;
+        wu_puts(note, notecap, &k, vis ? ") -> VISIBLE" : ") -> not visible");
+        wow32_setret(f, (DWORD)vis);
+        return 1;
+    }
+
+    case WOWGDI_CREATEFONT: {
+        char face[LF_FACESIZE];
+        HFONT hf;
+        WORD  tok;
+        int   k = 0;
+        int   h  = (int)(short)wow32_argw(f, CF_ARG_HEIGHT);
+        int   wd = (int)(short)wow32_argw(f, CF_ARG_WIDTH);
+        face[0] = 0;
+        wow32_argstr(f, CF_ARG_FACE, face, (int)sizeof face);
+        hf = CreateFontA(h, wd,
+                         (int)(short)wow32_argw(f, CF_ARG_ESCAPE),
+                         (int)(short)wow32_argw(f, CF_ARG_ORIENT),
+                         (int)(short)wow32_argw(f, CF_ARG_WEIGHT),
+                         (DWORD)(wow32_argw(f, CF_ARG_ITALIC) & 0xFF),
+                         (DWORD)(wow32_argw(f, CF_ARG_UNDER)  & 0xFF),
+                         (DWORD)(wow32_argw(f, CF_ARG_STRIKE) & 0xFF),
+                         (DWORD)(wow32_argw(f, CF_ARG_CHARSET) & 0xFF),
+                         (DWORD)(wow32_argw(f, CF_ARG_OUTPREC) & 0xFF),
+                         (DWORD)(wow32_argw(f, CF_ARG_CLIPPREC) & 0xFF),
+                         (DWORD)(wow32_argw(f, CF_ARG_QUALITY) & 0xFF),
+                         (DWORD)(wow32_argw(f, CF_ARG_PITCH) & 0xFF),
+                         face[0] ? face : NULL);
+        tok = hf ? wowgdi_h16((HGDIOBJ)hf, WOWGDI_KIND_OBJ) : 0;
+        wu_puts(note, notecap, &k, "CreateFont h=");
+        wu_puthex(note, notecap, &k, (DWORD)h, 4);
+        wu_puts(note, notecap, &k, " \"");
+        wu_puts(note, notecap, &k, face[0] ? face : "(any)");
+        wu_puts(note, notecap, &k, "\" -> token 0x");
+        wu_puthex(note, notecap, &k, tok, 4);
+        if (hf && !tok) { DeleteObject((HGDIOBJ)hf);
+                          wu_puts(note, notecap, &k, " -- ★ TOKEN MAP FULL; font deleted"); }
+        wow32_setret(f, (DWORD)tok);
+        return 1;
+    }
+
+    case WOWGDI_GETCHARWIDTH: {
+        WORD tok   = wow32_argw(f, GCW_ARG_HDC);
+        WORD first = wow32_argw(f, GCW_ARG_FIRST);
+        WORD last  = wow32_argw(f, GCW_ARG_LAST);
+        volatile BYTE *bp = wow32_argptr(f, GCW_ARG_BUF);
+        int kind = -1;
+        HGDIOBJ o = wowgdi_h32(tok, &kind);
+        INT w32[256];
+        int k = 0, n, i, ok;
+        wu_puts(note, notecap, &k, "GetCharWidth(0x");
+        wu_puthex(note, notecap, &k, tok, 4);
+        wu_puts(note, notecap, &k, ", "); wu_puthex(note, notecap, &k, first, 2);
+        wu_puts(note, notecap, &k, "..");  wu_puthex(note, notecap, &k, last, 2);
+        if (!o || (kind != WOWGDI_KIND_DC && kind != WOWGDI_KIND_WINDC) || !bp
+            || last < first || (int)(last - first) >= 256) {
+            wu_puts(note, notecap, &k, ") -- ★ NOT ONE OF OUR DC TOKENS, no buffer, "
+                                       "or a range past 256; 0");
+            wow32_setret(f, 0); return 1;
+        }
+        n  = (int)(last - first) + 1;
+        ok = GetCharWidth32A((HDC)o, first, last, w32) ? 1 : 0;
+        if (!ok) ok = GetCharWidthA((HDC)o, first, last, w32) ? 1 : 0;
+        if (!ok) { wu_puts(note, notecap, &k, ") -- GDI refused; nothing written");
+                   wow32_setret(f, 0); return 1; }
+        /* ⚠ ONE WORD PER CHARACTER. See the note by the ids. */
+        for (i = 0; i < n; ++i) wow32_pokew(bp + i * 2, (WORD)(short)w32[i]);
+        wu_puts(note, notecap, &k, ") -> "); wu_puthex(note, notecap, &k, (DWORD)n, 4);
+        wu_puts(note, notecap, &k, " widths, one WORD each");
+        wow32_setret(f, 1);
+        return 1;
+    }
+
     case WOWGDI_EXTTEXTOUT: {
         WORD hdc  = wow32_argw(f, ETO_ARG_HDC);
         int  x    = (int)(short)wow32_argw(f, ETO_ARG_X);

@@ -46,6 +46,18 @@
  *   CharToOemA/OemToCharA have exactly the same one.
  */
 
+/* ── ★★ CHARMAP's two, and they live HERE and not in wowuser.h. ──────────────
+     VkKeyScan and MapVirtualKey are KEYBOARD.DRV exports in Win16, not USER's,
+     and every thunk module has an id space ALL ITS OWN -- 0x81 is VkKeyScan here
+     and something else entirely in USER. Implementing them in the wrong file
+     compiles, dispatches from the wrong table, and answers a question nobody
+     asked. (docs/STATE.md: gate on the BOP's own CS.) */
+#define WOWKBD_VKKEYSCAN     0x0081
+#define WOWKBD_MAPVIRTUALKEY 0x0083
+#define WKB_ARG_CHAR   0
+#define WKB_ARG_MVTYPE 0
+#define WKB_ARG_MVCODE 2
+
 #define WOWKBD_ANSITOOEM   0x0005
 #define WOWKBD_OEMTOANSI   0x0006
 
@@ -70,6 +82,19 @@ static int wowkbd_call(wow32_frame_t *f, char *note, int notecap)
        ⚠ Win16 returns void. The thunk pops a return slot regardless, so this
          writes one; a caller reading it would be reading something Win16 never
          defined, and the log says which way the conversion went either way. */
+    case WOWKBD_VKKEYSCAN: {
+        WORD ch = wow32_argw(f, WKB_ARG_CHAR);
+        SHORT r = VkKeyScanA((CHAR)(ch & 0xFF));
+        wow32_setret(f, (DWORD)(WORD)r);
+        return 1;
+    }
+    case WOWKBD_MAPVIRTUALKEY: {
+        WORD code = wow32_argw(f, WKB_ARG_MVCODE);
+        WORD type = wow32_argw(f, WKB_ARG_MVTYPE);
+        wow32_setret(f, (DWORD)MapVirtualKeyA(code, type));
+        return 1;
+    }
+
     case WOWKBD_ANSITOOEM:
     case WOWKBD_OEMTOANSI: {
         int   toOem = (f->id == WOWKBD_ANSITOOEM);
