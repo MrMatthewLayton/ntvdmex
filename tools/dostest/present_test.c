@@ -135,6 +135,48 @@ int main(void)
         CHECK(ok, "Scale2x: a stride wider than the width is respected");
     }
 
+
+    printf("== Display: the aspect lock and the minimum window ==\n");
+
+    /* ── THE ASPECT LIST IS NOW A FOUR-WAY, AND 0/1 MUST STILL MEAN WHAT THEY DID.
+         It used to be a checkbox: 0 = fill, 1 = "correct aspect" = 4:3. Anything
+         already in a registry has to survive that becoming a combo, or every
+         existing install's window quietly changes shape on upgrade. */
+    CHECK(PRESENT_ASPECT_NONE == 0, "aspect 0 is still None, so an old unchecked box still fills");
+    CHECK(PRESENT_ASPECT_4_3 == 1,  "aspect 1 is still 4:3, so an old checked box still means 4:3");
+
+    {   int n = 0, d = 0;
+        present_aspect_ratio(PRESENT_ASPECT_16_9, &n, &d);
+        CHECK(n == 16 && d == 9, "16:9 is 16/9");
+        present_aspect_ratio(PRESENT_ASPECT_NONE, &n, &d);
+        CHECK(n == 0 && d == 0, "None has no ratio at all -- callers read that as 'fill'"); }
+
+    /* A wide window under 16:9 pillarboxes to 16:9, not to the old hard-coded 4:3. */
+    present_fit(1000, 400, PRESENT_ASPECT_16_9, &x, &y, &w, &h);
+    CHECK(w == 711 && h == 400, "16:9 in a 1000x400 client is 711x400, height-bound");
+
+    /* ── ★ THE MINIMUM WINDOW, WHERE THE ASPECT LOCK AND THE 640x480 FLOOR MEET.
+         On-aspect, at least 640 wide AND at least 480 tall -- so for a ratio WIDER
+         than 4:3 the height binds first and drags the width up past 640. Getting it
+         backwards gives a 16:9 minimum of 640x360, which is under the very floor
+         the rule exists to enforce. */
+    {   int mw = 0, mh = 0;
+        present_min_client(PRESENT_ASPECT_NONE, &mw, &mh);
+        CHECK(mw == 640 && mh == 480, "no lock: the minimum is just the 640x480 floor");
+        present_min_client(PRESENT_ASPECT_4_3, &mw, &mh);
+        CHECK(mw == 640 && mh == 480, "4:3: both constraints bind at once -- exactly 640x480");
+        present_min_client(PRESENT_ASPECT_16_10, &mw, &mh);
+        CHECK(mw == 768 && mh == 480, "16:10: the 480 height binds first, so 768x480");
+        present_min_client(PRESENT_ASPECT_16_9, &mw, &mh);
+        CHECK(mw == 853 && mh == 480, "16:9: wider still, so 853x480"); }
+
+    {   int i, mw = 0, mh = 0, ok2 = 1;
+        for (i = 0; i < PRESENT_ASPECT_COUNT; ++i) {
+            present_min_client(i, &mw, &mh);
+            if (mw < 640 || mh < 480) ok2 = 0;
+        }
+        CHECK(ok2, "no aspect can produce a minimum below 640x480 -- that is the floor"); }
+
     printf("-- %d checks, %d failures --\n", total, fails);
     return fails ? 1 : 0;
 }

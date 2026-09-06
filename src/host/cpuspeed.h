@@ -16,8 +16,8 @@
  *
  * ── WHAT "33 MHz" CAN HONESTLY MEAN HERE ────────────────────────────────────────
  * We execute 16-bit code on the real CPU. There are no cycles to count and nothing
- * to divide down, so a speed setting can only be a DUTY CYCLE: let the guest run for
- * a slice of each millisecond and hold it for the rest. The number on the menu is
+ * to divide down, so a speed setting can only be a DUTY CYCLE: let the guest run,
+ * then hold it for however much longer the ratio demands. The number on the menu is
  * therefore a CALIBRATED APPROXIMATION and this file says so out loud rather than
  * implying a precision it does not have.
  *
@@ -30,9 +30,10 @@
  * ── TWO EXECUTION PATHS, TWO MECHANISMS ─────────────────────────────────────────
  *   V86 on the real CPU  -- the exec thread is inside VdmStartExecution and we hold
  *                           no locks, so a second thread can SuspendThread it for a
- *                           slice of each millisecond. That machinery is proven:
+ *                           share of each period. That machinery is proven:
  *                           async_inject_irq() already suspends the same thread.
- *                           cpuspeed_step() is the Bresenham that decides per ms.
+ *                           The hold is priced by cpuspeed_hold_us() off a run
+ *                           phase that is MEASURED, not assumed -- see below.
  *   The interpreter      -- the easy half. It already counts instructions, so pace
  *                           slices against elapsed time directly: cpuspeed_charge().
  * The two never overlap. While the interpreter runs, the exec thread is executing
@@ -46,29 +47,57 @@
 #define CPUSPEED_H
 
 /* ── THE MENU, AND IT IS ALSO THE REGISTRY VALUE. ────────────────────────────────
-     Index 0 is UNLIMITED and must stay index 0: this list replaces the old dead
-     `SpeedMode` combo ("Auto|Maximum|Fixed cycles"), whose index 0 meant "do
-     nothing" too, so every value already in a registry somewhere keeps its
-     meaning. The list runs FASTEST FIRST so the migration of the other two old
-     indices is the least surprising one available -- "Maximum" (1) lands on the
-     fastest throttled setting rather than the slowest.
-   ⚠ The ordering is load-bearing for that reason. Add new speeds at the END. */
-#define CPUSPEED_COUNT   7
+     Index 0 is UNLIMITED and must stay index 0. This list replaced the old dead
+     `SpeedMode` combo ("Auto|Maximum|Fixed cycles"), whose index 0 also meant "do
+     nothing", so a machine that had never been touched is unaffected by any of it.
+     The list runs FASTEST FIRST, which is the order a person reads a speed list in
+     and the order the menu shows it.
+   ⚠ ORDERING IS PART OF THE CONTRACT: a new speed goes in its RIGHT PLACE, not at
+     the end -- and putting it there RENUMBERS every slower speed's registry value.
+   ⚠⚠ WHICH IT ALREADY DID ONCE, IN SESSION 54, AND OLD VALUES DID **NOT** SURVIVE. The list was Unlimited|200|100|66|33|16|8; every entry above 200 MHz is
+     new, so a stored index now names a different speed (an old 4 meant 33 MHz and
+     now means 500). That is a real break and it is taken deliberately rather than
+     hidden: the setting had been live for exactly one session, its default is 0,
+     and 0 still means Unlimited -- so the only machines affected are ones where
+     somebody had already chosen a speed by hand.
+   ► THE PERMANENT FIX IS TO STORE MHz RATHER THAN AN INDEX, so the list can be
+     reordered or extended forever without touching anybody's registry. That needs
+     a new SK_ kind in settings.h (the combo machinery is index-based end to end)
+     and is the right thing to do the next time this list is touched. */
+#define CPUSPEED_COUNT   18
 static const unsigned CPUSPEED_MHZ[CPUSPEED_COUNT] = {
-    0,      /* 0: Unlimited -- the shipped behaviour, and the default            */
-    200,    /* 1: Pentium MMX era                                                */
-    100,    /* 2: Pentium / 486DX4                                               */
-    66,     /* 3: 486DX2-66                                                      */
-    33,     /* 4: 486DX-33 / 386DX-33                                            */
-    16,     /* 5: 386SX-16  -- Skyroads' stated target hardware                  */
-    8       /* 6: 8086/286 era                                                   */
+    0,      /*  0: Unlimited -- the host's own speed, and the default            */
+    3300,   /*  1: the bare-metal rig (a 3.33 GHz box)                           */
+    2000,   /*  2                                                                */
+    1000,   /*  3: the GHz barrier                                               */
+    500,    /*  4: Pentium III                                                   */
+    333,    /*  5: Pentium II                                                    */
+    233,    /*  6: Pentium MMX                                                   */
+    166,    /*  7                                                                */
+    133,    /*  8                                                                */
+    100,    /*  9: Pentium / 486DX4                                              */
+    75,     /* 10                                                                */
+    66,     /* 11: 486DX2-66                                                     */
+    50,     /* 12                                                                */
+    33,     /* 13: 486DX-33 / 386DX-33                                           */
+    25,     /* 14                                                                */
+    16,     /* 15: 386SX-16 -- Skyroads' stated target hardware                  */
+    12,     /* 16: 286                                                           */
+    8       /* 17: 8086/8088 era                                                 */
 };
 static const char *const CPUSPEED_NAMES[CPUSPEED_COUNT] = {
-    "Unlimited", "200 MHz", "100 MHz", "66 MHz", "33 MHz", "16 MHz", "8 MHz"
+    "Unlimited", "3300 MHz", "2000 MHz", "1000 MHz", "500 MHz", "333 MHz",
+    "233 MHz", "166 MHz", "133 MHz", "100 MHz", "75 MHz", "66 MHz",
+    "50 MHz", "33 MHz", "25 MHz", "16 MHz", "12 MHz", "8 MHz"
 };
 /* The '|'-separated form SET_DEFS wants. Kept adjacent to the table above so the
-   two cannot drift; cpuspeed_test.c checks that they still agree. */
-#define CPUSPEED_ITEMS "Unlimited|200 MHz|100 MHz|66 MHz|33 MHz|16 MHz|8 MHz"
+   two cannot drift; cpuspeed_test.c checks that they still agree.
+ ⚠ A speed AT OR ABOVE the host's own is not a throttle and cannot be: it clamps to
+   flat out (see cpuspeed_duty_bp). So on a 1 GHz box the top three entries all
+   behave as Unlimited, which is honest -- they are ceilings, never boosts. */
+#define CPUSPEED_ITEMS \
+    "Unlimited|3300 MHz|2000 MHz|1000 MHz|500 MHz|333 MHz|233 MHz|166 MHz|" \
+    "133 MHz|100 MHz|75 MHz|66 MHz|50 MHz|33 MHz|25 MHz|16 MHz|12 MHz|8 MHz"
 
 /* ── THE ONE CALIBRATION CONSTANT. ───────────────────────────────────────────────
      "How fast does an unthrottled NTVDMEX look to a DOS program, in MHz?"

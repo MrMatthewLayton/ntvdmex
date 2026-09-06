@@ -3865,16 +3865,66 @@ enum {                                       /* wired command IDs               
     IDM_CAP_SHOT,
     IDM_HELP_ABOUT,
     IDM_TRAY_SHOW,                           /* bring the hidden host window back  */
-    /* ── GH #56: one id per approximate CPU speed, contiguous, so the handler is a
-         subtraction rather than a switch. Must stay LAST in this enum: the range
-         check below is `id - IDM_SPEED_0 < CPUSPEED_COUNT`. */
-    IDM_SPEED_0
+    /* The View menu's three CHECKBOX settings (the combos are ranges, below). */
+    IDM_VIEW_VSYNC, IDM_VIEW_BLINK,
+
+    /* ── ★ ONE CONTIGUOUS RANGE PER DROPDOWN SETTING. ────────────────────────────
+         Every combo on the Display page, plus the CPU speed, appears in a menu as a
+         run of ids `base + index`, so one handler serves all of them: find which
+         range the id fell in, and the offset IS the setting's value. No per-item
+         cases, and nothing to keep in step when a list gains an entry.
+       ⚠ THE ITEM TEXT IS NOT DUPLICATED HERE. menu_combo() below builds each
+         submenu by walking SET_DEFS' own `items` string -- the same string the
+         dialog fills its combo from -- so the menu and the dialog cannot disagree
+         about what the options are or which index each one means. Duplicating the
+         list is how a menu ends up setting Scale2x when it says Scanlines.
+       ⚠ SPAN IS THE MOST ITEMS ANY ONE LIST MAY HAVE. menu_combo() stops at it, so
+         overflowing collides with nothing -- the extra items simply do not appear,
+         which is visible, rather than silently invoking the next setting along. */
+#define IDM_COMBO_SPAN 32
+    IDM_COMBO_BASE  = 200,
+    IDM_SPEED_0     = IDM_COMBO_BASE + 0 * IDM_COMBO_SPAN,   /* CPU speed (#56)   */
+    IDM_WINSIZE_0   = IDM_COMBO_BASE + 1 * IDM_COMBO_SPAN,
+    IDM_RENDER_0    = IDM_COMBO_BASE + 2 * IDM_COMBO_SPAN,
+    IDM_SCALER_0    = IDM_COMBO_BASE + 3 * IDM_COMBO_SPAN,
+    IDM_FILTER_0    = IDM_COMBO_BASE + 4 * IDM_COMBO_SPAN,
+    IDM_FSKIP_0     = IDM_COMBO_BASE + 5 * IDM_COMBO_SPAN,
+    IDM_ASPECT_0    = IDM_COMBO_BASE + 6 * IDM_COMBO_SPAN
 };
+
+/* Which setting each range drives. The ONLY place the two are tied together. */
+static const struct { UINT base; int set; } MENU_COMBOS[] = {
+    { IDM_SPEED_0,   SET_SPEEDMODE }, { IDM_WINSIZE_0, SET_WINSIZE   },
+    { IDM_RENDER_0,  SET_RENDERER  }, { IDM_SCALER_0,  SET_SCALER    },
+    { IDM_FILTER_0,  SET_FILTER    }, { IDM_FSKIP_0,   SET_FRAMESKIP },
+    { IDM_ASPECT_0,  SET_ASPECT    },
+};
+#define MENU_COMBO_N ((int)(sizeof MENU_COMBOS / sizeof MENU_COMBOS[0]))
+
+/* ...and the checkbox ones, same idea. */
+static const struct { UINT id; int set; } MENU_CHECKS[] = {
+    { IDM_VIEW_VSYNC, SET_VSYNC }, { IDM_VIEW_BLINK, SET_BLINKCURSOR },
+};
+#define MENU_CHECK_N ((int)(sizeof MENU_CHECKS / sizeof MENU_CHECKS[0]))
 
 static void mi (HMENU m, const char *s, UINT id) { AppendMenuA(m, MF_STRING, id, s); }
 static void msep(HMENU m) { AppendMenuA(m, MF_SEPARATOR, 0, NULL); }
 static void msub(HMENU p, const char *s, HMENU c) { AppendMenuA(p, MF_POPUP, (UINT_PTR)c, s); }
 static HMENU mpop(void) { return CreatePopupMenu(); }
+
+/* A submenu built FROM THE SETTING ITSELF: one item per entry of SET_DEFS[set]'s
+   own '|'-separated list, at ids base+0, base+1, ... See the note by IDM_COMBO_BASE
+   for why the text is taken from there rather than written out again here. */
+static void menu_combo(HMENU parent, const char *label, int set, UINT base)
+{
+    HMENU s = mpop();
+    char it[64];
+    int n;
+    for (n = 0; n < IDM_COMBO_SPAN
+                && settings_item(SET_DEFS[set].items, n, it, (int)sizeof it); ++n)
+        mi(s, it, base + (UINT)n);
+    msub(parent, label, s);
+}
 
 /* ── WIN16 / WOW PASSTHROUGH (GH #129). ─────────────────────────────────────────
      See the call site at the top of WinMain for the measured launch shapes. Two
@@ -4470,8 +4520,37 @@ static HMENU build_menu(void)
     mi(m,"Copy Whole Screen",IDM_STUB); mi(m,"Paste\tCtrl+V",IDM_STUB); mi(m,"Select All",IDM_STUB);
     msub(bar, "Edit", m);
 
+    /* ── ★ VIEW IS THE DISPLAY PAGE, AND IT IS SESSION-ONLY. ─────────────────────
+         Every knob on the Settings dialog's Display tab is here too, because these
+         are the ones you reach for WHILE something is running -- a scaler you want
+         to compare, a window you want bigger -- and going through a modal dialog to
+         try one is the wrong shape for that.
+       ⚠ THE TWO ROUTES MEAN DIFFERENT THINGS, DELIBERATELY. The dialog edits the
+         SAVED configuration (g_set_disk) and writing it is what OK does. The menu
+         changes only what is in force right now (g_set) and never touches the
+         registry, so anything tried here is gone at the next launch. That is the
+         whole point: experimenting must not silently reconfigure the machine.
+       ⚠ Renderer's four entries are NOT all implemented -- the windowed path is
+         GDI and the fullscreen one is DirectDraw, and there is no Direct3D or
+         OpenGL code at all. They are listed anyway, enabled, which is this
+         project's standing decision about scaffold items (do not re-litigate); the
+         list itself comes from SET_DEFS so it says exactly what the dialog says. */
     m = mpop();                                                   /* View         */
     mi(m,"Fullscreen\tAlt+Enter",IDM_DISP_FULLSCREEN);
+    msep(m);
+    menu_combo(m, "Window Size", SET_WINSIZE,   IDM_WINSIZE_0);
+    menu_combo(m, "Renderer",    SET_RENDERER,  IDM_RENDER_0);
+    menu_combo(m, "Scaler",      SET_SCALER,    IDM_SCALER_0);
+    menu_combo(m, "Filtering",   SET_FILTER,    IDM_FILTER_0);
+    menu_combo(m, "Frame Skip",  SET_FRAMESKIP, IDM_FSKIP_0);
+    /* ── ★ ASPECT RATIO IS A LOCK ON THE WINDOW, not just a letterbox. Picking a
+         ratio constrains the window's shape as you drag it, so the picture fills the
+         client and there are no bars at all -- letterboxing only reappears if the
+         window ends up off-aspect anyway (maximised). "None" is a free resize. */
+    menu_combo(m, "Aspect Ratio", SET_ASPECT,    IDM_ASPECT_0);
+    msep(m);
+    mi(m,"Wait for VSync",IDM_VIEW_VSYNC);
+    mi(m,"Blink Text Cursor",IDM_VIEW_BLINK);
     msep(m);
     mi(m,"Show Menu Bar",IDM_DISP_SHOWMENU);
     mi(m,"Show Host Cursor\tCtrl+F8",IDM_INPUT_CURSOR);
@@ -4484,11 +4563,13 @@ static HMENU build_menu(void)
     /* ── ★ THE APPROXIMATE-SPEED DROPDOWN. (GH #56) ──────────────────────────────
          The user asked for this in the MENU, and the menu is where it belongs: it
          is a knob you reach for while watching something run too fast, not one you
-         set up before launching. The Settings CPU page carries the same value --
-         they are one registry key and one live variable, so neither can be stale. */
-    { HMENU sp = mpop(); int k;
-      for (k = 0; k < CPUSPEED_COUNT; ++k) mi(sp, CPUSPEED_NAMES[k], IDM_SPEED_0 + k);
-      msub(m, "CPU Speed", sp); }
+         set up before launching.
+       ⚠ AND IT IS SESSION-ONLY, like View. It used to write straight to the
+         registry, which made it the odd one out the moment the display knobs
+         arrived: a speed tried from the menu became the machine's permanent speed,
+         while a scaler tried from the menu did not. One rule -- the menu is for
+         trying things, the dialog is for keeping them. */
+    menu_combo(m, "CPU Speed", SET_SPEEDMODE, IDM_SPEED_0);
     msep(m);
     mi(m,"Capture Input\tWin+F10",IDM_INPUT_CAPTURE);
     mi(m,"Send Ctrl+Alt+Del",IDM_STUB);
@@ -4618,8 +4699,20 @@ static HWND g_status;                        /* the native comctl32 status bar  
 #define VDM_WIN_TITLE "Microsoft Windows XP Virtual DOS Machine"
 
 /* ── THE STATUS STRIP. ───────────────────────────────────────────────────────────
-     Left  : PROG.EXE   |   16-bit / 32-bit   |   Real mode / Protected mode
-     Right : the input-capture state, and the chord that changes it.
+     PROG.EXE ┃ 16-bit Real mode ┃ the input-capture state and the chord for it.
+   ⚠ THREE REAL PARTS, NOT ONE STRING WITH BARS IN IT. This used to pack the program
+     name, the bitness and the CPU mode into the left part separated by a literal
+     "   |   ", which is a drawn-by-hand imitation of the sunken divider comctl32
+     already puts between parts -- and it did not line up with the genuine divider
+     before the right-hand part, so the strip had two kinds of separator on it.
+   ★ AND THE BITNESS AND THE MODE ARE ONE FACT, so they are one field: "16-bit Real
+     mode", "32-bit Protected mode". They were never independent -- 32-bit only ever
+     means a DPMI client in protected mode -- so splitting them invited the reader to
+     look for a combination that cannot occur.
+   The mode is not decoration. A DPMI guest crossing into 32-bit protected mode is
+   the largest single change of behaviour this host has -- different interrupt
+   delivery, different pointer widths, a different service path for every INT -- and
+   before it was on the strip the only way to know it had happened was the log.
    The mode pair is not decoration. A DPMI guest crossing into 32-bit protected mode
    is the largest single change of behaviour this host has -- different interrupt
    delivery, different pointer widths, a different service path for every INT -- and
@@ -4627,7 +4720,7 @@ static HWND g_status;                        /* the native comctl32 status bar  
    ⚠ IN EXCLUSIVE FULLSCREEN NEITHER PART IS VISIBLE: the DirectDraw primary covers
      the strip exactly as it covers the menu bar. Win+F10 still releases. */
 static int  g_status_right_w = 190;          /* pixels reserved for the right part  */
-static char g_status_l[128], g_status_r[64]; /* what is currently ON the strip      */
+static char g_status_l[128], g_status_m[64], g_status_r[64];  /* what is ON it now  */
 
 static int zsame(const char *a, const char *b)
 {
@@ -4635,16 +4728,50 @@ static int zsame(const char *a, const char *b)
     return *a == *b;
 }
 
+/* How wide a string renders IN THE STATUS BAR'S OWN FONT. Asking the control for
+   its font matters: the strip is themed, so measuring with the stock system font
+   would size the part for text of a different width than the one drawn in it. */
+static int status_text_w(const char *s)
+{
+    HDC dc;
+    HFONT f, old = NULL;
+    SIZE sz;
+    int n = 0, w = 0;
+    if (!g_status || !s) return 0;
+    while (s[n]) ++n;
+    dc = GetDC(g_status);
+    if (!dc) return 0;
+    f = (HFONT)SendMessageA(g_status, WM_GETFONT, 0, 0);
+    if (f) old = (HFONT)SelectObject(dc, f);
+    if (GetTextExtentPoint32A(dc, s, n, &sz)) w = sz.cx;
+    if (old) SelectObject(dc, old);
+    ReleaseDC(g_status, dc);
+    return w;
+}
+
+/* ── ★ THE NAME PART HUGS THE NAME. ─────────────────────────────────────────────
+     The first cut reserved fixed widths from the RIGHT edge and gave the program
+     name everything left over, which put the divider two thirds of the way across
+     an empty field and left the machine state sitting out in the middle of the
+     strip, nowhere near the program it describes. Measure the name instead, so the
+     divider lands just after it and the mode reads as the next word along:
+         CAVE.EXE │ 16-bit Real mode                    Win+F10 captures input
+   ⚠ CLAMPED AT BOTH ENDS. A 63-character program name must not push the mode field
+     off the strip, and a one-character name must not produce a sliver. */
 static void status_set_parts(void)
 {
-    RECT rc; int parts[2];
+    RECT rc; int parts[3], name_w;
     if (!g_status) return;
     GetClientRect(g_status, &rc);
-    parts[0] = rc.right - g_status_right_w;
-    if (parts[0] < 60) parts[0] = 60;        /* a narrow window still shows the name */
-    parts[1] = -1;                           /* ...and the right part runs to the edge */
-    SendMessageA(g_status, SB_SETPARTS, 2, (LPARAM)parts);
-    g_status_l[0] = g_status_r[0] = 0;       /* re-partitioning blanks it: re-push    */
+    name_w = status_text_w(g_progname) + 18;      /* the control's own left inset */
+    if (name_w < 70)  name_w = 70;
+    if (name_w > 260) name_w = 260;
+    parts[0] = name_w;
+    parts[1] = rc.right - g_status_right_w;
+    if (parts[1] < parts[0] + 40) parts[1] = parts[0] + 40;
+    parts[2] = -1;                           /* the right part runs to the edge     */
+    SendMessageA(g_status, SB_SETPARTS, 3, (LPARAM)parts);
+    g_status_l[0] = g_status_m[0] = g_status_r[0] = 0;  /* re-partitioning blanks it */
 }
 
 /* Compose both parts, and push each only when it CHANGES.
@@ -4655,22 +4782,32 @@ static void status_set_parts(void)
      short strings once per frame costs nothing and cannot be forgotten. */
 static void status_update(void)
 {
-    char l[128], *p = l;
-    const char *r;
+    const char *l, *m, *r;
     if (!g_status) return;
-    p = zput(p, g_progname);
-    p = zput(p, "   |   ");
-    p = zput(p, (g_dpmi_pm && g_dpmi_client32) ? "32-bit" : "16-bit");
-    p = zput(p, "   |   ");
-    p = zput(p, g_dpmi_pm ? "Protected mode" : "Real mode");
+    l = g_progname;
+    /* One field, because they are one fact: 32-bit only ever means a DPMI client in
+       protected mode, so the four-way grid the old two fields implied never existed. */
+    m = (g_dpmi_pm && g_dpmi_client32) ? "32-bit Protected mode"
+      : g_dpmi_pm                      ? "16-bit Protected mode"
+                                       : "16-bit Real mode";
     r = g_captured ? "Captured -- Win+F10 releases" : "Win+F10 captures input";
+    /* ⚠ THE NAME DECIDES THE FIRST PART'S WIDTH, so a new program has to
+         re-partition BEFORE anything is pushed -- otherwise the divider stays where
+         the previous program left it and a long name is truncated against a boundary
+         measured for a short one. Re-partitioning blanks every part, which is why
+         all three are re-pushed below rather than only the one that changed. */
+    if (!zsame(l, g_status_l)) status_set_parts();
     if (!zsame(l, g_status_l)) {
         zput(g_status_l, l);
         SendMessageA(g_status, SB_SETTEXTA, 0, (LPARAM)l);
     }
+    if (!zsame(m, g_status_m)) {
+        zput(g_status_m, m);
+        SendMessageA(g_status, SB_SETTEXTA, 1, (LPARAM)m);
+    }
     if (!zsame(r, g_status_r)) {
         zput(g_status_r, r);
-        SendMessageA(g_status, SB_SETTEXTA, 1, (LPARAM)r);
+        SendMessageA(g_status, SB_SETTEXTA, 2, (LPARAM)r);
     }
 }
 
@@ -4703,19 +4840,6 @@ static void menu_check(HWND h, UINT id, int on)
     if (m) CheckMenuItem(m, id, MF_BYCOMMAND | (UINT)(on ? MF_CHECKED : MF_UNCHECKED));
 }
 
-/* ── GH #56: the CPU Speed submenu shows WHICH speed is set. ─────────────────────
-     CheckMenuRadioItem rather than a tick, because these are exclusive and a bullet
-     is what Windows uses to say so. It also unchecks the others in one call, which
-     is the difference between a menu that reports the setting and one that
-     accumulates ticks -- and a menu that shows two speeds at once is worse than one
-     that shows none, because it looks authoritative. */
-static void menu_speed_check(HWND h)
-{
-    HMENU m = GetMenu(h);
-    if (!m) m = g_savedmenu;
-    if (m) CheckMenuRadioItem(m, IDM_SPEED_0, IDM_SPEED_0 + CPUSPEED_COUNT - 1,
-                              IDM_SPEED_0 + (UINT)g_cpuspd_idx, MF_BYCOMMAND);
-}
 
 /* ── INPUT CAPTURE ("exclusivity"). ─────────────────────────────────────────────────
      Two different things are stealing the guest's keys, and they need different fixes.
@@ -4863,7 +4987,20 @@ static void host_cursor_set(HWND h, int on)
        SbModel, Midi, Gus, Tandy, joystick, KeyboardLayout, Typematic, SeamlessMouse,
        A20, BootFrom, DriveCPath, CdRomImage, SoundFontPath -- no consumer yet.
        (FloppyAImage IS live: it is what INT 13h opens.) */
+/* ── ★ TWO COPIES, BECAUSE THE MENU AND THE DIALOG MEAN DIFFERENT THINGS. ────────
+     g_set is WHAT IS IN FORCE. g_set_disk is WHAT THE REGISTRY HOLDS. They start
+     identical and diverge only when something is tried from a menu.
+   ► The View menu (and Machine > CPU Speed) write g_set and never save, so a scaler
+     or a speed tried while watching something run is gone at the next launch.
+   ► The Settings dialog is populated from g_set_disk and OK writes BOTH -- it is
+     the editor for the saved configuration, and pressing OK is what keeping
+     something means.
+   ⚠ SO OK ALSO DISCARDS ANY SESSION OVERRIDE, and that is the point rather than an
+     oversight: if the dialog showed the live values instead, then changing an audio
+     setting and pressing OK would silently make every display experiment permanent.
+     Two meanings, two copies, and the one you edit is the one you save. */
 static ntvdmex_settings g_set;
+static ntvdmex_settings g_set_disk;
 static dos_machine_t   *g_dosm;          /* so the DOS version can be changed live */
 
 /* Frames the presenter drops between the ones it shows. 0 = every frame, which is
@@ -4926,7 +5063,7 @@ static void settings_apply_present(present_ddraw *pd, const ntvdmex_settings *s)
 {
     pd->vsync  = (int)(s->v[SET_VSYNC]  ? 1 : 0);
     pd->filter = (int)(s->v[SET_FILTER] ? 1 : 0);
-    pd->aspect = (int)(s->v[SET_ASPECT] ? 1 : 0);
+    pd->aspect = (int)s->v[SET_ASPECT];   /* PRESENT_ASPECT_*, not a flag */
     pd->scaler = (int)s->v[SET_SCALER];
 }
 
@@ -4956,6 +5093,156 @@ static uint32_t settings_out_hz(const ntvdmex_settings *s)
 {
     static const uint32_t RATES[3] = { 22050u, 44100u, 48000u };
     return RATES[s->v[SET_RATE] < 3 ? s->v[SET_RATE] : 1];
+}
+
+/* ── ★ ONE BASE SIZE, AND EVERYTHING ELSE IS DERIVED FROM IT. ────────────────────
+     The window used to be sized from VID_FB_W/VID_FB_H -- the TEXT framebuffer,
+     640x400 -- which is only one of the shapes a guest runs in and is not even 4:3.
+     Now the base is `the smallest client this aspect allows` (present_min_client),
+     so 1x IS the minimum size, 2x is twice it, and the shape follows the setting:
+         None  / 4:3  -> 640x480      16:10 -> 768x480      16:9 -> 853x480
+     ⚠ VIDEO area, not client area: the status bar lives inside the client and must
+       not be counted into the picture's aspect, or the lock is wrong by 23 pixels
+       and gets wronger the smaller the window is. */
+static void host_video_base(int *w, int *h)
+{
+    present_min_client((int)g_set.v[SET_ASPECT], w, h);
+}
+
+/* What the frame adds around the video: borders, caption, menu bar, status strip.
+ ⚠ Asked of the window rather than assumed, because "Show Menu Bar" detaches the
+   menu and AdjustWindowRect's answer changes when it does. */
+static void host_frame_extra(HWND h, int *ex, int *ey)
+{
+    RECT z; z.left = 0; z.top = 0; z.right = 0; z.bottom = 0;
+    AdjustWindowRect(&z, (DWORD)GetWindowLongA(h, GWL_STYLE), GetMenu(h) != NULL);
+    *ex = z.right - z.left;
+    *ey = (z.bottom - z.top) + (g_pd.status_h ? g_pd.status_h : PRESENT_STATUS_H);
+}
+
+/* Would a client area at this scale fit inside the desktop's WORK AREA -- i.e. the
+   screen minus the taskbar? 1x is treated as always fitting: there is nothing
+   smaller to fall back to, and refusing to open at all is worse than overflowing. */
+static int win_scale_fits(int scale)
+{
+    RECT wa;
+    int bw, bh;
+    if (scale <= 1) return 1;
+    if (!SystemParametersInfoA(SPI_GETWORKAREA, 0, &wa, 0)) return 1;
+    host_video_base(&bw, &bh);
+    return bw * scale <= wa.right - wa.left
+        && bh * scale + PRESENT_STATUS_H <= wa.bottom - wa.top;
+}
+
+/* ── EVERY MENU-BACKED SETTING'S TICK, FROM THE ONE PLACE THAT KNOWS THE VALUES. ─
+     CheckMenuRadioItem for the dropdowns rather than a tick, because they are
+     exclusive and a bullet is what Windows uses to say so -- and because it clears
+     the siblings in one call. A menu showing two scalers at once is worse than one
+     showing none: it looks authoritative.
+   ⚠ DRIVEN FROM g_set, NOT FROM WHATEVER THE HANDLER JUST DID. The dialog can
+     change these too, and so can the startup load; re-reading the live settings is
+     the only version that is right for all three callers. */
+static void menu_view_sync(HWND h)
+{
+    HMENU m = GetMenu(h);
+    int i;
+    if (!m) m = g_savedmenu;
+    if (!m) return;
+    for (i = 0; i < MENU_COMBO_N; ++i) {
+        UINT base = MENU_COMBOS[i].base;
+        const set_def *d = &SET_DEFS[MENU_COMBOS[i].set];
+        DWORD v = g_set.v[MENU_COMBOS[i].set];
+        if (v > d->hi) v = d->lo;
+        CheckMenuRadioItem(m, base, base + (UINT)d->hi, base + (UINT)v, MF_BYCOMMAND);
+    }
+    for (i = 0; i < MENU_CHECK_N; ++i)
+        CheckMenuItem(m, MENU_CHECKS[i].id, MF_BYCOMMAND
+                      | (g_set.v[MENU_CHECKS[i].set] ? MF_CHECKED : MF_UNCHECKED));
+    /* ── ★ A SCALE THAT CANNOT FIT THE DISPLAY IS GREYED, NOT SILENTLY SUBSTITUTED.
+         win_scale_clamped() steps down until the window fits, which is the right
+         thing to DO and the wrong thing to say nothing about: picking 3x on a
+         1680x1050 desktop quietly gave 2x, so the menu reported a size the window
+         did not have and the setting looked broken rather than impossible.
+       ⚠ This is NOT the scaffold-stub case, so the standing "enabled, not greyed"
+         decision does not apply: those items are unimplemented, and this one is
+         implemented and physically impossible on THIS display. Greying says which.
+       ⚠ Re-evaluated on every sync rather than once, because the work area moves --
+         a taskbar that auto-hides, a second monitor, a resolution change. */
+    {   int sc;
+        for (sc = 1; sc <= 3; ++sc)
+            EnableMenuItem(m, IDM_WINSIZE_0 + (UINT)(sc - 1), MF_BYCOMMAND
+                           | (win_scale_fits(sc) ? MF_ENABLED : MF_GRAYED)); }
+}
+
+/* ── ★ WINDOW SIZE, AS A NUMBER THAT FITS ON THE SCREEN. ─────────────────────────
+     1x/2x/3x scale the CLIENT AREA -- the framebuffer -- not the whole window, so
+     the chrome, the menu and the status bar keep their real sizes at every scale
+     and "2x" means the picture is twice as big, not the window. "Custom" (index 3)
+     means whatever the user last dragged it to, and until there is somewhere to
+     remember that it is the same as 1x.
+   ⚠ AND IT MUST FIT. 3x is 1920x1200 of client area and the rig's desktop is
+     1024x768: a window larger than the desktop opens with its status bar and half
+     its picture off the bottom edge, which reads as "the scaler broke the display"
+     rather than as a setting. Step down until it fits; 1x always does. */
+static int win_scale_clamped(DWORD idx)
+{
+    int scale = (int)idx + 1;
+    if (scale < 1 || scale > 3) scale = 1;              /* Custom -> the default */
+    while (scale > 1 && !win_scale_fits(scale)) --scale;
+    return scale;
+}
+
+/* Resize the live window to a scale. Until now the scale was read ONCE, just before
+   CreateWindow, so changing it in the dialog stored a number and did nothing you
+   could see until the next launch -- reported as "I tried display size and it
+   didn't resize", which is exactly what it did.
+ ⚠ THE MENU MAY BE DETACHED. "Show Menu Bar" moves it into g_savedmenu, and
+   AdjustWindowRect's last argument decides whether a menu bar's height is added --
+   so it has to ask the window what it has RIGHT NOW, not assume.
+ ⚠ AND A MAXIMIZED WINDOW MUST BE RESTORED FIRST, or SetWindowPos resizes it while
+   Windows still believes it is maximized: the next restore snaps it back and the
+   setting looks like it was ignored. */
+static void host_apply_winsize(HWND h, DWORD idx)
+{
+    int scale, bw, bh, ex, ey;
+    if (!h || g_pd.fullscreen) return;   /* exclusive fullscreen owns the size */
+    if (IsZoomed(h)) ShowWindow(h, SW_RESTORE);
+    scale = win_scale_clamped(idx);
+    host_video_base(&bw, &bh);
+    host_frame_extra(h, &ex, &ey);
+    SetWindowPos(h, NULL, 0, 0, bw * scale + ex, bh * scale + ey,
+                 SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+}
+
+/* ── PUT g_set INTO EFFECT, WITHOUT TOUCHING THE REGISTRY. ───────────────────────
+     One function so the View menu, the CPU Speed submenu and the dialog's OK all
+     reach the machine by the same path -- three call sites that each remembered a
+     different subset is how a knob ends up working from one route and not another.
+   ⚠ settings_apply_devices is NOT called here. Nothing on the View menu is an audio
+     setting, and re-pushing the mixer on every scaler change is reach this has no
+     business having. The dialog calls it separately, where it belongs. */
+/* ⚠ THE RESIZE FIRES ONLY WHEN THE SIZE SETTING ACTUALLY CHANGED, and that is not
+     an optimisation. Every live apply passes through here, so resizing
+     unconditionally would mean picking a different SCALER snapped a window the user
+     had dragged to their own size back to 1x -- the setting reaching past its own
+     business, which is the thing that makes people stop touching the menu. */
+static DWORD g_winsize_live = 0xFFFFFFFFu;   /* what the window is currently AT */
+static DWORD g_aspect_live  = 0xFFFFFFFFu;   /* ...and the shape it is that size IN */
+
+static void settings_apply_live(HWND h)
+{
+    settings_apply(h, &g_set, 1);
+    settings_apply_present(&g_pd, &g_set);
+    /* ⚠ THE ASPECT CHANGES THE BASE SIZE, so it has to re-size too -- picking 16:9
+         while the window is 4:3-shaped and leaving it alone would show the lock as
+         doing nothing until the next drag. Tracked separately from the scale so
+         neither one triggers on the other's account. */
+    if (g_set.v[SET_WINSIZE] != g_winsize_live || g_set.v[SET_ASPECT] != g_aspect_live) {
+        g_winsize_live = g_set.v[SET_WINSIZE];
+        g_aspect_live  = g_set.v[SET_ASPECT];
+        host_apply_winsize(h, g_winsize_live);
+    }
+    menu_view_sync(h);
 }
 
 /* ── THE TABBED SETTINGS DIALOG. ─────────────────────────────────────────────────
@@ -5139,7 +5426,11 @@ static INT_PTR CALLBACK settings_dlgproc(HWND dlg, UINT msg, WPARAM wp, LPARAM l
                          rc.right - rc.left, rc.bottom - rc.top, SWP_HIDEWINDOW);
         }
         settings_fill_combos();
-        settings_to_dialog(&g_set);
+        /* ⚠ THE SAVED COPY, NOT THE LIVE ONE. This dialog edits the configuration
+             that persists; showing session overrides here would mean pressing OK
+             after changing an unrelated setting silently made every display
+             experiment permanent. See the note by g_set_disk. */
+        settings_to_dialog(&g_set_disk);
         settings_show_page(0);
         return TRUE; }
     case WM_NOTIFY:
@@ -5159,17 +5450,18 @@ static INT_PTR CALLBACK settings_dlgproc(HWND dlg, UINT msg, WPARAM wp, LPARAM l
             settings_to_dialog(&d);           /* shown, not applied -- OK commits */
             return TRUE; }
         case IDOK: {
-            ntvdmex_settings n = g_set;
+            ntvdmex_settings n = g_set_disk;
             settings_from_dialog(&n);
             settings_clamp(&n);
-            g_set = n;
-            settings_save(&g_set);            /* the registry IS the store        */
-            settings_apply(GetParent(dlg), &g_set, 1);
+            /* Both copies: this IS the saved configuration, and it also becomes what
+               is in force -- so OK deliberately drops any session-only override the
+               View menu had applied. Keeping them would mean the machine no longer
+               matched the dialog the user had just pressed OK on. */
+            g_set_disk = n;
+            g_set      = n;
+            settings_save(&g_set_disk);       /* the registry IS the store        */
+            settings_apply_live(GetParent(dlg));
             settings_apply_devices(&g_set);   /* the mixer + the presenter exist by now */
-            /* The CPU Speed submenu shows the same value this page just set, so it
-               has to move with it -- two places to read one setting is only an
-               improvement while they agree (GH #56). */
-            menu_speed_check(GetParent(dlg));
             /* ⚠ The construction-time ones (the card's port/IRQ/DMA, the output
                  rate, the window scale, the memory managers) are stored and take
                  effect at the NEXT launch. That is not a gap to hide: a Sound
@@ -5475,6 +5767,61 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
         present_ddraw_present(&g_pd);
         EndPaint(h, &ps);
         return 0; }
+    /* ── ★ THE ASPECT LOCK, WHILE THE MOUSE IS STILL DOWN. ──────────────────────
+         WM_SIZING hands us the rectangle Windows is ABOUT to use, so correcting it
+         here makes the window snap to the ratio as it is dragged rather than jumping
+         to it on release. Which side to correct depends on which handle is held: a
+         side handle drives the other dimension, a corner drives height from width.
+       ⚠ MOVE THE EDGE THE USER IS NOT HOLDING. Adjusting `right` while they drag the
+         left handle makes the window walk across the desktop -- correct in size and
+         visibly wrong to use. */
+    case WM_SIZING:
+        if (!g_pd.fullscreen) {
+            RECT *r = (RECT *)lp;
+            int n, d, ex, ey, vw, vh;
+            present_aspect_ratio((int)g_set.v[SET_ASPECT], &n, &d);
+            if (n && d) {
+                host_frame_extra(h, &ex, &ey);
+                vw = (r->right - r->left) - ex;
+                vh = (r->bottom - r->top) - ey;
+                if (vw < 1) vw = 1;
+                if (vh < 1) vh = 1;
+                switch (wp) {
+                case WMSZ_LEFT: case WMSZ_RIGHT:
+                    vh = vw * d / n; break;            /* width drives height     */
+                case WMSZ_TOP: case WMSZ_BOTTOM:
+                    vw = vh * n / d; break;            /* height drives width     */
+                default:
+                    vh = vw * d / n; break;            /* a corner: width wins    */
+                }
+                if (wp == WMSZ_LEFT || wp == WMSZ_TOPLEFT || wp == WMSZ_BOTTOMLEFT)
+                    r->left  = r->right - (vw + ex);
+                else
+                    r->right = r->left  + (vw + ex);
+                if (wp == WMSZ_TOP || wp == WMSZ_TOPLEFT || wp == WMSZ_TOPRIGHT)
+                    r->top    = r->bottom - (vh + ey);
+                else
+                    r->bottom = r->top    + (vh + ey);
+            }
+            return TRUE;
+        }
+        break;
+
+    /* The floor: 640x480 of PICTURE, or the smallest on-aspect box that clears it.
+       Enforced here rather than only in the presets, so dragging cannot go under it
+       either -- a 200x150 DOS window is not a size anybody wants by accident. */
+    case WM_GETMINMAXINFO:
+        if (g_hwnd && !g_pd.fullscreen) {
+            MINMAXINFO *mm = (MINMAXINFO *)lp;
+            int bw, bh, ex, ey;
+            host_video_base(&bw, &bh);
+            host_frame_extra(h, &ex, &ey);
+            mm->ptMinTrackSize.x = bw + ex;
+            mm->ptMinTrackSize.y = bh + ey;
+            return 0;
+        }
+        break;
+
     case WM_SIZE:
         if (g_status) {
             SendMessageA(g_status, WM_SIZE, 0, 0);            /* let it re-dock     */
@@ -5483,19 +5830,39 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
         }
         return 0;
     case WM_COMMAND:
-        /* ── GH #56: the speed items are a contiguous RANGE, so they are handled
-             before the switch rather than as CPUSPEED_COUNT near-identical cases.
-             Setting it does three things and all three are the point: the throttle
-             bites on the next millisecond, the tick moves, and it is WRITTEN TO THE
-             REGISTRY -- a speed chosen from the menu that did not survive the run
-             would be a knob you have to set twice. */
-        if ((UINT)LOWORD(wp) >= IDM_SPEED_0 &&
-            (UINT)LOWORD(wp) <  IDM_SPEED_0 + CPUSPEED_COUNT) {
-            g_set.v[SET_SPEEDMODE] = (DWORD)(LOWORD(wp) - IDM_SPEED_0);
-            settings_apply(h, &g_set, 1);
-            settings_save(&g_set);
-            menu_speed_check(h);
-            return 0;
+        /* ── ★ EVERY MENU-BACKED SETTING, IN ONE PLACE. ──────────────────────────
+             The dropdowns are contiguous RANGES, so they are handled before the
+             switch: find which range the id fell in and the offset IS the value.
+             One block for the CPU speed and all five display dropdowns, rather than
+             thirty near-identical cases that would each have to remember to apply
+             and re-tick.
+           ⚠ NOTHING HERE SAVES. A menu is for trying something; the Settings dialog
+             is for keeping it. See the note by g_set_disk.
+           ⚠ AND THE OFFSET IS RANGE-CHECKED AGAINST THE SETTING'S OWN `hi`. The id
+             space reserves IDM_COMBO_SPAN per dropdown, which is more entries than
+             any list has -- so an id inside the span but past the end of the list
+             is not a value, and writing it would put the setting somewhere the
+             dialog cannot even display. */
+        {   UINT id = (UINT)LOWORD(wp);
+            int k;
+            for (k = 0; k < MENU_COMBO_N; ++k) {
+                UINT base = MENU_COMBOS[k].base;
+                if (id >= base && id < base + IDM_COMBO_SPAN) {
+                    DWORD v = (DWORD)(id - base);
+                    if (v <= SET_DEFS[MENU_COMBOS[k].set].hi) {
+                        g_set.v[MENU_COMBOS[k].set] = v;
+                        settings_apply_live(h);
+                    }
+                    return 0;
+                }
+            }
+            for (k = 0; k < MENU_CHECK_N; ++k) {
+                if (id == MENU_CHECKS[k].id) {
+                    g_set.v[MENU_CHECKS[k].set] = g_set.v[MENU_CHECKS[k].set] ? 0u : 1u;
+                    settings_apply_live(h);
+                    return 0;
+                }
+            }
         }
         switch (LOWORD(wp)) {
         case IDM_FILE_EXIT: DestroyWindow(h); return 0;
@@ -5705,28 +6072,14 @@ static DWORD WINAPI ui_thread(LPVOID arg)
     wc.hIcon = LoadIconA(hi, MAKEINTRESOURCEA(101));    /* IDI_MAINICON: title bar + taskbar */
     wc.lpszClassName = "NtvdmexHostWindow";
     if (!RegisterClassA(&wc)) return 1;
-    /* ── WINDOW SIZE IS A CONSTRUCTION PARAMETER. ──────────────────────────────
-         1x/2x/3x scale the CLIENT AREA -- the framebuffer -- not the whole window,
-         so the chrome, the menu and the status bar keep their real sizes at every
-         scale and "2x" means the picture is twice as big, not the window. "Custom"
-         (index 3) means whatever the user last dragged it to, and until there is
-         somewhere to remember that it is the same as 1x. */
-    {   int scale = (int)g_set.v[SET_WINSIZE] + 1;
-        RECT wa;
-        if (scale < 1 || scale > 3) scale = 1;          /* Custom -> the default   */
-        /* ⚠ AND IT MUST FIT ON THE SCREEN. 3x is 1920x1200 of client area, and the
-             rig's desktop is 1024x768: a window larger than the desktop opens with
-             its status bar and half its picture off the bottom edge, which reads as
-             "the scaler broke the display" rather than as a setting. Step down
-             until it fits; 1x always does. */
-        if (SystemParametersInfoA(SPI_GETWORKAREA, 0, &wa, 0)) {
-            while (scale > 1
-                   && (VID_FB_W * scale > wa.right - wa.left
-                       || VID_FB_H * scale + PRESENT_STATUS_H > wa.bottom - wa.top))
-                --scale;
-        }
+    /* The initial size. Same helper the View menu and the dialog resize through, so
+       "what 2x means" has one definition rather than one per call site. */
+    {   int scale = win_scale_clamped(g_set.v[SET_WINSIZE]), bw, bh;
+        g_winsize_live = g_set.v[SET_WINSIZE];   /* the window is now AT this size */
+        g_aspect_live  = g_set.v[SET_ASPECT];    /* ...and in this shape            */
+        host_video_base(&bw, &bh);
         rc.left = 0; rc.top = 0;
-        rc.right = VID_FB_W * scale; rc.bottom = VID_FB_H * scale + PRESENT_STATUS_H; }
+        rc.right = bw * scale; rc.bottom = bh * scale + PRESENT_STATUS_H; }
     AdjustWindowRect(&rc, WS_OVERLAPPEDWINDOW, TRUE);   /* TRUE: window has a menu  */
     g_hwnd = CreateWindowA(wc.lpszClassName, VDM_WIN_TITLE, WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
                            CW_USEDEFAULT, CW_USEDEFAULT, rc.right - rc.left, rc.bottom - rc.top,
@@ -5740,10 +6093,19 @@ static DWORD WINAPI ui_thread(LPVOID arg)
     }
     SetMenu(g_hwnd, build_menu());
     menu_check(g_hwnd, IDM_INPUT_CURSOR, g_cursor_show);  /* tick reflects the state  */
-    menu_speed_check(g_hwnd);                             /* ...and so does the speed */
+    menu_view_sync(g_hwnd);                  /* ...and so do View + CPU Speed */
     present_ddraw_init(&g_pd, g_hwnd);          /* GDI windowed; DDraw for fullscreen */
     settings_apply_present(&g_pd, &g_set);      /* ...which zeroes its own struct     */
     make_status(g_hwnd, hi);                     /* native themed status bar          */
+    /* ── ★ AND NOW RE-SIZE TO THE STATUS BAR'S REAL HEIGHT. ─────────────────────
+         The window was created against PRESENT_STATUS_H, a compile-time GUESS at
+         how tall a comctl32 status bar is. The real one measures 23 on the rig, not
+         22 -- so the client area was a pixel short of the framebuffer and the guest
+         picture lost a row at EVERY scale. Invisible until the View menu made the
+         window resize live and 1x came back one pixel taller than it started.
+       ⚠ The theme decides that height, so it is not a constant to correct; ask the
+         control after it exists and size the window to the answer. */
+    host_apply_winsize(g_hwnd, g_set.v[SET_WINSIZE]);
     /* ★ A WIN16 GUEST GETS NO VDM WINDOW -- see the note by tray_add. The window
          is built either way (it owns the present surface, the raw input, the frame
          timer and the tray callbacks); only whether anyone sees it changes. */
@@ -15447,6 +15809,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
          and a setting clicked in a dialog on that machine must never silently change
          what a headless measurement is measuring. */
     settings_load(&g_set);
+    g_set_disk = g_set;          /* nothing has overridden anything yet */
     settings_apply(NULL, &g_set, 0);
     /* Log only the LIVE settings -- the ones the settings_apply* functions actually
        push into the machine. The stored-but-not-yet-honoured ones would make this

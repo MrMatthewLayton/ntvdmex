@@ -40,6 +40,7 @@
 #include <windows.h>
 #include "../../res/settings_ids.h"
 #include "cpuspeed.h"          /* GH #56: the speed list SET_SPEEDMODE selects from */
+#include "../vdd/present_scale.h"  /* the aspect list SET_ASPECT selects from       */
 
 #define NTVDMEX_REG_KEY "Software\\NTVDMEX"
 #define NTVDMEX_PATH_MAX 260
@@ -118,11 +119,11 @@ static const set_def SET_DEFS[SET_COUNT] = {
      it did nothing at all. It is now the approximate-speed dropdown (GH #56), the
      only lever this emulator has over software that paces itself with a delay loop
      or with nothing at all.
-   ★ OLD VALUES SURVIVE. Index 0 was "Auto" and is now "Unlimited"; both mean do
-     not throttle, and 0 is the default, so every machine with this key already set
-     keeps the behaviour it had. The list runs fastest-first so the other two old
-     indices land somewhere defensible rather than at the slow end: "Maximum" (1)
-     becomes 200 MHz. See src/host/cpuspeed.h for the list and the calibration. */
+   ★ THE DEFAULT SURVIVES: index 0 was "Auto" and is now "Unlimited", both meaning
+     do not throttle, so an untouched machine is unaffected.
+   ⚠ A CHOSEN value does NOT survive -- the ladder was extended upward in session 54
+     and every index above 0 moved. See the note on the table in src/host/cpuspeed.h,
+     which also says what the permanent fix is (store MHz, not an index). */
 { "SpeedMode",         IDC_S_SPEEDMODE,   SK_COMBO,      0,  0,
                                           CPUSPEED_COUNT - 1, CPUSPEED_ITEMS },
 { "Cycles",            IDC_S_CYCLES,      SK_UINT,    3000, 100, 1000000, NULL },
@@ -142,7 +143,16 @@ static const set_def SET_DEFS[SET_COUNT] = {
 { "Renderer",          IDC_S_RENDERER,    SK_COMBO,      0,  0,   3, "GDI|DirectDraw|Direct3D 9|OpenGL" },
 { "Scaler",            IDC_S_SCALER,      SK_COMBO,      0,  0,   4, "None|Scale2x|hq2x|Scanlines|CRT" },
 { "Filtering",         IDC_S_FILTER,      SK_COMBO,      0,  0,   1, "Nearest|Bilinear" },
-{ "AspectRatio",       IDC_S_ASPECT,      SK_CHECK,      0,  0,   1, NULL },
+/* ── ★ WAS A CHECKBOX, IS NOW THE ASPECT LOCK. (session 54) ─────────────────────
+     None / 4:3 / 16:9 / 16:10, and it does two things at once: it constrains the
+     WINDOW to that shape while you drag it, and it letterboxes the frame inside the
+     client if the two ever disagree anyway (maximised, or a drag Windows would not
+     let us constrain). With the lock on and the window on-aspect there are no bars.
+   ★ AND 0/1 KEEP THEIR OLD MEANINGS -- 0 was off, 1 was "correct aspect" = 4:3 --
+     so an existing registry value migrates for free. The list and the enum behind
+     it live in present_scale.h, checked by present_test.c. */
+{ "AspectRatio",       IDC_S_ASPECT,      SK_COMBO,      0,  0,
+                                          PRESENT_ASPECT_COUNT - 1, PRESENT_ASPECT_ITEMS },
 { "FrameSkip",         IDC_S_FRAMESKIP,   SK_COMBO,      0,  0,   2, "0|1|2" },
 { "VSync",             IDC_S_VSYNC,       SK_CHECK,      1,  0,   1, NULL },
 { "BlinkTextCursor",   IDC_S_BLINKCURSOR, SK_CHECK,      1,  0,   1, NULL },

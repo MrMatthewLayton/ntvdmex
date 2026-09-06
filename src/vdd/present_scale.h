@@ -49,15 +49,72 @@ static int present_scaler_scanlines(int scaler)
    ⚠ The source size is deliberately NOT consulted: every mode this host presents
      was displayed on a 4:3 screen, and using the framebuffer's own ratio would
      reproduce the very distortion the setting exists to remove. */
+/* ── THE ASPECT CHOICES, AND THEY ARE ALSO THE REGISTRY VALUE. ───────────────────
+     Indices of the AspectRatio combo in settings.h.
+   ★ 0 and 1 KEEP THE MEANINGS THEY HAD when this was a checkbox: 0 was off and 1
+     was "correct aspect", which was 4:3 -- so an existing registry value migrates
+     for free and nobody's window changes shape on upgrade. The new ratios are
+     appended, which is exactly the discipline the CPU speed list did NOT manage. */
+enum {
+    PRESENT_ASPECT_NONE = 0,
+    PRESENT_ASPECT_4_3,
+    PRESENT_ASPECT_16_9,
+    PRESENT_ASPECT_16_10,
+    PRESENT_ASPECT_COUNT
+};
+#define PRESENT_ASPECT_ITEMS "None|4:3|16:9|16:10"
+
+/* The ratio as a fraction. NONE gives 0/0, which every caller reads as "fill". */
+static void present_aspect_ratio(int aspect, int *n, int *d)
+{
+    switch (aspect) {
+    case PRESENT_ASPECT_4_3:   *n = 4;  *d = 3;  break;
+    case PRESENT_ASPECT_16_9:  *n = 16; *d = 9;  break;
+    case PRESENT_ASPECT_16_10: *n = 16; *d = 10; break;
+    default:                   *n = 0;  *d = 0;  break;
+    }
+}
+
+/* ── THE SMALLEST WINDOW THIS ASPECT ALLOWS. ─────────────────────────────────────
+     At least PRESENT_MIN_W wide AND at least PRESENT_MIN_H tall, and on-aspect --
+     so for a WIDE ratio the height binds first and forces extra width. 4:3 lands
+     exactly on 640x480; 16:10 needs 768x480; 16:9 needs 853x480.
+   With no lock there is nothing to satisfy but the floor itself. */
+#define PRESENT_MIN_W 640
+#define PRESENT_MIN_H 480
+static void present_min_client(int aspect, int *w, int *h)
+{
+    int n, d;
+    present_aspect_ratio(aspect, &n, &d);
+    if (!n || !d) { *w = PRESENT_MIN_W; *h = PRESENT_MIN_H; return; }
+    /* ⚠ ONE constraint binds and the other is then satisfied for free -- work out
+         WHICH, and derive the other side from it. Ceiling-rounding both independently
+         (the first cut) overshoots: 16:9 came out 854x481 instead of 853x480, i.e.
+         a pixel proud of the floor on both axes for no reason. */
+    *w = PRESENT_MIN_W;
+    *h = (PRESENT_MIN_W * d + n / 2) / n;
+    if (*h < PRESENT_MIN_H) {                    /* too short -> the HEIGHT binds */
+        *h = PRESENT_MIN_H;
+        *w = (PRESENT_MIN_H * n + d / 2) / d;
+    }
+}
+
+/* Where the frame goes inside the client area.
+ ⚠ WITH A LOCK ON, THE CLIENT IS ALREADY THAT SHAPE, so this normally returns the
+   whole client and there are no bars -- which is the point of locking the window
+   rather than letterboxing inside a free-shaped one. It still letterboxes when the
+   two disagree (a maximised window, a drag Windows would not let us constrain),
+   because distorting the picture is the worse of the two answers. */
 static void present_fit(int dst_w, int dst_h, int aspect,
                         int *x, int *y, int *w, int *h)
 {
-    int fw, fh;
+    int fw, fh, n, d;
     if (dst_w < 1) dst_w = 1;
     if (dst_h < 1) dst_h = 1;
-    if (!aspect) { *x = 0; *y = 0; *w = dst_w; *h = dst_h; return; }
-    fw = dst_w; fh = dst_w * 3 / 4;             /* as wide as possible...          */
-    if (fh > dst_h) { fh = dst_h; fw = dst_h * 4 / 3; }  /* ...unless too tall     */
+    present_aspect_ratio(aspect, &n, &d);
+    if (!n || !d) { *x = 0; *y = 0; *w = dst_w; *h = dst_h; return; }
+    fw = dst_w; fh = dst_w * d / n;              /* as wide as possible...          */
+    if (fh > dst_h) { fh = dst_h; fw = dst_h * n / d; }  /* ...unless too tall      */
     if (fw < 1) fw = 1;
     if (fh < 1) fh = 1;
     *w = fw; *h = fh;
