@@ -114,6 +114,15 @@ cc -std=c99 -Wall -Wextra -Wno-unused-function -O0 -g \
 
 "$DIR/comm_test"
 
+# GH #11: the SDK header must not drift from the in-tree ABI. This compiles both
+# and lets the compiler compare them; it produces no test output, and a FAILURE
+# HERE IS A COMPILE ERROR, which is the point -- a runtime check would come after
+# the wrong bytes were already on the stack.
+cc -std=c99 -Wall -Wextra -Wno-unused-function -c -O0 \
+   -I "$DIR/../../sdk/include" -I "$DIR/../../src/vdd" \
+   -o /dev/null "$DIR/../../sdk/sample/abi_check.c" \
+  && echo "== SDK ABI check: header matches src/vdd/ntvdd.h =="
+
 # Sound epic slice-4: the audio mixer (resampling + SB transport + PC speaker +
 # the master attenuator the Audio settings page drives).
 cc -std=c99 -Wall -Wextra -Wno-unused-function -O0 -g \

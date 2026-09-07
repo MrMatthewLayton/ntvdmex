@@ -63,6 +63,7 @@
 #include "vdd_sb.h"
 #include "vdd_mpu.h"
 #include "vdd_comm.h"
+#include "../../sdk/include/ntvdmex-vdd.h"
 #include "vdd_audio.h"
 #include "audio_wave.h"
 #include "present_ddraw.h"
@@ -145,6 +146,8 @@
    set before NtVdmControl(VdmQueueInterrupt) (1 = VDM_INT_HARDWARE, 2 = VDM_INT_TIMER,
    3 = both), bit 2 = raise a periodic device IRQ 5 for the qirq probe. Absent = the
    pre-session-11 behaviour (latch the pending bit only, never queue). */
+/* GH #11: one DLL path per line, '#' comments. See docs/sdk/vdd-sdk.md. */
+#define VDDLIST_PATH "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\vdd.txt"
 #define QIMODE_PATH "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\qimode.txt"
 /* Headless wall-clock cap override, decimal milliseconds, also on the share. The 30 s
    default is right for an unattended test that must not wedge the watcher, but an
@@ -1391,6 +1394,110 @@ static void serial_out(const char *buf, const char *end)
         FlushFileBuffers(g_serial);
     }
 }
+
+/* ── ★★★★ THIRD-PARTY VDDs: LOAD THEM. (GH #11, ADR-0008) ────────────────────
+     ADR-0008 chose a "clean internal plugin ABI that all our own devices use"
+     and a third-party hook point on top of it. Every device in src/vdd has been
+     using that ABI since M3; what was missing was the loader, so the model was
+     pluggable in shape and closed in fact.
+   ★ THE DRIVER IMPORTS NOTHING FROM US. Microsoft's ABI has a VDD import
+     VDDInstallIOHook and friends from `NTVDM.EXE` BY NAME, which binds a driver
+     to the FILENAME of its host -- and ours is ntvdmhost.exe, so an MS-shaped
+     import would not resolve at all. We hand over a table of function pointers
+     instead: versioned, appendable, and testable off-VM with a stub table.
+     See sdk/include/ntvdmex-vdd.h.
+   ⚠ A REFUSED CLAIM AND A FAILED LOAD ARE BOTH LOUD. A device that is not on
+     the bus reads as an empty ISA slot (0xFF) from the guest, which is
+     indistinguishable from hardware that is simply absent -- that is exactly how
+     a full port table cost this project an investigation once. Every step of
+     this says what happened.
+   ⚠ THE LIST IS A FILE, NOT THE REGISTRY, AND THAT IS THE PROJECT'S OWN RULE:
+     the share's text knobs override the registry ON PURPOSE, because a test rig
+     needs to change one without an installer. The registry path
+     (HKLM\...\VirtualDeviceDrivers, MS's own) belongs with the vddsvc veneer,
+     which ADR-0008 defers. */
+static void vdd_log_line(const char *msg)
+{
+    char lb[512], *q = lb;
+    unsigned i;
+    q = zput(q, "  VDD: ");
+    for (i = 0; msg && msg[i] && i < 400; ++i) *q++ = msg[i];
+    q = zput(q, "\r\n");
+    log_append(LOG_PATH, lb, q); serial_out(lb, q);
+}
+
+static const ntvdmex_vdd_api g_vdd_api = {
+    (uint32_t)sizeof(ntvdmex_vdd_api), NTVDMEX_VDD_ABI_VERSION,
+    (int  (*)(ntvdmex_vdd_bus *, uint16_t, uint16_t, ntvdmex_in_fn, ntvdmex_out_fn, void *))vdd_claim_ports,
+    (int  (*)(ntvdmex_vdd_bus *, uint32_t, uint32_t, ntvdmex_rd_fn, ntvdmex_wr_fn, void *))vdd_claim_mem,
+    (int  (*)(ntvdmex_vdd_bus *, uint8_t, ntvdmex_int_fn, void *))vdd_claim_int,
+    (int  (*)(ntvdmex_vdd_bus *, ntvdmex_frame_fn, void *))vdd_on_frame,
+    (void (*)(ntvdmex_vdd_bus *, uint8_t))vdd_raise_irq,
+    (void *(*)(ntvdmex_vdd_bus *, uint16_t, uint16_t))vdd_map_flat,
+    (void *(*)(ntvdmex_vdd_bus *, uint32_t))vdd_map_lin,
+    vdd_log_line
+};
+
+static void vdd_load_third_party(void)
+{
+    HANDLE h;
+    char buf[4096];
+    DWORD got = 0, i = 0, n = 0, loaded = 0;
+    h = CreateFileA(VDDLIST_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                    NULL, OPEN_EXISTING, 0, NULL);
+    if (h == INVALID_HANDLE_VALUE) return;          /* no list is not an error */
+    ReadFile(h, buf, sizeof buf - 1, &got, NULL);
+    CloseHandle(h);
+    buf[got] = 0;
+    while (i < got) {
+        char path[MAX_PATH]; DWORD k = 0;
+        while (i < got && (buf[i] == '\r' || buf[i] == '\n')) ++i;
+        while (i < got && buf[i] != '\r' && buf[i] != '\n' && k < MAX_PATH - 1)
+            path[k++] = buf[i++];
+        while (k && (path[k-1] == ' ' || path[k-1] == '\t')) --k;
+        path[k] = 0;
+        if (!k || path[0] == '#' || path[0] == ';') continue;
+        ++n;
+        {   HMODULE m = LoadLibraryA(path);
+            char lb[MAX_PATH + 200], *q = lb;
+            NtvdmexVddInitFn fn;
+            int rc;
+            if (!m) {
+                q = zput(q, "  VDD: LoadLibrary FAILED err=0x"); q = zhex(q, GetLastError());
+                q = zput(q, " for ["); q = zput(q, path); q = zput(q, "]\r\n");
+                log_append(LOG_PATH, lb, q); serial_out(lb, q);
+                continue;
+            }
+            fn = (NtvdmexVddInitFn)(ULONG_PTR)GetProcAddress(m, NTVDMEX_VDD_INIT_NAME);
+            if (!fn) {
+                q = zput(q, "  VDD: ["); q = zput(q, path);
+                q = zput(q, "] loaded but exports no "); q = zput(q, NTVDMEX_VDD_INIT_NAME);
+                q = zput(q, " -- not a VDD; unloaded\r\n");
+                log_append(LOG_PATH, lb, q); serial_out(lb, q);
+                FreeLibrary(m);
+                continue;
+            }
+            rc = fn(&g_vdd_api, (ntvdmex_vdd_bus *)&g_bus);
+            q = lb;
+            q = zput(q, "  VDD: ["); q = zput(q, path);
+            if (rc == 0) { q = zput(q, "] initialised\r\n"); ++loaded; }
+            else {
+                /* Unload a driver that refused. A half-armed device the guest
+                   can still reach is worse than no device: it answers. */
+                q = zput(q, "] NtvdmexVddInit returned 0x"); q = zhex(q, (DWORD)rc);
+                q = zput(q, " -- REFUSED, unloading\r\n");
+                FreeLibrary(m);
+            }
+            log_append(LOG_PATH, lb, q); serial_out(lb, q);
+        }
+    }
+    {   char lb[160], *q = lb;
+        q = zput(q, "  VDD: third-party list ["); q = zput(q, VDDLIST_PATH);
+        q = zput(q, "] -- 0x"); q = zhex(q, n); q = zput(q, " entr(ies), 0x");
+        q = zhex(q, loaded); q = zput(q, " initialised\r\n");
+        log_append(LOG_PATH, lb, q); serial_out(lb, q); }
+}
+
 /* ── THE WOW32 BOP BLOCK'S ONLY WAY OUT. (session 56) ────────────────────────
      Identical to log_append + serial_out, except that it drops the buffer when
      the current call is a folded repeat. Deliberately NOT a change to
@@ -17639,6 +17746,20 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     p = zhex(p, img.cs); p = zput(p, ":0x"); p = zhex(p, img.ip); p = zput(p, ")...\r\n");
     log_write(LOG_PATH, report, p);
     base = p;                       /* preamble is on disk; the loop appends from here */
+    /* ── THIRD-PARTY VDDs LOAD HERE, AND THE PLACE IS THE POINT. ─────────────
+         Two constraints, and only this line satisfies both:
+         (1) AFTER every built-in device is on the bus, so a third-party claim
+             that collides with our own video or UART is REFUSED honestly rather
+             than silently shadowing it;
+         (2) AFTER THE LAST log_write, which TRUNCATES. The first cut put this
+             beside the built-in devices, ~350 lines up -- the driver may well
+             have loaded and every line it logged was erased before anyone could
+             read it, which reads exactly like "the code never ran". The warning
+             immediately above this one says so in as many words, and I still
+             walked into it. Third time this trap has been paid for.
+         The guest's image is loaded but not yet running, so claims made here are
+         in place before its first instruction. */
+    vdd_load_third_party();
     /* ⚠⚠ AFTER THE **LAST** log_write. There are THREE of them in WinMain and every one
          TRUNCATES. This probe was placed after the first, then after the second, and
          both times its output was silently erased by the next one -- which reads
