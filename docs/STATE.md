@@ -240,7 +240,7 @@ and matches the 6.22 oracle row for row (session 53)** — but `MEM /C` still re
 
    ## ★ SESSION 56 — 83.1% → 84.3%
 
-   **Nine commits, all rig-gated. Resumed from session 55's pause; the user chose
+   **Thirteen commits, all rig-gated. Resumed from session 55's pause; the user chose
    the MIXED option, then asked for both halves of the follow-up.**
 
    ### ▶ ★★★★★ CALC IS A CALCULATOR THAT CALCULATES — AND s55 NAMED THE WRONG PASS
@@ -443,6 +443,43 @@ and matches the 6.22 oracle row for row (session 53)** — but `MEM /C` still re
    the same handle and `0x3e8`. That is not enough to name the RETURN, and s55
    already measured that 0 avoids its failure path, so it was left alone rather
    than guessed.
+
+   ### ▶ ★★★★★ A GUEST THAT CANNOT START NOW SAYS SO — WowMsgBox (0x84)
+
+   krnl386 has **its own error reporter** and we were stepping over it. A failed
+   launch calls `WowFailedExec` (0x9d) → `WowMsgBox` (0x84) with the text →
+   `ExitKernelThunk`. All three unimplemented, so a guest that could not start
+   **simply vanished**, with the reason sitting in a string nobody displayed.
+   [[wow-real-hwnd-frontier]] has said *implement MessageBox FIRST on any new
+   guest* for four guests running; this is the one that covers every guest which
+   dies **before** it can put up its own.
+
+   ★ **WINFILE — THE LAST `todo` — IS DIAGNOSED, AND IT IS NOT A HOST DEFECT.**
+   On screen: caption *"Can't run 16-bit Windows program"*, body *"Cannot find
+   file C:\WIN16\WINFILE.EXE (or one of its components)…"*. Its module table is
+   `[VER, KERNEL, GDI, USER, KEYBOARD, COMMDLG, SHELL, SCONFIG, COMMCTRL]` — the
+   **Windows for Workgroups build**, statically importing `SCONFIG.DLL`, which is
+   not on the box (`open "SCONFIG.DLL" -> CF=1 gle=2`, and the ONE module the
+   resolver could not path, while VER/LZEXPAND/COMMDLG/COMMCTRL all resolved).
+   **An asset gap.** ⚠ Its recorded blocker named ShellExecute and CreateWindowEx
+   as *"both still unimplemented"* — both were implemented later in the SAME
+   session that wrote the note (s55, `aba3783`). Ledger corrected.
+
+   ⚠⚠ **TWO MISTAKES OF MINE, BOTH CAUGHT BY THE INSTRUMENT, BOTH WORTH KEEPING:**
+   * **The first cut BLOCKED BEFORE IT RECORDED.** `MessageBoxA` does not return
+     until a human clicks and the arm's log block is not flushed until it does —
+     so the box appeared and the log held **nothing**, not even the harness's own
+     arg lines. *An instrument that blocks before it records is not an
+     instrument.* The line is written first now, with both candidate slots on it.
+   * **And that line immediately refuted my slot guess.** I had reasoned "take
+     whichever slot has text as the body"; one run printing both showed
+     `arg4="Can't run 16-bit Windows program"` and `arg8="Cannot find file …"` —
+     the SHORT one is the caption, the LONG one is the text. My version put the
+     explanation in the title bar. Plausible, and backwards. Now pinned from
+     data, with both slots still logged so it stays checkable.
+
+   ⚠ `LOG_PATH` moved from `main.c` (line 70, **after** the headers that want it)
+   into `log.h` beside `log_append`. One definition, not two.
 
    ### ▶ WHERE THE NUMBER WENT
 
