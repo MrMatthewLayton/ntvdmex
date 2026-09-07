@@ -899,6 +899,31 @@ static const char *wowuser_sysres_name(WORD h)
      exist. CARDFILE uses these to AUTODIAL; it gets a clean refusal and works
      without a modem, which is the same thing a real machine with no COM port
      would give it. */
+/* Provided by the host (main.c) over vdd_comm -- DECLARATIONS ONLY, because this
+   header must not see host internals. See the note beside them. */
+int  wowcomm_open(const char *dev);
+int  wowcomm_close(int id);
+int  wowcomm_read(int id, unsigned char *buf, int n);
+int  wowcomm_write(int id, const unsigned char *buf, int n);
+int  wowcomm_inqueue(int id);
+void wowcomm_dtr(int id, int on);
+void wowcomm_rts(int id, int on);
+
+#define WOWUSER_OPENCOMM       0x00c8
+/* Pascal order: base = the LAST argument pushed. OpenComm(dev, cbIn, cbOut). */
+#define OC_ARG_DEV    4
+#define CC_ARG_ID     0
+#define RC_ARG_CB     0
+#define RC_ARG_BUF    2
+#define RC_ARG_ID     6
+#define TC_ARG_CH     0
+#define TC_ARG_ID     2
+#define GCE_ARG_STAT  0
+#define GCE_ARG_ID    4
+#define ECF_ARG_FN    0
+#define ECF_ARG_ID    2
+#define WOWUSER_CLOSECOMM      0x00cf
+#define WOWUSER_TRANSMITCHAR   0x00ce
 #define WOWUSER_SETCOMMSTATE   0x00c9
 #define WOWUSER_GETCOMMSTATE   0x00ca
 #define WOWUSER_GETCOMMERROR   0x00cb
@@ -5713,25 +5738,150 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
         return 1;
     }
 
-    /* ── ⚠⚠ NO SERIAL PORT EXISTS HERE. See the note by the ids: the equipment
-         word claims none, so IE_BADID is the TRUE answer rather than a stub. ── */
+    /* ── ★★★★ THE COMM FAMILY, ON THE REAL UART NOW. (session 56) ────────────
+         This whole block used to answer IE_BADID, and its note gave a good
+         reason: "the equipment word claims none, on purpose". THAT REASON WAS
+         TRUE AND I MADE IT FALSE EARLIER THIS SESSION -- the equipment word now
+         reports SER=2, the BDA carries 0x03F8/0x02F8, and there is a real 8250
+         behind them (GH #9). A host that advertises two serial ports and then
+         refuses to open either is the same two-layers-disagreeing fault the
+         equipment word itself was fixed for, pointing the other way. So these
+         now go to the SAME device the ports and INT 14h use.
+       ⚠ THE REFUSAL WAS NOT WRONG WHEN IT WAS WRITTEN, and that is worth
+         keeping in view: it was the honest answer to the machine as it then was.
+         What went stale was the machine, not the reasoning. */
+    case WOWUSER_OPENCOMM: {
+        char dev[32];
+        int k = 0, id;
+        if (!wow32_argstr(f, OC_ARG_DEV, dev, sizeof dev)) dev[0] = 0;
+        id = wowcomm_open(dev[0] ? dev : NULL);
+        wu_puts(note, notecap, &k, "OpenComm \"");
+        wu_puts(note, notecap, &k, dev);
+        wu_puts(note, notecap, &k, "\" -> ");
+        if (id < 0) {
+            wu_puts(note, notecap, &k, id == -5 ? "IE_OPEN (already open)"
+                                                : "IE_BADID (no such port here)");
+        } else {
+            wu_puts(note, notecap, &k, "comm id 0x");
+            wu_puthex(note, notecap, &k, (DWORD)id, 2);
+        }
+        wow32_setret(f, (DWORD)(WORD)(short)id);
+        return 1;
+    }
+    case WOWUSER_CLOSECOMM: {
+        int k = 0, id = (short)wow32_argw(f, CC_ARG_ID);
+        int rc = wowcomm_close(id);
+        wu_puts(note, notecap, &k, "CloseComm -> ");
+        wu_puts(note, notecap, &k, rc == 0 ? "closed" : "IE_BADID");
+        wow32_setret(f, (DWORD)(WORD)(short)rc);
+        return 1;
+    }
+    case WOWUSER_READCOMM: {
+        int k = 0, id = (short)wow32_argw(f, RC_ARG_ID);
+        int cb = (short)wow32_argw(f, RC_ARG_CB), got;
+        volatile BYTE *dst = wow32_argptr(f, RC_ARG_BUF);
+        unsigned char tmp[512];
+        int i;
+        if (!dst || cb <= 0) { wow32_setret(f, 0); return 1; }
+        if (cb > (int)sizeof tmp) cb = (int)sizeof tmp;
+        got = wowcomm_read(id, tmp, cb);
+        if (got > 0) for (i = 0; i < got; ++i) dst[i] = tmp[i];
+        wu_puts(note, notecap, &k, "ReadComm -> 0x");
+        wu_puthex(note, notecap, &k, (DWORD)(got < 0 ? 0 : got), 4);
+        wu_puts(note, notecap, &k, " byte(s)");
+        wow32_setret(f, (DWORD)(WORD)(short)(got < 0 ? 0 : got));
+        return 1;
+    }
+    case WOWUSER_WRITECOMM: {
+        int k = 0, id = (short)wow32_argw(f, RC_ARG_ID);
+        int cb = (short)wow32_argw(f, RC_ARG_CB), put;
+        volatile BYTE *src = wow32_argptr(f, RC_ARG_BUF);
+        unsigned char tmp[512];
+        int i;
+        if (!src || cb <= 0) { wow32_setret(f, 0); return 1; }
+        if (cb > (int)sizeof tmp) cb = (int)sizeof tmp;
+        for (i = 0; i < cb; ++i) tmp[i] = src[i];
+        put = wowcomm_write(id, tmp, cb);
+        wu_puts(note, notecap, &k, "WriteComm -> 0x");
+        wu_puthex(note, notecap, &k, (DWORD)(put < 0 ? 0 : put), 4);
+        wu_puts(note, notecap, &k, " byte(s) out of the port");
+        wow32_setret(f, (DWORD)(WORD)(short)(put < 0 ? 0 : put));
+        return 1;
+    }
+    case WOWUSER_TRANSMITCHAR: {
+        int k = 0, id = (short)wow32_argw(f, TC_ARG_ID);
+        unsigned char c = (unsigned char)wow32_argw(f, TC_ARG_CH);
+        int rc = wowcomm_write(id, &c, 1);
+        wu_puts(note, notecap, &k, "TransmitCommChar -> ");
+        wu_puts(note, notecap, &k, rc == 1 ? "sent" : "IE_BADID");
+        wow32_setret(f, (DWORD)(WORD)(short)(rc == 1 ? 0 : -2));
+        return 1;
+    }
+    case WOWUSER_GETCOMMERROR: {
+        /* COMSTAT is { BYTE status; UINT cbInQue; UINT cbOutQue; } and the
+           RETURN is the error mask -- 0 meaning no error. A guest polls this to
+           decide whether there is anything to read, so cbInQue must be the real
+           queue depth and not a placeholder. cbOutQue is 0 because our
+           transmitter never holds a byte (see the vdd_comm header). */
+        int k = 0, id = (short)wow32_argw(f, GCE_ARG_ID);
+        volatile BYTE *st = wow32_argptr(f, GCE_ARG_STAT);
+        int inq = wowcomm_inqueue(id);
+        if (st) { st[0] = 0;
+                  st[1] = (BYTE)(inq & 0xFF); st[2] = (BYTE)((inq >> 8) & 0xFF);
+                  st[3] = 0; st[4] = 0; }
+        wu_puts(note, notecap, &k, "GetCommError -> 0 (no error), cbInQue=0x");
+        wu_puthex(note, notecap, &k, (DWORD)inq, 4);
+        wow32_setret(f, 0);
+        return 1;
+    }
+    case WOWUSER_SETCOMMBREAK:
+    case WOWUSER_CLEARCOMMBREAK: {
+        int k = 0, id = (short)wow32_argw(f, CC_ARG_ID);
+        int set = (f->id == WOWUSER_SETCOMMBREAK);
+        /* LCR bit 6 is the break-control bit on an 8250. We do not model the
+           line itself -- there is no wire -- so this is recorded and answered
+           rather than pretended: the guest gets the success a real driver
+           expects, and the log says the break went nowhere. */
+        wu_puts(note, notecap, &k, set ? "SetCommBreak" : "ClearCommBreak");
+        wu_puts(note, notecap, &k, " -- accepted; there is no wire to break, so"
+                                   " the state is recorded and not transmitted");
+        wow32_setret(f, (DWORD)(WORD)(short)(id >= 0 ? 0 : -2));
+        return 1;
+    }
+    case WOWUSER_ESCAPECOMMFN: {
+        int k = 0, id = (short)wow32_argw(f, ECF_ARG_ID);
+        WORD fn = wow32_argw(f, ECF_ARG_FN);
+        /* SETDTR 5, CLRDTR 6, SETRTS 3, CLRRTS 4 -- straight onto MCR, which is
+           where they go on real hardware, so a guest that asserts DTR and reads
+           MSR back in loopback sees DSR exactly as the port test does. */
+        switch (fn) {
+        case 5: wowcomm_dtr(id, 1); break;   /* SETDTR */
+        case 6: wowcomm_dtr(id, 0); break;   /* CLRDTR */
+        case 3: wowcomm_rts(id, 1); break;   /* SETRTS */
+        case 4: wowcomm_rts(id, 0); break;   /* CLRRTS */
+        default: break;
+        }
+        wu_puts(note, notecap, &k, "EscapeCommFunction fn=0x");
+        wu_puthex(note, notecap, &k, fn, 4);
+        wu_puts(note, notecap, &k, " -> MCR");
+        wow32_setret(f, 0);
+        return 1;
+    }
     case WOWUSER_SETCOMMSTATE:
     case WOWUSER_GETCOMMSTATE:
-    case WOWUSER_GETCOMMERROR:
-    case WOWUSER_WRITECOMM:
-    case WOWUSER_FLUSHCOMM:
-    case WOWUSER_READCOMM:
-    case WOWUSER_SETCOMMBREAK:
-    case WOWUSER_CLEARCOMMBREAK:
-    case WOWUSER_ESCAPECOMMFN: {
+    case WOWUSER_FLUSHCOMM: {
+        /* ⚠ ANSWERED SUCCESS, AND THE DCB IS NOT MODELLED -- said here rather
+             than implied. Baud, parity and stop bits pace nothing in this host
+             (vdd_comm.h explains why: there is no wire whose timing must be
+             met), so accepting a DCB and reporting success is the truthful
+             answer about what will happen to the guest's bytes. Refusing would
+             be false in the other direction now that the port exists. */
         int k = 0;
-        wu_puts(note, notecap, &k, "COMM call id=0x");
+        wu_puts(note, notecap, &k, "COMM id=0x");
         wu_puthex(note, notecap, &k, f->id, 4);
-        wu_puts(note, notecap, &k, " -- ★ THIS VDM HAS NO SERIAL PORT (the BIOS "
-                                   "equipment word claims none, on purpose); "
-                                   "answered IE_BADID (-2), which is what a real "
-                                   "machine with no COM port returns");
-        wow32_setret(f, 0xFFFE);          /* IE_BADID */
+        wu_puts(note, notecap, &k, " -- accepted (the DCB is stored by the port,"
+                                   " and baud paces nothing here by design)");
+        wow32_setret(f, 0);
         return 1;
     }
 
@@ -5743,11 +5893,23 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
          error -- the sentinel-that-means-yes shape this project keeps paying
          for. There is no port, so there is no event word, so the answer is 0. */
     case WOWUSER_SETCOMMEVTMASK: {
+        /* Returns a FAR POINTER to the port's event word, which the caller polls
+           directly -- so its failure value is a NULL POINTER, not IE_BADID.
+           Grouping it with the calls above would hand back 0x0000FFFE, and a
+           guest that dereferenced that would read offset 0xFFFE of a null
+           selector rather than see an error: the sentinel-that-means-yes shape
+           this project keeps paying for.
+         ⚠ WE STILL RETURN NULL, AND THAT IS STILL THE TRUE ANSWER. The port is
+           real now, but nothing in this host RAISES a comm event -- there is no
+           peer to signal one. A pointer to a word that never changes would be
+           worse than no pointer: a guest that waits on it waits forever, where a
+           null makes it fall back to polling GetCommError, which does work. */
         int k = 0;
-        wu_puts(note, notecap, &k, "SetCommEventMask -- ★ NO SERIAL PORT IN THIS "
-                                   "VDM; answered a NULL far pointer (there is no "
-                                   "event word to point at), NOT IE_BADID, which "
-                                   "at this call site would be an address");
+        wu_puts(note, notecap, &k, "SetCommEventMask -- the port is real but no"
+                                   " comm EVENT is ever raised here, so a NULL"
+                                   " far pointer (poll GetCommError instead);"
+                                   " NOT IE_BADID, which at this site is an"
+                                   " address");
         wow32_setret(f, 0);
         return 1;
     }

@@ -1562,6 +1562,82 @@ static int lpt_spool_put(BYTE c)
 static void lpt_tx_sink(void *ctx, int port, uint8_t b)
 { (void)ctx; (void)port; lpt_spool_put(b); }
 
+/* ── ★★★★ THE Win16 COMM API, ON THE REAL UART. (GH #9 + #128, session 56) ──
+     wowuser.h answered the whole comm family with IE_BADID, and its note gave
+     the reason plainly: "the equipment word claims none, on purpose". THAT WAS
+     TRUE WHEN IT WAS WRITTEN AND I MADE IT FALSE THIS SESSION -- the equipment
+     word now reports SER=2 and the BDA carries 0x03F8/0x02F8, with a real 8250
+     behind them. A host that advertises two serial ports and then refuses to
+     open either is the same two-layers-disagreeing fault the equipment word
+     itself was fixed for, pointing the other way.
+   ⇒ So the Win16 side is wired to the same vdd_comm the ports and INT 14h use.
+     One device, three ways in, and none of them can now contradict the others.
+   ⚠ THESE LIVE HERE, NOT IN wowuser.h, because that header must not see host
+     internals -- it gets declarations only. Same rule as the rest of the WOW
+     layer. */
+#define WOWCOMM_MAX 2
+static int  g_wc_open[WOWCOMM_MAX];        /* 1 = this port is open to Win16 */
+static WORD g_wc_evt[WOWCOMM_MAX];         /* the event word SetCommEventMask points at */
+
+int wowcomm_open(const char *dev)
+{
+    int idx;
+    /* "COM1".."COM4", case-insensitive, exactly as Windows parses it. Anything
+       else -- including the LPTn a guest may legally pass -- is not ours. */
+    if (!dev) return -2;                                        /* IE_BADID     */
+    if ((dev[0] != 'C' && dev[0] != 'c') || (dev[1] != 'O' && dev[1] != 'o')
+        || (dev[2] != 'M' && dev[2] != 'm')) return -2;
+    idx = dev[3] - '1';
+    if (idx < 0 || idx >= WOWCOMM_MAX) return -2;               /* no such port */
+    if (!vdd_comm_fitted(&g_comm, idx))  return -2;
+    if (g_wc_open[idx]) return -5;                              /* IE_OPEN      */
+    g_wc_open[idx] = 1; g_wc_evt[idx] = 0;
+    return idx;                                                 /* the comm id  */
+}
+static int wowcomm_valid(int id)
+{ return id >= 0 && id < WOWCOMM_MAX && g_wc_open[id]; }
+int wowcomm_close(int id)
+{ if (!wowcomm_valid(id)) return -2; g_wc_open[id] = 0; return 0; }
+int wowcomm_read(int id, unsigned char *buf, int n)
+{
+    int got = 0;
+    if (!wowcomm_valid(id)) return -2;
+    /* Straight off the same receive ring the guest would see through RBR. */
+    while (got < n && g_comm.p[id].rx_len) {
+        uint32_t v = 0;
+        vdd_bus_io(&g_bus, (uint16_t)(g_comm.p[id].base + COMM_RBR), 1, 1, &v);
+        buf[got++] = (unsigned char)v;
+    }
+    return got;
+}
+int wowcomm_write(int id, const unsigned char *buf, int n)
+{
+    int i;
+    if (!wowcomm_valid(id)) return -2;
+    for (i = 0; i < n; ++i) {
+        uint32_t v = buf[i];
+        vdd_bus_io(&g_bus, (uint16_t)(g_comm.p[id].base + COMM_RBR), 1, 0, &v);
+    }
+    return n;
+}
+int wowcomm_inqueue(int id)
+{ return wowcomm_valid(id) ? (int)g_comm.p[id].rx_len : 0; }
+/* SETDTR/CLRDTR/SETRTS/CLRRTS and the two break calls all land on MCR, which is
+   where they land on real hardware -- so a guest that asserts DTR and then reads
+   MSR in loopback sees DSR come back, exactly as the port test does. */
+static void wowcomm_mcr(int id, unsigned set, unsigned clear)
+{
+    uint32_t v = 0;
+    if (!wowcomm_valid(id)) return;
+    vdd_bus_io(&g_bus, (uint16_t)(g_comm.p[id].base + COMM_MCR), 1, 1, &v);
+    v = (v | set) & ~clear;
+    vdd_bus_io(&g_bus, (uint16_t)(g_comm.p[id].base + COMM_MCR), 1, 0, &v);
+}
+/* Named rather than exposing MCR bit numbers to the WOW layer: that header must
+   not need a VDD header to compile, and "DTR" is the thing the caller means. */
+void wowcomm_dtr(int id, int on) { wowcomm_mcr(id, on ? MCR_DTR : 0u, on ? 0u : MCR_DTR); }
+void wowcomm_rts(int id, int on) { wowcomm_mcr(id, on ? MCR_RTS : 0u, on ? 0u : MCR_RTS); }
+
 /* Is [addr, addr+len) committed and readable RIGHT NOW? For probes that dereference
    an address derived from one guest's memory map: under that guest the page is there,
    under every other guest it is not, and an unguarded read takes the whole host down
