@@ -409,6 +409,48 @@
 #define SCR_ARG_RGN     0
 #define SCR_ARG_HDC     2
 
+/* ── THE REST OF THE REGION API, AND THE TWO TEXT CALLS THAT GO WITH IT.
+     (session 55) Every one of these is a Win32 function of the same name and
+     the same meaning, so the body is a translation of handles and a call --
+     there is nothing to invent, which is exactly why they are worth doing in a
+     batch. The argument offsets follow this file's one rule: the FIRST
+     parameter sits at the HIGHEST offset, because the block is the pushed
+     arguments and the base is the last push. */
+#define WOWGDI_COMBINERGN       0x002f   /* ord 47,  8 args                    */
+#define CBR_ARG_MODE    0
+#define CBR_ARG_SRC2    2
+#define CBR_ARG_SRC1    4
+#define CBR_ARG_DEST    6
+
+#define WOWGDI_CREATERECTRGNIND 0x0041   /* ord 65,  4 args                    */
+#define CRRI_ARG_RECT   0                /* far pointer to a Win16 RECT        */
+
+#define WOWGDI_SETRECTRGN       0x00ac   /* ord 172, 10 args                   */
+#define SRR_ARG_BOTTOM  0
+#define SRR_ARG_RIGHT   2
+#define SRR_ARG_TOP     4
+#define SRR_ARG_LEFT    6
+#define SRR_ARG_RGN     8
+
+#define WOWGDI_CREATEPOLYGONRGN 0x003f   /* ord 63,  8 args                    */
+#define CPR_ARG_MODE    0
+#define CPR_ARG_COUNT   2
+#define CPR_ARG_POINTS  4                /* far pointer to an array of POINT16 */
+
+#define WOWGDI_GETCLIPBOX       0x004d   /* ord 77,  6 args                    */
+#define GCX_ARG_RECT    0                /* far pointer, written back          */
+#define GCX_ARG_HDC     4
+
+#define WOWGDI_GETTEXTFACE      0x005c   /* ord 92,  8 args                    */
+#define GTF_ARG_BUF     0                /* far pointer, written back          */
+#define GTF_ARG_COUNT   4
+#define GTF_ARG_HDC     6
+
+#define WOWGDI_SETTEXTJUST      0x000a   /* ord 10,  6 args                    */
+#define STJ_ARG_COUNT   0
+#define STJ_ARG_EXTRA   2
+#define STJ_ARG_HDC     4
+
 /* The three mapping-mode setters. All 6 args, all the same (hDC, x, y) block as
    SetWindowOrg, and all returning the PREVIOUS pair packed y:x in a DWORD. */
 #define WOWGDI_SETWINDOWEXT     0x000c   /* ord 12 */
@@ -674,6 +716,19 @@
 #define WOWGDI_BASE      0x2000
 #define WOWGDI_STEP      0x0008
 #define WOWGDI_MAX       256
+
+/* ⚠ A BOUND ON A COUNT THE GUEST CHOSE. CreatePolygonRgn's point count is a
+     guest WORD used to size a copy, so it is checked against this before it is
+     believed. 1024 points is far past anything the shelf draws and still a
+     fixed 8 KB of stack. */
+#define WOWGDI_MAX_POLYPTS 1024
+
+/* A little-endian WORD out of guest memory. wowuser.h has the same helper for
+   the USER side; this file is included independently, so it has its own. */
+static WORD wowgdi_peek(const volatile BYTE *p, int off)
+{
+    return (WORD)(p[off] | (p[off + 1] << 8));
+}
 
 /* ── ★★ THREE KINDS, NOT TWO -- AND THE THIRD IS WHY THIS IS NOT A BOOLEAN. ──
      A handle's kind decides which call is allowed to dispose of it, and getting
@@ -2362,6 +2417,236 @@ static int wowgdi_call(wow32_frame_t *f, char *note, int notecap)
         wu_puts(note, notecap, &k, " -> region complexity ");
         wu_puthex(note, notecap, &k, (DWORD)rc, 4);
         wow32_setret(f, (DWORD)(WORD)rc);
+        return 1;
+    }
+
+    /* ── 0x2f CombineRgn(hDest, hSrc1, hSrc2, mode). ─────────────────────────
+       ⚠ hSrc2 IS LEGITIMATELY NULL for RGN_COPY, so an absent second source is
+         only an error when the mode actually needs one. Refusing it outright
+         would break the idiomatic "copy this region" call. */
+    case WOWGDI_COMBINERGN: {
+        WORD hd = wow32_argw(f, CBR_ARG_DEST), h1 = wow32_argw(f, CBR_ARG_SRC1);
+        WORD h2 = wow32_argw(f, CBR_ARG_SRC2), md = wow32_argw(f, CBR_ARG_MODE);
+        int kd = -1, k1 = -1, k2 = -1, k = 0, rc;
+        HGDIOBJ d = wowgdi_h32(hd, &kd), s1 = wowgdi_h32(h1, &k1),
+                s2 = wowgdi_h32(h2, &k2);
+        wu_puts(note, notecap, &k, "CombineRgn(0x");
+        wu_puthex(note, notecap, &k, hd, 4);
+        wu_puts(note, notecap, &k, ", 0x"); wu_puthex(note, notecap, &k, h1, 4);
+        wu_puts(note, notecap, &k, ", 0x"); wu_puthex(note, notecap, &k, h2, 4);
+        wu_puts(note, notecap, &k, ", mode "); wu_puthex(note, notecap, &k, md, 2);
+        wu_puts(note, notecap, &k, ")");
+        if (!d || !s1 || (h2 && !s2)) {
+            wu_puts(note, notecap, &k, " -- ★ NOT ONE OF OUR REGION TOKENS;"
+                                       " answered ERROR");
+            wow32_setret(f, 0);                       /* ERROR */
+            return 1;
+        }
+        rc = CombineRgn((HRGN)d, (HRGN)s1, (HRGN)s2, (int)(short)md);
+        wu_puts(note, notecap, &k, " -> complexity ");
+        wu_puthex(note, notecap, &k, (DWORD)rc, 4);
+        wow32_setret(f, (DWORD)(WORD)rc);
+        return 1;
+    }
+
+    /* ── 0x41 CreateRectRgnIndirect(lpRect) -- CreateRectRgn with the four
+         numbers in a struct instead of on the stack. */
+    case WOWGDI_CREATERECTRGNIND: {
+        volatile BYTE *rp = wow32_argptr(f, CRRI_ARG_RECT);
+        int k = 0;
+        HRGN rgn;
+        WORD tok;
+        wu_puts(note, notecap, &k, "CreateRectRgnIndirect");
+        if (!rp) {
+            wu_puts(note, notecap, &k, " -- ★ NULL lpRect; answered 0");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        rgn = CreateRectRgn((int)(short)wowgdi_peek(rp, 0),
+                            (int)(short)wowgdi_peek(rp, 2),
+                            (int)(short)wowgdi_peek(rp, 4),
+                            (int)(short)wowgdi_peek(rp, 6));
+        tok = rgn ? wowgdi_h16((HGDIOBJ)rgn, WOWGDI_KIND_OBJ) : 0;
+        if (!tok) {
+            if (rgn) DeleteObject((HGDIOBJ)rgn);
+            wu_puts(note, notecap, &k, " -- ★ no region (or the token map is"
+                                       " full); answered 0");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        wu_puts(note, notecap, &k, " -> region token 0x");
+        wu_puthex(note, notecap, &k, tok, 4);
+        wow32_setret(f, tok);
+        return 1;
+    }
+
+    /* ── 0xac SetRectRgn(hrgn, l, t, r, b) -- redefine an EXISTING region.
+       ★ The point of it is that it does not allocate, so a guest animating a
+         clip does not churn the token map. */
+    case WOWGDI_SETRECTRGN: {
+        WORD hrgn = wow32_argw(f, SRR_ARG_RGN);
+        int  kk = -1, k = 0;
+        HGDIOBJ r = wowgdi_h32(hrgn, &kk);
+        wu_puts(note, notecap, &k, "SetRectRgn(0x");
+        wu_puthex(note, notecap, &k, hrgn, 4);
+        wu_puts(note, notecap, &k, ")");
+        if (!r) {
+            wu_puts(note, notecap, &k, " -- ★ NOT ONE OF OUR REGION TOKENS;"
+                                       " answered 0");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        SetRectRgn((HRGN)r,
+                   (int)(short)wow32_argw(f, SRR_ARG_LEFT),
+                   (int)(short)wow32_argw(f, SRR_ARG_TOP),
+                   (int)(short)wow32_argw(f, SRR_ARG_RIGHT),
+                   (int)(short)wow32_argw(f, SRR_ARG_BOTTOM));
+        wow32_setret(f, 1);
+        return 1;
+    }
+
+    /* ── 0x3f CreatePolygonRgn(lpPoints, nCount, fnMode). ────────────────────
+       ⚠ A Win16 POINT IS TWO **WORDS**, not two LONGs, so the array has to be
+         widened one point at a time -- handing the guest's buffer straight to
+         Win32 would read every coordinate from the wrong half of the next pair
+         and produce a region that is wrong without being empty.
+       ⚠ AND THE COUNT IS BOUNDED before it is trusted: it is a guest number
+         used as an allocation size. */
+    case WOWGDI_CREATEPOLYGONRGN: {
+        volatile BYTE *pp = wow32_argptr(f, CPR_ARG_POINTS);
+        WORD n  = wow32_argw(f, CPR_ARG_COUNT);
+        WORD md = wow32_argw(f, CPR_ARG_MODE);
+        int  k = 0, i;
+        POINT pts[WOWGDI_MAX_POLYPTS];
+        HRGN rgn;
+        WORD tok;
+        wu_puts(note, notecap, &k, "CreatePolygonRgn(n=");
+        wu_puthex(note, notecap, &k, n, 4);
+        wu_puts(note, notecap, &k, ", mode "); wu_puthex(note, notecap, &k, md, 2);
+        wu_puts(note, notecap, &k, ")");
+        if (!pp || !n || n > WOWGDI_MAX_POLYPTS) {
+            wu_puts(note, notecap, &k, " -- ★ NULL points or count out of range"
+                                       " (max 0x");
+            wu_puthex(note, notecap, &k, WOWGDI_MAX_POLYPTS, 4);
+            wu_puts(note, notecap, &k, "); answered 0");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        for (i = 0; i < (int)n; ++i) {
+            pts[i].x = (LONG)(short)wowgdi_peek(pp, i * 4 + 0);
+            pts[i].y = (LONG)(short)wowgdi_peek(pp, i * 4 + 2);
+        }
+        rgn = CreatePolygonRgn(pts, (int)n, (int)(short)md);
+        tok = rgn ? wowgdi_h16((HGDIOBJ)rgn, WOWGDI_KIND_OBJ) : 0;
+        if (!tok) {
+            if (rgn) DeleteObject((HGDIOBJ)rgn);
+            wu_puts(note, notecap, &k, " -- ★ no region; answered 0");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        wu_puts(note, notecap, &k, " -> region token 0x");
+        wu_puthex(note, notecap, &k, tok, 4);
+        wow32_setret(f, tok);
+        return 1;
+    }
+
+    /* ── 0x4d GetClipBox(hDC, lpRect) -- the bounding box of the clip region. */
+    case WOWGDI_GETCLIPBOX: {
+        WORD hdc = wow32_argw(f, GCX_ARG_HDC);
+        volatile BYTE *rp = wow32_argptr(f, GCX_ARG_RECT);
+        int dkind = -1, k = 0, rc;
+        HGDIOBJ d = wowgdi_h32(hdc, &dkind);
+        RECT rc32;
+        wu_puts(note, notecap, &k, "GetClipBox(0x");
+        wu_puthex(note, notecap, &k, hdc, 4);
+        wu_puts(note, notecap, &k, ")");
+        if (!rp) {
+            wu_puts(note, notecap, &k, " -- ★ NULL lpRect; nothing written");
+            wow32_setret(f, 0);                       /* ERROR */
+            return 1;
+        }
+        if (!d || (dkind != WOWGDI_KIND_DC && dkind != WOWGDI_KIND_WINDC)) {
+            int i;
+            /* Zero it rather than leave the caller's litter -- same reasoning as
+               GetClientRect, and for the same reason: a guest that clips to
+               stack litter draws nothing and looks like a paint bug. */
+            for (i = 0; i < 8; ++i) rp[i] = 0;
+            wu_puts(note, notecap, &k, " -- ★ NOT ONE OF OUR DC TOKENS; zeroed");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        rc = GetClipBox((HDC)d, &rc32);
+        wow32_pokew(rp + 0, (WORD)(short)rc32.left);
+        wow32_pokew(rp + 2, (WORD)(short)rc32.top);
+        wow32_pokew(rp + 4, (WORD)(short)rc32.right);
+        wow32_pokew(rp + 6, (WORD)(short)rc32.bottom);
+        wu_puts(note, notecap, &k, " -> ");
+        wu_puthex(note, notecap, &k, (DWORD)rc32.right, 4);
+        wu_puts(note, notecap, &k, "x");
+        wu_puthex(note, notecap, &k, (DWORD)rc32.bottom, 4);
+        wu_puts(note, notecap, &k, " complexity ");
+        wu_puthex(note, notecap, &k, (DWORD)rc, 4);
+        wow32_setret(f, (DWORD)(WORD)rc);
+        return 1;
+    }
+
+    /* ── 0x5c GetTextFace(hDC, nCount, lpFaceName) -- the name of the font
+         currently selected. WRITE.EXE and CARDFILE both ask.
+       ⚠ nCount IS A BUFFER SIZE FROM THE GUEST and bounds the copy; Win32's own
+         call is given the smaller of it and our stack buffer. */
+    case WOWGDI_GETTEXTFACE: {
+        WORD hdc = wow32_argw(f, GTF_ARG_HDC);
+        WORD cnt = wow32_argw(f, GTF_ARG_COUNT);
+        volatile BYTE *bp = wow32_argptr(f, GTF_ARG_BUF);
+        int dkind = -1, k = 0, got, i;
+        HGDIOBJ d = wowgdi_h32(hdc, &dkind);
+        char face[LF_FACESIZE + 1];
+        wu_puts(note, notecap, &k, "GetTextFace(0x");
+        wu_puthex(note, notecap, &k, hdc, 4);
+        wu_puts(note, notecap, &k, ", ");
+        wu_puthex(note, notecap, &k, cnt, 4);
+        wu_puts(note, notecap, &k, ")");
+        if (!bp || !cnt || !d
+            || (dkind != WOWGDI_KIND_DC && dkind != WOWGDI_KIND_WINDC)) {
+            wu_puts(note, notecap, &k, " -- ★ NULL buffer or not one of our DC"
+                                       " tokens; answered 0");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        got = (int)GetTextFaceA((HDC)d, (int)sizeof face, face);
+        if (got <= 0) { face[0] = 0; got = 0; }
+        if (got > (int)cnt - 1) got = (int)cnt - 1;
+        for (i = 0; i < got; ++i) bp[i] = (BYTE)face[i];
+        bp[got] = 0;
+        wu_puts(note, notecap, &k, " -> ");
+        wu_putq(note, notecap, &k, face);
+        wow32_setret(f, (DWORD)(WORD)got);
+        return 1;
+    }
+
+    /* ── 0x0a SetTextJustification(hDC, nBreakExtra, nBreakCount) -- how WRITE
+         justifies a line: spread nBreakExtra units over nBreakCount breaks. */
+    case WOWGDI_SETTEXTJUST: {
+        WORD hdc = wow32_argw(f, STJ_ARG_HDC);
+        int  ex  = (int)(short)wow32_argw(f, STJ_ARG_EXTRA);
+        int  ct  = (int)(short)wow32_argw(f, STJ_ARG_COUNT);
+        int  dkind = -1, k = 0, rc;
+        HGDIOBJ d = wowgdi_h32(hdc, &dkind);
+        wu_puts(note, notecap, &k, "SetTextJustification(0x");
+        wu_puthex(note, notecap, &k, hdc, 4);
+        wu_puts(note, notecap, &k, ", extra ");
+        wu_puthex(note, notecap, &k, (DWORD)ex, 4);
+        wu_puts(note, notecap, &k, ", breaks ");
+        wu_puthex(note, notecap, &k, (DWORD)ct, 4);
+        wu_puts(note, notecap, &k, ")");
+        if (!d || (dkind != WOWGDI_KIND_DC && dkind != WOWGDI_KIND_WINDC)) {
+            wu_puts(note, notecap, &k, " -- ★ NOT ONE OF OUR DC TOKENS;"
+                                       " answered 0");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        rc = SetTextJustification((HDC)d, ex, ct);
+        wow32_setret(f, (DWORD)(WORD)(rc ? 1 : 0));
         return 1;
     }
 

@@ -317,6 +317,51 @@ static const char *wowuser_sysres_name(WORD h)
 #define IR_ARG_RECT      2
 #define IR_ARG_HWND      6
 
+/* ── THE SMALL USER CALLS THE SHELF STILL ASKS FOR. (session 55) ─────────────
+     Each is a Win32 function of the same name and meaning, so the body is a
+     handle translation and a call. They are listed together because they were
+     found together -- `neneeds.py --todo` over the whole shelf -- and because
+     doing them one at a time is how a batch of one-liners turns into a session. */
+#define WOWUSER_ISCHILD          0x0030   /* ord 48,   4 args  */
+#define ICH_ARG_HWND     0
+#define ICH_ARG_PARENT   2
+
+#define WOWUSER_VALIDATERECT     0x007f   /* ord 127,  6 args  */
+#define VR_ARG_RECT      0
+#define VR_ARG_HWND      4
+
+#define WOWUSER_INVALIDATERGN    0x007e   /* ord 126,  6 args  */
+#define IRG_ARG_ERASE    0
+#define IRG_ARG_RGN      2
+#define IRG_ARG_HWND     4
+
+#define WOWUSER_GETCARETBLINK    0x00a9   /* ord 169,  0 args  */
+#define WOWUSER_INSENDMESSAGE    0x00c0   /* ord 192,  0 args  */
+
+#define WOWUSER_GETNEXTWINDOW    0x00e6   /* ord 230,  4 args  */
+#define GNW_ARG_FLAG     0
+#define GNW_ARG_HWND     2
+
+#define WOWUSER_HILITEMENUITEM   0x00a2   /* ord 162,  8 args  */
+#define HMI_ARG_FLAGS    0
+#define HMI_ARG_ITEM     2
+#define HMI_ARG_MENU     4
+#define HMI_ARG_HWND     6
+
+/* ── ★★★ 0x7a CallWindowProc -- AND IT IS ONE OF THE FOUR SINGLE CALLS THAT
+     EACH BLOCK A GUEST. (CARDFILE) ─────────────────────────────────────────
+     A subclassing program keeps the procedure it displaced and calls it for
+     everything it does not handle. The displaced procedure here can be either
+     kind, and that is the whole difficulty: a 16-bit one has to go through
+     wowcall.h, and a window of one of OUR system classes has no 16-bit
+     procedure at all and must go to the OS. */
+#define WOWUSER_CALLWINDOWPROC   0x007a   /* ord 122, 14 args  */
+#define CWP_ARG_LPARAM   0
+#define CWP_ARG_WPARAM   4
+#define CWP_ARG_MSG      6
+#define CWP_ARG_HWND     8
+#define CWP_ARG_PROC     10
+
 #define WOWUSER_GETSYSTEMMETRICS 0x00b3
 #define GSM_ARG_INDEX    0
 
@@ -4176,6 +4221,216 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
                                 wow32_setret(f, 0); return 1; }
         InvalidateRect(w->hwnd32, haver ? &r : NULL, er ? TRUE : FALSE);
         wow32_setret(f, 1);
+        return 1;
+    }
+
+    /* ── 0x7f ValidateRect(hWnd, lpRect) -- the other half of InvalidateRect:
+         take an area OUT of the update region. A NULL lpRect means the whole
+         client area, exactly as it does above. */
+    case WOWUSER_VALIDATERECT: {
+        WORD hwnd = wow32_argw(f, VR_ARG_HWND);
+        volatile BYTE *rp = wow32_argptr(f, VR_ARG_RECT);
+        wowuser_win_t *w = wowuser_findwin(hwnd);
+        RECT r; int k = 0, haver = 0;
+        wu_puts(note, notecap, &k, "ValidateRect 0x");
+        wu_puthex(note, notecap, &k, hwnd, 4);
+        if (rp) {
+            r.left   = (LONG)(short)wow32_peekw(rp + 0);
+            r.top    = (LONG)(short)wow32_peekw(rp + 2);
+            r.right  = (LONG)(short)wow32_peekw(rp + 4);
+            r.bottom = (LONG)(short)wow32_peekw(rp + 6);
+            haver = 1;
+        } else {
+            wu_puts(note, notecap, &k, " whole client area (lpRect NULL)");
+        }
+        if (!w || !w->hwnd32) {
+            wu_puts(note, notecap, &k, " -- no real window");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        ValidateRect(w->hwnd32, haver ? &r : NULL);
+        wow32_setret(f, 1);
+        return 1;
+    }
+
+    /* ── 0x7e InvalidateRgn(hWnd, hRgn, bErase). ─────────────────────────────
+       ⚠ A NULL hRgn IS NOT AN ERROR: it means the whole client area, the same
+         way a NULL lpRect does for InvalidateRect. Refusing it would leave a
+         guest that asked for a full repaint with none. */
+    case WOWUSER_INVALIDATERGN: {
+        WORD hwnd = wow32_argw(f, IRG_ARG_HWND);
+        WORD hrgn = wow32_argw(f, IRG_ARG_RGN);
+        WORD er   = wow32_argw(f, IRG_ARG_ERASE);
+        wowuser_win_t *w = wowuser_findwin(hwnd);
+        int rkind = -1, k = 0;
+        HGDIOBJ r = hrgn ? wowgdi_h32(hrgn, &rkind) : NULL;
+        wu_puts(note, notecap, &k, "InvalidateRgn 0x");
+        wu_puthex(note, notecap, &k, hwnd, 4);
+        wu_puts(note, notecap, &k, " rgn 0x");
+        wu_puthex(note, notecap, &k, hrgn, 4);
+        wu_puts(note, notecap, &k, er ? " erase" : " no erase");
+        if (!w || !w->hwnd32) {
+            wu_puts(note, notecap, &k, " -- no real window");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        if (hrgn && !r) {
+            wu_puts(note, notecap, &k, " -- ★ NOT ONE OF OUR REGION TOKENS;"
+                                       " answered 0 rather than invalidating"
+                                       " everything, which is what NULL means");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        InvalidateRgn(w->hwnd32, (HRGN)r, er ? TRUE : FALSE);
+        wow32_setret(f, 1);
+        return 1;
+    }
+
+    /* ── 0x30 IsChild(hWndParent, hWnd) -- is one window a descendant of the
+         other. Answered from the REAL windows, so it agrees with what the OS
+         thinks rather than with our own parent field, which a reparent would
+         leave stale. */
+    case WOWUSER_ISCHILD: {
+        WORD hp = wow32_argw(f, ICH_ARG_PARENT), hc = wow32_argw(f, ICH_ARG_HWND);
+        wowuser_win_t *p = wowuser_findwin(hp), *c = wowuser_findwin(hc);
+        int k = 0, r = 0;
+        if (p && c && p->hwnd32 && c->hwnd32)
+            r = IsChild(p->hwnd32, c->hwnd32) ? 1 : 0;
+        wu_puts(note, notecap, &k, "IsChild(0x");
+        wu_puthex(note, notecap, &k, hp, 4);
+        wu_puts(note, notecap, &k, ", 0x");
+        wu_puthex(note, notecap, &k, hc, 4);
+        wu_puts(note, notecap, &k, r ? ") -> TRUE" : ") -> FALSE");
+        if (!p || !c) wu_puts(note, notecap, &k, " (one of them is not one of ours)");
+        wow32_setret(f, (DWORD)r);
+        return 1;
+    }
+
+    /* ── 0xe6 GetNextWindow(hWnd, wFlag) -- walk the sibling chain. Win16's
+         wFlag is GW_HWNDNEXT(2)/GW_HWNDPREV(3), the same values Win32 uses, so
+         it passes straight through to GetWindow.
+       ⚠ THE ANSWER MUST BE TRANSLATED BACK. GetWindow hands us a real HWND and
+         the guest can only hold a 16-bit one; a window that is not ours has no
+         16-bit handle and the honest answer is 0, not the raw pointer. */
+    case WOWUSER_GETNEXTWINDOW: {
+        WORD hwnd = wow32_argw(f, GNW_ARG_HWND), fl = wow32_argw(f, GNW_ARG_FLAG);
+        wowuser_win_t *w = wowuser_findwin(hwnd);
+        int k = 0;
+        WORD out = 0;
+        if (w && w->hwnd32) {
+            HWND n = GetWindow(w->hwnd32, (UINT)fl);
+            if (n) out = wowwin_hwnd16(n);
+        }
+        wu_puts(note, notecap, &k, "GetNextWindow(0x");
+        wu_puthex(note, notecap, &k, hwnd, 4);
+        wu_puts(note, notecap, &k, ", flag ");
+        wu_puthex(note, notecap, &k, fl, 2);
+        wu_puts(note, notecap, &k, ") -> 0x");
+        wu_puthex(note, notecap, &k, out, 4);
+        if (!out) wu_puts(note, notecap, &k, " (end of the chain, or a window"
+                                             " that is not one of ours)");
+        wow32_setret(f, out);
+        return 1;
+    }
+
+    /* ── 0xa2 HiliteMenuItem(hWnd, hMenu, idItem, uHilite). */
+    case WOWUSER_HILITEMENUITEM: {
+        WORD hwnd = wow32_argw(f, HMI_ARG_HWND), hm = wow32_argw(f, HMI_ARG_MENU);
+        WORD it = wow32_argw(f, HMI_ARG_ITEM), fl = wow32_argw(f, HMI_ARG_FLAGS);
+        wowuser_win_t *w = wowuser_findwin(hwnd);
+        int k = 0, r = 0;
+        wu_puts(note, notecap, &k, "HiliteMenuItem(0x");
+        wu_puthex(note, notecap, &k, hwnd, 4);
+        wu_puts(note, notecap, &k, ", item ");
+        wu_puthex(note, notecap, &k, it, 4);
+        wu_puts(note, notecap, &k, ")");
+        if (w && w->hwnd32) {
+            HMENU m = hm ? (HMENU)(ULONG_PTR)hm : GetMenu(w->hwnd32);
+            if (m) r = HiliteMenuItem(w->hwnd32, m, (UINT)it, (UINT)fl) ? 1 : 0;
+        }
+        wow32_setret(f, (DWORD)r);
+        return 1;
+    }
+
+    /* ── 0xa9 GetCaretBlinkTime / 0xc0 InSendMessage -- no arguments, and both
+         are the OS's own answer rather than ours.
+       ★ InSendMessage is asked by a window procedure that wants to know whether
+         it is running inside a SEND (where the sender is blocked) or a POST. We
+         relay the host thread's real state, which is the truth for the thread
+         the guest's procedure is actually running on. */
+    case WOWUSER_GETCARETBLINK: {
+        int k = 0;
+        UINT t = GetCaretBlinkTime();
+        wu_puts(note, notecap, &k, "GetCaretBlinkTime -> ");
+        wu_puthex(note, notecap, &k, (DWORD)t, 4);
+        wu_puts(note, notecap, &k, " ms");
+        wow32_setret(f, (DWORD)(WORD)t);
+        return 1;
+    }
+
+    case WOWUSER_INSENDMESSAGE: {
+        int k = 0;
+        int r = InSendMessage() ? 1 : 0;
+        wu_puts(note, notecap, &k, r ? "InSendMessage -> TRUE"
+                                     : "InSendMessage -> FALSE");
+        wow32_setret(f, (DWORD)r);
+        return 1;
+    }
+
+    /* ── ★★★ 0x7a CallWindowProc(lpPrevWndFunc, hWnd, Msg, wParam, lParam) ───
+         What a subclassing program calls to reach the procedure it displaced,
+         and CARDFILE does not get off the ground without it.
+       ★ THE PROCEDURE IS THE ARGUMENT, NOT THE WINDOW'S. That is the whole
+         point of the call: after SetWindowLong(GWL_WNDPROC) the window's own
+         procedure is the NEW one, and passing this to the window would call the
+         subclass again -- an immediate infinite recursion rather than a wrong
+         answer. So cbproc is set from the argument.
+       ⚠ DS IS STILL THE WINDOW'S hInstance, because that is the entry contract
+         in wowcall.h and the displaced procedure belongs to the same module.
+       ⚠ GATED ON cbok like every other route into 16-bit code: with callbacks
+         off this falls through to the honest "unimplemented" rather than
+         silently returning 0, which a subclass would take for a real answer. */
+    case WOWUSER_CALLWINDOWPROC: {
+        DWORD proc = wow32_argd(f, CWP_ARG_PROC);
+        WORD  hwnd = wow32_argw(f, CWP_ARG_HWND);
+        WORD  msg  = wow32_argw(f, CWP_ARG_MSG);
+        WORD  wp   = wow32_argw(f, CWP_ARG_WPARAM);
+        DWORD lp   = wow32_argd(f, CWP_ARG_LPARAM);
+        wowuser_win_t *w;
+        int k = 0;
+        if (!f->cbok) return 0;
+        w = wowuser_findwin(hwnd);
+        wu_puts(note, notecap, &k, "CallWindowProc(proc 0x");
+        wu_puthex(note, notecap, &k, proc, 8);
+        wu_puts(note, notecap, &k, ", hwnd 0x");
+        wu_puthex(note, notecap, &k, hwnd, 4);
+        wu_puts(note, notecap, &k, ", msg 0x");
+        wu_puthex(note, notecap, &k, msg, 4);
+        wu_puts(note, notecap, &k, ")");
+        if (!proc) {
+            /* No procedure to call. DefWindowProc is the right default only
+               when we know the window; otherwise say so rather than invent. */
+            if (w) {
+                wu_puts(note, notecap, &k, " -- NULL proc; DefWindowProc");
+                wow32_setret(f, (DWORD)wowuser_defproc(f, w, msg, wp, lp,
+                                                       note, notecap));
+            } else {
+                wu_puts(note, notecap, &k, " -- ★ NULL proc and no such window;"
+                                           " answered 0");
+                wow32_setret(f, 0);
+            }
+            return 1;
+        }
+        if (!w) {
+            wu_puts(note, notecap, &k, " -- ★ no such window; answered 0");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        wu_puts(note, notecap, &k, " -> the displaced 16-bit procedure");
+        wow32_setret(f, 0);              /* overwritten by wowcall.h */
+        wowuser_want_msg(f, w, w->hinst ? w->hinst : g_wu_class[w->cls].hinst,
+                         msg, wp, lp, WOWCALL_RET_RESULT);
+        f->cbproc = proc;                /* ★ the argument, not the window's */
         return 1;
     }
 

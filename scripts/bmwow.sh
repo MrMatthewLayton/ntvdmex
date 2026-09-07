@@ -58,6 +58,26 @@ if [ "${PMBP:-0}" != "1" ] && [ -f "$SH/pmbp.txt" ]; then
   echo "disarmed pmbp.txt (PMBP=1 to keep it)"
 fi
 
+# ⚠⚠ MOVE THE TWO SWITCHES ASIDE, BECAUSE THE BASELINE IS MEASURED WITHOUT THEM.
+#   `wowsched.txt` and `wowcall.txt` turn on the task scheduler and 16-bit
+#   callbacks. wowlive.bat CREATES both -- it has to, a guest cannot launch
+#   without them -- so any gate run that follows a live session silently
+#   measures a DIFFERENT CONFIGURATION: the guest runs much further and the
+#   counters come back several times the baseline, which reads exactly like
+#   catastrophic drift and is nothing of the kind.
+#   This was written down as a standing hazard and left to be remembered by
+#   hand, and session 55 duly forgot it and got 280/291/74 against a documented
+#   85/113/57. A script that knows the rule cannot forget it. SWITCHES=1 keeps
+#   them, for deliberately measuring the other configuration.
+if [ "${SWITCHES:-0}" != "1" ]; then
+  for sw in wowsched wowcall; do
+    if [ -f "$SH/$sw.txt" ]; then
+      mv "$SH/$sw.txt" "$SH/$sw.txt.gateaside"
+      echo "moved $sw.txt aside for the gate (SWITCHES=1 to keep it)"
+    fi
+  done
+fi
+
 rm -f "$SH/wow_done.txt" "$SH/wow_host.txt" "$SH/wow_ldt.txt" "$SH/wow_wd.txt" "$SH/wow_alive.txt" "$SH/alive.txt"
 # The Win16 program to run. Empty = wowrun.bat's default (SYSEDIT.EXE), so the
 # baseline invocation is unchanged; TARGET=C:\\WINDOWS\\winhelp.exe runs another.
@@ -76,6 +96,18 @@ for ((i=0; i<TIMEOUT; i++)); do
   if [ -f "$SH/wow_done.txt" ]; then
     sleep 3                                     # let the copies settle
     echo "done: wow_host.txt $(stat -f '%z bytes, %Sm' -t '%H:%M:%S' "$SH/wow_host.txt" 2>/dev/null)"
+    # ── PRINT THE GATE'S OWN SIGNATURE. It is `serviced / declined / unimpl`
+    #   plus the address the guest stops at, and it has been counted BY HAND out
+    #   of the log every session it has ever been quoted -- which is why it is
+    #   quoted inconsistently. LC_ALL=C because the log is not valid UTF-8 and
+    #   grep will otherwise refuse to match in it.
+    S=$(LC_ALL=C grep -ac -- "-> SERVICED"      "$SH/wow_host.txt" 2>/dev/null || echo 0)
+    D=$(LC_ALL=C grep -ac -- "-> DECLINED"      "$SH/wow_host.txt" 2>/dev/null || echo 0)
+    U=$(LC_ALL=C grep -ac -- "-> UNIMPLEMENTED" "$SH/wow_host.txt" 2>/dev/null || echo 0)
+    W=$(LC_ALL=C grep -ao "0001:229[Cc]" "$SH/wow_host.txt" 2>/dev/null | tail -1)
+    echo "GATE: ${S} serviced / ${D} declined / ${U} unimpl${W:+ · $W}"
+    echo "      baseline (session 50): 85 / 113 / 57 · 0001:229C"
+    echo "      ⚠ only comparable with wowsched.txt/wowcall.txt MOVED ASIDE"
     if [ -n "${ARCHIVE:-}" ]; then
       mkdir -p "$ARCHIVE"; S=$(date +%H%M%S)
       cp "$SH/wow_host.txt" "$ARCHIVE/wow_host_$S.log" 2>/dev/null
