@@ -240,7 +240,7 @@ and matches the 6.22 oracle row for row (session 53)** — but `MEM /C` still re
 
    ## ★ SESSION 56 — 83.1% → 84.3%
 
-   **Eighteen commits, all rig-gated. Resumed from session 55's pause; the user chose
+   **Twenty-four commits, all rig-gated. Resumed from session 55's pause; the user chose
    the MIXED option, then asked for both halves of the follow-up.**
 
    ### ▶ ★★★★★ CALC IS A CALCULATOR THAT CALCULATES — AND s55 NAMED THE WRONG PASS
@@ -551,6 +551,48 @@ and matches the 6.22 oracle row for row (session 53)** — but `MEM /C` still re
    GetMessage -> WM_QUIT -- the loop ends / ExitKernelThunk(0) / STAGE2: exec
    loop exited`, and `tasklist` after: **NONE**. Confirmed on NOTEPAD (classic
    wndproc), CALC (a dialog) and CARDFILE.
+
+   ### ▶ ★★★★★ THE MODAL FLAG — s55's OPEN QUESTION, SETTLED, AND IT IS THE
+   SUB-DIALOG GAP THE USER NAMED
+
+   s55 left this written down and unresolved: *"Which of DialogBox/CreateDialog
+   this id serves is NOT known. ▶ To settle it, disassemble USER.EXE at
+   `0x03ff:0x4bdc`."* Done. The answer was **one push instruction** away:
+
+   ```
+   CreateDialog   seg1:0x4bd5   push 0    / lcall 0x047b:0x4c48
+   DialogBox      seg1:0x4d0c   push 1    / lcall 0x047b:0x4d97
+   ```
+
+   The **same thunk**, and the last word pushed — arg offset 0 — is 0 for the
+   modeless family and 1 for the modal one. s55 recorded that field as *"+0 still
+   unexplained (0 in every run)"*: it was 0 in every run because every guest
+   measured then (CALC, SOUNDREC, TERMINAL) calls **CreateDialog**.
+   `USER.87 DIALOGBOX` and `USER.89 CREATEDIALOG` are thin argument shufflers
+   onto `0x4c80` and `0x4b4a`, and **both return immediately after the thunk** —
+   so the modal message loop is **not in USER's 16-bit code. It is ours, and we
+   do not run one.**
+
+   ★ **THAT IS WHY A MODAL DIALOG ENDS ITS PROGRAM.** DialogBox's whole contract
+   is not returning until `EndDialog`. We create and return at once, so a caller
+   whose WinMain is `DialogBox(...); return;` — **TASKMAN exactly** — exits.
+   ⚠ This only became visible because the host leak was fixed earlier today: the
+   window s55 saw was an ORPHAN.
+
+   ★★ **AND IT IS THE SUB-DIALOG GAP THE USER NAMED IN s53** — Minesweeper's
+   `Game > Preferences`, Solitaire's `Options`/`Deck`. **Five guests call
+   DialogBox: NOTEPAD, PACKAGER, SYSEDIT, TASKMAN, WINMINE (3 calls).** One
+   feature unblocks all of it.
+
+   ▶ **WHAT IT NEEDS — the next task, specified.** Deferred completion of this
+   BOP: park the guest inside the service, pump the dialog by calling its 16-bit
+   dlgproc through the existing wowcall chain (`EDITLOCK → EDITFILL →
+   LocalUnlock` is the same shape), and complete the original call with
+   `EndDialog`'s result.
+   ⚠ **NOT ATTEMPTED, deliberately.** A half-built modal loop that never returns
+   is worse than an honest immediate return — it HANGS the guest instead of
+   ending it. What landed is the diagnosis: arg 0 is read, and a modal call now
+   NAMES ITSELF and its consequence in the trace.
 
    ### ▶ WHERE THE NUMBER WENT
 
