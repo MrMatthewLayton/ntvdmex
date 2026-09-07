@@ -240,7 +240,7 @@ and matches the 6.22 oracle row for row (session 53)** — but `MEM /C` still re
 
    ## ★ SESSION 56 — 83.1% → 84.3%
 
-   **Sixteen commits, all rig-gated. Resumed from session 55's pause; the user chose
+   **Eighteen commits, all rig-gated. Resumed from session 55's pause; the user chose
    the MIXED option, then asked for both halves of the follow-up.**
 
    ### ▶ ★★★★★ CALC IS A CALCULATOR THAT CALCULATES — AND s55 NAMED THE WRONG PASS
@@ -484,10 +484,28 @@ and matches the 6.22 oracle row for row (session 53)** — but `MEM /C` still re
    ### ▶ ★★★★★ USER-REPORTED: TRAY ICONS STACKING UP — AND THEY WERE LIVE HOSTS
 
    *"When a WoW16 window exits, it leaves its tray icon behind. They are stacking
-   up in the tray."* **They were not ghost icons. They were LIVE PROCESSES** —
-   one whole VDM host per guest ever launched, each holding a real tray icon, for
-   the rest of the session. Measured before touching anything: launch CALC, click
-   its X, the Calculator window is gone and `tasklist` still shows PID 1488.
+   up in the tray."*
+
+   ⚠⚠ **I ANSWERED "THEY ARE NOT GHOSTS, THEY ARE LIVE PROCESSES" AND THAT WAS
+   WRONG.** The user refuted it with one observation — *"why do they all
+   disappear when the mouse hovers over them?"* — which is the **textbook ghost
+   signature**: Explorer reaps a tray icon only after its owner is dead, and only
+   lazily, when the mouse crosses it. A live process's icon does not do that.
+   Measured afterwards and it is not close: **5 icons in the tray, `tasklist`
+   reporting 0 ntvdmhost.exe.**
+
+   ★ **BOTH FACTS WERE REAL AND THEY COMPOSE — that is what I missed.** The
+   lingering host is measured too (launch CALC, click its X, window gone, PID
+   1488 still there). But a lingering host is what the NEXT
+   `taskkill /f /im ntvdmhost.exe` kills — and every launch script runs one,
+   against **all** instances. An externally terminated process cannot run
+   `NIM_DELETE`, so each becomes a ghost. Reproduced end to end: 1 host + 6 icons
+   → `taskkill` → **0 hosts, still 6 icons**. I ran that kill ~30 times today.
+   ⇒ The icons were ghosts; the lingering hosts were what got ghosted; and one
+   fix covers both, because a host that exits WITH its guest never needs killing.
+   ▶ The launchers now ask before they kill (`rigshot close` on the host window,
+   then `taskkill` as the fallback). MEASURED: three consecutive launches, icon
+   count stable at 7 — it would have gone 7 → 8 → 9.
 
    ⚠ **MY FIRST MEASUREMENT PROVED NOTHING.** `rigshot` has no `close` verb, so
    the "test" never closed the guest and the host was still running for the most

@@ -21053,11 +21053,24 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     /* ── ★★★★ A WIN16 HOST MUST NOT OUTLIVE ITS GUEST. (session 56) ────────────
          REPORTED BY THE USER: "when a WoW16 window exits, it leaves its tray icon
          behind. They are stacking up in the tray."
-       ★ AND THEY ARE NOT GHOST ICONS -- THEY ARE LIVE PROCESSES, which is worse.
-         Measured on the rig: launch CALC, click its X, the Calculator window is
-         gone and `tasklist` still shows ntvdmhost.exe PID 1488. Every Win16
-         launch was leaving a whole VDM host running, each holding a real tray
-         icon, for as long as the session lasted.
+       ⚠⚠ I FIRST WROTE THAT THESE WERE NOT GHOSTS BUT LIVE PROCESSES. THE USER
+         REFUTED IT WITH ONE OBSERVATION: "they all disappear when the mouse
+         hovers over them", which is the textbook signature of a GHOST -- Explorer
+         reaps a tray icon only after its owner is dead, and only lazily, when the
+         mouse passes over it. A live process's icon does not do that.
+         Measured afterwards, and it is not close: FIVE icons in the tray with
+         `tasklist` reporting ZERO ntvdmhost.exe. They are ghosts.
+       ★ BOTH FACTS ARE REAL AND THEY COMPOSE. The lingering host is measured too
+         (launch CALC, click its X, the window is gone and PID 1488 is still
+         there) -- that is the bug this arm and wowuser.h's WM_DESTROY fix. But a
+         LINGERING host is what the NEXT `taskkill /f /im ntvdmhost.exe` then
+         kills, and every launch script runs one, against ALL instances. An
+         externally terminated process cannot run NIM_DELETE, so each one becomes
+         a ghost. Demonstrated end to end: 1 host + 6 icons -> taskkill -> 0 hosts
+         and still 6 icons.
+       ⇒ So the icons were ghosts, the lingering hosts were what got ghosted, and
+         the fix for both is the same: a host that exits WITH its guest never
+         needs killing.
        ⚠ The cause is the line below this one, and it was right for the case it
          was written for and wrong for this one. "Keep the window open so the
          guest's final screen stays visible until the user closes it" assumes

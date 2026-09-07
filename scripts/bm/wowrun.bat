@@ -12,6 +12,12 @@ rem    same thing happen at the start of the day on a freshly booted rig.
 rem    wowlive.bat and rt.bat both re-add it; this path was the one that did
 rem    not, which is why it is the one that broke.
 reg add "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\ntvdm.exe" /v Debugger /t REG_SZ /d C:\ntvdmex\ntvdmhost.exe /f >nul 2>&1
+rem ⚠ ASK BEFORE KILLING -- an externally terminated host never runs
+rem   Shell_NotifyIcon(NIM_DELETE), so its tray icon outlives it as a GHOST.
+rem   (session 56; measured 5 icons / 0 processes.) Graceful first, kill as the
+rem   fallback. Harmless when no host is running.
+"%BM%\rigshot.exe" close "Microsoft Windows XP Virtual DOS Machine" >nul 2>&1
+ping -n 3 127.0.0.1 >nul
 taskkill /f /im ntvdmhost.exe >nul 2>&1
 rem ⚠ AND KILL STOCK'S ntvdm.exe TOO -- XP's WOW VDM IS SHARED, so a live one
 rem    swallows the launch and the IFEO hook never fires.

@@ -6244,9 +6244,14 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
             }
         }
         /* ── ★★★★★ AND TELL THE GUEST, WHICH THIS NEVER DID. (session 56) ──
-             REPORTED BY THE USER: Win16 tray icons "stacking up". They were not
-             ghost icons -- they were LIVE HOSTS, one per guest ever launched,
-             and this line is why.
+             REPORTED BY THE USER: Win16 tray icons "stacking up". ⚠ I called
+             them live hosts rather than ghosts and the user refuted it in one
+             line -- "they all disappear when the mouse hovers over them", which
+             only a DEAD owner's icon does. Measured: 5 icons, 0 processes.
+             The chain is: this missing message left the host ALIVE with nothing
+             to do, the next launch's `taskkill /f` killed it without cleanup, and
+             its icon became a ghost. Fixing this line means no host is left to
+             kill. See the note in main.c's exec-loop tail.
              A Win16 application ends when its window does: WM_CLOSE ->
              DestroyWindow -> **WM_DESTROY** -> PostQuitMessage -> GetMessage
              returns 0 -> WinMain returns -> the task exits -> the VDM has

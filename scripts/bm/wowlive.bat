@@ -49,6 +49,18 @@ rem    new Win16 launch to THAT VDM instead of creating a fresh ntvdm.exe -- so 
 rem    IFEO Debugger hook never fires, our host never starts, and the program comes
 rem    up under STOCK while this script cheerfully reports success. That happened,
 rem    and it is what "it's only running stock NTVDM" looked like from the outside.
+rem ⚠⚠ ASK BEFORE KILLING, OR EVERY RUN LEAVES A GHOST TRAY ICON. (session 56)
+rem    `taskkill /f` terminates the host from OUTSIDE, so it never runs
+rem    Shell_NotifyIcon(NIM_DELETE) and its tray icon outlives it -- a ghost that
+rem    sits there until the user happens to mouse over the notification area.
+rem    The user reported them stacking up; measured, 5 icons with 0 processes,
+rem    and reproduced exactly: 1 host + 6 icons -> taskkill -> 0 hosts, 6 icons.
+rem    The host's own window (hidden for a Win16 run, but present) answers
+rem    WM_CLOSE by destroying itself, which removes the icon on the way out. So
+rem    ask first, give it a moment, and keep the kill as the FALLBACK it should
+rem    always have been -- an unconditional `taskkill` is a leak generator.
+"%BM%\rigshot.exe" close "Microsoft Windows XP Virtual DOS Machine" >nul 2>&1
+ping -n 3 127.0.0.1 >nul
 taskkill /f /im ntvdmhost.exe >nul 2>&1
 taskkill /f /im ntvdm.exe     >nul 2>&1
 ping -n 4 127.0.0.1 >nul

@@ -41,6 +41,12 @@ rem    a previous invocation holds C:\ntvdmex\ntvdmhost.exe open, `copy ... >nul
 rem    then fails SILENTLY, and the OLD binary runs while this script reports
 rem    success. That has happened. The wait, the errorlevel and the two listings
 rem    exist so it cannot happen quietly again.
+rem ⚠ ASK BEFORE KILLING -- an externally terminated host never runs
+rem   Shell_NotifyIcon(NIM_DELETE), so its tray icon outlives it as a GHOST.
+rem   (session 56; measured 5 icons / 0 processes.) Graceful first, kill as the
+rem   fallback. Harmless when no host is running.
+"%BM%\rigshot.exe" close "Microsoft Windows XP Virtual DOS Machine" >nul 2>&1
+ping -n 3 127.0.0.1 >nul
 taskkill /f /im ntvdmhost.exe >nul 2>&1
 taskkill /f /im ntvdm.exe >nul 2>&1
 ping -n 4 127.0.0.1 >nul
