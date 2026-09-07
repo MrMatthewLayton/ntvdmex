@@ -67,7 +67,7 @@
 #include "audio_wave.h"
 #include "present_ddraw.h"
 
-#define LOG_PATH    "C:\\ntvdmex\\ntvdmhost.log"
+/* LOG_PATH now lives in log.h -- see the note there. */
 #define TARGET_PATH "C:\\ntvdmex\\target.txt"
 #define AUTOEXIT_PATH "C:\\ntvdmex\\autoexit"   /* marker: headless test mode -> exit when the guest exits */
 /* Opt-in screenshot flag. Lives on the SMB SHARE folder so the remote driver can

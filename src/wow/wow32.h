@@ -911,6 +911,91 @@ static int wow32_call(wow32_frame_t *f, wow32_dosdata_t *dd)
          it. Answer the one drive this machine is on, from the constant all three
          routes now share. When a real per-process current drive exists, this
          changes with it and not before. */
+    /* ── ★★★★★ 0x84 WowMsgBox -- THE ONE THAT MAKES A DEAD GUEST SAY WHY.
+         (session 56) ────────────────────────────────────────────────────────
+         This is krnl386's own error reporter: when a launch fails it calls
+         WowFailedExec (0x9d) and then this, with the text, and then
+         ExitKernelThunk. Unimplemented, all three were stepped over -- so a
+         guest that could not start simply VANISHED, with the reason sitting in
+         a string nobody displayed.
+       ★ MEASURED on WINFILE, which is exactly this shape:
+             FUNC=0x9d WowFailedExec        -> UNIMPLEMENTED
+             FUNC=0x84 WowMsgBox  arg = "Can't run 16-bit Windows program"
+             FUNC=0x02 ExitKernelThunk      -> shutting the VDM down
+         Its real cause is an ASSET gap, not a host defect: WINFILE.EXE's module
+         table is [VER, KERNEL, GDI, USER, KEYBOARD, COMMDLG, SHELL, SCONFIG,
+         COMMCTRL] -- it is the Windows for Workgroups build and imports
+         SCONFIG.DLL, which is not on the box (`open "SCONFIG.DLL" -> CF=1
+         gle=2`, and it is the ONE module the resolver could not give a path).
+         That replaces the recorded blocker for this guest, which named
+         ShellExecute and CreateWindowEx and had been stale since both were
+         implemented later in s55.
+       ⇒ THE GENERAL WIN IS NOT WINFILE. It is that this is the fifth time a
+         Win16 guest has diagnosed itself in English and the sixth is now free:
+         [[wow-real-hwnd-frontier]]'s standing advice is `implement MessageBox
+         FIRST on any new guest`, and krnl386's own message box is the one that
+         covers every guest that dies BEFORE it can put up its own.
+       ⚠ THE OFFSETS ARE READ OFF A RUN, not from a signature. The harness's own
+         `★ arg[2]` line resolves the text, and its `k` is a WORD index while
+         wow32_argd takes a BYTE offset -- hence 4, not 2. `wType` at 0 was
+         0x0030 = MB_ICONEXCLAMATION|MB_OK, which is what krnl386 would use for
+         a launch failure and is the reading that makes the other fields line up.
+         The caption slot is tried and falls back, because a wrong caption is
+         cosmetic and a missing message is not.
+       ⚠ IT IS MODAL, deliberately. The guest is being told its program cannot
+         run and stock does exactly this; a headless run that used to end
+         silently now ends with a box on screen saying why, which is strictly
+         more information for the same outcome. */
+    case WOW32_WOWMSGBOX: {
+        char s4[512], s8[512], line[1200];
+        const char *body, *capt;
+        WORD type = wow32_argw(f, 0);
+        int  n = 0;
+        if (!wow32_argstr(f, 4, s4, sizeof s4)) s4[0] = 0;
+        if (!wow32_argstr(f, 8, s8, sizeof s8)) s8[0] = 0;
+        /* ★ THE SLOTS ARE PINNED, and by data rather than by a signature --
+             the log line below was added first precisely so they could be. One
+             WINFILE run prints BOTH, and they are unambiguous:
+                 arg4 = "Can't run 16-bit Windows program"
+                 arg8 = "Cannot find file C:\WIN16\WINFILE.EXE (or one of its
+                         components). Check to ensure the path and filename are
+                         correct and that all required libraries are available"
+             The short one is the CAPTION and the long one is the TEXT.
+           ⚠ MY FIRST CUT GUESSED THE OTHER WAY ROUND -- "take whichever slot has
+             text as the body" -- and put the explanation in the title bar and
+             the summary in the body. It looked plausible and was backwards; the
+             instrument added one step earlier is what showed it. Keep both slots
+             on the log line so this stays checkable rather than remembered. */
+        capt = s4[0] ? s4 : "NTVDMEX -- 16-bit Windows";
+        body = s8[0] ? s8 : (s4[0] ? s4 : "(krnl386 reported an error with no text)");
+        /* ── ★★ RECORD BEFORE BLOCKING. ────────────────────────────────────
+             MessageBoxA does not return until a human clicks, and this arm's
+             log block is not flushed until it does -- so the FIRST cut put the
+             box on screen and left NOTHING in the log, including the harness's
+             own arg lines. An instrument that blocks before it records is not an
+             instrument. Write the line here, then show the box. */
+        {   const char *pre = "  WOWMSGBOX: krnl386 is reporting an error to the "
+                              "user. type=0x";
+            const char *h = "0123456789abcdef";
+            const char *q; int i2;
+            for (q = pre; *q && n < (int)sizeof line - 2; ++q) line[n++] = *q;
+            line[n++] = h[(type >> 12) & 0xF]; line[n++] = h[(type >> 8) & 0xF];
+            line[n++] = h[(type >> 4) & 0xF];  line[n++] = h[type & 0xF];
+            for (q = " arg4=\""; *q; ++q) line[n++] = *q;
+            for (i2 = 0; s4[i2] && n < (int)sizeof line - 40; ++i2)
+                line[n++] = (s4[i2] == '\r' || s4[i2] == '\n') ? ' ' : s4[i2];
+            for (q = "\" arg8=\""; *q; ++q) line[n++] = *q;
+            for (i2 = 0; s8[i2] && n < (int)sizeof line - 8; ++i2)
+                line[n++] = (s8[i2] == '\r' || s8[i2] == '\n') ? ' ' : s8[i2];
+            for (q = "\"\r\n"; *q; ++q) line[n++] = *q;
+            log_append(LOG_PATH, line, line + n);
+        }
+        MessageBoxA(NULL, body, capt,
+                    (UINT)((type & 0xF0u) | MB_OK | MB_SETFOREGROUND));
+        wow32_setret(f, 1);                       /* IDOK */
+        return 1;
+    }
+
     case WOW32_SETCURRENTDRIVE:
         wow32_setret(f, (DWORD)DOS_CURRENT_DRIVE);
         return 1;

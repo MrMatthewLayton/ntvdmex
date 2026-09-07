@@ -50,6 +50,15 @@ static inline char *zdump(char *p, const void *b, unsigned n) {
    flooded 148 MB, thrashed the disk, and wedged the SMB result-copy. Cap the total
    appended bytes; past the cap log_append silently drops (writing one truncation
    marker). log_write (the STAGE0 truncate that starts a fresh run) resets the count. */
+/* ── THE LOG'S PATH LIVES WITH THE LOG. (session 56) ─────────────────────────
+     It used to be defined in main.c AFTER the headers that want it, so anything
+     included earlier -- wow32.h, for one -- could call log_append but had no
+     name for the file to pass it. Two copies of a path is how one of them goes
+     stale; one definition, beside the function that opens it. */
+#ifndef LOG_PATH
+#define LOG_PATH    "C:\\ntvdmex\\ntvdmhost.log"
+#endif
+
 #define LOG_MAX_BYTES (256u * 1024u * 1024u)  /* 4 MB -> 32 MB -> 256 MB. A client that RUNS
                                                  produces a long trace, and truncating it hides
                                                  exactly the part that matters. Measured: with
