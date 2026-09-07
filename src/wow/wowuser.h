@@ -153,6 +153,15 @@
 #define AD_ARG_NAMEHI            16
 #define AD_KIND_PREDEFINED       1
 #define AD_KIND_MODULERES        3
+/* ── ★ A FOURTH KIND: AN ICON THAT IS ALREADY A REAL OBJECT. (session 57) ────
+     The two kinds above are both LAZY -- the token carries an ordinal or a name
+     and the resolver goes and gets the image when somebody uses it, because
+     until then we do not know whether the guest means a cursor or an icon. That
+     cannot describe SHELL's ExtractIcon, whose whole job is to reach into
+     ANOTHER FILE and come back with an image: there is no ordinal in this
+     module's resources to remember, and no name either. So this kind carries the
+     HICON itself, and the resolver hands it straight back. */
+#define AD_KIND_REALICON         4
 
 /* ── ★★★★★ 0xaf -- "BUILD ME A BITMAP FROM THESE RESOURCE BYTES". ────────────
      MS Paint's second-to-last wall: with the registration, the DCs and the
@@ -219,6 +228,9 @@ typedef struct {
          which is why Paint had no icon at all and never changed its pointer.
          `ord` and `name` are alternatives: exactly one is set. */
     char name[32];
+    /* Set only for AD_KIND_REALICON: the object itself, because there is nothing
+       to look it up BY -- it came out of a file that is not this module. */
+    HICON real;
 } wowuser_sysres_t;
 
 static wowuser_sysres_t g_wu_sysres[WOWUSER_MAX_SYSRES];
@@ -1386,12 +1398,50 @@ static HMENU wowuser_menu32(WORD h)
      in one place and wrong in the other".
    `picked` receives the colour depth chosen out of the application's own icon
      group, or 0, so a log line can say which image the OS was given. */
+/* The HICON behind an AD_KIND_REALICON token, or NULL. Separate from the
+   resolver below because it is a LOOKUP, not a resolution: nothing is loaded. */
+static HICON wowuser_sysres_realicon(WORD h)
+{
+    int i;
+    if (!h) return NULL;
+    for (i = 0; i < g_wu_nsysres; ++i)
+        if (g_wu_sysres[i].h == h && g_wu_sysres[i].kind == AD_KIND_REALICON)
+            return g_wu_sysres[i].real;
+    return NULL;
+}
+
+/* Mint a token for an icon we already hold. ⚠ THE SAME HICON GETS THE SAME
+   TOKEN: a guest that extracts the same icon twice and compares the handles must
+   find them equal, which is the rule every other handle map here follows. */
+static WORD wowuser_sysres_mint_icon(HICON ic)
+{
+    int i;
+    if (!ic) return 0;
+    for (i = 0; i < g_wu_nsysres; ++i)
+        if (g_wu_sysres[i].h && g_wu_sysres[i].kind == AD_KIND_REALICON
+            && g_wu_sysres[i].real == ic)
+            return g_wu_sysres[i].h;
+    for (i = 0; i < g_wu_nsysres; ++i) if (!g_wu_sysres[i].h) break;
+    if (i == g_wu_nsysres) {
+        if (g_wu_nsysres >= WOWUSER_MAX_SYSRES) return 0;
+        i = g_wu_nsysres++;
+    }
+    g_wu_sysres[i].h    = (WORD)(WOWUSER_SYSRES_BASE + i * WOWUSER_SYSRES_STEP);
+    g_wu_sysres[i].ord  = 0;
+    g_wu_sysres[i].kind = AD_KIND_REALICON;
+    g_wu_sysres[i].name[0] = 0;
+    g_wu_sysres[i].real = ic;
+    return g_wu_sysres[i].h;
+}
+
 static HICON wowuser_sysres_hicon(WORD token, int *picked, int cx, int cy)
 {
     WORD ord  = wowuser_sysres_ord(token);
     WORD kind = wowuser_sysres_kind(token);
     const char *nm = wowuser_sysres_name(token);
     if (picked) *picked = 0;
+    /* ★ Already an object: hand it back. Nothing to load, nothing to guess. */
+    if (kind == AD_KIND_REALICON) return wowuser_sysres_realicon(token);
     if (nm)
         return wowres_open(g_wow_cmd_prog) ? wowres_icon_named(nm, picked, cx, cy)
                                            : NULL;

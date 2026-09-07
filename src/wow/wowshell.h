@@ -100,6 +100,47 @@
 #define DES_ARG_CB      0
 #define DES_ARG_STR     2
 
+/* ── ★★ 0x22 ExtractIcon(hInst, lpszExeFileName, nIconIndex) = 8 ────────────
+     "Give me icon N out of that file", and it is how PROGMAN draws a program
+     item and how PACKAGER shows what it has packaged. The Win32 call has the
+     same three arguments and the same three answers -- an HICON, 1 for "the file
+     has none", 0 for "no such file" -- so what this host has to add is only the
+     handle: an HICON from ANOTHER MODULE cannot be described by the ordinal or
+     name a lazy token carries, so it is minted as AD_KIND_REALICON.
+   ⚠ nIconIndex == -1 IS A COUNT QUERY, not an extraction, and it must not mint
+     anything: the answer is a number, not a handle. */
+#define WOWSHELL_EXTRACTICON  0x0022
+#define EXI_ARG_INDEX    0
+#define EXI_ARG_FILE     2               /* far */
+#define EXI_ARG_HINST    6
+
+/* ── 0x24 ExtractAssociatedIcon(hInst, lpIconPath, lpiIcon) = 10 ─────────────
+     The same, for a DOCUMENT: follow the association, and REWRITE the caller's
+     path buffer with the file the icon actually came from. Both the path and the
+     index are in/out, which is why they are far pointers rather than values.
+   ⚠ THE BUFFER IS THE GUEST'S AND ITS SIZE IS NOT PASSED. Win32's own contract
+     is the same (it assumes MAX_PATH), so the copy back is bounded at MAX_PATH
+     and the log says if the result was longer -- a silent overrun into a guest's
+     data segment is not a trade this host makes. */
+#define WOWSHELL_EXTRACTASSOCIATEDICON 0x0024
+#define EAI_ARG_LPIICON  0               /* far -- WORD in/out */
+#define EAI_ARG_PATH     4               /* far -- char[] in/out */
+#define EAI_ARG_HINST    8
+
+/* ── ★ 0x2b RegisterShellHook(hWnd, fAction) ─────────────────────────────────
+     PROGMAN calls it because PROGMAN IS THE SHELL: it is asking to be told when
+     top-level windows appear, vanish or want activating. We record the window
+     and answer TRUE, and THE LOG SAYS PLAINLY THAT NO HOOK MESSAGE IS EVER
+     POSTED -- because this host runs one Win16 task at a time, so there are no
+     other Win16 windows to report, and reporting the Win32 desktop's would mean
+     handing the guest 16-bit handles for windows it cannot own.
+   ⚠ THAT IS AN ANSWER, NOT A LIE, AND THE DIFFERENCE IS THE SUBSCRIPTION: the
+     call's contract is "you are registered", which is true. A shell that is told
+     nothing happened is in the same position as a shell on an idle desktop. */
+#define WOWSHELL_REGISTERSHELLHOOK 0x002b
+#define RSH_ARG_ACTION   0
+#define RSH_ARG_HWND     2
+
 #define WOWSHELL_DRAGACCEPTFILES 0x0009
 #define DAF_ARG_ACCEPT  0
 #define DAF_ARG_HWND    2
@@ -349,6 +390,118 @@ static int wowshell_call(wow32_frame_t *f, char *note, int notecap)
          through would ask the shell to perform the verb "" -- which is not the
          same thing and fails. The distinction between "no string" and "an empty
          string" is exactly what wow32_argstr's return value is for. */
+    case WOWSHELL_EXTRACTICON: {
+        WORD hinst = wow32_argw(f, EXI_ARG_HINST);
+        int  idx   = (int)(short)wow32_argw(f, EXI_ARG_INDEX);
+        char file[MAX_PATH];
+        int  k = 0;
+        HICON ic;
+        WORD tok;
+        (void)hinst;
+        wu_puts(note, notecap, &k, "ExtractIcon ");
+        if (!wow32_argstr(f, EXI_ARG_FILE, file, sizeof file) || !file[0]) {
+            wu_puts(note, notecap, &k, "-- ★ no file name; answered 0 (no such"
+                                       " file), which is the documented answer");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        wu_putq(note, notecap, &k, file);
+        wu_puts(note, notecap, &k, " index ");
+        wu_puthex(note, notecap, &k, (DWORD)idx, 4);
+        if (idx == -1) {
+            /* A COUNT QUERY. Win32 answers it the same way and it mints
+               nothing -- the value is a number of icons, not a handle. */
+            UINT n = (UINT)(ULONG_PTR)ExtractIconA(GetModuleHandleA(NULL), file,
+                                                   (UINT)-1);
+            wu_puts(note, notecap, &k, " -- a COUNT query -> ");
+            wu_puthex(note, notecap, &k, n, 4);
+            wow32_setret(f, (DWORD)(n & 0xFFFF));
+            return 1;
+        }
+        ic = ExtractIconA(GetModuleHandleA(NULL), file, (UINT)idx);
+        if ((ULONG_PTR)ic == 1) {
+            wu_puts(note, notecap, &k, " -- the file has NO icons (1), which is"
+                                       " the documented in-band answer");
+            wow32_setret(f, 1);
+            return 1;
+        }
+        if (!ic) {
+            wu_puts(note, notecap, &k, " -- no such file or no such index -> 0");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        tok = wowuser_sysres_mint_icon(ic);
+        wu_puts(note, notecap, &k, " -> token 0x");
+        wu_puthex(note, notecap, &k, tok, 4);
+        if (!tok) wu_puts(note, notecap, &k, " -- ★ THE TOKEN TABLE IS FULL, so"
+                                             " the icon exists and the guest"
+                                             " cannot be given it");
+        wow32_setret(f, tok);
+        return 1;
+    }
+
+    case WOWSHELL_EXTRACTASSOCIATEDICON: {
+        volatile BYTE *pidx = wow32_argptr(f, EAI_ARG_LPIICON);
+        volatile BYTE *ppath = wow32_argptr(f, EAI_ARG_PATH);
+        char path[MAX_PATH];
+        int  k = 0, i;
+        WORD idx = 0, tok;
+        HICON ic;
+        wu_puts(note, notecap, &k, "ExtractAssociatedIcon ");
+        if (!wow32_argstr(f, EAI_ARG_PATH, path, sizeof path) || !path[0]) {
+            wu_puts(note, notecap, &k, "-- ★ no path; answered 0");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        if (pidx) idx = (WORD)(pidx[0] | (pidx[1] << 8));
+        wu_putq(note, notecap, &k, path);
+        wu_puts(note, notecap, &k, " index ");
+        wu_puthex(note, notecap, &k, idx, 4);
+        ic = ExtractAssociatedIconA(GetModuleHandleA(NULL), path, &idx);
+        if (!ic) {
+            wu_puts(note, notecap, &k, " -- nothing associated -> 0");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        /* ★ BOTH OUT-PARAMETERS GO BACK, because the caller reads them: the path
+             is now the file the icon came from (which may be a different file
+             entirely) and the index is where in it. */
+        if (ppath) {
+            for (i = 0; i < MAX_PATH - 1 && path[i]; ++i) ppath[i] = (BYTE)path[i];
+            ppath[i] = 0;
+            if (i == MAX_PATH - 1)
+                wu_puts(note, notecap, &k, " [★ path TRUNCATED at MAX_PATH]");
+        }
+        if (pidx) { pidx[0] = (BYTE)(idx & 0xFF); pidx[1] = (BYTE)(idx >> 8); }
+        tok = wowuser_sysres_mint_icon(ic);
+        wu_puts(note, notecap, &k, " -> ");
+        wu_putq(note, notecap, &k, path);
+        wu_puts(note, notecap, &k, " token 0x");
+        wu_puthex(note, notecap, &k, tok, 4);
+        wow32_setret(f, tok);
+        return 1;
+    }
+
+    case WOWSHELL_REGISTERSHELLHOOK: {
+        WORD hwnd = wow32_argw(f, RSH_ARG_HWND);
+        WORD act  = wow32_argw(f, RSH_ARG_ACTION);
+        int  k = 0;
+        wu_puts(note, notecap, &k, "RegisterShellHook(hwnd 0x");
+        wu_puthex(note, notecap, &k, hwnd, 4);
+        wu_puts(note, notecap, &k, ", action ");
+        wu_puthex(note, notecap, &k, act, 4);
+        wu_puts(note, notecap, &k, ") -> registered."
+                                   " ★ AND NO SHELL HOOK MESSAGE WILL EVER BE"
+                                   " POSTED, said here rather than discovered:"
+                                   " this host runs one Win16 task at a time, so"
+                                   " there are no other Win16 windows to report,"
+                                   " and the Win32 desktop's windows have no"
+                                   " 16-bit handles to report them WITH. The"
+                                   " subscription is true; the feed is empty.");
+        wow32_setret(f, 1);
+        return 1;
+    }
+
     case WOWSHELL_SHELLEXECUTE: {
         WORD hwnd = wow32_argw(f, SE_ARG_HWND);
         WORD show = wow32_argw(f, SE_ARG_SHOW);

@@ -3008,6 +3008,240 @@ static void stdio_flush(void)
     g_stdio_n = 0;
 }
 
+/* ── THE UNDOCUMENTED PAIR OF OFFSETS THIS ROUTE RESTS ON (x86). ────────────
+     PEB                          +0x10  ProcessParameters
+     RTL_USER_PROCESS_PARAMETERS  +0x18  StandardInput
+                                  +0x1c  StandardOutput
+                                  +0x20  StandardError
+   ⚠ NOT TRUSTED, CHECKED. stdio_peb_stdout() below reads them out of THIS
+     process and compares with GetStdHandle before they are used on another. */
+#define PEB_OFF_PROCESSPARAMS 0x10
+#define RUPP_OFF_STDIN        0x18
+#define RUPP_OFF_STDOUT       0x1c
+
+typedef LONG (WINAPI *PFN_NtQueryInformationProcess)(HANDLE, ULONG, PVOID,
+                                                     ULONG, PULONG);
+
+/* ── ★★ THE INPUT SIDE, AND IT IS THE SAME DEFECT. (GH #131, session 57) ────
+     `prog < file` is the mirror of `prog > file`: the handle is in the parent
+     and not in us, for exactly the same reason. Adopted only when it is a FILE
+     or a PIPE -- a character handle is a console, and a console's input is the
+     keyboard, which this host already has a whole VDD for. Taking that would
+     replace a working path with a worse one.
+   ⚠ AND AT END OF FILE, DOS SAYS Ctrl-Z. A redirected read that runs out does
+     not block and does not fail: it returns 0x1A, which is what every DOS
+     program written since 1981 tests for. */
+static HANDLE g_stdin_h = NULL;
+static int    g_stdin_eof = 0;
+static DWORD  g_stdin_bytes = 0;
+
+/* One byte from the redirected input, or -1 if there is none to be had. */
+static int stdin_read_byte(void)
+{
+    BYTE b; DWORD got = 0;
+    if (!g_stdin_h) return -1;
+    if (g_stdin_eof) return 0x1A;
+    if (!ReadFile(g_stdin_h, &b, 1, &got, NULL) || got != 1) {
+        g_stdin_eof = 1;
+        return 0x1A;
+    }
+    ++g_stdin_bytes;
+    return b;
+}
+
+/* A handle VALUE out of `proc`'s process parameters at `off`, or 0. The value is
+   meaningful only in that process's handle table. */
+static HANDLE stdio_peb_handle(HANDLE proc, unsigned off);
+
+static HANDLE stdio_peb_stdout(HANDLE proc)
+{
+    static PFN_NtQueryInformationProcess qip;
+    struct { LONG st; PVOID peb; ULONG_PTR pid, aff, prio, parent; } pbi;
+    ULONG got = 0;
+    ULONG_PTR params = 0;
+    HANDLE out = NULL;
+    SIZE_T rd = 0;
+    if (!qip) qip = (PFN_NtQueryInformationProcess)(ULONG_PTR)GetProcAddress(
+                        GetModuleHandleA("ntdll.dll"), "NtQueryInformationProcess");
+    if (!qip || !proc) return NULL;
+    if (qip(proc, 0 /* ProcessBasicInformation */, &pbi, sizeof pbi, &got) < 0)
+        return NULL;
+    if (!pbi.peb) return NULL;
+    if (!ReadProcessMemory(proc, (BYTE *)pbi.peb + PEB_OFF_PROCESSPARAMS,
+                           &params, sizeof params, &rd) || rd != sizeof params)
+        return NULL;
+    if (!params) return NULL;
+    if (!ReadProcessMemory(proc, (BYTE *)params + RUPP_OFF_STDOUT,
+                           &out, sizeof out, &rd) || rd != sizeof out)
+        return NULL;
+    return out;
+}
+
+/* The same read at any offset in the parameters block -- used for StandardInput.
+   Kept as a separate entry point rather than a parameter on the one above so the
+   OUTPUT path, which is the one under test against the stock oracle, cannot be
+   changed by an edit meant for the input path. */
+static HANDLE stdio_peb_handle(HANDLE proc, unsigned off)
+{
+    static PFN_NtQueryInformationProcess qip;
+    struct { LONG st; PVOID peb; ULONG_PTR pid, aff, prio, parent; } pbi;
+    ULONG got = 0;
+    ULONG_PTR params = 0;
+    HANDLE out = NULL;
+    SIZE_T rd = 0;
+    if (!qip) qip = (PFN_NtQueryInformationProcess)(ULONG_PTR)GetProcAddress(
+                        GetModuleHandleA("ntdll.dll"), "NtQueryInformationProcess");
+    if (!qip || !proc) return NULL;
+    if (qip(proc, 0, &pbi, sizeof pbi, &got) < 0 || !pbi.peb) return NULL;
+    if (!ReadProcessMemory(proc, (BYTE *)pbi.peb + PEB_OFF_PROCESSPARAMS,
+                           &params, sizeof params, &rd) || !params) return NULL;
+    if (!ReadProcessMemory(proc, (BYTE *)params + off, &out, sizeof out, &rd)
+        || rd != sizeof out) return NULL;
+    return out;
+}
+
+/* ★ PROVE THE OFFSETS ON THIS PROCESS. Returns 1 if our own PEB reports the
+     same StandardOutput that GetStdHandle does -- which is the only evidence
+     available at run time that the two constants above are right on THIS
+     Windows. ⚠ A process with no stdout at all (which is exactly our case) has
+     0 in both places, and 0 == 0 would "prove" nothing -- so that is reported as
+     UNPROVEN rather than as agreement. */
+static int stdio_peb_layout_ok(int *sawnull)
+{
+    HANDLE mine = GetStdHandle(STD_OUTPUT_HANDLE);
+    HANDLE peb  = stdio_peb_stdout(GetCurrentProcess());
+    if (sawnull) *sawnull = (!mine && !peb);
+    if (!mine && !peb) return 0;              /* nothing to compare -- unproven */
+    return mine == peb;
+}
+
+/* ── ★★★★★ THE PARENT'S OWN STANDARD OUTPUT, DUPLICATED. (GH #131) ──────────
+     Called only after the five earlier routes have failed. See the long note at
+     the call site for why the handle is in the parent and not in us.
+
+   ⚠⚠ THE OFFSETS ARE VALIDATED BY THE DATA THEY READ, which is the only form of
+     proof available for an undocumented structure at run time -- and it is a
+     STRONGER one than checking our own process, because it validates them on the
+     EXACT process we are about to duplicate a handle out of. The parameters
+     block carries the process's own IMAGE PATH; if reading it at the offset this
+     code believes in produces a string whose file name is the one the process
+     list reports for that pid, then this really is that structure. If it does
+     not, we refuse and say so, so a wrong constant costs a log line rather than
+     a handle to something else entirely.
+   ⚠ AND THE DUPLICATED HANDLE IS TYPE-CHECKED BEFORE IT IS ADOPTED. GetFileType
+     is the test the rest of this file already uses: a handle whose type we can
+     name is one we can write to.
+   ⚠ A CONSOLE HANDLE IS TAKEN TOO, and that is not a lesser answer -- a DOS
+     program run at a prompt with no redirect should write to that prompt, which
+     is the same defect wearing different clothes. */
+#define RUPP_OFF_IMAGEPATH 0x38          /* UNICODE_STRING; Buffer at +4 */
+
+static int stdio_parent_is(HANDLE proc, DWORD ppid)
+{
+    struct { USHORT len, max; PVOID buf; } us;
+    ULONG_PTR params = 0;
+    struct { LONG st; PVOID peb; ULONG_PTR pid, aff, prio, parent; } pbi;
+    static PFN_NtQueryInformationProcess qip;
+    ULONG got = 0;
+    SIZE_T rd = 0;
+    WCHAR path[MAX_PATH];
+    char  narrow[MAX_PATH], want[MAX_PATH];
+    int i, n;
+    HANDLE snap;
+    want[0] = 0;
+    if (!qip) qip = (PFN_NtQueryInformationProcess)(ULONG_PTR)GetProcAddress(
+                        GetModuleHandleA("ntdll.dll"), "NtQueryInformationProcess");
+    if (!qip) return 0;
+    /* What the process list says this pid is. */
+    snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (snap != INVALID_HANDLE_VALUE) {
+        PROCESSENTRY32 pe; pe.dwSize = sizeof pe;
+        if (Process32First(snap, &pe)) {
+            do { if (pe.th32ProcessID == ppid) {
+                     for (i = 0; i < MAX_PATH - 1 && pe.szExeFile[i]; ++i)
+                         want[i] = pe.szExeFile[i];
+                     want[i] = 0; break; }
+            } while (Process32Next(snap, &pe));
+        }
+        CloseHandle(snap);
+    }
+    if (!want[0]) return 0;
+    if (qip(proc, 0, &pbi, sizeof pbi, &got) < 0 || !pbi.peb) return 0;
+    if (!ReadProcessMemory(proc, (BYTE *)pbi.peb + PEB_OFF_PROCESSPARAMS,
+                           &params, sizeof params, &rd) || !params) return 0;
+    if (!ReadProcessMemory(proc, (BYTE *)params + RUPP_OFF_IMAGEPATH,
+                           &us, sizeof us, &rd) || rd != sizeof us) return 0;
+    if (!us.buf || !us.len || us.len >= sizeof path) return 0;
+    if (!ReadProcessMemory(proc, us.buf, path, us.len, &rd) || rd != us.len)
+        return 0;
+    n = (int)(us.len / sizeof(WCHAR));
+    if (n >= MAX_PATH) n = MAX_PATH - 1;
+    for (i = 0; i < n; ++i)
+        narrow[i] = (path[i] < 0x80) ? (char)path[i] : '?';
+    narrow[n] = 0;
+    /* Compare the FILE NAME, case-insensitively: the list gives a name, the PEB
+       gives a full path, and it is the tail that has to agree. */
+    /* ⚠ NO CRT IN THIS LINK (see docs: the host links -nostdlib), so the length
+         is counted here rather than borrowed from a library that is not there. */
+    {   int wl = 0, nl = n;
+        while (want[wl]) ++wl;
+        {
+        const char *tail = narrow + (nl > wl ? nl - wl : 0);
+        if (nl < wl) return 0;
+        for (i = 0; i < wl; ++i) {
+            char a = tail[i], b = want[i];
+            if (a >= 'A' && a <= 'Z') a = (char)(a + 32);
+            if (b >= 'A' && b <= 'Z') b = (char)(b + 32);
+            if (a != b) return 0;
+        }
+        }
+    }
+    return 1;
+}
+
+static const char *stdio_from_parent(DWORD ppid)
+{
+    HANDLE proc = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ
+                              | PROCESS_DUP_HANDLE, FALSE, ppid);
+    HANDLE remote, dup = NULL;
+    DWORD ty;
+    if (!proc) return "none (no console, no redirect)";
+    if (!stdio_parent_is(proc, ppid)) {         /* the offsets did not check out */
+        CloseHandle(proc);
+        return "none (no console, no redirect)";
+    }
+    /* ── THE INPUT HANDLE, TAKEN IN THE SAME BREATH. Only a FILE or a PIPE:
+         see the note on g_stdin_h. Failure here is silent on purpose -- it must
+         never cost the output handle, which is the one being measured. */
+    {   HANDLE rin = stdio_peb_handle(proc, RUPP_OFF_STDIN), din = NULL;
+        if (rin && DuplicateHandle(proc, rin, GetCurrentProcess(), &din, 0, FALSE,
+                                   DUPLICATE_SAME_ACCESS)) {
+            DWORD it = GetFileType(din);
+            if (it == FILE_TYPE_DISK || it == FILE_TYPE_PIPE) g_stdin_h = din;
+            else CloseHandle(din);
+        }
+    }
+    remote = stdio_peb_stdout(proc);
+    if (!remote) { CloseHandle(proc); return "none (no console, no redirect)"; }
+    if (!DuplicateHandle(proc, remote, GetCurrentProcess(), &dup, 0, FALSE,
+                         DUPLICATE_SAME_ACCESS)) {
+        CloseHandle(proc);
+        return "none (no console, no redirect)";
+    }
+    CloseHandle(proc);
+    ty = GetFileType(dup);
+    if (ty == FILE_TYPE_DISK || ty == FILE_TYPE_PIPE) {
+        g_stdio = dup;
+        return "duplicated from the parent (REDIRECTED)";
+    }
+    if (ty == FILE_TYPE_CHAR) {
+        g_stdio = dup;
+        return "duplicated from the parent (its console)";
+    }
+    CloseHandle(dup);
+    return "none (no console, no redirect)";
+}
+
 static const char *stdio_init(void)
 {
     HANDLE h = GetStdHandle(STD_OUTPUT_HANDLE);
@@ -3045,6 +3279,41 @@ static const char *stdio_init(void)
             if (g_stdio != INVALID_HANDLE_VALUE) return "attached console by parent pid";
         }
         g_stdio_ppid = ppid;              /* reported at exit either way */
+
+        /* ── ★★★★★ ROUTE SIX: TAKE IT OUT OF THE PARENT. (GH #131, session 57)
+             Five routes have failed and the oracle says the handle EXISTS: run
+             `hello.com > out.txt` at a cmd prompt and STOCK ntvdm writes 136
+             bytes to the file while we write 0. The difference is not the
+             plumbing -- it is that an IFEO-substituted image is not handed the
+             creator's standard handles. Measured, in the same run:
+
+                 si.hStdOut=0x00000000/tffffffff  sf=0x00000000
+
+             -- no STARTF_USESTDHANDLES, no handles, nothing to inherit. And the
+             STOCK half of that comparison is not in the debugger shape at all
+             (the harness drops the IFEO key for it), which is exactly why it
+             works there and not here. So the asymmetry IS the substitution.
+
+           ⇒ BUT THE HANDLE IS STILL OPEN IN THE PARENT. cmd.exe implements
+             `> file` by putting the file on ITS OWN StandardOutput across the
+             child's lifetime, and it waits for the child -- so while we run, the
+             thing we want is sitting in cmd's process parameters. Read it, and
+             duplicate it into this process.
+
+           ⚠⚠ AND THE STRUCTURE OFFSETS ARE PROVEN ON OURSELVES FIRST, which is
+             the only reason this is allowed to exist. PEB.ProcessParameters and
+             RTL_USER_PROCESS_PARAMETERS.StandardOutput are undocumented offsets,
+             and this project's rule is that an expectation is never written from
+             memory. So the code reads its OWN PEB by the same path and checks
+             the answer against GetStdHandle(): if our own StandardOutput does
+             not come back where the offsets say it should, the layout is wrong
+             on this machine and the parent is NOT touched. A wrong offset then
+             costs a log line instead of a duplicated handle to something else
+             entirely. */
+        if (ppid) {
+            const char *why = stdio_from_parent(ppid);
+            if (g_stdio != INVALID_HANDLE_VALUE && g_stdio) return why;
+        }
     }
     return "none (no console, no redirect)";
 }
@@ -3129,6 +3398,10 @@ static int host_conin(void *ctx)
     uint16_t k; int got;
     (void)ctx;
     if (g_conin_pending >= 0) { int c = g_conin_pending; g_conin_pending = -1; return c; }
+    /* ★ A REDIRECTED STDIN OUTRANKS THE KEYBOARD, and must: a program run as
+         `prog < file` is not waiting for a human, and blocking on the key event
+         would hang a batch that has no console at all. See g_stdin_h. */
+    if (g_stdin_h) return stdin_read_byte();
     for (;;) {
         HOST_LOCK();
         got = vdd_input_pop(&g_in, &k);
@@ -3992,6 +4265,7 @@ static int host_coninnb(void *ctx)
     uint16_t k; int got;
     (void)ctx;
     if (g_conin_pending >= 0) { int c = g_conin_pending; g_conin_pending = -1; return c; }
+    if (g_stdin_h) return stdin_read_byte();   /* a file is always ready */
     HOST_LOCK();
     got = vdd_input_pop(&g_in, &k);
     HOST_UNLOCK();
@@ -4008,6 +4282,11 @@ static int host_conpeek(void *ctx)
     uint16_t k; int got;
     (void)ctx;
     if (g_conin_pending >= 0) return 1;
+    /* ⚠ A REDIRECTED INPUT IS ALWAYS "READY", INCLUDING AT END OF FILE -- the
+         read that follows returns Ctrl-Z immediately. Answering "not ready"
+         there would park a polling program forever on a file that has nothing
+         left to give, which is the hang this whole route exists to remove. */
+    if (g_stdin_h) return 1;
     HOST_LOCK();
     got = vdd_input_peek(&g_in, &k);
     HOST_UNLOCK();
@@ -16943,8 +17222,15 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     csrss_register_console();
     if (GetFileAttributesA(WOWTRY_FLAG) != INVALID_FILE_ATTRIBUTES) wow_probe_ldt_matrix("C-after-csrss-register");
     if (csrss_get_command(&g_ci, &err)) {
-        p = zput(p, "STAGE1: program "); p = zput(p, g_cur);
-        p = zput(p, "\\"); p = zput(p, g_title); p = zput(p, "\r\n");
+        /* ⚠ PRINT THE PATH WE WILL ACTUALLY USE. This joined the directory and
+             the title unconditionally and so reported `C:\test\C:\test\hello.com`
+             for a title that was already absolute -- a path that cannot exist,
+             in the one line a reader checks first. An instrument that composes a
+             string the loader does not use is an instrument that lies. */
+        p = zput(p, "STAGE1: program ");
+        if (g_title[0] == '\\' || (g_title[1] == ':' && g_title[2] == '\\'))
+            p = zput(p, g_title);
+        else { p = zput(p, g_cur); p = zput(p, "\\"); p = zput(p, g_title); } p = zput(p, "\r\n");
         /* #129: the OTHER half of the launch shape. CSRSS hands back the app name,
            the command tail, the PIF and a set of flags -- any of which may be what
            actually distinguishes a WOW launch from a DOS one. Print them all rather
@@ -17064,6 +17350,43 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                 p = zput(p, "\r\n");
             }
         }
+    }
+    /* ── ★★★★★ AN ABSOLUTE TITLE IS NOT JOINED TO THE DIRECTORY. (GH #131,
+         session 57) This composed `g_cur + "\" + g_title` unconditionally, and
+         CSRSS's title for a program named with a full path at a cmd prompt IS
+         that full path -- so `hello.com > out.txt` run in C:\test produced
+
+             STAGE1: program C:\test\C:\test\hello.com
+             STAGE2: loaded 0x00000000 from C:\test\C:\test\hello.com
+             STAGE2: embedded fallback
+
+         -- a path that cannot exist, a load of zero bytes, and then the four-byte
+         `mov ah,4Ch / int 21h` stub running INSTEAD OF THE PROGRAM. The run then
+         completes cleanly and writes NOTHING, which is indistinguishable from
+         the redirect defect this issue is about: the output file is empty either
+         way. It is not the same bug, and it was hiding behind it -- the log
+         reported ZERO INT 21h calls in the whole run, which is the tell.
+       ⚠ TWO FORMS OF ABSOLUTE, both real: `C:\...` (a drive) and `\...` (rooted
+         on the current drive). A relative title still gets the directory, which
+         is what the join was for and is still right. */
+    if (!nread && g_title[0]
+        && (g_title[0] == '\\' || (g_title[1] == ':' && g_title[2] == '\\'))) {
+        char path[768]; HANDLE hf; int tn;
+        zput(path, g_title);
+        /* ⚠ AND THE TITLE ARRIVES WITH A TRAILING SPACE -- measured:
+             `title=[C:\test\hello.com ]`. CreateFileA's treatment of one is not
+             something to rely on, and a path is not a place to leave whitespace
+             the guest never typed. */
+        for (tn = 0; path[tn]; ++tn) ;
+        while (tn > 0 && (path[tn - 1] == ' ' || path[tn - 1] == '\t')) path[--tn] = 0;
+        hf = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
+        if (hf != INVALID_HANDLE_VALUE) { ReadFile(hf, filebuf, sizeof(filebuf), &nread, NULL); CloseHandle(hf); }
+        zput(progpath, path);
+        if (g_cmd[0]) zput(args, g_cmd);
+        p = zput(p, "STAGE2: loaded 0x"); p = zhex(p, nread);
+        p = zput(p, " from "); p = zput(p, path);
+        p = zput(p, " [the title is ALREADY ABSOLUTE -- not joined to the"
+                    " current directory]\r\n");
     }
     if (!nread && g_cur[0] && g_title[0]) {
         char path[768]; char *pp = path; HANDLE hf;
