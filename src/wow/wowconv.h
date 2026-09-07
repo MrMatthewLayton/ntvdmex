@@ -205,4 +205,39 @@ static int wowconv_modal_exit(int ended, int window_alive, int has_proc,
     return WOWCONV_MODAL_RUN;
 }
 
+/* ── ⚠⚠ THE `ABC` STRUCTURE IS SIX BYTES IN Win16 AND TWELVE IN Win32 ─────────
+     The same shape of trap as RECT above, and worse in one way: RECT is wrong by
+     a factor of two on ONE structure, this is wrong by a factor of two on an
+     ARRAY -- one entry per character in the range, so measuring a 224-glyph font
+     into a guest's buffer would write 2,688 bytes where 1,344 were reserved.
+       Win16  short abcA; unsigned short abcB; short abcC;   =  6
+       Win32  LONG  abcA; UINT           abcB; LONG  abcC;   = 12
+     The values themselves are the same numbers: A and C are signed and may be
+     negative (an italic glyph overhangs), B is a width and cannot be. So this is
+     purely a narrowing, and the only judgement in it is what to do when a value
+     does not fit -- which is to CLAMP, because a 16-bit field that wraps turns a
+     small overhang into a huge one and lays the text out catastrophically rather
+     than slightly wrongly. */
+#define WOWCONV_ABC16_SIZE 6
+#define WOWCONV_ABC32_SIZE 12
+static int wowconv_clamp16(long v)
+{
+    if (v >  32767L) return  32767;
+    if (v < -32768L) return -32768;
+    return (int)v;
+}
+static void wowconv_abc32_to_16(const long *abc32, unsigned char *out16)
+{
+    int a = wowconv_clamp16(abc32[0]);
+    long b = abc32[1] < 0 ? 0 : abc32[1];      /* a width is never negative */
+    int c = wowconv_clamp16(abc32[2]);
+    if (b > 65535L) b = 65535L;
+    out16[0] = (unsigned char)(a & 0xff);
+    out16[1] = (unsigned char)((a >> 8) & 0xff);
+    out16[2] = (unsigned char)(b & 0xff);
+    out16[3] = (unsigned char)((b >> 8) & 0xff);
+    out16[4] = (unsigned char)(c & 0xff);
+    out16[5] = (unsigned char)((c >> 8) & 0xff);
+}
+
 #endif /* WOWCONV_H */

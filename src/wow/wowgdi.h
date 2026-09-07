@@ -711,6 +711,65 @@
 #define SDD_ARG_DSTX    24
 #define SDD_ARG_HDC     26
 
+/* ── ★ int Escape(HDC, int nEscape, int nCount, LPSTR lpInData, LPSTR lpOut) = 14
+     The device-driver back door, and on a SCREEN DC the honest answer to almost
+     all of it is "this driver does not do that", which Escape spells 0. That is
+     not a stub: 0 is the documented in-band answer for an escape the driver does
+     not implement, and a caller that asks QUERYESCSUPPORT first -- which is what
+     the escape exists for -- gets told before it tries.
+   ⚠ A PRINTING PATH WOULD NEED THE REST (STARTDOC/NEWFRAME/ENDDOC and an abort
+     procedure that calls back into 16-bit code). This host has no printer DC to
+     start one on, so what is NOT done is named here rather than half-built. */
+#define WOWGDI_ESCAPE           0x0026   /* ord 38, 14 args */
+#define ESC_ARG_OUT      0               /* far */
+#define ESC_ARG_IN       4               /* far */
+#define ESC_ARG_COUNT    8
+#define ESC_ARG_ESCAPE  10
+#define ESC_ARG_HDC     12
+#define ESC_QUERYESCSUPPORT 8            /* the one escape we can answer fully */
+
+/* ── HBITMAP CreateBitmapIndirect(LPBITMAP) = 4 ──────────────────────────────
+     CreateBitmap's arguments, in a structure, and the structure is a Win16 one:
+       +0  short bmType        +8  BYTE bmPlanes
+       +2  short bmWidth       +9  BYTE bmBitsPixel
+       +4  short bmHeight     +10  LPVOID bmBits (far)
+       +6  short bmWidthBytes
+     = 14 bytes. Win32's BITMAP is 24 with LONGs and a 32-bit pointer, so this is
+     read field by field rather than cast -- the same rule as every other shared
+     structure in this host. */
+#define WOWGDI_CREATEBITMAPINDIRECT 0x0031   /* ord 49, 4 args */
+#define CBI_ARG_BITMAP   0               /* far */
+#define CBI_OFF_WIDTH    2
+#define CBI_OFF_HEIGHT   4
+#define CBI_OFF_WBYTES   6
+#define CBI_OFF_PLANES   8
+#define CBI_OFF_BPP      9
+#define CBI_OFF_BITS    10
+#define CBI_BITMAP16_SIZE 14
+
+/* ── BOOL GetCharABCWidths(HDC, UINT first, UINT last, LPABC) = 10 ───────────
+   ⚠⚠ THE ABC STRUCTURE IS A DIFFERENT SIZE IN THE TWO WORLDS, and this is the
+     `RECT is 8 bytes not 16` trap again: Win16's ABC is `{ int abcA; UINT abcB;
+     int abcC; }` = SIX bytes; Win32's is three LONGs = TWELVE. Handing the
+     guest's six-byte-per-glyph array to Win32 would overrun it by a factor of
+     two before the first character was measured. Converted per glyph in
+     wowconv.h, where the battery can pin it. */
+#define WOWGDI_GETCHARABCWIDTHS 0x0133   /* ord 307, 10 args */
+#define ABCW_ARG_ABC     0               /* far */
+#define ABCW_ARG_LAST    4
+#define ABCW_ARG_FIRST   6
+#define ABCW_ARG_HDC     8
+
+/* ── UINT GetPaletteEntries(HPALETTE, UINT start, UINT n, LPPALETTEENTRY) = 10
+     ★ PALETTEENTRY IS FOUR BYTES IN BOTH -- peRed, peGreen, peBlue, peFlags --
+     so this one really is a copy, and saying which structures are identical
+     matters as much as saying which are not. */
+#define WOWGDI_GETPALETTEENTRIES 0x016b  /* ord 363, 10 args */
+#define GPE_ARG_ENTRIES  0               /* far */
+#define GPE_ARG_COUNT    4
+#define GPE_ARG_START    6
+#define GPE_ARG_HPAL     8
+
 /* GDI tokens sit below the menu tokens (0x4000) and above the window handles,
    so a stray handle of any kind is recognisable on sight in a log. */
 #define WOWGDI_BASE      0x2000
@@ -1651,6 +1710,210 @@ static int wowgdi_call(wow32_frame_t *f, char *note, int notecap)
          whose bits would run past a 64K segment is refused rather than handed to
          GDI to read whatever follows.
        ⚠ THE DIMENSIONS ARE SIGNED 16-BIT, as in CreateCompatibleBitmap. */
+    /* ── ★ 0x26 Escape -- THE DRIVER BACK DOOR, ANSWERED HONESTLY ────────────
+         WRITE.EXE is the guest that asks (its printing path). On a screen DC the
+         truthful answer to a device escape is "this driver does not implement
+         it", and Escape says that with 0 -- an in-band answer, not a sentinel we
+         invented. QUERYESCSUPPORT is answered properly, which is the whole point
+         of having it: a caller that asks first is told before it tries.
+       ⚠ SAID OUT LOUD RATHER THAN LEFT IN A ZERO. Every escape number this host
+         declines is NAMED in the log, so the first guest that genuinely needs
+         one is a line to grep for rather than a mystery -- this project's own
+         `an unimplemented call still answers` rule, applied to a call whose
+         answer is legitimately 0. */
+    case WOWGDI_ESCAPE: {
+        WORD hdc  = wow32_argw(f, ESC_ARG_HDC);
+        int  esc  = (int)(short)wow32_argw(f, ESC_ARG_ESCAPE);
+        int  cnt  = (int)(short)wow32_argw(f, ESC_ARG_COUNT);
+        volatile BYTE *in = wow32_argptr(f, ESC_ARG_IN);
+        int  k = 0, want = 0;
+        wu_puts(note, notecap, &k, "Escape(dc 0x");
+        wu_puthex(note, notecap, &k, hdc, 4);
+        wu_puts(note, notecap, &k, ", nEscape=");
+        wu_puthex(note, notecap, &k, (DWORD)esc, 4);
+        wu_puts(note, notecap, &k, ", count=");
+        wu_puthex(note, notecap, &k, (DWORD)cnt, 4);
+        wu_puts(note, notecap, &k, ")");
+        if (esc == ESC_QUERYESCSUPPORT) {
+            /* lpInData points at the escape number being asked about. */
+            if (in) want = (int)(WORD)(in[0] | (in[1] << 8));
+            wu_puts(note, notecap, &k, " -- QUERYESCSUPPORT for ");
+            wu_puthex(note, notecap, &k, (DWORD)want, 4);
+            wu_puts(note, notecap, &k, ": this DC supports QUERYESCSUPPORT and"
+                                       " nothing else, so the caller is told NO"
+                                       " before it tries");
+            wow32_setret(f, (DWORD)(want == ESC_QUERYESCSUPPORT ? 1 : 0));
+            return 1;
+        }
+        wu_puts(note, notecap, &k, " -- ★ NOT IMPLEMENTED BY THIS DRIVER, which"
+                                   " is what 0 MEANS for Escape (a screen DC has"
+                                   " no printing escapes). A real printing path"
+                                   " would need STARTDOC/NEWFRAME/ENDDOC and a"
+                                   " 16-bit abort procedure; this host has no"
+                                   " printer DC to start one on");
+        wow32_setret(f, 0);
+        return 1;
+    }
+
+    /* ── 0x31 CreateBitmapIndirect(LPBITMAP) ─────────────────────────────────
+         CreateBitmap's five arguments arriving in a 14-byte Win16 BITMAP instead
+         of on the stack. Read field by field: Win32's BITMAP is 24 bytes with
+         LONGs, so a cast would take bmWidth from the wrong half of bmType. */
+    case WOWGDI_CREATEBITMAPINDIRECT: {
+        const volatile BYTE *bp = wow32_argptr(f, CBI_ARG_BITMAP);
+        int  k = 0, w, h;
+        WORD pl, bpp, tok;
+        DWORD bits;
+        HBITMAP bm;
+        wu_puts(note, notecap, &k, "CreateBitmapIndirect ");
+        if (!bp) {
+            wu_puts(note, notecap, &k, "-- ★ the BITMAP far pointer does not"
+                                       " resolve; answered 0");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        w   = (int)(short)wowgdi_peek(bp, CBI_OFF_WIDTH);
+        h   = (int)(short)wowgdi_peek(bp, CBI_OFF_HEIGHT);
+        pl  = bp[CBI_OFF_PLANES];
+        bpp = bp[CBI_OFF_BPP];
+        bits = (DWORD)wowgdi_peek(bp, CBI_OFF_BITS)
+             | ((DWORD)wowgdi_peek(bp, CBI_OFF_BITS + 2) << 16);
+        wu_puthex(note, notecap, &k, (DWORD)w, 4);
+        wu_puts(note, notecap, &k, "x");
+        wu_puthex(note, notecap, &k, (DWORD)h, 4);
+        wu_puts(note, notecap, &k, " planes=");
+        wu_puthex(note, notecap, &k, pl, 2);
+        wu_puts(note, notecap, &k, " bpp=");
+        wu_puthex(note, notecap, &k, bpp, 2);
+        if (w <= 0 || h <= 0 || !pl || !bpp) {
+            wu_puts(note, notecap, &k, " -- ★ A DIMENSION OR FORMAT IS NOT"
+                                       " POSITIVE; answered 0");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        /* ⚠ bmBits IS IGNORED HERE ON PURPOSE, and the log says so: the pointer
+             is a guest far pointer whose bytes we would have to resolve and
+             validate exactly as CreateBitmap does. No guest measured passes one
+             (WRITE passes 0), so the code that would follow it is not written
+             blind -- it is left to the first run that needs it. */
+        if (bits) wu_puts(note, notecap, &k, " [★ bmBits IS NON-ZERO and is NOT"
+                                             " being read -- the bitmap comes"
+                                             " back UNINITIALISED]");
+        bm = CreateBitmap(w, h, pl, bpp, NULL);
+        tok = wowgdi_h16((HGDIOBJ)bm, WOWGDI_KIND_OBJ);
+        wu_puts(note, notecap, &k, " -> 0x");
+        wu_puthex(note, notecap, &k, tok, 4);
+        wow32_setret(f, tok);
+        return 1;
+    }
+
+    /* ── ★★ 0x133 GetCharABCWidths -- AND THE STRUCTURE IS HALF THE SIZE ─────
+         See wowconv.h: Win16's ABC is 6 bytes, Win32's is 12, so the array is
+         converted entry by entry into the guest's own buffer. Writing Win32's
+         directly would overrun a correctly sized guest buffer by 2x.
+       ⚠ ONLY A TRUETYPE FONT HAS ABC WIDTHS. Win32 fails the call for a raster
+         font, and FALSE is the right answer to pass on -- a caller that gets it
+         falls back to GetTextExtent, which this host implements. */
+    case WOWGDI_GETCHARABCWIDTHS: {
+        WORD hdc   = wow32_argw(f, ABCW_ARG_HDC);
+        WORD first = wow32_argw(f, ABCW_ARG_FIRST);
+        WORD last  = wow32_argw(f, ABCW_ARG_LAST);
+        volatile BYTE *out = wow32_argptr(f, ABCW_ARG_ABC);
+        HDC dc = (HDC)wowgdi_h32(hdc, NULL);
+        int k = 0, n, i, ok = 0;
+        wu_puts(note, notecap, &k, "GetCharABCWidths(dc 0x");
+        wu_puthex(note, notecap, &k, hdc, 4);
+        wu_puts(note, notecap, &k, ", ");
+        wu_puthex(note, notecap, &k, first, 4);
+        wu_puts(note, notecap, &k, "..");
+        wu_puthex(note, notecap, &k, last, 4);
+        wu_puts(note, notecap, &k, ")");
+        n = (int)last - (int)first + 1;
+        if (!dc || !out || n <= 0 || n > 1024) {
+            wu_puts(note, notecap, &k, " -- ★ no DC, no buffer, or a range this"
+                                       " host will not size a temporary for;"
+                                       " answered FALSE");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        {   static ABC abc[1024];
+            ok = GetCharABCWidthsA(dc, first, last, abc) ? 1 : 0;
+            if (ok) {
+                for (i = 0; i < n; ++i) {
+                    long v[3];
+                    unsigned char six[WOWCONV_ABC16_SIZE];
+                    int b;
+                    v[0] = (long)abc[i].abcA;
+                    v[1] = (long)abc[i].abcB;
+                    v[2] = (long)abc[i].abcC;
+                    wowconv_abc32_to_16(v, six);
+                    for (b = 0; b < WOWCONV_ABC16_SIZE; ++b)
+                        out[i * WOWCONV_ABC16_SIZE + b] = six[b];
+                }
+                wu_puts(note, notecap, &k, " -> 0x");
+                wu_puthex(note, notecap, &k, (DWORD)n, 4);
+                wu_puts(note, notecap, &k, " glyph(s), narrowed 12 bytes -> 6");
+            } else {
+                wu_puts(note, notecap, &k, " -- FALSE from the OS (a raster font"
+                                           " has no ABC widths; the caller falls"
+                                           " back to GetTextExtent)");
+            }
+        }
+        wow32_setret(f, (DWORD)ok);
+        return 1;
+    }
+
+    /* ── 0x16b GetPaletteEntries ──────────────────────────────────────────────
+         PALETTEENTRY is four bytes in both worlds, so this one is a copy -- and
+         knowing WHICH structures are identical is worth as much as knowing which
+         are not (see wowconv.h). */
+    case WOWGDI_GETPALETTEENTRIES: {
+        WORD hpal  = wow32_argw(f, GPE_ARG_HPAL);
+        WORD start = wow32_argw(f, GPE_ARG_START);
+        WORD cnt   = wow32_argw(f, GPE_ARG_COUNT);
+        volatile BYTE *out = wow32_argptr(f, GPE_ARG_ENTRIES);
+        HPALETTE pal = (HPALETTE)wowgdi_h32(hpal, NULL);
+        int k = 0;
+        UINT got = 0;
+        wu_puts(note, notecap, &k, "GetPaletteEntries(0x");
+        wu_puthex(note, notecap, &k, hpal, 4);
+        wu_puts(note, notecap, &k, ", start=");
+        wu_puthex(note, notecap, &k, start, 4);
+        wu_puts(note, notecap, &k, ", n=");
+        wu_puthex(note, notecap, &k, cnt, 4);
+        wu_puts(note, notecap, &k, ")");
+        if (!pal) {
+            wu_puts(note, notecap, &k, " -- ★ NOT ONE OF OUR PALETTES; answered 0");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        /* ⚠ A NULL buffer is not an error: it is how a caller ASKS HOW MANY
+             entries the palette has, and Win32 answers the same way. */
+        if (!out) {
+            got = GetPaletteEntries(pal, 0, 0, NULL);
+            wu_puts(note, notecap, &k, " -- a COUNT query -> 0x");
+            wu_puthex(note, notecap, &k, got, 4);
+            wow32_setret(f, got);
+            return 1;
+        }
+        if (cnt > 256) cnt = 256;
+        {   static PALETTEENTRY pe[256];
+            UINT i;
+            got = GetPaletteEntries(pal, start, cnt, pe);
+            for (i = 0; i < got; ++i) {
+                out[i * 4 + 0] = pe[i].peRed;
+                out[i * 4 + 1] = pe[i].peGreen;
+                out[i * 4 + 2] = pe[i].peBlue;
+                out[i * 4 + 3] = pe[i].peFlags;
+            }
+        }
+        wu_puts(note, notecap, &k, " -> 0x");
+        wu_puthex(note, notecap, &k, got, 4);
+        wu_puts(note, notecap, &k, " entries");
+        wow32_setret(f, got);
+        return 1;
+    }
+
     case WOWGDI_CREATEBITMAP: {
         int  w  = (int)(short)wow32_argw(f, CBM_ARG_WIDTH);
         int  h  = (int)(short)wow32_argw(f, CBM_ARG_HEIGHT);
