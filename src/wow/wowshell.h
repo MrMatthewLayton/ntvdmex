@@ -71,6 +71,35 @@
      id 0x0b, 10 args (HDROP, UINT, LPSTR, UINT) = 2+2+4+2. Both add up to what
      their own stubs declare, and both were already named in the header above as
      part of what made "the ids are the ordinals" a reading rather than a guess. */
+/* ── ★★ 0x14 ShellExecute -- ONE OF THE FOUR SINGLE CALLS THAT EACH BLOCK A
+     GUEST. WINFILE and PACKAGER both import it, and WINFILE is a file manager:
+     "open the thing I double-clicked" is most of what it exists to do.
+     ShellExecute(hwnd, lpOperation, lpFile, lpParameters, lpDirectory, nShow)
+     = 2 + 4 + 4 + 4 + 4 + 2 = 20 bytes, which is what the stub declares.
+   ⚠ ITS RETURN IS NOT A BOOLEAN AND NOT A HANDLE. Win16 returns an HINSTANCE
+     that is really a status: > 32 means success, <= 32 is an error code, and
+     Win32's ShellExecuteA kept the same convention -- so the value passes
+     straight through and must NOT be normalised to 0/1. */
+#define WOWSHELL_SHELLEXECUTE 0x0014
+#define SE_ARG_SHOW     0
+#define SE_ARG_DIR      2
+#define SE_ARG_PARAMS   6
+#define SE_ARG_FILE     10
+#define SE_ARG_OP       14
+#define SE_ARG_HWND     18
+
+/* 0x15 FindExecutable(lpFile, lpDirectory, lpResult) -- 4+4+4 = 12. */
+#define WOWSHELL_FINDEXECUTABLE 0x0015
+#define FE_ARG_RESULT   0
+#define FE_ARG_DIR      4
+#define FE_ARG_FILE     8
+
+/* 0x25 DoEnvironmentSubst(lpszString, cbString) -- 4+2 = 6. Expands %VAR% IN
+   PLACE, and the buffer it is given is the only one it may use. */
+#define WOWSHELL_DOENVSUBST   0x0025
+#define DES_ARG_CB      0
+#define DES_ARG_STR     2
+
 #define WOWSHELL_DRAGACCEPTFILES 0x0009
 #define DAF_ARG_ACCEPT  0
 #define DAF_ARG_HWND    2
@@ -315,6 +344,129 @@ static int wowshell_call(wow32_frame_t *f, char *note, int notecap)
          the correct answer to the call; what changes is that it comes up unowned,
          and a run that shows that line has found a window handle this host issued
          and then lost -- which is worth seeing. */
+    /* ── ★★ 0x14 ShellExecute -- see the note by the ids. ────────────────────
+       ⚠ A NULL lpOperation MEANS "open", and passing our empty buffer straight
+         through would ask the shell to perform the verb "" -- which is not the
+         same thing and fails. The distinction between "no string" and "an empty
+         string" is exactly what wow32_argstr's return value is for. */
+    case WOWSHELL_SHELLEXECUTE: {
+        WORD hwnd = wow32_argw(f, SE_ARG_HWND);
+        WORD show = wow32_argw(f, SE_ARG_SHOW);
+        wowuser_win_t *w = wowuser_findwin(hwnd);
+        char op[64], file[MAX_PATH], params[MAX_PATH], dir[MAX_PATH];
+        int  k = 0, haveop, havepar, havedir;
+        DWORD rc;
+        haveop  = wow32_argstr(f, SE_ARG_OP,     op,     sizeof op);
+        havepar = wow32_argstr(f, SE_ARG_PARAMS, params, sizeof params);
+        havedir = wow32_argstr(f, SE_ARG_DIR,    dir,    sizeof dir);
+        if (!wow32_argstr(f, SE_ARG_FILE, file, sizeof file) || !file[0]) {
+            wu_puts(note, notecap, &k, "ShellExecute -- ★ no lpFile; answered "
+                                       "SE_ERR_FNF (2)");
+            wow32_setret(f, 2);
+            return 1;
+        }
+        wu_puts(note, notecap, &k, "ShellExecute ");
+        wu_putq(note, notecap, &k, haveop && op[0] ? op : "(open)");
+        wu_puts(note, notecap, &k, " ");
+        wu_putq(note, notecap, &k, file);
+        if (havepar && params[0]) { wu_puts(note, notecap, &k, " args ");
+                                    wu_putq(note, notecap, &k, params); }
+        if (havedir && dir[0])    { wu_puts(note, notecap, &k, " in ");
+                                    wu_putq(note, notecap, &k, dir); }
+        rc = (DWORD)(ULONG_PTR)ShellExecuteA(w ? w->hwnd32 : NULL,
+                                             (haveop && op[0]) ? op : NULL,
+                                             file,
+                                             (havepar && params[0]) ? params : NULL,
+                                             (havedir && dir[0]) ? dir : NULL,
+                                             (int)(short)show);
+        wu_puts(note, notecap, &k, " -> ");
+        wu_puthex(note, notecap, &k, rc, 4);
+        wu_puts(note, notecap, &k, rc > 32 ? " (started)" : " (SE_ERR_*)");
+        /* ⚠ TRUNCATED TO 16 BITS DELIBERATELY: the guest's variable is an
+             HINSTANCE, which is a WORD here. A success value above 0xFFFF would
+             wrap to something <= 32 and read as an error, so clamp instead. */
+        if (rc > 0xFFFF) rc = 0xFFFF;
+        wow32_setret(f, rc);
+        return 1;
+    }
+
+    /* ── 0x15 FindExecutable(lpFile, lpDirectory, lpResult) -- which program
+         opens this document. Same >32 convention as ShellExecute. */
+    case WOWSHELL_FINDEXECUTABLE: {
+        char file[MAX_PATH], dir[MAX_PATH], out[MAX_PATH];
+        volatile BYTE *rp = wow32_argptr(f, FE_ARG_RESULT);
+        int k = 0, havedir, i;
+        DWORD rc;
+        out[0] = 0;
+        havedir = wow32_argstr(f, FE_ARG_DIR, dir, sizeof dir);
+        if (!wow32_argstr(f, FE_ARG_FILE, file, sizeof file) || !file[0] || !rp) {
+            wu_puts(note, notecap, &k, "FindExecutable -- ★ no lpFile or no "
+                                       "result buffer; answered SE_ERR_FNF (2)");
+            wow32_setret(f, 2);
+            return 1;
+        }
+        rc = (DWORD)(ULONG_PTR)FindExecutableA(file,
+                                               (havedir && dir[0]) ? dir : NULL,
+                                               out);
+        wu_puts(note, notecap, &k, "FindExecutable ");
+        wu_putq(note, notecap, &k, file);
+        if (rc > 32) {
+            for (i = 0; i < (int)sizeof out && out[i]; ++i) rp[i] = (BYTE)out[i];
+            rp[i] = 0;
+            wu_puts(note, notecap, &k, " -> ");
+            wu_putq(note, notecap, &k, out);
+        } else {
+            rp[0] = 0;
+            wu_puts(note, notecap, &k, " -> none (SE_ERR_ ");
+            wu_puthex(note, notecap, &k, rc, 4);
+            wu_puts(note, notecap, &k, ")");
+        }
+        if (rc > 0xFFFF) rc = 0xFFFF;
+        wow32_setret(f, rc);
+        return 1;
+    }
+
+    /* ── 0x25 DoEnvironmentSubst(lpszString, cbString) -- expand %VAR% IN
+         PLACE, inside the guest's own buffer.
+       ⚠ THE RETURN IS A PACKED PAIR, not a status: the HIGH word is the length
+         of the result and the LOW word is the size of the buffer. And the
+         expansion must NOT be written back unless it FITS -- the buffer is the
+         guest's and cbString is the only statement we have about its size. */
+    case WOWSHELL_DOENVSUBST: {
+        volatile BYTE *sp = wow32_argptr(f, DES_ARG_STR);
+        WORD cb = wow32_argw(f, DES_ARG_CB);
+        char in[MAX_PATH * 2], out[MAX_PATH * 2];
+        int k = 0, i, n;
+        DWORD got;
+        if (!sp || !cb) {
+            wu_puts(note, notecap, &k, "DoEnvironmentSubst -- ★ no buffer");
+            wow32_setret(f, (DWORD)cb);
+            return 1;
+        }
+        n = 0;
+        while (n < (int)sizeof in - 1 && n < (int)cb && sp[n]) { in[n] = (char)sp[n]; ++n; }
+        in[n] = 0;
+        got = ExpandEnvironmentStringsA(in, out, (DWORD)sizeof out);
+        wu_puts(note, notecap, &k, "DoEnvironmentSubst ");
+        wu_putq(note, notecap, &k, in);
+        if (got && got <= (DWORD)cb) {
+            for (i = 0; i < (int)got && out[i]; ++i) sp[i] = (BYTE)out[i];
+            sp[i] = 0;
+            wu_puts(note, notecap, &k, " -> ");
+            wu_putq(note, notecap, &k, out);
+            wow32_setret(f, ((DWORD)(WORD)i << 16) | (DWORD)cb);
+        } else {
+            /* Too long, or nothing to do: leave the guest's buffer alone and
+               report the original length. Truncating in place would hand the
+               program a path that silently is not the path it asked about. */
+            wu_puts(note, notecap, &k, got ? " -- ★ result does not fit; buffer"
+                                             " left UNCHANGED"
+                                           : " -- no substitution");
+            wow32_setret(f, ((DWORD)(WORD)n << 16) | (DWORD)cb);
+        }
+        return 1;
+    }
+
     case WOWSHELL_SHELLABOUT: {
         WORD hwnd = wow32_argw(f, SA_ARG_HWND);
         WORD htok = wow32_argw(f, SA_ARG_HICON);

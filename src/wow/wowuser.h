@@ -904,6 +904,16 @@ static const char *wowuser_sysres_name(WORD h)
 #define WOWUSER_GETCOMMERROR   0x00cb
 #define WOWUSER_WRITECOMM      0x00cd
 #define WOWUSER_FLUSHCOMM      0x00d7
+/* The rest of the Win16 comm surface the shelf asks for -- TERMINAL.EXE wants
+   all five. They join the honest refusal below rather than getting stubs.
+   ⚠ SetCommEventMask IS THE ODD ONE: it returns a FAR POINTER to the event
+     word, not a status, so IE_BADID would be a pointer to 0xFFFE. Its failure
+     value is a null pointer, and it is answered separately for that reason. */
+#define WOWUSER_READCOMM       0x00cc
+#define WOWUSER_SETCOMMEVTMASK 0x00d0
+#define WOWUSER_SETCOMMBREAK   0x00d2
+#define WOWUSER_CLEARCOMMBREAK 0x00d3
+#define WOWUSER_ESCAPECOMMFN   0x00d6
 
 #define WOWUSER_SETWINDOWPLACEMENT 0x0173
 #define WOWUSER_EXITWINDOWS        0x0007
@@ -1575,6 +1585,18 @@ static HCURSOR wowuser_sysres_hcursor(WORD token, int *fell)
 #define CW_ARG_STYLE        18
 #define CW_ARG_WINDOWNAME   22
 #define CW_ARG_CLASSNAME    26
+
+/* ── ★★ 0x1c4 CreateWindowEx -- AND ITS BLOCK IS CreateWindow's WITH ONE FIELD
+     ON THE END. (session 55) WINFILE.EXE imports it and creates no window at
+     all without it.
+     CreateWindowEx pushes dwExStyle FIRST, and the first push sits at the
+     HIGHEST offset -- so every one of the eleven offsets above is unchanged and
+     the extra DWORD lands at +30. 4+4+4+4+2+2+2+2+2+2+2+4 = 34, which is what
+     the stub declares. That is why this shares the CreateWindow body outright
+     rather than getting a copy of it: two copies of a window builder is how two
+     window builders come to disagree. */
+#define WOWUSER_CREATEWINDOWEX  0x01c4   /* ord 452, 34 args */
+#define CWX_ARG_EXSTYLE     30
 
 /* Win16's CW_USEDEFAULT, and what this host resolves it to.
    ★ SESSION 42: IT RESOLVES TO Win32's. This used to be a stated placeholder --
@@ -2813,8 +2835,12 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
          behind a working CreateWindow -- the "runs but lies" class.
        ⚠ The caller tests `or ax,ax / je`, so 0 is the failure the guest expects
          and any non-zero value is taken as the window handle. */
-    case WOWUSER_CREATEWINDOW: {
+    case WOWUSER_CREATEWINDOW:
+    case WOWUSER_CREATEWINDOWEX: {
         DWORD clsfp = wow32_argd(f, CW_ARG_CLASSNAME);
+        /* The ONLY difference between the two calls -- see the note by the ids. */
+        DWORD exstyle = (f->id == WOWUSER_CREATEWINDOWEX)
+                      ? wow32_argd(f, CWX_ARG_EXSTYLE) : 0;
         char  cname[64], wname[64];
         wowuser_class_t *c;
         wowuser_win_t *w;
@@ -2915,7 +2941,7 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
                 w->menuitems = nitems;
             }
             if (cc->reg32) {
-                w->hwnd32 = CreateWindowExA(0, cc->cls32, w->text, w->style,
+                w->hwnd32 = CreateWindowExA(exstyle, cc->cls32, w->text, w->style,
                                             wowwin_coord(wow32_argw(f, CW_ARG_X)),
                                             wowwin_coord(wow32_argw(f, CW_ARG_Y)),
                                             wowwin_coord(wow32_argw(f, CW_ARG_WIDTH)),
@@ -2927,7 +2953,14 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
             }
         }
 
-        wu_puts(note, notecap, &k, "CreateWindow ");
+        /* Name which of the two it was: they share a body, and a log that
+           called both "CreateWindow" would hide an exstyle we never applied. */
+        wu_puts(note, notecap, &k, exstyle ? "CreateWindowEx "
+                : (f->id == WOWUSER_CREATEWINDOWEX ? "CreateWindowEx(ex=0) "
+                                                   : "CreateWindow "));
+        if (exstyle) { wu_puts(note, notecap, &k, "ex=0x");
+                       wu_puthex(note, notecap, &k, exstyle, 8);
+                       wu_puts(note, notecap, &k, " "); }
         wu_putq(note, notecap, &k, c->name);
         wu_puts(note, notecap, &k, " ");
         wu_putq(note, notecap, &k, w->text);
@@ -5671,7 +5704,11 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
     case WOWUSER_GETCOMMSTATE:
     case WOWUSER_GETCOMMERROR:
     case WOWUSER_WRITECOMM:
-    case WOWUSER_FLUSHCOMM: {
+    case WOWUSER_FLUSHCOMM:
+    case WOWUSER_READCOMM:
+    case WOWUSER_SETCOMMBREAK:
+    case WOWUSER_CLEARCOMMBREAK:
+    case WOWUSER_ESCAPECOMMFN: {
         int k = 0;
         wu_puts(note, notecap, &k, "COMM call id=0x");
         wu_puthex(note, notecap, &k, f->id, 4);
@@ -5680,6 +5717,23 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
                                    "answered IE_BADID (-2), which is what a real "
                                    "machine with no COM port returns");
         wow32_setret(f, 0xFFFE);          /* IE_BADID */
+        return 1;
+    }
+
+    /* ── 0xd0 SetCommEventMask(idComDev, fuEvtMask) -- returns a FAR POINTER to
+         the port's event word, which the caller then polls directly.
+       ⚠ ITS FAILURE VALUE IS A NULL POINTER, NOT IE_BADID. Grouping it with the
+         calls above would hand back 0x0000FFFE, and a guest that dereferenced
+         that would read offset 0xFFFE of a null selector rather than seeing an
+         error -- the sentinel-that-means-yes shape this project keeps paying
+         for. There is no port, so there is no event word, so the answer is 0. */
+    case WOWUSER_SETCOMMEVTMASK: {
+        int k = 0;
+        wu_puts(note, notecap, &k, "SetCommEventMask -- ★ NO SERIAL PORT IN THIS "
+                                   "VDM; answered a NULL far pointer (there is no "
+                                   "event word to point at), NOT IE_BADID, which "
+                                   "at this call site would be an address");
+        wow32_setret(f, 0);
         return 1;
     }
 
