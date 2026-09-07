@@ -121,7 +121,10 @@ for ((i=0; i<TIMEOUT; i++)); do
       exit 4
     fi
     echo "GATE: ${S} serviced / ${D} declined / ${U} unimpl${W:+ · $W}"
-    echo "      baseline (session 50): 85 / 113 / 57 · 0001:229C"
+    echo "      baseline (session 56): 110 / 113 / 32 · 0001:229C"
+    echo "      (was 85/113/57 to s55; +25 serviced / -25 unimpl is EXACTLY the"
+    echo "       25 SetCurrentDrive calls WOW32 id 0xc8 now answers -- accounted"
+    echo "       for, not drift. Declines and the stop address are unchanged.)"
     echo "      ⚠ only comparable with wowsched.txt/wowcall.txt MOVED ASIDE"
     if [ -n "${ARCHIVE:-}" ]; then
       mkdir -p "$ARCHIVE"; S=$(date +%H%M%S)

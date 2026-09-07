@@ -75,6 +75,9 @@
 #define WOW32_H
 
 #include <windows.h>
+/* For DOS_CURRENT_DRIVE -- the WOW32 select-drive thunk and INT 21h AH=19h
+   must answer the same thing; see the note on the constant. */
+#include "dos_layout.h"
 
 /* Where each field sits relative to the thunk's BP. See the frame diagram above. */
 #define WOW32_OFF_ID    6
@@ -390,6 +393,7 @@ static DWORD wow32_peekret(const wow32_frame_t *f)
 #define WOW32_SETPRIORITY               0x20
 #define WOW32_LOCKCURRENTTASK           0x21
 #define WOW32_WOWLOADMODULE             0x2d
+#define WOW32_SETCURRENTDRIVE           0xc8   /* read off its call site, see below */
 #define WOW32_GETPROFILEINT             0x39   /* pinned from DGROUP, see below    */
 #define WOW32_GETPROFILESTRING          0x3a   /* ★ IT DECIDES PAINT'S COLOUR MODE */
 #define WOW32_WOWGETNEXTVDMCOMMAND      0x70
@@ -525,6 +529,7 @@ static const char *wow32_name(WORD id)
     case WOW32_GETCURDIR:              return "GetCurrentDirectory";
     case WOW32_GETSYSTEMDEFAULTLANGID: return "GetSystemDefaultLangID";
     case WOW32_GETWINDOWSDIRECTORY:    return "GetWindowsDirectory";
+    case WOW32_SETCURRENTDRIVE:        return "SetCurrentDrive";
     case WOW32_GETPROFILEINT:          return "GetProfileInt";
     case WOW32_GETPROFILESTRING:       return "GetProfileString";
     case WOW32_SETCURRENTDIR:          return "SetCurrentDirectory";
@@ -872,6 +877,44 @@ static int wow32_call(wow32_frame_t *f, wow32_dosdata_t *dd)
            simply let the guest get as far as asking with one missing.
          ⇒ The locals are writable and already the right size, so pass them always
            and make "absent" an empty *buffer* rather than an empty literal. */
+    /* ── ★★★★ 0xc8 -- AND IT IS WHY krnl386 THINKS IT IS ON DRIVE A:. ────────
+         Named from its call site, not from an export table, with
+         `tools/ne/nedis.py guest/wow/KRNL386.EXE --wowfunc 0xc8`:
+
+           seg1:0x537b  push dx / push ax
+                        call 0x5343        ; AL = current drive, via [0x275]
+                        cmp  dl, al        ; asked for the one we are already on?
+                        je   0x538d        ; yes -- nothing to do
+                        push dx
+                        call 0xb2d4        ; ★ WOW32 id 0xc8 (drive in DL)
+                        mov  byte ptr [0x2a0], al     ; ← THE RETURN IS CACHED
+                        pop  ax / mov al, 0x1a        ; 26 drives
+                        jmp  0x5577
+
+         So this is krnl386's INT 21h AH=0Eh (SELECT DEFAULT DRIVE) arm, and
+         WHATEVER WE RETURN BECOMES krnl386's ANSWER TO "what drive am I on".
+         [0x2a0] is not a table -- it is the cached current drive, written from
+         exactly two places (here, and the AH=19h arm at seg1:0x533a which reads
+         the real one through [0x275]) and invalidated with 0xFF at seg1:0x5717.
+         The per-drive TABLE is the separate [0x2a2 + bx] read at seg1:0x51ae.
+
+       ⚠ UNIMPLEMENTED, THIS RETURNED THE HARNESS SENTINEL 0 -- and 0 is a
+         perfectly good drive index, so krnl386 cached "the current drive is A:"
+         after every select. Measured on TERMINAL, which walks drives 0x19 down
+         to 0 and so calls this 25 times in one startup; WRITE does the same. It
+         is [[stepped-over-call-answers-at-random]] again: not a crash, not a log
+         line, just a number that means something.
+
+       ⚠ AND WE DO NOT SUPPORT CHANGING DRIVES. INT 21h AH=0Eh accepts a select
+         and ignores it, so returning the REQUESTED drive would claim a switch
+         that did not happen -- and the guest's very next AH=19h would contradict
+         it. Answer the one drive this machine is on, from the constant all three
+         routes now share. When a real per-process current drive exists, this
+         changes with it and not before. */
+    case WOW32_SETCURRENTDRIVE:
+        wow32_setret(f, (DWORD)DOS_CURRENT_DRIVE);
+        return 1;
+
     case WOW32_GETPROFILEINT: {
         char app[128], key[128];
         WORD def;

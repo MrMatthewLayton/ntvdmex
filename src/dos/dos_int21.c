@@ -1747,7 +1747,7 @@ int dos_int21(dos_machine_t *m)
     } else if (ah == 0x2F) {                    /* get DTA -> ES:BX */
         SET16(R_ES, m->dta_seg); SET16(R_BX, m->dta_off); OKCF();
     } else if (ah == 0x19) {                    /* get current drive -> AL (C: = 2) */
-        SETAX((R_AX & 0xFF00) | 0x02); OKCF();
+        SETAX((R_AX & 0xFF00) | DOS_CURRENT_DRIVE); OKCF();
     } else if (ah == 0x0E) {                    /* select drive -> AL = #drives */
         SETAX((R_AX & 0xFF00) | 0x03); OKCF();
     } else if (ah == 0x0D) {                    /* disk reset (flush) -> nop */

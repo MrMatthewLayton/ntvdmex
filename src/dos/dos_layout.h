@@ -8,6 +8,18 @@
 #include "dos_mcb.h"          /* DOS_PSP_SEG (0x0100), DOS_MEM_TOP (0xA000) */
 
 #define DOS_HDLR_SEG  0x0050  /* INT 21h BOP handler segment (linear 0x0500) */
+/* ── THE CURRENT DRIVE, IN ONE PLACE. (session 56) ───────────────────────────
+     Three routes ask this machine what drive it is on -- INT 21h AH=19h, the
+     WOW32 select-drive thunk (id 0xc8), and krnl386's own cached copy at DGROUP
+     [0x2a0] which is filled from whichever answered last. They must not
+     disagree; two of them disagreeing is exactly the shape of the equipment
+     word vs the 0040:0000 port table, and of the BIOS vs the UART registers.
+   ⚠ IT IS A CONSTANT BECAUSE CHANGING DRIVES IS NOT SUPPORTED. INT 21h AH=0Eh
+     accepts a select and ignores it, so anything that reported a DIFFERENT
+     drive back would be claiming a switch that did not happen. When a real
+     per-process current drive exists, this becomes a variable and all three
+     routes read it. */
+#define DOS_CURRENT_DRIVE 0x02      /* C: -- 0 = A: */
 #define DOS_ENV_SEG   0x0060  /* environment segment (linear 0x0600)         */
 #define DOS_LOAD_OFF  0x0010  /* .EXE load module = DOS_PSP_SEG + this       */
 #define DOS_DBCS_OFF  0x0018  /* empty DBCS table parked at DOS_HDLR_SEG:this */
