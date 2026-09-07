@@ -1353,12 +1353,29 @@ static void com_tx_sink(void *ctx, int port, uint8_t b)
      (CLEAR -- krnl386 tests `test al,2` at seg1:0xc136 and sets a kernel flag
      from it, so the two modes must not disagree; sharing one function is now
      the mechanism rather than the intention). */
+/* ★ Whether the guest is told a math coprocessor is installed -- the `Fpu` row
+     of the settings dialog, kept as a plain flag because the equipment word is
+     built long before the settings struct exists in this file. settings_apply()
+     is the only writer. */
+static int g_fpu_present = 1;
+
 static WORD bios_equipment_word(void)
 {
     WORD w = 0x4021;                      /* floppy, 80x25 colour, 1 parallel  */
     int n = 0, i;
     for (i = 0; i < COMM_MAX_PORTS; ++i) if (vdd_comm_fitted(&g_comm, i)) ++n;
     w = (WORD)((w & ~0x0E00u) | ((DWORD)(n & 7) << 9));
+    /* ── ★ BIT 1 IS "A MATH COPROCESSOR IS INSTALLED", AND IT WAS ALWAYS CLEAR.
+         (session 57, GH #136) The guest runs 16-bit code on the REAL CPU, which
+         has had an FPU since the 486DX -- so answering "no coprocessor" was not
+         a conservative default, it was a wrong one, and a program that asks
+         before using x87 was being sent down its emulator path for no reason.
+       ⚠ AND IT IS THE `Fpu` SETTING'S FIRST EFFECT. That row has existed since
+         the settings dialog did and consulted nothing; this is the line that
+         makes it mean something. Unticking it now tells the guest what the host
+         used to tell it unconditionally, which is a real configuration -- a
+         program can be forced onto its emulator to compare the two. */
+    if (g_fpu_present) w |= 0x0002;
     return w;
 }
 static void serial_init(void)
@@ -5881,7 +5898,27 @@ static void settings_apply(HWND h, const ntvdmex_settings *s, int live)
        interpreter re-reads the budget every slice, so changing the speed in the
        dialog bites on the next millisecond rather than at the next launch. */
     g_cpuspd_idx     = (int)(s->v[SET_SPEEDMODE] < CPUSPEED_COUNT ? s->v[SET_SPEEDMODE] : 0);
+    /* ── ★ TURBO OVERRIDES THE SPEED, IT DOES NOT REPLACE IT. (session 57) The
+         checkbox means "never mind the dropdown, run flat out", so it selects
+         index 0 -- the one the speed list already defines as Unlimited -- and
+         leaves the stored SpeedMode alone. Unticking it therefore goes back to
+         whatever the user had chosen, rather than to a default. One knob
+         borrowing another's mechanism, which is why this is two lines and not a
+         second throttle. */
+    g_fpu_present    = (int)(s->v[SET_FPU] ? 1 : 0);
+    if (s->v[SET_TURBO]) g_cpuspd_idx = 0;
     cpuspd_recompute();
+    /* ── ★ THE GUEST'S KEY REPEAT IS THE GUEST'S, NOT THE HOST'S. (session 57)
+         g_ty_period_us is seeded from the host's own SPI_GETKEYBOARDSPEED, which
+         is right for a Windows application and wrong for a DOS one: a DOS
+         program's repeat rate is the BIOS's, and the IBM BIOS default is about
+         ten characters a second. The setting's own default is 10 for that
+         reason. ⚠ THE DELAY IS LEFT ON THE HOST'S SETTING deliberately -- the
+         row is `TypematicRate`, it says nothing about the delay before the
+         first repeat, and inventing a second meaning for one control is how a
+         knob comes to do something its label does not say. */
+    if (s->v[SET_TYPEMATIC] >= 2)
+        g_ty_period_us = 1000000u / (uint32_t)s->v[SET_TYPEMATIC];
     g_floppy_img     = s->s[SET_STR_FLOPPYA][0] ? s->s[SET_STR_FLOPPYA] : FLOPPY_IMG_PATH;
     /* The SbDma list is 1|3|5, and 5 is not an 8-bit channel on any real 8237 --
        on an SB16 it is the SIXTEEN-bit one. Selecting it therefore moves H and

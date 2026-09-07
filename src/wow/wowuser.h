@@ -1478,6 +1478,35 @@ static HCURSOR wowuser_sysres_hcursor(WORD token, int *fell)
     return c;
 }
 
+/* ── ★ BOOL ScrollDC(HDC, int dx, int dy, LPRECT scroll, LPRECT clip,
+                       HRGN update, LPRECT lprcUpdate) = 20 ────────────────────
+     Win32 has the same call with the same seven arguments and the same meaning.
+     What is NOT the same is the RECTANGLES: a Win16 RECT is 8 bytes and Win32's
+     is 16 (see wowconv.h), so each one is read field by field and rebuilt, and
+     the update rectangle is written back the same way. Passing a guest's RECT
+     straight to Win32 would read this rectangle plus eight bytes of whatever
+     follows it. */
+#define WOWUSER_SCROLLDC         0x00dd
+#define SCRDC_ARG_LPRCUPDATE  0            /* far */
+#define SCRDC_ARG_HRGNUPDATE  4
+#define SCRDC_ARG_LPRCCLIP    6            /* far */
+#define SCRDC_ARG_LPRCSCROLL 10            /* far */
+#define SCRDC_ARG_DY         14
+#define SCRDC_ARG_DX         16
+#define SCRDC_ARG_HDC        18
+
+/* ── ★ 0x1ce CalcChildScroll(HWND hwnd, WORD wScroll) = 4 ────────────────────
+     An undocumented USER internal that PROGMAN calls: "recompute the scroll bars
+     of this MDI client". ⚠ THE HONEST ANSWER HERE IS THAT THE OS ALREADY DID IT.
+     Our MDICLIENT is the REAL Win32 system class (see wowuser_ensure_sysclasses),
+     so its scroll bars are managed by Win32's own MDI client, not by anything
+     this host keeps -- there is no state of ours to recalculate. That is a
+     statement about our architecture, not a stub, and the log says it every
+     time so a guest that visibly disagrees is a line to grep for. */
+#define WOWUSER_CALCCHILDSCROLL  0x01ce
+#define CCS_ARG_SCROLL   0
+#define CCS_ARG_HWND     2
+
 /* ── ★★ THE ENUMERATIONS. (session 57) One callback per item; the mechanism is
      in src/wow/wowenum.h and the argument blocks are reversed as always.
        BOOL EnumWindows(FARPROC lpEnumFunc, LPARAM lParam)              = 8
@@ -4006,6 +4035,76 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
         wu_puts(note, notecap, &k, " -> ");
         wow32_setret(f, (DWORD)wowuser_defproc(f, w, m.msg, m.wparam, m.lparam,
                                                note + k, notecap - k));
+        return 1;
+    }
+
+    case WOWUSER_SCROLLDC: {
+        WORD hdc = wow32_argw(f, SCRDC_ARG_HDC);
+        int  dx  = (int)(short)wow32_argw(f, SCRDC_ARG_DX);
+        int  dy  = (int)(short)wow32_argw(f, SCRDC_ARG_DY);
+        const volatile BYTE *rs = wow32_argptr(f, SCRDC_ARG_LPRCSCROLL);
+        const volatile BYTE *rc = wow32_argptr(f, SCRDC_ARG_LPRCCLIP);
+        volatile BYTE *ru = wow32_argptr(f, SCRDC_ARG_LPRCUPDATE);
+        WORD hrgn = wow32_argw(f, SCRDC_ARG_HRGNUPDATE);
+        HDC  dc   = (HDC)wowgdi_h32(hdc, NULL);
+        HRGN rgn  = (HRGN)wowgdi_h32(hrgn, NULL);
+        RECT scroll, clip, upd;
+        int  k = 0, ok;
+        wu_puts(note, notecap, &k, "ScrollDC(dc 0x");
+        wu_puthex(note, notecap, &k, hdc, 4);
+        wu_puts(note, notecap, &k, ", d=");
+        wu_puthex(note, notecap, &k, (DWORD)dx, 4);
+        wu_puts(note, notecap, &k, ",");
+        wu_puthex(note, notecap, &k, (DWORD)dy, 4);
+        wu_puts(note, notecap, &k, ")");
+        if (!dc) {
+            wu_puts(note, notecap, &k, " -- ★ NOT ONE OF OUR DCs; answered FALSE");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        /* ⚠ EIGHT BYTES IN, SIXTEEN OUT. wowconv_rect16_get is the same reader
+             the rest of this host uses, and it sign-extends -- a scroll
+             rectangle with a negative top is ordinary. A NULL rectangle means
+             "the whole DC" in both worlds and is passed through as NULL. */
+        if (rs) { scroll.left   = wowconv_rect16_get((const unsigned char *)rs, 0);
+                  scroll.top    = wowconv_rect16_get((const unsigned char *)rs, 1);
+                  scroll.right  = wowconv_rect16_get((const unsigned char *)rs, 2);
+                  scroll.bottom = wowconv_rect16_get((const unsigned char *)rs, 3); }
+        if (rc) { clip.left   = wowconv_rect16_get((const unsigned char *)rc, 0);
+                  clip.top    = wowconv_rect16_get((const unsigned char *)rc, 1);
+                  clip.right  = wowconv_rect16_get((const unsigned char *)rc, 2);
+                  clip.bottom = wowconv_rect16_get((const unsigned char *)rc, 3); }
+        ok = ScrollDC(dc, dx, dy, rs ? &scroll : NULL, rc ? &clip : NULL,
+                      rgn, ru ? &upd : NULL) ? 1 : 0;
+        if (ok && ru) {
+            wowconv_rect16_put((unsigned char *)ru, 0, (int)upd.left);
+            wowconv_rect16_put((unsigned char *)ru, 1, (int)upd.top);
+            wowconv_rect16_put((unsigned char *)ru, 2, (int)upd.right);
+            wowconv_rect16_put((unsigned char *)ru, 3, (int)upd.bottom);
+            wu_puts(note, notecap, &k, " update=");
+            wu_puthex(note, notecap, &k, (DWORD)(upd.right - upd.left), 4);
+            wu_puts(note, notecap, &k, "x");
+            wu_puthex(note, notecap, &k, (DWORD)(upd.bottom - upd.top), 4);
+        }
+        wu_puts(note, notecap, &k, ok ? " -> TRUE" : " -> FALSE (the OS refused)");
+        wow32_setret(f, (DWORD)ok);
+        return 1;
+    }
+
+    case WOWUSER_CALCCHILDSCROLL: {
+        WORD hwnd = wow32_argw(f, CCS_ARG_HWND);
+        WORD what = wow32_argw(f, CCS_ARG_SCROLL);
+        int  k = 0;
+        wu_puts(note, notecap, &k, "CalcChildScroll(0x");
+        wu_puthex(note, notecap, &k, hwnd, 4);
+        wu_puts(note, notecap, &k, ", ");
+        wu_puthex(note, notecap, &k, what, 4);
+        wu_puts(note, notecap, &k, ") -- ★ NOTHING TO RECALCULATE: our MDICLIENT"
+                                   " is the OS's own system class, so its scroll"
+                                   " bars are Win32's and are already current."
+                                   " This host keeps no MDI scroll state of its"
+                                   " own to bring into line.");
+        wow32_setret(f, 0);
         return 1;
     }
 

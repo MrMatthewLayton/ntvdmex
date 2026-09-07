@@ -52,6 +52,12 @@
      and something else entirely in USER. Implementing them in the wrong file
      compiles, dispatches from the wrong table, and answers a question nobody
      asked. (docs/STATE.md: gate on the BOP's own CS.) */
+/* GetKeyNameText(lParam, lpszBuffer, nMaxCount) -- 4+4+2 = 10, reversed. */
+#define WOWKBD_GETKEYNAMETEXT 0x0085
+#define GKNT_ARG_COUNT   0
+#define GKNT_ARG_BUF     2               /* far */
+#define GKNT_ARG_LPARAM  6               /* DWORD */
+
 #define WOWKBD_VKKEYSCAN     0x0081
 #define WOWKBD_MAPVIRTUALKEY 0x0083
 #define WKB_ARG_CHAR   0
@@ -82,6 +88,46 @@ static int wowkbd_call(wow32_frame_t *f, char *note, int notecap)
        ⚠ Win16 returns void. The thunk pops a return slot regardless, so this
          writes one; a caller reading it would be reading something Win16 never
          defined, and the log says which way the conversion went either way. */
+    /* ── ★ 0x85 GetKeyNameText(LONG lParam, LPSTR lpszBuffer, int cch) = 10 ──
+         The name of a key, for a program showing an accelerator ("Ctrl+F4") --
+         and the ONE thing that makes it a translation rather than a passthrough
+         is that the name comes from the KEYBOARD LAYOUT, which is the OS's, not
+         ours. Win32's GetKeyNameTextA takes the identical lParam bit field (the
+         scan code at 16..23, the extended bit at 24, "do not care" at 25), so
+         the value goes across unchanged and the OS answers in the user's own
+         layout and language -- which is exactly what a Win16 program asking this
+         question wanted and could not have got from a table we invented.
+       ⚠ THE COUNT IS A BUFFER SIZE INCLUDING THE NUL in both, and the return is
+         the length WITHOUT it. Same in both worlds; checked rather than assumed
+         because a length convention off by one writes a NUL past a guest's
+         buffer. */
+    case WOWKBD_GETKEYNAMETEXT: {
+        DWORD lp  = wow32_argd(f, GKNT_ARG_LPARAM);
+        WORD  cch = wow32_argw(f, GKNT_ARG_COUNT);
+        volatile BYTE *dst = wow32_argptr(f, GKNT_ARG_BUF);
+        char name[64];
+        int k = 0, n = 0, i;
+        wu_puts(note, notecap, &k, "GetKeyNameText(lParam=0x");
+        wu_puthex(note, notecap, &k, lp, 8);
+        wu_puts(note, notecap, &k, ", cch=");
+        wu_puthex(note, notecap, &k, cch, 4);
+        wu_puts(note, notecap, &k, ")");
+        if (!dst || !cch) {
+            wu_puts(note, notecap, &k, " -- no buffer; answered 0");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        n = GetKeyNameTextA((LONG)lp, name, (int)(cch < sizeof name ? cch
+                                                                    : sizeof name));
+        if (n < 0) n = 0;
+        for (i = 0; i < n && i < (int)cch - 1; ++i) dst[i] = (BYTE)name[i];
+        dst[i] = 0;
+        wu_puts(note, notecap, &k, " -> ");
+        wu_putq(note, notecap, &k, name);
+        wow32_setret(f, (DWORD)i);
+        return 1;
+    }
+
     case WOWKBD_VKKEYSCAN: {
         WORD ch = wow32_argw(f, WKB_ARG_CHAR);
         SHORT r = VkKeyScanA((CHAR)(ch & 0xFF));
