@@ -44,6 +44,17 @@
 
 #define WOWUSER_REGISTERCLASS   0x39
 #define WOWUSER_CREATEWINDOW    0x29
+/* ── ★★★★★ 0xEF -- THE DIALOG HELPER, AND NO EXPORT MAPS TO IT. ──────────────
+     USER's wow32 id space is derived from its export table, and this id is in
+     one of the GAPS: `CreateDialog`, `DialogBoxParam` and `CreateDialogParam`
+     are implemented in USER's OWN 16-bit code, so `neneeds.py` classifies them
+     `native16` and reports them as costing us nothing. THEY DO NOT. That
+     16-bit code does the FindResource/LoadResource/LockResource itself and then
+     calls OUT to the 32-bit side -- here -- to build the window and its
+     controls, because under WOW the windows are the 32-bit side's.
+   ⇒ `native16` IS NOT `free`, and this id is the proof: the tool said CALC had
+     0 services to do, and CALC produced no window at all. (session 55) */
+#define WOWUSER_CREATEDIALOG    0xEF
 #define WOWUSER_NOTIFYWOW       0x217
 #define WOWUSER_SENDMESSAGE     0x6f
 #define WOWUSER_GETWINDOWWORD   0x85
@@ -1647,7 +1658,19 @@ static int             g_wu_nclass = 0;
    ★ The "a class that exists and does nothing" objection does NOT apply to these:
      a system class here resolves to the OS's OWN Win32 class, so a window made
      from it is a real listbox with real behaviour, not a stub. */
-static const char *const g_wu_sysclass[] = { "MDICLIENT", "EDIT", "LISTBOX" };
+/* ⚠ THE DIALOG CONTROL CLASSES ARE HERE BECAUSE A DLGITEMTEMPLATE NAMES THEM BY
+     NUMBER, NOT BY STRING. A Win16 dialog item encodes its class as a single
+     byte 0x80..0x85, and those six values ARE these classes -- so a dialog
+     cannot be built at all until each one resolves to something CreateWindow
+     will accept. They are the OS's own classes, used as-is, for exactly the
+     reason MDICLIENT and EDIT already are: a BUTTON that we drew ourselves
+     would be a reimplementation of a control this machine already has.
+   ★ "#32770" is the standard DIALOG class and it is a real class on XP, so a
+     dialog whose template names NO class gets the OS's dialog window rather
+     than one of ours. (session 55) */
+static const char *const g_wu_sysclass[] = { "MDICLIENT", "EDIT", "LISTBOX",
+                                             "BUTTON", "STATIC", "SCROLLBAR",
+                                             "COMBOBOX", "#32770" };
 static int               g_wu_sysdone = 0;
 
 static void wowuser_ensure_sysclasses(void)
@@ -1693,7 +1716,12 @@ static void wowuser_ensure_sysclasses(void)
  * ⚠ THE HANDLE SPACE IS SYNTHETIC AND SAYS SO. A real Win16 HWND is an offset
  *   into USER's local heap; ours is a counter. Nothing may infer memory from it.
  */
-#define WOWUSER_MAX_WIN   32
+/* ⚠ 32 WAS ENOUGH UNTIL DIALOGS. A dialog is not one window, it is one window
+     PER CONTROL -- CALC's `SciCalc` template alone is a dialog plus 15 items,
+     and it opens that on top of the windows the program already has. At 32 the
+     table ran out mid-dialog, which does not fail loudly: the controls simply
+     stop being created and the dialog comes up half-built. (session 55) */
+#define WOWUSER_MAX_WIN   128
 #define WOWUSER_MAX_EXTRA 16            /* words -- 32 bytes of cbWndExtra */
 #define WOWUSER_HWND_BASE 0x0100        /* first synthetic handle */
 #define WOWUSER_HWND_STEP 0x0020        /* spaced so a stray +n is not a hit    */
@@ -1845,6 +1873,88 @@ static int wowuser_farstr(const wow32_frame_t *f, DWORD fp, char *out, int cap)
 static WORD wowuser_peek(const volatile BYTE *p, int off)
 {
     return (WORD)(p[off] | (p[off + 1] << 8));
+}
+
+/* ── A GUEST FAR POINTER AS SOMETHING THE HOST CAN READ. ──────────────────────
+     wowuser_farstr already did this for strings; a DLGTEMPLATE is a STRUCTURE,
+     so the pointer itself is what is wanted. Same rules: a null selector or a
+     selector the LDT cannot resolve yields NULL rather than a wild address. */
+static const volatile BYTE *wowuser_farmem(const wow32_frame_t *f, DWORD fp)
+{
+    WORD sel = (WORD)(fp >> 16);
+    DWORD base;
+    if (!sel || !f->sel2lin) return NULL;
+    base = f->sel2lin(sel, f->ctx);
+    if (!base) return NULL;
+    return (const volatile BYTE *)(ULONG_PTR)(base + (fp & 0xFFFF));
+}
+
+/* ── ★★★★★ THE Win16 DIALOG TEMPLATE, AND EVERY FIELD IS A DIFFERENT WIDTH
+     FROM ITS Win32 DESCENDANT. (session 55) ────────────────────────────────────
+     This is the 16-bit DLGTEMPLATE: the item count is a BYTE, every coordinate
+     is a WORD, and the variable-length name fields come in three forms. Win32's
+     structure has a WORD count and a different field ORDER, so a reader written
+     from the modern layout produces a dialog with a plausible size and the
+     wrong number of controls -- which looks like a drawing bug, not a parsing one.
+
+         DWORD dtStyle;  BYTE dtItemCount;  WORD dtX, dtY, dtCX, dtCY;
+         <menu>  <class>  <caption>
+         if (dtStyle & DS_SETFONT):  WORD pointsize;  <typeface>
+       then dtItemCount x:
+         WORD x, y, cx, cy;  WORD id;  DWORD style;
+         <class: ONE BYTE 0x80..0x85, or a string>  <text>  BYTE cbCreationData
+
+   ★ THE READING WAS CONFIRMED BEFORE ANY OF THIS EXISTED, by decoding CALC.EXE's
+     own resource offline (`tools/ne/neres.py dialog`) -- the same discipline the
+     menu decoder was held to in session 43. A wrong offset does not spell
+     'Calculator', 'SciCalc', and buttons reading Hex/Dec/Oct/Bin/Hyp/Inv. */
+#define WOWDLG_SETFONT 0x40
+
+static WORD wowdlg_w(const volatile BYTE *p, int o)
+{
+    return (WORD)(p[o] | (p[o + 1] << 8));
+}
+static DWORD wowdlg_d(const volatile BYTE *p, int o)
+{
+    return (DWORD)wowdlg_w(p, o) | ((DWORD)wowdlg_w(p, o + 2) << 16);
+}
+
+/* A NUL-terminated string out of guest memory. Returns BYTES CONSUMED including
+   the terminator, because every caller's next field depends on it. */
+static int wowdlg_sz(const volatile BYTE *p, int o, char *out, int cap)
+{
+    int k = 0;
+    while (p[o + k]) { if (k < cap - 1) out[k] = (char)p[o + k]; ++k; }
+    if (cap) out[k < cap - 1 ? k : cap - 1] = 0;
+    return k + 1;
+}
+
+/* The menu/class field: 0x00 absent, 0xFF + WORD ordinal, else a string.
+   ⚠ THE 0xFF FORM CARRIES A **WORD**, SO IT IS THREE BYTES. Reading it as a
+     byte leaves one behind and every field after it is garbage -- and garbage
+     here still parses, it just yields nonsense coordinates. */
+static int wowdlg_nameord(const volatile BYTE *p, int o, char *out, int cap,
+                          WORD *ord)
+{
+    *ord = 0;
+    if (cap) out[0] = 0;
+    if (p[o] == 0x00) return 1;
+    if (p[o] == 0xFF) { *ord = wowdlg_w(p, o + 1); return 3; }
+    return wowdlg_sz(p, o, out, cap);
+}
+
+/* The six predefined control classes, in the order their byte codes run. */
+static const char *wowdlg_class(BYTE b)
+{
+    switch (b) {
+    case 0x80: return "BUTTON";
+    case 0x81: return "EDIT";
+    case 0x82: return "STATIC";
+    case 0x83: return "LISTBOX";
+    case 0x84: return "SCROLLBAR";
+    case 0x85: return "COMBOBOX";
+    }
+    return NULL;
 }
 
 /* The class a name is registered under, or NULL. Win16 class names are
@@ -2827,6 +2937,276 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
            ⚠ lParam SHOULD BE AN LPCREATESTRUCT and is 0 -- a gap this host names
              rather than fakes. See wowcall.h. */
         wowuser_want_create(f, c, w);
+        return 1;
+    }
+
+    /* ── ★★★★★ 0xEF CreateDialog -- BUILD THE DIALOG AND ALL OF ITS CONTROLS.
+         (session 55) ────────────────────────────────────────────────────────────
+         THE ARGUMENTS ARE MEASURED, not taken from a header, because there is no
+         header: this is an internal entry point. One CALC.EXE run, 22 argument
+         bytes, and the WOWBOP line above the call settles the important one --
+         `ax=cx=dx=0x0b47`, the selector USER had just got back from
+         LockResource, and 0x0b47 is exactly what sits at +18.
+
+             +20  hInstance        0x0b6e
+             +16  template FAR*    0x0b47:0000   (high word = selector, as
+                                                  everywhere else in this file)
+             +14  hWndParent       0x0000        (CALC's dialog IS its main window)
+             +10  dialog procedure 0x00000000
+             +6   init parameter   0x00000000
+             +0..+5                UNEXPLAINED -- logged, not guessed. See below.
+
+       ★ THE DIALOG PROCEDURE IS NULL AND THAT IS NOT A BUG. USER keeps it: the
+         16-bit side runs the modal loop and calls the procedure itself, so what
+         it wants from us is the WINDOW, not the dispatching. Inventing a
+         procedure here would give the dialog two.
+
+       ★ WHY THIS IS 15 WINDOWS AND NOT ONE. A dialog template is a window plus
+         one child per item, and every one of those children has to be a real
+         control -- which is why the failure looked the way it did. With 0xEF
+         stepped over, CALC's log read `GetDlgItem` x15 and `ShowWindow 0x0000`
+         x15: the program walking the 15 controls its own template declares and
+         being handed window 0 for each. Fifteen is the item count in `SciCalc`.
+
+       ⚠ DIALOG UNITS ARE NOT PIXELS, and the conversion is the OS's own:
+         x*baseX/4 and y*baseY/8. Passing the template's numbers through as
+         pixels yields a dialog about a third of the right size with its controls
+         piled in the top-left -- which reads as a layout bug in the guest.
+       ⚠ AND THE TEMPLATE'S RECTANGLE IS THE CLIENT AREA. AdjustWindowRect adds
+         the caption and border, or the dialog comes up short by exactly the
+         chrome and the bottom row of controls falls outside it. This project has
+         already paid for that shape once, in the status-bar height (session 54). */
+    case WOWUSER_CREATEDIALOG: {
+        DWORD tfp     = wow32_argd(f, 16);
+        WORD  hinst   = wow32_argw(f, 20);
+        WORD  parent  = wow32_argw(f, 14);
+        DWORD dlgproc = wow32_argd(f, 10);
+        const volatile BYTE *t = wowuser_farmem(f, tfp);
+        char  cname[64], caption[64], menuname[64];
+        WORD  menuord = 0, clsord = 0;
+        DWORD style;
+        int   count, x, y, cx, cy, p, i, k = 0, made = 0;
+        DWORD bu;
+        int   bux, buy;
+        wowuser_class_t *c;
+        wowuser_win_t *w;
+        HWND parent32;
+
+        if (!t) {
+            wu_puts(note, notecap, &k, "CreateDialog: template far pointer 0x");
+            wu_puthex(note, notecap, &k, tfp, 8);
+            wu_puts(note, notecap, &k, " does not resolve");
+            wow32_setret(f, 0);
+            return 1;
+        }
+
+        style = wowdlg_d(t, 0);
+        count = t[4];
+        x  = (int)(short)wowdlg_w(t, 5);
+        y  = (int)(short)wowdlg_w(t, 7);
+        cx = (int)(short)wowdlg_w(t, 9);
+        cy = (int)(short)wowdlg_w(t, 11);
+        p  = 13;
+        p += wowdlg_nameord(t, p, menuname, sizeof menuname, &menuord);
+        p += wowdlg_nameord(t, p, cname,    sizeof cname,    &clsord);
+        p += wowdlg_sz(t, p, caption, sizeof caption);
+        if (style & WOWDLG_SETFONT) {
+            char face[64];
+            p += 2;                                   /* WORD point size */
+            p += wowdlg_sz(t, p, face, sizeof face);
+        }
+
+        /* ── THE DIALOG'S OWN CLASS. A template may name one, and when it does
+             it is the APPLICATION's -- CALC's is `SciCalc`, already registered,
+             with its own window procedure, its own menu and its own icon. That
+             is the class the window must be made from, or the program gets a
+             dialog it cannot drive. A template that names no class gets the
+             OS's standard dialog class. */
+        c = cname[0] ? wowuser_find(cname) : NULL;
+        if (!c) c = wowuser_find("#32770");
+        if (!c) { wow32_setret(f, 0); return 1; }
+
+        w = wowuser_newwin();
+        if (!w) {
+            wu_puts(note, notecap, &k, "CreateDialog: OUT OF WINDOW SLOTS");
+            wow32_setret(f, 0);
+            return 1;
+        }
+        w->cls     = (WORD)(c - g_wu_class);
+        w->style   = style;
+        w->wndproc = c->wndproc;
+        w->parent  = parent;
+        w->hinst   = hinst;
+        w->menu    = 0;
+        for (i = 0; i < (int)sizeof w->text; ++i)
+            w->text[i] = (i < (int)sizeof caption) ? caption[i] : 0;
+
+        bu  = GetDialogBaseUnits();
+        bux = (int)LOWORD(bu);
+        buy = (int)HIWORD(bu);
+        w->x  = MulDiv(x,  bux, 4);
+        w->y  = MulDiv(y,  buy, 8);
+        w->cx = MulDiv(cx, bux, 4);
+        w->cy = MulDiv(cy, buy, 8);
+
+        parent32 = parent ? wowuser_hwnd32(parent) : NULL;
+        {   RECT rc;
+            HMENU hm = NULL;
+            int nitems = 0;
+            /* The class may name a menu even though the template does not --
+               CALC registers `SciCalc` with `MENU="SM"` -- so ask the class
+               too, exactly as CreateWindow does. Named OR numbered; both forms
+               have been a gap in this host before. */
+            if (!(style & WS_CHILD16)) {
+                if (menuname[0] || menuord) {
+                    if (wowres_open(g_wow_cmd_prog))
+                        hm = menuord ? wowres_menu(menuord, &nitems)
+                                     : wowres_menu_byname(menuname, &nitems);
+                } else if (c->menuord || c->menuname[0]) {
+                    if (wowres_open(g_wow_cmd_prog))
+                        hm = c->menuord ? wowres_menu(c->menuord, &nitems)
+                                        : wowres_menu_byname(c->menuname, &nitems);
+                }
+            }
+            w->menuitems = nitems;
+            rc.left = w->x; rc.top = w->y;
+            rc.right = w->x + w->cx; rc.bottom = w->y + w->cy;
+            AdjustWindowRect(&rc, style, hm != NULL);
+            if (c->reg32) {
+                w->hwnd32 = CreateWindowExA(0, c->cls32, w->text, style,
+                                            rc.left, rc.top,
+                                            rc.right - rc.left,
+                                            rc.bottom - rc.top,
+                                            parent32, hm,
+                                            GetModuleHandleA(NULL), NULL);
+                if (w->hwnd32) { ++g_ww_created;
+                                 if (!g_ww_thread) g_ww_thread = GetCurrentThreadId(); }
+            }
+        }
+
+        /* ── AND NOW THE CONTROLS. Each item is a real child window of the
+             dialog AND a Win16 window in our table, because the guest addresses
+             them both ways: by real HWND when the OS delivers a message, and by
+             16-bit handle the moment it calls GetDlgItem or SetDlgItemText.
+           ⚠ THE CONTROL ID GOES IN hMenu, which is where Win32 keeps a child's
+             id -- that is what makes GetDlgItem(hDlg, id) work at all, and it
+             is the OS doing the lookup rather than us. */
+        for (i = 0; i < count; ++i) {
+            int ix, iy, icx, icy;
+            WORD iid, itxtord = 0;
+            DWORD istyle;
+            char icls[64], itext[64];
+            const char *pre;
+            wowuser_class_t *ic;
+            wowuser_win_t *cw;
+
+            ix  = (int)(short)wowdlg_w(t, p);
+            iy  = (int)(short)wowdlg_w(t, p + 2);
+            icx = (int)(short)wowdlg_w(t, p + 4);
+            icy = (int)(short)wowdlg_w(t, p + 6);
+            iid = wowdlg_w(t, p + 8);
+            istyle = wowdlg_d(t, p + 10);
+            p += 14;
+            pre = wowdlg_class(t[p]);
+            if (pre) {
+                int n;
+                for (n = 0; n < (int)sizeof icls - 1 && pre[n]; ++n) icls[n] = pre[n];
+                icls[n] = 0;
+                p += 1;
+            } else {
+                p += wowdlg_sz(t, p, icls, sizeof icls);
+            }
+            p += wowdlg_nameord(t, p, itext, sizeof itext, &itxtord);
+            p += 1 + t[p];                    /* BYTE cbCreationData, then the data */
+
+            ic = wowuser_find(icls);
+            cw = wowuser_newwin();
+            if (!cw) {
+                wu_puts(note, notecap, &k, " -- ★ OUT OF WINDOW SLOTS AT ITEM ");
+                wu_puthex(note, notecap, &k, (DWORD)i, 2);
+                break;
+            }
+            cw->cls     = ic ? (WORD)(ic - g_wu_class) : w->cls;
+            cw->style   = istyle;
+            cw->wndproc = ic ? ic->wndproc : 0;
+            cw->parent  = w->hwnd;
+            cw->menu    = iid;
+            cw->hinst   = hinst;
+            cw->x  = MulDiv(ix,  bux, 4);
+            cw->y  = MulDiv(iy,  buy, 8);
+            cw->cx = MulDiv(icx, bux, 4);
+            cw->cy = MulDiv(icy, buy, 8);
+            {   int n;
+                for (n = 0; n < (int)sizeof cw->text; ++n)
+                    cw->text[n] = (n < (int)sizeof itext) ? itext[n] : 0;
+            }
+            if (ic && ic->reg32 && w->hwnd32) {
+                cw->hwnd32 = CreateWindowExA(0, ic->cls32, cw->text, istyle,
+                                             cw->x, cw->y, cw->cx, cw->cy,
+                                             w->hwnd32,
+                                             (HMENU)(ULONG_PTR)iid,
+                                             GetModuleHandleA(NULL), NULL);
+                if (cw->hwnd32) { ++made; ++g_ww_created; }
+            }
+        }
+
+        /* ── ★★ AND SHOW IT, BECAUSE THE DIALOG MANAGER IS WHAT SHOWS A DIALOG.
+             A template whose style omits WS_VISIBLE is not a hidden dialog: it
+             is the ordinary case, and the manager shows it once the controls
+             exist. We are the manager's 32-bit half, so it falls here.
+           ★ MEASURED, and this is why it is not left to the guest: with the
+             window created and every control built, CALC ran its ENTIRE
+             WM_INITDIALOG -- GetWindowRect, the text metrics, the menu radio
+             via CheckMenuItem, GetDlgItem+ShowWindow over all 15 scientific
+             controls, CheckRadioButton, SetDlgItemText -- and then sat in its
+             message loop. Nothing was stepped over afterwards, so nothing was
+             waiting on us; there was simply no ShowWindow for the dialog
+             ITSELF anywhere in the run, on either side.
+           ⚠ AND IT IS HONESTLY A JUDGEMENT, not a measurement. Which of
+             DialogBox / CreateDialog / DialogBoxParam this id serves is NOT
+             known -- the three differ in exactly this respect, and a modeless
+             CreateDialog is the caller's to show. The cost of being wrong is a
+             dialog shown a moment early (the guest's own ShowWindow then does
+             nothing); the cost of the other choice is measured above, and it is
+             a program with no window. ▶ To settle it, disassemble USER.EXE at
+             the call site this frame names -- seg sel 0x03ff offset 0x4bdc. */
+        if (w->hwnd32 && !(style & WS_VISIBLE))
+            ShowWindow(w->hwnd32, SW_SHOW);
+
+        wu_puts(note, notecap, &k, "CreateDialog ");
+        wu_putq(note, notecap, &k, caption);
+        wu_puts(note, notecap, &k, " class=");
+        wu_putq(note, notecap, &k, cname[0] ? cname : "#32770");
+        wu_puts(note, notecap, &k, " style=0x");
+        wu_puthex(note, notecap, &k, style, 8);
+        wu_puts(note, notecap, &k, " items=");
+        wu_puthex(note, notecap, &k, (DWORD)count, 2);
+        wu_puts(note, notecap, &k, " built=");
+        wu_puthex(note, notecap, &k, (DWORD)made, 2);
+        wu_puts(note, notecap, &k, " -> hwnd=0x");
+        wu_puthex(note, notecap, &k, w->hwnd, 4);
+        if (w->hwnd32) {
+            wu_puts(note, notecap, &k, " HWND=0x");
+            wu_puthex(note, notecap, &k, (DWORD)(ULONG_PTR)w->hwnd32, 8);
+        } else {
+            wu_puts(note, notecap, &k, " -- ★ NO REAL WINDOW (gle=0x");
+            wu_puthex(note, notecap, &k, GetLastError(), 8);
+            wu_puts(note, notecap, &k, ")");
+        }
+        /* ⚠ SAY WHAT WAS NOT UNDERSTOOD. Six of the 22 argument bytes have no
+             meaning yet, and a run that prints them is how they get one -- the
+             alternative is a guess that reads as knowledge six months from now.
+             CALC passes 0x0140 at +2 and zero at +0 and +4. */
+        wu_puts(note, notecap, &k, " [unexplained args +0=0x");
+        wu_puthex(note, notecap, &k, wow32_argw(f, 0), 4);
+        wu_puts(note, notecap, &k, " +2=0x");
+        wu_puthex(note, notecap, &k, wow32_argw(f, 2), 4);
+        wu_puts(note, notecap, &k, " +4=0x");
+        wu_puthex(note, notecap, &k, wow32_argw(f, 4), 4);
+        wu_puts(note, notecap, &k, " dlgproc=0x");
+        wu_puthex(note, notecap, &k, dlgproc, 8);
+        wu_puts(note, notecap, &k, "]");
+        wow32_setret(f, w->hwnd);
         return 1;
     }
 

@@ -26,6 +26,17 @@ if "%TARGET%"=="" set TARGET=C:\WIN16\NOTEPAD.EXE
 del /q "%RES%\wowlive.txt" >nul 2>&1
 if not exist C:\ntvdmex md C:\ntvdmex
 
+rem ⚠⚠⚠ RE-ADD THE IFEO Debugger VALUE BEFORE EVERY LAUNCH. (session 55)
+rem    GH #132's recovery path DROPS this value after three consecutive unclean
+rem    starts -- and the `taskkill` two lines below is exactly what manufactures
+rem    them, so this script is its own worst enemy. When the value is gone the
+rem    guest comes up under STOCK ntvdm and EVERYTHING LOOKS NORMAL: a window
+rem    appears, it is the right program, and it is not ours. Session 54 showed the
+rem    user a Clock window that was stock's; session 55 found the value already
+rem    absent on a freshly rebooted rig, before a single run.
+rem    It is idempotent, it costs nothing, and the failure it prevents is silent.
+reg add "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\ntvdm.exe" /v Debugger /t REG_SZ /d C:\ntvdmex\ntvdmhost.exe /f >nul 2>&1
+
 rem -- !! KILL FIRST, THEN WAIT, THEN COPY, THEN PROVE IT. This script leaves a host
 rem    RUNNING, so the next invocation finds the previous one still holding
 rem    C:\ntvdmex\ntvdmhost.exe -- and `copy ... >nul` then fails SILENTLY and the
