@@ -3032,7 +3032,7 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
         DWORD style;
         int   count, x, y, cx, cy, p, i, k = 0, made = 0;
         DWORD bu;
-        int   bux, buy;
+        int   bux, buy, usedef = 0;
         wowuser_class_t *c;
         wowuser_win_t *w;
         HWND parent32;
@@ -3089,10 +3089,25 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
         bu  = GetDialogBaseUnits();
         bux = (int)LOWORD(bu);
         buy = (int)HIWORD(bu);
-        w->x  = MulDiv(x,  bux, 4);
-        w->y  = MulDiv(y,  buy, 8);
         w->cx = MulDiv(cx, bux, 4);
         w->cy = MulDiv(cy, buy, 8);
+        /* ── ⚠ -32768 IN A TEMPLATE'S x IS "YOU PLACE IT", NOT A COORDINATE.
+             (session 55) A DLGTEMPLATE says "put this where you like" with
+             0x8000 in dtX -- the same CW_USEDEFAULT value CreateWindow uses,
+             which is why wowwin_coord() already knows it. Scaling it as a
+             number instead gives MulDiv(-32768, 8, 4) = -65536, and
+             AdjustWindowRect then shifts it by the border to -65539.
+           ★ MEASURED, and it is what SOUND RECORDER did: its DIALOG 1 is
+             `180x80 at (-32768,0)` and its window came up at x=-65539 --
+             a real, correct, fully-built window placed entirely off screen,
+             which from the outside looks exactly like "no window". */
+        if ((WORD)x == CW_USEDEFAULT16) {
+            w->x = w->y = 0;                 /* our own record; the OS places it */
+            usedef = 1;
+        } else {
+            w->x = MulDiv(x, bux, 4);
+            w->y = MulDiv(y, buy, 8);
+        }
 
         parent32 = parent ? wowuser_hwnd32(parent) : NULL;
         {   RECT rc;
@@ -3119,7 +3134,8 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
             AdjustWindowRect(&rc, style, hm != NULL);
             if (c->reg32) {
                 w->hwnd32 = CreateWindowExA(0, c->cls32, w->text, style,
-                                            rc.left, rc.top,
+                                            usedef ? CW_USEDEFAULT32 : rc.left,
+                                            usedef ? CW_USEDEFAULT32 : rc.top,
                                             rc.right - rc.left,
                                             rc.bottom - rc.top,
                                             parent32, hm,
@@ -3238,19 +3254,29 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
             wu_puthex(note, notecap, &k, GetLastError(), 8);
             wu_puts(note, notecap, &k, ")");
         }
-        /* ⚠ SAY WHAT WAS NOT UNDERSTOOD. Six of the 22 argument bytes have no
-             meaning yet, and a run that prints them is how they get one -- the
-             alternative is a guess that reads as knowledge six months from now.
-             CALC passes 0x0140 at +2 and zero at +0 and +4. */
-        wu_puts(note, notecap, &k, " [unexplained args +0=0x");
-        wu_puthex(note, notecap, &k, wow32_argw(f, 0), 4);
-        wu_puts(note, notecap, &k, " +2=0x");
-        wu_puthex(note, notecap, &k, wow32_argw(f, 2), 4);
-        wu_puts(note, notecap, &k, " +4=0x");
-        wu_puthex(note, notecap, &k, wow32_argw(f, 4), 4);
+        /* ── ★★ +2 IS THE TEMPLATE'S LENGTH IN BYTES, AND TWO RUNS PROVE IT.
+             It was printed as "unexplained" for exactly one session, which is
+             the right way round: CALC passed 0x0140 there and `neres.py list`
+             reports its SC dialog as 320 bytes; SOUND RECORDER passed 0x0210
+             and its DIALOG 1 is 528. Two different programs, two different
+             numbers, both the resource's own size to the byte.
+           ⚠ AND IT WAS NEARLY READ AS A WINDOW HANDLE, because CALC's 0x0140
+             also happened to be the next handle our own allocator would issue.
+             A number matching something is not a number meaning it.
+           +0 and +4 are still unaccounted for -- both zero in every run so far,
+             so there is nothing yet to explain. dlgproc is 0 for CALC and
+             non-zero for SOUND RECORDER (0x0a970028), so USER does pass it
+             sometimes; we do not need it, because USER runs the dialog's own
+             message loop and calls the procedure itself. */
+        wu_puts(note, notecap, &k, " [tmpl_len=0x");
+        wu_puthex(note, notecap, &k, wow32_argd(f, 2), 8);
         wu_puts(note, notecap, &k, " dlgproc=0x");
         wu_puthex(note, notecap, &k, dlgproc, 8);
+        wu_puts(note, notecap, &k, " unexplained +0=0x");
+        wu_puthex(note, notecap, &k, wow32_argw(f, 0), 4);
         wu_puts(note, notecap, &k, "]");
+        if (usedef) wu_puts(note, notecap, &k, " [template said -32768: the OS"
+                                               " placed it]");
         wow32_setret(f, w->hwnd);
         return 1;
     }

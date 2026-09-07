@@ -1,7 +1,21 @@
 @echo off
 set BM=C:\Documents and Settings\All Users\Documents\ntvdmex\bm
 set RES=C:\Documents and Settings\All Users\Documents\ntvdmex
+rem ⚠⚠⚠ RE-ADD THE IFEO Debugger VALUE, AND DO IT BEFORE THE taskkill BELOW.
+rem    GH #132's recovery drops this value after three consecutive unclean
+rem    starts, and every batch on this box opens by killing the host -- so a
+rem    day of testing manufactures its own uninstall. When it happens the gate
+rem    does not fail, it comes back **0 serviced / 0 declined / 0 unimpl** with
+rem    no host log at all, because the guest quietly went to stock ntvdm.
+rem    Session 55 lost two gate runs to exactly that, having ALREADY had the
+rem    same thing happen at the start of the day on a freshly booted rig.
+rem    wowlive.bat and rt.bat both re-add it; this path was the one that did
+rem    not, which is why it is the one that broke.
+reg add "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\ntvdm.exe" /v Debugger /t REG_SZ /d C:\ntvdmex\ntvdmhost.exe /f >nul 2>&1
 taskkill /f /im ntvdmhost.exe >nul 2>&1
+rem ⚠ AND KILL STOCK'S ntvdm.exe TOO -- XP's WOW VDM IS SHARED, so a live one
+rem    swallows the launch and the IFEO hook never fires.
+taskkill /f /im ntvdm.exe     >nul 2>&1
 copy /y "%BM%\ntvdmhost.exe" C:\ntvdmex\ >nul
 del /q C:\ntvdmex\ldtprobe.log >nul 2>&1
 del /q C:\ntvdmex\ntvdmhost.log >nul 2>&1

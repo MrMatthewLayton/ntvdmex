@@ -105,6 +105,21 @@ for ((i=0; i<TIMEOUT; i++)); do
     D=$(LC_ALL=C grep -ac -- "-> DECLINED"      "$SH/wow_host.txt" 2>/dev/null || echo 0)
     U=$(LC_ALL=C grep -ac -- "-> UNIMPLEMENTED" "$SH/wow_host.txt" 2>/dev/null || echo 0)
     W=$(LC_ALL=C grep -ao "0001:229[Cc]" "$SH/wow_host.txt" 2>/dev/null | tail -1)
+    # ⚠ ZERO IS NOT A MEASUREMENT, IT IS A MISSING RUN. A gate that prints
+    #   "0 / 0 / 0" next to a baseline invites reading it as a catastrophic
+    #   regression; what it actually means is that our host never started and
+    #   the guest went to STOCK ntvdm. The usual cause is GH #132's recovery
+    #   having dropped the IFEO Debugger value after three unclean starts --
+    #   which a day of taskkill-led testing manufactures by itself. Say that,
+    #   and fail, rather than reporting a number.
+    if [ ! -s "$SH/wow_host.txt" ] || [ "$((S+D+U))" -eq 0 ]; then
+      echo "GATE: !! NO RUN -- wow_host.txt is empty or absent." >&2
+      echo "      Our host did not start; the guest went to STOCK ntvdm." >&2
+      echo "      Check the IFEO Debugger value first:" >&2
+      echo "        ntvdmhost.exe /status   (or run daygate.bat on the share)" >&2
+      echo "      GH #132 drops it after three consecutive unclean starts." >&2
+      exit 4
+    fi
     echo "GATE: ${S} serviced / ${D} declined / ${U} unimpl${W:+ · $W}"
     echo "      baseline (session 50): 85 / 113 / 57 · 0001:229C"
     echo "      ⚠ only comparable with wowsched.txt/wowcall.txt MOVED ASIDE"
