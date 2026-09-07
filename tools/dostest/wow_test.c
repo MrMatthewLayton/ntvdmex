@@ -378,6 +378,82 @@ static void part3_conversions(void)
        "DIB core: an output buffer too small is REFUSED, never overrun");
 }
 
+/*
+ * ── PART 4: THE MODAL DIALOG LOOP'S TWO DECISIONS. (session 57) ─────────────
+ * `DialogBox` does not return until `EndDialog`, so the host runs a message loop
+ * on the guest's behalf -- and the failure mode of getting that wrong is not a
+ * wrong pixel, it is a HANG. Session 56 declined to write the loop for exactly
+ * that reason. So both decisions inside it are pure functions in wowconv.h and
+ * both are pinned here, off-VM, with no rig and no guest:
+ *
+ *   1. WHICH PROCEDURE drives a window -- a `#32770` dialog has no class window
+ *      procedure at all, and getting the order wrong sends every message to the
+ *      wrong 16-bit address, which is the "answered by an unrelated function"
+ *      shape this project treats as worse than not answering.
+ *   2. WHEN THE LOOP MUST STOP. The property that matters is TOTALITY: there
+ *      must be no combination of facts for which the loop neither runs nor
+ *      leaves. That is checked here by enumerating all sixteen.
+ */
+static void part4_modal(void)
+{
+    int e, a, h, x, run = 0, seen[5];
+    printf("\n-- part 4: the modal dialog loop (wowconv.h, src/wow/wowdlg.h) --\n");
+
+    /* 1. The procedure rule. */
+    ok(wowconv_winproc(0x11110000u, 0) == 0x11110000u,
+       "winproc: a class window procedure drives its window");
+    ok(wowconv_winproc(0, 0x22220000u) == 0x22220000u,
+       "winproc: a #32770 dialog has only a DLGPROC, and it drives it");
+    ok(wowconv_winproc(0x11110000u, 0x22220000u) == 0x11110000u,
+       "winproc: with BOTH, the class procedure wins (CALC's SciCalc dialog)");
+    ok(wowconv_winproc(0, 0) == 0,
+       "winproc: neither means NOTHING can be told about this window");
+
+    /* 2. The exit rule, case by case. */
+    ok(wowconv_modal_exit(0, 1, 1, 0) == WOWCONV_MODAL_RUN,
+       "modal: alive, drivable, not ended, not expired -> KEEP PUMPING");
+    ok(wowconv_modal_exit(1, 1, 1, 0) == WOWCONV_MODAL_END,
+       "modal: EndDialog -> the caller gets nResult");
+    ok(wowconv_modal_exit(0, 0, 1, 0) == WOWCONV_MODAL_GONE,
+       "modal: the window was destroyed -> DialogBox returns 0, never waits");
+    ok(wowconv_modal_exit(0, 1, 0, 0) == WOWCONV_MODAL_NOPROC,
+       "modal: nothing to dispatch to -> return 0 AT ONCE (s56's behaviour)");
+    ok(wowconv_modal_exit(0, 1, 1, 1) == WOWCONV_MODAL_EXPIRED,
+       "modal: the bounded input wait ran out -> return 0, so a harness ends");
+
+    /* ★ THE ORDER, WHICH IS THE ONE THING A READER WOULD GET WRONG. A dialog
+         procedure that calls EndDialog and whose window is then torn down has
+         ANSWERED; reporting GONE there would throw away the OK the user just
+         clicked and hand back 0 instead. */
+    ok(wowconv_modal_exit(1, 0, 1, 0) == WOWCONV_MODAL_END,
+       "modal: ENDED OUTRANKS a destroyed window -- the answer is not lost");
+    ok(wowconv_modal_exit(1, 0, 0, 1) == WOWCONV_MODAL_END,
+       "modal: ...and outranks every other reason to stop, together");
+    ok(wowconv_modal_exit(0, 0, 0, 1) == WOWCONV_MODAL_GONE,
+       "modal: a gone window outranks having no procedure and no input");
+    ok(wowconv_modal_exit(0, 1, 0, 1) == WOWCONV_MODAL_NOPROC,
+       "modal: an undrivable dialog is refused BEFORE it can time out");
+
+    /* ★★ TOTALITY. Sixteen combinations, every one of them classified, and RUN
+         reachable from exactly one -- the one where the dialog is alive,
+         drivable, unfinished and has not run out of time. A new fact added to
+         this decision without a rule for it would show up here as a hang. */
+    for (x = 0; x < 5; ++x) seen[x] = 0;
+    for (e = 0; e < 2; ++e) for (a = 0; a < 2; ++a)
+    for (h = 0; h < 2; ++h) for (x = 0; x < 2; ++x) {
+        int v = wowconv_modal_exit(e, a, h, x);
+        if (v < 0 || v > 4) { ok(0, "modal: a verdict outside the five"); return; }
+        ++seen[v];
+        if (v == WOWCONV_MODAL_RUN) ++run;
+    }
+    ok(run == 1, "modal: EXACTLY ONE of the 16 states keeps pumping");
+    ok(seen[WOWCONV_MODAL_END] + seen[WOWCONV_MODAL_GONE]
+       + seen[WOWCONV_MODAL_NOPROC] + seen[WOWCONV_MODAL_EXPIRED] == 15,
+       "modal: the other 15 all LEAVE -- the loop has no state that hangs");
+    ok(seen[WOWCONV_MODAL_END] == 8,
+       "modal: ended is half of them, whatever else is true");
+}
+
 int main(int argc, char **argv)
 {
     const char *root = (argc > 1) ? argv[1] : "../..";
@@ -392,6 +468,7 @@ int main(int argc, char **argv)
     part1_macro_hygiene();
     part2_offset_tiling();
     part3_conversions();
+    part4_modal();
     printf("\n%d checks, %d failed, %d skipped\n", pass + fail, fail, skip);
     return fail ? 1 : 0;
 }

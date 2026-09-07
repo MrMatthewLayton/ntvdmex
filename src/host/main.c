@@ -36,6 +36,10 @@
      borrowed USER's note helpers, and those now live in wow32.h. */
 #include "../wow/wowgdi.h" /* GH #128: GDI.EXE's id space -- where MS Paint begins */
 #include "../wow/wowuser.h" /* GH #128: USER.EXE's id space -- a DIFFERENT one; see the file */
+/* ⚠ AFTER wowuser.h, and that order is load-bearing too: the modal loop reads
+     the window table and the procedure rule that file owns. USER's DialogBox and
+     EndDialog arms reach it through the three prototypes declared there. */
+#include "../wow/wowdlg.h" /* GH #128: ...and the MODAL loop -- why DialogBox does not return */
 #include "../wow/wowshell.h" /* GH #128: ...and SHELL.DLL's, which is a THIRD one again */
 #include "../wow/wowcommdlg.h" /* GH #128: ...and COMMDLG.DLL's -- File > Open */
 #include "../wow/wowkbd.h" /* GH #128: ...and KEYBOARD.DRV's -- ANSI/OEM conversion */
@@ -8870,6 +8874,19 @@ static WORD dpmi_seg_to_desc(WORD seg)
     return (WORD)((idx << 3) | 7);
 }
 
+/* ── ★ IS THIS CODE SELECTOR NOT PRESENT? (session 57) ─────────────────────────────
+     Declared in wowdlg.h and answered here, because the LDT is the host's. A Win16
+     code segment is loaded on demand and its descriptor is marked not-present until
+     it is, so a call into one must go through the RETF trampoline rather than by
+     writing CS -- see WOWCALL_RETF_OFF in wowcall.h and the CARDFILE run that named
+     it. The same three lines the BOP handler's own callback path computes inline;
+     one day both should read this. */
+static int wowdlg_sel_absent(WORD sel)
+{
+    WORD idx = (WORD)(sel >> 3);
+    return idx && idx < DPMI_LDT_MAX && !(g_ldt[idx].access & 0x80);
+}
+
 /* ── ★★★ A 16-BIT CODE SELECTOR OVER THE CALLBACK RETURN STUB. (session 40) ────────
      Not `dpmi_seg_to_desc`: that builds a DATA descriptor, and the guest has to
      EXECUTE these three bytes. The limit is one paragraph on purpose -- the stub is
@@ -12278,6 +12295,29 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                                     " locked");
                 }
             }
+            /* ── ★★★★★ THE MODAL LOOP'S NEXT TURN. (session 57) ───────────────
+                 A dialog procedure has just returned, so the question the loop
+                 exists to ask can be asked again: has EndDialog been called? If
+                 not, wait for the next message and call it again; if it has,
+                 write nResult into the DialogBox return hole we have been
+                 holding open and let the guest resume past a BOP it entered a
+                 long time ago. Either way the context to run next is already in
+                 the TIB and `return 1` runs it -- see src/wow/wowdlg.h.
+               ⚠ THIS RUNS AFTER wowcall_leave HAS RESTORED THE CONTEXT, which
+                 is what makes the loop cost nothing: the restored context IS the
+                 parked DialogBox caller, so re-entering the dialog procedure
+                 simply parks it again at the same SS:SP. Nothing accumulates. */
+            if (act == WOWCALL_ACT_MODALPUMP) {
+                char mnote[512];
+                WORD  mrsel = wow_callback_selector();
+                DWORD mssb  = dpmi_sel_base(
+                    (WORD)(VDM_REG(tib, VTIB_SS) & 0xFFFF));
+                mnote[0] = 0;
+                p = zput(p, "\r\n");
+                log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                wowdlg_step(tib, mssb, mrsel, &g_running, mnote, sizeof mnote);
+                p = zput(p, "WOWDLG: "); p = zput(p, mnote);
+            }
             p = zput(p, "\r\n");
             log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
             return 1;
@@ -12744,6 +12784,9 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                      issuing a LocalUnlock against a lock nobody had taken. Every
                      field of this frame is initialised here for that reason. */
                 f.cbact   = WOWCALL_ACT_NONE; f.cbactarg = 0;
+                f.modaldlg = 0;                /* ...and this one, for the same
+                                                  reason: it decides whether the
+                                                  guest is resumed at all */
                 /* ★ krnl386's segment 1 as a LIVE selector, for the day a
                      service needs to call a KERNEL export. The WOW32 common
                      thunk is IN that segment, so the CS at this BOP is it --
@@ -13479,6 +13522,36 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                                 p = zput(p, " -- ENTERED, depth ");
                                 p = zhex(p, (DWORD)g_wc_depth);
                             }
+                            p = zput(p, "\r\n");
+                        }
+                        /* ── ★★★★★ OR THE CALLER DOES NOT RESUME AT ALL. ───────
+                             (session 57) DialogBox is defined as not returning
+                             until EndDialog, so its BOP does not complete here:
+                             the modal loop takes over, and the guest carries on
+                             inside the dialog's own procedure instead of after
+                             the call it made. The context that is parked is the
+                             one this handler has already prepared -- EIP past
+                             the BOP -- so when the loop finally runs out, the
+                             guest is standing exactly where DialogBox returns
+                             to, with the answer in its hole.
+                           ⚠ `else if`, NOT a second `if`. A service that asked
+                             for both would otherwise have its callback entered
+                             and then be immediately displaced by the loop's
+                             first message, and the first call would never
+                             return. Nothing asks for both today; this is what
+                             stops the day it does from being a mystery. */
+                        else if (f.modaldlg) {
+                            char mnote[512];
+                            WORD  mrsel = wow_callback_selector();
+                            DWORD mssb  = dpmi_sel_base(
+                                (WORD)(VDM_REG(tib, VTIB_SS) & 0xFFFF));
+                            mnote[0] = 0;
+                            p = zput(p, "WOWDLG: the caller is PARKED inside"
+                                        " DialogBox; the modal loop has it\r\n");
+                            wowlog_flush(base, &p);
+                            wowdlg_step(tib, mssb, mrsel, &g_running,
+                                        mnote, sizeof mnote);
+                            p = zput(p, "WOWDLG: "); p = zput(p, mnote);
                             p = zput(p, "\r\n");
                         }
                         wowlog_flush(base, &p);

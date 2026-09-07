@@ -157,4 +157,52 @@ static unsigned wowconv_dib_core_to_info(const unsigned char *core, unsigned len
     return srcoff;
 }
 
+/* ── ★★ WHICH PROCEDURE DRIVES A WINDOW. (session 57) ────────────────────────
+     A Win16 window is driven by its CLASS's window procedure -- except a dialog
+     built from a template that names no class, which is a `#32770` window: the
+     class is the system's, there is no 16-bit window procedure, and the thing
+     that drives it is the DLGPROC the guest passed to DialogBox. Both can be
+     present (a dialog made from the application's own class, like CALC's
+     `SciCalc`), and then the class procedure is the one Windows calls.
+   ⚠ THE ORDER IS THE WHOLE FUNCTION, and it is here rather than at the three
+     call sites -- SendMessage, DispatchMessage and the modal loop -- because
+     three sites deciding this for themselves is how one of them comes to
+     disagree. 0 means nothing can be told about the window at all, which is a
+     fact its callers must handle rather than paper over. */
+static unsigned wowconv_winproc(unsigned wndproc, unsigned dlgproc)
+{
+    return wndproc ? wndproc : dlgproc;
+}
+
+/* ── ★★★★★ WHEN A MODAL LOOP MUST STOP. (session 57) ─────────────────────────
+     `DialogBox` is defined as not returning until `EndDialog`, so the host runs
+     a message loop on the guest's behalf -- and the one way to make that worse
+     than doing nothing is for the loop to have a state in which it neither runs
+     nor exits. Session 56 said so when it declined to write the loop: "a
+     half-built modal loop that never returns is worse than an honest immediate
+     return, because it hangs the guest instead of ending it."
+   ⇒ So the decision is a pure function of four facts, it is total (every
+     combination returns something), and the battery pins it. The loop itself
+     cannot hang unless this returns RUN forever, and this returns RUN only when
+     the dialog is alive, drivable and not yet finished.
+   ⚠ THE ORDER IS LOAD-BEARING, in one place especially: `ended` OUTRANKS a
+     destroyed window. A dialog procedure that calls EndDialog and whose window
+     the OS then tears down has ANSWERED, and the caller is entitled to that
+     answer -- checking liveness first would throw away the result of the dialog
+     the user just clicked OK on and return 0 instead. */
+#define WOWCONV_MODAL_RUN     0   /* keep pumping                              */
+#define WOWCONV_MODAL_END     1   /* EndDialog: the caller gets nResult         */
+#define WOWCONV_MODAL_GONE    2   /* the window is destroyed: 0                */
+#define WOWCONV_MODAL_NOPROC  3   /* nothing to dispatch to: 0, immediately    */
+#define WOWCONV_MODAL_EXPIRED 4   /* the bounded input wait ran out: 0         */
+static int wowconv_modal_exit(int ended, int window_alive, int has_proc,
+                              int wait_expired)
+{
+    if (ended)         return WOWCONV_MODAL_END;
+    if (!window_alive) return WOWCONV_MODAL_GONE;
+    if (!has_proc)     return WOWCONV_MODAL_NOPROC;
+    if (wait_expired)  return WOWCONV_MODAL_EXPIRED;
+    return WOWCONV_MODAL_RUN;
+}
+
 #endif /* WOWCONV_H */

@@ -203,6 +203,17 @@ typedef struct {
     BYTE             cbblob[64];
     int              cbblobn;        /* bytes of cbblob to place; 0 = none      */
     int              cbblobarg;      /* cbarg[] index to receive SEG:OFF, or -1  */
+    /* ── ★★★ "DO NOT RETURN TO THE CALLER AT ALL." (session 57) ────────────────
+         Every other field here describes a call to make BEFORE resuming the
+         guest; this one says the guest must not be resumed past its BOP yet,
+         because the service it asked for -- DialogBox -- is defined as not
+         returning until a dialog is dismissed. The host runs the modal loop
+         instead and completes this call much later, out of the same BOP handler.
+       ⚠ THE SERVICE STILL WRITES A RETURN VALUE, and it is deliberately the one
+         session 56 wrote: if the host declines to run the loop (callbacks off,
+         stack full) the guest gets the old behaviour rather than a hole nobody
+         filled. See src/wow/wowdlg.h. */
+    int              modaldlg;       /* 1 = a modal dialog was parked by this call */
 } wow32_frame_t;
 
 /* ---- note building (shared by EVERY id space's dispatcher) --------------

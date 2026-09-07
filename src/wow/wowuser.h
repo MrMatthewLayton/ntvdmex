@@ -1780,6 +1780,51 @@ static void wowuser_ensure_sysclasses(void)
         c->name[k]   = 0;
         c->atom      = (WORD)(0xC000 + g_wu_nclass);
         c->sysclass  = 1;
+        /* ── ★★★★★ `#32770` IS THE ONE SYSTEM CLASS WE MUST *NOT* USE AS-IS.
+             (session 57, and the run named it) The rule below is right for four
+             of these five and wrong for the fifth, and the difference is exactly
+             whether the OS's implementation can reach OUR code:
+               MDICLIENT / EDIT / LISTBOX / COMBOBOX -- the OS implements the
+                 whole control, and what it does with a click is DRAW and EDIT.
+                 Its answers are the ones we want; nothing has to come back.
+               #32770 -- the OS implements a DIALOG MANAGER, and what it does
+                 with a click is call the window's DLGPROC. Ours is 16-BIT code,
+                 and there is no way to put a 16-bit procedure in a Win32
+                 window's DWLP_DLGPROC slot. So a dialog built on the real class
+                 is INERT: `DefDlgProc` handles everything and `wowwin_proc`
+                 never runs, which means no WM_COMMAND is ever relayed, no
+                 WM_PAINT reaches the guest, and the modal loop below waits
+                 forever for a message the OS quietly consumed.
+           ⇒ MEASURED, TASKMAN on the rig, session 57. The modal loop ran, the
+             dialog and its eight controls were built, and a click on Cancel at
+             its measured screen position produced:
+                 WOWDLG/win32: msg=0x0201 hwnd=0x003600e6 -> win16 0x01c0
+                 ...  Win16 queued 0x00000000
+             -- the button pressed, redrew itself, and sent its WM_COMMAND to a
+             dialog procedure that is not ours. Nothing arrived, and the dialog
+             could not be dismissed.
+           ⇒ So this one gets OUR procedure, like every other Win16 window: it is
+             a window whose messages belong to the guest, not a control whose
+             behaviour belongs to the OS.
+           ⚠ THE ROAD NOT TAKEN, and why: a 32-bit DLGPROC could be installed on
+             the real class with SetWindowLongPtr(DWLP_DLGPROC), which would keep
+             the OS's dialog manager -- tab order, mnemonics, ESC=IDCANCEL, the
+             default button. That is real behaviour we are giving up here and it
+             is worth having. It is not taken NOW because installing a dialog
+             procedure on a window that USER32 did not create as a dialog is
+             undocumented, and this host does not guess about undocumented
+             structure when a plain answer works. Written down as the upgrade.
+           ⚠ THE BACKGROUND BRUSH IS REASONED, NOT MEASURED: COLOR_BTNFACE is
+             what a dialog is grey with on XP, and the run that found this showed
+             WALLPAPER through the client area because the real class erases with
+             a brush it only uses for windows it created itself. Stock ntvdm is
+             the oracle for the exact colour and has not been asked yet. */
+        if (c->name[0] == '#') {
+            c->reg32 = wowwin_register(c->name, c->cls32, sizeof c->cls32,
+                                       LoadCursorA(NULL, IDC_ARROW), NULL, NULL,
+                                       NULL, (HBRUSH)(COLOR_BTNFACE + 1));
+            continue;
+        }
         /* ★ A SYSTEM CLASS IS THE OS's OWN, AND WE USE IT AS-IS. `MDICLIENT` and
              `EDIT` are real Win32 classes on this machine; registering clones of
              them against our procedure would be reimplementing an edit control
@@ -1825,6 +1870,18 @@ typedef struct wowuser_win_s {
     DWORD wndproc;                   /* copied from the class AT CREATION -- Win16
                                         keeps it per window, so a later
                                         RegisterClass cannot retarget this one */
+    /* ── ★★★ AND THE OTHER PROCEDURE A WINDOW CAN HAVE. (session 57) ──────────
+         A dialog created from a template that names no class is a `#32770`
+         window -- a SYSTEM class, so `wndproc` above is 0 and always was, which
+         is correct and is also why a dialog could not be told anything. The
+         thing that drives it is the DLGPROC the guest passed to
+         DialogBox/CreateDialog, which is not a window procedure and does not
+         live in a class: it belongs to this one window, for its lifetime.
+       ⚠ NOT A FALLBACK FOR wndproc AT LARGE. Where a template DOES name the
+         application's own class (CALC's `SciCalc`) the class procedure is the
+         one Windows calls, and this stays 0 unless the guest supplied one. The
+         order is settled in wowuser_winproc_of() and nowhere else. */
+    DWORD dlgproc;
     int   x, y, cx, cy;
     WORD  parent, menu, hinst;
     char  text[64];
@@ -1882,8 +1939,39 @@ static wowuser_win_t *wowuser_newwin(void)
         w = &g_wu_win[g_wu_nwin++];
     }
     w->hwnd = (WORD)(WOWUSER_HWND_BASE + (w - g_wu_win) * WOWUSER_HWND_STEP);
+    /* ⚠ THIS SLOT MAY BE A REUSED ONE, AND EVERY CALLER SETS THE FIELDS IT
+         KNOWS ABOUT -- so a field only ONE caller sets has to be cleared here or
+         it is inherited from whatever window used to live in this slot. That is
+         the `f.cbact` trap in main.c exactly, and its cost was a callback
+         running another call's action. `dlgproc` is that field: only a dialog
+         sets it, and a plain window landing on a dead dialog's slot would
+         otherwise be driven by a procedure that belongs to a window that no
+         longer exists. */
+    w->dlgproc = 0;
     return w;
 }
+
+/* ── ★★ WHICH PROCEDURE DRIVES THIS WINDOW, AND IN WHICH ORDER. (session 57) ──
+     ONE place decides, because two places deciding is two answers. The class's
+     procedure wins where there is one -- that is the window Windows created and
+     the procedure it calls -- and the dialog procedure is what a `#32770` window
+     has INSTEAD, never as well. 0 means nothing can be told about this window,
+     which is a fact its callers must handle rather than paper over. */
+static DWORD wowuser_winproc_of(const wowuser_win_t *w)
+{
+    if (!w) return 0;
+    /* ★ The rule itself is in wowconv.h and pinned by wow_test.c; this is the
+         table lookup around it. */
+    return (DWORD)wowconv_winproc((unsigned)w->wndproc, (unsigned)w->dlgproc);
+}
+
+/* ── The modal dialog loop lives in wowdlg.h, which is included AFTER this file
+     because it reads the window table above. These three are what USER's own
+     DialogBox and EndDialog arms call into it. */
+static int wowdlg_push(WORD hwnd, DWORD retlin, DWORD dlgproc, DWORD wndproc,
+                       WORD ds, int defer_show);
+static int wowdlg_end(WORD hwnd, WORD result);
+static int wowdlg_active(void);
 
 static wowuser_win_t *wowuser_findwin(WORD hwnd)
 {
@@ -2156,7 +2244,12 @@ static DWORD wowuser_timer_proc(WORD hwnd, WORD id)
 static void wowuser_want_msg(wow32_frame_t *f, const wowuser_win_t *w, WORD ds,
                              WORD msg, WORD wparam, DWORD lparam, int retmode)
 {
-    f->cbproc   = w->wndproc;
+    /* ★ THE WINDOW'S procedure, which for a `#32770` dialog is its DLGPROC --
+         one rule, in wowuser_winproc_of(), so that a message cannot reach a
+         window through SendMessage and fail to reach it through DispatchMessage
+         (or the modal loop) because three call sites each decided for
+         themselves. */
+    f->cbproc   = wowuser_winproc_of(w);
     f->cbds     = ds;
     f->cbarg[0] = w->hwnd;
     f->cbarg[1] = msg;
@@ -3096,7 +3189,8 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
         const volatile BYTE *t = wowuser_farmem(f, tfp);
         char  cname[64], caption[64], menuname[64];
         WORD  menuord = 0, clsord = 0;
-        DWORD style;
+        DWORD style, cstyle;
+        int   defer_show = 0;
         int   count, x, y, cx, cy, p, i, k = 0, made = 0;
         DWORD bu;
         int   bux, buy, usedef = 0;
@@ -3113,6 +3207,7 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
         }
 
         style = wowdlg_d(t, 0);
+        cstyle = style;                 /* what we actually CREATE it with */
         count = t[4];
         x  = (int)(short)wowdlg_w(t, 5);
         y  = (int)(short)wowdlg_w(t, 7);
@@ -3199,8 +3294,39 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
             rc.left = w->x; rc.top = w->y;
             rc.right = w->x + w->cx; rc.bottom = w->y + w->cy;
             AdjustWindowRect(&rc, style, hm != NULL);
+            /* ── ★★★★★ A MODAL DIALOG IS CREATED HIDDEN AND SHOWN AFTERWARDS.
+                 (session 57) Real USER creates the dialog window, sends
+                 WM_INITDIALOG, and only THEN shows it -- and the order is not a
+                 detail, it is what makes the dialog's own WM_INITDIALOG work.
+                 A dialog procedure's first act is routinely to MOVE itself:
+                 TASKMAN centres its Task List with
+                     MoveWindow(hDlg, (cxScreen-w)/2, (cyScreen-h)/2, w, h, FALSE)
+                 and that FALSE is `bRepaint`, which Win32 documents as "no
+                 repainting of ANY kind occurs -- not the client area, not the
+                 non-client area, and not the part of the parent uncovered by the
+                 move". On a window that is not yet visible that costs nothing,
+                 because showing it paints everything. On a window we have ALREADY
+                 shown it is a disaster, and this is exactly what it looked like
+                 on the rig: the dialog's old pixels LEFT BEHIND at the top-left
+                 corner, and at its real position a window with the DESKTOP
+                 WALLPAPER showing through its client area -- painted once at an
+                 address it no longer occupied.
+               ⚠ THE TEMPLATE'S OWN WS_VISIBLE IS WHAT WE ARE DEFERRING, not
+                 overriding: `defer_show` remembers that the guest asked for a
+                 visible window, and the modal loop shows it the moment
+                 WM_INITDIALOG returns. If the loop cannot run at all (callbacks
+                 off, stack full) the arm below shows it immediately instead --
+                 an unpainted dialog is bad, an INVISIBLE one is worse.
+               ⚠ MODELESS IS UNTOUCHED. CreateDialog hands the window back for
+                 the caller to show and CALC's SciCalc dialog is measured working
+                 that way; changing when a modeless dialog appears would be
+                 changing something that is already right. */
+            if (modal && (style & WS_VISIBLE)) {
+                cstyle    &= ~(DWORD)WS_VISIBLE;
+                defer_show = 1;
+            }
             if (c->reg32) {
-                w->hwnd32 = CreateWindowExA(0, c->cls32, w->text, style,
+                w->hwnd32 = CreateWindowExA(0, c->cls32, w->text, cstyle,
                                             usedef ? CW_USEDEFAULT32 : rc.left,
                                             usedef ? CW_USEDEFAULT32 : rc.top,
                                             rc.right - rc.left,
@@ -3317,13 +3443,16 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
              mechanism as the SUB-DIALOG gap the user named in s53 --
              Minesweeper's Game > Preferences, Solitaire's Options and Deck.
              One feature unblocks all of it.
-           ▶ WHAT IT NEEDS is deferred completion of this BOP: park the guest
-             inside the service, pump the dialog by calling its 16-bit dlgproc
-             through the existing wowcall chain (the EDITLOCK -> EDITFILL ->
-             LocalUnlock chain is the same shape), and complete the original
-             DialogBox call with EndDialog's result. Not attempted here: a
-             half-built modal loop that never returns is worse than an honest
-             immediate return, because it hangs the guest instead of ending it. */
+           ★★★★★ AND IT IS BUILT NOW -- session 57, in src/wow/wowdlg.h, exactly
+             as the sentence below prescribed: park the guest inside the service,
+             pump the dialog by calling its 16-bit dlgproc through the existing
+             wowcall chain (the EDITLOCK -> EDITFILL -> LocalUnlock chain is the
+             same shape), and complete the original DialogBox call with
+             EndDialog's result. The warning that came with it -- "a half-built
+             modal loop that never returns is worse than an honest immediate
+             return, because it hangs the guest instead of ending it" -- is why
+             that file has FOUR named exits and why two paths in the arm below
+             still return immediately and say so. */
         if (w->hwnd32 && !(style & WS_VISIBLE))
             ShowWindow(w->hwnd32, SW_SHOW);
 
@@ -3340,16 +3469,58 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
         wu_puthex(note, notecap, &k, (DWORD)count, 2);
         wu_puts(note, notecap, &k, " built=");
         wu_puthex(note, notecap, &k, (DWORD)made, 2);
+        /* ── ★★★ THE DIALOG'S OWN PROCEDURE, KEPT ON THE WINDOW. ─────────────
+             For a `#32770` dialog this is the ONLY procedure there is: the class
+             is the system's, so `w->wndproc` is 0 and every message we could
+             ever deliver had nowhere to go. Recorded for modeless dialogs too,
+             because DispatchMessage needs the same answer for the same reason.
+           ⚠ NOT USED IN PREFERENCE TO A CLASS PROCEDURE -- see
+             wowuser_winproc_of(). CALC's dialog is its own `SciCalc` class and
+             passes dlgproc=0; SOUND RECORDER's passes 0x0a970028. Both were
+             measured in session 56 and the pair is why the order matters. */
+        w->dlgproc = dlgproc;
+
         if (modal) {
-            /* ⚠ THE CALLER EXPECTS NOT TO GET CONTROL BACK UNTIL EndDialog, and
-                 it is about to. Name it here rather than let the next reader
-                 discover a program that "just exits": TASKMAN's WinMain is
-                 DialogBox followed by a return. */
-            wu_puts(note, notecap, &k, " -- ★ MODAL, AND WE RETURN IMMEDIATELY:"
-                                       " there is no modal message loop yet, so"
-                                       " the caller resumes past DialogBox and a"
-                                       " program whose WinMain ends there EXITS."
-                                       " See the note at this case.");
+            /* ── ★★★★★ AND HERE THE CALLER STOPS. (session 57) ────────────────
+                 Everything above built the dialog; this is the half that makes
+                 it a MODAL one. The DialogBox call is PARKED -- its return hole
+                 is handed to the modal loop and nothing writes it until
+                 EndDialog -- and the loop itself runs out of the BOP handler,
+                 which is the only code in a position to enter 16-bit code. See
+                 src/wow/wowdlg.h for the mechanism and for its four exits.
+               ⚠ THE TWO FAILURE PATHS BELOW ARE SESSION 56'S BEHAVIOUR ON
+                 PURPOSE, not an oversight: with callbacks off (wowcall.txt) or
+                 the modal stack full, there is no way to run a loop, and an
+                 immediate return ends the program legibly where a wait would
+                 hang it. The line says which happened. */
+            DWORD hole = (DWORD)(ULONG_PTR)(f->bp + WOW32_OFF_RET);
+            WORD  dds  = w->hinst ? w->hinst : c->hinst;
+            if (wowdlg_active())
+                wu_puts(note, notecap, &k, " [NESTED: a modal dialog is already"
+                                           " running]");
+            /* ⚠ AND IF THERE IS NO LOOP, UNDO THE DEFERRAL HERE. A dialog we
+                 hid for an initialisation that is never going to happen is a
+                 program with no window at all -- strictly worse than session
+                 56's behaviour, which is what these two arms exist to preserve. */
+            if (!f->cbok) {
+                if (defer_show && w->hwnd32) ShowWindow(w->hwnd32, SW_SHOW);
+                wu_puts(note, notecap, &k, " -- ★ MODAL, BUT CALLBACKS ARE NOT"
+                                           " ARMED (wowcall.txt), so there can be"
+                                           " no modal loop: we return immediately"
+                                           " and a program whose WinMain ends at"
+                                           " DialogBox EXITS.");
+            } else if (!wowdlg_push(w->hwnd, hole, dlgproc, w->wndproc, dds,
+                                    defer_show)) {
+                if (defer_show && w->hwnd32) ShowWindow(w->hwnd32, SW_SHOW);
+                wu_puts(note, notecap, &k, " -- ★ MODAL, BUT THE MODAL STACK IS"
+                                           " FULL; returning immediately.");
+            } else {
+                f->modaldlg = 1;
+                wu_puts(note, notecap, &k, " -- ★ MODAL: the caller is PARKED here"
+                                           " and does not resume until EndDialog."
+                                           " Its return value is held open; the"
+                                           " MODAL lines that follow are the loop");
+            }
         }
         wu_puts(note, notecap, &k, " -> hwnd=0x");
         wu_puthex(note, notecap, &k, w->hwnd, 4);
@@ -3370,17 +3541,22 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
            ⚠ AND IT WAS NEARLY READ AS A WINDOW HANDLE, because CALC's 0x0140
              also happened to be the next handle our own allocator would issue.
              A number matching something is not a number meaning it.
-           +0 and +4 are still unaccounted for -- both zero in every run so far,
-             so there is nothing yet to explain. dlgproc is 0 for CALC and
-             non-zero for SOUND RECORDER (0x0a970028), so USER does pass it
-             sometimes; we do not need it, because USER runs the dialog's own
-             message loop and calls the procedure itself. */
+           +0 IS THE MODAL FLAG (session 56, above) and +4 is still unaccounted
+             for -- zero in every run so far, so there is nothing yet to explain.
+             dlgproc is 0 for CALC and non-zero for SOUND RECORDER (0x0a970028),
+             so USER does pass it sometimes.
+           ⚠ AND THE SENTENCE THAT USED TO END THIS PARAGRAPH WAS WRONG: "we do
+             not need it, because USER runs the dialog's own message loop and
+             calls the procedure itself". USER does neither -- session 56 read
+             both exports and they return immediately -- and a `#32770` dialog
+             has no other procedure, so dlgproc is the ONLY way to drive one. It
+             is now kept on the window. */
         wu_puts(note, notecap, &k, " [tmpl_len=0x");
         wu_puthex(note, notecap, &k, wow32_argd(f, 2), 8);
         wu_puts(note, notecap, &k, " dlgproc=0x");
         wu_puthex(note, notecap, &k, dlgproc, 8);
-        wu_puts(note, notecap, &k, " unexplained +0=0x");
-        wu_puthex(note, notecap, &k, wow32_argw(f, 0), 4);
+        wu_puts(note, notecap, &k, " modal=0x");
+        wu_puthex(note, notecap, &k, modal, 4);
         wu_puts(note, notecap, &k, "]");
         if (usedef) wu_puts(note, notecap, &k, " [template said -32768: the OS"
                                                " placed it]");
@@ -3427,12 +3603,13 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
             wow32_setret(f, 0);
             return 1;
         }
-        if (w->wndproc) {
+        if (wowuser_winproc_of(w)) {
             wu_puts(note, notecap, &k, "SendMessage 0x");
             wu_puthex(note, notecap, &k, hwnd, 4);
             wu_puts(note, notecap, &k, " msg 0x");
             wu_puthex(note, notecap, &k, msg, 4);
-            wu_puts(note, notecap, &k, " -> its own window procedure");
+            wu_puts(note, notecap, &k, w->wndproc ? " -> its own window procedure"
+                                                  : " -> its DIALOG procedure");
             /* Written so the hole is never uninitialised if the call is
                refused; wowcall.h overwrites it with the real answer. */
             wow32_setret(f, 0);
@@ -3728,14 +3905,21 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
             f->cbproc = m.lparam;             /* ...but to the PROC, not w->wndproc */
             return 1;
         }
-        if (w->wndproc) {
+        if (wowuser_winproc_of(w)) {
             if (!f->cbok) {
                 wu_puts(note, notecap, &k, " -- its own window procedure, but"
                                            " callbacks are not armed");
                 wow32_setret(f, 0);
                 return 1;
             }
-            wu_puts(note, notecap, &k, " -> its own window procedure");
+            /* ★ OR ITS DIALOG PROCEDURE, which is what a MODELESS `#32770`
+                 dialog is driven by -- the guest's own message loop takes the
+                 message out of GetMessage and hands it back here, and until
+                 session 57 this arm dropped it because the system class has no
+                 window procedure. Same rule as SendMessage and the modal loop;
+                 see wowuser_winproc_of(). */
+            wu_puts(note, notecap, &k, w->wndproc ? " -> its own window procedure"
+                                                  : " -> its DIALOG procedure");
             wow32_setret(f, 0);
             wowuser_want_msg(f, w, w->hinst ? w->hinst : g_wu_class[w->cls].hinst,
                              m.msg, m.wparam, m.lparam, WOWCALL_RET_RESULT);
@@ -6825,6 +7009,21 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
         wu_puthex(note, notecap, &k, hdlg, 4);
         wu_puts(note, notecap, &k, " result 0x");
         wu_puthex(note, notecap, &k, res, 4);
+        /* ── ★★★★★ AND THIS IS WHAT THE LOOP HAS BEEN WAITING FOR. (session 57)
+             ⚠ IT DOES NOT UNWIND ANYTHING HERE, AND IT MUST NOT: we are several
+               frames down inside the guest's own dialog procedure, which has to
+               return through our stub before its context can be put back.
+               Recording the answer is the whole job; the pump reads it on the
+               way out. Tearing the frame down from here would resume a caller
+               while its callee was still running.
+             ⚠ THE RESULT IS RECORDED EVEN IF Win32's EndDialog below refuses --
+               that call is about the real window, this is about the parked
+               DialogBox, and they are two different questions. Answering only
+               the first is how the loop would miss its own exit. */
+        if (wowdlg_end(hdlg, res))
+            wu_puts(note, notecap, &k, " -- ★ THIS ENDS A MODAL LOOP: DialogBox"
+                                       " returns it as soon as this procedure"
+                                       " does");
         if (!w || !w->hwnd32) { wu_puts(note, notecap, &k, " -- no real window");
                                 wow32_setret(f, 0); return 1; }
         ok = EndDialog(w->hwnd32, (INT_PTR)(short)res) ? 1 : 0;

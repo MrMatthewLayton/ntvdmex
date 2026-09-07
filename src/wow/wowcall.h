@@ -174,6 +174,14 @@
      Both carry the EDIT control's Win16 hwnd in `actarg`, as EDITTEXT does. */
 #define WOWCALL_ACT_EDITLOCK 2
 #define WOWCALL_ACT_EDITFILL 3
+/* ── ★★★★★ AND THE SAME SHAPE AGAIN, AS A LOOP. (session 57) ─────────────────
+     A modal dialog is this chain with a continuation rule instead of a fixed
+     next step: when the dialog procedure returns, ask whether EndDialog has been
+     called, and if not, wait for the next message and call it again. The parked
+     frame underneath the whole chain is the DialogBox call itself, which is why
+     `DialogBox` can finally do the one thing that defines it -- not return.
+     `actarg` = the dialog's Win16 hwnd. See src/wow/wowdlg.h. */
+#define WOWCALL_ACT_MODALPUMP 4
 
 /* Six words is not a guess about Win16 -- it is what the two things this host
    calls actually push: a window procedure's 5 (hwnd, msg, wParam, lParam hi+lo)
