@@ -8997,6 +8997,11 @@ static int wow_place_v86(dos_machine_t *mp, WORD *ecs, WORD *eip,
             g_wow_cbk_seg = cseg;
             g_wow_cbk_lin = (DWORD)cseg << 4;
             cb[0] = 0xC4; cb[1] = 0xC4; cb[2] = WOWCALL_BOP_CODE;
+            /* ★ And the RETF trampoline, four bytes along -- the paragraph has
+                 sixteen and we were using three. See WOWCALL_RETF_OFF: it is how
+                 a call into a NOT-YET-LOADED code segment gets that segment
+                 loaded, by faulting the way the guest's own far calls do. */
+            cb[WOWCALL_RETF_OFF] = WOWCALL_RETF_BYTE;
         }
         q = m;
         q = zput(q, "WOWV86: 16-bit callback return stub at para 0x");
@@ -11850,7 +11855,7 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                                              | KRNL_LOCALUNLOCK_OFF,
                                          ew->hinst, &uarg, 1, 0,
                                          WOWCALL_RET_KEEP, NULL, ew->hwnd, 0,
-                                         NULL, 0, -1))
+                                         NULL, 0, -1, 0))
                         p = zput(p, "; LocalUnlock in flight");
                     else
                         p = zput(p, "; ★ LocalUnlock REFUSED -- the block stays"
@@ -11879,7 +11884,7 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                                              | KRNL_LOCALLOCK_OFF,
                                          ew->hinst, &larg, 1, 0,
                                          WOWCALL_RET_KEEP, NULL, ew->hwnd, 0,
-                                         NULL, 0, -1)) {
+                                         NULL, 0, -1, 0)) {
                         if (g_wc_depth > 0) {
                             g_wc[g_wc_depth - 1].action = WOWCALL_ACT_EDITFILL;
                             g_wc[g_wc_depth - 1].actarg = ew->hwnd;
@@ -11933,7 +11938,7 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                                              | KRNL_LOCALUNLOCK_OFF,
                                          ew->hinst, &uarg, 1, 0,
                                          WOWCALL_RET_KEEP, NULL, ew->hwnd, 0,
-                                         NULL, 0, -1))
+                                         NULL, 0, -1, 0))
                         p = zput(p, "; LocalUnlock in flight");
                     else
                         p = zput(p, "; ★ LocalUnlock REFUSED -- the block stays"
@@ -13000,7 +13005,7 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                             WORD  rsel = wow_callback_selector();
                             DWORD ssb3 = dpmi_sel_base(
                                 (WORD)(VDM_REG(tib, VTIB_SS) & 0xFFFF));
-                            int ai;
+                            int ai, cbabsent = 0;
                             p = zput(p, "WOWCALL: -> 0x");
                             p = zhex(p, f.cbproc >> 16);
                             p = zput(p, ":0x"); p = zhex(p, f.cbproc & 0xFFFF);
@@ -13032,6 +13037,22 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                             else if (f.cbmsg == WM_CREATE16)
                                 p = zput(p, " [lParam=0: NO CREATESTRUCT -- a"
                                             " procedure that reads it will fault]");
+                            /* ── ★ IS THE PROCEDURE'S SEGMENT ACTUALLY LOADED? ──
+                                 A Win16 code segment is loaded on demand, and
+                                 until it is, its descriptor's PRESENT bit is
+                                 clear. Writing that selector into the TIB's CS
+                                 kills the VDM silently; see WOWCALL_RETF_OFF.
+                                 Say which one it is, because "not present" is a
+                                 fact about the guest's loader and belongs in the
+                                 log next to the call it changes. */
+                            { WORD pcs = (WORD)(f.cbproc >> 16);
+                              WORD pix = (WORD)(pcs >> 3);
+                              cbabsent = (pix && pix < DPMI_LDT_MAX
+                                          && !(g_ldt[pix].access & 0x80));
+                              if (cbabsent)
+                                  p = zput(p, " [code segment NOT PRESENT --"
+                                              " entering via the RETF trampoline"
+                                              " so krnl386 loads it]"); }
                             if (!rsel)
                                 p = zput(p, " -- NO RETURN SELECTOR (LDT full);"
                                             " the call was NOT made");
@@ -13042,7 +13063,7 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                                                     f.cbret, f.cbsink,
                                                     f.cbhwnd, f.cbmsg,
                                                     f.cbblob, f.cbblobn,
-                                                    f.cbblobarg))
+                                                    f.cbblobarg, cbabsent))
                                 p = zput(p, " -- REFUSED (depth, or an unusable"
                                             " stack/procedure); the call was NOT"
                                             " made and the guest keeps the answer"
@@ -14809,7 +14830,22 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                             VDM_REG(tib, VTIB_EIP) += 2;
                             return 1;
                         }
-                        if (ah == 0x3C || ah == 0x3D) {            /* create / open: DS:DX = ASCIIZ name */
+                        /* ── ★★★ AND 5Bh, "CREATE NEW", WHICH IS HOW A GUEST MAKES A
+                             TEMPORARY FILE. (session 56) ─────────────────────────────
+                             It is 3Ch with one difference -- it FAILS if the name
+                             already exists -- and that difference is the whole point:
+                             the caller invents a name, tries to create it, and retries
+                             with another on error 50h. Landing in "PM thunk TODO"
+                             therefore does not look like an unimplemented call, it
+                             looks like a full disk.
+                           ★ MEASURED. CARDFILE calls AH=2Ch for the time, builds a name
+                             from it, calls 5Bh, and puts up
+                                 "Cannot create temporary file. Delete one or more files
+                                  to increase available disk space, and then try again."
+                             on a 243 GB volume -- which is the recorded WRITE defect
+                             too, and the reason both were filed under "runs but lies"
+                             rather than as a missing DOS call. */
+                        if (ah == 0x3C || ah == 0x3D || ah == 0x5B) {  /* create / open: DS:DX = ASCIIZ name */
                             DWORD dsb = dpmi_sel_base((WORD)VDM_REG(tib, VTIB_DS));
                             const char *fn = (const char *)(ULONG_PTR)(dsb + (VDM_REG(tib, VTIB_EDX) & 0xFFFF));
                             /* ── ★★ AL IS A BIT FIELD, NOT A NUMBER. (#128, session 37) ──
@@ -14835,9 +14871,10 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                             DWORD acc = (mode == 1) ? GENERIC_WRITE
                                       : (mode == 2) ? (GENERIC_READ | GENERIC_WRITE) : GENERIC_READ;
                             DWORD shr = FILE_SHARE_READ | FILE_SHARE_WRITE;
-                            HANDLE f = (ah == 0x3C)
+                            HANDLE f = (ah == 0x3C || ah == 0x5B)
                                 ? CreateFileA(fn, GENERIC_READ | GENERIC_WRITE, shr, NULL,
-                                              CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL)
+                                              (ah == 0x5B) ? CREATE_NEW : CREATE_ALWAYS,
+                                              FILE_ATTRIBUTE_NORMAL, NULL)
                                 : CreateFileA(fn, acc, shr, NULL, OPEN_EXISTING,
                                               FILE_ATTRIBUTE_NORMAL, NULL);
                             DWORD gle = (f == INVALID_HANDLE_VALUE) ? GetLastError() : 0;
@@ -14851,6 +14888,11 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                                        (gle == ERROR_PATH_NOT_FOUND)     ? 3 :
                                        (gle == ERROR_ACCESS_DENIED)      ? 5 :
                                        (gle == ERROR_SHARING_VIOLATION)  ? 0x20 :
+                                       /* 50h is the ANSWER 5Bh exists to give: the name
+                                          is taken, try another. Mapping it to 2 would
+                                          tell the caller its own file is missing. */
+                                       (gle == ERROR_FILE_EXISTS ||
+                                        gle == ERROR_ALREADY_EXISTS)     ? 0x50 :
                                        (gle == ERROR_TOO_MANY_OPEN_FILES)? 4 : 2); }
                             else { int slot; for (slot = 5; slot < DOS_MAX_FILES && m.fh[slot]; ++slot) {}
                                    if (slot < 24) { m.fh[slot] = f; VDM_SET16(tib, VTIB_EAX, slot); }

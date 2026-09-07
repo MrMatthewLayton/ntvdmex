@@ -89,6 +89,38 @@
 #define WOWCALL_BOP_CODE  0x57
 #define WOWCALL_BOP_LEN   3
 
+/* ── ★★★★★ ONE MORE BYTE: A `RETF`, SO THE CPU CAN FAULT FOR US. (session 56) ──
+     A Win16 code segment is LOADED ON DEMAND, and the demand is a fault: krnl386
+     marks the selector not-present (access 0x7b), and the first far transfer to
+     it raises #NP, which its handler services by reading the segment in and
+     committing the descriptor present (access 0xfb). This host reflects that
+     exception correctly and has done for sessions -- eight of them succeeded in
+     the very run that found this.
+   ⚠ BUT WE NEVER LET IT HAPPEN ON OUR OWN CALLS. wowcall_enter reaches a 16-bit
+     procedure by WRITING CS:EIP into the VDM TIB, and a TIB whose CS names a
+     not-present selector is not a fault, it is a VDM that does not come back:
+     no exception, no log line, the process simply gone. Measured on CARDFILE,
+     which registers its class, creates its window, and dies on the first
+     instruction of its own WM_CREATE:
+
+         INT31h AX=0x000c BX=0x0b7f sel 0x0b7f <- desc ... acc 0x7b     (NOT present)
+         WOWCALL: -> 0x0b7f:0x0000 (hwnd=0x0140 msg=0x0001) -- ENTERED, depth 1
+         <log ends>
+
+     The contrast is in the same log: 0x04a7 gets the SAME 0x7b descriptor and is
+     later COMMITTED present (`acc=0xfb`), and its WOWCALL returns normally.
+     0x0b7f never is, because nothing ever faulted on it.
+
+   ⇒ So enter on a `RETF` instead, with the target pushed as a far address. The
+     RETF is a normal instruction on a segment that IS present, so the #NP it
+     raises is an ordinary restartable fault: krnl386 loads the segment, IRETs,
+     the RETF re-executes and this time it transfers. The guest's own mechanism,
+     used the way it was designed, instead of stepped around.
+     It lives at offset 4 of the callback paragraph, whose first three bytes are
+     the return BOP above; the selector already covers it. */
+#define WOWCALL_RETF_OFF  4
+#define WOWCALL_RETF_BYTE 0xCB
+
 /* Win16 messages this host sends. Kept here rather than in wowuser.h because
    the callback is what makes them meaningful. */
 #define WM_CREATE16       0x0001
@@ -193,11 +225,14 @@ static void wowcall_push(DWORD ssbase, WORD *sp, WORD v)
  *
  * Returns 1 if the guest is now standing at the procedure's first instruction.
  */
+/* `absent` = the target's code selector is NOT PRESENT, so we must reach it
+   through the RETF trampoline rather than by writing CS. See WOWCALL_RETF_OFF. */
 static int wowcall_enter(volatile BYTE *tib, DWORD ssbase, WORD retsel,
                          DWORD proc, WORD ds, const WORD *argw, int nargw,
                          DWORD retlin, int retmode, WORD *sink,
                          WORD hwnd, WORD msg,
-                         const BYTE *blob, int blobn, int blobarg)
+                         const BYTE *blob, int blobn, int blobarg,
+                         int absent)
 {
     wowcall_frame_t *fr;
     WORD arg[WOWCALL_MAX_ARGW];
@@ -255,6 +290,13 @@ static int wowcall_enter(volatile BYTE *tib, DWORD ssbase, WORD retsel,
     for (i = 0; i < nargw; ++i) wowcall_push(ssbase, &sp, arg[i]);
     wowcall_push(ssbase, &sp, retsel);       /* the far return address: CS ... */
     wowcall_push(ssbase, &sp, 0);            /* ... then IP, at offset 0       */
+    /* ★ AND, IF THE SEGMENT IS NOT LOADED, THE TARGET ITSELF -- so the RETF we
+         are about to enter on pops it and faults on OUR behalf. Same order as
+         the return address above: CS first, so IP ends up at [SP]. */
+    if (absent) {
+        wowcall_push(ssbase, &sp, (WORD)(proc >> 16));
+        wowcall_push(ssbase, &sp, (WORD)(proc & 0xFFFF));
+    }
     VDM_SET16(tib, VTIB_ESP, sp);
 
     /* DS is the contract (see the header note); AX carries the same value so
@@ -263,8 +305,16 @@ static int wowcall_enter(volatile BYTE *tib, DWORD ssbase, WORD retsel,
        both forms read the same register. */
     VDM_SET16(tib, VTIB_EAX, ds);
     VDM_SET16(tib, VTIB_DS,  ds);
-    VDM_SET16(tib, VTIB_CS,  (WORD)(proc >> 16));
-    VDM_REG(tib, VTIB_EIP) = (DWORD)(proc & 0xFFFF);
+    if (absent) {
+        /* Enter on the RETF, which is in a segment that IS present. Its own #NP
+           on the popped selector is restartable, so krnl386 loads the segment
+           and the retry lands in the procedure with this identical stack. */
+        VDM_SET16(tib, VTIB_CS,  retsel);
+        VDM_REG(tib, VTIB_EIP) = (DWORD)WOWCALL_RETF_OFF;
+    } else {
+        VDM_SET16(tib, VTIB_CS,  (WORD)(proc >> 16));
+        VDM_REG(tib, VTIB_EIP) = (DWORD)(proc & 0xFFFF);
+    }
     ++g_wc_calls;
     return 1;
 }
