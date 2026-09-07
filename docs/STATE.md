@@ -240,7 +240,7 @@ and matches the 6.22 oracle row for row (session 53)** — but `MEM /C` still re
 
    ## ★ SESSION 56 — 83.1% → 84.3%
 
-   **Thirteen commits, all rig-gated. Resumed from session 55's pause; the user chose
+   **Sixteen commits, all rig-gated. Resumed from session 55's pause; the user chose
    the MIXED option, then asked for both halves of the follow-up.**
 
    ### ▶ ★★★★★ CALC IS A CALCULATOR THAT CALCULATES — AND s55 NAMED THE WRONG PASS
@@ -480,6 +480,59 @@ and matches the 6.22 oracle row for row (session 53)** — but `MEM /C` still re
 
    ⚠ `LOG_PATH` moved from `main.c` (line 70, **after** the headers that want it)
    into `log.h` beside `log_append`. One definition, not two.
+
+   ### ▶ ★★★★★ USER-REPORTED: TRAY ICONS STACKING UP — AND THEY WERE LIVE HOSTS
+
+   *"When a WoW16 window exits, it leaves its tray icon behind. They are stacking
+   up in the tray."* **They were not ghost icons. They were LIVE PROCESSES** —
+   one whole VDM host per guest ever launched, each holding a real tray icon, for
+   the rest of the session. Measured before touching anything: launch CALC, click
+   its X, the Calculator window is gone and `tasklist` still shows PID 1488.
+
+   ⚠ **MY FIRST MEASUREMENT PROVED NOTHING.** `rigshot` has no `close` verb, so
+   the "test" never closed the guest and the host was still running for the most
+   boring reason available — a run that *read as* a clean reproduction. Clicking
+   the real X is what produced the evidence. ⚠⚠ And the tool HAD said so:
+   `unknown verb` went to `rigshot.txt` as designed and the batch overwrote that
+   file before anything read it. **Read the tool's log before trusting the tool's
+   effect.**
+
+   ### ▶ ★★★★★ THE REAL CAUSE: A WIN16 APP COULD NOT EXIT
+
+   The lifecycle is `WM_CLOSE → DestroyWindow → `**`WM_DESTROY`**` →
+   PostQuitMessage → GetMessage returns 0 → WinMain returns → task exits`.
+   We relayed `WM_CLOSE` (wowwin.h) and implemented `DestroyWindow` (wowuser.h),
+   and **dropped the middle link — `WM_DESTROY` was delivered by NOTHING,
+   ANYWHERE.** So a guest destroyed its window and went straight back to
+   `GetMessage` and blocked forever (`WOWMSG: blocked 0x7f23 ms` and climbing,
+   window already gone). The task never ended ⇒ the exec loop never ended ⇒ the
+   host never exited ⇒ the icon stayed.
+
+   ⚠ **ORDER IS THE WHOLE DIFFICULTY.** The window record must OUTLIVE the window
+   by exactly one message, because `DispatchMessage` resolves the window
+   procedure THROUGH it (`wowuser_findwin`). Clearing `hwnd` in DestroyWindow —
+   which the existing note rightly wants for a dead window — makes the message
+   just posted undeliverable. It is marked `dying` and released the instant its
+   `WM_DESTROY` is dispatched.
+   ⚠ Real Windows **SENDS** WM_DESTROY; we post it. Same caveat and same reason
+   as WM_SIZE/WM_SETFOCUS already carry.
+
+   ★ **SECOND HALF: A WIN16 HOST MUST NOT OUTLIVE ITS GUEST.** The exec loop's
+   tail said *"keep the window open so the guest's final screen stays visible"* —
+   right for DOS, wrong here, because a Win16 guest has **no window and no final
+   screen** (the `tray_add` note says so outright). Nothing to look at, nothing
+   to close, and the wait never ended. A Win16 host now asks its UI thread to
+   close and leaves through its OWN path, which is also what stops the OPL and
+   Beep.sys — both of which have outlived a host before.
+   ⚠ `tray_remove` now also runs before the VEH's `ExitProcess`, the headless
+   `ExitProcess` and the watchdog's `TerminateProcess` — the paths that CANNOT
+   unwind, and the only ones that could leave a genuine ghost.
+
+   ★ The full chain, in one log: `DestroyWindow -> WM_DESTROY posted /
+   DispatchMessage msg=0x0002 -> its own window procedure / PostQuitMessage 0 /
+   GetMessage -> WM_QUIT -- the loop ends / ExitKernelThunk(0) / STAGE2: exec
+   loop exited`, and `tasklist` after: **NONE**. Confirmed on NOTEPAD (classic
+   wndproc), CALC (a dialog) and CARDFILE.
 
    ### ▶ WHERE THE NUMBER WENT
 
