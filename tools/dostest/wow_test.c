@@ -48,7 +48,18 @@ static void ok(int c, const char *what)
 }
 
 /* ── PART 1 + 2 SHARED: the macro table scanned out of the real headers ───── */
-#define MAXDEF 512
+/* ⚠⚠ THIS CAP SILENTLY FAILED 27 CHECKS FOR A WHOLE SESSION. (session 56)
+     The scanner's overflow arm was `continue`, so once the headers held more
+     than MAXDEF `*_ARG_*` macros every one found after the cap was DROPPED --
+     and part 2 then reported them as `macro CDIB_ARG_HDC is not defined`, for
+     macros that are defined, in a file the scanner reads, at line 695. Session
+     55 added 13 services and crossed the line; the battery has been reporting
+     27 failures ever since and they were read as a known-bad tail rather than
+     as the instrument breaking.
+   ⇒ Room to grow, AND a loud overflow: an instrument that cannot hold its
+     input must say so, not quietly answer about a subset. This is the same
+     rule the bus applies to a refused port claim. */
+#define MAXDEF 2048
 typedef struct { char name[64]; long val; char file[32]; int line; } def_t;
 static def_t g_def[MAXDEF];
 static int   g_ndef;
@@ -85,7 +96,15 @@ static void scan_header(const char *root, const char *rel)
         if (*p == '(') continue;                 /* not a plain number */
         {   char *end; v = strtol(p, &end, 0);
             if (end == p) continue; }
-        if (g_ndef >= MAXDEF) continue;
+        if (g_ndef >= MAXDEF) {
+            /* Not `continue`. See the MAXDEF note: dropping a macro here makes
+               part 2 report it as UNDEFINED, which sends the reader to the
+               header to look for something that is already there. */
+            fprintf(stderr, "wow_test: FATAL -- more than %d `*_ARG_*` macros; "
+                            "raise MAXDEF. Every macro past the cap would be "
+                            "reported as 'not defined'.\n", MAXDEF);
+            exit(2);
+        }
         snprintf(g_def[g_ndef].name, sizeof g_def[g_ndef].name, "%s", name);
         snprintf(g_def[g_ndef].file, sizeof g_def[g_ndef].file, "%s", rel);
         g_def[g_ndef].val = v;
