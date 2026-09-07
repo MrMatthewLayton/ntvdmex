@@ -37,6 +37,16 @@ copy /y "%BM%\ntvdmhost.exe" C:\ntvdmex\ >nul
 reg add "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\ntvdm.exe" /v Debugger /t REG_SZ /d "C:\ntvdmex\ntvdmhost.exe" /f >nul
 del /q C:\ntvdmex\shot*.bmp >nul 2>&1
 del /q "%RES%\shot_%T%_*.bmp" >nul 2>&1
+rem ⚠⚠ AND THE HOST LOG, BECAUSE THE HOST APPENDS TO IT. (session 56)
+rem    ntvdmhost.log is not truncated at startup, so result_%T%.log is WHATEVER
+rem    RAN LAST followed by this run. Measured on doomrun.bat, which had the same
+rem    hole: a regression taken after a live CALC session came back at twice the
+rem    baseline size, and the FP counts and PM vector table read out of it were
+rem    CALC's -- in a log for a guest that never loads WIN87EM. Every runner that
+rem    starts a FRESH host has to do this; the interaction scripts (pbmin,
+rem    minetest, wowkeys) must NOT, because they attach to a host that is already
+rem    running and holding the file open.
+del /q C:\ntvdmex\ntvdmhost.log >nul 2>&1
 if exist "%RES%\%T%\*" goto game
 if not exist C:\test md C:\test
 copy /y "%BM%\dosstub.com" C:\test\ >nul

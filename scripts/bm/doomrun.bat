@@ -36,6 +36,17 @@ rem    (e.g. "-nosound"). Absent file = no arguments, exactly as before.
 set ARGS=
 if exist "%SH%doomargs.txt" for /f "delims=" %%a in ('type "%SH%doomargs.txt"') do set ARGS=%%a
 >%N%\target.txt echo %G%\%EXE% %ARGS%
+rem ⚠⚠ DELETE THE HOST LOG, BECAUSE THE HOST APPENDS TO IT. (session 56)
+rem    ntvdmhost.log is not truncated at startup, so result_doom.log was
+rem    WHATEVER RAN LAST followed by this run. Measured: a Doom regression taken
+rem    straight after a live CALC session came back 7,234,588 bytes against a
+rem    3,503,139-byte baseline, and the "Doom" FP counts and PM vector table read
+rem    out of it were CALC's -- selector 0x0b57, WIN87EM's handler, in a log for a
+rem    guest that has never loaded WIN87EM. The doubled size was the only hint,
+rem    and it reads like a regression rather than a harness fault.
+rem    The same rule the sb.raw note below already states: absent is a visible
+rem    failure, stale is an invisible one that reads as a result.
+del /q %N%\ntvdmhost.log >nul 2>&1
 echo.> %N%\autoexit
 cd /d "%G%"
 start /wait /d "%G%" "" "%G%\dosstub.com"
