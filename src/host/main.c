@@ -348,6 +348,24 @@ static opl_state    g_opl;       static ntvdd g_opl_dev;
 static sb_state     g_sb;        static ntvdd g_sb_dev;
 static mpu_state    g_mpu;       static ntvdd g_mpu_dev;
 static comm_state   g_comm;      static ntvdd g_comm_dev;   /* GH #9 */
+/* ── FOLDING RUNS OF THE SAME WOW32 CALL. (session 56) See the WOWFOLD note in
+     the BOP handler. `mute` is set only while a run is being folded and is
+     cleared the instant a different call arrives, so it can never outlive the
+     pattern that justified it. */
+#define WOWFOLD_KEEP  256u          /* full dumps kept per function id       */
+/* ── AND A SECOND, MUCH HIGHER CAP ON THE VERDICT LINE ITSELF. ───────────────
+     The dump fold took TERMINAL from 177 MB to 85 MB and left 900,374 verdict
+     lines, which are then the whole remaining volume. They are kept on purpose
+     -- bmwow.sh's signature is a COUNT of them -- so the second cap has to sit
+     far above anything the gate can produce. The gate's ENTIRE run is 85
+     serviced / 113 declined / 57 unimpl, i.e. under a hundred per function;
+     4096 is fifty times that. A guest that passes it is not being measured any
+     more, it is looping. */
+#define WOWFOLD_HARD  4096u
+#define WOWFOLD_SLOTS 1024u          /* power of two; see the collision note   */
+static DWORD g_wowfold_seen[WOWFOLD_SLOTS];
+static int   g_wowfold_mute;
+static DWORD g_wowfold_dropped;      /* dumps folded away, reported in WOWPERF */
 static audio_state  g_audio;     static audio_wave g_wave;
 static present_ddraw g_pd;
 static xms_state    g_xms;       /* M4: XMS extended-memory manager           */
@@ -1372,6 +1390,41 @@ static void serial_out(const char *buf, const char *end)
         WriteFile(g_serial, buf, (DWORD)(end - buf), &wrote, NULL);
         FlushFileBuffers(g_serial);
     }
+}
+/* ── THE WOW32 BOP BLOCK'S ONLY WAY OUT. (session 56) ────────────────────────
+     Identical to log_append + serial_out, except that it drops the buffer when
+     the current call is a folded repeat. Deliberately NOT a change to
+     log_append itself, and deliberately used only by the sites inside the WOW32
+     BOP handler: g_wowfold_mute stays set for as long as a run continues, so a
+     global mute would also swallow anything else logged BETWEEN those BOPs --
+     a fault, a PM interrupt, an LDT sync -- and hiding one of those to save disk
+     would be trading the trace for the thing the trace exists to catch.
+     `p` is reset either way, so a muted block cannot leak into the next one. */
+static void wowlog_flush(char *base, char **pp)
+{
+    char *e = *pp;
+    if (g_wowfold_mute == 2) { ++g_wowfold_dropped; *pp = base; return; }
+    if (g_wowfold_mute && e > base) {
+        /* ── ⚠⚠ KEEP THE VERDICT LINE. DROPPING IT WOULD BREAK THE GATE. ──
+             bmwow.sh's signature is a COUNT of `-> SERVICED` / `-> DECLINED` /
+             `-> UNIMPLEMENTED` lines, and the baseline it compares against
+             (85/113/57) is a count of the same. Folding whole blocks away would
+             have moved those numbers with no change in behaviour whatsoever --
+             a silent, self-inflicted regression signal, which is precisely the
+             class of instrument fault this fold exists to fix. So drop the
+             DUMP -- the register line, the two stack windows, the arguments --
+             and keep the one line that says what happened. That is ~90 bytes of
+             a ~1 KB block, and it leaves every count in the log exact. */
+        char *ls = e - 1;
+        while (ls > base && (ls[-1] != '\n')) --ls;
+        /* `ls` is now the start of the final line. If the block is one line
+           already there is nothing to save, and emitting it is correct. */
+        ++g_wowfold_dropped;
+        log_append(LOG_PATH, ls, e); serial_out(ls, e);
+        *pp = base;
+        return;
+    }
+    log_append(LOG_PATH, base, e); serial_out(base, e); *pp = base;
 }
 /* One printer, reachable two ways. INT 17h and the 0x378 data/strobe registers
    are the SAME LPT1 -- a guest may use either, and some use both in one run --
@@ -12077,8 +12130,74 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                 p = zput(p, " pump_calls=0x");        p = zhex(p, g_ww_pumpcalls);
                 p = zput(p, " pump_ms=0x");
                 p = zhex(p, fq.QuadPart ? (DWORD)(g_ww_qpc * 1000 / fq.QuadPart) : 0);
+                /* ★ AND HOW MUCH THE FOLD SAVED, because a suppression that is
+                     not counted is indistinguishable from a call that never
+                     happened -- which is the whole reason this line exists. */
+                p = zput(p, " folded=0x");            p = zhex(p, g_wowfold_dropped);
                 p = zput(p, "\r\n");
                 g_wow_perf_ms = now;
+            }
+            /* ── ★★★★ STOP WRITING A KILOBYTE PER BOP. (session 56) ──────────
+                 The note on g_log_quiet in log.h prescribes exactly this: the
+                 answer to "is the trace the bottleneck" is not to ship the
+                 silencer on, it is to stop producing the volume. TERMINAL made
+                 the case unanswerable -- 155,626 GetCurrentTime calls in a
+                 twenty-second run and a 158 MB log (s55 recorded 182 MB for the
+                 same guest). A grep over it TIMED OUT, which is the point at
+                 which an instrument has stopped being one.
+               ★ THE CLOCK IS NOT THE BUG, and that was checked before any of
+                 this was written: GetCurrentTime returned 321 DISTINCT values
+                 stepping ~16 ms, so it advances correctly and the guest is
+                 polling it ~485 times per tick. A delay loop is entitled to do
+                 that. What is not entitled is us minuting every iteration.
+               ⚠⚠ AND THE FIRST DESIGN WAS THE WRONG SHAPE, MEASURED. It folded
+                 RUNS of the same call back to back, which sounds like the same
+                 thing and is not: the longest identical run in that log is
+                 TWENTY-THREE. The 155,626 calls are interleaved into a repeating
+                 CYCLE, so a run-based fold never fired once (`folded=0x0`) and
+                 the log came back BIGGER. The pattern is "one function called an
+                 enormous number of times", not "one function repeated".
+               ⇒ So cap PER FUNCTION. The first WOWFOLD_KEEP calls of each id are
+                 traced in full -- which is where the arguments worth reading
+                 are -- and after that the block's DUMP is dropped while the
+                 verdict line is kept. Interleaving cannot defeat it. */
+            {   DWORD fsb  = dpmi_sel_base((WORD)(VDM_REG(tib, VTIB_SS) & 0xFFFF));
+                DWORD fbp  = VDM_REG(tib, VTIB_EBP) & 0xFFFF;
+                g_wowfold_mute = 0;
+                if (bcode == 0x51 && fsb
+                    && host_readable((const void *)(ULONG_PTR)(fsb + fbp), 16)) {
+                    const volatile BYTE *ff =
+                        (const volatile BYTE *)(ULONG_PTR)(fsb + fbp);
+                    DWORD ffid = (DWORD)(ff[WOW32_OFF_ID] | (ff[WOW32_OFF_ID + 1] << 8));
+                    /* ⚠ INDEXED BY ID ALONE, so two modules' ids can share a
+                         slot. That is acceptable HERE and nowhere else: the id
+                         space being per-module is a hard rule for DISPATCH (it
+                         cost a session to learn) but this table only decides how
+                         much to PRINT, and a collision can only make one
+                         function's dump stop early. It can never change what is
+                         serviced, and the verdict line is kept either way. */
+                    DWORD slot = ffid & (WOWFOLD_SLOTS - 1u);
+                    if (g_wowfold_seen[slot] < 0xFFFFFFFFu) ++g_wowfold_seen[slot];
+                    if (g_wowfold_seen[slot] == WOWFOLD_KEEP) {
+                        p = zput(p, "WOWFOLD: FUNC=0x"); p = zhex(p, ffid);
+                        p = zput(p, " has now been traced 0x");
+                        p = zhex(p, (DWORD)WOWFOLD_KEEP);
+                        p = zput(p, " times; from here its REGISTER AND STACK DUMP"
+                                    " is dropped and only the verdict line is kept."
+                                    " Nothing about what is serviced changes.\r\n");
+                        log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                    }
+                    if (g_wowfold_seen[slot] == WOWFOLD_HARD) {
+                        p = zput(p, "WOWFOLD: FUNC=0x"); p = zhex(p, ffid);
+                        p = zput(p, " has now been seen 0x"); p = zhex(p, (DWORD)WOWFOLD_HARD);
+                        p = zput(p, " times; from here it is COUNTED AND NOT TRACED AT"
+                                    " ALL. Line counts taken from this log past this"
+                                    " point are a floor, not a total.\r\n");
+                        log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                    }
+                    if (g_wowfold_seen[slot] > WOWFOLD_KEEP) g_wowfold_mute = 1;
+                    if (g_wowfold_seen[slot] > WOWFOLD_HARD) g_wowfold_mute = 2;
+                }
             }
             p = zput(p, "WOWBOP 0x"); p = zhexb(p, bcode);
             /* Only 0x53 carries a sub-function byte. Printing bb[3] for the others
@@ -12378,7 +12497,7 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                 VDM_REG(tib, VTIB_EIP) += 4;
                 p = zput(p, " -> no 32-bit companion (BX:DX=0) => it will use the "
                             "per-call BOP path\r\n");
-                log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                wowlog_flush(base, &p);
                 return 1;
             }
             /* ── ★ SERVICE THE CALL, IF WE KNOW HOW. (GH #128) ────────────────
@@ -12510,7 +12629,7 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                         p = zput(p, fromtdb ? " (TDB+0x1c)" : " (SS&~1 -- verified at the"
                                                               " resume)");
                         p = zput(p, "\r\n");
-                        log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                        wowlog_flush(base, &p);
                         VDM_REG(tib, VTIB_EIP) += WOW32_BOP_LEN;
                         return 1;
                     }
@@ -12563,7 +12682,7 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                         p = zput(p, " waited for a message -- YIELDING to parked task 0x");
                         p = zhex(p, to);
                         p = zput(p, " ([0x228] follows the context)\r\n");
-                        log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                        wowlog_flush(base, &p);
                         /* EIP is NOT advanced here: the whole context has been
                            replaced, and the resumed one already points where it
                            should. Advancing would step the OTHER task's EIP. */
@@ -12622,7 +12741,7 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                     else    { wow32_setret(&f, 0xFFFFFFFFu); ++g_wow32_unimpl;
                               p = zput(p, " -> FAILED (bad handle/selector/buffer)"); }
                     p = zput(p, "\r\n");
-                    log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                    wowlog_flush(base, &p);
                     VDM_REG(tib, VTIB_EIP) += WOW32_BOP_LEN;
                     return 1;
                 }
@@ -12664,7 +12783,7 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                     VDM_REG(tib, VTIB_EIP) += WOW32_BOP_LEN;
                     p = zput(p, " -> SERVICED (DOS-backed), returned 0x");
                     p = zhex(p, f.ret); p = zput(p, "\r\n");
-                    log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                    wowlog_flush(base, &p);
                     return 1;
                 }
                 /* ── ★★★ 0xc5 ResolveModulePath -- WHERE IS THIS MODULE? ─────────
@@ -12743,7 +12862,7 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                     VDM_REG(tib, VTIB_EIP) += WOW32_BOP_LEN;
                     p = zput(p, " -> SERVICED (host path search), returned 0x");
                     p = zhex(p, f.ret); p = zput(p, "\r\n");
-                    log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                    wowlog_flush(base, &p);
                     return 1;
                 }
                 /* ── ★ ExitKernelThunk: krnl386 SAYS IT IS DONE, SO STOP. ──────
@@ -12759,7 +12878,7 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                     p = zhex(p, wow32_argw(&f, 0));
                     p = zput(p, ") -- krnl386 is shutting the VDM down; ending the run"
                                 " here rather than looping on the UD0 behind it\r\n");
-                    log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                    wowlog_flush(base, &p);
                     return -1;
                 }
                 /* ── ★★★ krnl386 seg2's TABLE. Learn its segment from a stub. ──
@@ -12908,7 +13027,7 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                                 p = zput(p, "\r\n -> SERVICED (task environment),"
                                             " returned 0x");
                                 p = zhex(p, f.ret); p = zput(p, "\r\n");
-                                log_append(LOG_PATH, base, p); serial_out(base, p);
+                                wowlog_flush(base, &p);
                                 p = base;
                                 return 1;
                             }
@@ -13062,7 +13181,7 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                         p = zput(p, " ms; ");
                         p = zhex(p, (DWORD)g_wm_count);
                         p = zput(p, " message(s) arrived\r\n");
-                        log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                        wowlog_flush(base, &p);
                     }
                     /* ⚠ Same rule as ShellAbout and the file dialog: a modal
                          service does not return until a human dismisses it, and
@@ -13075,7 +13194,7 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                                     " stops here until it is dismissed; the"
                                     " SERVICED line carries its TEXT and follows"
                                     " when it is\r\n");
-                        log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                        wowlog_flush(base, &p);
                     }
                     if (wowuser_call(&f, note, sizeof note)) {
                         ++g_wow32_serviced;
@@ -13172,7 +13291,7 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                             }
                             p = zput(p, "\r\n");
                         }
-                        log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                        wowlog_flush(base, &p);
                         return 1;
                     }
                 }
@@ -13210,7 +13329,7 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                         p = zput(p, "\n     WOWSHELL: ShellAbout is MODAL -- the VDM"
                                     " stops here until the box is dismissed; the"
                                     " SERVICED line follows when it is\r\n");
-                        log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                        wowlog_flush(base, &p);
                     }
                     if (wowshell_call(&f, note, sizeof note)) {
                         ++g_wow32_serviced;
@@ -13219,7 +13338,7 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                         p = zhex(p, f.ret);
                         if (note[0]) { p = zput(p, " -- "); p = zput(p, note); }
                         p = zput(p, "\r\n");
-                        log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                        wowlog_flush(base, &p);
                         return 1;
                     }
                 }
@@ -13249,7 +13368,7 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                         p = zput(p, "\n     WOWCOMMDLG: the file dialog is MODAL --"
                                     " the VDM stops here until it is dismissed;"
                                     " the SERVICED line follows when it is\r\n");
-                        log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                        wowlog_flush(base, &p);
                     }
                     if (wowcommdlg_call(&f, note, sizeof note)) {
                         ++g_wow32_serviced;
@@ -13258,7 +13377,7 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                         p = zhex(p, f.ret);
                         if (note[0]) { p = zput(p, " -- "); p = zput(p, note); }
                         p = zput(p, "\r\n");
-                        log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                        wowlog_flush(base, &p);
                         return 1;
                     }
                 }
@@ -13284,7 +13403,7 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                         p = zhex(p, f.ret);
                         if (note[0]) { p = zput(p, " -- "); p = zput(p, note); }
                         p = zput(p, "\r\n");
-                        log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                        wowlog_flush(base, &p);
                         return 1;
                     }
                 }
@@ -13310,7 +13429,7 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                         p = zhex(p, f.ret);
                         if (note[0]) { p = zput(p, " -- "); p = zput(p, note); }
                         p = zput(p, "\r\n");
-                        log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                        wowlog_flush(base, &p);
                         return 1;
                     }
                 }
@@ -13354,7 +13473,7 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                         }
                     }
                     p = zput(p, "\r\n");
-                    log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                    wowlog_flush(base, &p);
                     return 1;
                 }
                 ++g_wow32_unimpl;
@@ -13392,7 +13511,7 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                           : " (** wow32ret.txt OVERRIDE -- an EXPERIMENT, not a service **)");
             }
             p = zput(p, "\r\n");
-            log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+            wowlog_flush(base, &p);
             return 1;
         }
     }
