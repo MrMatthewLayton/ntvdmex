@@ -439,6 +439,33 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show)
         return 0;
     }
 
+    /* ── ★ CLOSE A WINDOW THE WAY ITS X BUTTON DOES. (session 56) ─────────────
+         Added because its ABSENCE produced a wrong measurement. Chasing the
+         user's "tray icons are stacking up", the test batch called
+         `rigshot close "Calculator"` -- and rigshot had no such verb, so the
+         guest was never closed, the host was still running for the most boring
+         reason available, and the run READ AS a reproduction of the bug.
+       ⚠ THE TOOL DID SAY SO AND I DID NOT LOOK. `unknown verb` was written to
+         rigshot.txt exactly as designed -- and the batch then overwrote that
+         file with the next verb's output before anything read it. The tool was
+         honest; the harness around it threw the sentence away. Worth keeping
+         because the fix for that is not in this file: it is "read the tool's
+         log before trusting the tool's effect".
+       ⚠ WM_CLOSE, not DestroyWindow: closing is a REQUEST, and the whole point
+         of using it on a guest is to exercise the application's own shutdown --
+         its WM_CLOSE handler, its "save changes?" prompt, its PostQuitMessage.
+         DestroyWindow would tear the window down behind the program's back and
+         prove nothing about whether the program can exit. */
+    if (seq(verb, "close")) {
+        HWND w = FindWindowA(NULL, arg1);
+        char m[400], *p = m;
+        p = sput(p, w ? "close: WM_CLOSE -> " : "close: NOT FOUND "); p = sput(p, arg1);
+        logline(m);
+        if (!w) return 1;
+        PostMessageA(w, WM_CLOSE, 0, 0);
+        return 0;
+    }
+
     /* A real click, at a real screen coordinate, through the real hit-test. Used to
        switch tab pages: TCM_SETCURSEL would move the selection without raising
        TCN_SELCHANGE, so the page would not follow -- which would silently "verify"
@@ -501,6 +528,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show)
         return 0;
     }
 
-    logline("rigshot: unknown verb (shot|cmd|key|fg|list)");
+    logline("rigshot: unknown verb"
+            " (shot|list|tree|fg|click|drag|key|close|capture|cmd)");
     return 2;
 }
