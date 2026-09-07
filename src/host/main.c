@@ -10091,6 +10091,47 @@ static void dpmi_patch_code_region(DWORD base, DWORD limit, int d32)
                   if (mem[i] == 0xCD) {
                       DWORD lin = a + i;
                       if (pmap_get(lin)) continue;   /* already patched (aliased region) */
+                      /* ── ★★★★★ INT 34h..3Fh IS NOT AN INTERRUPT RANGE, IT IS
+                           FLOATING-POINT CODE. DO NOT TOUCH IT. (session 55) ──────
+                         The note above says patching any vector is safe because
+                         "our default PM handlers cover all 256 and simply IRET".
+                         That is true of interrupts. These are not interrupts.
+                         Microsoft's floating-point emulator encodes x87
+                         instructions AS `CD nn` in this range -- 0x34..0x3B are
+                         ESC opcodes D8..DF, 0x3C is a segment override + ESC and
+                         0x3D is FWAIT -- and the emulator library REWRITES those
+                         sites into real x87 instructions at load time when a
+                         coprocessor is present. 0x3E/0x3F are the far-call and
+                         overlay fixups and are equally not ours.
+                         So a `CD 39` in guest code is an FP operation, and
+                         rewriting it to a BOP destroys the operation; "handled by
+                         an IRET" then means the arithmetic silently did not
+                         happen.
+                       ★ MEASURED, and it is what killed CALC.EXE -- a CALCULATOR,
+                         which imports WIN87EM. It built its whole dialog, ran its
+                         entire WM_INITDIALOG, and then died at
+                         `bytes@eip-2 = 3d cb c4 c4 07 cd 3d cb cd 39` -- FWAIT,
+                         RETF, our BOP, then more FP -- with the run's own new
+                         diagnostic reading `pmap[eip]=INT 0x39 THIS IS A SITE WE
+                         PATCHED`. TASKMAN and CARDFILE end the same way.
+                       ⚠ NOT PATCHING THEM IS SAFE HERE and is the whole point: a
+                         raw INT in protected mode is serviced out of the #GP
+                         (session 34), so a guest that really does execute one
+                         still reaches whatever PM handler it installed through
+                         DPMI 0205h -- which for this range is its own emulator's.
+                         Patching was the thing taking that away. */
+                      if (mem[i+1] >= 0x34 && mem[i+1] <= 0x3F) {
+                          if (rej < 16) {
+                              char fb[160], *fq = fb;
+                              fq = zput(fq, "DPMI: NOT patching 0x"); fq = zhex(fq, lin);
+                              fq = zput(fq, " vec=0x"); fq = zhexb(fq, mem[i+1]);
+                              fq = zput(fq, " -- FP EMULATOR / fixup range 34..3F,"
+                                            " this is an x87 instruction not an"
+                                            " interrupt\r\n");
+                              log_append(LOG_PATH, fb, fq); serial_out(fb, fq);
+                          }
+                          continue;
+                      }
                       /* Record WHERE, not just how many -- see the push further down,
                          which happens AFTER the vote so the list and the count describe
                          the same set. "patched 2 INT sites" in a 55 KB code segment is
@@ -15379,6 +15420,33 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                       { const BYTE *ib = (const BYTE *)(ULONG_PTR)(lin - 2);
                         if (lin < 2 || !host_readable(ib, 16)) p = zput(p, "<unreadable from host>");
                         else                                   p = zdump(p, ib, 16); }
+                      /* ── ★ WAS THAT `C4 C4` OURS? SAY SO, RATHER THAN LEAVING
+                           IT AMBIGUOUS. (session 55) When a run dies on a byte
+                           pair that looks like a BOP, the log has always left
+                           the reader to guess between three things: a real
+                           native BOP, an INT SITE WE PATCHED whose vector we
+                           then failed to resolve, and a coincidence in data.
+                           pmap is the record of every site we rewrote, keyed by
+                           linear address, so it can answer directly -- and the
+                           answer changes the whole diagnosis. Both candidate
+                           addresses are probed because this dump's own ±2
+                           convention is borrowed from the patched-INT path and
+                           is not certain to apply to this event.
+                         CALC and TASKMAN both end here, so this line is meant to
+                           name their blocker on the next run rather than after
+                           another session of reading disassembly. */
+                      { BYTE v0 = pmap_get(lin), v2 = pmap_get(lin - 2);
+                        p = zput(p, " pmap[eip]=");
+                        if (v0) { p = zput(p, "INT 0x"); p = zhexb(p, v0);
+                                  p = zput(p, " ★ THIS IS A SITE WE PATCHED"); }
+                        else      p = zput(p, "none");
+                        p = zput(p, " pmap[eip-2]=");
+                        if (v2) { p = zput(p, "INT 0x"); p = zhexb(p, v2);
+                                  p = zput(p, " ★ THIS IS A SITE WE PATCHED"); }
+                        else      p = zput(p, "none");
+                        if (!v0 && !v2)
+                            p = zput(p, "  => NOT one of our patches: either a"
+                                        " real BOP or data being executed"); }
                       p = zput(p, "\r\n"); }
                     log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
                     return -1;
