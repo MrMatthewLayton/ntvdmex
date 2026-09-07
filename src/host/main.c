@@ -62,6 +62,7 @@
 #include "vdd_opl.h"
 #include "vdd_sb.h"
 #include "vdd_mpu.h"
+#include "vdd_comm.h"
 #include "vdd_audio.h"
 #include "audio_wave.h"
 #include "present_ddraw.h"
@@ -346,6 +347,7 @@ static dma_state    g_dma;       static ntvdd g_dma_dev;
 static opl_state    g_opl;       static ntvdd g_opl_dev;
 static sb_state     g_sb;        static ntvdd g_sb_dev;
 static mpu_state    g_mpu;       static ntvdd g_mpu_dev;
+static comm_state   g_comm;      static ntvdd g_comm_dev;   /* GH #9 */
 static audio_state  g_audio;     static audio_wave g_wave;
 static present_ddraw g_pd;
 static xms_state    g_xms;       /* M4: XMS extended-memory manager           */
@@ -1274,6 +1276,65 @@ static HANDLE g_serial = INVALID_HANDLE_VALUE;
 static HANDLE g_lpt = INVALID_HANDLE_VALUE;
 static int    g_lpt_failed = 0;      /* opened once and could not: stop retrying */
 #define LPT_SPOOL_PATH "C:\\ntvdmex\\PRINTOUT.TXT"
+/* ── GH #9: WHAT THE GUEST'S COM PORTS TRANSMIT INTO. ────────────────────────
+     The same spool shape as LPT1 above, and for the same reason: a file is a
+     real device as far as a DOS program can tell, and it is inspectable after
+     the run, which "discarded" is not.
+   ⚠⚠ AND IT IS DELIBERATELY NOT g_serial. That handle is the HOST'S OWN debug
+     channel -- serial_out() writes our log to it -- so pointing the guest's
+     COM1 at it would interleave guest bytes with our diagnostics and corrupt
+     both. The two things are both called "COM1" and are not the same port; the
+     guest's is virtual hardware, ours is where this host talks to the outside.
+   ⚠ The RESERVED-DEVICE-NAME trap in the LPT note above applies here word for
+     word: COM1-9 are reserved with any extension, in any directory. These names
+     are deliberately not on that list. */
+static HANDLE g_com_spool[COMM_MAX_PORTS];
+static int    g_com_failed[COMM_MAX_PORTS];
+static const char *const g_com_spool_path[COMM_MAX_PORTS] = {
+    "C:\\ntvdmex\\SERIAL1.TXT", "C:\\ntvdmex\\SERIAL2.TXT"
+};
+/* Opened lazily on the first byte, so a run that never transmits leaves no file
+   to confuse the next one -- and flushed per byte, because a VDM is far more
+   often killed than exited and an unflushed buffer would read as "nothing was
+   ever sent". Both rules are the LPT spool's, learned there. */
+static void com_tx_sink(void *ctx, int port, uint8_t b)
+{
+    (void)ctx;
+    if (port < 0 || port >= COMM_MAX_PORTS || g_com_failed[port]) return;
+    if (g_com_spool[port] == INVALID_HANDLE_VALUE) {
+        g_com_spool[port] = CreateFileA(g_com_spool_path[port], GENERIC_WRITE,
+                                        FILE_SHARE_READ, NULL, CREATE_ALWAYS,
+                                        FILE_ATTRIBUTE_NORMAL, NULL);
+        if (g_com_spool[port] == INVALID_HANDLE_VALUE) { g_com_failed[port] = 1; return; }
+    }
+    { DWORD w = 0; WriteFile(g_com_spool[port], &b, 1, &w, NULL);
+      FlushFileBuffers(g_com_spool[port]); }
+}
+
+/* ── THE EQUIPMENT WORD IS A CLAIM ABOUT HARDWARE, SO COMPUTE IT FROM THE
+     HARDWARE. (GH #9, session 56) ──────────────────────────────────────────
+     Two arms answer INT 11h -- one in PM, one in V86 -- and both used the bare
+     constant 0x4021 with a comment reading "one floppy, 80x25 colour, ONE
+     SERIAL, one parallel". The value does not say that. Bits 9-11 are the
+     serial count and they are 0 in 0x4021; the comment had been wrong at both
+     sites, and the 0040:0000 note further down quotes the same wrong reading.
+     That is exactly the disagreement between the equipment word and the port
+     base table that cost COMM.DRV a session -- the wrong half was just being
+     read out of a comment rather than out of memory.
+     So derive the serial count from the VDD that actually claimed the ports.
+     bit0 floppy present, bits4-5 video (10b = 80x25 colour), bits6-7 floppy
+     count-1, bits9-11 serial ports, bits14-15 parallel ports, bit1 coprocessor
+     (CLEAR -- krnl386 tests `test al,2` at seg1:0xc136 and sets a kernel flag
+     from it, so the two modes must not disagree; sharing one function is now
+     the mechanism rather than the intention). */
+static WORD bios_equipment_word(void)
+{
+    WORD w = 0x4021;                      /* floppy, 80x25 colour, 1 parallel  */
+    int n = 0, i;
+    for (i = 0; i < COMM_MAX_PORTS; ++i) if (vdd_comm_fitted(&g_comm, i)) ++n;
+    w = (WORD)((w & ~0x0E00u) | ((DWORD)(n & 7) << 9));
+    return w;
+}
 static void serial_init(void)
 {
     DCB dcb;
@@ -1312,6 +1373,35 @@ static void serial_out(const char *buf, const char *end)
         FlushFileBuffers(g_serial);
     }
 }
+/* One printer, reachable two ways. INT 17h and the 0x378 data/strobe registers
+   are the SAME LPT1 -- a guest may use either, and some use both in one run --
+   so they must share the spool rather than open it twice. Returns 0 if the byte
+   went nowhere, which is what lets INT 17h report an I/O error instead of the
+   ready status that once made the whole feature look like it worked. */
+static int lpt_spool_put(BYTE c)
+{
+    DWORD w = 0;
+    if (g_lpt_failed) return 0;
+    if (g_lpt == INVALID_HANDLE_VALUE) {
+        g_lpt = CreateFileA(LPT_SPOOL_PATH, GENERIC_WRITE, FILE_SHARE_READ, NULL,
+                            CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+        if (g_lpt == INVALID_HANDLE_VALUE) {
+            char lb[128], *lq = lb;
+            g_lpt_failed = 1;
+            lq = zput(lq, "  LPT1 spool OPEN FAILED err=0x");
+            lq = zhex(lq, GetLastError());
+            lq = zput(lq, " -> reporting I/O error, not ready\r\n");
+            log_append(LOG_PATH, lb, lq); serial_out(lb, lq);
+            return 0;
+        }
+    }
+    WriteFile(g_lpt, &c, 1, &w, NULL);
+    FlushFileBuffers(g_lpt);          /* the run may be killed, not exited */
+    return 1;
+}
+static void lpt_tx_sink(void *ctx, int port, uint8_t b)
+{ (void)ctx; (void)port; lpt_spool_put(b); }
+
 /* Is [addr, addr+len) committed and readable RIGHT NOW? For probes that dereference
    an address derived from one guest's memory map: under that guest the page is there,
    under every other guest it is not, and an unguarded read takes the whole host down
@@ -13618,14 +13708,15 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                         return 1;
                     }
                     if (vec == 0x11) {                             /* BIOS equipment, in PM */
-                        /* Same answer as the V86 arm below (0x4021: one floppy, 80x25
-                           colour, one serial, one parallel, NO coprocessor). Sharing
-                           the constant matters -- krnl386 tests `test al,2` for a
-                           coprocessor at seg1:0xc136 and sets a kernel flag from it, so
-                           the two modes disagreeing would mean the guest believes
-                           different hardware depending on when it asked. */
-                        VDM_SET16(tib, VTIB_EAX, 0x4021);
-                        p = zput(p, "INT11h(PM) equipment -> 0x4021\r\n");
+                        /* Same answer as the V86 arm below, and now the SAME
+                           FUNCTION rather than the same constant copied twice --
+                           see bios_equipment_word(), which also explains why the
+                           serial count is derived from the VDD instead of being
+                           asserted in a comment that was wrong at both sites. */
+                        WORD eqw = bios_equipment_word();
+                        VDM_SET16(tib, VTIB_EAX, eqw);
+                        p = zput(p, "INT11h(PM) equipment -> 0x"); p = zhex(p, eqw);
+                        p = zput(p, "\r\n");
                         log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
                         VDM_REG(tib, VTIB_EIP) += 2;
                         return 1;
@@ -17055,9 +17146,34 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
          word is the declaration; this table just stops disagreeing with it.
        ⚠ AFTER the input VDD is on the bus: it initialises the keyboard ring through
          the same 0040:0000 pointer, and doing this first would be overwritten. */
+    /* ── ★★★ AND NOW THERE ARE SERIAL PORTS, SO SAY SO. (GH #9, session 56) ──
+         The note above is right that filling in COM1..COM4 while nothing
+         answered for them would be inventing hardware -- that was the correct
+         call when there was no UART. There is one now: vdd_comm.c claims
+         0x3F8..0x3FF and 0x2F8..0x2FF and answers every register, including the
+         local-loopback self-test every serial driver runs before it believes a
+         port exists. So the declaration is no longer a lie -- and the equipment
+         word is updated in the same breath, because the whole point of the
+         original note is that the two must not disagree. */
+    { int ci;
+      for (ci = 0; ci < COMM_MAX_PORTS; ++ci) {
+          g_com_spool[ci] = INVALID_HANDLE_VALUE; g_com_failed[ci] = 0; }
+      g_comm.p[0].base = 0x03F8; g_comm.p[0].irq = 4; g_comm.p[0].fitted = 1;
+      g_comm.p[1].base = 0x02F8; g_comm.p[1].irq = 3; g_comm.p[1].fitted = 1;
+      g_comm.l[0].base = 0x0378; g_comm.l[0].fitted = 1;   /* LPT1 data/strobe */
+      g_comm.sink = com_tx_sink; g_comm.sink_ctx = NULL;
+      g_comm.lpt_sink = lpt_tx_sink; g_comm.lpt_sink_ctx = NULL;
+      g_comm_dev = vdd_comm_device(&g_comm);
+      vdd_bus_add(&g_bus, &g_comm_dev); }        /* 8250/16550A + INT 14h        */
     { volatile WORD *bda = (volatile WORD *)(ULONG_PTR)0x400;
-      bda[0] = 0; bda[1] = 0; bda[2] = 0; bda[3] = 0;   /* COM1..COM4: none fitted   */
-      bda[4] = 0x0378;                                  /* LPT1, per the 0x4021 word */
+      /* Declare exactly what the VDD actually CLAIMED. A port whose claim was
+         refused for want of a bus table slot is not fitted, and writing its base
+         here anyway would recreate the very inconsistency this block exists to
+         fix, one layer down. */
+      bda[0] = (WORD)(vdd_comm_fitted(&g_comm, 0) ? 0x03F8 : 0);
+      bda[1] = (WORD)(vdd_comm_fitted(&g_comm, 1) ? 0x02F8 : 0);
+      bda[2] = 0; bda[3] = 0;                           /* COM3..COM4: none fitted   */
+      bda[4] = (WORD)(vdd_lpt_fitted(&g_comm, 0) ? 0x0378 : 0);   /* LPT1          */
       bda[5] = 0; bda[6] = 0; bda[7] = 0; }             /* LPT2..LPT4: none fitted   */
     g_spk.pit = &g_pit;                         /* speaker tone <- PIT channel 2 */
     g_spk_dev = vdd_speaker_device(&g_spk);
@@ -17872,11 +17988,10 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             #define BSETAX(v) (VDM_REG(tib, VTIB_EAX) = \
                 (VDM_REG(tib, VTIB_EAX) & 0xFFFF0000u) | ((DWORD)(v) & 0xFFFF))
             if (bn == 0x11) {
-                /* Equipment word. Our machine: one floppy, 80x25 colour video,
-                   one parallel port, one serial port, no coprocessor.
-                   bit0 floppy present, bits4-5 video (10b = 80x25 colour),
-                   bits6-7 floppy count-1, bits9-11 serial, bits14-15 parallel. */
-                BSETAX(0x4021);
+                /* Equipment word -- see bios_equipment_word(). The serial count
+                   comes from the VDD that claimed the ports, so this and the
+                   0040:0000 port base table cannot drift apart. */
+                BSETAX(bios_equipment_word());
                 BCF_CLR();
             } else if (bn == 0x12) {
                 /* KB of conventional memory. 640 CONTRADICTED OUR OWN MEMORY MAP
@@ -17919,50 +18034,30 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                          until here, DOS/4GW takes this CF=1, and exits CLEANLY in 328 ms
                          (STAGE2: complete, run_ms=0x148) without printing a character. */
                 }
-            } else if (bn == 0x14) {               /* SERIAL, COM1.  GH #45   */
-                /* ── "NOT FITTED" CONTRADICTED OUR OWN EQUIPMENT WORD. ───────
-                     INT 11h above reports one serial and one parallel port (bit
-                     pattern 0x4021), and then this returned status 0x0000 --
-                     every bit clear, meaning a port that is fitted but will
-                     never be ready. A guest that believes INT 11h and polls
-                     here waits forever.
-                   The model: transmit is REAL (it goes to the same COM1 handle
-                   serial_out uses when the host has one), receive reports the
-                   line as idle with the TIMEOUT bit set, which is what a real
-                   UART with nothing on the other end does. That cannot hang a
-                   guest the way a permanently-not-ready port can.
-                   ⚠ The 6.22 oracle is NOT truth here -- QEMU runs SeaBIOS, so
-                     its answer is another reimplementation's opinion (epic #24).
-                     These bits are a statement about OUR virtual machine. */
-                unsigned ah14 = (VDM_REG(tib, VTIB_EAX) >> 8) & 0xFF;
-                /* AH bit7 timeout, 6 TX shift empty, 5 TX holding empty,
-                   0 data ready.  AL (in the status word's low half for AH=03)
-                   is the modem status: DSR+CTS+CD asserted. */
-                WORD line_idle = 0x6000;           /* both TX registers empty  */
-                if (ah14 == 0x00) {                /* initialise: AL = params  */
-                    BSETAX((WORD)(line_idle | 0x0030));
-                    BCF_CLR();
-                } else if (ah14 == 0x01) {         /* send AL                  */
-                    char c = (char)(VDM_REG(tib, VTIB_EAX) & 0xFF);
-                    if (g_serial != INVALID_HANDLE_VALUE) {
-                        DWORD w = 0; WriteFile(g_serial, &c, 1, &w, NULL);
-                    }
-                    /* AH keeps the line status, AL keeps the character sent;
-                       bit 7 of AH clear = no error. */
-                    BSETAX((WORD)(line_idle | (VDM_REG(tib, VTIB_EAX) & 0xFF)));
-                    BCF_CLR();
-                } else if (ah14 == 0x02) {         /* receive -> AL            */
-                    /* Nothing attached: TIMEOUT (bit 7), which is the answer a
-                       real port gives and a polling guest is written to expect. */
-                    BSETAX(0x8000);
-                    BCF_CLR();
-                } else if (ah14 == 0x03) {         /* status                   */
-                    BSETAX((WORD)(line_idle | 0x0030));   /* AL: DSR+CTS       */
-                    BCF_CLR();
-                } else {
-                    BSETAX(0x8000); BCF_CLR();
-                    g_bios_unimpl[0x14] = 1;
-                }
+            } else if (bn == 0x14) {               /* SERIAL.  GH #45, #9     */
+                /* ── ★★★ NOW ANSWERED BY THE PART, NOT BY THIS ARM. (GH #9) ──
+                     What used to be here was a plausible set of status bits and
+                     a transmit that wrote to g_serial -- THE HOST'S OWN DEBUG
+                     CHANNEL, which interleaved guest bytes with our log. Worse,
+                     receive returned TIMEOUT unconditionally, because there was
+                     nothing to receive FROM: ports 0x3F8.. were unclaimed and no
+                     byte could enter the machine by any route. The port was
+                     declared in the equipment word and could never be used.
+                     vdd_comm.c is a real 8250/16550A, so INT 14h and the port
+                     registers are now two views of ONE device -- a byte sent
+                     through the BIOS in local loopback is readable from RBR, and
+                     a byte the host pushes arrives whichever way the guest reads.
+                   ⚠ The 6.22 oracle is still NOT truth here -- QEMU runs SeaBIOS,
+                     so its answer is another reimplementation's opinion
+                     (epic #24). These bits are a statement about OUR machine, and
+                     the thing that pins them is the loopback self-test, which is
+                     the part's own documented behaviour rather than an opinion. */
+                ntvdd_regs r14; regs_load(&r14, tib);
+                HOST_LOCK();
+                vdd_bus_deliver_int(&g_bus, 0x14, &r14);
+                HOST_UNLOCK();
+                regs_store(&r14, tib);
+                BCF_CLR();
             } else if (bn == 0x17) {               /* PRINTER, LPT1.  GH #45  */
                 /* Printed output goes to a SPOOL FILE, which is a real printer
                    as far as a DOS program can tell and is inspectable afterwards
@@ -17972,24 +18067,10 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                    error, 0 timeout. 0x90 = not busy + selected = ready. */
                 unsigned ah17 = (VDM_REG(tib, VTIB_EAX) >> 8) & 0xFF;
                 if (ah17 == 0x00) {                /* print AL                 */
-                    char c = (char)(VDM_REG(tib, VTIB_EAX) & 0xFF);
-                    DWORD w = 0;
-                    if (g_lpt == INVALID_HANDLE_VALUE && !g_lpt_failed) {
-                        g_lpt = CreateFileA(LPT_SPOOL_PATH, GENERIC_WRITE,
-                                            FILE_SHARE_READ, NULL, CREATE_ALWAYS,
-                                            FILE_ATTRIBUTE_NORMAL, NULL);
-                        if (g_lpt == INVALID_HANDLE_VALUE) {
-                            char lb[128], *lq = lb;
-                            g_lpt_failed = 1;
-                            lq = zput(lq, "  INT17 spool OPEN FAILED err=0x");
-                            lq = zhex(lq, GetLastError());
-                            lq = zput(lq, " -> reporting I/O error, not ready\r\n");
-                            log_append(LOG_PATH, lb, lq); serial_out(lb, lq);
-                        }
-                    }
-                    if (g_lpt != INVALID_HANDLE_VALUE) {
-                        WriteFile(g_lpt, &c, 1, &w, NULL);
-                        FlushFileBuffers(g_lpt);   /* the run may be killed, not exited */
+                    BYTE c = (BYTE)(VDM_REG(tib, VTIB_EAX) & 0xFF);
+                    /* Shared with the 0x378 port model -- see lpt_spool_put.
+                       One printer, two ways in. */
+                    if (lpt_spool_put(c)) {
                         BSETAX((WORD)(0x9000 | (VDM_REG(tib, VTIB_EAX) & 0xFF)));
                     } else {
                         /* ── DO NOT REPORT READY WHEN THE BYTE WENT NOWHERE. ──

@@ -104,6 +104,16 @@ cc -std=c99 -Wall -Wextra -Wno-unused-function -O0 -g \
 
 "$DIR/mpu_test"
 
+# GH #9: the 8250/16550A serial port battery. Built around LOCAL LOOPBACK, which
+# is the one part of a UART whose correctness needs no peer, no cable and no host
+# serial hardware -- and is what every driver uses to decide the port exists.
+cc -std=c99 -Wall -Wextra -Wno-unused-function -O0 -g \
+   -I "$DIR/../../src/vdd" \
+   -o "$DIR/comm_test" "$DIR/comm_test.c" \
+   "$DIR/../../src/vdd/vdd_comm.c" "$DIR/../../src/vdd/vdd_bus.c"
+
+"$DIR/comm_test"
+
 # Sound epic slice-4: the audio mixer (resampling + SB transport + PC speaker +
 # the master attenuator the Audio settings page drives).
 cc -std=c99 -Wall -Wextra -Wno-unused-function -O0 -g \
