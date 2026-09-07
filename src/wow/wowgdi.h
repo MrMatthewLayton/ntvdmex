@@ -770,6 +770,24 @@
 #define GPE_ARG_START    6
 #define GPE_ARG_HPAL     8
 
+/* ── ★ void LineDDA(int x1, int y1, int x2, int y2, FARPROC, LPARAM) = 16 ────
+     The only enumeration in GDI whose callback takes NO STRUCTURE: it is called
+     with (x, y, lpData) for every point on the line, and the caller does the
+     drawing. That is why this one is implemented and EnumFonts/EnumObjects are
+     not -- theirs pass LOGFONT/TEXTMETRIC/LOGPEN pointers whose Win16 layouts
+     this host has not measured. See the header note in src/wow/wowenum.h.
+   ⚠ IT RETURNS NOTHING. A caller reads no value, so there is no hole to revise
+     and a callback's answer cannot stop it -- but the chain honours the veto
+     anyway, because a Win16 program that returns 0 from a DDA callback expects
+     to stop being called, whatever the function's own return says. */
+#define WOWGDI_LINEDDA          0x0064   /* ord 100, 16 args */
+#define LDDA_ARG_DATA    0               /* DWORD */
+#define LDDA_ARG_PROC    4               /* far   */
+#define LDDA_ARG_Y2      8
+#define LDDA_ARG_X2     10
+#define LDDA_ARG_Y1     12
+#define LDDA_ARG_X1     14
+
 /* GDI tokens sit below the menu tokens (0x4000) and above the window handles,
    so a stray handle of any kind is recognisable on sight in a log. */
 #define WOWGDI_BASE      0x2000
@@ -1911,6 +1929,52 @@ static int wowgdi_call(wow32_frame_t *f, char *note, int notecap)
         wu_puthex(note, notecap, &k, got, 4);
         wu_puts(note, notecap, &k, " entries");
         wow32_setret(f, got);
+        return 1;
+    }
+
+    case WOWGDI_LINEDDA: {
+        int x1 = (int)(short)wow32_argw(f, LDDA_ARG_X1);
+        int y1 = (int)(short)wow32_argw(f, LDDA_ARG_Y1);
+        int x2 = (int)(short)wow32_argw(f, LDDA_ARG_X2);
+        int y2 = (int)(short)wow32_argw(f, LDDA_ARG_Y2);
+        DWORD proc = wow32_argd(f, LDDA_ARG_PROC);
+        DWORD data = wow32_argd(f, LDDA_ARG_DATA);
+        int k = 0;
+        wu_puts(note, notecap, &k, "LineDDA (");
+        wu_puthex(note, notecap, &k, (DWORD)x1, 4);
+        wu_puts(note, notecap, &k, ",");
+        wu_puthex(note, notecap, &k, (DWORD)y1, 4);
+        wu_puts(note, notecap, &k, ")-(");
+        wu_puthex(note, notecap, &k, (DWORD)x2, 4);
+        wu_puts(note, notecap, &k, ",");
+        wu_puthex(note, notecap, &k, (DWORD)y2, 4);
+        wu_puts(note, notecap, &k, ") proc=0x");
+        wu_puthex(note, notecap, &k, proc, 8);
+        wow32_setret(f, 0);                       /* the function returns void */
+        if (!f->cbok) {
+            wu_puts(note, notecap, &k, " -- callbacks are not armed; no point was"
+                                       " visited");
+            return 1;
+        }
+        if (wowenum_busy()) {
+            wu_puts(note, notecap, &k, " -- ★ AN ENUMERATION IS ALREADY RUNNING;"
+                                       " REFUSED rather than sharing a cursor");
+            return 1;
+        }
+        /* ⚠ THE DS IS THE CALLER'S OWN. A LineDDA callback is application code in
+             the application's data segment, and this host has no class or window
+             to take an instance from here -- so it is entered with the DS the
+             guest itself is running on, which is what a MakeProcInstance thunk
+             would have restored anyway. */
+        if (!wowenum_begin(WOWENUM_LINE, proc,
+                           f->gds,
+                           data, 0, 0)) {
+            wu_puts(note, notecap, &k, " -- ★ the callback is not a usable far"
+                                       " pointer");
+            return 1;
+        }
+        wowenum_line(x1, y1, x2, y2);
+        f->enumreq = 1;
         return 1;
     }
 

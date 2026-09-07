@@ -40,6 +40,7 @@
      the window table and the procedure rule that file owns. USER's DialogBox and
      EndDialog arms reach it through the three prototypes declared there. */
 #include "../wow/wowdlg.h" /* GH #128: ...and the MODAL loop -- why DialogBox does not return */
+#include "../wow/wowenum.h" /* GH #128: ...and one callback per item -- EnumWindows, LineDDA */
 #include "../wow/wowshell.h" /* GH #128: ...and SHELL.DLL's, which is a THIRD one again */
 #include "../wow/wowcommdlg.h" /* GH #128: ...and COMMDLG.DLL's -- File > Open */
 #include "../wow/wowkbd.h" /* GH #128: ...and KEYBOARD.DRV's -- ANSI/OEM conversion */
@@ -12586,6 +12587,20 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                  is what makes the loop cost nothing: the restored context IS the
                  parked DialogBox caller, so re-entering the dialog procedure
                  simply parks it again at the same SS:SP. Nothing accumulates. */
+            /* ── ★ THE NEXT ITEM. (session 57) The callback has answered; 0
+                 means stop, anything else means carry on. Same restored-context
+                 property as the modal loop: what wowcall_leave put back IS the
+                 parked caller, so the next call re-parks it at the same SS:SP
+                 and nothing accumulates. See src/wow/wowenum.h. */
+            if (act == WOWCALL_ACT_ENUMNEXT) {
+                char enote[256];
+                WORD  ersel = wow_callback_selector();
+                DWORD essb  = dpmi_sel_base(
+                    (WORD)(VDM_REG(tib, VTIB_SS) & 0xFFFF));
+                enote[0] = 0;
+                wowenum_step(tib, essb, ersel, 0, res, enote, sizeof enote);
+                p = zput(p, " -- "); p = zput(p, enote);
+            }
             if (act == WOWCALL_ACT_MODALPUMP) {
                 char mnote[512];
                 WORD  mrsel = wow_callback_selector();
@@ -13063,6 +13078,8 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                      issuing a LocalUnlock against a lock nobody had taken. Every
                      field of this frame is initialised here for that reason. */
                 f.cbact   = WOWCALL_ACT_NONE; f.cbactarg = 0;
+                f.enumreq  = 0;                /* ...and this one too */
+                f.gds      = (WORD)(VDM_REG(tib, VTIB_DS) & 0xFFFF);
                 f.modaldlg = 0;                /* ...and this one, for the same
                                                   reason: it decides whether the
                                                   guest is resumed at all */
@@ -13819,6 +13836,17 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                              first message, and the first call would never
                              return. Nothing asks for both today; this is what
                              stops the day it does from being a mystery. */
+                        else if (f.enumreq) {
+                            char enote[256];
+                            WORD  ersel = wow_callback_selector();
+                            DWORD essb  = dpmi_sel_base(
+                                (WORD)(VDM_REG(tib, VTIB_SS) & 0xFFFF));
+                            enote[0] = 0;
+                            wowenum_step(tib, essb, ersel, 1, 0,
+                                         enote, sizeof enote);
+                            p = zput(p, "WOWENUM: "); p = zput(p, enote);
+                            p = zput(p, "\r\n");
+                        }
                         else if (f.modaldlg) {
                             char mnote[512];
                             WORD  mrsel = wow_callback_selector();

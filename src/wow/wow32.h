@@ -214,6 +214,15 @@ typedef struct {
          stack full) the guest gets the old behaviour rather than a hole nobody
          filled. See src/wow/wowdlg.h. */
     int              modaldlg;       /* 1 = a modal dialog was parked by this call */
+    /* 1 = an ENUMERATION was armed (wowenum.h) and its first call is owed. Same
+       "do not simply resume the guest" meaning as `modaldlg`, different
+       continuation; a service sets exactly one of them. */
+    int              enumreq;
+    /* ★ THE GUEST'S OWN DS AT THE BOP. A service that has to call back into
+         application code with no class or window to take an instance from --
+         LineDDA is the first -- needs the data segment the guest is actually
+         running on. Filled by the handler because only it can see the TIB. */
+    WORD             gds;
 } wow32_frame_t;
 
 /* ---- note building (shared by EVERY id space's dispatcher) --------------

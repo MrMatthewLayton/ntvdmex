@@ -1478,6 +1478,25 @@ static HCURSOR wowuser_sysres_hcursor(WORD token, int *fell)
     return c;
 }
 
+/* ── ★★ THE ENUMERATIONS. (session 57) One callback per item; the mechanism is
+     in src/wow/wowenum.h and the argument blocks are reversed as always.
+       BOOL EnumWindows(FARPROC lpEnumFunc, LPARAM lParam)              = 8
+       BOOL EnumChildWindows(HWND hParent, FARPROC, LPARAM)             = 10
+       BOOL EnumTaskWindows(HTASK hTask, FARPROC, LPARAM)               = 10
+     ⚠ THE CALLBACK'S SIGNATURE IS (HWND, LPARAM) -- three words -- and its answer
+       is a veto: 0 ends the enumeration and the function returns FALSE. */
+#define WOWUSER_ENUMWINDOWS      0x0036
+#define EW_ARG_LPARAM    0               /* DWORD */
+#define EW_ARG_PROC      4               /* far   */
+#define WOWUSER_ENUMCHILDWINDOWS 0x0037
+#define ECW_ARG_LPARAM   0
+#define ECW_ARG_PROC     4
+#define ECW_ARG_PARENT   8
+#define WOWUSER_ENUMTASKWINDOWS  0x00e1
+#define ETW_ARG_LPARAM   0
+#define ETW_ARG_PROC     4
+#define ETW_ARG_TASK     8
+
 /* ShowWindow(hWnd, nCmdShow) -- 4 bytes, reversed as always, and confirmed by the
    run: `(0x0005 0x0160)` from sysedit seg1:0x01da and `(0x0001 0x0140)` from
    seg2:0x0149. UpdateWindow(hWnd) -- 2 bytes. */
@@ -3987,6 +4006,77 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
         wu_puts(note, notecap, &k, " -> ");
         wow32_setret(f, (DWORD)wowuser_defproc(f, w, m.msg, m.wparam, m.lparam,
                                                note + k, notecap - k));
+        return 1;
+    }
+
+    /* ── ★★ 0x36 / 0x37 / 0xe1 -- THE WINDOW ENUMERATIONS. ───────────────────
+         PROGMAN, WRITE, PACKAGER and TASKMAN all walk windows this way. The
+         service ARMS the walk and the BOP handler makes the calls -- see
+         src/wow/wowenum.h for why it cannot be done from here.
+       ★ THE ANSWER IS WRITTEN IN ADVANCE. TRUE means "the whole list was
+         walked", which is what happens unless the callback stops it, and the
+         chain revises the hole to FALSE if it does. A caller therefore always
+         reads a defined value, including when the host refuses the walk.
+       ⚠ WHAT THE GUEST CAN SEE IS THE GUEST'S OWN WINDOWS. A Win16 program on
+         real Windows would also see other Win16 programs'; this host runs one
+         Win16 task at a time, and a Win32 window has no 16-bit handle to report
+         it by. Named on the line rather than left as a silent short list. */
+    case WOWUSER_ENUMWINDOWS:
+    case WOWUSER_ENUMCHILDWINDOWS:
+    case WOWUSER_ENUMTASKWINDOWS: {
+        int  which = (f->id == WOWUSER_ENUMWINDOWS)      ? WOWENUM_WINDOWS
+                   : (f->id == WOWUSER_ENUMCHILDWINDOWS) ? WOWENUM_CHILDREN
+                                                         : WOWENUM_TASK;
+        DWORD proc = (which == WOWENUM_WINDOWS) ? wow32_argd(f, EW_ARG_PROC)
+                                                : wow32_argd(f, ECW_ARG_PROC);
+        DWORD lp   = (which == WOWENUM_WINDOWS) ? wow32_argd(f, EW_ARG_LPARAM)
+                                                : wow32_argd(f, ECW_ARG_LPARAM);
+        WORD  parent = (which == WOWENUM_CHILDREN) ? wow32_argw(f, ECW_ARG_PARENT)
+                                                   : 0;
+        DWORD hole = (DWORD)(ULONG_PTR)(f->bp + WOW32_OFF_RET);
+        wowuser_win_t *pw = parent ? wowuser_findwin(parent) : NULL;
+        int k = 0;
+        wu_puts(note, notecap, &k,
+                which == WOWENUM_WINDOWS  ? "EnumWindows" :
+                which == WOWENUM_CHILDREN ? "EnumChildWindows" :
+                                            "EnumTaskWindows");
+        wu_puts(note, notecap, &k, " proc=0x");
+        wu_puthex(note, notecap, &k, proc, 8);
+        if (which == WOWENUM_CHILDREN) {
+            wu_puts(note, notecap, &k, " parent=0x");
+            wu_puthex(note, notecap, &k, parent, 4);
+        }
+        wow32_setret(f, 1);                    /* TRUE unless a callback stops it */
+        if (!f->cbok) {
+            wu_puts(note, notecap, &k, " -- callbacks are not armed; answered TRUE"
+                                       " with nothing enumerated");
+            return 1;
+        }
+        if (which == WOWENUM_CHILDREN && !pw) {
+            wu_puts(note, notecap, &k, " -- ★ NO SUCH PARENT; answered TRUE with"
+                                       " nothing enumerated");
+            return 1;
+        }
+        if (wowenum_busy()) {
+            /* See the nesting note in wowenum.h: one cursor, and a second walk
+               would inherit the first one's position. */
+            wu_puts(note, notecap, &k, " -- ★ AN ENUMERATION IS ALREADY RUNNING;"
+                                       " REFUSED (answered TRUE, nothing walked)"
+                                       " rather than sharing one cursor between"
+                                       " two walks");
+            return 1;
+        }
+        if (!wowenum_begin(which, proc,
+                           pw && pw->hinst ? pw->hinst : g_wu_class[0].hinst,
+                           lp, hole, parent)) {
+            wu_puts(note, notecap, &k, " -- ★ the callback is not a usable far"
+                                       " pointer; nothing walked");
+            return 1;
+        }
+        f->enumreq = 1;
+        wu_puts(note, notecap, &k, " -- walking this task's own top-level windows"
+                                   " (a Win32 window has no 16-bit handle to"
+                                   " report it by)");
         return 1;
     }
 

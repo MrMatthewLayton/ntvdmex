@@ -182,6 +182,28 @@
      `DialogBox` can finally do the one thing that defines it -- not return.
      `actarg` = the dialog's Win16 hwnd. See src/wow/wowdlg.h. */
 #define WOWCALL_ACT_MODALPUMP 4
+/* ── ★ AND A FOURTH USE OF THE SAME SHAPE: ONE CALL PER ITEM. (session 57) ────
+     EnumWindows / EnumChildWindows / EnumTaskWindows / LineDDA all call the
+     guest's callback once per item and stop when it answers 0. The continuation
+     rule is "next item"; see src/wow/wowenum.h. `actarg` = the item's window
+     handle where it has one, for the log. */
+#define WOWCALL_ACT_ENUMNEXT  5
+
+/* ── THE ENUMERATION SOURCES, DECLARED HERE FOR THE INCLUDE ORDER. ───────────
+     The walk itself is src/wow/wowenum.h, which is compiled AFTER the two
+     dispatchers that arm one (GDI's LineDDA, USER's EnumWindows family). One
+     enum rather than four flags: a cursor only ever walks ONE of these, and a
+     bitfield would allow a state that means nothing. */
+#define WOWENUM_NONE      0
+#define WOWENUM_WINDOWS   1     /* every top-level window of this guest        */
+#define WOWENUM_CHILDREN  2     /* every child of `parent`                     */
+#define WOWENUM_TASK      3     /* every window of a task                      */
+#define WOWENUM_LINE      4     /* every point on a line (LineDDA)             */
+
+static int  wowenum_busy(void);
+static int  wowenum_begin(int kind, DWORD proc, WORD ds, DWORD lparam,
+                          DWORD retlin, WORD parent);
+static void wowenum_line(int x0, int y0, int x1, int y1);
 
 /* Six words is not a guess about Win16 -- it is what the two things this host
    calls actually push: a window procedure's 5 (hwnd, msg, wParam, lParam hi+lo)
