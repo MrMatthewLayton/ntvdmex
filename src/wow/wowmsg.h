@@ -76,6 +76,11 @@
    guest (WM_CREATE, WM_MDICREATE, EM_*) or is the one the loop's own `or ax,ax`
    is testing for. */
 #define WM_QUIT16       0x0012
+/* ★ WM_DESTROY, WITHOUT WHICH A WIN16 TASK NEVER ENDS. (session 56) See the
+     DestroyWindow arm in wowuser.h: it is the message whose handler calls
+     PostQuitMessage, and until it was delivered every guest sat in GetMessage
+     forever after its window closed. */
+#define WM_DESTROY16    0x0002
 #define WM_KEYDOWN16    0x0100
 #define WM_KEYUP16      0x0101
 /* ── ★★★ WM_COMMAND, READ OUT OF THE GUESTS RATHER THAN OUT OF A HEADER ───────

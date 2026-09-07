@@ -8337,6 +8337,7 @@ veh_fatal:
     }
     log_append(LOG_PATH, cb, p);
     serial_out(cb, p);
+    tray_remove(g_hwnd);      /* the VEH exits without unwinding the UI thread */
     ExitProcess(0xDE0);                                 /* clean exit; batch dumps the log */
     return EXCEPTION_CONTINUE_SEARCH;                   /* not reached */
 }
@@ -8568,6 +8569,12 @@ static DWORD WINAPI dpmi_watchdog(LPVOID param)
         q = wb; q = zput(q, "\r\n]\r\n");
         log_append(WDLOG_PATH, wb, q);
     }
+    /* ⚠ TAKE THE TRAY ICON WITH US. TerminateProcess runs NO cleanup at all, so
+         an icon left installed here becomes a genuine GHOST -- it sits in the
+         tray pointing at a dead process until the user happens to mouse over it
+         and Explorer reaps it. That is the second half of the user's "they are
+         stacking up" report, and it is the half that survives the process. */
+    tray_remove(g_hwnd);
     /* TerminateProcess (forceful) -- ExitProcess hangs trying to unwind the PM engine
        thread (un-terminable LDT context). */
     TerminateProcess(GetCurrentProcess(), 0xDD0);
@@ -21040,10 +21047,36 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
        so it's one-shot; interactive runs (no marker) keep the window open. */
     if (g_headless) {
         DeleteFileA(AUTOEXIT_PATH);
+        tray_remove(g_hwnd);     /* ExitProcess runs no window cleanup -- see below */
         ExitProcess(0);
     }
+    /* ── ★★★★ A WIN16 HOST MUST NOT OUTLIVE ITS GUEST. (session 56) ────────────
+         REPORTED BY THE USER: "when a WoW16 window exits, it leaves its tray icon
+         behind. They are stacking up in the tray."
+       ★ AND THEY ARE NOT GHOST ICONS -- THEY ARE LIVE PROCESSES, which is worse.
+         Measured on the rig: launch CALC, click its X, the Calculator window is
+         gone and `tasklist` still shows ntvdmhost.exe PID 1488. Every Win16
+         launch was leaving a whole VDM host running, each holding a real tray
+         icon, for as long as the session lasted.
+       ⚠ The cause is the line below this one, and it was right for the case it
+         was written for and wrong for this one. "Keep the window open so the
+         guest's final screen stays visible until the user closes it" assumes
+         there IS a window and a final screen. A Win16 guest has NEITHER -- the
+         note by tray_add says so in as many words: it gets no VDM window, only a
+         tray icon. So there was nothing to look at and nothing to close, and the
+         wait never ended. The user could only reach it through the tray menu's
+         Exit, which is exactly the step they were never going to take twenty
+         times a session.
+       ⇒ For a Win16 host the guest exiting IS the end of the run. Ask the UI
+         thread to close, and let it leave through its OWN path -- WM_CLOSE ->
+         DestroyWindow -> WM_DESTROY -> PostQuitMessage -> the message loop
+         returns -> tray_remove + present_ddraw_shutdown. That is strictly better
+         than ExitProcess here, because WM_DESTROY is also what stops the OPL and
+         Beep.sys, and both of those have outlived a host before. */
+    if (g_wow_launch && g_hwnd) PostMessageA(g_hwnd, WM_CLOSE, 0, 0);
     /* Keep the Luna window open so the guest's final screen stays visible until
-       the user closes it; then the UI thread's message loop returns. */
+       the user closes it; then the UI thread's message loop returns. (A DOS
+       guest only -- see above.) */
     if (ui) { WaitForSingleObject(ui, INFINITE); CloseHandle(ui); }
     return 0;
 }

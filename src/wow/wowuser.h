@@ -1823,6 +1823,12 @@ typedef struct wowuser_win_s {
          16-bit because that is what the guest can hold; this is what the OS
          holds, and the pair of them is the whole of the bridge. */
     HWND  hwnd32;
+    /* ★ DESTROYED, BUT NOT YET TOLD. Set between DestroyWindow tearing the real
+         window down and the guest's own procedure receiving WM_DESTROY -- the
+         record has to outlive the window by exactly that long, because
+         DispatchMessage finds the procedure THROUGH it. Cleared when that
+         message is dispatched. See both arms. */
+    BYTE  dying;
 } wowuser_win_t;
 
 static wowuser_win_t g_wu_win[WOWUSER_MAX_WIN];
@@ -3665,6 +3671,15 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
             wow32_setret(f, 0);
             wowuser_want_msg(f, w, w->hinst ? w->hinst : g_wu_class[w->cls].hinst,
                              m.msg, m.wparam, m.lparam, WOWCALL_RET_RESULT);
+            /* ★ AND NOW THE RECORD CAN GO. `want_msg` has already captured the
+                 procedure and instance into the pending call, so the slot is no
+                 longer needed to make it -- and holding a destroyed window's
+                 handle any longer is exactly the dangling reference the
+                 DestroyWindow note warns about. */
+            if (m.msg == WM_DESTROY16 && w->dying) {
+                w->hwnd = 0; w->dying = 0;
+                wu_puts(note, notecap, &k, " (and its record is now released)");
+            }
             return 1;
         }
         wu_puts(note, notecap, &k, " -> ");
@@ -6228,10 +6243,37 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
                 c->hwnd = 0; c->hwnd32 = NULL; ++kids;
             }
         }
-        w->hwnd = 0; w->hwnd32 = NULL;
+        /* ── ★★★★★ AND TELL THE GUEST, WHICH THIS NEVER DID. (session 56) ──
+             REPORTED BY THE USER: Win16 tray icons "stacking up". They were not
+             ghost icons -- they were LIVE HOSTS, one per guest ever launched,
+             and this line is why.
+             A Win16 application ends when its window does: WM_CLOSE ->
+             DestroyWindow -> **WM_DESTROY** -> PostQuitMessage -> GetMessage
+             returns 0 -> WinMain returns -> the task exits -> the VDM has
+             nothing left to run. We relayed WM_CLOSE (wowwin.h) and implemented
+             DestroyWindow, and then dropped the middle link: WM_DESTROY was
+             delivered by nothing, anywhere. So the guest destroyed its window
+             and went straight back to GetMessage, where it blocked FOREVER --
+             measured, `WOWMSG: blocked 0x7f23 ms` and climbing, with the window
+             already gone from the desktop.
+           ⚠ ORDER: post BEFORE releasing the record, and KEEP the Win16 handle
+             until the message is dispatched. DispatchMessage resolves the window
+             procedure THROUGH this record (wowuser_findwin), so clearing `hwnd`
+             here -- which is what the note above rightly wants for a dead
+             window -- would make the message we just posted undeliverable. The
+             record is marked `dying` instead and released the moment its
+             WM_DESTROY is dispatched.
+           ⚠ ON REAL WINDOWS WM_DESTROY IS **SENT**, NOT POSTED. Same caveat, and
+             for the same reason, as WM_SIZE and WM_SETFOCUS in wowwin.h: sending
+             it means re-entering the guest from inside a service. Posted, the
+             guest sees it at its next GetMessage, which for this message is
+             precisely where its message loop already is. */
+        wowmsg_post(hwnd, WM_DESTROY16, 0, 0, GetTickCount(), 0, 0);
+        w->dying  = 1;
+        w->hwnd32 = NULL;              /* the real window is going NOW... */
         if (g_wm_focus == hwnd) g_wm_focus = 0;
         if (h32) DestroyWindow(h32);
-        wu_puts(note, notecap, &k, " -> destroyed");
+        wu_puts(note, notecap, &k, " -> destroyed, WM_DESTROY posted to the guest");
         if (kids) { wu_puts(note, notecap, &k, ", with 0x");
                     wu_puthex(note, notecap, &k, (DWORD)kids, 2);
                     wu_puts(note, notecap, &k, " child record(s) released too"); }
