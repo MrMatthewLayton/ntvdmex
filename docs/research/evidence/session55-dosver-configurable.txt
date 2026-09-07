@@ -1,0 +1,29 @@
+==== CASE 1: dosver.txt = 6.22  (expect major=06 minor=16) ==== 
+STAGE2: dosver override -> 00000006.00000016
+  ==> DOS OUTPUT: [INT21.30 major=06 minor=16 oem=FF serial=00:0000
+INT21.3306 major=06 minor=16 rev=00 flags=00 cf=00
+==== CASE 2: dosver.txt = 3.31  (expect major=03 minor=1f) ==== 
+STAGE2: dosver override -> 00000003.0000001f
+  ==> DOS OUTPUT: [INT21.30 major=03 minor=1F oem=FF serial=00:0000
+INT21.3306 major=03 minor=1F rev=00 flags=00 cf=00
+==== CASE 3: no dosver.txt -- registry default ==== 
+  ==> DOS OUTPUT: [INT21.30 major=06 minor=16 oem=FF serial=00:0000
+INT21.3306 major=06 minor=16 rev=00 flags=00 cf=00
+
+---- how this was produced (session 55, GH #28) ----
+scripts/bm/verver.bat on the bare-metal rig (192.168.1.29), ONE batch, three
+cases, each a full launch of tools/dostest/dosver.com through rt.bat.
+
+THE ORACLE, from docs/research/dos-oracle.md (real MS-DOS 6.22):
+  INT21.30   major=06 minor=16 oem=FF serial=00:0000
+  INT21.3306 major=06 minor=16 rev=00 flags=10 cf=00
+Case 1 reproduces every field of both lines except `flags`, which that document
+already excludes from comparison by name: DH bit 4 means "DOS is in the HMA" and
+the oracle image boots DOS=HIGH, so it is a property of that machine's CONFIG.SYS
+and not of the version. We provide no HMA, so 00 is the correct answer for us.
+
+⚠ THE FIRST RUN OF THIS GATE READ A STALE ARTEFACT and reported only the host
+side. The wait loop polled for verver_done.txt, which the PREVIOUS run had left
+on the share, so it returned instantly with the old verver.txt. Deleting both
+destinations from the driving side BEFORE dispatching is what fixed it -- the
+same lesson as `stale artefact worse than missing`, met again.
