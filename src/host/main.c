@@ -13393,6 +13393,18 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                             return 1;
                         }
                     }
+                    /* ⚠ AND DO NOT ADD THE FP RANGE HERE. (session 56.) WIN87EM's
+                         handlers ARE installed in g_pm_int[] and it is tempting to widen
+                         this test to reach them -- but this dispatcher resumes the client
+                         at `sEIP + 2` unconditionally (see the assignment near the end of
+                         dpmi_dispatch_to_pm_handler), and an FP-emulator handler ADJUSTS
+                         ITS OWN RETURN ADDRESS: `CD 39` is followed by the x87
+                         instruction's modrm and displacement, which the handler decodes
+                         and then steps over. Coming back at sEIP+2 would drop the guest
+                         onto its own operand bytes and execute them as code.
+                         The FP range is reflected as a REAL interrupt instead, on the
+                         guest's own stack, where the handler's IRET is the thing that
+                         decides where it returns to. See the #GP(IDT) arm. */
                     if (vec == 0x21 && g_pm_int[vec].client && !g_pm_disp[vec]) {
                         int rc = dpmi_dispatch_to_pm_handler(mp, tib, vec, steps);
                         if (rc != 0 || g_pm_int[vec].sel) return rc;
@@ -19437,18 +19449,82 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                                 volatile BYTE *gi = (volatile BYTE *)(ULONG_PTR)(gcb + fr[3]);
                                 if (gcb && host_readable((const void *)gi, 2)
                                     && gi[0] == 0xCD && gi[1] == (BYTE)gvec) {
+                                    /* ── ★★★★★ THIS IS THE PASS THAT RE-PATCHED CALC'S FP SITE.
+                                         (session 56 -- the question session 55 left open.)
+                                         Session 55 put a 34h..3Fh guard in the SCANNER and the
+                                         guard was right, but it was in the wrong place: the
+                                         scanner never touched CALC's site. THIS did. Measured,
+                                         from the session-55 CALC log:
+
+                                           EXC: #GP(IDT) is a RAW INT 0x39 at 0x0b77:0x05c6
+                                                lin=0x03d15b66 -- servicing + patching     x120,673
+
+                                         The comment below is right that the CPU's error code
+                                         names the vector and the address, and that this is the
+                                         strongest evidence a byte pair is really an INT. It is
+                                         still not evidence that the byte pair is an INTERRUPT.
+                                         `CD 39` in FP-emulator code IS the x87 instruction, and
+                                         the fault is how the emulator is ENTERED, not a failure.
+                                         Rewriting it to a BOP destroys the guest's own encoding
+                                         -- which is exactly what the scanner was stopped from
+                                         doing, by a guard this path did not have. */
                                     int grc;
+                                    int fpr = (gvec >= 0x34 && gvec <= 0x3F);
+                                    int fpref = fpr && g_pm_int[gvec].client;
                                     p = zput(p, "  EXC: #GP(IDT) is a RAW INT 0x"); p = zhex(p, gvec);
                                     p = zput(p, " at 0x"); p = zhex(p, fr[4]);
                                     p = zput(p, ":0x"); p = zhex(p, fr[3]);
                                     p = zput(p, " lin=0x"); p = zhex(p, gcb + fr[3]);
-                                    p = zput(p, " -- servicing + patching\r\n");
+                                    if (fpref) {
+                                        p = zput(p, " -- FP EMULATOR RANGE: reflecting to the"
+                                                    " handler the guest installed, 0x");
+                                        p = zhex(p, g_pm_int[gvec].sel);
+                                        p = zput(p, ":0x"); p = zhex(p, g_pm_int[gvec].off);
+                                        p = zput(p, " (not patched, not serviced)\r\n");
+                                    } else {
+                                        p = zput(p, fpr ? " -- FP EMULATOR RANGE but NO handler"
+                                                          " installed; servicing without patching\r\n"
+                                                        : " -- servicing + patching\r\n");
+                                    }
                                     log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
                                     /* put the guest back where it faulted, EIP ON the INT */
                                     VDM_SET16(tib, VTIB_SS, fr[7]); VDM_REG(tib, VTIB_ESP) = fr[6];
                                     VDM_SET16(tib, VTIB_CS, fr[4]); VDM_REG(tib, VTIB_EIP) = fr[3];
                                     VDM_SET16(tib, VTIB_EFLAGS, fr[5]);
-                                    if (host_writable((void *)(ULONG_PTR)gi, 2)) {
+                                    /* ── ★★★★ REFLECT IT, DO NOT SERVICE IT. ─────────────────
+                                         An FP `CD nn` is not a request to the host; it is the
+                                         guest's own emulator being entered, and the ONLY thing
+                                         that knows where to resume is that emulator. It reads
+                                         the modrm and displacement that FOLLOW the two bytes,
+                                         then REWRITES THE RETURN IP ON THE STACK to step over
+                                         them. So build the frame the CPU would have built --
+                                         flags, CS, IP-past-the-INT, on the GUEST's stack -- and
+                                         let its IRET decide where it goes. Every host-side
+                                         mechanism we have (BOP + trampoline, or a service arm
+                                         that IRETs) throws that adjustment away.
+                                       ⚠ IF stays as the guest had it. An INT gate would clear
+                                         it, but the emulator is not an ISR: it runs as part of
+                                         the guest's own instruction stream, and this host's
+                                         V86/VME rules make silently clearing IF a real hazard
+                                         (see [[vme-vif-interrupt-gating]]). TF is cleared,
+                                         which is what a gate does and costs nothing. */
+                                    if (fpref) {
+                                        DWORD sb   = dpmi_sel_base(fr[7]);
+                                        int   ss32 = dpmi_sel_is32(fr[7]);
+                                        DWORD sp   = fr[6];
+                                        sp = ss32 ? sp - 2 : ((sp - 2) & 0xFFFF);
+                                        pokew(sb + sp, fr[5]);                    /* FLAGS      */
+                                        sp = ss32 ? sp - 2 : ((sp - 2) & 0xFFFF);
+                                        pokew(sb + sp, fr[4]);                    /* return CS  */
+                                        sp = ss32 ? sp - 2 : ((sp - 2) & 0xFFFF);
+                                        pokew(sb + sp, (WORD)(fr[3] + 2));        /* return IP  */
+                                        VDM_REG(tib, VTIB_ESP) = sp;
+                                        VDM_SET16(tib, VTIB_CS, g_pm_int[gvec].sel);
+                                        VDM_REG(tib, VTIB_EIP) = g_pm_int[gvec].off & 0xFFFF;
+                                        VDM_REG(tib, VTIB_EFLAGS) &= ~0x100u;     /* TF */
+                                        continue;
+                                    }
+                                    if (!fpr && host_writable((void *)(ULONG_PTR)gi, 2)) {
                                         gi[0] = VDM_BOP0; gi[1] = VDM_BOP1;
                                         pmap_set(gcb + fr[3], (BYTE)gvec);
                                     }
