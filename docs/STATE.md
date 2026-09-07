@@ -240,7 +240,7 @@ and matches the 6.22 oracle row for row (session 53)** — but `MEM /C` still re
 
    ## ★ SESSION 56 — 83.1% → 84.3%
 
-   **Six commits, all rig-gated. Resumed from session 55's pause; the user chose
+   **Nine commits, all rig-gated. Resumed from session 55's pause; the user chose
    the MIXED option, then asked for both halves of the follow-up.**
 
    ### ▶ ★★★★★ CALC IS A CALCULATOR THAT CALCULATES — AND s55 NAMED THE WRONG PASS
@@ -379,10 +379,77 @@ and matches the 6.22 oracle row for row (session 53)** — but `MEM /C` still re
      fatal**. Measured both ways: 27 FAILs at `49d939c`, 0 now. The whole off-VM
      battery is clean for the first time in a session.
 
+   ### ▶ ★★★★ THE TRACE WAS THE PROBLEM — 158 MB → 3.3 MB
+
+   `log.h`'s own note on `g_log_quiet` prescribed this in advance: *the answer is
+   not to ship the silencer on, it is to stop writing a kilobyte per BOP.*
+   TERMINAL made it unanswerable — **a grep over its log TIMED OUT**, which is
+   the point at which an instrument has stopped being one.
+
+   ★ **THE CLOCK IS NOT THE BUG**, checked before any code was written:
+   `GetCurrentTime` returned **321 DISTINCT values stepping ~16 ms**, so it
+   advances correctly and the guest polls it ~485×/tick. `FUNC=0x6d` turned out
+   to be **PeekMessage** — TERMINAL is running an ordinary PeekMessage +
+   GetCurrentTime idle loop. Nothing was wrong with the guest at all.
+
+   ⚠⚠ **THE FIRST DESIGN WAS THE WRONG SHAPE, AND THE RUN SAID SO.** It folded
+   *runs* of the same call back to back — which sounds like the same thing and is
+   not: **the longest identical run in that log is 23.** The calls are
+   interleaved into a repeating CYCLE, so the fold never fired once
+   (`folded=0x0`) and the log came back **BIGGER**, 177 MB. The pattern is *one
+   function called an enormous number of times*, not *one function repeated*.
+   ⇒ Cap **per function**: full dump for 256 calls, then verdict-line-only, then
+   at 4096 counted and not traced. Both stages announce themselves by id.
+
+   ⚠ **KEEPING THE VERDICT LINE IS LOAD-BEARING.** `bmwow.sh`'s signature is a
+   COUNT of those lines; folding whole blocks would have moved the gate with no
+   behaviour change — a self-inflicted regression signal, the exact fault class
+   the fold exists to fix. The hard cap sits 48× above the gate's traffic.
+
+   ⚠ Wired into the WOW32 block's own flushes only, never `log_append`: the mute
+   spans BOPs, and a global one would swallow a fault or a PM interrupt logged
+   *between* them. Seven sites an over-wide edit had converted outside the block
+   were reverted for that reason.
+
+   ### ▶ ★★★★ krnl386 THOUGHT IT WAS ON DRIVE A: — WOW32 0xc8
+
+   Named from its call site with the method this repo already prescribes,
+   `nedis.py guest/wow/KRNL386.EXE --wowfunc 0xc8`. It is krnl386's **INT 21h
+   AH=0Eh (select default drive)** arm, and `mov byte ptr [0x2a0], al` means
+   **whatever we return becomes krnl386's answer to "what drive am I on".**
+   Unimplemented it got the sentinel `0` — a perfectly good drive index — so
+   krnl386 cached **A:** after every select while `AH=19h` went on saying C:.
+   Two routes to one fact, disagreeing, no error anywhere.
+
+   ⚠ **AND IT CORRECTS A RECORDED NOTE**: `[0x2a0]` is NOT the per-drive table
+   and is not *"written from none"*. It is the cached CURRENT DRIVE, written from
+   exactly two places (here, and the `AH=19h` arm at `seg1:0x533a` reading the
+   real one through `[0x275]`) and invalidated with `0xFF` at `seg1:0x5717`. The
+   per-drive table is the separate `[0x2a2 + bx]` read at `seg1:0x51ae`.
+
+   ⚠ All three routes now read `DOS_CURRENT_DRIVE` (`dos_layout.h`). Returning
+   the REQUESTED drive would claim a switch that did not happen — `AH=0Eh`
+   accepts a select and ignores it.
+
+   ★★ **THE GATE MOVED AND IS ACCOUNTED FOR TO THE CALL: 85/113/57 → 110/113/32.**
+   +25 serviced / −25 unimpl is EXACTLY the 25 `SetCurrentDrive` calls the gate's
+   guest makes; declines and `0001:229C` unchanged. `bmwow.sh`'s baseline is
+   updated **with that accounting beside it**, so the next session reads a step
+   rather than drift.
+
+   ▶ **NEXT ID, NOT TAKEN**: `0xc6` (15 calls in TERMINAL, 18 in WRITE). Its call
+   site is at `seg1:0x4792`, reached from a `test cl,1` branch whose `test cl,0x10`
+   sibling calls `0x9c WowCursorIconOp`, and `0x7c` precedes both — all three take
+   the same handle and `0x3e8`. That is not enough to name the RETURN, and s55
+   already measured that 0 avoids its failure path, so it was left alone rather
+   than guessed.
+
    ### ▶ WHERE THE NUMBER WENT
 
    `guests` 55% → 61% (CALC/CARDFILE/WRITE), `serial-vdd` 0 → 85%,
-   overall **83.1% → 84.3%**.
+   overall **83.1% → 84.3%**. ⚠ `0xc8` did NOT move `breadth`: it is a
+   krnl386-internal id, in no guest's import list, so the probe cannot see it.
+   The value there was correctness, not the number.
 
    ⚠ **All three guests are `partial`, NOT `done`** — `done` means USER-CONFIRMED
    and none has been typed into, saved and reloaded by a human. CALC's arithmetic
