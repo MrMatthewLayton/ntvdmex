@@ -3086,6 +3086,9 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
          chrome and the bottom row of controls falls outside it. This project has
          already paid for that shape once, in the status-bar height (session 54). */
     case WOWUSER_CREATEDIALOG: {
+        /* ★ ARG 0 IS THE MODAL FLAG -- 0 = CreateDialog, 1 = DialogBox. Pinned
+             from USER.EXE's own two call sites; see the long note below. */
+        WORD  modal   = wow32_argw(f, 0);
         DWORD tfp     = wow32_argd(f, 16);
         WORD  hinst   = wow32_argw(f, 20);
         WORD  parent  = wow32_argw(f, 14);
@@ -3287,18 +3290,47 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
              message loop. Nothing was stepped over afterwards, so nothing was
              waiting on us; there was simply no ShowWindow for the dialog
              ITSELF anywhere in the run, on either side.
-           ⚠ AND IT IS HONESTLY A JUDGEMENT, not a measurement. Which of
-             DialogBox / CreateDialog / DialogBoxParam this id serves is NOT
-             known -- the three differ in exactly this respect, and a modeless
-             CreateDialog is the caller's to show. The cost of being wrong is a
-             dialog shown a moment early (the guest's own ShowWindow then does
-             nothing); the cost of the other choice is measured above, and it is
-             a program with no window. ▶ To settle it, disassemble USER.EXE at
-             the call site this frame names -- seg sel 0x03ff offset 0x4bdc. */
+           ★★★★★ SETTLED, session 56, by doing exactly what the note below used
+             to prescribe -- disassembling USER.EXE at the call site. It serves
+             BOTH, and the argument at OFFSET 0 IS THE MODAL FLAG:
+
+               CreateDialog  seg1:0x4bd5  push 0   / lcall 0x047b:0x4c48
+               DialogBox     seg1:0x4d0c  push 1   / lcall 0x047b:0x4d97
+
+             Same thunk, and the LAST word pushed -- which is arg offset 0 --
+             is 0 for the modeless family and 1 for the modal one. Session 55
+             recorded that field as "+0 still unexplained (0 in every run)"; it
+             was 0 in every run because every guest measured then (CALC,
+             SOUNDREC, TERMINAL) uses CreateDialog. USER.87 DIALOGBOX and
+             USER.89 CREATEDIALOG are thin argument shufflers onto 0x4c80 and
+             0x4b4a respectively, and BOTH return immediately after the thunk --
+             so the modal message loop is not in USER's 16-bit code. IT IS OURS.
+           ⚠⚠ AND WE DO NOT RUN ONE, WHICH IS WHY A MODAL DIALOG ENDS ITS
+             PROGRAM. DialogBox's whole contract is that it does not return
+             until EndDialog; we create the dialog and return at once, so a
+             caller whose WinMain is `DialogBox(...); return;` -- which is
+             TASKMAN exactly -- exits immediately. Measured: TASKMAN builds the
+             dialog and all 8 controls, then STAGE2: complete with no window.
+             The window s55 saw was an ORPHAN kept alive by the host leak.
+           ▶ FIVE GUESTS ON THE SHELF CALL DialogBox: NOTEPAD, PACKAGER,
+             SYSEDIT, TASKMAN and WINMINE (3 calls). This is therefore the same
+             mechanism as the SUB-DIALOG gap the user named in s53 --
+             Minesweeper's Game > Preferences, Solitaire's Options and Deck.
+             One feature unblocks all of it.
+           ▶ WHAT IT NEEDS is deferred completion of this BOP: park the guest
+             inside the service, pump the dialog by calling its 16-bit dlgproc
+             through the existing wowcall chain (the EDITLOCK -> EDITFILL ->
+             LocalUnlock chain is the same shape), and complete the original
+             DialogBox call with EndDialog's result. Not attempted here: a
+             half-built modal loop that never returns is worse than an honest
+             immediate return, because it hangs the guest instead of ending it. */
         if (w->hwnd32 && !(style & WS_VISIBLE))
             ShowWindow(w->hwnd32, SW_SHOW);
 
-        wu_puts(note, notecap, &k, "CreateDialog ");
+        /* ★ SAY WHICH ONE THIS IS, EVERY TIME. Until the modal loop exists, a
+             modal call is a program about to exit, and a log that called it
+             "CreateDialog" would leave the reader hunting the wrong thing. */
+        wu_puts(note, notecap, &k, modal ? "DialogBox (MODAL) " : "CreateDialog ");
         wu_putq(note, notecap, &k, caption);
         wu_puts(note, notecap, &k, " class=");
         wu_putq(note, notecap, &k, cname[0] ? cname : "#32770");
@@ -3308,6 +3340,17 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
         wu_puthex(note, notecap, &k, (DWORD)count, 2);
         wu_puts(note, notecap, &k, " built=");
         wu_puthex(note, notecap, &k, (DWORD)made, 2);
+        if (modal) {
+            /* ⚠ THE CALLER EXPECTS NOT TO GET CONTROL BACK UNTIL EndDialog, and
+                 it is about to. Name it here rather than let the next reader
+                 discover a program that "just exits": TASKMAN's WinMain is
+                 DialogBox followed by a return. */
+            wu_puts(note, notecap, &k, " -- ★ MODAL, AND WE RETURN IMMEDIATELY:"
+                                       " there is no modal message loop yet, so"
+                                       " the caller resumes past DialogBox and a"
+                                       " program whose WinMain ends there EXITS."
+                                       " See the note at this case.");
+        }
         wu_puts(note, notecap, &k, " -> hwnd=0x");
         wu_puthex(note, notecap, &k, w->hwnd, 4);
         if (w->hwnd32) {
