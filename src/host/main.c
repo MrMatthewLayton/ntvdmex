@@ -11988,6 +11988,44 @@ static int dpmi_dispatch_to_pm_handler(dos_machine_t *mp, volatile BYTE *tib,
             int io_h; HOST_LOCK(); io_h = host_try_io_pm(tib, &g_bus); HOST_UNLOCK();
             if (io_h) continue;
         }
+        /* ── ★★★★★ A DPMI FAULT SITE IS NOT AN INTERRUPT, AND THIS LOOP MUST NOT EAT IT.
+             This is the SECOND protected-mode run loop -- it exists to run the client's
+             own INT handler to completion -- and it never had an arm for the case where
+             THAT HANDLER FAULTS. The kernel reflects such a fault onto our fault-site
+             stubs exactly as it does in the main loop, but here the BOP fell through to
+             dpmi_service_pm_int(), which read the site's `C4 C4 57` bytes and handed them
+             to the WOW dispatcher -- where 0x57 is the WOW callback id, a genuine
+             collision with DPMI_FAULT_BOP. The verdict was "UNIMPLEMENTED, STEPPED OVER",
+             so the exception was never delivered, the guest re-executed the same site,
+             and it looped until the dispatch budget ran out ("handler NO-RET").
+           ► MEASURED, ZAR (GH #23): cs=0x017f == g_dpmi_flt_code_sel, eip=0x694 ==
+             DPMI_FAULT_SITE(13) -- i.e. a #GP raised inside DOS/16M's own INT 21h
+             handler while ZAR asked for the DOS version (AX=0x3067). It was swallowed
+             here, which is why ZAR printed nothing: the error text it was composing
+             ("\VMD.", "program must be built -AUTO for DPMI") never reached the screen.
+           ⇒ Hand it back to the MAIN loop, which owns the whole exception-delivery
+             path (frame width, handler lookup, the FLTRET catcher). Returning 1 leaves
+             the guest parked ON the fault site with the INT frame still on its stack, so
+             the outer loop's gate fires on the next entry and delivers it properly; the
+             resume-past-the-INT epilogue below is deliberately NOT run, because the INT
+             has not finished -- its handler is mid-fault.
+           ⚠ THIS CANNOT AFFECT WOW. A real WOW `C4 C4 57` trampoline lives in a 16-bit
+             code selector of the guest's, never in g_dpmi_flt_code_sel, so the CS test
+             excludes it by construction. */
+        if (ev == VDM_EVENT_BOP
+            && (VDM_REG(tib, VTIB_CS) & 0xFFFF) == (g_dpmi_flt_code_sel & 0xFFFF)
+            && (eip == DPMI_FAULT_COFF
+                || (eip >= DPMI_FAULT_SITE(0)
+                    && eip <  DPMI_FAULT_SITE(DOS_FLTSITE_N)
+                    && ((eip - DPMI_FAULT_SITE(0)) & 3) == 0))) {
+            lp = zput(lp, "  PM INT 0x"); lp = zhex(lp, vec);
+            lp = zput(lp, " handler FAULTED at fault-site eip=0x"); lp = zhex(lp, eip);
+            lp = zput(lp, " -- returning to the main loop so the exception is DELIVERED"
+                          " (this loop has no fault arm of its own)\r\n");
+            log_append(LOG_PATH, lb, lp); serial_out(lb, lp); lp = lb;
+            g_pm_disp[vec] = 0;
+            return 1;
+        }
         nvec = (ev == VDM_EVENT_BOP) ? dpmi_bop_vec(VDM_REG(tib, VTIB_CS) & 0xFFFF, eip) : 0;
         rc = dpmi_service_pm_int(mp, tib, nvec, steps);
         if (rc > 0) continue;
@@ -12895,6 +12933,27 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                shows the first byte of the NEXT instruction and reads like data. */
             if (bcode == 0x53) { p = zput(p, " sub=0x"); p = zhexb(p, bsub); }
             p = zput(p, " at 0x");    p = zhex(p, eip);
+            /* ── ★★ ASK pmap FIRST, BECAUSE IT ANSWERS FOR EVERY GUEST. ───────────────
+                 The file-image check below is the WOW one and needs g_wow_nmod, so for a
+                 DOS or DPMI guest -- ZAR, GH #23 -- it cannot run at all, and the question
+                 "is this BOP OURS or the guest's own bytes" was left to inference twice.
+                 pmap is keyed by LINEAR ADDRESS and is exactly the record of what we
+                 rewrote, so one lookup settles it whatever the guest is. Print the address
+                 too: a BOP at an EIP with no pmap entry is the guest's own `C4 C4`, and
+                 that is a completely different bug from a patched INT whose vector we lost. */
+            {   DWORD cb3 = dpmi_sel_base((WORD)(VDM_REG(tib, VTIB_CS) & 0xFFFF));
+                DWORD lin3 = cb3 + eip;
+                BYTE  pv3 = pmap_get(lin3);
+                p = zput(p, " cs=0x"); p = zhex(p, VDM_REG(tib, VTIB_CS) & 0xFFFF);
+                p = zput(p, " fltsel=0x"); p = zhex(p, g_dpmi_flt_code_sel);
+                p = zput(p, " lin=0x"); p = zhex(p, lin3);
+                if (pv3) {
+                    p = zput(p, " [pmap: ★ THIS IS A SITE WE PATCHED, it was INT 0x");
+                    p = zhexb(p, pv3); p = zput(p, "]");
+                } else {
+                    p = zput(p, " [pmap: not ours -- the guest's own C4 C4]");
+                }
+            }
             /* ── ★ IS THIS ACTUALLY A PATCHED `INT nn` WHOSE VECTOR WE LOST? ───────────
                  Our patcher rewrites `CD nn` (two bytes) as `C4 C4` (two bytes) and keeps
                  the vector in a side map keyed by LINEAR ADDRESS. A BOP whose code byte we
