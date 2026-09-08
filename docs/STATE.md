@@ -467,6 +467,45 @@ and matches the 6.22 oracle row for row (session 53)** — but `MEM /C` still re
    interrupts, not real demand. **It still loops**, so this was not the blocker either
    — but every future ZAR measurement is now taken on a guest whose clock is right.
 
+   ### ▶ ★★★★★ STATE 4 IS **THE DEMO**, AND IT IS RUNNING. THE PICTURE NEVER LEAVES.
+
+   Following the chain out of the state machine, all measured or read off the image:
+
+   - The caption switch keys on the **request code**, not the state: request 6 →
+     `LOADING DEMO...` → jump-table index 5 (`lea eax,[ebx-1]`, table at obj1+0x1628) →
+     **state 4**. `ebx` is the return of the scene run loop **obj1+0x111a**, the function
+     that contains the tick-wait at obj1+0x1317. So ZAR asked for the demo, entered the
+     demo scene, and never leaves it.
+   - **A VIDEO DRIVER IS INSTALLED AND IT IS THE RIGHT ONE.** `[0x5ea320]` (the driver
+     pointer) = `0x046377e8` from the first tick, and the object there begins
+     `0x5f414756` = ASCII **`"VGA_"`** — it is the `VGA_320x200` descriptor from
+     `USER1.CFG`. Its put slot `[obj+0x80]` = `0x03ffc024` = **obj1+0x8c024**, the real
+     mode-13h blitter (`mov ecx,0xfa00 / mov edi,0xa0000 / rep movsd`). Nothing here is
+     a stub: mode SELECTION ran and chose correctly. (The descriptor lives at
+     obj3+0x5e77e8, past the initialised region, so it was BUILT at runtime.)
+   - **THE FRAME LOOP TURNS.** The per-tick body at obj1+0x1343 increments a frame
+     counter `[0x4c870]`, and it climbs **monotonically and never resets**.
+     ⚠ Its RATE varies wildly run to run — 0x34d (845) in one 45 s run against 0x3a (58)
+     in another at a similar tick count — so do NOT quote a frame rate from it; the
+     claim it supports is only "the loop is turning".
+   - ⇒ The periodic 1073-read cycle is the demo **streaming**, not restarting.
+   - **THE MODE IS NEVER SET.** The mode-set is obj1+0x98b0a (`eax=0x14`, then `0x13`),
+     called from obj1+0x8cdf2. It forks on `[0x4b82c]`: non-zero → `call ptr [0x4b714]`
+     (an alternate/external video dispatch), zero → the built-in path that issues
+     `INT 10h`. **Measured at runtime: `[0x4b82c]=0` and `[0x4b714]=0`** — the fork is
+     NOT taken, so the built-in path would have issued `INT 10h`. It never does.
+     ⇒ **obj1+0x98b0a is never CALLED.** Nothing is ever written to 0xA0000 either.
+
+   ▶ **NEXT SESSION STARTS HERE, and it is now a narrow question:** is obj1+0x8cdf2
+   (the function containing the mode-13h set) ever entered, and if so what does its gate
+   return? The gate is `mov eax,0x5e7724 / call 0x98de7 / cmp eax,1 / jne -> return 0`,
+   and with `[0x4b82c]=0` that resolves to **obj1+0x9cf2b**. A breakpoint at obj1+0x8cdf2
+   and obj1+0x9cf2b answers it in one run.
+   ⚠ **`pmbp.txt` still takes ABSOLUTE addresses and the load base moves every run** —
+   it needs the same `+<hex>` treatment `pmwatch.txt` just got, but it ARMS breakpoints
+   (patches the guest) rather than reading passively, and arming happens at several
+   points, so it is real work rather than a two-line change. Do that first.
+
    ### ▶ NEXT
 
    ▶ **Find what state 4 is waiting for** (above). `INT 10h` is still called ZERO times
