@@ -288,6 +288,33 @@ and matches the 6.22 oracle row for row (session 53)** — but `MEM /C` still re
    now. ▶ **If a service dispatches on a sub-function, its unimplemented arms must be
    reported where a HEADLESS run prints.**
 
+   ### ▶ ★★★★ AND SOUND IS THE SAME BUG, ONE GAP FURTHER DOWN
+
+   **DPMI `0300` is specified to invoke the GUEST'S OWN real-mode handler from the IVT.**
+   Ours serviced three vectors host-side (21h, 33h, and now 10h) and silently did nothing
+   for the rest. ZAR installs its own real-mode INT 66h handler (`0201 setRMvec int 0x66
+   = 0x34d3:0x01d1`, an AIL-style private API), calls it three times with AX=0300/0301/
+   0304, and restores the vector. **We dropped all three.** Consequences, measured:
+   the Miles driver it loads — `SOUND\SBLASTER.DIG`, opened, seeked, read — is **never
+   once called**, all **2,386** real-mode calls in a run go to our own DOS handler at
+   `0050:0000`, and no SB port is ever touched (`sb_dspwr=0`, `opl writes=0`).
+
+   ✅ **WITH REFLECTION ON, ZAR PROGRAMS THE SOUND BLASTER FOR THE FIRST TIME:**
+   `SNDIO out 0x22c`, `sb{blocks=1 left=0x10 len=0x10 rate=0x56ce}` — 0x56ce = 22222 Hz,
+   exactly the `sound SamplingRate 22222` in `USER1.CFG`.
+   ⚠ **AND THEN IT WEDGES.** The guest spins in REAL MODE at `0x34d3:0x06b1` with that
+   DMA block queued and never draining (`irq0=1 intpend=1`) until the watchdog kills it.
+   The driver is polling for a completion that never arrives: **the nested V86 loop that
+   `0301/0302` runs a real-mode procedure in does not appear to deliver the SB's IRQ**,
+   so `v86_run` never returns and the poll never ends. ▶ THAT is the next gap.
+
+   ⇒ Committed behind **`simintrefl.flag`, OFF by default** — a wedge is strictly worse
+   than "renders, silent", and this is the call `wowquiet.txt` / `pitinj.txt` already
+   make. Turn it on to work the audio thread; leave it off to play.
+   ⚠ Only reflects when the GUEST owns the vector (IVT segment != `DOS_HDLR_SEG`).
+   Vectors still pointing at our own stubs keep today's behaviour and stay visible in
+   `STAGE2: simInt (DPMI 0300) UNHANDLED`, which is where the next one will be found.
+
    ## ★ SESSION 59 (earlier) — HOW THE PROBLEM WAS NARROWED
 
    ### ▶ ★★★★★ THE ONE FACT THAT CHANGES THE PROBLEM

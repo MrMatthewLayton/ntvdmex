@@ -4682,6 +4682,13 @@ static DWORD g_ms_i33ax_ovf, g_ms_i33site_n, g_ms_i33site_ovf;
 #define I33_SRC_SIM  3                      /* DPMI 0300 simulate-real-mode-interrupt */
 /* DPMI 0300 (simulate real-mode interrupt) vectors we do NOT service. See the 0300 arm. */
 static DWORD g_simint_unhandled, g_simint_vec[256];
+/* ── ★ simintrefl.flag -- REFLECT DPMI 0300 TO THE GUEST'S OWN REAL-MODE HANDLER.
+     Off by default; see the long note at the reflection site for why. On, it is what
+     makes ZAR program the Sound Blaster at all -- and then wedges it waiting on an SB
+     completion the nested V86 call never delivers. One file, so the audio thread can be
+     picked up without a rebuild. */
+#define SIMINTREFL_FLAG "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\simintrefl.flag"
+static int g_simint_reflect = 0;
 static LONG  g_ms_raw_tot_x, g_ms_raw_tot_y;
 static volatile LONG g_ms_hidden = 1;       /* INT 33h cursor hide-count; 0 => visible */
 
@@ -14991,6 +14998,69 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                         p = zput(p, " BX=0x"); p = zhex(p, VDM_REG(tib, VTIB_EBX) & 0xFFFF);
                         p = zput(p, " CX=0x"); p = zhex(p, VDM_REG(tib, VTIB_ECX) & 0xFFFF);
                         VDM_REG(tib, VTIB_EFLAGS) &= ~1u;          /* default CF=0 (success) */
+                        /* ── ★★★★ 0300 MUST INVOKE THE GUEST'S OWN REAL-MODE HANDLER. ─────
+                             DPMI 0300 is specified as "simulate a real-mode interrupt": take
+                             CS:IP from the REAL-MODE IVT and run the handler there. Ours
+                             services a few vectors host-side (21h, 33h, 10h) and, for
+                             everything else, did nothing while reporting success -- so a
+                             guest that INSTALLS ITS OWN handler and then asks us to call it
+                             was answered "done" and its handler never ran.
+                           ★ ZAR does exactly that (GH #23): `INT 31h 0201` sets the
+                             real-mode INT 66h vector to its own trampoline at
+                             0x34d3:0x01d1, it calls `0300 BL=66h` three times (AX=0300,
+                             0301, 0304 -- an AIL-style private API), and then RESTORES the
+                             vector. Measured: `simInt UNHANDLED int66h x3`, and of 2,386
+                             real-mode calls in a run EVERY ONE went to our own DOS handler
+                             at 0050:0000 -- the Miles driver it loads (SOUND\SBLASTER.DIG,
+                             opened, seeked and read) is never once called, and no SB port
+                             is ever touched.
+                           ► REUSE 0302 RATHER THAN GROWING A SECOND RUN LOOP. 0302 already
+                             does the whole PM->V86->PM round trip with an IRET frame, which
+                             is precisely an interrupt's frame; the only thing 0300 adds is
+                             "and the address comes from the IVT". So write the IVT entry
+                             into the RMCS's CS:IP and let the 0302 arm run it. The printed
+                             `AX=0x00000300 ... -> callRM(iret) 0x34d3:0x01d1` says plainly
+                             what happened.
+                           ⚠ ONLY WHEN THE GUEST OWNS THE VECTOR. If the IVT still points at
+                             one of OUR stubs (DOS_HDLR_SEG) there is no guest handler to
+                             run, and reflecting would re-enter our own BOP through a path
+                             it was not written for. Those keep today's behaviour and stay
+                             visible in `STAGE2: simInt (DPMI 0300) UNHANDLED`, which is
+                             where the next one of these will be found. */
+                        /* ── ⚠⚠ ...AND IT IS OFF BY DEFAULT, BECAUSE IT CURRENTLY WEDGES ZAR.
+                             MEASURED, and the result is worth the knob. With it on, ZAR's
+                             INT 66h handler runs and **the Sound Blaster is programmed for
+                             the first time** -- `SNDIO out 0x22c`, `sb{blocks=1
+                             rate=0x56ce}` = 22222 Hz, exactly the `sound SamplingRate
+                             22222` in USER1.CFG. So the reflection is right and it is what
+                             stands between this host and ZAR's audio.
+                           ⚠ But the guest then SPINS IN REAL MODE at 0x34d3:0x06b1 with a
+                             DMA block queued and never draining (`left=0x10 len=0x10
+                             blocks=1`, `irq0=1 intpend=1`), until the watchdog kills it.
+                             The driver is waiting on a completion that never arrives: the
+                             nested V86 loop 0301/0302 runs the real-mode procedure in does
+                             not appear to deliver the SB's IRQ, so `v86_run` never returns
+                             and the poll never ends. That is the NEXT gap, not this one.
+                           ► A wedge is strictly worse than "renders, silent", so the
+                             correct default is OFF and the correct shape is a one-file
+                             switch -- the same call `wowquiet.txt` and `pitinj.txt` make.
+                             ▶ Turn it on to work the audio thread; leave it off to play. */
+                        if (ax == 0x0300 && g_simint_reflect) {
+                            DWORD iv = VDM_REG(tib, VTIB_EBX) & 0xFF;
+                            if (iv != 0x21 && iv != 0x33 && iv != 0x10) {
+                                WORD hs = peekw(iv * 4 + 2), ho = peekw(iv * 4);
+                                if (hs && hs != DOS_HDLR_SEG) {
+                                    DWORD esb0 = dpmi_sel_base((WORD)VDM_REG(tib, VTIB_ES));
+                                    volatile BYTE *r0 =
+                                        (volatile BYTE *)(ULONG_PTR)dpmi_rmcs_ptr(tib, esb0);
+                                    *(volatile WORD *)(r0 + 0x2C) = hs;   /* RMCS.CS */
+                                    *(volatile WORD *)(r0 + 0x2A) = ho;   /* RMCS.IP */
+                                    p = zput(p, " [simInt 0x"); p = zhexb(p, (BYTE)iv);
+                                    p = zput(p, " -> the guest's OWN real-mode handler]");
+                                    ax = 0x0302;      /* ...which is a real-mode call with an IRET frame */
+                                }
+                            }
+                        }
                         switch (ax) {
                         case 0x0400:                               /* get DPMI version */
                             VDM_SET16(tib, VTIB_EAX, 0x005A);      /* 0.90 */
@@ -18795,6 +18865,18 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     /* Full INT 21h call trace, opt-in per run: it is a differential instrument, not a
        default. See the trace at the top of dos_int21(). */
     m.trace_all = (GetFileAttributesA(DOSTRACE_FLAG) != INVALID_FILE_ATTRIBUTES);
+    /* simintrefl.flag: reflect DPMI 0300 to the guest's own real-mode handler. Say so,
+       because it is off by default and its effect (ZAR programs the SB, then wedges on
+       an SB completion) is dramatic enough that a silent run would be a mystery. */
+    g_simint_reflect = (GetFileAttributesA(SIMINTREFL_FLAG) != INVALID_FILE_ATTRIBUTES);
+    if (g_simint_reflect) {
+        char sb2[224], *sq = sb2;
+        sq = zput(sq, "STAGE1: simintrefl.flag -- DPMI 0300 WILL reflect to the guest's own "
+                      "real-mode IVT handler. Not the default: it makes ZAR program the SB "
+                      "and then wedges it waiting on a completion. See the note at the site."
+                      "\r\n");
+        log_append(LOG_PATH, sb2, sq); serial_out(sb2, sq);
+    }
     m.coninnb = host_coninnb;                   /* AH=06 DL=FF non-blocking read */
     m.conpeek = host_conpeek;                   /* AH=0B/06 non-blocking status  */
 
