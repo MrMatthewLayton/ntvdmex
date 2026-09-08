@@ -345,14 +345,46 @@ and matches the 6.22 oracle row for row (session 53)** — but `MEM /C` still re
    turn: **zero `IRQN-REFUSE` lines**, i.e. the gate never once saw a pending device IRQ
    while the driver waited. A cooperative fix structurally cannot reach this.
 
-   ▶ **THE REMAINING BLOCKER, stated exactly:** asynchronous delivery attempts **once**,
-   at the instant of the raise, and a single-cycle SB transfer raises **exactly one**
-   IRQ. A device IRQ that could not be placed then is never offered again.
-   ⇒ **Next: a retry for latched device IRQs** (`g_irqn_pending` already persists) from a
-   thread that is not the guest's. ⚠⚠ That is the `SuspendThread`-under-`g_lock` path
-   this project has been burned on twice (session 22's ~800 unbounded attempts; the
-   throttle that cost Skyroads a fifth of its clock). **It wants its own session with a
-   measured A/B, not the tail of a long one.**
+   ### ▶ THE ASYNC RETRY WAS ALSO TRIED. IT HELPS DOOM AND CANNOT HELP ZAR.
+
+   A device IRQ got exactly ONE async attempt, at the raise instant; if the CPU thread
+   was in host code that microsecond it was lost for ever. Now retried **once per PIT
+   sync**, first pending hooked line only, nothing at all when none is outstanding
+   (session 22's disaster was ~800 unbounded `SuspendThread` round trips *per sync*;
+   this is ~2 **a second**). Done in `host_pit_sync`, which already holds `g_lock` —
+   and holding it is what guarantees the thread we suspend is not holding it.
+   ✅ **Doom: `try=0x5f ok=0x10` and `try=0x6f ok=0x10` — 16 SB block-completion
+   interrupts a run that were previously LOST are now delivered**, reproducibly.
+   ⚠ `REPLAYED_LOUD` deserved care (a late IRQ is a plausible late-refill mechanism).
+   Six runs settle it as variance: **without** 112/120/152, **with** 157/79 — the retry
+   runs bracket the others on both sides. `idle` at its lowest, everything else flat.
+
+   ### ▶ ★★★★★ AND NOW THE ZAR AUDIO BLOCKER IS FULLY EXPLAINED
+
+   With `simintrefl.flag` on, the **heartbeat** (the only instrument that survives a
+   wedge — STAGE2 never prints when the watchdog kills the run, so the counters were
+   added there) reads:
+
+   ```
+   r5=0x1   rtry=0x65f/0x0   why=0x14
+   ```
+
+   IRQ 5 raised **exactly once**, the retry offers it **1631 times**, **every** offer
+   refused with `why=0x14` = *"the CPU thread was in HOST code"*. And the log's last
+   line is the **third** reflected INT 66h call (`AX=0x0304`) with **no matching
+   `0301 -> RM proc returned`** — the previous two both returned.
+
+   ⇒ **That call entered the guest's real-mode handler, programmed the SB, and never
+   came back. The host thread is blocked inside `v86_run`**, so `GetThreadContext`
+   reports the syscall frame rather than the V86 guest: the injector can neither SEE nor
+   REACH it. Cooperative delivery cannot help either — the loop gets no further turn
+   (zero `IRQN-REFUSE` lines). **Neither delivery path can reach a real-mode procedure
+   that spins without trapping.**
+
+   ▶ The architecturally right answer is the kernel's own interrupt assist via the
+   `FIXED_NTVDMSTATE` pending bits. ⚠⚠ But **"Never poke `[0x714]|=1`"** is an explicit
+   prior finding (VME/VIF gating) — so that wants its own session, deliberately, not the
+   tail of this one. ZAR renders and is silent; that is a good place to stand.
 
    ⚠ Doom re-gated and the change is **provably inert** for it: Doom only ever selects
    mixer index `0x82` (10 times a run), never `0x80`/`0x81`, so no path reaches it.
