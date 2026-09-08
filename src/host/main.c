@@ -18789,8 +18789,30 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             } else if (bn == 0x15) {
                 unsigned ah15 = (VDM_REG(tib, VTIB_EAX) >> 8) & 0xFF;
                 if (ah15 == 0x88) {                /* extended memory, KB */
+                    /* ⚠ THIS ARM IS LOGGED BECAUSE ITS SILENCE COST A WRONG CONCLUSION.
+                         A serviced call that leaves no trace is indistinguishable in a
+                         log from one that never happened, and session 58 read exactly
+                         that backwards twice while chasing ZAR (GH #23): the absence of
+                         an AH=88h line was taken as "the guest never asks", then as
+                         "the guest must ask". It does NOT ask -- DOS/16M installs its
+                         OWN protected-mode INT 15h handler (that is what its 33 INT 31h
+                         AX=0205 calls are for) and answers the extended-memory question
+                         internally, so this arm is never reached by that guest at all.
+                       ⚠ AND A REAL DEFECT IS RECORDED HERE RATHER THAN QUIETLY FIXED:
+                         0x3C00 "matching the XMS pool" hands the SAME memory out twice
+                         -- once here as raw extended memory a caller may take for
+                         itself, and again through XMS. A real machine cannot do that,
+                         because HIMEM.SYS hooks AH=88h and reports what is left after it
+                         has claimed extended memory, which is ZERO. Changing it was
+                         tried and REVERTED: it is inert for ZAR (never called) and is an
+                         unvalidated behaviour change for every other guest. It is worth
+                         doing deliberately, with Doom and the DOS batteries re-gated on
+                         it -- on its own merits, not as a ZAR fix. */
                     BSETAX(0x3C00);                /* 15 MB, matching the XMS pool */
                     BCF_CLR();
+                    { char x8[128], *x8q = x8;
+                      x8q = zput(x8q, "  INT15 AH=88h extended memory -> 0x3C00 KB\r\n");
+                      log_append(LOG_PATH, x8, x8q); serial_out(x8, x8q); }
                 } else if (ah15 == 0x86) {         /* wait CX:DX microseconds */
                     BCF_CLR();                     /* the PIT already paces us */
                 } else if (ah15 == 0xC0) {         /* get system config table */
@@ -20646,6 +20668,22 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                                   p = zput(p, "\r\n       @es:0000 = ");
                                   if (eb && host_readable((const void *)eo, 0x40))
                                        p = zdump(p, (const void *)eo, 0x40);
+                                  else p = zput(p, "<unreadable>"); }
+                                /* ── ★ AND THE SAME FOR DS, for the same reason. ES is dumped
+                                     because a #GP is usually ABOUT a selector; DS is dumped
+                                     because the bottom of a guest's data segment is where its
+                                     own state lives, and "which branch did it take, and on
+                                     what" is answerable from those bytes when it is not
+                                     answerable from the registers. (ZAR, GH #23: DOS/16M keeps
+                                     its memory-manager INTERRUPT VECTOR at ds:0x34 -- 0x15
+                                     means "size memory with INT 15h AH=88h", anything else
+                                     means "use my own manager", and the second path is the one
+                                     that faults. One dump says which we are on.) */
+                                { DWORD db = dpmi_sel_base((WORD)(VDM_REG(tib, VTIB_DS) & 0xFFFF));
+                                  const volatile BYTE *do_ = (const volatile BYTE *)(ULONG_PTR)db;
+                                  p = zput(p, "\r\n       @ds:0000 = ");
+                                  if (db && host_readable((const void *)do_, 0x40))
+                                       p = zdump(p, (const void *)do_, 0x40);
                                   else p = zput(p, "<unreadable>"); }
                                 { DWORD fb2 = dpmi_sel_base(fr[4]);
                                   const volatile BYTE *fi2 =
