@@ -232,6 +232,47 @@ static void sb_in(void *self, uint16_t port, uint8_t w, uint32_t *v)
             if (!st82) st->mix82_zero++;
             *v = st82;
         }
+        /* ── ★★★★ 0x80 / 0x81 ARE "WHICH IRQ AND DMA AM I ON?", AND WE ANSWERED
+             **NONE**. (session 59) ──────────────────────────────────────────────────
+             These fell through to the plain mixer RAM, which is zero until something
+             writes it -- and on a real SB16 a zero here does not mean "default", it
+             means NO IRQ SELECTED and NO DMA CHANNEL SELECTED. A driver that
+             autodetects instead of trusting BLASTER therefore learns the card is
+             unconfigured, and any transfer it starts can never be announced to it.
+           ★ MEASURED ON ZAR (GH #23). Its Miles driver resets the DSP (we answer 0xAA
+             correctly), asks for the version, then:
+                 out 224 <- 80 / in 225 -> 00      "which IRQ?"  -> none
+                 out 224 <- 81 / in 225 -> 00      "which DMA?"  -> none
+             ...and then programs `40 D3` (22222 Hz) and `14 0F 00` -- an 8-bit
+             SINGLE-CYCLE 16-byte transfer, which is the classic init-time DMA/IRQ
+             SELF-TEST -- and waits for a completion interrupt it has no idea how to
+             receive. The guest spins in real mode at 0x34d3:0x06b1 until the watchdog
+             kills it. The block itself is fine: `blocks=1` and xfer_mode back to
+             SB_XFER_IDLE is exactly what a completed single-cycle transfer looks like.
+           ► ANSWER FROM THE CARD'S OWN CONFIGURATION, DERIVED RATHER THAN STORED, so
+             it cannot drift from st->irq / st->dma8 / st->dma16 -- which are the same
+             numbers that go into BLASTER (see dos_env.h and the note in main.c). A
+             guest that reads these and a guest that parses BLASTER must not be told
+             two different things about one card.
+           ⚠ The bit assignments are the SB16's and are not a free choice:
+             0x80 bit0=IRQ2 bit1=IRQ5 bit2=IRQ7 bit3=IRQ10;
+             0x81 bit0=DMA0 bit1=DMA1 bit3=DMA3 bit5=DMA5 bit6=DMA6 bit7=DMA7.
+             An IRQ or channel outside those sets has no encoding, so it reports 0 --
+             the honest answer, and the same one the hardware would give. */
+        else if (st->mix_index == 0x80) {
+            uint8_t m = 0;
+            if (st->irq == 2)  m = 0x01;
+            else if (st->irq == 5)  m = 0x02;
+            else if (st->irq == 7)  m = 0x04;
+            else if (st->irq == 10) m = 0x08;
+            *v = m;
+        }
+        else if (st->mix_index == 0x81) {
+            uint8_t m = 0;
+            if (st->dma8 < 4)  m |= (uint8_t)(1u << st->dma8);
+            if (st->dma16 >= 5 && st->dma16 <= 7) m |= (uint8_t)(1u << st->dma16);
+            *v = m;
+        }
         else
             *v = st->mix[st->mix_index];
         break;
