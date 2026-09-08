@@ -1772,6 +1772,11 @@ static HMENU        g_savedmenu;            /* stashed menu while hidden        
    this an SB transfer completes, raises IRQ 5, and the game waits forever for an
    interrupt the host quietly dropped. */
 static volatile LONG  g_irqn_pending[8];
+/* Retry accounting for the one-attempt-per-sync device-IRQ offer in host_pit_sync.
+   `try` counts syncs where something was pending and we spent a round trip on it;
+   `ok` counts the ones that landed. try==ok==0 is the healthy steady state -- it
+   means every device IRQ was placed at its raise instant and this cost nothing. */
+static DWORD g_irqn_retry_try = 0, g_irqn_retry_ok = 0, g_irqn_retry_why = 0;
 static DWORD          g_irq_raised[8];      /* vdd_raise_irq calls, per line */
 static DWORD          g_irq_raised_any = 0;
 /* Async preemption (session 11). g_hcpu is a handle to the thread that runs the guest
@@ -4264,7 +4269,11 @@ static DWORD WINAPI heartbeat_thread(LPVOID pv)
     int n;
     (void)pv;
     for (n = 0; n < 80 && g_running; ++n) {
-        char b[256], *q = b;
+        /* ⚠ 384, NOT 256. This line is already ~215 characters, and a fixed log buffer
+             in this file is a silent budget -- adding one field to a 247-char line in a
+             char[256] killed the host earlier this session (see the note on
+             dpmi_dispatch_to_pm_handler's lb). The fields below add ~36. Count first. */
+        char b[384], *q = b;
         DWORD cs = 0, ip = 0, efl = 0;
         if (g_tib_dbg) {
             cs  = VDM_REG(g_tib_dbg, VTIB_CS)  & 0xFFFF;
@@ -4278,6 +4287,14 @@ static DWORD WINAPI heartbeat_thread(LPVOID pv)
         q = zput(q, " io=0x");       q = zhex(q, g_ev_io);
         q = zput(q, " irq0=0x");     q = zhex(q, g_irq0_inj);
         q = zput(q, " irqn=0x");     q = zhex(q, g_irqn_inj);
+        /* ► THE HEARTBEAT IS THE ONLY INSTRUMENT THAT SURVIVES A WEDGE -- STAGE2 never
+             prints when the watchdog kills the run, which is exactly the case being
+             debugged. `r5` is raises on line 5 (the SB); `rtry` is the async retry
+             offer/land pair. */
+        q = zput(q, " r5=0x");       q = zhex(q, g_irq_raised[5]);
+        q = zput(q, " rtry=0x");     q = zhex(q, g_irqn_retry_try);
+        q = zput(q, "/0x");          q = zhex(q, g_irqn_retry_ok);
+        q = zput(q, " why=0x");      q = zhex(q, g_irqn_retry_why);
         q = zput(q, " intpend=0x");  q = zhex(q, g_ev_intpend);
         /* SB transfer state on the beat. irqn_refused=0 across 4.6M gate evaluations
            proves the completion IRQ was raised only AFTER the exec loop ended, so what
@@ -7318,6 +7335,42 @@ static void host_pit_sync(void)
           }
           if (clocks > PIT_INPUT_HZ) clocks = PIT_INPUT_HZ;   /* cap a long stall at 1 s */
           vdd_pit_add_clocks(&g_pit, (uint32_t)clocks);
+      } }
+    /* ── ★★★★ A DEVICE IRQ GETS EXACTLY ONE ASYNCHRONOUS ATTEMPT, AT THE INSTANT IT IS
+         RAISED -- AND THAT IS NOT ENOUGH FOR A ONE-SHOT INTERRUPT. ────────────────────
+         host_irq_sink tries once when the device raises, and if the CPU thread happens
+         to be in HOST code at that microsecond the attempt bails (why=0x14) and nothing
+         ever offers it again. For a line that re-raises (Doom's auto-init SB fires 86
+         times a second) that is invisible. For a ONE-SHOT it is fatal.
+       ★ MEASURED ON ZAR (#23): its Miles driver's init-time DMA/IRQ self-test is an
+         8-bit SINGLE-CYCLE transfer, so the SB raises IRQ 5 exactly ONCE. The block
+         drains, the IRQ is raised, `ASYNC-EARLY bail irq=05 why=0x14`, and the driver
+         then waits for ever on a MEMORY flag its ISR would have set -- so it never traps
+         again and no cooperative path can reach it either (measured: zero IRQN-REFUSE).
+       ► The latch already persists (g_irqn_pending, cleared only on delivery), so the
+         missing piece is merely to OFFER IT AGAIN. Here, because this already runs on
+         the pacer thread and already holds g_lock -- and holding the lock is precisely
+         what guarantees the thread we are about to suspend is not holding it (see the
+         long note in host_irq_sink; do not move this outside).
+       ⚠⚠ ONE ATTEMPT PER SYNC, AND ONLY WHILE SOMETHING IS ACTUALLY PENDING. Session
+         22's disaster was ~800 unbounded SuspendThread round trips per sync under this
+         lock, and the throttle written to stop it later cost SKYROADS a fifth of its
+         clock. So: at most one retry per sync, the first pending hooked line only, and
+         nothing at all in the overwhelmingly common case where no device IRQ is
+         outstanding -- which is a single predictable branch, not a syscall. */
+    { int q;
+      for (q = 2; q < 8; ++q) {
+          if (!g_irqn_pending[q]) continue;
+          if (!vdd_pic_can_deliver(&g_pic, (uint8_t)q)) break;
+          ++g_irqn_retry_try;
+          if (g_qi_susp && async_inject_irq((unsigned)q)) {
+              InterlockedExchange(&g_irqn_pending[q], 0);
+              ++g_irqn_retry_ok;
+          }
+          /* WHICH CLAUSE SAID NO. 1597 refusals with no reason is not a measurement;
+             async_inject_irq already records one, so keep the last of them. */
+          else g_irqn_retry_why = g_async_why;
+          break;                  /* one per sync, pending or not: see the note above */
       } }
     HOST_UNLOCK();
 }
@@ -22273,6 +22326,10 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
               p = zput(p, "=");              p = zhex(p, g_coop_dma_polls_dev[dq]); } }
         p = zput(p, " in_async_isr=");  p = zhex(p, g_dmapoll_in_async);
         p = zput(p, " mainline=");      p = zhex(p, g_dmapoll_mainline);
+        p = zput(p, "\r\nSTAGE2: devirq async retry (one per sync): try=");
+        p = zhex(p, g_irqn_retry_try);
+        p = zput(p, " ok="); p = zhex(p, g_irqn_retry_ok);
+        p = zput(p, " (0/0 = every device IRQ landed at its raise instant)");
         p = zput(p, "\r\nSTAGE2: devirq (cooperative PM retry): inj=");
         p = zhex(p, g_pm_devirq_inj);
         p = zput(p, " fail=");  p = zhex(p, g_pm_devirq_fail);
