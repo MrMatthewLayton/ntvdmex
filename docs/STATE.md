@@ -5,11 +5,13 @@
 > what to do next.
 
 - **Last updated:** 2026-09-08 (session 58)
-- **Score: 85.4%** (`./tools/score/score.py` — run it, do not quote this line).
+- **Score: 86.9%** (`./tools/score/score.py` — run it, do not quote this line).
   Session 53 moved it 72.4 → 79.6; session 54 → 80.2; session 55 → 83.1;
-  session 56 → 85.4; **session 57 moved it not at all, on purpose** — it built
-  the modal dialog loop, and `guests` only counts a guest a human has confirmed.
-  See the session 57 block for what that leaves and what to do for the number.
+  session 56 → 85.4; s57 and **s58 moved it not at all** — s57 built the modal
+  dialog loop, s58 spent the day on ZAR (#23). `guests` only counts a guest a
+  human has confirmed, and `guest-zar` is BINARY: playable or not. Four real
+  defects were fixed in s58 and the number did not move by one point. That is
+  the model working, not the model failing — see the session 58 block.
 - ⚠ **The rig was shut down at the end of session 54.** Re-mount the share
   (`mount_smbfs -N //guest@192.168.1.29/ntvdmex /tmp/xpshare`) and **check
   `ntvdmhost.exe /status` before believing any run** — see the hazard below.
@@ -171,7 +173,7 @@ Win16 push, and should not be quoted.)
 
 | Bar | Where it is | Est. |
 |---|---|---|
-| **The original DOS games bar** — Doom / Skyroads / ZAR, flawless sound | Two of three fully playable and confirmed by hand. ZAR is the gap (VBE 2.0 hi-colour + linear framebuffer). | **~85%** |
+| **The original DOS games bar** — Doom / Skyroads / ZAR, flawless sound | Two of three fully playable and confirmed by hand. ZAR is the gap, and **the gap is NOT VESA** (s58): it ships `VGA_320x200` and dies long before any video call. It now banners and reaches `Game loading...`, then stalls. | **~85%** |
 | **★ The north star** — MS Paint + Notepad from Windows 3.x | **BOTH RUN AND BOTH DO THEIR JOB, USER-CONFIRMED.** **NOTEPAD IS A WORKING TEXT EDITOR**: opens through the real XP file dialog, you type into it, File > Save writes the text (verified byte for byte). **MS PAINT DRAWS IN COLOUR, KEEPS WHAT IT DRAWS, AND SAVES IT** — every shape tool, the flood fill, persistence across a repaint, and `File > Save As` writing a valid 1680×974 24-bit `.BMP` to the chosen directory; UI pixel-identical to stock ntvdm. **Paint's GDI surface is 67/76 and its USER surface 88/92; PBRUSH.DLL is 16/16.** ⚠ Not yet exercised: the Text tool, the cutout tools, Edit > Paste, printing. **The Alt-menu defect is CLOSED (session 53)** — Paint holds the mouse capture and USER32 will not open a menu while one is held. | **~90%** |
 | **The full vision** — an `ntvdm` superset on XP-32 | Everything above, plus the host UI, minus the standing DOS defects and M7/M8. **This is the bar `tools/score/score.py` measures, and it is the only one of the three with a model behind it rather than a judgement.** | **79.6%** |
 
@@ -215,7 +217,7 @@ and matches the 6.22 oracle row for row (session 53)** — but `MEM /C` still re
 | ~~No INT 13h / INT 25h / 26h~~ | **DONE** (#44) — `disk-int13` scores 100%. This row was stale. |
 | ~~No TSRs~~ | **DONE** (#49) — `tsr` scores 100%. This row was stale. |
 | **`MEM /C` reports wrong figures** | The main report is correct and matches the 6.22 oracle row for row (#47, s53). `MEM /C` still says MSDOS is 1,028K, contradicting its own summary. |
-| **ZAR** | Needs VBE 2.0 hi-colour + linear framebuffer. |
+| **ZAR** | ⚠ **NOT a VESA gap — that entry was wrong and is corrected in the session 58 block.** ZAR's own `USER1.CFG` ships `VGA_320x200` (mode 13h, supported since M3) and it never calls `INT 10h` at all. As of s58 it banners and reaches `Game loading...`, then stops after ~4.8 MB of loading. Four defects were fixed to get there, all ours. |
 | **24 of 47 settings** | Stored in the registry, honoured by nothing (was 40 of 46 before session 53). The three `settings_apply*` functions in `src/host/main.c` are the honest list of what actually works, and the comment above them now names *why* each remaining one is not there. |
 
 ---
@@ -239,206 +241,203 @@ and matches the 6.22 oracle row for row (session 53)** — but `MEM /C` still re
 
    ---
 
-   ## ★ SESSION 58 — 86.9% (unchanged by this work, and that is the honest number)
+   ## ★ SESSION 58 — 86.9% (unchanged, and four real defects were fixed anyway)
 
-   **The user set the day's goal at >95% and chose ZAR (#23) as the first target.**
-   The arithmetic was reported before starting and is worth keeping: at 86.9%,
-   +8.1 was needed and only **13.15 points of work remain in the whole model**, so
-   the day had to capture ~62% of everything left. It did not.
-
-   ### ▶ ★★★★★ ZAR'S BLOCKER WAS NEVER THE VESA GAP THE MODEL ATTRIBUTES TO IT
-
-   `guest-zar` has always been filed as *"needs VBE 2.0 hi-colour + LFB"*. **That is
-   wrong and should not be planned around.** ZAR's own `USER1.CFG` ships
-   `graphics VideoMode VGA_320x200` — mode 13h, which this host has supported since
-   M3 — and the run dies **before any video mode is set at all** (`STAGE2: mode
-   sets: none`, every run). The VESA work is not on ZAR's critical path.
-
-   ### ▶ ★★★★★ A 32-BIT DPMI CLIENT WAS GETTING A 16-BIT EXCEPTION FRAME (FIXED)
-
-   **The rule was already written down in this file's own source, and applied to one
-   path of two.** `dpmi_dispatch_to_pm_handler()` documents it for INTERRUPT frames:
-   *the frame width follows the CLIENT'S MODE, not the handler selector's D bit.*
-   The EXCEPTION frame never got the same treatment — it was built and read as eight
-   WORDs whatever the client was. ZAR looped on `#GP` until the log capped at 47 MB.
-
-   **Confirmed against the binary, not reasoned.** `DOS4GW.EXE+0x8896` is the `#GP`
-   handler ZAR registers late (`setEXC 0x0d = 0x0f:0x6abb`, overriding its own
-   generic one), and it is eleven bytes long before it touches memory:
+   ### ▶ ★★★★★ RESUME HERE: ZAR BANNERS AND LOADS. IT DOES NOT RUN.
 
    ```
-   1e 56 55        push ds / push si / push bp
-   8b ec           mov  bp,sp
-   8b 76 12        mov  si,[bp+0x12]   ; frame[+0x0C] = faulting EIP
-   8e 5e 16        mov  ds,[bp+0x16]   ; frame[+0x10] = faulting CS
-   80 3c 07        cmp  byte [si],0x07 ; `pop es`?   <-- faulted here, DS=0
-   80 3c 1f        cmp  byte [si],0x1f ; `pop ds`?
-   5d 5e 1f 66 cb  pop bp/si/ds / RETFD
+   DOS/4GW Protected Mode Run-time  Version 1.97
+   Copyright (c) Rational Systems, Inc. 1990-1994
+
+   Z.A.R.  Demo Version  v1.02 (net:v1.00)  Apr 06 1998 02:47:03
+   Copyright (C) 1997,1998 Maddox Games Ltd., Auric Vision Ltd.
+
+   Game loading...
    ```
 
-   `+0x0C`/`+0x10` are the DPMI **32-bit** frame's EIP and CS slots; our frame was
-   sixteen bytes, so `mov ds,[bp+0x16]` read past the end of it and loaded **zero** —
-   and the handler faulted on its own first memory read, which re-entered it, for
-   ever. `66 cb` (RETFD, eight bytes popped) says the same thing independently.
+   That is on the XP desktop, in our VDM window. It was a 47 MB `#GP` loop this
+   morning. **It still does not run** — see "where it stops" below.
 
-   **MEASURED: 47,089,105 bytes of log → 252,718; thousands of faults → two, both
-   returning through `EXC RETURN(32)`; the run reaches `STAGE2: complete`.**
-   Regressions all clean: off-VM battery 0 failures; **Doom all ten init markers and
-   `STAGE2: complete`, and it takes THREE exceptions through the changed path** so it
-   is exercised rather than bypassed; WOW gate `110/113/32 · 0001:229C`, the s56/s57
-   baseline exactly (krnl386 is a 16-bit client and keeps the 16-bit frame).
+   ⚠ **THE DAY'S GOAL WAS >95% AND THE SCORE DID NOT MOVE AT ALL.** That is the
+   honest outcome and it is worth understanding rather than explaining away:
+   `guest-zar` is BINARY (playable or not), everything else touched was already at
+   1.0, and the user's own framing is the right one — *"if ZAR doesn't work then
+   NTVDMEX doesn't work"*, because the IFEO key routes EVERY DOS launch through us,
+   so a program stock runs and we refuse is a REGRESSION ON THE USER'S MACHINE, not
+   a missing feature. ▶ **The score model under-prices this**: `guest-zar` sits at
+   w3 in the DOS section, priced like a third game, when it is really evidence for
+   or against the superset claim the whole project rests on. Worth a deliberate
+   model change; it is the user's call, not one to slip in.
 
-   ### ▶ WHERE ZAR STOPS NOW, AND IT NAMES ITSELF ON THE DESKTOP
+   ### ▶ FOUR DEFECTS FIXED, IN THE ORDER THEY WERE FOUND
 
+   **1. A 32-bit DPMI client got a 16-bit exception frame.** The rule was already
+   written in our own source for INTERRUPT frames (*"the frame width follows the
+   CLIENT'S MODE, not the handler selector's D bit"*) and had never been applied to
+   the EXCEPTION frame. Confirmed against the binary: DOS4GW's `#GP` handler reads
+   `[bp+0x12]`/`[bp+0x16]` = frame `+0x0C`/`+0x10`, the DPMI **32-bit** EIP and CS
+   slots, and leaves by `66 cb` (RETFD, eight bytes). Our 16-byte frame had nothing
+   at `+0x10`, so it loaded DS=0 and faulted on its own first memory read, for ever.
+   47,089,105 bytes of log → 252,718.
+
+   **2. ★★★★★ OUR INT-SITE PATCHER CORRUPTED A CALL — THIRD INSTANCE.**
+   `dpmi_patch_code_region` rewrote a call's DISPLACEMENT:
    ```
-   Error [35]: General Protection Fault in DOS4GW.EXE at 01A7:1B7D
-   code=0000 ss=001F ds=001F es=0000
-   ax=0000 bx=0060 cx=0010 dx=0000 sp=136E bp=1380 si=0000 di=1026
+   file  cs[0x5682] = e8 cd e4   call 0x3b52   (rel16 = 0xe4cd)
+   guest cs[0x5682] = e8 c4 c4   <- `cd e4` read as INT E4h, made a BOP
    ```
+   The x86len vote passed it correctly on its own terms — everything in front is
+   DATA (zeros), and an odd-aligned stream decodes `00 e8` as `add al,ch` and lands
+   exactly there. **The vote is a heuristic about where instructions START; it
+   cannot know a region is not code at all.** The corrupted call landed at `0x1b49`,
+   MID-INSTRUCTION, decoded as `mov ah,al / les ax,[di]`, RESYNCHRONISED at
+   `0x1b4f`, and so skipped both the `[0x34]` test and the `int 15h` the real
+   routine begins with — which is why neither ever appeared in the log and why two
+   earlier readings of this bug were wrong.
+   ⇒ **THE 64K SCANNER ALREADY HAD THE ANSWER AND THIS SCANNER NEVER GOT IT**:
+   *evidence only — patch a vector only with a guest that provably needs it and a
+   service arm to receive it.* Now restricted to the vectors `dpmi_service_pm_int`
+   actually implements: `{08,10,11,15,16,1A,21,2F,31,33,41}`. Not patching is SAFE
+   (a raw INT in PM is serviced out of the `#GP`, session 34) — patching is an
+   OPTIMISATION and it has now cost three guests (Doom s21, CALC/TASKMAN/CARDFILE
+   s55, ZAR s58).
 
-   `1B7A` was the `pop es` the handler just fixed up (it stores 0 over the bad
-   selector, taking the faulting stack from frame `+0x18`/`+0x1c` — slots that only
-   exist in the 32-bit frame, so this half is working). `1B7D` is three bytes later,
-   `26 89 47 02` = `mov es:[bx+2],ax`, faulting because ES is now the null selector.
+   **3. `INT 31h AX=0200h/0201h` — get/set REAL-MODE interrupt vector.** DPMI 0.9
+   core, and we had NEITHER half while the protected-mode twins `0204`/`0205` worked
+   all around them. DOS/16M reads all 256 and installs 39; every one was refused.
+   The IVT is the store, not a shadow table — V86 `int nn`, `INT 21h AH=35h` and
+   this call must not disagree. Doom exercises it (99 get, 2 set).
 
-   **The root cause is upstream and is characterised.** The extender is **not plain
-   DOS/4GW — it is Rational DOS/16M** (`DOS/16M Protected Mode Run-Time` in
-   `DOS4GW.EXE`), and the faulting routine is its **extended-memory sizing** code:
+   **4. `INT 21h AX=FF80h` — "lock this region".** DOS/16M requires it and reads
+   CF=1 as fatal (`jae ok / push 0x22 / call fatal`; 0x22 is message 34 = `DOS/16M
+   error: [34] DPMI host error (cannot lock stack)`). Answered CF=0, for the reason
+   our own `INT 31h AX=0600` arm already gives: guest memory here is never paged, so
+   a lock is already true. Scoped to FF80h exactly.
 
-   ```
-   1b41: cmp byte [0x34],0x15    ; a memory-SOURCE enum, not 0x15 in our runs
-   1b46: jne 1b4f                ;   -> so INT 15h AH=88h is never even called
-   1b48: mov ah,0x88 / int 15h
-   1b4c: add ax,0x400
-   1b4f: bx = ([0x9a]:[0x98]) >> 6      ; its own count, paragraphs -> KB
-   1b5f: cmp ax,bx / je 1b70
-   1b65: cmp byte [0x34],0x15 / jne 1b70
-   1b6c: xor ax,ax / cwd / ret   ; the ONLY exit that avoids what follows
-   1b70: mov bx,0x60 / push 8 / pop es / mov es:[bx+2],ax ...
-         ... mov es,bx           ; ES = 0x60
-   ```
+   **5. ★★★★★ THE SECOND PM RUN LOOP HAD NO FAULT ARM — this is the one that got
+   the banner.** `dpmi_dispatch_to_pm_handler` runs the client's own INT handler to
+   completion in a NESTED protected-mode loop. It handles PMRET, event 3 and I/O,
+   then hands everything else to `dpmi_service_pm_int` — and never had an arm for
+   THAT HANDLER FAULTING. The kernel reflects such a fault onto our fault-site stubs
+   as usual, but here the BOP was read as an interrupt: `dpmi_service_pm_int` saw the
+   stub's own `C4 C4 57` and dispatched it to the WOW handler, where **0x57 is the
+   WOW callback id — a genuine collision with `DPMI_FAULT_BOP`**. Verdict
+   "UNIMPLEMENTED, STEPPED OVER", exception never delivered, guest re-executed the
+   site for ever. Measured: `cs=0x017f == g_dpmi_flt_code_sel`, `eip=0x694 ==
+   DPMI_FAULT_SITE(13)` — a `#GP` inside DOS/16M's INT 21h handler while ZAR asked
+   the DOS version. **That is why ZAR printed nothing**: the call that would have
+   printed was the one being stepped over. Now handed back to the main loop, which
+   owns the whole delivery path. ⚠ Cannot affect WOW: a real WOW trampoline lives in
+   a guest 16-bit code selector, never in `g_dpmi_flt_code_sel`. Doom fires the new
+   arm ZERO times.
 
-   Selectors **8** and **0x60** are identity-mapped descriptor numbers — DOS/16M's
-   own **native** table, where selector N covers linear N·16. They are not DPMI
-   selectors and never can be under a VDM, where every client selector this host
-   hands out is `(idx<<3)|7` (measured: it allocated `0x18f..0x1b7` and `0x1c7`, and
-   the initial ones are `0x0f/0x17/0x1f`). So DOS/16M is running a **native-mode**
-   path while genuinely being a DPMI client — it did the `2F/1687` check, took the
-   mode switch, and uses INT 31h throughout.
+   ### ▶ AND ONE FEATURE: `dosenv.txt`
 
-   ### ▶ ★★★★★ DOS/16M's MEMORY DISPATCH, READ OUT OF THE GUEST RATHER THAN GUESSED
+   The guest environment was a hardcoded four (COMSPEC/PATH/PROMPT/BLASTER), so a
+   DOS program configured through its environment **could not be configured at
+   all**. One `NAME=VALUE` per line, `#` comments. MEASURED, not asserted — the host
+   dumps the block back OUT OF GUEST MEMORY after building it. ⚠ It does NOT fix
+   ZAR (DOS/4GW faults before reading `DOS4GVM`); kept because the gap is real.
+   ⚠ Not applied on the WOW path: that block is krnl386's and it finds its own
+   executable by scanning to the double NUL.
 
-   `dsprobe.txt` (new this session) names guest data offsets and dumps them at every
-   `#GP`, which turned this from inference into measurement. **Two earlier readings in
-   this block were wrong and are corrected here.**
+   ### ▶ WHERE ZAR STOPS NOW — THE NEXT THREAD
 
-   DOS/16M has **four memory back-ends**, each a pair of near pointers installed into
-   `ds:0xaa4`/`ds:0xaa6`, dispatched by `call [0xaa4]` at `0x3bbf`:
+   It loads **~4.8 MB of a data file and then stops progressing**: at 45 s the last
+   read is `pos=0x49d454` (854 reads); at 130 s `pos=0x454c28` (1118 reads).
+   - **It never calls `INT 10h` AT ALL** — no video init is ever attempted.
+   - It settles into polling **its own** `INT 21h` hook (`0x027f:0x0084`) for
+     `AH=2Ch` with NO `0302` round trip — ~156,000 iterations against two buffers
+     (`0x04250030`, `0x0425185a`).
+   - Its idle is a **wait-for-next-tick** loop at `0x03b71317`, which spins only
+     while `elapsed == 0`. NOT a hang: `pmwatch` shows the counter advancing one per
+     ISR (`0x86→0x87 … 0x680→0x681`), `done=1` every time. **Our timer has the
+     effect the guest is waiting for.**
 
-   | installer | `[0xaa4]` | back-end |
-   |---|---|---|
-   | file 28430 | `0x1b41` | raw / native (`push 8 / pop es`) |
-   | file 35549 | `0x3e25` | XMS (`mov ah,0x0C` through the entry from `2F/4310`) |
-   | file 36638 | `0x571d` | **DPMI** (allocates `0x40` paras via `AH=48h`) |
-   | file 38798 | `0x3d15` | VCPI (`INT 67h AX=DE00`/`DE0A`) |
+   ▶ **NEXT STEP:** instrument the TRANSITION where the reads stop, not the steady
+   state. Catch the LAST `AH=3F` read's caller and follow it forward — that is a
+   different dig from anything tried today, and the steady-state sampling has
+   nothing left to give.
 
-   ⚠ **AND THE DPMI ONE IS CORRECTLY SELECTED.** Measured at the fault:
-   `ds[0xaa4]=1d 57` → `0x571d`, `ds[0xaa6]=f4 56` → `0x56f4`. So the earlier reading
-   here — "DOS/16M is running a native-mode path" — was WRONG. It chose DPMI, as it
-   should. Consistent with the run: no `INT 67h` at all and no `2F/4300`/`4310`, i.e.
-   VCPI and XMS were never even probed, because DPMI was found first.
+   ⚠⚠ **REFUTED IN SESSION 58 — DO NOT RE-TRY.**
+   - **CPU speed.** A 1998 game calibrating against 3.3 GHz is the classic failure.
+     `cpuspd.txt=6` (233 MHz, Pentium MMX): identical behaviour.
+   - **The COM port.** The banner says `(net:v1.00)`, ZAR.CFG configures a modem on
+     0x3F8 with an `"ATZ"` string, and s56 made our serial VDD claim that port and
+     compute the equipment word from it — we now advertise TWO serial ports where we
+     advertised none, and a modem init awaiting a reply would hang exactly like
+     this. `net ComPortNum -1`: identical. (ZAR.CFG restored, share and box.)
+   - **Our `AH=2Ch`.** `GetLocalTime`, genuinely advancing — and the guest does not
+     even ask us; it services `AH=2Ch` in its own hook.
+   - **`DOS4GVM=@ZAR.VMC`** (the game's own launcher sets it): reaches the guest,
+     verified in the env block; DOS/4GW faults before reading it.
+   - **`INT 15h AH=88h`.** Chased TWICE and wrong both times. It is never called —
+     DOS/16M installs its own PM INT 15h handler (its 33 `AX=0205` calls) and
+     answers internally. ⚠ The `0x3C00` "matching the XMS pool" answer IS still a
+     real double-count defect (a real HIMEM reports 0 once it owns the memory) —
+     worth fixing deliberately, on its own merits, with Doom re-gated.
+   - **VESA.** `guest-zar` is filed as "needs VBE 2.0 hi-colour + LFB". **It does
+     not.** ZAR's own `USER1.CFG` ships `VGA_320x200` (mode 13h, supported since M3)
+     and it dies long before any video call. Do not plan the VESA work around ZAR.
+   - **MZ+LE page layout.** `DOS4GW.EXE` is a PURE MZ image (`e_lfanew` is garbage);
+     the load module is CONTIGUOUS and `file = guest + 0x9B10` holds throughout. An
+     earlier note here claiming otherwise was wrong — the real error was
+     disassembling from an unaligned offset.
 
-   ▶ **THE REAL ANOMALY IS THAT ITS MEMORY COUNT IS ZERO.** `ds[0x98]:[0x9a] = 0`, and
-   `ds[0xece] = 0` (the value it compared). The routine at `0x1b41` is a memory-size
-   check, and with a zero count the comparison at `0x1b5f` matches, `je 0x1b70` is
-   taken, and `0x1b70` is the block that addresses memory through identity-mapped
-   selectors 8 and 0x60 — which can never be valid under a VDM. So the fault is a
-   CONSEQUENCE of the count being zero, not of the wrong back-end being chosen.
-   The XMS back-end sets that count from the XMS lock address and the raw one sets it
-   to 1 MB; the DPMI back-end should set it from DPMI — and **the run makes no
-   `INT 31h AX=0500` (get free memory info) and no `AX=0501` (allocate) at all.** So
-   the DPMI back-end was installed and then never asked for memory.
+   ### ▶ INSTRUMENTS ADDED (all generic, all earned by getting something wrong)
 
-   ▶ **NEXT STEP, and it is now specific and measured:** find why the DPMI back-end
-   (`0x571d`) is never invoked to populate `ds:0x98`, and how control reaches `0x1b70`
-   without passing `0x1b41`'s `[0x34]` test (it must be entered by a jump or a second
-   entry point — `[0x34]` reads `0x15` at the fault, which would have sent `0x1b41`
-   down its early return). `pmbp.txt` can breakpoint `0x1a7:0x1b70` to catch the
-   caller; ⚠ use `rep`=1, per `a one-shot breakpoint loops`.
-   ⚠ **CORRECTION, MEASURED: `DOS4GW.EXE` IS NOT MZ+LE.** An earlier note in this block
-   claimed its pages were not laid out linearly and that static analysis needed an LE
-   page map. That was wrong. `e_lfanew` is garbage (`0x9b40000`), so the file is a PURE
-   MZ real-mode image (`0x200..0xf474`) with a payload appended, and the MZ load module
-   is CONTIGUOUS -- the faulting code lives inside it and `file = guest + 0x9B10` holds
-   throughout. What actually went wrong was disassembling from an arbitrary offset, so
-   the instruction stream was misaligned; starting at a verified instruction boundary
-   reproduces the routine exactly.
+   | knob / output | what it answers |
+   |---|---|
+   | `dsprobe.txt` | named DS offsets dumped at every `#GP` — a guest's branch state |
+   | `csprobe.txt` | the same against CS — **guest code vs the file image**, which is what found the patcher corruption |
+   | `@ss:sp` at a `#GP` | who CALLED the faulting routine, off the guest stack |
+   | `@ds:0000`, `csbase`, `code[ip±0x20]` | locate a fault in a binary instead of guessing |
+   | `pmap` line in the WOWBOP report | **is this BOP ours or the guest's own `C4 C4`** — works for ANY guest; the old file-image check needed `g_wow_nmod` |
+   | `code@eip` on ASYNC-PM | what code an injected tick interrupted — turns "looping at X" into "polling Y" |
+   | `scripts/bm/zarlong.bat` | a run with REAL wall-clock, `nolog` for long ones |
+   | `scripts/bm/zarout.bat` | ZAR's stdout under BOTH hosts, in text |
+   | `rigshot arrange <exe> left\|right` | move windows by OWNING PROCESS (ours and stock share captions) |
+   | `scripts/bm/sxs.bat`, `scripts/bmsxs.sh` | a BATCH of guests up under both hosts at once, left running |
 
-   ### ▶ ★★★★ THE STOCK ORACLE IS NOW A MEASUREMENT, NOT AN INFERENCE
+   ### ▶ TRAPS LEARNED THE HARD WAY THIS SESSION
 
-   The first read of this — *"stock runs ZAR, it goes fullscreen"* — rested on a
-   screenshot that was **entirely black**, which is what a desktop BitBlt of a
-   fullscreen DOS VDM looks like whether the guest is happy or sitting on an error.
-   That is the absence of evidence, and the investigation was resting on it. DOS/4GW
-   writes its fault report to **stdout**, so `scripts/bm/zarout.bat` runs ZAR under
-   both hosts with `> file` and compares text:
+   ⚠⚠ **THE SHARE ROOT IS PART OF THE HARNESS, NOT SCRATCH SPACE.** Tidying it
+   695 → 32 entries broke the rig TWICE: `wowtry.flag` is the **WOW opt-in** (its
+   absence made the whole shelf report *"16-bit Windows not supported"*), and the
+   root-level `.bat` files are called BY PATH from `rt.bat` and repo scripts, so
+   `bmqueue.sh doom` timed out with no result log. All 158 `.bat` restored; root is
+   ~203 entries with the ~500 `.bmp`/`.log`/stale `.txt` still archived in
+   `archive/2026-09-08-pre-s58/`. Check anything moved against `rt.bat`,
+   `runwatch.bat` and every `%RES%\…` reference in `scripts/` — not just `src/`.
 
-   ```
-   STOCK : DOS/4GW Protected Mode Run-time  Version 1.97
-           Copyright (c) Rational Systems, Inc. 1990-1994     <- banner, NO error
-   OURS  : Error [35]: General Protection Fault in DOS4GW.EXE at 01A7:1B7D
-           code=0000 ss=001F ds=001F es=0000                  <- banner NEVER PRINTED
-   ```
+   ⚠⚠ **NEVER `start /wait` OUR HOST.** Without the `autoexit` marker it keeps its
+   window open after the guest ends, so `/wait` never returns and the box wedges —
+   it took a `controld kill` to clear, twice.
 
-   **The gap is ours, confirmed in text, and we fault BEFORE DOS/4GW banners** — very
-   early in its own initialisation, after it has read its whole image. The `@ss:sp`
-   dump added to the `#GP` diagnostic this session is what produced the caller's
-   return address in the first place, and is the right kind of instrument here.
-   ⚠⚠ **`start /wait` ON OUR HOST WEDGES THE BOX.** Without the `autoexit` marker the
-   host keeps its window open after the guest ends, so `/wait` never returns; it took
-   a `controld kill` to clear. Every runner must either plant the marker (as `rt.bat`
-   does) or not wait at all.
+   ⚠ **THE HARNESS ITSELF STARTED LYING.** `rt.bat` caps a run at 45 s and the
+   compare scripts shoot at ~30 s. Fine while ZAR died in half a second; once it got
+   to "Game loading..." they cut it off mid-load and the evidence read *"no video
+   mode set"* when the truth was *"not finished yet"* (`HEADLESS: deadline
+   reached`). When a guest starts working, re-check the instrument's assumptions.
 
-   ⚠ **ONE HYPOTHESIS TESTED AND REFUTED, recorded so it is not re-tried.** `INT 15h
-   AH=88h` answers `0x3C00` ("15 MB") with the comment *"matching the XMS pool"* —
-   which is a real double-count (a real machine's HIMEM.SYS hooks AH=88h and reports
-   **0** once it has claimed extended memory). It looked like the trigger. It is not:
-   gating it on `g_xms_on` changed nothing, **because DOS/16M never calls AH=88h at
-   all** — `[0x34] != 0x15` skips it. The change was reverted rather than left in as
-   an unvalidated behaviour change for every guest. ▶ The double-count is still a
-   genuine *"runs but lies"* defect and is worth fixing deliberately, with Doom and
-   the DOS batteries re-gated on it — but on its own merits, not as a ZAR fix.
+   ⚠ **AN INSTRUMENT THAT FAILS BY PRINTING A PLAUSIBLE WRONG ANSWER** is worse than
+   one that fails loudly: the first env-block dump appended into the running report
+   bounded by `p < base + 3800`, which was already passed, so every readable byte
+   was dropped and it printed `[......]` — indistinguishable from an EMPTY
+   ENVIRONMENT.
 
-   ### ▶ TOOLING FOR THE USER'S CONFIRMATION RULE
+   ### ▶ REGRESSION BASELINES AT `4768150` (all re-run this session)
 
-   The user's standing condition for judging a guest by hand: *"run each app
-   side-by-side, one in stock NTVDM and one in NTVDMEX"*.
-   - `rigshot arrange <exe> left|right` — moves windows by **owning process**,
-     because ours and stock's have **identical captions** and only the process tells
-     them apart. Position only, never size: a Win16 window is often a fixed size the
-     guest computed, and resizing it would measure our host, not its layout.
-   - `scripts/bm/sxs.bat` + `scripts/bmsxs.sh` — a **batch** of guests up under both
-     hosts at once and left there, ours down the left half, stock down the right.
-     (Verified: two guests DO run concurrently under our host, two hosts at 32 MB.)
-   - `scripts/bm/zarcmp.bat` — ZAR under both, stock's half killed after capture
-     (#26 flags a display-wedge risk for graphics-mode DOS under stock; confirmed —
-     stock goes fullscreen and a desktop BitBlt of it comes back all black).
+   - off-VM battery: **62/62 + 27 + 27 + 48 + 23 + 17, 0 failed** (8 new `dosenv` checks)
+   - Doom: **all ten init markers, `STAGE2: complete`** — and it EXERCISES the new
+     code (99 `getRMvec`, 2 `setRMvec`, 195 sites correctly left unpatched across 21
+     regions), while firing the new fault arm ZERO times
+   - WOW gate: **110 / 113 / 32 · 0001:229C**, the s56/s57 baseline exactly
 
-   ⚠⚠ **THE SHARE WAS TIDIED AND IT BROKE THE RIG TWICE — READ THIS BEFORE TIDYING.**
-   695 root entries → 32, by moving run artefacts to `archive/2026-09-08-pre-s58/`
-   (nothing deleted). The keep-list was built from the `.txt` knobs the host reads,
-   and that was **not enough**, twice:
-   - `wowtry.flag` is the **WOW opt-in** — without it the host refuses every Win16
-     launch by design, so the whole shelf came up as *"16-bit Windows not supported"*.
-     Flags are knobs too.
-   - `doomrun.bat` and the other **root-level** `.bat` files are called BY PATH from
-     `rt.bat` and from repo scripts, so Doom could not run at all (`bmqueue.sh doom`
-     timed out with no result log). All 158 were restored; root is now 203 entries,
-     with the ~500 `.bmp`/`.log`/stale `.txt` still archived, which is where the
-     actual mess was.
-   ⇒ The rule: **the share root is not scratch space, it is part of the harness.**
-     Anything moved out of it must be checked against `rt.bat`, `runwatch.bat` and
-     every `%RES%\…` reference in `scripts/`, not just against `src/`.
+   ⚠ **CALC and WRITE were left on the rig under BOTH hosts awaiting a verdict and
+   never judged** — the day went to ZAR instead. `guests` is still the heaviest
+   lever at +0.26 per confirmation, and the user's standing rule is side-by-side,
+   which `bmsxs.sh` now does for a whole batch.
 
    ---
 
