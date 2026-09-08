@@ -264,6 +264,17 @@ and matches the 6.22 oracle row for row (session 53)** — but `MEM /C` still re
    playing in our VDM window.** ⚠ That is RENDERING, not "playable": input, sound and a
    real game session are unproven, and `done` means USER-CONFIRMED.
 
+   **RE-GATED** (the video path is shared; same day, same box, 45 s):
+
+   | | Doom | Skyroads |
+   |---|---|---|
+   | `simInt UNHANDLED` | **0** (all serviced) | **0** (all serviced) |
+   | `mode sets` | `0x03` **and** `0x13` | `0x13` |
+   | delivery | raises 6196, TOTAL 6197 (**100%**), owed_max 31 | `pit_reload=0x19e4` (180 Hz) |
+   | `irq0_inj` | — | **5412** vs 5415/5413 baseline |
+
+   ⇒ Neither guest affected; ZAR gains a picture.
+
    ★★★ **THIS IS THE SIXTH INSTANCE OF THE PROJECT'S MOST EXPENSIVE BUG SHAPE** — a
    service that does nothing and reports success (see [[stepped-over-call-answers-at-random]]).
    The `0300` arm's own comment says *"widen this when the evidence names an
