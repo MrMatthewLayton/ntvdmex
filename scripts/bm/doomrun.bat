@@ -51,6 +51,11 @@ echo.> %N%\autoexit
 cd /d "%G%"
 start /wait /d "%G%" "" "%G%\dosstub.com"
 copy /y %N%\ntvdmhost.log "%SH%result_doom.log" >nul 2>&1
+rem ⚠⚠ AND THIS FILE HAS TWO COPIES ON THE SHARE. `rt.bat`'s :doomrun calls the ROOT
+rem    one BY ABSOLUTE PATH (`...\ntvdmex\doomrun.bat`), not `bm\doomrun.bat`. Editing
+rem    the bm copy changes NOTHING and looks like the change did not work -- measured,
+rem    session 59, and it is the same "root .bat files are called BY PATH" trap that
+rem    broke the rig in session 58. STAGE TO THE ROOT.
 rem ── ★ AND THE SELF-CAPTURED FRAMES, WHICH THIS ARM WAS SILENTLY DROPPING. ─────────
 rem    rt.bat's `doom` arm jumps straight here and `goto :eof`, so it never reaches the
 rem    `:collect` block that copies shot*.bmp back to the share -- the 8bpp palette-index
