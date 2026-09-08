@@ -245,7 +245,7 @@ int main(void) {
 
         sb.base = 0x240; sb.irq = 7; sb.dma8 = 3; sb.dma16 = 0; sb.type = 3;
         memset(g, 0, sizeof g);
-        dos_env_build_card(g, 0x0000, "C:\\T.COM", "C:\\", &sb);
+        dos_env_build_card(g, 0x0000, "C:\\T.COM", "C:\\", &sb, NULL);
         for (i = 0, found = 0; i < (int)sizeof g - 8; ++i)
             if (memcmp(g + i, "BLASTER=", 8) == 0) { found = i; break; }
         CHECK(found > 0 && strcmp((char *)g + found, "BLASTER=A240 I7 D3 T3") == 0,
@@ -256,7 +256,7 @@ int main(void) {
            user-confirmed against the string without it. */
         sb.base = 0x220; sb.irq = 5; sb.dma8 = 1; sb.dma16 = 5; sb.type = 3;
         memset(g, 0, sizeof g);
-        dos_env_build_card(g, 0x0000, "C:\\T.COM", "C:\\", &sb);
+        dos_env_build_card(g, 0x0000, "C:\\T.COM", "C:\\", &sb, NULL);
         for (i = 0, found = 0; i < (int)sizeof g - 8; ++i)
             if (memcmp(g + i, "BLASTER=", 8) == 0) { found = i; break; }
         CHECK(found > 0 && strcmp((char *)g + found, "BLASTER=A220 I5 D1 H5 T3") == 0,
@@ -266,11 +266,70 @@ int main(void) {
            digits with no 0x -- both are how a driver parses it. */
         sb.base = 0x280; sb.irq = 10; sb.dma8 = 1; sb.dma16 = 0; sb.type = 6;
         memset(g, 0, sizeof g);
-        dos_env_build_card(g, 0x0000, "C:\\T.COM", "C:\\", &sb);
+        dos_env_build_card(g, 0x0000, "C:\\T.COM", "C:\\", &sb, NULL);
         for (i = 0, found = 0; i < (int)sizeof g - 8; ++i)
             if (memcmp(g + i, "BLASTER=", 8) == 0) { found = i; break; }
         CHECK(found > 0 && strcmp((char *)g + found, "BLASTER=A280 I10 D1 T6") == 0,
               "BLASTER: a two-digit IRQ survives, and the base is three hex digits");
+
+        /* ── EXTRA VARIABLES (dosenv.txt). The guest that needed this is ZAR, whose
+             own RUNZAR.BAT sets DOS4GVM before launching -- i.e. the game's supported
+             way to start it configures the extender through the environment, and we
+             had no way to pass one. */
+        {
+            static uint8_t h[0x400];
+            int base_len, with_len;
+
+            sb.base = 0x220; sb.irq = 5; sb.dma8 = 1; sb.dma16 = 0; sb.type = 3;
+
+            /* ⚠ THE DEFAULT MUST BE BYTE-IDENTICAL. A knob nobody sets must not
+                 change the environment every existing guest already runs against. */
+            memset(g, 0, sizeof g);
+            base_len = (int)dos_env_build_card(g, 0x0000, "C:\\T.COM", "C:\\", &sb, NULL);
+            memset(h, 0, sizeof h);
+            (void)dos_env_build_card(h, 0x0000, "C:\\T.COM", "C:\\", &sb, "");
+            CHECK(memcmp(g, h, sizeof h) == 0,
+                  "dosenv: absent and empty both leave the block byte-identical");
+
+            memset(g, 0, sizeof g);
+            with_len = (int)dos_env_build_card(g, 0x0000, "C:\\T.COM", "C:\\", &sb,
+                                               "DOS4GVM=@ZAR.VMC");
+            for (i = 0, found = 0; i < (int)sizeof g - 8; ++i)
+                if (memcmp(g + i, "DOS4GVM=", 8) == 0) { found = i; break; }
+            CHECK(found > 0 && strcmp((char *)g + found, "DOS4GVM=@ZAR.VMC") == 0,
+                  "dosenv: a variable is emitted as its own NUL-terminated string");
+            CHECK(with_len == base_len + 17,
+                  "dosenv: it costs exactly its own length plus the NUL");
+            /* The list terminator must still be there, or a guest walking to the
+               double NUL runs off into whatever follows -- how krnl386 finds its
+               own path, and a defect this project has already paid for once. */
+            CHECK(g[found + 16] == 0 && g[found + 17] == 0,
+                  "dosenv: the double NUL still ends the list after the last extra");
+
+            memset(g, 0, sizeof g);
+            (void)dos_env_build_card(g, 0x0000, "C:\\T.COM", "C:\\", &sb,
+                                     "# a comment\r\nA=1\r\n\r\nB=2\r\n");
+            for (i = 0, found = 0; i < (int)sizeof g - 4; ++i)
+                if (memcmp(g + i, "A=1", 4) == 0) { found = i; break; }
+            CHECK(found > 0, "dosenv: CRLF lines are split, blank lines skipped");
+            CHECK(found > 0 && strcmp((char *)g + found + 4, "B=2") == 0,
+                  "dosenv: the next variable follows immediately after the NUL");
+            for (i = 0, found = 0; i < (int)sizeof g - 2; ++i)
+                if (g[i] == '#') { found = 1; break; }
+            CHECK(!found, "dosenv: a '#' line is a comment and never reaches the guest");
+
+            /* An entry that does not fit is dropped WHOLE. Half an environment
+               variable is a value, and a wrong one -- worse than an absent one. */
+            memset(g, 0, sizeof g);
+            (void)dos_env_build_card(g, 0x0000, "C:\\T.COM", "C:\\", &sb,
+                                     "PAD=012345678901234567890123456789012345678901234567890"
+                                     "12345678901234567890123456789012345678901234567890"
+                                     "12345678901234567890123456789012345678901234567890"
+                                     "12345678901234567890123456789012345678901234567890;Z=1");
+            for (i = 0, found = 0; i < (int)sizeof g - 4; ++i)
+                if (memcmp(g + i, "PAD=", 4) == 0) { found = 1; break; }
+            CHECK(!found, "dosenv: an entry that cannot fit is dropped whole, not clipped");
+        }
     }
 
     /* T14: PSP command-tail builder (src/dos/dos_psp.h) --------------------- */

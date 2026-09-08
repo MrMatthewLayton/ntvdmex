@@ -115,9 +115,35 @@ static inline volatile uint8_t *dos_env_blaster(volatile uint8_t *p, volatile ui
     return p;
 }
 
+/* ── ★ EXTRA VARIABLES THE GUEST NEEDS AND WE HAD NO WAY TO GIVE IT. ─────────────
+     Until now this block was a fixed four -- COMSPEC, PATH, PROMPT, BLASTER -- and a
+     DOS program that is configured through its environment simply could not be
+     configured. That is not a corner case: it is how a whole class of DOS software
+     takes its settings, and the one that found it is ZAR (GH #23), whose own
+     RUNZAR.BAT is nothing but
+
+         set DOS4GVM=@ZAR.VMC
+         zar
+
+     -- i.e. the game's supported way to start it selects DOS/4GW's VIRTUAL MEMORY
+     manager, and we were launching the .EXE directly and silently getting a
+     different memory strategy from the one the game ships with.
+
+   `extra` is the raw text of the host's dosenv.txt knob: one NAME=VALUE per line.
+   Lines may also be separated by ';' so a caller with no file can pass a literal.
+   Blank lines and lines beginning with '#' are skipped, so the knob can be commented.
+   ⚠ NOTHING IS VALIDATED. A DOS environment is a list of NUL-terminated strings and
+     DOS itself does not care what is in them; a name with no '=' is legal and some
+     programs use exactly that. Rejecting shapes here would be inventing a rule the
+     thing we are emulating does not have.
+   ⚠ THE CAP IS REAL AND SILENT TRUNCATION WOULD BE THE WORST OUTCOME -- an env var
+     that is half present is a value, and a wrong one. Every write is bounded by
+     `vend`, which already reserves room for the terminator, the count WORD and the
+     program path, so the tail krnl386 reads can never be what is lost; an entry that
+     does not fit is dropped whole rather than clipped. */
 static inline uint32_t dos_env_build_card(volatile uint8_t *base, uint16_t env_seg,
                                           const char *progpath, const char *pathvar,
-                                          const dos_sbcfg *sb) {
+                                          const dos_sbcfg *sb, const char *extra) {
     volatile uint8_t *e = mcb_at(base, env_seg);
     volatile uint8_t *p = e;
     /* Leave room for the trailing NUL, the count WORD, the program path and its
@@ -138,6 +164,21 @@ static inline uint32_t dos_env_build_card(volatile uint8_t *base, uint16_t env_s
            That is why the numbers now come in as an argument rather than being
            typed here twice -- see dos_sbcfg. */
     p = dos_env_blaster(p, vend, sb); *p++ = 0;
+    if (extra) {
+        const char *s = extra;
+        while (*s) {
+            const char *ln = s;
+            int n = 0, i;
+            while (ln[n] && ln[n] != '\n' && ln[n] != '\r' && ln[n] != ';') ++n;
+            /* Drop the entry WHOLE if it cannot fit -- see the cap note above. */
+            if (n > 0 && ln[0] != '#' && p + n + 1 <= vend) {
+                for (i = 0; i < n; ++i) *p++ = (uint8_t)ln[i];
+                *p++ = 0;
+            }
+            s = ln + n;
+            while (*s == '\n' || *s == '\r' || *s == ';') ++s;
+        }
+    }
     *p++ = 0;                                       /* trailing \0 ends the var list */
     *p++ = 0x01; *p++ = 0x00;                       /* WORD: one string follows */
     p = dos_env_putv(p, e + DOS_ENV_CAP - 1,
@@ -150,12 +191,12 @@ static inline uint32_t dos_env_build_card(volatile uint8_t *base, uint16_t env_s
    supplied means the card this host has always claimed. */
 static inline uint32_t dos_env_build_path(volatile uint8_t *base, uint16_t env_seg,
                                           const char *progpath, const char *pathvar) {
-    return dos_env_build_card(base, env_seg, progpath, pathvar, NULL);
+    return dos_env_build_card(base, env_seg, progpath, pathvar, NULL, NULL);
 }
 
 static inline uint32_t dos_env_build(volatile uint8_t *base, uint16_t env_seg,
                                      const char *progpath) {
-    return dos_env_build_card(base, env_seg, progpath, "C:\\", NULL);
+    return dos_env_build_card(base, env_seg, progpath, "C:\\", NULL, NULL);
 }
 
 #endif /* DOS_ENV_H */

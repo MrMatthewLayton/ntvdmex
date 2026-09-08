@@ -190,6 +190,10 @@
    the rig sweeps every speed in a single batch without touching HKCU. */
 #define CPUSPD_PATH      "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\cpuspd.txt"
 #define DOSVER_PATH      "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\dosver.txt"
+/* Extra guest environment variables, one NAME=VALUE per line; '#' comments a line.
+   See dos_env_build_card for why this exists -- a DOS program configured through its
+   environment could not be configured at all before it. */
+#define DOSENV_PATH      "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\dosenv.txt"
 #define DOSTRACE_FLAG    "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\dostrace.flag"
 /* Scripted synthetic keystrokes, on the share so a test sequence can be changed between
    runs without a rebuild. Whitespace-separated tokens, played once in order:
@@ -10141,10 +10145,14 @@ static int wow_place_v86(dos_machine_t *mp, WORD *ecs, WORD *eip,
             if (n && n < MAX_PATH) { pv[n] = ';';
                 if (!GetWindowsDirectoryA(pv + n + 1, MAX_PATH)) pv[n] = 0; }
             else pv[0] = 0;
+            /* ⚠ NO dosenv.txt ON THE WOW PATH, deliberately. This block is krnl386's,
+                 it is rebuilt after the fact, and the note above records how narrowly
+                 it fits: krnl386 finds its own executable by scanning past the strings
+                 to the double NUL, so anything added here moves the tail it reads. */
             dos_env_build_card(NULL, DOS_ENV_SEG,
                           g_wow_krnl_path[0] ? g_wow_krnl_path
                                              : "C:\\WINDOWS\\SYSTEM32\\KRNL386.EXE",
-                          pv[0] ? pv : "C:\\WINDOWS\\SYSTEM32;C:\\WINDOWS", &g_sbcfg);
+                          pv[0] ? pv : "C:\\WINDOWS\\SYSTEM32;C:\\WINDOWS", &g_sbcfg, NULL);
             q = m; q = zput(q, "WOWV86: env rebuilt, PATH=");
             q = zput(q, pv[0] ? pv : "(fallback)");
             q = zput(q, " program path = ");
@@ -17663,8 +17671,61 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
        still 0000:0000 stores a null the program restores on the way out. Parent
        PSP = our own, since nothing launched us from inside the VDM. (GH #34) */
     dos_psp_save_vectors(NULL, DOS_PSP_SEG, DOS_PSP_SEG);
-    dos_env_build_card(NULL, DOS_ENV_SEG, progpath[0] ? progpath : "C:\\PROGRAM.COM",
-                       "C:\\", &g_sbcfg);                                          /* M2.5: env */
+    /* ── ★ EXTRA ENVIRONMENT VARIABLES FROM dosenv.txt. Read here, next to the block
+         being built, so a knob that is absent costs exactly one failed open and the
+         environment is byte-identical to what it has always been. */
+    { static char dosenv[192];
+      HANDLE h = CreateFileA(DOSENV_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                             NULL, OPEN_EXISTING, 0, NULL);
+      dosenv[0] = 0;
+      if (h != INVALID_HANDLE_VALUE) {
+          DWORD rd = 0;
+          ReadFile(h, dosenv, sizeof dosenv - 1, &rd, NULL);
+          CloseHandle(h);
+          dosenv[rd < sizeof dosenv ? rd : sizeof dosenv - 1] = 0;
+          if (dosenv[0]) {
+              p = zput(p, "STAGE2: dosenv.txt -> extra guest environment [");
+              p = zput(p, dosenv); p = zput(p, "]\r\n");
+          }
+      }
+      dos_env_build_card(NULL, DOS_ENV_SEG, progpath[0] ? progpath : "C:\\PROGRAM.COM",
+                         "C:\\", &g_sbcfg, dosenv[0] ? dosenv : NULL);            /* M2.5: env */
+      /* ── ★ READ THE BLOCK BACK OUT OF GUEST MEMORY AND PRINT IT. Not the string we
+           passed in -- the bytes the guest will actually walk, which is a different
+           claim and the only one worth logging. A DOS environment is a run of
+           NUL-terminated strings ended by a double NUL, then a count WORD, then the
+           program path; every one of those can be got wrong, and "the variable is
+           set" cannot be told from "the variable is set but the block is malformed"
+           from the host side. NULs print as '.' so the string boundaries are visible.
+         ⚠ This is what makes dosenv.txt a MEASURED feature rather than an asserted
+           one -- see `an unimplemented call still answers`. */
+      /* ⚠ ITS OWN BUFFER, NOT THE RUNNING REPORT. The first cut appended into `p` and
+           bounded the printable characters with `p < base + 3800` -- by this point in
+           the STAGE2 report that bound was already passed, so every readable byte was
+           silently dropped and the dump came back as `[......]`, which reads exactly
+           like an EMPTY ENVIRONMENT. An instrument that fails by printing a plausible
+           wrong answer is worse than one that fails loudly. */
+      { const volatile BYTE *eb = (const volatile BYTE *)((DWORD)DOS_ENV_SEG << 4);
+        char ev[288], *evq = ev;
+        unsigned ei, zeros = 0;
+        evq = zput(evq, "STAGE2: guest environment block @0x");
+        evq = zhex(evq, (DWORD)DOS_ENV_SEG << 4); evq = zput(evq, " = [");
+        for (ei = 0; ei < 0xC0 && evq < ev + 264; ++ei) {
+            BYTE c = eb[ei];
+            if (c == 0) { *evq++ = '.'; *evq = 0;
+                          if (++zeros >= 2 && ei > 8) break;
+                          continue; }
+            zeros = 0;
+            *evq++ = (char)((c >= 0x20 && c < 0x7F) ? c : '?'); *evq = 0;
+        }
+        evq = zput(evq, "]\r\n");
+        (void)evq;
+        /* Into the running report, the same way every neighbouring line goes: a
+           direct log_append here produced NOTHING in the file while the zput three
+           statements above appeared, and an instrument that silently writes nowhere
+           is not worth debugging twice. */
+        p = zput(p, ev); }
+    }
     dos_cmdtail_build(NULL, DOS_PSP_SEG, args);                                    /* M2.5: args */
     /* ► DUMP THE TAIL AS THE GUEST WILL SEE IT. Passing ANY argument makes DOS/4GW
          quit before printing a single character, with a DPMI/INT 21h trace identical
