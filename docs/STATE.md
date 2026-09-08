@@ -332,9 +332,27 @@ and matches the 6.22 oracle row for row (session 53)** — but `MEM /C` still re
    ⇒ **An IRQ raised while the guest is inside a nested real-mode call cannot be
    delivered**: the async injector only places one when it finds the thread executing
    GUEST code, and single-cycle means one IRQ and no second chance.
-   ▶ **NEXT: latch a hooked IRQ raised during a `0301/0302` call and have that loop
-   deliver it cooperatively**, the way the PM loop already latches IRQ0
-   (`g_pm_irq0_latch`). That is the last link in ZAR's audio.
+   ### ▶ ...AND THAT COOPERATIVE FIX WAS TRIED. IT IS RIGHT, AND IT IS NOT ENOUGH.
+
+   The gate was inline in the main exec loop, so a guest inside a nested real-mode call
+   never reached it. Factored into `v86_deliver_dev_irq()` (extracted verbatim, not
+   copied — two copies of an interrupt-delivery gate is how they drift) and called from
+   the nested `0301/0302` loop too. **A real gap, closed.**
+   ⚠ **But it does NOT fix ZAR's audio, and the measurement says why.** Its Miles driver
+   waits on a **memory flag its ISR will set, not on a port** — the last `SNDIO` in the
+   run is the `14 0F 00` command itself, with no polling after. A guest that spins
+   without trapping never returns from `v86_run`, so the nested loop gets no further
+   turn: **zero `IRQN-REFUSE` lines**, i.e. the gate never once saw a pending device IRQ
+   while the driver waited. A cooperative fix structurally cannot reach this.
+
+   ▶ **THE REMAINING BLOCKER, stated exactly:** asynchronous delivery attempts **once**,
+   at the instant of the raise, and a single-cycle SB transfer raises **exactly one**
+   IRQ. A device IRQ that could not be placed then is never offered again.
+   ⇒ **Next: a retry for latched device IRQs** (`g_irqn_pending` already persists) from a
+   thread that is not the guest's. ⚠⚠ That is the `SuspendThread`-under-`g_lock` path
+   this project has been burned on twice (session 22's ~800 unbounded attempts; the
+   throttle that cost Skyroads a fifth of its clock). **It wants its own session with a
+   measured A/B, not the tail of a long one.**
 
    ⚠ Doom re-gated and the change is **provably inert** for it: Doom only ever selects
    mixer index `0x82` (10 times a run), never `0x80`/`0x81`, so no path reaches it.
