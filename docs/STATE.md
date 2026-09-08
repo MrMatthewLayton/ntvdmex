@@ -326,18 +326,53 @@ and matches the 6.22 oracle row for row (session 53)** — but `MEM /C` still re
    path while genuinely being a DPMI client — it did the `2F/1687` check, took the
    mode switch, and uses INT 31h throughout.
 
-   ▶ **NEXT STEP, and it is a specific one:** find what sets `[0x34]` (DOS/16M's
-   memory-source enum) during its initialisation, and what we answer that makes it
-   choose this source. The routine at `0x1b41` has **no near caller in its own
-   segment** (scanned all 64 KB for `e8` targeting it), so it is reached by a far
-   call or through a pointer table — start there.
-   ⚠ **STATIC ANALYSIS HAS HIT ITS LIMIT: `DOS4GW.EXE` IS MZ+LE AND ITS PAGES ARE NOT
-   LAID OUT LINEARLY.** The `file = guest + 39696` mapping was derived from two unique
-   byte patterns and is right for the fault site and the handler, but extrapolating it
-   to the CALLER (return address `0x5685`, read off the guest stack) lands on code
-   whose `call` target does not match the routine we faulted in. Do not trust that
-   mapping away from a verified anchor; the next pass needs the LE object/page map, or
-   a runtime trace.
+   ### ▶ ★★★★★ DOS/16M's MEMORY DISPATCH, READ OUT OF THE GUEST RATHER THAN GUESSED
+
+   `dsprobe.txt` (new this session) names guest data offsets and dumps them at every
+   `#GP`, which turned this from inference into measurement. **Two earlier readings in
+   this block were wrong and are corrected here.**
+
+   DOS/16M has **four memory back-ends**, each a pair of near pointers installed into
+   `ds:0xaa4`/`ds:0xaa6`, dispatched by `call [0xaa4]` at `0x3bbf`:
+
+   | installer | `[0xaa4]` | back-end |
+   |---|---|---|
+   | file 28430 | `0x1b41` | raw / native (`push 8 / pop es`) |
+   | file 35549 | `0x3e25` | XMS (`mov ah,0x0C` through the entry from `2F/4310`) |
+   | file 36638 | `0x571d` | **DPMI** (allocates `0x40` paras via `AH=48h`) |
+   | file 38798 | `0x3d15` | VCPI (`INT 67h AX=DE00`/`DE0A`) |
+
+   ⚠ **AND THE DPMI ONE IS CORRECTLY SELECTED.** Measured at the fault:
+   `ds[0xaa4]=1d 57` → `0x571d`, `ds[0xaa6]=f4 56` → `0x56f4`. So the earlier reading
+   here — "DOS/16M is running a native-mode path" — was WRONG. It chose DPMI, as it
+   should. Consistent with the run: no `INT 67h` at all and no `2F/4300`/`4310`, i.e.
+   VCPI and XMS were never even probed, because DPMI was found first.
+
+   ▶ **THE REAL ANOMALY IS THAT ITS MEMORY COUNT IS ZERO.** `ds[0x98]:[0x9a] = 0`, and
+   `ds[0xece] = 0` (the value it compared). The routine at `0x1b41` is a memory-size
+   check, and with a zero count the comparison at `0x1b5f` matches, `je 0x1b70` is
+   taken, and `0x1b70` is the block that addresses memory through identity-mapped
+   selectors 8 and 0x60 — which can never be valid under a VDM. So the fault is a
+   CONSEQUENCE of the count being zero, not of the wrong back-end being chosen.
+   The XMS back-end sets that count from the XMS lock address and the raw one sets it
+   to 1 MB; the DPMI back-end should set it from DPMI — and **the run makes no
+   `INT 31h AX=0500` (get free memory info) and no `AX=0501` (allocate) at all.** So
+   the DPMI back-end was installed and then never asked for memory.
+
+   ▶ **NEXT STEP, and it is now specific and measured:** find why the DPMI back-end
+   (`0x571d`) is never invoked to populate `ds:0x98`, and how control reaches `0x1b70`
+   without passing `0x1b41`'s `[0x34]` test (it must be entered by a jump or a second
+   entry point — `[0x34]` reads `0x15` at the fault, which would have sent `0x1b41`
+   down its early return). `pmbp.txt` can breakpoint `0x1a7:0x1b70` to catch the
+   caller; ⚠ use `rep`=1, per `a one-shot breakpoint loops`.
+   ⚠ **CORRECTION, MEASURED: `DOS4GW.EXE` IS NOT MZ+LE.** An earlier note in this block
+   claimed its pages were not laid out linearly and that static analysis needed an LE
+   page map. That was wrong. `e_lfanew` is garbage (`0x9b40000`), so the file is a PURE
+   MZ real-mode image (`0x200..0xf474`) with a payload appended, and the MZ load module
+   is CONTIGUOUS -- the faulting code lives inside it and `file = guest + 0x9B10` holds
+   throughout. What actually went wrong was disassembling from an arbitrary offset, so
+   the instruction stream was misaligned; starting at a verified instruction boundary
+   reproduces the routine exactly.
 
    ### ▶ ★★★★ THE STOCK ORACLE IS NOW A MEASUREMENT, NOT AN INFERENCE
 

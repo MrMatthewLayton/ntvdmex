@@ -194,6 +194,43 @@
    See dos_env_build_card for why this exists -- a DOS program configured through its
    environment could not be configured at all before it. */
 #define DOSENV_PATH      "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\dosenv.txt"
+/* ── ★ dsprobe.txt: GUEST DATA WORDS TO DUMP AT EVERY #GP. ────────────────────
+     Whitespace-separated hex offsets; four bytes of DS: are printed for each.
+     A guest's branch decisions live in its own data segment, and reading them off
+     a disassembly is inference -- the whole ZAR investigation (GH #23) turned on
+     ds:0x2e, ds:0x34 and the function pointer at ds:0xaa4, none of which any
+     register dump can show. This is the generic form of the one-off ds:0000 dump:
+     name the offsets in a file and they come back in the fault report, with no
+     guest-specific code in the host and nothing to rebuild between guesses. */
+#define DSPROBE_PATH     "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\dsprobe.txt"
+#define DSPROBE_MAX 12
+static WORD g_dsprobe[DSPROBE_MAX];
+static int  g_dsprobe_n = 0;
+
+static void dsprobe_load(void)
+{
+    char b[256]; DWORD rd = 0; int i = 0;
+    HANDLE h = CreateFileA(DSPROBE_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                           NULL, OPEN_EXISTING, 0, NULL);
+    g_dsprobe_n = 0;
+    if (h == INVALID_HANDLE_VALUE) return;
+    ReadFile(h, b, sizeof b - 1, &rd, NULL);
+    CloseHandle(h);
+    b[rd < sizeof b ? rd : sizeof b - 1] = 0;
+    while (b[i] && g_dsprobe_n < DSPROBE_MAX) {
+        unsigned v = 0; int got = 0;
+        while (b[i] == ' ' || b[i] == '\t' || b[i] == '\r' || b[i] == '\n' || b[i] == ',') ++i;
+        while (b[i]) {
+            char c = b[i];
+            if      (c >= '0' && c <= '9') v = (v << 4) | (unsigned)(c - '0');
+            else if (c >= 'a' && c <= 'f') v = (v << 4) | (unsigned)(c - 'a' + 10);
+            else if (c >= 'A' && c <= 'F') v = (v << 4) | (unsigned)(c - 'A' + 10);
+            else break;
+            ++got; ++i;
+        }
+        if (got) g_dsprobe[g_dsprobe_n++] = (WORD)v; else if (b[i]) ++i;
+    }
+}
 #define DOSTRACE_FLAG    "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\dostrace.flag"
 /* Scripted synthetic keystrokes, on the share so a test sequence can be changed between
    runs without a rebuild. Whitespace-separated tokens, played once in order:
@@ -17674,6 +17711,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     /* ── ★ EXTRA ENVIRONMENT VARIABLES FROM dosenv.txt. Read here, next to the block
          being built, so a knob that is absent costs exactly one failed open and the
          environment is byte-identical to what it has always been. */
+    dsprobe_load();          /* the #GP fault report's named guest data words */
     { static char dosenv[192];
       HANDLE h = CreateFileA(DOSENV_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
                              NULL, OPEN_EXISTING, 0, NULL);
@@ -20745,7 +20783,22 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                                   p = zput(p, "\r\n       @ds:0000 = ");
                                   if (db && host_readable((const void *)do_, 0x40))
                                        p = zdump(p, (const void *)do_, 0x40);
-                                  else p = zput(p, "<unreadable>"); }
+                                  else p = zput(p, "<unreadable>");
+                                  /* The named offsets from dsprobe.txt -- see the knob's
+                                     note. Four bytes each, so a WORD and the word after it
+                                     (a far pointer's two halves) both read in one line. */
+                                  if (g_dsprobe_n && db) {
+                                      int dq;
+                                      p = zput(p, "\r\n       dsprobe:");
+                                      for (dq = 0; dq < g_dsprobe_n; ++dq) {
+                                          const volatile BYTE *dp = do_ + g_dsprobe[dq];
+                                          p = zput(p, " ds[0x"); p = zhex(p, g_dsprobe[dq]);
+                                          p = zput(p, "]=");
+                                          if (host_readable((const void *)dp, 4))
+                                               p = zdump(p, (const void *)dp, 4);
+                                          else p = zput(p, "?? ");
+                                      }
+                                  } }
                                 { DWORD fb2 = dpmi_sel_base(fr[4]);
                                   const volatile BYTE *fi2 =
                                       (const volatile BYTE *)(ULONG_PTR)(fb2 + fr[3]);
