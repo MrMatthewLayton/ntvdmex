@@ -1885,6 +1885,29 @@ static DWORD g_async_pm_bail2 = 0;           /* PM async attempts that did not c
 #define DPMI_WATCH_MAX 4
 static DWORD g_pm_watch[DPMI_WATCH_MAX];     /* linear addresses to watch (whitespace-separated) */
 static int   g_pm_nwatch      = 0;
+/* ── ★★★ A GUEST'S OWN OFFSETS ARE THE ONLY ONES WORTH WRITING DOWN. ────────────────
+     pmwatch.txt took absolute linear addresses, and an extended guest IS NOT LOADED AT
+     A FIXED ADDRESS: ZAR's LE code object came up at 0x03f70000 on one run and
+     0x03b70000 on the next, so an address read out of one run's log is wrong for the
+     next one and the watch silently reports a neighbouring allocation instead. That is
+     the "instrument that fails by printing a plausible wrong answer" this project has
+     already been bitten by.
+   ► A LEADING `+` MEANS "RELATIVE TO THE GUEST'S CODE-OBJECT LOAD BASE" -- the address
+     the host itself prints as `[LE CODE OBJECT] -> mem 0x...`. That is stable across
+     runs and it is the form a disassembly gives you, so `+3c878` can be copied straight
+     out of a listing and stays right tomorrow.
+   ⚠ RESOLVED LAZILY, NOT AT PARSE TIME. pmwatch.txt is read during the mode switch and
+     the client does not ask for its code object until AFTER that, so the base is still
+     zero when the file is parsed. A watch whose base is not known yet reads as
+     `????????` rather than as address 0x3c878, which would be a wrong answer wearing a
+     right one's clothes. */
+static BYTE  g_pm_watch_rel[DPMI_WATCH_MAX]; /* 1 = offset from g_le_load_base */
+static DWORD g_le_load_base   = 0;           /* first [LE CODE OBJECT] allocation */
+static DWORD pm_watch_addr(int i)
+{
+    if (!g_pm_watch_rel[i]) return g_pm_watch[i];
+    return g_le_load_base ? g_le_load_base + g_pm_watch[i] : 0;
+}
 static DWORD g_pm_irq0_done   = 0;           /* cooperative injections that reached an IRET */
 /* ── THE OTHER HALF OF THE DELIVERY ACCOUNT. ─────────────────────────────────────────
      `pit budget` reads "raises 144/s ... delivered 56/s" and concludes the guest's clock
@@ -15672,7 +15695,10 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                                 g_dpmi_blk[g_dpmi_nblk].size = sz ? sz : 1;
                                 g_dpmi_blk[g_dpmi_nblk].code = iscode;
                                 ++g_dpmi_nblk;
-                                if (iscode) { p = zput(p, " [LE CODE OBJECT]"); }
+                                if (iscode) { p = zput(p, " [LE CODE OBJECT]");
+                                    /* The FIRST one is the image base every offset in a
+                                       disassembly is relative to. See pm_watch_addr(). */
+                                    if (!g_le_load_base) g_le_load_base = (DWORD)(ULONG_PTR)mem; }
                             }
                             { DWORD lin = (DWORD)(ULONG_PTR)mem;   /* in-process: linear = host ptr */
                               VDM_SET16(tib, VTIB_EBX, lin >> 16); VDM_SET16(tib, VTIB_ECX, lin & 0xFFFF);
@@ -16930,8 +16956,8 @@ static int dpmi_inject_pm_irq(dos_machine_t *mp, volatile BYTE *tib, unsigned iv
     DWORD t_isr0 = GetTickCount();
     DWORD wpre[DPMI_WATCH_MAX]; int wi;
     for (wi = 0; wi < g_pm_nwatch; ++wi) {
-        const BYTE *wp0 = (const BYTE *)(ULONG_PTR)g_pm_watch[wi];
-        wpre[wi] = host_readable(wp0, 4) ? *(const DWORD *)wp0 : 0xDEADDEADu;
+        const BYTE *wp0 = (const BYTE *)(ULONG_PTR)pm_watch_addr(wi);
+        wpre[wi] = (wp0 && host_readable(wp0, 4)) ? *(const DWORD *)wp0 : 0xDEADDEADu;
     }
 
     dpmi_ensure_pmret_sel();
@@ -17104,9 +17130,10 @@ static int dpmi_inject_pm_irq(dos_machine_t *mp, volatile BYTE *tib, unsigned iv
       cq = zput(cq, " phases="); cq = zhex(cq, (DWORD)ph);
       cq = zput(cq, " ticks="); cq = zhex(cq, ++g_pm_irq0_done);
       for (wi = 0; wi < g_pm_nwatch; ++wi) {
-          const BYTE *wp = (const BYTE *)(ULONG_PTR)g_pm_watch[wi];
-          cq = zput(cq, " ["); cq = zhex(cq, g_pm_watch[wi]); cq = zput(cq, "]=0x");
-          if (!host_readable(wp, 4)) cq = zput(cq, "????????");
+          DWORD wa = pm_watch_addr(wi);
+          const BYTE *wp = (const BYTE *)(ULONG_PTR)wa;
+          cq = zput(cq, " ["); cq = zhex(cq, wa); cq = zput(cq, "]=0x");
+          if (!wa || !host_readable(wp, 4)) cq = zput(cq, "????????");
           else cq = zhex(cq, *(const DWORD *)wp);
           cq = zput(cq, "<-0x"); cq = zhex(cq, wpre[wi]);
       }
@@ -19945,7 +19972,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                       char wb2[128]; DWORD wn = 0, k2 = 0;
                       ReadFile(hw, wb2, sizeof wb2 - 1, &wn, NULL); CloseHandle(hw);
                       while (k2 < wn && g_pm_nwatch < DPMI_WATCH_MAX) {
-                          DWORD v = 0; int dig = 0;
+                          DWORD v = 0; int dig = 0, rel = 0;
+                          if (k2 < wn && wb2[k2] == '+') { rel = 1; ++k2; }
                           while (k2 < wn) {
                               char c = wb2[k2];
                               int d = (c >= '0' && c <= '9') ? c - '0'
@@ -19954,11 +19982,14 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                               if (d < 0) break;
                               v = (v << 4) | (DWORD)d; ++dig; ++k2;
                           }
-                          if (dig) g_pm_watch[g_pm_nwatch++] = v; else ++k2;
+                          if (dig) { g_pm_watch_rel[g_pm_nwatch] = (BYTE)rel;
+                                     g_pm_watch[g_pm_nwatch++] = v; }
+                          else ++k2;
                       }
                       p = zput(p, "DPMI: pmwatch.txt -> ");
                       { int wi; for (wi = 0; wi < g_pm_nwatch; ++wi) {
-                            p = zput(p, "0x"); p = zhex(p, g_pm_watch[wi]); p = zput(p, " "); } }
+                            p = zput(p, g_pm_watch_rel[wi] ? "codebase+0x" : "0x");
+                            p = zhex(p, g_pm_watch[wi]); p = zput(p, " "); } }
                       p = zput(p, "\r\n");
                       log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
                   } }

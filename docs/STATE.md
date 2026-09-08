@@ -434,16 +434,58 @@ and matches the 6.22 oracle row for row (session 53)** — but `MEM /C` still re
    - **The timer is being starved.** It is not: `delivered ~36/s` against a programmed
      36.41 Hz. The 29,657 `raises` were the PIT bug's phantoms, not real demand.
 
+   ### ▶ ★★★★★ AND THEN THE STATE VARIABLE ITSELF — IT IS **PINNED AT 4**
+
+   `pmwatch.txt` now takes `+<hex>` = **an offset from the guest's LE code-object load
+   base**, resolved lazily (the base is not known when the file is parsed). That matters
+   because an extended guest IS NOT LOADED AT A FIXED ADDRESS — ZAR came up at
+   `0x03f70000` one run and `0x03b70000` the next, so an absolute address copied out of
+   one log silently watches a neighbouring allocation on the next run. `+12c878` is
+   copy-pasteable from a disassembly and stays right.
+
+   With `pmwatch.txt = +4c878 +12c878 +12c8d0 +141310`, the state dword goes
+   **0 → 1 → … → 4 and then never changes again** for the rest of the run. It is NOT
+   cycling an attract loop. It is stuck in state 4 — and **4 is the one value the
+   caption switch at obj1+0x11f9 has no name for** (it handles 1, 2, 3, 5, 6, 7, 9).
+   The main loop then does exactly what the disassembly says it will: state != 0 and
+   != 5, so fall into the tick-wait at obj1+0x1317, for ever.
+   ⚠ ALSO SETTLED BY THE SAME RUN: the file image's absolute operands are **object
+   offsets, not link addresses** — `[0x4c878]` is `obj3 + 0x4c878`, i.e.
+   `codebase + 0x12c878`. The obj1-relative reading (`+4c878`) reads a constant
+   `0x9504`, which is code. Two candidate interpretations, one run, no guessing.
+   ▶ **NEXT SESSION STARTS HERE.** Every write of a constant to the state lives in one
+   jump table at obj1+0x1824 (`jmp [eax*4+0x1628]`), plus obj1+0x1191 (→7),
+   obj1+0x170b (→1), obj1+0x8b15 (→0) and obj1+0x13b77 (→4). **Find who selects arm 4
+   and what state 4 is waiting for.** The table index comes from `eax`; a `pmbp.txt`
+   breakpoint at obj1+0x1824 gives it directly.
+
+   ### ▶ AND THE PIT FIX TRANSFORMED ZAR'S OWN TIMER
+
+   Same 45 s run, before → after: `raises` **29,657 → 1,604** (= 35.6 Hz against the
+   36.41 Hz it programs), `delivered/raises` **5% → 100%**, `owed_max` 64 (saturated)
+   → 44. The "timer starvation" visible in every previous ZAR log was our phantom
+   interrupts, not real demand. **It still loops**, so this was not the blocker either
+   — but every future ZAR measurement is now taken on a guest whose clock is right.
+
    ### ▶ NEXT
 
-   ▶ **Find why video init is never entered.** The game reaches its main loop and runs
-   it; `INT 10h` is never called, `mode sets: none`, `mkind=00`. Candidates in order of
-   cheapness: (a) `zarargs.bat 90 -Help` — prove arguments reach the guest at all;
-   (b) `zarargs.bat 420 -NoVESA2` — halve the video path; (c) walk FORWARD from the
-   caller of the last `AH=3F` read, which the dispatch line now names.
-   ⚠ The reflected-dispatch line now carries `from <CS>:<EIP> lin=<linear>` — the
-   caller was two already-saved registers away from being printed and never was, which
-   is the question session 58's handoff left open.
+   ▶ **Find what state 4 is waiting for** (above). `INT 10h` is still called ZERO times
+   and `mode sets: none`, so video init is not merely failing — it is never entered.
+   ⚠ **A LEAD WORTH ONE MEASUREMENT FIRST:** `p3da_reads=481,618` against
+   `vbl_edges=94` in 45 s. The guest hammers the VGA status register ~10,700 times a
+   second and completes a retrace wait only **twice** a second, where real hardware
+   gives 70. Either an `in al,0x3DA` costs us ~90 µs, or the polls arrive in bursts and
+   the edge counter is fine. **Measure which before acting** — a counter's layout is a
+   claim, and this one has two very different readings.
+   ⚠ Cheap and now possible: `zarargs.bat 180 -NoVESA2` / `-NoSound`. Neither has been
+   run — the first attempt failed because `bmqueue.sh skyroads` had `rmdir`'d `C:\game`
+   out from under it (rt.bat's `:game` arm wipes the directory; re-run `bmqueue.sh zar`
+   to restore it).
+   ⚠ The reflected-dispatch line now carries `from <CS>:<EIP> lin=<linear>` — session
+   58's open question. For ZAR it names the Watcom CRT (`obj1+0xAEC87` read,
+   `obj1+0xB5C2C` clock), not game code, so the game's own frame needs a stack walk.
+   ▶ And the new STAGE2 line answers "what is this guest DOING?" in one place:
+   `21/2c=533,808` — ZAR asks its own clock hook **11,862 times a second**.
 
    ---
 
