@@ -19,6 +19,11 @@
  *   rigshot click <x> <y>     synthesise a left click at a screen coordinate
  *   rigshot fg   <caption>    bring a window to the foreground by exact caption
  *   rigshot list              dump every top-level window caption (diagnostic)
+ *   rigshot arrange <exe> left|right
+ *                             move every visible captioned window owned by <exe>
+ *                             into that half of the screen -- ours (ntvdmhost.exe)
+ *                             on one side, stock (ntvdm.exe) on the other, so the
+ *                             two can be judged together. Position only, never size.
  *   rigshot isne <dir>        classify every .exe in <dir> as NE / PE / LE / MZ
  *                             -- i.e. FIND THE 16-BIT WINDOWS PROGRAMS (GH #129/#128)
  *
@@ -33,6 +38,7 @@
  * KERNEL32/USER32/GDI32. See scripts/build-rigshot.sh.
  */
 #include <windows.h>
+#include <tlhelp32.h>
 
 #define SHARE "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex"
 #define VDM_TITLE "Microsoft Windows XP Virtual DOS Machine"
@@ -247,6 +253,80 @@ static BOOL CALLBACK enum_child_cb(HWND h, LPARAM lp)
     return TRUE;
 }
 
+/* ── selecting windows BY OWNING PROCESS, for `arrange` ──────────────────────
+   Toolhelp lives in kernel32 on XP, so this adds no import beyond the three the
+   build already allows. Case-insensitive because a process image name is, and
+   because a batch file will spell it whichever way reads best. */
+static int sieq(const char *a, const char *b)
+{
+    while (*a && *b) {
+        char ca = *a, cb = *b;
+        if (ca >= 'A' && ca <= 'Z') ca = (char)(ca + 32);
+        if (cb >= 'A' && cb <= 'Z') cb = (char)(cb + 32);
+        if (ca != cb) return 0;
+        ++a; ++b;
+    }
+    return *a == 0 && *b == 0;
+}
+
+static DWORD g_pids[64];
+static int   g_npids;
+
+static void collect_pids(const char *exe)
+{
+    HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    PROCESSENTRY32 pe;
+    g_npids = 0;
+    if (snap == INVALID_HANDLE_VALUE) return;
+    pe.dwSize = sizeof pe;
+    if (Process32First(snap, &pe)) {
+        do {
+            if (sieq(pe.szExeFile, exe) && g_npids < 64)
+                g_pids[g_npids++] = pe.th32ProcessID;
+        } while (Process32Next(snap, &pe));
+    }
+    CloseHandle(snap);
+}
+
+static int pid_wanted(DWORD pid)
+{
+    int i;
+    for (i = 0; i < g_npids; ++i) if (g_pids[i] == pid) return 1;
+    return 0;
+}
+
+static int g_arr_x, g_arr_n;
+
+static BOOL CALLBACK arrange_cb(HWND h, LPARAM lp)
+{
+    RECT r;
+    DWORD pid = 0;
+    char cap[256], line[400], *p;
+    int w, ht, x, y;
+    (void)lp;
+    if (!IsWindowVisible(h)) return TRUE;
+    cap[0] = 0;
+    GetWindowTextA(h, cap, sizeof cap);
+    if (!cap[0]) return TRUE;
+    GetWindowThreadProcessId(h, &pid);
+    if (!pid_wanted(pid)) return TRUE;
+    if (!GetWindowRect(h, &r)) return TRUE;
+    w  = (int)(r.right - r.left);
+    ht = (int)(r.bottom - r.top);
+    x  = g_arr_x + g_arr_n * 28;
+    y  = 60 + g_arr_n * 28;
+    MoveWindow(h, x, y, w, ht, TRUE);
+    ++g_arr_n;
+    p = line;
+    p = sput(p, "arrange: moved \"");   p = sput(p, cap);
+    p = sput(p, "\" to (");             p = sputu(p, (unsigned)x);
+    p = sput(p, ",");                   p = sputu(p, (unsigned)y);
+    p = sput(p, ") ");                  p = sputu(p, (unsigned)w);
+    p = sput(p, "x");                   p = sputu(p, (unsigned)ht);
+    logline(line);
+    return TRUE;
+}
+
 static const char *g_tree_want = 0;
 static int         g_tree_hits = 0;
 
@@ -344,6 +424,34 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show)
     if (seq(verb, "list")) {
         logline("list: visible top-level windows");
         EnumWindows(enum_cb, 0);
+        return 0;
+    }
+
+    /* ── ★★ `arrange <exe> left|right` -- PUT OURS AND STOCK SIDE BY SIDE.
+         The standing rule for judging a Win16 guest is the user's: run it under
+         NTVDMEX and under stock ntvdm AT THE SAME TIME, and look at both. That
+         only works if the two windows are not on top of each other -- and they
+         start life at exactly the same position, because it is the same program
+         making the same decision twice.
+       ⚠ THE CAPTION CANNOT TELL THEM APART. Both windows say `Calculator`. The
+         only thing that distinguishes them is WHICH PROCESS OWNS THE WINDOW --
+         ours is ntvdmhost.exe, stock's is ntvdm.exe -- so this verb selects by
+         image name through a toolhelp snapshot and never reads the caption at
+         all (it prints it, which is not the same thing).
+       ⚠ IT MOVES; IT DOES NOT RESIZE. A Win16 window is routinely a FIXED size
+         the guest computed for itself (CALC is 263x294). Tiling one into a
+         half-screen rectangle would be measuring our host's response to a resize
+         rather than the guest's own layout -- so size is preserved and only the
+         origin changes, cascaded so a batch of guests stays readable. */
+    if (seq(verb, "arrange")) {
+        int right = seq(arg2, "right");
+        collect_pids(arg1);
+        if (!g_npids) { logline("arrange: NO SUCH PROCESS"); return 1; }
+        g_arr_x = right ? GetSystemMetrics(SM_CXSCREEN) / 2 : 0;
+        g_arr_n = 0;
+        EnumWindows(arrange_cb, 0);
+        if (!g_arr_n)
+            logline("arrange: process is running but has NO VISIBLE CAPTIONED WINDOW");
         return 0;
     }
 

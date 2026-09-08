@@ -20528,8 +20528,69 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                                 p = zput(p, " has NO client handler (INT 31h 0203 never called "
                                             "for it) -- stopping rather than guessing\r\n");
                             } else {
-                                fr[0] = (WORD)DPMI_FLTRET_COFF;      /* return IP */
-                                fr[1] = g_dpmi_flt_code_sel;         /* return CS */
+                                /* ── ★★★★★ THE EXCEPTION FRAME'S WIDTH FOLLOWS THE CLIENT'S
+                                     MODE, NOT THE HANDLER SELECTOR'S D BIT. This is the same
+                                     rule dpmi_dispatch_to_pm_handler() already documents for
+                                     INTERRUPT frames, and it was never applied here -- so a
+                                     32-bit client got a 16-bit exception frame and read its
+                                     fields off the end of it.
+                                   ► MEASURED, ZAR (GH #23), and confirmed against the binary
+                                     rather than reasoned. NT builds a SIXTEEN-BIT frame on the
+                                     fault stack (8 words; the bytes are only coherent read that
+                                     way). DOS/4GW declares itself 32-bit at the mode switch, so
+                                     its #GP handler -- DOS4GW.EXE+0x8896, entered at 0x0f:0x6abb
+                                     -- is:
+                                         push ds / push si / push bp / mov bp,sp
+                                         mov si,[bp+0x12]   ; frame[+0x0C] = faulting EIP
+                                         mov ds,[bp+0x16]   ; frame[+0x10] = faulting CS
+                                         cmp byte [si],0x07 ; `pop es`?
+                                         cmp byte [si],0x1f ; `pop ds`?
+                                     +0x0C and +0x10 are the DPMI 32-BIT frame's EIP and CS. In
+                                     our 16-byte frame there is nothing at +0x10, so DS loaded
+                                     ZERO and the handler faulted on its own first memory read --
+                                     which re-entered it, for ever, until the log capped.
+                                   ► AND THE RETURN CONFIRMS IT INDEPENDENTLY: the handler leaves
+                                     by `66 cb` -- RETFD, popping EIGHT bytes -- exactly the `66
+                                     cf` IRETD tell that identified the interrupt-frame case.
+                                   ► WHY THIS IS A REBUILD AND NOT A WIDER READ: the frame is the
+                                     KERNEL'S, and it is 16-bit whatever the client is. So the
+                                     32-bit frame is built BELOW NT's (which is left intact, so
+                                     the logging above still reads the kernel's own values) and
+                                     ESP is moved onto it.
+                                   ⚠ NT's fields ARE 16-BIT, so a fault in 32-bit code with an
+                                     EIP above 0xFFFF would arrive here already truncated by the
+                                     kernel -- this widens the frame, it cannot recover bits that
+                                     were never handed to us. Both of ZAR's faults are in 16-bit
+                                     DOS/4GW selectors (0x1a7 and 0x0f, both D/B=0) where the
+                                     question does not arise; a 32-bit-CS fault that resumes
+                                     wrongly should suspect this line first. */
+                                if (g_dpmi_client32) {
+                                    DWORD nsp = (esp - 0x20) & 0xFFFF;
+                                    volatile DWORD *d32 =
+                                        (volatile DWORD *)(ULONG_PTR)(sb + nsp);
+                                    if (host_readable((const void *)d32, 0x20)) {
+                                        d32[0] = (DWORD)DPMI_FLTRET_COFF;  /* return EIP */
+                                        d32[1] = g_dpmi_flt_code_sel;      /* return CS  */
+                                        d32[2] = fr[2];                    /* error code */
+                                        d32[3] = fr[3];                    /* fault EIP  */
+                                        d32[4] = fr[4];                    /* fault CS   */
+                                        d32[5] = fr[5];                    /* EFLAGS     */
+                                        d32[6] = fr[6];                    /* fault ESP  */
+                                        d32[7] = fr[7];                    /* fault SS   */
+                                        VDM_REG(tib, VTIB_ESP) =
+                                            (VDM_REG(tib, VTIB_ESP) & 0xFFFF0000u) | nsp;
+                                    } else {
+                                        p = zput(p, "  EXC: !! 32-bit frame site unreadable at 0x");
+                                        p = zhex(p, sb + nsp);
+                                        p = zput(p, " -- delivering the KERNEL'S 16-bit frame, which"
+                                                    " a 32-bit client will misread\r\n");
+                                        fr[0] = (WORD)DPMI_FLTRET_COFF;
+                                        fr[1] = g_dpmi_flt_code_sel;
+                                    }
+                                } else {
+                                    fr[0] = (WORD)DPMI_FLTRET_COFF;      /* return IP */
+                                    fr[1] = g_dpmi_flt_code_sel;         /* return CS */
+                                }
                                 VDM_SET16(tib, VTIB_CS,  g_pm_exc[exc].sel);
                                 VDM_REG(tib, VTIB_EIP) = g_pm_exc[exc].off;
                                 p = zput(p, "  EXC: -> client handler for 0x"); p = zhex(p, (DWORD)exc);
@@ -20622,6 +20683,45 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                                         "-- stopping\r\n");
                             log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
                             break;
+                        }
+                        /* ── ★ AND THE RETURN IS THE SAME QUESTION, SO IT GETS THE SAME
+                             ANSWER. A 32-bit client's handler leaves by RETFD, which pops
+                             EIGHT bytes, so ESP lands on the error code of a DWORD frame:
+                                 +0x00 err  +0x04 EIP  +0x08 CS
+                                 +0x0c EFLAGS  +0x10 ESP  +0x14 SS
+                             Reading that as words would take the resume address from the
+                             top half of the error code.
+                           ► THE FRAME IS READ BACK, NOT REMEMBERED, because rewriting it is
+                             the handler's documented lever: DOS/4GW's #GP handler resumes AT
+                             THE FAULTING INSTRUCTION having stored 0 over the bad selector on
+                             the faulting stack (it takes that stack from +0x18/+0x1c, which
+                             only exist in the 32-bit frame), so the `pop es` re-executes and
+                             succeeds. Resuming from anywhere we cached would defeat it. */
+                        if (g_dpmi_client32) {
+                            volatile DWORD *d32 = (volatile DWORD *)(ULONG_PTR)(sb + esp);
+                            if (!host_readable((const void *)d32, 0x18)) {
+                                p = zput(p, "GH#128: EXC RETURN (32) but the frame at SS:ESP is "
+                                            "unreadable -- stopping\r\n");
+                                log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                                break;
+                            }
+                            p = zput(p, "GH#128: EXC RETURN(32) -> resume 0x"); p = zhex(p, d32[2]);
+                            p = zput(p, ":0x"); p = zhex(p, d32[1]);
+                            p = zput(p, " fl=0x"); p = zhex(p, d32[3]);
+                            p = zput(p, " ss:esp=0x"); p = zhex(p, d32[5]);
+                            p = zput(p, ":0x"); p = zhex(p, d32[4]);
+                            p = zput(p, " err=0x"); p = zhex(p, d32[0]);
+                            p = zput(p, "\r\n");
+                            log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                            VDM_SET16(tib, VTIB_SS,  (WORD)d32[5]);
+                            VDM_REG(tib, VTIB_ESP) = d32[4];
+                            VDM_SET16(tib, VTIB_CS,  (WORD)d32[2]);
+                            VDM_REG(tib, VTIB_EIP) = d32[1];
+                            /* ⚠ FLAGS: still merged as sixteen bits. The high half carries VM
+                                 and IOPL's neighbours, and this frame's EFLAGS came from a
+                                 kernel frame that only ever held a word. */
+                            VDM_SET16(tib, VTIB_EFLAGS, (WORD)d32[3]);
+                            continue;
                         }
                         p = zput(p, "GH#128: EXC RETURN -> resume 0x"); p = zhex(p, fr[2]);
                         p = zput(p, ":0x"); p = zhex(p, fr[1]);
