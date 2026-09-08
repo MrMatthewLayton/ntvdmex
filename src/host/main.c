@@ -1837,6 +1837,7 @@ static int async_vec_is_our_stub(unsigned irq);
 static void pokew(DWORD lin, WORD v);        /* fwd: guest-memory helpers, defined below */
 static WORD peekw(DWORD lin);
 static void host_pit_sync(void);             /* fwd: the guest's clock, driven by both threads */
+static int  v86_deliver_dev_irq(volatile BYTE *tib);  /* fwd: shared by the main and nested V86 loops */
 
 /* ── ASYNCHRONOUS DELIVERY INTO **PROTECTED MODE**. ───────────────────────────────
    The V86 arm below has always bailed when the guest is not in V86, and that hole is
@@ -16048,7 +16049,23 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                             VDM_SET16(tib,VTIB_SS,rss); VDM_REG(tib,VTIB_ESP)=rsp;
                             /* --- nested V86 run loop: run the proc until the return-BOP --- */
                             for (rt = 0; rt < 128 && !done; ++rt) {
-                                LONG rst; DWORD rev = v86_run(tib, &rst);
+                                LONG rst; DWORD rev;
+                                /* ── ★★★ A DEVICE IRQ RAISED IN HERE HAD NOWHERE TO GO.
+                                     The cooperative delivery gate lived in the MAIN exec
+                                     loop, and a guest inside this nested real-mode call
+                                     never reaches it -- while the ASYNC injector refuses,
+                                     because from its side the thread is in host code
+                                     (`ASYNC-EARLY bail irq=05 why=0x14`). So an interrupt
+                                     raised while a real-mode procedure runs was simply
+                                     lost, and a driver waiting on ONE of them (a
+                                     single-cycle SB transfer raises exactly one) waited
+                                     for ever. ZAR's Miles init is precisely that case.
+                                   ► Same gate, same clauses, offered every pass -- the
+                                     guest is in V86 here, which is the mode this delivery
+                                     was written for. The latch persists, so nothing is
+                                     delivered twice and nothing is invented. */
+                                v86_deliver_dev_irq(tib);
+                                rev = v86_run(tib, &rst);
                                 DWORD info = VDM_REG(tib, VTIB_EVENT_INFO) & 0xFF;
                                 if (rev == VDM_EVENT_BOP && info == DPMI_RMRET_BOP) {
                                     done = 1; break;                /* proc RETF'd -> finished */
@@ -17537,6 +17554,89 @@ static HANDLE csrss_open_split(char *path, char **pargs)
         path[i] = save;
     }
     return INVALID_HANDLE_VALUE;
+}
+
+
+/* ── ★★★ COOPERATIVE DEVICE-IRQ DELIVERY IN V86, FACTORED SO IT HAS ONE HOME. ──────
+     This was inline in the main exec loop, which meant it only ran when the guest
+     reached that loop -- and a guest inside a NESTED real-mode call (DPMI 0301/0302)
+     never does. MEASURED ON ZAR (#23): its Miles driver issues an 8-bit SINGLE-CYCLE
+     16-byte transfer as an init-time DMA/IRQ self-test, the block drains, IRQ 5 is
+     raised, and the async injector refuses it -- `ASYNC-EARLY bail irq=05 why=0x14`,
+     "the CPU thread was in HOST code", because the thread is down inside the nested
+     v86_run. Single-cycle means one IRQ and no second chance, so the driver spins at
+     0x34d3:0x06b1 until the watchdog kills it.
+   ► The latch (g_irqn_pending) already persists, and the guest inside 0301/0302 is in
+     V86, so the delivery this loop was already doing is exactly the right delivery --
+     it simply was not reachable from there. Extracted verbatim rather than copied: two
+     copies of an interrupt-delivery gate is how they drift, and every clause here was
+     paid for (the in_bop window, the VME-aware guest_if_enabled, the unhooked-drop, the
+     acknowledge/EOI rule, one-per-turn).
+   ⚠ Returns 1 if an interrupt was injected, so a caller that must let the handler IRET
+     before doing anything else can tell. */
+static int v86_deliver_dev_irq(volatile BYTE *tib)
+{
+    int injected = 0;
+/* Device IRQs (SB block completion on 5, etc.): same IF gating as IRQ0/1,
+   vectored as INT 8+irq. Skip while inside our own timer/keyboard stubs. */
+{ int q;
+  DWORD qcs = VDM_REG(tib, VTIB_CS) & 0xFFFF, qip = VDM_REG(tib, VTIB_EIP) & 0xFFFF;
+  /* Only the BOP itself is off-limits (we would re-enter mid-service);
+     once past it the guest is running a handler with IF set, and a real
+     PC delivers a device IRQ there quite happily. */
+  int in_bop = (qcs == DOS_HDLR_SEG &&
+                ((qip >= 0x34 && qip < 0x37) || (qip >= 0x4C && qip < 0x4F)));
+  if (!in_bop && guest_if_enabled(tib)) {
+      for (q = 2; q < 8; ++q) {
+          if (peekw((8 + q) * 4 + 2) == DOS_HDLR_SEG
+              && peekw((8 + q) * 4) == DOS_IRET_STUB_OFF) {
+              InterlockedExchange(&g_irqn_pending[q], 0);   /* unhooked: drop it */
+              continue;
+          }
+          if (!vdd_pic_can_deliver(&g_pic, (uint8_t)q)) continue;
+          if (InterlockedExchange(&g_irqn_pending[q], 0)) {
+              vdd_pic_acknowledge(&g_pic, (uint8_t)q);
+              if (async_vec_is_our_stub((unsigned)q)) vdd_pic_eoi(&g_pic, (uint8_t)q);
+              g_irqn_inj++;
+              inject_int(tib, (unsigned)(8 + q));
+              break;                    /* one per turn: let it IRET first */
+          }
+      }
+  } else {
+      /* REFUSAL LOG. A pending device IRQ we decline to inject is indistinguishable
+         from "no interrupt was ever raised" from outside, so record the first few
+         with everything needed to name the clause. MEASURED ANSWER for Skyroads:
+         irqn_refused stayed 0 across the whole run, so we never refuse -- the
+         completion IRQ is raised (raised[5]=1, sb_irq=5) about a second AFTER the
+         guest stops trapping. Heartbeat timeline: the block is programmed at ~8.5 s
+         (len 0x7d64 @ 6024 Hz), drains at exactly the right rate, and completes at
+         ~14 s; `io_events` freezes at ~13 s with the guest at DOS_HDLR_SEG:0x0037
+         (the `CD 1C`), i.e. inside its own INT 1Ch handler spinning with no traps.
+         So there is genuinely NO injection point at the moment that matters -- the
+         4.5M traps all happen in the first 6 s, before the block even exists. Async
+         delivery is required; this log stays as the discriminator if that changes. */
+      int pend = 0;
+      for (q = 2; q < 8; ++q) if (g_irqn_pending[q]) { pend = q; break; }
+      if (pend) g_irqn_refuse_total++;
+      if (pend && g_irqn_refuse_log < 16) {
+          char rb[256], *rq = rb;
+          DWORD ss = VDM_REG(tib, VTIB_SS) & 0xFFFF, sp = VDM_REG(tib, VTIB_ESP) & 0xFFFF;
+          g_irqn_refuse_log++;
+          rq = zput(rq, "IRQN-REFUSE irq=0x");  rq = zhex(rq, (DWORD)pend);
+          rq = zput(rq, " cs:ip=0x");           rq = zhex(rq, qcs);
+          rq = zput(rq, ":0x");                 rq = zhex(rq, qip);
+          rq = zput(rq, " efl=0x");             rq = zhex(rq, VDM_REG(tib, VTIB_EFLAGS));
+          rq = zput(rq, " ss:sp=0x");           rq = zhex(rq, ss);
+          rq = zput(rq, ":0x");                 rq = zhex(rq, sp);
+          rq = zput(rq, " stkflags=0x");
+          rq = zhex(rq, peekw((ss << 4) + ((sp + 4) & 0xFFFF)));
+          rq = zput(rq, in_bop ? " why=in_bop" : " why=if_gate");
+          rq = zput(rq, "\r\n");
+          log_append(LOG_PATH, rb, rq); serial_out(rb, rq);
+      }
+  } }
+
+    return injected;
 }
 
 int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
@@ -19168,64 +19268,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                 keylat_pop();               /* the guest is now IN its INT 09h */
             }
         }
-        /* Device IRQs (SB block completion on 5, etc.): same IF gating as IRQ0/1,
-           vectored as INT 8+irq. Skip while inside our own timer/keyboard stubs. */
-        { int q;
-          DWORD qcs = VDM_REG(tib, VTIB_CS) & 0xFFFF, qip = VDM_REG(tib, VTIB_EIP) & 0xFFFF;
-          /* Only the BOP itself is off-limits (we would re-enter mid-service);
-             once past it the guest is running a handler with IF set, and a real
-             PC delivers a device IRQ there quite happily. */
-          int in_bop = (qcs == DOS_HDLR_SEG &&
-                        ((qip >= 0x34 && qip < 0x37) || (qip >= 0x4C && qip < 0x4F)));
-          if (!in_bop && guest_if_enabled(tib)) {
-              for (q = 2; q < 8; ++q) {
-                  if (peekw((8 + q) * 4 + 2) == DOS_HDLR_SEG
-                      && peekw((8 + q) * 4) == DOS_IRET_STUB_OFF) {
-                      InterlockedExchange(&g_irqn_pending[q], 0);   /* unhooked: drop it */
-                      continue;
-                  }
-                  if (!vdd_pic_can_deliver(&g_pic, (uint8_t)q)) continue;
-                  if (InterlockedExchange(&g_irqn_pending[q], 0)) {
-                      vdd_pic_acknowledge(&g_pic, (uint8_t)q);
-                      if (async_vec_is_our_stub((unsigned)q)) vdd_pic_eoi(&g_pic, (uint8_t)q);
-                      g_irqn_inj++;
-                      inject_int(tib, (unsigned)(8 + q));
-                      break;                    /* one per turn: let it IRET first */
-                  }
-              }
-          } else {
-              /* REFUSAL LOG. A pending device IRQ we decline to inject is indistinguishable
-                 from "no interrupt was ever raised" from outside, so record the first few
-                 with everything needed to name the clause. MEASURED ANSWER for Skyroads:
-                 irqn_refused stayed 0 across the whole run, so we never refuse -- the
-                 completion IRQ is raised (raised[5]=1, sb_irq=5) about a second AFTER the
-                 guest stops trapping. Heartbeat timeline: the block is programmed at ~8.5 s
-                 (len 0x7d64 @ 6024 Hz), drains at exactly the right rate, and completes at
-                 ~14 s; `io_events` freezes at ~13 s with the guest at DOS_HDLR_SEG:0x0037
-                 (the `CD 1C`), i.e. inside its own INT 1Ch handler spinning with no traps.
-                 So there is genuinely NO injection point at the moment that matters -- the
-                 4.5M traps all happen in the first 6 s, before the block even exists. Async
-                 delivery is required; this log stays as the discriminator if that changes. */
-              int pend = 0;
-              for (q = 2; q < 8; ++q) if (g_irqn_pending[q]) { pend = q; break; }
-              if (pend) g_irqn_refuse_total++;
-              if (pend && g_irqn_refuse_log < 16) {
-                  char rb[256], *rq = rb;
-                  DWORD ss = VDM_REG(tib, VTIB_SS) & 0xFFFF, sp = VDM_REG(tib, VTIB_ESP) & 0xFFFF;
-                  g_irqn_refuse_log++;
-                  rq = zput(rq, "IRQN-REFUSE irq=0x");  rq = zhex(rq, (DWORD)pend);
-                  rq = zput(rq, " cs:ip=0x");           rq = zhex(rq, qcs);
-                  rq = zput(rq, ":0x");                 rq = zhex(rq, qip);
-                  rq = zput(rq, " efl=0x");             rq = zhex(rq, VDM_REG(tib, VTIB_EFLAGS));
-                  rq = zput(rq, " ss:sp=0x");           rq = zhex(rq, ss);
-                  rq = zput(rq, ":0x");                 rq = zhex(rq, sp);
-                  rq = zput(rq, " stkflags=0x");
-                  rq = zhex(rq, peekw((ss << 4) + ((sp + 4) & 0xFFFF)));
-                  rq = zput(rq, in_bop ? " why=in_bop" : " why=if_gate");
-                  rq = zput(rq, "\r\n");
-                  log_append(LOG_PATH, rb, rq); serial_out(rb, rq);
-              }
-          } }
+        v86_deliver_dev_irq(tib);   /* see the helper: shared with the nested 0301/0302 loop */
         /* Mirror the guest's IF into EFLAGS.VIF before handing the context back. On VME
            hardware the kernel's deliverability test reads VIF, and VIF is lost every time
            we synthesise an interrupt frame ourselves -- so a guest that has interrupts
