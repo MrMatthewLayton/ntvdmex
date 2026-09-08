@@ -395,6 +395,41 @@ and matches the 6.22 oracle row for row (session 53)** — but `MEM /C` still re
    Vectors still pointing at our own stubs keep today's behaviour and stay visible in
    `STAGE2: simInt (DPMI 0300) UNHANDLED`, which is where the next one will be found.
 
+   ### ▶ ⚠⚠⚠ A REPORTED DOOM REGRESSION, AND THE TWO RIG HAZARDS BEHIND IT
+
+   The user reported Doom's status bar pixelated and messages leaving pixels behind —
+   the symptoms `8648f41` fixed in session 25. **It did not reproduce, and the video
+   path measures perfect:**
+
+   - **`TITLEPIC vs shot01/shot02 : 0 of 64000 compared pixels differ (0.000%)`** —
+     planes → compose → present → capture, bit-perfect over a full screen, judged
+     against the IWAD.
+   - `planejudge`: planes **71.2/70.8/72.4/69.5%** vs STBAR, against the **70/69/71/68%**
+     recorded when it was fixed (**34/71/30/28%** when broken). Plane-to-plane identity
+     18–30%; the broken state was 66.8% (one plane smeared over the rest).
+   - Nothing this session touches Doom's video: **zero `simInt 0x10` calls**,
+     byte-identical video counters, mixer `0x80/0x81` never selected by Doom.
+
+   ⚠⚠⚠ **BUT TWO RIG HAZARDS MADE THE EVIDENCE UNTRUSTWORTHY, AND ONE WAS MINE.**
+   1. **`zarplay.bat` leaves `wowquiet.txt` behind** and cannot clean it up (it exits
+      while the game runs). That silences `log_append` for every LATER run — **which is
+      a TIMING change, not just a quiet log**: per-event logging under the device lock
+      is what cost Skyroads 24% of its ticks. Measured: created 22:43, and a Doom run at
+      23:19 came back **6,702 bytes** with the `WOWQUIET` banner — no STAGE2, no
+      counters, and different timing from the shipping configuration. A "bad, then fine"
+      report straddling that moment is explained with no code change at all — and it
+      cuts both ways, since "fine" under a silenced trace is not "fine" as shipped.
+      ▶ **`ls` the share for `wowquiet.txt` before believing any measurement or report.**
+      A 6 KB `result_*.log` where megabytes are expected is the tell.
+   2. **`doomrun.bat` exists TWICE on the share** and `rt.bat`'s `:doomrun` calls the
+      **ROOT** copy by absolute path. I staged a fix to `bm\` only; it did nothing and
+      read as "the fix does not work". Same trap as session 58's root-`.bat` breakage.
+
+   ✅ Re-baselined with the trace RESTORED (6.3 MB log): identical video counters.
+   ▶ **And it is now catchable**: `capture.flag` → `doomrun` collects `shot*.bmp` (it
+   never did — the `doom` arm skips `:collect`) → `doomref.py cmp TITLEPIC` is a
+   0/64000 pass-fail on the whole video path.
+
    ## ★ SESSION 59 (earlier) — HOW THE PROBLEM WAS NARROWED
 
    ### ▶ ★★★★★ THE ONE FACT THAT CHANGES THE PROBLEM
