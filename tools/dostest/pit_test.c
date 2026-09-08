@@ -47,6 +47,46 @@ int main(void)
     v = 0x10; vdd_bus_io(&bus, 0x40, 1, 0, &v);          /* hi -> 0x1000      */
     CHECK(pit.reload == 0x1000, "8254: lo/hi reload programmed to 0x1000");
 
+    /* T1b: A HALF-WRITTEN COUNT IS NOT A COUNT. -------------------------------
+       The 8254 buffers the LSB and loads the count register when the MSB
+       arrives, so between a guest's two `out 40h` instructions the rate must not
+       move. Read-modify-writing `reload` per byte instead is what gave ZAR
+       (GH #23) a divisor of 2 -- 596 kHz -- for the whole gap between its two
+       writes, and 29,657 IRQ0 raises in 45 s against a programmed 36.4 Hz.
+       Starting from 0x1000 and programming 0x8000 is the exact shape: the old
+       MSB (0x10) with the new LSB (0x00) is 0x1000, and the OTHER order --
+       old 0x8000 with a new LSB of 0x02 -- is the catastrophic one. */
+    v = 0x36; vdd_bus_io(&bus, 0x43, 1, 0, &v);          /* ch0, lo/hi, mode3 */
+    v = 0x00; vdd_bus_io(&bus, 0x40, 1, 0, &v);          /* LSB only so far   */
+    CHECK(pit.reload == 0x1000, "8254: LSB alone does NOT change the rate");
+    v = 0x80; vdd_bus_io(&bus, 0x40, 1, 0, &v);          /* MSB -> commit     */
+    CHECK(pit.reload == 0x8000, "8254: the MSB write commits both bytes at once");
+    /* ...and the pathological order, which is ZAR's: a small LSB against a large
+       standing MSB must not be visible as a divisor of 2 even for one clock. */
+    v = 0x36; vdd_bus_io(&bus, 0x43, 1, 0, &v);
+    v = 0x02; vdd_bus_io(&bus, 0x40, 1, 0, &v);
+    CHECK(pit.reload == 0x8000, "8254: a small LSB cannot transiently mean 596 kHz");
+    v = 0x11; vdd_bus_io(&bus, 0x40, 1, 0, &v);
+    CHECK(pit.reload == 0x1102, "8254: ...and the pair still lands where asked");
+
+    /* T1c: LSB-only and MSB-only ZERO the other half (Intel 8254 datasheet).
+       The same read-modify-write mistake in a second dress -- a guest that re-rates
+       a channel with a single MSB write would inherit whatever LSB was standing.
+       ZAR does not take this path (it uses lo/hi); this is fidelity on its own
+       merits, from the datasheet rather than from a run. */
+    v = 0x16; vdd_bus_io(&bus, 0x43, 1, 0, &v);          /* ch0, LSB only     */
+    v = 0x34; vdd_bus_io(&bus, 0x40, 1, 0, &v);
+    CHECK(pit.reload == 0x0034, "8254: LSB-only write zeroes the MSB");
+    v = 0x26; vdd_bus_io(&bus, 0x43, 1, 0, &v);          /* ch0, MSB only     */
+    v = 0x80; vdd_bus_io(&bus, 0x40, 1, 0, &v);
+    CHECK(pit.reload == 0x8000, "8254: MSB-only write zeroes the LSB");
+
+    /* restore what the rest of the battery expects */
+    v = 0x36; vdd_bus_io(&bus, 0x43, 1, 0, &v);
+    v = 0x00; vdd_bus_io(&bus, 0x40, 1, 0, &v);
+    v = 0x10; vdd_bus_io(&bus, 0x40, 1, 0, &v);
+    CHECK(pit.reload == 0x1000, "8254: reprogrammed back to 0x1000");
+
     /* T2: the time engine emits one IRQ0 per elapsed reload --------------- */
     g_irq = 0; pit.accum = 0; pit.total_clocks = 0;
     vdd_pit_add_clocks(&pit, 0x1000 * 3);                /* exactly 3 periods */

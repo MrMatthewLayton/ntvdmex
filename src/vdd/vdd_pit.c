@@ -50,12 +50,41 @@ static void pit_out(void *self, uint16_t port, uint8_t w, uint32_t v)
             st->access = acc; st->mode = (uint8_t)((val >> 1) & 7); st->wr_flip = 0;
         }
     } else if (port == 0x40) {               /* channel-0 reload write          */
+        /* ── ★★★★ A HALF-WRITTEN COUNT IS NOT A COUNT. ──────────────────────────────
+             This used to READ-MODIFY-WRITE `reload` on every byte, so between a guest's
+             two `out 40h` instructions the divisor was (old MSB | new LSB) -- a value
+             the guest never asked for and, when the two halves disagree, one that can
+             be arbitrarily small.
+           ★ MEASURED ON ZAR (GH #23): it programs 0x8002 (36.41 Hz, near enough 2x the
+             BIOS rate) as lo=0x02 then hi=0x80, arriving with reload=0 (65536). Under
+             the old rule the FIRST byte alone left `reload = (0 & 0xFF00) | 0x02` =
+             **2, i.e. 596,591 Hz**, and it stayed there for the whole gap between the
+             two port writes. That gap is not microseconds for us: each `out`
+             is a trap out of protected mode and back, and host_pit_sync() runs on ports
+             0x40-0x43, so the transient rate got sampled. The run's own counters show
+             the damage exactly: `raises=29657` in 45 s against a programmed 36.4 Hz,
+             i.e. ~29,000 interrupts the 8254 never generated, each costing a
+             SuspendThread round trip under the device lock and saturating the owed
+             backlog (`owed_max=64`). The tell was `PIT-RELOAD 0x2 (hz=0x91a6f)` sitting
+             in the log with nothing else out of range.
+           ► THE 8254 BUFFERS. Writing the LSB does not load the counter; the count
+             register is loaded when the MSB arrives. So buffer it and commit once --
+             the guest's two writes become ONE rate change, which is what the hardware
+             does and what every guest is written against.
+           ⚠ AND LSB-ONLY / MSB-ONLY ZERO THE OTHER HALF (Intel 8254 datasheet). That
+             is the same read-modify-write mistake in a second dress -- a guest that
+             re-rates a channel with a single MSB write would inherit whatever LSB
+             happened to be standing. ZAR does not take this path (it uses lo/hi), so
+             this half is fidelity, fixed on its own merits and not on its evidence.
+           ⚠⚠ THE PIT IS THE MOST SHARED PATH IN THIS PROJECT -- see the note on
+             host_irq_sink's throttle, where a change measured on Doom cost SKYROADS a
+             fifth of its clock. Re-gate BOTH before believing this. */
         uint8_t acc = st->access ? st->access : 3;
-        if (acc == 1) st->reload = (uint16_t)((st->reload & 0xFF00) | val);
-        else if (acc == 2) st->reload = (uint16_t)((st->reload & 0x00FF) | ((uint16_t)val << 8));
-        else {                               /* lo then hi                      */
-            if (!st->wr_flip) { st->reload = (uint16_t)((st->reload & 0xFF00) | val); st->wr_flip = 1; }
-            else { st->reload = (uint16_t)((st->reload & 0x00FF) | ((uint16_t)val << 8)); st->wr_flip = 0; }
+        if (acc == 1)      st->reload = val;                        /* LSB only: MSB := 0 */
+        else if (acc == 2) st->reload = (uint16_t)((uint16_t)val << 8);  /* MSB only: LSB := 0 */
+        else {                               /* lo then hi -- ONE atomic load   */
+            if (!st->wr_flip) { st->wr_lo = val; st->wr_flip = 1; }
+            else { st->reload = (uint16_t)(((uint16_t)val << 8) | st->wr_lo); st->wr_flip = 0; }
         }
     } else if (port == 0x42) {               /* channel-2 reload (speaker tone) */
         uint8_t acc = st->ch2_access ? st->ch2_access : 3;

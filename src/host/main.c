@@ -11879,10 +11879,70 @@ static void dpmi_invoke_callback(dos_machine_t *m, volatile BYTE *tib, int slot)
  */
 static BYTE g_pm_disp[256];                 /* 1 while inside vec's client handler */
 
+/* ── ★★★★ A REFLECTED INTERRUPT IS THE ONE TRACE THAT CAN OUTRUN THE GUEST. ────────
+     Every dispatch below writes two log_append lines (~350 bytes) and does two
+     host_readable() probes to print the caller's pointer. That is the right amount of
+     detail for a handler called a dozen times, and a firehose for one the guest POLLS.
+   ★ MEASURED ON ZAR (GH #23), and it is most of why "Game loading..." crawls: while it
+     decompresses ZARN0.SFS the game asks its OWN INT 21h hook for AH=2Ch about 3,800
+     times a second. A 45 s run is ~170,000 reflected dispatches, ~340,000 WriteFile
+     calls and 53 MB of log -- and a histogram of that log is 100% one line, one vector,
+     one AX value, repeated. The reads it is there to explain are 501 lines of it.
+   ★ THIS PROJECT HAS PAID FOR THIS EXACT SHAPE TWICE. Per-line log_append under the
+     device lock cost SKYROADS 24% of its delivered timer ticks and only a player's ear
+     caught it (see host_irq_sink); the same argument is written out again over
+     wowquiet.txt. Both times the lesson was "stop writing a kilobyte per event". This
+     is the third site, and the first one on a path a guest can drive at will.
+   ► SO BOUND IT PER (VECTOR, AH) -- NOT GLOBALLY. A global cap goes quiet on a RARE
+     vector because a common one already spent the budget, which is how a bounded log
+     becomes worse than no log at all (it is the "instrument lying by omission" that
+     LOG_MAX_BYTES was raised three times to avoid). Keyed this way, INT 21h AH=2Ch
+     falls silent after its first few and an INT 21h AH=3Fh arriving ten minutes later
+     still prints in full.
+   ► ...AND BOUND IT BY RATE, NOT ONLY BY COUNT. A pure count cap answers the wrong
+     question: it silences a pair after N lines however slowly they arrive, so the run
+     that matters -- a guest that is still going ten minutes in -- goes dark exactly
+     where the evidence is. ZAR is both cases at once: AH=2Ch at ~3,800/s must be
+     stopped, AH=3Fh at ~6/s (2,553 reads in a seven-minute run) is the ACTUAL SIGNAL
+     and must not be. So: the first PM_DISP_LOG_MAX of a pair always print (a rare call
+     is fully visible from its first appearance), and after that a pair may print again
+     once every PM_DISP_QUIET_MS. A 6/s caller stays fully traced; a 3,800/s one drops
+     to ten lines a second, ~400x smaller, and never goes silent.
+   ⚠ NOTHING IS LOST, only un-written: every pair is COUNTED whether logged or not and
+     the totals are reported at STAGE2. And a pair says so when it crosses into the
+     rate-limited regime, because a trace that simply stops reads as a crash (the rule
+     log_append's own cap follows). */
+#define PM_DISP_LOG_MAX   24        /* always-loud lines per (vec, AH) */
+#define PM_DISP_QUIET_MS  100u      /* ...then at most one more per pair per this */
+static BYTE  g_pm_disp_logged[256][256];    /* always-loud lines emitted for (vec, AH) */
+static DWORD g_pm_disp_count[256][256];     /* every dispatch, logged or not */
+static DWORD g_pm_disp_ms[256][256];        /* GetTickCount of the last line for the pair */
+
 static int dpmi_dispatch_to_pm_handler(dos_machine_t *mp, volatile BYTE *tib,
                                        DWORD vec, unsigned steps)
 {
-    char lb[256], *lp = lb;
+    /* ── ⚠⚠ 256 WAS NINE BYTES OF HEADROOM, AND ADDING ONE FIELD BLEW IT. ────────────
+         The entry line below is built in one pass with no bound: vector, handler
+         sel:off, AX, DS:EDX, its linear address, a SIXTEEN-BYTE zdump (48 chars on its
+         own), then SS/ESP/CS with their D/B annotations and h32. That is 247 characters
+         of a 256-byte stack buffer. Adding the caller's `from CS:EIP lin=` -- 42 more --
+         overflowed it by 33 and smashed this frame; the host died with
+         `DPMI FATAL: exception code=0xc0000005 ... bytes@fault: 0f b6 01 c0 e8 04` --
+         which is zdump's own nibble-to-hex lookup running on a wrecked pointer, i.e. the
+         formatter faulting several calls downstream of the frame the overflow ruined.
+       ► SO SIZE IT FOR THE LINE, NOT FOR THE HABIT. Nothing here counts characters, and
+         the next field added would have hit this again -- 512 leaves room for one. If
+         this line ever grows a second dump, split it rather than raising this again. */
+    char lb[512], *lp = lb;
+    /* Captured at ENTRY and kept in a LOCAL: the handler's whole job is to change AX, so
+       the exit line must be keyed on what the caller ASKED, not on the answer -- and this
+       function re-enters itself when a handler chains, so a static would cross-talk. */
+    unsigned dvec = vec & 0xFF, dah = (VDM_REG(tib, VTIB_EAX) >> 8) & 0xFF;
+    DWORD dnow = GetTickCount();
+    int   dfirst = (g_pm_disp_logged[dvec][dah] < PM_DISP_LOG_MAX);
+    int   loud = dfirst || (dnow - g_pm_disp_ms[dvec][dah]) >= PM_DISP_QUIET_MS;
+    if (g_pm_disp_count[dvec][dah] != 0xFFFFFFFFu) ++g_pm_disp_count[dvec][dah];
+    if (loud) g_pm_disp_ms[dvec][dah] = dnow;
     DWORD sEIP = VDM_REG(tib, VTIB_EIP), sESP = VDM_REG(tib, VTIB_ESP);
     WORD  sCS  = (WORD)VDM_REG(tib, VTIB_CS), sSS = (WORD)VDM_REG(tib, VTIB_SS);
     DWORD sEFL = VDM_REG(tib, VTIB_EFLAGS);
@@ -11930,10 +11990,22 @@ static int dpmi_dispatch_to_pm_handler(dos_machine_t *mp, volatile BYTE *tib,
     VDM_SET16(tib, VTIB_CS, g_pm_int[vec].sel);
     VDM_REG(tib, VTIB_EIP) = h32 ? g_pm_int[vec].off : (g_pm_int[vec].off & 0xFFFF);
 
+    if (!loud) goto quiet_entry;
+    if (dfirst) ++g_pm_disp_logged[dvec][dah];
     lp = zput(lp, "PM INT 0x"); lp = zhex(lp, vec);
     lp = zput(lp, " -> CLIENT handler 0x"); lp = zhex(lp, g_pm_int[vec].sel);
     lp = zput(lp, ":0x"); lp = zhex(lp, g_pm_int[vec].off);
     lp = zput(lp, " AX=0x"); lp = zhex(lp, VDM_REG(tib, VTIB_EAX) & 0xFFFF);
+    /* ► ...AND WHO ASKED. The interrupted CS:EIP is already saved right here (it has to
+         be, to resume the client past its INT) and was never printed -- so a reflected
+         call named the HANDLER and never the CALLER, and "which of the guest's own code
+         is doing this?" needed a separate dig every time. It is the question session 58's
+         handoff left open for ZAR ("catch the last AH=3F read's caller"), and the answer
+         was two saved registers away. Linear too: a flat client's CS base is 0, but a
+         16-bit one's is not, and the file image is only comparable in linear terms. */
+    lp = zput(lp, " from 0x"); lp = zhex(lp, sCS);
+    lp = zput(lp, ":0x"); lp = zhex(lp, sEIP);
+    lp = zput(lp, " lin=0x"); lp = zhex(lp, dpmi_sel_base(sCS) + sEIP);
     /* ► WHAT THE CALLER ACTUALLY PASSED. A DOS call that takes a pointer takes it in
          DS:(E)DX, and when one fails the FIRST question is whether the caller's pointer
          was good -- i.e. whether the fault is the client's or ours. Print the selector,
@@ -11962,6 +12034,16 @@ static int dpmi_dispatch_to_pm_handler(dos_machine_t *mp, volatile BYTE *tib,
         lp = zput(lp, dpmi_sel_is32((WORD)VDM_REG(tib, VTIB_CS)) ? " (CS D/B=1)" : " (CS D/B=0)");
         lp = zput(lp, " h32="); lp = zhex(lp, (DWORD)h32); } }
     lp = zput(lp, "\r\n"); log_append(LOG_PATH, lb, lp); serial_out(lb, lp); lp = lb;
+    /* Say so on the last always-loud one, not silently on the first suppressed one. */
+    if (dfirst && g_pm_disp_logged[dvec][dah] >= PM_DISP_LOG_MAX) {
+        lp = zput(lp, "PM INT 0x"); lp = zhex(lp, vec);
+        lp = zput(lp, " AH=0x"); lp = zhexb(lp, (BYTE)dah);
+        lp = zput(lp, ": reflected-dispatch trace RATE-LIMITED from here (this vector/AH"
+                      " pair only, one line per 100 ms; every one is still counted --"
+                      " total at STAGE2)\r\n");
+        log_append(LOG_PATH, lb, lp); serial_out(lb, lp); lp = lb;
+    }
+quiet_entry:
 
     g_pm_disp[vec] = 1;
     for (ph = 0; ph < 4096 && !done; ++ph) {
@@ -12052,11 +12134,18 @@ static int dpmi_dispatch_to_pm_handler(dos_machine_t *mp, volatile BYTE *tib,
     VDM_REG(tib, VTIB_EIP) = sEIP + 2;               /* past the 2-byte patched INT */
     VDM_SET16(tib, VTIB_SS, sSS);
     VDM_REG(tib, VTIB_ESP) = sESP;
-    lp = zput(lp, "PM INT 0x"); lp = zhex(lp, vec);
-    lp = zput(lp, done ? " <- handler IRET, AX=0x" : " <- handler NO-RET, AX=0x");
-    lp = zhex(lp, VDM_REG(tib, VTIB_EAX) & 0xFFFF);
-    lp = zput(lp, " CF="); lp = zhex(lp, VDM_REG(tib, VTIB_EFLAGS) & 1u);
-    lp = zput(lp, "\r\n"); log_append(LOG_PATH, lb, lp); serial_out(lb, lp);
+    /* ⚠ PAIRED WITH THE ENTRY LINE BY `loud`, NOT RE-TESTED. Re-testing the counter here
+         would print an exit with no entry (the entry line consumed the last of the
+         budget), and an unmatched "<- handler IRET" is exactly the shape that reads as a
+         re-entrancy bug. A NO-RET is a different matter and is never suppressed: it means
+         the handler did not come back, which is a fault report, not a trace line. */
+    if (loud || !done) {
+        lp = zput(lp, "PM INT 0x"); lp = zhex(lp, vec);
+        lp = zput(lp, done ? " <- handler IRET, AX=0x" : " <- handler NO-RET, AX=0x");
+        lp = zhex(lp, VDM_REG(tib, VTIB_EAX) & 0xFFFF);
+        lp = zput(lp, " CF="); lp = zhex(lp, VDM_REG(tib, VTIB_EFLAGS) & 1u);
+        lp = zput(lp, "\r\n"); log_append(LOG_PATH, lb, lp); serial_out(lb, lp);
+    }
     return 1;
 }
 
@@ -17180,6 +17269,50 @@ static void dos_wow_publish(volatile BYTE *hdlr, volatile BYTE *ct,
     *(volatile WORD *)(hdlr + DOS_SYSVARS_OFF + 0x6A) = tbl;
 }
 
+/* ── ★★★★★ A TITLE IS "PROGRAM [ARGUMENTS]", AND WE OPENED THE WHOLE THING AS A
+     FILENAME. (session 59) `target.txt` has split `path [args]` since M2.5, but the
+     CSRSS path -- which is EVERY REAL LAUNCH, because the IFEO hook is how a program
+     reaches us on the user's machine -- never did. `ZAR.EXE -Help` therefore tried to
+     open a file literally called `C:\game\ZAR.EXE -Help`, read ZERO bytes, fell through
+     to the four-byte `mov ah,4Ch / int 21h` embedded stub and exited in 78 ms having
+     printed nothing. **No DOS program could be given an argument at all** -- not
+     `EDIT FOO.TXT`, not `DOOM -warp 1 1` -- and every one of them would have looked
+     like "the program runs and does nothing", which is the same symptom GH #131 chased
+     for a session. The tell is `loaded 0x00000000` followed by `embedded fallback`.
+   ► TRY THE WHOLE STRING FIRST, THEN SPLIT LEFT TO RIGHT, AND LET THE FILE SYSTEM
+     ARBITRATE. Opening the untouched string first is what keeps a real path CONTAINING
+     a space working; only if that fails is a space treated as the separator, and then
+     the FIRST split that names a file which actually EXISTS wins -- so
+     `C:\Program Files\x\y.exe -a` finds `y.exe` and not `C:\Program`. Guessing where
+     the arguments start is exactly the thing not to do here.
+   ⚠ `path` is modified in place (NUL-terminated at the end of the program name) and
+     *pargs is left pointing at the remaining arguments within it, leading whitespace
+     skipped, or NULL when there were none. Returns INVALID_HANDLE_VALUE if no split
+     names a real file, leaving `path` as it was found. */
+static HANDLE csrss_open_split(char *path, char **pargs)
+{
+    HANDLE hf;
+    int i;
+    *pargs = NULL;
+    hf = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
+    if (hf != INVALID_HANDLE_VALUE) return hf;
+    for (i = 0; path[i]; ++i) {
+        char save;
+        if (path[i] != ' ' && path[i] != '\t') continue;
+        save = path[i];
+        path[i] = 0;
+        hf = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
+        if (hf != INVALID_HANDLE_VALUE) {
+            char *a = path + i + 1;
+            while (*a == ' ' || *a == '\t') ++a;
+            if (*a) *pargs = a;
+            return hf;
+        }
+        path[i] = save;
+    }
+    return INVALID_HANDLE_VALUE;
+}
+
 int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
 {
     char report[8192]; char *p = report; char *base;
@@ -17715,7 +17848,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
          is what the join was for and is still right. */
     if (!nread && g_title[0]
         && (g_title[0] == '\\' || (g_title[1] == ':' && g_title[2] == '\\'))) {
-        char path[768]; HANDLE hf; int tn;
+        char path[768]; HANDLE hf; int tn; char *targs = NULL;
         zput(path, g_title);
         /* ⚠ AND THE TITLE ARRIVES WITH A TRAILING SPACE -- measured:
              `title=[C:\test\hello.com ]`. CreateFileA's treatment of one is not
@@ -17723,24 +17856,34 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
              the guest never typed. */
         for (tn = 0; path[tn]; ++tn) ;
         while (tn > 0 && (path[tn - 1] == ' ' || path[tn - 1] == '\t')) path[--tn] = 0;
-        hf = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
+        hf = csrss_open_split(path, &targs);        /* "program [args]" -- see the helper */
         if (hf != INVALID_HANDLE_VALUE) { ReadFile(hf, filebuf, sizeof(filebuf), &nread, NULL); CloseHandle(hf); }
         zput(progpath, path);
-        if (g_cmd[0]) zput(args, g_cmd);
+        /* The title's own arguments beat CSRSS's CmdLine field, which arrives as
+           junk on this path (measured: `cmd=[\]` for a `ZAR.EXE -Help` launch) and
+           was only ever a best-effort guess. */
+        if (targs)         zput(args, targs);
+        else if (g_cmd[0]) zput(args, g_cmd);
         p = zput(p, "STAGE2: loaded 0x"); p = zhex(p, nread);
         p = zput(p, " from "); p = zput(p, path);
+        if (targs) { p = zput(p, " args=["); p = zput(p, targs); p = zput(p, "]"); }
         p = zput(p, " [the title is ALREADY ABSOLUTE -- not joined to the"
                     " current directory]\r\n");
     }
     if (!nread && g_cur[0] && g_title[0]) {
-        char path[768]; char *pp = path; HANDLE hf;
+        char path[768]; char *pp = path; HANDLE hf; int tn; char *targs = NULL;
         pp = zput(pp, g_cur); pp = zput(pp, "\\"); pp = zput(pp, g_title);
-        hf = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
+        for (tn = 0; path[tn]; ++tn) ;              /* same trailing-space trim as above */
+        while (tn > 0 && (path[tn - 1] == ' ' || path[tn - 1] == '\t')) path[--tn] = 0;
+        hf = csrss_open_split(path, &targs);        /* a RELATIVE title carries args too */
         if (hf != INVALID_HANDLE_VALUE) { ReadFile(hf, filebuf, sizeof(filebuf), &nread, NULL); CloseHandle(hf); }
         zput(progpath, path);                       /* env argv[0] */
-        if (g_cmd[0]) zput(args, g_cmd);            /* best-effort: CmdLine if CSRSS populated it */
+        if (targs)         zput(args, targs);
+        else if (g_cmd[0]) zput(args, g_cmd);       /* best-effort: CmdLine if CSRSS populated it */
         p = zput(p, "STAGE2: loaded 0x"); p = zhex(p, nread);
-        p = zput(p, " from "); p = zput(p, path); p = zput(p, "\r\n");
+        p = zput(p, " from "); p = zput(p, path);
+        if (targs) { p = zput(p, " args=["); p = zput(p, targs); p = zput(p, "]"); }
+        p = zput(p, "\r\n");
     }
     if (!nread) {
         static const BYTE stub[] = { 0xB4, 0x4C, 0xCD, 0x21 };   /* mov ah,4Ch; int 21h */
@@ -21538,6 +21681,27 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         p = zput(p, " ring=");         p = zhex(p, g_sb.lap_len);
         p = zput(p, " toobig=");       p = zhex(p, g_sb.lap_toobig);
         p = zput(p, " lead_buffers=");  p = zhex(p, g_wave.nbufs);
+        /* ► WHAT THE BOUNDED REFLECTED-DISPATCH TRACE STOPPED WRITING DOWN. Every INT
+             reflected to a client's own PM handler is counted per (vector, AH) even once
+             the per-pair line budget is spent, and this is where the counts come back.
+             It is also the cheapest answer to "what is this guest actually DOING?" --
+             ZAR's answer is 21/2c x ~170000, i.e. it polls its own clock hook, which no
+             amount of steady-state single-stepping had made obvious. Sorted by nothing:
+             a vector/AH pair is its own name and the numbers are what matter. */
+        /* Flush first: up to 24 pairs is ~500 bytes and `report` is shared with everything
+           above, which has no bound of its own. */
+        p = zput(p, "\r\n"); log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+        p = zput(p, "STAGE2: PM reflected dispatches (vec/AH=count):");
+        { unsigned dv, da, shown = 0;
+          for (dv = 0; dv < 256 && shown < 24; ++dv)
+            for (da = 0; da < 256 && shown < 24; ++da) {
+                if (!g_pm_disp_count[dv][da]) continue;
+                p = zput(p, " "); p = zhexb(p, (BYTE)dv);
+                p = zput(p, "/");  p = zhexb(p, (BYTE)da);
+                p = zput(p, "=");  p = zhex(p, g_pm_disp_count[dv][da]);
+                ++shown;
+            }
+          if (!shown) p = zput(p, " none"); }
         p = zput(p, "\r\nSTAGE2: pit budget: syncs="); p = zhex(p, g_pit_syncs);
         p = zput(p, " raises=");    p = zhex(p, g_irq_raised[0]);
         p = zput(p, " attempts=");  p = zhex(p, g_pit_async_attempts);

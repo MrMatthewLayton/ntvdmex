@@ -26,6 +26,7 @@ typedef struct pit_state {
     uint8_t  access;        /* access mode: 1=lo, 2=hi, 3=lo/hi                  */
     uint8_t  mode;          /* operating mode 0-5 (informational)               */
     uint8_t  wr_flip;       /* lo/hi write phase (0 => lo next)                 */
+    uint8_t  wr_lo;         /* the LSB written so far in lo/hi mode -- see pit_out */
     uint8_t  rd_flip;       /* lo/hi read phase                                 */
     uint8_t  latched;       /* a count snapshot is latched for reading          */
     uint16_t latch;         /* the latched count                                */

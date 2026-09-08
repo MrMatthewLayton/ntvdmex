@@ -237,7 +237,213 @@ and matches the 6.22 oracle row for row (session 53)** — but `MEM /C` still re
    the next step, and it is also the honest correction for *a fix measured on
    one guest is a fix for none*.
 
-   ### ▶ START HERE: **SESSION 58 (below), then session 57.**
+   ### ▶ START HERE: **SESSION 59 (below), then session 58.**
+
+   ---
+
+   ## ★ SESSION 59 — ZAR IS NOT STUCK. IT IS RUNNING ITS ATTRACT LOOP, BLIND.
+
+   ### ▶ ★★★★★ THE ONE FACT THAT CHANGES THE PROBLEM
+
+   Session 58 handed over *"loads ~4.8 MB of a data file and stops progressing"* and
+   set the next step as *"instrument the TRANSITION where the reads stop"*. **There is
+   no transition, because the reads never stop.** Given seven minutes instead of
+   forty-five seconds, ZAR's file-read sequence is **PERIODIC**: period **1073 reads**,
+   6.2% mismatch, ~175 s per cycle, measured by autocorrelating the `INT21 AH=3F`
+   trace of a 420 s run. 2,553 reads, 1,148 of them distinct, the tail set hit 10-11
+   times each. The "stall at `pos=0x49d454`" was a 45-second window onto a cycle.
+
+   ★ **AND THE BINARY NAMES THE CYCLE.** ZAR's state machine switches on a dword at
+   obj1 link `0x4c878`, and each state loads a caption from the obj3 string pool:
+
+   | state | caption | | state | caption |
+   |---|---|---|---|---|
+   | 1 | `WAIT...` | | 6 | **`LOADING DEMO...`** |
+   | 2 | `LOADING...` | | 7 | `LOADING INTRO...` |
+   | 5 | `LOADING BATTLE...` | | 9 | `QUITING...` |
+
+   A load cycle that repeats every ~175 s **is the attract/demo loop**. The outer loop
+   at obj1+0x1289 is a plain `wait for the tick counter to advance, then run that many
+   frames` — the thing session 58 filed as "its idle is a wait-for-next-tick loop" is
+   ZAR'S MAIN LOOP, and it is turning. Nothing fails: the binary carries
+   `Can't load game data`, `Library reading error`, `** NOT ENOUGH MEMORY: **` and
+   `Error loading sound effects.`, and **not one of them is ever printed**.
+
+   ⇒ **The blocker is not loading and never was. ZAR runs its game logic and never
+   initialises video** — `INT 10h` is called ZERO times in a seven-minute run.
+
+   ### ▶ HOW TO READ THE GUEST'S ADDRESSES (this cost an hour; it need not again)
+
+   - `ZAR.EXE` is MZ + **LE at 0x2a50**, three objects; the object page map is LINEAR,
+     so `obj1 + off` is at file `datapages + off` (`datapages` = LE header `+0x80`).
+   - The load base is IN THE LOG: `INT31h AX=0501 BX=0x0b CX=0x7000 [LE CODE OBJECT]
+     -> mem 0x03f70000` is obj1 (0xb7000 = its 183 pages). obj3 is the next 0x621000.
+     ⚠ **It moves run to run** — 0x03f70000 one run, 0x03b70000 the next. Take it from
+     the log, never from a previous session's note.
+   - The file image is already relocated against the LINK bases (**obj1 @ 0x10000,
+     obj3 @ 0xe0000**), so an absolute operand in a disassembly is a link address and
+     `guest = link - link_base + load_base`. Confirmed: obj1+0xae71c (the LE entry
+     point) is the `WATCOM C/C++32 Run-Time` banner.
+   - The string pool at obj3+0x100.. is the game's whole vocabulary — states, menus,
+     every error message. Dump it FIRST on any new guest; it is an hour of call-graph
+     work for free.
+
+   ### ▶ AND SWITCHES NOTHING ON THE RIG COULD REACH
+
+   `ZAR.EXE` obj3+0x1b5 is its own `-Help` text:
+   `-NoSound` (disables the sound system), **`-NoVESA2` (disables VESA 2.0 linear
+   frame buffer modes)**, `-Join <address> <port#>`, `-Psw <password>`. Every runner
+   here hard-coded a bare `ZAR.EXE`. `scripts/bm/zarargs.bat` passes a guest command
+   line (on the REAL command line — when CSRSS names the program the host does not
+   consult `target.txt`); `-Help` is the smoke test that arguments reach the guest.
+   ⚠ Note this against session 58's *"do not plan the VESA work around ZAR"*: that
+   conclusion still holds for the CONFIGURED mode (`USER1.CFG` ships `VGA_320x200`),
+   but the binary plainly has a VESA 2.0 path, a `VIDEO MODES` menu, and VBE `4F06`/
+   `4F07`/PM-interface call sites at obj1+0x97dca..0x980c9.
+
+   ### ▶ TWO DEFECTS FIXED, BOTH FOUND BY LOOKING AT WHAT THE HOST WAS DOING
+
+   **1. ★★★★ THE REFLECTED-INTERRUPT TRACE WAS A FIREHOSE A GUEST COULD DRIVE.**
+   `dpmi_dispatch_to_pm_handler` wrote two `log_append` lines (~350 bytes, plus two
+   `host_readable` probes) on EVERY reflected INT, unconditionally. ZAR polls its own
+   `INT 21h` hook for `AH=2Ch` at ~3,800/s, so a 45 s run was ~170,000 dispatches,
+   ~340,000 `WriteFile` calls and **53 MB of log** — a histogram of which is 100% one
+   line, one vector, one AX value. The 501 file reads that mattered were 0.1% of it.
+   ► Now bounded **per (vector, AH)**: the first 24 of a pair always print, then at
+   most one per 100 ms, with the total for every pair reported at STAGE2 and a line
+   saying when a pair crossed into the limited regime. **A seven-minute run is 9 MB
+   instead of ~500 MB** — which is the only reason the periodicity above was visible.
+   ⚠ Per-pair and RATE-based, both deliberately: a global count cap silences a rare
+   vector because a common one spent the budget, and a pure count cap goes dark exactly
+   where a long run's evidence is. `AH=3Fh` at 6/s stays fully traced.
+   ★ This is the THIRD time this project has paid for a per-event log in a hot path
+   (Skyroads lost 24% of its ticks to one; `wowquiet.txt` argues it again).
+
+   **2. ★★★★ THE 8254 APPLIED HALF A COUNT.** `pit_out` read-modify-wrote `reload` on
+   every byte, so between a guest's two `out 40h` instructions the divisor was
+   (old MSB | new LSB). ZAR programs **0x8002** (36.41 Hz, ~2x the BIOS rate) as
+   lo=0x02 then hi=0x80, from a standing 0 (65536) — so the LSB write alone left
+   **`reload = 2` = 596,591 Hz** for the whole gap between the two writes, and that gap
+   is not microseconds for us, it is two traps out of protected mode and back.
+   The run's own counters had said so all along and nobody had read them:
+   `raises=29657` in 45 s against a programmed 36.4 Hz, `owed_max=64` (saturated),
+   `PIT-RELOAD 0x2 (hz=0x91a6f)` sitting in the log with nothing else out of range.
+   ~29,000 interrupts the 8254 never generated, each a `SuspendThread` round trip under
+   the device lock. ► The real 8254 buffers the LSB and loads the count register on the
+   MSB write. LSB-only / MSB-only zeroing the other half is the same mistake in a second
+   dress and is fixed too, but **on datasheet grounds, not on ZAR's evidence** — ZAR
+   uses lo/hi and never takes that path. Three new checks in
+   `tools/dostest/pit_test.c`, **verified failing on the old code**, 26/26 passing now.
+   ⚠⚠ The PIT is the most shared path here — so BOTH were re-gated, same day, same box,
+   `bmqueue.sh` at the standard 45 s cap, the "before" run using the session-58 binary:
+
+   | | Doom before | Doom after | Skyroads before | Skyroads after |
+   |---|---|---|---|---|
+   | `pit_reload` | 0x214a (140 Hz) | 0x214a | 0x19e4 (180 Hz) | 0x19e4 |
+   | `raises` | 6624 | **6189** | 8242 | **8109** (=180.0 Hz exactly) |
+   | delivered / raises | 93% | **100%** | — | — |
+   | `owed_max` | 64 (**saturated**) | **27** | — | — |
+   | owed buckets 32-63 / 64 | 28 / 26 | **0 / 0** | — | — |
+   | `irq0_inj` (V86) | — | — | 5415 | **5413** (0.04%) |
+
+   ⇒ **Doom strictly better, Skyroads unaffected**, and in both the drop in `raises` is
+   exactly the phantom burst disappearing. That is the shape a correctness fix should
+   have: the guest's programmed rate is untouched, only the invented interrupts go.
+
+   ★★★ **AND IT REFUTES A BELIEF THIS HOST IS BUILT ON.** `host_irq_sink`'s throttle is
+   justified in a long comment by *"Doom's music driver programs the 8254 at 16 kHz
+   (reload 0x4a = 16 kHz, measured)"*, which makes a 50 ms catch-up gap EIGHT HUNDRED
+   raises. **There is no 16 kHz timer.** `0x4a` is the LOW BYTE of `0x214a`, and the
+   "measurement" was this bug's transient being read as the guest's intent. Doom
+   programs 140 Hz, once. ▶ So the whole "one attempt per sync" PM throttle was built to
+   defend against a burst WE CREATED — and it is the thing that later cost Skyroads a
+   fifth of its clock until it was scoped to PM clients. It is now defending against
+   nothing. **Removing it is a real lever and a separate, measured change** — do not
+   slip it in with this one, but it is the first thing to try for any PM guest that
+   looks tick-starved.
+
+   ### ▶ ★★★★★ AND THE BIG ONE, FOUND BY TRYING TO PASS `-Help`:
+   ### **NO DOS PROGRAM COULD BE GIVEN A COMMAND-LINE ARGUMENT. AT ALL.**
+
+   `target.txt` has split `path [args]` since M2.5. **The CSRSS path never did** — and
+   that is EVERY REAL LAUNCH, because the IFEO hook is how a program reaches us on the
+   user's machine. So `ZAR.EXE -Help` opened a file literally called
+   `C:\game\ZAR.EXE -Help`:
+
+   ```
+   STAGE2: loaded 0x00000000 from C:\game\ZAR.EXE -Help
+   STAGE2: loaded 0x00000000 from C:\game\C:\game\ZAR.EXE -Help
+   STAGE2: cmdtail len=0x02 [20 5c 0d ...]          <- " \" -- junk from CSRSS's cmd= field
+   ==> DOS terminate (AH=4Ch), exit code AL=0x00000000     (78 ms)
+   ```
+
+   Zero bytes read, fall through to the four-byte `mov ah,4Ch / int 21h` embedded stub,
+   clean exit having done nothing. **`EDIT FOO.TXT`, `DOOM -warp 1 1`, `PKUNZIP x.zip`
+   — none of them could ever have worked**, and each would have looked exactly like
+   "the program runs and does nothing". Same symptom GH #131 chased for a session.
+   ► Fixed by `csrss_open_split()`: try the whole string first (so a real path
+   CONTAINING a space still works), then split left to right and take **the first split
+   that names a file which actually exists** — the file system arbitrates instead of a
+   guess. Applied to both the absolute-title and the joined-relative arms.
+   ✅ **MEASURED:** `zarargs.bat 30 -Help` now prints ZAR's own options block through
+   our host, `cmdtail len=0x06 [20 2d 48 65 6c 70 0d]` = `" -Help\r"`.
+
+   ⚠⚠ **AND IT WAS NEVER "NO ARGUMENTS" — IT WAS ALWAYS A WRONG ONE.** With the title's
+   args unparsed the code fell back to CSRSS's `CmdLine`, which arrives as junk on this
+   path (`cmd=[\]`), so **every ZAR run this project has ever done handed the guest a
+   command tail of `" \"`** — a spurious argument, on a program whose argument parser
+   selects network and video behaviour. That is a live suspect for the whole #23
+   investigation and it has been under every measurement since session 55.
+
+   ### ▶ ⚠⚠ AND ONE SELF-INFLICTED WOUND WORTH REMEMBERING
+
+   ⚠⚠ **AND THE HOST UNINSTALLS ITSELF WHEN OUR OWN METHOD LOOKS LIKE CRASHES.**
+   GH #132 counts consecutive failed starts in `C:\ntvdmex\startfail.txt`, incremented
+   at every start and cleared only by a CLEAN GUEST EXIT — but `zarlong.bat` and
+   friends deliberately LEAVE THE HOST RUNNING for a human to look at, and the next run
+   `taskkill`s it. That is a "failed start" every time. **Three in a row and the host
+   removes its own IFEO Debugger key**, after which every later run silently measures
+   STOCK ntvdm. Measured this session: a run came back `start mode was UNINSTALL`, the
+   guest died in 31 ms, and the evidence read as *"-Help makes ZAR exit instantly"*.
+   The mechanism is correct and stays; the runners now `del C:\ntvdmex\startfail.txt`,
+   because a runner that kills the host ON PURPOSE has no business feeding that counter.
+   ▶ This is [[stock-ntvdm-doom-oracle]]'s hazard from a NEW direction: not "somebody
+   forgot the key" but "we took it out ourselves". `bm\ifeochk.bat` answers it in
+   seconds — run it whenever a result surprises you.
+
+   Adding that `from CS:EIP` field **killed the host outright** on the next run:
+   `DPMI FATAL: exception code=0xc0000005 ... bytes@fault: 0f b6 01 c0 e8 04`. The
+   entry line is built in ONE pass into a `char lb[256]` with nothing counting
+   characters, and it was already **247 characters** long — vector, handler sel:off,
+   AX, DS:EDX, a linear address, a 16-byte `zdump` (48 chars by itself), SS/ESP/CS with
+   D/B annotations, h32. Nine bytes of headroom. The new field is 42, so it overflowed
+   the frame by 33 and the host died several calls later inside `zdump`'s own
+   nibble-to-hex lookup, running on a pointer the overflow had wrecked.
+   ► **A fixed log buffer in this file is a silent budget nobody is tracking.** The
+   fault report was excellent and named the formatter, but the formatter was the
+   VICTIM. Before adding a field to any of these lines, add up the one that is already
+   there. `lb` is 512 now, with the arithmetic written down beside it.
+
+   ### ▶ REFUTED THIS SESSION — DO NOT RE-TRY
+
+   - **"It is just slow / it is the log."** Ten minutes with `wowquiet.txt` on (trace
+     silenced, 8.6 KB of log instead of 500 MB): still `Game loading...`. The trace
+     was a real defect and worth fixing on its own merits; it is not the blocker.
+   - **"It stalls at 87% of ZARN0.SFS."** It reaches the same byte at 45 s and at 7
+     minutes because that byte is the END OF A CYCLE. See above.
+   - **The timer is being starved.** It is not: `delivered ~36/s` against a programmed
+     36.41 Hz. The 29,657 `raises` were the PIT bug's phantoms, not real demand.
+
+   ### ▶ NEXT
+
+   ▶ **Find why video init is never entered.** The game reaches its main loop and runs
+   it; `INT 10h` is never called, `mode sets: none`, `mkind=00`. Candidates in order of
+   cheapness: (a) `zarargs.bat 90 -Help` — prove arguments reach the guest at all;
+   (b) `zarargs.bat 420 -NoVESA2` — halve the video path; (c) walk FORWARD from the
+   caller of the last `AH=3F` read, which the dispatch line now names.
+   ⚠ The reflected-dispatch line now carries `from <CS>:<EIP> lin=<linear>` — the
+   caller was two already-saved registers away from being printed and never was, which
+   is the question session 58's handoff left open.
 
    ---
 

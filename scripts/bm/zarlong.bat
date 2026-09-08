@@ -31,6 +31,14 @@ ping -n 4 127.0.0.1 >nul
 copy /y "%BM%\ntvdmhost.exe" C:\ntvdmex\ >> "%LOG%" 2>&1
 del /q C:\ntvdmex\ntvdmhost.log >nul 2>&1
 del /q C:\ntvdmex\autoexit >nul 2>&1
+rem ⚠⚠ CLEAR THE CRASH-RECOVERY COUNTER -- THIS RUNNER IS WHY IT FIRES. GH #132 counts
+rem    consecutive failed starts in C:\ntvdmex\startfail.txt and clears it only on a
+rem    CLEAN GUEST EXIT; this script deliberately LEAVES THE HOST RUNNING so a human can
+rem    look at it, and the next run taskkills it. That is a "failed start" three times
+rem    over, and then the host REMOVES ITS OWN IFEO KEY and every later run measures
+rem    STOCK ntvdm without saying so. Measured session 59. See the fuller note in
+rem    zarargs.bat.
+del /q C:\ntvdmex\startfail.txt >nul 2>&1
 
 reg add "%IFEO%" /v Debugger /t REG_SZ /d "C:\ntvdmex\ntvdmhost.exe" /f >nul 2>&1
 echo C:\game\ZAR.EXE> C:\ntvdmex\target.txt
