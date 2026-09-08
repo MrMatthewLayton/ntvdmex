@@ -51,6 +51,16 @@ echo.> %N%\autoexit
 cd /d "%G%"
 start /wait /d "%G%" "" "%G%\dosstub.com"
 copy /y %N%\ntvdmhost.log "%SH%result_doom.log" >nul 2>&1
+rem ── ★ AND THE SELF-CAPTURED FRAMES, WHICH THIS ARM WAS SILENTLY DROPPING. ─────────
+rem    rt.bat's `doom` arm jumps straight here and `goto :eof`, so it never reaches the
+rem    `:collect` block that copies shot*.bmp back to the share -- the 8bpp palette-index
+rem    BMPs the host writes under capture.flag, and the ONLY input tools/doomoracle can
+rem    use (a desktop screenshot is 24bpp and has been through a colour transform, so it
+rem    compares the wrong thing). Session 59 went looking for a status-bar regression and
+rem    found the pixel-exact oracle had no frames to judge, purely because of this gap.
+rem      capture.flag on the share  ->  frames  ->  doomref.py cmp STBAR <bmp> --at 0,168
+del /q "%SH%shot_doom_*.bmp" >nul 2>&1
+for %%f in (%N%\shot*.bmp) do copy /y "%%f" "%SH%shot_doom_%%~nxf" >nul 2>&1
 rem -- COLLECT THE PCM CAPTURE TOO, AND DELETE IT FIRST.
 rem    sbdump.flag makes the host write C:\ntvdmex\sb.raw, but nothing ever copied it
 rem    back, so the share kept ONE capture from whenever somebody last did it by hand --
