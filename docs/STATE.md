@@ -311,6 +311,36 @@ and matches the 6.22 oracle row for row (session 53)** — but `MEM /C` still re
    ⇒ Committed behind **`simintrefl.flag`, OFF by default** — a wedge is strictly worse
    than "renders, silent", and this is the call `wowquiet.txt` / `pitinj.txt` already
    make. Turn it on to work the audio thread; leave it off to play.
+
+   ### ▶ ★★★ AND ONE MORE STEP DOWN THE SOUND PATH (always on, Doom re-gated)
+
+   **The SB mixer answered "no IRQ, no DMA".** Registers `0x80` (IRQ select) and `0x81`
+   (DMA select) fell through to the plain mixer RAM, which is zero — and on real
+   hardware zero there does not mean "default", it means **NO IRQ SELECTED / NO DMA
+   CHANNEL SELECTED**. A driver that autodetects the card instead of trusting `BLASTER`
+   learns it is unconfigured. ZAR's Miles driver does exactly that:
+   `out 224<-80 / in 225->00`, `out 224<-81 / in 225->00`, then `40 D3` (22222 Hz) and
+   `14 0F 00` — an 8-bit **single-cycle 16-byte** transfer, the classic init-time
+   DMA/IRQ **self-test** — and waits for a completion interrupt it cannot receive.
+   ► Now answered from `st->irq`/`st->dma8`/`st->dma16`, **derived not stored**, so it
+   cannot drift from the numbers that go into `BLASTER`.
+
+   ✅ It moves the fault exactly one step, and names the next gap precisely:
+   `in 225 -> 0x02` (IRQ 5) and `0x22` (DMA1|DMA5); **`sb{left}` 0x10 → 0x00 — the block
+   now DRAINS**; and **`ASYNC-EARLY bail irq=05 why=0x14`** — **IRQ 5 IS RAISED** and
+   refused, `why=0x14` being *"the CPU thread was in HOST code"*.
+   ⇒ **An IRQ raised while the guest is inside a nested real-mode call cannot be
+   delivered**: the async injector only places one when it finds the thread executing
+   GUEST code, and single-cycle means one IRQ and no second chance.
+   ▶ **NEXT: latch a hooked IRQ raised during a `0301/0302` call and have that loop
+   deliver it cooperatively**, the way the PM loop already latches IRQ0
+   (`g_pm_irq0_latch`). That is the last link in ZAR's audio.
+
+   ⚠ Doom re-gated and the change is **provably inert** for it: Doom only ever selects
+   mixer index `0x82` (10 times a run), never `0x80`/`0x81`, so no path reaches it.
+   `sb_blocks 0xec5→0xecc`, `midi_msgs 0x309→0x30b`, `idle 0x6202→0x5a02` (less inserted
+   silence), `mix82 ANSWERED_NO 3→3`. `REPLAYED_LOUD 0x78→0x98` is run-to-run variance
+   on a metric with no route to this code — not a regression.
    ⚠ Only reflects when the GUEST owns the vector (IVT segment != `DOS_HDLR_SEG`).
    Vectors still pointing at our own stubs keep today's behaviour and stay visible in
    `STAGE2: simInt (DPMI 0300) UNHANDLED`, which is where the next one will be found.
