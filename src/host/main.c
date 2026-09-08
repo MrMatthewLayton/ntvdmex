@@ -2144,6 +2144,18 @@ static int async_inject_irq(unsigned irq)
             pq = zput(pq, " SS:ESP=0x"); pq = zhex(pq, (DWORD)g_async_pm_ss);
             pq = zput(pq, ":0x");        pq = zhex(pq, g_async_pm_esp);
             pq = zput(pq, " efl=0x");    pq = zhex(pq, g_async_pm_efl);
+            /* ── ★ WHAT CODE WAS INTERRUPTED. A timer injection reports WHERE the guest
+                 was; when the guest is STUCK, where it was is the whole question, and the
+                 address alone cannot answer it -- a spin on a memory flag, a spin on a
+                 port and a spin waiting for an interrupt all look identical as a number.
+                 Sixteen bytes at the interrupted EIP can be disassembled, so "it is
+                 looping around 0x03b71317" becomes "it is polling X".
+                 (ZAR, GH #23: it reaches "Game loading..." and then spins.) */
+            {   DWORD ib = dpmi_sel_base((WORD)cs) + g_async_pm_eip;
+                const volatile BYTE *ip = (const volatile BYTE *)(ULONG_PTR)ib;
+                pq = zput(pq, " code@eip=");
+                if (mem_readable((ULONG_PTR)ib, 16)) pq = zdump(pq, (const void *)ip, 16);
+                else                                 pq = zput(pq, "<unreadable>"); }
             pq = zput(pq, "\r\n"); log_append(LOG_PATH, pb, pq); serial_out(pb, pq);
             if (!ok) g_async_pm_bail2++;
         }

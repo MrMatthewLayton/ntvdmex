@@ -47,6 +47,17 @@ del /q "%RES%\rigshot.txt" >nul 2>&1
 "%BM%\rigshot.exe" list >nul 2>&1
 type "%RES%\rigshot.txt" >> "%LOG%" 2>&1
 tasklist /fi "imagename eq ntvdmhost.exe" >> "%LOG%" 2>&1
-copy /y C:\ntvdmex\ntvdmhost.log "%RES%\zarlong_host.txt" >nul 2>&1
+rem ⚠ THE LOG IS THE EXPENSIVE PART OF A LONG RUN. ZAR dispatches ~173,000 DOS calls
+rem   in 45 s and each writes several lines: 56 MB in 45 s, so a four-minute run is
+rem   ~300 MB -- past LOG_MAX_BYTES and far too slow to copy over SMB. `nolog` as the
+rem   second argument skips the copy so the run can be given real wall-clock and judged
+rem   on the SCREENSHOT alone, which is the only thing a "does it finish loading?"
+rem   question actually needs.
+if /i "%2"=="nolog" (
+  echo [zarlong] host log NOT copied ^(nolog^) -- size was: >> "%LOG%"
+  dir C:\ntvdmex\ntvdmhost.log >> "%LOG%" 2>&1
+) else (
+  copy /y C:\ntvdmex\ntvdmhost.log "%RES%\zarlong_host.txt" >nul 2>&1
+)
 echo [zarlong] LEFT RUNNING -- stop it from the tray icon or its own window. >> "%LOG%"
 echo DONE > "%RES%\zarlong_done.txt"
