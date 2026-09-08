@@ -20653,6 +20653,22 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                                   p = zput(p, " bytes@fault=");
                                   if (host_readable((const void *)fi2, 8)) p = zdump(p, (const void *)fi2, 8);
                                   else                                     p = zput(p, "<unreadable>"); }
+                                /* ── ★ AND WHO CALLED. The frame says WHERE it faulted; on a
+                                     #GP inside a subroutine that is only half the question,
+                                     because the other half is always "how did the guest get
+                                     here" -- and a routine that faults on its FIRST memory
+                                     access has usually been entered in the wrong state rather
+                                     than gone wrong on its own. The return address is sitting
+                                     on the faulting stack, a few words up from SS:SP, and it
+                                     costs one dump to have it instead of a second run and a
+                                     breakpoint. (ZAR, GH #23: `push 8 / pop es` in DOS/16M.) */
+                                { DWORD sb2 = dpmi_sel_base(fr[7]);
+                                  const volatile BYTE *st2 =
+                                      (const volatile BYTE *)(ULONG_PTR)(sb2 + fr[6]);
+                                  p = zput(p, "\r\n       @ss:sp = ");
+                                  if (sb2 && host_readable((const void *)st2, 0x20))
+                                       p = zdump(p, (const void *)st2, 0x20);
+                                  else p = zput(p, "<unreadable>"); }
                                 p = zput(p, "\r\n");
                                 log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
                                 continue;                 /* re-arm + re-enter, now in the handler */

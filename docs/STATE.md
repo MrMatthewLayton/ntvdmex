@@ -331,6 +331,38 @@ and matches the 6.22 oracle row for row (session 53)** — but `MEM /C` still re
    choose this source. The routine at `0x1b41` has **no near caller in its own
    segment** (scanned all 64 KB for `e8` targeting it), so it is reached by a far
    call or through a pointer table — start there.
+   ⚠ **STATIC ANALYSIS HAS HIT ITS LIMIT: `DOS4GW.EXE` IS MZ+LE AND ITS PAGES ARE NOT
+   LAID OUT LINEARLY.** The `file = guest + 39696` mapping was derived from two unique
+   byte patterns and is right for the fault site and the handler, but extrapolating it
+   to the CALLER (return address `0x5685`, read off the guest stack) lands on code
+   whose `call` target does not match the routine we faulted in. Do not trust that
+   mapping away from a verified anchor; the next pass needs the LE object/page map, or
+   a runtime trace.
+
+   ### ▶ ★★★★ THE STOCK ORACLE IS NOW A MEASUREMENT, NOT AN INFERENCE
+
+   The first read of this — *"stock runs ZAR, it goes fullscreen"* — rested on a
+   screenshot that was **entirely black**, which is what a desktop BitBlt of a
+   fullscreen DOS VDM looks like whether the guest is happy or sitting on an error.
+   That is the absence of evidence, and the investigation was resting on it. DOS/4GW
+   writes its fault report to **stdout**, so `scripts/bm/zarout.bat` runs ZAR under
+   both hosts with `> file` and compares text:
+
+   ```
+   STOCK : DOS/4GW Protected Mode Run-time  Version 1.97
+           Copyright (c) Rational Systems, Inc. 1990-1994     <- banner, NO error
+   OURS  : Error [35]: General Protection Fault in DOS4GW.EXE at 01A7:1B7D
+           code=0000 ss=001F ds=001F es=0000                  <- banner NEVER PRINTED
+   ```
+
+   **The gap is ours, confirmed in text, and we fault BEFORE DOS/4GW banners** — very
+   early in its own initialisation, after it has read its whole image. The `@ss:sp`
+   dump added to the `#GP` diagnostic this session is what produced the caller's
+   return address in the first place, and is the right kind of instrument here.
+   ⚠⚠ **`start /wait` ON OUR HOST WEDGES THE BOX.** Without the `autoexit` marker the
+   host keeps its window open after the guest ends, so `/wait` never returns; it took
+   a `controld kill` to clear. Every runner must either plant the marker (as `rt.bat`
+   does) or not wait at all.
 
    ⚠ **ONE HYPOTHESIS TESTED AND REFUTED, recorded so it is not re-tried.** `INT 15h
    AH=88h` answers `0x3C00` ("15 MB") with the comment *"matching the XMS pool"* —
