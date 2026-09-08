@@ -203,15 +203,49 @@
      name the offsets in a file and they come back in the fault report, with no
      guest-specific code in the host and nothing to rebuild between guesses. */
 #define DSPROBE_PATH     "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\dsprobe.txt"
+/* csprobe.txt is the same knob against CS: the guest's CODE. It exists because a
+   guest's dispatch can be PATCHED AT RUNTIME -- ZAR's DOS/16M reaches a routine the
+   file on disk has no call to, so what matters is the bytes in memory, not the bytes
+   in the image. Comparing the two is the whole point. */
+#define CSPROBE_PATH     "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\csprobe.txt"
 #define DSPROBE_MAX 12
 static WORD g_dsprobe[DSPROBE_MAX];
 static int  g_dsprobe_n = 0;
+static WORD g_csprobe[DSPROBE_MAX];
+static int  g_csprobe_n = 0;
+
+static void probe_load_into(const char *path, WORD *out, int *outn)
+{
+    char b[256]; DWORD rd = 0; int i = 0;
+    HANDLE h = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                           NULL, OPEN_EXISTING, 0, NULL);
+    *outn = 0;
+    if (h == INVALID_HANDLE_VALUE) return;
+    ReadFile(h, b, sizeof b - 1, &rd, NULL);
+    CloseHandle(h);
+    b[rd < sizeof b ? rd : sizeof b - 1] = 0;
+    while (b[i] && *outn < DSPROBE_MAX) {
+        unsigned v = 0; int got = 0;
+        while (b[i] == ' ' || b[i] == '\t' || b[i] == '\r' || b[i] == '\n' || b[i] == ',') ++i;
+        while (b[i]) {
+            char c = b[i];
+            if      (c >= '0' && c <= '9') v = (v << 4) | (unsigned)(c - '0');
+            else if (c >= 'a' && c <= 'f') v = (v << 4) | (unsigned)(c - 'a' + 10);
+            else if (c >= 'A' && c <= 'F') v = (v << 4) | (unsigned)(c - 'A' + 10);
+            else break;
+            ++got; ++i;
+        }
+        if (got) out[(*outn)++] = (WORD)v; else if (b[i]) ++i;
+    }
+}
 
 static void dsprobe_load(void)
 {
     char b[256]; DWORD rd = 0; int i = 0;
-    HANDLE h = CreateFileA(DSPROBE_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
-                           NULL, OPEN_EXISTING, 0, NULL);
+    HANDLE h;
+    probe_load_into(CSPROBE_PATH, g_csprobe, &g_csprobe_n);
+    h = CreateFileA(DSPROBE_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                    NULL, OPEN_EXISTING, 0, NULL);
     g_dsprobe_n = 0;
     if (h == INVALID_HANDLE_VALUE) return;
     ReadFile(h, b, sizeof b - 1, &rd, NULL);
@@ -10849,6 +10883,57 @@ static void dpmi_patch_code_region(DWORD base, DWORD limit, int d32)
                           }
                           continue;
                       }
+                      /* ── ★★★★★ AND ONLY A VECTOR WE CAN ACTUALLY SERVICE. ────────────
+                           THE THIRD INSTANCE OF THIS DEFECT, and the first two are already
+                           written up above and in x86len.h: a naive `CD nn` pair is not an
+                           INT instruction, and rewriting one that is really an operand
+                           destroys the instruction it belongs to.
+                         ★ MEASURED, ZAR (GH #23), and it is the whole reason that guest
+                           did not run. At this segment's +0x5683 the stream is
+                               e8 cd e4     call 0x3b52     (rel16 = 0xe4cd)
+                           and `cd e4` is the CALL'S DISPLACEMENT. The vote passed it --
+                           correctly, on its own terms: everything in front of it is DATA
+                           (a run of zero bytes), and an odd-aligned stream through zeros
+                           decodes `00 e8` as `add al,ch` and lands exactly here. The vote
+                           can only ever be a heuristic about where instructions START; it
+                           cannot know this region is not code at all.
+                           Patched, the call became `e8 c4 c4` -- target 0x1b49 instead of
+                           0x3b52 -- which lands MID-INSTRUCTION, decodes as
+                           `mov ah,al / les ax,[di]`, resynchronises at 0x1b4f, and thereby
+                           skips both the `[0x34]` test and the `int 15h` that the real
+                           routine begins with. It then compares an AX loaded from [di]
+                           against a zero memory count, matches, and falls into a block
+                           that addresses memory through identity-mapped selectors -- the
+                           `#GP` at 01A7:1B7D that DOS/4GW reports on the desktop.
+                         ⇒ THE 64K SCANNER ALREADY HAS THE ANSWER and this scanner never
+                           got it: "evidence only -- add a vector only with a guest that
+                           provably needs it, and only with a service arm to receive it".
+                           The set below is exactly the vectors dpmi_service_pm_int has an
+                           arm for. 0xE4 is not one of them; nothing could have been gained
+                           by patching it and a working guest was lost.
+                         ⚠ NOT PATCHING IS SAFE -- the same argument the FP-range arm just
+                           above relies on: a raw INT in protected mode is serviced out of
+                           the #GP (session 34), so a guest that really does execute one
+                           still reaches its handler. Patching is an OPTIMISATION, and it
+                           has now cost three guests.
+                         ⚠ 0x15 IS IN THE LIST, so this segment's other two sites (+0x1b3e
+                           and +0x1b4a, both real `cd 15`) are patched exactly as before. */
+                      { BYTE pv = mem[i+1];
+                        int serviced = (pv == 0x31 || pv == 0x21 || pv == 0x10
+                                        || pv == 0x16 || pv == 0x33 || pv == 0x2F
+                                        || pv == 0x11 || pv == 0x41 || pv == 0x1A
+                                        || pv == 0x08 || pv == 0x15);
+                        if (!serviced) {
+                            if (rej++ < 16) {
+                                char nb[176], *nq = nb;
+                                nq = zput(nq, "DPMI: NOT patching 0x"); nq = zhex(nq, lin);
+                                nq = zput(nq, " vec=0x"); nq = zhexb(nq, pv);
+                                nq = zput(nq, " -- no PM service arm for it, so a BOP here"
+                                              " could only ever lose an instruction\r\n");
+                                log_append(LOG_PATH, nb, nq); serial_out(nb, nq);
+                            }
+                            continue;
+                        } }
                       /* Record WHERE, not just how many -- see the push further down,
                          which happens AFTER the vote so the list and the count describe
                          the same set. "patched 2 INT sites" in a 55 KB code segment is
@@ -14994,6 +15079,53 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                                 p = zput(p, " -> resize bad sel");
                             }
                             break; }
+                        /* ── ★★★★ THE REAL-MODE VECTOR PAIR. DPMI 0.9 CORE, AND WE HAD
+                             NEITHER HALF. ───────────────────────────────────────────────
+                             0200h/0201h are the real-mode twins of the 0204h/0205h pair
+                             below: a protected-mode client reads and writes the V86 IVT
+                             through them, which is how an extender hooks a real-mode
+                             interrupt on behalf of the program it is hosting. Both
+                             answered UNSUP, and the asymmetry made it invisible -- the
+                             log showed 0204/0205 working all around them.
+                           ► THE GUEST THAT FOUND IT: ZAR (GH #23). Its DOS/16M reads ALL
+                             256 real-mode vectors (0200h x 256) and then installs its own
+                             (0201h x 39). Every one was refused, and it gave up with
+                             `DOS/16M error: [34] DPMI host error (cannot lock stack)`.
+                           ⚠ THE IVT IS THE STORE, not a shadow table of ours. A guest that
+                             hooks a real-mode vector must be visible to real-mode code that
+                             later executes `int nn` in V86 -- which dispatches through the
+                             IVT -- and to anything reading the vector back with INT 21h
+                             AH=35h. Keeping a private copy would make those three disagree.
+                             It is also exactly what the guest could already do by switching
+                             to real mode and storing the vector itself, so this grants no
+                             access it did not have; it only makes the documented route work.
+                           ⚠ AND IT CAN DISPLACE ONE OF OUR OWN BOP STUBS, deliberately. If
+                             a guest hooks a vector we service, its handler is the one that
+                             must run -- that is an ordinary TSR hooking an interrupt, and
+                             refusing it is how a host lies about whose machine it is. */
+                        case 0x0200: {                             /* get real-mode vector: BL -> CX:DX */
+                            DWORD bl = VDM_REG(tib, VTIB_EBX) & 0xFF;
+                            const volatile WORD *iv = (const volatile WORD *)(ULONG_PTR)(bl * 4);
+                            VDM_SET16(tib, VTIB_EDX, iv[0]);       /* offset  */
+                            VDM_SET16(tib, VTIB_ECX, iv[1]);       /* segment */
+                            VDM_REG(tib, VTIB_EFLAGS) &= ~1u;
+                            p = zput(p, " -> getRMvec int 0x"); p = zhex(p, bl);
+                            p = zput(p, " = 0x"); p = zhex(p, iv[1]);
+                            p = zput(p, ":0x"); p = zhex(p, iv[0]);
+                            break; }
+                        case 0x0201: {                             /* set real-mode vector: BL = CX:DX */
+                            DWORD bl = VDM_REG(tib, VTIB_EBX) & 0xFF;
+                            volatile WORD *iv = (volatile WORD *)(ULONG_PTR)(bl * 4);
+                            WORD oseg = iv[1], ooff = iv[0];
+                            iv[0] = (WORD)(VDM_REG(tib, VTIB_EDX) & 0xFFFF);
+                            iv[1] = (WORD)(VDM_REG(tib, VTIB_ECX) & 0xFFFF);
+                            VDM_REG(tib, VTIB_EFLAGS) &= ~1u;
+                            p = zput(p, " -> setRMvec int 0x"); p = zhex(p, bl);
+                            p = zput(p, " = 0x"); p = zhex(p, iv[1]);
+                            p = zput(p, ":0x"); p = zhex(p, iv[0]);
+                            p = zput(p, " (was 0x"); p = zhex(p, oseg);
+                            p = zput(p, ":0x"); p = zhex(p, ooff); p = zput(p, ")");
+                            break; }
                         case 0x0204: {                             /* get PM interrupt vector: BL -> CX:(E)DX */
                             DWORD bl = VDM_REG(tib, VTIB_EBX) & 0xFF;
                             VDM_SET16(tib, VTIB_ECX, g_pm_int[bl].sel);
@@ -16260,6 +16392,37 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                             return 1;
                         }
                     pm_int21_unhandled:
+                        /* ── ★★★★ INT 21h AX=FF80h -- "LOCK THIS MEMORY", AND THE ANSWER
+                             HERE IS YES. ─────────────────────────────────────────────────
+                             Rational's DOS/16M asks its host to lock a region through this
+                             call before it will run, and reads CF=1 as a hard failure:
+                                 mov ax,0xFF80 / mov dx,0x1301 / mov es,[bp+4] / int 21h
+                                 jae ok / push 0x22 / call <fatal>
+                             where 0x22 is message 34 of its table -- and 34 is exactly what
+                             ZAR printed on the desktop:
+                                 DOS/16M error: [34]  DPMI host error (cannot lock stack)
+                           ► THE ANSWER IS THE ONE THIS HOST ALREADY GIVES FOR THE DPMI TWIN.
+                             INT 31h AX=0600h (lock linear region) is answered CF=0 with the
+                             note "there is no virtual memory to lock, so lock is already
+                             true". Guest memory here is committed conventional/extended
+                             memory that is never paged out, so a lock request is a statement
+                             that is already satisfied -- and saying CF=1 does not describe
+                             the machine, it invents a failure.
+                           ⚠ SCOPED TO FF80h EXACTLY, and the fallthrough below is unchanged.
+                             The register dump under it exists because AH=0xFF is not a DOS
+                             function and the session-16 trace could not tell a real call from
+                             inherited garbage; that reasoning still applies to every OTHER
+                             FFxx, so only the subfunction with a guest and a decoded call
+                             site behind it is answered. Anything else still lands in the
+                             dump, which is what names the next one. */
+                        if ((VDM_REG(tib, VTIB_EAX) & 0xFFFF) == 0xFF80) {
+                            VDM_REG(tib, VTIB_EFLAGS) &= ~1u;      /* CF=0 -- locked */
+                            p = zput(p, "INT21h AX=FF80h lock region -> CF=0 (guest memory is"
+                                        " never paged here, so it is already locked)\r\n");
+                            log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                            VDM_REG(tib, VTIB_EIP) += 2;
+                            return 1;
+                        }
                         /* ── UNHANDLED INT 21h FROM PM: SAY ENOUGH TO IDENTIFY IT ────────
                            The session-16 trace reported five calls with "AH=0xff", which is
                            not a DOS function at all -- so either the client really is passing
@@ -20798,13 +20961,49 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                                                p = zdump(p, (const void *)dp, 4);
                                           else p = zput(p, "?? ");
                                       }
+                                  }
+                                  /* csprobe: the same against the FAULTING CODE SEGMENT, six
+                                     bytes each -- enough for `e8 rel16` plus what follows, which
+                                     is the shape being checked against the file on disk. */
+                                  if (g_csprobe_n) {
+                                      DWORD cb2 = dpmi_sel_base(fr[4]);
+                                      const volatile BYTE *co =
+                                          (const volatile BYTE *)(ULONG_PTR)cb2;
+                                      int cq;
+                                      p = zput(p, "\r\n       csprobe:");
+                                      for (cq = 0; cq < g_csprobe_n; ++cq) {
+                                          const volatile BYTE *cp = co + g_csprobe[cq];
+                                          p = zput(p, " cs[0x"); p = zhex(p, g_csprobe[cq]);
+                                          p = zput(p, "]=");
+                                          if (cb2 && host_readable((const void *)cp, 6))
+                                               p = zdump(p, (const void *)cp, 6);
+                                          else p = zput(p, "?? ");
+                                      }
                                   } }
                                 { DWORD fb2 = dpmi_sel_base(fr[4]);
                                   const volatile BYTE *fi2 =
                                       (const volatile BYTE *)(ULONG_PTR)(fb2 + fr[3]);
                                   p = zput(p, " bytes@fault=");
                                   if (host_readable((const void *)fi2, 8)) p = zdump(p, (const void *)fi2, 8);
-                                  else                                     p = zput(p, "<unreadable>"); }
+                                  else                                     p = zput(p, "<unreadable>");
+                                  /* ── ★ THE CODE AROUND THE FAULT, AND THE SELECTOR'S BASE.
+                                       Eight bytes AT the fault identify the instruction; they
+                                       do not identify WHERE IN THE GUEST'S IMAGE it came from,
+                                       and that is the question as soon as you start matching a
+                                       fault against a file on disk. A window either side can be
+                                       searched for in the binary, which either confirms the
+                                       file<->guest mapping or refutes it -- and this
+                                       investigation (GH #23) has now had TWO conclusions rest
+                                       on a mapping derived from a single 8-byte match.
+                                       The base is printed for the same reason: it is what turns
+                                       a selector:offset into the linear address pmbp.txt wants. */
+                                  p = zput(p, "\r\n       csbase=0x"); p = zhex(p, fb2);
+                                  p = zput(p, " code[ip-0x20..ip+0x20]=");
+                                  { const volatile BYTE *cw =
+                                        (const volatile BYTE *)(ULONG_PTR)(fb2 + ((fr[3] - 0x20) & 0xFFFF));
+                                    if (fr[3] >= 0x20 && host_readable((const void *)cw, 0x40))
+                                         p = zdump(p, (const void *)cw, 0x40);
+                                    else p = zput(p, "<unreadable>"); } }
                                 /* ── ★ AND WHO CALLED. The frame says WHERE it faulted; on a
                                      #GP inside a subroutine that is only half the question,
                                      because the other half is always "how did the guest get
