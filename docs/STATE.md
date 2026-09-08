@@ -241,7 +241,43 @@ and matches the 6.22 oracle row for row (session 53)** — but `MEM /C` still re
 
    ---
 
-   ## ★ SESSION 59 — ZAR IS NOT STUCK. IT IS RUNNING ITS ATTRACT LOOP, BLIND.
+   ## ★★★★★ SESSION 59 — **ZAR RENDERS.** ITS ATTRACT DEMO IS ON SCREEN, IN COLOUR.
+
+   ### ▶ THE ROOT CAUSE OF #23, AND IT WAS OURS
+
+   **DPMI `0300` (simulate real-mode interrupt) implemented ONLY `INT 21h` and `INT 33h`
+   — and then cleared CF unconditionally, so every other vector was told "done".**
+
+   A Watcom/DOS4GW program does not write `int 10h`. It calls `int86()`, and `int86`
+   under an extender is `INT 31h AX=0300, BL=10h`. So ZAR's `SetMode(0x13)` returned
+   SUCCESS having done nothing, and the game ran its demo — frames advancing, data
+   streaming — into a screen it had never been allowed to open. Same 45 s run:
+
+   | | before | after |
+   |---|---|---|
+   | `STAGE2: mode sets` | `none` | **`mode=0x13/kind=02/320x200`** |
+   | `STAGE2: video now` | `mkind=00` (text) | **`mkind=02 gw=0x140 gh=0xc8`** |
+   | `linear_bar_nonzero` | `0/0x2800` | **`0x2800/0x2800`** (framebuffer full) |
+   | unhandled `simInt` | *never printed* | `int2fh x3 int66h x3` (the game's own probes) |
+
+   ✅ **SCREENSHOT: 3D terrain, the `Z.A.R. - DEMO` banner, a vehicle — the attract demo
+   playing in our VDM window.** ⚠ That is RENDERING, not "playable": input, sound and a
+   real game session are unproven, and `done` means USER-CONFIRMED.
+
+   ★★★ **THIS IS THE SIXTH INSTANCE OF THE PROJECT'S MOST EXPENSIVE BUG SHAPE** — a
+   service that does nothing and reports success (see [[stepped-over-call-answers-at-random]]).
+   The `0300` arm's own comment says *"widen this when the evidence names an
+   interrupt"*, which is right — but it still cleared CF for vectors it did not
+   service, so nothing ever failed loudly.
+   ⚠⚠ **AND THE HOST HAD BEEN COUNTING THEM FOR FOUR SESSIONS.** `g_simint_unhandled`
+   and `g_simint_vec[]` recorded ZAR's seven unhandled `INT 10h` calls every run — into
+   the periodic KEYLOG block, **which a headless run never reaches**. Every "ZAR never
+   calls INT 10h" note in sessions 58 and 59 (including the ones above, written before
+   this was found) rested on a grep that could not see them. The counters are in STAGE2
+   now. ▶ **If a service dispatches on a sub-function, its unimplemented arms must be
+   reported where a HEADLESS run prints.**
+
+   ## ★ SESSION 59 (earlier) — HOW THE PROBLEM WAS NARROWED
 
    ### ▶ ★★★★★ THE ONE FACT THAT CHANGES THE PROBLEM
 

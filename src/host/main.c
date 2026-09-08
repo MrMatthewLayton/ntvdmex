@@ -915,6 +915,17 @@ static BYTE  g_bp_pending[DPMI_BP_MAX];  /* skipped -> needs re-arming once EIP 
 static DWORD g_bp_rep[DPMI_BP_MAX];
 static BYTE  g_bp_orig[DPMI_BP_MAX][2]; /* the two bytes we displaced                  */
 static BYTE  g_bp_armed[DPMI_BP_MAX];
+/* ── ⚠⚠ A REFUSAL IS A STANDING CONDITION, NOT AN EVENT. (session 59) ───────────────
+     dpmi_bp_arm() runs before EVERY PM entry, and both REFUSED arms below `continue`
+     without incrementing g_bp_arms -- so DPMI_BP_ARM_MAX, the ceiling that exists to
+     stop exactly this, never applies to them. A breakpoint on a one-byte instruction
+     therefore re-reports itself for the whole run: **489,200 lines and an 88 MB log**,
+     measured, from ONE misplaced breakpoint. The message is worth having (it names the
+     fix), but the guest cannot act on it and neither can the reader after the first.
+   ► So say it ONCE PER BREAKPOINT and then stay quiet. Not once globally: two
+     breakpoints refused for two different reasons must both be legible, which is the
+     same per-key argument the reflected-INT trace needed this session. */
+static BYTE  g_bp_refused[DPMI_BP_MAX];
 /* How many times each breakpoint has been PLANTED, and the ceiling. A repeating
    breakpoint on a hot instruction is a log bomb: one mis-sequenced re-arm fired
    340,808 times and produced a 268 MB log in a single run. Past the ceiling the site
@@ -11204,6 +11215,44 @@ static void dpmi_bp_load(void)
    ⇒ Mode bits 4..7 now carry the SEGMENT NUMBER when bit 1 is set. `2` still means
      segment 1 (0 is read as 1, so every existing pmbp.txt keeps working); `0x22` is
      segment 2, `0x32` segment 3, and so on. */
+/* ── ★★★ AND THE SAME FOR AN EXTENDED DOS GUEST: MODE BIT 8 = "OFFSET FROM THE LE
+     CODE-OBJECT LOAD BASE". (session 59) ────────────────────────────────────────────
+     The argument is the one dpmi_bp_resolve_seg already makes, arriving from the other
+     direction. krnl386's segment copies move every run; so does a DOS/4GW client's
+     image -- ZAR's LE code object came up at 0x03f70000 on one run and 0x03b70000 on
+     the next. Every interesting address in a #23 investigation is `obj1+0xNNNN` read
+     off a disassembly, and an absolute breakpoint list is a list that is wrong by the
+     next run. Session 32 lost readings to exactly this on the WOW side; `pmwatch.txt`
+     grew a `+` for it this session; this is the third instance and the last place that
+     still demanded a hand-copied address.
+   ⇒ `<addr> <dump> <skip> 8 <rep>` means `addr` is an offset from the base the host
+     itself prints as `[LE CODE OBJECT] -> mem 0x...`. Resolved when that allocation
+     happens, in place, clearing the bit -- so arming, hit matching and disarming stay
+     absolute and completely unchanged, exactly as the segment resolver does it.
+   ⚠ Bit 8, not bit 2: bit 2 is taken and its meaning (krnl386's segments, with the
+     segment number in bits 4..7) must not be disturbed. The two cannot both apply --
+     one guest is WOW, the other is an extended DOS program -- but they are checked
+     independently so a nonsense combination resolves once and stops, rather than
+     resolving twice into a wild address. */
+static void dpmi_bp_resolve_codebase(DWORD base)
+{
+    char lb[200], *q;
+    int k;
+    for (k = 0; k < g_bp_n; ++k) {
+        DWORD off;
+        if (!(g_bp_mode[k] & 8)) continue;
+        off = g_bp_lin[k];
+        g_bp_lin[k]   = base + off;
+        g_bp_mode[k] &= ~8u;
+        q = lb;
+        q = zput(q, "DPMI-BP: codebase+0x"); q = zhex(q, off);
+        q = zput(q, " -> linear 0x");        q = zhex(q, g_bp_lin[k]);
+        q = zput(q, " (the client's LE code object is at 0x"); q = zhex(q, base);
+        q = zput(q, ")\r\n");
+        log_append(LOG_PATH, lb, q); serial_out(lb, q);
+    }
+}
+
 static void dpmi_bp_resolve_seg(unsigned segno, DWORD base)
 {
     char lb[200], *q;
@@ -11300,6 +11349,36 @@ static void dpmi_bp_arm(void)
         if (g_bp_armed[k]) {
             if (g_bp_mode[k] == 1 ? (b[0] == 0xCC)
                                   : (b[0] == 0xC4 && b[1] == 0xC4)) continue;  /* still planted */
+            /* ── ⚠⚠ A HALF-CLOBBERED BOP MUST NOT BE RE-CAPTURED AS THE ORIGINAL. ───
+                 Falling straight through to the re-arm below saves whatever is at the
+                 site RIGHT NOW as `the guest's instruction` -- and when only the SECOND
+                 byte was overwritten, byte 0 is still OUR OWN 0xC4. Disarming then
+                 writes `C4 <x>` back into the guest permanently: a `LES` where an
+                 instruction used to be.
+               ★ MEASURED ON ZAR (#23), and the mechanism is exact. The breakpoint sat
+                 on obj1+0x8cdf2 `b8 24 77 5e 00` (mov eax,0x5e7724), so the 2-byte BOP
+                 covers the opcode AND THE LOW BYTE OF A RELOCATABLE OPERAND. The LE
+                 fixup pass ran AFTER we armed, rewrote the whole dword, and put 0x24
+                 back over our second byte -- the log shows `armed ... (displaced b8 24)`
+                 followed by `armed ... (displaced c4 24)`, the second being our own BOP
+                 recorded as the guest's code.
+               ⇒ ARMING BEFORE A CLIENT HAS FINISHED ITS FIXUPS IS NORMAL AND CANNOT BE
+                 AVOIDED -- the whole reason this runs before every PM entry is that
+                 modules appear late. So handle the partial clobber instead of racing
+                 it: byte 0 is still ours, therefore the byte 0 we saved first is still
+                 the truth; only byte 1's new value is news. Update that half, re-plant
+                 ours, and leave the entry armed. */
+            if (g_bp_mode[k] != 1 && b[0] == 0xC4 && g_bp_orig[k][0] != 0xC4) {
+                g_bp_orig[k][1] = b[1];                    /* the guest's new byte 1 */
+                b[1] = 0xC4;                               /* re-plant the lost half */
+                q = zput(q, "DPMI-BP: 0x"); q = zhex(q, lin);
+                q = zput(q, " half-clobbered (a fixup rewrote the byte under our BOP);"
+                            " byte 1 re-planted, saved original now ");
+                q = zdump(q, (const BYTE *)g_bp_orig[k], 2);
+                q = zput(q, "\r\n");
+                log_append(LOG_PATH, lb, q); serial_out(lb, q);
+                continue;
+            }
             g_bp_armed[k] = 0; pmap_clear(lin);            /* clobbered -> re-arm below */
         }
         if (b[0] == 0x00 && b[1] == 0x00) continue;        /* nothing loaded here yet */
@@ -11330,22 +11409,29 @@ static void dpmi_bp_arm(void)
               if (j != k && g_bp_armed[j] &&
                   (g_bp_lin[j] == lin + 1 || g_bp_lin[j] + 1 == lin)) clash = 1;
           if (clash) {
-              q = zput(q, "DPMI-BP: REFUSED 0x"); q = zhex(q, lin);
-              q = zput(q, " -- its 2-byte footprint overlaps another breakpoint\r\n");
-              log_append(LOG_PATH, lb, q); serial_out(lb, q);
+              if (!g_bp_refused[k]) {
+                  g_bp_refused[k] = 1;
+                  q = zput(q, "DPMI-BP: REFUSED 0x"); q = zhex(q, lin);
+                  q = zput(q, " -- its 2-byte footprint overlaps another breakpoint"
+                              " (said once; re-checked every PM entry)\r\n");
+                  log_append(LOG_PATH, lb, q); serial_out(lb, q);
+              }
               continue;
           } }
         if (g_bp_mode[k] != 1 && host_readable((const void *)(ULONG_PTR)lin, 16)) {
             unsigned ilen = x86_insn_len((const unsigned char *)(ULONG_PTR)lin, 0, 16,
                                          g_dpmi_client32);
             if (ilen == 1) {
-                q = zput(q, "DPMI-BP: REFUSED 0x"); q = zhex(q, lin);
-                q = zput(q, " -- ONE-BYTE instruction (");
-                q = zdump(q, (const BYTE *)(ULONG_PTR)lin, 1);
-                q = zput(q, "); a 2-byte BOP would eat the NEXT instruction and "
-                            "silently change what the guest does. Use mode 1 (int3) "
-                            "or move it.\r\n");
-                log_append(LOG_PATH, lb, q); serial_out(lb, q);
+                if (!g_bp_refused[k]) {
+                    g_bp_refused[k] = 1;
+                    q = zput(q, "DPMI-BP: REFUSED 0x"); q = zhex(q, lin);
+                    q = zput(q, " -- ONE-BYTE instruction (");
+                    q = zdump(q, (const BYTE *)(ULONG_PTR)lin, 1);
+                    q = zput(q, "); a 2-byte BOP would eat the NEXT instruction and "
+                                "silently change what the guest does. Use mode 1 (int3) "
+                                "or move it. (said once; re-checked every PM entry)\r\n");
+                    log_append(LOG_PATH, lb, q); serial_out(lb, q);
+                }
                 continue;
             }
         }
@@ -15698,7 +15784,15 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                                 if (iscode) { p = zput(p, " [LE CODE OBJECT]");
                                     /* The FIRST one is the image base every offset in a
                                        disassembly is relative to. See pm_watch_addr(). */
-                                    if (!g_le_load_base) g_le_load_base = (DWORD)(ULONG_PTR)mem; }
+                                    if (!g_le_load_base) {
+                                        g_le_load_base = (DWORD)(ULONG_PTR)mem;
+                                        /* Flush the pending line before the resolver
+                                           writes its own, or the two interleave. */
+                                        p = zput(p, "\r\n");
+                                        log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                                        dpmi_bp_resolve_codebase(g_le_load_base);
+                                        dpmi_bp_arm();   /* it may now be plantable */
+                                    } }
                             }
                             { DWORD lin = (DWORD)(ULONG_PTR)mem;   /* in-process: linear = host ptr */
                               VDM_SET16(tib, VTIB_EBX, lin >> 16); VDM_SET16(tib, VTIB_ECX, lin & 0xFFFF);
@@ -15748,8 +15842,43 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                                ⚠ Unhandled vectors are COUNTED now, not silently ignored --
                                  a service that does nothing and reports success is exactly
                                  what cost this one a session to find. */
+                            /* ── ★★★★★ ...AND NOW THE EVIDENCE NAMES **INT 10h**. (session 59)
+                                 THIS IS WHY ZAR NEVER SHOWS A PICTURE (GH #23), and the
+                                 shape is identical to the mouse case above.
+                               ★ A Watcom/DOS4GW program does not write `int 10h`; it calls
+                                 int86(), and int86 under an extender is 0300 with BL=10h.
+                                 Traced through ZAR's own image: its video driver's SetMode
+                                 (obj1+0x8bfa0) calls obj1+0x8bf84, which puts **0x13** in
+                                 the register block and calls the int86 wrapper -- which
+                                 ends `mov word [ebp],0x300 / mov byte [ebp+4],0x10`.
+                               ★ MEASURED, with a breakpoint on that worker: it IS reached
+                                 (`DPMI-BP HIT linear 0x03ffbf85`), and the very next line
+                                 of the log is `-> simInt 0x00000010`. Seven of them in a
+                                 45 s run -- one VESA probe (AX=4F00) and the mode set --
+                                 and every one landed in the `else` below and did NOTHING.
+                                 `STAGE2: mode sets: none`, 0xA0000 never written, and the
+                                 guest sat in its demo loop rendering to a screen it had
+                                 never been allowed to open.
+                               ⚠ AND THE HOST HAD BEEN COUNTING THEM ALL ALONG: `simint_unh`
+                                 and the per-vector histogram existed, but they are printed
+                                 in the periodic keylog block, which a HEADLESS run never
+                                 reaches. An instrument nobody can read is not an
+                                 instrument -- they are in STAGE2 now.
+                               ► Routed to the video VDD through exactly the path the
+                                 PROTECTED-mode INT 10h arm uses (see `vec == 0x10` in
+                                 dpmi_service_pm_int_body), video_trap_sync() included, so
+                                 the two cannot drift into disagreeing about what a video
+                                 BIOS call does depending on how the guest asked. */
                             if (intno == 0x21) { m.tp = p; dos_int21(&m); p = m.tp; }
                             else if (intno == 0x33) mouse_int33(tib, I33_SRC_SIM);
+                            else if (intno == 0x10) {
+                                ntvdd_regs vr; regs_load(&vr, tib);
+                                HOST_LOCK();
+                                vdd_bus_deliver_int(&g_bus, 0x10, &vr);
+                                HOST_UNLOCK();
+                                regs_store(&vr, tib);
+                                video_trap_sync();   /* mode 12h: interpret; no-op in 13h */
+                            }
                             else { g_simint_unhandled++;
                                    if (intno < 256) g_simint_vec[intno]++; }
                             /* write results back into the RMCS */
@@ -21721,6 +21850,20 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
              a vector/AH pair is its own name and the numbers are what matter. */
         /* Flush first: up to 24 pairs is ~500 bytes and `report` is shared with everything
            above, which has no bound of its own. */
+        /* ► ★★★ WHAT THE GUEST ASKED 0300 FOR AND WE DID NOT DO. These counters existed
+             already, but only in the periodic KEYLOG block -- which a headless run never
+             reaches, so they had never once been printed in the logs this project
+             actually reads. `simInt 0x10 x7` was sitting in ZAR's every run for four
+             sessions with nothing to show it. A service that silently does nothing and
+             reports success is this project's most expensive bug shape; the counter for
+             it belongs where the evidence is read. */
+        p = zput(p, "\r\nSTAGE2: simInt (DPMI 0300) UNHANDLED: total=");
+        p = zhex(p, g_simint_unhandled);
+        { unsigned sv, any = 0;
+          for (sv = 0; sv < 256; ++sv) if (g_simint_vec[sv]) {
+              p = zput(p, " int"); p = zhexb(p, (BYTE)sv);
+              p = zput(p, "h x"); p = zhex(p, g_simint_vec[sv]); any = 1; }
+          if (!any) p = zput(p, " (none -- every simulated interrupt was serviced)"); }
         p = zput(p, "\r\n"); log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
         p = zput(p, "STAGE2: PM reflected dispatches (vec/AH=count):");
         { unsigned dv, da, shown = 0;
