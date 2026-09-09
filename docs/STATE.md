@@ -4,10 +4,10 @@
 > this file top to bottom and you will know where it is, what works, what does not, and
 > what to do next.
 
-- **Last updated:** 2026-09-08 (session 58)
+- **Last updated:** 2026-09-09 (session 60)
 - **Score: 86.9%** (`./tools/score/score.py` — run it, do not quote this line).
   Session 53 moved it 72.4 → 79.6; session 54 → 80.2; session 55 → 83.1;
-  session 56 → 85.4; s57 and **s58 moved it not at all** — s57 built the modal
+  session 56 → 85.4; s57, **s58, s59 and s60 moved it not at all** — s57 built the modal
   dialog loop, s58 spent the day on ZAR (#23). `guests` only counts a guest a
   human has confirmed, and `guest-zar` is BINARY: playable or not. Four real
   defects were fixed in s58 and the number did not move by one point. That is
@@ -237,7 +237,336 @@ and matches the 6.22 oracle row for row (session 53)** — but `MEM /C` still re
    the next step, and it is also the honest correction for *a fix measured on
    one guest is a fix for none*.
 
-   ### ▶ START HERE: **SESSION 59 (below), then session 58.**
+   ### ▶ START HERE: **SESSION 61 (below), then session 60, then 59.**
+
+   ---
+
+   ## ★★★★★★ SESSION 61 (CONCLUSION) — **SKYROADS PERFECT: THE CRYSTAL WAS ON THE WRONG LOCK.**
+
+   **Date:** 2026-09-10. **COMMITTED (this session, on `m9/completeness`).** Skyroads is
+   **user-confirmed "absolutely perfect" while keys are held** — better than its Aug-19
+   best. The wobble was never the keyboard yield or delivery (those were the 14%); **86%
+   of stalls were the clock never GENERATING the tick**, because `host_pit_sync` took the
+   device lock `g_lock` (shared with the renderer, mixer, ~68k port-traps/s).
+
+   **THE FIX (baked, no knob needed):** the PIT is split into
+   - `host_pit_generate()` — advance the 8254 from QPC + latch IRQ0, under a NEW
+     micro-lock `g_pit_cs`; port handlers 0x40–0x43 take it via a `guard` hook in
+     `pit_state`. The crystal can no longer be blocked by the renderer. `gen` 86%→0.
+   - `host_pit_deliver()` — the async attempt still needs `g_lock` (never-suspend-a-
+     lock-holder), but takes it with `HOST_LOCK_TRY`: a busy lock SKIPS, the tick is
+     already latched, cooperative delivery places it. `pit_skip`~50k/session, harmless.
+   - **pacer priority HIGHEST→NORMAL** (baked): once generation stopped needing to win
+     the lock, HIGHEST starved the present thread on the single core (stepped fades,
+     dropped frames). NORMAL = perfect. ⚠ mechanism is a strong guess — `ui_gap` moved
+     the WRONG way, see [[timing-fidelity-frontier]].
+
+   ⚠ **FIVE arbitration "arms" (keyirq 0/1/2/3, courier) were all REFUTED in-game first**
+   — they fixed the 14%. All left in as `keyirq`/`courier` knobs, defaults are the
+   winners (`keyirq=1`, `courier=0`). Also this session: machine-jamming LL keyboard hook
+   OFF by default, single-instance mutex, `host_panic_release` on close, capture
+   watchdog, GH#132 three-strikes cleared per run, one-folder rig relayout, quoted
+   `target.txt` path parse. Det-test 30/30, imports clean, Skyroads headless `gen=0` with
+   ZERO knob files.
+
+   ### ▶ NEXT ACTIONS, IN ORDER
+
+   0. **★★★ GAMES NEED SHORT 8.3 PATHS.** Doom (& likely others) won't LOAD from
+      `games\<Name>\` — the long "Documents and Settings" path corrupts an INT 21h
+      filename (`DOOM.EXE`→`DOOM.ETX`→`DOOME`). Hand the guest a `GetShortPathName` 8.3
+      path. ⚠ The user is doing a one-by-one game pass and will report what works; this
+      blocks every game that reads its own files by full path.
+   0b. **THE CLOSE-ZOMBIE may recur** (host holding its binary/log after window close);
+      `controld` `kill` recovers it without a reset. Watch for it during the game pass.
+
+   ### ▶ SUPERSEDED SESSION-61 ACTIONS (kept for the trail; the crystal fix replaced them)
+
+   1. **★★★★★ N REPEATED RUNS PER ARM — THE FIX IS BUILT AND UNPROVEN.** The tick
+      courier (`courier.txt = 1`, ships **OFF**) is implemented and its dangerous half
+      is validated, but a single 45 s run **cannot** resolve its effect: five runs of
+      nominally the same configuration gave anomalous-gap counts of **50, 75, 81, 85,
+      240**. Any A/B must be N runs per arm with the **run shape checked** — Skyroads
+      sometimes plays a ~10 s intro at the BIOS 18.2 Hz and sometimes goes straight to
+      180 Hz, and `IRQ0TL persec`'s first entry says which (`0x14` = intro, `0xb6` =
+      no intro). Do not compare across shapes; I did once and it cost a round.
+   2. **★★★★ THE REAL LEVER IS THE PORT TRAP (2.33 us), AND THIS SESSION IS THE FIRST
+      DIRECT EVIDENCE FOR IT ON THE WOBBLE.** IRQ0 and IRQ1 compete for one scarce
+      thing — a moment when the guest is in exec with interrupts on. Every arbitration
+      tried just moves the loss: yield on → the clock waits; yield off → **half the
+      keystrokes go past 64 ms**; courier on → the clock gains a little and keys got
+      worse. Arbitration cannot create windows. The trap cost is what destroys them
+      (Skyroads' OPL helper alone runs ~68,000 port traps/s), and it is also handoff
+      item #2 from s60. **Own session.**
+   3. `guests` (w15, 63%) is still the heaviest score lever; **CALC and WRITE remain
+      unjudged** on the rig since s59.
+
+   ### ★★★★★ WHAT THE RUNS ACTUALLY SAID
+
+   The s60 handoff pinned the wobble on **async delivery starving** — "75% of IRQ0
+   attempts bail `not_in_exec`" — and prescribed a lock-free courier. The first half of
+   that is measured and true; the inference from it is **wrong**, and two new
+   instruments say so:
+
+   ```
+   anomalous gap = one spanning >= 2 of the period THE GUEST ITSELF programmed
+   STAGE2: IRQ0WHY gen=.. del=.. anom[raise,att,nie,yld]=..
+   ```
+
+   | in the gaps where Skyroads missed a tick | run A | run B | run C | run D | run E |
+   |---|---|---|---|---|---|
+   | IRQ0s the 8254 generated | 110 | 192 | 85 | 119 | 362 |
+   | injection attempts made | 53 | 76 | 85 | 81 | 253 |
+   | **attempts never made** | **57** | **116** | **0** | **38** | **109** |
+   | **keyboard yields** | **57** | **116** | **0** | **38** | **109** |
+   | bailed `not_in_exec` | 4 | 1 | 0 | 0 | 4 |
+
+   **`raises − attempts == yields`, exactly, in every run.** Every tick that lost its
+   injection attempt lost it to `host_irq_sink` handing the timer's one async
+   opportunity per raise to a pending key (`g_keyirq_retry`, ON by default,
+   `KEYIRQ_MAX_YIELD` = 3 in a row = 16.7 ms at 180 Hz). The worst gap measured reads
+   `raise=3, yld=2, att=1` → **20 ms**. That is the wobble in four numbers, and it is
+   an **identity within each run**, not a comparison between runs — which is why it
+   survives the noise that sinks everything else here.
+
+   ⚠ **`not_in_exec` IS THE HEALTHY BASELINE, NOT THE FAULT.** It runs at **76% during
+   the ~6,000 gaps that are keeping perfect time** and 0–4 events total inside the
+   anomalous ones. A statistic that is *higher* when the clock is working cannot be
+   what breaks it; the cooperative path absorbs those bails routinely.
+
+   ⚠ **AND THE YIELD MUST NOT SIMPLY BE REMOVED.** `keyirq.txt = 0`, measured:
+   **51 of 102 keystrokes past 64 ms, worst 1864 ms** (against 0–1 and 5–250 ms with
+   it on). That is the "loses keys" result this file already records twice.
+
+   ### ★★★ TWO DEFECTS IN MY OWN INSTRUMENT, BOTH FOUND BY RUNNING IT
+
+   1. **THE "LONG GAP" THRESHOLD WAS A FIXED 8 ms AND THE GUEST CHANGES THE RATE UNDER
+      IT.** Skyroads' intro runs at the BIOS 18.2 Hz (55 ms), so **187 of the first
+      run's 319 "big gaps" were the intro ticking correctly** — 187 measured against
+      ~182 predicted from the timeline. The threshold is now **relative to the period
+      the guest programmed**, which is the only frame that means anything.
+   2. **I/O PER *GAP* IS CONFOUNDED BY GAP LENGTH.** A gap ten times longer collects
+      ten times the I/O whatever the guest is doing. ⚠ **The s60 note records the
+      music-overrun hypothesis as REFUTED on this number** (`big gaps 5.3 io/gap vs
+      360`); the same raw ratio came out **25x the other way** on this session's runs.
+      Neither figure means anything. As a **rate** the answer is clean and does
+      confirm the s60 conclusion: **0 port ops/ms during anomalous gaps against 169/ms
+      during normal ones.** The guest is not hammering the OPL when the clock slips.
+
+   ### ★★★ THE TICK COURIER — BUILT, DEFAULT **OFF**, HARD PART VALIDATED
+
+   `tick_courier_thread`: a thread that retries a still-pending IRQ0 **outside
+   `g_lock`**, woken by the raise site, one tick per wake, bounded by
+   `COURIER_BUDGET_US`. An immediate second attempt in the sink cannot work — injecting
+   IRQ1 leaves the guest entering INT 09h with interrupts off — so the retry has to
+   wait microseconds for the handler to IRET, which nothing in the old structure could
+   do. **V86 only (`!g_dpmi_pm`), so it cannot regress Doom.**
+
+   ★★ **THE `g_lock` INTERLOCK PROBLEM IS SOLVED, AND THE SOLUTION IS MEASURED.**
+   `host_irq_sink`'s note names the prerequisite for ever moving a suspend outside the
+   lock: *"a separate suspend-safe handshake (the exec thread marking itself
+   un-suspendable while it holds g_lock)"*. That handshake already shipped — the CPU
+   throttle's — and it is now in `async_inject_irq`: re-read `g_in_exec` **after** the
+   suspend has landed (`GetThreadContext` is what makes "landed" true) and resume
+   instantly on 0. **`left_exec` fired 4 times in 45 s**: four real races where the
+   guest left `v86_run` between the pre-check and the suspend. Without it those are
+   four suspends of a possibly-lock-holding thread. Plus `g_async_ctxwr`, a
+   single-context-writer interlock (**`ctx_busy` = 52**), because two threads building
+   IRET frames from the same context would collide on the guest's stack —
+   previously safe only *by accident*, since every caller ran under `g_lock`.
+   `vdd_pic_ack_autoeoi()` replaces the ack-then-eoi pair for auto-EOI'd lines: the
+   pair's transient set/clear of the shared ISR byte is not safe without the device
+   lock, and losing IRQ1's in-service bit is the "press a key and everything hangs"
+   fault.
+
+   ⚠ **IT SHIPS OFF BECAUSE THE DATA DOES NOT SUPPORT TURNING IT ON.** Its one run cut
+   delivery-caused gaps (30 → 19) while generation-caused gaps rose, and key latency
+   was worse — the same competition running the other way. Against a 5x run-to-run
+   spread, none of that is a result. See next action 1.
+
+   ---
+
+   ## ★★★★ SESSION 60 — **CPU SPEED, HONESTLY. THEN THE SKYROADS WOBBLE, ROOT-CAUSED.**
+
+   **Date:** 2026-09-09. **Score: 86.9%, unmoved** — everything this session is a row
+   already at 1.0 (`host-ui`) or accuracy on a counted row (`settings-live`). The 8
+   points to 95% live in `guests` (w15 at 63%). **Tree: UNCOMMITTED (13 files).** Rig
+   clean. Deterministic CPU test 30/30; full build clean.
+
+   ### ▶ NEXT ACTIONS, IN ORDER
+
+   1. **★★★★★ FIX THE SKYROADS WOBBLE — ROOT CAUSE IS PINNED, USER DEFERRED THE FIX TO
+      A FRESH HEAD.** The lever: **deliver the timer tick to a SPINNING guest without
+      waiting on `g_lock`.** Skyroads spin-waits at `0110:3b40` (IF set) for its 180 Hz
+      tick; during a spin it never traps, so only ASYNC delivery works, and async is
+      starved (75% bail `not_in_exec`; residual 8–20 ms gaps are `g_lock` contention
+      with the audio mixer — which is why timer AND music wobble together). During a
+      pure spin the guest holds no lock, so suspend-to-inject is safe WITHOUT taking
+      `g_lock`. ⚠⚠ `g_lock` is the load-bearing interlock (never suspend a lock-holder);
+      hardest area of the codebase, needs care. Full chain + instruments in
+      [[skyroads-playable-input-stack]]. ⚠ **Skyroads wants UNLIMITED, not a throttle**
+      — the throttle STARVES its timer (measured: 84/180, 1 s gaps).
+   2. **THE PORT TRAP IS THE REAL CEILING (2.33 us).** Below every speed label; the only
+      lever that also speeds Doom/Skyroads at Unlimited (and would cut the OPL trap
+      volume that starves async delivery in #1). Own session.
+   3. `guests` (w15, 63%) is still the heaviest lever; **CALC and WRITE STILL unjudged**
+      on the rig since s59.
+   4. **THE MOUSE + MENUS NEED YOUR EYES** (popup contents, Edit-greying-in-graphics) —
+      `scripts/bm/menushot.bat` / `setshot.bat` put a live host up. ⚠ Do NOT drive the
+      desktop while the user is on the box (I did once; use headless `dlgcheck.flag`).
+
+   ### ★★★ DONE THIS SESSION (all in the uncommitted tree)
+
+   - **CPU throttle rewritten as a CLOSED-LOOP INVARIANT + a DETERMINISTIC TEST.** The
+     open-loop debt carry (leaked twice) → `hold = max(0, E/duty − T)`, one pure
+     function `cpuspeed_step`, driven against a virtual clock in `cpuspeed_test.c`
+     (30/30, bit-identical). Rig, host-measured `delivered_bp` (non-circular): whole
+     ladder within ~12% of label (100→88, 66→61, 33→30, 16→15, 8→7). Ref reverted
+     **5900→3704** (native ALU) — 5900 was a fit to hide the broken mechanism. Two
+     real-world fixes the det-test can't see: torn exec-clock read (clamp `dexec` to
+     run wall) and per-period catch overhead (1 ms Sleep-able run floor above 32 bp).
+     See [[acceptance-test-is-the-calibration]].
+   - **SETTINGS RESTRUCTURED (user's asks):** "CPU"→"Processor" tab (one honest "Limit
+     speed" control + a live CPU-name line; Type/Core/Cycles/FPU/Turbo/slider/affinity
+     removed as dead or clutter), Memory split to its own tab, PIT/UI-tick moved to a
+     new Advanced tab. Speed ladder trimmed 18→6. `Help▸About`→system ShellAbout. All 8
+     pages verified building via `dlgcheck.flag` (headless).
+   - **MENU BAR** `File Edit View Tools Help` (photographed); **mouse auto-capture** on
+     INT 33h use-calls (Doom captures, Skyroads doesn't).
+   - **SKYROADS ROOT-CAUSED** (see #1) — and the music-overrun hypothesis REFUTED with
+     data (big gaps 5 io/gap vs normal 360).
+
+   ### ★★★ THE ACCEPTANCE TEST WAS THE CALIBRATION WORKLOAD (early-session, superseded above)
+
+   `CPUSPEED_REF_MHZ` is calibrated by `cpubench.com`, whose header says outright *"NO
+   REGISTER IN THE LOOP TOUCHES MEMORY, and that is deliberate"*. `cpuswp.bat` then
+   re-runs **that same program** at each index and checks the reported MHz tracks the
+   label. **It passes however wrong the constant is for every other kind of code**,
+   because the ratio it measures is the ratio it was built from.
+
+   `tools/dostest/mixbench.asm` is the instrument that can fail: five shapes of work,
+   four of them 12 cycles on a 486 *by construction* so they are directly comparable
+   with no arithmetic in between. On the rig at **index 11, where the menu says 66 MHz**:
+
+   ```
+   ALU 68    MEM 209    VID13 92    VID12 23    PORT ~1      (MHz apparent)
+   ```
+
+   A **200x spread at one setting**. The ALU figure is right because ALU code is what
+   the constant was made from.
+
+   ### ★★ FOUR DEFECTS, ALL OURS
+
+   1. **`cpuspd.txt` PARSED A SINGLE DIGIT.** `c[0] - '0'` cannot express an index above
+      9, and the ladder went to 17 in s54. So 75, 66, 50, 33, 25, 16, 12 and 8 MHz --
+      **every period-hardware setting** -- were unreachable from the file knob, and
+      `echo 13` ran as index **1 = 3300 MHz** while reporting that it had. The range
+      check *hid* it: `c[0] < '0' + CPUSPEED_COUNT` with COUNT=18 accepts up to `'A'`.
+      ⇒ The rig sweep this knob exists to drive **never tested the slow half of the
+      ladder even once**, and `cpuswp.bat` only ever swept 0-6.
+      ⚠ File knob only. The menu and dialog set the index directly, so this is a
+      testability defect and **not** the cause of any speed a user has seen.
+   2. **THE THROTTLE BILLED THE GUEST FOR OUR OWN OVERHEAD.** `ran_us` was wall clock
+      from resume to suspend, and a DOS guest spends much of that window not executing
+      but trapped inside us. Every port write is an IOPL-0 #GP costing **2.33 us**
+      (iobench case 3: 117,920 accesses / 5 ticks = 429,400/s). At a 1.8% duty the
+      guest is held 54x as long as it "ran", so every mis-attributed microsecond costs
+      it 54 more -- hardware-touching code penalised in proportion to how slow *we* are.
+      Now charged on guest **execution** time (`g_exec_us_acc`, bracketed by
+      `g_in_exec`, gated off entirely at Unlimited).
+   3. **THE EXECUTION BASELINE MOVED ON FAILED RETRIES**, discarding execution that was
+      never charged. The throttle reported `delivered_bp=100` -- a 1.00% duty, exactly
+      as asked -- while mixbench measured the guest getting **2.6%**. `missed=594` is
+      where it went.
+   4. **`delivered_mhz` REPORTED THE REQUEST, NOT THE DELIVERY.** At index 15 it logged
+      16 MHz while the guest measured **34** -- and index 15 was *faster than index 13*,
+      so **the ladder is non-monotonic at the slow end** and this field could not say
+      so. `owed_ms=1326` of unpayable arrears was sitting three fields away saying the
+      opposite. Now `requested_mhz` beside a measured `delivered_bp`, with `wall_us`
+      next to `ran_us` so the overhead is visible.
+
+   ### WHAT IT BOUGHT, MEASURED
+
+   | index 11 ("66 MHz") | before | after |
+   |---|---|---|
+   | ALU | 68 | 76 |
+   | MEM | 209 | 76 |
+   | VID13 | 92 | 54 |
+   | VID12 (interpreter) | 23 | 23 |
+   | **PORT** | **89,600 outs/s** | **220,400 outs/s** |
+
+   Spread across the real-CPU cases **9.1x -> 3.3x**; port throughput **2.46x**;
+   Unlimited unchanged (3781 / 3926 / 4012 / 27).
+
+   ⚠ **`CPUSPEED_REF_MHZ_DEFAULT` IS NOW 5900 AND ITS UNITS CHANGED.** It is MHz of
+   guest *execution* time, not of wall clock. **`cpubench` still reports the wall-clock
+   number** and will read ~3700 on this rig for ever, which looks like a disagreement
+   and is not -- putting 3661 back would silently restore the old behaviour. 5900 is a
+   **fit across two points** (1.44x at index 11, 1.85x at 13), not a derivation: one
+   constant cannot satisfy both because the residual is per-workload escape.
+   ⚠ **STILL OPEN:** the throttle is workload-dependent and still not monotonic -- MEM
+   reads 80 MHz at index 13 against ALU's 26, and higher than its own index-11 figure.
+
+   ### ★★★ AND NO CALIBRATION CAN FIX THE REAL PROBLEM
+
+   A port trap is **6.9 MHz apparent** against a 486's 16-cycle `OUT`. That is **below
+   every label on the menu**. Doom does ~43,000 port writes a second while drawing;
+   Skyroads' AdLib helper spends 43 port accesses per OPL register. So the dropdown is
+   an approximation for **compute**, and `cpuspeed.h` has always said so -- it now says
+   by how much. Making the trap faster is the only route to an honest 66 MHz, and it is
+   the one change that would also speed the games up at Unlimited.
+
+   ### ★★ SKYROADS: THE TIMER IS FLAT. DO NOT RE-INSTRUMENT IT.
+
+   User report: "the weird slow down/speed up timing issue". The last recorded run was
+   `idx=0 duty_bp=10000` -- **unthrottled** -- so the CPU throttle is not involved.
+   New instrument (`STAGE2: IRQ0TL` / `IRQ0GAP`, both delivery paths) over 45 s:
+
+   ```
+   IRQ0TL persec = 183,181,179,180,180,180,180,181,180,...,177,179,183,180,179,181,177
+   IRQ0GAP ms[<1,1,2,4,8,16,32,64+] = 79,59,416,7375,171,1,0,0  n=8101  max_ms=16
+   ```
+
+   **180 ticks/second flat, range 177-183 (+-1.7%).** 91% of gaps in the 4-8 ms bucket
+   (180 Hz = 5.56 ms), **one** gap over 16 ms, worst case 16 ms. 8101 delivered against
+   the session-21 baseline of ~4485 -- delivery is better than it has ever been.
+   ⚠ **BUT THIS IS A HEADLESS ATTRACT-MODE RUN**, and the memory warns twice that
+   Skyroads' attract loop fakes success and that in-game uses a different input path.
+   ⇒ The tick rate is cleared **for this run shape**. Next suspects are frame
+   presentation and OPL pacing, not the timer.
+
+   ### ★ MOUSE EXCLUSIVITY IS THE GUEST'S OWN DECLARATION
+
+   A program that wants the mouse says so through INT 33h; one that does not never
+   calls it. Capture now keys on the **use** functions (01/03/05/06/0B) and explicitly
+   **not** on the detection probes -- validated against real logs before it was written:
+
+   - **Doom:** `0000 x1  0015 x1  53c1 x1  0003 x1338  000b x1338` -- probes once, then
+     polls every frame. Confirmed live: `autocap_want=1 fired=1 captured=1`.
+   - **Skyroads:** *no `MOUSEI33` lines at all.* Never calls INT 33h, so its mouse stays
+     on the Windows desktop. Exactly the split the user described.
+
+   ★ **AND IT CLOSED AN OPEN QUESTION IN THE CODE.** The `i33oth=1079` note listed two
+   hypotheses for high AX values -- unimplemented functions, or a mis-patched `CD 33`.
+   It is neither: **`AX=53c1` is Logitech CyberMan SWIFT detection**, made once, and
+   Doom prints `CyberMan: Wrong mouse driver - no SWIFT support (AX=53c1)` in the same
+   log. The bucket was the defect, not the thing bucketed.
+
+   Latched once per program so a polling guest cannot drag the pointer back after
+   Win+F10; requires foreground so a background VDM cannot steal it. **Show Host Cursor
+   and Ctrl+F8 are gone** -- pointer visibility is what exclusive mode looks like, not a
+   knob of its own. `ShowHostCursor` survives, narrowed to "when not captured".
+
+   ### ⚠ TWO HARNESS TRAPS I WALKED INTO TODAY
+
+   - **TWO CONCURRENT `build.sh` RUNS INTO ONE `build/`.** A backgrounded job re-ran the
+     build while I ran it in the foreground; the binary came out with *some* edits and
+     not others, and I spent a detour concluding a field "was missing".
+   - **`grep`/`strings` ON THE PE DOES NOT FIND ITS STRING LITERALS.** `site_ovf=` is
+     demonstrably printed by the running binary and matches **zero** times in the file.
+     Two wrong conclusions came from that before I stopped trusting it. **The only
+     trustworthy check that a build contains a change is to RUN IT.**
+   - Also: a stray background job racing the foreground over `cpuspd.txt` produced an
+     interleaved, contaminated sweep -- *stale artefact worse than missing*, again.
 
    ---
 

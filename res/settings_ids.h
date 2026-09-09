@@ -24,26 +24,37 @@
 #define IDC_S_DEFAULTS        202   /* button:   restore every page's defaults        */
 
 #define IDD_PAGE_GENERAL      210
-#define IDD_PAGE_CPU          211
+#define IDD_PAGE_CPU          211   /* the "Processor" tab (id kept; it is only a number) */
 #define IDD_PAGE_DISPLAY      212
 #define IDD_PAGE_AUDIO        213
 #define IDD_PAGE_INPUT        214
 #define IDD_PAGE_DRIVES       215
-#define NTVDMEX_PAGE_COUNT      6
+#define IDD_PAGE_MEMORY       216   /* split out of the old CPU page (session 60)     */
+#define IDD_PAGE_ADVANCED     217   /* the internal pacing knobs live here now        */
+#define NTVDMEX_PAGE_COUNT      8
 
 /* ── General ──────────────────────────────────────────────────────────────────── */
 #define IDC_S_DOSVER          230   /* combo:    reported MS-DOS version, "6.22"      */
 #define IDC_S_DOSVER_NOTE     231   /* static:   why the version is a knob            */
+
+/* ── Advanced (was on General) ──────────────────────────────────────────────────
+     Internal pacing knobs. They are not "General" and they are certainly not the
+     "Processor" -- they tune how the host paces the emulated timer and its own
+     render loop, which is diagnostic. Most people never touch them. */
 #define IDC_S_PITPACE         232   /* checkbox: pace the PIT from a 1 kHz thread     */
 #define IDC_S_UITICK          233   /* edit:     UI/present tick floor, milliseconds  */
 
-/* ── CPU ──────────────────────────────────────────────────────────────────────── */
-#define IDC_S_CPUTYPE         240
-#define IDC_S_CPUCORE         241
-#define IDC_S_FPU             242
-#define IDC_S_SPEEDMODE       243
-#define IDC_S_CYCLES          244
-#define IDC_S_TURBO           245
+/* ── Processor ──────────────────────────────────────────────────────────────────
+     ⚠ THE OLD CPU PAGE WAS MOSTLY FICTION (session 60). CpuType, Core and Cycles
+       were DOSBox vocabulary that this host reads nowhere -- it runs on the real
+       CPU, so there is no emulated processor to configure. FPU and Turbo were live
+       but pointless as user controls (we always have a real FPU; "unlimited" is
+       already turbo). The smoothness slider and core-affinity box were mine and did
+       not earn their place. All removed. What is left is one honest control. */
+#define IDC_S_CPUINFO         240   /* static:   this PC's real CPU, filled at init   */
+#define IDC_S_SPEEDMODE       243   /* combo:    optional speed LIMIT (see cpuspeed.h)*/
+
+/* ── Memory (split out of CPU, session 60) ──────────────────────────────────────── */
 #define IDC_S_CONVKB          246
 #define IDC_S_XMS             247
 #define IDC_S_EMS             248

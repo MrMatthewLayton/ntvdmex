@@ -46,58 +46,40 @@
 #ifndef CPUSPEED_H
 #define CPUSPEED_H
 
-/* ── THE MENU, AND IT IS ALSO THE REGISTRY VALUE. ────────────────────────────────
-     Index 0 is UNLIMITED and must stay index 0. This list replaced the old dead
-     `SpeedMode` combo ("Auto|Maximum|Fixed cycles"), whose index 0 also meant "do
-     nothing", so a machine that had never been touched is unaffected by any of it.
-     The list runs FASTEST FIRST, which is the order a person reads a speed list in
-     and the order the menu shows it.
-   ⚠ ORDERING IS PART OF THE CONTRACT: a new speed goes in its RIGHT PLACE, not at
-     the end -- and putting it there RENUMBERS every slower speed's registry value.
-   ⚠⚠ WHICH IT ALREADY DID ONCE, IN SESSION 54, AND OLD VALUES DID **NOT** SURVIVE. The list was Unlimited|200|100|66|33|16|8; every entry above 200 MHz is
-     new, so a stored index now names a different speed (an old 4 meant 33 MHz and
-     now means 500). That is a real break and it is taken deliberately rather than
-     hidden: the setting had been live for exactly one session, its default is 0,
-     and 0 still means Unlimited -- so the only machines affected are ones where
-     somebody had already chosen a speed by hand.
-   ► THE PERMANENT FIX IS TO STORE MHz RATHER THAN AN INDEX, so the list can be
-     reordered or extended forever without touching anybody's registry. That needs
-     a new SK_ kind in settings.h (the combo machinery is index-based end to end)
-     and is the right thing to do the next time this list is touched. */
-#define CPUSPEED_COUNT   18
+/* ── THE LIST, AND IT IS ALSO THE REGISTRY VALUE. ────────────────────────────────
+     Index 0 is UNLIMITED and must stay index 0. This is the OPTIONAL SPEED LIMIT --
+     for software that runs too fast on a modern PC -- and every entry is a real
+     machine somebody owned, because that is how a person thinks about "slow it down
+     to roughly this." Fastest first, which is the order a list of speeds reads in.
+   ⚠⚠ TRIMMED FROM 18 ENTRIES TO 6 IN SESSION 60. The old ladder ran up to 3300 MHz
+     -- ceilings that behave as Unlimited on any real box and are pure noise in a
+     "limit speed" dropdown -- plus a rung every ~33 MHz that nobody reaches for. A
+     shorter honest list was the point of the cleanup. Index 0 still means Unlimited,
+     so an untouched machine is unaffected; a stored index that named one of the
+     removed rungs falls OUT OF RANGE and settings_clamp resets it to Unlimited,
+     which is visible rather than silently becoming a different speed.
+   ⚠ ORDERING IS STILL THE CONTRACT: a new entry goes in its right place and
+     renumbers the slower ones. The permanent fix (store MHz, not an index) is still
+     the right thing the next time this needs to change without disturbing anyone. */
+#define CPUSPEED_COUNT   6
 static const unsigned CPUSPEED_MHZ[CPUSPEED_COUNT] = {
-    0,      /*  0: Unlimited -- the host's own speed, and the default            */
-    3300,   /*  1: the bare-metal rig (a 3.33 GHz box)                           */
-    2000,   /*  2                                                                */
-    1000,   /*  3: the GHz barrier                                               */
-    500,    /*  4: Pentium III                                                   */
-    333,    /*  5: Pentium II                                                    */
-    233,    /*  6: Pentium MMX                                                   */
-    166,    /*  7                                                                */
-    133,    /*  8                                                                */
-    100,    /*  9: Pentium / 486DX4                                              */
-    75,     /* 10                                                                */
-    66,     /* 11: 486DX2-66                                                     */
-    50,     /* 12                                                                */
-    33,     /* 13: 486DX-33 / 386DX-33                                           */
-    25,     /* 14                                                                */
-    16,     /* 15: 386SX-16 -- Skyroads' stated target hardware                  */
-    12,     /* 16: 286                                                           */
-    8       /* 17: 8086/8088 era                                                 */
+    0,      /* 0: Unlimited -- the host's own speed, and the default             */
+    100,    /* 1: Pentium / 486DX4                                               */
+    66,     /* 2: 486DX2-66                                                      */
+    33,     /* 3: 486DX-33 / 386DX-33                                            */
+    16,     /* 4: 386SX-16 -- Skyroads' stated target hardware                   */
+    8       /* 5: 8088 / 286 era                                                 */
 };
 static const char *const CPUSPEED_NAMES[CPUSPEED_COUNT] = {
-    "Unlimited", "3300 MHz", "2000 MHz", "1000 MHz", "500 MHz", "333 MHz",
-    "233 MHz", "166 MHz", "133 MHz", "100 MHz", "75 MHz", "66 MHz",
-    "50 MHz", "33 MHz", "25 MHz", "16 MHz", "12 MHz", "8 MHz"
+    "Unlimited", "100 MHz", "66 MHz", "33 MHz", "16 MHz", "8 MHz"
 };
 /* The '|'-separated form SET_DEFS wants. Kept adjacent to the table above so the
    two cannot drift; cpuspeed_test.c checks that they still agree.
  ⚠ A speed AT OR ABOVE the host's own is not a throttle and cannot be: it clamps to
-   flat out (see cpuspeed_duty_bp). So on a 1 GHz box the top three entries all
-   behave as Unlimited, which is honest -- they are ceilings, never boosts. */
+   flat out (see cpuspeed_duty_bp), so on a slow enough host the faster entries just
+   behave as Unlimited -- honest, they are ceilings and never boosts. */
 #define CPUSPEED_ITEMS \
-    "Unlimited|3300 MHz|2000 MHz|1000 MHz|500 MHz|333 MHz|233 MHz|166 MHz|" \
-    "133 MHz|100 MHz|75 MHz|66 MHz|50 MHz|33 MHz|25 MHz|16 MHz|12 MHz|8 MHz"
+    "Unlimited|100 MHz|66 MHz|33 MHz|16 MHz|8 MHz"
 
 /* ── THE ONE CALIBRATION CONSTANT. ───────────────────────────────────────────────
      "How fast does an unthrottled NTVDMEX look to a DOS program, in MHz?"
@@ -110,7 +92,30 @@ static const char *const CPUSPEED_NAMES[CPUSPEED_COUNT] = {
      ⚠ It is also a FILE KNOB (cpuref.txt on the share) so the rig can be re-
        calibrated without a rebuild -- this is the sort of constant that is wrong
        on somebody else's machine by construction. */
-#define CPUSPEED_REF_MHZ_DEFAULT 3661u
+/* ── "HOW FAST DOES AN UNTHROTTLED GUEST LOOK, IN MHz?" -- AND IT IS THE NATIVE ALU
+     RATE AGAIN, MEASURED. ────────────────────────────────────────────────────────
+     The duty is delivered ACCURATELY now (session 60: the closed-loop invariant
+     holds guest execution to `duty` of wall time, delivered_bp tracks duty_bp to
+     ~10% across the whole ladder on the rig, proven by a deterministic test). So the
+     reference has one honest job left: set what a speed LABEL means. apparent =
+     native x duty, and duty = mhz/ref, so apparent = mhz x native/ref -- which equals
+     the label exactly when ref == native. So ref IS the native rate.
+   ★ MEASURED 2026-09-09 on the rig (mixbench.com ALU case, Unlimited): 3704 MHz.
+     "66 MHz" then delivers duty 66/3704 = 178 bp, and ALU runs at 3704 x 0.0178 =
+     66 MHz. The label is honest for COMPUTE.
+   ⚠⚠ THIS WENT BACK DOWN FROM 5900. The 5900 was a FIT to paper over a throttle that
+     was itself inaccurate (open-loop debt carry, two leaks). With the mechanism fixed
+     the fit is not just unnecessary, it is WRONG -- it would make every label ~1.6x
+     fast. The lesson: do not calibrate a constant to hide a mechanism bug; fix the
+     mechanism and the constant becomes what it always should have been, the measured
+     native rate.
+   ⚠ IT IS THIS BOX'S NUMBER. cpuref.txt on the share overrides it per machine, which
+     is the whole reason that knob exists; the default is a sane modern figure.
+   ► STILL TRUE, AND STILL NOT A CONSTANT'S JOB TO FIX: a port trap is ~6.9 MHz
+     apparent (iobench case 3), below every label, so hardware-bound code runs slower
+     than the label says -- as it did on period hardware, whose I/O was also slow next
+     to its ALU. The dropdown is an approximation for compute and says so. */
+#define CPUSPEED_REF_MHZ_DEFAULT 3704u
 
 /* Duty cycle in BASIS POINTS (1/10000) for a speed index against a reference.
    10000 = run flat out. A target at or above the reference cannot be delivered by
@@ -152,8 +157,75 @@ static unsigned cpuspeed_duty_bp(unsigned idx, unsigned ref_mhz)
      it. A real 8 MHz machine was slow and smooth; this is slow and stepped. The
      only finer lever is a cycle-counting interpreter, which is the thing this
      project exists not to be. */
-#define CPUSPEED_WAIT_MS    1u     /* how long to let it run before trying to hold */
+#define CPUSPEED_WAIT_MS    1u     /* legacy: superseded by the granularity lever   */
 #define CPUSPEED_MAX_OFF_MS 1000u  /* a hold longer than this is a hang, not a knob */
+
+/* ── ★★★★ GRANULARITY: THE LEVER THAT DECIDES WHETHER A SETTING IS PLAYABLE. ─────
+ * ⚠⚠ THROUGHPUT WAS ALREADY ROUGHLY RIGHT AND THE FEATURE WAS STILL UNUSABLE. The
+ *    user's report after the calibration work: "66 MHz is still unplayable." The
+ *    counters say why, and it is not the amount of work delivered -- it is the SHAPE
+ *    of the delivery. Measured at index 11 on the rig:
+ *        ran_us=1551  wall_us=1954  run_ms=44  held_ms=3982
+ *    i.e. the guest runs ~1.55 ms, is frozen ~140 ms, and repeats: **about SEVEN
+ *    BURSTS A SECOND**. A game rendering 35 frames a second gets its whole second's
+ *    work in seven clumps. That is a slideshow whatever the average says, and no
+ *    calibration constant can touch it -- which is why the last session's
+ *    recalibration improved the numbers and not the experience.
+ *
+ * ── THE ARITHMETIC, WHICH NAMES THE FIX EXACTLY ─────────────────────────────────
+ *    period = run / duty.  So the period is set by THE RUN PHASE, not by the hold.
+ *    At 66 MHz the duty is ~1.1%, so for a period inside one 60 Hz frame (16 ms)
+ *    the run phase must be at most 16 x 0.011 = 0.17 ms = 170 us.
+ *    It was 1551 us. And the reason is one statement: `Sleep(CPUSPEED_WAIT_MS)`
+ *    before reaching for the guest. Sleep(1) with the multimedia timer at 1 ms is
+ *    1-2 ms in practice -- an order of magnitude more than the budget allows.
+ * ⇒ So make the run phase a TARGET PERIOD instead of a fixed millisecond, and let
+ *   it go to zero: suspend immediately and let the round trip itself be the run.
+ *
+ * ── WHY THIS IS A SLIDER AND NOT A CONSTANT (the user's WinAmp analogy) ─────────
+ *   The floor is the SuspendThread / GetThreadContext / ResumeThread round trip,
+ *   and that is a property of the MACHINE, not of us. Below it there is no run
+ *   phase to shorten. Above it, every halving of the period doubles the number of
+ *   round trips per second -- smoothness bought with host CPU. That is exactly the
+ *   trade WinAmp's refresh slider exposed, and exactly what its auto-detect button
+ *   measured. So: a target period the user can move, and an AUTO setting that
+ *   measures the round trip on this box and picks the finest period it can sustain.
+ * ⚠ AUTO MUST MEASURE, NOT ASSUME. The round trip depends on core count, on what
+ *   else is running and on whether the target is inside a syscall -- the whole
+ *   reason a constant was wrong the first three times this feature was tuned.
+ */
+#define CPUSPEED_GRAN_AUTO      0u     /* 0 = measure the round trip and choose     */
+#define CPUSPEED_GRAN_MIN_MS    2u     /* finer than this is round trips, not speed */
+#define CPUSPEED_GRAN_MAX_MS    250u   /* coarser than this is the old slideshow    */
+#define CPUSPEED_GRAN_DEFAULT   16u    /* one 60 Hz frame: the bar to clear         */
+
+/* The finest period this host can actually deliver at `duty_bp`, given a measured
+   round-trip cost. Below rt_us/duty there is no run phase left to shorten.
+   ⚠ ALSO FLOORED BY THE HOLD: Sleep cannot express less than a millisecond, so a
+     period whose OFF phase rounds to zero delivers no throttling at all -- the debt
+     carries, but the guest runs free meanwhile. Hence the second term. */
+static unsigned cpuspeed_period_floor_ms(unsigned duty_bp, unsigned long rt_us)
+{
+    unsigned long by_run, by_hold;
+    if (!duty_bp || duty_bp >= 10000u) return CPUSPEED_GRAN_MIN_MS;
+    if (!rt_us) rt_us = 100ul;                      /* unmeasured: a sane placeholder */
+    by_run  = (rt_us * 10000ul + duty_bp - 1ul) / duty_bp / 1000ul;  /* ms */
+    by_hold = (10000ul + (10000u - duty_bp) - 1ul) / (10000u - duty_bp);
+    if (by_hold < 1ul) by_hold = 1ul;
+    { unsigned long f = by_run > by_hold ? by_run : by_hold;
+      if (f < CPUSPEED_GRAN_MIN_MS) f = CPUSPEED_GRAN_MIN_MS;
+      if (f > CPUSPEED_GRAN_MAX_MS) f = CPUSPEED_GRAN_MAX_MS;
+      return (unsigned)f; }
+}
+
+/* How long to let the guest run this period, in MICROSECONDS, for a target period.
+   Returns 0 when the answer is "do not wait at all -- reach for it immediately",
+   which is the fine end of the slider and the whole point of it. */
+static unsigned long cpuspeed_run_us(unsigned duty_bp, unsigned period_ms)
+{
+    if (!duty_bp || duty_bp >= 10000u) return 0ul;
+    return ((unsigned long)period_ms * 1000ul * duty_bp) / 10000ul;
+}
 
 /* ── ★ THE RUN PHASE IS MEASURED, NOT ASSUMED, AND THAT IS THE WHOLE DESIGN. ─────
      The second cut asked for a 1 ms run and computed the hold from that constant.
@@ -169,67 +241,90 @@ static unsigned cpuspeed_duty_bp(unsigned idx, unsigned ref_mhz)
      without either of them having to be named or measured separately.
    ⚠ A constant would have had to be re-derived for every machine. This does not. */
 
-/* How long the guest OWES for having run ran_us, in microseconds. Uncapped: this
-   is the requirement, not what we are able to pay in one go.
-   Returns 0 when there is nothing to do (unlimited, or a run too short to price). */
-static unsigned long cpuspeed_hold_us(unsigned duty_bp, unsigned long ran_us)
+/* ── ★★★★ THE CLOSED-LOOP INVARIANT: keep exec time a fixed fraction of wall time.
+ * The throttle has exactly one job -- hold guest EXECUTION time E to the fraction
+ * `duty` of WALL time T:  E = duty * T.  Everything the old code bookkept by hand
+ * (the per-run hold, the carried debt, jitter tolerance, saturation) is a
+ * CONSEQUENCE of that one equation, so compute it directly and let the equation keep
+ * the books.
+ *
+ * After the guest has executed E microseconds, wall time SHOULD read E/duty for the
+ * ratio to hold. So the hold needed right now is simply:
+ *       hold = max(0, E/duty - T)
+ * where E and T are RUNNING TOTALS since the last time the guest was caught up.
+ *
+ * ⚠ WHY THIS REPLACED THE DEBT CARRY (hold_us + pay_ms + owed_us), session 60. The
+ *   open-loop version priced each run phase alone and accumulated the remainder in
+ *   `owed_us`. The arithmetic was right and the LOOP was wrong TWICE: a baseline
+ *   re-sampled on a failed suspend discarded uncharged execution, and a spin-guard
+ *   Sleep(1) added an off phase the accounting never saw. Both are impossible here,
+ *   because there is no per-period state to fall out of step -- E and T are the only
+ *   state and they are MEASURED, not accumulated by hand.
+ * ★ SELF-CORRECTING AND JITTER-PROOF. Sleep overshoots? T ran ahead, next hold is
+ *   shorter, no credit is banked. Sleep undershoots? T is behind, next hold is
+ *   longer. A descheduled 19 ms outlier corrects itself the same way -- which is the
+ *   exact failure ("non-monotonic below 33 MHz") the debt carry was chasing.
+ * ★ SATURATION IS HONEST WITH NO SPECIAL CASE. One hold is capped (a guest frozen
+ *   >1 s has stopped answering, it is not "slow"). If a setting needs more than the
+ *   cap, T never reaches E/duty, delivered E/T stays above the target -- and that IS
+ *   the true achievable speed, reported not hidden.
+ * ★ AND THE PORT-TRAP CEILING FALLS OUT. If host overhead alone already makes the
+ *   guest slower than the target (E/T < duty before we hold at all) the hold is 0
+ *   and we deliver E/T: we can add holds, never remove the host's own trap cost, so
+ *   delivered = min(target, the guest's own trap-limited rate). Physical truth.
+ *
+ * ⚠ 64-BIT. E and T are totals across a window that only resets when the guest is
+ *   caught up, so under saturation they grow; E*10000 stays inside 64 bits for the
+ *   life of any session. */
+#define CPUSPEED_MAX_WINDOW_US 60000000ull  /* force a rebaseline after this, bounded */
+/* ── ★ WHERE THE 1 ms RUN-PHASE FLOOR KICKS IN (see the throttle loop). Above this
+     duty the immediate-catch hold is too small to swamp the per-period catch cost, so
+     the guest must run a Sleep-able chunk first; below it, an immediate catch already
+     earns a large hold and the floor would over-run. Rig-tuned against ref 3704: 8 MHz
+     (22 bp) must NOT floor -- it over-runs 1.5x if it does -- and 16 MHz (44 bp) must;
+     the threshold sits between. Keyed on duty, which already carries the reference. */
+#define CPUSPEED_RUN_FLOOR_BP  32u
+
+static unsigned long long cpuspeed_hold_for(unsigned long long exec_us,
+                                            unsigned long long wall_us,
+                                            unsigned duty_bp)
 {
-    if (duty_bp >= 10000u || duty_bp == 0u || !ran_us) return 0ul;
-    return (ran_us * (unsigned long)(10000u - duty_bp)) / (unsigned long)duty_bp;
+    unsigned long long target;
+    if (duty_bp == 0u || duty_bp >= 10000u) return 0ull;   /* unlimited: never hold */
+    target = (exec_us * 10000ull) / (unsigned long long)duty_bp;
+    return target > wall_us ? target - wall_us : 0ull;
 }
 
-/* ── ★ THE DEBT IS CARRIED, AND THAT IS WHAT MAKES THE SLOW SETTINGS WORK. ───────
-     A single hold is capped, because a guest frozen for several seconds is not a
-     slow machine, it is one that has stopped answering. But the run phase is
-     MEASURED, and measurements have outliers: on the rig it is usually ~2 ms and
-     occasionally 19 ms (the whole box gets descheduled after a long hold). Pricing
-     each period independently and then clamping THREW THE REMAINDER AWAY, so one
-     long run bought the guest 19 ms of free execution it never paid for -- which is
-     exactly why the first adaptive cut came out at 52 MHz where 33 was asked, and
-     came out NON-MONOTONIC below that.
-   ⇒ So carry the unpaid remainder into the next period. Each hold pays what it can;
-     the long-run average is then exact for any setting whose average requirement
-     fits under the cap, and saturates -- visibly, in the log -- for any that does
-     not. Same shape as the interpreter half's microsecond debt, for the same reason.
-   ⚠ THE DEBT IS BOUNDED. A setting the host cannot reach would otherwise accumulate
-     an ever-growing arrears that would go on freezing the guest long after the user
-     had put the speed back to Unlimited. */
-#define CPUSPEED_MAX_OWED_US 4000000ul     /* four seconds of arrears, and no more */
-
-/* Pay what we can off the debt. Updates *owed_us and returns the milliseconds to
-   sleep now (0 = nothing owed yet, so do not sleep at all). */
-static unsigned cpuspeed_pay_ms(unsigned long *owed_us)
+/* One period of the controller, as a PURE FUNCTION so the loop and the deterministic
+   test run the identical law (tools/dostest/cpuspeed_test.c drives this against a
+   simulated clock). E and T are totals since the window began; returns the hold to
+   take now and sets *reset when the caller should rebaseline the window.
+ ⚠ *reset FIRES ONLY WHEN THE GUEST IS AT OR AHEAD OF TARGET (hold rounds to nothing),
+   never on a paid-but-positive hold. That is what makes this survive Sleep's 1 ms
+   granularity: a sub-millisecond hold is NOT forgiven -- it rides forward in the
+   running totals until it is worth a whole millisecond -- and the ONLY thing a reset
+   throws away is accumulated LEAD (the guest ran slower than asked), which must not
+   be bankable as a later burst. A stall (wall jumps, exec flat) lands here too and is
+   correctly forgiven. The window bound is the only other reason to rebaseline. */
+static unsigned long long cpuspeed_step(unsigned long long E, unsigned long long T,
+                                        unsigned duty_bp, unsigned long long cap_us,
+                                        int *reset)
 {
-    unsigned long ms;
-    if (*owed_us > CPUSPEED_MAX_OWED_US) *owed_us = CPUSPEED_MAX_OWED_US;
-    ms = *owed_us / 1000ul;
-    if (!ms) return 0u;
-    if (ms > CPUSPEED_MAX_OFF_MS) ms = CPUSPEED_MAX_OFF_MS;
-    *owed_us -= ms * 1000ul;
-    return (unsigned)ms;
+    unsigned long long raw = cpuspeed_hold_for(E, T, duty_bp);
+    unsigned long long hold = raw > cap_us ? cap_us : raw;
+    *reset = (raw == 0ull) || (T > CPUSPEED_MAX_WINDOW_US);
+    return hold;
 }
 
-/* ── ★ WHAT IT ACTUALLY DELIVERS, WHICH IS NOT ALWAYS WHAT WAS ASKED. ────────────
-     The hold is capped, because a hold long enough to deliver 8 MHz on a 3.6 GHz
-     box is over a second and a guest frozen for a second is not a slow machine, it
-     is one that has stopped answering. So on a fast host the slowest settings floor
-     out -- and a throttle that quietly delivers 13 MHz while the menu says 8 is the
-     "runs but lies" class this project treats as the most expensive kind of defect.
-     Hence this: the host logs requested AND delivered, every run, side by side.
-     ran_us is the measured run phase; 0 means unlimited. */
-static unsigned cpuspeed_delivered_mhz(unsigned idx, unsigned ref_mhz,
-                                       unsigned long ran_us)
+/* The duty actually achieved over a window, in basis points: exec / wall. This is
+   what the guest FEELS, and it equals the target only when the target is reachable
+   -- below the port-trap ceiling and inside the hold cap. Logged beside the
+   requested duty so the two can disagree in the open rather than the label lying. */
+static unsigned cpuspeed_delivered_bp(unsigned long long exec_us,
+                                      unsigned long long wall_us)
 {
-    unsigned bp = cpuspeed_duty_bp(idx, ref_mhz);
-    unsigned long hold_us;
-    if (bp >= 10000u || !ran_us) return 0u;
-    hold_us = cpuspeed_hold_us(bp, ran_us);
-    /* With the debt carried, a setting is delivered in full as long as its AVERAGE
-       requirement fits under the cap. Past that it saturates, and the saturated
-       figure -- not the label -- is what the guest will feel. */
-    if (hold_us > (unsigned long)CPUSPEED_MAX_OFF_MS * 1000ul)
-        hold_us = (unsigned long)CPUSPEED_MAX_OFF_MS * 1000ul;
-    return (unsigned)(((unsigned long)ref_mhz * ran_us) / (ran_us + hold_us));
+    if (!wall_us) return 0u;
+    return (unsigned)((exec_us * 10000ull) / wall_us);
 }
 
 /* ── THE INTERPRETER HALF: PACE BY INSTRUCTIONS, NOT BY DUTY. ────────────────────

@@ -23,18 +23,27 @@ void vdd_pit_add_clocks(pit_state *st, uint32_t clocks)
     }
 }
 
+/* See pit_state.guard in the header: every touch of counter state from a caller
+   the HOST does not already serialize against the pacer goes through this. */
+#define PIT_GUARD(st, e) do { if ((st)->guard) (st)->guard((st)->guard_ctx, (e)); } while (0)
+
 static void pit_frame(void *self)
 {
     pit_state *st = (pit_state *)self;
-    uint32_t clocks = (uint32_t)(((uint64_t)PIT_INPUT_HZ * st->frame_us) / 1000000u);
+    uint32_t clocks;
+    /* The host that drives time from a pacer sets frame_us = 0; add_clocks(0) is
+       a no-op ARITHMETICALLY but its u64 read-modify-writes still race the pacer
+       on a 32-bit build, so do not touch the state at all. */
+    if (!st->frame_us) return;
+    clocks = (uint32_t)(((uint64_t)PIT_INPUT_HZ * st->frame_us) / 1000000u);
+    PIT_GUARD(st, 1);
     vdd_pit_add_clocks(st, clocks);
+    PIT_GUARD(st, 0);
 }
 
 /* --- 8254 ports 0x40-0x43 ------------------------------------------------- */
-static void pit_out(void *self, uint16_t port, uint8_t w, uint32_t v)
+static void pit_out_locked(pit_state *st, uint16_t port, uint8_t val)
 {
-    pit_state *st = (pit_state *)self;
-    uint8_t val = (uint8_t)v; (void)w;
     if (port == 0x43) {                      /* mode/command register           */
         uint8_t ch = (uint8_t)(val >> 6);
         uint8_t acc = (uint8_t)((val >> 4) & 3);
@@ -98,11 +107,18 @@ static void pit_out(void *self, uint16_t port, uint8_t w, uint32_t v)
     /* port 0x41 (DRAM refresh) not modelled */
 }
 
-static void pit_in(void *self, uint16_t port, uint8_t w, uint32_t *val)
+static void pit_out(void *self, uint16_t port, uint8_t w, uint32_t v)
 {
     pit_state *st = (pit_state *)self;
-    uint16_t v; uint8_t acc;
     (void)w;
+    PIT_GUARD(st, 1);
+    pit_out_locked(st, port, (uint8_t)v);
+    PIT_GUARD(st, 0);
+}
+
+static void pit_in_locked(pit_state *st, uint16_t port, uint32_t *val)
+{
+    uint16_t v; uint8_t acc;
     if (port != 0x40) { *val = 0xFF; return; }
     v = st->latched ? st->latch : pit_current_count(st);
     acc = st->access ? st->access : 3;
@@ -112,6 +128,15 @@ static void pit_in(void *self, uint16_t port, uint8_t w, uint32_t *val)
         if (!st->rd_flip) { *val = v & 0xFF; st->rd_flip = 1; }
         else { *val = (v >> 8) & 0xFF; st->rd_flip = 0; st->latched = 0; }
     }
+}
+
+static void pit_in(void *self, uint16_t port, uint8_t w, uint32_t *val)
+{
+    pit_state *st = (pit_state *)self;
+    (void)w;
+    PIT_GUARD(st, 1);
+    pit_in_locked(st, port, val);
+    PIT_GUARD(st, 0);
 }
 
 /* --- BIOS timer services -------------------------------------------------- */
@@ -163,11 +188,13 @@ void vdd_pit_reset(void *self)
 {
     pit_state *st = (pit_state *)self;
     vdd_bus *bus = st->bus; uint32_t fus = st->frame_us;
+    void (*guard)(void *, int) = st->guard; void *gctx = st->guard_ctx;
     unsigned i; uint8_t *p = (uint8_t *)st;
     for (i = 0; i < sizeof(*st); ++i) p[i] = 0;     /* zero, then restore links */
     st->bus = bus;
     st->access = 3;
     st->frame_us = fus ? fus : PIT_DEFAULT_FRAME_US;
+    st->guard = guard; st->guard_ctx = gctx;        /* the lock survives a reset */
 }
 
 int vdd_pit_init(vdd_bus *b, void *self)

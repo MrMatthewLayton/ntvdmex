@@ -78,8 +78,8 @@ BEGIN
 END
 
 /* ── PAGE: GENERAL ──────────────────────────────────────────────────────────────
-   What machine we claim to be, and the two timing knobs that belong to the host
-   rather than to any emulated device. Both of the Timing controls are LIVE. */
+   What machine we claim to be. The timing knobs that used to sit here moved to the
+   Advanced page (session 60) -- they are internal pacing, not "General". */
 IDD_PAGE_GENERAL DIALOGEX 0, 0, 292, 181
 STYLE DS_SETFONT | DS_CONTROL | WS_CHILD
 FONT 8, "MS Shell Dlg", 400, 0, 0x1
@@ -91,50 +91,72 @@ BEGIN
     LTEXT           "A guest that refuses to start may just dislike this number. "
                     "6.22 is the reference; Windows XP's own COMMAND.COM requires 5.00.",
                     IDC_S_DOSVER_NOTE, 14, 39, 266, 20
-
-    GROUPBOX        "Timing", -1, 4, 74, 284, 56
-    CONTROL         "&Pace the PIT from a dedicated thread (keeps timer ticks even)",
-                    IDC_S_PITPACE, "Button", BS_AUTOCHECKBOX | WS_TABSTOP | WS_GROUP,
-                    14, 89, 266, 10
-    LTEXT           "&UI tick:", -1, 14, 108, 28, 8
-    EDITTEXT        IDC_S_UITICK, 44, 106, 30, 13, ES_AUTOHSCROLL | ES_NUMBER | WS_TABSTOP
-    LTEXT           "milliseconds  (the floor on the present/UI loop)", -1, 78, 108, 180, 8
 END
 
-/* ── PAGE: CPU ───────────────────────────────────────────────────────────────── */
+/* ── PAGE: PROCESSOR ─────────────────────────────────────────────────────────────
+   ⚠ THIS WAS THE "CPU" PAGE, AND IT WAS MOSTLY FICTION (session 60). Type, Core and
+   Cycles were DOSBox vocabulary read by nothing; FPU and Turbo were live but did not
+   earn a control; the smoothness slider and core-affinity box (both mine) were
+   removed to file knobs. There is nothing to configure about the processor -- it is
+   the user's own, running in V86 -- so the page SAYS that and offers the one real
+   lever: an optional speed limit for software that runs too fast. */
 IDD_PAGE_CPU DIALOGEX 0, 0, 292, 181
 STYLE DS_SETFONT | DS_CONTROL | WS_CHILD
 FONT 8, "MS Shell Dlg", 400, 0, 0x1
 BEGIN
-    GROUPBOX        "Processor", -1, 4, 4, 284, 76
-    LTEXT           "CPU &type:", -1, 14, 21, 44, 8
-    COMBOBOX        IDC_S_CPUTYPE, 62, 19, 74, 80,
-                    CBS_DROPDOWNLIST | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP | WS_GROUP
-    LTEXT           "&Core:", -1, 150, 21, 24, 8
-    COMBOBOX        IDC_S_CPUCORE, 178, 19, 74, 80,
-                    CBS_DROPDOWNLIST | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP
-    LTEXT           "&Speed:", -1, 14, 41, 44, 8
-    COMBOBOX        IDC_S_SPEEDMODE, 62, 39, 74, 80,
-                    CBS_DROPDOWNLIST | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP
-    LTEXT           "C&ycles:", -1, 150, 41, 26, 8
-    EDITTEXT        IDC_S_CYCLES, 178, 39, 50, 13, ES_AUTOHSCROLL | ES_NUMBER | WS_TABSTOP
-    CONTROL         "Enable the &FPU (x87)", IDC_S_FPU, "Button",
-                    BS_AUTOCHECKBOX | WS_TABSTOP, 14, 60, 110, 10
-    CONTROL         "Tu&rbo", IDC_S_TURBO, "Button",
-                    BS_AUTOCHECKBOX | WS_TABSTOP, 150, 60, 60, 10
+    GROUPBOX        "This PC's processor", -1, 4, 4, 284, 54
+    /* Filled at WM_INITDIALOG from the registry's ProcessorNameString -- see
+       settings_pageproc. The placeholder shows if that read ever fails. */
+    LTEXT           "Running on this PC's own processor.", IDC_S_CPUINFO, 14, 18, 266, 8
+    LTEXT           "DOS programs run on it directly, in Virtual-8086 mode. There is "
+                    "no emulated CPU to set up -- it is your real one.",
+                    -1, 14, 32, 266, 18
 
-    GROUPBOX        "Memory", -1, 4, 88, 284, 70
-    LTEXT           "Con&ventional:", -1, 14, 105, 50, 8
-    EDITTEXT        IDC_S_CONVKB, 68, 103, 40, 13, ES_AUTOHSCROLL | ES_NUMBER | WS_TABSTOP | WS_GROUP
-    LTEXT           "KB", -1, 112, 105, 14, 8
+    GROUPBOX        "Speed", -1, 4, 64, 284, 56
+    LTEXT           "&Limit to:", -1, 14, 81, 40, 8
+    COMBOBOX        IDC_S_SPEEDMODE, 60, 79, 74, 90,
+                    CBS_DROPDOWNLIST | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP | WS_GROUP
+    LTEXT           "Slows software that runs too fast on a modern PC (a delay-loop "
+                    "game or an unpaced demo). Speeds are approximate.",
+                    -1, 14, 99, 266, 16
+END
+
+/* ── PAGE: MEMORY (split out of the old CPU page, session 60) ─────────────────── */
+IDD_PAGE_MEMORY DIALOGEX 0, 0, 292, 181
+STYLE DS_SETFONT | DS_CONTROL | WS_CHILD
+FONT 8, "MS Shell Dlg", 400, 0, 0x1
+BEGIN
+    GROUPBOX        "Memory", -1, 4, 4, 284, 76
+    LTEXT           "Con&ventional:", -1, 14, 20, 50, 8
+    EDITTEXT        IDC_S_CONVKB, 68, 18, 40, 13, ES_AUTOHSCROLL | ES_NUMBER | WS_TABSTOP | WS_GROUP
+    LTEXT           "KB", -1, 112, 20, 14, 8
     CONTROL         "&XMS (extended memory)", IDC_S_XMS, "Button",
-                    BS_AUTOCHECKBOX | WS_TABSTOP, 14, 124, 124, 10
+                    BS_AUTOCHECKBOX | WS_TABSTOP, 14, 38, 124, 10
     CONTROL         "&EMS (expanded memory)", IDC_S_EMS, "Button",
-                    BS_AUTOCHECKBOX | WS_TABSTOP, 150, 124, 124, 10
+                    BS_AUTOCHECKBOX | WS_TABSTOP, 150, 38, 124, 10
     CONTROL         "&UMB (upper memory blocks)", IDC_S_UMB, "Button",
-                    BS_AUTOCHECKBOX | WS_TABSTOP, 14, 140, 124, 10
+                    BS_AUTOCHECKBOX | WS_TABSTOP, 14, 54, 124, 10
     CONTROL         "&A20 line always enabled", IDC_S_A20, "Button",
-                    BS_AUTOCHECKBOX | WS_TABSTOP, 150, 140, 124, 10
+                    BS_AUTOCHECKBOX | WS_TABSTOP, 150, 54, 124, 10
+END
+
+/* ── PAGE: ADVANCED ──────────────────────────────────────────────────────────────
+   Internal pacing knobs, moved off General (session 60). Both LIVE, both diagnostic;
+   this is where things a normal user should not need to touch go to live. */
+IDD_PAGE_ADVANCED DIALOGEX 0, 0, 292, 181
+STYLE DS_SETFONT | DS_CONTROL | WS_CHILD
+FONT 8, "MS Shell Dlg", 400, 0, 0x1
+BEGIN
+    GROUPBOX        "Timing (internal)", -1, 4, 4, 284, 76
+    LTEXT           "These tune how the host paces the guest's clock and its own "
+                    "redraw. Leave them unless something tells you otherwise.",
+                    -1, 14, 18, 266, 16
+    CONTROL         "&Pace the PIT from a dedicated thread (keeps timer ticks even)",
+                    IDC_S_PITPACE, "Button", BS_AUTOCHECKBOX | WS_TABSTOP | WS_GROUP,
+                    14, 40, 266, 10
+    LTEXT           "&UI tick:", -1, 14, 58, 28, 8
+    EDITTEXT        IDC_S_UITICK, 44, 56, 30, 13, ES_AUTOHSCROLL | ES_NUMBER | WS_TABSTOP
+    LTEXT           "milliseconds  (the floor on the present/UI loop)", -1, 78, 58, 200, 8
 END
 
 /* ── PAGE: DISPLAY ──────────────────────────────────────────────────────────────

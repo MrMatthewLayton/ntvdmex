@@ -36,6 +36,17 @@ typedef struct pit_state {
     uint16_t ch2_reload;    /* channel-2 reload (the PC-speaker tone divisor)   */
     uint8_t  ch2_access;    /* channel-2 access mode (1=lo, 2=hi, 3=lo/hi)      */
     uint8_t  ch2_wr_flip;   /* channel-2 lo/hi write phase                      */
+    /* ── HOST SERIALIZATION HOOK (may be NULL, e.g. in the off-VM tests). ─────────
+       A real 8254 counts on its own crystal, in parallel with the CPU; this model
+       only counts when a thread runs its code, and s61 measured what happens when
+       that thread has to queue behind the video renderer for the DEVICE lock: the
+       clock stops, then lurches (86% of a played session's timing stalls). So the
+       host drives vdd_pit_add_clocks from a pacer thread under a PIT-ONLY lock --
+       and these handlers, which arrive under the DEVICE lock, must take that same
+       PIT lock or a guest reprogramming the reload races the pacer mid-count.
+       The hook keeps this file pure C: enter=1 before counter state, enter=0 after. */
+    void   (*guard)(void *ctx, int enter);
+    void    *guard_ctx;
 } pit_state;
 
 /* effective reload (0 means 65536 on the 8254). */

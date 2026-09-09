@@ -14,6 +14,33 @@
 #include <windows.h>
 #include <commctrl.h>
 #include "ntvdm.h"
+/* ── ★★ ONE FOLDER HOLDS THE WHOLE RIG. (s61, at the user's instruction) ──────────
+     Everything this host reads or writes lives under ONE directory, and NOTHING is
+     written to C:. Before this, the rig was spread over five places -- 52 knob and
+     flag files loose in the share ROOT, results and screenshots beside them, and
+     C:\ntvdmex holding the log, target.txt, autoexit, sb.raw, PRINTOUT.TXT,
+     SERIAL*.TXT, the floppy image and three probe logs -- plus C:\test and C:\game
+     recreated per run and rt.bat dropped into C:\WINDOWS. The user cleared the box
+     and asked for that not to happen again; this is the half of it that is the
+     HOST'S doing rather than the scripts'.
+
+       <dir>\cfg\   everything we READ: knobs, flags, target.txt, the floppy image
+       <dir>\out\   everything we WRITE: the log, screenshots, traces, probe dumps
+       <dir>\bm\    the harness and this binary       (scripts' business, not ours)
+       <dir>\games\ the user's games, run IN PLACE    (never copied anywhere)
+
+   ⚠ The two directories are created at startup (see ntvdmex_dirs_ensure): a knob
+     read may legitimately find nothing, but a WRITE to a missing out\ would fail
+     silently and take the log with it -- which is the one instrument that explains
+     every other failure. */
+#define NTVDMEX_DIR "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\"
+#define NTVDMEX_CFG NTVDMEX_DIR "cfg\\"
+#define NTVDMEX_OUT NTVDMEX_DIR "out\\"
+#define CFG_(n)     NTVDMEX_CFG n
+#define OUT_(n)     NTVDMEX_OUT n
+/* The log is the one path log.h owns; define it before including so its #ifndef
+   defers to us rather than putting the log back on C:. */
+#define LOG_PATH    OUT_("ntvdmhost.log")
 #include "v86.h"
 #include "dpmi.h"
 #include "csrss.h"
@@ -74,27 +101,28 @@
 #include "present_ddraw.h"
 
 /* LOG_PATH now lives in log.h -- see the note there. */
-#define TARGET_PATH "C:\\ntvdmex\\target.txt"
-#define AUTOEXIT_PATH "C:\\ntvdmex\\autoexit"   /* marker: headless test mode -> exit when the guest exits */
+/* Both are written by the runner and READ by us, so they are cfg, not out. */
+#define TARGET_PATH CFG_("target.txt")
+#define AUTOEXIT_PATH CFG_("autoexit")   /* marker: headless test mode -> exit when the guest exits */
 /* Opt-in screenshot flag. Lives on the SMB SHARE folder so the remote driver can
    toggle it (create it before a GRAPHICAL test, remove it otherwise). Non-graphical
    tests (selftest/dpmitest) then never touch the self-capture path -- keeping the
    common case off the capture code entirely. */
-#define CAPTURE_FLAG "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\capture.flag"
+#define CAPTURE_FLAG CFG_("capture.flag")
 /* Mode-Y de-interleave tuning; see modey_flush() in vdd_video.c. Contents = the run
    coalescing slack in dwords. Absent = the built-in default. */
-#define MODEY_PATH "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\modey.txt"
+#define MODEY_PATH CFG_("modey.txt")
 /* Per-plane backing for mode Y is ON by default -- see the MODE-Y PLANE BACKING block.
    This file DISABLES it and falls back to the de-interleave heuristic, which is worth
    keeping only because it is what a machine that refuses the remap will use. */
-#define SBDUMP_FLAG  "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\sbdump.flag"
-#define SBDUMP_PATH  "C:\\ntvdmex\\sb.raw"
-#define NOREMAP_FLAG "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\noremap.flag"
+#define SBDUMP_FLAG  CFG_("sbdump.flag")
+#define SBDUMP_PATH  OUT_("sb.raw")
+#define NOREMAP_FLAG CFG_("noremap.flag")
 /* Diagnostic knob: disable the mode-12h A0000 NOACCESS trap. With it off, planar
    writes land in the raw aperture instead of the VGA engine, so the PICTURE will
    be wrong -- the question it answers is whether the guest EXECUTES AT ALL.
    Absent = normal behaviour, so ordinary runs are untouched. Delete after use. */
-#define NOA000_FLAG  "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\noa000.flag"
+#define NOA000_FLAG  CFG_("noa000.flag")
 /* Mode 12h WITHOUT the A0000 page trap (GH #55). Arming that trap stops the V86
    guest running at all -- 10 I/O events in 30s against 22.5 MILLION with it off.
    But we do not actually need it: in mode 12h QuickBASIC reprograms a VGA
@@ -102,16 +130,19 @@
    constantly, and the batching interpreter can then run the pixel loop with its
    A0000 stores going through the planar engine. This knob keys the interpreter
    off "planar mode is active" instead of "the page is protected". */
-#define INTERP12_FLAG "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\interp12.flag"
+#define INTERP12_FLAG CFG_("interp12.flag")
 /* Escape hatch for the planar policy (GH #55): present = go back to the A0000
    page trap. Interpreting the guest for the whole time a planar mode is set is
    the DEFAULT because the page trap demonstrably freezes the guest on real
    hardware; this knob exists so the old path is still one file away. */
-#define P12OFF_FLAG   "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\p12off.flag"
+#define P12OFF_FLAG   CFG_("p12off.flag")
+/* Create every Settings page off-screen at startup and log whether the templates
+   still build. See the call site: a bad DIALOGEX fails to CREATE, silently. */
+#define DLGCHECK_FLAG CFG_("dlgcheck.flag")
 /* GH #128: opt into the EXPERIMENTAL WOW load probe on a Win16 launch. Absent (the
    default) the host still refuses Win16 loudly -- an experiment must never become the
    shipped behaviour by accident. */
-#define WOWTRY_FLAG   "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\wowtry.flag"
+#define WOWTRY_FLAG   CFG_("wowtry.flag")
 /* ── ⚠ `/B` BOOT LOGGING WAS TRIED AND DOES NOT WORK HERE. (GH #128, session 36) ──
      krnl386 has a stock `WIN /B` switch: its command-line parser at seg1:0xc941 reads
      the PSP command tail, and on `/b` calls seg1:0xb148, which builds a path from the
@@ -130,7 +161,7 @@
      the loader's return code per module directly. See the session-36 log. */
 /* A log NOTHING truncates. WinMain has three log_write calls and each wipes the file;
    diagnostics that need to survive the whole run belong here instead. */
-#define LDTLOG_PATH   "C:\\ntvdmex\\ldtprobe.log"
+#define LDTLOG_PATH   OUT_("ldtprobe.log")
 /* ── ★ THE WATCHDOG WRITES HERE, AND NOWHERE ELSE. ────────────────────────────────
      It is the one instrument whose whole job is to speak when the main thread cannot,
      so sharing a file with the main thread's firehose leaves a shared-resource
@@ -139,36 +170,41 @@
      distinction session 32 could not make and spent four rig runs failing to settle.
      log_append opens with FILE_SHARE_READ|FILE_SHARE_WRITE and appends, so this was
      never likely; "never likely" is not the same as ruled out. */
-#define WDLOG_PATH    "C:\\ntvdmex\\wdprobe.log"
+#define WDLOG_PATH    OUT_("wdprobe.log")
 /* Dev-only: capture the exact OPL register stream a game sends, with timestamps,
    so it can be replayed offline through BOTH our synth and a reference core and
    the audio diffed. Counting register writes cannot say WHY an instrument sounds
    wrong; comparing waveforms from identical input can. Absent = no cost at all. */
-#define OPLTRACE_FLAG "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\opltrace.flag"
-#define OPLTRACE_PATH "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\opltrace.txt"
+#define OPLTRACE_FLAG CFG_("opltrace.flag")
+#define OPLTRACE_PATH CFG_("opltrace.txt")
 /* Async-preemption experiment knob, also on the share so it can be changed between
    runs without a rebuild. One digit: bits 0-1 = the FIXED_NTVDMSTATE pending bits to
    set before NtVdmControl(VdmQueueInterrupt) (1 = VDM_INT_HARDWARE, 2 = VDM_INT_TIMER,
    3 = both), bit 2 = raise a periodic device IRQ 5 for the qirq probe. Absent = the
    pre-session-11 behaviour (latch the pending bit only, never queue). */
 /* GH #11: one DLL path per line, '#' comments. See docs/sdk/vdd-sdk.md. */
-#define VDDLIST_PATH "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\vdd.txt"
-#define QIMODE_PATH "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\qimode.txt"
+#define VDDLIST_PATH CFG_("vdd.txt")
+#define QIMODE_PATH CFG_("qimode.txt")
 /* Headless wall-clock cap override, decimal milliseconds, also on the share. The 30 s
    default is right for an unattended test that must not wedge the watcher, but an
    INTERACTIVE test on the box -- keylog, where a human walks over and presses every key
    -- needs minutes, and the default would kill the guest mid-typing. Absent = the
    default. */
-#define HEADLESS_MS_PATH "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\headless_ms.txt"
-#define AWBUFS_PATH      "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\awbufs.txt"
-#define AWFRAMES_PATH    "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\awframes.txt"
-#define EXECPRIO_PATH    "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\execprio.txt"
-#define DSPVER_PATH      "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\dspver.txt"
-#define SBGATE_PATH      "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\sbgate.txt"
-#define PITPACE_PATH     "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\pitpace.txt"
-#define PITPRIO_PATH     "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\pitprio.txt"
-#define PITINJ_PATH      "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\pitinj.txt"
-#define UITICK_PATH      "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\uitick.txt"
+#define HEADLESS_MS_PATH CFG_("headless_ms.txt")
+#define AWBUFS_PATH      CFG_("awbufs.txt")
+#define AWFRAMES_PATH    CFG_("awframes.txt")
+#define EXECPRIO_PATH    CFG_("execprio.txt")
+#define DSPVER_PATH      CFG_("dspver.txt")
+#define SBGATE_PATH      CFG_("sbgate.txt")
+#define PITPACE_PATH     CFG_("pitpace.txt")
+#define PITPRIO_PATH     CFG_("pitprio.txt")
+#define PITINJ_PATH      CFG_("pitinj.txt")
+#define UITICK_PATH      CFG_("uitick.txt")
+/* courier.txt = 0 turns the tick courier off (see tick_courier_thread). 1 = as shipped. */
+#define COURIER_PATH     CFG_("courier.txt")
+/* llkbd.txt = 1 re-enables the SYSTEM-WIDE low-level keyboard hook. OFF by default --
+   see input_capture_set for why it is the single most dangerous thing this host does. */
+#define LLKBD_PATH       CFG_("llkbd.txt")
 /* ── ★ HOW LONG A BLOCKED Win16 TASK WAITS. (GH #128, session 43) ────────────────
      Milliseconds, decimal; **0 means FOREVER**, which is what a real Win16 task
      does and what an INTERACTIVE session needs -- a program sitting in GetMessage
@@ -176,24 +212,28 @@
      a host that quits it after six seconds makes it impossible to type into.
      Absent = WOWMSG_WAIT_MS, the bound a harness run needs so that a guest which
      will never receive anything still lets the run finish. */
-#define WOWIDLE_PATH     "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\wowidle.txt"
-#define KEYIRQ_PATH      "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\keyirq.txt"
-#define MSENS_PATH       "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\msens.txt"
+#define WOWIDLE_PATH     CFG_("wowidle.txt")
+#define KEYIRQ_PATH      CFG_("keyirq.txt")
+#define MSENS_PATH       CFG_("msens.txt")
 /* ── ★ THE CPU-SPEED CALIBRATION, AS A FILE. (GH #56) ────────────────────────────
      Decimal MHz: how fast an UNTHROTTLED host looks to a DOS program on THIS box.
      Every speed on the menu is a fraction of it, so it is the one number that makes
      "33 MHz" mean 33 MHz here, and it is wrong on somebody else's machine by
      construction -- a faster box presents more. Measured by cpubench.asm; absent =
      CPUSPEED_REF_MHZ_DEFAULT. A knob, so re-calibrating is a run rather than a build. */
-#define CPUREF_PATH      "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\cpuref.txt"
+#define CPUREF_PATH      CFG_("cpuref.txt")
 /* Decimal index into CPUSPEED_MHZ, overriding the registry for one run. This is how
    the rig sweeps every speed in a single batch without touching HKCU. */
-#define CPUSPD_PATH      "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\cpuspd.txt"
-#define DOSVER_PATH      "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\dosver.txt"
+#define CPUSPD_PATH      CFG_("cpuspd.txt")
+/* Throttle granularity (target run/hold period, ms). 0/absent = auto-detect. */
+#define CPUGRAN_PATH     CFG_("cpugran.txt")
+/* cpuaff.txt = 1 -> pin the guest to a core of its own (see cpuaff_apply). */
+#define CPUAFF_PATH      CFG_("cpuaff.txt")
+#define DOSVER_PATH      CFG_("dosver.txt")
 /* Extra guest environment variables, one NAME=VALUE per line; '#' comments a line.
    See dos_env_build_card for why this exists -- a DOS program configured through its
    environment could not be configured at all before it. */
-#define DOSENV_PATH      "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\dosenv.txt"
+#define DOSENV_PATH      CFG_("dosenv.txt")
 /* ── ★ dsprobe.txt: GUEST DATA WORDS TO DUMP AT EVERY #GP. ────────────────────
      Whitespace-separated hex offsets; four bytes of DS: are printed for each.
      A guest's branch decisions live in its own data segment, and reading them off
@@ -202,12 +242,12 @@
      register dump can show. This is the generic form of the one-off ds:0000 dump:
      name the offsets in a file and they come back in the fault report, with no
      guest-specific code in the host and nothing to rebuild between guesses. */
-#define DSPROBE_PATH     "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\dsprobe.txt"
+#define DSPROBE_PATH     CFG_("dsprobe.txt")
 /* csprobe.txt is the same knob against CS: the guest's CODE. It exists because a
    guest's dispatch can be PATCHED AT RUNTIME -- ZAR's DOS/16M reaches a routine the
    file on disk has no call to, so what matters is the bytes in memory, not the bytes
    in the image. Comparing the two is the whole point. */
-#define CSPROBE_PATH     "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\csprobe.txt"
+#define CSPROBE_PATH     CFG_("csprobe.txt")
 #define DSPROBE_MAX 12
 static WORD g_dsprobe[DSPROBE_MAX];
 static int  g_dsprobe_n = 0;
@@ -265,7 +305,7 @@ static void dsprobe_load(void)
         if (got) g_dsprobe[g_dsprobe_n++] = (WORD)v; else if (b[i]) ++i;
     }
 }
-#define DOSTRACE_FLAG    "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\dostrace.flag"
+#define DOSTRACE_FLAG    CFG_("dostrace.flag")
 /* Scripted synthetic keystrokes, on the share so a test sequence can be changed between
    runs without a rebuild. Whitespace-separated tokens, played once in order:
      4d     -- scancode 4D: make, brief hold, break
@@ -274,7 +314,7 @@ static void dsprobe_load(void)
    A hardcoded "tap UP 400 times" cannot reach a specific screen, and worse, UP is a no-op
    on a menu whose first item is already selected -- a probe that cannot tell success from
    failure. A script can say "wait for the intro, Enter, DOWN, DOWN, Enter". */
-#define KEYS_PATH "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\keys.txt"
+#define KEYS_PATH CFG_("keys.txt")
 
 /* Offset, within DOS_HDLR_SEG, of the XMS API far-call entry stub (BOP 0x43; RETF).
    Lives just past the INT 1Ah stub (which ends at 0x40) and the INT 2Fh stub (4 bytes
@@ -491,6 +531,7 @@ static volatile LONG g_irq0_pending = 0;    /* PIT raised IRQ0 (UI thread sets, 
        is starving the timer, which is starving the audio. */
 static uint32_t g_pit_syncs;
 static uint32_t g_pit_async_attempts;
+static DWORD    g_pit_deliver_skipped;  /* attempts foregone: g_lock busy when the crystal knocked */
 static LONG     g_pm_tick_owed_max;
 /* ── ...AND owed_max IS A HIGH-WATER MARK, NOT AN OCCUPANCY. ─────────────────────────
      "owed_max = 0x40 = PM_TICK_OWED_MAX, the backlog is PERMANENTLY SATURATED" reads a
@@ -528,11 +569,6 @@ static int pm_tick_take(void)
     return 1;
 }
 static int   g_async_tried_this_sync = 0;   /* see host_irq_sink: one attempt per PIT sync */
-/* Set (under g_lock) while the PACER thread is inside a sync, when pitinj.txt = 0: the
-   pacer then only advances the clock and does NOT perform the async injection, leaving
-   delivery to the UI and exec threads as it was before the pacer existed. See
-   pit_pacer_thread for why that is one of the two things worth testing. */
-static int   g_pit_noinject = 0;
 /* ── HOW EVENLY DO IRQ0s ACTUALLY LAND? ──────────────────────────────────────────────
      DMX's mixer is armed by the SB block IRQ (next_due = NOW) and SERVICED on the next
      timer interrupt. A block is 11.6 ms; a tick period at the 135/s we deliver is
@@ -668,6 +704,14 @@ static uint32_t qpc_us(LONGLONG d)
     if (!g_qpf.QuadPart || d <= 0) return 0;
     return (uint32_t)((d * 1000000) / g_qpf.QuadPart);
 }
+/* 64-bit form, for the throttle's windowed wall total (a 32-bit us wraps at 71 min
+   and the window can be up to CPUSPEED_MAX_WINDOW_US). d is bounded to one window, so
+   d*1e6 stays far inside 64 bits. */
+static unsigned long long qpc_us64(LONGLONG d)
+{
+    if (!g_qpf.QuadPart || d <= 0) return 0ull;
+    return (unsigned long long)((d * 1000000ll) / g_qpf.QuadPart);
+}
 
 static void host_lock_enter(int site)
 {
@@ -699,9 +743,44 @@ static void host_lock_leave(void)
     }
     LeaveCriticalSection(&g_lock);
 }
+/* ── A NON-BLOCKING ACQUIRE, for a caller that would rather SKIP than QUEUE. ──────
+     The tick generator uses this for its delivery attempts: an attempt needs g_lock
+     (the never-suspend-a-lock-holder interlock), but the CLOCK must never stand in
+     line behind the renderer to make one -- a skipped attempt costs nothing, because
+     the tick is already latched and the cooperative path delivers it at the guest's
+     next trap. Bookkeeping matches host_lock_enter minus the wait tracking, which is
+     meaningless here: a try never waits. */
+static int host_lock_try(int site)
+{
+    DWORD me = GetCurrentThreadId();
+    int nested = (g_lk_owner == me && g_lk_depth != 0);
+    if (!TryEnterCriticalSection(&g_lock)) return 0;
+    if (!nested) {
+        LARGE_INTEGER b; QueryPerformanceCounter(&b);
+        g_lk_owner = me; g_lk_since = b.QuadPart; g_lk_site = site; g_lk_depth = 0;
+    }
+    g_lk_depth++;
+    return 1;
+}
 /* __LINE__ gives every site its own identity without touching 28 call sites by hand. */
 #define HOST_LOCK()   host_lock_enter(__LINE__)
 #define HOST_UNLOCK() host_lock_leave()
+#define HOST_LOCK_TRY() host_lock_try(__LINE__)
+/* ── ★★★ THE CRYSTAL'S OWN LOCK. (s61) ───────────────────────────────────────────
+     A real 8254 counts on a crystal that cannot be made to wait. Ours counted only
+     under g_lock -- the same lock the video renderer holds for 13-22 ms a frame, the
+     audio mixer holds per fill, and ~68,000 port traps a second pass through -- and
+     the measured result, from a session the user played, was that 86% of all timing
+     stalls were the clock simply NEVER TICKING on time (STAGE2: IRQ0WHY gen vs del).
+     Every arbitration scheme downstream failed because they rationed delivery while
+     GENERATION was what starved.
+     So tick generation now runs under this micro-lock only. Rules that keep it safe:
+       - held for microseconds: QPC arithmetic, the counter model, the PIC's IRR
+         latch, an event signal. NEVER file I/O, NEVER a suspend, NEVER g_lock.
+       - ordering is strictly g_lock -> g_pit_cs (the exec thread reaches the PIT's
+         port handlers with g_lock held). Nothing may take g_lock while holding this;
+         delivery attempts run AFTER release, and only via HOST_LOCK_TRY. */
+static CRITICAL_SECTION g_pit_cs;
 static HWND         g_hwnd;
 static HANDLE       g_key_event;            /* signalled when a key is pushed     */
 static volatile LONG g_running = 1;         /* 0 once the window is closed         */
@@ -794,14 +873,14 @@ static void pmap_clear(DWORD lin)
    ONE-SHOT by design: on hit we restore the original bytes and do NOT advance EIP, so
    the real instruction executes and the client runs on undisturbed. A loop therefore
    reports its first pass, not its ten-thousandth. */
-#define PMBP_PATH "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\pmbp.txt"
+#define PMBP_PATH CFG_("pmbp.txt")
 /* Suppress the asynchronous IRQ0 -> PM INT 08h injection. A knob, not a feature: when a
    client dies the instant we deliver a timer tick, the first question is whether the
    DELIVERY is wrong or merely BADLY TIMED, and the cheapest way to ask it is to stop
    delivering and see how much further the client gets. Absent file = normal behaviour. */
-#define PMNOIRQ_PATH "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\pmnoirq.flag"
-#define PMVEHPASS_PATH "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\pmvehpass.flag"
-#define NOSB_PATH      "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\nosb.flag"
+#define PMNOIRQ_PATH CFG_("pmnoirq.flag")
+#define PMVEHPASS_PATH CFG_("pmvehpass.flag")
+#define NOSB_PATH      CFG_("nosb.flag")
 /* ── A WATCH ADDRESS: ONE HEX LINEAR ADDRESS, DUMPED EITHER SIDE OF EACH INJECTED
      INTERRUPT. ─────────────────────────────────────────────────────────────────────
    The question an injected timer tick always raises is not "did the handler run" --
@@ -819,7 +898,7 @@ static void pmap_clear(DWORD lin)
      counter DOES NOT move while ticks complete -> the handler we enter is not the one
                                                  that increments it: a different bug
    Absent file = no watch and no cost, like every other knob here. */
-#define PMWATCH_PATH "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\pmwatch.txt"
+#define PMWATCH_PATH CFG_("pmwatch.txt")
 /* ── ★ WHO WROTE THIS BYTE? (GH #128, session 37) ─────────────────────────────
      pmbp.txt answers "what is there when I stop here", which needs you to know
      where to stop. The expensive question is the other one, and it has no
@@ -830,7 +909,7 @@ static void pmap_clear(DWORD lin)
      every PM event, so it cannot name the instruction -- it brackets the write
      between two events that name themselves, which is a bisect's first step for
      one run instead of five. Absent file = no watch and no cost. */
-#define PMCHG_PATH   "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\pmchg.txt"
+#define PMCHG_PATH   CFG_("pmchg.txt")
 /* ── RUN PROTECTED MODE UNDER THE KERNEL MONITOR INSTEAD OF IN-PROCESS. ──────────
    This host far-jmps into PM (dpmi_enter.S) because an early spike found
    VdmStartExecution faulting when it ran PM -- and everything expensive we have
@@ -845,7 +924,7 @@ static void pmap_clear(DWORD lin)
    So it is worth asking the original question again, against a host that now has
    working descriptors, services and thunks rather than almost nothing. Opt-in,
    because the far-jmp path is what currently works. */
-#define PMKERNEL_PATH "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\pmkernel.flag"
+#define PMKERNEL_PATH CFG_("pmkernel.flag")
 static int g_pm_noirq = 0;
 static int g_pm_veh_pass = 0;   /* pmvehpass.flag: let a non-INT PM fault fall THROUGH the VEH */
 /* THE EIP WE HANDED TO VdmStartExecution. The kernel's exception record reports a
@@ -860,7 +939,7 @@ static volatile LONG g_pm_entry_eip = -1;
    events it is the thing stopping it: a Doom run hit the 4 MB log cap at event 0xdb1
    with the game still loading. So: a handful of checkpoints always (they still catch a
    death at the switch), and the full firehose only when asked for. */
-#define PMVERBOSE_PATH "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\pmverbose.flag"
+#define PMVERBOSE_PATH CFG_("pmverbose.flag")
 static unsigned g_dpmi_cp_max = 8;
 #define DPMI_BP_VEC  0xEE               /* sentinel in g_int_vec[]: not a real vector */
 #define DPMI_BP_MAX  32
@@ -970,6 +1049,159 @@ static int            g_headless      = 0;  /* AUTOEXIT marker present: SMB test
 static DWORD          g_ev_io         = 0;  /* port-I/O events serviced            */
 static DWORD          g_io_extra      = 0;  /* accesses absorbed by the LOOP burst */
 static DWORD          g_irq0_inj      = 0;  /* INT 08h injections into the guest   */
+/* ── ★ IS THE GUEST'S CLOCK EVEN? A TOTAL CANNOT ANSWER THAT. ────────────────────
+ *  The user reports Skyroads "slow down / speed up" -- a RATE THAT VARIES -- and
+ *  every instrument this host has for IRQ0 is a COUNT. `irq0_inj 4485` is the same
+ *  number whether the ticks arrived evenly or in a clump followed by a stall, and
+ *  session 22 already had to reconstruct the distribution by hand to find the audio
+ *  defect at the DMA block boundary. Counting harder cannot see unevenness; only
+ *  the distribution can.
+ *  ⇒ Two shapes, because they answer different questions:
+ *      TIMELINE   deliveries in each whole second of the run. A slow-down/speed-up
+ *                 is visible directly as the sequence moving -- 180,180,61,204,90 --
+ *                 and no other instrument here would show it at all.
+ *      GAPS       the inter-delivery interval histogram. Says whether unevenness is
+ *                 a few long stalls or continuous jitter, which need different fixes.
+ *  ⚠ RATE, NOT COST: ~180 deliveries a second, so one QueryPerformanceCounter each
+ *    is free -- and unlike the reflected-INT trace this cannot be driven faster by
+ *    the guest, because it is bounded by the PIT rate the guest itself programmed.
+ *    (See [[guest-trace-can-outrun-the-guest]] for why that distinction matters.)
+ *  ⚠ FIXED WINDOW, so a long run cannot grow it. Past IRQ0TL_SECS the timeline
+ *    simply stops recording; the gap histogram keeps going. */
+#define IRQ0TL_SECS 90
+static DWORD          g_irq0_tl[IRQ0TL_SECS];   /* deliveries per second of run     */
+static DWORD          g_irq0_gap_hist[8];       /* ms: <1,1,2,4,8,16,32,64+         */
+static DWORD          g_irq0_gap_max_ms, g_irq0_gap_n;
+static LONGLONG       g_irq0_t0, g_irq0_tprev;
+/* ── ★ WHAT IS THE GUEST DOING DURING A LONG TIMER GAP? (Skyroads wobble, s61) ────
+     The gaps that wobble the game are the long ones, and the question is whether
+     they are the guest's music ISR overrunning on our slow (trapped) OPL port I/O,
+     or something else (a compute stretch, our own delivery latency). So split the
+     port-I/O count by gap size. `dio` is the port events serviced since the last
+     delivery -- g_ev_io is the running total. Also keep the single worst gap's I/O
+     and where the guest was when we finally delivered it.
+
+   ⚠⚠ TWO DEFECTS IN THE FIRST CUT OF THIS, AND THE SECOND ONE PRODUCED A REFUTATION
+      THAT DOES NOT HOLD. Both are measured, on the s61 in-game run:
+
+      1. "LONG" WAS A FIXED 8 ms, AND THE GUEST CHANGES THE TICK RATE UNDER IT.
+         Skyroads' intro runs at the BIOS 18.2 Hz -- a 55 ms period -- and only
+         switches to 180 Hz (5.56 ms) in game. So every NORMAL intro tick scored as
+         a "big gap": 187 of the 319 were the intro ticking correctly. The threshold
+         has to be RELATIVE TO THE PERIOD THE GUEST PROGRAMMED, or it measures the
+         guest's own choice of rate and calls it a fault.
+      2. I/O PER *GAP* IS CONFOUNDED BY GAP LENGTH. A gap ten times longer collects
+         ten times the I/O whatever the guest is doing, so "big gaps carry more I/O"
+         is true by construction and says nothing about the music. It has to be a
+         RATE -- I/O per millisecond -- before the two populations are comparable.
+         The s60 note recorded the opposite sign of this ratio and read it as
+         REFUTING the music-overrun hypothesis; on this run the raw ratio comes out
+         25x the other way. Neither number means anything until it is a rate.
+      ⇒ Both are the [[instrument-must-not-infer-its-own-frame]] shape: an instrument
+        that quietly assumes a constant the system is free to change. */
+static DWORD          g_irq0_io_prev, g_irq0_worstgap_ms, g_irq0_worstgap_io;
+static DWORD          g_irq0_worst_cs, g_irq0_worst_ip;    /* where IF re-opened     */
+static DWORD          g_irq0_note_cs, g_irq0_note_ip;      /* set by the caller      */
+/* ── ★★ WHICH OF THREE MECHANISMS MAKES A LONG GAP? (Skyroads wobble, s61) ────────
+     The s60 root-cause note reads the 8-20 ms gaps as ASYNC DELIVERY starving, and
+     the fix that follows from that is a lock-free courier thread. But two other
+     mechanisms produce a gap of exactly that size, and NOTHING IN THE TREE TELLS
+     THEM APART -- so the courier would be a fix chosen by argument, which is the
+     move that has cost this project whole sessions before:
+
+       A  DELIVERY    the tick WAS raised and the injector could not place it: the
+                      exec thread was in host code (why=20 not_in_exec, measured at
+                      75% of attempts). A courier that retries OUTSIDE g_lock fixes
+                      this and nothing else.
+       B  GENERATION  the tick was never raised at all, because host_pit_sync could
+                      not run -- every caller takes g_lock and host_audio_fill holds
+                      it across a whole buffer mix. A gap with NO RAISES inside it is
+                      not a delivery fault, and a courier cannot fix it: there is
+                      nothing pending to deliver. The fix would be the lock.
+       C  YIELD       host_irq_sink hands the IRQ0 async opportunity to a pending KEY
+                      (g_keyirq_retry, ON by default), up to KEYIRQ_MAX_YIELD = 3
+                      times in a row. Three yields at 180 Hz is 16.7 ms -- the exact
+                      observed gap size -- and it can only happen WHILE A KEY IS
+                      DOWN, which is when the player is steering and is precisely
+                      when the wobble is reported. That code calls the yield "free"
+                      because the tick is not LOST; the wobble is a LATENCY symptom,
+                      and latency is what a yield spends.
+
+   ► AND THE RAISE COUNT SEPARATES A FROM B WITH NO THRESHOLD AT ALL, which is why
+     it is the field to read first. Whatever rate the guest programmed, a HEALTHY
+     gap contains exactly ONE raise: one tick generated, one tick delivered. So
+       raises-in-gap >= 2  => the 8254 DID generate the ticks and we failed to place
+                              them. That is A, delivery, and a courier is the fix.
+       raises-in-gap <= 1  => the ticks were never generated. The clock itself
+                              stalled, so there was nothing pending and no injector
+                              of any kind could have helped. That is B, and the fix
+                              is the lock that host_pit_sync waits on.
+     A gap is ANOMALOUS when it spans at least two programmed periods -- the same
+     "the guest missed a tick" test, expressed in the guest's own units. */
+static DWORD          g_irq0_raise_ct, g_irq0_att_ct, g_irq0_nie_ct, g_irq0_yield_ct;
+static DWORD          g_irq0_pr_raise, g_irq0_pr_att, g_irq0_pr_nie, g_irq0_pr_yield;
+/* Anomalous gaps (>= 2 programmed periods) and normal ones, with I/O as a RATE. */
+static DWORD          g_irq0_anom_n, g_irq0_anom_us, g_irq0_anom_io;
+static DWORD          g_irq0_anom_raise, g_irq0_anom_att, g_irq0_anom_nie, g_irq0_anom_yld;
+static DWORD          g_irq0_anom_gen, g_irq0_anom_del;   /* B and A, by raise count */
+static DWORD          g_irq0_norm_n, g_irq0_norm_us, g_irq0_norm_io;
+static DWORD          g_irq0_wst_raise, g_irq0_wst_att, g_irq0_wst_nie, g_irq0_wst_yield;
+static DWORD          g_irq0_wst_per_us;   /* the period in force at the worst gap  */
+/* V86 single-run stretch durations (Skyroads wobble, s61). See the exec loop. */
+static DWORD          g_v86str_hist[8], g_v86str_n8;
+static DWORD          g_v86str_max_ms, g_v86str_max_cs, g_v86str_max_ip, g_v86str_max_ev;
+static void irq0_delivered_note(void)
+{
+    LARGE_INTEGER n;
+    QueryPerformanceCounter(&n);
+    if (!g_irq0_t0) { g_irq0_t0 = n.QuadPart; g_irq0_tprev = n.QuadPart;
+                      g_irq0_io_prev = g_ev_io;
+                      g_irq0_pr_raise = g_irq0_raise_ct; g_irq0_pr_att   = g_irq0_att_ct;
+                      g_irq0_pr_nie   = g_irq0_nie_ct;   g_irq0_pr_yield = g_irq0_yield_ct;
+                      return; }
+    {   DWORD sec = qpc_us(n.QuadPart - g_irq0_t0) / 1000000u;
+        DWORD gus = qpc_us(n.QuadPart - g_irq0_tprev);
+        DWORD gms = gus / 1000u;
+        DWORD dio = g_ev_io - g_irq0_io_prev;
+        /* The A/B/C discriminator -- see the block above. Same shape as dio. */
+        DWORD draise = g_irq0_raise_ct - g_irq0_pr_raise;
+        DWORD datt   = g_irq0_att_ct   - g_irq0_pr_att;
+        DWORD dnie   = g_irq0_nie_ct   - g_irq0_pr_nie;
+        DWORD dyld   = g_irq0_yield_ct - g_irq0_pr_yield;
+        /* THE GUEST'S OWN PERIOD, not a constant of ours. Skyroads runs its intro at
+           the BIOS 18.2 Hz and its game at 180 Hz, and a fixed threshold scores the
+           whole intro as faulty. Sampled per delivery: reprogramming the 8254 is
+           exactly the event that must move this. */
+        DWORD per_us = (DWORD)(((unsigned long long)pit_eff_reload(&g_pit) * 1000000ull)
+                               / PIT_INPUT_HZ);
+        unsigned b = 0;
+        if (sec < IRQ0TL_SECS) g_irq0_tl[sec]++;
+        while (b < 7 && gms >= (1u << b)) ++b;     /* 0:<1ms 1:1 2:2 3:4 ... 7:64+  */
+        g_irq0_gap_hist[b]++;
+        ++g_irq0_gap_n;
+        if (per_us && gus >= 2u * per_us) {        /* the guest missed a whole tick  */
+            ++g_irq0_anom_n; g_irq0_anom_us += gus; g_irq0_anom_io += dio;
+            g_irq0_anom_raise += draise; g_irq0_anom_att += datt;
+            g_irq0_anom_nie   += dnie;   g_irq0_anom_yld += dyld;
+            /* A or B, by whether the ticks were ever generated. See the essay. */
+            if (draise >= 2u) ++g_irq0_anom_del; else ++g_irq0_anom_gen;
+        } else {
+            ++g_irq0_norm_n; g_irq0_norm_us += gus; g_irq0_norm_io += dio;
+        }
+        if (gms > g_irq0_worstgap_ms) {
+            g_irq0_worstgap_ms = gms; g_irq0_worstgap_io = dio;
+            g_irq0_worst_cs = g_irq0_note_cs; g_irq0_worst_ip = g_irq0_note_ip;
+            g_irq0_wst_raise = draise; g_irq0_wst_att   = datt;
+            g_irq0_wst_nie   = dnie;   g_irq0_wst_yield = dyld;
+            g_irq0_wst_per_us = per_us;
+        }
+        if (gms > g_irq0_gap_max_ms) g_irq0_gap_max_ms = gms;
+        g_irq0_tprev = n.QuadPart;
+        g_irq0_io_prev = g_ev_io;
+        g_irq0_pr_raise = g_irq0_raise_ct; g_irq0_pr_att   = g_irq0_att_ct;
+        g_irq0_pr_nie   = g_irq0_nie_ct;   g_irq0_pr_yield = g_irq0_yield_ct;
+    }
+}
 static DWORD          g_irq0_skip     = 0;  /* IRQ0 delivery gated off (IF=0 etc.) */
 static DWORD          g_irq0_skip_if  = 0;  /* ...because the guest had interrupts off  */
 static DWORD          g_irq0_skip_stub= 0;  /* ...because we were inside our INT 08h stub */
@@ -1387,7 +1619,7 @@ static HANDLE g_serial = INVALID_HANDLE_VALUE;
    COM1-9. The name below is deliberately not on it. */
 static HANDLE g_lpt = INVALID_HANDLE_VALUE;
 static int    g_lpt_failed = 0;      /* opened once and could not: stop retrying */
-#define LPT_SPOOL_PATH "C:\\ntvdmex\\PRINTOUT.TXT"
+#define LPT_SPOOL_PATH OUT_("PRINTOUT.TXT")
 /* ── GH #9: WHAT THE GUEST'S COM PORTS TRANSMIT INTO. ────────────────────────
      The same spool shape as LPT1 above, and for the same reason: a file is a
      real device as far as a DOS program can tell, and it is inspectable after
@@ -1403,7 +1635,7 @@ static int    g_lpt_failed = 0;      /* opened once and could not: stop retrying
 static HANDLE g_com_spool[COMM_MAX_PORTS];
 static int    g_com_failed[COMM_MAX_PORTS];
 static const char *const g_com_spool_path[COMM_MAX_PORTS] = {
-    "C:\\ntvdmex\\SERIAL1.TXT", "C:\\ntvdmex\\SERIAL2.TXT"
+    OUT_("SERIAL1.TXT"), OUT_("SERIAL2.TXT")
 };
 /* Opened lazily on the first byte, so a run that never transmits leaves no file
    to confuse the next one -- and flushed per byte, because a VDM is far more
@@ -1800,6 +2032,26 @@ static int            g_qi_keys_async = 0;   /* opt-in: async-deliver IRQ1 (see 
    CONTEXT genuinely is the guest's frame and our loop is not touching the VDM_TIB. The
    async injector refuses to act unless this is set, so it can never race the exec loop. */
 static volatile LONG  g_in_exec       = 0;
+/* ── ⚠⚠ ONE THREAD MAY OWN THE GUEST'S CONTEXT AT A TIME, AND UNTIL THE COURIER
+     THERE WAS ONLY EVER ONE. async_inject_irq() reads the context, computes an IRET
+     frame from it and writes it back; two threads doing that concurrently would each
+     build a frame from a context the other had already superseded, and the two frames
+     would collide on the guest's stack. It was safe by accident: every caller ran
+     inside host_pit_sync, under g_lock. The tick courier deliberately runs OUTSIDE
+     that lock (that is the whole point of it), so the guarantee has to become explicit
+     rather than incidental.
+   ⚠ This is NOT the g_lock interlock and does not replace it. g_lock answers "is the
+     thread I am about to suspend holding a lock?"; this answers "is another thread
+     already rewriting the context?". The courier satisfies the first by confirming
+     g_in_exec AFTER the suspend has landed -- see the throttle's note for why that
+     order is sound -- and the second by holding this.
+   ⚠ The CPU throttle also suspends this thread, and that stays safe without taking
+     this: it only READS the context, and suspend counts nest. */
+static volatile LONG  g_async_ctxwr   = 0;   /* 1 while a thread owns the guest CONTEXT */
+/* Signalled by the IRQ0 raise site when a tick is still pending after its one attempt.
+   Declared here because host_irq_sink is above the courier itself; see
+   tick_courier_thread for what waits on it. */
+static HANDLE         g_courier_event;
 static DWORD          g_async_inj     = 0;   /* successful async injections */
 static DWORD          g_interp_refused = 0;  /* interpreter declined the faulting opcode */
 static DWORD          g_async_bail    = 0;   /* attempts declined (guest not in a safe spot) */
@@ -1842,6 +2094,8 @@ static int async_vec_is_our_stub(unsigned irq);
 static void pokew(DWORD lin, WORD v);        /* fwd: guest-memory helpers, defined below */
 static WORD peekw(DWORD lin);
 static void host_pit_sync(void);             /* fwd: the guest's clock, driven by both threads */
+static void host_pit_generate(void);         /* fwd: the crystal half (g_pit_cs only)  */
+static void host_pit_deliver(void);          /* fwd: the attempt half (g_lock, by TRY) */
 static int  v86_deliver_dev_irq(volatile BYTE *tib);  /* fwd: shared by the main and nested V86 loops */
 
 /* ── ASYNCHRONOUS DELIVERY INTO **PROTECTED MODE**. ───────────────────────────────
@@ -2027,6 +2281,9 @@ static void async_early_bail(unsigned irq, unsigned why)
     char pb[96], *pq = pb;
     g_async_bail++;
     async_why_note(irq, why);
+    /* A/B/C discriminator: "the tick was raised and we could not place it". 20 is
+       not_in_exec, the bail the s60 note measured at 75%. See irq0_delivered_note. */
+    if (irq == 0 && why == 20) ++g_irq0_nie_ct;
     /* ── ⚠⚠ THE CAP WAS 4000 AND IT COST SKYROADS A FIFTH OF ITS TIMER. ──────────────
          This log is reached from host_irq_sink, which runs inside host_pit_sync --
          **while it holds g_lock**. Every line is a log_append (open/write/close) plus a
@@ -2052,6 +2309,9 @@ static void async_early_bail(unsigned irq, unsigned why)
     pq = zput(pq, " ms="); pq = zhex(pq, GetTickCount());
     pq = zput(pq, "\r\n"); log_append(LOG_PATH, pb, pq); serial_out(pb, pq);
 }
+/* Paired with the InterlockedCompareExchange below; every path that resumed the guest
+   must drop ownership. See g_async_ctxwr. */
+#define ASYNC_CTX_RELEASE() InterlockedExchange(&g_async_ctxwr, 0)
 static int async_inject_irq(unsigned irq)
 {
     CONTEXT cx;
@@ -2066,6 +2326,11 @@ static int async_inject_irq(unsigned irq)
          was indistinguishable from "the injector tried and bailed before it could say so".
          That is the difference between a measurement and an unread instrument, so give
          each early exit a why code (20+) and let async_early_bail() say it out loud. */
+    /* ⚠ NEVER SUSPEND ONCE WE ARE WINDING DOWN. A suspend that lands during teardown
+         can leave the thread stopped forever, and a process with a suspended thread
+         does not finish exiting -- which strands the system-wide hook and cursor clip
+         (see host_panic_release). g_running is cleared first thing in WM_DESTROY. */
+    if (!g_running) { async_early_bail(irq, 20); return 0; }
     if (!g_hcpu || g_in_exec == 0) { async_early_bail(irq, 20); return 0; }
     /* Ask the PIC, exactly as the hardware would: is this line unmasked, and is nothing of
        equal or higher priority still in service? That is what stops us re-entering a handler
@@ -2092,10 +2357,30 @@ static int async_inject_irq(unsigned irq)
                         && peekw(v0 * 4) == DOS_IRET_STUB_OFF);
       int pm_hooked = g_dpmi_pm && g_pm_int[0x08u + irq].client;
       if (irq >= 2 && !rm_hooked && !pm_hooked) { async_early_bail(irq, 22); return 0; } }
-    if (SuspendThread(g_hcpu) == (DWORD)-1) { async_early_bail(irq, 23); return 0; }
+    /* Exclusive ownership of the guest's context for the whole suspend/rewrite/resume.
+       See g_async_ctxwr. Declining is free -- the other owner is placing an interrupt
+       right now, so this line simply takes the next opportunity. */
+    if (InterlockedCompareExchange(&g_async_ctxwr, 1, 0) != 0) { async_early_bail(irq, 28); return 0; }
+    if (SuspendThread(g_hcpu) == (DWORD)-1) { ASYNC_CTX_RELEASE(); async_early_bail(irq, 23); return 0; }
     { unsigned i; char *z = (char *)&cx; for (i = 0; i < sizeof cx; ++i) z[i] = 0; }
     cx.ContextFlags = CONTEXT_CONTROL | CONTEXT_SEGMENTS;
-    if (!GetThreadContext(g_hcpu, &cx)) { ResumeThread(g_hcpu); async_early_bail(irq, 24); return 0; }
+    if (!GetThreadContext(g_hcpu, &cx)) { ResumeThread(g_hcpu); ASYNC_CTX_RELEASE();
+                                          async_early_bail(irq, 24); return 0; }
+    /* ── ⚠⚠ RE-READ g_in_exec NOW THAT THE SUSPEND HAS LANDED. ────────────────────
+         The check at the top of this function is a sample: the guest can trap between
+         it and the suspend taking effect, leaving the thread inside HOST code -- and
+         possibly holding g_lock -- while we hold it frozen. Callers that already hold
+         g_lock are immune (a thread blocked on it cannot be inside it), but the tick
+         courier holds nothing, so the guarantee has to be re-established here.
+         GetThreadContext above is what makes "the suspend has landed" true: on a
+         multiprocessor SuspendThread only REQUESTS it, and reading the context is the
+         documented way to wait. The exec loop clears g_in_exec immediately on return
+         from v86_run, BEFORE any HOST_LOCK, so a 1 observed on an already-stopped
+         thread means it is still inside the kernel call, holding nothing.
+       ► Resuming instantly on a 0 is the correct trade: a microsecond probe of a
+         thread that MIGHT hold a lock is harmless, holding one is the catastrophe. */
+    if (g_in_exec == 0) { ResumeThread(g_hcpu); ASYNC_CTX_RELEASE();
+                          async_early_bail(irq, 29); return 0; }
 
     efl = cx.EFlags;
     cs  = cx.SegCs & 0xFFFF;
@@ -2106,6 +2391,7 @@ static int async_inject_irq(unsigned irq)
         char sb2[160], *sq = sb2;
         DWORD sblin = dpmi_sel_base((WORD)cs) + cx.Eip;
         ResumeThread(g_hcpu);                    /* NEVER log while the guest is held */
+        ASYNC_CTX_RELEASE();
         sq = zput(sq, "ASYNC-SITE #"); sq = zhex(sq, (DWORD)g_async_nsite);
         sq = zput(sq, " irq="); sq = zhex(sq, irq);
         sq = zput(sq, " cs:eip=0x"); sq = zhex(sq, cs);
@@ -2144,6 +2430,7 @@ static int async_inject_irq(unsigned irq)
         }
         else async_why_note(irq, (unsigned)g_async_why);   /* the clause that said no */
         ResumeThread(g_hcpu);
+        ASYNC_CTX_RELEASE();
         if (ok) { g_async_inj++; g_async_pm_inj++; g_async_inj_line[irq & 7]++;
                   if (!(irq & 7)) tick_delivered_note(); } else g_async_bail++;
         /* Log AFTER the resume, never while the guest is held -- and bounded, because this
@@ -2209,6 +2496,7 @@ static int async_inject_irq(unsigned irq)
          a why code like every other exit; async_early_bail's cap keeps it bounded. */
     if (!(efl & (0x200u | EFLAGS_VIF_BIT)) || cs == DOS_HDLR_SEG) {
         ResumeThread(g_hcpu);
+        ASYNC_CTX_RELEASE();
         async_early_bail(irq, (cs == DOS_HDLR_SEG) ? 26 : 25);
         return 0;
     }
@@ -2227,8 +2515,8 @@ static int async_inject_irq(unsigned irq)
     cx.ContextFlags = CONTEXT_CONTROL | CONTEXT_SEGMENTS;
     ok = SetThreadContext(g_hcpu, &cx) ? 1 : 0;
     if (ok) {
-        vdd_pic_acknowledge(&g_pic, (uint8_t)irq);       /* in service until the guest EOIs */
-        /* Release it immediately in the two cases where nobody ever will:
+        /* Acknowledge: in service until the guest EOIs.
+           Release it immediately in the two cases where nobody ever will:
            - a line vectored at one of OUR default stubs, which do nothing and never EOI;
            - THE TIMER. Measured on Skyroads: it EOIs only ~36 times a second against a
              180 Hz timer, i.e. only on the ~1-in-16 ticks where its handler chains to the
@@ -2238,7 +2526,13 @@ static int async_inject_irq(unsigned irq)
              delivered ticks per 3 s). IRQ0 is gated by the guest's own IF discipline, which
              has always worked; the re-entrancy this whole mechanism exists to stop was on
              IRQ1, and that stays strict. */
-        if (irq == 0 || async_vec_is_our_stub(irq)) vdd_pic_eoi(&g_pic, (uint8_t)irq);
+        /* ⚠ THE AUTO-EOI CASE IS ONE OPERATION, NOT ack-then-eoi. The pair's transient
+             set/clear of the shared ISR byte is not safe from the tick courier, which
+             runs without the device lock; the net effect is identical. See
+             vdd_pic_ack_autoeoi. The strict case (IRQ1) keeps plain acknowledge, so its
+             in-service bit is still held until the guest EOIs. */
+        if (irq == 0 || async_vec_is_our_stub(irq)) vdd_pic_ack_autoeoi(&g_pic, (uint8_t)irq);
+        else                                        vdd_pic_acknowledge(&g_pic, (uint8_t)irq);
         /* ⚠ A KEY DELIVERED HERE WAS INVISIBLE. g_irq1_inj and keylat_pop() both live in
            the COOPERATIVE block only, so an asynchronously-placed keystroke counted as
            neither delivered nor timed -- and the retry experiment therefore read as
@@ -2248,6 +2542,7 @@ static int async_inject_irq(unsigned irq)
         if (irq == 1) { ++g_irq1_async_inj; keylat_pop(); }
     }
     ResumeThread(g_hcpu);
+    ASYNC_CTX_RELEASE();
     if (ok) g_async_inj++; else g_async_bail++;
     async_why_note(irq, ok ? 0u : 13u);     /* the V86 arm's only failure is SetThreadContext */
     /* Log AFTER the resume (never hold the guest suspended across file I/O). The IVT dump
@@ -2287,9 +2582,15 @@ static void host_irq_sink(void *ctx, uint8_t irq)
        latched -- so the line number this arrives on is the missing fact. */
     g_irq_raised[irq & 7]++;
     g_irq_raised_any++;
-    vdd_pic_raise(&g_pic, irq);
+    /* ⚠ ATOMICALLY: the timer's raise now arrives under g_pit_cs while every other
+       PIC mutation runs under g_lock, and IRR |= bit compiled as a plain byte RMW
+       could undo a concurrent acknowledge on a DIFFERENT line. One atomic OR closes
+       it; the slave (irq >= 8) keeps the plain path, nothing raises it cross-lock. */
+    if (irq < 8) __sync_fetch_and_or(&g_pic.m.irr, (uint8_t)(1u << irq));
+    else         vdd_pic_raise(&g_pic, irq);
     if (irq == 0) {
         irq0_latch();
+        ++g_irq0_raise_ct;          /* A/B/C discriminator: generation. See irq0_delivered_note. */
         /* THE TIMER NEEDS THE ASYNC PATH TOO -- arguably more than the devices do. A game
            that parks in its own handler stops trapping, so the exec loop never gets a turn
            and the tick it is waiting for can never arrive. A real PC interrupts it regardless.
@@ -2378,50 +2679,25 @@ static void host_irq_sink(void *ctx, uint8_t irq)
              800-raise burst again. None that we run does (Skyroads 180 Hz is the
              fastest measured), and the honest fix if one appears is to bound the BURST
              -- attempts per sync, not per guest -- rather than to widen this back. */
-        /* ── ⚠⚠ DO NOT MOVE THIS ATTEMPT OUTSIDE THE LOCK. TRIED, MEASURED, REVERTED.
-             It looks wrong to hold g_lock across a SuspendThread / GetThreadContext /
-             SetThreadContext / ResumeThread round trip -- SuspendThread does not return
-             until the target reaches a safe point, and honouring GR4 in the video path
-             pushed the hold attributed to host_pit_sync from 14.6 ms to 45.7 ms against
-             DMX's 7.4 ms tick period. Deferring the syscall until after HOST_UNLOCK is
-             the obvious repair, and it makes things WORSE:
-                 longest hold   45.7 ms -> 149 ms   (and it moves to host_audio_fill)
-                 longest wait   41.5 ms -> 149 ms
-                 tick delivery  135/s   -> 136/s    REPLAYED_LOUD  30% -> 30%
-           ► WHY, AND IT IS THE WHOLE POINT: holding the lock is what GUARANTEES THE
-             THREAD WE ARE ABOUT TO SUSPEND IS NOT HOLDING IT. Suspend the exec thread
-             from outside and it can be frozen mid-critical-section, so g_lock stays
-             taken for the entire suspend and every other thread piles up behind it -- a
-             bounded hold traded for an unbounded one. The lock is not merely protecting
-             device state here; it is an interlock against suspending a lock holder.
-             If this is ever revisited, the prerequisite is a separate suspend-safe
-             handshake (the exec thread marking itself un-suspendable while it holds
-             g_lock), not simply moving the call. */
-        if (g_qi_susp && !g_pit_noinject && (!g_dpmi_pm || !g_async_tried_this_sync)) {
-            g_async_tried_this_sync = 1;
-            /* A PENDING KEY IS A STATE, NOT A MOMENT. IRQ1 gets ONE async attempt, at the
-               raise; if the guest had interrupts off (96% of gameplay) it falls to the
-               exec loop, which can only place it on a pass where they are back on. This is
-               the retry, and it is free: async_inject_irq VERIFIES IF/VIF before it
-               injects, so an IRQ0 opportunity IS a proven enabled moment, ~184/s. The key
-               takes it and the tick waits -- g_irq0_pending is not decremented, so the
-               tick is not lost, just delivered on the next raise. Bounded so a key that
-               can never be placed cannot stop the clock. */
-            if (g_keyirq_retry && !g_dpmi_pm && g_irq1_pending > 0
-                && g_irq0_yielded < KEYIRQ_MAX_YIELD
-                && vdd_pic_can_deliver(&g_pic, 1) && async_inject_irq(1)) {
-                InterlockedDecrement(&g_irq1_pending);
-                ++g_irq0_yielded;
-                ++g_irq1_async_retry;
-            } else {
-                g_irq0_yielded = 0;
-                ++g_pit_async_attempts;
-                if (async_inject_irq(0)) {
-                    InterlockedDecrement(&g_irq0_pending);
-                    pm_tick_take();
-                }
-            }
-        }
+        /* ── ★★★ THE DELIVERY ATTEMPT NO LONGER LIVES HERE. (s61 restructure) ────────
+             This sink now runs under g_pit_cs -- the crystal's own micro-lock -- so a
+             raise may only LATCH: the PIC request bit, the pending counter, the
+             courier signal. Anything slower would put the renderer back between the
+             crystal and the next tick, which is the measured 86%% failure this
+             restructure exists to kill. The one asynchronous attempt per sync
+             happens in host_pit_deliver(), after the crystal is released -- still
+             strictly under g_lock (the never-suspend-a-lock-holder interlock), but
+             acquired with a TRY so the clock never queues for it. The attempt's
+             full history (session 22's 800-round-trip disaster, session 23's budget
+             experiment, the keyboard yield and its refuted variants) moved with the
+             code. */
+        /* ── ★ HAND ANY STILL-PENDING TICK TO THE COURIER. The one attempt above is
+             all this site can afford (see the long note), and it is exactly the
+             attempt a pending KEY takes for itself. Signalling costs a SetEvent on an
+             already-signalled auto-reset event in the common case, which is a few
+             hundred nanoseconds -- affordable even here, inside the lock, at the PIT's
+             rate. The courier does the waiting, outside the lock, on its own thread. */
+        if (g_courier_event && g_irq0_pending > 0) SetEvent(g_courier_event);
     }
     else if (irq == 1) {
         /* One pending interrupt at a time: the 8042 has a single output buffer, and the
@@ -2723,7 +2999,7 @@ static int dos_terminate(dos_machine_t *m, void *tib, char **pp, char *base)
    so a hang or a crash leaves it raised. Three strikes and we drop the IFEO
    value: better to hand the machine back to Microsoft's ntvdm than to leave it
    with no working 16-bit subsystem at all. See src/dos/dos_recovery.h. */
-#define STARTFAIL_PATH "C:\\ntvdmex\\startfail.txt"
+#define STARTFAIL_PATH OUT_("startfail.txt")
 static dos_start_mode g_start_mode = DOS_START_NORMAL;
 
 static unsigned recovery_read(void)
@@ -3006,7 +3282,7 @@ static void recovery_uninstall(char **pp)
      Win32 call before the host has a window presents as a hang, not an error.
      SetErrorMode for the same reason. A guest that never touches INT 13h never
      pays for this and never risks it. */
-#define FLOPPY_IMG_PATH "C:\\ntvdmex\\FLOPPY.IMG"
+#define FLOPPY_IMG_PATH CFG_("FLOPPY.IMG")   /* read, not written -> cfg */
 /* ── AND THE DRIVES PAGE CAN POINT IT SOMEWHERE ELSE. ────────────────────────
      settings_apply() aims this at the FloppyAImage setting when one is stored.
      ⚠ IT IS A POINTER, NOT A COPY, AND IT POINTS INTO g_set -- which lives for
@@ -3750,7 +4026,19 @@ static DWORD  g_pitpace_calls;
                          0 = the pacer only ADVANCES THE CLOCK and leaves delivery to the
                              UI and exec threads, exactly as before the pacer existed.
    ⚠ Both default to the shipped behaviour, so an absent file changes nothing. */
-static int  g_pitpace_prio = THREAD_PRIORITY_HIGHEST;
+/* ── ★★★ NORMAL, NOT HIGHEST -- and the reason is the s61 crystal split. ─────────
+     The pacer was HIGHEST because in the OLD design it fought the renderer for
+     g_lock every millisecond and had to win to keep the clock moving. Now generation
+     runs under its own micro-lock (g_pit_cs, see host_pit_generate) and never blocks
+     on g_lock at all -- so the pacer no longer NEEDS to outrank anything, and at
+     HIGHEST it did active harm: on the single-core rig it starved the ~64 Hz present
+     thread, which the user saw as stepped palette fades and dropped in-game frames.
+     Dropped to NORMAL, the run was user-confirmed "absolutely perfect".
+   ⚠ It only needs to WAKE ~1000/s (timeBeginPeriod(1) + Sleep(1)); NORMAL does that
+     fine, and the crystal is covered by cooperative delivery if a wake is ever late.
+     pitprio.txt still overrides for A/B (0=idle..4=highest) but the default is the
+     validated one. */
+static int  g_pitpace_prio = THREAD_PRIORITY_NORMAL;
 static int  g_pitpace_inject = 1;
 static DWORD WINAPI pit_pacer_thread(LPVOID param)
 {
@@ -3758,18 +4046,159 @@ static DWORD WINAPI pit_pacer_thread(LPVOID param)
     /* Above the guest but below the audio pump, so it can never starve either. */
     SetThreadPriority(GetCurrentThread(), g_pitpace_prio);
     while (g_running) {
-        if (g_pitpace_inject) host_pit_sync();
-        else {
-            /* g_lock is recursive, so host_pit_sync may re-enter it; taking it out here is
-               what makes the flag safe -- no other thread can be inside a sync at once. */
-            HOST_LOCK();
-            g_pit_noinject = 1;
-            host_pit_sync();
-            g_pit_noinject = 0;
-            HOST_UNLOCK();
-        }
+        /* s61: the pacer is the crystal's drive shaft and touches ONLY the crystal's
+           lock; pitinj.txt=0 still means "advance the clock, attempt nothing", now
+           expressed as which function runs instead of a flag threaded through a
+           shared sink. It can no longer be made to wait by the renderer. */
+        host_pit_generate();
+        if (g_pitpace_inject) host_pit_deliver();
         ++g_pitpace_calls;
         Sleep((DWORD)g_pitpace_ms);
+    }
+    return 0;
+}
+
+/* ── ★★★ THE TICK COURIER: A RETRY THAT IS NOT TIED TO THE RAISE CADENCE. (s61) ──
+     MEASURED, in-game, 45 s, Unlimited, synthetic keys (the fair A/B is in
+     docs/STATE.md SESSION 61). Across the 75 gaps where Skyroads missed at least one
+     of its own 180 Hz ticks:
+
+         IRQ0s the 8254 generated                192
+         injection attempts actually made         76
+         attempts NEVER MADE                     116   <-- and yields = 116, exactly
+         attempts that bailed not_in_exec          1
+
+     Every tick that lost its injection attempt lost it to the KEYBOARD YIELD in
+     host_irq_sink: when a key is pending, the timer's one async opportunity per raise
+     is handed to IRQ1 instead. That is not a bug in the yield -- turning it off
+     (keyirq.txt = 0) is measured to put HALF of all keystrokes past 64 ms, worst
+     1864 ms, which is the "loses keys" result this file already records twice. The
+     yield is load-bearing for input.
+
+   ► SO THE FAULT IS NOT WHO WINS, IT IS THAT WINNING COSTS THE LOSER A WHOLE PERIOD.
+     IRQ0 and IRQ1 compete for one scarce thing: a moment when the guest is in exec
+     with interrupts on. host_irq_sink offers exactly ONE such moment per raise, so a
+     tick that loses waits 5.56 ms for the next one -- and KEYIRQ_MAX_YIELD allows
+     three losses in a row, which is 16.7 ms. The worst gap measured is 20 ms and its
+     account reads raise=3, yld=2, att=1: three ticks generated, two given to keys,
+     one attempted. That is the wobble, in four numbers.
+
+   ► AND AN IMMEDIATE SECOND ATTEMPT CANNOT WORK, which is why this is a thread and
+     not two lines in the sink. Injecting IRQ1 leaves the guest entering its INT 09h
+     with interrupts off, so a retry in the same breath is refused on IF -- correctly.
+     The tick has to wait for the guest's key handler to IRET, which is microseconds
+     away, not milliseconds. Nothing in the old structure could wait that long or that
+     precisely: the sink is called from the PIT and only from the PIT.
+
+   ⚠⚠ WHY IT MUST NOT TAKE g_lock, and why that is safe HERE and was not before.
+     host_irq_sink's long note is right: holding g_lock across a suspend is what
+     guarantees the thread being suspended is not a lock holder, and simply moving the
+     call outside was tried and made things worse. This is the "separate suspend-safe
+     handshake" that note names as the prerequisite -- the same one the CPU throttle
+     already uses and has shipped with for a session: confirm g_in_exec AFTER the
+     suspend has landed (GetThreadContext is what makes "landed" true), and resume
+     instantly if it reads 0. g_in_exec is set only around v86_run, where the thread
+     holds nothing, and is cleared before any HOST_LOCK. See async_inject_irq's
+     re-check, which is where that handshake actually lives.
+     Taking g_lock would also defeat the purpose: the measured worst lock WAIT is
+     17 ms, which is longer than the gap being repaired.
+
+   ⚠ V86 ONLY, ON PURPOSE. A protected-mode client is fed almost entirely by the async
+     path and is deliberately throttled to one attempt per sync; session 23 measured
+     that buying more attempts there tripled the cost and moved delivery by nothing.
+     This is a different mechanism aimed at a different fault, and gating it on
+     !g_dpmi_pm means it CANNOT regress Doom -- the one guest that throttle protects.
+   ⚠ ONE TICK PER WAKE. The backlog is not drained in a burst: g_irq0_pending is a
+     saturating latch precisely so a stall is not repaid as a flood, and session 22
+     proved that compressing game time is catastrophic. Placing one tick and going
+     back to sleep keeps the guest's clock monotonic.
+   ⚠ BOUNDED IN TIME, NOT JUST IN SPINS. Each retry is a full suspend round trip
+     (~tens of us), so an unbounded spin against a guest that keeps interrupts off
+     would burn a core to no purpose. It gives up after COURIER_BUDGET_US and lets the
+     next raise re-arm it -- which is exactly the old behaviour, so the worst case is
+     no worse than today. */
+#define COURIER_BUDGET_US 3000u
+static HANDLE g_courier_thread;
+/* ── ⚠⚠ DEFAULT OFF, AND THE REASON IS THE MEASUREMENT, NOT THE MECHANISM. ────────
+     The mechanism above is established: raises - attempts == yields, exactly, in
+     every run taken. What is NOT established is that this thread is a net win, and
+     one 45 s run cannot establish it. Five runs of nominally the same configuration
+     produced anomalous-gap counts of 50, 75, 81, 85 and 240 -- a 5x spread that is
+     larger than any effect either knob produced. (Two run SHAPES are mixed in there:
+     Skyroads sometimes plays a ~10 s intro at the BIOS 18.2 Hz and sometimes goes
+     straight to 180 Hz. That explains some of the spread and not all of it.)
+     The one courier run also showed key latency worse, not better -- which is the
+     shape you would expect if it takes interrupts-enabled windows from IRQ1, i.e.
+     exactly the competition it was built to relieve, running the other way.
+   ⇒ So it ships OFF and is turned on by courier.txt = 1, and the next session's job
+     is N repeated runs per arm with the run shape checked (IRQ0TL's first second says
+     which), not another single-run A/B. Shipping it on would be calling a result that
+     the data does not support -- and this file's history is mostly the cost of doing
+     exactly that. */
+static int    g_courier_on = 0;              /* courier.txt = 1 enables */
+static DWORD  g_courier_wakes, g_courier_inj, g_courier_tries, g_courier_giveup;
+static DWORD WINAPI tick_courier_thread(LPVOID pv)
+{
+    (void)pv;
+    /* ── ⛔ courier = 1 IS REFUTED, USER-CONFIRMED. IT COLLAPSES PROGRESSIVELY. ─────
+         Four runs of the same level: "1. Absolutely fine  2. Degraded slightly
+         3. Even worse, and then it was like time flew forward instantly ... it just
+         instantly went to the beginning of the level  4. Basically like I have
+         dementia." The burst at (3) is a drained backlog, and the monotonic decay is
+         a POSITIVE FEEDBACK LOOP that this design has by construction:
+             tick undelivered -> more pending -> courier spins harder (up to
+             COURIER_BUDGET_US of suspend/get-context/resume round trips, at
+             THREAD_PRIORITY_HIGHEST, on a SINGLE-CORE box) -> the guest gets LESS
+             CPU -> the clock falls further behind -> the courier spins harder still.
+         The courier spends the very resource it is trying to create. Session 22 and
+         session 23 each learned a version of this ("extra attempts merely pay full
+         SuspendThread round trips to be told no"); this is the third.
+       ► courier = 2 is the gentle arm, and the difference is entirely about not
+         competing with the guest: NORMAL priority (it can no longer preempt the
+         thread it is waiting on), a budget in HUNDREDS of microseconds rather than
+         milliseconds, and a hard cap of two attempts per wake so a wake cannot
+         become a spin at all. If that still decays, the retry idea is dead and the
+         answer is the port-trap cost, not arbitration. */
+    SetThreadPriority(GetCurrentThread(),
+                      g_courier_on == 2 ? THREAD_PRIORITY_NORMAL
+                                        : THREAD_PRIORITY_HIGHEST);
+    while (g_running) {
+        LARGE_INTEGER t0, tn;
+        /* The 50 ms cap is a backstop, not the mechanism: the raise site signals us.
+           Without it a lost signal would park the courier for the rest of the run. */
+        WaitForSingleObject(g_courier_event, 50);
+        ++g_courier_wakes;
+        if (!g_courier_on || !g_qi_susp || g_dpmi_pm || !g_hcpu) continue;
+        if (g_irq0_pending <= 0) continue;
+        QueryPerformanceCounter(&t0);
+        {   unsigned budget_us = (g_courier_on == 2) ? 300u : COURIER_BUDGET_US;
+            int tries_left     = (g_courier_on == 2) ? 2    : 1000000;
+        for (;;) {
+            if (!g_running || g_irq0_pending <= 0) break;
+            if (tries_left-- <= 0) { ++g_courier_giveup; break; }
+            if (g_in_exec == 0) {
+                /* Not executing guest code: nothing to inject into, and a suspend
+                   would only probe a thread that may be holding a lock. Yield and
+                   look again -- the guest is being serviced and will be back. */
+                SwitchToThread();
+            } else {
+                ++g_courier_tries;
+                if (async_inject_irq(0)) {
+                    InterlockedDecrement(&g_irq0_pending);
+                    pm_tick_take();
+                    g_irq0_note_cs = 0xFFFF; g_irq0_note_ip = 0;   /* delivered async */
+                    irq0_delivered_note();
+                    ++g_courier_inj;
+                    break;                      /* one tick per wake -- see above */
+                }
+                SwitchToThread();
+            }
+            QueryPerformanceCounter(&tn);
+            if (qpc_us(tn.QuadPart - t0.QuadPart) >= budget_us) {
+                ++g_courier_giveup;
+                break;
+            }
+        } }
     }
     return 0;
 }
@@ -3821,92 +4250,340 @@ static DWORD  g_cpuspd_missed;   /* held millisecond the guest was not in exec f
      Sleep's inaccuracy plus whatever it costs the kernel to stop a thread inside
      VdmStartExecution -- and the hold is priced off this, not off the 1 ms. */
 static DWORD  g_cpuspd_ran_us;
-/* Hold time run up but not yet paid -- see cpuspeed.h. Nonzero at exit means the
-   setting is beyond what this host can deliver, which is a fact worth logging. */
-static DWORD  g_cpuspd_owed_ms;
+/* The same window measured as WALL CLOCK. Printed next to ran_us so the gap between
+   them -- our own servicing overhead, the thing the guest is no longer billed for --
+   is a number in the log rather than an inference. */
+static DWORD  g_cpuspd_wall_us;
+/* ── ★ THE GRANULARITY SLIDER AND ITS AUTO-DETECT. See cpuspeed.h. ───────────────
+     g_cpuspd_gran_ms is the TARGET PERIOD: 0 = auto (measure and choose). The
+     measured round-trip cost is what auto is derived from, and it is reported so a
+     surprising period can be traced to the machine rather than guessed at. */
+static unsigned g_cpuspd_gran_ms  = CPUSPEED_GRAN_AUTO;   /* 0=auto; cpugran.txt knob */
+static DWORD    g_cpuspd_rt_us;        /* measured suspend round trip, microseconds */
+static DWORD    g_cpuspd_period_ms;    /* what auto actually chose, or the setting  */
+static DWORD    g_cpuspd_periods;      /* how many run/hold cycles were completed   */
+static DWORD    g_start_ms;            /* GetTickCount at throttle start, for exec_bp */
+
+/* ── ★★ THE ROUND TRIP IS MEASURED WHERE IT HAPPENS, NOT IN A SYNTHETIC BURST. ───
+ * ⚠⚠ THE FIRST CUT DID IT AT STARTUP and the number was meaningless: it reported
+ *    **3 us**, because at that moment the exec thread is not necessarily inside
+ *    VdmStartExecution, and suspending an idle thread costs almost nothing while
+ *    suspending one inside a syscall makes the kernel unwind it out of V86 first.
+ *    The instrument was not measuring the thing it is named for -- the same defect
+ *    class as [[instrument-must-not-infer-its-own-frame]], and it fed a plausible
+ *    wrong answer straight into the granularity arithmetic (auto picked the 2 ms
+ *    floor on the strength of it).
+ * ⇒ So sample it in the REAL loop: the interval from calling SuspendThread to
+ *   GetThreadContext returning, on a thread that is genuinely in exec, which is
+ *   exactly the cost the granularity floor is made of. Free, self-correcting, and
+ *   it cannot be measured under conditions that do not occur.
+ * ⚠ KEEP THE MINIMUM, not the mean. Contention makes individual round trips long
+ *   and a slider cannot fix contention; the floor is what the mechanism can do when
+ *   nothing is in the way, which is the right basis for "how fine can this go".
+ * ⚠ AND IT WARMS UP. The first few periods run at the default granularity because
+ *   nothing has been sampled yet; the period is recomputed as the estimate settles,
+ *   which is why g_cpuspd_period_ms is cleared on a change rather than latched. */
+static void cpuspd_note_rt(unsigned long us)
+{
+    if (!us) return;
+    if (!g_cpuspd_rt_us || us < g_cpuspd_rt_us) {
+        g_cpuspd_rt_us = (DWORD)us;
+        g_cpuspd_period_ms = 0;          /* re-derive auto from the better estimate */
+    }
+}
+
+/* ── ★★★ THE GUEST IS ONLY CHARGED FOR TIME IT WAS ACTUALLY EXECUTING. ───────────
+ * ⚠⚠ THE BUG THIS FIXES, MEASURED ON THE RIG 2026-09-09 WITH tools/dostest/mixbench:
+ *    at index 11 -- the menu says 66 MHz -- five shapes of work were delivered at
+ *        ALU 68   MEM 209   VID13 92   VID12 23   PORT 1     (MHz apparent)
+ *    The ALU figure is right because ALU code is what CPUSPEED_REF_MHZ was
+ *    calibrated from (cpubench.asm: "NO REGISTER IN THE LOOP TOUCHES MEMORY"). The
+ *    PORT figure is 66x LOW, and port I/O is not a corner case: Doom's mode-Y
+ *    drawing does ~43,000 port writes a second and Skyroads' AdLib helper spends 43
+ *    port accesses per OPL register. The user's report was "66 MHz is unplayably
+ *    slow; my real 486 DX2-66 played these fine", and this is why.
+ *
+ * ► THE CAUSE IS WHAT `ran_us` MEASURED. It was wall clock from the moment we let
+ *   the guest go to the moment a suspend landed -- and a DOS guest spends much of
+ *   that window NOT EXECUTING but trapped inside US, being serviced. Every port
+ *   write is an IOPL-0 #GP reflected out to host code and costs 2.33 us of wall
+ *   clock (measured: iobench case 3, 117,920 accesses in 5 ticks = 429,400/s).
+ *   Charging that to the guest bills it for our own overhead at the guest's rate,
+ *   and then the duty cycle multiplies the bill: at a 1.8% duty the guest is held
+ *   fifty-four times as long as it "ran", so every microsecond we mis-attribute
+ *   costs it fifty-four more. Hardware-touching code is therefore penalised in
+ *   proportion to how slow WE are at servicing it, which is precisely backwards.
+ *
+ * ⇒ So count only the time the guest was inside v86_run/dpmi_enter_pm, which is
+ *   exactly what g_in_exec already brackets, and price the hold off THAT. Our
+ *   servicing time is simply not the guest's to pay for.
+ *
+ * ⚠ 32 BITS OF MICROSECONDS, ON PURPOSE. A 64-bit accumulator cannot be read
+ *   atomically on 32-bit x86, and the throttle samples it while the exec thread is
+ *   RUNNING (right after ResumeThread), so a torn read is a real possibility and
+ *   would produce a garbage hold. A uint32 of microseconds wraps every ~71 minutes
+ *   and unsigned subtraction gives the correct delta across the wrap, which is all
+ *   this is ever used for -- differences of milliseconds.
+ * ⚠ AND IT IS READABLE MID-INTERVAL. The whole point is to sample it at the instant
+ *   the guest is suspended, which is INSIDE a v86_run that has not returned yet, so
+ *   the accumulated total alone would be stale by exactly the interval that matters.
+ *   exec_us_now() adds the open interval. Safe when the target is suspended (nothing
+ *   can change under us) and harmlessly approximate when it is not.
+ * ⚠ GATED ON THROTTLING BEING ON. Two QueryPerformanceCounter calls per trap is
+ *   nothing next to a 2.33 us trap, but at Unlimited -- the default, and how every
+ *   measurement in this project was taken -- it buys nothing, so it is not paid. */
+static volatile LONG g_exec_us_acc;      /* completed guest-execution time, us      */
+/* ── ⚠⚠ THE OPEN INTERVAL IS ONE 32-BIT VALUE, AND THE FIRST CUT GOT THIS WRONG. ──
+     It stored the entry QueryPerformanceCounter as TWO LONGs, hi and lo, and
+     reassembled them in the reader -- which is the identical torn-read hazard the
+     comment above rejects for the accumulator, reintroduced on the very next line.
+     The reader runs on the throttle thread while the exec thread is RUNNING, so an
+     entry landing between the two reads yields a value from neither sample: a
+     garbage interval, a garbage `ran_us`, and a hold computed from it.
+     Measured symptom: `ran_us` stayed ~1500 us with no sleep in the run phase at
+     all, and ALU delivered 123 MHz against accounting that said 64.
+   ⇒ Store MICROSECONDS SINCE A SESSION BASE in a single LONG. 32 bits of
+     microseconds wraps every ~71 minutes and unsigned subtraction spans the wrap,
+     which is all this is used for. One aligned 32-bit store is atomic on x86, so
+     the reader cannot see half of it. 0 is the "no interval open" sentinel. */
+static LARGE_INTEGER g_exec_qpc_base;    /* fixed at first use; never moves         */
+static volatile LONG g_exec_enter_us;    /* open interval start, us since base; 0=none */
+static volatile LONG g_exec_timing_on;   /* only while a throttle is actually set   */
+
+static LONG exec_clock_us(void)
+{
+    LARGE_INTEGER n;
+    QueryPerformanceCounter(&n);
+    if (!g_exec_qpc_base.QuadPart) g_exec_qpc_base = n;
+    /* +1 so a genuine reading can never collide with the 0 sentinel. */
+    return (LONG)qpc_us(n.QuadPart - g_exec_qpc_base.QuadPart) + 1;
+}
+static void exec_enter_mark(void)
+{
+    if (!g_exec_timing_on) return;
+    InterlockedExchange(&g_exec_enter_us, exec_clock_us());
+}
+static void exec_leave_mark(void)
+{
+    LONG ent, now;
+    if (!g_exec_timing_on) return;
+    ent = g_exec_enter_us;
+    if (!ent) return;
+    now = exec_clock_us();
+    InterlockedExchangeAdd(&g_exec_us_acc, (LONG)(ULONG)(now - ent));
+    InterlockedExchange(&g_exec_enter_us, 0);
+}
+/* The accumulator PLUS the interval currently open, so a sample taken while the
+   guest is stopped inside v86_run is not short by that whole interval. */
+static LONG exec_us_now(void)
+{
+    LONG acc = g_exec_us_acc;
+    LONG ent = g_exec_enter_us;                  /* one atomic 32-bit read */
+    if (ent) acc += (LONG)(ULONG)(exec_clock_us() - ent);
+    return acc;
+}
 
 /* Recompute the duty from the setting. One function so the menu, the dialog and
    the file knob cannot each arrive at a different answer. */
 static void cpuspd_recompute(void)
 {
-    InterlockedExchange(&g_cpuspd_duty,
-                        (LONG)cpuspeed_duty_bp((unsigned)g_cpuspd_idx, g_cpuspd_ref_mhz));
+    LONG bp = (LONG)cpuspeed_duty_bp((unsigned)g_cpuspd_idx, g_cpuspd_ref_mhz);
+    InterlockedExchange(&g_cpuspd_duty, bp);
+    /* Pay for the per-trap timestamping only while it is actually being used. */
+    InterlockedExchange(&g_exec_timing_on, bp < 10000 ? 1 : 0);
+    /* The period depends on the duty, so a speed change invalidates it. Zero means
+       "work it out again on the next pass" -- including re-running auto-detect's
+       arithmetic, which is why the measured round trip is kept separately. */
+    g_cpuspd_period_ms = 0;
+}
+
+/* ── ★★ PIN THE GUEST TO ONE CORE. (user request, 2026-09-09) ────────────────────
+ * The rig is an Intel Core 2 Duo E8600 -- TWO cores -- and this host runs at least
+ * five threads across them: the exec thread in V86, the UI thread, the PIT pacer at
+ * 1 kHz, the audio pump, and the throttle. Three reasons that matters here:
+ *
+ *   1. THE CLOCK. Every number the throttle computes comes from
+ *      QueryPerformanceCounter, and on XP QPC can be backed by the TSC -- which is
+ *      PER CORE. A thread migrating between cores can therefore see time move
+ *      unevenly or backwards, and a negative interval silently becomes a garbage
+ *      hold. Pinning the exec thread removes the migration entirely.
+ *   2. THE SUSPEND. The throttle catches the guest by suspending it; measured, the
+ *      round trip is ~1 us when it lands and the cost is all in CATCHING it. Keeping
+ *      the guest on its own core and the throttle off that core means the two are
+ *      never competing for the same one.
+ *   3. THE GUEST IS SINGLE-THREADED BY CONSTRUCTION. A DOS program cannot use a
+ *      second core, so nothing is lost by confining it to one.
+ *
+ * ⚠ THE GUEST GETS A CORE TO ITSELF; EVERYTHING ELSE GETS THE REST. Pinning them all
+ *   to the same core would be worse than not pinning at all -- the pacer alone wakes
+ *   1000 times a second and would preempt the guest constantly. On a single-core box
+ *   this does nothing at all, correctly, and says so rather than pretending.
+ * ⚠ NOT DEFAULT. This changes scheduling for every guest on the machine and its
+ *   benefit is unmeasured; a knob that alters timing must be opt-in until there is a
+ *   number attached to it. cpuaff.txt = 1 to try it.
+ */
+static int   g_cpuaff_on;              /* cpuaff.txt = 1 (file knob only): pin the guest */
+static DWORD g_cpuaff_guest, g_cpuaff_rest, g_cpuaff_ncpu;   /* what we chose       */
+static void cpuaff_apply(void)
+{
+    SYSTEM_INFO si;
+    DWORD_PTR procmask = 0, sysmask = 0;
+    if (!g_cpuaff_on || !g_hcpu) return;
+    GetSystemInfo(&si);
+    g_cpuaff_ncpu = si.dwNumberOfProcessors;
+    if (g_cpuaff_ncpu < 2) return;     /* one core: nothing to separate */
+    if (!GetProcessAffinityMask(GetCurrentProcess(), &procmask, &sysmask) || !procmask)
+        return;
+    /* Lowest core the process may use goes to the guest; everything else to us. */
+    {   DWORD_PTR guest = procmask & (~procmask + 1);   /* lowest set bit */
+        DWORD_PTR rest  = procmask & ~guest;
+        if (!rest) return;                              /* only one core available */
+        g_cpuaff_guest = (DWORD)guest;
+        g_cpuaff_rest  = (DWORD)rest;
+        SetThreadAffinityMask(g_hcpu, guest);
+        /* The threads that must NOT sit on the guest's core. The throttle pins
+           itself below; the pacer and UI are pinned where they are created. */
+        SetThreadAffinityMask(GetCurrentThread(), rest);
+    }
 }
 
 static DWORD WINAPI cpuspeed_thread(LPVOID param)
 {
-    LARGE_INTEGER t_go;                  /* when the guest was last let go */
-    unsigned long owed_us = 0ul;         /* hold time run up but not yet paid */
+    /* ── ★★★ THE CLOSED-LOOP THROTTLE. The whole control law is cpuspeed_step (the
+         long note in cpuspeed.h); this loop only FEEDS it two measured numbers and
+         applies the hold it returns. It replaced ~150 lines of debt bookkeeping
+         (owed_us + hold_us + pay_ms + two baselines that fell out of step and leaked
+         TWICE) with one invariant: guest EXECUTION time E held to `duty` of WALL time
+         T. A deterministic test drives the identical cpuspeed_step against a
+         simulated clock (tools/dostest/cpuspeed_test.c), so the accuracy is proven
+         off-hardware rather than argued from a rig number that reads the guest's own
+         throttled clock.
+       ► E EXCLUDES BOTH HOLDS AND HOST SERVICING, for free. exec_us_now() counts only
+         wall time spent INSIDE v86_run, and it is sampled at RESUME and at SUSPEND:
+         the hold (before the resume) and every trap-servicing gap (outside v86_run)
+         are simply not in the difference. So E is true guest execution and E/T is the
+         honest delivered speed -- the port-trap ceiling is not a special case, it is
+         E naturally landing below T.
+       ► T IS WINDOWED and rebaselines only when the guest is at or ahead of target
+         (cpuspeed_step's *reset), which banks no credit for having run slow, absorbs
+         a stall, and keeps the 64-bit totals small. */
+    LARGE_INTEGER w_win;                 /* wall origin of the current window         */
+    LARGE_INTEGER w_run0;                /* wall clock at the last resume (run start)  */
+    LONG e_run0;                         /* exec clock at the last resume (run start)  */
+    unsigned long long E = 0ull;         /* guest execution this window, microseconds  */
+    int clock_set = 0;                   /* g_start_ms anchored at first throttled catch */
+    const unsigned long long CAP_US = (unsigned long long)CPUSPEED_MAX_OFF_MS * 1000ull;
     (void)param;
-    /* Above the guest, so a hold is actually a hold; below the audio pump and the
-       PIT pacer, so throttling can never starve the clock or the mixer. */
+    /* Above the guest, so a hold is actually a hold; below the audio pump and the PIT
+       pacer, so throttling can never starve the clock or the mixer. */
     SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_ABOVE_NORMAL);
-    QueryPerformanceCounter(&t_go);
+    cpuaff_apply();
+    if (g_cpuaff_rest) SetThreadAffinityMask(GetCurrentThread(), g_cpuaff_rest);
+    g_start_ms = GetTickCount();
+    QueryPerformanceCounter(&w_win);
+    w_run0 = w_win;
+    e_run0 = exec_us_now();
     while (g_running) {
         unsigned duty = (unsigned)InterlockedCompareExchange(&g_cpuspd_duty, 0, 0);
-        /* ⚠ THE IDLE ARM DOES NOT COUNT MILLISECONDS. It sleeps four at a time, and
-             booking those as "the guest ran" would make run_ms mean two different
-             things depending on the setting -- the counter-layout trap this project
-             has already paid for once. Unlimited simply does not report. */
-        /* ⚠ UNLIMITED FORGIVES THE DEBT. Arrears run up at 8 MHz must not go on
-             freezing the guest after the user has put the speed back. */
-        if (duty >= 10000u) { owed_us = 0ul; Sleep(4);
-                              QueryPerformanceCounter(&t_go); continue; }
-        Sleep(CPUSPEED_WAIT_MS);            /* let it run before reaching for it   */
-        /* ── THE HOLD, AND IT MUST BE HELD TIME, NOT ELAPSED TIME. ──────────────
-             ⚠⚠ AN EARLIER CUT SLEPT THE OFF PERIOD WHETHER OR NOT THE HOLD LANDED,
-               and that is a leak, not a rounding error: if the guest happened to be
-               inside a host service call at that instant we could not suspend it,
-               so we slept 226 ms while it RAN FREE. Measured on the rig, half of
-               every period leaked that way and the sweep came out NON-MONOTONIC --
-               16 MHz ran faster than 66 MHz. A guest that BOPs tens of thousands of
-               times a second is in host code a great deal of the time, so this is
-               the common case, not an edge one.
-             ⇒ So retry until the hold actually lands, and only then sleep. Once the
-               thread is suspended and confirmed in exec it cannot leave, so the
-               whole hold can go in a single Sleep.
-             ⚠ BOUNDED, because a guest blocked in a host key-read is never
-               suspendable and would spin this loop forever. Give up after a fixed
-               window -- and not throttling a guest that is BLOCKED is correct
-               anyway: it is not executing, so there is nothing to slow down. */
+        if (duty >= 10000u) {            /* Unlimited: no hold, no window to keep */
+            E = 0ull; clock_set = 0; Sleep(4);
+            QueryPerformanceCounter(&w_win); w_run0 = w_win; e_run0 = exec_us_now();
+            continue;
+        }
+        /* ── THE RUN SLICE, AND IT MUST BE AT LEAST A MILLISECOND. ────────────────
+             The invariant delivers the requested duty EXACTLY given a clean run and
+             hold (proven off-hardware, cpuspeed_test.c). On real hardware it is
+             defeated by ONE thing: the per-period cost of CATCHING the guest (a burst
+             of SwitchToThread yields, measured ~hundreds of us). If the run phase is
+             so short that the hold it earns is smaller than that catch cost, the catch
+             cost itself becomes the throttle and the guest gets LESS than asked --
+             measured on the rig, the fast settings delivered 0.37-0.62x while the slow
+             ones (whose holds dwarf the catch cost) were dead on.
+           ⇒ So let the guest run a Sleep-able chunk -- at least 1 ms -- every period.
+             The hold that earns is then 1ms x (1-duty)/duty, which at these heavy
+             throttles is tens to hundreds of ms: far larger than the catch cost, which
+             vanishes into the noise. The price is CHUNKIER bursts (period = ~1ms/duty),
+             and that is the honest, unavoidable trade of Sleep-based throttling on a
+             fast host -- the only way to be both smooth AND accurate is a
+             cycle-counting interpreter, which this project is not.
+           ⚠ ...BUT ONLY WHERE IT IS NEEDED, AND THE TWO REGIMES ARE REAL. At a VERY
+             slow setting the guest, caught immediately after a few microseconds, already
+             earns a hold of many milliseconds -- far larger than the catch cost -- so it
+             is accurate WITHOUT a run Sleep, and forcing a 1 ms run there makes the
+             earned hold enormous and OVER-shoots (measured: 8 MHz delivered 3x with the
+             floor, dead-on without it). So the floor applies only above a duty where the
+             immediate-catch hold would otherwise be swamped by the catch cost. The
+             threshold is rig-tuned (8 MHz = 14 bp fails with the floor, 33 MHz = 56 bp
+             needs it) and keyed on the DUTY, which already folds in the reference. */
+        {   unsigned long run_us = g_cpuspd_gran_ms
+                ? (unsigned long)g_cpuspd_gran_ms * 1000ul * duty / 10000ul : 0ul;
+            if (duty >= CPUSPEED_RUN_FLOOR_BP && run_us < 1000ul)
+                run_us = 1000ul;                       /* Sleep-able floor, fast half */
+            if (run_us >= 1000ul) Sleep((DWORD)(run_us / 1000ul));
+            /* else: immediate catch -- correct for the slow half. */
+        }
+        /* ── CATCH THE GUEST INSIDE v86_run, measure, hold. The retry YIELDS rather
+             than sleeping so it catches within microseconds of a re-entry; bounded,
+             then it gives up (a guest blocked in a host call is not executing, so
+             there is nothing to throttle -- and NOT resetting the window here is
+             correct: the stall shows up as T growing while E does not, and the next
+             at-or-ahead step forgives it). */
         {   DWORD started = GetTickCount();
-            int done = 0;
+            int done = 0, spins = 0;
+#define CPUSPD_YIELD_BURST 200
             while (!done && g_running && GetTickCount() - started < 400u) {
-                CONTEXT cx;
-                if (!g_hcpu || g_in_exec == 0) { g_cpuspd_missed++; Sleep(1); continue; }
-                if (SuspendThread(g_hcpu) == (DWORD)-1) { g_cpuspd_missed++; Sleep(1); continue; }
-                cx.ContextFlags = CONTEXT_CONTROL;
-                if (GetThreadContext(g_hcpu, &cx) && g_in_exec != 0) {
-                    /* ── HELD. And NOW is when we know how long it really ran: from
-                         the last resume to this instant, wall clock, including the
-                         Sleep's inaccuracy and whatever it cost the kernel to stop a
-                         thread that was inside VdmStartExecution. Price the hold off
-                         THAT rather than off the millisecond we asked for. */
-                    LARGE_INTEGER now;
-                    unsigned long ran_us;
-                    unsigned hold;
-                    QueryPerformanceCounter(&now);
-                    ran_us = (unsigned long)qpc_us(now.QuadPart - t_go.QuadPart);
-                    if (!ran_us) ran_us = 1ul;
-                    g_cpuspd_ran_us = (DWORD)ran_us;      /* reported at STAGE2 */
-                    owed_us += cpuspeed_hold_us(duty, ran_us);
-                    hold = cpuspeed_pay_ms(&owed_us);
-                    g_cpuspd_run_ms  += (DWORD)((ran_us + 500ul) / 1000ul);
-                    g_cpuspd_held_ms += hold;
-                    g_cpuspd_owed_ms  = (DWORD)(owed_us / 1000ul);
-                    if (hold) Sleep(hold);
-                    done = 1;
+                CONTEXT cx; LARGE_INTEGER rt0, rt1, now; int gotctx;
+                if (!g_hcpu || g_in_exec == 0) {
+                    ++g_cpuspd_missed;
+                    if (++spins < CPUSPD_YIELD_BURST) SwitchToThread(); else Sleep(1);
+                    continue;
                 }
-                ResumeThread(g_hcpu);
-                QueryPerformanceCounter(&t_go);           /* the run phase restarts */
-                if (!done) { g_cpuspd_missed++; Sleep(1); }
+                QueryPerformanceCounter(&rt0);
+                if (SuspendThread(g_hcpu) == (DWORD)-1) { ++g_cpuspd_missed; Sleep(1); continue; }
+                cx.ContextFlags = CONTEXT_CONTROL;
+                gotctx = GetThreadContext(g_hcpu, &cx);
+                QueryPerformanceCounter(&rt1);
+                cpuspd_note_rt((unsigned long)qpc_us(rt1.QuadPart - rt0.QuadPart));
+                if (gotctx && g_in_exec != 0) {
+                    unsigned long long T, hold_us; int reset;
+                    unsigned dexec;
+                    LONG e_now = exec_us_now();
+                    QueryPerformanceCounter(&now);
+                    dexec = (unsigned)(ULONG)(e_now - e_run0);   /* run exec, no hold  */
+                    /* ⚠ EXEC CAN NEVER EXCEED WALL. A torn read of the exec clock on
+                         this thread while the exec thread mutates it can wrap dexec to
+                         a garbage ~4e9; clamping to the run's own wall (now - resume)
+                         kills that at the source, so one bad sample cannot corrupt E or
+                         the lifetime exec_ms. Measured: idx 2 reported exec_ms=8.5M in a
+                         46 s run before this. */
+                    {   unsigned rw = qpc_us((LONGLONG)(now.QuadPart - w_run0.QuadPart));
+                        if (dexec > rw) dexec = rw; }
+                    if (!clock_set) { g_start_ms = GetTickCount(); clock_set = 1; }
+                    E += (unsigned long long)dexec;
+                    T = qpc_us64(now.QuadPart - w_win.QuadPart);  /* window wall, holds in */
+                    hold_us = cpuspeed_step(E, T, duty, CAP_US, &reset);
+                    g_cpuspd_ran_us   = dexec;
+                    g_cpuspd_wall_us  = (DWORD)T;
+                    g_cpuspd_run_ms  += (DWORD)((dexec + 500u) / 1000u); /* lifetime exec */
+                    g_cpuspd_held_ms += (DWORD)(hold_us / 1000ull);      /* lifetime hold */
+                    ++g_cpuspd_periods;
+                    if (hold_us >= 1000ull) Sleep((DWORD)(hold_us / 1000ull));
+                    ResumeThread(g_hcpu);
+                    QueryPerformanceCounter(&w_run0);
+                    e_run0 = exec_us_now();           /* new run baseline, POST-hold */
+                    if (reset) { w_win = w_run0; E = 0ull; }
+                    done = 1;
+                } else {
+                    ResumeThread(g_hcpu);
+                    ++g_cpuspd_missed;
+                    if (++spins < CPUSPD_YIELD_BURST) SwitchToThread(); else Sleep(1);
+                }
             }
-            if (!done) QueryPerformanceCounter(&t_go);    /* gave up: not its fault */
+#undef CPUSPD_YIELD_BURST
         }
     }
     return 0;
 }
-
 static void host_audio_fill(void *ctx, int16_t *out, uint32_t frames)
 {
     (void)ctx;
@@ -3993,7 +4670,7 @@ static void host_screenshot(void)
     /* ...and the same image on the share, so it can be read from the build machine. */
     {
         char path[160];
-        const char *dir = "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\";
+        const char *dir = NTVDMEX_OUT;   /* screenshots are output, not clutter in the root */
         int i = 0, j;
         while (dir[i]) { path[i] = dir[i]; ++i; }
         { const char *nm = "shot_manual_00.bmp";
@@ -4683,6 +5360,21 @@ static DWORD g_ms_wm_input, g_ms_raw_abs, g_ms_i33[16], g_ms_i33_other;
      The two have different SHAPES and the shape is the discriminator: a real function
      set is a handful of plausible values from a handful of sites; a mis-patch is
      scattered values, and its site is not a `CD 33` in DOOM.EXE.
+   ★★ ANSWERED 2026-09-09, AND IT IS NEITHER OF THE TWO. The histogram this note asked
+     for was read off a real Doom run and it is small and entirely sensible:
+         0000 x1   0015 x1   53c1 x1   0003 x1338   000b x1338
+     Doom probes ONCE (00 reset, 15 get-storage-size, 53c1) and then polls position
+     and relative motion every frame. `AX=53c1` -- the value that made "AX >= 0x10"
+     look like a thousand scattered calls -- is LOGITECH CYBERMAN SWIFT DETECTION, a
+     real and documented probe, and Doom announces the result itself in the same log:
+         CyberMan: Wrong mouse driver - no SWIFT support (AX=53c1).
+     So the bucket was hiding one legitimate call made once, not a mis-patch and not
+     a set of unimplemented functions. ⇒ NO FIX IS NEEDED HERE. The lesson is the one
+     this note already carries -- the bucket, not the thing bucketed, was the defect.
+   ► AND THE HISTOGRAM IS NOW LOAD-BEARING: the auto-capture trigger keys on exactly
+     the USE functions (01/03/05/06/0B) and deliberately not on 00/15/53c1, which is
+     only defensible because this measurement says which is which. See
+     g_ms_want_capture.
    ⚠ SO RECORD BOTH, AND DO NOT GUESS BETWEEN THEM. The AX values as they actually
      are (sparse, not bucketed), and WHERE the caller was -- linear address, which
      entry path, and the bytes around the site so it can be diffed against the file
@@ -4705,23 +5397,62 @@ static DWORD g_simint_unhandled, g_simint_vec[256];
      makes ZAR program the Sound Blaster at all -- and then wedges it waiting on an SB
      completion the nested V86 call never delivers. One file, so the audio thread can be
      picked up without a rebuild. */
-#define SIMINTREFL_FLAG "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\simintrefl.flag"
+#define SIMINTREFL_FLAG CFG_("simintrefl.flag")
 static int g_simint_reflect = 0;
 static LONG  g_ms_raw_tot_x, g_ms_raw_tot_y;
 static volatile LONG g_ms_hidden = 1;       /* INT 33h cursor hide-count; 0 => visible */
 
 /* THE HOST ARROW over the video area, which is a SEPARATE thing from the INT 33h
-   driver cursor above. The client used to hide it unconditionally, which is right
-   for a game that has taken the mouse and wrong for everything else: with no
-   pointer at all you cannot see where you are aiming a click, and you lose the
-   pointer entirely the moment it crosses into the window. It is a user choice, so
-   it is a toggle -- Input > Mouse > Show Host Cursor, or Ctrl+F8. Default OFF, i.e.
-   exactly the behaviour that shipped, so no run changes unless it is asked for. */
-static volatile LONG g_cursor_show = 0;
+   driver cursor above.
+ ► IT IS NO LONGER A MENU ITEM OR A HOTKEY, and that is the point: the pointer's
+   visibility is not an independent knob, it is what EXCLUSIVE MODE looks like.
+   Captured, the guest owns the mouse and the desktop arrow must be gone; not
+   captured, the mouse belongs to the Windows desktop and the arrow must be there.
+   Two controls for one idea is how a UI starts disagreeing with itself -- the user
+   put it plainly: the pointer "belongs to the Windows XP desktop, and NTVDMEX at
+   the same time", which is exactly what a separate toggle produces.
+ ⚠ THE SETTING SURVIVES AND IS STILL LIVE. `ShowHostCursor` now means "show the
+   desktop arrow over the video WHEN NOT CAPTURED" (default 1). Capture overrides
+   it unconditionally; there is no state in which an exclusive-mode guest shows the
+   host pointer. So the row is still honoured -- it is narrower, not dead. */
+static volatile LONG g_cursor_show = 1;
 /* Input capture ("exclusivity") -- see input_capture_set. Declared up here because
    status_update, which is defined above it, reports the capture state and the chord
    that changes it on the right-hand half of the status strip. */
 static volatile LONG g_captured = 0;
+
+/* ── ★ THE GUEST ASKING FOR THE MOUSE IS WHAT TAKES IT. ──────────────────────────
+     A DOS program that wants the mouse says so, through INT 33h, and a program that
+     does not never calls it at all. That is a better signal than any menu item: it
+     is the guest's own declaration, and it separates the two cases exactly the way
+     the user described them -- Skyroads never calls INT 33h, so its mouse stays on
+     the Windows desktop; Doom does, so the mouse goes into the game and the desktop
+     arrow disappears.
+   ► WHICH CALLS COUNT: the ones that USE the mouse (01 show cursor, 03 get position,
+     05/06 button state, 0B read motion), NOT 00 (reset / is-a-driver-present). Very
+     many DOS programs probe for a driver at startup and then never touch it again,
+     and grabbing the pointer away from the desktop for one of those would be a
+     nuisance with no benefit. Detection is not use.
+   ⚠ AND `00` IS DELIBERATELY EXCLUDED FOR A SECOND REASON. A mis-patched `CD 33`
+     site calls this servicer with ARBITRARY AX -- that is the `i33oth=1079` shape
+     documented on g_ms_i33ax, and it is the class of bug that killed Doom for five
+     sessions. Keying the grab on a small set of plausible function numbers rather
+     than on "any INT 33h at all" means one stray call cannot take the user's mouse.
+   ⚠ THE FLAG IS SET ON THE V86/EXEC THREAD AND ACTED ON BY THE UI THREAD. ClipCursor,
+     SetWindowsHookEx and SetCursor all belong to the thread that owns the window, so
+     mouse_int33 may only ever raise a request; WM_TIMER performs it.
+   ★ ONCE PER PROGRAM, AND THAT IS WHAT MAKES Win+F10 MEAN SOMETHING. The latch is
+     set when we auto-capture and never cleared, so a user who escapes with Win+F10
+     stays escaped -- the guest goes on polling INT 33h every frame, and without the
+     latch every one of those polls would drag the pointer straight back in. */
+static volatile LONG g_ms_want_capture = 0;   /* guest used the mouse; UI: please grab */
+static volatile LONG g_ms_autocap_done = 0;   /* we have grabbed once; never again     */
+/* Reported at STAGE2, because "the guest asked and we took it" and "the guest asked
+   and we did not" are different outcomes and a headless run must be able to tell
+   them apart. want=1 fired=0 means the request was raised and the window was not in
+   the foreground -- which is correct behaviour, not a failure, and only a counter
+   can say which of the two happened. */
+static DWORD         g_ms_autocap_fired = 0;
 
 /* INT 33h mouse driver (functions DOS apps actually use). The host draws the
    cursor (overlay in the present path) when the hide-count is 0, so apps that
@@ -4763,6 +5494,12 @@ static void mouse_int33(volatile BYTE *tib, int src)
             ++g_ms_i33site[i].n;
         } else ++g_ms_i33site_ovf;
     }
+    /* The guest is USING the mouse, not merely asking whether one exists -- so take
+       it into the window. See the note on g_ms_want_capture for why 0x00 is not in
+       this set and why the UI thread is the one that acts. */
+    if (ax == 0x0001 || ax == 0x0003 || ax == 0x0005
+        || ax == 0x0006 || ax == 0x000B)
+        InterlockedExchange(&g_ms_want_capture, 1);
     switch (ax) {
     case 0x0000:                                        /* reset + get status      */
         VDM_SET16(tib, VTIB_EAX, 0xFFFF);               /* driver installed        */
@@ -4858,12 +5595,25 @@ enum {                                       /* wired command IDs               
     IDM_STUB = 1,                            /* every not-yet-wired item          */
     IDM_FILE_EXIT, IDM_FILE_CLOSEPROG,
     IDM_DISP_FULLSCREEN, IDM_DISP_SHOWMENU,
-    IDM_INPUT_CURSOR, IDM_INPUT_CAPTURE,
+    IDM_INPUT_CAPTURE,          /* (IDM_INPUT_CURSOR retired -- see g_cursor_show) */
     IDM_FILE_SETTINGS,
     IDM_CAP_SHOT,
     IDM_HELP_ABOUT,
     IDM_TRAY_SHOW,                           /* bring the hidden host window back  */
     IDM_FILE_INSTALL, IDM_FILE_UNINSTALL, IDM_FILE_STATUS,   /* GH #13 */
+    /* ── THE EDIT ITEMS HAVE REAL IDS PURELY SO THEY CAN BE ADDRESSED. ───────────
+         They are still scaffold and still no-ops (they fall to the WM_COMMAND
+         `default:` arm exactly as IDM_STUB does), but "grey these five in a
+         graphics mode" needs to name them one at a time, and EnableMenuItem with
+         MF_BYCOMMAND cannot distinguish five items that all carry IDM_STUB.
+       ⚠ THIS IS NOT THE SCAFFOLD-STUB DECISION BEING RE-LITIGATED. That decision
+         says an UNIMPLEMENTED item stays enabled, and in text mode these still are.
+         Greying them in a graphics mode is a different claim -- mark, copy and
+         paste operate on a CHARACTER GRID, and in mode 13h there is no such thing
+         to select -- so it is about what the item MEANS here, not about whether it
+         is finished. See menu_sync_modal(). */
+    IDM_EDIT_MARK, IDM_EDIT_COPY, IDM_EDIT_COPYSCREEN, IDM_EDIT_PASTE,
+    IDM_EDIT_SELECTALL,
     /* The View menu's two CHECKBOX settings (the combos are ranges, below). */
     IDM_VIEW_VSYNC, IDM_VIEW_BLINK,
 
@@ -5497,7 +6247,7 @@ static int wow_refuse(const char *cmd)
    The rest is still scaffold: items carrying IDM_STUB no-op until they are wired. */
 static HMENU build_menu(void)
 {
-    HMENU bar = CreateMenu(), m, s;
+    HMENU bar = CreateMenu(), m, s, tools;
     m = mpop();                                                   /* File         */
     mi(m, "Open Executable...\tCtrl+O", IDM_STUB);
     msub(m, "Open Recent", (s=mpop(), mi(s,"(empty)",IDM_STUB), s));
@@ -5508,24 +6258,19 @@ static HMENU build_menu(void)
     /* The old "Configuration" submenu (Edit Config File, Open Config Folder, ...)
        described a config FILE that never existed; the store is HKCU and the dialog
        is how you edit it. One entry, and it is this one. */
-    mi(m, "Settings...", IDM_FILE_SETTINGS);
-    msep(m);
-    /* ── ★ INSTALLING IS AN ACTION, SO IT IS ON A MENU AND NOT A SETTINGS PAGE.
-         It changes a machine-wide registry value, needs Administrator, and is the
-         one thing here that outlives the process -- none of which belongs behind a
-         tab of checkboxes. The same three verbs exist on the command line
-         (/install, /uninstall, /status) for scripted use. */
-    mi(m, "Install as System VDM...", IDM_FILE_INSTALL);
-    mi(m, "Uninstall...", IDM_FILE_UNINSTALL);
-    mi(m, "Installation Status...", IDM_FILE_STATUS);
-    msep(m);
     mi(m, "Close Program", IDM_FILE_CLOSEPROG);
     mi(m, "Exit\tAlt+F4", IDM_FILE_EXIT);
     msub(bar, "File", m);
 
+    /* ── EDIT IS A TEXT-MODE MENU, AND menu_sync_modal() SAYS SO AT OPEN TIME. ───
+         Every item here works on the character grid the text renderer maintains.
+         In a graphics mode there is no grid to mark, copy or paste into, so they
+         are greyed rather than left to fail silently -- see the note by
+         IDM_EDIT_MARK for why that is not the scaffold-stub rule being bent. */
     m = mpop();                                                   /* Edit         */
-    mi(m,"Mark / Select Region",IDM_STUB); mi(m,"Copy\tCtrl+C",IDM_STUB);
-    mi(m,"Copy Whole Screen",IDM_STUB); mi(m,"Paste\tCtrl+V",IDM_STUB); mi(m,"Select All",IDM_STUB);
+    mi(m,"Mark / Select Region",IDM_EDIT_MARK); mi(m,"Copy\tCtrl+C",IDM_EDIT_COPY);
+    mi(m,"Copy Whole Screen",IDM_EDIT_COPYSCREEN); mi(m,"Paste\tCtrl+V",IDM_EDIT_PASTE);
+    mi(m,"Select All",IDM_EDIT_SELECTALL);
     msub(bar, "Edit", m);
 
     /* ── ★ VIEW IS THE DISPLAY PAGE, AND IT IS SESSION-ONLY. ─────────────────────
@@ -5561,10 +6306,32 @@ static HMENU build_menu(void)
     mi(m,"Blink Text Cursor",IDM_VIEW_BLINK);
     msep(m);
     mi(m,"Show Menu Bar",IDM_DISP_SHOWMENU);
-    mi(m,"Show Host Cursor\tCtrl+F8",IDM_INPUT_CURSOR);
+    /* ⚠ "Show Host Cursor" AND ITS Ctrl+F8 HOTKEY WERE REMOVED HERE, DELIBERATELY.
+         The desktop pointer's visibility is not a knob of its own -- it is what
+         exclusive mode looks like, and Win+F10 is the control for that. See the
+         note on g_cursor_show. */
     msub(bar, "View", m);
 
-    m = mpop();                                                   /* Machine      */
+    /* ── ★ TOOLS: ONE MENU FOR EVERYTHING THAT IS NOT THE PICTURE. ───────────────
+         The bar was File / Edit / View / Machine / Capture / Debug / Help -- seven
+         tops for a window whose whole job is to show one DOS program. Machine,
+         Capture and Debug are each a handful of items nobody opens mid-game, and
+         three top-level menus is how a menu bar stops being scannable.
+       ► So they become SUBMENUS of one Tools menu, in place, with their contents
+         untouched. Nothing is renamed and nothing is dropped: a user who knew where
+         Swap Disk was finds it under Tools > Machine, one level deeper.
+       ► And the four File items that were never file operations come here too.
+         Settings, Install, Uninstall and Installation Status are all things you do
+         TO the machine or TO this installation; File now holds only what opens,
+         saves or closes something, which is what the word means everywhere else on
+         this desktop.
+       ⚠ SETTINGS GOES LAST, under a separator. Tools > Options at the bottom is the
+         convention every Windows application of this era follows, and the install
+         verbs sit above it because they are the destructive ones -- they should not
+         be the thing your hand lands on. */
+    tools = mpop();                                               /* Tools        */
+
+    m = mpop();                                                   /* Tools>Machine*/
     mi(m,"Restart Machine",IDM_STUB);
     mi(m,"Pause / Resume\tPause",IDM_STUB);
     msep(m);
@@ -5577,7 +6344,7 @@ static HMENU build_menu(void)
          arrived: a speed tried from the menu became the machine's permanent speed,
          while a scaler tried from the menu did not. One rule -- the menu is for
          trying things, the dialog is for keeping them. */
-    menu_combo(m, "CPU Speed", SET_SPEEDMODE, IDM_SPEED_0);
+    menu_combo(m, "Limit Speed", SET_SPEEDMODE, IDM_SPEED_0);
     msep(m);
     mi(m,"Capture Input\tWin+F10",IDM_INPUT_CAPTURE);
     mi(m,"Send Ctrl+Alt+Del",IDM_STUB);
@@ -5588,22 +6355,38 @@ static HMENU build_menu(void)
     msep(m);
     mi(m,"Boot from Drive / Image...",IDM_STUB); mi(m,"Swap Disk\tCtrl+F4",IDM_STUB);
     mi(m,"Drive Status...",IDM_STUB);
-    msub(bar, "Machine", m);
+    msub(tools, "Machine", m);
 
-    m = mpop();                                                   /* Capture      */
+    m = mpop();                                                   /* Tools>Capture*/
     mi(m,"Take Screenshot\tCtrl+F5",IDM_CAP_SHOT);
     msub(m,"Record Video (AVI)",(s=mpop(),mi(s,"Start / Stop",IDM_STUB),s));
     msub(m,"Record Audio (WAV)",(s=mpop(),mi(s,"Start / Stop",IDM_STUB),s));
     msub(m,"Record OPL / MIDI",(s=mpop(),mi(s,"Start / Stop",IDM_STUB),s)); msep(m);
     mi(m,"Open Capture Folder",IDM_STUB); mi(m,"Capture Settings...",IDM_STUB);
-    msub(bar, "Capture", m);
+    msub(tools, "Capture", m);
 
-    m = mpop();                                                   /* Debug        */
+    m = mpop();                                                   /* Tools>Debug  */
     mi(m,"Step Instruction",IDM_STUB);
     mi(m,"Debugger Console...",IDM_STUB); mi(m,"Registers / Memory / Disassembly",IDM_STUB); msep(m);
     msub(m,"Logging",(s=mpop(),mi(s,"Levels...",IDM_STUB),mi(s,"Log to file",IDM_STUB),s));
     mi(m,"Performance Overlay",IDM_STUB);
-    msub(bar, "Debug", m);
+    msub(tools, "Debug", m);
+
+    msep(tools);
+    /* ── ★ INSTALLING IS AN ACTION, SO IT IS ON A MENU AND NOT A SETTINGS PAGE.
+         It changes a machine-wide registry value, needs Administrator, and is the
+         one thing here that outlives the process -- none of which belongs behind a
+         tab of checkboxes. The same three verbs exist on the command line
+         (/install, /uninstall, /status) for scripted use. */
+    mi(tools, "Install as System VDM...", IDM_FILE_INSTALL);
+    mi(tools, "Uninstall...", IDM_FILE_UNINSTALL);
+    mi(tools, "Installation Status...", IDM_FILE_STATUS);
+    msep(tools);
+    /* The old "Configuration" submenu (Edit Config File, Open Config Folder, ...)
+       described a config FILE that never existed; the store is HKCU and the dialog
+       is how you edit it. One entry, and it is this one. */
+    mi(tools, "Settings...", IDM_FILE_SETTINGS);
+    msub(bar, "Tools", tools);
 
     m = mpop();                                                   /* Help         */
     mi(m,"Quick Start",IDM_STUB); mi(m,"Keyboard Shortcuts...",IDM_STUB); msep(m);
@@ -5848,6 +6631,32 @@ static void menu_check(HWND h, UINT id, int on)
     if (m) CheckMenuItem(m, id, MF_BYCOMMAND | (UINT)(on ? MF_CHECKED : MF_UNCHECKED));
 }
 
+/* ── ★ ITEMS THAT ONLY MEAN SOMETHING IN A TEXT MODE. ────────────────────────────
+     Mark, Copy, Copy Whole Screen, Paste and Select All all operate on the CHARACTER
+     GRID. In mode 13h or a planar mode there is no grid -- there are pixels -- so
+     there is nothing to mark and nothing to paste into, and an enabled item that
+     cannot do its job is the "runs but lies" shape this project treats as the most
+     expensive kind of defect.
+   ► Driven from WM_INITMENUPOPUP rather than from the mode set, because the mode is
+     the GUEST's to change and it can change at any instant: syncing when the menu is
+     about to be drawn is the only moment the answer is guaranteed current, and it
+     costs five EnableMenuItem calls on a user action.
+   ⚠ NOT the scaffold-stub rule (unimplemented items stay enabled) -- see the note by
+     IDM_EDIT_MARK. In text mode these are enabled exactly as before. */
+static void menu_sync_modal(HWND h)
+{
+    static const UINT TEXT_ONLY[] = { IDM_EDIT_MARK, IDM_EDIT_COPY, IDM_EDIT_COPYSCREEN,
+                                      IDM_EDIT_PASTE, IDM_EDIT_SELECTALL };
+    HMENU m = GetMenu(h);
+    UINT  flag;
+    unsigned i;
+    if (!m) m = g_savedmenu;
+    if (!m) return;
+    flag = (g_vid.mkind == VID_KIND_TEXT) ? MF_ENABLED : (MF_GRAYED | MF_DISABLED);
+    for (i = 0; i < sizeof TEXT_ONLY / sizeof TEXT_ONLY[0]; ++i)
+        EnableMenuItem(m, TEXT_ONLY[i], MF_BYCOMMAND | flag);
+}
+
 
 /* ── INPUT CAPTURE ("exclusivity"). ─────────────────────────────────────────────────
      Two different things are stealing the guest's keys, and they need different fixes.
@@ -5873,6 +6682,9 @@ static void menu_check(HWND h, UINT id, int on)
    ⚠ Capture is dropped on WM_KILLFOCUS -- otherwise a clipped cursor and a swallowed
      Alt+Tab would strand the user in a window they cannot leave. */
 static HHOOK         g_llkbd;
+static int           g_llkbd_on = 0;     /* OFF by default; llkbd.txt = 1. See input_capture_set. */
+static volatile LONG g_ui_beat;          /* ++ per WM_TIMER: the UI thread is pumping   */
+static DWORD         g_capwd_released;   /* times the watchdog had to hand the box back */
 static volatile LONG g_win_down;         /* Win held -- maintained by the hook, see below */
 
 static LRESULT CALLBACK ll_kbd_proc(int code, WPARAM wp, LPARAM lp)
@@ -5923,7 +6735,23 @@ static void input_capture_set(HWND h, int on)
     InterlockedExchange(&g_captured, on ? 1 : 0);
     if (on) {
         RECT rc; POINT tl;
-        if (!g_llkbd)
+        /* ── ⛔⛔ THIS HOOK CAN JAM THE WHOLE MACHINE, SO IT IS OFF BY DEFAULT. ────────
+             WH_KEYBOARD_LL is SYSTEM-WIDE: every keystroke on the box is routed through
+             THIS process's UI thread. If that thread stalls -- and a VDM host has many
+             ways to stall, including being blocked behind the guest -- then the entire
+             machine's keyboard stalls with it. Add ClipCursor below, which confines the
+             mouse system-wide, and a host that wedges while captured leaves a computer
+             that is running, pingable, and completely unusable.
+             Reported by the user, 2026-09-09, twice in one session: "that basically
+             crashed Windows, and I had to restart the rig", then "NTVDMEX jams the rig".
+           ► AND WHAT IT BUYS IS SMALL: swallowing Win, Alt+Tab and Ctrl/Alt+Esc so the
+             guest keeps focus. Losing that means Alt+Tab works again -- which is an
+             ESCAPE ROUTE from a misbehaving guest, not a regression. The trade is not
+             close: a stuck Alt+Tab costs a keystroke, a stuck hook costs the session.
+           ⚠ ClipCursor stays, because it is released on capture exit, on WM_KILLFOCUS,
+             on WM_DESTROY (see host_panic_release) and by Windows on process death. The
+             hook is the one that outlives a wedge. */
+        if (!g_llkbd && g_llkbd_on)
             g_llkbd = SetWindowsHookExA(WH_KEYBOARD_LL, ll_kbd_proc,
                                         GetModuleHandleA(NULL), 0);
         GetClientRect(h, &rc);
@@ -5945,6 +6773,75 @@ static void input_capture_set(HWND h, int on)
        reached from the WM_KEYDOWN path, but the tick is the single writer. */
 }
 
+/* ── ⛔⛔⛔ GIVE THE MACHINE BACK. CALL THIS BEFORE ANY TEARDOWN PATH. ─────────────
+     Two things this host does are SYSTEM-WIDE and outlive our window, and a third
+     can stop the process dying at all:
+       1. WH_KEYBOARD_LL routes every keystroke on the box through our UI thread.
+       2. ClipCursor confines the mouse system-wide to our client rect.
+       3. WE SUSPEND OUR OWN GUEST THREAD -- async_inject_irq and the CPU throttle
+          both do, dozens of times a second. A process cannot finish exiting while
+          one of its threads is suspended, so a teardown that races a suspend leaves
+          a ZOMBIE holding (1) and (2). The machine then runs, pings, and cannot be
+          typed at: exactly the "whole machine jammed" the user hit, and exactly why
+          "I closed it and reran it" made a second instance on top of a live hook.
+     WM_DESTROY used to stop the audio and clear g_running and do none of this.
+   ⚠ ORDER: release the SYSTEM-WIDE things first, because they are what strands a
+     human. The thread resume is a loop -- suspend counts NEST, and the throttle and
+     the injector can each hold one. */
+static void host_panic_release(void)
+{
+    ClipCursor(NULL);
+    if (g_llkbd) { UnhookWindowsHookEx(g_llkbd); g_llkbd = NULL; }
+    InterlockedExchange(&g_captured, 0);
+    if (g_hcpu) {
+        int guard = 0;
+        /* ResumeThread returns the PREVIOUS count; >1 means it is still suspended.
+           Bounded so a bad handle cannot spin here forever. */
+        while (guard++ < 64) { DWORD prev = ResumeThread(g_hcpu);
+                               if (prev == (DWORD)-1 || prev <= 1) break; }
+    }
+}
+
+/* ── ⛔⛔ THE LAST LINE OF DEFENCE: HAND THE MACHINE BACK WITHOUT BEING ASKED. ─────
+     host_panic_release covers the paths where we KNOW we are going away. This covers
+     the one where we do not: the UI thread stops pumping while capture is held. That
+     is the state that cost the user two hard resets -- the box runs, answers ping, and
+     cannot be typed at or clicked out of, because the things capture holds are
+     system-wide and only that same stalled thread ever releases them.
+     A separate thread owes the user nothing but this: if capture is held and the UI
+     thread has not reached its timer for CAPWD_STALL_MS, take the machine back. It
+     does NOT try to diagnose, kill or recover the guest -- a wedged emulator is a bug
+     report, a wedged computer is a lost afternoon, and only the second is urgent.
+   ⚠ ClipCursor and UnhookWindowsHookEx are safe from another thread; SetCursor and
+     the menu check are not, so they are deliberately not touched here.
+   ⚠ It must not fire while merely SLOW. 3 s is far longer than any frame this host
+     has ever taken (worst measured UI gap: 35 ms) and far shorter than a human's
+     patience with a dead keyboard. */
+#define CAPWD_STALL_MS 3000u
+static DWORD WINAPI capture_watchdog_thread(LPVOID pv)
+{
+    LONG  last = -1;
+    DWORD last_ms = GetTickCount();
+    (void)pv;
+    while (g_running) {
+        Sleep(250);
+        if (!g_captured) { last = g_ui_beat; last_ms = GetTickCount(); continue; }
+        if (g_ui_beat != last) { last = g_ui_beat; last_ms = GetTickCount(); continue; }
+        if (GetTickCount() - last_ms < CAPWD_STALL_MS) continue;
+        {   char wb[192], *wq = wb;
+            ClipCursor(NULL);
+            if (g_llkbd) { UnhookWindowsHookEx(g_llkbd); g_llkbd = NULL; }
+            InterlockedExchange(&g_captured, 0);
+            ++g_capwd_released;
+            wq = zput(wq, "CAPTURE-WATCHDOG: UI thread silent for ");
+            wq = zhex(wq, GetTickCount() - last_ms);
+            wq = zput(wq, " ms while captured -- cursor clip and keyboard hook RELEASED\r\n");
+            log_append(LOG_PATH, wb, wq); serial_out(wb, wq); }
+        last_ms = GetTickCount();
+    }
+    return 0;
+}
+
 /* Show/hide the host arrow over the video. The immediate SetCursor matters:
    WM_SETCURSOR only fires when the mouse next MOVES or re-enters the window, so
    without it the tick changes and the pointer does not until you jiggle it. Guard
@@ -5954,9 +6851,12 @@ static void host_cursor_set(HWND h, int on)
 {
     POINT pt;
     InterlockedExchange(&g_cursor_show, on ? 1 : 0);
-    menu_check(h, IDM_INPUT_CURSOR, on);
+    /* CAPTURE WINS. `on` is the ShowHostCursor setting, which only ever describes
+       the UNCAPTURED case; an exclusive-mode guest shows no host pointer whatever
+       the setting says. Without this, applying settings mid-capture would put the
+       desktop arrow back on top of a game that had taken the mouse. */
     if (GetCursorPos(&pt) && WindowFromPoint(pt) == h)
-        SetCursor(on ? LoadCursorA(NULL, IDC_ARROW) : NULL);
+        SetCursor((on && !g_captured) ? LoadCursorA(NULL, IDC_ARROW) : NULL);
 }
 
 /* ── SETTINGS: THE STORE, AND WHAT APPLYING THEM MEANS. ──────────────────────────
@@ -6044,15 +6944,10 @@ static void settings_apply(HWND h, const ntvdmex_settings *s, int live)
        interpreter re-reads the budget every slice, so changing the speed in the
        dialog bites on the next millisecond rather than at the next launch. */
     g_cpuspd_idx     = (int)(s->v[SET_SPEEDMODE] < CPUSPEED_COUNT ? s->v[SET_SPEEDMODE] : 0);
-    /* ── ★ TURBO OVERRIDES THE SPEED, IT DOES NOT REPLACE IT. (session 57) The
-         checkbox means "never mind the dropdown, run flat out", so it selects
-         index 0 -- the one the speed list already defines as Unlimited -- and
-         leaves the stored SpeedMode alone. Unticking it therefore goes back to
-         whatever the user had chosen, rather than to a default. One knob
-         borrowing another's mechanism, which is why this is two lines and not a
-         second throttle. */
-    g_fpu_present    = (int)(s->v[SET_FPU] ? 1 : 0);
-    if (s->v[SET_TURBO]) g_cpuspd_idx = 0;
+    /* ⚠ FPU AND TURBO WERE REMOVED AS SETTINGS (session 60). g_fpu_present stays 1
+         -- we run on a real x87, so advertising it is always correct, and a checkbox
+         whose only other position makes a guest wrong is not worth having. Turbo was
+         just "select Unlimited", which the speed list already offers directly. */
     cpuspd_recompute();
     /* ── ★ THE GUEST'S KEY REPEAT IS THE GUEST'S, NOT THE HOST'S. (session 57)
          g_ty_period_us is seeded from the host's own SPI_GETKEYBOARDSPEED, which
@@ -6079,6 +6974,12 @@ static void settings_apply(HWND h, const ntvdmex_settings *s, int live)
       else        { g_sbcfg.dma8 = SB_DEFAULT_DMA8; g_sbcfg.dma16 = ch; } }
     if (g_dosm) dos_int21_set_version(g_dosm, (uint8_t)s->v[SET_DOSMAJ],
                                               (uint8_t)s->v[SET_DOSMIN]);
+    /* ⚠ THROTTLE GRANULARITY AND CORE-AFFINITY ARE NO LONGER SETTINGS (session 60).
+         Granularity defaults to AUTO (g_cpuspd_gran_ms = 0), which is the behaviour
+         that made a slow speed smooth, so it needs no control; cpugran.txt still
+         overrides it for the rig. Affinity defaults OFF and stays a file knob
+         (cpuaff.txt) because measured it broke the guest's timer -- exposed for a
+         future re-test, not for a user to find. */
     /* The cursor is the one setting with a VISIBLE side effect, so it goes through
        the same helper the menu item and Ctrl+F8 use rather than poking the flag. */
     if (live && h) host_cursor_set(h, (int)s->v[SET_HOSTCURSOR]);
@@ -6280,11 +7181,11 @@ static void settings_apply_live(HWND h)
      read is a loop over SET_DEFS in settings.h, so adding a knob is one table row and
      one line of .rc layout, not four edits in four functions that can disagree. */
 static const int SETTINGS_PAGES[NTVDMEX_PAGE_COUNT] = {
-    IDD_PAGE_GENERAL, IDD_PAGE_CPU, IDD_PAGE_DISPLAY,
-    IDD_PAGE_AUDIO,   IDD_PAGE_INPUT, IDD_PAGE_DRIVES
+    IDD_PAGE_GENERAL, IDD_PAGE_CPU, IDD_PAGE_MEMORY, IDD_PAGE_DISPLAY,
+    IDD_PAGE_AUDIO,   IDD_PAGE_INPUT, IDD_PAGE_DRIVES, IDD_PAGE_ADVANCED
 };
 static const char *const SETTINGS_TABS[NTVDMEX_PAGE_COUNT] = {
-    "General", "CPU", "Display", "Audio", "Input", "Drives"
+    "General", "Processor", "Memory", "Display", "Audio", "Input", "Drives", "Advanced"
 };
 static HWND g_spage[NTVDMEX_PAGE_COUNT];
 
@@ -6403,6 +7304,34 @@ typedef HRESULT (WINAPI *pfn_etdt)(HWND, DWORD);
 static HMODULE   g_uxtheme;
 static pfn_etdt  g_etdt;
 
+/* The Processor page says WHICH processor -- the user's own -- so fill the static
+   with its brand string. It is read from the same place a DOS tool or Windows shows
+   it (HKLM\HARDWARE\...\CentralProcessor\0\ProcessorNameString), trimmed of the
+   leading spaces Intel pads it with. If the read fails the template's placeholder
+   stands, so a missing key costs a generic line, not a blank. */
+static void settings_fill_cpuinfo(HWND dlg)
+{
+    HWND c = GetDlgItem(dlg, IDC_S_CPUINFO);
+    HKEY k;
+    char name[128]; DWORD cb = sizeof name - 1, type = 0;
+    char out[160];
+    const char *p = name;
+    if (!c) return;
+    if (RegOpenKeyExA(HKEY_LOCAL_MACHINE,
+            "HARDWARE\\DESCRIPTION\\System\\CentralProcessor\\0",
+            0, KEY_READ, &k) != ERROR_SUCCESS)
+        return;
+    if (RegQueryValueExA(k, "ProcessorNameString", NULL, &type,
+                         (BYTE *)name, &cb) == ERROR_SUCCESS
+        && type == REG_SZ && cb) {
+        name[cb < sizeof name ? cb : sizeof name - 1] = 0;
+        while (*p == ' ') ++p;                 /* Intel pads the string with spaces */
+        wsprintfA(out, "Running on: %s", p);
+        SetWindowTextA(c, out);
+    }
+    RegCloseKey(k);
+}
+
 static INT_PTR CALLBACK settings_pageproc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
 {
     (void)wp; (void)lp;
@@ -6413,6 +7342,7 @@ static INT_PTR CALLBACK settings_pageproc(HWND dlg, UINT msg, WPARAM wp, LPARAM 
                 g_etdt = (pfn_etdt)GetProcAddress(g_uxtheme, "EnableThemeDialogTexture");
         }
         if (g_etdt) g_etdt(dlg, 0x00000006);   /* ETDT_ENABLE | ETDT_USETABTEXTURE */
+        settings_fill_cpuinfo(dlg);            /* no-op on pages without the static */
         return TRUE;
     }
     return FALSE;
@@ -6552,6 +7482,10 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
 {
     switch (msg) {
     case WM_TIMER:
+        /* Liveness beat for the capture watchdog: proof the UI thread is still pumping
+           messages. Taken FIRST, before any of the frame work below, so the beat means
+           "this thread reached its timer", not "this thread finished a frame". */
+        InterlockedIncrement(&g_ui_beat);
         /* ── THE 5 ms FRAME TIMER WAS NEVER ACTUALLY HONOURED, AND THE PACER REVEALED IT.
              SetTimer asks for VID_PRESENT_TICK_MS = 5, but XP's default timer granularity
              is 15.6 ms, so this body has ALWAYS run at ~64 Hz -- which is exactly the
@@ -6663,6 +7597,11 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
                 mq = zput(mq, " ax_ovf="); mq = zhex(mq, g_ms_i33ax_ovf);
                 mq = zput(mq, " sites="); mq = zhex(mq, g_ms_i33site_n);
                 mq = zput(mq, " site_ovf="); mq = zhex(mq, g_ms_i33site_ovf);
+                /* Auto-capture, so a headless run can show it. want=1 fired=0 is the
+                   window not being in the foreground, which is deliberate. */
+                mq = zput(mq, " autocap_want="); mq = zhex(mq, (DWORD)g_ms_want_capture);
+                mq = zput(mq, " fired="); mq = zhex(mq, g_ms_autocap_fired);
+                mq = zput(mq, " captured="); mq = zhex(mq, (DWORD)g_captured);
                 mq = zput(mq, "\r\n");
                 log_append(LOG_PATH, mb, mq);
                 for (i = 0; i < g_ms_i33site_n && i < I33_SITEN; ++i) {
@@ -6678,6 +7617,21 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
                     log_append(LOG_PATH, sb, sq);
                 }
             } }
+        /* ── ★ THE GUEST ASKED FOR THE MOUSE: TAKE IT. ───────────────────────────
+             Raised on the exec thread by mouse_int33 and performed here, because
+             ClipCursor / SetWindowsHookEx / SetCursor belong to the window's own
+             thread. Latched, so this fires once per program and Win+F10 stays the
+             last word on it -- see the note on g_ms_want_capture.
+           ⚠ NOT while the window is in the background: grabbing the pointer out of
+             whatever the user is actually doing, because a DOS program in another
+             window polled its mouse, is exactly the behaviour that makes capture
+             feel like something being done TO you. */
+        if (g_ms_want_capture && !g_ms_autocap_done && !g_captured
+            && GetForegroundWindow() == h) {
+            InterlockedExchange(&g_ms_autocap_done, 1);
+            ++g_ms_autocap_fired;
+            input_capture_set(h, 1);
+        }
         status_update();          /* program name / width / mode / capture, on the UI thread */
         /* Drive the PIT from REAL elapsed time so the BIOS tick (0040:006C) and
            INT 1Ah track wall-clock regardless of WM_TIMER jitter; clamp after a
@@ -6772,7 +7726,7 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
                  CONTENTS are the period in milliseconds now; empty keeps the 300 ms
                  default, and 1100 spans a whole 45 s headless run. */
             if ((cap_tick++ % (g_capture_ms / VID_PRESENT_TICK_MS + 1)) == 0 && cap_seq < 40) {
-                char path[] = "C:\\ntvdmex\\shot00.bmp";
+                char path[] = OUT_("shot00.bmp");
                 path[15] = (char)('0' + (cap_seq / 10) % 10);
                 path[16] = (char)('0' + cap_seq % 10);
                 if (present_ddraw_save_bmp(&g_pd, path) == 0) ++cap_seq;
@@ -6857,6 +7811,12 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
             status_update();         /* re-partitioning blanks them; fill them again */
         }
         return 0;
+    /* The one moment a menu's enable state is guaranteed to be current: the guest
+       can change video mode whenever it likes, so this is synced at open time
+       rather than at mode-set time. */
+    case WM_INITMENUPOPUP:
+        menu_sync_modal(h);
+        return 0;
     case WM_COMMAND:
         /* ── ★ EVERY MENU-BACKED SETTING, IN ONE PLACE. ──────────────────────────
              The dropdowns are contiguous RANGES, so they are handled before the
@@ -6899,7 +7859,6 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
             HMENU cur = GetMenu(h);
             if (cur) { g_savedmenu = cur; SetMenu(h, NULL); } else SetMenu(h, g_savedmenu);
             return 0; }
-        case IDM_INPUT_CURSOR: host_cursor_set(h, !g_cursor_show); return 0;
         /* ⚠ CONFIRM FIRST. Both of these change how EVERY DOS and Win16 program on
              the machine starts, and both outlive this process -- an accidental
              click on a menu is not consent for that. */
@@ -6937,10 +7896,28 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
             return 0;
         case IDM_INPUT_CAPTURE: input_capture_set(h, !g_captured); return 0;
         case IDM_CAP_SHOT: host_screenshot(); return 0;
+        /* ── ★ THE SYSTEM ABOUT BOX, WHICH IS WHAT A PROGRAM OF THIS ERA USES. ───
+             ShellAbout is the shared About dialog every Win16 and early Win32
+             application on this desktop puts behind Help > About -- Program
+             Manager's is this dialog -- so ours being a plain MessageBox was the
+             one place the host stopped looking like the thing it replaces. It also
+             gives us the pieces a MessageBox cannot: the Windows version and the
+             physical-memory and resource figures, filled in by the shell.
+           ⚠ szApp IS TWO FIELDS SEPARATED BY '#'. Before the hash goes in the TITLE
+             BAR (the shell prefixes "About "), after it on the first line of the
+             body. Passing a string with no hash puts the whole thing in both.
+           ⚠ AND THE SHELL PUTS ITS OWN BRANDING ON THE FIRST LINE, which is why the
+             product name is repeated in the body text rather than left to the
+             caption alone -- the caption is the only part we fully own.
+             ▶ NOT YET SEEN ON HARDWARE: what XP renders here needs one look before
+               this is called done. */
         case IDM_HELP_ABOUT:
-            MessageBoxA(h, "NTVDMEX -- New Technology Virtual DOS Manager, Extended\n"
-                          "A from-scratch ntvdm.exe for Windows XP (DOS on the real CPU in V86).",
-                          "About NTVDMEX", MB_OK | MB_ICONINFORMATION); return 0;
+            ShellAboutA(h, "NTVDMEX#NTVDMEX -- New Technology Virtual DOS Manager, Extended",
+                        "A from-scratch ntvdm.exe for Windows XP.\r\n"
+                        "MS-DOS on the real CPU in V86, and 16-bit Windows through "
+                        "the system's own krnl386.",
+                        LoadIconA(GetModuleHandleA(NULL), MAKEINTRESOURCEA(101)));
+            return 0;
         /* ★ The way back to a window that was never shown. Not a toggle: "hide it
              again" is what the close button already means for a machine whose
              icon is in the tray, and two ways to do one thing is how a UI starts
@@ -7005,13 +7982,11 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
         if (g_captured) { key_push_make(lp); break; }
         if (wp == VK_F11) { present_ddraw_set_fullscreen(&g_pd, !g_pd.fullscreen); return 0; }
         if (wp == VK_F5 && (GetKeyState(VK_CONTROL) & 0x8000)) { host_screenshot(); return 0; }
-        /* Ctrl+F8 -> host cursor on/off. It needs a hotkey and not just the menu
-           item because FULLSCREEN is exactly when you most want it and exactly when
-           there is no menu bar to reach. Swallowed here, like Ctrl+F5, so the guest
-           never sees the F-key. */
-        if (wp == VK_F8 && (GetKeyState(VK_CONTROL) & 0x8000)) {
-            host_cursor_set(h, !g_cursor_show); return 0;
-        }
+        /* ⚠ Ctrl+F8 (host cursor on/off) WAS REMOVED WITH ITS MENU ITEM. Its
+             argument was "fullscreen is when you most want it and there is no menu
+             bar to reach" -- which is true of EXCLUSIVE MODE, and Win+F10 is the
+             chord for that. One idea, one control; see the note on g_cursor_show.
+             Removing it also gives the F-key back to the guest. */
         /* Raw AT keyboard: push the MAKE scancode (lParam bits 16-23 = the OEM scan
            code) into the 0x60/0x64 FIFO and raise IRQ1, so action games that hook
            INT 09h or poll port 0x60 for real-time held-key state get input. This runs
@@ -7084,7 +8059,61 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
         InterlockedExchange(&g_ms_btn, b);
         return 0; }
     case WM_DESTROY:
+        /* GIVE THE MACHINE BACK FIRST -- before g_running, before the audio unwind,
+           before anything that can block. Everything below this line is about our
+           process; this line is about the user's computer. See host_panic_release. */
+        host_panic_release();
         InterlockedExchange(&g_running, 0);
+        /* ── ★★ THE NUMBERS FOR A RUN A HUMAN ACTUALLY PLAYED. ───────────────────
+             The full STAGE2 report is written by the EXEC thread when the guest
+             terminates. Closing the window does not terminate the guest -- it tears
+             the process down from the UI thread -- so an interactive session, which
+             is the only kind that can report FEEL, produced no numbers at all. Every
+             figure this project has on the keyboard-yield fault came from synthetic
+             runs for exactly that reason.
+             So dump the handful that matter from HERE, where a close always lands.
+             One line, no allocation, safe from this thread (all file-scope counters).
+           ⚠ Read `yld` against `raise-att`: they are equal by construction when the
+             keyboard is stealing the timer's slot, which is the whole mechanism. */
+        {   char cb[512], *cq = cb;
+            cq = zput(cq, "CLOSE: keyirq="); cq = zhex(cq, (DWORD)g_keyirq_retry);
+            cq = zput(cq, " courier=");      cq = zhex(cq, (DWORD)g_courier_on);
+            cq = zput(cq, " irq0_inj=");     cq = zhex(cq, g_irq0_inj);
+            cq = zput(cq, " anom_n=");       cq = zhex(cq, g_irq0_anom_n);
+            cq = zput(cq, " gen=");          cq = zhex(cq, g_irq0_anom_gen);
+            cq = zput(cq, " del=");          cq = zhex(cq, g_irq0_anom_del);
+            cq = zput(cq, " anom[raise,att,nie,yld]=");
+            cq = zhex(cq, g_irq0_anom_raise); cq = zput(cq, ",");
+            cq = zhex(cq, g_irq0_anom_att);   cq = zput(cq, ",");
+            cq = zhex(cq, g_irq0_anom_nie);   cq = zput(cq, ",");
+            cq = zhex(cq, g_irq0_anom_yld);
+            cq = zput(cq, " gap_ms[<1,1,2,4,8,16,32,64+]=");
+            { unsigned gb; for (gb = 0; gb < 8; ++gb) {
+                cq = zput(cq, gb ? "," : ""); cq = zhex(cq, g_irq0_gap_hist[gb]); } }
+            cq = zput(cq, " gap_max=");  cq = zhex(cq, g_irq0_gap_max_ms);
+            cq = zput(cq, " keydel_ms[0,1,2,4,8,16,32,64+]=");
+            { unsigned kb2; for (kb2 = 0; kb2 < 8; ++kb2) {
+                cq = zput(cq, kb2 ? "," : ""); cq = zhex(cq, g_keydel_hist[kb2]); } }
+            cq = zput(cq, " keydel_max="); cq = zhex(cq, g_keydel_max_ms);
+            cq = zput(cq, " cour_inj=");   cq = zhex(cq, g_courier_inj);
+            cq = zput(cq, " capwd=");      cq = zhex(cq, g_capwd_released);
+            cq = zput(cq, " pit_skip=");   cq = zhex(cq, g_pit_deliver_skipped);
+            /* ── ★★★ NAME THE LOCK HOLDER. (s61, and it is the whole question now.) ──
+                 The arm-4 close said 86% of the stalls are GENERATION -- the 8254 never
+                 made the tick, because host_pit_sync could not run. Every caller of it
+                 takes g_lock, so the culprit is whoever was holding g_lock, and the
+                 lock instrument has known that number since session 21 without ever
+                 being printed anywhere an INTERACTIVE run could reach.
+               ► hold@line is the answer: it is the __LINE__ of the outermost acquire
+                 that held longest. Read it with wait@line (who was stuck behind it)
+                 and ui_gap (whether the UI thread was running at all). */
+            cq = zput(cq, " lk_hold_us="); cq = zhex(cq, g_lk_hold_us);
+            cq = zput(cq, "@line ");       cq = zhex(cq, (DWORD)g_lk_hold_site);
+            cq = zput(cq, " lk_wait_us="); cq = zhex(cq, g_lk_wait_us);
+            cq = zput(cq, "@line ");       cq = zhex(cq, (DWORD)g_lk_wait_site);
+            cq = zput(cq, " ui_gap_us=");  cq = zhex(cq, g_ui_gap_us);
+            cq = zput(cq, "\r\n");
+            log_append(LOG_PATH, cb, cq); serial_out(cb, cq); }
         /* PANIC-STOP THE SOUND, HERE, BEFORE ANYTHING ELSE UNWINDS.
            Closing the window used to leave notes sounding until the host was
            restarted (user, 2026-08-21). Nothing ever called audio_wave_stop -- it
@@ -7148,8 +8177,44 @@ static DWORD WINAPI ui_thread(LPVOID arg)
         g_ms_raw_ok = RegisterRawInputDevices(&rid, 1, sizeof rid) ? 1 : 0;
     }
     SetMenu(g_hwnd, build_menu());
-    menu_check(g_hwnd, IDM_INPUT_CURSOR, g_cursor_show);  /* tick reflects the state  */
-    menu_view_sync(g_hwnd);                  /* ...and so do View + CPU Speed */
+    menu_view_sync(g_hwnd);                  /* View + CPU Speed reflect the state */
+    /* ── ★ DOES THE SETTINGS DIALOG STILL BUILD? ─────────────────────────────────
+         A malformed DIALOGEX template does not draw badly -- it FAILS TO CREATE, and
+         the menu item then silently does nothing. Adding a control whose window class
+         is not registered, or a style constant the resource compiler did not know, is
+         exactly how that happens, and a successful BUILD says nothing about it.
+       ► So create every page off-screen, check the controls that matter are really
+         there, log it, and destroy them. Deterministic, needs no clicking, and it
+         runs in a headless test -- which matters because the alternative (driving the
+         menu with synthetic clicks) lands on the desktop of whoever is using the box.
+       ⚠ Behind a flag: eight dialogs at every startup is a cost no shipped run needs
+         to pay, and this answers a question that only changes when the .rc does. */
+    if (GetFileAttributesA(DLGCHECK_FLAG) != INVALID_FILE_ATTRIBUTES) {
+        char cb[512], *cq = cb;
+        int pi;
+        HINSTANCE hinst = GetModuleHandleA(NULL);
+        for (pi = 0; pi < NTVDMEX_PAGE_COUNT; ++pi) {
+            HWND pg = CreateDialogParamA(hinst, MAKEINTRESOURCEA(SETTINGS_PAGES[pi]),
+                                         g_hwnd, settings_pageproc, 0);
+            cq = zput(cq, "DLGCHECK page="); cq = zhex(cq, (DWORD)SETTINGS_PAGES[pi]);
+            cq = zput(cq, pg ? " CREATED" : " **FAILED** err=");
+            if (!pg) cq = zhex(cq, GetLastError());
+            if (pg) {
+                /* A control that must exist on THIS page, by id, so "the page was
+                   created" cannot be mistaken for "the controls I moved are on it".
+                   Each is 0 on every page but the one that owns it -- which is the
+                   point: it proves the split (Processor=speed, Memory=convkb,
+                   Advanced=pitpace) actually landed. */
+                cq = zput(cq, " speed=");  cq = zhex(cq, GetDlgItem(pg, IDC_S_SPEEDMODE) ? 1u : 0u);
+                cq = zput(cq, " cpuinfo=");cq = zhex(cq, GetDlgItem(pg, IDC_S_CPUINFO) ? 1u : 0u);
+                cq = zput(cq, " convkb="); cq = zhex(cq, GetDlgItem(pg, IDC_S_CONVKB) ? 1u : 0u);
+                cq = zput(cq, " pitpace=");cq = zhex(cq, GetDlgItem(pg, IDC_S_PITPACE) ? 1u : 0u);
+                DestroyWindow(pg);
+            }
+            cq = zput(cq, "\r\n");
+            log_append(LOG_PATH, cb, cq); cq = cb;
+        }
+    }
     present_ddraw_init(&g_pd, g_hwnd);          /* GDI windowed; DDraw for fullscreen */
     settings_apply_present(&g_pd, &g_set);      /* ...which zeroes its own struct     */
     make_status(g_hwnd, hi);                     /* native themed status bar          */
@@ -7297,24 +8362,40 @@ static void io_unclaimed_note(uint16_t port, int is_in)
 static uint32_t g_pit_catchup_clamped;             /* gaps past it (STAGE2)          */
 static uint32_t g_pit_gap_max;                     /* the worst one, in 8254 clocks  */
 
-static void host_pit_sync(void)
+/* Wired onto g_pit at startup; see g_pit_cs and pit_state.guard. */
+static void host_pit_guard(void *ctx, int enter)
+{
+    (void)ctx;
+    if (enter) EnterCriticalSection(&g_pit_cs);
+    else       LeaveCriticalSection(&g_pit_cs);
+}
+
+/* ── ★★★ THE CRYSTAL. (s61) Advance the 8254 to NOW and latch what fell due. ────
+     g_pit_cs only, held for microseconds, and NOTHING slow inside: this is the part
+     of the machine that must behave like silicon. It used to run under g_lock, and
+     the measured price -- from a session the user PLAYED -- was that 86%% of all
+     timing stalls were ticks never generated on time because the renderer, the
+     mixer or a port-trap storm held the lock (STAGE2: IRQ0WHY gen=443 del=71).
+     Delivery is a separate concern with separate rules: host_pit_deliver below. */
+static void host_pit_generate(void)
 {
     static LARGE_INTEGER s_freq, s_last;
     LARGE_INTEGER now;
     ULONGLONG delta;
-    /* Called from BOTH the exec thread (so a guest polling the counter reads real time) and
-       the UI thread (so the clock keeps running while the guest is spinning and not trapping
-       at all). It must be one shared clock or the two would double-count, hence the lock --
-       g_lock is recursive for the exec thread, which already holds it inside host_io_do. */
-    HOST_LOCK();
+    /* Called from the exec thread (so a guest polling the counter reads real time),
+       the UI thread, and the PACER (so the clock keeps running while the guest spins
+       and never traps). One shared clock, hence one lock -- but the CRYSTAL's lock,
+       not g_lock: this function must be able to run while the renderer holds the
+       device lock for 20 ms, or the clock stops with it. s61, measured. */
+    EnterCriticalSection(&g_pit_cs);
     if (!s_freq.QuadPart) {
         if (QueryPerformanceFrequency(&s_freq) && s_freq.QuadPart)
             QueryPerformanceCounter(&s_last);
-        HOST_UNLOCK();
+        LeaveCriticalSection(&g_pit_cs);
         return;
     }
     if (!QueryPerformanceCounter(&now) || now.QuadPart <= s_last.QuadPart) {
-        HOST_UNLOCK();
+        LeaveCriticalSection(&g_pit_cs);
         return;
     }
     g_async_tried_this_sync = 0;        /* a fresh burst of raises gets one attempt */
@@ -7336,6 +8417,91 @@ static void host_pit_sync(void)
           if (clocks > PIT_INPUT_HZ) clocks = PIT_INPUT_HZ;   /* cap a long stall at 1 s */
           vdd_pit_add_clocks(&g_pit, (uint32_t)clocks);
       } }
+    LeaveCriticalSection(&g_pit_cs);
+}
+
+/* ── ★★★ DELIVERY: one bounded pass of attempts, and only if g_lock is FREE. ────
+     The old shape held g_lock across generation AND attempts, which was load-bearing
+     in one way (holding g_lock guarantees the thread we suspend is not holding it)
+     and disastrous in another (the clock queued behind the renderer to tick). The
+     split keeps the guarantee -- attempts still happen ONLY under g_lock -- and
+     deletes the queueing: HOST_LOCK_TRY means a busy lock skips the attempt, and the
+     tick is already LATCHED, so the cooperative path delivers it at the guest's next
+     trap (~68,000/s on Skyroads). A skip costs latency bounded by the next trap or
+     the next pacer round; the old cost was unbounded clock stall. The s61 suspend
+     handshake (post-suspend g_in_exec re-check, ctx-writer interlock) additionally
+     protects the suspend itself; both layers stay. */
+static void host_pit_deliver(void)
+{
+    if (!HOST_LOCK_TRY()) { ++g_pit_deliver_skipped; return; }
+    if (g_irq0_pending > 0 && g_qi_susp && (!g_dpmi_pm || !g_async_tried_this_sync)) {
+            g_async_tried_this_sync = 1;
+            /* A PENDING KEY IS A STATE, NOT A MOMENT. IRQ1 gets ONE async attempt, at the
+               raise; if the guest had interrupts off (96% of gameplay) it falls to the
+               exec loop, which can only place it on a pass where they are back on. This is
+               the retry, and it is free: async_inject_irq VERIFIES IF/VIF before it
+               injects, so an IRQ0 opportunity IS a proven enabled moment, ~184/s. The key
+               takes it and the tick waits -- g_irq0_pending is not decremented, so the
+               tick is not lost, just delivered on the next raise. Bounded so a key that
+               can never be placed cannot stop the clock. */
+            /* ── ★★★ keyirq = 2: YIELD ONLY WHILE THE CLOCK IS ON SCHEDULE. ──────────
+                 USER-CONFIRMED SYMPTOM (2026-09-09, in-game, at the box): "butter
+                 smooth, until you start pressing keys, then it lags. When you release
+                 the keys, it eventually goes smooth again." That is this branch, felt
+                 rather than measured -- and it matches the measurement exactly, where
+                 `raises - attempts == yields` in every run taken.
+               ► The yield itself is NOT the mistake: turning it off (keyirq = 0) is
+                 measured to put 51 of 102 keystrokes past 64 ms, worst 1864 ms. Keys
+                 and the timer are competing for one scarce thing -- a moment when the
+                 guest is in exec with interrupts on -- and somebody has to lose.
+               ⇒ So lose the slot only when losing it is FREE. g_irq0_pending is the
+                 saturating tick latch and irq0_latch() has already counted this raise,
+                 so <= 1 means "nothing is owed but the tick we just made": the clock is
+                 on schedule and can afford to wait one period. Above that the timer is
+                 already behind, which is exactly when a further 5.56 ms of delay is
+                 what the player feels, so the key waits instead -- for ONE period, not
+                 the three KEYIRQ_MAX_YIELD would allow.
+                 0 = never yield (measured: loses keys), 1 = always (the old default,
+                 what the user felt), 2 = only when not behind. */
+            /* ── ⚠⚠ keyirq = 2 IS REFUTED, USER-CONFIRMED. DO NOT RETRY IT. ─────────
+                 "Now it reads too many keys in a row and doesn't stop reading them
+                 when the key is released. I flew straight off the road. Twice."
+                 Making the KEY wait strands its BREAK code: g_irq1_pending is one
+                 deep, so a make code still queued when the release arrives coalesces
+                 the release away and the guest never sees the key come up. This file
+                 already recorded that shape once ("the earlier cap-with-a-backlog is
+                 what stranded break codes and killed the arrow keys") and I walked
+                 into it anyway. ⇒ ANY FIX THAT DELAYS THE KEY IS OFF THE TABLE.
+               ► keyirq = 3 is the survivor of that: never delay a key, but allow only
+                 ONE yield in a row instead of KEYIRQ_MAX_YIELD's three. The key is
+                 served instantly exactly as in mode 1, and the clock's worst-case
+                 loss falls from three periods (16.7 ms at 180 Hz) to one. It cannot
+                 strand a break code, because a key is never made to wait. */
+            {   int maxy = (g_keyirq_retry == 3) ? 1 : KEYIRQ_MAX_YIELD;
+            if (g_keyirq_retry && !g_dpmi_pm && g_irq1_pending > 0
+                && (g_keyirq_retry != 2 || g_irq0_pending <= 1)
+                && g_irq0_yielded < maxy
+                && vdd_pic_can_deliver(&g_pic, 1) && async_inject_irq(1)) {
+                InterlockedDecrement(&g_irq1_pending);
+                ++g_irq0_yielded;
+                ++g_irq1_async_retry;
+                ++g_irq0_yield_ct;   /* A/B/C discriminator: the key took the clock's turn */
+            } else {
+                g_irq0_yielded = 0;
+                ++g_pit_async_attempts;
+                ++g_irq0_att_ct;     /* A/B/C discriminator: an attempt was actually made */
+                if (async_inject_irq(0)) {
+                    InterlockedDecrement(&g_irq0_pending);
+                    pm_tick_take();
+                    /* ⚠ BOTH DELIVERY PATHS, OR THE TIMELINE IS A LIE. A PM guest
+                       is fed almost entirely from here and a V86 one from the
+                       cooperative site; counting one would show a clock stopping
+                       exactly where the other took over. */
+                    g_irq0_note_cs = 0xFFFF; g_irq0_note_ip = 0;  /* delivered async */
+                    irq0_delivered_note();
+                }
+            } }
+        }
     /* ── ★★★★ A DEVICE IRQ GETS EXACTLY ONE ASYNCHRONOUS ATTEMPT, AT THE INSTANT IT IS
          RAISED -- AND THAT IS NOT ENOUGH FOR A ONE-SHOT INTERRUPT. ────────────────────
          host_irq_sink tries once when the device raises, and if the CPU thread happens
@@ -7373,6 +8539,13 @@ static void host_pit_sync(void)
           break;                  /* one per sync, pending or not: see the note above */
       } }
     HOST_UNLOCK();
+}
+
+/* One clock, two concerns: callers that used to call host_pit_sync still can. */
+static void host_pit_sync(void)
+{
+    host_pit_generate();
+    host_pit_deliver();
 }
 
 static DWORD g_sndio_logged = 0;    /* bounded SNDIO trace; see the note below */
@@ -11623,7 +12796,7 @@ static void dpmi_sync_defsel_width(void)
      that changes the answer for one run. The log marks every overridden call as an
      EXPERIMENT rather than a service, so no reader can mistake a measurement for an
      implementation. Absent file = the sentinel, unchanged, and no cost. */
-#define WOW32RET_PATH "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\wow32ret.txt"
+#define WOW32RET_PATH CFG_("wow32ret.txt")
 #define WOW32RET_MAX 16
 static WORD  g_w32ret_id[WOW32RET_MAX];
 static DWORD g_w32ret_val[WOW32RET_MAX];
@@ -11648,7 +12821,7 @@ static DWORD wow32_ret_override(WORD id)
      not a crash so much as a random jump. One line, one id, one run, and read the
      log -- the same discipline wow32ret.txt earned the hard way, for higher stakes.
    Format: `<hex id> <hex mode>`, data lines first, `#` comments below. */
-#define WOWMODE_PATH "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\wowmode.txt"
+#define WOWMODE_PATH CFG_("wowmode.txt")
 #define WOWMODE_MAX 8
 static WORD g_w32mode_id[WOWMODE_MAX];
 static WORD g_w32mode_val[WOWMODE_MAX];
@@ -11781,7 +12954,7 @@ static void wow32_ret_load(void)
      since it started executing Win16 code at all. A default run must still
      reproduce the committed result exactly, so the switch is a file on the share
      and its absence costs nothing. */
-#define WOWSCHED_PATH "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\wowsched.txt"
+#define WOWSCHED_PATH CFG_("wowsched.txt")
 static int   g_wowsched_on = 0;
 static WORD  g_wow_dgsel   = 0;      /* krnl386's DGROUP selector, learned at a BOP */
 static wowsched_slot_t g_ws_task;    /* the task parked at its own launch BOP       */
@@ -11860,7 +13033,7 @@ static void wowsched_setcur(WORD task)
    emission site. */
 static DWORD g_wow_bops = 0, g_wow_perf_ms = 0;
 
-#define WOWQUIET_PATH "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\wowquiet.txt"
+#define WOWQUIET_PATH CFG_("wowquiet.txt")
 static void wowquiet_load(void)
 {
     HANDLE h = CreateFileA(WOWQUIET_PATH, GENERIC_READ,
@@ -11897,7 +13070,7 @@ static void wowsched_load(void)
      stack it did not build the frame for. A default run must still reproduce the
      committed baseline (270 / 44 / 122 / 98) count for count, so the switch is a
      file on the share and its absence costs nothing. See src/wow/wowcall.h. */
-#define WOWCALL_PATH "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\wowcall.txt"
+#define WOWCALL_PATH CFG_("wowcall.txt")
 static int g_wowcall_on = 0;
 
 static void wowcall_load(void)
@@ -17703,6 +18876,41 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     char progpath[768]; char args[256];
     unsigned i; int guard;
     g_guest_tid = GetCurrentThreadId();
+    /* cfg\ and out\ before ANYTHING logs. A missing out\ makes every log_append fail
+       silently, and the log is what explains every other failure. Idempotent. */
+    CreateDirectoryA(NTVDMEX_CFG, NULL);
+    CreateDirectoryA(NTVDMEX_OUT, NULL);
+    /* ── ⛔⛔ ONE HOST AT A TIME. ─────────────────────────────────────────────────
+         Nothing stopped a second instance, and two of them fight over things that
+         are SYSTEM-WIDE, not per-process: the low-level keyboard hook, the cursor
+         clip, exclusive-fullscreen DirectDraw, and the guest's suspend count. The
+         user hit it directly -- "I closed your Skyroads run, and reran it. That
+         basically crashed Windows" -- because closing does not necessarily finish
+         (a suspended guest thread keeps the process alive; see host_panic_release),
+         so the rerun landed ON TOP of a zombie that still owned the keyboard.
+       ⚠ Bail SILENTLY and with success. This is launched by the IFEO Debugger key
+         on every 16-bit start, so a message box here would be a modal dialog on a
+         machine that is already confused -- and a failure exit code would make the
+         launch look broken rather than declined. */
+    /* ⚠⚠ GetLastError() IS ONLY MEANINGFUL IMMEDIATELY AFTER THE CALL, AND THE FIRST
+         CUT OF THIS GUARD REFUSED EVERY LAUNCH. CreateDirectoryA above fails with
+         ERROR_ALREADY_EXISTS whenever cfg\ exists -- i.e. always, after the first run
+         -- and CreateMutexA does NOT clear the last-error value when it succeeds. So
+         the guard read the DIRECTORY's error, concluded another host was running, and
+         exited: the rig went silent, no log at all, and the run timed out.
+         Clear it first and latch it immediately. Same do-nothing-and-look-fine shape
+         as everything else this file warns about. */
+    {   HANDLE once; DWORD gle;
+        SetLastError(0);
+        once = CreateMutexA(NULL, TRUE, "Global\\ntvdmex_host_single");
+        gle  = GetLastError();
+        if (once && gle == ERROR_ALREADY_EXISTS) {
+            char sb[160], *sq = sb;
+            sq = zput(sq, "REFUSED: another ntvdmhost is already running -- "
+                          "this instance is exiting (see the single-instance guard)\r\n");
+            log_append(LOG_PATH, sb, sq);
+            return 0;
+        } }
     static const BYTE bop[] = { VDM_BOP0, VDM_BOP1, 0x20, 0xCF };  /* BOP 0x20 ; iret */
     static const BYTE bop10[] = { VDM_BOP0, VDM_BOP1, 0x10, 0xCF }; /* BOP 0x10 ; iret */
     static const BYTE bop16[] = { VDM_BOP0, VDM_BOP1, 0x16, 0xCF }; /* BOP 0x16 ; iret */
@@ -18183,9 +19391,42 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             char tpath[512]; DWORD tn = 0; char *q; char *a = 0;
             ReadFile(ht, tpath, sizeof(tpath) - 1, &tn, NULL); CloseHandle(ht);
             tpath[tn < sizeof(tpath) ? tn : sizeof(tpath) - 1] = 0;
-            for (q = tpath; *q; ++q) {                  /* split "path [args]"; stop at CR/LF */
-                if (*q == '\r' || *q == '\n') { *q = 0; break; }
-                if (*q == ' ' && !a) { *q = 0; a = q + 1; }
+            /* ── ⚠⚠ A PROGRAM PATH MAY CONTAIN SPACES, AND THIS SPLIT ON THE FIRST ONE.
+                 Every path the rig used to hand us was C:\game\X.EXE or C:\test\X.COM,
+                 so "first space starts the arguments" was never wrong -- until the rig
+                 moved into the share folder, whose path contains "Documents and
+                 Settings". Measured, first run after the move:
+
+                   target.txt loaded 0x0 from C:\Documents
+                     args=[and Settings\All Users\...\games\Skyroads\Skyroads.EXE]
+
+                 A zero-byte load, then the embedded four-byte `mov ah,4Ch / int 21h`
+                 stub runs INSTEAD of the game and the run completes cleanly -- the
+                 same silent-success shape as GH #131 below, and it reports `mode
+                 sets: none` rather than any kind of error.
+               ⇒ So honour QUOTES, and treat an unquoted line as a bare path with no
+                 arguments when what it names actually exists. A quoted first token is
+                 unambiguous and is what every Windows caller already writes. */
+            q = tpath;
+            if (*q == '"') {                            /* "path with spaces" [args] */
+                char *w = q; ++q;
+                while (*q && *q != '"') *w++ = *q++;
+                if (*q == '"') ++q;
+                *w = 0;
+                while (*q == ' ') ++q;
+                { char *e; for (e = q; *e; ++e) if (*e == '\r' || *e == '\n') { *e = 0; break; } }
+                if (*q) a = q;
+            } else {
+                for (q = tpath; *q; ++q)                 /* trim EOL first */
+                    if (*q == '\r' || *q == '\n') { *q = 0; break; }
+                /* Unquoted: only split on a space if the WHOLE line is not itself a
+                   file. That keeps `C:\test\x.com >out.txt` working and stops a path
+                   with spaces being torn in half. */
+                { HANDLE probe = CreateFileA(tpath, GENERIC_READ, FILE_SHARE_READ, NULL,
+                                             OPEN_EXISTING, 0, NULL);
+                  if (probe != INVALID_HANDLE_VALUE) CloseHandle(probe);
+                  else for (q = tpath; *q; ++q)
+                           if (*q == ' ') { *q = 0; a = q + 1; break; } }
             }
             if (tpath[0]) {
                 HANDLE hf = CreateFileA(tpath, GENERIC_READ, FILE_SHARE_READ, NULL,
@@ -18724,6 +19965,9 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
        thread. I/O on claimed ports reflects as event 0 -> the bus; INT 10h comes
        in as a BOP routed below; DOS console output is routed via m.conout. */
     InitializeCriticalSection(&g_lock);
+    InitializeCriticalSection(&g_pit_cs);       /* the crystal's own lock; see its decl */
+    g_pit.guard = host_pit_guard;               /* port handlers serialize with the pacer */
+    g_pit.guard_ctx = NULL;
     QueryPerformanceFrequency(&g_qpf);      /* seeds qpc_us for the lock instrument */
     host_key_typematic_init();              /* typematic from XP's setting, not a guess */
     vdd_bus_init(&g_bus, NULL);
@@ -18908,6 +20152,23 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
           ReadFile(hp4, c, sizeof c, &rd, NULL); CloseHandle(hp4);
           if (rd && (c[0] == '0' || c[0] == '1')) g_pitpace_inject = c[0] - '0';
       } }
+    /* llkbd.txt = 1 re-enables the system-wide keyboard hook. See input_capture_set. */
+    { HANDLE hk = CreateFileA(LLKBD_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                              NULL, OPEN_EXISTING, 0, NULL);
+      if (hk != INVALID_HANDLE_VALUE) {
+          char c[8]; DWORD rd = 0;
+          ReadFile(hk, c, sizeof c, &rd, NULL); CloseHandle(hk);
+          if (rd && (c[0] == '0' || c[0] == '1')) g_llkbd_on = c[0] - '0';
+      } }
+    /* courier.txt -- the tick courier (see tick_courier_thread). 0 = as shipped. */
+    { HANDLE hc = CreateFileA(COURIER_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                              NULL, OPEN_EXISTING, 0, NULL);
+      if (hc != INVALID_HANDLE_VALUE) {
+          char c[8]; DWORD rd = 0;
+          ReadFile(hc, c, sizeof c, &rd, NULL); CloseHandle(hc);
+          /* 0 = off, 1 = REFUTED (progressive collapse), 2 = gentle. See the thread. */
+          if (rd && c[0] >= '0' && c[0] <= '2') g_courier_on = c[0] - '0';
+      } }
     { HANDLE hp5 = CreateFileA(UITICK_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
                                NULL, OPEN_EXISTING, 0, NULL);
       if (hp5 != INVALID_HANDLE_VALUE) {
@@ -18946,7 +20207,9 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
       if (hp6 != INVALID_HANDLE_VALUE) {
           char c[8]; DWORD rd = 0;
           ReadFile(hp6, c, sizeof c, &rd, NULL); CloseHandle(hp6);
-          if (rd && (c[0] == '0' || c[0] == '1')) g_keyirq_retry = c[0] - '0';
+          /* 0 = never yield, 1 = always (old default), 2 = only while the clock is on
+             schedule. See the yield branch in host_irq_sink. */
+          if (rd && c[0] >= '0' && c[0] <= '3') g_keyirq_retry = c[0] - '0';
       } }
     /* Mouse feel is per-guest and per-hand, and every test of it costs a play session,
        so it is a knob from the start: percent, 100 = the device's own counts. */
@@ -18977,10 +20240,55 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     { HANDLE hp9 = CreateFileA(CPUSPD_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
                                NULL, OPEN_EXISTING, 0, NULL);
       if (hp9 != INVALID_HANDLE_VALUE) {
-          char c[8]; DWORD rd = 0;
+          /* ── ⚠⚠ THIS READ ONE CHARACTER, SO HALF THE LADDER WAS UNREACHABLE. ────
+               `c[0] - '0'` cannot express an index above 9, and the ladder went to
+               17 in session 54 when it grew from 7 entries to 18. So every speed
+               from 75 MHz down -- 75, 66, 50, 33, 25, 16, 12, 8, which is ALL of
+               the period-hardware settings and every one a person would actually
+               reach for -- silently selected the FIRST DIGIT instead: `13` (33 MHz)
+               ran as index 1, i.e. 3300 MHz, and reported itself as doing so.
+             ⚠ THE RANGE CHECK HID IT rather than catching it. `c[0] < '0' +
+               CPUSPEED_COUNT` with COUNT=18 accepts characters up to 'A', so a
+               two-digit value passed the guard on its first digit and was accepted
+               as a valid index -- a bounds test that admits exactly the input it
+               should have rejected.
+             ★ MEASURED 2026-09-09: `echo 13 > cpuspd.txt` came back
+               `STAGE2: cpuspeed idx=00000001 mhz=00000ce4` -- 3300 MHz. The rig
+               sweep this knob exists to drive therefore never tested the slow half
+               of the ladder even once, and cpuswp.bat only ever swept 0-6.
+             ► The CPUREF reader four lines above already does it correctly. Same
+               loop here; there is no reason for two adjacent knobs to disagree.
+             ⚠ This is the FILE knob only. The menu and the Settings dialog set the
+               index directly and were never affected, so it is a testability defect
+               and not the cause of any speed a user has seen. */
+          char c[8]; DWORD rd = 0; unsigned v9 = 0; int j9;
           ReadFile(hp9, c, sizeof c, &rd, NULL); CloseHandle(hp9);
-          if (rd && c[0] >= '0' && c[0] < ('0' + CPUSPEED_COUNT))
-              g_cpuspd_idx = c[0] - '0';
+          for (j9 = 0; j9 < (int)rd; ++j9) { if (c[j9] < '0' || c[j9] > '9') break;
+                                             v9 = v9 * 10u + (unsigned)(c[j9] - '0'); }
+          if (j9 > 0 && v9 < (unsigned)CPUSPEED_COUNT) g_cpuspd_idx = (int)v9;
+      } }
+    /* ── THE GRANULARITY SLIDER AS A FILE KNOB. cpugran.txt = target period in ms,
+         0 or absent = AUTO (measure the suspend round trip and pick the finest
+         period this box can sustain). See the long note in cpuspeed.h -- this is
+         the lever that decides whether a slow setting is playable or a slideshow,
+         and it is a file knob first so the sweep can find the right default without
+         a rebuild per value. */
+    { HANDLE hpg = CreateFileA(CPUGRAN_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                               NULL, OPEN_EXISTING, 0, NULL);
+      if (hpg != INVALID_HANDLE_VALUE) {
+          char c[12]; DWORD rd = 0; unsigned vg = 0; int jg;
+          ReadFile(hpg, c, sizeof c, &rd, NULL); CloseHandle(hpg);
+          for (jg = 0; jg < (int)rd; ++jg) { if (c[jg] < '0' || c[jg] > '9') break;
+                                             vg = vg * 10u + (unsigned)(c[jg] - '0'); }
+          if (jg > 0 && vg <= CPUSPEED_GRAN_MAX_MS) g_cpuspd_gran_ms = vg;
+      } }
+    /* cpuaff.txt = 1 -> give the guest a core of its own. See cpuaff_apply. */
+    { HANDLE hpa = CreateFileA(CPUAFF_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                               NULL, OPEN_EXISTING, 0, NULL);
+      if (hpa != INVALID_HANDLE_VALUE) {
+          char c[8]; DWORD rd = 0;
+          ReadFile(hpa, c, sizeof c, &rd, NULL); CloseHandle(hpa);
+          if (rd && (c[0] == '0' || c[0] == '1')) g_cpuaff_on = (c[0] == '1');
       } }
     if (g_pitpace_on) {
         HMODULE mm = LoadLibraryA("winmm.dll");
@@ -18988,6 +20296,19 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                       (PFN_timeBeginPeriod)GetProcAddress(mm, "timeBeginPeriod");
                   if (tbp) tbp(1); }
         g_pitpace_thread = CreateThread(NULL, 0, pit_pacer_thread, NULL, 0, NULL);
+    }
+    /* The capture watchdog runs for every guest, throttled or not, headless or not:
+       it is the only thing standing between a wedge and a hard reset. */
+    { HANDLE hcw = CreateThread(NULL, 0, capture_watchdog_thread, NULL, 0, NULL);
+      if (hcw) CloseHandle(hcw); }
+    /* ── ★ THE TICK COURIER. Auto-reset: one signal wakes exactly one pass, and a
+         signal arriving while it is already awake is not lost -- the pass re-checks
+         g_irq0_pending anyway. Created even when the courier is knobbed off, so the
+         raise site's SetEvent never has to test two things. */
+    if (g_qi_susp) {
+        g_courier_event = CreateEventA(NULL, FALSE, FALSE, NULL);
+        if (g_courier_event)
+            g_courier_thread = CreateThread(NULL, 0, tick_courier_thread, NULL, 0, NULL);
     }
     /* ── ★ THE CPU-SPEED THROTTLE. (GH #56) ──────────────────────────────────────
          Started unconditionally, even at Unlimited: the setting is live, and a
@@ -19280,6 +20601,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                 vdd_pic_acknowledge(&g_pic, 0);
                 vdd_pic_eoi(&g_pic, 0);         /* see async_inject_irq: timer is auto-EOI */
                 g_irq0_inj++;
+                g_irq0_note_cs = cs; g_irq0_note_ip = ip;   /* where IF re-opened */
+                irq0_delivered_note();          /* the guest's clock, as a timeline */
                 inject_int(tib, 0x08);
             } else {
                 static int s_bud_skip = 6;
@@ -19371,8 +20694,31 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             g_p12_bails++;
         }
         InterlockedExchange(&g_in_exec, 1);
-        ev = v86_run(tib, &st);
+        exec_enter_mark();               /* guest-execution clock starts (throttle) */
+        {   LARGE_INTEGER vt0, vt1; DWORD vdt;
+            DWORD ecs = VDM_REG(tib, VTIB_CS) & 0xFFFF, eip = VDM_REG(tib, VTIB_EIP) & 0xFFFF;
+            QueryPerformanceCounter(&vt0);
+            ev = v86_run(tib, &st);
+            QueryPerformanceCounter(&vt1);
+            /* ── ★ HOW LONG DID ONE V86 RUN LAST WITHOUT GIVING US A TURN? (Skyroads
+                 wobble, s61.) The big timer gaps are low-I/O, so the guest is not
+                 hammering ports -- it is inside ONE long v86_run stretch (a spin, a
+                 cli section, or slow interpreted VGA). This is the PM stretch
+                 instrument for the V86 path: bucket the durations and keep the worst,
+                 with the ENTRY cs:ip (where the stretch began) and the exit event. A
+                 stretch >8 ms at native speed is 30M+ instructions -- so it is a WAIT
+                 or a slow op, and its entry names the routine. */
+            {   unsigned b = 0;
+                vdt = qpc_us(vt1.QuadPart - vt0.QuadPart) / 1000u;   /* ms */
+                while (b < 7 && vdt >= (1u << b)) ++b;
+                g_v86str_hist[b]++;
+                if (vdt >= 8u) ++g_v86str_n8;
+                if (vdt > g_v86str_max_ms) {
+                    g_v86str_max_ms = vdt; g_v86str_max_cs = ecs;
+                    g_v86str_max_ip = eip; g_v86str_max_ev = ev;
+                } } }
         g_ev_hist[ev < EV_HIST_MAX ? ev : EV_HIST_MAX - 1]++;
+        exec_leave_mark();               /* ...and stops. Our servicing is not its  */
         InterlockedExchange(&g_in_exec, 0);
         /* SPIKE: once in protected mode, stop at the FIRST PM event and dump the raw
            taxonomy (event/info/selectors) -- this is how the spike learns how the
@@ -20802,6 +22148,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                     if (!dpmi_sel_is32((WORD)(VDM_REG(tib, VTIB_SS) & 0xFFFF)))
                         VDM_REG(tib, VTIB_ESP) &= 0xFFFFu;
                     InterlockedExchange(&g_in_exec, 1);
+                    exec_enter_mark();   /* guest-execution clock starts (throttle) */
                     if (g_dpmi_use_kernel) {
                         /* Hand the PM CONTEXT to the kernel monitor exactly as the V86
                            path does. Same TIB, same call; the only difference is that
@@ -20906,6 +22253,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                             }
                         }
                     }
+                    exec_leave_mark();   /* ...and stops. Our servicing is not its   */
                     InterlockedExchange(&g_in_exec, 0);
                     if (steps < g_dpmi_cp_max) {
                         p = zput(p, "DPMI-CP["); p = zhex(p, (unsigned)steps);
@@ -21819,18 +23167,39 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
       p = zput(p, " mhz="); p = zhex(p, g_cpuspd_idx < CPUSPEED_COUNT
                                         ? CPUSPEED_MHZ[g_cpuspd_idx] : 0u);
       p = zput(p, " ref_mhz="); p = zhex(p, g_cpuspd_ref_mhz);
-      /* ⚠ DELIVERED, NOT REQUESTED, AND BOTH. The hold is capped, so the slowest
-           settings cannot be reached on a fast host -- and a throttle that quietly
-           delivers 14 MHz where the menu says 8 is the "runs but lies" class. */
-      p = zput(p, " delivered_mhz=");
-      p = zhex(p, cpuspeed_delivered_mhz((unsigned)g_cpuspd_idx, g_cpuspd_ref_mhz,
-                                         g_cpuspd_ran_us));
-      p = zput(p, " ran_us="); p = zhex(p, g_cpuspd_ran_us);
-      p = zput(p, " owed_ms="); p = zhex(p, g_cpuspd_owed_ms);
+      /* ── ★ REQUESTED vs DELIVERED, BOTH MEASURED, AND NOW THEY AGREE BY DESIGN.
+           The throttle's contract is that guest execution is `duty` of wall time.
+           `delivered_bp` is that ratio as it actually came out -- lifetime guest
+           EXECUTION over lifetime WALL -- and it equals `duty_bp` whenever the
+           setting is reachable (below the port-trap ceiling and inside the hold cap),
+           disagreeing in the open when it is not. The control law that ties them
+           together is cpuspeed_step, proven by a DETERMINISTIC test off-hardware
+           (tools/dostest/cpuspeed_test.c) rather than argued from a rig number read
+           through the guest's own throttled clock.
+         ★ run_ms IS TRUE GUEST EXECUTION now: dexec is sampled resume-to-suspend, so
+           holds (before the resume) and host-servicing (outside v86_run) are already
+           out of it. That is why the old execnet/held-subtraction dance is gone --
+           the number is clean at the source instead of patched at the report. */
       p = zput(p, " duty_bp="); p = zhex(p, (DWORD)g_cpuspd_duty);
-      p = zput(p, " run_ms="); p = zhex(p, g_cpuspd_run_ms);
+      { DWORD wall_ms = GetTickCount() - g_start_ms;
+        /* Units cancel in the ratio, so ms goes straight in. */
+        p = zput(p, " delivered_bp=");
+        p = zhex(p, cpuspeed_delivered_bp(g_cpuspd_run_ms, wall_ms));
+        p = zput(p, " exec_ms="); p = zhex(p, g_cpuspd_run_ms);
+        p = zput(p, " wall_ms="); p = zhex(p, wall_ms); }
       p = zput(p, " held_ms="); p = zhex(p, g_cpuspd_held_ms);
+      p = zput(p, " ran_us="); p = zhex(p, g_cpuspd_ran_us);
+      p = zput(p, " win_wall_us="); p = zhex(p, g_cpuspd_wall_us);
       p = zput(p, " missed="); p = zhex(p, g_cpuspd_missed);
+      /* ── GRANULARITY = BURST SIZE = playable vs slideshow. `periods` over the run's
+           seconds is how many bursts a second the guest advanced in; seven was the
+           "still unplayable" number. gran=0 means auto chose period_ms from rt_us. */
+      p = zput(p, " gran_ms="); p = zhex(p, g_cpuspd_gran_ms);
+      p = zput(p, " period_ms="); p = zhex(p, g_cpuspd_period_ms);
+      p = zput(p, " rt_us="); p = zhex(p, g_cpuspd_rt_us);
+      p = zput(p, " periods="); p = zhex(p, g_cpuspd_periods);
+      p = zput(p, " aff="); p = zhex(p, (DWORD)g_cpuaff_on);
+      p = zput(p, " ncpu="); p = zhex(p, g_cpuaff_ncpu);
       /* THE KEYSTROKE ITSELF, both halves. ms buckets [0,1,2,4,8,16,32,64+]. */
       p = zput(p, "\r\nSTAGE2: KEYLAT msgq_ms[0,1,2,4,8,16,32,64+]=");
       { unsigned kb; for (kb = 0; kb < 8; ++kb) { p = zput(p, kb ? "," : "");
@@ -21907,6 +23276,92 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     p = zput(p, "STAGE2: io_events=0x");  p = zhex(p, g_ev_io);
     p = zput(p, " io_burst=0x");          p = zhex(p, g_io_extra);
     p = zput(p, " irq0_inj=0x");          p = zhex(p, g_irq0_inj);
+    /* ── THE GUEST'S CLOCK AS A SHAPE, NOT A TOTAL. See irq0_delivered_note.
+         IRQ0TL is deliveries in each whole second: read it as a sequence and a
+         slow-down/speed-up is the sequence moving. IRQ0GAP is the inter-delivery
+         interval histogram, which says whether that is stalls or jitter. Both are
+         DECIMAL-in-hex like every other counter here. */
+    {   unsigned t; DWORD last = 0;
+        for (t = 0; t < IRQ0TL_SECS; ++t) if (g_irq0_tl[t]) last = t;
+        p = zput(p, "\r\nSTAGE2: IRQ0TL persec=");
+        for (t = 0; t <= last && t < IRQ0TL_SECS; ++t) {
+            p = zput(p, t ? "," : ""); p = zhex(p, g_irq0_tl[t]);
+            if (p - base > 3600) { log_append(LOG_PATH, base, p); p = base; }
+        }
+        p = zput(p, "\r\nSTAGE2: IRQ0GAP ms[<1,1,2,4,8,16,32,64+]=");
+        for (t = 0; t < 8; ++t) { p = zput(p, t ? "," : "");
+                                  p = zhex(p, g_irq0_gap_hist[t]); }
+        p = zput(p, " n="); p = zhex(p, g_irq0_gap_n);
+        p = zput(p, " max_ms="); p = zhex(p, g_irq0_gap_max_ms);
+        /* ── ★ IS THE MUSIC ISR THE CULPRIT? io-per-MILLISECOND, anomalous vs normal.
+             A RATE, because a longer gap collects more I/O whatever the guest is
+             doing -- comparing io-per-GAP across populations of different length is
+             the confound that produced a refutation this run reverses. If anom_io_pms
+             is many times norm_io_pms the long gaps really are the guest hammering
+             ports (a trapped-I/O overrun) and the fix is the port cost; if they are
+             similar the search moves on. worst = the single biggest gap, its I/O, and
+             the CS:IP where the guest re-opened interrupts (cs=0xffff means async). */
+        p = zput(p, " anom_n="); p = zhex(p, g_irq0_anom_n);
+        p = zput(p, " anom_ms="); p = zhex(p, g_irq0_anom_us / 1000u);
+        p = zput(p, " anom_io_pms=");
+        p = zhex(p, g_irq0_anom_us ? g_irq0_anom_io / (g_irq0_anom_us / 1000u ? g_irq0_anom_us / 1000u : 1u) : 0u);
+        p = zput(p, " norm_n="); p = zhex(p, g_irq0_norm_n);
+        p = zput(p, " norm_ms="); p = zhex(p, g_irq0_norm_us / 1000u);
+        p = zput(p, " norm_io_pms=");
+        p = zhex(p, g_irq0_norm_us ? g_irq0_norm_io / (g_irq0_norm_us / 1000u ? g_irq0_norm_us / 1000u : 1u) : 0u);
+        p = zput(p, " worst_ms="); p = zhex(p, g_irq0_worstgap_ms);
+        p = zput(p, " worst_io="); p = zhex(p, g_irq0_worstgap_io);
+        p = zput(p, " worst_per_us="); p = zhex(p, g_irq0_wst_per_us);
+        p = zput(p, " worst_cs="); p = zhex(p, g_irq0_worst_cs);
+        p = zput(p, " worst_ip="); p = zhex(p, g_irq0_worst_ip);
+        /* ── ★★ THE A/B/C DISCRIMINATOR. See irq0_delivered_note for how to read it.
+             Deltas summed over ANOMALOUS gaps only (>= 2 of the period the guest
+             itself programmed), so they are meaningful divided by anom_n above.
+               raise  IRQ0s the 8254 generated inside the gap
+               att    async attempts actually made        (raise-att = attempts stolen)
+               nie    attempts that bailed not_in_exec    (high => A, delivery)
+               yld    attempts handed to a pending KEY    (high => C, the yield)
+             ★ gen/del is the answer with no threshold in it: `del` counts anomalous
+             gaps that contained >= 2 raises (the ticks existed and we lost them --
+             A), `gen` counts those that did not (the clock itself stalled -- B).
+             Whichever dominates names the fix. wst_* are the same four for the single
+             worst gap, beside the period that was in force for it. */
+        p = zput(p, "\r\nSTAGE2: IRQ0WHY gen="); p = zhex(p, g_irq0_anom_gen);
+        p = zput(p, " del="); p = zhex(p, g_irq0_anom_del);
+        p = zput(p, " anom[raise,att,nie,yld]=");
+        p = zhex(p, g_irq0_anom_raise); p = zput(p, ",");
+        p = zhex(p, g_irq0_anom_att);   p = zput(p, ",");
+        p = zhex(p, g_irq0_anom_nie);   p = zput(p, ",");
+        p = zhex(p, g_irq0_anom_yld);
+        p = zput(p, " wst[raise,att,nie,yld]=");
+        p = zhex(p, g_irq0_wst_raise); p = zput(p, ",");
+        p = zhex(p, g_irq0_wst_att);   p = zput(p, ",");
+        p = zhex(p, g_irq0_wst_nie);   p = zput(p, ",");
+        p = zhex(p, g_irq0_wst_yield);
+        /* ── ★ WHAT THE TICK COURIER DID. `inj` is the whole point: ticks placed that
+             the raise site had already given away to a key. Read it against IRQ0WHY's
+             yld -- if inj is a large fraction of yld the courier is collecting exactly
+             what the yield spends. `tries` counts suspend round trips (the cost),
+             `giveup` the passes that spent their whole budget without placing, which
+             is the guest legitimately holding interrupts off. courier=0 means the
+             knob turned it off, and every other field here must then read zero. */
+        p = zput(p, "\r\nSTAGE2: COURIER on="); p = zhex(p, (DWORD)g_courier_on);
+        p = zput(p, " wakes="); p = zhex(p, g_courier_wakes);
+        p = zput(p, " inj=");   p = zhex(p, g_courier_inj);
+        p = zput(p, " tries="); p = zhex(p, g_courier_tries);
+        p = zput(p, " giveup="); p = zhex(p, g_courier_giveup);
+    }
+    /* ── ★ V86 STRETCHES: the duration of single v86_run calls, ms buckets. A big
+         timer gap IS a big stretch here; str_max names where it started (cs:ip) and
+         how it ended (ev). ev 2=I/O, others per the event taxonomy. */
+    p = zput(p, "\r\nSTAGE2: V86STR ms[<1,1,2,4,8,16,32,64+]=");
+    { unsigned t; for (t = 0; t < 8; ++t) { p = zput(p, t ? "," : "");
+                                            p = zhex(p, g_v86str_hist[t]); } }
+    p = zput(p, " n8="); p = zhex(p, g_v86str_n8);
+    p = zput(p, " max_ms="); p = zhex(p, g_v86str_max_ms);
+    p = zput(p, " max_cs="); p = zhex(p, g_v86str_max_cs);
+    p = zput(p, " max_ip="); p = zhex(p, g_v86str_max_ip);
+    p = zput(p, " max_ev="); p = zhex(p, g_v86str_max_ev);
     p = zput(p, " irq0_skip=0x");         p = zhex(p, g_irq0_skip);
     p = zput(p, " intpend=0x");           p = zhex(p, g_ev_intpend);
     p = zput(p, " iostr=0x");             p = zhex(p, g_ev_iostr);
@@ -22100,7 +23555,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             "no_app_timer","vIF_off","IF_off","arm_quiet","IN_FLIGHT","host_stack",
             "not32","setctx_fail","HOST_CS","?f","?10","?11","?12","?13",
             "not_in_exec","pic_refuse","unhooked","suspend_fail","getctx_fail",
-            "v86_IF_off","in_our_hdlr","observed","?1c","?1d","?1e","?1f" };
+            "v86_IF_off","in_our_hdlr","observed","ctx_busy","left_exec","?1e","?1f" };
           log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
           /* NO SILENT CAPS: say how many ASYNC-EARLY lines were written and how many
              were suppressed, so the log's thinness is never read as "it stopped

@@ -50,7 +50,14 @@
      sizes the value block, so a row added to one and not the other fails to build. */
 typedef enum {
     SET_DOSMAJ = 0, SET_DOSMIN, SET_PITPACE, SET_UITICK,
-    SET_CPUTYPE, SET_CPUCORE, SET_FPU, SET_SPEEDMODE, SET_CYCLES, SET_TURBO,
+    /* ── ★ THE PROCESSOR PAGE IS ONE CONTROL NOW (session 60). CpuType/CpuCore/
+         Cycles were read by nothing (DOSBox vocabulary on a real-CPU host); Fpu and
+         Turbo were live but pointless as knobs; the granularity slider and the
+         core-affinity box were removed to file knobs. SpeedMode -- the optional
+         speed LIMIT -- is all that survives. Removing an enum member is safe because
+         settings persist BY NAME (SET_DEFS[i].reg), so an orphaned registry value is
+         simply never read again. */
+    SET_SPEEDMODE,
     SET_CONVKB, SET_XMS, SET_EMS, SET_UMB, SET_A20,
     SET_WINSIZE, SET_RENDERER, SET_SCALER, SET_FILTER, SET_ASPECT,
     SET_FRAMESKIP, SET_VSYNC, SET_BLINKCURSOR,
@@ -110,24 +117,18 @@ static const set_def SET_DEFS[SET_COUNT] = {
 { "PitPace",           IDC_S_PITPACE,     SK_CHECK,      1,  0,   1, NULL },
 { "UiTickMs",          IDC_S_UITICK,      SK_UINT,      15,  1, 200, NULL },
 
-{ "CpuType",           IDC_S_CPUTYPE,     SK_COMBO,      2,  0,   4, "8086|286|386|486|Pentium" },
-{ "CpuCore",           IDC_S_CPUCORE,     SK_COMBO,      0,  0,   3, "Auto|Normal|Dynamic|Simple" },
-{ "Fpu",               IDC_S_FPU,         SK_CHECK,      1,  0,   1, NULL },
-/* ── ⚠ THIS ROW CHANGED MEANING, AND THE MIGRATION IS THE REASON IT IS SHAPED
-     LIKE THIS. It used to read "Auto|Maximum|Fixed cycles" -- DOSBox's vocabulary,
-     for a host that has no cycles to count because it runs on the real CPU -- and
-     it did nothing at all. It is now the approximate-speed dropdown (GH #56), the
-     only lever this emulator has over software that paces itself with a delay loop
-     or with nothing at all.
-   ★ THE DEFAULT SURVIVES: index 0 was "Auto" and is now "Unlimited", both meaning
-     do not throttle, so an untouched machine is unaffected.
-   ⚠ A CHOSEN value does NOT survive -- the ladder was extended upward in session 54
-     and every index above 0 moved. See the note on the table in src/host/cpuspeed.h,
-     which also says what the permanent fix is (store MHz, not an index). */
+/* ── ★ THE ONE PROCESSOR CONTROL: AN OPTIONAL SPEED LIMIT. ──────────────────────
+     Off (Unlimited) by default. It slows software that runs too fast on a modern
+     PC -- a delay-loop or unpaced demo -- and it CANNOT do more than that: it runs
+     16-bit code on the real CPU, so there is nothing to clock down and the only
+     lever is a duty cycle. It is an approximation, deliberately labelled as one; see
+     src/host/cpuspeed.h for what "66 MHz" can and cannot mean here.
+   ★ THE DEFAULT SURVIVES EVERY RESHUFFLE: index 0 is Unlimited, so an untouched
+     machine never throttles. ⚠ A CHOSEN value does not survive the session-60 trim
+     of the ladder (18 entries -> 6); an out-of-range stored index clamps back to
+     Unlimited, which is visible rather than silently wrong. */
 { "SpeedMode",         IDC_S_SPEEDMODE,   SK_COMBO,      0,  0,
                                           CPUSPEED_COUNT - 1, CPUSPEED_ITEMS },
-{ "Cycles",            IDC_S_CYCLES,      SK_UINT,    3000, 100, 1000000, NULL },
-{ "Turbo",             IDC_S_TURBO,       SK_CHECK,      0,  0,   1, NULL },
 { "ConventionalKB",    IDC_S_CONVKB,      SK_UINT,     640, 64,  640, NULL },
 { "Xms",               IDC_S_XMS,         SK_CHECK,      1,  0,   1, NULL },
 { "Ems",               IDC_S_EMS,         SK_CHECK,      1,  0,   1, NULL },

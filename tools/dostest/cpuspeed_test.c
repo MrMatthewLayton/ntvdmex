@@ -21,12 +21,50 @@ static unsigned idx_of(unsigned mhz)
 {
     unsigned i;
     for (i = 0; i < CPUSPEED_COUNT; ++i) if (CPUSPEED_MHZ[i] == mhz) return i;
-    return 0u;
+    return CPUSPEED_COUNT;   /* not found: an off-end index, never a silent 0 */
 }
 
 static int total = 0, fails = 0;
 #define CHECK(c,m) do{ total++; if(c){printf("  PASS  %s\n",(m));} \
     else{printf("  FAIL  %s\n",(m)); fails++;} }while(0)
+
+/* ── ★★★ THE DETERMINISTIC HEART OF THE THROTTLE. ─────────────────────────────────
+ *  cpuspeed_step (cpuspeed.h) IS the whole control law, and here it is driven against
+ *  a SIMULATED clock -- no threads, no Sleep, no hardware -- so the result is
+ *  bit-for-bit repeatable. That is the point the user asked for: the rig could only
+ *  measure apparent MHz through the guest's own BIOS tick, which the throttle
+ *  starves, so the instrument was circular. This is not. It asserts the ONE contract
+ *  the throttle exists to keep -- over a window, delivered exec/wall equals the
+ *  requested duty, or the workload's own overhead ceiling if that is slower.
+ *
+ *  A "slice" is one turn of the loop: the guest executes dE us over dWall us of wall
+ *  time (dWall >= dE models host/trap overhead), then it is held. The wall[] pattern
+ *  cycles, so a descheduled OUTLIER slice is exercised -- that outlier is exactly
+ *  what made the old open-loop debt carry come out non-monotonic on the rig. */
+static unsigned sim_delivered_bp(unsigned duty_bp, unsigned long long cap_us,
+                                 const unsigned *wall, int nwall,
+                                 unsigned e_num, unsigned e_den,
+                                 unsigned long long total_us)
+{
+    unsigned long long E = 0, T = 0;       /* monotonic simulated totals */
+    unsigned long long e0 = 0, t0 = 0;     /* the window baseline cpuspeed_step tracks */
+    int w = 0;
+    while (T < total_us) {
+        unsigned long long dWall = wall[w % nwall];
+        unsigned long long dE = dWall * e_num / e_den;
+        int reset;
+        unsigned long long hold;
+        ++w;
+        E += dE; T += dWall;               /* the run slice */
+        hold = cpuspeed_step(E - e0, T - t0, duty_bp, cap_us, &reset);
+        T += hold;                         /* the guest is held */
+        if (reset) { e0 = E; t0 = T; }     /* rebaseline at the real post-hold clock */
+    }
+    return cpuspeed_delivered_bp(E, T);     /* the same ratio the host reports */
+}
+/* Within `tol` basis points of `want`. */
+static int near_bp(unsigned got, unsigned want, unsigned tol)
+{ return (got >= want ? got - want : want - got) <= tol; }
 
 int main(void)
 {
@@ -74,14 +112,15 @@ int main(void)
         CHECK(bp >= 460 && bp <= 480, "33 MHz against a 700 MHz reference is ~4.7% duty"); }
 
     /* ⚠ MONOTONIC ONLY BELOW THE REFERENCE, and the exception is the point. Every
-         speed at or above the host's own clamps to flat out, so on a 700 MHz box
-         1000/2000/3300 MHz are all TIED at 10000 -- which is correct (they are
-         ceilings, not boosts) and would have failed a naive "strictly decreasing"
-         check the moment the list grew past the reference. */
+         speed at or above the host's own clamps to flat out, so on a 50 MHz box the
+         100 and 66 MHz entries are TIED at 10000 -- correct (they are ceilings, not
+         boosts) and would fail a naive "strictly decreasing" check the moment the
+         list runs past the reference. (The reference here is 50 rather than 700
+         because the session-60 ladder tops out at 100 MHz.) */
     {   int mono = 1, ties = 0;
         for (i = 2; i < CPUSPEED_COUNT; ++i) {
-            unsigned a = cpuspeed_duty_bp(i - 1, 700), b = cpuspeed_duty_bp(i, 700);
-            if (CPUSPEED_MHZ[i - 1] >= 700u) { if (a != 10000u) mono = 0; ties++; continue; }
+            unsigned a = cpuspeed_duty_bp(i - 1, 50), b = cpuspeed_duty_bp(i, 50);
+            if (CPUSPEED_MHZ[i - 1] >= 50u) { if (a != 10000u) mono = 0; ties++; continue; }
             if (b >= a) mono = 0;
         }
         CHECK(mono, "below the reference a slower setting is always a smaller duty");
@@ -94,95 +133,78 @@ int main(void)
 
     /* A target at or above the reference is a ceiling, not a boost: we cannot make
        the host faster and must not pretend by handing back more than 100%. */
-    CHECK(cpuspeed_duty_bp(idx_of(3300), 100) == 10000,
+    CHECK(cpuspeed_duty_bp(idx_of(100), 66) == 10000,
           "a speed above the reference clamps to flat out -- a ceiling, never a boost");
 
-    printf("== CPU speed: the hold, priced off a MEASURED run phase ==\n");
+    printf("== CPU speed: the throttle delivers the requested duty (deterministic) ==\n");
 
-    /* ⚠⚠ THE REGRESSION THIS SECTION EXISTS FOR, AND IT TOOK THREE CUTS ON REAL
-         HARDWARE. Pricing the hold off the 1 ms we ASK for came out 3.5x too fast
-         at EVERY setting -- 56 MHz where 16 was requested, 740 where 200 was. The
-         run phase is not 1 ms: it is 1 ms plus Sleep's inaccuracy plus whatever it
-         costs the kernel to stop a thread inside VdmStartExecution. So the hold is
-         computed from the run phase actually MEASURED, and these checks are in the
-         units that measurement produces -- microseconds, not assumptions. */
-    CHECK(cpuspeed_hold_us(10000, 3500) == 0, "Unlimited asks for no hold at all");
-    CHECK(cpuspeed_hold_us(500, 0) == 0, "a run of zero cannot be priced, and says so");
+    /* The cap on one hold, in microseconds (CPUSPEED_MAX_OFF_MS = 1000 ms). Below
+       this, a setting is reachable and the invariant delivers it exactly; above it,
+       the setting saturates and delivers honestly-faster-than-asked. */
+    {   const unsigned long long CAP = (unsigned long long)CPUSPEED_MAX_OFF_MS * 1000ull;
+        const unsigned steady[]  = { 2000 };                       /* a plain 2 ms slice   */
+        const unsigned jitter[]  = { 2000,2000,2000,19000,2000 };  /* a descheduled outlier*/
+        const unsigned fine[]    = { 100 };                        /* the smooth end       */
+        const unsigned long long RUN = 20000000ull;                /* 20 s of simulated run*/
 
-    /* 5% duty: for every 1 unit of running, 19 of held. A 3.5 ms measured run
-       therefore owes 66.5 ms. */
-    CHECK(cpuspeed_hold_us(500, 3500) == 66500ul, "a 5% duty owes 19x the measured run");
-    CHECK(cpuspeed_hold_us(5000, 3500) == 3500ul, "a 50% duty owes as long as it ran");
+        /* ── 1. PURE COMPUTE, STEADY SLICES: DELIVERED == REQUESTED, EXACTLY. ──────
+             This is the claim the rig kept failing to prove. With no trap overhead
+             each window pays to exactly E/duty, so the ratio is the duty to the bp.
+             Every duty on the trimmed ladder, against the shipped reference. */
+        {   int ok = 1; unsigned bad = 0;
+            for (i = 1; i < CPUSPEED_COUNT; ++i) {
+                unsigned d   = cpuspeed_duty_bp(i, CPUSPEED_REF_MHZ_DEFAULT);
+                unsigned got = sim_delivered_bp(d, CAP, steady, 1, 1, 1, RUN);
+                /* Reachable at 2 ms slices iff one slice's hold fits the cap. */
+                if ((unsigned long long)2000 * 10000ull / d - 2000ull > CAP) continue;
+                if (!near_bp(got, d, 2)) { ok = 0; bad = i; }
+            }
+            CHECK(ok, "every reachable ladder speed is delivered to within 2 bp of its duty");
+            (void)bad; }
 
-    /* THE POINT: the same duty against a LONGER measured run must owe more. A
-       constant would not do this, and a constant is what was 3.5x wrong. */
-    CHECK(cpuspeed_hold_us(500, 7000) > cpuspeed_hold_us(500, 3500),
-          "a run phase that turned out longer owes proportionally more");
+        /* ── 2. THE OUTLIER, ABSORBED. A 19 ms descheduled slice among 2 ms ones was
+             what made the debt carry non-monotonic. The closed loop prices each slice
+             against the running total, so the average is still the duty exactly. */
+        {   unsigned d = cpuspeed_duty_bp(idx_of(33), CPUSPEED_REF_MHZ_DEFAULT);
+            unsigned smooth = sim_delivered_bp(d, CAP, steady, 1, 1, 1, RUN);
+            unsigned rough  = sim_delivered_bp(d, CAP, jitter, 5, 1, 1, RUN);
+            CHECK(near_bp(rough, d, 3), "a descheduled 19 ms outlier does not move the delivered speed");
+            CHECK(near_bp(rough, smooth, 3), "...it is within 3 bp of the jitter-free run"); }
 
-    /* ── THE DEBT CARRY. One long run must not buy the guest free execution. */
-    /* ⚠ `total` IS THE HARNESS'S OWN COUNTER. Declaring one in these blocks
-         SHADOWED it, so CHECK counted into the local and the assertions compared
-         against a number the harness had been incrementing -- one case reported a
-         failure it did not have and its neighbour passed by luck. Name them
-         something else. */
-    {   unsigned long owed = 0ul; unsigned paid_ms = 0; int k;
-        /* 8 MHz-ish: every 2 ms run owes ~900 ms, which fits under the cap. */
-        for (k = 0; k < 5; ++k) { owed += cpuspeed_hold_us(22, 2000);
-                                  paid_ms += cpuspeed_pay_ms(&owed); }
-        CHECK(paid_ms >= 4400 && paid_ms <= 4600,
-              "five 2 ms runs at a 0.22% duty are paid for in full, ~907 ms each");
-        CHECK(owed < 1000ul, "...and almost nothing is left owing"); }
+        /* ── 3. THE PORT-TRAP CEILING, WHICH IS PHYSICS, NOT A BUG. A workload that
+             only executes 40% of its wall time (the rest trapped in the host) cannot
+             be sped past 40% however high the target; a lower target is still hit. */
+        {   unsigned near40 = sim_delivered_bp(5000, CAP, steady, 1, 2, 5, RUN);   /* want 50% */
+            unsigned at20   = sim_delivered_bp(2000, CAP, steady, 1, 2, 5, RUN);   /* want 20% */
+            CHECK(near_bp(near40, 4000, 20), "a 40%-overhead workload tops out near 40%, not the 50% asked");
+            CHECK(near_bp(at20, 2000, 5),    "...but a target below that ceiling is delivered exactly"); }
 
-    {   unsigned long owed = 0ul; unsigned paid_ms = 0, k;
-        /* An OUTLIER run: 19 ms at the same duty owes 8.6 s, past the arrears cap.
-           What CAN be carried must be paid off across later periods, not thrown
-           away -- throwing it away is what made the rig sweep non-monotonic. */
-        owed += cpuspeed_hold_us(22, 19000);
-        for (k = 0; k < 12; ++k) paid_ms += cpuspeed_pay_ms(&owed);
-        CHECK(paid_ms == 4000,
-              "an outlier run's debt is paid down over later holds, to the arrears cap");
-        CHECK(owed == 0ul, "...and the carried debt is fully discharged, not left to grow"); }
+        /* ── 4. SATURATION IS HONEST, AND GRANULARITY IS ITS CURE. A duty low enough
+             that one 2 ms slice needs a hold past the 1 s cap CANNOT be reached at
+             coarse slices -- it saturates and delivers FASTER than asked -- but the
+             SAME duty at fine (100 us) slices fits the cap and lands exactly. This is
+             the whole "smoothness" story, deterministically, and it is pinned to a
+             fixed low duty (10 bp) rather than a ladder label so it does not depend on
+             the reference: 2 ms / 0.001 = 2 s hold >> the 1 s cap. */
+        {   unsigned d      = 10u;                                    /* 0.10% */
+            unsigned coarse = sim_delivered_bp(d, CAP, steady, 1, 1, 1, RUN);
+            unsigned smooth = sim_delivered_bp(d, CAP, fine,   1, 1, 1, RUN);
+            CHECK(coarse > d && !near_bp(coarse, d, 3),
+                  "0.1% at coarse slices saturates -- delivered faster than asked, in the open");
+            CHECK(near_bp(smooth, d, 2), "...and at fine slices it fits the cap and is delivered exactly"); }
 
-    {   unsigned long owed = 10000000ul;   /* ten seconds of arrears */
-        cpuspeed_pay_ms(&owed);
-        CHECK(owed <= CPUSPEED_MAX_OWED_US,
-              "arrears are bounded, so an unreachable setting cannot freeze the guest forever"); }
+        /* ── 5. A HOLD IS BOUNDED, so an absurd setting cannot freeze the guest: even
+             at a 1 bp duty the single hold never exceeds the cap. */
+        {   int reset; unsigned long long h = cpuspeed_step(2000, 0, 1, CAP, &reset);
+            CHECK(h <= CAP, "one hold is capped, so an unreachable setting slows but never freezes");
+            CHECK(!reset, "...and a capped hold is carried, not forgiven"); }
 
-    {   unsigned long owed = 400ul;        /* less than a millisecond owed */
-        CHECK(cpuspeed_pay_ms(&owed) == 0, "a sub-millisecond debt sleeps 0 rather than rounding up");
-        CHECK(owed == 400ul, "...and stays owed, so it is not lost either"); }
-
-    /* Delivered speed across the table, against the rig's measured reference and a
-       realistic 3.5 ms run phase. ⚠ 8 MHz is EXCLUDED and the next check says why. */
-    {   int ok = 1;
-        /* Only the speeds the hold cap can actually reach; the next check is the
-           one that pins where that boundary is. */
-        for (i = 1; i < CPUSPEED_COUNT; ++i) {
-            unsigned want = CPUSPEED_MHZ[i];
-            unsigned got  = cpuspeed_delivered_mhz(i, 3661, 3500);
-            if (want < 16u) continue;
-            if (got + want / 10u < want || got > want + want / 10u) ok = 0;
-        }
-        CHECK(ok, "every speed from 16 MHz up is delivered within 10% at a 3.5 ms run phase"); }
-
-    /* ⚠ AND THE ONE THAT IS NOT. 8 MHz against 3661 with a 3.5 ms run phase wants a
-         1.6 second hold, which is not a speed setting, it is a machine that has
-         stopped answering. It clamps -- and the host LOGS delivered beside
-         requested, so the shortfall is visible rather than being a menu entry that
-         quietly means something else. */
-    {   unsigned got = cpuspeed_delivered_mhz(idx_of(8), 3661, 3500);
-        CHECK(got > CPUSPEED_MHZ[idx_of(8)],
-              "8 MHz cannot be delivered against a 3661 MHz reference -- it clamps");
-        CHECK(got < 20u, "...but it still lands near it, not somewhere unrelated"); }
-
-    CHECK(cpuspeed_delivered_mhz(0, 3661, 3500) == 0,
-          "Unlimited delivers 'unlimited', not a number");
-
-    /* ⚠ THE HOLD IS CAPPED, and the cap is what stops an absurd duty becoming a
-         freeze the user's only answer to is the power button. */
-    {   unsigned long owed = cpuspeed_hold_us(1, 3500);
-        CHECK(cpuspeed_pay_ms(&owed) == CPUSPEED_MAX_OFF_MS,
-              "an absurd duty pays the cap, not a multi-second freeze"); }
+        /* ── 6. UNLIMITED NEVER HOLDS, whatever the totals. */
+        {   int reset;
+            CHECK(cpuspeed_step(999999, 0, 10000, CAP, &reset) == 0 && reset,
+                  "Unlimited holds for nothing and keeps no window"); }
+        (void)jitter; (void)fine;
+    }
 
     printf("== CPU speed: the interpreter's instruction budget ==\n");
 

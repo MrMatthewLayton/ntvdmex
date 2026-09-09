@@ -125,6 +125,24 @@ void vdd_pic_acknowledge(pic_state *st, uint8_t irq)
     if (irq >= 8 && !st->m.auto_eoi) st->m.isr |= 0x04;   /* cascade in service   */
 }
 
+/* Acknowledge a line the HOST auto-EOIs -- IRQ0, and any line still vectored at one of
+   our own do-nothing stubs. Net effect is identical to acknowledge() followed by eoi():
+   the request bit is cleared and ISR ends exactly where it started.
+   ► WHY IT IS A FUNCTION RATHER THAN THE PAIR. The pair SETS the in-service bit and
+     then clears it, and that transient is a read-modify-write on a byte shared with
+     every other line. A caller that does not hold the device lock -- the tick courier
+     in the host, which by construction runs while the guest thread is frozen and no
+     lock is held -- could interleave with a concurrent acknowledge() for a DIFFERENT
+     line and lose ITS in-service bit. IRQ1's in-service bit is the keyboard
+     re-entrancy guard, so losing it is the "press a key and everything hangs" fault.
+     Doing the net operation directly touches only IRR, which no delivery decision
+     reads (can_deliver consults IMR and ISR), so it is safe from any thread. */
+void vdd_pic_ack_autoeoi(pic_state *st, uint8_t irq)
+{
+    if (irq >= 8) { vdd_pic_acknowledge(st, irq); vdd_pic_eoi(st, irq); return; }
+    st->m.irr &= (uint8_t)~(1u << irq);
+}
+
 void vdd_pic_eoi(pic_state *st, uint8_t irq)
 {
     if (irq >= 16) return;

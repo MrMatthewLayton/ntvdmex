@@ -69,6 +69,9 @@ void vdd_pic_raise(pic_state *st, uint8_t irq);
    (the real BIOS timer ISR ends with an EOI, and ours is a BOP with nowhere to put one),
    and lines vectored at our default do-nothing stubs, which by definition never EOI. */
 void vdd_pic_eoi(pic_state *st, uint8_t irq);
+/* acknowledge()+eoi() as ONE operation, for lines the host auto-EOIs. Touches only IRR,
+   so it is safe from a thread that does not hold the device lock. See the .c file. */
+void vdd_pic_ack_autoeoi(pic_state *st, uint8_t irq);
 
 static inline ntvdd vdd_pic_device(pic_state *st)
 {

@@ -17,13 +17,19 @@ SH=/private/tmp/xpshare
 TARGET="${1:?usage: bmqueue.sh <target> [args]}"
 shift || true
 ARGS="$*"
+# ⚠ 240s, and it is not generous. mtime over SMB LAGS: a `setup` that demonstrably
+# ran and wrote its log at 17:24:47 was still reported as "never updated" by a 90s
+# wait, and that false timeout nearly bought a wrong root cause (I read "the watcher
+# is not running rt.bat" off it, when rt.bat had run fine). If this fires, CHECK THE
+# FILE'S MTIME BY HAND before concluding anything.
 TIMEOUT="${TIMEOUT:-240}"
 
-# rt.bat's `doom` arm writes result_doom.log; every other target writes result_<name>.log
-case "$TARGET" in
-  doom) RESULT="$SH/result_doom.log" ;;
-  *)    RESULT="$SH/result_${TARGET}.log" ;;
-esac
+# s61: results moved OUT of the share root into out\, along with everything else the
+# host writes -- the root now holds only bm/ games/ cfg/ out/ and the watcher's own
+# control files. `doom` is the one exception during bootstrap: the OLD rt.bat is what
+# invokes <share>\doomrun.bat, and that script reports to the root so this script can
+# see it before the new layout is in place.
+RESULT="$SH/out/result_${TARGET}.log"
 
 mtime() { stat -f '%m' "$1" 2>/dev/null || echo 0; }
 BEFORE=$(mtime "$RESULT")

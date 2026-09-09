@@ -1,9 +1,22 @@
 @echo off
-set BM=C:\Documents and Settings\All Users\Documents\ntvdmex\bm
+rem ============================================================================
+rem  NTVDMEX test watcher -- polls the share for cmd.txt and runs rt.bat.
+rem
+rem  s61: THIS SCRIPT WAS ITSELF A SOURCE OF LITTER, and it put it back every time
+rem  it started, so deleting the mess by hand never held:
+rem       md C:\ntvdmex          <- recreated on every watcher start
+rem       md C:\test             <- same
+rem       copy rt.bat C:\WINDOWS <- same
+rem  All three are gone.  rt.bat is now called from bm\ where it lives, and the
+rem  only thing this installs outside the share is its own Startup entry, which is
+rem  what lets the box recover the watcher after a reboot without a human.
+rem ============================================================================
 set SH=C:\Documents and Settings\All Users\Documents\ntvdmex
-if not exist C:\ntvdmex md C:\ntvdmex
-if not exist C:\test md C:\test
-copy /y "%BM%\rt.bat" C:\WINDOWS\ >nul
+set BM=%SH%\bm
+
+if not exist "%SH%\cfg" md "%SH%\cfg"
+if not exist "%SH%\out" md "%SH%\out"
+
 rem -- self-install to Startup so a reboot auto-recovers the watcher --
 copy /y "%~f0" "%ALLUSERSPROFILE%\Start Menu\Programs\Startup\ntvdmex-watch.bat" >nul 2>&1
 rem -- self-upgrade the control daemon: stop any old one, pull a staged newer build, relaunch --
@@ -39,7 +52,7 @@ rem    happens when NTVDMEX exits (it is linked console-subsystem, so it shares 
 rem    console control events and teardown). Observed repeatedly today as "the
 rem    watcher died too", costing a reboot each time. cmd /c gives the test its own
 rem    process, so the loop survives whatever the test does to itself.
-cmd /c C:\WINDOWS\rt.bat %TN%
+cmd /c ""%BM%\rt.bat" %TN%"
 echo [%TIME%] done %TN%
 goto loop
 :emptycmd
