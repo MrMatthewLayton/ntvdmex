@@ -243,6 +243,29 @@ and matches the 6.22 oracle row for row (session 53)** — but `MEM /C` still re
 
    ## ★★★★★ SESSION 59 — **ZAR RENDERS.** ITS ATTRACT DEMO IS ON SCREEN, IN COLOUR.
 
+   > **▶ NEXT SESSION, IN ORDER. (15 commits, `10a62cf`..`543858c`, NOT PUSHED.**
+   > **Rig clean: no knobs set, watcher alive, staged binary = the build.)**
+   >
+   > 1. **IS ZAR PLAYABLE?** The user saw it render ("I saw it run. Good progress")
+   >    but has not yet driven it. **`scripts/bm/zarplay.bat` is staged and ready** —
+   >    it asserts the IFEO key, clears the GH #132 counter, silences the trace for
+   >    speed and leaves the game up. Questions: does the demo run smoothly; does
+   >    ESC/SPACE/ENTER reach a MENU (`MAIN MENU`/`SELECT PLAYER` exist in the
+   >    binary); do arrows/mouse respond and how does it FEEL. Expect NO sound.
+   >    ⚠⚠ **DELETE `wowquiet.txt` AFTERWARDS** — see hazard (5).
+   > 2. **ZAR'S AUDIO** — one named gap, and it needs its own session because the
+   >    right answer touches an explicit "never do this". See the block below and
+   >    [[zar-dos16m-frontier]]. Do NOT start it at the end of a long session.
+   > 3. **REMOVE THE `host_irq_sink` PM THROTTLE.** It defends against a phantom
+   >    16 kHz burst that the 8254 fix proved never existed. Separate, measured.
+   > 4. **CALC and WRITE** are still unjudged on the rig (carried from s58);
+   >    `guests` remains the heaviest score lever at +0.26 each.
+   > 5. ⚠⚠⚠ **TWO RIG HAZARDS BIT THIS SESSION — READ BEFORE TRUSTING A RESULT:**
+   >    `zarplay.bat` leaves `wowquiet.txt` behind (a TIMING change for every later
+   >    run; a 6 KB `result_*.log` is the tell), and `doomrun.bat` exists TWICE with
+   >    `rt.bat` calling the ROOT copy by absolute path. Also: the watcher dies with
+   >    a host teardown and needed restarting three times.
+
    ### ▶ THE ROOT CAUSE OF #23, AND IT WAS OURS
 
    **DPMI `0300` (simulate real-mode interrupt) implemented ONLY `INT 21h` and `INT 33h`
