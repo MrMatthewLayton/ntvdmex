@@ -5436,6 +5436,90 @@ static int g_simint_reflect = 0;
 static LONG  g_ms_raw_tot_x, g_ms_raw_tot_y;
 static volatile LONG g_ms_hidden = 1;       /* INT 33h cursor hide-count; 0 => visible */
 
+/* ── ★★ A CLICK IS AN EVENT, AND WE WERE ONLY EVER REPORTING A LEVEL. ────────────────
+     `g_ms_btn` is a sample of the MK_* bits taken whenever a mouse message happens to
+     arrive, and INT 33h 05h/06h -- "how many times has this button been pressed /
+     released SINCE YOU LAST ASKED, and WHERE" -- was hardcoded to answer zero: the
+     old arm set EBX to a literal 0 with the comment "0 presses since last call"
+     beside it. That is the whole reason a guest which detects clicks the ordinary way
+     sees NONE. It is not a partial implementation, it is a confident wrong answer.
+     A level sample cannot substitute either: press and release between two of the
+     guest's polls and the click never existed. ZAR is exactly this shape.
+   ► So COUNT THE EDGES on the UI thread, where the transitions actually arrive, and
+     record the POSITION AT THE TRANSITION -- 05h/06h report where the button went
+     down, not where the pointer has drifted to since. Drained by the read, because
+     "since the last call" is the contract.
+   ⚠ ONE SOURCE OF EDGES ONLY. Raw input (WM_INPUT) also carries button transitions in
+     usButtonFlags, and we deliberately do NOT read them: RegisterRawInputDevices is
+     called with dwFlags = 0, so the legacy WM_?BUTTON* messages still arrive as well,
+     and counting both would double every click. Legacy is the single writer. */
+#define MS_BTNS 3                           /* left, right, middle                     */
+static volatile LONG g_ms_press_n[MS_BTNS], g_ms_rel_n[MS_BTNS];
+static volatile LONG g_ms_press_x[MS_BTNS], g_ms_press_y[MS_BTNS];
+static volatile LONG g_ms_rel_x[MS_BTNS],   g_ms_rel_y[MS_BTNS];
+static DWORD         g_ms_edges;            /* transitions seen -- STAGE2 evidence     */
+
+/* ── THE DRIVER'S SCREEN IS NOT THE FRAME. ───────────────────────────────────────────
+     Every INT 33h coordinate is in the driver's VIRTUAL screen, and in a 320-wide mode
+     that screen is 640 across: the mouse driver's cell is 8 pixels and mode 13h's is
+     16, so the driver counts X in half-pixels. Guests know this and halve it. We were
+     handing back physical pixels, so every hit-test in a 320-wide mode landed at half
+     scale -- the pointer and the thing it was supposed to be over were never in the
+     same place. Y is 1:1 in all the standard modes (200/350/480). */
+static int i33_xshift(void)
+{
+    unsigned w = g_vid.frame.w;
+    return (w && w <= 320) ? 1 : 0;
+}
+static LONG i33_vx(LONG px) { return px << i33_xshift(); }
+static LONG i33_px(LONG vx) { return vx >> i33_xshift(); }
+static LONG i33_vmaxx(void)
+{ unsigned w = g_vid.frame.w ? g_vid.frame.w : 640; return (LONG)(w << i33_xshift()) - 1; }
+static LONG i33_vmaxy(void)
+{ unsigned h = g_vid.frame.h ? g_vid.frame.h : 480; return (LONG)h - 1; }
+
+/* 07h/08h cursor ranges, in VIRTUAL coordinates. -1 = the guest never set one, so the
+   mode's own extent applies; a guest that sets a range while in one mode and then
+   changes mode keeps its range, which is what the real driver does. */
+static volatile LONG g_ms_minx = -1, g_ms_maxx = -1, g_ms_miny = -1, g_ms_maxy = -1;
+/* 0Fh / 1Ah / 1Bh. The defaults are the real driver's: 8 mickeys per 8 pixels
+   horizontally, 16 vertically (a mouse moves further across a screen than down it),
+   and a 64 mickey/second double-speed threshold. */
+static volatile LONG g_ms_mick_x = 8, g_ms_mick_y = 16, g_ms_dbl_thresh = 64;
+
+/* ── 0Ch / 14h: THE EVENT HANDLER. STORED AND REPORTED; NOT YET CALLED. ──────────────
+     A guest installs a far pointer and a call mask and expects the driver to CALL IT
+     on the masked events. We do not do that yet -- invoking guest code out of band
+     needs the same care async_inject_irq takes and is its own piece of work.
+   ► BUT STORING IT IS NOT COSMETIC, IT IS THE DIFFERENCE BETWEEN A KNOWN GAP AND A
+     SILENT ONE. Before this, 0Ch fell into `default:` and returned with the guest's
+     registers untouched -- "did nothing, reported success", the shape this codebase
+     has now been bitten by six times. 14h in particular MUST hand back the PREVIOUS
+     handler, and a guest that chains handlers on a zero it was never told about will
+     jump to 0000:0000. Now the pointer round-trips, and the install is COUNTED so a
+     log says plainly "this guest wants callbacks and is not getting them" instead of
+     leaving it to be re-diagnosed from behaviour. */
+static volatile LONG g_ms_evt_mask, g_ms_evt_seg, g_ms_evt_off;
+static DWORD         g_ms_evt_installs;
+
+/* Record a button transition. UI thread only (the sole writer of g_ms_btn), and the
+   position is taken from the live driver position rather than the message's client
+   coordinates because while captured it is WM_INPUT, not WM_MOUSEMOVE, that owns it. */
+static void mouse_btn_edges(LONG prev, LONG now)
+{
+    int i;
+    for (i = 0; i < MS_BTNS; ++i) {
+        LONG bit = 1L << i;
+        if ((prev ^ now) & bit) {
+            ++g_ms_edges;
+            if (now & bit) { InterlockedIncrement(&g_ms_press_n[i]);
+                             g_ms_press_x[i] = g_ms_x; g_ms_press_y[i] = g_ms_y; }
+            else           { InterlockedIncrement(&g_ms_rel_n[i]);
+                             g_ms_rel_x[i]   = g_ms_x; g_ms_rel_y[i]   = g_ms_y; }
+        }
+    }
+}
+
 /* THE HOST ARROW over the video area, which is a SEPARATE thing from the INT 33h
    driver cursor above.
  ► IT IS NO LONGER A MENU ITEM OR A HOTKEY, and that is the point: the pointer's
@@ -5488,6 +5572,130 @@ static volatile LONG g_ms_autocap_done = 0;   /* we have grabbed once; never aga
    can say which of the two happened. */
 static DWORD         g_ms_autocap_fired = 0;
 
+/* RULE 1 of the capture policy, and the ONE predicate for it -- "has this guest ever
+   used the mouse". Defined here rather than beside the rules it serves because the
+   status strip, which is built long before input_capture_set, has to answer it too.
+   The full policy is written out above input_capture_set; do not add a second latch. */
+static int capture_allowed(void) { return g_ms_want_capture != 0; }
+
+static DWORD g_ms_shape_sets;      /* 09h/0Ah: cursor shapes we accept and discard   */
+static DWORD g_ms_state_badptr;    /* 16h/17h: ES:DX we refused to dereference       */
+static DWORD g_ms_i33_unimpl;      /* calls that reached `default:` -- see there     */
+
+/* Range accessors. A guest range wins; otherwise the current mode's own extent, so a
+   mode change moves the limits with it rather than pinning the pointer to whatever
+   was on screen when the driver was reset. */
+static LONG i33_rangex_min(void) { return g_ms_minx >= 0 ? g_ms_minx : 0; }
+static LONG i33_rangey_min(void) { return g_ms_miny >= 0 ? g_ms_miny : 0; }
+static LONG i33_rangex_max(void) { return g_ms_maxx >= 0 ? g_ms_maxx : i33_vmaxx(); }
+static LONG i33_rangey_max(void) { return g_ms_maxy >= 0 ? g_ms_maxy : i33_vmaxy(); }
+static LONG i33_clampx(LONG vx)
+{ LONG lo = i33_rangex_min(), hi = i33_rangex_max();
+  return vx < lo ? lo : (vx > hi ? hi : vx); }
+static LONG i33_clampy(LONG vy)
+{ LONG lo = i33_rangey_min(), hi = i33_rangey_max();
+  return vy < lo ? lo : (vy > hi ? hi : vy); }
+/* 07h/08h hand over CX and DX and the driver takes them EITHER WAY ROUND -- passing
+   max first is common enough that a driver which honoured the order literally would
+   pin the pointer to a single coordinate. Swap rather than reject. */
+static void i33_set_range(volatile LONG *lo, volatile LONG *hi, LONG a, LONG b)
+{
+    if (a > b) { LONG t = a; a = b; b = t; }
+    if (a < 0) a = 0;
+    if (b < a) b = a;
+    InterlockedExchange(lo, a); InterlockedExchange(hi, b);
+}
+
+/* 15h/16h/17h state block. The layout is OURS -- the guest is told the size by 15h
+   and only ever hands the same buffer back to 17h, so nothing outside this file
+   reads it. Versioned so a restore cannot be fed a block from an older build. */
+#define I33_STATE_MAGIC 0x3833564EuL       /* 'NV38'                                 */
+typedef struct {
+    DWORD magic;
+    LONG  x, y, hidden;
+    LONG  minx, maxx, miny, maxy;
+    LONG  mick_x, mick_y, dbl;
+    LONG  evt_mask, evt_seg, evt_off;
+} i33_state;
+
+static void i33_state_save(volatile BYTE *p)
+{
+    i33_state s;
+    s.magic = I33_STATE_MAGIC;
+    s.x = g_ms_x; s.y = g_ms_y; s.hidden = g_ms_hidden;
+    s.minx = g_ms_minx; s.maxx = g_ms_maxx;
+    s.miny = g_ms_miny; s.maxy = g_ms_maxy;
+    s.mick_x = g_ms_mick_x; s.mick_y = g_ms_mick_y; s.dbl = g_ms_dbl_thresh;
+    s.evt_mask = g_ms_evt_mask; s.evt_seg = g_ms_evt_seg; s.evt_off = g_ms_evt_off;
+    { unsigned i; const BYTE *q = (const BYTE *)&s;
+      for (i = 0; i < sizeof s; ++i) p[i] = q[i]; }
+}
+static void i33_state_load(volatile BYTE *p)
+{
+    i33_state s;
+    { unsigned i; BYTE *q = (BYTE *)&s;
+      for (i = 0; i < sizeof s; ++i) q[i] = p[i]; }
+    if (s.magic != I33_STATE_MAGIC) { ++g_ms_state_badptr; return; }
+    InterlockedExchange(&g_ms_x, s.x);       InterlockedExchange(&g_ms_y, s.y);
+    InterlockedExchange(&g_ms_hidden, s.hidden);
+    InterlockedExchange(&g_ms_minx, s.minx); InterlockedExchange(&g_ms_maxx, s.maxx);
+    InterlockedExchange(&g_ms_miny, s.miny); InterlockedExchange(&g_ms_maxy, s.maxy);
+    InterlockedExchange(&g_ms_mick_x, s.mick_x);
+    InterlockedExchange(&g_ms_mick_y, s.mick_y);
+    InterlockedExchange(&g_ms_dbl_thresh, s.dbl);
+    InterlockedExchange(&g_ms_evt_mask, s.evt_mask);
+    InterlockedExchange(&g_ms_evt_seg, s.evt_seg);
+    InterlockedExchange(&g_ms_evt_off, s.evt_off);
+}
+
+/* Resolve a guest ES:DX to something we may touch. The segment means different things
+   on the three entry paths -- a real-mode paragraph in V86 and through 0300, an LDT
+   selector in PM -- and NEITHER may be dereferenced on trust: this address comes from
+   a guest register, and 16h/17h are exactly where a wrong one would fault the host
+   rather than the guest. mem_readable is the same guard the call-site capture uses. */
+static volatile BYTE *i33_guest_ptr(volatile BYTE *tib, int src,
+                                    WORD seg, WORD off, SIZE_T len, int forwrite)
+{
+    ULONG_PTR lin;
+    (void)tib;
+    lin = (src == I33_SRC_PM) ? (ULONG_PTR)(dpmi_sel_base(seg) + off)
+                              : (ULONG_PTR)(((DWORD)seg << 4) + off);
+    if (!lin || !mem_readable(lin, len)) return NULL;
+    /* 16h WRITES, and mem_readable says nothing about that -- a read-only page passes
+       it and then faults the HOST on the first store. Ask separately rather than
+       assume a guest buffer is writable because it usually is. */
+    if (forwrite) {
+        MEMORY_BASIC_INFORMATION mb;
+        if (VirtualQuery((LPCVOID)lin, &mb, sizeof mb) != sizeof mb) return NULL;
+        if (!(mb.Protect & (PAGE_READWRITE | PAGE_WRITECOPY
+                          | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY)))
+            return NULL;
+    }
+    return (volatile BYTE *)lin;
+}
+
+/* 00h and 21h both reset. Everything the driver owns goes back to its power-on value
+   -- and that includes the things the old 00h arm left standing: the ranges, the
+   sensitivity, the event handler and the button counts. A guest that resets and then
+   asks "how many clicks" must be told none, not however many it ignored earlier. */
+static void i33_reset_state(void)
+{
+    int i;
+    InterlockedExchange(&g_ms_hidden, 1);               /* hidden until Show       */
+    InterlockedExchange(&g_ms_minx, -1); InterlockedExchange(&g_ms_maxx, -1);
+    InterlockedExchange(&g_ms_miny, -1); InterlockedExchange(&g_ms_maxy, -1);
+    InterlockedExchange(&g_ms_mick_x, 8); InterlockedExchange(&g_ms_mick_y, 16);
+    InterlockedExchange(&g_ms_dbl_thresh, 64);
+    InterlockedExchange(&g_ms_evt_mask, 0);
+    InterlockedExchange(&g_ms_evt_seg, 0);
+    InterlockedExchange(&g_ms_evt_off, 0);
+    for (i = 0; i < MS_BTNS; ++i) {
+        InterlockedExchange(&g_ms_press_n[i], 0);
+        InterlockedExchange(&g_ms_rel_n[i], 0);
+    }
+    InterlockedExchange(&g_ms_dx, 0); InterlockedExchange(&g_ms_dy, 0);
+}
+
 /* INT 33h mouse driver (functions DOS apps actually use). The host draws the
    cursor (overlay in the present path) when the hide-count is 0, so apps that
    rely on the driver cursor (the common case) get a visible pointer. */
@@ -5531,14 +5739,21 @@ static void mouse_int33(volatile BYTE *tib, int src)
     /* The guest is USING the mouse, not merely asking whether one exists -- so take
        it into the window. See the note on g_ms_want_capture for why 0x00 is not in
        this set and why the UI thread is the one that acts. */
-    if (ax == 0x0001 || ax == 0x0003 || ax == 0x0005
-        || ax == 0x0006 || ax == 0x000B)
+    /* ► 0Ch/14h JOIN THE SET (s64). Installing an event handler is the single most
+         explicit way a guest can say "the mouse is mine" -- more so than polling --
+         and a menu-driven program that only ever waits on its callback would
+         otherwise never trigger the grab at all. 07h/08h (fencing the pointer into a
+         region) is the same declaration made differently. 00h stays out: detection is
+         not use, and it is the AX a mis-patched site is most likely to arrive with. */
+    if (ax == 0x0001 || ax == 0x0003 || ax == 0x0005 || ax == 0x0006
+        || ax == 0x0007 || ax == 0x0008 || ax == 0x000B
+        || ax == 0x000C || ax == 0x0014)
         InterlockedExchange(&g_ms_want_capture, 1);
     switch (ax) {
     case 0x0000:                                        /* reset + get status      */
         VDM_SET16(tib, VTIB_EAX, 0xFFFF);               /* driver installed        */
         VDM_SET16(tib, VTIB_EBX, 0x0002);               /* 2 buttons               */
-        InterlockedExchange(&g_ms_hidden, 1);           /* hidden until Show       */
+        i33_reset_state();
         break;
     case 0x0001:                                        /* show cursor (dec count) */
         if (g_ms_hidden > 0) InterlockedDecrement(&g_ms_hidden);
@@ -5547,19 +5762,59 @@ static void mouse_int33(volatile BYTE *tib, int src)
         InterlockedIncrement(&g_ms_hidden);
         break;
     case 0x0003:                                        /* get position + buttons  */
-        VDM_SET16(tib, VTIB_ECX, (WORD)x);
-        VDM_SET16(tib, VTIB_EDX, (WORD)y);
+        VDM_SET16(tib, VTIB_ECX, (WORD)i33_clampx(i33_vx(x)));
+        VDM_SET16(tib, VTIB_EDX, (WORD)i33_clampy(y));
         VDM_SET16(tib, VTIB_EBX, (WORD)b);
         break;
-    case 0x0004:                                        /* set cursor position     */
-        InterlockedExchange(&g_ms_x, (LONG)(VDM_REG(tib, VTIB_ECX) & 0xFFFF));
-        InterlockedExchange(&g_ms_y, (LONG)(VDM_REG(tib, VTIB_EDX) & 0xFFFF));
-        break;
-    case 0x0005: case 0x0006:                           /* button press/release info */
+    case 0x0004: {                                      /* set cursor position     */
+        LONG vx = i33_clampx((LONG)(short)(VDM_REG(tib, VTIB_ECX) & 0xFFFF));
+        LONG vy = i33_clampy((LONG)(short)(VDM_REG(tib, VTIB_EDX) & 0xFFFF));
+        InterlockedExchange(&g_ms_x, i33_px(vx));
+        InterlockedExchange(&g_ms_y, vy);
+        break; }
+    /* ── 05h / 06h: THE COUNTS, AND THE POSITION AT THE TRANSITION. ──────────────
+         BX on entry selects the button (0 L, 1 R, 2 M) and it is an INPUT we used to
+         ignore entirely. AX returns the CURRENT button mask, BX the number of
+         transitions SINCE THE LAST CALL for that button, CX/DX where the last one
+         happened. The count is drained by the read -- that is what "since" means,
+         and a guest that polls in a loop must not see the same click twice. */
+    case 0x0005: case 0x0006: {
+        int      rel = (ax == 0x0006);
+        DWORD    bn  = VDM_REG(tib, VTIB_EBX) & 0xFFFF;
+        volatile LONG *cnt, *px, *py;
+        LONG n;
+        if (bn >= MS_BTNS) bn = 0;                      /* driver clamps, not faults */
+        cnt = rel ? &g_ms_rel_n[bn]   : &g_ms_press_n[bn];
+        px  = rel ? &g_ms_rel_x[bn]   : &g_ms_press_x[bn];
+        py  = rel ? &g_ms_rel_y[bn]   : &g_ms_press_y[bn];
+        n   = InterlockedExchange(cnt, 0);
+        if (n > 0x7FFF) n = 0x7FFF;
         VDM_SET16(tib, VTIB_EAX, (WORD)b);
-        VDM_SET16(tib, VTIB_EBX, 0);                    /* 0 presses since last call */
-        VDM_SET16(tib, VTIB_ECX, (WORD)x);
-        VDM_SET16(tib, VTIB_EDX, (WORD)y);
+        VDM_SET16(tib, VTIB_EBX, (WORD)n);
+        /* No transition yet: the documented answer is the CURRENT position, not a
+           stale zero -- a guest that plots at CX/DX would jump to the top-left. */
+        VDM_SET16(tib, VTIB_ECX, (WORD)i33_clampx(i33_vx(n ? *px : x)));
+        VDM_SET16(tib, VTIB_EDX, (WORD)i33_clampy(n ? *py : y));
+        break; }
+    case 0x0007:                                        /* set X range (virtual)   */
+        i33_set_range(&g_ms_minx, &g_ms_maxx,
+                      (LONG)(short)(VDM_REG(tib, VTIB_ECX) & 0xFFFF),
+                      (LONG)(short)(VDM_REG(tib, VTIB_EDX) & 0xFFFF));
+        InterlockedExchange(&g_ms_x, i33_px(i33_clampx(i33_vx(x))));
+        break;
+    case 0x0008:                                        /* set Y range (virtual)   */
+        i33_set_range(&g_ms_miny, &g_ms_maxy,
+                      (LONG)(short)(VDM_REG(tib, VTIB_ECX) & 0xFFFF),
+                      (LONG)(short)(VDM_REG(tib, VTIB_EDX) & 0xFFFF));
+        InterlockedExchange(&g_ms_y, i33_clampy(y));
+        break;
+    case 0x0009:                                        /* define graphics cursor  */
+    case 0x000A:                                        /* define text cursor      */
+        /* Accepted and ignored ON PURPOSE: the host draws its own overlay pointer
+           (overlay_cursor), so a guest-supplied bitmap has nowhere to go. Unlike the
+           old `default:` this is a decision, and it is counted below so a guest whose
+           pointer looks wrong can be told apart from one we never heard from. */
+        ++g_ms_shape_sets;
         break;
     case 0x000B: {                                      /* read relative motion    */
         LONG dx, dy;
@@ -5578,7 +5833,109 @@ static void mouse_int33(volatile BYTE *tib, int src)
         VDM_SET16(tib, VTIB_ECX, (WORD)(SHORT)dx);
         VDM_SET16(tib, VTIB_EDX, (WORD)(SHORT)dy);
         break; }
-    default: break;                                     /* 07/08 range, 0C handler, ...: accept */
+    /* ── 0Ch SET / 14h EXCHANGE the event handler. See the note on g_ms_evt_mask:
+         stored and reported, NOT yet invoked. 14h must return the PREVIOUS pair or a
+         guest that chains handlers jumps to whatever we failed to tell it. */
+    case 0x000C:
+        InterlockedExchange(&g_ms_evt_mask, (LONG)(VDM_REG(tib, VTIB_ECX) & 0xFFFF));
+        InterlockedExchange(&g_ms_evt_seg,  (LONG)(VDM_REG(tib, VTIB_ES)  & 0xFFFF));
+        InterlockedExchange(&g_ms_evt_off,  (LONG)(VDM_REG(tib, VTIB_EDX) & 0xFFFF));
+        ++g_ms_evt_installs;
+        break;
+    case 0x0014: {                                      /* exchange event handler  */
+        LONG om = g_ms_evt_mask, os = g_ms_evt_seg, oo = g_ms_evt_off;
+        InterlockedExchange(&g_ms_evt_mask, (LONG)(VDM_REG(tib, VTIB_ECX) & 0xFFFF));
+        InterlockedExchange(&g_ms_evt_seg,  (LONG)(VDM_REG(tib, VTIB_ES)  & 0xFFFF));
+        InterlockedExchange(&g_ms_evt_off,  (LONG)(VDM_REG(tib, VTIB_EDX) & 0xFFFF));
+        ++g_ms_evt_installs;
+        VDM_SET16(tib, VTIB_ECX, (WORD)om);
+        VDM_SET16(tib, VTIB_EDX, (WORD)oo);
+        VDM_SET16(tib, VTIB_ES,  (WORD)os);
+        break; }
+    case 0x000F:                                        /* mickeys per 8 pixels    */
+        {   LONG mx = (LONG)(VDM_REG(tib, VTIB_ECX) & 0xFFFF);
+            LONG my = (LONG)(VDM_REG(tib, VTIB_EDX) & 0xFFFF);
+            if (mx > 0) InterlockedExchange(&g_ms_mick_x, mx);
+            if (my > 0) InterlockedExchange(&g_ms_mick_y, my); }
+        break;
+    case 0x0010:                                        /* conditional-off region  */
+        /* The region in which the driver hides its own cursor while the guest
+           redraws under it. We re-render the frame from VRAM every present and draw
+           the overlay on top, so there is never a cursor to erase -- honouring this
+           would change nothing visible. Accepted deliberately. */
+        break;
+    case 0x0013:                                        /* double-speed threshold  */
+        InterlockedExchange(&g_ms_dbl_thresh, (LONG)(VDM_REG(tib, VTIB_EDX) & 0xFFFF));
+        break;
+    case 0x0015:                                        /* get state buffer size   */
+        VDM_SET16(tib, VTIB_EBX, (WORD)sizeof(i33_state));
+        break;
+    case 0x0016:                                        /* save state -> ES:DX     */
+    case 0x0017: {                                      /* restore state <- ES:DX  */
+        volatile BYTE *p = i33_guest_ptr(tib, src,
+                                         (WORD)(VDM_REG(tib, VTIB_ES) & 0xFFFF),
+                                         (WORD)(VDM_REG(tib, VTIB_EDX) & 0xFFFF),
+                                         sizeof(i33_state), ax == 0x0016);
+        if (!p) { ++g_ms_state_badptr; break; }          /* refuse, do not fault    */
+        if (ax == 0x0016) i33_state_save(p); else i33_state_load(p);
+        break; }
+    case 0x001A:                                        /* set sensitivity         */
+        {   LONG mx = (LONG)(VDM_REG(tib, VTIB_EBX) & 0xFFFF);
+            LONG my = (LONG)(VDM_REG(tib, VTIB_ECX) & 0xFFFF);
+            if (mx > 0) InterlockedExchange(&g_ms_mick_x, mx);
+            if (my > 0) InterlockedExchange(&g_ms_mick_y, my);
+            InterlockedExchange(&g_ms_dbl_thresh, (LONG)(VDM_REG(tib, VTIB_EDX) & 0xFFFF)); }
+        break;
+    case 0x001B:                                        /* get sensitivity         */
+        VDM_SET16(tib, VTIB_EBX, (WORD)g_ms_mick_x);
+        VDM_SET16(tib, VTIB_ECX, (WORD)g_ms_mick_y);
+        VDM_SET16(tib, VTIB_EDX, (WORD)g_ms_dbl_thresh);
+        break;
+    case 0x0020:                                        /* enable driver           */
+    case 0x0021:                                        /* software reset          */
+        /* 21h differs from 00h: it does NOT re-probe the hardware, and it answers in
+           AX/BX the same way. We have no hardware to re-probe, so the two are the
+           same action here -- but say so, rather than letting 21h fall through to a
+           `default:` that would leave AX holding 0x21. */
+        VDM_SET16(tib, VTIB_EAX, 0xFFFF);
+        VDM_SET16(tib, VTIB_EBX, 0x0002);
+        i33_reset_state();
+        break;
+    /* ── 1Fh DISABLE DRIVER: WE REFUSE, AND THAT IS THE SAFE ANSWER. ────────────
+         Success means "AX=001Fh, and ES:BX is the INT 33h vector that was there
+         BEFORE the driver hooked it" -- so the guest can restore it. There is no such
+         vector here: we ARE the driver and the BOP stub in IVT[33h] is all there has
+         ever been. Answering success with ES:BX = 0000:0000 hands a guest a null far
+         pointer and invites it to install it, which turns "disable the mouse" into a
+         jump to the interrupt table. AX=FFFFh (failure) is both true and harmless --
+         a guest that cannot disable the driver simply carries on using it. */
+    case 0x001F:
+        VDM_SET16(tib, VTIB_EAX, 0xFFFF);
+        break;
+    case 0x0024:                                        /* driver version / type   */
+        VDM_SET16(tib, VTIB_EBX, 0x0800);               /* report 8.00             */
+        VDM_SET16(tib, VTIB_ECX, 0x0400);               /* CH: type 4 = PS/2, CL: 0 */
+        break;
+    case 0x0026:                                        /* max virtual coordinates */
+        VDM_SET16(tib, VTIB_EBX, 0x0000);               /* driver not disabled     */
+        VDM_SET16(tib, VTIB_ECX, (WORD)i33_rangex_max());
+        VDM_SET16(tib, VTIB_EDX, (WORD)i33_rangey_max());
+        break;
+    /* Logitech CyberMan / SWIFT probe. Doom makes it once and PRINTS the answer, so
+       this is the one unimplemented call whose behaviour was already measured: the
+       documented "no SWIFT support" reply is AX = 0, and leaving AX holding 0x53C1
+       only happened to read as a refusal. Say no on purpose. */
+    case 0x53C1:
+        VDM_SET16(tib, VTIB_EAX, 0x0000);
+        break;
+    /* ── ⚠ `default:` IS THE BUG SHAPE THIS FILE HAS PAID FOR SIX TIMES. ─────────
+         It returns with the guest's registers untouched, which is not "unsupported",
+         it is "success, and here is whatever was already in AX". Every function the
+         driver actually defines is now handled above, so anything reaching here is
+         either a genuinely exotic call or a MIS-PATCHED `CD 33` site -- and those need
+         opposite fixes, so COUNT it and leave the registers alone rather than invent
+         an answer. g_ms_i33ax already records which AX values and from which sites. */
+    default: ++g_ms_i33_unimpl; break;
     }
 }
 
