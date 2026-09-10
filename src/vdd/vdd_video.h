@@ -128,6 +128,11 @@ typedef struct video_state {
     uint8_t  yplane[4][VID_Y_PLANE];   /* de-interleaved mode-Y planes             */
     uint8_t  yshadow[VID_Y_PLANE];     /* the aperture as of the last plane flush   */
     uint8_t  crtc_seen;                /* the guest has written a CRTC start address */
+    /* ⚠ SEPARATE FROM crtc_seen ON PURPOSE. crtc_offset RESETS TO 40, which is the
+         right stride for mode 12h (40 * 2 = 80 bytes a line) and wrong for 0Dh (which
+         wants 20 * 2 = 40). So the default cannot be trusted as a value -- only an
+         explicit write to CRTC index 0x13 means "this is the stride". */
+    uint8_t  crtc_off_seen;            /* the guest has written CRTC Offset (0x13)   */
     uint32_t modey_gap;                /* mode-Y run coalescing slack, in dwords     */
     /* ── OPTIONAL: PER-PLANE BACKING SUPPLIED BY THE HOST. ───────────────────────
          When these are set, the guest's A0000 window IS whichever plane the map mask

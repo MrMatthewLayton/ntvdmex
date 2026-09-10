@@ -1047,7 +1047,7 @@ static void crtc_set_data(void *self, uint32_t v)
                st->crtc_seen = 1; st->dirty = 1; break;
     case 0x0D: st->crtc_start = (uint16_t)((st->crtc_start & 0xFF00) | (v & 0xFF));
                st->crtc_seen = 1; st->dirty = 1; break;
-    case 0x13: st->crtc_offset = (uint8_t)v;                                                          st->dirty = 1; break;
+    case 0x13: st->crtc_offset = (uint8_t)v; st->crtc_off_seen = 1;                                   st->dirty = 1; break;
     default: break;
     }
 }
@@ -1432,17 +1432,43 @@ static void render_cga(video_state *st)
     }
 }
 
+/* ── ★★★ THE PLANAR RENDERER HAS TO READ THE CRTC. (s64) ─────────────────────────
+     This drew every frame from address 0 with a stride of gw/8, which is correct for
+     exactly one thing: a stationary full-screen picture. That is what the test card
+     draws, what the mode-12h demos draw, and what QBasic's BUBBLES draws -- so the
+     whole planar suite passed while Lemmings' GAMEPLAY was garbled, because Lemmings
+     SCROLLS. Measured on the rig, mid-level: `crtc_seen=01 crtc_start=0x000002c2`.
+     The game had panned 706 bytes into the buffer and we were still rendering from
+     the top of it.
+   ⚠ ANIMATION IS NOT SCROLLING, and that distinction is why every other guest missed
+     this. BUBBLES animates by REDRAWING PIXELS -- its start address never leaves 0.
+     A scrolling game leaves the pixels alone and moves the WINDOW over them. Nothing
+     but Lemmings, in everything tested, does the second.
+   ★ render_modey() has honoured both registers for ages -- Doom needed the start
+     address to page-flip. The capability existed in one renderer and not its sibling,
+     purely because nothing had yet asked the sibling for it.
+   ⚠ THE OFFSET REGISTER COUNTS IN 2-BYTE UNITS, and its reset value of 40 is right
+     for 12h and wrong for 0Dh -- hence crtc_off_seen: use it only when the guest has
+     actually written it, and fall back to the mode's natural stride otherwise.
+   ⚠ Both values come from a guest register, so every plane index is wrapped into the
+     plane rather than trusted: a mid-scroll write must not read off the end. */
 static void render_planar(video_state *st)
 {
     int y, xb, b;
     int gw = st->gw ? st->gw : VID_G12_W;
     int gh = st->gh ? st->gh : VID_G12_H;
+    uint32_t bytes = (uint32_t)(gw / 8);
+    uint32_t pitch = (st->crtc_off_seen && st->crtc_offset)
+                     ? (uint32_t)st->crtc_offset * 2u : bytes;
+    uint32_t base  = st->crtc_seen ? (uint32_t)st->crtc_start : 0u;
+    if (!pitch) pitch = bytes;
     for (y = 0; y < gh; ++y) {
-        uint32_t row = y * (gw / 8);
+        uint32_t row = base + (uint32_t)y * pitch;
         uint8_t *out = &st->fb[y * gw];
-        for (xb = 0; xb < gw / 8; ++xb) {
-            uint8_t p0 = st->plane[0][row+xb], p1 = st->plane[1][row+xb];
-            uint8_t p2 = st->plane[2][row+xb], p3 = st->plane[3][row+xb];
+        for (xb = 0; xb < (int)bytes; ++xb) {
+            uint32_t o = (row + (uint32_t)xb) % (uint32_t)VID_PLANE_SIZE;
+            uint8_t p0 = st->plane[0][o], p1 = st->plane[1][o];
+            uint8_t p2 = st->plane[2][o], p3 = st->plane[3][o];
             for (b = 0; b < 8; ++b) {
                 uint8_t m = (uint8_t)(0x80 >> b);
                 out[xb*8 + b] = (uint8_t)(((p0&m)?1:0) | ((p1&m)?2:0) | ((p2&m)?4:0) | ((p3&m)?8:0));
@@ -1580,7 +1606,7 @@ void vdd_video_reset(void *self)
     st->seq_index = st->gc_index = 0;
     st->map_mask = 0x0F; st->bit_mask = 0xFF; st->write_mode = 0;
     st->chain4 = 1; st->y_mask = 0x0F;
-    st->crtc_index = 0; st->crtc_offset = 40; st->crtc_start = 0;
+    st->crtc_index = 0; st->crtc_offset = 40; st->crtc_start = 0; st->crtc_off_seen = 0;
     st->set_reset = st->enable_sr = st->func_rotate = st->read_map = 0;
     st->latch[0] = st->latch[1] = st->latch[2] = st->latch[3] = 0;
     st->in_vesa = 0; st->vesa_mode = 0; st->vesa_bank = 0;
