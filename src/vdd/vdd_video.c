@@ -6,12 +6,11 @@
 #include "vga_font_8x14.h"
 
 /* 16-colour EGA/CGA text palette as 0xAARRGGBB. */
-static const uint32_t ega16[16] = {
-    0xFF000000, 0xFF0000AA, 0xFF00AA00, 0xFF00AAAA,
-    0xFFAA0000, 0xFFAA00AA, 0xFFAA5500, 0xFFAAAAAA,
-    0xFF555555, 0xFF5555FF, 0xFF55FF55, 0xFF55FFFF,
-    0xFFFF5555, 0xFFFF55FF, 0xFFFFFF55, 0xFFFFFFFF
-};
+/* ⚠ THE ega16 TABLE THAT WAS HERE IS GONE. It hardcoded the sixteen colours a
+   16-colour mode renders with, which is exactly the assumption this file had to
+   stop making: those colours are dac[vpal[i]], and both halves belong to the
+   guest. ega64_rgb() below derives the DEFAULTS instead, and reproduces the old
+   table exactly for the default AC palette. */
 
 /* DAC component (0..63) -> 8-bit; pack/unpack a palette entry. */
 static uint32_t dac_pack(uint8_t r, uint8_t g, uint8_t b)
@@ -21,11 +20,136 @@ static uint32_t dac_pack(uint8_t r, uint8_t g, uint8_t b)
    above.  Real VGA reloads this on every INT 10h AH=00 mode set; without it a
    graphics program that reprogrammed the DAC (e.g. SCREEN 13) leaves later text
    drawn in *its* palette -- usually near-black, so text mode looks dead. */
+/* ── ★★ THE ATTRIBUTE CONTROLLER, WHICH IS WHERE A 16-COLOUR PIXEL GETS ITS COLOUR.
+     A 4-bit pixel does NOT index the DAC. It indexes one of the AC's sixteen palette
+     registers (st->vpal), and THAT six-bit value indexes the DAC. We stored vpal --
+     INT 10h AH=10h has always written it -- and then rendered straight from a fixed
+     ega16 table, so nothing a guest did to the palette had any effect. Lemmings sets
+     its own palette, which is exactly why its menu came out structurally perfect and
+     the wrong colours.
+   ★ WHY THIS CHANGES NOTHING BY DEFAULT. A six-bit EGA value is rgbRGB: two bits per
+     channel, the primary worth twice the secondary. Expanded as v*255/63 the DEFAULT
+     vpal reproduces the old ega16 table EXACTLY -- 0x3F -> 255, 0x07 -> 170, 0x38 ->
+     85, 0x14 -> (170,85,0) brown. So this is inert until a guest programs the AC, and
+     an existing correct screen cannot regress into a different shade.
+   ⚠ NOT <<2. dac_pack expands six bits by shifting, which gives 252 for white and
+     would have shifted every default colour by a few counts. Here the exact ratio
+     matters precisely because it has to be a no-op. */
+static uint32_t ega64_rgb(uint8_t v)
+{
+    /* rgbRGB: bit5=r bit4=g bit3=b (secondary), bit2=R bit1=G bit0=B (primary) */
+    unsigned R = (unsigned)(((v >> 2) & 1) * 2 + ((v >> 5) & 1));
+    unsigned G = (unsigned)(((v >> 1) & 1) * 2 + ((v >> 4) & 1));
+    unsigned B = (unsigned)(((v >> 0) & 1) * 2 + ((v >> 3) & 1));
+    unsigned r = R * 85, g = G * 85, b = B * 85;   /* 0,85,170,255 */
+    return 0xFF000000u | (r << 16) | (g << 8) | b;
+}
+
+/* The sixteen AC palette registers a mode set leaves behind. */
+static const uint8_t VPAL_DEFAULT[16] = {
+    0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x14, 0x07,
+    0x38, 0x39, 0x3A, 0x3B, 0x3C, 0x3D, 0x3E, 0x3F
+};
+
+/* ── ★★★ THE RENDER PALETTE IS DERIVED, NOT STORED. ─────────────────────────────
+     pal[] is what the 8-bit framebuffer indexes; dac[] is what the guest programmed.
+     In a 16-colour mode they differ, because the hardware puts the Attribute
+     Controller between them:
+         pixel (4 bits) -> vpal[pixel] -> 6-bit DAC index -> dac[]
+     Rebuilding pal[0..15] through that chain is what makes a guest's palette
+     actually appear. Mode 13h bypasses the AC (its 8-bit pixel goes straight to the
+     DAC), so there pal[] is simply dac[].
+
+   ⚠ THE FIRST CUT OF THIS WAS WRONG IN A WAY WORTH RECORDING: it wrote a COMPUTED
+     EGA colour into pal[0..15] and never consulted dac[] at all. That made the test
+     card pass -- the card uses the default DAC -- while leaving Lemmings exactly as
+     broken, because Lemmings programs the DAC and then points the AC at it. It also
+     clobbered the guest's DAC entries, since pal[] and dac[] were the same array.
+     A derived table has to derive from something; substituting a plausible value for
+     the real one is the same mistake as a stepped-over call returning a sentinel. */
+static void pal_refresh(video_state *st)
+{
+    int i;
+    if (st->mkind == VID_KIND_LINEAR8) {
+        for (i = 0; i < 256; ++i) st->pal[i] = st->dac[i];
+    } else {
+        for (i = 0; i < 16; ++i) {
+            uint8_t v = (uint8_t)(st->vpal[i] & 0x3F);
+            /* AR14 Color Select supplies the high DAC bits on a real VGA; zero by
+               default, which makes this the identity. */
+            if (st->attr_mode & 0x80)
+                v = (uint8_t)((v & 0x0F) | ((st->attr_cse & 0x03) << 4));
+            v = (uint8_t)(v | ((st->attr_cse & 0x0C) << 4));
+            st->pal[i] = st->dac[v];
+        }
+        for (i = 16; i < 256; ++i) st->pal[i] = st->dac[i];
+    }
+    st->dirty = 1;
+}
+
+/* A mode set reloads the DAC and the AC palette. Real hardware does this, and
+   without it a program that reprogrammed the palette leaves the NEXT program (or
+   the text screen it returns to) drawn in its colours -- usually near-black, so
+   text mode looks dead. */
 static void load_default_palette(video_state *st)
 {
     int i;
-    for (i = 0; i < 16; ++i)   st->pal[i] = ega16[i];
-    for (i = 16; i < 256; ++i) st->pal[i] = 0xFF000000u | (uint32_t)(i * 0x010101u);
+    for (i = 0; i < 16; ++i)   st->vpal[i] = VPAL_DEFAULT[i];
+    st->vpal[16] = 0;
+    st->attr_ff = st->attr_index = st->attr_mode = st->attr_cse = 0;
+    /* Seed the DAC. Entries 0..63 are the 64 EGA colours, because that is what the
+       default AC palette (0,1,2,3,4,5,0x14,7,0x38..0x3F) points AT -- with those the
+       derived pal[0..15] comes out exactly equal to the old ega16 table, so all of
+       this is inert until a guest programs something. Above 63, the grey ramp. */
+    for (i = 0; i < 64; ++i)   st->dac[i] = ega64_rgb((uint8_t)i);
+    for (i = 64; i < 256; ++i) st->dac[i] = 0xFF000000u | (uint32_t)(i * 0x010101u);
+    pal_refresh(st);
+}
+
+/* ── 0x3C0 / 0x3C1: index and data on ONE port, alternating. ─────────────────────
+     Write to 0x3C0 and the flip-flop decides whether it lands in the index or the
+     data half. The flip-flop is reset by READING 0x3DA -- every guest does that read
+     first, which is why status_in resets it and why claiming 0x3DA was already
+     necessary for this to work at all.
+   ⚠ Bit 5 of the INDEX is "video enable" and is not part of the register number: a
+     guest programming the palette clears it and sets it again when it has finished.
+     Masking it off the index (0x1F) is the difference between writing register 0 and
+     writing register 32. */
+static void attr_out(void *self, uint16_t port, uint8_t w, uint32_t v)
+{
+    video_state *st = (video_state *)self;
+    uint8_t val = (uint8_t)(v & 0xFF);
+    (void)w;
+    if (port == 0x3C1) return;                       /* data port is read-only       */
+    if (!st->attr_ff) { st->attr_index = val; st->attr_ff = 1; return; }
+    st->attr_ff = 0;
+    switch (st->attr_index & 0x1F) {
+    case 0x00: case 0x01: case 0x02: case 0x03:
+    case 0x04: case 0x05: case 0x06: case 0x07:
+    case 0x08: case 0x09: case 0x0A: case 0x0B:
+    case 0x0C: case 0x0D: case 0x0E: case 0x0F:
+        st->vpal[st->attr_index & 0x0F] = (uint8_t)(val & 0x3F);
+        pal_refresh(st);
+        break;
+    case 0x10: st->attr_mode = val;  pal_refresh(st); break;
+    case 0x11: st->vpal[16] = st->overscan = (uint8_t)(val & 0x3F); st->dirty = 1; break;
+    case 0x14: st->attr_cse = val;   pal_refresh(st); break;
+    default: break;                                  /* 12h plane enable, 13h pan    */
+    }
+}
+
+static void attr_in(void *self, uint16_t port, uint8_t w, uint32_t *v)
+{
+    video_state *st = (video_state *)self;
+    uint8_t idx = (uint8_t)(st->attr_index & 0x1F);
+    (void)w;
+    if (port == 0x3C0) { *v = st->attr_index; return; }   /* index reads back at 3C0 */
+    switch (idx) {
+    case 0x10: *v = st->attr_mode; break;
+    case 0x11: *v = st->vpal[16];  break;
+    case 0x14: *v = st->attr_cse;  break;
+    default:   *v = (idx < 16) ? st->vpal[idx] : 0; break;
+    }
 }
 
 /* The standard BIOS mode set.  Dimensions are the modes' documented geometry;
@@ -223,12 +347,12 @@ static void vesa(video_state *st, ntvdd_regs *r)
         uint8_t sh = (uint8_t)(st->vesa_dacwidth == 8 ? 0 : 2);
         for (i = 0; i < n && (first + i) < 256; ++i) {
             if (bl9 == 0x00 || bl9 == 0x80)
-                st->pal[first + i] = 0xFF000000u
+                st->dac[first + i] = 0xFF000000u
                     | ((uint32_t)(t[i*4+2] << sh) << 16)
                     | ((uint32_t)(t[i*4+1] << sh) << 8)
                     |  (uint32_t)(t[i*4+0] << sh);
             else {
-                uint32_t v = st->pal[first + i];
+                uint32_t v = st->dac[first + i];
                 t[i*4+0] = (uint8_t)((v & 0xFF) >> sh);
                 t[i*4+1] = (uint8_t)(((v >> 8) & 0xFF) >> sh);
                 t[i*4+2] = (uint8_t)(((v >> 16) & 0xFF) >> sh);
@@ -393,23 +517,27 @@ static void int10(void *self, ntvdd_regs *r)
     case 0x10:                                        /* palette / DAC            */
         if (al == 0x10) {                             /* set one DAC register     */
             uint16_t idx = r_bx(r);
-            st->pal[idx & 0xFF] = dac_pack((uint8_t)(r_dx(r) >> 8) & 0x3F,
+            st->dac[idx & 0xFF] = dac_pack((uint8_t)(r_dx(r) >> 8) & 0x3F,
                                            (uint8_t)(r_cx(r) >> 8) & 0x3F,
                                            (uint8_t)(r_cx(r) & 0x3F));
+            pal_refresh(st);
         } else if (al == 0x12) {                      /* set block of DAC regs    */
             uint16_t first = r_bx(r), n = r_cx(r), i;
             uint8_t *t = (uint8_t *)vdd_map_flat(st->bus, r->es, (uint16_t)r_dx(r));
             for (i = 0; i < n && (first + i) < 256; ++i)
-                st->pal[first + i] = dac_pack(t[i*3] & 0x3F, t[i*3+1] & 0x3F, t[i*3+2] & 0x3F);
+                st->dac[first + i] = dac_pack(t[i*3] & 0x3F, t[i*3+1] & 0x3F, t[i*3+2] & 0x3F);
+            pal_refresh(st);
         } else if (al == 0x00) {                      /* set one palette register */
             uint8_t reg = (uint8_t)((r_bx(r) >> 8) & 0xFF);
             if (reg < 17) st->vpal[reg] = (uint8_t)(r_bx(r) & 0x3F);
+            pal_refresh(st);   /* AH=10h stored vpal and rendered from ega16: inert until now */
         } else if (al == 0x01) {                      /* set the border           */
             st->vpal[16] = st->overscan = (uint8_t)((r_bx(r) >> 8) & 0x3F);
         } else if (al == 0x02) {                      /* set all 16 + border      */
             uint8_t *t = (uint8_t *)vdd_map_flat(st->bus, r->es, (uint16_t)r_dx(r));
             int i; for (i = 0; i < 17; ++i) st->vpal[i] = (uint8_t)(t[i] & 0x3F);
             st->overscan = st->vpal[16];
+            pal_refresh(st);
         } else if (al == 0x03) {                      /* blink vs bright background */
             st->blink = (uint8_t)(r_bx(r) & 1);
         } else if (al == 0x07) {                      /* get one palette register */
@@ -423,14 +551,14 @@ static void int10(void *self, ntvdd_regs *r)
         } else if (al == 0x13) {                      /* select DAC page / mode   */
             st->dac_page = (uint8_t)(r_bx(r) >> 8);
         } else if (al == 0x15) {                      /* get one DAC register     */
-            uint32_t v = st->pal[r_bx(r) & 0xFF];
+            uint32_t v = st->dac[r_bx(r) & 0xFF];
             s_dx(r, (uint16_t)(((v >> 18) & 0x3F) << 8));
             s_cx(r, (uint16_t)(((((v >> 10) & 0x3F)) << 8) | ((v >> 2) & 0x3F)));
         } else if (al == 0x17) {                      /* get block of DAC regs    */
             uint16_t first = r_bx(r), n = r_cx(r), i;
             uint8_t *t = (uint8_t *)vdd_map_flat(st->bus, r->es, (uint16_t)r_dx(r));
             for (i = 0; i < n && (first + i) < 256; ++i) {
-                uint32_t v = st->pal[first + i];
+                uint32_t v = st->dac[first + i];
                 t[i*3] = (uint8_t)((v >> 18) & 0x3F);
                 t[i*3+1] = (uint8_t)((v >> 10) & 0x3F);
                 t[i*3+2] = (uint8_t)((v >> 2) & 0x3F);
@@ -440,11 +568,12 @@ static void int10(void *self, ntvdd_regs *r)
         } else if (al == 0x1B) {                      /* convert to grey scale    */
             uint16_t first = r_bx(r), n = r_cx(r), i;
             for (i = 0; i < n && (first + i) < 256; ++i) {
-                uint32_t v = st->pal[first + i];
+                uint32_t v = st->dac[first + i];
                 uint32_t g = ((((v >> 16) & 0xFF) * 30) + (((v >> 8) & 0xFF) * 59)
                               + ((v & 0xFF) * 11)) / 100;
-                st->pal[first + i] = 0xFF000000u | (g << 16) | (g << 8) | g;
+                st->dac[first + i] = 0xFF000000u | (g << 16) | (g << 8) | g;
             }
+            pal_refresh(st);
         } else {
             VID_UNIMPL_SET(st->unimpl_fn, 0x10);      /* name it, do not ignore it */
         }
@@ -502,11 +631,12 @@ static void int10(void *self, ntvdd_regs *r)
             uint8_t *buf = (uint8_t *)vdd_map_flat(st->bus, r->es, (uint16_t)r->ebx);
             int i;
             if (al1c == 0x01) for (i = 0; i < 256; ++i)
-                { buf[i*3] = (uint8_t)((st->pal[i] >> 18) & 0x3F);
-                  buf[i*3+1] = (uint8_t)((st->pal[i] >> 10) & 0x3F);
-                  buf[i*3+2] = (uint8_t)((st->pal[i] >> 2) & 0x3F); }
+                { buf[i*3] = (uint8_t)((st->dac[i] >> 18) & 0x3F);
+                  buf[i*3+1] = (uint8_t)((st->dac[i] >> 10) & 0x3F);
+                  buf[i*3+2] = (uint8_t)((st->dac[i] >> 2) & 0x3F); }
             else for (i = 0; i < 256; ++i)
-                st->pal[i] = dac_pack(buf[i*3] & 0x3F, buf[i*3+1] & 0x3F, buf[i*3+2] & 0x3F);
+                st->dac[i] = dac_pack(buf[i*3] & 0x3F, buf[i*3+1] & 0x3F, buf[i*3+2] & 0x3F);
+            pal_refresh(st);
             s_ax(r, (uint16_t)((r_ax(r) & 0xFF00) | 0x1C));
         }
         break; }
@@ -666,8 +796,12 @@ static void dac_out(void *self, uint16_t port, uint8_t w, uint32_t v)
     else if (port == 0x3C9) {
         st->dac_latch[st->dac_comp++] = val & 0x3F;
         if (st->dac_comp >= 3) {
-            st->pal[st->dac_widx] = dac_pack(st->dac_latch[0], st->dac_latch[1], st->dac_latch[2]);
-            st->dac_widx++; st->dac_comp = 0; st->dirty = 1;
+            st->dac[st->dac_widx] = dac_pack(st->dac_latch[0], st->dac_latch[1], st->dac_latch[2]);
+            st->dac_widx++; st->dac_comp = 0;
+            /* pal[] is DERIVED from dac[] -- see pal_refresh. Without this a guest
+               could reprogram the DAC and see nothing change, which is precisely the
+               half of the Lemmings bug that survived the first fix. */
+            pal_refresh(st);
         }
     }
 }
@@ -676,7 +810,7 @@ static void dac_in(void *self, uint16_t port, uint8_t w, uint32_t *v)
     video_state *st = (video_state *)self; uint32_t p; (void)w;
     if (port == 0x3C8) { *v = st->dac_widx; return; }
     if (port != 0x3C9) { *v = 0xFF; return; }
-    p = st->pal[st->dac_ridx];
+    p = st->dac[st->dac_ridx];
     switch (st->dac_comp) {
     case 0: *v = ((p >> 16) & 0xFF) >> 2; break;      /* R 8->6                  */
     case 1: *v = ((p >> 8) & 0xFF) >> 2; break;       /* G                       */
@@ -1106,6 +1240,10 @@ static void status_in(void *self, uint16_t port, uint8_t w, uint32_t *v)
 {
     video_state *st = (video_state *)self; (void)port; (void)w;
     uint64_t now, in_frame;
+    /* ⚠ LOAD-BEARING, AND NOT A VBLANK CONCERN. Reading this port resets the
+         Attribute Controller's index/data flip-flop, and every guest relies on it
+         before touching 0x3C0. See attr_out. */
+    st->attr_ff = 0;
     uint32_t frame_us, line_us, line, dot_us;
     int tall, vtotal, vactive, in_vbl, in_hbl;
 
@@ -1465,6 +1603,7 @@ int vdd_video_init(vdd_bus *b, void *self)
          page-flips with ONE 16-BIT WRITE and these handlers dropped the data byte, so
          claiming the port broke the flip outright -- worse than not claiming it. See
          seq_out()/vga_idx_data(). */
+    if (vdd_claim_ports(b, 0x3C0, 0x3C1, attr_in, attr_out, st)) return -1; /* Attribute */
     if (vdd_claim_ports(b, 0x3C7, 0x3C9, dac_in, dac_out, st)) return -1;  /* DAC       */
     if (vdd_claim_ports(b, 0x3CE, 0x3CF, gc_in, gc_out, st)) return -1;    /* Graphics  */
     /* CRTC. Claimed at last -- see render_modey() for why three earlier attempts

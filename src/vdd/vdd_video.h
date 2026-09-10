@@ -68,7 +68,16 @@ typedef struct video_state {
     uint16_t cur_shape;                 /* INT 10h AH=01 CX: start/end scan lines    */
     uint8_t  cursor_blink;              /* host setting: blink it, as a real CRTC does */
     uint8_t  page;
-    uint32_t pal[256];                  /* ARGB palette ([0..15]=EGA for text)     */
+    /* ── TWO TABLES, AND CONFLATING THEM IS A BUG. ────────────────────────────
+         dac[]  is the DAC: 256 ARGB entries, written by port 0x3C9 and the INT 10h
+                palette calls. It is what the GUEST programs.
+         pal[]  is the RENDER palette: what the framebuffer's 8-bit values index.
+         In a 16-colour mode they are NOT the same table -- the chain is
+             pixel(4 bits) -> vpal[pixel] (Attribute Controller) -> DAC index -> dac[]
+         so pal[0..15] is a DERIVED view of dac[], rebuilt by pal_refresh(). In 13h
+         the AC is bypassed and pal[] is simply dac[]. */
+    uint32_t dac[256];                  /* the DAC as the guest programmed it      */
+    uint32_t pal[256];                  /* ARGB palette the framebuffer indexes    */
     /* DAC (ports 3C7/3C8/3C9) write/read state */
     uint8_t  dac_widx, dac_ridx, dac_comp, dac_latch[3];
     /* VESA VBE state */
@@ -84,6 +93,18 @@ typedef struct video_state {
     uint8_t  enable_sr;    /* GR1                                                  */
     uint8_t  func_rotate;  /* GR3: bits0-2 rotate count, bits3-4 ALU               */
     uint8_t  read_map;     /* GR4: plane read in read-mode 0                       */
+    /* ── ATTRIBUTE CONTROLLER (0x3C0/0x3C1). ──────────────────────────────────
+         In every 16-colour planar and text mode the 4-bit pixel value indexes
+         THESE registers (vpal, above), and the result indexes the DAC. Not
+         claiming 0x3C0 meant a guest's palette writes went nowhere -- right
+         shapes, wrong colours, static. That is what ailed Lemmings.
+       ⚠ INDEX AND DATA SHARE ONE PORT and alternate; the flip-flop is reset by
+         READING 0x3DA (see status_in), which is why that read is load-bearing
+         and not merely a vblank poll. */
+    uint8_t  attr_ff;      /* 0 = next 3C0 write is the index, 1 = the data        */
+    uint8_t  attr_index;   /* last index written, including bit5 (video enable)    */
+    uint8_t  attr_mode;    /* AR10 Mode Control                                    */
+    uint8_t  attr_cse;     /* AR14 Color Select                                    */
     /* ── UNCHAINED ("mode Y") SUPPORT, snapshot-based. ────────────────────────
          Clearing Sequencer reg 4 bit 3 unchains mode 13h: 320x200 becomes four
          planes, pixel (x,y) in plane (x&3) at y*80 + x/4, and programs page-flip
