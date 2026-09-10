@@ -8499,6 +8499,7 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
            40 frames so a long run never fills the disk. rt.bat copies shot*.bmp off. */
         if (g_capture) {
             static unsigned cap_tick = 0, cap_seq = 0;
+            static int cap_failed = 0;
             /* ► 2 s IS FAR TOO SLOW TO CATCH A MODE SWITCH. Doom runs about ten
                  seconds and sets mode 13h in the last fraction of it, so a 2 s cadence
                  caught exactly ONE frame -- blank text mode, two distinct colours. At
@@ -8513,10 +8514,36 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
                  CONTENTS are the period in milliseconds now; empty keeps the 300 ms
                  default, and 1100 spans a whole 45 s headless run. */
             if ((cap_tick++ % (g_capture_ms / VID_PRESENT_TICK_MS + 1)) == 0 && cap_seq < 40) {
+                /* ── ⛔⛔ THESE INDICES WERE HARDCODED, AND THE PATH MOVED UNDER THEM.
+                     They were 15 and 16, which addressed the two digits back when this
+                     was `C:\ntvdmex\shot00.bmp`. The s61 one-folder move made it
+                     `C:\Documents and Settings\...\out\shot00.bmp`, where 15 and 16
+                     land in "Documents and" -- so every shot was written to
+                     `C:\Documents an07 Settings\...`, a directory that does not exist.
+                   ⚠ AND IT FAILED IN SILENCE FOR THREE SESSIONS: save_bmp returns <0,
+                     cap_seq simply does not advance, and nothing is logged. The rig has
+                     no VNC, so these BMPs are the only eyes on a graphical run --
+                     "the guest drew nothing" and "we could not write the file" looked
+                     identical, which is the exact failure this codebase keeps paying
+                     for. Derive the offset from the string so the next path change
+                     cannot do it again, and SAY SO when a write fails. */
                 char path[] = OUT_("shot00.bmp");
-                path[15] = (char)('0' + (cap_seq / 10) % 10);
-                path[16] = (char)('0' + cap_seq % 10);
+                const unsigned d = (unsigned)sizeof path - 7;   /* the "00" in shot00 */
+                path[d]     = (char)('0' + (cap_seq / 10) % 10);
+                path[d + 1] = (char)('0' + cap_seq % 10);
                 if (present_ddraw_save_bmp(&g_pd, path) == 0) ++cap_seq;
+                else if (!cap_failed) {
+                    char eb[320], *eq = eb;
+                    cap_failed = 1;
+                    eq = zput(eq, "CAPTURE: save_bmp FAILED for ");
+                    eq = zput(eq, path);
+                    eq = zput(eq, " -- snap_valid=");
+                    eq = zdec(eq, (unsigned)g_pd.snap_valid);
+                    eq = zput(eq, " w=");  eq = zdec(eq, (unsigned)g_pd.snap_w);
+                    eq = zput(eq, " h=");  eq = zdec(eq, (unsigned)g_pd.snap_h);
+                    eq = zput(eq, " (reported once)\r\n");
+                    log_append(LOG_PATH, eb, eq);
+                }
             }
         }
         return 0;
