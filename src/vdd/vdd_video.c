@@ -1033,6 +1033,14 @@ static void vga_idx_data(uint8_t *index, uint8_t w, uint32_t v,
 
 static void crtc_set_data(void *self, uint32_t v);
 
+/* Reassemble the ten-bit Line Compare from its three registers. */
+static void crtc_lc_update(video_state *st)
+{
+    st->crtc_line_compare = (uint16_t)(st->crtc_lc_low
+                            | (((uint16_t)(st->crtc_overflow >> 4) & 1u) << 8)
+                            | (((uint16_t)(st->crtc_maxscan  >> 6) & 1u) << 9));
+}
+
 static void crtc_out(void *self, uint16_t port, uint8_t w, uint32_t v)
 {
     video_state *st = (video_state *)self;
@@ -1048,6 +1056,10 @@ static void crtc_set_data(void *self, uint32_t v)
     case 0x0D: st->crtc_start = (uint16_t)((st->crtc_start & 0xFF00) | (v & 0xFF));
                st->crtc_seen = 1; st->dirty = 1; break;
     case 0x13: st->crtc_offset = (uint8_t)v; st->crtc_off_seen = 1;                                   st->dirty = 1; break;
+    /* Line Compare, and the two registers that carry its top two bits. */
+    case 0x07: st->crtc_overflow = (uint8_t)v; crtc_lc_update(st); st->dirty = 1; break;
+    case 0x09: st->crtc_maxscan  = (uint8_t)v; crtc_lc_update(st); st->dirty = 1; break;
+    case 0x18: st->crtc_lc_low   = (uint8_t)v; crtc_lc_update(st); st->dirty = 1; break;
     default: break;
     }
 }
@@ -1461,9 +1473,26 @@ static void render_planar(video_state *st)
     uint32_t pitch = (st->crtc_off_seen && st->crtc_offset)
                      ? (uint32_t)st->crtc_offset * 2u : bytes;
     uint32_t base  = st->crtc_seen ? (uint32_t)st->crtc_start : 0u;
+    /* ── SPLIT SCREEN. Below Line Compare the address generator restarts at 0, which
+         is how a scrolling game pins a status panel to the bottom of the screen while
+         the level pans behind it. Lemmings does exactly this, and without it the panel
+         is drawn from the scrolled address -- the striped band under an otherwise
+         correct level.
+       ⚠ LINE COMPARE COUNTS SCANLINES, NOT OUR ROWS. A 200-line mode is displayed as
+         400 scanlines (double-scanned), so a value that looks past the bottom of the
+         picture is really in the doubled space -- halve it rather than ignoring it.
+         A value that is still past the end after that means "no split", which is the
+         power-on state (all ones) and must stay inert. */
+    uint32_t split = (uint32_t)gh;                 /* gh = no split */
+    if (st->crtc_line_compare) {
+        uint32_t lc = st->crtc_line_compare;
+        if (lc >= (uint32_t)gh && (lc / 2u) < (uint32_t)gh) lc /= 2u;
+        if (lc < (uint32_t)gh) split = lc;
+    }
     if (!pitch) pitch = bytes;
     for (y = 0; y < gh; ++y) {
-        uint32_t row = base + (uint32_t)y * pitch;
+        uint32_t row = (y < (int)split) ? base + (uint32_t)y * pitch
+                                        : (uint32_t)(y - (int)split) * pitch;
         uint8_t *out = &st->fb[y * gw];
         for (xb = 0; xb < (int)bytes; ++xb) {
             uint32_t o = (row + (uint32_t)xb) % (uint32_t)VID_PLANE_SIZE;

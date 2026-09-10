@@ -133,6 +133,18 @@ typedef struct video_state {
          wants 20 * 2 = 40). So the default cannot be trusted as a value -- only an
          explicit write to CRTC index 0x13 means "this is the stride". */
     uint8_t  crtc_off_seen;            /* the guest has written CRTC Offset (0x13)   */
+    /* ── SPLIT SCREEN (Line Compare). ─────────────────────────────────────────
+         When the scanline counter reaches Line Compare the address generator
+         RESETS TO 0, so everything below that line comes from the start of video
+         memory regardless of the pan. It is how a scrolling game keeps a
+         stationary status panel -- which is exactly what Lemmings does.
+       ⚠ The value is TEN BITS spread over three registers: 0x18 low eight,
+         Overflow (0x07) bit 4 = bit 8, Maximum Scan Line (0x09) bit 6 = bit 9.
+         Reading only 0x18 gives a value that is silently wrong past line 255. */
+    uint16_t crtc_line_compare;
+    uint8_t  crtc_overflow;            /* 0x07, for line-compare bit 8            */
+    uint8_t  crtc_maxscan;             /* 0x09, bit 6 = line-compare bit 9        */
+    uint8_t  crtc_lc_low;              /* 0x18, line-compare bits 0-7             */
     uint32_t modey_gap;                /* mode-Y run coalescing slack, in dwords     */
     /* ── OPTIONAL: PER-PLANE BACKING SUPPLIED BY THE HOST. ───────────────────────
          When these are set, the guest's A0000 window IS whichever plane the map mask

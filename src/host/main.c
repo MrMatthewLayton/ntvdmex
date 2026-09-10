@@ -25003,6 +25003,18 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         /* ► Is mode Y actually in use? The whole unchained theory rests on Doom
              clearing Sequencer reg 4 bit 3, which was INFERRED from a pixel pattern
              (80-px period, 50 rows) and never observed directly. Print the register. */
+        /* ── THE CRTC AS THE GUEST PROGRAMMED IT. Added s64 after two speculative
+             fixes in a row -- one right, one wrong. render_planar now depends on all
+             of these, so a wrong picture has to be able to name which register is
+             responsible instead of being guessed at. */
+        p = zput(p, "STAGE2: crtc: start=");   p = zdec(p, g_vid.crtc_start);
+        p = zput(p, " offset=");               p = zdec(p, g_vid.crtc_offset);
+        p = zput(p, " off_seen=");             p = zdec(p, g_vid.crtc_off_seen);
+        p = zput(p, " linecmp=");              p = zdec(p, g_vid.crtc_line_compare);
+        p = zput(p, " (0x18=");                p = zdec(p, g_vid.crtc_lc_low);
+        p = zput(p, " ovf=");                  p = zdec(p, g_vid.crtc_overflow);
+        p = zput(p, " maxscan=");              p = zdec(p, g_vid.crtc_maxscan);
+        p = zput(p, ")\r\n");
         p = zput(p, "STAGE2: video now: chain4="); p = zhexb(p, g_vid.chain4);
         p = zput(p, " ymask="); p = zhexb(p, g_vid.y_mask);
         p = zput(p, " mkind="); p = zhexb(p, g_vid.mkind);
