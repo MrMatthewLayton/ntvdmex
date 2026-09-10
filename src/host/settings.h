@@ -63,7 +63,7 @@ typedef enum {
     SET_FRAMESKIP, SET_VSYNC, SET_BLINKCURSOR,
     SET_VOLUME, SET_MUTE, SET_RATE, SET_SBMODEL, SET_SBADDR, SET_SBIRQ, SET_SBDMA,
     SET_OPL, SET_MIDI, SET_SPEAKER, SET_GUS, SET_TANDY,
-    SET_HOSTCURSOR, SET_SEAMLESS, SET_MSENS, SET_KBLAYOUT, SET_TYPEMATIC,
+    SET_HIDECURSOR, SET_SEAMLESS, SET_MSENS, SET_KBLAYOUT, SET_TYPEMATIC,
     SET_JOYTYPE, SET_JOYPAD,
     SET_BOOTFROM,
     SET_COUNT
@@ -157,6 +157,17 @@ static const set_def SET_DEFS[SET_COUNT] = {
 { "FrameSkip",         IDC_S_FRAMESKIP,   SK_COMBO,      0,  0,   2, "0|1|2" },
 { "VSync",             IDC_S_VSYNC,       SK_CHECK,      1,  0,   1, NULL },
 { "BlinkTextCursor",   IDC_S_BLINKCURSOR, SK_CHECK,      1,  0,   1, NULL },
+/* ⛔ FULLSCREEN HAS NO SETTINGS AT ALL, AND THAT IS THE FIX. (s64)
+     It briefly had two -- a resolution list and a "sharp pixels" checkbox -- and the
+     user's verdict was "there's a lot of knobs to fiddle now, and none of them seem
+     to actually achieve sharp pixels". BOTH HALVES WERE RIGHT, and the second is why
+     the first happened: I could not make it sharp, so I kept adding ways to ask.
+     The real cause was the DirectDraw stretch blt being FILTERED BY THE DRIVER (see
+     the long note over gdi_present). Fullscreen is now a borderless window drawn by
+     the same GDI path as the window, which is point-sampled and always was sharp.
+     With no display-mode change there is no resolution to choose, and whole-multiple
+     scaling is not something anyone would switch off. So: ZERO KNOBS.
+     The escape hatch for the old exclusive path is a file knob, ddrawfs.flag. */
 
 { "MasterVolume",      IDC_S_VOLUME,      SK_UINT,     100,  0, 100, NULL },
 { "Mute",              IDC_S_MUTE,        SK_CHECK,      0,  0,   1, NULL },
@@ -180,7 +191,7 @@ static const set_def SET_DEFS[SET_COUNT] = {
 { "Gus",               IDC_S_GUS,         SK_CHECK,      0,  0,   1, NULL },
 { "Tandy",             IDC_S_TANDY,       SK_CHECK,      0,  0,   1, NULL },
 
-{ "ShowHostCursor",    IDC_S_HOSTCURSOR,  SK_CHECK,      1,  0,   1, NULL },
+{ "HideHostCursor",    IDC_S_HOSTCURSOR,  SK_CHECK,      0,  0,   1, NULL },
 { "SeamlessMouse",     IDC_S_SEAMLESS,    SK_CHECK,      0,  0,   1, NULL },
 { "MouseSensitivity",  IDC_S_MSENS,       SK_UINT,     100, 10, 1000, NULL },
 { "KeyboardLayout",    IDC_S_KBLAYOUT,    SK_COMBO,      0,  0,   3, "US|United Kingdom|German|French" },

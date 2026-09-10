@@ -173,25 +173,28 @@ BEGIN
     COMBOBOX        IDC_S_RENDERER, 180, 20, 82, 80,
                     CBS_DROPDOWNLIST | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP
 
-    GROUPBOX        "Image", -1, 4, 52, 284, 76
-    LTEXT           "&Scaler:", -1, 14, 70, 30, 8
-    COMBOBOX        IDC_S_SCALER, 48, 68, 76, 80,
+    GROUPBOX        "Image", -1, 4, 48, 284, 94
+    LTEXT           "&Scaler:", -1, 14, 66, 30, 8
+    COMBOBOX        IDC_S_SCALER, 48, 64, 76, 80,
                     CBS_DROPDOWNLIST | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP | WS_GROUP
-    LTEXT           "&Filtering:", -1, 138, 70, 34, 8
-    COMBOBOX        IDC_S_FILTER, 180, 68, 82, 80,
+    LTEXT           "&Filtering:", -1, 138, 66, 34, 8
+    COMBOBOX        IDC_S_FILTER, 180, 64, 82, 80,
                     CBS_DROPDOWNLIST | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP
-    LTEXT           "Frame s&kip:", -1, 14, 90, 44, 8
-    COMBOBOX        IDC_S_FRAMESKIP, 62, 88, 40, 80,
+    LTEXT           "Frame s&kip:", -1, 14, 86, 44, 8
+    COMBOBOX        IDC_S_FRAMESKIP, 62, 84, 40, 80,
                     CBS_DROPDOWNLIST | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP
     CONTROL         "&Aspect ratio correction", IDC_S_ASPECT, "Button",
-                    BS_AUTOCHECKBOX | WS_TABSTOP, 14, 108, 120, 10
+                    BS_AUTOCHECKBOX | WS_TABSTOP, 14, 104, 120, 10
     CONTROL         "&VSync", IDC_S_VSYNC, "Button",
-                    BS_AUTOCHECKBOX | WS_TABSTOP, 150, 108, 60, 10
-
-    GROUPBOX        "Text mode", -1, 4, 136, 284, 36
+                    BS_AUTOCHECKBOX | WS_TABSTOP, 150, 104, 60, 10
     CONTROL         "&Blink the text-mode cursor, as a real CRTC does",
-                    IDC_S_BLINKCURSOR, "Button", BS_AUTOCHECKBOX | WS_TABSTOP | WS_GROUP,
-                    14, 152, 250, 10
+                    IDC_S_BLINKCURSOR, "Button", BS_AUTOCHECKBOX | WS_TABSTOP,
+                    14, 122, 250, 10
+
+    /* ⛔ THERE IS NO "FULLSCREEN" GROUP, AND THAT IS THE FIX -- see the note over
+         the Display settings in src/host/settings.h. Fullscreen is a borderless
+         window drawn by the same path as this one, so everything above applies to
+         it and there is nothing extra to choose. */
 END
 
 /* ── PAGE: AUDIO ────────────────────────────────────────────────────────────────
@@ -246,13 +249,13 @@ BEGIN
 END
 
 /* ── PAGE: INPUT ────────────────────────────────────────────────────────────────
-   Show-host-cursor and Sensitivity are LIVE; the rest is stored only. */
+   Hide-host-cursor and Sensitivity are LIVE; the rest is stored only. */
 IDD_PAGE_INPUT DIALOGEX 0, 0, 292, 181
 STYLE DS_SETFONT | DS_CONTROL | WS_CHILD
 FONT 8, "MS Shell Dlg", 400, 0, 0x1
 BEGIN
     GROUPBOX        "Mouse", -1, 4, 4, 284, 68
-    CONTROL         "Show the host mouse &cursor over the video area",
+    CONTROL         "&Hide the host mouse cursor over the video area",
                     IDC_S_HOSTCURSOR, "Button", BS_AUTOCHECKBOX | WS_TABSTOP | WS_GROUP,
                     14, 20, 240, 10
     CONTROL         "&Seamless mouse (no capture needed)",

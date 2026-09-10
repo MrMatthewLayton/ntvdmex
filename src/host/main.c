@@ -5532,8 +5532,17 @@ static void mouse_btn_edges(LONG prev, LONG now)
  ⚠ THE SETTING SURVIVES AND IS STILL LIVE. `ShowHostCursor` now means "show the
    desktop arrow over the video WHEN NOT CAPTURED" (default 1). Capture overrides
    it unconditionally; there is no state in which an exclusive-mode guest shows the
-   host pointer. So the row is still honoured -- it is narrower, not dead. */
-static volatile LONG g_cursor_show = 1;
+   host pointer. So the row is still honoured -- it is narrower, not dead.
+ ★ s64: THE SETTING IS NOW PHRASED AS `HideHostCursor`, and the flag with it. The row
+   read "Show the host mouse cursor over the video area" and defaulted to ON, so the
+   only thing it could ever do was be switched OFF -- a checkbox whose default is
+   "yes, do the ordinary thing" is a checkbox that reads as a question nobody asked.
+   Phrased as HIDE, ticking it is the action and leaving it alone is the default.
+ ⚠ The REGISTRY KEY changed with it (`ShowHostCursor` -> `HideHostCursor`) rather than
+   keeping the old name with the opposite meaning, because a stored 1 that used to
+   mean "show" and now means "hide" is a value that silently flips on upgrade. A new
+   name simply defaults, and the default is the behaviour everyone already had. */
+static volatile LONG g_cursor_hide = 0;
 /* Input capture ("exclusivity") -- see input_capture_set. Declared up here because
    status_update, which is defined above it, reports the capture state and the chord
    that changes it on the right-hand half of the status strip. */
@@ -6737,7 +6746,9 @@ static HMENU build_menu(void)
          trying things, the dialog is for keeping them. */
     menu_combo(m, "Limit Speed", SET_SPEEDMODE, IDM_SPEED_0);
     msep(m);
-    mi(m,"Capture Input\tWin+Click / F10",IDM_INPUT_CAPTURE);
+    /* The accelerator column names the RELEASE, because that is the one a captured
+       user needs and cannot look up -- the menu is unreachable while capture is held. */
+    mi(m,"Capture Mouse\tWin releases",IDM_INPUT_CAPTURE);
     mi(m,"Send Ctrl+Alt+Del",IDM_STUB);
     mi(m,"Key Mapper...",IDM_STUB);
     msep(m);
@@ -6972,8 +6983,12 @@ static void status_update(void)
     m = (g_dpmi_pm && g_dpmi_client32) ? "32-bit Protected mode"
       : g_dpmi_pm                      ? "16-bit Protected mode"
                                        : "16-bit Real mode";
-    r = g_captured ? "Captured -- Win+Click or Win+F10 releases"
-                   : "Win+Click captures input";
+    /* THREE STATES, NOT TWO. The strip used to offer a chord unconditionally, so a
+       guest that never touches the mouse -- where capture is refused by rule 1 and
+       nothing at all will happen -- still advertised one. Say which case this is. */
+    r = g_captured        ? "Mouse captured -- press Windows key to release"
+      : capture_allowed() ? "Click the screen to capture the mouse"
+                          : "Mouse belongs to the desktop";
     /* ⚠ THE NAME DECIDES THE FIRST PART'S WIDTH, so a new program has to
          re-partition BEFORE anything is pushed -- otherwise the divider stays where
          the previous program left it and a long name is truncated against a boundary
@@ -7113,20 +7128,114 @@ static LRESULT CALLBACK ll_kbd_proc(int code, WPARAM wp, LPARAM lp)
     return CallNextHookEx(g_llkbd, code, wp, lp);
 }
 
-/* Is a Windows key held? While captured the hook owns the answer (it swallowed the key);
-   uncaptured there is no hook, so ask the system. */
-static int host_key_held(void)
+/* ⚠ host_key_held() WAS HERE AND IS GONE (s64). It answered "is a Windows key held",
+   which only ever mattered to the Win+F10 and Win+Click CHORDS. The Windows key is now
+   a release key in its own right (capture rule 4), so nothing needs to ask whether it
+   is held alongside something else. g_win_down stays: ll_kbd_proc swallows the Win DOWN
+   when the low-level hook is enabled, and must still track it so it cannot leave the
+   system believing the key is stuck. */
+
+/* ── ★★★ THE CAPTURE RULES, WRITTEN DOWN ONCE. (s64, user spec) ──────────────────────
+     Capture was a toggle with four ways to flip it (Win+F10, Scroll Lock, Win+Click, a
+     menu item), it applied to a machine that might have no interest in the mouse at
+     all, and it was reachable in states where it did nothing but strand the pointer.
+     The user's words: "capture is a bit buggy, so here's absolutely how I want it to
+     work". So it is now a POLICY, not a toggle, and this is the whole of it:
+
+       1. A GUEST THAT NEVER HOOKS THE MOUSE NEVER CAPTURES IT. No chord, no menu item,
+          no click takes the pointer -- it belongs to the Windows desktop and stays
+          there. Skyroads is this case, and there is nothing capture could give it.
+       2. A GUEST THAT HOOKS THE MOUSE CAPTURES IMMEDIATELY, at the moment it hooks.
+          That is g_ms_want_capture, raised by mouse_int33 the first time the guest
+          USES the driver, and performed on the UI tick.
+       3. CAPTURED, THE POINTER DOES NOT EXIST. Not over the video, not over the status
+          bar, not over the menu -- ClipCursor already confines it to our client, and
+          nothing about a captured machine wants a desktop arrow drawn on top of it.
+       4. THE WINDOWS KEY ALONE RELEASES. One key, no chord. It is the only key a DOS
+          guest cannot generate, which is the entire requirement for a release key, and
+          a chord is one thing too many to remember while a game has your mouse.
+       5. A CLICK IN THE VIDEO AREA RE-CAPTURES -- and ONLY the video area. Not focus,
+          not the title bar, not the menu, not the status strip. That is what keeps the
+          window draggable and the menus reachable after a release: getting your mouse
+          back is a deliberate click into the picture, and everything else on the window
+          still belongs to Windows.
+
+   ⚠ capture_allowed() gates rule 1 and it is deliberately the SAME latch the automatic
+     grab keys on. "Has this guest ever used the mouse" has one answer and one variable;
+     two would drift, and a UI that disagrees with itself about who owns the pointer is
+     the bug this replaces. It is defined up beside g_ms_autocap_fired because the
+     status strip needs it and is built before this point. */
+
+/* Is a point (client coords) over the VIDEO, as opposed to the status strip? The menu
+   bar and the caption are not in client space at all, so they cannot reach here. */
+static int pt_over_video(HWND h, int cx, int cy)
 {
-    if (g_win_down) return 1;
-    return ((GetAsyncKeyState(VK_LWIN) | GetAsyncKeyState(VK_RWIN)) & 0x8000) != 0;
+    RECT rc; int vh;
+    if (!GetClientRect(h, &rc)) return 0;
+    vh = rc.bottom - (g_pd.status_h ? g_pd.status_h : PRESENT_STATUS_H);
+    return cx >= 0 && cx < rc.right && cy >= 0 && cy < vh;
+}
+
+/* ── ONE DECISION, ONE PLACE: IS THE DESKTOP ARROW VISIBLE RIGHT NOW? ────────────────
+     There were four copies of this expression -- in input_capture_set, in
+     host_cursor_set, in host_fullscreen_toggle and in WM_SETCURSOR -- and they had
+     already drifted: three of them tested `g_cursor_show` without asking whether the
+     pointer was over the VIDEO or over the status bar, which is the only part of the
+     window the setting was ever about.
+   ► THE ORDER MATTERS AND IT IS NOT SYMMETRIC:
+       captured   -> hidden EVERYWHERE on the window (rule 3). The status strip and
+                     the menu are ours too, and a captured machine has no pointer.
+       fullscreen -> hidden everywhere. Exclusive mode has no chrome to point at.
+       otherwise  -> the setting, and ONLY over the video. The status bar keeps its
+                     arrow and its size grip whatever the checkbox says. */
+static int host_cursor_visible_at(int over_video)
+{
+    if (g_captured || g_pd.fullscreen) return 0;
+    return over_video ? !g_cursor_hide : 1;
+}
+
+/* Apply it NOW rather than waiting for WM_SETCURSOR, which only fires when the mouse
+   next MOVES or re-enters -- without this the state changes and the pointer does not
+   until you jiggle it. Guarded on the pointer actually being over us: SetCursor
+   changes the shape there and then, and we have no business touching it while it is
+   over someone else's window. The status bar is a CHILD, so accept it as ours. */
+static void host_cursor_refresh(HWND h)
+{
+    POINT pt, c; HWND w;
+    if (!h || !GetCursorPos(&pt)) return;
+    w = WindowFromPoint(pt);
+    if (w != h && GetParent(w) != h) return;
+    c = pt; ScreenToClient(h, &c);
+    SetCursor(host_cursor_visible_at(pt_over_video(h, c.x, c.y))
+              ? LoadCursorA(NULL, IDC_ARROW) : NULL);
+}
+
+/* Confine the pointer to our client area. Split out of input_capture_set because the
+   rect is only true for the geometry it was computed from: go fullscreen (or resize)
+   while captured and the clip is still the OLD window, so the mouse is fenced into a
+   corner of the screen the picture no longer occupies. Anything that changes the
+   window's shape must re-apply it. */
+static void capture_clip_apply(HWND h)
+{
+    RECT rc; POINT tl;
+    if (!h || !g_captured) return;
+    GetClientRect(h, &rc);
+    tl.x = rc.left; tl.y = rc.top;
+    ClientToScreen(h, &tl);
+    rc.left = tl.x; rc.top = tl.y;
+    rc.right += tl.x; rc.bottom += tl.y;
+    ClipCursor(&rc);
 }
 
 static void input_capture_set(HWND h, int on)
 {
+    /* RULE 1. Refuse rather than assert: this is reached from the menu, the click
+       path and the UI tick, and "the guest never asked for the mouse" is a normal
+       state, not an error. */
+    if (on && !capture_allowed()) return;
     if (on == g_captured) return;
     InterlockedExchange(&g_captured, on ? 1 : 0);
     if (on) {
-        RECT rc; POINT tl;
         /* ── ⛔⛔ THIS HOOK CAN JAM THE WHOLE MACHINE, SO IT IS OFF BY DEFAULT. ────────
              WH_KEYBOARD_LL is SYSTEM-WIDE: every keystroke on the box is routed through
              THIS process's UI thread. If that thread stalls -- and a VDM host has many
@@ -7146,20 +7255,13 @@ static void input_capture_set(HWND h, int on)
         if (!g_llkbd && g_llkbd_on)
             g_llkbd = SetWindowsHookExA(WH_KEYBOARD_LL, ll_kbd_proc,
                                         GetModuleHandleA(NULL), 0);
-        GetClientRect(h, &rc);
-        tl.x = rc.left; tl.y = rc.top;
-        ClientToScreen(h, &tl);
-        rc.left = tl.x; rc.top = tl.y;
-        rc.right += tl.x; rc.bottom += tl.y;
-        ClipCursor(&rc);
+        capture_clip_apply(h);
     } else {
         ClipCursor(NULL);
         if (g_llkbd) { UnhookWindowsHookEx(g_llkbd); g_llkbd = NULL; }
     }
     menu_check(h, IDM_INPUT_CAPTURE, on);
-    { POINT pt;                          /* apply the pointer change now, not on next move */
-      if (GetCursorPos(&pt) && WindowFromPoint(pt) == h)
-          SetCursor((on || !g_cursor_show) ? NULL : LoadCursorA(NULL, IDC_ARROW)); }
+    host_cursor_refresh(h);              /* apply the pointer change now, not on next move */
     /* The status strip says how to get back out. It is repainted from the UI tick,
        which is where SendMessage to the control is safe -- input_capture_set is also
        reached from the WM_KEYDOWN path, but the tick is the single writer. */
@@ -7234,38 +7336,150 @@ static DWORD WINAPI capture_watchdog_thread(LPVOID pv)
     return 0;
 }
 
-/* Show/hide the host arrow over the video. The immediate SetCursor matters:
-   WM_SETCURSOR only fires when the mouse next MOVES or re-enters the window, so
-   without it the tick changes and the pointer does not until you jiggle it. Guard
-   it on the pointer actually being over us -- SetCursor changes the shape there and
-   then, and we have no business touching it while it is over someone else. */
-static void host_cursor_set(HWND h, int on)
+/* Set the hide-the-arrow-over-the-video flag and make it visible immediately.
+   The decision itself lives in host_cursor_visible_at -- this only owns the flag. */
+static void host_cursor_set(HWND h, int hide)
 {
-    POINT pt;
-    InterlockedExchange(&g_cursor_show, on ? 1 : 0);
-    /* CAPTURE WINS. `on` is the ShowHostCursor setting, which only ever describes
-       the UNCAPTURED case; an exclusive-mode guest shows no host pointer whatever
-       the setting says. Without this, applying settings mid-capture would put the
-       desktop arrow back on top of a game that had taken the mouse. */
-    if (GetCursorPos(&pt) && WindowFromPoint(pt) == h)
-        SetCursor((on && !g_captured && !g_pd.fullscreen)
-                  ? LoadCursorA(NULL, IDC_ARROW) : NULL);
+    InterlockedExchange(&g_cursor_hide, hide ? 1 : 0);
+    host_cursor_refresh(h);
 }
 
-/* ── FULLSCREEN HIDES THE POINTER, WHATEVER THE TOGGLE SAYS. (session 62) ────────
-     User ask, 2026-09-10: exclusive fullscreen IS exclusive mode -- there is no
-     chrome, no menu and no status strip to point at, so a desktop arrow parked
-     over the game is never right, hooked mouse or not. One helper for all three
-     ways in (menu, Alt+Enter, F11), because WM_SETCURSOR only fires on the next
-     actual mouse MOVE -- without the immediate SetCursor the arrow lingers over
-     the game until a jiggle, the same trap host_cursor_set documents. */
+/* ── ★★ FULLSCREEN IS A WINDOW STYLE, NOT JUST A DIRECTDRAW MODE. (s64) ──────────────
+     We asked DirectDraw for an exclusive fullscreen mode and left the WINDOW exactly
+     as it was: WS_OVERLAPPEDWINDOW, caption, thick resizing frame, menu bar. The
+     DirectDraw primary covers the pixels, so it LOOKS right -- until the pointer nears
+     an edge and Windows hit-tests the frame that is still there and hands back a
+     RESIZE cursor over a fullscreen game. The user saw exactly that and drew the right
+     conclusion: "fullscreen mode might not be using the correct window style. It
+     should essentially have no style."
+   ► So take the style off going in and put it back coming out: WS_POPUP over the whole
+     virtual screen, no caption, no frame, no menu. There is then no non-client area to
+     hit-test, which is what actually removes the resize cursors -- SetCursor could
+     never have done it, because the frame cursors are decided in WM_NCHITTEST long
+     before WM_SETCURSOR is asked.
+   ⚠ AND RESTORE THE GEOMETRY, WHICH IS THE OTHER HALF OF THE SAME BUG. Going exclusive
+     leaves the window sized to the screen; coming back out we used to keep that size,
+     so Alt+Enter twice turned a 640x480 window into a full-screen-sized one that was
+     no longer fullscreen. Alt+Enter is a TOGGLE and a toggle must land back where it
+     started. GetWindowPlacement/SetWindowPlacement rather than a bare rect: it carries
+     the maximised/minimised state too, so a window that was maximised before returns
+     maximised rather than to some remembered restored size.
+   ⚠ ORDER, both ways. Going in: style first, then DirectDraw -- ddraw wants the window
+     it is about to own to already be the shape it will be. Coming out: DirectDraw
+     first, then style, then placement, so the mode is back before we ask Windows to
+     lay a window out on it. */
+static WINDOWPLACEMENT g_fs_place;      /* geometry to come back to                  */
+static LONG            g_fs_style;      /* the style we took off                     */
+static LONG            g_fs_exstyle;
+static HMENU           g_fs_menu;       /* the menu bar we detached                  */
+static int             g_fs_saved;
+
+/* Undo everything the fullscreen entry changed. Separate because BOTH the normal exit
+   and the "DirectDraw refused" path need it, and a chromeless window that is not
+   fullscreen is a worse state than either end of the toggle. */
+static void host_fullscreen_toggle_restore(HWND h)
+{
+    if (g_status) { ShowWindow(g_status, SW_SHOW);
+                    SendMessageA(g_status, WM_SIZE, 0, 0); }   /* re-dock at the bottom */
+    if (g_fs_menu) { SetMenu(h, g_fs_menu); g_fs_menu = NULL; }
+    if (g_fs_style)   SetWindowLongA(h, GWL_STYLE, g_fs_style);
+    if (g_fs_exstyle) SetWindowLongA(h, GWL_EXSTYLE, g_fs_exstyle);
+    /* SWP_FRAMECHANGED before the placement: the frame has to exist again for
+       SetWindowPlacement's rect to mean the same thing it did when we saved it. */
+    SetWindowPos(h, NULL, 0, 0, 0, 0,
+                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE
+                 | SWP_FRAMECHANGED);
+    if (g_fs_saved) { g_fs_place.length = sizeof g_fs_place;
+                      SetWindowPlacement(h, &g_fs_place); g_fs_saved = 0; }
+    g_fs_style = g_fs_exstyle = 0;
+    DrawMenuBar(h);
+    InvalidateRect(h, NULL, TRUE);
+}
+
 static void host_fullscreen_toggle(HWND h)
 {
-    POINT pt;
-    present_ddraw_set_fullscreen(&g_pd, !g_pd.fullscreen);
-    if (GetCursorPos(&pt) && WindowFromPoint(pt) == h)
-        SetCursor((g_pd.fullscreen || g_captured || !g_cursor_show)
-                  ? NULL : LoadCursorA(NULL, IDC_ARROW));
+    int want = !g_pd.fullscreen;
+    if (want) {
+        g_fs_place.length = sizeof g_fs_place;
+        g_fs_saved   = GetWindowPlacement(h, &g_fs_place) ? 1 : 0;
+        g_fs_style   = GetWindowLongA(h, GWL_STYLE);
+        g_fs_exstyle = GetWindowLongA(h, GWL_EXSTYLE);
+        g_fs_menu    = GetMenu(h);
+        SetMenu(h, NULL);
+        /* WS_VISIBLE stays -- everything else that draws or hit-tests chrome goes.
+           WS_EX_ prefixes that put a border on (WINDOWEDGE / CLIENTEDGE / DLGMODALFRAME
+           / STATICEDGE) go with it. */
+        SetWindowLongA(h, GWL_STYLE, (g_fs_style & ~(LONG)WS_OVERLAPPEDWINDOW) | WS_POPUP);
+        SetWindowLongA(h, GWL_EXSTYLE, g_fs_exstyle
+                       & ~(LONG)(WS_EX_WINDOWEDGE | WS_EX_CLIENTEDGE
+                                 | WS_EX_DLGMODALFRAME | WS_EX_STATICEDGE));
+        /* The status strip is a CHILD WINDOW, so taking the menu and frame off does
+           not remove it -- it would sit on top of the picture at whatever size it
+           last docked to. gdi_present already stops reserving room for it in
+           fullscreen; this stops it being drawn. */
+        if (g_status) ShowWindow(g_status, SW_HIDE);
+        SetWindowPos(h, HWND_TOP, 0, 0,
+                     GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN),
+                     SWP_FRAMECHANGED | SWP_NOACTIVATE);
+        if (present_ddraw_set_fullscreen(&g_pd, 1) != 0) {
+            /* No DirectDraw, or it refused. Do not leave the user in a chromeless
+               window that is not fullscreen either -- put it all back. */
+            host_fullscreen_toggle_restore(h);
+            return;
+        }
+    } else {
+        present_ddraw_set_fullscreen(&g_pd, 0);
+        host_fullscreen_toggle_restore(h);
+    }
+    /* The window just changed shape. If the guest holds the mouse, the ClipCursor
+       rect is now describing the window we USED to be -- re-fence it. Alt+Enter is
+       reachable while captured (see WM_SYSKEYDOWN), so this is a live path, not a
+       theoretical one. */
+    capture_clip_apply(h);
+    host_cursor_refresh(h);
+    /* ── ★★ SAY WHAT ACTUALLY HAPPENED, IN DECIMAL, EVERY TOGGLE. ────────────────
+         "None of them seem to actually achieve sharp pixels" (user, s64) could not be
+         diagnosed from outside: a requested mode that the display REFUSES falls back
+         silently, and a fitted rectangle that is a fractional multiple of the frame
+         looks identical in a log to one that is whole. Both are now on one line.
+         READ IT LIKE THIS:
+           req != got      -> the display refused the mode; the fallback is what you
+                              are looking at, and no scaling choice can fix softness
+                              introduced by the monitor rescaling a non-native signal.
+           scale=NxM       -> WHOLE NUMBERS MEAN SHARP. Anything else means the frame
+                              did not divide into the destination and present_fit_int
+                              could not find a factor -- which should not happen, so
+                              it is a bug rather than a setting.
+           got == native   -> the panel is getting its own resolution, which is the
+                              other half of sharpness and the half we do not control. */
+    if (g_pd.fullscreen) {
+        char fb[256], *fq = fb;
+        RECT cr;
+        int cw = 0, chh = 0;
+        if (GetClientRect(h, &cr)) { cw = cr.right; chh = cr.bottom; }
+        fq = zput(fq, "FULLSCREEN: path=");
+        fq = zput(fq, (g_pd.dd && g_pd.back) ? "ddraw-exclusive" : "gdi-borderless");
+        fq = zput(fq, " client=");           fq = zdec(fq, (unsigned)cw);
+        fq = zput(fq, "x");                  fq = zdec(fq, (unsigned)chh);
+        fq = zput(fq, " frame=");            fq = zdec(fq, (unsigned)g_vid.frame.w);
+        fq = zput(fq, "x");                  fq = zdec(fq, (unsigned)g_vid.frame.h);
+        if (g_vid.frame.w && g_vid.frame.h) {
+            int fx, fy, fw, fh;
+            present_fit_int(cw, chh, (int)g_vid.frame.w, (int)g_vid.frame.h,
+                            g_pd.aspect, &fx, &fy, &fw, &fh);
+            fq = zput(fq, " dest=");  fq = zdec(fq, (unsigned)fw);
+            fq = zput(fq, "x");       fq = zdec(fq, (unsigned)fh);
+            fq = zput(fq, " at ");    fq = zdec(fq, (unsigned)fx);
+            fq = zput(fq, ",");       fq = zdec(fq, (unsigned)fy);
+            fq = zput(fq, " scale="); fq = zdec(fq, (unsigned)(fw / (int)g_vid.frame.w));
+            fq = zput(fq, "x");       fq = zdec(fq, (unsigned)(fh / (int)g_vid.frame.h));
+            fq = zput(fq, " rem=");   fq = zdec(fq, (unsigned)(fw % (int)g_vid.frame.w));
+            fq = zput(fq, ",");       fq = zdec(fq, (unsigned)(fh % (int)g_vid.frame.h));
+        }
+        fq = zput(fq, " aspect=");  fq = zdec(fq, (unsigned)g_pd.aspect);
+        fq = zput(fq, "\r\n");
+        log_append(LOG_PATH, fb, fq); serial_out(fb, fq);
+    }
 }
 
 /* ── SETTINGS: THE STORE, AND WHAT APPLYING THEM MEANS. ──────────────────────────
@@ -7487,18 +7701,53 @@ static void settings_apply(HWND h, const ntvdmex_settings *s, int live)
          future re-test, not for a user to find. */
     /* The cursor is the one setting with a VISIBLE side effect, so it goes through
        the same helper the menu item and Ctrl+F8 use rather than poking the flag. */
-    if (live && h) host_cursor_set(h, (int)s->v[SET_HOSTCURSOR]);
-    else InterlockedExchange(&g_cursor_show, s->v[SET_HOSTCURSOR] ? 1 : 0);
+    if (live && h) host_cursor_set(h, (int)s->v[SET_HIDECURSOR]);
+    else InterlockedExchange(&g_cursor_hide, s->v[SET_HIDECURSOR] ? 1 : 0);
 }
 
 /* The display half. Separate because the UI thread builds its presenter long after
    WinMain reads the registry, and present_ddraw_init() zeroes its own struct. */
+/* ── ★ ddrawfs.flag -- GO BACK TO EXCLUSIVE DIRECTDRAW FULLSCREEN. ───────────────────
+     OFF by default, and the default is the whole point: the exclusive path's stretch
+     blt is filtered by the driver and cannot be told not to be, which is what made
+     fullscreen blurry when the identically-scaled WINDOW was sharp. Borderless-window
+     fullscreen through the GDI path has none of that.
+     Kept as a knob rather than deleted because "no tearing" was the exclusive path's
+     original argument and a file is enough to get it back for a comparison. */
+#define DDRAWFS_FLAG CFG_("ddrawfs.flag")
+
+/* ── ★ fsinteger.flag -- SNAP FULLSCREEN TO WHOLE PIXEL MULTIPLES. OFF BY DEFAULT. ──
+     I added whole-multiple scaling to cure blurry fullscreen. It was never the cause
+     (the DirectDraw stretch blt's filtering was), and once that was fixed the snapping
+     had exactly one remaining effect: BARS. The user, with the desktop at 1680x1050:
+       "fullscreen now shows sharp pixels, but there is a letterbox around the output
+        which didn't happen before... it seems the desktop resolution needs to be
+        either 1:1 or 2:1 to see sharp pixels edge to edge. This still doesn't feel
+        right."
+     Correct. 1680/320 = 5.25, so snapping drops to 5x = 1600x1000 and leaves 80x50 of
+     black. At 2560x1600 (8x) and 1280x800 (4x) it divides exactly and the bars vanish
+     -- which is the whole of the "1:1 or 2:1" pattern they spotted.
+   ► AND THE BARS BUY NOTHING THEY WANT, by their own evidence: the MAXIMIZED WINDOW is
+     a 5.25x non-integer scale and they call it sharp. Nearest-neighbour at a fractional
+     factor gives hard edges with occasional 6-pixel-wide columns among the 5s; that is
+     visibly fine, and it fills the screen. Even pixels are the purist's answer to a
+     question this user is not asking.
+   ⇒ DEFAULT IS FILL, exactly like the window. Same code path, same fit, same result at
+     any resolution, and fullscreen keeps its zero user-facing settings. The flag exists
+     because "every pixel identical" is a legitimate taste, not because anyone must
+     choose. */
+#define FSINT_FLAG   CFG_("fsinteger.flag")
+
 static void settings_apply_present(present_ddraw *pd, const ntvdmex_settings *s)
 {
     pd->vsync  = (int)(s->v[SET_VSYNC]  ? 1 : 0);
     pd->filter = (int)(s->v[SET_FILTER] ? 1 : 0);
     pd->aspect = (int)s->v[SET_ASPECT];   /* PRESENT_ASPECT_*, not a flag */
     pd->scaler = (int)s->v[SET_SCALER];
+    /* Neither of these is a user setting -- see the note in settings.h about why
+       fullscreen ended up with none. Both are file knobs, both default OFF. */
+    pd->fs_integer   = (GetFileAttributesA(FSINT_FLAG)   != INVALID_FILE_ATTRIBUTES);
+    pd->fs_use_ddraw = (GetFileAttributesA(DDRAWFS_FLAG) != INVALID_FILE_ATTRIBUTES);
 }
 
 static void settings_apply_devices(const ntvdmex_settings *s)
@@ -7606,6 +7855,14 @@ static void menu_view_sync(HWND h)
         for (sc = 1; sc <= 3; ++sc)
             EnableMenuItem(m, IDM_WINSIZE_0 + (UINT)(sc - 1), MF_BYCOMMAND
                            | (win_scale_fits(sc) ? MF_ENABLED : MF_GRAYED)); }
+    /* ── RULE 1, SAID IN THE MENU. Same argument as the scale items above and NOT the
+         scaffold-stub case: Capture Mouse is implemented, and it is impossible for a
+         guest that has never called INT 33h -- there is nothing to capture the mouse
+         INTO. An enabled item that silently does nothing is the worse answer. */
+    EnableMenuItem(m, IDM_INPUT_CAPTURE, MF_BYCOMMAND
+                   | (capture_allowed() ? MF_ENABLED : MF_GRAYED));
+    CheckMenuItem(m, IDM_INPUT_CAPTURE, MF_BYCOMMAND
+                  | (g_captured ? MF_CHECKED : MF_UNCHECKED));
 }
 
 /* ── ★ WINDOW SIZE, AS A NUMBER THAT FITS ON THE SCREEN. ─────────────────────────
@@ -8107,6 +8364,31 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
                 mq = zput(mq, " autocap_want="); mq = zhex(mq, (DWORD)g_ms_want_capture);
                 mq = zput(mq, " fired="); mq = zhex(mq, g_ms_autocap_fired);
                 mq = zput(mq, " captured="); mq = zhex(mq, (DWORD)g_captured);
+                /* ── ★ THE s64 EVIDENCE, AND EACH FIELD ANSWERS ONE QUESTION. ────
+                     edges  -- did the HOST see any button transitions at all? 0 with
+                               a user who was clicking means the fault is above INT
+                               33h (focus, capture, the window), not in the driver.
+                     p0/r0  -- left-button presses/releases WAITING to be collected.
+                               These drain on read, so a guest that polls 05h/06h
+                               keeps them near 0; a guest that never asks lets them
+                               pile up, and THAT is the discriminator between "we
+                               never saw the click" and "the guest never asked".
+                     evt    -- 0Ch/14h handler installs. NON-ZERO IS A KNOWN GAP: we
+                               store the handler and never call it, so a guest that
+                               waits on its callback will sit there. Named, not
+                               silent -- see the note on g_ms_evt_mask.
+                     unimpl -- calls that reached `default:`. Should be 0 now that
+                               every documented function is handled; anything else
+                               is either exotic or a mis-patched CD 33 site.
+                     xsh    -- the virtual-coordinate shift (1 in a 320-wide mode).  */
+                mq = zput(mq, " edges="); mq = zhex(mq, g_ms_edges);
+                mq = zput(mq, " p0=");    mq = zhex(mq, (DWORD)g_ms_press_n[0]);
+                mq = zput(mq, " r0=");    mq = zhex(mq, (DWORD)g_ms_rel_n[0]);
+                mq = zput(mq, " evt=");   mq = zhex(mq, g_ms_evt_installs);
+                mq = zput(mq, " shape="); mq = zhex(mq, g_ms_shape_sets);
+                mq = zput(mq, " badptr=");mq = zhex(mq, g_ms_state_badptr);
+                mq = zput(mq, " unimpl=");mq = zhex(mq, g_ms_i33_unimpl);
+                mq = zput(mq, " xsh=");   mq = zhex(mq, (DWORD)i33_xshift());
                 mq = zput(mq, "\r\n");
                 log_append(LOG_PATH, mb, mq);
                 for (i = 0; i < g_ms_i33site_n && i < I33_SITEN; ++i) {
@@ -8241,15 +8523,22 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
     case WM_ERASEBKGND:
         return 1;                       /* we own the whole client -> no white erase */
     case WM_SETCURSOR:
-        /* Hide it over the VIDEO ONLY, and only while the toggle says so. wp is the
-           window the hit-test belongs to, and testing the hit-test ALONE was wrong:
-           the status bar is a child that forwards its own HTCLIENT here, so the
-           cursor vanished over the status bar and its size grip as well. */
-        if ((HWND)wp == h && LOWORD(lp) == HTCLIENT
-            && (g_captured || g_pd.fullscreen || !g_cursor_show)) {
-            SetCursor(NULL); return TRUE;   /* captured and FULLSCREEN always hide,
-                                               whatever the toggle -- fullscreen is
-                                               exclusive mode (session 62) */
+        /* ── RULE 3: CAPTURED, THERE IS NO POINTER ANYWHERE ON THIS WINDOW. ───────
+             The old test was `(HWND)wp == h && HTCLIENT`, so the status bar -- a
+             CHILD, which forwards its own hit-test here with wp set to ITSELF --
+             kept its arrow while the guest owned the mouse. ClipCursor confines the
+             pointer to our client rect, so that arrow had nowhere to go but sit on
+             top of a captured game. Captured or fullscreen: hide it for every
+             hit-test on every part of this window, ours or a child's.
+             Otherwise fall back to the per-area decision, which is the only place
+             the Hide-over-video setting applies. */
+        if (g_captured || g_pd.fullscreen) { SetCursor(NULL); return TRUE; }
+        if ((HWND)wp == h && LOWORD(lp) == HTCLIENT && g_cursor_hide) {
+            POINT c;
+            if (GetCursorPos(&c)) {
+                ScreenToClient(h, &c);
+                if (pt_over_video(h, c.x, c.y)) { SetCursor(NULL); return TRUE; }
+            }
         }
         break;
     case WM_PAINT: {                     /* re-blit the last snapshot on expose/move   */
@@ -8451,10 +8740,22 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
              Why the Windows key: DOS predates it, so no guest asks for it, and it is not
              a reserved XP shortcut. Scroll Lock is kept as an alternative below but must
              not be the only one -- plenty of current keyboards no longer have the key. */
-        if (wp == VK_F10 && host_key_held()) {
-            input_capture_set(h, !g_captured); return 0;
-        }
-        if (wp == VK_RETURN && !g_captured) { host_fullscreen_toggle(h); return 0; }
+        /* ⚠ Win+F10 IS GONE (s64). The release key is the WINDOWS KEY ALONE -- see
+             the capture rules above input_capture_set. A chord and a bare key for the
+             same job means the chord's second half arrives at the guest after the bare
+             key has already released, and the user asked for exactly one rule. */
+        /* ── ★ ALT+ENTER IS A HOST KEY EVEN WHILE CAPTURED. (s64, user report) ────────
+             Reported as "Alt+Enter worked a few times in DOOM, and then stopped -- I
+             guess the game hooks the enter key". The game does not: the guard here was
+             `!g_captured`, and Doom takes the mouse the moment it first polls INT 33h.
+             So Alt+Enter worked right up until the auto-grab fired and never again --
+             "a few times, then stopped" exactly.
+           ► Alt+Enter is the one hotkey that must survive capture. It is the universal
+             Windows binding for fullscreen, no DOS program asks for it (DOS predates
+             the convention), and fullscreen is a HOST property of the window rather
+             than anything the guest has an opinion about. F11 deliberately does NOT
+             get the same treatment below -- that one is Doom's gamma key. */
+        if (wp == VK_RETURN) { host_fullscreen_toggle(h); return 0; }
         /* Alt+F4 stays Windows' while uncaptured: there must always be a way to close
            the window that does not require knowing a chord. Captured, it is the guest's. */
         if (wp == VK_F4 && !g_captured) break;
@@ -8473,17 +8774,30 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
         return 0;
     case WM_KEYDOWN:
         key_msg_note();
-        /* ── THE HOST KEY IS SCROLL LOCK, AND BOTH HALVES OF THAT ARE THE FIX. ─────────
-             It was Ctrl+F10, which was broken twice over. F10 is a SYSTEM key: it arrives
-             as WM_SYSKEYDOWN, never here, so the chord could never fire at all -- capture
-             simply did not work. And the binding was wrong even in principle, because
-             DOOM USES CTRL TO FIRE and uses every F-key (F10 quit, F11 gamma, F12 spy),
-             so a Ctrl+F<n> host chord fights the guest for keys it needs constantly.
-             The host key is WIN+F10 (handled in WM_SYSKEYDOWN, because F10 only ever
-             arrives there); Scroll Lock is kept as an alternative for keyboards that
-             still have one, and many current keyboards do not. Swallowed here so the guest never sees it: the release has to be
-             one key WE reserve, because there is no chord a DOS guest cannot generate. */
-        if (wp == VK_SCROLL) { input_capture_set(h, !g_captured); return 0; }  /* alt: ScrLk */
+        /* ── ★ RULE 4: THE WINDOWS KEY ALONE RELEASES THE CAPTURE. ───────────────────
+             The lineage, because each step was a real fix: Ctrl+F10 (broken twice over
+             -- F10 is a SYSTEM key and only ever arrives as WM_SYSKEYDOWN, so the chord
+             could never fire; and DOOM USES CTRL TO FIRE and every F-key besides), then
+             Win+F10 with Scroll Lock as an alternative, then Win+Click, and now this.
+             One key, no chord, and it only ever RELEASES -- it is not a toggle, because
+             the way back in is a click in the video (rule 5) and a key that did both
+             would fight that click. Win is the right key for the same reason Win+F10
+             was: DOS predates it, so no guest can ask for it, and a captured guest owns
+             every key that a guest CAN ask for.
+             Swallowed either way, so the guest never sees it.
+           ⚠ It is handled on the DOWN. Windows opens the Start menu on the UP, and by
+             then capture is already released and ClipCursor already cleared -- so even
+             in the case we cannot suppress (the low-level hook is off by default, see
+             input_capture_set) the user lands on a desktop with their mouse back,
+             which is what they were asking for by pressing it. */
+        if (wp == VK_LWIN || wp == VK_RWIN) {
+            if (g_captured) input_capture_set(h, 0);
+            return 0;
+        }
+        /* ⚠ Scroll Lock was the alternative capture toggle. Retired with Win+F10 for
+             the same reason: rule 4 says the release is the Windows key, and rule 1
+             says a guest that never hooked the mouse cannot capture at all -- so a
+             second toggle could only ever disagree with one of them. */
         /* ► CAPTURED MEANS CAPTURED. Every other host hotkey stands down and the key goes
              to the guest -- F11 is Doom's gamma, Ctrl+F5/F8 collide with its fire key.
              Exclusivity that still eats keys is not exclusivity. */
@@ -8492,8 +8806,8 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
         if (wp == VK_F5 && (GetKeyState(VK_CONTROL) & 0x8000)) { host_screenshot(); return 0; }
         /* ⚠ Ctrl+F8 (host cursor on/off) WAS REMOVED WITH ITS MENU ITEM. Its
              argument was "fullscreen is when you most want it and there is no menu
-             bar to reach" -- which is true of EXCLUSIVE MODE, and Win+F10 is the
-             chord for that. One idea, one control; see the note on g_cursor_show.
+             bar to reach" -- which is true of EXCLUSIVE MODE, and that is a mode, not
+             a cursor knob. One idea, one control; see the note on g_cursor_hide.
              Removing it also gives the F-key back to the guest. */
         /* Raw AT keyboard: push the MAKE scancode (lParam bits 16-23 = the OEM scan
            code) into the 0x60/0x64 FIFO and raise IRQ1, so action games that hook
@@ -8548,17 +8862,28 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
     case WM_RBUTTONDOWN: case WM_RBUTTONUP:
     case WM_MBUTTONDOWN: case WM_MBUTTONUP: {
         RECT rc; int cw, ch, fw, fh; LONG b = 0;
-        /* ── ★ Win+Left-Click TOGGLES CAPTURE. (s63, user ask) ─────────────────────
-             The keyboard chord (Win+F10) stays as a backstop -- some laptops have no
-             easy F10, and a captured guest owns every key so the release MUST be one
-             the guest cannot generate -- but the natural gesture for "let me into /
-             out of this window" is a click. Win is held, so this cannot collide with
-             a guest that wants plain clicks (a paint program, a menu). Consume the
-             DOWN so the toggling click never reaches the guest as a button press; the
-             matching UP is harmless (no buttons set). host_key_held() reads the same
-             async Win state Win+F10 does, so the two chords behave identically. */
-        if (msg == WM_LBUTTONDOWN && host_key_held()) {
-            input_capture_set(h, !g_captured);
+        /* ── ★ RULE 5: A CLICK IN THE VIDEO RE-CAPTURES. ONLY THE VIDEO. ────────────
+             This replaces Win+Click (s63), which was a toggle and needed a modifier
+             precisely BECAUSE it was one -- a plain click that could also release
+             would take the mouse away from a guest mid-game. Release is the Windows
+             key now (rule 4), so the click only ever goes one way and needs nothing
+             held.
+           ► WHAT "ONLY THE VIDEO" BUYS. The caption, the frame and the menu bar are
+             not client area at all, so they never reach here: the window stays
+             draggable and the menus stay usable while a guest is waiting to have its
+             mouse handed back. The status strip IS client area and a child besides,
+             so it is excluded explicitly -- clicking the size grip should resize the
+             window, not disappear the pointer.
+           ⚠ CONSUME THE DOWN. The click that takes the mouse back must not ALSO
+             arrive at the guest as a button press, or every re-entry fires the
+             weapon / picks the menu item under the pointer. The matching UP is
+             harmless and is deliberately left alone: swallowing an UP without its
+             DOWN is how a guest ends up believing a button is held forever.
+           ⚠ And gated on rule 1 via input_capture_set: for a guest that never touched
+             INT 33h this is an ordinary click on an ordinary window. */
+        if (msg == WM_LBUTTONDOWN && !g_captured && capture_allowed()
+            && pt_over_video(h, (short)LOWORD(lp), (short)HIWORD(lp))) {
+            input_capture_set(h, 1);
             return 0;
         }
         fw = g_vid.frame.w ? (int)g_vid.frame.w : 640;
@@ -8577,7 +8902,11 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
         if (wp & MK_LBUTTON) b |= 1;
         if (wp & MK_RBUTTON) b |= 2;
         if (wp & MK_MBUTTON) b |= 4;
-        InterlockedExchange(&g_ms_btn, b);
+        /* THE EDGE, NOT JUST THE LEVEL -- see mouse_btn_edges. The exchange must
+           happen first: the transition is recorded against the position we have
+           just written above, which is what 05h/06h are required to report. */
+        {   LONG prev = InterlockedExchange(&g_ms_btn, b);
+            if (prev != b) mouse_btn_edges(prev, b); }
         return 0; }
     case WM_DESTROY:
         /* GIVE THE MACHINE BACK FIRST -- before g_running, before the audio unwind,
@@ -19705,7 +20034,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
        push into the machine. The stored-but-not-yet-honoured ones would make this
        line four times longer and every value in it would be a claim the run cannot
        support. Two lines because there are now enough of them to wrap. */
-    p = zput(p, "STAGE0: settings cursor="); p = zhex(p, g_set.v[SET_HOSTCURSOR]);
+    p = zput(p, "STAGE0: settings hidecur="); p = zhex(p, g_set.v[SET_HIDECURSOR]);
     p = zput(p, " blink=");   p = zhex(p, g_set.v[SET_BLINKCURSOR]);
     p = zput(p, " msens=");   p = zhex(p, g_set.v[SET_MSENS]);
     p = zput(p, " dosver=");  p = zhex(p, g_set.v[SET_DOSMAJ]);

@@ -87,7 +87,7 @@
 #define IDC_S_TANDY           292
 
 /* ── Input ────────────────────────────────────────────────────────────────────── */
-#define IDC_S_HOSTCURSOR      310   /* checkbox: show the host arrow over the video   */
+#define IDC_S_HOSTCURSOR      310   /* checkbox: HIDE the host arrow over the video   */
 #define IDC_S_SEAMLESS        311
 #define IDC_S_MSENS           312   /* edit:     mouse sensitivity, percent           */
 #define IDC_S_KBLAYOUT        313

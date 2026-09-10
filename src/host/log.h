@@ -34,6 +34,18 @@ static inline char *zhexb(char *p, unsigned v) {
 }
 
 /* Append a raw hex dump of n bytes at b (space-separated, newline every 16). */
+/* Plain decimal. Everything else here is hex because it is describing machine state,
+   where hex is the readable form -- but a SCREEN RESOLUTION is not machine state, and
+   "0xa00 x 0x640" is not a thing anyone can check against their display settings. */
+static inline char *zdec(char *p, unsigned v) {
+    char t[11]; int n = 0;
+    if (!v) { *p++ = '0'; *p = 0; return p; }
+    while (v && n < 10) { t[n++] = (char)('0' + v % 10); v /= 10; }
+    while (n) *p++ = t[--n];
+    *p = 0;
+    return p;
+}
+
 static inline char *zdump(char *p, const void *b, unsigned n) {
     const unsigned char *q = (const unsigned char *)b; unsigned i;
     for (i = 0; i < n; ++i) {

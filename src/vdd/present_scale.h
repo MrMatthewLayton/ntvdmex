@@ -122,6 +122,73 @@ static void present_fit(int dst_w, int dst_h, int aspect,
     *y = (dst_h - fh) / 2;
 }
 
+/* ── ★★ SHARP PIXELS: WHOLE MULTIPLES, ONE FACTOR PER AXIS. ──────────────────────────
+     present_fit above gives the biggest on-aspect rectangle that fits, and at a typical
+     desktop size that is a FRACTIONAL multiple of the guest's frame: 1680/320 = 5.25.
+     A stretch to 5.25x cannot put the same number of physical pixels under each guest
+     pixel, so columns come out alternately 5 and 6 wide. DirectDraw's stretch blt is
+     point-sampled on the drivers of this era, so this is not a soft interpolation --
+     it is a visibly UNEVEN grid, which is what "the pixels look blurry" actually is.
+     (User, 2026-09-10, on a 2560x1600 panel driven at 1680x1050.)
+
+   ► SO SNAP EACH AXIS TO A WHOLE MULTIPLE -- AND ALLOW THE TWO TO DIFFER. Independent
+     factors are what lets this serve the aspect setting at the same time as sharpness,
+     because a DOS frame does not have square pixels: 320x200 shown at 4:3 needs a pixel
+     that is 1.2 times taller than it is wide, and 5x6 delivers exactly that (1600x1200
+     is precisely 4:3). One shared factor could only ever produce 8:5.
+
+   ⚠ THE TWO GOALS GENUINELY CONFLICT AND THE CALLER SHOULD KNOW IT. At most sizes there
+     is no integer pair that hits the aspect exactly, so we take the closest and then the
+     largest -- sharp always, aspect as near as whole numbers allow. With PRESENT_ASPECT_
+     NONE there is nothing to approximate and the rule collapses to the obvious one:
+     square pixels, so nx == ny.
+
+   Search cost is (dst_w/src_w) * (dst_h/src_h) iterations -- at most a few hundred on any
+   real display, and only on the present path, which already touches every pixel. */
+static void present_fit_int(int dst_w, int dst_h, int src_w, int src_h, int aspect,
+                            int *x, int *y, int *w, int *h)
+{
+    int n, d, nx, ny, mx, my, bx = 1, by = 1;
+    long best_err = -1, best_area = -1;
+    if (dst_w < 1) dst_w = 1;
+    if (dst_h < 1) dst_h = 1;
+    /* No frame yet, or one too big to multiply at all: fall back to the smooth fit
+       rather than inventing a factor of zero. */
+    if (src_w < 1 || src_h < 1 || src_w > dst_w || src_h > dst_h) {
+        present_fit(dst_w, dst_h, aspect, x, y, w, h);
+        return;
+    }
+    mx = dst_w / src_w; my = dst_h / src_h;
+    if (mx < 1) mx = 1;
+    if (my < 1) my = 1;
+    present_aspect_ratio(aspect, &n, &d);
+    if (!n || !d) {                          /* square pixels: one factor, both axes */
+        bx = by = (mx < my) ? mx : my;
+    } else {
+        for (nx = 1; nx <= mx; ++nx) {
+            for (ny = 1; ny <= my; ++ny) {
+                /* Aspect error, cross-multiplied so it stays integer: we want
+                   (src_w*nx) / (src_h*ny) == n/d, i.e. src_w*nx*d == src_h*ny*n. */
+                long ww = (long)src_w * nx, hh = (long)src_h * ny;
+                long err = ww * d - hh * n;
+                long area = ww * hh;
+                if (err < 0) err = -err;
+                /* Scale the error against the rectangle so a big near-miss is not
+                   ranked worse than a tiny one; then prefer the LARGER picture among
+                   equally-accurate pairs, or every aspect would pick 1x1. */
+                err = (err * 1000) / (hh * n);
+                if (best_err < 0 || err < best_err
+                    || (err == best_err && area > best_area)) {
+                    best_err = err; best_area = area; bx = nx; by = ny;
+                }
+            }
+        }
+    }
+    *w = src_w * bx; *h = src_h * by;
+    *x = (dst_w - *w) / 2;
+    *y = (dst_h - *h) / 2;
+}
+
 /* ── SCALE2X (EPX). ──────────────────────────────────────────────────────────────
      Each source pixel becomes four. A corner is interpolated only where the two
      neighbours it lies between AGREE and the opposite pair does not -- which is

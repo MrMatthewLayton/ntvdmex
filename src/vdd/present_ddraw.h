@@ -46,6 +46,17 @@ typedef struct present_ddraw {
     int   filter;       /* 0 = nearest, 1 = bilinear (GDI HALFTONE)             */
     int   aspect;       /* 1 = letterbox to 4:3 rather than fill the client     */
     int   scaler;       /* PRESENT_SCALER_* (present_scale.h)                   */
+    /* ── FULLSCREEN (s64). ───────────────────────────────────────────────────
+         By DEFAULT fullscreen is a borderless window drawn by gdi_present, because
+         DirectDraw's stretch blt is filtered by the driver and there is no way to
+         forbid that -- see the long note over gdi_present. So:
+           fs_use_ddraw  0 = borderless window (default, SHARP)
+                         1 = exclusive DirectDraw (ddrawfs.flag; kept for tearing)
+           fs_mode_w/h   only consulted by the exclusive path; 0 = no mode change
+           fs_integer    snap the fullscreen picture to whole pixel multiples    */
+    int   fs_use_ddraw;
+    int   fs_mode_w, fs_mode_h;
+    int   fs_integer;
     /* double-buffer snapshot: filled under the caller's lock by _snapshot(),
        blitted (vsync'd) outside it by _present(). Removes the concurrent-write
        tearing of the live framebuffer. 8bpp + palette (all our frames). */
