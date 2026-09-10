@@ -43,6 +43,7 @@ org 0x100
 %define K_PL0    3            ; planar, drawn via WRITE MODE 0 per-plane
 %define K_ATTR   4            ; planar + REVERSED Attribute Controller palette
 %define K_SROR   5            ; planar + Set/Reset + ALU=OR over loaded latches
+%define K_SRMIX  6            ; planar + PARTIAL Enable Set/Reset (0x0E): mixed sources
 
 ; table entry: mode, kind, bytes/row, pad, width_px(2), height(2)  = 8 bytes
 %define ENT_SZ 8
@@ -59,16 +60,38 @@ start:
     mov     cl, [0x80]                  ; its length
     xor     ch, ch
     jcxz    .noarg
+    ; ⚠ TWO DIGITS, NOT ONE. The first cut took a single digit, so `testcard 10`
+    ;   selected card 1 -- and because the ORACLE ran the same binary with the same
+    ;   argument, both sides rendered card 1 and the comparison came back 0 differ.
+    ;   A test that agrees because neither side did anything is worse than a failing
+    ;   one: it reports PASS for a path it never touched.
 .scan:
     lodsb
     cmp     al, '0'
     jb      .nextc
     cmp     al, '9'
     ja      .nextc
+    sub     al, '0'                     ; first digit
+    mov     bl, al
+    xor     bh, bh
+    dec     cx
+    jz      .setit
+    lodsb                               ; a second digit?
+    cmp     al, '0'
+    jb      .setit
+    cmp     al, '9'
+    ja      .setit
     sub     al, '0'
+    mov     dx, bx                      ; bx = bx*10 + al
+    shl     bx, 1
+    shl     bx, 1
+    add     bx, dx
+    shl     bx, 1
     xor     ah, ah
-    mov     [midx], ax
-    mov     [tally], al
+    add     bx, ax
+.setit:
+    mov     [midx], bx
+    mov     [tally], bl
     mov     byte [hold], 1
     jmp     .noarg
 .nextc:
@@ -106,6 +129,8 @@ start:
     je      .do_attr
     cmp     bl, K_SROR
     je      .do_sror
+    cmp     bl, K_SRMIX
+    je      .do_srmix
     call    draw_planar
     jmp     .wait
 .do_pl0:
@@ -118,6 +143,10 @@ start:
 .do_sror:
     call    draw_planar
     call    sr_or_band
+    jmp     .wait
+.do_srmix:
+    call    draw_planar
+    call    sr_mix_band
     jmp     .wait
 .do_text:
     call    draw_text
@@ -469,6 +498,83 @@ draw_planar0:
     call    pl_tally
     ret
 
+; ── PARTIAL ENABLE SET/RESET: TWO DATA SOURCES IN ONE WRITE ───────────────────
+; ★ ensr=0x0E IS 435,852 OF LEMMINGS' WRITES and nothing tests it. Card 9 uses
+;   0x0F, where ALL FOUR planes take the Set/Reset colour and the CPU byte is
+;   irrelevant. 0x0E is structurally different: planes 1,2,3 take Set/Reset while
+;   PLANE 0 TAKES THE CPU BYTE. One write, two sources, and the split between them
+;   is a per-plane decision -- exactly the kind of thing an implementation gets
+;   subtly wrong while passing every all-or-nothing test.
+;
+; Set/Reset = 0x0A (planes 1 and 3 on, plane 2 off) and a CPU byte of 0xAA, with the
+; replace function so the latches cannot mask a mistake. Per pixel that gives
+; bit1=1, bit2=0, bit3=1 and bit0 alternating from 0xAA -- so the band must come out
+; as colours 10 and 11 alternating. Anything else names which plane took the wrong
+; source.
+sr_mix_band:
+    push    dx
+    mov     ax, 0xA000
+    mov     es, ax
+    mov     dx, 0x3CE                   ; GR5 = write mode 0
+    mov     al, 5
+    out     dx, al
+    inc     dx
+    xor     al, al
+    out     dx, al
+    mov     dx, 0x3CE                   ; GR0 = Set/Reset = 0x0A
+    mov     al, 0
+    out     dx, al
+    inc     dx
+    mov     al, 0x0A
+    out     dx, al
+    mov     dx, 0x3CE                   ; GR1 = Enable Set/Reset = 0x0E
+    mov     al, 1
+    out     dx, al
+    inc     dx
+    mov     al, 0x0E
+    out     dx, al
+    mov     dx, 0x3CE                   ; GR3 = replace, rotate 0
+    mov     al, 3
+    out     dx, al
+    inc     dx
+    xor     al, al
+    out     dx, al
+    call    pl_mask_ff
+    mov     dx, 0x3C4                   ; Map Mask: all planes
+    mov     al, 2
+    out     dx, al
+    inc     dx
+    mov     al, 0x0F
+    out     dx, al
+
+    mov     bx, [hrows]
+    shr     bx, 1
+    mov     ax, [hrows]
+    shr     ax, 2
+    add     ax, bx
+    mov     [.endrow], ax
+.band:
+    call    row_off
+    mov     cx, [wbytes]
+.b1:
+    mov     byte [es:di], 0xAA          ; plane 0 takes THIS; planes 1-3 take set/reset
+    inc     di
+    dec     cx
+    jnz     .b1
+    inc     bx
+    cmp     bx, [.endrow]
+    jb      .band
+
+    mov     dx, 0x3CE                   ; leave the GC as we found it
+    mov     al, 1
+    out     dx, al
+    inc     dx
+    xor     al, al
+    out     dx, al
+    pop     dx
+    ret
+.endrow: dw 0
+
 ; ── SET/RESET + ALU=OR OVER LOADED LATCHES ────────────────────────────────────
 ; ★ THIS IS THE IDIOM LEMMINGS ACTUALLY DRAWS WITH, and nothing tested it. Measured
 ;   inside vga_planar_write on a real gameplay run -- the registers as they were AT
@@ -712,6 +818,8 @@ modes:
     db 0x10, K_ATTR,   80, 0            ; 8: 10h + REVERSED attribute palette
     dw 640, 350
     db 0x0D, K_SROR,   40, 0            ; 9: Set/Reset + ALU=OR -- Lemmings' idiom
+    dw 320, 200
+    db 0x0D, K_SRMIX,  40, 0            ; 10: partial Enable Set/Reset (0x0E)
     dw 320, 200
     db 0xFF, 0,        0,  0
     dw 0, 0
