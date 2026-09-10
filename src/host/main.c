@@ -25020,6 +25020,25 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             p = zput(p, " of_which_nonzero="); p = zdec(p, g_vid.w_p3_nz);
             p = zput(p, " p3_from_cpu=");   p = zdec(p, g_vid.w_p3_data);
             p = zput(p, "\r\n"); }
+        {   unsigned i;
+            p = zput(p, "STAGE2: attr: acport="); p = zdec(p, g_vid.ac_port_writes);
+            p = zput(p, " acbios=");              p = zdec(p, g_vid.ac_bios_writes);
+            p = zput(p, " dacw=");                p = zdec(p, g_vid.dac_writes);
+            p = zput(p, " palresets="); p = zdec(p, g_vid.pal_resets);
+            p = zput(p, " hi_since_reset="); p = zdec(p, g_vid.dac_hi_since_reset);
+            p = zput(p, " dacblk[16s]=");
+            for (i = 0; i < 16; ++i) { p = zdec(p, g_vid.dac_block[i]); p = zput(p, ","); }
+            p = zput(p, " vpal=[");
+            for (i = 0; i < 16; ++i) { p = zhexb(p, g_vid.vpal[i]); p = zput(p, " "); }
+            p = zput(p, "] dac@vpal=[");
+            /* The DAC entries the DEFAULT AC palette actually points at. If these are
+               the seeded EGA64 values the guest never wrote them; if they hold its
+               colours, the write landed and the fault is downstream. */
+            for (i = 0; i < 16; ++i) {
+                uint32_t v = g_vid.dac[g_vid.vpal[i] & 0x3F];
+                p = zhexb(p, (v >> 16) & 0xFF); p = zhexb(p, (v >> 8) & 0xFF);
+                p = zhexb(p, v & 0xFF); p = zput(p, " "); }
+            p = zput(p, "]\r\n"); }
         p = zput(p, "STAGE2: crtc: start=");   p = zdec(p, g_vid.crtc_start);
         p = zput(p, " offset=");               p = zdec(p, g_vid.crtc_offset);
         p = zput(p, " off_seen=");             p = zdec(p, g_vid.crtc_off_seen);

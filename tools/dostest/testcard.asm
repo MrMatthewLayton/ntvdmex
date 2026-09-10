@@ -44,6 +44,7 @@ org 0x100
 %define K_ATTR   4            ; planar + REVERSED Attribute Controller palette
 %define K_SROR   5            ; planar + Set/Reset + ALU=OR over loaded latches
 %define K_SRMIX  6            ; planar + PARTIAL Enable Set/Reset (0x0E): mixed sources
+%define K_DAC16  7            ; planar + DAC 0..15 reprogrammed, AC left ALONE
 
 ; table entry: mode, kind, bytes/row, pad, width_px(2), height(2)  = 8 bytes
 %define ENT_SZ 8
@@ -131,6 +132,8 @@ start:
     je      .do_sror
     cmp     bl, K_SRMIX
     je      .do_srmix
+    cmp     bl, K_DAC16
+    je      .do_dac16
     call    draw_planar
     jmp     .wait
 .do_pl0:
@@ -147,6 +150,10 @@ start:
 .do_srmix:
     call    draw_planar
     call    sr_mix_band
+    jmp     .wait
+.do_dac16:
+    call    draw_planar
+    call    dac16_ramp
     jmp     .wait
 .do_text:
     call    draw_text
@@ -498,6 +505,45 @@ draw_planar0:
     call    pl_tally
     ret
 
+; ── WHICH DAC ENTRIES DOES A 16-COLOUR MODE ACTUALLY LOOK AT? ─────────────────
+; ★ THE QUESTION LEMMINGS FORCED. A 4-bit pixel indexes the Attribute Controller's
+;   palette, and THAT indexes the DAC. So which DAC entries a mode reads depends
+;   entirely on what the BIOS left in the AC registers at mode set. Two conventions
+;   exist and they disagree for ten of the sixteen colours:
+;       EGA compatibility:  00 01 02 03 04 05 14 07 38 39 3A 3B 3C 3D 3E 3F
+;       identity:           00 01 02 03 04 05 06 07 08 09 0A 0B 0C 0D 0E 0F
+;   Measured on the rig, Lemmings writes DAC 0..7 and 0x14 and NEVER touches the AC
+;   -- and gets sixteen correct colours on real hardware. That is only possible if
+;   the real BIOS's table is not the one we assumed.
+;
+; This card settles it without a guess: reprogram DAC entries 0..15 to an obvious
+; red ramp (index i -> red = i*4) and DO NOT TOUCH THE AC. Then draw the usual bars.
+;   * identity AC  -> all sixteen bars come out as the ramp, dark red to bright.
+;   * EGA-table AC -> only bars 0..5 and 7 follow the ramp; 6 and 8..15 show
+;                     whatever DAC 0x14 and 0x38..0x3F happened to hold.
+; The difference is unmissable and it names the convention.
+dac16_ramp:
+    push    dx
+    mov     dx, 0x3C8                   ; DAC write index = 0
+    xor     al, al
+    out     dx, al
+    mov     dx, 0x3C9
+    xor     bx, bx                      ; bx = entry 0..15
+.e:
+    mov     al, bl                      ; red = i * 4  (0,4,8..60)
+    shl     al, 1
+    shl     al, 1
+    out     dx, al                      ; R
+    xor     al, al
+    out     dx, al                      ; G
+    xor     al, al
+    out     dx, al                      ; B
+    inc     bx
+    cmp     bx, 16
+    jb      .e
+    pop     dx
+    ret
+
 ; ── PARTIAL ENABLE SET/RESET: TWO DATA SOURCES IN ONE WRITE ───────────────────
 ; ★ ensr=0x0E IS 435,852 OF LEMMINGS' WRITES and nothing tests it. Card 9 uses
 ;   0x0F, where ALL FOUR planes take the Set/Reset colour and the CPU byte is
@@ -820,6 +866,8 @@ modes:
     db 0x0D, K_SROR,   40, 0            ; 9: Set/Reset + ALU=OR -- Lemmings' idiom
     dw 320, 200
     db 0x0D, K_SRMIX,  40, 0            ; 10: partial Enable Set/Reset (0x0E)
+    dw 320, 200
+    db 0x0D, K_DAC16,  40, 0            ; 11: DAC 0..15 ramp, AC untouched
     dw 320, 200
     db 0xFF, 0,        0,  0
     dw 0, 0

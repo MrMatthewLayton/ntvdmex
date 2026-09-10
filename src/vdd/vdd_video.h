@@ -229,6 +229,16 @@ typedef struct video_state {
     uint32_t w_p3_sr;                   /* writes where plane 3 took set/reset      */
     uint32_t w_p3_nz;                   /* ...of which stored a NON-ZERO byte       */
     uint32_t w_p3_data;                 /* writes where plane 3 took the CPU byte   */
+    uint32_t ac_port_writes;            /* palette registers written via 0x3C0       */
+    uint32_t ac_bios_writes;            /* ...and via INT 10h AH=10h                 */
+    uint32_t dac_writes;                /* DAC entries written (3C9 + INT 10h)       */
+    /* Which DAC entries the guest actually programs, in 16-entry blocks. The whole
+       Lemmings palette question is "does it write 0x38..0x3F", and a total count
+       cannot answer that. */
+    uint32_t dac_block[16];
+    uint8_t  def_pal_off;               /* INT 10h AH=12h BL=31h: suppress the reload */
+    uint32_t pal_resets;                /* load_default_palette() calls              */
+    uint32_t dac_hi_since_reset;        /* block-3 DAC writes since the last reset   */
     uint32_t mw_hist[64];               /* (write mode, map mask) pairs -- see seq_out */
     uint32_t mask_skip_chain4;          /* map-mask writes dropped: chained            */
     uint32_t mask_skip_same;            /* map-mask writes dropped: value unchanged    */

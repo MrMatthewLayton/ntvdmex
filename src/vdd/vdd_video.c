@@ -45,9 +45,22 @@ static uint32_t ega64_rgb(uint8_t v)
     return 0xFF000000u | (r << 16) | (g << 8) | b;
 }
 
-/* The sixteen AC palette registers a mode set leaves behind. */
+/* ── THE SIXTEEN AC PALETTE REGISTERS A MODE SET LEAVES BEHIND -- MEASURED. ──────
+     Index 6 was 0x14 here, taken from the EGA-compatibility table that every
+     reference quotes. It is wrong for what the VGA BIOS actually leaves in mode 0Dh,
+     and the error was invisible until a guest programmed the DAC without touching
+     the AC -- which is exactly what Lemmings does.
+   ★ HOW IT WAS MEASURED, rather than looked up: testcard card 11 reprograms DAC
+     entries 0..15 to a red ramp and leaves the AC alone. On genuine MS-DOS 6.22 the
+     bars come back
+         0..7   (0,0,0) (16,0,0) (32,0,0) ... (112,0,0)   <- the ramp, so vpal[i]=i
+         8..15  the EGA brights                            <- so vpal[i]=0x38+i-8
+     Bar 6 following the ramp is the whole proof: with 0x14 there it would have shown
+     DAC 0x14, which the card never wrote.
+   ⚠ SO THE TABLE IS IDENTITY FOR THE LOW EIGHT AND THE EGA BLOCK FOR THE HIGH EIGHT.
+     Do not "correct" index 6 back to 0x14 from a datasheet; the rig disagrees. */
 static const uint8_t VPAL_DEFAULT[16] = {
-    0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x14, 0x07,
+    0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
     0x38, 0x39, 0x3A, 0x3B, 0x3C, 0x3D, 0x3E, 0x3F
 };
 
@@ -94,6 +107,11 @@ static void pal_refresh(video_state *st)
 static void load_default_palette(video_state *st)
 {
     int i;
+    /* The guest asked us not to (AH=12h BL=31h). Leave both the DAC and the
+       attribute palette exactly as it left them. */
+    if (st->def_pal_off) return;
+    st->pal_resets++;
+    st->dac_hi_since_reset = 0;
     for (i = 0; i < 16; ++i)   st->vpal[i] = VPAL_DEFAULT[i];
     st->vpal[16] = 0;
     st->attr_ff = st->attr_index = st->attr_mode = st->attr_cse = 0;
@@ -129,6 +147,7 @@ static void attr_out(void *self, uint16_t port, uint8_t w, uint32_t v)
     case 0x08: case 0x09: case 0x0A: case 0x0B:
     case 0x0C: case 0x0D: case 0x0E: case 0x0F:
         st->vpal[st->attr_index & 0x0F] = (uint8_t)(val & 0x3F);
+        st->ac_port_writes++;
         pal_refresh(st);
         break;
     case 0x10: st->attr_mode = val;  pal_refresh(st); break;
@@ -517,6 +536,7 @@ static void int10(void *self, ntvdd_regs *r)
     case 0x10:                                        /* palette / DAC            */
         if (al == 0x10) {                             /* set one DAC register     */
             uint16_t idx = r_bx(r);
+            st->dac_block[((idx & 0xFF) >> 4) & 15]++;
             st->dac[idx & 0xFF] = dac_pack((uint8_t)(r_dx(r) >> 8) & 0x3F,
                                            (uint8_t)(r_cx(r) >> 8) & 0x3F,
                                            (uint8_t)(r_cx(r) & 0x3F));
@@ -525,11 +545,14 @@ static void int10(void *self, ntvdd_regs *r)
             uint16_t first = r_bx(r), n = r_cx(r), i;
             uint8_t *t = (uint8_t *)vdd_map_flat(st->bus, r->es, (uint16_t)r_dx(r));
             for (i = 0; i < n && (first + i) < 256; ++i)
-                st->dac[first + i] = dac_pack(t[i*3] & 0x3F, t[i*3+1] & 0x3F, t[i*3+2] & 0x3F);
+                { st->dac[first + i] = dac_pack(t[i*3] & 0x3F, t[i*3+1] & 0x3F, t[i*3+2] & 0x3F);
+                  st->dac_block[((first + i) >> 4) & 15]++;
+                  if (((first + i) & 0xF0) == 0x30) st->dac_hi_since_reset++; }
+            st->dac_writes += n;
             pal_refresh(st);
         } else if (al == 0x00) {                      /* set one palette register */
             uint8_t reg = (uint8_t)((r_bx(r) >> 8) & 0xFF);
-            if (reg < 17) st->vpal[reg] = (uint8_t)(r_bx(r) & 0x3F);
+            if (reg < 17) { st->vpal[reg] = (uint8_t)(r_bx(r) & 0x3F); st->ac_bios_writes++; }
             pal_refresh(st);   /* AH=10h stored vpal and rendered from ega16: inert until now */
         } else if (al == 0x01) {                      /* set the border           */
             st->vpal[16] = st->overscan = (uint8_t)((r_bx(r) >> 8) & 0x3F);
@@ -537,6 +560,7 @@ static void int10(void *self, ntvdd_regs *r)
             uint8_t *t = (uint8_t *)vdd_map_flat(st->bus, r->es, (uint16_t)r_dx(r));
             int i; for (i = 0; i < 17; ++i) st->vpal[i] = (uint8_t)(t[i] & 0x3F);
             st->overscan = st->vpal[16];
+            st->ac_bios_writes += 17;
             pal_refresh(st);
         } else if (al == 0x03) {                      /* blink vs bright background */
             st->blink = (uint8_t)(r_bx(r) & 1);
@@ -750,6 +774,24 @@ static void int10(void *self, ntvdd_regs *r)
     case 0x12: {                                       /* alternate function sel  */
         uint8_t bl = (uint8_t)(r_bx(r) & 0xFF);
         if (bl == 0x10) { s_bx(r, 0x0003); s_cx(r, 0x0009); }  /* color / 256K, switches */
+        /* ── ★★ BL=31h: DEFAULT PALETTE LOADING. NOT A NO-OP. ────────────────────
+             A mode set normally reloads the DAC and the attribute palette, which
+             destroys any colours the program has already installed. A game that
+             wants to keep them says so with this call BEFORE setting the mode --
+             and that is exactly what Lemmings does.
+           ⚠ WE USED TO ACCEPT IT AND IGNORE IT. The `else` arm below answers
+             AL=12h ("supported") to every unhandled BL, so this looked handled and
+             did nothing: measured, Lemmings wrote 752 entries into DAC 0x30..0x3F,
+             a mode set wiped them (palresets=5, hi_since_reset=0), and it never
+             wrote them again -- because on real hardware it did not have to. Its
+             terrain then rendered in the leftover default EGA brights, which is the
+             cyan-and-green "garbling" this whole thread has been chasing.
+             The same "unimplemented call still answers" shape as ever: a sentinel
+             that reads as success is worse than a refusal. */
+        else if (bl == 0x31) {
+            st->def_pal_off = (uint8_t)((r_ax(r) & 0xFF) ? 1 : 0);
+            s_ax(r, (uint16_t)((r_ax(r) & 0xFF00) | 0x12));
+        }
         else            { s_ax(r, (uint16_t)((r_ax(r) & 0xFF00) | 0x12)); } /* supported */
         break; }
     case 0x1A:                                         /* get display combination */
@@ -797,7 +839,9 @@ static void dac_out(void *self, uint16_t port, uint8_t w, uint32_t v)
         st->dac_latch[st->dac_comp++] = val & 0x3F;
         if (st->dac_comp >= 3) {
             st->dac[st->dac_widx] = dac_pack(st->dac_latch[0], st->dac_latch[1], st->dac_latch[2]);
-            st->dac_widx++; st->dac_comp = 0;
+            st->dac_block[(st->dac_widx >> 4) & 15]++;
+            if ((st->dac_widx & 0xF0) == 0x30) st->dac_hi_since_reset++;
+            st->dac_widx++; st->dac_comp = 0; st->dac_writes++;
             /* pal[] is DERIVED from dac[] -- see pal_refresh. Without this a guest
                could reprogram the DAC and see nothing change, which is precisely the
                half of the Lemmings bug that survived the first fix. */
