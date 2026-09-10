@@ -14,6 +14,7 @@ nasm -f bin "$DIR/demovesa.asm" -o "$DIR/vesademo.com"
 nasm -f bin "$DIR/blitfast.asm" -o "$DIR/blitfast.com"   # 12h rects, efficient REP idiom (vs QB BLIT)
 nasm -f bin "$DIR/timertst.asm" -o "$DIR/timertst.com"   # PIT timer-IRQ test (INT 1Ch dots)
 nasm -f bin "$DIR/mousetst.asm" -o "$DIR/mousetst.com"   # INT 33h mouse test (draw + cursor)
+nasm -f bin "$DIR/testcard.asm" -o "$DIR/testcard.com"   # s64: per-mode TV test card (see scripts/testcard_check.py)
 nasm -f bin "$DIR/xmstest.asm"  -o "$DIR/xmstest.com"    # M4 XMS end-to-end test (2Fh + Move)
 nasm -f bin "$DIR/emstest.asm"  -o "$DIR/emstest.com"    # M4 EMS end-to-end test (67h + shadowing)
 nasm -f bin "$DIR/selftest.asm" -o "$DIR/selftest.com"  # one-shot regression suite (all subsystems)
