@@ -42,6 +42,7 @@ org 0x100
 %define K_LIN8   2
 %define K_PL0    3            ; planar, drawn via WRITE MODE 0 per-plane
 %define K_ATTR   4            ; planar + REVERSED Attribute Controller palette
+%define K_SROR   5            ; planar + Set/Reset + ALU=OR over loaded latches
 
 ; table entry: mode, kind, bytes/row, pad, width_px(2), height(2)  = 8 bytes
 %define ENT_SZ 8
@@ -103,6 +104,8 @@ start:
     je      .do_pl0
     cmp     bl, K_ATTR
     je      .do_attr
+    cmp     bl, K_SROR
+    je      .do_sror
     call    draw_planar
     jmp     .wait
 .do_pl0:
@@ -111,6 +114,10 @@ start:
 .do_attr:
     call    draw_planar
     call    attr_reverse
+    jmp     .wait
+.do_sror:
+    call    draw_planar
+    call    sr_or_band
     jmp     .wait
 .do_text:
     call    draw_text
@@ -462,6 +469,100 @@ draw_planar0:
     call    pl_tally
     ret
 
+; ── SET/RESET + ALU=OR OVER LOADED LATCHES ────────────────────────────────────
+; ★ THIS IS THE IDIOM LEMMINGS ACTUALLY DRAWS WITH, and nothing tested it. Measured
+;   inside vga_planar_write on a real gameplay run -- the registers as they were AT
+;   EACH WRITE, not sampled at exit:
+;       ensr@write 0x00=1252120 0x0c=41792 0x0e=435852 0x0f=189508
+;       alu        0=1423170    2=496102
+;   So half a million writes go through Enable Set/Reset with the ALU set to OR,
+;   combining the Set/Reset colour with the LATCHES. Every other card here uses the
+;   replace function with set/reset off, which exercises none of that.
+;
+; What this draws: the colour bars, then a band redrawn as (bar OR 5). On correct
+; hardware every pixel in the band becomes its bar colour with bits 0 and 2 forced
+; on. Any disagreement isolates the ALU, the Enable Set/Reset gating, or the latches.
+;
+; ⚠ THE READ IS THE POINT. OR-with-latch is meaningless unless the latches hold the
+;   destination, and only a READ loads them -- the same trap that bit the border.
+sr_or_band:
+    push    dx
+    mov     ax, 0xA000
+    mov     es, ax
+    mov     dx, 0x3CE                   ; GR5 = write mode 0
+    mov     al, 5
+    out     dx, al
+    inc     dx
+    xor     al, al
+    out     dx, al
+    mov     dx, 0x3CE                   ; GR0 = Set/Reset value = 5
+    mov     al, 0
+    out     dx, al
+    inc     dx
+    mov     al, 5
+    out     dx, al
+    mov     dx, 0x3CE                   ; GR1 = Enable Set/Reset, all four planes
+    mov     al, 1
+    out     dx, al
+    inc     dx
+    mov     al, 0x0F
+    out     dx, al
+    mov     dx, 0x3CE                   ; GR3 = function select 2 (OR), rotate 0
+    mov     al, 3
+    out     dx, al
+    inc     dx
+    mov     al, 0x10                    ; bits 3-4 = 10b = OR
+    out     dx, al
+    call    pl_mask_ff
+    mov     dx, 0x3C4                   ; Map Mask: all planes
+    mov     al, 2
+    out     dx, al
+    inc     dx
+    mov     al, 0x0F
+    out     dx, al
+
+    ; ⚠ COUNT AGAINST AN END ROW HELD IN MEMORY, not a register. The first cut kept
+    ;   the row count in SI across `call row_off` and `call pl_latch`, and the loop ran
+    ;   away -- 144000 writes where 2000 were intended. That mattered for more than
+    ;   tidiness: a runaway write clips differently on real hardware than it does
+    ;   against our bounds check, so the card would have "found" an emulator bug that
+    ;   was entirely its own. Verify the instrument before believing its verdict.
+    mov     bx, [hrows]                 ; band starts at h/2
+    shr     bx, 1
+    mov     ax, [hrows]
+    shr     ax, 2                       ; ...and is h/4 rows tall
+    add     ax, bx
+    mov     [.endrow], ax
+.band:
+    call    row_off
+    mov     cx, [wbytes]
+.b1:
+    call    pl_latch                    ; load the latches from the destination
+    mov     byte [es:di], 0             ; CPU byte unused: all planes take set/reset
+    inc     di
+    dec     cx
+    jnz     .b1
+    inc     bx
+    cmp     bx, [.endrow]
+    jb      .band
+
+    ; put the Graphics Controller back so later cards are unaffected
+    mov     dx, 0x3CE
+    mov     al, 1
+    out     dx, al
+    inc     dx
+    xor     al, al                      ; Enable Set/Reset off
+    out     dx, al
+    mov     dx, 0x3CE
+    mov     al, 3
+    out     dx, al
+    inc     dx
+    xor     al, al                      ; function select back to replace
+    out     dx, al
+    pop     dx
+    ret
+.endrow: dw 0
+
 ; ── REVERSE THE ATTRIBUTE CONTROLLER PALETTE ──────────────────────────────────
 ; ★ WHY THIS CARD EXISTS. In a 16-colour planar mode the 4-bit pixel value does NOT
 ;   index the DAC directly -- it indexes the ATTRIBUTE CONTROLLER's 16 palette
@@ -610,6 +711,8 @@ modes:
     dw 640, 350
     db 0x10, K_ATTR,   80, 0            ; 8: 10h + REVERSED attribute palette
     dw 640, 350
+    db 0x0D, K_SROR,   40, 0            ; 9: Set/Reset + ALU=OR -- Lemmings' idiom
+    dw 320, 200
     db 0xFF, 0,        0,  0
     dw 0, 0
 

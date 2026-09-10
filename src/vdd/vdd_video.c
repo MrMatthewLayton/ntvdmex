@@ -853,10 +853,16 @@ void vga_planar_write(video_state *st, uint32_t off, uint8_t cpu)
         return; }
     default: {                                    /* write mode 0                   */
         uint8_t data = vga_ror(cpu, st->func_rotate);
+        st->w_ensr_hist[st->enable_sr & 0x0F]++;
+        st->w_alu_hist[alu & 3]++;
         for (p = 0; p < 4; ++p) {
             uint8_t val = (st->enable_sr & (1<<p)) ? (uint8_t)((st->set_reset & (1<<p)) ? 0xFF : 0x00) : data;
             uint8_t r = vga_alu(alu, val, st->latch[p]);
             r = (uint8_t)((r & bm) | (st->latch[p] & (uint8_t)~bm));
+            if (p == 3 && (st->map_mask & 8)) {
+                if (st->enable_sr & 8) { st->w_p3_sr++; if (r) st->w_p3_nz++; }
+                else                     st->w_p3_data++;
+            }
             if (st->map_mask & (1<<p)) st->plane[p][off] = r;
         }
         return; }

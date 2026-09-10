@@ -25007,6 +25007,19 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
              fixes in a row -- one right, one wrong. render_planar now depends on all
              of these, so a wrong picture has to be able to name which register is
              responsible instead of being guessed at. */
+        {   unsigned i;
+            p = zput(p, "STAGE2: planar w0: ensr@write");
+            for (i = 0; i < 16; ++i) if (g_vid.w_ensr_hist[i]) {
+                p = zput(p, " 0x"); p = zhexb(p, i);
+                p = zput(p, "="); p = zdec(p, g_vid.w_ensr_hist[i]); }
+            p = zput(p, " | alu");
+            for (i = 0; i < 4; ++i) if (g_vid.w_alu_hist[i]) {
+                p = zput(p, " "); p = zdec(p, i);
+                p = zput(p, "="); p = zdec(p, g_vid.w_alu_hist[i]); }
+            p = zput(p, " | p3_from_sr=");  p = zdec(p, g_vid.w_p3_sr);
+            p = zput(p, " of_which_nonzero="); p = zdec(p, g_vid.w_p3_nz);
+            p = zput(p, " p3_from_cpu=");   p = zdec(p, g_vid.w_p3_data);
+            p = zput(p, "\r\n"); }
         p = zput(p, "STAGE2: crtc: start=");   p = zdec(p, g_vid.crtc_start);
         p = zput(p, " offset=");               p = zdec(p, g_vid.crtc_offset);
         p = zput(p, " off_seen=");             p = zdec(p, g_vid.crtc_off_seen);

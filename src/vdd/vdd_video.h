@@ -219,6 +219,16 @@ typedef struct video_state {
        arrays that actually carry a mode-Y frame. */
     uint32_t mask_hist[16];             /* map-mask values written, by value          */
     uint32_t wmode_hist[4];             /* GC write modes selected (1 = LATCH COPY)   */
+    /* ── WHAT THE REGISTERS HELD AT *WRITE* TIME, not at end of run. ──────────
+         wmode_hist/mask_hist above count register PROGRAMMING; a snapshot of
+         enable_sr taken when the guest exits says nothing about what it held
+         during the thousands of writes before that. These are incremented inside
+         vga_planar_write, so they are a history rather than a final state. */
+    uint32_t w_ensr_hist[16];           /* Enable Set/Reset live at each write     */
+    uint32_t w_alu_hist[4];             /* GR3 ALU function live at each write      */
+    uint32_t w_p3_sr;                   /* writes where plane 3 took set/reset      */
+    uint32_t w_p3_nz;                   /* ...of which stored a NON-ZERO byte       */
+    uint32_t w_p3_data;                 /* writes where plane 3 took the CPU byte   */
     uint32_t mw_hist[64];               /* (write mode, map mask) pairs -- see seq_out */
     uint32_t mask_skip_chain4;          /* map-mask writes dropped: chained            */
     uint32_t mask_skip_same;            /* map-mask writes dropped: value unchanged    */
