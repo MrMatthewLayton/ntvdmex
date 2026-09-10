@@ -90,6 +90,7 @@
 #include "vdd_video.h"
 #include "vdd_input.h"
 #include "vdd_speaker.h"
+#include "vdd_joy.h"
 #include "vdd_dma.h"
 #include "vdd_opl.h"
 #include "vdd_sb.h"
@@ -471,6 +472,15 @@ static opl_state    g_opl;       static ntvdd g_opl_dev;
 static sb_state     g_sb;        static ntvdd g_sb_dev;
 static mpu_state    g_mpu;       static ntvdd g_mpu_dev;
 static comm_state   g_comm;      static ntvdd g_comm_dev;   /* GH #9 */
+/* ── THE GAMEPORT (session 62). The VDD models the 558 one-shot behind port
+     0x201; this side feeds it: a winmm poll thread (joyGetPosEx -- XP-safe,
+     loaded dynamically like waveOut, no new import) writes present/axes/
+     buttons, and settings_apply writes the adapter type. Until now the port
+     was UNCLAIMED and Mario Bros died right after a CLI poll of it. */
+static joy_state    g_joy;       static ntvdd g_joy_dev;
+static int          g_joy_povmap;   /* JoystickGamepad: map the pad's D-pad
+                                       (POV hat) onto axis A -- what a DOS
+                                       platformer actually wants from a pad */
 /* ── FOLDING RUNS OF THE SAME WOW32 CALL. (session 56) See the WOWFOLD note in
      the BOP handler. `mute` is set only while a run is being folded and is
      cleared the instant a different call arrives, so it can never outlive the
@@ -657,6 +667,7 @@ static DWORD    g_ui_tick_skips;
      a torn sample costs one bucket, not a wrong conclusion. */
 #define KEYLAT_RING 32
 static uint32_t qpc_us(LONGLONG d);          /* fwd: defined with the lock instruments */
+static int host_readable(const void *addr, SIZE_T len);  /* fwd: defined with the VEH */
 static volatile LONGLONG g_keylat_t[KEYLAT_RING];
 static volatile LONG     g_keylat_head, g_keylat_tail;
 static DWORD    g_keymsg_hist[8];     /* queue delay ms: 0,1,2,4,8,16,32,64+       */
@@ -1694,6 +1705,10 @@ static WORD bios_equipment_word(void)
          used to tell it unconditionally, which is a real configuration -- a
          program can be forced onto its emulator to compare the two. */
     if (g_fpu_present) w |= 0x0002;
+    /* Bit 12: game adapter installed. The CARD exists iff the JoystickType
+       setting says so; whether a stick is plugged into it is the port's
+       business (an empty gameport still answers), not the equipment word's. */
+    if (g_joy.type != JOY_TYPE_NONE) w |= 0x1000;
     return w;
 }
 static void serial_init(void)
@@ -4983,6 +4998,25 @@ static DWORD WINAPI heartbeat_thread(LPVOID pv)
         q = zput(q, " blocks=0x");   q = zhex(q, g_sb.blocks);
         q = zput(q, " rate=0x");     q = zhex(q, g_sb.rate_hz);
         q = zput(q, "} mixed=0x");   q = zhex(q, g_audio.frames_mixed);
+        /* ► THE 3DA VIEW: did the guest's vblank polls reach the VDD, and what was
+             it told last? Mario spins >1s on `in al,3DA / test al,8 / jz` before
+             the breakpoint kill; 700k reads with no edge is either "the reads
+             never reach status_in" or "the model never asserts bit 3", and only
+             these two numbers can tell them apart. (session 62) */
+        q = zput(q, " p3da=0x");     q = zhex(q, g_vid.p3da_reads);
+        q = zput(q, "/edges=0x");    q = zhex(q, g_vid.vbl_edges);
+        q = zput(q, "/last=0x");     q = zhexb(q, g_vid.retrace);
+        /* ► THE BYTES AT THE BEAT'S CS:IP. Mario's host dies between beats with
+             exit 0x80000003 and NO user-mode dispatch, so the last heartbeat is
+             the only witness -- and a bare cs:ip in a moving guest names nothing
+             once the process is gone. Eight bytes make it decodable after the
+             fact. (session 62) */
+        if (cs || ip) {
+            const BYTE *cp = (const BYTE *)(ULONG_PTR)((cs << 4) + ip);
+            q = zput(q, " code@csip=");
+            if (host_readable(cp, 8)) q = zdump(q, cp, 8);
+            else q = zput(q, "<unreadable>");
+        }
         q = zput(q, "\r\n");
         log_append(LOG_PATH, b, q); serial_out(b, q);
         Sleep(500);
@@ -6856,7 +6890,24 @@ static void host_cursor_set(HWND h, int on)
        the setting says. Without this, applying settings mid-capture would put the
        desktop arrow back on top of a game that had taken the mouse. */
     if (GetCursorPos(&pt) && WindowFromPoint(pt) == h)
-        SetCursor((on && !g_captured) ? LoadCursorA(NULL, IDC_ARROW) : NULL);
+        SetCursor((on && !g_captured && !g_pd.fullscreen)
+                  ? LoadCursorA(NULL, IDC_ARROW) : NULL);
+}
+
+/* ── FULLSCREEN HIDES THE POINTER, WHATEVER THE TOGGLE SAYS. (session 62) ────────
+     User ask, 2026-09-10: exclusive fullscreen IS exclusive mode -- there is no
+     chrome, no menu and no status strip to point at, so a desktop arrow parked
+     over the game is never right, hooked mouse or not. One helper for all three
+     ways in (menu, Alt+Enter, F11), because WM_SETCURSOR only fires on the next
+     actual mouse MOVE -- without the immediate SetCursor the arrow lingers over
+     the game until a jiggle, the same trap host_cursor_set documents. */
+static void host_fullscreen_toggle(HWND h)
+{
+    POINT pt;
+    present_ddraw_set_fullscreen(&g_pd, !g_pd.fullscreen);
+    if (GetCursorPos(&pt) && WindowFromPoint(pt) == h)
+        SetCursor((g_pd.fullscreen || g_captured || !g_cursor_show)
+                  ? NULL : LoadCursorA(NULL, IDC_ARROW));
 }
 
 /* ── SETTINGS: THE STORE, AND WHAT APPLYING THEM MEANS. ──────────────────────────
@@ -6892,9 +6943,71 @@ static void host_cursor_set(HWND h, int on)
                        windowed blit does not exist yet (the clipper field is unused).
                        Filtering IS pushed, and GDI honours it in the stretch.
        Opl (OPL2/OPL3)     -- vdd_opl is a 9-channel OPL2. There is no OPL3 to select.
-       SbModel, Midi, Gus, Tandy, joystick, KeyboardLayout, Typematic, SeamlessMouse,
+       SbModel, Midi, Gus, Tandy, KeyboardLayout, Typematic, SeamlessMouse,
        A20, BootFrom, DriveCPath, CdRomImage, SoundFontPath -- no consumer yet.
-       (FloppyAImage IS live: it is what INT 13h opens.) */
+       (FloppyAImage IS live: it is what INT 13h opens. JoystickType and
+       JoystickGamepad ARE live as of session 62: the gameport VDD and the winmm
+       poll thread consume them.) */
+/* ── THE GAMEPORT'S CLOCK AND ITS POLL THREAD. (session 62) ──────────────────────
+     The VDD times its one-shots off this injected clock -- QPC, the same timebase
+     as everything else here. Absolute microseconds, not a delta: only differences
+     are ever taken. */
+static uint64_t joy_now_us(void *ctx)
+{
+    LARGE_INTEGER t; (void)ctx;
+    QueryPerformanceCounter(&t);
+    return qpc_us64(t.QuadPart);
+}
+
+/* joyGetPosEx costs a driver round-trip, so it must NEVER run inside the port
+   trap -- the guest polls 0x201 in a tight CLI loop precisely while measuring an
+   axis. This thread samples at ~66 Hz into g_joy and the trap reads only the
+   cached bytes. winmm binds dynamically like waveOut (audio_wave.c): no new
+   import, and a machine with no multimedia stack still boots. XP-safe on
+   purpose -- joyGetPosEx sees an Xbox 360 pad through xusb; XInput does not
+   exist down-level and would be a new allowlist DLL. */
+typedef DWORD (WINAPI *PFN_joyGetPosEx)(UINT, JOYINFOEX *);
+static DWORD WINAPI joy_poll_thread(LPVOID param)
+{
+    HMODULE mod = NULL; PFN_joyGetPosEx pGetPos = NULL;
+    (void)param;
+    for (;;) {
+        if (g_joy.type == JOY_TYPE_NONE) { g_joy.present = 0; Sleep(250); continue; }
+        if (!pGetPos) {
+            if (!mod) mod = LoadLibraryA("winmm.dll");
+            pGetPos = mod ? (PFN_joyGetPosEx)GetProcAddress(mod, "joyGetPosEx") : NULL;
+            if (!pGetPos) { g_joy.present = 0; Sleep(1000); continue; }
+        }
+        {   JOYINFOEX ji; unsigned ax[4]; int i;
+            ji.dwSize = sizeof ji;
+            ji.dwFlags = 0xFFu;                    /* JOY_RETURNALL: X Y Z R U V POV buttons */
+            if (pGetPos(0, &ji) == 0) {            /* JOYSTICKID1, JOYERR_NOERROR */
+                /* winmm's view of a 360 pad on XP: X/Y = left stick, U/R = right
+                   stick, Z = triggers (unused here), POV = the D-pad. */
+                ax[0] = (ji.dwXpos >> 8) & 0xFF; ax[1] = (ji.dwYpos >> 8) & 0xFF;
+                ax[2] = (ji.dwUpos >> 8) & 0xFF; ax[3] = (ji.dwRpos >> 8) & 0xFF;
+                if (g_joy_povmap && ji.dwPOV < 36000) {
+                    /* Hundredths of a degree, 0 = up. Snap the eight sectors
+                       onto axis A extremes -- a DOS platformer reads digital
+                       directions out of the analog port, and a held D-pad must
+                       pin the axis, not average with a centred stick. */
+                    int sec = (int)(((ji.dwPOV + 2250u) / 4500u) & 7u);
+                    if (sec == 7 || sec == 0 || sec == 1) ax[1] = 0;
+                    if (sec >= 3 && sec <= 5)             ax[1] = 255;
+                    if (sec >= 1 && sec <= 3)             ax[0] = 255;
+                    if (sec >= 5 && sec <= 7)             ax[0] = 0;
+                }
+                for (i = 0; i < 4; ++i) g_joy.axis[i] = (uint8_t)ax[i];
+                g_joy.buttons = (uint8_t)(ji.dwButtons & 0x0F);
+                g_joy.present = 1;
+            } else {
+                g_joy.present = 0;                 /* unplugged mid-run is fine */
+            }
+        }
+        Sleep(15);
+    }
+}
+
 /* ── ★ TWO COPIES, BECAUSE THE MENU AND THE DIALOG MEAN DIFFERENT THINGS. ────────
      g_set is WHAT IS IN FORCE. g_set_disk is WHAT THE REGISTRY HOLDS. They start
      identical and diverge only when something is tried from a menu.
@@ -6934,6 +7047,12 @@ static int g_xms_on = 1, g_ems_on = 1;
 static void settings_apply(HWND h, const ntvdmex_settings *s, int live)
 {
     g_ms_sens        = (int)s->v[SET_MSENS];
+    /* ── THE JOYSTICK ROWS GO LIVE (session 62). The type reaches the gameport
+         VDD (how many axes/buttons the adapter wires); the D-pad mapping stays
+         host-side because it shapes the SAMPLE, not the device model. Live: the
+         poll thread and the port trap both re-read these on every pass. */
+    g_joy.type       = (uint8_t)(s->v[SET_JOYTYPE] <= 2 ? s->v[SET_JOYTYPE] : 0);
+    g_joy_povmap     = (int)(s->v[SET_JOYPAD] ? 1 : 0);
     g_pitpace_on     = (int)(s->v[SET_PITPACE] ? 1 : 0);
     g_ui_tick_min_ms = (int)s->v[SET_UITICK];
     g_vid.cursor_blink = (uint8_t)(s->v[SET_BLINKCURSOR] ? 1 : 0);
@@ -7740,8 +7859,11 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
            window the hit-test belongs to, and testing the hit-test ALONE was wrong:
            the status bar is a child that forwards its own HTCLIENT here, so the
            cursor vanished over the status bar and its size grip as well. */
-        if ((HWND)wp == h && LOWORD(lp) == HTCLIENT && (g_captured || !g_cursor_show)) {
-            SetCursor(NULL); return TRUE;   /* captured always hides, whatever the toggle */
+        if ((HWND)wp == h && LOWORD(lp) == HTCLIENT
+            && (g_captured || g_pd.fullscreen || !g_cursor_show)) {
+            SetCursor(NULL); return TRUE;   /* captured and FULLSCREEN always hide,
+                                               whatever the toggle -- fullscreen is
+                                               exclusive mode (session 62) */
         }
         break;
     case WM_PAINT: {                     /* re-blit the last snapshot on expose/move   */
@@ -7854,7 +7976,7 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
         }
         switch (LOWORD(wp)) {
         case IDM_FILE_EXIT: DestroyWindow(h); return 0;
-        case IDM_DISP_FULLSCREEN: present_ddraw_set_fullscreen(&g_pd, !g_pd.fullscreen); return 0;
+        case IDM_DISP_FULLSCREEN: host_fullscreen_toggle(h); return 0;
         case IDM_DISP_SHOWMENU: {
             HMENU cur = GetMenu(h);
             if (cur) { g_savedmenu = cur; SetMenu(h, NULL); } else SetMenu(h, g_savedmenu);
@@ -7946,7 +8068,7 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
         if (wp == VK_F10 && host_key_held()) {
             input_capture_set(h, !g_captured); return 0;
         }
-        if (wp == VK_RETURN && !g_captured) { present_ddraw_set_fullscreen(&g_pd, !g_pd.fullscreen); return 0; }
+        if (wp == VK_RETURN && !g_captured) { host_fullscreen_toggle(h); return 0; }
         /* Alt+F4 stays Windows' while uncaptured: there must always be a way to close
            the window that does not require knowing a chord. Captured, it is the guest's. */
         if (wp == VK_F4 && !g_captured) break;
@@ -7980,7 +8102,7 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
              to the guest -- F11 is Doom's gamma, Ctrl+F5/F8 collide with its fire key.
              Exclusivity that still eats keys is not exclusivity. */
         if (g_captured) { key_push_make(lp); break; }
-        if (wp == VK_F11) { present_ddraw_set_fullscreen(&g_pd, !g_pd.fullscreen); return 0; }
+        if (wp == VK_F11) { host_fullscreen_toggle(h); return 0; }
         if (wp == VK_F5 && (GetKeyState(VK_CONTROL) & 0x8000)) { host_screenshot(); return 0; }
         /* ⚠ Ctrl+F8 (host cursor on/off) WAS REMOVED WITH ITS MENU ITEM. Its
              argument was "fullscreen is when you most want it and there is no menu
@@ -9936,12 +10058,153 @@ static int host_writable(void *addr, SIZE_T len)
    the guest PM CONTEXT to the log, then exits CLEANLY (no WER dialog) so the batch
    still prints the log. Only meaningful once g_dpmi_pm is set. */
 static int s_veh_count = 0;
+
+/* ── THE FATAL DUMP, SHARED. (session 62) ────────────────────────────────────────
+     Factored out of the VEH's veh_fatal arm so the LAST-CHANCE filter below can
+     produce the same dump for a real-mode run -- until now `!g_dpmi_pm` bailed at
+     the top of the VEH, so a host fault under a V86-only guest fell through to WER
+     and the log just STOPPED. Mario and Heretic both died blind that way (10-game
+     pass, 2026-09-10). Never returns: writes the dump, drops the tray icon, exits
+     cleanly so the batch still collects the log. Runs on a broken process: no
+     allocation, no locks, statics only. Own 2 KB buffer -- the frames + @esp lines
+     alone approach 1 KB, and appending them after an arm's ~400 chars overflowed
+     the old shared cb[1024] silently. */
+static void host_fatal_dump(EXCEPTION_RECORD *er, CONTEXT *cx)
+{
+    static char cb[2048]; char *p = cb;
+    InterlockedIncrement(&g_veh_fatal);                 /* run 52: a real fault WAS delivered */
+    p = zput(p, g_dpmi_pm ? "\r\nDPMI FATAL: exception code=0x"
+                          : "\r\nHOST FATAL (real-mode guest): exception code=0x");
+    p = zhex(p, er->ExceptionCode);
+    p = zput(p, " at 0x"); p = zhex(p, (unsigned)(ULONG_PTR)er->ExceptionAddress);
+    if (er->ExceptionCode == EXCEPTION_ACCESS_VIOLATION && er->NumberParameters >= 2) {
+        p = zput(p, " av{op=0x");  p = zhex(p, (DWORD)er->ExceptionInformation[0]);
+        p = zput(p, " addr=0x");   p = zhex(p, (DWORD)er->ExceptionInformation[1]);
+        p = zput(p, "}");
+    }
+    p = zput(p, "\r\n  CS:EIP=0x"); p = zhex(p, cx->SegCs); p = zput(p, ":0x"); p = zhex(p, cx->Eip);
+    p = zput(p, " SS:ESP=0x"); p = zhex(p, cx->SegSs); p = zput(p, ":0x"); p = zhex(p, cx->Esp);
+    p = zput(p, " EFL=0x"); p = zhex(p, cx->EFlags); p = zput(p, "\r\n");
+    p = zput(p, "  DS=0x"); p = zhex(p, cx->SegDs); p = zput(p, " ES=0x"); p = zhex(p, cx->SegEs);
+    p = zput(p, " FS=0x"); p = zhex(p, cx->SegFs); p = zput(p, " GS=0x"); p = zhex(p, cx->SegGs);
+    p = zput(p, "\r\n  EAX=0x"); p = zhex(p, cx->Eax); p = zput(p, " EBX=0x"); p = zhex(p, cx->Ebx);
+    p = zput(p, " ECX=0x"); p = zhex(p, cx->Ecx); p = zput(p, " EDX=0x"); p = zhex(p, cx->Edx);
+    p = zput(p, "\r\n");
+    { const BYTE *fb = (const BYTE *)(ULONG_PTR)(er->ExceptionAddress);
+      p = zput(p, "  bytes@fault: ");
+      if (host_readable(fb, 16)) p = zdump(p, fb, 16); else p = zput(p, "<unreadable>");
+    }
+    /* Where the GUEST was when the host died. For a real-mode crash this is the
+       line that names the suspect -- e.g. a CLI poll of an unclaimed port. */
+    if (g_tib_dbg) {
+        volatile BYTE *t = g_tib_dbg;
+        p = zput(p, "\r\n  guest tib{cs:ip=0x"); p = zhex(p, VDM_REG(t, VTIB_CS) & 0xFFFF);
+        p = zput(p, ":0x"); p = zhex(p, VDM_REG(t, VTIB_EIP));
+        p = zput(p, " eax=0x"); p = zhex(p, VDM_REG(t, VTIB_EAX));
+        p = zput(p, " edx=0x"); p = zhex(p, VDM_REG(t, VTIB_EDX)); p = zput(p, "}");
+    }
+    p = zput(p, "\r\n");
+    /* ── ★★ WHO CALLED INTO THIS? (GH #128, session 38) ───────────────────────────
+         A fault inside ntdll or kernel32 is OUR bug at one remove -- some host call
+         passed a bad pointer -- and the registers name the *instruction* while saying
+         nothing about the caller. "An access violation in ntdll at 0x7c912c16" is not
+         an actionable line; the first return address inside our own image is.
+       ⚠ Guarded at every step and bounded: this runs inside a VEH on a process that is
+         already broken, so it may not allocate, may not lock, and must not fault. A
+         frame chain that does not ascend is not a frame chain, and we stop rather than
+         printing plausible-looking rubbish -- an instrument that invents its own frame
+         is this project's most expensive recurring mistake. */
+    p = zput(p, "  last WOW32 call ENTERED: id=0x"); p = zhex(p, g_wow_last_id);
+    { const char *nm = wow32_name(g_wow_last_id);
+      if (nm) { p = zput(p, " "); p = zput(p, nm); } }
+    p = zput(p, " from=0x"); p = zhex(p, g_wow_last_from);
+    p = zput(p, " (it may have COMPLETED -- the log line is only written with the result,\r\n"
+                "    so a crash inside a service loses the header and the log ends one call short)\r\n");
+    p = zput(p, "  tid=0x"); p = zhex(p, GetCurrentThreadId());
+    p = zput(p, (GetCurrentThreadId() == g_guest_tid)
+              ? " (THE GUEST THREAD)" : " (a WORKER thread, NOT the guest)");
+    p = zput(p, " ourbase=0x");
+    p = zhex(p, (DWORD)(ULONG_PTR)GetModuleHandleA(NULL));
+    p = zput(p, "\r\n  frames:");
+    {   DWORD fp = cx->Ebp; int k;
+        for (k = 0; k < 12 && fp; ++k) {
+            const DWORD *fr = (const DWORD *)(ULONG_PTR)fp;
+            if (!host_readable(fr, 8)) { p = zput(p, " <unreadable>"); break; }
+            p = zput(p, " 0x"); p = zhex(p, fr[1]);
+            if (fr[0] <= fp) { p = zput(p, " <chain ends>"); break; }
+            fp = fr[0];
+        }
+        p = zput(p, "\r\n");
+    }
+    /* ★ AND THE RAW STACK, because the frame chain is only as good as EBP. A leaf
+         function that has not built a frame, or one compiled without one, breaks the
+         walk above and the walk cannot tell you that it did. Twenty-four words from
+         ESP will contain the return address whether EBP is trustworthy or not -- the
+         reader looks for one near `ourbase`. */
+    {   const DWORD *sp = (const DWORD *)(ULONG_PTR)cx->Esp; int k;
+        p = zput(p, "  @esp:");
+        for (k = 0; k < 24; ++k) {
+            if (!host_readable(sp + k, 4)) { p = zput(p, " <unreadable>"); break; }
+            p = zput(p, " 0x"); p = zhex(p, sp[k]);
+        }
+        p = zput(p, "\r\n");
+    }
+    log_append(LOG_PATH, cb, p);
+    serial_out(cb, p);
+    tray_remove(g_hwnd);      /* the VEH exits without unwinding the UI thread */
+    ExitProcess(0xDE0);                                 /* clean exit; batch dumps the log */
+}
+
+/* First-chance sightings of real-mode/host faults -- see the arm in the VEH below. */
+static LONG s_rm_fault_seen = 0;
+
 static LONG CALLBACK dpmi_crash_veh(EXCEPTION_POINTERS *ep)
 {
     static char cb[1024]; char *p = cb;
     EXCEPTION_RECORD *er = ep->ExceptionRecord;
     CONTEXT *cx = ep->ContextRecord;
-    if (!g_dpmi_pm) return EXCEPTION_CONTINUE_SEARCH;   /* only handle PM events */
+    if (!g_dpmi_pm) {
+        /* ── A REAL-MODE GUEST'S HOST CRASH USED TO BE INVISIBLE. (session 62) ────
+             This handler bailed here unconditionally, so every host-side fault
+             under a V86-only guest went to WER with nothing in the log. FIRST
+             chance we only LOG -- an SEH frame somewhere below may legitimately
+             claim the fault (nothing in src raises on purpose, but system DLLs
+             may), and exiting here would kill a healthy run. If nothing claims
+             it, host_unhandled_filter writes the full dump at LAST chance.
+             Error severity (0xC........) -- and BREAKPOINT/SINGLE-STEP too,
+             measured the hard way: Mario's host dies with EXIT CODE 0x80000003
+             (STATUS_BREAKPOINT, from the launcher's %ERRORLEVEL%), and the
+             first cut of this arm filtered to error severity only, so the one
+             exception that names the killer was exactly the one not logged.
+             Guard pages and debug prints stay excluded. */
+        if ((er->ExceptionCode & 0xF0000000u) == 0xC0000000u
+            || er->ExceptionCode == EXCEPTION_BREAKPOINT
+            || er->ExceptionCode == EXCEPTION_SINGLE_STEP) {
+            LONG n = InterlockedIncrement(&s_rm_fault_seen);
+            if (n <= 32) {
+                p = zput(p, "HOSTFAULT #"); p = zhex(p, (unsigned)n);
+                p = zput(p, ": exc=0x"); p = zhex(p, er->ExceptionCode);
+                p = zput(p, " at=0x"); p = zhex(p, (DWORD)(ULONG_PTR)er->ExceptionAddress);
+                if (er->ExceptionCode == EXCEPTION_ACCESS_VIOLATION && er->NumberParameters >= 2) {
+                    p = zput(p, " av{op=0x"); p = zhex(p, (DWORD)er->ExceptionInformation[0]);
+                    p = zput(p, " addr=0x"); p = zhex(p, (DWORD)er->ExceptionInformation[1]);
+                    p = zput(p, "}");
+                }
+                p = zput(p, " cs:eip=0x"); p = zhex(p, cx->SegCs);
+                p = zput(p, ":0x"); p = zhex(p, cx->Eip);
+                p = zput(p, " tid=0x"); p = zhex(p, GetCurrentThreadId());
+                p = zput(p, (GetCurrentThreadId() == g_guest_tid) ? " (guest thread)" : " (worker)");
+                if (g_tib_dbg) {
+                    volatile BYTE *t = g_tib_dbg;
+                    p = zput(p, " tib{cs:ip=0x"); p = zhex(p, VDM_REG(t, VTIB_CS) & 0xFFFF);
+                    p = zput(p, ":0x"); p = zhex(p, VDM_REG(t, VTIB_EIP)); p = zput(p, "}");
+                }
+                p = zput(p, "\r\n");
+                log_append(LOG_PATH, cb, p); serial_out(cb, p);
+            }
+        }
+        return EXCEPTION_CONTINUE_SEARCH;
+    }
     InterlockedIncrement(&g_veh_any);                   /* run 52: prove ANY PM fault reaches us */
 
     /* --- Reflected PM software interrupt = the DPMI INT 31h dispatch (run 26) ---------
@@ -10095,8 +10358,7 @@ static LONG CALLBACK dpmi_crash_veh(EXCEPTION_POINTERS *ep)
               if ((DWORD)cx->Edx != (DWORD)g_pm_entry_eip || g_pm_entry_eip < 0) {
                   p = zput(p, " -> REAL fault (EDX is not the entry EIP): FATAL dump");
                   p = zput(p, "\r\n");
-                  log_append(LOG_PATH, cb, p); serial_out(cb, p);
-                  goto veh_fatal;
+                  goto veh_fatal;                       /* the label flushes cb */
               }
               if (g_pm_entry_eip >= 0 && (DWORD)g_pm_entry_eip != cx->Eip) {
                   p = zput(p, " -> FAULT, not an INT: resuming at ENTRY 0x");
@@ -10136,69 +10398,24 @@ static LONG CALLBACK dpmi_crash_veh(EXCEPTION_POINTERS *ep)
 
     /* --- genuine (non-reflected) PM fault: full dump + clean exit -------------------- */
 veh_fatal:
-    InterlockedIncrement(&g_veh_fatal);                 /* run 52: a real PM fault WAS delivered */
-    p = zput(p, "\r\nDPMI FATAL: exception code=0x"); p = zhex(p, er->ExceptionCode);
-    p = zput(p, " at 0x"); p = zhex(p, (unsigned)(ULONG_PTR)er->ExceptionAddress);
-    p = zput(p, "\r\n  CS:EIP=0x"); p = zhex(p, cx->SegCs); p = zput(p, ":0x"); p = zhex(p, cx->Eip);
-    p = zput(p, " SS:ESP=0x"); p = zhex(p, cx->SegSs); p = zput(p, ":0x"); p = zhex(p, cx->Esp);
-    p = zput(p, " EFL=0x"); p = zhex(p, cx->EFlags); p = zput(p, "\r\n");
-    p = zput(p, "  DS=0x"); p = zhex(p, cx->SegDs); p = zput(p, " ES=0x"); p = zhex(p, cx->SegEs);
-    p = zput(p, " FS=0x"); p = zhex(p, cx->SegFs); p = zput(p, " GS=0x"); p = zhex(p, cx->SegGs);
-    p = zput(p, "\r\n  EAX=0x"); p = zhex(p, cx->Eax); p = zput(p, " EBX=0x"); p = zhex(p, cx->Ebx);
-    p = zput(p, " ECX=0x"); p = zhex(p, cx->Ecx); p = zput(p, " EDX=0x"); p = zhex(p, cx->Edx);
-    p = zput(p, "\r\n");
-    { const BYTE *fb = (const BYTE *)(ULONG_PTR)(er->ExceptionAddress);
-      p = zput(p, "  bytes@fault: "); p = zdump(p, fb, 16); }
-    /* ── ★★ WHO CALLED INTO THIS? (GH #128, session 38) ───────────────────────────
-         A fault inside ntdll or kernel32 is OUR bug at one remove -- some host call
-         passed a bad pointer -- and the registers name the *instruction* while saying
-         nothing about the caller. "An access violation in ntdll at 0x7c912c16" is not
-         an actionable line; the first return address inside our own image is.
-       ⚠ Guarded at every step and bounded: this runs inside a VEH on a process that is
-         already broken, so it may not allocate, may not lock, and must not fault. A
-         frame chain that does not ascend is not a frame chain, and we stop rather than
-         printing plausible-looking rubbish -- an instrument that invents its own frame
-         is this project's most expensive recurring mistake. */
-    p = zput(p, "  last WOW32 call ENTERED: id=0x"); p = zhex(p, g_wow_last_id);
-    { const char *nm = wow32_name(g_wow_last_id);
-      if (nm) { p = zput(p, " "); p = zput(p, nm); } }
-    p = zput(p, " from=0x"); p = zhex(p, g_wow_last_from);
-    p = zput(p, " (it may have COMPLETED -- the log line is only written with the result,\r\n"
-                "    so a crash inside a service loses the header and the log ends one call short)\r\n");
-    p = zput(p, "  tid=0x"); p = zhex(p, GetCurrentThreadId());
-    p = zput(p, (GetCurrentThreadId() == g_guest_tid)
-              ? " (THE GUEST THREAD)" : " (a WORKER thread, NOT the guest)");
-    p = zput(p, " ourbase=0x");
-    p = zhex(p, (DWORD)(ULONG_PTR)GetModuleHandleA(NULL));
-    p = zput(p, "\r\n  frames:");
-    {   DWORD fp = cx->Ebp; int k;
-        for (k = 0; k < 12 && fp; ++k) {
-            const DWORD *fr = (const DWORD *)(ULONG_PTR)fp;
-            if (!host_readable(fr, 8)) { p = zput(p, " <unreadable>"); break; }
-            p = zput(p, " 0x"); p = zhex(p, fr[1]);
-            if (fr[0] <= fp) { p = zput(p, " <chain ends>"); break; }
-            fp = fr[0];
-        }
-        p = zput(p, "\r\n");
-    }
-    /* ★ AND THE RAW STACK, because the frame chain is only as good as EBP. A leaf
-         function that has not built a frame, or one compiled without one, breaks the
-         walk above and the walk cannot tell you that it did. Twenty-four words from
-         ESP will contain the return address whether EBP is trustworthy or not -- the
-         reader looks for one near `ourbase`. */
-    {   const DWORD *sp = (const DWORD *)(ULONG_PTR)cx->Esp; int k;
-        p = zput(p, "  @esp:");
-        for (k = 0; k < 24; ++k) {
-            if (!host_readable(sp + k, 4)) { p = zput(p, " <unreadable>"); break; }
-            p = zput(p, " 0x"); p = zhex(p, sp[k]);
-        }
-        p = zput(p, "\r\n");
-    }
-    log_append(LOG_PATH, cb, p);
-    serial_out(cb, p);
-    tray_remove(g_hwnd);      /* the VEH exits without unwinding the UI thread */
-    ExitProcess(0xDE0);                                 /* clean exit; batch dumps the log */
-    return EXCEPTION_CONTINUE_SEARCH;                   /* not reached */
+    log_append(LOG_PATH, cb, p); serial_out(cb, p);     /* flush the arm's context first;   */
+    host_fatal_dump(er, cx);                            /* the dump has its own buffer. The */
+    return EXCEPTION_CONTINUE_SEARCH;                   /* old inline dump overflowed cb.   */
+}
+
+/* ── LAST CHANCE: the dump a real-mode run never had. (session 62) ───────────────
+     With g_dpmi_pm set the VEH above already turns an unmatched fault into the
+     fatal dump at FIRST chance. Real-mode runs only log there and pass the fault
+     on -- so if no SEH frame claims it, it arrives here, where WER used to eat it
+     and the log just stopped. Same dump, same clean exit, so the batch and the
+     rig watcher collect the evidence either way. */
+static LONG WINAPI host_unhandled_filter(EXCEPTION_POINTERS *ep)
+{
+    static char ub[128]; char *p = ub;
+    p = zput(p, "\r\nHOST UNHANDLED EXCEPTION (last chance; no SEH claimed it):\r\n");
+    log_append(LOG_PATH, ub, p); serial_out(ub, p);
+    host_fatal_dump(ep->ExceptionRecord, ep->ContextRecord);
+    return EXCEPTION_EXECUTE_HANDLER;                   /* not reached */
 }
 
 /* DPMI test watchdog: if the PM guest neither faults to the VEH nor exits within a few
@@ -19217,6 +19434,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     p = zput(p, " hcpu=0x");           p = zhex(p, (DWORD)(ULONG_PTR)g_hcpu);
     p = zput(p, "\r\n");
     AddVectoredExceptionHandler(1, dpmi_crash_veh);     /* DPMI spike crash diagnostic */
+    SetUnhandledExceptionFilter(host_unhandled_filter); /* real-mode runs: full dump, not WER */
 
     /* CSRSS command-info: receive buffers + first-command state + IFEO task id. */
     g_ci.CmdLine = g_cmd; g_ci.CmdLen = sizeof(g_cmd);
@@ -20047,6 +20265,12 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     g_spk.pit = &g_pit;                         /* speaker tone <- PIT channel 2 */
     g_spk_dev = vdd_speaker_device(&g_spk);
     vdd_bus_add(&g_bus, &g_spk_dev);            /* PC speaker: claims port 0x61  */
+    g_joy.now_us = joy_now_us;
+    g_joy_dev = vdd_joy_device(&g_joy);
+    vdd_bus_add(&g_bus, &g_joy_dev);            /* gameport: 0x200-0x207         */
+    { HANDLE jt = CreateThread(NULL, 0, joy_poll_thread, NULL, 0, NULL);
+      if (jt) CloseHandle(jt); }                /* NORMAL priority: 66 Hz of winmm
+                                                   must never preempt the guest  */
     g_dma_dev = vdd_dma_device(&g_dma);
     vdd_bus_add(&g_bus, &g_dma_dev);            /* 8237 DMA: 0x00-0x0F/80-8F/C0-DF */
     g_opl.ext_clock = 1;                        /* exec loop pumps real elapsed us */
@@ -20720,6 +20944,32 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         g_ev_hist[ev < EV_HIST_MAX ? ev : EV_HIST_MAX - 1]++;
         exec_leave_mark();               /* ...and stops. Our servicing is not its  */
         InterlockedExchange(&g_in_exec, 0);
+        /* ── WHEN VdmStartExecution RETURNS A FAILURE STATUS, SAY SO. (session 62) ──
+             The V86 path ignored `st` entirely -- only the DPMI branch below ever
+             read it -- so a guest that executes an INT3 (or any fault the kernel
+             turns into a returned NTSTATUS rather than a serviceable event) died
+             with the host process exit code equal to that status and NOTHING in the
+             log. That is exactly Mario's flaky ~2s death: exit 0x80000003
+             (STATUS_BREAKPOINT), reached in the MAIN LOOP well past the joystick
+             poll, with the last heartbeat the only witness. Name the guest cs:ip
+             and the bytes there so the INT3's origin is visible. Bounded; the top
+             bit of an NTSTATUS is set for both warning (0x8...) and error (0xC...). */
+        if ((unsigned)st & 0x80000000u) {
+            static int s_bud_st = 16;
+            if (s_bud_st > 0) {
+                DWORD sc = VDM_REG(tib, VTIB_CS) & 0xFFFF, si = VDM_REG(tib, VTIB_EIP) & 0xFFFF;
+                const volatile BYTE *sp3 = (const volatile BYTE *)((sc << 4) + si);
+                unsigned k7;
+                --s_bud_st;
+                p = zput(p, "V86-STATUS 0x"); p = zhex(p, (unsigned)st);
+                p = zput(p, " ev=0x"); p = zhex(p, ev);
+                p = zput(p, " at 0x"); p = zhex(p, sc); p = zput(p, ":0x"); p = zhex(p, si);
+                p = zput(p, " bytes:");
+                for (k7 = 0; k7 < 8; ++k7) { p = zput(p, " "); p = zhexb(p, sp3[k7]); }
+                p = zput(p, "\r\n");
+                log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+            }
+        }
         /* SPIKE: once in protected mode, stop at the FIRST PM event and dump the raw
            taxonomy (event/info/selectors) -- this is how the spike learns how the
            monitor reflects a PM INT 31h / fault. Later increments replace this with
@@ -20971,6 +21221,44 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                       log_append(LOG_PATH, x8, x8q); serial_out(x8, x8q); }
                 } else if (ah15 == 0x86) {         /* wait CX:DX microseconds */
                     BCF_CLR();                     /* the PIT already paces us */
+                } else if (ah15 == 0x84) {
+                    /* ── BIOS joystick support (session 62). DX picks the half:
+                         0 = switches (buttons, bits 4-7 of AL, ACTIVE LOW like
+                         the port), 1 = the four resistive inputs. The values
+                         come from the same host-fed sample the gameport VDD
+                         answers with, so the two interfaces cannot disagree.
+                         No stick (or JoystickType None) -> AH=86h CF=1, which
+                         is what sends a well-behaved game to its keyboard
+                         path. Logged once, not per call -- a game polls this
+                         at frame rate and a trace the guest drives outruns
+                         the guest. */
+                    unsigned dx84 = VDM_REG(tib, VTIB_EDX) & 0xFFFF;
+                    { static int said = 0;
+                      if (!said) { said = 1;
+                        char jb[64], *jq = jb;
+                        jq = zput(jq, "  INT15 AH=84h joystick, dx=0x");
+                        jq = zhex(jq, dx84);
+                        jq = zput(jq, joy_live(&g_joy) ? " (live)\r\n" : " (absent)\r\n");
+                        log_append(LOG_PATH, jb, jq); serial_out(jb, jq); } }
+                    if (!joy_live(&g_joy)) {
+                        BSETAX((WORD)((VDM_REG(tib, VTIB_EAX) & 0xFF) | 0x8600));
+                        BCF_SET();
+                    } else if (dx84 == 0x0000) {
+                        unsigned mask = (1u << joy_buttons_wired(&g_joy)) - 1u;
+                        BSETAX((WORD)(((~g_joy.buttons & mask) & 0x0F) << 4));
+                        BCF_CLR();
+                    } else if (dx84 == 0x0001) {
+                        BSETAX((WORD)g_joy.axis[0]);
+                        VDM_REG(tib, VTIB_EBX) = (VDM_REG(tib, VTIB_EBX) & 0xFFFF0000u) | g_joy.axis[1];
+                        VDM_REG(tib, VTIB_ECX) = (VDM_REG(tib, VTIB_ECX) & 0xFFFF0000u)
+                                               | (joy_axes(&g_joy) >= 4 ? g_joy.axis[2] : 0u);
+                        VDM_REG(tib, VTIB_EDX) = (VDM_REG(tib, VTIB_EDX) & 0xFFFF0000u)
+                                               | (joy_axes(&g_joy) >= 4 ? g_joy.axis[3] : 0u);
+                        BCF_CLR();
+                    } else {
+                        BSETAX((WORD)((VDM_REG(tib, VTIB_EAX) & 0xFF) | 0x8600));
+                        BCF_SET();
+                    }
                 } else if (ah15 == 0xC0) {         /* get system config table */
                     BSETAX(0x8600); BCF_SET();     /* not provided -> unsupported */
                     g_bios_unimpl[0x15] = 1;

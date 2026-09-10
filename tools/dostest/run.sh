@@ -63,6 +63,15 @@ cc -std=c99 -Wall -Wextra -Wno-unused-function -O0 -g \
 
 "$DIR/speaker_test"
 
+# Session 62: the gameport (joystick) VDD battery -- the 558 one-shot model that
+# port 0x201 answers with, timed against an injected clock.
+cc -std=c99 -Wall -Wextra -Wno-unused-function -O0 -g \
+   -I "$DIR/../../src/vdd" \
+   -o "$DIR/joy_test" "$DIR/joy_test.c" \
+   "$DIR/../../src/vdd/vdd_joy.c" "$DIR/../../src/vdd/vdd_bus.c"
+
+"$DIR/joy_test"
+
 # Sound epic slice-1: the ISA DMA controller battery (vdd_dma.c on the bus).
 cc -std=c99 -Wall -Wextra -Wno-unused-function -O0 -g \
    -I "$DIR/../../src/vdd" \
