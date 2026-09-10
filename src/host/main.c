@@ -6972,6 +6972,12 @@ static DWORD WINAPI joy_poll_thread(LPVOID param)
 {
     HMODULE mod = NULL; PFN_joyGetPosEx pGetPos = NULL;
     (void)param;
+    /* ⚠ BELOW the pacer, ALWAYS. joyGetPosEx is a legacy-driver round trip that can
+         block for milliseconds, and the s61 Skyroads timing is fragile to exactly
+         this kind of contention on a 2-core box. This thread must never be able to
+         delay a frame present or a PIT tick, so it sits below NORMAL -- the present
+         pacer (g_pitpace_prio = NORMAL) and the exec thread always win. */
+    SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
     for (;;) {
         if (g_joy.type == JOY_TYPE_NONE) { g_joy.present = 0; Sleep(250); continue; }
         if (!pGetPos) {
@@ -7007,6 +7013,25 @@ static DWORD WINAPI joy_poll_thread(LPVOID param)
         }
         Sleep(15);
     }
+}
+
+/* Spawn the joystick poll thread AT MOST ONCE, and only when a joystick is
+   configured. Called from settings_apply, which runs at startup and on every
+   dialog OK. The default (JoystickType=None) never reaches the create, so a
+   machine that has never enabled a gamepad has NO poll thread at all -- the
+   whole point, so a non-joystick game (Skyroads and friends) keeps the exact
+   thread landscape the s61 timing was tuned against. Once created the thread
+   lives on and idles at 4 Hz if the type is later set back to None; recreating
+   and joining a thread on a setting change is not worth the complexity when the
+   idle cost is a Sleep. */
+static LONG g_joy_thread_started = 0;
+static void joy_poll_ensure(void)
+{
+    if (g_joy.type == JOY_TYPE_NONE) return;
+    if (InterlockedExchange(&g_joy_thread_started, 1)) return;   /* once */
+    { HANDLE jt = CreateThread(NULL, 0, joy_poll_thread, NULL, 0, NULL);
+      if (jt) CloseHandle(jt);
+      else InterlockedExchange(&g_joy_thread_started, 0); }       /* retry next apply */
 }
 
 /* ── ★ TWO COPIES, BECAUSE THE MENU AND THE DIALOG MEAN DIFFERENT THINGS. ────────
@@ -7054,6 +7079,9 @@ static void settings_apply(HWND h, const ntvdmex_settings *s, int live)
          poll thread and the port trap both re-read these on every pass. */
     g_joy.type       = (uint8_t)(s->v[SET_JOYTYPE] <= 2 ? s->v[SET_JOYTYPE] : 0);
     g_joy_povmap     = (int)(s->v[SET_JOYPAD] ? 1 : 0);
+    joy_poll_ensure();               /* spawns the winmm poll thread ONLY if a
+                                        joystick is configured -- no thread, and no
+                                        timing risk, in the default (None) config */
     g_pitpace_on     = (int)(s->v[SET_PITPACE] ? 1 : 0);
     g_ui_tick_min_ms = (int)s->v[SET_UITICK];
     g_vid.cursor_blink = (uint8_t)(s->v[SET_BLINKCURSOR] ? 1 : 0);
@@ -19345,6 +19373,21 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     p = zput(p, " vsync=");     p = zhex(p, g_set.v[SET_VSYNC]);
     p = zput(p, " frameskip="); p = zhex(p, g_set.v[SET_FRAMESKIP]);
     p = zput(p, "\r\n");
+    /* ── ★★★ THE TIMING LANDSCAPE, IN EVERY LOG. (s63) ──────────────────────────────
+         Skyroads' frame pacing is fragile on a 2-core box and has regressed THREE
+         times, each time because a change quietly added background work or moved a
+         priority and nobody re-checked. So make the invariants AUDITABLE: the pacer
+         priority MUST read 0x0 (THREAD_PRIORITY_NORMAL); the s61 regression was it
+         sitting at HIGHEST (0x2), which let the pacer preempt the guest. joy_thread
+         MUST read 0x0 whenever JoystickType is None, because a non-joystick game
+         must run with no poll thread at all. A regression in either now shows up in
+         the first twenty lines of every run, not two months later on a user's
+         screen. (Priority constants: NORMAL=0, ABOVE_NORMAL=1, HIGHEST=2,
+         BELOW_NORMAL=-1=0xffffffff, LOWEST=-2.) */
+    p = zput(p, "STAGE0: timing: pacer_prio="); p = zhex(p, (DWORD)g_pitpace_prio);
+    p = zput(p, " (want 0x0=NORMAL) joytype=");  p = zhex(p, (DWORD)g_joy.type);
+    p = zput(p, " joy_thread=");  p = zhex(p, (DWORD)g_joy_thread_started);
+    p = zput(p, " (want 0x0 when joytype=0x0) pit_split=1\r\n");
 
     g_headless = (GetFileAttributesA(AUTOEXIT_PATH) != INVALID_FILE_ATTRIBUTES);
     /* Self-screenshot only when explicitly requested (graphical tests) AND headless, so
@@ -20326,9 +20369,10 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     g_joy.now_us = joy_now_us;
     g_joy_dev = vdd_joy_device(&g_joy);
     vdd_bus_add(&g_bus, &g_joy_dev);            /* gameport: 0x200-0x207         */
-    { HANDLE jt = CreateThread(NULL, 0, joy_poll_thread, NULL, 0, NULL);
-      if (jt) CloseHandle(jt); }                /* NORMAL priority: 66 Hz of winmm
-                                                   must never preempt the guest  */
+    /* ⛔ THE POLL THREAD IS NOT SPAWNED HERE. See joy_poll_ensure: it is created
+         ONLY when a joystick is actually configured, so the default play config --
+         which is EVERY game that does not use a gamepad, Skyroads included -- runs
+         with the exact s61 thread landscape and cannot regress on its account. */
     g_dma_dev = vdd_dma_device(&g_dma);
     vdd_bus_add(&g_bus, &g_dma_dev);            /* 8237 DMA: 0x00-0x0F/80-8F/C0-DF */
     g_opl.ext_clock = 1;                        /* exec loop pumps real elapsed us */
