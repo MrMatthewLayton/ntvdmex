@@ -40,6 +40,8 @@ org 0x100
 %define K_TEXT   0
 %define K_PLANAR 1
 %define K_LIN8   2
+%define K_PL0    3            ; planar, drawn via WRITE MODE 0 per-plane
+%define K_ATTR   4            ; planar + REVERSED Attribute Controller palette
 
 ; table entry: mode, kind, bytes/row, pad, width_px(2), height(2)  = 8 bytes
 %define ENT_SZ 8
@@ -97,7 +99,18 @@ start:
     je      .do_text
     cmp     bl, K_LIN8
     je      .do_lin8
+    cmp     bl, K_PL0
+    je      .do_pl0
+    cmp     bl, K_ATTR
+    je      .do_attr
     call    draw_planar
+    jmp     .wait
+.do_pl0:
+    call    draw_planar0
+    jmp     .wait
+.do_attr:
+    call    draw_planar
+    call    attr_reverse
     jmp     .wait
 .do_text:
     call    draw_text
@@ -348,6 +361,147 @@ pl_tally:
     loop    .t
     ret
 
+; ── PLANAR VIA WRITE MODE 0, ONE PLANE AT A TIME ──────────────────────────────
+; ★ THIS IS THE PATH LEMMINGS ACTUALLY USES, and until this card existed nothing
+;   tested it. Measured on the rig, one Lemmings run:
+;       wmode hist: 00x12e5 01x1 02x0 03x0
+;       pairs: w00/m01=2 w00/m02=4828 w00/m04=4820 w00/m08=4785 w00/m0f=4835
+;   i.e. ~4800 writes in WRITE MODE 0 with the Map Mask selecting ONE PLANE at a
+;   time, and not a single write in mode 2 -- which is the only mode the rest of
+;   this card exercises. A card that passes while the game is wrong is a card that
+;   is testing the wrong thing.
+;
+; In write mode 0 the CPU byte is the PLANE's bits directly (8 pixels' worth of one
+; bit), and the Map Mask says which planes receive it. So the same 16 colour bars
+; are built as four separate bit-planes and blasted one plane at a time.
+draw_planar0:
+    mov     ax, 0xA000
+    mov     es, ax
+    mov     dx, 0x3CE                   ; GC 5 = write mode 0
+    mov     al, 5
+    out     dx, al
+    inc     dx
+    xor     al, al
+    out     dx, al
+    call    pl_mask_ff                  ; GC 8 = bit mask, all bits
+    mov     dx, 0x3CE                   ; GC 3 = data rotate/function: replace
+    mov     al, 3
+    out     dx, al
+    inc     dx
+    xor     al, al
+    out     dx, al
+
+    xor     bp, bp                      ; bp = plane 0..3
+.plane:
+    mov     ax, 2                       ; Sequencer 2 = Map Mask
+    mov     dx, 0x3C4
+    out     dx, al
+    inc     dx
+    mov     cx, bp
+    mov     al, 1
+    shl     al, cl                      ; this plane only
+    out     dx, al
+
+    ; build one row of THIS plane's bits: bit set where (colour >> plane) & 1
+    xor     cx, cx
+.build:
+    mov     ax, cx
+    push    cx
+    mov     cl, 4
+    shl     ax, cl
+    pop     cx
+    xor     dx, dx
+    div     word [wbytes]               ; ax = colour 0..15 for this byte column
+    push    cx
+    mov     cx, bp
+    shr     ax, cl                      ; >> plane
+    pop     cx
+    test    al, 1
+    mov     al, 0
+    jz      .zero
+    mov     al, 0xFF                    ; all 8 pixels of this byte have the bit
+.zero:
+    mov     si, cx
+    mov     [barbuf + si], al
+    inc     cx
+    cmp     cx, [wbytes]
+    jb      .build
+
+    xor     bx, bx
+.row:
+    call    row_off
+    mov     si, barbuf
+    mov     cx, [wbytes]
+    rep     movsb
+    inc     bx
+    cmp     bx, [hrows]
+    jb      .row
+
+    inc     bp
+    cmp     bp, 4
+    jb      .plane
+
+    ; borders/diagonal/corners still go through write mode 2 -- they are proven,
+    ; and mixing the two is itself worth testing: a game does exactly that.
+    mov     dx, 0x3CE
+    mov     al, 5
+    out     dx, al
+    inc     dx
+    mov     al, 2
+    out     dx, al
+    mov     dx, 0x3C4
+    mov     al, 2
+    out     dx, al
+    inc     dx
+    mov     al, 0x0F
+    out     dx, al
+    call    pl_edges
+    call    pl_diag
+    call    pl_mask_ff
+    call    pl_corners
+    call    pl_tally
+    ret
+
+; ── REVERSE THE ATTRIBUTE CONTROLLER PALETTE ──────────────────────────────────
+; ★ WHY THIS CARD EXISTS. In a 16-colour planar mode the 4-bit pixel value does NOT
+;   index the DAC directly -- it indexes the ATTRIBUTE CONTROLLER's 16 palette
+;   registers (port 0x3C0), and THAT result reaches the DAC. A guest which
+;   reprograms those registers changes every colour on screen without touching a
+;   single pixel.
+;   src/vdd/vdd_video.c claims 0x3C4/5 (Sequencer), 0x3C7-9 (DAC), 0x3CE/F (Graphics
+;   Controller), 0x3D4/5 (CRTC) and 0x3DA -- but NOT 0x3C0. So on NTVDMEX these OUTs
+;   go nowhere and the colours should not change, while on real hardware the bars
+;   run white-to-black instead of black-to-white. An unmistakable difference.
+;
+; ⚠ THE INDEX/DATA FLIP-FLOP. 0x3C0 is index and data on the SAME port, alternating,
+;   and the toggle is reset by READING 0x3DA. Miss that read and every value lands
+;   in the wrong half. Bit 5 of the index must be 0 while programming the palette
+;   and set again afterwards, or the display stays blanked.
+attr_reverse:
+    push    dx
+    mov     dx, 0x3DA
+    in      al, dx                      ; reset the index/data flip-flop
+    xor     cx, cx
+.p:
+    mov     dx, 0x3C0
+    mov     al, cl                      ; index = palette register 0..15, bit5=0
+    out     dx, al
+    mov     si, 15
+    sub     si, cx                      ; reversed: reg i gets default colour 15-i
+    mov     al, [defpal + si]
+    out     dx, al                      ; same port, data half
+    inc     cx
+    cmp     cx, 16
+    jb      .p
+    mov     dx, 0x3C0
+    mov     al, 0x20                    ; bit 5 back on -- re-enable video output
+    out     dx, al
+    pop     dx
+    ret
+; the standard 16-colour attribute palette, which is what the modes come up with
+defpal: db 0x00,0x01,0x02,0x03,0x04,0x05,0x14,0x07
+        db 0x38,0x39,0x3A,0x3B,0x3C,0x3D,0x3E,0x3F
+
 ; ── LINEAR 8bpp (13h) ─────────────────────────────────────────────────────────
 draw_lin8:
     mov     ax, 0xA000
@@ -450,6 +604,12 @@ modes:
     dw 640, 480
     db 0x13, K_LIN8,   0,  0
     dw 320, 200
+    db 0x0D, K_PL0,    40, 0            ; 6: 0Dh drawn via WRITE MODE 0 per-plane
+    dw 320, 200
+    db 0x10, K_PL0,    80, 0            ; 7: 10h ditto -- the mode Lemmings draws in
+    dw 640, 350
+    db 0x10, K_ATTR,   80, 0            ; 8: 10h + REVERSED attribute palette
+    dw 640, 350
     db 0xFF, 0,        0,  0
     dw 0, 0
 

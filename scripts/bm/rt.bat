@@ -26,6 +26,8 @@ set OUT=%SH%\out
 if /i "%1"=="reboot" goto rebootnow
 if /i "%1"=="clean"  goto cleanup
 if /i "%1"=="setup"  goto setup
+if /i "%1"=="warm"   goto warmup
+if /i "%1"=="noprefetch" goto noprefetch
 if /i "%1"=="live"   goto live
 if /i "%1"=="stop"   goto stop
 if "%1"==""          goto nogame
@@ -66,7 +68,10 @@ rem    back to stock ntvdm. That is what "it booted in stock NTVDM" was.
 rem    The counter defends a USER against a host that wedges on startup; on a rig that
 rem    kills hosts deliberately it only ever fires as a false positive.
 del /q "%OUT%\startfail.txt" >nul 2>&1
-echo "%GDIR%\%EXE%"> "%CFG%\target.txt"
+rem ARGS: everything after the EXE is passed to the guest. Needed by testcard.com,
+rem which takes a digit to HOLD one video mode -- a card that only appears for 2.5s
+rem in a cycle cannot be caught reliably by a periodic screenshot.
+echo "%GDIR%\%EXE%" %3 %4 %5> "%CFG%\target.txt"
 
 rem A header in the notes file so the report is per-game without anyone typing one.
 echo.>> "%SH%\notes.txt"
@@ -111,6 +116,45 @@ rem ---------------------------------------------------------------------------
 rem  SETUP -- everything the rig needs to exist, and nothing more.
 rem  Idempotent: safe to run any number of times.
 rem ---------------------------------------------------------------------------
+rem ---------------------------------------------------------------------------
+rem  NOPREFETCH -- turn XP's application prefetcher OFF.  (s64)
+rem
+rem  WHY THIS EXISTS, AND IT IS NOT A MICRO-OPTIMISATION.  XP TRACES THE FIRST ~10
+rem  SECONDS of a new process and then writes a .pf file for it.  The trace is keyed
+rem  to the executable, so DEPLOYING A NEW BINARY INVALIDATES IT and the very next
+rem  launch re-traces -- background work, on a 2-core box, during exactly the window
+rem  where Skyroads is establishing its frame pacing.
+rem
+rem  That is the shape the user reported on 2026-09-10: "the first run after a build
+rem  drops frames, every run after that is fine".  It has almost certainly been read
+rem  as a TIMING REGRESSION IN OUR CODE more than once, and re-fixed accordingly.
+rem  A test rig has no use for a desktop-responsiveness optimisation that perturbs
+rem  the thing under measurement -- so remove the variable rather than work around it.
+rem
+rem  0 = off, 1 = applications, 2 = boot, 3 = both (XP default).  NEEDS A REBOOT.
+rem ---------------------------------------------------------------------------
+:noprefetch
+if not exist "%OUT%" md "%OUT%"
+reg add "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management\PrefetchParameters" /v EnablePrefetcher /t REG_DWORD /d 0 /f >nul
+echo EnablePrefetcher set to 0 at %TIME% -- REBOOT REQUIRED > "%OUT%\result_noprefetch.log"
+reg query "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management\PrefetchParameters" /v EnablePrefetcher >> "%OUT%\result_noprefetch.log" 2>&1
+echo --- existing traces (deleted so nothing stale is reused): >> "%OUT%\result_noprefetch.log"
+dir /b "%SystemRoot%\Prefetch\*.pf" >> "%OUT%\result_noprefetch.log" 2>&1
+del /q "%SystemRoot%\Prefetch\*.pf" >nul 2>&1
+goto :eof
+
+rem ---------------------------------------------------------------------------
+rem  WARM -- read the host binary into the file cache after a deploy, so the first
+rem  REAL run is not the one that pays for faulting a freshly-written 1.6 MB PE in.
+rem  Belt and braces alongside :noprefetch; costs about a second.
+rem ---------------------------------------------------------------------------
+:warmup
+if not exist "%OUT%" md "%OUT%"
+type "%BM%\ntvdmhost.exe" > nul 2>&1
+echo warmed %TIME% > "%OUT%\result_warm.log"
+dir "%BM%\ntvdmhost.exe" >> "%OUT%\result_warm.log" 2>&1
+goto :eof
+
 :setup
 if not exist "%CFG%" md "%CFG%"
 if not exist "%OUT%" md "%OUT%"
@@ -193,7 +237,7 @@ del /q "%OUT%\shot*.bmp" >nul 2>&1
 
 rem QUOTED: the share path contains "Documents and Settings", and an unquoted path
 rem with a space used to be split into program + arguments at the first one.
-echo "%GDIR%\%EXE%"> "%CFG%\target.txt"
+echo "%GDIR%\%EXE%" %3 %4 %5> "%CFG%\target.txt"
 echo.> "%CFG%\autoexit"
 
 rem Run FROM the game's own directory so it finds its data files, and so anything
