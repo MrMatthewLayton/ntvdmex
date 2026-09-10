@@ -48,7 +48,25 @@ static HBRUSH scanline_brush(void)
     return s_br;
 }
 
-/* ---- windowed: GDI StretchDIBits from the snapshot ---------------------- */
+/* ---- windowed AND (by default) fullscreen: GDI StretchDIBits ---------------
+ * ── ★★★ THIS PATH IS SHARP AND THE DIRECTDRAW ONE IS NOT. (s64) ─────────────────
+ *   The user settled it with a comparison no log could have produced: "even if I
+ *   maximize the window on the desktop, with or without aspect ratio, the pixels stay
+ *   sharp. In fullscreen they are NEVER sharp, regardless of what knobs I twiddle."
+ *   Same frame, same aspect maths, same monitor, same non-integer 5.25x scale -- the
+ *   only difference is WHICH BLITTER DRAWS IT:
+ *     GDI StretchDIBits + COLORONCOLOR -> point sampling. Hard pixel edges.
+ *     DirectDraw stretch Blt           -> the DRIVER decides, and it filters.
+ *   DirectDraw offers no reliable way to demand point sampling on a stretch blt
+ *   (DDBLTFX can ASK for arithmetic stretching; there is no flag that forbids it), so
+ *   the fix is not to configure the stretch but to STOP ASKING FOR ONE.
+ * ► So fullscreen is now a BORDERLESS WINDOW presented through here, not an exclusive
+ *   DirectDraw mode. That also gets back the instant toggle (no mode switch to resync)
+ *   and removes the fullscreen resolution knob entirely -- there is no mode to choose.
+ *   The exclusive path is kept behind a file knob (ddrawfs.flag) rather than deleted,
+ *   because "no tearing" was its original argument and that deserves a way back.
+ * ⚠ TWO THINGS DIFFER IN FULLSCREEN and both are handled below: there is no status
+ *   strip to reserve room for, and the fit is snapped to whole multiples. */
 static void gdi_present(present_ddraw *pd)
 {
     HDC hdc; RECT rc; int cw, ch, dx, dy, dw, dh; unsigned i;
@@ -58,7 +76,9 @@ static void gdi_present(present_ddraw *pd)
     hdc = GetDC(pd->hwnd);
     if (!hdc) return;
     GetClientRect(pd->hwnd, &rc);
-    cw = rc.right; ch = rc.bottom - (pd->status_h ? pd->status_h : PRESENT_STATUS_H);
+    cw = rc.right;
+    ch = rc.bottom - (pd->fullscreen ? 0
+                                     : (pd->status_h ? pd->status_h : PRESENT_STATUS_H));
     if (cw < 1) cw = 1;
     if (ch < 1) ch = 1;
 
@@ -79,7 +99,14 @@ static void gdi_present(present_ddraw *pd)
         bi.c[i].rgbRed = (BYTE)(a >> 16); bi.c[i].rgbGreen = (BYTE)(a >> 8);
         bi.c[i].rgbBlue = (BYTE)a; bi.c[i].rgbReserved = 0;
     }
-    present_fit(cw, ch, pd->aspect, &dx, &dy, &dw, &dh);
+    /* ⚠ THE INTEGER FIT USES sw/sh, WHICH ARE POST-SCALE2X. That is deliberate: the
+         blit source is what has to divide into the destination. Snapping to a multiple
+         of the ORIGINAL 320 while blitting a 640-wide scale2x source would give 2.5x
+         and put the uneven pixels straight back. */
+    if (pd->fullscreen && pd->fs_integer)
+        present_fit_int(cw, ch, sw, sh, pd->aspect, &dx, &dy, &dw, &dh);
+    else
+        present_fit(cw, ch, pd->aspect, &dx, &dy, &dw, &dh);
     wait_vblank(pd);
     /* Letterboxing leaves bars, and they must be PAINTED: the client area is ours
        (WM_ERASEBKGND returns 1), so whatever was there last -- the previous mode's
@@ -110,15 +137,62 @@ static void rel_surf(void **s)
 static void fs_teardown(present_ddraw *pd)
 {
     pd->back = 0;
+    rel_surf(&pd->fbsurf);
+    pd->fb_w = pd->fb_h = 0;
     rel_surf(&pd->primary);
 }
 
+/* ── ★★ FULLSCREEN KEEPS THE DESKTOP'S OWN MODE. (s64) ───────────────────────────────
+     This used to `SetDisplayMode(640, 480)` and then stretch the frame across all of
+     it, and BOTH halves of that were wrong on a modern panel:
+       * The monitor is not 4:3. Handed a 640x480 signal, an LCD stretches it across a
+         16:9 panel itself -- so the picture came out wide no matter what our aspect
+         setting said, and nothing we did to the pixels could have corrected it. That
+         is the "pixels get stretched regardless of the setting" report, and the stretch
+         was happening in the DISPLAY, downstream of everything we control.
+       * fs_present then ignored pd->aspect completely, so even the part we DID control
+         was filling rather than fitting.
+     Taking the desktop's current mode fixes both: the panel shows its native signal
+     1:1, and we letterbox/pillarbox inside it with present_fit -- the same function the
+     windowed path uses, so the two modes finally agree about what a setting means.
+   ⚠ NO SetDisplayMode AT ALL now. Exclusive mode does not require one, and not calling
+     it also means Alt+Enter no longer makes the monitor resync twice per toggle.
+   ⚠ THE COST IS THAT THE DESTINATION IS NOW BIG. A software nearest-neighbour loop over
+     1440x1080 is ~1.5M pixels a frame and this host cannot afford that, so the picture
+     goes through an OFFSCREEN SURFACE and a hardware stretch Blt: we convert only
+     snap_w x snap_h (64k pixels for mode 13h) and the GPU does the scaling. fs_present
+     keeps the old software loop as a fallback for a driver that refuses the blt. */
 static int fs_setup(present_ddraw *pd)
 {
-    DDSURFACEDESC2 d; DDSCAPS2 caps; LPDIRECTDRAWSURFACE7 pr = 0, bk = 0;
-    if (FAILED(IDirectDraw7_SetDisplayMode(DD, (DWORD)pd->fs_w, (DWORD)pd->fs_h, 32, 0, 0)) &&
-        FAILED(IDirectDraw7_SetDisplayMode(DD, (DWORD)pd->fs_w, (DWORD)pd->fs_h, 16, 0, 0)))
-        return -1;
+    DDSURFACEDESC2 d; DDSCAPS2 caps; LPDIRECTDRAWSURFACE7 pr = 0, bk = 0, fb = 0;
+
+    /* ★ AN EXPLICIT MODE IS TRIED FIRST, AND ONLY IF THE USER ASKED FOR ONE. Try 32bpp
+         then 16, the same pair this always used; if the display refuses both, fall
+         through to the desktop mode rather than failing the toggle outright. */
+    pd->fs_w = 0; pd->fs_h = 0;
+    if (pd->fs_mode_w > 0 && pd->fs_mode_h > 0) {
+        if (SUCCEEDED(IDirectDraw7_SetDisplayMode(DD, (DWORD)pd->fs_mode_w,
+                                                  (DWORD)pd->fs_mode_h, 32, 0, 0)) ||
+            SUCCEEDED(IDirectDraw7_SetDisplayMode(DD, (DWORD)pd->fs_mode_w,
+                                                  (DWORD)pd->fs_mode_h, 16, 0, 0))) {
+            pd->fs_w = pd->fs_mode_w; pd->fs_h = pd->fs_mode_h;
+        }
+    }
+    if (!pd->fs_w) {
+        ZeroMemory(&d, sizeof d); d.dwSize = sizeof d;
+        if (SUCCEEDED(IDirectDraw7_GetDisplayMode(DD, &d)) && d.dwWidth && d.dwHeight) {
+            pd->fs_w = (int)d.dwWidth;
+            pd->fs_h = (int)d.dwHeight;
+        } else {
+            /* Could not ask. Fall back to the old behaviour rather than guessing -- a
+               forced 640x480 is worse than the desktop mode but better than no picture. */
+            pd->fs_w = 640; pd->fs_h = 480;
+            if (FAILED(IDirectDraw7_SetDisplayMode(DD, 640, 480, 32, 0, 0)) &&
+                FAILED(IDirectDraw7_SetDisplayMode(DD, 640, 480, 16, 0, 0)))
+                return -1;
+        }
+    }
+
     ZeroMemory(&d, sizeof d); d.dwSize = sizeof d;
     d.dwFlags = DDSD_CAPS | DDSD_BACKBUFFERCOUNT; d.dwBackBufferCount = 1;
     d.ddsCaps.dwCaps = DDSCAPS_PRIMARYSURFACE | DDSCAPS_FLIP | DDSCAPS_COMPLEX;
@@ -127,6 +201,24 @@ static int fs_setup(present_ddraw *pd)
     ZeroMemory(&caps, sizeof caps); caps.dwCaps = DDSCAPS_BACKBUFFER;
     if (FAILED(IDirectDrawSurface7_GetAttachedSurface(pr, &caps, &bk))) return -1;
     pd->back = bk;
+
+    /* The staging surface the guest frame is converted into, at FRAME size. Video
+       memory if the driver will give it (the stretch blt is then card-to-card),
+       system memory if not. Failing both is not fatal -- fs_present falls back to
+       the software path, which needs no surface at all. */
+    ZeroMemory(&d, sizeof d); d.dwSize = sizeof d;
+    d.dwFlags = DDSD_CAPS | DDSD_WIDTH | DDSD_HEIGHT;
+    d.dwWidth = 640; d.dwHeight = 480;
+    d.ddsCaps.dwCaps = DDSCAPS_OFFSCREENPLAIN | DDSCAPS_VIDEOMEMORY;
+    if (FAILED(IDirectDraw7_CreateSurface(DD, &d, &fb, NULL))) {
+        ZeroMemory(&d, sizeof d); d.dwSize = sizeof d;
+        d.dwFlags = DDSD_CAPS | DDSD_WIDTH | DDSD_HEIGHT;
+        d.dwWidth = 640; d.dwHeight = 480;
+        d.ddsCaps.dwCaps = DDSCAPS_OFFSCREENPLAIN | DDSCAPS_SYSTEMMEMORY;
+        if (FAILED(IDirectDraw7_CreateSurface(DD, &d, &fb, NULL))) fb = 0;
+    }
+    pd->fbsurf = fb;
+    pd->fb_w = fb ? 640 : 0; pd->fb_h = fb ? 480 : 0;
     return 0;
 }
 
@@ -134,11 +226,48 @@ static int fs_setup(present_ddraw *pd)
 static void mask_info(DWORD m, int *shift, int *bits)
 { int s=0,b=0; if(m){while(!(m&1)){m>>=1;++s;}while(m&1){m>>=1;++b;}} *shift=s; *bits=b; }
 
-static void fs_present(present_ddraw *pd)
+/* Write one snapshot pixel, packed to whatever depth the locked surface is. */
+static void put_px(BYTE *drow, int dx, DWORD bpp, uint32_t argb,
+                   int rsh, int rb, int gsh, int gb, int bsh, int bb)
+{
+    uint32_t r = (argb >> 16) & 0xFF, g = (argb >> 8) & 0xFF, b = argb & 0xFF;
+    if (bpp == 32) ((DWORD *)drow)[dx] = argb;
+    else if (bpp == 16 || bpp == 15)
+        ((WORD *)drow)[dx] = (WORD)(((r>>(8-rb))<<rsh)|((g>>(8-gb))<<gsh)|((b>>(8-bb))<<bsh));
+    else if (bpp == 24) { BYTE *p = drow + dx*3; p[0]=(BYTE)b; p[1]=(BYTE)g; p[2]=(BYTE)r; }
+    else drow[dx] = (BYTE)((r*30 + g*59 + b*11) / 100);
+}
+
+/* Convert the snapshot 1:1 into the staging surface's top-left corner. No scaling
+   here on purpose -- that is the GPU's job in fs_present. 0 = ok. */
+static int fs_stage(present_ddraw *pd, LPDIRECTDRAWSURFACE7 fb)
+{
+    DDSURFACEDESC2 d;
+    DWORD bpp; int rsh,rb,gsh,gb,bsh,bb; int y, x;
+    ZeroMemory(&d, sizeof d); d.dwSize = sizeof d;
+    if (FAILED(IDirectDrawSurface7_Lock(fb, NULL, &d,
+                                        DDLOCK_WAIT|DDLOCK_SURFACEMEMORYPTR, NULL)))
+        return -1;
+    bpp = d.ddpfPixelFormat.dwRGBBitCount;
+    mask_info(d.ddpfPixelFormat.dwRBitMask, &rsh, &rb);
+    mask_info(d.ddpfPixelFormat.dwGBitMask, &gsh, &gb);
+    mask_info(d.ddpfPixelFormat.dwBBitMask, &bsh, &bb);
+    for (y = 0; y < pd->snap_h; ++y) {
+        BYTE *drow = (BYTE *)d.lpSurface + (size_t)y * d.lPitch;
+        const uint8_t *srow = pd->snap + (size_t)y * pd->snap_w;
+        for (x = 0; x < pd->snap_w; ++x)
+            put_px(drow, x, bpp, pd->snap_pal[srow[x]], rsh,rb,gsh,gb,bsh,bb);
+    }
+    IDirectDrawSurface7_Unlock(fb, NULL);
+    return 0;
+}
+
+/* The fallback: nearest-neighbour straight into the back buffer, honouring the same
+   fitted rectangle. Only reached if the driver refuses a stretch blt. */
+static void fs_present_sw(present_ddraw *pd, int fx, int fy, int fw, int fh)
 {
     DDSURFACEDESC2 d; LPDIRECTDRAWSURFACE7 bk = SURF(pd->back);
     DWORD bpp; int rsh,rb,gsh,gb,bsh,bb; int y, x, dy, dx;
-    if (!bk) return;
     ZeroMemory(&d, sizeof d); d.dwSize = sizeof d;
     if (IDirectDrawSurface7_Lock(bk, NULL, &d, DDLOCK_WAIT|DDLOCK_SURFACEMEMORYPTR, NULL)
             == DDERR_SURFACELOST) { IDirectDrawSurface7_Restore(SURF(pd->primary)); return; }
@@ -146,23 +275,58 @@ static void fs_present(present_ddraw *pd)
     mask_info(d.ddpfPixelFormat.dwRBitMask, &rsh, &rb);
     mask_info(d.ddpfPixelFormat.dwGBitMask, &gsh, &gb);
     mask_info(d.ddpfPixelFormat.dwBBitMask, &bsh, &bb);
-    /* nearest-neighbour stretch of the snapshot into fs_w x fs_h */
     for (dy = 0; dy < pd->fs_h; ++dy) {
         BYTE *drow = (BYTE *)d.lpSurface + (size_t)dy * d.lPitch;
-        y = dy * pd->snap_h / pd->fs_h;
+        int insidey = (dy >= fy && dy < fy + fh);
+        y = insidey ? (dy - fy) * pd->snap_h / fh : 0;
         for (dx = 0; dx < pd->fs_w; ++dx) {
-            uint32_t argb, r, g, b;
-            x = dx * pd->snap_w / pd->fs_w;
-            argb = pd->snap_pal[pd->snap[(size_t)y * pd->snap_w + x]];
-            r=(argb>>16)&0xFF; g=(argb>>8)&0xFF; b=argb&0xFF;
-            if (bpp == 32) ((DWORD*)drow)[dx] = argb;
-            else if (bpp == 16 || bpp == 15)
-                ((WORD*)drow)[dx] = (WORD)(((r>>(8-rb))<<rsh)|((g>>(8-gb))<<gsh)|((b>>(8-bb))<<bsh));
-            else if (bpp == 24) { BYTE *p=drow+dx*3; p[0]=(BYTE)b; p[1]=(BYTE)g; p[2]=(BYTE)r; }
-            else drow[dx] = (BYTE)((r*30+g*59+b*11)/100);
+            /* The bars are part of the picture: this is a FLIP CHAIN, so a pixel we
+               do not write keeps whatever the buffer held two frames ago. */
+            if (!insidey || dx < fx || dx >= fx + fw) {
+                put_px(drow, dx, bpp, 0, rsh,rb,gsh,gb,bsh,bb);
+                continue;
+            }
+            x = (dx - fx) * pd->snap_w / fw;
+            put_px(drow, dx, bpp, pd->snap_pal[pd->snap[(size_t)y * pd->snap_w + x]],
+                   rsh,rb,gsh,gb,bsh,bb);
         }
     }
     IDirectDrawSurface7_Unlock(bk, NULL);
+}
+
+static void fs_present(present_ddraw *pd)
+{
+    LPDIRECTDRAWSURFACE7 bk = SURF(pd->back), fb = SURF(pd->fbsurf);
+    int fx, fy, fw, fh, done = 0;
+    if (!bk) return;
+    /* ★ THE SAME FIT THE WINDOW USES. present_fit centres an on-aspect rectangle in
+         the destination and returns the whole destination for "None" (fill). One
+         function for both modes is the point: a setting that meant one thing windowed
+         and another fullscreen is exactly the bug being fixed.
+       ★ ...unless sharp pixels were asked for, in which case each axis snaps to a
+         whole multiple of the FRAME -- which is why this needs snap_w/snap_h and the
+         windowed caller does not. See present_fit_int. */
+    if (pd->fs_integer)
+        present_fit_int(pd->fs_w, pd->fs_h, pd->snap_w, pd->snap_h, pd->aspect,
+                        &fx, &fy, &fw, &fh);
+    else
+        present_fit(pd->fs_w, pd->fs_h, pd->aspect, &fx, &fy, &fw, &fh);
+
+    if (fb && pd->snap_w > 0 && pd->snap_h > 0 && fs_stage(pd, fb) == 0) {
+        RECT src, dst;
+        src.left = 0; src.top = 0;
+        src.right = pd->snap_w; src.bottom = pd->snap_h;
+        dst.left = fx; dst.top = fy; dst.right = fx + fw; dst.bottom = fy + fh;
+        if (fx || fy) {                          /* letterboxed -> clear the bars */
+            DDBLTFX bfx;
+            ZeroMemory(&bfx, sizeof bfx); bfx.dwSize = sizeof bfx; bfx.dwFillColor = 0;
+            IDirectDrawSurface7_Blt(bk, NULL, NULL, NULL,
+                                    DDBLT_COLORFILL | DDBLT_WAIT, &bfx);
+        }
+        done = SUCCEEDED(IDirectDrawSurface7_Blt(bk, &dst, fb, &src, DDBLT_WAIT, NULL));
+    }
+    if (!done) fs_present_sw(pd, fx, fy, fw, fh);
+
     if (IDirectDrawSurface7_Flip(SURF(pd->primary), NULL, DDFLIP_WAIT) == DDERR_SURFACELOST)
         IDirectDrawSurface7_Restore(SURF(pd->primary));
 }
@@ -198,6 +362,16 @@ void present_ddraw_shutdown(present_ddraw *pd)
 int present_ddraw_set_fullscreen(present_ddraw *pd, int on)
 {
     if (on == pd->fullscreen) return 0;
+    /* ★ THE DEFAULT IS A BORDERLESS WINDOW, NOT AN EXCLUSIVE MODE. See the long note
+         over gdi_present: exclusive DirectDraw is where the blurring comes from. The
+         caller has already made the window chromeless and screen-sized, so all that is
+         left to do is record the state and let gdi_present do what it does windowed --
+         which the user has demonstrated is sharp. */
+    if (!pd->fs_use_ddraw) {
+        pd->fullscreen = on;
+        InvalidateRect(pd->hwnd, NULL, TRUE);
+        return 0;
+    }
     if (!pd->dd) return -1;                          /* no DirectDraw -> stay windowed */
     if (on) {
         if (FAILED(IDirectDraw7_SetCooperativeLevel(DD, pd->hwnd,
@@ -230,8 +404,11 @@ void present_ddraw_snapshot(present_ddraw *pd, const ntvdd_frame *f)
 void present_ddraw_present(present_ddraw *pd)
 {
     if (!pd->snap_valid) return;
-    if (pd->fullscreen && pd->dd) fs_present(pd);
-    else                          gdi_present(pd);
+    /* `back` is only non-NULL when the exclusive path actually set up, so this also
+       covers "we asked for DirectDraw fullscreen and it refused" -- which must fall
+       back to drawing something rather than to drawing nothing. */
+    if (pd->fullscreen && pd->dd && pd->back) fs_present(pd);
+    else                                      gdi_present(pd);
 }
 
 void present_ddraw_frame(present_ddraw *pd, const ntvdd_frame *f)

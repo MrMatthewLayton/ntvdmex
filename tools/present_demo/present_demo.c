@@ -10,6 +10,7 @@
  */
 #include <windows.h>
 #include "present_ddraw.h"
+#include "present_scale.h"      /* PRESENT_ASPECT_* -- the 'A' key cycles them */
 
 #define FB_W 320
 #define FB_H 200
@@ -55,6 +56,28 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         break;
     case WM_KEYDOWN:
         if (wp == VK_F11) { present_ddraw_set_fullscreen(&g_pd, !g_pd.fullscreen); return 0; }
+        /* ── ★ 'A' CYCLES THE ASPECT, IN BOTH MODES. (s64) ───────────────────────────
+             Added because fullscreen was ignoring pd->aspect entirely and there was no
+             way to SEE that without a guest. The whole point of this demo is to prove
+             the blit path on real XP before trusting it in the host, and an aspect it
+             cannot exercise is an aspect it cannot prove. The caption reports the
+             current setting so the screen says which one you are looking at. */
+        if (wp == 'A') {
+            char t[96], *q = t;
+            static const char *const NAMES[PRESENT_ASPECT_COUNT] =
+                { "None (fill)", "4:3", "16:9", "16:10" };
+            const char *n;
+            unsigned i;
+            g_pd.aspect = (g_pd.aspect + 1) % PRESENT_ASPECT_COUNT;
+            n = NAMES[g_pd.aspect];
+            for (i = 0; "present demo -- Alt+Enter=fullscreen, A=aspect, Esc=quit ["[i]; ++i)
+                *q++ = "present demo -- Alt+Enter=fullscreen, A=aspect, Esc=quit ["[i];
+            while (*n) *q++ = *n++;
+            *q++ = ']'; *q = 0;
+            SetWindowTextA(hwnd, t);
+            InvalidateRect(hwnd, NULL, TRUE);
+            return 0;
+        }
         if (wp == VK_ESCAPE) {
             if (g_pd.fullscreen) present_ddraw_set_fullscreen(&g_pd, 0);
             else PostQuitMessage(0);
@@ -83,7 +106,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
 
     rc.left = 0; rc.top = 0; rc.right = FB_W * 2; rc.bottom = FB_H * 2;   /* 2x scale */
     AdjustWindowRect(&rc, WS_OVERLAPPEDWINDOW, FALSE);
-    hwnd = CreateWindowA(g_class, "NTVDMEX DirectDraw present demo (Alt+Enter=fullscreen, Esc=quit)",
+    hwnd = CreateWindowA(g_class, "present demo -- Alt+Enter=fullscreen, A=aspect, Esc=quit [None (fill)]",
                          WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT,
                          rc.right - rc.left, rc.bottom - rc.top, NULL, NULL, hInst, NULL);
     if (!hwnd) return 1;
@@ -92,6 +115,10 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         MessageBoxA(hwnd, "DirectDraw init failed", "present_demo", MB_OK);
         return 1;
     }
+    /* Match the host's fullscreen defaults, or the demo proves a path nobody runs:
+       fill (no whole-multiple snapping) and no display-mode change, so fullscreen is
+       a borderless window drawn by exactly the same code as the windowed view. */
+    g_pd.fs_integer = 0;
 
     build_palette();
     ShowWindow(hwnd, nShow);
