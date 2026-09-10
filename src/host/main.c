@@ -8358,7 +8358,28 @@ static DWORD WINAPI ui_thread(LPVOID arg)
     while (GetMessageA(&msg, NULL, 0, 0) > 0) { TranslateMessage(&msg); DispatchMessageA(&msg); }
     tray_remove(g_hwnd);            /* or the icon outlives the process */
     present_ddraw_shutdown(&g_pd);
-    return 0;
+    /* ── ⛔⛔ THE WINDOW CLOSING MUST KILL THE PROCESS, NOT JUST THIS THREAD. (s63) ──
+         Reported by the user: launch a game, close the window, launch something else
+         -- and the host "flashes open and immediately exits", so nothing can be
+         tested. The cause is the single-instance mutex (WinMain) held for the
+         PROCESS's life, colliding with a ZOMBIE left by this very close:
+           WinMain runs on the MAIN thread, which is the GUEST exec thread. Closing
+           the window runs WM_DESTROY *on this UI thread* -- it sets g_running=0 and
+           PostQuitMessage, so this message loop returns and all the machine-release
+           cleanup (host_panic_release, audio, OPL, tray) has already run. But the
+           main thread only notices g_running=0 when it RETURNS from v86_run; a guest
+           spinning in a tight loop that traps nothing sits inside VdmStartExecution
+           forever, so WinMain never returns, ExitProcess is never reached, and the
+           process lingers -- STILL OWNING THE MUTEX. The next launch reads
+           ERROR_ALREADY_EXISTS and bails in milliseconds: the flash-and-vanish.
+       ⇒ By here the user has closed the window and the cleanup is done, so we WANT
+         to be gone regardless of where the guest thread is stuck. ExitProcess is not
+         safe -- it tries to unwind the wedged PM engine and can hang (see the
+         watchdog's note) -- so TERMINATE. This frees the mutex and there is no zombie
+         for the next launch to trip over. Belt-and-suspenders with the mutex guard,
+         which now also opens the door when it finds the holder was abandoned. */
+    TerminateProcess(GetCurrentProcess(), 0);
+    return 0;                                            /* not reached */
 }
 
 /* --- guest register view <-> VDM_TIB CONTEXT (for bus interrupt dispatch) --- */
@@ -19117,16 +19138,39 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
          exited: the rig went silent, no log at all, and the run timed out.
          Clear it first and latch it immediately. Same do-nothing-and-look-fine shape
          as everything else this file warns about. */
+    /* ⚠ AND A HELD MUTEX IS NOT PROOF A HOST IS ALIVE. (s63) The value of the guard
+         is entirely in NOT refusing a launch when the "other" instance is a corpse.
+         The named object exists as long as ANY handle to it is open -- including one
+         held by a wedged zombie -- so ERROR_ALREADY_EXISTS on its own said "refuse"
+         even when the previous host had left the machine (that is the flash-and-vanish
+         the user hit). So do not decide on the flag: TRY TO ACQUIRE it. A host that is
+         really running owns it (created with bInitialOwner) and the wait TIMES OUT ->
+         refuse, correctly, one-host-at-a-time. If the owner released it or its thread
+         died the wait returns signalled or ABANDONED -> we take it and run. The
+         window-close path now TerminateProcess()es (see ui_thread), so the common
+         zombie is gone at the source; this makes the guard safe against any that slip
+         through rather than turning them into a permanent lockout. */
     {   HANDLE once; DWORD gle;
         SetLastError(0);
         once = CreateMutexA(NULL, TRUE, "Global\\ntvdmex_host_single");
         gle  = GetLastError();
         if (once && gle == ERROR_ALREADY_EXISTS) {
-            char sb[160], *sq = sb;
-            sq = zput(sq, "REFUSED: another ntvdmhost is already running -- "
-                          "this instance is exiting (see the single-instance guard)\r\n");
-            log_append(LOG_PATH, sb, sq);
-            return 0;
+            DWORD w = WaitForSingleObject(once, 200);   /* brief: a live host never yields it */
+            if (w == WAIT_TIMEOUT) {
+                char sb[176], *sq = sb;
+                sq = zput(sq, "REFUSED: another ntvdmhost is LIVE (owns the single-instance "
+                              "mutex) -- this instance is exiting\r\n");
+                log_append(LOG_PATH, sb, sq);
+                return 0;
+            }
+            /* WAIT_OBJECT_0 / WAIT_ABANDONED: the previous holder is gone -- we now own
+               it, so carry on as the sole host. */
+            { char sb[176], *sq = sb;
+              sq = zput(sq, "single-instance: prior holder was ");
+              sq = zput(sq, w == WAIT_ABANDONED ? "ABANDONED (zombie thread died)"
+                                                : "released");
+              sq = zput(sq, " -- taking ownership and running\r\n");
+              log_append(LOG_PATH, sb, sq); }
         } }
     static const BYTE bop[] = { VDM_BOP0, VDM_BOP1, 0x20, 0xCF };  /* BOP 0x20 ; iret */
     static const BYTE bop10[] = { VDM_BOP0, VDM_BOP1, 0x10, 0xCF }; /* BOP 0x10 ; iret */
