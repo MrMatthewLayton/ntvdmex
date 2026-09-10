@@ -6380,7 +6380,7 @@ static HMENU build_menu(void)
          trying things, the dialog is for keeping them. */
     menu_combo(m, "Limit Speed", SET_SPEEDMODE, IDM_SPEED_0);
     msep(m);
-    mi(m,"Capture Input\tWin+F10",IDM_INPUT_CAPTURE);
+    mi(m,"Capture Input\tWin+Click / F10",IDM_INPUT_CAPTURE);
     mi(m,"Send Ctrl+Alt+Del",IDM_STUB);
     mi(m,"Key Mapper...",IDM_STUB);
     msep(m);
@@ -6615,7 +6615,8 @@ static void status_update(void)
     m = (g_dpmi_pm && g_dpmi_client32) ? "32-bit Protected mode"
       : g_dpmi_pm                      ? "16-bit Protected mode"
                                        : "16-bit Real mode";
-    r = g_captured ? "Captured -- Win+F10 releases" : "Win+F10 captures input";
+    r = g_captured ? "Captured -- Win+Click or Win+F10 releases"
+                   : "Win+Click captures input";
     /* ⚠ THE NAME DECIDES THE FIRST PART'S WIDTH, so a new program has to
          re-partition BEFORE anything is pushed -- otherwise the divider stays where
          the previous program left it and a long name is truncated against a boundary
@@ -8162,6 +8163,19 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
     case WM_RBUTTONDOWN: case WM_RBUTTONUP:
     case WM_MBUTTONDOWN: case WM_MBUTTONUP: {
         RECT rc; int cw, ch, fw, fh; LONG b = 0;
+        /* ── ★ Win+Left-Click TOGGLES CAPTURE. (s63, user ask) ─────────────────────
+             The keyboard chord (Win+F10) stays as a backstop -- some laptops have no
+             easy F10, and a captured guest owns every key so the release MUST be one
+             the guest cannot generate -- but the natural gesture for "let me into /
+             out of this window" is a click. Win is held, so this cannot collide with
+             a guest that wants plain clicks (a paint program, a menu). Consume the
+             DOWN so the toggling click never reaches the guest as a button press; the
+             matching UP is harmless (no buttons set). host_key_held() reads the same
+             async Win state Win+F10 does, so the two chords behave identically. */
+        if (msg == WM_LBUTTONDOWN && host_key_held()) {
+            input_capture_set(h, !g_captured);
+            return 0;
+        }
         fw = g_vid.frame.w ? (int)g_vid.frame.w : 640;
         fh = g_vid.frame.h ? (int)g_vid.frame.h : 480;
         GetClientRect(h, &rc);
@@ -24589,10 +24603,18 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
          returns -> tray_remove + present_ddraw_shutdown. That is strictly better
          than ExitProcess here, because WM_DESTROY is also what stops the OPL and
          Beep.sys, and both of those have outlived a host before. */
-    if (g_wow_launch && g_hwnd) PostMessageA(g_hwnd, WM_CLOSE, 0, 0);
-    /* Keep the Luna window open so the guest's final screen stays visible until
-       the user closes it; then the UI thread's message loop returns. (A DOS
-       guest only -- see above.) */
+    /* ── ★ AUTO-CLOSE ON GUEST TERMINATION, FOR EVERY GUEST. (s63, user ask) ────────
+         This was WOW-only; a DOS guest that exited left its window open showing a
+         dead final frame until the user closed it by hand. But reaching here means
+         the guest we were asked to run has TERMINATED -- for a game, quitting it
+         exits the program and lands exactly here -- so the run is over and there is
+         nothing to interact with. Closing through WM_CLOSE -> WM_DESTROY runs
+         host_panic_release(), which is also THE FIX FOR THE CAPTURE-EXIT TRAP: a
+         guest that exited while it held the mouse used to leave the pointer clipped
+         to a dead window with no way to escape but the keyboard chord. Same path for
+         DOS and Win16 now; the s63 ui_thread TerminateProcess then guarantees the
+         process is gone. */
+    if (g_hwnd) PostMessageA(g_hwnd, WM_CLOSE, 0, 0);
     if (ui) { WaitForSingleObject(ui, INFINITE); CloseHandle(ui); }
     return 0;
 }
