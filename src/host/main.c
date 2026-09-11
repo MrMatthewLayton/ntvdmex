@@ -25026,6 +25026,9 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             p = zput(p, " dacw=");                p = zdec(p, g_vid.dac_writes);
             p = zput(p, " palresets="); p = zdec(p, g_vid.pal_resets);
             p = zput(p, " hi_since_reset="); p = zdec(p, g_vid.dac_hi_since_reset);
+            /* The one that can actually be non-zero: this report is written after
+               the guest has exited through a mode set back to text. */
+            p = zput(p, " hi_max="); p = zdec(p, g_vid.dac_hi_max);
             p = zput(p, " dacblk[16s]=");
             for (i = 0; i < 16; ++i) { p = zdec(p, g_vid.dac_block[i]); p = zput(p, ","); }
             p = zput(p, " vpal=[");

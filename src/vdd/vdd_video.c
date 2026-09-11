@@ -4,65 +4,81 @@
 #include "vga_font_8x16.h"
 #include "vga_font_8x8.h"
 #include "vga_font_8x14.h"
+#include "vga_defaults.h"
 
-/* 16-colour EGA/CGA text palette as 0xAARRGGBB. */
-/* ⚠ THE ega16 TABLE THAT WAS HERE IS GONE. It hardcoded the sixteen colours a
-   16-colour mode renders with, which is exactly the assumption this file had to
-   stop making: those colours are dac[vpal[i]], and both halves belong to the
-   guest. ega64_rgb() below derives the DEFAULTS instead, and reproduces the old
-   table exactly for the default AC palette. */
+/* ⚠ THE ega16 TABLE THAT WAS HERE IS GONE, and so is the ega64_rgb() that replaced
+   it. Both hardcoded the sixteen colours a 16-colour mode renders with, which is
+   exactly the assumption this file had to stop making: those colours are
+   dac[vpal[i]], and both halves belong to the guest. The defaults now come from
+   vga_defaults.h, MEASURED per mode; tools/gen-vgadefs.py refuses to generate it
+   unless mode 10h's measured DAC matches what ega64_rgb() computed entry for entry,
+   so retiring the formula shifted no colour anywhere. */
 
 /* DAC component (0..63) -> 8-bit; pack/unpack a palette entry. */
+/* ⚠ This is <<2, so a guest writing 0x3F gets 252 and not 255 -- it disagrees by a
+   few counts with the (v<<2)|(v>>4) the generated defaults use. Pre-existing, and
+   left alone deliberately: it is on the path of every guest that programs a palette,
+   so it wants its own before/after rather than riding along with this one. */
 static uint32_t dac_pack(uint8_t r, uint8_t g, uint8_t b)
 { return 0xFF000000u | ((uint32_t)(r << 2) << 16) | ((uint32_t)(g << 2) << 8) | (uint32_t)(b << 2); }
 
-/* Load the default DAC palette: 16 EGA colours in 0..15, a 240-entry grey ramp
-   above.  Real VGA reloads this on every INT 10h AH=00 mode set; without it a
-   graphics program that reprogrammed the DAC (e.g. SCREEN 13) leaves later text
-   drawn in *its* palette -- usually near-black, so text mode looks dead. */
 /* ── ★★ THE ATTRIBUTE CONTROLLER, WHICH IS WHERE A 16-COLOUR PIXEL GETS ITS COLOUR.
      A 4-bit pixel does NOT index the DAC. It indexes one of the AC's sixteen palette
      registers (st->vpal), and THAT six-bit value indexes the DAC. We stored vpal --
      INT 10h AH=10h has always written it -- and then rendered straight from a fixed
      ega16 table, so nothing a guest did to the palette had any effect. Lemmings sets
      its own palette, which is exactly why its menu came out structurally perfect and
-     the wrong colours.
-   ★ WHY THIS CHANGES NOTHING BY DEFAULT. A six-bit EGA value is rgbRGB: two bits per
-     channel, the primary worth twice the secondary. Expanded as v*255/63 the DEFAULT
-     vpal reproduces the old ega16 table EXACTLY -- 0x3F -> 255, 0x07 -> 170, 0x38 ->
-     85, 0x14 -> (170,85,0) brown. So this is inert until a guest programs the AC, and
-     an existing correct screen cannot regress into a different shade.
-   ⚠ NOT <<2. dac_pack expands six bits by shifting, which gives 252 for white and
-     would have shifted every default colour by a few counts. Here the exact ratio
-     matters precisely because it has to be a no-op. */
-static uint32_t ega64_rgb(uint8_t v)
-{
-    /* rgbRGB: bit5=r bit4=g bit3=b (secondary), bit2=R bit1=G bit0=B (primary) */
-    unsigned R = (unsigned)(((v >> 2) & 1) * 2 + ((v >> 5) & 1));
-    unsigned G = (unsigned)(((v >> 1) & 1) * 2 + ((v >> 4) & 1));
-    unsigned B = (unsigned)(((v >> 0) & 1) * 2 + ((v >> 3) & 1));
-    unsigned r = R * 85, g = G * 85, b = B * 85;   /* 0,85,170,255 */
-    return 0xFF000000u | (r << 16) | (g << 8) | b;
-}
+     the wrong colours. */
 
-/* ── THE SIXTEEN AC PALETTE REGISTERS A MODE SET LEAVES BEHIND -- MEASURED. ──────
-     Index 6 was 0x14 here, taken from the EGA-compatibility table that every
-     reference quotes. It is wrong for what the VGA BIOS actually leaves in mode 0Dh,
-     and the error was invisible until a guest programmed the DAC without touching
-     the AC -- which is exactly what Lemmings does.
-   ★ HOW IT WAS MEASURED, rather than looked up: testcard card 11 reprograms DAC
-     entries 0..15 to a red ramp and leaves the AC alone. On genuine MS-DOS 6.22 the
-     bars come back
-         0..7   (0,0,0) (16,0,0) (32,0,0) ... (112,0,0)   <- the ramp, so vpal[i]=i
-         8..15  the EGA brights                            <- so vpal[i]=0x38+i-8
-     Bar 6 following the ramp is the whole proof: with 0x14 there it would have shown
-     DAC 0x14, which the card never wrote.
-   ⚠ SO THE TABLE IS IDENTITY FOR THE LOW EIGHT AND THE EGA BLOCK FOR THE HIGH EIGHT.
-     Do not "correct" index 6 back to 0x14 from a datasheet; the rig disagrees. */
-static const uint8_t VPAL_DEFAULT[16] = {
-    0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
-    0x38, 0x39, 0x3A, 0x3B, 0x3C, 0x3D, 0x3E, 0x3F
-};
+/* ── WHAT A MODE SET LEAVES BEHIND IS PER MODE. ─────────────────────────────────
+     There is no single default AC palette and no single default DAC; the BIOS has a
+     table for each mode and they genuinely differ:
+
+         00h-03h, 10h, 12h   AC 00 01 02 03 04 05 14 07 38..3F   DAC = the EGA 64
+         0Dh, 0Eh            AC 00 01 02 03 04 05 06 07 10..17   DAC = CGA 16, x4
+         13h                 AC 00..0F (identity)                DAC = the VGA 256
+         04h/05h/06h/07h/0Fh/11h  each different again
+
+     All of it is measured by tools/dostest/vgadefs.asm, which sets each mode and
+     reads the registers BACK -- the AC through 0x3C1, the DAC through 0x3C7/0x3C9 --
+     on genuine MS-DOS 6.22. tools/gen-vgadefs.py turns that dump into
+     vga_defaults.h. Bit 7 of AL ("do not clear the buffer") changes none of it; the
+     probe measures 8Dh and 90h to prove that rather than assume it.
+
+   ⚠⚠ THE SINGLE TABLE THAT WAS HERE WAS INFERRED FROM A PICTURE, AND BOTH HALVES OF
+     THE INFERENCE WERE WRONG. Card 11 reprogrammed DAC 0..15 to a ramp in mode 0Dh,
+     left the AC alone, and read the bars off the screen: bar 6 followed the ramp, so
+     index 6 was concluded to be 6 rather than the 0x14 every reference quotes, and
+     bars 8..15 showed the EGA brights, so the high eight were concluded to be
+     0x38..0x3F. In mode 0Dh the high eight are really 0x10..0x17 -- and the card
+     could not tell, because mode 0Dh's default DAC repeats the same sixteen colours
+     four times across 0..0x3F, so 0x10..0x17 and 0x38..0x3F hold identical values.
+     A bar's colour is a reading of the whole chain and cannot say which link differs.
+   ⚠ And the card ran in 0Dh while the guest that prompted it plays in 10h, where
+     index 6 IS 0x14. Lemmings carries that exact table inside VGALEMMI.EXE and uses
+     it to choose which DAC entries to program, so with 6 there its colour 6 was
+     written to DAC 0x14 and read back from DAC 0x06. */
+static void vga_defaults_for(uint8_t mode,
+                             const unsigned char **ac, const unsigned long **dac)
+{
+    unsigned i;
+    for (i = 0; i < VGA_DEFAULT_MODES; ++i)
+        if (VGA_DEFAULT_BY_MODE[0][i] == mode) {
+            *ac  = VGA_AC_DEFAULT [VGA_DEFAULT_BY_MODE[1][i]];
+            *dac = VGA_DAC_DEFAULT[VGA_DEFAULT_BY_MODE[2][i]];
+            return;
+        }
+    /* A mode the BIOS has no table for: a VESA mode, or one nobody defines. Above
+       13h means 256 colours, so 13h's defaults; below it, mode 3's. st->mkind is
+       not set yet at the point this runs, so the mode number is all there is. */
+    for (i = 0; i < VGA_DEFAULT_MODES; ++i)
+        if (VGA_DEFAULT_BY_MODE[0][i] == (mode >= 0x13 ? 0x13 : 0x03)) {
+            *ac  = VGA_AC_DEFAULT [VGA_DEFAULT_BY_MODE[1][i]];
+            *dac = VGA_DAC_DEFAULT[VGA_DEFAULT_BY_MODE[2][i]];
+            return;
+        }
+    *ac = VGA_AC_DEFAULT[0]; *dac = VGA_DAC_DEFAULT[0];
+}
 
 /* ── ★★★ THE RENDER PALETTE IS DERIVED, NOT STORED. ─────────────────────────────
      pal[] is what the 8-bit framebuffer indexes; dac[] is what the guest programmed.
@@ -109,18 +125,25 @@ static void load_default_palette(video_state *st)
     int i;
     /* The guest asked us not to (AH=12h BL=31h). Leave both the DAC and the
        attribute palette exactly as it left them. */
+    const unsigned char *ac; const unsigned long *dc;
     if (st->def_pal_off) return;
     st->pal_resets++;
+    /* ⚠ dac_hi_since_reset ON ITS OWN CANNOT REPORT ANYTHING. The counters are
+       printed after the guest has exited, and a guest exits through a mode set back
+       to text -- so "since the last reset" is always "since a moment after the last
+       thing the guest drew", and the answer is always zero. It read zero for
+       Lemmings and was taken as evidence that a mode set had wiped a palette the
+       game never rewrote; the disassembly says the game sets the mode and THEN
+       writes the palette, which is the only order that can work on real hardware.
+       Carry the running maximum too, so the epoch that had the writes survives. */
+    if (st->dac_hi_since_reset > st->dac_hi_max)
+        st->dac_hi_max = st->dac_hi_since_reset;
     st->dac_hi_since_reset = 0;
-    for (i = 0; i < 16; ++i)   st->vpal[i] = VPAL_DEFAULT[i];
+    vga_defaults_for(st->mode, &ac, &dc);
+    for (i = 0; i < 16; ++i)   st->vpal[i] = ac[i];
     st->vpal[16] = 0;
     st->attr_ff = st->attr_index = st->attr_mode = st->attr_cse = 0;
-    /* Seed the DAC. Entries 0..63 are the 64 EGA colours, because that is what the
-       default AC palette (0,1,2,3,4,5,0x14,7,0x38..0x3F) points AT -- with those the
-       derived pal[0..15] comes out exactly equal to the old ega16 table, so all of
-       this is inert until a guest programs something. Above 63, the grey ramp. */
-    for (i = 0; i < 64; ++i)   st->dac[i] = ega64_rgb((uint8_t)i);
-    for (i = 64; i < 256; ++i) st->dac[i] = 0xFF000000u | (uint32_t)(i * 0x010101u);
+    for (i = 0; i < 256; ++i)  st->dac[i] = 0xFF000000u | (uint32_t)dc[i];
     pal_refresh(st);
 }
 

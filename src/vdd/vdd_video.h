@@ -239,6 +239,10 @@ typedef struct video_state {
     uint8_t  def_pal_off;               /* INT 10h AH=12h BL=31h: suppress the reload */
     uint32_t pal_resets;                /* load_default_palette() calls              */
     uint32_t dac_hi_since_reset;        /* block-3 DAC writes since the last reset   */
+    /* ⚠ ...and the running maximum over all reset epochs. The counter above is read
+       after the guest has exited, and a guest exits through a mode set, so on its
+       own it reads zero for every guest that ever ran. */
+    uint32_t dac_hi_max;
     uint32_t mw_hist[64];               /* (write mode, map mask) pairs -- see seq_out */
     uint32_t mask_skip_chain4;          /* map-mask writes dropped: chained            */
     uint32_t mask_skip_same;            /* map-mask writes dropped: value unchanged    */

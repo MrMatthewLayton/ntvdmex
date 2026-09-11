@@ -383,6 +383,66 @@ int main(void)
         vdd_cursor_lines(0x1F1F, 16, &st0, &en, &hid);
         CHECK(st0 < 16 && en < 16, "an out-of-range shape is clamped inside the cell"); }
 
+    /* T20: WHAT A MODE SET LEAVES IN THE AC AND THE DAC, PER MODE -------------
+       These values are measured on genuine MS-DOS 6.22 by tools/dostest/vgadefs.asm
+       (checked in as vgadefs.ref.txt) and generated into src/vdd/vga_defaults.h.
+       They are asserted here because the previous single table was inferred from a
+       screenshot and was wrong in two independent ways at once, and nothing in the
+       battery noticed -- a test card renders the whole chain, so it passes whenever
+       two wrong links cancel. Reading the registers back cannot do that. */
+    {   static const uint8_t AC_CGA[16] = { 0x00,0x01,0x02,0x03,0x04,0x05,0x06,0x07,
+                                            0x10,0x11,0x12,0x13,0x14,0x15,0x16,0x17 };
+        static const uint8_t AC_EGA[16] = { 0x00,0x01,0x02,0x03,0x04,0x05,0x14,0x07,
+                                            0x38,0x39,0x3A,0x3B,0x3C,0x3D,0x3E,0x3F };
+        int i, ok;
+
+        memset(&r,0,sizeof r); s_ah(&r,0x00); s_al(&r,0x0D);
+        vdd_bus_deliver_int(&bus,0x10,&r);
+        for (i = 0, ok = 1; i < 16; ++i) if (vid.vpal[i] != AC_CGA[i]) ok = 0;
+        CHECK(ok, "mode 0Dh leaves the CGA attribute table (6 at index 6, 10h..17h high)");
+        /* Mode 0Dh's DAC repeats the same sixteen colours four times over 0..0x3F.
+           That repetition is why card 11 could not tell 0x10..0x17 from 0x38..0x3F. */
+        for (i = 0, ok = 1; i < 64; ++i)
+            /* ⚠ <<4, not <<3. The bright eight sit at 0x10..0x17, and 0x08..0x0F is
+               the DARK eight over again -- which is exactly why mode 0Dh's AC table
+               has to reach up to 0x10 to find them. */
+            if (vid.dac[i] != vid.dac[(i & 7) | (((i >> 4) & 1) << 4)]) ok = 0;
+        CHECK(ok, "mode 0Dh's default DAC is the 16 CGA colours, repeated four times");
+
+        memset(&r,0,sizeof r); s_ah(&r,0x00); s_al(&r,0x10);
+        vdd_bus_deliver_int(&bus,0x10,&r);
+        for (i = 0, ok = 1; i < 16; ++i) if (vid.vpal[i] != AC_EGA[i]) ok = 0;
+        CHECK(ok, "mode 10h leaves the EGA attribute table (0x14 at index 6)");
+        CHECK(vid.dac[0x14] == 0xFFAA5500u, "mode 10h: DAC 0x14 is EGA brown");
+        CHECK(vid.dac[0x06] == 0xFFAAAA00u, "mode 10h: DAC 0x06 is dark yellow, not brown");
+
+        /* ★ THE WHOLE LEMMINGS FAULT IN ONE ASSERTION. The game writes its colour 6
+           to the DAC entry its own copy of this table names -- 0x14 -- and a pixel of
+           value 6 must read it back. With 6 in that slot the write went to 0x14 and
+           the read came from 0x06, so exactly one colour of sixteen was stale. */
+        {   uint32_t v; v=0x14; vdd_bus_io(&bus,0x3C8,1,0,&v);
+            v=0x3F; vdd_bus_io(&bus,0x3C9,1,0,&v);
+            v=0x00; vdd_bus_io(&bus,0x3C9,1,0,&v);
+            v=0x00; vdd_bus_io(&bus,0x3C9,1,0,&v);
+            CHECK(vid.pal[6] == vid.dac[0x14],
+                  "mode 10h: a DAC 0x14 write is what pixel value 6 renders with"); }
+
+        memset(&r,0,sizeof r); s_ah(&r,0x00); s_al(&r,0x13);
+        vdd_bus_deliver_int(&bus,0x10,&r);
+        for (i = 0, ok = 1; i < 16; ++i) if (vid.vpal[i] != i) ok = 0;
+        CHECK(ok, "mode 13h leaves the identity attribute table");
+        /* 13h's default is the real 256-colour palette, not a grey ramp: greys sit
+           at 0x10..0x1F and the colour wheel starts at 0x20. */
+        CHECK(vid.dac[0x10]==0xFF000000u && vid.dac[0x1F]==0xFFFFFFFFu,
+              "mode 13h: 0x10..0x1F is the grey ramp, black to white");
+        CHECK(vid.dac[0x20]==0xFF0000FFu, "mode 13h: the colour wheel starts at 0x20");
+
+        /* Bit 7 of AL means "do not clear the buffer" and nothing else -- measured. */
+        memset(&r,0,sizeof r); s_ah(&r,0x00); s_al(&r,0x90);
+        vdd_bus_deliver_int(&bus,0x10,&r);
+        for (i = 0, ok = 1; i < 16; ++i) if (vid.vpal[i] != AC_EGA[i]) ok = 0;
+        CHECK(ok, "AL=90h is mode 10h: bit 7 does not change the palette load"); }
+
     printf("\n%d checks, %d failed\n", total, fails);
     return fails ? 1 : 0;
 }

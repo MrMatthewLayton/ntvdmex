@@ -91,6 +91,10 @@ def main():
     ap.add_argument("--boot", type=float, default=22.0, help="seconds before the first key")
     ap.add_argument("--gap", type=float, default=2.0, help="seconds between keys")
     ap.add_argument("--settle", type=float, default=6.0, help="seconds before the dump")
+    ap.add_argument("--memdump", default="",
+                    help="also pmemsave the first MB here. VGALEMMI.EXE is "
+                         "PKLITE-compressed, so the only honest way to read its code "
+                         "is to read it after it has decompressed ITSELF.")
     a = ap.parse_args()
 
     tmp = os.environ.get("TMPDIR", "/tmp")
@@ -112,8 +116,20 @@ def main():
            "-drive", "file=%s,format=raw,if=ide,index=0,media=disk" % scratch,
            "-drive", "file=%s,format=raw,if=floppy,index=0" % disk,
            "-boot", "c", "-no-reboot", "-display", "none", "-monitor", "stdio"]
+    # The monitor's replies go to a file, not a pipe: an undrained pipe can block
+    # QEMU, and a monitor error (a mistyped pmemsave, say) is otherwise invisible
+    # -- the command simply appears to do nothing.
+    monlog = os.path.join(tmp, "lemref-mon-%d.log" % os.getpid())
+    logf = open(monlog, "wb")
+    # ⚠ pmemsave's size is parsed by the HMP *expression* evaluator, which happily
+    # eats the '/' that starts an absolute path as a division operator and fails
+    # with "invalid char 't' in expression". So QEMU is run in the output directory
+    # and the dump is named relatively. screendump takes a filename argument proper
+    # and is unaffected.
+    dumpdir, dumpname = os.path.split(os.path.abspath(a.memdump)) if a.memdump \
+        else (tmp, "")
     proc = subprocess.Popen(cmd, stdin=subprocess.PIPE,
-                            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                            stdout=logf, stderr=subprocess.STDOUT, cwd=dumpdir)
 
     def mon(line):
         proc.stdin.write((line + "\n").encode())
@@ -130,12 +146,29 @@ def main():
         time.sleep(a.settle)
         mon("screendump %s" % os.path.abspath(a.out))
         time.sleep(2.0)
+        if a.memdump:
+            mon("pmemsave 0 0x100000 %s" % dumpname)
+            time.sleep(3.0)
+            print("wrote %s (%d bytes)"
+                  % (a.memdump, os.path.getsize(a.memdump)
+                     if os.path.exists(a.memdump) else 0))
     finally:
         try:
             mon("quit")
             proc.wait(timeout=5)
         except Exception:
             proc.kill()
+        logf.close()
+        with open(monlog, "rb") as f:
+            raw = f.read().decode(errors="replace")
+        # Every keystroke is echoed back with cursor controls, so the prompt lines
+        # are pages of noise. What matters is the lines the monitor itself emits.
+        tail = [ln for ln in raw.splitlines()
+                if ln.strip() and "\x1b" not in ln and not ln.startswith("(qemu)")
+                and not ln.startswith("QEMU ")]
+        if tail:
+            print("--- qemu monitor ---\n%s\n--------------------" % "\n".join(tail))
+        os.unlink(monlog)
         for f in (disk, scratch):
             try:
                 os.unlink(f)
