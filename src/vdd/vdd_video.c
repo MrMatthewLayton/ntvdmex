@@ -489,7 +489,7 @@ static void int10(void *self, ntvdd_regs *r)
                 } else if (st->mkind == VID_KIND_LINEAR8) {
                     int i; for (i = 0; i < VID_G13_W * VID_G13_H; ++i) st->vmem[i] = 0;
                 } else if (st->mkind == VID_KIND_PLANAR) {
-                    int pl, i;
+                    int pl; uint32_t i;
                     for (pl = 0; pl < 4; ++pl)
                         for (i = 0; i < VID_PLANE_SIZE; ++i) st->plane[pl][i] = 0;
                 } else if (st->mkind == VID_KIND_CGA) {
@@ -893,7 +893,7 @@ static uint8_t vga_alu(uint8_t op, uint8_t v, uint8_t lat)
 { switch (op & 3) { case 1: return (uint8_t)(v & lat); case 2: return (uint8_t)(v | lat);
                     case 3: return (uint8_t)(v ^ lat); default: return v; } }
 
-void vga_planar_write(video_state *st, uint32_t off, uint8_t cpu)
+static void vga_planar_write_1(video_state *st, uint32_t off, uint8_t cpu)
 {
     uint8_t alu = (uint8_t)((st->func_rotate >> 3) & 3), bm = st->bit_mask; int p;
     if (off >= VID_PLANE_SIZE) return;
@@ -936,9 +936,30 @@ void vga_planar_write(video_state *st, uint32_t off, uint8_t cpu)
     }
 }
 
+/* The watchpoint wrapper. The engine above is left exactly as it was so that the
+   instrument cannot change what it measures; this only records around it. */
+void vga_planar_write(video_state *st, uint32_t off, uint8_t cpu)
+{
+    vid_watch_rec r; int p;
+    if (off > st->planar_hi_water) st->planar_hi_water = off;
+    if (off != st->watch_off) { vga_planar_write_1(st, off, cpu); return; }
+    r.pc = st->guest_pc ? st->guest_pc() : 0;
+    r.wmode = (uint8_t)(st->write_mode & 3); r.map_mask = st->map_mask;
+    r.ensr = st->enable_sr; r.set_reset = st->set_reset;
+    r.frot = st->func_rotate; r.bit_mask = st->bit_mask; r.cpu = cpu;
+    for (p = 0; p < 4; ++p) r.latch[p] = st->latch[p];
+    vga_planar_write_1(st, off, cpu);
+    for (p = 0; p < 4; ++p)
+        r.after[p] = (off < VID_PLANE_SIZE) ? st->plane[p][off] : 0;
+    if (st->watch_n < VID_WATCH_MAX) st->watch[st->watch_n] = r;
+    st->watch_last = r;
+    st->watch_n++;
+}
+
 uint8_t vga_planar_read(video_state *st, uint32_t off)
 {
     int p;
+    if (off > st->planar_hi_water) st->planar_hi_water = off;
     if (off >= VID_PLANE_SIZE) return 0xFF;
     for (p = 0; p < 4; ++p) st->latch[p] = st->plane[p][off];   /* load latches    */
     return st->plane[st->read_map & 3][off];                    /* read mode 0     */
@@ -1721,6 +1742,8 @@ int vdd_video_init(vdd_bus *b, void *self)
 {
     video_state *st = (video_state *)self;
     st->bus = b;
+    /* Disarmed before the reset, so no offset a guest can produce matches. */
+    st->watch_off = 0xFFFFFFFFu;
     vdd_video_reset(st);
     st->modey_gap = MODEY_GAP_DEFAULT;
     if (vdd_claim_mem(b, VID_TEXT_BASE, 0x8000, vid_rd, vid_wr, st)) return -1;

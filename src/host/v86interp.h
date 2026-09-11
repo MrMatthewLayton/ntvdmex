@@ -237,11 +237,18 @@ static int decode_modrm(icpu *c, uint32_t cb, int idx, int segov, modrm_t *o)
     return len;
 }
 
+/* Where the guest is, for instruments downstream of a memory access. Every planar
+   VRAM write reaches the video VDD through this interpreter, so a watchpoint there
+   can name the guest routine responsible -- which is the difference between "some
+   idiom wrote 0xFF" and an address to disassemble. One store per instruction. */
+static uint32_t g_ipc;
+
 /* Execute one instruction. Returns 1 if modeled (state + IP advanced/jumped),
    0 to bail (state untouched at the current instruction). */
 static int istep(icpu *c)
 {
     uint32_t cb = (seg_base(c->seg[1])) + c->ip;   /* linear CS:IP */
+    g_ipc = ((uint32_t)c->seg[1] << 16) | c->ip;
     int idx = 0, segov = -1, rep = 0, osz = 0;
     int W;                                            /* word operand width: 4 if 0x66 else 2 */
     BYTE op;

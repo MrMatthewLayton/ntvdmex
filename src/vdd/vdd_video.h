@@ -30,7 +30,19 @@
 #define VID_G13_H         200
 #define VID_G12_W         640           /* mode 12h: 640x480x16 planar            */
 #define VID_G12_H         480
-#define VID_PLANE_SIZE    (VID_G12_W * VID_G12_H / 8)   /* 38400 bytes/plane      */
+/* ── ★ A VGA BIT-PLANE IS 64KB, NOT "AS MUCH AS THE VISIBLE SCREEN NEEDS". ───────
+     This was VID_G12_W * VID_G12_H / 8 = 38400, which is exactly mode 12h's visible
+     area. The aperture it serves is A0000-AFFFF, so a guest can address 65536 bytes
+     per plane, and the 27136 above the old bound were NOT THERE: vga_planar_read
+     returned 0xFF for them and vga_planar_write dropped the write, silently.
+   ⚠ That is not an obscure corner. Off-screen VRAM is where DOS games keep sprite
+     and background caches and where they page-flip to, and a source read back as
+     0xFF is eight pixels of colour 15. Lemmings' level-briefing preview is blitted
+     from up there, which is why a 52x17-byte rectangle of it came out solid green.
+     With the plane the size the hardware makes it, the bounds check in the engine
+     can no longer fail at all -- off is lin - 0xA0000, so it is 16-bit by
+     construction. */
+#define VID_PLANE_SIZE    65536u                        /* bytes/plane, as on a VGA */
 #define VID_Y_PLANE       65536u                        /* mode-Y plane = full 64K */
 
 /* VESA VBE 2.0 (banked, packed-256). A0000 is the 64KB window onto vesa_vram. */
@@ -47,6 +59,15 @@
 #define VID_KIND_LINEAR8  2             /* mode 13h: one byte per pixel            */
 #define VID_KIND_CGA      3             /* modes 4/5: 320x200x4, 6: 640x200x2      */
 #define VID_KIND_UNSUP    4
+
+/* One recorded planar write -- see `watch` in video_state. */
+#define VID_WATCH_MAX 32
+typedef struct {
+    uint32_t pc;                        /* guest (CS<<16)|IP at the write            */
+    uint8_t  wmode, map_mask, ensr, set_reset, frot, bit_mask, cpu;
+    uint8_t  latch[4];                  /* the latches the write combined with       */
+    uint8_t  after[4];                  /* the four plane bytes it left behind       */
+} vid_watch_rec;
 
 typedef struct video_state {
     vdd_bus *bus;
@@ -243,6 +264,26 @@ typedef struct video_state {
        after the guest has exited, and a guest exits through a mode set, so on its
        own it reads zero for every guest that ever ran. */
     uint32_t dac_hi_max;
+    /* ── A VRAM WATCHPOINT: EVERY WRITE TO ONE BYTE, WITH THE REGISTERS THAT MADE IT.
+         A histogram says which idioms a run used; it cannot say which idiom produced
+         the wrong pixel, because every idiom is in the histogram. This records the
+         whole write -- mode, map mask, Enable Set/Reset, Set/Reset, ALU, bit mask,
+         the CPU byte, the latches, and the four plane bytes afterwards -- for one
+         chosen offset, plus the guest CS:IP so the routine responsible can be found
+         in a disassembly. Armed from cfg/vwatch.txt; off by default.
+       ⚠ BOUNDED ON PURPose: a guest-driven trace outruns the guest. The first
+         VID_WATCH_MAX writes are kept and the LAST one separately, because the last
+         write is the one that decides what is on screen. */
+    /* The highest VRAM byte offset the guest has touched, read or written. Answers
+       "does this guest use off-screen VRAM?" for any guest, which is what the old
+       38400-byte plane made unanswerable -- everything above it read back as 0xFF
+       and looked like the guest's own data. */
+    uint32_t planar_hi_water;
+    uint32_t watch_off;                 /* VRAM byte offset watched; ~0u = disarmed  */
+    uint32_t watch_n;                   /* writes seen (may exceed what is recorded) */
+    vid_watch_rec watch[VID_WATCH_MAX];
+    vid_watch_rec watch_last;
+    uint32_t (*guest_pc)(void);         /* host hook: (CS<<16)|IP, 0 if unavailable  */
     uint32_t mw_hist[64];               /* (write mode, map mask) pairs -- see seq_out */
     uint32_t mask_skip_chain4;          /* map-mask writes dropped: chained            */
     uint32_t mask_skip_same;            /* map-mask writes dropped: value unchanged    */

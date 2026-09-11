@@ -113,6 +113,9 @@
 /* Mode-Y de-interleave tuning; see modey_flush() in vdd_video.c. Contents = the run
    coalescing slack in dwords. Absent = the built-in default. */
 #define MODEY_PATH CFG_("modey.txt")
+/* A hex VRAM byte offset. Every planar write to it is recorded with the registers
+   that produced it and the guest CS:IP -- see the watchpoint in vdd_video.c. */
+#define VWATCH_PATH CFG_("vwatch.txt")
 /* Per-plane backing for mode Y is ON by default -- see the MODE-Y PLANE BACKING block.
    This file DISABLES it and falls back to the de-interleave heuristic, which is worth
    keeping only because it is what a machine that refuses the remap will use. */
@@ -10659,6 +10662,11 @@ static void iio_out(uint16_t port, int width, uint32_t val)
 
 #include "v86interp.h"
 
+/* Where the guest was at the last interpreted instruction. Every planar VRAM write
+   arrives through imem_w8 above, i.e. from the interpreter, so this is exact at the
+   moment the video VDD's watchpoint fires. */
+static uint32_t host_guest_pc(void) { return g_ipc; }
+
 /* The mode-12h trap-storm escape hatch. By default V86 runs on the real CPU and
    each VGA access (memory OR port) is emulated one-at-a-time as a device access
    -- pure device virtualization. But QuickBasic plots pixels one at a time and
@@ -21013,8 +21021,35 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     /* (per-plane backing is taken later, once the preamble is on disk -- every
        log_write() before that point TRUNCATES the file and would eat its report.) */
     g_vid.time_us = host_time_us;               /* real CRT timebase for 0x3DA (#55) */
+    g_vid.guest_pc = host_guest_pc;             /* so a VRAM watchpoint names a routine */
     g_vid_dev = vdd_video_device(&g_vid);
     vdd_bus_add(&g_bus, &g_vid_dev);
+    /* ⚠ AFTER vdd_bus_add, NOT BEFORE. vdd_bus_add calls vdd_video_init, which
+       disarms the watchpoint -- setting it first looked right and was silently
+       undone, and the run came back with no trace and no error. */
+    /* cfg/vwatch.txt: a hex VRAM byte offset to record every planar write to. Off
+       unless the file is there -- see the watchpoint in vdd_video.c. */
+    { HANDLE hw = CreateFileA(VWATCH_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                              NULL, OPEN_EXISTING, 0, NULL);
+      if (hw != INVALID_HANDLE_VALUE) {
+          char wb[32]; DWORD rdw = 0, vw = 0, iw; int gotw = 0;
+          ReadFile(hw, wb, sizeof wb - 1, &rdw, NULL); CloseHandle(hw);
+          for (iw = 0; iw < rdw; ++iw) {
+              int d = -1; char ch = wb[iw];
+              if (ch >= '0' && ch <= '9') d = ch - '0';
+              else if (ch >= 'a' && ch <= 'f') d = ch - 'a' + 10;
+              else if (ch >= 'A' && ch <= 'F') d = ch - 'A' + 10;
+              if (d < 0) break;
+              vw = (vw << 4) | (DWORD)d; gotw = 1;
+          }
+          if (gotw) {
+              char lb5[96], *lq5 = lb5;
+              g_vid.watch_off = vw;
+              lq5 = zput(lq5, "STAGE0: vwatch.txt -> planar watchpoint at VRAM offset 0x");
+              lq5 = zhex(lq5, vw); lq5 = zput(lq5, "\r\n");
+              log_append(LOG_PATH, lb5, lq5); serial_out(lb5, lq5);
+          }
+      } }
     /* AFTER the video VDD is on the bus (it needs st->bus to resolve a guest address). */
     vdd_video_install_fonts(&g_vid);            /* real glyph data behind INT 10h 1130h */
     /* The BIOS keyboard buffer belongs to the guest: point the VDD at 0040:0000 BEFORE the
@@ -25042,6 +25077,37 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                 p = zhexb(p, (v >> 16) & 0xFF); p = zhexb(p, (v >> 8) & 0xFF);
                 p = zhexb(p, v & 0xFF); p = zput(p, " "); }
             p = zput(p, "]\r\n"); }
+        /* The VRAM watchpoint. Silent unless cfg/vwatch.txt armed it. */
+        if (g_vid.watch_off != 0xFFFFFFFFu) {
+            unsigned wi, wn = g_vid.watch_n < VID_WATCH_MAX ? g_vid.watch_n : VID_WATCH_MAX;
+            p = zput(p, "STAGE2: vwatch off=0x"); p = zhex(p, g_vid.watch_off);
+            p = zput(p, " writes="); p = zdec(p, g_vid.watch_n); p = zput(p, "\r\n");
+            for (wi = 0; wi <= wn; ++wi) {
+                const vid_watch_rec *w = (wi < wn) ? &g_vid.watch[wi] : &g_vid.watch_last;
+                int k;
+                if (wi == wn) { if (!g_vid.watch_n) break; p = zput(p, "  LAST "); }
+                else          { p = zput(p, "  #"); p = zdec(p, wi); p = zput(p, " "); }
+                p = zput(p, "pc="); p = zhex(p, w->pc);
+                p = zput(p, " wm="); p = zdec(p, w->wmode);
+                p = zput(p, " mm="); p = zhexb(p, w->map_mask);
+                p = zput(p, " ensr="); p = zhexb(p, w->ensr);
+                p = zput(p, " sr="); p = zhexb(p, w->set_reset);
+                p = zput(p, " frot="); p = zhexb(p, w->frot);
+                p = zput(p, " bm="); p = zhexb(p, w->bit_mask);
+                p = zput(p, " cpu="); p = zhexb(p, w->cpu);
+                p = zput(p, " lat=");
+                for (k = 0; k < 4; ++k) p = zhexb(p, w->latch[k]);
+                p = zput(p, " after=");
+                for (k = 0; k < 4; ++k) p = zhexb(p, w->after[k]);
+                p = zput(p, "\r\n");
+                if (p > report + sizeof report - 256) break;
+            }
+        }
+        /* ► Does this guest use OFF-SCREEN VRAM? Above 38400 used to read back as
+             0xFF, so the answer used to be invisible. */
+        p = zput(p, "STAGE2: planar hi_water=0x"); p = zhex(p, g_vid.planar_hi_water);
+        p = zput(p, " plane_size=0x"); p = zhex(p, (DWORD)VID_PLANE_SIZE);
+        p = zput(p, "\r\n");
         p = zput(p, "STAGE2: crtc: start=");   p = zdec(p, g_vid.crtc_start);
         p = zput(p, " offset=");               p = zdec(p, g_vid.crtc_offset);
         p = zput(p, " off_seen=");             p = zdec(p, g_vid.crtc_off_seen);
