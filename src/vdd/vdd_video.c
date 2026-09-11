@@ -495,6 +495,21 @@ static void int10(void *self, ntvdd_regs *r)
     st->dirty = 1;
     switch (ah) {
     case 0x00:                                        /* set video mode          */
+        /* ── ▶ AL BIT 7 = "DO NOT CLEAR VIDEO MEMORY", AND IT IS NOT DECORATION. ────
+             Standard since the EGA: a mode set with bit 7 reprograms the card but
+             LEAVES DISPLAY MEMORY ALONE. We masked the bit off to get the mode number
+             and then threw it away, so every mode set wiped all four 64KB planes.
+           ⚠ THAT IS THE MISSING LEMMINGS TOOLBAR. The game composes its skill-button
+             panel into OFF-SCREEN VRAM at 0xF91F..0xFFFE, then sets its mode with
+             `mov ax,0x008D` (0x0FB3) -- and the menu with `mov ax,0x0090` (0x4BEF) --
+             exactly so that cache survives. We cleared it, and the panel blit at
+             0x7626 then copied 1760 bytes of zeroes onto the screen, faithfully.
+             MEASURED: the blit writes with wm=1 and lat=00000000 while the cache's
+             own last write left 0x00/0x24/0x7F/0x00 there -- the copy was never wrong,
+             its source had been destroyed underneath it.
+           ▶ Everything else a mode set does still happens; only the erase is skipped,
+             which is the whole difference the bit describes. */
+        {   int noclear = (al & 0x80) != 0;
         st->mode = al & 0x7F; st->in_vesa = 0;        /* a standard mode leaves VESA */
         st->cur_row = st->cur_col = 0; st->page = 0;
         load_default_palette(st);                     /* HW reloads the DAC on mode set */
@@ -507,7 +522,7 @@ static void int10(void *self, ntvdd_regs *r)
                 st->mkind = VID_KIND_TEXT;
                 st->cols = VID_COLS; st->rows = VID_ROWS;
                 st->gw = VID_FB_W; st->gh = VID_FB_H;
-                clear_text(st, 0x07);
+                if (!noclear) clear_text(st, 0x07);
             } else {
                 st->mkind = vid_modes[mi].kind;
                 st->cols  = vid_modes[mi].cols;
@@ -521,20 +536,21 @@ static void int10(void *self, ntvdd_regs *r)
                     st->mkind = VID_KIND_TEXT;
                     st->cols = VID_COLS; st->rows = VID_ROWS;
                     st->gw = VID_FB_W;  st->gh = VID_FB_H;
-                    clear_text(st, 0x07);
+                    if (!noclear) clear_text(st, 0x07);
                 } else if (st->mkind == VID_KIND_LINEAR8) {
-                    int i; for (i = 0; i < VID_G13_W * VID_G13_H; ++i) st->vmem[i] = 0;
+                    int i; if (!noclear) for (i = 0; i < VID_G13_W * VID_G13_H; ++i) st->vmem[i] = 0;
                 } else if (st->mkind == VID_KIND_PLANAR) {
                     int pl; uint32_t i;
-                    for (pl = 0; pl < 4; ++pl)
-                        for (i = 0; i < VID_PLANE_SIZE; ++i) st->plane[pl][i] = 0;
+                    if (!noclear)
+                        for (pl = 0; pl < 4; ++pl)
+                            for (i = 0; i < VID_PLANE_SIZE; ++i) st->plane[pl][i] = 0;
                 } else if (st->mkind == VID_KIND_CGA) {
                     int i;
                     st->cga_bpp = (uint8_t)(st->mode == 0x06 ? 1 : 2);
                     st->cga_pal = 0;
-                    for (i = 0; i < 16384; ++i) st->vmem[VID_TEXT_OFF + i] = 0;
+                    if (!noclear) for (i = 0; i < 16384; ++i) st->vmem[VID_TEXT_OFF + i] = 0;
                 } else {
-                    clear_text(st, 0x07);
+                    if (!noclear) clear_text(st, 0x07);
                 }
             }
             if (st->mode_qn < 8) {
@@ -546,7 +562,7 @@ static void int10(void *self, ntvdd_regs *r)
                 st->mode_q[st->mode_qn].h    = st->gh;
                 st->mode_qn++;
             }
-        }
+        } }
         break;
     case 0x01: st->cur_shape = r_cx(r); break;
     case 0x02: st->cur_row = (uint8_t)(r_dx(r) >> 8); st->cur_col = (uint8_t)(r_dx(r) & 0xFF); break;

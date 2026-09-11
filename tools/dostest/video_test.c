@@ -607,7 +607,49 @@ int main(void)
                   "lemmings panel: ...and that last byte copies like any other");
         }
 
-        /* ── (5) THE INSTRUMENT THAT HAS TO ANSWER "DID THE BLIT RUN AT ALL". ─────
+        /* ── (5) ★★★ AL BIT 7 ON A MODE SET MEANS "DO NOT CLEAR VIDEO MEMORY". ───
+         *   THE ACTUAL TOOLBAR BUG. We took `al & 0x7F` for the mode number and threw
+         *   the bit away, so every mode set wiped all four 64KB planes. Lemmings
+         *   composes its skill-button panel into OFF-SCREEN VRAM and only then sets
+         *   its mode -- `mov ax,0x008D` at guest 0x0FB3 for gameplay, `mov ax,0x0090`
+         *   at 0x4BEF for the menu -- with bit 7 set precisely so that cache survives.
+         *   We erased it, and the panel blit copied 1760 bytes of zeroes.
+         * ⚠ The off-screen half is the half that matters and the half a screen-shaped
+         *   test would miss: the visible page gets redrawn immediately either way, so
+         *   a check that only looked at the picture would pass while the bug remained. */
+        {   ntvdd_regs r;
+            uint32_t OFF = 0xF91F, VIS = 0x0100;
+            int pl;
+
+            for (pl = 0; pl < 4; ++pl) {
+                vid.plane[pl][OFF] = (uint8_t)(0xA0 + pl);
+                vid.plane[pl][VIS] = (uint8_t)(0x50 + pl);
+            }
+            memset(&r, 0, sizeof r); s_ah(&r, 0x00); s_al(&r, 0x8D);   /* mode 0Dh, PRESERVE */
+            vdd_bus_deliver_int(&bus, 0x10, &r);
+            CHECK(vid.mode == 0x0D, "mode set: AL=0x8D still selects mode 0Dh (bit 7 is not the mode)");
+            {   int kept = 1;
+                for (pl = 0; pl < 4; ++pl)
+                    if (vid.plane[pl][OFF] != (uint8_t)(0xA0 + pl)) kept = 0;
+                CHECK(kept, "mode set: AL bit 7 PRESERVES the off-screen sprite cache");
+            }
+            {   int kept = 1;
+                for (pl = 0; pl < 4; ++pl)
+                    if (vid.plane[pl][VIS] != (uint8_t)(0x50 + pl)) kept = 0;
+                CHECK(kept, "mode set: ...and the visible page too -- it is ALL of display memory");
+            }
+            /* AND THE DEFAULT MUST STILL CLEAR, or every guest that relies on a mode
+               set to blank the screen inherits the last program's picture. */
+            memset(&r, 0, sizeof r); s_ah(&r, 0x00); s_al(&r, 0x0D);   /* mode 0Dh, CLEAR */
+            vdd_bus_deliver_int(&bus, 0x10, &r);
+            {   int cleared = 1;
+                for (pl = 0; pl < 4; ++pl)
+                    if (vid.plane[pl][OFF] || vid.plane[pl][VIS]) cleared = 0;
+                CHECK(cleared, "mode set: WITHOUT bit 7 the planes are cleared, as before");
+            }
+        }
+
+        /* ── (6) THE INSTRUMENT THAT HAS TO ANSWER "DID THE BLIT RUN AT ALL". ─────
          *   The rig's answer so far is an ABSENCE: no read site at the panel blit's
          *   pc. But that report is drawn from 256-slot single-slot hashes which lost
          *   249,630 reads on the same run, so an absence there can equally mean the
