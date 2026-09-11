@@ -133,6 +133,27 @@ typedef struct video_state {
     uint8_t  enable_sr;    /* GR1                                                  */
     uint8_t  func_rotate;  /* GR3: bits0-2 rotate count, bits3-4 ALU               */
     uint8_t  read_map;     /* GR4: plane read in read-mode 0                       */
+    /* ── ★★ READ MODE 1 IS COLOUR COMPARE, AND IT IS HOW A GAME ASKS THE HARDWARE
+         "WHICH OF THESE EIGHT PIXELS ARE SOLID?". A read in mode 1 does not return a
+         plane; it returns one BIT PER PIXEL, set where the pixel's 4-bit colour
+         matches GR2 (Color Compare) in every plane GR7 (Color Don't Care) says to
+         look at. That is pixel-perfect terrain collision in one instruction, which is
+         exactly what a platform game does with it.
+       ⚠ NONE OF THIS EXISTED: GR5 bit 3 was masked off with `v & 3`, so the read mode
+         was thrown away, and GR2 and GR7 fell into `default:` and were dropped. Every
+         colour-compare read therefore came back as a raw plane byte -- a plausible
+         wrong answer, so the guest ran on and its lemmings walked off the terrain. */
+    uint8_t  read_mode;    /* GR5 bit 3: 0 = plane select, 1 = colour compare       */
+    uint8_t  col_compare;  /* GR2                                                   */
+    uint8_t  col_dontcare; /* GR7: bit n SET = plane n takes part in the compare    */
+    uint32_t rmode_hist[2];/* reads served in each mode                             */
+    /* CRTC start address: what the guest has written so far, and what the display is
+       actually using. They differ between the two byte writes of a page flip -- see
+       crtc_out case 0x0C for why rendering from the first is a flicker. */
+    uint16_t crtc_start_live;
+    uint8_t  crtc_start_pend;   /* 0x0C written, 0x0D not yet                       */
+    uint32_t crtc_start_writes; /* completed pairs                                   */
+    uint32_t crtc_start_half;   /* frames built mid-pair -- would have been torn      */
     /* ── ATTRIBUTE CONTROLLER (0x3C0/0x3C1). ──────────────────────────────────
          In every 16-colour planar and text mode the 4-bit pixel value indexes
          THESE registers (vpal, above), and the result indexes the DAC. Not

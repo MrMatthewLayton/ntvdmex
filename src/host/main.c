@@ -25151,6 +25151,13 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         p = zput(p, "STAGE2: planar hi_water=0x"); p = zhex(p, g_vid.planar_hi_water);
         p = zput(p, " plane_size=0x"); p = zhex(p, (DWORD)VID_PLANE_SIZE);
         p = zput(p, " wsite_lost="); p = zdec(p, g_vid.wsite_lost);
+        /* ► DOES THIS GUEST USE COLOUR COMPARE? Read mode 1 is pixel-perfect terrain
+             collision in one instruction; until it was implemented, every such read
+             returned a raw plane byte and the guest acted on it. */
+        p = zput(p, " reads[mode0/mode1]="); p = zdec(p, g_vid.rmode_hist[0]);
+        p = zput(p, "/"); p = zdec(p, g_vid.rmode_hist[1]);
+        p = zput(p, " cc="); p = zhexb(p, g_vid.col_compare);
+        p = zput(p, " cdc="); p = zhexb(p, g_vid.col_dontcare);
         p = zput(p, "\r\n");
         {   unsigned k;
             /* ► And, whatever their rank, every site that touched DEEP off-screen
@@ -25203,6 +25210,12 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                 if (p > report + sizeof report - 512) break;
             }
 }
+        /* ► Does this guest scroll or page-flip, and how often would a frame have
+             been built from a half-written start address? */
+        p = zput(p, "STAGE2: crtc start: pairs="); p = zdec(p, g_vid.crtc_start_writes);
+        p = zput(p, " torn_avoided="); p = zdec(p, g_vid.crtc_start_half);
+        p = zput(p, " live="); p = zdec(p, g_vid.crtc_start_live);
+        p = zput(p, "\r\n");
         p = zput(p, "STAGE2: crtc: start=");   p = zdec(p, g_vid.crtc_start);
         p = zput(p, " offset=");               p = zdec(p, g_vid.crtc_offset);
         p = zput(p, " off_seen=");             p = zdec(p, g_vid.crtc_off_seen);

@@ -460,6 +460,89 @@ int main(void)
         for (i = 0, ok = 1; i < 16; ++i) if (vid.vpal[i] != AC_EGA[i]) ok = 0;
         CHECK(ok, "AL=90h is mode 10h: bit 7 does not change the palette load"); }
 
+    /* T21: READ MODE 1 -- COLOUR COMPARE. ------------------------------------
+       A read in mode 1 returns one BIT PER PIXEL, set where that pixel's 4-bit
+       colour matches GR2 in every plane GR7 selects. It is how a game asks the
+       hardware "which of these eight pixels are solid", i.e. pixel-perfect terrain
+       collision in one instruction. GR5 bit 3 used to be masked off and GR2/GR7
+       dropped entirely, so every such read came back as a raw plane byte. */
+    {   uint32_t v;
+        memset(&r,0,sizeof r); s_ah(&r,0x00); s_al(&r,0x12);
+        vdd_bus_deliver_int(&bus,0x10,&r);
+        /* Hand-place eight pixels in one byte: colours 0,1,2,3,4,5,6,7 left to right.
+           Plane p bit (7-k) is bit p of pixel k's colour. */
+        {   int k, pl;
+            for (pl = 0; pl < 4; ++pl) {
+                uint8_t b = 0;
+                for (k = 0; k < 8; ++k) if ((k >> pl) & 1) b = (uint8_t)(b | (0x80 >> k));
+                vid.plane[pl][0] = b;
+            } }
+        v = 5; vdd_bus_io(&bus,0x3CE,1,0,&v);            /* GR5 Mode          */
+        v = 0x08; vdd_bus_io(&bus,0x3CF,1,0,&v);         /* read mode 1       */
+        CHECK(vid.read_mode==1 && vid.write_mode==0,
+              "GR5 bit 3 selects read mode 1 and leaves the write mode alone");
+        v = 7; vdd_bus_io(&bus,0x3CE,1,0,&v);            /* GR7 Don't Care    */
+        v = 0x0F; vdd_bus_io(&bus,0x3CF,1,0,&v);         /* compare all planes */
+        v = 2; vdd_bus_io(&bus,0x3CE,1,0,&v);            /* GR2 Color Compare */
+        v = 5; vdd_bus_io(&bus,0x3CF,1,0,&v);            /* looking for colour 5 */
+        CHECK(vga_planar_read(&vid,0)==(0x80>>5),
+              "read mode 1: exactly the pixel whose colour is 5 comes back set");
+        v = 2; vdd_bus_io(&bus,0x3CE,1,0,&v);
+        v = 0; vdd_bus_io(&bus,0x3CF,1,0,&v);
+        CHECK(vga_planar_read(&vid,0)==(0x80>>0),
+              "...and colour 0 finds only pixel 0");
+        /* GR7 = 0 means NO plane takes part, so every pixel matches. That is the
+           hardware's answer and not a bug to be tidied away. */
+        v = 7; vdd_bus_io(&bus,0x3CE,1,0,&v);
+        v = 0; vdd_bus_io(&bus,0x3CF,1,0,&v);
+        CHECK(vga_planar_read(&vid,0)==0xFF,
+              "Color Don't Care = 0 compares nothing, so every pixel matches");
+        /* Only plane 0 in the comparison: colours 1,3,5,7 have bit 0 set. */
+        v = 7; vdd_bus_io(&bus,0x3CE,1,0,&v);
+        v = 1; vdd_bus_io(&bus,0x3CF,1,0,&v);
+        v = 2; vdd_bus_io(&bus,0x3CE,1,0,&v);
+        v = 1; vdd_bus_io(&bus,0x3CF,1,0,&v);
+        CHECK(vga_planar_read(&vid,0)==0x55,
+              "comparing plane 0 alone finds every odd-numbered colour");
+        /* A read in mode 1 must STILL load the latches -- a masked write right after
+           one depends on them, and that is the pairing a collision-and-draw loop uses. */
+        CHECK(vid.latch[0]==0x55, "read mode 1 still loads the latches");
+        /* Back to mode 0 and the plane select works as before. */
+        v = 5; vdd_bus_io(&bus,0x3CE,1,0,&v);
+        v = 0; vdd_bus_io(&bus,0x3CF,1,0,&v);
+        v = 4; vdd_bus_io(&bus,0x3CE,1,0,&v);
+        v = 2; vdd_bus_io(&bus,0x3CF,1,0,&v);
+        CHECK(vga_planar_read(&vid,0)==vid.plane[2][0],
+              "read mode 0 still returns the plane GR4 selects");
+        CHECK(vid.rmode_hist[1]==4 && vid.rmode_hist[0]>=1,
+              "the read-mode histogram counts what was actually served"); }
+
+    /* T22: THE START ADDRESS IS LATCHED, so a page flip is never seen half-written.
+       The pair is two byte registers; between them the value is half old and half new,
+       and a frame built there is a whole-screen glitch. Real hardware loads the
+       address counter at the vertical retrace, so it cannot happen. */
+    {   uint32_t v;
+        memset(&r,0,sizeof r); s_ah(&r,0x00); s_al(&r,0x0D);
+        vdd_bus_deliver_int(&bus,0x10,&r);
+        v = 0x0C; vdd_bus_io(&bus,0x3D4,1,0,&v);
+        v = 0x20; vdd_bus_io(&bus,0x3D5,1,0,&v);         /* high byte of 0x2040 */
+        CHECK(vid.crtc_start_live==0 && vid.crtc_start_pend,
+              "the high byte alone does not move the display -- nothing is latched yet");
+        v = 0x0D; vdd_bus_io(&bus,0x3D4,1,0,&v);
+        v = 0x40; vdd_bus_io(&bus,0x3D5,1,0,&v);         /* low byte completes it */
+        CHECK(vid.crtc_start_live==0 && !vid.crtc_start_pend
+              && vid.crtc_start_writes>=1,
+              "...and neither does the low byte: the LATCH is what moves it");
+        vid.dirty=1; vdd_bus_frame(&bus);
+        CHECK(vid.crtc_start_live==0x2040,
+              "the next frame latches the completed pair, as the retrace does");
+        {   uint32_t before = vid.crtc_start_half;
+            v = 0x0C; vdd_bus_io(&bus,0x3D4,1,0,&v);
+            v = 0x30; vdd_bus_io(&bus,0x3D5,1,0,&v);     /* half a new address */
+            vid.dirty=1; vdd_bus_frame(&bus);
+            CHECK(vid.crtc_start_half==before+1,
+                  "a frame latched mid-pair is COUNTED -- hardware tears there too"); } }
+
     printf("\n%d checks, %d failed\n", total, fails);
     return fails ? 1 : 0;
 }

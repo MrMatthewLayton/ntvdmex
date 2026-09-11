@@ -59,3 +59,9 @@ guest/
 # STALE marker rather than failing. Committing it would make one machine's
 # measurement look like the project's.
 tools/score/probe-cache.json
+
+# PCem ROM pack: real BIOS / video BIOS / sound ROMs, licensed and large. Kept as an
+# ORACLE, never committed. ibm_vga.bin is the genuine IBM VGA BIOS (24KB at file
+# offset 0x2000) -- the thing scripts/dosoracle's docstring says we lack, since QEMU
+# runs SeaVGABIOS and "for INT 10h it is only another reimplementation's opinion".
+/PCem-ROMs-master/

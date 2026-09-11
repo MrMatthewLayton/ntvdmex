@@ -95,6 +95,8 @@ static void load_default_crtc(video_state *st)
     st->crtc_index = 0;
     st->crtc_offset = c[VGA_CRTC_OFFSET];
     st->crtc_start = (uint32_t)(((unsigned)c[VGA_CRTC_START_HI] << 8) | c[VGA_CRTC_START_LO]);
+    st->crtc_start_live = (uint16_t)st->crtc_start;   /* the display follows at once */
+    st->crtc_start_pend = 0;
     st->crtc_off_seen = 0;
     st->dirty = 1;
 }
@@ -998,7 +1000,24 @@ uint8_t vga_planar_read(video_state *st, uint32_t off)
     }
     if (off >= VID_PLANE_SIZE) return 0xFF;
     for (p = 0; p < 4; ++p) st->latch[p] = st->plane[p][off];   /* load latches    */
-    return st->plane[st->read_map & 3][off];                    /* read mode 0     */
+    st->rmode_hist[st->read_mode & 1]++;
+    if (!(st->read_mode & 1))
+        return st->plane[st->read_map & 3][off];                /* read mode 0     */
+    /* ── READ MODE 1: COLOUR COMPARE. One bit per pixel, set where that pixel's
+         colour matches GR2 in every plane GR7 selects. GR7 is "Color DON'T Care" and
+         reads backwards: a SET bit means the plane DOES take part. With GR7 = 0 no
+         plane is compared, so every pixel matches and the read is 0xFF -- which is the
+         hardware's answer, not a failure, and worth not "fixing". */
+    {   uint8_t r = 0; int b;
+        for (b = 0; b < 8; ++b) {
+            int match = 1;
+            for (p = 0; p < 4; ++p) {
+                if (!((st->col_dontcare >> p) & 1)) continue;
+                if (((st->latch[p] >> b) & 1) != ((st->col_compare >> p) & 1)) { match = 0; break; }
+            }
+            if (match) r = (uint8_t)(r | (1 << b));
+        }
+        return r; }
 }
 
 int vdd_video_planar_active(const video_state *st) { return st->mkind == VID_KIND_PLANAR; }
@@ -1181,10 +1200,21 @@ static void crtc_set_data(void *self, uint32_t v)
 {
     video_state *st = (video_state *)self;
     switch (st->crtc_index) {
+    /* ── THE START ADDRESS IS SIXTEEN BITS WRITTEN AS TWO REGISTERS, so between the
+         two writes it holds a value the guest never asked for -- half of the old
+         address and half of the new. Real hardware survives that because the address
+         counter LOADS FROM THESE REGISTERS AT THE VERTICAL RETRACE, not continuously,
+         and a guest that flips pages during retrace is therefore never seen torn.
+         We rendered from them directly, so a frame built between the two writes
+         showed a garbage address -- a whole-screen flicker on any guest that scrolls
+         or page-flips, which is every scrolling game. crtc_start_half counts how
+         often a frame was built mid-pair; crtc_start_live is what the renderer uses. */
     case 0x0C: st->crtc_start = (uint16_t)((st->crtc_start & 0x00FF) | ((uint16_t)(v & 0xFF) << 8));
-               st->crtc_seen = 1; st->dirty = 1; break;
+               st->crtc_seen = 1; st->crtc_start_pend ^= 1; st->dirty = 1; break;
     case 0x0D: st->crtc_start = (uint16_t)((st->crtc_start & 0xFF00) | (v & 0xFF));
-               st->crtc_seen = 1; st->dirty = 1; break;
+               st->crtc_seen = 1; st->crtc_start_pend ^= 1;
+               if (!st->crtc_start_pend) st->crtc_start_writes++;
+               st->dirty = 1; break;
     case 0x13: st->crtc_offset = (uint8_t)v; st->crtc_off_seen = 1;                                   st->dirty = 1; break;
     /* Line Compare, and the two registers that carry its top two bits. */
     case 0x07: st->crtc_overflow = (uint8_t)v; crtc_lc_update(st); st->dirty = 1; break;
@@ -1306,6 +1336,10 @@ static void gc_set_data(void *self, uint32_t v)
     switch (st->gc_index) {
     case 0: st->set_reset   = (uint8_t)(v & 0x0F); break;
     case 1: st->enable_sr   = (uint8_t)(v & 0x0F); break;
+    /* GR2 and GR7 are the two halves of read mode 1 and used to fall into default:,
+       i.e. be dropped. See read_mode in the header. */
+    case 2: st->col_compare  = (uint8_t)(v & 0x0F); break;
+    case 7: st->col_dontcare = (uint8_t)(v & 0x0F); break;
     case 3: st->func_rotate = (uint8_t)(v & 0x1F); break;
     /* ── GR4 IS THE READ PLANE, AND THE REMAP PATH CANNOT SEE READS AT ALL. ──────────
          In the `st->plane[]` interpreter path a guest read is served by us and honours
@@ -1335,6 +1369,7 @@ static void gc_set_data(void *self, uint32_t v)
              to be visible rather than inferred. */
         st->wmode_hist[v & 3]++;
         st->write_mode  = (uint8_t)(v & 3);
+        st->read_mode   = (uint8_t)((v >> 3) & 1);   /* ⚠ bit 3 used to be masked off */
         if (st->ymap_wmode) st->ymap_wmode(st->ymap_ctx, (int)(v & 3));
         break;
     case 8: st->bit_mask    = (uint8_t)v;          break;
@@ -1347,8 +1382,10 @@ static void gc_in(void *self, uint16_t port, uint8_t w, uint32_t *v)
     if (port == 0x3CE) { *v = st->gc_index; return; }
     switch (st->gc_index) {
     case 0: *v = st->set_reset; break;  case 1: *v = st->enable_sr; break;
+    case 2: *v = st->col_compare; break; case 7: *v = st->col_dontcare; break;
     case 3: *v = st->func_rotate; break; case 4: *v = st->read_map; break;
-    case 5: *v = st->write_mode; break; case 8: *v = st->bit_mask; break;
+    case 5: *v = (uint8_t)(st->write_mode | (st->read_mode << 3)); break;
+    case 8: *v = st->bit_mask; break;
     default: *v = 0; break;
     }
 }
@@ -1602,7 +1639,8 @@ static void render_planar(video_state *st)
     uint32_t bytes = (uint32_t)(gw / 8);
     uint32_t pitch = (st->crtc_off_seen && st->crtc_offset)
                      ? (uint32_t)st->crtc_offset * 2u : bytes;
-    uint32_t base  = st->crtc_seen ? (uint32_t)st->crtc_start : 0u;
+    /* The LATCHED start address, not the register pair -- see crtc_out case 0x0C. */
+    uint32_t base  = st->crtc_seen ? (uint32_t)st->crtc_start_live : 0u;
     /* ── SPLIT SCREEN. Below Line Compare the address generator restarts at 0, which
          is how a scrolling game pins a status panel to the bottom of the screen while
          the level pans behind it. Lemmings does exactly this, and without it the panel
@@ -1711,6 +1749,18 @@ static void vid_frame(void *self)
 {
     video_state *st = (video_state *)self;
     if (!st->vmem) return;
+    /* ── THE START ADDRESS IS LATCHED ONCE PER FRAME, as the hardware's address
+         counter loads it at the vertical retrace. Rendering straight from the
+         register pair means a frame built between the two byte writes of a page flip
+         shows half the old address and half the new. crtc_start_half counts the
+         frames latched mid-pair -- real hardware tears there too, so this is a
+         diagnostic and not a guarantee; a guest avoids it by writing both halves
+         inside the retrace.
+       ⚠ MEASURED ON LEMMINGS: 941 completed pairs, crtc_start_half = 0. So this is
+         NOT the cause of the flicker it was written to explain. Kept because it is
+         what the hardware does and the hazard is real for other guests. */
+    st->crtc_start_live = (uint16_t)st->crtc_start;
+    if (st->crtc_start_pend) st->crtc_start_half++;
     if (st->in_vesa) {                                 /* VESA: sync window -> vram */
         vesa_sync(st);
         st->frame.w = st->vesa_w; st->frame.h = st->vesa_h; st->frame.bpp = 8;
@@ -1767,6 +1817,7 @@ void vdd_video_reset(void *self)
     st->chain4 = 1; st->y_mask = 0x0F;
     load_default_crtc(st);                      /* mode 3's CRTC, measured not assumed */
     st->set_reset = st->enable_sr = st->func_rotate = st->read_map = 0;
+    st->read_mode = st->col_compare = st->col_dontcare = 0;
     st->latch[0] = st->latch[1] = st->latch[2] = st->latch[3] = 0;
     st->in_vesa = 0; st->vesa_mode = 0; st->vesa_bank = 0;
     load_default_palette(st);
