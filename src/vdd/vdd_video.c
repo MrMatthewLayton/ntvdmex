@@ -85,10 +85,16 @@ static void vga_defaults_for(uint8_t mode,
      was then drawn 44 bytes to the line instead of 80 and came out as diagonal
      noise. The BIOS writes all 25 registers on every mode set -- these values are
      measured per mode by tools/dostest/vgadefs.asm.
-   ⚠ Only Offset and the start address are applied. The rest of the CRTC is carried
-     in the table but not acted on, because the renderer takes its geometry from the
-     mode table rather than from CRT timings; applying timings here would be a much
-     larger change wearing this one's clothes. */
+   ▶ THE VERTICAL TIMING IS NOW APPLIED TOO, and it had to be: the BIOS sets these
+     registers, the guest does not, so a mode set is the ONLY place a BIOS-set mode
+     ever learns its own geometry. Leaving it out was what kept 0x3DA on the old
+     two-case guess -- and that guess is wrong by 45 lines in 640x350 (which is
+     Lemmings' MENU; its gameplay is 0Dh). The renderer still takes its picture size from the mode
+     table; what these feed is the CRT timing, which is a different question.
+   ⚠ Line Compare's three registers are loaded here as well, so it holds the BIOS's
+     all-ones "no split" rather than a zero we merely happen to treat as inert. */
+static void crtc_lc_update(video_state *st);
+static void crtc_vt_update(video_state *st);
 static void load_default_crtc(video_state *st)
 {
     const unsigned char *c = VGA_CRTC_DEFAULT[VGA_DEFAULT_BY_MODE[3][vga_defaults_row(st->mode)]];
@@ -98,6 +104,14 @@ static void load_default_crtc(video_state *st)
     st->crtc_start_live = (uint16_t)st->crtc_start;   /* the display follows at once */
     st->crtc_start_pend = 0;
     st->crtc_off_seen = 0;
+    st->crtc_overflow   = c[0x07];
+    st->crtc_maxscan    = c[0x09];
+    st->crtc_lc_low     = c[0x18];
+    st->crtc_vtotal_lo  = c[0x06];
+    st->crtc_vde_lo     = c[0x12];
+    st->crtc_vbs_lo     = c[0x15];
+    crtc_lc_update(st);
+    crtc_vt_update(st);
     st->dirty = 1;
 }
 
@@ -997,6 +1011,13 @@ uint8_t vga_planar_read(video_state *st, uint32_t off)
         else if (w->pc == pc) { if (off < w->lo) w->lo = off;
                                 if (off > w->hi) w->hi = off; w->n++; }
         else                  st->rsite_lost++;
+        if (st->read_mode & 1) {
+            vid_wsite *c = &st->rsite1[VID_WSITE_HASH(pc)];
+            if (!c->n)            { c->pc = pc; c->lo = c->hi = off; c->n = 1; }
+            else if (c->pc == pc) { if (off < c->lo) c->lo = off;
+                                    if (off > c->hi) c->hi = off; c->n++; }
+            else                  st->rsite1_lost++;
+        }
     }
     if (off >= VID_PLANE_SIZE) return 0xFF;
     for (p = 0; p < 4; ++p) st->latch[p] = st->plane[p][off];   /* load latches    */
@@ -1036,15 +1057,23 @@ int vdd_video_planar_active(const video_state *st) { return st->mkind == VID_KIN
    of the active period: late enough that a guest released by the PREVIOUS retrace
    has finished its drawing, early enough to be a distinct instant every frame. */
 #define VID_PRESENT_WINDOW_PM 120
+static int vga_vtiming(const video_state *st, uint32_t *total, uint32_t *active,
+                       uint32_t *blank_start);
 int vdd_video_present_ready(video_state *st)
 {
-    uint32_t frame_us, pm;
-    int act;
+    uint32_t frame_us, pm, t, a, b;
+    int act, tall;
     if (!st->time_us) return 1;                 /* no clock: present every tick   */
-    frame_us = 1000000u / (uint32_t)((st->gh > VID_VACTIVE_LO) ? VID_VBL_HZ_HI : VID_VBL_HZ_LO);
+    /* Same geometry the 0x3DA read uses, and for the same reason: 914/891 permille
+       are the two BIOS cases, and 640x350 is neither -- its picture ends at 350 of
+       449 lines, 780 permille. Presenting at 891 there meant building the frame 1.6ms
+       into the blanking interval rather than at the end of the picture. */
+    tall = (st->gh > VID_VACTIVE_LO);
+    act  = tall ? 914 : 891;
+    if (vga_vtiming(st, &t, &a, &b)) { tall = (t >= 500u); act = (int)(a * 1000u / t); }
+    frame_us = 1000000u / (uint32_t)(tall ? VID_VBL_HZ_HI : VID_VBL_HZ_LO);
     if (!frame_us) return 1;
     pm  = (uint32_t)((st->time_us() % frame_us) * 1000u / frame_us);
-    act = (st->gh > VID_VACTIVE_LO) ? 914 : 891;
     return (int)pm >= act - VID_PRESENT_WINDOW_PM && (int)pm < act;
 }
 
@@ -1190,6 +1219,52 @@ static void crtc_lc_update(video_state *st)
                             | (((uint16_t)(st->crtc_maxscan  >> 6) & 1u) << 9));
 }
 
+/* A mode set writes 0x06, 0x12 and 0x15 among the rest; only once all three have
+   arrived is the vertical timing a complete statement rather than one register of
+   the old mode's geometry beside two of the new one's. */
+static void crtc_vt_update(video_state *st)
+{
+    if (st->crtc_vtotal_lo && st->crtc_vde_lo && st->crtc_vbs_lo) st->crtc_vt_seen = 1;
+}
+
+/* ── THE CRT'S VERTICAL GEOMETRY, FROM THE REGISTERS THE GUEST WROTE. ──────────────
+     Each of the three quantities is a 10-bit value split across three registers: the
+     low byte of its own, plus one bit in Overflow (0x07) and -- for Blank Start only
+     -- one in Maximum Scan Line (0x09). That scattering is why it is worth composing
+     in one place instead of at each use.
+
+       Vertical Total        0x06 + ov bit0 + ov bit5   (+2 = scanlines per frame)
+       Vertical Display End  0x12 + ov bit1 + ov bit6   (+1 = active scanlines)
+       Vertical Blank Start  0x15 + ov bit3 + maxscan bit5
+
+   ▶ WHY NOT KEEP THE TWO CONSTANTS. They were right for every mode the BIOS sets
+     except 0Fh/10h, and wrong there by 45 lines -- checked against the per-mode CRTC
+     tables in vga_defaults.h, which were read back off a real card. A guest that
+     programs its own timing (Mode X and friends) was never covered at all.
+   ▶ Returns 0 and touches nothing when the guest has not programmed the CRTC, or
+     when what it programmed is not a plausible screen: the caller then keeps the old
+     constants. An off-VM test that sets gh directly takes this path, which is why
+     the existing battery is unaffected. */
+static int vga_vtiming(const video_state *st, uint32_t *total, uint32_t *active,
+                       uint32_t *blank_start)
+{
+    uint32_t ov, ms, vt, vde, vbs;
+    if (!st->crtc_vt_seen) return 0;
+    ov = st->crtc_overflow; ms = st->crtc_maxscan;
+    vt  = (uint32_t)st->crtc_vtotal_lo | ((ov >> 0 & 1u) << 8) | ((ov >> 5 & 1u) << 9);
+    vde = (uint32_t)st->crtc_vde_lo    | ((ov >> 1 & 1u) << 8) | ((ov >> 6 & 1u) << 9);
+    vbs = (uint32_t)st->crtc_vbs_lo    | ((ov >> 3 & 1u) << 8) | ((ms >> 5 & 1u) << 9);
+    vt += 2; vde += 1;
+    /* A plausible screen: blanking after the picture, and inside the frame. Anything
+       else is a half-written mode set, and a garbage frame period would freeze every
+       guest that waits on retrace -- far worse than the constants it replaces. */
+    if (vt < 100u || vt > 1200u) return 0;
+    if (vde == 0u || vde > vt)   return 0;
+    if (vbs < vde || vbs >= vt)  return 0;
+    *total = vt; *active = vde; *blank_start = vbs;
+    return 1;
+}
+
 static void crtc_out(void *self, uint16_t port, uint8_t w, uint32_t v)
 {
     video_state *st = (video_state *)self;
@@ -1217,9 +1292,14 @@ static void crtc_set_data(void *self, uint32_t v)
                st->dirty = 1; break;
     case 0x13: st->crtc_offset = (uint8_t)v; st->crtc_off_seen = 1;                                   st->dirty = 1; break;
     /* Line Compare, and the two registers that carry its top two bits. */
-    case 0x07: st->crtc_overflow = (uint8_t)v; crtc_lc_update(st); st->dirty = 1; break;
-    case 0x09: st->crtc_maxscan  = (uint8_t)v; crtc_lc_update(st); st->dirty = 1; break;
+    case 0x07: st->crtc_overflow = (uint8_t)v; crtc_lc_update(st); crtc_vt_update(st); st->dirty = 1; break;
+    case 0x09: st->crtc_maxscan  = (uint8_t)v; crtc_lc_update(st); crtc_vt_update(st); st->dirty = 1; break;
     case 0x18: st->crtc_lc_low   = (uint8_t)v; crtc_lc_update(st); st->dirty = 1; break;
+    /* Vertical timing -- see vga_vtiming(). Low bytes only; 0x07/0x09 carry the
+       high bits and are latched above for Line Compare already. */
+    case 0x06: st->crtc_vtotal_lo = (uint8_t)v; crtc_vt_update(st); st->dirty = 1; break;
+    case 0x12: st->crtc_vde_lo    = (uint8_t)v; crtc_vt_update(st); st->dirty = 1; break;
+    case 0x15: st->crtc_vbs_lo    = (uint8_t)v; crtc_vt_update(st); st->dirty = 1; break;
     default: break;
     }
 }
@@ -1423,7 +1503,7 @@ static void status_in(void *self, uint16_t port, uint8_t w, uint32_t *v)
          Attribute Controller's index/data flip-flop, and every guest relies on it
          before touching 0x3C0. See attr_out. */
     st->attr_ff = 0;
-    uint32_t frame_us, line_us, line, dot_us;
+    uint32_t frame_us, line;
     int tall, vtotal, vactive, in_vbl, in_hbl;
 
     if (!st->time_us) {                             /* no clock injected: old behaviour */
@@ -1437,18 +1517,50 @@ static void status_in(void *self, uint16_t port, uint8_t w, uint32_t *v)
     tall    = (st->gh > VID_VACTIVE_LO);
     vtotal  = tall ? VID_VTOTAL_HI  : VID_VTOTAL_LO;
     vactive = tall ? VID_VACTIVE_HI : VID_VACTIVE_LO;
+    /* Prefer the geometry the guest programmed. `vactive` becomes BLANK START, not
+       display end -- they differ by 6 lines in the BIOS modes and by 45 in 640x350,
+       and it is blanking, not the end of the picture, that raises the bit. */
+    {   uint32_t t, a, b;
+        if (vga_vtiming(st, &t, &a, &b)) {
+            vtotal = (int)t; vactive = (int)b;
+            /* 449-line modes are the 70 Hz family, 525-line the 60 Hz one. Keyed off
+               the measured total rather than the displayed height, so a 350-line mode
+               is no longer forced to pick a side of a 400-line fence. */
+            tall = (t >= 500u);
+        }
+    }
     frame_us = 1000000u / (uint32_t)(tall ? VID_VBL_HZ_HI : VID_VBL_HZ_LO);
-    line_us  = frame_us / (uint32_t)vtotal;
-    if (!line_us) line_us = 1;                      /* never divide by zero          */
 
     now      = st->time_us();
+    /* Bracket the polling in the model's own microseconds -- see the header. */
+    if (!st->t3da_first) st->t3da_first = now;
+    if (st->t3da_last) {
+        uint64_t d = now - st->t3da_last;
+        if (!d) st->dt3da_zero++;
+        else {
+            unsigned b = 0;
+            uint64_t t = d;
+            while (b < 7 && t >= 4) { t >>= 2; b++; }
+            st->dt3da_hist[b]++;
+            if (d > (uint64_t)st->dt3da_max)
+                st->dt3da_max = (d > 0xFFFFFFFFull) ? 0xFFFFFFFFu : (uint32_t)d;
+        }
+    }
+    st->t3da_last = now;
+    /* ── SCALE FIRST, DIVIDE ONCE. A scanline is not a whole number of microseconds:
+         at 70 Hz it is 14285/449 = 31.8us, and taking `line_us = frame_us / vtotal`
+         truncated that to 31. Lines then ran 2.6% fast -- a frame's worth of them
+         reached 460 on a 449-line screen, which is what the clamp below was quietly
+         absorbing, and it put every line boundary up to 12 lines out by the bottom of
+         the picture. Multiplying into the frame before dividing keeps the fraction and
+         needs no clamp: `line` cannot exceed vtotal-1 because in_frame < frame_us.
+         The remainder is the position WITHIN the line, on the same scale. */
     in_frame = now % (uint64_t)frame_us;
-    line     = (uint32_t)(in_frame / line_us);
-    dot_us   = (uint32_t)(in_frame % line_us);
-    if (line >= (uint32_t)vtotal) line = (uint32_t)vtotal - 1;  /* rounding guard     */
-
+    {   uint64_t pos = in_frame * (uint64_t)vtotal;
+        line   = (uint32_t)(pos / frame_us);
+        in_hbl = ((uint64_t)(pos % frame_us) * 100u >= (uint64_t)frame_us * VID_HACTIVE_PCT);
+    }
     in_vbl = (line >= (uint32_t)vactive);
-    in_hbl = (dot_us * 100u >= line_us * VID_HACTIVE_PCT);
     /* bit 3 = vertical retrace; bit 0 = display disabled (h- OR v-blank). Bit 0 is a
        DIFFERENT signal on a real card -- it changes per scanline, not per frame --
        so toggling the two together, as we used to, was doubly wrong. */

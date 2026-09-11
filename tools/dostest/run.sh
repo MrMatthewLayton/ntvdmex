@@ -282,3 +282,13 @@ cc -std=c99 -Wall -Wextra -Wno-unused-function -O0 -g \
    -o "$DIR/recovery_test" "$DIR/recovery_test.c"
 
 "$DIR/recovery_test"
+
+# ── AN OUTSIDE WITNESS FOR THE VGA TABLES. Every other video check compares our
+# tables against themselves; this one compares them against the genuine IBM VGA
+# BIOS, which is the only way they can be found WRONG rather than self-consistent.
+# SKIPs loudly when the (licensed, gitignored) ROM pack is absent.
+cc -std=c99 -Wall -Wextra -Wno-unused-function -O0 -g \
+   -I "$DIR/../../src/vdd" \
+   -o "$DIR/vgarom_test" "$DIR/vgarom_test.c"
+
+"$DIR/vgarom_test"

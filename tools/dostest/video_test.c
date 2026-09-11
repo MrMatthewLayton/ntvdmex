@@ -30,6 +30,17 @@ static uint8_t g_flat[0x100000];          /* guest memory for INT 10h ES:BP/ES:D
    least testable thing in an emulator, an ordinary deterministic assertion. */
 uint64_t g_fake_us = 0;
 static uint64_t fake_clock(void) { return g_fake_us; }
+/* Index/data register writes the way a guest does them. */
+static void gc_w(vdd_bus *b, uint8_t idx, uint8_t val)
+{ uint32_t v = idx; vdd_bus_io(b,0x3CE,1,0,&v); v = val; vdd_bus_io(b,0x3CF,1,0,&v); }
+static void sc_w(vdd_bus *b, uint8_t idx, uint8_t val)
+{ uint32_t v = idx; vdd_bus_io(b,0x3C4,1,0,&v); v = val; vdd_bus_io(b,0x3C5,1,0,&v); }
+/* Write one CRTC register the way a guest does: index to 0x3D4, data to 0x3D5. */
+static void crtc_w(vdd_bus *b, uint8_t idx, uint8_t val)
+{
+    uint32_t v = idx; vdd_bus_io(b, 0x3D4, 1, 0, &v);
+    v = val;          vdd_bus_io(b, 0x3D5, 1, 0, &v);
+}
 static uint8_t g_vmem[VID_APERTURE_SIZE]; /* the video aperture (A0000) stand-in   */
 static video_state vid;
 
@@ -308,8 +319,14 @@ int main(void)
       CHECK(hi < lo / 4, "3DA: retrace is a small minority of the frame (~9%)");
 
       /* --- 320x200 / text run at 70 Hz, so the SAME wall-clock instant lands
-       *     differently. Keys off displayed height, not mode number. -------- */
+       *     differently. ⚠ This used to key off `vid.gh` alone; the CRTC is now
+       *     authoritative and a mode set earlier in this battery left 12h's
+       *     525-line timing behind, so the 70 Hz family has to be asked for in
+       *     the registers. These are mode 03h/0Dh/13h's, from vga_defaults.h:
+       *     Vertical Total 0xBF|bit8 = 449 lines, Blank Start 0x96|bit8 = 406. */
       vid.gh = 400;
+      crtc_w(&bus, 0x06, 0xBF); crtc_w(&bus, 0x07, 0x1F); crtc_w(&bus, 0x09, 0x41);
+      crtc_w(&bus, 0x12, 0x8F); crtc_w(&bus, 0x15, 0x96);
       hi = lo = 0;
       for (i = 0; i < 1000; i++) {
           g_fake_us = (uint64_t)(i * 14286 / 1000);       /* one 70 Hz frame */
@@ -337,6 +354,191 @@ int main(void)
         vdd_bus_io(&bus, 0x3DA, 1, 1, &a);
         vdd_bus_io(&bus, 0x3DA, 1, 1, &b);
         CHECK(a != b, "3DA: with no clock injected the legacy toggle remains"); }
+    }
+
+    /* ── ★★ THE BLANKING INTERVAL COMES FROM THE CRTC, NOT FROM A TWO-CASE GUESS. ──
+     *   The old model asserted retrace from line 400 (or 480 for tall modes). That is
+     *   within 8 lines of the truth for every mode the BIOS sets EXCEPT 0Fh/10h --
+     *   640x350 -- where real blanking starts at line 355 of 449 and the guess said
+     *   400. It reported a 10.9% blanking interval where the card gives 20.9%: less
+     *   than half. ⚠ 640x350 is Lemmings' MENU screen -- its gameplay is mode 0Dh,
+     *   320x200, measured from the BDA of a dump of the real game.
+     *
+     * ⚠ EVERY NUMBER BELOW IS DECODED FROM VGA_CRTC_DEFAULT in vga_defaults.h, which
+     *   was read back off a real card by tools/dostest/vgadefs.asm. None of it is
+     *   written from memory, and none of it is this implementation's own opinion --
+     *   that is the whole point, and it is what caught the bug.
+     *
+     *   mode 10h: CR06=0xBF CR07=0x1F CR09=0x40 CR12=0x5D CR15=0x63
+     *     Vertical Total       = 0xBF | ov bit0<<8              = 447, +2 = 449 lines
+     *     Vertical Display End = 0x5D | ov bit1<<8              = 349, +1 = 350 active
+     *     Vertical Blank Start = 0x63 | ov bit3<<8 | ms bit5<<9 = 355                */
+    {   uint32_t v; int i, hi, lo; int lo_edge = -1;
+        vid.time_us = fake_clock;
+        vid.gh = 350;                      /* what the old model could not express   */
+        crtc_w(&bus, 0x06, 0xBF); crtc_w(&bus, 0x07, 0x1F); crtc_w(&bus, 0x09, 0x40);
+        crtc_w(&bus, 0x12, 0x5D); crtc_w(&bus, 0x15, 0x63);
+
+        /* Line 354 is still picture, line 356 is blanked. Straddling the boundary is
+         * the whole claim -- a duty-cycle count alone would pass on a window in the
+         * wrong PLACE, so pin the edge itself. 449 lines in 1000000/70 us.          */
+        g_fake_us = (uint64_t)(354.0 * (1000000.0 / 70.0) / 449.0);
+        vdd_bus_io(&bus, 0x3DA, 1, 1, &v);
+        CHECK(!(v & 0x08), "3DA/CRTC: 640x350 line 354 is still the active picture");
+        g_fake_us = (uint64_t)(357.0 * (1000000.0 / 70.0) / 449.0);
+        vdd_bus_io(&bus, 0x3DA, 1, 1, &v);
+        CHECK((v & 0x08) != 0, "3DA/CRTC: 640x350 blanking has begun by line 357");
+
+        /* ...and the duty cycle that follows from it: 94 of 449 lines = 20.9%. The
+         * old model gave 49 of 449 = 10.9%, so a >15% floor separates them. */
+        hi = lo = 0;
+        for (i = 0; i < 1000; i++) {
+            g_fake_us = (uint64_t)((double)i * (1000000.0 / 70.0) / 1000.0);
+            vdd_bus_io(&bus, 0x3DA, 1, 1, &v);
+            if (v & 0x08) { hi++; if (lo_edge < 0) lo_edge = i; } else lo++;
+        }
+        CHECK(hi > 150 && hi < 260, "3DA/CRTC: 640x350 blanks for ~20.9% of the frame");
+        CHECK(lo > 0, "3DA/CRTC: 640x350 still shows a picture for most of the frame");
+
+        /* A HALF-WRITTEN MODE SET MUST NOT BE BELIEVED. Blank Start before Display
+         * End is not a screen; the guest is mid-reprogram. Falling back to the old
+         * constants is survivable, a garbage frame period is not -- it would freeze
+         * every guest that waits on retrace. */
+        crtc_w(&bus, 0x15, 0x10);          /* blank start 16, well above the picture */
+        hi = lo = 0;
+        for (i = 0; i < 200; i++) {
+            g_fake_us = (uint64_t)((double)i * (1000000.0 / 70.0) / 200.0);
+            vdd_bus_io(&bus, 0x3DA, 1, 1, &v);
+            if (v & 0x08) hi++; else lo++;
+        }
+        CHECK(hi > 0 && lo > hi, "3DA/CRTC: an impossible blank start falls back, still sane");
+        vid.time_us = 0;
+    }
+
+    /* ── ★★★ LEMMINGS' OWN BLITTERS, REPLAYED REGISTER FOR REGISTER. ──────────────────
+     *   Not invented, and not read off a datasheet: DISASSEMBLED from the running game.
+     *   VGALEMMI.EXE is PKLITE-packed, so the code was read back out of a 1MB memory
+     *   dump of the game running under genuine MS-DOS 6.22 (scripts/lemref.py
+     *   --memdump), anchored on the retrace-wait bytes the rig's IO-SITE instrument had
+     *   already measured, which fixes the code segment without assuming a load address.
+     *
+     *   Why these two and not some other pair: they are the ONLY two sites in the game
+     *   that read video memory -- the read-site histogram attributes every one of
+     *   ~970,000 reads in a level to them, with zero lost to hash collisions. Pin these
+     *   and the whole of Lemmings' drawing is pinned.
+     *
+     * ⚠ THE VALUE IS THAT A SHIPPING 1991 GAME IS THE EXPECTATION. These sequences ran
+     *   on real hardware; if our VGA disagrees with them it is our VGA that is wrong.
+     *   That is a different and stronger claim than "it matches our reading of the spec".
+     */
+    {   uint8_t got;
+
+        /* ── (1) THE MASKED SPRITE BLITTER at CS:IP +0x95E0, the colour-compare path.
+         *   Set-up, verbatim from the disassembly at +0x9540:
+         *       mov ax,0x0805 out dx,ax   GR5 = 0x08  read mode 1
+         *       mov ax,0x0807 out dx,ax   GR7 = 0x08  don't care: plane 3 only
+         *       mov ax,0x0802 out dx,ax   GR2 = 0x08  compare: plane 3 SET
+         *   and then, per byte:
+         *       mov ah,[es:di] / not ah / mov al,8 / out dx,ax / movsb
+         *   i.e. "which pixels here are colour 8..15? -- write my sprite into the
+         *   OTHERS." Transparency done by the card, one byte at a time. This is what
+         *   read mode 1 is actually for in this game; it is not collision detection.  */
+        memset(&r,0,sizeof r); s_ah(&r,0x00); s_al(&r,0x12); vdd_bus_deliver_int(&bus,0x10,&r);
+        vid.plane[3][0x40] = 0xF0;     /* left four pixels are colour 8..15 = "terrain" */
+        vid.plane[0][0x40] = 0x00;
+        gc_w(&bus, 0x00, 0x00);        /* GR0 set/reset        = 0 (as Lemmings does) */
+        gc_w(&bus, 0x01, 0x00);        /* GR1 enable set/reset = 0                    */
+        gc_w(&bus, 0x05, 0x08);        /* GR5 READ MODE 1                             */
+        gc_w(&bus, 0x07, 0x08);        /* GR7 colour don't care                       */
+        gc_w(&bus, 0x02, 0x08);        /* GR2 colour compare                          */
+        got = vga_planar_read(&vid, 0x40);
+        CHECK(got == 0xF0, "lemmings blit: colour-compare read names the colour-8..15 pixels");
+        CHECK(vid.latch[3] == 0xF0, "lemmings blit: ...and a mode-1 read still loads the latches");
+
+        /* `not ah` -> 0x0F, straight into the Bit Mask, then one byte of sprite. */
+        gc_w(&bus, 0x08, (uint8_t)~got);   /* GR8 bit mask = 0x0F                     */
+        gc_w(&bus, 0x03, 0x00);            /* GR3 replace (the OR case is below)      */
+        gc_w(&bus, 0x05, 0x00);            /* back to write mode 0 to do the movsb    */
+        sc_w(&bus, 0x02, 0x01);            /* map mask = plane 0, as its per-plane loop */
+        vga_planar_write(&vid, 0x40, 0xFF);
+        CHECK(vid.plane[0][0x40] == 0x0F,
+              "lemmings blit: the sprite lands ONLY where the terrain was not");
+        CHECK(vid.plane[3][0x40] == 0xF0,
+              "lemmings blit: ...and the terrain plane is untouched by it");
+
+        /* ⚠ IT REALLY DOES USE THE ALU. +0x956B is `mov ax,0x1003` -- GR3 = 0x10, which
+         *   is function select = OR, not replace. A card that ignored GR3 would pass
+         *   every check above and still draw this game wrong, so pin the OR itself:
+         *   masked-in bits become (cpu OR latch), masked-out bits stay latch.        */
+        vid.plane[0][0x41] = 0x55;                 /* latch source                     */
+        vga_planar_read(&vid, 0x41);               /* load the latches                 */
+        gc_w(&bus, 0x03, 0x10);                    /* GR3 = OR, exactly as Lemmings    */
+        gc_w(&bus, 0x08, 0x0F);                    /* bit mask: low nibble only        */
+        vga_planar_write(&vid, 0x41, 0x0A);
+        CHECK(vid.plane[0][0x41] == 0x5F,
+              "lemmings blit: GR3 function select ORs cpu with latch (0x5|0xA -> 0xF)");
+        gc_w(&bus, 0x03, 0x00);
+        gc_w(&bus, 0x08, 0xFF);
+
+        /* ── (2) THE PLAIN BLITTER at CS:IP +0x98D1, which is the busier of the two
+         *   (858,644 reads of the 970,000). Its inner loop is only:
+         *       mov al,[es:di] / movsb / loop
+         *   The read's VALUE IS DISCARDED -- it is there to load the latches, so that
+         *   the planes the Map Mask disables keep what they had. If a card lets a
+         *   disabled plane change, every sprite in the game smears across the others.
+         *   That is the guarantee this pins.                                         */
+        vid.plane[0][0x50]=0x11; vid.plane[1][0x50]=0x22;
+        vid.plane[2][0x50]=0x33; vid.plane[3][0x50]=0x44;
+        gc_w(&bus, 0x05, 0x00);            /* read mode 0, write mode 0               */
+        gc_w(&bus, 0x04, 0x00);            /* read map 0 -- the value it throws away  */
+        sc_w(&bus, 0x02, 0x04);            /* map mask = plane 2 only                 */
+        (void)vga_planar_read(&vid, 0x50); /* `mov al,[es:di]`: latches, not data      */
+        CHECK(vid.latch[1] == 0x22 && vid.latch[3] == 0x44,
+              "lemmings blit: the discarded read is what loads all four latches");
+        vga_planar_write(&vid, 0x50, 0x99);
+        CHECK(vid.plane[2][0x50] == 0x99, "lemmings blit: movsb writes the selected plane");
+        CHECK(vid.plane[0][0x50] == 0x11 && vid.plane[1][0x50] == 0x22 &&
+              vid.plane[3][0x50] == 0x44,
+              "lemmings blit: the other three planes are preserved exactly");
+
+        /* ── (3) THE VRAM->VRAM COPY at +0x7161. This is how the toolbar gets on
+         *   screen, and it is the mechanism behind the open "panel has no icons" bug:
+         *       mov dx,0x3c4 / mov ax,0x0f02 / out    Map Mask = all four planes
+         *       mov dx,0x3ce / mov ax,0x0105 / out    GR5 = WRITE MODE 1
+         *       mov dx,0xa000 / mov es,dx / mov ds,dx   BOTH segments = VRAM
+         *       movsb movsb ...                        A000 -> A000
+         *   Write mode 1 ignores the CPU byte entirely and writes THE FOUR LATCHES to
+         *   the four planes, so one `movsb` moves a four-plane pixel group. It is the
+         *   only way to move 16-colour artwork without four passes, and it is how the
+         *   panel is pulled from its off-screen cache (VRAM 0xF91F..0xFFFA -- which is
+         *   above the visible page and only addressable because a plane is 64KB).
+         * ⚠ THE CPU BYTE MUST NOT MATTER. A card that quietly used it would copy
+         *   whatever `movsb` happened to load instead of the latched pixels, and the
+         *   panel would come out a flat colour -- icons missing, which is the symptom.
+         *   So the check feeds it a deliberately wrong byte.                          */
+        vid.plane[0][0x60]=0xDE; vid.plane[1][0x60]=0xAD;
+        vid.plane[2][0x60]=0xBE; vid.plane[3][0x60]=0xEF;
+        vid.plane[0][0x61]=0x00; vid.plane[1][0x61]=0x00;
+        vid.plane[2][0x61]=0x00; vid.plane[3][0x61]=0x00;
+        sc_w(&bus, 0x02, 0x0F);            /* Map Mask = 0x0F, all four planes        */
+        gc_w(&bus, 0x05, 0x01);            /* GR5 = write mode 1                      */
+        (void)vga_planar_read(&vid, 0x60); /* the `movsb` source read: latches         */
+        vga_planar_write(&vid, 0x61, 0x00);/* ...and its store. CPU byte is a LIE.     */
+        CHECK(vid.plane[0][0x61]==0xDE && vid.plane[1][0x61]==0xAD &&
+              vid.plane[2][0x61]==0xBE && vid.plane[3][0x61]==0xEF,
+              "lemmings panel: write mode 1 copies all four planes from the latches");
+        CHECK(vid.plane[0][0x60]==0xDE && vid.plane[3][0x60]==0xEF,
+              "lemmings panel: ...and the source group is left alone");
+
+        /* The panel cache lives at 0xF91F..0xFFFA -- ABOVE the 320x200 visible page
+         * (0x1F40) and running to the last byte of the plane. `VID_PLANE_SIZE` was
+         * once 38400, so every one of those bytes read back 0xFF and every write was
+         * dropped: the panel was being cached into a hole. Pin both ends. */
+        CHECK(VID_PLANE_SIZE == 0x10000, "a VGA plane is 64KB, so off-screen VRAM exists");
+        vid.plane[2][0xF91F] = 0x5A; vid.plane[2][0xFFFA] = 0xA5;
+        gc_w(&bus, 0x05, 0x00); gc_w(&bus, 0x04, 0x02);   /* read mode 0, read plane 2 */
+        CHECK(vga_planar_read(&vid, 0xF91F)==0x5A && vga_planar_read(&vid, 0xFFFA)==0xA5,
+              "lemmings panel: the off-screen cache 0xF91F..0xFFFA reads back");
     }
 
 
@@ -467,6 +669,12 @@ int main(void)
        collision in one instruction. GR5 bit 3 used to be masked off and GR2/GR7
        dropped entirely, so every such read came back as a raw plane byte. */
     {   uint32_t v;
+        /* ⚠ A DELTA, NOT A TOTAL. This used to assert `rmode_hist[1]==4` against the
+           whole run's count, so adding a read ANYWHERE earlier in the battery broke a
+           test that has nothing to do with the addition -- which is exactly what the
+           Lemmings blit cases then did. Snapshot here and assert the change; the claim
+           is just as tight and it no longer depends on what else the file does. */
+        uint32_t rm0 = vid.rmode_hist[0], rm1 = vid.rmode_hist[1];
         memset(&r,0,sizeof r); s_ah(&r,0x00); s_al(&r,0x12);
         vdd_bus_deliver_int(&bus,0x10,&r);
         /* Hand-place eight pixels in one byte: colours 0,1,2,3,4,5,6,7 left to right.
@@ -514,7 +722,7 @@ int main(void)
         v = 2; vdd_bus_io(&bus,0x3CF,1,0,&v);
         CHECK(vga_planar_read(&vid,0)==vid.plane[2][0],
               "read mode 0 still returns the plane GR4 selects");
-        CHECK(vid.rmode_hist[1]==4 && vid.rmode_hist[0]>=1,
+        CHECK(vid.rmode_hist[1]-rm1==4 && vid.rmode_hist[0]-rm0>=1,
               "the read-mode histogram counts what was actually served"); }
 
     /* T22: THE START ADDRESS IS LATCHED, so a page flip is never seen half-written.

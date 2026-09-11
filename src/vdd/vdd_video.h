@@ -206,6 +206,25 @@ typedef struct video_state {
     uint8_t  crtc_overflow;            /* 0x07, for line-compare bit 8            */
     uint8_t  crtc_maxscan;             /* 0x09, bit 6 = line-compare bit 9        */
     uint8_t  crtc_lc_low;              /* 0x18, line-compare bits 0-7             */
+    /* ▶ THE VERTICAL TIMING THE GUEST ITSELF PROGRAMMED, so 0x3DA stops being a
+         guess keyed off the displayed height. The old model had exactly two cases,
+         "400-line" and "480-line", and asserted blanking from line 400 or 480.
+         Checked against the MEASURED per-mode tables in vga_defaults.h that is
+         right within 8 lines for every mode EXCEPT 0Fh/10h (640x350), where real
+         blanking starts at line 355 of 449 and we said 400 -- so we reported a
+         10.9% blanking interval where the card gives 20.9%, less than half.
+         A two-case table has nowhere to put a 350-line mode.
+       ⚠ 640x350 is Lemmings' MENU, not its gameplay: measured from the BDA in a dump
+         of the real game, gameplay is mode 0Dh, 320x200, page size 0x2000. Do not
+         reach for this fix to explain a gameplay symptom.
+         These are the low bytes; the high bits live in crtc_overflow (0x07) and
+         crtc_maxscan (0x09), which we already latch for Line Compare. Composed by
+         vga_vtiming(), which falls back to the old constants when the guest has not
+         programmed the CRTC (off-VM tests set gh directly and never touch it). */
+    uint8_t  crtc_vtotal_lo;           /* 0x06, Vertical Total bits 0-7           */
+    uint8_t  crtc_vde_lo;              /* 0x12, Vertical Display End bits 0-7     */
+    uint8_t  crtc_vbs_lo;              /* 0x15, Vertical Blank Start bits 0-7     */
+    uint8_t  crtc_vt_seen;             /* guest has written 0x06 AND 0x12 AND 0x15 */
     uint32_t modey_gap;                /* mode-Y run coalescing slack, in dwords     */
     /* ── OPTIONAL: PER-PLANE BACKING SUPPLIED BY THE HOST. ───────────────────────
          When these are set, the guest's A0000 window IS whichever plane the map mask
@@ -239,6 +258,30 @@ typedef struct video_state {
     uint32_t vbl_edges;
     uint32_t p3da_reads;
     uint8_t  vbl_prev;
+    /* ▶ IS THE TIMEBASE UNDER THE RETRACE ACTUALLY WALL-CLOCK TIME? `vbl_edges` says
+         the guest completes N frames a second, but that is only a statement about the
+         CARD if the clock beneath it runs at real speed. Both of the obvious readings
+         of a low edge count -- "the guest is missing vblanks" and "the model is slow"
+         -- predict the same vbl_edges, so that counter cannot separate them and no
+         amount of staring at it will.
+         These can. t3da_first/t3da_last bracket the polling in MODEL microseconds,
+         read from the SAME clock status_in derives the bits from, so the two cannot
+         disagree about their units; the caller compares that span against the run's
+         real length. A model span 20x shorter than the run says the retrace is slow
+         because the CLOCK is slow, and the video model is innocent.
+         dt3da_max is the largest gap between two consecutive polls: a guest can only
+         legitimately miss a vblank if it was away longer than one blanking interval,
+         so if this stays well under a frame the guest missed nothing. */
+    uint64_t t3da_first, t3da_last;
+    uint32_t dt3da_max;
+    uint32_t dt3da_zero;   /* polls across which the clock did not advance at all */
+    /* A MAXIMUM IS ONE EVENT AND CANNOT CARRY A RATE. dt3da_max says the guest was
+       once away for seconds; what decides the frame rate is how OFTEN it is away
+       longer than a blanking interval (~1.9ms), because each of those can step over
+       a whole vblank unseen. Buckets are powers of four in microseconds, so the
+       window and the frame period land in known ones: [5] is 1024-4095us (straddles
+       the ~1.9ms window) and [6]/[7] are longer than a 14.3ms frame outright. */
+    uint32_t dt3da_hist[8];
     uint32_t int10_11_calls;/* INT 10h AH=11h (character generator) calls -- see below */
     /* WHAT the guest asked for, not just that it asked. BH selects the table and the
        answer's CX (bytes per character) is what the caller strides by -- so a wrong CX
@@ -326,6 +369,12 @@ typedef struct video_state {
        VRAM in play, "who reads up there" is the question that separates the two. */
     vid_wsite rsite[VID_WSITES];
     uint32_t rsite_lost;
+    /* Colour-compare reads get their OWN table. They are a tiny minority of reads and
+       would be buried in the one above, and they are the interesting ones: a read mode
+       1 site is a guest asking "where is the ground", so its pc is a routine worth
+       disassembling and its address range says WHICH copy of the level it trusts. */
+    vid_wsite rsite1[VID_WSITES];
+    uint32_t rsite1_lost;
     uint32_t watch_off;                 /* VRAM byte offset watched; ~0u = disarmed  */
     uint32_t watch_n;                   /* writes seen (may exceed what is recorded) */
     vid_watch_rec watch[VID_WATCH_MAX];

@@ -5030,6 +5030,14 @@ static DWORD WINAPI heartbeat_thread(LPVOID pv)
         q = zput(q, " p3da=0x");     q = zhex(q, g_vid.p3da_reads);
         q = zput(q, "/edges=0x");    q = zhex(q, g_vid.vbl_edges);
         q = zput(q, "/last=0x");     q = zhexb(q, g_vid.retrace);
+        /* ► AND THE CLOCK THOSE TWO ARE RATES AGAINST. Without it the only time axis
+             on this line is irq0, and irq0 is the PIT -- which a guest REPROGRAMS.
+             Reading frames-per-second off a beat count that the guest itself can
+             change the rate of is how "26 fps" and "3.5 fps" both got computed from
+             the same run. This is the same microsecond clock the retrace model and
+             the PIT sync derive from, so edges/ms on this line is a measurement and
+             not a conversion. */
+        q = zput(q, " t_ms=0x");     q = zhex(q, (uint32_t)(host_time_us() / 1000u));
         /* ► THE BYTES AT THE BEAT'S CS:IP. Mario's host dies between beats with
              exit 0x80000003 and NO user-mode dispatch, so the last heartbeat is
              the only witness -- and a bare cs:ip in a moving guest names nothing
@@ -25194,6 +25202,22 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                 g_vid.wsite[best].n = 0;            /* report is the last use of it */
                 if (p > report + sizeof report - 512) break;
             }
+            /* ► THE COLOUR-COMPARE READ SITES: a guest asking "where is the ground". */
+            p = zput(p, "STAGE2: planar COLOUR-COMPARE read sites, lost=");
+            p = zdec(p, g_vid.rsite1_lost); p = zput(p, "\r\n");
+            for (shown = 0; shown < 10; ++shown) {
+                unsigned best = VID_WSITES; uint32_t bn = 0;
+                for (k = 0; k < VID_WSITES; ++k)
+                    if (g_vid.rsite1[k].n > bn) { bn = g_vid.rsite1[k].n; best = k; }
+                if (best == VID_WSITES) break;
+                p = zput(p, "  cc-read pc="); p = zhex(p, g_vid.rsite1[best].pc);
+                p = zput(p, " n=");   p = zdec(p, g_vid.rsite1[best].n);
+                p = zput(p, " off=0x"); p = zhex(p, g_vid.rsite1[best].lo);
+                p = zput(p, "..0x");    p = zhex(p, g_vid.rsite1[best].hi);
+                p = zput(p, "\r\n");
+                g_vid.rsite1[best].n = 0;
+                if (p > report + sizeof report - 512) break;
+            }
             p = zput(p, "STAGE2: planar read sites, rsite_lost=");
             p = zdec(p, g_vid.rsite_lost); p = zput(p, "\r\n");
             for (shown = 0; shown < 14; ++shown) {
@@ -25212,6 +25236,21 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
 }
         /* ► Does this guest scroll or page-flip, and how often would a frame have
              been built from a half-written start address? */
+        /* ► THE RETRACE CLOCK, IN ITS OWN UNITS. span_ms is how much MODEL time passed
+             between the guest's first and last 0x3DA poll. Against the run's real
+             length it says whether the timebase is wall-clock: if span_ms is a
+             twentieth of the run, the guest's frame rate is low because the clock is
+             slow, and the vblank geometry is not on trial. dtmax is the longest the
+             guest went between polls -- it can only miss a vblank if that exceeds the
+             blanking interval. */
+        p = zput(p, "STAGE2: 3da clock: span_ms="); p = zdec(p, (uint32_t)((g_vid.t3da_last - g_vid.t3da_first) / 1000u));
+        p = zput(p, " reads=");  p = zdec(p, g_vid.p3da_reads);
+        p = zput(p, " edges=");  p = zdec(p, g_vid.vbl_edges);
+        p = zput(p, " dtmax_us="); p = zdec(p, g_vid.dt3da_max);
+        p = zput(p, " dtzero=");   p = zdec(p, g_vid.dt3da_zero);
+        p = zput(p, " dthist[1,4,16,64,256,1k,4k,16k+us]=");
+        { unsigned bi; for (bi = 0; bi < 8; ++bi) { if (bi) p = zput(p, "/"); p = zdec(p, g_vid.dt3da_hist[bi]); } }
+        p = zput(p, "\r\n");
         p = zput(p, "STAGE2: crtc start: pairs="); p = zdec(p, g_vid.crtc_start_writes);
         p = zput(p, " torn_avoided="); p = zdec(p, g_vid.crtc_start_half);
         p = zput(p, " live="); p = zdec(p, g_vid.crtc_start_live);

@@ -65,3 +65,7 @@ tools/score/probe-cache.json
 # offset 0x2000) -- the thing scripts/dosoracle's docstring says we lack, since QEMU
 # runs SeaVGABIOS and "for INT 10h it is only another reimplementation's opinion".
 /PCem-ROMs-master/
+
+# Bare-metal rig result logs, archived locally by hand or by bmqueue.sh ARCHIVE=.
+# Large, regenerated every run, and not ours to redistribute (they quote guest memory).
+/runs/
