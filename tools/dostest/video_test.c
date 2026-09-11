@@ -437,6 +437,23 @@ int main(void)
               "mode 13h: 0x10..0x1F is the grey ramp, black to white");
         CHECK(vid.dac[0x20]==0xFF0000FFu, "mode 13h: the colour wheel starts at 0x20");
 
+        /* ★ A MODE SET REPROGRAMS THE CRTC. Without this a screen inherits the
+           geometry of the one before it: Lemmings' gameplay sets Offset=22 for its
+           352-pixel scrolling window, and the mode 10h screen that follows was drawn
+           44 bytes to the line instead of 80 -- diagonal noise. */
+        memset(&r,0,sizeof r); s_ah(&r,0x00); s_al(&r,0x0D);
+        vdd_bus_deliver_int(&bus,0x10,&r);
+        CHECK(vid.crtc_offset==0x14, "mode 0Dh's default CRTC Offset is 20 (320px)");
+        {   uint32_t v = 0x13; vdd_bus_io(&bus,0x3D4,1,0,&v);   /* Offset register */
+            v = 22;            vdd_bus_io(&bus,0x3D5,1,0,&v); } /* ...as Lemmings sets it */
+        CHECK(vid.crtc_offset==22 && vid.crtc_off_seen,
+              "a guest CAN set its own Offset, and it is recorded as seen");
+        memset(&r,0,sizeof r); s_ah(&r,0x00); s_al(&r,0x10);
+        vdd_bus_deliver_int(&bus,0x10,&r);
+        CHECK(vid.crtc_offset==0x28, "...and the next mode set takes it back to 40 (640px)");
+        CHECK(vid.crtc_start==0 && !vid.crtc_off_seen,
+              "a mode set also clears the start address and the seen flag");
+
         /* Bit 7 of AL means "do not clear the buffer" and nothing else -- measured. */
         memset(&r,0,sizeof r); s_ah(&r,0x00); s_al(&r,0x90);
         vdd_bus_deliver_int(&bus,0x10,&r);

@@ -78,6 +78,32 @@ start:
         inc     bx
         loop    .dac
 
+        ; ---- CRTC registers 00..18. A mode set reprograms the whole CRTC, which is
+        ; why these belong next to the palette: the host used to leave crtc_offset
+        ; and crtc_start alone across a mode set, so a screen inherited the geometry
+        ; of the one before it. Lemmings' gameplay sets offset=22 and the NEXT mode
+        ; 10h screen was then drawn 44 bytes to the line instead of 80.
+        ; ⚠ The index port is 3D4 on a colour adapter and 3B4 on mono; the BIOS keeps
+        ; the live one at 0040:0063, so take it from there rather than assume.
+        push    ds
+        xor     ax, ax
+        mov     ds, ax
+        mov     dx, [463h]
+        pop     ds
+        mov     [crtcport], dx
+        xor     cx, cx
+.crtc:
+        mov     dx, [crtcport]
+        mov     al, cl
+        out     dx, al
+        inc     dx
+        in      al, dx
+        mov     bx, cx
+        mov     [crtcbuf + bx], al
+        inc     cx
+        cmp     cx, 25
+        jb      .crtc
+
         mov     ax, 0003h               ; text mode before printing
         int     10h
 
@@ -96,6 +122,19 @@ start:
         inc     bx
         cmp     bx, 16
         jb      .pac
+        call    crlf
+
+        mov     si, s_crtc
+        call    puts
+        xor     bx, bx
+.pcrtc:
+        mov     al, [crtcbuf + bx]
+        call    puthex
+        mov     al, ' '
+        call    putc
+        inc     bx
+        cmp     bx, 25
+        jb      .pcrtc
         call    crlf
 
         ; DAC, eight entries to a line, each line prefixed with its first index.
@@ -198,5 +237,8 @@ curmode db      0
 s_mode  db      'MODE=', 0
 s_ac    db      ' AC=', 0
 s_dac   db      13, 10, 'DAC', 0
+s_crtc  db      'CRTC=', 0
+crtcport dw     3D4h
+crtcbuf times 25 db 0
 acbuf   times 16 db 0
 dacbuf  times 256*3 db 0

@@ -4833,6 +4833,12 @@ static void host_key_typematic(void)
     g_ty_sent++;
 }
 
+/* Defined with the rest of the mouse state, below. A scripted run needs it because
+   a guest that finds an INT 33h driver asks for a CLICK and ignores the keyboard --
+   Lemmings' level briefing says "Press mouse button to continue" to us and "Press
+   Space" to a DOS with no driver, so without this the harness cannot get past it. */
+static void host_mouse_button(int btn, int down);
+
 static DWORD WINAPI synthkey_thread(LPVOID pv)
 {
     int n;
@@ -4852,6 +4858,21 @@ static DWORD WINAPI synthkey_thread(LPVOID pv)
               int ext = 0; DWORD v = 0; int digits = 0;
               while (i < rd && (s[i] == ' ' || s[i] == '\t' || s[i] == '\r' || s[i] == '\n')) ++i;
               if (i >= rd) break;
+              /* m<0|1|2> -- a full click of that button (left/right/middle). Not a
+                 keystroke, but it belongs in the same script: the point of the script
+                 is to reach a screen, and mouse-driven guests cannot be reached with
+                 scancodes. `dm0`/`um0` are not provided; nothing has wanted a held
+                 button yet, and an unreleased one is a nasty thing to leave behind. */
+              if (s[i] == 'm' || s[i] == 'M') {
+                  int bn = 0;
+                  ++i;
+                  if (i < rd && s[i] >= '0' && s[i] <= '2') { bn = s[i] - '0'; ++i; }
+                  host_mouse_button(bn, 1);
+                  Sleep(60);
+                  host_mouse_button(bn, 0);
+                  Sleep(250);
+                  continue;
+              }
               if (s[i] == 'w' || s[i] == 'W') {           /* w<decimal ms> */
                   ++i;
                   while (i < rd && s[i] >= '0' && s[i] <= '9') { v = v*10 + (DWORD)(s[i]-'0'); ++i; }
@@ -5505,9 +5526,12 @@ static volatile LONG g_ms_mick_x = 8, g_ms_mick_y = 16, g_ms_dbl_thresh = 64;
 static volatile LONG g_ms_evt_mask, g_ms_evt_seg, g_ms_evt_off;
 static DWORD         g_ms_evt_installs;
 
-/* Record a button transition. UI thread only (the sole writer of g_ms_btn), and the
-   position is taken from the live driver position rather than the message's client
-   coordinates because while captured it is WM_INPUT, not WM_MOUSEMOVE, that owns it. */
+/* Record a button transition. Normally UI-thread only, and the position is taken
+   from the live driver position rather than the message's client coordinates because
+   while captured it is WM_INPUT, not WM_MOUSEMOVE, that owns it.
+   ⚠ host_mouse_button below is a SECOND writer, from the scripted-input thread. It
+   is why g_ms_btn is updated there with a compare-exchange loop rather than the plain
+   exchange the window procedure can afford. */
 static void mouse_btn_edges(LONG prev, LONG now)
 {
     int i;
@@ -5520,6 +5544,25 @@ static void mouse_btn_edges(LONG prev, LONG now)
             else           { InterlockedIncrement(&g_ms_rel_n[i]);
                              g_ms_rel_x[i]   = g_ms_x; g_ms_rel_y[i]   = g_ms_y; }
         }
+    }
+}
+
+/* Press or release a button from the keys.txt script -- the `m0` token. Takes the
+   same two steps the window procedure takes, so the guest cannot tell the difference:
+   the level goes into g_ms_btn and the EDGE goes into the press/release counters that
+   INT 33h 05h/06h report. A compare-exchange loop, not an exchange, because the UI
+   thread is writing the same word from a real mouse. */
+static void host_mouse_button(int btn, int down)
+{
+    LONG bit;
+    if (btn < 0 || btn >= MS_BTNS) return;
+    bit = 1L << btn;
+    for (;;) {
+        LONG prev = g_ms_btn;
+        LONG now  = down ? (prev | bit) : (prev & ~bit);
+        if (InterlockedCompareExchange(&g_ms_btn, now, prev) != prev) continue;
+        if (prev != now) mouse_btn_edges(prev, now);
+        return;
     }
 }
 

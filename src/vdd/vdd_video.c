@@ -58,26 +58,45 @@ static uint32_t dac_pack(uint8_t r, uint8_t g, uint8_t b)
      index 6 IS 0x14. Lemmings carries that exact table inside VGALEMMI.EXE and uses
      it to choose which DAC entries to program, so with 6 there its colour 6 was
      written to DAC 0x14 and read back from DAC 0x06. */
-static void vga_defaults_for(uint8_t mode,
-                             const unsigned char **ac, const unsigned long **dac)
+static int vga_defaults_row(uint8_t mode)
 {
     unsigned i;
     for (i = 0; i < VGA_DEFAULT_MODES; ++i)
-        if (VGA_DEFAULT_BY_MODE[0][i] == mode) {
-            *ac  = VGA_AC_DEFAULT [VGA_DEFAULT_BY_MODE[1][i]];
-            *dac = VGA_DAC_DEFAULT[VGA_DEFAULT_BY_MODE[2][i]];
-            return;
-        }
+        if (VGA_DEFAULT_BY_MODE[0][i] == mode) return (int)i;
     /* A mode the BIOS has no table for: a VESA mode, or one nobody defines. Above
        13h means 256 colours, so 13h's defaults; below it, mode 3's. st->mkind is
        not set yet at the point this runs, so the mode number is all there is. */
     for (i = 0; i < VGA_DEFAULT_MODES; ++i)
-        if (VGA_DEFAULT_BY_MODE[0][i] == (mode >= 0x13 ? 0x13 : 0x03)) {
-            *ac  = VGA_AC_DEFAULT [VGA_DEFAULT_BY_MODE[1][i]];
-            *dac = VGA_DAC_DEFAULT[VGA_DEFAULT_BY_MODE[2][i]];
-            return;
-        }
-    *ac = VGA_AC_DEFAULT[0]; *dac = VGA_DAC_DEFAULT[0];
+        if (VGA_DEFAULT_BY_MODE[0][i] == (mode >= 0x13 ? 0x13 : 0x03)) return (int)i;
+    return 0;
+}
+
+static void vga_defaults_for(uint8_t mode,
+                             const unsigned char **ac, const unsigned long **dac)
+{
+    int i = vga_defaults_row(mode);
+    *ac  = VGA_AC_DEFAULT [VGA_DEFAULT_BY_MODE[1][i]];
+    *dac = VGA_DAC_DEFAULT[VGA_DEFAULT_BY_MODE[2][i]];
+}
+
+/* ── ★ A MODE SET REPROGRAMS THE CRTC, and not doing so lets one screen inherit the
+     geometry of the one before it. Lemmings' gameplay sets Offset=22 (44 bytes to
+     the line, for a 352-pixel-wide scrolling window); the mode 10h screen AFTER it
+     was then drawn 44 bytes to the line instead of 80 and came out as diagonal
+     noise. The BIOS writes all 25 registers on every mode set -- these values are
+     measured per mode by tools/dostest/vgadefs.asm.
+   ⚠ Only Offset and the start address are applied. The rest of the CRTC is carried
+     in the table but not acted on, because the renderer takes its geometry from the
+     mode table rather than from CRT timings; applying timings here would be a much
+     larger change wearing this one's clothes. */
+static void load_default_crtc(video_state *st)
+{
+    const unsigned char *c = VGA_CRTC_DEFAULT[VGA_DEFAULT_BY_MODE[3][vga_defaults_row(st->mode)]];
+    st->crtc_index = 0;
+    st->crtc_offset = c[VGA_CRTC_OFFSET];
+    st->crtc_start = (uint32_t)(((unsigned)c[VGA_CRTC_START_HI] << 8) | c[VGA_CRTC_START_LO]);
+    st->crtc_off_seen = 0;
+    st->dirty = 1;
 }
 
 /* ── ★★★ THE RENDER PALETTE IS DERIVED, NOT STORED. ─────────────────────────────
@@ -463,6 +482,7 @@ static void int10(void *self, ntvdd_regs *r)
         st->mode = al & 0x7F; st->in_vesa = 0;        /* a standard mode leaves VESA */
         st->cur_row = st->cur_col = 0; st->page = 0;
         load_default_palette(st);                     /* HW reloads the DAC on mode set */
+        load_default_crtc(st);                        /* ...and reprograms the CRTC     */
         {   unsigned mi; const void *found = 0;
             for (mi = 0; mi < sizeof(vid_modes)/sizeof(vid_modes[0]); ++mi)
                 if (vid_modes[mi].mode == st->mode) { found = &vid_modes[mi]; break; }
@@ -1729,7 +1749,7 @@ void vdd_video_reset(void *self)
     st->seq_index = st->gc_index = 0;
     st->map_mask = 0x0F; st->bit_mask = 0xFF; st->write_mode = 0;
     st->chain4 = 1; st->y_mask = 0x0F;
-    st->crtc_index = 0; st->crtc_offset = 40; st->crtc_start = 0; st->crtc_off_seen = 0;
+    load_default_crtc(st);                      /* mode 3's CRTC, measured not assumed */
     st->set_reset = st->enable_sr = st->func_rotate = st->read_map = 0;
     st->latch[0] = st->latch[1] = st->latch[2] = st->latch[3] = 0;
     st->in_vesa = 0; st->vesa_mode = 0; st->vesa_bank = 0;
