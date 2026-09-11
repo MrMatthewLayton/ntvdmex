@@ -25172,6 +25172,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                  VRAM. That region was unreachable until a plane became 64KB, so
                  "who is up there" is the question worth answering unprompted -- and
                  a one-shot blit of a status panel will never be in a top-N list. */
+        { log_append(LOG_PATH, base, p); serial_out(base, p); p = base; }
             p = zput(p, "STAGE2: planar sites touching off-screen (>=0xC000):\r\n");
             for (k = 0; k < VID_WSITES; ++k) {
                 int which;
@@ -25249,6 +25250,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                 if (p > report + sizeof report - 512) break;
             }
             /* ► THE COLOUR-COMPARE READ SITES: a guest asking "where is the ground". */
+        { log_append(LOG_PATH, base, p); serial_out(base, p); p = base; }
             p = zput(p, "STAGE2: planar COLOUR-COMPARE read sites, lost=");
             p = zdec(p, g_vid.rsite1_lost); p = zput(p, "\r\n");
             for (shown = 0; shown < 10; ++shown) {
@@ -25260,10 +25262,22 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                 p = zput(p, " n=");   p = zdec(p, g_vid.rsite1[best].n);
                 p = zput(p, " off=0x"); p = zhex(p, g_vid.rsite1[best].lo);
                 p = zput(p, "..0x");    p = zhex(p, g_vid.rsite1[best].hi);
+                /* ► AND WHAT IT ANSWERED. all-zero means the guest saw no terrain. */
+                p = zput(p, " zero="); p = zdec(p, g_vid.rsite1_zero[best]);
+                p = zput(p, " ones="); p = zdec(p, g_vid.rsite1_ones[best]);
                 p = zput(p, "\r\n");
                 g_vid.rsite1[best].n = 0;
                 if (p > report + sizeof report - 512) break;
             }
+            /* ► HOW MANY SITES THIS TOP-N LEFT OUT. Without it a truncated list
+                 reads as a complete enumeration of who touches VRAM, and "pc X is not
+                 here" becomes an argument it cannot support. */
+            {   unsigned more = 0;
+                for (k = 0; k < VID_WSITES; ++k) if (g_vid.rsite1[k].n) ++more;
+                p = zput(p, "  (cc-read: "); p = zdec(p, more);
+                p = zput(p, " further sites not shown)\r\n");
+            }
+        { log_append(LOG_PATH, base, p); serial_out(base, p); p = base; }
             p = zput(p, "STAGE2: planar read sites, rsite_lost=");
             p = zdec(p, g_vid.rsite_lost); p = zput(p, "\r\n");
             for (shown = 0; shown < 14; ++shown) {
@@ -25278,6 +25292,14 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                 p = zput(p, "\r\n");
                 g_vid.rsite[best].n = 0;
                 if (p > report + sizeof report - 512) break;
+            }
+            /* ► HOW MANY SITES THIS TOP-N LEFT OUT. Without it a truncated list
+                 reads as a complete enumeration of who touches VRAM, and "pc X is not
+                 here" becomes an argument it cannot support. */
+            {   unsigned more = 0;
+                for (k = 0; k < VID_WSITES; ++k) if (g_vid.rsite[k].n) ++more;
+                p = zput(p, "  (rsite: "); p = zdec(p, more);
+                p = zput(p, " further sites not shown)\r\n");
             }
 }
         /* ► Does this guest scroll or page-flip, and how often would a frame have

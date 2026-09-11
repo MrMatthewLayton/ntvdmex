@@ -1082,6 +1082,15 @@ uint8_t vga_planar_read(video_state *st, uint32_t off)
             }
             if (match) r = (uint8_t)(r | (1 << b));
         }
+        /* Record what we ANSWERED, not just that we were asked -- see vdd_video.h. */
+        if (st->guest_pc) {
+            uint32_t pc2 = st->guest_pc();
+            unsigned h = VID_WSITE_HASH(pc2);
+            if (st->rsite1[h].pc == pc2) {
+                if (!r)            st->rsite1_zero[h]++;
+                else if (r == 0xFF) st->rsite1_ones[h]++;
+            }
+        }
         return r; }
 }
 
@@ -1266,9 +1275,40 @@ static void crtc_lc_update(video_state *st)
 /* A mode set writes 0x06, 0x12 and 0x15 among the rest; only once all three have
    arrived is the vertical timing a complete statement rather than one register of
    the old mode's geometry beside two of the new one's. */
+/* ── ▶ DERIVED ONCE PER CRTC WRITE, NOT ONCE PER 0x3DA READ. ──────────────────────
+     The vertical geometry is a function of five registers. Recomputing it inside
+     status_in meant reassembling three 10-bit values out of scattered bits, running
+     three validity tests and a division ON EVERY POLL -- and a guest polls this port
+     harder than it does anything else: Lemmings reads 0x3DA 73.8 MILLION times in a
+     45-second run, 1.6M/s, and in its menu phase it does essentially nothing else.
+     MEASURED: that put the per-poll cost up from 16.0ns to 20.0ns off-VM, and on the
+     rig the guest got through 77.0M polls per run before and 73.6M after -- 4.4% fewer
+     in the same wall time, paid by every guest that waits on retrace.
+     The inputs change only when the guest writes the CRTC, so the answer is cached
+     there and the hot path just reads it. Same numbers, none of the arithmetic. */
+static void crtc_vt_recompute(video_state *st)
+{
+    uint32_t ov, ms, vt, vde, vbs;
+    st->vt_valid = 0;
+    if (!st->crtc_vt_seen) return;
+    ov = st->crtc_overflow; ms = st->crtc_maxscan;
+    vt  = (uint32_t)st->crtc_vtotal_lo | ((ov >> 0 & 1u) << 8) | ((ov >> 5 & 1u) << 9);
+    vde = (uint32_t)st->crtc_vde_lo    | ((ov >> 1 & 1u) << 8) | ((ov >> 6 & 1u) << 9);
+    vbs = (uint32_t)st->crtc_vbs_lo    | ((ov >> 3 & 1u) << 8) | ((ms >> 5 & 1u) << 9);
+    vt += 2; vde += 1;
+    if (vt < 100u || vt > 1200u) return;
+    if (vde == 0u || vde > vt)   return;
+    if (vbs < vde || vbs >= vt)  return;
+    st->vt_total = (uint16_t)vt;
+    st->vt_active = (uint16_t)vde;
+    st->vt_blank  = (uint16_t)vbs;
+    st->vt_valid  = 1;
+}
+
 static void crtc_vt_update(video_state *st)
 {
     if (st->crtc_vtotal_lo && st->crtc_vde_lo && st->crtc_vbs_lo) st->crtc_vt_seen = 1;
+    crtc_vt_recompute(st);
 }
 
 /* ── THE CRT'S VERTICAL GEOMETRY, FROM THE REGISTERS THE GUEST WROTE. ──────────────
@@ -1289,23 +1329,14 @@ static void crtc_vt_update(video_state *st)
      when what it programmed is not a plausible screen: the caller then keeps the old
      constants. An off-VM test that sets gh directly takes this path, which is why
      the existing battery is unaffected. */
+/* Read back what crtc_vt_recompute() worked out. The validity rules -- a plausible
+   screen: blanking after the picture and inside the frame -- live there, because a
+   half-written mode set must be rejected ONCE, not re-rejected 73 million times. */
 static int vga_vtiming(const video_state *st, uint32_t *total, uint32_t *active,
                        uint32_t *blank_start)
 {
-    uint32_t ov, ms, vt, vde, vbs;
-    if (!st->crtc_vt_seen) return 0;
-    ov = st->crtc_overflow; ms = st->crtc_maxscan;
-    vt  = (uint32_t)st->crtc_vtotal_lo | ((ov >> 0 & 1u) << 8) | ((ov >> 5 & 1u) << 9);
-    vde = (uint32_t)st->crtc_vde_lo    | ((ov >> 1 & 1u) << 8) | ((ov >> 6 & 1u) << 9);
-    vbs = (uint32_t)st->crtc_vbs_lo    | ((ov >> 3 & 1u) << 8) | ((ms >> 5 & 1u) << 9);
-    vt += 2; vde += 1;
-    /* A plausible screen: blanking after the picture, and inside the frame. Anything
-       else is a half-written mode set, and a garbage frame period would freeze every
-       guest that waits on retrace -- far worse than the constants it replaces. */
-    if (vt < 100u || vt > 1200u) return 0;
-    if (vde == 0u || vde > vt)   return 0;
-    if (vbs < vde || vbs >= vt)  return 0;
-    *total = vt; *active = vde; *blank_start = vbs;
+    if (!st->vt_valid) return 0;
+    *total = st->vt_total; *active = st->vt_active; *blank_start = st->vt_blank;
     return 1;
 }
 

@@ -238,6 +238,14 @@ typedef struct video_state {
     uint8_t  crtc_vde_lo;              /* 0x12, Vertical Display End bits 0-7     */
     uint8_t  crtc_vbs_lo;              /* 0x15, Vertical Blank Start bits 0-7     */
     uint8_t  crtc_vt_seen;             /* guest has written 0x06 AND 0x12 AND 0x15 */
+    /* ▶ The geometry those five registers DESCRIBE, worked out once per CRTC write by
+         crtc_vt_recompute(). 0x3DA is the most-read port there is -- Lemmings polls it
+         1.6 MILLION times a second -- so reassembling three scattered 10-bit fields and
+         revalidating them on every read was 4.4% of that guest's poll budget for an
+         answer that only changes when the guest programs the CRTC. vt_valid = 0 means
+         "not a plausible screen", and the caller keeps the old two-case constants. */
+    uint16_t vt_total, vt_active, vt_blank;
+    uint8_t  vt_valid;
     uint32_t modey_gap;                /* mode-Y run coalescing slack, in dwords     */
     /* ── OPTIONAL: PER-PLANE BACKING SUPPLIED BY THE HOST. ───────────────────────
          When these are set, the guest's A0000 window IS whichever plane the map mask
@@ -388,6 +396,16 @@ typedef struct video_state {
        disassembling and its address range says WHICH copy of the level it trusts. */
     vid_wsite rsite1[VID_WSITES];
     uint32_t rsite1_lost;
+    /* ▶ WHAT THE COMPARE ACTUALLY ANSWERED, per site. A colour-compare read is the only
+         VRAM read whose RESULT is a decision rather than a pixel, and Lemmings has one
+         site (guest 0x7A3A) that reads two bytes, counts the set bits and branches on
+         whether at least 8 of 16 pixels are terrain. A count of reads says that site
+         ran; it cannot say the game could SEE anything. If `zero` is essentially equal
+         to `n` at that site, every pixel it asked about came back "not terrain" -- which
+         is a lemming walking into thin air, and is indistinguishable, in every counter
+         we had before this, from a site that is working perfectly. */
+    uint32_t rsite1_zero[VID_WSITES];   /* compares that returned 0x00 -- nothing matched */
+    uint32_t rsite1_ones[VID_WSITES];   /* compares that returned 0xFF -- everything did  */
     /* ── ▶ WHO TOUCHES THE OFF-SCREEN SPRITE CACHE -- A LINEAR TABLE, NOT A HASH. ──
          The three tables above are 256 single-slot hashes, so a site whose pc collides
          with a busier one is dropped into a `_lost` counter and NEVER APPEARS. On the
