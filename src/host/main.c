@@ -25150,7 +25150,59 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
              0xFF, so the answer used to be invisible. */
         p = zput(p, "STAGE2: planar hi_water=0x"); p = zhex(p, g_vid.planar_hi_water);
         p = zput(p, " plane_size=0x"); p = zhex(p, (DWORD)VID_PLANE_SIZE);
+        p = zput(p, " wsite_lost="); p = zdec(p, g_vid.wsite_lost);
         p = zput(p, "\r\n");
+        {   unsigned k;
+            /* ► And, whatever their rank, every site that touched DEEP off-screen
+                 VRAM. That region was unreachable until a plane became 64KB, so
+                 "who is up there" is the question worth answering unprompted -- and
+                 a one-shot blit of a status panel will never be in a top-N list. */
+            p = zput(p, "STAGE2: planar sites touching off-screen (>=0xC000):\r\n");
+            for (k = 0; k < VID_WSITES; ++k) {
+                int which;
+                for (which = 0; which < 2; ++which) {
+                    const vid_wsite *s2 = which ? &g_vid.rsite[k] : &g_vid.wsite[k];
+                    if (!s2->n || s2->hi < 0xC000u) continue;
+                    p = zput(p, which ? "  READ  pc=" : "  WRITE pc=");
+                    p = zhex(p, s2->pc);
+                    p = zput(p, " n=");     p = zdec(p, s2->n);
+                    p = zput(p, " off=0x"); p = zhex(p, s2->lo);
+                    p = zput(p, "..0x");    p = zhex(p, s2->hi);
+                    p = zput(p, "\r\n");
+                }
+                if (p > report + sizeof report - 256) break;
+            }         }
+        /* The write sites, busiest first -- who drew the screen, and where. */
+        {   unsigned k, shown;
+            for (shown = 0; shown < 14; ++shown) {
+                unsigned best = VID_WSITES; uint32_t bn = 0;
+                for (k = 0; k < VID_WSITES; ++k)
+                    if (g_vid.wsite[k].n > bn) { bn = g_vid.wsite[k].n; best = k; }
+                if (best == VID_WSITES) break;
+                p = zput(p, "  wsite pc="); p = zhex(p, g_vid.wsite[best].pc);
+                p = zput(p, " n=");   p = zdec(p, g_vid.wsite[best].n);
+                p = zput(p, " off=0x"); p = zhex(p, g_vid.wsite[best].lo);
+                p = zput(p, "..0x");    p = zhex(p, g_vid.wsite[best].hi);
+                p = zput(p, "\r\n");
+                g_vid.wsite[best].n = 0;            /* report is the last use of it */
+                if (p > report + sizeof report - 512) break;
+            }
+            p = zput(p, "STAGE2: planar read sites, rsite_lost=");
+            p = zdec(p, g_vid.rsite_lost); p = zput(p, "\r\n");
+            for (shown = 0; shown < 14; ++shown) {
+                unsigned best = VID_WSITES; uint32_t bn = 0;
+                for (k = 0; k < VID_WSITES; ++k)
+                    if (g_vid.rsite[k].n > bn) { bn = g_vid.rsite[k].n; best = k; }
+                if (best == VID_WSITES) break;
+                p = zput(p, "  rsite pc="); p = zhex(p, g_vid.rsite[best].pc);
+                p = zput(p, " n=");   p = zdec(p, g_vid.rsite[best].n);
+                p = zput(p, " off=0x"); p = zhex(p, g_vid.rsite[best].lo);
+                p = zput(p, "..0x");    p = zhex(p, g_vid.rsite[best].hi);
+                p = zput(p, "\r\n");
+                g_vid.rsite[best].n = 0;
+                if (p > report + sizeof report - 512) break;
+            }
+}
         p = zput(p, "STAGE2: crtc: start=");   p = zdec(p, g_vid.crtc_start);
         p = zput(p, " offset=");               p = zdec(p, g_vid.crtc_offset);
         p = zput(p, " off_seen=");             p = zdec(p, g_vid.crtc_off_seen);

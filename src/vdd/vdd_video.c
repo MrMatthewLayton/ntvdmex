@@ -962,6 +962,14 @@ void vga_planar_write(video_state *st, uint32_t off, uint8_t cpu)
 {
     vid_watch_rec r; int p;
     if (off > st->planar_hi_water) st->planar_hi_water = off;
+    if (st->guest_pc) {
+        uint32_t pc = st->guest_pc();
+        vid_wsite *w = &st->wsite[VID_WSITE_HASH(pc)];
+        if (!w->n)            { w->pc = pc; w->lo = w->hi = off; w->n = 1; }
+        else if (w->pc == pc) { if (off < w->lo) w->lo = off;
+                                if (off > w->hi) w->hi = off; w->n++; }
+        else                  st->wsite_lost++;
+    }
     if (off != st->watch_off) { vga_planar_write_1(st, off, cpu); return; }
     r.pc = st->guest_pc ? st->guest_pc() : 0;
     r.wmode = (uint8_t)(st->write_mode & 3); r.map_mask = st->map_mask;
@@ -980,6 +988,14 @@ uint8_t vga_planar_read(video_state *st, uint32_t off)
 {
     int p;
     if (off > st->planar_hi_water) st->planar_hi_water = off;
+    if (st->guest_pc) {
+        uint32_t pc = st->guest_pc();
+        vid_wsite *w = &st->rsite[VID_WSITE_HASH(pc)];
+        if (!w->n)            { w->pc = pc; w->lo = w->hi = off; w->n = 1; }
+        else if (w->pc == pc) { if (off < w->lo) w->lo = off;
+                                if (off > w->hi) w->hi = off; w->n++; }
+        else                  st->rsite_lost++;
+    }
     if (off >= VID_PLANE_SIZE) return 0xFF;
     for (p = 0; p < 4; ++p) st->latch[p] = st->plane[p][off];   /* load latches    */
     return st->plane[st->read_map & 3][off];                    /* read mode 0     */

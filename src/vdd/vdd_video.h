@@ -69,6 +69,25 @@ typedef struct {
     uint8_t  after[4];                  /* the four plane bytes it left behind       */
 } vid_watch_rec;
 
+/* ── WHO WRITES THE SCREEN, AND WHERE. ──────────────────────────────────────────
+     A watchpoint answers "how was THIS byte made" and needs the byte's address; a
+     scrolling guest moves its addresses about, so picking one is guesswork. This is
+     the other half: every planar write is counted against the guest CS:IP that made
+     it, with the lowest and highest VRAM offset that site touched. A missing piece
+     of a picture is then either a site that never ran or a site writing somewhere
+     unexpected, and both are visible without knowing an address in advance.
+   ⚠ DIRECT-MAPPED, not searched: this is on the path of every planar write, of which
+     a run makes millions. One index and one compare. A pc that collides with another
+     is counted in wsite_lost rather than silently attributed to the wrong routine --
+     a histogram that lies about attribution is worse than one with a gap in it. */
+/* ⚠ 256 SLOTS AND A MIXED HASH, because the first cut used 64 slots indexed by
+   (pc>>2) and lost 568574 reads of 860000 to collisions -- the pcs of a blitter's
+   unrolled bodies are only a few bytes apart, so the low bits alone put them all in
+   the same slot and the table reported two sites where there were dozens. */
+#define VID_WSITES 256
+#define VID_WSITE_HASH(pc) ((((pc) >> 1) ^ ((pc) >> 7) ^ ((pc) >> 13)) & (VID_WSITES - 1))
+typedef struct { uint32_t pc, n, lo, hi; } vid_wsite;
+
 typedef struct video_state {
     vdd_bus *bus;
     uint8_t *vmem;                      /* the 128KB aperture (A0000); caller-set  */
@@ -279,6 +298,13 @@ typedef struct video_state {
        38400-byte plane made unanswerable -- everything above it read back as 0xFF
        and looked like the guest's own data. */
     uint32_t planar_hi_water;
+    vid_wsite wsite[VID_WSITES];        /* write sites, by guest CS:IP               */
+    uint32_t wsite_lost;                /* writes whose pc collided with another      */
+    /* And the same for READS. A picture that is missing something is as often a copy
+       whose SOURCE was never read as a write that never happened -- with off-screen
+       VRAM in play, "who reads up there" is the question that separates the two. */
+    vid_wsite rsite[VID_WSITES];
+    uint32_t rsite_lost;
     uint32_t watch_off;                 /* VRAM byte offset watched; ~0u = disarmed  */
     uint32_t watch_n;                   /* writes seen (may exceed what is recorded) */
     vid_watch_rec watch[VID_WATCH_MAX];
