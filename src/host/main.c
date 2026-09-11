@@ -25195,23 +25195,42 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
              being full, which `lost` states. `seq` is a tick per cache access, so
              first/last order the compositor against the blitter and answer "was the
              cache filled BEFORE it was copied to the screen" directly. */
+        /* ⚠ FLUSH FIRST. This block is near the END of a report that shares one
+             char[8192], and the off-screen list above it can run to dozens of lines.
+             On its first rig run the buffer guard below fired after the FIRST entry
+             and silently dropped the other nine -- the table had the answer and the
+             log did not. It was caught only because `seq` is printed beside the per
+             entry counts and 12800 did not add up to 19984; without that cross-check
+             the truncated list reads as a complete one, which is the worst shape a
+             report can fail in. A fixed buffer is a silent budget: spend it here. */
+        { log_append(LOG_PATH, base, p); serial_out(base, p); p = base; }
         {   unsigned k;
             p = zput(p, "STAGE2: off-screen cache sites (>=0x"); p = zhex(p, VID_CACHE_LO);
             p = zput(p, "), lost="); p = zdec(p, g_vid.csite_lost);
             p = zput(p, " seq=");    p = zdec(p, g_vid.csite_seq);
             p = zput(p, "\r\n");
-            for (k = 0; k < VID_CSITES; ++k) {
-                const vid_csite *c = &g_vid.csite[k];
-                if (!c->n) continue;
-                p = zput(p, c->wr ? "  cache WRITE pc=" : "  cache READ  pc=");
-                p = zhex(p, c->pc);
-                p = zput(p, " n=");      p = zdec(p, c->n);
-                p = zput(p, " off=0x");  p = zhex(p, c->lo);
-                p = zput(p, "..0x");     p = zhex(p, c->hi);
-                p = zput(p, " first=");  p = zdec(p, c->first);
-                p = zput(p, " last=");   p = zdec(p, c->last);
-                p = zput(p, "\r\n");
-                if (p > report + sizeof report - 512) break;
+            {   uint32_t acct = 0;
+                for (k = 0; k < VID_CSITES; ++k) {
+                    const vid_csite *c = &g_vid.csite[k];
+                    if (!c->n) continue;
+                    acct += c->n;
+                    p = zput(p, c->wr ? "  cache WRITE pc=" : "  cache READ  pc=");
+                    p = zhex(p, c->pc);
+                    p = zput(p, " n=");      p = zdec(p, c->n);
+                    p = zput(p, " off=0x");  p = zhex(p, c->lo);
+                    p = zput(p, "..0x");     p = zhex(p, c->hi);
+                    p = zput(p, " first=");  p = zdec(p, c->first);
+                    p = zput(p, " last=");   p = zdec(p, c->last);
+                    p = zput(p, "\r\n");
+                    if (p > report + sizeof report - 512) break;
+                }
+                /* ► THE LIST MUST ACCOUNT FOR EVERY ACCESS IT COUNTED. n's + lost has
+                     to equal seq; if it does not, lines are MISSING and the absence of
+                     a pc above means nothing. Said out loud so it cannot be read past. */
+                p = zput(p, "  cache accounted="); p = zdec(p, acct + g_vid.csite_lost);
+                p = zput(p, " of seq=");           p = zdec(p, g_vid.csite_seq);
+                p = zput(p, (acct + g_vid.csite_lost == g_vid.csite_seq)
+                              ? " COMPLETE\r\n" : " !! TRUNCATED -- absence proves NOTHING\r\n");
             }
         }
         /* The write sites, busiest first -- who drew the screen, and where. */
