@@ -88,6 +88,19 @@ typedef struct {
 #define VID_WSITE_HASH(pc) ((((pc) >> 1) ^ ((pc) >> 7) ^ ((pc) >> 13)) & (VID_WSITES - 1))
 typedef struct { uint32_t pc, n, lo, hi; } vid_wsite;
 
+/* ── THE OFF-SCREEN SPRITE-CACHE WITNESS. ─────────────────────────────────────────
+     VID_CACHE_LO is a floor, not a measurement of any particular guest: it is chosen
+     to sit ABOVE every screen page a 16-colour mode can have (0x8000 covers 640x480
+     planar) and above everything the measured Lemmings run touches for drawing
+     (0xDABF at the busiest), while including its panel cache at 0xF91F..0xFFFE. A
+     guest that caches sprites lower than this is simply not covered -- which is a
+     reported gap, not a wrong answer, because `lost` and the range fields say what
+     the table did see. Direction is part of the key: the same routine reading and
+     writing the cache is two facts, and the toolbar question is about reads. */
+#define VID_CACHE_LO 0xF000u
+#define VID_CSITES   10
+typedef struct { uint32_t pc, n, lo, hi, first, last; uint8_t wr; } vid_csite;
+
 typedef struct video_state {
     vdd_bus *bus;
     uint8_t *vmem;                      /* the 128KB aperture (A0000); caller-set  */
@@ -375,6 +388,28 @@ typedef struct video_state {
        disassembling and its address range says WHICH copy of the level it trusts. */
     vid_wsite rsite1[VID_WSITES];
     uint32_t rsite1_lost;
+    /* ── ▶ WHO TOUCHES THE OFF-SCREEN SPRITE CACHE -- A LINEAR TABLE, NOT A HASH. ──
+         The three tables above are 256 single-slot hashes, so a site whose pc collides
+         with a busier one is dropped into a `_lost` counter and NEVER APPEARS. On the
+         Lemmings run that cost 249,630 reads, which makes those tables unable to answer
+         the one question the toolbar bug turns on: does the routine that copies the
+         composed panel onto the screen RUN AT ALL? An absence there is indistinguishable
+         from a collision, and reasoning from it is exactly the trap the site histograms
+         have already sprung twice.
+         This table cannot collide: it is a short LINEAR scan, and it only admits
+         accesses above VID_CACHE_LO -- a region no other site in the measured run comes
+         near (the busiest top out at 0xDABF), so ten slots is generous rather than tight.
+         `lost` counts accesses that found the table full, and a nonzero value invalidates
+         only the CLAIM OF COMPLETENESS, never the entries themselves.
+       ▶ AND THE ORDER THEY CAME IN. A panel that is composed and then blitted looks
+         identical, by count, to one that is blitted and then composed -- but the second
+         puts an empty cache on the screen, which is the reported symptom. Counts cannot
+         tell those apart and no number of them will. `first`/`last` are ticks of a
+         counter that advances only on cache accesses, so comparing the compositor's
+         first write against the blitter's first read settles the ordering outright. */
+    vid_csite csite[VID_CSITES];
+    uint32_t  csite_lost;
+    uint32_t  csite_seq;                /* ticks once per cache-region access          */
     uint32_t watch_off;                 /* VRAM byte offset watched; ~0u = disarmed  */
     uint32_t watch_n;                   /* writes seen (may exceed what is recorded) */
     vid_watch_rec watch[VID_WATCH_MAX];

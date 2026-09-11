@@ -30,6 +30,11 @@ static uint8_t g_flat[0x100000];          /* guest memory for INT 10h ES:BP/ES:D
    least testable thing in an emulator, an ordinary deterministic assertion. */
 uint64_t g_fake_us = 0;
 static uint64_t fake_clock(void) { return g_fake_us; }
+/* The same trick for the guest's CS:IP. The site instruments all key on it, so
+   without a hook the battery exercises the VGA engine and NONE of the tables that
+   are used to reason about a guest -- which is how they shipped unverified. */
+static uint32_t g_fake_pc = 0;
+static uint32_t fake_pc(void) { return g_fake_pc; }
 /* Index/data register writes the way a guest does them. */
 static void gc_w(vdd_bus *b, uint8_t idx, uint8_t val)
 { uint32_t v = idx; vdd_bus_io(b,0x3CE,1,0,&v); v = val; vdd_bus_io(b,0x3CF,1,0,&v); }
@@ -539,6 +544,126 @@ int main(void)
         gc_w(&bus, 0x05, 0x00); gc_w(&bus, 0x04, 0x02);   /* read mode 0, read plane 2 */
         CHECK(vga_planar_read(&vid, 0xF91F)==0x5A && vga_planar_read(&vid, 0xFFFA)==0xA5,
               "lemmings panel: the off-screen cache 0xF91F..0xFFFA reads back");
+
+        /* ── (4) THE WHOLE-PANEL BLIT at CS:IP 0x7626 -- THE ROUTINE THAT ACTUALLY
+         *   PUTS THE TOOLBAR ON SCREEN, and the one the "missing icons" bug is about.
+         *   Disassembled from the same dump (segment base linear 0x04CE0, seg 0x04CE,
+         *   which is the PARAGRAPH-ALIGNED anchor -- see the warning below):
+         *
+         *       7602:  mov dx,0x3c4 / mov ax,0x0f02 / out   Map Mask = all four planes
+         *              mov dx,0x3ce / mov ax,0x0105 / out   GR5 = WRITE MODE 1
+         *              mov si,0xf91f                        source: the panel cache
+         *              mov dx,0xa000 / mov es,dx / mov ds,dx
+         *              mov cx,0x6e0                         1760 bytes = 40 rows x 44
+         *       7626:  rep movsb                            <- THE WHOLE TOOLBAR, ONE OP
+         *
+         *   Its two callers (0x75EF) blit it to BOTH pages -- [0x1f76] and [0x1f78],
+         *   each +0x1E42 -- and 0x75EF has exactly one caller, 0x39CE, whose FIRST
+         *   instruction it is, which in turn is called straight-line from level init at
+         *   0x048F. ▶ NOTHING GATES IT. It is unconditional on every level start.
+         *
+         * ⚠ THIS CORRECTS THE PINNED STORY. The per-button routine at 0x789E (whose
+         *   first movsb at 0x78F4 is the site the rig named) is NOT the panel painter:
+         *   its only caller, 0x3B3C, is behind `mov ah,[0x82] / cmp [0x83],ah / jz`,
+         *   i.e. it repaints ONE button when the SELECTED skill changes. Running ~1.5
+         *   times in a run where the player changed selection once is correct, not a
+         *   defect -- so "the blitter runs 1.5 times instead of 12" was a question about
+         *   the wrong routine.
+         *
+         * ⚠⚠ WHY A REP AND NOT A LOOP OF ONE. In `rep movsb` every single byte must do
+         *   its OWN read-then-write: the read loads the latches, the write emits them.
+         *   A model that hoisted the read out of the rep, or let the latches go stale
+         *   across it, would smear ONE pixel group over all 1760 bytes -- a flat-colour
+         *   panel with no icons, which is exactly the reported symptom. So the source
+         *   here is deliberately NON-uniform and every byte of the result is checked. */
+        {   uint32_t i2; int same = 1; unsigned pl;
+            const uint32_t SRC = 0xF91F, DST = 0x1E42, N = 0x6E0;
+            /* A pattern that differs per byte AND per plane, so a stale latch or a
+               wrong plane cannot coincidentally reproduce it. */
+            for (i2 = 0; i2 < N; ++i2)
+                for (pl = 0; pl < 4; ++pl) {
+                    vid.plane[pl][SRC + i2] = (uint8_t)(i2 * 7u + pl * 61u + 1u);
+                    vid.plane[pl][DST + i2] = 0x00;      /* a black panel to start from */
+                }
+            sc_w(&bus, 0x02, 0x0F);            /* Map Mask = 0x0F                      */
+            gc_w(&bus, 0x05, 0x01);            /* GR5 = write mode 1                   */
+            for (i2 = 0; i2 < N; ++i2) {       /* rep movsb, byte for byte             */
+                (void)vga_planar_read(&vid, SRC + i2);
+                vga_planar_write(&vid, DST + i2, 0x00);  /* CPU byte is ignored        */
+            }
+            for (i2 = 0; i2 < N && same; ++i2)
+                for (pl = 0; pl < 4; ++pl)
+                    if (vid.plane[pl][DST + i2] != vid.plane[pl][SRC + i2]) { same = 0; break; }
+            CHECK(same, "lemmings panel: the 1760-byte rep movsb reproduces all four planes");
+            /* A stale-latch model passes a one-byte check and fails this one: it would
+               leave every destination byte equal to the FIRST source group. */
+            CHECK(vid.plane[0][DST + 1] != vid.plane[0][DST],
+                  "lemmings panel: ...byte by byte, not one group smeared over the copy");
+            /* THE COPY ENDS ONE BYTE FROM THE TOP OF THE PLANE: 0xF91F + 0x6E0 - 1 =
+               0xFFFE. An off-by-one in the plane bound truncates the last row of the
+               toolbar rather than failing outright, so pin the final byte explicitly. */
+            CHECK(SRC + N - 1 == 0xFFFE, "lemmings panel: the blit ends at 0xFFFE, inside the plane");
+            CHECK(vid.plane[3][DST + N - 1] == vid.plane[3][SRC + N - 1],
+                  "lemmings panel: ...and that last byte copies like any other");
+        }
+
+        /* ── (5) THE INSTRUMENT THAT HAS TO ANSWER "DID THE BLIT RUN AT ALL". ─────
+         *   The rig's answer so far is an ABSENCE: no read site at the panel blit's
+         *   pc. But that report is drawn from 256-slot single-slot hashes which lost
+         *   249,630 reads on the same run, so an absence there can equally mean the
+         *   pc collided with a busier one -- the two readings are indistinguishable,
+         *   and acting on the wrong one costs a session. The linear cache table
+         *   exists to make the absence mean something, so it is worth exactly as
+         *   much as this test: replay the two routines and check it names both, in
+         *   the order they happened.                                                */
+        {   uint32_t i2; unsigned k, nrd = 0, nwr = 0;
+            uint32_t first_wr = 0, first_rd = 0;
+            const uint32_t SRC = 0xF91F, DST = 0x1E42;
+            const uint32_t PC_COMPOSE = 0x01105815, PC_BLIT = 0x01107626;
+
+            memset(vid.csite, 0, sizeof vid.csite);
+            vid.csite_lost = 0; vid.csite_seq = 0;
+            vid.guest_pc = fake_pc;
+
+            g_fake_pc = PC_COMPOSE;                     /* the compositor fills it   */
+            gc_w(&bus, 0x05, 0x00);                     /* write mode 0, plain bytes */
+            sc_w(&bus, 0x02, 0x0F);
+            for (i2 = 0; i2 < 64; ++i2) vga_planar_write(&vid, SRC + i2, (uint8_t)i2);
+            g_fake_pc = PC_BLIT;                        /* ...then the blit reads it */
+            gc_w(&bus, 0x05, 0x01);
+            for (i2 = 0; i2 < 64; ++i2) {
+                (void)vga_planar_read(&vid, SRC + i2);
+                vga_planar_write(&vid, DST + i2, 0x00);
+            }
+            for (k = 0; k < VID_CSITES; ++k) {
+                if (!vid.csite[k].n) continue;
+                if (vid.csite[k].wr) { nwr++; if (vid.csite[k].pc == PC_COMPOSE) first_wr = vid.csite[k].first; }
+                else                 { nrd++; if (vid.csite[k].pc == PC_BLIT)    first_rd = vid.csite[k].first; }
+            }
+            CHECK(nwr == 1 && nrd == 1 && !vid.csite_lost,
+                  "cache sites: the compositor and the blit are BOTH named, none lost");
+            CHECK(first_wr && first_rd && first_wr < first_rd,
+                  "cache sites: ...and the order says the cache was filled BEFORE it was read");
+            /* THE WRITE TO THE SCREEN MUST NOT BE COUNTED AS A CACHE TOUCH. The blit's
+               destination is an ordinary visible page; if the floor let it in, the table
+               would report the blitter as its own compositor and invert the ordering. */
+            {   int below = 0;
+                for (k = 0; k < VID_CSITES; ++k)
+                    if (vid.csite[k].n && vid.csite[k].lo < VID_CACHE_LO) below = 1;
+                CHECK(!below && DST < VID_CACHE_LO,
+                      "cache sites: the visible page is below the floor, so it is ignored");
+            }
+            /* A FULL TABLE MUST SAY SO RATHER THAN SILENTLY DROP. */
+            for (i2 = 0; i2 < VID_CSITES + 4u; ++i2) {
+                g_fake_pc = 0x02000000u + i2 * 0x100u;
+                (void)vga_planar_read(&vid, SRC);
+            }
+            CHECK(vid.csite_lost > 0, "cache sites: overflow is REPORTED, never dropped in silence");
+
+            memset(vid.csite, 0, sizeof vid.csite);
+            vid.csite_lost = 0; vid.csite_seq = 0;
+            vid.guest_pc = 0;                  /* leave the rest of the battery as it was */
+        }
     }
 
 

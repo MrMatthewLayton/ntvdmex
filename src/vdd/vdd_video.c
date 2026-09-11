@@ -972,6 +972,32 @@ static void vga_planar_write_1(video_state *st, uint32_t off, uint8_t cpu)
     }
 }
 
+/* ── THE CACHE WITNESS. A linear scan over ten slots, entered only for accesses
+     above VID_CACHE_LO, so its cost falls on nothing that draws the screen. It is
+     deliberately NOT a hash: the whole point is that "this pc never appeared" must
+     mean the pc never ran, and a hashed table cannot say that. See vdd_video.h. */
+static void csite_note(video_state *st, uint32_t off, int wr)
+{
+    uint32_t pc, i;
+    if (off < VID_CACHE_LO || !st->guest_pc) return;
+    pc = st->guest_pc();
+    st->csite_seq++;
+    for (i = 0; i < VID_CSITES; ++i) {
+        vid_csite *c = &st->csite[i];
+        if (c->n) {
+            if (c->pc != pc || c->wr != (uint8_t)wr) continue;
+            if (off < c->lo) c->lo = off;
+            if (off > c->hi) c->hi = off;
+        } else {
+            c->pc = pc; c->wr = (uint8_t)wr; c->lo = c->hi = off;
+            c->first = st->csite_seq;
+        }
+        c->n++; c->last = st->csite_seq;
+        return;
+    }
+    st->csite_lost++;
+}
+
 /* The watchpoint wrapper. The engine above is left exactly as it was so that the
    instrument cannot change what it measures; this only records around it. */
 void vga_planar_write(video_state *st, uint32_t off, uint8_t cpu)
@@ -986,6 +1012,7 @@ void vga_planar_write(video_state *st, uint32_t off, uint8_t cpu)
                                 if (off > w->hi) w->hi = off; w->n++; }
         else                  st->wsite_lost++;
     }
+    csite_note(st, off, 1);
     if (off != st->watch_off) { vga_planar_write_1(st, off, cpu); return; }
     r.pc = st->guest_pc ? st->guest_pc() : 0;
     r.wmode = (uint8_t)(st->write_mode & 3); r.map_mask = st->map_mask;
@@ -1019,6 +1046,7 @@ uint8_t vga_planar_read(video_state *st, uint32_t off)
             else                  st->rsite1_lost++;
         }
     }
+    csite_note(st, off, 0);
     if (off >= VID_PLANE_SIZE) return 0xFF;
     for (p = 0; p < 4; ++p) st->latch[p] = st->plane[p][off];   /* load latches    */
     st->rmode_hist[st->read_mode & 1]++;

@@ -25187,6 +25187,33 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                 }
                 if (p > report + sizeof report - 256) break;
             }         }
+        /* ► THE OFF-SCREEN SPRITE CACHE, WITHOUT THE COLLISION CAVEAT. The report
+             above is drawn from 256-slot hashes that lost 249,630 reads on the run
+             this was written for, so a site missing from it may simply have collided
+             -- and the open toolbar question is precisely whether a routine RAN.
+             This table is linear and cannot lose an entry to another pc; only to
+             being full, which `lost` states. `seq` is a tick per cache access, so
+             first/last order the compositor against the blitter and answer "was the
+             cache filled BEFORE it was copied to the screen" directly. */
+        {   unsigned k;
+            p = zput(p, "STAGE2: off-screen cache sites (>=0x"); p = zhex(p, VID_CACHE_LO);
+            p = zput(p, "), lost="); p = zdec(p, g_vid.csite_lost);
+            p = zput(p, " seq=");    p = zdec(p, g_vid.csite_seq);
+            p = zput(p, "\r\n");
+            for (k = 0; k < VID_CSITES; ++k) {
+                const vid_csite *c = &g_vid.csite[k];
+                if (!c->n) continue;
+                p = zput(p, c->wr ? "  cache WRITE pc=" : "  cache READ  pc=");
+                p = zhex(p, c->pc);
+                p = zput(p, " n=");      p = zdec(p, c->n);
+                p = zput(p, " off=0x");  p = zhex(p, c->lo);
+                p = zput(p, "..0x");     p = zhex(p, c->hi);
+                p = zput(p, " first=");  p = zdec(p, c->first);
+                p = zput(p, " last=");   p = zdec(p, c->last);
+                p = zput(p, "\r\n");
+                if (p > report + sizeof report - 512) break;
+            }
+        }
         /* The write sites, busiest first -- who drew the screen, and where. */
         {   unsigned k, shown;
             for (shown = 0; shown < 14; ++shown) {
