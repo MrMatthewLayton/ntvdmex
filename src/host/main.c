@@ -7505,6 +7505,7 @@ static void host_fullscreen_toggle_restore(HWND h)
     InvalidateRect(h, NULL, TRUE);
 }
 
+static void host_fullscreen_toggle(HWND h);
 static void host_fullscreen_toggle(HWND h)
 {
     int want = !g_pd.fullscreen;
@@ -7728,6 +7729,21 @@ static void joy_poll_ensure(void)
      Two meanings, two copies, and the one you edit is the one you save. */
 static ntvdmex_settings g_set;
 static ntvdmex_settings g_set_disk;
+
+/* ── START FULLSCREEN (s68). One decision per process, on the UI thread, and it only
+     ever turns fullscreen ON: Alt+Enter owns everything after that. `graphics` says
+     whether the guest is in a graphics mode right now -- Always fires regardless,
+     Graphics only waits for it, Never does nothing. */
+static int g_autofs_done = 0;
+static void host_autofs_consider(HWND h, int graphics)
+{
+    DWORD mode = g_set.v[SET_AUTOFS];
+    if (g_autofs_done || g_wow_launch || g_headless) return;
+    if (mode == AUTOFS_NEVER) { g_autofs_done = 1; return; }
+    if (mode == AUTOFS_GRAPHICS && !graphics) return;
+    g_autofs_done = 1;
+    if (!g_pd.fullscreen) host_fullscreen_toggle(h);
+}
 static dos_machine_t   *g_dosm;          /* so the DOS version can be changed live */
 
 /* Frames the presenter drops between the ones it shows. 0 = every frame, which is
@@ -8600,6 +8616,8 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
                 HOST_UNLOCK();  /* not our phase: keep the last frame up */
             }
         }
+        if (!g_autofs_done)                   /* "Graphics only": the first graphics mode */
+            host_autofs_consider(g_hwnd, g_vid.mkind != VID_KIND_TEXT || g_vid.in_vesa);
         if (g_spk_real) pcspk_set(&g_pcspk, g_spk_real_hz);   /* outside the lock */
         /* Headless remote visual capture (session-9): the host screenshots ITSELF to
            C:\ntvdmex\shotNN.bmp every ~2s so a graphical run (Skyroads, the PM demos)
@@ -9231,6 +9249,7 @@ static DWORD WINAPI ui_thread(LPVOID arg)
     {   char sb[96], *sq = sb;
         sq = zput(sq, "STAGE0: window up -> start counted as SUCCEEDED (GH #132)\r\n");
         log_append(LOG_PATH, sb, sq); }
+    host_autofs_consider(g_hwnd, g_vid.mkind != VID_KIND_TEXT || g_vid.in_vesa);
     SetTimer(g_hwnd, 1, VID_PRESENT_TICK_MS, NULL);  /* fast tick; present is PHASE-gated */
     while (GetMessageA(&msg, NULL, 0, 0) > 0) { TranslateMessage(&msg); DispatchMessageA(&msg); }
     tray_remove(g_hwnd);            /* or the icon outlives the process */

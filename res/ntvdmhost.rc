@@ -191,6 +191,12 @@ BEGIN
                     IDC_S_BLINKCURSOR, "Button", BS_AUTOCHECKBOX | WS_TABSTOP,
                     14, 122, 250, 10
 
+    GROUPBOX        "Fullscreen", -1, 4, 146, 284, 32
+    LTEXT           "Start &fullscreen:", -1, 14, 162, 60, 8
+    COMBOBOX        IDC_S_AUTOFS, 78, 160, 84, 80,
+                    CBS_DROPDOWNLIST | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP | WS_GROUP
+    LTEXT           "Alt+Enter still toggles at any time.", -1, 170, 162, 112, 8
+
     /* ⛔ THERE IS NO "FULLSCREEN" GROUP, AND THAT IS THE FIX -- see the note over
          the Display settings in src/host/settings.h. Fullscreen is a borderless
          window drawn by the same path as this one, so everything above applies to

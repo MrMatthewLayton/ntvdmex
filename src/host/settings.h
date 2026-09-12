@@ -60,7 +60,7 @@ typedef enum {
     SET_SPEEDMODE,
     SET_CONVKB, SET_XMS, SET_EMS, SET_UMB, SET_A20,
     SET_WINSIZE, SET_RENDERER, SET_SCALER, SET_FILTER, SET_ASPECT,
-    SET_FRAMESKIP, SET_VSYNC, SET_BLINKCURSOR,
+    SET_FRAMESKIP, SET_VSYNC, SET_BLINKCURSOR, SET_AUTOFS,
     SET_VOLUME, SET_MUTE, SET_RATE, SET_SBMODEL, SET_SBADDR, SET_SBIRQ, SET_SBDMA,
     SET_OPL, SET_MIDI, SET_SPEAKER, SET_GUS, SET_TANDY,
     SET_HIDECURSOR, SET_SEAMLESS, SET_MSENS, SET_KBLAYOUT, SET_TYPEMATIC,
@@ -74,6 +74,8 @@ typedef enum {
     SET_STR_DRIVEC = 0, SET_STR_FLOPPYA, SET_STR_CDROM, SET_STR_SOUNDFONT,
     SET_STR_COUNT
 } set_str_id;
+
+enum { AUTOFS_ALWAYS = 0, AUTOFS_GRAPHICS = 1, AUTOFS_NEVER = 2 };
 
 /* PcSpeaker's values. Named, because `s->v[SET_SPEAKER] == 2` at a call site is
    a number nobody can check against the item list four hundred lines away. */
@@ -157,6 +159,12 @@ static const set_def SET_DEFS[SET_COUNT] = {
 { "FrameSkip",         IDC_S_FRAMESKIP,   SK_COMBO,      0,  0,   2, "0|1|2" },
 { "VSync",             IDC_S_VSYNC,       SK_CHECK,      1,  0,   1, NULL },
 { "BlinkTextCursor",   IDC_S_BLINKCURSOR, SK_CHECK,      1,  0,   1, NULL },
+/* ── START FULLSCREEN (s68, user ask). Always = every program starts fullscreen;
+     Graphics only = a program that begins in text mode (DOOM) starts in a window and
+     flips the moment it sets a graphics mode; Never = always a window. It fires ONCE
+     per process and never touches Alt+Enter -- the user can still flip by hand either
+     way. Default Never = the shipped behaviour to date. Values: AUTOFS_* below. */
+{ "StartFullscreen",   IDC_S_AUTOFS,      SK_COMBO,      2,  0,   2, "Always|Graphics only|Never" },
 /* ⛔ FULLSCREEN HAS NO SETTINGS AT ALL, AND THAT IS THE FIX. (s64)
      It briefly had two -- a resolution list and a "sharp pixels" checkbox -- and the
      user's verdict was "there's a lot of knobs to fiddle now, and none of them seem

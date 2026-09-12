@@ -70,6 +70,7 @@
 #define IDC_S_FRAMESKIP       265
 #define IDC_S_VSYNC           266
 #define IDC_S_BLINKCURSOR     267   /* checkbox: blink the text-mode cursor           */
+#define IDC_S_AUTOFS          268   /* combo: start fullscreen Always/Graphics/Never  */
 
 /* ── Audio ────────────────────────────────────────────────────────────────────── */
 #define IDC_S_VOLUME          280
