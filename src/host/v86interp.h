@@ -377,8 +377,23 @@ static int istep(icpu *c)
               uint16_t sp = (uint16_t)(c->r[4] - 2);
               wr_mem((seg_base(c->seg[2])) + sp, 2, val);
               c->r[4] = sp; c->ip = nip; return 1;
+          }
+          /* CALL FAR m16:16 (/3) and JMP FAR m16:16 (/5): the seg:off is IN MEMORY.
+             (s68) Lemmings dispatches through `jmp far [0x1fbe]` on every frame and
+             this bailed to V86 -- and in a planar mode a bail is not one instruction,
+             it is everything up to the next event, with A0000 unprotected. Same shape
+             as the scasb leak; same fix. Real mode only, like EA/9A above. */
+          if ((m.g == 3 || m.g == 5) && m.is_mem && !g_seg2lin) {
+              uint16_t seg = (uint16_t)rd_mem(m.lin + 2, 2);
+              if (m.g == 3) {
+                  uint32_t ssb = seg_base(c->seg[2]);
+                  uint16_t sp = (uint16_t)(c->r[4] - 2); wr_mem(ssb + sp, 2, c->seg[1]);
+                  sp = (uint16_t)(sp - 2);               wr_mem(ssb + sp, 2, nip);
+                  c->r[4] = (c->r[4] & 0xFFFF0000u) | sp;
+              }
+              c->seg[1] = seg; c->ip = val; return 1;
           } }
-        return 0;                                      /* g=3/5/7: far/illegal -> bail */
+        return 0;                                      /* g=7 / reg-form far: bail */
     }
 
     /* ---- TEST r/m,r (84/85); TEST AL/AX,imm (A8/A9) ----------------------- */
@@ -706,6 +721,47 @@ static int istep(icpu *c)
                                           imem_r8((seg_base(ss)) + (uint16_t)(si + 1)));
                       si = (uint16_t)(si + dir); di = (uint16_t)(di + dir); cnt--; }
         c->r[6] = si; c->r[7] = di; if (rep) c->r[1] = (uint16_t)cnt;
+        c->ip = (uint16_t)(c->ip + idx); return 1;
+    }
+    /* ── CMPS (A6/A7) and SCAS (AE/AF), with REPE (F3) / REPNE (F2). ─────────────
+         ⛔ THESE WERE UNMODELLED, AND THE BAIL LEAKED A WHOLE FRAME OF VRAM WRITES.
+         (s68, Lemmings.) In a planar mode the host is the CPU and A0000 is left
+         UNPROTECTED in V86 (the page trap freezes the rig -- see video_trap_sync).
+         Lemmings erases its sprites by `repne scasb` over an 800-byte dirty map and
+         a `rep movsb` latch copy master->page for every cell it finds. The scasb
+         bailed here, v86_run then kept the guest on the real CPU until the NEXT
+         EVENT, and every one of those latch copies landed in the live mapping,
+         invisible to st->plane[]. Measured: the erase engine's whole-run total was
+         exactly 2 x 7040 = the two full-window redraws (no scasb on that path) and
+         ZERO dirty-cell restores -- the permanent trail of un-erased lemmings.
+       ► Flags are CMP's (do_sub, no store). REP termination is on ZF after each
+         element: REPE stops on ZF=0, REPNE on ZF=1. CX=0 with a prefix = no-op and
+         the flags are left alone, as on the hardware. */
+    if (op == 0xA6 || op == 0xA7 || op == 0xAE || op == 0xAF) {
+        int w = (op & 1) ? 2 : 1, dir = (c->flags & F_DF) ? -w : w;
+        int scas = (op >= 0xAE);
+        uint32_t cnt = rep ? c->r[1] : 1, es = c->seg[0];
+        uint32_t ss = c->seg[(segov >= 0) ? segov : 3];
+        uint16_t si = c->r[6], di = c->r[7];
+        if (osz) return 0;                            /* 32-bit string op: TODO */
+        while (cnt) {
+            uint32_t a, b, dl = (seg_base(es)) + di;
+            b = imem_r8(dl);
+            if (w == 2) b |= (uint32_t)imem_r8((seg_base(es)) + (uint16_t)(di + 1)) << 8;
+            if (scas) a = grw(c, 0, w);                              /* AL/AX */
+            else {
+                uint32_t sl = (seg_base(ss)) + si;
+                a = imem_r8(sl);
+                if (w == 2) a |= (uint32_t)imem_r8((seg_base(ss)) + (uint16_t)(si + 1)) << 8;
+                si = (uint16_t)(si + dir);
+            }
+            do_sub(c, a, b, 0, w);                                   /* CMP a,b */
+            di = (uint16_t)(di + dir); cnt--;
+            if (rep == 1 && !(c->flags & F_ZF)) break;               /* REPE  */
+            if (rep == 2 &&  (c->flags & F_ZF)) break;               /* REPNE */
+        }
+        if (!scas) c->r[6] = si;
+        c->r[7] = di; if (rep) c->r[1] = (uint16_t)cnt;
         c->ip = (uint16_t)(c->ip + idx); return 1;
     }
     if (op == 0xAC || op == 0xAD) {                   /* LODS AL/AX <- DS:SI */

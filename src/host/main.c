@@ -1283,6 +1283,16 @@ static int            g_opltrace_on   = 0;
 static DWORD          g_p12_batches   = 0;
 static DWORD          g_p12_instrs    = 0;
 static DWORD          g_p12_bails     = 0;
+/* ── EVERY DISTINCT BAIL SITE, NOT THE FIRST TWELVE LINES. (s68) ──────────────────
+     In a planar mode a bail is not one instruction: v86_run keeps the guest until the
+     next EVENT with A0000 unprotected, so every VRAM write in that stretch is lost to
+     st->plane[]. The list of bail sites IS the to-do list for the interpreter, and a
+     12-line budget spent on one site hid the `repne scasb` that cost Lemmings its
+     sprite erase for four sessions. Linear table, BOP stubs excluded, printed at
+     exit with the bytes so each entry can be decoded without a dump. */
+#define P12_SITE_MAX 24
+static struct { DWORD cs, ip, n; BYTE b[8]; } g_p12_site[P12_SITE_MAX];
+static unsigned g_p12_site_n = 0, g_p12_site_lost = 0;
 #define PM_HEADLESS_MS_DEFAULT 30000             /* headless exec-loop wall-clock cap (an infinite visual demo self-exits) */
 static DWORD g_headless_ms = PM_HEADLESS_MS_DEFAULT;   /* overridable via HEADLESS_MS_PATH */
 #define PM_HEADLESS_MS g_headless_ms
@@ -4725,6 +4735,31 @@ static void host_screenshot(void)
     if (GlobalLock(hmem)) GlobalUnlock(hmem);
 }
 
+/* ► THE SOURCE BESIDE THE PICTURE. (s68) A planar frame is st->fb rendered from
+     st->plane[] at crtc_start_live, and a watchpoint on the byte a visible sprite
+     must live in recorded NO sprite write on either page. One of the two is lying;
+     the only way to tell is to have both from the same instant. Called from the
+     periodic capture right after its BMP, under cfg\planedump.flag: writes the BMP's
+     path with `.pln` = a 16-byte header (start, offset in 2-byte units, gw, gh) +
+     the four 64K planes. Caller holds no lock; this takes it. */
+static void planes_dump_beside(const char *bmp_path)
+{
+    char path[200]; int n = 0; HANDLE f;
+    DWORD hdr[4], wr; int pl;
+    while (bmp_path[n] && n < 190) { path[n] = bmp_path[n]; ++n; }
+    if (n < 4) return;
+    path[n - 3] = 'p'; path[n - 2] = 'l'; path[n - 1] = 'n'; path[n] = 0;
+    f = CreateFileA(path, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, 0, NULL);
+    if (f == INVALID_HANDLE_VALUE) return;
+    HOST_LOCK();
+    hdr[0] = g_vid.crtc_start_live; hdr[1] = g_vid.crtc_offset;
+    hdr[2] = g_vid.gw;              hdr[3] = g_vid.gh;
+    WriteFile(f, hdr, sizeof hdr, &wr, NULL);
+    for (pl = 0; pl < 4; ++pl) WriteFile(f, g_vid.plane[pl], VID_PLANE_SIZE, &wr, NULL);
+    HOST_UNLOCK();
+    CloseHandle(f);
+}
+
 /* ONE path for a keystroke, whoever produced it. The window proc used to latch
    g_irq1_pending itself and never call host_irq_sink, which meant real keys bypassed BOTH
    the async delivery added for input lag AND the PIC that gates re-entry -- so every fix
@@ -4997,11 +5032,13 @@ static DWORD WINAPI heartbeat_thread(LPVOID pv)
     int n;
     (void)pv;
     for (n = 0; n < 80 && g_running; ++n) {
-        /* ⚠ 384, NOT 256. This line is already ~215 characters, and a fixed log buffer
-             in this file is a silent budget -- adding one field to a 247-char line in a
-             char[256] killed the host earlier this session (see the note on
-             dpmi_dispatch_to_pm_handler's lb). The fields below add ~36. Count first. */
-        char b[384], *q = b;
+        /* ⚠⚠ 640, AND MEASURE THE LINE IN A REAL LOG BEFORE ADDING A FIELD. A fixed log
+             buffer in this file is a silent budget: adding one field to a 247-char line
+             in a char[256] killed the host once (see dpmi_dispatch_to_pm_handler's lb),
+             and this line was 392 bytes in a char[384] from s62's `t_ms=`/`code@csip=`
+             until s68 -- an 8-byte stack overwrite on every beat that nothing reported.
+             With the `crtc=` fields it measures ~434. */
+        char b[640], *q = b;
         DWORD cs = 0, ip = 0, efl = 0;
         if (g_tib_dbg) {
             cs  = VDM_REG(g_tib_dbg, VTIB_CS)  & 0xFFFF;
@@ -5042,6 +5079,12 @@ static DWORD WINAPI heartbeat_thread(LPVOID pv)
         q = zput(q, " p3da=0x");     q = zhex(q, g_vid.p3da_reads);
         q = zput(q, "/edges=0x");    q = zhex(q, g_vid.vbl_edges);
         q = zput(q, "/last=0x");     q = zhexb(q, g_vid.retrace);
+        /* ► THE LIVE DISPLAY START, so a VRAM watchpoint can be AIMED. The exit
+             report prints it once, at exit, when the guest is back in text mode --
+             useless for `offset = start + y*stride + x/8` during gameplay. (s68) */
+        q = zput(q, " crtc=0x");     q = zhex(q, g_vid.crtc_start_live);
+        q = zput(q, "/flips=0x");    q = zhex(q, g_vid.crtc_start_writes);
+        q = zput(q, "/ofs=0x");      q = zhexb(q, g_vid.crtc_offset);
         /* ► AND THE CLOCK THOSE TWO ARE RATES AGAINST. Without it the only time axis
              on this line is irq0, and irq0 is the PIT -- which a guest REPROGRAMS.
              Reading frames-per-second off a beat count that the guest itself can
@@ -8597,7 +8640,11 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
                 const unsigned d = (unsigned)sizeof path - 7;   /* the "00" in shot00 */
                 path[d]     = (char)('0' + (cap_seq / 10) % 10);
                 path[d + 1] = (char)('0' + cap_seq % 10);
-                if (present_ddraw_save_bmp(&g_pd, path) == 0) ++cap_seq;
+                if (present_ddraw_save_bmp(&g_pd, path) == 0) {
+                    ++cap_seq;
+                    if (GetFileAttributesA(CFG_("planedump.flag")) != INVALID_FILE_ATTRIBUTES)
+                        planes_dump_beside(path);
+                }
                 else if (!cap_failed) {
                     char eb[320], *eq = eb;
                     cap_failed = 1;
@@ -21861,18 +21908,23 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             long ran = host_interp_paced(tib, P12_SLICE);
             if (ran > 0) { g_p12_batches++; g_p12_instrs += (DWORD)ran; continue; }
             /* NAME THE OPCODE. Every bail is guest execution we cannot see, so the
-               list of declined opcodes IS the to-do list for this path (#27). */
-            { static int s_bud_p12 = 12;
-              if (s_bud_p12 > 0) {
-                DWORD c3 = VDM_REG(tib, VTIB_CS) & 0xFFFF, i3 = VDM_REG(tib, VTIB_EIP) & 0xFFFF;
-                const volatile BYTE *ip3 = (const volatile BYTE *)((c3 << 4) + i3);
+               list of declined opcodes IS the to-do list for this path (#27).
+               ⚠ NOT ON A BOP: our own `C4 C4 nn` stubs are the overwhelming majority
+               of bails and are not unmodelled opcodes. Per-site table, reported at
+               exit -- see g_p12_site. */
+            { DWORD c3 = VDM_REG(tib, VTIB_CS) & 0xFFFF, i3 = VDM_REG(tib, VTIB_EIP) & 0xFFFF;
+              const volatile BYTE *ip3 = (const volatile BYTE *)((c3 << 4) + i3);
+              if (!(ip3[0] == 0xC4 && ip3[1] == 0xC4)) {
                 unsigned k5;
-                --s_bud_p12;
-                p = zput(p, "P12-BAIL at 0x"); p = zhex(p, c3);
-                p = zput(p, ":0x"); p = zhex(p, i3); p = zput(p, " bytes:");
-                for (k5 = 0; k5 < 8; ++k5) { p = zput(p, " "); p = zhexb(p, ip3[k5]); }
-                p = zput(p, "\r\n");
-                log_append(LOG_PATH, base, p); p = base;
+                for (k5 = 0; k5 < g_p12_site_n; ++k5)
+                    if (g_p12_site[k5].cs == c3 && g_p12_site[k5].ip == i3) break;
+                if (k5 < g_p12_site_n) g_p12_site[k5].n++;
+                else if (g_p12_site_n < P12_SITE_MAX) {
+                    unsigned k6;
+                    g_p12_site[k5].cs = c3; g_p12_site[k5].ip = i3; g_p12_site[k5].n = 1;
+                    for (k6 = 0; k6 < 8; ++k6) g_p12_site[k5].b[k6] = ip3[k6];
+                    ++g_p12_site_n;
+                } else ++g_p12_site_lost;
               } }
             g_p12_bails++;
         }
@@ -25421,6 +25473,20 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         p = zput(p, (g_async_site_full ? "(FULL)" : ""));
         p = zput(p, " pmstretch_max_us="); p = zhex(p, g_pm_stretch_max_us);
         p = zput(p, "\r\n"); }
+      /* The interpreter's to-do list: every non-BOP site it declined, with the bytes. */
+      { unsigned k4;
+        log_append(LOG_PATH, report, p); p = report;      /* flush: the table may be long */
+        p = zput(p, "STAGE2: P12 non-BOP bail sites="); p = zdec(p, g_p12_site_n);
+        p = zput(p, " lost="); p = zdec(p, g_p12_site_lost); p = zput(p, "\r\n");
+        for (k4 = 0; k4 < g_p12_site_n; ++k4) {
+            unsigned k5;
+            p = zput(p, "  bail cs:ip="); p = zhex(p, g_p12_site[k4].cs);
+            p = zput(p, ":"); p = zhex(p, g_p12_site[k4].ip);
+            p = zput(p, " n="); p = zdec(p, g_p12_site[k4].n); p = zput(p, " bytes:");
+            for (k5 = 0; k5 < 8; ++k5) { p = zput(p, " "); p = zhexb(p, g_p12_site[k4].b[k5]); }
+            p = zput(p, "\r\n");
+            if (p > report + sizeof report - 256) { log_append(LOG_PATH, report, p); p = report; }
+        } }
       p = zput(p, "STAGE2: mode sets:");
       for (i = 0; i < g_vid.mode_qn; ++i) {
           p = zput(p, " mode=0x"); p = zhexb(p, g_vid.mode_q[i].mode);

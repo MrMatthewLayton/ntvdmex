@@ -677,6 +677,68 @@ int main(void)
             "66 61: POPAD restores full 32-bit EAX/EBX/EDI");
       CHECK((c.r[4] & 0xFFFF) == 0x0200, "popad: SP back to 0x0200"); }
 
+    /* ---- T62: LEMMINGS' DIRTY-MAP SCAN -- `repne scasb` (F2 AE) MUST BE MODELLED.
+         (s68) The erase engine is: mov al,1 / mov cx,0x28 / repne scasb / jz found.
+         Unmodelled, the scasb bailed to V86 and the latch copies that followed it
+         landed in the unprotected A0000 window, so no sprite was ever erased.
+         Pinned as the guest's own idiom: ES:DI over a 40-byte row with a 1 at [5]. */
+    { icpu c = mkcpu(); BYTE p[] = { 0xF2, 0xAE, 0x74, 0x02, 0xB0, 0x55, 0xB0, 0xAA };
+      /* repne scasb; jz +2; mov al,55h; mov al,AAh */
+      uint32_t b = (uint32_t)0x2000 << 4;
+      memset(MEM + b, 0, 0x28); MEM[b + 5] = 1;
+      c.seg[0] = 0x2000; c.r[7] = 0; c.r[0] = 0x01; c.r[1] = 0x28;
+      load(&c, 0x1000, 0, p, sizeof p);
+      CHECK(step1(&c) == 1, "F2 AE: repne scasb is modelled (no bail)");
+      CHECK((c.flags & F_ZF) && (c.r[7] & 0xFFFF) == 6 && (c.r[1] & 0xFFFF) == 0x28 - 6,
+            "repne scasb: stops ONE PAST the match with ZF=1, CX=0x22");
+      step1(&c); step1(&c);
+      CHECK((c.r[0] & 0xFF) == 0xAA, "repne scasb + jz: the `found` branch is taken"); }
+
+    /* ---- T63: repne scasb with NO match runs CX to 0 and leaves ZF=0 ---------- */
+    { icpu c = mkcpu(); BYTE p[] = { 0xF2, 0xAE };
+      uint32_t b = (uint32_t)0x2000 << 4;
+      memset(MEM + b, 0, 0x28);
+      c.seg[0] = 0x2000; c.r[7] = 0; c.r[0] = 0x01; c.r[1] = 0x28;
+      load(&c, 0x1000, 0, p, sizeof p); step1(&c);
+      CHECK(!(c.flags & F_ZF) && (c.r[7] & 0xFFFF) == 0x28 && (c.r[1] & 0xFFFF) == 0,
+            "repne scasb: no match -> DI+=CX, CX=0, ZF=0"); }
+
+    /* ---- T64: repe scasb (F3 AE) finds the END of a run of matches ------------ */
+    { icpu c = mkcpu(); BYTE p[] = { 0xF3, 0xAE };
+      uint32_t b = (uint32_t)0x2000 << 4;
+      memset(MEM + b, 1, 0x28); MEM[b + 3] = 0;
+      c.seg[0] = 0x2000; c.r[7] = 0; c.r[0] = 0x01; c.r[1] = 0x28;
+      load(&c, 0x1000, 0, p, sizeof p); step1(&c);
+      CHECK(!(c.flags & F_ZF) && (c.r[7] & 0xFFFF) == 4 && (c.r[1] & 0xFFFF) == 0x28 - 4,
+            "repe scasb: stops one past the first mismatch, ZF=0"); }
+
+    /* ---- T65: rep with CX=0 is a no-op that leaves the flags alone ----------- */
+    { icpu c = mkcpu(); BYTE p[] = { 0xF2, 0xAE };
+      c.seg[0] = 0x2000; c.r[7] = 7; c.r[0] = 0x01; c.r[1] = 0; c.flags |= F_ZF | F_CF;
+      load(&c, 0x1000, 0, p, sizeof p); step1(&c);
+      CHECK((c.flags & (F_ZF | F_CF)) == (F_ZF | F_CF) && (c.r[7] & 0xFFFF) == 7,
+            "repne scasb CX=0: nothing happens, flags untouched"); }
+
+    /* ---- T66: cmpsb (A6) compares DS:SI with ES:DI, CMP flags, both advance --- */
+    { icpu c = mkcpu(); BYTE p[] = { 0xA6 };
+      uint32_t s = (uint32_t)0x3000 << 4, d = (uint32_t)0x4000 << 4;
+      MEM[s] = 0x10; MEM[d] = 0x20;
+      c.seg[3] = 0x3000; c.seg[0] = 0x4000; c.r[6] = 0; c.r[7] = 0;
+      load(&c, 0x1000, 0, p, sizeof p); step1(&c);
+      CHECK((c.flags & F_CF) && !(c.flags & F_ZF) && (c.r[6] & 0xFFFF) == 1 && (c.r[7] & 0xFFFF) == 1,
+            "cmpsb: 10h-20h -> CF=1 ZF=0, SI and DI advance"); }
+
+    /* ---- T67: repe cmpsw (F3 A7) with DF=1 walks DOWN by words ---------------- */
+    { icpu c = mkcpu(); BYTE p[] = { 0xF3, 0xA7 };
+      uint32_t s = (uint32_t)0x3000 << 4, d = (uint32_t)0x4000 << 4;
+      MEM[s+8]=0x11; MEM[s+9]=0x22; MEM[d+8]=0x11; MEM[d+9]=0x22;   /* equal   */
+      MEM[s+6]=0x33; MEM[s+7]=0x44; MEM[d+6]=0x33; MEM[d+7]=0x45;   /* differ  */
+      c.seg[3] = 0x3000; c.seg[0] = 0x4000; c.r[6] = 8; c.r[7] = 8; c.r[1] = 4;
+      c.flags |= F_DF;
+      load(&c, 0x1000, 0, p, sizeof p); step1(&c);
+      CHECK(!(c.flags & F_ZF) && (c.r[6] & 0xFFFF) == 4 && (c.r[7] & 0xFFFF) == 4 && (c.r[1] & 0xFFFF) == 2,
+            "repe cmpsw DF=1: two words compared, stops after the mismatch, SI/DI -= 4"); }
+
     printf("\n%d checks, %d failed\n", total, fails);
     return fails ? 1 : 0;
 }
