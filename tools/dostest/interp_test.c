@@ -739,6 +739,30 @@ int main(void)
       CHECK(!(c.flags & F_ZF) && (c.r[6] & 0xFFFF) == 4 && (c.r[7] & 0xFFFF) == 4 && (c.r[1] & 0xFFFF) == 2,
             "repe cmpsw DF=1: two words compared, stops after the mismatch, SI/DI -= 4"); }
 
+    /* ---- T68-T71: the rest of Lemmings' bail table -- CBW, CWD, XLAT, LES mem ---- */
+    { icpu c = mkcpu(); BYTE p[] = { 0x98, 0x99 };        /* CBW; CWD */
+      c.r[0] = 0x1280; c.r[2] = 0x1234;
+      load(&c, 0x1000, 0, p, sizeof p); step1(&c);
+      CHECK((c.r[0] & 0xFFFF) == 0xFF80, "98: CBW sign-extends AL=80h to AX=FF80h");
+      step1(&c);
+      CHECK((c.r[2] & 0xFFFF) == 0xFFFF, "99: CWD sign-extends AX into DX"); }
+    { icpu c = mkcpu(); BYTE p[] = { 0xD7 };              /* XLAT */
+      uint32_t b = (uint32_t)0x5000 << 4;
+      MEM[b + 0x100 + 7] = 0x5A;
+      c.seg[3] = 0x5000; c.r[3] = 0x100; c.r[0] = 0x1107;
+      load(&c, 0x1000, 0, p, sizeof p); step1(&c);
+      CHECK((c.r[0] & 0xFFFF) == 0x115A, "D7: XLAT AL <- [DS:BX+AL], AH kept"); }
+    { icpu c = mkcpu(); BYTE p[] = { 0xC4, 0x1E, 0xBE, 0x1F };   /* LES BX,[1FBEh] */
+      uint32_t b = (uint32_t)0x5000 << 4;
+      MEM[b+0x1FBE]=0x34; MEM[b+0x1FBF]=0x12; MEM[b+0x1FC0]=0x00; MEM[b+0x1FC1]=0xA0;
+      c.seg[3] = 0x5000; c.seg[0] = 0;
+      load(&c, 0x1000, 0, p, sizeof p);
+      CHECK(step1(&c) == 1, "C4 1E: LES (memory form) is modelled");
+      CHECK((c.r[3] & 0xFFFF) == 0x1234 && c.seg[0] == 0xA000, "LES BX,[m]: BX=off, ES=seg"); }
+    { icpu c = mkcpu(); BYTE p[] = { 0xC4, 0xC4, 0x21 };  /* the VDM BOP: must STILL bail */
+      load(&c, 0x1000, 0, p, sizeof p);
+      CHECK(step1(&c) == 0 && c.ip == 0, "C4 C4 nn: the BOP still bails, IP untouched"); }
+
     printf("\n%d checks, %d failed\n", total, fails);
     return fails ? 1 : 0;
 }

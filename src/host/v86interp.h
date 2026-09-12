@@ -834,6 +834,39 @@ static int istep(icpu *c)
         c->r[4] = (c->r[4] & 0xFFFF0000u) | (uint16_t)(sp + 2);
         c->ip = (uint16_t)(c->ip + idx); return 1;
     }
+    /* ── CBW (98) / CWD (99), XLAT (D7), LES/LDS (C4/C5, MEMORY form). (s68) ────────
+         Named by the P12 bail table on Lemmings once the scasb was modelled: 270
+         bails a run on CBW alone, each one a stretch of V86 with A0000 unprotected.
+       ► C4 is ALSO the VDM BOP -- but only as `C4 C4 nn`, i.e. the modrm byte 0xC4
+         (mod=3, the REGISTER form, which LES cannot take). A memory-form C4/C5 is a
+         real LES/LDS and cannot be a BOP; the register form still bails, so every
+         service call still reaches the kernel as before. */
+    if (op == 0x98) {                                  /* CBW: AX <- sign(AL) */
+        if (osz) return 0;                             /* CWDE: TODO */
+        s16(c, 0, (uint16_t)(int16_t)(int8_t)(c->r[0] & 0xFF));
+        c->ip = (uint16_t)(c->ip + idx); return 1;
+    }
+    if (op == 0x99) {                                  /* CWD: DX <- sign(AX) */
+        if (osz) return 0;                             /* CDQ: TODO */
+        s16(c, 2, (c->r[0] & 0x8000u) ? 0xFFFFu : 0u);
+        c->ip = (uint16_t)(c->ip + idx); return 1;
+    }
+    if (op == 0xD7) {                                  /* XLAT: AL <- [DS:BX+AL] */
+        uint32_t ss = c->seg[(segov >= 0) ? segov : 3];
+        uint32_t lin = (seg_base(ss)) + (uint16_t)((c->r[3] & 0xFFFF) + (c->r[0] & 0xFF));
+        if (lin >= GUEST_HI) return 0;
+        s8(c, 0, imem_r8(lin));
+        c->ip = (uint16_t)(c->ip + idx); return 1;
+    }
+    if ((op == 0xC4 || op == 0xC5) && CB(idx) != 0xC4 && (CB(idx) >> 6) != 3) {
+        modrm_t m;
+        if (osz || g_seg2lin) return 0;                /* 32-bit / PM: TODO */
+        idx += decode_modrm(c, cb, idx, segov, &m);
+        if (!m.is_mem || m.lin + 4 > GUEST_HI) return 0;
+        s16(c, m.g, (uint16_t)rd_mem(m.lin, 2));
+        c->seg[op == 0xC4 ? 0 : 3] = (uint16_t)rd_mem(m.lin + 2, 2);
+        c->ip = (uint16_t)(c->ip + idx); return 1;
+    }
     if (op >= 0xE0 && op <= 0xE3) {
         int8_t rel = (int8_t)CB(idx++); int take;
         if (op == 0xE3) take = (c->r[1] == 0);        /* JCXZ */

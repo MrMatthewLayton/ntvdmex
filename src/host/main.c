@@ -20452,7 +20452,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     if (GetFileAttributesA(WOWTRY_FLAG) != INVALID_FILE_ATTRIBUTES)
         wow_probe_ldt_matrix(g_wow_nmod ? "wow-early" : "dos-early");
     if (g_wow_nmod) {                        /* GH #128: WOW selector stage */
-        log_append(LOG_PATH, report, p); p = report;
+        log_append(LOG_PATH, base, p); p = base;
         /* The DOS bisection puts the flip between csrss_get_command() and
            v86_get_tib(). The latter is one call and costs nothing to try here, so
            try it BEFORE concluding the blocker is the command fetch. */
@@ -25452,6 +25452,11 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         p = zput(p, " plane-nonzero=");
         for (pl = 0; pl < 4; ++pl) { p = zhex(p, nz[pl]); p = zput(p, pl<3?"/":""); }
         p = zput(p, "\r\n"); }
+      /* ⚠ FLUSH FIRST. The rsite/crtc/video-now block above can fill the 8 KB report
+           on its own, and log_append writes [buf,end) UNCLAMPED: the ivt08 line was
+           cut at `bail=000`, the next two blocks vanished, and the overrun went onto
+           the stack. (s68 -- the third truncation of this report in two sessions.) */
+      log_append(LOG_PATH, base, p); p = base;
       { const volatile BYTE *z0 = (const volatile BYTE *)0;
         DWORD cs2 = VDM_REG(tib, VTIB_CS) & 0xFFFF, ip2 = VDM_REG(tib, VTIB_EIP) & 0xFFFF;
         const volatile BYTE *cd = (const volatile BYTE *)((cs2 << 4) + ip2);
@@ -25475,7 +25480,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         p = zput(p, "\r\n"); }
       /* The interpreter's to-do list: every non-BOP site it declined, with the bytes. */
       { unsigned k4;
-        log_append(LOG_PATH, report, p); p = report;      /* flush: the table may be long */
+        log_append(LOG_PATH, base, p); p = base;      /* flush: the table may be long */
         p = zput(p, "STAGE2: P12 non-BOP bail sites="); p = zdec(p, g_p12_site_n);
         p = zput(p, " lost="); p = zdec(p, g_p12_site_lost); p = zput(p, "\r\n");
         for (k4 = 0; k4 < g_p12_site_n; ++k4) {
@@ -25485,8 +25490,9 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             p = zput(p, " n="); p = zdec(p, g_p12_site[k4].n); p = zput(p, " bytes:");
             for (k5 = 0; k5 < 8; ++k5) { p = zput(p, " "); p = zhexb(p, g_p12_site[k4].b[k5]); }
             p = zput(p, "\r\n");
-            if (p > report + sizeof report - 256) { log_append(LOG_PATH, report, p); p = report; }
+            if (p > report + sizeof report - 256) { log_append(LOG_PATH, base, p); p = base; }
         } }
+      log_append(LOG_PATH, base, p); p = base;
       p = zput(p, "STAGE2: mode sets:");
       for (i = 0; i < g_vid.mode_qn; ++i) {
           p = zput(p, " mode=0x"); p = zhexb(p, g_vid.mode_q[i].mode);
