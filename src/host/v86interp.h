@@ -841,6 +841,25 @@ static int istep(icpu *c)
          (mod=3, the REGISTER form, which LES cannot take). A memory-form C4/C5 is a
          real LES/LDS and cannot be a BOP; the register form still bails, so every
          service call still reaches the kernel as before. */
+    /* POP r/m16 (8F /0) and WAIT (9B). Named by the bail table on Bubbles (QBasic,
+       mode 12h): `pop [bx+7]` alone bailed 1,158,586 times in one run -- the QBasic
+       runtime's calling convention -- and each bail is a stretch of lost pixels. */
+    if (op == 0x8F) {
+        modrm_t m; uint16_t sp, v;
+        if (osz || g_seg2lin) return 0;
+        idx += decode_modrm(c, cb, idx, segov, &m);
+        if (m.g != 0 || (m.is_mem && m.lin + 2 > GUEST_HI)) return 0;
+        sp = (uint16_t)c->r[4];
+        v = (uint16_t)rd_mem((seg_base(c->seg[2])) + sp, 2);
+        c->r[4] = (c->r[4] & 0xFFFF0000u) | (uint16_t)(sp + 2);   /* SP moves FIRST:
+                                                    `pop [sp-relative]` sees the new SP */
+        if (m.is_mem) wr_mem(m.lin, 2, v); else s16(c, m.rm_reg, v);
+        c->ip = (uint16_t)(c->ip + idx); return 1;
+    }
+    if (op == 0x9B) { c->ip = (uint16_t)(c->ip + idx); return 1; }   /* WAIT: no FPU here */
+    /* LAHF (9F) / SAHF (9E): AH <-> SF ZF AF PF CF (bit 1 reads as 1). Bubbles: 16,586. */
+    if (op == 0x9F) { s8(c, 4, (uint8_t)((c->flags & 0xD5u) | 0x02u)); c->ip = (uint16_t)(c->ip + idx); return 1; }
+    if (op == 0x9E) { c->flags = (c->flags & ~0xD5u) | (g8(c, 4) & 0xD5u); c->ip = (uint16_t)(c->ip + idx); return 1; }
     if (op == 0x98) {                                  /* CBW: AX <- sign(AL) */
         if (osz) return 0;                             /* CWDE: TODO */
         s16(c, 0, (uint16_t)(int16_t)(int8_t)(c->r[0] & 0xFF));

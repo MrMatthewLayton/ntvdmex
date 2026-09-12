@@ -763,6 +763,25 @@ int main(void)
       load(&c, 0x1000, 0, p, sizeof p);
       CHECK(step1(&c) == 0 && c.ip == 0, "C4 C4 nn: the BOP still bails, IP untouched"); }
 
+    /* ---- T72: POP r/m16 (8F /0) -- Bubbles' `pop [bx+7]`, 1.16M bails a run ------- */
+    { icpu c = mkcpu(); BYTE p[] = { 0x8F, 0x47, 0x07, 0x9B };   /* POP [BX+7]; WAIT */
+      uint32_t sb = (uint32_t)0x8000 << 4, db = (uint32_t)0x5000 << 4;
+      c.seg[2] = 0x8000; c.r[4] = 0x0100; MEM[sb+0x100] = 0xCD; MEM[sb+0x101] = 0xAB;
+      c.seg[3] = 0x5000; c.r[3] = 0x20;
+      load(&c, 0x1000, 0, p, sizeof p); step1(&c);
+      CHECK((MEM[db+0x27] | (MEM[db+0x28] << 8)) == 0xABCD && (c.r[4] & 0xFFFF) == 0x0102,
+            "8F /0: POP [BX+7] stores the word and SP += 2");
+      CHECK(step1(&c) == 1 && c.ip == 4, "9B: WAIT is a no-op"); }
+
+    /* ---- T73: LAHF/SAHF round-trip (9F/9E) ------------------------------------- */
+    { icpu c = mkcpu(); BYTE p[] = { 0x9F, 0x9E };
+      c.flags = 0x0002 | F_CF | F_ZF | F_SF;
+      load(&c, 0x1000, 0, p, sizeof p); step1(&c);
+      CHECK(((c.r[0] >> 8) & 0xFF) == (0x02 | F_CF | F_ZF | F_SF), "9F: LAHF copies SF/ZF/CF + bit1 into AH");
+      c.flags = 0x0002; c.r[0] = (c.r[0] & 0xFF) | ((F_PF | F_AF) << 8);
+      step1(&c);
+      CHECK((c.flags & 0xD5) == (F_PF | F_AF), "9E: SAHF loads PF/AF from AH, clears the rest"); }
+
     printf("\n%d checks, %d failed\n", total, fails);
     return fails ? 1 : 0;
 }
