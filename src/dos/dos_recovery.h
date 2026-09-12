@@ -13,8 +13,19 @@
  *   reboot and shutdown all failed -- and one of them ALSO left the IFEO key
  *   removed, so every later run silently measured stock ntvdm.
  *
- * The policy: count CONSECUTIVE failed starts. A start counts as failed until
- * the run ends cleanly, so a hang or a crash leaves the count raised.
+ * The policy: count CONSECUTIVE failed STARTS. A start has FAILED until the host
+ * has a window on the desktop (or its tray icon, for a Win16 launch): both s52
+ * wedges were blocking Win32 calls BEFORE the window existed, and a host with a
+ * window can always be closed, so the machine has not lost its VDM.
+ *
+ * ⚠⚠ IT USED TO SAY "until the run ends cleanly", AND THAT UNINSTALLED US ON A
+ *   HEALTHY MACHINE (2026-09-12). Closing the game window ends in TerminateProcess
+ *   (s63, deliberately -- a guest spinning in VdmStartExecution never returns), so
+ *   it never reached the clean-exit path; neither does a guest that crashes
+ *   (Mario, Heretic). The user play-tested three games, quit each by its X button,
+ *   and the FOURTH launch removed the IFEO key: "I couldn't get any DOS apps
+ *   running in NTVDMEX" -- every one of them had silently run under stock ntvdm.
+ *   A crash mid-game is a bug in that game's run, not evidence the VDM is broken.
  *
  *   0 .. SAFE-1        run normally
  *   SAFE .. GONE-1     run in SAFE MODE -- skip everything optional

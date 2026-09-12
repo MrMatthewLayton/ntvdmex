@@ -189,6 +189,10 @@
 /* GH #11: one DLL path per line, '#' comments. See docs/sdk/vdd-sdk.md. */
 #define VDDLIST_PATH CFG_("vdd.txt")
 #define QIMODE_PATH CFG_("qimode.txt")
+/* FIXED_NTVDMSTATE ([0x714]) initial value override, hex, up to 8 digits. Absent = 0.
+   Exists so the rig can try a different starting word without a rebuild -- see the
+   note at the v86_init call for why the word must be INITIALISED at all. */
+#define VDMSTATE_PATH CFG_("vdmstate.txt")
 /* Headless wall-clock cap override, decimal milliseconds, also on the share. The 30 s
    default is right for an unattended test that must not wedge the watcher, but an
    INTERACTIVE test on the box -- keylog, where a human walks over and presses every key
@@ -3013,10 +3017,16 @@ static int dos_terminate(dos_machine_t *m, void *tib, char **pp, char *base)
      and the fix needs a registry edit with no working VDM to make it from.
      Session 52 wedged the rig twice in one day, both on a blocking Win32 call
      before the host had a window; neither could be recovered remotely.
-   The counter is raised on every start and cleared only when a run ENDS CLEANLY,
-   so a hang or a crash leaves it raised. Three strikes and we drop the IFEO
-   value: better to hand the machine back to Microsoft's ntvdm than to leave it
-   with no working 16-bit subsystem at all. See src/dos/dos_recovery.h. */
+   The counter is raised on every start and cleared THE MOMENT THE HOST HAS A
+   WINDOW (recovery_started, on the UI thread) -- that is the point past which the
+   s52 shape cannot happen, because a host with a window can be closed. Three
+   strikes and we drop the IFEO value: better to hand the machine back to
+   Microsoft's ntvdm than to leave it with no working 16-bit subsystem at all.
+   ⛔ IT WAS "cleared only on a clean exit" UNTIL 2026-09-12, AND THAT UNINSTALLED
+     US ON A HEALTHY BOX: the X button ends in TerminateProcess (s63) and a guest
+     crash never exits cleanly either, so three ordinary play-tests were three
+     strikes and the user's next launch silently ran stock ntvdm for the rest of
+     the day. See src/dos/dos_recovery.h. */
 #define STARTFAIL_PATH OUT_("startfail.txt")
 static dos_start_mode g_start_mode = DOS_START_NORMAL;
 
@@ -3045,7 +3055,9 @@ static void recovery_write(unsigned v)
     CloseHandle(h);
 }
 
-/* Cleared only from the clean-exit path: an aborted run must leave it raised. */
+/* The start SUCCEEDED: the host has a window (or tray icon) on the desktop. Called
+   from the UI thread right after ShowWindow/tray_add, and again from the clean-exit
+   path so a headless run that never got that far still clears on its way out. */
 static void recovery_ok(void) { DeleteFileA(STARTFAIL_PATH); }
 
 /* ── ★ THE INSTALLER. (GH #13) ───────────────────────────────────────────────────
@@ -9163,6 +9175,15 @@ static DWORD WINAPI ui_thread(LPVOID arg)
          timer and the tray callbacks); only whether anyone sees it changes. */
     if (g_wow_launch) { tray_add(hi, g_hwnd); }
     else              { ShowWindow(g_hwnd, SW_SHOW); UpdateWindow(g_hwnd); }
+    /* ★ THE START HAS SUCCEEDED -- say so NOW, not at exit. (GH #132, 2026-09-12)
+         From here the user can close us, so the "no working VDM on the box" failure
+         the three-strikes counter defends against can no longer happen. Clearing it
+         at exit instead counted every X-button quit and every guest crash as a
+         failed start, and three play-tests uninstalled the host. */
+    recovery_ok();
+    {   char sb[96], *sq = sb;
+        sq = zput(sq, "STAGE0: window up -> start counted as SUCCEEDED (GH #132)\r\n");
+        log_append(LOG_PATH, sb, sq); }
     SetTimer(g_hwnd, 1, VID_PRESENT_TICK_MS, NULL);  /* fast tick; present is PHASE-gated */
     while (GetMessageA(&msg, NULL, 0, 0) > 0) { TranslateMessage(&msg); DispatchMessageA(&msg); }
     tray_remove(g_hwnd);            /* or the icon outlives the process */
@@ -20338,6 +20359,43 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     v86_setup_memory();
     st = v86_init();
     p = zput(p, "STAGE1: v86_init NTSTATUS=0x"); p = zhex(p, (unsigned)st); p = zput(p, "\r\n");
+    /* ── ⛔⛔⛔ FIXED_NTVDMSTATE ([0x714]) IS INHERITED GARBAGE UNTIL SOMEONE WRITES IT.
+         (2026-09-12: "no DOS app runs on the rig" after a REBOOT, host gone in <1 s.)
+         VdmInitialize does not define this word; it holds whatever the machine's
+         real-mode boot left in physical low memory, so it changes PER BOOT. Since the
+         Sep 9 boot it read 0xc0003232 and everything worked; after this morning's
+         reboot it read 0xc0002979 -- bit 0 (VDM_INT_HARDWARE pending) SET -- and the
+         kernel dutifully raised VIP in the guest's very first EFLAGS (0x00130002).
+         The first STI with VIP set is a raw #GP, and XP tears the VDM down silently
+         (run 71 watched it under a kernel debugger; see dpmi_async_inject_pm). So the
+         host died after its first IRQ0 check on EVERY launch, the three-strikes
+         counter then removed the IFEO key, and every later launch was stock ntvdm.
+       ► Stock ntvdm's live dump (build/stockdumps/130913, +0x714) reads 0x00300200:
+         no 0xc000 high bits, nothing pending -- it starts from a DEFINED word. So do
+         we, now: zero, or cfg\vdmstate.txt. The kernel sets bits 0-1 when it queues
+         and dpmi_enter.S sets bit 9 on PM entry; nothing else needs to be pre-set. */
+    {   volatile DWORD *vs = (volatile DWORD *)(ULONG_PTR)0x714;
+        DWORD inherited = *vs, want = 0;
+        HANDLE h = CreateFileA(VDMSTATE_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                               NULL, OPEN_EXISTING, 0, NULL);
+        if (h != INVALID_HANDLE_VALUE) {
+            char c[9]; DWORD rd = 0; int i;
+            ReadFile(h, c, 8, &rd, NULL);
+            CloseHandle(h);
+            for (i = 0; i < (int)rd; ++i) {
+                int d = -1;
+                if (c[i] >= '0' && c[i] <= '9') d = c[i] - '0';
+                else if (c[i] >= 'a' && c[i] <= 'f') d = c[i] - 'a' + 10;
+                else if (c[i] >= 'A' && c[i] <= 'F') d = c[i] - 'A' + 10;
+                if (d < 0) break;
+                want = (want << 4) | (DWORD)d;
+            }
+        }
+        *vs = want;
+        p = zput(p, "STAGE1: FIXED_NTVDMSTATE [0x714] inherited=0x"); p = zhex(p, inherited);
+        p = zput(p, " -> set 0x"); p = zhex(p, want);
+        p = zput(p, h != INVALID_HANDLE_VALUE ? " (cfg\\vdmstate.txt)\r\n" : "\r\n");
+    }
     /* ── THE CLEAN 2x2. ─────────────────────────────────────────────────────────────
          The first differential compared a WOW probe HERE against a DOS probe placed
          ~500 lines later, after CSRSS and the whole DOS machine were built. That is two

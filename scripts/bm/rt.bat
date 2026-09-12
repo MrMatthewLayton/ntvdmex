@@ -234,6 +234,8 @@ rem The host APPENDS to its log, so a stale one makes result_<T>.log whatever ra
 rem last followed by this run -- that cost a whole session's wrong conclusions.
 del /q "%OUT%\ntvdmhost.log" >nul 2>&1
 del /q "%OUT%\shot*.bmp" >nul 2>&1
+rem GH #132: a taskkill above is an unclean exit; the counter must not carry over.
+del /q "%OUT%\startfail.txt" >nul 2>&1
 
 rem QUOTED: the share path contains "Documents and Settings", and an unquoted path
 rem with a space used to be split into program + arguments at the first one.
