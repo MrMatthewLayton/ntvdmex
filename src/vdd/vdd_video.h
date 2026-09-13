@@ -300,11 +300,20 @@ typedef struct video_state {
     uint64_t p3da_last_line;
     uint8_t  p3da_last_bit0, p3da_have_last;
     uint32_t p3da_hbl_owed;   /* blanks reported by that rule (STAGE2)               */
-    /* The last VID_P3DA_RING polls: model microseconds and the byte returned. A
-       scanline-counting loop is ~1000 polls in 85 million, invisible in any
-       histogram; the host dumps this ring when the guest latches the 8254, which is
-       how such a loop ends (Lemmings' calibration, s69). */
+    /* ── ⚠ DEBUG SCAFFOLDING, OFF UNLESS ASKED FOR. ─────────────────────────────────
+         The last VID_P3DA_RING polls: model microseconds and the byte returned. A
+         scanline-counting loop is ~1000 polls in 85 million, invisible in any
+         histogram, so the host dumps this ring when the guest latches the 8254 --
+         which is how such a loop ends (Lemmings' calibration, s69).
+       ⚠⚠ `ring_on` GATES IT, AND DEFAULTS TO 0, because both halves are the kind of
+         cost this project has been bitten by: the stores sit on 0x3DA, the single
+         hottest path in the program (85 MILLION reads in a Lemmings run, and the
+         port trap is the measured ceiling), and the dump is ~43 log_append calls
+         made from iio_out -- i.e. FILE I/O UNDER g_lock from inside the planar
+         interpreter. I shipped both to the user in s69 by default; a build a person
+         plays on must not carry an instrument that heavy. `cfg\pitlatch.flag`. */
 #define VID_P3DA_RING 1024
+    uint8_t  p3da_ring_on;
     uint32_t p3da_ring_us[VID_P3DA_RING];
     uint8_t  p3da_ring_v[VID_P3DA_RING];
     uint32_t p3da_ring_n;

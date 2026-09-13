@@ -9600,6 +9600,11 @@ static void pit_latch_note(uint8_t cmd)
 {
     uint32_t n, cnt, i0, base, i, col = 0;
     char b[1200], *q = b;
+    /* ⚠ The ring is opt-in (cfg\pitlatch.flag) and so is this: the dump is ~43
+         log_append calls issued from iio_out, i.e. FILE I/O UNDER g_lock from inside
+         the planar interpreter. Fine for a debugging run, not for a build a person
+         plays on -- shipping it enabled in s69 was a mistake, see vdd_video.h. */
+    if (!g_vid.p3da_ring_on) return;
     if ((cmd & 0xF0) != 0x00 || g_pitlatch_dumps >= 2 || !g_vid.p3da_ring_n) return;
     n = g_vid.p3da_ring_n; cnt = n < VID_P3DA_RING ? n : VID_P3DA_RING;
     i0 = n - cnt; base = g_vid.p3da_ring_us[i0 & (VID_P3DA_RING - 1)];
@@ -21233,6 +21238,10 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     /* (per-plane backing is taken later, once the preamble is on disk -- every
        log_write() before that point TRUNCATES the file and would eat its report.) */
     g_vid.time_us = host_time_us;               /* real CRT timebase for 0x3DA (#55) */
+    /* Opt-in only: the ring costs two stores on the hottest path in the program and
+       the dump does file I/O under g_lock. See the note in vdd_video.h. */
+    g_vid.p3da_ring_on =
+        (GetFileAttributesA(CFG_("pitlatch.flag")) != INVALID_FILE_ATTRIBUTES);
     g_vid.guest_pc = host_guest_pc;             /* so a VRAM watchpoint names a routine */
     g_vid_dev = vdd_video_device(&g_vid);
     vdd_bus_add(&g_bus, &g_vid_dev);

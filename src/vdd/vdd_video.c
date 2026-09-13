@@ -1665,9 +1665,11 @@ static void status_in(void *self, uint16_t port, uint8_t w, uint32_t *v)
            a DIFFERENT signal on a real card -- it changes per scanline, not per frame
            -- so toggling the two together, as we used to, was doubly wrong. */
         *v = (uint32_t)((in_vbl ? 0x08u : 0u) | (bit0 ? 0x01u : 0u));
-        st->p3da_ring_us[st->p3da_ring_n & (VID_P3DA_RING - 1)] = (uint32_t)now;
-        st->p3da_ring_v [st->p3da_ring_n & (VID_P3DA_RING - 1)] = (uint8_t)*v;
-        st->p3da_ring_n++;
+        if (st->p3da_ring_on) {          /* debug only -- see the note in the header */
+            st->p3da_ring_us[st->p3da_ring_n & (VID_P3DA_RING - 1)] = (uint32_t)now;
+            st->p3da_ring_v [st->p3da_ring_n & (VID_P3DA_RING - 1)] = (uint8_t)*v;
+            st->p3da_ring_n++;
+        }
     }
     st->retrace = (uint8_t)*v;                      /* keep it observable in dumps    */
     /* Count the edge the GUEST sees, not the one the model produces: a clear->set
