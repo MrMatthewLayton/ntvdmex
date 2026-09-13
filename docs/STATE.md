@@ -282,6 +282,7 @@ and matches the 6.22 oracle row for row (session 53)** — but `MEM /C` still re
    guest that is not captured gets no deltas, no position, no buttons; release reports
    any held button as let go. `mouse_goes_to_guest()` is the one decision point.
    Skyroads on baseline, Lemmings' scripted click still lands while captured.
+   **USER-CONFIRMED by hand in Doom and Lemmings.**
 
    **▶ NEXT:** (a) user confirms by hand: music tempo, level fade-in, and that the
    briefing/game no longer flicker between palettes (the nesting may have been that
