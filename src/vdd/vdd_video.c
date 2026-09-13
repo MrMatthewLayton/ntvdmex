@@ -131,9 +131,15 @@ static void load_default_crtc(video_state *st)
      clobbered the guest's DAC entries, since pal[] and dac[] were the same array.
      A derived table has to derive from something; substituting a plausible value for
      the real one is the same mistake as a stepped-over call returning a sentinel. */
+static void pal_split_note(video_state *st, const uint32_t *prev);
+static int  vid_beam(const video_state *st, uint64_t *now, uint32_t *frame_us,
+                     uint32_t *vtotal, uint32_t *vdisp, uint32_t *vblank,
+                     uint32_t *frame_no, uint32_t *line);   /* fwd: defined with status_in */
 static void pal_refresh(video_state *st)
 {
     int i;
+    uint32_t prev[256];
+    for (i = 0; i < 256; ++i) prev[i] = st->pal[i];
     if (st->mkind == VID_KIND_LINEAR8) {
         for (i = 0; i < 256; ++i) st->pal[i] = st->dac[i];
     } else {
@@ -148,7 +154,67 @@ static void pal_refresh(video_state *st)
         }
         for (i = 16; i < 256; ++i) st->pal[i] = st->dac[i];
     }
+    pal_split_note(st, prev);
     st->dirty = 1;
+}
+
+/* ── ★★★★ A PALETTE WRITE MID-FRAME IS A RASTER SPLIT, NOT A NEW PALETTE. ─────────
+     s70, the user's "flickers between the right and wrong colours" (Lemmings #1/#2).
+     Lemmings' HP-mode timer tick is calibrated to land 320 scanlines after the
+     retrace -- pixel row 160, the top of the toolbar -- and the tick's first act is
+     to push one set of DAC entries 16..23 (guest ds:2668); after the retrace it
+     pushes another (ds:2650). The level is drawn in one set, the toolbar in the
+     other, and the beam position is what separates them. The presenter took ONE
+     palette per frame, so whichever set the snapshot caught coloured the whole
+     screen, and the alternation between the two was the flicker. (The real-DOS
+     oracle under QEMU shows one set everywhere too: its default 0x3DA model makes
+     the retrace wait return at once, so the two writes land back to back. The
+     oracle is not truth for a raster effect; the game's own tables and timing are.)
+   ► So per entry: the value at the START of the frame (`pal_base`), the value written
+     MID-frame and the row it was written at (`pal_split`/`pal_split_row`), stamped
+     with the frame number so a guest that stops splitting is back to one palette a
+     frame later. Writes during blanking or on the first two rows are the frame's
+     base (Lemmings' post-retrace push lands on row 0). The first write of a new
+     frame rebases: what the palette held before it IS what the DAC held at the
+     frame start. ntvdd_frame_pal_at resolves a row; the presenter and the capture
+     apply it, video_test pins it with a fake clock. */
+static void pal_split_note(video_state *st, const uint32_t *prev)
+{
+    uint64_t now; uint32_t frame_us, vtotal, vdisp, vblank, frame_no, line, row;
+    int i, split;
+    if (!vid_beam(st, &now, &frame_us, &vtotal, &vdisp, &vblank, &frame_no, &line)
+        || !st->gh || !vdisp) {
+        for (i = 0; i < 256; ++i) if (st->pal[i] != prev[i]) st->pal_base[i] = st->pal[i];
+        return;
+    }
+    if (frame_no != st->pal_frame_no) {           /* first write of this frame: rebase */
+        for (i = 0; i < 256; ++i) st->pal_base[i] = prev[i];
+        st->pal_frame_no = frame_no;
+    }
+    row   = (line < vdisp) ? (uint32_t)(((uint64_t)line * st->gh) / vdisp) : 0xFFFFu;
+    split = (row != 0xFFFFu && row >= 2u);
+    for (i = 0; i < 256; ++i) {
+        if (st->pal[i] == prev[i]) continue;
+        if (split) {
+            st->pal_split[i]       = st->pal[i];
+            st->pal_split_row[i]   = (uint16_t)row;
+            st->pal_split_frame[i] = frame_no;
+            st->pal_split_notes++;
+        } else {
+            st->pal_base[i] = st->pal[i];
+        }
+    }
+}
+
+void vdd_video_frame_touch(video_state *st)
+{
+    uint64_t now; uint32_t frame_us, vtotal, vdisp, vblank, frame_no, line;
+    st->frame.palette_base  = st->pal_base;
+    st->frame.palette_split = st->pal_split;
+    st->frame.split_row     = st->pal_split_row;
+    st->frame.split_frame   = st->pal_split_frame;
+    st->frame.frame_no = vid_beam(st, &now, &frame_us, &vtotal, &vdisp, &vblank, &frame_no, &line)
+                       ? frame_no : st->pal_frame_no;
 }
 
 /* A mode set reloads the DAC and the AC palette. Real hardware does this, and
@@ -161,6 +227,7 @@ static void load_default_palette(video_state *st)
     /* The guest asked us not to (AH=12h BL=31h). Leave both the DAC and the
        attribute palette exactly as it left them. */
     const unsigned char *ac; const unsigned long *dc;
+    for (i = 0; i < 256; ++i) st->pal_split_row[i] = 0;   /* a mode set ends any raster split */
     if (st->def_pal_off) return;
     st->pal_resets++;
     /* ⚠ dac_hi_since_reset ON ITS OWN CANNOT REPORT ANYTHING. The counters are
@@ -1568,6 +1635,44 @@ static void gc_in(void *self, uint16_t port, uint8_t w, uint32_t *v)
      guest that does any work between polls would miss it and wait an extra frame;
      the blanking interval (~9%) is the forgiving reading and is what emulators
      conventionally report. */
+/* ── WHERE IS THE BEAM? One answer for everyone who asks. ──────────────────────
+     status_in derived the frame timing inline; the raster-split bookkeeping needs
+     the same numbers at every DAC write, so it lives here. Returns 0 with no clock
+     (the off-VM default). `now` is the model's microseconds; `frame_us` the frame
+     period; `vtotal`/`vdisp`/`vblank` the line counts (total, display end, blank
+     start); `frame_no` = now / frame_us; `line` = the scanline the beam is on. */
+static int vid_beam(const video_state *st, uint64_t *now, uint32_t *frame_us,
+                    uint32_t *vtotal, uint32_t *vdisp, uint32_t *vblank,
+                    uint32_t *frame_no, uint32_t *line)
+{
+    int tall; uint32_t t, a, b; uint64_t in_frame;
+    if (!st->time_us) return 0;
+    /* 480-line modes run at 60 Hz, the 200/400-line ones at 70 Hz. Mode 13h is
+       320x200 displayed as 400 scanlines, so it belongs with the 70 Hz group -- key
+       the choice off the DISPLAYED height, not the mode number. */
+    tall    = (st->gh > VID_VACTIVE_LO);
+    *vtotal = tall ? VID_VTOTAL_HI  : VID_VTOTAL_LO;
+    *vblank = tall ? VID_VACTIVE_HI : VID_VACTIVE_LO;
+    *vdisp  = *vblank;
+    /* Prefer the geometry the guest programmed. `vblank` is BLANK START, not display
+       end -- they differ by 6 lines in the BIOS modes and by 45 in 640x350, and it is
+       blanking, not the end of the picture, that raises the status bit. */
+    if (vga_vtiming(st, &t, &a, &b)) {
+        *vtotal = t; *vdisp = a; *vblank = b;
+        /* 449-line modes are the 70 Hz family, 525-line the 60 Hz one. Keyed off the
+           measured total rather than the displayed height, so a 350-line mode is no
+           longer forced to pick a side of a 400-line fence. */
+        tall = (t >= 500u);
+    }
+    *frame_us = 1000000u / (uint32_t)(tall ? VID_VBL_HZ_HI : VID_VBL_HZ_LO);
+    *now      = st->time_us();
+    *frame_no = (uint32_t)(*now / *frame_us);
+    in_frame  = *now % (uint64_t)*frame_us;
+    /* SCALE FIRST, DIVIDE ONCE -- see status_in for why line_us must not be an integer. */
+    *line     = (uint32_t)((in_frame * (uint64_t)*vtotal) / *frame_us);
+    return 1;
+}
+
 static void status_out(void *self, uint16_t port, uint8_t w, uint32_t v)
 { (void)self; (void)port; (void)w; (void)v; }     /* feature ctrl: ignore */
 static void status_in(void *self, uint16_t port, uint8_t w, uint32_t *v)
@@ -1578,35 +1683,15 @@ static void status_in(void *self, uint16_t port, uint8_t w, uint32_t *v)
          Attribute Controller's index/data flip-flop, and every guest relies on it
          before touching 0x3C0. See attr_out. */
     st->attr_ff = 0;
-    uint32_t frame_us, line;
-    int tall, vtotal, vactive, in_vbl, in_hbl;
+    uint32_t frame_us, line, u_vtotal, u_vdisp, u_vblank, frame_no;
+    int vtotal, vactive, in_vbl, in_hbl;
 
-    if (!st->time_us) {                             /* no clock injected: old behaviour */
-        st->retrace ^= 0x09;
+    if (!vid_beam(st, &now, &frame_us, &u_vtotal, &u_vdisp, &u_vblank, &frame_no, &line)) {
+        st->retrace ^= 0x09;                        /* no clock injected: old behaviour */
         *v = st->retrace;
         return;
     }
-    /* 480-line modes run at 60 Hz, the 200/400-line ones at 70 Hz. Mode 13h is
-       320x200 displayed as 400 scanlines, so it belongs with the 70 Hz group -- key
-       the choice off the DISPLAYED height, not the mode number. */
-    tall    = (st->gh > VID_VACTIVE_LO);
-    vtotal  = tall ? VID_VTOTAL_HI  : VID_VTOTAL_LO;
-    vactive = tall ? VID_VACTIVE_HI : VID_VACTIVE_LO;
-    /* Prefer the geometry the guest programmed. `vactive` becomes BLANK START, not
-       display end -- they differ by 6 lines in the BIOS modes and by 45 in 640x350,
-       and it is blanking, not the end of the picture, that raises the bit. */
-    {   uint32_t t, a, b;
-        if (vga_vtiming(st, &t, &a, &b)) {
-            vtotal = (int)t; vactive = (int)b;
-            /* 449-line modes are the 70 Hz family, 525-line the 60 Hz one. Keyed off
-               the measured total rather than the displayed height, so a 350-line mode
-               is no longer forced to pick a side of a 400-line fence. */
-            tall = (t >= 500u);
-        }
-    }
-    frame_us = 1000000u / (uint32_t)(tall ? VID_VBL_HZ_HI : VID_VBL_HZ_LO);
-
-    now      = st->time_us();
+    vtotal = (int)u_vtotal; vactive = (int)u_vblank; (void)u_vdisp; (void)frame_no;
     /* Bracket the polling in the model's own microseconds -- see the header. */
     if (!st->t3da_first) st->t3da_first = now;
     if (st->t3da_last) {

@@ -63,6 +63,14 @@ typedef struct present_ddraw {
     uint8_t  snap[640 * 480];
     uint32_t snap_pal[256];
     int   snap_w, snap_h, snap_valid;
+    /* Raster split (s70, see ntvdd_frame): the frame-start and mid-frame palettes,
+       the row each mid-frame entry applies from, and the frame stamps. `snap_split`
+       is 0 for the ordinary one-palette frame, which keeps the fast paths. */
+    uint32_t snap_pal_base[256], snap_pal_split[256], snap_split_frame[256];
+    uint16_t snap_split_row[256];
+    uint32_t snap_frame_no;
+    int      snap_split;
+    uint32_t rowpal[256]; int rowpal_y;   /* the palette resolved for one row       */
 } present_ddraw;
 
 /* Bring up DirectDraw in windowed mode on `hwnd`. 0 = ok, <0 = failed. */

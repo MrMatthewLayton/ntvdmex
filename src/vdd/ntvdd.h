@@ -59,7 +59,43 @@ typedef struct ntvdd_frame {
     uint32_t        stride;         /* bytes per scanline of `pixels`           */
     const uint8_t  *pixels;         /* framebuffer (indices if bpp==8)          */
     const uint32_t *palette;        /* 256 ARGB entries (bpp==8 only; else NULL)*/
+    /* ── RASTER-SPLIT PALETTE (s70). A guest may rewrite DAC entries MID-FRAME so
+         that the rows above the beam and the rows below it are shown in different
+         colours -- Lemmings does exactly this from its timer tick at row 160 (the
+         level in one palette, the toolbar in another). One palette per frame
+         cannot draw that: whichever set the snapshot caught colours the WHOLE
+         screen, and the picture flickers between two wrong versions. So the video
+         VDD keeps, per entry, the value in effect at the frame start (`palette_base`)
+         and the value written mid-frame with the row it was written at
+         (`palette_split`/`split_row`, 0 = none) stamped with the frame number. All
+         NULL when the device does not track it. Resolve with ntvdd_frame_pal_at. */
+    const uint32_t *palette_base;
+    const uint32_t *palette_split;
+    const uint16_t *split_row;
+    const uint32_t *split_frame;
+    uint32_t        frame_no;       /* the frame number at snapshot time         */
 } ntvdd_frame;
+
+/* The colour of index `i` on frame row `row`: the mid-frame value from its row
+   down, the frame-start value above it, and the live palette once a split is
+   older than one frame (the guest stopped doing it; the DAC simply holds). */
+static inline uint32_t ntvdd_frame_pal_at(const ntvdd_frame *f, unsigned row, unsigned i)
+{
+    if (f->split_row && f->split_row[i]
+        && (uint32_t)(f->frame_no - f->split_frame[i]) <= 1u)
+        return (row >= f->split_row[i]) ? f->palette_split[i] : f->palette_base[i];
+    return f->palette[i];
+}
+/* Is any entry split on this frame? Lets a presenter keep its single-palette fast
+   path for the 99% of frames that have none. */
+static inline int ntvdd_frame_has_split(const ntvdd_frame *f)
+{
+    unsigned i;
+    if (!f->split_row) return 0;
+    for (i = 0; i < 256; ++i)
+        if (f->split_row[i] && (uint32_t)(f->frame_no - f->split_frame[i]) <= 1u) return 1;
+    return 0;
+}
 
 /* --- device-supplied callback signatures ---------------------------------- */
 typedef void (*ntvdd_in_fn)  (void *self, uint16_t port, uint8_t width, uint32_t *val);

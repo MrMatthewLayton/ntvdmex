@@ -8773,6 +8773,7 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
                 if (g_ms_hidden == 0 && g_vid.frame.bpp == 8 && g_vid.frame.pixels)
                     overlay_cursor((uint8_t *)g_vid.frame.pixels, g_vid.frame.w, g_vid.frame.h,
                                    (int)g_vid.frame.stride, g_ms_x, g_ms_y);  /* driver cursor */
+                vdd_video_frame_touch(&g_vid);               /* raster-split state + frame no. */
                 present_ddraw_snapshot(&g_pd, &g_vid.frame); /* consistent copy UNDER lock */
                 HOST_UNLOCK();
                 /* ── FRAME SKIP DROPS THE BLIT, NOT THE SNAPSHOT. ────────────────
@@ -25839,6 +25840,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         p = zput(p, "STAGE2: 3da clock: span_ms="); p = zdec(p, (uint32_t)((g_vid.t3da_last - g_vid.t3da_first) / 1000u));
         p = zput(p, " reads=");  p = zdec(p, g_vid.p3da_reads);
         p = zput(p, " edges=");  p = zdec(p, g_vid.vbl_edges);
+        p = zput(p, " pal_splits="); p = zdec(p, g_vid.pal_split_notes);
         p = zput(p, " dtmax_us="); p = zdec(p, g_vid.dt3da_max);
         p = zput(p, " dtzero=");   p = zdec(p, g_vid.dt3da_zero);
         p = zput(p, " dthist[1,4,16,64,256,1k,4k,16k+us]=");

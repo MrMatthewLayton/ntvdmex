@@ -67,12 +67,15 @@ static HBRUSH scanline_brush(void)
  *   because "no tearing" was its original argument and that deserves a way back.
  * ⚠ TWO THINGS DIFFER IN FULLSCREEN and both are handled below: there is no status
  *   strip to reserve room for, and the fit is snapped to whole multiples. */
+static const uint32_t *row_pal(present_ddraw *pd, int y);   /* fwd: with _snapshot */
 static void gdi_present(present_ddraw *pd)
 {
     HDC hdc; RECT rc; int cw, ch, dx, dy, dw, dh; unsigned i;
     const uint8_t *pix = pd->snap;
     int sw = pd->snap_w, sh = pd->snap_h;
     struct { BITMAPINFOHEADER h; RGBQUAD c[256]; } bi;
+    static uint32_t s_rgb32[640 * 480];   /* a raster-split frame, resolved per row */
+    int split = pd->snap_split && sw <= 640 && sh <= 480;
     hdc = GetDC(pd->hwnd);
     if (!hdc) return;
     GetClientRect(pd->hwnd, &rc);
@@ -84,7 +87,10 @@ static void gdi_present(present_ddraw *pd)
 
     /* Scale2x first: it is a property of the FRAME, so it happens before the
        stretch and the stretch then works from a source with twice the detail. */
-    if (present_scaler_doubles(pd->scaler) && sw > 0 && sh > 0
+    /* (A split frame skips scale2x: the doubled source would need a doubled
+        32bpp buffer, and the combination is rare -- a 16-colour raster trick under a
+        pixel-art scaler. The picture is still right, just not doubled.) */
+    if (!split && present_scaler_doubles(pd->scaler) && sw > 0 && sh > 0
         && sw * 2 <= 1280 && sh * 2 <= 960) {
         present_scale2x_8(pd->snap, sw, sh, sw, s_scaled);
         pix = s_scaled; sw *= 2; sh *= 2;
@@ -98,6 +104,16 @@ static void gdi_present(present_ddraw *pd)
         uint32_t a = pd->snap_pal[i];
         bi.c[i].rgbRed = (BYTE)(a >> 16); bi.c[i].rgbGreen = (BYTE)(a >> 8);
         bi.c[i].rgbBlue = (BYTE)a; bi.c[i].rgbReserved = 0;
+    }
+    if (split) {                       /* two palettes on one screen: resolve to 32bpp */
+        int y, x;
+        for (y = 0; y < sh; ++y) {
+            const uint32_t *pal = row_pal(pd, y);
+            const uint8_t *srow = pd->snap + (size_t)y * sw;
+            uint32_t *drow = s_rgb32 + (size_t)y * sw;
+            for (x = 0; x < sw; ++x) drow[x] = pal[srow[x]] & 0x00FFFFFFu;
+        }
+        bi.h.biBitCount = 32; pix = (const uint8_t *)s_rgb32;
     }
     /* ⚠ THE INTEGER FIT USES sw/sh, WHICH ARE POST-SCALE2X. That is deliberate: the
          blit source is what has to divide into the destination. Snapping to a multiple
@@ -255,8 +271,9 @@ static int fs_stage(present_ddraw *pd, LPDIRECTDRAWSURFACE7 fb)
     for (y = 0; y < pd->snap_h; ++y) {
         BYTE *drow = (BYTE *)d.lpSurface + (size_t)y * d.lPitch;
         const uint8_t *srow = pd->snap + (size_t)y * pd->snap_w;
+        const uint32_t *pal = row_pal(pd, y);
         for (x = 0; x < pd->snap_w; ++x)
-            put_px(drow, x, bpp, pd->snap_pal[srow[x]], rsh,rb,gsh,gb,bsh,bb);
+            put_px(drow, x, bpp, pal[srow[x]], rsh,rb,gsh,gb,bsh,bb);
     }
     IDirectDrawSurface7_Unlock(fb, NULL);
     return 0;
@@ -287,7 +304,7 @@ static void fs_present_sw(present_ddraw *pd, int fx, int fy, int fw, int fh)
                 continue;
             }
             x = (dx - fx) * pd->snap_w / fw;
-            put_px(drow, dx, bpp, pd->snap_pal[pd->snap[(size_t)y * pd->snap_w + x]],
+            put_px(drow, dx, bpp, row_pal(pd, y)[pd->snap[(size_t)y * pd->snap_w + x]],
                    rsh,rb,gsh,gb,bsh,bb);
         }
     }
@@ -397,7 +414,32 @@ void present_ddraw_snapshot(present_ddraw *pd, const ntvdd_frame *f)
     for (y = 0; y < (int)f->h; ++y)
         CopyMemory(pd->snap + (size_t)y * f->w, f->pixels + (size_t)y * f->stride, f->w);
     if (f->palette) CopyMemory(pd->snap_pal, f->palette, 256 * sizeof(uint32_t));
+    pd->snap_split = ntvdd_frame_has_split(f);
+    if (pd->snap_split) {
+        CopyMemory(pd->snap_pal_base,   f->palette_base,  256 * sizeof(uint32_t));
+        CopyMemory(pd->snap_pal_split,  f->palette_split, 256 * sizeof(uint32_t));
+        CopyMemory(pd->snap_split_frame,f->split_frame,   256 * sizeof(uint32_t));
+        CopyMemory(pd->snap_split_row,  f->split_row,     256 * sizeof(uint16_t));
+        pd->snap_frame_no = f->frame_no;
+    }
+    pd->rowpal_y = -1;
     pd->snap_w = f->w; pd->snap_h = f->h; pd->snap_valid = 1;
+}
+
+/* The palette for source row `y` of the snapshot: the single palette on an ordinary
+   frame; on a raster-split frame the per-entry resolution of ntvdd_frame_pal_at,
+   computed once per row. */
+static const uint32_t *row_pal(present_ddraw *pd, int y)
+{
+    ntvdd_frame f; unsigned i;
+    if (!pd->snap_split) return pd->snap_pal;
+    if (pd->rowpal_y == y) return pd->rowpal;
+    f.palette = pd->snap_pal; f.palette_base = pd->snap_pal_base;
+    f.palette_split = pd->snap_pal_split; f.split_row = pd->snap_split_row;
+    f.split_frame = pd->snap_split_frame; f.frame_no = pd->snap_frame_no;
+    for (i = 0; i < 256; ++i) pd->rowpal[i] = ntvdd_frame_pal_at(&f, (unsigned)y, i);
+    pd->rowpal_y = y;
+    return pd->rowpal;
 }
 
 /* blit the back-buffer to the screen, vsync'd (call outside the lock). */
@@ -432,10 +474,15 @@ int present_ddraw_save_bmp(present_ddraw *pd, const char *path)
     BYTE fh[14], ih[40];
     static BYTE pal[256 * 4];
     static BYTE row[640 + 4];
+    int split = pd->snap_split;
+    static BYTE row24[640 * 3 + 4];
     if (!pd->snap_valid || w <= 0 || h <= 0 || w > 640 || h > 480) return -1;
-    rowb  = ((DWORD)w + 3) & ~3u;               /* rows padded to 4 bytes            */
+    /* A raster-split frame cannot be an 8bpp BMP (one palette per file), so it is
+       written as 24bpp with every row resolved. Ordinary frames stay 8bpp: the
+       oracle tools compare palette INDICES and must keep them. */
+    rowb  = split ? (((DWORD)w * 3 + 3) & ~3u) : (((DWORD)w + 3) & ~3u);
     imgsz = rowb * (DWORD)h;
-    off   = 14 + 40 + 256 * 4;                  /* pixels start after headers+palette */
+    off   = split ? 14 + 40 : 14 + 40 + 256 * 4;
 
     /* BITMAPFILEHEADER */
     fh[0] = 'B'; fh[1] = 'M';
@@ -445,10 +492,10 @@ int present_ddraw_save_bmp(present_ddraw *pd, const char *path)
     /* BITMAPINFOHEADER (positive height -> bottom-up rows) */
     st_le32(ih + 0, 40);
     st_le32(ih + 4, (DWORD)w);  st_le32(ih + 8, (DWORD)h);
-    st_le16(ih + 12, 1);        st_le16(ih + 14, 8);       /* 1 plane, 8bpp          */
+    st_le16(ih + 12, 1);        st_le16(ih + 14, (WORD)(split ? 24 : 8)); /* 1 plane */
     st_le32(ih + 16, 0);        st_le32(ih + 20, imgsz);   /* BI_RGB                 */
     st_le32(ih + 24, 2835);     st_le32(ih + 28, 2835);    /* ~72 dpi                */
-    st_le32(ih + 32, 256);      st_le32(ih + 36, 0);       /* 256 colours used       */
+    st_le32(ih + 32, split ? 0 : 256); st_le32(ih + 36, 0); /* colours used          */
     /* palette: snap_pal is 0xAARRGGBB -> RGBQUAD {B,G,R,0} */
     for (x = 0; x < 256; ++x) {
         uint32_t a = pd->snap_pal[x];
@@ -461,8 +508,19 @@ int present_ddraw_save_bmp(present_ddraw *pd, const char *path)
     if (hf == INVALID_HANDLE_VALUE) return -1;
     WriteFile(hf, fh, 14, &wr, NULL);
     WriteFile(hf, ih, 40, &wr, NULL);
-    WriteFile(hf, pal, sizeof pal, &wr, NULL);
+    if (!split) WriteFile(hf, pal, sizeof pal, &wr, NULL);
     for (y = h - 1; y >= 0; --y) {              /* BMP is bottom-up                  */
+        if (split) {
+            const uint32_t *rp = row_pal(pd, y);
+            for (x = 0; x < w; ++x) {
+                uint32_t a = rp[pd->snap[(size_t)y * (size_t)w + (size_t)x]];
+                row24[x*3+0] = (BYTE)(a & 0xFF); row24[x*3+1] = (BYTE)((a >> 8) & 0xFF);
+                row24[x*3+2] = (BYTE)((a >> 16) & 0xFF);
+            }
+            for (x = w * 3; x < (int)rowb; ++x) row24[x] = 0;
+            WriteFile(hf, row24, rowb, &wr, NULL);
+            continue;
+        }
         for (x = 0; x < w; ++x) row[x] = pd->snap[(size_t)y * (size_t)w + (size_t)x];
         for (x = w; x < (int)rowb; ++x) row[x] = 0;
         WriteFile(hf, row, rowb, &wr, NULL);

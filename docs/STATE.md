@@ -300,10 +300,28 @@ and matches the 6.22 oracle row for row (session 53)** — but `MEM /C` still re
    ⚠ One headless run died silently at `russell.dat` (first run after a deploy, the
    s69 shape, `runs/lemref/s70_headless_death1.log`); 4 later runs were clean.
 
-   **▶ NEXT:** (a) user re-tests Lemmings by hand — trapdoors, then read
-   `irq0_isr[...]` + any `IRQ0-ISR-LONG` lines; if it stalls, LEAVE IT RUNNING; (b) the
-   palette flicker (#1/#2) is still open — separate cause; (c) #4 in-game click
-   assigning a skill; (d) consider strict IRQ0 for the PM arm, on Doom.
+   **★★★★★ USER-CONFIRMED (22:xx): "everything worked! Lemmings is now playable. I've
+   just completed two levels."** On the `3026254` build (`0908cce5…`). The briefing
+   screen no longer flickers; a small part of the GAME screen still flickered — that
+   is the raster split below.
+
+   **The remaining flicker, root-caused and fixed off-VM (not yet deployed):** Lemmings
+   keeps TWO palettes for DAC 16–23 — `ds:2668` pushed by the timer tick, which is
+   calibrated to land at row 160 (the toolbar's top), and `ds:2650` pushed after the
+   retrace. Level in one, toolbar in the other, separated by the beam. Our presenter
+   applied one palette per frame, so the snapshot's phase decided which half was wrong.
+   ⚠ The real-DOS oracle under QEMU shows ONE set everywhere (its default 0x3DA makes
+   the two writes land back to back) — for raster effects the oracle is not truth; the
+   game's tables and timing are. Now: `pal_base`/`pal_split`/`pal_split_row` per entry
+   in the video VDD (`pal_split_note`, keyed on the same beam model as 0x3DA), resolved
+   per row by the presenter (all three paths) and the capture (24bpp when split), pinned
+   by video_test T-SPLIT with the fake clock (8 checks, incl. phase independence and
+   expiry). Battery green.
+
+   **▶ NEXT:** (a) deploy the raster-split build and have the user confirm the toolbar
+   region stops flickering; (b) the Lemmings gate (`tools/lemgate`): log invariants +
+   per-region palette from the game's own tables, so none of today's fixes can regress
+   silently; (c) #4 in-game click assigning a skill; (d) strict IRQ0 for the PM arm.
 
    ---
 

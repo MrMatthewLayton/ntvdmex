@@ -917,6 +917,54 @@ int main(void)
             CHECK(vid.crtc_start_half==before+1,
                   "a frame latched mid-pair is COUNTED -- hardware tears there too"); } }
 
+    /* T-SPLIT: A PALETTE WRITE MID-FRAME IS A RASTER SPLIT (s70, Lemmings #1/#2) ---
+     * Lemmings rewrites DAC 16..23 twice per frame: once from its timer tick, which
+     * is calibrated to land at row 160 (the toolbar's top), and once after the
+     * retrace. The rows above 160 must show the frame-start value, the rows from
+     * 160 down the mid-frame one -- and that must hold WHATEVER phase the snapshot
+     * is taken at, and stop holding once the guest stops doing it. No oracle can
+     * pin this (QEMU's default 0x3DA makes the two writes land back to back), so
+     * the fake clock and the game's own idiom do.                              */
+    { uint32_t v, A, B; ntvdd_frame *f = &vid.frame;
+      const uint64_t FR = 1000000u / 70u;                 /* 14285 us: 449 lines */
+#define AT(frame, line) ((uint64_t)(frame) * FR + (uint64_t)(line) * FR / 449u)
+#define DAC(idx, r, g, bl) do { v=(idx); vdd_bus_io(&bus,0x3C8,1,0,&v); v=(r); vdd_bus_io(&bus,0x3C9,1,0,&v); \
+                                v=(g); vdd_bus_io(&bus,0x3C9,1,0,&v); v=(bl); vdd_bus_io(&bus,0x3C9,1,0,&v); } while (0)
+      vid.time_us = fake_clock;
+      vid.gh = 200;                                       /* 320x200 shown as 400 lines */
+      crtc_w(&bus, 0x06, 0xBF); crtc_w(&bus, 0x07, 0x1F); crtc_w(&bus, 0x09, 0x41);
+      crtc_w(&bus, 0x12, 0x8F); crtc_w(&bus, 0x15, 0x96);
+      g_fake_us = AT(10, 3);   DAC(16, 0x3F, 0x00, 0x00); A = vid.pal[16];   /* row 1: base  */
+      /* (321, not 320: AT() and the model both truncate, and 320 lands on 319.99.) */
+      g_fake_us = AT(10, 321); DAC(16, 0x00, 0x3F, 0x00); B = vid.pal[16];   /* row 160: split */
+      CHECK(A != B && vid.pal_split_row[16] == 160 && vid.pal_base[16] == A && vid.pal_split[16] == B,
+            "split: a DAC write at scanline 320 is a split at row 160 over the frame-start value");
+      g_fake_us = AT(10, 400); vdd_video_frame_touch(&vid);
+      CHECK(ntvdd_frame_has_split(f), "split: the frame reports a live split");
+      CHECK(ntvdd_frame_pal_at(f, 100, 16) == A && ntvdd_frame_pal_at(f, 159, 16) == A,
+            "split: rows above 160 resolve to the frame-start colour");
+      CHECK(ntvdd_frame_pal_at(f, 160, 16) == B && ntvdd_frame_pal_at(f, 199, 16) == B,
+            "split: rows from 160 down resolve to the mid-frame colour");
+      CHECK(ntvdd_frame_pal_at(f, 100, 17) == vid.pal[17], "split: an entry never split is the live palette");
+      /* Next frame, the post-retrace push on row 0, snapshot taken BEFORE this
+         frame's tick: the split from the previous frame must still hold. */
+      g_fake_us = AT(11, 1);   DAC(16, 0x3F, 0x00, 0x00);
+      g_fake_us = AT(11, 200); vdd_video_frame_touch(&vid);
+      CHECK(ntvdd_frame_pal_at(f, 100, 16) == A && ntvdd_frame_pal_at(f, 180, 16) == B,
+            "split: phase-independent -- a snapshot before this frame's tick still shows both");
+      /* The guest stops splitting: one frame later it is a single palette again. */
+      g_fake_us = AT(14, 100); vdd_video_frame_touch(&vid);
+      CHECK(!ntvdd_frame_has_split(f) && ntvdd_frame_pal_at(f, 180, 16) == vid.pal[16],
+            "split: expires a frame after the guest stops -- the DAC simply holds");
+      /* A write during blanking is the frame's base, not a split. */
+      g_fake_us = AT(20, 420); DAC(16, 0x00, 0x00, 0x3F);
+      CHECK(vid.pal_base[16] == vid.pal[16] && !ntvdd_frame_has_split(f),
+            "split: a write in vertical blanking is the next frame's base");
+      vid.time_us = 0;
+#undef AT
+#undef DAC
+    }
+
     printf("\n%d checks, %d failed\n", total, fails);
     return fails ? 1 : 0;
 }

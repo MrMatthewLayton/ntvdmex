@@ -131,6 +131,15 @@ typedef struct video_state {
          the AC is bypassed and pal[] is simply dac[]. */
     uint32_t dac[256];                  /* the DAC as the guest programmed it      */
     uint32_t pal[256];                  /* ARGB palette the framebuffer indexes    */
+    /* Raster-split bookkeeping over pal[] (see ntvdd_frame and pal_split_note):
+       what each entry was at the start of the current frame, what it was set to
+       mid-frame and at which row, stamped with the frame number. */
+    uint32_t pal_base[256];
+    uint32_t pal_split[256];
+    uint16_t pal_split_row[256];
+    uint32_t pal_split_frame[256];
+    uint32_t pal_frame_no;              /* frame the bookkeeping last rebased on   */
+    uint32_t pal_split_notes;           /* mid-frame palette writes seen (STAGE2)  */
     /* DAC (ports 3C7/3C8/3C9) write/read state */
     uint8_t  dac_widx, dac_ridx, dac_comp, dac_latch[3];
     /* VESA VBE state */
@@ -473,6 +482,10 @@ typedef struct video_state {
 
 int  vdd_video_init(vdd_bus *b, void *self);
 void vdd_video_reset(void *self);
+/* Stamp the frame with the current frame number and the raster-split arrays. The
+   host calls this under its lock right before it snapshots the frame; tests call it
+   before resolving colours with ntvdd_frame_pal_at. */
+void vdd_video_frame_touch(video_state *st);
 static inline ntvdd vdd_video_device(video_state *st)
 { ntvdd d; d.name = "video"; d.init = vdd_video_init; d.reset = vdd_video_reset;
   d.shutdown = 0; d.self = st; return d; }
