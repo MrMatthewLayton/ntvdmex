@@ -1225,6 +1225,8 @@ static DWORD          g_irq0_skip_if  = 0;  /* ...because the guest had interrup
 static DWORD          g_irq0_skip_stub= 0;  /* ...because we were inside our INT 08h stub */
 static DWORD          g_pit_reload_log = 0;
 static DWORD          g_pitlatch_dumps = 0;   /* PIT-LATCH poll-ring dumps printed (max 2) */
+static DWORD          g_hb_ds = 0;            /* guest DS sampled by the heartbeat (s69 fade dump) */
+static int imem_page_ok(uint32_t lin);        /* fwd: page-validity guard, defined with imem_r8 */
 static DWORD          g_ev_intpend    = 0;  /* event-3 interrupt-pending notifications */
 static DWORD          g_ev_iostr      = 0;  /* REP INS/OUTS (event 1) reflects serviced */
 static DWORD          g_irq1_inj      = 0;  /* INT 09h injections (should track scancodes) */
@@ -5045,6 +5047,7 @@ static DWORD WINAPI heartbeat_thread(LPVOID pv)
             cs  = VDM_REG(g_tib_dbg, VTIB_CS)  & 0xFFFF;
             ip  = VDM_REG(g_tib_dbg, VTIB_EIP) & 0xFFFF;
             efl = VDM_REG(g_tib_dbg, VTIB_EFLAGS);
+            g_hb_ds = VDM_REG(g_tib_dbg, VTIB_DS) & 0xFFFF;   /* s69: for the fade dump */
         }
         q = zput(q, "HB 0x");        q = zhex(q, (DWORD)n);
         q = zput(q, " cs:ip=0x");    q = zhex(q, cs); q = zput(q, ":0x"); q = zhex(q, ip);
@@ -5104,6 +5107,22 @@ static DWORD WINAPI heartbeat_thread(LPVOID pv)
             q = zput(q, " code@csip=");
             if (host_readable(cp, 8)) q = zdump(q, cp, 8);
             else q = zput(q, "<unreadable>");
+        }
+        /* ── s69: THE PALETTE FADE, ON THE BEAT. The blank-screen bug is a black
+             per-frame palette buffer (ds:0x2668) while the colours are loaded; it is
+             by-hand-only and the by-hand host dies before the exit report, so put the
+             live state where the heartbeat can carry it out. `pal2668` = the first 3
+             DAC entries the frame routine will push; `1f7c` = the palette state
+             selector (oracle=4). All zero here = the fade is stuck black. */
+        if (g_hb_ds) {
+            uint32_t dsb = (uint32_t)g_hb_ds << 4;
+            q = zput(q, " pal2668=");
+            if (imem_page_ok(dsb + 0x2668)) {
+                int j; for (j = 0; j < 6; ++j) { q = zhexb(q, *(volatile BYTE *)(dsb + 0x2668 + j)); }
+            } else q = zput(q, "??");
+            q = zput(q, " 1f7c=");
+            if (imem_page_ok(dsb + 0x1f7c)) q = zhexb(q, *(volatile BYTE *)(dsb + 0x1f7c));
+            else q = zput(q, "??");
         }
         q = zput(q, "\r\n");
         log_append(LOG_PATH, b, q); serial_out(b, q);
@@ -25385,6 +25404,47 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                 p = zhexb(p, (v >> 16) & 0xFF); p = zhexb(p, (v >> 8) & 0xFF);
                 p = zhexb(p, v & 0xFF); p = zput(p, " "); }
             p = zput(p, "]\r\n"); }
+        /* ── s69: IS THE LEVEL PALETTE EVEN LOADED? ────────────────────────────────
+             The gameplay screen renders black because dac@vpal is all-zero. That is
+             either "the game never loaded its colours" or "the fade multiplied them
+             to zero and is stuck". The oracle's per-frame palette buffer holds a
+             known green run (00 2a 00 15 3f 15 15 15 15 2a 00 00); scan our guest's
+             conventional memory for it. Found => the colours ARE in memory and the
+             fault is the fade/DAC path (ours); absent => the palette was never loaded
+             (a file-read/decode fault, earlier). Bounded, one pass, exit only. */
+        {   static const uint8_t sig[12] = {0x00,0x2a,0x00,0x15,0x3f,0x15,0x15,0x15,0x15,0x2a,0x00,0x00};
+            uint32_t a, found = 0xFFFFFFFFu, hits = 0;
+            for (a = 0x400; a + 12 <= 0xA0000u; ++a) {
+                if ((a & 0xFFF) == 0 && !imem_page_ok(a)) { a += 0xFFF; continue; }
+                if (*(volatile BYTE *)a == 0x00 && *(volatile BYTE *)(a+1) == 0x2a) {
+                    uint32_t k; int ok = 1;
+                    for (k = 0; k < 12; ++k) if (*(volatile BYTE *)(a+k) != sig[k]) { ok = 0; break; }
+                    if (ok) { if (found == 0xFFFFFFFFu) found = a; hits++; }
+                }
+            }
+            p = zput(p, "STAGE2: level-palette signature: ");
+            if (found != 0xFFFFFFFFu) { p = zput(p, "FOUND at lin=0x"); p = zhex(p, found);
+                p = zput(p, " (hits="); p = zdec(p, hits);
+                p = zput(p, ") -> colours ARE loaded; fade/DAC path is the fault\r\n"); }
+            else p = zput(p, "ABSENT -> the level palette was never loaded into guest RAM\r\n");
+        }
+        /* ── s69: THE FADED PALETTE BUFFER + THE FADE STATE, from the guest DS the
+             heartbeat last sampled. The per-frame palette routine feeds the DAC from
+             ds:0x2668; if that is black while the raw palette (above) is present, the
+             fade multiplied it to zero. [0x1f7c] is the palette-state selector
+             (oracle=4). Reads go through imem_page_ok so an unmapped DS cannot fault. */
+        if (g_hb_ds) {
+            uint32_t dsb = (uint32_t)g_hb_ds << 4, i;
+            p = zput(p, "STAGE2: fade dump ds=0x"); p = zhex(p, g_hb_ds);
+            if (imem_page_ok(dsb + 0x1f7c)) {
+                p = zput(p, " [1f7c]=0x"); p = zhexb(p, *(volatile BYTE *)(dsb + 0x1f7c));
+            }
+            p = zput(p, " buf@2668=[");
+            if (imem_page_ok(dsb + 0x2668)) {
+                for (i = 0; i < 24; ++i) { p = zhexb(p, *(volatile BYTE *)(dsb + 0x2668 + i)); p = zput(p, " "); }
+            } else p = zput(p, "<ds:2668 unmapped>");
+            p = zput(p, "]\r\n");
+        }
         /* The VRAM watchpoint. Silent unless cfg/vwatch.txt armed it. */
         if (g_vid.watch_off != 0xFFFFFFFFu) {
             unsigned wi, wn = g_vid.watch_n < VID_WATCH_MAX ? g_vid.watch_n : VID_WATCH_MAX;
