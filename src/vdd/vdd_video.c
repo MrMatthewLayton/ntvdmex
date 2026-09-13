@@ -178,6 +178,7 @@ static void pal_refresh(video_state *st)
      frame rebases: what the palette held before it IS what the DAC held at the
      frame start. ntvdd_frame_pal_at resolves a row; the presenter and the capture
      apply it, video_test pins it with a fake clock. */
+#define VID_SPLIT_STICK 12u   /* rows: IRQ jitter measured at +-5 rows (s70), with margin */
 static void pal_split_note(video_state *st, const uint32_t *prev)
 {
     uint64_t now; uint32_t frame_us, vtotal, vdisp, vblank, frame_no, line, row;
@@ -196,8 +197,20 @@ static void pal_split_note(video_state *st, const uint32_t *prev)
     for (i = 0; i < 256; ++i) {
         if (st->pal[i] == prev[i]) continue;
         if (split) {
+            /* ── THE BOUNDARY IS STICKY (s70, the user's HP run). The tick that writes
+                 this split is an IRQ we deliver with ~100-300 us of jitter, so its row
+                 wandered 160..169 frame to frame (heartbeat `lastrow`). Drawn faithfully
+                 that is a ten-row band flickering between palettes -- worse than the
+                 single-palette picture it replaced. A real PC's IRQ lands within a
+                 microsecond of the same row every frame. So a mid-frame write within
+                 VID_SPLIT_STICK rows of this entry's live split keeps the OLD row: the
+                 boundary stays where the guest first put it, and only a genuinely
+                 different row (a new effect) moves it. */
+            uint32_t old = st->pal_split_row[i];
+            int live = old && (uint32_t)(frame_no - st->pal_split_frame[i]) <= 2u;
+            uint32_t d = old > row ? old - row : row - old;
             st->pal_split[i]       = st->pal[i];
-            st->pal_split_row[i]   = (uint16_t)row;
+            st->pal_split_row[i]   = (live && d <= VID_SPLIT_STICK) ? (uint16_t)old : (uint16_t)row;
             st->pal_split_frame[i] = frame_no;
             st->pal_split_notes++;
         } else {
@@ -1724,13 +1737,33 @@ static void status_in(void *self, uint16_t port, uint8_t w, uint32_t *v)
     /* bit 3 = vertical retrace; bit 0 = display disabled (h- OR v-blank). Bit 0 is a
        DIFFERENT signal on a real card -- it changes per scanline, not per frame -- so
        toggling the two together, as we used to, was doubly wrong.
-       ⚠ s69 REVERTED: an "owed-blank" rule synthesised a bit-0 blank for a poll that
-       crossed a scanline boundary while both samples read active, to help Lemmings'
-       scanline-counting calibration under our slow trapped `in`. It went out with the
-       count-from-load PIT change that broke the palette fade, so it is reverted with
-       it -- the calibration accuracy it bought is moot once the reload it fed is
-       reverted. See [[session-67-handoff]]. */
-    {   int bit0 = (in_vbl || in_hbl);
+       The owed-blank rule below is what makes a scanline counter exact. */
+    /* ── ★★★★ A BLANK THAT PASSED BETWEEN TWO POLLS HAPPENED, WHETHER OR NOT A SAMPLE
+         LANDED IN IT. Bit 0 is what a scanline COUNTER reads: Lemmings' "High
+         Performance PC" calibration does `wait while set; wait while clear` 320 times
+         against the 8254 and uses the elapsed clocks as its game tick (guest
+         CS:1602..1643), and the tick is then what places its raster palette split on
+         the screen -- row 160 when the count is exactly 320 lines. On real silicon an
+         `in` is a microsecond and every 6.4us hblank is sampled. Here any host stall
+         during the ~10 ms window (a lock, a present, a capture) skips whole lines:
+         measured reloads 0x2F00..0x38CD across one evening -- 320 to 383 lines -- and
+         at 383 the toolbar's top 31 rows were drawn in the level's palette.
+       ► So if the guest's previous poll was in an EARLIER line and saw the display
+         active, the blanking of that earlier line went unobserved; report it ONCE and
+         let the next poll read the true phase. The rule cannot fire within a line (two
+         reads at one instant still agree, the property the timed model was built for)
+         and does not fire when the guest saw the blank itself, so a fast poller sees
+         exactly what it saw before. A poller slower than a whole line cannot count
+         lines on real hardware either and is not helped. (s69 shipped this and s69
+         reverted it with the PIT change it was bundled with; on its own it was right.) */
+    {   uint64_t abs_line = (now / (uint64_t)frame_us) * (uint64_t)vtotal + line;
+        int bit0 = (in_vbl || in_hbl);
+        if (!bit0 && st->p3da_have_last && !st->p3da_last_bit0
+            && abs_line != st->p3da_last_line) {
+            bit0 = 1; st->p3da_hbl_owed++;
+        }
+        st->p3da_last_line = abs_line; st->p3da_last_bit0 = (uint8_t)bit0;
+        st->p3da_have_last = 1;
         *v = (uint32_t)((in_vbl ? 0x08u : 0u) | (bit0 ? 0x01u : 0u));
         if (st->p3da_ring_on) {          /* debug only -- see the note in the header */
             st->p3da_ring_us[st->p3da_ring_n & (VID_P3DA_RING - 1)] = (uint32_t)now;

@@ -2203,12 +2203,23 @@ static void host_pit_resync_check(void)
 
 /* Can IRQ0 be delivered now? The PIC's answer, plus safety net 1. Called at both
    delivery sites (cooperative exec loop and the async courier). */
+static DWORD g_irq0_last_attempt = 0;   /* GetTickCount()|1 at the last delivery attempt */
 static int irq0_can_deliver(void)
 {
+    DWORD now = GetTickCount() | 1, gap = now - g_irq0_last_attempt;
+    g_irq0_last_attempt = now;
     if (vdd_pic_can_deliver(&g_pic, 0)) return 1;
     if (g_pic.m.isr & 1) {
         DWORD since = g_irq0_isr_since;
-        if (since && (GetTickCount() - since) > IRQ0_ISR_TIMEOUT_MS) {
+        /* ── A HOST STALL IS NOT A GUEST THAT FORGOT TO EOI. s70: a headless run with
+             capture.flag hit the timeout three times and engaged the fallback -- but no
+             IRQ0-ISR-LONG line was ever written, i.e. nothing ATTEMPTED delivery during
+             those episodes: the whole host was stopped (a 24bpp shot written to the SMB
+             share under the device lock), the guest's handler included. Time the guest
+             did not get cannot count against it. If this is the first attempt after a
+             gap longer than the timeout's own resolution, restart the clock instead. */
+        if (since && gap > 100u) { g_irq0_isr_since = now; since = now; }
+        if (since && (now - since) > IRQ0_ISR_TIMEOUT_MS) {
             vdd_pic_eoi(&g_pic, 0);
             g_irq0_isr_since = 0;
             if (++g_irq0_isr_timeouts >= IRQ0_ISR_TIMEOUTS_MAX && !g_irq0_autoeoi) {

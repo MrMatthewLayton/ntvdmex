@@ -78,11 +78,13 @@ typedef struct ntvdd_frame {
 
 /* The colour of index `i` on frame row `row`: the mid-frame value from its row
    down, the frame-start value above it, and the live palette once a split is
-   older than one frame (the guest stopped doing it; the DAC simply holds). */
+   older than two frames (the guest stopped doing it; the DAC simply holds). Two,
+   not one: our tick can arrive a frame late under a host stall, and a boundary
+   that vanishes for that one frame is itself a flicker. */
 static inline uint32_t ntvdd_frame_pal_at(const ntvdd_frame *f, unsigned row, unsigned i)
 {
     if (f->split_row && f->split_row[i]
-        && (uint32_t)(f->frame_no - f->split_frame[i]) <= 1u)
+        && (uint32_t)(f->frame_no - f->split_frame[i]) <= 2u)
         return (row >= f->split_row[i]) ? f->palette_split[i] : f->palette_base[i];
     return f->palette[i];
 }
@@ -93,7 +95,7 @@ static inline int ntvdd_frame_has_split(const ntvdd_frame *f)
     unsigned i;
     if (!f->split_row) return 0;
     for (i = 0; i < 256; ++i)
-        if (f->split_row[i] && (uint32_t)(f->frame_no - f->split_frame[i]) <= 1u) return 1;
+        if (f->split_row[i] && (uint32_t)(f->frame_no - f->split_frame[i]) <= 2u) return 1;
     return 0;
 }
 

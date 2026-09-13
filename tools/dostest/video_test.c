@@ -917,6 +917,38 @@ int main(void)
             CHECK(vid.crtc_start_half==before+1,
                   "a frame latched mid-pair is COUNTED -- hardware tears there too"); } }
 
+    /* T-OWED: A SCANLINE COUNTER MUST NOT SKIP LINES BECAUSE OUR PORT IS SLOW -------
+     * Lemmings' HP calibration counts 320 hblanks on bit 0 (`wait while set; wait
+     * while clear` per line) against the 8254, and the tick that count programs is
+     * what places its palette split at row 160. A poll slower than the 6.4us hblank
+     * must still be told about every line it crossed -- once -- or the count runs
+     * long (measured on the rig: 320..383 lines) and the split lands too low.    */
+    { uint32_t v; uint64_t t; int it;
+      vid.time_us = fake_clock; vid.gh = 400;               /* 70 Hz, 31.8us lines */
+      crtc_w(&bus, 0x06, 0xBF); crtc_w(&bus, 0x07, 0x1F); crtc_w(&bus, 0x09, 0x41);
+      crtc_w(&bus, 0x12, 0x8F); crtc_w(&bus, 0x15, 0x96);
+      t = 0; g_fake_us = 0; vdd_bus_io(&bus, 0x3DA, 1, 1, &v); /* prime: line 0, active */
+      for (it = 0; it < 320; ++it) {                        /* the guest's loop, 12us/in */
+          do { t += 12; g_fake_us = t; vdd_bus_io(&bus, 0x3DA, 1, 1, &v); } while (v & 1);
+          do { t += 12; g_fake_us = t; vdd_bus_io(&bus, 0x3DA, 1, 1, &v); } while (!(v & 1));
+      }
+      /* 320 lines at 14285us/449 = 10181us; a missed line is +32us. */
+      CHECK(t >= 10150 && t <= 10230, "3DA: a 12us poll loop counts EVERY scanline (320 in ~10.18ms)");
+      t = 0; g_fake_us = 0; vdd_bus_io(&bus, 0x3DA, 1, 1, &v);
+      for (it = 0; it < 320; ++it) {                        /* a 4us poller sees each blank */
+          do { t += 4; g_fake_us = t; vdd_bus_io(&bus, 0x3DA, 1, 1, &v); } while (v & 1);
+          do { t += 4; g_fake_us = t; vdd_bus_io(&bus, 0x3DA, 1, 1, &v); } while (!(v & 1));
+      }
+      CHECK(t >= 10150 && t <= 10230, "3DA: ...and a 4us poll loop counts the same 320");
+      /* A stalled poller: 600us gaps (a host hiccup every line) still count 320 lines
+         in 320 lines' worth of hblanks... it cannot -- but it must not count MORE
+         clocks than lines it actually crossed: every line crossed is reported once. */
+      { uint32_t a, b; g_fake_us = 100000; vdd_bus_io(&bus, 0x3DA, 1, 1, &a);
+        g_fake_us = 100001; vdd_bus_io(&bus, 0x3DA, 1, 1, &b);
+        CHECK(a == b, "3DA: two reads in the same line still agree (the rule needs a line boundary)"); }
+      vid.time_us = 0;
+    }
+
     /* T-SPLIT: A PALETTE WRITE MID-FRAME IS A RASTER SPLIT (s70, Lemmings #1/#2) ---
      * Lemmings rewrites DAC 16..23 twice per frame: once from its timer tick, which
      * is calibrated to land at row 160 (the toolbar's top), and once after the
@@ -952,10 +984,25 @@ int main(void)
       g_fake_us = AT(11, 200); vdd_video_frame_touch(&vid);
       CHECK(ntvdd_frame_pal_at(f, 100, 16) == A && ntvdd_frame_pal_at(f, 180, 16) == B,
             "split: phase-independent -- a snapshot before this frame's tick still shows both");
-      /* The guest stops splitting: one frame later it is a single palette again. */
-      g_fake_us = AT(14, 100); vdd_video_frame_touch(&vid);
+      /* A jittering tick: the next frames' writes land on rows 165 and 158. The
+         boundary must STAY at 160 (IRQ jitter is ours, not the guest's). */
+      g_fake_us = AT(12, 1);   DAC(16, 0x3F, 0x00, 0x00);
+      g_fake_us = AT(12, 331); DAC(16, 0x00, 0x3F, 0x00);      /* row 165 */
+      CHECK(vid.pal_split_row[16] == 160, "split: a write 5 rows off keeps the boundary at 160 (sticky)");
+      g_fake_us = AT(13, 1);   DAC(16, 0x3F, 0x00, 0x00);
+      g_fake_us = AT(13, 317); DAC(16, 0x00, 0x3F, 0x00);      /* row 158 */
+      CHECK(vid.pal_split_row[16] == 160, "split: ...and 2 rows the other way too");
+      g_fake_us = AT(13, 400); vdd_video_frame_touch(&vid);
+      CHECK(ntvdd_frame_pal_at(f, 159, 16) == A && ntvdd_frame_pal_at(f, 160, 16) == B,
+            "split: rows 159/160 still resolve either side of the sticky boundary");
+      /* The guest stops splitting: two frames later it is a single palette again. */
+      g_fake_us = AT(17, 100); vdd_video_frame_touch(&vid);
       CHECK(!ntvdd_frame_has_split(f) && ntvdd_frame_pal_at(f, 180, 16) == vid.pal[16],
-            "split: expires a frame after the guest stops -- the DAC simply holds");
+            "split: expires two frames after the guest stops -- the DAC simply holds");
+      /* A genuinely different row (a new effect at row 60) does move it. */
+      g_fake_us = AT(18, 1);   DAC(16, 0x3F, 0x00, 0x00);
+      g_fake_us = AT(18, 121); DAC(16, 0x00, 0x3F, 0x00);      /* row 60 */
+      CHECK(vid.pal_split_row[16] == 60, "split: a write far from the old boundary moves it");
       /* A write during blanking is the frame's base, not a split. */
       g_fake_us = AT(20, 420); DAC(16, 0x00, 0x00, 0x3F);
       CHECK(vid.pal_base[16] == vid.pal[16] && !ntvdd_frame_has_split(f),
