@@ -11099,10 +11099,24 @@ static void imem_w8(uint32_t lin, uint8_t v)
 
 /* Port I/O dispatched to the device bus (same path as host_try_io). The
    interpreter already runs under g_lock, which is what the bus needs. */
+/* ── ★★★★ THE PIT MUST READ REAL TIME ON THIS PATH TOO (s70). The reflected port
+     path calls host_pit_sync() before every 0x40-0x43 access "so a poll always reads
+     real time"; this path did not, so a count LOADED here and LATCHED here each saw
+     total_clocks as of the last pacer round -- stale by up to a period, in different
+     amounts. Lemmings' High-Performance calibration runs interpreted (planar mode):
+     its 320-hblank count came back 306..330 lines across runs (0x2D84..0x315B), in
+     BOTH directions, which no missed-pulse story explains, and its timer tick -- the
+     row where it switches palettes -- landed anywhere from row 153 to 165. Generate
+     only: delivery takes g_lock by TRY and the interpreter already holds it. */
+static void host_pit_generate(void);
 static uint32_t iio_in(uint16_t port, int width)
-{ uint32_t v = 0; vdd_bus_io(&g_bus, port, (uint8_t)width, 1, &v); return v; }
+{ uint32_t v = 0;
+  if (port >= 0x40 && port <= 0x43) host_pit_generate();
+  vdd_bus_io(&g_bus, port, (uint8_t)width, 1, &v); return v; }
 static void iio_out(uint16_t port, int width, uint32_t val)
-{ uint32_t v = val; vdd_bus_io(&g_bus, port, (uint8_t)width, 0, &v);
+{ uint32_t v = val;
+  if (port >= 0x40 && port <= 0x43) host_pit_generate();
+  vdd_bus_io(&g_bus, port, (uint8_t)width, 0, &v);
   if (port == 0x43) pit_latch_note((uint8_t)val);     /* same instrument as the reflected path */
   if (port == 0x40) host_pit_resync_check(); }         /* and the same resync rule           */
 
