@@ -2166,6 +2166,41 @@ static DWORD g_irq0_isr_strict   = 0;   /* acknowledges that HELD the line (gues
 static DWORD g_irq0_isr_auto     = 0;   /* acknowledges that auto-EOI'd (stub or fallback)   */
 static int   g_irq0_autoeoi      = 0;   /* fallback engaged: this guest does not EOI IRQ0    */
 
+/* ── ★★★★ A TIMER RE-ARMED FROM INSIDE ITS OWN HANDLER DISCARDS THE TICK QUEUED BEHIND IT. ──
+     s70, the user's by-hand Lemmings run: the fade completed, then "it stalled when the
+     trapdoors opened" -- every heartbeat from then on inside the ISR's retrace spin,
+     irq0/s == edges/s == 71, p3da 3.1M reads/s, and the new counters read blocks=796,
+     timeouts=1. Not nesting this time (the in-service guard held) but a LOCKSTEP: one
+     long tick (250 ms in service -- the trapdoor moment) left a tick queued behind the
+     handler; the queued tick re-entered the handler AT THE EOI, that instance spun to the
+     next retrace and re-armed the PIT, and its own tick then fired during the NEXT
+     instance's spin -- queued again, forever. The main loop never got a cycle. A real
+     8259 latches one IRR bit and would do exactly the same after such a stall; Lemmings'
+     design is fragile and a 386 simply never stalled that long.
+   ► The guest's own act names the fix. A `out 43h` + count on counter 0 from INSIDE the
+     IRQ0 handler is the guest saying "the next tick is N clocks from NOW" -- it has just
+     resynchronised. A tick that was queued before that instant belongs to the period it
+     just discarded, so drop it: clear the V86 backlog and the IRR bit. For a guest that
+     programs its timer once at start-up (Skyroads, Doom's DMX, the BIOS rate) the
+     condition never holds -- no restart while in service -- so nothing changes for them.
+     The deviation from the hardware is exactly one tick, at exactly the moment the
+     guest asked for a new period. Counted: STAGE2 irq0_isr[...,resync_drop]. */
+static DWORD    g_irq0_resync_drop = 0;
+static uint32_t g_pit_restarts_seen = 0;
+static void host_pit_resync_check(void)
+{
+    uint32_t r = g_pit.restarts;             /* monotonic; a stale read only defers us */
+    if (r == g_pit_restarts_seen) return;
+    g_pit_restarts_seen = r;
+    if ((g_pic.m.isr & 1) && !g_irq0_autoeoi) {
+        LONG pend = InterlockedExchange(&g_irq0_pending, 0);
+        if (pend || (g_pic.m.irr & 1)) {
+            __sync_fetch_and_and(&g_pic.m.irr, (uint8_t)~1u);
+            g_irq0_resync_drop++;
+        }
+    }
+}
+
 /* Can IRQ0 be delivered now? The PIC's answer, plus safety net 1. Called at both
    delivery sites (cooperative exec loop and the async courier). */
 static int irq0_can_deliver(void)
@@ -2185,6 +2220,26 @@ static int irq0_can_deliver(void)
             return vdd_pic_can_deliver(&g_pic, 0);
         }
         g_irq0_isr_blocks++;
+        /* ── NAME THE LONG ONE. The s70 by-hand stall began with a single in-service
+             episode of >250 ms (the trapdoor moment) and the log could not say where the
+             guest was. Bounded: one line per 50 ms step of an episode, 8 lines per run.
+             cs:ip is the TIB's, i.e. the last V86 exit -- biased, but it is what the
+             heartbeat prints and it has named sites before. */
+        if (since && g_tib_dbg) {
+            static DWORD s_lines = 0, s_episode = 0, s_step = 0;
+            DWORD ms = GetTickCount() - since;
+            if (s_episode != since) { s_episode = since; s_step = 0; }
+            if (ms >= (s_step + 1) * 50u && s_lines < 8) {
+                char b[160], *q = b;
+                s_step = ms / 50u; ++s_lines;
+                q = zput(q, "IRQ0-ISR-LONG in service ms=");  q = zdec(q, ms);
+                q = zput(q, " guest cs:ip=0x"); q = zhex(q, VDM_REG(g_tib_dbg, VTIB_CS) & 0xFFFF);
+                q = zput(q, ":0x");              q = zhex(q, VDM_REG(g_tib_dbg, VTIB_EIP) & 0xFFFF);
+                q = zput(q, " pending=");        q = zdec(q, (DWORD)g_irq0_pending);
+                q = zput(q, "\r\n");
+                log_append(LOG_PATH, b, q);
+            }
+        }
     }
     return 0;
 }
@@ -9840,6 +9895,7 @@ static void host_io_do(volatile BYTE *tib, vdd_bus *bus, uint16_t port,
     } else {
         val = (width == 1) ? (eax & 0xFF) : (width == 2) ? (eax & 0xFFFF) : eax;
         if (!vdd_bus_io(bus, port, (uint8_t)width, 0, &val)) io_unclaimed_note(port, 0);
+        if (port == 0x40) host_pit_resync_check();   /* see host_pit_resync_check */
     }
     /* ── THE SOUND-CARD HANDSHAKE, IN FULL, FOR AS LONG AS IT LASTS. ─────────────────
          "SB isn't responding at p=0x220, i=7, d=1" is Doom's verdict, not a
@@ -11035,7 +11091,8 @@ static uint32_t iio_in(uint16_t port, int width)
 { uint32_t v = 0; vdd_bus_io(&g_bus, port, (uint8_t)width, 1, &v); return v; }
 static void iio_out(uint16_t port, int width, uint32_t val)
 { uint32_t v = val; vdd_bus_io(&g_bus, port, (uint8_t)width, 0, &v);
-  if (port == 0x43) pit_latch_note((uint8_t)val); }   /* same instrument as the reflected path */
+  if (port == 0x43) pit_latch_note((uint8_t)val);     /* same instrument as the reflected path */
+  if (port == 0x40) host_pit_resync_check(); }         /* and the same resync rule           */
 
 #include "v86interp.h"
 
@@ -24737,11 +24794,12 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
       /* s70: IRQ0 in-service accounting (see irq0_ack). strict = acknowledges that held
          the line, auto = stub/fallback, blocks = deliveries refused while in service,
          timeouts = releases by the safety net, fallback = the auto-EOI regime engaged. */
-      p = zput(p, " irq0_isr[strict,auto,blocks,timeouts,fallback]=0x"); p = zhex(p, g_irq0_isr_strict);
+      p = zput(p, " irq0_isr[strict,auto,blocks,timeouts,fallback,resync_drop]=0x"); p = zhex(p, g_irq0_isr_strict);
       p = zput(p, ",0x"); p = zhex(p, g_irq0_isr_auto);
       p = zput(p, ",0x"); p = zhex(p, g_irq0_isr_blocks);
       p = zput(p, ",0x"); p = zhex(p, g_irq0_isr_timeouts);
       p = zput(p, ",0x"); p = zhex(p, (DWORD)g_irq0_autoeoi);
+      p = zput(p, ",0x"); p = zhex(p, g_irq0_resync_drop);
       p = zput(p, " irq1_inj=0x");   p = zhex(p, g_irq1_inj);
       p = zput(p, " int16=[");
       { int k; for (k = 0; k < 4; ++k) { p = zput(p, "0x"); p = zhex(p, g_in.int16_calls[k]); p = zput(p, " "); } }

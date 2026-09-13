@@ -284,10 +284,26 @@ and matches the 6.22 oracle row for row (session 53)** — but `MEM /C` still re
    Skyroads on baseline, Lemmings' scripted click still lands while captured.
    **USER-CONFIRMED by hand in Doom and Lemmings.**
 
-   **▶ NEXT:** (a) user confirms by hand: music tempo, level fade-in, and that the
-   briefing/game no longer flicker between palettes (the nesting may have been that
-   too); (b) capture refinements (`0097dd1` + rule 6) still untested by hand; (c) #4
-   in-game click assigning a skill; (d) consider strict IRQ0 for the PM arm, on Doom.
+   **User's by-hand result (21:03): screen no longer blank, fade completes — but the
+   palette still flickers and "it stalled when the trapdoors opened".** The heartbeat
+   named the stall: every sample in the ISR's retrace spin, `irq0 == edges == 71/s`,
+   `p3da` 3.1M/s, and the new counters `blocks=796 timeouts=1`. Not nesting (the guard
+   held) but a **LOCKSTEP**: one long tick (>250 ms in service, the trapdoor moment)
+   left a tick queued behind the handler; the queued tick re-entered at the EOI, that
+   instance spun to the next retrace and re-armed the PIT, and its own tick then
+   fired during the next instance's spin — queued again, forever. A real 8259 would
+   do the same after such a stall; the game's design is fragile, a 386 never stalled.
+   **Fix (rig-clean, by-hand unproven): a PIT restart (CW+count) from INSIDE the IRQ0
+   handler drops the tick queued behind it** (`host_pit_resync_check`, both port
+   paths; counted as `resync_drop`). Guests that program the timer once are untouched.
+   Plus `IRQ0-ISR-LONG` lines (≤8/run) naming the guest cs:ip during a long episode.
+   ⚠ One headless run died silently at `russell.dat` (first run after a deploy, the
+   s69 shape, `runs/lemref/s70_headless_death1.log`); 4 later runs were clean.
+
+   **▶ NEXT:** (a) user re-tests Lemmings by hand — trapdoors, then read
+   `irq0_isr[...]` + any `IRQ0-ISR-LONG` lines; if it stalls, LEAVE IT RUNNING; (b) the
+   palette flicker (#1/#2) is still open — separate cause; (c) #4 in-game click
+   assigning a skill; (d) consider strict IRQ0 for the PM arm, on Doom.
 
    ---
 

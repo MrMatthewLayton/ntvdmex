@@ -98,6 +98,7 @@ static void pit_load(pit_state *st, uint16_t count)
     st->accum        = 0;
     st->cw_armed     = 0;
     st->next_pending = 0;
+    st->restarts++;
 }
 
 /* See pit_state.guard in the header: every touch of counter state from a caller

@@ -40,6 +40,8 @@ typedef struct pit_state {
     uint8_t  next_pending;  /* modes 2/3, count written WITHOUT a Control Word: it is
                                held here and loaded at the end of the current period  */
     uint16_t next_reload;   /* ...that held count                                */
+    uint32_t restarts;      /* loads that RESTARTED the period (CW+count / one-shot
+                               modes); the host watches it -- see host_pit_resync_check */
     uint32_t frame_us;      /* microseconds per bus frame tick                  */
     uint16_t ch2_reload;    /* channel-2 reload (the PC-speaker tone divisor)   */
     uint8_t  ch2_access;    /* channel-2 access mode (1=lo, 2=hi, 3=lo/hi)      */
