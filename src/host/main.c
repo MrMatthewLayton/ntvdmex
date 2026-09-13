@@ -5031,7 +5031,7 @@ static DWORD WINAPI heartbeat_thread(LPVOID pv)
 {
     int n;
     (void)pv;
-    for (n = 0; n < 80 && g_running; ++n) {
+    for (n = 0; n < 400 && g_running; ++n) {   /* 200 s: a live run outlasts 40 s */
         /* ⚠⚠ 640, AND MEASURE THE LINE IN A REAL LOG BEFORE ADDING A FIELD. A fixed log
              buffer in this file is a silent budget: adding one field to a 247-char line
              in a char[256] killed the host once (see dpmi_dispatch_to_pm_handler's lb),
@@ -21626,7 +21626,10 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                       /* appended to the preamble, which is flushed further down */
                       p = zput(p, "HEADLESS: cap=0x"); p = zhex(p, g_headless_ms);
                       p = zput(p, " ms\r\n"); }
-    if (g_headless) { HANDLE hb = CreateThread(NULL, 0, heartbeat_thread, NULL, 0, NULL);
+    /* cfg\livehb.flag: the heartbeat on a LIVE (by-hand) run too. A host that dies
+       with no exit report leaves nothing else that says where the guest was. (s68) */
+    if (g_headless || GetFileAttributesA(CFG_("livehb.flag")) != INVALID_FILE_ATTRIBUTES) {
+                      HANDLE hb = CreateThread(NULL, 0, heartbeat_thread, NULL, 0, NULL);
                       if (hb) CloseHandle(hb); }
     if (g_qi_keys) { HANDLE hk = CreateThread(NULL, 0, synthkey_thread, NULL, 0, NULL);
                      if (hk) CloseHandle(hk); }

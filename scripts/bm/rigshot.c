@@ -624,10 +624,15 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show)
         int vk = satoi(arg1);
         char m[200], *p = m;
         n = arg2[0] ? satoi(arg2) : 1;
+        /* ⚠ WITH THE SCANCODE. A bScan of 0 reaches the host as WM_KEYDOWN with
+             scancode 0 in lParam, and the host's INT 09h path is scancode-driven --
+             12 messages received, 0 delivered, and a run that read as "the guest
+             ignores the keyboard" (s68). A real keyboard always carries one. */
+        BYTE sc = (BYTE)MapVirtualKeyA((UINT)vk, 0);
         for (i = 0; i < n; ++i) {
-            keybd_event((BYTE)vk, 0, 0, 0);
+            keybd_event((BYTE)vk, sc, 0, 0);
             Sleep(40);
-            keybd_event((BYTE)vk, 0, KEYEVENTF_KEYUP, 0);
+            keybd_event((BYTE)vk, sc, KEYEVENTF_KEYUP, 0);
             Sleep(120);
         }
         p = sput(p, "key: sent vk="); p = sput(p, arg1);
