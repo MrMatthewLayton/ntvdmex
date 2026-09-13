@@ -10822,15 +10822,50 @@ static void video_trap_sync(void)
  *  bail). One fault now drives the entire fill instead of one-per-pixel.  *
  * ====================================================================== */
 
+/* ── ⚠⚠ A STRAY GUEST POINTER MUST NOT JAM THE MACHINE. ─────────────────────────────
+     imem treats a guest LINEAR address as a HOST virtual address -- true for the low
+     megabyte NTVDM identity-maps, but the UMB region (0xC0000-0xEFFFF) has HOLES that
+     are not committed, and a guest (or an interpreter state bug) that dereferences one
+     raises an access violation that takes the whole host down -- exactly the "NTVDMEX
+     can jam the machine" failure this project has a standing rule against.
+   ★ MEASURED (s69, user's live rig): Lemmings' sprite blitter faulted reading guest
+     linear 0xd4013 -- es=0xa000 in the code, yet the interpreter's effective address
+     landed in the 0xD0000 UMB hole. Whatever the root cause of the bad address, the
+     host must DEGRADE, not die: an unmapped read is 0xFF on real hardware (floating
+     bus) and an unmapped write is dropped.
+   ► A per-4KB-page validity cache, probed once with VirtualQuery. imem is hot (every
+     interpreted byte), so the fast path is a single array lookup; the syscall happens
+     at most once per page. 0=unknown, 1=ok, 2=bad. The low conventional memory and our
+     own aperture never reach the probe (handled above / by the A000 branch), so the
+     cost falls only on the upper-memory accesses that are the anomaly. */
+static uint8_t g_pagemap[0x100000u >> 12];     /* one entry per 4KB page of the low 1MB */
+static DWORD   g_imem_bad_reads, g_imem_bad_writes, g_imem_bad_logged;
+static void imem_bad_note(uint32_t lin, int write);   /* defined after v86interp.h (needs icpu) */
+static int imem_page_ok(uint32_t lin)
+{
+    uint32_t pg = lin >> 12;
+    if (lin >= 0x100000u) return 1;             /* HMA and above: leave to the raw path */
+    if (g_pagemap[pg] == 0) {
+        MEMORY_BASIC_INFORMATION mbi;
+        int ok = 0;
+        if (VirtualQuery((LPCVOID)(ULONG_PTR)(pg << 12), &mbi, sizeof mbi) == sizeof mbi)
+            ok = (mbi.State == MEM_COMMIT) &&
+                 !(mbi.Protect & (PAGE_NOACCESS | PAGE_GUARD));
+        g_pagemap[pg] = (uint8_t)(ok ? 1 : 2);
+    }
+    return g_pagemap[pg] == 1;
+}
 /* Flat/planar guest memory for the interpreter: A0000 goes through the VGA
    engine (a read loads the latches), everything else is the directly-mapped
    V86 address space. These are the host hooks v86interp.h requires. */
 static uint8_t imem_r8(uint32_t lin)
-{ return (lin >= A000_LO && lin < A000_HI) ? vga_planar_read(&g_vid, lin - A000_LO)
-                                           : *(volatile BYTE *)lin; }
+{ if (lin >= A000_LO && lin < A000_HI) return vga_planar_read(&g_vid, lin - A000_LO);
+  if (!imem_page_ok(lin)) { g_imem_bad_reads++; imem_bad_note(lin, 0); return 0xFF; }
+  return *(volatile BYTE *)lin; }
 static void imem_w8(uint32_t lin, uint8_t v)
-{ if (lin >= A000_LO && lin < A000_HI) vga_planar_write(&g_vid, lin - A000_LO, v);
-  else *(volatile BYTE *)lin = v; }
+{ if (lin >= A000_LO && lin < A000_HI) { vga_planar_write(&g_vid, lin - A000_LO, v); return; }
+  if (!imem_page_ok(lin)) { g_imem_bad_writes++; imem_bad_note(lin, 1); return; }
+  *(volatile BYTE *)lin = v; }
 
 /* Port I/O dispatched to the device bus (same path as host_try_io). The
    interpreter already runs under g_lock, which is what the bus needs. */
@@ -10841,6 +10876,30 @@ static void iio_out(uint16_t port, int width, uint32_t val)
   if (port == 0x43) pit_latch_note((uint8_t)val); }   /* same instrument as the reflected path */
 
 #include "v86interp.h"
+
+/* The interpreter's live register file, for the fatal dump and the OOR logger. A
+   crash or a stray access inside istep (s69) leaves the VDM context a whole slice
+   stale; this is the es/di the effective address was actually built from. NULL when
+   the interpreter is not running. */
+static const icpu *g_interp_c;
+
+/* Name the FIRST few out-of-range accesses: the guest cs:ip, and the interpreter's
+   live es/di/ds -- which is what says whether a bad address is a wrong SEGMENT or an
+   unmasked OFFSET (s69, Lemmings' blit to a 0xD0000 hole). Bounded; graceful. */
+static void imem_bad_note(uint32_t lin, int write)
+{
+    char b[224], *q = b;
+    if (g_imem_bad_logged >= 12) return;
+    g_imem_bad_logged++;
+    q = zput(q, "IMEM-OOR "); q = zput(q, write ? "W" : "R"); q = zput(q, " lin=0x"); q = zhex(q, lin);
+    q = zput(q, " guest cs:ip=0x"); q = zhex(q, g_ipc);
+    if (g_interp_c) { const icpu *ic = g_interp_c;
+        q = zput(q, " es=0x"); q = zhex(q, ic->seg[0]);
+        q = zput(q, " ds=0x"); q = zhex(q, ic->seg[3]);
+        q = zput(q, " di=0x"); q = zhex(q, ic->r[7]);
+        q = zput(q, " si=0x"); q = zhex(q, ic->r[6]); }
+    q = zput(q, "\r\n"); log_append(LOG_PATH, b, q);
+}
 
 /* Where the guest was at the last interpreted instruction. Every planar VRAM write
    arrives through imem_w8 above, i.e. from the interpreter, so this is exact at the
@@ -10880,6 +10939,7 @@ static long host_interp(volatile BYTE *tib, long cap)
     c.ip = (uint16_t)VDM_REG(tib, VTIB_EIP); c.flags = VDM_REG(tib, VTIB_EFLAGS);
 
     HOST_LOCK();
+    g_interp_c = &c;
     for (iters = 0; iters < cap; ++iters) {
         if (!istep(&c)) break;
         /* YIELD WHEN AN INTERRUPT IS PENDING. A real CPU takes interrupts in the
@@ -10901,6 +10961,7 @@ static long host_interp(volatile BYTE *tib, long cap)
             if (pend) { ++iters; break; }
         }
     }
+    g_interp_c = NULL;
     HOST_UNLOCK();
 
     if (iters == 0) return 0;                          /* first opcode unmodeled */
@@ -11057,6 +11118,20 @@ static void host_fatal_dump(EXCEPTION_RECORD *er, CONTEXT *cx)
     { const BYTE *fb = (const BYTE *)(ULONG_PTR)(er->ExceptionAddress);
       p = zput(p, "  bytes@fault: ");
       if (host_readable(fb, 16)) p = zdump(p, fb, 16); else p = zput(p, "<unreadable>");
+    }
+    /* ★ THE INTERPRETER'S LIVE REGISTERS. When the fault is inside istep (a stray
+         guest pointer, s69), the VDM context is a whole slice stale; THIS is the es/di
+         the effective address was actually built from. es_base+ea that lands in an
+         unmapped hole names the bug: a wrong SEGMENT vs an unmasked OFFSET. */
+    if (g_interp_c) {
+        const icpu *ic = g_interp_c;
+        p = zput(p, "\r\n  interp cs:ip=0x"); p = zhex(p, ic->seg[1]); p = zput(p, ":0x"); p = zhex(p, ic->ip);
+        p = zput(p, " es=0x"); p = zhex(p, ic->seg[0]); p = zput(p, " ds=0x"); p = zhex(p, ic->seg[3]);
+        p = zput(p, " ss=0x"); p = zhex(p, ic->seg[2]);
+        p = zput(p, "\r\n  interp di=0x"); p = zhex(p, ic->r[7]); p = zput(p, " si=0x"); p = zhex(p, ic->r[6]);
+        p = zput(p, " bx=0x"); p = zhex(p, ic->r[3]); p = zput(p, " bp=0x"); p = zhex(p, ic->r[5]);
+        p = zput(p, " ax=0x"); p = zhex(p, ic->r[0]); p = zput(p, " cx=0x"); p = zhex(p, ic->r[1]);
+        p = zput(p, "\r\n");
     }
     /* Where the GUEST was when the host died. For a real-mode crash this is the
        line that names the suspect -- e.g. a CLI poll of an unclaimed port. */
@@ -25265,6 +25340,9 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         p = zput(p, " hbl_owed=");               p = zhex(p, g_vid.p3da_hbl_owed);
         p = zput(p, " run_ms=");                 p = zhex(p, GetTickCount() - g_run_start_tick);
         p = zput(p, "\r\n");
+        p = zput(p, "STAGE2: imem out-of-range (guarded, would have CRASHED the host): bad_reads=");
+        p = zhex(p, g_imem_bad_reads); p = zput(p, " bad_writes="); p = zhex(p, g_imem_bad_writes);
+        p = zput(p, " logged="); p = zhex(p, g_imem_bad_logged); p = zput(p, "\r\n");
         /* ► Is mode Y actually in use? The whole unchained theory rests on Doom
              clearing Sequencer reg 4 bit 3, which was INFERRED from a pixel pattern
              (80-px period, 50 rows) and never observed directly. Print the register. */
