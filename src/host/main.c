@@ -110,6 +110,11 @@
    tests (selftest/dpmitest) then never touch the self-capture path -- keeping the
    common case off the capture code entirely. */
 #define CAPTURE_FLAG CFG_("capture.flag")
+/* dwExtraInfo tag on keystrokes WE synthesise with SendInput (the Start-menu
+   suppression Ctrl tap), so our own WM_KEYDOWN/UP handlers recognise and drop them
+   instead of forwarding them to the guest. Any non-zero sentinel a real device will
+   not use. */
+#define HOST_INJECT_TAG 0x4E56444Du   /* 'NVDM' */
 /* Mode-Y de-interleave tuning; see modey_flush() in vdd_video.c. Contents = the run
    coalescing slack in dwords. Absent = the built-in default. */
 #define MODEY_PATH CFG_("modey.txt")
@@ -8950,7 +8955,24 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
     case WM_KILLFOCUS:
         input_capture_set(h, 0);         /* never strand the user in a captured window */
         return 0;
+    case WM_ACTIVATE:
+        /* ── RULE 5 (s69, user spec): GAINING FOCUS RE-CAPTURES, for a guest that asked
+             for the mouse. The click-in-the-video path (below) already covers "click the
+             window"; this adds "focus the window" -- alt-tab back, or the click that
+             activated an unfocused window (WA_CLICKACTIVE), grabs the mouse straight
+             away. input_capture_set gates it on rule 1 (capture_allowed), so a guest
+             that never touched INT 33h is unaffected. WM_KILLFOCUS is the matching
+             release, so alt-tab away frees the pointer and alt-tab back takes it.
+           ⚠ This composes with the Windows-key release ONLY because that release now
+             suppresses the Start menu (see the WM_KEYDOWN handler): without suppression
+             the menu would steal focus and returning to the window would re-capture
+             instantly, making the release feel dead. */
+        if (LOWORD(wp) != WA_INACTIVE) input_capture_set(h, 1);
+        break;                           /* let DefWindowProc do the focus bookkeeping */
     case WM_KEYDOWN:
+        /* Our own Start-menu-suppression Ctrl tap (see the VK_LWIN handler) comes back
+           to us as a normal keystroke; drop it so it never reaches the guest. */
+        if (GetMessageExtraInfo() == (LPARAM)HOST_INJECT_TAG) return 0;
         key_msg_note();
         /* ── ★ RULE 4: THE WINDOWS KEY ALONE RELEASES THE CAPTURE. ───────────────────
              The lineage, because each step was a real fix: Ctrl+F10 (broken twice over
@@ -8970,6 +8992,25 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
              which is what they were asking for by pressing it. */
         if (wp == VK_LWIN || wp == VK_RWIN) {
             if (g_captured) input_capture_set(h, 0);
+            /* ── ★ SUPPRESS THE START MENU WITHOUT THE SYSTEM-WIDE HOOK. (s69, user ask) ──
+                 The Windows equivalent of e.preventDefault() for a keystroke is a
+                 WH_KEYBOARD_LL hook returning nonzero -- and we HAVE that (ll_kbd_proc,
+                 llkbd.txt) -- but it is off by default because that hook is system-wide
+                 and jammed the rig twice (see input_capture_set). This is the safe
+                 equivalent: Explorer opens the Start menu on the WIN key-UP only if no
+                 other key was pressed while WIN was held, so -- WIN still down here --
+                 inject ONE benign keystroke. Explorer then sees WIN+Ctrl, not a lone
+                 WIN, and never opens the menu. A one-shot SendInput cannot stall the
+                 keyboard the way a persistent hook can. Ctrl is inert on the desktop,
+                 and we are UNCAPTURED by now so it never reaches the guest.
+               ⚠ DESKTOP BEHAVIOUR -- verify by hand; it cannot be tested headless. */
+            { INPUT in[2];
+              in[0].type = INPUT_KEYBOARD;
+              in[0].ki.wVk = VK_CONTROL; in[0].ki.wScan = 0;
+              in[0].ki.dwFlags = 0; in[0].ki.time = 0;
+              in[0].ki.dwExtraInfo = HOST_INJECT_TAG;   /* so our own key handlers skip it */
+              in[1] = in[0]; in[1].ki.dwFlags = KEYEVENTF_KEYUP;
+              SendInput(2, in, sizeof(INPUT)); }
             return 0;
         }
         /* ⚠ Scroll Lock was the alternative capture toggle. Retired with Win+F10 for
@@ -9000,6 +9041,9 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
            ignored every arrow. One key, one path. */
         break;
     case WM_KEYUP:                       /* raw AT keyboard BREAK code + IRQ1      */
+        /* Skip our injected Start-menu-suppression Ctrl -- otherwise the guest gets a
+           break code with no matching make. */
+        if (GetMessageExtraInfo() == (LPARAM)HOST_INJECT_TAG) return 0;
         key_msg_note();
         key_push_break(lp);
         break;
