@@ -318,10 +318,36 @@ and matches the 6.22 oracle row for row (session 53)** — but `MEM /C` still re
    by video_test T-SPLIT with the fake clock (8 checks, incl. phase independence and
    expiry). Battery green.
 
-   **▶ NEXT:** (a) deploy the raster-split build and have the user confirm the toolbar
-   region stops flickering; (b) the Lemmings gate (`tools/lemgate`): log invariants +
-   per-region palette from the game's own tables, so none of today's fixes can regress
-   silently; (c) #4 in-game click assigning a skill; (d) strict IRQ0 for the PM arm.
+   **The rest of the evening, in order (all on the rig now, `f79d954`):**
+   * Deploying the raster split over the confirmed build made it WORSE ("flicker at
+     the bottom") — rolled back; rule written: a user-confirmed build is the rollback
+     copy and is not replaced without an explicit go.
+   * Instrumented runs by the user proved the mechanism: HP mode (1,2) writes two
+     palettes per frame with the tick landing on rows 160–169 (reload `0x3192`);
+     normal-PC mode (1,1) writes none during play and is fine.
+   * Why the split looked worse: the calibration landed the tick on a different row
+     every run (306–383 lines), and our IRQ jitter moved it ±5 rows frame to frame.
+     Root cause of the run-to-run spread: the interpreter's port path (`iio_out`) did
+     not sync the PIT clock before 0x40–0x43, unlike the reflected path — load and
+     latch each read a clock stale by up to a pacer round (`19dd3b8`). Spread went
+     ±14 → +2..+10 lines. Sticky split boundary (12 rows) + 2-frame expiry absorb
+     the jitter (`40112ac`). The multi-line "blank debt" repayment was tried twice
+     and measured wrong off-VM; s69's one-blank rule stays, bounded to recent polls
+     (`f79d954`). Stall-aware IRQ0 timeout (capture stalls are not the guest's).
+   * Headless: reload 322/322/330 lines, 0 blocks/timeouts/drops, Skyroads baseline.
+   * **USER VERDICT (23:05): "Clean. There is some slight flicker … Lemmings is
+     playable, and flicker is minimal."** Session paused here at the user's request.
+
+   **▶ NEXT:** (a) the user wants to judge the residual flicker against the oracle
+   themselves — note the QEMU oracle shows ONE palette everywhere (wrong for raster
+   effects); a real-hardware reference or the game's own tables are the oracle;
+   (b) the standing ask: **oracle-backed regression gates** (`tools/lemgate`: log
+   invariants — reload 320–330 lines, IRQ0 == retrace ±2/s, fade 2–4 s, blocks/
+   timeouts/drops 0, no faults, run completes; per-region palette on split frames;
+   Skyroads bands) so none of this regresses silently; (c) the silent first-run-after-
+   deploy death at `russell.dat` (3 of ~14 headless runs); (d) #4 click→skill; (e)
+   strict IRQ0 on the PM arm; (f) the residual +2..+10-line calibration excess (a host
+   stall inside the count is repaid one line).
 
    ---
 
