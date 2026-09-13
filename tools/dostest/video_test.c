@@ -940,12 +940,23 @@ int main(void)
           do { t += 4; g_fake_us = t; vdd_bus_io(&bus, 0x3DA, 1, 1, &v); } while (!(v & 1));
       }
       CHECK(t >= 10150 && t <= 10230, "3DA: ...and a 4us poll loop counts the same 320");
-      /* A stalled poller: 600us gaps (a host hiccup every line) still count 320 lines
-         in 320 lines' worth of hblanks... it cannot -- but it must not count MORE
-         clocks than lines it actually crossed: every line crossed is reported once. */
+      /* A HOST STALL MID-COUNT: the guest is not polled for 330us (~10 lines) at
+         iteration 100. Every line crossed is a blank owed and the count must still
+         end at 320 lines' worth of real time -- one-blank repayment left +6 lines
+         on the rig (0x310B). */
+      t = 0; g_fake_us = 0; vdd_bus_io(&bus, 0x3DA, 1, 1, &v);
+      for (it = 0; it < 320; ++it) {
+          if (it == 100) t += 330;                             /* the stall          */
+          do { t += 12; g_fake_us = t; vdd_bus_io(&bus, 0x3DA, 1, 1, &v); } while (v & 1);
+          do { t += 12; g_fake_us = t; vdd_bus_io(&bus, 0x3DA, 1, 1, &v); } while (!(v & 1));
+      }
+      CHECK(t >= 10150 && t <= 10260, "3DA: a 330us stall mid-count is repaid line for line (320 in ~10.18ms)");
       { uint32_t a, b; g_fake_us = 100000; vdd_bus_io(&bus, 0x3DA, 1, 1, &a);
         g_fake_us = 100001; vdd_bus_io(&bus, 0x3DA, 1, 1, &b);
         CHECK(a == b, "3DA: two reads in the same line still agree (the rule needs a line boundary)"); }
+      /* A gap of a frame or more owes nothing: the next poll reads the true phase. */
+      { uint32_t a; g_fake_us = 100000 + 3 * 14285; vdd_bus_io(&bus, 0x3DA, 1, 1, &a);
+        CHECK(vid.p3da_hbl_debt == 0, "3DA: a gap of frames drops the debt (the guest was not counting)"); }
       vid.time_us = 0;
     }
 

@@ -309,6 +309,9 @@ typedef struct video_state {
     uint64_t p3da_last_line;
     uint8_t  p3da_last_bit0, p3da_have_last;
     uint32_t p3da_hbl_owed;   /* blanks reported by that rule (STAGE2)               */
+    uint32_t p3da_hbl_debt;   /* blanks still owed: whole lines crossed unsampled     */
+    uint8_t  p3da_synth_hi;   /* a synthetic blank is half-way through (1 reported)   */
+    uint8_t  p3da_last_vbl;   /* the previous poll was in vertical blanking          */
     /* ── ⚠ DEBUG SCAFFOLDING, OFF UNLESS ASKED FOR. ─────────────────────────────────
          The last VID_P3DA_RING polls: model microseconds and the byte returned. A
          scanline-counting loop is ~1000 polls in 85 million, invisible in any
