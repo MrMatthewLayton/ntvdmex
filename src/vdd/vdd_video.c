@@ -1636,34 +1636,16 @@ static void status_in(void *self, uint16_t port, uint8_t w, uint32_t *v)
         in_hbl = ((uint64_t)(pos % frame_us) * 100u >= (uint64_t)frame_us * VID_HACTIVE_PCT);
     }
     in_vbl = (line >= (uint32_t)vactive);
-    /* ── ★★★★ A BLANK THAT PASSED BETWEEN TWO POLLS HAPPENED, WHETHER OR NOT A
-         SAMPLE LANDED IN IT. Bit 0 is what a scanline COUNTER reads: Lemmings' "High
-         Performance PC" calibration does `wait while set; wait while clear` 160 (or
-         320) times against the 8254 and uses the elapsed clocks as its game tick
-         (guest CS:15BB..1633). On real silicon an `in` is a microsecond and every
-         6.4us hblank is sampled. Here a trapped `in` costs ~11us, so about half the
-         hblanks fell between two samples and the loop counted 2.24 lines per
-         iteration -- measured on the rig: reload 0x3520 = 13,600 clocks for what is
-         6,067 on the hardware, i.e. a game running at 44%% speed with the user's
-         "music is too slow" as the audible half of it.
-       ► So if the guest's previous poll was in an EARLIER line and saw the display
-         active, the blanking of that earlier line went unobserved; report it ONCE and
-         let the next poll read the true phase. The rule cannot fire within a line
-         (two reads at one instant still agree, which is the property the timed model
-         was built for) and does not fire when the guest saw the blank itself, so a
-         fast poller sees exactly what it saw before. A poller slower than a whole
-         line cannot count lines on real hardware either and is not helped. */
-    {   uint64_t abs_line = (now / (uint64_t)frame_us) * (uint64_t)vtotal + line;
-        int bit0 = (in_vbl || in_hbl);
-        if (!bit0 && st->p3da_have_last && !st->p3da_last_bit0
-            && abs_line != st->p3da_last_line) {
-            bit0 = 1; st->p3da_hbl_owed++;
-        }
-        st->p3da_last_line = abs_line; st->p3da_last_bit0 = (uint8_t)bit0;
-        st->p3da_have_last = 1;
-        /* bit 3 = vertical retrace; bit 0 = display disabled (h- OR v-blank). Bit 0 is
-           a DIFFERENT signal on a real card -- it changes per scanline, not per frame
-           -- so toggling the two together, as we used to, was doubly wrong. */
+    /* bit 3 = vertical retrace; bit 0 = display disabled (h- OR v-blank). Bit 0 is a
+       DIFFERENT signal on a real card -- it changes per scanline, not per frame -- so
+       toggling the two together, as we used to, was doubly wrong.
+       ⚠ s69 REVERTED: an "owed-blank" rule synthesised a bit-0 blank for a poll that
+       crossed a scanline boundary while both samples read active, to help Lemmings'
+       scanline-counting calibration under our slow trapped `in`. It went out with the
+       count-from-load PIT change that broke the palette fade, so it is reverted with
+       it -- the calibration accuracy it bought is moot once the reload it fed is
+       reverted. See [[session-67-handoff]]. */
+    {   int bit0 = (in_vbl || in_hbl);
         *v = (uint32_t)((in_vbl ? 0x08u : 0u) | (bit0 ? 0x01u : 0u));
         if (st->p3da_ring_on) {          /* debug only -- see the note in the header */
             st->p3da_ring_us[st->p3da_ring_n & (VID_P3DA_RING - 1)] = (uint32_t)now;

@@ -351,41 +351,6 @@ int main(void)
             prev = v;
         }
         CHECK(changed, "3DA: display-disabled (bit 0) toggles within a scanline"); }
-
-      /* --- ★★★★ A SCANLINE COUNTER MUST NOT SKIP LINES BECAUSE OUR PORT IS SLOW.
-       *     Lemmings' "High Performance PC" calibration counts 160 (or 320)
-       *     scanlines on bit 0 -- `wait while set; wait while clear` per line --
-       *     against the 8254. On real silicon an `in` is a microsecond and every
-       *     6.4us hblank is sampled; here a trapped `in` is ~11us, so the loop
-       *     missed about half of them and counted 2.24 lines per iteration
-       *     (measured on the rig: reload 0x3520 for 160 lines = 13,600 clocks
-       *     against 6,067). Model it as a 6845 would be read by a slower CPU:
-       *     if the guest's previous poll of this port was in an EARLIER line and
-       *     saw the display active, the blanking between the two polls happened
-       *     whether or not a sample landed in it, so report it ONCE. The rule
-       *     never fires within a line (two reads at one instant still agree) and
-       *     never when the guest saw the blank itself.                        --- */
-      { uint64_t t = 0; int it;
-        vid.gh = 400;                                     /* 70 Hz, 31.8us lines */
-        crtc_w(&bus, 0x06, 0xBF); crtc_w(&bus, 0x07, 0x1F); crtc_w(&bus, 0x09, 0x41);
-        crtc_w(&bus, 0x12, 0x8F); crtc_w(&bus, 0x15, 0x96);
-        g_fake_us = 0; vdd_bus_io(&bus, 0x3DA, 1, 1, &v);  /* prime: line 0, active */
-        for (it = 0; it < 160; ++it) {                    /* the guest's loop, 12us/in */
-            do { t += 12; g_fake_us = t; vdd_bus_io(&bus, 0x3DA, 1, 1, &v); } while (v & 1);
-            do { t += 12; g_fake_us = t; vdd_bus_io(&bus, 0x3DA, 1, 1, &v); } while (!(v & 1));
-        }
-        /* 160 lines at 14286us/449 = 5091us; a missed line is +32us, so a window of
-           one line either side separates "every line" from "half of them" (9600). */
-        CHECK(t >= 5060 && t <= 5130, "3DA: a 12us poll loop counts EVERY scanline (160 in ~5.09ms)");
-        /* A poll that DID see the blank is not owed another one: at 4us steps every
-           hblank is sampled and the count is the same. */
-        t = 0; g_fake_us = 0; vdd_bus_io(&bus, 0x3DA, 1, 1, &v);
-        for (it = 0; it < 160; ++it) {
-            do { t += 4; g_fake_us = t; vdd_bus_io(&bus, 0x3DA, 1, 1, &v); } while (v & 1);
-            do { t += 4; g_fake_us = t; vdd_bus_io(&bus, 0x3DA, 1, 1, &v); } while (!(v & 1));
-        }
-        CHECK(t >= 5060 && t <= 5130, "3DA: ...and a 4us poll loop counts the same 160"); }
-
       /* --- No clock injected -> the legacy toggle still applies, so off-VM
        *     callers that never set a clock are unaffected. ------------------ */
       { uint32_t a, b;

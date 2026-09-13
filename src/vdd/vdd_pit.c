@@ -2,40 +2,20 @@
  * on the VDD bus.  Pure C, no <windows.h>. */
 #include "vdd_pit.h"
 
-/* ── ★★★★ THE COUNT STARTS WHEN THE GUEST LOADS IT. ─────────────────────────────
-     This used to be `R - (total_clocks % R)`: a free-running divider whose phase had
-     nothing to do with the moment the guest wrote the count. For a guest that only
-     ever waits for IRQ0 that is invisible. For one that READS THE COUNTER it is a
-     random number generator.
-   ★ MEASURED ON LEMMINGS (s69). Its "High Performance PC" option calibrates the game
-     tick from the CRT: load counter 0 with 0xFFFF in mode 0, count 160 scanlines on
-     0x3DA bit 0, latch, and use 0xFFFF - latch as the reload (guest CS:15BB..1633 in
-     the real-DOS dump). 160 lines at 31.47 kHz is 6,067 clocks; the user's by-hand
-     run got 0x4BB9 (19,385 -- 61.5 Hz, a third of the intended tick rate, and the
-     "music is slower" they reported), and every run would get a different one, because
-     the read-back was `total_clocks % 0xFFFF` at the latch -- uniformly random.
-   ► So keep the instant of the load (`load_clocks`) and derive the counting element
-     from the clocks since it, per mode (Intel 8254 datasheet):
-       mode 0   load - elapsed, and on past terminal count through 0xFFFF (one-shot)
-       mode 3   decrements by TWO per clock and reloads at zero, so the count runs
-                R, R-2, ... 2 twice per period and a read never shows an odd LSB
-       others   R - (elapsed mod R), reloading at the period (modes 2, 4, 5; mode 1)
-     The IRQ engine below is untouched: it still fires once per reload of elapsed
-     clocks, which is right for the periodic modes and a harmless over-approximation
-     of mode 0 (whose single terminal count no guest here waits on). */
+/* current down-counter value (counts reload..1 repeatedly).
+   ⚠ s69 REVERTED (user-directed): a count-from-load model derived from the LOAD
+     instant (per-mode) fixed Lemmings' random calibration reload (the "music too
+     slow" #3), but it left the game's palette FADE stuck near-black -- the fade is
+     coupled to this same timer, and the "correct" reload broke the renderer. Until
+     the fader is understood, restore the s68 free-running behaviour the user
+     confirmed VISIBLE (slower music, but a playable screen). See the handoff and
+     [[session-67-handoff]]. `load_clocks` stays in the struct, unused, so the
+     instrument that prints clocks_since_load keeps compiling. */
 static uint16_t pit_current_count(const pit_state *st)
 {
     uint32_t R = pit_eff_reload(st);
-    uint64_t elapsed = (st->total_clocks >= st->load_clocks)
-                     ? st->total_clocks - st->load_clocks : 0;
-    if (st->mode == 0)
-        return (uint16_t)(R - elapsed);      /* wraps through 0xFFFF past zero   */
-    if (st->mode == 3) {
-        uint32_t half  = (R + 1) / 2;
-        uint32_t phase = (uint32_t)(elapsed % half);
-        return (uint16_t)(R - 2 * phase);    /* R when phase==0 (65536 -> 0)     */
-    }
-    return (uint16_t)(R - (uint32_t)(elapsed % R));
+    uint32_t phase = (uint32_t)(st->total_clocks % R);
+    return (uint16_t)(R - phase);            /* R when phase==0 (65536 -> 0)     */
 }
 
 /* --- the time engine: clocks -> IRQ0 pulses ------------------------------- */
@@ -69,39 +49,6 @@ static void pit_frame(void *self)
     PIT_GUARD(st, 0);
 }
 
-/* ── ★★★★★ A COUNT WRITE RESTARTS THE PERIOD ONLY IN THE ONE-SHOT MODES. ───────────
-     ⛔ THIS WAS THE s69 REGRESSION, AND IT CAME FROM A TEST I WROTE OUT OF BELIEF
-        RATHER THAN OUT OF THE DATASHEET -- the one thing M9 says never to do. The
-        first version reset `accum` on EVERY load, "because the control word stops the
-        counter". That is true of modes 0/1/4/5 and FALSE of modes 2 and 3, which are
-        the rate-generator and square-wave modes every DOS timer actually uses. Intel
-        8254, modes 2/3: if the counter is written between CLK pulses the new count is
-        NOT loaded until the end of the current counting cycle -- the period in flight
-        is not disturbed.
-     ★ MEASURED ON THE USER'S LIVE STUCK RIG (s69): Lemmings reprograms counter 0 with
-        the SAME reload once per frame, from its vblank sync routine (guest
-        CS:17D0..1829 -- write CRTC 0x0C/0x0D, wait for 0x3DA bit 3, then out 43h/40h).
-        With `accum` reset by each of those writes the accumulator never survived long
-        enough to reach the reload at its own rate, so IRQ0 came out at **exactly the
-        frame rate**: 69.95/s against 92.5 Hz programmed, and identical to `vbl_edges`
-        (69.95/s). Two independent counters locked to the same wrong number named it.
-     ⚠⚠ AND IT CAN SILENCE THE TIMER OUTRIGHT: a guest reprogramming FASTER than one
-        reload period resets the accumulator before it ever reaches the reload, so
-        IRQ0 never fires at all. "No music" is the audible end of that, and anything
-        waiting on a tick counter hangs.
-   ► So: modes 0/1/4/5 load and start counting NOW. Modes 2/3 take the new reload for
-     the next period and leave the current one -- and the accumulator -- alone.
-     `load_clocks` moves only when the counting element really restarts, because that
-     is what pit_current_count measures the read-back from. */
-static void pit_load(pit_state *st, uint16_t count)
-{
-    int oneshot = (st->mode != 2 && st->mode != 3);
-    st->reload = count;
-    if (oneshot) {                    /* the write loads AND starts the counter */
-        st->load_clocks = st->total_clocks;
-        st->accum       = 0;
-    }
-}
 
 /* --- 8254 ports 0x40-0x43 ------------------------------------------------- */
 static void pit_out_locked(pit_state *st, uint16_t port, uint8_t val)
@@ -150,12 +97,17 @@ static void pit_out_locked(pit_state *st, uint16_t port, uint8_t val)
            ⚠⚠ THE PIT IS THE MOST SHARED PATH IN THIS PROJECT -- see the note on
              host_irq_sink's throttle, where a change measured on Doom cost SKYROADS a
              fifth of its clock. Re-gate BOTH before believing this. */
+        /* ⚠ s69 REVERTED: this briefly called pit_load() (restart the period / count
+           from the load instant). Back to the direct commit -- the s68 behaviour --
+           because the count-from-load model broke Lemmings' palette fade. The 8254
+           LSB/MSB BUFFERING (the ZAR half-written-count fix) is UNCHANGED; only the
+           period-restart is gone. */
         uint8_t acc = st->access ? st->access : 3;
-        if (acc == 1)      pit_load(st, val);                        /* LSB only: MSB := 0 */
-        else if (acc == 2) pit_load(st, (uint16_t)((uint16_t)val << 8));  /* MSB only: LSB := 0 */
+        if (acc == 1)      st->reload = val;                        /* LSB only: MSB := 0 */
+        else if (acc == 2) st->reload = (uint16_t)((uint16_t)val << 8);  /* MSB only: LSB := 0 */
         else {                               /* lo then hi -- ONE atomic load   */
             if (!st->wr_flip) { st->wr_lo = val; st->wr_flip = 1; }
-            else { pit_load(st, (uint16_t)(((uint16_t)val << 8) | st->wr_lo)); st->wr_flip = 0; }
+            else { st->reload = (uint16_t)(((uint16_t)val << 8) | st->wr_lo); st->wr_flip = 0; }
         }
     } else if (port == 0x42) {               /* channel-2 reload (speaker tone) */
         uint8_t acc = st->ch2_access ? st->ch2_access : 3;
