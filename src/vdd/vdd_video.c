@@ -905,6 +905,7 @@ static void int10(void *self, ntvdd_regs *r)
 }
 
 /* DAC palette ports 3C7 (read index) / 3C8 (write index) / 3C9 (data). */
+static uint16_t dac_beam_row(const video_state *st);   /* s70 instrument: defined after status_in */
 static void dac_out(void *self, uint16_t port, uint8_t w, uint32_t v)
 {
     video_state *st = (video_state *)self; uint8_t val = (uint8_t)v; (void)w;
@@ -917,6 +918,10 @@ static void dac_out(void *self, uint16_t port, uint8_t w, uint32_t v)
             st->dac_block[(st->dac_widx >> 4) & 15]++;
             if ((st->dac_widx & 0xF0) == 0x30) st->dac_hi_since_reset++;
             st->dac_widx++; st->dac_comp = 0; st->dac_writes++;
+            {   uint16_t row = dac_beam_row(st);
+                st->dac_last_row = row;
+                st->dac_row_hist[row == 0xFFFF ? 3 : row == 0xFFFE ? 0 : row < 2 ? 0 : row < 160 ? 1 : 2]++;
+            }
             /* pal[] is DERIVED from dac[] -- see pal_refresh. Without this a guest
                could reprogram the DAC and see nothing change, which is precisely the
                half of the Lemmings bug that survived the first fix. */
@@ -1570,6 +1575,23 @@ static void gc_in(void *self, uint16_t port, uint8_t w, uint32_t *v)
      conventionally report. */
 static void status_out(void *self, uint16_t port, uint8_t w, uint32_t v)
 { (void)self; (void)port; (void)w; (void)v; }     /* feature ctrl: ignore */
+/* s70 instrument: the beam row (0..gh-1) at this instant, 0xFFFF in vertical
+   blanking, 0xFFFE with no clock. Same arithmetic as status_in. */
+static int vga_vtiming(const video_state *st, uint32_t *total, uint32_t *active,
+                       uint32_t *blank_start);
+static uint16_t dac_beam_row(const video_state *st)
+{
+    int tall; uint32_t vtotal, vdisp, vblank, t, a, b, frame_us, line; uint64_t now, in_frame;
+    if (!st->time_us || !st->gh) return 0xFFFE;
+    tall = (st->gh > VID_VACTIVE_LO);
+    vtotal = tall ? VID_VTOTAL_HI : VID_VTOTAL_LO; vblank = tall ? VID_VACTIVE_HI : VID_VACTIVE_LO; vdisp = vblank;
+    if (vga_vtiming(st, &t, &a, &b)) { vtotal = t; vdisp = a; vblank = b; tall = (t >= 500u); }
+    frame_us = 1000000u / (uint32_t)(tall ? VID_VBL_HZ_HI : VID_VBL_HZ_LO);
+    now = st->time_us(); in_frame = now % (uint64_t)frame_us;
+    line = (uint32_t)((in_frame * (uint64_t)vtotal) / frame_us);
+    if (line >= vblank || !vdisp) return 0xFFFF;
+    return (uint16_t)(((uint64_t)line * st->gh) / vdisp);
+}
 static void status_in(void *self, uint16_t port, uint8_t w, uint32_t *v)
 {
     video_state *st = (video_state *)self; (void)port; (void)w;
