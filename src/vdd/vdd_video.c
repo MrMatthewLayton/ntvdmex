@@ -1694,6 +1694,7 @@ static int vid_beam(const video_state *st, uint64_t *now, uint32_t *frame_us,
 
 static void status_out(void *self, uint16_t port, uint8_t w, uint32_t v)
 { (void)self; (void)port; (void)w; (void)v; }     /* feature ctrl: ignore */
+#define VID_HBL_DEBT_MAX 16u   /* lines: further apart than this, a poll is not counting lines */
 static void status_in(void *self, uint16_t port, uint8_t w, uint32_t *v)
 {
     video_state *st = (video_state *)self; (void)port; (void)w;
@@ -1764,33 +1765,24 @@ static void status_in(void *self, uint16_t port, uint8_t w, uint32_t *v)
          reverted it with the PIT change it was bundled with; on its own it was right.) */
     {   uint64_t abs_line = (now / (uint64_t)frame_us) * (uint64_t)vtotal + line;
         int bit0 = (in_vbl || in_hbl);
-        /* ► EVERY line crossed unsampled is a blank owed, not just the last one (s70).
-             The one-blank form left a one-sided excess: a host stall of a few hundred
-             microseconds inside Lemmings' 320-line count crossed ~10 lines and was
-             repaid one (reloads 0x2FB5, 0x310B = 322, 326 lines). So: lines crossed
-             since the previous poll, minus the previous line's own blank if that poll
-             already saw it, go into a debt that the following polls drain as synthetic
-             blanks -- reported high once, then low once, exactly the two samples the
-             guest's `wait while set; wait while clear` consumes per line. A real line's
-             blank seen meanwhile still counts as itself, so the total is the lines
-             elapsed. Only ACTIVE lines carry a blank of their own: a stall inside
-             vertical blanking owes nothing (bit 0 is simply high throughout), and a
-             gap of a frame or more is a guest that was not counting -- the debt is
-             dropped, never carried into the next thing it does with this port. */
-        if (st->p3da_have_last && abs_line > st->p3da_last_line) {
-            uint64_t crossed = abs_line - st->p3da_last_line;        /* >= 1            */
-            if (crossed >= (uint64_t)vtotal) st->p3da_hbl_debt = 0;  /* not counting     */
-            else if (!in_vbl && !st->p3da_last_vbl) {
-                uint32_t missed = (uint32_t)(crossed - 1)            /* whole lines      */
-                                + (st->p3da_last_bit0 ? 0u : 1u);    /* + the last one's */
-                st->p3da_hbl_debt += missed;
-                if (st->p3da_hbl_debt > 64u) st->p3da_hbl_debt = 64u;
-            }
+        /* ► ONE blank owed per straddle, and only for a poll that is plausibly counting
+             lines (s69's rule, bounded, s70). Two generalisations were tried and
+             measured wrong in video_test: repaying every line crossed as a debt of
+             synthetic pulses either swallowed real blanks in the guest's `wait while
+             set` phase (a 330us stall came back wholly unrepaid) or, drained the other
+             way round, broke the plain case. A two-phase poll loop cannot be fed more
+             than one blank per line boundary it crosses. So the residual stands: a
+             host stall of N lines inside a count is repaid ONE line; the rest is
+             real time the guest lost. With the interpreter port path now syncing the
+             PIT (main.c iio_out) the rig measured 320.7..322.7 lines on four runs.
+           ► A poll more than VID_HBL_DEBT_MAX lines after the previous one is not a
+             line counter (the attribute flip-flop reset before a palette write,
+             once a frame) and owes nothing. */
+        if (!bit0 && st->p3da_have_last && !st->p3da_last_bit0 && !in_vbl && !st->p3da_last_vbl
+            && abs_line > st->p3da_last_line
+            && abs_line - st->p3da_last_line <= VID_HBL_DEBT_MAX) {
+            bit0 = 1; st->p3da_hbl_owed++;
         }
-        if (st->p3da_hbl_debt && !bit0) {
-            if (!st->p3da_synth_hi) { bit0 = 1; st->p3da_synth_hi = 1; }
-            else { st->p3da_synth_hi = 0; st->p3da_hbl_debt--; st->p3da_hbl_owed++; }
-        } else if (bit0) st->p3da_synth_hi = 0;
         st->p3da_last_line = abs_line; st->p3da_last_bit0 = (uint8_t)bit0;
         st->p3da_last_vbl = (uint8_t)in_vbl;
         st->p3da_have_last = 1;
