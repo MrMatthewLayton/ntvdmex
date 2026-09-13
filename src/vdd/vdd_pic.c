@@ -18,6 +18,21 @@ static void pic_chip_reset(pic_chip *c, uint8_t base)
     c->icw_step = 0; c->icw4_needed = 0; c->read_isr = 0; c->auto_eoi = 0;
 }
 
+/* ── IN-SERVICE UPDATES ARE ATOMIC. ───────────────────────────────────────────────
+     The host acknowledges IRQ0 from its tick courier, which by design runs with the
+     guest thread frozen and NO device lock held, while the guest's own EOIs (and every
+     other line's acknowledge) arrive under that lock. A plain `isr |= bit` / `isr &=
+     ~bit` is a byte read-modify-write, and two of them racing lose one bit -- IRQ1's
+     in-service bit IS the keyboard re-entrancy guard, so losing it is "press a key and
+     everything hangs" all over again. The host already OR's IRR atomically for the
+     same reason (host_irq_sink); ISR gets the same treatment here so that IRQ0 can be
+     held in service across threads. GCC/Clang builtins, so this file stays pure C. */
+#define ISR_SET(c, bit)  ((void)__sync_fetch_and_or (&(c)->isr, (uint8_t)(bit)))
+#define ISR_CLR(c, bit)  ((void)__sync_fetch_and_and(&(c)->isr, (uint8_t)~(uint8_t)(bit)))
+/* IRR likewise: the host raises with an atomic OR from the PIT's lock, so the clear
+   at acknowledge must be atomic too or a raise can be lost under it. */
+#define IRR_CLR(c, bit)  ((void)__sync_fetch_and_and(&(c)->irr, (uint8_t)~(uint8_t)(bit)))
+
 /* --- port side ------------------------------------------------------------- */
 
 /* base port (0x20 / 0xA0): ICW1, OCW2 (EOI), OCW3 (read select) */
@@ -38,14 +53,14 @@ static void pic_cmd_write(pic_chip *c, uint8_t v)
     switch (v & 0xE0) {
     case 0x20: {                            /* non-specific EOI                  */
         int top = pic_top(c->isr);
-        if (top >= 0) c->isr &= (uint8_t)~(1u << top);
+        if (top >= 0) ISR_CLR(c, 1u << top);
         break; }
     case 0x60:                              /* specific EOI                      */
-        c->isr &= (uint8_t)~(1u << (v & 7));
+        ISR_CLR(c, 1u << (v & 7));
         break;
     case 0xA0: {                            /* rotate on non-specific EOI        */
         int top = pic_top(c->isr);
-        if (top >= 0) c->isr &= (uint8_t)~(1u << top);
+        if (top >= 0) ISR_CLR(c, 1u << top);
         break; }
     default:
         break;                              /* other rotate/priority forms: nop  */
@@ -120,9 +135,9 @@ void vdd_pic_acknowledge(pic_state *st, uint8_t irq)
     if (irq >= 16) return;
     c   = (irq < 8) ? &st->m : &st->s;
     bit = (uint8_t)(1u << (irq & 7));
-    c->irr &= (uint8_t)~bit;
-    if (!c->auto_eoi) c->isr |= bit;
-    if (irq >= 8 && !st->m.auto_eoi) st->m.isr |= 0x04;   /* cascade in service   */
+    IRR_CLR(c, bit);
+    if (!c->auto_eoi) ISR_SET(c, bit);
+    if (irq >= 8 && !st->m.auto_eoi) ISR_SET(&st->m, 0x04);   /* cascade in service */
 }
 
 /* Acknowledge a line the HOST auto-EOIs -- IRQ0, and any line still vectored at one of
@@ -140,15 +155,15 @@ void vdd_pic_acknowledge(pic_state *st, uint8_t irq)
 void vdd_pic_ack_autoeoi(pic_state *st, uint8_t irq)
 {
     if (irq >= 8) { vdd_pic_acknowledge(st, irq); vdd_pic_eoi(st, irq); return; }
-    st->m.irr &= (uint8_t)~(1u << irq);
+    IRR_CLR(&st->m, 1u << irq);
 }
 
 void vdd_pic_eoi(pic_state *st, uint8_t irq)
 {
     if (irq >= 16) return;
-    if (irq < 8) st->m.isr &= (uint8_t)~(1u << irq);
-    else       { st->s.isr &= (uint8_t)~(1u << (irq - 8));
-                 if (!st->s.isr) st->m.isr &= (uint8_t)~0x04; }   /* release the cascade */
+    if (irq < 8) ISR_CLR(&st->m, 1u << irq);
+    else       { ISR_CLR(&st->s, 1u << (irq - 8));
+                 if (!st->s.isr) ISR_CLR(&st->m, 0x04); }   /* release the cascade */
 }
 
 uint8_t vdd_pic_vector(pic_state *st, uint8_t irq)

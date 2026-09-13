@@ -2,20 +2,40 @@
  * on the VDD bus.  Pure C, no <windows.h>. */
 #include "vdd_pit.h"
 
-/* current down-counter value (counts reload..1 repeatedly).
-   ⚠ s69 REVERTED (user-directed): a count-from-load model derived from the LOAD
-     instant (per-mode) fixed Lemmings' random calibration reload (the "music too
-     slow" #3), but it left the game's palette FADE stuck near-black -- the fade is
-     coupled to this same timer, and the "correct" reload broke the renderer. Until
-     the fader is understood, restore the s68 free-running behaviour the user
-     confirmed VISIBLE (slower music, but a playable screen). See the handoff and
-     [[session-67-handoff]]. `load_clocks` stays in the struct, unused, so the
-     instrument that prints clocks_since_load keeps compiling. */
+/* ── ★★★★ THE COUNT STARTS WHEN THE GUEST LOADS IT. ─────────────────────────────
+     This used to be `R - (total_clocks % R)`: a free-running divider whose phase had
+     nothing to do with the moment the guest wrote the count. For a guest that only
+     ever waits for IRQ0 that is invisible. For one that READS THE COUNTER it is a
+     random number generator.
+   ★ MEASURED ON LEMMINGS (s69). Its "High Performance PC" option calibrates the game
+     tick from the CRT: load counter 0 with 0xFFFF in mode 0, count 320 hblanks on
+     0x3DA bit 0, latch, and use 0xFFFF - latch as the reload (guest CS:15BB..1643 in
+     the real-DOS dump). The user's by-hand run got 0x4BB9 (61.5 Hz -- "the music is
+     slower"), the headless rig 0xC40C (23.8 Hz), every run a different number,
+     because the read-back was `total_clocks % 0xFFFF` at the latch: uniformly random.
+   ► So keep the instant of the load (`load_clocks`) and derive the counting element
+     from the clocks since it, per mode (Intel 8254 datasheet, 231164-005):
+       mode 0   N - elapsed, on past terminal count through 0xFFFF (one-shot)
+       mode 3   "decremented by two on succeeding CLK pulses" and reloaded at zero,
+                so the count runs N, N-2, ... twice per period; never an odd LSB
+       others   N - (elapsed mod N), reloading at the period (modes 2, 4, 5; mode 1)
+   ⚠ s69 HISTORY: this model was shipped, blamed for a blank screen, and reverted. The
+     blank screen was never the count -- it was IRQ0 re-entering the game's timer ISR
+     (the host auto-EOI'd IRQ0; see irq0_ack in the host) once the tick was correct.
+     Both halves are now fixed; see docs/STATE.md session 70. */
 static uint16_t pit_current_count(const pit_state *st)
 {
     uint32_t R = pit_eff_reload(st);
-    uint32_t phase = (uint32_t)(st->total_clocks % R);
-    return (uint16_t)(R - phase);            /* R when phase==0 (65536 -> 0)     */
+    uint64_t elapsed = (st->total_clocks >= st->load_clocks)
+                     ? st->total_clocks - st->load_clocks : 0;
+    if (st->mode == 0)
+        return (uint16_t)(R - elapsed);      /* wraps through 0xFFFF past zero   */
+    if (st->mode == 3) {
+        uint32_t half  = (R + 1) / 2;
+        uint32_t phase = (uint32_t)(elapsed % half);
+        return (uint16_t)(R - 2 * phase);    /* R when phase==0 (65536 -> 0)     */
+    }
+    return (uint16_t)(R - (uint32_t)(elapsed % R));
 }
 
 /* --- the time engine: clocks -> IRQ0 pulses ------------------------------- */
@@ -28,7 +48,56 @@ void vdd_pit_add_clocks(pit_state *st, uint32_t clocks)
     while (st->accum >= R && guard++ < 100000) {
         st->accum -= R;
         vdd_raise_irq(st->bus, 0);           /* IRQ0 -> guest takes INT 08h     */
+        /* A count written WITHOUT a Control Word in modes 2/3 is "loaded at the end
+           of the current counting cycle" (datasheet, mode 2; mode 3 says half-cycle,
+           approximated here as the full one). This is that end. */
+        if (st->next_pending) {
+            st->reload       = st->next_reload;
+            st->next_pending = 0;
+            st->load_clocks  = st->total_clocks - st->accum;   /* the period boundary */
+            R = pit_eff_reload(st);
+        }
     }
+}
+
+/* ── ★★★★★ WHEN A COUNT WRITE RESTARTS THE PERIOD -- FROM THE DATASHEET, NOT BELIEF. ──
+     Intel 8254 (231164-005), the modes every DOS timer uses:
+       Mode 2 / Mode 3: "After writing a Control Word and initial count, the Counter will
+         be loaded on the next CLK pulse. This allows the Counter to be synchronized by
+         software." -- i.e. Control Word THEN count = load now, period restarts.
+       Mode 2 / Mode 3: "Writing a new count while counting does not affect the current
+         counting sequence ... the new count will be loaded at the end of the current
+         counting cycle." -- i.e. a BARE count write (no Control Word since the last
+         load) leaves the period in flight alone and takes over at its end.
+       Modes 0/1/4/5: "If a new count is written to the Counter, it will be loaded on the
+         next CLK pulse and counting will continue from the new count." -- restart.
+   ⛔⛔ THE s69 REGRESSION, BOTH WAYS. 59ee731 restarted on EVERY count write (wrong for a
+     bare write in 2/3); 9eec369 "corrected" it to NEVER restart in 2/3 -- also wrong,
+     because Lemmings writes `out 43h,36h` BEFORE its count on every tick, which is the
+     "synchronized by software" case. Its game ISR runs at IRQ0, spins on 0x3DA for the
+     vertical retrace, and THEN reprograms the count: the tick is meant to be locked to
+     the retrace, with the IRQ landing ~320 lines after it. Never restarting made the IRQ
+     free-run at ~98 Hz against a 70 Hz retrace, so the ISR was re-entered before it
+     could finish and the game loop starved (the "stuck palette fade"). Each of the two
+     wrong models had a test written to certify it. These are written from the quotes
+     above; [[m9-completeness-programme]] rule: never from memory.
+   ► `cw_armed` is set by a Control Word for this counter and cleared by the load it
+     arms; `next_pending` parks a bare mode-2/3 count until vdd_pit_add_clocks reaches
+     the end of the period. `load_clocks` moves only when the counting element really
+     (re)starts, because that is what pit_current_count measures the read-back from. */
+static void pit_load(pit_state *st, uint16_t count)
+{
+    int periodic = (st->mode == 2 || st->mode == 3);
+    if (periodic && !st->cw_armed) {         /* bare write: takes over at period end */
+        st->next_reload  = count;
+        st->next_pending = 1;
+        return;
+    }
+    st->reload       = count;                /* Control Word + count, or a one-shot mode */
+    st->load_clocks  = st->total_clocks;
+    st->accum        = 0;
+    st->cw_armed     = 0;
+    st->next_pending = 0;
 }
 
 /* See pit_state.guard in the header: every touch of counter state from a caller
@@ -65,7 +134,20 @@ static void pit_out_locked(pit_state *st, uint16_t port, uint8_t val)
             st->latch = pit_current_count(st);
             st->latched = 1; st->rd_flip = 0;
         } else {
+            /* A Control Word arms the next count write to load and restart (see
+               pit_load) and clears the count register ("CRM and CRL are cleared when
+               the Counter is programmed"), so a parked bare write is discarded. The
+               counting element is NOT stopped: the datasheet halts counting on the first
+               byte of a COUNT, not on the Control Word, and a guest that programs a
+               mode and never writes a count (Lemmings' calibration exit: `out 43h,36h`
+               then a read) must keep ticking at the old rate, as the real part does.
+               ⚠ A latched count is deliberately KEPT across this: "(or until the
+               Counter is reprogrammed)" would unlatch it, but the value the OL would
+               then follow is the same CE a handful of clocks on, and Lemmings reads
+               it right here -- keeping the latch is the same number without the
+               mode-3 by-two arithmetic being applied to a mode-0 count. */
             st->access = acc; st->mode = (uint8_t)((val >> 1) & 7); st->wr_flip = 0;
+            st->cw_armed = 1; st->next_pending = 0;
         }
     } else if (port == 0x40) {               /* channel-0 reload write          */
         /* ── ★★★★ A HALF-WRITTEN COUNT IS NOT A COUNT. ──────────────────────────────
@@ -97,17 +179,15 @@ static void pit_out_locked(pit_state *st, uint16_t port, uint8_t val)
            ⚠⚠ THE PIT IS THE MOST SHARED PATH IN THIS PROJECT -- see the note on
              host_irq_sink's throttle, where a change measured on Doom cost SKYROADS a
              fifth of its clock. Re-gate BOTH before believing this. */
-        /* ⚠ s69 REVERTED: this briefly called pit_load() (restart the period / count
-           from the load instant). Back to the direct commit -- the s68 behaviour --
-           because the count-from-load model broke Lemmings' palette fade. The 8254
-           LSB/MSB BUFFERING (the ZAR half-written-count fix) is UNCHANGED; only the
-           period-restart is gone. */
+        /* The committed count goes through pit_load, which decides (per mode and per
+           whether a Control Word preceded it) between "load and restart now" and
+           "take over at the end of the period". See the note above pit_load. */
         uint8_t acc = st->access ? st->access : 3;
-        if (acc == 1)      st->reload = val;                        /* LSB only: MSB := 0 */
-        else if (acc == 2) st->reload = (uint16_t)((uint16_t)val << 8);  /* MSB only: LSB := 0 */
+        if (acc == 1)      pit_load(st, val);                        /* LSB only: MSB := 0 */
+        else if (acc == 2) pit_load(st, (uint16_t)((uint16_t)val << 8));  /* MSB only: LSB := 0 */
         else {                               /* lo then hi -- ONE atomic load   */
             if (!st->wr_flip) { st->wr_lo = val; st->wr_flip = 1; }
-            else { st->reload = (uint16_t)(((uint16_t)val << 8) | st->wr_lo); st->wr_flip = 0; }
+            else { pit_load(st, (uint16_t)(((uint16_t)val << 8) | st->wr_lo)); st->wr_flip = 0; }
         }
     } else if (port == 0x42) {               /* channel-2 reload (speaker tone) */
         uint8_t acc = st->ch2_access ? st->ch2_access : 3;

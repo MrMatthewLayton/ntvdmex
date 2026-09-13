@@ -2130,6 +2130,80 @@ static DWORD          g_async_nest_blocked = 0;   /* refused: line masked or in 
    EOI, so anything delivered through them must be auto-EOI'd or the line latches. */
 static int async_vec_is_our_stub(unsigned irq);
 
+/* ── ★★★★★ IRQ0 IS HELD IN SERVICE UNTIL THE GUEST EOIs -- LIKE EVERY OTHER LINE. ──────
+     Since ba927ac the timer was the ONE line the host auto-EOI'd on delivery, "gated by
+     the guest's own IF discipline". That discipline is not enough, and Lemmings is the
+     proof (s69/s70): its High-Performance-PC timer ISR does `sti` and then SPINS on
+     0x3DA for the vertical retrace before it reprograms the PIT and does its work
+     (guest CS:17C7..18B1). On a real PC the 8259's in-service bit keeps the next IRQ0
+     out until the `out 20h,20h` at the end. With auto-EOI, a tick raised during that
+     spin RE-ENTERED the handler; the inner instance took the retrace the outer one was
+     waiting for, and from then on every tick nested one level deeper, forever: no ISR
+     body ever ran (no music), the game loop never ran (black screen, "stuck fade"),
+     and the stack grew ~30 bytes a tick until it overran the data segment (the
+     sprite-blitter AV with es=0xD000). The heartbeat's tell: irq0/s == flips/s == 70
+     with the guest 100% inside the 0x3DA poll (p3da 3.3M reads/s) -- everything
+     "ticking" and nothing finishing. It only surfaced once the PIT was corrected: the
+     old random reload happened to be slow enough for the nesting to unwind.
+   ► So IRQ0 is acknowledged like any line and released by the guest's EOI -- or by our
+     own INT 08h BOP, which EOIs where the BIOS handler would (the Skyroads case that
+     motivated the deviation: it chains to the BIOS on the ticks it does not EOI).
+   ⚠ TWO SAFETY NETS, both counted in STAGE2 (`irq0_isr=`):
+       1. A handler that never EOIs and never chains cannot exist on real hardware (the
+          timer would stop dead), but a guest that dies inside its handler can. If IRQ0
+          sits in service for IRQ0_ISR_TIMEOUT_MS it is released and counted; after
+          IRQ0_ISR_TIMEOUTS_MAX of those the guest is judged not to EOI its timer and
+          the old auto-EOI behaviour comes back for the rest of the run, logged.
+       2. `g_irq0_pending` still saturates at four, so a long handler is followed by a
+          short burst; a real PIC latches one. Left as is: our delivery latency is what
+          the backlog compensates for. */
+#define IRQ0_ISR_TIMEOUT_MS   250u
+#define IRQ0_ISR_TIMEOUTS_MAX 3u
+static DWORD g_irq0_isr_since    = 0;   /* GetTickCount()|1 when IRQ0 went in service; 0 = not */
+static DWORD g_irq0_isr_blocks   = 0;   /* deliveries refused because IRQ0 was in service    */
+static DWORD g_irq0_isr_timeouts = 0;   /* in-service bits released by the timeout           */
+static DWORD g_irq0_isr_strict   = 0;   /* acknowledges that HELD the line (guest EOIs)      */
+static DWORD g_irq0_isr_auto     = 0;   /* acknowledges that auto-EOI'd (stub or fallback)   */
+static int   g_irq0_autoeoi      = 0;   /* fallback engaged: this guest does not EOI IRQ0    */
+
+/* Can IRQ0 be delivered now? The PIC's answer, plus safety net 1. Called at both
+   delivery sites (cooperative exec loop and the async courier). */
+static int irq0_can_deliver(void)
+{
+    if (vdd_pic_can_deliver(&g_pic, 0)) return 1;
+    if (g_pic.m.isr & 1) {
+        DWORD since = g_irq0_isr_since;
+        if (since && (GetTickCount() - since) > IRQ0_ISR_TIMEOUT_MS) {
+            vdd_pic_eoi(&g_pic, 0);
+            g_irq0_isr_since = 0;
+            if (++g_irq0_isr_timeouts >= IRQ0_ISR_TIMEOUTS_MAX && !g_irq0_autoeoi) {
+                static const char msg[] = "IRQ0-ISR: in service past the timeout 3x -- this guest "
+                    "does not EOI its timer; auto-EOI fallback engaged for the rest of the run\r\n";
+                g_irq0_autoeoi = 1;
+                log_append(LOG_PATH, msg, msg + sizeof(msg) - 1);
+            }
+            return vdd_pic_can_deliver(&g_pic, 0);
+        }
+        g_irq0_isr_blocks++;
+    }
+    return 0;
+}
+
+/* Acknowledge IRQ0 at delivery: hold it in service unless the vector is one of our
+   never-EOIing stubs or the fallback is engaged. (Our INT 08h BOP is NOT such a stub:
+   it EOIs, as the BIOS handler does.) */
+static void irq0_ack(void)
+{
+    if (g_irq0_autoeoi || async_vec_is_our_stub(0)) {
+        vdd_pic_ack_autoeoi(&g_pic, 0);
+        g_irq0_isr_auto++;
+    } else {
+        vdd_pic_acknowledge(&g_pic, 0);
+        g_irq0_isr_since = GetTickCount() | 1;
+        g_irq0_isr_strict++;
+    }
+}
+
 
 static void pokew(DWORD lin, WORD v);        /* fwd: guest-memory helpers, defined below */
 static WORD peekw(DWORD lin);
@@ -2375,7 +2449,8 @@ static int async_inject_irq(unsigned irq)
     /* Ask the PIC, exactly as the hardware would: is this line unmasked, and is nothing of
        equal or higher priority still in service? That is what stops us re-entering a handler
        that has not EOI'd yet -- the fault behind "press a key and everything hangs". */
-    if (!vdd_pic_can_deliver(&g_pic, (uint8_t)irq)) { g_async_nest_blocked++; async_early_bail(irq, 21); return 0; }
+    if (irq == 0 ? !irq0_can_deliver() : !vdd_pic_can_deliver(&g_pic, (uint8_t)irq)) {
+        g_async_nest_blocked++; async_early_bail(irq, 21); return 0; }
     /* Never deliver a line the guest has not hooked. Its vector still points at our default
        IRET stub, which means no ISR is installed -- and on a real PC an unused line sits
        masked in the PIC, so nothing would arrive at all. Delivering anyway is not harmless:
@@ -2556,23 +2631,24 @@ static int async_inject_irq(unsigned irq)
     ok = SetThreadContext(g_hcpu, &cx) ? 1 : 0;
     if (ok) {
         /* Acknowledge: in service until the guest EOIs.
-           Release it immediately in the two cases where nobody ever will:
-           - a line vectored at one of OUR default stubs, which do nothing and never EOI;
-           - THE TIMER. Measured on Skyroads: it EOIs only ~36 times a second against a
-             180 Hz timer, i.e. only on the ~1-in-16 ticks where its handler chains to the
-             BIOS -- so it is relying on something other than a per-tick EOI. Our INT 08h
-             stand-in is a BOP with nowhere to put an EOI at the END of the handler, so
-             modelling IRQ0's in-service bit strictly starves the guest (measured: 540 -> 15
-             delivered ticks per 3 s). IRQ0 is gated by the guest's own IF discipline, which
-             has always worked; the re-entrancy this whole mechanism exists to stop was on
-             IRQ1, and that stays strict. */
+           Release it immediately for a line vectored at one of OUR default stubs, which
+           do nothing and never EOI.
+           ⚠ s70: THE TIMER USED TO BE THE OTHER EXCEPTION, and it is not any more. The
+             ba927ac measurement ("Skyroads EOIs only ~36 times a second against a 180 Hz
+             timer ... modelling IRQ0's in-service bit strictly starves it, 540 -> 15
+             ticks per 3 s") was taken before our INT 08h BOP sent the BIOS's EOI; with
+             that EOI in place, strict IRQ0 delivers every raise on Skyroads (s70 rig:
+             raises == strict acks, 0 blocked, 0 timeouts, V86STR/ui_gap on baseline).
+             And "gated by the guest's own IF discipline" was the bug: Lemmings' timer
+             ISR does `sti` before it spins for the retrace. See irq0_ack. */
         /* ⚠ THE AUTO-EOI CASE IS ONE OPERATION, NOT ack-then-eoi. The pair's transient
              set/clear of the shared ISR byte is not safe from the tick courier, which
              runs without the device lock; the net effect is identical. See
              vdd_pic_ack_autoeoi. The strict case (IRQ1) keeps plain acknowledge, so its
              in-service bit is still held until the guest EOIs. */
-        if (irq == 0 || async_vec_is_our_stub(irq)) vdd_pic_ack_autoeoi(&g_pic, (uint8_t)irq);
-        else                                        vdd_pic_acknowledge(&g_pic, (uint8_t)irq);
+        if (irq == 0)                     irq0_ack();
+        else if (async_vec_is_our_stub(irq)) vdd_pic_ack_autoeoi(&g_pic, (uint8_t)irq);
+        else                              vdd_pic_acknowledge(&g_pic, (uint8_t)irq);
         /* ⚠ A KEY DELIVERED HERE WAS INVISIBLE. g_irq1_inj and keylat_pop() both live in
            the COOPERATIVE block only, so an asynchronously-placed keystroke counted as
            neither delivered nor timed -- and the retry experiment therefore read as
@@ -22031,11 +22107,10 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             } else {
                 fl = VDM_REG(tib, VTIB_EFLAGS);
             }
-            if (if_or_vif(fl) && vdd_pic_can_deliver(&g_pic, 0)
+            if (if_or_vif(fl) && irq0_can_deliver()
                 && !(cs == DOS_HDLR_SEG && ip >= 0x34 && ip < 0x3A)) {
                 InterlockedDecrement(&g_irq0_pending);
-                vdd_pic_acknowledge(&g_pic, 0);
-                vdd_pic_eoi(&g_pic, 0);         /* see async_inject_irq: timer is auto-EOI */
+                irq0_ack();                     /* in service until the guest EOIs (s70) */
                 g_irq0_inj++;
                 g_irq0_note_cs = cs; g_irq0_note_ip = ip;   /* where IF re-opened */
                 irq0_delivered_note();          /* the guest's clock, as a timeline */
@@ -24636,6 +24711,14 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
       p = zput(p, " async_pm=0x"); p = zhex(p, g_async_pm_inj);
       p = zput(p, " async_bail=0x"); p = zhex(p, g_async_bail);
       p = zput(p, " async_nest=0x"); p = zhex(p, g_async_nest_blocked);
+      /* s70: IRQ0 in-service accounting (see irq0_ack). strict = acknowledges that held
+         the line, auto = stub/fallback, blocks = deliveries refused while in service,
+         timeouts = releases by the safety net, fallback = the auto-EOI regime engaged. */
+      p = zput(p, " irq0_isr[strict,auto,blocks,timeouts,fallback]=0x"); p = zhex(p, g_irq0_isr_strict);
+      p = zput(p, ",0x"); p = zhex(p, g_irq0_isr_auto);
+      p = zput(p, ",0x"); p = zhex(p, g_irq0_isr_blocks);
+      p = zput(p, ",0x"); p = zhex(p, g_irq0_isr_timeouts);
+      p = zput(p, ",0x"); p = zhex(p, (DWORD)g_irq0_autoeoi);
       p = zput(p, " irq1_inj=0x");   p = zhex(p, g_irq1_inj);
       p = zput(p, " int16=[");
       { int k; for (k = 0; k < 4; ++k) { p = zput(p, "0x"); p = zhex(p, g_in.int16_calls[k]); p = zput(p, " "); } }

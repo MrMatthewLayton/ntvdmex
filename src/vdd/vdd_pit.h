@@ -34,6 +34,12 @@ typedef struct pit_state {
     uint64_t load_clocks;   /* total_clocks when the count was last loaded: the
                                counting element runs from HERE (see pit_current_count) */
     uint64_t accum;         /* clocks not yet turned into IRQ0 pulses           */
+    uint8_t  cw_armed;      /* a Control Word was written since the last load: the
+                               next count write LOADS and RESTARTS the period, in every
+                               mode (8254: "synchronized by software"). See pit_load. */
+    uint8_t  next_pending;  /* modes 2/3, count written WITHOUT a Control Word: it is
+                               held here and loaded at the end of the current period  */
+    uint16_t next_reload;   /* ...that held count                                */
     uint32_t frame_us;      /* microseconds per bus frame tick                  */
     uint16_t ch2_reload;    /* channel-2 reload (the PC-speaker tone divisor)   */
     uint8_t  ch2_access;    /* channel-2 access mode (1=lo, 2=hi, 3=lo/hi)      */

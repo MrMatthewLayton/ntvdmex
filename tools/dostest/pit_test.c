@@ -153,6 +153,103 @@ int main(void)
     CHECK(pit.bus == &bus && pit.access == 3 && pit.frame_us == PIT_DEFAULT_FRAME_US,
           "reset: bus link + defaults restored");
 
+    /* ── T11-T15: WHEN A LOAD RESTARTS THE PERIOD, from the Intel 8254 datasheet ───────
+       (231164-005, Mode Definitions). Every expectation below is a quote, not a belief
+       -- s69 shipped two opposite models, each certified by a test written from memory.
+       Lemmings' HP-mode timer ISR is the shape under test: Control Word + count on every
+       tick ("synchronized by software"), and the calibration is a mode-0 read-back. */
+
+    /* T11: mode 0 read-back counts from the LOAD instant, not the free-running phase.
+       "After the Control Word and initial count are written ... the initial count will
+        be loaded on the next CLK pulse" -- Lemmings loads 0xFFFF, waits 320 hblanks
+       (~12,100 clocks), latches, and uses 0xFFFF - latch as its tick. */
+    vdd_pit_reset(&pit);
+    vdd_pit_add_clocks(&pit, 54321);                      /* an arbitrary prior phase */
+    v = 0x30; vdd_bus_io(&bus, 0x43, 1, 0, &v);           /* ch0, lo/hi, MODE 0      */
+    v = 0xFF; vdd_bus_io(&bus, 0x40, 1, 0, &v);
+    v = 0xFF; vdd_bus_io(&bus, 0x40, 1, 0, &v);           /* count 0xFFFF, loaded NOW */
+    vdd_pit_add_clocks(&pit, 12100);
+    v = 0x00; vdd_bus_io(&bus, 0x43, 1, 0, &v);           /* latch                    */
+    v = 0x36; vdd_bus_io(&bus, 0x43, 1, 0, &v);           /* Lemmings: mode 3 CW next */
+    {   uint32_t lo = 0, hi = 0;
+        vdd_bus_io(&bus, 0x40, 1, 1, &lo); vdd_bus_io(&bus, 0x40, 1, 1, &hi);
+        CHECK(0xFFFF - ((hi << 8) | lo) == 12100,
+              "8254 mode 0: latched count = 0xFFFF - clocks since the LOAD (phase-free)");
+    }
+
+    /* T12: Control Word + count RESTARTS the period in mode 3.
+       "After writing a Control Word and initial count, the Counter will be loaded on
+        the next CLK pulse. This allows the Counter to be synchronized by software." */
+    vdd_pit_reset(&pit); g_irq = 0;
+    v = 0x36; vdd_bus_io(&bus, 0x43, 1, 0, &v);
+    v = 0x00; vdd_bus_io(&bus, 0x40, 1, 0, &v);
+    v = 0x10; vdd_bus_io(&bus, 0x40, 1, 0, &v);           /* N = 0x1000              */
+    vdd_pit_add_clocks(&pit, 0x0C00);                     /* 3/4 through the period  */
+    v = 0x36; vdd_bus_io(&bus, 0x43, 1, 0, &v);           /* CW + the SAME count ... */
+    v = 0x00; vdd_bus_io(&bus, 0x40, 1, 0, &v);
+    v = 0x10; vdd_bus_io(&bus, 0x40, 1, 0, &v);
+    vdd_pit_add_clocks(&pit, 0x0FFF);
+    CHECK(g_irq == 0, "8254 mode 3: CW+count restarts -- no IRQ0 at the OLD period's end");
+    vdd_pit_add_clocks(&pit, 1);
+    CHECK(g_irq == 1, "8254 mode 3: CW+count restarts -- IRQ0 exactly N clocks after the load");
+
+    /* T13: a BARE count write in mode 2/3 does NOT disturb the period in flight.
+       "Writing a new count while counting does not affect the current counting
+        sequence ... the new count will be loaded at the end of the current counting
+        cycle." (mode 2; mode 3 identically, modulo its half-cycle) */
+    vdd_pit_reset(&pit); g_irq = 0;
+    v = 0x34; vdd_bus_io(&bus, 0x43, 1, 0, &v);           /* ch0, lo/hi, MODE 2      */
+    v = 0x00; vdd_bus_io(&bus, 0x40, 1, 0, &v);
+    v = 0x10; vdd_bus_io(&bus, 0x40, 1, 0, &v);           /* N = 0x1000              */
+    vdd_pit_add_clocks(&pit, 0x0C00);
+    v = 0x00; vdd_bus_io(&bus, 0x40, 1, 0, &v);
+    v = 0x02; vdd_bus_io(&bus, 0x40, 1, 0, &v);           /* bare write: M = 0x200   */
+    vdd_pit_add_clocks(&pit, 0x03FF);
+    CHECK(g_irq == 0, "8254 mode 2: bare count write leaves the current period alone");
+    vdd_pit_add_clocks(&pit, 1);
+    CHECK(g_irq == 1, "8254 mode 2: ...IRQ0 at the OLD period's end");
+    CHECK(pit.reload == 0x200, "8254 mode 2: the new count takes over at that boundary");
+    g_irq = 0; vdd_pit_add_clocks(&pit, 0x200 * 4);
+    CHECK(g_irq == 4, "8254 mode 2: ...and the new period runs from there");
+
+    /* T14: THE LEMMINGS SHAPE. CW+count re-written after every IRQ, N clocks apart plus
+       a spin: the tick is one per (N + spin), never faster, never free-running. */
+    vdd_pit_reset(&pit); g_irq = 0;
+    {   int tick, spin = 3500, N = 12904;                  /* measured on the rig      */
+        v = 0x36; vdd_bus_io(&bus, 0x43, 1, 0, &v);
+        v = (uint32_t)(N & 0xFF); vdd_bus_io(&bus, 0x40, 1, 0, &v);
+        v = (uint32_t)(N >> 8);   vdd_bus_io(&bus, 0x40, 1, 0, &v);
+        for (tick = 0; tick < 10; ++tick) {
+            int before = g_irq;
+            vdd_pit_add_clocks(&pit, (uint32_t)(N - 1));
+            if (g_irq != before) break;                   /* early: free-running      */
+            vdd_pit_add_clocks(&pit, 1);                  /* the IRQ: ISR entered     */
+            vdd_pit_add_clocks(&pit, (uint32_t)spin);     /* ISR spins for retrace    */
+            v = 0x36; vdd_bus_io(&bus, 0x43, 1, 0, &v);   /* ...then reprograms       */
+            v = (uint32_t)(N & 0xFF); vdd_bus_io(&bus, 0x40, 1, 0, &v);
+            v = (uint32_t)(N >> 8);   vdd_bus_io(&bus, 0x40, 1, 0, &v);
+        }
+        CHECK(g_irq == 10, "8254 Lemmings shape: exactly one IRQ0 per (N + spin), locked");
+    }
+
+    /* T15: one-shot modes restart on any count write.
+       Mode 0: "If a new count is written to the Counter, it will be loaded on the next
+        CLK pulse and counting will continue from the new count." */
+    vdd_pit_reset(&pit);
+    v = 0x30; vdd_bus_io(&bus, 0x43, 1, 0, &v);
+    v = 0x00; vdd_bus_io(&bus, 0x40, 1, 0, &v);
+    v = 0x10; vdd_bus_io(&bus, 0x40, 1, 0, &v);
+    vdd_pit_add_clocks(&pit, 0x0800);
+    v = 0x00; vdd_bus_io(&bus, 0x40, 1, 0, &v);
+    v = 0x20; vdd_bus_io(&bus, 0x40, 1, 0, &v);           /* bare write, mode 0      */
+    vdd_pit_add_clocks(&pit, 0x0100);
+    v = 0x00; vdd_bus_io(&bus, 0x43, 1, 0, &v);
+    {   uint32_t lo = 0, hi = 0;
+        vdd_bus_io(&bus, 0x40, 1, 1, &lo); vdd_bus_io(&bus, 0x40, 1, 1, &hi);
+        CHECK(((hi << 8) | lo) == 0x2000 - 0x100,
+              "8254 mode 0: a bare count write loads and counts from the new count");
+    }
+
     printf("\n%d checks, %d failed\n", total, fails);
     return fails ? 1 : 0;
 }
