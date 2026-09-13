@@ -5263,6 +5263,12 @@ static DWORD WINAPI heartbeat_thread(LPVOID pv)
              selector (oracle=4). All zero here = the fade is stuck black. */
         if (g_hb_ds) {
             uint32_t dsb = (uint32_t)g_hb_ds << 4;
+            q = zput(q, " reload=0x"); q = zhex(q, (DWORD)g_pit.reload);
+            q = zput(q, " dacrow[0-1,2-159,160+,vbl]="); q = zdec(q, g_vid.dac_row_hist[0]);
+            q = zput(q, "/"); q = zdec(q, g_vid.dac_row_hist[1]);
+            q = zput(q, "/"); q = zdec(q, g_vid.dac_row_hist[2]);
+            q = zput(q, "/"); q = zdec(q, g_vid.dac_row_hist[3]);
+            q = zput(q, " lastrow=0x"); q = zhex(q, (DWORD)g_vid.dac_last_row);
             q = zput(q, " pal2668=");
             if (imem_page_ok(dsb + 0x2668)) {
                 int j; for (j = 0; j < 6; ++j) { q = zhexb(q, *(volatile BYTE *)(dsb + 0x2668 + j)); }
@@ -25866,6 +25872,10 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         p = zput(p, " reads=");  p = zdec(p, g_vid.p3da_reads);
         p = zput(p, " edges=");  p = zdec(p, g_vid.vbl_edges);
         p = zput(p, " pal_splits="); p = zdec(p, g_vid.pal_split_notes);
+        p = zput(p, " dacrow[0-1,2-159,160+,vbl]="); p = zdec(p, g_vid.dac_row_hist[0]);
+        p = zput(p, "/"); p = zdec(p, g_vid.dac_row_hist[1]);
+        p = zput(p, "/"); p = zdec(p, g_vid.dac_row_hist[2]);
+        p = zput(p, "/"); p = zdec(p, g_vid.dac_row_hist[3]);
         p = zput(p, " dtmax_us="); p = zdec(p, g_vid.dt3da_max);
         p = zput(p, " dtzero=");   p = zdec(p, g_vid.dt3da_zero);
         p = zput(p, " dthist[1,4,16,64,256,1k,4k,16k+us]=");

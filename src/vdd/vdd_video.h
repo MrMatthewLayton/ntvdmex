@@ -389,6 +389,11 @@ typedef struct video_state {
     uint32_t ac_port_writes;            /* palette registers written via 0x3C0       */
     uint32_t ac_bios_writes;            /* ...and via INT 10h AH=10h                 */
     uint32_t dac_writes;                /* DAC entries written (3C9 + INT 10h)       */
+    /* s70 instrument: WHERE ON THE SCREEN the guest writes its DAC. Bands: rows 0-1,
+       2-159, 160+ (toolbar), vertical blanking. dac_last_row = the last write's row
+       (0xFFFF = blanking, 0xFFFE = no clock). */
+    uint32_t dac_row_hist[4];
+    uint16_t dac_last_row;
     /* Which DAC entries the guest actually programs, in 16-entry blocks. The whole
        Lemmings palette question is "does it write 0x38..0x3F", and a total count
        cannot answer that. */

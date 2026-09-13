@@ -997,6 +997,12 @@ static void dac_out(void *self, uint16_t port, uint8_t w, uint32_t v)
             st->dac_block[(st->dac_widx >> 4) & 15]++;
             if ((st->dac_widx & 0xF0) == 0x30) st->dac_hi_since_reset++;
             st->dac_widx++; st->dac_comp = 0; st->dac_writes++;
+            {   uint64_t now; uint32_t frame_us, vtotal, vdisp, vblank, frame_no, line; uint16_t row = 0xFFFE;
+                if (vid_beam(st, &now, &frame_us, &vtotal, &vdisp, &vblank, &frame_no, &line) && st->gh && vdisp)
+                    row = (line >= vblank) ? 0xFFFF : (uint16_t)(((uint64_t)line * st->gh) / vdisp);
+                st->dac_last_row = row;
+                st->dac_row_hist[row == 0xFFFF ? 3 : row == 0xFFFE ? 0 : row < 2 ? 0 : row < 160 ? 1 : 2]++;
+            }
             /* pal[] is DERIVED from dac[] -- see pal_refresh. Without this a guest
                could reprogram the DAC and see nothing change, which is precisely the
                half of the Lemmings bug that survived the first fix. */
