@@ -136,7 +136,8 @@ int main(void)
     CHECK(*bda_tick() == 0x00123456 && *bda_flag() == 0, "int1a/01: tick set, flag cleared");
 
     /* T9: a latched count reads back lo then hi via port 0x40 ------------- */
-    pit.reload = 0x1234; pit.access = 3; pit.total_clocks = 0; pit.latched = 0;
+    pit.reload = 0x1234; pit.access = 3; pit.total_clocks = 0; pit.load_clocks = 0;
+    pit.latched = 0;
     v = 0x00; vdd_bus_io(&bus, 0x43, 1, 0, &v);          /* latch ch0 count   */
     {
         uint32_t lo = 0, hi = 0;
@@ -144,6 +145,102 @@ int main(void)
         vdd_bus_io(&bus, 0x40, 1, 1, &hi);              /* hi byte           */
         CHECK(((hi << 8) | lo) == 0x1234, "8254: latched count reads lo/hi = 0x1234");
     }
+
+    /* T11: THE COUNT STARTS WHEN THE GUEST LOADS IT (Intel 8254, mode 0). -------
+       Lemmings' "High Performance PC" option calibrates its game tick by loading
+       counter 0 with 0xFFFF in mode 0, waiting 160 scanlines, latching, and using
+       0xFFFF - latch as the PIT reload (guest code at CS:15BB..1633, read from the
+       real-DOS dump). The model used to derive the count from the FREE-RUNNING
+       phase `total_clocks % reload`, unrelated to the moment of the load, so the
+       game read a value uniformly random in 0..65535: the user's by-hand run got
+       0x4BB9 (61.5 Hz) where 160 lines at 31.47 kHz is 6067 clocks (~197 Hz). On
+       real silicon the load restarts the counting element, so the read-back is the
+       elapsed clocks -- whatever the phase was before the load. */
+    vdd_pit_add_clocks(&pit, 12345);                     /* an arbitrary phase */
+    v = 0x30; vdd_bus_io(&bus, 0x43, 1, 0, &v);          /* ch0, lo/hi, mode 0 */
+    v = 0xFF; vdd_bus_io(&bus, 0x40, 1, 0, &v);
+    v = 0xFF; vdd_bus_io(&bus, 0x40, 1, 0, &v);          /* count = 0xFFFF     */
+    vdd_pit_add_clocks(&pit, 6067);                      /* 160 scanlines      */
+    v = 0x06; vdd_bus_io(&bus, 0x43, 1, 0, &v);          /* latch (the game's byte) */
+    v = 0x36; vdd_bus_io(&bus, 0x43, 1, 0, &v);          /* control word BEFORE the read */
+    {
+        uint32_t lo = 0, hi = 0;
+        vdd_bus_io(&bus, 0x40, 1, 1, &lo);
+        vdd_bus_io(&bus, 0x40, 1, 1, &hi);
+        CHECK(0xFFFF - ((hi << 8) | lo) == 6067,
+              "8254: mode-0 count = load - elapsed, from the LOAD instant, not the phase");
+    }
+    /* mode 0 runs on past terminal count: 0x100 loaded, 0x180 later reads 0xFF80 */
+    v = 0x30; vdd_bus_io(&bus, 0x43, 1, 0, &v);
+    v = 0x00; vdd_bus_io(&bus, 0x40, 1, 0, &v);
+    v = 0x01; vdd_bus_io(&bus, 0x40, 1, 0, &v);
+    vdd_pit_add_clocks(&pit, 0x180);
+    v = 0x00; vdd_bus_io(&bus, 0x43, 1, 0, &v);
+    {
+        uint32_t lo = 0, hi = 0;
+        vdd_bus_io(&bus, 0x40, 1, 1, &lo);
+        vdd_bus_io(&bus, 0x40, 1, 1, &hi);
+        CHECK(((hi << 8) | lo) == 0xFF80, "8254: mode 0 wraps past terminal count");
+    }
+
+    /* T12: modes 2 and 3 reload at the period; mode 3 steps by TWO per clock.
+       (Datasheet: in mode 3 the counter decrements by two and reloads at zero,
+       so a read never shows an odd LSB; DOSBox masks it the same way.) */
+    v = 0x34; vdd_bus_io(&bus, 0x43, 1, 0, &v);          /* mode 2, lo/hi     */
+    v = 0x00; vdd_bus_io(&bus, 0x40, 1, 0, &v);
+    v = 0x10; vdd_bus_io(&bus, 0x40, 1, 0, &v);          /* 0x1000            */
+    vdd_pit_add_clocks(&pit, 100);
+    v = 0x00; vdd_bus_io(&bus, 0x43, 1, 0, &v);
+    {
+        uint32_t lo = 0, hi = 0;
+        vdd_bus_io(&bus, 0x40, 1, 1, &lo);
+        vdd_bus_io(&bus, 0x40, 1, 1, &hi);
+        CHECK(((hi << 8) | lo) == 0x1000 - 100, "8254: mode 2 counts one per clock from the load");
+    }
+    vdd_pit_add_clocks(&pit, 0x1000);                    /* one full period later: same */
+    v = 0x00; vdd_bus_io(&bus, 0x43, 1, 0, &v);
+    {
+        uint32_t lo = 0, hi = 0;
+        vdd_bus_io(&bus, 0x40, 1, 1, &lo);
+        vdd_bus_io(&bus, 0x40, 1, 1, &hi);
+        CHECK(((hi << 8) | lo) == 0x1000 - 100, "8254: mode 2 reloads at the period");
+    }
+    v = 0x36; vdd_bus_io(&bus, 0x43, 1, 0, &v);          /* mode 3, lo/hi     */
+    v = 0x00; vdd_bus_io(&bus, 0x40, 1, 0, &v);
+    v = 0x10; vdd_bus_io(&bus, 0x40, 1, 0, &v);          /* 0x1000            */
+    vdd_pit_add_clocks(&pit, 100);
+    v = 0x00; vdd_bus_io(&bus, 0x43, 1, 0, &v);
+    {
+        uint32_t lo = 0, hi = 0;
+        vdd_bus_io(&bus, 0x40, 1, 1, &lo);
+        vdd_bus_io(&bus, 0x40, 1, 1, &hi);
+        CHECK(((hi << 8) | lo) == 0x1000 - 200, "8254: mode 3 counts TWO per clock");
+    }
+    vdd_pit_add_clocks(&pit, 0x800 - 100 + 1);           /* half a period + 1 */
+    v = 0x00; vdd_bus_io(&bus, 0x43, 1, 0, &v);
+    {
+        uint32_t lo = 0, hi = 0;
+        vdd_bus_io(&bus, 0x40, 1, 1, &lo);
+        vdd_bus_io(&bus, 0x40, 1, 1, &hi);
+        CHECK(((hi << 8) | lo) == 0x1000 - 2, "8254: mode 3 reloads every HALF period");
+    }
+
+    /* T13: loading a count restarts the IRQ period (the control word stops the
+       counter and the count write starts it), so the first IRQ0 after a
+       reprogram comes exactly one reload later -- not early by whatever the old
+       period had accumulated. */
+    v = 0x36; vdd_bus_io(&bus, 0x43, 1, 0, &v);
+    v = 0x00; vdd_bus_io(&bus, 0x40, 1, 0, &v);
+    v = 0x20; vdd_bus_io(&bus, 0x40, 1, 0, &v);          /* 0x2000            */
+    vdd_pit_add_clocks(&pit, 0x1F00);                    /* most of a period  */
+    g_irq = 0;
+    v = 0x36; vdd_bus_io(&bus, 0x43, 1, 0, &v);
+    v = 0x00; vdd_bus_io(&bus, 0x40, 1, 0, &v);
+    v = 0x10; vdd_bus_io(&bus, 0x40, 1, 0, &v);          /* re-rate to 0x1000 */
+    vdd_pit_add_clocks(&pit, 0x1000 - 1);
+    CHECK(g_irq == 0, "8254: a reload does not inherit the old period's phase");
+    vdd_pit_add_clocks(&pit, 1);
+    CHECK(g_irq == 1, "8254: ...the first IRQ0 is exactly one reload after the load");
 
     /* T10: reset restores defaults but keeps the bus link ---------------- */
     pit.reload = 0x9999; pit.accum = 777; pit.total_clocks = 999;

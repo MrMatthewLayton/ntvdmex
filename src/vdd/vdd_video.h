@@ -294,6 +294,20 @@ typedef struct video_state {
          legitimately miss a vblank if it was away longer than one blanking interval,
          so if this stays well under a frame the guest missed nothing. */
     uint64_t t3da_first, t3da_last;
+    /* The guest's previous poll of bit 0: which scanline (absolute, frames included)
+       and what it read. A poll in a LATER line whose predecessor saw the display
+       active is owed the blanking that passed between them -- see status_in. */
+    uint64_t p3da_last_line;
+    uint8_t  p3da_last_bit0, p3da_have_last;
+    uint32_t p3da_hbl_owed;   /* blanks reported by that rule (STAGE2)               */
+    /* The last VID_P3DA_RING polls: model microseconds and the byte returned. A
+       scanline-counting loop is ~1000 polls in 85 million, invisible in any
+       histogram; the host dumps this ring when the guest latches the 8254, which is
+       how such a loop ends (Lemmings' calibration, s69). */
+#define VID_P3DA_RING 1024
+    uint32_t p3da_ring_us[VID_P3DA_RING];
+    uint8_t  p3da_ring_v[VID_P3DA_RING];
+    uint32_t p3da_ring_n;
     uint32_t dt3da_max;
     uint32_t dt3da_zero;   /* polls across which the clock did not advance at all */
     /* A MAXIMUM IS ONE EVENT AND CANNOT CARRY A RATE. dt3da_max says the guest was

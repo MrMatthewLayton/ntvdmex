@@ -1224,6 +1224,7 @@ static DWORD          g_irq0_skip     = 0;  /* IRQ0 delivery gated off (IF=0 etc
 static DWORD          g_irq0_skip_if  = 0;  /* ...because the guest had interrupts off  */
 static DWORD          g_irq0_skip_stub= 0;  /* ...because we were inside our INT 08h stub */
 static DWORD          g_pit_reload_log = 0;
+static DWORD          g_pitlatch_dumps = 0;   /* PIT-LATCH poll-ring dumps printed (max 2) */
 static DWORD          g_ev_intpend    = 0;  /* event-3 interrupt-pending notifications */
 static DWORD          g_ev_iostr      = 0;  /* REP INS/OUTS (event 1) reflects serviced */
 static DWORD          g_irq1_inj      = 0;  /* INT 09h injections (should track scancodes) */
@@ -9587,6 +9588,38 @@ static void host_pit_sync(void)
     host_pit_deliver();
 }
 
+/* ── A COUNTER-0 LATCH ENDS A MEASUREMENT: SHOW WHAT WAS MEASURED. ──────────────
+     A guest that latches the 8254 has just timed something, and what Lemmings times
+     is 320 scanlines on 0x3DA bit 0 (s69). Those ~1000 polls are invisible among 85
+     million in any histogram, so dump the tail of the 0x3DA poll ring here -- model
+     microseconds relative to the first entry, and the byte returned -- for the first
+     two counter-0 latches only. Read it as: gaps over ~32us straddle a whole line,
+     and a `..:00` followed by `..:01` in a later line is a synthesised owed blank.
+     `cmd` is the byte written to 0x43; a counter-0 latch is SC=00, RW=00. */
+static void pit_latch_note(uint8_t cmd)
+{
+    uint32_t n, cnt, i0, base, i, col = 0;
+    char b[1200], *q = b;
+    if ((cmd & 0xF0) != 0x00 || g_pitlatch_dumps >= 2 || !g_vid.p3da_ring_n) return;
+    n = g_vid.p3da_ring_n; cnt = n < VID_P3DA_RING ? n : VID_P3DA_RING;
+    i0 = n - cnt; base = g_vid.p3da_ring_us[i0 & (VID_P3DA_RING - 1)];
+    g_pitlatch_dumps++;
+    q = zput(q, "PIT-LATCH #"); q = zdec(q, g_pitlatch_dumps);
+    q = zput(q, " reload=0x"); q = zhex(q, (DWORD)g_pit.reload);
+    q = zput(q, " mode="); q = zdec(q, g_pit.mode);
+    q = zput(q, " clocks_since_load="); q = zdec(q, (uint32_t)(g_pit.total_clocks - g_pit.load_clocks));
+    q = zput(q, " hbl_owed="); q = zdec(q, g_vid.p3da_hbl_owed);
+    q = zput(q, " last "); q = zdec(q, cnt); q = zput(q, " 0x3DA polls (us:val):\r\n");
+    for (i = i0; i < n; ++i) {
+        uint32_t k = i & (VID_P3DA_RING - 1);
+        q = zdec(q, g_vid.p3da_ring_us[k] - base); q = zput(q, ":");
+        q = zhexb(q, g_vid.p3da_ring_v[k]); q = zput(q, " ");
+        if (++col == 24 || i + 1 == n) {
+            q = zput(q, "\r\n"); log_append(LOG_PATH, b, q); q = b; col = 0;
+        }
+    }
+}
+
 static DWORD g_sndio_logged = 0;    /* bounded SNDIO trace; see the note below */
 static void host_io_do(volatile BYTE *tib, vdd_bus *bus, uint16_t port,
                        int is_in, int width)
@@ -9621,6 +9654,9 @@ static void host_io_do(volatile BYTE *tib, vdd_bus *bus, uint16_t port,
             log_append(LOG_PATH, b, q); serial_out(b, q);
         }
     }
+    /* Reached from BOTH port paths (this reflected one and the interpreter's
+       iio_out); Lemmings' calibration latches from whichever the guest is in. */
+    if (port == 0x43 && !is_in) pit_latch_note((uint8_t)eax);
     if (is_in) {
         /* An unclaimed ISA port floats high: real hardware reads 0xFF, not 0x00.
            This matters for device detection -- a probe that reads 0x00 from an
@@ -10796,7 +10832,8 @@ static void imem_w8(uint32_t lin, uint8_t v)
 static uint32_t iio_in(uint16_t port, int width)
 { uint32_t v = 0; vdd_bus_io(&g_bus, port, (uint8_t)width, 1, &v); return v; }
 static void iio_out(uint16_t port, int width, uint32_t val)
-{ uint32_t v = val; vdd_bus_io(&g_bus, port, (uint8_t)width, 0, &v); }
+{ uint32_t v = val; vdd_bus_io(&g_bus, port, (uint8_t)width, 0, &v);
+  if (port == 0x43) pit_latch_note((uint8_t)val); }   /* same instrument as the reflected path */
 
 #include "v86interp.h"
 
@@ -25216,6 +25253,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         p = zput(p, "\r\n");
         p = zput(p, "STAGE2: vsync: vbl_edges="); p = zhex(p, g_vid.vbl_edges);
         p = zput(p, " p3da_reads=");             p = zhex(p, g_vid.p3da_reads);
+        p = zput(p, " hbl_owed=");               p = zhex(p, g_vid.p3da_hbl_owed);
         p = zput(p, " run_ms=");                 p = zhex(p, GetTickCount() - g_run_start_tick);
         p = zput(p, "\r\n");
         /* ► Is mode Y actually in use? The whole unchained theory rests on Doom

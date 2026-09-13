@@ -24,13 +24,15 @@ typedef struct pit_state {
     vdd_bus *bus;
     uint16_t reload;        /* channel-0 reload latch (0 => 65536 effective)    */
     uint8_t  access;        /* access mode: 1=lo, 2=hi, 3=lo/hi                  */
-    uint8_t  mode;          /* operating mode 0-5 (informational)               */
+    uint8_t  mode;          /* operating mode 0-5 (shapes the count read-back)  */
     uint8_t  wr_flip;       /* lo/hi write phase (0 => lo next)                 */
     uint8_t  wr_lo;         /* the LSB written so far in lo/hi mode -- see pit_out */
     uint8_t  rd_flip;       /* lo/hi read phase                                 */
     uint8_t  latched;       /* a count snapshot is latched for reading          */
     uint16_t latch;         /* the latched count                                */
     uint64_t total_clocks;  /* monotonic PIT input clocks (for count reads)     */
+    uint64_t load_clocks;   /* total_clocks when the count was last loaded: the
+                               counting element runs from HERE (see pit_current_count) */
     uint64_t accum;         /* clocks not yet turned into IRQ0 pulses           */
     uint32_t frame_us;      /* microseconds per bus frame tick                  */
     uint16_t ch2_reload;    /* channel-2 reload (the PC-speaker tone divisor)   */

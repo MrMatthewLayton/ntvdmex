@@ -2,12 +2,40 @@
  * on the VDD bus.  Pure C, no <windows.h>. */
 #include "vdd_pit.h"
 
-/* current down-counter value (counts reload..1 repeatedly). */
+/* ── ★★★★ THE COUNT STARTS WHEN THE GUEST LOADS IT. ─────────────────────────────
+     This used to be `R - (total_clocks % R)`: a free-running divider whose phase had
+     nothing to do with the moment the guest wrote the count. For a guest that only
+     ever waits for IRQ0 that is invisible. For one that READS THE COUNTER it is a
+     random number generator.
+   ★ MEASURED ON LEMMINGS (s69). Its "High Performance PC" option calibrates the game
+     tick from the CRT: load counter 0 with 0xFFFF in mode 0, count 160 scanlines on
+     0x3DA bit 0, latch, and use 0xFFFF - latch as the reload (guest CS:15BB..1633 in
+     the real-DOS dump). 160 lines at 31.47 kHz is 6,067 clocks; the user's by-hand
+     run got 0x4BB9 (19,385 -- 61.5 Hz, a third of the intended tick rate, and the
+     "music is slower" they reported), and every run would get a different one, because
+     the read-back was `total_clocks % 0xFFFF` at the latch -- uniformly random.
+   ► So keep the instant of the load (`load_clocks`) and derive the counting element
+     from the clocks since it, per mode (Intel 8254 datasheet):
+       mode 0   load - elapsed, and on past terminal count through 0xFFFF (one-shot)
+       mode 3   decrements by TWO per clock and reloads at zero, so the count runs
+                R, R-2, ... 2 twice per period and a read never shows an odd LSB
+       others   R - (elapsed mod R), reloading at the period (modes 2, 4, 5; mode 1)
+     The IRQ engine below is untouched: it still fires once per reload of elapsed
+     clocks, which is right for the periodic modes and a harmless over-approximation
+     of mode 0 (whose single terminal count no guest here waits on). */
 static uint16_t pit_current_count(const pit_state *st)
 {
     uint32_t R = pit_eff_reload(st);
-    uint32_t phase = (uint32_t)(st->total_clocks % R);
-    return (uint16_t)(R - phase);            /* R when phase==0 (65536 -> 0)     */
+    uint64_t elapsed = (st->total_clocks >= st->load_clocks)
+                     ? st->total_clocks - st->load_clocks : 0;
+    if (st->mode == 0)
+        return (uint16_t)(R - elapsed);      /* wraps through 0xFFFF past zero   */
+    if (st->mode == 3) {
+        uint32_t half  = (R + 1) / 2;
+        uint32_t phase = (uint32_t)(elapsed % half);
+        return (uint16_t)(R - 2 * phase);    /* R when phase==0 (65536 -> 0)     */
+    }
+    return (uint16_t)(R - (uint32_t)(elapsed % R));
 }
 
 /* --- the time engine: clocks -> IRQ0 pulses ------------------------------- */
@@ -39,6 +67,18 @@ static void pit_frame(void *self)
     PIT_GUARD(st, 1);
     vdd_pit_add_clocks(st, clocks);
     PIT_GUARD(st, 0);
+}
+
+/* The count register is loaded: the counting element restarts from it NOW, and so
+   does the output period -- the control word that precedes a load stops the
+   counter (OUT high, modes 2/3) and the count write starts it, so the first IRQ0
+   after a reprogram is one full reload away, not early by the old period's
+   remainder. The latch is left alone: a latched count is held until it is read. */
+static void pit_load(pit_state *st, uint16_t count)
+{
+    st->reload      = count;
+    st->load_clocks = st->total_clocks;
+    st->accum       = 0;
 }
 
 /* --- 8254 ports 0x40-0x43 ------------------------------------------------- */
@@ -89,11 +129,11 @@ static void pit_out_locked(pit_state *st, uint16_t port, uint8_t val)
              host_irq_sink's throttle, where a change measured on Doom cost SKYROADS a
              fifth of its clock. Re-gate BOTH before believing this. */
         uint8_t acc = st->access ? st->access : 3;
-        if (acc == 1)      st->reload = val;                        /* LSB only: MSB := 0 */
-        else if (acc == 2) st->reload = (uint16_t)((uint16_t)val << 8);  /* MSB only: LSB := 0 */
+        if (acc == 1)      pit_load(st, val);                        /* LSB only: MSB := 0 */
+        else if (acc == 2) pit_load(st, (uint16_t)((uint16_t)val << 8));  /* MSB only: LSB := 0 */
         else {                               /* lo then hi -- ONE atomic load   */
             if (!st->wr_flip) { st->wr_lo = val; st->wr_flip = 1; }
-            else { st->reload = (uint16_t)(((uint16_t)val << 8) | st->wr_lo); st->wr_flip = 0; }
+            else { pit_load(st, (uint16_t)(((uint16_t)val << 8) | st->wr_lo)); st->wr_flip = 0; }
         }
     } else if (port == 0x42) {               /* channel-2 reload (speaker tone) */
         uint8_t acc = st->ch2_access ? st->ch2_access : 3;
