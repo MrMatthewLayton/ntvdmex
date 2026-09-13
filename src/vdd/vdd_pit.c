@@ -69,16 +69,38 @@ static void pit_frame(void *self)
     PIT_GUARD(st, 0);
 }
 
-/* The count register is loaded: the counting element restarts from it NOW, and so
-   does the output period -- the control word that precedes a load stops the
-   counter (OUT high, modes 2/3) and the count write starts it, so the first IRQ0
-   after a reprogram is one full reload away, not early by the old period's
-   remainder. The latch is left alone: a latched count is held until it is read. */
+/* ── ★★★★★ A COUNT WRITE RESTARTS THE PERIOD ONLY IN THE ONE-SHOT MODES. ───────────
+     ⛔ THIS WAS THE s69 REGRESSION, AND IT CAME FROM A TEST I WROTE OUT OF BELIEF
+        RATHER THAN OUT OF THE DATASHEET -- the one thing M9 says never to do. The
+        first version reset `accum` on EVERY load, "because the control word stops the
+        counter". That is true of modes 0/1/4/5 and FALSE of modes 2 and 3, which are
+        the rate-generator and square-wave modes every DOS timer actually uses. Intel
+        8254, modes 2/3: if the counter is written between CLK pulses the new count is
+        NOT loaded until the end of the current counting cycle -- the period in flight
+        is not disturbed.
+     ★ MEASURED ON THE USER'S LIVE STUCK RIG (s69): Lemmings reprograms counter 0 with
+        the SAME reload once per frame, from its vblank sync routine (guest
+        CS:17D0..1829 -- write CRTC 0x0C/0x0D, wait for 0x3DA bit 3, then out 43h/40h).
+        With `accum` reset by each of those writes the accumulator never survived long
+        enough to reach the reload at its own rate, so IRQ0 came out at **exactly the
+        frame rate**: 69.95/s against 92.5 Hz programmed, and identical to `vbl_edges`
+        (69.95/s). Two independent counters locked to the same wrong number named it.
+     ⚠⚠ AND IT CAN SILENCE THE TIMER OUTRIGHT: a guest reprogramming FASTER than one
+        reload period resets the accumulator before it ever reaches the reload, so
+        IRQ0 never fires at all. "No music" is the audible end of that, and anything
+        waiting on a tick counter hangs.
+   ► So: modes 0/1/4/5 load and start counting NOW. Modes 2/3 take the new reload for
+     the next period and leave the current one -- and the accumulator -- alone.
+     `load_clocks` moves only when the counting element really restarts, because that
+     is what pit_current_count measures the read-back from. */
 static void pit_load(pit_state *st, uint16_t count)
 {
-    st->reload      = count;
-    st->load_clocks = st->total_clocks;
-    st->accum       = 0;
+    int oneshot = (st->mode != 2 && st->mode != 3);
+    st->reload = count;
+    if (oneshot) {                    /* the write loads AND starts the counter */
+        st->load_clocks = st->total_clocks;
+        st->accum       = 0;
+    }
 }
 
 /* --- 8254 ports 0x40-0x43 ------------------------------------------------- */

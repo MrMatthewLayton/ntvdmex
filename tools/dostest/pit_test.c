@@ -186,9 +186,12 @@ int main(void)
     /* T12: modes 2 and 3 reload at the period; mode 3 steps by TWO per clock.
        (Datasheet: in mode 3 the counter decrements by two and reloads at zero,
        so a read never shows an odd LSB; DOSBox masks it the same way.) */
+    /* ⚠ The PHASE is established directly, not by a count write: in modes 2/3 a write
+       deliberately does NOT restart the counting element (T13), so going through the
+       port here would be testing load semantics instead of the read-back arithmetic
+       this case exists to pin. The control word only sets mode/access. */
     v = 0x34; vdd_bus_io(&bus, 0x43, 1, 0, &v);          /* mode 2, lo/hi     */
-    v = 0x00; vdd_bus_io(&bus, 0x40, 1, 0, &v);
-    v = 0x10; vdd_bus_io(&bus, 0x40, 1, 0, &v);          /* 0x1000            */
+    pit.reload = 0x1000; pit.total_clocks = 0; pit.load_clocks = 0; pit.accum = 0;
     vdd_pit_add_clocks(&pit, 100);
     v = 0x00; vdd_bus_io(&bus, 0x43, 1, 0, &v);
     {
@@ -206,8 +209,7 @@ int main(void)
         CHECK(((hi << 8) | lo) == 0x1000 - 100, "8254: mode 2 reloads at the period");
     }
     v = 0x36; vdd_bus_io(&bus, 0x43, 1, 0, &v);          /* mode 3, lo/hi     */
-    v = 0x00; vdd_bus_io(&bus, 0x40, 1, 0, &v);
-    v = 0x10; vdd_bus_io(&bus, 0x40, 1, 0, &v);          /* 0x1000            */
+    pit.reload = 0x1000; pit.total_clocks = 0; pit.load_clocks = 0; pit.accum = 0;
     vdd_pit_add_clocks(&pit, 100);
     v = 0x00; vdd_bus_io(&bus, 0x43, 1, 0, &v);
     {
@@ -225,22 +227,59 @@ int main(void)
         CHECK(((hi << 8) | lo) == 0x1000 - 2, "8254: mode 3 reloads every HALF period");
     }
 
-    /* T13: loading a count restarts the IRQ period (the control word stops the
-       counter and the count write starts it), so the first IRQ0 after a
-       reprogram comes exactly one reload later -- not early by whatever the old
-       period had accumulated. */
-    v = 0x36; vdd_bus_io(&bus, 0x43, 1, 0, &v);
+    /* ── T13: ★★★★★ A COUNT WRITE MUST NOT RESTART THE PERIOD IN MODE 2 OR 3. ───────
+       ⛔ THE s69 REGRESSION, AND THIS TEST USED TO ASSERT THE OPPOSITE -- I wrote the
+          expectation from my belief that "the control word stops the counter", which
+          is true only of the one-shot modes. Intel 8254, modes 2/3: a count written
+          between CLK pulses is not loaded until the end of the current cycle.
+       ★ THE SHAPE THAT BROKE LEMMINGS: it reprograms counter 0 with the SAME reload
+          once per frame from its vblank sync routine. If each write resets the
+          accumulator, IRQ0 stops coming at the programmed rate and comes out at the
+          REPROGRAM rate instead -- measured on the rig at 69.95/s against 92.5 Hz
+          programmed. So drive exactly that: a guest re-writing the same count more
+          often than the period must still get the programmed rate. */
+    v = 0x36; vdd_bus_io(&bus, 0x43, 1, 0, &v);          /* mode 3            */
     v = 0x00; vdd_bus_io(&bus, 0x40, 1, 0, &v);
-    v = 0x20; vdd_bus_io(&bus, 0x40, 1, 0, &v);          /* 0x2000            */
-    vdd_pit_add_clocks(&pit, 0x1F00);                    /* most of a period  */
+    v = 0x10; vdd_bus_io(&bus, 0x40, 1, 0, &v);          /* 0x1000 = 4096     */
     g_irq = 0;
-    v = 0x36; vdd_bus_io(&bus, 0x43, 1, 0, &v);
+    {   /* 16 rounds of "advance a third of a period, then reprogram the same count".
+           48 periods' worth of clocks must yield 16 IRQ0, not 0. */
+        int k;
+        for (k = 0; k < 48; ++k) {
+            vdd_pit_add_clocks(&pit, 0x1000 / 3);
+            if (k % 3 == 0) {                            /* reprogram, same value */
+                v = 0x36; vdd_bus_io(&bus, 0x43, 1, 0, &v);
+                v = 0x00; vdd_bus_io(&bus, 0x40, 1, 0, &v);
+                v = 0x10; vdd_bus_io(&bus, 0x40, 1, 0, &v);
+            }
+        }
+        CHECK(g_irq >= 15 && g_irq <= 16,
+              "8254: mode 3 re-written faster than its period still ticks at the PROGRAMMED rate");
+    }
+    /* ...and a guest reprogramming faster than the period cannot silence IRQ0. */
+    {   int k; g_irq = 0;
+        for (k = 0; k < 40; ++k) {
+            vdd_pit_add_clocks(&pit, 0x1000 / 4);
+            v = 0x36; vdd_bus_io(&bus, 0x43, 1, 0, &v);  /* every single round */
+            v = 0x00; vdd_bus_io(&bus, 0x40, 1, 0, &v);
+            v = 0x10; vdd_bus_io(&bus, 0x40, 1, 0, &v);
+        }
+        CHECK(g_irq >= 9, "8254: reprogramming every quarter-period does NOT silence the timer");
+    }
+    /* The one-shot modes DO restart on a write -- that is the calibration path (T11),
+       and it is the half of the original claim that was right. */
+    v = 0x30; vdd_bus_io(&bus, 0x43, 1, 0, &v);          /* mode 0            */
     v = 0x00; vdd_bus_io(&bus, 0x40, 1, 0, &v);
-    v = 0x10; vdd_bus_io(&bus, 0x40, 1, 0, &v);          /* re-rate to 0x1000 */
+    v = 0x10; vdd_bus_io(&bus, 0x40, 1, 0, &v);          /* 0x1000            */
+    vdd_pit_add_clocks(&pit, 0x0F00);
+    g_irq = 0;
+    v = 0x30; vdd_bus_io(&bus, 0x43, 1, 0, &v);
+    v = 0x00; vdd_bus_io(&bus, 0x40, 1, 0, &v);
+    v = 0x10; vdd_bus_io(&bus, 0x40, 1, 0, &v);          /* re-arm            */
     vdd_pit_add_clocks(&pit, 0x1000 - 1);
-    CHECK(g_irq == 0, "8254: a reload does not inherit the old period's phase");
+    CHECK(g_irq == 0, "8254: a MODE 0 re-arm does restart the period (no inherited phase)");
     vdd_pit_add_clocks(&pit, 1);
-    CHECK(g_irq == 1, "8254: ...the first IRQ0 is exactly one reload after the load");
+    CHECK(g_irq == 1, "8254: ...and fires exactly one reload after the re-arm");
 
     /* T10: reset restores defaults but keeps the bus link ---------------- */
     pit.reload = 0x9999; pit.accum = 777; pit.total_clocks = 999;
