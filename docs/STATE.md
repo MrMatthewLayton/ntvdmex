@@ -4,7 +4,7 @@
 > this file top to bottom and you will know where it is, what works, what does not, and
 > what to do next.
 
-- **Last updated:** 2026-09-13 (session 69)
+- **Last updated:** 2026-09-13 (session 70)
 - **Score: 86.9%** (`./tools/score/score.py` — run it, do not quote this line).
   Session 53 moved it 72.4 → 79.6; session 54 → 80.2; session 55 → 83.1;
   session 56 → 85.4; s57, **s58, s59 and s60 moved it not at all** — s57 built the modal
@@ -237,7 +237,48 @@ and matches the 6.22 oracle row for row (session 53)** — but `MEM /C` still re
    the next step, and it is also the honest correction for *a fix measured on
    one guest is a fix for none*.
 
-   ### ▶ START HERE: **SESSION 69 (below), then 68, 61, 60, 59.**
+   ### ▶ START HERE: **SESSION 70 (below), then 69, 68, 61, 60, 59.**
+
+   ---
+
+   ## ★★★★★ SESSION 70 (2026-09-13, evening) — **LEMMINGS #3 CLOSED FOR REAL: THE TIMER RESTARTS PER THE DATASHEET, AND IRQ0 IS HELD IN SERVICE.**
+
+   **HEAD `f6a2080`, committed, NOT pushed. Battery 1238/0 (pit 35). Rig binary = HEAD
+   (`09a42b5a…`). Deadline: the 17th.**
+
+   The s69 "fader-vs-timer coupling" was never a fader problem. Read from the guest
+   binary + the 8254 datasheet, then measured: Lemmings' HP-mode timer ISR (`CS:17C7`)
+   does `sti`, spins on `0x3DA` for the retrace, then `out 43h,36h` + the calibrated
+   count. Its main loop runs one game frame per 5 ticks and steps the level fade one
+   step per game frame — it never waits on the retrace in HP mode (`0x31E`). So the
+   design is a 70 Hz retrace-locked tick, and two host bugs hid each other:
+
+   1. **PIT (`vdd_pit.c`)**: read-back was the free-running phase → random calibration
+      reload (the slow music). And the datasheet says Control Word + count **restarts**
+      the period in modes 2/3 too ("synchronized by software"); only a *bare* count
+      write waits for the period's end. s69's two models were each wrong one way. Now
+      `cw_armed`/`next_pending` + count-from-load. Tests T11–T15 from the datasheet
+      quotes, verified failing on the old model.
+   2. **PIC / host**: IRQ0 was auto-EOI'd on delivery (ba927ac). With a correct 70 Hz
+      tick, an IRQ0 raised during the ISR's `sti` spin **re-entered the handler**, and
+      every tick then nested one level deeper forever — no ISR body (no music), no main
+      loop (black screen = "stuck fade"), stack overrun (the es=0xD000 blitter AV). The
+      tell was `irq0/s == flips/s == 70` with `p3da` at 3.3M reads/s. Now IRQ0 is held in
+      service until the guest EOIs (or our INT 08h BOP EOIs, as the BIOS does), PIC
+      ISR/IRR updates are atomic, and a 250 ms timeout ×3 falls back to auto-EOI with a
+      log line. STAGE2 `irq0_isr[strict,auto,blocks,timeouts,fallback]`.
+
+   **Measured (rig, headless, keyed to gameplay):** Lemmings IRQ0 70.0/s == vbl edges,
+   level fade 2.5–3 s (real ≈2.3 s), `0x3DA` share 24% (the spin), 0 blocked / 0
+   timeouts, no faults. Skyroads `n8=0x67 max_ms=0x13 ui_gap=0x8d23` — the baseline
+   exactly; keyed play run's frozen-at-`0110:3B40` ending is identical on the previous
+   binary (A/B). ⚠ The DPMI (protected-mode) delivery arm still auto-EOIs IRQ0 — Doom's
+   path, by hand only.
+
+   **▶ NEXT:** (a) user confirms by hand: music tempo, level fade-in, and that the
+   briefing/game no longer flicker between palettes (the nesting may have been that
+   too); (b) capture refinements (`0097dd1`) still untested by hand; (c) #4 in-game
+   click assigning a skill; (d) consider strict IRQ0 for the PM arm, measured on Doom.
 
    ---
 
