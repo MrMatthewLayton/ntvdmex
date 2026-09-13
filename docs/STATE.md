@@ -275,10 +275,18 @@ and matches the 6.22 oracle row for row (session 53)** — but `MEM /C` still re
    binary (A/B). ⚠ The DPMI (protected-mode) delivery arm still auto-EOIs IRQ0 — Doom's
    path, by hand only.
 
+   **Also (user-specified, same evening): capture RULE 6 — released means released.**
+   Raw input followed focus, not capture, so after the Windows key gave the pointer
+   back, dragging on the desktop still mouse-looked in the game while our window was
+   foreground, and right-clicks over the picture still reached it. Now a mouse-using
+   guest that is not captured gets no deltas, no position, no buttons; release reports
+   any held button as let go. `mouse_goes_to_guest()` is the one decision point.
+   Skyroads on baseline, Lemmings' scripted click still lands while captured.
+
    **▶ NEXT:** (a) user confirms by hand: music tempo, level fade-in, and that the
    briefing/game no longer flicker between palettes (the nesting may have been that
-   too); (b) capture refinements (`0097dd1`) still untested by hand; (c) #4 in-game
-   click assigning a skill; (d) consider strict IRQ0 for the PM arm, measured on Doom.
+   too); (b) capture refinements (`0097dd1` + rule 6) still untested by hand; (c) #4
+   in-game click assigning a skill; (d) consider strict IRQ0 for the PM arm, on Doom.
 
    ---
 

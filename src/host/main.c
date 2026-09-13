@@ -5796,6 +5796,10 @@ static DWORD         g_ms_autocap_fired = 0;
    status strip, which is built long before input_capture_set, has to answer it too.
    The full policy is written out above input_capture_set; do not add a second latch. */
 static int capture_allowed(void) { return g_ms_want_capture != 0; }
+/* RULE 6 (see the capture rules above input_capture_set): does host mouse input reach
+   the guest right now? Captured: yes. Never used the mouse: yes (ordinary window).
+   Uses the mouse but released: no. Read on the UI thread only. */
+static int mouse_goes_to_guest(void) { return g_captured || !capture_allowed(); }
 
 static DWORD g_ms_shape_sets;      /* 09h/0Ah: cursor shapes we accept and discard   */
 static DWORD g_ms_state_badptr;    /* 16h/17h: ES:DX we refused to dereference       */
@@ -7369,6 +7373,15 @@ static LRESULT CALLBACK ll_kbd_proc(int code, WPARAM wp, LPARAM lp)
           window draggable and the menus reachable after a release: getting your mouse
           back is a deliberate click into the picture, and everything else on the window
           still belongs to Windows.
+       6. RELEASED MEANS RELEASED (s70, user spec). A guest that uses the mouse and is
+          NOT captured receives NOTHING from it: no raw deltas (0Bh), no position (03h),
+          no buttons (05h/06h). Before this, raw input followed FOCUS not capture, so
+          after the Windows key gave the pointer back, dragging across the desktop still
+          mouse-looked in the game as long as our window was foreground, and a right
+          click over the picture still reached it. Release also reports any held button
+          as let go, so the guest is never left believing a button is down. A guest that
+          never used the mouse is untouched -- it was never captured and the plain
+          window behaviour is right for it. One decision point: mouse_goes_to_guest().
 
    ⚠ capture_allowed() gates rule 1 and it is deliberately the SAME latch the automatic
      grab keys on. "Has this guest ever used the mouse" has one answer and one variable;
@@ -7469,6 +7482,10 @@ static void input_capture_set(HWND h, int on)
     } else {
         ClipCursor(NULL);
         if (g_llkbd) { UnhookWindowsHookEx(g_llkbd); g_llkbd = NULL; }
+        /* RULE 6: the UP that follows will not reach the guest, so report any held
+           button as released NOW -- edges and all, so 06h sees it. */
+        {   LONG prev = InterlockedExchange(&g_ms_btn, 0);
+            if (prev) mouse_btn_edges(prev, 0); }
     }
     menu_check(h, IDM_INPUT_CAPTURE, on);
     host_cursor_refresh(h);              /* apply the pointer change now, not on next move */
@@ -9140,6 +9157,9 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
             ++g_ms_wm_input;
             InterlockedExchangeAdd(&g_ms_raw_tot_x, (LONG)ri.data.mouse.lLastX);
             InterlockedExchangeAdd(&g_ms_raw_tot_y, (LONG)ri.data.mouse.lLastY);
+            /* RULE 6: raw input follows FOCUS, not capture -- a released guest would
+               otherwise keep mouse-looking while the user drags on the desktop. */
+            if (!mouse_goes_to_guest()) break;
             InterlockedExchangeAdd(&g_ms_dx, (LONG)ri.data.mouse.lLastX);
             InterlockedExchangeAdd(&g_ms_dy, (LONG)ri.data.mouse.lLastY);
             /* While captured the pointer is clipped, so WM_MOUSEMOVE stops telling the
@@ -9184,6 +9204,9 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
             input_capture_set(h, 1);
             return 0;
         }
+        /* RULE 6: a mouse-using guest that is released sees no position and no
+           buttons. Not consumed -- DefWindowProc still gets its ordinary click. */
+        if (!mouse_goes_to_guest()) break;
         fw = g_vid.frame.w ? (int)g_vid.frame.w : 640;
         fh = g_vid.frame.h ? (int)g_vid.frame.h : 480;
         GetClientRect(h, &rc);
