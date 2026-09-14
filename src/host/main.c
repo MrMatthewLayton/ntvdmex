@@ -5800,7 +5800,12 @@ static DWORD         g_ms_evt_installs;
      the DPMI callback path; those are counted (cb_pm) so the gap stays visible. */
 #define MS_CB_RET_OFF   0x005C          /* DOS_HDLR_SEG:005C = BOP MS_CB_BOP ; iret   */
 #define MS_CB_BOP       0x35
-#define MS_CB_TIMEOUT_MS 2000u
+/* ⚠ 2 s WAS WRONG. "In flight" lasts until the handler's RETF reaches our stub, and the
+   exec loop only notices that at its next pass -- for a guest that runs natively for
+   seconds between traps that is seconds, not milliseconds. Timing out early marks the
+   callback lost, so when the RETF does arrive the stub is "stray", steps over its BOP
+   and IRETs on a stack that holds no frame: a jump into garbage. */
+#define MS_CB_TIMEOUT_MS 30000u
 static volatile LONG g_ms_evt_pend;     /* event bits raised since the last callback */
 static int    g_ms_cb_active;           /* a callback is in flight                    */
 static DWORD  g_ms_cb_since;            /* GetTickCount()|1 when it went in flight     */
@@ -6363,12 +6368,36 @@ static void mouse_cb_try(volatile BYTE *tib)
     VDM_SET16(tib, VTIB_EIP, (WORD)g_ms_evt_off);
     g_ms_cb_active = 1; g_ms_cb_since = GetTickCount() | 1;
     ++g_ms_cb_inj;
+    if (g_ms_cb_inj <= 16) {                       /* the first few, with where from */
+        char cb[192], *cq = cb;
+        cq = zput(cq, "MOUSECB inject #"); cq = zhex(cq, g_ms_cb_inj);
+        cq = zput(cq, " ev=0x");   cq = zhex(cq, (DWORD)pend);
+        cq = zput(cq, " from=0x"); cq = zhex(cq, g_ms_cb_saved.cs);
+        cq = zput(cq, ":0x");      cq = zhex(cq, g_ms_cb_saved.eip);
+        cq = zput(cq, " ss:sp=0x"); cq = zhex(cq, g_ms_cb_saved.ss);
+        cq = zput(cq, ":0x");      cq = zhex(cq, g_ms_cb_saved.esp);
+        cq = zput(cq, " -> 0x");   cq = zhex(cq, (DWORD)g_ms_evt_seg);
+        cq = zput(cq, ":0x");      cq = zhex(cq, (DWORD)g_ms_evt_off);
+        cq = zput(cq, "\r\n");
+        log_append(LOG_PATH, cb, cq);
+    }
 }
 /* The BOP at DOS_HDLR_SEG:MS_CB_RET_OFF: the handler RETF'd here, put everything back. */
 static void mouse_cb_return(volatile BYTE *tib)
 {
     if (!g_ms_cb_active) {                         /* not ours to unwind: step over  */
-        ++g_ms_cb_stray; VDM_REG(tib, VTIB_EIP) += 3; return;
+        char cb[160], *cq = cb;
+        ++g_ms_cb_stray; VDM_REG(tib, VTIB_EIP) += 3;
+        cq = zput(cq, "MOUSECB STRAY return, nothing in flight: ss:sp=0x");
+        cq = zhex(cq, VDM_REG(tib, VTIB_SS) & 0xFFFF); cq = zput(cq, ":0x");
+        cq = zhex(cq, VDM_REG(tib, VTIB_ESP) & 0xFFFF); cq = zput(cq, "\r\n");
+        log_append(LOG_PATH, cb, cq);
+        return;
+    }
+    if (g_ms_cb_done < 16) {
+        char cb[96], *cq = cb;
+        cq = zput(cq, "MOUSECB return #"); cq = zhex(cq, g_ms_cb_done + 1);
+        cq = zput(cq, " ok\r\n"); log_append(LOG_PATH, cb, cq);
     }
     VDM_REG(tib, VTIB_EAX) = g_ms_cb_saved.eax; VDM_REG(tib, VTIB_EBX) = g_ms_cb_saved.ebx;
     VDM_REG(tib, VTIB_ECX) = g_ms_cb_saved.ecx; VDM_REG(tib, VTIB_EDX) = g_ms_cb_saved.edx;
@@ -25178,6 +25207,19 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
       p = zput(p, " periods="); p = zhex(p, g_cpuspd_periods);
       p = zput(p, " aff="); p = zhex(p, (DWORD)g_cpuaff_on);
       p = zput(p, " ncpu="); p = zhex(p, g_cpuaff_ncpu);
+      /* The INT 33h callback path, at EXIT (the heartbeat's copy is a snapshot). */
+      p = zput(p, "\r\nSTAGE2: MOUSECB inj="); p = zhex(p, g_ms_cb_inj);
+      p = zput(p, " done=");  p = zhex(p, g_ms_cb_done);
+      p = zput(p, " lost=");  p = zhex(p, g_ms_cb_lost);
+      p = zput(p, " stray="); p = zhex(p, g_ms_cb_stray);
+      p = zput(p, " pm=");    p = zhex(p, g_ms_cb_pm);
+      p = zput(p, " active="); p = zhex(p, (DWORD)g_ms_cb_active);
+      p = zput(p, " raised="); p = zhex(p, g_ms_evt_raised);
+      p = zput(p, " why[fly,none,nohdl,stub,if]=");
+      { int w; for (w = 0; w < 5; ++w) { p = zhex(p, g_ms_cb_why[w]); p = zput(p, w < 4 ? "," : ""); } }
+      p = zput(p, " mask=0x"); p = zhex(p, (DWORD)g_ms_evt_mask);
+      p = zput(p, " hdl=0x");  p = zhex(p, (DWORD)g_ms_evt_seg);
+      p = zput(p, ":0x");      p = zhex(p, (DWORD)g_ms_evt_off);
       /* THE KEYSTROKE ITSELF, both halves. ms buckets [0,1,2,4,8,16,32,64+]. */
       p = zput(p, "\r\nSTAGE2: KEYLAT msgq_ms[0,1,2,4,8,16,32,64+]=");
       { unsigned kb; for (kb = 0; kb < 8; ++kb) { p = zput(p, kb ? "," : "");
