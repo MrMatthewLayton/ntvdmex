@@ -5794,8 +5794,13 @@ static volatile LONG g_ms_evt_pend;     /* event bits raised since the last call
 static int    g_ms_cb_active;           /* a callback is in flight                    */
 static DWORD  g_ms_cb_since;            /* GetTickCount()|1 when it went in flight     */
 static DWORD  g_ms_cb_inj, g_ms_cb_done, g_ms_cb_lost, g_ms_cb_pm, g_ms_cb_stray;
+/* Why a delivery attempt did NOT happen, by reason -- a zero cb_inj must be readable:
+   [0] in flight  [1] no mask/no events  [2] no handler  [3] inside our stub  [4] IF off */
+static DWORD  g_ms_cb_why[5];
+static DWORD  g_ms_evt_raised;          /* event bits ever raised by the UI side      */
 static struct { DWORD eax, ebx, ecx, edx, esi, edi, ebp, esp, eip, efl, cs, ds, es, ss; } g_ms_cb_saved;
-static void mouse_evt_raise(LONG bits) { (void)__sync_fetch_and_or((LONG *)&g_ms_evt_pend, bits); }
+static void mouse_evt_raise(LONG bits)
+{ (void)__sync_fetch_and_or((LONG *)&g_ms_evt_pend, bits); ++g_ms_evt_raised; }
 
 /* Record a button transition. Normally UI-thread only, and the position is taken
    from the live driver position rather than the message's client coordinates because
@@ -6296,20 +6301,20 @@ static void mouse_cb_try(volatile BYTE *tib)
         if ((DWORD)(GetTickCount() - (g_ms_cb_since & ~1u)) > MS_CB_TIMEOUT_MS) {
             g_ms_cb_active = 0; ++g_ms_cb_lost;
         }
-        return;
+        ++g_ms_cb_why[0]; return;
     }
-    if (!mask || !(g_ms_evt_pend & mask)) return;
-    if ((g_ms_evt_seg | g_ms_evt_off) == 0) return;
+    if (!mask || !(g_ms_evt_pend & mask)) { ++g_ms_cb_why[1]; return; }
+    if ((g_ms_evt_seg | g_ms_evt_off) == 0) { ++g_ms_cb_why[2]; return; }
     if (g_dpmi_pm) {                               /* PM handler: not this path (yet) */
         InterlockedExchange(&g_ms_evt_pend, 0); ++g_ms_cb_pm; return;
     }
     cs = VDM_REG(tib, VTIB_CS) & 0xFFFF; ip = VDM_REG(tib, VTIB_EIP) & 0xFFFF;
     ss = VDM_REG(tib, VTIB_SS) & 0xFFFF; sp = VDM_REG(tib, VTIB_ESP) & 0xFFFF;
     if (cs == DOS_HDLR_SEG) {
-        if ((ip >= 0x34 && ip < 0x3A) || (ip >= 0x4C && ip < 0x50)) return;  /* our INT 08h/09h */
+        if ((ip >= 0x34 && ip < 0x3A) || (ip >= 0x4C && ip < 0x50)) { ++g_ms_cb_why[3]; return; }
         fl = peekw((ss << 4) + ((sp + 4) & 0xFFFF));    /* the FLAGS the stub IRETs to  */
     } else fl = VDM_REG(tib, VTIB_EFLAGS);
-    if (!if_or_vif(fl)) return;                    /* interrupts off: like an IRQ, wait */
+    if (!if_or_vif(fl)) { ++g_ms_cb_why[4]; return; } /* interrupts off: like an IRQ, wait */
     pend = InterlockedExchange(&g_ms_evt_pend, 0) & mask;
     if (!pend) return;
     /* Save the whole interrupted context host-side. */
@@ -8855,6 +8860,12 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
                 mq = zput(mq, " cb_lost="); mq = zhex(mq, g_ms_cb_lost);
                 mq = zput(mq, " cb_pm=");   mq = zhex(mq, g_ms_cb_pm);
                 mq = zput(mq, " cb_stray="); mq = zhex(mq, g_ms_cb_stray);
+                mq = zput(mq, " cb_why[fly,none,nohdl,stub,if]=");
+                { int w; for (w = 0; w < 5; ++w) { mq = zhex(mq, g_ms_cb_why[w]); mq = zput(mq, w < 4 ? "," : ""); } }
+                mq = zput(mq, " raised="); mq = zhex(mq, g_ms_evt_raised);
+                mq = zput(mq, " mask=0x");  mq = zhex(mq, (DWORD)g_ms_evt_mask);
+                mq = zput(mq, " hdl=0x");   mq = zhex(mq, (DWORD)g_ms_evt_seg);
+                mq = zput(mq, ":0x");       mq = zhex(mq, (DWORD)g_ms_evt_off);
                 mq = zput(mq, " shape="); mq = zhex(mq, g_ms_shape_sets);
                 mq = zput(mq, " badptr=");mq = zhex(mq, g_ms_state_badptr);
                 mq = zput(mq, " unimpl=");mq = zhex(mq, g_ms_i33_unimpl);
