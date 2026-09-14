@@ -6321,8 +6321,20 @@ static void mouse_cb_try(volatile BYTE *tib)
     cs = VDM_REG(tib, VTIB_CS) & 0xFFFF; ip = VDM_REG(tib, VTIB_EIP) & 0xFFFF;
     ss = VDM_REG(tib, VTIB_SS) & 0xFFFF; sp = VDM_REG(tib, VTIB_ESP) & 0xFFFF;
     if (cs == DOS_HDLR_SEG) {
-        if ((ip >= 0x34 && ip < 0x3A) || (ip >= 0x4C && ip < 0x50)) { ++g_ms_cb_why[3]; return; }
-        fl = peekw((ss << 4) + ((sp + 4) & 0xFFFF));    /* the FLAGS the stub IRETs to  */
+        /* ── THE STUBS ARE WHERE THE EXEC LOOP ACTUALLY RUNS FOR THIS GUEST. ─────────
+             Measured (QB, 13.6 s): 926 exec-loop passes in all, every IRQ delivered by
+             the async path, and every pass with mouse events pending was AT our INT 08h
+             or INT 09h stub -- QB chains its timer/keyboard hooks to the BIOS and
+             otherwise runs without trapping. Refusing there, as the IRQ gates do to avoid
+             re-entering the handler, meant the callback never ran once (cb_why stub=41,
+             inj=0). Calling from the stub is safe for a CALLBACK: the stub is about to
+             IRET, the live IF is clear so nothing nests inside the handler, and the
+             driver on real hardware calls it from an interrupt context too. Only the
+             INT 09h stub's own BOP instruction (0x4C..0x4E, not yet executed) is kept
+             out, so the byte it consumes is not disturbed. */
+        if (ip >= 0x4C && ip < 0x4F) { ++g_ms_cb_why[3]; return; }
+        if ((ip >= 0x34 && ip < 0x3A) || ip == 0x4F) fl = 0x200; /* stub about to IRET: deliver */
+        else fl = peekw((ss << 4) + ((sp + 4) & 0xFFFF));    /* the FLAGS the stub IRETs to  */
     } else fl = VDM_REG(tib, VTIB_EFLAGS);
     if (!if_or_vif(fl)) { ++g_ms_cb_why[4]; return; } /* interrupts off: like an IRQ, wait */
     pend = InterlockedExchange(&g_ms_evt_pend, 0) & mask;
@@ -9398,6 +9410,11 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
         /* Skip our injected Start-menu-suppression Ctrl -- otherwise the guest gets a
            break code with no matching make. */
         if (GetMessageExtraInfo() == (LPARAM)HOST_INJECT_TAG) return 0;
+        /* The Windows key is the HOST's (rule 4) and its DOWN is never forwarded -- so
+           its UP must not be either. It was: the guest got a lone E0 DB break code for
+           a key that did not exist when it was written (QB's scancode tables stop at
+           0x58), which is the "Win key almost always crashes QBasic" report. */
+        if (wp == VK_LWIN || wp == VK_RWIN) return 0;
         key_msg_note();
         key_push_break(lp);
         break;
