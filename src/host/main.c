@@ -5865,10 +5865,27 @@ static DWORD         g_ms_evt_installs;
      that is not a DPMI client falls through to INT 21h with AH = the event bits = 0:
      "DOS terminate". QBasic died the instant the mouse moved (s71, twice). The
      handler segment has no single map of its slots; the check before "running .EXE"
-     now verifies this stub survived every later planting. 0x12..0x17 sits between the
-     EMM device-header name (0x0A..0x11) and the DBCS table (0x18) and is used by
-     nothing. */
-#define MS_CB_RET_OFF   0x0012          /* DOS_HDLR_SEG:0012 = BOP MS_CB_BOP ; iret   */
+     now verifies this stub survived every later planting.
+   ⚠⚠ 0x12 WAS THE SECOND CHOICE, AND THE GUEST OVERWROTE IT. Segment 0050 is not
+     ours: linear 0500..05FF is the DOS/BIOS communication area, and 0050:0010..0021
+     are BASIC's documented slots -- 0010 its DS, 0012 the saved INT 1Ch vector, 0016
+     INT 23h, 001A INT 24h. QBasic IS BASIC: measured on the rig (s71, headless
+     qbclick.bat) the bytes at 0050:0012 read `3a 00 50 00` = 0050:003A, our INT 1Ch
+     stub, stored there by QB at start-up. The handler's RETF then executed data, the
+     return BOP was never reached, the callback stayed "in flight" for the whole run
+     and every click after it was refused -- "the mouse opens nothing".
+   ⚠⚠⚠ 0x100 WAS THE THIRD CHOICE AND IT IS THE ENVIRONMENT BLOCK. DOS_ENV_SEG is
+     0x0060, i.e. linear 0x600 = 0050:0100 -- the segment overlaps its own env one
+     paragraph on. The re-check (added the same session) caught it at once: the bytes
+     read `43 4f 4d 53` = "COMS" (COMSPEC). So segment 0x50 is usable ONLY for offsets
+     0x00..0xFF, and inside that BASIC scribbles the low slots and DOS owns the stubs.
+     0xE0 is the gap: past the sysvars block (0x8E..~0xD0) and below the env at 0x100,
+     touched by no planting of ours (the next is DOS_FLTSITE_OFF at 0x260, in DPMI
+     mode) and by nothing a DOS program documents. AND the bytes are re-verified at
+     every injection (mouse_cb_try), because segment 0x50 is guest-writable and a
+     fixed offset is a hope, not a guarantee -- the check turns a crash into a
+     counted, named refusal. */
+#define MS_CB_RET_OFF   0x00E0          /* DOS_HDLR_SEG:00E0 = BOP MS_CB_BOP ; iret   */
 #define MS_CB_BOP       0x35
 /* ⚠ 2 s WAS WRONG. "In flight" lasts until the handler's RETF reaches our stub, and the
    exec loop only notices that at its next pass -- for a guest that runs natively for
@@ -5892,9 +5909,19 @@ static DWORD g_ms_evq_dropped;
 static int    g_ms_cb_active;           /* a callback is in flight                    */
 static DWORD  g_ms_cb_since;            /* GetTickCount()|1 when it went in flight     */
 static DWORD  g_ms_cb_inj, g_ms_cb_done, g_ms_cb_lost, g_ms_cb_pm, g_ms_cb_stray;
+/* ── WHAT DID THE GUEST DO AFTER THE CALLBACK WAS INJECTED? (s71) ──────────────────
+     QB's first callback was injected (inj=1) and never came back (done=0, no STRAY),
+     while the guest carried on ticking -- so every later event was refused as
+     "in flight" and a click opened nothing. Nothing in the log said where the handler
+     went: the heartbeat only ever shows the last TRAP, which for an idle text-mode
+     guest is the INT 08h stub. So for the first few injections, log the next few VM
+     events verbatim (event, BOP number, cs:ip, ss:sp, the code and stack bytes). The
+     first event after a good injection is the handler's own CLI/STI reflection or its
+     RETF landing on the return BOP; anything else names the wrong turn. Bounded. */
+static int    g_ms_cb_trace;            /* VM events still to log after an injection  */
 /* Why a delivery attempt did NOT happen, by reason -- a zero cb_inj must be readable:
    [0] in flight  [1] no mask/no events  [2] no handler  [3] inside our stub  [4] IF off */
-static DWORD  g_ms_cb_why[5];
+static DWORD  g_ms_cb_why[6];           /* [5] = return stub clobbered (see MS_CB_RET_OFF) */
 static DWORD  g_ms_evt_raised;          /* event bits ever raised by the UI side      */
 static struct { DWORD eax, ebx, ecx, edx, esi, edi, ebp, esp, eip, efl, cs, ds, es, ss; } g_ms_cb_saved;
 static void mouse_evt_raise(LONG bits)
@@ -6444,6 +6471,23 @@ static void mouse_cb_try(volatile BYTE *tib)
         else fl = peekw((ss << 4) + ((sp + 4) & 0xFFFF));    /* the FLAGS the stub IRETs to  */
     } else fl = VDM_REG(tib, VTIB_EFLAGS);
     if (!if_or_vif(fl)) { ++g_ms_cb_why[4]; return; } /* interrupts off: like an IRQ, wait */
+    /* ── THE RETURN STUB, RE-VERIFIED EVERY TIME (see MS_CB_RET_OFF). A guest that has
+         written over it would be sent into data by its own RETF; refusing is the
+         lesser harm, and the refusal is counted and named. */
+    {   const volatile BYTE *rs = (const volatile BYTE *)(ULONG_PTR)((DOS_HDLR_SEG << 4) + MS_CB_RET_OFF);
+        if (rs[0] != VDM_BOP0 || rs[1] != VDM_BOP1 || rs[2] != MS_CB_BOP) {
+            if (g_ms_cb_why[5] < 4) {
+                char cb[160], *cq = cb;
+                cq = zput(cq, "MOUSECB REFUSED: return stub at 0050:");
+                cq = zhex(cq, MS_CB_RET_OFF); cq = zput(cq, " overwritten by the guest: ");
+                cq = zdump(cq, (const void *)rs, 4); cq = zput(cq, "\r\n");
+                log_append(LOG_PATH, cb, cq);
+            }
+            ++g_ms_cb_why[5];
+            g_ms_evq_tail = g_ms_evq_head; InterlockedExchange(&g_ms_evt_pend, 0);
+            return;
+        }
+    }
     /* The oldest queued event the handler asked for; unmasked ones are skipped. */
     {   LONG t; int n = 0;
         pend = 0;
@@ -6479,18 +6523,41 @@ static void mouse_cb_try(volatile BYTE *tib)
     VDM_SET16(tib, VTIB_EIP, (WORD)g_ms_evt_off);
     g_ms_cb_active = 1; g_ms_cb_since = GetTickCount() | 1;
     ++g_ms_cb_inj;
+    if (g_ms_cb_inj <= 3) g_ms_cb_trace = 10;     /* see g_ms_cb_trace: the next VM events */
     if (g_ms_cb_inj <= 16) {                       /* the first few, with where from */
-        char cb[192], *cq = cb;
+        char cb[384], *cq = cb;
         cq = zput(cq, "MOUSECB inject #"); cq = zhex(cq, g_ms_cb_inj);
         cq = zput(cq, " ev=0x");   cq = zhex(cq, (DWORD)pend);
         cq = zput(cq, " from=0x"); cq = zhex(cq, g_ms_cb_saved.cs);
         cq = zput(cq, ":0x");      cq = zhex(cq, g_ms_cb_saved.eip);
+        cq = zput(cq, " efl=0x");  cq = zhex(cq, g_ms_cb_saved.efl);
         cq = zput(cq, " ss:sp=0x"); cq = zhex(cq, g_ms_cb_saved.ss);
         cq = zput(cq, ":0x");      cq = zhex(cq, g_ms_cb_saved.esp);
         cq = zput(cq, " -> 0x");   cq = zhex(cq, (DWORD)g_ms_evt_seg);
         cq = zput(cq, ":0x");      cq = zhex(cq, (DWORD)g_ms_evt_off);
+        /* The three things the handler's return depends on, read back from guest memory:
+           the code at the handler, the return BOP at DOS_HDLR_SEG:MS_CB_RET_OFF, and the
+           far-return frame just pushed. If any is not what was intended, the trace that
+           follows is explained before it is read. */
+        cq = zput(cq, " code@hdl=");
+        cq = zdump(cq, (const void *)(ULONG_PTR)(((DWORD)g_ms_evt_seg << 4) + g_ms_evt_off), 8);
+        cq = zput(cq, " ret@50:12=");
+        cq = zdump(cq, (const void *)(ULONG_PTR)((DOS_HDLR_SEG << 4) + MS_CB_RET_OFF), 4);
+        cq = zput(cq, " frame@sp=");
+        cq = zdump(cq, (const void *)(ULONG_PTR)((ss << 4) + sp), 4);
         cq = zput(cq, "\r\n");
         log_append(LOG_PATH, cb, cq);
+        /* Once: the DOS communication area as the guest has left it. This is how the
+           BASIC slots were found (0050:0012 = the saved INT 1Ch vector) and it says
+           whether anything else of ours below 0x40 -- the INT 10h stub at 0x20 sits
+           right after BASIC's INT 24h slot at 0x1A..0x1D -- has been written over. */
+        if (g_ms_cb_inj == 1) {
+            char ab[256], *aq = ab;
+            aq = zput(aq, "MOUSECB area 0050:0000..003F=");
+            aq = zdump(aq, (const void *)(ULONG_PTR)(DOS_HDLR_SEG << 4), 0x40);
+            aq = zput(aq, "\r\n");
+            log_append(LOG_PATH, ab, aq);
+        }
     }
 }
 /* The BOP at DOS_HDLR_SEG:MS_CB_RET_OFF: the handler RETF'd here, put everything back. */
@@ -9023,8 +9090,8 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
                 mq = zput(mq, " cb_lost="); mq = zhex(mq, g_ms_cb_lost);
                 mq = zput(mq, " cb_pm=");   mq = zhex(mq, g_ms_cb_pm);
                 mq = zput(mq, " cb_stray="); mq = zhex(mq, g_ms_cb_stray);
-                mq = zput(mq, " cb_why[fly,none,nohdl,stub,if]=");
-                { int w; for (w = 0; w < 5; ++w) { mq = zhex(mq, g_ms_cb_why[w]); mq = zput(mq, w < 4 ? "," : ""); } }
+                mq = zput(mq, " cb_why[fly,none,nohdl,stub,if,clob]=");
+                { int w; for (w = 0; w < 6; ++w) { mq = zhex(mq, g_ms_cb_why[w]); mq = zput(mq, w < 5 ? "," : ""); } }
                 mq = zput(mq, " raised="); mq = zhex(mq, g_ms_evt_raised);
                 mq = zput(mq, " mask=0x");  mq = zhex(mq, (DWORD)g_ms_evt_mask);
                 mq = zput(mq, " hdl=0x");   mq = zhex(mq, (DWORD)g_ms_evt_seg);
@@ -22764,6 +22831,28 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         g_ev_hist[ev < EV_HIST_MAX ? ev : EV_HIST_MAX - 1]++;
         exec_leave_mark();               /* ...and stops. Our servicing is not its  */
         InterlockedExchange(&g_in_exec, 0);
+        /* ── The VM events that follow a mouse-callback injection, verbatim. See
+             g_ms_cb_trace. Logged before any arm below acts on the event, so what is
+             recorded is what the kernel handed back, not what we made of it. */
+        if (g_ms_cb_trace > 0) {
+            char tb[384], *tq = tb;
+            DWORD tcs = VDM_REG(tib, VTIB_CS) & 0xFFFF, tip = VDM_REG(tib, VTIB_EIP) & 0xFFFF;
+            DWORD tss = VDM_REG(tib, VTIB_SS) & 0xFFFF, tsp = VDM_REG(tib, VTIB_ESP) & 0xFFFF;
+            --g_ms_cb_trace;
+            tq = zput(tq, "MOUSECB-TRACE ev=0x"); tq = zhex(tq, ev);
+            tq = zput(tq, " info=0x"); tq = zhex(tq, VDM_REG(tib, VTIB_EVENT_INFO));
+            tq = zput(tq, " st=0x");   tq = zhex(tq, (DWORD)st);
+            tq = zput(tq, " cs:ip=0x"); tq = zhex(tq, tcs); tq = zput(tq, ":0x"); tq = zhex(tq, tip);
+            tq = zput(tq, " efl=0x");  tq = zhex(tq, VDM_REG(tib, VTIB_EFLAGS));
+            tq = zput(tq, " ss:sp=0x"); tq = zhex(tq, tss); tq = zput(tq, ":0x"); tq = zhex(tq, tsp);
+            tq = zput(tq, " ax=0x");   tq = zhex(tq, VDM_REG(tib, VTIB_EAX) & 0xFFFF);
+            tq = zput(tq, " [714]=0x"); tq = zhex(tq, *(volatile DWORD *)(ULONG_PTR)0x714);
+            tq = zput(tq, " active="); tq = zhex(tq, (DWORD)g_ms_cb_active);
+            tq = zput(tq, " code=");   tq = zdump(tq, (const void *)(ULONG_PTR)((tcs << 4) + tip), 8);
+            tq = zput(tq, " stack=");  tq = zdump(tq, (const void *)(ULONG_PTR)((tss << 4) + tsp), 12);
+            tq = zput(tq, "\r\n");
+            log_append(LOG_PATH, tb, tq);
+        }
         /* ── WHEN VdmStartExecution RETURNS A FAILURE STATUS, SAY SO. (session 62) ──
              The V86 path ignored `st` entirely -- only the DPMI branch below ever
              read it -- so a guest that executes an INT3 (or any fault the kernel
@@ -25343,7 +25432,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
       p = zput(p, " active="); p = zhex(p, (DWORD)g_ms_cb_active);
       p = zput(p, " raised="); p = zhex(p, g_ms_evt_raised);
       p = zput(p, " why[fly,none,nohdl,stub,if]=");
-      { int w; for (w = 0; w < 5; ++w) { p = zhex(p, g_ms_cb_why[w]); p = zput(p, w < 4 ? "," : ""); } }
+      { int w; for (w = 0; w < 6; ++w) { p = zhex(p, g_ms_cb_why[w]); p = zput(p, w < 5 ? "," : ""); } }
       p = zput(p, " mask=0x"); p = zhex(p, (DWORD)g_ms_evt_mask);
       p = zput(p, " hdl=0x");  p = zhex(p, (DWORD)g_ms_evt_seg);
       p = zput(p, ":0x");      p = zhex(p, (DWORD)g_ms_evt_off);
