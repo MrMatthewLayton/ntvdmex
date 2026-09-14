@@ -5876,7 +5876,19 @@ static DWORD         g_ms_evt_installs;
    callback lost, so when the RETF does arrive the stub is "stray", steps over its BOP
    and IRETs on a stack that holds no frame: a jump into garbage. */
 #define MS_CB_TIMEOUT_MS 30000u
-static volatile LONG g_ms_evt_pend;     /* event bits raised since the last callback */
+static volatile LONG g_ms_evt_pend;     /* event bits raised since the last callback (any-pending flag) */
+/* ── ONE CALLBACK PER EVENT, IN ORDER, WITH THE BUTTON STATE OF THAT MOMENT. ───────
+     The first cut OR-ed the event bits into one word and delivered them in a single
+     call. A click is a press and a release; both bits arrived together with BX = the
+     CURRENT state (released), so the handler saw "pressed" with no button down -- a
+     click that never happened. The driver on real hardware calls the handler once
+     per mouse packet, and that is what a program's own event queue expects. Ring of
+     32; motion is coalesced into a pending motion-only entry, buttons never are. */
+#define MS_EVQ 32
+typedef struct { LONG bits, btn, x, y; } ms_evt_t;
+static ms_evt_t g_ms_evq[MS_EVQ];
+static volatile LONG g_ms_evq_head, g_ms_evq_tail;   /* UI pushes at head, exec pops at tail */
+static DWORD g_ms_evq_dropped;
 static int    g_ms_cb_active;           /* a callback is in flight                    */
 static DWORD  g_ms_cb_since;            /* GetTickCount()|1 when it went in flight     */
 static DWORD  g_ms_cb_inj, g_ms_cb_done, g_ms_cb_lost, g_ms_cb_pm, g_ms_cb_stray;
@@ -5886,7 +5898,24 @@ static DWORD  g_ms_cb_why[5];
 static DWORD  g_ms_evt_raised;          /* event bits ever raised by the UI side      */
 static struct { DWORD eax, ebx, ecx, edx, esi, edi, ebp, esp, eip, efl, cs, ds, es, ss; } g_ms_cb_saved;
 static void mouse_evt_raise(LONG bits)
-{ (void)__sync_fetch_and_or((LONG *)&g_ms_evt_pend, bits); ++g_ms_evt_raised; }
+{
+    LONG h = g_ms_evq_head, t = g_ms_evq_tail;
+    ++g_ms_evt_raised;
+    /* Motion after motion, not yet delivered: update the queued entry in place. */
+    if (bits == 1 && h != t) {
+        LONG last = (h + MS_EVQ - 1) % MS_EVQ;
+        if (g_ms_evq[last].bits == 1) {
+            g_ms_evq[last].x = g_ms_x; g_ms_evq[last].y = g_ms_y; g_ms_evq[last].btn = g_ms_btn;
+            (void)__sync_fetch_and_or((LONG *)&g_ms_evt_pend, bits);
+            return;
+        }
+    }
+    if ((h + 1) % MS_EVQ == t) { ++g_ms_evq_dropped; return; }   /* full: drop the newest */
+    g_ms_evq[h].bits = bits; g_ms_evq[h].btn = g_ms_btn;
+    g_ms_evq[h].x = g_ms_x;  g_ms_evq[h].y = g_ms_y;
+    g_ms_evq_head = (h + 1) % MS_EVQ;
+    (void)__sync_fetch_and_or((LONG *)&g_ms_evt_pend, bits);
+}
 
 /* Record a button transition. Normally UI-thread only, and the position is taken
    from the live driver position rather than the message's client coordinates because
@@ -6383,16 +6412,18 @@ static void mouse_cb_try(volatile BYTE *tib)
 {
     LONG mask = g_ms_evt_mask, pend;
     DWORD cs, ip, fl, ss, sp;
+    ms_evt_t ev = { 0, 0, 0, 0 };
     if (g_ms_cb_active) {                          /* a handler that never came back */
         if ((DWORD)(GetTickCount() - (g_ms_cb_since & ~1u)) > MS_CB_TIMEOUT_MS) {
             g_ms_cb_active = 0; ++g_ms_cb_lost;
         }
         ++g_ms_cb_why[0]; return;
     }
-    if (!mask || !(g_ms_evt_pend & mask)) { ++g_ms_cb_why[1]; return; }
+    if (!mask || g_ms_evq_head == g_ms_evq_tail) { ++g_ms_cb_why[1]; return; }
     if ((g_ms_evt_seg | g_ms_evt_off) == 0) { ++g_ms_cb_why[2]; return; }
     if (g_dpmi_pm) {                               /* PM handler: not this path (yet) */
-        InterlockedExchange(&g_ms_evt_pend, 0); ++g_ms_cb_pm; return;
+        g_ms_evq_tail = g_ms_evq_head; InterlockedExchange(&g_ms_evt_pend, 0);
+        ++g_ms_cb_pm; return;
     }
     cs = VDM_REG(tib, VTIB_CS) & 0xFFFF; ip = VDM_REG(tib, VTIB_EIP) & 0xFFFF;
     ss = VDM_REG(tib, VTIB_SS) & 0xFFFF; sp = VDM_REG(tib, VTIB_ESP) & 0xFFFF;
@@ -6413,8 +6444,18 @@ static void mouse_cb_try(volatile BYTE *tib)
         else fl = peekw((ss << 4) + ((sp + 4) & 0xFFFF));    /* the FLAGS the stub IRETs to  */
     } else fl = VDM_REG(tib, VTIB_EFLAGS);
     if (!if_or_vif(fl)) { ++g_ms_cb_why[4]; return; } /* interrupts off: like an IRQ, wait */
-    pend = InterlockedExchange(&g_ms_evt_pend, 0) & mask;
-    if (!pend) return;
+    /* The oldest queued event the handler asked for; unmasked ones are skipped. */
+    {   LONG t; int n = 0;
+        pend = 0;
+        while (g_ms_evq_tail != g_ms_evq_head && n++ < MS_EVQ) {
+            t = g_ms_evq_tail;
+            ev = g_ms_evq[t];
+            g_ms_evq_tail = (t + 1) % MS_EVQ;
+            if (ev.bits & mask) { pend = ev.bits & mask; break; }
+        }
+        if (g_ms_evq_tail == g_ms_evq_head) InterlockedExchange(&g_ms_evt_pend, 0);
+        if (!pend) return;
+    }
     /* Save the whole interrupted context host-side. */
     g_ms_cb_saved.eax = VDM_REG(tib, VTIB_EAX); g_ms_cb_saved.ebx = VDM_REG(tib, VTIB_EBX);
     g_ms_cb_saved.ecx = VDM_REG(tib, VTIB_ECX); g_ms_cb_saved.edx = VDM_REG(tib, VTIB_EDX);
@@ -6428,9 +6469,9 @@ static void mouse_cb_try(volatile BYTE *tib)
     sp = (sp - 2) & 0xFFFF; pokew((ss << 4) + sp, MS_CB_RET_OFF);
     VDM_SET16(tib, VTIB_ESP, (WORD)sp);
     VDM_SET16(tib, VTIB_EAX, (WORD)pend);
-    VDM_SET16(tib, VTIB_EBX, (WORD)g_ms_btn);
-    VDM_SET16(tib, VTIB_ECX, (WORD)i33_clampx(i33_vx(g_ms_x)));
-    VDM_SET16(tib, VTIB_EDX, (WORD)i33_clampy(i33_vy(g_ms_y)));
+    VDM_SET16(tib, VTIB_EBX, (WORD)ev.btn);          /* the state AT the event     */
+    VDM_SET16(tib, VTIB_ECX, (WORD)i33_clampx(i33_vx(ev.x)));
+    VDM_SET16(tib, VTIB_EDX, (WORD)i33_clampy(i33_vy(ev.y)));
     VDM_SET16(tib, VTIB_ESI, 0);
     VDM_SET16(tib, VTIB_EDI, 0);
     VDM_SET16(tib, VTIB_DS,  DOS_HDLR_SEG);        /* "the driver's DS"              */
