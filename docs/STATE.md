@@ -4,7 +4,7 @@
 > this file top to bottom and you will know where it is, what works, what does not, and
 > what to do next.
 
-- **Last updated:** 2026-09-13 (session 70)
+- **Last updated:** 2026-09-14 (session 71)
 - **Score: 86.9%** (`./tools/score/score.py` — run it, do not quote this line).
   Session 53 moved it 72.4 → 79.6; session 54 → 80.2; session 55 → 83.1;
   session 56 → 85.4; s57, **s58, s59 and s60 moved it not at all** — s57 built the modal
@@ -237,7 +237,64 @@ and matches the 6.22 oracle row for row (session 53)** — but `MEM /C` still re
    the next step, and it is also the honest correction for *a fix measured on
    one guest is a fix for none*.
 
-   ### ▶ START HERE: **SESSION 70 (below), then 69, 68, 61, 60, 59.**
+   ### ▶ START HERE: **SESSION 71 (below), then 70, 69, 68, 61, 60, 59.**
+
+   ---
+
+   ## ★★★★ SESSION 71 (2026-09-14, morning) — **THE TEXT-MODE APPLICATION CLASS: QBASIC'S THREE SYMPTOMS WERE SIX HOST DEFECTS, ALL OFF-VM TESTABLE.**
+
+   **HEAD = this block's commit, NOT pushed. Battery green (input 60, video 162; full
+   suite green). Host builds (`build/ntvdmhost.exe` md5 `f3ace9fe…`). ⚠ NOT DEPLOYED:
+   the rig still runs the user-confirmed `f79d954`; a deploy needs the user's explicit go.
+   Deadline: the 17th — three days.**
+
+   The user's report on QB.EXE 4.5 (`demos/qb45` on the share): a graphical mouse
+   pointer drawn over a text screen, no menu opened, and nothing could be typed. None
+   of it was QBasic's. Each was read from the code (and the guest binary) and pinned as
+   a battery check before the fix:
+
+   1. **Typing (`vdd_input.c`)** — QB's INT 09h hook (`1DDB1h`) does `in al,60h`, looks
+      at the byte, and for every ordinary key chains to the BIOS via `int 0EFh` (the
+      saved vector). On an 8042 the BIOS's own `in al,60h` reads the SAME byte again;
+      our FIFO had popped it on the hook's read, so the BIOS arm found the FIFO empty,
+      translated nothing, and the ring at 0040:001E stayed empty. Now the BIOS arm
+      serves that byte once from `sc_last` (`sc_bios_owed`; STAGE2 `owed=`), superseded
+      by any newer byte. Every INT 09h hook that peeks the port and chains — Turbo
+      Pascal's CRT unit, most TSRs — had the same gap. Input battery T9.
+   2. **Alt menus (`vdd_input.c`)** — the translation never consulted Alt: Alt+F arrived
+      as `AH=21 AL='f'` where the BIOS stores `2100h`, so every editor's accelerator
+      typed a letter. Replaced the two ASCII columns with the IBM four-column table
+      (plain/Shift/Ctrl/Alt, F-keys incl. F11/F12, Ctrl+arrows `7300h` etc., enhanced
+      Alt+grey codes); CapsLock inverts Shift for letters only, NumLock for the keypad
+      only. Input battery T10. Also 0040:0096 bit 4 (enhanced keyboard present) is set.
+   3. **The pointer (`main.c` present path + `vdd_video_text_cursor`)** — in a text mode
+      the driver has no pixels; it rewrites the ATTRIBUTE of the cell under the pointer
+      (INT 33h 0Ah masks, defaults `77FFh`/`7700h`). The host stamped its 16x16 arrow into
+      the text frame regardless. Now text modes redraw the cell through the masks (0Ah
+      BX=0 stores them; BX=1 falls back to the default and is counted).
+   4. **Mouse menus (`main.c` INT 33h)** — the driver's text screen is 640x200 whatever
+      the font, so apps do `row = DX/8`. We returned the 400-line frame row: every row
+      doubled, a menu-bar click landed two rows down. `i33_vy/i33_py` scale Y in text
+      modes (03h/04h/05h/06h/08h).
+   5. **Text rendering (`vdd_video.c`)** — attribute bit 7 was always masked off (no
+      bright backgrounds after `1003h BL=0`, no blink with it on); `1112h` — THE 50-line
+      call — cleared the user font and changed nothing else (cell height is now
+      per-state: 8/14/16, rows = 400/cell_h, cursor emulation and INT 43h answer follow
+      it; `1111h`/`1114h`/`1x` user fonts likewise); CRTC `0A/0B/0E/0F` (cursor
+      shape/address, how every CRT unit moves the cursor) fell into `default:`; the BDA
+      display fields 0449..0489 were never written (rows-1 at 0040:0084 read 0 — a
+      one-row screen to anything that sizes itself from it); 40-column text was drawn
+      at stride 640 into a 320-wide frame. Video battery T21 a–f.
+   6. **Alt held forever (`main.c`)** — Windows delivers a key's UP to whichever window
+      has focus when it is released, so Alt+Tab away left the guest with Alt down.
+      `WM_KILLFOCUS` now releases the modifiers we pushed.
+
+   **▶ NEXT (needs the user):** deploy on their go, then by hand in QB.EXE: type in the
+   edit window; Alt then F opens File; click File in the menu bar; the pointer is an
+   inverted cell; Options > Display for 50 lines (`1112h`). Then edit.com (XP's
+   `system32\edit.com` — a different code base, 43/50-line and mouse paths both used).
+   ⚠ Re-run Skyroads after (shared keyboard path, standing rule). Then the same
+   read-the-binary pass over the next text-mode guest rather than another game.
 
    ---
 
