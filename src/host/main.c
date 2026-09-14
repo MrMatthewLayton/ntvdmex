@@ -5798,7 +5798,15 @@ static DWORD         g_ms_evt_installs;
      time; a handler that never returns is timed out and counted, not waited for.
    ⚠ V86 only. A protected-mode client's handler lives at a selector:offset and needs
      the DPMI callback path; those are counted (cb_pm) so the gap stays visible. */
-#define MS_CB_RET_OFF   0x005C          /* DOS_HDLR_SEG:005C = BOP MS_CB_BOP ; iret   */
+/* ⚠ 0x5C WAS THE FIRST CHOICE AND IT IS DPMI_RAW2PM_OFF -- planted LATER in start-up,
+     so the mouse handler's RETF landed on a raw mode-switch BOP, which for a program
+     that is not a DPMI client falls through to INT 21h with AH = the event bits = 0:
+     "DOS terminate". QBasic died the instant the mouse moved (s71, twice). The
+     handler segment has no single map of its slots; the check before "running .EXE"
+     now verifies this stub survived every later planting. 0x12..0x17 sits between the
+     EMM device-header name (0x0A..0x11) and the DBCS table (0x18) and is used by
+     nothing. */
+#define MS_CB_RET_OFF   0x0012          /* DOS_HDLR_SEG:0012 = BOP MS_CB_BOP ; iret   */
 #define MS_CB_BOP       0x35
 /* ⚠ 2 s WAS WRONG. "In flight" lasts until the handler's RETF reaches our stub, and the
    exec loop only notices that at its next pass -- for a guest that runs natively for
@@ -22377,6 +22385,19 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     if (!img.is_exe)                                        /* .COM near-ret guard */
         *(volatile WORD *)(((DWORD)DOS_PSP_SEG << 4) + 0xFFFE) = 0;
 
+    /* Every stub the host plants in DOS_HDLR_SEG is planted by a different piece of
+       start-up code with its own idea of a free offset. Verify the ones a guest can
+       RETURN INTO after all planting is done -- an overwritten stub is a guest jumping
+       into another service's BOP, and the symptom (QBasic: "DOS terminate" on the first
+       mouse move) names nothing. */
+    {   volatile BYTE *hs = (volatile BYTE *)(DOS_HDLR_SEG << 4);
+        if (hs[MS_CB_RET_OFF] != VDM_BOP0 || hs[MS_CB_RET_OFF + 1] != VDM_BOP1
+            || hs[MS_CB_RET_OFF + 2] != MS_CB_BOP) {
+            p = zput(p, "STAGE2: *** STUB OVERWRITTEN at DOS_HDLR_SEG:0x");
+            p = zhex(p, MS_CB_RET_OFF); p = zput(p, " (mouse callback return): bytes ");
+            p = zdump(p, (const void *)(hs + MS_CB_RET_OFF), 4); p = zput(p, "\r\n");
+        }
+    }
     p = zput(p, img.is_exe ? "STAGE2: running .EXE (entry 0x"
                            : "STAGE2: running .COM (entry 0x");
     p = zhex(p, img.cs); p = zput(p, ":0x"); p = zhex(p, img.ip); p = zput(p, ")...\r\n");
