@@ -456,6 +456,7 @@ static DWORD g_ems_frame_lin;                        /* set by v86_map_ems_frame
 
 /* CSRSS receive buffers + program image (no CRT heap; static = zero-init). */
 static char g_cmd[1024], g_app[1024], g_cur[512], g_pif[512];
+static WORD g_cds_seg;                       /* the CDS array's reserved block, 0 = none */
 static char g_env[8192], g_desk[512], g_title[512], g_rsv[512];
 static VDM_COMMAND_INFO g_ci;
 static BYTE filebuf[0x80000];   /* 512KB: hold a real game's MZ image (DOS/4GW stub etc.), run 85 */
@@ -20719,6 +20720,14 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             return ok ? 0 : 1;
         } }
 
+    /* ── NO MODAL HARDWARE-ERROR BOXES, EVER, FOR THE WHOLE PROCESS. ───────────────
+         Every Win32 call that touches a drive with no media -- A: with the door
+         open, an ejected CD -- raises XP's "There is no disk in drive" box unless
+         told not to, and that box has wedged the rig from inside host start-up
+         once already. Now that the guest can select and search those drives
+         (INT 21h AH=0Eh, 47h, 4Eh...), the mode must cover every call, not just
+         the two sites that wrapped it. The errors still come back as errors. */
+    SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOOPENFILEERRORBOX);
     p = zput(p, "NTVDMEX clean host\r\nSTAGE0: WinMain entered [build dpmi-harness-v180]\r\n");
     log_write(LOG_PATH, report, p);
     serial_init();                                      /* DPMI harness: COM1 log sink */
@@ -21565,7 +21574,16 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
       p = zput(p, " [");
       for (ti = 0; ti < 16; ++ti) { p = zhexb(p, pspb[0x81 + ti]); p = zput(p, " "); }
       p = zput(p, "]\r\n"); }
-    dos_int21_init(&m, dos_mcb_init(NULL));
+    {   uint16_t first_mcb = dos_mcb_init(NULL);
+        dos_int21_init(&m, first_mcb);
+        /* The CDS array's block, at the top of the chain (see DOS_LASTDRIVE). The
+           PSP was built with DOS_MEM_TOP as its memory top; the program's block now
+           ends one paragraph below the reserved block's data, and PSP+2 must say so
+           or a program that resizes itself to "PSP+2 - PSP" fails with error 8. */
+        g_cds_seg = dos_mcb_reserve_top(NULL, first_mcb, DOS_CDS_PARAS);
+        if (g_cds_seg)
+            *(volatile WORD *)(((DWORD)DOS_PSP_SEG << 4) + 2) = (WORD)(g_cds_seg - 1);
+    }
     /* Published so the Settings dialog can change the reported DOS version while a
        guest is running -- it is read per INT 21h AH=30h, so it takes effect at the
        guest's next version check with no restart. */
@@ -21659,21 +21677,31 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
              instead of asking, and DRIVE_REMOVABLE is skipped outright: a DPB
              for a drive whose media can vanish is not worth the risk here. */
         UINT oldmode = SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOOPENFILEERRORBOX);
-        for (d = 0; d < 26 && nd < DOS_DPBCHAIN_MAX; ++d) {
+        UINT dtype[26];
+        /* ── s71: EVERY DRIVE THE MACHINE HAS, CLASSIFIED ONCE. ──────────────────────
+             Fixed and RAM disks get a DPB measured off the volume; a REMOVABLE drive
+             (A:) gets a DPB with floppy defaults and its media is NEVER touched here
+             (the "no disk in drive A:" box is modal and wedged the rig once); CD-ROM
+             and network drives are redirector drives -- a CDS entry with the network
+             flag and no DPB, which is how MSCDEX and a redirector present them. */
+        for (d = 0; d < 26; ++d) {
             char rt[4];
-            UINT ty;
+            dtype[d] = DRIVE_NO_ROOT_DIR;
             if (!(drives & (1u << d))) continue;
             rt[0] = (char)('A' + d); rt[1] = ':'; rt[2] = '\\'; rt[3] = 0;
-            ty = GetDriveTypeA(rt);
-            if (ty != DRIVE_FIXED && ty != DRIVE_RAMDISK) continue;
-            slot[nd++] = d;
+            dtype[d] = GetDriveTypeA(rt);
+            if (dtype[d] != DRIVE_FIXED && dtype[d] != DRIVE_RAMDISK
+                && dtype[d] != DRIVE_REMOVABLE) continue;
+            if (nd < DOS_DPBCHAIN_MAX) slot[nd++] = d;
         }
         for (n = 0; n < nd; ++n) {
             DWORD spc = 0, bps = 0, freec = 0, totc = 0;
             char root[4]; unsigned k; BYTE dp[DPB_LEN];
             int last = (n + 1 == nd);
             root[0] = (char)('A' + slot[n]); root[1] = ':'; root[2] = '\\'; root[3] = 0;
-            if (!GetDiskFreeSpaceA(root, &spc, &bps, &freec, &totc))
+            if (dtype[slot[n]] == DRIVE_REMOVABLE)             /* 1.44M defaults, no probe */
+                { spc = 1; bps = 512; totc = 2847; }
+            else if (!GetDiskFreeSpaceA(root, &spc, &bps, &freec, &totc))
                 { spc = 8; bps = 512; totc = 0xFFF0; }
             dos_dpb_build(dp, slot[n], bps ? bps : 512, spc ? spc : 1, 512,
                           (totc > 0xFFFE) ? 0xFFFE : totc + 1, 0xF8,
@@ -21723,25 +21751,43 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                zeroed with a terminated DPB pointer rather than one dangling at
                the array's base. Measured layout: path at +0, flags at +0x43,
                DPB far pointer at +0x45, backslash offset at +0x4F, stride 88. */
-        {   unsigned di2, seen2 = 0;
+        /* In its own reserved block now (g_cds_seg), 26 entries -- see DOS_LASTDRIVE. */
+        if (g_cds_seg) {
+            volatile BYTE *cd = (volatile BYTE *)((DWORD)g_cds_seg << 4);
+            unsigned di2, seen2 = 0;
             for (di2 = 0; di2 < DOS_LASTDRIVE; ++di2) {
-                BYTE cds[CDS_LEN]; unsigned k;
+                BYTE cds[CDS_LEN]; unsigned k, flags = 0;
                 int have = 0, j;
                 for (j = 0; j < (int)nd; ++j) if (slot[j] == di2) have = 1;
-                dos_cds_build(cds, di2, have, DOS_CTAB_SEG,
+                if (have) flags = CDS_FLAG_PHYSICAL;
+                else if (dtype[di2] == DRIVE_CDROM || dtype[di2] == DRIVE_REMOTE)
+                    flags = CDS_FLAG_PHYSICAL | CDS_FLAG_NETWORK;
+                dos_cds_build(cds, di2, flags, DOS_CTAB_SEG,
                               (WORD)(DOS_DPBCHAIN_OFF + seen2 * DPB_LEN));
                 if (have) ++seen2;
                 for (k = 0; k < CDS_LEN; ++k)
-                    ct[DOS_CDS_OFF + di2 * CDS_LEN + k] = cds[k];
+                    cd[di2 * CDS_LEN + k] = cds[k];
             }
-            *(volatile WORD *)(hdlr + DOS_SYSVARS_OFF + SV_CDS)     = DOS_CDS_OFF;
-            *(volatile WORD *)(hdlr + DOS_SYSVARS_OFF + SV_CDS + 2) = DOS_CTAB_SEG;
+            *(volatile WORD *)(hdlr + DOS_SYSVARS_OFF + SV_CDS)     = 0x0000;
+            *(volatile WORD *)(hdlr + DOS_SYSVARS_OFF + SV_CDS + 2) = g_cds_seg;
+        } else {                                  /* no block: no array, say so */
+            *(volatile WORD *)(hdlr + DOS_SYSVARS_OFF + SV_CDS)     = 0xFFFF;
+            *(volatile WORD *)(hdlr + DOS_SYSVARS_OFF + SV_CDS + 2) = 0xFFFF;
         }
         q = zput(q, "DOS: SysVars ");     q = zhex(q, nd);
         q = zput(q, " DPBs at 0x");       q = zhex(q, DOS_CTAB_SEG);
         q = zput(q, ":");                 q = zhex(q, DOS_DPBCHAIN_OFF);
         q = zput(q, " (terminated), NUL header inline, "); q = zhex(q, DOS_LASTDRIVE);
-        q = zput(q, " CDS entries (GH #48)\r\n");
+        q = zput(q, " CDS entries at 0x"); q = zhex(q, g_cds_seg);
+        q = zput(q, ":0 drives=");
+        for (d = 0; d < 26; ++d) {
+            if (!(drives & (1u << d))) continue;
+            q = zput(q, dtype[d] == DRIVE_FIXED ? " " : dtype[d] == DRIVE_REMOVABLE ? " ~"
+                       : dtype[d] == DRIVE_CDROM ? " cd:" : dtype[d] == DRIVE_REMOTE ? " net:"
+                       : dtype[d] == DRIVE_RAMDISK ? " ram:" : " ?");
+            { char dl[2]; dl[0] = (char)('A' + d); dl[1] = 0; q = zput(q, dl); }
+        }
+        q = zput(q, " (GH #48)\r\n");
         SetErrorMode(oldmode);
         log_append(LOG_PATH, report, q); serial_out(report, q);
     }

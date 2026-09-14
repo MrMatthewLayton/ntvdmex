@@ -191,7 +191,20 @@
  ⚠ A: through E: covers every drive this host exposes (C: is index 2), and
    krnl386 only needs the byte to be non-zero -- it reads it through the
    SysVars+0x6A table to decide there are drives at all. */
-#define DOS_LASTDRIVE     5
+/* ── s71: LASTDRIVE IS 26 AGAIN, AND THE CDS ARRAY LIVES IN ITS OWN BLOCK. ─────
+   5 was 6.22's DEFAULT, and it was the right number for a host that only ever
+   exposed C:. This host exposes what the machine has -- the user's has A:, C:,
+   D: (CD-ROM) and Z: (network) -- and a DOS program sizes its drive list from
+   INT 21h AH=0Eh's answer, which IS LASTDRIVE: QB.EXE's file dialog showed only
+   C: for exactly that reason. A LASTDRIVE that cannot name Z: is a lie about the
+   machine, so it is 26, as a CONFIG.SYS with LASTDRIVE=Z makes 6.22 report.
+   The 26 x 88 = 2288-byte CDS array does not fit the resident filler, so it
+   takes a block of its own reserved at the top of conventional memory
+   (dos_mcb_reserve_top), owned by DOS like the rest of the resident data. The
+   program block loses 0x90 paragraphs, which is what LASTDRIVE=Z costs on a
+   real PC too. */
+#define DOS_LASTDRIVE     26
+#define DOS_CDS_PARAS     0x8F      /* 26 * 88 = 2288 bytes = 143 paragraphs        */
 #define DOS_WOW_TBL_OFF   0x0370   /* 11 far pointers = 44 bytes                */
 #define DOS_WOW_TBL_N     11
 #define DOS_WOW_VARS_OFF  0x03A0   /* the storage those pointers point AT        */

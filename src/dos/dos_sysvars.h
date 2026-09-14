@@ -98,6 +98,9 @@
 /* Measured flag: bit 14 set = the drive is PHYSICAL/local. 6.22 had 0x4000 on
    A:, and a drive letter with nothing behind it gets 0. */
 #define CDS_FLAG_PHYSICAL 0x4000
+/* Bit 15 = the drive is served by a redirector (network, and MSCDEX's CD-ROMs
+   look the same to DOS). Such entries carry no DPB: there is no FAT to walk. */
+#define CDS_FLAG_NETWORK  0x8000
 
 static void sv_w(unsigned char *p, unsigned o, unsigned v)
 {
@@ -158,10 +161,11 @@ static void dos_dpb_build(unsigned char *p, unsigned drive,
     sv_w(p, DPB_FREECOUNT, 0xFFFF);
 }
 
-/* Build one CDS entry for drive 0..25. `exists` decides the flags word: a drive
-   letter with nothing behind it gets 0, which is how DOS marks an unused slot in
-   an array that is always LASTDRIVE entries long. */
-static void dos_cds_build(unsigned char *p, unsigned drive, int exists,
+/* Build one CDS entry for drive 0..25. `flags` is the flags word: 0 for a drive
+   letter with nothing behind it (how DOS marks an unused slot in an array that is
+   always LASTDRIVE entries long), CDS_FLAG_PHYSICAL for a local drive with a DPB,
+   CDS_FLAG_PHYSICAL|CDS_FLAG_NETWORK for a redirected one (no DPB). */
+static void dos_cds_build(unsigned char *p, unsigned drive, unsigned flags,
                           unsigned dpb_seg, unsigned dpb_off)
 {
     unsigned i;
@@ -169,9 +173,10 @@ static void dos_cds_build(unsigned char *p, unsigned drive, int exists,
     p[CDS_PATH + 0] = (unsigned char)('A' + drive);
     p[CDS_PATH + 1] = ':';
     p[CDS_PATH + 2] = '\\';
-    sv_w(p, CDS_FLAGS, exists ? CDS_FLAG_PHYSICAL : 0);
-    if (exists) sv_far(p, CDS_DPB, dpb_seg, dpb_off);
-    else        sv_far(p, CDS_DPB, 0xFFFF, 0xFFFF);
+    sv_w(p, CDS_FLAGS, flags);
+    if (!flags)                          sv_far(p, CDS_DPB, 0xFFFF, 0xFFFF);
+    else if (flags & CDS_FLAG_NETWORK)   sv_far(p, CDS_DPB, 0x0000, 0x0000);
+    else                                 sv_far(p, CDS_DPB, dpb_seg, dpb_off);
     sv_w(p, CDS_UNKNOWN, 0xFFFF);
     sv_w(p, CDS_UNKNOWN + 2, 0xFFFF);
     sv_w(p, CDS_SLASH, 2);              /* "A:\" -- the backslash is at index 2 */

@@ -114,7 +114,7 @@ int main(void)
 
     /* ── AND WHAT WE BUILD MUST MATCH THAT SHAPE. */
     memset(buf, 0xAA, sizeof(buf));
-    dos_cds_build(buf, 2 /* C: */, 1, 0x1234, 0x0040);
+    dos_cds_build(buf, 2 /* C: */, CDS_FLAG_PHYSICAL, 0x1234, 0x0040);
     ++checks;
     if (memcmp(buf, "C:\\", 4) != 0) {
         ++fails; printf("  FAIL %-54s\n", "built CDS path is 'C:\\'");
@@ -130,6 +130,11 @@ int main(void)
     eq("absent drive: flags = 0", buf[CDS_FLAGS] | (buf[CDS_FLAGS + 1] << 8), 0);
     eq("absent drive: DPB pointer is FFFF (terminated, not dangling)",
        buf[CDS_DPB + 2] | (buf[CDS_DPB + 3] << 8), 0xFFFF);
+    /* A redirected drive (network share, MSCDEX CD-ROM): physical|network, no DPB. */
+    dos_cds_build(buf, 25 /* Z: */, CDS_FLAG_PHYSICAL | CDS_FLAG_NETWORK, 0x1234, 0x0040);
+    eq("network drive: flags = 0xC000", buf[CDS_FLAGS] | (buf[CDS_FLAGS + 1] << 8), 0xC000);
+    eq("network drive: DPB pointer is 0000 (no FAT behind a redirector)",
+       buf[CDS_DPB + 2] | (buf[CDS_DPB + 3] << 8), 0x0000);
 
     memset(buf, 0xAA, sizeof(buf));
     dos_dpb_build(buf, 2, 512, 8, 512, 0x1000, 0xF8, 0x50, 0x90, 0xFFFF, 0xFFFF);

@@ -1747,9 +1747,32 @@ int dos_int21(dos_machine_t *m)
     } else if (ah == 0x2F) {                    /* get DTA -> ES:BX */
         SET16(R_ES, m->dta_seg); SET16(R_BX, m->dta_off); OKCF();
     } else if (ah == 0x19) {                    /* get current drive -> AL (C: = 2) */
-        SETAX((R_AX & 0xFF00) | DOS_CURRENT_DRIVE); OKCF();
-    } else if (ah == 0x0E) {                    /* select drive -> AL = #drives */
-        SETAX((R_AX & 0xFF00) | 0x03); OKCF();
+        /* ── THE CURRENT DRIVE IS THE HOST CURRENT DIRECTORY'S, LIKE AH=47h's. ─────
+             This returned a constant while AH=0Eh below was accepted and ignored, so
+             a program probing drives the classic way -- select X, read back, compare
+             -- found only C:. QB.EXE's file dialog does exactly that (39BCCh..39BE4h)
+             and listed one drive on a machine with four. */
+        char cw[300];
+        DWORD n = GetCurrentDirectoryA(sizeof(cw), cw);
+        uint8_t cd = (n >= 2 && cw[1] == ':') ? (uint8_t)((cw[0] | 0x20) - 'a')
+                                              : DOS_CURRENT_DRIVE;
+        SETAX((R_AX & 0xFF00) | cd); OKCF();
+    } else if (ah == 0x0E) {                    /* select drive -> AL = LASTDRIVE  */
+        /* Win32 keeps a current directory per drive (the hidden =X: variables), and
+           "X:" as a path means that directory -- so selecting a drive is one call,
+           and a later relative open lands where DOS would put it. A drive that is
+           not there is left unselected, as DOS leaves it; AL is LASTDRIVE either
+           way, which is the documented answer and what a program sizes its drive
+           list from. */
+        uint8_t dl = (uint8_t)(R_DX & 0xFF);
+        if (dl < 26 && (GetLogicalDrives() & (1u << dl))) {
+            char spec[3]; spec[0] = (char)('A' + dl); spec[1] = ':'; spec[2] = 0;
+            if (!SetCurrentDirectoryA(spec)) {           /* e.g. no media: try the root */
+                char root[4]; root[0] = spec[0]; root[1] = ':'; root[2] = '\\'; root[3] = 0;
+                SetCurrentDirectoryA(root);
+            }
+        }
+        SETAX((R_AX & 0xFF00) | DOS_LASTDRIVE); OKCF();
     } else if (ah == 0x0D) {                    /* disk reset (flush) -> nop */
         OKCF();
     } else if (ah == 0x33) {                    /* get/set Ctrl-Break, get true version */

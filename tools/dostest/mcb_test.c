@@ -75,6 +75,19 @@ int main(void) {
     CHECK(sig_of(0x70) == 'M' && own_of(0x70) == 0x0008 && sz_of(0x70) == 0x8E,
           "init: DOS block = M / 8 / 0x8E");
 
+    /* T0b: a block reserved at the TOP for resident DOS data (the CDS array) --
+       the program block shrinks by paras+1, the chain still ends at DOS_MEM_TOP,
+       and the new last block is DOS's. Then put the chain back for the rest. */
+    {   uint16_t cs = dos_mcb_reserve_top(mem, first, 0x8F);
+        CHECK(cs == DOS_MEM_TOP - 0x8F, "reserve_top: data segment = TOP - paras");
+        CHECK(dos_mcb_check(mem, first, DOS_MEM_TOP) == 0, "reserve_top: chain still consistent");
+        CHECK(sig_of(0xFF) == 'M' && sz_of(0xFF) == PROG - 0x8F - 1,
+              "reserve_top: program block is M and paras+1 smaller");
+        CHECK(sig_of(cs - 1) == 'Z' && own_of(cs - 1) == 0x0008 && sz_of(cs - 1) == 0x8F,
+              "reserve_top: the reserved block is Z / DOS / paras");
+        first = dos_mcb_init(mem);
+    }
+
     /* T1: alloc on a fresh chain must fail (everything is owned) ------------ */
     max = 0xDEAD;
     rc = dos_alloc(mem, first, 0x10, &seg, &max);

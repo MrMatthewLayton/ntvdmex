@@ -72,6 +72,35 @@ static inline uint16_t dos_mcb_init(volatile uint8_t *base) {
     return 0x005F;
 }
 
+/* --- reserve `paras` at the TOP of the chain for resident DOS data ---------- *
+ * Splits the last ('Z') block: it keeps its owner and loses paras+1 paragraphs,
+ * and a new 'Z' block owned by DOS (8) takes the top. Returns the data segment
+ * of the reserved block, or 0 if the last block is too small. Used for the CDS
+ * array, which is LASTDRIVE (26) entries of 88 bytes -- more than the resident
+ * filler holds -- and which real DOS keeps in its resident data just the same.
+ * The top of the program's block moves down by exactly that much, and PSP+2
+ * must be built from the value this returns minus one, not from DOS_MEM_TOP. */
+static inline uint16_t dos_mcb_reserve_top(volatile uint8_t *base, uint16_t first_mcb,
+                                           uint16_t paras) {
+    uint16_t m = first_mcb;
+    int guard = 0;
+    for (;;) {
+        volatile uint8_t *mc = mcb_at(base, m);
+        uint16_t sz = mcb_rd16(mc + 3);
+        if (mc[0] == 'Z') {
+            uint16_t newtop;
+            if (sz < (uint16_t)(paras + 2)) return 0;
+            mcb_wr16(mc + 3, (uint16_t)(sz - paras - 1));
+            mc[0] = 'M';
+            newtop = (uint16_t)(m + 1 + (sz - paras - 1));     /* the new 'Z' MCB  */
+            mcb_lay(base, newtop, 'Z', 0x0008, paras);
+            return (uint16_t)(newtop + 1);
+        }
+        if (mc[0] != 'M' || ++guard > 0x1000) return 0;
+        m = (uint16_t)(m + 1 + sz);
+    }
+}
+
 /* --- AH=48: allocate `want` paragraphs ------------------------------------- *
  * On success returns 0 and *out_seg = segment of the allocated block (data, not
  * MCB). On failure returns 8 and *out_max = largest free block found. */
