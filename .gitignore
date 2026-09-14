@@ -69,3 +69,6 @@ tools/score/probe-cache.json
 # Bare-metal rig result logs, archived locally by hand or by bmqueue.sh ARCHIVE=.
 # Large, regenerated every run, and not ours to redistribute (they quote guest memory).
 /runs/
+
+# PCem itself (macOS build + source for reference): the user's copies, not ours to ship.
+/pcem/
