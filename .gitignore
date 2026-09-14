@@ -72,3 +72,4 @@ tools/score/probe-cache.json
 
 # PCem itself (macOS build + source for reference): the user's copies, not ours to ship.
 /pcem/
+/dist/

@@ -33,11 +33,26 @@
      read may legitimately find nothing, but a WRITE to a missing out\ would fail
      silently and take the log with it -- which is the one instrument that explains
      every other failure. */
-#define NTVDMEX_DIR "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\"
-#define NTVDMEX_CFG NTVDMEX_DIR "cfg\\"
-#define NTVDMEX_OUT NTVDMEX_DIR "out\\"
-#define CFG_(n)     NTVDMEX_CFG n
-#define OUT_(n)     NTVDMEX_OUT n
+/* ── ★ THE FOLDER IS WHEREVER THE HOST WAS EXTRACTED. (s71, the 17th deliverable) ────
+     This was a compile-time string naming the rig's share, so a copy of NTVDMEX on any
+     other machine wrote its log nowhere, read no knobs and found no target -- a zip
+     that "works on my machine" and nowhere else. The root is now derived once from
+     the host's own path: the exe lives in <root>\bm\, so the root is bm's parent; an
+     exe not in a bm\ folder uses its own directory. The old share path is only the
+     fallback for a GetModuleFileName that fails, which it does not. The rig's layout
+     is unchanged by this: its exe is in bm\ under the share root.
+   The macros keep their names and their call sites: each expands to a call that
+   composes the path into one of a ring of buffers, so `CreateFileA(CFG_("x.txt"))`
+   reads as before. A returned pointer is good for the next 15 calls from any thread,
+   which covers every use here (all immediate). */
+#define NTVDMEX_DIR_DEFAULT "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\"
+static const char *ntvdmex_root(void);                    /* "<root>\", trailing slash */
+static const char *ntvdmex_path(const char *sub, const char *name);
+#define NTVDMEX_DIR ntvdmex_root()
+#define NTVDMEX_CFG ntvdmex_path("cfg\\", "")
+#define NTVDMEX_OUT ntvdmex_path("out\\", "")
+#define CFG_(n)     ntvdmex_path("cfg\\", n)
+#define OUT_(n)     ntvdmex_path("out\\", n)
 /* The log is the one path log.h owns; define it before including so its #ifndef
    defers to us rather than putting the log back on C:. */
 #define LOG_PATH    OUT_("ntvdmhost.log")
@@ -457,6 +472,50 @@ static DWORD g_ems_frame_lin;                        /* set by v86_map_ems_frame
 /* CSRSS receive buffers + program image (no CRT heap; static = zero-init). */
 static char g_cmd[1024], g_app[1024], g_cur[512], g_pif[512];
 static WORD g_cds_seg;                       /* the CDS array's reserved block, 0 = none */
+
+/* See NTVDMEX_DIR. No CRT here (the host links without one), so the string work is
+   spelled out. */
+static const char *ntvdmex_root(void)
+{
+    static char root[MAX_PATH + 16];
+    static volatile LONG ready;
+    if (!ready) {
+        char self[MAX_PATH + 16];
+        DWORD n = GetModuleFileNameA(NULL, self, sizeof self - 2);
+        int i, last = -1, prev = -1;
+        if (n == 0 || n >= sizeof self - 2) {
+            for (i = 0; NTVDMEX_DIR_DEFAULT[i]; ++i) root[i] = NTVDMEX_DIR_DEFAULT[i];
+            root[i] = 0;
+        } else {
+            for (i = 0; i < (int)n; ++i) if (self[i] == '\\') { prev = last; last = i; }
+            if (last < 0) { root[0] = '.'; root[1] = '\\'; root[2] = 0; }
+            else {
+                int cut = last;                      /* ...\bm\ntvdmhost.exe -> ...\bm  */
+                /* the exe's directory is "bm" (any case) -> the root is its parent */
+                if (prev >= 0 && last - prev == 3
+                    && (self[prev + 1] | 0x20) == 'b' && (self[prev + 2] | 0x20) == 'm')
+                    cut = prev;
+                for (i = 0; i < cut; ++i) root[i] = self[i];
+                root[cut] = '\\'; root[cut + 1] = 0;
+            }
+        }
+        ready = 1;
+    }
+    return root;
+}
+static const char *ntvdmex_path(const char *sub, const char *name)
+{
+    static char ring[16][MAX_PATH + 96];
+    static volatile LONG next;
+    char *b = ring[InterlockedIncrement(&next) & 15];
+    const char *r = ntvdmex_root();
+    int i = 0, k;
+    for (k = 0; r[k] && i < MAX_PATH + 90; ++k) b[i++] = r[k];
+    for (k = 0; sub[k] && i < MAX_PATH + 90; ++k) b[i++] = sub[k];
+    for (k = 0; name[k] && i < MAX_PATH + 94; ++k) b[i++] = name[k];
+    b[i] = 0;
+    return b;
+}
 static char g_env[8192], g_desk[512], g_title[512], g_rsv[512];
 static VDM_COMMAND_INFO g_ci;
 static BYTE filebuf[0x80000];   /* 512KB: hold a real game's MZ image (DOS/4GW stub etc.), run 85 */
@@ -1671,9 +1730,9 @@ static int    g_lpt_failed = 0;      /* opened once and could not: stop retrying
      are deliberately not on that list. */
 static HANDLE g_com_spool[COMM_MAX_PORTS];
 static int    g_com_failed[COMM_MAX_PORTS];
-static const char *const g_com_spool_path[COMM_MAX_PORTS] = {
-    OUT_("SERIAL1.TXT"), OUT_("SERIAL2.TXT")
-};
+/* Composed at open time (the root is runtime-derived now, see NTVDMEX_DIR). */
+static const char *const g_com_spool_name[COMM_MAX_PORTS] = { "SERIAL1.TXT", "SERIAL2.TXT" };
+#define g_com_spool_path(i) OUT_(g_com_spool_name[i])
 /* Opened lazily on the first byte, so a run that never transmits leaves no file
    to confuse the next one -- and flushed per byte, because a VDM is far more
    often killed than exited and an unflushed buffer would read as "nothing was
@@ -1683,7 +1742,7 @@ static void com_tx_sink(void *ctx, int port, uint8_t b)
     (void)ctx;
     if (port < 0 || port >= COMM_MAX_PORTS || g_com_failed[port]) return;
     if (g_com_spool[port] == INVALID_HANDLE_VALUE) {
-        g_com_spool[port] = CreateFileA(g_com_spool_path[port], GENERIC_WRITE,
+        g_com_spool[port] = CreateFileA(g_com_spool_path(port), GENERIC_WRITE,
                                         FILE_SHARE_READ, NULL, CREATE_ALWAYS,
                                         FILE_ATTRIBUTE_NORMAL, NULL);
         if (g_com_spool[port] == INVALID_HANDLE_VALUE) { g_com_failed[port] = 1; return; }
@@ -3483,7 +3542,10 @@ static void recovery_uninstall(char **pp)
        literal above and re-launches; if an empty setting overrode that, every
        headless disk measurement would start reporting "drive not ready" on a
        machine where nothing had changed. */
-static const char   *g_floppy_img = FLOPPY_IMG_PATH;
+/* NULL = the harness fallback (FLOPPY_IMG_PATH), composed at use because the root is
+   runtime-derived now; a settings value points this INTO g_set as before. */
+static const char   *g_floppy_img = NULL;
+static const char   *floppy_img_path(void) { return g_floppy_img ? g_floppy_img : FLOPPY_IMG_PATH; }
 static HANDLE        g_disk_h[1] = { INVALID_HANDLE_VALUE };
 static dos_disk_geom g_disk_g[1];
 static int           g_disk_tried[1];
@@ -3500,7 +3562,7 @@ static dos_disk_geom *disk_for(unsigned drive)
     if (g_disk_tried[0]) return NULL;
     g_disk_tried[0] = 1;
     om = SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOOPENFILEERRORBOX);
-    g_disk_h[0] = CreateFileA(g_floppy_img, GENERIC_READ | GENERIC_WRITE,
+    g_disk_h[0] = CreateFileA(floppy_img_path(), GENERIC_READ | GENERIC_WRITE,
                               FILE_SHARE_READ, NULL, OPEN_EXISTING,
                               FILE_ATTRIBUTE_NORMAL, NULL);
     SetErrorMode(om);
@@ -3519,7 +3581,7 @@ static dos_disk_geom *disk_for(unsigned drive)
         return NULL;
     }
     { char db[200], *dq = db;
-      dq = zput(dq, "  INT13 drive 0 = "); dq = zput(dq, g_floppy_img); dq = zput(dq, ", ");
+      dq = zput(dq, "  INT13 drive 0 = "); dq = zput(dq, floppy_img_path()); dq = zput(dq, ", ");
       dq = zhex(dq, g_disk_g[0].cylinders); dq = zput(dq, " cyl x ");
       dq = zhex(dq, g_disk_g[0].heads);     dq = zput(dq, " head x ");
       dq = zhex(dq, g_disk_g[0].sectors);   dq = zput(dq, " sec, type 0x");
@@ -8177,7 +8239,7 @@ static void settings_apply(HWND h, const ntvdmex_settings *s, int live)
          knob comes to do something its label does not say. */
     if (s->v[SET_TYPEMATIC] >= 2)
         g_ty_period_us = 1000000u / (uint32_t)s->v[SET_TYPEMATIC];
-    g_floppy_img     = s->s[SET_STR_FLOPPYA][0] ? s->s[SET_STR_FLOPPYA] : FLOPPY_IMG_PATH;
+    g_floppy_img     = s->s[SET_STR_FLOPPYA][0] ? s->s[SET_STR_FLOPPYA] : NULL;
     /* The SbDma list is 1|3|5, and 5 is not an 8-bit channel on any real 8237 --
        on an SB16 it is the SIXTEEN-bit one. Selecting it therefore moves H and
        leaves D where it was, rather than pointing the 8-bit engine at a channel
@@ -9082,10 +9144,11 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
                      identical, which is the exact failure this codebase keeps paying
                      for. Derive the offset from the string so the next path change
                      cannot do it again, and SAY SO when a write fails. */
-                char path[] = OUT_("shot00.bmp");
-                const unsigned d = (unsigned)sizeof path - 7;   /* the "00" in shot00 */
-                path[d]     = (char)('0' + (cap_seq / 10) % 10);
-                path[d + 1] = (char)('0' + cap_seq % 10);
+                char name[] = "shot00.bmp";
+                const char *path;
+                name[4] = (char)('0' + (cap_seq / 10) % 10);
+                name[5] = (char)('0' + cap_seq % 10);
+                path = OUT_(name);
                 if (present_ddraw_save_bmp(&g_pd, path) == 0) {
                     ++cap_seq;
                     if (GetFileAttributesA(CFG_("planedump.flag")) != INVALID_FILE_ATTRIBUTES)
@@ -20802,6 +20865,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
              See the note by tray_add for why a Win16 guest gets no window. */
         g_wow_launch = 1;
         p = zput(p, "STAGE0: WIN16/WOW launch detected -> refusing (see GH #129)\r\n");
+        p = zput(p, "STAGE0: root=["); p = zput(p, NTVDMEX_DIR); p = zput(p, "] (derived from the host's own path)\r\n");
         p = zput(p, "STAGE0: cmdline=["); p = zput(p, GetCommandLineA()); p = zput(p, "]\r\n");
         log_append(LOG_PATH, report, p); serial_out(report, p);
         if (GetFileAttributesA(WOWTRY_FLAG) == INVALID_FILE_ATTRIBUTES)
@@ -21040,7 +21104,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
          been bitten repeatedly by building on a documented claim instead of a
          measured one. Log the raw string; diff a DOS launch against a Win16 launch
          on the rig; write the detector against what the diff actually shows. */
-    p = zput(p, "STAGE0: cmdline=["); p = zput(p, GetCommandLineA()); p = zput(p, "]\r\n");
+    p = zput(p, "STAGE0: root=["); p = zput(p, NTVDMEX_DIR); p = zput(p, "] (derived from the host's own path)\r\n");
+        p = zput(p, "STAGE0: cmdline=["); p = zput(p, GetCommandLineA()); p = zput(p, "]\r\n");
 
     /* V86 address space, then register as a VDM with the kernel (order matters). */
     v86_setup_memory();
