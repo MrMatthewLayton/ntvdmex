@@ -343,6 +343,47 @@ static void clear_text(video_state *st, uint8_t attr)
     for (i = 0; i < n; ++i) { t[i*2] = ' '; t[i*2+1] = attr; }
 }
 
+/* The number of text rows the loaded font gives on a 400-line VGA text screen. */
+static uint8_t text_rows_for(uint8_t cell_h)
+{ return (uint8_t)(cell_h ? (400 / cell_h) : 25); }
+
+/* ── THE BDA DESCRIBES THE DISPLAY, AND A TEXT APPLICATION BELIEVES IT. ──────────
+     0040:0049 mode, 004A columns, 004C page size, 004E page offset, 0050 the cursor
+     per page, 0060 the cursor shape, 0062 active page, 0063 the CRTC base, 0084 rows
+     minus one, 0085 the character height, 0087-0089 the EGA/VGA info bytes. All of
+     it read as ZERO before this: rows-1 = 0 is a one-row screen to a program that
+     sizes itself from 0040:0084, and the video-info bytes said "no EGA/VGA" to one
+     that checks before it asks for 50 lines. Cheap enough to redo after every INT
+     10h call and every frame -- a few dozen byte writes -- and correct by
+     construction, since it is derived rather than maintained. */
+void vdd_video_bda_sync(video_state *st)
+{
+    uint8_t *b = st->bda;
+    unsigned psize;
+    if (!b) return;
+    b[0x49] = st->mode;
+    b[0x4A] = st->cols; b[0x4B] = 0;
+    if (st->mkind == VID_KIND_TEXT) {
+        psize = ((unsigned)st->cols * st->rows * 2u + 0xFFu) & ~0xFFu;
+        if (psize < 0x800u) psize = 0x800u;
+    } else psize = 0x2000u;                            /* graphics: a plane, as the BIOS says */
+    b[0x4C] = (uint8_t)psize; b[0x4D] = (uint8_t)(psize >> 8);
+    { unsigned poff = (unsigned)st->page * psize;
+      b[0x4E] = (uint8_t)poff; b[0x4F] = (uint8_t)(poff >> 8); }
+    { unsigned pg = st->page & 7;
+      b[0x50 + pg * 2] = st->cur_col; b[0x51 + pg * 2] = st->cur_row; }
+    b[0x60] = (uint8_t)st->cur_shape; b[0x61] = (uint8_t)(st->cur_shape >> 8);
+    b[0x62] = st->page;
+    { unsigned crtc = (st->mode == 0x07) ? 0x3B4u : 0x3D4u;
+      b[0x63] = (uint8_t)crtc; b[0x64] = (uint8_t)(crtc >> 8); }
+    b[0x84] = (uint8_t)(st->rows ? st->rows - 1 : 24);
+    b[0x85] = st->cell_h; b[0x86] = 0;
+    b[0x87] = 0x60;                                    /* 256K, EGA/VGA active, cursor emulation on */
+    b[0x88] = 0x09;                                    /* feature/switch bits: enhanced colour */
+    /* 0089: bit 0 = VGA active; bits 7,4 = scan lines (0,0 = 350; 0,1 = 400; 1,0 = 200). */
+    b[0x89] = (uint8_t)((st->gh == 200) ? 0x81 : (st->gh == 350) ? 0x01 : 0x11);
+}
+
 static void scroll_up(video_state *st, int lines, int top, int left,
                       int bot, int right, uint8_t attr)
 {
@@ -592,6 +633,14 @@ static void int10(void *self, ntvdd_regs *r)
         {   int noclear = (al & 0x80) != 0;
         st->mode = al & 0x7F; st->in_vesa = 0;        /* a standard mode leaves VESA */
         st->cur_row = st->cur_col = 0; st->page = 0;
+        st->cur_shape = 0x0607;                       /* the BIOS resets the shape too */
+        st->blink = 1;                                /* ...and re-enables blink (AR10 bit 3) */
+        st->user_font_on = 0;                         /* the ROM font comes back with the mode */
+        /* The cell height the mode's BIOS font gives: 8x16 in the VGA text modes and
+           the 480-line graphics modes, 8x14 at 350 lines, 8x8 at 200. */
+        st->cell_h = (uint8_t)((st->mode <= 0x03 || st->mode == 0x07 ||
+                                st->mode == 0x11 || st->mode == 0x12) ? 16
+                             : (st->mode == 0x0F || st->mode == 0x10) ? 14 : 8);
         load_default_palette(st);                     /* HW reloads the DAC on mode set */
         load_default_crtc(st);                        /* ...and reprograms the CRTC     */
         {   unsigned mi; const void *found = 0;
@@ -852,13 +901,11 @@ static void int10(void *self, ntvdd_regs *r)
                 /* Whatever the active mode actually draws with -- 8x8 in the 200-line
                    graphics modes, 8x16 in text. We used to answer this (and 8x14) with the
                    8x16 table while reporting CX=14, so a caller striding by 14 through
-                   16-byte glyphs drifted 2 bytes per character and drew shredded text. */
-                if (st->mode == 0x13 || st->mode == 0x04 || st->mode == 0x05 ||
-                    st->mode == 0x06 || st->mode == 0x0D) {
-                    seg = VDD_FONT8X8_SEG;  off = 0; bpc = 8;
-                } else {
-                    seg = VDD_FONT8X16_SEG; off = 0; bpc = 16;
-                }
+                   16-byte glyphs drifted 2 bytes per character and drew shredded text.
+                   cell_h is that answer, and it follows a 1112h/1111h font change too. */
+                if      (st->cell_h == 8)  { seg = VDD_FONT8X8_SEG;  off = 0; bpc = 8;  }
+                else if (st->cell_h == 14) { seg = VDD_FONT8X14_SEG; off = 0; bpc = 14; }
+                else                       { seg = VDD_FONT8X16_SEG; off = 0; bpc = 16; }
                 break;
             default:   seg = VDD_FONT8X16_SEG; off = 0;       bpc = 16; break;
             }
@@ -913,9 +960,27 @@ static void int10(void *self, ntvdd_regs *r)
                     st->user_font_rows = bpc;
                     st->user_font_on = 1;
                     st->dirty = 1;
+                    /* AL=10h (not 00h) also reprograms the CRTC for the new height:
+                       the cell becomes the font's height and the row count follows. */
+                    if (al == 0x10 && st->mkind == VID_KIND_TEXT) {
+                        st->cell_h = bpc;
+                        st->rows = text_rows_for(bpc);
+                    }
                 }
             } else {
+                /* ── ★ AL=x1/x2/x4 SELECT A ROM FONT, AND WITH 1x THAT IS A ROW COUNT. ──
+                     1112h is THE 50-line call: load the 8x8 ROM font and, because AL
+                     has bit 4 set, recompute the CRTC -- 400 lines / 8 = 50 rows.
+                     1111h is 8x14 (28 rows) and 1114h 8x16 (25). The 0x variants only
+                     change the glyphs, which is what the BIOS documents and what a
+                     caller that follows 1102h with its own CRTC programming expects. */
+                uint8_t h = (uint8_t)(((al & 0x0F) == 0x02) ? 8 : ((al & 0x0F) == 0x01) ? 14 : 16);
                 st->user_font_on = 0;              /* back to the ROM tables */
+                if ((al & 0x10) && st->mkind == VID_KIND_TEXT) {
+                    st->cell_h = h;
+                    st->rows = text_rows_for(h);
+                    if (st->cur_row >= st->rows) st->cur_row = (uint8_t)(st->rows - 1);
+                }
                 st->dirty = 1;
             }
             s_dx(r, (uint16_t)(st->rows ? st->rows - 1 : 24));
@@ -963,7 +1028,7 @@ static void int10(void *self, ntvdd_regs *r)
         b[4] = (uint8_t)st->mode;                      /* current mode            */
         wr16(b + 5, st->cols);                         /* columns on screen       */
         b[0x22] = (uint8_t)(st->rows ? st->rows : 25); /* character rows          */
-        wr16(b + 0x23, 16);                            /* bytes per character     */
+        wr16(b + 0x23, st->cell_h ? st->cell_h : 16);  /* bytes per character     */
         b[0x25] = 0x08;                                /* active DCC = VGA colour */
         wr16(b + 0x27, 256);                           /* number of colours       */
         b[0x29] = 8;                                   /* number of pages         */
@@ -982,6 +1047,7 @@ static void int10(void *self, ntvdd_regs *r)
         st->dirty = 0;
         break;
     }
+    vdd_video_bda_sync(st);                            /* the BDA follows every call */
 }
 
 /* DAC palette ports 3C7 (read index) / 3C8 (write index) / 3C9 (data). */
@@ -1350,6 +1416,27 @@ static void vga_idx_data(uint8_t *index, uint8_t w, uint32_t v,
 
 static void crtc_set_data(void *self, uint32_t v);
 
+/* The cursor's CRTC address (0x0E/0x0F) as the BIOS path implies it: cells from the
+   start of video memory, so the display start is added back in. */
+static uint16_t crtc_cursor_of(const video_state *st)
+{ return (uint16_t)(st->crtc_start + (unsigned)st->cur_row * st->cols + st->cur_col); }
+/* ...and the reverse: a guest wrote 0x0E/0x0F, so derive row/col from it. A value
+   off the visible page (some guests park the cursor at 0x7FFF to hide it) is left
+   where it is -- hidden by being out of range, as it is on the card. */
+static void crtc_cursor_apply(video_state *st)
+{
+    unsigned pos = st->crtc_cursor;
+    unsigned base = st->crtc_start;
+    st->dirty = 1;
+    if (!st->cols || !st->rows) return;
+    if (pos < base) { st->cur_row = st->rows; return; }          /* off-page: hidden  */
+    pos -= base;
+    if (pos >= (unsigned)st->cols * st->rows) { st->cur_row = st->rows; return; }
+    st->cur_row = (uint8_t)(pos / st->cols);
+    st->cur_col = (uint8_t)(pos % st->cols);
+    vdd_video_bda_sync(st);
+}
+
 /* Reassemble the ten-bit Line Compare from its three registers. */
 static void crtc_lc_update(video_state *st)
 {
@@ -1461,6 +1548,21 @@ static void crtc_set_data(void *self, uint32_t v)
     case 0x06: st->crtc_vtotal_lo = (uint8_t)v; crtc_vt_update(st); st->dirty = 1; break;
     case 0x12: st->crtc_vde_lo    = (uint8_t)v; crtc_vt_update(st); st->dirty = 1; break;
     case 0x15: st->crtc_vbs_lo    = (uint8_t)v; crtc_vt_update(st); st->dirty = 1; break;
+    /* ── THE TEXT CURSOR, PROGRAMMED DIRECTLY. ────────────────────────────────────
+         0x0A/0x0B are Cursor Start/End (the same CH/CL INT 10h AH=01h takes, bit 5
+         of Start = off) and 0x0E/0x0F the cursor's address in character cells from
+         the start of video memory. Full-screen editors and every CRT unit (Turbo
+         Pascal's, QB's runtime) position the cursor this way instead of through the
+         BIOS, and these registers fell into `default:` -- so the cursor sat wherever
+         the last INT 10h left it, which in an editor is nowhere near the text. */
+    case 0x0A: st->cur_shape = (uint16_t)((st->cur_shape & 0x00FF) | ((uint16_t)(v & 0x3F) << 8));
+               st->dirty = 1; vdd_video_bda_sync(st); break;
+    case 0x0B: st->cur_shape = (uint16_t)((st->cur_shape & 0xFF00) | (v & 0x1F));
+               st->dirty = 1; vdd_video_bda_sync(st); break;
+    case 0x0E: st->crtc_cursor = (uint16_t)((st->crtc_cursor & 0x00FF) | ((uint16_t)(v & 0xFF) << 8));
+               crtc_cursor_apply(st); break;
+    case 0x0F: st->crtc_cursor = (uint16_t)((st->crtc_cursor & 0xFF00) | (v & 0xFF));
+               crtc_cursor_apply(st); break;
     default: break;
     }
 }
@@ -1472,6 +1574,11 @@ static void crtc_in(void *self, uint16_t port, uint8_t w, uint32_t *v)
     case 0x0C: *v = (uint8_t)(st->crtc_start >> 8); break;
     case 0x0D: *v = (uint8_t)(st->crtc_start & 0xFF); break;
     case 0x13: *v = st->crtc_offset; break;
+    case 0x0A: *v = (uint8_t)((st->cur_shape >> 8) & 0x3F); break;
+    case 0x0B: *v = (uint8_t)(st->cur_shape & 0x1F); break;
+    /* Read back what the BIOS path set, in the hardware's own units. */
+    case 0x0E: *v = (uint8_t)(crtc_cursor_of(st) >> 8); break;
+    case 0x0F: *v = (uint8_t)(crtc_cursor_of(st) & 0xFF); break;
     default:   *v = 0; break;
     }
 }
@@ -1836,24 +1943,80 @@ static uint8_t vid_rd(void *self, uint32_t off)
 static void vid_wr(void *self, uint32_t off, uint8_t v)
 { video_state *st = (video_state *)self; st->vmem[VID_TEXT_OFF + off] = v; st->dirty = 1; }
 
+/* One character's glyph rows: the loaded user font wins (GH #52), otherwise the ROM
+   table for the cell height in force -- 8x8 after a 1112h, 8x14 after 1111h, 8x16
+   otherwise. One predictable branch in the ordinary case. */
+static const uint8_t *glyph_rows(const video_state *st, uint8_t ch)
+{
+    if (st->user_font_on)  return &st->user_font[ch * VID_CELL_H];
+    if (st->cell_h == 8)   return vga_font_8x8[ch];
+    if (st->cell_h == 14)  return vga_font_8x14[ch];
+    return vga_font_8x16[ch];
+}
+
+/* ── ONE CELL. The attribute byte's top bit is BLINK OR BRIGHT BACKGROUND, and the
+     Attribute Controller (AR10 bit 3, INT 10h AX=1003h) decides which. Blink is the
+     power-on default. We always masked the bit off -- `(attr >> 4) & 7` -- so a
+     program that turned blink OFF to get sixteen background colours (every text-mode
+     UI with a light-grey dialog on a bright panel) got the dark eight, and one that
+     left blink ON and used it never blinked. `st->blink_off` is the phase for this
+     render, set once per frame by vdd_video_render from the injected clock. */
+static void render_cell(video_state *st, int r, int c, uint8_t ch, uint8_t attr)
+{
+    int gy, gx;
+    int cell_h = st->cell_h ? st->cell_h : VID_CELL_H;
+    int stride = st->cols * VID_CELL_W;                /* 320 in a 40-column mode  */
+    uint8_t fg = attr & 0x0F, bg;
+    const uint8_t *gl = glyph_rows(st, ch);
+    if (st->blink) {
+        bg = (uint8_t)((attr >> 4) & 0x07);
+        if ((attr & 0x80) && st->blink_off) fg = bg;  /* off phase: the glyph hides */
+    } else {
+        bg = (uint8_t)((attr >> 4) & 0x0F);           /* sixteen backgrounds      */
+    }
+    for (gy = 0; gy < cell_h; ++gy) {
+        uint8_t bits = gl[gy];
+        uint8_t *row = &st->fb[(r*cell_h + gy) * stride + c*VID_CELL_W];
+        for (gx = 0; gx < VID_CELL_W; ++gx) row[gx] = (bits & (0x80 >> gx)) ? fg : bg;
+    }
+}
+
+static void draw_hw_cursor(video_state *st);
+
 void vdd_video_render(video_state *st)                 /* text glyph render        */
 {
-    int r, c, gy, gx;
+    int r, c;
+    /* Text blinks at half the cursor rate: 32 frames on, 32 off at 60 Hz. */
+    st->blink_off = (uint8_t)((st->blink && st->time_us)
+                              ? ((st->time_us() % 1066000u) >= 533000u) : 0);
     for (r = 0; r < st->rows; ++r)
         for (c = 0; c < st->cols; ++c) {
             uint8_t *p = cell(st, r, c);
-            uint8_t ch = p[0], attr = p[1];
-            uint8_t fg = attr & 0x0F, bg = (uint8_t)((attr >> 4) & 0x07);
-            /* GH #52: a loaded user font wins; otherwise the ROM table, which
-               is the ordinary case and one predictable branch. */
-            const uint8_t *gl = st->user_font_on ? &st->user_font[ch * VID_CELL_H]
-                                                 : vga_font_8x16[ch];
-            for (gy = 0; gy < VID_CELL_H; ++gy) {
-                uint8_t bits = gl[gy];
-                uint8_t *row = &st->fb[(r*VID_CELL_H + gy) * VID_FB_W + c*VID_CELL_W];
-                for (gx = 0; gx < VID_CELL_W; ++gx) row[gx] = (bits & (0x80 >> gx)) ? fg : bg;
-            }
+            render_cell(st, r, c, p[0], p[1]);
         }
+    draw_hw_cursor(st);
+}
+
+void vdd_video_text_cursor(video_state *st, int col, int row,
+                           uint16_t and_mask, uint16_t xor_mask)
+{
+    uint8_t *p, ch, attr;
+    if (st->mkind != VID_KIND_TEXT) return;
+    if (col < 0 || row < 0 || col >= st->cols || row >= st->rows) return;
+    p    = cell(st, row, col);
+    ch   = (uint8_t)((p[0] & (and_mask & 0xFF)) ^ (xor_mask & 0xFF));
+    attr = (uint8_t)((p[1] & (and_mask >> 8)) ^ (xor_mask >> 8));
+    render_cell(st, row, col, ch, attr);
+    /* The hardware cursor is drawn by the CRTC over whatever the cell holds, so it
+       stays on top of the pointer when the two share a cell. */
+    if (row == st->cur_row && col == st->cur_col) draw_hw_cursor(st);
+}
+
+static void draw_hw_cursor(video_state *st)
+{
+    int gy, gx;
+    int cell_h = st->cell_h ? st->cell_h : VID_CELL_H;
+    int stride = st->cols * VID_CELL_W;
     /* ── THE TEXT CURSOR: SHAPE FROM THE GUEST, SCALED, BLINK FROM THE CLOCK. ────
          This used to be two hard-coded scan lines, always lit. Two things were wrong
          with that and only one of them is cosmetic:
@@ -1872,7 +2035,7 @@ void vdd_video_render(video_state *st)                 /* text glyph render     
     if (st->cur_row < st->rows && st->cur_col < st->cols) {
         unsigned start, end;
         int hidden, lit = 1;
-        vdd_cursor_lines(st->cur_shape, VID_CELL_H, &start, &end, &hidden);
+        vdd_cursor_lines(st->cur_shape, (unsigned)cell_h, &start, &end, &hidden);
         if (st->cursor_blink && st->time_us) {
             /* 16 frames on / 16 off at 60 Hz = a 533 ms period, lit for the first
                half. Integer maths only; no floating point in a VDD. */
@@ -1883,7 +2046,7 @@ void vdd_video_render(video_state *st)                 /* text glyph render     
             uint8_t fg = cell(st, st->cur_row, st->cur_col)[1] & 0x0F;
             for (gy = (int)start; gy <= (int)end; ++gy)
                 for (gx = 0; gx < VID_CELL_W; ++gx)
-                    st->fb[(st->cur_row*VID_CELL_H + gy) * VID_FB_W
+                    st->fb[(st->cur_row*cell_h + gy) * stride
                            + st->cur_col*VID_CELL_W + gx] = fg;
         }
     }
@@ -2134,7 +2297,8 @@ static void vid_frame(void *self)
            renders 320 pixels wide instead of pretending to be 640. */
         vdd_video_render(st);
         st->frame.w = (uint16_t)(st->cols * VID_CELL_W);
-        st->frame.h = (uint16_t)(st->rows * VID_CELL_H);
+        st->frame.h = (uint16_t)(st->rows * (st->cell_h ? st->cell_h : VID_CELL_H));
+        vdd_video_bda_sync(st);                        /* cursor moved by teletype etc. */
         st->frame.bpp = 8;
         st->frame.stride = st->frame.w;
         st->frame.pixels = st->fb; st->frame.palette = st->pal;
@@ -2149,6 +2313,8 @@ void vdd_video_reset(void *self)
     video_state *st = (video_state *)self;
     st->mode = 3; st->cols = VID_COLS; st->rows = VID_ROWS;
     st->mkind = VID_KIND_TEXT; st->gw = VID_FB_W; st->gh = VID_FB_H;
+    st->cell_h = VID_CELL_H; st->blink = 1; st->user_font_on = 0;
+    st->crtc_cursor = 0;
     st->mode_qn = 0;
     st->cur_row = st->cur_col = 0; st->cur_shape = 0x0607; st->page = 0;
     st->dac_widx = st->dac_ridx = st->dac_comp = 0;
@@ -2162,6 +2328,7 @@ void vdd_video_reset(void *self)
     st->in_vesa = 0; st->vesa_mode = 0; st->vesa_bank = 0;
     load_default_palette(st);
     if (st->vmem) clear_text(st, 0x07);
+    vdd_video_bda_sync(st);
     st->dirty = 1;
 }
 

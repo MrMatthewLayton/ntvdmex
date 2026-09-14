@@ -431,6 +431,11 @@ void vdd_input_reset(void *self)
         bda_w16(st, BDA_KB_TAIL, BDA_KB_START);
         st->bda[BDA_KB_FLAGS]  = 0;
         st->bda[BDA_KB_FLAGS2] = 0;
+        /* 0040:0096 bit 4 = "enhanced (101/102-key) keyboard present". It is what a
+           program checks before it uses INT 16h AH=10h/11h and the F11/F12 and grey
+           key codes -- edit.com and QBasic among them. We serve those functions, so
+           say so; a zero here makes them fall back to the 83-key subset. */
+        st->bda[0x96] = (uint8_t)(st->bda[0x96] | 0x10);
     }
 }
 

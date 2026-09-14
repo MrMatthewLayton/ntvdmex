@@ -7,6 +7,7 @@
 #include <string.h>
 #include "vdd_video.h"
 #include "vga_font_8x16.h"
+#include "vga_font_8x8.h"
 
 /* True if some VDD claimed `port` -- used instead of asserting a range count. */
 static int claims_port(const vdd_bus *b, uint16_t port)
@@ -1028,6 +1029,121 @@ int main(void)
       vid.time_us = 0;
 #undef AT
 #undef DAC
+    }
+
+    /* ── T21: ★ TEXT-MODE FIDELITY FOR FULL-SCREEN APPLICATIONS (edit.com, QBasic). ──
+       Five things a text-mode UI relies on and none of which existed: the BDA display
+       fields, bright-vs-blink backgrounds, the 43/50-line font calls, the CRTC cursor
+       registers, and the mouse driver's inverted-cell text cursor. Each is checked as a
+       RENDER or a byte in guest memory, not as a return code. */
+    {   static uint8_t tbda[0x100];
+        int gy, gx;
+        memset(tbda, 0, sizeof tbda);
+        vid.bda = tbda;
+        memset(&r,0,sizeof r); s_ah(&r,0x00); s_al(&r,0x03); vdd_bus_deliver_int(&bus,0x10,&r);
+
+        /* a. the BDA describes the display, and a text app reads it rather than asking */
+        CHECK(tbda[0x49]==3 && tbda[0x4A]==80 && tbda[0x4B]==0 && tbda[0x84]==24 &&
+              tbda[0x85]==16 && tbda[0x63]==0xD4 && tbda[0x64]==0x03,
+              "bda: mode 3 -> 0449=03 044A=80 0484=24 (rows-1) 0485=16 0463=3D4h");
+        CHECK((tbda[0x89] & 0x01) && (tbda[0x87] & 0x60) == 0x60,
+              "bda: 0489 says VGA active at 400 lines, 0487 says 256K EGA/VGA");
+        memset(&r,0,sizeof r); s_ah(&r,0x02); s_dx(&r,(uint16_t)((7<<8)|12)); vdd_bus_deliver_int(&bus,0x10,&r);
+        CHECK(tbda[0x50]==12 && tbda[0x51]==7, "bda: INT 10h AH=02 lands in 0450 as (col,row)");
+        memset(&r,0,sizeof r); s_ah(&r,0x01); s_cx(&r,0x0007); vdd_bus_deliver_int(&bus,0x10,&r);
+        CHECK(tbda[0x60]==0x07 && tbda[0x61]==0x00, "bda: INT 10h AH=01 lands in 0460 as (end,start)");
+
+        /* b. attribute bit 7: BLINK by default, BRIGHT BACKGROUND after 1003h BL=0 */
+        memset(&r,0,sizeof r); s_ah(&r,0x02); s_dx(&r,0); vdd_bus_deliver_int(&bus,0x10,&r);
+        memset(&r,0,sizeof r); s_ah(&r,0x09); s_al(&r,' '); s_bx(&r,0xF0); s_cx(&r,1); vdd_bus_deliver_int(&bus,0x10,&r);
+        memset(&r,0,sizeof r); s_ah(&r,0x02); s_dx(&r,(uint16_t)((24<<8)|79)); vdd_bus_deliver_int(&bus,0x10,&r);
+        CHECK(vid.blink == 1, "blink: a mode set enables blink (the power-on default)");
+        vdd_video_render(&vid);
+        CHECK(vid.fb[0] == 7, "blink on: attribute F0h draws background 7 (bit 7 is blink, not bright)");
+        memset(&r,0,sizeof r); s_ax(&r,0x1003); s_bx(&r,0x0000); vdd_bus_deliver_int(&bus,0x10,&r);
+        CHECK(vid.blink == 0, "int10/1003 BL=0: blink off");
+        vdd_video_render(&vid);
+        CHECK(vid.fb[0] == 15, "blink off: attribute F0h draws background 15 (sixteen backgrounds)");
+        memset(&r,0,sizeof r); s_ax(&r,0x1003); s_bx(&r,0x0001); vdd_bus_deliver_int(&bus,0x10,&r);
+        txt(0,0)[0]='A'; txt(0,0)[1]=0x87;                /* blinking grey on black */
+        vid.time_us = fake_clock;
+        g_fake_us = 100000; vdd_video_render(&vid);
+        { const uint8_t *gl = vga_font_8x16['A']; int lit = 0;
+          for (gy=0;gy<16;++gy) for (gx=0;gx<8;++gx)
+              if ((gl[gy]&(0x80>>gx)) && vid.fb[gy*640+gx]==7) lit++;
+          CHECK(lit > 0, "blink: in the on phase the glyph is drawn"); }
+        g_fake_us = 700000; vdd_video_render(&vid);
+        { int any = 0; for (gy=0;gy<16;++gy) for (gx=0;gx<8;++gx) if (vid.fb[gy*640+gx]!=0) any++;
+          CHECK(any == 0, "blink: in the off phase the glyph hides (fg == bg)"); }
+        vid.time_us = 0; txt(0,0)[1]=0x07;
+
+        /* c. 1112h IS the 50-line call: 8x8 ROM font, 400/8 rows, an 8x8 render */
+        memset(&r,0,sizeof r); s_ax(&r,0x1112); s_bx(&r,0); vdd_bus_deliver_int(&bus,0x10,&r);
+        CHECK(vid.rows == 50 && vid.cell_h == 8, "int10/1112: the 8x8 ROM font gives 50 rows");
+        CHECK((r_dx(&r) & 0xFF) == 49, "int10/1112: DL = rows-1 = 49");
+        CHECK(tbda[0x84]==49 && tbda[0x85]==8, "bda: 0484=49 0485=8 after 1112h");
+        vid.dirty=1; vdd_bus_frame(&bus);
+        CHECK(vid.frame.w==640 && vid.frame.h==400, "frame(50-line): still 640x400");
+        txt(49,0)[0]='A'; txt(49,0)[1]=0x0F;
+        vdd_video_render(&vid);
+        { const uint8_t *gl = vga_font_8x8['A']; int mism = 0;
+          for (gy=0;gy<8;++gy) for (gx=0;gx<8;++gx) {
+              uint8_t e=(gl[gy]&(0x80>>gx))?15:0; if (vid.fb[(392+gy)*640+gx]!=e) mism++; }
+          CHECK(mism==0, "render(50-line): row 49 is an 8x8 ROM glyph at scan line 392"); }
+        memset(&r,0,sizeof r); s_ah(&r,0x11); s_al(&r,0x30); s_bx(&r,0x0100); vdd_bus_deliver_int(&bus,0x10,&r);
+        CHECK(r_cx(&r) == 8 && (r_dx(&r)&0xFF) == 49, "int10/1130 BH=1: the CURRENT font is 8x8, 50 rows");
+        memset(&r,0,sizeof r); s_ax(&r,0x1114); s_bx(&r,0); vdd_bus_deliver_int(&bus,0x10,&r);
+        CHECK(vid.rows == 25 && vid.cell_h == 16, "int10/1114: the 8x16 ROM font gives 25 rows again");
+        memset(&r,0,sizeof r); s_ax(&r,0x1102); s_bx(&r,0); vdd_bus_deliver_int(&bus,0x10,&r);
+        CHECK(vid.rows == 25 && vid.cell_h == 16, "int10/1102: the 0x variant changes glyphs only, not rows");
+        memset(&r,0,sizeof r); s_ax(&r,0x1111); s_bx(&r,0); vdd_bus_deliver_int(&bus,0x10,&r);
+        CHECK(vid.rows == 28 && vid.cell_h == 14, "int10/1111: the 8x14 ROM font gives 28 rows");
+
+        /* d. the cursor programmed straight into the CRTC (every CRT unit does this) */
+        memset(&r,0,sizeof r); s_ah(&r,0x00); s_al(&r,0x03); vdd_bus_deliver_int(&bus,0x10,&r);
+        crtc_w(&bus, 0x0E, (uint8_t)((3*80+5) >> 8)); crtc_w(&bus, 0x0F, (uint8_t)((3*80+5) & 0xFF));
+        CHECK(vid.cur_row == 3 && vid.cur_col == 5, "crtc 0E/0F: cursor address 3*80+5 -> row 3 col 5");
+        CHECK(tbda[0x50]==5 && tbda[0x51]==3, "crtc 0E/0F: ...and the BDA follows");
+        { uint32_t v = 0, idx = 0x0E; vdd_bus_io(&bus,0x3D4,1,0,&idx); vdd_bus_io(&bus,0x3D5,1,1,&v);
+          CHECK(v == ((3*80+5)>>8), "crtc 0E: reads back the cursor address high byte"); }
+        crtc_w(&bus, 0x0A, 0x20);
+        { unsigned s0,e0; int hid; vdd_cursor_lines(vid.cur_shape, 16, &s0,&e0,&hid);
+          CHECK(hid, "crtc 0A: bit 5 hides the cursor"); }
+        crtc_w(&bus, 0x0A, 0x06); crtc_w(&bus, 0x0B, 0x07);
+        CHECK(vid.cur_shape == 0x0607, "crtc 0A/0B: start/end become the INT 10h shape word");
+        crtc_w(&bus, 0x0E, 0x7F); crtc_w(&bus, 0x0F, 0xFF);
+        CHECK(vid.cur_row >= vid.rows, "crtc 0E/0F: an off-page address (7FFFh) hides the cursor");
+
+        /* e. the INT 33h text cursor: the cell under the pointer, attribute masked */
+        memset(&r,0,sizeof r); s_ah(&r,0x00); s_al(&r,0x03); vdd_bus_deliver_int(&bus,0x10,&r);
+        memset(&r,0,sizeof r); s_ah(&r,0x02); s_dx(&r,(uint16_t)((24<<8)|79)); vdd_bus_deliver_int(&bus,0x10,&r);
+        txt(2,3)[0]='X'; txt(2,3)[1]=0x1F;                /* white on blue          */
+        vdd_video_render(&vid);
+        vdd_video_text_cursor(&vid, 3, 2, 0x77FF, 0x7700); /* the driver's defaults  */
+        { const uint8_t *gl = vga_font_8x16['X']; int mism = 0;
+          for (gy=0;gy<16;++gy) for (gx=0;gx<8;++gx) {
+              uint8_t e=(gl[gy]&(0x80>>gx))?0:6; if (vid.fb[(2*16+gy)*640+3*8+gx]!=e) mism++; }
+          CHECK(mism==0, "int33 text cursor: cell (3,2) redrawn with (1F & 77) ^ 77 = 60h: black on brown"); }
+        CHECK(txt(2,3)[1] == 0x1F, "int33 text cursor: VRAM itself is untouched (no trail)");
+        vdd_video_text_cursor(&vid, 80, 2, 0x77FF, 0x7700);
+        vdd_video_text_cursor(&vid, -1, 2, 0x77FF, 0x7700);
+        CHECK(1, "int33 text cursor: out-of-range cells are ignored, not written");
+        memset(&r,0,sizeof r); s_ah(&r,0x00); s_al(&r,0x13); vdd_bus_deliver_int(&bus,0x10,&r);
+        vdd_video_text_cursor(&vid, 3, 2, 0x77FF, 0x7700);
+        CHECK(vid.mkind != VID_KIND_TEXT, "int33 text cursor: a no-op outside text modes");
+
+        /* f. a 40-column mode renders at ITS stride, which is what the frame declares */
+        memset(&r,0,sizeof r); s_ah(&r,0x00); s_al(&r,0x01); vdd_bus_deliver_int(&bus,0x10,&r);
+        memset(&r,0,sizeof r); s_ah(&r,0x02); s_dx(&r,(uint16_t)((24<<8)|39)); vdd_bus_deliver_int(&bus,0x10,&r);
+        txt(1,0)[0]='A'; txt(1,0)[1]=0x0F;
+        vdd_video_render(&vid);
+        { const uint8_t *gl = vga_font_8x16['A']; int mism = 0;
+          for (gy=0;gy<16;++gy) for (gx=0;gx<8;++gx) {
+              uint8_t e=(gl[gy]&(0x80>>gx))?15:0; if (vid.fb[(16+gy)*320+gx]!=e) mism++; }
+          CHECK(mism==0, "render(40-col): row 1 is at stride 320 (was drawn at 640: every other line)"); }
+        CHECK(tbda[0x4A]==40 && tbda[0x49]==1, "bda: mode 1 -> 40 columns");
+        memset(&r,0,sizeof r); s_ah(&r,0x00); s_al(&r,0x03); vdd_bus_deliver_int(&bus,0x10,&r);
+        vid.bda = 0;
     }
 
     printf("\n%d checks, %d failed\n", total, fails);

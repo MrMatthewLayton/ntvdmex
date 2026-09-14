@@ -106,6 +106,22 @@ typedef struct video_state {
     uint8_t *vmem;                      /* the 128KB aperture (A0000); caller-set  */
     uint8_t  mode;                      /* 0x03 text, 0x13 graphics                */
     uint8_t  cols, rows;
+    /* ── THE CELL HEIGHT IS THE GUEST'S, NOT A COMPILE-TIME 16. ───────────────────
+         A VGA text mode has 400 scan lines and the BIOS divides them by whatever font
+         is loaded: 8x16 gives 25 rows, 8x14 gives 28, 8x8 gives 50 -- and INT 10h
+         AX=1112h (load the ROM 8x8) is how edit.com, QBasic, DOSSHELL and every
+         "43/50 line" option get there. With VID_CELL_H hard-wired to 16 that call
+         cleared the user font and changed nothing else, so a 50-row screen was drawn
+         as 25 rows of 16-line glyphs over a buffer the guest laid out as 50. */
+    uint8_t  cell_h;                    /* scan lines per text row: 8, 14 or 16     */
+    uint8_t  blink_off;                 /* this render: blinking cells are in their off phase */
+    /* The BIOS DATA AREA fields that describe the display (0040:0049..008A). A text
+       application reads them rather than asking: rows-1 at 0040:0084 is how QBasic
+       and edit.com size their screen, 0040:004A the columns, 0040:0050 the cursor.
+       NULL in the off-VM battery unless a test wires a buffer; the host points it at
+       guest linear 0x400, as the input VDD does for the keyboard ring. Nothing wrote
+       any of these before, so every one read as zero. */
+    uint8_t *bda;
     uint16_t gw, gh;                    /* graphics resolution of the current mode  */
     uint8_t  mkind;                     /* VID_KIND_* below                          */
     uint8_t  cga_bpp;                   /* 2 for modes 4/5, 1 for mode 6             */
@@ -208,6 +224,7 @@ typedef struct video_state {
     uint8_t  crtc_index;   /* 3D4 index latch                                      */
     uint8_t  crtc_offset;  /* CRTC 0x13: logical line width in 2-byte units        */
     uint16_t crtc_start;   /* CRTC 0x0C/0x0D: display start -- the page-flip reg   */
+    uint16_t crtc_cursor;  /* CRTC 0x0E/0x0F as last written by the guest          */
     uint8_t  yplane[4][VID_Y_PLANE];   /* de-interleaved mode-Y planes             */
     uint8_t  yshadow[VID_Y_PLANE];     /* the aperture as of the last plane flush   */
     uint8_t  crtc_seen;                /* the guest has written a CRTC start address */
@@ -497,6 +514,18 @@ static inline ntvdd vdd_video_device(video_state *st)
   d.shutdown = 0; d.self = st; return d; }
 
 void vdd_video_render(video_state *st);                /* text glyph render        */
+/* ── THE INT 33h TEXT CURSOR IS A CELL, NOT A SPRITE. ───────────────────────────────
+     In a text mode the mouse driver has no pixels to draw an arrow with; it shows the
+     pointer by REWRITING THE ATTRIBUTE of the character cell under it -- AND-ed with
+     the screen mask, XOR-ed with the cursor mask (INT 33h 0Ah; the defaults 77FFh /
+     7700h invert foreground and background). The host used to stamp its 16x16 arrow
+     sprite into the text frame, which is what "a graphical mouse cursor over a text
+     interface" looks like. Call after vdd_video_render, with the cell the pointer is
+     in; the masks are the driver's (low byte = character, high byte = attribute). */
+void vdd_video_text_cursor(video_state *st, int col, int row,
+                           uint16_t and_mask, uint16_t xor_mask);
+/* Write the display's BDA fields from the current state (see `bda` above). */
+void vdd_video_bda_sync(video_state *st);
 /* ── ★ CURSOR EMULATION: AN 8-LINE SHAPE ON A 16-LINE CELL. ─────────────────────
      DOS asks for its cursor in SCAN LINES, and it asks in the units of the machine
      it was written for -- an 8-line character cell, where an underline is lines 6-7

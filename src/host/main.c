@@ -5735,8 +5735,16 @@ static LONG i33_vx(LONG px) { return px << i33_xshift(); }
 static LONG i33_px(LONG vx) { return vx >> i33_xshift(); }
 static LONG i33_vmaxx(void)
 { unsigned w = g_vid.frame.w ? g_vid.frame.w : 640; return (LONG)(w << i33_xshift()) - 1; }
+/* ── ...AND IN A TEXT MODE THE VIRTUAL SCREEN IS 640x200, WHATEVER THE FONT. ──────
+     The driver's text cell is 8x8 virtual pixels (8x4 in 50-line mode), so a text
+     application does `row = DX / 8` -- 0..199 over 25 rows. Our text frame is 400
+     lines tall and we handed that back raw, so every row came out DOUBLED: a click on
+     QBasic's menu bar landed two rows below it and no menu ever opened by mouse. */
+static int  i33_text(void)  { return g_vid.mkind == VID_KIND_TEXT && !g_vid.in_vesa && g_vid.frame.h > 200; }
+static LONG i33_vy(LONG py) { return i33_text() ? py * 200 / (LONG)g_vid.frame.h : py; }
+static LONG i33_py(LONG vy) { return i33_text() ? vy * (LONG)g_vid.frame.h / 200 : vy; }
 static LONG i33_vmaxy(void)
-{ unsigned h = g_vid.frame.h ? g_vid.frame.h : 480; return (LONG)h - 1; }
+{ unsigned h = g_vid.frame.h ? g_vid.frame.h : 480; return i33_text() ? 199 : (LONG)h - 1; }
 
 /* 07h/08h cursor ranges, in VIRTUAL coordinates. -1 = the guest never set one, so the
    mode's own extent applies; a guest that sets a range while in one mode and then
@@ -5873,7 +5881,10 @@ static int capture_allowed(void) { return g_ms_want_capture != 0; }
    Uses the mouse but released: no. Read on the UI thread only. */
 static int mouse_goes_to_guest(void) { return g_captured || !capture_allowed(); }
 
-static DWORD g_ms_shape_sets;      /* 09h/0Ah: cursor shapes we accept and discard   */
+static DWORD g_ms_shape_sets;      /* 09h (and 0Ah BX=1): cursor shapes we accept and discard */
+/* 0Ah BX=0: the text cursor's screen (AND) and cursor (XOR) masks over the cell's
+   (char, attr) word. The driver's defaults invert the colours and leave the character. */
+static volatile LONG g_ms_tc_and = 0x77FF, g_ms_tc_xor = 0x7700;
 static DWORD g_ms_state_badptr;    /* 16h/17h: ES:DX we refused to dereference       */
 static DWORD g_ms_i33_unimpl;      /* calls that reached `default:` -- see there     */
 
@@ -5984,6 +5995,7 @@ static void i33_reset_state(void)
     InterlockedExchange(&g_ms_evt_mask, 0);
     InterlockedExchange(&g_ms_evt_seg, 0);
     InterlockedExchange(&g_ms_evt_off, 0);
+    InterlockedExchange(&g_ms_tc_and, 0x77FF); InterlockedExchange(&g_ms_tc_xor, 0x7700);
     for (i = 0; i < MS_BTNS; ++i) {
         InterlockedExchange(&g_ms_press_n[i], 0);
         InterlockedExchange(&g_ms_rel_n[i], 0);
@@ -6058,14 +6070,14 @@ static void mouse_int33(volatile BYTE *tib, int src)
         break;
     case 0x0003:                                        /* get position + buttons  */
         VDM_SET16(tib, VTIB_ECX, (WORD)i33_clampx(i33_vx(x)));
-        VDM_SET16(tib, VTIB_EDX, (WORD)i33_clampy(y));
+        VDM_SET16(tib, VTIB_EDX, (WORD)i33_clampy(i33_vy(y)));
         VDM_SET16(tib, VTIB_EBX, (WORD)b);
         break;
     case 0x0004: {                                      /* set cursor position     */
         LONG vx = i33_clampx((LONG)(short)(VDM_REG(tib, VTIB_ECX) & 0xFFFF));
         LONG vy = i33_clampy((LONG)(short)(VDM_REG(tib, VTIB_EDX) & 0xFFFF));
         InterlockedExchange(&g_ms_x, i33_px(vx));
-        InterlockedExchange(&g_ms_y, vy);
+        InterlockedExchange(&g_ms_y, i33_py(vy));
         break; }
     /* ── 05h / 06h: THE COUNTS, AND THE POSITION AT THE TRANSITION. ──────────────
          BX on entry selects the button (0 L, 1 R, 2 M) and it is an INPUT we used to
@@ -6089,7 +6101,7 @@ static void mouse_int33(volatile BYTE *tib, int src)
         /* No transition yet: the documented answer is the CURRENT position, not a
            stale zero -- a guest that plots at CX/DX would jump to the top-left. */
         VDM_SET16(tib, VTIB_ECX, (WORD)i33_clampx(i33_vx(n ? *px : x)));
-        VDM_SET16(tib, VTIB_EDX, (WORD)i33_clampy(n ? *py : y));
+        VDM_SET16(tib, VTIB_EDX, (WORD)i33_clampy(i33_vy(n ? *py : y)));
         break; }
     case 0x0007:                                        /* set X range (virtual)   */
         i33_set_range(&g_ms_minx, &g_ms_maxx,
@@ -6101,15 +6113,26 @@ static void mouse_int33(volatile BYTE *tib, int src)
         i33_set_range(&g_ms_miny, &g_ms_maxy,
                       (LONG)(short)(VDM_REG(tib, VTIB_ECX) & 0xFFFF),
                       (LONG)(short)(VDM_REG(tib, VTIB_EDX) & 0xFFFF));
-        InterlockedExchange(&g_ms_y, i33_clampy(y));
+        InterlockedExchange(&g_ms_y, i33_py(i33_clampy(i33_vy(y))));
         break;
     case 0x0009:                                        /* define graphics cursor  */
-    case 0x000A:                                        /* define text cursor      */
         /* Accepted and ignored ON PURPOSE: the host draws its own overlay pointer
            (overlay_cursor), so a guest-supplied bitmap has nowhere to go. Unlike the
            old `default:` this is a decision, and it is counted below so a guest whose
            pointer looks wrong can be told apart from one we never heard from. */
         ++g_ms_shape_sets;
+        break;
+    case 0x000A:                                        /* define text cursor      */
+        /* BX=0: a SOFTWARE cursor -- CX is the screen mask (AND), DX the cursor mask
+           (XOR), applied to the (char, attr) word of the cell under the pointer. That
+           is the whole text-mode pointer, and the present path now draws it that way
+           (vdd_video_text_cursor). BX=1 asks for the HARDWARE cursor to be moved
+           instead; counted with the shapes and drawn as the software default, which
+           is at least a pointer in the right cell. */
+        if ((VDM_REG(tib, VTIB_EBX) & 0xFFFF) == 0) {
+            InterlockedExchange(&g_ms_tc_and, (LONG)(VDM_REG(tib, VTIB_ECX) & 0xFFFF));
+            InterlockedExchange(&g_ms_tc_xor, (LONG)(VDM_REG(tib, VTIB_EDX) & 0xFFFF));
+        } else ++g_ms_shape_sets;
         break;
     case 0x000B: {                                      /* read relative motion    */
         LONG dx, dy;
@@ -8535,6 +8558,7 @@ static void key_msg_note(void)
     keylat_bucket(g_keymsg_hist, qd); ++g_keymsg_n;
     if (qd > g_keymsg_max_ms) g_keymsg_max_ms = qd;
 }
+static void mod_track(uint8_t rawsc, int ext, int down);
 static void key_push_make(LPARAM lp)
 {
     uint8_t rawsc = (uint8_t)((lp >> 16) & 0xFF);
@@ -8544,14 +8568,45 @@ static void key_push_make(LPARAM lp)
        not silently dropped: the count is how we tell "the OS stopped sending them"
        from "we stopped listening". */
     if (lp & 0x40000000) { g_ty_os_repeats++; return; }
-    if (rawsc) { host_key_scancode(rawsc, ext, 0); host_key_typematic_press(rawsc, ext); }
+    if (rawsc) { host_key_scancode(rawsc, ext, 0); host_key_typematic_press(rawsc, ext);
+                 mod_track(rawsc, ext, 1); }
 }
 static void key_push_break(LPARAM lp)
 {
     uint8_t rawsc = (uint8_t)((lp >> 16) & 0xFF);
     int ext = (lp & 0x01000000) != 0;
     if (rawsc) { host_key_typematic_release(rawsc, ext);   /* stop repeating first */
-                 host_key_scancode(rawsc, ext, 1); }
+                 host_key_scancode(rawsc, ext, 1);
+                 mod_track(rawsc, ext, 0); }
+}
+/* ── LOSING FOCUS RELEASES THE MODIFIERS. ─────────────────────────────────────────────
+     Windows delivers a key's UP to whichever window has focus WHEN IT IS RELEASED. So
+     Alt+Tab away from us sends the guest Alt's make and never its break: 0040:0017 says
+     Alt is held for the rest of the run, and the first letter typed on return is an Alt
+     accelerator -- or, for a game reading port 60h, Ctrl stays "fired". Tracked here
+     from what we actually pushed (not from the BDA, which a guest hooking INT 09h never
+     updates), and released as synthetic breaks on WM_KILLFOCUS. */
+static BYTE g_mod_down;                              /* bits: 0 LSh 1 RSh 2 LCtl 3 RCtl 4 LAlt 5 RAlt */
+static void mod_track(uint8_t rawsc, int ext, int down)
+{
+    int bit = -1;
+    if (!ext) { if (rawsc == 0x2A) bit = 0; else if (rawsc == 0x36) bit = 1;
+                else if (rawsc == 0x1D) bit = 2; else if (rawsc == 0x38) bit = 4; }
+    else      { if (rawsc == 0x1D) bit = 3; else if (rawsc == 0x38) bit = 5; }
+    if (bit < 0) return;
+    if (down) g_mod_down |= (BYTE)(1u << bit); else g_mod_down &= (BYTE)~(1u << bit);
+}
+static void host_release_modifiers(void)
+{
+    static const struct { uint8_t sc; int ext; } mods[6] =
+        { {0x2A,0}, {0x36,0}, {0x1D,0}, {0x1D,1}, {0x38,0}, {0x38,1} };
+    int i;
+    for (i = 0; i < 6; ++i)
+        if (g_mod_down & (1u << i)) {
+            host_key_typematic_release(mods[i].sc, mods[i].ext);
+            host_key_scancode(mods[i].sc, mods[i].ext, 1);
+        }
+    g_mod_down = 0;
 }
 
 /* --- the UI thread: window + present + frame timer ------------------------- */
@@ -8787,9 +8842,19 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
             int stale = (DWORD)(nowt - s_last_present) >= VID_PRESENT_STALE_MS;
             if (vdd_video_present_ready(&g_vid) || stale) {
                 s_last_present = nowt;
-                if (g_ms_hidden == 0 && g_vid.frame.bpp == 8 && g_vid.frame.pixels)
-                    overlay_cursor((uint8_t *)g_vid.frame.pixels, g_vid.frame.w, g_vid.frame.h,
-                                   (int)g_vid.frame.stride, g_ms_x, g_ms_y);  /* driver cursor */
+                if (g_ms_hidden == 0 && g_vid.frame.bpp == 8 && g_vid.frame.pixels) {
+                    /* THE DRIVER CURSOR. In a text mode it is not a sprite at all: the
+                       real driver inverts the character cell under the pointer (0Ah
+                       masks), and stamping a 16x16 arrow into a text frame is what
+                       "a graphical mouse cursor over a text interface" was. */
+                    if (g_vid.mkind == VID_KIND_TEXT && !g_vid.in_vesa) {
+                        int ch = g_vid.cell_h ? g_vid.cell_h : VID_CELL_H;
+                        vdd_video_text_cursor(&g_vid, (int)(g_ms_x / VID_CELL_W), (int)(g_ms_y / ch),
+                                              (uint16_t)g_ms_tc_and, (uint16_t)g_ms_tc_xor);
+                    } else
+                        overlay_cursor((uint8_t *)g_vid.frame.pixels, g_vid.frame.w, g_vid.frame.h,
+                                       (int)g_vid.frame.stride, g_ms_x, g_ms_y);
+                }
                 vdd_video_frame_touch(&g_vid);               /* raster-split state + frame no. */
                 present_ddraw_snapshot(&g_pd, &g_vid.frame); /* consistent copy UNDER lock */
                 HOST_UNLOCK();
@@ -9120,6 +9185,7 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
         return 0;                        /* swallow the menu-mnemonic beep */
     case WM_KILLFOCUS:
         input_capture_set(h, 0);         /* never strand the user in a captured window */
+        host_release_modifiers();        /* ...nor the guest with Alt held forever     */
         return 0;
     case WM_ACTIVATE:
         /* ── RULE 5 (s69, user spec): GAINING FOCUS RE-CAPTURES, for a guest that asked
@@ -21569,6 +21635,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     g_vid.p3da_ring_on =
         (GetFileAttributesA(CFG_("pitlatch.flag")) != INVALID_FILE_ATTRIBUTES);
     g_vid.guest_pc = host_guest_pc;             /* so a VRAM watchpoint names a routine */
+    g_vid.bda = (uint8_t *)0x400;               /* the display's BDA fields (0449..0489) */
     g_vid_dev = vdd_video_device(&g_vid);
     vdd_bus_add(&g_bus, &g_vid_dev);
     /* ⚠ AFTER vdd_bus_add, NOT BEFORE. vdd_bus_add calls vdd_video_init, which
@@ -24836,6 +24903,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
       p = zput(p, " int16=[");
       { int k; for (k = 0; k < 4; ++k) { p = zput(p, "0x"); p = zhex(p, g_in.int16_calls[k]); p = zput(p, " "); } }
       p = zput(p, "] p60=0x");       p = zhex(p, g_in.p60_reads);
+      p = zput(p, " owed=0x");       p = zhex(p, g_in.sc_owed_served);   /* keys the BIOS arm served after a hook's port read */
       p = zput(p, " sc_left=0x");    p = zhex(p, (DWORD)vdd_input_sc_pending(&g_in));
       p = zput(p, " sc_push=0x");    p = zhex(p, g_in.sc_pushed);
       p = zput(p, " sc_drop=0x");    p = zhex(p, g_in.sc_dropped);
