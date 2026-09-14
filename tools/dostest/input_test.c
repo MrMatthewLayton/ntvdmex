@@ -149,6 +149,86 @@ int main(void)
     vdd_bus_deliver_int(&bus, 0x16, &r);
     CHECK(r.zf == 1, "int16/unknown: ZF=1, never a phantom key");
 
+    /* T9: ★ A GUEST THAT READS PORT 60h AND THEN CHAINS TO THE BIOS STILL GETS A KEY.
+     * QB.EXE 4.5's INT 09h hook (1DDB1h) does `in al,60h`, inspects the byte, and for
+     * every ordinary key runs `int 0EFh` -- the BIOS handler it saved. On an 8042 the
+     * BIOS's own `in al,60h` reads the SAME byte again. Ours had popped it, so the BIOS
+     * arm stored nothing and QBasic could not be typed into. */
+    { uint32_t v = 0;
+      fresh(&in, &bus);
+      vdd_input_push_scancode(&in, 0x1E);                      /* 'a' arrives         */
+      vdd_bus_io(&bus, 0x60, 1, 1, &v);                        /* the HOOK reads it   */
+      CHECK(v == 0x1E, "int09-chain: the guest hook reads 1E from port 60h");
+      CHECK(vdd_input_sc_pending(&in) == 0, "int09-chain: ...and the FIFO is now empty");
+      vdd_input_bios_consume(&in);                             /* it chains to the BIOS */
+      CHECK(vdd_input_pop(&in, &k) == 1 && k == 0x1E61,
+            "int09-chain: the BIOS arm still translates the byte the hook took (QB typing)");
+      CHECK(in.sc_owed_served == 1, "int09-chain: ...and counts that it did");
+      /* A second chain with nothing new must not re-serve the same byte. */
+      vdd_input_bios_consume(&in);
+      CHECK(vdd_input_pop(&in, &k) == 0, "int09-chain: an owed byte is served ONCE");
+      /* A hook that does NOT chain (Doom's) leaves nothing behind for a later key:
+         the next scancode supersedes the owed one, so one key press = one key. */
+      vdd_input_push_scancode(&in, 0x1F); vdd_bus_io(&bus, 0x60, 1, 1, &v);  /* 's', not chained */
+      vdd_input_push_scancode(&in, 0x20); vdd_input_bios_consume(&in);       /* 'd', BIOS path   */
+      CHECK(vdd_input_pop(&in, &k) == 1 && k == 0x2064, "int09-chain: a newer byte supersedes the owed one");
+      CHECK(vdd_input_pop(&in, &k) == 0, "int09-chain: ...and the un-chained 's' is not resurrected");
+      /* The break code of a key the hook read must not become a key either. */
+      vdd_input_push_scancode(&in, 0x9E); vdd_bus_io(&bus, 0x60, 1, 1, &v);
+      vdd_input_bios_consume(&in);
+      CHECK(vdd_input_pop(&in, &k) == 0, "int09-chain: an owed BREAK code stores nothing");
+    }
+
+    /* T10: THE FOUR BIOS COLUMNS -- Shift, Ctrl and ALT, per the IBM table. Alt was
+     * never consulted before, so Alt+F typed an 'f' where every DOS editor's menu bar
+     * expects 2100h. These are the exact codes editors bind. */
+    { fresh(&in, &bus);
+#define KEY(sc) (vdd_input_push_scancode(&in, (uint8_t)(sc)), vdd_input_bios_consume(&in))
+#define EXPECT(code, msg) CHECK(vdd_input_pop(&in, &k) == 1 && k == (code), msg)
+#define NOKEY(msg) CHECK(vdd_input_pop(&in, &k) == 0, msg)
+      KEY(0x38); KEY(0x21); KEY(0xA1); KEY(0xB8);              /* Alt+F               */
+      EXPECT(0x2100, "int09: Alt+F -> 2100h (a menu accelerator, NOT the letter f)");
+      KEY(0x38); KEY(0x3B); KEY(0xBB); KEY(0xB8);              /* Alt+F1              */
+      EXPECT(0x6800, "int09: Alt+F1 -> 6800h");
+      KEY(0x2A); KEY(0x3B); KEY(0xBB); KEY(0xAA);              /* Shift+F1            */
+      EXPECT(0x5400, "int09: Shift+F1 -> 5400h");
+      KEY(0x1D); KEY(0x3B); KEY(0xBB); KEY(0x9D);              /* Ctrl+F1             */
+      EXPECT(0x5E00, "int09: Ctrl+F1 -> 5E00h");
+      KEY(0x1D); KEY(0xE0); KEY(0x4B); KEY(0xE0); KEY(0xCB); KEY(0x9D);   /* Ctrl+Left */
+      EXPECT(0x7300, "int09: Ctrl+Left (E0 4B) -> 7300h (word left in every editor)");
+      KEY(0x38); KEY(0xE0); KEY(0x4B); KEY(0xE0); KEY(0xCB); KEY(0xB8);   /* Alt+Left  */
+      EXPECT(0x9B00, "int09: Alt+Left -> 9B00h (enhanced BIOS)");
+      KEY(0x1D); KEY(0x02); KEY(0x82); KEY(0x9D);              /* Ctrl+1              */
+      NOKEY("int09: Ctrl+1 stores NOTHING, as the BIOS does");
+      KEY(0x1D); KEY(0x0E); KEY(0x8E); KEY(0x9D);              /* Ctrl+Backspace      */
+      EXPECT(0x0E7F, "int09: Ctrl+Backspace -> 0E7Fh");
+      KEY(0x38); KEY(0x39); KEY(0xB9); KEY(0xB8);              /* Alt+Space           */
+      EXPECT(0x3920, "int09: Alt+Space -> 3920h (Alt does not silence Space)");
+      KEY(0x3A); KEY(0xBA);                                    /* CapsLock on         */
+      KEY(0x1E); KEY(0x9E);
+      EXPECT(0x1E41, "int09: CapsLock + a -> 'A'");
+      KEY(0x2A); KEY(0x1E); KEY(0x9E); KEY(0xAA);
+      EXPECT(0x1E61, "int09: CapsLock + Shift + a -> 'a' (Caps inverts Shift for letters)");
+      KEY(0x02); KEY(0x82);
+      EXPECT(0x0231, "int09: CapsLock leaves '1' alone");
+      KEY(0x3A); KEY(0xBA);                                    /* CapsLock off        */
+      KEY(0x47); KEY(0xC7);
+      EXPECT(0x4700, "int09: keypad 7 with NumLock off -> Home (4700h)");
+      KEY(0x45); KEY(0xC5);                                    /* NumLock on          */
+      KEY(0x47); KEY(0xC7);
+      EXPECT(0x4737, "int09: keypad 7 with NumLock on -> '7'");
+      KEY(0x2A); KEY(0x47); KEY(0xC7); KEY(0xAA);
+      EXPECT(0x4700, "int09: Shift undoes NumLock -> Home again");
+      KEY(0xE0); KEY(0x1C); KEY(0xE0); KEY(0x9C);              /* keypad Enter        */
+      EXPECT(0x1C0D, "int09: keypad Enter (E0 1C) -> 1C0Dh");
+      KEY(0x57); KEY(0xD7);
+      EXPECT(0x8500, "int09: F11 -> 8500h");
+      CHECK((bda[BDA_KB_FLAGS] & 0x0F) == 0, "int09: no modifier left held after all that");
+#undef KEY
+#undef EXPECT
+#undef NOKEY
+    }
+
     printf("\n%d checks, %d failed\n", total, fails);
     return fails ? 1 : 0;
 }

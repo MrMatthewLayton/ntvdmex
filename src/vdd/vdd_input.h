@@ -73,6 +73,18 @@ typedef struct input_state {
     uint8_t  kbd_typematic_set;    /* the guest set a rate at least once          */
     uint8_t  kbd_typematic_byte;   /* the last rate/delay byte it asked for       */
     uint8_t  sc_last;          /* last byte handed out on IN 0x60 (re-read)       */
+    /* ── ★ THE BYTE THE GUEST TOOK FIRST IS STILL THE BIOS'S TO TRANSLATE. ────────
+         The commonest INT 09h hook of the era reads port 0x60 ITSELF, looks at the
+         scancode, and then chains to the BIOS handler it displaced (QB.EXE 4.5 does
+         exactly this: `in al,60h` at 1DDC8h, then `int 0EFh` = the saved vector).
+         On an 8042 that is fine: the output buffer keeps presenting the same byte
+         until the next one is loaded, so the BIOS's own `in al,60h` sees it again.
+         Our FIFO POPPED on the guest's read, so the BIOS arm found nothing, stored
+         nothing, and every key typed into QBasic vanished -- "I couldn't type".
+         This flag is that byte's pending translation: set by a port read, cleared
+         when the BIOS arm consumes it or a newer byte arrives. */
+    uint8_t  sc_bios_owed;
+    uint32_t sc_owed_served;   /* BIOS arm keys served from the guest-read byte   */
 } input_state;
 
 /* BIOS ring ops, all operating on the guest's buffer at 0040:001E.
