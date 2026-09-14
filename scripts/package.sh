@@ -11,7 +11,10 @@
 #   install.bat uninstall.bat status.bat smoke.bat README.txt
 #   bm\ntvdmhost.exe  bm\selftest.com
 #   cfg\  out\                 (empty; the host creates them anyway)
-#   guest\wow\*                (the Win16 system files; private copies)
+#
+# No Win16 system files are bundled: the WOW half runs XP's OWN krnl386/gdi/user
+# from system32 (the -a argument of the WOW launch names them), which every XP
+# has. guest/wow in the repo is a copy of those for reading, not for shipping.
 #
 # Text files are written CRLF: cmd.exe mis-parses LF-only batch files (labels and
 # goto break), which took the rig's watcher down once. The host binary is checked
@@ -32,15 +35,10 @@ date=$(date +%Y%m%d)
 name="ntvdmex-$date-$sha"
 stage="$ROOT/dist/$name"
 rm -rf "$stage"
-mkdir -p "$stage/bm" "$stage/cfg" "$stage/out" "$stage/guest/wow"
+mkdir -p "$stage/bm" "$stage/cfg" "$stage/out"
 
 cp "$HOST" "$stage/bm/ntvdmhost.exe"
 cp "$ROOT/tools/dostest/selftest.com" "$stage/bm/selftest.com"
-if ls "$ROOT/guest/wow"/* >/dev/null 2>&1; then
-    cp "$ROOT/guest/wow"/* "$stage/guest/wow/"
-else
-    echo "WARNING: guest/wow is empty -- Win16 programs will use XP's own system files" >&2
-fi
 for f in install.bat uninstall.bat status.bat smoke.bat README.txt; do
     perl -pe 's/\r?\n/\r\n/' "$ROOT/package/$f" > "$stage/$f"
 done

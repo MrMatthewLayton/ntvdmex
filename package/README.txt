@@ -29,7 +29,6 @@ FILES
   bm\              the program itself
   cfg\             optional settings files; empty means all defaults
   out\             the log of the LAST run (ntvdmhost.log) and screenshots
-  guest\wow\       the 16-bit Windows system files Win16 programs need
 
 IF SOMETHING GOES WRONG
   - Run status.bat. It says whether NTVDMEX is installed and shows the key
@@ -48,6 +47,8 @@ WHAT TO EXPECT (tested by hand on real hardware before this build)
   MS-DOS: COMMAND.COM, DOOM (with sound and mouse), Skyroads, Lemmings, the
   QBasic and EDIT text-mode editors (typing, menus, mouse).
   Win16: Notepad and Paint from Windows 3.11 (Paint draws and saves files).
+  Win16 programs use XP's own 16-bit system files from system32; nothing is
+  bundled. Bring the programs themselves (NOTEPAD.EXE, PBRUSH.EXE ...).
   Programs outside that list may or may not work; the log says why when they
   do not.
 

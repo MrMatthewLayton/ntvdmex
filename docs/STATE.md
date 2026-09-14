@@ -304,6 +304,19 @@ and matches the 6.22 oracle row for row (session 53)** — but `MEM /C` still re
       has focus when it is released, so Alt+Tab away left the guest with Alt down.
       `WM_KILLFOCUS` now releases the modifiers we pushed.
 
+   **Evening addendum — THE 17th IS A PORTABLE ZIP (see `docs/PLAN-17th.md`).**
+   Done today: `NTVDMEX_DIR` is derived from the host's own path (parent of `bm\`;
+   rig-verified: `STAGE0: root=[...\ntvdmex\]`), `package/` holds install/uninstall/
+   status/smoke `.bat` + README, `scripts/package.sh` builds `dist/ntvdmex-<date>-<sha>.zip`
+   (host + selftest.com + empty cfg\ out\; NO Win16 system files -- the WOW half uses
+   XP's own from system32). A copy sits on the share at `dist\` for the by-hand
+   fresh-folder install test. Also today: mouse callbacks delivered at our stubs, the
+   return stub moved 0x5C->0x12 (0x5C was `DPMI_RAW2PM_OFF`, planted later -- "DOS
+   terminate on the first mouse move"), 8042 transfer hold (900 us), Win key never
+   forwarded, LASTDRIVE=26 + CDS in a top-of-chain block + real AH=0Eh/19h. PCem 17
+   (macOS app + source) is under `./pcem` (gitignored) for the BIOS/VGA oracle.
+   Rig = `b85a8a53…`; rollback = `bf9534a9…` (f79d954). Branch pushed.
+
    **▶ NEXT (needs the user):** deploy on their go, then by hand in QB.EXE: type in the
    edit window; Alt then F opens File; click File in the menu bar; the pointer is an
    inverted cell; Options > Display for 50 lines (`1112h`). Then edit.com (XP's
