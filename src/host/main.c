@@ -5769,6 +5769,33 @@ static volatile LONG g_ms_mick_x = 8, g_ms_mick_y = 16, g_ms_dbl_thresh = 64;
      leaving it to be re-diagnosed from behaviour. */
 static volatile LONG g_ms_evt_mask, g_ms_evt_seg, g_ms_evt_off;
 static DWORD         g_ms_evt_installs;
+/* ── ★ ...AND NOW IT IS CALLED (s71). ──────────────────────────────────────────────
+     QB.EXE, edit.com and every other Microsoft text-mode UI take their mouse THROUGH
+     THIS HANDLER: they install it with 0Ch and then poll their own flags, calling 03h
+     only a handful of times per run (measured: 20 calls in a whole QBasic session).
+     With the handler stored and never invoked, the pointer moved and no click ever
+     reached the program -- "none of the menus worked".
+     The driver calls the handler from its own interrupt context with AX = the event
+     bits that fired (bit 0 motion, 1/2 left down/up, 3/4 right, 5/6 middle), BX = the
+     button state, CX/DX = the virtual position, SI/DI = the mickey counts, DS = the
+     driver's data segment; the handler returns with RETF. We do it at the same place
+     and under the same gate as an injected IRQ: at an exec-loop boundary, interrupts
+     enabled, not inside our own timer/keyboard stubs. The interrupted context is saved
+     HOST-SIDE in full, a far return to DOS_HDLR_SEG:MS_CB_RET_OFF is pushed, and the
+     BOP there restores the context -- so the guest's stack carries only the return
+     address and nothing we save can be corrupted by the handler. One in flight at a
+     time; a handler that never returns is timed out and counted, not waited for.
+   ⚠ V86 only. A protected-mode client's handler lives at a selector:offset and needs
+     the DPMI callback path; those are counted (cb_pm) so the gap stays visible. */
+#define MS_CB_RET_OFF   0x005C          /* DOS_HDLR_SEG:005C = BOP MS_CB_BOP ; iret   */
+#define MS_CB_BOP       0x35
+#define MS_CB_TIMEOUT_MS 2000u
+static volatile LONG g_ms_evt_pend;     /* event bits raised since the last callback */
+static int    g_ms_cb_active;           /* a callback is in flight                    */
+static DWORD  g_ms_cb_since;            /* GetTickCount()|1 when it went in flight     */
+static DWORD  g_ms_cb_inj, g_ms_cb_done, g_ms_cb_lost, g_ms_cb_pm, g_ms_cb_stray;
+static struct { DWORD eax, ebx, ecx, edx, esi, edi, ebp, esp, eip, efl, cs, ds, es, ss; } g_ms_cb_saved;
+static void mouse_evt_raise(LONG bits) { (void)__sync_fetch_and_or((LONG *)&g_ms_evt_pend, bits); }
 
 /* Record a button transition. Normally UI-thread only, and the position is taken
    from the live driver position rather than the message's client coordinates because
@@ -5784,9 +5811,11 @@ static void mouse_btn_edges(LONG prev, LONG now)
         if ((prev ^ now) & bit) {
             ++g_ms_edges;
             if (now & bit) { InterlockedIncrement(&g_ms_press_n[i]);
-                             g_ms_press_x[i] = g_ms_x; g_ms_press_y[i] = g_ms_y; }
+                             g_ms_press_x[i] = g_ms_x; g_ms_press_y[i] = g_ms_y;
+                             mouse_evt_raise(1L << (2 * i + 1)); }       /* press event  */
             else           { InterlockedIncrement(&g_ms_rel_n[i]);
-                             g_ms_rel_x[i]   = g_ms_x; g_ms_rel_y[i]   = g_ms_y; }
+                             g_ms_rel_x[i]   = g_ms_x; g_ms_rel_y[i]   = g_ms_y;
+                             mouse_evt_raise(1L << (2 * i + 2)); }       /* release event */
         }
     }
 }
@@ -6255,6 +6284,72 @@ static void mouse_int33(volatile BYTE *tib, int src)
          an answer. g_ms_i33ax already records which AX values and from which sites. */
     default: ++g_ms_i33_unimpl; break;
     }
+}
+
+/* Deliver pending mouse events to the guest's INT 33h handler -- see g_ms_evt_pend.
+   Called at the exec-loop boundary, right after the IRQ gates, V86 thread only. */
+static void mouse_cb_try(volatile BYTE *tib)
+{
+    LONG mask = g_ms_evt_mask, pend;
+    DWORD cs, ip, fl, ss, sp;
+    if (g_ms_cb_active) {                          /* a handler that never came back */
+        if ((DWORD)(GetTickCount() - (g_ms_cb_since & ~1u)) > MS_CB_TIMEOUT_MS) {
+            g_ms_cb_active = 0; ++g_ms_cb_lost;
+        }
+        return;
+    }
+    if (!mask || !(g_ms_evt_pend & mask)) return;
+    if ((g_ms_evt_seg | g_ms_evt_off) == 0) return;
+    if (g_dpmi_pm) {                               /* PM handler: not this path (yet) */
+        InterlockedExchange(&g_ms_evt_pend, 0); ++g_ms_cb_pm; return;
+    }
+    cs = VDM_REG(tib, VTIB_CS) & 0xFFFF; ip = VDM_REG(tib, VTIB_EIP) & 0xFFFF;
+    ss = VDM_REG(tib, VTIB_SS) & 0xFFFF; sp = VDM_REG(tib, VTIB_ESP) & 0xFFFF;
+    if (cs == DOS_HDLR_SEG) {
+        if ((ip >= 0x34 && ip < 0x3A) || (ip >= 0x4C && ip < 0x50)) return;  /* our INT 08h/09h */
+        fl = peekw((ss << 4) + ((sp + 4) & 0xFFFF));    /* the FLAGS the stub IRETs to  */
+    } else fl = VDM_REG(tib, VTIB_EFLAGS);
+    if (!if_or_vif(fl)) return;                    /* interrupts off: like an IRQ, wait */
+    pend = InterlockedExchange(&g_ms_evt_pend, 0) & mask;
+    if (!pend) return;
+    /* Save the whole interrupted context host-side. */
+    g_ms_cb_saved.eax = VDM_REG(tib, VTIB_EAX); g_ms_cb_saved.ebx = VDM_REG(tib, VTIB_EBX);
+    g_ms_cb_saved.ecx = VDM_REG(tib, VTIB_ECX); g_ms_cb_saved.edx = VDM_REG(tib, VTIB_EDX);
+    g_ms_cb_saved.esi = VDM_REG(tib, VTIB_ESI); g_ms_cb_saved.edi = VDM_REG(tib, VTIB_EDI);
+    g_ms_cb_saved.ebp = VDM_REG(tib, VTIB_EBP); g_ms_cb_saved.esp = VDM_REG(tib, VTIB_ESP);
+    g_ms_cb_saved.eip = VDM_REG(tib, VTIB_EIP); g_ms_cb_saved.efl = VDM_REG(tib, VTIB_EFLAGS);
+    g_ms_cb_saved.cs  = VDM_REG(tib, VTIB_CS);  g_ms_cb_saved.ds  = VDM_REG(tib, VTIB_DS);
+    g_ms_cb_saved.es  = VDM_REG(tib, VTIB_ES);  g_ms_cb_saved.ss  = VDM_REG(tib, VTIB_SS);
+    /* The far return the handler's RETF will take, then the call itself. */
+    sp = (sp - 2) & 0xFFFF; pokew((ss << 4) + sp, DOS_HDLR_SEG);
+    sp = (sp - 2) & 0xFFFF; pokew((ss << 4) + sp, MS_CB_RET_OFF);
+    VDM_SET16(tib, VTIB_ESP, (WORD)sp);
+    VDM_SET16(tib, VTIB_EAX, (WORD)pend);
+    VDM_SET16(tib, VTIB_EBX, (WORD)g_ms_btn);
+    VDM_SET16(tib, VTIB_ECX, (WORD)i33_clampx(i33_vx(g_ms_x)));
+    VDM_SET16(tib, VTIB_EDX, (WORD)i33_clampy(i33_vy(g_ms_y)));
+    VDM_SET16(tib, VTIB_ESI, 0);
+    VDM_SET16(tib, VTIB_EDI, 0);
+    VDM_SET16(tib, VTIB_DS,  DOS_HDLR_SEG);        /* "the driver's DS"              */
+    VDM_SET16(tib, VTIB_CS,  (WORD)g_ms_evt_seg);
+    VDM_SET16(tib, VTIB_EIP, (WORD)g_ms_evt_off);
+    g_ms_cb_active = 1; g_ms_cb_since = GetTickCount() | 1;
+    ++g_ms_cb_inj;
+}
+/* The BOP at DOS_HDLR_SEG:MS_CB_RET_OFF: the handler RETF'd here, put everything back. */
+static void mouse_cb_return(volatile BYTE *tib)
+{
+    if (!g_ms_cb_active) {                         /* not ours to unwind: step over  */
+        ++g_ms_cb_stray; VDM_REG(tib, VTIB_EIP) += 3; return;
+    }
+    VDM_REG(tib, VTIB_EAX) = g_ms_cb_saved.eax; VDM_REG(tib, VTIB_EBX) = g_ms_cb_saved.ebx;
+    VDM_REG(tib, VTIB_ECX) = g_ms_cb_saved.ecx; VDM_REG(tib, VTIB_EDX) = g_ms_cb_saved.edx;
+    VDM_REG(tib, VTIB_ESI) = g_ms_cb_saved.esi; VDM_REG(tib, VTIB_EDI) = g_ms_cb_saved.edi;
+    VDM_REG(tib, VTIB_EBP) = g_ms_cb_saved.ebp; VDM_REG(tib, VTIB_ESP) = g_ms_cb_saved.esp;
+    VDM_REG(tib, VTIB_EIP) = g_ms_cb_saved.eip; VDM_REG(tib, VTIB_EFLAGS) = g_ms_cb_saved.efl;
+    VDM_REG(tib, VTIB_CS)  = g_ms_cb_saved.cs;  VDM_REG(tib, VTIB_DS)  = g_ms_cb_saved.ds;
+    VDM_REG(tib, VTIB_ES)  = g_ms_cb_saved.es;  VDM_REG(tib, VTIB_SS)  = g_ms_cb_saved.ss;
+    g_ms_cb_active = 0; ++g_ms_cb_done;
 }
 
 /* Classic arrow cursor: 'o' = black outline (index 0), 'X' = white fill (15),
@@ -8755,6 +8850,11 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
                 mq = zput(mq, " p0=");    mq = zhex(mq, (DWORD)g_ms_press_n[0]);
                 mq = zput(mq, " r0=");    mq = zhex(mq, (DWORD)g_ms_rel_n[0]);
                 mq = zput(mq, " evt=");   mq = zhex(mq, g_ms_evt_installs);
+                mq = zput(mq, " cb_inj=");  mq = zhex(mq, g_ms_cb_inj);
+                mq = zput(mq, " cb_done="); mq = zhex(mq, g_ms_cb_done);
+                mq = zput(mq, " cb_lost="); mq = zhex(mq, g_ms_cb_lost);
+                mq = zput(mq, " cb_pm=");   mq = zhex(mq, g_ms_cb_pm);
+                mq = zput(mq, " cb_stray="); mq = zhex(mq, g_ms_cb_stray);
                 mq = zput(mq, " shape="); mq = zhex(mq, g_ms_shape_sets);
                 mq = zput(mq, " badptr=");mq = zhex(mq, g_ms_state_badptr);
                 mq = zput(mq, " unimpl=");mq = zhex(mq, g_ms_i33_unimpl);
@@ -9309,6 +9409,7 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
                 LONG ny = g_ms_y + (LONG)ri.data.mouse.lLastY;
                 if (nx < 0) nx = 0; else if (nx >= (LONG)g_vid.frame.w) nx = (LONG)g_vid.frame.w - 1;
                 if (ny < 0) ny = 0; else if (ny >= (LONG)g_vid.frame.h) ny = (LONG)g_vid.frame.h - 1;
+                if (nx != g_ms_x || ny != g_ms_y) mouse_evt_raise(1);   /* motion event */
                 InterlockedExchange(&g_ms_x, nx); InterlockedExchange(&g_ms_y, ny);
             }
         }
@@ -9357,7 +9458,8 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
           else if (fx >= fw) fx = fw - 1;
           if (fy < 0) fy = 0;
           else if (fy >= fh) fy = fh - 1;
-          if (!g_captured) { InterlockedExchange(&g_ms_x, fx);   /* captured: WM_INPUT owns it */
+          if (!g_captured) { if (fx != g_ms_x || fy != g_ms_y) mouse_evt_raise(1);  /* motion */
+                             InterlockedExchange(&g_ms_x, fx);   /* captured: WM_INPUT owns it */
                              InterlockedExchange(&g_ms_y, fy); } }
         if (wp & MK_LBUTTON) b |= 1;
         if (wp & MK_RBUTTON) b |= 2;
@@ -21196,6 +21298,9 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     *(volatile WORD *)(0x1C * 4)     = 0x003A;              /* IVT[0x1C].offset    */
     *(volatile WORD *)(0x1C * 4 + 2) = DOS_HDLR_SEG;        /* IVT[0x1C].segment   */
     for (i = 0; i < sizeof(bop09); ++i) hdlr[0x4C + i] = bop09[i];  /* INT 09h default iret (0x4C-0x4F) */
+    /* INT 33h event-handler return: the guest's handler RETFs here (see mouse_cb_try). */
+    hdlr[MS_CB_RET_OFF + 0] = VDM_BOP0; hdlr[MS_CB_RET_OFF + 1] = VDM_BOP1;
+    hdlr[MS_CB_RET_OFF + 2] = MS_CB_BOP; hdlr[MS_CB_RET_OFF + 3] = 0xCF;
     /* DEFAULT DEVICE-IRQ HANDLERS. A real BIOS points the unused hardware vectors at a
        handler that just acknowledges and returns; we had them pointing at whatever junk was
        in the IVT, which on this box read F000:A390 -- unowned ROM. That was harmless only so
@@ -22335,6 +22440,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             }
         }
         v86_deliver_dev_irq(tib);   /* see the helper: shared with the nested 0301/0302 loop */
+        mouse_cb_try(tib);          /* INT 33h 0Ch events, under the same gate as an IRQ */
         /* Mirror the guest's IF into EFLAGS.VIF before handing the context back. On VME
            hardware the kernel's deliverability test reads VIF, and VIF is lost every time
            we synthesise an interrupt frame ourselves -- so a guest that has interrupts
@@ -22610,9 +22716,24 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             VDM_REG(tib, VTIB_EIP) += 3;
             continue;
         }
+        if ((VDM_REG(tib, VTIB_EVENT_INFO) & 0xFF) == MS_CB_BOP) {   /* INT 33h handler returned */
+            mouse_cb_return(tib);
+            continue;
+        }
         if ((VDM_REG(tib, VTIB_EVENT_INFO) & 0xFF) == 0x09) {   /* INT 09h: BIOS keyboard */
             HOST_LOCK();
             vdd_input_bios_consume(&g_in);      /* take the byte, re-arm if more queued */
+            /* ── ★ THE BIOS INT 09h ENDS WITH AN EOI, AND SO MUST THIS. ──────────────────
+                 A guest that hooks INT 09h keeps IRQ1 in service until it EOIs (strict
+                 acknowledge above). QB.EXE's hook EOIs only the keys it swallows; for
+                 every ordinary key it CHAINS to the BIOS handler (`int 0EFh`) and leaves
+                 the EOI to it -- as the real one does with `mov al,20h / out 20h,al`.
+                 This arm never sent one, so IRQ1's in-service bit stayed set after the
+                 first key and no keyboard interrupt was ever delivered again: measured
+                 keyirq=1 for a whole QBasic run of ~19 key presses. Same shape as the
+                 INT 08h arm's EOI below, for the same reason. Harmless when the guest
+                 EOI'd before chaining: the bit is already clear. */
+            vdd_pic_eoi(&g_pic, 1);
             HOST_UNLOCK();
             VDM_REG(tib, VTIB_EIP) += 3;        /* -> the IRET */
             continue;
