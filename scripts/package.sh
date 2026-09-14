@@ -57,4 +57,4 @@ mkdir -p "$ROOT/dist"
 rm -f "$ROOT/dist/$name.zip"
 ( cd "$ROOT/dist" && zip -q -r "$name.zip" "$name" )
 echo "wrote dist/$name.zip"
-( cd "$ROOT/dist" && unzip -l "$name.zip" | tail -n +4 | sed -e "$d" -e "$d" )
+( cd "$ROOT/dist" && unzip -l "$name.zip" | tail -n +4 | sed -e '$d' -e '$d' )

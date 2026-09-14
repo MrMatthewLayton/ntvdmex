@@ -36,7 +36,10 @@ BEFORE=$(mtime "$RESULT")
 
 # The watcher reads cmd.txt with `for /f ... in ('type cmd.txt')`, so it wants a
 # CRLF-terminated line. Write via printf, not a text-mode tool that would strip the CR.
-printf '%s %s\r\n' "$TARGET" "$ARGS" > "$SH/cmd.txt"
+# ATOMIC: the watcher polls the share and can see a freshly created, still-empty
+# cmd.txt (SMB create and write are two operations). An empty read is "no target",
+# the run silently becomes result_none.log, and the queue reports a timeout.
+printf '%s %s\r\n' "$TARGET" "$ARGS" > "$SH/cmd.tmp" && mv "$SH/cmd.tmp" "$SH/cmd.txt"
 echo "queued: $TARGET $ARGS   (waiting up to ${TIMEOUT}s for $(basename "$RESULT"))"
 
 # Phase 1: the watcher consumes cmd.txt. If it never does, the watcher is dead.
