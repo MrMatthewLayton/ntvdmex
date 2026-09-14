@@ -243,10 +243,25 @@ and matches the 6.22 oracle row for row (session 53)** — but `MEM /C` still re
 
    ## ★★★★ SESSION 71 (2026-09-14, morning) — **THE TEXT-MODE APPLICATION CLASS: QBASIC'S THREE SYMPTOMS WERE SIX HOST DEFECTS, ALL OFF-VM TESTABLE.**
 
-   **HEAD = this block's commit, NOT pushed. Battery green (input 60, video 162; full
-   suite green). Host builds (`build/ntvdmhost.exe` md5 `f3ace9fe…`). ⚠ NOT DEPLOYED:
-   the rig still runs the user-confirmed `f79d954`; a deploy needs the user's explicit go.
-   Deadline: the 17th — three days.**
+   **HEAD `b7ccd6e`, NOT pushed. Battery green (input 60, video 162; full suite green).
+   ★ DEPLOYED with the user's go: rig = `836e9440…`; rollback `bm\ntvdmhost_prev.exe` =
+   the confirmed `f79d954` (`bf9534a9…`). Awaiting the user's QB re-test. Deadline: the
+   17th — three days.**
+
+   **Midday addendum — the user's "still not working" was measured on the OLD build
+   (never deployed), and its log named two more defects, now fixed in `b7ccd6e`:**
+   7. **IRQ1 stayed in service after the first key** (`keyirq=1` across ~19 presses). QB's
+      hook EOIs only the keys it swallows and chains to the BIOS for the rest, leaving the
+      EOI to the BIOS handler; our INT 09h BOP arm never sent one. It does now, exactly as
+      the INT 08h arm EOIs IRQ0.
+   8. **The INT 33h event handler (0Ch) is now CALLED** (`mouse_cb_try`; return stub BOP
+      0x35 at `DOS_HDLR_SEG:005C`; context saved host-side; one in flight; 2 s timeout;
+      PM handlers counted as `cb_pm`, not called). QB called 03h twenty times in a whole
+      run — Microsoft's text UIs take all their mouse input through the callback.
+   ⚠ Also seen: old-build QB detected CGA (zero BDA video bytes) and sat in its
+   snow-avoidance `cli`/`3DA`-per-character loop. ⚠ `irq0_inj=` counts only exec-loop
+   deliveries; the async path delivered the rest (`gap_ms[]` showed a healthy 18 Hz) —
+   do not read a low `irq0=` as a stalled timer.
 
    The user's report on QB.EXE 4.5 (`demos/qb45` on the share): a graphical mouse
    pointer drawn over a text screen, no menu opened, and nothing could be typed. None
