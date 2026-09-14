@@ -5015,6 +5015,16 @@ static void host_key_typematic_release(uint8_t sc, int ext)
 }
 
 /* Pumped from both threads; cheap and lock-free until it actually fires. */
+/* The 8042 presents the next queued scancode only after the keyboard's transfer time
+   (see KBD_XFER_US in vdd_input.h). Nothing raises IRQ1 for it unless someone looks, so
+   both pumps look. Lock-free when nothing is queued or an interrupt is already up. */
+static void host_key_present(void)
+{
+    if (g_in.sc_head == g_in.sc_tail || g_in.sc_irq_up) return;   /* racy, benign */
+    HOST_LOCK();
+    vdd_input_poll(&g_in);
+    HOST_UNLOCK();
+}
 static void host_key_typematic(void)
 {
     LARGE_INTEGER n;
@@ -8923,6 +8933,7 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
         g_pit.frame_us = 0;
         host_pit_sync();
         host_key_typematic();       /* pumped from BOTH threads, like the PIT */
+        host_key_present();
         HOST_LOCK();
         vdd_bus_frame(&g_bus);          /* tick PIT + render into g_vid.frame       */
         /* ── THE REAL PC SPEAKER, SAMPLED HERE AND DRIVEN BELOW. ─────────────────
@@ -21787,6 +21798,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
        program reading 0040:001A can see them. V86 low memory is mapped in our address
        space, so the BDA is addressable directly. */
     g_in.bda = (uint8_t *)0x400;
+    g_in.time_us = host_time_us;                /* the keyboard's transfer time is real time */
     g_in_dev = vdd_input_device(&g_in);
     vdd_bus_add(&g_bus, &g_in_dev);             /* keyboard: claims INT 16h      */
     /* ── ★★ THE BDA's PORT BASE-ADDRESS TABLE, WHICH WE HAD LEFT AT ZERO. (GH #128) ──
@@ -22386,6 +22398,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         host_pit_sync();
         opl_pump_time();            /* keep the OPL timers current for the guest */
         host_key_typematic();       /* the keyboard repeats even when the UI stalls */
+        host_key_present();         /* ...and presents the next byte after its transfer time */
         /* Deliver a pending PIT IRQ0 as INT 08h when the guest's main-line
            interrupts are enabled. We regain control at event boundaries, almost
            always inside a BOP stub (CS == DOS_HDLR_SEG) where the LIVE IF is the
@@ -23807,7 +23820,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                             kq = zput(kq, " app32=");      kq = zhex(kq, (DWORD)app);
                             kq = zput(kq, " done=");       kq = zhex(kq, (DWORD)done1);
                             kq = zput(kq, " cs=0x");       kq = zhex(kq, VDM_REG(tib, VTIB_CS) & 0xFFFF);
-                            kq = zput(kq, " scleft=");     kq = zhex(kq, (DWORD)vdd_input_sc_pending(&g_in));
+                            kq = zput(kq, " scleft=");     kq = zhex(kq, (DWORD)vdd_input_sc_queued(&g_in));
                             kq = zput(kq, "\r\n"); log_append(LOG_PATH, kb2, kq); serial_out(kb2, kq);
                         }
                     }
@@ -25036,7 +25049,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
       { int k; for (k = 0; k < 4; ++k) { p = zput(p, "0x"); p = zhex(p, g_in.int16_calls[k]); p = zput(p, " "); } }
       p = zput(p, "] p60=0x");       p = zhex(p, g_in.p60_reads);
       p = zput(p, " owed=0x");       p = zhex(p, g_in.sc_owed_served);   /* keys the BIOS arm served after a hook's port read */
-      p = zput(p, " sc_left=0x");    p = zhex(p, (DWORD)vdd_input_sc_pending(&g_in));
+      p = zput(p, " sc_left=0x");    p = zhex(p, (DWORD)vdd_input_sc_queued(&g_in));
+      p = zput(p, " sc_held=0x");    p = zhex(p, g_in.sc_held_reads);   /* re-reads inside the transfer hold */
       p = zput(p, " sc_push=0x");    p = zhex(p, g_in.sc_pushed);
       p = zput(p, " sc_drop=0x");    p = zhex(p, g_in.sc_dropped);
       /* sc_hi is the deepest the 32-byte FIFO ever got; pit_clamp counts catch-up

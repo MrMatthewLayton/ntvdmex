@@ -15,6 +15,11 @@ static int total = 0, fails = 0;
 /* Stand-in for guest segment 0x40. The ring lives in the GUEST's BIOS data area now, so a
    test that leaves this NULL is testing nothing at all -- every push would be discarded. */
 static uint8_t bda[0x100];
+/* A fake clock for the keyboard transfer-time tests (T11), and an IRQ counter. */
+static uint64_t g_fake_us = 0;
+static uint64_t fake_clock(void) { return g_fake_us; }
+static uint32_t g_irq1_n = 0;
+static void count_irq(void *ctx, uint8_t irq) { if (irq == 1) ++*(uint32_t *)ctx; }
 
 static void fresh(input_state *in, vdd_bus *bus)
 {
@@ -227,6 +232,51 @@ int main(void)
 #undef KEY
 #undef EXPECT
 #undef NOKEY
+    }
+
+    /* T11: ★ THE KEYBOARD'S TRANSFER TIME -- two reads in one handler see ONE byte.
+     * QB.EXE layers two INT 09h hooks and then chains the BIOS; all three read port 60h
+     * for the same interrupt. With bytes already queued our FIFO handed each a different
+     * one. With a clock the next byte is held for KBD_XFER_US after a pop, exactly as the
+     * keyboard cannot send while the 8042's buffer is full. */
+    { uint32_t v = 0; int irqs;
+      fresh(&in, &bus);
+      in.time_us = fake_clock; g_fake_us = 1000000;
+      vdd_bus_set_sinks(&bus, count_irq, &g_irq1_n, 0, 0); g_irq1_n = 0;
+      vdd_input_push_scancode(&in, 0x38);                      /* Alt make            */
+      vdd_input_push_scancode(&in, 0x21);                      /* F make              */
+      vdd_input_push_scancode(&in, 0xA1);                      /* F break             */
+      vdd_input_push_scancode(&in, 0xB8);                      /* Alt break           */
+      CHECK(g_irq1_n == 1, "hold: four bytes queued at once raise ONE interrupt");
+      vdd_bus_io(&bus, 0x60, 1, 1, &v);                        /* hook 1 reads        */
+      CHECK(v == 0x38, "hold: the first hook reads 38 (Alt make)");
+      vdd_bus_io(&bus, 0x60, 1, 1, &v);                        /* hook 2 re-reads     */
+      CHECK(v == 0x38 && in.sc_held_reads == 1, "hold: the second hook reads the SAME byte (was 21: the sequence scrambled)");
+      vdd_bus_io(&bus, 0x64, 1, 1, &v);
+      CHECK((v & 1) == 0, "hold: OBF reads clear while the keyboard is still sending the next byte");
+      vdd_input_bios_consume(&in);                             /* BIOS chained        */
+      CHECK(vdd_input_pop(&in, &k) == 0 && (bda[BDA_KB_FLAGS] & 0x08),
+            "hold: the chained BIOS translates the owed 38 -> Alt flag set, no key, FIFO untouched");
+      CHECK(vdd_input_sc_queued(&in) == 3, "hold: three bytes still queued");
+      irqs = (int)g_irq1_n;
+      vdd_input_poll(&in);
+      CHECK((int)g_irq1_n == irqs, "hold: no new interrupt before the transfer time passes");
+      g_fake_us += KBD_XFER_US;
+      vdd_input_poll(&in);
+      CHECK((int)g_irq1_n == irqs + 1, "hold: the transfer time passes -> IRQ1 for the next byte");
+      vdd_bus_io(&bus, 0x64, 1, 1, &v);
+      CHECK((v & 1) == 1, "hold: ...and OBF is set again");
+      vdd_bus_io(&bus, 0x60, 1, 1, &v);
+      CHECK(v == 0x21, "hold: the next interrupt's read is 21 (F make)");
+      vdd_input_bios_consume(&in);
+      CHECK(vdd_input_pop(&in, &k) == 1 && k == 0x2100, "hold: ...which the chained BIOS turns into Alt+F = 2100h");
+      /* Drain the rest at the keyboard's pace. */
+      g_fake_us += KBD_XFER_US; vdd_input_poll(&in); vdd_bus_io(&bus, 0x60, 1, 1, &v); vdd_input_bios_consume(&in);
+      g_fake_us += KBD_XFER_US; vdd_input_poll(&in); vdd_bus_io(&bus, 0x60, 1, 1, &v); vdd_input_bios_consume(&in);
+      CHECK(v == 0xB8 && (bda[BDA_KB_FLAGS] & 0x08) == 0 && vdd_input_sc_queued(&in) == 0,
+            "hold: Alt break arrives last, in order, and clears the flag");
+      CHECK(g_irq1_n == 4, "hold: exactly one interrupt per byte");
+      in.time_us = 0; vdd_bus_set_sinks(&bus, 0, 0, 0, 0);
     }
 
     printf("\n%d checks, %d failed\n", total, fails);

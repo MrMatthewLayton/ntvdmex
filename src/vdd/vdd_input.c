@@ -72,6 +72,39 @@ int vdd_input_peek(input_state *st, uint16_t *key)
    their interrupts altogether -- so E0-prefixed keys (every arrow) never arrived, and a
    key's BREAK code could be stranded in the FIFO, leaving the game convinced it was still
    held. That is exactly "arrows do nothing, and space sticks on after you let go". */
+/* Is the byte at the head of the FIFO presented in the output buffer yet? */
+static int sc_avail(const input_state *st)
+{
+    if (st->sc_head == st->sc_tail) return 0;
+    if (st->time_us && st->time_us() < st->sc_hold_until) return 0;
+    return 1;
+}
+/* Take the head byte out of the output buffer: it becomes the re-read value, the
+   BIOS arm is owed it, and the keyboard starts sending the next one (the hold). */
+static uint8_t sc_pop(input_state *st)
+{
+    uint8_t sc = st->sc_buf[st->sc_tail];
+    st->sc_tail = next(st->sc_tail);
+    st->sc_last = sc;
+    st->sc_irq_up = 0;
+    if (st->time_us) st->sc_hold_until = st->time_us() + KBD_XFER_US;
+    return sc;
+}
+/* Raise IRQ1 for the head byte if it is presented and nobody has announced it. */
+void vdd_input_poll(input_state *st)
+{
+    if (st->sc_irq_up || !sc_avail(st)) return;
+    st->sc_irq_up = 1;
+    st->sc_bios_owed = 0;       /* the buffer now holds THIS byte; the old one is gone */
+    if (st->bus) vdd_raise_irq(st->bus, 1);
+}
+int vdd_input_sc_queued(const input_state *st)
+{
+    int depth = st->sc_head - st->sc_tail;
+    if (depth < 0) depth += (int)VDD_KBD_SIZE;
+    return depth;
+}
+
 void vdd_input_push_scancode(input_state *st, uint8_t sc)
 {
     int was_empty = (st->sc_head == st->sc_tail);
@@ -92,7 +125,9 @@ void vdd_input_push_scancode(input_state *st, uint8_t sc)
     { int depth = st->sc_head - st->sc_tail;
       if (depth < 0) depth += (int)VDD_KBD_SIZE;
       if ((uint32_t)depth > st->sc_hiwater) st->sc_hiwater = (uint32_t)depth; }
-    if (was_empty && st->bus) vdd_raise_irq(st->bus, 1);     /* empty -> full        */
+    /* empty -> full: announce it now if the keyboard may send yet, else the poll will
+       when the transfer delay from the last pop has passed. */
+    if (was_empty) vdd_input_poll(st);
 }
 
 /* --- scancode set 1 -> the BIOS keycode (US layout) ------------------------- */
@@ -309,25 +344,25 @@ static void bios_translate(input_state *st, uint8_t sc)
 void vdd_input_bios_consume(input_state *st)
 {
     uint8_t sc;
-    if (st->sc_head == st->sc_tail) {
-        if (st->sc_bios_owed) {
-            st->sc_bios_owed = 0;
-            st->sc_owed_served++;
-            bios_translate(st, st->sc_last);
-        }
+    /* Chained after a hook that read the byte: the output buffer still shows that
+       byte (the keyboard has not sent the next one yet), so that is what the BIOS
+       reads -- NOT the next queued byte, which belongs to the next interrupt. */
+    if (st->sc_bios_owed) {
+        st->sc_bios_owed = 0;
+        st->sc_owed_served++;
+        bios_translate(st, st->sc_last);
         return;
     }
-    sc = st->sc_buf[st->sc_tail];
-    st->sc_last = sc;
-    st->sc_bios_owed = 0;                   /* a newer byte supersedes any owed one    */
-    st->sc_tail = next(st->sc_tail);
+    if (!sc_avail(st)) return;              /* spurious: nothing presented           */
+    sc = sc_pop(st);
     bios_translate(st, sc);                 /* <- what the stub never did: make it a KEY */
-    if (st->sc_head != st->sc_tail && st->bus) vdd_raise_irq(st->bus, 1);
+    vdd_input_poll(st);                     /* next byte: now (no clock) or after the hold */
 }
 
+/* "Is a byte presented?" -- OBF, as the host's delivery gates ask it. */
 int vdd_input_sc_pending(const input_state *st)
 {
-    return st->sc_head != st->sc_tail;
+    return sc_avail(st);
 }
 
 /* IN 0x60 = keyboard data (pop one scancode; re-reads see the last byte).
@@ -338,18 +373,20 @@ static void kbd_hw_in(void *self, uint16_t port, uint8_t w, uint32_t *val)
     input_state *st = (input_state *)self;
     (void)w;
     if (port == 0x64) {                       /* status register                    */
-        *val = vdd_input_sc_pending(st) ? 0x01 : 0x00;
+        *val = sc_avail(st) ? 0x01 : 0x00;    /* OBF: a byte is presented           */
         return;
     }
     /* port 0x60: data register */
     st->p60_reads++;
-    if (st->sc_head != st->sc_tail) {
-        st->sc_last = st->sc_buf[st->sc_tail];
-        st->sc_tail = next(st->sc_tail);
+    if (sc_avail(st)) {
+        (void)sc_pop(st);
         st->sc_bios_owed = 1;               /* the BIOS arm may still chain and want it */
         /* Still more queued? The controller presents the next byte and re-asserts the
-           line, so the guest gets exactly one interrupt per scancode, at its own pace. */
-        if (st->sc_head != st->sc_tail && st->bus) vdd_raise_irq(st->bus, 1);
+           line -- after the keyboard's transfer time (poll), or at once with no clock --
+           so the guest gets exactly one interrupt per scancode, at its own pace. */
+        vdd_input_poll(st);
+    } else if (st->sc_head != st->sc_tail) {
+        st->sc_held_reads++;                /* re-read inside the hold: same byte    */
     }
     *val = st->sc_last;
 }
@@ -425,6 +462,7 @@ void vdd_input_reset(void *self)
     st->sc_head = st->sc_tail = 0;
     st->sc_last = 0;
     st->sc_bios_owed = 0;
+    st->sc_hold_until = 0; st->sc_irq_up = 0;
     st->ext_pending = 0;
     if (st->bda) {                          /* an empty ring is head==tail at its start */
         bda_w16(st, BDA_KB_HEAD, BDA_KB_START);

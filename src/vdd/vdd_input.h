@@ -85,7 +85,29 @@ typedef struct input_state {
          when the BIOS arm consumes it or a newer byte arrives. */
     uint8_t  sc_bios_owed;
     uint32_t sc_owed_served;   /* BIOS arm keys served from the guest-read byte   */
+    /* ── ★ THE KEYBOARD TAKES ~1 ms TO SEND THE NEXT BYTE, AND CODE RELIES ON IT. ──────
+         An AT keyboard cannot send while the 8042's output buffer is full; once the
+         guest reads port 60h the next byte still needs ~11 bit-times on the keyboard's
+         clock to arrive. So two reads of port 60h inside the same interrupt handler
+         return the SAME byte on real hardware -- which is exactly what layered INT 09h
+         hooks depend on: QB.EXE 4.5 has two (the IDE's at 3BE9Bh and the runtime's at
+         1DDB1h), each does `in al,60h`, and then the BIOS is chained and reads it a
+         third time. Our FIFO popped on EVERY read, so with bytes already queued (fast
+         typing, or a held Alt repeating) the three readers each got a DIFFERENT byte: the
+         sequence scrambled, Alt never released, and QB fell over "intermittently, mostly
+         with Alt". DOSBox models the same delay (its KEYDELAY). With no clock injected
+         (the battery's default) the hold is zero and behaviour is as before. */
+    uint64_t (*time_us)(void);  /* host clock; NULL = no transfer delay          */
+    uint64_t sc_hold_until;     /* the next byte is not presented before this     */
+    uint8_t  sc_irq_up;         /* IRQ1 raised for the byte at the head, not yet popped */
+    uint32_t sc_held_reads;     /* port 60h reads answered with the same byte (held) */
 } input_state;
+#define KBD_XFER_US 900u        /* ~11 bits at the keyboard's ~12 kHz clock       */
+/* Present the next queued byte once the transfer delay has passed: raises IRQ1 if one
+   is not already up. Cheap when nothing is queued; the host calls it every exec-loop
+   pass and from its UI timer. */
+void vdd_input_poll(input_state *st);
+int  vdd_input_sc_queued(const input_state *st);     /* bytes in the FIFO, held or not */
 
 /* BIOS ring ops, all operating on the guest's buffer at 0040:001E.
    (push = UI thread; pop/peek = V86 thread; caller serialises.) */
