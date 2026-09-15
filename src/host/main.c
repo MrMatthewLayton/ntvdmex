@@ -14070,7 +14070,7 @@ static void dpmi_bp_rearm_pending(DWORD cur_lin);   /* fwd: re-plant stepped-ove
 static void dpmi_patch_code_region(DWORD base, DWORD limit, int d32)
 {
     volatile BYTE *mem;
-    DWORD end, n = 0, rej = 0;
+    DWORD end, n = 0, rej = 0, ntbl = 0;   /* ntbl: jump-table entries skipped -- see the guard */
     DWORD po[12], npo = 0;               /* the first few patched offsets, for the log */
     char lb[320], *q = lb;
     /* ► NEVER PATCH THE IVT / BIOS DATA AREA, even when the client declares a base-0
@@ -14218,7 +14218,19 @@ static void dpmi_patch_code_region(DWORD base, DWORD limit, int d32)
                         if (doff + 4 <= (rend - a)) {
                             DWORD w = *(const volatile DWORD *)(const volatile void *)(mem + doff);
                             if (w >= ptr_lo && w < ptr_hi) {
-                                if (rej++ < 16) {
+                                /* ⚠ ITS OWN BUDGET, NOT THE SHARED ONE. Counted separately
+                                     AND always reported in the scan line below, because the
+                                     first version shared `rej`'s 16-line cap -- and the
+                                     corrupting scan rejects 334 byte pairs before it ever
+                                     reaches the table, so the one line that proves this guard
+                                     works was suppressed EXACTLY when it mattered. The live
+                                     confirming run logged it zero times and the guard had in
+                                     fact fired three times; only `patched 3 -> 0` and
+                                     `rejected 0x14e -> 0x151` gave it away. An absence in the
+                                     report means nothing unless the report says what it left
+                                     out -- this project's most repeated lesson. */
+                                ++ntbl;
+                                if (ntbl <= 8) {
                                     char tb[192], *tq = tb;
                                     tq = zput(tq, "DPMI: NOT patching 0x"); tq = zhex(tq, lin);
                                     tq = zput(tq, " vec=0x"); tq = zhexb(tq, mem[i+1]);
@@ -14377,7 +14389,8 @@ static void dpmi_patch_code_region(DWORD base, DWORD limit, int d32)
     q = zput(q, "DPMI: code region 0x"); q = zhex(q, base);
     q = zput(q, "..0x"); q = zhex(q, end);
     q = zput(q, " -> patched "); q = zhex(q, n); q = zput(q, " INT sites, rejected ");
-    q = zhex(q, rej); q = zput(q, " mid-instruction byte pairs");
+    q = zhex(q, rej); q = zput(q, " mid-instruction byte pairs, ");
+    q = zhex(q, ntbl); q = zput(q, " jump-table entries");
     if (npo) {
         DWORD z;
         q = zput(q, " at +0x");
