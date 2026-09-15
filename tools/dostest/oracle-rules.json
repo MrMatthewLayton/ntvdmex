@@ -958,5 +958,275 @@
   ],
   "recorded": "2026-09-15",
   "why": "The second word of the same read-back; see xms.hma.readback/AX."
+ },
+ {
+  "probe": "drv",
+  "case": "int21.0E.A",
+  "field": "AX",
+  "abstain": [
+   "msdos622"
+  ],
+  "recorded": "2026-09-15",
+  "why": "p_drv is a PER-HOST DUMP, not a cross-host diff, and its own comments say so (\"phantom on a one-floppy machine; absent on the rig\", \"CD-ROM with no disc on the rig; CDS entry with no drive on the oracle\", \"network on the rig; beyond LASTDRIVE on the oracle\"). The oracle boots from A: with LASTDRIVE=5, no Z: and a phantom B:; the rig runs from C: with an empty A:, a CD on D: and Z: mapped to \\\\server\\storage. Every ABSOLUTE answer here is therefore a fact about the machine. ★ THE RELATION IS STILL CHECKED AND STILL AGREES: drv.26.stayed.put and drv.restore.round.trip were added for exactly this and are NOT abstained. AH=0Eh returns AL = the number of drive letters, i.e. LASTDRIVE: 5 on the oracle (the MS-DOS default) and 26 here (we support A..Z). A CONFIG.SYS setting, not a defect."
+ },
+ {
+  "probe": "drv",
+  "case": "int21.0E.B",
+  "field": "AX",
+  "abstain": [
+   "msdos622"
+  ],
+  "recorded": "2026-09-15",
+  "why": "p_drv is a PER-HOST DUMP, not a cross-host diff, and its own comments say so (\"phantom on a one-floppy machine; absent on the rig\", \"CD-ROM with no disc on the rig; CDS entry with no drive on the oracle\", \"network on the rig; beyond LASTDRIVE on the oracle\"). The oracle boots from A: with LASTDRIVE=5, no Z: and a phantom B:; the rig runs from C: with an empty A:, a CD on D: and Z: mapped to \\\\server\\storage. Every ABSOLUTE answer here is therefore a fact about the machine. ★ THE RELATION IS STILL CHECKED AND STILL AGREES: drv.26.stayed.put and drv.restore.round.trip were added for exactly this and are NOT abstained. AH=0Eh returns AL = the number of drive letters, i.e. LASTDRIVE: 5 on the oracle (the MS-DOS default) and 26 here (we support A..Z). A CONFIG.SYS setting, not a defect."
+ },
+ {
+  "probe": "drv",
+  "case": "int21.0E.C",
+  "field": "AX",
+  "abstain": [
+   "msdos622"
+  ],
+  "recorded": "2026-09-15",
+  "why": "p_drv is a PER-HOST DUMP, not a cross-host diff, and its own comments say so (\"phantom on a one-floppy machine; absent on the rig\", \"CD-ROM with no disc on the rig; CDS entry with no drive on the oracle\", \"network on the rig; beyond LASTDRIVE on the oracle\"). The oracle boots from A: with LASTDRIVE=5, no Z: and a phantom B:; the rig runs from C: with an empty A:, a CD on D: and Z: mapped to \\\\server\\storage. Every ABSOLUTE answer here is therefore a fact about the machine. ★ THE RELATION IS STILL CHECKED AND STILL AGREES: drv.26.stayed.put and drv.restore.round.trip were added for exactly this and are NOT abstained. AH=0Eh returns AL = the number of drive letters, i.e. LASTDRIVE: 5 on the oracle (the MS-DOS default) and 26 here (we support A..Z). A CONFIG.SYS setting, not a defect."
+ },
+ {
+  "probe": "drv",
+  "case": "int21.0E.D",
+  "field": "AX",
+  "abstain": [
+   "msdos622"
+  ],
+  "recorded": "2026-09-15",
+  "why": "p_drv is a PER-HOST DUMP, not a cross-host diff, and its own comments say so (\"phantom on a one-floppy machine; absent on the rig\", \"CD-ROM with no disc on the rig; CDS entry with no drive on the oracle\", \"network on the rig; beyond LASTDRIVE on the oracle\"). The oracle boots from A: with LASTDRIVE=5, no Z: and a phantom B:; the rig runs from C: with an empty A:, a CD on D: and Z: mapped to \\\\server\\storage. Every ABSOLUTE answer here is therefore a fact about the machine. ★ THE RELATION IS STILL CHECKED AND STILL AGREES: drv.26.stayed.put and drv.restore.round.trip were added for exactly this and are NOT abstained. AH=0Eh returns AL = the number of drive letters, i.e. LASTDRIVE: 5 on the oracle (the MS-DOS default) and 26 here (we support A..Z). A CONFIG.SYS setting, not a defect."
+ },
+ {
+  "probe": "drv",
+  "case": "int21.0E.Z",
+  "field": "AX",
+  "abstain": [
+   "msdos622"
+  ],
+  "recorded": "2026-09-15",
+  "why": "p_drv is a PER-HOST DUMP, not a cross-host diff, and its own comments say so (\"phantom on a one-floppy machine; absent on the rig\", \"CD-ROM with no disc on the rig; CDS entry with no drive on the oracle\", \"network on the rig; beyond LASTDRIVE on the oracle\"). The oracle boots from A: with LASTDRIVE=5, no Z: and a phantom B:; the rig runs from C: with an empty A:, a CD on D: and Z: mapped to \\\\server\\storage. Every ABSOLUTE answer here is therefore a fact about the machine. ★ THE RELATION IS STILL CHECKED AND STILL AGREES: drv.26.stayed.put and drv.restore.round.trip were added for exactly this and are NOT abstained. AH=0Eh returns AL = the number of drive letters, i.e. LASTDRIVE: 5 on the oracle (the MS-DOS default) and 26 here (we support A..Z). A CONFIG.SYS setting, not a defect."
+ },
+ {
+  "probe": "drv",
+  "case": "int21.0E.26",
+  "field": "AX",
+  "abstain": [
+   "msdos622"
+  ],
+  "recorded": "2026-09-15",
+  "why": "p_drv is a PER-HOST DUMP, not a cross-host diff, and its own comments say so (\"phantom on a one-floppy machine; absent on the rig\", \"CD-ROM with no disc on the rig; CDS entry with no drive on the oracle\", \"network on the rig; beyond LASTDRIVE on the oracle\"). The oracle boots from A: with LASTDRIVE=5, no Z: and a phantom B:; the rig runs from C: with an empty A:, a CD on D: and Z: mapped to \\\\server\\storage. Every ABSOLUTE answer here is therefore a fact about the machine. ★ THE RELATION IS STILL CHECKED AND STILL AGREES: drv.26.stayed.put and drv.restore.round.trip were added for exactly this and are NOT abstained. AH=0Eh returns AL = the number of drive letters, i.e. LASTDRIVE: 5 on the oracle (the MS-DOS default) and 26 here (we support A..Z). A CONFIG.SYS setting, not a defect."
+ },
+ {
+  "probe": "drv",
+  "case": "int21.0E.restore",
+  "field": "AX",
+  "abstain": [
+   "msdos622"
+  ],
+  "recorded": "2026-09-15",
+  "why": "p_drv is a PER-HOST DUMP, not a cross-host diff, and its own comments say so (\"phantom on a one-floppy machine; absent on the rig\", \"CD-ROM with no disc on the rig; CDS entry with no drive on the oracle\", \"network on the rig; beyond LASTDRIVE on the oracle\"). The oracle boots from A: with LASTDRIVE=5, no Z: and a phantom B:; the rig runs from C: with an empty A:, a CD on D: and Z: mapped to \\\\server\\storage. Every ABSOLUTE answer here is therefore a fact about the machine. ★ THE RELATION IS STILL CHECKED AND STILL AGREES: drv.26.stayed.put and drv.restore.round.trip were added for exactly this and are NOT abstained. AH=0Eh returns AL = the number of drive letters, i.e. LASTDRIVE: 5 on the oracle (the MS-DOS default) and 26 here (we support A..Z). A CONFIG.SYS setting, not a defect."
+ },
+ {
+  "probe": "drv",
+  "case": "int21.0E.A",
+  "field": "CF",
+  "abstain": [
+   "msdos622"
+  ],
+  "recorded": "2026-09-15",
+  "why": "CF is NOT DEFINED for INT 21h AH=0Eh -- it returns a count in AL and nothing else. The oracle happens to leave carry set on this ONE case of seven (selecting A: while already on A:) and clear on the other six, which is undocumented behaviour of one kernel on one input rather than a contract. Not matched by invention; see the six 0Eh CF rows beside it, which agree."
+ },
+ {
+  "probe": "drv",
+  "case": "int21.19.start",
+  "field": "AX",
+  "abstain": [
+   "msdos622"
+  ],
+  "recorded": "2026-09-15",
+  "why": "p_drv is a PER-HOST DUMP, not a cross-host diff, and its own comments say so (\"phantom on a one-floppy machine; absent on the rig\", \"CD-ROM with no disc on the rig; CDS entry with no drive on the oracle\", \"network on the rig; beyond LASTDRIVE on the oracle\"). The oracle boots from A: with LASTDRIVE=5, no Z: and a phantom B:; the rig runs from C: with an empty A:, a CD on D: and Z: mapped to \\\\server\\storage. Every ABSOLUTE answer here is therefore a fact about the machine. ★ THE RELATION IS STILL CHECKED AND STILL AGREES: drv.26.stayed.put and drv.restore.round.trip were added for exactly this and are NOT abstained. AH=19h returns WHICH drive is current as an absolute number, so it differs wherever the two machines' drive sets or starting drives differ. ⚠ Several of these encode CORRECT behaviour on both sides and still cannot agree: after selecting drive 26 both hosts CORRECTLY stayed put, and print 0 and 2 because they started on A: and C:."
+ },
+ {
+  "probe": "drv",
+  "case": "int21.19.after.B",
+  "field": "AX",
+  "abstain": [
+   "msdos622"
+  ],
+  "recorded": "2026-09-15",
+  "why": "p_drv is a PER-HOST DUMP, not a cross-host diff, and its own comments say so (\"phantom on a one-floppy machine; absent on the rig\", \"CD-ROM with no disc on the rig; CDS entry with no drive on the oracle\", \"network on the rig; beyond LASTDRIVE on the oracle\"). The oracle boots from A: with LASTDRIVE=5, no Z: and a phantom B:; the rig runs from C: with an empty A:, a CD on D: and Z: mapped to \\\\server\\storage. Every ABSOLUTE answer here is therefore a fact about the machine. ★ THE RELATION IS STILL CHECKED AND STILL AGREES: drv.26.stayed.put and drv.restore.round.trip were added for exactly this and are NOT abstained. AH=19h returns WHICH drive is current as an absolute number, so it differs wherever the two machines' drive sets or starting drives differ. ⚠ Several of these encode CORRECT behaviour on both sides and still cannot agree: after selecting drive 26 both hosts CORRECTLY stayed put, and print 0 and 2 because they started on A: and C:."
+ },
+ {
+  "probe": "drv",
+  "case": "int21.19.after.D",
+  "field": "AX",
+  "abstain": [
+   "msdos622"
+  ],
+  "recorded": "2026-09-15",
+  "why": "p_drv is a PER-HOST DUMP, not a cross-host diff, and its own comments say so (\"phantom on a one-floppy machine; absent on the rig\", \"CD-ROM with no disc on the rig; CDS entry with no drive on the oracle\", \"network on the rig; beyond LASTDRIVE on the oracle\"). The oracle boots from A: with LASTDRIVE=5, no Z: and a phantom B:; the rig runs from C: with an empty A:, a CD on D: and Z: mapped to \\\\server\\storage. Every ABSOLUTE answer here is therefore a fact about the machine. ★ THE RELATION IS STILL CHECKED AND STILL AGREES: drv.26.stayed.put and drv.restore.round.trip were added for exactly this and are NOT abstained. AH=19h returns WHICH drive is current as an absolute number, so it differs wherever the two machines' drive sets or starting drives differ. ⚠ Several of these encode CORRECT behaviour on both sides and still cannot agree: after selecting drive 26 both hosts CORRECTLY stayed put, and print 0 and 2 because they started on A: and C:."
+ },
+ {
+  "probe": "drv",
+  "case": "int21.19.after.Z",
+  "field": "AX",
+  "abstain": [
+   "msdos622"
+  ],
+  "recorded": "2026-09-15",
+  "why": "p_drv is a PER-HOST DUMP, not a cross-host diff, and its own comments say so (\"phantom on a one-floppy machine; absent on the rig\", \"CD-ROM with no disc on the rig; CDS entry with no drive on the oracle\", \"network on the rig; beyond LASTDRIVE on the oracle\"). The oracle boots from A: with LASTDRIVE=5, no Z: and a phantom B:; the rig runs from C: with an empty A:, a CD on D: and Z: mapped to \\\\server\\storage. Every ABSOLUTE answer here is therefore a fact about the machine. ★ THE RELATION IS STILL CHECKED AND STILL AGREES: drv.26.stayed.put and drv.restore.round.trip were added for exactly this and are NOT abstained. AH=19h returns WHICH drive is current as an absolute number, so it differs wherever the two machines' drive sets or starting drives differ. ⚠ Several of these encode CORRECT behaviour on both sides and still cannot agree: after selecting drive 26 both hosts CORRECTLY stayed put, and print 0 and 2 because they started on A: and C:."
+ },
+ {
+  "probe": "drv",
+  "case": "int21.19.after.26",
+  "field": "AX",
+  "abstain": [
+   "msdos622"
+  ],
+  "recorded": "2026-09-15",
+  "why": "p_drv is a PER-HOST DUMP, not a cross-host diff, and its own comments say so (\"phantom on a one-floppy machine; absent on the rig\", \"CD-ROM with no disc on the rig; CDS entry with no drive on the oracle\", \"network on the rig; beyond LASTDRIVE on the oracle\"). The oracle boots from A: with LASTDRIVE=5, no Z: and a phantom B:; the rig runs from C: with an empty A:, a CD on D: and Z: mapped to \\\\server\\storage. Every ABSOLUTE answer here is therefore a fact about the machine. ★ THE RELATION IS STILL CHECKED AND STILL AGREES: drv.26.stayed.put and drv.restore.round.trip were added for exactly this and are NOT abstained. AH=19h returns WHICH drive is current as an absolute number, so it differs wherever the two machines' drive sets or starting drives differ. ⚠ Several of these encode CORRECT behaviour on both sides and still cannot agree: after selecting drive 26 both hosts CORRECTLY stayed put, and print 0 and 2 because they started on A: and C:."
+ },
+ {
+  "probe": "drv",
+  "case": "int21.19.restored",
+  "field": "AX",
+  "abstain": [
+   "msdos622"
+  ],
+  "recorded": "2026-09-15",
+  "why": "p_drv is a PER-HOST DUMP, not a cross-host diff, and its own comments say so (\"phantom on a one-floppy machine; absent on the rig\", \"CD-ROM with no disc on the rig; CDS entry with no drive on the oracle\", \"network on the rig; beyond LASTDRIVE on the oracle\"). The oracle boots from A: with LASTDRIVE=5, no Z: and a phantom B:; the rig runs from C: with an empty A:, a CD on D: and Z: mapped to \\\\server\\storage. Every ABSOLUTE answer here is therefore a fact about the machine. ★ THE RELATION IS STILL CHECKED AND STILL AGREES: drv.26.stayed.put and drv.restore.round.trip were added for exactly this and are NOT abstained. AH=19h returns WHICH drive is current as an absolute number, so it differs wherever the two machines' drive sets or starting drives differ. ⚠ Several of these encode CORRECT behaviour on both sides and still cannot agree: after selecting drive 26 both hosts CORRECTLY stayed put, and print 0 and 2 because they started on A: and C:."
+ },
+ {
+  "probe": "drv",
+  "case": "int21.19.after.3B.C",
+  "field": "AX",
+  "abstain": [
+   "msdos622"
+  ],
+  "recorded": "2026-09-15",
+  "why": "p_drv is a PER-HOST DUMP, not a cross-host diff, and its own comments say so (\"phantom on a one-floppy machine; absent on the rig\", \"CD-ROM with no disc on the rig; CDS entry with no drive on the oracle\", \"network on the rig; beyond LASTDRIVE on the oracle\"). The oracle boots from A: with LASTDRIVE=5, no Z: and a phantom B:; the rig runs from C: with an empty A:, a CD on D: and Z: mapped to \\\\server\\storage. Every ABSOLUTE answer here is therefore a fact about the machine. ★ THE RELATION IS STILL CHECKED AND STILL AGREES: drv.26.stayed.put and drv.restore.round.trip were added for exactly this and are NOT abstained. AH=19h returns WHICH drive is current as an absolute number, so it differs wherever the two machines' drive sets or starting drives differ. ⚠ Several of these encode CORRECT behaviour on both sides and still cannot agree: after selecting drive 26 both hosts CORRECTLY stayed put, and print 0 and 2 because they started on A: and C:."
+ },
+ {
+  "probe": "drv",
+  "case": "int21.19.after.3B.C-only",
+  "field": "AX",
+  "abstain": [
+   "msdos622"
+  ],
+  "recorded": "2026-09-15",
+  "why": "p_drv is a PER-HOST DUMP, not a cross-host diff, and its own comments say so (\"phantom on a one-floppy machine; absent on the rig\", \"CD-ROM with no disc on the rig; CDS entry with no drive on the oracle\", \"network on the rig; beyond LASTDRIVE on the oracle\"). The oracle boots from A: with LASTDRIVE=5, no Z: and a phantom B:; the rig runs from C: with an empty A:, a CD on D: and Z: mapped to \\\\server\\storage. Every ABSOLUTE answer here is therefore a fact about the machine. ★ THE RELATION IS STILL CHECKED AND STILL AGREES: drv.26.stayed.put and drv.restore.round.trip were added for exactly this and are NOT abstained. AH=19h returns WHICH drive is current as an absolute number, so it differs wherever the two machines' drive sets or starting drives differ. ⚠ Several of these encode CORRECT behaviour on both sides and still cannot agree: after selecting drive 26 both hosts CORRECTLY stayed put, and print 0 and 2 because they started on A: and C:."
+ },
+ {
+  "probe": "drv",
+  "case": "int21.19.after.3B.Z-root",
+  "field": "AX",
+  "abstain": [
+   "msdos622"
+  ],
+  "recorded": "2026-09-15",
+  "why": "p_drv is a PER-HOST DUMP, not a cross-host diff, and its own comments say so (\"phantom on a one-floppy machine; absent on the rig\", \"CD-ROM with no disc on the rig; CDS entry with no drive on the oracle\", \"network on the rig; beyond LASTDRIVE on the oracle\"). The oracle boots from A: with LASTDRIVE=5, no Z: and a phantom B:; the rig runs from C: with an empty A:, a CD on D: and Z: mapped to \\\\server\\storage. Every ABSOLUTE answer here is therefore a fact about the machine. ★ THE RELATION IS STILL CHECKED AND STILL AGREES: drv.26.stayed.put and drv.restore.round.trip were added for exactly this and are NOT abstained. AH=19h returns WHICH drive is current as an absolute number, so it differs wherever the two machines' drive sets or starting drives differ. ⚠ Several of these encode CORRECT behaviour on both sides and still cannot agree: after selecting drive 26 both hosts CORRECTLY stayed put, and print 0 and 2 because they started on A: and C:."
+ },
+ {
+  "probe": "drv",
+  "case": "int21.19.end",
+  "field": "AX",
+  "abstain": [
+   "msdos622"
+  ],
+  "recorded": "2026-09-15",
+  "why": "p_drv is a PER-HOST DUMP, not a cross-host diff, and its own comments say so (\"phantom on a one-floppy machine; absent on the rig\", \"CD-ROM with no disc on the rig; CDS entry with no drive on the oracle\", \"network on the rig; beyond LASTDRIVE on the oracle\"). The oracle boots from A: with LASTDRIVE=5, no Z: and a phantom B:; the rig runs from C: with an empty A:, a CD on D: and Z: mapped to \\\\server\\storage. Every ABSOLUTE answer here is therefore a fact about the machine. ★ THE RELATION IS STILL CHECKED AND STILL AGREES: drv.26.stayed.put and drv.restore.round.trip were added for exactly this and are NOT abstained. AH=19h returns WHICH drive is current as an absolute number, so it differs wherever the two machines' drive sets or starting drives differ. ⚠ Several of these encode CORRECT behaviour on both sides and still cannot agree: after selecting drive 26 both hosts CORRECTLY stayed put, and print 0 and 2 because they started on A: and C:."
+ },
+ {
+  "probe": "drv",
+  "case": "int21.3B.chdir.C",
+  "field": "AX",
+  "abstain": [
+   "msdos622"
+  ],
+  "recorded": "2026-09-15",
+  "why": "AX is DESTROYED by AH=3Bh on success -- undefined, per its interface. The oracle zeroes it; we leave the caller's AH=3Bh in place. Neither is wrong and a program may not read it. CF, which IS the documented result, agrees."
+ },
+ {
+  "probe": "drv",
+  "case": "int21.3B.Z-root",
+  "field": "AX",
+  "abstain": [
+   "msdos622"
+  ],
+  "recorded": "2026-09-15",
+  "why": "p_drv is a PER-HOST DUMP, not a cross-host diff, and its own comments say so (\"phantom on a one-floppy machine; absent on the rig\", \"CD-ROM with no disc on the rig; CDS entry with no drive on the oracle\", \"network on the rig; beyond LASTDRIVE on the oracle\"). The oracle boots from A: with LASTDRIVE=5, no Z: and a phantom B:; the rig runs from C: with an empty A:, a CD on D: and Z: mapped to \\\\server\\storage. Every ABSOLUTE answer here is therefore a fact about the machine. ★ THE RELATION IS STILL CHECKED AND STILL AGREES: drv.26.stayed.put and drv.restore.round.trip were added for exactly this and are NOT abstained. Chdir to Z:\\ FAILS on the oracle (no Z: there, error 3) and SUCCEEDS here, because Z: is a real mapped network drive on the rig. Both answers are correct about their own machine."
+ },
+ {
+  "probe": "drv",
+  "case": "int21.47.Z",
+  "field": "AX",
+  "abstain": [
+   "msdos622"
+  ],
+  "recorded": "2026-09-15",
+  "why": "p_drv is a PER-HOST DUMP, not a cross-host diff, and its own comments say so (\"phantom on a one-floppy machine; absent on the rig\", \"CD-ROM with no disc on the rig; CDS entry with no drive on the oracle\", \"network on the rig; beyond LASTDRIVE on the oracle\"). The oracle boots from A: with LASTDRIVE=5, no Z: and a phantom B:; the rig runs from C: with an empty A:, a CD on D: and Z: mapped to \\\\server\\storage. Every ABSOLUTE answer here is therefore a fact about the machine. ★ THE RELATION IS STILL CHECKED AND STILL AGREES: drv.26.stayed.put and drv.restore.round.trip were added for exactly this and are NOT abstained. AH=47h for drive Z: returns 'invalid drive' on the oracle and a real path here, for the same reason as int21.3B.Z-root: the rig HAS a Z:."
+ },
+ {
+  "probe": "drv",
+  "case": "int21.3B.Z-root",
+  "field": "CF",
+  "abstain": [
+   "msdos622"
+  ],
+  "recorded": "2026-09-15",
+  "why": "p_drv is a PER-HOST DUMP, not a cross-host diff, and its own comments say so (\"phantom on a one-floppy machine; absent on the rig\", \"CD-ROM with no disc on the rig; CDS entry with no drive on the oracle\", \"network on the rig; beyond LASTDRIVE on the oracle\"). The oracle boots from A: with LASTDRIVE=5, no Z: and a phantom B:; the rig runs from C: with an empty A:, a CD on D: and Z: mapped to \\\\server\\storage. Every ABSOLUTE answer here is therefore a fact about the machine. ★ THE RELATION IS STILL CHECKED AND STILL AGREES: drv.26.stayed.put and drv.restore.round.trip were added for exactly this and are NOT abstained. Chdir to Z:\\ FAILS on the oracle (no Z: there, error 3) and SUCCEEDS here, because Z: is a real mapped network drive on the rig. Both answers are correct about their own machine."
+ },
+ {
+  "probe": "drv",
+  "case": "int21.47.Z",
+  "field": "CF",
+  "abstain": [
+   "msdos622"
+  ],
+  "recorded": "2026-09-15",
+  "why": "p_drv is a PER-HOST DUMP, not a cross-host diff, and its own comments say so (\"phantom on a one-floppy machine; absent on the rig\", \"CD-ROM with no disc on the rig; CDS entry with no drive on the oracle\", \"network on the rig; beyond LASTDRIVE on the oracle\"). The oracle boots from A: with LASTDRIVE=5, no Z: and a phantom B:; the rig runs from C: with an empty A:, a CD on D: and Z: mapped to \\\\server\\storage. Every ABSOLUTE answer here is therefore a fact about the machine. ★ THE RELATION IS STILL CHECKED AND STILL AGREES: drv.26.stayed.put and drv.restore.round.trip were added for exactly this and are NOT abstained. AH=47h for drive Z: returns 'invalid drive' on the oracle and a real path here, for the same reason as int21.3B.Z-root: the rig HAS a Z:."
+ },
+ {
+  "probe": "drv",
+  "case": "curdir.start",
+  "field": "BUF",
+  "abstain": [
+   "msdos622"
+  ],
+  "recorded": "2026-09-15",
+  "why": "p_drv is a PER-HOST DUMP, not a cross-host diff, and its own comments say so (\"phantom on a one-floppy machine; absent on the rig\", \"CD-ROM with no disc on the rig; CDS entry with no drive on the oracle\", \"network on the rig; beyond LASTDRIVE on the oracle\"). The oracle boots from A: with LASTDRIVE=5, no Z: and a phantom B:; the rig runs from C: with an empty A:, a CD on D: and Z: mapped to \\\\server\\storage. Every ABSOLUTE answer here is therefore a fact about the machine. ★ THE RELATION IS STILL CHECKED AND STILL AGREES: drv.26.stayed.put and drv.restore.round.trip were added for exactly this and are NOT abstained. AH=47h returns the ABSOLUTE path of a current directory, and the two hosts start in different places (the oracle at A:\\ root, the rig deep inside the share). Same cause as the curdir.* rows in p_curdir."
+ },
+ {
+  "probe": "drv",
+  "case": "curdir.C",
+  "field": "BUF",
+  "abstain": [
+   "msdos622"
+  ],
+  "recorded": "2026-09-15",
+  "why": "p_drv is a PER-HOST DUMP, not a cross-host diff, and its own comments say so (\"phantom on a one-floppy machine; absent on the rig\", \"CD-ROM with no disc on the rig; CDS entry with no drive on the oracle\", \"network on the rig; beyond LASTDRIVE on the oracle\"). The oracle boots from A: with LASTDRIVE=5, no Z: and a phantom B:; the rig runs from C: with an empty A:, a CD on D: and Z: mapped to \\\\server\\storage. Every ABSOLUTE answer here is therefore a fact about the machine. ★ THE RELATION IS STILL CHECKED AND STILL AGREES: drv.26.stayed.put and drv.restore.round.trip were added for exactly this and are NOT abstained. AH=47h returns the ABSOLUTE path of a current directory, and the two hosts start in different places (the oracle at A:\\ root, the rig deep inside the share). Same cause as the curdir.* rows in p_curdir."
+ },
+ {
+  "probe": "drv",
+  "case": "curdir.0.after.3B.C",
+  "field": "BUF",
+  "abstain": [
+   "msdos622"
+  ],
+  "recorded": "2026-09-15",
+  "why": "p_drv is a PER-HOST DUMP, not a cross-host diff, and its own comments say so (\"phantom on a one-floppy machine; absent on the rig\", \"CD-ROM with no disc on the rig; CDS entry with no drive on the oracle\", \"network on the rig; beyond LASTDRIVE on the oracle\"). The oracle boots from A: with LASTDRIVE=5, no Z: and a phantom B:; the rig runs from C: with an empty A:, a CD on D: and Z: mapped to \\\\server\\storage. Every ABSOLUTE answer here is therefore a fact about the machine. ★ THE RELATION IS STILL CHECKED AND STILL AGREES: drv.26.stayed.put and drv.restore.round.trip were added for exactly this and are NOT abstained. AH=47h returns the ABSOLUTE path of a current directory, and the two hosts start in different places (the oracle at A:\\ root, the rig deep inside the share). Same cause as the curdir.* rows in p_curdir."
+ },
+ {
+  "probe": "drv",
+  "case": "curdir.end",
+  "field": "BUF",
+  "abstain": [
+   "msdos622"
+  ],
+  "recorded": "2026-09-15",
+  "why": "p_drv is a PER-HOST DUMP, not a cross-host diff, and its own comments say so (\"phantom on a one-floppy machine; absent on the rig\", \"CD-ROM with no disc on the rig; CDS entry with no drive on the oracle\", \"network on the rig; beyond LASTDRIVE on the oracle\"). The oracle boots from A: with LASTDRIVE=5, no Z: and a phantom B:; the rig runs from C: with an empty A:, a CD on D: and Z: mapped to \\\\server\\storage. Every ABSOLUTE answer here is therefore a fact about the machine. ★ THE RELATION IS STILL CHECKED AND STILL AGREES: drv.26.stayed.put and drv.restore.round.trip were added for exactly this and are NOT abstained. AH=47h returns the ABSOLUTE path of a current directory, and the two hosts start in different places (the oracle at A:\\ root, the rig deep inside the share). Same cause as the curdir.* rows in p_curdir."
  }
 ]

@@ -565,6 +565,50 @@ rather than being matched by invention.
 
 ---
 
+# The score, measured (s72 close)
+
+`./scripts/paritysweep.sh` — the oracle tier in one command, the companion to
+`./scripts/offvm.sh` (our own algorithms off-VM: **30 tests, 1361 checks, 0 failed**).
+
+```
+36 probes (34 real + 2 companions)   28 clean · 6 with mismatches
+532 rows        446 agree · 23 mismatch · 63 abstained
+PARITY  95.1%   (446 of 469 comparable rows)
+        96.7%   excluding the 8 rows that have NO valid oracle
+```
+
+Abstentions are **excluded from the denominator, never counted as passes** — an
+abstention records that a row cannot be a contract, not that we match.
+
+### What the 23 remaining mismatches are
+
+| n | probe | what |
+|---|---|---|
+| 13 | `p_disk` | INT 13h genuinely unimplemented (answers `AH=80h`, leaves poison in BX/CX/DX) — but probed against **floppy drive 0**, which is empty on the rig. Needs a probe aimed at a drive the machine has. |
+| 8 | `p_lpt` 5, `p_plan12` 1, `p_vesapm` 2 | **No valid oracle.** INT 10h/11h/14h/17h against SeaBIOS, a reimplementation; and `p_vesapm`'s own header says *"there is no MS-DOS ground truth for a VESA BIOS"*. Blocked on PCem. |
+| 1 | `p_tsr` | `tsr.paras.still.held`, 0x26 vs 0x21. Uninvestigated. |
+| 1 | `p_xms` | `xms.08.queryfree` **BH**, which the XMS spec leaves **undefined**. Left red and undecided rather than matched by invention. |
+
+### ⛔ `p_drv` had never actually been diffed — and it was 27 of the 50
+
+It was run once as a harness sanity check with `--host msdos622` **alone**. With no
+subject there is nothing to compare, so it printed *"no disputes, no mismatches"* and
+read as a clean probe. ▶ **A one-host run is not a pass; it is a question nobody asked.**
+
+Diffed properly it produced 27 mismatches, every one a machine fact — the oracle boots
+from `A:` with `LASTDRIVE=5`, no `Z:` and a phantom `B:`; the rig runs from `C:` with an
+empty `A:`, a CD on `D:` and `Z:` mapped to `\\server\storage`. The probe's own comments
+say as much; it was written as a **per-host dump**, not a cross-host diff.
+
+★ Rather than only abstaining, the probe gained the contract it was missing — the
+**relation** rather than the absolute: `drv.26.stayed.put` (drive 26 is past `Z:` on every
+machine, so nobody has it and both hosts must be exactly where they started) and
+`drv.restore.round.trip`. **Both agree at 1.** Several abstained rows encode *correct*
+behaviour on both sides and still cannot agree: after selecting drive 26 both hosts
+correctly stayed put, and print `0` and `2` because they started on different drives.
+
+---
+
 # Next, in order
 
 1. **The DPMI/protected-mode IRQ0 arm**, which still auto-EOIs and which `p_pic.asm`

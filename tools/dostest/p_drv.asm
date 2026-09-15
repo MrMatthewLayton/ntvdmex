@@ -46,6 +46,27 @@ ask47:
         call    probe_capture
         ret
 
+; samedrv -- AX=1 if the current drive is still [orig], else 0. THE CROSS-HOST
+; CONTRACT THIS PROBE WAS MISSING: every absolute answer here (which drive is
+; current, how many letters exist, whether Z: is a drive) is a fact about the
+; MACHINE -- the oracle boots from A: with LASTDRIVE=5 and no Z:, the rig runs
+; from C: with a CD on D: and Z: mapped to a server -- so the raw 19h value can
+; never agree and 27 rows read as defects. What IS the same on both is the
+; RELATION: selecting a drive that does not exist must leave you where you were.
+samedrv:
+        POISON
+        mov     ah, 19h
+        int     21h
+        mov     ah, 0
+        cmp     al, [orig]
+        mov     ax, 0
+        jne     .no
+        inc     ax
+.no:
+        mov     [__ax], ax
+        mov     word [__fl], 0
+        ret
+
 start:
         PROBE_BEGIN "drv"
 
@@ -105,11 +126,20 @@ start:
         EMIT    "int21.0E.26", "AX,CF"
         call    cur
         EMIT    "int21.19.after.26", "AX"
+        ; ★ THE CONTRACT: 26 is past Z: on every machine, so NOBODY has that drive
+        ; and both hosts must be exactly where they started. Comparable; the raw
+        ; 19h value above is not.
+        call    samedrv
+        EMIT    "drv.26.stayed.put", "AX"
         mov     dl, [orig]
         call    sel
         EMIT    "int21.0E.restore", "AX,CF"
         call    cur
         EMIT    "int21.19.restored", "AX"
+        ; ★ AND THE ROUND TRIP: whatever the starting drive was, selecting it back
+        ; must restore it. Both hosts must say 1.
+        call    samedrv
+        EMIT    "drv.restore.round.trip", "AX"
 
         ; ---- 3Bh to C:\ZZDRV (made here) while the current drive may be another:
         ; does the current drive move? does 47h(C:) say ZZDRV? does 47h(0) change?
