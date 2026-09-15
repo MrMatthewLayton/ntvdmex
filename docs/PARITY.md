@@ -571,10 +571,10 @@ rather than being matched by invention.
 `./scripts/offvm.sh` (our own algorithms off-VM: **30 tests, 1361 checks, 0 failed**).
 
 ```
-36 probes (34 real + 2 companions)   28 clean · 6 with mismatches
-532 rows        446 agree · 23 mismatch · 63 abstained
-PARITY  95.1%   (446 of 469 comparable rows)
-        96.7%   excluding the 8 rows that have NO valid oracle
+36 probes (34 real + 2 companions)   29 clean · 5 with mismatches
+532 rows        459 agree · 10 mismatch · 63 abstained
+PARITY  97.9%   (459 of 469 comparable rows)
+        99.6%   excluding the 8 rows that have NO valid oracle
 ```
 
 Abstentions are **excluded from the denominator, never counted as passes** — an
@@ -584,7 +584,7 @@ abstention records that a row cannot be a contract, not that we match.
 
 | n | probe | what |
 |---|---|---|
-| 13 | `p_disk` | INT 13h genuinely unimplemented (answers `AH=80h`, leaves poison in BX/CX/DX) — but probed against **floppy drive 0**, which is empty on the rig. Needs a probe aimed at a drive the machine has. |
+| ~~13~~ | ~~`p_disk`~~ | ✅ **CLOSED — INT 13h was never unimplemented, it had no disk.** See below. All 18 rows now AGREE. |
 | 8 | `p_lpt` 5, `p_plan12` 1, `p_vesapm` 2 | **No valid oracle.** INT 10h/11h/14h/17h against SeaBIOS, a reimplementation; and `p_vesapm`'s own header says *"there is no MS-DOS ground truth for a VESA BIOS"*. Blocked on PCem. |
 | 1 | `p_tsr` | `tsr.paras.still.held`, 0x26 vs 0x21. Uninvestigated. |
 | 1 | `p_xms` | `xms.08.queryfree` **BH**, which the XMS spec leaves **undefined**. Left red and undecided rather than matched by invention. |
@@ -606,6 +606,42 @@ machine, so nobody has it and both hosts must be exactly where they started) and
 `drv.restore.round.trip`. **Both agree at 1.** Several abstained rows encode *correct*
 behaviour on both sides and still cannot agree: after selecting drive 26 both hosts
 correctly stayed put, and print `0` and `2` because they started on different drives.
+
+---
+
+# ✅ INT 13h — it was never unimplemented, it had no disk (s72)
+
+`p_disk` showed 13 mismatches and I filed them as *"INT 13h unimplemented: answers
+`AH=80h` and leaves the probe's poison in BX/CX/DX"*. **That reading was wrong.**
+
+`src/dos/dos_disk.h` states the design in its first paragraph: *"a drive is a disk
+**IMAGE FILE**, or it is absent. Nothing is synthesised."* The layer is fully
+implemented against that model and unit-tested (`disk_test.c`, 23 checks). With no
+`cfg\FLOPPY.IMG` on the rig it correctly answered **"drive not ready"** to everything —
+and the registers that looked like untouched poison were a call that had properly
+**failed**, because a failed call does not write them.
+
+Given a disk, **all 18 rows AGREE**:
+
+| | |
+|---|---|
+| `int13.08.params` | `CX=4F12` (79 cyl, 18 sec) · `DX=0101` (2 heads, 1 drive) · `BX=0004` (1.44MB) |
+| `int13.15.type` | `AX=0100` — floppy, no change-line |
+| `int13.02.read.boot` | `AX=0001`, one sector read |
+| `disk.boot.sig` / `.oem` | `55AA` / `MTOO` — the oracle's scratch floppy is mformat-made too |
+| `int25.absread` | agrees, flags contract included |
+
+`./scripts/mkfloppy.sh` builds the image rather than leaving a magic 1.4 MB file on
+the share — `mformat -f 1440`, the oracle's exact geometry, plus a known file so a
+guest reading the data area can prove it read *this* disk. The BPB is asserted. ⚠ Two
+builds are not byte-identical (mformat stamps a time-based volume serial); the
+geometry is, and that is the contract.
+
+▶ **Before calling a surface unimplemented, check that it has something to work on.**
+
+⚠ **Rig state:** `cfg\FLOPPY.IMG` is now present and should stay — without it `p_disk`
+goes back to measuring an absent drive. It backs INT 13h/25h only; DOS file I/O on A:
+still goes through Win32, so no other probe or guest is affected.
 
 ---
 
