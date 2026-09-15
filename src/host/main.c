@@ -518,6 +518,19 @@ static const char *ntvdmex_path(const char *sub, const char *name)
 }
 static char g_env[8192], g_desk[512], g_title[512], g_rsv[512];
 static VDM_COMMAND_INFO g_ci;
+/* The SECOND fetch (s72): what CSRSS actually queued -- AppName is the program's
+   full path, CmdLine its argument tail (CR LF terminated), Env the launcher's Win32
+   environment block. See csrss_fetch_command(). */
+static char g_app2[1024], g_cmd2[1024], g_cur2[512], g_env2[8192];
+static int  g_fetch2_ok = 0;
+static volatile LONG g_report_got_next = 0;   /* the report call returned TRUE: a command was queued to us */
+static DWORD WINAPI csrss_report_thread(LPVOID pv)
+{
+    DWORD e = 0;
+    BOOL ok = csrss_task_done(g_ci.TaskId, (ULONG)(ULONG_PTR)pv, &e, NULL);
+    if (ok) InterlockedExchange(&g_report_got_next, 1);
+    return e;
+}
 static BYTE filebuf[0x80000];   /* 512KB: hold a real game's MZ image (DOS/4GW stub etc.), run 85 */
 
 /* The live machine, for the WATCHDOG THREAD. A wedged run is terminated forcefully and
@@ -21359,6 +21372,52 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     } else {
         p = zput(p, "STAGE1: GetNextVDMCommand FALSE err=0x"); p = zhex(p, err); p = zput(p, "\r\n");
     }
+    /* ── ★★★★★ THE SECOND FETCH: THE COMMAND ITSELF. (s72, the package smoke test) ──
+         The call above is stock ntvdm's `cmdGetStartInfo` shape (VDM_GET_FIRST_COMMAND):
+         it fills Title, CurDirectory and the PIF, and nothing else -- AppName/CmdLine
+         come back as capture-buffer scaffolding (`app=[5??] cmd=[\]`). Explorer puts the
+         program's path in the console TITLE, which is the only reason a double-click has
+         ever run the right program. A launch from cmd.exe or a batch file -- smoke.bat,
+         a prompt, the friend's machine on the 18th -- has a title of "" (start) or the
+         typed command WITH ITS ARGUMENTS (direct), and we ran the embedded four-byte stub
+         and reported a clean exit: the package smoke test passed without running the
+         self-test. Stock ntvdm consumes the real command in its exec-BOP path with a
+         second GetNextVDMCommand, VDM_FLAG_DOS | VDM_FLAG_FIRST_TASK.
+       ► MEASURED on the rig, both launch shapes (STAGE1: fetch2 lines, s72):
+           AppName = C:\DOCUME~1\...\bm\selftest.com   (full short path, AppLen incl. NUL)
+           CmdLine = "hello world\r\n"                     (the tail ONLY; "\r\n" when none)
+           CurDirectory = the launcher's cwd; Env = its Win32 environment block (0x46c);
+           ComingFromBat = 1 from a batch file; TaskId 0 without -i is fine.
+         DONT_WAIT so a protocol misunderstanding is a FALSE with an error, never a hang.
+         Only after a successful first fetch: on a WOW launch the first returns FALSE
+         (err 0x57) and that tell is left exactly as it was. */
+    if (g_cur[0] || g_title[0]) {
+        VDM_COMMAND_INFO ci2;
+        DWORD err2 = 0; BOOL ok2; int k;
+        static char pf2[512], dk2[512], tt2[512], rv2[512];
+        ZeroMemory(&ci2, sizeof ci2);
+        ci2.CmdLine = g_cmd2; ci2.CmdLen = sizeof g_cmd2;  ci2.AppName = g_app2; ci2.AppLen = sizeof g_app2;
+        ci2.PifFile = pf2; ci2.PifLen = sizeof pf2; ci2.CurDirectory = g_cur2; ci2.CurDirectoryLen = sizeof g_cur2;
+        ci2.Env = g_env2; ci2.EnvLen = sizeof g_env2; ci2.Desktop = dk2; ci2.DesktopLen = sizeof dk2;
+        ci2.Title = tt2; ci2.TitleLen = sizeof tt2; ci2.Reserved = rv2; ci2.ReservedLen = sizeof rv2;
+        ci2.StartupInfo.cb = sizeof(STARTUPINFOA);
+        ci2.VDMState = 0x04 | 0x01 | 0x20;              /* VDM_FLAG_DOS | FIRST_TASK | DONT_WAIT */
+        ci2.TaskId = g_ci.TaskId;
+        ok2 = csrss_get_command(&ci2, &err2);
+        g_app2[sizeof g_app2 - 1] = 0; g_cmd2[sizeof g_cmd2 - 1] = 0; g_cur2[sizeof g_cur2 - 1] = 0;
+        /* the tail ends in CR LF; the PSP wants neither */
+        for (k = 0; g_cmd2[k]; ++k) if (g_cmd2[k] == '\r' || g_cmd2[k] == '\n') { g_cmd2[k] = 0; break; }
+        g_fetch2_ok = ok2 && ci2.AppLen > 1 && g_app2[0];
+        p = zput(p, "STAGE1: command fetch (DOS|FIRST|DONT_WAIT) -> "); p = zput(p, ok2 ? "TRUE" : "FALSE");
+        p = zput(p, " err=0x"); p = zhex(p, err2);
+        p = zput(p, " app=["); p = zput(p, g_app2); p = zput(p, "] args=["); p = zput(p, g_cmd2);
+        p = zput(p, "] cur=["); p = zput(p, g_cur2); p = zput(p, "] bat=0x"); p = zhex(p, ci2.ComingFromBat);
+        p = zput(p, " drive=0x"); p = zhex(p, ci2.CurrentDrive); p = zput(p, " envlen=0x"); p = zhex(p, ci2.EnvLen);
+        p = zput(p, " flags=0x"); p = zhex(p, ci2.CreationFlags);
+        p = zput(p, " std=0x"); p = zhex(p, (DWORD)(ULONG_PTR)ci2.StdIn); p = zput(p, "/0x"); p = zhex(p, (DWORD)(ULONG_PTR)ci2.StdOut);
+        p = zput(p, "/0x"); p = zhex(p, (DWORD)(ULONG_PTR)ci2.StdErr);
+        p = zput(p, "\r\n");
+    }
     log_write(LOG_PATH, report, p);
     /* ⚠ AFTER the log_write, not before: log_write TRUNCATES. The first cut of this
          ran the probe earlier and its output was silently erased by this very line,
@@ -21387,12 +21446,45 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
        (STAGE1: program C:\test\ -- an empty tail), so the override still
        applies there. It stops applying exactly when someone actually asked for
        a program, which is the only case that was ever wrong. */
+    /* ── ★★★★★ THE COMMAND CSRSS QUEUED WINS OVER EVERYTHING BELOW. (s72) ───────
+         AppName is the program's full path and CmdLine its tail, straight from the
+         launcher's CreateProcess -- no title heuristics, no quote-splitting, no join
+         with the current directory, and target.txt is not consulted. The title and
+         target.txt paths below remain for the shapes where this fetch does not answer
+         (the rig harness's dosstub.com + target.txt, where the queued command IS the
+         stub and the file names the real target -- kept by a stub-named check). */
+    if (g_fetch2_ok) {
+        HANDLE hf = CreateFileA(g_app2, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
+        int is_stub = 0;
+        {   const char *bn = g_app2, *q;
+            for (q = g_app2; *q; ++q) if (*q == '\\' || *q == '/') bn = q + 1;
+            is_stub = (lstrcmpiA(bn, "dosstub.com") == 0); }
+        if (is_stub) {
+            if (hf != INVALID_HANDLE_VALUE) CloseHandle(hf);
+            p = zput(p, "STAGE2: CSRSS queued dosstub.com -- the harness stub; target.txt names the program\r\n");
+            g_title[0] = 0;                              /* and the title must not either */
+        } else if (hf != INVALID_HANDLE_VALUE) {
+            ReadFile(hf, filebuf, sizeof(filebuf), &nread, NULL); CloseHandle(hf);
+            zput(progpath, g_app2);
+            zput(args, g_cmd2);
+            zput(g_wow_cmd_prog, g_app2);
+            zput(g_wow_cmd_args, g_cmd2);
+            p = zput(p, "STAGE2: loaded 0x"); p = zhex(p, nread);
+            p = zput(p, " from "); p = zput(p, g_app2);
+            p = zput(p, " args=["); p = zput(p, args); p = zput(p, "] (CSRSS AppName + CmdLine; target.txt and the title NOT consulted)\r\n");
+            g_title[0] = 0;                              /* the title chain below must not re-load */
+        } else {
+            p = zput(p, "STAGE2: CSRSS AppName ["); p = zput(p, g_app2);
+            p = zput(p, "] cannot be opened (0x"); p = zhex(p, GetLastError());
+            p = zput(p, ") -- falling back to the title / target.txt\r\n");
+        }
+    }
     {
-        int csrss_named = (g_cur[0] && g_title[0]);
+        int csrss_named = (g_cur[0] && g_title[0]) || (nread != 0);
         HANDLE ht = csrss_named ? INVALID_HANDLE_VALUE
                   : CreateFileA(TARGET_PATH, GENERIC_READ, FILE_SHARE_READ, NULL,
                                 OPEN_EXISTING, 0, NULL);
-        if (csrss_named) {
+        if (csrss_named && !nread) {
             p = zput(p, "STAGE2: CSRSS named a program -- target.txt NOT consulted "
                         "(GH #130)\r\n");
         }
@@ -25290,8 +25382,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
        way so it does not force-exit us mid-flush and lose the DOS output. */
     InterlockedExchange(&g_wound_down, 1);
 
-    g_ci.ExitCode = (ULONG)m.exit_code;             /* M2.5: errorlevel (shell notify = best-effort TODO) */
-
+    g_ci.ExitCode = (ULONG)m.exit_code;
     /* Flush captured DOS output to the console + the log.
      ► IF WE STREAMED IT LIVE, DO NOT PRINT IT AGAIN. g_stdio carries the output
        as the guest produces it now (GH #131), so the historical bulk write to
@@ -25300,6 +25391,61 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
        the line buffer instead. The log copy below is unconditional either way:
        it is a different sink and the one the rig harness reads. */
     stdio_flush();
+    /* ── ★ REPORT THE ERRORLEVEL TO CSRSS AND LEAVE THE CONSOLE. (s72) ──────────────
+         Only when CSRSS queued this task to us (the harness stub / target.txt shapes
+         and a WOW launch are untouched). AFTER the flush, so the launcher -- released
+         the instant CSRSS takes the report -- finds the program's whole output.
+       ► MEASURED: GetNextVDMCommand with the exit code releases the launcher and then
+         BLOCKS, DONT_WAIT or not, until the console's next DOS command arrives: stock
+         ntvdm stays resident per console and that wait is its idle state. We do not
+         stay, so the report goes in a helper thread and the main thread carries on to
+         ExitVDM, which is what releases the console's VDM record (without it the next
+         DOS program typed into the same window was queued to a host that had gone). */
+    if (g_fetch2_ok) {
+        HANDLE th; DWORD tid = 0, w;
+        p = zput(p, "STAGE2: task done -> reporting exit code 0x"); p = zhex(p, (DWORD)m.exit_code);
+        p = zput(p, " to CSRSS (helper thread)...\r\n");
+        log_append(LOG_PATH, base, p); p = base;
+        th = CreateThread(NULL, 0, csrss_report_thread, (LPVOID)(ULONG_PTR)m.exit_code, 0, &tid);
+        /* A short grace so the report's LPC is processed (launcher released) before
+           ExitVDM's is. The wait normally times out: the call is blocked for the
+           console's next command, which is stock ntvdm's idle state, not ours. */
+        w = th ? WaitForSingleObject(th, 50) : WAIT_FAILED;
+        if (th) CloseHandle(th);
+        p = zput(p, "STAGE2: task done -> report thread ");
+        p = zput(p, w == WAIT_OBJECT_0 ? "returned" : w == WAIT_TIMEOUT ? "blocked for the console's next command (expected)" : "could not start");
+        p = zput(p, "; ExitVDM...\r\n");
+        log_append(LOG_PATH, base, p); p = base;
+        {   BOOL ev = csrss_exit_vdm(); DWORD ee = GetLastError();
+            p = zput(p, "STAGE2: task done -> ExitVDM = "); p = zput(p, ev ? "TRUE" : "FALSE");
+            p = zput(p, " err=0x"); p = zhex(p, ee); p = zput(p, " got_next="); p = zhex(p, (DWORD)g_report_got_next);
+            p = zput(p, " next_app=["); p = zput(p, csrss_next_app); p = zput(p, "]\r\n");
+            log_append(LOG_PATH, base, p); p = base; }
+        /* ── A COMMAND ARRIVED IN THE WINDOW. The launcher queued its next DOS program
+             to THIS console's VDM (us) between the report and ExitVDM; CSRSS handed it
+             to the blocked report call. We are not going to run it in this process, and
+             CSRSS has already forgotten it: relaunch it here, in the same console, so it
+             runs in a fresh host. (Measured before this: the program silently did not
+             run and the launcher saw exit code 0.) */
+        if (g_report_got_next && csrss_next_app[0]) {
+            char cl[2300]; char *q = cl; STARTUPINFOA si; PROCESS_INFORMATION pi;
+            q = zput(q, "\""); q = zput(q, csrss_next_app); q = zput(q, "\"");
+            if (csrss_next_cmd[0]) { q = zput(q, " "); q = zput(q, csrss_next_cmd); }
+            *q = 0;
+            ZeroMemory(&si, sizeof si); si.cb = sizeof si; ZeroMemory(&pi, sizeof pi);
+            p = zput(p, "STAGE2: task done -> a command was queued to this VDM in the window: relaunching [");
+            p = zput(p, cl); p = zput(p, "] in [");  p = zput(p, csrss_next_cur); p = zput(p, "]");
+            if (CreateProcessA(NULL, cl, NULL, NULL, TRUE, 0, NULL,
+                               csrss_next_cur[0] ? csrss_next_cur : NULL, &si, &pi)) {
+                p = zput(p, " -> pid 0x"); p = zhex(p, pi.dwProcessId); p = zput(p, ", waiting\r\n");
+                log_append(LOG_PATH, base, p); p = base;
+                WaitForSingleObject(pi.hProcess, INFINITE);
+                CloseHandle(pi.hProcess); CloseHandle(pi.hThread);
+                p = zput(p, "STAGE2: task done -> relaunched command finished\r\n");
+            } else { p = zput(p, " -> CreateProcess FAILED 0x"); p = zhex(p, GetLastError()); p = zput(p, "\r\n"); }
+            log_append(LOG_PATH, base, p); p = base;
+        }
+    }
     /* ⚠ REPORTED AT EXIT, not at startup. The startup line is written before a
        later log_write(LOG_PATH,...) TRUNCATES the file, so it never survived to
        be read -- exactly as #131's stdout line did not. Same trap, same day. */

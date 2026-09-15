@@ -22,4 +22,22 @@ BOOL csrss_register_console(void);
    result; *out_err receives GetLastError() when non-NULL. */
 BOOL csrss_get_command(VDM_COMMAND_INFO *ci, DWORD *out_err);
 
+/* THE TASK IS OVER, AND SO IS THE VDM. (s72) Stock ntvdm reports a program's
+   exit code to CSRSS with GetNextVDMCommand (VDM_FLAG_DOS, ExitCode set, no
+   FIRST_TASK) -- which is what releases the launcher waiting on the task -- and
+   calls ExitVDM when it leaves a console. We did neither, so after our first
+   program CSRSS still believed a VDM owned the console and the SECOND DOS program
+   typed into the same cmd window was queued to a host that no longer existed and
+   never ran (measured: fetch2.bat's "direct 2" produced no log at all). One
+   task per host, then ExitVDM: the next launch in that console gets a fresh
+   host. DONT_WAIT: if CSRSS already has a follow-up queued we are not going to
+   run it, and a FALSE is fine. Returns what GetNextVDMCommand said, for the log. */
+BOOL csrss_task_done(ULONG task_id, ULONG exit_code, DWORD *out_err, BOOL *out_exitvdm);
+/* If csrss_task_done returned TRUE, CSRSS handed us the console's NEXT command
+   (a program launched into this console before ExitVDM); these hold it. */
+extern char csrss_next_app[1024], csrss_next_cmd[1024], csrss_next_cur[512];
+/* ExitVDM(FALSE, 0): a DOS VDM leaving its console. Separate so a hang in either
+   call names itself in the log. */
+BOOL csrss_exit_vdm(void);
+
 #endif /* VDM_CSRSS_H */

@@ -212,6 +212,9 @@ t_fileio:
     inc si
     inc di
     loop .cmp
+    mov ah, 0x41                ; and leave nothing behind
+    mov dx, fname
+    int 0x21
     xor ax, ax
     ret
 .f1: mov ax, 0x21
@@ -505,7 +508,12 @@ s_fhdr:    db "-------------------------------", 13, 10, "==== FAILURES: $"
 s_ftail:   db " ====", 13, 10, "$"
 s_waitk:   db "Press any key to exit...", 13, 10, "$"
 
-fname:     db "C:\ntvdmex\ST$.TMP", 0
+; s72: RELATIVE, in whatever directory the test was started from. It named
+; C:\ntvdmex\ST$.TMP, the first rig layout, which no longer exists on the rig and
+; never existed on anyone else's machine -- the packaged smoke test reported
+; "File I/O FAIL=21" on a host that had just opened, written and read the file
+; it was launched from. A self-test that needs a directory of its own is not one.
+fname:     db "ST$.TMP", 0
 fdata:     db "selftest fileio!"          ; exactly 16 bytes
 fbuf:      times 16 db 0
 
