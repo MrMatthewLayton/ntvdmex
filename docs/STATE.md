@@ -284,9 +284,11 @@ and matches the 6.22 oracle row for row (session 53)** — but `MEM /C` still re
      with AH=29h into an FCB and searches with **AH=11h/12h**, not AH=4Eh. ⚠ I saw
      the empty pane in my own headless screenshots this morning and explained it away
      as a Tab-order quirk — it is a real bug.
-   * **Doom dies ~1s after killing the imp on the ledge / the far zombie** on E1M1 —
-     and it **reproduces on demand**, which Mario's and Lemmings' identical deaths
-     never have. See the s72 section of `docs/PARITY.md` and the memory note.
+   * ~~**Doom dies ~1s after killing the imp on the ledge / the far zombie** on E1M1~~
+     — ✅ **SOLVED AND USER-CONFIRMED, s72 evening.** It was **our own INT-site
+     patcher corrupting a jump table it mistook for code.** See the block below;
+     everything under "in what is now known rather than guessed" is superseded as a
+     *conclusion* but kept because the eliminations were all correct.
 
    ### The Doom crash, in what is now known rather than guessed
    No `HOSTFAULT`, `veh{any=0 fatal=0}`, **no Application Error in XP's event log and
@@ -306,10 +308,62 @@ and matches the 6.22 oracle row for row (session 53)** — but `MEM /C` still re
    ⛔ **AND I ASKED FOR A RUN THAT COULD NOT ANSWER:** the counter I needed was
    printed only in the exit report, which a killed guest never writes. Counters that
    bear on a crash now ride the PM heartbeat.
-   ▶ **NEXT:** the **DPMI/PM IRQ0 arm, which still auto-EOIs** (`p_pic.asm` cannot
-   reach it) — the tail now ends on a successful async PM injection. And selector
-   `0x317` (base `0x041A0000`, limit `0x19`) is **refused by NT twice and never
-   installed in the LDT** in every run; a defect on its own account.
+   ▶ ~~**NEXT:** the DPMI/PM IRQ0 arm~~ — **wrong suspect; see below.** The IRQ0 arm
+   still auto-EOIs and selector `0x317` (base `0x041A0000`, limit `0x19`) is still
+   **refused by NT twice and never installed in the LDT**; both remain open defects
+   on their own account, but neither was this crash.
+
+   ### ✅ THE ANSWER (s72 evening, `6a2174a`) — A JUMP TABLE IS DATA, EVEN INSIDE A CODE OBJECT
+
+   **The instrument that ended it: `bm\vdmwatch.exe`** (`scripts/bm/vdmwatch.c`, built by
+   `scripts/build-vdmwatch.sh`) — a tiny attach-and-log debugger. Nothing we own runs
+   after the kernel gives up on a process, but `KiDispatchException` forwards every
+   exception to the **debug port first**, before the user-stack write that fails here.
+   It answers everything `DBG_EXCEPTION_NOT_HANDLED` (the no-debugger path) and logs the
+   code, address, register file, CS/SS descriptors, code+stack bytes and the exit code.
+
+   It caught the kill exactly: **`ACCESS_VIOLATION` whose fault address IS the EIP** —
+   `cs:eip=02bf:04c4c4fa`, an unmapped page — first chance, second chance, exit
+   `0xC0000005`, `veh{any=0}` to the end. `scripts/doomstack.py` then walked the core it
+   dumps: the guest `jmp`'d through a **near-pointer table at Doom obj1+`0x2cc6c`** and
+   landed on entry[1] = `0x04c4c4fa`.
+
+   **That value is `0x0416cdfa` with its middle two bytes overwritten by `C4 C4`** — the
+   BOP our INT-site patcher writes. Three of the table's five entries point into
+   obj1+`0x2cdXX`; little-endian that is `XX cd 16 04`, so the middle pair reads as
+   `CD 16` = INT 16h, a **serviced** vector, and `x86_int_site_is_real()` passes because a
+   table of code pointers decodes into plausible instruction streams. The guest writes the
+   table **after** the first scan, so the **second** scan corrupts it — DOS/4GW re-declares
+   its code selector on every file load (`AH=0009`/`000c`), re-running
+   `dpmi_patch_code_region` over the same range. `pmap_get` stops a site being patched
+   twice but **not a new candidate that only appeared once data was written.**
+
+   This is the **fourth** time this patcher has rewritten non-code — ZAR's call
+   displacement, `R_InitTextureMapping`'s `jle` displacement and the FP range 34h..3Fh are
+   the other three, all documented at the call site — and the first found by measurement
+   rather than a hunt.
+
+   **The fix:** a `cd nn` candidate lying inside an **aligned dword that points back into
+   the region being scanned** is a jump/call table entry, not two instructions — skip it.
+   Safe by the same argument as every arm beside it: a genuinely raw INT so aligned is
+   still serviced out of the `#GP`.
+
+   **★★★★★ USER-CONFIRMED: "Doom survived the crash!"** on build `a5cd764b`, which is now
+   the rig baseline (`bm\ntvdmhost_prev.exe` = the previous confirmed `c91b521e`).
+   Regression-clean: **ZAR** (the patcher's heaviest user) shows byte-identical patch
+   counts with the guard firing **0** times; **Skyroads** `max_ms=0x14`.
+
+   ⚠ **Doom's repro is BY-HAND ONLY** — headless can't even load the WAD (the target path
+   is mangled to `GAMESDOOME`, the known path-specific DOS/4GW blocker), so it never
+   reaches the second scan.
+
+   ⛔ **AND THE GUARD WAS SILENT IN THE RUN THAT PROVED IT** (`f036ba5`): its log line
+   shared the `rej++ < 16` cap, and that scan rejects **334** byte pairs before reaching
+   the table. What actually proved it was differencing two runs' counters —
+   `patched 3, rejected 0x14e` became `patched 0, rejected 0x151`, and `0x14e + 3 = 0x151`.
+   The guard now has its own counter, always printed in the scan line. *An absence in the
+   report means nothing unless the report says what it left out* — a fresh instance of
+   this project's most repeated lesson.
 
    ---
 
