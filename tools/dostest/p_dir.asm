@@ -59,7 +59,15 @@ start:
         ; ---- 36h on a drive that does not exist -> AX=FFFF
         POISON
         mov     ax, 3600h
-        mov     dl, 26                          ; drive Z:
+        ; ⚠ Y:, NOT Z:. Z: is not a free drive letter on the panel -- DOSBox-X
+        ; always mounts it as its own utility drive, and the XP rig has it mapped
+        ; to a network share, so on BOTH of those the drive EXISTS and the honest
+        ; answer to "what does DOS say about a missing drive" never gets asked.
+        ; Measured: this row read as an NTVDMEX bug (AX=0002 = 2 sectors/cluster,
+        ; i.e. a SUCCESSFUL query of the real Z:) and came within one commit of
+        ; "fixing" correct code into denying a mapped network drive. p_err.asm
+        ; already uses Y: for exactly this reason.
+        mov     dl, 25                          ; drive Y: -- unclaimed everywhere
         int     21h
         call    probe_capture
         EMIT    "int21.3600.baddrive", "AX,CF"
