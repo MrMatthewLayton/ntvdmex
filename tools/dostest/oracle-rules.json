@@ -858,5 +858,65 @@
   ],
   "recorded": "2026-09-15",
   "why": "The XMS DRIVER's internal revision (HIMEM.SYS 3.10 on the oracle, ours 3.00) -- a version number for a different program. ⚠ NOT abstained beside it: xms.00.version/DX, which reports whether an HMA EXISTS and is a real gap -- see docs/PARITY.md."
+ },
+ {
+  "probe": "sysvar",
+  "case": "sysvars.raw",
+  "field": "BUF",
+  "abstain": [
+   "msdos622"
+  ],
+  "recorded": "2026-09-15",
+  "why": "p_sysvar DUMPS DOS's internal structures, and every one of them is threaded with FAR POINTERS INTO THAT HOST'S OWN MEMORY -- which the probe's own header says mean nothing across hosts. So a byte-for-byte cross-host diff of these buffers can never agree and is not the probe's value; its value is the DUMP, read offline against src/dos/dos_sysvars.h, which is what GH #48 asked for. The List of Lists itself: DPB/SFT/CDS/device-chain far pointers plus this machine's drive count and LASTDRIVE."
+ },
+ {
+  "probe": "sysvar",
+  "case": "sysvars.dpb0",
+  "field": "BUF",
+  "abstain": [
+   "msdos622"
+  ],
+  "recorded": "2026-09-15",
+  "why": "p_sysvar DUMPS DOS's internal structures, and every one of them is threaded with FAR POINTERS INTO THAT HOST'S OWN MEMORY -- which the probe's own header says mean nothing across hosts. So a byte-for-byte cross-host diff of these buffers can never agree and is not the probe's value; its value is the DUMP, read offline against src/dos/dos_sysvars.h, which is what GH #48 asked for. The first DPB describes the first PHYSICAL drive -- a floppy on the oracle (which boots from one) and a hard disk here, so sectors/cluster, cluster count and the FAT geometry are all properties of different media."
+ },
+ {
+  "probe": "sysvar",
+  "case": "sysvars.sft0",
+  "field": "BUF",
+  "abstain": [
+   "msdos622"
+  ],
+  "recorded": "2026-09-15",
+  "why": "p_sysvar DUMPS DOS's internal structures, and every one of them is threaded with FAR POINTERS INTO THAT HOST'S OWN MEMORY -- which the probe's own header says mean nothing across hosts. So a byte-for-byte cross-host diff of these buffers can never agree and is not the probe's value; its value is the DUMP, read offline against src/dos/dos_sysvars.h, which is what GH #48 asked for. ⚠ AND A REAL DIFFERENCE THAT IS NOT A DEFECT: the oracle's first SFT block CHAINS (next=029B:0000, 5 entries, because DOS sizes blocks from FILES=), while ours is ONE block of 128 entries with next=FFFF:FFFF. dos_layout.h states that shape deliberately -- one block, terminated, advertising exactly what dos_machine_t::fh[] can really open. ★ THE THING THAT MATTERED HERE WAS FIXED (s72): SysVars+4 was 0000:0000 for a DOS guest, which is not 'no SFT' but 'an SFT at segment 0', i.e. the IVT read as SFT headers. It is now a real terminated block."
+ },
+ {
+  "probe": "sysvar",
+  "case": "sysvars.cds0",
+  "field": "BUF",
+  "abstain": [
+   "msdos622"
+  ],
+  "recorded": "2026-09-15",
+  "why": "p_sysvar DUMPS DOS's internal structures, and every one of them is threaded with FAR POINTERS INTO THAT HOST'S OWN MEMORY -- which the probe's own header says mean nothing across hosts. So a byte-for-byte cross-host diff of these buffers can never agree and is not the probe's value; its value is the DUMP, read offline against src/dos/dos_sysvars.h, which is what GH #48 asked for. A CDS entry is a path, flags, and a FAR POINTER to that drive's DPB. The paths agree ('A:\\\\'); the pointer and the drive flags are per-machine."
+ },
+ {
+  "probe": "sysvar",
+  "case": "sysvars.cds2",
+  "field": "BUF",
+  "abstain": [
+   "msdos622"
+  ],
+  "recorded": "2026-09-15",
+  "why": "p_sysvar DUMPS DOS's internal structures, and every one of them is threaded with FAR POINTERS INTO THAT HOST'S OWN MEMORY -- which the probe's own header says mean nothing across hosts. So a byte-for-byte cross-host diff of these buffers can never agree and is not the probe's value; its value is the DUMP, read offline against src/dos/dos_sysvars.h, which is what GH #48 asked for. Same as sysvars.cds0, for drive C:."
+ },
+ {
+  "probe": "sysvar",
+  "case": "sysvars.nul",
+  "field": "BUF",
+  "abstain": [
+   "msdos622"
+  ],
+  "recorded": "2026-09-15",
+  "why": "p_sysvar DUMPS DOS's internal structures, and every one of them is threaded with FAR POINTERS INTO THAT HOST'S OWN MEMORY -- which the probe's own header says mean nothing across hosts. So a byte-for-byte cross-host diff of these buffers can never agree and is not the probe's value; its value is the DUMP, read offline against src/dos/dos_sysvars.h, which is what GH #48 asked for. The NUL device header, whose first field is the far pointer to the NEXT driver in that host's chain."
  }
 ]

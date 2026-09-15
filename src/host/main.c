@@ -472,6 +472,7 @@ static DWORD g_ems_frame_lin;                        /* set by v86_map_ems_frame
 /* CSRSS receive buffers + program image (no CRT heap; static = zero-init). */
 static char g_cmd[1024], g_app[1024], g_cur[512], g_pif[512];
 static WORD g_cds_seg;                       /* the CDS array's reserved block, 0 = none */
+static WORD g_sft_seg;                       /* the SFT block for a DOS guest, 0 = none  */
 
 /* See NTVDMEX_DIR. No CRT here (the host links without one), so the string work is
    spelled out. */
@@ -22088,7 +22089,40 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
            PSP was built with DOS_MEM_TOP as its memory top; the program's block now
            ends one paragraph below the reserved block's data, and PSP+2 must say so
            or a program that resizes itself to "PSP+2 - PSP" fails with error 8. */
-        g_cds_seg = dos_mcb_reserve_top(NULL, first_mcb, DOS_CDS_PARAS);
+        /* ⚠⚠ ONE RESERVATION, CARVED -- NOT TWO CALLS. dos_mcb_reserve_top() splits
+             the LAST 'Z' block, and its first act is to make the block it split an
+             'M' and put the new 'Z' on top. So a SECOND call finds the block the
+             FIRST one just reserved and tries to split THAT: 143 paragraphs, which
+             cannot hold the SFT's 473, so it returned 0 and the SFT silently came
+             out ABSENT. Measured, first run -- the log said "SFT ABSENT" while the
+             memory it needed was sitting free below. Reserve the pair in one go and
+             carve it: CDS at the bottom, SFT immediately above. One MCB owned by
+             DOS (8) covering both is what it is -- resident DOS data. */
+        {   WORD resv = dos_mcb_reserve_top(NULL, first_mcb,
+                                            (WORD)(DOS_CDS_PARAS + DOS_SFT_PARAS));
+            if (resv) { g_cds_seg = resv; g_sft_seg = (WORD)(resv + DOS_CDS_PARAS); }
+            else        g_cds_seg = dos_mcb_reserve_top(NULL, first_mcb, DOS_CDS_PARAS);
+        }
+        /* ── ★ AND THE SFT, FOR A **DOS** GUEST. (s72) ────────────────────────────
+             The SFT chain was planted only on the WOW path, and the note there said
+             so in as many words -- "a DOS guest still gets SysVars+4 = 0 ... when a
+             DOS program needs the SFT, this moves". A DOS program now has: p_sysvar
+             walks the List of Lists and reads the chain head as absent.
+           ⚠⚠ AND ABSENT IS THE DANGEROUS PART, NOT THE MISSING PART. SysVars+4 = 0
+             does not mean "no SFT", it means "an SFT at segment 0" -- so a program
+             that walks the chain reads the IVT as SFT headers. That is exactly what
+             krnl386 did: 0x00000000 -> 0x000fa357 -> 0x000bc370 -> back, forever,
+             117 MB of DPMI calls in one run (see DOS_SFT_* in dos_layout.h). The
+             only reason no DOS guest had hit it is that none had looked.
+           ▸ THE MEMORY IS AFFORDABLE, AND THAT WAS MEASURED, NOT ASSUMED. The block
+             is 473 paragraphs (7.4 KB). p_tsr puts the largest free block at 0x962F
+             here against 0x9302 on genuine MS-DOS 6.22 -- we hand out 12.7 KB MORE
+             than real DOS -- so after this we are still 5.3 KB ahead of it, and a
+             guest that fits on 6.22 still fits here.
+           ▸ Reserved at the top like the CDS, owned by DOS (8), so it is resident
+             data a memory walker can see and account for rather than a hole. It is
+             taken AFTER the CDS, so it lands just below it and the program's block
+             now ends below THIS one -- hence PSP+2 comes from the lower of the two. */
         if (g_cds_seg)
             *(volatile WORD *)(((DWORD)DOS_PSP_SEG << 4) + 2) = (WORD)(g_cds_seg - 1);
     }
@@ -22282,12 +22316,39 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             *(volatile WORD *)(hdlr + DOS_SYSVARS_OFF + SV_CDS)     = 0xFFFF;
             *(volatile WORD *)(hdlr + DOS_SYSVARS_OFF + SV_CDS + 2) = 0xFFFF;
         }
+        /* ---- the SYSTEM FILE TABLE: one block, terminated, entries = what our
+               INT 21h layer can really open (dos_machine_t::fh[]). Same shape the
+               WOW path plants -- see the reserve above for why a DOS guest needs
+               one and why 0000:0000 was worse than useless. The entries are left
+               zeroed, which is not a stub: that is what a free SFT entry looks
+               like, and nothing has been opened this early.
+             ⚠ THE TERMINATOR IS THE POINT AT LEAST AS MUCH AS THE COUNT IS, so
+               the no-block path below writes FFFF:FFFF rather than falling back to
+               the zero this change exists to remove. */
+        if (g_sft_seg) {
+            volatile BYTE *sf = (volatile BYTE *)((DWORD)g_sft_seg << 4);
+            unsigned k;
+            for (k = 0; k < (unsigned)DOS_SFT_BYTES; ++k) sf[k] = 0;
+            *(volatile WORD *)(sf + 0) = 0xFFFF;             /* next offset: last block */
+            *(volatile WORD *)(sf + 2) = 0xFFFF;             /* next segment            */
+            *(volatile WORD *)(sf + 4) = DOS_SFT_ENTRIES;    /* entries in this block   */
+            *(volatile WORD *)(hdlr + DOS_SYSVARS_OFF + SV_SFT)     = 0x0000;
+            *(volatile WORD *)(hdlr + DOS_SYSVARS_OFF + SV_SFT + 2) = g_sft_seg;
+        } else {
+            *(volatile WORD *)(hdlr + DOS_SYSVARS_OFF + SV_SFT)     = 0xFFFF;
+            *(volatile WORD *)(hdlr + DOS_SYSVARS_OFF + SV_SFT + 2) = 0xFFFF;
+        }
         q = zput(q, "DOS: SysVars ");     q = zhex(q, nd);
         q = zput(q, " DPBs at 0x");       q = zhex(q, DOS_CTAB_SEG);
         q = zput(q, ":");                 q = zhex(q, DOS_DPBCHAIN_OFF);
         q = zput(q, " (terminated), NUL header inline, "); q = zhex(q, DOS_LASTDRIVE);
         q = zput(q, " CDS entries at 0x"); q = zhex(q, g_cds_seg);
-        q = zput(q, ":0 drives=");
+        q = zput(q, ":0, SFT ");
+        if (g_sft_seg) { q = zput(q, "at 0x"); q = zhex(q, g_sft_seg);
+                         q = zput(q, ":0 x"); q = zhex(q, (DWORD)DOS_SFT_ENTRIES);
+                         q = zput(q, " entries (terminated)"); }
+        else             q = zput(q, "ABSENT -- chain head terminated FFFF:FFFF");
+        q = zput(q, ", drives=");
         for (d = 0; d < 26; ++d) {
             if (!(drives & (1u << d))) continue;
             q = zput(q, dtype[d] == DRIVE_FIXED ? " " : dtype[d] == DRIVE_REMOVABLE ? " ~"
