@@ -216,6 +216,67 @@ static const char *exc_name(DWORD code)
     }
 }
 
+/* ── the core: guest memory as a flat file per region, so the death can be read
+   offline against the LE image. Offsets are linear (addr = base + offset); a page
+   ReadProcessMemory cannot read is written as zeros and counted, never skipped, so
+   the file stays addressable. Written once per process, at the FIRST exception --
+   the process is frozen while the debugger holds the event, so this is the one
+   moment the picture is consistent. */
+static void dump_region(HANDLE hp, const char *path, DWORD base, DWORD size)
+{
+    static BYTE buf[0x10000];
+    static char b[256]; char *p = b;
+    HANDLE f = CreateFileA(path, GENERIC_WRITE, FILE_SHARE_READ, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    DWORD off, wr, bad = 0, t0 = GetTickCount();
+    if (f == INVALID_HANDLE_VALUE) { p = sput(p, "core: cannot create "); p = sput(p, path); logline(b); return; }
+    for (off = 0; off < size; off += sizeof buf) {
+        DWORD n = size - off; SIZE_T got = 0;
+        if (n > sizeof buf) n = sizeof buf;
+        if (!ReadProcessMemory(hp, (LPCVOID)(ULONG_PTR)(base + off), buf, n, &got) || got != n) {
+            /* fall back a page at a time; zero what cannot be read */
+            DWORD pg;
+            for (pg = 0; pg < n; pg += 0x1000) {
+                SIZE_T g2 = 0;
+                if (!ReadProcessMemory(hp, (LPCVOID)(ULONG_PTR)(base + off + pg), buf + pg, 0x1000, &g2) || g2 != 0x1000) {
+                    unsigned i; for (i = 0; i < 0x1000; ++i) buf[pg + i] = 0;
+                    ++bad;
+                }
+            }
+        }
+        WriteFile(f, buf, n, &wr, NULL);
+    }
+    CloseHandle(f);
+    p = sput(p, "core: "); p = sput(p, path); p = sput(p, " base=0x"); p = sputx(p, base);
+    p = sput(p, " size=0x"); p = sputx(p, size); p = sput(p, " unreadable pages="); p = sputu(p, bad);
+    p = sput(p, " ms="); p = sputu(p, GetTickCount() - t0);
+    logline(b);
+}
+
+static void dump_core(HANDLE hp)
+{
+    dump_region(hp, SHARE "\\out\\vdmwatch_core_low.bin",  0x00000000u, 0x00110000u);   /* IVT..HMA */
+    dump_region(hp, SHARE "\\out\\vdmwatch_core_dpmi.bin", 0x03ff0000u, 0x00b10000u);   /* every DPMI block Doom took */
+}
+
+/* The stack, wide: from below ESP (what a `ret` just popped, the callee's locals) up
+   to the top of the stack object, so the whole return chain is in the log. */
+static void dump_stack(HANDLE hp, DWORD lin_esp)
+{
+    static char b[256]; char *p;
+    DWORD lo = lin_esp - 0x100, hi = lin_esp + 0x600, a;
+    for (a = lo; a < hi; a += 32) {
+        BYTE x[32]; SIZE_T got = 0; unsigned i;
+        p = b;
+        p = sput(p, "  st "); p = sputx(p, a); p = sput(p, a == lin_esp ? " >" : "  ");
+        if (!ReadProcessMemory(hp, (LPCVOID)(ULONG_PTR)a, x, 32, &got) || got != 32) { p = sput(p, " <unreadable>"); logline(b); continue; }
+        for (i = 0; i < 32; i += 4) {
+            DWORD v = x[i] | ((DWORD)x[i+1] << 8) | ((DWORD)x[i+2] << 16) | ((DWORD)x[i+3] << 24);
+            *p++ = ' '; p = sputx(p, v);
+        }
+        logline(b);
+    }
+}
+
 /* ── the exception dump: record, register file, both segments, code and stack ── */
 static void dump_exception(HANDLE hp, DWORD tid, const EXCEPTION_DEBUG_INFO *ei)
 {
@@ -274,6 +335,7 @@ static void dump_exception(HANDLE hp, DWORD tid, const EXCEPTION_DEBUG_INFO *ei)
         p = sput(p, "  stack@lin 0x"); p = sputx(p, lin); p = sput(p, ": ");
         p = hexbytes(p, hp, lin, 32);
         logline(b); p = b;
+        if (ei->dwFirstChance) dump_stack(hp, lin);
     }
 }
 
@@ -283,7 +345,7 @@ static void watch(DWORD pid)
     static char b[512]; char *p = b;
     DEBUG_EVENT de;
     HANDLE hp = NULL;
-    int attach_bp_pending = 1, done = 0;
+    int attach_bp_pending = 1, done = 0, core_written = 0;
     unsigned nexc = 0;
 
     thr_clear();
@@ -359,6 +421,7 @@ static void watch(DWORD pid)
             }
             attach_bp_pending = 0;
             dump_exception(hp, de.dwThreadId, &de.u.Exception);
+            if (!core_written && hp) { core_written = 1; dump_core(hp); }
             cont = DBG_EXCEPTION_NOT_HANDLED;   /* exactly what happens with no debugger present */
             break;
         case EXIT_PROCESS_DEBUG_EVENT:
