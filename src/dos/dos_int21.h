@@ -82,6 +82,17 @@ typedef struct {
     uint16_t line_seg, line_off;
     int      line_n, line_active;
     int      trace_all;        /* log EVERY INT 21h call -- see the trace at entry */
+    /* THE CURRENT DRIVE WHEN WIN32 CANNOT STAND ON IT. -1 = the current drive is the
+       process current directory's, as it always was. DOS selects a drive (AH=0Eh)
+       from the CDS without touching the media -- oracle: `0Eh B:` on a one-floppy
+       machine selects the phantom B: and 19h reads it back -- but Win32's
+       SetCurrentDirectory("A:") on an empty floppy or CD-ROM drive says NOT READY.
+       So a drive that exists (GetLogicalDrives) but cannot be entered is held here,
+       19h/47h/36h answer for it, and every relative path is prefixed with it so the
+       access fails on THAT drive the way DOS's would, instead of quietly landing on
+       C:. QB.EXE's File dialog sizes its drive list by select-then-read-back, and
+       listed one drive on a machine with four. (s72) */
+    int      vdrive;
     /* WHICH OF THE FIVE STANDARD HANDLES ARE STILL OPEN (bits 0-4, set at startup).
        fh[0..4] are NULL because they are devices, not files, so "NULL" cannot also
        mean "free" for them -- and the difference is load-bearing. DOS hands out the

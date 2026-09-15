@@ -224,6 +224,48 @@ static void v86_str(DWORD seg, DWORD off, char *dst, int max)
     dst[i] = 0;
 }
 
+/* The current drive, 0 = A:. The process current directory's, unless AH=0Eh
+   selected a drive Win32 could not enter (m->vdrive, see the header). */
+static uint8_t dos_cur_drive(const dos_machine_t *m)
+{
+    char cw[300];
+    DWORD n;
+    if (m->vdrive >= 0) return (uint8_t)m->vdrive;
+    n = GetCurrentDirectoryA(sizeof(cw), cw);
+    return (n >= 2 && cw[1] == ':') ? (uint8_t)((cw[0] | 0x20) - 'a') : DOS_CURRENT_DRIVE;
+}
+
+/* Keep Win32's per-drive current directory in step. GetFullPathNameA("X:") and
+   SetCurrentDirectoryA("X:") read the hidden `=X:` environment variable, which
+   cmd.exe and the CRT maintain and SetCurrentDirectoryA itself does NOT -- so
+   without this, C: -> D: -> C: came back to C:'s ROOT, where DOS returns to the
+   directory it left. The guest never sees the process environment (its block is
+   built separately), so these variables cost it nothing. */
+static void dos_note_drive_dir(const char *full)
+{
+    char var[5];
+    if (!full || !full[0] || full[1] != ':') return;
+    var[0] = '='; var[1] = (char)(full[0] & ~0x20); var[2] = ':'; var[3] = 0;
+    SetEnvironmentVariableA(var, full);
+}
+
+/* A guest path, as Win32 should see it: v86_str, then -- only while the current
+   drive is one Win32 cannot stand on -- a relative path is prefixed with that
+   drive so it resolves (and fails) THERE. "X:..." and "\\server" are left alone.
+   A device name survives the prefix: Win32 reads "A:CON" as CON, as DOS does. */
+static void v86_path(const dos_machine_t *m, DWORD seg, DWORD off, char *dst, int max)
+{
+    char tmp[300];
+    int k = 0, i;
+    v86_str(seg, off, tmp, sizeof(tmp));
+    if (m->vdrive >= 0 && tmp[0] && tmp[1] != ':' && !(tmp[0] == '\\' && tmp[1] == '\\')
+        && max > 3) {
+        dst[k++] = (char)('A' + m->vdrive); dst[k++] = ':';
+    }
+    for (i = 0; tmp[i] && k < max - 1; ++i) dst[k++] = tmp[i];
+    dst[k] = 0;
+}
+
 void dos_int21_init(dos_machine_t *m, uint16_t first_mcb)
 {
     int i;
@@ -234,6 +276,7 @@ void dos_int21_init(dos_machine_t *m, uint16_t first_mcb)
     m->child_rc = 0;
     m->fcb_find = 0;
     m->switch_char = '/';   /* oracle-confirmed 6.22 default */
+    m->vdrive = -1;         /* the current drive is the process current directory's */
     m->psp_seg = DOS_PSP_SEG;
     m->exec_pending = 0;
     m->tsr_pending = 0; m->tsr_keep = 0;
@@ -505,7 +548,7 @@ int dos_int21(dos_machine_t *m)
              still comes from the guest. */
         char fn[300]; DWORD slot; HANDLE f;
         DWORD shr = FILE_SHARE_READ | FILE_SHARE_WRITE;
-        v86_str(R_DS, R_DX, fn, sizeof(fn));
+        v86_path(m, R_DS, R_DX, fn, sizeof(fn));
         if (ah == 0x3C)
             f = CreateFileA(fn, GENERIC_READ | GENERIC_WRITE, shr,
                             NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
@@ -589,12 +632,17 @@ int dos_int21(dos_machine_t *m)
         int slot = -1, ok = 0;
         if (ah == 0x4E) {
             char pat[300];
-            v86_str(R_DS, R_DX, pat, sizeof(pat));
+            v86_path(m, R_DS, R_DX, pat, sizeof(pat));
             mask = (uint16_t)(R_CX & 0xFFFF);
             for (slot = 0; slot < 8 && m->find_h[slot]; ++slot) {}
             if (slot >= 8) { slot = 0;                       /* recycle the oldest */
                              FindClose(m->find_h[0]); m->find_h[0] = 0; }
             { HANDLE hf = FindFirstFileA(pat, &fd);
+              if (m->trace_all) { tp = zput(tp, "  INT21 AH=4E ["); tp = zput(tp, pat);
+                                  tp = zput(tp, "] attr=0x"); tp = zhex(tp, mask);
+                                  tp = zput(tp, hf == INVALID_HANDLE_VALUE ? " -> none (0x" : " -> found (0x");
+                                  tp = zhex(tp, hf == INVALID_HANDLE_VALUE ? GetLastError() : 0);
+                                  tp = zput(tp, ")\r\n"); }
               if (hf == INVALID_HANDLE_VALUE) {
                   DWORD e = GetLastError();
                   /* ORACLE-CONFIRMED, and not what memory suggests: a pattern
@@ -704,12 +752,7 @@ int dos_int21(dos_machine_t *m)
                        actually resolved -- measured: the oracle returns 01 when
                        run from A:, DOSBox 03 from C:. We were leaving the
                        caller's 0 in place. */
-                    if (!f[0]) {
-                        char cw[300];
-                        DWORD cn = GetCurrentDirectoryA(sizeof(cw), cw);
-                        if (cn >= 2 && cw[1] == ':')
-                            f[0] = (BYTE)((cw[0] | 0x20) - 'a' + 1);
-                    }
+                    if (!f[0]) f[0] = (BYTE)(dos_cur_drive(m) + 1);
                     f[24] = FCB_MAGIC; f[25] = (BYTE)slot;
                     FCB_OK();
                 }
@@ -972,7 +1015,7 @@ int dos_int21(dos_machine_t *m)
             /* AL=01 answers THROUGH this block, so remember where it is. */
             m->exec_pb_seg = (uint16_t)(R_ES & 0xFFFF);
             m->exec_pb_off = (uint16_t)(R_BX & 0xFFFF);
-            v86_str(R_DS, R_DX, m->exec_path, sizeof(m->exec_path));
+            v86_path(m, R_DS, R_DX, m->exec_path, sizeof(m->exec_path));
             m->exec_env      = (uint16_t)(pb[0] | (pb[1] << 8));
             m->exec_tail_off = (uint16_t)(pb[2] | (pb[3] << 8));
             m->exec_tail_seg = (uint16_t)(pb[4] | (pb[5] << 8));
@@ -992,7 +1035,7 @@ int dos_int21(dos_machine_t *m)
                  path is wrong for it and it branches early. (GH #50) */
             const volatile BYTE *pb =
                 (const volatile BYTE *)((R_ES << 4) + (R_BX & 0xFFFF));
-            v86_str(R_DS, R_DX, m->exec_path, sizeof(m->exec_path));
+            v86_path(m, R_DS, R_DX, m->exec_path, sizeof(m->exec_path));
             m->exec_ovl_seg   = (uint16_t)(pb[0] | (pb[1] << 8));
             m->exec_ovl_reloc = (uint16_t)(pb[2] | (pb[3] << 8));
             m->exec_mode = 0x03;
@@ -1012,9 +1055,10 @@ int dos_int21(dos_machine_t *m)
            probe's own output until probe_capture learned to restore it. */
         DWORD spc = 0, bps = 0, freec = 0, totc = 0;
         char root[4]; char *rp = 0;
-        uint8_t dl1b = (uint8_t)(R_DX & 0xFF);
-        if (ah == 0x1C && dl1b) { root[0] = (char)('A' + dl1b - 1); root[1] = ':';
-                                  root[2] = '\\'; root[3] = 0; rp = root; }
+        uint8_t dl1b = (ah == 0x1C) ? (uint8_t)(R_DX & 0xFF) : 0;   /* 1Bh: default drive */
+        if (!dl1b && m->vdrive >= 0) dl1b = (uint8_t)(m->vdrive + 1);
+        if (dl1b) { root[0] = (char)('A' + dl1b - 1); root[1] = ':';
+                    root[2] = '\\'; root[3] = 0; rp = root; }
         if (GetDiskFreeSpaceA(rp, &spc, &bps, &freec, &totc)) {
             volatile BYTE *md = (volatile BYTE *)((DOS_CTAB_SEG << 4) + DOS_MEDIA_OFF);
             *md = 0xF8;                          /* fixed disk */
@@ -1166,7 +1210,7 @@ int dos_int21(dos_machine_t *m)
     } else if (ah == 0x39 || ah == 0x3A) {      /* mkdir / rmdir */
         char fn[300];
         int ok2;
-        v86_str(R_DS, R_DX, fn, sizeof(fn));
+        v86_path(m, R_DS, R_DX, fn, sizeof(fn));
         ok2 = (ah == 0x39) ? (int)CreateDirectoryA(fn, NULL)
                            : (int)RemoveDirectoryA(fn);
         if (ok2) OKCF();
@@ -1181,13 +1225,13 @@ int dos_int21(dos_machine_t *m)
         }
     } else if (ah == 0x41) {                    /* delete file */
         char fn[300];
-        v86_str(R_DS, R_DX, fn, sizeof(fn));
+        v86_path(m, R_DS, R_DX, fn, sizeof(fn));
         if (DeleteFileA(fn)) OKCF();
         else { SETAX(2); ERRCF(); }             /* oracle: absent -> AX=2 */
     } else if (ah == 0x43) {                    /* get/set file attributes */
         char fn[300];
         uint8_t al43 = (uint8_t)(R_AX & 0xFF);
-        v86_str(R_DS, R_DX, fn, sizeof(fn));
+        v86_path(m, R_DS, R_DX, fn, sizeof(fn));
         if (al43 == 0x00) {
             DWORD a = GetFileAttributesA(fn);
             if (a == 0xFFFFFFFFu) { SETAX(2); ERRCF(); }
@@ -1257,8 +1301,8 @@ int dos_int21(dos_machine_t *m)
         OKCF();
     } else if (ah == 0x56) {                    /* rename: DS:DX -> ES:DI */
         char from[300], to[300];
-        v86_str(R_DS, R_DX, from, sizeof(from));
-        v86_str(R_ES, R_DI, to,   sizeof(to));
+        v86_path(m, R_DS, R_DX, from, sizeof(from));
+        v86_path(m, R_ES, R_DI, to,   sizeof(to));
         if (MoveFileA(from, to)) OKCF();
         else { DWORD e = GetLastError();
                SETAX((uint16_t)(e == ERROR_ALREADY_EXISTS ? 5 : 2)); ERRCF(); }
@@ -1282,7 +1326,7 @@ int dos_int21(dos_machine_t *m)
         } else { SETAX(1); ERRCF(); }
     } else if (ah == 0x5A || ah == 0x5B) {      /* create temp / create new */
         char fn[300]; HANDLE f; DWORD slot;
-        v86_str(R_DS, R_DX, fn, sizeof(fn));
+        v86_path(m, R_DS, R_DX, fn, sizeof(fn));
         if (ah == 0x5A) {                       /* DS:DX is a DIRECTORY path;
                                                    DOS appends a generated name
                                                    and hands it back in place. */
@@ -1344,7 +1388,7 @@ int dos_int21(dos_machine_t *m)
         DWORD mode = R_BX & 3;
         DWORD acc = (mode == 1) ? GENERIC_WRITE
                   : (mode == 2) ? (GENERIC_READ | GENERIC_WRITE) : GENERIC_READ;
-        v86_str(R_DS, R_SI, fn, sizeof(fn));
+        v86_path(m, R_DS, R_SI, fn, sizeof(fn));
         if      (exists == 2 && missing == 1) disp = CREATE_ALWAYS;
         else if (exists == 1 && missing == 1) disp = OPEN_ALWAYS;
         else if (exists == 0 && missing == 1) disp = CREATE_NEW;
@@ -1390,7 +1434,7 @@ int dos_int21(dos_machine_t *m)
     } else if (ah == 0x60) {                    /* truename: DS:SI -> ES:DI */
         char in[300], out[300];
         DWORD n;
-        v86_str(R_DS, R_SI, in, sizeof(in));
+        v86_path(m, R_DS, R_SI, in, sizeof(in));
         n = GetFullPathNameA(in, sizeof(out), out, NULL);
         if (n == 0 || n >= sizeof(out)) { SETAX(3); ERRCF(); }
         else {
@@ -1490,10 +1534,13 @@ int dos_int21(dos_machine_t *m)
            Wanted by four of the five real 6.22 tools we ran (TREE, ATTRIB,
            XCOPY, COMMAND.COM), which is why it came first.  GH #32. */
         char cwd[300];
-        DWORD n = GetCurrentDirectoryA(sizeof(cwd), cwd);
+        DWORD n;
         uint8_t dl47 = (uint8_t)(R_DX & 0xFF);
-        uint8_t curdrv = (n >= 2 && cwd[1] == ':')
-                       ? (uint8_t)((cwd[0] | 0x20) - 'a' + 1) : 3;
+        uint8_t curdrv = (uint8_t)(dos_cur_drive(m) + 1);
+        if (m->vdrive >= 0) {                 /* a drive Win32 cannot stand on: its =X: or root */
+            char spec[3]; spec[0] = (char)('A' + m->vdrive); spec[1] = ':'; spec[2] = 0;
+            n = GetFullPathNameA(spec, sizeof(cwd), cwd, NULL);
+        } else n = GetCurrentDirectoryA(sizeof(cwd), cwd);
         /* ── ★ 0xF0 IS krnl386 TALKING TO ntvdm, AND WE ARE ntvdm. (#128, s37) ──
              krnl386 keeps a per-drive byte table at its DGROUP 0x2a2 and, for any
              drive flagged there, re-issues this call through seg1:0x0834, which is
@@ -1541,10 +1588,40 @@ int dos_int21(dos_machine_t *m)
             SETAX(0x0100); OKCF();                    /* oracle: AX=0100      */
         }
     } else if (ah == 0x3B) {                    /* chdir: DS:DX = ASCIIZ path */
-        char fn[300];
-        v86_str(R_DS, R_DX, fn, sizeof(fn));
-        if (SetCurrentDirectoryA(fn)) { OKCF(); }
-        else { SETAX(3); ERRCF(); }             /* oracle: AX=0003, CF=1      */
+        /* ── ★ CHDIR NEVER MOVES THE CURRENT DRIVE. ─────────────────────────────
+             Oracle (p_drv.asm): `3Bh C:\ZZDRV` issued from A: leaves 19h at A:, and
+             47h for C: then answers ZZDRV -- every drive keeps its own directory.
+             SetCurrentDirectoryA("C:\ZZDRV") moves the PROCESS to C:, which made
+             the DOS current drive follow it. So a path on another drive only sets
+             that drive's =X: variable (which is what "X:" resolves through); the
+             process current directory changes only for the drive we are on.
+             Also measured: a bare "C:" is path-not-found (AX=3), not a no-op. */
+        char fn[300], full[300];
+        DWORD n;
+        uint8_t tgt;
+        v86_path(m, R_DS, R_DX, fn, sizeof(fn));
+        tp = zput(tp, "  INT21 AH=3B chdir ["); tp = zput(tp, fn); tp = zput(tp, "]");
+        if (fn[0] && fn[1] == ':' && !fn[2]) { SETAX(3); ERRCF(); tp = zput(tp, " -> 3 (drive only)\r\n"); }
+        else if ((n = GetFullPathNameA(fn, sizeof(full), full, NULL)) == 0 || n >= sizeof(full)
+                 || full[1] != ':') { SETAX(3); ERRCF(); tp = zput(tp, " -> 3\r\n"); }
+        else {
+            tgt = (uint8_t)((full[0] | 0x20) - 'a');
+            if (tgt == dos_cur_drive(m)) {
+                if (SetCurrentDirectoryA(full)) {
+                    m->vdrive = -1;             /* it can be stood on after all */
+                    dos_note_drive_dir(full);
+                    OKCF(); tp = zput(tp, " -> ok\r\n");
+                } else { SETAX(3); ERRCF(); tp = zput(tp, " -> 3 (0x"); tp = zhex(tp, GetLastError());
+                         tp = zput(tp, ")\r\n"); }   /* oracle: AX=0003, CF=1 */
+            } else {
+                DWORD a = GetFileAttributesA(full);
+                if (a != 0xFFFFFFFFu && (a & FILE_ATTRIBUTE_DIRECTORY)) {
+                    dos_note_drive_dir(full);
+                    OKCF(); tp = zput(tp, " -> ok (another drive's directory; current drive unchanged)\r\n");
+                } else { SETAX(3); ERRCF(); tp = zput(tp, " -> 3 (other drive, 0x"); tp = zhex(tp, GetLastError());
+                         tp = zput(tp, ")\r\n"); }
+            }
+        }
     } else if (ah == 0x36) {                    /* get free disk space: DL = drive */
         /* AX=sectors/cluster BX=free clusters CX=bytes/sector DX=total clusters.
            AN INVALID DRIVE RETURNS AX=FFFF WITH CARRY CLEAR -- oracle-confirmed,
@@ -1553,6 +1630,7 @@ int dos_int21(dos_machine_t *m)
         uint8_t dl36 = (uint8_t)(R_DX & 0xFF);
         DWORD spc = 0, bps = 0, freec = 0, totc = 0;
         char root[4]; char *rp = 0;
+        if (!dl36 && m->vdrive >= 0) dl36 = (uint8_t)(m->vdrive + 1);
         if (dl36) { root[0] = (char)('A' + dl36 - 1); root[1] = ':'; root[2] = '\\';
                     root[3] = 0; rp = root; }
         if (dl36 <= 26 && GetDiskFreeSpaceA(rp, &spc, &bps, &freec, &totc)) {
@@ -1668,11 +1746,7 @@ int dos_int21(dos_machine_t *m)
         else if (al == 0x08 || al == 0x09 || al == 0x0E) {
             BYTE drv = (BYTE)(bx & 0xFF);            /* 0 = default drive           */
             UINT ty = 0;
-            if (!drv) {
-                char cw[300];
-                DWORD n = GetCurrentDirectoryA(sizeof(cw), cw);
-                drv = (n >= 2 && cw[1] == ':') ? (BYTE)((cw[0] | 0x20) - 'a' + 1) : 3;
-            }
+            if (!drv) drv = (BYTE)(dos_cur_drive(m) + 1);
             if (drv >= 1 && drv <= 26 && (GetLogicalDrives() & (1u << (drv - 1)))) {
                 char root[4]; root[0] = (char)('A' + drv - 1); root[1] = ':';
                 root[2] = '\\'; root[3] = 0;
@@ -1752,24 +1826,40 @@ int dos_int21(dos_machine_t *m)
              a program probing drives the classic way -- select X, read back, compare
              -- found only C:. QB.EXE's file dialog does exactly that (39BCCh..39BE4h)
              and listed one drive on a machine with four. */
-        char cw[300];
-        DWORD n = GetCurrentDirectoryA(sizeof(cw), cw);
-        uint8_t cd = (n >= 2 && cw[1] == ':') ? (uint8_t)((cw[0] | 0x20) - 'a')
-                                              : DOS_CURRENT_DRIVE;
-        SETAX((R_AX & 0xFF00) | cd); OKCF();
+        SETAX((R_AX & 0xFF00) | dos_cur_drive(m)); OKCF();
     } else if (ah == 0x0E) {                    /* select drive -> AL = LASTDRIVE  */
         /* Win32 keeps a current directory per drive (the hidden =X: variables), and
            "X:" as a path means that directory -- so selecting a drive is one call,
            and a later relative open lands where DOS would put it. A drive that is
            not there is left unselected, as DOS leaves it; AL is LASTDRIVE either
            way, which is the documented answer and what a program sizes its drive
-           list from. */
+           list from.
+           ── ★ A DRIVE THAT IS THERE BUT NOT READY IS STILL SELECTED. ─────────────
+             Oracle (p_drv.asm): `0Eh B:` on a one-floppy 6.22 machine selects the
+             phantom B: with nothing in it and 19h reads back 1; only a letter with
+             no device behind it (D: with LASTDRIVE=E, Z:) is refused. Win32 refuses
+             to chdir onto an empty floppy or CD-ROM (NOT READY), and this used to
+             leave the guest on C: -- so QB.EXE's select/read-back probe found ONE
+             drive on a machine with four. Now the selection is held in m->vdrive
+             and every relative path goes to that drive (v86_path), where the access
+             fails as DOS's would. */
         uint8_t dl = (uint8_t)(R_DX & 0xFF);
         if (dl < 26 && (GetLogicalDrives() & (1u << dl))) {
-            char spec[3]; spec[0] = (char)('A' + dl); spec[1] = ':'; spec[2] = 0;
-            if (!SetCurrentDirectoryA(spec)) {           /* e.g. no media: try the root */
+            char spec[3], cw[300];
+            spec[0] = (char)('A' + dl); spec[1] = ':'; spec[2] = 0;
+            /* remember the directory we are leaving; "X:" resolves through =X: */
+            if (m->vdrive < 0 && GetCurrentDirectoryA(sizeof(cw), cw)) dos_note_drive_dir(cw);
+            if (SetCurrentDirectoryA(spec)) m->vdrive = -1;
+            else {                                       /* e.g. no media: try the root */
                 char root[4]; root[0] = spec[0]; root[1] = ':'; root[2] = '\\'; root[3] = 0;
-                SetCurrentDirectoryA(root);
+                if (SetCurrentDirectoryA(root)) m->vdrive = -1;
+                else {
+                    m->vdrive = dl;
+                    tp = zput(tp, "  INT21 AH=0E drive "); *tp++ = spec[0];
+                    tp = zput(tp, ": exists but is not ready (Win32 error 0x");
+                    tp = zhex(tp, GetLastError());
+                    tp = zput(tp, ") -> selected as the DOS current drive anyway\r\n");
+                }
             }
         }
         SETAX((R_AX & 0xFF00) | DOS_LASTDRIVE); OKCF();
