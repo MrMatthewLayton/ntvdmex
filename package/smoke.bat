@@ -5,9 +5,14 @@ echo.
 echo NTVDMEX smoke test -- runs the built-in self-test under the installed VDM.
 echo Expect eight lines ending in PASS. It takes a few seconds.
 echo.
-"%~dp0bm\ntvdmhost.exe" /status | findstr /I /C:"installed as this machine" >nul
+rem /status answers in its EXIT CODE: 0 = NTVDMEX is the machine's VDM, 1 = nobody
+rem is, 2 = another program is. This used to grep the output for a sentence that
+rem only install.bat prints, so it reported "not installed" immediately after
+rem install.bat reported success.
+"%~dp0bm\ntvdmhost.exe" /status >nul
 if errorlevel 1 (
     echo NTVDMEX is not installed on this machine. Run install.bat first.
+    echo (status.bat will say who owns the VDM.^)
     pause
     exit /b 1
 )

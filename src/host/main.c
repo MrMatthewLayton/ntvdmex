@@ -977,6 +977,14 @@ static void pmap_clear(DWORD lin)
 #define PMNOIRQ_PATH CFG_("pmnoirq.flag")
 #define PMVEHPASS_PATH CFG_("pmvehpass.flag")
 #define NOSB_PATH      CFG_("nosb.flag")
+/* ── "THERE IS NO MOUSE ON THIS MACHINE". ───────────────────────────────────────
+     INT 33h AX=0000h answers AX=0 and every other function is left alone, which is
+     what a DOS program sees with no driver loaded. It exists to take the mouse --
+     and with it Doom's twice-a-frame DPMI real-mode simulation -- OUT of a run, so
+     "is that path involved in this crash at all" becomes one measurement instead of
+     a series of guesses. A configuration, not a debug hack: a machine without a
+     mouse is a machine a guest has to cope with. */
+#define NOMOUSE_PATH   CFG_("nomouse.flag")
 /* ── A WATCH ADDRESS: ONE HEX LINEAR ADDRESS, DUMPED EITHER SIDE OF EACH INJECTED
      INTERRUPT. ─────────────────────────────────────────────────────────────────────
    The question an injected timer tick always raises is not "did the handler run" --
@@ -2565,6 +2573,27 @@ static void async_early_bail(unsigned irq, unsigned why)
 /* Paired with the InterlockedCompareExchange below; every path that resumed the guest
    must drop ownership. See g_async_ctxwr. */
 #define ASYNC_CTX_RELEASE() InterlockedExchange(&g_async_ctxwr, 0)
+/* ── ★★★★★ A DPMI REAL-MODE SIMULATION IS A WINDOW IN WHICH THE VDM HAS NO SETTLED
+     MODE, AND THE ASYNC INJECTOR MUST NOT LOOK INTO IT. (s72, Doom's E1M1 crash)
+     INT 31h AX=0300h/0301h/0302h save the client's protected-mode register file,
+     overwrite the TIB with a REAL-MODE one, run the handler, and put the first back.
+     async_inject_irq() decides "protected mode or V86?" from the VM bit of the context
+     it has just read -- which is precisely the field being rewritten. Injecting into
+     that window builds an interrupt frame for the mode the guest is no longer in, NT
+     sees a VDM whose state makes no sense, and it TERMINATES THE PROCESS: no user-mode
+     exception (our VEH reported any=0 fatal=0), no Application Error in the event log,
+     no shutdown path -- the log simply stops. That is the signature of this crash, of
+     the Mario one, and of s69's Lemmings death.
+   ► MEASURED: two of the user's Doom crashes, one with sound and one with the Sound
+     Blaster unfitted, END ON THE SAME TWO LINES -- a pair of `simInt 0x33` (Doom polls
+     the mouse twice a frame through DPMI). Killing a distant enemy is a heavy frame, so
+     more IRQ0s land inside the window; that is why it looks like "shooting the imp
+     crashes it" rather than a random fault.
+   ⚠ NOTHING IS LOST by refusing here. The injector's contract is already "observed
+     only -- the next tick injects", so the interrupt is simply delivered a moment
+     later, once the guest is back in a mode that exists. */
+static volatile LONG g_simint_busy = 0;
+
 static int async_inject_irq(unsigned irq)
 {
     CONTEXT cx;
@@ -2585,6 +2614,9 @@ static int async_inject_irq(unsigned irq)
          (see host_panic_release). g_running is cleared first thing in WM_DESTROY. */
     if (!g_running) { async_early_bail(irq, 20); return 0; }
     if (!g_hcpu || g_in_exec == 0) { async_early_bail(irq, 20); return 0; }
+    /* Mid real-mode simulation: the guest's mode is being rewritten under us. See
+       g_simint_busy -- this is the Doom E1M1 crash. */
+    if (g_simint_busy) { async_early_bail(irq, 30); return 0; }
     /* Ask the PIC, exactly as the hardware would: is this line unmasked, and is nothing of
        equal or higher priority still in service? That is what stops us re-entering a handler
        that has not EOI'd yet -- the fault behind "press a key and everything hangs". */
@@ -3454,8 +3486,13 @@ static int install_perform(int want, char *msg, DWORD cap)
     return 1;
 }
 
-/* Where we stand right now, in words, for `/status` and for the menu. */
-static void install_status_text(char *msg, DWORD cap)
+/* Where we stand right now, in words, for `/status` and for the menu.
+   RETURNS the state too, because a caller that must ACT on it should never have to
+   read the prose. package/smoke.bat did exactly that -- it grepped /status for
+   "installed as this machine", a sentence only /install ever prints -- so it
+   declared NTVDMEX uninstalled the moment after install.bat said otherwise. Two
+   layers that have to agree about a string, don't. (s72, found by hand on the rig.) */
+static install_state install_status_text(char *msg, DWORD cap)
 {
     char self[NTVDMEX_PATH_MAX], cur[NTVDMEX_PATH_MAX];
     char *p = msg;
@@ -3476,6 +3513,7 @@ static void install_status_text(char *msg, DWORD cap)
     default:
         p = zput(p, "NOT INSTALLED -- this machine uses its own ntvdm.exe.\r\n"); break;
     }
+    return st;
 }
 
 /* Which verb, if any, this command line asks for: 0 install, 1 uninstall,
@@ -5779,6 +5817,8 @@ static DWORD g_simint_unhandled, g_simint_vec[256];
      picked up without a rebuild. */
 #define SIMINTREFL_FLAG CFG_("simintrefl.flag")
 static int g_simint_reflect = 0;
+static int g_mouse_absent = 0;          /* nomouse.flag: INT 33h 0000h answers "none" */
+/* g_simint_busy (declared above async_inject_irq) is set across 0300h. */
 static LONG  g_ms_raw_tot_x, g_ms_raw_tot_y;
 static volatile LONG g_ms_hidden = 1;       /* INT 33h cursor hide-count; 0 => visible */
 
@@ -6283,6 +6323,7 @@ static void mouse_int33(volatile BYTE *tib, int src)
         InterlockedExchange(&g_ms_want_capture, 1);
     switch (ax) {
     case 0x0000:                                        /* reset + get status      */
+        if (g_mouse_absent) { VDM_SET16(tib, VTIB_EAX, 0x0000); break; }  /* no driver */
         VDM_SET16(tib, VTIB_EAX, 0xFFFF);               /* driver installed        */
         VDM_SET16(tib, VTIB_EBX, 0x0002);               /* 2 buttons               */
         i33_reset_state();
@@ -19113,6 +19154,7 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                             DWORD esb = dpmi_sel_base((WORD)VDM_REG(tib, VTIB_ES));
                             volatile BYTE *r = (volatile BYTE *)(ULONG_PTR)dpmi_rmcs_ptr(tib, esb);
                             dpmi_rmcs_probe(tib, esb, 0, intno);   /* observation only */
+                            InterlockedExchange(&g_simint_busy, 1);  /* no async injection in here */
                             /* save the client's PM register file */
                             DWORD sA=VDM_REG(tib,VTIB_EAX),sB=VDM_REG(tib,VTIB_EBX),sC=VDM_REG(tib,VTIB_ECX),
                                   sD=VDM_REG(tib,VTIB_EDX),sS=VDM_REG(tib,VTIB_ESI),sDi=VDM_REG(tib,VTIB_EDI),
@@ -19192,6 +19234,7 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                             VDM_REG(tib,VTIB_ESI)=sS;VDM_REG(tib,VTIB_EDI)=sDi;VDM_REG(tib,VTIB_EBP)=sBp;VDM_REG(tib,VTIB_DS)=sDs;
                             VDM_REG(tib,VTIB_ES)=sEs;VDM_REG(tib,VTIB_SS)=sSs;VDM_REG(tib,VTIB_ESP)=sSp;VDM_REG(tib,VTIB_EFLAGS)=sFl;
                             VDM_REG(tib,VTIB_EFLAGS) &= ~1u;       /* 0300 succeeds */
+                            InterlockedExchange(&g_simint_busy, 0);
                             p = zput(p, " -> simInt 0x"); p = zhex(p, intno);
                             break; }
                         case 0x0302:                               /* ...with an IRET frame */
@@ -19228,6 +19271,9 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                             WORD rcs = *(volatile WORD*)(r+0x2C), rip = *(volatile WORD*)(r+0x2A);
                             WORD rss = *(volatile WORD*)(r+0x30), rsp = *(volatile WORD*)(r+0x2E);
                             unsigned rt; int done = 0;
+                            /* 0301h/0302h rewrite the VDM into V86 and back for real, so they are
+                               the SAME window as 0300h and share its guard -- see g_simint_busy. */
+                            InterlockedExchange(&g_simint_busy, 1);
                             if (rss == 0) { rss = (WORD)(g_dpmi_code_base >> 4); rsp = 0xFF00; }
                             p = zput(p, (ax == 0x0302) ? " -> callRM(iret) 0x" : " -> callRM 0x");
                             p = zhex(p, rcs); p = zput(p, ":0x"); p = zhex(p, rip);
@@ -19359,6 +19405,7 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                             VDM_SET16(tib,VTIB_CS,pCs);VDM_REG(tib,VTIB_EIP)=pIp;
                             VDM_SET16(tib,VTIB_SS,pSs);VDM_REG(tib,VTIB_ESP)=pSp;VDM_REG(tib,VTIB_EFLAGS)=pFl;
                             VDM_REG(tib,VTIB_EFLAGS) &= ~1u;        /* CF=0: success */
+                            InterlockedExchange(&g_simint_busy, 0);
                             p = zput(p, "0301 -> RM proc returned after "); p = zhex(p, rt);
                             p = zput(p, done ? " steps (OK)" : " steps (NO-RET)");
                             break; }
@@ -21003,8 +21050,17 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                  BEHAVIOURAL half of the gate, not by the registry read. */
             int ok, want = (verb == 0);
             vmsg[0] = 0;
-            if (verb == 2) install_status_text(vmsg, sizeof vmsg), ok = 1;
-            else           ok = install_perform(want, vmsg, sizeof vmsg);
+            if (verb == 2) {
+                /* ── /status ANSWERS IN ITS EXIT CODE, not only in English. ──────
+                     0 = NTVDMEX is the machine's VDM, 1 = nobody is, 2 = another
+                     program is. A script can branch on that without matching a
+                     sentence -- which is exactly what package/smoke.bat was doing
+                     wrongly, grepping for text only /install ever prints. */
+                install_state st2 = install_status_text(vmsg, sizeof vmsg);
+                install_report(vmsg, 1);
+                return st2 == INSTALL_OURS ? 0 : (st2 == INSTALL_OTHER ? 2 : 1);
+            }
+            ok = install_perform(want, vmsg, sizeof vmsg);
             install_report(vmsg, ok);
             return ok ? 0 : 1;
         } }
@@ -24025,6 +24081,11 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                     p = zput(p, "DPMI: pmkernel.flag -- PM will run under VdmStartExecution\r\n");
                     log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
                 }
+                g_mouse_absent = (GetFileAttributesA(NOMOUSE_PATH) != INVALID_FILE_ATTRIBUTES);
+                if (g_mouse_absent) {
+                    p = zput(p, "MOUSE: nomouse.flag -- INT 33h reports NO driver installed\r\n");
+                    log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                }
                 g_sb_absent = (GetFileAttributesA(NOSB_PATH) != INVALID_FILE_ATTRIBUTES);
                 g_opl_absent = g_sb_absent;      /* one knob, both devices unfitted */
                 if (g_sb_absent) {
@@ -24119,6 +24180,17 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                         p = zput(p, " wow32{ok=0x");   p = zhex(p, g_wow32_serviced);
                         p = zput(p, " decl=0x");       p = zhex(p, g_wow32_declined);
                         p = zput(p, " unimpl=0x");     p = zhex(p, g_wow32_unimpl);
+                        p = zput(p, "}");
+                        /* ── ★ THE COUNTERS THAT MATTER TO A CRASH MUST NOT LIVE ONLY IN THE
+                             EXIT REPORT. (s72) The async why-histogram was printed at exit
+                             and nowhere else -- so for a guest that is KILLED, which is the
+                             only kind of run that needs it, the number was unreachable. I
+                             asked the user for a run whose whole purpose was to produce a
+                             counter the run could not produce. Emit the three that bear on
+                             the DPMI mode-switch race on every PM heartbeat instead. */
+                        p = zput(p, " why{simint_rm=0x"); p = zhex(p, g_async_why_hist[0][30]);
+                        p = zput(p, " hostcs=0x");        p = zhex(p, g_async_why_hist[0][14]);
+                        p = zput(p, " inflight=0x");      p = zhex(p, g_async_why_hist[0][10]);
                         p = zput(p, "}");
                         /* ★ WHERE IS IT ABOUT TO GO, AND WHAT IS IT ABOUT TO RUN.
                              The resume point alone is not enough. When we hand the
@@ -26007,7 +26079,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             "no_app_timer","vIF_off","IF_off","arm_quiet","IN_FLIGHT","host_stack",
             "not32","setctx_fail","HOST_CS","?f","?10","?11","?12","?13",
             "not_in_exec","pic_refuse","unhooked","suspend_fail","getctx_fail",
-            "v86_IF_off","in_our_hdlr","observed","ctx_busy","left_exec","?1e","?1f" };
+            "v86_IF_off","in_our_hdlr","observed","ctx_busy","left_exec","simint_rm","?1f" };
           log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
           /* NO SILENT CAPS: say how many ASYNC-EARLY lines were written and how many
              were suppressed, so the log's thinness is never read as "it stopped
