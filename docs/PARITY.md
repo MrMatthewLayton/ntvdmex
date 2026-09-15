@@ -434,6 +434,52 @@ all-AGREE probe is not the same as a verified surface.
 
 ---
 
+# The full sweep — all 36 probes now run at least once (s72 evening)
+
+Before this session **8 of 36** probes had ever been diffed. All 36 have now been
+run. This table is the map; it is not a claim that a clean probe means a verified
+surface (see the warning under the cluster above).
+
+| clean | `p_file` `p_alloc` `p_exec` `p_ovl` `p_ctab` `p_ctry` `p_defs` `p_misc` `p_redir` `p_umb` `p_unimp` `p_ver` `p_dir`* `p_rest`* |
+|---|---|
+| **abstained (environment)** | `p_curdir` `p_psp` `p_mcb` — 12 rows, rationales recorded |
+| **fixed this session** | `p_err` (AH=3Dh error mapping, `b580c4d`) |
+| **still disagreeing** | `p_disk` 13 · `p_xms` 7 · `p_sysvar` 6 · `p_lpt` 5 · `p_ioctl` 3 · `p_tsr` 3 · `p_plan12` 1 |
+
+\* `p_dir` and `p_rest` were **probe bugs, not host bugs** — see below.
+
+### ⛔⛔ TWO FALSE POSITIVES, AND THE SECOND NEARLY GOT "FIXED"
+
+`p_dir`/`int21.3600.baddrive` and `p_rest`/`int21.3200.baddrive` both used **DL=26
+(Z:)** to mean "a drive that is not there". Z: is not free on this panel: DOSBox-X
+mounts it as its utility drive, and **the XP rig has it mapped to
+`\\server\storage`** (confirmed with `net use` before anything was changed). So the
+question was never asked, and the rows read as NTVDMEX bugs:
+
+    int21.3600.baddrive   oracle AX=FFFF   ours AX=0002
+    int21.3200.baddrive   oracle AX=32FF   ours AX=3200
+
+`AX=0002` is *two sectors per cluster* — a **successful** query of the real Z:. Our
+answers were right for the machine they ran on, and "fixing" them would have made
+`AH=36h`/`32h` deny a mapped network drive. Switched to **Y:**, unclaimed
+everywhere; both now agree — `FFFF` **with carry clear** (it is not a CF error) and
+`AL=FF`. ⚠ `p_err.asm` already used Y: *and said why*; the reasoning had not reached
+the other two probes.
+
+### `p_plan12` — do NOT fix toward this one
+`int10.set.mode12` (oracle `AX=0020`, ours `AX=0012`) is **INT 10h**, where the table
+at the top of this file says the QEMU oracle is SeaBIOS, *a rewrite*. It joins
+`16.01.enh` and `bda.crtc` as **blocked on PCem**, not as a defect.
+
+### `p_disk` — a real gap the probe cannot fairly measure
+We answer `AH=80h` (timeout) and leave **BX/CX/DX holding the probe's poison**, i.e.
+INT 13h is unimplemented rather than answering. But the probe targets **floppy drive
+0**, and the rig's A: is empty (`~A` in the boot line), where "not ready" is a
+defensible answer. ▶ Needs a probe aimed at a drive the machine actually has before
+any of it can be called a defect.
+
+---
+
 # Next, in order
 
 1. **The DPMI/protected-mode IRQ0 arm**, which still auto-EOIs and which `p_pic.asm`
