@@ -2040,6 +2040,38 @@ static void render_cell(video_state *st, int r, int c, uint8_t ch, uint8_t attr)
 
 static void draw_hw_cursor(video_state *st);
 
+/* ── THE TEXT SCREEN AS THE GUEST WROTE IT, not as we drew it. ───────────────────
+     An instrument for exactly one question, and it is a question screenshots cannot
+     answer: when something is missing from the display, did the guest never PUT it
+     there, or did we never DRAW it? Chasing QBasic's empty file list from captured
+     images cost three wrong guesses -- blink, the search API, the DTA names -- two
+     of which were about the picture rather than the data.
+     Rows of characters, then the attribute of each cell in hex, straight out of the
+     text VRAM the renderer itself reads. */
+int vdd_video_text_snapshot(video_state *st, char *out, int cap)
+{
+    static const char hexd[] = "0123456789abcdef";
+    int r, c, n = 0;
+    if (!out || cap < 16) return 0;
+    for (r = 0; r < st->rows; ++r) {
+        for (c = 0; c < st->cols && n < cap - 2; ++c) {
+            uint8_t ch = cell(st, r, c)[0];
+            out[n++] = (ch >= 32 && ch < 127) ? (char)ch : '.';
+        }
+        if (n < cap - 2) out[n++] = '\n';
+    }
+    if (n < cap - 8) { const char *h = "--attr--\n"; while (*h && n < cap - 2) out[n++] = *h++; }
+    for (r = 0; r < st->rows; ++r) {
+        for (c = 0; c < st->cols && n < cap - 3; ++c) {
+            uint8_t a = cell(st, r, c)[1];
+            out[n++] = hexd[(a >> 4) & 0xF]; out[n++] = hexd[a & 0xF];
+        }
+        if (n < cap - 2) out[n++] = '\n';
+    }
+    out[n] = 0;
+    return n;
+}
+
 void vdd_video_render(video_state *st)                 /* text glyph render        */
 {
     int r, c;

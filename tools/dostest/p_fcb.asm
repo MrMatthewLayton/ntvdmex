@@ -46,6 +46,54 @@ start:
         EMIT    "int21.29.parse", "AX"
         EMIT_BUF "fcb.parsed", fcb, 16
 
+        ; ---- ★ 29h AND THE WILDCARD. DOS EXPANDS `*` INTO `?`s as it parses: the
+        ; FCB has no room for a star, so "*.BAS" must land as ????????BAS and "*.*"
+        ; as ???????????. A program that then matches directory entries against the
+        ; parsed FCB -- which is what QBasic's Open dialog does to fill its file
+        ; list -- matches NOTHING if the star is stored literally, and shows an
+        ; empty list while the directory list beside it is perfectly correct.
+        ; ⚠ ITS OWN BUFFER: parsing into the shared `fcb` left ??????????? behind and
+        ; the open/close cases further down then failed on a wildcard FCB.
+        mov     di, fcbw
+        mov     cx, 40
+        mov     al, 0EEh
+        push    es
+        mov     bx, cs
+        mov     es, bx
+        cld
+        rep     stosb
+        pop     es
+        POISON
+        push    ds
+        pop     es
+        mov     si, pwild
+        mov     di, fcbw
+        mov     ax, 2900h
+        int     21h
+        call    probe_capture
+        EMIT    "int21.29.wild", "AX"
+        EMIT_BUF "fcb.wild", fcbw, 12
+
+        mov     di, fcbw
+        mov     cx, 40
+        mov     al, 0EEh
+        push    es
+        mov     bx, cs
+        mov     es, bx
+        cld
+        rep     stosb
+        pop     es
+        POISON
+        push    ds
+        pop     es
+        mov     si, pstar
+        mov     di, fcbw
+        mov     ax, 2900h
+        int     21h
+        call    probe_capture
+        EMIT    "int21.29.starstar", "AX"
+        EMIT_BUF "fcb.starstar", fcbw, 12
+
         ; The parse above deliberately used "C:" to exercise the drive field, and
         ; fcb.parsed proves it landed. But the scratch file was created in the
         ; CURRENT directory, which is not C:\ on every host, so clear the drive
@@ -135,6 +183,10 @@ fcbmiss db 0, 'ZZNOSUCH', 'XYZ', 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
 fcbwild db 0, '????????', '???', 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
 fcbnone db 0, 'ZZNOMTCH', 'ZZZ', 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
 fcbdel  db 0, 'PZFCB   ', 'TMP', 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+fcbw:
+        times 40 db 0
+pwild   db '*.BAS', 0
+pstar   db '*.*', 0
 fcb:
         times 40 db 0
 dta:

@@ -514,6 +514,9 @@ static inline ntvdd vdd_video_device(video_state *st)
   d.shutdown = 0; d.self = st; return d; }
 
 void vdd_video_render(video_state *st);                /* text glyph render        */
+/* The text screen as the GUEST wrote it (characters, then attributes in hex) --
+   the instrument that separates "never listed" from "never drawn". */
+int  vdd_video_text_snapshot(video_state *st, char *out, int cap);
 /* ── THE INT 33h TEXT CURSOR IS A CELL, NOT A SPRITE. ───────────────────────────────
      In a text mode the mouse driver has no pixels to draw an arrow with; it shows the
      pointer by REWRITING THE ATTRIBUTE of the character cell under it -- AND-ed with

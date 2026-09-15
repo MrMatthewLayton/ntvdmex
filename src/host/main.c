@@ -985,6 +985,7 @@ static void pmap_clear(DWORD lin)
      a series of guesses. A configuration, not a debug hack: a machine without a
      mouse is a machine a guest has to cope with. */
 #define NOMOUSE_PATH   CFG_("nomouse.flag")
+#define TEXTDUMP_PATH  CFG_("textdump.flag")   /* shotNN.txt beside shotNN.bmp */
 /* ── A WATCH ADDRESS: ONE HEX LINEAR ADDRESS, DUMPED EITHER SIDE OF EACH INJECTED
      INTERRUPT. ─────────────────────────────────────────────────────────────────────
    The question an injected timer tick always raises is not "did the handler run" --
@@ -5818,6 +5819,7 @@ static DWORD g_simint_unhandled, g_simint_vec[256];
 #define SIMINTREFL_FLAG CFG_("simintrefl.flag")
 static int g_simint_reflect = 0;
 static int g_mouse_absent = 0;          /* nomouse.flag: INT 33h 0000h answers "none" */
+static int g_textdump = 0;              /* textdump.flag: dump the text screen too    */
 /* g_simint_busy (declared above async_inject_irq) is set across 0300h. */
 static LONG  g_ms_raw_tot_x, g_ms_raw_tot_y;
 static volatile LONG g_ms_hidden = 1;       /* INT 33h cursor hide-count; 0 => visible */
@@ -9359,6 +9361,25 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
                 const char *path;
                 name[4] = (char)('0' + (cap_seq / 10) % 10);
                 name[5] = (char)('0' + cap_seq % 10);
+                /* ── ...AND THE SAME FRAME AS TEXT, when asked. A picture cannot say
+                     whether a missing line was never written or merely never drawn,
+                     and that distinction is where three wrong guesses went on
+                     QBasic's empty file list. Gated: no run pays for it unaltered. */
+                if (g_textdump && g_vid.mkind == VID_KIND_TEXT && !g_vid.in_vesa) {
+                    static char tsnap[8192];
+                    char tname[] = "shot00.txt";
+                    int tn;
+                    tname[4] = name[4]; tname[5] = name[5];
+                    tn = vdd_video_text_snapshot(&g_vid, tsnap, sizeof tsnap);
+                    if (tn > 0) {
+                        HANDLE tf = CreateFileA(OUT_(tname), GENERIC_WRITE, 0, NULL,
+                                                CREATE_ALWAYS, 0, NULL);
+                        if (tf != INVALID_HANDLE_VALUE) {
+                            DWORD wr = 0; WriteFile(tf, tsnap, (DWORD)tn, &wr, NULL);
+                            CloseHandle(tf);
+                        }
+                    }
+                }
                 path = OUT_(name);
                 if (present_ddraw_save_bmp(&g_pd, path) == 0) {
                     ++cap_seq;
@@ -21206,6 +21227,13 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             if (v3 >= 50 && v3 <= 60000) g_capture_ms = v3;
         }
     }
+    /* ⚠ THESE BELONG WITH THE OTHER STARTUP FLAGS, NOT IN THE DPMI BLOCK. Read from
+         inside the protected-mode setup they applied to Doom and not to QBasic --
+         nomouse worked for one guest and silently did nothing for the other, and
+         textdump wrote no files at all for a real-mode run. A knob that only some
+         launches honour is worse than no knob. */
+    g_textdump = (GetFileAttributesA(TEXTDUMP_PATH) != INVALID_FILE_ATTRIBUTES);
+    g_mouse_absent = (GetFileAttributesA(NOMOUSE_PATH) != INVALID_FILE_ATTRIBUTES);
     g_no_a000  = (GetFileAttributesA(NOA000_FLAG) != INVALID_FILE_ATTRIBUTES);
     g_interp12 = (GetFileAttributesA(INTERP12_FLAG) != INVALID_FILE_ATTRIBUTES);
     g_p12_off  = (GetFileAttributesA(P12OFF_FLAG)   != INVALID_FILE_ATTRIBUTES);
@@ -24081,7 +24109,6 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                     p = zput(p, "DPMI: pmkernel.flag -- PM will run under VdmStartExecution\r\n");
                     log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
                 }
-                g_mouse_absent = (GetFileAttributesA(NOMOUSE_PATH) != INVALID_FILE_ATTRIBUTES);
                 if (g_mouse_absent) {
                     p = zput(p, "MOUSE: nomouse.flag -- INT 33h reports NO driver installed\r\n");
                     log_append(LOG_PATH, base, p); serial_out(base, p); p = base;

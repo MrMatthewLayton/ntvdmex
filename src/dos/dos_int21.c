@@ -207,12 +207,28 @@ static void fcb_put_name(volatile BYTE *d, const char *nm)
         if (nm[1] == '.' && (nm[2] == 0 || nm[2] == '.')) d[1] = '.';
         if (nm[1] == 0 || nm[1] == '.') return;
     }
-    for (k = 0; k < 8 && !fcb_name_ends((unsigned char)nm[i]) && nm[i] != '.'; ++k, ++i)
+    /* ── ★ `*` IS EXPANDED INTO `?`s, IT IS NOT STORED. ─────────────────────────
+         An FCB name field has no room for a star and no meaning for one: the only
+         wildcard the format knows is `?`, so DOS fills the rest of the field with
+         them as it parses. Oracle-measured (p_fcb.asm int21.29.wild/starstar on
+         6.22): "*.BAS" lands as 00 3F×8 'BAS' and "*.*" as 00 3F×11.
+       ► THIS IS WHY QBASIC'S OPEN DIALOG LISTED NO FILES. It parses the pattern
+         with AH=29h and then matches each directory entry against the parsed FCB.
+         We stored `*` literally, so the template read `*` + seven blanks, nothing
+         matched it, and the file pane came up empty -- while the directory pane
+         beside it, which is not pattern-filtered, was perfectly correct. The
+         symptom pointed at the search, the directory entries and the renderer; the
+         cause was in the parser none of them go through. */
+    for (k = 0; k < 8 && !fcb_name_ends((unsigned char)nm[i]) && nm[i] != '.'; ++k, ++i) {
+        if (nm[i] == '*') { while (k < 8) d[k++] = '?'; break; }
         d[k] = (BYTE)(nm[i] >= 'a' && nm[i] <= 'z' ? nm[i] - 32 : nm[i]);
+    }
     while (!fcb_name_ends((unsigned char)nm[i]) && nm[i] != '.') ++i;
     if (nm[i] == '.') ++i;
-    for (k = 8; k < 11 && !fcb_name_ends((unsigned char)nm[i]); ++k, ++i)
+    for (k = 8; k < 11 && !fcb_name_ends((unsigned char)nm[i]); ++k, ++i) {
+        if (nm[i] == '*') { while (k < 11) d[k++] = '?'; break; }
         d[k] = (BYTE)(nm[i] >= 'a' && nm[i] <= 'z' ? nm[i] - 32 : nm[i]);
+    }
 }
 
 /* Copy an ASCIIZ string out of V86 memory (seg:off) into a host buffer. */

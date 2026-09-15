@@ -21,10 +21,12 @@ taskkill /f /im ntvdm.exe >nul 2>&1
 del /q "%OUT%\ntvdmhost.log" >nul 2>&1
 del /q "%OUT%\startfail.txt" >nul 2>&1
 del /q "%OUT%\shot??.bmp" >nul 2>&1
+del /q "%OUT%\shot??.txt" >nul 2>&1
 > "%CFG%\target.txt" echo "%GDIR%\%EXE%"
 > "%CFG%\qimode.txt" echo 20
 > "%CFG%\dostrace.flag" echo.
-> "%CFG%\capture.flag" echo 250
+> "%CFG%\textdump.flag" echo.
+> "%CFG%\capture.flag" echo 150
 rem Default: Esc (welcome box); Alt+F, O (Open dialog: *.BAS + dirs + drives);
 rem Tab x3 across File Name / Files / Dirs+Drives / OK; Esc; Alt+F, X (exit).
 if exist "%BM%\qbkeys_%~1.txt" (
@@ -36,11 +38,12 @@ if exist "%BM%\qbkeys_%~1.txt" (
 cd /d "%GDIR%"
 start /wait "" "%BM%\dosstub.com"
 copy /y "%OUT%\ntvdmhost.log" "%OUT%\result_%T%.log" >nul 2>&1
-for %%f in ("%OUT%\shot??.bmp") do copy /y "%%f" "%OUT%\shot_%T%_%%~nxf" >nul 2>&1
+for %%f in ("%OUT%\shot??.bmp" "%OUT%\shot??.txt") do copy /y "%%f" "%OUT%\shot_%T%_%%~nxf" >nul 2>&1
 del /q "%CFG%\autoexit" >nul 2>&1
 del /q "%CFG%\keys.txt" >nul 2>&1
 del /q "%CFG%\qimode.txt" >nul 2>&1
 del /q "%CFG%\dostrace.flag" >nul 2>&1
+del /q "%CFG%\textdump.flag" >nul 2>&1
 del /q "%CFG%\capture.flag" >nul 2>&1
 > "%OUT%\qbopen_done.txt" echo done
 goto :eof
