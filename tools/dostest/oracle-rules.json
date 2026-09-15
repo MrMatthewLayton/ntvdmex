@@ -788,5 +788,15 @@
   ],
   "recorded": "2026-09-15",
   "why": "the next block's segment of the first MCB, which is a function of what this machine loaded before the probe. Layout, not contract -- see mcb.head. mcb.block/AX (the 'M' signature) is NOT abstained and agrees."
+ },
+ {
+  "probe": "ioctl",
+  "case": "int21.19.curdrive",
+  "field": "AX",
+  "abstain": [
+   "msdos622"
+  ],
+  "recorded": "2026-09-15",
+  "why": "Same cause as curdir/int21.19.curdrive: AH=19h reports the drive the program was STARTED on, which is A: (0) on the oracle -- it boots from a floppy -- and C: (2) on the rig. An environment fact, not a DOS contract. The ioctl rows beside it were the same trap and were FIXED rather than abstained: they now name drive C: explicitly (BL=3) instead of asking about 'the default drive', which makes them the same question on every host."
  }
 ]

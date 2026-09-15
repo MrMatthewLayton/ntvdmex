@@ -61,40 +61,56 @@ start:
         call    probe_capture
         EMIT    "int21.4400.stdin", "CF"
 
-        ; ---- 4408h: is the DEFAULT drive's block device removable?
-        ; AX = 0 removable, 1 fixed.  BL=0 means "the default drive".
+        ; ── ⚠ BL=3 (C:), NOT BL=0 ("the default drive"). ────────────────────────
+        ; These three asked about whatever drive the program happened to be
+        ; STARTED on -- A: on the oracle, which boots from a floppy, and C: on the
+        ; rig. So 4408 asked "is a floppy removable?" on one host and "is a hard
+        ; disk removable?" on the other, and the two CORRECT answers (0 and 1)
+        ; were reported as NTVDMEX disagreeing with DOS.
+        ;
+        ; 440E was worse, because the comment below asserted the thing that was
+        ; false: "no host has a single-floppy alias on its DEFAULT drive" -- the
+        ; oracle's default IS A:, and a machine with one physical floppy maps both
+        ; A: and B: to it, which is exactly the alias 440E exists to report. The
+        ; oracle answered 1 and was right.
+        ;
+        ; C: is a fixed disk on every host in the panel, so all three become the
+        ; same question everywhere: removable=1 (fixed), not remote, no alias.
+
+        ; ---- 4408h: is C:'s block device removable?  AX = 0 removable, 1 fixed.
         POISON
         mov     ax, 4408h
-        mov     bl, 0
+        mov     bl, 3                   ; C:
         int     21h
         call    probe_capture
-        EMIT    "int21.4408.default", "AX,CF"
+        EMIT    "int21.4408.C", "AX,CF"
 
-        ; ---- 4409h: is the DEFAULT drive remote?
+        ; ---- 4409h: is C: remote?
         ; DX = the device attribute word; bit 12 (0x1000) is "remote".  Masked --
         ; see the header note.
         POISON
         mov     ax, 4409h
-        mov     bl, 0
+        mov     bl, 3                   ; C:
         int     21h
         pushf
         and     dx, 1000h
         popf
         call    probe_capture
-        EMIT    "int21.4409.default", "DX,CF"
+        EMIT    "int21.4409.C", "DX,CF"
 
-        ; ---- 440Eh: get the logical drive map for the default drive.
+        ; ---- 440Eh: get the logical drive map for C:.
         ; AL = 0 when only one letter maps to the block device, else the letter
-        ; number.  No host in the panel has a SUBST or a single-floppy alias on
-        ; its default drive, so 0 is the answer they should share.
+        ; number.  A hard disk has no SUBST or single-floppy alias on any host in
+        ; the panel, so 0 is the answer they should share -- which is what the old
+        ; comment claimed for the DEFAULT drive and could not deliver.
         POISON
         mov     ax, 440Eh
-        mov     bl, 0
+        mov     bl, 3                   ; C:
         int     21h
         pushf
         and     ax, 00FFh               ; AL is the answer; RBIL destroys AH, and
         popf                            ;   the panel duly differs on it
         call    probe_capture
-        EMIT    "int21.440E.default", "AX,CF"
+        EMIT    "int21.440E.C", "AX,CF"
 
         PROBE_END
