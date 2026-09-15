@@ -31,5 +31,18 @@ if not errorlevel 1 (
     pause
     exit /b 1
 )
-echo OK: the self-test ran to completion under NTVDMEX. Check the eight PASS lines above.
+findstr /C:"FAIL=" "%~dp0out\ntvdmhost.log" >nul
+if not errorlevel 1 (
+    echo FAIL: one or more self-test subsystems failed -- see the report above.
+    echo Send out\ntvdmhost.log.
+    pause
+    exit /b 1
+)
+findstr /C:"ALL TESTS PASSED" "%~dp0out\ntvdmhost.log" >nul
+if errorlevel 1 (
+    echo FAIL: the self-test did not report ALL TESTS PASSED. Send out\ntvdmhost.log.
+    pause
+    exit /b 1
+)
+echo OK: all eight self-test subsystems PASSED under NTVDMEX.
 pause
