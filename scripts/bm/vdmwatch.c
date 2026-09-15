@@ -346,7 +346,7 @@ static void watch(DWORD pid)
     DEBUG_EVENT de;
     HANDLE hp = NULL;
     int attach_bp_pending = 1, done = 0, core_written = 0;
-    unsigned nexc = 0;
+    unsigned nexc = 0, nbadclose = 0;
 
     thr_clear();
     if (!DebugActiveProcess(pid)) {
@@ -420,6 +420,24 @@ static void watch(DWORD pid)
                 break;
             }
             attach_bp_pending = 0;
+            /* ⚠ A DEBUGGER-ONLY EXCEPTION. NtClose on a bad handle raises
+               STATUS_INVALID_HANDLE in user mode ONLY when a debugger is attached;
+               without one it is a silent failure. Passed through as NOT_HANDLED it
+               reached the host's VEH, which is fatal on anything unrecognised once in
+               PM -- so the instrument killed Doom at the loader screen (s72, run 7).
+               Swallow it and count it: the count is a free measurement of how often
+               the host closes a handle it does not own. */
+            if (de.u.Exception.ExceptionRecord.ExceptionCode == 0xC0000008) {
+                ++nbadclose;
+                if (nbadclose <= 20) {
+                    p = sput(p, "bad CloseHandle #"); p = sputu(p, nbadclose);
+                    p = sput(p, " (STATUS_INVALID_HANDLE) tid="); p = sputu(p, de.dwThreadId);
+                    p = sput(p, " -- continued, invisible without a debugger");
+                    logline(b); p = b;
+                }
+                cont = DBG_CONTINUE;
+                break;
+            }
             dump_exception(hp, de.dwThreadId, &de.u.Exception);
             if (!core_written && hp) { core_written = 1; dump_core(hp); }
             cont = DBG_EXCEPTION_NOT_HANDLED;   /* exactly what happens with no debugger present */
@@ -429,6 +447,7 @@ static void watch(DWORD pid)
             p = sput(p, " code=0x"); p = sputx(p, de.u.ExitProcess.dwExitCode);
             p = sput(p, " ("); p = sput(p, exc_name(de.u.ExitProcess.dwExitCode)); p = sput(p, ")");
             p = sput(p, " exceptions seen="); p = sputu(p, nexc);
+            p = sput(p, " bad CloseHandle="); p = sputu(p, nbadclose);
             logline(b); p = b;
             done = 1;
             cont = DBG_CONTINUE;
