@@ -648,5 +648,15 @@
   ],
   "recorded": "2026-09-15",
   "why": "The SEGMENT of the INT 33h handler. On the oracle it is wherever MOUSE.COM loaded itself (04BD); on our host it is DOS_HDLR_SEG (0050). There is no host-independent right answer and a guest must never depend on one -- the row is kept because a segment of ZERO is the one answer that matters (no driver at all), and the probe leaves quietly when it sees it."
+ },
+ {
+  "probe": "video",
+  "case": "bda.crtc",
+  "field": "CX",
+  "abstain": [
+   "msdos622"
+  ],
+  "recorded": "2026-09-15",
+  "why": "0040:0065 is the CRT mode-select register value a VGA BIOS stores after a mode set (0x29 for mode 3 on genuine IBM hardware). QEMU runs SeaVGABIOS, a REIMPLEMENTATION, and it simply does not write this byte -- it reads 0000 there for every mode, which is an observation about SeaVGABIOS and not about a VGA. Our 0x29 is very likely the more faithful answer, but 'very likely' is not measured: this row is BLOCKED ON PCem with a genuine ROM, and is listed as such in docs/PARITY.md. \u26a0 Do not 'fix' it to match QEMU."
  }
 ]

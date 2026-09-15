@@ -366,13 +366,31 @@ void vdd_video_bda_sync(video_state *st)
     if (st->mkind == VID_KIND_TEXT) {
         psize = ((unsigned)st->cols * st->rows * 2u + 0xFFu) & ~0xFFu;
         if (psize < 0x800u) psize = 0x800u;
-    } else psize = 0x2000u;                            /* graphics: a plane, as the BIOS says */
+    } else {
+        /* ── THE GRAPHICS PAGE SIZE IS PER MODE, and this was a flat 0x2000 for all
+             of them. Measured on 6.22: mode 06h is 0x4000 and mode 12h is 0xA000,
+             where we said 0x2000 either way. A program that pages by adding this to
+             its offset lands inside the previous page. 06h/12h/13h are the
+             oracle-verified rows (p_video.asm); the rest are the standard VGA BIOS
+             table and are marked unverified in docs/PARITY.md. */
+        switch (st->mode) {
+        case 0x04: case 0x05: case 0x06: psize = 0x4000u; break;  /* 06h verified   */
+        case 0x0D:                       psize = 0x2000u; break;
+        case 0x0E:                       psize = 0x4000u; break;
+        case 0x0F: case 0x10:            psize = 0x8000u; break;
+        case 0x11: case 0x12:            psize = 0xA000u; break;  /* 12h verified   */
+        case 0x13:                       psize = 0x2000u; break;  /* 13h verified   */
+        default:                         psize = 0x2000u; break;
+        }
+    }
     b[0x4C] = (uint8_t)psize; b[0x4D] = (uint8_t)(psize >> 8);
     { unsigned poff = (unsigned)st->page * psize;
       b[0x4E] = (uint8_t)poff; b[0x4F] = (uint8_t)(poff >> 8); }
     { unsigned pg = st->page & 7;
       b[0x50 + pg * 2] = st->cur_col; b[0x51 + pg * 2] = st->cur_row; }
-    b[0x60] = (uint8_t)st->cur_shape; b[0x61] = (uint8_t)(st->cur_shape >> 8);
+    {   /* 0040:0060 follows the same rule as AH=03h: no text cursor in graphics. */
+        uint16_t shp = (st->mkind == VID_KIND_TEXT) ? st->cur_shape : 0;
+        b[0x60] = (uint8_t)shp; b[0x61] = (uint8_t)(shp >> 8); }
     b[0x62] = st->page;
     { unsigned crtc = (st->mode == 0x07) ? 0x3B4u : 0x3D4u;
       b[0x63] = (uint8_t)crtc; b[0x64] = (uint8_t)(crtc >> 8); }
@@ -695,7 +713,14 @@ static void int10(void *self, ntvdd_regs *r)
         break;
     case 0x01: st->cur_shape = r_cx(r); break;
     case 0x02: st->cur_row = (uint8_t)(r_dx(r) >> 8); st->cur_col = (uint8_t)(r_dx(r) & 0xFF); break;
-    case 0x03: s_dx(r, (uint16_t)((st->cur_row << 8) | st->cur_col)); s_cx(r, st->cur_shape); break;
+    case 0x03:
+        /* THERE IS NO TEXT CURSOR IN A GRAPHICS MODE, and the BIOS says so: CX comes
+           back 0000 in 06h/12h/13h, where we were still handing out the text
+           underline shape 0607. Measured, p_video.asm int10.03.<mode>. The stored
+           shape is left alone so returning to a text mode restores it. */
+        s_dx(r, (uint16_t)((st->cur_row << 8) | st->cur_col));
+        s_cx(r, (uint16_t)(st->mkind == VID_KIND_TEXT ? st->cur_shape : 0));
+        break;
     case 0x05: st->page = al; break;
     case 0x06:
         scroll_up(st, al, (uint8_t)(r_cx(r) >> 8), (uint8_t)(r_cx(r) & 0xFF),
@@ -736,7 +761,13 @@ static void int10(void *self, ntvdd_regs *r)
             advance(st);
         } else teletype(st, al);
         break;
-    case 0x0F: s_ax(r, (uint16_t)((st->cols << 8) | st->mode)); s_bx(r, (uint16_t)(st->page << 8)); break;
+    case 0x0F:
+        /* BH is the active page; BL IS NOT DEFINED BY THIS CALL and the real BIOS
+           leaves it alone -- we were zeroing the whole of BX and taking the caller's
+           BL with it. Measured: the oracle returns the probe's poison in BL. */
+        s_ax(r, (uint16_t)((st->cols << 8) | st->mode));
+        s_bx(r, (uint16_t)((st->page << 8) | (r_bx(r) & 0xFF)));
+        break;
     case 0x10:                                        /* palette / DAC            */
         if (al == 0x10) {                             /* set one DAC register     */
             uint16_t idx = r_bx(r);
@@ -910,7 +941,14 @@ static void int10(void *self, ntvdd_regs *r)
             default:   seg = VDD_FONT8X16_SEG; off = 0;       bpc = 16; break;
             }
             r->es = seg; r->ebp = off;
-            s_cx(r, bpc);                              /* bytes per character     */
+            /* ── ★ CX IS THE ON-SCREEN FONT'S HEIGHT, NOT THE REQUESTED TABLE'S. ──
+                 The classic gotcha in this call, and we had it backwards: BH selects
+                 which TABLE ES:BP points at, but CX reports the height of the font
+                 the screen is CURRENTLY drawing with. Measured on 6.22: BH=0 asks for
+                 the 8x8 upper half and CX still comes back 16 in mode 3. We answered
+                 8, contradicting our OWN BDA byte at 0040:0085 two lines of probe
+                 output earlier -- and a 43/50-line editor sizes the screen from CX. */
+            s_cx(r, st->cell_h ? st->cell_h : bpc);    /* on-screen bytes/character */
             s_dx(r, (uint16_t)(st->rows ? st->rows - 1 : 24));  /* DL = rows-1     */
             if (st->font_qn < 4) {                     /* record the request + answer */
                 st->font_q[st->font_qn].al  = al;
