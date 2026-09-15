@@ -278,12 +278,55 @@ and matches the 6.22 oracle row for row (session 53)** — but `MEM /C` still re
    empty CD-ROM is error 3, Esc, clean exit; Save As writes the file. Skyroads on
    baseline (`n8=0x66 max_ms=0x13`).
 
-   **▶ NEXT (needs the user):** deploy the candidate on their go (`build/ntvdmhost.exe`,
-   `86bb80b1…`; the confirmed build is already the rollback plan) and re-run the QB
+   **▶ NEXT (needs the user):** deploy the candidate on their go (`build/ntvdmhost.exe`;
+   the confirmed build is already the rollback plan) and re-run the QB
    pass by hand: File > Open shows four drives, a `.BAS` opens, Save As saves. Then
    edit.com. ⚠ The Doom regression the user reported on the 14th is still deferred, and
    its log is gone -- my QB runs delete `out\ntvdmhost.log`; copy a user's log to `runs/`
    before queueing anything.
+
+   ### ★★★★★ s72, afternoon — **THE PACKAGE SMOKE TEST WAS RUNNING THE STUB, NOT THE SELF-TEST: A DOS LAUNCH FROM cmd/BATCH NOW RUNS THE REAL PROGRAM.** (HEAD `11e4a13`, host `caff9e08…`.)
+
+   Running the fresh-folder package install on the rig (`scripts/bm/pkgtest.bat`,
+   what the friend's machine does on the 18th) exposed that `smoke.bat`'s
+   `selftest.com` reported "File I/O FAIL=21" -- on a host that had just opened the
+   file it was launched from. Two bugs, both on the path that has always mattered
+   for the 17th and was never exercised, because every rig run goes through
+   `dosstub.com` + `target.txt`:
+
+   1. **We ran the wrong program.** The first `GetNextVDMCommand`
+      (`VDM_GET_FIRST_COMMAND`) fills only the console Title and CurDirectory.
+      Explorer puts the program's path in the Title -- the sole reason a
+      double-click has ever worked -- but a launch from `cmd.exe`, a batch file, or
+      `smoke.bat` gives `title=[]` (via `start`) or the typed command WITH its
+      arguments (direct). So we loaded the embedded 4-byte `mov ah,4Ch/int 21h` stub
+      and reported a clean exit; the packaged smoke test "passed" having run nothing.
+      Stock ntvdm consumes the real command in its exec-BOP path with a SECOND fetch,
+      `VDM_FLAG_DOS` (`reverse/ntvdm.exe` 0xf04ed86 / 0xf00ac1e). We now do the same:
+      AppName comes back as the program's full path, CmdLine as its tail, and that
+      wins over the title heuristics and target.txt. The harness `dosstub.com` is
+      recognised by name so target.txt still names the game there; a WOW launch
+      (first fetch FALSE, err 0x57) is untouched.
+   2. **We never told CSRSS the task ended, so a second program in the same window
+      never ran.** On exit we now report the errorlevel (`GetNextVDMCommand` with
+      ExitCode) and `ExitVDM`. That report blocks for the console's next command
+      (stock ntvdm's resident idle state), so it runs on a helper thread while the
+      main thread ExitVDMs; and because that call is itself handed the queued
+      follow-up command, we relaunch it (`CreateProcess`, same console) in a fresh
+      host. Measured: `selftest.com` run twice in one `cmd` window now runs twice.
+
+   `selftest.asm`: the File I/O test named `C:\ntvdmex\ST$.TMP` -- the first rig
+   layout, on nobody's machine now -- made relative and deleted after.
+
+   **Rig, headless (candidate `caff9e08…`), all verified, then TAKEN BACK OFF:**
+   `selftest` 8/8 under a bare `selftest.com`, a redirected run, a `start /wait`, and
+   a second run in the same window; the fresh-folder package install (differently
+   named dir) → smoke 8/8 → uninstall restores → the rig's own host back; the
+   target.txt game harness still loads Skyroads (timing baseline `max_ms=0x13`).
+   `smoke.bat` now fails on a `FAIL=` line or a missing `ALL TESTS PASSED`, not only
+   on a crash. Package `dist/ntvdmex-20260915-11e4a13.zip` carries the fix. **Rig is
+   the mouse-confirmed `7e9080bb…`; candidate `build/ntvdmhost.exe` = `caff9e08…`
+   holds the QB drive fix + this, awaiting one by-hand deploy.**
 
    ---
 
