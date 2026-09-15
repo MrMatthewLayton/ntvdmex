@@ -5812,25 +5812,50 @@ static DWORD         g_ms_edges;            /* transitions seen -- STAGE2 eviden
      handing back physical pixels, so every hit-test in a 320-wide mode landed at half
      scale -- the pointer and the thing it was supposed to be over were never in the
      same place. Y is 1:1 in all the standard modes (200/350/480). */
+/* ── ★★★★★ THE DRIVER'S SCREEN IS THE VIDEO MODE'S, NOT THE PRESENT SURFACE'S. ──
+     Every helper here used g_vid.frame.w/h -- the dimensions of the SNAPSHOT the UI
+     thread presents. That surface does not exist until something has been drawn, so
+     in a headless run (and in the window between a mode set and the first present)
+     frame.h is ZERO, and then:
+        i33_text()  -> 0 > 200 is false, so the text-mode scaling never engages;
+        i33_vmaxy() -> falls back to 479, in a twenty-five-row text screen;
+     and a guest that asks 26h or reads a position is answered for a 640x480 screen
+     that is not on the machine. Measured with p_mouse.asm against the real MOUSE.COM
+     on 6.22: reset put our pointer at y=240 where the driver says 96, and the
+     MOUSEI33 line said `text=0 mkind=0 fh=0 vmaxy=1df` -- mode 3, and none of it
+     reaching the arithmetic.
+   ⇒ g_vid.gw/gh are the MODE's extent, set by the mode set itself and always
+     populated (vdd_video_reset seeds them), which is also what the real driver keys
+     off: it hooks INT 10h and rebuilds its screen when the mode changes. */
+static unsigned i33_w(void) { return g_vid.gw ? g_vid.gw : 640; }
+static unsigned i33_h(void) { return g_vid.gh ? g_vid.gh : 480; }
 static int i33_xshift(void)
 {
-    unsigned w = g_vid.frame.w;
-    return (w && w <= 320) ? 1 : 0;
+    unsigned w = i33_w();
+    return (w <= 320) ? 1 : 0;
 }
 static LONG i33_vx(LONG px) { return px << i33_xshift(); }
 static LONG i33_px(LONG vx) { return vx >> i33_xshift(); }
 static LONG i33_vmaxx(void)
-{ unsigned w = g_vid.frame.w ? g_vid.frame.w : 640; return (LONG)(w << i33_xshift()) - 1; }
+{ return (LONG)(i33_w() << i33_xshift()) - 1; }
 /* ── ...AND IN A TEXT MODE THE VIRTUAL SCREEN IS 640x200, WHATEVER THE FONT. ──────
      The driver's text cell is 8x8 virtual pixels (8x4 in 50-line mode), so a text
      application does `row = DX / 8` -- 0..199 over 25 rows. Our text frame is 400
      lines tall and we handed that back raw, so every row came out DOUBLED: a click on
      QBasic's menu bar landed two rows below it and no menu ever opened by mouse. */
-static int  i33_text(void)  { return g_vid.mkind == VID_KIND_TEXT && !g_vid.in_vesa && g_vid.frame.h > 200; }
-static LONG i33_vy(LONG py) { return i33_text() ? py * 200 / (LONG)g_vid.frame.h : py; }
-static LONG i33_py(LONG vy) { return i33_text() ? vy * (LONG)g_vid.frame.h / 200 : vy; }
+static int  i33_text(void)  { return g_vid.mkind == VID_KIND_TEXT && !g_vid.in_vesa && i33_h() > 200; }
+static LONG i33_vy(LONG py) { return i33_text() ? py * 200 / (LONG)i33_h() : py; }
+static LONG i33_py(LONG vy) { return i33_text() ? vy * (LONG)i33_h() / 200 : vy; }
 static LONG i33_vmaxy(void)
-{ unsigned h = g_vid.frame.h ? g_vid.frame.h : 480; return i33_text() ? 199 : (LONG)h - 1; }
+{ return i33_text() ? 199 : (LONG)i33_h() - 1; }
+/* ── ...AND A TEXT POSITION IS A CELL, NOT A PIXEL. ──────────────────────────────
+     The real driver quantises to its 8x8 virtual cell in a text mode: measured on
+     6.22, set-position 100,50 reads back as 96,48 and 101,51 reads back as 96,48
+     too. A host that returns the exact value it was handed disagrees with the
+     driver about which cell the pointer is in, which is the whole question a text
+     UI asks. Snap BEFORE clamping, so snapping can never push the pointer outside
+     a range the guest set with 07h/08h. */
+static LONG i33_snap(LONG v) { return i33_text() ? (v & ~(LONG)7) : v; }
 
 /* 07h/08h cursor ranges, in VIRTUAL coordinates. -1 = the guest never set one, so the
    mode's own extent applies; a guest that sets a range while in one mode and then
@@ -6190,6 +6215,17 @@ static void i33_reset_state(void)
         InterlockedExchange(&g_ms_rel_n[i], 0);
     }
     InterlockedExchange(&g_ms_dx, 0); InterlockedExchange(&g_ms_dy, 0);
+    /* ── A RESET PUTS THE POINTER IN THE MIDDLE OF THE SCREEN. ───────────────────
+         We left it wherever it happened to be -- which, before any mouse has moved,
+         is the startup value 320,240. In a twenty-five-row text screen that is row
+         30: off the bottom, and off the 640x200 virtual screen entirely. Measured on
+         6.22: after AX=0000 in mode 3 the real driver reports 320,96 -- the centre,
+         snapped to its cell grid. The ranges are cleared just above, so the extent
+         used here is the mode's own. */
+    {   LONG cx = i33_clampx(i33_snap((i33_vmaxx() + 1) / 2));
+        LONG cy = i33_clampy(i33_snap((i33_vmaxy() + 1) / 2));
+        InterlockedExchange(&g_ms_x, i33_px(cx));
+        InterlockedExchange(&g_ms_y, i33_py(cy)); }
 }
 
 /* INT 33h mouse driver (functions DOS apps actually use). The host draws the
@@ -6258,13 +6294,13 @@ static void mouse_int33(volatile BYTE *tib, int src)
         InterlockedIncrement(&g_ms_hidden);
         break;
     case 0x0003:                                        /* get position + buttons  */
-        VDM_SET16(tib, VTIB_ECX, (WORD)i33_clampx(i33_vx(x)));
-        VDM_SET16(tib, VTIB_EDX, (WORD)i33_clampy(i33_vy(y)));
+        VDM_SET16(tib, VTIB_ECX, (WORD)i33_clampx(i33_snap(i33_vx(x))));
+        VDM_SET16(tib, VTIB_EDX, (WORD)i33_clampy(i33_snap(i33_vy(y))));
         VDM_SET16(tib, VTIB_EBX, (WORD)b);
         break;
     case 0x0004: {                                      /* set cursor position     */
-        LONG vx = i33_clampx((LONG)(short)(VDM_REG(tib, VTIB_ECX) & 0xFFFF));
-        LONG vy = i33_clampy((LONG)(short)(VDM_REG(tib, VTIB_EDX) & 0xFFFF));
+        LONG vx = i33_clampx(i33_snap((LONG)(short)(VDM_REG(tib, VTIB_ECX) & 0xFFFF)));
+        LONG vy = i33_clampy(i33_snap((LONG)(short)(VDM_REG(tib, VTIB_EDX) & 0xFFFF)));
         InterlockedExchange(&g_ms_x, i33_px(vx));
         InterlockedExchange(&g_ms_y, i33_py(vy));
         break; }
@@ -6421,7 +6457,9 @@ static void mouse_int33(volatile BYTE *tib, int src)
         break;
     case 0x0024:                                        /* driver version / type   */
         VDM_SET16(tib, VTIB_EBX, 0x0800);               /* report 8.00             */
-        VDM_SET16(tib, VTIB_ECX, 0x0400);               /* CH: type 4 = PS/2, CL: 0 */
+        /* CH=04 PS/2. CL is the IRQ, and the real driver answers FF for a PS/2
+           mouse rather than 0 -- measured, p_mouse.asm i33.24.version. */
+        VDM_SET16(tib, VTIB_ECX, 0x04FF);
         break;
     case 0x0026:                                        /* max virtual coordinates */
         VDM_SET16(tib, VTIB_EBX, 0x0000);               /* driver not disabled     */
@@ -9113,6 +9151,17 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
                 mq = zput(mq, " badptr=");mq = zhex(mq, g_ms_state_badptr);
                 mq = zput(mq, " unimpl=");mq = zhex(mq, g_ms_i33_unimpl);
                 mq = zput(mq, " xsh=");   mq = zhex(mq, (DWORD)i33_xshift());
+                /* THE VIRTUAL SCREEN THIS DRIVER IS ACTUALLY USING. Without these,
+                   a coordinate that comes back wrong is indistinguishable from a
+                   text-mode test that quietly evaluated false, and the difference
+                   is which file the bug is in. text= is i33_text()'s verdict, not
+                   mkind, because that verdict is what every coordinate call uses. */
+                mq = zput(mq, " text=");  mq = zhex(mq, (DWORD)i33_text());
+                mq = zput(mq, " mkind="); mq = zhex(mq, (DWORD)g_vid.mkind);
+                mq = zput(mq, " vesa=");  mq = zhex(mq, (DWORD)g_vid.in_vesa);
+                mq = zput(mq, " fh=");    mq = zhex(mq, (DWORD)g_vid.frame.h);
+                mq = zput(mq, " vmaxy="); mq = zhex(mq, (DWORD)i33_vmaxy());
+                mq = zput(mq, " msy=");   mq = zhex(mq, (DWORD)g_ms_y);
                 mq = zput(mq, "\r\n");
                 log_append(LOG_PATH, mb, mq);
                 for (i = 0; i < g_ms_i33site_n && i < I33_SITEN; ++i) {

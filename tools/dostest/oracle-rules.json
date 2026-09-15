@@ -1,602 +1,652 @@
 [
-  {
-    "probe": "dosver",
-    "case": "int21.30",
-    "field": "AX",
-    "abstain": [
-      "dosbox-x"
-    ],
-    "recorded": "2026-08-20",
-    "why": "DOSBox-X's reported DOS version is a CONFIGURABLE EMULATOR SETTING (config 'dosbox: ver', default 5.0), not an observation about MS-DOS. It is evidence about DOSBox's default, so it carries no weight on what DOS reports. The genuine Microsoft kernel is definitive here: AH=30h returns AX=0x1606 on 6.22. See GH #28 -- our own value is selectable too, which is exactly why DOSBox's cannot be truth."
-  },
-  {
-    "probe": "dosver",
-    "case": "int21.3306",
-    "field": "BX",
-    "abstain": [
-      "dosbox-x"
-    ],
-    "recorded": "2026-08-20",
-    "why": "Same cause as int21.30/AX: 3306h reports the same configurable version through BL:BH, so DOSBox-X's answer is its 'ver' setting rather than evidence about MS-DOS."
-  },
-  {
-    "probe": "unimp",
-    "case": "int21.73",
-    "field": "CF",
-    "abstain": [
-      "dosbox-x"
-    ],
-    "recorded": "2026-08-20",
-    "why": "AH=73h is the FAT32 function group introduced in DOS 7.1. MS-DOS 6.22 does not define it at all, so it falls into the undefined bucket and returns CF=0 with AX unchanged, exactly like AH=FFh and AH=88h. DOSBox-X implements the group and returns CF=1 for the unsupported subfunction -- a sensible answer for the later DOS it emulates, but an answer to a different question. For 'what does 6.22 do', the genuine kernel is definitive."
-  },
-  {
-    "probe": "dir",
-    "case": "int21.3600.baddrive",
-    "field": "AX",
-    "abstain": [
-      "dosbox-x"
-    ],
-    "recorded": "2026-08-20",
-    "why": "The case asks what DOS reports for a drive that does not exist, using DL=26 (Z:). DOSBox-X ALWAYS MOUNTS Z: as its own virtual utility drive, so on that host the drive does exist and 0x0020 is a correct answer to a different question. Real 6.22 has no Z: and returns AX=FFFF -- with CARRY CLEAR, which is the part worth remembering: it is not a CF error."
-  },
-  {
-    "probe": "find",
-    "case": "int21.4F.after.failed.4E",
-    "field": "AX",
-    "abstain": [
-      "dosbox-x"
-    ],
-    "recorded": "2026-08-20",
-    "why": "Measures whether a FAILED find-first clobbers the search state already sitting in the DTA. Real MS-DOS 6.22 leaves it alone, so the following find-next carries on the earlier live '*.*' search and succeeds (AX=0, CF=0). DOSBox-X resets the state and reports no-more-files (AX=0x12, CF=1). NTVDMEX matches 6.22, because our find-first only writes the DTA search fields on success -- worth keeping that way deliberately rather than by accident."
-  },
-  {
-    "probe": "find",
-    "case": "int21.4F.after.failed.4E",
-    "field": "CF",
-    "abstain": [
-      "dosbox-x"
-    ],
-    "recorded": "2026-08-20",
-    "why": "Measures whether a FAILED find-first clobbers the search state already sitting in the DTA. Real MS-DOS 6.22 leaves it alone, so the following find-next carries on the earlier live '*.*' search and succeeds (AX=0, CF=0). DOSBox-X resets the state and reports no-more-files (AX=0x12, CF=1). NTVDMEX matches 6.22, because our find-first only writes the DTA search fields on success -- worth keeping that way deliberately rather than by accident."
-  },
-  {
-    "probe": "err",
-    "case": "err.after.4E.nofile",
-    "field": "BX",
-    "abstain": [
-      "dosbox-x"
-    ],
-    "recorded": "2026-08-20",
-    "why": "AH=59h reports a failure as four things: the extended code (AX), an error CLASS (BH), a suggested ACTION (BL) and a LOCUS (CH). The oracle populates all of them -- 0803/CH=02 for the not-found family, 0704/CH=01 for a bad handle. DOSBox-X returns the code correctly but largely does not populate class/action/locus (0001 or 0801, CH=00), so it is not evidence about what DOS reports in those fields. AX itself is still compared and agrees everywhere."
-  },
-  {
-    "probe": "err",
-    "case": "err.after.4E.nofile",
-    "field": "CX",
-    "abstain": [
-      "dosbox-x"
-    ],
-    "recorded": "2026-08-20",
-    "why": "AH=59h reports a failure as four things: the extended code (AX), an error CLASS (BH), a suggested ACTION (BL) and a LOCUS (CH). The oracle populates all of them -- 0803/CH=02 for the not-found family, 0704/CH=01 for a bad handle. DOSBox-X returns the code correctly but largely does not populate class/action/locus (0001 or 0801, CH=00), so it is not evidence about what DOS reports in those fields. AX itself is still compared and agrees everywhere."
-  },
-  {
-    "probe": "err",
-    "case": "err.after.4E.nopath",
-    "field": "BX",
-    "abstain": [
-      "dosbox-x"
-    ],
-    "recorded": "2026-08-20",
-    "why": "AH=59h reports a failure as four things: the extended code (AX), an error CLASS (BH), a suggested ACTION (BL) and a LOCUS (CH). The oracle populates all of them -- 0803/CH=02 for the not-found family, 0704/CH=01 for a bad handle. DOSBox-X returns the code correctly but largely does not populate class/action/locus (0001 or 0801, CH=00), so it is not evidence about what DOS reports in those fields. AX itself is still compared and agrees everywhere."
-  },
-  {
-    "probe": "err",
-    "case": "err.after.4E.nopath",
-    "field": "CX",
-    "abstain": [
-      "dosbox-x"
-    ],
-    "recorded": "2026-08-20",
-    "why": "AH=59h reports a failure as four things: the extended code (AX), an error CLASS (BH), a suggested ACTION (BL) and a LOCUS (CH). The oracle populates all of them -- 0803/CH=02 for the not-found family, 0704/CH=01 for a bad handle. DOSBox-X returns the code correctly but largely does not populate class/action/locus (0001 or 0801, CH=00), so it is not evidence about what DOS reports in those fields. AX itself is still compared and agrees everywhere."
-  },
-  {
-    "probe": "err",
-    "case": "err.after.3D.missing",
-    "field": "BX",
-    "abstain": [
-      "dosbox-x"
-    ],
-    "recorded": "2026-08-20",
-    "why": "AH=59h reports a failure as four things: the extended code (AX), an error CLASS (BH), a suggested ACTION (BL) and a LOCUS (CH). The oracle populates all of them -- 0803/CH=02 for the not-found family, 0704/CH=01 for a bad handle. DOSBox-X returns the code correctly but largely does not populate class/action/locus (0001 or 0801, CH=00), so it is not evidence about what DOS reports in those fields. AX itself is still compared and agrees everywhere."
-  },
-  {
-    "probe": "err",
-    "case": "err.after.3D.missing",
-    "field": "CX",
-    "abstain": [
-      "dosbox-x"
-    ],
-    "recorded": "2026-08-20",
-    "why": "AH=59h reports a failure as four things: the extended code (AX), an error CLASS (BH), a suggested ACTION (BL) and a LOCUS (CH). The oracle populates all of them -- 0803/CH=02 for the not-found family, 0704/CH=01 for a bad handle. DOSBox-X returns the code correctly but largely does not populate class/action/locus (0001 or 0801, CH=00), so it is not evidence about what DOS reports in those fields. AX itself is still compared and agrees everywhere."
-  },
-  {
-    "probe": "err",
-    "case": "err.after.3B.missing",
-    "field": "BX",
-    "abstain": [
-      "dosbox-x"
-    ],
-    "recorded": "2026-08-20",
-    "why": "AH=59h reports a failure as four things: the extended code (AX), an error CLASS (BH), a suggested ACTION (BL) and a LOCUS (CH). The oracle populates all of them -- 0803/CH=02 for the not-found family, 0704/CH=01 for a bad handle. DOSBox-X returns the code correctly but largely does not populate class/action/locus (0001 or 0801, CH=00), so it is not evidence about what DOS reports in those fields. AX itself is still compared and agrees everywhere."
-  },
-  {
-    "probe": "err",
-    "case": "err.after.3B.missing",
-    "field": "CX",
-    "abstain": [
-      "dosbox-x"
-    ],
-    "recorded": "2026-08-20",
-    "why": "AH=59h reports a failure as four things: the extended code (AX), an error CLASS (BH), a suggested ACTION (BL) and a LOCUS (CH). The oracle populates all of them -- 0803/CH=02 for the not-found family, 0704/CH=01 for a bad handle. DOSBox-X returns the code correctly but largely does not populate class/action/locus (0001 or 0801, CH=00), so it is not evidence about what DOS reports in those fields. AX itself is still compared and agrees everywhere."
-  },
-  {
-    "probe": "err",
-    "case": "err.after.3F.badhandle",
-    "field": "BX",
-    "abstain": [
-      "dosbox-x"
-    ],
-    "recorded": "2026-08-20",
-    "why": "AH=59h reports a failure as four things: the extended code (AX), an error CLASS (BH), a suggested ACTION (BL) and a LOCUS (CH). The oracle populates all of them -- 0803/CH=02 for the not-found family, 0704/CH=01 for a bad handle. DOSBox-X returns the code correctly but largely does not populate class/action/locus (0001 or 0801, CH=00), so it is not evidence about what DOS reports in those fields. AX itself is still compared and agrees everywhere."
-  },
-  {
-    "probe": "err",
-    "case": "err.after.3F.badhandle",
-    "field": "CX",
-    "abstain": [
-      "dosbox-x"
-    ],
-    "recorded": "2026-08-20",
-    "why": "AH=59h reports a failure as four things: the extended code (AX), an error CLASS (BH), a suggested ACTION (BL) and a LOCUS (CH). The oracle populates all of them -- 0803/CH=02 for the not-found family, 0704/CH=01 for a bad handle. DOSBox-X returns the code correctly but largely does not populate class/action/locus (0001 or 0801, CH=00), so it is not evidence about what DOS reports in those fields. AX itself is still compared and agrees everywhere."
-  },
-  {
-    "probe": "err",
-    "case": "err.after.3E.badhandle",
-    "field": "BX",
-    "abstain": [
-      "dosbox-x"
-    ],
-    "recorded": "2026-08-20",
-    "why": "AH=59h reports a failure as four things: the extended code (AX), an error CLASS (BH), a suggested ACTION (BL) and a LOCUS (CH). The oracle populates all of them -- 0803/CH=02 for the not-found family, 0704/CH=01 for a bad handle. DOSBox-X returns the code correctly but largely does not populate class/action/locus (0001 or 0801, CH=00), so it is not evidence about what DOS reports in those fields. AX itself is still compared and agrees everywhere."
-  },
-  {
-    "probe": "err",
-    "case": "err.after.3E.badhandle",
-    "field": "CX",
-    "abstain": [
-      "dosbox-x"
-    ],
-    "recorded": "2026-08-20",
-    "why": "AH=59h reports a failure as four things: the extended code (AX), an error CLASS (BH), a suggested ACTION (BL) and a LOCUS (CH). The oracle populates all of them -- 0803/CH=02 for the not-found family, 0704/CH=01 for a bad handle. DOSBox-X returns the code correctly but largely does not populate class/action/locus (0001 or 0801, CH=00), so it is not evidence about what DOS reports in those fields. AX itself is still compared and agrees everywhere."
-  },
-  {
-    "probe": "ctab",
-    "case": "t.02.upper",
-    "field": "AX",
-    "abstain": [
-      "dosbox-x"
-    ],
-    "recorded": "2026-08-20",
-    "why": "Real 6.22 returns the active CODE PAGE in AX for every AH=65h subfunction (0x1B5 = 437). DOSBox-X leaves AX holding the call number it was given (6502h, 6504h...), i.e. it does not set AX at all. The descriptor and table pointer it returns are fine; only this register differs, so it is not evidence about what DOS puts in AX."
-  },
-  {
-    "probe": "ctab",
-    "case": "t.04.fnupper",
-    "field": "AX",
-    "abstain": [
-      "dosbox-x"
-    ],
-    "recorded": "2026-08-20",
-    "why": "Real 6.22 returns the active CODE PAGE in AX for every AH=65h subfunction (0x1B5 = 437). DOSBox-X leaves AX holding the call number it was given (6502h, 6504h...), i.e. it does not set AX at all. The descriptor and table pointer it returns are fine; only this register differs, so it is not evidence about what DOS puts in AX."
-  },
-  {
-    "probe": "ctab",
-    "case": "t.05.fnterm",
-    "field": "AX",
-    "abstain": [
-      "dosbox-x"
-    ],
-    "recorded": "2026-08-20",
-    "why": "Real 6.22 returns the active CODE PAGE in AX for every AH=65h subfunction (0x1B5 = 437). DOSBox-X leaves AX holding the call number it was given (6502h, 6504h...), i.e. it does not set AX at all. The descriptor and table pointer it returns are fine; only this register differs, so it is not evidence about what DOS puts in AX."
-  },
-  {
-    "probe": "ctab",
-    "case": "t.06.collate",
-    "field": "AX",
-    "abstain": [
-      "dosbox-x"
-    ],
-    "recorded": "2026-08-20",
-    "why": "Real 6.22 returns the active CODE PAGE in AX for every AH=65h subfunction (0x1B5 = 437). DOSBox-X leaves AX holding the call number it was given (6502h, 6504h...), i.e. it does not set AX at all. The descriptor and table pointer it returns are fine; only this register differs, so it is not evidence about what DOS puts in AX."
-  },
-  {
-    "probe": "ctab",
-    "case": "t.07.dbcs",
-    "field": "AX",
-    "abstain": [
-      "dosbox-x"
-    ],
-    "recorded": "2026-08-20",
-    "why": "Real 6.22 returns the active CODE PAGE in AX for every AH=65h subfunction (0x1B5 = 437). DOSBox-X leaves AX holding the call number it was given (6502h, 6504h...), i.e. it does not set AX at all. The descriptor and table pointer it returns are fine; only this register differs, so it is not evidence about what DOS puts in AX."
-  },
-  {
-    "probe": "ctry",
-    "case": "ctry.block",
-    "field": "BUF",
-    "ignore_bytes": [
-      [
-        18,
-        4
-      ]
-    ],
-    "recorded": "2026-08-20",
-    "why": "The country block embeds a FAR POINTER to DOS's case-mapping routine at offset 18, and that address is a property of the host, not of DOS -- the oracle's 0116:0CF5, ours in the handler segment, DOSBox's somewhere else. It is the buffer equivalent of DS/ES, so those four bytes are excluded and the rest of the block IS compared."
-  },
-  {
-    "probe": "ctry",
-    "case": "ctry.block.us",
-    "field": "BUF",
-    "ignore_bytes": [
-      [
-        18,
-        4
-      ]
-    ],
-    "recorded": "2026-08-20",
-    "why": "The country block embeds a FAR POINTER to DOS's case-mapping routine at offset 18, and that address is a property of the host, not of DOS -- the oracle's 0116:0CF5, ours in the handler segment, DOSBox's somewhere else. It is the buffer equivalent of DS/ES, so those four bytes are excluded and the rest of the block IS compared."
-  },
-  {
-    "probe": "misc",
-    "case": "ctry65",
-    "field": "BUF",
-    "ignore_bytes": [
-      [
-        25,
-        4
-      ]
-    ],
-    "recorded": "2026-08-20",
-    "why": "The country block embeds a FAR POINTER to DOS's case-mapping routine at offset 18, and that address is a property of the host, not of DOS -- the oracle's 0116:0CF5, ours in the handler segment, DOSBox's somewhere else. It is the buffer equivalent of DS/ES, so those four bytes are excluded and the rest of the block IS compared."
-  },
-  {
-    "probe": "ctry",
-    "case": "ctry.block.us",
-    "field": "BUF",
-    "abstain": [
-      "dosbox-x"
-    ],
-    "ignore_bytes": [
-      [
-        18,
-        4
-      ]
-    ],
-    "recorded": "2026-08-20",
-    "why": "DOSBox-X does not implement AH=38h with AL=FFh (it returns CF=1 and leaves the buffer untouched, still full of the probe's 0xEE poison), so it has no answer to give here. Real 6.22 fills the block. The country block embeds a FAR POINTER to DOS's case-mapping routine at offset 18, and that address is a property of the host, not of DOS -- the oracle's 0116:0CF5, ours in the handler segment, DOSBox's somewhere else. It is the buffer equivalent of DS/ES, so those four bytes are excluded and the rest of the block IS compared."
-  },
-  {
-    "probe": "ctry",
-    "case": "ctry.block",
-    "field": "BUF",
-    "abstain": [
-      "dosbox-x"
-    ],
-    "recorded": "2026-08-20",
-    "why": "With the case-map pointer masked out, the blocks differ in ONE byte: the US date separator. Genuine MS-DOS 6.22 uses '-' (0x2D); DOSBox-X uses '/' (0x2F). NTVDMEX is byte-identical to the oracle across the whole block. DOSBox is stating its own convention, not reporting 6.22's."
-  },
-  {
-    "probe": "ctry",
-    "case": "int21.3800",
-    "field": "AX",
-    "abstain": [
-      "dosbox-x"
-    ],
-    "recorded": "2026-08-20",
-    "why": "Real 6.22 returns the country code in AX (0001). DOSBox-X leaves AX holding the call number it was passed (3801h), i.e. it does not write AX at all -- the same pattern as its AH=65h handling. Not evidence about what DOS returns."
-  },
-  {
-    "probe": "ctry",
-    "case": "int21.38FF.us",
-    "field": "AX",
-    "abstain": [
-      "dosbox-x"
-    ],
-    "recorded": "2026-08-20",
-    "why": "Real 6.22 supports AH=38h with AL=FFh (country code supplied in BX) and returns the country code in AX. DOSBox-X does not implement that form: it returns CF=1 with AX untouched and the caller's buffer left as it was."
-  },
-  {
-    "probe": "ctry",
-    "case": "int21.38FF.us",
-    "field": "CF",
-    "abstain": [
-      "dosbox-x"
-    ],
-    "recorded": "2026-08-20",
-    "why": "As above: DOSBox-X does not implement AH=38h AL=FFh and reports failure, where genuine 6.22 succeeds."
-  },
-  {
-    "probe": "find",
-    "case": "dta.after.4E",
-    "field": "BUF",
-    "ignore_bytes": [
-      [
-        0,
-        44
-      ]
-    ],
-    "recorded": "2026-08-20",
-    "why": "The DTA after a successful find-first describes THE FILE THAT WAS FOUND -- name, size, date, attributes -- plus DOS's private search state. Every host searches a different directory (the oracle's A:, the rig's C:\\\\test, DOSBox's mount), so not one byte of it is comparable across hosts. It is still dumped, because reading it is how the block layout was established in the first place, but it is excluded from the verdict. The layout itself is asserted by the register cases and documented in dos_int21.c."
-  },
-  {
-    "probe": "fcb",
-    "case": "fcb.opened",
-    "field": "BUF",
-    "ignore_bytes": [
-      [
-        20,
-        12
-      ]
-    ],
-    "recorded": "2026-08-20",
-    "why": "Bytes 20-23 are the scratch file's date and time, which differ by when each host created it, and 24-31 are DOS's own workspace inside the FCB -- we keep our handle slot there, the oracle keeps something else. The drive, name, extension, current block, record size and file size (bytes 0-19) ARE compared."
-  },
-  {
-    "probe": "fcb",
-    "case": "fcb.dta.found",
-    "field": "BUF",
-    "ignore_bytes": [
-      [
-        0,
-        40
-      ]
-    ],
-    "recorded": "2026-08-20",
-    "why": "An FCB find-first fills the DTA with the directory entry OF THE FILE FOUND, and every host searches a different directory. Not one byte is comparable. Still dumped, because reading it is how the 33-byte layout was established, but excluded from the verdict; the layout itself is asserted by the register cases and documented in dos_int21.c."
-  },
-  {
-    "probe": "rest",
-    "case": "int21.3200.baddrive",
-    "field": "AX",
-    "abstain": [
-      "dosbox-x"
-    ],
-    "recorded": "2026-08-20",
-    "why": "Same cause as int21.3600.baddrive: the case uses DL=26 (Z:) to mean 'a drive that does not exist', and DOSBox-X always mounts Z: as its own utility drive, so there it DOES exist and AL=00 is correct for that host. Real 6.22 returns AL=FF."
-  },
-  {
-    "probe": "dir",
-    "case": "cwd",
-    "field": "BUF",
-    "ignore_bytes": [
-      [
-        0,
-        16
-      ]
-    ],
-    "recorded": "2026-08-20",
-    "why": "AH=47h returns THE CURRENT DIRECTORY, and each host runs a probe from its own directory -- the oracle's A:\\\\, the rig's C:\\\\test, DOSBox's mount root. The buffer is therefore never comparable; it is still dumped, and the call's success is asserted by CF."
-  },
-  {
-    "probe": "fcb",
-    "case": "fcb.opened",
-    "field": "BUF",
-    "ignore_bytes": [
-      [
-        0,
-        1
-      ]
-    ],
-    "recorded": "2026-08-20",
-    "why": "Byte 0 is the DRIVE the open resolved to, and each host runs the probe from its own drive -- the oracle from A: (01), DOSBox from C: (03), the rig from C:. The behaviour being checked is that the field gets FILLED IN at all, which it now is; the value itself is a property of where the probe is running."
-  },
-  {
-    "probe": "defs",
-    "case": "def.30.version",
-    "field": "AX",
-    "recorded": "2026-08-20",
-    "why": "Same as dosver/int21.30: DOSBox-X's reported DOS version is a configurable emulator setting, not an observation about MS-DOS. We match the genuine kernel (0x1606).",
-    "abstain": [
-      "dosbox-x"
-    ]
-  },
-  {
-    "probe": "defs",
-    "case": "edge.71",
-    "field": "CF",
-    "recorded": "2026-08-20",
-    "why": "AH=71h is the long-filename group introduced with Windows 95. MS-DOS 6.22 does not define it, so it no-ops with carry clear; DOSBox-X implements it and reports a real error. A correct answer to a later DOS's question.",
-    "abstain": [
-      "dosbox-x"
-    ]
-  },
-  {
-    "probe": "alloc",
-    "case": "sysvars.at.bx-2",
-    "field": "BUF",
-    "recorded": "2026-08-20",
-    "why": "DOS's internal SysVars: real kernels fill it with pointers to their own DPB, SFT and driver chains, all host addresses. Ours is deliberately a stub with only the first-MCB word real (see the AH=52h handler for why a null stub beats a plausible one). Nothing here is comparable.",
-    "ignore_bytes": [
-      [
-        0,
-        48
-      ]
-    ]
-  },
-  {
-    "probe": "misc",
-    "case": "int21.6501",
-    "field": "AX",
-    "recorded": "2026-08-20",
-    "why": "Real 6.22 returns the active code page in AX (0x1B5 = 437); DOSBox-X leaves AX holding the call number. We match the oracle.",
-    "abstain": [
-      "dosbox-x"
-    ]
-  },
-  {
-    "probe": "misc",
-    "case": "int21.5900",
-    "field": "BX",
-    "recorded": "2026-08-20",
-    "why": "Same as the err probe: DOSBox-X returns the extended error CODE correctly but does not populate the class/action fields. We match the oracle.",
-    "abstain": [
-      "dosbox-x"
-    ]
-  },
-  {
-    "probe": "misc",
-    "case": "int21.5900",
-    "field": "CX",
-    "recorded": "2026-08-20",
-    "why": "Same as the err probe: DOSBox-X returns the extended error CODE correctly but does not populate the locus fields. We match the oracle.",
-    "abstain": [
-      "dosbox-x"
-    ]
-  },
-  {
-    "probe": "misc",
-    "case": "ctry65",
-    "field": "BUF",
-    "recorded": "2026-08-20",
-    "why": "With the case-map pointer masked, the remaining difference is the US date separator: genuine 6.22 uses '-' (0x2D), DOSBox-X uses '/' (0x2F). We are byte-identical to the oracle.",
-    "abstain": [
-      "dosbox-x"
-    ],
-    "ignore_bytes": [
-      [
-        25,
-        4
-      ]
-    ]
-  },
-  {
-    "probe": "misc",
-    "case": "truename",
-    "field": "BUF",
-    "recorded": "2026-08-20",
-    "why": "60h canonicalises against the CURRENT DIRECTORY. Each host runs a probe from its own directory and drive -- the oracle's A:, the rig's C:\\\\test, DOSBox's mount root -- so this value describes WHERE THE PROBE IS, not what DOS does.",
-    "ignore_bytes": [
-      [
-        0,
-        24
-      ]
-    ]
-  },
-  {
-    "probe": "misc",
-    "case": "serial",
-    "field": "BUF",
-    "recorded": "2026-08-20",
-    "why": "The volume serial number, label and filesystem type of whichever disk the probe is running from. Each host runs a probe from its own directory and drive -- the oracle's A:, the rig's C:\\\\test, DOSBox's mount root -- so this value describes WHERE THE PROBE IS, not what DOS does.",
-    "ignore_bytes": [
-      [
-        0,
-        24
-      ]
-    ]
-  },
-  {
-    "probe": "ctab",
-    "case": "t.02.upper.desc",
-    "field": "BUF",
-    "recorded": "2026-08-20",
-    "why": "The descriptor's bytes 1-4 are a FAR POINTER to the table, which lives at a different address on every host. The subfunction id in byte 0 IS compared, and the table the pointer leads to is compared separately.",
-    "ignore_bytes": [
-      [
-        1,
-        4
-      ]
-    ]
-  },
-  {
-    "probe": "ctab",
-    "case": "t.04.fnupper.desc",
-    "field": "BUF",
-    "recorded": "2026-08-20",
-    "why": "The descriptor's bytes 1-4 are a FAR POINTER to the table, which lives at a different address on every host. The subfunction id in byte 0 IS compared, and the table the pointer leads to is compared separately.",
-    "ignore_bytes": [
-      [
-        1,
-        4
-      ]
-    ]
-  },
-  {
-    "probe": "ctab",
-    "case": "t.05.fnterm.desc",
-    "field": "BUF",
-    "recorded": "2026-08-20",
-    "why": "The descriptor's bytes 1-4 are a FAR POINTER to the table, which lives at a different address on every host. The subfunction id in byte 0 IS compared, and the table the pointer leads to is compared separately.",
-    "ignore_bytes": [
-      [
-        1,
-        4
-      ]
-    ]
-  },
-  {
-    "probe": "ctab",
-    "case": "t.06.collate.desc",
-    "field": "BUF",
-    "recorded": "2026-08-20",
-    "why": "The descriptor's bytes 1-4 are a FAR POINTER to the table, which lives at a different address on every host. The subfunction id in byte 0 IS compared, and the table the pointer leads to is compared separately.",
-    "ignore_bytes": [
-      [
-        1,
-        4
-      ]
-    ]
-  },
-  {
-    "probe": "ctab",
-    "case": "t.07.dbcs.desc",
-    "field": "BUF",
-    "recorded": "2026-08-20",
-    "why": "The descriptor's bytes 1-4 are a FAR POINTER to the table, which lives at a different address on every host. The subfunction id in byte 0 IS compared, and the table the pointer leads to is compared separately.",
-    "ignore_bytes": [
-      [
-        1,
-        4
-      ]
-    ]
-  },
-  {
-    "probe": "ctab",
-    "case": "t.02.upper.tab",
-    "field": "BUF",
-    "recorded": "2026-08-20",
-    "why": "DOSBox-X's uppercase table is a near-identity mapping (80,81,82,83...), not code page 437's real case folding. Ours is byte-identical to the genuine 6.22 table, which is the point of having dumped it rather than generated it.",
-    "abstain": [
-      "dosbox-x"
-    ]
-  },
-  {
-    "probe": "ctab",
-    "case": "t.04.fnupper.tab",
-    "field": "BUF",
-    "recorded": "2026-08-20",
-    "why": "DOSBox-X's uppercase table is a near-identity mapping (80,81,82,83...), not code page 437's real case folding. Ours is byte-identical to the genuine 6.22 table, which is the point of having dumped it rather than generated it.",
-    "abstain": [
-      "dosbox-x"
-    ]
-  },
-  {
-    "probe": "ctab",
-    "case": "t.06.collate.tab",
-    "field": "BUF",
-    "abstain": [
-      "dosbox-x"
-    ],
-    "recorded": "2026-08-20",
-    "why": "DOSBox-X's collating sequence does not fold lower case onto upper (it diverges from the genuine table at byte 99: 'A' vs 'a'). Ours is byte-identical to 6.22's, which is exactly why the table was dumped from the oracle rather than generated -- a plausible-looking collating table would sort wrongly in a way nobody would notice until a program listed names out of order."
-  }
+ {
+  "probe": "dosver",
+  "case": "int21.30",
+  "field": "AX",
+  "abstain": [
+   "dosbox-x"
+  ],
+  "recorded": "2026-08-20",
+  "why": "DOSBox-X's reported DOS version is a CONFIGURABLE EMULATOR SETTING (config 'dosbox: ver', default 5.0), not an observation about MS-DOS. It is evidence about DOSBox's default, so it carries no weight on what DOS reports. The genuine Microsoft kernel is definitive here: AH=30h returns AX=0x1606 on 6.22. See GH #28 -- our own value is selectable too, which is exactly why DOSBox's cannot be truth."
+ },
+ {
+  "probe": "dosver",
+  "case": "int21.3306",
+  "field": "BX",
+  "abstain": [
+   "dosbox-x"
+  ],
+  "recorded": "2026-08-20",
+  "why": "Same cause as int21.30/AX: 3306h reports the same configurable version through BL:BH, so DOSBox-X's answer is its 'ver' setting rather than evidence about MS-DOS."
+ },
+ {
+  "probe": "unimp",
+  "case": "int21.73",
+  "field": "CF",
+  "abstain": [
+   "dosbox-x"
+  ],
+  "recorded": "2026-08-20",
+  "why": "AH=73h is the FAT32 function group introduced in DOS 7.1. MS-DOS 6.22 does not define it at all, so it falls into the undefined bucket and returns CF=0 with AX unchanged, exactly like AH=FFh and AH=88h. DOSBox-X implements the group and returns CF=1 for the unsupported subfunction -- a sensible answer for the later DOS it emulates, but an answer to a different question. For 'what does 6.22 do', the genuine kernel is definitive."
+ },
+ {
+  "probe": "dir",
+  "case": "int21.3600.baddrive",
+  "field": "AX",
+  "abstain": [
+   "dosbox-x"
+  ],
+  "recorded": "2026-08-20",
+  "why": "The case asks what DOS reports for a drive that does not exist, using DL=26 (Z:). DOSBox-X ALWAYS MOUNTS Z: as its own virtual utility drive, so on that host the drive does exist and 0x0020 is a correct answer to a different question. Real 6.22 has no Z: and returns AX=FFFF -- with CARRY CLEAR, which is the part worth remembering: it is not a CF error."
+ },
+ {
+  "probe": "find",
+  "case": "int21.4F.after.failed.4E",
+  "field": "AX",
+  "abstain": [
+   "dosbox-x"
+  ],
+  "recorded": "2026-08-20",
+  "why": "Measures whether a FAILED find-first clobbers the search state already sitting in the DTA. Real MS-DOS 6.22 leaves it alone, so the following find-next carries on the earlier live '*.*' search and succeeds (AX=0, CF=0). DOSBox-X resets the state and reports no-more-files (AX=0x12, CF=1). NTVDMEX matches 6.22, because our find-first only writes the DTA search fields on success -- worth keeping that way deliberately rather than by accident."
+ },
+ {
+  "probe": "find",
+  "case": "int21.4F.after.failed.4E",
+  "field": "CF",
+  "abstain": [
+   "dosbox-x"
+  ],
+  "recorded": "2026-08-20",
+  "why": "Measures whether a FAILED find-first clobbers the search state already sitting in the DTA. Real MS-DOS 6.22 leaves it alone, so the following find-next carries on the earlier live '*.*' search and succeeds (AX=0, CF=0). DOSBox-X resets the state and reports no-more-files (AX=0x12, CF=1). NTVDMEX matches 6.22, because our find-first only writes the DTA search fields on success -- worth keeping that way deliberately rather than by accident."
+ },
+ {
+  "probe": "err",
+  "case": "err.after.4E.nofile",
+  "field": "BX",
+  "abstain": [
+   "dosbox-x"
+  ],
+  "recorded": "2026-08-20",
+  "why": "AH=59h reports a failure as four things: the extended code (AX), an error CLASS (BH), a suggested ACTION (BL) and a LOCUS (CH). The oracle populates all of them -- 0803/CH=02 for the not-found family, 0704/CH=01 for a bad handle. DOSBox-X returns the code correctly but largely does not populate class/action/locus (0001 or 0801, CH=00), so it is not evidence about what DOS reports in those fields. AX itself is still compared and agrees everywhere."
+ },
+ {
+  "probe": "err",
+  "case": "err.after.4E.nofile",
+  "field": "CX",
+  "abstain": [
+   "dosbox-x"
+  ],
+  "recorded": "2026-08-20",
+  "why": "AH=59h reports a failure as four things: the extended code (AX), an error CLASS (BH), a suggested ACTION (BL) and a LOCUS (CH). The oracle populates all of them -- 0803/CH=02 for the not-found family, 0704/CH=01 for a bad handle. DOSBox-X returns the code correctly but largely does not populate class/action/locus (0001 or 0801, CH=00), so it is not evidence about what DOS reports in those fields. AX itself is still compared and agrees everywhere."
+ },
+ {
+  "probe": "err",
+  "case": "err.after.4E.nopath",
+  "field": "BX",
+  "abstain": [
+   "dosbox-x"
+  ],
+  "recorded": "2026-08-20",
+  "why": "AH=59h reports a failure as four things: the extended code (AX), an error CLASS (BH), a suggested ACTION (BL) and a LOCUS (CH). The oracle populates all of them -- 0803/CH=02 for the not-found family, 0704/CH=01 for a bad handle. DOSBox-X returns the code correctly but largely does not populate class/action/locus (0001 or 0801, CH=00), so it is not evidence about what DOS reports in those fields. AX itself is still compared and agrees everywhere."
+ },
+ {
+  "probe": "err",
+  "case": "err.after.4E.nopath",
+  "field": "CX",
+  "abstain": [
+   "dosbox-x"
+  ],
+  "recorded": "2026-08-20",
+  "why": "AH=59h reports a failure as four things: the extended code (AX), an error CLASS (BH), a suggested ACTION (BL) and a LOCUS (CH). The oracle populates all of them -- 0803/CH=02 for the not-found family, 0704/CH=01 for a bad handle. DOSBox-X returns the code correctly but largely does not populate class/action/locus (0001 or 0801, CH=00), so it is not evidence about what DOS reports in those fields. AX itself is still compared and agrees everywhere."
+ },
+ {
+  "probe": "err",
+  "case": "err.after.3D.missing",
+  "field": "BX",
+  "abstain": [
+   "dosbox-x"
+  ],
+  "recorded": "2026-08-20",
+  "why": "AH=59h reports a failure as four things: the extended code (AX), an error CLASS (BH), a suggested ACTION (BL) and a LOCUS (CH). The oracle populates all of them -- 0803/CH=02 for the not-found family, 0704/CH=01 for a bad handle. DOSBox-X returns the code correctly but largely does not populate class/action/locus (0001 or 0801, CH=00), so it is not evidence about what DOS reports in those fields. AX itself is still compared and agrees everywhere."
+ },
+ {
+  "probe": "err",
+  "case": "err.after.3D.missing",
+  "field": "CX",
+  "abstain": [
+   "dosbox-x"
+  ],
+  "recorded": "2026-08-20",
+  "why": "AH=59h reports a failure as four things: the extended code (AX), an error CLASS (BH), a suggested ACTION (BL) and a LOCUS (CH). The oracle populates all of them -- 0803/CH=02 for the not-found family, 0704/CH=01 for a bad handle. DOSBox-X returns the code correctly but largely does not populate class/action/locus (0001 or 0801, CH=00), so it is not evidence about what DOS reports in those fields. AX itself is still compared and agrees everywhere."
+ },
+ {
+  "probe": "err",
+  "case": "err.after.3B.missing",
+  "field": "BX",
+  "abstain": [
+   "dosbox-x"
+  ],
+  "recorded": "2026-08-20",
+  "why": "AH=59h reports a failure as four things: the extended code (AX), an error CLASS (BH), a suggested ACTION (BL) and a LOCUS (CH). The oracle populates all of them -- 0803/CH=02 for the not-found family, 0704/CH=01 for a bad handle. DOSBox-X returns the code correctly but largely does not populate class/action/locus (0001 or 0801, CH=00), so it is not evidence about what DOS reports in those fields. AX itself is still compared and agrees everywhere."
+ },
+ {
+  "probe": "err",
+  "case": "err.after.3B.missing",
+  "field": "CX",
+  "abstain": [
+   "dosbox-x"
+  ],
+  "recorded": "2026-08-20",
+  "why": "AH=59h reports a failure as four things: the extended code (AX), an error CLASS (BH), a suggested ACTION (BL) and a LOCUS (CH). The oracle populates all of them -- 0803/CH=02 for the not-found family, 0704/CH=01 for a bad handle. DOSBox-X returns the code correctly but largely does not populate class/action/locus (0001 or 0801, CH=00), so it is not evidence about what DOS reports in those fields. AX itself is still compared and agrees everywhere."
+ },
+ {
+  "probe": "err",
+  "case": "err.after.3F.badhandle",
+  "field": "BX",
+  "abstain": [
+   "dosbox-x"
+  ],
+  "recorded": "2026-08-20",
+  "why": "AH=59h reports a failure as four things: the extended code (AX), an error CLASS (BH), a suggested ACTION (BL) and a LOCUS (CH). The oracle populates all of them -- 0803/CH=02 for the not-found family, 0704/CH=01 for a bad handle. DOSBox-X returns the code correctly but largely does not populate class/action/locus (0001 or 0801, CH=00), so it is not evidence about what DOS reports in those fields. AX itself is still compared and agrees everywhere."
+ },
+ {
+  "probe": "err",
+  "case": "err.after.3F.badhandle",
+  "field": "CX",
+  "abstain": [
+   "dosbox-x"
+  ],
+  "recorded": "2026-08-20",
+  "why": "AH=59h reports a failure as four things: the extended code (AX), an error CLASS (BH), a suggested ACTION (BL) and a LOCUS (CH). The oracle populates all of them -- 0803/CH=02 for the not-found family, 0704/CH=01 for a bad handle. DOSBox-X returns the code correctly but largely does not populate class/action/locus (0001 or 0801, CH=00), so it is not evidence about what DOS reports in those fields. AX itself is still compared and agrees everywhere."
+ },
+ {
+  "probe": "err",
+  "case": "err.after.3E.badhandle",
+  "field": "BX",
+  "abstain": [
+   "dosbox-x"
+  ],
+  "recorded": "2026-08-20",
+  "why": "AH=59h reports a failure as four things: the extended code (AX), an error CLASS (BH), a suggested ACTION (BL) and a LOCUS (CH). The oracle populates all of them -- 0803/CH=02 for the not-found family, 0704/CH=01 for a bad handle. DOSBox-X returns the code correctly but largely does not populate class/action/locus (0001 or 0801, CH=00), so it is not evidence about what DOS reports in those fields. AX itself is still compared and agrees everywhere."
+ },
+ {
+  "probe": "err",
+  "case": "err.after.3E.badhandle",
+  "field": "CX",
+  "abstain": [
+   "dosbox-x"
+  ],
+  "recorded": "2026-08-20",
+  "why": "AH=59h reports a failure as four things: the extended code (AX), an error CLASS (BH), a suggested ACTION (BL) and a LOCUS (CH). The oracle populates all of them -- 0803/CH=02 for the not-found family, 0704/CH=01 for a bad handle. DOSBox-X returns the code correctly but largely does not populate class/action/locus (0001 or 0801, CH=00), so it is not evidence about what DOS reports in those fields. AX itself is still compared and agrees everywhere."
+ },
+ {
+  "probe": "ctab",
+  "case": "t.02.upper",
+  "field": "AX",
+  "abstain": [
+   "dosbox-x"
+  ],
+  "recorded": "2026-08-20",
+  "why": "Real 6.22 returns the active CODE PAGE in AX for every AH=65h subfunction (0x1B5 = 437). DOSBox-X leaves AX holding the call number it was given (6502h, 6504h...), i.e. it does not set AX at all. The descriptor and table pointer it returns are fine; only this register differs, so it is not evidence about what DOS puts in AX."
+ },
+ {
+  "probe": "ctab",
+  "case": "t.04.fnupper",
+  "field": "AX",
+  "abstain": [
+   "dosbox-x"
+  ],
+  "recorded": "2026-08-20",
+  "why": "Real 6.22 returns the active CODE PAGE in AX for every AH=65h subfunction (0x1B5 = 437). DOSBox-X leaves AX holding the call number it was given (6502h, 6504h...), i.e. it does not set AX at all. The descriptor and table pointer it returns are fine; only this register differs, so it is not evidence about what DOS puts in AX."
+ },
+ {
+  "probe": "ctab",
+  "case": "t.05.fnterm",
+  "field": "AX",
+  "abstain": [
+   "dosbox-x"
+  ],
+  "recorded": "2026-08-20",
+  "why": "Real 6.22 returns the active CODE PAGE in AX for every AH=65h subfunction (0x1B5 = 437). DOSBox-X leaves AX holding the call number it was given (6502h, 6504h...), i.e. it does not set AX at all. The descriptor and table pointer it returns are fine; only this register differs, so it is not evidence about what DOS puts in AX."
+ },
+ {
+  "probe": "ctab",
+  "case": "t.06.collate",
+  "field": "AX",
+  "abstain": [
+   "dosbox-x"
+  ],
+  "recorded": "2026-08-20",
+  "why": "Real 6.22 returns the active CODE PAGE in AX for every AH=65h subfunction (0x1B5 = 437). DOSBox-X leaves AX holding the call number it was given (6502h, 6504h...), i.e. it does not set AX at all. The descriptor and table pointer it returns are fine; only this register differs, so it is not evidence about what DOS puts in AX."
+ },
+ {
+  "probe": "ctab",
+  "case": "t.07.dbcs",
+  "field": "AX",
+  "abstain": [
+   "dosbox-x"
+  ],
+  "recorded": "2026-08-20",
+  "why": "Real 6.22 returns the active CODE PAGE in AX for every AH=65h subfunction (0x1B5 = 437). DOSBox-X leaves AX holding the call number it was given (6502h, 6504h...), i.e. it does not set AX at all. The descriptor and table pointer it returns are fine; only this register differs, so it is not evidence about what DOS puts in AX."
+ },
+ {
+  "probe": "ctry",
+  "case": "ctry.block",
+  "field": "BUF",
+  "ignore_bytes": [
+   [
+    18,
+    4
+   ]
+  ],
+  "recorded": "2026-08-20",
+  "why": "The country block embeds a FAR POINTER to DOS's case-mapping routine at offset 18, and that address is a property of the host, not of DOS -- the oracle's 0116:0CF5, ours in the handler segment, DOSBox's somewhere else. It is the buffer equivalent of DS/ES, so those four bytes are excluded and the rest of the block IS compared."
+ },
+ {
+  "probe": "ctry",
+  "case": "ctry.block.us",
+  "field": "BUF",
+  "ignore_bytes": [
+   [
+    18,
+    4
+   ]
+  ],
+  "recorded": "2026-08-20",
+  "why": "The country block embeds a FAR POINTER to DOS's case-mapping routine at offset 18, and that address is a property of the host, not of DOS -- the oracle's 0116:0CF5, ours in the handler segment, DOSBox's somewhere else. It is the buffer equivalent of DS/ES, so those four bytes are excluded and the rest of the block IS compared."
+ },
+ {
+  "probe": "misc",
+  "case": "ctry65",
+  "field": "BUF",
+  "ignore_bytes": [
+   [
+    25,
+    4
+   ]
+  ],
+  "recorded": "2026-08-20",
+  "why": "The country block embeds a FAR POINTER to DOS's case-mapping routine at offset 18, and that address is a property of the host, not of DOS -- the oracle's 0116:0CF5, ours in the handler segment, DOSBox's somewhere else. It is the buffer equivalent of DS/ES, so those four bytes are excluded and the rest of the block IS compared."
+ },
+ {
+  "probe": "ctry",
+  "case": "ctry.block.us",
+  "field": "BUF",
+  "abstain": [
+   "dosbox-x"
+  ],
+  "ignore_bytes": [
+   [
+    18,
+    4
+   ]
+  ],
+  "recorded": "2026-08-20",
+  "why": "DOSBox-X does not implement AH=38h with AL=FFh (it returns CF=1 and leaves the buffer untouched, still full of the probe's 0xEE poison), so it has no answer to give here. Real 6.22 fills the block. The country block embeds a FAR POINTER to DOS's case-mapping routine at offset 18, and that address is a property of the host, not of DOS -- the oracle's 0116:0CF5, ours in the handler segment, DOSBox's somewhere else. It is the buffer equivalent of DS/ES, so those four bytes are excluded and the rest of the block IS compared."
+ },
+ {
+  "probe": "ctry",
+  "case": "ctry.block",
+  "field": "BUF",
+  "abstain": [
+   "dosbox-x"
+  ],
+  "recorded": "2026-08-20",
+  "why": "With the case-map pointer masked out, the blocks differ in ONE byte: the US date separator. Genuine MS-DOS 6.22 uses '-' (0x2D); DOSBox-X uses '/' (0x2F). NTVDMEX is byte-identical to the oracle across the whole block. DOSBox is stating its own convention, not reporting 6.22's."
+ },
+ {
+  "probe": "ctry",
+  "case": "int21.3800",
+  "field": "AX",
+  "abstain": [
+   "dosbox-x"
+  ],
+  "recorded": "2026-08-20",
+  "why": "Real 6.22 returns the country code in AX (0001). DOSBox-X leaves AX holding the call number it was passed (3801h), i.e. it does not write AX at all -- the same pattern as its AH=65h handling. Not evidence about what DOS returns."
+ },
+ {
+  "probe": "ctry",
+  "case": "int21.38FF.us",
+  "field": "AX",
+  "abstain": [
+   "dosbox-x"
+  ],
+  "recorded": "2026-08-20",
+  "why": "Real 6.22 supports AH=38h with AL=FFh (country code supplied in BX) and returns the country code in AX. DOSBox-X does not implement that form: it returns CF=1 with AX untouched and the caller's buffer left as it was."
+ },
+ {
+  "probe": "ctry",
+  "case": "int21.38FF.us",
+  "field": "CF",
+  "abstain": [
+   "dosbox-x"
+  ],
+  "recorded": "2026-08-20",
+  "why": "As above: DOSBox-X does not implement AH=38h AL=FFh and reports failure, where genuine 6.22 succeeds."
+ },
+ {
+  "probe": "find",
+  "case": "dta.after.4E",
+  "field": "BUF",
+  "ignore_bytes": [
+   [
+    0,
+    44
+   ]
+  ],
+  "recorded": "2026-08-20",
+  "why": "The DTA after a successful find-first describes THE FILE THAT WAS FOUND -- name, size, date, attributes -- plus DOS's private search state. Every host searches a different directory (the oracle's A:, the rig's C:\\\\test, DOSBox's mount), so not one byte of it is comparable across hosts. It is still dumped, because reading it is how the block layout was established in the first place, but it is excluded from the verdict. The layout itself is asserted by the register cases and documented in dos_int21.c."
+ },
+ {
+  "probe": "fcb",
+  "case": "fcb.opened",
+  "field": "BUF",
+  "ignore_bytes": [
+   [
+    20,
+    12
+   ]
+  ],
+  "recorded": "2026-08-20",
+  "why": "Bytes 20-23 are the scratch file's date and time, which differ by when each host created it, and 24-31 are DOS's own workspace inside the FCB -- we keep our handle slot there, the oracle keeps something else. The drive, name, extension, current block, record size and file size (bytes 0-19) ARE compared."
+ },
+ {
+  "probe": "fcb",
+  "case": "fcb.dta.found",
+  "field": "BUF",
+  "ignore_bytes": [
+   [
+    0,
+    40
+   ]
+  ],
+  "recorded": "2026-08-20",
+  "why": "An FCB find-first fills the DTA with the directory entry OF THE FILE FOUND, and every host searches a different directory. Not one byte is comparable. Still dumped, because reading it is how the 33-byte layout was established, but excluded from the verdict; the layout itself is asserted by the register cases and documented in dos_int21.c."
+ },
+ {
+  "probe": "rest",
+  "case": "int21.3200.baddrive",
+  "field": "AX",
+  "abstain": [
+   "dosbox-x"
+  ],
+  "recorded": "2026-08-20",
+  "why": "Same cause as int21.3600.baddrive: the case uses DL=26 (Z:) to mean 'a drive that does not exist', and DOSBox-X always mounts Z: as its own utility drive, so there it DOES exist and AL=00 is correct for that host. Real 6.22 returns AL=FF."
+ },
+ {
+  "probe": "dir",
+  "case": "cwd",
+  "field": "BUF",
+  "ignore_bytes": [
+   [
+    0,
+    16
+   ]
+  ],
+  "recorded": "2026-08-20",
+  "why": "AH=47h returns THE CURRENT DIRECTORY, and each host runs a probe from its own directory -- the oracle's A:\\\\, the rig's C:\\\\test, DOSBox's mount root. The buffer is therefore never comparable; it is still dumped, and the call's success is asserted by CF."
+ },
+ {
+  "probe": "fcb",
+  "case": "fcb.opened",
+  "field": "BUF",
+  "ignore_bytes": [
+   [
+    0,
+    1
+   ]
+  ],
+  "recorded": "2026-08-20",
+  "why": "Byte 0 is the DRIVE the open resolved to, and each host runs the probe from its own drive -- the oracle from A: (01), DOSBox from C: (03), the rig from C:. The behaviour being checked is that the field gets FILLED IN at all, which it now is; the value itself is a property of where the probe is running."
+ },
+ {
+  "probe": "defs",
+  "case": "def.30.version",
+  "field": "AX",
+  "recorded": "2026-08-20",
+  "why": "Same as dosver/int21.30: DOSBox-X's reported DOS version is a configurable emulator setting, not an observation about MS-DOS. We match the genuine kernel (0x1606).",
+  "abstain": [
+   "dosbox-x"
+  ]
+ },
+ {
+  "probe": "defs",
+  "case": "edge.71",
+  "field": "CF",
+  "recorded": "2026-08-20",
+  "why": "AH=71h is the long-filename group introduced with Windows 95. MS-DOS 6.22 does not define it, so it no-ops with carry clear; DOSBox-X implements it and reports a real error. A correct answer to a later DOS's question.",
+  "abstain": [
+   "dosbox-x"
+  ]
+ },
+ {
+  "probe": "alloc",
+  "case": "sysvars.at.bx-2",
+  "field": "BUF",
+  "recorded": "2026-08-20",
+  "why": "DOS's internal SysVars: real kernels fill it with pointers to their own DPB, SFT and driver chains, all host addresses. Ours is deliberately a stub with only the first-MCB word real (see the AH=52h handler for why a null stub beats a plausible one). Nothing here is comparable.",
+  "ignore_bytes": [
+   [
+    0,
+    48
+   ]
+  ]
+ },
+ {
+  "probe": "misc",
+  "case": "int21.6501",
+  "field": "AX",
+  "recorded": "2026-08-20",
+  "why": "Real 6.22 returns the active code page in AX (0x1B5 = 437); DOSBox-X leaves AX holding the call number. We match the oracle.",
+  "abstain": [
+   "dosbox-x"
+  ]
+ },
+ {
+  "probe": "misc",
+  "case": "int21.5900",
+  "field": "BX",
+  "recorded": "2026-08-20",
+  "why": "Same as the err probe: DOSBox-X returns the extended error CODE correctly but does not populate the class/action fields. We match the oracle.",
+  "abstain": [
+   "dosbox-x"
+  ]
+ },
+ {
+  "probe": "misc",
+  "case": "int21.5900",
+  "field": "CX",
+  "recorded": "2026-08-20",
+  "why": "Same as the err probe: DOSBox-X returns the extended error CODE correctly but does not populate the locus fields. We match the oracle.",
+  "abstain": [
+   "dosbox-x"
+  ]
+ },
+ {
+  "probe": "misc",
+  "case": "ctry65",
+  "field": "BUF",
+  "recorded": "2026-08-20",
+  "why": "With the case-map pointer masked, the remaining difference is the US date separator: genuine 6.22 uses '-' (0x2D), DOSBox-X uses '/' (0x2F). We are byte-identical to the oracle.",
+  "abstain": [
+   "dosbox-x"
+  ],
+  "ignore_bytes": [
+   [
+    25,
+    4
+   ]
+  ]
+ },
+ {
+  "probe": "misc",
+  "case": "truename",
+  "field": "BUF",
+  "recorded": "2026-08-20",
+  "why": "60h canonicalises against the CURRENT DIRECTORY. Each host runs a probe from its own directory and drive -- the oracle's A:, the rig's C:\\\\test, DOSBox's mount root -- so this value describes WHERE THE PROBE IS, not what DOS does.",
+  "ignore_bytes": [
+   [
+    0,
+    24
+   ]
+  ]
+ },
+ {
+  "probe": "misc",
+  "case": "serial",
+  "field": "BUF",
+  "recorded": "2026-08-20",
+  "why": "The volume serial number, label and filesystem type of whichever disk the probe is running from. Each host runs a probe from its own directory and drive -- the oracle's A:, the rig's C:\\\\test, DOSBox's mount root -- so this value describes WHERE THE PROBE IS, not what DOS does.",
+  "ignore_bytes": [
+   [
+    0,
+    24
+   ]
+  ]
+ },
+ {
+  "probe": "ctab",
+  "case": "t.02.upper.desc",
+  "field": "BUF",
+  "recorded": "2026-08-20",
+  "why": "The descriptor's bytes 1-4 are a FAR POINTER to the table, which lives at a different address on every host. The subfunction id in byte 0 IS compared, and the table the pointer leads to is compared separately.",
+  "ignore_bytes": [
+   [
+    1,
+    4
+   ]
+  ]
+ },
+ {
+  "probe": "ctab",
+  "case": "t.04.fnupper.desc",
+  "field": "BUF",
+  "recorded": "2026-08-20",
+  "why": "The descriptor's bytes 1-4 are a FAR POINTER to the table, which lives at a different address on every host. The subfunction id in byte 0 IS compared, and the table the pointer leads to is compared separately.",
+  "ignore_bytes": [
+   [
+    1,
+    4
+   ]
+  ]
+ },
+ {
+  "probe": "ctab",
+  "case": "t.05.fnterm.desc",
+  "field": "BUF",
+  "recorded": "2026-08-20",
+  "why": "The descriptor's bytes 1-4 are a FAR POINTER to the table, which lives at a different address on every host. The subfunction id in byte 0 IS compared, and the table the pointer leads to is compared separately.",
+  "ignore_bytes": [
+   [
+    1,
+    4
+   ]
+  ]
+ },
+ {
+  "probe": "ctab",
+  "case": "t.06.collate.desc",
+  "field": "BUF",
+  "recorded": "2026-08-20",
+  "why": "The descriptor's bytes 1-4 are a FAR POINTER to the table, which lives at a different address on every host. The subfunction id in byte 0 IS compared, and the table the pointer leads to is compared separately.",
+  "ignore_bytes": [
+   [
+    1,
+    4
+   ]
+  ]
+ },
+ {
+  "probe": "ctab",
+  "case": "t.07.dbcs.desc",
+  "field": "BUF",
+  "recorded": "2026-08-20",
+  "why": "The descriptor's bytes 1-4 are a FAR POINTER to the table, which lives at a different address on every host. The subfunction id in byte 0 IS compared, and the table the pointer leads to is compared separately.",
+  "ignore_bytes": [
+   [
+    1,
+    4
+   ]
+  ]
+ },
+ {
+  "probe": "ctab",
+  "case": "t.02.upper.tab",
+  "field": "BUF",
+  "recorded": "2026-08-20",
+  "why": "DOSBox-X's uppercase table is a near-identity mapping (80,81,82,83...), not code page 437's real case folding. Ours is byte-identical to the genuine 6.22 table, which is the point of having dumped it rather than generated it.",
+  "abstain": [
+   "dosbox-x"
+  ]
+ },
+ {
+  "probe": "ctab",
+  "case": "t.04.fnupper.tab",
+  "field": "BUF",
+  "recorded": "2026-08-20",
+  "why": "DOSBox-X's uppercase table is a near-identity mapping (80,81,82,83...), not code page 437's real case folding. Ours is byte-identical to the genuine 6.22 table, which is the point of having dumped it rather than generated it.",
+  "abstain": [
+   "dosbox-x"
+  ]
+ },
+ {
+  "probe": "ctab",
+  "case": "t.06.collate.tab",
+  "field": "BUF",
+  "abstain": [
+   "dosbox-x"
+  ],
+  "recorded": "2026-08-20",
+  "why": "DOSBox-X's collating sequence does not fold lower case onto upper (it diverges from the genuine table at byte 99: 'A' vs 'a'). Ours is byte-identical to 6.22's, which is exactly why the table was dumped from the oracle rather than generated -- a plausible-looking collating table would sort wrongly in a way nobody would notice until a program listed names out of order."
+ },
+ {
+  "probe": "mouse",
+  "case": "i33.24.version",
+  "field": "BX",
+  "abstain": [
+   "msdos622"
+  ],
+  "recorded": "2026-09-15",
+  "why": "The driver VERSION is a property of which MOUSE.COM happens to be on the reference disk (6.24 here), not of the INT 33h contract. We report 8.00 deliberately: it is a real Microsoft driver version and a higher one, so a program's `version >= N` gate opens rather than closing. Every FUNCTION either version defines is compared on its own row, which is the part that can actually be wrong. \u26a0 The risk of claiming 8.00 is a guest that then uses a call 8.0 added and we lack -- 26h is the obvious one and we implement it, but this row is the reminder to check the next one."
+ },
+ {
+  "probe": "mouse",
+  "case": "i33.26.maxvirt",
+  "field": "CX",
+  "abstain": [
+   "msdos622"
+  ],
+  "recorded": "2026-09-15",
+  "why": "MOUSE.COM 6.24 does not implement AX=0026h at all: the probe POISONs CX/DX first and the poison survives the call (C1C1/D1D1), so the oracle abstains rather than disagrees. We answer it, which makes us a superset, and our answer is checked for INTERNAL consistency instead -- it must equal the same virtual screen 03h/04h use (639 x 199 in a text mode). It reported 479 until the s72 frame-vs-mode fix, which is exactly the inconsistency this row exists to catch."
+ },
+ {
+  "probe": "mouse",
+  "case": "i33.26.maxvirt",
+  "field": "DX",
+  "abstain": [
+   "msdos622"
+  ],
+  "recorded": "2026-09-15",
+  "why": "Same call as i33.26.maxvirt/CX -- the oracle's driver does not implement 26h, so the poison survives and it abstains. DX is the virtual maximum Y: 199 in a text mode, and it is the value that was 479 (a 640x480 screen that was not on the machine) before the s72 fix."
+ },
+ {
+  "probe": "mouse",
+  "case": "i33.15.statesize",
+  "field": "BX",
+  "abstain": [
+   "msdos622"
+  ],
+  "recorded": "2026-09-15",
+  "why": "The save-state BLOCK SIZE is each driver's own business, not a contract: the guest asks 15h how big a buffer to allocate, hands that buffer to 16h, and hands it straight back to 17h. Nothing outside the driver ever reads a byte of it. 370 bytes is what MOUSE.COM 6.24 needs for its state; 56 is what we need for ours. What MUST hold -- and is not this row -- is that 15h/16h/17h agree with EACH OTHER, which the off-VM battery pins."
+ },
+ {
+  "probe": "mouse",
+  "case": "i33.vector",
+  "field": "AX",
+  "abstain": [
+   "msdos622"
+  ],
+  "recorded": "2026-09-15",
+  "why": "The SEGMENT of the INT 33h handler. On the oracle it is wherever MOUSE.COM loaded itself (04BD); on our host it is DOS_HDLR_SEG (0050). There is no host-independent right answer and a guest must never depend on one -- the row is kept because a segment of ZERO is the one answer that matters (no driver at all), and the probe leaves quietly when it sees it."
+ }
 ]

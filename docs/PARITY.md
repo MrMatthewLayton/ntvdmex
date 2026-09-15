@@ -1,0 +1,217 @@
+# Parity by inventory
+
+Started 2026-09-15 (session 72), per `docs/PLAN-17th.md`.
+
+Every keyboard and mouse defect this project has paid for was in a surface nobody
+had **inventoried**: the INT 09h hook that peeks port 60h and chains, the missing
+Alt column, IRQ1 left in service, the BDA display fields reading zero, the text-mode
+mouse row that came back doubled. The DOS services — which *were* measured against
+MS-DOS 6.22, function by function — caused none of them.
+
+A run's end-of-run report can only ever catch **"asked and refused"**. This inventory
+is what catches the other three:
+
+* **answered wrongly** — the call returns, with the wrong number;
+* **never asked** — the guest never gets far enough to ask;
+* **wrong timing** — the right answer, too late or too early.
+
+## The four states
+
+| state | meaning |
+|---|---|
+| **missing** | not implemented; a guest that asks gets a refusal or nothing |
+| **guessed** | implemented from documentation or memory, never compared |
+| **implemented** | implemented and exercised by a guest, but no reference comparison |
+| **verified** | a probe compares it against a reference machine, and they agree |
+
+**verified means the expectation was RECORDED ON THE REFERENCE, not written from
+memory.** That distinction is the whole of M9, and it has bitten twice: a PIT test
+written from belief certified the bug it was meant to catch, and `16.09.support`
+below "agreed" on its first run purely because nothing had touched AL.
+
+## How to add one
+
+```bash
+# 1. write tools/dostest/p_<thing>.asm using probe.inc (PROBE_BEGIN / EMIT / POISON)
+nasm -f bin tools/dostest/p_<thing>.asm -o tools/dostest/p_<thing>.com
+
+# 2. ask the reference and the subject the SAME question, and diff
+python3 scripts/dosdiff.py tools/dostest/p_<thing>.com --host msdos622 --host ntvdmex
+```
+
+`dosdiff.py` runs the identical `.COM` on each host and lines the answers up. The
+oracles vote on truth; **NTVDMEX never votes** — it is the thing being graded. A row
+that cannot be a contract (a load segment, a driver's private buffer size) gets an
+abstention *with a written rationale* in `tools/dostest/oracle-rules.json`, never a
+shrug.
+
+Sidecars beside the probe:
+
+* `p_x.deps` — files staged next to it (one per line, relative to the probe).
+* `p_x.pre` — commands to run **before** it, **oracle only**. This is what loads
+  `MOUSE.COM` so the oracle has an INT 33h at all. It is oracle-only on purpose:
+  loading a mouse driver on *our* side would install its INT 33h over ours and
+  measure the wrong thing entirely.
+
+### ⚠ Two traps this exercise walked into on day one
+
+1. **POISON the output registers, always.** A host that ignores a call leaves the
+   register exactly as the caller passed it, and "untouched" is indistinguishable
+   from "answered". `16.09.support` and `i33.26.maxvirt` both read as clean matches
+   until the probe stamped `B1`/`C1C1` in first. Only ever omit POISON where the
+   register is an *input*.
+2. **Guard every blocking call.** An unguarded `INT 16h AH=00h` on a host whose ring
+   never fills blocks forever and the probe dies as a harness timeout — an absence
+   that reads as a hang instead of as data. `p_kbd.asm`'s `read16`/`read10` peek
+   first and emit `AX=DEAD` for "nothing waiting".
+
+## References, and what each is good for
+
+| reference | good for | NOT good for |
+|---|---|---|
+| **MS-DOS 6.22 under QEMU** (`scripts/oracle.sh`) | INT 21h — a genuine Microsoft kernel; and any DRIVER run on it (MOUSE.COM) | the BIOS: QEMU's SeaBIOS is a rewrite |
+| **PCem + genuine IBM/AMI ROM** | INT 10h/16h, the BDA, 8042 and chip timing | *(not yet running — see below)* |
+| **datasheets** (8042, 8259, 8254) | chip rules; quote them in the test | anything about what a BIOS chose to do |
+| **stock ntvdm on the rig** | what we are replacing, for the DOS API | devices, sound, VESA |
+
+⚠ **The keyboard rows below are PROVISIONAL.** They were measured against SeaBIOS,
+which is a reimplementation, not IBM's ROM. They are recorded as *verified against
+the oracle we have* and must be re-confirmed on PCem. One row is already known to be
+suspicious — see `16.01.enh` below.
+
+⛔ **PCem is still blocked.** It launches (`scripts/pcem-fixlinks.sh` repaired the
+dyld failure) but the floppy protocol times out: the GUI comes up and `A:\OUT.TXT`
+never gets `[END]`, so the guest's boot / AUTOEXEC hook / floppy read are unverified.
+Until that is fixed there is no BIOS-level reference on this machine.
+
+---
+
+# Keyboard — INT 16h and the BDA (`p_kbd.asm`)
+
+32 fields, all **AGREE** with the 6.22 oracle as of 2026-09-15.
+
+| item | state | notes |
+|---|---|---|
+| ring geometry `0040:0080/0082` | verified | `001E`..`003E`, sixteen 2-byte slots |
+| `0040:0096` bit 4 enhanced-keyboard | verified | set; a zero here makes a guest use the 83-key subset |
+| empty ring ⇒ `AH=01h/11h` ZF=1 | verified | empty is `head == tail` |
+| `AH=01h` peek does not consume | verified | head unmoved, tail one on |
+| `AH=00h` read consumes, advances head | verified | |
+| `AH=10h/11h` enhanced read/peek | verified | F11 `8500h` returned intact |
+| extended key with `AL=0` (`4B00h` Left) | verified | ordinary calls DO return these |
+| ring **wrap** at the last slot | verified | tail returns to `001E`, order preserved |
+| **`AH=05h` push into the ring** | verified | **was MISSING — see below** |
+| `AH=05h` full ⇒ `AL=1` | verified | 16 slots hold 15; the 16th is refused, head survives |
+| `AH=02h/12h` shift status | verified | reads the same `0017`/`0018` the guest can |
+| **`AH=09h` supported-function mask** | verified | **was MISSING**; `0x30`, measured not derived |
+| `AH=03h` set typematic | verified | answered; `CF=0` |
+| `16.01.enh` — does `AH=01h` SKIP an enhanced key? | ⚠ **provisional** | oracle says **no** (returns `8500h`, head unmoved) and we match it. The documented IBM rule is that `AH=00h/01h` skip codes only a 101-key keyboard can make. **SeaBIOS may simply not implement the skip.** Re-ask on PCem before trusting either behaviour. |
+
+### Gaps this found and closed (s72, `c5c3e60`)
+
+* **`AH=05h` did nothing at all.** It fell into the `default` arm, which sets ZF and
+  leaves AX exactly as passed — so a key-stuffing program read its **own** byte back
+  out of AL and took it for success, and nothing was ever queued. This is how DOSKEY,
+  installers that pre-answer their own prompts, and every TSR that drives another
+  program put keys in.
+* **`AH=09h` likewise.** Caught only once the probe poisoned AL.
+* **`AH=03h`** was answered by accident (the default arm happens not to touch CF).
+
+## Not yet inventoried (keyboard)
+
+| item | state | why it needs PCem or a live run |
+|---|---|---|
+| scancode → ASCII for the whole four-column table | implemented | pinned off-VM (input battery T10) against the IBM table, not against a machine |
+| port 60h/64h re-read semantics, 8042 status bits | implemented | the s71 transfer-hold; a *timing* contract, so it needs real hardware |
+| typematic repeat rate as a guest observes it | guessed | host OS owns repeat; no BIOS-readable copy |
+| `AH=04h` keyclick, `AH=0Ah` keyboard ID | missing | never asked by any guest we run |
+| LED state `0040:0097` | missing | |
+| INT 09h → IRQ1 → EOI ordering as a hooked handler sees it | implemented | `p_pic.asm` not yet written — **next** |
+
+---
+
+# Mouse — INT 33h (`p_mouse.asm`)
+
+Compared against the real Microsoft `MOUSE.COM` 6.24 on 6.22. All contract rows
+**AGREE** as of 2026-09-15; five rows carry recorded abstentions (below).
+
+| item | state | notes |
+|---|---|---|
+| `AX=0000h` reset ⇒ `AX=FFFF`, `BX=2` | verified | |
+| **reset centres the pointer** | verified | **was wrong** — see below |
+| `AX=0003h` position + buttons | verified | `320,96` after reset in mode 3 |
+| **`AX=0004h` set position, read back** | verified | **snapping was missing** — see below |
+| text-mode **cell snapping** to 8 virtual px | verified | `100,50` → `96,48`; `101,51` → `96,48` |
+| `AX=0007h/0008h` ranges and **clamping** | verified | high and low, both axes |
+| `AX=000Bh` relative motion, zeroed by the read | verified | |
+| `AX=0005h/0006h` press/release counts | verified | |
+| `AX=001Ah/001Bh` sensitivity get/set pair | verified | stored and returned, all three fields |
+| `AX=0021h` software reset | verified | |
+| `AX=0001h/0002h` show/hide | verified | survivable, no fabricated answer |
+| `AX=000Fh` mickeys per 8 pixels | verified | does not disturb the position |
+| `AX=0024h` version/type `CL` | verified | `04FF` — PS/2, and the real driver answers `FF` not `0` |
+
+### ★ The gap this found and closed (s72)
+
+**The driver's virtual screen was derived from the PRESENT SURFACE, not the video
+mode.** Every helper used `g_vid.frame.w/h` — the dimensions of the snapshot the UI
+thread presents. That surface does not exist until something has been drawn, so in a
+headless run (and in the window between a mode set and the first present)
+`frame.h == 0`, and then:
+
+* `i33_text()` evaluated **false** in a genuine text mode (`0 > 200`), so the whole
+  640x200 text-mode scaling never engaged;
+* `i33_vmaxy()` fell back to **479**, in a twenty-five-row text screen.
+
+Measured: after a reset in mode 3 the real driver reports `y=96`; we reported `240`
+— off the 640x200 virtual screen entirely, i.e. **row 30 of a 25-row display**. The
+`MOUSEI33` line said it in one read once it was asked to: `text=0 mkind=0 fh=0
+vmaxy=1df`. Fixed by keying off `g_vid.gw/gh`, the **mode's** extent, which is also
+what the real driver keys off (it hooks INT 10h and rebuilds its screen on a mode
+change).
+
+Two smaller ones alongside it:
+
+* **reset did not centre the pointer** — it left it wherever it was, which before any
+  mouse movement is the startup `320,240`.
+* **no cell snapping** — the real driver quantises to its 8x8 text cell; we returned
+  the exact value we were handed, so we disagreed with the driver about which cell
+  the pointer was in, which is the only question a text UI asks.
+
+⚠ **NOT YET CONFIRMED BY HAND.** This changes the coordinate path that QBasic's mouse
+(user-confirmed, s71) and Doom's mouse-look run through. The probe and the off-VM
+battery are green and Skyroads is on baseline, but a by-hand pass is owed.
+
+### Recorded abstentions (`tools/dostest/oracle-rules.json`)
+
+| row | why the oracle cannot be truth |
+|---|---|
+| `i33.vector/AX` | the handler's load segment — no host-independent answer exists. Kept because segment **0** (no driver) is the one answer that matters. |
+| `i33.24.version/BX` | which `MOUSE.COM` is on the reference disk, not the contract. We report 8.00 deliberately (higher, so `version >=` gates open). ⚠ the standing risk is a guest then using a call 8.0 added that we lack. |
+| `i33.26.maxvirt/CX,DX` | **MOUSE.COM 6.24 does not implement 26h** — the poison survives the call. We are a superset here; the row is checked for *internal* consistency instead, and it read 479 until the fix above. |
+| `i33.15.statesize/BX` | each driver's private save-state size. What must hold is that 15h/16h/17h agree with **each other**. |
+
+## Not yet inventoried (mouse)
+
+| item | state | why |
+|---|---|---|
+| `AX=000Ch/0014h` event callbacks | implemented | the s71 work; needs real events, so it needs a **driven** probe (QMP mouse injection), not a static one |
+| `AX=0016h/0017h` save/restore state round-trip | implemented | self-consistent by construction; not yet round-tripped in a probe |
+| `AX=000Ah` text cursor masks | implemented | QBasic uses it; no reference comparison yet |
+| `AX=0009h` graphics cursor shape | implemented | |
+| `AX=0010h` exclusion area | guessed | never observed to matter |
+| mickey→pixel motion ratio as the guest sees it | guessed | needs injected movement |
+| **behaviour when a guest loads its OWN `MOUSE.COM`** | ⚠ unknown | it would install its INT 33h over ours and then talk to hardware we may not emulate. Nobody has tried it. |
+
+---
+
+# Next, in order
+
+1. **`p_pic.asm`** — the EOI / in-service rules as a hooked INT 09h sees them. This is
+   where `irq0-must-be-held-in-service` and the s71 IRQ1 bug both lived, and it is the
+   last uninventoried piece of the keyboard path.
+2. **Unblock PCem**, then re-ask every ⚠ row above — especially `16.01.enh`.
+3. **`p_video.asm`** — INT 10h sub-functions and the BDA `0449..008A` after each mode
+   set, `1112h`/`1111h`/`1114h` rows, cursor shape through the CRTC. Needs PCem to be
+   worth anything: QEMU's VGA is not a raster or BIOS reference.
+4. A **driven** mouse probe (QMP `input-send-event`) for the callback surface.

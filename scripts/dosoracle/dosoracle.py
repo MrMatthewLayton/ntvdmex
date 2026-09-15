@@ -217,6 +217,28 @@ class Oracle:
         return self._go("\r\n".join(lines), (), screenshot, hostdir)
 
     @staticmethod
+    def pre(program):
+        """DOS commands to run BEFORE the probe, from a `<probe>.pre` sidecar.
+
+        WHY THIS EXISTS AND WHY IT IS ORACLE-ONLY. INT 33h is not a BIOS service --
+        it belongs to a MOUSE DRIVER a program loads. On real DOS that driver is
+        MOUSE.COM; under NTVDMEX the driver IS us. So the honest comparison is
+        "our INT 33h against the real driver's", which means the oracle needs
+        `MOUSE` run first and our host must NOT have it -- loading MOUSE.COM on
+        our side would install its INT 33h over ours and measure the wrong thing.
+        Hence a sidecar the oracle honours and the rig adapter ignores.
+        """
+        side = os.path.splitext(program)[0] + ".pre"
+        if not os.path.exists(side):
+            return []
+        out = []
+        for line in open(side):
+            line = line.strip()
+            if line and not line.startswith("#"):
+                out.append(line)
+        return out
+
+    @staticmethod
     def deps(program):
         """Companion files a probe needs beside it, from a `<probe>.deps` sidecar.
 
@@ -248,9 +270,13 @@ class Oracle:
         # root, so this puts all three hosts on the same footing.
         lines = ["@ECHO OFF",
                  "ECHO [BEGIN] > A:\\OUT.TXT",
-                 "A:",
-                 "%s %s >> A:\\OUT.TXT" % (name, args),
-                 "C:"]
+                 "A:"]
+        # Anything the probe needs RESIDENT first (a mouse driver, a TSR). Its
+        # output is deliberately NOT captured: a driver's banner is not the
+        # probe's answer, and mixing the two breaks the canonical dump.
+        lines += ["%s > NUL" % c for c in self.pre(program)]
+        lines += ["%s %s >> A:\\OUT.TXT" % (name, args),
+                  "C:"]
         lines += self._epilogue()
         payload = [(program, name)]
         for dep in self.deps(program):
