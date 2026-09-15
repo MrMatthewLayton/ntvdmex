@@ -255,6 +255,28 @@ static void pit_int08(void *self, ntvdd_regs *r)
 
 /* INT 1Ah -- BIOS time-of-day. AH=00 get tick count (+ clear midnight flag),
    AH=01 set tick count. */
+/* ── INT 1Ah's RTC HALF. ─────────────────────────────────────────────────────────
+     AH=02h/04h fell into `default:` -- "RTC subfns not modelled yet" -- which leaves
+     every register exactly as the caller passed it. Found by p_bios.asm: the probe
+     poisons CX/DX and the poison came straight back (C1C1/D1D1), where the 6.22
+     oracle answers with the time and date in BCD.
+   ⚠ BCD IS THE CONTRACT. A guest that parses these as binary (every one of them --
+     that is what the BIOS returns) reads garbage from a binary answer: 0x22 seconds
+     is twenty-two, not thirty-four. */
+static unsigned pit_bcd(unsigned v) { return ((v / 10) % 10) * 16 + (v % 10); }
+
+/* The clock is the HOST's to supply -- this file stays free of <time.h>, which the
+   XP-targeting CRT does not link anyway. No clock installed means the call is NOT
+   answered, exactly as before: a fabricated date would be worse than no answer. */
+static int pit_rtc(pit_state *st, struct vdd_rtc *out)
+{
+    if (!st->rtc_now) return 0;
+    out->cent = 20; out->year = 0; out->month = 1; out->day = 1;
+    out->hour = 0;  out->min = 0;  out->sec = 0;
+    st->rtc_now(st->rtc_ctx, out);
+    return 1;
+}
+
 static void pit_int1a(void *self, ntvdd_regs *r)
 {
     pit_state *st = (pit_state *)self;
@@ -273,8 +295,26 @@ static void pit_int1a(void *self, ntvdd_regs *r)
         bda[0x70] = 0;
         r->cf = 0;
         break;
+    case 0x02: {                             /* get RTC time, BCD               */
+        struct vdd_rtc n; if (!pit_rtc(st, &n)) break;
+        s_cx(r, (uint16_t)((pit_bcd(n.hour) << 8) | pit_bcd(n.min)));
+        /* DL = daylight-saving flag. 0 = standard time; we do not track a DST rule
+           the guest could act on, and saying 1 would invite one. */
+        s_dx(r, (uint16_t)(pit_bcd(n.sec) << 8));
+        r->cf = 0;
+        break; }
+    case 0x04: {                             /* get RTC date, BCD               */
+        struct vdd_rtc n; if (!pit_rtc(st, &n)) break;
+        s_cx(r, (uint16_t)((pit_bcd(n.cent) << 8) | pit_bcd(n.year)));
+        s_dx(r, (uint16_t)((pit_bcd(n.month) << 8) | pit_bcd(n.day)));
+        r->cf = 0;
+        break; }
     default:
-        break;                               /* RTC subfns not modelled yet     */
+        /* 03h/05h (set time/date) and 06h/07h (alarm) are deliberately NOT answered:
+           we cannot move the host's clock, and accepting the call with CF=0 would be
+           the "runs but lies" shape -- TIME would report success and change nothing.
+           Unmeasured on the reference too; p_bios.asm is where to add them. */
+        break;
     }
 }
 

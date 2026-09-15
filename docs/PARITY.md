@@ -268,11 +268,84 @@ and then reads it back, which is the actual contract and is harness-independent.
 
 ---
 
+# Interrupt controller — the 8259 as a handler sees it (`p_pic.asm`)
+
+10 fields, all **AGREE** as of 2026-09-15. Nothing was broken here — which is the
+result, because this is where the two worst bugs in the project lived and neither had
+a regression test until now.
+
+| item | state | notes |
+|---|---|---|
+| mask write/read-back, master and slave | verified | `0FCh` / `0FFh`, restored immediately |
+| ISR reads zero when nothing is in service | verified | a stuck bit = the next interrupt of that priority never arrives |
+| **IRQ0's ISR bit is SET inside a hooked INT 08h** | verified | before the BIOS EOIs |
+| **...and CLEAR after the BIOS EOIs** | verified | the EOI is what clears it |
+| ★★ **the handler is never RE-ENTERED** | verified | **this is the Lemmings bug as a number.** Auto-EOI on delivery re-entered the ISR once per tick, for ever |
+| masking IRQ0 actually stops delivery | verified | self-calibrating spin: measures two ticks, then spins the same amount masked |
+| unmasking resumes it | verified | |
+
+⚠ **This is the V86/real-mode delivery arm only.** The **DPMI (protected-mode) arm
+still auto-EOIs IRQ0** — that is Doom's path and it is by-hand only, so this probe
+says nothing about it. See [[irq0-must-be-held-in-service]].
+
+⚠ **IRQ1's in-service behaviour is NOT covered.** The s71 bug (our INT 09h arm never
+EOI'd, so a guest that chains to the BIOS typed one character and went deaf) needs a
+*keypress* to reproduce, and the oracle has nobody at the keyboard. It is pinned
+off-VM instead (input battery T9/T11) and would need a rig-only keyed run to compare.
+
+---
+
+# Misc BIOS — INT 11h, 12h, 1Ah, 1Ch (`p_bios.asm`)
+
+| item | state | notes |
+|---|---|---|
+| `INT 12h` conventional memory | verified | `027Fh` = 639 KB, same as the oracle |
+| `INT 1Ah AH=00h` tick count advances | verified | |
+| `INT 1Ah AH=00h` midnight flag | verified | `0`, and cleared by the read |
+| **`INT 1Ah AH=02h` RTC time in BCD** | verified | **was unimplemented** — see below |
+| **`INT 1Ah AH=04h` RTC date in BCD** | verified | **was unimplemented** |
+| ★ **`INT 1Ch` is called, once per tick, never re-entered** | verified | the vector a game actually hooks |
+| `INT 11h` equipment word | abstained | describes the machine; ours says 2 serial ports because 2 are fitted. Must stay consistent with `vdd_comm_fitted()` |
+| `INT 1Ah AH=03h/05h` set time/date | **missing, deliberately** | we cannot move the host clock, and accepting with `CF=0` would be the "runs but lies" shape — `TIME` would report success and change nothing. Unmeasured on the reference too |
+| `INT 1Ah AH=06h/07h` alarm | missing | never asked by a guest we run |
+
+### The gap this found and closed (s72)
+
+**`INT 1Ah` AH=02h and AH=04h fell into `default:`** — a comment reading "RTC subfns
+not modelled yet" — which leaves every register exactly as the caller passed it. The
+probe poisons CX/DX and got the poison **straight back** (`C1C1`/`D1D1`) where the
+oracle answers with the time and date. Guests use these for file timestamps, save-game
+dates and as a seed. **BCD is the contract**: a guest reads them as BCD because that
+is what a BIOS returns, so a binary 34 would be read as 22.
+
+The clock is now **host-supplied** through a `rtc_now` hook on the PIT VDD rather than
+`<time.h>` — which the XP-targeting CRT does not link anyway, and which would have put
+libc time inside a portable VDD. With no clock installed the call is still **not
+answered**: fabricating a date is worse than silence, because a guest would stamp
+every file with it. The battery injects a fixed instant so the BCD conversion is
+pinned rather than read off the wall.
+
+### ⚠ A second harness artifact, same shape as the video one
+
+`int1a.00.advances` reported **"the clock does not advance"** on the rig and nowhere
+else. It was the probe: a 400-unit spin is longer than a tick on the emulated 486 and
+*shorter* than one on the rig, so the probe gave up before the counter moved. Raising
+the bound to the one every other wait uses made it agree. ▶ Same lesson as the cursor
+rows: **when a row fails on one host only, check the probe's own assumptions about
+time before you touch the host.**
+
+▶ And a third, in the battery rather than a probe: the first `int1a/02` check asserted
+`0x1729` for 23:41, which is simply wrong arithmetic — BCD 23:41 is `0x2341`. It
+failed on its first run, which is exactly why the expectation is written down and
+executed rather than reasoned about.
+
+---
+
 # Next, in order
 
-1. **`p_pic.asm`** — the EOI / in-service rules as a hooked INT 09h sees them. This is
-   where `irq0-must-be-held-in-service` and the s71 IRQ1 bug both lived, and it is the
-   last uninventoried piece of the keyboard path.
+1. **The DPMI/protected-mode IRQ0 arm**, which still auto-EOIs and which `p_pic.asm`
+   cannot reach — it is Doom's path and by-hand only. A PM-entering probe would close
+   the last hole in the interrupt inventory.
 2. **Unblock PCem**, then re-ask every ⚠ and ⛔ row above — `16.01.enh` (does `AH=01h`
    skip an enhanced key?) and `bda.crtc/CX` (`0040:0065`) are the two that are
    *blocked*, not merely provisional.

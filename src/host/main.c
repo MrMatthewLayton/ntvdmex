@@ -10116,6 +10116,25 @@ static uint32_t g_pit_catchup_clamped;             /* gaps past it (STAGE2)     
 static uint32_t g_pit_gap_max;                     /* the worst one, in 8254 clocks  */
 
 /* Wired onto g_pit at startup; see g_pit_cs and pit_state.guard. */
+/* ── THE MACHINE'S CLOCK, for INT 1Ah AH=02h/04h. ────────────────────────────────
+     vdd_pit.c is a portable VDD and stays free of <time.h> (which the XP-targeting
+     CRT does not link in any case), so the host hands it the reading. Local time,
+     not UTC: a DOS guest's clock is the wall clock on the machine in front of you,
+     and that is what `DATE` and `TIME` and every file timestamp are compared against. */
+static void host_rtc_now(void *ctx, struct vdd_rtc *out)
+{
+    SYSTEMTIME lt;
+    (void)ctx;
+    GetLocalTime(&lt);
+    out->cent  = (unsigned)(lt.wYear / 100);
+    out->year  = (unsigned)(lt.wYear % 100);
+    out->month = (unsigned)lt.wMonth;
+    out->day   = (unsigned)lt.wDay;
+    out->hour  = (unsigned)lt.wHour;
+    out->min   = (unsigned)lt.wMinute;
+    out->sec   = (unsigned)lt.wSecond;
+}
+
 static void host_pit_guard(void *ctx, int enter)
 {
     (void)ctx;
@@ -22158,6 +22177,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     InitializeCriticalSection(&g_pit_cs);       /* the crystal's own lock; see its decl */
     g_pit.guard = host_pit_guard;               /* port handlers serialize with the pacer */
     g_pit.guard_ctx = NULL;
+    g_pit.rtc_now = host_rtc_now;               /* INT 1Ah AH=02h/04h -- see the hook */
+    g_pit.rtc_ctx = NULL;
     QueryPerformanceFrequency(&g_qpf);      /* seeds qpc_us for the lock instrument */
     host_key_typematic_init();              /* typematic from XP's setting, not a guess */
     vdd_bus_init(&g_bus, NULL);

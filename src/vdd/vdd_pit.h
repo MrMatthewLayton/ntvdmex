@@ -20,6 +20,9 @@
 #define PIT_TICKS_PER_DAY 0x1800B0u    /* 1,573,040 INT 8 ticks / 24h (BIOS)    */
 #define PIT_DEFAULT_FRAME_US 16667u    /* ~60 Hz host frame tick                */
 
+/* A wall-clock reading, in ordinary binary -- INT 1Ah converts to BCD at the edge. */
+struct vdd_rtc { unsigned cent, year, month, day, hour, min, sec; };
+
 typedef struct pit_state {
     vdd_bus *bus;
     uint16_t reload;        /* channel-0 reload latch (0 => 65536 effective)    */
@@ -57,6 +60,12 @@ typedef struct pit_state {
        The hook keeps this file pure C: enter=1 before counter state, enter=0 after. */
     void   (*guard)(void *ctx, int enter);
     void    *guard_ctx;
+    /* ── THE REAL-TIME CLOCK BEHIND INT 1Ah AH=02h/04h. ──────────────────────────
+         Injectable so the battery can pin the exact BCD a known instant produces;
+         NULL means the C library clock, which is what the host uses. The PIT owns
+         these because it already owns INT 1Ah (the tick half of the same service). */
+    void   (*rtc_now)(void *ctx, struct vdd_rtc *out);
+    void    *rtc_ctx;
 } pit_state;
 
 /* effective reload (0 means 65536 on the 8254). */

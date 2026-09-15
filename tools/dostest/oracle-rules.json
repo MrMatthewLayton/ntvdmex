@@ -658,5 +658,15 @@
   ],
   "recorded": "2026-09-15",
   "why": "0040:0065 is the CRT mode-select register value a VGA BIOS stores after a mode set (0x29 for mode 3 on genuine IBM hardware). QEMU runs SeaVGABIOS, a REIMPLEMENTATION, and it simply does not write this byte -- it reads 0000 there for every mode, which is an observation about SeaVGABIOS and not about a VGA. Our 0x29 is very likely the more faithful answer, but 'very likely' is not measured: this row is BLOCKED ON PCem with a genuine ROM, and is listed as such in docs/PARITY.md. \u26a0 Do not 'fix' it to match QEMU."
+ },
+ {
+  "probe": "bios",
+  "case": "int11.equip",
+  "field": "AX",
+  "abstain": [
+   "msdos622"
+  ],
+  "recorded": "2026-09-15",
+  "why": "The equipment word DESCRIBES THE MACHINE, so two different machines are entitled to two different answers: the oracle's QEMU box reports one serial port (0x4227), ours reports two (0x4423) because two are actually fitted. What matters is not that the numbers match but that ours is SELF-CONSISTENT -- bios_equipment_word() derives the serial count from vdd_comm_fitted(), i.e. from the VDD that really claimed the ports, precisely so the word and the port base table cannot drift apart. That drift is what cost COMM.DRV a whole session (a comment claimed 'one serial' while bits 9-11 said zero). \u26a0 If the fitted port count ever changes, this row changes with it and that is correct; what would be a DEFECT is this row staying still while the COMM VDD changes."
  }
 ]

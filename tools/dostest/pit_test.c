@@ -23,6 +23,15 @@ static uint8_t  g_flat[0x100000];          /* guest low memory (BDA at 0x400)   
 static uint32_t *bda_tick(void) { return (uint32_t *)(g_flat + 0x46C); }   /* 0040:006C */
 static uint8_t  *bda_flag(void) { return g_flat + 0x470; }                 /* 0040:0070 */
 
+/* A fixed instant, so the BCD conversion is pinned rather than read off the wall:
+   2026-09-15 23:41:07. */
+static void fake_rtc(void *ctx, struct vdd_rtc *out)
+{
+    (void)ctx;
+    out->cent = 20; out->year = 26; out->month = 9; out->day = 15;
+    out->hour = 23; out->min = 41; out->sec = 7;
+}
+
 int main(void)
 {
     vdd_bus bus;
@@ -249,6 +258,41 @@ int main(void)
         CHECK(((hi << 8) | lo) == 0x2000 - 0x100,
               "8254 mode 0: a bare count write loads and counts from the new count");
     }
+    /* T16: ★ INT 1Ah's RTC HALF -- AH=02h/04h, in BCD.
+         Both fell into `default:` ("RTC subfns not modelled yet"), which leaves every
+         register exactly as the caller passed it. p_bios.asm found it by POISONing
+         CX/DX and getting the poison straight back, where the 6.22 oracle answers
+         with the time and date. BCD is the contract: a guest reads these as BCD
+         because that is what a BIOS returns, so a binary 34 would be read as 22. */
+    {   ntvdd_regs r;
+        pit_state *ps = &pit;
+        ps->rtc_now = fake_rtc; ps->rtc_ctx = 0;
+        memset(&r, 0, sizeof r); s_ah(&r, 0x02);
+        r.ecx = 0xC1C1; r.edx = 0xD1D1;          /* the probe's poison, same idea */
+        vdd_bus_deliver_int(&bus, 0x1A, &r);
+        /* 23 -> 0x23, 41 -> 0x41. (I first wrote 0x1729 here from carelessness and
+           this check failed on its first run, which is the point of writing it.) */
+        CHECK(r_cx(&r) == 0x2341, "int1a/02: 23:41 comes back as BCD 2341, not binary 174A");
+        CHECK((r_dx(&r) >> 8) == 0x07, "int1a/02: 7 seconds -> DH=07");
+        CHECK(r.cf == 0, "int1a/02: answered, CF=0");
+
+        memset(&r, 0, sizeof r); s_ah(&r, 0x04);
+        r.ecx = 0xC1C1; r.edx = 0xD1D1;
+        vdd_bus_deliver_int(&bus, 0x1A, &r);
+        CHECK(r_cx(&r) == 0x2026, "int1a/04: century+year 2026 -> CX=2026 BCD");
+        CHECK(r_dx(&r) == 0x0915, "int1a/04: 15 September -> DX=0915 BCD");
+        CHECK(r.cf == 0, "int1a/04: answered, CF=0");
+
+        /* ...and with NO clock installed the call is NOT answered. Fabricating a date
+           would be worse than silence: a guest would stamp every file with it. */
+        ps->rtc_now = 0;
+        memset(&r, 0, sizeof r); s_ah(&r, 0x02);
+        r.ecx = 0xC1C1;
+        vdd_bus_deliver_int(&bus, 0x1A, &r);
+        CHECK(r_cx(&r) == 0xC1C1, "int1a/02: no clock installed -> left alone, not invented");
+        ps->rtc_now = fake_rtc;
+    }
+
 
     printf("\n%d checks, %d failed\n", total, fails);
     return fails ? 1 : 0;
