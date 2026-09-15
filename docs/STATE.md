@@ -237,7 +237,53 @@ and matches the 6.22 oracle row for row (session 53)** — but `MEM /C` still re
    the next step, and it is also the honest correction for *a fix measured on
    one guest is a fix for none*.
 
-   ### ▶ START HERE: **SESSION 71 (below), then 70, 69, 68, 61, 60, 59.**
+   ### ▶ START HERE: **SESSION 72 (below), then 71, 70, 69, 68, 61, 60, 59.**
+
+   ---
+
+   ## ★★★ SESSION 72 (2026-09-15, morning) — **QBASIC'S "FILE SYSTEM PROBLEMS" WERE THE DRIVE LIST: A DRIVE WITH NO MEDIA MUST STILL BE SELECTABLE, AND CHDIR NEVER MOVES THE CURRENT DRIVE.**
+
+   **HEAD `a9b6c51`. Battery green (1302/0). Candidate `build/ntvdmhost.exe` = `86bb80b1…`,
+   verified headless on the rig and then TAKEN OFF AGAIN: the rig is at the mouse-confirmed
+   `7e9080bb…` (`c896300`), rollback `bm\ntvdmhost_prev.exe` = `bf9534a9…`. Deadline: the 17th.**
+
+   The user's round-5 verdict on QB.EXE was "lots of problems, mostly around the file
+   system". Driven headless (`scripts/bm/qbopen.bat`, `dostrace.flag`, screenshots), the
+   Open dialog listed the directory correctly and `[-C-]` alone under Dirs/Drives, on a
+   machine with A:, C:, D: and Z:. QB sizes that list by the classic probe -- for each
+   letter `0Eh`, `19h`, compare, `0Eh` back -- and our `0Eh` selected a drive only when
+   `SetCurrentDirectoryA("X:")` succeeded, which an empty floppy or CD-ROM drive refuses
+   with NOT READY. Asked the oracle first (`tools/dostest/p_drv.asm`, MS-DOS 6.22):
+
+   * `0Eh` selects any letter with a device behind it from the CDS, without touching the
+     media -- the phantom B: on a one-floppy machine reads back through `19h`. Only a
+     letter with no device (D: under LASTDRIVE=E, Z:) is refused, silently.
+   * `3Bh C:\ZZDRV` issued from A: leaves `19h` at A:, and `47h` for C: then answers
+     `ZZDRV`: every drive keeps its own directory. Ours moved the process (and so the
+     current drive) to C:. A bare `3Bh "C:"` is path-not-found (3).
+   * ⚠ `47h` or `3Bh` on the phantom drive PROMPTS "Insert diskette for drive B:" and
+     hangs the oracle run. Two probe revisions learned that.
+
+   Fix (`src/dos/dos_int21.c`): `m->vdrive` holds a drive that exists but cannot be
+   entered; `dos_cur_drive()` answers `19h`/`47h`/`36h`/`1Bh`/FCB/IOCTL for it, and
+   `v86_path()` prefixes every relative path with it so an access fails ON that drive
+   the way DOS's would. `3Bh` on another drive only sets that drive's `=X:` variable
+   (what `"X:"` resolves through; `SetCurrentDirectory` does not maintain it, so
+   `C:` → `D:` → `C:` now also returns to the directory it left, not the root).
+
+   **Rig, headless, on the candidate:** `p_drv` selects A: / D: / Z:, refuses B:, keeps
+   the drive across a cross-drive chdir. QB.EXE: Dirs/Drives shows `[-A-] [-C-] [-D-]
+   [-Z-]`; `PERSONAL`↵ enters and relists; `BLIT.BAS`↵ opens (its `.MAK` miss is QB
+   looking for a make file -- normal, and the "CMAK" of the old log); `D:\`↵ on the
+   empty CD-ROM is error 3, Esc, clean exit; Save As writes the file. Skyroads on
+   baseline (`n8=0x66 max_ms=0x13`).
+
+   **▶ NEXT (needs the user):** deploy the candidate on their go (`build/ntvdmhost.exe`,
+   `86bb80b1…`; the confirmed build is already the rollback plan) and re-run the QB
+   pass by hand: File > Open shows four drives, a `.BAS` opens, Save As saves. Then
+   edit.com. ⚠ The Doom regression the user reported on the 14th is still deferred, and
+   its log is gone -- my QB runs delete `out\ntvdmhost.log`; copy a user's log to `runs/`
+   before queueing anything.
 
    ---
 
