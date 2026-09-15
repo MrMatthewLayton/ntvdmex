@@ -489,7 +489,7 @@ and only the first is work on NTVDMEX.
 
 | where | evidence | what it means |
 |---|---|---|
-| **XMS: there is no HMA** | `xms.00.version` **DX=0** (oracle 1) and `xms.01.request.hma` **BL=0x90** "HMA does not exist" (oracle `0x91`, "already in use") | Not a wrong value — an **unimplemented feature**. Two independent rows agree on it. |
+| ~~**XMS: there is no HMA**~~ | ✅ **CLOSED (s72)** — see the section below | `xms.00.version` **DX now AGREES at 1**, and the guest can write and read `FFFF:0010`. |
 | `xms.08.queryfree` BH | oracle `0xAA`, ours leaves poison | BH is undefined for `AH=08h`; the oracle writes something deliberate. Undecided — do not "fix" without provoking it. |
 | `p_tsr` `tsr.paras.still.held` | oracle `0x26`, ours `0x21` | The block a TSR still holds. 5 paragraphs apart; the free-memory rows beside it are abstained, this one is not. Uninvestigated. |
 | `p_sysvar` 6 BUF rows | `sysvars.sft0` comes back as **`EEEEEEEE` — the probe's own poison** | DOS internals (List of Lists, DPB, SFT, CDS, NUL). Poison means *we never wrote it*. `cds0`/`cds2` start correctly (`"A:\"`, `"C:\"`) and then diverge. krnl386 walks the SFT, so this is WOW-relevant. |
@@ -525,6 +525,43 @@ figures, XMS totals, the XMS driver's own revision and code bytes. ★ In each c
 probe's *real* contract is still checked and still holds — e.g. all four `p_curdir`
 buffers are identical on each host (an EXEC does not clobber the cwd), and `mcb`'s `'M'`
 signature and `9FC0` chain end both agree.
+
+---
+
+# ✅ The HMA, closed (s72)
+
+`p_xms` measured us refusing the HMA twice over — `AH=00h` answered `DX=0` ("no HMA")
+and `AH=01h` answered `BL=0x90` ("HMA does not exist") — against an oracle that has
+one. An unimplemented **feature**, not a wrong number.
+
+★ **AND IT TURNED OUT TO BE THERE ALL ALONG.** The first attempt went straight to
+`VirtualAlloc(0x100000, MEM_RESERVE|MEM_COMMIT)` and got **`ERROR_INVALID_ADDRESS`
+(0x1E7)** — which says *"something already owns this"*, not *"you may not have it"*,
+and those need opposite responses. Asking `VirtualQuery` first showed the region
+already `MEM_COMMIT`: **NT had mapped the VDM's HMA the whole time and we were simply
+refusing to admit it.** In this design a guest linear IS a host VA, so there was
+nothing to allocate. ▶ *Query before you allocate; an error code that means "occupied"
+is good news wearing a bad hat.*
+
+**Proven, not claimed.** The XMS arm's own comment warned that reporting an HMA we do
+not provide "would have been a lie", so the probe now writes a pattern through
+`FFFF:0010` and reads it back: **`A55A`/`1234` return exactly as written.** It only
+does so when `AH=01h` succeeded — on a `DOS=HIGH` machine that memory is the running
+kernel, so the oracle reports the untouched sentinel `0xDEAD` by design.
+
+⛔ **AND THE FIRST VERSION OF THAT TEST PASSED WHILE PROVING NOTHING.** It read
+`POISON` / `cmp ax,1`, and POISON's whole job is to overwrite AX — so the compare
+tested the poison, both hosts took the "did not get it" branch, and the row agreed
+`DEAD == DEAD`. The trap this file's own header warns about, walked into anyway. The
+result is saved into `[hmaok]` the instant the call returns now.
+
+⚠ **No A20 aliasing**, which is a decision already recorded in `dos_xms.h`: *"an NT VDM
+does not wrap at 1 MB — the line is effectively always open."* We model the A20 **flag**
+(`AH=03h`..`07h`), not the address wrap.
+
+Remaining in `p_xms`: `xms.08.queryfree` **BH** (oracle `0xAA`, ours leaves poison).
+`BH` is **undefined by the XMS spec** for this call, so it stays RED and undecided
+rather than being matched by invention.
 
 ---
 

@@ -918,5 +918,45 @@
   ],
   "recorded": "2026-09-15",
   "why": "p_sysvar DUMPS DOS's internal structures, and every one of them is threaded with FAR POINTERS INTO THAT HOST'S OWN MEMORY -- which the probe's own header says mean nothing across hosts. So a byte-for-byte cross-host diff of these buffers can never agree and is not the probe's value; its value is the DUMP, read offline against src/dos/dos_sysvars.h, which is what GH #48 asked for. The NUL device header, whose first field is the far pointer to the NEXT driver in that host's chain."
+ },
+ {
+  "probe": "xms",
+  "case": "xms.01.request.hma",
+  "field": "AX",
+  "abstain": [
+   "msdos622"
+  ],
+  "recorded": "2026-09-15",
+  "why": "Whether the HMA is FREE depends on whether that machine loaded DOS into it. The oracle runs MS-DOS 6.22 with DOS=HIGH, so HIMEM has already given the HMA to the kernel and an application asking for it is correctly refused with BL=0x91 'already in use'. We do not relocate a kernel into the HMA, so ours is free and the first caller correctly gets it (AX=1). Both answers are right about their own machine; the row is a configuration fact, not a contract. ★ NOT abstained beside it: xms.00.version/DX, which asks whether an HMA EXISTS AT ALL -- that WAS a real gap (we answered 0) and it is now closed and AGREES."
+ },
+ {
+  "probe": "xms",
+  "case": "xms.01.request.hma",
+  "field": "BX",
+  "abstain": [
+   "msdos622"
+  ],
+  "recorded": "2026-09-15",
+  "why": "Whether the HMA is FREE depends on whether that machine loaded DOS into it. The oracle runs MS-DOS 6.22 with DOS=HIGH, so HIMEM has already given the HMA to the kernel and an application asking for it is correctly refused with BL=0x91 'already in use'. We do not relocate a kernel into the HMA, so ours is free and the first caller correctly gets it (AX=1). Both answers are right about their own machine; the row is a configuration fact, not a contract. BL carries the reason (0x91 in-use vs 0x00 granted), so it differs for the same cause as AX."
+ },
+ {
+  "probe": "xms",
+  "case": "xms.hma.readback",
+  "field": "AX",
+  "abstain": [
+   "msdos622"
+  ],
+  "recorded": "2026-09-15",
+  "why": "A DIRECT CONSEQUENCE OF xms.01.request.hma: the probe writes a pattern through FFFF:0010 and reads it back ONLY if the request succeeded, because on a DOS=HIGH machine that memory is the running kernel and writing to it would corrupt it. The oracle therefore reports the untouched sentinel 0xDEAD by design. ★ OUR side is the point of the row and it PASSES: A55A/1234 come back exactly as written, which is what makes 'we have an HMA' a checkable claim rather than the lie the XMS arm's own comment warned against."
+ },
+ {
+  "probe": "xms",
+  "case": "xms.hma.readback",
+  "field": "BX",
+  "abstain": [
+   "msdos622"
+  ],
+  "recorded": "2026-09-15",
+  "why": "The second word of the same read-back; see xms.hma.readback/AX."
  }
 ]

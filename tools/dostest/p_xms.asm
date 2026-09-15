@@ -74,8 +74,44 @@ start:
         mov     ah, 01h
         mov     dx, 0FFFFh                      ; DX=FFFF: an application asking
         call    far [xent]
+        mov     [hmaok], ax                     ; ⚠ SAVE IT NOW -- see the readback below
         call    probe_capture
         EMIT    "xms.01.request.hma", "AX,BX"
+
+        ; ---- ★ AND IF WE GOT IT, IS IT REAL MEMORY? (s72)
+        ; A driver can answer "yes" to AH=01h and still have nothing at FFFF:0010;
+        ; the note in NTVDMEX's own XMS arm says claiming an HMA it does not provide
+        ; "would have been a lie", so the claim has to be checkable. Write a pattern
+        ; through FFFF:0010 (A20 is on -- AH=07h above says so) and read it back.
+        ; ⚠ ONLY IF THE REQUEST SUCCEEDED. On a machine with DOS=HIGH the HMA belongs
+        ;   to DOS, AH=01h fails, and writing there would corrupt the running kernel.
+        ;   So a host that refused emits the sentinel instead of touching anything --
+        ;   which is also the honest answer for "we have no HMA".
+        ; ⚠⚠ THE TEST READS [hmaok], NOT AX. The first cut did `POISON` and then
+        ;   `cmp ax,1` -- and POISON's whole job is to overwrite AX, so the compare
+        ;   tested the poison, both hosts took the "did not get it" branch, and the
+        ;   row came back DEAD==DEAD: a PASSING row that had proved nothing. Exactly
+        ;   the trap this file's own header warns about, walked into anyway.
+        POISON
+        cmp     word [hmaok], 1
+        jne     .nohma
+        push    es
+        mov     ax, 0FFFFh
+        mov     es, ax
+        mov     word [es:0010h], 0A55Ah
+        mov     word [es:0012h], 01234h
+        mov     ax, [es:0010h]
+        mov     bx, [es:0012h]
+        pop     es
+        jmp     .emit
+.nohma:
+        mov     ax, 0DEADh                      ; not ours: deliberately not touched
+        mov     bx, 0DEADh
+.emit:
+        mov     [__ax], ax
+        mov     [__bx], bx
+        mov     word [__fl], 0
+        EMIT    "xms.hma.readback", "AX,BX"
 
         ; ---- AH=07h: is the A20 line enabled? A driver that reports no HMA and
         ; no A20 control is one MEM may reasonably ignore.
@@ -112,4 +148,5 @@ start:
         PROBE_END
 
 xent     dd 0
+hmaok    dw 0
 ebuf     times 20h db 0

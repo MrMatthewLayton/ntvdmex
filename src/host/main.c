@@ -588,6 +588,45 @@ static DWORD g_wowfold_dropped;      /* dumps folded away, reported in WOWPERF *
 static audio_state  g_audio;     static audio_wave g_wave;
 static present_ddraw g_pd;
 static xms_state    g_xms;       /* M4: XMS extended-memory manager           */
+static void        *g_hma;       /* the HMA at linear 0x100000, 0 = unavailable */
+static DWORD        g_hma_err;   /* why not, when g_hma == 0                     */
+
+/* Make the HMA real: one committed 64KB range at linear 0x100000, which a guest
+   reaches as FFFF:0010 because in this design a guest linear IS a host VA.
+   ⚠ Called ONCE and EARLY so the answer can ride the STAGE0 preamble, which is a
+     single buffered flush. Logged as its own later append it simply VANISHED --
+     log_append caches one handle per path with no lock, so a concurrent writer can
+     lose or misplace a line. Chasing that cost a cycle here, and the same defect
+     had already put a stray SysVars line at byte 0 of the log. */
+static DWORD g_hma_state, g_hma_prot;   /* what was already at 0x100000          */
+static void hma_try(void)
+{
+    MEMORY_BASIC_INFORMATION mbi;
+    void *want = (void *)(ULONG_PTR)0x100000u;
+    /* ── ASK WHAT IS THERE BEFORE ASKING FOR IT. ──────────────────────────────
+         The first cut went straight to VirtualAlloc(MEM_RESERVE|MEM_COMMIT) and
+         got ERROR_INVALID_ADDRESS (0x1E7) -- which says "something already owns
+         this", not "you may not have it", and those need opposite responses. If
+         NT has already mapped the VDM's HMA then the memory is real and all we
+         were ever missing was the nerve to report it; if it is merely reserved,
+         it needs committing; only if it is free do we allocate. */
+    if (VirtualQuery(want, &mbi, sizeof mbi) != sizeof mbi) {
+        g_hma_err = GetLastError(); return;
+    }
+    g_hma_state = mbi.State; g_hma_prot = mbi.Protect;
+    if (mbi.State == MEM_COMMIT) {
+        if (mbi.Protect & (PAGE_NOACCESS | PAGE_GUARD)) { g_hma_err = 0xE1; return; }
+        g_hma = want;                       /* already ours -- nothing to do      */
+        return;
+    }
+    g_hma = VirtualAlloc(want, 0x10000u,
+                         (mbi.State == MEM_RESERVE) ? MEM_COMMIT
+                                                    : (MEM_COMMIT | MEM_RESERVE),
+                         PAGE_READWRITE);
+    if (g_hma != want) { g_hma_err = GetLastError(); g_hma = 0; return; }
+    { unsigned i; volatile BYTE *h = (volatile BYTE *)(ULONG_PTR)0x100000u;
+      for (i = 0; i < 0x10000u; ++i) h[i] = 0; }
+}
 static ems_state    g_ems;       /* M4: EMS expanded-memory manager           */
 /* PENDING TIMER TICKS, as a saturating COUNT rather than a flag. A boolean coalesces: every
    tick that falls while the guest has interrupts off -- and Skyroads spends most of its time
@@ -5597,10 +5636,26 @@ static void host_xms(volatile BYTE *tib)
            still reported Extended (XMS) 0K. So the HMA flag is not what gates
            it, and claiming an HMA we do not provide would have been a lie for
            nothing. Fourth refuted hypothesis on that issue. */
-        X_SETAX(XMS_VERSION); X_SETBX(XMS_REVISION); X_SETDX(0);
+        /* ▸ DX NOW ANSWERS FROM THE MEMORY, NOT FROM A CONSTANT: 1 only when the
+             HMA is really committed (see the VirtualAlloc at startup). The note
+             above stands -- claiming an HMA we do not provide fixed nothing and
+             was a lie; providing one and then saying so is a different act. */
+        X_SETAX(XMS_VERSION); X_SETBX(XMS_REVISION); X_SETDX(g_hma ? 1 : 0);
         break;
-    case 0x01: X_FAIL(XMSERR_HMA_NONE);   break; /* request HMA (none provided) */
-    case 0x02: X_FAIL(XMSERR_HMA_NOTALL); break; /* release HMA */
+    case 0x01:                                  /* request HMA: DX = bytes needed */
+        /* Oracle (6.22 + HIMEM, DOS=HIGH): BL=0x91 "already in use". Ours is free
+           at boot, so a first caller gets it. DX=0xFFFF is the documented "I am a
+           TSR/driver, give me all of it"; anything larger than the HMA is refused
+           with the same code HIMEM uses for "your request does not fit". */
+        if (!g_hma)            X_FAIL(XMSERR_HMA_NONE);
+        else if (g_xms.hma_used) X_FAIL(XMSERR_HMA_INUSE);
+        else { g_xms.hma_used = 1; X_SETAX(1); X_SETBL(0); }
+        break;
+    case 0x02:                                  /* release HMA */
+        if (!g_hma)              X_FAIL(XMSERR_HMA_NONE);
+        else if (!g_xms.hma_used) X_FAIL(XMSERR_HMA_NOTALL);
+        else { g_xms.hma_used = 0; X_SETAX(1); X_SETBL(0); }
+        break;
     case 0x03: case 0x05: g_xms.a20 = 1; X_SETAX(1); break;  /* enable A20 (global/local) */
     case 0x04: case 0x06: g_xms.a20 = 0; X_SETAX(1); break;  /* disable A20 */
     case 0x07: X_SETAX(g_xms.a20 ? 1 : 0); X_SETBL(0); break;/* query A20 */
@@ -21187,6 +21242,13 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         g_wow_launch = 1;
         p = zput(p, "STAGE0: WIN16/WOW launch detected -> refusing (see GH #129)\r\n");
         p = zput(p, "STAGE0: root=["); p = zput(p, NTVDMEX_DIR); p = zput(p, "] (derived from the host's own path)\r\n");
+        hma_try();
+        p = zput(p, "STAGE0: HMA ");
+        if (g_hma) p = zput(p, "committed at 0x100000 -- FFFF:0010 is real");
+        else { p = zput(p, "UNAVAILABLE err=0x"); p = zhex(p, g_hma_err);
+       p = zput(p, " state=0x"); p = zhex(p, g_hma_state);
+       p = zput(p, " prot=0x");  p = zhex(p, g_hma_prot); }
+        p = zput(p, "\r\n");
         p = zput(p, "STAGE0: cmdline=["); p = zput(p, GetCommandLineA()); p = zput(p, "]\r\n");
         log_append(LOG_PATH, report, p); serial_out(report, p);
         if (GetFileAttributesA(WOWTRY_FLAG) == INVALID_FILE_ATTRIBUTES)
@@ -21433,6 +21495,13 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
          measured one. Log the raw string; diff a DOS launch against a Win16 launch
          on the rig; write the detector against what the diff actually shows. */
     p = zput(p, "STAGE0: root=["); p = zput(p, NTVDMEX_DIR); p = zput(p, "] (derived from the host's own path)\r\n");
+    hma_try();
+    p = zput(p, "STAGE0: HMA ");
+    if (g_hma) p = zput(p, "committed at 0x100000 -- FFFF:0010 is real");
+    else { p = zput(p, "UNAVAILABLE err=0x"); p = zhex(p, g_hma_err);
+       p = zput(p, " state=0x"); p = zhex(p, g_hma_state);
+       p = zput(p, " prot=0x");  p = zhex(p, g_hma_prot); }
+    p = zput(p, "\r\n");
         p = zput(p, "STAGE0: cmdline=["); p = zput(p, GetCommandLineA()); p = zput(p, "]\r\n");
 
     /* V86 address space, then register as a VDM with the kernel (order matters). */
@@ -22363,6 +22432,25 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     /* GH #128: and the WOW extension krnl386 reads before it does anything else. */
     dos_wow_publish(hdlr, (volatile BYTE *)(DOS_CTAB_SEG << 4), 2 /* C: */);
     xms_init(&g_xms, XMS_POOL_KB, xms_host_alloc, xms_host_free, NULL);  /* M4: XMS pool */
+    /* ── ★ THE HMA: 64KB-16 AT LINEAR 0x100000, REACHED AS FFFF:0010. (s72) ───────
+         p_xms measured us refusing it TWICE over -- AH=00h answered DX=0 ("no HMA")
+         and AH=01h answered BL=0x90 ("HMA does not exist") -- against an oracle that
+         has one. That is an unimplemented FEATURE, not a wrong number.
+       ▸ In this design a guest linear address IS a host virtual address (every
+         `(seg<<4)+off` deref in this file depends on it), so the HMA is exactly one
+         committed 64KB page range at 0x100000. Whether NT lets us have that address
+         in a VDM process is an empirical question, so it is ASKED and LOGGED rather
+         than assumed: a guest is told DX=1 only if the memory is really there.
+       ▸ No A20 aliasing, and that is a decision already recorded in dos_xms.h: "an
+         NT VDM does not wrap at 1 MB -- the line is effectively always open". We
+         model the A20 FLAG (AH=03h..07h) but not the address wrap. A program that
+         disables A20 and then expects FFFF:0010 to alias 0000:0000 would see the
+         HMA instead; none of the panel does, and inventing a wrap would mean
+         remapping views on every A20 toggle. */
+    /* (the attempt itself is made early, in hma_try(), and reported in the STAGE0
+       preamble -- ONE buffered flush, which survives the log-handle race that
+       swallowed this line entirely when it was appended separately here.) */
+
     ems_init(&g_ems, (uint16_t)(g_ems_frame_lin >> 4), EMS_POOL_PAGES,
              (volatile BYTE *)g_ems_frame_lin,
              ems_host_alloc, ems_host_free, NULL);             /* M4: 8MB EMS pool   */
