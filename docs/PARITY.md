@@ -480,6 +480,54 @@ any of it can be called a defect.
 
 ---
 
+# Triage of the sweep — what is a defect and what is not (s72 evening)
+
+The sweep left ~37 disagreeing fields. Triaged, they are **four different things**,
+and only the first is work on NTVDMEX.
+
+## 1. REAL GAPS (left RED on purpose — these are the backlog)
+
+| where | evidence | what it means |
+|---|---|---|
+| **XMS: there is no HMA** | `xms.00.version` **DX=0** (oracle 1) and `xms.01.request.hma` **BL=0x90** "HMA does not exist" (oracle `0x91`, "already in use") | Not a wrong value — an **unimplemented feature**. Two independent rows agree on it. |
+| `xms.08.queryfree` BH | oracle `0xAA`, ours leaves poison | BH is undefined for `AH=08h`; the oracle writes something deliberate. Undecided — do not "fix" without provoking it. |
+| `p_tsr` `tsr.paras.still.held` | oracle `0x26`, ours `0x21` | The block a TSR still holds. 5 paragraphs apart; the free-memory rows beside it are abstained, this one is not. Uninvestigated. |
+| `p_sysvar` 6 BUF rows | `sysvars.sft0` comes back as **`EEEEEEEE` — the probe's own poison** | DOS internals (List of Lists, DPB, SFT, CDS, NUL). Poison means *we never wrote it*. `cds0`/`cds2` start correctly (`"A:\"`, `"C:\"`) and then diverge. krnl386 walks the SFT, so this is WOW-relevant. |
+| `p_disk` INT 13h | `AH=80h` + poison in BX/CX/DX | Unimplemented rather than answering — but the probe targets **floppy drive 0** and the rig's A: is empty, where "not ready" is defensible. **Needs a probe aimed at a drive the machine has.** |
+
+## 2. BLOCKED ON PCem — measured against a BIOS that is a REIMPLEMENTATION
+
+`p_lpt` (**5 rows**: `int11.equipment`, `int17.00.print` ×2, `int14.03.status`,
+`int14.02.recv.timeout`) and `p_plan12` (`int10.set.mode12`) are all **INT 10h/11h/14h/17h**.
+The table at the top of this file says it plainly: QEMU's SeaBIOS is a rewrite and is
+**not evidence about a BIOS**. These are not defects and must not be "fixed" toward
+SeaBIOS. They join `16.01.enh` and `bda.crtc` on the PCem list.
+
+## 3. FIVE FALSE POSITIVES — probes asking a question the panel could not answer
+
+⛔ **Every one of these read as an NTVDMEX bug.** Two were one commit from "fixing"
+correct code.
+
+| probe | the flaw | fix |
+|---|---|---|
+| `p_dir`, `p_rest` | used **Z:** as "a drive that is not there" — DOSBox-X mounts Z:, and **the rig has it mapped to `\\server\storage`**. Our `AX=0002` was *two sectors per cluster*: a **successful** query of a real drive. | → **Y:**, unclaimed everywhere |
+| `p_ioctl` ×3 | `4408/4409/440E` passed **BL=0, "the default drive"** — A: on the oracle, C: on the rig. Asked "is a floppy removable?" vs "is a hard disk removable?" and called the two correct answers a disagreement. Its own comment asserted the false part: *"no host has a single-floppy alias on its default drive"* — the oracle's default **is** A:, which has one. | → **BL=3 (C:)**, a fixed disk everywhere |
+
+▶ **The lesson, twice over:** `p_err.asm` already used Y: *and wrote down why*, and the
+reasoning never reached the other probes. **A hazard recorded in one probe does not
+propagate.** And the abstention machinery only models an *oracle* being unable to vote —
+here it was the **subject's** environment that made the question invalid.
+
+## 4. ENVIRONMENT — abstained, with a rationale each (18 rows total)
+
+Current drive, absolute paths, top-of-memory, vector addresses, MCB layout, free-memory
+figures, XMS totals, the XMS driver's own revision and code bytes. ★ In each case the
+probe's *real* contract is still checked and still holds — e.g. all four `p_curdir`
+buffers are identical on each host (an EXEC does not clobber the cwd), and `mcb`'s `'M'`
+signature and `9FC0` chain end both agree.
+
+---
+
 # Next, in order
 
 1. **The DPMI/protected-mode IRQ0 arm**, which still auto-EOIs and which `p_pic.asm`

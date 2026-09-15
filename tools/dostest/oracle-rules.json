@@ -798,5 +798,65 @@
   ],
   "recorded": "2026-09-15",
   "why": "Same cause as curdir/int21.19.curdrive: AH=19h reports the drive the program was STARTED on, which is A: (0) on the oracle -- it boots from a floppy -- and C: (2) on the rig. An environment fact, not a DOS contract. The ioctl rows beside it were the same trap and were FIXED rather than abstained: they now name drive C: explicitly (BL=3) instead of asking about 'the default drive', which makes them the same question on every host."
+ },
+ {
+  "probe": "tsr",
+  "case": "int21.48.free.before",
+  "field": "BX",
+  "abstain": [
+   "msdos622"
+  ],
+  "recorded": "2026-09-15",
+  "why": "The largest free block in paragraphs -- how much memory THIS machine has left after its own resident footprint. Environment, not contract; the same class as psp.02.memtop. What the probe is really for (that a TSR still holds its block afterwards) is checked by tsr.paras.still.held, which is NOT abstained."
+ },
+ {
+  "probe": "tsr",
+  "case": "int21.48.free.after",
+  "field": "BX",
+  "abstain": [
+   "msdos622"
+  ],
+  "recorded": "2026-09-15",
+  "why": "The same figure after the TSR; see int21.48.free.before. The DELTA is the meaningful quantity and is not expressible as a cross-host row."
+ },
+ {
+  "probe": "xms",
+  "case": "xms.08.queryfree",
+  "field": "AX",
+  "abstain": [
+   "msdos622"
+  ],
+  "recorded": "2026-09-15",
+  "why": "Free extended memory in KB -- 15168 on the oracle VM, 16384 here. A statement about how much RAM each machine was given, not about XMS behaviour."
+ },
+ {
+  "probe": "xms",
+  "case": "xms.08.queryfree",
+  "field": "DX",
+  "abstain": [
+   "msdos622"
+  ],
+  "recorded": "2026-09-15",
+  "why": "Total extended memory in KB; same cause as xms.08.queryfree/AX."
+ },
+ {
+  "probe": "xms",
+  "case": "xms.entry.plus40",
+  "field": "BUF",
+  "abstain": [
+   "msdos622"
+  ],
+  "recorded": "2026-09-15",
+  "why": "Raw bytes of the XMS driver's own code at entry+0x40. That is HIMEM.SYS's implementation on the oracle and ours here; comparing two different programs' instruction bytes is not a contract about XMS."
+ },
+ {
+  "probe": "xms",
+  "case": "xms.00.version",
+  "field": "BX",
+  "abstain": [
+   "msdos622"
+  ],
+  "recorded": "2026-09-15",
+  "why": "The XMS DRIVER's internal revision (HIMEM.SYS 3.10 on the oracle, ours 3.00) -- a version number for a different program. ⚠ NOT abstained beside it: xms.00.version/DX, which reports whether an HMA EXISTS and is a real gap -- see docs/PARITY.md."
  }
 ]
