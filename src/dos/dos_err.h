@@ -95,4 +95,60 @@ static int dos_err_classify(unsigned short code, unsigned short *bx, unsigned ch
     return 0;                                   /* caller logs UNMEASURED       */
 }
 
+/* ── WIN32 -> DOS, FOR EVERY CALL THAT FAILS THROUGH CreateFileA. (s72) ───────
+   AH=3Dh answered **2 ("file not found") for every possible failure**, because
+   the handler read `f == INVALID_HANDLE_VALUE` and stopped asking. Measured by
+   tools/dostest/p_err.asm against MS-DOS 6.22, that is wrong twice over:
+
+     CASE=err.after.3D.readonly  oracle AX=0005  ours AX=0002   access denied
+     CASE=err.after.3D.baddrive  oracle AX=0003  ours AX=0002   path not found
+
+   and it is not cosmetic -- a program that gets "not found" for a file that is
+   plainly there goes looking for it instead of reporting the real problem. The
+   note beside the 0x0F row above records the same trap from the other side: the
+   DOS answer for opening "Y:\..." is 3, NOT 15, so this table must not "improve"
+   on it. The comment at AH=3Ch/3Dh already blamed this collapse for the GDI.EXE
+   wall; the sharing half was fixed then and the mapping half was left.
+
+   ⚠ BOTH SIDES OF EVERY ROW ARE MEASURED. The DOS side is the oracle CASE= line
+     quoted beside it; the WIN32 side is what the rig actually reported, read off
+     the handler's own `win32=0x..` log during the run that closed these rows:
+
+       INT21 AH=3d [ZZNOSUCH.XYZ]    FAILED win32=0x2 -> AX=0x2
+       INT21 AH=3d [ZZRDONLY.TMP]    FAILED win32=0x5 -> AX=0x5
+       INT21 AH=3d [Y:\ZZNOSUCH.XYZ] FAILED win32=0x3 -> AX=0x3
+
+     An unmapped code is logged `UNMAPPED` and keeps the old answer rather than
+     being collapsed silently, exactly as dos_err_classify() refuses to invent a
+     class.
+   ⚠ THERE IS DELIBERATELY NO ERROR_INVALID_DRIVE (15) ROW. The obvious guess is
+     that "Y:\..." arrives as 15 and should map to DOS 3 -- but measured, it
+     arrives as **win32=3**, so a 15 row would be an unexercised invention
+     dressed as evidence. If a door is ever found that does produce 15, provoke
+     it and add the row then, in that order.
+
+   Numeric rather than the ERROR_* macros so this header stays free of
+   windows.h and tools/dostest/err_test.c can keep pinning it off-VM. */
+#define W32_FILE_NOT_FOUND      2u
+#define W32_PATH_NOT_FOUND      3u
+#define W32_TOO_MANY_OPEN       4u
+#define W32_ACCESS_DENIED       5u
+
+static int dos_err_from_win32(unsigned long e, unsigned short *dos)
+{
+    switch (e) {
+    /* ── MEASURED, both sides. See the log lines quoted above. ─────────────── */
+    case W32_FILE_NOT_FOUND: *dos = 0x02; return 1;  /* err.after.3D.missing  AX=0002 */
+    /* Also the bad-drive door: "Y:\..." arrives here as 3, not 15. */
+    case W32_PATH_NOT_FOUND: *dos = 0x03; return 1;  /* err.after.3D.baddrive AX=0003 */
+    case W32_ACCESS_DENIED:  *dos = 0x05; return 1;  /* err.after.3D.readonly AX=0005 */
+    /* ── AN IDENTITY, NOT A MEASUREMENT, AND LABELLED AS SUCH. DOS error 4 IS
+         "too many open files" and the handler already answers 4 when it runs out
+         of its own slots, so the two names denote one condition. NOT provoked by
+         a probe: to promote it, extend p_err.asm to exhaust the handle table. */
+    case W32_TOO_MANY_OPEN:  *dos = 0x04; return 1;
+    default: *dos = 0x02; return 0;                  /* caller logs win32= and keeps 2 */
+    }
+}
+
 #endif /* DOS_ERR_H */

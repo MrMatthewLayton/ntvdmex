@@ -111,6 +111,55 @@ int main(void)
         }
     }
 
+    /* ── WIN32 -> DOS, the mapping AH=3Dh used to skip entirely. (s72) ────────
+         Every expectation below is a pair of measured lines: the oracle's answer
+         for the situation, and the `win32=0x..` the rig's own handler logged for
+         the same probe case. Before this existed AH=3Dh answered 2 for every
+         cause, so a read-only file read as "not found". */
+    {
+        unsigned short d;
+        printf("== INT 21h AH=3Dh: Win32 failure -> DOS code (dos_err_from_win32)\n");
+
+        ++checks;
+        if (!dos_err_from_win32(W32_FILE_NOT_FOUND, &d)) { ++fails;
+            printf("  FAIL %-56s not mapped\n", "win32=2 is a measured row"); }
+        eq("win32=2  -> 2   [err.after.3D.missing  AX=0002]", d, 0x02);
+
+        ++checks;
+        if (!dos_err_from_win32(W32_PATH_NOT_FOUND, &d)) { ++fails;
+            printf("  FAIL %-56s not mapped\n", "win32=3 is a measured row"); }
+        eq("win32=3  -> 3   [err.after.3D.baddrive AX=0003]", d, 0x03);
+
+        ++checks;
+        if (!dos_err_from_win32(W32_ACCESS_DENIED, &d)) { ++fails;
+            printf("  FAIL %-56s not mapped\n", "win32=5 is a measured row"); }
+        eq("win32=5  -> 5   [err.after.3D.readonly AX=0005]", d, 0x05);
+
+        /* ⚠ THE POINT OF THE WHOLE EXERCISE: these three must be DISTINCT. The
+             bug was not a wrong constant, it was three causes collapsing to one
+             answer, and a table that mapped them all to 5 would pass any test
+             that only checked "not 2". */
+        {
+            unsigned short a, b, c;
+            dos_err_from_win32(W32_FILE_NOT_FOUND, &a);
+            dos_err_from_win32(W32_PATH_NOT_FOUND, &b);
+            dos_err_from_win32(W32_ACCESS_DENIED,  &c);
+            ++checks;
+            if (a == b || b == c || a == c) { ++fails;
+                printf("  FAIL %-56s %u/%u/%u\n",
+                       "not-found / path / denied must stay distinct", a, b, c); }
+        }
+
+        /* An unmapped code must NOT invent an answer: it keeps the old 2 and
+           reports 0 so the handler can log UNMAPPED -- the same refusal
+           dos_err_classify() makes for an unmeasured class. */
+        ++checks;
+        d = 0xDEAD;
+        if (dos_err_from_win32(0x4D2, &d)) { ++fails;
+            printf("  FAIL %-56s claimed to know it\n", "win32=1234 is unmapped"); }
+        eq("unmapped keeps the historical 2 (no invention)", d, 0x02);
+    }
+
     printf("== %d checks, %d failed\n", checks, fails);
     return fails ? 1 : 0;
 }

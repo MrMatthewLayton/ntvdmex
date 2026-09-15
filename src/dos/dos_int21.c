@@ -579,7 +579,18 @@ int dos_int21(dos_machine_t *m)
             slot = dos_fh_alloc((void *const *)m->fh, m->std_open);
             if (slot < DOS_MAX_FILES) { m->fh[slot] = f; SETAX(slot); OKCF(); }
             else { CloseHandle(f); SETAX(4); ERRCF(); }
-        } else { SETAX(2); ERRCF(); }
+        } else {
+            /* ── ASK WHY IT FAILED. It used to answer 2 for every cause; see
+                 dos_err_from_win32() for the two oracle rows that names wrong. */
+            DWORD we = GetLastError(); unsigned short de;
+            int mapped = dos_err_from_win32((unsigned long)we, &de);
+            SETAX(de); ERRCF();
+            tp = zput(tp, "  INT21 AH=0x"); tp = zhex(tp, ah);
+            tp = zput(tp, " ["); tp = zput(tp, fn); tp = zput(tp, "] FAILED win32=0x");
+            tp = zhex(tp, we);
+            tp = zput(tp, mapped ? " -> AX=0x" : " UNMAPPED, kept -> AX=0x");
+            tp = zhex(tp, de); tp = zput(tp, "\r\n");
+        }
         tp = zput(tp, "  INT21 AH=0x"); tp = zhex(tp, ah);
         tp = zput(tp, " ["); tp = zput(tp, fn); tp = zput(tp, "] -> AX=0x");
         tp = zhex(tp, R_AX & 0xFFFF); tp = zput(tp, (*pfl & 1) ? " (err)\r\n" : "\r\n");
@@ -1413,7 +1424,16 @@ int dos_int21(dos_machine_t *m)
         f = CreateFileA(fn, acc, FILE_SHARE_READ, NULL, disp,
                         (DWORD)(R_CX & 0x3F) ? (DWORD)(R_CX & 0x3F)
                                              : FILE_ATTRIBUTE_NORMAL, NULL);
-        if (f == INVALID_HANDLE_VALUE) { SETAX(2); ERRCF(); }
+        if (f == INVALID_HANDLE_VALUE) {
+            /* Same collapse as AH=3Dh had, same fix -- see dos_err_from_win32(). */
+            DWORD we = GetLastError(); unsigned short de;
+            int mapped = dos_err_from_win32((unsigned long)we, &de);
+            SETAX(de); ERRCF();
+            tp = zput(tp, "  INT21 AH=6C ["); tp = zput(tp, fn);
+            tp = zput(tp, "] FAILED win32=0x"); tp = zhex(tp, we);
+            tp = zput(tp, mapped ? " -> AX=0x" : " UNMAPPED, kept -> AX=0x");
+            tp = zhex(tp, de); tp = zput(tp, "\r\n");
+        }
         else {
             uint16_t res = (disp == CREATE_NEW) ? 2
                          : (disp == TRUNCATE_EXISTING || disp == CREATE_ALWAYS) ? 3 : 1;
