@@ -144,4 +144,48 @@ start:
         mov     [__bx], ax              ; DL = rows-1
         EMIT    "int10.1130", "AX,BX"
 
+        ; ---- ★ BLINK LIVES IN THE ATTRIBUTE CONTROLLER, index 10h bit 3, and that is
+        ; the register the hardware reads. INT 10h 1003h is only the BIOS's way of
+        ; writing it, so the two must never disagree: a program that turns blink off
+        ; by touching 3C0h directly (which is the usual way, and what QBasic does)
+        ; gets nothing if the host keeps its own private flag instead.
+        mov     ax, 0003h
+        int     10h
+        mov     ax, 1003h               ; BL=0 -> intensity, blink OFF
+        xor     bl, bl
+        int     10h
+        call    rd_ar10
+        and     ax, 8
+        mov     [__ax], ax
+        EMIT    "ar10.blink.off", "AX"
+        mov     ax, 1003h               ; BL=1 -> blink ON
+        mov     bl, 1
+        int     10h
+        call    rd_ar10
+        and     ax, 8
+        mov     [__ax], ax
+        EMIT    "ar10.blink.on", "AX"
+        mov     ax, 0003h               ; leave the screen as we found it
+        int     10h
+
         PROBE_END
+
+; rd_ar10 -- AL = attribute controller register 10h (mode control).
+; ⚠ 3DA READ FIRST: the AC's address/data flip-flop is reset by reading the input
+;   status register, and without that the index write lands in the data half.
+; ⚠ INDEX | 20h keeps the palette ENABLED; leaving bit 5 clear blanks the display.
+rd_ar10:
+        mov     dx, 3DAh
+        in      al, dx
+        mov     dx, 3C0h
+        mov     al, 30h
+        out     dx, al
+        mov     dx, 3C1h
+        in      al, dx
+        push    ax
+        mov     dx, 3C0h                ; re-enable the palette before leaving
+        mov     al, 20h
+        out     dx, al
+        pop     ax
+        xor     ah, ah
+        ret

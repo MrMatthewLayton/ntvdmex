@@ -288,7 +288,20 @@ static void attr_out(void *self, uint16_t port, uint8_t w, uint32_t v)
         st->ac_port_writes++;
         pal_refresh(st);
         break;
-    case 0x10: st->attr_mode = val;  pal_refresh(st); break;
+    case 0x10:
+        /* ── ★ BIT 3 IS BLINK ENABLE, AND IT IS THE HARDWARE'S ANSWER, NOT OURS. ──
+             We stored this register and kept a PRIVATE st->blink beside it that only
+             INT 10h 1003h could move -- so a program that turns blink off the usual
+             way, by writing the attribute controller directly, was ignored and every
+             character with attribute bit 7 went on blinking.
+             Found in QBasic: its dialogs mark the accelerator letter with bit 7, so
+             `Files` rendered as `iles` and `Help` as `elp` every other half-second --
+             the letter was there, it was blinking. Two layers with their own copy of
+             one fact, disagreeing; AR10 is now the single source. */
+        st->attr_mode = val;
+        st->blink = (uint8_t)((val >> 3) & 1);
+        pal_refresh(st);
+        break;
     case 0x11: st->vpal[16] = st->overscan = (uint8_t)(val & 0x3F); st->dirty = 1; break;
     case 0x14: st->attr_cse = val;   pal_refresh(st); break;
     default: break;                                  /* 12h plane enable, 13h pan    */
@@ -653,6 +666,7 @@ static void int10(void *self, ntvdd_regs *r)
         st->cur_row = st->cur_col = 0; st->page = 0;
         st->cur_shape = 0x0607;                       /* the BIOS resets the shape too */
         st->blink = 1;                                /* ...and re-enables blink (AR10 bit 3) */
+        st->attr_mode = (uint8_t)(st->attr_mode | 0x08u);   /* the register agrees    */
         st->user_font_on = 0;                         /* the ROM font comes back with the mode */
         /* The cell height the mode's BIOS font gives: 8x16 in the VGA text modes and
            the 480-line graphics modes, 8x14 at 350 lines, 8x8 at 200. */
@@ -798,7 +812,12 @@ static void int10(void *self, ntvdd_regs *r)
             st->ac_bios_writes += 17;
             pal_refresh(st);
         } else if (al == 0x03) {                      /* blink vs bright background */
+            /* The BIOS's job here is to write AR10 bit 3; keep both in step so a
+               guest that sets it through the BIOS and then READS the register back
+               sees what it asked for. Oracle-measured (p_video.asm ar10.blink.*):
+               BL=0 leaves AR10 bit 3 clear, BL=1 sets it. */
             st->blink = (uint8_t)(r_bx(r) & 1);
+            st->attr_mode = (uint8_t)((st->attr_mode & ~0x08u) | (st->blink ? 0x08u : 0u));
         } else if (al == 0x07) {                      /* get one palette register */
             uint8_t reg = (uint8_t)((r_bx(r) >> 8) & 0xFF);
             s_bx(r, (uint16_t)((r_bx(r) & 0xFF00) | (reg < 17 ? st->vpal[reg] : 0)));
@@ -2352,6 +2371,7 @@ void vdd_video_reset(void *self)
     st->mode = 3; st->cols = VID_COLS; st->rows = VID_ROWS;
     st->mkind = VID_KIND_TEXT; st->gw = VID_FB_W; st->gh = VID_FB_H;
     st->cell_h = VID_CELL_H; st->blink = 1; st->user_font_on = 0;
+    st->attr_mode = (uint8_t)(st->attr_mode | 0x08u);
     st->crtc_cursor = 0;
     st->mode_qn = 0;
     st->cur_row = st->cur_col = 0; st->cur_shape = 0x0607; st->page = 0;
