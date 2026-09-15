@@ -241,6 +241,61 @@ and matches the 6.22 oracle row for row (session 53)** — but `MEM /C` still re
 
    ---
 
+   ## ★★★★★ SESSION 72 (2026-09-15, afternoon) — **THE BY-HAND PASS: THE PACKAGE WORKS ON A FRESH FOLDER, AND DOOM'S E1M1 CRASH IS NOW REPRODUCIBLE WITH THREE SUSPECTS DEAD.**
+
+   **HEAD `9ad5eff`, pushed. Battery 1316/0. RIG = `70351a20…` = USER-CONFIRMED, and
+   it is now also `bm\ntvdmhost_prev.exe` (the rollback); `bm\ntvdmhost_lemok.exe`
+   keeps `bf9534a9` (f79d954, Lemmings). Package `dist/ntvdmex-20260915-9ad5eff.zip`.**
+
+   ### ✅ USER-CONFIRMED BY HAND
+   * **THE 18th DELIVERABLE WORKS.** From a fresh Desktop folder: `status` → 2
+     (another program owns the VDM), `install.bat`, `status` → 0, `smoke.bat` →
+     **eight PASS lines and ALL TESTS PASSED**, `uninstall.bat`, the rig's own host
+     back in charge. This had **never been run by a human** before today.
+   * QBasic: welcome box and "Untitled" banner now draw, **mouse clicks navigate the
+     cursor**, Alt/File menus open by mouse, pointer is an inverted cell.
+   * Mouse capture: exclusive to the guest, **Win** releases it, clicking recaptures.
+     (One bad capture on the first launch after a deploy, **not reproduced** — the
+     known "a first run after a deploy is not evidence" pattern.)
+   * **Mario now PLAYS** (it used to die on the intro). ⚠ Cause UNKNOWN — the s72
+     simInt guard did **not** do it (`simint_rm=0`, and Mario makes no DPMI calls).
+     Graphics leave artefacts behind moving objects: a mode-Y planar issue, open.
+   * `DATE$`/`TIME$` correct in a guest — the INT 1Ah RTC half landing.
+
+   ### ⛔ THE TWO OPEN BUGS THE PASS FOUND
+   * **QB File > Open lists NO FILES** (Dirs/Drives is correct). QB parses `*.BAS`
+     with AH=29h into an FCB and searches with **AH=11h/12h**, not AH=4Eh. ⚠ I saw
+     the empty pane in my own headless screenshots this morning and explained it away
+     as a Tab-order quirk — it is a real bug.
+   * **Doom dies ~1s after killing the imp on the ledge / the far zombie** on E1M1 —
+     and it **reproduces on demand**, which Mario's and Lemmings' identical deaths
+     never have. See the s72 section of `docs/PARITY.md` and the memory note.
+
+   ### The Doom crash, in what is now known rather than guessed
+   No `HOSTFAULT`, `veh{any=0 fatal=0}`, **no Application Error in XP's event log and
+   no Dr Watson log**, and **not one line of the shutdown path**. The process is
+   terminated outright — NT killing a VDM whose state it will not accept.
+   Eliminated **by measurement**, one user run each:
+   | suspect | how | result |
+   |---|---|---|
+   | sound / SB / IRQ5 | `cfg\nosb.flag` | crashed, **0** IRQ5 deliveries (was 521) |
+   | mouse + DPMI real-mode simulation | `cfg\nomouse.flag` | crashed, **0** `simInt 0x33` (was ~1389) |
+   | async injection racing the mode switch | `g_simint_busy` guard | **`simint_rm=0`** — never hit |
+
+   ⛔⛔ **A METHOD TRAP, MINE:** three crashes ended on the same two `simInt 0x33`
+   lines and I built a theory on it. It was **coincidence** — `simInt` was simply the
+   most frequent line in the log. ▶ Before calling "it always ends on X" a
+   fingerprint, ask what share of all lines X is.
+   ⛔ **AND I ASKED FOR A RUN THAT COULD NOT ANSWER:** the counter I needed was
+   printed only in the exit report, which a killed guest never writes. Counters that
+   bear on a crash now ride the PM heartbeat.
+   ▶ **NEXT:** the **DPMI/PM IRQ0 arm, which still auto-EOIs** (`p_pic.asm` cannot
+   reach it) — the tail now ends on a successful async PM injection. And selector
+   `0x317` (base `0x041A0000`, limit `0x19`) is **refused by NT twice and never
+   installed in the LDT** in every run; a defect on its own account.
+
+   ---
+
    ## ★★★ SESSION 72 (2026-09-15, morning) — **QBASIC'S "FILE SYSTEM PROBLEMS" WERE THE DRIVE LIST: A DRIVE WITH NO MEDIA MUST STILL BE SELECTABLE, AND CHDIR NEVER MOVES THE CURRENT DRIVE.**
 
    **HEAD `a9b6c51`. Battery green (1302/0). Candidate `build/ntvdmhost.exe` = `86bb80b1…`,
