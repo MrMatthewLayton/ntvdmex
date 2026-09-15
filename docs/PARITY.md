@@ -341,6 +341,24 @@ executed rather than reasoned about.
 
 ---
 
+# DOS file services — the FCB parser (`p_fcb.asm`, `p_find.asm`)
+
+| item | state | notes |
+|---|---|---|
+| **`AH=29h` expands `*` into `?`s** | verified | **was stored literally** — `*.BAS` → `00 3F×8 'BAS'`, `*.*` → `00 3F×11` |
+| `AH=29h` drive field, AL wildcard flag | verified | |
+| `AH=0Fh/10h/11h/12h/13h/16h` FCB open/close/find/delete | verified | |
+| `AH=4Eh/4Fh` find-first/next, error codes | verified | `AX=18` no-match in an existing dir, `AX=3` missing dir |
+| a FAILED `4Eh` leaves a live search alone | verified | ⚠ mismatched in ONE run and clean in three since, nothing changed — the *first run after a deploy* pattern |
+
+**The gap (s72):** `AH=29h` stored `*` literally. QBasic parses its file pattern with
+29h and then matches each directory entry against the parsed FCB, so nothing matched
+and its Open dialog listed **no files** while the directory pane beside it was correct.
+⛔ I twice guessed QB used the **FCB search**; it enumerates with `AH=4Eh/4Fh`. One
+trace line settled what two rounds of reasoning had not.
+
+---
+
 # Next, in order
 
 1. **The DPMI/protected-mode IRQ0 arm**, which still auto-EOIs and which `p_pic.asm`

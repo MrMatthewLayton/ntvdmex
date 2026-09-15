@@ -262,7 +262,24 @@ and matches the 6.22 oracle row for row (session 53)** — but `MEM /C` still re
      Graphics leave artefacts behind moving objects: a mode-Y planar issue, open.
    * `DATE$`/`TIME$` correct in a guest — the INT 1Ah RTC half landing.
 
-   ### ⛔ THE TWO OPEN BUGS THE PASS FOUND
+   ### ✅ BOTH BUGS THE PASS FOUND ARE NOW CLOSED (user-confirmed)
+   * **QB's Open dialog navigates by mouse, lists files, opens and runs programs.**
+     `INT 21h AH=29h` stored `*` literally where DOS expands it into `?`s: QB parses
+     the pattern into an FCB and matches every directory entry against it, so a literal
+     star matched nothing -- empty Files pane, correct Dirs pane. Oracle-pinned, fixed
+     in `fcb_put_name` (`0dbe737`). ⛔ I guessed the FCB SEARCH twice; QB enumerates
+     with `AH=4Eh/4Fh`, which one trace line showed.
+   * **Dialog labels stopped losing letters.** `Files`->`iles` was QB's accelerator
+     characters BLINKING: Blink Enable is attribute-controller register 0x10 bit 3 and
+     we kept a private flag only the BIOS call could move (`48d7a67`).
+   * ★★ **The instrument that ended it: `cfg\textdump.flag`** -- the text screen as the
+     GUEST wrote it, beside each screenshot. It showed the pane empty IN THE BUFFER,
+     clearing the search and the renderer at once, after three wrong guesses from
+     pixels. ▶ When something is missing from a text screen, dump the CELLS first.
+   * ⛔ **NEW, user-reported, not investigated:** making EXEs from QBasic (the
+     BC.EXE/LINK.EXE path) does not work properly. Filed at the user's request.
+
+   ### ⛔ THE OPEN BUG THE PASS FOUND
    * **QB File > Open lists NO FILES** (Dirs/Drives is correct). QB parses `*.BAS`
      with AH=29h into an FCB and searches with **AH=11h/12h**, not AH=4Eh. ⚠ I saw
      the empty pane in my own headless screenshots this morning and explained it away
