@@ -279,6 +279,56 @@ int main(void)
       in.time_us = 0; vdd_bus_set_sinks(&bus, 0, 0, 0, 0);
     }
 
+    /* T12: ★ THE WRITE SIDE OF THE RING -- INT 16h AH=05h, AH=09h, AH=03h.
+         All three fell into the `default` arm, which sets ZF and leaves AX exactly
+         as the caller passed it. So a key-stuffing program read its OWN byte back
+         out of AL and took it for "stored, success", and nothing was ever queued.
+         Found by p_kbd.asm against the 6.22 oracle -- and only once that probe
+         POISONED AL, because "untouched" and "answered 00" are the same picture
+         otherwise. This is the whole of DOSKEY, of an installer that pre-answers
+         its own prompt, and of every TSR that drives another program. */
+    {   int i;
+        vdd_input_reset(&in);
+        memset(&r, 0, sizeof r); s_ah(&r, 0x05); s_al(&r, 0xB1);
+        r.ecx = 0x1C0D;                                       /* Enter */
+        vdd_bus_deliver_int(&bus, 0x16, &r);
+        CHECK(r_al(&r) == 0x00, "int16/05: a stored keystroke answers AL=0 (was AL untouched)");
+        CHECK(vdd_input_pop(&in, &k) == 1 && k == 0x1C0D,
+              "int16/05: ...and the key is really in the ring, in order");
+
+        /* FULL is the other half of the contract: a 16-slot ring takes fifteen and
+           then REFUSES, rather than overwriting the head and losing a keystroke the
+           guest has already been told about. */
+        vdd_input_reset(&in);
+        for (i = 0; i < 15; ++i) {
+            memset(&r, 0, sizeof r); s_ah(&r, 0x05); s_al(&r, 0xB1);
+            r.ecx = (uint32_t)(0x3930 + (i % 10));
+            vdd_bus_deliver_int(&bus, 0x16, &r);
+            if (r_al(&r) != 0) break;
+        }
+        CHECK(i == 15, "int16/05: fifteen entries fit a sixteen-slot ring");
+        memset(&r, 0, sizeof r); s_ah(&r, 0x05); s_al(&r, 0xB1);
+        r.ecx = 0x3932;
+        vdd_bus_deliver_int(&bus, 0x16, &r);
+        CHECK(r_al(&r) == 0x01, "int16/05: the sixteenth is refused with AL=1, not silently dropped");
+        CHECK(vdd_input_pop(&in, &k) == 1 && k == 0x3930,
+              "int16/05: ...and the OLDEST key survived the refusal");
+
+        /* AH=09h: 0x30 is MEASURED on the 6.22 oracle, not derived -- the bit
+           definitions disagree between references, which is exactly the kind of
+           expectation M9 forbids writing from memory. */
+        memset(&r, 0, sizeof r); s_ah(&r, 0x09); s_al(&r, 0xB1);
+        vdd_bus_deliver_int(&bus, 0x16, &r);
+        CHECK(r_al(&r) == 0x30, "int16/09: supported-function mask = 30 (oracle-measured)");
+
+        /* AH=03h stores nothing, but it must be ANSWERED: a guest that sets the
+           typematic rate and gets CF=1 can conclude there is no BIOS here at all. */
+        memset(&r, 0, sizeof r); s_ah(&r, 0x03); s_al(&r, 0x05); r.cf = 1;
+        vdd_bus_deliver_int(&bus, 0x16, &r);
+        CHECK(r.cf == 0, "int16/03: set typematic rate is accepted (CF=0)");
+        vdd_input_reset(&in);
+    }
+
     printf("\n%d checks, %d failed\n", total, fails);
     return fails ? 1 : 0;
 }

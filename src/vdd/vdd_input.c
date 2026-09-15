@@ -16,10 +16,10 @@ static void bda_w16(input_state *st, int off, uint16_t v)
 static uint16_t bda_next(uint16_t p)
 { p += 2; return (p >= BDA_KB_END) ? (uint16_t)BDA_KB_START : p; }
 
-void vdd_input_push(input_state *st, uint16_t key)
+int vdd_input_push(input_state *st, uint16_t key)
 {
     uint16_t head, tail, n;
-    if (!st->bda) return;                 /* no guest memory yet: nowhere to put it */
+    if (!st->bda) return 0;               /* no guest memory yet: nowhere to put it */
     head = bda_r16(st, BDA_KB_HEAD);
     tail = bda_r16(st, BDA_KB_TAIL);
     /* A pointer pair the guest has not initialised (or has scribbled on) would send the
@@ -30,11 +30,15 @@ void vdd_input_push(input_state *st, uint16_t key)
         bda_w16(st, BDA_KB_HEAD, head);
     }
     n = bda_next(tail);
-    if (n == head) return;                /* full -> discard the NEW key: the real BIOS
+    if (n == head) return 0;              /* full -> discard the NEW key: the real BIOS
                                              beeps and throws it away. Dropping the OLDEST
-                                             instead would split a keystroke stream. */
+                                             instead would split a keystroke stream.
+                                             The RESULT is the answer INT 16h AH=05h owes
+                                             its caller (AL=1 = full), so it is returned
+                                             rather than swallowed. */
     bda_w16(st, tail, key);
     bda_w16(st, BDA_KB_TAIL, n);
+    return 1;
 }
 
 int vdd_input_pop(input_state *st, uint16_t *key)
@@ -428,7 +432,7 @@ static void int16(void *self, ntvdd_regs *r)
     switch (r_ah(r)) {
     case 0x00: case 0x10: st->int16_calls[0]++; break;
     case 0x01: case 0x11: st->int16_calls[1]++; break;
-    case 0x02:            st->int16_calls[2]++; break;
+    case 0x02: case 0x12: st->int16_calls[2]++; break;
     default:              st->int16_calls[3]++; break;
     }
     switch (r_ah(r)) {
@@ -449,6 +453,30 @@ static void int16(void *self, ntvdd_regs *r)
         s_al(r, kb_flags(st));
         s_ah(r, st->bda ? st->bda[BDA_KB_FLAGS2] : 0);
         r->zf = 0;
+        break;
+    case 0x03:                              /* set typematic rate/delay (AL=05)    */
+        /* There is nothing to store: the repeat rate is the host OS's, and the BIOS
+           keeps no readable copy of it. What matters is that the call is ANSWERED --
+           measured on 6.22 (p_kbd.asm 16.03.typematic): AX unchanged, CF=0. A guest
+           that sets the rate and gets an error back can conclude the BIOS is not
+           there at all. */
+        r->cf = 0; r->zf = 0;
+        break;
+    case 0x05:                              /* push a keystroke: CH=scan CL=ascii   */
+        /* ★ THE WRITE SIDE OF THE RING, and it was missing entirely -- the `default`
+             arm below left AX exactly as the caller passed it, so a program read its
+             own byte back and called it success (p_kbd.asm caught it only once the
+             probe POISONED AL; without the poison the row was a false match).
+             This is how DOSKEY, installers that pre-answer their own prompts, and
+             every key-stuffing TSR put keys in. Oracle: AL=0 stored, AL=1 full. */
+        s_al(r, (uint8_t)(vdd_input_push(st, r_cx(r)) ? 0x00 : 0x01));
+        r->cf = 0; r->zf = 0;
+        break;
+    case 0x09:                              /* which INT 16h functions exist -> AL  */
+        /* 0x30 is MEASURED on the 6.22 oracle, not derived from the bit definitions
+           (which disagree between references). See docs/PARITY.md. */
+        s_al(r, 0x30);
+        r->cf = 0; r->zf = 0;
         break;
     default:                                /* unknown fn: report "no key", never  */
         r->zf = 1;                          /* a phantom keystroke (was a bug)     */

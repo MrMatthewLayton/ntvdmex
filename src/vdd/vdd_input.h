@@ -111,7 +111,7 @@ int  vdd_input_sc_queued(const input_state *st);     /* bytes in the FIFO, held 
 
 /* BIOS ring ops, all operating on the guest's buffer at 0040:001E.
    (push = UI thread; pop/peek = V86 thread; caller serialises.) */
-void vdd_input_push(input_state *st, uint16_t key);   /* full -> discard, as the BIOS does */
+int  vdd_input_push(input_state *st, uint16_t key);   /* full -> discard (0), as the BIOS does */
 int  vdd_input_pop (input_state *st, uint16_t *key);  /* 1 if a key was returned */
 int  vdd_input_peek(input_state *st, uint16_t *key);  /* 1 if a key is available */
 

@@ -299,39 +299,33 @@ class NtvdmexRig(Host):
         return True, ""
 
     def run(self, com, timeout=240):
-        name = os.path.basename(com)
-        shutil.copyfile(com, os.path.join(self.share, "bm", "tests", name))
-        # rt.bat copies only the named test into C:\test, so a probe's companion
-        # files are staged there directly and left in place between runs.
-        deps = _deps(com)
-        for dep in deps:
-            shutil.copyfile(dep, os.path.join(self.share, "bm", "tests",
-                                              os.path.basename(dep)))
-        if deps:
-            # rt.bat copies only the named test into C:\test, so stage the
-            # companions with a preliminary run. The watcher interpolates
-            # cmd.txt into a command line, so `&` chains a copy after rt.bat.
-            # They persist in C:\test, but re-staging each time keeps a stale
-            # companion from silently being the thing under test.
-            chain = "dosstub.com"
-            for dep in deps:
-                chain += "&copy /y \"%s\\bm\\tests\\%s\" C:\\test\\" % (
-                    "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex",
-                    os.path.basename(dep))
-            with open(os.path.join(self.share, "cmd.txt"), "wb") as f:
-                f.write((chain + "\r\n").encode())
-            deadline2 = time.time() + 120
-            while time.time() < deadline2:
-                time.sleep(3)
-                if not os.path.exists(os.path.join(self.share, "cmd.txt")):
-                    break
-            time.sleep(8)
-        log = os.path.join(self.share, "result_%s.log" % name)
-        if os.path.exists(log):
-            os.unlink(log)
+        """Stage the probe as a one-file 'game' and let rt.bat run it.
 
-        with open(os.path.join(self.share, "cmd.txt"), "wb") as f:
-            f.write((name + "\r\n").encode())
+        ⚠ THIS ADAPTER WENT STALE AND SAID SO ONLY BY TIMING OUT. It staged into
+          bm/tests/ and queued the bare probe name, which was the pre-s61 layout;
+          rt.bat's :run arm has taken `<Name> [EXE]` and looked under games/<Name>/
+          since. The share reorganisation moved the result log into out/ too. A
+          harness that cannot run is not a harness, so it is wired to what rt.bat
+          actually does today: games/Probe/<NAME>, cmd.txt = "Probe <NAME>",
+          answer in out/result_Probe.log.
+        """
+        name = os.path.basename(com).upper()
+        gdir = os.path.join(self.share, "games", "Probe")
+        os.makedirs(gdir, exist_ok=True)
+        shutil.copyfile(com, os.path.join(gdir, name))
+        for dep in _deps(com):
+            shutil.copyfile(dep, os.path.join(gdir, os.path.basename(dep).upper()))
+
+        log = os.path.join(self.share, "out", "result_Probe.log")
+        before = os.path.getmtime(log) if os.path.exists(log) else 0
+
+        # The watcher reads cmd.txt with `for /f ... in ('type cmd.txt')`, so it
+        # wants a CRLF line -- and it must appear ATOMICALLY: the watcher can see a
+        # created-but-still-empty file over SMB, and an empty read is "no target".
+        tmp = os.path.join(self.share, "cmd.tmp")
+        with open(tmp, "wb") as f:
+            f.write(("Probe %s\r\n" % name).encode())
+        os.replace(tmp, os.path.join(self.share, "cmd.txt"))
 
         deadline = time.time() + timeout
         while time.time() < deadline:
@@ -341,20 +335,19 @@ class NtvdmexRig(Host):
         else:
             raise RuntimeError("watcher never consumed cmd.txt within %ds" % timeout)
 
-        # rt.bat copies the log while the host may still be finishing, and SMB
-        # caches the result -- a log read too early is a PARTIAL file.  Wait for
-        # the known-final line rather than for a duration, and re-list the
-        # directory each poll to force a fresh readdir.
+        # ⚠ WAIT FOR A LOG NEWER THAN THE MOMENT WE QUEUED, not merely for one to
+        #   exist: a stale result_Probe.log from the previous probe parses cleanly
+        #   and would be reported as this probe's answer.
         while time.time() < deadline:
             time.sleep(3)
-            os.listdir(self.share)
-            if not os.path.exists(log):
+            os.listdir(self.share)          # force a fresh readdir over SMB
+            if not os.path.exists(log) or os.path.getmtime(log) <= before:
                 continue
             with open(log, "rb") as f:
                 text = f.read().decode("cp437", "replace")
-            if "STAGE2: complete" in text or "==> DOS OUTPUT:" in text and "\n]" in text:
+            if "#END" in text or "STAGE2: complete" in text:
                 return self._dos_output(text)
-        raise RuntimeError("result log never completed (no 'STAGE2: complete')")
+        raise RuntimeError("no result_Probe.log newer than the queue time")
 
     @staticmethod
     def _dos_output(text):
