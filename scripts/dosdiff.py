@@ -438,10 +438,18 @@ def diff(results, hosts, probe=None, rules=()):
             if f == "BUF" and rule and rule.get("ignore_bytes"):
                 for h in list(vals):
                     vals[h] = mask_buf(vals[h], rule["ignore_bytes"])
+            # ── "NOBODY ANSWERED" AND "WE DECIDED NOT TO ASK" ARE NOT THE SAME.
+            #    Both used to come out as NO-DATA, whose summary line reads
+            #    "missing evidence ... check for a truncated log" -- so a row
+            #    deliberately abstained per oracle-rules.json accused the harness
+            #    of being broken, and the subject HAD answered. Keep them apart:
+            #    ABSTAINED is a recorded decision, NO-DATA is missing evidence.
+            ovals_all = [vals[h] for h in oracles if vals.get(h) is not None]
             ovals = [vals[h] for h in oracles
                      if vals.get(h) is not None and h not in abstain]
             if not ovals:
-                verdict, truth = "NO-DATA", None
+                verdict = "ABSTAINED" if ovals_all else "NO-DATA"
+                truth = None
             elif len(set(ovals)) == 1:
                 verdict, truth = "AGREE", ovals[0]
             else:
@@ -499,7 +507,7 @@ def report(probe, rows, oracles, subjects, unavailable):
     print("\n" + head)
     print("   " + "-" * (len(head) - 3))
 
-    disputed = failed = nodata = 0
+    disputed = failed = nodata = abstained = 0
     notes = []
     for r in rows:
         line = "   %-16s %-6s " % (r["case"], r["field"])
@@ -513,6 +521,8 @@ def report(probe, rows, oracles, subjects, unavailable):
             disputed += 1
         elif v == "NO-DATA":
             nodata += 1
+        elif v == "ABSTAINED":
+            abstained += 1
         if r["abstain"]:
             notes.append(r)
             v += " [%d]" % len(notes)
@@ -535,6 +545,14 @@ def report(probe, rows, oracles, subjects, unavailable):
         print("   %d field(s) with NO DATA from the subject -- missing evidence, not"
               % nodata)
         print("   agreement. Check for a truncated log or a probe that died early.")
+    # ► SAY WHAT WAS LEFT OUT. An abstention is not a pass and must not vanish
+    #   into "no mismatches" -- each one is a claim that the row cannot be a
+    #   contract, and claims rot. The rationale is printed above, per row.
+    if abstained:
+        print("   %d field(s) ABSTAINED -- no oracle vote by recorded decision"
+              % abstained)
+        print("   (oracle-rules.json), NOT agreement. The subject answered; the")
+        print("   row is simply not a contract. Re-read the rationales above.")
     if not disputed and not failed and not nodata:
         print("   no disputes, no mismatches.")
     return 0

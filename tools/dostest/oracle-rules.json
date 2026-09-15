@@ -607,7 +607,7 @@
    "msdos622"
   ],
   "recorded": "2026-09-15",
-  "why": "The driver VERSION is a property of which MOUSE.COM happens to be on the reference disk (6.24 here), not of the INT 33h contract. We report 8.00 deliberately: it is a real Microsoft driver version and a higher one, so a program's `version >= N` gate opens rather than closing. Every FUNCTION either version defines is compared on its own row, which is the part that can actually be wrong. \u26a0 The risk of claiming 8.00 is a guest that then uses a call 8.0 added and we lack -- 26h is the obvious one and we implement it, but this row is the reminder to check the next one."
+  "why": "The driver VERSION is a property of which MOUSE.COM happens to be on the reference disk (6.24 here), not of the INT 33h contract. We report 8.00 deliberately: it is a real Microsoft driver version and a higher one, so a program's `version >= N` gate opens rather than closing. Every FUNCTION either version defines is compared on its own row, which is the part that can actually be wrong. ⚠ The risk of claiming 8.00 is a guest that then uses a call 8.0 added and we lack -- 26h is the obvious one and we implement it, but this row is the reminder to check the next one."
  },
  {
   "probe": "mouse",
@@ -657,7 +657,7 @@
    "msdos622"
   ],
   "recorded": "2026-09-15",
-  "why": "0040:0065 is the CRT mode-select register value a VGA BIOS stores after a mode set (0x29 for mode 3 on genuine IBM hardware). QEMU runs SeaVGABIOS, a REIMPLEMENTATION, and it simply does not write this byte -- it reads 0000 there for every mode, which is an observation about SeaVGABIOS and not about a VGA. Our 0x29 is very likely the more faithful answer, but 'very likely' is not measured: this row is BLOCKED ON PCem with a genuine ROM, and is listed as such in docs/PARITY.md. \u26a0 Do not 'fix' it to match QEMU."
+  "why": "0040:0065 is the CRT mode-select register value a VGA BIOS stores after a mode set (0x29 for mode 3 on genuine IBM hardware). QEMU runs SeaVGABIOS, a REIMPLEMENTATION, and it simply does not write this byte -- it reads 0000 there for every mode, which is an observation about SeaVGABIOS and not about a VGA. Our 0x29 is very likely the more faithful answer, but 'very likely' is not measured: this row is BLOCKED ON PCem with a genuine ROM, and is listed as such in docs/PARITY.md. ⚠ Do not 'fix' it to match QEMU."
  },
  {
   "probe": "bios",
@@ -667,6 +667,126 @@
    "msdos622"
   ],
   "recorded": "2026-09-15",
-  "why": "The equipment word DESCRIBES THE MACHINE, so two different machines are entitled to two different answers: the oracle's QEMU box reports one serial port (0x4227), ours reports two (0x4423) because two are actually fitted. What matters is not that the numbers match but that ours is SELF-CONSISTENT -- bios_equipment_word() derives the serial count from vdd_comm_fitted(), i.e. from the VDD that really claimed the ports, precisely so the word and the port base table cannot drift apart. That drift is what cost COMM.DRV a whole session (a comment claimed 'one serial' while bits 9-11 said zero). \u26a0 If the fitted port count ever changes, this row changes with it and that is correct; what would be a DEFECT is this row staying still while the COMM VDD changes."
+  "why": "The equipment word DESCRIBES THE MACHINE, so two different machines are entitled to two different answers: the oracle's QEMU box reports one serial port (0x4227), ours reports two (0x4423) because two are actually fitted. What matters is not that the numbers match but that ours is SELF-CONSISTENT -- bios_equipment_word() derives the serial count from vdd_comm_fitted(), i.e. from the VDD that really claimed the ports, precisely so the word and the port base table cannot drift apart. That drift is what cost COMM.DRV a whole session (a comment claimed 'one serial' while bits 9-11 said zero). ⚠ If the fitted port count ever changes, this row changes with it and that is correct; what would be a DEFECT is this row staying still while the COMM VDD changes."
+ },
+ {
+  "probe": "curdir",
+  "case": "int21.19.curdrive",
+  "field": "AX",
+  "abstain": [
+   "msdos622"
+  ],
+  "recorded": "2026-09-15",
+  "why": "The probe is launched from a DIFFERENT DIRECTORY on each machine -- the oracle boots to A:\\ and the rig runs it from deep inside the share (C:\\DOCUME~1\\ALLUSE~1\\...). So this row compares two environments, not two implementations, and it can never agree. AH=19h reports the drive the program was started on: A: (0) on the oracle, C: (2) on the rig. Not a contract. What IS a contract -- that 3Bh never moves the current drive -- is measured by p_drv.asm."
+ },
+ {
+  "probe": "curdir",
+  "case": "curdir.before.dl0",
+  "field": "BUF",
+  "abstain": [
+   "msdos622"
+  ],
+  "recorded": "2026-09-15",
+  "why": "The probe is launched from a DIFFERENT DIRECTORY on each machine -- the oracle boots to A:\\ and the rig runs it from deep inside the share (C:\\DOCUME~1\\ALLUSE~1\\...). So this row compares two environments, not two implementations, and it can never agree. AH=47h returns the absolute path of the current directory, so the oracle says \"ZZCD\" (it chdir'd there from the root) and we say \"DOCUME~1\\ALLUSE~1\\...\" -- both correct for where they were started, and ours is properly 8.3-shortened. ⚠ THE REAL CONTRACT THIS PROBE EXISTS FOR (GH #134) IS STILL CHECKED AND STILL HOLDS: all four buffers are IDENTICAL on each host, i.e. an EXEC does not clobber the current directory and DL=0 agrees with an explicit drive. Abstaining the cross-host comparison does not abstain that."
+ },
+ {
+  "probe": "curdir",
+  "case": "curdir.before.explicit",
+  "field": "BUF",
+  "abstain": [
+   "msdos622"
+  ],
+  "recorded": "2026-09-15",
+  "why": "The probe is launched from a DIFFERENT DIRECTORY on each machine -- the oracle boots to A:\\ and the rig runs it from deep inside the share (C:\\DOCUME~1\\ALLUSE~1\\...). So this row compares two environments, not two implementations, and it can never agree. AH=47h returns the absolute path of the current directory, so the oracle says \"ZZCD\" (it chdir'd there from the root) and we say \"DOCUME~1\\ALLUSE~1\\...\" -- both correct for where they were started, and ours is properly 8.3-shortened. ⚠ THE REAL CONTRACT THIS PROBE EXISTS FOR (GH #134) IS STILL CHECKED AND STILL HOLDS: all four buffers are IDENTICAL on each host, i.e. an EXEC does not clobber the current directory and DL=0 agrees with an explicit drive. Abstaining the cross-host comparison does not abstain that."
+ },
+ {
+  "probe": "curdir",
+  "case": "curdir.after.dl0",
+  "field": "BUF",
+  "abstain": [
+   "msdos622"
+  ],
+  "recorded": "2026-09-15",
+  "why": "The probe is launched from a DIFFERENT DIRECTORY on each machine -- the oracle boots to A:\\ and the rig runs it from deep inside the share (C:\\DOCUME~1\\ALLUSE~1\\...). So this row compares two environments, not two implementations, and it can never agree. AH=47h returns the absolute path of the current directory, so the oracle says \"ZZCD\" (it chdir'd there from the root) and we say \"DOCUME~1\\ALLUSE~1\\...\" -- both correct for where they were started, and ours is properly 8.3-shortened. ⚠ THE REAL CONTRACT THIS PROBE EXISTS FOR (GH #134) IS STILL CHECKED AND STILL HOLDS: all four buffers are IDENTICAL on each host, i.e. an EXEC does not clobber the current directory and DL=0 agrees with an explicit drive. Abstaining the cross-host comparison does not abstain that."
+ },
+ {
+  "probe": "curdir",
+  "case": "curdir.after.explicit",
+  "field": "BUF",
+  "abstain": [
+   "msdos622"
+  ],
+  "recorded": "2026-09-15",
+  "why": "The probe is launched from a DIFFERENT DIRECTORY on each machine -- the oracle boots to A:\\ and the rig runs it from deep inside the share (C:\\DOCUME~1\\ALLUSE~1\\...). So this row compares two environments, not two implementations, and it can never agree. AH=47h returns the absolute path of the current directory, so the oracle says \"ZZCD\" (it chdir'd there from the root) and we say \"DOCUME~1\\ALLUSE~1\\...\" -- both correct for where they were started, and ours is properly 8.3-shortened. ⚠ THE REAL CONTRACT THIS PROBE EXISTS FOR (GH #134) IS STILL CHECKED AND STILL HOLDS: all four buffers are IDENTICAL on each host, i.e. an EXEC does not clobber the current directory and DL=0 agrees with an explicit drive. Abstaining the cross-host comparison does not abstain that."
+ },
+ {
+  "probe": "psp",
+  "case": "psp.02.memtop",
+  "field": "AX",
+  "abstain": [
+   "msdos622"
+  ],
+  "recorded": "2026-09-15",
+  "why": "PSP+02h is the segment just past the program's memory, i.e. how much conventional memory this particular machine has left after its own resident footprint -- 9FC0 on the bare oracle, 9F30 here. A machine fact, not a DOS contract. The contract that the MCB chain ENDS at that same segment is checked by p_mcb (mcb.chain.ends.at) and agrees."
+ },
+ {
+  "probe": "psp",
+  "case": "psp.int24.live",
+  "field": "AX",
+  "abstain": [
+   "msdos622"
+  ],
+  "recorded": "2026-09-15",
+  "why": "The SEGMENT of the live INT 24h handler. The probe's own comment says the question is whether it \"points at something\" rather than where -- a handler necessarily lives at a different address on each host. ⚠ The probe emits the raw vector, which cannot express that intent as a cross-host diff; to make it a contract it should emit a derived boolean (non-zero, and not pointing into the IVT)."
+ },
+ {
+  "probe": "psp",
+  "case": "psp.int24.live",
+  "field": "BX",
+  "abstain": [
+   "msdos622"
+  ],
+  "recorded": "2026-09-15",
+  "why": "The OFFSET half of the same vector; see psp.int24.live/AX."
+ },
+ {
+  "probe": "mcb",
+  "case": "mcb.head",
+  "field": "AX",
+  "abstain": [
+   "msdos622"
+  ],
+  "recorded": "2026-09-15",
+  "why": "The segment of the first MCB -- where this machine's DOS happens to have placed its arena. Layout, not contract. The structural checks around it DO agree: the block carries the 'M' signature (0x4D) and the chain terminates at 9FC0 on both."
+ },
+ {
+  "probe": "mcb",
+  "case": "mcb.block",
+  "field": "BX",
+  "abstain": [
+   "msdos622"
+  ],
+  "recorded": "2026-09-15",
+  "why": "the owner PSP of the first MCB, which is a function of what this machine loaded before the probe. Layout, not contract -- see mcb.head. mcb.block/AX (the 'M' signature) is NOT abstained and agrees."
+ },
+ {
+  "probe": "mcb",
+  "case": "mcb.block",
+  "field": "CX",
+  "abstain": [
+   "msdos622"
+  ],
+  "recorded": "2026-09-15",
+  "why": "the block size in paragraphs of the first MCB, which is a function of what this machine loaded before the probe. Layout, not contract -- see mcb.head. mcb.block/AX (the 'M' signature) is NOT abstained and agrees."
+ },
+ {
+  "probe": "mcb",
+  "case": "mcb.block",
+  "field": "DX",
+  "abstain": [
+   "msdos622"
+  ],
+  "recorded": "2026-09-15",
+  "why": "the next block's segment of the first MCB, which is a function of what this machine loaded before the probe. Layout, not contract -- see mcb.head. mcb.block/AX (the 'M' signature) is NOT abstained and agrees."
  }
 ]

@@ -359,6 +359,81 @@ trace line settled what two rounds of reasoning had not.
 
 ---
 
+# File / directory / PSP / memory (`p_file`, `p_curdir`, `p_psp`, `p_mcb`, `p_alloc`, `p_err`)
+
+Session 72 (evening). **The first harvest of the probes that were already written.**
+36 probes exist in `tools/dostest/`; before this, 8 had ever been diffed. This is the
+first of the remaining 28.
+
+| probe | rows | result |
+|---|---|---|
+| `p_file` | 24 | all AGREE |
+| `p_alloc` | 8 | all AGREE |
+| `p_err` | 20 | **2 real gaps, closed** (see below) |
+| `p_curdir` | 14 | AGREE + 5 abstained (not contracts) |
+| `p_psp` | 8 | AGREE + 3 abstained |
+| `p_mcb` | 7 | AGREE + 4 abstained |
+
+### ★ The gaps this found and closed (`b580c4d`)
+
+**`AH=3Dh` answered "file not found" (2) for every possible failure.** The handler
+read `f == INVALID_HANDLE_VALUE` and stopped asking why.
+
+| case | oracle | ours (before) |
+|---|---|---|
+| `err.after.3D.readonly` — read-only file opened for WRITE | `AX=0005` access denied | `AX=0002` |
+| `err.after.3D.baddrive` — open on unclaimed `Y:` | `AX=0003` path not found | `AX=0002` |
+
+Not cosmetic: a program told "not found" about a file that is plainly there goes
+looking for it instead of reporting the real problem. ⚠ The comment directly above
+that line **already blamed this exact collapse for the GDI.EXE wall** — the sharing
+half was fixed in s37 and the mapping half was left sitting there. `AH=6Ch` had the
+same line and the same bug.
+
+Fixed by `dos_err_from_win32()` in `dos_err.h`, in the 59h table's own style: **both
+sides of every row measured** — the DOS side is the oracle `CASE=` line, the Win32
+side is the handler's new `win32=0x..` log (`2 -> 2`, `5 -> 5`, `3 -> 3`). Unmapped
+codes log `UNMAPPED` and keep the old 2 rather than inventing an answer. `BX=0303`
+(the access-denied class) then follows for free — 59h was always right about code 5,
+nothing had ever handed it one. Pinned off-VM by `err_test.c` (36 checks), including
+that the three causes stay **distinct**.
+
+⚠ **There is deliberately no `ERROR_INVALID_DRIVE`(15) row.** The obvious guess is
+that `Y:\...` arrives as 15; measured, it arrives as **3**. A 15 row would be an
+unexercised invention dressed as evidence.
+
+### Rows that are NOT contracts, and why (abstentions in `oracle-rules.json`)
+
+The oracle boots to `A:\` and the rig runs probes from deep inside the share, so a
+family of rows compares two *environments*:
+
+* `int21.19.curdrive` — the drive the program started on (A: vs C:).
+* `curdir.*` (4 rows) — `AH=47h`'s absolute path: `"ZZCD"` vs
+  `"DOCUME~1\ALLUSE~1\..."`. Both correct for where they were started, and **ours is
+  properly 8.3-shortened**. ★ The contract this probe exists for (GH #134) is
+  untouched and still holds: **all four buffers are identical on each host**, i.e. an
+  EXEC does not clobber the current directory.
+* `psp.02.memtop`, `psp.int24.live` — how much memory this machine has left, and
+  where its INT 24h handler happens to live.
+* `mcb.head`, `mcb.block` BX/CX/DX — arena layout. The *structural* checks are not
+  abstained and agree: the `'M'` signature (`0x4D`) and the chain ending at `9FC0`.
+
+⛔ **THE HARNESS WAS MISREPORTING THESE.** A deliberately abstained row came out as
+`NO-DATA`, whose summary reads *"missing evidence ... check for a truncated log"* —
+accusing the harness of being broken when the subject had answered perfectly well and
+the oracle had simply been told not to vote. `dosdiff.py` now separates **ABSTAINED**
+(a recorded decision) from **NO-DATA** (missing evidence), and prints the abstention
+count rather than letting it vanish into "no mismatches".
+
+### ⚠ What these probes do NOT cover, despite appearances
+
+`p_file`'s own header claims `46h, 5Ch, 67h, 6Ch`; none of them are emitted. Several
+rows compare only `CF`, so "it returned success" is checked while the returned
+*value* is not — `int21.5700.getdate` and `int21.34.indos` are both this shape. An
+all-AGREE probe is not the same as a verified surface.
+
+---
+
 # Next, in order
 
 1. **The DPMI/protected-mode IRQ0 arm**, which still auto-EOIs and which `p_pic.asm`
