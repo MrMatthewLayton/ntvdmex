@@ -14082,6 +14082,7 @@ static void dpmi_patch_code_region(DWORD base, DWORD limit, int d32)
          our own handler segment prologue: definitionally data, never executed as the
          client's code. Start the scan above it. */
     end = base + limit;                              /* limit is the LAST valid byte */
+    DWORD ptr_lo = base, ptr_hi = end;               /* a near-pointer table INTO this region is DATA -- see the loop */
     if (base < 0x600) base = 0x600;                  /* ...but the region END is unchanged */
     /* No upper bound any more: the regions that matter live in EXTENDED memory, which is
        where a working extender puts its modules. The size cap is a sanity bound rather
@@ -14188,6 +14189,46 @@ static void dpmi_patch_code_region(DWORD base, DWORD limit, int d32)
                   if (mem[i] == 0xCD) {
                       DWORD lin = a + i;
                       if (pmap_get(lin)) continue;   /* already patched (aliased region) */
+                      /* ── ★★★★★ A JUMP/CALL TABLE IS DATA, EVEN INSIDE A CODE OBJECT.
+                           (session 72) The FOURTH instance of the patcher rewriting a
+                           non-code byte pair -- the ZAR call displacement, the
+                           R_InitTextureMapping `jle` displacement and the FP range are the
+                           other three, all above/below -- and the first found by a debugger
+                           reading the dead guest's OWN CORE (bm\vdmwatch.exe).
+                         Doom's platform-type dispatch is a table of near pointers at
+                           obj1+0x2cc6c. Three of its entries point into obj1+0x2cdXX, whose
+                           little-endian bytes are `XX cd 16 04`, so the middle pair reads as
+                           `CD 16` = INT 16h -- a serviced vector -- and x86_int_site_is_real()
+                           passes, because a table of code pointers decodes into plausible
+                           instruction streams. The table is written by the guest AFTER the
+                           first scan, so the SECOND scan (DOS/4GW re-declares its code selector
+                           on every file load, which re-runs this patcher over the same range)
+                           is the one that corrupts it: `0x0416cdfa` -> `0x04c4c4fa`. Killing
+                           that platform type later makes the guest `jmp` through the mangled
+                           entry into unmapped memory -- the ACCESS_VIOLATION at 0x04c4c4fa that
+                           XP would not reflect and that tore the VDM down with no VEH, no
+                           watchdog line and nothing after the log's last byte, for six sessions.
+                         ⇒ An aligned dword that points back INTO this very code region is a
+                           pointer, not two instructions. All five of Doom's table entries point
+                           here; skip any candidate that lands inside one. Safe like every arm
+                           below: a real INT so aligned is still serviced out of the #GP. The
+                           read is 4-aligned (VirtualQuery bases are page-aligned), so it cannot
+                           itself fault the scanner. */
+                      { DWORD doff = (lin & ~3u) - a;
+                        if (doff + 4 <= (rend - a)) {
+                            DWORD w = *(const volatile DWORD *)(const volatile void *)(mem + doff);
+                            if (w >= ptr_lo && w < ptr_hi) {
+                                if (rej++ < 16) {
+                                    char tb[192], *tq = tb;
+                                    tq = zput(tq, "DPMI: NOT patching 0x"); tq = zhex(tq, lin);
+                                    tq = zput(tq, " vec=0x"); tq = zhexb(tq, mem[i+1]);
+                                    tq = zput(tq, " -- inside aligned pointer 0x"); tq = zhex(tq, w);
+                                    tq = zput(tq, " into this code region: a jump-table entry, DATA\r\n");
+                                    log_append(LOG_PATH, tb, tq); serial_out(tb, tq);
+                                }
+                                continue;
+                            }
+                        } }
                       /* ── ★★★★★ INT 34h..3Fh IS NOT AN INTERRUPT RANGE, IT IS
                            FLOATING-POINT CODE. DO NOT TOUCH IT. (session 55) ──────
                          The note above says patching any vector is safe because
