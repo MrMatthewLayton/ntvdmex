@@ -296,8 +296,31 @@ and matches the 6.22 oracle row for row (session 53)** — but `MEM /C` still re
    **The cutover, in the order that keeps the box alive:** (1) `restore.bat` via controld
    → IFEO = `bin\ntvdmhost.exe` **before** anything moved out of `bm\`; (2) `exec` the new
    `runwatch.bat` → new Startup entry + new controld; (3) `reboot` → only the new watcher
-   comes back; (4) delete `bm\`. **`bm\` was still on the share at the reboot** — see the
-   close block for whether step 4 happened.
+   comes back; (4) delete `bm\`. ⚠ **The queued `reboot` was consumed and never fired**
+   (both watchers kept beating; `rigshot list` showed both windows) — the old watcher was
+   killed by its exact window title through controld instead, `bm\` then deleted cleanly,
+   so the box has NOT been rebooted on the new layout yet. The new `runwatch.bat` did
+   install its Startup entry; the first reboot will tell.
+
+   **Verified on the rig, in this order:** `setup` → IFEO = `"…\bin\ntvdmhost.exe"` and
+   the layout listing · **selftest 8/8 through `bin\ntvdmhost.exe`** (`STAGE0: root` =
+   the share, program under `debug\tests\selftest\`, log in `debug\out\`) · the new
+   package **`dist/ntvdmex-20260916-970f9f1.zip`** by `pkgtest.bat` from a fresh folder:
+   `/status` (saw the rig's key as another program's) → `/install` → **8/8 through the
+   package's own `bin\`** → `/uninstall` restored the rig's key · **Skyroads headless from
+   `demo\msdos\`: `n8=0x65 max_ms=0x14`** (baseline `≈0x6c/0x15`), guards intact.
+   `dist\` on the share now holds ONLY that zip (the two unpacked test folders and the
+   `bm\`-layout `9ad5eff` zip are gone). `debug\out\` was 53 files incl. two vdmwatch
+   cores (12 MB) and an 86 MB `result_Wolfy.log` — left as-is, they are the user's call.
+
+   ▶ **The by-hand pass owed from s72 is still owed, now for FIVE changes** (SFT, HMA,
+   `AH=3Dh`, guard logging, **the `bin\`/`debug\out\` paths**). Same three asks: Doom E1M1
+   kill, QBasic Open → run, one memory-tight guest. Roll back by copying
+   `debug\prev\ntvdmhost_prev.exe` (`a5cd764b`) over `bin\ntvdmhost.exe` — and note a
+   rolled-back host would write to `out\` again and expect `bm\`; **`a5cd764b` cannot run
+   from `bin\`** (it derives its root from a folder named `bm`). A rollback therefore
+   means `mkdir bm`, put it there, `reg add` IFEO to `bm\`. That asymmetry is the price of
+   the rename; `bmstage.sh --host` handles the forward direction only.
 
    ## ★★★★★ SESSION 72 (2026-09-15, afternoon) — **THE BY-HAND PASS: THE PACKAGE WORKS ON A FRESH FOLDER, AND DOOM'S E1M1 CRASH IS NOW REPRODUCIBLE WITH THREE SUSPECTS DEAD.**
 
