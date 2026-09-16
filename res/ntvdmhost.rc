@@ -154,9 +154,10 @@ BEGIN
     CONTROL         "&Pace the PIT from a dedicated thread (keeps timer ticks even)",
                     IDC_S_PITPACE, "Button", BS_AUTOCHECKBOX | WS_TABSTOP | WS_GROUP,
                     14, 40, 266, 10
-    LTEXT           "&UI tick:", -1, 14, 58, 28, 8
-    EDITTEXT        IDC_S_UITICK, 44, 56, 30, 13, ES_AUTOHSCROLL | ES_NUMBER | WS_TABSTOP
-    LTEXT           "milliseconds  (the floor on the present/UI loop)", -1, 78, 58, 200, 8
+    LTEXT           "&Screen update:", -1, 14, 58, 50, 8
+    COMBOBOX        IDC_S_UITICK, 66, 56, 150, 90,
+                    CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+    LTEXT           "(Auto = when the program finishes a frame)", -1, 14, 72, 266, 8
 END
 
 /* ── PAGE: DISPLAY ──────────────────────────────────────────────────────────────
@@ -185,8 +186,8 @@ BEGIN
                     CBS_DROPDOWNLIST | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP
     CONTROL         "&Aspect ratio correction", IDC_S_ASPECT, "Button",
                     BS_AUTOCHECKBOX | WS_TABSTOP, 14, 104, 120, 10
-    CONTROL         "&VSync", IDC_S_VSYNC, "Button",
-                    BS_AUTOCHECKBOX | WS_TABSTOP, 150, 104, 60, 10
+    CONTROL         "Wait for monitor &VSync (can drop frames)", IDC_S_VSYNC, "Button",
+                    BS_AUTOCHECKBOX | WS_TABSTOP, 140, 104, 140, 10
     CONTROL         "&Blink the text-mode cursor, as a real CRTC does",
                     IDC_S_BLINKCURSOR, "Button", BS_AUTOCHECKBOX | WS_TABSTOP,
                     14, 122, 250, 10

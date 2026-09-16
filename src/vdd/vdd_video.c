@@ -1319,8 +1319,19 @@ int vdd_video_planar_active(const video_state *st) { return st->mkind == VID_KIN
    of the active period: late enough that a guest released by the PREVIOUS retrace
    has finished its drawing, early enough to be a distinct instant every frame. */
 #define VID_PRESENT_WINDOW_PM 120
+/* A poll this long after the previous one means the guest went away to draw. Its own
+   draw is 1-4 ms (BOUNCEBX 2.4); a poll loop iterates in well under 50 us. */
+#define VID_PRESENT_GAP_US    400
 static int vga_vtiming(const video_state *st, uint32_t *total, uint32_t *active,
                        uint32_t *blank_start);
+/* The mode's frame period in microseconds -- the same 60/70 Hz choice the retrace
+   model makes -- for the host's Auto fallback floor. 1/60 s when there is no clock. */
+uint32_t vdd_video_frame_us(const video_state *st)
+{
+    uint32_t t, a, b; int tall = (st->gh > VID_VACTIVE_LO);
+    if (vga_vtiming(st, &t, &a, &b)) tall = (t >= 500u);
+    return 1000000u / (uint32_t)(tall ? VID_VBL_HZ_HI : VID_VBL_HZ_LO);
+}
 int vdd_video_present_ready(video_state *st)
 {
     uint32_t frame_us, pm, t, a, b;
@@ -1875,11 +1886,12 @@ static void status_in(void *self, uint16_t port, uint8_t w, uint32_t *v)
         *v = st->retrace;
         return;
     }
-    vtotal = (int)u_vtotal; vactive = (int)u_vblank; (void)u_vdisp; (void)frame_no;
+    vtotal = (int)u_vtotal; vactive = (int)u_vblank; (void)u_vdisp;
     /* Bracket the polling in the model's own microseconds -- see the header. */
     if (!st->t3da_first) st->t3da_first = now;
     if (st->t3da_last) {
         uint64_t d = now - st->t3da_last;
+        st->present_gap_us = (d > 0xFFFFFFFFull) ? 0xFFFFFFFFu : (uint32_t)d;
         if (!d) st->dt3da_zero++;
         else {
             unsigned b = 0;
@@ -1964,6 +1976,33 @@ static void status_in(void *self, uint16_t port, uint8_t w, uint32_t *v)
     st->p3da_reads++;
     if (in_vbl && !st->vbl_prev) st->vbl_edges++;
     st->vbl_prev = (uint8_t)in_vbl;
+    /* ── RAISE THE PRESENT FROM THE GUEST'S FRAME (see present_hook in the header).
+         Same window as vdd_video_present_ready -- the last VID_PRESENT_WINDOW_PM of
+         the frame before blanking, when a retrace-paced guest has finished drawing
+         and is parked here polling -- expressed in lines so no second clock read is
+         paid on a path that runs millions of times a second. A poller that skips
+         the window (one read per frame, at the edge) gets the edge instead: the
+         frame it drew is complete by then too. Once per frame_no either way. */
+    if (st->present_hook && st->present_frame != frame_no) {
+        uint32_t win_lines = (uint32_t)vtotal * VID_PRESENT_WINDOW_PM / 1000u;
+        /* ► THE FIRST POLL AFTER A GAP IS THE BEST MOMENT OF ALL. A retrace-paced
+             guest leaves this port to DRAW and comes back to wait: the first read
+             after it was away (>= VID_PRESENT_GAP_US) means the frame is complete
+             and the guest is parked -- with most of the frame still ahead for the
+             render, which blocks its polls while it runs. Firing in the window
+             instead (first cut) put that render right before the retrace the guest
+             was waiting for, and it missed one frame in twenty (BOUNCEBX 1798 ->
+             1697 edges, dtmax 2.4 -> 13.5 ms). The window and the edge remain for
+             a guest that never leaves the port. */
+        int gap = st->present_gap_us >= VID_PRESENT_GAP_US;
+        if (gap || in_vbl || (line + win_lines >= (uint32_t)vactive)) {
+            st->present_frame = frame_no;
+            st->present_hook_fires++;
+            if (gap) st->present_hook_gap++;
+            st->present_hook(st->present_ctx);
+        }
+    }
+    st->present_gap_us = 0;
 }
 
 /* Copy both character generators into guest-visible memory so the pointer handed out by

@@ -396,6 +396,40 @@ and matches the 6.22 oracle row for row (session 53)** — but `MEM /C` still re
    Rig host **`28ec97b2`**; offvm 1361/0; selftest 8/8; Skyroads `n8=0x63 max_ms=0x14`.
    Package NOT yet rebuilt with this — do that before the by-hand pass.
 
+   ### ★★★★ s73, AFTERNOON: **THE SCREEN UPDATE IS RAISED BY THE GUEST'S FRAME ("Auto") — BOUNCEBX MEASURED 1:1, WHERE IT WAS CHOPPY.**
+
+   User: *"BOUNCEBX in stock NTVDM is virtually butter smooth. On NTVDMEX it's choppy. Why?"*
+   Measured (30 s headless, mode 12h): the guest drew **1798 frames at 59.9 Hz** and the
+   host presented **~1200 of them** — the present was a 15 ms `WM_TIMER` sampling a ~2 ms
+   phase window, so it missed a third of the frames at an irregular cadence. Stock has
+   ONE clock for the retrace and the repaint; we had two, beating.
+
+   **Now:** `video_state.present_hook` fires from the guest's own `0x3DA` poll, once per
+   frame — on the **first poll after a gap ≥ 400 µs** (the guest went away to draw and
+   is back to wait: frame complete, 14 ms to spare), else in the old window, else at the
+   edge — and `WM_APP_PRESENT` runs the frame body at once. The timer is a fallback only
+   (Auto floor = 90% of the mode's frame period; presents only if the hook has been quiet
+   two frames). Settings › Timing: **Screen update = Auto (recommended) / 5 / 10 / 15 /
+   20 ms** (combo, index-valued, registry `UiTickMode`; `cfg\uitick.txt` 0 = Auto).
+
+   Three things the numbers caught on the way, each a session-saver:
+   * **Firing in the window (2 ms before retrace) lost one frame in twenty** — the render
+     under the lock blocked the guest's polls across the retrace it was waiting for
+     (edges 1798 → 1697, dtmax 2.4 → 13.5 ms). Hence the gap trigger.
+   * **`WaitForVerticalBlank` is a BUSY LOOP on XP** and, at 60 presents/s, stole a whole
+     core from the guest. Replaced by sleep-to-just-before-the-blank + a bounded look.
+     ⚠ "Sleep(1) and look again" sailed past the 1.4 ms blank half the time (1002 presents
+     for 1788 frames).
+   * Even the polite wait delays the NEXT frame's render to a random phase (−3%). So
+     **"Wait for monitor VSync" now defaults OFF** (stock does not vsync its blit either)
+     and is labelled "can drop frames". Result: `presents{hook=1800 timer=~20}` for 1801
+     fires, guest 59.0–59.4 Hz, dtmax 3.1 ms.
+
+   **Skyroads guard:** `pacer_prio=0 joy_thread=0 pit_split=1`; IRQ0 **1 anomalous gap
+   in 5398 ticks (was 76 this morning)**; V86 stretches now `n8=0 max_ms=6` vs the
+   `≈0x6c/0x15` baseline — evenly interrupted rather than in long runs. Feel is the
+   user's call. Rig host **`e1a56ef1`**. offvm 1361/0.
+
    ▶ **The by-hand pass owed from s72 is still owed, now for FIVE changes** (SFT, HMA,
    `AH=3Dh`, guard logging, **the `bin\`/`debug\out\` paths**). Same three asks: Doom E1M1
    kill, QBasic Open → run, one memory-tight guest. Roll back by copying

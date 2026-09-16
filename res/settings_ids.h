@@ -42,7 +42,7 @@
      "Processor" -- they tune how the host paces the emulated timer and its own
      render loop, which is diagnostic. Most people never touch them. */
 #define IDC_S_PITPACE         232   /* checkbox: pace the PIT from a 1 kHz thread     */
-#define IDC_S_UITICK          233   /* edit:     UI/present tick floor, milliseconds  */
+#define IDC_S_UITICK          233   /* combo:    screen update: Auto / 5 / 10 / 15 / 20 ms */
 
 /* ── Processor ──────────────────────────────────────────────────────────────────
      ⚠ THE OLD CPU PAGE WAS MOSTLY FICTION (session 60). CpuType, Core and Cycles

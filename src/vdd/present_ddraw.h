@@ -43,6 +43,7 @@ typedef struct present_ddraw {
          default to what this host did before they existed, so a machine with no
          stored settings behaves exactly as it always has. */
     int   vsync;        /* 1 = time the blit near vblank (the historical default)*/
+    int   mon_h, mon_hz;/* monitor lines + refresh, read once by wait_vblank (0 = not yet, -1 = unknown) */
     int   filter;       /* 0 = nearest, 1 = bilinear (GDI HALFTONE)             */
     int   aspect;       /* 1 = letterbox to 4:3 rather than fill the client     */
     int   scaler;       /* PRESENT_SCALER_* (present_scale.h)                   */

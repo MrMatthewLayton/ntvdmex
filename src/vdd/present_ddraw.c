@@ -17,10 +17,45 @@ typedef HRESULT (WINAPI *PFN_DDCREATEEX)(GUID *, LPVOID *, REFIID, IUnknown *);
 #define DD   ((LPDIRECTDRAW7)pd->dd)
 #define SURF(p) ((LPDIRECTDRAWSURFACE7)(p))
 
-/* time a blit near the monitor's vertical blank (reduces tearing). */
+/* time a blit near the monitor's vertical blank (reduces tearing).
+   ⚠ NOT WaitForVerticalBlank. On XP that call is a BUSY LOOP on the scanline register,
+   and once presents were raised by the guest's frame (s73 Auto) it ran ~60 times a
+   second for up to a frame each -- a whole core, on a two-core box, and the guest's
+   own thread lost it: BOUNCEBX polls stalled 13.5 ms (dtmax was 2.4) and it dropped
+   one frame in twenty.
+   ► And not "Sleep(1) and look again" either: the blank is ~1.4 ms wide at 60 Hz and a
+     1 ms sleep sailed past it half the time, then waited a WHOLE extra frame -- 1002
+     presents for 1788 guest frames. So compute where the beam is, SLEEP to just short
+     of the blank, and spin only the last millisecond. The monitor's line count and
+     refresh are read once (GetDisplayMode / GetMonitorFrequency) and fall back to
+     60 Hz if the driver will not say. Bounded: at most ~2 frames however it goes. */
 static void wait_vblank(present_ddraw *pd)
 {
-    if (pd->vsync && pd->dd) IDirectDraw7_WaitForVerticalBlank(DD, DDWAITVB_BLOCKBEGIN, NULL);
+    DWORD sl = 0, height, hz, per_us, k;
+    HRESULT hr;
+    if (!pd->vsync || !pd->dd) return;
+    if (!pd->mon_h) {
+        DDSURFACEDESC2 d; ZeroMemory(&d, sizeof d); d.dwSize = sizeof d;
+        pd->mon_h = (SUCCEEDED(IDirectDraw7_GetDisplayMode(DD, &d)) && d.dwHeight) ? (int)d.dwHeight : 0;
+        pd->mon_hz = (SUCCEEDED(IDirectDraw7_GetMonitorFrequency(DD, &hz)) && hz >= 40 && hz <= 240) ? (int)hz : 60;
+        if (!pd->mon_h) pd->mon_h = -1;               /* asked once; unknown: spin-free fallback below */
+    }
+    height = pd->mon_h > 0 ? (DWORD)pd->mon_h : 0;
+    per_us = 1000000u / (DWORD)(pd->mon_hz ? pd->mon_hz : 60);
+    hr = IDirectDraw7_GetScanLine(DD, &sl);
+    if (hr == DDERR_VERTICALBLANKINPROGRESS) return;      /* already in the blank: go   */
+    if (hr != DD_OK) return;                              /* cannot tell: do not wait   */
+    if (height && sl < height) {
+        /* lines to go, as time; the blank starts at `height` (the CRTC counts on
+           through it), so sleep for all of it but the last ~1.2 ms */
+        DWORD us = (DWORD)((uint64_t)(height - sl) * per_us / (height * 21u / 20u));
+        if (us > 1200) Sleep((us - 1200) / 1000);
+    }
+    for (k = 0; k < 3000; ++k) {                          /* the last stretch: ~1-2 ms */
+        hr = IDirectDraw7_GetScanLine(DD, &sl);
+        if (hr != DD_OK) return;                          /* VERTICALBLANKINPROGRESS = go */
+        if (height && sl < 4) return;                     /* wrapped: just after the blank */
+    }
 }
 
 /* ── THE SCALE2X TARGET, AS ONE STATIC BUFFER. ───────────────────────────────────

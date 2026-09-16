@@ -776,11 +776,20 @@ static DWORD    g_lk_owner, g_lk_depth;
 static LONGLONG g_lk_since;
 static int      g_lk_site, g_lk_hold_site, g_lk_wait_site;
 static uint32_t g_lk_hold_us, g_lk_wait_us, g_ui_gap_us;
-/* Floor on how often the WM_TIMER body may do its frame work, in ms. 15 restores the
-   ~64 Hz this has always actually run at under XP's default granularity; 0 = unbounded
-   (the behaviour timeBeginPeriod(1) exposed). Knob: uitick.txt. See WM_TIMER. */
-static int      g_ui_tick_min_ms = 15;
+/* Floor on how often the WM_TIMER body may do its frame work, in ms. 15 is the ~64 Hz
+   this always actually ran at under XP's default granularity. Knob: uitick.txt.
+   ★ 0 = AUTO (s73, the default): the present is RAISED BY THE GUEST'S FRAME -- the
+     video VDD fires present_hook from the guest's own 0x3DA poll when the beam enters
+     the present window, WM_APP_PRESENT runs the frame body at once, and the timer is
+     only a fallback (floor = 90% of the mode's frame period) for a guest that never
+     looks at the retrace. Two clocks became one; see present_hook in vdd_video.h. */
+#define UITICK_AUTO 0
+static const int UITICK_MS[5] = { UITICK_AUTO, 5, 10, 15, 20 };   /* Settings combo index -> ms */
+static int      g_ui_tick_min_ms = UITICK_AUTO;
 static DWORD    g_ui_tick_skips;
+static DWORD    g_ui_hook_presents, g_ui_timer_presents;  /* who raised each present   */
+static volatile LONG g_ui_present_pending;                /* one WM_APP_PRESENT in flight */
+static int      g_ui_forced;                              /* this body run was raised by the hook */
 
 /* ── MEASURE THE KEYSTROKE ITSELF, BECAUSE FOUR HYPOTHESES HAVE NOW MISSED. ──────────
      Session 26: the user reports Skyroads key lag whenever the pacer runs, and it has
@@ -7615,6 +7624,16 @@ static HMENU build_menu(void)
  *   change is the condition on this flag, which is why it is one flag.
  */
 #define WM_TRAY (WM_APP + 1)
+#define WM_APP_PRESENT (WM_APP + 2)   /* the guest finished a frame: present now (Auto) */
+/* Runs on the GUEST thread inside status_in, under the device lock: post and leave.
+   One in flight at a time so a fast poller cannot flood the queue. */
+static void host_present_hook(void *ctx)
+{
+    (void)ctx;
+    if (g_ui_tick_min_ms != UITICK_AUTO || !g_hwnd) return;
+    if (InterlockedCompareExchange(&g_ui_present_pending, 1, 0) == 0)
+        PostMessageA(g_hwnd, WM_APP_PRESENT, 0, 0);
+}
 #define TRAY_ID 1
 static int  g_wow_launch = 0;                /* `-w`: this VDM hosts Win16        */
 static int  g_tray_on    = 0;                /* the icon is currently installed   */
@@ -8479,7 +8498,7 @@ static void settings_apply(HWND h, const ntvdmex_settings *s, int live)
                                         joystick is configured -- no thread, and no
                                         timing risk, in the default (None) config */
     g_pitpace_on     = (int)(s->v[SET_PITPACE] ? 1 : 0);
-    g_ui_tick_min_ms = (int)s->v[SET_UITICK];
+    g_ui_tick_min_ms = UITICK_MS[s->v[SET_UITICK] < 5 ? s->v[SET_UITICK] : 0];
     g_vid.cursor_blink = (uint8_t)(s->v[SET_BLINKCURSOR] ? 1 : 0);
     g_frameskip      = (int)s->v[SET_FRAMESKIP];
     g_xms_on         = (int)(s->v[SET_XMS] ? 1 : 0);
@@ -9100,6 +9119,10 @@ static void host_release_modifiers(void)
 static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
 {
     switch (msg) {
+    case WM_APP_PRESENT:
+        InterlockedExchange(&g_ui_present_pending, 0);
+        g_ui_forced = 1;                 /* raised by the guest's frame: no floor, no phase gate */
+        /* fall through */
     case WM_TIMER:
         /* Liveness beat for the capture watchdog: proof the UI thread is still pumping
            messages. Taken FIRST, before any of the frame work below, so the beat means
@@ -9124,12 +9147,17 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
            ► So bound the expensive body to the rate it has actually always run at, and
              leave the tick itself fast -- the present is phase-gated and WANTS to sample
              often. uitick.txt sets the floor in ms; 0 restores the unbounded behaviour. */
-        if (g_ui_tick_min_ms) {
-            static LARGE_INTEGER s_body;
+        {   static LARGE_INTEGER s_body;
             LARGE_INTEGER bn;
+            /* Auto: the timer is the FALLBACK for a guest that never polls the retrace,
+               at 90% of the mode's own frame period so it cannot fall to every other
+               tick; a hook-raised run resets the interval so the two never double up. */
+            uint32_t floor_us = g_ui_tick_min_ms != UITICK_AUTO
+                                ? (uint32_t)g_ui_tick_min_ms * 1000u
+                                : vdd_video_frame_us(&g_vid) * 9u / 10u;
             QueryPerformanceCounter(&bn);
-            if (s_body.QuadPart &&
-                qpc_us(bn.QuadPart - s_body.QuadPart) < (uint32_t)g_ui_tick_min_ms * 1000u) {
+            if (!g_ui_forced && s_body.QuadPart &&
+                qpc_us(bn.QuadPart - s_body.QuadPart) < floor_us) {
                 ++g_ui_tick_skips;
                 return 0;
             }
@@ -9350,8 +9378,15 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
         {   static DWORD s_last_present = 0;
             DWORD nowt = GetTickCount();
             int stale = (DWORD)(nowt - s_last_present) >= VID_PRESENT_STALE_MS;
-            if (vdd_video_present_ready(&g_vid) || stale) {
+            /* Auto: the hook owns the cadence; the timer presents only when it has
+               gone quiet (a guest that never polls the retrace), never on top of it --
+               the first cut presented 112 frames twice in 30 s that way. */
+            int timer_ok = g_ui_tick_min_ms == UITICK_AUTO
+                           ? ((DWORD)(nowt - s_last_present) >= 2u * (vdd_video_frame_us(&g_vid) / 1000u))
+                           : (vdd_video_present_ready(&g_vid) || stale);
+            if (g_ui_forced || timer_ok) {
                 s_last_present = nowt;
+                if (g_ui_forced) ++g_ui_hook_presents; else ++g_ui_timer_presents;
                 if (g_ms_hidden == 0 && g_vid.frame.bpp == 8 && g_vid.frame.pixels) {
                     /* THE DRIVER CURSOR. In a text mode it is not a sprite at all: the
                        real driver inverts the character cell under the pointer (0Ah
@@ -9381,6 +9416,7 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
             } else {
                 HOST_UNLOCK();  /* not our phase: keep the last frame up */
             }
+            g_ui_forced = 0;
         }
         if (!g_autofs_done)                   /* "Graphics only": the first graphics mode */
             host_autofs_consider(g_hwnd, g_vid.mkind != VID_KIND_TEXT || g_vid.in_vesa);
@@ -22587,6 +22623,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     /* (per-plane backing is taken later, once the preamble is on disk -- every
        log_write() before that point TRUNCATES the file and would eat its report.) */
     g_vid.time_us = host_time_us;               /* real CRT timebase for 0x3DA (#55) */
+    g_vid.present_hook = host_present_hook;     /* Auto: the guest's frame raises the present (s73) */
     /* Opt-in only: the ring costs two stores on the hottest path in the program and
        the dump does file I/O under g_lock. See the note in vdd_video.h. */
     g_vid.p3da_ring_on =
@@ -26002,6 +26039,11 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
       p = zput(p, " prio="); p = zhex(p, (DWORD)g_pitpace_prio);
       p = zput(p, " inject="); p = zhex(p, (DWORD)g_pitpace_inject);
       p = zput(p, " uitick_min_ms="); p = zhex(p, (DWORD)g_ui_tick_min_ms);
+      p = zput(p, g_ui_tick_min_ms == UITICK_AUTO ? " (AUTO)" : " (fixed)");
+      p = zput(p, " presents{hook="); p = zhex(p, g_ui_hook_presents);
+      p = zput(p, " timer="); p = zhex(p, g_ui_timer_presents);
+      p = zput(p, " hook_fires="); p = zhex(p, g_vid.present_hook_fires);
+      p = zput(p, " of_which_after_draw="); p = zhex(p, g_vid.present_hook_gap); p = zput(p, "}");
       p = zput(p, " uitick_skipped="); p = zhex(p, g_ui_tick_skips);
       /* ── GH #56: DID THE THROTTLE ACTUALLY BITE? ──────────────────────────────
            run/held are the milliseconds the Bresenham handed out, and held/(run+

@@ -305,6 +305,22 @@ typedef struct video_state {
     uint32_t vbl_edges;
     uint32_t p3da_reads;
     uint8_t  vbl_prev;
+    /* ── ★ THE PRESENT, RAISED BY THE GUEST'S OWN FRAME (s73, "Auto" UI tick). ──────
+         The host used to discover the present window by SAMPLING it from a timer --
+         a 15 ms tick looking for a ~2 ms phase window in a 16.7 ms frame, so it hit
+         about two frames in three and at an arbitrary offset (BOUNCEBX: 1798 guest
+         frames, ~1200 presents, visibly choppy where stock is smooth -- stock has ONE
+         clock for the retrace and the repaint). The guest's 0x3DA poll already
+         computes where the beam is; when it enters the present window -- or, failing
+         that, the retrace itself -- this hook fires ONCE per frame and the host
+         presents as a consequence of the guest's frame, not on its own stopwatch.
+         NULL = nobody listening (off-VM, or a fixed tick). */
+    void   (*present_hook)(void *ctx);
+    void    *present_ctx;
+    uint32_t present_frame;      /* frame_no the hook last fired for              */
+    uint32_t present_hook_fires; /* how often it fired (the report compares to edges) */
+    uint32_t present_hook_gap;   /* ...of which on "first poll after drawing"        */
+    uint32_t present_gap_us;     /* this poll's distance from the previous one       */
     /* ▶ IS THE TIMEBASE UNDER THE RETRACE ACTUALLY WALL-CLOCK TIME? `vbl_edges` says
          the guest completes N frames a second, but that is only a statement about the
          CARD if the clock beneath it runs at real speed. Both of the obvious readings
@@ -560,6 +576,7 @@ int     vdd_video_planar_active(const video_state *st);    /* 1 in mode 12h     
    program that erases-then-redraws (BOUNCEBX) tear: catch it between the two and
    the object is simply missing. Returns 1 unconditionally with no clock injected. */
 int     vdd_video_present_ready(video_state *st);
+uint32_t vdd_video_frame_us(const video_state *st);   /* 16667 or 14286 (s73) */
 
 /* WHERE THE BIOS FONTS LIVE IN GUEST MEMORY.
    INT 10h AH=11h AL=30h hands the caller a POINTER to the character generator, and plenty of

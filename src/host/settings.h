@@ -117,7 +117,14 @@ static const set_def SET_DEFS[SET_COUNT] = {
 { "DosVersionMajor",   IDC_S_DOSVER,      SK_VER,        6,  1, 255, NULL },
 { "DosVersionMinor",   0,                 SK_DERIVED,   22,  0,  99, NULL },
 { "PitPace",           IDC_S_PITPACE,     SK_CHECK,      1,  0,   1, NULL },
-{ "UiTickMs",          IDC_S_UITICK,      SK_UINT,      15,  1, 200, NULL },
+/* ★ s73: a CHOICE, not a number. Index 0 = Auto -- the screen is updated when the
+     guest's own frame completes (the 0x3DA present hook), which is what stock NTVDM
+     effectively does and why BOUNCEBX is smooth there. The fixed floors remain for
+     experiments; 5 ms was measured to saturate the UI thread and cost keyboard
+     response (Skyroads, s61), which is why 15 was the floor before Auto existed.
+     New registry name so an old "UiTickMs"=15 is not read as index 15. */
+{ "UiTickMode",        IDC_S_UITICK,      SK_COMBO,      0,  0,   4,
+  "Auto (recommended)|5 ms (fast - may cost input response)|10 ms|15 ms|20 ms" },
 
 /* ── ★ THE ONE PROCESSOR CONTROL: AN OPTIONAL SPEED LIMIT. ──────────────────────
      Off (Unlimited) by default. It slows software that runs too fast on a modern
@@ -157,7 +164,11 @@ static const set_def SET_DEFS[SET_COUNT] = {
 { "AspectRatio",       IDC_S_ASPECT,      SK_COMBO,      0,  0,
                                           PRESENT_ASPECT_COUNT - 1, PRESENT_ASPECT_ITEMS },
 { "FrameSkip",         IDC_S_FRAMESKIP,   SK_COMBO,      0,  0,   2, "0|1|2" },
-{ "VSync",             IDC_S_VSYNC,       SK_CHECK,      1,  0,   1, NULL },
+/* s73: OFF by default. With the Auto screen update every guest frame is blitted at
+     the moment it completes; making that blit also wait for the monitor's blank
+     delays the NEXT frame's render to a random phase and cost 3% of BOUNCEBX's
+     frames on the rig. Stock NTVDM does not vsync its blit either, and it is smooth. */
+{ "VSync",             IDC_S_VSYNC,       SK_CHECK,      0,  0,   1, NULL },
 { "BlinkTextCursor",   IDC_S_BLINKCURSOR, SK_CHECK,      1,  0,   1, NULL },
 /* ── START FULLSCREEN (s68, user ask). Always = every program starts fullscreen;
      Graphics only = a program that begins in text mode (DOOM) starts in a window and
