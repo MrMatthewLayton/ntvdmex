@@ -4,7 +4,7 @@
 > this file top to bottom and you will know where it is, what works, what does not, and
 > what to do next.
 
-- **Last updated:** 2026-09-16 (session 73 — share re-laid for release; see the s73 block)
+- **Last updated:** 2026-09-16 (session 74 — Heretic runs headless; see the s74 block)
 - **Score: 86.9%** (`./tools/score/score.py` — run it, do not quote this line).
   Session 53 moved it 72.4 → 79.6; session 54 → 80.2; session 55 → 83.1;
   session 56 → 85.4; s57, **s58, s59 and s60 moved it not at all** — s57 built the modal
@@ -237,7 +237,49 @@ and matches the 6.22 oracle row for row (session 53)** — but `MEM /C` still re
    the next step, and it is also the honest correction for *a fix measured on
    one guest is a fix for none*.
 
-   ### ▶ START HERE: **SESSION 73 EVENING (below) — THE NEXT JOB IS HERETIC.** Then 72, 71, 70, 69, 68, 61, 60, 59.
+   ### ▶ START HERE: **SESSION 74 (below) — HERETIC RUNS HEADLESS; A BY-HAND CONFIRMATION IS OWED.** Then s73 evening, 72, 71, 70, 69, 68, 61, 60, 59.
+
+   > **s74 (2026-09-16, ~21:10). HEAD `00c780e`, rig host `eb466c56` = HEAD — NOT yet
+   > user-confirmed.** The displaced confirmed build is `debug\prev\ntvdmhost_877eb238.exe`
+   > (and `ntvdmhost_prev.exe` = `a5cd764b`); rollback = copy it back to `bin\`.
+   > Deadline is END OF THE 17th. Package on the share is still `23bd9ae` — re-cut it
+   > once the user has seen Heretic by hand.
+
+   ### ★★★★★ s74 — **HERETIC RUNS: OUR VESA 4F00 HANDLER WROTE PAST THE CALLER'S 256-BYTE BLOCK AND OVER THE NEXT MCB.** (HEAD `00c780e`, rig host `eb466c56`)
+
+   **The find took one log read, not a run.** The s73 chain dump said the MCB at
+   `0x25f4` was corrupt between "alloc 16 paras" and "free it". The DPMI trace shows
+   what sits between those two lines — exactly one thing:
+
+   ```
+   INT31h AX=0100 BX=0010 -> DOSmem seg=0x25e4        (256 bytes)
+   RMCS 0300 int=0x10 ... eax=0x00004f00               (VBE: get controller info, ES:DI = that block)
+   INT31h AX=0101 BX=0347 -> DOSfree
+   ```
+
+   `vdd_video.c`'s 4F00 arm wrote the OEM string at **+0x100** and the mode list at
+   **+0x120** of the caller's buffer, unconditionally. `0x25e4:0x100` **is** `0x25f4:0`
+   — the MCB. Its signature became `'N'` (of `"NTVDMEX VESA"`), the walk stopped, and
+   the 480 KB above went invisible. VBE 2.0 §4.3: the block is **256 bytes unless the
+   caller preset `"VBE2"`**, and the OEM string / mode list belong in the reserved area
+   at +34. Hypothesis 3 from the s73 block ("something of ours wrote there") — and it
+   was not a patcher or a probe, it was a BIOS service answering with more than it was
+   asked for. Doom never probes VESA; Heretic does; that is the whole difference.
+
+   **Fixed (`00c780e`):** OEM string at +0x22, mode list at +0x40, 512-byte form and
+   2.0-only fields only when `"VBE2"` was preset. `video_test` now poisons 256..511 and
+   checks nothing lands there (fails 3 checks on the old handler). The ENOMEM chain
+   dump now also prints the 16 bytes at the MCB where the walk stopped.
+
+   **Measured on the rig, headless (`runs/s74_heretic/`):** the 64-para allocation
+   succeeds at `0x25e4`; Heretic sets mode 13h, shows the title screen and **plays its
+   E1M1 demo** — HUD, weapon, "ethereal arrows" pickup message, SB streaming (`sb_blocks=
+   0xaa4`), ~2000 INT 33h polls — until the headless deadline (`heretic_shot01/03.png`).
+   Doom on the same host: mode 13h, SB streaming, deadline — unchanged. offvm **1366/0**.
+
+   ▶ **OWED: a by-hand Heretic run** (sound, input, feel — the headless rig cannot see
+   input lag). One change vs `877eb238`; rollback is one copy. ⚠ Hexen's VESA probe, if
+   it has one, went through the same handler — worth a by-hand glance too.
 
    > **s73 close (2026-09-16, ~19:00). HEAD `23bd9ae`, rig host `877eb238` = HEAD.
    > Package `dist\ntvdmex-20260916-23bd9ae.zip` on the share, fresh-folder verified 8/8.
@@ -443,7 +485,7 @@ and matches the 6.22 oracle row for row (session 53)** — but `MEM /C` still re
 
    ### ★★★★★ s73, EVENING — **HEXEN AND DOOM RUN: DOS/4GW COPIES argv[0] INTO A 64-BYTE BUFFER.** (HEAD `23bd9ae`, rig host `877eb238`)
 
-   ▶▶ **NEXT JOB: GET HERETIC WORKING.** Everything known about it is in the block
+   ~~▶▶ NEXT JOB: GET HERETIC WORKING.~~ **Done in s74 — see the s74 block.** What was known is in the block
    below. Doom, Hexen, Zar and Wolf3d are **USER-CONFIRMED WORKING** on this host.
 
    **The find.** DOS/4GW re-opens `argv[0]` to load its protected-mode half and copies
@@ -477,7 +519,7 @@ and matches the 6.22 oracle row for row (session 53)** — but `MEM /C` still re
    in-game headless (HUD, 113 colours) and Hexen too (ettins, weapon, HUD; log 461 KB →
    7.9 MB). A DOS/4GW guest no longer costs a by-hand test to judge.
 
-   ### ▶▶ HERETIC — WHERE IT IS AND WHAT IS KNOWN (the next job)
+   ### ✅ HERETIC — WHERE IT WAS AND WHAT WAS KNOWN AT s73 CLOSE (closed in s74: the VESA 4F00 overrun, hypothesis 3)
 
    Heretic is **further than it has ever been**: past the loader, through `V_Init`,
    `M_LoadDefaults`, `Z_Init` (`DPMI memory: 0x0, 0x800000 allocated for zone`) and
