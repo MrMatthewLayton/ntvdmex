@@ -329,6 +329,17 @@ static LRESULT CALLBACK wowwin_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
         }
         break;
     case WM_CLOSE:
+        /* ⚠ LOGGED BOTH WAYS. (s73) User-reported: the X does not close Charmap or
+             WinMine. Measured headlessly -- the guest's loop is alive and dispatching
+             WM_TIMER, but msg 0x0010 never reaches it, and NOTHING in the log said
+             whether this case ran at all or whether h16 resolved. An absence in the
+             report means nothing; say which branch was taken. */
+        {   char cb[160], *cq = cb;
+            cq = zput(cq, "WOWWIN: WM_CLOSE on hwnd=0x"); cq = zhex(cq, (DWORD)(ULONG_PTR)h);
+            cq = zput(cq, " -> h16=0x"); cq = zhex(cq, h16);
+            cq = zput(cq, h16 ? " -- posted to the guest\r\n"
+                              : " -- NO Win16 window for it, falling through to DefWindowProc\r\n");
+            log_append(LOG_PATH, cb, cq); }
         if (h16) { wowmsg_post(h16, (WORD)msg, 0, 0, GetTickCount(), ptx, pty);
                    ++g_ww_msgs; return 0; }
         break;
