@@ -19510,6 +19510,49 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                             info[8] = 0;                           /* no paging file            */
                             p = zput(p, " -> meminfo 64MB/0x4000 pages");
                             break; }
+                        /* ── ★★★ 0800: MAP A PHYSICAL ADDRESS INTO THE LINEAR SPACE. (s74)
+                             The other half of the VESA linear framebuffer. 4F01 reports
+                             PhysBasePtr = VID_VESA_LFB_PHYS; a DPMI client then asks this
+                             function to map it and writes pixels straight at the answer.
+                             With it unimplemented the whole LFB advertisement was a
+                             promise we could not keep, and heaven7 refused all twelve
+                             modes rather than call 4F02.
+                             We answer with the HOST VA of the VDD's vesa_vram, which is
+                             exactly the convention 0501 already uses -- it hands the
+                             client a host VA as its linear address, and g_dpmi_blk[]
+                             records them as such. So the client's "linear" really is a
+                             pointer here, and the picture it draws lands in the buffer
+                             the presenter reads.
+                           ⚠ ONLY OUR OWN APERTURE. A request for any other physical
+                             address is refused rather than identity-mapped: handing a
+                             guest a pointer to arbitrary host memory because it asked
+                             for a physical address is not a mapping, it is a hole. */
+                        case 0x0800: {
+                            DWORD ph = ((VDM_REG(tib, VTIB_EBX) & 0xFFFF) << 16)
+                                     |  (VDM_REG(tib, VTIB_ECX) & 0xFFFF);
+                            DWORD sz = ((VDM_REG(tib, VTIB_ESI) & 0xFFFF) << 16)
+                                     |  (VDM_REG(tib, VTIB_EDI) & 0xFFFF);
+                            p = zput(p, " phys=0x"); p = zhex(p, ph);
+                            p = zput(p, " size=0x"); p = zhex(p, sz);
+                            if (ph == VID_VESA_LFB_PHYS && sz <= VID_VESA_VRAM) {
+                                DWORD lin = (DWORD)(ULONG_PTR)&g_vid.vesa_vram[0];
+                                VDM_SET16(tib, VTIB_EBX, (WORD)(lin >> 16));
+                                VDM_SET16(tib, VTIB_ECX, (WORD)(lin & 0xFFFF));
+                                VDM_REG(tib, VTIB_EFLAGS) &= ~1u;
+                                p = zput(p, " -> VESA LFB linear=0x"); p = zhex(p, lin);
+                            } else {
+                                VDM_REG(tib, VTIB_EFLAGS) |= 1u;
+                                VDM_SET16(tib, VTIB_EAX, 0x8021);   /* invalid value */
+                                p = zput(p, " -> REFUSED (not our aperture)");
+                            }
+                            break; }
+                        case 0x0801:                               /* free physical mapping */
+                            /* Nothing to undo: the mapping is the VDD's own buffer and it
+                               outlives the client. Succeeding is honest; failing would
+                               make a tidy client think it had leaked something. */
+                            VDM_REG(tib, VTIB_EFLAGS) &= ~1u;
+                            p = zput(p, " -> free physical mapping (no-op, buffer is ours)");
+                            break;
                         case 0x0501: {                             /* allocate memory block BX:CX bytes */
                             DWORD sz = ((VDM_REG(tib, VTIB_EBX) & 0xFFFF) << 16) | (VDM_REG(tib, VTIB_ECX) & 0xFFFF);
                             void *mem = VirtualAlloc(NULL, sz ? sz : 1, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
@@ -27761,6 +27804,16 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
       for (i = 0; i < 16; ++i)
           if (g_vid.mask_hist[i]) { p = zput(p, " 0x"); p = zhexb(p, (unsigned)i);
                                     p = zput(p, "x"); p = zhex(p, g_vid.mask_hist[i]); }
+      p = zput(p, "\r\n");
+      p = zput(p, "STAGE2: VESA mode SET (4F02): ");
+      if (!g_vid.vesa_set_seen) p = zput(p, "never called");
+      else { p = zput(p, "BX=0x"); p = zhex(p, (DWORD)g_vid.vesa_set_bx);
+             p = zput(p, g_vid.vesa_set_ok ? " ACCEPTED" : " REFUSED");
+             p = zput(p, (g_vid.vesa_set_bx & 0x4000) ? " [LFB]" : " [banked]");
+             p = zput(p, " -> "); p = zhex(p, (DWORD)g_vid.vesa_w);
+             p = zput(p, "x"); p = zhex(p, (DWORD)g_vid.vesa_h);
+             p = zput(p, "x"); p = zhex(p, (DWORD)g_vid.vesa_bpp);
+             p = zput(p, " stride=0x"); p = zhex(p, g_vid.vesa_stride); }
       p = zput(p, "\r\n");
       p = zput(p, "STAGE2: VESA mode queries (4F01/4F02):");
       if (!g_vid.vesa_qn) p = zput(p, " none");

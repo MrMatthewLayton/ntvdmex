@@ -47,7 +47,22 @@
 
 /* VESA VBE 2.0 (banked, packed-256). A0000 is the 64KB window onto vesa_vram. */
 #define VID_VESA_WIN      0x10000u      /* 64KB banked window                     */
-#define VID_VESA_VRAM     0x80000u      /* 512KB total emulated VRAM (8 banks)    */
+/* ── ★ VRAM HAS TO HOLD THE DEEPEST MODE WE ADVERTISE, NOT THE SHALLOWEST. (s74)
+     512KB was exactly enough for 800x600x8 and nothing else. Advertising hi-colour
+     means 800x600x24 = 1,440,000 bytes, so a mode the guest is allowed to SET must
+     have somewhere to live -- a mode list that promises more than VRAM can back is
+     a promise the first blit breaks. 2MB covers every mode in vesa_modes[]. */
+#define VID_VESA_VRAM     0x200000u     /* 2MB: enough for 800x600x24             */
+/* ── THE LFB'S ADVERTISED PHYSICAL ADDRESS. ───────────────────────────────────────
+     4F01 reports this as PhysBasePtr and the guest asks DPMI 0800 to map it; the
+     host answers with the host VA of vesa_vram, which is exactly the convention
+     0501 already uses (it hands the client a host VA as its linear address). Both
+     halves must agree on the number, so it lives here rather than twice.
+     0xE0000000 is where a PCI video aperture normally sits, so it cannot collide
+     with anything the guest has a right to expect at a lower address. */
+#define VID_VESA_LFB_PHYS 0xE0000000u
+#define VID_VESA_MAXW     800           /* widest hi-colour mode advertised        */
+#define VID_VESA_MAXH     600
 #define VID_FB_MAX        (640 * 480)   /* largest glyph/planar render target     */
 
 /* How a mode is rendered.  Before this, only 13h and 12h were branched on and
@@ -162,6 +177,14 @@ typedef struct video_state {
     uint8_t  in_vesa;                   /* a VESA mode is active                   */
     uint16_t vesa_mode, vesa_w, vesa_h; /* current VESA mode + resolution          */
     uint16_t vesa_bank;                 /* current 64KB window bank (4F05)         */
+    uint8_t  vesa_bpp;                  /* 8/15/16/24 -- bits per pixel of the mode */
+    uint32_t vesa_stride;               /* bytes per scan line of the current mode  */
+    uint8_t  vesa_lfb;                  /* the mode was set with bit 14: LFB in use  */
+    /* Hi-colour frames are handed to the presenter as 32-bit ARGB: the frame
+       contract has a bpp field but every consumer indexed a palette, so a direct
+       colour mode has to be converted somewhere. Here is the only place that knows
+       the guest's pixel format, so here is where it converts. */
+    uint32_t vesa_argb[(uint32_t)VID_VESA_MAXW * VID_VESA_MAXH];
     uint8_t  vesa_vram[VID_VESA_VRAM];  /* full packed-256 framebuffer             */
     uint8_t  plane[4][VID_PLANE_SIZE];  /* mode 12h: 4 bit-planes (640x480x16)     */
     /* VGA planar write engine (Sequencer 3C4/3C5 + Graphics Controller 3CE/3CF) */
@@ -409,9 +432,18 @@ typedef struct video_state {
          twice and prints "VESA error" -- and nothing in the log said WHICH modes,
          which is the only fact needed to decide what to implement. Do not guess a
          guest's expectation; record it. */
-    uint16_t vesa_q[12];                /* modes passed to 4F01 / 4F02              */
-    uint8_t  vesa_q_ok[12];             /* 1 = we answered 0x004F, 0 = 0x014F       */
-    uint8_t  vesa_q_fn[12];             /* 0x01 or 0x02 -- which call asked         */
+    /* ⚠⚠ 12 SLOTS WAS EXACTLY THE NUMBER OF MODES WE PUBLISH, so heaven7's twelve
+         4F01 queries filled the ring and the 4F02 that FOLLOWED THEM -- the one call
+         the whole instrument existed to catch -- was silently dropped. The log then
+         read "the guest never set a mode" while it was demonstrably rendering. A
+         ring sized to the thing it observes will always lose the last event, so the
+         SET is now recorded on its own and cannot be crowded out by queries. */
+    uint16_t vesa_q[32];                /* modes passed to 4F01 / 4F02              */
+    uint8_t  vesa_q_ok[32];             /* 1 = we answered 0x004F, 0 = 0x014F       */
+    uint8_t  vesa_q_fn[32];             /* 0x01 or 0x02 -- which call asked         */
+    uint16_t vesa_set_bx;               /* the raw BX of the last 4F02 (mode|flags)  */
+    uint8_t  vesa_set_ok;               /* and whether we accepted it                */
+    uint8_t  vesa_set_seen;
     uint8_t  vesa_qn;                   /* how many recorded (capped)               */
     ntvdd_frame frame;
     /* Mode-Y de-interleave instrumentation. `plane-nonzero` in STAGE2 has always

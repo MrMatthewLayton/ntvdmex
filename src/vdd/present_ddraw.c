@@ -103,14 +103,18 @@ static HBRUSH scanline_brush(void)
  * ⚠ TWO THINGS DIFFER IN FULLSCREEN and both are handled below: there is no status
  *   strip to reserve room for, and the fit is snapped to whole multiples. */
 static const uint32_t *row_pal(present_ddraw *pd, int y);   /* fwd: with _snapshot */
+static uint32_t snap_px(present_ddraw *pd, int y, int x);   /* fwd: depth-agnostic pixel */
 static void gdi_present(present_ddraw *pd)
 {
     HDC hdc; RECT rc; int cw, ch, dx, dy, dw, dh; unsigned i;
     const uint8_t *pix = pd->snap;
     int sw = pd->snap_w, sh = pd->snap_h;
     struct { BITMAPINFOHEADER h; RGBQUAD c[256]; } bi;
-    static uint32_t s_rgb32[640 * 480];   /* a raster-split frame, resolved per row */
-    int split = pd->snap_split && sw <= 640 && sh <= 480;
+    static uint32_t s_rgb32[800 * 600];   /* a split frame resolved per row, or ARGB */
+    /* A direct-colour frame takes the same 32bpp DIB route a raster-split frame
+       does -- it is already ARGB, so it needs no resolving, just no palette. */
+    int direct = (pd->snap_bpp == 32);
+    int split = !direct && pd->snap_split && sw <= 640 && sh <= 480;
     hdc = GetDC(pd->hwnd);
     if (!hdc) return;
     GetClientRect(pd->hwnd, &rc);
@@ -125,7 +129,9 @@ static void gdi_present(present_ddraw *pd)
     /* (A split frame skips scale2x: the doubled source would need a doubled
         32bpp buffer, and the combination is rare -- a 16-colour raster trick under a
         pixel-art scaler. The picture is still right, just not doubled.) */
-    if (!split && present_scaler_doubles(pd->scaler) && sw > 0 && sh > 0
+    /* scale2x is an 8bpp pixel-art scaler; a 16/24bpp photo-real frame is not its
+       job and it cannot read snap32 anyway. */
+    if (!split && !direct && present_scaler_doubles(pd->scaler) && sw > 0 && sh > 0
         && sw * 2 <= 1280 && sh * 2 <= 960) {
         present_scale2x_8(pd->snap, sw, sh, sw, s_scaled);
         pix = s_scaled; sw *= 2; sh *= 2;
@@ -140,13 +146,11 @@ static void gdi_present(present_ddraw *pd)
         bi.c[i].rgbRed = (BYTE)(a >> 16); bi.c[i].rgbGreen = (BYTE)(a >> 8);
         bi.c[i].rgbBlue = (BYTE)a; bi.c[i].rgbReserved = 0;
     }
-    if (split) {                       /* two palettes on one screen: resolve to 32bpp */
+    if (split || direct) {             /* resolve to a 32bpp DIB */
         int y, x;
         for (y = 0; y < sh; ++y) {
-            const uint32_t *pal = row_pal(pd, y);
-            const uint8_t *srow = pd->snap + (size_t)y * sw;
             uint32_t *drow = s_rgb32 + (size_t)y * sw;
-            for (x = 0; x < sw; ++x) drow[x] = pal[srow[x]] & 0x00FFFFFFu;
+            for (x = 0; x < sw; ++x) drow[x] = snap_px(pd, y, x) & 0x00FFFFFFu;
         }
         bi.h.biBitCount = 32; pix = (const uint8_t *)s_rgb32;
     }
@@ -277,6 +281,16 @@ static int fs_setup(present_ddraw *pd)
 static void mask_info(DWORD m, int *shift, int *bits)
 { int s=0,b=0; if(m){while(!(m&1)){m>>=1;++s;}while(m&1){m>>=1;++b;}} *shift=s; *bits=b; }
 
+/* The snapshot's pixel at (x,y) as ARGB, whatever depth it was captured at. One
+   accessor so the depth is resolved in exactly one place: the alternative is the
+   same `snap_bpp` test copied into four loops, which is how one of them ends up
+   not having it. */
+static uint32_t snap_px(present_ddraw *pd, int y, int x)
+{
+    if (pd->snap_bpp == 32) return pd->snap32[(size_t)y * pd->snap_w + x];
+    return row_pal(pd, y)[pd->snap[(size_t)y * pd->snap_w + x]];
+}
+
 /* Write one snapshot pixel, packed to whatever depth the locked surface is. */
 static void put_px(BYTE *drow, int dx, DWORD bpp, uint32_t argb,
                    int rsh, int rb, int gsh, int gb, int bsh, int bb)
@@ -305,10 +319,8 @@ static int fs_stage(present_ddraw *pd, LPDIRECTDRAWSURFACE7 fb)
     mask_info(d.ddpfPixelFormat.dwBBitMask, &bsh, &bb);
     for (y = 0; y < pd->snap_h; ++y) {
         BYTE *drow = (BYTE *)d.lpSurface + (size_t)y * d.lPitch;
-        const uint8_t *srow = pd->snap + (size_t)y * pd->snap_w;
-        const uint32_t *pal = row_pal(pd, y);
         for (x = 0; x < pd->snap_w; ++x)
-            put_px(drow, x, bpp, pal[srow[x]], rsh,rb,gsh,gb,bsh,bb);
+            put_px(drow, x, bpp, snap_px(pd, y, x), rsh,rb,gsh,gb,bsh,bb);
     }
     IDirectDrawSurface7_Unlock(fb, NULL);
     return 0;
@@ -339,7 +351,7 @@ static void fs_present_sw(present_ddraw *pd, int fx, int fy, int fw, int fh)
                 continue;
             }
             x = (dx - fx) * pd->snap_w / fw;
-            put_px(drow, dx, bpp, row_pal(pd, y)[pd->snap[(size_t)y * pd->snap_w + x]],
+            put_px(drow, dx, bpp, snap_px(pd, y, x),
                    rsh,rb,gsh,gb,bsh,bb);
         }
     }
@@ -443,8 +455,21 @@ int present_ddraw_set_fullscreen(present_ddraw *pd, int on)
 void present_ddraw_snapshot(present_ddraw *pd, const ntvdd_frame *f)
 {
     int y;
-    if (!f || !f->w || !f->h || !f->pixels || f->bpp != 8 || f->w > 640 || f->h > 480) {
+    if (!f || !f->w || !f->h || !f->pixels || (f->bpp != 8 && f->bpp != 32)
+        || f->w > 800 || f->h > 600) {
         pd->snap_valid = 0; return;
+    }
+    pd->snap_bpp = f->bpp;
+    if (f->bpp == 32) {
+        /* Direct colour: no palette is involved at all, and a split palette is
+           meaningless here -- the pixels already carry their own colour. */
+        for (y = 0; y < (int)f->h; ++y)
+            CopyMemory(pd->snap32 + (size_t)y * f->w,
+                       f->pixels + (size_t)y * f->stride, (size_t)f->w * 4);
+        pd->snap_split = 0;
+        pd->rowpal_y = -1;
+        pd->snap_w = f->w; pd->snap_h = f->h; pd->snap_valid = 1;
+        return;
     }
     for (y = 0; y < (int)f->h; ++y)
         CopyMemory(pd->snap + (size_t)y * f->w, f->pixels + (size_t)y * f->stride, f->w);
@@ -509,7 +534,9 @@ int present_ddraw_save_bmp(present_ddraw *pd, const char *path)
     BYTE fh[14], ih[40];
     static BYTE pal[256 * 4];
     static BYTE row[640 + 4];
-    int split = pd->snap_split;
+    /* 24bpp output is needed for a split palette AND for a direct-colour frame:
+       neither can be described by one 256-entry BMP palette. */
+    int split = pd->snap_split || pd->snap_bpp == 32;
     static BYTE row24[640 * 3 + 4];
     if (!pd->snap_valid || w <= 0 || h <= 0 || w > 640 || h > 480) return -1;
     /* A raster-split frame cannot be an 8bpp BMP (one palette per file), so it is
@@ -528,6 +555,8 @@ int present_ddraw_save_bmp(present_ddraw *pd, const char *path)
     st_le32(ih + 0, 40);
     st_le32(ih + 4, (DWORD)w);  st_le32(ih + 8, (DWORD)h);
     st_le16(ih + 12, 1);        st_le16(ih + 14, (WORD)(split ? 24 : 8)); /* 1 plane */
+    /* `split` is computed by the caller as "needs 24bpp", which a direct-colour
+       snapshot also does -- see the assignment below. */
     st_le32(ih + 16, 0);        st_le32(ih + 20, imgsz);   /* BI_RGB                 */
     st_le32(ih + 24, 2835);     st_le32(ih + 28, 2835);    /* ~72 dpi                */
     st_le32(ih + 32, split ? 0 : 256); st_le32(ih + 36, 0); /* colours used          */
@@ -546,9 +575,8 @@ int present_ddraw_save_bmp(present_ddraw *pd, const char *path)
     if (!split) WriteFile(hf, pal, sizeof pal, &wr, NULL);
     for (y = h - 1; y >= 0; --y) {              /* BMP is bottom-up                  */
         if (split) {
-            const uint32_t *rp = row_pal(pd, y);
             for (x = 0; x < w; ++x) {
-                uint32_t a = rp[pd->snap[(size_t)y * (size_t)w + (size_t)x]];
+                uint32_t a = snap_px(pd, y, x);
                 row24[x*3+0] = (BYTE)(a & 0xFF); row24[x*3+1] = (BYTE)((a >> 8) & 0xFF);
                 row24[x*3+2] = (BYTE)((a >> 16) & 0xFF);
             }

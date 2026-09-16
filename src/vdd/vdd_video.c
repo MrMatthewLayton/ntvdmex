@@ -464,9 +464,30 @@ static void teletype(video_state *st, uint8_t ch)
 
 /* --- VESA VBE 2.0 (banked, packed-256) ----------------------------------- */
 /* supported modes: {VBE number, width, height} (all 8bpp packed) */
-static const struct { uint16_t num, w, h; } vesa_modes[] = {
-    { 0x100, 640, 400 }, { 0x101, 640, 480 }, { 0x103, 800, 600 },
+/* ── ★★ THE MODE LIST IS THE INTERFACE, AND A GUEST FILTERS ON IT. (s74) ──────────
+     This was three 8bpp modes. heaven7 calls 4F00, walks the list we publish, asks
+     4F01 about every entry -- we answered OK for all three -- and then printed its
+     own "VESA error" WITHOUT EVER CALLING 4F02. Measured, in that order. A guest that
+     wants direct colour will not settle for 640x400x8 however cheerfully we describe
+     it, so the fix is the list and the ModeInfoBlock behind it, not the answer code.
+     Numbers are the VBE standard assignments; 0x11x direct-colour modes are what
+     anything from the late 90s actually asks for. Every entry here must fit in
+     VID_VESA_VRAM -- see the note there. */
+static const struct { uint16_t num, w, h; uint8_t bpp; } vesa_modes[] = {
+    /* packed-pixel 256-colour */
+    { 0x100, 640, 400,  8 }, { 0x101, 640, 480,  8 },
+    { 0x103, 800, 600,  8 },
+    /* ⚠ NO 1024x768. VRAM could back it, but the presenter snapshots at most
+         800x600, and a mode that sets and then shows nothing is worse than a mode
+         that was never offered -- the guest has no way to find out. Raise both
+         together or neither. */
+    /* direct colour: 15/16/24bpp at the resolutions VRAM can back */
+    { 0x10D, 320, 200, 15 }, { 0x10E, 320, 200, 16 }, { 0x10F, 320, 200, 24 },
+    { 0x110, 640, 480, 15 }, { 0x111, 640, 480, 16 }, { 0x112, 640, 480, 24 },
+    { 0x113, 800, 600, 15 }, { 0x114, 800, 600, 16 }, { 0x115, 800, 600, 24 },
 };
+/* bytes per pixel as VBE counts them: 15bpp occupies 2 bytes, like 16. */
+static uint32_t vesa_bypp(uint8_t bpp) { return bpp <= 8 ? 1u : bpp <= 16 ? 2u : bpp <= 24 ? 3u : 4u; }
 /* Record a VESA mode query and its answer -- see vesa_q[] in vdd_video.h. */
 static void vesa_note(video_state *st, uint8_t fn, uint16_t mode, int ok)
 {
@@ -478,11 +499,22 @@ static void vesa_note(video_state *st, uint8_t fn, uint16_t mode, int ok)
     st->vesa_q[k] = mode; st->vesa_q_ok[k] = (uint8_t)(ok ? 1 : 0); st->vesa_q_fn[k] = fn;
 }
 
-static int vesa_find(uint16_t num, uint16_t *w, uint16_t *h)
+static int vesa_find(uint16_t num, uint16_t *w, uint16_t *h, uint8_t *bpp)
 {
     unsigned i;
     for (i = 0; i < sizeof(vesa_modes)/sizeof(vesa_modes[0]); ++i)
-        if (vesa_modes[i].num == (num & 0x3FFF)) { *w = vesa_modes[i].w; *h = vesa_modes[i].h; return 1; }
+        if (vesa_modes[i].num == (num & 0x3FFF)) {
+            uint32_t need = (uint32_t)vesa_modes[i].w * vesa_modes[i].h
+                          * vesa_bypp(vesa_modes[i].bpp);
+            /* ⚠ A MODE WE CANNOT STORE IS NOT A MODE WE SUPPORT. Answering 4F01 for
+                 geometry that does not fit VID_VESA_VRAM invites a 4F02 we would have
+                 to fail, or worse, blits off the end of the buffer. Checked here so
+                 the list and the answer can never disagree. */
+            if (need > VID_VESA_VRAM) return 0;
+            *w = vesa_modes[i].w; *h = vesa_modes[i].h;
+            if (bpp) *bpp = vesa_modes[i].bpp;
+            return 1;
+        }
     return 0;
 }
 static void wr16(uint8_t *p, uint16_t v) { p[0] = (uint8_t)v; p[1] = (uint8_t)(v >> 8); }
@@ -492,8 +524,46 @@ static void wr32(uint8_t *p, uint32_t v) { p[0]=(uint8_t)v; p[1]=(uint8_t)(v>>8)
 static void vesa_sync(video_state *st)
 {
     uint32_t off = (uint32_t)st->vesa_bank * VID_VESA_WIN; unsigned i;
+    /* ⚠ AN LFB GUEST NEVER WRITES A0000, so copying that window into vram would
+         paint a stale (usually blank) 64KB hole over the frame it just drew. */
+    if (st->vesa_lfb) return;
     if (off + VID_VESA_WIN > VID_VESA_VRAM) return;
     for (i = 0; i < VID_VESA_WIN; ++i) st->vesa_vram[off + i] = st->vmem[i];
+}
+
+/* ── DIRECT COLOUR -> ARGB, ONCE PER FRAME. (s74) ─────────────────────────────────
+     The frame contract has a bpp field, but every consumer of it indexed a palette --
+     so a 15/16/24bpp mode has to be converted somewhere, and this is the only place
+     that knows the guest's pixel format. Channels are expanded by REPLICATING the
+     high bits into the low ones (5 bits -> 8 as (v<<3)|(v>>2)), not by shifting and
+     leaving zeros: a white pixel must come out 0xFF, and 0x1F<<3 is 0xF8, which is a
+     visibly grey white and the classic giveaway of a lazy 5-to-8 expansion. */
+static void vesa_to_argb(video_state *st)
+{
+    uint32_t y, x, w = st->vesa_w, h = st->vesa_h, pitch = st->vesa_stride;
+    uint32_t bypp = vesa_bypp(st->vesa_bpp);
+    if (!w || !h || !pitch) return;
+    if (w > VID_VESA_MAXW || h > VID_VESA_MAXH) return;   /* cannot happen: vesa_find caps it */
+    for (y = 0; y < h; ++y) {
+        const uint8_t *src = st->vesa_vram + y * pitch;
+        uint32_t *dst = st->vesa_argb + y * w;
+        if (y * pitch + w * bypp > VID_VESA_VRAM) break;
+        for (x = 0; x < w; ++x) {
+            uint32_t r, g, b;
+            if (st->vesa_bpp == 15) {
+                uint32_t v = (uint32_t)src[x*2] | ((uint32_t)src[x*2+1] << 8);
+                r = (v >> 10) & 0x1F; g = (v >> 5) & 0x1F; b = v & 0x1F;
+                r = (r << 3) | (r >> 2); g = (g << 3) | (g >> 2); b = (b << 3) | (b >> 2);
+            } else if (st->vesa_bpp == 16) {
+                uint32_t v = (uint32_t)src[x*2] | ((uint32_t)src[x*2+1] << 8);
+                r = (v >> 11) & 0x1F; g = (v >> 5) & 0x3F; b = v & 0x1F;
+                r = (r << 3) | (r >> 2); g = (g << 2) | (g >> 4); b = (b << 3) | (b >> 2);
+            } else {                                   /* 24bpp, B G R in memory */
+                b = src[x*3]; g = src[x*3+1]; r = src[x*3+2];
+            }
+            dst[x] = 0xFF000000u | (r << 16) | (g << 8) | b;
+        }
+    }
 }
 
 /* INT 10h AX=4Fxx. Always returns AX=0x004F (supported+ok) for what we handle. */
@@ -535,31 +605,76 @@ static void vesa(video_state *st, ntvdd_regs *r)
         s_ax(r, 0x004F);
         break; }
     case 0x01: {                                  /* return mode info             */
-        uint16_t w, h;
-        vesa_note(st, 0x01, r_cx(r), vesa_find(r_cx(r), &w, &h));
-        if (vesa_find(r_cx(r), &w, &h)) {
+        uint16_t w, h; uint8_t mbpp = 8;
+        vesa_note(st, 0x01, r_cx(r), vesa_find(r_cx(r), &w, &h, &mbpp));
+        if (vesa_find(r_cx(r), &w, &h, &mbpp)) {
             uint8_t *b = (uint8_t *)vdd_map_flat(st->bus, r->es, (uint16_t)(uint16_t)r->edi);
+            uint32_t bypp = vesa_bypp(mbpp), pitch = (uint32_t)w * bypp;
+            uint32_t nbank = (pitch * h + (VID_VESA_WIN - 1)) / VID_VESA_WIN;
             for (i = 0; i < 256; ++i) b[i] = 0;
             wr16(b + 0, 0x009B);                  /* attrs: supported|color|graphics */
             b[2] = 0x07; b[3] = 0x00;             /* WinA r/w/exists; WinB none    */
             wr16(b + 4, 64); wr16(b + 6, 64);     /* granularity / size (KB)       */
             wr16(b + 8, 0xA000); wr16(b + 10, 0); /* WinA seg / WinB seg           */
             wr32(b + 12, 0);                      /* WinFuncPtr (use INT 10h 4F05) */
-            wr16(b + 16, w);                      /* bytes per scan line           */
+            wr16(b + 16, (uint16_t)pitch);        /* bytes per scan line           */
             wr16(b + 18, w); wr16(b + 20, h);     /* X / Y resolution              */
             b[22] = 8; b[23] = 16;                /* char cell                     */
-            b[24] = 1; b[25] = 8;                 /* planes / bpp                  */
-            b[26] = 1; b[27] = 4;                 /* banks / memory model (packed) */
-            wr32(b + 40, 0);                      /* PhysBasePtr: no LFB (banked)  */
+            b[24] = 1; b[25] = mbpp;              /* planes / bits per pixel       */
+            /* ⚠ BANKS AND MEMORY MODEL ARE NOT CONSTANTS. They were 1 and 4 for
+                 every mode, which is a lie twice over for direct colour: model 4 is
+                 "packed pixel" (a palette index), model 6 is "direct colour", and a
+                 guest reads that byte to decide whether the bytes it writes are
+                 indices or channels. NumberOfBanks is the window count the mode
+                 actually needs, which is what a banked guest paginates through. */
+            b[26] = (uint8_t)(nbank ? nbank : 1);
+            b[27] = (uint8_t)(mbpp > 8 ? 6 : 4);  /* 6 = direct colour, 4 = packed  */
+            b[28] = 0;                            /* NumberOfImagePages (0 = one)   */
+            b[29] = 1;                            /* reserved, must be 1 per VBE 1.2 */
+            /* ── DIRECT-COLOUR FIELD LAYOUT (offsets 31..38). A guest cannot pack a
+                 pixel without these, and it will not trust a mode that leaves them
+                 zero. 15bpp is 5:5:5 with one byte unused, 16bpp is 5:6:5, 24bpp is
+                 8:8:8 -- all little-endian, blue in the low bits, which is what every
+                 PC VBE implementation does. */
+            if (mbpp == 15)      { b[31]=5; b[32]=10; b[33]=5; b[34]=5; b[35]=5; b[36]=0;
+                                   b[37]=1; b[38]=15; }
+            else if (mbpp == 16) { b[31]=5; b[32]=11; b[33]=6; b[34]=5; b[35]=5; b[36]=0;
+                                   b[37]=0; b[38]=0; }
+            else if (mbpp == 24) { b[31]=8; b[32]=16; b[33]=8; b[34]=8;  b[35]=8; b[36]=0;
+                                   b[37]=0; b[38]=0; }
+            b[39] = 0;                            /* DirectColorModeInfo: no prog ramp */
+            /* ── ★★★ LINEAR FRAMEBUFFER. (s74) Attribute bit 7 says a mode HAS one and
+                 PhysBasePtr says where; with them 0 the whole mode list reads as
+                 "banked only". heaven7 enumerated all twelve modes we published,
+                 including 320x200x16 and 640x480x16, and refused every one without
+                 ever calling 4F02 -- measured twice, before and after the list grew.
+                 A 2000-era demo will not paginate a 64KB window to raytrace. */
+            wr16(b + 0, (uint16_t)(0x009B | 0x0080));   /* ...|LFB available        */
+            wr32(b + 40, VID_VESA_LFB_PHYS);            /* PhysBasePtr              */
+            /* VBE 2.0 adds the linear-mode geometry at +50; a guest that drives the
+               LFB reads these rather than the banked ones. Same numbers here because
+               our pitch does not change between the two. */
+            wr16(b + 50, (uint16_t)pitch);              /* LinBytesPerScanLine      */
+            b[52] = 0; b[53] = 0;                       /* Lin/Bnk NumberOfImagePages */
+            if (mbpp > 8) { b[54]=b[31]; b[55]=b[32]; b[56]=b[33]; b[57]=b[34];
+                            b[58]=b[35]; b[59]=b[36]; b[60]=b[37]; b[61]=b[38]; }
             s_ax(r, 0x004F);
         } else s_ax(r, 0x014F);
         break; }
     case 0x02: {                                  /* set VBE mode                 */
-        uint16_t w, h;
-        vesa_note(st, 0x02, r_bx(r), vesa_find(r_bx(r), &w, &h));
-        if (vesa_find(r_bx(r), &w, &h)) {
+        uint16_t w, h; uint8_t mbpp = 8;
+        vesa_note(st, 0x02, r_bx(r), vesa_find(r_bx(r), &w, &h, &mbpp));
+        st->vesa_set_bx = r_bx(r); st->vesa_set_seen = 1;
+        st->vesa_set_ok = (uint8_t)(vesa_find(r_bx(r), &w, &h, &mbpp) ? 1 : 0);
+        if (vesa_find(r_bx(r), &w, &h, &mbpp)) {
             uint32_t n;
             st->in_vesa = 1; st->vesa_mode = r_bx(r) & 0x3FFF; st->vesa_w = w; st->vesa_h = h;
+            /* Bit 14 of the mode = "use the linear framebuffer". It matters beyond
+               bookkeeping: an LFB guest never touches A0000, so vesa_sync must stop
+               copying that window over the picture (see vesa_sync). */
+            st->vesa_lfb = (uint8_t)((r_bx(r) & 0x4000) ? 1 : 0);
+            st->vesa_bpp = mbpp;
+            st->vesa_stride = (uint32_t)w * vesa_bypp(mbpp);
             st->vesa_bank = 0;
             for (n = 0; n < VID_VESA_VRAM; ++n) st->vesa_vram[n] = 0;
             for (n = 0; n < VID_VESA_WIN; ++n) st->vmem[n] = 0;
@@ -2425,8 +2540,20 @@ static void vid_frame(void *self)
     if (st->crtc_start_pend) st->crtc_start_half++;
     if (st->in_vesa) {                                 /* VESA: sync window -> vram */
         vesa_sync(st);
-        st->frame.w = st->vesa_w; st->frame.h = st->vesa_h; st->frame.bpp = 8;
-        st->frame.stride = st->vesa_w; st->frame.pixels = st->vesa_vram; st->frame.palette = st->pal;
+        st->frame.w = st->vesa_w; st->frame.h = st->vesa_h;
+        if (st->vesa_bpp > 8) {                        /* direct colour -> ARGB */
+            vesa_to_argb(st);
+            st->frame.bpp = 32;
+            st->frame.stride = (uint32_t)st->vesa_w * 4;
+            st->frame.pixels = (const uint8_t *)st->vesa_argb;
+            st->frame.palette = 0;                     /* contract: NULL unless bpp==8 */
+        } else {
+            st->frame.bpp = 8;
+            /* ⚠ THE STRIDE IS THE MODE'S PITCH, NOT ITS WIDTH. Equal for 8bpp, and
+                 that equality is why this read `= st->vesa_w` and nobody noticed. */
+            st->frame.stride = st->vesa_stride ? st->vesa_stride : st->vesa_w;
+            st->frame.pixels = st->vesa_vram; st->frame.palette = st->pal;
+        }
     } else if (st->mkind == VID_KIND_LINEAR8 && !st->chain4) {  /* mode Y */
         /* ⚠ NO SNAPSHOT HERE. It used to capture the "live" plane at present time,
              but present time is an ARBITRARY moment: it can land mid-write, and

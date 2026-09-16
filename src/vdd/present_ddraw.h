@@ -61,7 +61,16 @@ typedef struct present_ddraw {
     /* double-buffer snapshot: filled under the caller's lock by _snapshot(),
        blitted (vsync'd) outside it by _present(). Removes the concurrent-write
        tearing of the live framebuffer. 8bpp + palette (all our frames). */
-    uint8_t  snap[640 * 480];
+    /* ── THE SNAPSHOT NOW CARRIES DEPTH. (s74) VESA direct-colour modes hand us
+         32-bit ARGB, not palette indices, so there are two buffers and `snap_bpp`
+         says which one holds this frame. The 8bpp path is byte-for-byte what it
+         always was -- Doom, Heretic, Hexen and ZAR all run through it and the
+         release was imminent when this landed. Sized to the widest mode
+         vesa_modes[] advertises: every mode we publish must be one we can DISPLAY,
+         or the list is promising something the presenter drops on the floor. */
+    uint8_t  snap[800 * 600];
+    uint32_t snap32[800 * 600];         /* ARGB, when snap_bpp == 32               */
+    uint8_t  snap_bpp;                  /* 8 = snap[] + snap_pal, 32 = snap32[]    */
     uint32_t snap_pal[256];
     int   snap_w, snap_h, snap_valid;
     /* Raster split (s70, see ntvdd_frame): the frame-start and mid-frame palettes,
