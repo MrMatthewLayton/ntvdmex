@@ -1663,6 +1663,7 @@ static struct {
     WORD  cs, ss, ds, es;
     WORD  psp, dta_seg, dta_off;
     WORD  child_seg;                  /* freed when the child terminates */
+    WORD  env_seg;                    /* the env COPY we made for it, if any; freed with it */
 } g_exec[EXEC_MAX_DEPTH];
 static int g_exec_depth;
 
@@ -1673,7 +1674,7 @@ static char *exec_begin(dos_machine_t *m, volatile BYTE *tib, char *p)
 {
     HANDLE hf;
     DWORD nread = 0;
-    uint16_t child = 0, maxpara = 0, want;
+    uint16_t child = 0, maxpara = 0, want, envseg = 0, envblk = 0;
     dos_image_t img;
     volatile WORD *pfl;
     int d = g_exec_depth;
@@ -1718,16 +1719,59 @@ static char *exec_begin(dos_machine_t *m, volatile BYTE *tib, char *p)
         return p;
     }
 
+    /* ── THE CHILD'S ENVIRONMENT. (s74) ──────────────────────────────────────
+         Parameter block word 0 = 0 means "inherit", and on MS-DOS 6.22 inherit
+         means A COPY: a fresh block, allocated BELOW the program block, holding
+         the parent's strings, the double NUL, the word 0001 and the program name
+         exactly as the caller spelled it to EXEC (p_child measures all four as
+         relations: child.env.copy=0101, count=0100, namekind=0000). We used to
+         hand the child the parent's block itself -- and then dos_psp_build wiped
+         its first three bytes. DOS/4GW, launched as a separate DOS4GW.EXE by the
+         stub in Heaven7's h7.EXE, reads that name slot to find what to load, and
+         read "PEC=C:\COMMAND.COM". Doom, Heretic, Hexen and ZAR never showed it
+         because their extenders are BOUND into the game EXE: no EXEC, no copy.
+         A non-zero word is the caller's own block and is used as it stands. */
+    envseg = m->exec_env;
+    if (!envseg) {
+        const volatile BYTE *ppsp = (const volatile BYTE *)((DWORD)m->psp_seg << 4);
+        WORD penv = (WORD)(ppsp[0x2C] | (ppsp[0x2D] << 8));
+        const volatile BYTE *pe = (const volatile BYTE *)((DWORD)penv << 4);
+        DWORD slen, nlen = 0, total, k;
+        volatile BYTE *ce;
+        if (pe[0] == 0) slen = 1;                   /* empty: one NUL ends the list */
+        else { for (slen = 0; slen < 0x7FFE && !(pe[slen] == 0 && pe[slen + 1] == 0); ++slen) ; slen += 2; }
+        while (m->exec_name[nlen] && nlen < sizeof(m->exec_name) - 1) ++nlen;
+        total = slen + 2 + nlen + 1;
+        if (dos_alloc(NULL, m->first_mcb, (uint16_t)((total + 15) >> 4), &envblk, &maxpara) != 0) {
+            p = zput(p, "  EXEC: no memory for the environment copy\r\n");
+            VDM_REG(tib, VTIB_EAX) = (VDM_REG(tib, VTIB_EAX) & 0xFFFF0000u) | 8;
+            *pfl |= 1; VDM_REG(tib, VTIB_EIP) += 3;
+            return p;
+        }
+        ce = (volatile BYTE *)((DWORD)envblk << 4);
+        for (k = 0; k < slen; ++k) ce[k] = pe[k];
+        ce[slen] = 1; ce[slen + 1] = 0;             /* count word 0001 */
+        for (k = 0; k <= nlen; ++k) ce[slen + 2 + k] = (BYTE)m->exec_name[k];
+        envseg = envblk;
+        p = zput(p, "  EXEC: env copied from 0x"); p = zhex(p, penv);
+        p = zput(p, " to 0x"); p = zhex(p, envblk);
+        p = zput(p, " ("); p = zhex(p, slen); p = zput(p, " bytes of strings) + name [");
+        p = zput(p, m->exec_name); p = zput(p, "]\r\n");
+    }
+
     /* Ask for everything: DOS gives a .COM all of free memory, and an .EXE at
        least its minalloc. Probe the largest block by asking for too much. */
     if (dos_alloc(NULL, m->first_mcb, 0xFFFF, &child, &maxpara) == 0) maxpara = 0;
     want = maxpara;
     if (!want || dos_alloc(NULL, m->first_mcb, want, &child, &maxpara) != 0) {
         p = zput(p, "  EXEC: no memory\r\n");
+        if (envblk) dos_free(NULL, envblk);
         VDM_REG(tib, VTIB_EAX) = (VDM_REG(tib, VTIB_EAX) & 0xFFFF0000u) | 8;
         *pfl |= 1; VDM_REG(tib, VTIB_EIP) += 3;
         return p;
     }
+    /* The env block belongs to the child, as DOS records it (MCB owner = its PSP). */
+    if (envblk) mcb_wr16((volatile uint8_t *)((DWORD)(envblk - 1) << 4) + 1, child);
 
     /* Snapshot the parent BEFORE anything is overwritten. */
     g_exec[d].eax = VDM_REG(tib, VTIB_EAX); g_exec[d].ebx = VDM_REG(tib, VTIB_EBX);
@@ -1740,10 +1784,10 @@ static char *exec_begin(dos_machine_t *m, volatile BYTE *tib, char *p)
     g_exec[d].psp = m->psp_seg;
     g_exec[d].dta_seg = m->dta_seg; g_exec[d].dta_off = m->dta_off;
     g_exec[d].child_seg = child;
+    g_exec[d].env_seg   = envblk;
 
     /* Build the child's PSP and copy in its command tail, then load the image. */
-    dos_psp_build(NULL, child, m->exec_env ? m->exec_env : DOS_ENV_SEG,
-                  (uint16_t)(child + want));
+    dos_psp_build(NULL, child, envseg, (uint16_t)(child + want));
     /* The child gets the vectors as they stand NOW, so whatever it installs is
        unwound to the parent's when it exits -- that is the whole contract, and it
        matters most for INT 24h. (GH #34) */
@@ -3366,6 +3410,9 @@ static int dos_terminate(dos_machine_t *m, void *tib, char **pp, char *base)
         if (g_exec[d].child_seg)
             dos_psp_restore_vectors(NULL, g_exec[d].child_seg);
         if (g_exec[d].child_seg) dos_free(NULL, g_exec[d].child_seg);
+        /* And the environment copy EXEC made for it (s74). A TSR keeps its env
+           block along with its PSP, which is why this is on the exit arm only. */
+        if (g_exec[d].env_seg) { dos_free(NULL, g_exec[d].env_seg); g_exec[d].env_seg = 0; }
         }
         VDM_REG(tib, VTIB_EAX) = g_exec[d].eax; VDM_REG(tib, VTIB_EBX) = g_exec[d].ebx;
         VDM_REG(tib, VTIB_ECX) = g_exec[d].ecx; VDM_REG(tib, VTIB_EDX) = g_exec[d].edx;

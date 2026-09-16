@@ -336,15 +336,18 @@ class NtvdmexRig(Host):
           harness that cannot run is not a harness, so it is wired to what rt.bat
           actually does today: games/Probe/<NAME>, cmd.txt = "Probe <NAME>",
           answer in out/result_Probe.log.
+        ⚠ AND IT WENT STALE AGAIN with the s73 release layout (found s74, when the
+          first probe after it reported "no disputes" off ONE host): tests live in
+          debug/tests/Probe/ and the host writes to debug/out/. Same lesson.
         """
         name = os.path.basename(com).upper()
-        gdir = os.path.join(self.share, "games", "Probe")
+        gdir = os.path.join(self.share, "debug", "tests", "Probe")
         os.makedirs(gdir, exist_ok=True)
         shutil.copyfile(com, os.path.join(gdir, name))
         for dep in _deps(com):
             shutil.copyfile(dep, os.path.join(gdir, os.path.basename(dep).upper()))
 
-        log = os.path.join(self.share, "out", "result_Probe.log")
+        log = os.path.join(self.share, "debug", "out", "result_Probe.log")
         # ★ Delete the previous result and wait for a NEW file (s73): macOS's SMB
         #   client caches attributes, so an mtime change on an existing file can take
         #   minutes to show -- the whole sweep ran at ~4 min/probe on that. A file that

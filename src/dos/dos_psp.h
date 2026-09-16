@@ -9,17 +9,24 @@
 #include <stdint.h>
 #include "dos_mcb.h"        /* mcb_at / mcb_wr16 paragraph addressing */
 
-/* Build a PSP at psp_seg:0 and an empty environment at env_seg:0. top_seg is the
- * top-of-conventional-memory segment (0xA000 = 640KB). The command tail is empty
+/* Build a PSP at psp_seg:0 that points at the environment at env_seg:0. top_seg is
+ * the top-of-conventional-memory segment (0xA000 = 640KB). The command tail is empty
  * (length 0) until M2.5 wires real args; psp[0x81] holds the 0x0D the command-tail
- * parser scans for. Mirrors vdmhost.c's PSP setup. */
+ * parser scans for. Mirrors vdmhost.c's PSP setup.
+ *
+ * ⚠ IT DOES NOT TOUCH THE ENVIRONMENT BLOCK. (s74) It used to write three NULs at
+ *   env_seg:0 "to make an empty environment" -- harmless for the first program,
+ *   whose env is built straight afterwards, but EXEC hands a child the PARENT'S
+ *   block when the parameter block says "inherit", and three NULs over `COM` of
+ *   `COMSPEC=` turned the block into: strings end at +1, count word at +2, program
+ *   name at +4 = "PEC=C:\COMMAND.COM". That is the file Heaven7's DOS4GW.EXE
+ *   reported it could not open. The WOW launch had already found the same wipe
+ *   and rebuilt its env after this call; the EXEC path had not. Whoever wants an
+ *   empty environment writes the one NUL themselves. */
 static inline void dos_psp_build(volatile uint8_t *base, uint16_t psp_seg,
                                  uint16_t env_seg, uint16_t top_seg) {
     volatile uint8_t *psp = mcb_at(base, psp_seg);
-    volatile uint8_t *env = mcb_at(base, env_seg);
     uint32_t i;
-
-    env[0] = 0; env[1] = 0; env[2] = 0;                /* empty environment block   */
 
     for (i = 0; i < 0x100; ++i) psp[i] = 0;
     psp[0x00] = 0xCD; psp[0x01] = 0x20;                /* INT 20h (legacy exit)      */

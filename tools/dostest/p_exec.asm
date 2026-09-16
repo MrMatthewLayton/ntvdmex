@@ -36,6 +36,18 @@ start:
         mov     [pb_fcb1 + 2], ax
         mov     [pb_fcb2 + 2], ax
 
+        ; s74: remember the first 16 bytes of OUR environment.  EXEC with env=0
+        ; must give the child a COPY; the parent's block must come back untouched.
+        ; (The host shared it, and its PSP builder zeroed the first three bytes:
+        ; that is what killed Heaven7's DOS4GW.EXE -- see p_child.asm.)
+        push    ds
+        mov     ds, [2Ch]
+        xor     si, si
+        mov     di, envsave
+        mov     cx, 16
+        rep     movsb                           ; ES=CS already, set above
+        pop     ds
+
         POISON
         push    ds
         pop     es
@@ -45,6 +57,22 @@ start:
         int     21h
         call    probe_capture
         EMIT    "int21.4B.exec", "CF"
+
+        ; ---- is our environment still what it was?
+        push    ds
+        pop     es
+        mov     byte [envok], 0
+        push    ds
+        mov     ds, [2Ch]
+        xor     si, si
+        mov     di, envsave
+        mov     cx, 16
+        repe    cmpsb
+        pop     ds
+        jne     .env_changed
+        mov     byte [envok], 1
+.env_changed:
+        EMIT_BUF "exec.env.intact", envok, 1
 
         ; ---- 4Dh: the child's exit code should be here now.
         POISON
@@ -75,3 +103,5 @@ pb_fcb1  dw dfcb, 0
 pb_fcb2  dw dfcb, 0
 tail     db 0, 13
 dfcb     times 16 db 0
+envsave  times 16 db 0
+envok    db 0

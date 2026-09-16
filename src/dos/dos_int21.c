@@ -1043,6 +1043,7 @@ int dos_int21(dos_machine_t *m)
             m->exec_pb_seg = (uint16_t)(R_ES & 0xFFFF);
             m->exec_pb_off = (uint16_t)(R_BX & 0xFFFF);
             v86_path(m, R_DS, R_DX, m->exec_path, sizeof(m->exec_path));
+            v86_str(R_DS, R_DX, m->exec_name, sizeof(m->exec_name));
             m->exec_env      = (uint16_t)(pb[0] | (pb[1] << 8));
             m->exec_tail_off = (uint16_t)(pb[2] | (pb[3] << 8));
             m->exec_tail_seg = (uint16_t)(pb[4] | (pb[5] << 8));

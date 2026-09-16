@@ -51,7 +51,11 @@ typedef struct {
     uint16_t exec_pb_seg, exec_pb_off;
     uint16_t exec_ovl_seg, exec_ovl_reloc;
     char     exec_path[128];
-    uint16_t exec_env;         /* 0 = inherit the parent's environment               */
+    /* The name EXACTLY as the caller passed it in DS:DX. DOS 6.22 appends this,
+       verbatim -- not qualified, not upcased -- to the child's environment copy
+       after the 00 01 00; measured by p_exec/p_child (child.env.namekind). */
+    char     exec_name[128];
+    uint16_t exec_env;         /* 0 = inherit the parent's environment (a COPY)      */
     uint16_t exec_tail_seg, exec_tail_off;
     uint16_t exec_fcb1_seg, exec_fcb1_off;
     uint16_t exec_fcb2_seg, exec_fcb2_off;
