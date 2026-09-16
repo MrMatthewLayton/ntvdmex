@@ -10,8 +10,8 @@ context, so the call chain at the death can be read off. Values in the data
 object, the zone and the stack object are named too.
 
     scripts/doomstack.py runs/vdmwatch_s72_crash7.txt \
-        --core /private/tmp/xpshare/out/vdmwatch_core_dpmi.bin \
-        --exe  /private/tmp/xpshare/games/Doom/DOOM.EXE
+        --core /private/tmp/xpshare/debug/out/vdmwatch_core_dpmi.bin \
+        --exe  /private/tmp/xpshare/demo/msdos/Doom/DOOM.EXE
 
 The object bases are the ones the host handed DOS/4GW on this run (from the
 INT 31h 0501 lines in ntvdmhost.log); pass --code/--data if they differ.
@@ -41,7 +41,7 @@ def main():
     ap.add_argument('log')
     ap.add_argument('--core', help='vdmwatch_core_dpmi.bin (relocated bytes; preferred)')
     ap.add_argument('--core-base', type=lambda s: int(s, 0), default=0x03ff0000)
-    ap.add_argument('--exe', default='/private/tmp/xpshare/games/Doom/DOOM.EXE')
+    ap.add_argument('--exe', default='/private/tmp/xpshare/demo/msdos/Doom/DOOM.EXE')
     ap.add_argument('--code', type=lambda s: int(s, 0), default=0x04140000)
     ap.add_argument('--data', type=lambda s: int(s, 0), default=0x041b0000)
     ap.add_argument('--zone', type=lambda s: int(s, 0), default=0x04260000)

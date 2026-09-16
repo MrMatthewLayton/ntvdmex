@@ -5,18 +5,19 @@ rem then real clicks through the real window proc. (s68: "never made it to the g
 rem screen" by hand while the headless script did.) Leaves the host running.
 setlocal
 set SH=C:\Documents and Settings\All Users\Documents\ntvdmex
-set BM=%SH%\bm
+set BIN=%SH%\bin
+set RIG=%SH%\debug\rig
 set CFG=%SH%\cfg
-set OUT=%SH%\out
-set R=%BM%\rigshot.exe
+set OUT=%SH%\debug\out
+set R=%RIG%\rigshot.exe
 set LOG=%OUT%\lemlive.txt
 taskkill /f /im ntvdmhost.exe >nul 2>&1
 del /q "%CFG%\autoexit" "%CFG%\keys.txt" "%CFG%\qimode.txt" "%CFG%\capture.flag" "%OUT%\startfail.txt" >nul 2>&1
 del /q "%OUT%\ntvdmhost.log" "%OUT%\lemlive*.bmp" "%SH%\rigshot.txt" >nul 2>&1
-echo "%SH%\games\Lemmings\VGALEMMI.EXE"> "%CFG%\target.txt"
+echo "%SH%\demo\msdos\Lemmings\VGALEMMI.EXE"> "%CFG%\target.txt"
 echo ==== lemlive %DATE% %TIME% ==== > "%LOG%"
-cd /d "%SH%\games\Lemmings"
-start "" "%BM%\dosstub.com"
+cd /d "%SH%\demo\msdos\Lemmings"
+start "" "%RIG%\dosstub.com"
 ping -n 9 127.0.0.1 >nul
 "%R%" list >nul 2>&1
 type "%SH%\rigshot.txt" >> "%LOG%"

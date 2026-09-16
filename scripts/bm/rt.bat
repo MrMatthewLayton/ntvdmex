@@ -1,6 +1,6 @@
 @echo off
 rem ============================================================================
-rem  NTVDMEX bare-metal runner -- ONE FOLDER, NOTHING ON C:.  (s61 rewrite)
+rem  NTVDMEX bare-metal runner -- ONE FOLDER, NOTHING ON C:.  (s61 rewrite, s73 layout)
 rem
 rem  The previous version spread the rig over five places and the user cleared the
 rem  box because of it.  What it used to do, and no longer does:
@@ -9,19 +9,33 @@ rem     md C:\test             a copy of each test program
 rem     rmdir/xcopy C:\game    a FULL COPY of the game, every single run
 rem     copy rt.bat C:\WINDOWS
 rem     result_*.log + shot_*.bmp dropped in the share root
-rem  Now: the host runs from bm\, games run IN PLACE from games\, everything read
-rem  is in cfg\ and everything written is in out\.  C: gets nothing at all.
+rem
+rem  THE s73 LAYOUT (the share root is also what gets copied to a USB for a release):
+rem     bin\          the working host binary -- the ONLY thing in here
+rem     dist\         the installable zips
+rem     cfg\          everything the host READS: knobs, flags, target.txt, FLOPPY.IMG
+rem     debug\rig\    this harness: rt.bat, runwatch.bat, controld, rigshot, vdmwatch
+rem     debug\tests\  DOS test programs: Probe\ Argtest\ Testcard\ dos\ selftest\
+rem     debug\out\    everything the host WRITES: ntvdmhost.log, result_*.log, shots
+rem     debug\prev\   rollback host builds (never run from here)
+rem     demo\msdos\   THE USER'S games and demos -- run IN PLACE, never copied
+rem     demo\win16\   Win 3.11 apps
+rem  C: gets nothing at all.  bin\ bm\-compat: the host also accepts a folder named bm.
 rem
 rem  USAGE (via cmd.txt, one line):
-rem     <Name> [EXE]   run games\<Name>\<EXE>   (EXE defaults to <Name>.EXE)
-rem     setup          install watcher + IFEO, create cfg\ and out\
-rem     clean          remove every artefact the OLD layout left behind
+rem     <Name> [EXE]   run demo\msdos\<Name>\<EXE>, else debug\tests\<Name>\<EXE>
+rem                    (EXE defaults to <Name>.EXE)
+rem     setup          install watcher + IFEO, create cfg\ and debug\out\
+rem     clean          remove every artefact the OLD layouts left behind
 rem     reboot         restart the box
 rem ============================================================================
 set SH=C:\Documents and Settings\All Users\Documents\ntvdmex
-set BM=%SH%\bm
+set BIN=%SH%\bin
+set RIG=%SH%\debug\rig
+set TESTS=%SH%\debug\tests
+set DEMO=%SH%\demo\msdos
 set CFG=%SH%\cfg
-set OUT=%SH%\out
+set OUT=%SH%\debug\out
 
 if /i "%1"=="reboot" goto rebootnow
 if /i "%1"=="clean"  goto cleanup
@@ -49,8 +63,10 @@ rem ---------------------------------------------------------------------------
 set T=%2
 set EXE=%3
 if "%EXE%"=="" set EXE=%T%.EXE
-set GDIR=%SH%\games\%T%
+set GDIR=%DEMO%\%T%
+if not exist "%GDIR%\%EXE%" set GDIR=%TESTS%\%T%
 if not exist "%CFG%" md "%CFG%"
+if not exist "%SH%\debug" md "%SH%\debug"
 if not exist "%OUT%" md "%OUT%"
 if not exist "%GDIR%\%EXE%" goto livenosuch
 
@@ -74,8 +90,8 @@ rem in a cycle cannot be caught reliably by a periodic screenshot.
 echo "%GDIR%\%EXE%" %3 %4 %5> "%CFG%\target.txt"
 
 rem A header in the notes file so the report is per-game without anyone typing one.
-echo.>> "%SH%\notes.txt"
-echo ==== %T% (%EXE%)  %DATE% %TIME% ====>> "%SH%\notes.txt"
+echo.>> "%OUT%\notes.txt"
+echo ==== %T% (%EXE%)  %DATE% %TIME% ====>> "%OUT%\notes.txt"
 
 rem ⚠⚠ /wait, AND IT IS NOT OPTIONAL. Without it this cmd exits as soon as `start`
 rem    returns, and OUR HOST IS CONSOLE-SUBSYSTEM -- it shares in the parent console's
@@ -87,14 +103,14 @@ rem    queued while one is up. That is the right trade: a game you can actually 
 rem    beats a queue slot, and closing the window ends it.
 echo launched %GDIR%\%EXE% at %TIME% > "%OUT%\result_live.log"
 cd /d "%GDIR%"
-start /wait "" "%BM%\dosstub.com"
+start /wait "" "%RIG%\dosstub.com"
 echo exited at %TIME% >> "%OUT%\result_live.log"
 copy /y "%OUT%\ntvdmhost.log" "%OUT%\result_%T%.log" >nul 2>&1
 goto :eof
 
 :livenosuch
 echo NO SUCH TARGET: %GDIR%\%EXE% > "%OUT%\result_live.log"
-echo --- what is in games\%T%: >> "%OUT%\result_live.log"
+echo --- what is in %GDIR%: >> "%OUT%\result_live.log"
 dir /b "%GDIR%" >> "%OUT%\result_live.log" 2>&1
 goto :eof
 
@@ -150,28 +166,31 @@ rem  Belt and braces alongside :noprefetch; costs about a second.
 rem ---------------------------------------------------------------------------
 :warmup
 if not exist "%OUT%" md "%OUT%"
-type "%BM%\ntvdmhost.exe" > nul 2>&1
+type "%BIN%\ntvdmhost.exe" > nul 2>&1
 echo warmed %TIME% > "%OUT%\result_warm.log"
-dir "%BM%\ntvdmhost.exe" >> "%OUT%\result_warm.log" 2>&1
+dir "%BIN%\ntvdmhost.exe" >> "%OUT%\result_warm.log" 2>&1
 goto :eof
 
 :setup
 if not exist "%CFG%" md "%CFG%"
+if not exist "%SH%\debug" md "%SH%\debug"
 if not exist "%OUT%" md "%OUT%"
 rem The IFEO Debugger key is the whole interception mechanism.  It must point at a
 rem binary that EXISTS -- if it does not, EVERY 16-bit launch on the box fails,
 rem which is exactly what "nothing ran at all" looked like after the wipe.
-reg add "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\ntvdm.exe" /v Debugger /t REG_SZ /d "\"%BM%\ntvdmhost.exe\"" /f >nul
+reg add "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\ntvdm.exe" /v Debugger /t REG_SZ /d "\"%BIN%\ntvdmhost.exe\"" /f >nul
 rem Watcher auto-recovery on reboot.  One file in Startup; it is how the box comes
 rem back without someone standing at it.
-copy /y "%BM%\runwatch.bat" "%ALLUSERSPROFILE%\Start Menu\Programs\Startup\ntvdmex-watch.bat" >nul 2>&1
+copy /y "%RIG%\runwatch.bat" "%ALLUSERSPROFILE%\Start Menu\Programs\Startup\ntvdmex-watch.bat" >nul 2>&1
 echo setup done > "%OUT%\result_setup.log"
 echo IFEO: >> "%OUT%\result_setup.log"
 reg query "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\ntvdm.exe" /v Debugger >> "%OUT%\result_setup.log" 2>&1
 echo host: >> "%OUT%\result_setup.log"
-dir "%BM%\ntvdmhost.exe" >> "%OUT%\result_setup.log" 2>&1
-echo games: >> "%OUT%\result_setup.log"
-dir /b "%SH%\games" >> "%OUT%\result_setup.log" 2>&1
+dir "%BIN%\ntvdmhost.exe" >> "%OUT%\result_setup.log" 2>&1
+echo demo\msdos: >> "%OUT%\result_setup.log"
+dir /b "%DEMO%" >> "%OUT%\result_setup.log" 2>&1
+echo debug\tests: >> "%OUT%\result_setup.log"
+dir /b "%TESTS%" >> "%OUT%\result_setup.log" 2>&1
 goto :eof
 
 rem ---------------------------------------------------------------------------
@@ -200,6 +219,13 @@ del /q "%SH%\*.bmp"           >nul 2>&1
 del /q "%SH%\result_*.log"    >nul 2>&1
 del /q "%SH%\doomrun.bat"     >nul 2>&1
 del /q "%SH%\ntvdmhost.log"   >nul 2>&1
+del /q "%SH%\notes.txt"       >nul 2>&1
+rem The s61 share layout (bm\ games\ demos\ out\) that s73 folded into bin\ debug\
+rem demo\. Only removed once EMPTY -- this never deletes a game or a log by itself.
+rd "%SH%\bm"    >nul 2>&1
+rd "%SH%\games" >nul 2>&1
+rd "%SH%\demos" >nul 2>&1
+rd "%SH%\out"   >nul 2>&1
 echo === AFTER === >> "%OUT%\result_clean.log"
 if exist C:\ntvdmex      echo STILL C:\ntvdmex      >> "%OUT%\result_clean.log"
 if exist C:\test         echo STILL C:\test         >> "%OUT%\result_clean.log"
@@ -217,15 +243,18 @@ echo no target given > "%OUT%\result_none.log"
 goto :eof
 
 rem ---------------------------------------------------------------------------
-rem  RUN -- games\<Name>\<EXE>, IN PLACE.  No copy, no scratch directory.
+rem  RUN -- demo\msdos\<Name>\<EXE> (or debug\tests\<Name>\<EXE>), IN PLACE.
 rem ---------------------------------------------------------------------------
 :run
 set T=%1
 set EXE=%2
 if "%EXE%"=="" set EXE=%T%.EXE
-set GDIR=%SH%\games\%T%
+rem A target is a game or demo first, a test program second -- same name, same run.
+set GDIR=%DEMO%\%T%
+if not exist "%GDIR%\%EXE%" set GDIR=%TESTS%\%T%
 
 if not exist "%CFG%" md "%CFG%"
+if not exist "%SH%\debug" md "%SH%\debug"
 if not exist "%OUT%" md "%OUT%"
 if not exist "%GDIR%\%EXE%" goto nosuch
 
@@ -245,7 +274,7 @@ echo.> "%CFG%\autoexit"
 rem Run FROM the game's own directory so it finds its data files, and so anything
 rem it writes (config, saves) lands where a real install would put them.
 cd /d "%GDIR%"
-start /wait "" "%BM%\dosstub.com"
+start /wait "" "%RIG%\dosstub.com"
 
 copy /y "%OUT%\ntvdmhost.log" "%OUT%\result_%T%.log" >nul 2>&1
 for %%f in ("%OUT%\shot*.bmp") do copy /y "%%f" "%OUT%\shot_%T%_%%~nxf" >nul 2>&1
@@ -254,6 +283,6 @@ goto :eof
 
 :nosuch
 echo NO SUCH TARGET: %GDIR%\%EXE% > "%OUT%\result_%T%.log"
-echo --- what is in games\%T%: >> "%OUT%\result_%T%.log"
+echo --- what is in %GDIR%: >> "%OUT%\result_%T%.log"
 dir /b "%GDIR%" >> "%OUT%\result_%T%.log" 2>&1
 goto :eof

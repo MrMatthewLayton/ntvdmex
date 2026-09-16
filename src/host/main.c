@@ -24,23 +24,25 @@
      and asked for that not to happen again; this is the half of it that is the
      HOST'S doing rather than the scripts'.
 
-       <dir>\cfg\   everything we READ: knobs, flags, target.txt, the floppy image
-       <dir>\out\   everything we WRITE: the log, screenshots, traces, probe dumps
-       <dir>\bm\    the harness and this binary       (scripts' business, not ours)
-       <dir>\games\ the user's games, run IN PLACE    (never copied anywhere)
+       <dir>\cfg\        everything we READ: knobs, flags, target.txt, the floppy image
+       <dir>\debug\out\  everything we WRITE: the log, screenshots, traces, probe dumps
+       <dir>\bin\        this binary                       (bm\ = the pre-s73 name)
+       <dir>\debug\rig\  the harness                       (scripts' business, not ours)
+       <dir>\demo\msdos\ the user's games and demos, run IN PLACE (never copied)
 
-   ⚠ The two directories are created at startup (see ntvdmex_dirs_ensure): a knob
-     read may legitimately find nothing, but a WRITE to a missing out\ would fail
-     silently and take the log with it -- which is the one instrument that explains
-     every other failure. */
+   ⚠ The directories are created at startup: a knob read may legitimately find
+     nothing, but a WRITE to a missing debug\out\ would fail silently and take the
+     log with it -- which is the one instrument that explains every other failure.
+     debug\ is created before debug\out\ -- CreateDirectoryA makes ONE level. */
 /* ── ★ THE FOLDER IS WHEREVER THE HOST WAS EXTRACTED. (s71, the 17th deliverable) ────
      This was a compile-time string naming the rig's share, so a copy of NTVDMEX on any
      other machine wrote its log nowhere, read no knobs and found no target -- a zip
      that "works on my machine" and nowhere else. The root is now derived once from
-     the host's own path: the exe lives in <root>\bm\, so the root is bm's parent; an
-     exe not in a bm\ folder uses its own directory. The old share path is only the
-     fallback for a GetModuleFileName that fails, which it does not. The rig's layout
-     is unchanged by this: its exe is in bm\ under the share root.
+     the host's own path: the exe lives in <root>\bin\ (or the older <root>\bm\), so
+     the root is that folder's parent; an exe anywhere else uses its own directory.
+     The old share path is only the fallback for a GetModuleFileName that fails, which
+     it does not. s73 renamed bm\ to bin\ for the release layout; bm\ stays accepted so
+     an already-installed s72 zip keeps finding its cfg\.
    The macros keep their names and their call sites: each expands to a call that
    composes the path into one of a ring of buffers, so `CreateFileA(CFG_("x.txt"))`
    reads as before. A returned pointer is good for the next 15 calls from any thread,
@@ -49,10 +51,11 @@
 static const char *ntvdmex_root(void);                    /* "<root>\", trailing slash */
 static const char *ntvdmex_path(const char *sub, const char *name);
 #define NTVDMEX_DIR ntvdmex_root()
-#define NTVDMEX_CFG ntvdmex_path("cfg\\", "")
-#define NTVDMEX_OUT ntvdmex_path("out\\", "")
-#define CFG_(n)     ntvdmex_path("cfg\\", n)
-#define OUT_(n)     ntvdmex_path("out\\", n)
+#define NTVDMEX_CFG   ntvdmex_path("cfg\\", "")
+#define NTVDMEX_DEBUG ntvdmex_path("debug\\", "")        /* parent of out\; created first */
+#define NTVDMEX_OUT   ntvdmex_path("debug\\out\\", "")
+#define CFG_(n)       ntvdmex_path("cfg\\", n)
+#define OUT_(n)       ntvdmex_path("debug\\out\\", n)
 /* The log is the one path log.h owns; define it before including so its #ifndef
    defers to us rather than putting the log back on C:. */
 #define LOG_PATH    OUT_("ntvdmhost.log")
@@ -491,10 +494,14 @@ static const char *ntvdmex_root(void)
             for (i = 0; i < (int)n; ++i) if (self[i] == '\\') { prev = last; last = i; }
             if (last < 0) { root[0] = '.'; root[1] = '\\'; root[2] = 0; }
             else {
-                int cut = last;                      /* ...\bm\ntvdmhost.exe -> ...\bm  */
-                /* the exe's directory is "bm" (any case) -> the root is its parent */
-                if (prev >= 0 && last - prev == 3
-                    && (self[prev + 1] | 0x20) == 'b' && (self[prev + 2] | 0x20) == 'm')
+                int cut = last;                      /* ...\bin\ntvdmhost.exe -> ...\bin */
+                /* the exe's directory is "bin" or "bm" (any case) -> the root is its
+                   parent. bm is the pre-s73 name; an installed s72 zip still has it. */
+                int dl = last - prev;                /* dir name length + 1 */
+                if (prev >= 0 && (self[prev + 1] | 0x20) == 'b'
+                    && ((dl == 3 && (self[prev + 2] | 0x20) == 'm')
+                        || (dl == 4 && (self[prev + 2] | 0x20) == 'i'
+                                    && (self[prev + 3] | 0x20) == 'n')))
                     cut = prev;
                 for (i = 0; i < cut; ++i) root[i] = self[i];
                 root[cut] = '\\'; root[cut + 1] = 0;
@@ -21058,9 +21065,11 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     char progpath[768]; char args[256];
     unsigned i; int guard;
     g_guest_tid = GetCurrentThreadId();
-    /* cfg\ and out\ before ANYTHING logs. A missing out\ makes every log_append fail
-       silently, and the log is what explains every other failure. Idempotent. */
+    /* cfg\ and debug\out\ before ANYTHING logs. A missing out\ makes every log_append
+       fail silently, and the log is what explains every other failure. Idempotent;
+       debug\ first because CreateDirectoryA does not create intermediate levels. */
     CreateDirectoryA(NTVDMEX_CFG, NULL);
+    CreateDirectoryA(NTVDMEX_DEBUG, NULL);
     CreateDirectoryA(NTVDMEX_OUT, NULL);
     /* ── ⛔⛔ ONE HOST AT A TIME. ─────────────────────────────────────────────────
          Nothing stopped a second instance, and two of them fight over things that

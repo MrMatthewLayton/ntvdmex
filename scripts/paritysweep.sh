@@ -22,7 +22,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 D="$ROOT/tools/dostest"
 SHARE=/private/tmp/xpshare
 
-echo "  subject on the rig: $(md5 -q "$SHARE/bm/ntvdmhost.exe" 2>/dev/null || echo '?')"
+echo "  subject on the rig: $(md5 -q "$SHARE/bin/ntvdmhost.exe" 2>/dev/null || echo '?')"
 echo
 
 probes=()

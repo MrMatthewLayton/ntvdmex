@@ -4,7 +4,7 @@
 > this file top to bottom and you will know where it is, what works, what does not, and
 > what to do next.
 
-- **Last updated:** 2026-09-16 (session 72 close)
+- **Last updated:** 2026-09-16 (session 73 — share re-laid for release; see the s73 block)
 - **Score: 86.9%** (`./tools/score/score.py` — run it, do not quote this line).
   Session 53 moved it 72.4 → 79.6; session 54 → 80.2; session 55 → 83.1;
   session 56 → 85.4; s57, **s58, s59 and s60 moved it not at all** — s57 built the modal
@@ -237,9 +237,67 @@ and matches the 6.22 oracle row for row (session 53)** — but `MEM /C` still re
    the next step, and it is also the honest correction for *a fix measured on
    one guest is a fix for none*.
 
-   ### ▶ START HERE: **SESSION 72 (below), then 71, 70, 69, 68, 61, 60, 59.**
+   ### ▶ START HERE: **SESSION 73 (below), then 72, 71, 70, 69, 68, 61, 60, 59.**
 
    ---
+
+   ## ★★★ SESSION 73 (2026-09-16, morning) — **THE SHARE IS LAID OUT FOR RELEASE: `bin\ dist\ cfg\ debug\ demo\`. THE HOST MOVED TO `bin\`; THE RIG RUNS `cfdd7211`, UNCONFIRMED.**
+
+   **Two days to the first test release (the 18th).** The user's plan: copy the share to a
+   USB — binary, games and apps together — so the share had to be coherent to copy AND to
+   keep working in. It was `bm\ cfg\ out\ games\ demos\ dist\` plus root litter. Now:
+
+   ```
+   \ntvdmex\                        (= the SMB share; = the USB)
+      bin\ntvdmhost.exe            THE working host. Nothing else in here.
+      dist\ntvdmex-<date>-<sha>.zip the installable package(s) -- zips only
+      cfg\                          everything the host READS (unchanged: FLOPPY.IMG, target.txt, knobs)
+      debug\rig\                    the harness: rt.bat runwatch.bat controld rigshot vdmwatch vdmdump
+                                    dosstub.com + the LIVE .bat runners + qbkeys_*.txt
+      debug\tests\                  Probe\ Argtest\ Testcard\ selftest\ dos\ (the old bm\tests)
+      debug\out\                    everything the host WRITES (the old out\ + notes.txt)
+      debug\prev\                   rollback builds: ntvdmhost_prev.exe = a5cd764b (USER-CONFIRMED)
+      demo\msdos\                   games + demos FLAT: Doom Duke3D HERETIC Hexen Lemmings Mario Skyroads
+                                    skyxmas Wolf3D Wolfy Zar Bubbles chasmdem dkd-egas fusion_f radiance h7 qb45
+      demo\win16\                   Win 3.11 apps (EMPTY -- README only; nothing was on the share)
+      watcher.txt controld.txt cmd.txt rigshot.txt   the control channel (compiled into controld/rigshot)
+   ```
+   For the USB: copy `bin\ dist\ cfg\ demo\`; leave `debug\` behind.
+
+   **What had to change for `bm\` → `bin\`, and it was not a rename:**
+   * **The host** derived its root from the exe's directory being literally `bm`
+     (`ntvdmex_root()`). It now accepts `bin` **or** `bm` (an installed s72 zip keeps
+     working) and writes to **`debug\out\`** instead of `out\` (`NTVDMEX_OUT`; `debug\`
+     is created first — `CreateDirectoryA` makes one level). That is a **5th unseen host
+     change** on top of s72's four; the user chose "rebuild + deploy".
+   * **`vdmwatch.c`** logged to a compiled-in `\out\` — repointed. controld/rigshot write
+     to the root and are unchanged.
+   * **`rt.bat`**: `BIN RIG TESTS DEMO CFG OUT` variables; a target resolves to
+     `demo\msdos\<Name>` first, `debug\tests\<Name>` second, so `bmqueue.sh Probe P_DRV.COM`
+     and `bmqueue.sh Doom DOOM.EXE` are unchanged. `setup` points IFEO at `bin\`. `clean`
+     `rd`s the empty s61 dirs. `runwatch.bat` runs `debug\rig\rt.bat`; its window title now
+     carries `[debug\rig]` so an old and a new watcher can be told apart.
+   * **`package.sh` + `package\*.bat` + README**: `bin\ntvdmhost.exe`, `debug\out\ntvdmhost.log`.
+   * **Mac side**: `bmqueue.sh` (results in `debug/out/`), `paritysweep.sh`, `lemhpab.sh`,
+     `wowtriage.sh`, `bmwow.sh`, `bmsxs.sh`, `bmstockdump.sh`, `doomstack.py`.
+   * ★ **NEW `scripts/bmstage.sh`** — lays `debug\rig\` out FROM THE REPO (CRLF, md5 both
+     sides). **It does not touch the host unless `--host`**, and `--host` copies the old
+     `bin\` exe to `debug\prev\ntvdmhost_prev.exe` first. `--check` diffs without writing.
+
+   **⚠ WHAT WAS DROPPED FROM THE SHARE, AND WHY.** `doomrun menushot setshot stageall
+   stockdump sxs zarargs zarcmp zarlong zarout zarplay gamedir` — every one is **pre-s61**:
+   they `md C:\ntvdmex`, copy the host there, and `reg add` the IFEO Debugger to
+   `C:\ntvdmex\ntvdmhost.exe`. Running any of them recreates the litter the user wiped the
+   box over, then points the interception at a binary that does not exist — *"no DOS app
+   runs"*. They stay in `scripts/bm/` for reading; `bmstage.sh` stages only the LIVE set.
+   `rt_stock.bat` (the stock oracle) was the one live-era script still copying to
+   `C:\test` — ported to run in place from `debug\tests\dos\`.
+
+   **The cutover, in the order that keeps the box alive:** (1) `restore.bat` via controld
+   → IFEO = `bin\ntvdmhost.exe` **before** anything moved out of `bm\`; (2) `exec` the new
+   `runwatch.bat` → new Startup entry + new controld; (3) `reboot` → only the new watcher
+   comes back; (4) delete `bm\`. **`bm\` was still on the share at the reboot** — see the
+   close block for whether step 4 happened.
 
    ## ★★★★★ SESSION 72 (2026-09-15, afternoon) — **THE BY-HAND PASS: THE PACKAGE WORKS ON A FRESH FOLDER, AND DOOM'S E1M1 CRASH IS NOW REPRODUCIBLE WITH THREE SUSPECTS DEAD.**
 
@@ -393,7 +451,8 @@ and matches the 6.22 oracle row for row (session 53)** — but `MEM /C` still re
      memory under the fix confirmed this afternoon; (2) **QBasic File > Open, navigate,
      run** — the memory map moved beneath it; (3) **one memory-tight guest** (Duke3D is
      the known one), which is where 7.4 KB would show.
-   * Rollback: `bm\ntvdmhost_prev.exe` = `c91b521e`; `a5cd764b` archived in `runs/`.
+   * Rollback: ~~`bm\ntvdmhost_prev.exe` = `c91b521e`~~ **s73: `debug\prev\ntvdmhost_prev.exe`
+     = `a5cd764b` (the confirmed build); `c91b521e` is `debug\prev\ntvdmhost_c91b521e.exe`.**
 
    ### ⚠ RIG STATE THAT MUST NOT BE LOST
    `cfg\FLOPPY.IMG` is now on the share and **must stay** — without it `p_disk` goes

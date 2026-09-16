@@ -9,10 +9,11 @@ rem does not fit controld's 192-byte command buffer) and the results are
 rem result_qbopen<tag>.log + shot_qbopen<tag>_*.bmp. No tag = the default walk.
 rem Cleans up the flags afterwards so a later by-hand run is not fed scripted input.
 set SH=C:\Documents and Settings\All Users\Documents\ntvdmex
-set BM=%SH%\bm
+set BIN=%SH%\bin
+set RIG=%SH%\debug\rig
 set CFG=%SH%\cfg
-set OUT=%SH%\out
-set GDIR=%SH%\demos\qb45
+set OUT=%SH%\debug\out
+set GDIR=%SH%\demo\msdos\qb45
 set EXE=QB.EXE
 set T=qbopen%~1
 if not exist "%GDIR%\%EXE%" goto nosuch
@@ -29,14 +30,14 @@ del /q "%OUT%\shot??.txt" >nul 2>&1
 > "%CFG%\capture.flag" echo 150
 rem Default: Esc (welcome box); Alt+F, O (Open dialog: *.BAS + dirs + drives);
 rem Tab x3 across File Name / Files / Dirs+Drives / OK; Esc; Alt+F, X (exit).
-if exist "%BM%\qbkeys_%~1.txt" (
-  copy /y "%BM%\qbkeys_%~1.txt" "%CFG%\keys.txt" >nul
+if exist "%RIG%\qbkeys_%~1.txt" (
+  copy /y "%RIG%\qbkeys_%~1.txt" "%CFG%\keys.txt" >nul
 ) else (
   > "%CFG%\keys.txt" echo w5000 01 w1500 d38 21 u38 w1000 18 w5000 0f w1500 0f w1500 0f w1500 01 w1500 d38 21 u38 w1000 2d w3000
 )
 > "%CFG%\autoexit" echo.
 cd /d "%GDIR%"
-start /wait "" "%BM%\dosstub.com"
+start /wait "" "%RIG%\dosstub.com"
 copy /y "%OUT%\ntvdmhost.log" "%OUT%\result_%T%.log" >nul 2>&1
 for %%f in ("%OUT%\shot??.bmp" "%OUT%\shot??.txt") do copy /y "%%f" "%OUT%\shot_%T%_%%~nxf" >nul 2>&1
 del /q "%CFG%\autoexit" >nul 2>&1

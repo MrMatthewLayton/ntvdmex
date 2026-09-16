@@ -42,7 +42,8 @@
 #include <tlhelp32.h>
 
 #define SHARE "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex"
-#define LOGF  SHARE "\\out\\vdmwatch.txt"
+#define OUTDIR SHARE "\\debug\\out"         /* what the host writes lives here (s73 layout) */
+#define LOGF  OUTDIR "\\vdmwatch.txt"
 
 /* ── tiny no-CRT helpers (same shapes as rigshot.c) ─────────────────────────── */
 static char *sput(char *p, const char *s) { while (*s) *p++ = *s++; *p = 0; return p; }
@@ -254,8 +255,8 @@ static void dump_region(HANDLE hp, const char *path, DWORD base, DWORD size)
 
 static void dump_core(HANDLE hp)
 {
-    dump_region(hp, SHARE "\\out\\vdmwatch_core_low.bin",  0x00000000u, 0x00110000u);   /* IVT..HMA */
-    dump_region(hp, SHARE "\\out\\vdmwatch_core_dpmi.bin", 0x03ff0000u, 0x00b10000u);   /* every DPMI block Doom took */
+    dump_region(hp, OUTDIR "\\vdmwatch_core_low.bin",  0x00000000u, 0x00110000u);   /* IVT..HMA */
+    dump_region(hp, OUTDIR "\\vdmwatch_core_dpmi.bin", 0x03ff0000u, 0x00b10000u);   /* every DPMI block Doom took */
 }
 
 /* The stack, wide: from below ESP (what a `ret` just popped, the callee's locals) up

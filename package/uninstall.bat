@@ -4,7 +4,7 @@ cd /d "%~dp0"
 echo.
 echo NTVDMEX -- put the machine's own ntvdm.exe back
 echo.
-"%~dp0bm\ntvdmhost.exe" /uninstall
+"%~dp0bin\ntvdmhost.exe" /uninstall
 if errorlevel 1 (
     echo.
     echo UNINSTALL FAILED. If the message above says "access denied", run this from

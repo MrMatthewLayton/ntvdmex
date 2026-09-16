@@ -293,7 +293,7 @@ class NtvdmexRig(Host):
             time.sleep(6)
             if os.stat(beat).st_mtime == t0:
                 return False, ("watcher.txt is not updating -- the rig watcher has "
-                               "stopped (run bm/runwatch.bat on the box)")
+                               "stopped (run debug/rig/runwatch.bat on the box)")
         except OSError as e:
             return False, "cannot stat watcher.txt: %s" % e
         return True, ""

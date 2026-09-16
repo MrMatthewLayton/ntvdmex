@@ -28,8 +28,8 @@ TIMEOUT="${TIMEOUT:-180}"
 [ -d "$SH" ]   || { echo "share not mounted at $SH" >&2; exit 2; }
 
 if [ "${1:-}" != "--no-deploy" ]; then
-  cp "$HOST" "$SH/bm/ntvdmhost.exe" || exit 2
-  L=$(md5 -q "$HOST"); R=$(md5 -q "$SH/bm/ntvdmhost.exe")
+  cp "$HOST" "$SH/bin/ntvdmhost.exe" || exit 2
+  L=$(md5 -q "$HOST"); R=$(md5 -q "$SH/bin/ntvdmhost.exe")
   [ "$L" = "$R" ] || { echo "DEPLOY MISMATCH local=$L share=$R" >&2; exit 2; }
   echo "deployed ntvdmhost.exe  md5=$L"
 fi

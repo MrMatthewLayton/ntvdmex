@@ -37,16 +37,16 @@ else
   # ⚠ CHECKSUM WHAT IS DEPLOYED. build/ produces ntvdmex.exe AND ntvdmhost.exe and
   #   the host is the second one; copying the wrong one has cost more than one
   #   session, with runs that kept "succeeding" against a stale log.
-  cp "$HOST" "$SH/bm/ntvdmhost.exe" || exit 2
-  L=$(md5 -q "$HOST"); R=$(md5 -q "$SH/bm/ntvdmhost.exe")
+  cp "$HOST" "$SH/bin/ntvdmhost.exe" || exit 2
+  L=$(md5 -q "$HOST"); R=$(md5 -q "$SH/bin/ntvdmhost.exe")
   [ "$L" = "$R" ] || { echo "DEPLOY MISMATCH local=$L share=$R" >&2; exit 2; }
   echo "deployed ntvdmhost.exe  md5=$L"
   if [ -f "$SHOT" ]; then
-    cp "$SHOT" "$SH/bm/rigshot.exe" || exit 2
+    cp "$SHOT" "$SH/debug/rig/rigshot.exe" || exit 2
     echo "deployed rigshot.exe    md5=$(md5 -q "$SHOT")"
   fi
 fi
-cp scripts/bm/sxs.bat "$SH/bm/sxs.bat" || exit 2
+cp scripts/bm/sxs.bat "$SH/debug/rig/sxs.bat" || exit 2
 
 GUESTS="$*"
 [ -n "$GUESTS" ] || GUESTS="CALC WRITE CARDFILE SYSEDIT"
@@ -55,7 +55,7 @@ GUESTS="$*"
 #   a stale one is a silent wrong answer, and this project has paid for that once.
 rm -f "$SH/sxs_done.txt" "$SH/sxs.txt" "$SH/sxs.bmp"
 
-printf 'exec cmd /c "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\bm\\sxs.bat" %s\r\n' \
+printf 'exec cmd /c "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\debug\\rig\\sxs.bat" %s\r\n' \
   "$GUESTS" > "$SH/control.txt"
 echo "queued via controld: $GUESTS   (up to ${TIMEOUT}s for sxs_done.txt)"
 

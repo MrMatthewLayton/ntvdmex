@@ -5,12 +5,12 @@ echo.
 echo NTVDMEX -- make this copy the machine's MS-DOS and Win16 VDM
 echo Folder: %~dp0
 echo.
-if not exist "%~dp0bm\ntvdmhost.exe" (
-    echo bm\ntvdmhost.exe is missing next to this script. Extract the whole zip.
+if not exist "%~dp0bin\ntvdmhost.exe" (
+    echo bin\ntvdmhost.exe is missing next to this script. Extract the whole zip.
     pause
     exit /b 1
 )
-"%~dp0bm\ntvdmhost.exe" /install
+"%~dp0bin\ntvdmhost.exe" /install
 if errorlevel 1 (
     echo.
     echo INSTALL FAILED. If the message above says "access denied", this needs an

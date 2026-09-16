@@ -9,8 +9,8 @@
 # on an XP box and running install.bat is the whole install:
 #
 #   install.bat uninstall.bat status.bat smoke.bat README.txt
-#   bm\ntvdmhost.exe  bm\selftest.com
-#   cfg\  out\                 (empty; the host creates them anyway)
+#   bin\ntvdmhost.exe  bin\selftest.com
+#   cfg\  debug\out\        (empty; the host creates them anyway)
 #
 # No Win16 system files are bundled: the WOW half runs XP's OWN krnl386/gdi/user
 # from system32 (the -a argument of the WOW launch names them), which every XP
@@ -35,15 +35,15 @@ date=$(date +%Y%m%d)
 name="ntvdmex-$date-$sha"
 stage="$ROOT/dist/$name"
 rm -rf "$stage"
-mkdir -p "$stage/bm" "$stage/cfg" "$stage/out"
+mkdir -p "$stage/bin" "$stage/cfg" "$stage/debug/out"
 
-cp "$HOST" "$stage/bm/ntvdmhost.exe"
-cp "$ROOT/tools/dostest/selftest.com" "$stage/bm/selftest.com"
+cp "$HOST" "$stage/bin/ntvdmhost.exe"
+cp "$ROOT/tools/dostest/selftest.com" "$stage/bin/selftest.com"
 for f in install.bat uninstall.bat status.bat smoke.bat README.txt; do
     perl -pe 's/\r?\n/\r\n/' "$ROOT/package/$f" > "$stage/$f"
 done
 printf 'settings files go here; empty = defaults\r\n' > "$stage/cfg/README.txt"
-printf 'the last run''s log (ntvdmhost.log) and screenshots land here\r\n' > "$stage/out/README.txt"
+printf 'the last run''s log (ntvdmhost.log) and screenshots land here\r\n' > "$stage/debug/out/README.txt"
 {
     echo "NTVDMEX $name"
     echo "host md5: $(md5 -q "$HOST")"

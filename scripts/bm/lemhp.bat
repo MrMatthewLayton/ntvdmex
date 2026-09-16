@@ -7,10 +7,11 @@ rem no autoexit, no keys.txt, real window, Start-fullscreen from the registry.
 rem Leaves the host running; copies the log out under a name the run cannot overwrite.
 setlocal
 set SH=C:\Documents and Settings\All Users\Documents\ntvdmex
-set BM=%SH%\bm
+set BIN=%SH%\bin
+set RIG=%SH%\debug\rig
 set CFG=%SH%\cfg
-set OUT=%SH%\out
-set R=%BM%\rigshot.exe
+set OUT=%SH%\debug\out
+set R=%RIG%\rigshot.exe
 set TAG=%1
 if "%TAG%"=="" set TAG=hp
 taskkill /f /im ntvdmhost.exe >nul 2>&1
@@ -22,9 +23,9 @@ del /q "%OUT%\lemhp_%TAG%*.bmp" "%SH%\rigshot.txt" >nul 2>&1
 rem livehb: a heartbeat on a LIVE run, so a host that dies leaves something that
 rem says where the guest was (s68 added this flag for exactly this case).
 echo.> "%CFG%\livehb.flag"
-echo "%SH%\games\Lemmings\VGALEMMI.EXE"> "%CFG%\target.txt"
-cd /d "%SH%\games\Lemmings"
-start "" "%BM%\dosstub.com"
+echo "%SH%\demo\msdos\Lemmings\VGALEMMI.EXE"> "%CFG%\target.txt"
+cd /d "%SH%\demo\msdos\Lemmings"
+start "" "%RIG%\dosstub.com"
 ping -n 10 127.0.0.1 >nul
 "%R%" list >nul 2>&1
 rem ⚠⚠ BRING THE GUEST FORWARD BEFORE EVERY KEY. A `controld exec` opens a visible

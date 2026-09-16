@@ -27,15 +27,15 @@ for r in $(seq 1 "$ROUNDS"); do
     ctl "kill" >/dev/null 2>&1; sleep 3
     # ⚠ A RUNNING HOST LOCKS ITS OWN EXE, so a failed copy would silently leave the
     #   PREVIOUS build in place and the round would measure the wrong binary.
-    for _ in $(seq 1 5); do cp "$EXE" "$SH/bm/ntvdmhost.exe" 2>/dev/null && break; sleep 2; done
-    GOT=$(md5 -q "$SH/bm/ntvdmhost.exe"); WANT=$(md5 -q "$EXE")
+    for _ in $(seq 1 5); do cp "$EXE" "$SH/bin/ntvdmhost.exe" 2>/dev/null && break; sleep 2; done
+    GOT=$(md5 -q "$SH/bin/ntvdmhost.exe"); WANT=$(md5 -q "$EXE")
     if [ "$GOT" != "$WANT" ]; then echo "round $TAG: DEPLOY FAILED ($GOT != $WANT)"; continue; fi
-    rm -f "$SH/out/lemhp_$TAG.txt" "$SH/out/lemhp_${TAG}_host.txt"
-    ctl "exec cmd /c \"\"C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\bm\\lemhp.bat\" $TAG\"" >/dev/null
-    for _ in $(seq 1 45); do [ -f "$SH/out/lemhp_$TAG.txt" ] && break; sleep 2; done
-    if [ ! -f "$SH/out/lemhp_$TAG.txt" ]; then echo "round $TAG: NO RESULT FILE"; continue; fi
-    HOSTLOG="$SH/out/lemhp_${TAG}_host.txt"
-    if grep -q "HOST IS GONE" "$SH/out/lemhp_$TAG.txt"; then
+    rm -f "$SH/debug/out/lemhp_$TAG.txt" "$SH/debug/out/lemhp_${TAG}_host.txt"
+    ctl "exec cmd /c \"\"C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\debug\\rig\\lemhp.bat\" $TAG\"" >/dev/null
+    for _ in $(seq 1 45); do [ -f "$SH/debug/out/lemhp_$TAG.txt" ] && break; sleep 2; done
+    if [ ! -f "$SH/debug/out/lemhp_$TAG.txt" ]; then echo "round $TAG: NO RESULT FILE"; continue; fi
+    HOSTLOG="$SH/debug/out/lemhp_${TAG}_host.txt"
+    if grep -q "HOST IS GONE" "$SH/debug/out/lemhp_$TAG.txt"; then
       VERDICT=DEAD
       [ "$side" = A ] && A_DEAD=$((A_DEAD+1)) || B_DEAD=$((B_DEAD+1))
     else

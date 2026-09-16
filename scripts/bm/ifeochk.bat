@@ -4,7 +4,7 @@ rem  !! It used to `reg add` C:\ntvdmex\ntvdmhost.exe first -- a path that no lo
 rem    exists since the s61 relayout -- so RUNNING THE CHECK BROKE THE RIG. A check
 rem    must not change what it checks; `rt.bat setup` is the thing that re-adds the key.
 set SH=C:\Documents and Settings\All Users\Documents\ntvdmex
-set OUT=%SH%\out
+set OUT=%SH%\debug\out
 set IFEO=HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\ntvdm.exe
 if not exist "%OUT%" md "%OUT%"
 > "%OUT%\ifeo_check.txt" reg query "%IFEO%" /v Debugger

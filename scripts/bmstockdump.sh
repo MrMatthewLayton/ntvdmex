@@ -27,11 +27,11 @@ python3 "$ROOT/tools/ne/needles.py" "$KRNL" > "$ROOT/build/needles.txt" || exit 
 echo "needles: $(grep -vc '^#' "$ROOT/build/needles.txt") from $(basename "$KRNL")"
 
 # Deploy, checksummed -- copying the wrong file has cost more than one session.
-cp "$ROOT/build/vdmdump.exe" "$SH/bm/vdmdump.exe" || exit 2
-L=$(md5 -q "$ROOT/build/vdmdump.exe"); R=$(md5 -q "$SH/bm/vdmdump.exe")
+cp "$ROOT/build/vdmdump.exe" "$SH/debug/rig/vdmdump.exe" || exit 2
+L=$(md5 -q "$ROOT/build/vdmdump.exe"); R=$(md5 -q "$SH/debug/rig/vdmdump.exe")
 [ "$L" = "$R" ] || { echo "DEPLOY MISMATCH local=$L share=$R" >&2; exit 2; }
 echo "deployed vdmdump.exe  md5=$L"
-awk '{printf "%s\r\n", $0}' "$ROOT/build/needles.txt"        > "$SH/bm/needles.txt"
+awk '{printf "%s\r\n", $0}' "$ROOT/build/needles.txt"        > "$SH/debug/rig/needles.txt"
 awk '{printf "%s\r\n", $0}' "$ROOT/scripts/bm/stockdump.bat" > "$SH/stockdump.bat"
 
 # Delete the destinations BEFORE the run: an absent artefact is a loud failure,

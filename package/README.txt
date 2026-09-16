@@ -22,18 +22,18 @@ INSTALL
   4. Run any DOS or 16-bit Windows program as you normally would.
 
 FILES
-  install.bat      register NTVDMEX          (bm\ntvdmhost.exe /install)
-  uninstall.bat    restore Windows' own VDM  (bm\ntvdmhost.exe /uninstall)
+  install.bat      register NTVDMEX          (bin\ntvdmhost.exe /install)
+  uninstall.bat    restore Windows' own VDM  (bin\ntvdmhost.exe /uninstall)
   status.bat       which VDM is in force, and the last run's log summary
   smoke.bat        the built-in self-test
-  bm\              the program itself
+  bin\             the program itself
   cfg\             optional settings files; empty means all defaults
-  out\             the log of the LAST run (ntvdmhost.log) and screenshots
+  debug\out\       the log of the LAST run (ntvdmhost.log) and screenshots
 
 IF SOMETHING GOES WRONG
   - Run status.bat. It says whether NTVDMEX is installed and shows the key
     lines of the last log.
-  - The log of the last run is out\ntvdmhost.log. It is the one file that
+  - The log of the last run is debug\out\ntvdmhost.log. It is the one file that
     explains a failure; send it back with a one-line description of what you
     ran and what you saw.
   - If DOS programs stop working entirely: NTVDMEX removes itself after three

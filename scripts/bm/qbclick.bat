@@ -4,10 +4,11 @@ rem callback that never returns). Same shape as rt.bat's :run arm, but the targe
 rem demos\qb45\QB.EXE and the keys script clicks once. Cleans up keys.txt/qimode.txt
 rem afterwards so a later by-hand run is not fed scripted input.
 set SH=C:\Documents and Settings\All Users\Documents\ntvdmex
-set BM=%SH%\bm
+set BIN=%SH%\bin
+set RIG=%SH%\debug\rig
 set CFG=%SH%\cfg
-set OUT=%SH%\out
-set GDIR=%SH%\demos\qb45
+set OUT=%SH%\debug\out
+set GDIR=%SH%\demo\msdos\qb45
 set EXE=QB.EXE
 set T=qb
 if not exist "%GDIR%\%EXE%" goto nosuch
@@ -20,7 +21,7 @@ del /q "%OUT%\startfail.txt" >nul 2>&1
 > "%CFG%\keys.txt" echo w5000 01 w1500 m0 w3000 01 w500 d38 21 u38 w1000 2d w3000
 > "%CFG%\autoexit" echo.
 cd /d "%GDIR%"
-start /wait "" "%BM%\dosstub.com"
+start /wait "" "%RIG%\dosstub.com"
 copy /y "%OUT%\ntvdmhost.log" "%OUT%\result_%T%.log" >nul 2>&1
 del /q "%CFG%\autoexit" >nul 2>&1
 del /q "%CFG%\keys.txt" >nul 2>&1

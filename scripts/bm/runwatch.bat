@@ -7,24 +7,29 @@ rem  it started, so deleting the mess by hand never held:
 rem       md C:\ntvdmex          <- recreated on every watcher start
 rem       md C:\test             <- same
 rem       copy rt.bat C:\WINDOWS <- same
-rem  All three are gone.  rt.bat is now called from bm\ where it lives, and the
-rem  only thing this installs outside the share is its own Startup entry, which is
-rem  what lets the box recover the watcher after a reboot without a human.
+rem  All three are gone.  rt.bat is now called from where it lives, and the only
+rem  thing this installs outside the share is its own Startup entry, which is what
+rem  lets the box recover the watcher after a reboot without a human.
+rem
+rem  s73: the harness moved from bm\ to debug\rig\ (the host to bin\, its output to
+rem  debug\out\). The window title carries the layout so an old watcher and a new one
+rem  can be told apart -- and the old one killed by title -- during a cutover.
 rem ============================================================================
 set SH=C:\Documents and Settings\All Users\Documents\ntvdmex
-set BM=%SH%\bm
+set RIG=%SH%\debug\rig
 
 if not exist "%SH%\cfg" md "%SH%\cfg"
-if not exist "%SH%\out" md "%SH%\out"
+if not exist "%SH%\debug" md "%SH%\debug"
+if not exist "%SH%\debug\out" md "%SH%\debug\out"
 
 rem -- self-install to Startup so a reboot auto-recovers the watcher --
 copy /y "%~f0" "%ALLUSERSPROFILE%\Start Menu\Programs\Startup\ntvdmex-watch.bat" >nul 2>&1
 rem -- self-upgrade the control daemon: stop any old one, pull a staged newer build, relaunch --
 taskkill /f /im controld.exe >nul 2>&1
-if exist "%BM%\controld_v2.exe" copy /y "%BM%\controld_v2.exe" "%BM%\controld.exe" >nul 2>&1
-start "" "%BM%\controld.exe"
+if exist "%RIG%\controld_v2.exe" copy /y "%RIG%\controld_v2.exe" "%RIG%\controld.exe" >nul 2>&1
+start "" "%RIG%\controld.exe"
 echo watcher up > "%SH%\watcher.txt"
-title NTVDMEX test watcher -- leave this window open
+title NTVDMEX test watcher [debug\rig] -- leave this window open
 echo ================================================
 echo  NTVDMEX bare-metal test watcher is RUNNING.
 echo  Auto-starts on reboot; control daemon launched.
@@ -52,7 +57,7 @@ rem    happens when NTVDMEX exits (it is linked console-subsystem, so it shares 
 rem    console control events and teardown). Observed repeatedly today as "the
 rem    watcher died too", costing a reboot each time. cmd /c gives the test its own
 rem    process, so the loop survives whatever the test does to itself.
-cmd /c ""%BM%\rt.bat" %TN%"
+cmd /c ""%RIG%\rt.bat" %TN%"
 echo [%TIME%] done %TN%
 goto loop
 :emptycmd

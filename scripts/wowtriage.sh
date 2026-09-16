@@ -41,8 +41,8 @@ touch "$SH/wowsched.txt" "$SH/wowcall.txt" || exit 2
 # "no change" about a fix that had never reached the box. That is this project's
 # oldest trap and it caught this script on its second use.
 ./scripts/bmwow.sh --deploy-only >/dev/null 2>&1 || {
-    cp build/ntvdmhost.exe "$SH/bm/ntvdmhost.exe" || exit 2
-    L=$(md5 -q build/ntvdmhost.exe); R=$(md5 -q "$SH/bm/ntvdmhost.exe")
+    cp build/ntvdmhost.exe "$SH/bin/ntvdmhost.exe" || exit 2
+    L=$(md5 -q build/ntvdmhost.exe); R=$(md5 -q "$SH/bin/ntvdmhost.exe")
     [ "$L" = "$R" ] || { echo "DEPLOY MISMATCH local=$L share=$R" >&2; exit 2; }
     echo "deployed ntvdmhost.exe  md5=$L"
 }

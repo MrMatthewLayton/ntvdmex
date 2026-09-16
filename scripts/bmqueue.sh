@@ -24,12 +24,11 @@ ARGS="$*"
 # FILE'S MTIME BY HAND before concluding anything.
 TIMEOUT="${TIMEOUT:-240}"
 
-# s61: results moved OUT of the share root into out\, along with everything else the
-# host writes -- the root now holds only bm/ games/ cfg/ out/ and the watcher's own
-# control files. `doom` is the one exception during bootstrap: the OLD rt.bat is what
-# invokes <share>\doomrun.bat, and that script reports to the root so this script can
-# see it before the new layout is in place.
-RESULT="$SH/out/result_${TARGET}.log"
+# s61 moved results out of the share root; s73 laid the share out for release:
+#   bin/ dist/ cfg/ debug/{rig,tests,out,prev}/ demo/{msdos,win16}/ + the watcher's
+#   control files. Everything the host writes lands in debug/out/. A <target> is a
+#   folder under demo/msdos/ first, debug/tests/ second (rt.bat resolves it).
+RESULT="$SH/debug/out/result_${TARGET}.log"
 
 mtime() { stat -f '%m' "$1" 2>/dev/null || echo 0; }
 BEFORE=$(mtime "$RESULT")
