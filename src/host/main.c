@@ -150,6 +150,24 @@ static const char *ntvdmex_path(const char *sub, const char *name);
    be wrong -- the question it answers is whether the guest EXECUTES AT ALL.
    Absent = normal behaviour, so ordinary runs are untouched. Delete after use. */
 #define NOA000_FLAG  CFG_("noa000.flag")
+/* ── TURN THE PM INT-SITE PATCHER OFF. (s74, diagnostic) ─────────────────────────
+   The patcher rewrites `CD nn` -> `C4 C4` in a client's declared code region so a
+   protected-mode INT becomes a BOP we can service; a raw `CD nn` in PM is the one
+   fault XP will not reflect. But the region is whatever the CLIENT calls code, and
+   in a guest that GENERATES tables or code at runtime a stray 0xCD is just data --
+   which is how this has now broken guests five times (Doom's jump table four, then
+   heaven7). Present = scan nothing, so a silent death can be A/B'd against the
+   patcher in one run instead of being argued about. Absent = normal behaviour.
+   ⚠ It is a DIAGNOSTIC, not a fix: with it on, a guest that really does execute
+     `CD nn` in PM dies differently. Judge it on whether the guest gets FURTHER. */
+#define NOPMPATCH_FLAG CFG_("nopmpatch.flag")
+/* Optional CONTENTS of nopmpatch.flag: a hex byte count. Regions at least that big
+   are not scanned; smaller ones are patched as usual. Empty = skip every region.
+   Why a SIZE: DOS/4GW's own PM code region is ~0x5000 bytes of dense, real
+   `mov ah,N / int 21h`, and it NEEDS patching (a raw CD in PM is the one fault XP
+   will not reflect). heaven7's is the whole 0x3a000 LE allocation -- code object
+   AND data object AND everything it generates into them -- and needs not to be.
+   Size separates the two without naming an address, which changes run to run. */
 /* Mode 12h WITHOUT the A0000 page trap (GH #55). Arming that trap stops the V86
    guest running at all -- 10 I/O events in 30s against 22.5 MILLION with it off.
    But we do not actually need it: in mode 12h QuickBASIC reprograms a VGA
@@ -1469,6 +1487,8 @@ static int      g_unclaimed_n = 0;
 static unsigned       g_capture_ms    = 300; /* CAPTURE_FLAG contents: ms between shots */
 static int            g_capture       = 0;  /* CAPTURE_FLAG present: opt-in self-screenshot for graphical tests */
 static int            g_no_a000       = 0;  /* NOA000_FLAG present: leave A0000 mapped (diagnostic) */
+static int            g_no_pmpatch    = 0;  /* NOPMPATCH_FLAG present: scan no code regions (diagnostic) */
+static DWORD          g_no_pmpatch_min = 0; /* ...or only regions >= this many bytes */
 static int            g_interp12      = 0;  /* INTERP12_FLAG: interpret mode 12h, no page trap */
 static int            g_p12_off       = 0;  /* P12OFF_FLAG: revert to the A0000 page trap      */
 static DWORD          g_run_start_tick= 0;  /* exec-loop start, so STAGE2 can report a RATE    */
@@ -14280,6 +14300,7 @@ static void dpmi_patch_code_region(DWORD base, DWORD limit, int d32)
     volatile BYTE *mem;
     DWORD end, n = 0, rej = 0, ntbl = 0;   /* ntbl: jump-table entries skipped -- see the guard */
     DWORD po[12], npo = 0;               /* the first few patched offsets, for the log */
+    DWORD nlog = 0;                      /* how many sites we have dumped BYTES for */
     char lb[320], *q = lb;
     /* ► NEVER PATCH THE IVT / BIOS DATA AREA, even when the client declares a base-0
          code selector -- and Doom does exactly that (sel 0x67, base 0, limit 0xFFFF),
@@ -14290,6 +14311,16 @@ static void dpmi_patch_code_region(DWORD base, DWORD limit, int d32)
          our own handler segment prologue: definitionally data, never executed as the
          client's code. Start the scan above it. */
     end = base + limit;                              /* limit is the LAST valid byte */
+    if (g_no_pmpatch && (!g_no_pmpatch_min || (end - base) >= g_no_pmpatch_min)) {
+        q = zput(q, "DPMI: code region 0x"); q = zhex(q, base);      /* see NOPMPATCH_FLAG */
+        q = zput(q, "..0x"); q = zhex(q, end);
+        q = zput(q, " size=0x"); q = zhex(q, end - base);
+        q = zput(q, " -- NOT SCANNED (nopmpatch.flag");
+        if (g_no_pmpatch_min) { q = zput(q, " min=0x"); q = zhex(q, g_no_pmpatch_min); }
+        q = zput(q, ")\r\n");
+        log_append(LOG_PATH, lb, q); serial_out(lb, q);
+        return;
+    }
     DWORD ptr_lo = base, ptr_hi = end;               /* a near-pointer table INTO this region is DATA -- see the loop */
     if (base < 0x600) base = 0x600;                  /* ...but the region END is unchanged */
     /* No upper bound any more: the regions that matter live in EXTENDED memory, which is
@@ -14586,6 +14617,25 @@ static void dpmi_patch_code_region(DWORD base, DWORD limit, int d32)
                            offset it needed was sitting in it. The count and the list
                            have to be claims about the same set. */
                       if (npo < 12) po[npo++] = lin - base;
+                      /* ── ★ SAY WHAT WE ARE ABOUT TO OVERWRITE, BEFORE WE DO. (s74)
+                           "ON ANY SILENT VDM DEATH, GET THE BYTES FIRST" -- and for five
+                           sessions the one thing this patcher never recorded was the bytes
+                           IT clobbered, so every investigation had to reconstruct them from
+                           the guest binary (and for a guest that builds code or tables at
+                           RUNTIME, as heaven7 does, they are not in the binary at all: the
+                           file has `0b c3` where we patched, because the memory was
+                           generated, not loaded). A site list without bytes is a claim you
+                           cannot check. Bounded to the first 12, like po[]. */
+                      if (nlog < 24) {              /* its OWN counter: npo saturates at 12 */
+                          char sb2[192], *sq = sb2;
+                          ++nlog;
+                          sq = zput(sq, "DPMI: PATCHING 0x"); sq = zhex(sq, lin);
+                          sq = zput(sq, " (+0x"); sq = zhex(sq, lin - base);
+                          sq = zput(sq, ") vec=0x"); sq = zhexb(sq, mem[i+1]);
+                          sq = zput(sq, " -> C4 C4  was="); sq = zdump(sq, (const BYTE *)(ULONG_PTR)(lin - 6), 16);
+                          sq = zput(sq, "\r\n");
+                          log_append(LOG_PATH, sb2, sq); serial_out(sb2, sq);
+                      }
                       pmap_set(lin, mem[i+1]);
                       mem[i] = 0xC4; mem[i+1] = 0xC4;
                       ++n;
@@ -21545,6 +21595,23 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     g_textdump = (GetFileAttributesA(TEXTDUMP_PATH) != INVALID_FILE_ATTRIBUTES);
     g_mouse_absent = (GetFileAttributesA(NOMOUSE_PATH) != INVALID_FILE_ATTRIBUTES);
     g_no_a000  = (GetFileAttributesA(NOA000_FLAG) != INVALID_FILE_ATTRIBUTES);
+    g_no_pmpatch = (GetFileAttributesA(NOPMPATCH_FLAG) != INVALID_FILE_ATTRIBUTES);
+    if (g_no_pmpatch) {                    /* contents, if any, = minimum region size */
+        HANDLE hn = CreateFileA(NOPMPATCH_FLAG, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                                NULL, OPEN_EXISTING, 0, NULL);
+        if (hn != INVALID_HANDLE_VALUE) {
+            char nb[32]; DWORD nrd = 0, nv = 0, ni;
+            ReadFile(hn, nb, sizeof nb - 1, &nrd, NULL); CloseHandle(hn);
+            for (ni = 0; ni < nrd; ++ni) {
+                int hd = (nb[ni] >= '0' && nb[ni] <= '9') ? nb[ni] - '0'
+                       : (nb[ni] >= 'a' && nb[ni] <= 'f') ? nb[ni] - 'a' + 10
+                       : (nb[ni] >= 'A' && nb[ni] <= 'F') ? nb[ni] - 'A' + 10 : -1;
+                if (hd < 0) break;
+                nv = (nv << 4) | (DWORD)hd;
+            }
+            g_no_pmpatch_min = nv;
+        }
+    }
     g_interp12 = (GetFileAttributesA(INTERP12_FLAG) != INVALID_FILE_ATTRIBUTES);
     g_p12_off  = (GetFileAttributesA(P12OFF_FLAG)   != INVALID_FILE_ATTRIBUTES);
     g_opltrace_on = (GetFileAttributesA(OPLTRACE_FLAG) != INVALID_FILE_ATTRIBUTES);
