@@ -27805,6 +27805,16 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
           if (g_vid.mask_hist[i]) { p = zput(p, " 0x"); p = zhexb(p, (unsigned)i);
                                     p = zput(p, "x"); p = zhex(p, g_vid.mask_hist[i]); }
       p = zput(p, "\r\n");
+      if (g_vid.vram_nz) {
+          uint32_t pitch = g_vid.vesa_stride ? g_vid.vesa_stride : 1;
+          p = zput(p, "STAGE2: VESA framebuffer WRITTEN: lo=0x"); p = zhex(p, g_vid.vram_lo);
+          p = zput(p, " hi=0x"); p = zhex(p, g_vid.vram_hi);
+          p = zput(p, " nonzero=0x"); p = zhex(p, g_vid.vram_nz);
+          p = zput(p, "  => row "); p = zhex(p, g_vid.vram_lo / pitch);
+          p = zput(p, " col "); p = zhex(p, (g_vid.vram_lo % pitch) / (pitch / (g_vid.vesa_w ? g_vid.vesa_w : 1)));
+          p = zput(p, " .. row "); p = zhex(p, g_vid.vram_hi / pitch);
+          p = zput(p, "\r\n");
+      }
       p = zput(p, "STAGE2: VESA mode SET (4F02): ");
       if (!g_vid.vesa_set_seen) p = zput(p, "never called");
       else { p = zput(p, "BX=0x"); p = zhex(p, (DWORD)g_vid.vesa_set_bx);

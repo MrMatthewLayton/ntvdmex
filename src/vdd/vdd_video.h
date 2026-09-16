@@ -180,6 +180,10 @@ typedef struct video_state {
     uint8_t  vesa_bpp;                  /* 8/15/16/24 -- bits per pixel of the mode */
     uint32_t vesa_stride;               /* bytes per scan line of the current mode  */
     uint8_t  vesa_lfb;                  /* the mode was set with bit 14: LFB in use  */
+    /* Where the guest ACTUALLY wrote in the framebuffer, in raw buffer offsets --
+       independent of how WE choose to interpret stride/origin. The only way to tell
+       "the demo put its picture there" from "we are reading the buffer wrong". */
+    uint32_t vram_lo, vram_hi, vram_nz;
     /* Hi-colour frames are handed to the presenter as 32-bit ARGB: the frame
        contract has a bpp field but every consumer indexed a palette, so a direct
        colour mode has to be converted somewhere. Here is the only place that knows

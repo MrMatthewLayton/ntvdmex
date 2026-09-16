@@ -538,6 +538,19 @@ static void vesa_sync(video_state *st)
      high bits into the low ones (5 bits -> 8 as (v<<3)|(v>>2)), not by shifting and
      leaving zeros: a white pixel must come out 0xFF, and 0x1F<<3 is 0xF8, which is a
      visibly grey white and the classic giveaway of a lazy 5-to-8 expansion. */
+/* Bounding offsets of everything non-zero in the framebuffer. Answers, without any
+   assumption about stride or origin, WHERE the guest put its pixels. */
+static void vesa_scan_written(video_state *st)
+{
+    uint32_t i, lo = 0xFFFFFFFFu, hi = 0, nz = 0;
+    uint32_t end = st->vesa_stride * st->vesa_h;
+    if (!end || end > VID_VESA_VRAM) end = VID_VESA_VRAM;
+    for (i = 0; i < end; ++i)
+        if (st->vesa_vram[i]) { if (lo == 0xFFFFFFFFu) lo = i; hi = i; ++nz; }
+    st->vram_lo = (lo == 0xFFFFFFFFu) ? 0 : lo;
+    st->vram_hi = hi; st->vram_nz = nz;
+}
+
 static void vesa_to_argb(video_state *st)
 {
     uint32_t y, x, w = st->vesa_w, h = st->vesa_h, pitch = st->vesa_stride;
@@ -610,7 +623,6 @@ static void vesa(video_state *st, ntvdd_regs *r)
         if (vesa_find(r_cx(r), &w, &h, &mbpp)) {
             uint8_t *b = (uint8_t *)vdd_map_flat(st->bus, r->es, (uint16_t)(uint16_t)r->edi);
             uint32_t bypp = vesa_bypp(mbpp), pitch = (uint32_t)w * bypp;
-            uint32_t nbank = (pitch * h + (VID_VESA_WIN - 1)) / VID_VESA_WIN;
             for (i = 0; i < 256; ++i) b[i] = 0;
             wr16(b + 0, 0x009B);                  /* attrs: supported|color|graphics */
             b[2] = 0x07; b[3] = 0x00;             /* WinA r/w/exists; WinB none    */
@@ -621,16 +633,31 @@ static void vesa(video_state *st, ntvdd_regs *r)
             wr16(b + 18, w); wr16(b + 20, h);     /* X / Y resolution              */
             b[22] = 8; b[23] = 16;                /* char cell                     */
             b[24] = 1; b[25] = mbpp;              /* planes / bits per pixel       */
-            /* ⚠ BANKS AND MEMORY MODEL ARE NOT CONSTANTS. They were 1 and 4 for
-                 every mode, which is a lie twice over for direct colour: model 4 is
-                 "packed pixel" (a palette index), model 6 is "direct colour", and a
-                 guest reads that byte to decide whether the bytes it writes are
-                 indices or channels. NumberOfBanks is the window count the mode
-                 actually needs, which is what a banked guest paginates through. */
-            b[26] = (uint8_t)(nbank ? nbank : 1);
-            b[27] = (uint8_t)(mbpp > 8 ? 6 : 4);  /* 6 = direct colour, 4 = packed  */
-            b[28] = 0;                            /* NumberOfImagePages (0 = one)   */
-            b[29] = 1;                            /* reserved, must be 1 per VBE 1.2 */
+            /* ⚠ MEMORY MODEL IS NOT A CONSTANT. It was 4 ("packed pixel", i.e. a
+                 palette index) for every mode, which is a lie for direct colour --
+                 a guest reads this byte to decide whether the bytes it writes are
+                 indices or channels. VBE 2.0 §4.4: 04h packed pixel, 06h direct colour. */
+            b[27] = (uint8_t)(mbpp > 8 ? 6 : 4);
+            /* ⚠⚠ NumberOfBanks IS **NOT** "how many 64KB windows the mode needs".
+                 I wrote that from memory and it is the wrong CONCEPT, not just a wrong
+                 number -- it computed 22 for 640x480x24. VBE 2.0 §4.4: banks are the
+                 groups the SCAN LINES are divided into (the CGA/Hercules interleave),
+                 and "for modes that don't have scanline banks (such as VGA modes
+                 0Dh-13h), this field should be set to 1". BankSize likewise 0.
+                 Caught by reading the spec, not by any guest -- heaven7 never looks. */
+            b[26] = 1;                            /* +26 NumberOfBanks: no scanline banks */
+            /* ⚠⚠⚠ AND THE OFFSETS FROM HERE WERE OFF BY ONE, ALSO FROM MEMORY. The
+                 VBE 2.0 ModeInfoBlock runs +26 NumberOfBanks, +27 MemoryModel,
+                 +28 BankSize, +29 NumberOfImagePages, +30 Reserved(=1). I had written
+                 NumberOfImagePages at +28 and "reserved must be 1" at +29 -- so the
+                 image-page count was landing in BankSize, a 1 was landing in
+                 NumberOfImagePages (which is a count MINUS ONE, i.e. claiming two
+                 pages of a mode we have one page of VRAM for), and Reserved at +30 was
+                 left 0 when the spec says it is always 1 in this version.
+                 Three fields wrong, none of which any guest we have would have caught. */
+            b[28] = 0;                            /* +28 BankSize: no scanline banks   */
+            b[29] = 0;                            /* +29 NumberOfImagePages = total-1  */
+            b[30] = 1;                            /* +30 Reserved: always 1 in VBE 2.0 */
             /* ── DIRECT-COLOUR FIELD LAYOUT (offsets 31..38). A guest cannot pack a
                  pixel without these, and it will not trust a mode that leaves them
                  zero. 15bpp is 5:5:5 with one byte unused, 16bpp is 5:6:5, 24bpp is
@@ -649,7 +676,11 @@ static void vesa(video_state *st, ntvdd_regs *r)
                  including 320x200x16 and 640x480x16, and refused every one without
                  ever calling 4F02 -- measured twice, before and after the list grew.
                  A 2000-era demo will not paginate a 64KB window to raytrace. */
-            wr16(b + 0, (uint16_t)(0x009B | 0x0080));   /* ...|LFB available        */
+            /* ⚠ 0x9B ALREADY CARRIES D7 (LFB available) -- D0|D1|D3|D4|D7. An earlier
+                 note here claimed bit 7 was 0 and OR'd 0x80 in; that was a no-op and
+                 the claim was wrong. What was actually missing was PhysBasePtr, which
+                 D7 is worthless without. VBE 2.0 §4.4 D7/D6 table: D7=1,D6=0 means
+                 "both windowed and linear", which is exactly what we now provide. */
             wr32(b + 40, VID_VESA_LFB_PHYS);            /* PhysBasePtr              */
             /* VBE 2.0 adds the linear-mode geometry at +50; a guest that drives the
                LFB reads these rather than the banked ones. Same numbers here because
@@ -676,8 +707,17 @@ static void vesa(video_state *st, ntvdd_regs *r)
             st->vesa_bpp = mbpp;
             st->vesa_stride = (uint32_t)w * vesa_bypp(mbpp);
             st->vesa_bank = 0;
-            for (n = 0; n < VID_VESA_VRAM; ++n) st->vesa_vram[n] = 0;
-            for (n = 0; n < VID_VESA_WIN; ++n) st->vmem[n] = 0;
+            /* ── ★★★ D15 = "DON'T CLEAR DISPLAY MEMORY". (VBE 2.0 §4.5) ──────────────
+                 We cleared unconditionally. This is the SAME defect as the standard
+                 BIOS one already on the books -- "AL bit 7 on a mode set = DO NOT
+                 CLEAR VRAM" -- just on the VESA function instead, and it was found the
+                 same way it should have been the first time: by reading the spec.
+                 A guest that sets a mode to change geometry while keeping its picture
+                 gets a black screen from us otherwise. */
+            if (!(r_bx(r) & 0x8000)) {
+                for (n = 0; n < VID_VESA_VRAM; ++n) st->vesa_vram[n] = 0;
+                for (n = 0; n < VID_VESA_WIN; ++n) st->vmem[n] = 0;
+            }
             st->dirty = 1; s_ax(r, 0x004F);
         } else s_ax(r, 0x014F);
         break; }
@@ -2542,6 +2582,7 @@ static void vid_frame(void *self)
         vesa_sync(st);
         st->frame.w = st->vesa_w; st->frame.h = st->vesa_h;
         if (st->vesa_bpp > 8) {                        /* direct colour -> ARGB */
+            vesa_scan_written(st);
             vesa_to_argb(st);
             st->frame.bpp = 32;
             st->frame.stride = (uint32_t)st->vesa_w * 4;
