@@ -498,14 +498,28 @@ and matches the 6.22 oracle row for row (session 53)** — but `MEM /C` still re
      real guest GPF at `0001:3983` right after `RegQueryValue` (SHELL) with a stepped-over
      USER call earlier in its log — MCI/MMSYSTEM territory, not chased.
 
-   **Verified on host `db29628e`:** selftest 8/8 · Notepad up · Skyroads `V86STR n8=0
-   max_ms=7`, IRQ0 `anom_n=0`, guards intact · offvm **1361/0** · parity sweep (see the
-   log line below this block when it lands). Evidence in `runs/s73_qbmake/`.
+   **Verified on host `8733e095` (= HEAD `137f673`, THE RIG'S HOST NOW):** selftest 8/8 ·
+   Notepad up · Skyroads `V86STR n8=0 max_ms=7`, IRQ0 `anom_n=0`, guards intact · offvm
+   **1361/0** · parity: 12 probes clean before the sweep was cut short (it was ~4 min/probe
+   — see the SMB note below), then the memory-map subset `p_mcb p_ovl p_psp p_sysvar p_tsr
+   p_umb` **35/35 comparable rows agree** (`p_child`/`p_tsrc` are companions, always NO
+   ROWS) · `dosenv.txt` still appends · **package `dist\ntvdmex-20260916-137f673.zip`
+   verified from a fresh folder: 8/8 + Paintbrush up** — the only zip in `dist\`.
+   Evidence in `runs/s73_qbmake/`.
 
-   ▶ **The by-hand pass owed from s72 is still owed, now for SEVEN changes** (SFT, HMA,
+   ★ **THE SWEEP WAS SLOW FOR ONE REASON, AND IT WAS NOT QEMU.** The 6.22 oracle run is
+   **3 s**. The rest of each ~4 min was macOS's SMB attribute cache taking minutes to show
+   an mtime change on the existing `result_Probe.log` — the same lag that gave `bmqueue.sh`
+   a false TIMEOUT today. A file that APPEARS is seen in seconds, so `dosdiff.py` and
+   `bmqueue.sh` now delete the old result and wait for a fresh one (also retiring the
+   stale-result hazard). Six probes then took ~2 min in total. Oracle answers are cached
+   under `build/dosdiff-cache/` by the probe's sha1 (`DOSDIFF_NOCACHE=1` bypasses).
+
+   ▶ **The by-hand pass owed from s72 is still owed, now for EIGHT changes** (SFT, HMA,
    `AH=3Dh`, guard logging, the `bin\`/`debug\out\` paths, Auto screen update, **the
-   environment block**). Same three asks: Doom E1M1 kill, QBasic Open → run, one
-   memory-tight guest — Duke3D now matters doubly, the env block took ~1.6 KB. Roll back by copying
+   environment block, the relaunch/redirect handover**). Asks: Doom E1M1 kill, QBasic
+   Open → run, **`QB45.BAT` → Run > Make EXE File → run the EXE**, one memory-tight guest
+   (Duke3D matters doubly: the env block took ~1.6 KB). Roll back by copying
    `debug\prev\ntvdmhost_prev.exe` (`a5cd764b`) over `bin\ntvdmhost.exe` — and note a
    rolled-back host would write to `out\` again and expect `bm\`; **`a5cd764b` cannot run
    from `bin\`** (it derives its root from a folder named `bm`). A rollback therefore
