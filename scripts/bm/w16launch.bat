@@ -16,9 +16,11 @@ rem     exec cmd /c ""<share>\debug\rig\w16launch.bat" notepad"
 rem     exec cmd /c ""<share>\debug\rig\w16launch.bat" pbrush PBRUSH.EXE keep"
 rem ============================================================================
 set SH=C:\Documents and Settings\All Users\Documents\ntvdmex
-set BIN=%SH%\bin
+rem BIN and OUT may be pre-set by a caller (pkgw16.bat points them at an extracted
+rem package, so the Win16 half is proven from the folder a tester gets, not the rig's).
+if not defined BIN set BIN=%SH%\bin
+if not defined OUT set OUT=%SH%\debug\out
 set RIG=%SH%\debug\rig
-set OUT=%SH%\debug\out
 set W16=%SH%\demo\win16
 set IFEO=HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\ntvdm.exe
 set T=%1
