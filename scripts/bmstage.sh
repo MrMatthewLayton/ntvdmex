@@ -18,10 +18,10 @@
 #   demo/msdos/   the user's games and demos              <- never touched here
 #   demo/win16/   Win 3.11 apps                           <- never touched here
 #
-# ⛔ THE HOST IS NOT REPLACED BY DEFAULT. The exe in bin/ is the build the user last
-#    confirmed by hand and it is the rollback point; a harness fix must not swap it out
-#    as a side effect. --host copies bin/ntvdmhost.exe to debug/prev/ntvdmhost_prev.exe
-#    first, then deploys, then md5s BOTH sides -- an SMB copy that "succeeded" has
+# ⛔ THE HOST IS NOT REPLACED BY DEFAULT: a harness fix must not swap it out as a side
+#    effect. --host archives the displaced exe as debug/prev/ntvdmhost_<md5>.exe, then
+#    deploys, then md5s BOTH sides. debug/prev/ntvdmhost_prev.exe = the last build a HUMAN
+#    confirmed; promote to it by hand, never here -- an SMB copy that "succeeded" has
 #    silently delivered a stale file before.
 # ⚠ ONLY THE LIVE SET OF BATCH FILES IS STAGED. scripts/bm/ also holds pre-s61 scripts
 #    (doomrun, menushot, setshot, sxs, zar*, stockdump ...) that copy the host to
@@ -47,7 +47,7 @@ esac
 # The LIVE harness: every script here uses the s73 layout and writes nothing to C:.
 LIVE_BATS=(rt.bat runwatch.bat rt_stock.bat ifeochk.bat restore.bat
            lemhp.bat lemlive.bat qbclick.bat qbopen.bat pkgtest.bat pkgsmoke.bat
-           evt.bat cpuinfo.bat)
+           evt.bat cpuinfo.bat w16launch.bat w16watch.bat)
 # Tools that are rebuilt on the Mac; staged only when a build exists.
 LIVE_EXES=(vdmwatch.exe controld_v2.exe rigshot.exe vdmdump.exe present_demo.exe)
 
@@ -89,9 +89,13 @@ if [ "$MODE" = host ]; then
   size=$(stat -f '%z' "$HOST")
   [ "$size" -gt 1000000 ] || { echo "build/ntvdmhost.exe is $size bytes: that is the LAUNCHER, not the host" >&2; exit 1; }
   mkdir -p "$SH/bin"
+  # The displaced exe is kept BY HASH. debug/prev/ntvdmhost_prev.exe is the last build a
+  # HUMAN confirmed and only a human promotes to it -- this script cannot know whether
+  # the exe it is replacing was ever seen, and it usually was not.
   if [ -f "$SH/bin/ntvdmhost.exe" ] && [ "$(md5 -q "$HOST")" != "$(md5 -q "$SH/bin/ntvdmhost.exe")" ]; then
-    cp "$SH/bin/ntvdmhost.exe" "$SH/debug/prev/ntvdmhost_prev.exe" \
-      && echo "rollback -> debug/prev/ntvdmhost_prev.exe ($(md5 -q "$SH/debug/prev/ntvdmhost_prev.exe"))"
+    old=$(md5 -q "$SH/bin/ntvdmhost.exe"); keep="$SH/debug/prev/ntvdmhost_${old:0:8}.exe"
+    [ -f "$keep" ] || cp "$SH/bin/ntvdmhost.exe" "$keep"
+    echo "displaced -> debug/prev/$(basename "$keep")   (ntvdmhost_prev.exe = $(md5 -q "$SH/debug/prev/ntvdmhost_prev.exe" 2>/dev/null | cut -c1-8), the confirmed one, untouched)"
   fi
   echo "host -> bin/"
   stage_bin "$HOST" "$SH/bin/ntvdmhost.exe"

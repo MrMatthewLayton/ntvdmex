@@ -319,6 +319,42 @@ and matches the 6.22 oracle row for row (session 53)** — but `MEM /C` still re
    `bm\`-layout `9ad5eff` zip are gone). `debug\out\` was 53 files incl. two vdmwatch
    cores (12 MB) and an 86 MB `result_Wolfy.log` — left as-is, they are the user's call.
 
+   ### ⛔⛔ s73, LATER: **WIN16 DOES NOT RUN ON THE RIG, AND HAS NOT SINCE THE s61 WIPE.**
+
+   Found while laying `demo\win16\` out (17 apps from `guest/win16/`, one folder each, via
+   **`scripts/w16demo.sh`**; `debug\rig\w16launch.bat <app> [EXE] [keep]` starts one through
+   the IFEO hook and lists the desktop; `w16watch.bat` watches the process second by second).
+   Notepad through the hook → nothing on screen. Three stacked causes, two fixed:
+
+   1. **The Win16 half is FOUR `cfg\` files and the wipe took all of them**: `wowtry.flag`
+      (absent = every Win16 launch REFUSED with a "16-bit Windows not supported" box),
+      `wowsched.txt`, `wowcall.txt` (existence-gated), `wowidle.txt`=`0` (absent = a task in
+      GetMessage is quit after ~6 s). Filed as s38–s43 "experiments", never promoted, and
+      **the shipped zip did not include them while its README promised Notepad and Paint.**
+      FIXED: on the rig, and `package.sh` now ships all four.
+   2. **The log destroyed itself on the Win16 path** (`src/host/log.h`, an s71 regression):
+      `log_append` cached the caller's path POINTER, which since s71 is one of sixteen ring
+      slots — so a stale slot compared equal to a different file and the main log's lines
+      went into `ldtprobe.log`. Separately, three callers pass a bad `[buf,end)` (one NULL
+      buffer, two with a LENGTH where `end` belongs); `(DWORD)(end-buf)` wrapped, tripped
+      the 256 MB cap on one call, and the file held **66 bytes: the cap marker and nothing
+      else**. The confirmed `a5cd764b` did exactly the same (A/B from a temporary `bm\`), so
+      this is NOT the s72/s73 host changes. FIXED: the cache keys on a copy; a bad range is
+      reported in the file and dropped, and the run keeps logging. The three bad callers are
+      still to be found — the log now prints their pointers.
+   3. **OPEN: krnl386 reaches protected mode and the VDM dies silently at `PMHB steps=0x85`**
+      — after `FUNC 0xc0` and `0xbe` were STEPPED OVER as unimplemented, a run of
+      `INT31h AX=0002` (segment→selector for 0x40/0xF000/0xA000…0xE000), two `0703`
+      paging no-ops and a `04F2` commit. `wow32{ok=5 decl=4 unimpl=2}`. Log
+      `runs/`-worthy: `debug\out\result_w16watch*.log` + `ntvdmhost.log` from 10:29.
+      ⚠ Also still true: **the WOW path takes its program from `cfg\target.txt`** (the CSRSS
+      first fetch is FALSE on `-w`), so a double-click on a fresh machine has NO program
+      name. `w16launch.bat` writes it, as `wowlive.bat` always did; the product gap stands.
+
+   **Rig host is now `4c502027`** (cfdd7211 + the log.h fix; archived as
+   `debug\prev\ntvdmhost_cfdd7211.exe`). `bmstage.sh --host` archives the displaced exe
+   BY HASH and never touches `ntvdmhost_prev.exe` — promotion to "confirmed" is by hand.
+
    ▶ **The by-hand pass owed from s72 is still owed, now for FIVE changes** (SFT, HMA,
    `AH=3Dh`, guard logging, **the `bin\`/`debug\out\` paths**). Same three asks: Doom E1M1
    kill, QBasic Open → run, one memory-tight guest. Roll back by copying

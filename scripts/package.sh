@@ -43,6 +43,20 @@ for f in install.bat uninstall.bat status.bat smoke.bat README.txt; do
     perl -pe 's/\r?\n/\r\n/' "$ROOT/package/$f" > "$stage/$f"
 done
 printf 'settings files go here; empty = defaults\r\n' > "$stage/cfg/README.txt"
+# ⚠⚠ THE WIN16 HALF IS FOUR cfg\ FILES, AND EVERY CONFIRMED RESULT HAD ALL FOUR.
+#   They were filed as opt-in experiments in s38-s43 and never promoted; the s61 wipe
+#   lost them and s58 + s73 both rediscovered the symptom -- a "16-bit Windows not
+#   supported" box, or a guest that quits after ~6 s in GetMessage. A zip that
+#   promises Notepad and Paint must ship them (existence-gated except wowidle):
+#     wowtry.flag    the WOW opt-in -- absent = every Win16 launch is REFUSED
+#     wowsched.txt   the host-side Win16 task scheduler (src/wow/wowsched.h)
+#     wowcall.txt    the host calls 16-bit code (CreateWindow -> WM_CREATE etc.)
+#     wowidle.txt=0  a task blocked in GetMessage waits FOREVER, as real Windows does;
+#                    absent = WOWMSG_WAIT_MS, a harness bound that kills an interactive app
+printf 'WOW opt-in: with this file present NTVDMEX runs 16-bit Windows programs; without it they are refused.\r\n' > "$stage/cfg/wowtry.flag"
+printf 'Win16 task scheduler ON (existence-gated). Needed for any Win16 program.\r\n' > "$stage/cfg/wowsched.txt"
+printf 'Host calls 16-bit code ON (existence-gated). Needed for any Win16 program.\r\n'  > "$stage/cfg/wowcall.txt"
+printf '0' > "$stage/cfg/wowidle.txt"
 printf 'the last run''s log (ntvdmhost.log) and screenshots land here\r\n' > "$stage/debug/out/README.txt"
 {
     echo "NTVDMEX $name"

@@ -101,9 +101,17 @@ static int           g_log_capped = 0;
      debugging method rests on. The share flags are unchanged too, so the log is
      still readable from outside while a run is in progress.
    ⚠ The handle is keyed by PATH: log_write truncates and starts a new run, so it
-     must drop the cached handle rather than keep appending to the old file. */
+     must drop the cached handle rather than keep appending to the old file.
+   ⚠⚠ KEYED BY A COPY OF THE PATH, NOT BY THE CALLER'S POINTER (s73). Since s71 every
+     path is composed at the call site into one of ntvdmex_path()'s SIXTEEN ring
+     slots, so a cached pointer names whatever that slot holds NOW. Measured on the
+     Win16 path, which alternates LOG_PATH with LDTLOG_PATH: the slot cached for
+     ldtprobe.log was later refilled with ntvdmhost.log's text, log_path_eq said
+     "same file", and every STAGE line of the run went into ldtprobe.log while
+     ntvdmhost.log stayed empty. A DOS run never showed it -- it uses one path. */
 static HANDLE g_log_h = INVALID_HANDLE_VALUE;
-static const char *g_log_h_path = 0;
+static char   g_log_h_path_buf[MAX_PATH + 96];
+static const char *g_log_h_path = 0;        /* -> g_log_h_path_buf when a handle is open */
 
 static inline int log_path_eq(const char *a, const char *b) {
     if (a == b) return 1;
@@ -119,8 +127,30 @@ static inline void log_close(void) {
 }
 
 /* Overwrite `path` with [buf..end). Resets the runaway guard -- a new run starts here. */
+/* ── ⚠ A CALLER WITH end < buf IS A BUG IN THE CALLER, AND IT USED TO BE FATAL TO THE
+     INSTRUMENT (s73). (DWORD)(end - buf) wraps to ~4 GB, the runaway guard trips on
+     that ONE call, and every later line of the run is suppressed -- the file holds the
+     cap marker and nothing else, which reads as "runaway guest" when it is a stale
+     pointer in the host. Measured on the Win16 path: a 66-byte log and a host that
+     died in under a second, with no way to see where. Now the bad call is reported,
+     in the file, with both pointers, and the run goes on logging. */
+static inline int log_badrange(const char *path, const char *buf, const char *end) {
+    HANDLE h; char m[128], *q = m; DWORD wr; unsigned v; int k;
+    if (end >= buf && (unsigned long)(end - buf) < (16u << 20)) return 0;
+    for (k = 0; "\r\n[log: BAD RANGE from a caller: buf=0x"[k]; ++k) *q++ = "\r\n[log: BAD RANGE from a caller: buf=0x"[k];
+    for (v = (unsigned)(ULONG_PTR)buf, k = 28; k >= 0; k -= 4) *q++ = "0123456789abcdef"[(v >> k) & 15];
+    for (k = 0; " end=0x"[k]; ++k) *q++ = " end=0x"[k];
+    for (v = (unsigned)(ULONG_PTR)end, k = 28; k >= 0; k -= 4) *q++ = "0123456789abcdef"[(v >> k) & 15];
+    for (k = 0; " -- line dropped, run continues]\r\n"[k]; ++k) *q++ = " -- line dropped, run continues]\r\n"[k];
+    h = CreateFileA(path, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                    NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (h != INVALID_HANDLE_VALUE) { WriteFile(h, m, (DWORD)(q - m), &wr, NULL); CloseHandle(h); }
+    return 1;
+}
+
 static inline void log_write(const char *path, const char *buf, const char *end) {
     HANDLE h;
+    if (log_badrange(path, buf, end)) return;
     log_close();                       /* the cached handle names the OLD file */
     h = CreateFileA(path, GENERIC_WRITE, 0, NULL,
                     CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
@@ -159,6 +189,7 @@ static inline void log_append(const char *path, const char *buf, const char *end
     HANDLE h;
     LARGE_INTEGER t0, t1;
     if (g_log_quiet) return;
+    if (log_badrange(path, buf, end)) return;
     QueryPerformanceCounter(&t0);
     ++g_log_calls; g_log_bytes += n;
     if (g_log_capped) return;
@@ -186,7 +217,10 @@ static inline void log_append(const char *path, const char *buf, const char *end
                         FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
                         NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
         if (h == INVALID_HANDLE_VALUE) return;
-        g_log_h = h; g_log_h_path = path;
+        {   unsigned i = 0;
+            while (path[i] && i < sizeof g_log_h_path_buf - 1) { g_log_h_path_buf[i] = path[i]; ++i; }
+            g_log_h_path_buf[i] = 0; }
+        g_log_h = h; g_log_h_path = g_log_h_path_buf;
     }
     {   DWORD wr; WriteFile(g_log_h, buf, n, &wr, NULL); }
     QueryPerformanceCounter(&t1);

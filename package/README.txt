@@ -27,7 +27,7 @@ FILES
   status.bat       which VDM is in force, and the last run's log summary
   smoke.bat        the built-in self-test
   bin\             the program itself
-  cfg\             optional settings files; empty means all defaults
+  cfg\             settings files; the four wow*.* files enable Win16 -- keep them
   debug\out\       the log of the LAST run (ntvdmhost.log) and screenshots
 
 IF SOMETHING GOES WRONG
