@@ -254,6 +254,41 @@ and matches the 6.22 oracle row for row (session 53)** — but `MEM /C` still re
    > claimed. If it ever matters, an INTERLEAVED A/B against `debug\prev\ntvdmhost_prev.exe`
    > is the only honest measurement.
 
+   ### ▶ s74 later — **HEAVEN7: OUR EXEC HANDED THE CHILD THE PARENT'S ENV BLOCK, THEN WIPED ITS FIRST THREE BYTES.** (HEAD `2a39000`, rig host `ddedb494` — UNCONFIRMED)
+
+   The user asked why the heaven7 demo fails. Two things were wrong:
+
+   1. **The share's `demo\msdos\heaven7\` held only `h7.EXE`** — no `DOS4GW.EXE`.
+      h7.EXE is a DOS/4GW *stub* that loads an external extender; the folder was
+      incomplete. Copied in the standard `DOS4GW.EXE` (the same one ZAR ships).
+   2. **A real host bug, oracle-verified.** INT 21h AH=4Bh with env=0 ("inherit")
+      must give the child a **COPY** of the parent's environment. We handed over
+      the parent's block itself, and then `dos_psp_build` zeroed its first three
+      bytes — so `COMSPEC=` became `PEC=C:\COMMAND.COM`, exactly where DOS appends
+      the program name. DOS/4GW reads that slot to find what to load and died with
+      `DOS/16M error [8]: cannot open file 'PEC=C:\COMMAND.COM'`. **Doom, Heretic,
+      Hexen and ZAR never showed it because their extenders are bound into the game
+      EXE — no EXEC, no copy.** Fixed `2a39000`: `dos_psp_build` no longer touches
+      the env block; `exec_begin` allocates the child a copy (owned by its PSP,
+      freed on exit); `exec_name` is captured verbatim from DS:DX. New relations in
+      `p_child`/`p_exec` (copy, count word 0001, name tail/shape, parent intact):
+      **5 rows, all MISMATCH before, all AGREE with 6.22 after.** offvm 1366/0.
+
+   **Where heaven7 is now (rig host `ddedb494`, `runs/s74_heaven7/`):** with both
+   fixes it EXEC-loads DOS4GW.EXE, enters 32-bit PM, relocates the LE image, reads
+   its whole data file and runs **its own protected-mode code** (building/mapping
+   descriptors) — a world away from the instant death. But it **has not set a video
+   mode**: the captured frame is blank and the headless log ends during PM setup
+   with no STAGE2 summary. **A NEW, SEPARATE WALL — not judged headless.** Needs a
+   by-hand look (and `dosdiff`'s rig adapter was fixed to the s73 layout in passing —
+   it had gone stale and only said so by "no disputes" off one host).
+
+   ⚠ **RIG IS ON `ddedb494`, DISPLACING THE CONFIRMED `eb466c56`** (rollback copy
+   `debug\prev\ntvdmhost_eb466c56.exe`). The EXEC-env change is a strict superset —
+   it only touches the inherit-the-env path, which Doom/Heretic/Hexen/ZAR do not use —
+   and it is oracle-clean + offvm-green, but it is **not user-confirmed by hand.**
+   The package/USB is still `eb466c56` until it is.
+
    ### ★★★★★ s74 — **HERETIC RUNS: OUR VESA 4F00 HANDLER WROTE PAST THE CALLER'S 256-BYTE BLOCK AND OVER THE NEXT MCB.** (HEAD `00c780e`, rig host `eb466c56`)
 
    **The find took one log read, not a run.** The s73 chain dump said the MCB at
