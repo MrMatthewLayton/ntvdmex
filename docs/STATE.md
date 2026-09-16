@@ -342,7 +342,7 @@ and matches the 6.22 oracle row for row (session 53)** — but `MEM /C` still re
       this is NOT the s72/s73 host changes. FIXED: the cache keys on a copy; a bad range is
       reported in the file and dropped, and the run keeps logging. The three bad callers are
       still to be found — the log now prints their pointers.
-   3. **OPEN: krnl386 reaches protected mode and the VDM dies silently at `PMHB steps=0x85`**
+   3. ~~OPEN~~ **CLOSED at midday, see the next block.** krnl386 reached protected mode and the VDM died silently at `PMHB steps=0x85`
       — after `FUNC 0xc0` and `0xbe` were STEPPED OVER as unimplemented, a run of
       `INT31h AX=0002` (segment→selector for 0x40/0xF000/0xA000…0xE000), two `0703`
       paging no-ops and a `04F2` commit. `wow32{ok=5 decl=4 unimpl=2}`. Log
@@ -354,6 +354,47 @@ and matches the 6.22 oracle row for row (session 53)** — but `MEM /C` still re
    **Rig host is now `4c502027`** (cfdd7211 + the log.h fix; archived as
    `debug\prev\ntvdmhost_cfdd7211.exe`). `bmstage.sh --host` archives the displaced exe
    BY HASH and never touches `ntvdmhost_prev.exe` — promotion to "confirmed" is by hand.
+
+   ### ★★★★★ s73, MIDDAY: **WIN16 IS BACK — 15 OF 17 DEMOS PUT THEIR WINDOW UP, FROM A REAL LAUNCH, WITH NO `target.txt`.**
+
+   Item 3 above is closed, and it was never a WOW-layer defect. Three host fixes, in the
+   order the log revealed them (each one uncovered the next):
+
+   1. **`e595c91` (s68) killed Win16 and nobody noticed for five sessions.** "The report
+      stops eating itself" turned every `report` flush into a `base` flush mechanically,
+      including the one at the WOW selector stage (`main.c` ~21566) — 1,500 lines
+      **before** `base = p` is executed. So `log_append(NULL, p)`, then `p = NULL`, then
+      every STAGE1 line was `zput` from **address 0 = the guest's IVT and BDA** in a VDM
+      process. krnl386 ran on a trashed interrupt table and died at `PMHB 0x85`. The
+      flush is gone (nothing to flush: the probes log via `ldtprobe.log`). ⚠ The lesson
+      is the standing one about a fix measured on one guest: that commit was verified on
+      Lemmings, and Win16 was never launched again after the wipe.
+   2. **krnl386 sees 8.3 names only.** With the log alive the kernel put up "Cannot find
+      file …\notepad\notepad.EXE (or one of its components)" for a file that was there:
+      its loader opens through INT 21h. New `wow_shorten()` (`wow32.h`) runs
+      `GetShortPathNameA` on every path handed to the Win16 side — the launch command and
+      `ResolveModulePath`'s answer. The old `C:\WIN16\` never needed it.
+   3. **The Win16 program now comes from CSRSS, as stock does — the s50 gap is closed.**
+      On `-w` the first fetch is FALSE/0x57, so the name came only from `cfg\target.txt`.
+      Measured shapes (every one DONT_WAIT, all logged as `STAGE1: WOW command fetch [...]`):
+      `WOW|FIRST` alone → `FALSE err=0x490` with either task id;
+      **`GET_FIRST_COMMAND|WOW` → TRUE (junk AppName, real CurDir) = the handshake, THEN
+      `WOW|FIRST_TASK` → TRUE with the AppName already in 8.3** — the same two-step the DOS
+      path learned in s72. A name is believed only if drive-qualified or UNC (TRUE with
+      capture-buffer junk is not a program — the first cut launched the junk). The image
+      is read into `filebuf` like the target.txt path or the V86 stage builds for the
+      embedded stub and krnl386 dies in its own heap init ("Unable to initialize heap").
+      **Negative control passed:** `target.txt` naming Terminal, Paint launched → Paint.
+      Then `target.txt` deleted from the box, whole shelf launched → 15/17.
+
+   | up (window title) | not up |
+   |---|---|
+   | Notepad, Paintbrush, Solitaire, Minesweeper, Character Map, Calculator, Write, Cardfile, Clock, System Configuration Editor, Task List, Recorder, Sound Recorder, Object Packager, Terminal (+ its port dialog) | **PROGMAN** (host alive, no window — was "frame up" in s55), **MPLAYER** (host gone — was "launches" in s53) |
+
+   `scripts/bm/w16launch.bat <app> [EXE] [keep]` is the launcher (kills the shared WOW
+   VDM first, re-asserts IFEO, lists the desktop, keeps the app up with `keep`).
+   Rig host **`28ec97b2`**; offvm 1361/0; selftest 8/8; Skyroads `n8=0x63 max_ms=0x14`.
+   Package NOT yet rebuilt with this — do that before the by-hand pass.
 
    ▶ **The by-hand pass owed from s72 is still owed, now for FIVE changes** (SFT, HMA,
    `AH=3Dh`, guard logging, **the `bin\`/`debug\out\` paths**). Same three asks: Doom E1M1

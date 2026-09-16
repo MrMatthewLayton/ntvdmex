@@ -580,6 +580,20 @@ typedef struct {
 static char g_wow_cmd_prog[512] = { 0 };   /* full path of the Win16 program   */
 static char g_wow_cmd_args[192] = { 0 };   /* its arguments, without a leading space */
 static int  g_wow_cmd_taken     = 0;       /* delivered already -- deliver once */
+/* ── ★ WIN16 SEES 8.3 NAMES, AND ONLY 8.3 NAMES. (s73) ──────────────────────────
+     krnl386's loader opens the program through INT 21h, and a Win16 DOS world has no
+     long file names: "C:\Documents and Settings\...\notepad\notepad.EXE" fails at
+     the first space, WowFailedExec fires, and the user reads "Cannot find file ... (or
+     one of its components)" for a file that is right there. Stock WOW hands krnl386
+     the SHORT form (a double-click's AppName arrives that way). Every path we hand
+     the Win16 side -- the launch command, ResolveModulePath's answer -- goes through
+     here. A path with no short form (the API returns 0) is passed as given. */
+static void wow_shorten(char *path, unsigned cap)
+{
+    char sh[MAX_PATH + 16]; DWORD n = 0;
+    if (path[0]) n = GetShortPathNameA(path, sh, sizeof sh);
+    if (n && n < sizeof sh && n < cap) { unsigned i; for (i = 0; i <= n; ++i) path[i] = sh[i]; }
+}
 
 /* Field offsets of the command structure -- derived in the 0x70 case, which is
    the only place they are used and the only place the derivation makes sense. */

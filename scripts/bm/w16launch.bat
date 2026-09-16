@@ -46,13 +46,9 @@ del /q "%OUT%\startfail.txt" >nul 2>&1
 del /q "%OUT%\ntvdmhost.log" >nul 2>&1
 reg add "%IFEO%" /v Debugger /t REG_SZ /d "\"%BIN%\ntvdmhost.exe\"" /f >nul
 
-rem ⚠⚠ THE WOW PATH STILL TAKES ITS PROGRAM FROM cfg\target.txt (s50, still true s73):
-rem    CSRSS's first fetch returns FALSE on a WOW launch, so the CSRSS AppName path
-rem    never fires and the host falls back to target.txt -- which otherwise names the
-rem    last DOS target, and THAT is what runs inside the WOW VDM. wowlive.bat always
-rem    wrote it; so does this. A real double-click on a fresh machine has no such
-rem    file -- that is the open product gap, not this harness.
-echo "%W16%\%T%\%EXE%"> "%SH%\cfg\target.txt"
+rem s73: the host now takes the Win16 program from CSRSS (GetNextVDMCommand with
+rem VDM_FLAG_WOW), as stock WOW does. target.txt is NOT written here any more -- a
+rem stale one is the negative control: if THAT program comes up, the fetch failed.
 cd /d "%W16%\%T%"
 >> "%R%" echo launching %W16%\%T%\%EXE% at %TIME%
 start "" "%W16%\%T%\%EXE%"

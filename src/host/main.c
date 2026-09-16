@@ -17215,6 +17215,10 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                         p = zput(p, "\""); p = zput(p, name); p = zput(p, "\" -> ");
                         if (name[0])
                             n = SearchPathA(NULL, name, NULL, sizeof full, full, &fp);
+                        if (n && n < sizeof full) {       /* krnl386 opens this via DOS: 8.3 only */
+                            wow_shorten(full, sizeof full);
+                            for (n = 0; full[n]; ++n) ;
+                        }
                         if (!n || n >= sizeof full || !dst) {
                             p = zput(p, "NOT FOUND (krnl386 will fall back to its own"
                                         " name, as it does today)");
@@ -21057,6 +21061,7 @@ static int v86_deliver_dev_irq(volatile BYTE *tib)
 int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
 {
     char report[8192]; char *p = report; char *base;
+    int wow_cmd_from_csrss = 0;         /* s73: the Win16 program came from CSRSS, not target.txt */
     volatile BYTE *tib, *hdlr;
     DWORD nread = 0, err = 0, ev; LONG st;
     dos_image_t img;
@@ -21563,7 +21568,18 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     if (GetFileAttributesA(WOWTRY_FLAG) != INVALID_FILE_ATTRIBUTES)
         wow_probe_ldt_matrix(g_wow_nmod ? "wow-early" : "dos-early");
     if (g_wow_nmod) {                        /* GH #128: WOW selector stage */
-        log_append(LOG_PATH, base, p); p = base;
+        /* ⛔ NO FLUSH HERE, AND NEVER THROUGH `base`. (s73) This read
+             `log_append(LOG_PATH, base, p); p = base;` from e595c91 (s68), which turned
+             every `report` flush into a `base` flush mechanically -- right for the exit
+             report, where base marks the end of the preamble, and WRONG here, 1,500
+             lines before `base = p` is ever executed. So: log_append(NULL, p) -- a bad
+             range -- then p = NULL, then every STAGE1 line was zput FROM ADDRESS 0, which
+             in a VDM process is the guest's IVT and BDA. krnl386 then ran on a trashed
+             interrupt table and the VDM died silently at PMHB 0x85. Win16 was dead from
+             s68 to s73 and nothing noticed: no Win16 program was launched after the wipe.
+           There is nothing to flush anyway -- the probes below log through LDTLOG_PATH,
+             and report[] has ~5 KB of headroom at this point; the preamble goes to disk
+             as one piece at the log_write after the command fetch. */
         /* The DOS bisection puts the flip between csrss_get_command() and
            v86_get_tib(). The latter is one call and costs nothing to try here, so
            try it BEFORE concluding the blocker is the command fetch. */
@@ -21702,6 +21718,89 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         p = zput(p, " std=0x"); p = zhex(p, (DWORD)(ULONG_PTR)ci2.StdIn); p = zput(p, "/0x"); p = zhex(p, (DWORD)(ULONG_PTR)ci2.StdOut);
         p = zput(p, "/0x"); p = zhex(p, (DWORD)(ULONG_PTR)ci2.StdErr);
         p = zput(p, "\r\n");
+    } else if (g_wow_launch) {
+        /* ── ★★★★ THE WIN16 PROGRAM, FROM CSRSS. (s73) ──────────────────────────
+             A WOW launch never carried its program: the VDM starts as
+             `ntvdm -f -i<n> -w -a krnl386.exe`, the first fetch above returns FALSE
+             err=0x57 (measured, s3x), and until today the name came ONLY from
+             cfg\target.txt -- the harness's channel -- so on any machine without
+             that file a double-clicked Win16 program ran nothing, and on the rig it
+             ran whatever the file happened to name last. Stock WOW gets it exactly
+             the way stock DOS does: WOWEXEC's WowGetNextVDMCommand (WOW32 0x70) is
+             wow32.dll calling GetNextVDMCommand with VDM_FLAG_WOW, and CSRSS answers
+             with the AppName + CmdLine the launcher queued. We ask here, before
+             krnl386 runs, so that 0x70 can answer from g_wow_cmd_prog as it already
+             does. DONT_WAIT: a misunderstanding is a FALSE, never a hang. */
+        VDM_COMMAND_INFO ci2;
+        DWORD err2 = 0; BOOL ok2; int k;
+        static char pf2[512], dk2[512], tt2[512], rv2[512];
+        ZeroMemory(&ci2, sizeof ci2);
+        ci2.CmdLine = g_cmd2; ci2.CmdLen = sizeof g_cmd2;  ci2.AppName = g_app2; ci2.AppLen = sizeof g_app2;
+        ci2.PifFile = pf2; ci2.PifLen = sizeof pf2; ci2.CurDirectory = g_cur2; ci2.CurDirectoryLen = sizeof g_cur2;
+        ci2.Env = g_env2; ci2.EnvLen = sizeof g_env2; ci2.Desktop = dk2; ci2.DesktopLen = sizeof dk2;
+        ci2.Title = tt2; ci2.TitleLen = sizeof tt2; ci2.Reserved = rv2; ci2.ReservedLen = sizeof rv2;
+        ci2.StartupInfo.cb = sizeof(STARTUPINFOA);
+        /* ► THE SHAPE IS MEASURED, NOT ASSUMED (rig, s73). WOW|FIRST|DONT_WAIT alone
+             answers FALSE err=0x490 (ERROR_NOT_FOUND), with either task id. What
+             answers TRUE is GET_FIRST_COMMAND|WOW -- the same handshake stock ntvdm's
+             cmdGetStartInfo makes for DOS, and like the DOS one it fills Title/CurDir
+             and leaves AppName as capture-buffer junk ("[5??]"). So, as on the DOS
+             path: the GET_FIRST call first, then the FIRST_TASK fetch for the command
+             itself. Every call is DONT_WAIT and every answer is logged; a "name" is
+             only believed when it is drive-qualified or UNC -- TRUE with junk is not
+             a program. */
+        {   static const struct { DWORD state; int own_task; int handshake; const char *what; } SH[] = {
+                { 0x100 | 0x02 | 0x20, 1, 1, "GET_FIRST|WOW|DONT_WAIT taskid=-i (handshake)" },
+                { 0x02 | 0x01 | 0x20,  1, 0, "WOW|FIRST|DONT_WAIT taskid=-i" },
+                { 0x02 | 0x01 | 0x20,  0, 0, "WOW|FIRST|DONT_WAIT taskid=0"  },
+                { 0x02 | 0x20,         1, 0, "WOW|DONT_WAIT taskid=-i"       },
+                { 0x02 | 0x01 | 0x08 | 0x20, 1, 0, "WOW|FIRST|RETRY|DONT_WAIT taskid=-i" },
+            };
+            unsigned si; int named = 0;
+            for (si = 0; si < sizeof SH / sizeof SH[0] && !named; ++si) {
+                g_app2[0] = 0; g_cmd2[0] = 0; g_cur2[0] = 0; err2 = 0;
+                ci2.AppLen = sizeof g_app2; ci2.CmdLen = sizeof g_cmd2; ci2.CurDirectoryLen = sizeof g_cur2;
+                ci2.EnvLen = sizeof g_env2; ci2.PifLen = sizeof pf2; ci2.DesktopLen = sizeof dk2;
+                ci2.TitleLen = sizeof tt2; ci2.ReservedLen = sizeof rv2;
+                ci2.VDMState = SH[si].state;
+                ci2.TaskId = SH[si].own_task ? g_ci.TaskId : 0;
+                ok2 = csrss_get_command(&ci2, &err2);
+                g_app2[sizeof g_app2 - 1] = 0; g_cmd2[sizeof g_cmd2 - 1] = 0; g_cur2[sizeof g_cur2 - 1] = 0;
+                named = ok2 && !SH[si].handshake
+                        && ((g_app2[0] >= 'A' && (g_app2[0] | 0x20) <= 'z' && g_app2[1] == ':' && g_app2[2] == '\\')
+                            || (g_app2[0] == '\\' && g_app2[1] == '\\'));
+                p = zput(p, "STAGE1: WOW command fetch ["); p = zput(p, SH[si].what); p = zput(p, "] -> ");
+                p = zput(p, ok2 ? "TRUE" : "FALSE");
+                p = zput(p, " err=0x"); p = zhex(p, err2);
+                p = zput(p, " app=["); if (named) p = zput(p, g_app2); else if (g_app2[0]) p = zput(p, "<not a path>");
+                p = zput(p, "] args=["); if (named) p = zput(p, g_cmd2);
+                p = zput(p, "] cur=["); p = zput(p, g_cur2); p = zput(p, "] show=0x"); p = zhex(p, ci2.StartupInfo.wShowWindow);
+                p = zput(p, " taskid=0x"); p = zhex(p, ci2.TaskId);
+                p = zput(p, "\r\n");
+            }
+            ok2 = named;
+        }
+        for (k = 0; g_cmd2[k]; ++k) if (g_cmd2[k] == '\r' || g_cmd2[k] == '\n') { g_cmd2[k] = 0; break; }
+        wow_cmd_from_csrss = ok2 && g_app2[0];
+        if (wow_cmd_from_csrss) {
+            /* Exactly what the target.txt path does with a name, or the stage below
+               builds the V86 world for the embedded four-byte stub instead ("STAGE2:
+               embedded fallback"), krnl386 gets no program path in its environment,
+               and it dies in its own init: "NTVDM KERNEL: Unable to initialize heap".
+               Measured, first cut. The image read here is discarded by wow_place_v86;
+               the NAME and the byte count are what the stage keys on. */
+            HANDLE hw;
+            zput(g_wow_cmd_prog, g_app2); wow_shorten(g_wow_cmd_prog, sizeof g_wow_cmd_prog);
+            /* the tail arrives with its leading space, as a DOS tail does; 0x70 adds its own */
+            { const char *a = g_cmd2; while (*a == ' ') ++a; zput(g_wow_cmd_args, a); zput(args, a); }
+            zput(progpath, g_wow_cmd_prog);
+            hw = CreateFileA(g_wow_cmd_prog, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
+            if (hw != INVALID_HANDLE_VALUE) { ReadFile(hw, filebuf, sizeof(filebuf), &nread, NULL); CloseHandle(hw); }
+            if (g_cur2[0]) SetCurrentDirectoryA(g_cur2);
+            p = zput(p, "STAGE2: Win16 program from CSRSS -- LAUNCH ["); p = zput(p, g_wow_cmd_prog);
+            p = zput(p, "] loaded 0x"); p = zhex(p, nread); p = zput(p, " (target.txt NOT consulted)\r\n");
+            if (!nread) wow_cmd_from_csrss = 0;          /* unreadable: fall back as before */
+        }
     }
     log_write(LOG_PATH, report, p);
     /* ⚠ AFTER the log_write, not before: log_write TRUNCATES. The first cut of this
@@ -21752,7 +21851,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             ReadFile(hf, filebuf, sizeof(filebuf), &nread, NULL); CloseHandle(hf);
             zput(progpath, g_app2);
             zput(args, g_cmd2);
-            zput(g_wow_cmd_prog, g_app2);
+            zput(g_wow_cmd_prog, g_app2); wow_shorten(g_wow_cmd_prog, sizeof g_wow_cmd_prog);
             zput(g_wow_cmd_args, g_cmd2);
             p = zput(p, "STAGE2: loaded 0x"); p = zhex(p, nread);
             p = zput(p, " from "); p = zput(p, g_app2);
@@ -21765,7 +21864,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         }
     }
     {
-        int csrss_named = (g_cur[0] && g_title[0]) || (nread != 0);
+        int csrss_named = (g_cur[0] && g_title[0]) || (nread != 0) || wow_cmd_from_csrss;
         HANDLE ht = csrss_named ? INVALID_HANDLE_VALUE
                   : CreateFileA(TARGET_PATH, GENERIC_READ, FILE_SHARE_READ, NULL,
                                 OPEN_EXISTING, 0, NULL);
@@ -21825,7 +21924,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                      loaded just below is discarded there (see wow_place_v86), but
                      the NAME is the one thing the WOW path still needs -- Windows
                      does not put it on the VDM's command line. */
-                zput(g_wow_cmd_prog, tpath);
+                zput(g_wow_cmd_prog, tpath); wow_shorten(g_wow_cmd_prog, sizeof g_wow_cmd_prog);
                 if (a) zput(g_wow_cmd_args, a);
                 p = zput(p, "STAGE2: target.txt loaded 0x"); p = zhex(p, nread);
                 p = zput(p, " from "); p = zput(p, tpath);
