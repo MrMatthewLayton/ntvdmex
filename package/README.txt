@@ -64,7 +64,13 @@ ENVIRONMENT VARIABLES
       set LIB=C:\QB45\LIB
       QB
   Use 8.3 names (no spaces) in such paths: a 1988 linker cannot read long ones.
-  (demo\msdos\qb45\QB45.BAT on the demo USB does exactly this.)
+
+  On the demo USB, demo\msdos\qb45 has two helpers that do this for you:
+      MKEXE CAVE    compiles CAVE.BAS straight to a working standalone CAVE.EXE
+      QB45          starts QuickBASIC with LIB set, so Run > Make EXE File works
+  !! Type QB45, not QB. Typing QB runs QB.EXE directly (.EXE beats .BAT), which
+     starts QuickBASIC WITHOUT LIB -- it still edits and runs programs fine, but
+     every EXE it builds is a broken ~4 KB file that does nothing when run.
 
 KNOWN LIMITS
   Hardware-level access is slower than a real PC (every port access is a trap),
