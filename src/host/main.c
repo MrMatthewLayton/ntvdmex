@@ -1488,6 +1488,7 @@ static unsigned       g_capture_ms    = 300; /* CAPTURE_FLAG contents: ms betwee
 static int            g_capture       = 0;  /* CAPTURE_FLAG present: opt-in self-screenshot for graphical tests */
 static int            g_no_a000       = 0;  /* NOA000_FLAG present: leave A0000 mapped (diagnostic) */
 static int            g_no_pmpatch    = 0;  /* NOPMPATCH_FLAG present: scan no code regions (diagnostic) */
+static int            g_flt32_warned  = 0;  /* said once: NT's 16-bit frame cannot locate a flat client's INT */
 static DWORD          g_no_pmpatch_min = 0; /* ...or only regions >= this many bytes */
 static int            g_interp12      = 0;  /* INTERP12_FLAG: interpret mode 12h, no page trap */
 static int            g_p12_off       = 0;  /* P12OFF_FLAG: revert to the A0000 page trap      */
@@ -25633,7 +25634,47 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                                 DWORD gvec = (DWORD)(fr[2] >> 3) & 0xFF;
                                 DWORD gcb  = dpmi_sel_base(fr[4]);
                                 volatile BYTE *gi = (volatile BYTE *)(ULONG_PTR)(gcb + fr[3]);
-                                if (gcb && host_readable((const void *)gi, 2)
+                                /* ── ⚠⚠⚠ THIS ARM CANNOT SERVE A FLAT 32-BIT CLIENT, AND THE
+                                     REASON IS NT'S FRAME, NOT THIS TEST. (s74)
+                                     It used to read `if (gcb && ...)`, and dpmi_sel_base()
+                                     returns g_ldt[idx].base -- 0 for exactly the descriptor a
+                                     flat 32-bit client runs on (`desc 0x0000ffff:0x00cffa00`,
+                                     base 0, limit 4 GB, D/B=1). So it declined those faults by
+                                     accident, reading a legitimate base as "no selector".
+                                     Fixing THAT predicate alone is WORSE THAN THE BUG: NT hands
+                                     us a 16-BIT frame whatever the client is (see the widening
+                                     code below), so a flat client's EIP -- which IS its linear
+                                     address, the base being 0 -- arrives TRUNCATED TO 16 BITS.
+                                     `gcb + fr[3]` then names low memory instead of the faulting
+                                     instruction, and a chance `CD nn` match there would make us
+                                     write C4 C4 into an innocent page. Measured on heaven7: its
+                                     own `int 31h` 16 bytes past the LE entry point reports
+                                     `cs:ip=0x0347:0x231c` (err=0x018a = IDT|vector 0x31) when the
+                                     instruction really lives at ~0x0433231c.
+                                   ⇒ So DECLINE EXPLICITLY, on the real criterion -- the frame is
+                                     only trustworthy for a 16-bit faulting CS, which is what all
+                                     62 serviced faults in the heaven7 run happened to be -- and
+                                     SAY SO, loudly, once, naming the limitation. The fix is a
+                                     wider frame (the kernel would have to hand us one, or we
+                                     recover EIP another way); until then a flat 32-bit client's
+                                     raw INTs must come from the eager scan. */
+                                uint32_t gar = 0;
+                                int gpresent = dpmi_sel_desc(fr[4], &gar, NULL);
+                                int gis32 = gpresent && (((gar >> 20) & 0xF) & 0x4);
+                                if (gis32 && !g_flt32_warned) {
+                                    char wb[256], *wq = wb;
+                                    g_flt32_warned = 1;
+                                    wq = zput(wq, "  EXC: #GP(IDT) vec=0x"); wq = zhex(wq, gvec);
+                                    wq = zput(wq, " in a FLAT/32-BIT CS 0x"); wq = zhex(wq, fr[4]);
+                                    wq = zput(wq, " -- NOT serviced here: NT's frame is 16-bit, so"
+                                                  " the faulting EIP arrived truncated (0x");
+                                    wq = zhex(wq, fr[3]);
+                                    wq = zput(wq, "). Reflecting to the client instead. A 32-bit"
+                                                  " client's raw INTs need the eager scan.\r\n");
+                                    log_append(LOG_PATH, wb, wq); serial_out(wb, wq);
+                                }
+                                if (gpresent && !gis32
+                                    && host_readable((const void *)gi, 2)
                                     && gi[0] == 0xCD && gi[1] == (BYTE)gvec) {
                                     /* ── ★★★★★ THIS IS THE PASS THAT RE-PATCHED CALC'S FP SITE.
                                          (session 56 -- the question session 55 left open.)
