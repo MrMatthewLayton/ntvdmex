@@ -237,6 +237,45 @@ and matches the 6.22 oracle row for row (session 53)** — but `MEM /C` still re
    the next step, and it is also the honest correction for *a fix measured on
    one guest is a fix for none*.
 
+   ### ⛔⛔ s74 LATEST — **DOOM REGRESSED ON THE VESA BUILD. ROLLED BACK; RIG IS `eb466c56`.**
+
+   > **The user ran Doom by hand on `6d2f9af5` and its raycaster drew ~4px-wide column
+   > strides instead of 1px. Heretic and Hexen were fine. h7 also did not work by hand.**
+   > Rig rolled back to the confirmed `eb466c56` immediately (standing rule: roll back
+   > FIRST on "worse"), stable zip untouched, user's log in `runs/s74_doom_regression/`.
+   > **The whole VESA branch (`96345f6`) is committed but MUST NOT go back on the rig
+   > until this is understood.**
+
+   **What is ruled OUT, by measurement:**
+   - **The patcher.** Footprint is byte-identical between the good and broken runs —
+     same regions, same counts (`0x17`, `3`, `0x24`, `0x45`), same rejects. Only the
+     base addresses moved, because `video_state` grew.
+   - **The EIP reconstruction (`bb5ae66`).** **Zero** reconstructions in Doom's log.
+   - **Struct growth aliasing the mode-Y planes.** The plane views are independent
+     `CreateFileMapping` sections, not buffers inside `video_state`.
+   - **A stack blowup from the 2.09MB I added to `present_ddraw`.** Both instances
+     (`main.c`, `present_demo`) are `static`. ⚠ But note the struct carries an explicit
+     design constraint in its own comment — "stays something a caller can hold by
+     value" — which 2.09MB violates in spirit. Worth undoing regardless.
+   - **Headless Doom on the VESA build renders CORRECTLY** (`runs/s74_doom_regression/
+     test/`), same launch shape as the good baseline (`good/`).
+
+   ⚠⚠ **A FALSE LEAD, RECORDED SO NOBODY REPEATS IT.** The mode-Y counters looked
+   damning — good run `fanouts=0x70` (112), broken `fanouts=0xdc61` (56,417), i.e.
+   "more fanouts than swaps". **It is normal.** Re-running Doom on the CONFIRMED build
+   gave `fanouts=0x44d44` (281,412) against `swaps=0x104e2`. The two logs being compared
+   were different launch shapes and durations. ⇒ **An A/B between two runs you did not
+   control is not an A/B.**
+
+   ▶ **WHERE TO LOOK NEXT.** The screenshot path (`snap` -> BMP) is clean, so the defect
+   is in the ON-SCREEN path that headless never exercises: `gdi_present` /
+   `fs_stage`, which is exactly what changed to add the 32bpp snapshot. **Prime
+   suspect:** `gdi_present` can now set `biBitCount = 32` (the `split || direct`
+   branch). An 8bpp buffer described to `StretchDIBits` as 32bpp renders **exactly 4x
+   too wide** — which is the reported signature precisely. NOT PROVEN: `direct` should
+   be 0 for Doom (`snap_bpp` is assigned from `f->bpp` on every valid frame). Reproduce
+   it before fixing it; a by-hand run with the per-present values logged would settle it.
+
    ### ★★★★★ s74 LATE — **HEAVEN7 RENDERS. VBE 2.0 DIRECT COLOUR + A LINEAR FRAMEBUFFER.** (HEAD `96345f6`, rig host `6d2f9af5` — UNCONFIRMED)
 
    **heaven7 draws its opening corridor ("we used to dream") and its "heaven seven"
