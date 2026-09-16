@@ -110,6 +110,10 @@ add_executable(ntvdmhost
     src/vdd/present_ddraw.c
     src/runtime.c
     res/ntvdmhost.rc)
+# The .rc names MAINICON.ico but CMake does not scan .rc includes, so a new icon alone
+# rebuilt nothing and the old one shipped (s73). Make the dependency explicit.
+set_source_files_properties(res/ntvdmhost.rc PROPERTIES
+    OBJECT_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/res/MAINICON.ico")
 target_include_directories(ntvdmhost PRIVATE src/host src/vdm src/dos src/vdd src/wow)
 if(NOT NTVDMEX_EMBED_MANIFEST)
     target_compile_definitions(ntvdmhost PRIVATE NTVDMEX_NO_MANIFEST)
