@@ -14,6 +14,7 @@
 #   debug/tests/  DOS test programs (Probe/ Argtest/ dos/) <- never touched here
 #   debug/out/    everything the host WRITES              <- never touched here
 #   debug/prev/   rollback host builds                    <- --host moves the old bin/ exe here
+#   debug/ctl/    the watcher's control channel           <- cmd.txt watcher.txt control.txt controld.txt rigshot.txt
 #   demo/msdos/   the user's games and demos              <- never touched here
 #   demo/win16/   Win 3.11 apps                           <- never touched here
 #
@@ -70,7 +71,7 @@ stage_bin() {    # $1 = src, $2 = dst; md5 both sides
   echo "  staged:  $(basename "$2") ($L)"
 }
 
-[ "$MODE" = check ] || mkdir -p "$RIG" "$SH/debug/out" "$SH/debug/tests" "$SH/debug/prev"
+[ "$MODE" = check ] || mkdir -p "$RIG" "$SH/debug/out" "$SH/debug/tests" "$SH/debug/prev" "$SH/debug/ctl"
 echo "harness -> debug/rig/"
 for b in "${LIVE_BATS[@]}"; do
   [ -f "$ROOT/scripts/bm/$b" ] || { echo "  MISSING in repo: scripts/bm/$b" >&2; continue; }
@@ -102,6 +103,8 @@ else
   fi
 fi
 
+# controld.exe itself is RUNNING on the box and cannot be overwritten; runwatch.bat
+# copies controld_v2.exe over it at its next start. rigshot.exe is one-shot: safe.
 if [ -f "$SH/wowquiet.txt" ] || [ -f "$SH/cfg/wowquiet.txt" ]; then
   echo "⚠ wowquiet.txt is on the share: the log is silenced and the guest runs FASTER than shipped" >&2
 fi

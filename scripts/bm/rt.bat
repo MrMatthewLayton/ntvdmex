@@ -18,6 +18,7 @@ rem     debug\rig\    this harness: rt.bat, runwatch.bat, controld, rigshot, vdm
 rem     debug\tests\  DOS test programs: Probe\ Argtest\ Testcard\ dos\ selftest\
 rem     debug\out\    everything the host WRITES: ntvdmhost.log, result_*.log, shots
 rem     debug\prev\   rollback host builds (never run from here)
+rem     debug\ctl\    the watcher's control channel: cmd.txt watcher.txt control.txt controld.txt rigshot.txt
 rem     demo\msdos\   THE USER'S games and demos -- run IN PLACE, never copied
 rem     demo\win16\   Win 3.11 apps
 rem  C: gets nothing at all.  bin\ bm\-compat: the host also accepts a folder named bm.

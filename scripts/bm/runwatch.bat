@@ -12,15 +12,19 @@ rem  thing this installs outside the share is its own Startup entry, which is wh
 rem  lets the box recover the watcher after a reboot without a human.
 rem
 rem  s73: the harness moved from bm\ to debug\rig\ (the host to bin\, its output to
-rem  debug\out\). The window title carries the layout so an old watcher and a new one
-rem  can be told apart -- and the old one killed by title -- during a cutover.
+rem  debug\out\), and the control channel -- cmd.txt watcher.txt control.txt controld.txt
+rem  rigshot.txt -- to debug\ctl\ (controld.exe and rigshot.exe have it compiled in).
+rem  The window title carries the layout so an old watcher and a new one can be told
+rem  apart -- and the old one killed by title -- during a cutover.
 rem ============================================================================
 set SH=C:\Documents and Settings\All Users\Documents\ntvdmex
 set RIG=%SH%\debug\rig
+set CTL=%SH%\debug\ctl
 
 if not exist "%SH%\cfg" md "%SH%\cfg"
 if not exist "%SH%\debug" md "%SH%\debug"
 if not exist "%SH%\debug\out" md "%SH%\debug\out"
+if not exist "%CTL%" md "%CTL%"
 
 rem -- self-install to Startup so a reboot auto-recovers the watcher --
 copy /y "%~f0" "%ALLUSERSPROFILE%\Start Menu\Programs\Startup\ntvdmex-watch.bat" >nul 2>&1
@@ -28,16 +32,16 @@ rem -- self-upgrade the control daemon: stop any old one, pull a staged newer bu
 taskkill /f /im controld.exe >nul 2>&1
 if exist "%RIG%\controld_v2.exe" copy /y "%RIG%\controld_v2.exe" "%RIG%\controld.exe" >nul 2>&1
 start "" "%RIG%\controld.exe"
-echo watcher up > "%SH%\watcher.txt"
-title NTVDMEX test watcher [debug\rig] -- leave this window open
+echo watcher up > "%CTL%\watcher.txt"
+title NTVDMEX test watcher [debug\rig, ctl=debug\ctl] -- leave this window open
 echo ================================================
 echo  NTVDMEX bare-metal test watcher is RUNNING.
 echo  Auto-starts on reboot; control daemon launched.
 echo  Leave this window open; it runs tests on demand.
 echo ================================================
 :loop
-if exist "%SH%\cmd.txt" goto run
-echo watcher up > "%SH%\watcher.txt"
+if exist "%CTL%\cmd.txt" goto run
+echo watcher up > "%CTL%\watcher.txt"
 ping -n 3 127.0.0.1 >nul
 goto loop
 :run
@@ -47,9 +51,9 @@ rem    two operations), the body never runs and TN keeps its PREVIOUS value -- s
 rem    watcher silently re-runs the last target. That cost a real debugging session:
 rem    "skyroads" was queued and p_ver.com ran, and the resulting log looked plausible.
 set TN=
-for /f "delims=" %%c in ('type "%SH%\cmd.txt"') do set TN=%%c
+for /f "delims=" %%c in ('type "%CTL%\cmd.txt"') do set TN=%%c
 if "%TN%"=="" goto emptycmd
-del "%SH%\cmd.txt" >nul 2>&1
+del "%CTL%\cmd.txt" >nul 2>&1
 echo [%TIME%] running %TN%
 rem -- ISOLATE THE TEST FROM THE LOOP. `call` runs rt.bat inside THIS cmd.exe, so
 rem    anything that takes the test down takes the watcher with it -- which is what
@@ -61,6 +65,6 @@ cmd /c ""%RIG%\rt.bat" %TN%"
 echo [%TIME%] done %TN%
 goto loop
 :emptycmd
-del "%SH%\cmd.txt" >nul 2>&1
+del "%CTL%\cmd.txt" >nul 2>&1
 echo [%TIME%] EMPTY cmd.txt -- ignored, not re-running the last target
 goto loop

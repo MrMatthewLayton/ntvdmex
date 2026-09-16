@@ -56,13 +56,13 @@ GUESTS="$*"
 rm -f "$SH/sxs_done.txt" "$SH/sxs.txt" "$SH/sxs.bmp"
 
 printf 'exec cmd /c "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\debug\\rig\\sxs.bat" %s\r\n' \
-  "$GUESTS" > "$SH/control.txt"
+  "$GUESTS" > "$SH/debug/ctl/control.txt"
 echo "queued via controld: $GUESTS   (up to ${TIMEOUT}s for sxs_done.txt)"
 
-for ((i=0; i<30; i++)); do [ -f "$SH/control.txt" ] || break; sleep 2; done
-if [ -f "$SH/control.txt" ]; then
+for ((i=0; i<30; i++)); do [ -f "$SH/debug/ctl/control.txt" ] || break; sleep 2; done
+if [ -f "$SH/debug/ctl/control.txt" ]; then
   echo "FAILED: controld never consumed control.txt -- daemon is not running" >&2
-  echo "  heartbeat: $(cat "$SH/controld.txt" 2>/dev/null)" >&2
+  echo "  heartbeat: $(cat "$SH/debug/ctl/controld.txt" 2>/dev/null)" >&2
   exit 2
 fi
 

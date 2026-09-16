@@ -283,7 +283,7 @@ class NtvdmexRig(Host):
         if not os.path.ismount(self.share):
             return False, ("share not mounted at %s -- mount_smbfs -N "
                            "//guest@<box-ip>/ntvdmex %s" % (self.share, self.share))
-        beat = os.path.join(self.share, "watcher.txt")
+        beat = os.path.join(self.share, "debug", "ctl", "watcher.txt")
         if not os.path.exists(beat):
             return False, "no watcher.txt on the share -- the rig watcher is not running"
         # The heartbeat must be MOVING.  A stale watcher.txt looks identical to a
@@ -322,15 +322,15 @@ class NtvdmexRig(Host):
         # The watcher reads cmd.txt with `for /f ... in ('type cmd.txt')`, so it
         # wants a CRLF line -- and it must appear ATOMICALLY: the watcher can see a
         # created-but-still-empty file over SMB, and an empty read is "no target".
-        tmp = os.path.join(self.share, "cmd.tmp")
+        tmp = os.path.join(self.share, "debug", "ctl", "cmd.tmp")
         with open(tmp, "wb") as f:
             f.write(("Probe %s\r\n" % name).encode())
-        os.replace(tmp, os.path.join(self.share, "cmd.txt"))
+        os.replace(tmp, os.path.join(self.share, "debug", "ctl", "cmd.txt"))
 
         deadline = time.time() + timeout
         while time.time() < deadline:
             time.sleep(3)
-            if not os.path.exists(os.path.join(self.share, "cmd.txt")):
+            if not os.path.exists(os.path.join(self.share, "debug", "ctl", "cmd.txt")):
                 break
         else:
             raise RuntimeError("watcher never consumed cmd.txt within %ds" % timeout)

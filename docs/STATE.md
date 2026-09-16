@@ -260,9 +260,13 @@ and matches the 6.22 oracle row for row (session 53)** — but `MEM /C` still re
       demo\msdos\                   games + demos FLAT: Doom Duke3D HERETIC Hexen Lemmings Mario Skyroads
                                     skyxmas Wolf3D Wolfy Zar Bubbles chasmdem dkd-egas fusion_f radiance h7 qb45
       demo\win16\                   Win 3.11 apps (EMPTY -- README only; nothing was on the share)
-      watcher.txt controld.txt cmd.txt rigshot.txt   the control channel (compiled into controld/rigshot)
+      debug\ctl\                    the control channel: cmd.txt watcher.txt control.txt controld.txt rigshot.txt
    ```
-   For the USB: copy `bin\ dist\ cfg\ demo\`; leave `debug\` behind.
+   **The root is exactly `bin cfg debug demo dist`.** For the USB: copy everything but `debug\`.
+   (The control files were at the root until the user asked; `controld.exe` and
+   `rigshot.exe` have the path compiled in, so both were rebuilt -- `controld_v2.exe` is
+   hot-swapped by `runwatch.bat` at its next start -- and `bmqueue.sh`, `bmwow.sh`,
+   `lemhpab.sh`, `launchmatrix.sh`, `dosdiff.py` etc. write `debug/ctl/cmd.txt`.)
 
    **What had to change for `bm\` → `bin\`, and it was not a rename:**
    * **The host** derived its root from the exe's directory being literally `bm`
@@ -300,7 +304,9 @@ and matches the 6.22 oracle row for row (session 53)** — but `MEM /C` still re
    (both watchers kept beating; `rigshot list` showed both windows) — the old watcher was
    killed by its exact window title through controld instead, `bm\` then deleted cleanly,
    so the box has NOT been rebooted on the new layout yet. The new `runwatch.bat` did
-   install its Startup entry; the first reboot will tell.
+   install its Startup entry; the first reboot will tell. The same kill-by-title move
+   was used a second time for the `debug\ctl\` change (title now
+   `[debug\rig, ctl=debug\ctl]`); a queued selftest then ran 8/8 through the new channel.
 
    **Verified on the rig, in this order:** `setup` → IFEO = `"…\bin\ntvdmhost.exe"` and
    the layout listing · **selftest 8/8 through `bin\ntvdmhost.exe`** (`STAGE0: root` =

@@ -65,12 +65,12 @@ run_one() {   # $1 = host tag (ex|stock), $2 = target
     before=$(stat -f '%m' "$res" 2>/dev/null || echo 0)
     rm -f "$res" 2>/dev/null
     if [ "$tag" = stock ]; then
-        printf 'stock %s\r\n' "$t" > "$SH/cmd.txt"
+        printf 'stock %s\r\n' "$t" > "$SH/debug/ctl/cmd.txt"
     else
-        printf '%s\r\n' "$t" > "$SH/cmd.txt"
+        printf '%s\r\n' "$t" > "$SH/debug/ctl/cmd.txt"
     fi
-    for ((i=0; i<40; i++)); do [ -f "$SH/cmd.txt" ] || break; sleep 2; done
-    if [ -f "$SH/cmd.txt" ]; then echo "WATCHER-DEAD"; return; fi
+    for ((i=0; i<40; i++)); do [ -f "$SH/debug/ctl/cmd.txt" ] || break; sleep 2; done
+    if [ -f "$SH/debug/ctl/cmd.txt" ]; then echo "WATCHER-DEAD"; return; fi
     for ((i=0; i<90; i++)); do
         after=$(stat -f '%m' "$res" 2>/dev/null || echo 0)
         if [ "$after" != "0" ] && [ "$after" != "$before" ]; then sleep 3; break; fi

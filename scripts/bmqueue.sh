@@ -38,15 +38,15 @@ BEFORE=$(mtime "$RESULT")
 # ATOMIC: the watcher polls the share and can see a freshly created, still-empty
 # cmd.txt (SMB create and write are two operations). An empty read is "no target",
 # the run silently becomes result_none.log, and the queue reports a timeout.
-printf '%s %s\r\n' "$TARGET" "$ARGS" > "$SH/cmd.tmp" && mv "$SH/cmd.tmp" "$SH/cmd.txt"
+printf '%s %s\r\n' "$TARGET" "$ARGS" > "$SH/debug/ctl/cmd.tmp" && mv "$SH/debug/ctl/cmd.tmp" "$SH/debug/ctl/cmd.txt"
 echo "queued: $TARGET $ARGS   (waiting up to ${TIMEOUT}s for $(basename "$RESULT"))"
 
 # Phase 1: the watcher consumes cmd.txt. If it never does, the watcher is dead.
 for ((i=0; i<30; i++)); do
-  [ -f "$SH/cmd.txt" ] || break
+  [ -f "$SH/debug/ctl/cmd.txt" ] || break
   sleep 2
 done
-if [ -f "$SH/cmd.txt" ]; then
+if [ -f "$SH/debug/ctl/cmd.txt" ]; then
   echo "FAILED: watcher never consumed cmd.txt -- watcher is not running" >&2
   exit 2
 fi

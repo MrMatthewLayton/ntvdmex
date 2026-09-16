@@ -42,7 +42,7 @@
 
 #define SHARE "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex"
 #define VDM_TITLE "Microsoft Windows XP Virtual DOS Machine"
-#define LOGF SHARE "\\rigshot.txt"
+#define LOGF SHARE "\\debug\\ctl\\rigshot.txt"   /* with the watcher's control channel (s73) */
 
 /* ── tiny no-CRT helpers ─────────────────────────────────────────────────────── */
 static int slen(const char *s) { int n = 0; while (s[n]) ++n; return n; }
@@ -382,7 +382,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show)
     arg4[i] = 0;
 
     if (seq(verb, "shot"))
-        return do_shot(arg1[0] ? arg1 : (SHARE "\\rigshot.bmp"));
+        return do_shot(arg1[0] ? arg1 : (SHARE "\\debug\\out\\rigshot.bmp"));
 
     /* ── ★★★ `capture "<caption>"` -- WHO HOLDS THE MOUSE CAPTURE, AND THE FOCUS.
          The Win16 menu defect ("after three canvas drags, Alt-F-A stops opening

@@ -40,13 +40,13 @@ rm -f "$SH"/stockdump.txt "$SH"/stockdump.bin "$SH"/stockdump.blk \
       "$SH"/stockdump_con.txt "$SH"/stockdump_state.txt "$SH"/stockdump_done.txt
 
 printf 'exec cmd /c "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\stockdump.bat"\r\n' \
-  > "$SH/control.txt"
+  > "$SH/debug/ctl/control.txt"
 echo "queued via controld; waiting up to ${TIMEOUT}s"
 
-for ((i=0; i<30; i++)); do [ -f "$SH/control.txt" ] || break; sleep 2; done
-if [ -f "$SH/control.txt" ]; then
+for ((i=0; i<30; i++)); do [ -f "$SH/debug/ctl/control.txt" ] || break; sleep 2; done
+if [ -f "$SH/debug/ctl/control.txt" ]; then
   echo "FAILED: controld never consumed control.txt -- daemon is not running" >&2
-  echo "  heartbeat: $(cat "$SH/controld.txt" 2>/dev/null)" >&2
+  echo "  heartbeat: $(cat "$SH/debug/ctl/controld.txt" 2>/dev/null)" >&2
   exit 2
 fi
 

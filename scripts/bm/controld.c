@@ -24,8 +24,9 @@
 #include <windows.h>
 
 #define SHARE "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex"
-#define CTRL  SHARE "\\control.txt"
-#define BEAT  SHARE "\\controld.txt"
+#define CTL   SHARE "\\debug\\ctl"          /* the watcher's control channel (s73) */
+#define CTRL  CTL "\\control.txt"
+#define BEAT  CTL "\\controld.txt"
 
 /* Enable SeShutdownPrivilege in our token so ExitWindowsEx is allowed. */
 static void enable_shutdown_priv(void)

@@ -16,8 +16,8 @@ SH=/private/tmp/xpshare
 ROUNDS="${1:-3}"; EXEA="${2:?usage: lemhpab.sh <rounds> <exeA> <exeB>}"; EXEB="${3:?}"
 A_ALIVE=0; A_DEAD=0; B_ALIVE=0; B_DEAD=0
 
-ctl() { printf '%s\r\n' "$1" > "$SH/control.txt"
-        for _ in $(seq 1 30); do [ -f "$SH/control.txt" ] || return 0; sleep 2; done
+ctl() { printf '%s\r\n' "$1" > "$SH/debug/ctl/control.txt"
+        for _ in $(seq 1 30); do [ -f "$SH/debug/ctl/control.txt" ] || return 0; sleep 2; done
         echo "  !! controld never consumed control.txt" >&2; return 1; }
 
 for r in $(seq 1 "$ROUNDS"); do
