@@ -237,6 +237,42 @@ and matches the 6.22 oracle row for row (session 53)** — but `MEM /C` still re
    the next step, and it is also the honest correction for *a fix measured on
    one guest is a fix for none*.
 
+   ### ★★★★★ s74 LATE — **HEAVEN7 RENDERS. VBE 2.0 DIRECT COLOUR + A LINEAR FRAMEBUFFER.** (HEAD `96345f6`, rig host `6d2f9af5` — UNCONFIRMED)
+
+   **heaven7 draws its opening corridor ("we used to dream") and its "heaven seven"
+   title, 640x480x24, 17,707 distinct colours, 874 presents over the full 30s
+   deadline.** Captures in `runs/s74_vesa/shots/`. It was FOUR walls, three of them
+   ours — see the blocks below for 1 and 2:
+
+   3. **The lazy raw-INT path could not serve a flat 32-bit client** (`bb5ae66`) —
+      NT's 16-bit exception frame truncates a flat client's EIP. Reconstructed from
+      the client's own 0501 blocks, requiring a UNIQUE site holding `CD <vec>`.
+      Serviced raw INTs 62 → 72; the demo reached its own code and printed its own
+      `VESA error`.
+   4. **VESA** (`96345f6`). The eleven VBE sub-functions were all present — what was
+      missing was everything a guest FILTERS on: only three 8bpp modes, `MemoryModel`
+      hardcoded to 4 (packed) for every mode, no RGB field layout, and **no linear
+      framebuffer** (attribute bit 7 and `PhysBasePtr` both 0), with **DPMI 0800
+      unimplemented** so the advertisement could not have been honoured anyway.
+      Now: twelve modes incl. 15/16/24bpp, a correct ModeInfoBlock, the LFB aperture
+      at `VID_VESA_LFB_PHYS`, DPMI 0800/0801, and direct colour converted to ARGB for
+      a presenter that gained a 32bpp snapshot beside its 8bpp one.
+      **The 8bpp path is byte-for-byte unchanged** — Doom/Heretic/Hexen/ZAR run through it.
+      Measured: `BX=0x4112` (640x480x24, LFB) ACCEPTED, aperture `0xE0000000` size
+      `0xE1000` = exactly 640*480*3.
+
+   ⚠ **NOT DONE — the geometry.** The picture is a **320x176 rectangle at (160,272)**
+   inside an otherwise correct 640x480 frame. x=160 is *exactly* `(640-320)/2`, so the
+   demo is centring horizontally; y=272 is NOT `(480-176)/2`=152. It calls neither
+   4F06 nor 4F07, so it is not panning. Unexplained — start here.
+
+   ⚠ **heaven7 still needs `cfg\nopmpatch.flag`** to get past wall 2 (our eager
+   INT-site patcher corrupting its generated tables). That knot is NOT untied.
+
+   ⛔ **HEXEN'S LOADER SCREEN IS NOT VESA** — measured, zero `INT 10h AX=4Fxx` calls in
+   an 89,636-line run from startup into gameplay. VBE work will not touch it; it needs
+   its own investigation.
+
    ### ▶ START HERE: **SESSION 74 (below) — HERETIC RUNS, USER-CONFIRMED BY HAND. `eb466c56` IS THE CONFIRMED BUILD.** Then s73 evening, 72, 71, 70, 69, 68, 61, 60, 59.
 
    > **s74 close (2026-09-16, late). Rig host `eb466c56` (= `00c780e`'s binary) is
