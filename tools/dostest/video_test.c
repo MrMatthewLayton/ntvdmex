@@ -213,12 +213,29 @@ int main(void)
           && vid.frame.pixels==g_vmem, "frame(mode13): 320x200x8 from the aperture");
 
     /* T9: VESA 4F00 controller info ------------------------------------- */
-    { uint16_t seg=0x3000, off=0x0000; uint8_t *b=&g_flat[(seg<<4)+off]; uint32_t mlp;
+    /* ⚠ THE INFO BLOCK IS 256 BYTES UNLESS THE CALLER PRESET "VBE2". (s74) Heretic
+       allocates exactly 256 bytes of DOS memory for it, and we used to write the OEM
+       string at +0x100 -- over the MCB of the next block, which broke the chain and
+       killed it at I_AllocLow. So: poison 256..511, and check nothing lands there. */
+    { uint16_t seg=0x3000, off=0x0000; uint8_t *b=&g_flat[(seg<<4)+off]; uint32_t mlp, oem; int i, clean=1;
+      memset(b, 0xAA, 512);
       memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x00); r.es=seg; r.edi=off;
       vdd_bus_deliver_int(&bus,0x10,&r);
       CHECK(r_ax(&r)==0x004F && b[0]=='V'&&b[1]=='E'&&b[2]=='S'&&b[3]=='A', "vesa/4F00: 'VESA' signature");
       mlp = b[14]|(b[15]<<8);                 /* mode-list offset (low word of far ptr) */
-      CHECK((b[(mlp&0xFFFF)]|(b[(mlp&0xFFFF)+1]<<8))==0x100, "vesa/4F00: mode list starts 0x100"); }
+      oem = b[6]|(b[7]<<8);                   /* OEM-string offset                      */
+      CHECK((b[(mlp&0xFFFF)]|(b[(mlp&0xFFFF)+1]<<8))==0x100, "vesa/4F00: mode list starts 0x100");
+      CHECK((b[16]|(b[17]<<8))==seg && (b[8]|(b[9]<<8))==seg, "vesa/4F00: pointers are in the caller's segment");
+      CHECK(mlp>=34 && mlp<256 && oem>=34 && oem<256, "vesa/4F00: mode list and OEM string inside the 256-byte block");
+      for (i=256;i<512;++i) if (b[i]!=0xAA) clean=0;
+      CHECK(clean, "vesa/4F00: nothing written past 256 bytes without 'VBE2'");
+      /* With "VBE2" preset the block is 512 bytes and may be used in full. */
+      memset(b, 0xAA, 512); b[0]='V'; b[1]='B'; b[2]='E'; b[3]='2';
+      memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x00); r.es=seg; r.edi=off;
+      vdd_bus_deliver_int(&bus,0x10,&r);
+      CHECK(r_ax(&r)==0x004F && b[0]=='V'&&b[1]=='E'&&b[2]=='S'&&b[3]=='A' && (b[4]|(b[5]<<8))==0x0200,
+            "vesa/4F00 (VBE2): signature rewritten, version 2.0");
+      CHECK(b[511]==0, "vesa/4F00 (VBE2): 512-byte block initialised"); }
 
     /* T10: VESA 4F01 mode info for 0x101 (640x480x8) -------------------- */
     { uint16_t seg=0x3100; uint8_t *b=&g_flat[(seg<<4)];

@@ -18901,7 +18901,17 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                                         BYTE sig = mc[0];
                                         WORD own = (WORD)(mc[1] | (mc[2] << 8));
                                         WORD sz  = (WORD)(mc[3] | (mc[4] << 8));
-                                        if ((sig != 'M' && sig != 'Z') || ++guard2 > 48) break;
+                                        if ((sig != 'M' && sig != 'Z') || ++guard2 > 48) {
+                                            /* ⚠ AND SHOW THE BYTES WHERE THE WALK STOPPED. (s74)
+                                                 A chain that ends without a 'Z' is a chain
+                                                 somebody wrote over, and the 16 bytes say WHO:
+                                                 guest data, zeros, or -- as with Heretic --
+                                                 our own text. The theory comes after the bytes. */
+                                            int bi;
+                                            p = zput(p, " STOP@0x"); p = zhex(p, mm); p = zput(p, " bytes=[");
+                                            for (bi = 0; bi < 16; ++bi) { p = zhexb(p, mc[bi]); p = zput(p, bi < 15 ? " " : "]"); }
+                                            break;
+                                        }
                                         p = zput(p, " 0x");   p = zhex(p, mm);
                                         p = zput(p, ":");     p = zput(p, own ? "own=0x" : "FREE sz=0x");
                                         if (own) { p = zhex(p, own); p = zput(p, "/sz=0x"); }

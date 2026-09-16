@@ -491,18 +491,36 @@ static void vesa(video_state *st, ntvdd_regs *r)
     uint8_t al = r_al(r); unsigned i;
     switch (al) {
     case 0x00: {                                  /* return controller info       */
+        /* ⚠ THE CALLER'S BLOCK IS 256 BYTES UNLESS IT PRESET "VBE2". (s74) VBE 2.0
+             §4.3: a VbeInfoBlock is 256 bytes for a VBE 1.x caller and 512 only when
+             the caller wrote "VBE2" into the signature first; the OEM string and mode
+             list go in the reserved area at +34 (that is what it is for). We used to
+             put the OEM string at +0x100 and the mode list at +0x120 REGARDLESS.
+             Heretic allocates exactly 16 paragraphs for this call, so +0x100 was the
+             MCB of the next block: its signature became 'N' (of "NTVDMEX VESA"), the
+             chain walk stopped there, ~480 KB above went invisible, and its next DOS
+             allocation died with "I_AllocLow: DOS alloc of 1024 failed, 256 free".
+             Doom never probes VESA, which is why only Heretic paid. */
         uint8_t *b = (uint8_t *)vdd_map_flat(st->bus, r->es, (uint16_t)(uint16_t)r->edi);
-        for (i = 0; i < 256; ++i) b[i] = 0;
+        int vbe2 = (b[0]=='V' && b[1]=='B' && b[2]=='E' && b[3]=='2');
+        const unsigned OEM = 0x22, MODES = 0x40;  /* both inside the reserved area */
+        for (i = 0; i < (vbe2 ? 512u : 256u); ++i) b[i] = 0;
         b[0]='V'; b[1]='E'; b[2]='S'; b[3]='A';
         wr16(b + 4, 0x0200);                      /* VBE 2.0                      */
-        wr32(b + 6, ((uint32_t)r->es << 16) | (((uint16_t)r->edi + 0x100) & 0xFFFF));   /* OEM string */
+        wr32(b + 6, ((uint32_t)r->es << 16) | (((uint16_t)r->edi + OEM) & 0xFFFF));    /* OEM string */
         wr32(b + 10, 0);                          /* capabilities                 */
-        wr32(b + 14, ((uint32_t)r->es << 16) | (((uint16_t)r->edi + 0x120) & 0xFFFF));  /* mode list  */
+        wr32(b + 14, ((uint32_t)r->es << 16) | (((uint16_t)r->edi + MODES) & 0xFFFF));  /* mode list  */
         wr16(b + 18, VID_VESA_VRAM / 0x10000);    /* total memory in 64KB units   */
-        { const char *o = "NTVDMEX VESA"; for (i = 0; o[i]; ++i) b[0x100 + i] = (uint8_t)o[i]; b[0x100+i]=0; }
+        if (vbe2) {                               /* VBE 2.0 fields, only for a 2.0 caller */
+            wr16(b + 20, 0x0100);                 /* OEM software rev             */
+            wr32(b + 22, ((uint32_t)r->es << 16) | (((uint16_t)r->edi + OEM) & 0xFFFF)); /* vendor  */
+            wr32(b + 26, ((uint32_t)r->es << 16) | (((uint16_t)r->edi + OEM) & 0xFFFF)); /* product */
+            wr32(b + 30, ((uint32_t)r->es << 16) | (((uint16_t)r->edi + OEM) & 0xFFFF)); /* rev     */
+        }
+        { const char *o = "NTVDMEX VESA"; for (i = 0; o[i]; ++i) b[OEM + i] = (uint8_t)o[i]; b[OEM+i]=0; }
         for (i = 0; i < sizeof(vesa_modes)/sizeof(vesa_modes[0]); ++i)
-            wr16(b + 0x120 + i*2, vesa_modes[i].num);
-        wr16(b + 0x120 + i*2, 0xFFFF);            /* mode-list terminator         */
+            wr16(b + MODES + i*2, vesa_modes[i].num);
+        wr16(b + MODES + i*2, 0xFFFF);            /* mode-list terminator         */
         s_ax(r, 0x004F);
         break; }
     case 0x01: {                                  /* return mode info             */
