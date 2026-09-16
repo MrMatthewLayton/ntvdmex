@@ -254,7 +254,7 @@ and matches the 6.22 oracle row for row (session 53)** — but `MEM /C` still re
    > claimed. If it ever matters, an INTERLEAVED A/B against `debug\prev\ntvdmhost_prev.exe`
    > is the only honest measurement.
 
-   ### ▶ s74 later — **HEAVEN7: OUR EXEC HANDED THE CHILD THE PARENT'S ENV BLOCK, THEN WIPED ITS FIRST THREE BYTES.** (HEAD `2a39000`, rig host `ddedb494` — UNCONFIRMED)
+   ### ▶ s74 later — **HEAVEN7: TWO OF OUR BUGS BACK TO BACK — EXEC'S ENV COPY, THEN THE INT-SITE PATCHER.** (HEAD `3d451cf`, rig host `f5b86403` — UNCONFIRMED)
 
    The user asked why the heaven7 demo fails. Two things were wrong:
 
@@ -274,16 +274,46 @@ and matches the 6.22 oracle row for row (session 53)** — but `MEM /C` still re
       `p_child`/`p_exec` (copy, count word 0001, name tail/shape, parent intact):
       **5 rows, all MISMATCH before, all AGREE with 6.22 after.** offvm 1366/0.
 
-   **Where heaven7 is now (rig host `ddedb494`, `runs/s74_heaven7/`):** with both
-   fixes it EXEC-loads DOS4GW.EXE, enters 32-bit PM, relocates the LE image, reads
-   its whole data file and runs **its own protected-mode code** (building/mapping
-   descriptors) — a world away from the instant death. But it **has not set a video
-   mode**: the captured frame is blank and the headless log ends during PM setup
-   with no STAGE2 summary. **A NEW, SEPARATE WALL — not judged headless.** Needs a
-   by-hand look (and `dosdiff`'s rig adapter was fixed to the s73 layout in passing —
-   it had gone stale and only said so by "no disputes" off one host).
+   **Wall 2, found when the user tried it by hand and it still failed (`3d451cf`):
+   OUR INT-SITE PATCHER, FOR THE FIFTH TIME.** The by-hand log died at exactly the
+   same instruction as the headless one — a file close that succeeds, then silence,
+   no STAGE2. The patcher had rewritten **7 "INT sites" inside the demo's own 0x3a000
+   LE allocation**, vectors `0x41 0x11 0x1a 0x11 0x33 0x08 0x31` preceded by
+   high-entropy bytes. **Nobody executes `int 08h` (IRQ0) or `int 41h`, least of all
+   from 32-bit PM code** — it is DATA. heaven7 generates its tables at runtime and
+   1 byte in 256 of noise is `0xCD`. The proof is in the same run: in DOS/4GW's own
+   region every patched site is a real `b4 09 cd 21` / `b8 02 09 cd 31`. And the
+   demo's region was scanned FIVE times — the first four found **zero** sites,
+   because the content had not arrived yet.
 
-   ⚠ **RIG IS ON `ddedb494`, DISPLACING THE CONFIRMED `eb466c56`** (rollback copy
+   ⇒ **The patcher now logs the 16 bytes around every site it patches, before it
+   patches them.** For five sessions the one thing it never recorded was what IT
+   clobbered — and for a guest that GENERATES code they are not in the binary at all
+   (the file has `0b c3` where we patched). `nopmpatch.flag` skips scanning; its
+   contents are an optional hex minimum region SIZE, so DOS/4GW's ~0x5000 of dense
+   real INT sites keep their patches while a 0x3a000 code+data+generated allocation
+   is left alone. **A DIAGNOSTIC, NOT A FIX.**
+
+   **MEASURED A/B:** with `nopmpatch.flag`=`20000` heaven7 **no longer dies silently
+   — it reaches `STAGE2: complete`.** That confirms the patcher was killing it.
+
+   **Wall 3, where it stands now:** it still **does not render** (`mode sets: none`).
+   It now stops inside **DOS/4GW's own error path — "cannot make transparent
+   segment"** (that string is on the fault stack; a raw `INT 0xFC` at
+   `0x027f:0x044e`). That is the next thing to chase, and it is a DOS/4GW memory /
+   descriptor service, not a video one. heaven7 has moved two walls in one session
+   and is still not playable.
+
+   ⚠ **The patcher heuristic itself was NOT changed** — Doom/Heretic/Hexen/ZAR are
+   confirmed on it and the release is imminent. The tightening (e.g. never patching
+   the hardware IRQ vectors 0x08-0x0F, which no application executes) is written
+   down, not done.
+
+   (`dosdiff`'s rig adapter was fixed to the s73 layout in passing — it had gone
+   stale and only said so by "no disputes" off one host.)
+
+   ⚠ **RIG IS ON `f5b86403`** (= `ddedb494` + the patcher's byte logging and the
+   inert `nopmpatch.flag`), **displacing the confirmed `eb466c56`** (rollback copy
    `debug\prev\ntvdmhost_eb466c56.exe`). The EXEC-env change is a strict superset —
    it only touches the inherit-the-env path, which Doom/Heretic/Hexen/ZAR do not use —
    and it is oracle-clean + offvm-green, but it is **not user-confirmed by hand.**
