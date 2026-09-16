@@ -237,7 +237,18 @@ and matches the 6.22 oracle row for row (session 53)** — but `MEM /C` still re
    the next step, and it is also the honest correction for *a fix measured on
    one guest is a fix for none*.
 
-   ### ▶ START HERE: **SESSION 73 (below), then 72, 71, 70, 69, 68, 61, 60, 59.**
+   ### ▶ START HERE: **SESSION 73 EVENING (below) — THE NEXT JOB IS HERETIC.** Then 72, 71, 70, 69, 68, 61, 60, 59.
+
+   > **s73 close (2026-09-16, ~19:00). HEAD `23bd9ae`, rig host `877eb238` = HEAD.
+   > Package `dist\ntvdmex-20260916-23bd9ae.zip` on the share, fresh-folder verified 8/8.
+   > USER-CONFIRMED BY HAND TODAY: Doom, Hexen, Zar, Wolf3d all play; QB builds a
+   > runnable standalone EXE (`MKEXE.BAT`). Deadline is END OF THE 17th, not the 18th.**
+   >
+   > **Open, in the user's priority order:** (1) **HERETIC** — see the evening block;
+   > everything needed is written down and the loop is headless. (2) Win16 polish: the X
+   > does not close WinMine/Charmap (app-specific — Notepad closes cleanly; `w16close.bat`
+   > tests it headlessly), Calc/Charmap/Clock draw incorrectly. (3) Bubbles palette,
+   > Matrix_1 slow. MPLAYER GPFs at `0001:3983` (MCI), not chased.
 
    ---
 
@@ -429,6 +440,104 @@ and matches the 6.22 oracle row for row (session 53)** — but `MEM /C` still re
    in 5398 ticks (was 76 this morning)**; V86 stretches now `n8=0 max_ms=6` vs the
    `≈0x6c/0x15` baseline — evenly interrupted rather than in long runs. Feel is the
    user's call. Rig host **`e1a56ef1`**. offvm 1361/0.
+
+   ### ★★★★★ s73, EVENING — **HEXEN AND DOOM RUN: DOS/4GW COPIES argv[0] INTO A 64-BYTE BUFFER.** (HEAD `23bd9ae`, rig host `877eb238`)
+
+   ▶▶ **NEXT JOB: GET HERETIC WORKING.** Everything known about it is in the block
+   below. Doom, Hexen, Zar and Wolf3d are **USER-CONFIRMED WORKING** on this host.
+
+   **The find.** DOS/4GW re-opens `argv[0]` to load its protected-mode half and copies
+   that name into a **64-byte buffer with no bound**. Measured from this one share:
+
+   | game | argv[0] length | result |
+   |---|---|---|
+   | `doom\DOOM.EXE`       | 62 | loads and plays |
+   | `hexen\HEXEN.EXE`     | **64** | `fatal error (1007): can't find file ...\HEXEN.EXE<` — no room for the NUL, so it reads one byte of garbage |
+   | `heretic\HERETIC.EXE` | 68 | truncated at 64: `...\HERETICD` |
+
+   Copying `HEXEN.EXE` alone to a 61-char path fixed it outright — that pinned it.
+
+   ⚠⚠ **"HEXEN WORKED BEFORE AND DOES NOT NOW" WAS NOT A CODE REGRESSION — IT WAS THE
+   FOLDER RENAME.** s73 moved the games from `games\Hexen\` (59 chars) to
+   `demo\msdos\hexen\` (64) and crossed the limit. A layout change broke a game, and
+   no code was involved. ▶ **Path length is a compatibility surface. Keep `demo\msdos\`
+   shallow, and never lengthen it without re-running a DOS/4GW guest.**
+
+   **The fix** (`23bd9ae`), both at the one place `argv[0]` is built:
+   * shorten to 8.3 (`GetShortPathNameA`). A by-hand launch already worked because CSRSS
+     hands over the short name; only the `target.txt` path passed the long one — which is
+     why this read as a *"headless-only DOS/4GW blocker"* for sessions. **It was never
+     headless-only: it is PATH-specific**, and any user whose games sit under a path with
+     spaces had the same broken launch.
+   * if it is STILL over 62 chars, hand over the **bare filename** — the guest's cwd is
+     the program's own directory (it is how these games find their WAD), so the extender
+     opens the same file and an 8.3 name can never approach 64.
+
+   ★ **THE HEADLESS RIG CAN NOW RUN DOS/4GW GAMES.** That is the multiplier: Doom renders
+   in-game headless (HUD, 113 colours) and Hexen too (ettins, weapon, HUD; log 461 KB →
+   7.9 MB). A DOS/4GW guest no longer costs a by-hand test to judge.
+
+   ### ▶▶ HERETIC — WHERE IT IS AND WHAT IS KNOWN (the next job)
+
+   Heretic is **further than it has ever been**: past the loader, through `V_Init`,
+   `M_LoadDefaults`, `Z_Init` (`DPMI memory: 0x0, 0x800000 allocated for zone`) and
+   `W_Init: Init WADfiles.` — then dies on screen with:
+
+   ```
+   I_AllocLow: DOS alloc of 1024 failed, 256 free
+   ```
+
+   Which is our `INT31h AX=0100 BX=0x40` (64 paras) answered `ENOMEM max=0x10`.
+
+   **THE CAUSE IS A BROKEN MCB CHAIN, AND THE CHAIN DUMP PROVES IT.** A new diagnostic
+   (in `23bd9ae`, the `0x0100` ENOMEM arm) walks and prints the chain on any failed DOS
+   allocation. At Heretic's failure it reads:
+
+   ```
+   0x0005f own=0x0100 sz=0x010     0x00070 own=0x0008 sz=0x08e
+   0x000ff own=0x0100 sz=0x1236    0x01336 own=0x0100 sz=0x200
+   0x01537 own=0x0100 sz=0x000     0x01538 own=0x0100 sz=0x040
+   0x01579 own=0x0100 sz=0x080     0x015fa own=0x0100 sz=0x006
+   0x01601 own=0x0100 sz=0x040     0x01642 own=0x0100 sz=0xfa0
+   0x025e3 FREE sz=0x010      <-- THE WALK STOPS HERE
+   ```
+
+   **There is no terminating 'Z' block and nothing above `0x25e3`.** The MCB at
+   **`0x25f4`** has an invalid signature, so the chain walk stops and the allocator
+   cannot see the **~480 KB** between `0x25f4` and the CDS/SFT at `~0x9d58`. `max=0x10`
+   is exactly the 16-para hole Heretic had just freed. `dos_free` is behaving correctly:
+   it refuses to coalesce into a neighbour that is not a valid MCB.
+
+   **The sequence that gets there** (all `INT31h AX=0100/0101`):
+   1. `BX=0xfa0` (4000 paras) → seg `0x1643`  — splits, tail free MCB lands at `0x25e3`
+   2. `BX=0x010` (16 paras)   → seg `0x25e4`  — splits again, tail free MCB at **`0x25f4`**
+   3. `AX=0101` frees selector `0x347` (that 16-para block) — coalesce forward **fails**
+   4. `BX=0x040` (64 paras)   → **ENOMEM max=0x10**
+
+   So **`0x25f4` is corrupted between step 2 and step 3.** Doom does the same shape of
+   allocations (a 16000-para block, then 64 paras) and does **not** corrupt, so it is not
+   simply "our split is wrong for every case".
+
+   **Three hypotheses, none yet tested:**
+   1. **The guest overran its own 16-para block** (256 bytes) and smashed the MCB header
+      at `0x25f4`. If so the bytes there are Heretic's data, and the question becomes why
+      it writes past an allocation it asked for — possibly our **LDT limit for the DPMI
+      DOS block is wrong** (we set `limit = (want<<4)-1`, so 0xFF here; a guest writing
+      through a *different*, flatter selector would not be stopped).
+   2. **`dos_alloc`'s split wrote the tail MCB wrongly** for this size/position. Read the
+      split arm in `src/dos/dos_mcb.h`; it looked correct on inspection but was not
+      instrumented.
+   3. Something of **ours** wrote there (the usual suspect list — a patcher, a probe).
+
+   ▶ **THE NEXT MEASUREMENT, AND IT IS CHEAP:** dump the **16 bytes at `0x25f4`** at the
+   moment of failure (is it guest data, zeros, or a mangled header?), and print the chain
+   **immediately after step 2 and again after step 3** to bracket exactly when it breaks.
+   That distinguishes all three hypotheses in one run. `./scripts/bmqueue.sh heretic
+   heretic.EXE` is the whole loop — no by-hand test needed.
+
+   ⛔ **DO NOT "FIX" IT BY MAKING `dos_free` COALESCE ACROSS AN INVALID MCB.** That hides
+   a memory corruption behind a plausible-looking chain, which is the exact shape this
+   project keeps paying for.
 
    ### ★★★★ s73, 1–2 pm: **"QBASIC CANNOT BUILD EXEs" — CLOSED. Two host defects, one missing variable, and the launcher's environment now reaches every DOS guest.**
 
