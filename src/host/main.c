@@ -18887,6 +18887,29 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                                 VDM_SET16(tib, VTIB_EAX, err ? err : 0x0008);   /* 8 = insufficient memory */
                                 VDM_SET16(tib, VTIB_EBX, max);                  /* largest available (paras) */
                                 p = zput(p, " -> DOSmem ENOMEM max=0x"); p = zhex(p, max);
+                                /* ⚠ AND SAY WHO HAS THE MEMORY. (s73) Heretic dies here
+                                     -- "I_AllocLow: DOS alloc of 1024 failed, 256 free" --
+                                     and "insufficient memory" on its own cannot be told
+                                     from a chain we corrupted. Walk it and name every
+                                     block's owner and size; a free tail that is not being
+                                     coalesced looks completely different from a guest
+                                     that really did take everything. */
+                                {   uint16_t mm = m.first_mcb; int guard2 = 0;
+                                    p = zput(p, " chain:");
+                                    for (;;) {
+                                        volatile BYTE *mc = (volatile BYTE *)((DWORD)mm << 4);
+                                        BYTE sig = mc[0];
+                                        WORD own = (WORD)(mc[1] | (mc[2] << 8));
+                                        WORD sz  = (WORD)(mc[3] | (mc[4] << 8));
+                                        if ((sig != 'M' && sig != 'Z') || ++guard2 > 48) break;
+                                        p = zput(p, " 0x");   p = zhex(p, mm);
+                                        p = zput(p, ":");     p = zput(p, own ? "own=0x" : "FREE sz=0x");
+                                        if (own) { p = zhex(p, own); p = zput(p, "/sz=0x"); }
+                                        p = zhex(p, sz);
+                                        if (sig == 'Z') break;
+                                        mm = (uint16_t)(mm + 1 + sz);
+                                    }
+                                    p = zput(p, "\r\n"); }
                             } else {
                                 int idx = g_ldt_next++;
                                 g_ldt[idx].base = (DWORD)seg << 4;
@@ -22308,6 +22331,56 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
           if (dosenv[0]) {
               p = zput(p, "STAGE2: dosenv.txt -> extra guest environment [");
               p = zput(p, dosenv); p = zput(p, "]\r\n");
+          }
+      }
+      /* ── ★★★★ argv[0] MUST BE 8.3, BECAUSE A DOS EXTENDER RE-OPENS IT. (s73) ─────
+           DOS/4GW loads its own protected-mode half by re-opening the program named in
+           the environment's program-path field, and it tokenises that name -- so a path
+           with spaces is torn at the first one and the open fails. It then prints its
+           banner and stops, with no error and no video mode set.
+         ▸ THAT IS THE "HEADLESS-ONLY DOS/4GW BLOCKER", and it was never headless-only:
+           it is PATH-specific, exactly as the note said. A by-hand launch works because
+           CSRSS hands us the SHORT name already (C:\DOCUME~1\...\DOOM.EXE); the
+           target.txt path handed over the long one (C:\Documents and Settings\...),
+           and only the harness used that. Any user whose games live under a path with
+           a space had the same broken launch.
+         ▸ Shortened here, once, where argv[0] is built -- so every launch shape agrees
+           with the one that was already working. wow_shorten leaves the path alone if
+           GetShortPathNameA cannot answer, so a path that has no 8.3 form is unchanged. */
+      if (progpath[0]) {
+          char before[768]; lstrcpynA(before, progpath, sizeof before);
+          wow_shorten(progpath, sizeof progpath);
+          if (lstrcmpA(before, progpath) != 0) {
+              p = zput(p, "STAGE2: argv[0] shortened for the guest: ["); p = zput(p, before);
+              p = zput(p, "] -> ["); p = zput(p, progpath); p = zput(p, "]\r\n");
+          }
+          /* ── ★★★★★ AND IF IT IS STILL TOO LONG, HAND OVER THE BARE NAME. ──────────
+               DOS/4GW 1.97 copies argv[0] into a **64-BYTE BUFFER** and does not bound
+               it. MEASURED, three ways, from this one share:
+                 doom\DOOM.EXE        62 chars -> loads and plays
+                 hexen\HEXEN.EXE      64 chars -> "fatal error (1007): can't find file
+                                      ...\HEXEN\HEXEN.EXE< to load"  (no room for the
+                                      NUL, so it reads one byte of garbage)
+                 heretic\HERETIC.EXE  68 chars -> truncated at 64: "...\HERETICD"
+               Copying HEXEN.EXE alone to a 61-char path fixed it outright -- DOS/4GW
+               loaded and Hexen got as far as looking for its WAD.
+             ⚠ THIS IS WHY "HEXEN WORKED BEFORE AND DOES NOT NOW", and it is not a code
+               regression: s73 moved the games from `games\Hexen\` (59) to
+               `demo\msdos\hexen\` (64) and crossed the limit. A user installing a game
+               under a deep path of their own hits exactly the same wall.
+             ▸ The bare filename is safe because the guest's current directory IS the
+               program's own directory (it is how every one of these games finds its
+               WAD), so the extender's open resolves to the same file -- and 8.3 name
+               plus NUL can never approach 64. Only done when it must be. */
+          if (lstrlenA(progpath) > 62) {
+              const char *bn = progpath, *q;
+              for (q = progpath; *q; ++q) if (*q == '\\' || *q == '/') bn = q + 1;
+              if (bn != progpath && *bn) {
+                  p = zput(p, "STAGE2: argv[0] is "); p = zhex(p, (DWORD)lstrlenA(progpath));
+                  p = zput(p, " chars -- past DOS/4GW's 64-byte buffer; handing over the bare name [");
+                  p = zput(p, bn); p = zput(p, "] (cwd is the program's own directory)\r\n");
+                  { char bcopy[64]; lstrcpynA(bcopy, bn, sizeof bcopy); zput(progpath, bcopy); }
+              }
           }
       }
       /* ── THE ENVIRONMENT: the four defaults + dosenv.txt + the launcher's LIB/INCLUDE,
