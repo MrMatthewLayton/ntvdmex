@@ -237,7 +237,42 @@ and matches the 6.22 oracle row for row (session 53)** — but `MEM /C` still re
    the next step, and it is also the honest correction for *a fix measured on
    one guest is a fix for none*.
 
-   ### ⛔⛔ s74 LATEST — **DOOM REGRESSED ON THE VESA BUILD. ROLLED BACK; RIG IS `eb466c56`.**
+   ### ✅ s74 RESOLVED — **DOOM'S "4px COLUMNS" WAS `detaillevel 1` IN ITS OWN `default.cfg`. NOT OUR CODE.**
+
+   > **It survived a rollback to `eb466c56` — which is the whole tell.** A defect that
+   > outlives a binary swap is not in the binary. Doom's LOW DETAIL mode (F5 in-game)
+   > halves horizontal resolution, drawing every column double-width; at 2x present
+   > scale that is the ~4px stride the user saw. It had been written into
+   > `demo\msdos\doom\default.cfg` when the game was quit, so it persisted across
+   > every host build.
+
+   **PROVEN, same binary `eb466c56`, only the guest's config changed:**
+
+   | `default.cfg` | odd-column-boundary changes (3D view) |
+   |---|---|
+   | `detaillevel 1` (as found) | **0** — every column pair identical |
+   | `detaillevel 0` (restored)  | **8279** — full 1px columns |
+
+   Restored to `detaillevel 0` on the rig; original saved as
+   `runs/s74_doom_regression/default.cfg.lowdetail.bak`. Status-bar labels
+   ("AMMO/HEALTH/ARMS/ARMOR") are legible again, and were not before.
+
+   ✅ **THE VESA BUILD WAS NEVER IMPLICATED.** Doom on `6d2f9af5` with detail restored:
+   7756 odd-boundary changes — full 1px columns, same as the confirmed build.
+
+   ⚠⚠ **MY OWN ERROR, RECORDED.** I declared a headless baseline "renders correctly"
+   from a 320x200 thumbnail BY EYE. It was already low-detail; column doubling is
+   invisible at that size. That false baseline is what made a phantom regression look
+   real and sent me hunting my own VESA changes. **MEASURE THE PIXELS. An image small
+   enough to eyeball is small enough to lie.** (Second wrong turn in the same hunt --
+   see the mode-Y `fanouts` false lead below.)
+
+   ▶ **h7 "did not work when I ran it" is EXPLAINED and still open:** heaven7 only gets
+   past wall 2 with `cfg\nopmpatch.flag` present, and the headless harness deletes it
+   after every run -- so a by-hand launch hits the eager INT-site patcher and dies.
+   That knot is still untied.
+
+   ### ⛔ s74 (superseded by the block above) — the investigation that got there
 
    > **The user ran Doom by hand on `6d2f9af5` and its raycaster drew ~4px-wide column
    > strides instead of 1px. Heretic and Hexen were fine. h7 also did not work by hand.**
