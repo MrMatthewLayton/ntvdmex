@@ -4,7 +4,7 @@
 > this file top to bottom and you will know where it is, what works, what does not, and
 > what to do next.
 
-- **Last updated:** 2026-09-16 (session 74 — Heretic runs headless; see the s74 block)
+- **Last updated:** 2026-09-16 (session 74 — Heretic runs, USER-CONFIRMED BY HAND; see the s74 block)
 - **Score: 86.9%** (`./tools/score/score.py` — run it, do not quote this line).
   Session 53 moved it 72.4 → 79.6; session 54 → 80.2; session 55 → 83.1;
   session 56 → 85.4; s57, **s58, s59 and s60 moved it not at all** — s57 built the modal
@@ -237,13 +237,22 @@ and matches the 6.22 oracle row for row (session 53)** — but `MEM /C` still re
    the next step, and it is also the honest correction for *a fix measured on
    one guest is a fix for none*.
 
-   ### ▶ START HERE: **SESSION 74 (below) — HERETIC RUNS HEADLESS; A BY-HAND CONFIRMATION IS OWED.** Then s73 evening, 72, 71, 70, 69, 68, 61, 60, 59.
+   ### ▶ START HERE: **SESSION 74 (below) — HERETIC RUNS, USER-CONFIRMED BY HAND. `eb466c56` IS THE CONFIRMED BUILD.** Then s73 evening, 72, 71, 70, 69, 68, 61, 60, 59.
 
-   > **s74 (2026-09-16, ~21:10). HEAD `00c780e`, rig host `eb466c56` = HEAD — NOT yet
-   > user-confirmed.** The displaced confirmed build is `debug\prev\ntvdmhost_877eb238.exe`
-   > (and `ntvdmhost_prev.exe` = `a5cd764b`); rollback = copy it back to `bin\`.
-   > Deadline is END OF THE 17th. Package on the share is still `23bd9ae` — re-cut it
-   > once the user has seen Heretic by hand.
+   > **s74 close (2026-09-16, late). Rig host `eb466c56` (= `00c780e`'s binary) is
+   > USER-CONFIRMED BY HAND: Doom, Heretic and Hexen all play.** It is now the rollback
+   > copy (`debug\prev\ntvdmhost_eb466c56.exe`); the previous ones are
+   > `ntvdmhost_877eb238.exe` and `ntvdmhost_prev.exe` = `a5cd764b`. The package on
+   > the share is re-cut from this binary (`dist\ntvdmex-20260916-<sha>.zip`, VERSION.txt
+   > names host md5 `eb466c56`). Deadline is END OF THE 17th.
+   >
+   > The user also reports Doom's wave audio is now **flawless** where it was slightly
+   > glitchy before. ⚠ **Nothing on the audio path changed** — `23bd9ae..HEAD` touches
+   > only `vdd_video.c` (VESA 4F00) and one log line in `main.c`; the only timing-adjacent
+   > commit in the last 60 is `0d19439` (IRQ0 held in service, the 15th), which governs
+   > the real-mode arm while Doom's DMX ISRs run under the PM arm. Unexplained; not
+   > claimed. If it ever matters, an INTERLEAVED A/B against `debug\prev\ntvdmhost_prev.exe`
+   > is the only honest measurement.
 
    ### ★★★★★ s74 — **HERETIC RUNS: OUR VESA 4F00 HANDLER WROTE PAST THE CALLER'S 256-BYTE BLOCK AND OVER THE NEXT MCB.** (HEAD `00c780e`, rig host `eb466c56`)
 
@@ -277,9 +286,9 @@ and matches the 6.22 oracle row for row (session 53)** — but `MEM /C` still re
    0xaa4`), ~2000 INT 33h polls — until the headless deadline (`heretic_shot01/03.png`).
    Doom on the same host: mode 13h, SB streaming, deadline — unchanged. offvm **1366/0**.
 
-   ▶ **OWED: a by-hand Heretic run** (sound, input, feel — the headless rig cannot see
-   input lag). One change vs `877eb238`; rollback is one copy. ⚠ Hexen's VESA probe, if
-   it has one, went through the same handler — worth a by-hand glance too.
+   ~~▶ **OWED: a by-hand Heretic run**~~ **Done — the user ran Doom, Heretic and Hexen by
+   hand on `eb466c56` and all three play.** (The Hexen glance was owed because its VESA
+   probe, if any, goes through the same handler; it passed.)
 
    > **s73 close (2026-09-16, ~19:00). HEAD `23bd9ae`, rig host `877eb238` = HEAD.
    > Package `dist\ntvdmex-20260916-23bd9ae.zip` on the share, fresh-folder verified 8/8.
