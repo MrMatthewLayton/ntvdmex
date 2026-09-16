@@ -4,7 +4,7 @@
 > this file top to bottom and you will know where it is, what works, what does not, and
 > what to do next.
 
-- **Last updated:** 2026-09-14 (session 71)
+- **Last updated:** 2026-09-16 (session 72 close)
 - **Score: 86.9%** (`./tools/score/score.py` — run it, do not quote this line).
   Session 53 moved it 72.4 → 79.6; session 54 → 80.2; session 55 → 83.1;
   session 56 → 85.4; s57, **s58, s59 and s60 moved it not at all** — s57 built the modal
@@ -364,6 +364,97 @@ and matches the 6.22 oracle row for row (session 53)** — but `MEM /C` still re
    The guard now has its own counter, always printed in the scan line. *An absence in the
    report means nothing unless the report says what it left out* — a fresh instance of
    this project's most repeated lesson.
+
+   ---
+
+   ## ⏸⏸ SESSION 72 CLOSE (2026-09-15 evening) — **READ THIS BEFORE ANYTHING ELSE**
+
+   ### ⚠ A BY-HAND PASS IS OWED AND THE DEADLINE IS THE 17th (i.e. TOMORROW)
+
+   **The package is built and headless-verified; it has not been in front of a human.**
+
+   * **`dist/ntvdmex-20260915-5a72811.zip`** — host `ffdea07a`, HEAD `5a72811`.
+     Verified by `bm\pkgtest.bat` from a fresh folder: `/status` correctly saw another
+     program's Debugger value → `/install` → **selftest 8/8 THROUGH the package host**
+     → `/uninstall` → the rig's own routing restored. The previous package was
+     **23 commits stale** — it predates the Doom fix AND the confirmed QB fixes.
+   * ⛔ **The rig still runs `a5cd764b`** (the user-confirmed Doom build), so **four
+     host changes have never been seen by a human**:
+
+     | change | commit | risk |
+     |---|---|---|
+     | **The DOS SFT** | `9ca0437` | **Moves conventional memory −7.4 KB for EVERY DOS guest.** Biggest risk. |
+     | The HMA | `7bf65e8` | New guest-visible memory at `FFFF:0010`. |
+     | `AH=3Dh` error codes | `b580c4d` | Programs branch on these. |
+     | Jump-table guard logging | `f036ba5` | Cosmetic, rides along. |
+
+   * ▶ **Ask the user for three things (~10 min):** (1) **Doom E1M1, kill the distant
+     imp** — the regression check that matters most, because the SFT and HMA both moved
+     memory under the fix confirmed this afternoon; (2) **QBasic File > Open, navigate,
+     run** — the memory map moved beneath it; (3) **one memory-tight guest** (Duke3D is
+     the known one), which is where 7.4 KB would show.
+   * Rollback: `bm\ntvdmhost_prev.exe` = `c91b521e`; `a5cd764b` archived in `runs/`.
+
+   ### ⚠ RIG STATE THAT MUST NOT BE LOST
+   `cfg\FLOPPY.IMG` is now on the share and **must stay** — without it `p_disk` goes
+   back to measuring an absent drive. Rebuild with `./scripts/mkfloppy.sh`. It backs
+   INT 13h/25h only; DOS file I/O on A: still goes through Win32.
+
+   ### The three scores, all MEASURED (do not quote, re-run)
+   ```
+   ./scripts/paritysweep.sh   36 probes · 532 rows · PARITY 97.9% (459/469 comparable)
+                              99.6% excluding the 8 rows with NO valid oracle
+                              ⇒ only 2 gradeable rows remain open
+   ./scripts/offvm.sh         30 tests · 1361 checks · 0 failed
+   tools/score/score.py       86.9%  (DOS 89.7 / WOW 86.3 / product 76.8)
+   ```
+   ⚠ The overall score did **not** move today, and that is correct: it scores attested
+   capability items, not probe rows. Nudging one because something looks done is how it
+   becomes a vanity metric — its own header says so.
+
+   ### What closed today
+   1. ★★★★★ **Doom's E1M1 kill crash — USER-CONFIRMED** (`412624a`). Six sessions of
+      silent VDM deaths were **our own INT-site patcher corrupting a jump table on a
+      re-scan**. Found by attaching a debugger and reading the dead guest's core.
+   2. `AH=3Dh` answered "file not found" for **every** failure (`b580c4d`).
+   3. A DOS guest had **no SFT** — and `SysVars+4 = 0` is an SFT at *segment 0*, so a
+      walker reads the IVT (`9ca0437`).
+   4. The **HMA** — NT had mapped it all along; we were refusing it (`7bf65e8`).
+   5. **INT 13h** — never unimplemented, it simply had no disk (`a662c58`).
+
+   ### New tooling, all reusable
+   | tool | what |
+   |---|---|
+   | `bm\vdmwatch.exe` | Attach-and-log debugger: sees the exception the kernel refuses to deliver, dumps a core. **The thing that cracked Doom.** |
+   | `scripts/doomstack.py` | Walks a vdmwatch core against the LE object map. |
+   | `scripts/offvm.sh` | The whole off-VM battery in one command (was 30 hand-compiles). |
+   | `scripts/paritysweep.sh` | The whole oracle tier in one command. |
+   | `scripts/mkfloppy.sh` | Builds `cfg\FLOPPY.IMG` for INT 13h. |
+
+   ### Still open
+   * ⛔ **QBasic cannot build EXEs** (BC/LINK) — user-reported, uninvestigated. Today
+     **eliminated the obvious suspect**: `p_exec` and `p_ovl` are clean, so EXEC,
+     load-without-execute and overlay relocation all match DOS. It is elsewhere.
+   * 2 gradeable parity rows: `p_tsr` paras-still-held; `xms.08` **BH** (undefined by
+     the XMS spec — left red and undecided rather than matched by invention).
+   * 8 rows **blocked on PCem** (`p_lpt`, `p_plan12`, `p_vesapm`): SeaBIOS is a rewrite
+     and there is no DOS ground truth for a VESA BIOS. **Do not fix toward them.**
+   * Older: Mario mode-Y artefacts, Heretic load screen, Hexen hi-res, Duke3D memory.
+
+   ### Method lessons worth more than the fixes
+   * ⛔ **A one-host run is not a pass** — `p_drv` printed "no disputes" from an
+     oracle-only run and was really 27 mismatches.
+   * ⛔ **Before calling a surface unimplemented, check it has something to work on**
+     (INT 13h).
+   * ⛔ **An all-AGREE probe is not a verified surface** — several emit fewer functions
+     than their headers claim, and many rows compare only `CF`.
+   * ⛔ **A guard's own log line must never share a budget with what it guards against**
+     — the jump-table guard logged nothing in the very run that proved it works.
+   * ⛔ **Five false positives**, two within a commit of "fixing" correct code: a probe
+     naming *"the default drive"* or **Z:** compares two **machines**, not two
+     implementations. Fix it by giving the probe the **relation**, not just an abstention.
+   * ★ `ERROR_INVALID_ADDRESS` means *"occupied"*, not *"denied"* — **query before you
+     allocate** (the HMA).
 
    ---
 
