@@ -403,6 +403,16 @@ typedef struct video_state {
        drained into the STAGE2 block so a run yields a to-do list instead. */
     uint8_t  unimpl_fn[32];             /* INT 10h AH values seen but unhandled     */
     uint8_t  unimpl_mode[32];           /* mode numbers requested but unsupported   */
+    /* ── WHICH VESA MODES THE GUEST ASKED ABOUT, AND WHETHER WE HAD THEM. (s74)
+         `unimpl_mode` is a 256-bit map indexed by mode number, so it cannot hold a
+         VBE mode at all (they start at 0x100). heaven7 asks 4F01 twice, gets 0x014F
+         twice and prints "VESA error" -- and nothing in the log said WHICH modes,
+         which is the only fact needed to decide what to implement. Do not guess a
+         guest's expectation; record it. */
+    uint16_t vesa_q[12];                /* modes passed to 4F01 / 4F02              */
+    uint8_t  vesa_q_ok[12];             /* 1 = we answered 0x004F, 0 = 0x014F       */
+    uint8_t  vesa_q_fn[12];             /* 0x01 or 0x02 -- which call asked         */
+    uint8_t  vesa_qn;                   /* how many recorded (capped)               */
     ntvdd_frame frame;
     /* Mode-Y de-interleave instrumentation. `plane-nonzero` in STAGE2 has always
        counted st->plane[] -- the 16-colour PLANAR array -- which mode Y never touches,

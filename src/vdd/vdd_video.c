@@ -467,6 +467,17 @@ static void teletype(video_state *st, uint8_t ch)
 static const struct { uint16_t num, w, h; } vesa_modes[] = {
     { 0x100, 640, 400 }, { 0x101, 640, 480 }, { 0x103, 800, 600 },
 };
+/* Record a VESA mode query and its answer -- see vesa_q[] in vdd_video.h. */
+static void vesa_note(video_state *st, uint8_t fn, uint16_t mode, int ok)
+{
+    unsigned k;
+    for (k = 0; k < st->vesa_qn; ++k)                  /* collapse repeats */
+        if (st->vesa_q[k] == mode && st->vesa_q_fn[k] == fn) return;
+    if (st->vesa_qn >= sizeof(st->vesa_q)/sizeof(st->vesa_q[0])) return;
+    k = st->vesa_qn++;
+    st->vesa_q[k] = mode; st->vesa_q_ok[k] = (uint8_t)(ok ? 1 : 0); st->vesa_q_fn[k] = fn;
+}
+
 static int vesa_find(uint16_t num, uint16_t *w, uint16_t *h)
 {
     unsigned i;
@@ -525,6 +536,7 @@ static void vesa(video_state *st, ntvdd_regs *r)
         break; }
     case 0x01: {                                  /* return mode info             */
         uint16_t w, h;
+        vesa_note(st, 0x01, r_cx(r), vesa_find(r_cx(r), &w, &h));
         if (vesa_find(r_cx(r), &w, &h)) {
             uint8_t *b = (uint8_t *)vdd_map_flat(st->bus, r->es, (uint16_t)(uint16_t)r->edi);
             for (i = 0; i < 256; ++i) b[i] = 0;
@@ -544,6 +556,7 @@ static void vesa(video_state *st, ntvdd_regs *r)
         break; }
     case 0x02: {                                  /* set VBE mode                 */
         uint16_t w, h;
+        vesa_note(st, 0x02, r_bx(r), vesa_find(r_bx(r), &w, &h));
         if (vesa_find(r_bx(r), &w, &h)) {
             uint32_t n;
             st->in_vesa = 1; st->vesa_mode = r_bx(r) & 0x3FFF; st->vesa_w = w; st->vesa_h = h;

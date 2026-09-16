@@ -14192,6 +14192,39 @@ static DWORD dpmi_sel_base(WORD sel)
    `sel` names a populated descriptor (access byte != 0) and fills the access-rights
    in LAR format (access byte at bits 8-15, the G/D/AVL flag nibble at 20-23) + the
    byte-granular limit. The null selector (idx 0) and unallocated slots are invalid. */
+/* ── RECOVER A FLAT 32-BIT CLIENT'S FAULTING ADDRESS FROM A 16-BIT FRAME. (s74) ─────
+   NT's exception frame is 16-bit whatever the client is, so when the faulting CS has
+   base 0 -- the flat 32-bit case -- the EIP it reports *is* a linear address with its
+   top 16 bits gone. Those bits are recoverable WITHOUT GUESSING, because we know
+   exactly which memory is the client's: every block handed to it through INT 31h 0501
+   (g_dpmi_blk[]). Only one address per 64 KB window can carry the low bits we were
+   given, so the candidate set is tiny; require that the bytes there actually BE
+   `CD <vec>`, and that the answer is UNIQUE.
+   Unique-or-nothing is the whole point. One site that holds the very instruction the
+   CPU just told us it executed is EVIDENCE; taking the first of several would be the
+   same kind of guess as the eager scan's length vote, which has broken five guests.
+   Returns the linear address, or 0 if absent or ambiguous. *pcand gets the count. */
+static DWORD dpmi_recover_flat_eip(DWORD lo16, BYTE vec, int *pcand)
+{
+    DWORD found = 0; int n = 0, i;
+    lo16 &= 0xFFFFu;
+    for (i = 0; i < g_dpmi_nblk; ++i) {
+        DWORD b = g_dpmi_blk[i].base, sz = g_dpmi_blk[i].size, a;
+        if (!sz) continue;
+        for (a = (b & ~0xFFFFu) | lo16; a < b + sz; a += 0x10000u) {
+            const volatile BYTE *q2;
+            if (a < b || a + 1 >= b + sz) continue;
+            if (!host_readable((const void *)(ULONG_PTR)a, 2)) continue;
+            q2 = (const volatile BYTE *)(ULONG_PTR)a;
+            if (q2[0] != 0xCD || q2[1] != vec) continue;
+            if (n == 0) { found = a; n = 1; }
+            else if (a != found) ++n;
+        }
+    }
+    if (pcand) *pcand = n;
+    return (n == 1) ? found : 0;
+}
+
 static int dpmi_sel_desc(uint16_t sel, uint32_t *ar, uint32_t *limit)
 {
     int idx = (sel & 0xFFFF) >> 3;
@@ -25634,46 +25667,59 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                                 DWORD gvec = (DWORD)(fr[2] >> 3) & 0xFF;
                                 DWORD gcb  = dpmi_sel_base(fr[4]);
                                 volatile BYTE *gi = (volatile BYTE *)(ULONG_PTR)(gcb + fr[3]);
-                                /* ── ⚠⚠⚠ THIS ARM CANNOT SERVE A FLAT 32-BIT CLIENT, AND THE
-                                     REASON IS NT'S FRAME, NOT THIS TEST. (s74)
-                                     It used to read `if (gcb && ...)`, and dpmi_sel_base()
-                                     returns g_ldt[idx].base -- 0 for exactly the descriptor a
-                                     flat 32-bit client runs on (`desc 0x0000ffff:0x00cffa00`,
-                                     base 0, limit 4 GB, D/B=1). So it declined those faults by
-                                     accident, reading a legitimate base as "no selector".
-                                     Fixing THAT predicate alone is WORSE THAN THE BUG: NT hands
-                                     us a 16-BIT frame whatever the client is (see the widening
-                                     code below), so a flat client's EIP -- which IS its linear
-                                     address, the base being 0 -- arrives TRUNCATED TO 16 BITS.
-                                     `gcb + fr[3]` then names low memory instead of the faulting
-                                     instruction, and a chance `CD nn` match there would make us
-                                     write C4 C4 into an innocent page. Measured on heaven7: its
-                                     own `int 31h` 16 bytes past the LE entry point reports
-                                     `cs:ip=0x0347:0x231c` (err=0x018a = IDT|vector 0x31) when the
-                                     instruction really lives at ~0x0433231c.
-                                   ⇒ So DECLINE EXPLICITLY, on the real criterion -- the frame is
-                                     only trustworthy for a 16-bit faulting CS, which is what all
-                                     62 serviced faults in the heaven7 run happened to be -- and
-                                     SAY SO, loudly, once, naming the limitation. The fix is a
-                                     wider frame (the kernel would have to hand us one, or we
-                                     recover EIP another way); until then a flat 32-bit client's
-                                     raw INTs must come from the eager scan. */
+                                /* ── ⚠⚠⚠ WHAT MAKES THE FRAME'S IP TRUSTWORTHY IS THE
+                                     SELECTOR'S BASE, NOT ITS WIDTH. (s74)
+                                     This began as `if (gcb && ...)`. dpmi_sel_base() returns
+                                     g_ldt[idx].base, so a base of 0 -- exactly what a FLAT
+                                     32-bit client runs on (`desc 0x0000ffff:0x00cffa00`, base 0,
+                                     limit 4 GB, D/B=1) -- was being read as "no selector" and
+                                     those faults declined by accident.
+                                     ⚠ The first attempt at this replaced the test with "decline
+                                       any 32-bit CS", and THAT WAS A REGRESSION, measured: the
+                                       serviced count on heaven7 fell 62 -> 43, because a 32-bit
+                                       CS with a NON-ZERO base (0x287, base ~0x48000) has a
+                                       perfectly good IP and had been serviced all along. Width
+                                       was never the issue.
+                                     The real issue is narrow and it is this: NT hands us a
+                                     16-BIT exception frame whatever the client is, so when the
+                                     base is 0 the EIP *is* the linear address and arrives with
+                                     its top 16 bits gone -- heaven7 reports 0x231c for an
+                                     instruction living at ~0x0433231c. Then `gcb + fr[3]` names
+                                     LOW MEMORY, and a chance `CD nn` match there would make us
+                                     write C4 C4 into an innocent page: the eager patcher's own
+                                     failure mode, relocated.
+                                   ⇒ So: trust `gcb + fr[3]` whenever the base is non-zero (as
+                                     before), and for the flat base-0 case RECONSTRUCT the
+                                     address from the client's own 0501 blocks, requiring a
+                                     UNIQUE hit that actually holds `CD <vec>`. Unique-or-decline
+                                     is evidence; picking the first match would be a guess. */
                                 uint32_t gar = 0;
                                 int gpresent = dpmi_sel_desc(fr[4], &gar, NULL);
-                                int gis32 = gpresent && (((gar >> 20) & 0xF) & 0x4);
-                                if (gis32 && !g_flt32_warned) {
-                                    char wb[256], *wq = wb;
-                                    g_flt32_warned = 1;
-                                    wq = zput(wq, "  EXC: #GP(IDT) vec=0x"); wq = zhex(wq, gvec);
-                                    wq = zput(wq, " in a FLAT/32-BIT CS 0x"); wq = zhex(wq, fr[4]);
-                                    wq = zput(wq, " -- NOT serviced here: NT's frame is 16-bit, so"
-                                                  " the faulting EIP arrived truncated (0x");
-                                    wq = zhex(wq, fr[3]);
-                                    wq = zput(wq, "). Reflecting to the client instead. A 32-bit"
-                                                  " client's raw INTs need the eager scan.\r\n");
-                                    log_append(LOG_PATH, wb, wq); serial_out(wb, wq);
+                                int gis32    = gpresent && (((gar >> 20) & 0xF) & 0x4);
+                                int gtrunc   = gis32 && gcb == 0;   /* EIP *is* the linear addr */
+                                int gcand    = 0;
+                                DWORD glin   = gcb + fr[3];
+                                if (gtrunc) {
+                                    DWORD grec = dpmi_recover_flat_eip((DWORD)fr[3],
+                                                                       (BYTE)gvec, &gcand);
+                                    glin = grec;                    /* 0 = ambiguous or absent */
+                                    gi   = (volatile BYTE *)(ULONG_PTR)glin;
+                                    if (!grec && !g_flt32_warned) {
+                                        char wb[288], *wq = wb;
+                                        g_flt32_warned = 1;
+                                        wq = zput(wq, "  EXC: #GP(IDT) vec=0x"); wq = zhex(wq, gvec);
+                                        wq = zput(wq, " in a FLAT base-0 32-bit CS 0x");
+                                        wq = zhex(wq, fr[4]);
+                                        wq = zput(wq, ": NT's frame is 16-bit so the EIP arrived"
+                                                      " truncated (0x"); wq = zhex(wq, fr[3]);
+                                        wq = zput(wq, "), and reconstruction from the client's"
+                                                      " 0501 blocks found "); wq = zhex(wq, (DWORD)gcand);
+                                        wq = zput(wq, " candidates holding CD "); wq = zhexb(wq, (unsigned)gvec);
+                                        wq = zput(wq, " -- need exactly 1. Reflecting instead.\r\n");
+                                        log_append(LOG_PATH, wb, wq); serial_out(wb, wq);
+                                    }
                                 }
-                                if (gpresent && !gis32
+                                if (gpresent && glin
                                     && host_readable((const void *)gi, 2)
                                     && gi[0] == 0xCD && gi[1] == (BYTE)gvec) {
                                     /* ── ★★★★★ THIS IS THE PASS THAT RE-PATCHED CALC'S FP SITE.
@@ -25701,7 +25747,9 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                                     p = zput(p, "  EXC: #GP(IDT) is a RAW INT 0x"); p = zhex(p, gvec);
                                     p = zput(p, " at 0x"); p = zhex(p, fr[4]);
                                     p = zput(p, ":0x"); p = zhex(p, fr[3]);
-                                    p = zput(p, " lin=0x"); p = zhex(p, gcb + fr[3]);
+                                    p = zput(p, " lin=0x"); p = zhex(p, glin);
+                                    if (gtrunc) p = zput(p, " (EIP RECONSTRUCTED: flat base-0 CS,"
+                                                            " NT's frame gave only 16 bits)");
                                     if (fpref) {
                                         p = zput(p, " -- FP EMULATOR RANGE: reflecting to the"
                                                     " handler the guest installed, 0x");
@@ -25714,9 +25762,17 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                                                         : " -- servicing + patching\r\n");
                                     }
                                     log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
-                                    /* put the guest back where it faulted, EIP ON the INT */
+                                    /* put the guest back where it faulted, EIP ON the INT.
+                                       ⚠ For the flat base-0 case the frame's IP is TRUNCATED, so
+                                         resume on the RECONSTRUCTED linear address -- writing
+                                         fr[3] back there would be a wild jump into low memory.
+                                         (The frame's SP is truncated the same way and cannot be
+                                         reconstructed this way, which is why gtrunc is only ever
+                                         reached for a client whose stack selector is NOT flat --
+                                         see the decline above if that ever stops holding.) */
                                     VDM_SET16(tib, VTIB_SS, fr[7]); VDM_REG(tib, VTIB_ESP) = fr[6];
-                                    VDM_SET16(tib, VTIB_CS, fr[4]); VDM_REG(tib, VTIB_EIP) = fr[3];
+                                    VDM_SET16(tib, VTIB_CS, fr[4]);
+                                    VDM_REG(tib, VTIB_EIP) = gtrunc ? (glin - gcb) : (DWORD)fr[3];
                                     VDM_SET16(tib, VTIB_EFLAGS, fr[5]);
                                     /* ── ★★★★ REFLECT IT, DO NOT SERVICE IT. ─────────────────
                                          An FP `CD nn` is not a request to the host; it is the
@@ -25753,7 +25809,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                                     }
                                     if (!fpr && host_writable((void *)(ULONG_PTR)gi, 2)) {
                                         gi[0] = VDM_BOP0; gi[1] = VDM_BOP1;
-                                        pmap_set(gcb + fr[3], (BYTE)gvec);
+                                        pmap_set(glin, (BYTE)gvec);   /* the REAL site (s74) */
                                     }
                                     grc = dpmi_service_pm_int(&m, tib, gvec, steps);
                                     if (grc > 0) continue;      /* serviced -> keep running */
@@ -27705,6 +27761,14 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
       for (i = 0; i < 16; ++i)
           if (g_vid.mask_hist[i]) { p = zput(p, " 0x"); p = zhexb(p, (unsigned)i);
                                     p = zput(p, "x"); p = zhex(p, g_vid.mask_hist[i]); }
+      p = zput(p, "\r\n");
+      p = zput(p, "STAGE2: VESA mode queries (4F01/4F02):");
+      if (!g_vid.vesa_qn) p = zput(p, " none");
+      else for (i = 0; i < g_vid.vesa_qn; ++i) {
+          p = zput(p, " 4F"); p = zhexb(p, (unsigned)g_vid.vesa_q_fn[i]);
+          p = zput(p, ":0x"); p = zhex(p, (DWORD)g_vid.vesa_q[i]);
+          p = zput(p, g_vid.vesa_q_ok[i] ? "=OK" : "=UNSUPPORTED");
+      }
       p = zput(p, "\r\n");
       p = zput(p, "STAGE2: video modes unsupported:");
       for (i = 0, n = 0; i < 256; ++i)
