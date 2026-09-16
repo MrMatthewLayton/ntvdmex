@@ -254,7 +254,7 @@ and matches the 6.22 oracle row for row (session 53)** — but `MEM /C` still re
    > claimed. If it ever matters, an INTERLEAVED A/B against `debug\prev\ntvdmhost_prev.exe`
    > is the only honest measurement.
 
-   ### ▶ s74 later — **HEAVEN7: TWO OF OUR BUGS BACK TO BACK — EXEC'S ENV COPY, THEN THE INT-SITE PATCHER.** (HEAD `3d451cf`, rig host `f5b86403` — UNCONFIRMED)
+   ### ▶ s74 later — **HEAVEN7: TWO OF OUR BUGS BACK TO BACK — EXEC'S ENV COPY, THEN THE INT-SITE PATCHER.** (HEAD `a7e9de0`, rig host `90f41fb9` — UNCONFIRMED)
 
    The user asked why the heaven7 demo fails. Two things were wrong:
 
@@ -297,12 +297,40 @@ and matches the 6.22 oracle row for row (session 53)** — but `MEM /C` still re
    **MEASURED A/B:** with `nopmpatch.flag`=`20000` heaven7 **no longer dies silently
    — it reaches `STAGE2: complete`.** That confirms the patcher was killing it.
 
-   **Wall 3, where it stands now:** it still **does not render** (`mode sets: none`).
-   It now stops inside **DOS/4GW's own error path — "cannot make transparent
-   segment"** (that string is on the fault stack; a raw `INT 0xFC` at
-   `0x027f:0x044e`). That is the next thing to chase, and it is a DOS/4GW memory /
-   descriptor service, not a video one. heaven7 has moved two walls in one session
-   and is still not playable.
+   **Wall 3 — ROOT-CAUSED, NOT FIXED (`a7e9de0`). THE TWO WALLS MEET, AND THAT IS THE
+   WHOLE PROBLEM.** With the eager scan excluded from the demo's region, its own
+   `int 31h` **sixteen bytes past the LE entry point** raises `#GP(IDT)` err=`0x018a`
+   (= IDT | vector 0x31) and is reflected to DOS/4GW's `#GP` handler instead of being
+   serviced — so the demo never gets its first DPMI call answered and never sets a
+   mode. (The "cannot make transparent segment" string on the fault stack was a red
+   herring: stack residue, not the cause.)
+
+   The host has a **lazy** `#GP(IDT) → RAW INT → service + patch` arm, and it is the
+   architecturally right mechanism: it patches only bytes the CPU **actually executed
+   as an interrupt**, so it has *no false positives by construction*. It serviced
+   **62** real INTs in the same run. It could not serve heaven7, for two stacked
+   reasons:
+   1. Its guard read `if (gcb && ...)` where `gcb = dpmi_sel_base()` → `g_ldt[].base`,
+      which is **0 for exactly the descriptor a flat 32-bit client runs on** (base 0,
+      limit 4 GB, D/B=1). It was declining those faults *by accident*, reading a
+      legitimate base as "no selector".
+   2. ⚠ **But fixing that predicate alone is WORSE than the bug** — measured before it
+      shipped. **NT hands us a 16-bit exception frame whatever the client is**, so a
+      flat client's EIP (which *is* its linear address, the base being 0) arrives
+      **truncated to 16 bits**: heaven7 reports `0x231c` for an instruction that lives
+      at `~0x0433231c`. `gcb + fr[3]` then names **low memory**, and a chance `CD nn`
+      match there would write `C4 C4` into an innocent page — the patcher's own
+      failure mode, relocated. **That build was thrown away, not shipped.**
+
+   ⇒ `a7e9de0` declines on the **real** criterion (the frame is trustworthy only for a
+   16-bit faulting CS, which is what all 62 serviced faults were) and **logs the reason
+   once, naming the limitation**. A 16-bit CS with base 0 is now serviced correctly.
+
+   **So heaven7 needs the eager scan for its flat 32-bit `int 31h` sites — and the
+   eager scan is exactly what corrupts its generated tables.** That is the knot.
+   Either the heuristic gets smarter, or the lazy path gets a frame wide enough to
+   locate a flat client's instruction. **heaven7 moved two walls in one session and is
+   still not playable.**
 
    ⚠ **The patcher heuristic itself was NOT changed** — Doom/Heretic/Hexen/ZAR are
    confirmed on it and the release is imminent. The tightening (e.g. never patching
