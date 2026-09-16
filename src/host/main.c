@@ -531,6 +531,150 @@ static VDM_COMMAND_INFO g_ci;
    environment block. See csrss_fetch_command(). */
 static char g_app2[1024], g_cmd2[1024], g_cur2[512], g_env2[8192];
 static int  g_fetch2_ok = 0;
+
+/* ── ★ THE LAUNCHER'S ENVIRONMENT REACHES THE GUEST. (s73) ──────────────────────────
+     A DOS program is configured through its environment -- LIB and INCLUDE for the
+     Microsoft tool chain, DOS4GVM for DOS/4GW, BLASTER for every sound driver -- and
+     stock ntvdm hands the launcher's NT environment through. We built a fixed block
+     of four instead (COMSPEC PATH PROMPT BLASTER), so `set LIB=...` then `LINK` in a
+     cmd window could not find BCOM45.LIB while the same two lines under stock could:
+     that was "QuickBASIC cannot build EXEs" from a batch file.
+   ▸ THE RULES ARE STOCK'S, MEASURED WITH p_env.com IN THE SAME cmd WINDOW, not
+     recalled: COMSPEC first; then every launcher variable in NT's order with the
+     NAME upper-cased and the value verbatim -- except a fixed set of path variables
+     whose values stock shortens to 8.3 (ALLUSERSPROFILE APPDATA COMMONPROGRAMFILES
+     PROGRAMFILES USERPROFILE, and PATH element by element); LIB, HOMEPATH and every
+     other user variable stay exactly as typed (a long LIB fails the 1988 linker under
+     stock too, and matching that is the point). BLASTER comes LAST, and it is OUR
+     card's string, as stock's is autoexec.nt's -- a launcher BLASTER is dropped.
+     The block is owned by the program's PSP (MEM /C lists it as the environment),
+     and the program path after the count word is upper-cased 8.3, as DOS stores it.
+   ▸ dosenv.txt still appends, unchanged, before BLASTER.
+   ▸ Bounded: an entry that does not fit is dropped WHOLE and counted, never clipped
+     (a half-present variable is a wrong value, see dos_env_build_card). */
+#define DOSENV_MAX 4096
+static char  g_dosenv[DOSENV_MAX];
+static DWORD g_dosenv_len = 0;        /* bytes of variable text incl. the final NUL; 0 = none */
+static DWORD g_dosenv_dropped = 0;
+
+static int dosenv_name_is(const char *nm, unsigned n, const char *lit)
+{
+    unsigned i;
+    for (i = 0; i < n; ++i) {
+        char c = nm[i]; if (c >= 'a' && c <= 'z') c = (char)(c - 32);
+        if (c != lit[i]) return 0;
+    }
+    return lit[n] == 0;
+}
+
+/* Append one variable NAME=VALUE (NUL-terminated) to the block, upper-casing the
+   name and shortening the value if asked; 0 = did not fit (nothing written). */
+static int dosenv_put(char *dst, DWORD cap, DWORD *len, const char *nm, unsigned nlen,
+                      const char *val, int shorten, int per_element)
+{
+    char sv[1024]; const char *v = val;
+    unsigned vl; DWORD need;
+    if (shorten) {
+        if (per_element) {                        /* PATH: each ';' piece on its own */
+            char *o = sv; const char *s = val;
+            while (*s && o < sv + sizeof sv - 1) {
+                char piece[512], sp[512]; unsigned pl = 0; DWORD sl;
+                while (*s && *s != ';' && pl < sizeof piece - 1) piece[pl++] = *s++;
+                piece[pl] = 0;
+                sl = pl ? GetShortPathNameA(piece, sp, sizeof sp) : 0;
+                if (sl == 0 || sl >= sizeof sp) { lstrcpynA(sp, piece, sizeof sp); sl = pl; }
+                if (o + sl + 1 >= sv + sizeof sv) break;
+                CopyMemory(o, sp, sl); o += sl;
+                if (*s == ';') { *o++ = ';'; ++s; }
+            }
+            *o = 0; v = sv;
+        } else {
+            DWORD sl = GetShortPathNameA(val, sv, sizeof sv);
+            if (sl && sl < sizeof sv) v = sv;
+        }
+    }
+    vl = (unsigned)lstrlenA(v);
+    need = (DWORD)nlen + 1 + vl + 1;
+    if (*len + need + 1 > cap) return 0;          /* +1: the block's own final NUL */
+    { unsigned i; char *o = dst + *len;
+      for (i = 0; i < nlen; ++i) { char c = nm[i]; if (c >= 'a' && c <= 'z') c = (char)(c - 32); *o++ = c; }
+      *o++ = '=';
+      CopyMemory(o, v, vl); o += vl; *o = 0;
+      *len += need; }
+    return 1;
+}
+
+/* Build g_dosenv from a Win32 environment block (NUL-separated, double-NUL ended).
+   Returns the number of variables passed through; 0 leaves g_dosenv_len = 0 so the
+   caller falls back to the historical fixed block. */
+static unsigned dosenv_from_launcher(const char *env, DWORD envcap, const dos_sbcfg *sb,
+                                     const char *extra)
+{
+    static const char *shorten[] = { "ALLUSERSPROFILE", "APPDATA", "COMMONPROGRAMFILES",
+                                     "PROGRAMFILES", "USERPROFILE", NULL };
+    const char *s = env; unsigned n = 0, i;
+    g_dosenv_len = 0; g_dosenv_dropped = 0;
+    if (!env || envcap < 2 || !env[0]) return 0;
+    dosenv_put(g_dosenv, DOSENV_MAX, &g_dosenv_len, "COMSPEC", 7, "C:\\COMMAND.COM", 0, 0);
+    while (s < env + envcap && *s) {
+        const char *eq = s; unsigned nl; int sh = 0, pe = 0;
+        while (*eq && *eq != '=') ++eq;
+        if (*eq != '=' || eq == s) { s += lstrlenA(s) + 1; continue; }  /* "=C:=..." drive
+                                                                            markers: skipped */
+        nl = (unsigned)(eq - s);
+        /* windir is NT's own and stock leaves it out (43 strings to our 44 before). */
+        if (dosenv_name_is(s, nl, "COMSPEC") || dosenv_name_is(s, nl, "BLASTER")
+            || dosenv_name_is(s, nl, "WINDIR")) {
+            s += lstrlenA(s) + 1; continue;
+        }
+        if (dosenv_name_is(s, nl, "PATH")) { sh = 1; pe = 1; }
+        for (i = 0; shorten[i]; ++i) if (dosenv_name_is(s, nl, shorten[i])) sh = 1;
+        /* ── TEMP AND TMP: STOCK'S RULE, MEASURED ELEVEN TIMES AND NOT UNDERSTOOD. ────
+             A value of 12 characters or more is replaced by %windir%\TEMP; 11 or fewer
+             passes through verbatim. Existence, case and the number of components do
+             not matter: C:\WINDOWS, C:\windows, C:\WINDOWS\, C:\NOSUCH and C:\A\B were
+             kept; C:\ABCDEFGHI (12), C:\NOSUCH\Sub, C:\WINDOWS\system32,
+             C:\DOCUME~1\Matthew and the user's LOCALS~1\Temp were all replaced. The
+             user's own temp is therefore C:\WINDOWS\TEMP under stock on every XP, and
+             that is where a DOS program's temp files land here too. */
+        if (dosenv_name_is(s, nl, "TEMP") || dosenv_name_is(s, nl, "TMP")) {
+            if (lstrlenA(eq + 1) >= 12) {
+                char wt[MAX_PATH + 8]; UINT wl = GetWindowsDirectoryA(wt, MAX_PATH);
+                if (wl && wl < MAX_PATH) {
+                    lstrcatA(wt, "\\TEMP");
+                    if (dosenv_put(g_dosenv, DOSENV_MAX, &g_dosenv_len, s, nl, wt, 0, 0)) ++n;
+                    else ++g_dosenv_dropped;
+                    s += lstrlenA(s) + 1; continue;
+                }
+            }
+        }
+        if (dosenv_put(g_dosenv, DOSENV_MAX, &g_dosenv_len, s, nl, eq + 1, sh, pe)) ++n;
+        else ++g_dosenv_dropped;
+        s += lstrlenA(s) + 1;
+    }
+    if (extra) {                                   /* dosenv.txt: one NAME=VALUE per line */
+        const char *ln = extra;
+        while (*ln) {
+            unsigned k = 0; const char *eq;
+            while (ln[k] && ln[k] != '\n' && ln[k] != '\r' && ln[k] != ';') ++k;
+            eq = ln; while (eq < ln + k && *eq != '=') ++eq;
+            if (k > 0 && ln[0] != '#') {
+                char val[512]; unsigned vl = (eq < ln + k) ? (unsigned)(ln + k - eq - 1) : 0;
+                if (vl >= sizeof val) vl = sizeof val - 1;
+                CopyMemory(val, eq + 1, vl); val[vl] = 0;
+                if (!dosenv_put(g_dosenv, DOSENV_MAX, &g_dosenv_len, ln,
+                                (unsigned)(eq - ln), val, 0, 0)) ++g_dosenv_dropped;
+            }
+            ln += k; while (*ln == '\n' || *ln == '\r' || *ln == ';') ++ln;
+        }
+    }
+    {   char bl[64]; volatile uint8_t *e = (volatile uint8_t *)bl;
+        volatile uint8_t *q = dos_env_blaster(e, e + sizeof bl - 1, sb);
+        *q = 0;
+        dosenv_put(g_dosenv, DOSENV_MAX, &g_dosenv_len, "BLASTER", 7, bl + 8, 0, 0); }
+    g_dosenv[g_dosenv_len++] = 0;                  /* the block's final NUL */
+    return n;
+}
 static volatile LONG g_report_got_next = 0;   /* the report call returned TRUE: a command was queued to us */
 static DWORD WINAPI csrss_report_thread(LPVOID pv)
 {
@@ -1377,6 +1521,8 @@ static DWORD          g_irqn_inj      = 0;  /* device IRQs (2-7) injected into t
 static DWORD          g_irqn_refuse_log = 0; /* bounded refusal-log budget (see the gate)  */
 static DWORD          g_irqn_refuse_total = 0;
 static volatile LONG  g_wound_down    = 0;  /* exec loop exited: clean shutdown in progress */
+static HANDLE         g_once_mutex    = NULL; /* the single-instance mutex (WinMain); handed
+                                                 over before a relaunch, see task-done */
 #define IO_HOT_MAX 48   /* 12 filled up before the hottest port was even seen */
 static uint16_t g_io_last_port = 0;      /* port the last serviced access touched */
 /* ── ⚠ AN INTERMITTENT I/O STORM, NOT YET EXPLAINED (session 53). ────────────
@@ -21165,7 +21311,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                                                 : "released");
               sq = zput(sq, " -- taking ownership and running\r\n");
               log_append(LOG_PATH, sb, sq); }
-        } }
+        }
+        g_once_mutex = once; }
     static const BYTE bop[] = { VDM_BOP0, VDM_BOP1, 0x20, 0xCF };  /* BOP 0x20 ; iret */
     static const BYTE bop10[] = { VDM_BOP0, VDM_BOP1, 0x10, 0xCF }; /* BOP 0x10 ; iret */
     static const BYTE bop16[] = { VDM_BOP0, VDM_BOP1, 0x16, 0xCF }; /* BOP 0x16 ; iret */
@@ -22249,6 +22396,25 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
       }
       dos_env_build_card(NULL, DOS_ENV_SEG, progpath[0] ? progpath : "C:\\PROGRAM.COM",
                          "C:\\", &g_sbcfg, dosenv[0] ? dosenv : NULL);            /* M2.5: env */
+      /* ── ★ AND THE LAUNCHER'S ENVIRONMENT, WHEN CSRSS GAVE US ONE. (s73) The block
+           at 0x60 above is 256 bytes and stays as the fallback; a launcher block is
+           laid in its own PSP-owned MCB at the top of memory, next to the CDS and SFT
+           (see the reservation below), and PSP:2C is pointed at it. The raw NT block
+           is logged first so the transform can be checked against stock's dump. */
+      if (g_fetch2_ok) {
+          unsigned nv = dosenv_from_launcher(g_env2, sizeof g_env2, &g_sbcfg, dosenv[0] ? dosenv : NULL);
+          p = zput(p, "STAGE2: launcher environment -> "); p = zhex(p, nv);
+          p = zput(p, " variables, "); p = zhex(p, g_dosenv_len); p = zput(p, " bytes, dropped=0x");
+          p = zhex(p, g_dosenv_dropped); p = zput(p, "\r\n");
+          { char rv[400], *rq = rv; unsigned ri, zeros = 0;
+            rq = zput(rq, "STAGE2: launcher environment raw = [");
+            for (ri = 0; ri < sizeof g_env2 && rq < rv + 360; ++ri) {
+                char c = g_env2[ri];
+                if (c == 0) { *rq++ = '.'; if (++zeros >= 2) break; continue; }
+                zeros = 0; *rq++ = (c >= 0x20 && c < 0x7F) ? c : '?';
+            }
+            *rq = 0; rq = zput(rq, "]\r\n"); p = zput(p, rv); }
+      }
       /* ── ★ READ THE BLOCK BACK OUT OF GUEST MEMORY AND PRINT IT. Not the string we
            passed in -- the bytes the guest will actually walk, which is a different
            claim and the only one worth logging. A DOS environment is a run of
@@ -22311,10 +22477,47 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
              memory it needed was sitting free below. Reserve the pair in one go and
              carve it: CDS at the bottom, SFT immediately above. One MCB owned by
              DOS (8) covering both is what it is -- resident DOS data. */
-        {   WORD resv = dos_mcb_reserve_top(NULL, first_mcb,
-                                            (WORD)(DOS_CDS_PARAS + DOS_SFT_PARAS));
-            if (resv) { g_cds_seg = resv; g_sft_seg = (WORD)(resv + DOS_CDS_PARAS); }
-            else        g_cds_seg = dos_mcb_reserve_top(NULL, first_mcb, DOS_CDS_PARAS);
+        /* ── ★ THE LAUNCHER'S ENVIRONMENT BLOCK, IN THE SAME RESERVATION. (s73) ──────
+             env_paras + 1 (its MCB) are added at the BOTTOM of the reserved run, so the
+             carve is: [M owner=PSP env][Z owner=DOS CDS SFT]. Two MCBs from one split --
+             the 'Z' reserve_top laid is re-laid one env block higher. Owned by the PSP
+             because that is what it is (MEM /C reports it as the program's environment)
+             and so AH=49h on it succeeds for a TSR that frees its environment. */
+        {   WORD env_paras = 0, ppl = 0; char pp[768];
+            if (g_dosenv_len) {
+                DWORD i;
+                lstrcpynA(pp, progpath[0] ? progpath : "C:\\PROGRAM.COM", sizeof pp);
+                for (i = 0; pp[i]; ++i) if (pp[i] >= 'a' && pp[i] <= 'z') pp[i] = (char)(pp[i] - 32);
+                ppl = (WORD)i;
+                env_paras = (WORD)((g_dosenv_len + 2 + ppl + 1 + 15) / 16);
+            }
+            {   WORD resv = dos_mcb_reserve_top(NULL, first_mcb,
+                                                (WORD)(DOS_CDS_PARAS + DOS_SFT_PARAS
+                                                       + (env_paras ? env_paras + 1 : 0)));
+                if (resv && env_paras) {
+                    volatile BYTE *e = (volatile BYTE *)((DWORD)resv << 4);
+                    DWORD i;
+                    mcb_lay(NULL, (uint16_t)(resv - 1), 'M', DOS_PSP_SEG, env_paras);
+                    mcb_lay(NULL, (uint16_t)(resv + env_paras), 'Z', 0x0008,
+                            (uint16_t)(DOS_CDS_PARAS + DOS_SFT_PARAS));
+                    for (i = 0; i < g_dosenv_len; ++i) e[i] = (BYTE)g_dosenv[i];
+                    e[i++] = 1; e[i++] = 0;                          /* count WORD: one string */
+                    { WORD k; for (k = 0; k < ppl; ++k) e[i++] = (BYTE)pp[k]; e[i] = 0; }
+                    *(volatile WORD *)(((DWORD)DOS_PSP_SEG << 4) + 0x2C) = resv;
+                    g_cds_seg = (WORD)(resv + env_paras + 1);
+                    g_sft_seg = (WORD)(g_cds_seg + DOS_CDS_PARAS);
+                    p = zput(p, "STAGE2: launcher environment laid at 0x"); p = zhex(p, resv);
+                    p = zput(p, ":0 ("); p = zhex(p, env_paras); p = zput(p, " paras, owner PSP) -> PSP:2C\r\n");
+                } else if (resv) { g_cds_seg = resv; g_sft_seg = (WORD)(resv + DOS_CDS_PARAS); }
+                else if (env_paras) {                    /* did not fit with the env: without */
+                    g_dosenv_len = 0;
+                    p = zput(p, "STAGE2: launcher environment DROPPED -- no room above the program\r\n");
+                    resv = dos_mcb_reserve_top(NULL, first_mcb, (WORD)(DOS_CDS_PARAS + DOS_SFT_PARAS));
+                    if (resv) { g_cds_seg = resv; g_sft_seg = (WORD)(resv + DOS_CDS_PARAS); }
+                    else        g_cds_seg = dos_mcb_reserve_top(NULL, first_mcb, DOS_CDS_PARAS);
+                }
+                else        g_cds_seg = dos_mcb_reserve_top(NULL, first_mcb, DOS_CDS_PARAS);
+            }
         }
         /* ── ★ AND THE SFT, FOR A **DOS** GUEST. (s72) ────────────────────────────
              The SFT chain was planted only on the WOW path, and the note there said
@@ -22336,7 +22539,12 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
              data a memory walker can see and account for rather than a hole. It is
              taken AFTER the CDS, so it lands just below it and the program's block
              now ends below THIS one -- hence PSP+2 comes from the lower of the two. */
-        if (g_cds_seg)
+        /* s73: with a launcher environment the program's block ends one paragraph
+           below THAT (its MCB), which sits below the CDS. */
+        if (g_dosenv_len)
+            *(volatile WORD *)(((DWORD)DOS_PSP_SEG << 4) + 2) =
+                (WORD)(*(volatile WORD *)(((DWORD)DOS_PSP_SEG << 4) + 0x2C) - 1);
+        else if (g_cds_seg)
             *(volatile WORD *)(((DWORD)DOS_PSP_SEG << 4) + 2) = (WORD)(g_cds_seg - 1);
     }
     /* Published so the Settings dialog can change the reported DOS version while a
@@ -25950,8 +26158,19 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             if (csrss_next_cmd[0]) { q = zput(q, " "); q = zput(q, csrss_next_cmd); }
             *q = 0;
             ZeroMemory(&si, sizeof si); si.cb = sizeof si; ZeroMemory(&pi, sizeof pi);
+            /* ⛔ HAND OVER THE SINGLE-INSTANCE MUTEX FIRST. (s73) The relaunched host is a
+               second ntvdmhost, and the guard in WinMain refuses a second instance while
+               the first OWNS the mutex -- which this one did, for as long as it waited
+               on the child. Measured: `BC x.BAS` then `LINK x.OBJ` from one cmd window --
+               BC ran, LINK was queued to this VDM, the relaunched host wrote "REFUSED:
+               another ntvdmhost is LIVE" and exited, the launcher saw rc=0, and no EXE
+               was ever written. That was "QBasic cannot build EXEs" from a batch file.
+               The guest is gone (the exec loop is out), so the system-wide things the
+               guard protects are released here too; the child takes them over. */
+            host_panic_release();
+            if (g_once_mutex) { ReleaseMutex(g_once_mutex); CloseHandle(g_once_mutex); g_once_mutex = NULL; }
             p = zput(p, "STAGE2: task done -> a command was queued to this VDM in the window: relaunching [");
-            p = zput(p, cl); p = zput(p, "] in [");  p = zput(p, csrss_next_cur); p = zput(p, "]");
+            p = zput(p, cl); p = zput(p, "] in [");  p = zput(p, csrss_next_cur); p = zput(p, "] (single-instance mutex released)");
             if (CreateProcessA(NULL, cl, NULL, NULL, TRUE, 0, NULL,
                                csrss_next_cur[0] ? csrss_next_cur : NULL, &si, &pi)) {
                 p = zput(p, " -> pid 0x"); p = zhex(p, pi.dwProcessId); p = zput(p, ", waiting\r\n");

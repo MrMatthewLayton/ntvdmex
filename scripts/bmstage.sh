@@ -46,7 +46,7 @@ esac
 
 # The LIVE harness: every script here uses the s73 layout and writes nothing to C:.
 LIVE_BATS=(rt.bat runwatch.bat rt_stock.bat ifeochk.bat restore.bat
-           lemhp.bat lemlive.bat qbclick.bat qbopen.bat pkgtest.bat pkgsmoke.bat pkgw16.bat
+           lemhp.bat lemlive.bat qbclick.bat qbopen.bat pkgtest.bat pkgsmoke.bat pkgw16.bat qbmake.bat envprobe.bat
            evt.bat cpuinfo.bat w16launch.bat w16watch.bat)
 # Tools that are rebuilt on the Mac; staged only when a build exists.
 LIVE_EXES=(vdmwatch.exe controld_v2.exe rigshot.exe vdmdump.exe present_demo.exe)
