@@ -430,9 +430,82 @@ and matches the 6.22 oracle row for row (session 53)** — but `MEM /C` still re
    `≈0x6c/0x15` baseline — evenly interrupted rather than in long runs. Feel is the
    user's call. Rig host **`e1a56ef1`**. offvm 1361/0.
 
-   ▶ **The by-hand pass owed from s72 is still owed, now for FIVE changes** (SFT, HMA,
-   `AH=3Dh`, guard logging, **the `bin\`/`debug\out\` paths**). Same three asks: Doom E1M1
-   kill, QBasic Open → run, one memory-tight guest. Roll back by copying
+   ### ★★★★ s73, 1–2 pm: **"QBASIC CANNOT BUILD EXEs" — CLOSED. Two host defects, one missing variable, and the launcher's environment now reaches every DOS guest.**
+
+   **Package `dist\ntvdmex-20260916-09e101f.zip` is on the share — the FIRST zip whose
+   Win16 half is proven from a fresh folder:** `pkgtest.bat` 8/8 through the package's own
+   `bin\`, then new **`pkgw16.bat`** (installs the package host, `w16launch.bat` with
+   `BIN`/`OUT` pointed at the package, rig's key restored) put **Notepad AND Paintbrush up
+   from the package folder** with `STAGE0: root` = the package. Earlier zips never shipped
+   the four WOW `cfg\` files. `dist\` holds only the zip. ⚠ It predates the env change below.
+
+   **The QB bug, reproduced the user's way** (`scripts/bm/qbmake.bat`: `cli host|stock`
+   = BC then LINK from a cmd line, redirected; `qb` = QB's own Run > Make EXE by key script
+   with the DOS trace on — the Run menu here is **Easy Menus**, four items, so Down×3).
+   The user's leftovers said it first: `CAVE.OBJ` compiled `/O` (default library BCOM45),
+   `CAVE.EXE` **3,772 bytes with 0 relocations** (no runtime = linked WITHOUT the
+   library), `~QBLNK.TMP` not cleaned up. Then, in order of discovery:
+   1. **A second DOS command in the same cmd window never ran.** `BC` then `LINK`: BC's
+      host was handed LINK by CSRSS and relaunched it in a fresh host (s72's design) —
+      which logged **`REFUSED: another ntvdmhost is LIVE (owns the single-instance
+      mutex)`** and quit, because the relaunching host still owned the mutex while it
+      waited on the child. cmd saw rc=0, nothing was written. **Fixed:** the mutex (and
+      `host_panic_release()`'s system-wide things) are handed over before the relaunch.
+   2. **The guest got a FIXED four-variable environment** and the launcher's block CSRSS
+      hands over (`envlen=0x746`) was discarded — so `set LIB=…` then `LINK` found no
+      `BCOM45.LIB` under us while the same two lines under stock did. **Fixed, to stock's
+      MEASURED rules** (new `tools/dostest/p_env.com` dumps PSP:2C as text; run in the
+      same cmd window under both, `scripts/bm/envprobe.bat stock|host`): COMSPEC first;
+      names upper-cased, values verbatim; `ALLUSERSPROFILE APPDATA COMMONPROGRAMFILES
+      PROGRAMFILES USERPROFILE` and each `PATH` element to 8.3; `windir` dropped;
+      **`TEMP`/`TMP` of ≥12 characters → `%windir%\TEMP`** (eleven data points: length is
+      the only predictor — `C:\WINDOWS`, `C:\windows`, `C:\NOSUCH`, `C:\A\B` kept;
+      `C:\ABCDEFGHI`, `C:\WINDOWS\system32`, the user's `LOCALS~1\Temp` replaced; rule
+      not understood, recorded); BLASTER last. Ours now differs from stock's dump in
+      exactly two DELIBERATE lines (`COMSPEC=C:\COMMAND.COM`; our card's BLASTER without
+      `P330`). The block lives in its own **PSP-owned MCB at the top of memory** beside
+      the CDS and SFT (one `dos_mcb_reserve_top`, carved three ways), PSP:2C and PSP+2
+      point at it; the 256-byte `0x60` block stays as the fallback for a launch with no
+      environment; `dosenv.txt` still appends. Cost: the env's size (0x67 paras here,
+      stock 0x6E) off the top of the program's block.
+   3. **QB's Make EXE needs `LIB` in the environment** — on a real DOS box QB's SETUP
+      wrote `SET LIB=C:\QB45\LIB` into AUTOEXEC.BAT. QB.INI's Set Paths (`C:\LIB` on the
+      user's copy) is used by QB's own probe and is NOT handed to LINK. **Stock fails
+      identically without it** (3,772-byte EXE). With `set LIB=<8.3 path>\qb45\LIB` in the
+      launching batch, **QB builds a 46,846-byte stand-alone `CAVE.EXE` that runs**
+      (mode 13h, clean exit). ▶ Tell the user: set `LIB` (system env var, 8.3 form) or
+      launch QB from a batch that sets it.
+
+   **Then (`726da7a`): the relaunched child inherits the launcher's redirect.** The next
+   command's StdIn/Out/Err come back from the report call as handles CSRSS placed in the
+   parent; they are dup'd inheritable and — the part that mattered — set as the parent's
+   OWN std handles (`SetStdHandle` = the PEB fields the child's `stdio_from_parent` reads;
+   `STARTUPINFO` never reaches a BaseSrv-created child, measured). `LINK … > file` now
+   fills the file as stock does.
+   ⚠ **Relaunch-shape caveat, unchanged:** the launcher is released by `ExitVDM` *before*
+   the relaunched command finishes (a batch's next line runs early — its own `dir` did not
+   see the EXE that appeared a second later). Stock's shape — stay resident, run the next
+   command in-process, report each exit code in turn — is the right one and is a WinMain
+   restructuring, not a day's work. Documented in `package/README.txt` KNOWN LIMITS.
+   * `package/README.txt`: the stale "no `> file` yet" line replaced by an ENVIRONMENT
+     VARIABLES section (LIB for QB, 8.3 paths) and the Win16 list of 16.
+   * **`package/demo/qb45/QB45.BAT`** (also on the share): sets LIB/INCLUDE to the folder's
+     own 8.3 paths and starts QB — the USB-shape fix for Make EXE. (`QB.BAT` would lose to
+     `QB.EXE` in PATHEXT order.)
+   * **PROGMAN IS UP** (`runs/s73_qbmake/progman.png`): title bar, `File Options Window
+     Help`, empty grey client — correct with no `.GRP`s. This morning's "no window" read
+     XP's own desktop caption ("Program Manager") as the tally. **16 of 17.** MPLAYER is a
+     real guest GPF at `0001:3983` right after `RegQueryValue` (SHELL) with a stepped-over
+     USER call earlier in its log — MCI/MMSYSTEM territory, not chased.
+
+   **Verified on host `db29628e`:** selftest 8/8 · Notepad up · Skyroads `V86STR n8=0
+   max_ms=7`, IRQ0 `anom_n=0`, guards intact · offvm **1361/0** · parity sweep (see the
+   log line below this block when it lands). Evidence in `runs/s73_qbmake/`.
+
+   ▶ **The by-hand pass owed from s72 is still owed, now for SEVEN changes** (SFT, HMA,
+   `AH=3Dh`, guard logging, the `bin\`/`debug\out\` paths, Auto screen update, **the
+   environment block**). Same three asks: Doom E1M1 kill, QBasic Open → run, one
+   memory-tight guest — Duke3D now matters doubly, the env block took ~1.6 KB. Roll back by copying
    `debug\prev\ntvdmhost_prev.exe` (`a5cd764b`) over `bin\ntvdmhost.exe` — and note a
    rolled-back host would write to `out\` again and expect `bm\`; **`a5cd764b` cannot run
    from `bin\`** (it derives its root from a folder named `bm`). A rollback therefore

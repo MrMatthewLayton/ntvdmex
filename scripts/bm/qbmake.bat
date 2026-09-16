@@ -108,7 +108,16 @@ set LIB=%QB8%\LIB
 if "%2"=="nolib" set LIB=
 if "%2"=="nolib" set R=%OUT%\qbmake_qb_nolib.txt
 cd /d "%QB%"
-start /wait "" "%RIG%\dosstub.com"
+rem %2=bat: the USB shape -- demo\msdos\qb45\QB45.BAT sets LIB itself and starts
+rem QB.EXE from a batch (the cmd-launch path, not dosstub/target.txt).
+if "%2"=="bat" (
+  set LIB=
+  set R=%OUT%\qbmake_qb_bat.txt
+  del /q "%CFG%\target.txt" >nul 2>&1
+  start /wait "" cmd /c ""%QB%\QB45.BAT" PERSONAL\T_CAVE.BAS"
+) else (
+  start /wait "" "%RIG%\dosstub.com"
+)
 copy /y "%OUT%\ntvdmhost.log" "%OUT%\qbmake_qb.log" >nul 2>&1
 for %%f in ("%OUT%\shot??.bmp" "%OUT%\shot??.txt") do copy /y "%%f" "%OUT%\qbmake_%%~nxf" >nul 2>&1
 del /q "%CFG%\autoexit" "%CFG%\keys.txt" "%CFG%\qimode.txt" "%CFG%\dostrace.flag" "%CFG%\textdump.flag" "%CFG%\capture.flag" "%CFG%\target.txt" >nul 2>&1

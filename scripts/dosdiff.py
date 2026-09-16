@@ -106,6 +106,34 @@ def rule_for(rules, probe, case, field):
     return out
 
 
+# ── THE ORACLE'S ANSWER IS A FUNCTION OF THE PROBE BINARY, SO KEEP IT. (s73) ──────
+#   Every msdos622 run boots genuine DOS in QEMU (~1-3 min, TCG); a 37-probe sweep
+#   spent most of an hour re-deriving answers that cannot have changed, and the
+#   rig was idle-but-reserved the whole time. Cached under build/dosdiff-cache/
+#   by the sha1 of the .com AND its .deps companions -- a rebuilt probe misses.
+#   Only oracle hosts are cached: the subject is what is being measured.
+#   DOSDIFF_NOCACHE=1 bypasses it (e.g. after touching vm/dos622.img).
+def _cache_key(host, program):
+    import hashlib
+    h = hashlib.sha1()
+    h.update(host.encode())
+    for f in [program] + _deps(program):
+        try:
+            with open(f, "rb") as fh: h.update(fh.read())
+        except OSError:
+            return None
+    return h.hexdigest()
+
+def _cache_path(host, program):
+    key = _cache_key(host, program)
+    if not key or os.environ.get("DOSDIFF_NOCACHE"):
+        return None
+    d = os.path.join(ROOT, "build", "dosdiff-cache")
+    try: os.makedirs(d, exist_ok=True)
+    except OSError: return None
+    return os.path.join(d, "%s-%s.txt" % (os.path.basename(program), key))
+
+
 def _deps(program):
     """Companion files listed in a `<probe>.deps` sidecar beside the probe."""
     side = os.path.splitext(program)[0] + ".deps"
@@ -317,6 +345,13 @@ class NtvdmexRig(Host):
             shutil.copyfile(dep, os.path.join(gdir, os.path.basename(dep).upper()))
 
         log = os.path.join(self.share, "out", "result_Probe.log")
+        # ★ Delete the previous result and wait for a NEW file (s73): macOS's SMB
+        #   client caches attributes, so an mtime change on an existing file can take
+        #   minutes to show -- the whole sweep ran at ~4 min/probe on that. A file that
+        #   appears is seen within seconds, and deleting first retires the stale-result
+        #   hazard the mtime check was for. The mtime check is kept as the fallback.
+        try: os.remove(log)
+        except OSError: pass
         before = os.path.getmtime(log) if os.path.exists(log) else 0
 
         # The watcher reads cmd.txt with `for /f ... in ('type cmd.txt')`, so it
@@ -340,7 +375,7 @@ class NtvdmexRig(Host):
         #   and would be reported as this probe's answer.
         while time.time() < deadline:
             time.sleep(3)
-            os.listdir(self.share)          # force a fresh readdir over SMB
+            os.listdir(os.path.dirname(log))    # force a fresh readdir over SMB
             if not os.path.exists(log) or os.path.getmtime(log) <= before:
                 continue
             with open(log, "rb") as f:
@@ -580,11 +615,18 @@ def main():
         if not ok:
             unavailable.append((h.name, why))
             continue
-        try:
-            text = h.run(a.probe)
-        except Exception as e:
-            unavailable.append((h.name, "run failed: %s" % e))
-            continue
+        cache = _cache_path(h.name, a.probe) if h.role == "oracle" else None
+        text = None
+        if cache and os.path.exists(cache):
+            with open(cache, "rb") as f: text = f.read().decode("cp437", "replace")
+        if text is None:
+            try:
+                text = h.run(a.probe)
+            except Exception as e:
+                unavailable.append((h.name, "run failed: %s" % e))
+                continue
+            if cache and "#END" in text:
+                with open(cache, "wb") as f: f.write(text.encode("cp437", "replace"))
         name, cases = parse_dump(text)
         probe_name = probe_name or name
         if not cases:

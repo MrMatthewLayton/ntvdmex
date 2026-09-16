@@ -46,14 +46,31 @@ IF SOMETHING GOES WRONG
 WHAT TO EXPECT (tested by hand on real hardware before this build)
   MS-DOS: COMMAND.COM, DOOM (with sound and mouse), Skyroads, Lemmings, the
   QBasic and EDIT text-mode editors (typing, menus, mouse).
-  Win16: Notepad and Paint from Windows 3.11 (Paint draws and saves files).
+  Win16: Notepad and Paint from Windows 3.11 (Paint draws and saves files);
+  Write, Cardfile, Calc, Clock, CharMap, Solitaire, Minesweeper, Recorder,
+  Sound Recorder, Terminal, SysEdit, TaskMan, Packager and Program Manager put
+  their windows up. Media Player does not (it faults on start).
   Win16 programs use XP's own 16-bit system files from system32; nothing is
   bundled. Bring the programs themselves (NOTEPAD.EXE, PBRUSH.EXE ...).
   Programs outside that list may or may not work; the log says why when they
   do not.
 
+ENVIRONMENT VARIABLES
+  A DOS program gets the environment of whatever launched it, the same way it
+  does under Windows' own VDM: variables you SET in a command prompt or a batch
+  file before running the program are there for it. Tools that are configured
+  that way need it -- QuickBASIC's Make EXE needs LIB to point at its LIB
+  folder (as its own SETUP once wrote into AUTOEXEC.BAT), e.g.
+      set LIB=C:\QB45\LIB
+      QB
+  Use 8.3 names (no spaces) in such paths: a 1988 linker cannot read long ones.
+  (demo\msdos\qb45\QB45.BAT on the demo USB does exactly this.)
+
 KNOWN LIMITS
   Hardware-level access is slower than a real PC (every port access is a trap),
   so timing-critical games run at roughly a 386-class pace. There is no
-  direct-memory-access hardware for user programs. A DOS program's screen
-  output does not reach a command prompt's redirection (> file) yet.
+  direct-memory-access hardware for user programs. Running several DOS programs
+  one after another from one batch file works, but the second and later ones
+  are started a moment after the batch has moved on to its next line, so a
+  batch that runs a tool and then immediately reads its output can get ahead
+  of it.

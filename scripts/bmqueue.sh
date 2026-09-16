@@ -31,6 +31,15 @@ TIMEOUT="${TIMEOUT:-240}"
 RESULT="$SH/debug/out/result_${TARGET}.log"
 
 mtime() { stat -f '%m' "$1" 2>/dev/null || echo 0; }
+# ── ★ REMOVE THE OLD RESULT FIRST, AND WAIT FOR A NEW FILE, NOT A NEW MTIME. (s73) ──
+#   macOS's SMB client caches attributes: an mtime change on an EXISTING file can
+#   take minutes to show (a whole parity sweep ran at ~4 min/probe on that alone,
+#   and this script reported a false TIMEOUT for a run that had finished in 15 s).
+#   A file that APPEARS is seen within seconds. So the previous result is deleted
+#   here -- which also retires the stale-result hazard the mtime check existed for --
+#   and phase 2 waits for the watcher to create a fresh one. If the delete fails the
+#   mtime check below still applies.
+rm -f "$RESULT" 2>/dev/null
 BEFORE=$(mtime "$RESULT")
 
 # The watcher reads cmd.txt with `for /f ... in ('type cmd.txt')`, so it wants a
@@ -53,6 +62,7 @@ fi
 
 # Phase 2: wait for a result log NEWER than the moment we queued.
 for ((i=0; i<TIMEOUT; i++)); do
+  ls "$SH/debug/out" >/dev/null 2>&1      # a fresh readdir: new entries show up
   NOW=$(mtime "$RESULT")
   if [ "$NOW" != "$BEFORE" ] && [ "$NOW" != "0" ]; then
     sleep 3   # let the copy settle before anyone reads it
