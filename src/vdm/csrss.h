@@ -36,6 +36,7 @@ BOOL csrss_task_done(ULONG task_id, ULONG exit_code, DWORD *out_err, BOOL *out_e
 /* If csrss_task_done returned TRUE, CSRSS handed us the console's NEXT command
    (a program launched into this console before ExitVDM); these hold it. */
 extern char csrss_next_app[1024], csrss_next_cmd[1024], csrss_next_cur[512];
+extern HANDLE csrss_next_std[3];
 /* ExitVDM(FALSE, 0): a DOS VDM leaving its console. Separate so a hang in either
    call names itself in the log. */
 BOOL csrss_exit_vdm(void);

@@ -54,6 +54,8 @@ BOOL csrss_get_command(VDM_COMMAND_INFO *ci, DWORD *out_err)
 }
 
 char csrss_next_app[1024], csrss_next_cmd[1024], csrss_next_cur[512];
+HANDLE csrss_next_std[3];   /* the next command's StdIn/StdOut/StdErr as CSRSS placed them
+                               in THIS process (s73: handed to the relaunched host) */
 
 BOOL csrss_task_done(ULONG task_id, ULONG exit_code, DWORD *out_err, BOOL *out_exitvdm)
 {
@@ -69,6 +71,7 @@ BOOL csrss_task_done(ULONG task_id, ULONG exit_code, DWORD *out_err, BOOL *out_e
     if (!pfn) { if (out_err) *out_err = ERROR_PROC_NOT_FOUND; return FALSE; }
     ZeroMemory(&ci, sizeof ci);
     csrss_next_app[0] = csrss_next_cmd[0] = csrss_next_cur[0] = 0;
+    csrss_next_std[0] = csrss_next_std[1] = csrss_next_std[2] = NULL;
     ci.CmdLine = csrss_next_cmd; ci.CmdLen = sizeof csrss_next_cmd;
     ci.AppName = csrss_next_app; ci.AppLen = sizeof csrss_next_app;
     ci.PifFile = pif; ci.PifLen = sizeof pif;
@@ -86,6 +89,7 @@ BOOL csrss_task_done(ULONG task_id, ULONG exit_code, DWORD *out_err, BOOL *out_e
     ok = pfn(&ci);
     if (out_err) *out_err = GetLastError();
     csrss_next_app[sizeof csrss_next_app - 1] = 0; csrss_next_cmd[sizeof csrss_next_cmd - 1] = 0;
+    if (ok) { csrss_next_std[0] = ci.StdIn; csrss_next_std[1] = ci.StdOut; csrss_next_std[2] = ci.StdErr; }
     for (k = 0; csrss_next_cmd[k]; ++k) if (csrss_next_cmd[k] == '\r' || csrss_next_cmd[k] == '\n') { csrss_next_cmd[k] = 0; break; }
     if (pexit && out_exitvdm) *out_exitvdm = pexit(FALSE, 0);
     return ok;

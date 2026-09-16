@@ -26169,6 +26169,40 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                guard protects are released here too; the child takes them over. */
             host_panic_release();
             if (g_once_mutex) { ReleaseMutex(g_once_mutex); CloseHandle(g_once_mutex); g_once_mutex = NULL; }
+            /* ── AND ITS REDIRECT. (s73) The command's StdIn/Out/Err came back from the
+                 report call as handles CSRSS placed in THIS process (the launcher's
+                 `LINK > file`). The child's stdio_init takes an inherited disk/pipe
+                 standard handle first, so hand them over inheritable; a console handle
+                 is left alone (the child finds its console the way it always has).
+                 Measured before this: the relaunched LINK's log said "stdout -> none". */
+            {   int k, any = 0; HANDLE hs[3] = { NULL, NULL, NULL };
+                for (k = 0; k < 3; ++k) {
+                    HANDLE h = csrss_next_std[k]; DWORD ty;
+                    if (!h || h == INVALID_HANDLE_VALUE) continue;
+                    ty = GetFileType(h);
+                    if (ty != FILE_TYPE_DISK && ty != FILE_TYPE_PIPE) continue;
+                    if (DuplicateHandle(GetCurrentProcess(), h, GetCurrentProcess(), &hs[k],
+                                        0, TRUE, DUPLICATE_SAME_ACCESS)) any = 1;
+                }
+                if (any) {
+                    /* ⚠ STARTUPINFO NEVER REACHES THE CHILD: a DOS .EXE goes through
+                       BaseSrv, which creates the ntvdm (us again, via IFEO) itself.
+                       What the child DOES read is its PARENT'S PEB standard handles
+                       (stdio_from_parent, GH #131) -- and its parent is this process.
+                       SetStdHandle writes exactly those PEB fields. Measured: with
+                       STARTUPINFO alone the child still said "stdout -> none". */
+                    if (hs[0]) SetStdHandle(STD_INPUT_HANDLE,  hs[0]);
+                    if (hs[1]) SetStdHandle(STD_OUTPUT_HANDLE, hs[1]);
+                    if (hs[2] || hs[1]) SetStdHandle(STD_ERROR_HANDLE, hs[2] ? hs[2] : hs[1]);
+                    si.dwFlags |= STARTF_USESTDHANDLES;
+                    si.hStdInput  = hs[0] ? hs[0] : GetStdHandle(STD_INPUT_HANDLE);
+                    si.hStdOutput = hs[1] ? hs[1] : GetStdHandle(STD_OUTPUT_HANDLE);
+                    si.hStdError  = hs[2] ? hs[2] : (hs[1] ? hs[1] : GetStdHandle(STD_ERROR_HANDLE));
+                }
+                p = zput(p, "STAGE2: task done -> next command's std handles in=0x"); p = zhex(p, (DWORD)(ULONG_PTR)csrss_next_std[0]);
+                p = zput(p, " out=0x"); p = zhex(p, (DWORD)(ULONG_PTR)csrss_next_std[1]);
+                p = zput(p, " err=0x"); p = zhex(p, (DWORD)(ULONG_PTR)csrss_next_std[2]);
+                p = zput(p, any ? " -> handed to the child (redirect)\r\n" : " -> not a redirect, child finds its own\r\n"); }
             p = zput(p, "STAGE2: task done -> a command was queued to this VDM in the window: relaunching [");
             p = zput(p, cl); p = zput(p, "] in [");  p = zput(p, csrss_next_cur); p = zput(p, "] (single-instance mutex released)");
             if (CreateProcessA(NULL, cl, NULL, NULL, TRUE, 0, NULL,
