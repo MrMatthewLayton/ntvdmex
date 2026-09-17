@@ -16002,10 +16002,21 @@ quiet_entry:
      measured, not assumed: its RMCS pointers log as es=0x1f edi=0x00004b54, masked
      and full identical. Only a 32-bit caller changes, and for a 32-bit caller the
      old behaviour was never right. */
+/* The same rule for ANY offset register a client hands us: (E)SI, (E)DI, (E)DX are
+   full-width from 32-bit code, 16 bits from 16-bit code. Duke3D (s74c) is the
+   guest that made this a rule rather than an RMCS special case: it calls 0500
+   from flat code with the 30h-byte block on its 32-bit stack (ES:EDI =
+   0x2f7:0x045d53xx), and the masked address put our answer at linear 0x53xx --
+   the guest read an uninitialised block, concluded "You don't have enough memory
+   to run Duke Nukem 3D", and exited 0. */
+static DWORD dpmi_caller_off(volatile BYTE *tib, DWORD v)
+{
+    return dpmi_sel_is32((WORD)(VDM_REG(tib, VTIB_CS) & 0xFFFF)) ? v : (v & 0xFFFF);
+}
+
 static DWORD dpmi_rmcs_ptr(volatile BYTE *tib, DWORD esb)
 {
-    DWORD edi = VDM_REG(tib, VTIB_EDI);
-    return esb + (dpmi_sel_is32((WORD)(VDM_REG(tib, VTIB_CS) & 0xFFFF)) ? edi : (edi & 0xFFFF));
+    return esb + dpmi_caller_off(tib, VDM_REG(tib, VTIB_EDI));
 }
 
 static void dpmi_rmcs_probe(volatile BYTE *tib, DWORD esb, unsigned slot, DWORD intno)
@@ -19554,11 +19565,21 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                                pool is what we say it is. Report it consistently in both units
                                rather than making the client guess. Reserved fields stay -1. */
                             DWORD esb = dpmi_sel_base((WORD)VDM_REG(tib, VTIB_ES));
-                            volatile DWORD *info = (volatile DWORD *)(ULONG_PTR)
-                                (esb + (VDM_REG(tib, VTIB_EDI) & 0xFFFF));
+                            /* ES:(E)DI by the caller's D/B bit -- see dpmi_caller_off. Duke3D
+                               passes a 32-bit stack offset here and the old 16-bit mask sent
+                               the block to low memory; it then read its own uninitialised
+                               buffer and refused to start. */
+                            DWORD ia = esb + dpmi_caller_off(tib, VDM_REG(tib, VTIB_EDI));
+                            volatile DWORD *info = (volatile DWORD *)(ULONG_PTR)ia;
                             const DWORD pool_bytes = 0x04000000u;          /* 64 MB            */
                             const DWORD pool_pages = pool_bytes >> 12;     /* 0x4000 pages     */
-                            int i; for (i = 0; i < 12; ++i) info[i] = 0xFFFFFFFFu;
+                            int i;
+                            if (!mem_readable((ULONG_PTR)ia, 0x30)) {
+                                VDM_REG(tib, VTIB_EFLAGS) |= 1u; VDM_SET16(tib, VTIB_EAX, 0x8021);
+                                p = zput(p, " -> meminfo REFUSED: ES:EDI 0x"); p = zhex(p, ia);
+                                p = zput(p, " unreadable"); break;
+                            }
+                            for (i = 0; i < 12; ++i) info[i] = 0xFFFFFFFFu;
                             info[0] = pool_bytes;                  /* largest free block, bytes */
                             info[1] = pool_pages;                  /* max unlocked page alloc   */
                             info[2] = pool_pages;                  /* max locked page alloc     */
@@ -19925,8 +19946,10 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                                 p = zput(p, " -> cb ENOMEM"); break;
                             }
                             g_cb[s].used = 1;
-                            g_cb[s].pm_sel = (WORD)VDM_REG(tib, VTIB_DS); g_cb[s].pm_off = VDM_REG(tib, VTIB_ESI) & 0xFFFF;
-                            g_cb[s].rm_es  = (WORD)VDM_REG(tib, VTIB_ES); g_cb[s].rm_di  = VDM_REG(tib, VTIB_EDI) & 0xFFFF;
+                            /* DS:(E)SI handler and ES:(E)DI RMCS follow the caller's D/B bit (dpmi_caller_off):
+                               a flat 32-bit client's handler offset is its linear address. */
+                            g_cb[s].pm_sel = (WORD)VDM_REG(tib, VTIB_DS); g_cb[s].pm_off = dpmi_caller_off(tib, VDM_REG(tib, VTIB_ESI));
+                            g_cb[s].rm_es  = (WORD)VDM_REG(tib, VTIB_ES); g_cb[s].rm_di  = dpmi_caller_off(tib, VDM_REG(tib, VTIB_EDI));
                             VDM_SET16(tib, VTIB_ECX, DOS_HDLR_SEG);
                             VDM_SET16(tib, VTIB_EDX, DPMI_CB_BASE_OFF + s*4);
                             p = zput(p, " -> cb slot "); p = zhex(p, s); p = zput(p, " = 0x");
