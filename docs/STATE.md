@@ -4,7 +4,8 @@
 > this file top to bottom and you will know where it is, what works, what does not, and
 > what to do next.
 
-- **Last updated:** 2026-09-17 16:00 (session 74b — **HEXEN'S HI-RES LOADER RENDERS** (`2df5651`, rig `a988c6e6`); VESACUBE demo deployed (`demo\msdos\vesacube`, solid/culled/shaded, vsync, page flip); see the s74b block)
+- **Last updated:** 2026-09-17 17:10 (session 74b — ★ **RELEASE CUT: `dist\ntvdmex-20260917-f3c349d.zip`, host `a988c6e6`, USER-CONFIRMED BY HAND across all major apps and games incl. Hexen's loader; pkgtest 8/8 + pkgw16 from the package's own bin\. This is the new stable anchor; the old `eb466c56` zip is in `debug\prev\`.**)
+- Previously: 2026-09-17 16:00 (session 74b — **HEXEN'S HI-RES LOADER RENDERS** (`2df5651`, rig `a988c6e6`); VESACUBE demo deployed (`demo\msdos\vesacube`, solid/culled/shaded, vsync, page flip); see the s74b block)
 - Previously: 2026-09-17 14:50 (session 74b — PCem boots UNATTENDED (~60 s; the stall was AMI's 'D: drive failure — Press F1', not sync); p_vesa/p_vesapm/p_plan12/p_lpt clean vs real BIOSes; rig `474f7b2e`; see the s74b block)
 - Previously: 2026-09-17 14:30 (session 74b — **PCem IS THE VESA ORACLE**: `p_vesa` 128/128 vs a real Tseng ET4000/W32p ROM + Bochs, rig `b3a3cf33`; see the s74b block)
 - Previously: 2026-09-17 10:35 (session 74b — VESA/VBE runtime + text + 1280x1024 + PM + DDC done, rig `7d883a85`; PCem BOOTS (needs eyes); see the s74b block)
@@ -402,6 +403,15 @@ and matches the 6.22 oracle row for row (session 53)** — but `MEM /C` still re
      marks and skull progress bar** (`runs/s74b_lazy32/shots_hexen/`). Guards on `a988c6e6`:
      Lemmings level screen (0Dh/10h via `lemhp.bat`), Doom, Skyroads, QB CAVE, Heretic (no 12h
      loader in this version). Rig `bin\` = `a988c6e6`; **zip still `eb466c56`.**
+
+   **7. 17:10 — RELEASE.** User: *"tested all of the major apps and games with no significant
+   regressions, and the hexen hires loader works"* on `a988c6e6`. `./scripts/package.sh` →
+   `dist\ntvdmex-20260917-f3c349d.zip` (host md5 `a988c6e6`, commit `f3c349d`). On the rig from
+   the package's OWN `bin\`: `pkgtest.bat` install → selftest **8/8** → uninstall → rig host
+   restored; `pkgw16.bat` Notepad launches through the package host, rig host restored. Old
+   `ntvdmex-20260916-08824e0.zip` (`eb466c56`) moved to `debug\prev\`; `debug\prev\
+   ntvdmhost_prev.exe` = `a988c6e6` now; git tag `release-20260917`. **The zip is again
+   IMMUTABLE until the next confirmed build.**
 
    **Score now:** see the s74b VBE table in the session log — **~82/100**, up from 60.
    Open on VESA: `4F0A` PM interface (clean decline; nobody on the shelf calls it),
