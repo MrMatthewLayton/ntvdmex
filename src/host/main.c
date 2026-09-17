@@ -14059,6 +14059,17 @@ static void dpmi_install(int idx)
        so they stay usable no matter how the client retypes them. g_ldt[idx].access keeps the
        client's requested value, so LAR/LSL introspection (dpmi_sel_desc) still reports it. */
     if (idx == 2 || idx == 3) acc = 0xF2;                      /* present, DPL3, data R/W */
+    /* ── DPL IS THE HOST'S, NOT THE CLIENT'S. (s74c, ZAR's VESA modes) ──────────
+         ZAR builds its LFB selector with 0009 CX=8092: DPL 0. On real DOS that is
+         legal because DOS/4GW runs the client at ring 0; under a ring-3 DPMI host
+         it is a descriptor nobody could load, and NT's PspIsDescriptorValid
+         REJECTS any LDT entry whose DPL is not 3 (0xC000011A), so the selector was
+         never installed and the first `rep stosd` into the frame buffer #GP'd.
+         The DPMI spec has 0009 take the client's CPL for the DPL; here that is
+         always 3. g_ldt[idx].access keeps the requested byte for LAR. Only a
+         PRESENT descriptor is touched: a freed selector is installed as the all-zero
+         null descriptor, which is the one non-DPL-3 entry NT accepts. */
+    if (acc & 0x80) acc = (BYTE)(acc | 0x60);
     dpmi_build_desc(g_ldt[idx].base, lim & 0xFFFFF, acc, fl, &lo, &hi);
     {
         /* #3 (DOS/4GW flat model): XP's LDT validator caps base+limit <= MmHighestUserAddress
@@ -19377,7 +19388,15 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                         case 0x0008: {                             /* set limit of sel BX = CX:DX */
                             int idx = (VDM_REG(tib, VTIB_EBX) & 0xFFFF) >> 3;
                             DWORD l = ((VDM_REG(tib, VTIB_ECX) & 0xFFFF) << 16) | (VDM_REG(tib, VTIB_EDX) & 0xFFFF);
-                            if (idx >= 1 && idx < DPMI_LDT_MAX) { g_ldt[idx].limit = l; dpmi_install(idx); }
+                            /* 0008's limit is in BYTES and the host chooses G (dpmi_install
+                               scales anything past 1 MB). A G bit the client left in the
+                               flags via 0009 CH must not survive into a byte limit: ZAR
+                               sets 8092 (G=1) first and 0x4afff bytes second, and G=1 over
+                               a raw 0x4afff field is a 1.2 GB segment NT refuses. */
+                            if (idx >= 1 && idx < DPMI_LDT_MAX) {
+                                g_ldt[idx].limit = l; g_ldt[idx].flags &= (BYTE)~0x8;
+                                dpmi_install(idx);
+                            }
                             p = zput(p, " sel 0x"); p = zhex(p, VDM_REG(tib, VTIB_EBX) & 0xFFFF);
                             p = zput(p, " -> setlimit 0x"); p = zhex(p, l);
                             break; }
