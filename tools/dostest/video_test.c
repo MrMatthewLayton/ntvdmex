@@ -476,6 +476,7 @@ int main(void)
     /* T13: mode 12h planar -- set mode, plot a pixel, check planes + render --- */
     memset(&r,0,sizeof r); s_ah(&r,0x00); s_al(&r,0x12); vdd_bus_deliver_int(&bus,0x10,&r);
     CHECK(vid.mode==0x12, "int10/00: mode set to 12h");
+    CHECK(vid.chain4==0 && vid.map_mask==0x0F, "int10/00 mode 12h: the BIOS's SR4 (chain-4 OFF) and SR2 (0Fh) are modelled -- Hexen's loader, s74b");
     CHECK(r_al(&r)==0x20, "int10/00 mode 12h: AL=20h video-mode flag (AMI ROM and SeaBIOS agree; was the mode number)");
     memset(&r,0,sizeof r); s_ah(&r,0x00); s_al(&r,0x06); vdd_bus_deliver_int(&bus,0x10,&r);
     CHECK(r_al(&r)==0x3F, "int10/00 mode 6: AL=3Fh");

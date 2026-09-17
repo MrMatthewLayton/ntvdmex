@@ -5213,7 +5213,8 @@ static void planes_dump_beside(const char *bmp_path)
     hdr[0] = g_vid.crtc_start_live; hdr[1] = g_vid.crtc_offset;
     hdr[2] = g_vid.gw;              hdr[3] = g_vid.gh;
     WriteFile(f, hdr, sizeof hdr, &wr, NULL);
-    for (pl = 0; pl < 4; ++pl) WriteFile(f, g_vid.plane[pl], VID_PLANE_SIZE, &wr, NULL);
+    for (pl = 0; pl < 4; ++pl)                        /* the live backing: host sections when remapped (s74b) */
+        WriteFile(f, g_vid.ymap_plane ? g_vid.ymap_plane(g_vid.ymap_ctx, pl) : g_vid.plane[pl], VID_PLANE_SIZE, &wr, NULL);
     HOST_UNLOCK();
     CloseHandle(f);
 }
@@ -26898,7 +26899,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
       p = zput(p, "\r\n");
       { unsigned pl, nz[4]; 
         for (pl = 0; pl < 4; ++pl) { unsigned k2, c2 = 0;
-            for (k2 = 0; k2 < VID_PLANE_SIZE; ++k2) if (g_vid.plane[pl][k2]) ++c2;
+            { const uint8_t *pb = g_vid.ymap_plane ? g_vid.ymap_plane(g_vid.ymap_ctx, pl) : g_vid.plane[pl];
+              for (k2 = 0; k2 < VID_PLANE_SIZE; ++k2) if (pb[k2]) ++c2; }
             nz[pl] = c2; }
         /* OPL PROFILE (GH #21): what the guest's music driver actually asks for.
            A gap the game never uses cannot be why the music sounds flat. */

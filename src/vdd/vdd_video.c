@@ -354,6 +354,21 @@ static const struct { uint8_t mode, kind, cols, rows; uint16_t w, h; } vid_modes
 static uint8_t *cell(video_state *st, int r, int c)   /* -> char byte of (r,c)    */
 { return st->vmem + VID_TEXT_OFF + (r * st->cols + c) * 2; }
 
+/* ── ONE BACKING STORE FOR A BIT-PLANE, WHOEVER WRITES IT. (s74b) ─────────────────
+     The mode-12h engine wrote its four planes into st->plane[] and render_planar read
+     them back -- fine for a real-mode guest, whose pixel loop runs in the host
+     interpreter and reaches the engine. A PROTECTED-MODE guest runs natively: its
+     `memcpy` to A0000 lands wherever the host has mapped that window, which under the
+     mode-Y remap is the SELECTED PLANE'S OWN SECTION (ymap_plane) -- the map-mask port
+     handler moves the window on every mask write whenever chain-4 is off, mode 12h
+     included. So Hexen's and Heretic's 640x480 loaders were written, in full, into
+     memory nothing rendered: `planar hi_water=0`, black screen, for two guests.
+     When the host supplies plane sections, the engine, the BIOS pixel services and
+     the renderer all use them; without a host (the off-VM harness) st->plane[] as
+     before. The sections are MODEY_WIN = VID_PLANE_SIZE bytes, so nothing changes size. */
+static uint8_t *PL(video_state *st, int p)
+{ return st->ymap_plane ? st->ymap_plane(st->ymap_ctx, p & 3) : st->plane[p & 3]; }
+
 static void clear_text(video_state *st, uint8_t attr)
 {
     int n = st->cols * st->rows, i;
@@ -1142,7 +1157,7 @@ static void glyph_12h(video_state *st, int col, int row, uint8_t ch, uint8_t fg,
         for (p = 0; p < 4; ++p) {
             uint8_t fgb = ((fg >> p) & 1) ? 0xFF : 0x00;
             uint8_t bgb = ((bg >> p) & 1) ? 0xFF : 0x00;
-            st->plane[p][off] = (uint8_t)((bits & fgb) | ((uint8_t)~bits & bgb));
+            PL(st,p)[off] = (uint8_t)((bits & fgb) | ((uint8_t)~bits & bgb));
         }
     }
 }
@@ -1209,12 +1224,32 @@ static void int10(void *self, ntvdd_regs *r)
                     st->gw = VID_FB_W;  st->gh = VID_FB_H;
                     if (!noclear) clear_text(st, 0x07);
                 } else if (st->mkind == VID_KIND_LINEAR8) {
-                    int i; if (!noclear) for (i = 0; i < VID_G13_W * VID_G13_H; ++i) st->vmem[i] = 0;
+                    int i;
+                    /* the BIOS sets SR4 = 0Eh for mode 13h: chain-4 ON (see the planar arm) */
+                    st->map_mask = 0x0F; st->y_mask = 0x0F;
+                    if (!st->chain4) { st->chain4 = 1; st->chain4_sel++;
+                                       if (st->ymap_select) st->ymap_select(st->ymap_ctx, -1); }
+                    if (!noclear) for (i = 0; i < VID_G13_W * VID_G13_H; ++i) st->vmem[i] = 0;
                 } else if (st->mkind == VID_KIND_PLANAR) {
                     int pl; uint32_t i;
+                    /* ── ★★★ THE BIOS PROGRAMS THE SEQUENCER TOO. (s74b) A mode set writes
+                         SR4 = 06h for the planar modes (chain-4 OFF, odd/even off) and SR2 =
+                         0Fh; we modelled neither, so chain4 kept whatever the guest last
+                         wrote -- 1 from reset -- and the map-mask handler took its
+                         `mask_skip_chain4` branch for EVERY mask write in mode 12h. The
+                         host window never left the linear section, and a guest that fills
+                         the four planes with mask 1/2/4/8 (Hexen's and Heretic's 640x480
+                         loaders, from protected mode where no interpreter routes the store)
+                         wrote all four on top of each other into memory nothing renders.
+                         `planar hi_water=0`, black screen. Doom escaped because it programs
+                         SR4 itself for mode Y. Real-mode guests escaped because their pixel
+                         loops run in the interpreter, which reaches the engine regardless. */
+                    st->map_mask = 0x0F; st->y_mask = 0x0F;
+                    if (st->chain4) { st->chain4 = 0; st->chain4_sel++; }
+                    if (st->ymap_select) st->ymap_select(st->ymap_ctx, (int)st->map_mask);
                     if (!noclear)
                         for (pl = 0; pl < 4; ++pl)
-                            for (i = 0; i < VID_PLANE_SIZE; ++i) st->plane[pl][i] = 0;
+                            for (i = 0; i < VID_PLANE_SIZE; ++i) PL(st,pl)[i] = 0;
                 } else if (st->mkind == VID_KIND_CGA) {
                     int i;
                     st->cga_bpp = (uint8_t)(st->mode == 0x06 ? 1 : 2);
@@ -1280,8 +1315,8 @@ static void int10(void *self, ntvdd_regs *r)
                 uint32_t byte = y * (VID_G12_W / 8) + (x >> 3);
                 uint8_t  bit = (uint8_t)(0x80 >> (x & 7)), p;
                 for (p = 0; p < 4; ++p) {
-                    if (al & (1 << p)) st->plane[p][byte] |= bit;
-                    else               st->plane[p][byte] &= (uint8_t)~bit;
+                    if (al & (1 << p)) PL(st,p)[byte] |= bit;
+                    else               PL(st,p)[byte] &= (uint8_t)~bit;
                 }
             }
         }
@@ -1409,10 +1444,10 @@ static void int10(void *self, ntvdd_regs *r)
             uint32_t byi = y * (st->gw / 8) + (x >> 3);
             uint8_t  msk = (uint8_t)(0x80 >> (x & 7));
             if (byi < VID_PLANE_SIZE)
-                v = (uint8_t)(((st->plane[0][byi] & msk) ? 1 : 0)
-                            | ((st->plane[1][byi] & msk) ? 2 : 0)
-                            | ((st->plane[2][byi] & msk) ? 4 : 0)
-                            | ((st->plane[3][byi] & msk) ? 8 : 0));
+                v = (uint8_t)(((PL(st,0)[byi] & msk) ? 1 : 0)
+                            | ((PL(st,1)[byi] & msk) ? 2 : 0)
+                            | ((PL(st,2)[byi] & msk) ? 4 : 0)
+                            | ((PL(st,3)[byi] & msk) ? 8 : 0));
         }
         s_ax(r, (uint16_t)((r_ax(r) & 0xFF00) | v));
         break; }
@@ -1673,14 +1708,14 @@ static void vga_planar_write_1(video_state *st, uint32_t off, uint8_t cpu)
     st->dirty = 1;
     switch (st->write_mode & 3) {
     case 1:                                       /* copy latches -> planes        */
-        for (p = 0; p < 4; ++p) if (st->map_mask & (1<<p)) st->plane[p][off] = st->latch[p];
+        for (p = 0; p < 4; ++p) if (st->map_mask & (1<<p)) PL(st,p)[off] = st->latch[p];
         return;
     case 2:                                       /* CPU bit p -> plane p           */
         for (p = 0; p < 4; ++p) {
             uint8_t val = (uint8_t)((cpu & (1<<p)) ? 0xFF : 0x00);
             uint8_t r = vga_alu(alu, val, st->latch[p]);
             r = (uint8_t)((r & bm) | (st->latch[p] & (uint8_t)~bm));
-            if (st->map_mask & (1<<p)) st->plane[p][off] = r;
+            if (st->map_mask & (1<<p)) PL(st,p)[off] = r;
         }
         return;
     case 3: {                                     /* set/reset masked by rot(cpu)&bm */
@@ -1688,7 +1723,7 @@ static void vga_planar_write_1(video_state *st, uint32_t off, uint8_t cpu)
         for (p = 0; p < 4; ++p) {
             uint8_t val = (uint8_t)((st->set_reset & (1<<p)) ? 0xFF : 0x00);
             uint8_t r = (uint8_t)((val & mask) | (st->latch[p] & (uint8_t)~mask));
-            if (st->map_mask & (1<<p)) st->plane[p][off] = r;
+            if (st->map_mask & (1<<p)) PL(st,p)[off] = r;
         }
         return; }
     default: {                                    /* write mode 0                   */
@@ -1703,7 +1738,7 @@ static void vga_planar_write_1(video_state *st, uint32_t off, uint8_t cpu)
                 if (st->enable_sr & 8) { st->w_p3_sr++; if (r) st->w_p3_nz++; }
                 else                     st->w_p3_data++;
             }
-            if (st->map_mask & (1<<p)) st->plane[p][off] = r;
+            if (st->map_mask & (1<<p)) PL(st,p)[off] = r;
         }
         return; }
     }
@@ -1758,7 +1793,7 @@ void vga_planar_write(video_state *st, uint32_t off, uint8_t cpu)
     for (p = 0; p < 4; ++p) r.latch[p] = st->latch[p];
     vga_planar_write_1(st, off, cpu);
     for (p = 0; p < 4; ++p)
-        r.after[p] = (off < VID_PLANE_SIZE) ? st->plane[p][off] : 0;
+        r.after[p] = (off < VID_PLANE_SIZE) ? PL(st,p)[off] : 0;
     if (st->watch_n < VID_WATCH_MAX) st->watch[st->watch_n] = r;
     st->watch_last = r;
     st->watch_n++;
@@ -1785,10 +1820,10 @@ uint8_t vga_planar_read(video_state *st, uint32_t off)
     }
     csite_note(st, off, 0);
     if (off >= VID_PLANE_SIZE) return 0xFF;
-    for (p = 0; p < 4; ++p) st->latch[p] = st->plane[p][off];   /* load latches    */
+    for (p = 0; p < 4; ++p) st->latch[p] = PL(st,p)[off];   /* load latches    */
     st->rmode_hist[st->read_mode & 1]++;
     if (!(st->read_mode & 1))
-        return st->plane[st->read_map & 3][off];                /* read mode 0     */
+        return PL(st,st->read_map & 3)[off];                /* read mode 0     */
     /* ── READ MODE 1: COLOUR COMPARE. One bit per pixel, set where that pixel's
          colour matches GR2 in every plane GR7 selects. GR7 is "Color DON'T Care" and
          reads backwards: a SET bit means the plane DOES take part. With GR7 = 0 no
@@ -2807,8 +2842,8 @@ static void render_planar(video_state *st)
         uint8_t *out = &st->fb[y * gw];
         for (xb = 0; xb < (int)bytes; ++xb) {
             uint32_t o = (row + (uint32_t)xb) % (uint32_t)VID_PLANE_SIZE;
-            uint8_t p0 = st->plane[0][o], p1 = st->plane[1][o];
-            uint8_t p2 = st->plane[2][o], p3 = st->plane[3][o];
+            uint8_t p0 = PL(st,0)[o], p1 = PL(st,1)[o];
+            uint8_t p2 = PL(st,2)[o], p3 = PL(st,3)[o];
             for (b = 0; b < 8; ++b) {
                 uint8_t m = (uint8_t)(0x80 >> b);
                 out[xb*8 + b] = (uint8_t)(((p0&m)?1:0) | ((p1&m)?2:0) | ((p2&m)?4:0) | ((p3&m)?8:0));
