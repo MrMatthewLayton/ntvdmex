@@ -30,12 +30,16 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 APP = os.path.join(ROOT, "pcem", "PCem.app", "Contents", "MacOS")
 PCEM = os.path.join(APP, "PCem")
 CFG = os.path.join(APP, "configs", os.environ.get("PCEM_CFG", "NTVDMEX-DOS622.cfg"))
-# ⚠⚠ BOTH CONFIGS MUST HAVE `enable_sync = 0` (s74b, 13:45). With sync on, PCem
-#   waits for the display's vertical blank, and a window that is not being drawn --
-#   on another Space, behind a fullscreen app -- never gets one: the CPU spins at
-#   ~25% and the guest makes no progress. Five "boot never finishes" runs were
-#   exactly that: every run that worked was one somebody was looking at. pcem/ is
-#   gitignored, so this note is the record; check the line before trusting a run.
+# ⚠⚠ THE CMOS MUST DESCRIBE THE MACHINE, OR THE BIOS WAITS FOR F1. (s74b, 14:20)
+#   nvr/default/ami486.nvr describes two type-47 hard disks; our config has one image,
+#   so AMI halted every boot on "D: drive failure -- Press F1", and the runs that
+#   "worked" were the ones where the USER pressed F1 without saying so. Diagnosed
+#   from here as everything else (display sync, budgets, flush timing) until they
+#   mentioned it. CMOS 0x12 low nibble = 0, 0x1A = 0, 0x24..0x2C = 0, checksum
+#   redone (big-endian sum of 0x10..0x2D at 0x2E). Unattended boot+run is now ~60 s.
+#   enable_sync = 0 in both configs is kept (harmless) but was NOT the cause.
+#   pcem/ and ~/PCem/nvr are gitignored; a clean copy of the CMOS is in
+#   runs/s74b_lazy32/NTVDMEX-DOS622.ami486.nvr.noD.
 # PCEM_CFG=NTVDMEX-VESA.cfg selects the same machine with a Diamond Stealth 32
 # (Tseng ET4000/W32p, VESA BIOS in ROM) instead of the plain IBM VGA -- the VESA
 # oracle. Both configs share the CMOS layout (nvr copied), so boot is identical.
