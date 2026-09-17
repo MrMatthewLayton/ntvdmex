@@ -4,7 +4,7 @@
 > this file top to bottom and you will know where it is, what works, what does not, and
 > what to do next.
 
-- **Last updated:** 2026-09-16 (session 74 — Heretic runs, USER-CONFIRMED BY HAND; see the s74 block)
+- **Last updated:** 2026-09-17 08:50 (session 74b — heaven7 runs BY HAND (no flag), VESA runtime half done; see the s74b block)
 - **Score: 86.9%** (`./tools/score/score.py` — run it, do not quote this line).
   Session 53 moved it 72.4 → 79.6; session 54 → 80.2; session 55 → 83.1;
   session 56 → 85.4; s57, **s58, s59 and s60 moved it not at all** — s57 built the modal
@@ -236,6 +236,67 @@ and matches the 6.22 oracle row for row (session 53)** — but `MEM /C` still re
    for eight sessions. The shelf is measured and unlaunched; a third guest is
    the next step, and it is also the honest correction for *a fix measured on
    one guest is a fix for none*.
+
+   ### ★★★★★ s74b (17th, 07:30–08:50) — **HEAVEN7 RUNS WITH NO FLAG. THE PATCHER KNOT IS UNTIED. VESA'S RUNTIME HALF (4F04–4F09) IS DONE, SPEC-TESTED.**
+
+   > **Rig `bin\ntvdmhost.exe` = `e92ce8ab` = HEAD `9938226`. Stable zip on the share is
+   > STILL `eb466c56` — unchanged, per the user's rule. Rollbacks in `debug\prev\`:
+   > `f3468d65` (this morning's start), `0d85af53`, `6ba7524a`, `772d8911`.**
+   > `cfg\` is clean (no diagnostic flags). **Nothing needs the user until they can test
+   > by hand: heaven7, then Doom/Heretic/Hexen/ZAR, whose INT path changed.**
+
+   **1. heaven7 — the knot (`b45137b`).** All seven "INT sites" the eager scan wrote
+   `C4 C4` over are in `h7.EXE` at object+0x2d8: the LE code object is a PACKED payload
+   (s74's "runtime-generated" was wrong). Reproduced offline with the real `x86len.h`:
+   the six false sites score **44–48 votes of 48** — x86 self-synchronisation converges
+   on random bytes as well as on code; the vote measures convergence, not code-ness.
+   Entropy separates only at 1 KB windows by 0.3 bits over 281 real sites; rejected.
+   **Fix: `d32` regions are scanned and logged (`32-bit, NOT WRITTEN: would patch N`)
+   but never written**; the `#GP(IDT)` arm services on the CPU's evidence and patches on
+   the way past. 16-bit paths unchanged.
+   **That exposed a second defect:** the lazy arm restored `VTIB_ESP = fr[6]` — the
+   frame's **16-bit** SP — while its own comment claimed flat-SS clients were "declined
+   above". Nothing declined them. heaven7 survived by luck; **Doom (SS flat, ESP
+   `0x0443xxxx`) would have died on its first lazy INT.** The kernel saves full-width
+   SS:ESP/EIP in the TIB (`fcs:feip` = SS:ESP, `fss3` = EIP — calibrated on three known
+   faults); ESP now comes from the slot when SS is 32-bit (and only if its low half
+   matches the frame), EIP for a flat CS from `sav3`, byte-checked, with the 0501-block
+   reconstruction kept as a logged cross-check (`AGREE` on every one of 14 heaven7 +
+   17 Doom sites).
+   **Graded headless, `runs/s74b_lazy32/`:** heaven7 ×3 renders (22,524 colours) ·
+   Doom ×3 `STAGE2: complete`, 17 lazy INTs, 0 declined · Heretic/Hexen wind-down
+   identical to `eb466c56` · **ZAR A/B vs `f3468d65`: same frame, same wind-down
+   address** (its forced-exit path prints no STAGE2 summary — grade it by capture) ·
+   Skyroads `n8=0 max_ms=6–7`, guards intact · Notepad opens and closes ×2 · offvm
+   1396/0.
+
+   **2. VESA runtime half (`5be7cb6`, `9938226`) — tests from the PDF first, 31 new
+   checks, 25 of which fail on the previous code.**
+   - **4F06/4F07 were accepted and ignored** — the presenter never read the logical
+     pitch or the display start, so a page-flipping guest saw page 1 forever with
+     `004F` in hand. Now `vesa_stride` + `vesa_origin()` drive the 8bpp pointer, the
+     direct-colour conversion and the written-extent probe. Failure codes per spec.
+   - **4F05 read BL as set/get** (spec: BH set/get, BL window). "Get window A" was a
+     SET to whatever DX held. Window B fails; LFB mode fails AH=03.
+   - **4F08** next-lower width (10→8, 7→6), AH=03 in direct colour, reset to 6 on any
+     mode set. **4F09** never called `pal_refresh()` (presenter kept the old palette);
+     BL=02/03 → AH=02; DX+CX>256 → AH=02.
+   - **`pal_refresh()` took the EGA attribute path in VESA 8bpp** (a 4F02 never sets
+     `mkind`), so indices 6, 8–15 showed DAC 0x14, 0x38–0x3F. Identity now.
+   - **4F04 did not exist; AH=1Ch reported 3 blocks and wrote 768 bytes** — the Heretic
+     MCB overrun in another function. One 896-byte state block serves both; restore
+     re-enters the mode with the don't-clear bit and refuses a foreign buffer.
+   - **Corpus inventory (`runs/s74b_vesa_corpus/inventory.txt`, 20 targets):
+     heaven7 is the ONLY guest on the shelf that calls VESA** — 4F00/01/02/07. Its
+     15,900 `4F07` calls are all `(0,0)`, none refused: display start as a flip/vsync
+     idiom on a single buffer. **So its 320×176 placement is the demo's own** (most
+     likely its CPU-speed render-size pick); no VESA question remains there.
+     `graphics\VS87.EXE` produced no summary (died/hung) — not looked at.
+
+   **Score now:** see the s74b VBE table in the session log — **~82/100**, up from 60.
+   Open on VESA: `4F0A` PM interface (clean decline; nobody on the shelf calls it),
+   `4F15` DDC (decline), 1024×768 (presenter cap), and **still no oracle** (PCem needs
+   its romsets found).
 
    ### ✅ s74 RESOLVED — **DOOM'S "4px COLUMNS" WAS `detaillevel 1` IN ITS OWN `default.cfg`. NOT OUR CODE.**
 
