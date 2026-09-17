@@ -1024,10 +1024,12 @@ static void vesa(video_state *st, ntvdd_regs *r)
         s_ax(r, 0x004F);
         break; }
     case 0x0A:                                    /* protected-mode interface      */
-        /* There is no PM bank-switching stub to hand out. Report NOT SUPPORTED
-           (AH=01) rather than returning 4F00 with a null pointer, which a client
-           would call straight into. */
-        s_ax(r, 0x014F);
+        /* There is no PM bank-switching stub to hand out. ⚠ (s74b) The answer for a
+           function we do not provide is AL != 4Fh -- "no such function" -- which is
+           what BOTH the Tseng ET4000/W32p ROM and Bochs return for 4F0A (AX=0100,
+           p_vesapm). 014F says "supported, but this call failed", and a client that
+           tests AL first reads that as a PM interface that is present and broken. */
+        s_ax(r, 0x0100);
         VID_UNIMPL_SET(st->unimpl_fn, 0x4F);
         break;
     case 0x10: {                                  /* VBE/PM: display power (DPMS)  */
@@ -1121,7 +1123,7 @@ static void vesa(video_state *st, ntvdd_regs *r)
         } else { s_ax(r, 0x014F); break; }
         s_ax(r, 0x004F);
         break; }
-    default: s_ax(r, 0x014F); break;              /* unsupported sub-function      */
+    default: s_ax(r, 0x0100); break;              /* no such sub-function: AL != 4Fh (measured on two BIOSes) */
     }
 }
 
@@ -1222,6 +1224,13 @@ static void int10(void *self, ntvdd_regs *r)
                     if (!noclear) clear_text(st, 0x07);
                 }
             }
+            /* ── AH=00h RETURNS A "VIDEO MODE FLAG" IN AL, NOT THE MODE. (s74b) Measured
+                 on the AMI 486 ROM under PCem and on SeaBIOS alike (p_plan12: AX=0020
+                 after mode 12h); RBIL documents it for Phoenix/AMI: 20h for modes > 7,
+                 30h for modes 0-5 and 7, 3Fh for mode 6. We returned AL = the mode,
+                 which is what a caller that saved AX would see as "mode 12h set" --
+                 harmless for most, wrong for anything that keys on the flag. */
+            s_al(r, (uint8_t)(st->mode > 7 ? 0x20 : st->mode == 6 ? 0x3F : 0x30));
             if (st->mode_qn < 8) {
                 st->mode_q[st->mode_qn].mode = st->mode;
                 st->mode_q[st->mode_qn].kind = st->mkind;

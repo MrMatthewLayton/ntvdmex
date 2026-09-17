@@ -1331,5 +1331,18 @@
   ],
   "recorded": "2026-09-17",
   "why": "A mode the Tseng ET4000/W32p ROM does not offer, so only Bochs's synthetic VBE votes -- and the two fields it would grade (YCharSize in 200-line modes, DirectColorModeInfo D1 for 5:5:5) are exactly the ones on which the real ROM and Bochs split on every sibling mode (DISPUTED 010D/010E/0110/0113/0116). We follow the real ROM's policy; a single synthetic vote does not outrank it."
+ },
+ {
+  "probe": "vesapm",
+  "case": "vesapm.sig",
+  "field": "BUF",
+  "ignore_bytes": [
+   [
+    4,
+    2
+   ]
+  ],
+  "recorded": "2026-09-17",
+  "why": "'VESA' + the version word: 1.2 on the Tseng ROM, 3.0 on Bochs, 2.0 here. The version identifies the implementation; the signature is the contract."
  }
 ]

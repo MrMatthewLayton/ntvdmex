@@ -471,6 +471,14 @@ int main(void)
     /* T13: mode 12h planar -- set mode, plot a pixel, check planes + render --- */
     memset(&r,0,sizeof r); s_ah(&r,0x00); s_al(&r,0x12); vdd_bus_deliver_int(&bus,0x10,&r);
     CHECK(vid.mode==0x12, "int10/00: mode set to 12h");
+    CHECK(r_al(&r)==0x20, "int10/00 mode 12h: AL=20h video-mode flag (AMI ROM and SeaBIOS agree; was the mode number)");
+    memset(&r,0,sizeof r); s_ah(&r,0x00); s_al(&r,0x06); vdd_bus_deliver_int(&bus,0x10,&r);
+    CHECK(r_al(&r)==0x3F, "int10/00 mode 6: AL=3Fh");
+    memset(&r,0,sizeof r); s_ah(&r,0x00); s_al(&r,0x03); vdd_bus_deliver_int(&bus,0x10,&r);
+    CHECK(r_al(&r)==0x30, "int10/00 mode 3: AL=30h");
+    memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x0A); s_bx(&r,0); vdd_bus_deliver_int(&bus,0x10,&r);
+    CHECK(r_ax(&r)==0x0100, "vesa/4F0A: AX=0100 'no such function' (two real BIOSes), not 014F");
+    memset(&r,0,sizeof r); s_ah(&r,0x00); s_al(&r,0x12); vdd_bus_deliver_int(&bus,0x10,&r);
     /* plot (x=9,y=1) colour 0x0A (1010b -> planes 1 and 3) */
     memset(&r,0,sizeof r); s_ah(&r,0x0C); s_al(&r,0x0A); s_cx(&r,9); s_dx(&r,1);
     vdd_bus_deliver_int(&bus,0x10,&r);

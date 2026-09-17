@@ -16,6 +16,7 @@
 ;   to a REDIRECTED stdout, so nothing is drawn and mode 13h is harmless; the mode is
 ;   put back to 3 at the end so the shell that follows has a screen.
 ;
+; ORACLE-ALSO: pcem   (s74b: AMI 486 + genuine IBM VGA ROM -- the bda.crtc row waited six sessions for this)
 ; nasm -f bin p_video.asm -o p_video.com
 
         org     100h
