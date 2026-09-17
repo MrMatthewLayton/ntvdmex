@@ -4,7 +4,8 @@
 > this file top to bottom and you will know where it is, what works, what does not, and
 > what to do next.
 
-- **Last updated:** 2026-09-17 18:30 (session 74c — ★★★★★ **DUKE NUKEM 3D RUNS (first time ever) and ZAR's VESA MODES RENDER, both VESA1 banked and VESA2 LFB** — two DPMI defects (`4012e1a`, `d15a26a`); rig `bin\` = `61093e09` = HEAD; **stable zip UNCHANGED at `f3c349d`/`a988c6e6` — this build is by-hand OWED: Duke3D, ZAR VESA1+VESA2, then the DPMI regression set.** See the s74c block.)
+- **Last updated:** 2026-09-17 19:15 (session 74c — ★★★★★ **DUKE3D RUNS + ITS SETUP RUNS; ZAR's VESA MODES RENDER AND ITS MOUSE BUTTONS ARRIVE** — `4012e1a` `d15a26a` `dbcf44f` `70fc097`; rig `bin\` = `9448cf27` = HEAD. ⛔⛔ **A shared path ring CREATED `cfg\pmnoirq.flag` at 18:59 and silently killed every PM timer until 19:08 — fixed (per-thread), flag deleted; if a DPMI guest has no time, `dir cfg\` FIRST.** Stable zip UNCHANGED at `f3c349d`/`a988c6e6`; **by-hand OWED: Duke3D + SETUP, ZAR VESA1/VESA2 + clicks, then Doom/Heretic/Hexen/Skyroads/heaven7/Notepad.** See the s74c block.)
+- Previously: 2026-09-17 18:30 (session 74c — Duke3D runs, ZAR VESA renders; `4012e1a`, `d15a26a`, rig `61093e09`)
 - Previously: 2026-09-17 17:10 (session 74b — ★ **RELEASE CUT: `dist\ntvdmex-20260917-f3c349d.zip`, host `a988c6e6`, USER-CONFIRMED BY HAND across all major apps and games incl. Hexen's loader; pkgtest 8/8 + pkgw16 from the package's own bin\. This is the new stable anchor; the old `eb466c56` zip is in `debug\prev\`.**)
 - Previously: 2026-09-17 16:00 (session 74b — **HEXEN'S HI-RES LOADER RENDERS** (`2df5651`, rig `a988c6e6`); VESACUBE demo deployed (`demo\msdos\vesacube`, solid/culled/shaded, vsync, page flip); see the s74b block)
 - Previously: 2026-09-17 14:50 (session 74b — PCem boots UNATTENDED (~60 s; the stall was AMI's 'D: drive failure — Press F1', not sync); p_vesa/p_vesapm/p_plan12/p_lpt clean vs real BIOSes; rig `474f7b2e`; see the s74b block)
@@ -305,8 +306,46 @@ and matches the 6.22 oracle row for row (session 53)** — but `MEM /C` still re
      reflector — not for deadline day. Candidate narrow rule: chain when the handler's
      selector is a 32-bit code selector the extender did not create.
 
+   **5. Second pass (18:35–19:15, `dbcf44f`, `70fc097`) — the user's next two: "duke3d's
+   setup program crashes, and mouse clicks still don't work in zar".**
+   - **ZAR's buttons (`dbcf44f`).** ZAR installs an INT 33h **0Ch event handler from flat
+     code** (mask `7e` = buttons only, handler `0x347:0x045d2240`) and polls motion with
+     0Bh — so aiming worked and no click could: `mouse_cb_try()` served V86 guests only
+     and **dropped a PM client's queue** ("not this path (yet)", counted `cb_pm`). New
+     `dpmi_inject_pm_mousecb()` = `dpmi_inject_pm_irq()`'s mechanics with a **RETF
+     frame** (CS:EIP, what the handler pops) and AX/BX/CX/DX loaded; 0Ch/14h store a
+     full-width EDX from a 32-bit caller. Headless with `keys.txt` `m0`/`m1` (needs
+     `qimode.txt`=`20`): **10 injected, 10 returned**, both buttons, press and release.
+     The click's *effect* is by-hand: headless capture refuses ZAR's 800×600 window
+     snapshot (instrument gap, unchanged).
+   - **Duke3D SETUP (`70fc097`) was four things**, each named by the log in turn:
+     (a) *"DOS/16M error: [8] cannot open file ''"* — SETUP EXECs `.\setmain.exe` with
+     its **own env segment** and we handed it over as-is; DOS **always** copies and
+     appends `0001` + the program name, which is where DOS/4G finds its LE payload.
+     (b) Then it sat at `0x042d16f1` until the **watchdog** killed it — a flat client
+     that hooks the keyboard but not the timer never bumps `g_dpmi_iter`; "frozen 3 s"
+     read as wedged. The watchdog's own live sample showed the EIP moving; **client code
+     at a new EIP now resets the streak** (same idea as the Win16 GetMessage exemption).
+     (c) The async timer path refused IRQ0 (`why=6`, app not hooked) and bumped nothing,
+     so a Watcom `delay()` had no clock; it now does the BIOS's `0040:006C` bookkeeping
+     there, billed to the owed count.
+     (d) ⛔⛔ **Then Duke3D itself regressed — *"Playback failed, possibly due to an
+     invalid or conflicting IRQ"* — and it was NOT code: `cfg\pmnoirq.flag` had appeared
+     at 18:59 containing the watchdog's first log line.** `ntvdmex_path()` used a 16-slot
+     ring shared across threads; the watchdog's path pointer was overwritten with the PM
+     loop's `pmnoirq.flag` probe before its `CreateFile`, so the watchdog CREATED the
+     knob that suppresses every PM IRQ. Two guard runs "passed" under it (their checks
+     were too weak to notice no timer). Per-thread ring now (Win32 TLS — `__thread`
+     wants libgcc's emutls). **Rule: a DPMI guest with no time → `dir cfg\` first.**
+     SETUP's main menu is drawn (`runs/s74c_duke/shot02.txt`) and it lives the whole run.
+   - Guards on `9448cf27`: Duke3D plays (0x1574 ticks) · SETUP alive · Doom `STAGE2:
+     complete` · ZAR VGA 579 HB / 0 faults · heaven7 LFB · Notepad opens/X-closes ·
+     QBasic V86 click 2/2 · offvm 1426/0.
+
    **Lessons.** *A guest that "doesn't load" usually said why — read its stdout out of
    the log before the DPMI trace* (Duke3D's message was in the morning's log at 08:31).
+   *A regression need not be code — `dir cfg\` before bisecting* (a flag file with log
+   text in it). *"Wedged" needs a moving/not-moving test, not a trap count.*
    *`& 0xFFFF` on an (E)SI/(E)DI/(E)DX from a client is a 16-bit assumption; grep them
    all when one bites* (s6x fixed the RMCS one and left 0500/0303). *A cfg file is a
    headless menu* — ZAR's by-hand crash became a 90-second loop.
