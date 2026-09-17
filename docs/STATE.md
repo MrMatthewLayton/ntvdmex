@@ -4,7 +4,8 @@
 > this file top to bottom and you will know where it is, what works, what does not, and
 > what to do next.
 
-- **Last updated:** 2026-09-17 14:30 (session 74b — **PCem IS THE VESA ORACLE**: `p_vesa` 128/128 vs a real Tseng ET4000/W32p ROM + Bochs, rig `b3a3cf33`; see the s74b block)
+- **Last updated:** 2026-09-17 14:50 (session 74b — PCem boots UNATTENDED (~60 s; the stall was AMI's 'D: drive failure — Press F1', not sync); p_vesa/p_vesapm/p_plan12/p_lpt clean vs real BIOSes; rig `474f7b2e`; see the s74b block)
+- Previously: 2026-09-17 14:30 (session 74b — **PCem IS THE VESA ORACLE**: `p_vesa` 128/128 vs a real Tseng ET4000/W32p ROM + Bochs, rig `b3a3cf33`; see the s74b block)
 - Previously: 2026-09-17 10:35 (session 74b — VESA/VBE runtime + text + 1280x1024 + PM + DDC done, rig `7d883a85`; PCem BOOTS (needs eyes); see the s74b block)
 - Previously: 2026-09-17 09:20 (session 74b — USER-CONFIRMED BY HAND on `e92ce8ab`: Doom, Heretic, Hexen, Zar, Wolf3D, Skyroads; heaven7 geometry closed (`6fce192`, rig `36c872e9`); heaven7 music = GUS-only, no GUS model yet)
 - **Score: 86.9%** (`./tools/score/score.py` — run it, do not quote this line).
@@ -364,6 +365,18 @@ and matches the 6.22 oracle row for row (session 53)** — but `MEM /C` still re
    - `p_vesapm` / `p_lpt` / `p_plan12` — "PCem-blocked" since the programme began — are now
      tagged `ORACLE-ALSO` and being swept (result in the session log / memory).
    - ⛔ **NEVER `lldb -p` unattended** (memory `lldb-attach-wedges-the-mac`).
+   - **14:20 CORRECTION — the "only boots when watched" stall was AMI's "D: drive failure —
+     Press F1"** (the seeded CMOS described two disks; the user had been pressing F1 without
+     saying so). `enable_sync` was NOT the cause; the earlier commit message is wrong on that.
+     CMOS 0x12=F0/0x1A=0/0x24..2C=0, checksum redone; **unattended boot+run ≈ 60 s**. Lesson:
+     when a run works only when someone is watching, ask what the watcher DID.
+   - **`474f7b2e` (`1c8578b`+):** INT 10h AH=00 returns the video-mode FLAG in AL (20h/30h/3Fh —
+     AMI ROM and SeaBIOS agree; we returned the mode); 4F0A and unknown 4Fxx return `AX=0100`
+     (AL≠4Fh, "no such function" — both real BIOSes) not `014F`. **p_plan12 (PCem-blocked since
+     GH #15), p_vesapm, p_lpt: clean vs real BIOSes. p_video: the `bda.crtc` row has the IBM VGA
+     ROM's vote at last; 7 rows DISPUTED (IBM ROM vs SeaBIOS on cursor shape 0D0E/0607 and mode 7
+     on a colour monitor — card facts, correctly ungraded).** Guards on `474f7b2e`: Doom, heaven7,
+     Skyroads, QB, ZAR (capture A/B), Notepad — all clean. offvm 1424/0.
 
    **Score now:** see the s74b VBE table in the session log — **~82/100**, up from 60.
    Open on VESA: `4F0A` PM interface (clean decline; nobody on the shelf calls it),
