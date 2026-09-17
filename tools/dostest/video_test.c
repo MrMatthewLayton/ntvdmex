@@ -441,6 +441,19 @@ int main(void)
       vid.bda = 0;
       memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x02); s_bx(&r,0x0101); vdd_bus_deliver_int(&bus,0x10,&r); }
 
+    /* T12f: 4F15 VBE/DDC -- a synthesised EDID 1.3 block ------------------------ */
+    { uint16_t seg=0x3500; uint8_t *e=&g_flat[(seg<<4)]; unsigned k, sum=0;
+      memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x15); s_bx(&r,0x0000); r.es=0; r.edi=0; vdd_bus_deliver_int(&bus,0x10,&r);
+      CHECK(r_ax(&r)==0x004F && (r_bx(&r)&0x03)!=0, "vesa/4F15 BL=00: DDC supported (DDC1 and/or DDC2 bits)");
+      memset(e, 0xEE, 256);
+      memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x15); s_bx(&r,0x0001); s_dx(&r,0); r.es=seg; r.edi=0; vdd_bus_deliver_int(&bus,0x10,&r);
+      for (k = 0; k < 128; ++k) sum += e[k];
+      CHECK(r_ax(&r)==0x004F && e[0]==0x00 && e[1]==0xFF && e[6]==0xFF && e[7]==0x00 && (sum & 0xFF)==0
+            && e[18]==1 && e[19]>=3 && e[126]==0 && e[128]==0xEE,
+            "vesa/4F15 BL=01: EDID header, version 1.3+, checksum 0, no extensions, exactly 128 bytes written");
+      memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x15); s_bx(&r,0x0001); s_dx(&r,1); r.es=seg; r.edi=0; vdd_bus_deliver_int(&bus,0x10,&r);
+      CHECK(r_ax(&r)!=0x004F, "vesa/4F15 BL=01 block 1: none, fails"); }
+
     /* T12d: 4F10 VBE/PM (DPMS) ----------------------------------------------- */
     memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x10); s_bx(&r,0x0000); vdd_bus_deliver_int(&bus,0x10,&r);
     CHECK(r_ax(&r)==0x004F && (r_bx(&r)&0xFF)==0x10 && (r_bx(&r)>>8)==0x0F, "vesa/4F10 report: VBE/PM 1.0, all four states");

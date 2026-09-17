@@ -1028,10 +1028,58 @@ static void vesa(video_state *st, ntvdd_regs *r)
         else { s_ax(r, 0x014F); break; }
         s_ax(r, 0x004F);
         break; }
-    case 0x15:                                    /* DDC / display identification  */
-        s_ax(r, 0x014F);                          /* no monitor EDID to report     */
-        VID_UNIMPL_SET(st->unimpl_fn, 0x4F);
-        break;
+    case 0x15: {                                  /* VBE/DDC: display identification */
+        /* BL=00 report capabilities: BH = seconds per EDID block, BL = bit0 DDC1,
+           bit1 DDC2, bit2 "screen blanked during transfer". BL=01 read EDID block
+           DX into ES:DI (128 bytes). ⚠ From the published VBE/DDC interface (what
+           Bochs/DOSBox answer), not a PDF in docs/ref; no oracle. The block is a
+           SYNTHESISED EDID 1.3 for a generic analogue monitor that does every mode
+           we publish -- "no monitor" was the previous answer, and a guest that asks
+           deserves a plausible one rather than a refusal. One block, no extensions. */
+        uint8_t bl = (uint8_t)(r_bx(r) & 0xFF);
+        if (bl == 0x00) { s_bx(r, 0x0103); s_ax(r, 0x004F); break; }   /* 1 s, DDC1+DDC2 */
+        if (bl == 0x01) {
+            uint8_t *e; unsigned k, sum = 0;
+            if (r_dx(r) != 0) { s_ax(r, 0x014F); break; }              /* block 0 only   */
+            e = (uint8_t *)vdd_map_flat(st->bus, r->es, (uint16_t)r->edi);
+            for (k = 0; k < 128; ++k) e[k] = 0;
+            e[0] = 0x00; for (k = 1; k < 7; ++k) e[k] = 0xFF; e[7] = 0x00;   /* header   */
+            e[8] = 0x3A; e[9] = 0x96;                 /* manufacturer "NTV" (5-bit packed) */
+            e[10] = 0x01; e[11] = 0x00;               /* product code 1                */
+            e[16] = 1; e[17] = 10;                    /* week 1, 2000                  */
+            e[18] = 1; e[19] = 3;                     /* EDID 1.3                      */
+            e[20] = 0x0E;                             /* analogue, 0.7/0.3 V, sync on H/V + composite */
+            e[21] = 34; e[22] = 27;                   /* 34 x 27 cm (17")               */
+            e[23] = 120;                              /* gamma 2.2                     */
+            e[24] = 0xEE;                             /* DPMS standby/suspend/off, RGB, preferred timing */
+            /* chromaticity: sRGB primaries */
+            e[25] = 0xEE; e[26] = 0x91; e[27] = 0xA3; e[28] = 0x54; e[29] = 0x4C;
+            e[30] = 0x99; e[31] = 0x26; e[32] = 0x0F; e[33] = 0x50; e[34] = 0x54;
+            e[35] = 0x2D; e[36] = 0xEF; e[37] = 0x00; /* established: 720x400@70 640x480@60/72/75 800x600@56/60/72/75 1024x768@60/70/75 */
+            e[38] = 0x81; e[39] = 0x80;               /* standard timing 1280x1024@60  */
+            e[40] = 0x81; e[41] = 0x40;               /* 1280x960@60                   */
+            for (k = 42; k < 54; ++k) e[k] = 0x01;    /* unused standard timings       */
+            /* detailed timing 1: 1280x1024@60 (108 MHz) */
+            e[54] = 0x30; e[55] = 0x2A; e[56] = 0x00; e[57] = 0x98; e[58] = 0x51; e[59] = 0x00;
+            e[60] = 0x2A; e[61] = 0x40; e[62] = 0x30; e[63] = 0x70; e[64] = 0x13; e[65] = 0x00;
+            e[66] = 0x54; e[67] = 0x0E; e[68] = 0x11; e[69] = 0x00; e[70] = 0x00; e[71] = 0x1E;
+            /* descriptor 2: range limits 50-75 Hz, 30-80 kHz, 110 MHz */
+            e[72] = 0; e[73] = 0; e[74] = 0; e[75] = 0xFD; e[76] = 0;
+            e[77] = 50; e[78] = 75; e[79] = 30; e[80] = 80; e[81] = 11; e[82] = 0x00; e[83] = 0x0A;
+            for (k = 84; k < 90; ++k) e[k] = 0x20;
+            /* descriptor 3: monitor name */
+            e[90] = 0; e[91] = 0; e[92] = 0; e[93] = 0xFC; e[94] = 0;
+            { const char *nm = "NTVDMEX VESA\n"; for (k = 0; k < 13; ++k) e[95 + k] = (uint8_t)(nm[k] ? nm[k] : ' '); }
+            /* descriptor 4: serial */
+            e[108] = 0; e[109] = 0; e[110] = 0; e[111] = 0xFF; e[112] = 0;
+            { const char *sn = "0000001\n"; for (k = 0; k < 13; ++k) e[113 + k] = (uint8_t)(sn[k] ? sn[k] : ' '); }
+            e[126] = 0;                               /* no extension blocks           */
+            for (k = 0; k < 127; ++k) sum += e[k];
+            e[127] = (uint8_t)(0x100u - (sum & 0xFFu));
+            s_ax(r, 0x004F); break;
+        }
+        s_ax(r, 0x014F);
+        break; }
     case 0x05: {                                  /* window control (bank switch) */
         /* VBE 2.0 §4.8: BH = 00h set / 01h get, BL = WINDOW (00h A, 01h B), DX = window
            position in granularity units (64 KB here, as 4F01 says).
