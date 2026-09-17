@@ -140,7 +140,12 @@ static void pal_refresh(video_state *st)
     int i;
     uint32_t prev[256];
     for (i = 0; i < 256; ++i) prev[i] = st->pal[i];
-    if (st->mkind == VID_KIND_LINEAR8) {
+    /* A packed 8bpp VESA mode indexes the DAC directly, exactly as mode 13h does.
+       (s74b) It used to fall through to the attribute-controller path below because a
+       4F02 mode set never touches mkind, so pixels 0..15 went through the EGA remap
+       (6 -> DAC 0x14, 8..15 -> 0x38..0x3F) and a VESA guest's first sixteen colours
+       were somebody else's. */
+    if (st->mkind == VID_KIND_LINEAR8 || (st->in_vesa && st->vesa_bpp <= 8)) {
         for (i = 0; i < 256; ++i) st->pal[i] = st->dac[i];
     } else {
         for (i = 0; i < 16; ++i) {
@@ -488,6 +493,13 @@ static const struct { uint16_t num, w, h; uint8_t bpp; } vesa_modes[] = {
 };
 /* bytes per pixel as VBE counts them: 15bpp occupies 2 bytes, like 16. */
 static uint32_t vesa_bypp(uint8_t bpp) { return bpp <= 8 ? 1u : bpp <= 16 ? 2u : bpp <= 24 ? 3u : 4u; }
+/* Byte offset into vesa_vram of the pixel shown top-left: the 4F07 display start at
+   the 4F06 logical pitch. (0,0) at the mode's own pitch until a guest moves it. */
+static uint32_t vesa_origin(const video_state *st)
+{
+    return (uint32_t)st->vesa_start_y * st->vesa_stride
+         + (uint32_t)st->vesa_start_x * vesa_bypp(st->vesa_bpp);
+}
 /* Record a VESA mode query and its answer -- see vesa_q[] in vdd_video.h. */
 static void vesa_note(video_state *st, uint8_t fn, uint16_t mode, int ok)
 {
@@ -543,7 +555,7 @@ static void vesa_sync(video_state *st)
 static void vesa_scan_written(video_state *st)
 {
     uint32_t i, lo = 0xFFFFFFFFu, hi = 0, nz = 0;
-    uint32_t end = st->vesa_stride * st->vesa_h;
+    uint32_t end = vesa_origin(st) + st->vesa_stride * st->vesa_h;
     if (!end || end > VID_VESA_VRAM) end = VID_VESA_VRAM;
     for (i = 0; i < end; ++i)
         if (st->vesa_vram[i]) { if (lo == 0xFFFFFFFFu) lo = i; hi = i; ++nz; }
@@ -554,13 +566,13 @@ static void vesa_scan_written(video_state *st)
 static void vesa_to_argb(video_state *st)
 {
     uint32_t y, x, w = st->vesa_w, h = st->vesa_h, pitch = st->vesa_stride;
-    uint32_t bypp = vesa_bypp(st->vesa_bpp);
+    uint32_t bypp = vesa_bypp(st->vesa_bpp), org = vesa_origin(st);
     if (!w || !h || !pitch) return;
     if (w > VID_VESA_MAXW || h > VID_VESA_MAXH) return;   /* cannot happen: vesa_find caps it */
     for (y = 0; y < h; ++y) {
-        const uint8_t *src = st->vesa_vram + y * pitch;
+        const uint8_t *src = st->vesa_vram + org + y * pitch;  /* from the 4F07 start */
         uint32_t *dst = st->vesa_argb + y * w;
-        if (y * pitch + w * bypp > VID_VESA_VRAM) break;
+        if (org + y * pitch + w * bypp > VID_VESA_VRAM) break;
         for (x = 0; x < w; ++x) {
             uint32_t r, g, b;
             if (st->vesa_bpp == 15) {
@@ -583,6 +595,11 @@ static void vesa_to_argb(video_state *st)
 static void vesa(video_state *st, ntvdd_regs *r)
 {
     uint8_t al = r_al(r); unsigned i;
+    if (al < 0x16) {                              /* inventory: see vesa_calls[]   */
+        uint8_t bl = (uint8_t)(r_bx(r) & 0xFF);
+        st->vesa_calls[al]++;
+        st->vesa_bl[al] |= (uint16_t)(bl == 0x80 ? 0x8000u : bl < 15 ? (1u << bl) : 0u);
+    }
     switch (al) {
     case 0x00: {                                  /* return controller info       */
         /* ⚠ THE CALLER'S BLOCK IS 256 BYTES UNLESS IT PRESET "VBE2". (s74) VBE 2.0
@@ -706,6 +723,8 @@ static void vesa(video_state *st, ntvdd_regs *r)
             st->vesa_lfb = (uint8_t)((r_bx(r) & 0x4000) ? 1 : 0);
             st->vesa_bpp = mbpp;
             st->vesa_stride = (uint32_t)w * vesa_bypp(mbpp);
+            st->vesa_start_x = st->vesa_start_y = 0;   /* a mode set shows page 1 */
+            st->vesa_dacwidth = 6;                     /* §4.11: any mode set -> 6 bits */
             st->vesa_bank = 0;
             /* ── ★★★ D15 = "DON'T CLEAR DISPLAY MEMORY". (VBE 2.0 §4.5) ──────────────
                  We cleared unconditionally. This is the SAME defect as the standard
@@ -718,6 +737,7 @@ static void vesa(video_state *st, ntvdd_regs *r)
                 for (n = 0; n < VID_VESA_VRAM; ++n) st->vesa_vram[n] = 0;
                 for (n = 0; n < VID_VESA_WIN; ++n) st->vmem[n] = 0;
             }
+            pal_refresh(st);                           /* identity DAC path, see pal_refresh */
             st->dirty = 1; s_ax(r, 0x004F);
         } else s_ax(r, 0x014F);
         break; }
@@ -725,41 +745,92 @@ static void vesa(video_state *st, ntvdd_regs *r)
         s_bx(r, (uint16_t)(st->in_vesa ? st->vesa_mode : st->mode));
         s_ax(r, 0x004F);
         break;
-    case 0x06:                                    /* get/set logical scan length   */
-        /* BL=0 set in pixels, 1 get, 2 set in bytes, 3 get max. Returns BX=bytes
-           per scan line, CX=pixels, DX=number of scan lines. */
-        if ((r_bx(r) & 0xFF) == 0 && r_cx(r)) st->vesa_scanline = r_cx(r);
-        if (!st->vesa_scanline) st->vesa_scanline = st->vesa_w;
-        s_bx(r, st->vesa_scanline);               /* 8bpp: bytes == pixels         */
-        s_cx(r, st->vesa_scanline);
-        s_dx(r, (uint16_t)(st->vesa_scanline ? VID_VESA_VRAM / st->vesa_scanline : 0));
+    /* ── 4F06 / 4F07: THE LOGICAL SCREEN, AND WHICH PART OF IT IS SHOWN. (s74b) ──
+         VBE 2.0 §4.9/§4.10. Both of these used to be accepted and IGNORED: 4F06 kept a
+         private `vesa_scanline` the presenter never read (and assumed bytes == pixels,
+         true only at 8bpp), and 4F07 stored a start the presenter never applied. So a
+         guest that draws page 2 and calls 4F07 to show it -- the standard VESA
+         double-buffer -- got 004F back and saw page 1 forever. `vesa_stride` is the
+         single truth for bytes-per-line and `vesa_origin()` for the displayed start;
+         the presenter reads both.
+       ► Failure codes are the spec's: AH=02 for a length or start that does not fit,
+         AH=03 outside a VESA mode ("invalid in current video mode"). "Fail and make no
+         changes" -- §4.10 -- so nothing is written until the request has been checked. */
+    case 0x06: {                                  /* get/set logical scan length   */
+        uint8_t  bl   = (uint8_t)(r_bx(r) & 0xFF);
+        uint32_t bypp = vesa_bypp(st->vesa_bpp);
+        uint32_t minb = (uint32_t)st->vesa_w * bypp;                 /* the mode's own pitch */
+        uint32_t maxb = st->vesa_h ? VID_VESA_VRAM / st->vesa_h : 0; /* longest line that still holds h rows */
+        maxb -= maxb % bypp;                                         /* whole pixels          */
+        if (!st->in_vesa || !minb || !maxb) { s_ax(r, 0x034F); break; }
+        if (bl == 0x00 || bl == 0x02) {
+            uint32_t want = r_cx(r);
+            if (bl == 0x00) want *= bypp;                            /* pixels -> bytes       */
+            want = (want + bypp - 1) / bypp * bypp;                  /* "next larger value"   */
+            if (want < minb || want > maxb) { s_ax(r, 0x024F); break; }
+            st->vesa_stride = want;
+            /* a start that no longer leaves a full page at the new pitch is reset,
+               which is what a BIOS that re-latches its CRTC offset does in effect */
+            if (vesa_origin(st) + (uint32_t)(st->vesa_h - 1) * want + minb > VID_VESA_VRAM)
+                st->vesa_start_x = st->vesa_start_y = 0;
+            st->dirty = 1;
+        } else if (bl == 0x03) {                  /* get maximum                   */
+            s_bx(r, (uint16_t)maxb); s_cx(r, (uint16_t)(maxb / bypp));
+            s_dx(r, (uint16_t)(VID_VESA_VRAM / maxb)); s_ax(r, 0x004F);
+            break;
+        } else if (bl != 0x01) { s_ax(r, 0x014F); break; }
+        s_bx(r, (uint16_t)st->vesa_stride);
+        s_cx(r, (uint16_t)(st->vesa_stride / bypp));
+        s_dx(r, (uint16_t)(VID_VESA_VRAM / st->vesa_stride));
         s_ax(r, 0x004F);
-        break;
-    case 0x07:                                    /* get/set display start         */
-        if ((r_bx(r) & 0xFF) == 0x01) {           /* BL=1 get                      */
+        break; }
+    case 0x07: {                                  /* get/set display start         */
+        uint8_t bl = (uint8_t)(r_bx(r) & 0xFF);
+        if (!st->in_vesa) { s_ax(r, 0x034F); break; }
+        if (bl == 0x01) {                         /* get                           */
             s_cx(r, st->vesa_start_x); s_dx(r, st->vesa_start_y); s_bx(r, 0);
-        } else {                                  /* BL=0/80h set                  */
+            s_ax(r, 0x004F);
+        } else if (bl == 0x00 || bl == 0x80) {    /* set (80h: during retrace)     */
+            uint32_t bypp = vesa_bypp(st->vesa_bpp);
+            uint32_t org  = (uint32_t)r_dx(r) * st->vesa_stride + (uint32_t)r_cx(r) * bypp;
+            /* the whole displayed page must exist: "if the requested Display Start
+               coordinates do not allow for a full page of video memory ... fail" */
+            if (org + (uint32_t)(st->vesa_h - 1) * st->vesa_stride
+                    + (uint32_t)st->vesa_w * bypp > VID_VESA_VRAM) { s_ax(r, 0x024F); break; }
             st->vesa_start_x = r_cx(r); st->vesa_start_y = r_dx(r);
             st->dirty = 1;
-        }
-        s_ax(r, 0x004F);
-        break;
-    case 0x08:                                    /* get/set DAC palette width     */
-        if ((r_bx(r) & 0xFF) == 0x00) {           /* BL=0 set                      */
+            s_ax(r, 0x004F);
+        } else s_ax(r, 0x014F);                   /* VBE 3.0 sub-functions: not here */
+        break; }
+    case 0x08: {                                  /* get/set DAC palette width     */
+        /* VBE 2.0 §4.11: BL=00 set (BH = wanted bits), BL=01 get; BH out = current.
+           "If the hardware cannot select the requested width, the NEXT LOWER value it
+           can is selected" -- we have 6 and 8, so 10 -> 8 and 7 -> 6 (this used to send
+           anything but exactly 8 to 6). AH=03 in a direct-colour mode; the width is
+           reset to 6 by any mode set (done in 4F02 and the standard AH=00). */
+        uint8_t bl8 = (uint8_t)(r_bx(r) & 0xFF);
+        if (!st->in_vesa || st->vesa_bpp > 8) { s_ax(r, 0x034F); break; }
+        if (bl8 == 0x00) {
             uint8_t w8 = (uint8_t)((r_bx(r) >> 8) & 0xFF);
-            st->vesa_dacwidth = (uint8_t)(w8 == 8 ? 8 : 6);
-        }
+            st->vesa_dacwidth = (uint8_t)(w8 >= 8 ? 8 : 6);
+        } else if (bl8 != 0x01) { s_ax(r, 0x014F); break; }
         if (!st->vesa_dacwidth) st->vesa_dacwidth = 6;
         s_bx(r, (uint16_t)((r_bx(r) & 0x00FF) | ((uint16_t)st->vesa_dacwidth << 8)));
         s_ax(r, 0x004F);
-        break;
+        break; }
     case 0x09: {                                  /* get/set palette data          */
-        /* BL=0 set, 1 get; DX=first, CX=count, ES:DI = quads (B,G,R,align).
-           The DAC width set by 4F08 decides how far to shift. */
+        /* VBE 2.0 §4.12: BL=00 set, 01 get, 02/03 secondary palette (none here ->
+           AH=02), 80h set during retrace; DX=first, CX=count, ES:DI = quads laid out
+           B,G,R,align in memory. The DAC width set by 4F08 decides how far to shift.
+           ⚠ (s74b) A set never called pal_refresh(), so the presenter kept showing the
+             OLD palette until some other DAC path happened to refresh it. */
         uint8_t bl9 = (uint8_t)(r_bx(r) & 0xFF);
         uint16_t first = r_dx(r), n = r_cx(r), i;
         uint8_t *t = (uint8_t *)vdd_map_flat(st->bus, r->es, (uint16_t)r->edi);
         uint8_t sh = (uint8_t)(st->vesa_dacwidth == 8 ? 0 : 2);
+        if (bl9 == 0x02 || bl9 == 0x03) { s_ax(r, 0x024F); break; }
+        if (bl9 != 0x00 && bl9 != 0x01 && bl9 != 0x80) { s_ax(r, 0x014F); break; }
+        if ((uint32_t)first + n > 256) { s_ax(r, 0x024F); break; }   /* fail, change nothing */
         for (i = 0; i < n && (first + i) < 256; ++i) {
             if (bl9 == 0x00 || bl9 == 0x80)
                 st->dac[first + i] = 0xFF000000u
@@ -774,6 +845,7 @@ static void vesa(video_state *st, ntvdd_regs *r)
                 t[i*4+3] = 0;
             }
         }
+        if (bl9 != 0x01) pal_refresh(st);         /* the presenter reads st->pal */
         st->dirty = 1;
         s_ax(r, 0x004F);
         break; }
@@ -788,19 +860,31 @@ static void vesa(video_state *st, ntvdd_regs *r)
         s_ax(r, 0x014F);                          /* no monitor EDID to report     */
         VID_UNIMPL_SET(st->unimpl_fn, 0x4F);
         break;
-    case 0x05:                                    /* window control (bank switch) */
-        if ((r_bx(r) & 0xFF) == 0) {              /* BL=0 set window A             */
+    case 0x05: {                                  /* window control (bank switch) */
+        /* VBE 2.0 §4.8: BH = 00h set / 01h get, BL = WINDOW (00h A, 01h B), DX = window
+           position in granularity units (64 KB here, as 4F01 says).
+           ⚠ (s74b) This read BL as the set/get selector. Window A's number is 0, so a
+             SET of window A (BH=00,BL=00) happened to work -- and a GET of window A
+             (BH=01,BL=00) was treated as a set to whatever DX held. A guest that reads
+             the bank back to restore it later flipped its own window to junk. Caught
+             by the spec audit, not by a guest; there is no oracle for VESA yet.
+           Window B is advertised as absent (WinBAttributes=0) so BL=01 fails; in an LFB
+           mode the spec requires AH=03. */
+        uint8_t bh = (uint8_t)((r_bx(r) >> 8) & 0xFF), bl = (uint8_t)(r_bx(r) & 0xFF);
+        if (!st->in_vesa || st->vesa_lfb) { s_ax(r, 0x034F); break; }
+        if (bl != 0x00) { s_ax(r, 0x014F); break; }
+        if (bh == 0x00) {                         /* set window A                  */
+            uint32_t off = (uint32_t)r_dx(r) * VID_VESA_WIN; unsigned k;
+            if (off + VID_VESA_WIN > VID_VESA_VRAM) { s_ax(r, 0x024F); break; }
             vesa_sync(st);                        /* flush current bank            */
             st->vesa_bank = r_dx(r);
-            { uint32_t off = (uint32_t)st->vesa_bank * VID_VESA_WIN; unsigned k;
-              if (off + VID_VESA_WIN <= VID_VESA_VRAM)
-                  for (k = 0; k < VID_VESA_WIN; ++k) st->vmem[k] = st->vesa_vram[off + k]; }
+            for (k = 0; k < VID_VESA_WIN; ++k) st->vmem[k] = st->vesa_vram[off + k];
             st->dirty = 1;
-        } else if ((r_bx(r) & 0xFF) == 1) {       /* BL=1 get window               */
+        } else if (bh == 0x01) {                  /* get window A                  */
             s_dx(r, st->vesa_bank);
-        }
+        } else { s_ax(r, 0x014F); break; }
         s_ax(r, 0x004F);
-        break;
+        break; }
     default: s_ax(r, 0x014F); break;              /* unsupported sub-function      */
     }
 }
@@ -849,6 +933,7 @@ static void int10(void *self, ntvdd_regs *r)
              which is the whole difference the bit describes. */
         {   int noclear = (al & 0x80) != 0;
         st->mode = al & 0x7F; st->in_vesa = 0;        /* a standard mode leaves VESA */
+        st->vesa_dacwidth = 6;                        /* §4.11: any mode set -> 6 bits */
         st->cur_row = st->cur_col = 0; st->page = 0;
         st->cur_shape = 0x0607;                       /* the BIOS resets the shape too */
         st->blink = 1;                                /* ...and re-enables blink (AR10 bit 3) */
@@ -2591,9 +2676,11 @@ static void vid_frame(void *self)
         } else {
             st->frame.bpp = 8;
             /* ⚠ THE STRIDE IS THE MODE'S PITCH, NOT ITS WIDTH. Equal for 8bpp, and
-                 that equality is why this read `= st->vesa_w` and nobody noticed. */
+                 that equality is why this read `= st->vesa_w` and nobody noticed.
+                 And the pitch is the 4F06 LOGICAL one, the origin the 4F07 start:
+                 a page flip is nothing more than this pointer moving. */
             st->frame.stride = st->vesa_stride ? st->vesa_stride : st->vesa_w;
-            st->frame.pixels = st->vesa_vram; st->frame.palette = st->pal;
+            st->frame.pixels = st->vesa_vram + vesa_origin(st); st->frame.palette = st->pal;
         }
     } else if (st->mkind == VID_KIND_LINEAR8 && !st->chain4) {  /* mode Y */
         /* ⚠ NO SNAPSHOT HERE. It used to capture the "live" plane at present time,

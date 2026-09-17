@@ -27916,6 +27916,20 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
              p = zput(p, "x"); p = zhex(p, (DWORD)g_vid.vesa_bpp);
              p = zput(p, " stride=0x"); p = zhex(p, g_vid.vesa_stride); }
       p = zput(p, "\r\n");
+      p = zput(p, "STAGE2: VESA calls by sub-function:");
+      { int any = 0;
+        for (i = 0; i < 0x16; ++i) if (g_vid.vesa_calls[i]) {
+            unsigned bb; any = 1;
+            p = zput(p, " 4F"); p = zhexb(p, (unsigned)i); p = zput(p, "x"); p = zhex(p, g_vid.vesa_calls[i]);
+            if (g_vid.vesa_bl[i]) {
+                p = zput(p, "(bl:");
+                for (bb = 0; bb < 16; ++bb) if (g_vid.vesa_bl[i] & (1u << bb)) { p = zhexb(p, bb == 15 ? 0x80u : bb); p = zput(p, ","); }
+                p = zput(p, ")");
+            }
+        }
+        if (!any) p = zput(p, " none");
+        p = zput(p, "\r\n");
+        log_append(LOG_PATH, base, p); serial_out(base, p); p = base; }
       p = zput(p, "STAGE2: VESA mode queries (4F01/4F02):");
       if (!g_vid.vesa_qn) p = zput(p, " none");
       else for (i = 0; i < g_vid.vesa_qn; ++i) {

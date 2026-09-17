@@ -256,11 +256,105 @@ int main(void)
     vdd_bus_deliver_int(&bus,0x10,&r);
     CHECK(g_vmem[10]==0xAB, "vesa/4F05: bank 0 window restored from vram");
     CHECK(vid.vesa_vram[1*VID_VESA_WIN + 10]==0xCD, "vesa/4F05: bank 1 byte kept in vram");
+    /* §4.8: BH selects set(00)/get(01), BL is the WINDOW (A=0, B=1). The code read BL as
+       the selector, so a "get window A" (BH=01,BL=00,DX=junk) was a SET to junk. */
+    memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x05); s_bx(&r,0x0100); s_dx(&r,0x1234); vdd_bus_deliver_int(&bus,0x10,&r);
+    CHECK(r_ax(&r)==0x004F && r_dx(&r)==0 && vid.vesa_bank==0, "vesa/4F05 get (BH=01): DX=bank 0, bank NOT changed by DX in");
+    memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x05); s_bx(&r,0x0001); s_dx(&r,1); vdd_bus_deliver_int(&bus,0x10,&r);
+    CHECK(r_ax(&r)!=0x004F && vid.vesa_bank==0, "vesa/4F05 window B (BL=01): fails, we advertise none");
+    memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x05); s_bx(&r,0x0000); s_dx(&r,(uint16_t)(VID_VESA_VRAM/VID_VESA_WIN)); vdd_bus_deliver_int(&bus,0x10,&r);
+    CHECK(r_ax(&r)==0x024F && vid.vesa_bank==0, "vesa/4F05 set past memory: AH=02, bank kept");
+    memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x02); s_bx(&r,0x4101); vdd_bus_deliver_int(&bus,0x10,&r);   /* LFB */
+    memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x05); s_bx(&r,0x0000); s_dx(&r,1); vdd_bus_deliver_int(&bus,0x10,&r);
+    CHECK(r_ax(&r)==0x034F, "vesa/4F05 in an LFB mode: AH=03 (invalid in current mode)");
+    memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x02); s_bx(&r,0x0101); vdd_bus_deliver_int(&bus,0x10,&r);   /* banked again */
+
+    /* T11b: 4F08 DAC width + 4F09 palette, VBE 2.0 §4.11/§4.12 ------------------- */
+    { uint16_t seg=0x3200; uint8_t *t=&g_flat[(seg<<4)];
+      memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x08); s_bx(&r,0x0001); vdd_bus_deliver_int(&bus,0x10,&r);
+      CHECK(r_ax(&r)==0x004F && (r_bx(&r)>>8)==6, "vesa/4F08 get after a mode set: 6 bits");
+      memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x08); s_bx(&r,0x0A00); vdd_bus_deliver_int(&bus,0x10,&r);
+      CHECK(r_ax(&r)==0x004F && (r_bx(&r)>>8)==8, "vesa/4F08 set 10 bits: next lower we have = 8");
+      /* 8-bit palette entry 1 = pure blue, through 4F09; the presenter palette must follow */
+      t[0]=0xFF; t[1]=0; t[2]=0; t[3]=0;
+      memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x09); s_bx(&r,0x0000); s_cx(&r,1); s_dx(&r,1); r.es=seg; r.edi=0; vdd_bus_deliver_int(&bus,0x10,&r);
+      CHECK(r_ax(&r)==0x004F && vid.dac[1]==0xFF0000FFu && vid.pal[1]==0xFF0000FFu, "vesa/4F09 set (8-bit): dac[1] blue AND pal[1] refreshed");
+      memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x08); s_bx(&r,0x0700); vdd_bus_deliver_int(&bus,0x10,&r);
+      CHECK((r_bx(&r)>>8)==6, "vesa/4F08 set 7 bits: next lower = 6");
+      /* 6-bit: index 6 -- one the EGA attribute mapping would send to DAC 0x14 -- must be identity in a VESA 8bpp mode */
+      t[0]=0x3F; t[1]=0; t[2]=0; t[3]=0;
+      memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x09); s_bx(&r,0x0000); s_cx(&r,1); s_dx(&r,6); r.es=seg; r.edi=0; vdd_bus_deliver_int(&bus,0x10,&r);
+      CHECK(vid.dac[6]==0xFF0000FCu && vid.pal[6]==0xFF0000FCu, "vesa/4F09 set (6-bit) index 6: pal[6] is the DAC entry, not the EGA remap");
+      t[0]=t[1]=t[2]=t[3]=0xEE;
+      memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x09); s_bx(&r,0x0001); s_cx(&r,1); s_dx(&r,6); r.es=seg; r.edi=0; vdd_bus_deliver_int(&bus,0x10,&r);
+      CHECK(r_ax(&r)==0x004F && t[0]==0x3F && t[1]==0 && t[2]==0 && t[3]==0, "vesa/4F09 get (6-bit): B,G,R,0 = 3F,0,0,0");
+      memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x09); s_bx(&r,0x0002); s_cx(&r,1); s_dx(&r,0); r.es=seg; r.edi=0; vdd_bus_deliver_int(&bus,0x10,&r);
+      CHECK(r_ax(&r)==0x024F, "vesa/4F09 secondary palette (BL=02): AH=02, none here");
+      memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x09); s_bx(&r,0x0000); s_cx(&r,10); s_dx(&r,250); r.es=seg; r.edi=0; vdd_bus_deliver_int(&bus,0x10,&r);
+      CHECK(r_ax(&r)==0x024F, "vesa/4F09 DX+CX past 256: AH=02");
+      memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x08); s_bx(&r,0x0800); vdd_bus_deliver_int(&bus,0x10,&r);
+      memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x02); s_bx(&r,0x0101); vdd_bus_deliver_int(&bus,0x10,&r);
+      memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x08); s_bx(&r,0x0001); vdd_bus_deliver_int(&bus,0x10,&r);
+      CHECK((r_bx(&r)>>8)==6, "vesa/4F08: a mode set resets the DAC to 6 bits");
+      memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x02); s_bx(&r,0x0111); vdd_bus_deliver_int(&bus,0x10,&r);
+      memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x08); s_bx(&r,0x0001); vdd_bus_deliver_int(&bus,0x10,&r);
+      CHECK(r_ax(&r)==0x034F, "vesa/4F08 in a direct-colour mode: AH=03");
+      memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x02); s_bx(&r,0x0101); vdd_bus_deliver_int(&bus,0x10,&r); }
 
     /* T12: VESA frame is vesa_w x vesa_h x8 ----------------------------- */
     vid.dirty=1; vdd_bus_frame(&bus);
     CHECK(vid.frame.w==640 && vid.frame.h==480 && vid.frame.pixels==vid.vesa_vram,
           "frame(vesa): 640x480x8 from vesa_vram");
+
+    /* T12b: VESA 4F06 logical scan line + 4F07 display start, VBE 2.0 §4.9/4.10.
+       Both used to be ACCEPTED AND IGNORED: the stride the presenter used never moved
+       and the start it displayed was always (0,0), so a guest that page-flips through
+       4F07 -- the standard VESA double-buffer -- showed the wrong page while every call
+       returned 004F. Expectations below are the spec's, not the code's. */
+    /* BL=01 get: BX bytes/line, CX pixels/line, DX max lines at that length */
+    memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x06); s_bx(&r,0x01); vdd_bus_deliver_int(&bus,0x10,&r);
+    CHECK(r_ax(&r)==0x004F && r_bx(&r)==640 && r_cx(&r)==640 && r_dx(&r)==VID_VESA_VRAM/640,
+          "vesa/4F06 get: 640 bytes, 640 px, VRAM/640 lines");
+    /* BL=00 set 1024 pixels -> stride 1024 */
+    memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x06); s_bx(&r,0x00); s_cx(&r,1024); vdd_bus_deliver_int(&bus,0x10,&r);
+    CHECK(r_ax(&r)==0x004F && r_bx(&r)==1024 && r_cx(&r)==1024 && r_dx(&r)==VID_VESA_VRAM/1024
+          && vid.vesa_stride==1024, "vesa/4F06 set 1024 px: stride 1024, DX=VRAM/1024");
+    /* BL=03 get maximum: longest line that still holds the mode's 480 rows */
+    memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x06); s_bx(&r,0x03); vdd_bus_deliver_int(&bus,0x10,&r);
+    CHECK(r_ax(&r)==0x004F && r_bx(&r)==VID_VESA_VRAM/480 && r_cx(&r)==VID_VESA_VRAM/480
+          && r_dx(&r)>=480 && vid.vesa_stride==1024, "vesa/4F06 get max: VRAM/480, stride untouched");
+    /* too long (5000*480 > VRAM) -> 02h, unchanged; narrower than the mode -> 02h */
+    memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x06); s_bx(&r,0x02); s_cx(&r,5000); vdd_bus_deliver_int(&bus,0x10,&r);
+    CHECK(r_ax(&r)==0x024F && vid.vesa_stride==1024, "vesa/4F06 set too long: AH=02, stride kept");
+    memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x06); s_bx(&r,0x00); s_cx(&r,320); vdd_bus_deliver_int(&bus,0x10,&r);
+    CHECK(r_ax(&r)==0x024F && vid.vesa_stride==1024, "vesa/4F06 set narrower than mode: AH=02, stride kept");
+    /* 4F07 set (0,480): page 2 at stride 1024 -> the frame starts 480 rows in */
+    memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x07); s_bx(&r,0x00); s_cx(&r,0); s_dx(&r,480); vdd_bus_deliver_int(&bus,0x10,&r);
+    vid.vesa_vram[480u*1024u + 5] = 0x77;
+    vid.dirty=1; vdd_bus_frame(&bus);
+    CHECK(r_ax(&r)==0x004F && vid.frame.stride==1024 && vid.frame.pixels==vid.vesa_vram+480u*1024u
+          && vid.frame.pixels[5]==0x77, "vesa/4F07 set (0,480): frame is page 2 at stride 1024");
+    memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x07); s_bx(&r,0x01); vdd_bus_deliver_int(&bus,0x10,&r);
+    CHECK(r_ax(&r)==0x004F && (r_bx(&r)>>8)==0 && r_cx(&r)==0 && r_dx(&r)==480, "vesa/4F07 get: (0,480), BH=0");
+    /* a start that leaves less than a full page -> fail, no change */
+    memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x07); s_bx(&r,0x00); s_cx(&r,0); s_dx(&r,2000); vdd_bus_deliver_int(&bus,0x10,&r);
+    CHECK(r_ax(&r)==0x024F && vid.vesa_start_y==480, "vesa/4F07 set past memory: AH=02, start kept");
+    /* BL=80h (during retrace) is a set too; x offset moves the origin by bytes-per-pixel */
+    memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x07); s_bx(&r,0x80); s_cx(&r,8); s_dx(&r,0); vdd_bus_deliver_int(&bus,0x10,&r);
+    vid.dirty=1; vdd_bus_frame(&bus);
+    CHECK(r_ax(&r)==0x004F && vid.frame.pixels==vid.vesa_vram+8, "vesa/4F07 BL=80 set (8,0): origin +8 bytes");
+    /* a mode set resets both */
+    memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x02); s_bx(&r,0x101); vdd_bus_deliver_int(&bus,0x10,&r);
+    CHECK(vid.vesa_stride==640 && vid.vesa_start_x==0 && vid.vesa_start_y==0, "vesa/4F02: resets stride and display start");
+    /* direct colour: 0x111 (640x480x16), flip to row 480 and read a white pixel back as ARGB */
+    memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x02); s_bx(&r,0x111); vdd_bus_deliver_int(&bus,0x10,&r);
+    memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x07); s_bx(&r,0x00); s_cx(&r,0); s_dx(&r,480); vdd_bus_deliver_int(&bus,0x10,&r);
+    vid.vesa_vram[480u*1280u + 0] = 0xFF; vid.vesa_vram[480u*1280u + 1] = 0xFF;
+    vid.dirty=1; vdd_bus_frame(&bus);
+    CHECK(r_ax(&r)==0x004F && vid.frame.bpp==32
+          && ((const uint32_t *)(const void *)vid.frame.pixels)[0]==0xFFFFFFFFu,
+          "vesa/4F07 (16bpp): page 2 pixel 0 = white after the flip");
+    memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x02); s_bx(&r,0x101); vdd_bus_deliver_int(&bus,0x10,&r);
 
     /* T13: mode 12h planar -- set mode, plot a pixel, check planes + render --- */
     memset(&r,0,sizeof r); s_ah(&r,0x00); s_al(&r,0x12); vdd_bus_deliver_int(&bus,0x10,&r);

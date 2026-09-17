@@ -145,8 +145,8 @@ typedef struct video_state {
     uint8_t  blink;                     /* AH=10h AL=03: blink vs bright background  */
     uint8_t  dac_page;                  /* AH=10h AL=13: DAC page state              */
     uint8_t  vpal[17];                  /* the 16 EGA palette registers + border     */
-    uint16_t vesa_scanline;             /* 4F06 logical scan line length, pixels     */
-    uint16_t vesa_start_x, vesa_start_y;/* 4F07 display start                        */
+    uint16_t vesa_start_x, vesa_start_y;/* 4F07 display start (pixels, rows); the      */
+                                        /* 4F06 logical pitch lives in vesa_stride    */
     uint8_t  vesa_dacwidth;             /* 4F08 bits per DAC primary (6 or 8)        */
     uint8_t  cur_row, cur_col;
     uint16_t cur_shape;                 /* INT 10h AH=01 CX: start/end scan lines    */
@@ -449,6 +449,11 @@ typedef struct video_state {
     uint8_t  vesa_set_ok;               /* and whether we accepted it                */
     uint8_t  vesa_set_seen;
     uint8_t  vesa_qn;                   /* how many recorded (capped)               */
+    /* Every 4Fxx call by sub-function, and which BL values it came with -- the
+       corpus inventory: what guests ACTUALLY ask of VESA. Bits 0..14 = BL 0..14,
+       bit 15 = BL 80h (the "during retrace" variants). Costs two adds per call. */
+    uint32_t vesa_calls[0x16];
+    uint16_t vesa_bl[0x16];
     ntvdd_frame frame;
     /* Mode-Y de-interleave instrumentation. `plane-nonzero` in STAGE2 has always
        counted st->plane[] -- the 16-colour PLANAR array -- which mode Y never touches,
