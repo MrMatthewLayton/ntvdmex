@@ -161,6 +161,12 @@ static const char *ntvdmex_path(const char *sub, const char *name);
    ⚠ It is a DIAGNOSTIC, not a fix: with it on, a guest that really does execute
      `CD nn` in PM dies differently. Judge it on whether the guest gets FURTHER. */
 #define NOPMPATCH_FLAG CFG_("nopmpatch.flag")
+/* ── DUMP A GUEST LINEAR RANGE AT THE HEADLESS DEADLINE. (s74b, diagnostic) ──────
+   Contents: two hex numbers, "<linear> <size>". Written to debug\out\memdump.bin while
+   the guest is still mapped -- the way to READ A PACKED GUEST (heaven7 unpacks itself
+   into its 0501 block, so its strings and tables exist only in memory). Absent = off. */
+#define MEMDUMP_FLAG   CFG_("memdump.flag")
+#define MEMDUMP_PATH   OUT_("memdump.bin")
 /* Optional CONTENTS of nopmpatch.flag: a hex byte count. Regions at least that big
    are not scanned; smaller ones are patched as usual. Empty = skip every region.
    Why a SIZE: DOS/4GW's own PM code region is ~0x5000 bytes of dense, real
@@ -1490,6 +1496,7 @@ static int            g_no_a000       = 0;  /* NOA000_FLAG present: leave A0000 
 static int            g_no_pmpatch    = 0;  /* NOPMPATCH_FLAG present: scan no code regions (diagnostic) */
 static int            g_flt32_warned  = 0;  /* said once: NT's 16-bit frame cannot locate a flat client's INT */
 static DWORD          g_no_pmpatch_min = 0; /* ...or only regions >= this many bytes */
+static DWORD          g_memdump_lin = 0, g_memdump_len = 0;   /* MEMDUMP_FLAG */
 static int            g_interp12      = 0;  /* INTERP12_FLAG: interpret mode 12h, no page trap */
 static int            g_p12_off       = 0;  /* P12OFF_FLAG: revert to the A0000 page trap      */
 static DWORD          g_run_start_tick= 0;  /* exec-loop start, so STAGE2 can report a RATE    */
@@ -5626,6 +5633,23 @@ static DWORD WINAPI headless_deadline_thread(LPVOID pv)
     if (g_key_event) SetEvent(g_key_event);     /* wake a blocked host_conin/INT16 wait */
     q = zput(q, "HEADLESS: deadline reached -> g_running=0 (wind down)\r\n");
     log_append(LOG_PATH, b, q); serial_out(b, q);
+    if (g_memdump_len) {                        /* MEMDUMP_FLAG: the guest is still mapped */
+        HANDLE hd = CreateFileA(MEMDUMP_PATH, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, 0, NULL);
+        DWORD done = 0, off = 0;
+        if (hd != INVALID_HANDLE_VALUE) {
+            while (off < g_memdump_len) {       /* page at a time, skipping what is not mapped */
+                DWORD n = 0x1000, wr = 0; const void *src = (const void *)(ULONG_PTR)(g_memdump_lin + off);
+                if (n > g_memdump_len - off) n = g_memdump_len - off;
+                if (host_readable(src, n)) { WriteFile(hd, src, n, &wr, NULL); done += wr; }
+                else { static const BYTE z[0x1000]; WriteFile(hd, z, n, &wr, NULL); }
+                off += n;
+            }
+            CloseHandle(hd);
+        }
+        q = b; q = zput(q, "HEADLESS: memdump 0x"); q = zhex(q, g_memdump_lin);
+        q = zput(q, " +0x"); q = zhex(q, g_memdump_len); q = zput(q, " -> memdump.bin, readable bytes 0x");
+        q = zhex(q, done); q = zput(q, "\r\n"); log_append(LOG_PATH, b, q); serial_out(b, q);
+    }
 
     /* HARD BACKSTOP. Clearing g_running only stops a loop that gets a turn, and the
        exec loops only get one when the guest faults, BOPs or takes an interrupt. A
@@ -21722,6 +21746,21 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                 nv = (nv << 4) | (DWORD)hd;
             }
             g_no_pmpatch_min = nv;
+        }
+    }
+    {   HANDLE hm = CreateFileA(MEMDUMP_FLAG, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                                NULL, OPEN_EXISTING, 0, NULL);
+        if (hm != INVALID_HANDLE_VALUE) {         /* "<linear> <size>" in hex */
+            char mb[48]; DWORD mrd = 0, mi, v[2] = {0, 0}, w = 0; int in = 0;
+            ReadFile(hm, mb, sizeof mb - 1, &mrd, NULL); CloseHandle(hm);
+            for (mi = 0; mi < mrd && w < 2; ++mi) {
+                int hd = (mb[mi] >= '0' && mb[mi] <= '9') ? mb[mi] - '0'
+                       : (mb[mi] >= 'a' && mb[mi] <= 'f') ? mb[mi] - 'a' + 10
+                       : (mb[mi] >= 'A' && mb[mi] <= 'F') ? mb[mi] - 'A' + 10 : -1;
+                if (hd < 0) { if (in) { ++w; in = 0; } continue; }
+                v[w] = (v[w] << 4) | (DWORD)hd; in = 1;
+            }
+            g_memdump_lin = v[0]; g_memdump_len = v[1];
         }
     }
     g_interp12 = (GetFileAttributesA(INTERP12_FLAG) != INVALID_FILE_ATTRIBUTES);

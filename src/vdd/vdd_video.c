@@ -486,6 +486,16 @@ static const struct { uint16_t num, w, h; uint8_t bpp; } vesa_modes[] = {
          800x600, and a mode that sets and then shows nothing is worse than a mode
          that was never offered -- the guest has no way to find out. Raise both
          together or neither. */
+    /* ── 320x240, THE MODE HEAVEN7 ASKS FOR BY DEFAULT. (s74b) ───────────────────
+         Not a VBE-numbered mode; it is an OEM mode, and the numbers below are the S3
+         Trio's (0x151 8bpp, 0x160 15bpp, 0x170 16bpp), which is the set DOSBox and
+         every game of the period expects. heaven7's render table is (320,176)
+         (512,280) (640,352) (800,440) -- one letterboxed picture per screen height,
+         and 320x176 belongs to 320x240, its default. Without this mode it fell back
+         to 640x480 and drew its 320x176 picture in the bottom quarter of the screen,
+         which read as "the geometry is wrong" for a whole session. A guest picks by
+         XResolution/YResolution from 4F01, so the number itself is not load-bearing. */
+    { 0x151, 320, 240,  8 }, { 0x160, 320, 240, 15 }, { 0x170, 320, 240, 16 },
     /* direct colour: 15/16/24bpp at the resolutions VRAM can back */
     { 0x10D, 320, 200, 15 }, { 0x10E, 320, 200, 16 }, { 0x10F, 320, 200, 24 },
     { 0x110, 640, 480, 15 }, { 0x111, 640, 480, 16 }, { 0x112, 640, 480, 24 },
