@@ -14356,6 +14356,28 @@ static void dpmi_patch_code_region(DWORD base, DWORD limit, int d32)
         return;
     }
     DWORD ptr_lo = base, ptr_hi = end;               /* a near-pointer table INTO this region is DATA -- see the loop */
+    /* ── ★★★★★ A 32-BIT CODE REGION IS SCANNED BUT NEVER WRITTEN. (s74) ─────────────
+         The sixth guest this scan corrupted was heaven7, and the failure is not one the
+         vote can be tuned out of: its LE code object is a PACKED payload, and x86's
+         self-synchronisation converges on random bytes exactly as well as on code --
+         the six false sites scored 44..48 votes out of 48, indistinguishable from the
+         real `int 31h` beside them (measured offline against h7.EXE with this very
+         header; all seven are in the FILE at object+0x2d8, not runtime-generated as
+         first written up). Byte entropy separates them only at 1 KB windows by 0.3
+         bits over 281 real sites -- a heuristic on a heuristic, not a rule.
+         What the scan BUYS a 32-bit client is one #GP per site: since session 39 the
+         `#GP(IDT) is a RAW INT` arm services a raw INT and patches it on the way past,
+         on the CPU's evidence rather than a guess, and since s74 it does so for a flat
+         base-0 CS as well (heaven7: 72 serviced, none declined, with the scan off).
+         What the scan COSTS is Doom's six sessions (a jump table written after the
+         first pass) and heaven7 outright. Wrong trade. So for `d32` regions the scan
+         still runs and still logs what it would have done -- the count and the sites
+         remain the instrument they were -- but writes nothing; the first execution of
+         each site takes the lazy path once and is fast thereafter.
+       ⚠ 16-BIT REGIONS ARE UNCHANGED. DOS/4GW's own modules, DOS16M (ZAR) and krnl386
+         are all confirmed on the eager path, and the lazy arm's 16-bit resume has a
+         longer record than its 32-bit one. One change per by-hand test. */
+    const int dry = d32;
     if (base < 0x600) base = 0x600;                  /* ...but the region END is unchanged */
     /* No upper bound any more: the regions that matter live in EXTENDED memory, which is
        where a working extender puts its modules. The size cap is a sanity bound rather
@@ -14663,15 +14685,19 @@ static void dpmi_patch_code_region(DWORD base, DWORD limit, int d32)
                       if (nlog < 24) {              /* its OWN counter: npo saturates at 12 */
                           char sb2[192], *sq = sb2;
                           ++nlog;
-                          sq = zput(sq, "DPMI: PATCHING 0x"); sq = zhex(sq, lin);
+                          sq = zput(sq, dry ? "DPMI: WOULD PATCH 0x" : "DPMI: PATCHING 0x"); sq = zhex(sq, lin);
                           sq = zput(sq, " (+0x"); sq = zhex(sq, lin - base);
                           sq = zput(sq, ") vec=0x"); sq = zhexb(sq, mem[i+1]);
-                          sq = zput(sq, " -> C4 C4  was="); sq = zdump(sq, (const BYTE *)(ULONG_PTR)(lin - 6), 16);
+                          sq = zput(sq, dry ? " (32-bit region: left for the #GP(IDT) arm)  bytes="
+                                            : " -> C4 C4  was=");
+                          sq = zdump(sq, (const BYTE *)(ULONG_PTR)(lin - 6), 16);
                           sq = zput(sq, "\r\n");
                           log_append(LOG_PATH, sb2, sq); serial_out(sb2, sq);
                       }
-                      pmap_set(lin, mem[i+1]);
-                      mem[i] = 0xC4; mem[i+1] = 0xC4;
+                      if (!dry) {
+                          pmap_set(lin, mem[i+1]);
+                          mem[i] = 0xC4; mem[i+1] = 0xC4;
+                      }
                       ++n;
                   }
               }
@@ -14680,7 +14706,8 @@ static void dpmi_patch_code_region(DWORD base, DWORD limit, int d32)
       } }
     q = zput(q, "DPMI: code region 0x"); q = zhex(q, base);
     q = zput(q, "..0x"); q = zhex(q, end);
-    q = zput(q, " -> patched "); q = zhex(q, n); q = zput(q, " INT sites, rejected ");
+    q = zput(q, dry ? " -> 32-bit, NOT WRITTEN: would patch " : " -> patched ");
+    q = zhex(q, n); q = zput(q, " INT sites, rejected ");
     q = zhex(q, rej); q = zput(q, " mid-instruction byte pairs, ");
     q = zhex(q, ntbl); q = zput(q, " jump-table entries");
     if (npo) {
@@ -25742,12 +25769,49 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                                 int gtrunc   = gis32 && gcb == 0;   /* EIP *is* the linear addr */
                                 int gcand    = 0;
                                 DWORD glin   = gcb + fr[3];
+                                DWORD grec   = 0;
+                                int   gsrc   = 0;                   /* 0 frame, 1 TIB slot, 2 blocks */
+                                int   gss32  = dpmi_sel_is32(fr[7]);
+                                /* the slot must agree with the frame's low halves, or it is not
+                                   the slot we calibrated -- then we do not resume on it */
+                                int   gespok = !gss32 || ((feip & 0xFFFFu) == fr[6] && (fcs & 0xFFFFu) == fr[7]);
+                                /* ── ★★ THE FULL-WIDTH REGISTERS ARE IN THE TIB; THE FRAME IS
+                                     THE TRUNCATED COPY. (s74, second pass) ─────────────────────
+                                     The kernel saves the faulting SS:ESP and EIP at full width
+                                     BEFORE it builds the 16-bit DPMI frame: `fcs:feip` (misnamed
+                                     VTIB_FLT_SAVCS/SAVEIP) is SS:ESP and `fss3` is EIP. That is
+                                     not a reading of the layout, it is three faults with every
+                                     field known independently, from one heaven7 run:
+                                         based CS 0x287:0x0119   sav3=0x00000119  savSS:ESP=0x297:0x5874
+                                         flat  CS 0x347 -> lin 0x04332335 (blocks, unique)
+                                                                 sav3=0x04332335  savSS:ESP=0x34f:0x8610
+                                       and the frame's fr[7]:fr[6] equalled the low halves each time.
+                                     So the flat base-0 EIP need not be REBUILT from the client's
+                                     0501 blocks; it is in the slot. The block walk stays as a
+                                     CROSS-CHECK (logged: agree / disagree / ambiguous) and as the
+                                     fallback if the slot's address does not hold `CD vec`.
+                                   ⚠ AND THE SAME TRUNCATION APPLIES TO ESP, which this arm had
+                                     been restoring from fr[6] -- 16 bits -- while its own comment
+                                     claimed a flat-SS client was "declined above". Nothing declined
+                                     it. heaven7 survived only because its SS is BASED with SP <
+                                     64 KB; a Watcom flat-model client (Doom: DS=SS=flat, ESP ~
+                                     0x0043xxxx) resumed through here would have lost the top half
+                                     of its stack pointer on the first lazily-serviced INT. Restore
+                                     ESP from the slot whenever SS is 32-bit, and refuse to resume
+                                     if the slot and the frame disagree in the low half -- that is
+                                     the one check that would catch a mis-identified slot. */
                                 if (gtrunc) {
-                                    DWORD grec = dpmi_recover_flat_eip((DWORD)fr[3],
-                                                                       (BYTE)gvec, &gcand);
-                                    glin = grec;                    /* 0 = ambiguous or absent */
+                                    grec = dpmi_recover_flat_eip((DWORD)fr[3], (BYTE)gvec, &gcand);
+                                    if ((fss3 & 0xFFFFu) == fr[3]
+                                        && host_readable((const void *)(ULONG_PTR)fss3, 2)
+                                        && ((const volatile BYTE *)(ULONG_PTR)fss3)[0] == 0xCD
+                                        && ((const volatile BYTE *)(ULONG_PTR)fss3)[1] == (BYTE)gvec) {
+                                        glin = fss3; gsrc = 1;
+                                    } else {
+                                        glin = grec; gsrc = 2;      /* 0 = ambiguous or absent */
+                                    }
                                     gi   = (volatile BYTE *)(ULONG_PTR)glin;
-                                    if (!grec && !g_flt32_warned) {
+                                    if (!glin && !g_flt32_warned) {
                                         char wb[288], *wq = wb;
                                         g_flt32_warned = 1;
                                         wq = zput(wq, "  EXC: #GP(IDT) vec=0x"); wq = zhex(wq, gvec);
@@ -25755,14 +25819,27 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                                         wq = zhex(wq, fr[4]);
                                         wq = zput(wq, ": NT's frame is 16-bit so the EIP arrived"
                                                       " truncated (0x"); wq = zhex(wq, fr[3]);
-                                        wq = zput(wq, "), and reconstruction from the client's"
+                                        wq = zput(wq, "); TIB sav3=0x"); wq = zhex(wq, fss3);
+                                        wq = zput(wq, " does not hold CD "); wq = zhexb(wq, (unsigned)gvec);
+                                        wq = zput(wq, ", and reconstruction from the client's"
                                                       " 0501 blocks found "); wq = zhex(wq, (DWORD)gcand);
-                                        wq = zput(wq, " candidates holding CD "); wq = zhexb(wq, (unsigned)gvec);
-                                        wq = zput(wq, " -- need exactly 1. Reflecting instead.\r\n");
+                                        wq = zput(wq, " candidates -- need exactly 1. Reflecting instead.\r\n");
                                         log_append(LOG_PATH, wb, wq); serial_out(wb, wq);
                                     }
                                 }
-                                if (gpresent && glin
+                                if (gss32 && !gespok && !g_flt32_warned) {
+                                    char wb[224], *wq = wb;
+                                    g_flt32_warned = 1;
+                                    wq = zput(wq, "  EXC: #GP(IDT) vec=0x"); wq = zhex(wq, gvec);
+                                    wq = zput(wq, " with a 32-bit SS 0x"); wq = zhex(wq, fr[7]);
+                                    wq = zput(wq, ": TIB savSS:savESP=0x"); wq = zhex(wq, fcs);
+                                    wq = zput(wq, ":0x"); wq = zhex(wq, feip);
+                                    wq = zput(wq, " does not match the frame's 0x"); wq = zhex(wq, fr[7]);
+                                    wq = zput(wq, ":0x"); wq = zhex(wq, fr[6]);
+                                    wq = zput(wq, " -- cannot restore a full ESP. Reflecting instead.\r\n");
+                                    log_append(LOG_PATH, wb, wq); serial_out(wb, wq);
+                                }
+                                if (gpresent && glin && gespok
                                     && host_readable((const void *)gi, 2)
                                     && gi[0] == 0xCD && gi[1] == (BYTE)gvec) {
                                     /* ── ★★★★★ THIS IS THE PASS THAT RE-PATCHED CALC'S FP SITE.
@@ -25791,8 +25868,22 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                                     p = zput(p, " at 0x"); p = zhex(p, fr[4]);
                                     p = zput(p, ":0x"); p = zhex(p, fr[3]);
                                     p = zput(p, " lin=0x"); p = zhex(p, glin);
-                                    if (gtrunc) p = zput(p, " (EIP RECONSTRUCTED: flat base-0 CS,"
-                                                            " NT's frame gave only 16 bits)");
+                                    if (gtrunc) {
+                                        p = zput(p, gsrc == 1 ? " (flat base-0 CS: EIP from TIB sav3,"
+                                                                " blocks cross-check "
+                                                              : " (flat base-0 CS: EIP RECONSTRUCTED"
+                                                                " from blocks, TIB sav3=0x");
+                                        if (gsrc == 1) {
+                                            if (!grec)             { p = zput(p, "ambiguous n="); p = zhex(p, (DWORD)gcand); }
+                                            else if (grec == glin)   p = zput(p, "AGREE");
+                                            else                   { p = zput(p, "DISAGREE 0x"); p = zhex(p, grec); }
+                                        } else p = zhex(p, fss3);
+                                        p = zput(p, ")");
+                                    }
+                                    if (gss32) {
+                                        p = zput(p, " SS32 esp=0x"); p = zhex(p, feip);
+                                        if ((feip & 0xFFFFu) != fr[6]) p = zput(p, " ⚠ slot/frame DISAGREE");
+                                    }
                                     if (fpref) {
                                         p = zput(p, " -- FP EMULATOR RANGE: reflecting to the"
                                                     " handler the guest installed, 0x");
@@ -25807,13 +25898,13 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                                     log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
                                     /* put the guest back where it faulted, EIP ON the INT.
                                        ⚠ For the flat base-0 case the frame's IP is TRUNCATED, so
-                                         resume on the RECONSTRUCTED linear address -- writing
-                                         fr[3] back there would be a wild jump into low memory.
-                                         (The frame's SP is truncated the same way and cannot be
-                                         reconstructed this way, which is why gtrunc is only ever
-                                         reached for a client whose stack selector is NOT flat --
-                                         see the decline above if that ever stops holding.) */
-                                    VDM_SET16(tib, VTIB_SS, fr[7]); VDM_REG(tib, VTIB_ESP) = fr[6];
+                                         resume on the full linear address (TIB slot, or the block
+                                         reconstruction) -- writing fr[3] back there would be a
+                                         wild jump into low memory. The frame's SP is truncated the
+                                         same way: for a 32-bit SS take ESP from the TIB slot, which
+                                         `gespok` has just checked against the frame's low half. */
+                                    VDM_SET16(tib, VTIB_SS, fr[7]);
+                                    VDM_REG(tib, VTIB_ESP) = gss32 ? feip : (DWORD)fr[6];
                                     VDM_SET16(tib, VTIB_CS, fr[4]);
                                     VDM_REG(tib, VTIB_EIP) = gtrunc ? (glin - gcb) : (DWORD)fr[3];
                                     VDM_SET16(tib, VTIB_EFLAGS, fr[5]);
@@ -25836,8 +25927,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                                          which is what a gate does and costs nothing. */
                                     if (fpref) {
                                         DWORD sb   = dpmi_sel_base(fr[7]);
-                                        int   ss32 = dpmi_sel_is32(fr[7]);
-                                        DWORD sp   = fr[6];
+                                        int   ss32 = gss32;
+                                        DWORD sp   = ss32 ? feip : (DWORD)fr[6];   /* full width, see gespok */
                                         sp = ss32 ? sp - 2 : ((sp - 2) & 0xFFFF);
                                         pokew(sb + sp, fr[5]);                    /* FLAGS      */
                                         sp = ss32 ? sp - 2 : ((sp - 2) & 0xFFFF);
