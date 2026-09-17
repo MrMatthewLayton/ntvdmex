@@ -72,8 +72,18 @@ def launch(floppy=None):
     cmd = [PCEM, "--config", CFG]
     if floppy:
         cmd += ["--load_drive_a", floppy]
-    # PCem resolves roms/, configs/ and nvr/ relative to its own directory.
-    return subprocess.Popen(cmd, cwd=APP, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    # Two things the wx build needs on macOS, both found the hard way (s74/s74b):
+    #  - it enumerates host optical drives while building its menu and blocks in
+    #    open() on a device node (Full Disk Access); tools/pcem/libnodev.dylib
+    #    interposes opendev() to fail instantly -- the emulated machine has no CD;
+    #  - pcem_path is ~/Library/Application Support/PCem/, NOT the bundle, so roms/
+    #    configs/ nvr/ must exist THERE (symlinked to the bundle's copies). "No ROMs
+    #    present!" with a full roms/ in the bundle means exactly this.
+    env = dict(os.environ)
+    nodev = os.path.join(ROOT, "tools", "pcem", "libnodev.dylib")
+    if os.path.exists(nodev):
+        env["DYLD_INSERT_LIBRARIES"] = nodev
+    return subprocess.Popen(cmd, cwd=APP, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
 def stop(proc):
