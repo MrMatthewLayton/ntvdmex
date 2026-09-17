@@ -4,7 +4,8 @@
 > this file top to bottom and you will know where it is, what works, what does not, and
 > what to do next.
 
-- **Last updated:** 2026-09-17 14:50 (session 74b — PCem boots UNATTENDED (~60 s; the stall was AMI's 'D: drive failure — Press F1', not sync); p_vesa/p_vesapm/p_plan12/p_lpt clean vs real BIOSes; rig `474f7b2e`; see the s74b block)
+- **Last updated:** 2026-09-17 16:00 (session 74b — **HEXEN'S HI-RES LOADER RENDERS** (`2df5651`, rig `a988c6e6`); VESACUBE demo deployed (`demo\msdos\vesacube`, solid/culled/shaded, vsync, page flip); see the s74b block)
+- Previously: 2026-09-17 14:50 (session 74b — PCem boots UNATTENDED (~60 s; the stall was AMI's 'D: drive failure — Press F1', not sync); p_vesa/p_vesapm/p_plan12/p_lpt clean vs real BIOSes; rig `474f7b2e`; see the s74b block)
 - Previously: 2026-09-17 14:30 (session 74b — **PCem IS THE VESA ORACLE**: `p_vesa` 128/128 vs a real Tseng ET4000/W32p ROM + Bochs, rig `b3a3cf33`; see the s74b block)
 - Previously: 2026-09-17 10:35 (session 74b — VESA/VBE runtime + text + 1280x1024 + PM + DDC done, rig `7d883a85`; PCem BOOTS (needs eyes); see the s74b block)
 - Previously: 2026-09-17 09:20 (session 74b — USER-CONFIRMED BY HAND on `e92ce8ab`: Doom, Heretic, Hexen, Zar, Wolf3D, Skyroads; heaven7 geometry closed (`6fce192`, rig `36c872e9`); heaven7 music = GUS-only, no GUS model yet)
@@ -377,6 +378,30 @@ and matches the 6.22 oracle row for row (session 53)** — but `MEM /C` still re
      ROM's vote at last; 7 rows DISPUTED (IBM ROM vs SeaBIOS on cursor shape 0D0E/0607 and mode 7
      on a colour monitor — card facts, correctly ungraded).** Guards on `474f7b2e`: Doom, heaven7,
      Skyroads, QB, ZAR (capture A/B), Notepad — all clean. offvm 1424/0.
+
+   **6. 15:00–16:00 — VESACUBE + HEXEN'S LOADER.**
+   - **`demo\msdos\vesacube\VESACUBE.COM`** (`tools/vesacube/`, NASM real mode): menu of every
+     banked VESA mode from 4F00/4F01; a SOLID cube — outward-wound faces, back-face culled on
+     the rotated normal, 4-level flat shading, convex scan-line fill — page-flipped with
+     `4F07 BL=80h` when two pages fit, `4F09` shade palette in 8 bpp, vsync on 3DAh with a tick
+     fallback (rig: ~800 retrace edges / 930 flips in 12 s). Verified: QEMU screenshot, PCem
+     ET4000 clean run, rig host-screenshot in 640x480x8 and 320x240x16. `VESACUBE 111` = 12 s
+     headless. **By-hand owed: B, L, N, E, W.** (`scripts/bm/cubeshot.bat` drives the menu with
+     rigshot; XP focus rules make it flaky.) My one bug: 4F03 returns the mode in BX, my record
+     pointer. ⚠ The headless `capture.flag` shots came out BLACK for this guest while the
+     framebuffer stats and a new unit check said the picture was there — instrument loose end.
+   - **HEXEN'S HI-RES LOADER (`2df5651`):** `planar hi_water=0`. Hexen is a PM (DOS/4GW) guest,
+     so no interpreter routes its stores; they land wherever A0000 is mapped. **chain4 was 1
+     from reset and only the GUEST's SR4 write changed it** — a real BIOS writes SR4=06h for
+     planar modes at the mode set; ours didn't, so every map-mask write took
+     `mask_skip_chain4`, the window never left the linear section and the four planes were
+     copied on top of each other. AND render_planar/the engine used `st->plane[]`, never the
+     host sections. Fix: the mode set programs SR4/SR2 like the BIOS (chain-4 off planar / on
+     13h) and repositions the window; `PL(st,p)` = the host's section when present, for the
+     engine, BIOS pixel services, latches and renderer alike. **Hexen shows the logo, Raven/id
+     marks and skull progress bar** (`runs/s74b_lazy32/shots_hexen/`). Guards on `a988c6e6`:
+     Lemmings level screen (0Dh/10h via `lemhp.bat`), Doom, Skyroads, QB CAVE, Heretic (no 12h
+     loader in this version). Rig `bin\` = `a988c6e6`; **zip still `eb466c56`.**
 
    **Score now:** see the s74b VBE table in the session log — **~82/100**, up from 60.
    Open on VESA: `4F0A` PM interface (clean decline; nobody on the shelf calls it),
