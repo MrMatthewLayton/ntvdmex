@@ -1,17 +1,23 @@
-; vesacube.com -- a VESA exerciser: mode selector + a tumbling, bouncing 3-D cube.
+; vesacube.com -- a VESA exerciser: mode selector + a tumbling, bouncing solid 3-D cube.
 ;
 ; What it drives, deliberately, so a VESA implementation is judged by what a guest
 ; DOES with it rather than by what it says:
 ;   4F00 (VBE2 block, mode list)   4F01 (every mode: geometry, depth, model, window)
 ;   4F02 (banked set)              4F03 (read-back after set)
 ;   4F05 (bank switch on EVERY crossing -- the cube walks the whole framebuffer)
+;   4F06 get (pitch AND how many rows VRAM holds -> one page or two)
+;   4F07 BL=80h (page flip on the retrace when two pages fit -- double buffering)
+;   4F09 (the 8 bpp shade palette, 24 entries from index 16)
 ;   pixel formats 8 (palette), 15 (5:5:5), 16 (5:6:5), 24 (B,G,R)
-;   4F06 get (the pitch the BIOS reports is the pitch we draw with)
+; The cube is SOLID: six faces with outward winding, back-face culled on the sign of
+; the rotated normal's z, flat-shaded in four levels from that normal, filled by a
+; convex scan-line filler with horizontal runs -- a filled face crosses bank
+; boundaries mid-run, which a wire frame rarely does.
 ;
 ; Real mode, 386 instructions, banked windows only (the LFB needs a protected-mode
 ; or unreal-mode client; that is heaven7's job).  Draws with a bank-aware byte
-; writer, erases the previous frame's edges rather than clearing the screen, and
-; paces frames on the BIOS tick (see vsync for why not 3DAh).
+; writer; with two pages it flips, with one it erases the last frame's bounding box.
+; Paces frames on the BIOS tick (see vsync for why not 3DAh).
 ;
 ; Usage:  VESACUBE            menu: pick a mode by letter, ESC leaves the cube,
 ;                             ESC again quits
@@ -25,7 +31,6 @@
 
 MAXMODES equ    24
 CUBE     equ    1               ; half-edge, in "units" scaled below
-NEDGES   equ    12
 RUNTICKS equ    220             ; ~12 s at 18.2 Hz for the headless form
 
 start:
@@ -297,7 +302,9 @@ run_cube:
         add     al, 7
         shr     al, 3
         mov     [bypp], al                      ; 1, 2, 3
-        ; 4F06 BL=1: the BIOS's own pitch wins over the mode block's
+        mov     byte [pages], 1
+        ; 4F06 BL=1: the BIOS's own pitch wins over the mode block's, and DX says
+        ; how many rows VRAM holds -- whether a second page exists
         mov     ax, 4F06h
         mov     bl, 1
         int     10h
@@ -305,9 +312,20 @@ run_cube:
         jne     .nopitch
         movzx   eax, bx
         mov     [pitch], eax
+        ; DX = rows VRAM holds at this pitch: two pages if the whole picture fits twice
+        mov     ax, [scrh]
+        shl     ax, 1
+        cmp     dx, ax
+        jb      .nopitch
+        mov     byte [pages], 2
 .nopitch:
         mov     word [curbank], 0FFFFh
         call    build_colours
+        call    load_palette                    ; 4F09, 8 bpp only
+        mov     byte [page], 0
+        mov     dword [pagebase], 0
+        mov     word [bb0+4], -1                ; old bbox invalid (ymax < 0)
+        mov     word [bb1+4], -1
         ; cube size: 1/5 of the smaller dimension; start centred, moving
         mov     ax, [scrw]
         cmp     ax, [scrh]
@@ -330,7 +348,6 @@ run_cube:
         mov     word [ang0], 0
         mov     word [ang1], 40
         mov     word [ang2], 80
-        mov     byte [haveold], 0
         ; tick base for the headless form
         mov     ah, 0
         int     1Ah
@@ -339,9 +356,27 @@ run_cube:
         call    step
         call    project
         call    vsync
-        call    erase_old
-        call    draw_new
-        call    keep_old
+        ; pick the page to draw on (the one NOT being shown), and its byte base
+        cmp     byte [pages], 2
+        jne     .onepage
+        xor     byte [page], 1
+        movzx   eax, byte [page]
+        imul    eax, [pitch]
+        movzx   ecx, word [scrh]
+        imul    eax, ecx
+        mov     [pagebase], eax
+.onepage:
+        call    erase_bbox                      ; what this page showed last time
+        call    draw_solid                      ; culled, shaded faces; records the bbox
+        cmp     byte [pages], 2
+        jne     .shown
+        mov     ax, 4F07h                       ; show this page on the retrace
+        mov     bx, 0080h
+        xor     cx, cx
+        movzx   dx, byte [page]
+        imul    dx, [scrh]
+        int     10h
+.shown:
         ; exit conditions
         cmp     word [runlimit], 0
         je      .keys
@@ -366,19 +401,52 @@ run_cube:
         call    getkey
         ret
 
-; per-edge colours in this mode's pixel format: 12 dwords
+; colours[face*4+level] in this mode's pixel format. Face base colour is a 0/1 RGB
+; mask (facecol), level 0..3 scales it 25/50/75/100 %. 8 bpp: palette index 16+.
 build_colours:
-        xor     ebx, ebx
-.e:     mov     al, [rgb_r+bx]
-        mov     ah, [rgb_g+bx]
-        mov     dl, [rgb_b+bx]
-        cmp     byte [bpp], 8
+        xor     ebx, ebx                        ; face*4+level
+.e:     mov     eax, ebx
+        shr     eax, 2                          ; face
+        mov     al, [facecol+eax]               ; bit0 R, bit1 G, bit2 B
+        mov     ah, bl
+        and     ah, 3                           ; level
+        ; channel value by level: 40/60/80/100 %
+        movzx   ecx, ah
+        mov     cl, [lvl8+ecx]
+        xor     edx, edx                        ; edx: B<<16 | G<<8 | R (scratch)
+        test    al, 1
+        jz      .nr
+        mov     [tr], cl
+        jmp     .g
+.nr:    mov     byte [tr], 0
+.g:     test    al, 2
+        jz      .ng
+        mov     [tg], cl
+        jmp     .b
+.ng:    mov     byte [tg], 0
+.b:     test    al, 4
+        jz      .nb
+        mov     [tb], cl
+        jmp     .pack
+.nb:    mov     byte [tb], 0
+.pack:  cmp     byte [bpp], 8
         jne     .n8
-        movzx   eax, byte [pal8+bx]
+        lea     eax, [ebx+16]                   ; palette index
         jmp     .st
-.n8:    cmp     byte [bpp], 15
+.n8:    mov     al, [tr]
+        mov     ah, [tg]
+        mov     dl, [tb]
+        call    pack_rgb
+.st:    mov     [colours+ebx*4], eax
+        inc     ebx
+        cmp     ebx, 24
+        jb      .e
+        ret
+
+; pack_rgb -- AL=R AH=G DL=B (8-bit) -> EAX in the mode's format (15/16/24)
+pack_rgb:
+        cmp     byte [bpp], 15
         jne     .n15
-        ; 5:5:5  r<<10 | g<<5 | b
         movzx   ecx, al
         shr     cx, 3
         shl     cx, 10
@@ -390,7 +458,7 @@ build_colours:
         shr     si, 3
         or      cx, si
         mov     eax, ecx
-        jmp     .st
+        ret
 .n15:   cmp     byte [bpp], 16
         jne     .n16
         movzx   ecx, al
@@ -404,9 +472,8 @@ build_colours:
         shr     si, 3
         or      cx, si
         mov     eax, ecx
-        jmp     .st
-.n16:   ; 24: byte order B,G,R in memory -> value R<<16 | G<<8 | B
-        movzx   ecx, al
+        ret
+.n16:   movzx   ecx, al                         ; 24: B,G,R in memory = R<<16|G<<8|B
         shl     ecx, 16
         movzx   esi, ah
         shl     esi, 8
@@ -414,11 +481,45 @@ build_colours:
         movzx   esi, dl
         or      ecx, esi
         mov     eax, ecx
-.st:    mov     [colours+ebx*4], eax
-        inc     ebx
-        cmp     ebx, NEDGES
-        jb      .e
         ret
+
+; load_palette -- 8 bpp: 24 shade entries at index 16 through 4F09 (6-bit DAC)
+load_palette:
+        cmp     byte [bpp], 8
+        jne     .r
+        xor     ebx, ebx
+.e:     mov     eax, ebx
+        shr     eax, 2
+        mov     al, [facecol+eax]
+        movzx   ecx, bl
+        and     cl, 3
+        mov     cl, [lvl6+ecx]                  ; 6-bit DAC: 40/60/80/100 %
+        lea     di, [palq+ebx*4]
+        mov     byte [di+3], 0
+        mov     byte [di+2], 0                  ; R
+        mov     byte [di+1], 0                  ; G
+        mov     byte [di+0], 0                  ; B
+        test    al, 1
+        jz      .g
+        mov     [di+2], cl
+.g:     test    al, 2
+        jz      .b
+        mov     [di+1], cl
+.b:     test    al, 4
+        jz      .n
+        mov     [di+0], cl
+.n:     inc     ebx
+        cmp     ebx, 24
+        jb      .e
+        push    ds
+        pop     es
+        mov     di, palq
+        mov     ax, 4F09h
+        xor     bl, bl
+        mov     cx, 24
+        mov     dx, 16
+        int     10h
+.r:     ret
 
 ; ── motion
 step:
@@ -555,6 +656,15 @@ project:
         mov     [vy], ax
         mov     ax, [tx]
         mov     [vx], ax
+        ; keep the rotated point for the face normals
+        lea     esi, [edi+edi*2]
+        shl     esi, 1                          ; di*6
+        mov     ax, [vx]
+        mov     [rot+esi], ax
+        mov     ax, [vy]
+        mov     [rot+esi+2], ax
+        mov     ax, [vz]
+        mov     [rot+esi+4], ax
         ; perspective: screen = centre + v * F / (z + D), D = 4*size, F = 3*size
         mov     cx, [size]
         mov     ax, cx
@@ -600,138 +710,337 @@ sincos:                                         ; BX = angle -> AX = sin, DX = c
         ret
 
 ; ── drawing
-erase_old:
-        cmp     byte [haveold], 0
-        je      .r
+; erase_bbox: black out the rectangle this page showed last time (bb0/bb1: x0,y0,x1,y1)
+erase_bbox:
+        mov     si, bb0
+        cmp     byte [page], 0
+        je      .p
+        mov     si, bb1
+.p:     mov     ax, [si+6]
+        cmp     ax, 0
+        jl      .r                              ; nothing drawn on this page yet
         mov     dword [colour], 0
-        mov     si, oldpts
-        call    draw_edges_flat
+        mov     dx, [si+2]                      ; y0
+.row:   cmp     dx, [si+6]
+        jg      .r
+        mov     cx, [si]                        ; x0
+        mov     bx, [si+4]                      ; x1
+        call    hline
+        inc     dx
+        jmp     .row
 .r:     ret
 
-draw_new:
-        mov     esi, newpts
-        xor     ebx, ebx
-.e:     push    ebx
+; draw_solid: for each face, cull on the rotated normal, shade, fill; track the bbox
+draw_solid:
+        mov     word [nbx0], 32767
+        mov     word [nby0], 32767
+        mov     word [nbx1], -32768
+        mov     word [nby1], -32768
+        xor     ebx, ebx                        ; face
+.f:     push    ebx
+        ; vertex indices a,b,c,d
+        movzx   eax, byte [faces+ebx*4]
+        movzx   ecx, byte [faces+ebx*4+1]
+        movzx   edx, byte [faces+ebx*4+2]
+        mov     [ia], ax
+        mov     [ib], cx
+        mov     [ic], dx
+        movzx   eax, byte [faces+ebx*4+3]
+        mov     [id], ax
+        ; normal n = (b-a) x (c-a) from the rotated points (each point is 3 words)
+        movzx   esi, word [ia]
+        imul    esi, esi, 6
+        movzx   edi, word [ib]
+        imul    edi, edi, 6
+        movsx   eax, word [rot+edi]
+        movsx   ecx, word [rot+esi]
+        sub     eax, ecx
+        mov     [e1x], eax
+        movsx   eax, word [rot+edi+2]
+        movsx   ecx, word [rot+esi+2]
+        sub     eax, ecx
+        mov     [e1y], eax
+        movsx   eax, word [rot+edi+4]
+        movsx   ecx, word [rot+esi+4]
+        sub     eax, ecx
+        mov     [e1z], eax
+        movzx   edi, word [ic]
+        imul    edi, edi, 6
+        movsx   eax, word [rot+edi]
+        movsx   ecx, word [rot+esi]
+        sub     eax, ecx
+        mov     [e2x], eax
+        movsx   eax, word [rot+edi+2]
+        movsx   ecx, word [rot+esi+2]
+        sub     eax, ecx
+        mov     [e2y], eax
+        movsx   eax, word [rot+edi+4]
+        movsx   ecx, word [rot+esi+4]
+        sub     eax, ecx
+        mov     [e2z], eax
+        ; nz = e1x*e2y - e1y*e2x ; visible iff nz < 0 (camera at -z)
+        mov     eax, [e1x]
+        imul    eax, [e2y]
+        mov     ecx, [e1y]
+        imul    ecx, [e2x]
+        sub     eax, ecx
+        mov     [nz], eax
+        cmp     eax, 0
+        jge     .skip
+        ; nx = e1y*e2z - e1z*e2y ; ny = e1z*e2x - e1x*e2z
+        mov     eax, [e1y]
+        imul    eax, [e2z]
+        mov     ecx, [e1z]
+        imul    ecx, [e2y]
+        sub     eax, ecx
+        mov     [nx], eax
+        mov     eax, [e1z]
+        imul    eax, [e2x]
+        mov     ecx, [e1x]
+        imul    ecx, [e2z]
+        sub     eax, ecx
+        mov     [ny], eax
+        ; light from the upper left front: val = -2*nz + nx - ny (y grows downward)
+        ; |n| = 4*size^2, so level = val / (2*size^2), clamped to 0..3
+        mov     eax, [nz]
+        neg     eax
+        shl     eax, 1
+        add     eax, [nx]
+        sub     eax, [ny]
+        jns     .pos
+        xor     eax, eax
+.pos:   movzx   ecx, word [size]
+        imul    ecx, ecx
+        shl     ecx, 1
+        xor     edx, edx
+        div     ecx
+        cmp     eax, 3
+        jbe     .lv
+        mov     eax, 3
+.lv:    pop     ebx                             ; face (re-pushed: .skip pops it)
+        push    ebx
+        shl     ebx, 2
+        add     ebx, eax                        ; face*4+level
         mov     eax, [colours+ebx*4]
         mov     [colour], eax
-        mov     al, [edges+ebx*2]
-        movzx   edi, al
-        mov     ax, [esi+edi*4]
-        mov     [x0], ax
-        mov     ax, [esi+edi*4+2]
-        mov     [y0], ax
-        mov     al, [edges+ebx*2+1]
-        movzx   edi, al
-        mov     ax, [esi+edi*4]
-        mov     [x1], ax
-        mov     ax, [esi+edi*4+2]
-        mov     [y1], ax
-        call    line
-        pop     ebx
+        ; the quad's four projected points -> qp[]
+        mov     esi, newpts
+        movzx   edi, word [ia]
+        mov     eax, [esi+edi*4]
+        mov     [qp], eax
+        movzx   edi, word [ib]
+        mov     eax, [esi+edi*4]
+        mov     [qp+4], eax
+        movzx   edi, word [ic]
+        mov     eax, [esi+edi*4]
+        mov     [qp+8], eax
+        movzx   edi, word [id]
+        mov     eax, [esi+edi*4]
+        mov     [qp+12], eax
+        call    fill_quad
+.skip:  pop     ebx
         inc     ebx
-        cmp     ebx, NEDGES
-        jb      .e
+        cmp     ebx, 6
+        jb      .f
+        ; commit the bbox for this page
+        mov     si, bb0
+        cmp     byte [page], 0
+        je      .c
+        mov     si, bb1
+.c:     mov     ax, [nbx0]
+        mov     [si], ax
+        mov     ax, [nby0]
+        mov     [si+2], ax
+        mov     ax, [nbx1]
+        mov     [si+4], ax
+        mov     ax, [nby1]
+        mov     [si+6], ax
         ret
 
-draw_edges_flat:                                ; SI = point table, [colour] set
-        movzx   esi, si
+; fill_quad: convex fill of qp[0..3] in [colour]; updates the new bbox
+fill_quad:
+        ; y range of the quad, clipped to the screen
+        mov     ax, 32767
+        mov     [qy0], ax
+        mov     word [qy1], -32768
         xor     ebx, ebx
-.e:     push    ebx
-        mov     al, [edges+ebx*2]
-        movzx   edi, al
-        mov     ax, [esi+edi*4]
-        mov     [x0], ax
-        mov     ax, [esi+edi*4+2]
-        mov     [y0], ax
-        mov     al, [edges+ebx*2+1]
-        movzx   edi, al
-        mov     ax, [esi+edi*4]
-        mov     [x1], ax
-        mov     ax, [esi+edi*4+2]
-        mov     [y1], ax
-        call    line
+.yr:    mov     ax, [qp+ebx*4+2]
+        cmp     ax, [qy0]
+        jge     .n1
+        mov     [qy0], ax
+.n1:    cmp     ax, [qy1]
+        jle     .n2
+        mov     [qy1], ax
+.n2:    inc     ebx
+        cmp     ebx, 4
+        jb      .yr
+        cmp     word [qy0], 0
+        jge     .c0
+        mov     word [qy0], 0
+.c0:    mov     ax, [scrh]
+        dec     ax
+        cmp     [qy1], ax
+        jle     .c1
+        mov     [qy1], ax
+.c1:    mov     ax, [qy0]
+        cmp     ax, [qy1]
+        jg      .done
+        ; init spans
+        movzx   edi, word [qy0]
+.ini:   mov     word [xl+edi*2], 32767
+        mov     word [xr+edi*2], -32768
+        inc     edi
+        cmp     di, [qy1]
+        jle     .ini
+        ; walk the four edges
+        xor     ebx, ebx
+.ed:    mov     ax, [qp+ebx*4]
+        mov     [ex0], ax
+        mov     ax, [qp+ebx*4+2]
+        mov     [ey0], ax
+        mov     ecx, ebx
+        inc     ecx
+        and     ecx, 3
+        mov     ax, [qp+ecx*4]
+        mov     [ex1], ax
+        mov     ax, [qp+ecx*4+2]
+        mov     [ey1], ax
+        push    ebx
+        call    edge_walk
         pop     ebx
         inc     ebx
-        cmp     ebx, NEDGES
-        jb      .e
-        ret
-
-keep_old:
-        mov     si, newpts
-        mov     di, oldpts
-        mov     cx, 16
-        push    ds
-        pop     es
-        rep     movsw
-        mov     byte [haveold], 1
-        ret
-
-; Bresenham from (x0,y0) to (x1,y1) in [colour]
-line:
-        mov     ax, [x1]
-        sub     ax, [x0]
-        mov     word [sx], 1
-        jge     .dxok
-        neg     ax
-        mov     word [sx], -1
-.dxok:  mov     [ldx], ax
-        mov     ax, [y1]
-        sub     ax, [y0]
-        mov     word [sy], 1
-        jge     .dyok
-        neg     ax
-        mov     word [sy], -1
-.dyok:  mov     [ldy], ax
-        mov     ax, [ldx]
-        sub     ax, [ldy]
-        mov     [err], ax                       ; err = dx - dy
-        mov     cx, [x0]
-        mov     dx, [y0]
-.p:     call    plot                            ; CX,DX
-        cmp     cx, [x1]
-        jne     .go
-        cmp     dx, [y1]
-        je      .done
-.go:    mov     ax, [err]
-        shl     ax, 1                           ; e2 = 2*err
-        mov     bx, [ldy]
-        neg     bx
-        cmp     ax, bx                          ; e2 > -dy ?
-        jle     .noy
-        mov     bx, [ldy]
-        sub     [err], bx
-        add     cx, [sx]
-.noy:   mov     bx, [ldx]
-        cmp     ax, bx                          ; e2 < dx ?
-        jge     .p
-        add     [err], bx
-        add     dx, [sy]
-        jmp     .p
+        cmp     ebx, 4
+        jb      .ed
+        ; fill the spans
+        mov     dx, [qy0]
+.sp:    movzx   edi, dx
+        mov     cx, [xl+edi*2]
+        mov     bx, [xr+edi*2]
+        cmp     cx, bx
+        jg      .nx
+        call    hline
+.nx:    inc     dx
+        cmp     dx, [qy1]
+        jle     .sp
+        ; bbox
+        mov     ax, [qy0]
+        cmp     ax, [nby0]
+        jge     .b1
+        mov     [nby0], ax
+.b1:    mov     ax, [qy1]
+        cmp     ax, [nby1]
+        jle     .done
+        mov     [nby1], ax
 .done:  ret
 
-; plot pixel CX,DX with [colour]; clips; bank-aware byte writes
-plot:
-        cmp     cx, 0
-        jl      .out
+; edge_walk: (ex0,ey0)-(ex1,ey1): per row, widen xl/xr; also the x bbox
+edge_walk:
+        mov     ax, [ex0]
+        call    bbx
+        mov     ax, [ex1]
+        call    bbx
+        mov     ax, [ey0]
+        cmp     ax, [ey1]
+        jle     .ord
+        xchg    ax, [ey1]
+        mov     [ey0], ax
+        mov     ax, [ex0]
+        xchg    ax, [ex1]
+        mov     [ex0], ax
+.ord:   movsx   eax, word [ex0]
+        shl     eax, 16                         ; x in 16.16
+        mov     [efx], eax
+        movsx   ecx, word [ey1]
+        movsx   edx, word [ey0]
+        sub     ecx, edx                        ; dy >= 0
+        jnz     .slope
+        ; horizontal edge: both x on one row
+        mov     dx, [ey0]
+        mov     ax, [ex0]
+        call    span_x
+        mov     ax, [ex1]
+        call    span_x
+        ret
+.slope: movsx   eax, word [ex1]
+        movsx   edx, word [ex0]
+        sub     eax, edx
+        shl     eax, 16
+        cdq
+        idiv    ecx                             ; step per row, 16.16
+        mov     [estep], eax
+        mov     dx, [ey0]
+.w:     mov     eax, [efx]
+        sar     eax, 16
+        call    span_x                          ; AX=x, DX=y
+        mov     eax, [efx]
+        add     eax, [estep]
+        mov     [efx], eax
+        inc     dx
+        cmp     dx, [ey1]
+        jle     .w
+        ret
+
+span_x:                                         ; AX = x, DX = y: widen row y's span
+        cmp     dx, 0
+        jl      .r
+        cmp     dx, [scrh]
+        jge     .r
+        push    edi
+        movzx   edi, dx
+        cmp     ax, [xl+edi*2]
+        jge     .nl
+        mov     [xl+edi*2], ax
+.nl:    cmp     ax, [xr+edi*2]
+        jle     .nr
+        mov     [xr+edi*2], ax
+.nr:    pop     edi
+.r:     ret
+
+bbx:                                            ; AX = x: widen the new x bbox
+        cmp     ax, [nbx0]
+        jge     .n
+        mov     [nbx0], ax
+.n:     cmp     ax, [nbx1]
+        jle     .r
+        mov     [nbx1], ax
+.r:     ret
+
+; hline: row DX from CX to BX inclusive in [colour]; clips; bank-aware
+hline:
+        pushad
         cmp     dx, 0
         jl      .out
-        cmp     cx, [scrw]
-        jae     .out
         cmp     dx, [scrh]
-        jae     .out
-        pushad
+        jge     .out
+        cmp     cx, 0
+        jge     .l
+        xor     cx, cx
+.l:     mov     ax, [scrw]
+        dec     ax
+        cmp     bx, ax
+        jle     .r
+        mov     bx, ax
+.r:     cmp     cx, bx
+        jg      .out
+        sub     bx, cx
+        inc     bx                              ; run length in pixels
         movzx   eax, dx
         imul    eax, [pitch]
-        movzx   ebx, cx
+        movzx   esi, cx
         movzx   ecx, byte [bypp]
-        imul    ebx, ecx
-        add     eax, ebx                        ; byte offset
-        mov     edx, [colour]
-.b:     call    putbyte                         ; writes DL at EAX, then EAX++
+        imul    esi, ecx
+        add     eax, esi
+        add     eax, [pagebase]                 ; EAX = first byte
+        movzx   esi, bx                         ; pixels left
+.px:    mov     edx, [colour]
+        movzx   ecx, byte [bypp]
+.b:     call    putbyte
         shr     edx, 8
         loop    .b
-        popad
-.out:   ret
+        dec     esi
+        jnz     .px
+.out:   popad
+        ret
 
 ; write DL at framebuffer byte offset EAX (bank-switching as needed); EAX += 1
 putbyte:
@@ -846,11 +1155,16 @@ msg_setfail: db 'mode set (4F02) refused -- any key', 13, 10, 0
 
 corners:    db -1,-1,-1,  1,-1,-1,  1, 1,-1, -1, 1,-1
             db -1,-1, 1,  1,-1, 1,  1, 1, 1, -1, 1, 1
-edges:      db 0,1, 1,2, 2,3, 3,0,  4,5, 5,6, 6,7, 7,4,  0,4, 1,5, 2,6, 3,7
-rgb_r:      db 255,255,255,255,  0,  0,  0,  0, 255,  0,255,128
-rgb_g:      db   0,128,255,255,255,255,128,  0,   0,  0,255,128
-rgb_b:      db   0,  0,  0,128,  0,255,255,255, 255,255,255,255
-pal8:       db  12, 6, 14, 10, 10, 11, 9, 9, 13, 1, 15, 7
+; faces as a,b,c,d with (b-a)x(c-a) pointing OUTWARD (checked by hand per face)
+faces:      db 0,3,2,1      ; front  z=-1
+            db 4,5,6,7      ; back   z=+1
+            db 0,1,5,4      ; bottom y=-1
+            db 3,7,6,2      ; top    y=+1
+            db 0,4,7,3      ; left   x=-1
+            db 1,2,6,5      ; right  x=+1
+facecol:    db 1, 2, 4, 3, 5, 6     ; R, G, B, yellow, magenta, cyan (bit0 R bit1 G bit2 B)
+lvl8:       db 102, 153, 204, 255   ; shade levels, 8-bit channels
+lvl6:       db  25,  38,  51,  63   ; the same for a 6-bit DAC
 
 sintab:
 %include "sintab.inc"
@@ -899,19 +1213,46 @@ vz: dw 0
 tx: dw 0
 ty: dw 0
 colour:   dd 0
-haveold:  db 0
-x0: dw 0
-y0: dw 0
-x1: dw 0
-y1: dw 0
-ldx: dw 0
-ldy: dw 0
-sx: dw 0
-sy: dw 0
-err: dw 0
-colours:  times NEDGES dd 0
+tr: db 0
+tg: db 0
+tb: db 0
+pages:    db 1
+page:     db 0
+pagebase: dd 0
+ia: dw 0
+ib: dw 0
+ic: dw 0
+id: dw 0
+e1x: dd 0
+e1y: dd 0
+e1z: dd 0
+e2x: dd 0
+e2y: dd 0
+e2z: dd 0
+nx: dd 0
+ny: dd 0
+nz: dd 0
+qp:       times 8 dw 0
+qy0: dw 0
+qy1: dw 0
+ex0: dw 0
+ey0: dw 0
+ex1: dw 0
+ey1: dw 0
+efx: dd 0
+estep: dd 0
+nbx0: dw 0
+nby0: dw 0
+nbx1: dw 0
+nby1: dw 0
+bb0:      times 4 dw 0
+bb1:      times 4 dw 0
+colours:  times 24 dd 0
+palq:     times 24 dd 0
 newpts:   times 16 dw 0
-oldpts:   times 16 dw 0
+rot:      times 24 dw 0
+xl:       times 1024 dw 0
+xr:       times 1024 dw 0
 modes:    times MAXMODES*14 db 0
 vbeinfo:  times 512 db 0
 modeinfo: times 256 db 0

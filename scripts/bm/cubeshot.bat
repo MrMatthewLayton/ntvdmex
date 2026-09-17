@@ -21,16 +21,10 @@ reg add "%IFEO%" /v Debugger /t REG_SZ /d "\"%BIN%\ntvdmhost.exe\"" /f >nul
 cd /d "%SH%\demo\msdos\vesacube"
 start "" "%SH%\demo\msdos\vesacube\VESACUBE.COM"
 ping -n 7 127.0.0.1 >nul
-"%RIG%\rigshot.exe" fg "Microsoft Windows XP Virtual DOS Machine"
-"%RIG%\rigshot.exe" click 400 560
-ping -n 2 127.0.0.1 >nul
 ping -n 2 127.0.0.1 >nul
 "%RIG%\rigshot.exe" shot "%OUT%\cubeshot_menu.bmp"
 for %%L in (%LETTERS%) do (
-  "%RIG%\rigshot.exe" fg "Microsoft Windows XP Virtual DOS Machine"
-"%RIG%\rigshot.exe" click 400 560
-ping -n 2 127.0.0.1 >nul
-  "%RIG%\rigshot.exe" key %%L
+    "%RIG%\rigshot.exe" key %%L
   ping -n 6 127.0.0.1 >nul
   rem the host's own Capture > Take Screenshot (IDM_CAP_SHOT = 8): a desktop BitBlt cannot
   rem see a DirectDraw fullscreen surface, the host's frame copy can -- shot_manual_NN.bmp
