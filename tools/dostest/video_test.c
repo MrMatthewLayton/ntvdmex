@@ -341,6 +341,11 @@ int main(void)
     vid.dirty=1; vdd_bus_frame(&bus);
     CHECK(vid.frame.w==640 && vid.frame.h==480 && vid.frame.pixels==vid.vesa_vram,
           "frame(vesa): 640x480x8 from vesa_vram");
+    /* a banked guest writes into the A0000 window and never calls 4F05 again: the
+       present must sync the window into the frame (vesacube, s74b) */
+    g_vmem[640*10 + 7] = 0x0C;
+    vid.dirty=1; vdd_bus_frame(&bus);
+    CHECK(vid.frame.pixels[640*10 + 7]==0x0C, "frame(vesa banked): a window write reaches the presented frame");
 
     /* T12b: VESA 4F06 logical scan line + 4F07 display start, VBE 2.0 §4.9/4.10.
        Both used to be ACCEPTED AND IGNORED: the stride the presenter used never moved
