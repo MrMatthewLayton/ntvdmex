@@ -4,7 +4,8 @@
 > this file top to bottom and you will know where it is, what works, what does not, and
 > what to do next.
 
-- **Last updated:** 2026-09-17 17:10 (session 74b — ★ **RELEASE CUT: `dist\ntvdmex-20260917-f3c349d.zip`, host `a988c6e6`, USER-CONFIRMED BY HAND across all major apps and games incl. Hexen's loader; pkgtest 8/8 + pkgw16 from the package's own bin\. This is the new stable anchor; the old `eb466c56` zip is in `debug\prev\`.**)
+- **Last updated:** 2026-09-17 18:30 (session 74c — ★★★★★ **DUKE NUKEM 3D RUNS (first time ever) and ZAR's VESA MODES RENDER, both VESA1 banked and VESA2 LFB** — two DPMI defects (`4012e1a`, `d15a26a`); rig `bin\` = `61093e09` = HEAD; **stable zip UNCHANGED at `f3c349d`/`a988c6e6` — this build is by-hand OWED: Duke3D, ZAR VESA1+VESA2, then the DPMI regression set.** See the s74c block.)
+- Previously: 2026-09-17 17:10 (session 74b — ★ **RELEASE CUT: `dist\ntvdmex-20260917-f3c349d.zip`, host `a988c6e6`, USER-CONFIRMED BY HAND across all major apps and games incl. Hexen's loader; pkgtest 8/8 + pkgw16 from the package's own bin\. This is the new stable anchor; the old `eb466c56` zip is in `debug\prev\`.**)
 - Previously: 2026-09-17 16:00 (session 74b — **HEXEN'S HI-RES LOADER RENDERS** (`2df5651`, rig `a988c6e6`); VESACUBE demo deployed (`demo\msdos\vesacube`, solid/culled/shaded, vsync, page flip); see the s74b block)
 - Previously: 2026-09-17 14:50 (session 74b — PCem boots UNATTENDED (~60 s; the stall was AMI's 'D: drive failure — Press F1', not sync); p_vesa/p_vesapm/p_plan12/p_lpt clean vs real BIOSes; rig `474f7b2e`; see the s74b block)
 - Previously: 2026-09-17 14:30 (session 74b — **PCem IS THE VESA ORACLE**: `p_vesa` 128/128 vs a real Tseng ET4000/W32p ROM + Bochs, rig `b3a3cf33`; see the s74b block)
@@ -241,6 +242,74 @@ and matches the 6.22 oracle row for row (session 53)** — but `MEM /C` still re
    for eight sessions. The shelf is measured and unlaunched; a third guest is
    the next step, and it is also the honest correction for *a fix measured on
    one guest is a fix for none*.
+
+   ### ★★★★★ s74c (17th, 17:15–18:30) — **DUKE NUKEM 3D RUNS. ZAR'S VESA MODES RENDER. TWO DPMI DEFECTS, BOTH "A 32-BIT CLIENT IS NOT A 16-BIT CLIENT".**
+
+   > **Rig `bin\ntvdmhost.exe` = `61093e09` = HEAD `d15a26a`. Stable zip on the share is
+   > STILL `f3c349d` / `a988c6e6` (`debug\prev\ntvdmhost_prev.exe`) — unchanged, per the
+   > rule. `debug\prev\ntvdmhost_a988c6e6.exe` is the displaced release host.**
+   > **By-hand OWED on `61093e09`: (1) Duke3D from `demo\msdos\duke3d` — expect the
+   > setup/title, demo, sound; (2) ZAR → options → a VESA1 and a VESA2 mode (the by-hand
+   > crash); (3) the DPMI regression set: Doom, Heretic, Hexen, ZAR VGA, Skyroads,
+   > heaven7, Notepad — all headless-green here, none eyeballed.** `cfg\` clean, ZAR's
+   > `USER1.CFG` restored to `VGA_320x200`.
+
+   **1. Duke3D "doesn't load at all" was its own exit 0 (`4012e1a`).** The morning's
+   corpus log already held the answer: the game writes *"You don't have enough memory to
+   run Duke Nukem 3D … 'Total memory free'"* to stdout and terminates. It sizes itself
+   from **INT 31h 0500** called from flat 32-bit code with the 30h-byte block on its
+   32-bit stack (`ES:EDI = 0x2f7:0x045d53xx`); the handler did `esb + (EDI & 0xFFFF)`,
+   wrote our 64 MB answer at linear `0x53xx`, and the game read its own uninitialised
+   buffer. `dpmi_rmcs_ptr` had learned this rule from Doom's 0300 mouse RMCS in s6x; it
+   is now `dpmi_caller_off()` (the caller's CS D/B bit decides 16 vs 32) and **0500 and
+   0303 (handler DS:ESI, RMCS ES:EDI) use it**. 0500 refuses an unreadable block with
+   8021 instead of writing it. **Headless: CONs compile, art/palette load, mode 13h,
+   DEMO1 plays with SB DMA — `runs/s74c_duke/shot01.png` is E1M1.** Duke3D is a bound
+   DOS/4GW *Professional*; no `DOS4GW.EXE` needed.
+
+   **2. ZAR crashed on selecting a VESA mode (`d15a26a`) — reproduced headless by
+   editing `USER1.CFG` `graphics VideoMode` to `VESA2_640x480` / `VESA1_640x480`.**
+   4F02 `0x4101` accepted, 0800 mapped the LFB, then **`#GP` on the first `rep stosd`
+   through `es=0x3af`**. The log had the cause three lines up: `DPMI-LDT: install
+   REJECTED … 0xC000011A`. ZAR builds the selector with **0009 CX=8092 — DPL 0, G=1** —
+   then 0007 base, 0008 limit `0x4afff` bytes. NT's `PspIsDescriptorValid` rejects any
+   non-null LDT entry whose DPL≠3, and G=1 over a raw `0x4afff` field is a 1.2 GB segment
+   it rejects again. DPL 0 is legal on real DOS only because DOS/4GW runs the client at
+   ring 0; a ring-3 host takes the client's CPL (the spec says so). **`dpmi_install`
+   forces DPL 3 on PRESENT descriptors** (first attempt forced it on freed/null ones too
+   → 2375 rejections — a null descriptor is the one non-DPL-3 entry NT takes) **and 0008
+   clears a client-set G flag** (its limit is bytes; the host chooses G). Both paths
+   in-game at 640×480: `runs/s74c_zar/zar_vesa2_01.png` (LFB) and `zar_vesa1_01.png`
+   (banked, 4,735 `4F05` calls).
+
+   **3. Guards on `61093e09`, all headless, `runs/s74c_guards/`:** Doom/Heretic/Hexen
+   heartbeats 672/344/646 vs the morning's confirmed 674/359/656, same SB block counts,
+   same Hexen watchdog wind-down · ZAR VGA 579 vs 591, 0 faults · Skyroads `n8=0
+   max_ms=7` · heaven7 `0x4170` LFB, 16,389 `4F07` · Notepad (Win16) launches and
+   X-closes through the package host (`w16close_notepad.txt`) · **offvm 1426/0**.
+
+   **4. The other "never worked" guests, read not run:**
+   - **Chasm, Radiance:** *"Runtime error 200 at xxxx:0091"* — Turbo Pascal's CRT-unit
+     `Delay()` calibration overflow on any CPU > ~200 MHz. Identical on real hardware
+     and stock ntvdm; the fix is the well-known EXE patch (TPPATCH/ctbppat), not ours.
+   - **egasikio:** its readme says *"requires an EGA card … doesn't work on VGA-cards"*;
+     it detects VGA and exits 0. Correct.
+   - **Fusion (Russian demo, own DPMI stub): DIAGNOSED, NOT FIXED.** It installs its own
+     PM handler for **INT 33h** (`0205 → 0x187:0x55b`) and then issues `INT 33h AX=D021`
+     as its *own* syscall; our patched site services vector 33h as the mouse and the
+     demo aborts cleanly. The dispatcher chains only vector 21h to a client handler
+     (`main.c` ~18376); 10h/16h/1Ah/33h are host-serviced regardless. **The right fix is
+     "a client-installed PM handler owns the vector", but DOS/4GW installs passthrough
+     handlers on all four for every game on the shelf** (`sel:0x40/0x58/0x68/0xcc`), so
+     that change reroutes the whole shelf's BIOS/mouse traffic through DOS/4GW's
+     reflector — not for deadline day. Candidate narrow rule: chain when the handler's
+     selector is a 32-bit code selector the extender did not create.
+
+   **Lessons.** *A guest that "doesn't load" usually said why — read its stdout out of
+   the log before the DPMI trace* (Duke3D's message was in the morning's log at 08:31).
+   *`& 0xFFFF` on an (E)SI/(E)DI/(E)DX from a client is a 16-bit assumption; grep them
+   all when one bites* (s6x fixed the RMCS one and left 0500/0303). *A cfg file is a
+   headless menu* — ZAR's by-hand crash became a 90-second loop.
 
    ### ★★★★★ s74b (17th, 07:30–08:50) — **HEAVEN7 RUNS WITH NO FLAG. THE PATCHER KNOT IS UNTIED. VESA'S RUNTIME HALF (4F04–4F09) IS DONE, SPEC-TESTED.**
 
