@@ -4,7 +4,8 @@
 > this file top to bottom and you will know where it is, what works, what does not, and
 > what to do next.
 
-- **Last updated:** 2026-09-17 10:35 (session 74b — VESA/VBE runtime + text + 1280x1024 + PM + DDC done, rig `7d883a85`; PCem BOOTS (needs eyes); see the s74b block)
+- **Last updated:** 2026-09-17 14:30 (session 74b — **PCem IS THE VESA ORACLE**: `p_vesa` 128/128 vs a real Tseng ET4000/W32p ROM + Bochs, rig `b3a3cf33`; see the s74b block)
+- Previously: 2026-09-17 10:35 (session 74b — VESA/VBE runtime + text + 1280x1024 + PM + DDC done, rig `7d883a85`; PCem BOOTS (needs eyes); see the s74b block)
 - Previously: 2026-09-17 09:20 (session 74b — USER-CONFIRMED BY HAND on `e92ce8ab`: Doom, Heretic, Hexen, Zar, Wolf3D, Skyroads; heaven7 geometry closed (`6fce192`, rig `36c872e9`); heaven7 music = GUS-only, no GUS model yet)
 - **Score: 86.9%** (`./tools/score/score.py` — run it, do not quote this line).
   Session 53 moved it 72.4 → 79.6; session 54 → 80.2; session 55 → 83.1;
@@ -333,6 +334,36 @@ and matches the 6.22 oracle row for row (session 53)** — but `MEM /C` still re
    - **heaven7 (`36c872e9`+) default = 320x240x16 LFB edge-to-edge; `-2` = 640x480. GUS-only
      audio; no GUS model.** By-hand owed on `7d883a85`: heaven7, then the six confirmed on
      `e92ce8ab` if you want the new stable to be this build.
+
+   **5. 11:00–14:30 — PCem IS AN ORACLE (`42ab7f8` `2451aa8`), and it found two defects
+   the spec audit had passed.** With the user's eyes for three minutes: DOS 6.22 boots to
+   `C:\>` in PCem (AMI 486, real IBM VGA), `AUTOEXEC` has the `A:\RUN.BAT` hook.
+   - `--load_drive_a` is a NO-OP in the wx build; A: is mounted via the config's `disc_a`
+     line (rewritten per launch). Guest POST+boot ≈ 100–115 s; PCem writes the floppy image
+     THROUGH while running, so the poll loop stands (default 240 s).
+   - ⛔ **`enable_sync = 1` STALLS THE GUEST WHEN THE WINDOW IS NOT BEING DRAWN** (another
+     Space, behind a fullscreen app): CPU spins at ~25 %, nothing progresses. Five "boot
+     never finishes" runs were this; every run that worked was one somebody was looking at.
+     Both configs now `enable_sync = 0`. `pcem/` is gitignored — the note lives in
+     `scripts/pcemoracle.py` and memory `pcem-oracle-setup`.
+   - New probe **`tools/dostest/p_vesa.asm`**: VbeInfoBlock + every ModeInfoBlock, BIOS
+     pointers masked. dosdiff hosts **`pcem`** (IBM VGA) and **`pcem-vesa`** (Diamond
+     Stealth 32 = Tseng ET4000/W32p, VESA 1.2 in ROM, `configs/NTVDMEX-VESA.cfg`); rule
+     cases may be globs; a probe opts into extra oracles with `; ORACLE-ALSO: <host>`.
+   - **Found by the oracle, fixed:** VbeInfoBlock **Capabilities D0 = 0** (we honour the
+     8-bit DAC but told guests not to ask) · **NumberOfImagePages = 0** for every mode (the
+     s74 audit fixed the offset and left "one page" in it) · YCharSize 8 in 200-line modes ·
+     DirectColorModeInfo D1 for 5:5:5 · Lin/BnkNumberOfImagePages follow +29.
+   - **Read and deliberately NOT copied**, each a recorded rule: card version/memory/OEM
+     rev · Tseng's write-only-A/read-only-B window pair · 5:5:5 as "16 bpp" · TTY-in-graphics
+     bit (we don't draw teletype into VESA modes, so we don't claim it) · 9-dot 80-column
+     text cells (we render 8-dot and say 8 — fix by rendering 9, not by lying).
+   - Bochs and the real ROM split on YCharSize/DC-D1; with both voting those rows are
+     DISPUTED; the two modes only Bochs offers abstain it, reason written down.
+   - **`paritysweep.sh p_vesa`: 131 rows, 128 comparable, 100 %, 3 abstained.**
+   - `p_vesapm` / `p_lpt` / `p_plan12` — "PCem-blocked" since the programme began — are now
+     tagged `ORACLE-ALSO` and being swept (result in the session log / memory).
+   - ⛔ **NEVER `lldb -p` unattended** (memory `lldb-attach-wedges-the-mac`).
 
    **Score now:** see the s74b VBE table in the session log — **~82/100**, up from 60.
    Open on VESA: `4F0A` PM interface (clean decline; nobody on the shelf calls it),

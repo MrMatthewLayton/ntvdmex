@@ -22,6 +22,7 @@
 ;   the aperture would exercise the same fault path as the write and could hide a
 ;   fault-handler bug behind itself.
 ;
+; ORACLE-ALSO: pcem   (s74b: a real AMI 486 BIOS + IBM VGA ROM under PCem, not SeaBIOS)
 ; nasm -f bin p_plan12.asm -o p_plan12.com
 
         org     100h

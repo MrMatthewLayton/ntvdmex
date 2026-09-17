@@ -15,6 +15,7 @@
 ; actually arrive somewhere, and a read from a port with nothing attached must
 ; report TIMEOUT rather than block or lie about having data.
 ;
+; ORACLE-ALSO: pcem   (s74b: a real AMI 486 BIOS + IBM VGA ROM under PCem, not SeaBIOS)
 ; nasm -f bin p_lpt.asm -o p_lpt.com
 
         org     100h

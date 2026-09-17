@@ -23,6 +23,7 @@
 ;   +6  WORD  offset to a list of ports/memory the client needs (0 = none)
 ; CX = the length of the whole block, code included.
 ;
+; ORACLE-ALSO: pcem-vesa   (s74b: a real AMI 486 BIOS + Tseng ET4000/W32p VESA ROM under PCem, not SeaBIOS)
 ; nasm -f bin p_vesapm.asm -o p_vesapm.com
 
         org     100h
