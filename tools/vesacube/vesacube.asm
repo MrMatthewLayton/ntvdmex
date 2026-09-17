@@ -17,7 +17,7 @@
 ; Real mode, 386 instructions, banked windows only (the LFB needs a protected-mode
 ; or unreal-mode client; that is heaven7's job).  Draws with a bank-aware byte
 ; writer; with two pages it flips, with one it erases the last frame's bounding box.
-; Paces frames on the BIOS tick (see vsync for why not 3DAh).
+; Paces frames on the vertical retrace (3DAh), falling back to the BIOS tick (see vsync).
 ;
 ; Usage:  VESACUBE            menu: pick a mode by letter, ESC leaves the cube,
 ;                             ESC again quits
@@ -1075,18 +1075,36 @@ putbyte:
         inc     eax
         ret
 
-; Frame pacing: wait for the BIOS tick (18.2 Hz) to change. ⚠ Polling 3DAh for the
-; vertical retrace was tried first and spins for ~half a second per edge under the
-; NTVDMEX headless harness (every IN is reflected; ~2 edges/s measured), so the cube
-; would crawl. The tick is what DOS games that do not race the beam use anyway.
+; Frame pacing: VERTICAL RETRACE with a tick fallback. Wait for the CRT to leave
+; retrace, then to enter it (3DAh bit 3 low -> high) -- but give up as soon as the
+; BIOS tick (18.2 Hz) moves on, so a host whose retrace bit toggles rarely (the
+; NTVDMEX headless harness measured ~2 edges/s, reflecting every IN) still runs at
+; tick rate instead of stalling, and real hardware / a good emulation gets a true
+; 60-70 Hz sync. With two pages, 4F07 BL=80h additionally flips on the retrace.
 vsync:
         push    es
         push    ax
+        push    dx
         xor     ax, ax
         mov     es, ax
         mov     ax, [es:046Ch]
-.w:     cmp     ax, [es:046Ch]
-        je      .w
+        mov     [vt0], ax                       ; tick at entry
+        mov     dx, 3DAh
+.leave: in      al, dx                          ; wait until NOT in retrace
+        test    al, 8
+        jz      .enter
+        mov     ax, [es:046Ch]
+        cmp     ax, [vt0]                       ; tick moved? -> fallback
+        jne     .done
+        jmp     .leave
+.enter: in      al, dx                          ; wait until IN retrace
+        test    al, 8
+        jnz     .done
+        mov     ax, [es:046Ch]
+        cmp     ax, [vt0]
+        jne     .done
+        jmp     .enter
+.done:  pop     dx
         pop     ax
         pop     es
         ret
@@ -1185,6 +1203,7 @@ cur:      dw 0
 tmpmode:  dw 0
 runlimit: dw 0
 tick0:    dw 0
+vt0:      dw 0
 scrw:     dw 0
 scrh:     dw 0
 pitch:    dd 0

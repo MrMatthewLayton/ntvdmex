@@ -20,5 +20,6 @@ and on NTVDMEX (rig desktop screenshot, mode 101h). `scripts/bm/cubeshot.bat` dr
 menu with `rigshot` for unattended screenshots; XP's focus rules make it flaky — a person
 at the keyboard is the better test.
 
-Frame pacing is the BIOS tick, not port 3DAh: under the headless harness a retrace poll
-sees ~2 edges a second and the cube would crawl.
+Frame pacing: vertical retrace on port 3DAh (low -> high on bit 3), with the BIOS tick as
+a fallback so a host whose retrace bit is slow still runs at tick rate. On the rig a 12 s
+run shows ~800 retrace edges and ~930 page flips (~65 Hz).
