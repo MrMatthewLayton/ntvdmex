@@ -4,7 +4,8 @@
 > this file top to bottom and you will know where it is, what works, what does not, and
 > what to do next.
 
-- **Last updated:** 2026-09-17 09:20 (session 74b — USER-CONFIRMED BY HAND on `e92ce8ab`: Doom, Heretic, Hexen, Zar, Wolf3D, Skyroads; heaven7 geometry closed (`6fce192`, rig `36c872e9`); heaven7 music = GUS-only, no GUS model yet)
+- **Last updated:** 2026-09-17 10:35 (session 74b — VESA/VBE runtime + text + 1280x1024 + PM + DDC done, rig `7d883a85`; PCem BOOTS (needs eyes); see the s74b block)
+- Previously: 2026-09-17 09:20 (session 74b — USER-CONFIRMED BY HAND on `e92ce8ab`: Doom, Heretic, Hexen, Zar, Wolf3D, Skyroads; heaven7 geometry closed (`6fce192`, rig `36c872e9`); heaven7 music = GUS-only, no GUS model yet)
 - **Score: 86.9%** (`./tools/score/score.py` — run it, do not quote this line).
   Session 53 moved it 72.4 → 79.6; session 54 → 80.2; session 55 → 83.1;
   session 56 → 85.4; s57, **s58, s59 and s60 moved it not at all** — s57 built the modal
@@ -308,6 +309,30 @@ and matches the 6.22 oracle row for row (session 53)** — but `MEM /C` still re
    `BLASTER` string and no `0x2xx` port immediate. A Gravis Ultrasound model (GF1: 32 voices,
    1 MB DMA-loaded sample RAM, envelopes, timers, IRQ) is a new device — not a same-day job.
    `-n` silences it cleanly. By-hand owed on `36c872e9`: heaven7 default + `-2`.
+
+   **4. 09:20–10:35 — the rest of the VBE list (`fac0349` `5f42907` `f8b3410`), rig `7d883a85`:**
+   - **1024x768 + 1280x1024** (`0x105/0x116-118`, `0x107/0x119-11B`): `NTVDD_FRAME_MAXW/H`
+     (1280x1024) in `ntvdd.h` now sizes the presenter's snapshots, its guard, the VESA list's
+     cap and `VID_FB_MAX` from ONE number; VRAM 2 → 4 MB.
+   - **132-column text modes `0x108-0x10C`**: 4F01 answers in characters (model 0, B800),
+     4F02 goes through the standard mode-3 set then applies the geometry, 4F03 remembers the
+     VESA number until a standard set clears it. Renderer needed nothing — it was already
+     `cols x 8` / `rows x cell_h`. QB's 80x25 unchanged on the rig.
+   - **4F10 VBE/PM** (report/set/get) and **4F15 VBE/DDC** (synthesised EDID 1.3, valid
+     checksum, one block) — both from the published interface as Bochs/DOSBox answer; no PDF,
+     no oracle, said so in the commits.
+   - `4F0A` PM interface stays a clean decline BY DESIGN (guests fall back; a proper one is
+     position-independent code the client copies that we then have to service).
+   - video_test 197 → 219 checks; offvm **1418/0**. Guards on `7d883a85`: heaven7, Doom ×2 clean
+     (the first post-deploy Doom took the watchdog wind-down — the standing rule, not chased).
+   - **PCem BOOTS AND EMULATES** (`~/PCem/roms` was missing — PCem created `~/PCem/` itself in
+     s71; CMOS now 32 MB + C-first). The guest chain after POST is unobserved: needs the user at
+     the Mac once (approve lldb, or PCem's screenshot key). ⛔ **DO NOT `lldb -p` unattended** —
+     the pending SecurityAgent prompt wedged every unsigned exec on the Mac for 20 minutes
+     (memory `lldb-attach-wedges-the-mac`).
+   - **heaven7 (`36c872e9`+) default = 320x240x16 LFB edge-to-edge; `-2` = 640x480. GUS-only
+     audio; no GUS model.** By-hand owed on `7d883a85`: heaven7, then the six confirmed on
+     `e92ce8ab` if you want the new stable to be this build.
 
    **Score now:** see the s74b VBE table in the session log — **~82/100**, up from 60.
    Open on VESA: `4F0A` PM interface (clean decline; nobody on the shelf calls it),
