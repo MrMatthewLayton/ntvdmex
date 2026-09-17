@@ -535,11 +535,35 @@ static const char *ntvdmex_root(void)
     }
     return root;
 }
+/* ── ⛔ THE RING IS PER-THREAD, BECAUSE A SHARED ONE WROTE A LOG LINE INTO A FLAG FILE.
+     (s74c) The watchdog thread built WDLOG_PATH here, and before its CreateFile ran the
+     other threads had taken 16 more slots -- so the pointer it held now read
+     `cfg\pmnoirq.flag` (the PM loop's GetFileAttributes at entry), and the watchdog's
+     "started" line CREATED the knob that suppresses every PM IRQ. From that run on,
+     Duke3D failed its sound-IRQ test ("Playback failed, possibly due to an invalid or
+     conflicting IRQ"), heaven7 and ZAR ran with time stopped, and nothing said why:
+     the file's CONTENTS were the only clue. A caller may legitimately hold a few paths
+     at once (LOG_PATH inside log_append while building another), so keep a small ring,
+     but never let another thread's path land in it. */
+#define NTVDMEX_PATH_SLOTS 8
+#define NTVDMEX_PATH_SLOT  (MAX_PATH + 96)
+static volatile LONG g_path_tls = -1;             /* TlsAlloc'd on first use (no __thread: no libgcc) */
 static const char *ntvdmex_path(const char *sub, const char *name)
 {
-    static char ring[16][MAX_PATH + 96];
-    static volatile LONG next;
-    char *b = ring[InterlockedIncrement(&next) & 15];
+    char *ring; unsigned *next; char *b;
+    if (g_path_tls < 0) {
+        LONG t = (LONG)TlsAlloc();
+        if (InterlockedCompareExchange(&g_path_tls, t, -1) != -1) TlsFree((DWORD)t);
+    }
+    ring = (char *)TlsGetValue((DWORD)g_path_tls);
+    if (!ring) {
+        ring = (char *)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY,
+                                 NTVDMEX_PATH_SLOTS * NTVDMEX_PATH_SLOT + sizeof(unsigned));
+        if (!ring) return "";                     /* out of memory: an empty path fails loudly downstream */
+        TlsSetValue((DWORD)g_path_tls, ring);
+    }
+    next = (unsigned *)(ring + NTVDMEX_PATH_SLOTS * NTVDMEX_PATH_SLOT);
+    b = ring + ((*next)++ & (NTVDMEX_PATH_SLOTS - 1)) * NTVDMEX_PATH_SLOT;
     const char *r = ntvdmex_root();
     int i = 0, k;
     for (k = 0; r[k] && i < MAX_PATH + 90; ++k) b[i++] = r[k];
@@ -1758,11 +1782,18 @@ static char *exec_begin(dos_machine_t *m, volatile BYTE *tib, char *p)
          stub in Heaven7's h7.EXE, reads that name slot to find what to load, and
          read "PEC=C:\COMMAND.COM". Doom, Heretic, Hexen and ZAR never showed it
          because their extenders are BOUND into the game EXE: no EXEC, no copy.
-         A non-zero word is the caller's own block and is used as it stands. */
+         ⚠ AND A NON-ZERO WORD IS COPIED TOO (s74c). It used to be handed to the child
+         as it stood, on the theory that "the caller's own block" is the caller's
+         business. DOS does not think so: EXEC always builds the child a FRESH block
+         -- strings from whichever segment was named, then 0001 + the program name --
+         because the name slot is DOS's, not the caller's. Duke3D's SETUP.EXE spawns
+         SETMAIN.EXE (bound DOS/4G) with a Watcom-built environment that has no name
+         slot; DOS/4G read its own path out of the tail, got "", and died with
+         "DOS/16M error: [8] cannot open file ''". */
     envseg = m->exec_env;
-    if (!envseg) {
+    {
         const volatile BYTE *ppsp = (const volatile BYTE *)((DWORD)m->psp_seg << 4);
-        WORD penv = (WORD)(ppsp[0x2C] | (ppsp[0x2D] << 8));
+        WORD penv = envseg ? envseg : (WORD)(ppsp[0x2C] | (ppsp[0x2D] << 8));
         const volatile BYTE *pe = (const volatile BYTE *)((DWORD)penv << 4);
         DWORD slen, nlen = 0, total, k;
         volatile BYTE *ce;
@@ -12727,6 +12758,23 @@ static DWORD WINAPI dpmi_watchdog(LPVOID param)
                     if (lb && mem_readable((ULONG_PTR)lp, 8)) {
                         q = zput(q, " b@live="); q = zdump(q, lp, 8);
                     }
+                    /* ── ★ A GUEST THAT IS MOVING IS NOT WEDGED. (s74c, Duke3D's SETUP)
+                         `iter` counts PM ENTRIES, so a flat client that runs natively
+                         without trapping -- SETMAIN hooks the keyboard, not the timer,
+                         draws its menu and then polls its own key buffer -- never bumps
+                         it, and this watchdog TerminateProcess'd a perfectly healthy
+                         program 3 s after it finished loading. By hand that is "setup
+                         crashes". The live sample above already tells the two apart:
+                         a wedge sits on one EIP (a jmp-self, or the kernel never
+                         returning, in which case the sample is host code), a running
+                         guest is somewhere else every 250 ms. Client code (TI=1) at a
+                         new EIP resets the streak, exactly as the Win16 wait does. */
+                    { static DWORD wd_live_prev = 0;
+                      if ((gcs & 4) && geip != wd_live_prev) {
+                          frozen = 0;
+                          q = zput(q, " (moving -> not wedged)");
+                      }
+                      wd_live_prev = geip; }
                 }
               }
               q = zput(q, "\r\n");
@@ -20933,7 +20981,25 @@ static int dpmi_async_inject_pm(unsigned irq, CONTEXT *cx)
     if (g_pmret_sel == 0) { g_async_why = 4; return 0; }              /* no catcher yet -> no way back */
     if (!g_pm_int[iv].client) { g_async_why = 5; return 0; }          /* the client has not hooked this line */
     /* Not before the application has an ISR; see dpmi_inject_pm_irq(). */
-    if (g_dpmi_client32 && iv == 0x08 && !g_pm_app_hooked_timer) { g_async_why = 6; return 0; }
+    if (g_dpmi_client32 && iv == 0x08 && !g_pm_app_hooked_timer) {
+        /* ── BUT THE BIOS TICK STILL HAS TO ADVANCE. (s74c, Duke3D's SETUP) ────────
+             A flat application that never hooks INT 08h still reads 0040:006C: Watcom's
+             delay()/clock() spin on it. The PM loop bumps it "polled", i.e. only when
+             the guest traps back in -- and a tick-spin never traps, so SETMAIN sat at
+             0x042d16f1 with time stopped until the watchdog killed it (1,665 refusals
+             here, why=6). We are the timer: with the CPU thread suspended in guest code
+             this is the one place that can do the BIOS's bookkeeping while it spins.
+             Billed against the owed-tick count so time is never manufactured, and the
+             pending flag is consumed so the polled path does not count it again. */
+        if (pm_tick_take()) {
+            volatile DWORD *t = (volatile DWORD *)(ULONG_PTR)0x46C;
+            DWORD v = *t + 1;
+            if (v >= 0x1800B0u) { v = 0; *(volatile BYTE *)(ULONG_PTR)0x470 = 1; }
+            *t = v;
+            if (g_irq0_pending > 0) InterlockedDecrement(&g_irq0_pending);
+        }
+        g_async_why = 6; return 0;
+    }
     if (!g_dpmi_vi) { g_async_why = 7; return 0; }                    /* the client has interrupts masked */
     if (!(efl & (0x200u | EFLAGS_VIF_BIT))) { g_async_why = 8; return 0; }      /* ...and the CPU agrees */
     /* Same hold-off the cooperative path uses: a vector installed microseconds ago is an
