@@ -6044,6 +6044,15 @@ static DWORD g_ms_i33ax_ovf, g_ms_i33site_n, g_ms_i33site_ovf;
 #define I33_SRC_V86  1                      /* V86 BOP (patched `CD 33` in real mode) */
 #define I33_SRC_PM   2                      /* PM BOP  (patched `CD 33` in PM code)   */
 #define I33_SRC_SIM  3                      /* DPMI 0300 simulate-real-mode-interrupt */
+/* An offset register from the caller: full-width from a 32-bit PM caller, a word from
+   V86, 16-bit PM, or a 0300 excursion (s74c, the 0Ch handler ZAR installs at
+   0x347:0x0044xxxx). */
+static int dpmi_sel_is32(WORD sel);
+static DWORD mouse_i33_off(volatile BYTE *tib, int src, DWORD v)
+{
+    if (src == I33_SRC_PM && dpmi_sel_is32((WORD)(VDM_REG(tib, VTIB_CS) & 0xFFFF))) return v;
+    return v & 0xFFFF;
+}
 /* DPMI 0300 (simulate real-mode interrupt) vectors we do NOT service. See the 0300 arm. */
 static DWORD g_simint_unhandled, g_simint_vec[256];
 /* ── ★ simintrefl.flag -- REFLECT DPMI 0300 TO THE GUEST'S OWN REAL-MODE HANDLER.
@@ -6657,17 +6666,19 @@ static void mouse_int33(volatile BYTE *tib, int src)
     /* ── 0Ch SET / 14h EXCHANGE the event handler. See the note on g_ms_evt_mask:
          stored and reported, NOT yet invoked. 14h must return the PREVIOUS pair or a
          guest that chains handlers jumps to whatever we failed to tell it. */
+    /* ES:(E)DX -- a flat PM client's handler offset is a full 32-bit linear (ZAR:
+       0x347:0x0044xxxx, s74c); a 16-bit or V86 caller's is a word. */
     case 0x000C:
         InterlockedExchange(&g_ms_evt_mask, (LONG)(VDM_REG(tib, VTIB_ECX) & 0xFFFF));
         InterlockedExchange(&g_ms_evt_seg,  (LONG)(VDM_REG(tib, VTIB_ES)  & 0xFFFF));
-        InterlockedExchange(&g_ms_evt_off,  (LONG)(VDM_REG(tib, VTIB_EDX) & 0xFFFF));
+        InterlockedExchange(&g_ms_evt_off,  (LONG)mouse_i33_off(tib, src, VDM_REG(tib, VTIB_EDX)));
         ++g_ms_evt_installs;
         break;
     case 0x0014: {                                      /* exchange event handler  */
         LONG om = g_ms_evt_mask, os = g_ms_evt_seg, oo = g_ms_evt_off;
         InterlockedExchange(&g_ms_evt_mask, (LONG)(VDM_REG(tib, VTIB_ECX) & 0xFFFF));
         InterlockedExchange(&g_ms_evt_seg,  (LONG)(VDM_REG(tib, VTIB_ES)  & 0xFFFF));
-        InterlockedExchange(&g_ms_evt_off,  (LONG)(VDM_REG(tib, VTIB_EDX) & 0xFFFF));
+        InterlockedExchange(&g_ms_evt_off,  (LONG)mouse_i33_off(tib, src, VDM_REG(tib, VTIB_EDX)));
         ++g_ms_evt_installs;
         VDM_SET16(tib, VTIB_ECX, (WORD)om);
         VDM_SET16(tib, VTIB_EDX, (WORD)oo);
@@ -6777,8 +6788,10 @@ static void mouse_cb_try(volatile BYTE *tib)
     }
     if (!mask || g_ms_evq_head == g_ms_evq_tail) { ++g_ms_cb_why[1]; return; }
     if ((g_ms_evt_seg | g_ms_evt_off) == 0) { ++g_ms_cb_why[2]; return; }
-    if (g_dpmi_pm) {                               /* PM handler: not this path (yet) */
-        g_ms_evq_tail = g_ms_evq_head; InterlockedExchange(&g_ms_evt_pend, 0);
+    if (g_dpmi_pm) {                               /* PM client: dpmi_inject_pm_mousecb()
+                                                      delivers from the PM loop; leave the
+                                                      queue for it (s74c -- it used to be
+                                                      DROPPED here, ZAR never saw a click) */
         ++g_ms_cb_pm; return;
     }
     cs = VDM_REG(tib, VTIB_CS) & 0xFFFF; ip = VDM_REG(tib, VTIB_EIP) & 0xFFFF;
@@ -21192,6 +21205,129 @@ static int dpmi_inject_pm_irq(dos_machine_t *mp, volatile BYTE *tib, unsigned iv
     return done;
 }
 
+/* ── THE INT 33h EVENT HANDLER, FOR A PROTECTED-MODE CLIENT. (s74c: ZAR's clicks) ───
+     mouse_cb_try() delivers 0Ch callbacks to V86 guests only; for a DPMI client it
+     DROPPED the queue ("not this path (yet)", counted as cb_pm). ZAR installs its
+     handler from flat 32-bit code -- 0Ch with ES:EDX = 0x347:0x0044xxxx, mask 0x7e =
+     button press/release only -- and polls motion with 0Bh. So aiming worked and no
+     click ever reached the game: the buttons only travel through the callback.
+     On real hardware DOS/4GW turns the driver's real-mode call into a PM far call of
+     the client's handler with the same registers (AX event bits, BX buttons, CX/DX
+     position, SI/DI mickeys) and the handler RETFs. Do the same here, with the
+     mechanics of dpmi_inject_pm_irq(): interrupt the APPLICATION only (32-bit CS when
+     the client is), on its own stack, a far-return frame onto the PM-return catcher,
+     the same phase loop, the interrupted context restored verbatim. The frame is a
+     RETF frame (CS:EIP, no FLAGS) because that is what the handler pops. */
+static int dpmi_inject_pm_mousecb(dos_machine_t *mp, volatile BYTE *tib, unsigned steps)
+{
+    DWORD sEAX=VDM_REG(tib,VTIB_EAX), sEBX=VDM_REG(tib,VTIB_EBX), sECX=VDM_REG(tib,VTIB_ECX);
+    DWORD sEDX=VDM_REG(tib,VTIB_EDX), sESI=VDM_REG(tib,VTIB_ESI), sEDI=VDM_REG(tib,VTIB_EDI);
+    DWORD sEBP=VDM_REG(tib,VTIB_EBP), sEIP=VDM_REG(tib,VTIB_EIP), sESP=VDM_REG(tib,VTIB_ESP);
+    DWORD sEFL=VDM_REG(tib,VTIB_EFLAGS);
+    WORD  sCS=(WORD)VDM_REG(tib,VTIB_CS), sSS=(WORD)VDM_REG(tib,VTIB_SS);
+    WORD  sDS=(WORD)VDM_REG(tib,VTIB_DS), sES=(WORD)VDM_REG(tib,VTIB_ES);
+    WORD  sFS=(WORD)VDM_REG(tib,VTIB_FS), sGS=(WORD)VDM_REG(tib,VTIB_GS);
+    int prev_vi = g_dpmi_vi; unsigned ph; int done = 0;
+    DWORD t0 = GetTickCount();
+    LONG mask = g_ms_evt_mask, pend = 0;
+    ms_evt_t ev = { 0, 0, 0, 0 };
+    WORD hsel = (WORD)g_ms_evt_seg; DWORD hoff = (DWORD)g_ms_evt_off;
+    int h32 = g_dpmi_client32;
+
+    if (!mask || (hsel | hoff) == 0) return 0;
+    dpmi_ensure_pmret_sel();
+    if (g_pmret_sel == 0) return 0;
+    if (g_dpmi_client32 && !dpmi_sel_is32(sCS)) return 0;      /* the extender mid-service */
+    if (!(sSS & 4)) return 0;                                    /* not a client stack      */
+    /* The oldest queued event the handler asked for; unmasked ones are skipped. */
+    {   LONG t; int n = 0;
+        while (g_ms_evq_tail != g_ms_evq_head && n++ < MS_EVQ) {
+            t = g_ms_evq_tail;
+            ev = g_ms_evq[t];
+            g_ms_evq_tail = (t + 1) % MS_EVQ;
+            if (ev.bits & mask) { pend = ev.bits & mask; break; }
+        }
+        if (g_ms_evq_tail == g_ms_evq_head) InterlockedExchange(&g_ms_evt_pend, 0);
+        if (!pend) return 0;
+    }
+    /* A far-return frame (CS:EIP) onto the catcher, on the client's own stack. Frame
+       width is the CLIENT's; stack addressing is the SS descriptor's B bit. */
+    { DWORD b = dpmi_sel_base(sSS);
+      int ss32 = dpmi_sel_is32(sSS);
+      DWORD sp = ss32 ? sESP : (sESP & 0xFFFF);
+      if (h32) {
+          sp = ss32 ? sp - 4 : ((sp - 4) & 0xFFFF); poked(b + sp, g_pmret_sel);
+          sp = ss32 ? sp - 4 : ((sp - 4) & 0xFFFF); poked(b + sp, DPMI_PMRET_OFF);
+      } else {
+          sp = ss32 ? sp - 2 : ((sp - 2) & 0xFFFF); pokew(b + sp, g_pmret_sel);
+          sp = ss32 ? sp - 2 : ((sp - 2) & 0xFFFF); pokew(b + sp, DPMI_PMRET_OFF);
+      }
+      VDM_REG(tib, VTIB_ESP) = ss32 ? sp : ((sESP & 0xFFFF0000u) | sp); }
+    VDM_SET16(tib, VTIB_EAX, (WORD)pend);
+    VDM_SET16(tib, VTIB_EBX, (WORD)ev.btn);
+    VDM_SET16(tib, VTIB_ECX, (WORD)i33_clampx(i33_vx(ev.x)));
+    VDM_SET16(tib, VTIB_EDX, (WORD)i33_clampy(i33_vy(ev.y)));
+    VDM_REG(tib, VTIB_ESI) = 0; VDM_REG(tib, VTIB_EDI) = 0;
+    /* DS stays the interrupted application's: for a flat client that IS its data
+       selector, and a Watcom `__loadds` handler reloads its own anyway. */
+    g_dpmi_vi = 0;
+    VDM_REG(tib, VTIB_EFLAGS) = (sEFL & ~(0x200u | EFLAGS_VIF_BIT | EFLAGS_VIP_BIT)) | 2u;
+    *(volatile DWORD *)(ULONG_PTR)0x714 &= ~3u;
+    VDM_SET16(tib, VTIB_CS, hsel);
+    VDM_REG(tib, VTIB_EIP) = h32 ? hoff : (hoff & 0xFFFF);
+    ++g_ms_cb_inj;
+    if (g_ms_cb_inj <= 16) {
+        char lb[256], *lp = lb;
+        lp = zput(lp, "  MOUSECB->PM #"); lp = zhex(lp, g_ms_cb_inj);
+        lp = zput(lp, " ev=0x"); lp = zhex(lp, (DWORD)pend);
+        lp = zput(lp, " btn=0x"); lp = zhex(lp, (DWORD)ev.btn);
+        lp = zput(lp, " handler 0x"); lp = zhex(lp, hsel); lp = zput(lp, ":0x"); lp = zhex(lp, hoff);
+        lp = zput(lp, " from 0x"); lp = zhex(lp, sCS); lp = zput(lp, ":0x"); lp = zhex(lp, sEIP);
+        lp = zput(lp, " ss:esp=0x"); lp = zhex(lp, sSS); lp = zput(lp, ":0x"); lp = zhex(lp, VDM_REG(tib, VTIB_ESP));
+        lp = zput(lp, " h32="); lp = zhex(lp, (DWORD)h32);
+        lp = zput(lp, "\r\n"); log_append(LOG_PATH, lb, lp); serial_out(lb, lp);
+    }
+    for (ph = 0; ph < DPMI_IRQ0_PHASE_MAX && !done; ++ph) {
+        DWORD e, eip, vec; int rc;
+        if ((ph & 0x3F) == 0x3F && (GetTickCount() - t0) > DPMI_IRQ0_MS_MAX) break;
+        dpmi_arm_fault_trampoline(tib, 0);
+        dpmi_enter_pm(tib);
+        e   = VDM_REG(tib, VTIB_EVENT);
+        eip = dpmi_pm_eip(tib);
+        if (e == VDM_EVENT_BOP && eip == DPMI_PMRET_OFF
+            && (VDM_REG(tib, VTIB_CS) & 0xFFFF) == g_pmret_sel) { done = 1; break; }
+        if (e == 3) continue;
+        if (e == VDM_EVENT_IO || e == VDM_EVENT_IO_HW || e == VDM_EVENT_GPFAULT) {
+            int io_h;
+            HOST_LOCK();
+            io_h = host_try_io_pm(tib, &g_bus);
+            HOST_UNLOCK();
+            if (io_h) continue;
+        }
+        vec = (e == VDM_EVENT_BOP) ? dpmi_bop_vec(VDM_REG(tib, VTIB_CS) & 0xFFFF, eip) : 0;
+        rc = dpmi_service_pm_int(mp, tib, vec, steps);
+        if (rc > 0) continue;
+        break;
+    }
+    if (done) ++g_ms_cb_done; else ++g_ms_cb_lost;
+    if (!done) {
+        char ab[192], *aq = ab;
+        aq = zput(aq, "DPMI: *** PM MOUSE CALLBACK ABANDONED after "); aq = zhex(aq, (DWORD)ph);
+        aq = zput(aq, " phases (last cs:eip=0x"); aq = zhex(aq, VDM_REG(tib, VTIB_CS) & 0xFFFF);
+        aq = zput(aq, ":0x"); aq = zhex(aq, dpmi_pm_eip(tib)); aq = zput(aq, ")\r\n");
+        log_append(LOG_PATH, ab, aq); serial_out(ab, aq);
+    }
+    VDM_REG(tib,VTIB_EAX)=sEAX; VDM_REG(tib,VTIB_EBX)=sEBX; VDM_REG(tib,VTIB_ECX)=sECX;
+    VDM_REG(tib,VTIB_EDX)=sEDX; VDM_REG(tib,VTIB_ESI)=sESI; VDM_REG(tib,VTIB_EDI)=sEDI;
+    VDM_REG(tib,VTIB_EBP)=sEBP; VDM_REG(tib,VTIB_EIP)=sEIP; VDM_REG(tib,VTIB_ESP)=sESP;
+    VDM_REG(tib,VTIB_EFLAGS)=sEFL;
+    VDM_SET16(tib,VTIB_CS,sCS); VDM_SET16(tib,VTIB_SS,sSS);
+    VDM_SET16(tib,VTIB_DS,sDS); VDM_SET16(tib,VTIB_ES,sES);
+    VDM_SET16(tib,VTIB_FS,sFS); VDM_SET16(tib,VTIB_GS,sGS);
+    g_dpmi_vi = prev_vi;
+    return done;
+}
+
 /* ================================================================================ *
  *  run 53 (GH #2): host-interpreted protected mode -- the emulation path.           *
  *                                                                                    *
@@ -25233,6 +25369,14 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                          timer latch and the keyboard now do. The guest reaches this point
                          constantly (every INT 31h, every trapped port access), so the
                          added latency is microseconds and no new thread is involved. */
+                    /* ── AND THE MOUSE DRIVER'S OWN CALLBACK (INT 33h 0Ch), same gate.
+                         (s74c) ZAR's buttons travel only through this. */
+                    if (g_ms_evt_pend && g_ms_evt_mask && (g_ms_evt_seg | g_ms_evt_off)
+                        && g_dpmi_vi && !g_pm_noirq && !g_in_pm_irq && !g_async_pm_active) {
+                        g_in_pm_irq = 1;
+                        dpmi_inject_pm_mousecb(&m, tib, steps);
+                        g_in_pm_irq = 0;
+                    }
                     if (g_dpmi_vi && !g_pm_noirq && !g_in_pm_irq && !g_async_pm_active) {
                         int q;
                         for (q = 2; q < 8; ++q) {
