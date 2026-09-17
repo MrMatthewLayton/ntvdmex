@@ -4,7 +4,7 @@
 > this file top to bottom and you will know where it is, what works, what does not, and
 > what to do next.
 
-- **Last updated:** 2026-09-17 08:50 (session 74b — heaven7 runs BY HAND (no flag), VESA runtime half done; see the s74b block)
+- **Last updated:** 2026-09-17 09:20 (session 74b — USER-CONFIRMED BY HAND on `e92ce8ab`: Doom, Heretic, Hexen, Zar, Wolf3D, Skyroads; heaven7 geometry closed (`6fce192`, rig `36c872e9`); heaven7 music = GUS-only, no GUS model yet)
 - **Score: 86.9%** (`./tools/score/score.py` — run it, do not quote this line).
   Session 53 moved it 72.4 → 79.6; session 54 → 80.2; session 55 → 83.1;
   session 56 → 85.4; s57, **s58, s59 and s60 moved it not at all** — s57 built the modal
@@ -292,6 +292,22 @@ and matches the 6.22 oracle row for row (session 53)** — but `MEM /C` still re
      idiom on a single buffer. **So its 320×176 placement is the demo's own** (most
      likely its CPU-speed render-size pick); no VESA question remains there.
      `graphics\VS87.EXE` produced no summary (died/hung) — not looked at.
+
+   **3. 09:00–09:20 — USER-CONFIRMED BY HAND on `e92ce8ab`: Doom, Heretic, Hexen, Zar, Wolf3D,
+   Skyroads all still play.** heaven7 loaded "in a box". **Closed (`6fce192`, rig `36c872e9`):**
+   read the guest — new `cfg\memdump.flag` (`<linear> <size>` → `debug\out\memdump.bin` at the
+   headless deadline) dumped heaven7's UNPACKED image (`runs/s74b_lazy32/h7_memdump_04330000.bin`).
+   Its help text is `-1 512x384 -2 640x480 -3 800x600 -a low -b average -t no text -n no sound
+   -l looping`, and a render table `(320,176) (512,280) (640,352) (800,440)` — one letterboxed
+   picture per screen height. **320x176 is the picture for its DEFAULT screen, 320x240 — an OEM
+   mode we did not publish.** It fell back to 640x480 and drew the default picture at
+   `y = 480-240+(240-176)/2 = 272`. Published 320x240x{8,15,16} as S3 `0x151/0x160/0x170`; the
+   unmodified demo now picks `0x4170` and draws edge to edge (its bars are its own). `h7 -2` =
+   640x352 in 640x480, also correct. Captures `shots_h7_320/`, `shots_h7_dash2/`.
+   **Music: heaven7 is GUS-ONLY** — the image scans for `ULTRASND=`, programs base+offset, has no
+   `BLASTER` string and no `0x2xx` port immediate. A Gravis Ultrasound model (GF1: 32 voices,
+   1 MB DMA-loaded sample RAM, envelopes, timers, IRQ) is a new device — not a same-day job.
+   `-n` silences it cleanly. By-hand owed on `36c872e9`: heaven7 default + `-2`.
 
    **Score now:** see the s74b VBE table in the session log — **~82/100**, up from 60.
    Open on VESA: `4F0A` PM interface (clean decline; nobody on the shelf calls it),
