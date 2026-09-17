@@ -242,7 +242,10 @@ int main(void)
       memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x01); s_cx(&r,0x101); r.es=seg; r.edi=0;
       vdd_bus_deliver_int(&bus,0x10,&r);
       CHECK(r_ax(&r)==0x004F && (b[18]|(b[19]<<8))==640 && (b[20]|(b[21]<<8))==480 && b[25]==8,
-            "vesa/4F01: 0x101 = 640x480x8"); }
+            "vesa/4F01: 0x101 = 640x480x8");
+      CHECK(b[29]==(VID_VESA_VRAM/(640u*480u))-1 && b[30]==1, "vesa/4F01: NumberOfImagePages = pages-1 (was 0, oracle row), Reserved=1");
+      memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x00); r.es=seg; r.edi=0; memset(b,0,512); vdd_bus_deliver_int(&bus,0x10,&r);
+      CHECK((b[10]|(b[11]<<8)|(b[12]<<16)|(b[13]<<24))==1, "vesa/4F00: Capabilities D0 = DAC switchable (we honour 4F08 BH=8)"); }
 
     /* T11: VESA 4F02 set mode + 4F05 banking round-trips through vram ---- */
     memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x02); s_bx(&r,0x101); vdd_bus_deliver_int(&bus,0x10,&r);

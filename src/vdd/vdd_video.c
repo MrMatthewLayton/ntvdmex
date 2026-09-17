@@ -717,7 +717,11 @@ static void vesa(video_state *st, ntvdd_regs *r)
         b[0]='V'; b[1]='E'; b[2]='S'; b[3]='A';
         wr16(b + 4, 0x0200);                      /* VBE 2.0                      */
         wr32(b + 6, ((uint32_t)r->es << 16) | (((uint16_t)r->edi + OEM) & 0xFFFF));    /* OEM string */
-        wr32(b + 10, 0);                          /* capabilities                 */
+        /* Capabilities D0 = "DAC width is switchable to 8 bits per primary" (§4.3).
+           We answer 4F08 BH=8 with 8 -- and advertised 0 here, so a guest that
+           follows the spec's own advice ("query capabilities before 4F08") never
+           asked. Found by p_vesa against QEMU's VBE (s74b), the first oracle row. */
+        wr32(b + 10, 1);                          /* capabilities: D0 DAC switchable */
         wr32(b + 14, ((uint32_t)r->es << 16) | (((uint16_t)r->edi + MODES) & 0xFFFF));  /* mode list  */
         wr16(b + 18, VID_VESA_VRAM / 0x10000);    /* total memory in 64KB units   */
         if (vbe2) {                               /* VBE 2.0 fields, only for a 2.0 caller */
@@ -798,7 +802,13 @@ static void vesa(video_state *st, ntvdd_regs *r)
                  left 0 when the spec says it is always 1 in this version.
                  Three fields wrong, none of which any guest we have would have caught. */
             b[28] = 0;                            /* +28 BankSize: no scanline banks   */
-            b[29] = 0;                            /* +29 NumberOfImagePages = total-1  */
+            /* +29 NumberOfImagePages = pages VRAM holds MINUS ONE. The s74 audit put
+               this field at the right offset and left a 0 in it, which told every
+               page-flipping guest there was a single page. QEMU's VBE says 50 for
+               640x480x8 in 16 MB; with 4 MB we say 12. Found by p_vesa (s74b). */
+            { uint32_t pg = (uint32_t)pitch * h;
+              uint32_t np = pg ? VID_VESA_VRAM / pg : 1u;
+              b[29] = (uint8_t)(np ? (np > 256u ? 255u : np - 1u) : 0u); }
             b[30] = 1;                            /* +30 Reserved: always 1 in VBE 2.0 */
             /* ── DIRECT-COLOUR FIELD LAYOUT (offsets 31..38). A guest cannot pack a
                  pixel without these, and it will not trust a mode that leaves them

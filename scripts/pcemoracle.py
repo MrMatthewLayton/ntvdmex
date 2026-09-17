@@ -29,7 +29,10 @@ import time
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 APP = os.path.join(ROOT, "pcem", "PCem.app", "Contents", "MacOS")
 PCEM = os.path.join(APP, "PCem")
-CFG = os.path.join(APP, "configs", "NTVDMEX-DOS622.cfg")
+CFG = os.path.join(APP, "configs", os.environ.get("PCEM_CFG", "NTVDMEX-DOS622.cfg"))
+# PCEM_CFG=NTVDMEX-VESA.cfg selects the same machine with a Diamond Stealth 32
+# (Tseng ET4000/W32p, VESA BIOS in ROM) instead of the plain IBM VGA -- the VESA
+# oracle. Both configs share the CMOS layout (nvr copied), so boot is identical.
 IMG = os.path.join(ROOT, "vm", "dos622.img")
 BUILD = os.path.join(ROOT, "scripts", "dosoracle", "_build")
 
@@ -70,8 +73,16 @@ def launch(floppy=None):
         if not os.path.exists(p):
             raise OracleError("missing: " + p)
     cmd = [PCEM, "--config", CFG]
-    if floppy:
-        cmd += ["--load_drive_a", floppy]
+    # ⚠ --load_drive_a IS A NO-OP IN THIS wx BUILD (s74b, watched on screen: "Not ready
+    #   reading drive A" with the flag given). The config's own `disc_a =` line is what
+    #   mounts A:, so the scratch image is written INTO the config before each launch
+    #   and cleared afterwards. The floppy path must be absolute.
+    with open(CFG) as f:
+        lines = f.read().splitlines()
+    lines = [("disc_a = " + (os.path.abspath(floppy) if floppy else "")) if l.startswith("disc_a") else l
+             for l in lines]
+    with open(CFG, "w") as f:
+        f.write("\n".join(lines) + "\n")
     # Two things the wx build needs on macOS, both found the hard way (s74/s74b):
     #  - it enumerates host optical drives while building its menu and blocks in
     #    open() on a device node (Full Disk Access); tools/pcem/libnodev.dylib
@@ -95,7 +106,12 @@ def stop(proc):
             proc.kill()
 
 
-def run_program(program, args="", timeout=120):
+def run_program(program, args="", timeout=240, budget=None):
+    """★ MEASURED (s74b): the guest POSTs and boots in ~100 s on this Mac, and PCem
+      WRITES THE FLOPPY IMAGE THROUGH while running -- [END] was on disk at +105 s
+      with PCem still up. So: poll the image for [END] up to `timeout` (default 240,
+      not 120: the old default was shorter than the boot), then SIGTERM PCem and read
+      once more in case a flush lagged. `budget`, if given, caps the run instead."""
     if not os.path.exists(program):
         raise OracleError("no such program: " + program)
     name = os.path.basename(program).upper()
@@ -110,21 +126,24 @@ def run_program(program, args="", timeout=120):
              "ECHO [END] >> A:\\OUT.TXT"]
     floppy = os.path.join(BUILD, "pcem_scratch.img")
     make_floppy(floppy, "\r\n".join(lines) + "\r\n", [(program, name)])
+    limit = budget if budget else timeout
     proc = launch(floppy)
     t0 = time.time()
     out = None
     try:
-        while time.time() - t0 < timeout:
-            time.sleep(2)
+        while time.time() - t0 < limit:
+            time.sleep(3)
             if proc.poll() is not None:
                 raise OracleError("PCem exited early (rc=%s)" % proc.returncode)
             out = read_out(floppy)
             if out and "[END]" in out:
                 break
-        else:
-            raise OracleError("timeout after %ds; OUT.TXT so far: %r" % (timeout, out))
     finally:
         stop(proc)
+    if not out or "[END]" not in out:
+        out = read_out(floppy)                      # a flush that lagged the stop
+    if not out or "[END]" not in out:
+        raise OracleError("no [END] after %ds; OUT.TXT: %r" % (limit, out))
     return out, time.time() - t0
 
 
@@ -132,7 +151,8 @@ def main():
     ap = argparse.ArgumentParser()
     sub = ap.add_subparsers(dest="cmd", required=True)
     r = sub.add_parser("run"); r.add_argument("program"); r.add_argument("--args", default="")
-    r.add_argument("--timeout", type=int, default=120)
+    r.add_argument("--timeout", type=int, default=240)
+    r.add_argument("--budget", type=int, default=None, help="seconds to let the machine run before stopping it (default min(timeout,60))")
     sub.add_parser("boot")
     a = ap.parse_args()
     if a.cmd == "boot":
@@ -143,7 +163,7 @@ def main():
         except KeyboardInterrupt:
             stop(proc)
         return 0
-    out, secs = run_program(a.program, a.args, a.timeout)
+    out, secs = run_program(a.program, a.args, a.timeout, a.budget)
     sys.stdout.write(out)
     sys.stderr.write("[%.1fs]\n" % secs)
     return 0
