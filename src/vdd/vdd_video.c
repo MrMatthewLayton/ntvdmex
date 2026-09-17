@@ -481,11 +481,10 @@ static void teletype(video_state *st, uint8_t ch)
 static const struct { uint16_t num, w, h; uint8_t bpp; } vesa_modes[] = {
     /* packed-pixel 256-colour */
     { 0x100, 640, 400,  8 }, { 0x101, 640, 480,  8 },
-    { 0x103, 800, 600,  8 },
-    /* ⚠ NO 1024x768. VRAM could back it, but the presenter snapshots at most
-         800x600, and a mode that sets and then shows nothing is worse than a mode
-         that was never offered -- the guest has no way to find out. Raise both
-         together or neither. */
+    { 0x103, 800, 600,  8 }, { 0x105, 1024, 768, 8 },
+    /* 1024x768 arrived with NTVDD_FRAME_MAXW/H (s74b): the presenter's snapshot and
+       this list are now sized from ONE number, so a mode cannot be offered that the
+       presenter would drop. 0x105 is the 1024x768x8 every VESA game's setup lists. */
     /* ── 320x240, THE MODE HEAVEN7 ASKS FOR BY DEFAULT. (s74b) ───────────────────
          Not a VBE-numbered mode; it is an OEM mode, and the numbers below are the S3
          Trio's (0x151 8bpp, 0x160 15bpp, 0x170 16bpp), which is the set DOSBox and
@@ -500,6 +499,7 @@ static const struct { uint16_t num, w, h; uint8_t bpp; } vesa_modes[] = {
     { 0x10D, 320, 200, 15 }, { 0x10E, 320, 200, 16 }, { 0x10F, 320, 200, 24 },
     { 0x110, 640, 480, 15 }, { 0x111, 640, 480, 16 }, { 0x112, 640, 480, 24 },
     { 0x113, 800, 600, 15 }, { 0x114, 800, 600, 16 }, { 0x115, 800, 600, 24 },
+    { 0x116, 1024, 768, 15 }, { 0x117, 1024, 768, 16 }, { 0x118, 1024, 768, 24 },
 };
 /* bytes per pixel as VBE counts them: 15bpp occupies 2 bytes, like 16. */
 static uint32_t vesa_bypp(uint8_t bpp) { return bpp <= 8 ? 1u : bpp <= 16 ? 2u : bpp <= 24 ? 3u : 4u; }
@@ -944,6 +944,20 @@ static void vesa(video_state *st, ntvdd_regs *r)
         s_ax(r, 0x014F);
         VID_UNIMPL_SET(st->unimpl_fn, 0x4F);
         break;
+    case 0x10: {                                  /* VBE/PM: display power (DPMS)  */
+        /* VBE/PM 1.0. BL=00 report: BL=version 10h (BCD), BH=states supported
+           (bit0 standby, bit1 suspend, bit2 off, bit3 reduced-on); BL=01 set state
+           BH; BL=02 get state -> BH. ⚠ From the published interface (what Bochs and
+           DOSBox answer), not from a VESA PDF in docs/ref -- there is no oracle for
+           it. We claim all four states and remember the one set; nothing blanks,
+           which is what a monitor with no power management would show too. */
+        uint8_t bl = (uint8_t)(r_bx(r) & 0xFF), bh = (uint8_t)((r_bx(r) >> 8) & 0xFF);
+        if (bl == 0x00)      s_bx(r, (uint16_t)((0x0Fu << 8) | 0x10));
+        else if (bl == 0x01) { if (bh & ~0x0Fu) { s_ax(r, 0x024F); break; } st->vesa_pm_state = bh; }
+        else if (bl == 0x02) s_bx(r, (uint16_t)(((uint16_t)st->vesa_pm_state << 8) | bl));
+        else { s_ax(r, 0x014F); break; }
+        s_ax(r, 0x004F);
+        break; }
     case 0x15:                                    /* DDC / display identification  */
         s_ax(r, 0x014F);                          /* no monitor EDID to report     */
         VID_UNIMPL_SET(st->unimpl_fn, 0x4F);

@@ -356,8 +356,8 @@ int main(void)
     memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x06); s_bx(&r,0x03); vdd_bus_deliver_int(&bus,0x10,&r);
     CHECK(r_ax(&r)==0x004F && r_bx(&r)==VID_VESA_VRAM/480 && r_cx(&r)==VID_VESA_VRAM/480
           && r_dx(&r)>=480 && vid.vesa_stride==1024, "vesa/4F06 get max: VRAM/480, stride untouched");
-    /* too long (5000*480 > VRAM) -> 02h, unchanged; narrower than the mode -> 02h */
-    memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x06); s_bx(&r,0x02); s_cx(&r,5000); vdd_bus_deliver_int(&bus,0x10,&r);
+    /* too long (65535*480 > VRAM) -> 02h, unchanged; narrower than the mode -> 02h */
+    memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x06); s_bx(&r,0x02); s_cx(&r,0xFFFF); vdd_bus_deliver_int(&bus,0x10,&r);
     CHECK(r_ax(&r)==0x024F && vid.vesa_stride==1024, "vesa/4F06 set too long: AH=02, stride kept");
     memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x06); s_bx(&r,0x00); s_cx(&r,320); vdd_bus_deliver_int(&bus,0x10,&r);
     CHECK(r_ax(&r)==0x024F && vid.vesa_stride==1024, "vesa/4F06 set narrower than mode: AH=02, stride kept");
@@ -370,7 +370,7 @@ int main(void)
     memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x07); s_bx(&r,0x01); vdd_bus_deliver_int(&bus,0x10,&r);
     CHECK(r_ax(&r)==0x004F && (r_bx(&r)>>8)==0 && r_cx(&r)==0 && r_dx(&r)==480, "vesa/4F07 get: (0,480), BH=0");
     /* a start that leaves less than a full page -> fail, no change */
-    memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x07); s_bx(&r,0x00); s_cx(&r,0); s_dx(&r,2000); vdd_bus_deliver_int(&bus,0x10,&r);
+    memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x07); s_bx(&r,0x00); s_cx(&r,0); s_dx(&r,(uint16_t)(VID_VESA_VRAM/1024 - 100)); vdd_bus_deliver_int(&bus,0x10,&r);
     CHECK(r_ax(&r)==0x024F && vid.vesa_start_y==480, "vesa/4F07 set past memory: AH=02, start kept");
     /* BL=80h (during retrace) is a set too; x offset moves the origin by bytes-per-pixel */
     memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x07); s_bx(&r,0x80); s_cx(&r,8); s_dx(&r,0); vdd_bus_deliver_int(&bus,0x10,&r);
@@ -388,6 +388,34 @@ int main(void)
           && ((const uint32_t *)(const void *)vid.frame.pixels)[0]==0xFFFFFFFFu,
           "vesa/4F07 (16bpp): page 2 pixel 0 = white after the flip");
     memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x02); s_bx(&r,0x101); vdd_bus_deliver_int(&bus,0x10,&r);
+
+    /* T12c: 1024x768 -- the list, the presenter cap and VRAM are sized from one number */
+    { uint16_t seg=0x3100; uint8_t *b=&g_flat[(seg<<4)];
+      memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x01); s_cx(&r,0x105); r.es=seg; r.edi=0; vdd_bus_deliver_int(&bus,0x10,&r);
+      CHECK(r_ax(&r)==0x004F && (b[18]|(b[19]<<8))==1024 && (b[20]|(b[21]<<8))==768 && b[25]==8 && (b[16]|(b[17]<<8))==1024,
+            "vesa/4F01: 0x105 = 1024x768x8, pitch 1024");
+      memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x02); s_bx(&r,0x105); vdd_bus_deliver_int(&bus,0x10,&r);
+      vid.dirty=1; vdd_bus_frame(&bus);
+      CHECK(r_ax(&r)==0x004F && vid.frame.w==1024 && vid.frame.h==768 && vid.frame.bpp==8, "vesa/4F02 0x105: frame 1024x768x8");
+      memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x02); s_bx(&r,0x4118); vdd_bus_deliver_int(&bus,0x10,&r);
+      vid.vesa_vram[(767u*1024u+1023u)*3+0]=0xFF; vid.vesa_vram[(767u*1024u+1023u)*3+1]=0xFF; vid.vesa_vram[(767u*1024u+1023u)*3+2]=0xFF;
+      vid.dirty=1; vdd_bus_frame(&bus);
+      CHECK(r_ax(&r)==0x004F && vid.frame.w==1024 && vid.frame.h==768 && vid.frame.bpp==32
+            && ((const uint32_t *)(const void *)vid.frame.pixels)[767u*1024u+1023u]==0xFFFFFFFFu,
+            "vesa/4F02 0x4118: 1024x768x24 LFB, last pixel reaches the ARGB frame");
+      CHECK(NTVDD_FRAME_MAXW>=1024 && NTVDD_FRAME_MAXH>=768 && VID_VESA_VRAM>=1024u*768u*3u, "sizes: presenter cap and VRAM hold 1024x768x24");
+      memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x02); s_bx(&r,0x0101); vdd_bus_deliver_int(&bus,0x10,&r); }
+
+    /* T12d: 4F10 VBE/PM (DPMS) ----------------------------------------------- */
+    memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x10); s_bx(&r,0x0000); vdd_bus_deliver_int(&bus,0x10,&r);
+    CHECK(r_ax(&r)==0x004F && (r_bx(&r)&0xFF)==0x10 && (r_bx(&r)>>8)==0x0F, "vesa/4F10 report: VBE/PM 1.0, all four states");
+    memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x10); s_bx(&r,0x0401); vdd_bus_deliver_int(&bus,0x10,&r);
+    CHECK(r_ax(&r)==0x004F, "vesa/4F10 set: off");
+    memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x10); s_bx(&r,0x0002); vdd_bus_deliver_int(&bus,0x10,&r);
+    CHECK(r_ax(&r)==0x004F && (r_bx(&r)>>8)==0x04, "vesa/4F10 get: off");
+    memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x10); s_bx(&r,0x0001); vdd_bus_deliver_int(&bus,0x10,&r);
+    memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x10); s_bx(&r,0x0002); vdd_bus_deliver_int(&bus,0x10,&r);
+    CHECK((r_bx(&r)>>8)==0x00, "vesa/4F10 set on, get: on");
 
     /* T13: mode 12h planar -- set mode, plot a pixel, check planes + render --- */
     memset(&r,0,sizeof r); s_ah(&r,0x00); s_al(&r,0x12); vdd_bus_deliver_int(&bus,0x10,&r);

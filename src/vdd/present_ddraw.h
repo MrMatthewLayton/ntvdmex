@@ -68,8 +68,8 @@ typedef struct present_ddraw {
          release was imminent when this landed. Sized to the widest mode
          vesa_modes[] advertises: every mode we publish must be one we can DISPLAY,
          or the list is promising something the presenter drops on the floor. */
-    uint8_t  snap[800 * 600];
-    uint32_t snap32[800 * 600];         /* ARGB, when snap_bpp == 32               */
+    uint8_t  snap[NTVDD_FRAME_MAXW * NTVDD_FRAME_MAXH];
+    uint32_t snap32[NTVDD_FRAME_MAXW * NTVDD_FRAME_MAXH];   /* ARGB, when snap_bpp == 32 */
     uint8_t  snap_bpp;                  /* 8 = snap[] + snap_pal, 32 = snap32[]    */
     uint32_t snap_pal[256];
     int   snap_w, snap_h, snap_valid;

@@ -52,7 +52,7 @@
      means 800x600x24 = 1,440,000 bytes, so a mode the guest is allowed to SET must
      have somewhere to live -- a mode list that promises more than VRAM can back is
      a promise the first blit breaks. 2MB covers every mode in vesa_modes[]. */
-#define VID_VESA_VRAM     0x200000u     /* 2MB: enough for 800x600x24             */
+#define VID_VESA_VRAM     0x400000u     /* 4MB: enough for 1024x768x24 (s74b)      */
 /* ── THE LFB'S ADVERTISED PHYSICAL ADDRESS. ───────────────────────────────────────
      4F01 reports this as PhysBasePtr and the guest asks DPMI 0800 to map it; the
      host answers with the host VA of vesa_vram, which is exactly the convention
@@ -61,8 +61,8 @@
      0xE0000000 is where a PCI video aperture normally sits, so it cannot collide
      with anything the guest has a right to expect at a lower address. */
 #define VID_VESA_LFB_PHYS 0xE0000000u
-#define VID_VESA_MAXW     800           /* widest hi-colour mode advertised        */
-#define VID_VESA_MAXH     600
+#define VID_VESA_MAXW     NTVDD_FRAME_MAXW   /* widest mode advertised = what the presenter shows */
+#define VID_VESA_MAXH     NTVDD_FRAME_MAXH
 #define VID_FB_MAX        (640 * 480)   /* largest glyph/planar render target     */
 
 /* How a mode is rendered.  Before this, only 13h and 12h were branched on and
@@ -454,6 +454,7 @@ typedef struct video_state {
        bit 15 = BL 80h (the "during retrace" variants). Costs two adds per call. */
     uint32_t vesa_calls[0x16];
     uint16_t vesa_bl[0x16];
+    uint8_t  vesa_pm_state;             /* 4F10 VBE/PM: 0 on 1 standby 2 suspend 4 off 8 reduced-on */
     uint16_t vesa_07_maxx, vesa_07_maxy;/* largest display start a guest asked for  */
     uint32_t vesa_07_rej;               /* 4F07 sets refused (would not fit)         */
     ntvdd_frame frame;

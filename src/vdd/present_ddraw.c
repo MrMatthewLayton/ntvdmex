@@ -110,7 +110,7 @@ static void gdi_present(present_ddraw *pd)
     const uint8_t *pix = pd->snap;
     int sw = pd->snap_w, sh = pd->snap_h;
     struct { BITMAPINFOHEADER h; RGBQUAD c[256]; } bi;
-    static uint32_t s_rgb32[800 * 600];   /* a split frame resolved per row, or ARGB */
+    static uint32_t s_rgb32[NTVDD_FRAME_MAXW * NTVDD_FRAME_MAXH];   /* a split frame resolved per row, or ARGB */
     /* A direct-colour frame takes the same 32bpp DIB route a raster-split frame
        does -- it is already ARGB, so it needs no resolving, just no palette. */
     int direct = (pd->snap_bpp == 32);
@@ -456,7 +456,7 @@ void present_ddraw_snapshot(present_ddraw *pd, const ntvdd_frame *f)
 {
     int y;
     if (!f || !f->w || !f->h || !f->pixels || (f->bpp != 8 && f->bpp != 32)
-        || f->w > 800 || f->h > 600) {
+        || f->w > NTVDD_FRAME_MAXW || f->h > NTVDD_FRAME_MAXH) {
         pd->snap_valid = 0; return;
     }
     pd->snap_bpp = f->bpp;

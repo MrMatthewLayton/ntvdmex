@@ -53,6 +53,13 @@ static inline void s_cx(ntvdd_regs *r, uint16_t v){ r->ecx = (r->ecx & 0xFFFF000
 static inline void s_dx(ntvdd_regs *r, uint16_t v){ r->edx = (r->edx & 0xFFFF0000u) | v; }
 
 /* --- a finished frame the video VDD hands to the presentation layer -------- */
+/* The largest frame the contract carries. Both ends size their buffers from this:
+   the video VDD may not advertise a mode wider or taller than the presenter can
+   show, and the presenter may not drop a frame the VDD is allowed to produce.
+   (s74b: was 800x600 in two headers that had to agree by hand; 1024x768 lets the
+   VBE 1.2 modes real games list -- 0x105, 0x116..0x118 -- be published.) */
+#define NTVDD_FRAME_MAXW  1024
+#define NTVDD_FRAME_MAXH  768
 typedef struct ntvdd_frame {
     uint16_t        w, h;           /* logical resolution in pixels             */
     uint8_t         bpp;            /* 8 (palettised) or 32 (ARGB)              */
