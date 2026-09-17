@@ -591,6 +591,71 @@ static void vesa_to_argb(video_state *st)
     }
 }
 
+/* ── SAVE / RESTORE STATE: one block for INT 10h AH=1Ch and VBE 4F04 (§4.7). (s74b)
+     AH=1Ch used to report 3 blocks (192 bytes) and then write 768 bytes of DAC into the
+     caller's buffer -- the Heretic MCB overrun again, in a different function -- and
+     4F04 did not exist. A guest treats the buffer as opaque, so the layout is ours:
+        +0   'NTVS'  +4 mask  +6 version
+        +8   mode, in_vesa, vesa_mode(2), vesa_bpp, vesa_lfb, dacwidth, bank(2),
+             stride(4) @+20, start_x(2) @+24, start_y(2) @+26
+        +32  DAC, 256 x (R,G,B) at 8 bits each -- the 8-bit width would lose precision
+             at 6 bits, and AH=1Ch's own 6-bit format is produced from this on the way out
+        +800 the attribute controller (vpal[17], AR10, AR14, overscan), text cursor
+             (row, col, shape), page, CRTC start/offset
+     896 bytes = 14 blocks, reported for every mask; the spec permits over-reporting
+     and a guest allocates from the answer, which is the one thing that must hold.
+     Restore re-enters the saved mode with the DON'T-CLEAR bit -- frame buffer memory
+     is explicitly not part of the state -- then puts the registers back over it. */
+#define VID_STATE_BYTES  896u
+#define VID_STATE_BLOCKS (VID_STATE_BYTES / 64u)
+static void int10(void *self, ntvdd_regs *r);
+static void vesa(video_state *st, ntvdd_regs *r);
+static void vid_state_save(video_state *st, uint8_t *b, uint16_t mask)
+{
+    unsigned i;
+    for (i = 0; i < VID_STATE_BYTES; ++i) b[i] = 0;
+    b[0] = 'N'; b[1] = 'T'; b[2] = 'V'; b[3] = 'S'; wr16(b + 4, mask); wr16(b + 6, 1);
+    b[8] = st->mode; b[9] = st->in_vesa; wr16(b + 10, st->vesa_mode);
+    b[12] = st->vesa_bpp; b[13] = st->vesa_lfb; b[14] = st->vesa_dacwidth;
+    wr16(b + 16, st->vesa_bank); wr32(b + 20, st->vesa_stride);
+    wr16(b + 24, st->vesa_start_x); wr16(b + 26, st->vesa_start_y);
+    for (i = 0; i < 256; ++i) {
+        b[32 + i*3]     = (uint8_t)(st->dac[i] >> 16);
+        b[32 + i*3 + 1] = (uint8_t)(st->dac[i] >> 8);
+        b[32 + i*3 + 2] = (uint8_t)(st->dac[i]);
+    }
+    for (i = 0; i < 17; ++i) b[800 + i] = st->vpal[i];
+    b[817] = st->attr_mode; b[818] = st->attr_cse; b[819] = st->overscan;
+    b[820] = st->cur_row; b[821] = st->cur_col; wr16(b + 822, st->cur_shape);
+    b[824] = st->page; wr16(b + 826, st->crtc_start); b[828] = st->crtc_offset;
+}
+/* 1 = restored, 0 = not a buffer we wrote (the caller answers AH=02). */
+static int vid_state_load(video_state *st, const uint8_t *b)
+{
+    unsigned i; ntvdd_regs m;
+    if (b[0] != 'N' || b[1] != 'T' || b[2] != 'V' || b[3] != 'S') return 0;
+    for (i = 0; i < sizeof m; ++i) ((uint8_t *)&m)[i] = 0;
+    if (b[9]) {                                   /* back into the VESA mode, no clear */
+        uint16_t bx = (uint16_t)(0x8000u | (b[13] ? 0x4000u : 0u) | (b[10] | (b[11] << 8)));
+        s_ah(&m, 0x4F); s_al(&m, 0x02); s_bx(&m, bx); vesa(st, &m);
+        st->vesa_dacwidth = b[14]; st->vesa_bank = (uint16_t)(b[16] | (b[17] << 8));
+        st->vesa_stride   = (uint32_t)b[20] | ((uint32_t)b[21] << 8) | ((uint32_t)b[22] << 16) | ((uint32_t)b[23] << 24);
+        st->vesa_start_x  = (uint16_t)(b[24] | (b[25] << 8));
+        st->vesa_start_y  = (uint16_t)(b[26] | (b[27] << 8));
+    } else {                                      /* a standard mode, bit 7 = no clear */
+        s_ah(&m, 0x00); s_al(&m, (uint8_t)(b[8] | 0x80)); int10(st, &m);
+    }
+    for (i = 0; i < 256; ++i)
+        st->dac[i] = 0xFF000000u | ((uint32_t)b[32 + i*3] << 16)
+                   | ((uint32_t)b[32 + i*3 + 1] << 8) | (uint32_t)b[32 + i*3 + 2];
+    for (i = 0; i < 17; ++i) st->vpal[i] = b[800 + i];
+    st->attr_mode = b[817]; st->attr_cse = b[818]; st->overscan = b[819];
+    st->cur_row = b[820]; st->cur_col = b[821]; st->cur_shape = (uint16_t)(b[822] | (b[823] << 8));
+    st->page = b[824]; st->crtc_start = (uint16_t)(b[826] | (b[827] << 8)); st->crtc_offset = b[828];
+    pal_refresh(st); st->dirty = 1;
+    return 1;
+}
+
 /* INT 10h AX=4Fxx. Always returns AX=0x004F (supported+ok) for what we handle. */
 static void vesa(video_state *st, ntvdd_regs *r)
 {
@@ -741,6 +806,17 @@ static void vesa(video_state *st, ntvdd_regs *r)
             st->dirty = 1; s_ax(r, 0x004F);
         } else s_ax(r, 0x014F);
         break; }
+    case 0x04: {                                  /* save/restore state (§4.7)     */
+        uint8_t dl = (uint8_t)(r_dx(r) & 0xFF);
+        if (dl == 0x00) { s_bx(r, VID_STATE_BLOCKS); s_ax(r, 0x004F); break; }
+        if (dl == 0x01 || dl == 0x02) {
+            uint8_t *sb = (uint8_t *)vdd_map_flat(st->bus, r->es, (uint16_t)r->ebx);
+            if (dl == 0x01) { vid_state_save(st, sb, r_cx(r)); s_ax(r, 0x004F); }
+            else s_ax(r, vid_state_load(st, sb) ? 0x004F : 0x024F);
+            break;
+        }
+        s_ax(r, 0x014F);
+        break; }
     case 0x03:                                    /* get the current VBE mode      */
         s_bx(r, (uint16_t)(st->in_vesa ? st->vesa_mode : st->mode));
         s_ax(r, 0x004F);
@@ -793,10 +869,12 @@ static void vesa(video_state *st, ntvdd_regs *r)
         } else if (bl == 0x00 || bl == 0x80) {    /* set (80h: during retrace)     */
             uint32_t bypp = vesa_bypp(st->vesa_bpp);
             uint32_t org  = (uint32_t)r_dx(r) * st->vesa_stride + (uint32_t)r_cx(r) * bypp;
+            if (r_cx(r) > st->vesa_07_maxx) st->vesa_07_maxx = r_cx(r);   /* inventory */
+            if (r_dx(r) > st->vesa_07_maxy) st->vesa_07_maxy = r_dx(r);
             /* the whole displayed page must exist: "if the requested Display Start
                coordinates do not allow for a full page of video memory ... fail" */
             if (org + (uint32_t)(st->vesa_h - 1) * st->vesa_stride
-                    + (uint32_t)st->vesa_w * bypp > VID_VESA_VRAM) { s_ax(r, 0x024F); break; }
+                    + (uint32_t)st->vesa_w * bypp > VID_VESA_VRAM) { st->vesa_07_rej++; s_ax(r, 0x024F); break; }
             st->vesa_start_x = r_cx(r); st->vesa_start_y = r_dx(r);
             st->dirty = 1;
             s_ax(r, 0x004F);
@@ -1171,21 +1249,16 @@ static void int10(void *self, ntvdd_regs *r)
         s_ax(r, (uint16_t)((r_ax(r) & 0xFF00) | v));
         break; }
     case 0x1C: {                                       /* save / restore state    */
-        /* CX is a bitmask of what to save; BX:0 is the buffer. We report the
-           size in BX (blocks of 64 bytes) and accept save/restore of the DAC,
-           which is the part programs actually use. */
+        /* CX is a bitmask of what to save; ES:BX is the buffer. Same state block as
+           VBE 4F04 -- see vid_state_save(). ⚠ This used to report 3 blocks and then
+           write 768 bytes: a guest that allocated what it was told got its next MCB
+           overwritten. The size reported is now the size written. */
         uint8_t al1c = al;
-        if (al1c == 0x00)      { s_bx(r, 3); s_ax(r, (uint16_t)((r_ax(r) & 0xFF00) | 0x1C)); }
+        if (al1c == 0x00)      { s_bx(r, VID_STATE_BLOCKS); s_ax(r, (uint16_t)((r_ax(r) & 0xFF00) | 0x1C)); }
         else if (al1c == 0x01 || al1c == 0x02) {
             uint8_t *buf = (uint8_t *)vdd_map_flat(st->bus, r->es, (uint16_t)r->ebx);
-            int i;
-            if (al1c == 0x01) for (i = 0; i < 256; ++i)
-                { buf[i*3] = (uint8_t)((st->dac[i] >> 18) & 0x3F);
-                  buf[i*3+1] = (uint8_t)((st->dac[i] >> 10) & 0x3F);
-                  buf[i*3+2] = (uint8_t)((st->dac[i] >> 2) & 0x3F); }
-            else for (i = 0; i < 256; ++i)
-                st->dac[i] = dac_pack(buf[i*3] & 0x3F, buf[i*3+1] & 0x3F, buf[i*3+2] & 0x3F);
-            pal_refresh(st);
+            if (al1c == 0x01) vid_state_save(st, buf, r_cx(r));
+            else              (void)vid_state_load(st, buf);   /* a foreign buffer: no-op */
             s_ax(r, (uint16_t)((r_ax(r) & 0xFF00) | 0x1C));
         }
         break; }

@@ -454,6 +454,8 @@ typedef struct video_state {
        bit 15 = BL 80h (the "during retrace" variants). Costs two adds per call. */
     uint32_t vesa_calls[0x16];
     uint16_t vesa_bl[0x16];
+    uint16_t vesa_07_maxx, vesa_07_maxy;/* largest display start a guest asked for  */
+    uint32_t vesa_07_rej;               /* 4F07 sets refused (would not fit)         */
     ntvdd_frame frame;
     /* Mode-Y de-interleave instrumentation. `plane-nonzero` in STAGE2 has always
        counted st->plane[] -- the 16-colour PLANAR array -- which mode Y never touches,

@@ -5692,6 +5692,14 @@ static DWORD WINAPI headless_deadline_thread(LPVOID pv)
         { int i; q = zput(q, "  unclaimed ports touched:");
           for (i = 0; i < g_unclaimed_n; ++i) { q = zput(q, " 0x"); q = zhex(q, g_unclaimed[i]); }
           q = zput(q, "\r\n"); }
+        /* The VESA inventory too: a guest that spins at wind-down (Heretic, Hexen,
+           ZAR) never reaches the STAGE2 summary, and the corpus sweep read "no line"
+           as "no data" for exactly the three guests it most wanted. (s74b) */
+        { int i, any = 0; q = zput(q, "  VESA calls by sub-function:");
+          for (i = 0; i < 0x16; ++i) if (g_vid.vesa_calls[i]) {
+              any = 1; q = zput(q, " 4F"); q = zhexb(q, (unsigned)i); q = zput(q, "x"); q = zhex(q, g_vid.vesa_calls[i]); }
+          if (!any) q = zput(q, " none");
+          q = zput(q, "\r\n"); }
         log_append(LOG_PATH, b, q); serial_out(b, q);
         ExitProcess(3);
     }
@@ -27928,6 +27936,11 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             }
         }
         if (!any) p = zput(p, " none");
+        if (g_vid.vesa_calls[7]) {
+            p = zput(p, " | 4F07 max start=("); p = zhex(p, (DWORD)g_vid.vesa_07_maxx);
+            p = zput(p, ","); p = zhex(p, (DWORD)g_vid.vesa_07_maxy);
+            p = zput(p, ") refused="); p = zhex(p, g_vid.vesa_07_rej);
+        }
         p = zput(p, "\r\n");
         log_append(LOG_PATH, base, p); serial_out(base, p); p = base; }
       p = zput(p, "STAGE2: VESA mode queries (4F01/4F02):");

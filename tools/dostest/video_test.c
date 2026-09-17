@@ -301,6 +301,39 @@ int main(void)
       CHECK(r_ax(&r)==0x034F, "vesa/4F08 in a direct-colour mode: AH=03");
       memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x02); s_bx(&r,0x0101); vdd_bus_deliver_int(&bus,0x10,&r); }
 
+    /* T11c: 4F04 save/restore state (§4.7) and the AH=1Ch it is a superset of.
+       AH=1Ch reported 3 blocks (192 bytes) and then wrote 768 bytes of DAC into the
+       caller's buffer -- the Heretic MCB overrun, in another function. The size we
+       report must be at least what we write, for both entry points. */
+    { uint16_t seg=0x3300; uint8_t *sb=&g_flat[(seg<<4)]; uint16_t blocks, blocks1c; unsigned k, spill=0;
+      memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x04); s_dx(&r,0x0000); s_cx(&r,0x000F); vdd_bus_deliver_int(&bus,0x10,&r);
+      blocks = r_bx(&r);
+      CHECK(r_ax(&r)==0x004F && blocks>=12, "vesa/4F04 DL=00: reports a size that can hold a 768-byte DAC");
+      memset(&r,0,sizeof r); s_ah(&r,0x1C); s_al(&r,0x00); s_cx(&r,0x0007); vdd_bus_deliver_int(&bus,0x10,&r);
+      blocks1c = r_bx(&r);
+      CHECK(r_al(&r)==0x1C && blocks1c>=12, "int10/1C AL=00: size >= 12 blocks (was 3, then wrote 768 bytes)");
+      /* arrange a state: 8-bit DAC, entry 7 = (R=0x12,G=0x34,B=0x56), page 2 at stride 1024 */
+      memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x08); s_bx(&r,0x0800); vdd_bus_deliver_int(&bus,0x10,&r);
+      { uint8_t *t=&g_flat[(0x3200<<4)]; t[0]=0x56; t[1]=0x34; t[2]=0x12; t[3]=0;
+        memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x09); s_bx(&r,0x0000); s_cx(&r,1); s_dx(&r,7); r.es=0x3200; r.edi=0; vdd_bus_deliver_int(&bus,0x10,&r); }
+      memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x06); s_bx(&r,0x00); s_cx(&r,1024); vdd_bus_deliver_int(&bus,0x10,&r);
+      memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x07); s_bx(&r,0x00); s_cx(&r,0); s_dx(&r,480); vdd_bus_deliver_int(&bus,0x10,&r);
+      /* save; the bytes past the reported size must be untouched */
+      memset(sb, 0xA5, 4096);
+      memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x04); s_dx(&r,0x0001); s_cx(&r,0x000F); r.es=seg; r.ebx=0; vdd_bus_deliver_int(&bus,0x10,&r);
+      for (k = blocks*64u; k < 4096; ++k) if (sb[k] != 0xA5) ++spill;
+      CHECK(r_ax(&r)==0x004F && spill==0, "vesa/4F04 DL=01 save: nothing written past the reported size");
+      /* disturb everything, then restore */
+      memset(&r,0,sizeof r); s_ah(&r,0x00); s_al(&r,0x03); vdd_bus_deliver_int(&bus,0x10,&r);   /* text mode: leaves VESA */
+      vid.dac[7] = 0xFF000000u;
+      memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x04); s_dx(&r,0x0002); s_cx(&r,0x000F); r.es=seg; r.ebx=0; vdd_bus_deliver_int(&bus,0x10,&r);
+      CHECK(r_ax(&r)==0x004F && vid.in_vesa && vid.vesa_mode==0x101 && vid.vesa_stride==1024 && vid.vesa_start_y==480
+            && vid.vesa_dacwidth==8 && vid.dac[7]==0xFF123456u && vid.pal[7]==0xFF123456u,
+            "vesa/4F04 DL=02 restore: VESA mode, pitch, start, DAC width and DAC entry all back");
+      memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x04); s_dx(&r,0x0002); s_cx(&r,0x000F); r.es=0x3400; r.ebx=0; vdd_bus_deliver_int(&bus,0x10,&r);
+      CHECK(r_ax(&r)==0x024F, "vesa/4F04 restore from a buffer we did not write: AH=02, refused");
+      memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x02); s_bx(&r,0x0101); vdd_bus_deliver_int(&bus,0x10,&r); }
+
     /* T12: VESA frame is vesa_w x vesa_h x8 ----------------------------- */
     vid.dirty=1; vdd_bus_frame(&bus);
     CHECK(vid.frame.w==640 && vid.frame.h==480 && vid.frame.pixels==vid.vesa_vram,
