@@ -39,7 +39,14 @@ for p in "${probes[@]}"; do
         FAILED+=("$p (assembly)"); failed=$((failed+1))
         printf '  %-10s ASSEMBLY FAILED\n' "$p"; continue
     fi
-    out="$(python3 "$ROOT/scripts/dosdiff.py" "$D/$p.com" --host msdos622 --host ntvdmex 2>&1)"
+    # A probe may name EXTRA oracles in a header comment, "; ORACLE-ALSO: pcem-vesa".
+    # p_vesa does: a VESA BIOS is not MS-DOS, and Bochs's VBE and a real Tseng ROM
+    # disagree on a few fields -- with both voting, a split is DISPUTED (not graded)
+    # instead of a false mismatch against whichever answered alone. Costs ~2.5 min
+    # per probe that asks (PCem boots for each), so it is opt-in per probe.
+    extra=""
+    for o in $(sed -n 's/^; *ORACLE-ALSO: *//p' "$D/$p.asm"); do extra="$extra --host $o"; done
+    out="$(/usr/bin/python3 "$ROOT/scripts/dosdiff.py" "$D/$p.com" --host msdos622 $extra --host ntvdmex 2>&1)"
     rows="$(printf '%s\n' "$out" | grep -cE '  (AGREE|MISMATCH|ABSTAINED|DISPUTED|NO-DATA)( \[[0-9]+\])?$')"
     bad="$(printf  '%s\n' "$out" | grep -cE '  MISMATCH( \[[0-9]+\])?$')"
     abs="$(printf  '%s\n' "$out" | grep -cE '  ABSTAINED( \[[0-9]+\])?$')"

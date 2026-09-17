@@ -21,6 +21,11 @@
 ;   int10.4F01.<mode>         AX for that mode
 ;   vesa.mi.<mode>            ModeInfoBlock bytes 0..49, WinFuncPtr/PhysBasePtr zeroed
 ;
+; ORACLE-ALSO: pcem-vesa
+;   (paritysweep.sh reads this: the Tseng ET4000/W32p ROM under PCem votes alongside
+;    QEMU's Bochs VBE, so a split between a synthetic VBE and a real one is DISPUTED
+;    rather than a verdict.)
+;
 ; nasm -f bin p_vesa.asm -o p_vesa.com
 
         org     100h

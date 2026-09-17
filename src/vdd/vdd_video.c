@@ -777,7 +777,10 @@ static void vesa(video_state *st, ntvdd_regs *r)
             wr32(b + 12, 0);                      /* WinFuncPtr (use INT 10h 4F05) */
             wr16(b + 16, (uint16_t)pitch);        /* bytes per scan line           */
             wr16(b + 18, w); wr16(b + 20, h);     /* X / Y resolution              */
-            b[22] = 8; b[23] = 16;                /* char cell                     */
+            /* char cell: the BIOS font the mode's line count implies -- 8x8 at 200
+               lines, 8x14 at 350, 8x16 otherwise. The ET4000/W32p ROM says YCharSize=8
+               for 320x200 (p_vesa vs pcem-vesa, s74b); we said 16 for everything. */
+            b[22] = 8; b[23] = (uint8_t)(h <= 200 ? 8 : h <= 350 ? 14 : 16);
             b[24] = 1; b[25] = mbpp;              /* planes / bits per pixel       */
             /* ⚠ MEMORY MODEL IS NOT A CONSTANT. It was 4 ("packed pixel", i.e. a
                  palette index) for every mode, which is a lie for direct colour --
@@ -821,7 +824,10 @@ static void vesa(video_state *st, ntvdd_regs *r)
                                    b[37]=0; b[38]=0; }
             else if (mbpp == 24) { b[31]=8; b[32]=16; b[33]=8; b[34]=8;  b[35]=8; b[36]=0;
                                    b[37]=0; b[38]=0; }
-            b[39] = 0;                            /* DirectColorModeInfo: no prog ramp */
+            /* DirectColorModeInfo: D0 colour ramp programmable (no), D1 "bits in the
+               Rsvd field are usable by the application" -- yes for 5:5:5, whose spare
+               bit nothing reads (the ET4000/W32p ROM says 02 there; p_vesa, s74b). */
+            b[39] = (uint8_t)(mbpp == 15 ? 0x02 : 0x00);
             /* ── ★★★ LINEAR FRAMEBUFFER. (s74) Attribute bit 7 says a mode HAS one and
                  PhysBasePtr says where; with them 0 the whole mode list reads as
                  "banked only". heaven7 enumerated all twelve modes we published,
@@ -838,7 +844,7 @@ static void vesa(video_state *st, ntvdd_regs *r)
                LFB reads these rather than the banked ones. Same numbers here because
                our pitch does not change between the two. */
             wr16(b + 50, (uint16_t)pitch);              /* LinBytesPerScanLine      */
-            b[52] = 0; b[53] = 0;                       /* Lin/Bnk NumberOfImagePages */
+            b[52] = b[29]; b[53] = b[29];               /* Lin/Bnk NumberOfImagePages = +29 */
             if (mbpp > 8) { b[54]=b[31]; b[55]=b[32]; b[56]=b[33]; b[57]=b[34];
                             b[58]=b[35]; b[59]=b[36]; b[60]=b[37]; b[61]=b[38]; }
             s_ax(r, 0x004F);

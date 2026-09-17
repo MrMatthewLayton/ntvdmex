@@ -39,6 +39,7 @@ import time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "scripts", "dosoracle"))
+sys.path.insert(0, os.path.join(ROOT, "scripts"))          # pcemoracle
 
 REGS = ["AX", "BX", "CX", "DX", "SI", "DI", "DS", "ES", "FL", "CF"]
 
@@ -89,9 +90,11 @@ def rule_for(rules, probe, case, field):
     first-match silently drops the second -- which looks exactly like the rule
     not working.
     """
+    import fnmatch
     hits = [r for r in rules
-            if (not r.get("probe") or r["probe"] == probe)
-            and r["case"] == case and r["field"].upper() == field.upper()]
+            if r["probe"] == probe
+            and (r["case"] == case or fnmatch.fnmatchcase(case, r["case"]))   # a case may be a glob (vesa.mi.*)
+            and r["field"].upper() == field.upper()]
     if not hits:
         return None
     out = {"abstain": [], "ignore_bytes": [], "why": ""}
@@ -422,10 +425,46 @@ class RigHost(Host):
         raise RuntimeError(self.why)
 
 
+class PCem(Host):
+    """Genuine MS-DOS 6.22 on an AMI 486 under PCem, with a REAL video BIOS in ROM.
+    `pcem` = IBM VGA (no VESA); `pcem-vesa` = Diamond Stealth 32, Tseng ET4000/W32p
+    with a VESA 1.2 BIOS -- the only VESA ground truth this project has (s74b).
+    Same protocol as msdos622 (scratch A:, RUN.BAT, OUT.TXT); see pcemoracle.py for
+    the two things the wx build needs (nodev.dylib, enable_sync = 0)."""
+
+    def __init__(self, name, cfg):
+        Host.__init__(self, name)
+        self.cfg = cfg
+
+    def available(self):
+        app = os.path.join(ROOT, "pcem", "PCem.app", "Contents", "MacOS")
+        if not os.path.exists(os.path.join(app, "PCem")):
+            return False, "no pcem/PCem.app"
+        if not os.path.exists(os.path.join(app, "configs", self.cfg)):
+            return False, "no configs/%s" % self.cfg
+        return True, ""
+
+    def run(self, com):
+        import pcemoracle
+        old = os.environ.get("PCEM_CFG")
+        os.environ["PCEM_CFG"] = self.cfg
+        pcemoracle.CFG = os.path.join(pcemoracle.APP, "configs", self.cfg)
+        try:
+            out, _secs = pcemoracle.run_program(com)
+            return out
+        except pcemoracle.OracleError as e:
+            raise RuntimeError(str(e))
+        finally:
+            if old is None: os.environ.pop("PCEM_CFG", None)
+            else: os.environ["PCEM_CFG"] = old
+
+
 def all_hosts():
     return [
         MsDos622(),
         DosBoxX(),
+        PCem("pcem", "NTVDMEX-DOS622.cfg"),
+        PCem("pcem-vesa", "NTVDMEX-VESA.cfg"),
         RigHost("ntvdm", "oracle",
                 "needs an rt.bat variant that drops the IFEO Debugger key for the "
                 "baseline run and restores it after -- AND a decision from the user: "
