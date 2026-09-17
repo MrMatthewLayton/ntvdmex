@@ -63,7 +63,7 @@
 #define VID_VESA_LFB_PHYS 0xE0000000u
 #define VID_VESA_MAXW     NTVDD_FRAME_MAXW   /* widest mode advertised = what the presenter shows */
 #define VID_VESA_MAXH     NTVDD_FRAME_MAXH
-#define VID_FB_MAX        (640 * 480)   /* largest glyph/planar render target     */
+#define VID_FB_MAX        (NTVDD_FRAME_MAXW * NTVDD_FRAME_MAXH)   /* glyph/planar render target: 132 cols x 60 rows fits */
 
 /* How a mode is rendered.  Before this, only 13h and 12h were branched on and
    EVERY other mode silently became 80x25 text -- so mode 0 gave 80 columns
@@ -454,6 +454,7 @@ typedef struct video_state {
        bit 15 = BL 80h (the "during retrace" variants). Costs two adds per call. */
     uint32_t vesa_calls[0x16];
     uint16_t vesa_bl[0x16];
+    uint16_t vesa_text_mode;            /* 0x108..0x10C while a VESA TEXT mode is set (4F03 reports it); 0 otherwise */
     uint8_t  vesa_pm_state;             /* 4F10 VBE/PM: 0 on 1 standby 2 suspend 4 off 8 reduced-on */
     uint16_t vesa_07_maxx, vesa_07_maxy;/* largest display start a guest asked for  */
     uint32_t vesa_07_rej;               /* 4F07 sets refused (would not fit)         */

@@ -406,6 +406,41 @@ int main(void)
       CHECK(NTVDD_FRAME_MAXW>=1024 && NTVDD_FRAME_MAXH>=768 && VID_VESA_VRAM>=1024u*768u*3u, "sizes: presenter cap and VRAM hold 1024x768x24");
       memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x02); s_bx(&r,0x0101); vdd_bus_deliver_int(&bus,0x10,&r); }
 
+    /* T12e: VESA text modes 0x108..0x10C (132 columns) and 1280x1024 ------------ */
+    { uint16_t seg=0x3100; uint8_t *b=&g_flat[(seg<<4)]; static uint8_t tb[0x100]; vid.bda = tb;
+      memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x01); s_cx(&r,0x109); r.es=seg; r.edi=0; vdd_bus_deliver_int(&bus,0x10,&r);
+      CHECK(r_ax(&r)==0x004F && !((b[0]|(b[1]<<8)) & 0x10) && (b[18]|(b[19]<<8))==132 && (b[20]|(b[21]<<8))==25
+            && b[22]==8 && b[23]==16 && (b[16]|(b[17]<<8))==264 && b[27]==0 && (b[8]|(b[9]<<8))==0xB800,
+            "vesa/4F01 0x109: text attrs, 132x25 chars, 8x16 cell, 264 bytes/line, model 0, window B800");
+      memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x02); s_bx(&r,0x109); vdd_bus_deliver_int(&bus,0x10,&r);
+      CHECK(r_ax(&r)==0x004F && vid.mkind==VID_KIND_TEXT && vid.cols==132 && vid.rows==25 && vid.cell_h==16 && !vid.in_vesa,
+            "vesa/4F02 0x109: text kind, 132x25, not a graphics VESA state");
+      memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x03); vdd_bus_deliver_int(&bus,0x10,&r);
+      CHECK(r_ax(&r)==0x004F && r_bx(&r)==0x109, "vesa/4F03 in a VESA text mode: 0x109");
+      memset(&r,0,sizeof r); s_ah(&r,0x0F); vdd_bus_deliver_int(&bus,0x10,&r);
+      CHECK((r_ax(&r)>>8)==132 && tb[0x4A]==132 && tb[0x84]==24, "int10/0F + BDA: 132 columns, 25 rows");
+      memset(&r,0,sizeof r); s_ah(&r,0x02); s_dx(&r,(uint16_t)((3<<8)|100)); vdd_bus_deliver_int(&bus,0x10,&r);
+      memset(&r,0,sizeof r); s_ah(&r,0x0E); s_al(&r,'Z'); vdd_bus_deliver_int(&bus,0x10,&r);
+      CHECK(vid.vmem[VID_TEXT_OFF + (3*132+100)*2]=='Z', "text at (3,100): cell addressing uses 132 columns");
+      vid.dirty=1; vdd_bus_frame(&bus);
+      CHECK(vid.frame.w==1056 && vid.frame.h==400 && vid.frame.bpp==8, "frame(0x109): 1056x400");
+      memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x02); s_bx(&r,0x10C); vdd_bus_deliver_int(&bus,0x10,&r);
+      vid.dirty=1; vdd_bus_frame(&bus);
+      CHECK(r_ax(&r)==0x004F && vid.cols==132 && vid.rows==60 && vid.cell_h==8 && vid.frame.w==1056 && vid.frame.h==480,
+            "vesa/4F02 0x10C: 132x60 at 8x8 -> 1056x480");
+      memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x02); s_bx(&r,0x108); vdd_bus_deliver_int(&bus,0x10,&r);
+      CHECK(r_ax(&r)==0x004F && vid.cols==80 && vid.rows==60, "vesa/4F02 0x108: 80x60");
+      memset(&r,0,sizeof r); s_ah(&r,0x00); s_al(&r,0x03); vdd_bus_deliver_int(&bus,0x10,&r);
+      memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x03); vdd_bus_deliver_int(&bus,0x10,&r);
+      CHECK(vid.cols==80 && vid.rows==25 && r_bx(&r)==0x03, "int10/00 mode 3 leaves the VESA text mode; 4F03 = 3");
+      memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x01); s_cx(&r,0x107); r.es=seg; r.edi=0; vdd_bus_deliver_int(&bus,0x10,&r);
+      CHECK(r_ax(&r)==0x004F && (b[18]|(b[19]<<8))==1280 && (b[20]|(b[21]<<8))==1024 && b[25]==8, "vesa/4F01: 0x107 = 1280x1024x8");
+      memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x02); s_bx(&r,0x411B); vdd_bus_deliver_int(&bus,0x10,&r);
+      vid.dirty=1; vdd_bus_frame(&bus);
+      CHECK(r_ax(&r)==0x004F && vid.frame.w==1280 && vid.frame.h==1024 && vid.frame.bpp==32, "vesa/4F02 0x411B: 1280x1024x24 LFB frame");
+      vid.bda = 0;
+      memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x02); s_bx(&r,0x0101); vdd_bus_deliver_int(&bus,0x10,&r); }
+
     /* T12d: 4F10 VBE/PM (DPMS) ----------------------------------------------- */
     memset(&r,0,sizeof r); s_ah(&r,0x4F); s_al(&r,0x10); s_bx(&r,0x0000); vdd_bus_deliver_int(&bus,0x10,&r);
     CHECK(r_ax(&r)==0x004F && (r_bx(&r)&0xFF)==0x10 && (r_bx(&r)>>8)==0x0F, "vesa/4F10 report: VBE/PM 1.0, all four states");

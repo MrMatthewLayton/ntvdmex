@@ -58,8 +58,8 @@ static inline void s_dx(ntvdd_regs *r, uint16_t v){ r->edx = (r->edx & 0xFFFF000
    show, and the presenter may not drop a frame the VDD is allowed to produce.
    (s74b: was 800x600 in two headers that had to agree by hand; 1024x768 lets the
    VBE 1.2 modes real games list -- 0x105, 0x116..0x118 -- be published.) */
-#define NTVDD_FRAME_MAXW  1024
-#define NTVDD_FRAME_MAXH  768
+#define NTVDD_FRAME_MAXW  1280   /* 1280x1024 (0x107) and 132 columns x 8 = 1056 */
+#define NTVDD_FRAME_MAXH  1024
 typedef struct ntvdd_frame {
     uint16_t        w, h;           /* logical resolution in pixels             */
     uint8_t         bpp;            /* 8 (palettised) or 32 (ARGB)              */

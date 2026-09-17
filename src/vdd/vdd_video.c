@@ -500,7 +500,30 @@ static const struct { uint16_t num, w, h; uint8_t bpp; } vesa_modes[] = {
     { 0x110, 640, 480, 15 }, { 0x111, 640, 480, 16 }, { 0x112, 640, 480, 24 },
     { 0x113, 800, 600, 15 }, { 0x114, 800, 600, 16 }, { 0x115, 800, 600, 24 },
     { 0x116, 1024, 768, 15 }, { 0x117, 1024, 768, 16 }, { 0x118, 1024, 768, 24 },
+    { 0x107, 1280, 1024, 8 },
+    { 0x119, 1280, 1024, 15 }, { 0x11A, 1280, 1024, 16 }, { 0x11B, 1280, 1024, 24 },
 };
+/* ── VESA TEXT MODES (VBE 1.2 §, mode numbers 108h..10Ch). (s74b) ─────────────────
+     132-column text is what editors and file managers of the period ask for. A VESA
+     text mode is an ordinary text mode with a different geometry: it lives at B800,
+     goes through VID_KIND_TEXT and every INT 10h text service unchanged, and the
+     renderer already sizes the frame from cols x 8 and rows x cell_h. Only the
+     bookkeeping is new: 4F01 answers in characters, 4F02 lands in text kind, 4F03
+     remembers the VESA number (a standard mode set forgets it). */
+static const struct { uint16_t num; uint8_t cols, rows, cell_h; } vesa_text_modes[] = {
+    { 0x108,  80, 60,  8 }, { 0x109, 132, 25, 16 }, { 0x10A, 132, 43,  8 },
+    { 0x10B, 132, 50,  8 }, { 0x10C, 132, 60,  8 },
+};
+static int vesa_find_text(uint16_t num, uint8_t *cols, uint8_t *rows, uint8_t *cell_h)
+{
+    unsigned i;
+    for (i = 0; i < sizeof(vesa_text_modes)/sizeof(vesa_text_modes[0]); ++i)
+        if (vesa_text_modes[i].num == (num & 0x3FFF)) {
+            *cols = vesa_text_modes[i].cols; *rows = vesa_text_modes[i].rows;
+            *cell_h = vesa_text_modes[i].cell_h; return 1;
+        }
+    return 0;
+}
 /* bytes per pixel as VBE counts them: 15bpp occupies 2 bytes, like 16. */
 static uint32_t vesa_bypp(uint8_t bpp) { return bpp <= 8 ? 1u : bpp <= 16 ? 2u : bpp <= 24 ? 3u : 4u; }
 /* Byte offset into vesa_vram of the pixel shown top-left: the 4F07 display start at
@@ -706,11 +729,38 @@ static void vesa(video_state *st, ntvdd_regs *r)
         { const char *o = "NTVDMEX VESA"; for (i = 0; o[i]; ++i) b[OEM + i] = (uint8_t)o[i]; b[OEM+i]=0; }
         for (i = 0; i < sizeof(vesa_modes)/sizeof(vesa_modes[0]); ++i)
             wr16(b + MODES + i*2, vesa_modes[i].num);
+        { unsigned t;
+          for (t = 0; t < sizeof(vesa_text_modes)/sizeof(vesa_text_modes[0]); ++t, ++i)
+              wr16(b + MODES + i*2, vesa_text_modes[t].num); }
         wr16(b + MODES + i*2, 0xFFFF);            /* mode-list terminator         */
         s_ax(r, 0x004F);
         break; }
     case 0x01: {                                  /* return mode info             */
         uint16_t w, h; uint8_t mbpp = 8;
+        { uint8_t tc, tr, th;
+          if (vesa_find_text(r_cx(r), &tc, &tr, &th)) {   /* a TEXT mode: answer in characters */
+              uint8_t *b = (uint8_t *)vdd_map_flat(st->bus, r->es, (uint16_t)r->edi);
+              unsigned page = (unsigned)tc * tr * 2u;
+              vesa_note(st, 0x01, r_cx(r), 1);
+              for (i = 0; i < 256; ++i) b[i] = 0;
+              wr16(b + 0, 0x000F);              /* supported|opt info|BIOS output|colour; bit 4 clear = TEXT */
+              b[2] = 0x07; b[3] = 0x00;         /* WinA r/w/exists; WinB none    */
+              wr16(b + 4, 32); wr16(b + 6, 32); /* the 32 KB colour-text window  */
+              wr16(b + 8, 0xB800); wr16(b + 10, 0);
+              wr32(b + 12, 0);
+              wr16(b + 16, (uint16_t)(tc * 2u)); /* bytes per character row       */
+              wr16(b + 18, tc); wr16(b + 20, tr); /* X/Y resolution IN CHARACTERS  */
+              b[22] = 8; b[23] = th;            /* char cell                     */
+              b[24] = 1;                        /* planes                        */
+              b[25] = 4;                        /* bits per pixel (attribute)    */
+              b[26] = 1;                        /* NumberOfBanks                 */
+              b[27] = 0;                        /* MemoryModel 0 = text          */
+              b[28] = 0;                        /* BankSize                      */
+              b[29] = (uint8_t)(page ? (0x8000u / page) - 1u : 0u);   /* image pages */
+              b[30] = 1;                        /* Reserved = 1                  */
+              s_ax(r, 0x004F);
+              break;
+          } }
         vesa_note(st, 0x01, r_cx(r), vesa_find(r_cx(r), &w, &h, &mbpp));
         if (vesa_find(r_cx(r), &w, &h, &mbpp)) {
             uint8_t *b = (uint8_t *)vdd_map_flat(st->bus, r->es, (uint16_t)(uint16_t)r->edi);
@@ -786,6 +836,26 @@ static void vesa(video_state *st, ntvdd_regs *r)
         break; }
     case 0x02: {                                  /* set VBE mode                 */
         uint16_t w, h; uint8_t mbpp = 8;
+        { uint8_t tc, tr, th;
+          if (vesa_find_text(r_bx(r), &tc, &tr, &th)) {
+              /* A VESA text mode = mode 3 with a different geometry. Go through the
+                 standard mode set so everything a text mode resets is reset (font,
+                 palette, CRTC, cursor, blink), honouring D15 as AL bit 7, then apply
+                 the geometry. vesa_text_mode is what 4F03 reports until a standard
+                 mode set clears it (that path zeroes it below). */
+              ntvdd_regs m; unsigned k;
+              for (k = 0; k < sizeof m; ++k) ((uint8_t *)&m)[k] = 0;
+              vesa_note(st, 0x02, r_bx(r), 1);
+              st->vesa_set_bx = r_bx(r); st->vesa_set_seen = 1; st->vesa_set_ok = 1;
+              s_ah(&m, 0x00); s_al(&m, (uint8_t)(0x03 | ((r_bx(r) & 0x8000) ? 0x80 : 0x00)));
+              int10(st, &m);
+              st->cols = tc; st->rows = tr; st->cell_h = th;
+              st->gw = (uint16_t)(tc * VID_CELL_W); st->gh = (uint16_t)(tr * th);
+              if (!(r_bx(r) & 0x8000)) clear_text(st, 0x07);
+              st->vesa_text_mode = (uint16_t)(r_bx(r) & 0x3FFF);
+              st->dirty = 1; s_ax(r, 0x004F);
+              break;
+          } }
         vesa_note(st, 0x02, r_bx(r), vesa_find(r_bx(r), &w, &h, &mbpp));
         st->vesa_set_bx = r_bx(r); st->vesa_set_seen = 1;
         st->vesa_set_ok = (uint8_t)(vesa_find(r_bx(r), &w, &h, &mbpp) ? 1 : 0);
@@ -828,7 +898,7 @@ static void vesa(video_state *st, ntvdd_regs *r)
         s_ax(r, 0x014F);
         break; }
     case 0x03:                                    /* get the current VBE mode      */
-        s_bx(r, (uint16_t)(st->in_vesa ? st->vesa_mode : st->mode));
+        s_bx(r, (uint16_t)(st->in_vesa ? st->vesa_mode : st->vesa_text_mode ? st->vesa_text_mode : st->mode));
         s_ax(r, 0x004F);
         break;
     /* ── 4F06 / 4F07: THE LOGICAL SCREEN, AND WHICH PART OF IT IS SHOWN. (s74b) ──
@@ -1035,6 +1105,7 @@ static void int10(void *self, ntvdd_regs *r)
              which is the whole difference the bit describes. */
         {   int noclear = (al & 0x80) != 0;
         st->mode = al & 0x7F; st->in_vesa = 0;        /* a standard mode leaves VESA */
+        st->vesa_text_mode = 0;                       /* ...including a VESA text mode */
         st->vesa_dacwidth = 6;                        /* §4.11: any mode set -> 6 bits */
         st->cur_row = st->cur_col = 0; st->page = 0;
         st->cur_shape = 0x0607;                       /* the BIOS resets the shape too */
