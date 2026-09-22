@@ -148,9 +148,60 @@ static inline int log_badrange(const char *path, const char *buf, const char *en
     return 1;
 }
 
+/* ── KEEP THE LAST FEW RUNS. (2026-09-22, the first field report) ─────────────────
+     The zip went to a machine we cannot reach. Its first session was broken -- every
+     DOS/4GW game crawled and stalled -- and its second was fine, and by the time the
+     report arrived the only log on the box was the LAST run's, because every start
+     truncates ntvdmhost.log. The one file that explains a failure had been overwritten
+     by the runs that worked. So the first truncate of a process first shifts what is
+     there: ntvdmhost.log -> ntvdmhost-1.log -> ... -> ntvdmhost-LOG_KEEP.log, the
+     oldest dropped. A field machine then holds the last LOG_KEEP+1 runs for someone to
+     copy back by hand; nothing here can read them for us.
+   ⚠ ONCE PER PROCESS. log_write is called more than once in a run (the STAGE0 line,
+     then the preamble re-truncates), and a rotation on each would shift one run into
+     several files. The flag is per-process, which is per-run.
+   ⚠ MoveFileEx over an existing target: on a share the target can be open elsewhere
+     (the rig's watcher tails the log), in which case the shift fails and the run
+     simply overwrites as it always did -- rotation is best-effort and must never
+     stop the log itself from being written. */
+#define LOG_KEEP 5
+static int g_log_rotated = 0;
+
+/* "<stem>.log" + k -> "<stem>-k.log" (a name without .log gets the suffix at its end). */
+static inline void log_rot_name(char *out, const char *path, int n, int stem, int k) {
+    int i; char *q = out;
+    for (i = 0; i < stem; ++i) *q++ = path[i];
+    *q++ = '-'; *q++ = (char)('0' + k);
+    for (i = stem; i < n; ++i) *q++ = path[i];
+    *q = 0;
+}
+
+static inline void log_rotate_once(const char *path) {
+    char from[MAX_PATH + 16], to[MAX_PATH + 16];
+    int n = 0, stem, k;
+    if (g_log_rotated) return;
+    g_log_rotated = 1;
+    while (path[n]) ++n;
+    if (n < 4 || n + 8 >= (int)sizeof from) return;
+    if (GetFileAttributesA(path) == INVALID_FILE_ATTRIBUTES) return;   /* nothing to keep */
+    stem = n;
+    if (path[n-4] == '.' && (path[n-3] | 0x20) == 'l' && (path[n-2] | 0x20) == 'o'
+        && (path[n-1] | 0x20) == 'g') stem = n - 4;
+    log_rot_name(to, path, n, stem, LOG_KEEP);
+    DeleteFileA(to);                                        /* the oldest falls off */
+    for (k = LOG_KEEP - 1; k >= 1; --k) {
+        log_rot_name(from, path, n, stem, k);
+        log_rot_name(to,   path, n, stem, k + 1);
+        MoveFileExA(from, to, MOVEFILE_REPLACE_EXISTING);
+    }
+    log_rot_name(to, path, n, stem, 1);
+    MoveFileExA(path, to, MOVEFILE_REPLACE_EXISTING);       /* last run -> -1 */
+}
+
 static inline void log_write(const char *path, const char *buf, const char *end) {
     HANDLE h;
     if (log_badrange(path, buf, end)) return;
+    log_rotate_once(path);
     log_close();                       /* the cached handle names the OLD file */
     h = CreateFileA(path, GENERIC_WRITE, 0, NULL,
                     CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);

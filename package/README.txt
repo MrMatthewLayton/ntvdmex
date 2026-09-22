@@ -18,8 +18,14 @@ INSTALL
      Do not move the folder after installing; if you must, run uninstall.bat
      first, move it, then install.bat again.
   2. Run install.bat.
-  3. Run smoke.bat. It runs the built-in self-test and tells you PASS or FAIL.
-  4. Run any DOS or 16-bit Windows program as you normally would.
+  3. CLOSE EVERY DOS AND 16-BIT WINDOWS PROGRAM THAT IS ALREADY RUNNING, or just
+     reboot. Windows keeps its own ntvdm.exe alive after a 16-bit program exits
+     and hands every later 16-bit program to it; NTVDMEX only takes over when
+     Windows starts a NEW one. If you tried anything under Windows' own VDM
+     before installing (to compare), this step is not optional. install.bat and
+     status.bat both say when one is still running.
+  4. Run smoke.bat. It runs the built-in self-test and tells you PASS or FAIL.
+  5. Run any DOS or 16-bit Windows program as you normally would.
 
 FILES
   install.bat      register NTVDMEX          (bin\ntvdmhost.exe /install)
@@ -33,9 +39,10 @@ FILES
 IF SOMETHING GOES WRONG
   - Run status.bat. It says whether NTVDMEX is installed and shows the key
     lines of the last log.
-  - The log of the last run is debug\out\ntvdmhost.log. It is the one file that
-    explains a failure; send it back with a one-line description of what you
-    ran and what you saw.
+  - The log of the last run is debug\out\ntvdmhost.log, and the five runs before
+    it are ntvdmhost-1.log (the previous run) to ntvdmhost-5.log. They are the
+    files that explain a failure; send the lot back with a one-line description
+    of what you ran and what you saw. The whole debug\out\ folder is fine.
   - If DOS programs stop working entirely: NTVDMEX removes itself after three
     starts in a row that did not end cleanly (closing a game's window with the
     X counts as clean; a crash does not). Run status.bat -- if it says "not

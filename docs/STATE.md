@@ -4,7 +4,8 @@
 > this file top to bottom and you will know where it is, what works, what does not, and
 > what to do next.
 
-- **Last updated:** 2026-09-17 21:05 (session 74c — ★★★★★ **RELEASE CUT: `dist\ntvdmex-20260917-4847355.zip`, host `9448cf27`, git tag `release-20260917b`. USER-CONFIRMED BY HAND: Duke3D + its Setup, ZAR VESA modes + mouse buttons, on top of the 17:10 set.** `pkgtest` 8/8 + `pkgw16` from the package's own `bin\`. Old `f3c349d` zip → `debug\prev\`; `debug\prev\ntvdmhost_prev.exe` = `9448cf27`. **THE NEW STABLE ANCHOR — the zip is IMMUTABLE until the next confirmed build.** The user is copying the whole share to USB to install on a friend's machine.)
+- **Last updated:** 2026-09-22 10:50 (session 75 — ★★★★ **THE ZIP WENT TO TWO MORE MACHINES.** User's second XP box: everything fine first run. A friend's Win98-era box: first session broken (DOS/4GW games crawled; Win16 drew under STOCK — the tester had run them under stock first, and the resident shared WOW VDM kept them; `/install` and `/status` now detect and say so), fine after a reboot that also changed the BIOS, and Duke3D took no keyboard there. Host now keeps the last six logs (`ntvdmhost-1..5.log`). Rig `bin\` = `4fc852aa`; guards green; **stable zip UNCHANGED at `4847355`/`9448cf27`**. See the s75 block.)
+- Previously: 2026-09-17 21:05 (session 74c — ★★★★★ **RELEASE CUT: `dist\ntvdmex-20260917-4847355.zip`, host `9448cf27`, git tag `release-20260917b`. USER-CONFIRMED BY HAND: Duke3D + its Setup, ZAR VESA modes + mouse buttons, on top of the 17:10 set.** `pkgtest` 8/8 + `pkgw16` from the package's own `bin\`. Old `f3c349d` zip → `debug\prev\`; `debug\prev\ntvdmhost_prev.exe` = `9448cf27`. **THE NEW STABLE ANCHOR — the zip is IMMUTABLE until the next confirmed build.** The user is copying the whole share to USB to install on a friend's machine.)
 - Previously: 2026-09-17 19:15 (session 74c — ★★★★★ **DUKE3D RUNS + ITS SETUP RUNS; ZAR's VESA MODES RENDER AND ITS MOUSE BUTTONS ARRIVE** — `4012e1a` `d15a26a` `dbcf44f` `70fc097`; rig `bin\` = `9448cf27` = HEAD. ⛔⛔ **A shared path ring CREATED `cfg\pmnoirq.flag` at 18:59 and silently killed every PM timer until 19:08 — fixed (per-thread), flag deleted; if a DPMI guest has no time, `dir cfg\` FIRST.** Stable zip UNCHANGED at `f3c349d`/`a988c6e6`; **by-hand OWED: Duke3D + SETUP, ZAR VESA1/VESA2 + clicks, then Doom/Heretic/Hexen/Skyroads/heaven7/Notepad.** See the s74c block.)
 - Previously: 2026-09-17 18:30 (session 74c — Duke3D runs, ZAR VESA renders; `4012e1a`, `d15a26a`, rig `61093e09`)
 - Previously: 2026-09-17 17:10 (session 74b — ★ **RELEASE CUT: `dist\ntvdmex-20260917-f3c349d.zip`, host `a988c6e6`, USER-CONFIRMED BY HAND across all major apps and games incl. Hexen's loader; pkgtest 8/8 + pkgw16 from the package's own bin\. This is the new stable anchor; the old `eb466c56` zip is in `debug\prev\`.**)
@@ -244,6 +245,53 @@ and matches the 6.22 oracle row for row (session 53)** — but `MEM /C` still re
    for eight sessions. The shelf is measured and unlaunched; a third guest is
    the next step, and it is also the honest correction for *a fix measured on
    one guest is a fix for none*.
+
+   ### ★★★★ s75 (22nd) — **THE ZIP IN THE FIELD: TWO MORE MACHINES. ONE INSTALL DEFECT FOUND AND CLOSED; ONE FIRST-SESSION FAILURE UNEXPLAINED; DUKE3D TOOK NO KEYBOARD ON ONE BOX.**
+
+   > **Rig `bin\ntvdmhost.exe` = `4fc852aa` (this session). Stable zip UNCHANGED at
+   > `4847355` / `9448cf27` (`debug\prev\ntvdmhost_prev.exe`). Guards on `4fc852aa`:
+   > selftest PASS, Notepad launches and closes via X, Skyroads `n8=0 max_ms=6`.
+   > Log rotation seen working on the rig (`ntvdmhost-1.log` appeared on the second
+   > direct launch). ⚠ `rt.bat` deletes `ntvdmhost.log` before every run, so the
+   > harness never rotates — only a direct launch does.**
+
+   **The report (user, 22nd; runs on the 18th).** The `4847355` zip installed on a
+   friend's XP SP3 box (built for Win98: BIOS strips hardware, PS/2 keyboard + mouse,
+   Quadro FX 3450 → passive HDMI → 2560×1440) and on the user's own second XP box
+   (older Win98-era hardware, triple-boot). **The user's box: everything fine, first
+   run.** The friend's box, **first session, straight after install.bat**: Doom, Duke3D,
+   Heretic, Hexen all crawled — the DOS/4GW banner printed like a typewriter, never past
+   the PM text; Skyroads playable with slight lag; **Notepad/Paint/WinMine/Solitaire
+   drew under STOCK ntvdm**. **After a reboot** (during which the BIOS was also changed:
+   hardware removed, optimised defaults): Doom/Heretic/Hexen fine, Skyroads fine bar
+   minor keyboard lag, Win16 under NTVDMEX — and **Duke3D ran but took no keyboard
+   input** (it does on the rig and on both of the user's boxes).
+
+   **1. Win16 under stock — explained and closed.** The tester had run the Win16 apps
+   under stock *first*, to compare. XP keeps ONE shared WOW VDM resident after a Win16
+   program exits, and the IFEO `Debugger` value is only consulted when a NEW `ntvdm.exe`
+   is created — so a resident stock VDM keeps every Win16 launch until it dies or the box
+   reboots, and `/install` never said so. Now it does: `install_resident_vdms()` counts
+   `ntvdm.exe` in the process list (ours is `ntvdmhost.exe`, never mistaken for one) and
+   both `/install` and `/status` print *"N copies of Windows' own ntvdm.exe are still
+   running … close every MS-DOS and 16-bit Windows program (or reboot)"*. README step 3
+   says the same. `/status` on the rig with nothing running prints nothing extra.
+
+   **2. The slow first session — unexplained, and not separable.** Not `[0x714]` (written
+   since `d6f8014`), not the 3-strikes key (a reboot does not re-add it, and install was
+   not re-run). The reboot and the BIOS change happened together, the machine is
+   unreachable, and the only log it keeps is the last run's. So: **the host now rotates
+   `ntvdmhost.log` → `ntvdmhost-1.log` … `-5.log` on the first truncate of each process**
+   (`log_rotate_once`, `src/host/log.h`) — a field box holds its last six runs for
+   someone to copy back by hand. That is the whole of what can be done about it from
+   here.
+
+   **3. Duke3D, no keyboard, one machine.** Keys go WM_KEYDOWN → scancode FIFO → IRQ1
+   (`main.c:9977`); the low-level hook is off by default; PS/2 and USB are identical at
+   that layer. Both keyboard symptoms on that box (Skyroads lag, Duke3D dead) sit on the
+   IRQ1 path, whose only machine-specific inputs are CPU/BIOS — which changed. **Nothing
+   to act on without its log**; the ask is Duke3D again, ten seconds of keys, quit, send
+   `debug\out\`.
 
    ### ★★★★★ s74c (17th, 17:15–18:30) — **DUKE NUKEM 3D RUNS. ZAR'S VESA MODES RENDER. TWO DPMI DEFECTS, BOTH "A 32-BIT CLIENT IS NOT A 16-BIT CLIENT".**
 

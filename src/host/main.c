@@ -3624,6 +3624,62 @@ static void install_self_path(char *buf, DWORD cap)
     if (!GetModuleFileNameA(NULL, buf, cap)) buf[0] = 0;
 }
 
+/* ── HOW MANY OF WINDOWS' OWN ntvdm.exe ARE RUNNING RIGHT NOW. ──────────────────────
+     The IFEO Debugger value is consulted when a NEW ntvdm.exe is created and never
+     again, and XP does not create one per program: every Win16 program shares ONE
+     resident WOW VDM that outlives the program that started it, and a DOS program
+     run from a console reuses that console's VDM. So a stock ntvdm.exe that is alive
+     when /install runs keeps taking every launch it would have taken anyway, and the
+     key we just wrote routes nothing until it exits -- or the box reboots.
+   ► Field report, 2026-09-18 (a friend's machine): the tester ran Notepad, Paint,
+     WinMine and Solitaire under stock ntvdm FIRST, to have something to compare
+     against, then installed NTVDMEX. Every Win16 launch after that still drew under
+     stock; a reboot "fixed" it. That is exactly the sequence an alpha tester follows,
+     and nothing in the install told them. It has to.
+   Counts by image name from the process list; our own host is ntvdmhost.exe, so it
+   is never mistaken for one. -1 when the list cannot be read at all, so the caller
+   can say "could not tell" rather than "none". */
+static int install_resident_vdms(void)
+{
+    HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    PROCESSENTRY32 pe;
+    int n = 0;
+    if (snap == INVALID_HANDLE_VALUE) return -1;
+    pe.dwSize = sizeof pe;
+    if (Process32First(snap, &pe)) {
+        do {
+            static const char want[] = "ntvdm.exe";
+            int i;
+            for (i = 0; want[i]; ++i) {
+                char c = pe.szExeFile[i];
+                if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a');
+                if (c != want[i]) break;
+            }
+            if (!want[i] && !pe.szExeFile[i]) ++n;
+        } while (Process32Next(snap, &pe));
+    }
+    CloseHandle(snap);
+    return n;
+}
+
+/* The sentence that goes with a non-zero count, for /install and /status alike. */
+static char *install_resident_text(char *p, int n)
+{
+    if (n == 0) return p;
+    if (n < 0) return zput(p, "(Could not read the process list, so whether one of "
+                              "Windows' own ntvdm.exe is still running is unknown.)\r\n");
+    p = zput(p, "\r\n!! ");
+    p = zdec(p, (unsigned)n);
+    p = zput(p, n == 1 ? " copy of Windows' own ntvdm.exe is still running."
+                       : " copies of Windows' own ntvdm.exe are still running.");
+    p = zput(p, "\r\n   Programs that are already running, and 16-bit Windows programs "
+                "started\r\n   from now on, keep using it: Windows only asks for NTVDMEX "
+                "when it starts a\r\n   NEW ntvdm.exe. Close every MS-DOS and 16-bit "
+                "Windows program (or reboot),\r\n   then run status.bat -- it should "
+                "no longer print this.\r\n");
+    return p;
+}
+
 /* ── DO IT, AND REPORT WHAT ACTUALLY HAPPENED. ───────────────────────────────────
      `want` is 1 to install, 0 to uninstall. The message is composed here rather
      than by the caller so the same words are used from the command line and from
@@ -3702,6 +3758,7 @@ static int install_perform(int want, char *msg, DWORD cap)
                     "machine now runs through NTVDMEX:\r\n    ");
         p = zput(p, self);
         p = zput(p, "\r\nUninstall with:  ntvdmhost.exe /uninstall\r\n");
+        p = install_resident_text(p, install_resident_vdms());
     } else {
         p = zput(p, act == INSTALL_ACT_RESTORE
             ? "UNINSTALLED, and the Debugger value we displaced has been put back:\r\n    "
@@ -3730,7 +3787,9 @@ static install_state install_status_text(char *msg, DWORD cap)
     switch (st) {
     case INSTALL_OURS:
         p = zput(p, "INSTALLED -- MS-DOS and 16-bit Windows launches on this machine "
-                    "run through NTVDMEX.\r\n"); break;
+                    "run through NTVDMEX.\r\n");
+        p = install_resident_text(p, install_resident_vdms());
+        break;
     case INSTALL_OTHER:
         p = zput(p, "NOT INSTALLED, and the ntvdm.exe Debugger value belongs to "
                     "another program:\r\n    ");
@@ -9848,7 +9907,7 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
              click on a menu is not consent for that. */
         case IDM_FILE_INSTALL:
         case IDM_FILE_UNINSTALL: {
-            char msg[1024]; int want = (LOWORD(wp) == IDM_FILE_INSTALL), ok;
+            char msg[2048]; int want = (LOWORD(wp) == IDM_FILE_INSTALL), ok;
             if (MessageBoxA(h, want
                     ? "Make NTVDMEX this machine's virtual DOS machine?\n\n"
                       "Every MS-DOS and 16-bit Windows program will then start "
@@ -9866,7 +9925,7 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
                         MB_OK | (ok ? MB_ICONINFORMATION : MB_ICONERROR));
             return 0; }
         case IDM_FILE_STATUS: {
-            char msg[1024];
+            char msg[2048];
             msg[0] = 0;
             install_status_text(msg, sizeof msg);
             MessageBoxA(h, msg, "NTVDMEX", MB_OK | MB_ICONINFORMATION);
@@ -21795,7 +21854,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
          because this is the one part of the host that is run BOTH from a prompt and
          by double-clicking. Reporting into a console nobody can see is how an
          installer becomes "it did nothing". */
-    {   char vmsg[1024];
+    {   char vmsg[2048];
         int verb = install_verb(GetCommandLineA());
         if (verb >= 0) {
             /* ⚠ `verb == 0`, NOT `verb != 2`. The first cut wrote the latter, which
