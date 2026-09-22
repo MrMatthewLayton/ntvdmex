@@ -11708,6 +11708,21 @@ static void modey_remap_select(void *ctx, int mask)
             yfan_bar_note(k, g_yprev_mask);      /* is this how the bar collapses? */
             for (p = 0; p < 4; ++p)
                 if (g_yprev_mask & (1 << p)) ((BYTE *)g_yview[p])[k] = b;
+            /* ── ⛔ AND THE SEED MOVES WITH IT, OR THIS WRITE IS FANNED OUT AGAIN.
+                 The scratch is only re-seeded where the window actually MOVES, and a
+                 guest alternating two multi-plane masks never moves it: 0x03 and 0x0c
+                 both want the scratch, so `want == g_ycur` returns early and the seed
+                 stays in the previous mask's era. The next fan-out then sees THESE
+                 bytes still differing from it and copies them into the NEW mask's
+                 planes as well -- plane 0+1 data bleeding into planes 2+3.
+               ► That is Doom's LOW DETAIL mode exactly: measured 0x03 x143490 and
+                 0x0c x143514 against ~16900 for each single-plane mask. What is fully
+                 repainted every frame (the 3D view) mostly heals; what is repainted
+                 only where it changes (the status bar, ST_diffDraw) keeps the damage --
+                 which is the reported "status bar is broken" at low detail and not at
+                 high. Advancing the seed here makes each fan-out cover only the writes
+                 made SINCE the last mask change, which is what it always meant. */
+            g_yseed[k] = b;
         }
         ++g_yfanouts;
     }
