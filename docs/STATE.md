@@ -4,7 +4,8 @@
 > this file top to bottom and you will know where it is, what works, what does not, and
 > what to do next.
 
-- **Last updated:** 2026-09-22 10:50 (session 75 — ★★★★ **THE ZIP WENT TO TWO MORE MACHINES.** User's second XP box: everything fine first run. A friend's Win98-era box: first session broken (DOS/4GW games crawled; Win16 drew under STOCK — the tester had run them under stock first, and the resident shared WOW VDM kept them; `/install` and `/status` now detect and say so), fine after a reboot that also changed the BIOS, and Duke3D took no keyboard there. Host now keeps the last six logs (`ntvdmhost-1..5.log`). Rig `bin\` = `4fc852aa`; guards green; **stable zip UNCHANGED at `4847355`/`9448cf27`**. See the s75 block.)
+- **Last updated:** 2026-09-22 12:45 (session 75 — ⛔⛔⛔ **`install.bat` COULD ANNOUNCE AN INSTALL IT HAD NOT PERFORMED**: the single-instance guard returns 0 silently and the install verbs sat below it, so `/install` beside any live guest wrote nothing and exited 0. Fixed (`6449645`); `install.bat` now re-asks `/status`. That mechanism reproduces the user's Windows 2000 report exactly (installed-apparently, smoke fails, no logs) though it is not confirmed on that box. New: **`diag.bat` in the zip** names which of three failures you have. Trial zip for 2000 = `dist\ntvdmex-20260922-c477a13.zip`, host `97e37bbe`; rig `bin\` = same, selftest ALL PASSED. **Stable zip still `4847355`/`9448cf27`.**)
+- Previously: 2026-09-22 10:50 (session 75 — ★★★★ **THE ZIP WENT TO TWO MORE MACHINES.** User's second XP box: everything fine first run. A friend's Win98-era box: first session broken (DOS/4GW games crawled; Win16 drew under STOCK — the tester had run them under stock first, and the resident shared WOW VDM kept them; `/install` and `/status` now detect and say so), fine after a reboot that also changed the BIOS, and Duke3D took no keyboard there. Host now keeps the last six logs (`ntvdmhost-1..5.log`). Rig `bin\` = `4fc852aa`; guards green; **stable zip UNCHANGED at `4847355`/`9448cf27`**. See the s75 block.)
 - Previously: 2026-09-17 21:05 (session 74c — ★★★★★ **RELEASE CUT: `dist\ntvdmex-20260917-4847355.zip`, host `9448cf27`, git tag `release-20260917b`. USER-CONFIRMED BY HAND: Duke3D + its Setup, ZAR VESA modes + mouse buttons, on top of the 17:10 set.** `pkgtest` 8/8 + `pkgw16` from the package's own `bin\`. Old `f3c349d` zip → `debug\prev\`; `debug\prev\ntvdmhost_prev.exe` = `9448cf27`. **THE NEW STABLE ANCHOR — the zip is IMMUTABLE until the next confirmed build.** The user is copying the whole share to USB to install on a friend's machine.)
 - Previously: 2026-09-17 19:15 (session 74c — ★★★★★ **DUKE3D RUNS + ITS SETUP RUNS; ZAR's VESA MODES RENDER AND ITS MOUSE BUTTONS ARRIVE** — `4012e1a` `d15a26a` `dbcf44f` `70fc097`; rig `bin\` = `9448cf27` = HEAD. ⛔⛔ **A shared path ring CREATED `cfg\pmnoirq.flag` at 18:59 and silently killed every PM timer until 19:08 — fixed (per-thread), flag deleted; if a DPMI guest has no time, `dir cfg\` FIRST.** Stable zip UNCHANGED at `f3c349d`/`a988c6e6`; **by-hand OWED: Duke3D + SETUP, ZAR VESA1/VESA2 + clicks, then Doom/Heretic/Hexen/Skyroads/heaven7/Notepad.** See the s74c block.)
 - Previously: 2026-09-17 18:30 (session 74c — Duke3D runs, ZAR VESA renders; `4012e1a`, `d15a26a`, rig `61093e09`)
@@ -306,6 +307,34 @@ and matches the 6.22 oracle row for row (session 53)** — but `MEM /C` still re
    box and reports; no 2000 rig.** Windows 7 (32-bit only — x64 has no NTVDM) added to
    the list; no machine for it yet. XP unchanged: selftest PASS, Doom to `ST_Init`,
    Notepad, on `e1f4b4ea`. Stable zip untouched.
+
+   **6. ⛔⛔⛔ `install.bat` WAS ANNOUNCING A SUCCESS IT HAD NOT PERFORMED (`6449645`).**
+   The user's 2000 report — *"Installed, apparently (this failed before). But smoke does
+   not run, and no logs are produced"* — is reproduced exactly by a defect in our own
+   ordering, found while building a diagnostic for it. The single-instance guard
+   (`main.c`, "ONE HOST AT A TIME") returns **0 — success, silently, no output** — when
+   another host owns the mutex, and **the install-verb block sat BELOW it**. So
+   `/install` or `/status` issued while any guest was on screen printed nothing, wrote
+   nothing to the registry and exited 0; `install.bat` branches on the exit code alone
+   and announced *"Installed. Every MS-DOS and 16-bit Windows program now runs under
+   NTVDMEX"*. `smoke.bat`'s `/status` gate passed the same way and then failed with *"no
+   log was written"*. **A verb is a command-line utility invocation, not a VDM launch,
+   and must not be subject to a guard about how many VDMs are running.** Verbs now run
+   first; `install.bat` re-asks `/status` instead of trusting the exit code. ⚠ This is a
+   MECHANISM that fits the report, not a confirmed diagnosis of the 2000 box — it
+   requires a live/zombie `ntvdmhost.exe` at install time, which is plausible there
+   (a first launch that wedged) and unproven.
+
+   **7. `diag.bat` — one pass that names which failure you have.** Ships in the zip.
+   Separates *Windows never launched us* (section 6 counts the resident stock
+   `ntvdm.exe` — the check added in `de98e60`) from *we died before logging* from
+   *`debug\out\` is not writable*, using nothing absent on Windows 2000 (no `reg.exe`,
+   no `tasklist.exe`, neither of which ships there). Validated end-to-end on the rig by
+   installing the package host and running it exactly as a user would — **and its
+   section 6 is what proves the verb fix: before it, `/status` beside a live guest
+   printed nothing at all.** ⚠ Rig lesson: `start` on a missing path raises a MODAL box
+   that blocks the batch forever (it blocked this very run; `rigshot shot` found it on
+   screen in seconds — look at the screen before theorising).
 
    **3. Duke3D, no keyboard, one machine.** Keys go WM_KEYDOWN → scancode FIFO → IRQ1
    (`main.c:9977`); the low-level hook is off by default; PS/2 and USB are identical at
