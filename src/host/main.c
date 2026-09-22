@@ -21807,6 +21807,56 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     CreateDirectoryA(NTVDMEX_CFG, NULL);
     CreateDirectoryA(NTVDMEX_DEBUG, NULL);
     CreateDirectoryA(NTVDMEX_OUT, NULL);
+
+    /* ── ★ THE INSTALL VERBS, BEFORE ANYTHING ELSE EXISTS. (GH #13) ─────────────
+         `ntvdmhost.exe /install`, `/uninstall`, `/status`. They run and exit without
+         touching the VDM, the log, COM1 or the recovery counter -- none of which
+         should move because somebody asked whether we are installed.
+       ⛔⛔ AND THIS BLOCK USED TO SIT BELOW THE SINGLE-INSTANCE GUARD, WHICH MADE
+         `install.bat` LIE. (2026-09-22) The guard returns 0 -- success, silently, no
+         output -- when another host owns the mutex. A verb arriving while ANY guest
+         was on screen therefore printed NOTHING and exited 0, and install.bat, which
+         branches on the exit code alone, announced "Installed. Every MS-DOS and
+         16-bit Windows program now runs under NTVDMEX" having written nothing to the
+         registry at all. smoke.bat's `/status` gate passed for the same reason and
+         then failed with "no log was written" -- the exact report from the user's
+         Windows 2000 box ("installed, apparently; smoke does not run; no logs").
+         A verb is a command-line utility invocation, not a VDM launch: it must never
+         be subject to a guard about how many VDMs are running.
+       ⚠ THE VERB MUST BE THE FIRST ARGUMENT, and that is what makes this safe to put
+         ahead of every other launch shape. Windows hands an IFEO-substituted VDM the
+         ORIGINAL command line, whose first argument is always the path to ntvdm.exe,
+         so a real VDM launch can never look like a verb -- while a token matched
+         anywhere on the line could be, one day, a DOS program's argument.
+       ⚠ Output goes to stdout when there is one and a message box when there is not,
+         because this is the one part of the host that is run BOTH from a prompt and
+         by double-clicking. Reporting into a console nobody can see is how an
+         installer becomes "it did nothing". */
+    {   char vmsg[2048];
+        int verb = install_verb(GetCommandLineA());
+        if (verb >= 0) {
+            /* ⚠ `verb == 0`, NOT `verb != 2`. The first cut wrote the latter, which
+                 makes INSTALL and UNINSTALL both ask to be installed -- and it
+                 reported "INSTALLED" cheerfully while doing it, because the message
+                 is composed from the same wrong flag. Caught on the rig by the
+                 BEHAVIOURAL half of the gate, not by the registry read. */
+            int ok, want = (verb == 0);
+            vmsg[0] = 0;
+            if (verb == 2) {
+                /* ── /status ANSWERS IN ITS EXIT CODE, not only in English. ──────
+                     0 = NTVDMEX is the machine's VDM, 1 = nobody is, 2 = another
+                     program is. A script can branch on that without matching a
+                     sentence -- which is exactly what package/smoke.bat was doing
+                     wrongly, grepping for text only /install ever prints. */
+                install_state st2 = install_status_text(vmsg, sizeof vmsg);
+                install_report(vmsg, 1);
+                return st2 == INSTALL_OURS ? 0 : (st2 == INSTALL_OTHER ? 2 : 1);
+            }
+            ok = install_perform(want, vmsg, sizeof vmsg);
+            install_report(vmsg, ok);
+            return ok ? 0 : 1;
+        } }
+
     /* ── ⛔⛔ ONE HOST AT A TIME. ─────────────────────────────────────────────────
          Nothing stopped a second instance, and two of them fight over things that
          are SYSTEM-WIDE, not per-process: the low-level keyboard hook, the cursor
@@ -21904,43 +21954,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     (void)hInst; (void)hPrev; (void)lpCmd; (void)nShow;
     progpath[0] = 0; args[0] = 0;
 
-    /* ── ★ THE INSTALL VERBS, BEFORE ANYTHING ELSE EXISTS. (GH #13) ─────────────
-         `ntvdmhost.exe /install`, `/uninstall`, `/status`. They run and exit without
-         touching the VDM, the log, COM1 or the recovery counter -- none of which
-         should move because somebody asked whether we are installed.
-       ⚠ THE VERB MUST BE THE FIRST ARGUMENT, and that is what makes this safe to put
-         ahead of every other launch shape. Windows hands an IFEO-substituted VDM the
-         ORIGINAL command line, whose first argument is always the path to ntvdm.exe,
-         so a real VDM launch can never look like a verb -- while a token matched
-         anywhere on the line could be, one day, a DOS program's argument.
-       ⚠ Output goes to stdout when there is one and a message box when there is not,
-         because this is the one part of the host that is run BOTH from a prompt and
-         by double-clicking. Reporting into a console nobody can see is how an
-         installer becomes "it did nothing". */
-    {   char vmsg[2048];
-        int verb = install_verb(GetCommandLineA());
-        if (verb >= 0) {
-            /* ⚠ `verb == 0`, NOT `verb != 2`. The first cut wrote the latter, which
-                 makes INSTALL and UNINSTALL both ask to be installed -- and it
-                 reported "INSTALLED" cheerfully while doing it, because the message
-                 is composed from the same wrong flag. Caught on the rig by the
-                 BEHAVIOURAL half of the gate, not by the registry read. */
-            int ok, want = (verb == 0);
-            vmsg[0] = 0;
-            if (verb == 2) {
-                /* ── /status ANSWERS IN ITS EXIT CODE, not only in English. ──────
-                     0 = NTVDMEX is the machine's VDM, 1 = nobody is, 2 = another
-                     program is. A script can branch on that without matching a
-                     sentence -- which is exactly what package/smoke.bat was doing
-                     wrongly, grepping for text only /install ever prints. */
-                install_state st2 = install_status_text(vmsg, sizeof vmsg);
-                install_report(vmsg, 1);
-                return st2 == INSTALL_OURS ? 0 : (st2 == INSTALL_OTHER ? 2 : 1);
-            }
-            ok = install_perform(want, vmsg, sizeof vmsg);
-            install_report(vmsg, ok);
-            return ok ? 0 : 1;
-        } }
+    /* The install verbs ran far above, ahead of the single-instance guard -- see the
+       block after the CreateDirectory calls, and the defect note there. */
 
     /* ── NO MODAL HARDWARE-ERROR BOXES, EVER, FOR THE WHOLE PROCESS. ───────────────
          Every Win32 call that touches a drive with no media -- A: with the door
