@@ -119,6 +119,57 @@ static const char *ntvdmex_path(const char *sub, const char *name);
 #include "audio_wave.h"
 #include "present_ddraw.h"
 
+/* ── ★ THE FOUR IMPORTS WINDOWS 2000 DOES NOT HAVE. (2026-09-22, user on the 2000 box) ──
+     The host would not START on Windows 2000: "The procedure entry point
+     AddVectoredExceptionHandler could not be located in KERNEL32.dll". The loader
+     resolves every static import before WinMain runs, so ONE missing export is a
+     refusal to load, not a degraded feature. The import table of the built exe was
+     dumped and compared: of 417 imports exactly four are XP-only --
+       kernel32  AddVectoredExceptionHandler   (the PM-fault VEH)
+       kernel32  AttachConsole                 (stdout to the parent's console)
+       user32    RegisterRawInputDevices       (raw mouse deltas while captured)
+       user32    GetRawInputData
+     Everything else is NT 5.0. So these four are bound at run time, and each has a
+     fallback that already existed or is the same mechanism one layer down:
+       no VEH        -> the unhandled-exception filter runs the SAME handler. With no
+                        CRT there is no SEH frame in this host to claim a fault first,
+                        so the filter is the next thing after the VEH would have been,
+                        and a filter may return EXCEPTION_CONTINUE_EXECUTION with a
+                        modified context exactly as the VEH does.
+       no Attach     -> the other stdout routes (inherited handle, the parent's handle)
+       no raw input  -> g_ms_raw_ok stays 0 and the absolute-derived delta path runs,
+                        which is what the code already did when registration failed.
+   ⚠ THIS IS "LOADS ON 2000", NOT "RUNS ON 2000". The NtVdmControl contract (the
+     VdmInitialize block, VDM_TIB offsets, TEB+0xF18, [0x714]) was taken from XP's
+     ntvdm and kernel; what 2000's do differently is unmeasured, and the first run's
+     log is the instrument. The Win16 half is pinned to XP's krnl386 and is a
+     separate effort. On XP nothing changes: the same four functions are found and
+     used as before. `STAGE0: os=` names the version and which of the four resolved. */
+typedef PVOID (WINAPI *PFN_AddVEH)(ULONG, PVECTORED_EXCEPTION_HANDLER);
+typedef BOOL  (WINAPI *PFN_AttachConsole)(DWORD);
+typedef BOOL  (WINAPI *PFN_RegisterRawInputDevices)(PCRAWINPUTDEVICE, UINT, UINT);
+typedef UINT  (WINAPI *PFN_GetRawInputData)(HRAWINPUT, UINT, LPVOID, PUINT, UINT);
+static PFN_AddVEH                  g_pfn_addveh;
+static PFN_AttachConsole           g_pfn_attachconsole;
+static PFN_RegisterRawInputDevices g_pfn_regrawinput;
+static PFN_GetRawInputData         g_pfn_getrawinput;
+static DWORD                       g_os_ver;       /* GetVersion(): 0x0500 = 2000, 0x0501 = XP */
+
+static void oscompat_bind(void)
+{
+    HMODULE k = GetModuleHandleA("kernel32.dll"), u = GetModuleHandleA("user32.dll");
+    g_os_ver = GetVersion();
+    g_pfn_addveh        = (PFN_AddVEH)(ULONG_PTR)GetProcAddress(k, "AddVectoredExceptionHandler");
+    g_pfn_attachconsole = (PFN_AttachConsole)(ULONG_PTR)GetProcAddress(k, "AttachConsole");
+    g_pfn_regrawinput   = u ? (PFN_RegisterRawInputDevices)(ULONG_PTR)GetProcAddress(u, "RegisterRawInputDevices") : 0;
+    g_pfn_getrawinput   = u ? (PFN_GetRawInputData)(ULONG_PTR)GetProcAddress(u, "GetRawInputData") : 0;
+}
+/* AttachConsole on an OS without it: fail, and let the next route try. */
+static BOOL oscompat_attach_console(DWORD pid)
+{
+    return g_pfn_attachconsole ? g_pfn_attachconsole(pid) : FALSE;
+}
+
 /* LOG_PATH now lives in log.h -- see the note there. */
 /* Both are written by the runner and READ by us, so they are cfg, not out. */
 #define TARGET_PATH CFG_("target.txt")
@@ -4260,7 +4311,7 @@ static const char *stdio_init(void)
         return "inherited (redirected)";
     }
     if (ty == FILE_TYPE_CHAR) { g_stdio = h; return "inherited console"; }
-    if (AttachConsole(ATTACH_PARENT_PROCESS)) {
+    if (oscompat_attach_console(ATTACH_PARENT_PROCESS)) {
         g_stdio = CreateFileA("CONOUT$", GENERIC_WRITE, FILE_SHARE_WRITE, NULL,
                               OPEN_EXISTING, 0, NULL);
         if (g_stdio != INVALID_HANDLE_VALUE) return "attached parent console";
@@ -4282,7 +4333,7 @@ static const char *stdio_init(void)
             }
             CloseHandle(snap);
         }
-        if (ppid && AttachConsole(ppid)) {
+        if (ppid && oscompat_attach_console(ppid)) {
             g_stdio = CreateFileA("CONOUT$", GENERIC_WRITE, FILE_SHARE_WRITE, NULL,
                                   OPEN_EXISTING, 0, NULL);
             if (g_stdio != INVALID_HANDLE_VALUE) return "attached console by parent pid";
@@ -10124,7 +10175,8 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
         return 0;
     case WM_INPUT: {                     /* raw relative motion -- see g_ms_dx      */
         RAWINPUT ri; UINT sz = sizeof ri;
-        if (GetRawInputData((HRAWINPUT)lp, RID_INPUT, &ri, &sz, sizeof(RAWINPUTHEADER))
+        if (g_pfn_getrawinput
+                && g_pfn_getrawinput((HRAWINPUT)lp, RID_INPUT, &ri, &sz, sizeof(RAWINPUTHEADER))
                 != (UINT)-1
             && ri.header.dwType == RIM_TYPEMOUSE
             && !(ri.data.mouse.usFlags & MOUSE_MOVE_ABSOLUTE)) {
@@ -10323,7 +10375,7 @@ static DWORD WINAPI ui_thread(LPVOID arg)
         rid.usUsagePage = 0x01; rid.usUsage = 0x02;
         rid.dwFlags = 0;                 /* follow focus: no INPUTSINK, foreground only */
         rid.hwndTarget = g_hwnd;
-        g_ms_raw_ok = RegisterRawInputDevices(&rid, 1, sizeof rid) ? 1 : 0;
+        g_ms_raw_ok = (g_pfn_regrawinput && g_pfn_regrawinput(&rid, 1, sizeof rid)) ? 1 : 0;
     }
     SetMenu(g_hwnd, build_menu());
     menu_view_sync(g_hwnd);                  /* View + CPU Speed reflect the state */
@@ -12626,6 +12678,16 @@ veh_fatal:
 static LONG WINAPI host_unhandled_filter(EXCEPTION_POINTERS *ep)
 {
     static char ub[128]; char *p = ub;
+    /* ── NO VEH ON THIS OS (Windows 2000): the filter IS the VEH. ─────────────────
+         With no vectored handler installed, a fault reaches here after the (empty)
+         SEH chain, one dispatch step later than the VEH saw it on XP but with the same
+         record and context. Run the same arms; if one resumes the guest, resume. */
+    if (!g_pfn_addveh) {
+        if (dpmi_crash_veh(ep) == EXCEPTION_CONTINUE_EXECUTION)
+            return EXCEPTION_CONTINUE_EXECUTION;
+        /* dpmi_crash_veh's fatal arm has already dumped and exited when it applies;
+           anything that falls out of it is the real-mode/host case below. */
+    }
     p = zput(p, "\r\nHOST UNHANDLED EXCEPTION (last chance; no SEH claimed it):\r\n");
     log_append(LOG_PATH, ub, p); serial_out(ub, p);
     host_fatal_dump(ep->ExceptionRecord, ep->ContextRecord);
@@ -21738,6 +21800,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     char progpath[768]; char args[256];
     unsigned i; int guard;
     g_guest_tid = GetCurrentThreadId();
+    oscompat_bind();                    /* the four XP-only imports, or their absence */
     /* cfg\ and debug\out\ before ANYTHING logs. A missing out\ makes every log_append
        fail silently, and the log is what explains every other failure. Idempotent;
        debug\ first because CreateDirectoryA does not create intermediate levels. */
@@ -22183,7 +22246,13 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     p = zput(p, " qi_susp=0x");        p = zhex(p, (DWORD)g_qi_susp);
     p = zput(p, " hcpu=0x");           p = zhex(p, (DWORD)(ULONG_PTR)g_hcpu);
     p = zput(p, "\r\n");
-    AddVectoredExceptionHandler(1, dpmi_crash_veh);     /* DPMI spike crash diagnostic */
+    p = zput(p, "STAGE0: os=0x"); p = zhex(p, ((g_os_ver & 0xff) << 8) | ((g_os_ver >> 8) & 0xff));
+    p = zput(p, " build="); p = zdec(p, (g_os_ver < 0x80000000u) ? (g_os_ver >> 16) : 0);
+    p = zput(p, " veh="); p = zdec(p, g_pfn_addveh != 0);
+    p = zput(p, " attachconsole="); p = zdec(p, g_pfn_attachconsole != 0);
+    p = zput(p, " rawinput="); p = zdec(p, g_pfn_regrawinput && g_pfn_getrawinput);
+    p = zput(p, g_pfn_addveh ? "\r\n" : "  (no VEH: the unhandled filter runs the PM-fault arms)\r\n");
+    if (g_pfn_addveh) g_pfn_addveh(1, dpmi_crash_veh);  /* DPMI spike crash diagnostic; XP+ */
     SetUnhandledExceptionFilter(host_unhandled_filter); /* real-mode runs: full dump, not WER */
 
     /* CSRSS command-info: receive buffers + first-command state + IFEO task id. */

@@ -12,6 +12,9 @@ REQUIREMENTS
   Windows XP, 32-bit, Service Pack 3. An administrator account for install.bat
   and uninstall.bat (they write HKEY_LOCAL_MACHINE). Running programs afterwards
   needs no special rights.
+  Windows 2000: this build LOADS there (earlier ones refused with a missing
+  KERNEL32 entry point) but has not been run there by anyone yet. If you try it,
+  debug\out\ntvdmhost.log is what to send back, whatever happens.
 
 INSTALL
   1. Extract the zip anywhere -- the folder name and drive do not matter.
