@@ -4,7 +4,8 @@
 > this file top to bottom and you will know where it is, what works, what does not, and
 > what to do next.
 
-- **Last updated:** 2026-09-22 13:40 (session 75 — ★★★★★ **THE DIRECTION CHANGED AND THE FIRST STEP IS IN: BUILD FROM THE SPECS, THEN TEST THE APPS.** `docs/inventory/` is the method + the VGA measurement (41 of 71 registers modelled; every absent one describes geometry, addressing or panning). **Step 1 shipped (`a5dd042`): a real register file — every SEQ/CRTC/GC/AC index captured with a write count, the five unclaimed external ports claimed, `STAGE2: VGAREG` on both exit paths. It immediately proved the thesis: Doom programs CRTC `14`, CRTC `17` and GC `06` once each — the address generator — and we drop all three; Skyroads programs NOTHING. Same mode 13h.** Rig `2565bffe`, offvm 1426/0, selftest PASS, Doom to `ST_Init`, Skyroads `n8=0 max_ms=7`. ⚠ **BY-HAND SHELF CHECK OWED.** Win2000 PARKED at the user's request. **Stable zip still `4847355`/`9448cf27`.**)
+- **Last updated:** 2026-09-22 22:20 (session 75 — ⛔⛔⛔ **A WHOLE DAY LOST TO `detaillevel 1` IN DOOM'S OWN `default.cfg` — THE THIRD TIME.** User: *"What is running on the screen RIGHT NOW is perfect!"* after the single change `detaillevel 1 -> 0` on the SHARE copy. Nothing in NTVDMEX was wrong. **WHY IT HID: the rig had TWO COMPLETE NTVDMEX INSTALLATIONS with DIFFERENT game configs** — the share (`All Users\Documents\ntvdmex`, `detaillevel 1`, the one every `live doom` launched) and the user's own `Matthew\Desktop\ntvdmex` (`detaillevel 0`, holds their savegame). The user said "I play on high detail" (true of theirs), I said the config was low detail (true of the one on screen) — **both right, different installs.** Also `runs/s74_doom_regression/good/` was MISLABELLED low-detail captures, so every measurement "matched good" and proved nothing; it is renamed with a `READ_THIS_FIRST.txt`. A game config survived every binary swap, two reverts, a reboot and a full wipe-and-rebuild from the 17th tag. **Rig: one host, `6e28e178`, rebuilt from tag `release-20260917b`, installed + verified.** Today's VGA work (`db4c059`, `ec7c3e9`) was reverted during the hunt and is NOT the cause of anything. See the s75 block.)
+- Previously: 2026-09-22 13:40 (session 75 — ★★★★★ **THE DIRECTION CHANGED AND THE FIRST STEP IS IN: BUILD FROM THE SPECS, THEN TEST THE APPS.** `docs/inventory/` is the method + the VGA measurement (41 of 71 registers modelled; every absent one describes geometry, addressing or panning). **Step 1 shipped (`a5dd042`): a real register file — every SEQ/CRTC/GC/AC index captured with a write count, the five unclaimed external ports claimed, `STAGE2: VGAREG` on both exit paths. It immediately proved the thesis: Doom programs CRTC `14`, CRTC `17` and GC `06` once each — the address generator — and we drop all three; Skyroads programs NOTHING. Same mode 13h.** Rig `2565bffe`, offvm 1426/0, selftest PASS, Doom to `ST_Init`, Skyroads `n8=0 max_ms=7`. ⚠ **BY-HAND SHELF CHECK OWED.** Win2000 PARKED at the user's request. **Stable zip still `4847355`/`9448cf27`.**)
 - Previously: 2026-09-22 12:45 (session 75 — ⛔⛔⛔ **`install.bat` COULD ANNOUNCE AN INSTALL IT HAD NOT PERFORMED**: the single-instance guard returns 0 silently and the install verbs sat below it, so `/install` beside any live guest wrote nothing and exited 0. Fixed (`6449645`); `install.bat` now re-asks `/status`. That mechanism reproduces the user's Windows 2000 report exactly (installed-apparently, smoke fails, no logs) though it is not confirmed on that box. New: **`diag.bat` in the zip** names which of three failures you have. Trial zip for 2000 = `dist\ntvdmex-20260922-c477a13.zip`, host `97e37bbe`; rig `bin\` = same, selftest ALL PASSED. **Stable zip still `4847355`/`9448cf27`.**)
 - Previously: 2026-09-22 10:50 (session 75 — ★★★★ **THE ZIP WENT TO TWO MORE MACHINES.** User's second XP box: everything fine first run. A friend's Win98-era box: first session broken (DOS/4GW games crawled; Win16 drew under STOCK — the tester had run them under stock first, and the resident shared WOW VDM kept them; `/install` and `/status` now detect and say so), fine after a reboot that also changed the BIOS, and Duke3D took no keyboard there. Host now keeps the last six logs (`ntvdmhost-1..5.log`). Rig `bin\` = `4fc852aa`; guards green; **stable zip UNCHANGED at `4847355`/`9448cf27`**. See the s75 block.)
 - Previously: 2026-09-17 21:05 (session 74c — ★★★★★ **RELEASE CUT: `dist\ntvdmex-20260917-4847355.zip`, host `9448cf27`, git tag `release-20260917b`. USER-CONFIRMED BY HAND: Duke3D + its Setup, ZAR VESA modes + mouse buttons, on top of the 17:10 set.** `pkgtest` 8/8 + `pkgw16` from the package's own `bin\`. Old `f3c349d` zip → `debug\prev\`; `debug\prev\ntvdmhost_prev.exe` = `9448cf27`. **THE NEW STABLE ANCHOR — the zip is IMMUTABLE until the next confirmed build.** The user is copying the whole share to USB to install on a friend's machine.)
@@ -247,6 +248,56 @@ and matches the 6.22 oracle row for row (session 53)** — but `MEM /C` still re
    for eight sessions. The shelf is measured and unlaunched; a third guest is
    the next step, and it is also the honest correction for *a fix measured on
    one guest is a fix for none*.
+
+   ### ⛔⛔⛔ s75 (22nd, evening) — **"DOOM IS BROKEN" WAS `detaillevel 1`, AGAIN. TWO INSTALLS HID IT FOR A WHOLE DAY.**
+
+   **Resolved by one change:** `detaillevel 1 -> 0` in
+   `demo\msdos\doom\default.cfg` on the SHARE copy. User: *"What is running on the
+   screen RIGHT NOW is perfect!"* **No NTVDMEX defect was involved.**
+
+   Low detail draws every column double-width and makes the status-bar labels
+   illegible — exactly the reported *"raycaster columns too wide and flickery, and the
+   status bar is broken"*. Measured, same binary, one variable:
+
+   | share `default.cfg` | odd-column-boundary changes (3D view) |
+   |---|---|
+   | `detaillevel 1` | **0** — every column pair identical |
+   | `detaillevel 0` | **8030**, **12088** (s74's good figure: 8279) |
+
+   **⛔ WHY IT WAS UNFINDABLE — THREE TRAPS:**
+
+   **1. TWO COMPLETE NTVDMEX INSTALLATIONS, DIFFERENT GAME CONFIGS.**
+   `C:\…\All Users\Documents\ntvdmex\` (the SMB share — **`detaillevel 1`**, and what
+   every `live doom` launched) and `C:\…\Matthew\Desktop\ntvdmex\` (the user's own, with
+   their savegame — **`detaillevel 0`**). The user said *"I have Doom playing on high
+   detail"* — true of theirs. I said the config was low detail — true of the one on
+   screen. **Both correct, describing different installations, for hours.**
+   ▶ `dir /s /b C:\ntvdmhost.exe` finds every install. **Confirm the copy you launch is
+   the copy they are looking at.**
+
+   **2. `runs/s74_doom_regression/good/` WAS MISLABELLED** — it holds low-detail
+   captures (0/267/0 vs 8030+ for real high detail). Every comparison said "matches the
+   good reference", which was true and worthless. Renamed to
+   `MISLABELLED_was_good_actually_lowdetail/` with a `READ_THIS_FIRST.txt`.
+
+   **3. A GAME CONFIG SURVIVES EVERYTHING** — binary swaps, two reverts, a machine
+   reboot, and a full wipe-and-rebuild from the 17th tag, because none of those touch
+   `default.cfg`. Doom rewrites it on exit, so an in-game F5 persists forever.
+
+   **▶ THE RULE: `findstr /I "detaillevel screenblocks" default.cfg` BEFORE touching
+   code.** s74 resolved the identical symptom the same way; this is the third time.
+
+   **Collateral from the hunt, all recorded:** today's VGA commits `db4c059` (mode-set
+   register file + CR11 write-protect) and `ec7c3e9` (integer scaling) were reverted
+   while chasing this and are **not** implicated in anything. Running stock ntvdm on a
+   graphics target to get a reference **crashed the rig's `nv4_disp` driver** and forced
+   a reboot. `/uninstall` REFUSES when the IFEO value points at a third binary, which
+   locked the user out of uninstalling — the displaced-value restore had pointed the key
+   at a throwaway `dist\` package. Both are real defects worth fixing.
+
+   **Rig now:** ONE host on the machine — `6e28e178`, rebuilt from tag
+   `release-20260917b` after deleting every `ntvdmhost.exe` on C: — installed and
+   verified; share Doom at `detaillevel 0`; `cfg\` as it was on the 17th.
 
    ### ★★★★ s75 (22nd) — **THE ZIP IN THE FIELD: TWO MORE MACHINES. ONE INSTALL DEFECT FOUND AND CLOSED; ONE FIRST-SESSION FAILURE UNEXPLAINED; DUKE3D TOOK NO KEYBOARD ON ONE BOX.**
 
