@@ -1,13 +1,10 @@
 /* vdd_video.c -- see vdd_video.h.  Text mode 3 + graphics mode 13h over the
  * shared video aperture (vmem), with the DAC palette, on the VDD bus.  Pure C. */
 #include "vdd_video.h"
-#include "vga_modedefs.h"
 #include "vga_font_8x16.h"
 #include "vga_font_8x8.h"
 #include "vga_font_8x14.h"
 #include "vga_defaults.h"
-
-static void vga_load_modedef(video_state *st, uint8_t mode);
 
 /* ⚠ THE ega16 TABLE THAT WAS HERE IS GONE, and so is the ega64_rgb() that replaced
    it. Both hardcoded the sixteen colours a 16-colour mode renders with, which is
@@ -1204,7 +1201,6 @@ static void int10(void *self, ntvdd_regs *r)
                                 st->mode == 0x11 || st->mode == 0x12) ? 16
                              : (st->mode == 0x0F || st->mode == 0x10) ? 14 : 8);
         load_default_palette(st);                     /* HW reloads the DAC on mode set */
-        vga_load_modedef(st, st->mode);               /* ...and programs the register file */
         load_default_crtc(st);                        /* ...and reprograms the CRTC     */
         {   unsigned mi; const void *found = 0;
             for (mi = 0; mi < sizeof(vid_modes)/sizeof(vid_modes[0]); ++mi)
@@ -2035,38 +2031,6 @@ static void vga_idx_data(uint8_t *index, uint8_t w, uint32_t v,
     if (w == 2) setdata(ctx, (v >> 8) & 0xFF);
 }
 
-/* ── ★★★ A MODE SET PROGRAMS THE REGISTER FILE, AS A REAL BIOS DOES. ────────────────
-     (docs/inventory/vga.md step 3.) Measured on genuine MS-DOS 6.22: a BIOS mode set
-     leaves about SIXTY meaningful values across the Sequencer, CRTC, Graphics
-     Controller, Attribute Controller and Miscellaneous Output. Ours left about five,
-     so a guest that reads a register back to learn the geometry -- or saves and
-     restores the card around its own mode switch, which plenty of DOS programs do --
-     was told zero.
-   ⚠ THIS FILLS THE FILE; IT DOES NOT YET DRIVE THE PICTURE. Every derived field
-     (mkind, gw/gh, chain4, crtc_offset, map_mask ...) is still computed exactly as
-     before and remains the authority for rendering. Moving the authority here is the
-     NEXT step and is a separate commit, because it touches every rendering path.
-   ⚠ ONLY MEASURED MODES. A mode absent from VGA_MODEDEFS is left exactly as it was
-     rather than filled with a guess -- extend p_vgareg.asm and regenerate.
-   ⚠ THE WRITE COUNTS ARE NOT TOUCHED. `*_w[i]` means "the GUEST wrote this index",
-     and it is the evidence the inventory is built from; a BIOS load must not forge it.
-     After this, `VGAREG` values are the BIOS's and the written-by-guest list is still
-     only the guest's. */
-static void vga_load_modedef(video_state *st, uint8_t mode)
-{
-    int i, k;
-    for (k = 0; k < VGA_MODEDEFS_N; ++k) {
-        const vga_modedef *d = &VGA_MODEDEFS[k];
-        if (d->mode != mode) continue;
-        st->misc_out = d->misc;
-        for (i = 0; i < 5;  ++i) st->seq_reg[i]  = d->seq[i];
-        for (i = 0; i < 25; ++i) st->crtc_reg[i] = d->crtc[i];
-        for (i = 0; i < 9;  ++i) st->gc_reg[i]   = d->gc[i];
-        for (i = 0; i < 21; ++i) st->attr_reg[i] = d->attr[i];
-        return;
-    }
-}
-
 static void crtc_set_data(void *self, uint32_t v);
 
 /* The cursor's CRTC address (0x0E/0x0F) as the BIOS path implies it: cells from the
@@ -2178,19 +2142,6 @@ static void crtc_out(void *self, uint16_t port, uint8_t w, uint32_t v)
 static void crtc_set_data(void *self, uint32_t v)
 {
     video_state *st = (video_state *)self;
-    /* ── ⛔ CR11 BIT 7 WRITE-PROTECTS CR00..CR07, AND WE USED TO IGNORE IT. ─────────
-         Measured against 6.22 by p_vgareg (`vga.cr11wp.protected.cr00`): with the bit
-         set, hardware REFUSES a write to CR00 and the register still reads back 0x5F;
-         we accepted it and read back 0x55. A guest that protects the timing registers
-         and then writes them -- which is what the protect is FOR -- got a card that
-         silently reprogrammed itself.
-       ⚠ Refused means refused: not stored, not counted as a guest write, and not
-         applied below. `crtc_wp_refused` counts them so the report can say it
-         happened rather than leaving an absence to be interpreted. */
-    if ((st->crtc_index & 31) <= 0x07 && (st->crtc_reg[0x11] & 0x80)) {
-        st->crtc_wp_refused++;
-        return;
-    }
     /* CAPTURE FIRST, always, whatever the switch below does with it -- an index that
        falls into `default:` is exactly the one the inventory needs to hear about. */
     st->crtc_reg[st->crtc_index & 31] = (uint8_t)v;
@@ -3172,8 +3123,7 @@ int vdd_video_regs_dump(const video_state *st, char *out, int cap)
     p = rd_str(p, "(w=");                          p = rd_dec(p, st->vgaen_w);
     /* Say so in the artefact, not only in the source: an unwritten external register
        is OUR spec-derived default and has never been checked against a real card. */
-    p = rd_str(p, ") cr11wp_refused=");            p = rd_dec(p, st->crtc_wp_refused);
-    p = rd_str(p, "  [unwritten externals are spec defaults, UNVERIFIED vs a card;"
+    p = rd_str(p, ")  [unwritten externals are spec defaults, UNVERIFIED vs a card;"
                   " InputStatus0 reads 0x00 pending the oracle]\r\n");
     p = rd_group(p, "SEQ ", st->seq_reg,  st->seq_w,   8);
     p = rd_group(p, "CRTC", st->crtc_reg, st->crtc_w, 32);
@@ -3195,14 +3145,8 @@ void vdd_video_reset(void *self)
          6.22 but covers only the AC palette and the DAC, so there is no measured
          table for the externals yet. Step 2's probe against the PCem ET4000 is what
          turns this from spec-correct into verified. Until then the dump marks it. */
-    st->feat_ctrl = 0x00; st->vga_enable = 0x01; st->dac_mask = 0xFF;
-    /* ⚠ AND THE POWER-ON STATE IS MODE 3'S, NOT ZEROES. A real machine reaches DOS
-         with its BIOS having set mode 3, so the register file holds mode 3's values
-         before a guest runs at all -- and most guests never call AH=00h for text,
-         they just start drawing. Loading it here rather than only from the INT 10h
-         path is what makes `VGAREG` describe a plausible card from the first line.
-         vga_load_modedef sets misc_out too, so it is not set separately. */
-    vga_load_modedef(st, 0x03);
+    st->misc_out = 0x67; st->feat_ctrl = 0x00;
+    st->vga_enable = 0x01; st->dac_mask = 0xFF;
     st->mode = 3; st->cols = VID_COLS; st->rows = VID_ROWS;
     st->mkind = VID_KIND_TEXT; st->gw = VID_FB_W; st->gh = VID_FB_H;
     st->cell_h = VID_CELL_H; st->blink = 1; st->user_font_on = 0;
