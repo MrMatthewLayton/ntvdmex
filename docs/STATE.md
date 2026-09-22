@@ -286,6 +286,27 @@ and matches the 6.22 oracle row for row (session 53)** — but `MEM /C` still re
    someone to copy back by hand. That is the whole of what can be done about it from
    here.
 
+   **4. ★★★★★ THE DIRECTION CHANGED (user, 22nd): BUILD FROM THE SPECS, THEN TEST THE
+   APPS.** *"Gaps implemented by what we're building, not what's asking for them."* The
+   example given: Doom, Wolf3D, Mario and Skyroads all use mode 13h differently
+   (chain-4 off + CRTC page flips, map-mask layouts, plain linear) and real hardware
+   copes because it IS the registers; we built a 13h renderer and then a fix per game.
+   The inventory (every surface, its spec, every function/register, coverage measured
+   from the code) is the next deliverable, with the VGA register model at its head —
+   PCem with a real ET4000 ROM is the oracle. Recorded in memory as a standing rule.
+
+   **5. Windows 2000 loads (`ffebdab`, zip `dist\ntvdmex-20260922-ffebdab.zip`, host
+   `e1f4b4ea`).** The host refused to start there: `AddVectoredExceptionHandler` missing.
+   The import table (417 entries) has exactly four XP-only imports (VEH, `AttachConsole`,
+   `RegisterRawInputDevices`, `GetRawInputData`); all four are now bound at run time with
+   fallbacks (the unhandled filter runs the VEH's arms; no SEH frames exist in this
+   CRT-less host). `STAGE0: os=` logs what bound. **Loads-on-2000 only**: the
+   `NtVdmControl`/`VDM_TIB`/`VdmInitialize` contract is XP's and unmeasured on 2000; the
+   Win16 half is pinned to XP's `krnl386`. **The user tests by hand on the triple-boot
+   box and reports; no 2000 rig.** Windows 7 (32-bit only — x64 has no NTVDM) added to
+   the list; no machine for it yet. XP unchanged: selftest PASS, Doom to `ST_Init`,
+   Notepad, on `e1f4b4ea`. Stable zip untouched.
+
    **3. Duke3D, no keyboard, one machine.** Keys go WM_KEYDOWN → scancode FIFO → IRQ1
    (`main.c:9977`); the low-level hook is off by default; PS/2 and USB are identical at
    that layer. Both keyboard symptoms on that box (Skyroads lag, Duke3D dead) sit on the
