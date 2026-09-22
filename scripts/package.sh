@@ -39,7 +39,7 @@ mkdir -p "$stage/bin" "$stage/cfg" "$stage/debug/out"
 
 cp "$HOST" "$stage/bin/ntvdmhost.exe"
 cp "$ROOT/tools/dostest/selftest.com" "$stage/bin/selftest.com"
-for f in install.bat uninstall.bat status.bat smoke.bat README.txt; do
+for f in install.bat uninstall.bat status.bat smoke.bat diag.bat README.txt; do
     perl -pe 's/\r?\n/\r\n/' "$ROOT/package/$f" > "$stage/$f"
 done
 printf 'settings files go here; empty = defaults\r\n' > "$stage/cfg/README.txt"

@@ -35,6 +35,7 @@ FILES
   uninstall.bat    restore Windows' own VDM  (bin\ntvdmhost.exe /uninstall)
   status.bat       which VDM is in force, and the last run's log summary
   smoke.bat        the built-in self-test
+  diag.bat         when nothing seems to happen: writes debug\out\diag.txt, send it
   bin\             the program itself
   cfg\             settings files; the four wow*.* files enable Win16 -- keep them
   debug\out\       the log of the LAST run (ntvdmhost.log) and screenshots
