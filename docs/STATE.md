@@ -249,6 +249,47 @@ and matches the 6.22 oracle row for row (session 53)** — but `MEM /C` still re
    the next step, and it is also the honest correction for *a fix measured on
    one guest is a fix for none*.
 
+   ### ⛔ s75 (22nd, late) — **AND THE OTHER HALF: DOOM'S LOW DETAIL IS GENUINELY BROKEN.**
+
+   **User, after testing both via the in-game menu: *"High detail works. Low detail is
+   broken!"*** The `detaillevel` finding below explained WHICH picture was on screen; it
+   did not explain that one of those pictures is rendered wrongly **by us**.
+
+   **Measured** (odd-column-boundary changes, 320×200 guest framebuffer):
+
+   | frame | 3D view | **status bar** |
+   |---|---|---|
+   | HIGH 01 / 02 | 8030 / 12088 | **3667 / 3613** |
+   | LOW 01 / 02 | 352 / 16059 | **1263 / 941** |
+
+   ▶ **Doom draws the status bar at FULL resolution whatever the detail level**, so that
+   column must match in both. It loses ~70% of its detail — we are degrading pixels the
+   game never asked us to degrade. The 3D view is inconsistent too (352 = properly
+   doubled on one frame, 16059 = noisier than HIGH on the next): corruption, not doubling.
+
+   **THE CAUSE, MEASURED** — `STAGE2: modeY mapmask hist` on the low-detail run:
+
+   ```
+   0x01 x 16964   0x02 x 16884   0x04 x 16829   0x08 x 16821    <- one plane
+   0x03 x 143490  0x0c x 143514                                 <- TWO PLANES AT ONCE
+   ```
+
+   The two-plane masks dominate by ~8.5×. That is Doom's low-detail column drawer
+   writing one byte into a PAIR of planes so every pixel is double-width. **Our mode-Y
+   support cannot serve it:** `ymap_select()` maps the A0000 window to a SINGLE plane and
+   `modey_flush()` falls back to a snapshot that `vdd_video.h` itself calls *"approximate
+   for a program that interleaves planes mid-scan"* — which is exactly this case.
+
+   ▶ **This is the concrete instance of what `docs/inventory/vga.md` predicted**: we
+   approximate mode Y instead of modelling the address generator, so an idiom nobody
+   implemented against renders wrong. **Mario's open mode-Y artefacts are a candidate for
+   the same cause.** The fix belongs in VGA steps 3–4 (derive addressing from
+   CR17/CR14/GR5/GR6/SR4), not another special case.
+
+   ⚠ **Not yet measured:** the HIGH-detail contrast histogram (that run printed no
+   `modeY` block — it is gated on `g_yremap` and the run ended without the video
+   summary). Expectation is single-plane masks only; **verify, do not assume.**
+
    ### ⛔⛔⛔ s75 (22nd, evening) — **"DOOM IS BROKEN" WAS `detaillevel 1`, AGAIN. TWO INSTALLS HID IT FOR A WHOLE DAY.**
 
    **Resolved by one change:** `detaillevel 1 -> 0` in
