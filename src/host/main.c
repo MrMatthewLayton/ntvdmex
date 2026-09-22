@@ -8906,7 +8906,7 @@ static void settings_apply(HWND h, const ntvdmex_settings *s, int live)
      any resolution, and fullscreen keeps its zero user-facing settings. The flag exists
      because "every pixel identical" is a legitimate taste, not because anyone must
      choose. */
-#define FSINT_FLAG   CFG_("fsinteger.flag")
+#define STRETCH_FLAG CFG_("stretch.flag")   /* opt OUT of integer scaling */
 
 static void settings_apply_present(present_ddraw *pd, const ntvdmex_settings *s)
 {
@@ -8916,7 +8916,10 @@ static void settings_apply_present(present_ddraw *pd, const ntvdmex_settings *s)
     pd->scaler = (int)s->v[SET_SCALER];
     /* Neither of these is a user setting -- see the note in settings.h about why
        fullscreen ended up with none. Both are file knobs, both default OFF. */
-    pd->fs_integer   = (GetFileAttributesA(FSINT_FLAG)   != INVALID_FILE_ATTRIBUTES);
+    /* ★ ON BY DEFAULT, and the flag now turns it OFF. `fsinteger.flag` was opt-in and
+         fullscreen-only, so nobody ever had sharp pixels; `stretch.flag` restores the
+         old fill-the-area behaviour for anyone who wants it. */
+    pd->integer_scale = (GetFileAttributesA(STRETCH_FLAG) == INVALID_FILE_ATTRIBUTES);
     pd->fs_use_ddraw = (GetFileAttributesA(DDRAWFS_FLAG) != INVALID_FILE_ATTRIBUTES);
 }
 

@@ -54,10 +54,20 @@ typedef struct present_ddraw {
            fs_use_ddraw  0 = borderless window (default, SHARP)
                          1 = exclusive DirectDraw (ddrawfs.flag; kept for tearing)
            fs_mode_w/h   only consulted by the exclusive path; 0 = no mode change
-           fs_integer    snap the fullscreen picture to whole pixel multiples    */
+           integer_scale snap the picture to whole pixel multiples -- BOTH windowed
+                         and fullscreen, and ON BY DEFAULT. It used to be
+                         `fs_integer`: fullscreen-only AND opt-in via a flag file
+                         nobody had, so it never ran anywhere. A 320x200 frame
+                         stretched into a 1680-wide window is 5.25x, which
+                         nearest-neighbour renders as columns of 5 and 6 pixels that
+                         shimmer as the view moves -- measured on the rig, and the
+                         whole of "Doom's raycaster columns are too wide and
+                         flickery, and the status bar is broken". An uneven pixel
+                         grid is a defect, not a preference, so the opt-out is now
+                         the flag: cfg\stretch.flag fills the area as before.     */
     int   fs_use_ddraw;
     int   fs_mode_w, fs_mode_h;
-    int   fs_integer;
+    int   integer_scale;
     /* double-buffer snapshot: filled under the caller's lock by _snapshot(),
        blitted (vsync'd) outside it by _present(). Removes the concurrent-write
        tearing of the live framebuffer. 8bpp + palette (all our frames). */

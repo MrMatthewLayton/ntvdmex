@@ -158,7 +158,11 @@ static void gdi_present(present_ddraw *pd)
          blit source is what has to divide into the destination. Snapping to a multiple
          of the ORIGINAL 320 while blitting a 640-wide scale2x source would give 2.5x
          and put the uneven pixels straight back. */
-    if (pd->fullscreen && pd->fs_integer)
+    /* ⚠ AND WINDOWED TOO, WHICH IS WHERE THIS WAS MISSING. The test used to read
+         `pd->fullscreen && pd->fs_integer`, so a maximised window -- the way a guest
+         is actually played on the rig -- took the smooth stretch and got the uneven
+         grid this file's own header warns about. */
+    if (pd->integer_scale)
         present_fit_int(cw, ch, sw, sh, pd->aspect, &dx, &dy, &dw, &dh);
     else
         present_fit(cw, ch, pd->aspect, &dx, &dy, &dw, &dh);
@@ -370,7 +374,7 @@ static void fs_present(present_ddraw *pd)
        ★ ...unless sharp pixels were asked for, in which case each axis snaps to a
          whole multiple of the FRAME -- which is why this needs snap_w/snap_h and the
          windowed caller does not. See present_fit_int. */
-    if (pd->fs_integer)
+    if (pd->integer_scale)
         present_fit_int(pd->fs_w, pd->fs_h, pd->snap_w, pd->snap_h, pd->aspect,
                         &fx, &fy, &fw, &fh);
     else

@@ -118,7 +118,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     /* Match the host's fullscreen defaults, or the demo proves a path nobody runs:
        fill (no whole-multiple snapping) and no display-mode change, so fullscreen is
        a borderless window drawn by exactly the same code as the windowed view. */
-    g_pd.fs_integer = 0;
+    g_pd.integer_scale = 0;
 
     build_palette();
     ShowWindow(hwnd, nShow);
