@@ -206,6 +206,58 @@ the AC palette and the DAC, so the SEQ/CRTC/GC/external tables do not exist yet.
 pair before committing a flip would never commit one for Doom. Ours commits on `0C`
 (measured `start=32768` at exit), so this is a note for step 3, not a live defect.
 
+## Step 2, first results — the probe against genuine MS-DOS 6.22 (2026-09-22)
+
+`tools/dostest/p_vgareg.asm` dumps the whole file (64 bytes: Misc/Feature/InpStat0/
+DACMask, SR0–4, CR00–18, GR0–8, AR00–14) after each BIOS mode set, plus three
+behavioural cases. Full data: `tools/dostest/vgareg.ref.txt`.
+
+⚠ **PCem was unavailable.** It exits early even for `p_vesa`, which has run 128/128
+there — so the fault is the oracle's, not the probe's, and the rows marked OPEN below
+must not be acted on until it answers. (Likely its documented GUI/desktop-session
+dependency; the runs above were driven from a non-interactive session.)
+
+**CONFIRMED — our guess was right.** Input Status 0 (`3C2` read) = `0x00` on 6.22, which
+is what step 1 chose and flagged as unverified. One down.
+
+**CONFIRMED DEFECT — CRTC write protect is not honoured.** `vga.cr11wp.protected.cr00`:
+with CR11 bit 7 set, a write of `0x55` to CR00 is **refused** by hardware (reads back
+`0x5F`, mode 3's real Horizontal Total) and **accepted** by us (`0x55`). Written from
+the spec before any fix, and it failed on first run — as intended.
+
+**CONFIRMED GAP, and far starker than the static inventory could show — a BIOS mode set
+leaves ~60 meaningful register values on real hardware, and about five here.**
+
+| Mode | Misc Out (6.22 → ours) | Real CR00–CR18 | Ours |
+|---|---|---|---|
+| 03h text | `67` → `67` | `5F4F5082 5581BF1F 004F0D0E …A3FF` | zeros but CR0A/0B/13 |
+| 0Dh 320×200×16 | **`63`** → `67` | `2D272890 2B80BF1F 00C0…E3FF` | same zeros |
+| 12h 640×480×16 | **`E3`** → `67` | `5F4F5082 5480…04E3FF` | same zeros |
+| 13h 320×200×256 | **`63`** → `67` | `5F4F5082 5480BF1F 0041…A3FF` | same zeros |
+| 07h mono | **`66`** → `67` | (via 3B4 — reads at all only since step 1) | same zeros |
+
+Mode 12h really does leave **`0xE3`** in Miscellaneous Output — the 480-line sync
+polarity this document predicted — and 0Dh/13h leave `0x63` (÷2 dot clock), 07h `0x66`
+(bit 0 clear: CRTC at 3Bx). **We report `0x67` for every mode, because our INT 10h never
+programs it.** Likewise the Sequencer (`03 00 03 00 02` for mode 3 — odd/even, planes
+0+1 — versus our `00 00 0F 00 00`), the Graphics Controller (`…10 0E 0F FF`: GR5 odd/even,
+GR6 = B800 + chain-odd/even — versus our `…00 00 00 FF`), and AR10/AR12/AR13 (`0C 00 0F 08`
+for mode 3, **`41` for mode 13h — bit 6, the 8-bit colour formatter** — versus our zeros).
+
+Our AC palette registers AR00–AR0F match the oracle exactly in every colour mode, which
+is `vga_defaults.h` doing its job and is the pattern the rest should follow.
+
+**OPEN — do not act on one host.**
+- **DAC Pixel Mask** reads `0x00` on the oracle, `0xFF` here. `0xFF` is the documented
+  reset value and `0x00` would mean a blanked screen, so this smells like a read-path
+  quirk (the hidden-DAC-register trick fires after four consecutive `3C6` reads with no
+  `3C7/3C8/3C9` access between — which this probe does). Needs PCem, and possibly a
+  probe that touches `3C8` between reads.
+- **Mode 7's AC palette** from the oracle (`20 08 08 08…18`) disagrees with
+  `vga_defaults.h`'s own mode-7 row (`20 01 08 03…0F`), which is itself labelled as
+  measured on 6.22. One of the two was read by a different route (INT 10h AH=10h vs port
+  `3C1`). Worth settling before either is trusted.
+
 ## The recommendation
 
 **Make the register file real, then derive the picture from it.** Concretely, in this

@@ -1,0 +1,104 @@
+# p_vgareg reference -- the VGA register file after a BIOS mode set
+#
+# Source: tools/dostest/p_vgareg.asm run on genuine MS-DOS 6.22 (the msdos622
+# oracle) on 2026-09-22. PCem was UNAVAILABLE that day -- it exits early even for
+# p_vesa, which has run there before, so the fault is the oracle's, not the
+# probe's; the two rows marked OPEN below need it before anything is changed.
+#
+# Layout: off 0 MiscOut, 1 FeatCtl, 2 InpStat0, 3 DACMask, 4..8 SR0-4,
+#         9..33 CR00-CR18, 34..42 GR0-GR8, 43..63 AR00-AR14.
+
+== vga.mode03
+   Misc Output (3CC)        6.22=67
+                            ours=67
+   Feature Control (3CA)    6.22=00
+                            ours=00
+   Input Status 0 (3C2)     6.22=00
+                            ours=00
+ ! DAC Pixel Mask (3C6)     6.22=00
+                            ours=FF
+ ! SEQ SR0-SR4              6.22=0300030002
+                            ours=00000F0000
+ ! CRTC CR00-CR18           6.22=5F4F50825581BF1F004F0D0E000000009C8E8F281F96B9A3FF
+                            ours=00000000000000000000060700000000000000280000000000
+ ! GC GR0-GR8               6.22=0000000000100E0FFF
+                            ours=0000000000000000FF
+ ! AC AR00-AR14             6.22=000102030405140738393A3B3C3D3E3F0C000F0800
+                            ours=000102030405140738393A3B3C3D3E3F0000000000
+
+== vga.mode0D
+ ! Misc Output (3CC)        6.22=63
+                            ours=67
+   Feature Control (3CA)    6.22=00
+                            ours=00
+   Input Status 0 (3C2)     6.22=00
+                            ours=00
+ ! DAC Pixel Mask (3C6)     6.22=00
+                            ours=FF
+ ! SEQ SR0-SR4              6.22=03090F0006
+                            ours=00000F0000
+ ! CRTC CR00-CR18           6.22=2D2728902B80BF1F00C00000000000009C8E8F140096B9E3FF
+                            ours=00000000000000000000060700000000000000140000000000
+ ! GC GR0-GR8               6.22=000000000000050FFF
+                            ours=0000000000000000FF
+ ! AC AR00-AR14             6.22=0001020304050607101112131415161701000F0000
+                            ours=000102030405060710111213141516170000000000
+
+== vga.mode12
+ ! Misc Output (3CC)        6.22=E3
+                            ours=67
+   Feature Control (3CA)    6.22=00
+                            ours=00
+   Input Status 0 (3C2)     6.22=00
+                            ours=00
+ ! DAC Pixel Mask (3C6)     6.22=00
+                            ours=FF
+ ! SEQ SR0-SR4              6.22=03010F0006
+                            ours=00000F0000
+ ! CRTC CR00-CR18           6.22=5F4F508254800B3E0040000000000000EA8CDF2800E704E3FF
+                            ours=00000000000000000000060700000000000000280000000000
+ ! GC GR0-GR8               6.22=000000000000050FFF
+                            ours=0000000000000000FF
+ ! AC AR00-AR14             6.22=000102030405140738393A3B3C3D3E3F01000F0000
+                            ours=000102030405140738393A3B3C3D3E3F0000000000
+
+== vga.mode13
+ ! Misc Output (3CC)        6.22=63
+                            ours=67
+   Feature Control (3CA)    6.22=00
+                            ours=00
+   Input Status 0 (3C2)     6.22=00
+                            ours=00
+ ! DAC Pixel Mask (3C6)     6.22=00
+                            ours=FF
+ ! SEQ SR0-SR4              6.22=03010F000E
+                            ours=00000F0000
+ ! CRTC CR00-CR18           6.22=5F4F50825480BF1F00410000000000009C8E8F284096B9A3FF
+                            ours=00000000000000000000060700000000000000280000000000
+ ! GC GR0-GR8               6.22=000000000040050FFF
+                            ours=0000000000000000FF
+ ! AC AR00-AR14             6.22=000102030405060708090A0B0C0D0E0F41000F0000
+                            ours=000102030405060708090A0B0C0D0E0F0000000000
+
+== vga.mode07mono
+ ! Misc Output (3CC)        6.22=66
+                            ours=67
+   Feature Control (3CA)    6.22=00
+                            ours=00
+   Input Status 0 (3C2)     6.22=00
+                            ours=00
+ ! DAC Pixel Mask (3C6)     6.22=00
+                            ours=FF
+ ! SEQ SR0-SR4              6.22=0300030002
+                            ours=00000F0000
+ ! CRTC CR00-CR18           6.22=5F4F50825480BF1F00410000000000009C8E8F284096B9A3FF
+                            ours=00000000000000000000060700000000000000280000000000
+ ! GC GR0-GR8               6.22=0000000000100A0FFF
+                            ours=0000000000000000FF
+ ! AC AR00-AR14             6.22=200808080808080810181818181818180E000F0800
+                            ours=20010803080508071009180B180D180F0000000000
+
+== vga.cr11wp.protected.cr00  6.22=0x005F  ours=0x0055  MISMATCH
+== vga.cr11wp.open.cr00  6.22=0x0055  ours=0x0055  AGREE
+== vga.dacmask.wr3C  6.22=0x0000  ours=0x003C  MISMATCH
+== vga.sr2.readback05  6.22=0x0005  ours=0x0005  AGREE
