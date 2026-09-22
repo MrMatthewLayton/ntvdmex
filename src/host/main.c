@@ -5867,6 +5867,15 @@ static DWORD WINAPI headless_deadline_thread(LPVOID pv)
           if (!any) q = zput(q, " none");
           q = zput(q, "\r\n"); }
         log_append(LOG_PATH, b, q); serial_out(b, q);
+        /* ── ⛔ AND THE REGISTER FILE HERE TOO, NOT ONLY ON THE CLEAN PATH. ──────────
+             The STAGE2 summary is printed by the wind-down path, and a guest that has
+             to be forced out never reaches it -- Doom headless and ZAR both leave this
+             way. An instrument that only reports on the tidy exit cannot see the
+             guests it exists for; that is the "an absence in the report means nothing"
+             trap, and it has already cost this project a session on ZAR. */
+        {   static char vr2[2048];
+            int n2 = vdd_video_regs_dump(&g_vid, vr2, (int)sizeof vr2);
+            if (n2 > 0) { log_append(LOG_PATH, vr2, vr2 + n2); serial_out(vr2, vr2 + n2); } }
         ExitProcess(3);
     }
     return 0;
@@ -28090,6 +28099,12 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         p = zput(p, " ovf=");                  p = zdec(p, g_vid.crtc_overflow);
         p = zput(p, " maxscan=");              p = zdec(p, g_vid.crtc_maxscan);
         p = zput(p, ")\r\n");
+        /* ── THE VGA REGISTER FILE. (docs/inventory/vga.md, step 1) ─────────────────
+             Its own buffer and its own flush: the block is ~1.2 KB and `report` is
+             shared with everything else in this summary. */
+        {   static char vr[2048];
+            int n = vdd_video_regs_dump(&g_vid, vr, (int)sizeof vr);
+            if (n > 0) { log_append(LOG_PATH, vr, vr + n); serial_out(vr, vr + n); } }
         p = zput(p, "STAGE2: video now: chain4="); p = zhexb(p, g_vid.chain4);
         p = zput(p, " ymask="); p = zhexb(p, g_vid.y_mask);
         p = zput(p, " mkind="); p = zhexb(p, g_vid.mkind);

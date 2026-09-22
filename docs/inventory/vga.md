@@ -170,17 +170,55 @@ discarded and the fade does nothing.
 
 ---
 
+## Measured: what our guests actually program (step 1, 2026-09-22)
+
+The capture layer landed, and the first two guests settle the argument. Both run mode
+13h. `written-by-guest` counts come from `STAGE2: VGAREG` in each run's log.
+
+| | Sequencer | CRTC | Graphics Controller | AC | Misc Out |
+|---|---|---|---|---|---|
+| **Doom** | `02`×1,101,409 `04`×1 | `0C`×986 **`14`×1 `17`×1** | `04`×3,534 `05`×221 **`06`×1** | none | never |
+| **Skyroads** | none | none | none | none | never |
+
+**Doom programs CR14, CR17 and GR6 exactly once each — and we drop all three.** Those
+are precisely the three registers this document named as the address generator before
+the measurement existed. Doom writes them at mode-set time to build unchained 13h, we
+discard them, and then reconstruct what they must have meant with the mode-Y snapshot
+heuristic. It works because someone spent a session making it work for Doom.
+
+**Skyroads programs nothing at all** — BIOS mode set, then linear writes to A000. Same
+mode number, zero registers.
+
+Two guests, one mode, six registers versus none. That is the whole thesis in one table:
+on period hardware both work because the hardware *is* the registers; here each needed
+its own code path because there was nothing for them to be different *in*.
+
+⚠ Also measured, and a gap in its own right: **our INT 10h mode set programs none of
+the file.** `selftest.com` sets modes through the BIOS and every group reports
+`written-by-guest: none`. A real VGA BIOS writes all ~70 registers on a mode set, which
+is where a guest's "read back what the BIOS left" expectations come from — and it is
+what step 3 must derive geometry *from*. Closing that belongs with step 2's probe:
+`vga_defaults.h` is already generated from a probe against genuine 6.22 but covers only
+the AC palette and the DAC, so the SEQ/CRTC/GC/external tables do not exist yet.
+
+⚠ Doom page-flips by writing **`0C` only** (986 times, no `0D` at all): its pages are
+64 KB-aligned, so the low byte never changes. Any logic that waits for the `0C`+`0D`
+pair before committing a flip would never commit one for Doom. Ours commits on `0C`
+(measured `start=32768` at exit), so this is a note for step 3, not a live defect.
+
 ## The recommendation
 
 **Make the register file real, then derive the picture from it.** Concretely, in this
 order — each step is independently shippable and testable:
 
-1. **Capture everything** (no behaviour change). Claim `3C2/3C3/3C6/3CA/3CC` and the
-   `3B4/3B5/3BA` aliases; store all of SEQ/CRTC/GC/AC into complete arrays, including
-   the indices nothing consumes yet; add read-back for every index the hardware allows.
-   Add a `vgaregs` dump to STAGE2. **This immediately makes "which registers do our
-   guests actually program?" answerable — the inventory's own evidence base — and gives
-   PCem something to diff against.**
+1. ~~**Capture everything**~~ — **DONE 2026-09-22.** Ports `3C2/3C3/3C6/3CA/3CC` and the
+   `3B4/3B5/3BA` mono aliases claimed; all four indexed groups stored with a per-index
+   write count; spec read-back for every index (they used to return 0 or `0xFF`); the
+   `STAGE2: VGAREG` dump, printed on **both** exit paths — the forced-exit path prints
+   no STAGE2 block, and Doom and ZAR both leave that way.
+   ⚠ Reads of the five newly-claimed ports changed from the bus's absent-device `0xFF`
+   to hardware values. Input Status 0 (`3C2` read) returns `0x00` and is marked
+   UNVERIFIED in the dump itself, pending step 2's oracle — it is not guessed at.
 2. **A probe + the oracle.** `tools/dostest/p_vgareg.com`: write and read back every
    register, dump the file after each BIOS mode set, run against PCem's ET4000. The
    expectations come from the spec **first**, as the VESA work did — see them fail, then

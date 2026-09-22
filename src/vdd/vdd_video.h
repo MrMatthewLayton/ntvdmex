@@ -569,6 +569,38 @@ typedef struct video_state {
                                            show a residual that is not a lost write   */
     uint32_t ysnap[4];                  /* snapshots taken into each mode-Y plane      */
     uint32_t ynz[4];                    /* busiest snapshot each plane ever received   */
+    /* ── ★★★★★ THE REGISTER FILE. (docs/inventory/vga.md, step 1) ───────────────────
+         Every Sequencer / CRTC / Graphics Controller / Attribute Controller index as
+         the guest wrote it, plus the external registers, plus a WRITE COUNT per index.
+       ► WHY, in the user's words: *"Doom, Wolf3D, Mario and Skyroads all use mode 13h,
+         but they all use it differently. Those differences were not identified and
+         implemented against until the apps asked for them. Yet on real period-correct
+         hardware they all work."* They work because the hardware IS these registers and
+         the picture is what they make. This host had no register file at all: it had a
+         mode number and a special case per guest that failed. The inventory measured
+         41 of 71 registers modelled, and every absent one describes geometry, address
+         generation or panning -- which is exactly what differs between those four.
+       ⚠ THIS IS CAPTURE ONLY AND RENDERS NOTHING. The derived fields above
+         (map_mask, chain4, crtc_start, write_mode ...) remain the sole authority for
+         every picture, so step 1 cannot change one. What it changes is that
+         "which registers do our guests actually program, and with what?" has an
+         answer -- for the first time -- and that the oracle has something to diff.
+         Steps 3-5 of the plan move the authority here, one guest at a time.
+       ⚠ A WRITE COUNT IS NOT A VALUE. `*_w[i] == 0` means the guest never touched
+         index i, so the value beside it is OUR reset default and a statement about us,
+         not about the guest. Read the two together or the table lies. */
+    uint8_t  seq_reg[8];                /* SR0-SR4 (8 decoded)                        */
+    uint8_t  crtc_reg[32];              /* CR00-CR18 (32 decoded)                     */
+    uint8_t  gc_reg[16];                /* GR0-GR8 (16 decoded)                       */
+    uint8_t  attr_reg[32];              /* AR00-AR14 (32 decoded)                     */
+    uint32_t seq_w[8], crtc_w[32], gc_w[16], attr_w[32];
+    /* External/general registers. Ports 3C2/3C3/3C6/3CA/3CC were claimed by NOBODY
+       before this, so a write vanished and a read returned the bus's 0xFF. */
+    uint8_t  misc_out;                  /* 3C2 write / 3CC read -- clock + sync polarity */
+    uint8_t  feat_ctrl;                 /* 3?A write / 3CA read                        */
+    uint8_t  vga_enable;                /* 3C3                                         */
+    uint8_t  dac_mask;                  /* 3C6 -- ANDed with every pixel; fades use it  */
+    uint32_t misc_w, feat_w, vgaen_w, dacmask_w;
 } video_state;
 
 #define VID_UNIMPL_SET(bm, n)  ((bm)[((n) & 0xFF) >> 3] |= (uint8_t)(1u << ((n) & 7)))
@@ -653,5 +685,12 @@ uint32_t vdd_video_frame_us(const video_state *st);   /* 16667 or 14286 (s73) */
 
 /* Publish both fonts into guest memory. Call once at start-up. */
 void vdd_video_install_fonts(video_state *st);
+
+/* ── THE REGISTER FILE, AS TEXT. (docs/inventory/vga.md) ─────────────────────────
+     Writes `STAGE2: VGAREG ...` lines into `out` and returns the bytes written.
+     Every index with its value and, separately, the list of indices the GUEST
+     actually wrote -- the second list is the evidence the inventory is built on and
+     the first is meaningless without it (see the write-count warning in the struct). */
+int vdd_video_regs_dump(const video_state *st, char *out, int cap);
 
 #endif /* NTVDMEX_VDD_VIDEO_H */

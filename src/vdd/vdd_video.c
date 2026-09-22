@@ -284,6 +284,8 @@ static void attr_out(void *self, uint16_t port, uint8_t w, uint32_t v)
     if (port == 0x3C1) return;                       /* data port is read-only       */
     if (!st->attr_ff) { st->attr_index = val; st->attr_ff = 1; return; }
     st->attr_ff = 0;
+    st->attr_reg[st->attr_index & 0x1F] = val;
+    st->attr_w  [st->attr_index & 0x1F]++;
     switch (st->attr_index & 0x1F) {
     case 0x00: case 0x01: case 0x02: case 0x03:
     case 0x04: case 0x05: case 0x06: case 0x07:
@@ -323,7 +325,7 @@ static void attr_in(void *self, uint16_t port, uint8_t w, uint32_t *v)
     case 0x10: *v = st->attr_mode; break;
     case 0x11: *v = st->vpal[16];  break;
     case 0x14: *v = st->attr_cse;  break;
-    default:   *v = (idx < 16) ? st->vpal[idx] : 0; break;
+    default:   *v = (idx < 16) ? st->vpal[idx] : st->attr_reg[idx]; break;  /* AR12/AR13 */
     }
 }
 
@@ -2131,12 +2133,19 @@ static int vga_vtiming(const video_state *st, uint32_t *total, uint32_t *active,
 static void crtc_out(void *self, uint16_t port, uint8_t w, uint32_t v)
 {
     video_state *st = (video_state *)self;
-    if (port == 0x3D4) { vga_idx_data(&st->crtc_index, w, v, crtc_set_data, st); return; }
+    /* 3B4 is the SAME index port as 3D4 (Misc Output bit 0 picks which one decodes);
+       both are claimed, so both must be recognised as the index half or a mono guest's
+       index write would be taken as data. */
+    if (port == 0x3D4 || port == 0x3B4) { vga_idx_data(&st->crtc_index, w, v, crtc_set_data, st); return; }
     crtc_set_data(st, v);
 }
 static void crtc_set_data(void *self, uint32_t v)
 {
     video_state *st = (video_state *)self;
+    /* CAPTURE FIRST, always, whatever the switch below does with it -- an index that
+       falls into `default:` is exactly the one the inventory needs to hear about. */
+    st->crtc_reg[st->crtc_index & 31] = (uint8_t)v;
+    st->crtc_w  [st->crtc_index & 31]++;
     switch (st->crtc_index) {
     /* ── THE START ADDRESS IS SIXTEEN BITS WRITTEN AS TWO REGISTERS, so between the
          two writes it holds a value the guest never asked for -- half of the old
@@ -2184,7 +2193,7 @@ static void crtc_set_data(void *self, uint32_t v)
 static void crtc_in(void *self, uint16_t port, uint8_t w, uint32_t *v)
 {
     video_state *st = (video_state *)self; (void)w;
-    if (port == 0x3D4) { *v = st->crtc_index; return; }
+    if (port == 0x3D4 || port == 0x3B4) { *v = st->crtc_index; return; }
     switch (st->crtc_index) {
     case 0x0C: *v = (uint8_t)(st->crtc_start >> 8); break;
     case 0x0D: *v = (uint8_t)(st->crtc_start & 0xFF); break;
@@ -2194,7 +2203,7 @@ static void crtc_in(void *self, uint16_t port, uint8_t w, uint32_t *v)
     /* Read back what the BIOS path set, in the hardware's own units. */
     case 0x0E: *v = (uint8_t)(crtc_cursor_of(st) >> 8); break;
     case 0x0F: *v = (uint8_t)(crtc_cursor_of(st) & 0xFF); break;
-    default:   *v = 0; break;
+    default:   *v = st->crtc_reg[st->crtc_index & 31]; break;  /* CR00-05/11/17 read back */
     }
 }
 
@@ -2227,6 +2236,8 @@ static void seq_out(void *self, uint16_t port, uint8_t w, uint32_t v)
 static void seq_set_data(void *self, uint32_t v)
 {
     video_state *st = (video_state *)self;
+    st->seq_reg[st->seq_index & 7] = (uint8_t)v;
+    st->seq_w  [st->seq_index & 7]++;
     if (st->seq_index == 2) {
         /* Which map-mask values does this program actually use, and how often? The
            de-interleave is built entirely on the assumption that an unchained program
@@ -2282,7 +2293,12 @@ static void seq_set_data(void *self, uint32_t v)
 static void seq_in(void *self, uint16_t port, uint8_t w, uint32_t *v)
 {
     video_state *st = (video_state *)self; (void)w;
-    *v = (port == 0x3C4) ? st->seq_index : (st->seq_index == 2 ? st->map_mask : 0);
+    /* ⚠ USED TO RETURN 0 FOR EVERY INDEX BUT 2. A VGA reads every Sequencer register
+       back, and a guest that probes the card by writing and re-reading one got a zero
+       that says "no card here". The register file answers properly now; index 2 still
+       comes from map_mask, which is the live authority for it. */
+    if (port == 0x3C4) { *v = st->seq_index; return; }
+    *v = (st->seq_index == 2) ? st->map_mask : st->seq_reg[st->seq_index & 7];
 }
 /* Graphics Controller ports 3CE (index) / 3CF (data). */
 static void gc_set_data(void *self, uint32_t v);
@@ -2296,6 +2312,8 @@ static void gc_out(void *self, uint16_t port, uint8_t w, uint32_t v)
 static void gc_set_data(void *self, uint32_t v)
 {
     video_state *st = (video_state *)self;
+    st->gc_reg[st->gc_index & 15] = (uint8_t)v;
+    st->gc_w  [st->gc_index & 15]++;
     switch (st->gc_index) {
     case 0: st->set_reset   = (uint8_t)(v & 0x0F); break;
     case 1: st->enable_sr   = (uint8_t)(v & 0x0F); break;
@@ -2349,7 +2367,7 @@ static void gc_in(void *self, uint16_t port, uint8_t w, uint32_t *v)
     case 3: *v = st->func_rotate; break; case 4: *v = st->read_map; break;
     case 5: *v = (uint8_t)(st->write_mode | (st->read_mode << 3)); break;
     case 8: *v = st->bit_mask; break;
-    default: *v = 0; break;
+    default: *v = st->gc_reg[st->gc_index & 15]; break;   /* GR6 and the rest read back */
     }
 }
 
@@ -2414,8 +2432,55 @@ static int vid_beam(const video_state *st, uint64_t *now, uint32_t *frame_us,
     return 1;
 }
 
+/* ── ★ THE EXTERNAL REGISTERS -- CLAIMED AT LAST. (docs/inventory/vga.md, step 1) ──
+     3C2, 3C3, 3C6, 3CA and 3CC were claimed by NOBODY: a guest's write vanished and a
+     read came back 0xFF from the bus's absent-device default. The inventory calls
+     Miscellaneous Output the worst of them, because bits 6-7 are the sync polarities
+     -- which is how a VGA encodes 400- vs 350- vs 480-line vertical size -- and bits
+     2-3 the dot clock. A guest setting Mode X writes 0xE3 here, and we never saw it.
+   ⚠ CAPTURE ONLY: these are stored and reported, and NOTHING derives geometry from
+     them yet. In particular Misc Output bit 0 (CRTC at 3Bx vs 3Dx) is recorded and not
+     acted on -- acting on it is step 3, with the whole shelf as the regression set.
+   ⚠ READS CHANGE, AND THAT IS THE POINT. Every one of these ports used to answer 0xFF
+     (not a value any VGA returns); now they answer what was written, or the documented
+     power-on value. The one exception is deliberate: the DAC Pixel Mask resets to 0xFF,
+     which is BOTH the hardware default and what the port used to return by accident. */
+static void ext_out(void *self, uint16_t port, uint8_t w, uint32_t v)
+{
+    video_state *st = (video_state *)self; (void)w;
+    if (port == 0x3C2)      { st->misc_out   = (uint8_t)v; st->misc_w++;  }
+    else if (port == 0x3C3) { st->vga_enable = (uint8_t)(v & 1); st->vgaen_w++; }
+    else if (port == 0x3C6) { st->dac_mask   = (uint8_t)v; st->dacmask_w++; }
+    /* 3CA and 3CC are READ-ONLY aliases (Feature Control / Misc Output); a write
+       there is a guest bug on real hardware too, so it is dropped, not stored. */
+}
+
+static void ext_in(void *self, uint16_t port, uint8_t w, uint32_t *v)
+{
+    video_state *st = (video_state *)self; (void)w;
+    switch (port) {
+    /* ⚠ INPUT STATUS 0, and its value is UNVERIFIED. Bit 7 is "vertical retrace
+         interrupt pending" (we raise none, so 0) and bit 4 is the DAC switch-sense
+         comparator, whose real value depends on the DAC contents and the monitor.
+         0x00 is returned deliberately rather than guessed at: it is safe (no phantom
+         interrupt) and it is flagged here and in the dump so the PCem ET4000 probe in
+         step 2 settles it rather than a memory of a datasheet. */
+    case 0x3C2: *v = 0x00; break;
+    case 0x3C3: *v = st->vga_enable; break;
+    case 0x3C6: *v = st->dac_mask;   break;
+    case 0x3CA: *v = st->feat_ctrl;  break;   /* Feature Control read  */
+    case 0x3CC: *v = st->misc_out;   break;   /* Misc Output read      */
+    default:    *v = 0xFF; break;             /* 3CB: nothing decodes there */
+    }
+}
+
+/* Feature Control WRITE lives at 3BA/3DA -- the same port whose READ is Input Status 1.
+   It was thrown away here; now it is captured, for the same reason as the rest. */
 static void status_out(void *self, uint16_t port, uint8_t w, uint32_t v)
-{ (void)self; (void)port; (void)w; (void)v; }     /* feature ctrl: ignore */
+{
+    video_state *st = (video_state *)self; (void)port; (void)w;
+    st->feat_ctrl = (uint8_t)v; st->feat_w++;
+}
 #define VID_HBL_DEBT_MAX 16u   /* lines: further apart than this, a poll is not counting lines */
 static void status_in(void *self, uint16_t port, uint8_t w, uint32_t *v)
 {
@@ -2998,9 +3063,90 @@ static void vid_frame(void *self)
 
 void vdd_video_putc(video_state *st, uint8_t ch) { teletype(st, ch); st->dirty = 1; }
 
+/* ── THE REGISTER FILE AS TEXT. (docs/inventory/vga.md) ──────────────────────────────
+     Two things, and the second is the one that matters: every index with its value,
+     and then the indices the GUEST wrote. A value whose write count is zero is OUR
+     reset default -- a statement about this host, not about the guest -- so printing
+     the values alone would invite exactly the wrong reading. No CRT here (the VDD is
+     built off-VM too), so the formatting is by hand. */
+static char *rd_hex2(char *p, unsigned v)
+{
+    static const char H[] = "0123456789ABCDEF";
+    *p++ = H[(v >> 4) & 15]; *p++ = H[v & 15]; return p;
+}
+static char *rd_str(char *p, const char *s) { while (*s) *p++ = *s++; return p; }
+static char *rd_dec(char *p, unsigned v)
+{
+    char t[12]; int n = 0;
+    if (!v) { *p++ = '0'; return p; }
+    while (v) { t[n++] = (char)('0' + v % 10); v /= 10; }
+    while (n) *p++ = t[--n];
+    return p;
+}
+/* "SEQ 00:03 01:01 ..." for one group, then "  written:" and the indices with w>0. */
+static char *rd_group(char *p, const char *name, const uint8_t *reg,
+                      const uint32_t *w, int n)
+{
+    int i, any = 0;
+    p = rd_str(p, "STAGE2: VGAREG "); p = rd_str(p, name);
+    for (i = 0; i < n; ++i) {
+        *p++ = ' '; p = rd_hex2(p, (unsigned)i); *p++ = ':';
+        p = rd_hex2(p, reg[i]);
+    }
+    p = rd_str(p, "\r\n");
+    p = rd_str(p, "STAGE2: VGAREG "); p = rd_str(p, name);
+    p = rd_str(p, " written-by-guest:");
+    for (i = 0; i < n; ++i) {
+        if (!w[i]) continue;
+        any = 1; *p++ = ' '; p = rd_hex2(p, (unsigned)i);
+        *p++ = 'x'; p = rd_dec(p, w[i]);
+    }
+    if (!any) p = rd_str(p, " none");
+    p = rd_str(p, "\r\n");
+    return p;
+}
+
+int vdd_video_regs_dump(const video_state *st, char *out, int cap)
+{
+    char *p = out;
+    /* Worst case is the four groups at ~7 bytes an entry plus the externals; 1600 is
+       comfortably over it. Refuse rather than overrun -- this runs inside the exit
+       report, where a smashed buffer would take the whole report with it. */
+    if (!st || !out || cap < 1600) return 0;
+    p = rd_str(p, "STAGE2: VGAREG ext misc=0x");   p = rd_hex2(p, st->misc_out);
+    p = rd_str(p, "(w=");                          p = rd_dec(p, st->misc_w);
+    p = rd_str(p, ") feat=0x");                    p = rd_hex2(p, st->feat_ctrl);
+    p = rd_str(p, "(w=");                          p = rd_dec(p, st->feat_w);
+    p = rd_str(p, ") dacmask=0x");                 p = rd_hex2(p, st->dac_mask);
+    p = rd_str(p, "(w=");                          p = rd_dec(p, st->dacmask_w);
+    p = rd_str(p, ") vgaen=0x");                   p = rd_hex2(p, st->vga_enable);
+    p = rd_str(p, "(w=");                          p = rd_dec(p, st->vgaen_w);
+    /* Say so in the artefact, not only in the source: an unwritten external register
+       is OUR spec-derived default and has never been checked against a real card. */
+    p = rd_str(p, ")  [unwritten externals are spec defaults, UNVERIFIED vs a card;"
+                  " InputStatus0 reads 0x00 pending the oracle]\r\n");
+    p = rd_group(p, "SEQ ", st->seq_reg,  st->seq_w,   8);
+    p = rd_group(p, "CRTC", st->crtc_reg, st->crtc_w, 32);
+    p = rd_group(p, "GC  ", st->gc_reg,   st->gc_w,   16);
+    p = rd_group(p, "AC  ", st->attr_reg, st->attr_w, 32);
+    return (int)(p - out);
+}
+
 void vdd_video_reset(void *self)
 {
     video_state *st = (video_state *)self;
+    /* ── THE EXTERNAL REGISTERS' POWER-ON VALUES. (inventory step 1) ────────────────
+         Only reached once, from vdd_video_init -- a mode set does NOT come through
+         here -- so the write counters below accumulate for the whole run and a
+         `*_w == 0` really does mean "this guest never wrote that index".
+       ⚠ misc_out = 0x67 is what a VGA BIOS leaves after a mode 3 set (colour at 3Dx,
+         RAM enabled, 28 MHz clock, 400 lines: -hsync +vsync). It is a SPEC value, not
+         a measured one -- vga_defaults.h is generated from a probe against genuine
+         6.22 but covers only the AC palette and the DAC, so there is no measured
+         table for the externals yet. Step 2's probe against the PCem ET4000 is what
+         turns this from spec-correct into verified. Until then the dump marks it. */
+    st->misc_out = 0x67; st->feat_ctrl = 0x00;
+    st->vga_enable = 0x01; st->dac_mask = 0xFF;
     st->mode = 3; st->cols = VID_COLS; st->rows = VID_ROWS;
     st->mkind = VID_KIND_TEXT; st->gw = VID_FB_W; st->gh = VID_FB_H;
     st->cell_h = VID_CELL_H; st->blink = 1; st->user_font_on = 0;
@@ -3046,6 +3192,23 @@ int vdd_video_init(vdd_bus *b, void *self)
        regressed Doom and why that cause is gone. */
     if (vdd_claim_ports(b, 0x3D4, 0x3D5, crtc_in, crtc_out, st)) return -1; /* CRTC     */
     if (vdd_claim_ports(b, 0x3DA, 0x3DA, status_in, status_out, st)) return -1; /* InpStatus1 */
+    /* ── THE EXTERNAL REGISTERS AND THE MONOCHROME ALIASES. (inventory step 1) ──────
+         3C2 Misc Output / Input Status 0, 3C3 VGA Enable, 3C6 DAC Pixel Mask,
+         3CA Feature Control read, 3CC Misc Output read -- none of which any device
+         claimed, so every write was lost and every read answered 0xFF.
+       ⚠ 3CB decodes nothing on a VGA and is inside the 3CA-3CC range; ext_in answers
+         it 0xFF, which is what an unclaimed port answered before, so nothing changes
+         for a guest that touches it.
+       ⚠ THE MONO ALIASES ARE REAL. vdd_video.c already COMPUTES 0x3B4 for mode 7
+         (see the BDA sync) while no handler was registered for it, so a mode-7 guest
+         programming its CRTC wrote into nothing. 3B4/3B5 are the same CRTC and 3BA the
+         same Input Status 1 / Feature Control as their 3Dx twins -- the same handlers,
+         because they are the same registers. */
+    if (vdd_claim_ports(b, 0x3C2, 0x3C3, ext_in, ext_out, st)) return -1;  /* MiscOut/Enable */
+    if (vdd_claim_ports(b, 0x3C6, 0x3C6, ext_in, ext_out, st)) return -1;  /* DAC pixel mask */
+    if (vdd_claim_ports(b, 0x3CA, 0x3CC, ext_in, ext_out, st)) return -1;  /* FeatCtl/MiscOut */
+    if (vdd_claim_ports(b, 0x3B4, 0x3B5, crtc_in, crtc_out, st)) return -1; /* mono CRTC */
+    if (vdd_claim_ports(b, 0x3BA, 0x3BA, status_in, status_out, st)) return -1; /* mono status */
     if (vdd_on_frame(b, vid_frame, st)) return -1;
     return 0;
 }
