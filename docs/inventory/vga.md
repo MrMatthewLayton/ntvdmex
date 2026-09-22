@@ -258,6 +258,36 @@ is `vga_defaults.h` doing its job and is the pattern the rest should follow.
   measured on 6.22. One of the two was read by a different route (INT 10h AH=10h vs port
   `3C1`). Worth settling before either is trusted.
 
+## ★★★★★ THE WORKED EXAMPLE — DOOM'S LOW DETAIL (s75, 2026-09-22)
+
+The user's directive said to build from the spec rather than from what an app asks for.
+This is what the alternative costs, measured in one evening.
+
+**The hardware mechanism is one sentence:** a store passes through the Sequencer map
+mask and lands in EVERY plane the mask selects, at the moment of the write.
+
+**What we built instead:** a named special case, "mode Y", which points the A0000 window
+at ONE plane and, for a multi-plane mask, at a scratch buffer whose writes are
+reconstructed afterwards by diffing against a seed.
+
+**What happened:**
+- Doom HIGH detail writes single-plane masks. Someone made that case work. It works.
+- Doom LOW detail writes TWO-plane masks -- `0x03` x143,490 and `0x0c` x143,514 against
+  ~16,900 for each single-plane mask. Nobody implemented against it. It is broken:
+  the status bar loses ~70% of its detail (3613 -> 941 odd-column changes) and menu
+  letterforms survive in planes that were never updated.
+- **And it cannot be patched at that layer.** The diff cannot distinguish "written again
+  with the same value" from "not written" -- and Doom's doubled pixels are the same
+  colour, so that case is constant. Advancing the seed (`4aadc0b`) fixed the 3D view
+  (16059 -> a consistent 352) and made the stale-plane artefacts worse; it was reverted
+  (`52af908`). Over-fan = wrong data, under-fan = stale data, and no policy is right.
+
+▶ **THE POINT: the approximation discarded information the hardware model has for free.**
+The mask is present at the store. Reconstructing it later asks a question the buffer
+cannot answer. That is the structural cost of filling gaps from what an app asked for,
+and no amount of tuning recovers it -- the fix has to move to the layer that still has
+the information, which is steps 3-4 below.
+
 ## The recommendation
 
 **Make the register file real, then derive the picture from it.** Concretely, in this
