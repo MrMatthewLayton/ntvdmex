@@ -10,6 +10,29 @@
 > point of doing it: a row that reads `implemented` here may well be **PART**, which is
 > the state that returns a plausible wrong answer.
 
+> ## ⛔⛔⛔ 2026-09-24 — everything below this line was scored by an instrument that
+> ## had stopped asking ten of its questions
+>
+> `paritysweep.sh` extracted a probe's extra oracle with `sed -n 's/^; *ORACLE-ALSO: *//p'`,
+> which returns **the rest of the line** — so a header carrying a trailing comment
+> word-split into `--host pcem --host (a --host real --host AMI …`, dosdiff rejected it,
+> and the probe reported `NO ROWS` **and left the sweep**.
+>
+> **Ten of 47 were out**: `p_dma p_fdc p_kbc p_rtc p_uart p_vgaext p_vgamem p_vgareg
+> p_video`, essentially every hardware-device probe in the project, plus `p_tsrc`.
+> `p_vesa`, `p_pit`, `p_lpt`, `p_plan12` and `p_vesapm` survived **only because their
+> lines happen to be a bare hostname**.
+>
+> ⇒ **An unusable probe leaves *both halves* of the fraction, so the score could only rise
+> when a probe broke.** Fixed in `e618011` / `e89478e`. Two further defects in the same
+> runner came out with it: `p_tsrc` is a **TSR payload, not a probe** — every sweep this
+> project ever ran installed it on the rig — and `p_child` is **`p_exec`'s declared
+> companion**, graded standalone, where both its "mismatches" were artefacts of having no
+> parent.
+>
+> **The table below is kept for its per-row triage, which is still good. Its counts are
+> not.** Current figures are in the section after it.
+
 # The full sweep — all 36 probes now run at least once (s72 evening)
 
 Before this session **8 of 36** probes had ever been diffed. All 36 have now been
@@ -103,3 +126,55 @@ buffers are identical on each host (an EXEC does not clobber the cwd), and `mcb`
 signature and `9FC0` chain end both agree.
 
 ---
+
+---
+
+# 2026-09-24 — the sweep, with every probe actually asking
+
+First run after `e618011`/`e89478e`. **Re-run, never quote** — but the *shape* below is
+the point, and the shape is what the broken instrument was hiding.
+
+| | broken | fixed |
+|---|---|---|
+| probes | 47: 34 clean, 3 dirty, **10 unusable** | 46: **40 clean**, 6 dirty, **0 unusable** |
+| rows | 628 (558 agree, 4 mismatch) | **748** (670 agree, **7** mismatch, 71 abstained) |
+| **PARITY** | **99.3%** (558/562) | **99.0%** (670/677) |
+
+**+120 rows, +3 net mismatches, and the score went DOWN.** That is the instrument working:
+every probe that had stopped asking was silently improving the number.
+
+## Every one of the seven, accounted for
+
+| Probe | Row | Why it is open |
+|---|---|---|
+| `p_tsr` | paras-still-held | long-standing, recorded |
+| `p_xms` | `xms.08` BH | **undefined by the spec** — nothing to match |
+| `p_vgamem` | the one `13h`→unchained case | mode-Y exactness is **PARKED**: `vdd_video.c:1991` has no address generator, and A0000 is mapped RAM with no write hook |
+| `p_kbc` | `kbc.outport.d0` `01CF` vs `0103` | bits 0 and 1 — **the two with a meaning to software** — match. PCem additionally sets 2, 3, 6, 7 (keyboard clock/data, two undefined). **One oracle is not a pass**; recorded rather than copied |
+| `p_dma` | `dma.status.idle` `0400` vs `0000` | channel 2's **TC**, latched by the floppy read that loaded the probe. ⚠ Sharper than it was: we now *have* an FDC, so this is attributable to its **DMA data path** (inventory step 1) rather than to the 8237A model |
+| `p_fdc` | `alt.3f6` `0050` vs `00FF` | **the ATA alternate status register — not the FDC's.** Filed against the IDE/ATA surface; claiming the port would turn the row green by taking somebody else's register |
+| `p_fdc` | `dumpreg` first byte `01` vs `00` | the **present cylinder of drive 0**. Their BIOS seeked there to load the program; our head has never moved because INT 13h does not drive the chip. Not adjudicable |
+
+⇒ **No unexplained mismatch, and no regression from the 82077AA landing.**
+
+## Two probes are now skipped, and that is correct
+
+| Probe | Why |
+|---|---|
+| `p_tsrc` | **Not a probe** — the resident half of `p_tsr`, `incbin`'d into it, emitting no canonical dump. Every sweep before this one *ran* it, installing a TSR that hooks INT 60h on the rig |
+| `p_child` | **A companion**, declared in `p_exec.deps`. Its cases are *relations between a child and its parent*, and run alone it has none. Graded properly by `p_exec`, which is clean on all four |
+
+⚠ **`p_child` is the instructive one.** Standalone it reported `child.env.copy` as *shared*,
+which looks exactly like the **Heaven7 environment-sharing bug** — a fixed, famous defect.
+The cause was that our top-level PSP is **its own parent**
+(`main.c:23023`, `dos_psp_save_vectors(NULL, DOS_PSP_SEG, DOS_PSP_SEG)`), so the probe
+compared our environment segment against itself. *A plausible-looking regression of a
+famous bug is the worst artefact a sweep can produce*, and it had been sitting in the
+"still disagreeing" line for sessions.
+
+## One probe added
+
+`p_fdcreg` — all ten DUMPREG bytes, because `vdd_fdc.c`'s byte **order** was written from
+memory and nothing had checked it. Confirmed on two machines (6.22's byte 7 = `12h` = 18
+sectors per track pins it as EOT). 3 rows, clean; the byte string is correctly **DISPUTED**
+between the oracles rather than graded against us.

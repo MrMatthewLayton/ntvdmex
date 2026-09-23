@@ -283,9 +283,94 @@ in the project.
 
 The summary also refuses to let the percentage stand alone while any probe is unusable.
 
+### And a fourth, which I got wrong twice before getting it right
+
+`p_child` reported **2 MISMATCH** on every sweep. I first wrote it off as *"probably the
+same companion artefact as `p_tsrc`"* — right conclusion, wrong reasoning, and I said so to
+the user before checking. Then the rows themselves suggested something much worse:
+
+```
+child.env.copy      6.22 0101   ours 0001     <- "the env segments do NOT differ"
+child.env.namekind  6.22 0101   ours 0000     <- "no drive letter, no backslash"
+```
+
+`child.env.copy`'s first byte is *"did your parent hand you a **copy** of its
+environment?"* — and **that is the Heaven7 bug**, named in `p_child.asm`'s own header as
+the defect it was written to catch. It is fixed and has stayed fixed.
+
+The cause is `main.c:23023`:
+
+```c
+dos_psp_save_vectors(NULL, DOS_PSP_SEG, DOS_PSP_SEG);   /* parent PSP = itself */
+```
+
+**Our top-level PSP is its own parent**, so the probe fetched "the parent's environment
+segment" from its own PSP and compared it with itself. And `namekind` asks whether the
+appended program name is drive-qualified — a property of **the launcher**, not of DOS.
+
+**Measured, and it settles both:** through the real EXEC path, `p_exec` (which launches
+`p_child` via INT 21h/4Bh) is clean on all four of the child's cases — `child.env.copy` =
+`0101` **on both hosts**, and `child.env.namekind` = `0000` **on both**, because through
+`4Bh` neither host qualifies the path. The contract is honoured.
+
+> ⚠ **A plausible-looking regression of a famous bug is the worst artefact a sweep can
+> produce**, and it had been sitting in the "still disagreeing" line for sessions. The
+> thing that saved it was refusing to accept my own first explanation.
+
+A file declared in another probe's `.deps` is by construction not a standalone probe, and
+the runner now skips it and says so.
+
+### The number, re-run rather than derived
+
+| | broken | fixed |
+|---|---|---|
+| probes | 47: 34 clean, 3 dirty, **10 unusable** | 46: **40 clean**, 6 dirty, **0 unusable** |
+| rows | 628 (558 agree, 4 mismatch) | **748** (670 agree, **7** mismatch, 71 abstained) |
+| **PARITY** | **99.3%** (558/562) | **99.0%** (670/677) |
+
+**+120 rows and the score went down**, which is the instrument working. All seven
+remaining mismatches are accounted for in [`inventory/sweep.md`](../../inventory/sweep.md)
+— four long-standing open rows, and three (`kbc.outport.d0`, `dma.status.idle`,
+`fdc.alt.3f6`/`fdc.dumpreg`) recorded and deliberately unfixed. **No regression from the
+82077AA landing.**
+
 ---
 
-## 8. State at the end
+## 9. A postscript on DUMPREG — a mark I had no right to make
+
+`vdd_fdc.c`'s ten DUMPREG bytes came out of my memory of the datasheet, went into the code
+and into `ref/fdc.md`, and I marked the row **IMPL**. Nothing had checked it. *A wrong
+order does not fail — it hands a driver ten believable numbers in the wrong slots.*
+
+Two things settled it, in the right order. PCem's source is vendored in this tree
+(`pcem/src/pcem-dev/src/floppy/fdc.c:961`) and emits
+`track[0] track[1] 0 0 specify[0] specify[1] eot (perp|lock) config pretrk` — byte for
+byte ours. Then `p_fdcreg` asked the machines:
+
+```
+6.22   01 00 00 00 0A 03 12 00 60 00
+pcem   00 00 00 00 BF 02 24 0C 08 00
+ours   00 00 00 00 00 00 00 00 00 00
+```
+
+★ **`12h` = 18 — the sectors per track of a 1.44M floppy** — pins byte 7 as EOT beyond
+argument. The order is confirmed.
+
+⚠ **And reading the oracle's source has a boundary.** The same file shows PCem rejecting
+`09h` WRITE DELETED DATA and `0Ch` READ DELETED DATA, which *are* in the 82077AA command
+set — it has simply never needed them. **An oracle's presence is evidence; its absence is
+usually silence.** Those two opcodes are marked *implemented from the spec, confirmed by no
+machine*, with a note so nobody later probes it and "fixes" us by deleting a real command.
+
+⚠ The probe also found a gap I had not marked: **our ten bytes are all zero**, because
+nothing has ever issued SPECIFY or CONFIGURE to us. Triaged three ways rather than
+patched — EOT is *correctly* zero (a residue of a data command we do not have yet), and
+the configuration bytes are **not adjudicable**, since the two oracles disagree on every
+one of them and they are a BIOS's choices rather than the chip's.
+
+---
+
+## 10. State at the end
 
 - Host `bbea3134` deployed to `bin\`. **Not user-confirmed** — `debug\prev\ntvdmhost_prev.exe`
   remains `71ef4737`, and the stable zip `dist\ntvdmex-20260917-4847355.zip` remains the anchor.

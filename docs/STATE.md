@@ -108,7 +108,7 @@ The full surface list, with the primary source named for each, is in
 | **Win16 shelf** | X does not close WinMine/Charmap · Calc/Charmap/Clock draw incorrectly · Bubbles palette · Matrix_1 slow · `graphics\VS87.EXE` · MPLAYER GPF `0001:3983`. |
 | **Console/stdio integration** | DOS output is buffered and flushed to `CONOUT$` at exit, so shell redirection and piping are bypassed and every DOS program pops a window. |
 | **`MEM /C`** | The main report matches the 6.22 oracle row for row; `MEM /C` still says MSDOS is 1,028K, contradicting its own summary. |
-| **Parity, open rows** | `p_tsr` paras-still-held · `xms.08` BH (undefined by spec). |
+| **Parity, open rows** | **7 of 677 comparable rows, every one accounted for.** `p_tsr` paras-still-held · `xms.08` BH (undefined by spec) · `p_vgamem` the one 13h→unchained case (mode-Y, parked) · `kbc.outport.d0` bits 2/3/6/7 (**one oracle — recorded, deliberately unfixed**) · `dma.status.idle` (channel 2's TC — needs the FDC's data path, not the DMA model) · `fdc.alt.3f6` (**the ATA surface's, not the FDC's**) · `fdc.dumpreg` byte 1 (where the head is; not adjudicable). |
 | **`/uninstall` can lock the user out** | It refuses when the IFEO value names a third binary, which the displaced-value restore can produce. Needs a `/force` or a message naming the path. |
 
 ### ⏸ Parked
@@ -204,7 +204,7 @@ Doom check this project has ever run was high detail.
 | Instrument | What it is good for | Command |
 |---|---|---|
 | **The off-VM battery** | ~30 native unit tests over the DOS kernel and the device models. No VM, no rig. **Run it after touching any shared header.** | `./scripts/offvm.sh` |
-| **The parity sweep** | Every DOS probe asked of NTVDMEX and of genuine MS-DOS 6.22, diffed. ⛔ **Its score excluded TEN device probes for three sessions** — a trailing comment on a probe's `ORACLE-ALSO:` line built a nonsense command line, the probe reported `NO ROWS`, and an unusable probe leaves *both halves* of the fraction, so the number could only rise when something broke (`e618011`) | `./scripts/paritysweep.sh` |
+| **The parity sweep** | Every DOS probe asked of NTVDMEX and of genuine MS-DOS 6.22 (and PCem where a probe names it), diffed. **46 probes, 748 rows, 0 unusable.** ⛔ **Its score excluded TEN device probes for three sessions** — a trailing comment on a probe's `ORACLE-ALSO:` line built a nonsense command line, the probe reported `NO ROWS`, and an unusable probe leaves *both halves* of the fraction, so the number could only **rise** when something broke (`e618011`, `e89478e`) | `./scripts/paritysweep.sh` |
 | **The bare-metal rig** | A real XP box. The only thing that can see a wrong picture. | [`wiki/The-bare-metal-rig`](wiki/The-bare-metal-rig.md) |
 | **PCem + a genuine IBM VGA / Tseng ET4000 ROM** | The VGA/VESA/BIOS oracle — the only period-correct firmware we have | ✅ **runs unattended**, ~60 s: `scripts/pcemoracle.py run <x.com>` ⚠ **outside the command sandbox** |
 | **Stock `ntvdm` on the rig** | The oracle for everything with no public spec — the WOW32 thunk ABI above all | [`research/stock-vdm-dump-oracle`](research/) |
