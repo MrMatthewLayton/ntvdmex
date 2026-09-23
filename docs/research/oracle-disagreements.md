@@ -163,3 +163,48 @@ is ever mounted on all three; not worth manufacturing one now.
 and the panel duly differs on it. The first run compared the whole `AX` for `440Eh` and
 reported ours as `4400` against the oracles' `07xx`, which is a disagreement about a byte
 the interface does not define. Same discipline as `p_dir.asm`'s note on `47h`.
+
+---
+
+# 2026-09-23 — dosbox-x came back, and it moved four "blocked on PCem" rows
+
+**The adapter was excluded on a false premise.** `dosdiff.py` carried a comment saying
+DOSBox-X *"insists on a real window: `SDL_VIDEODRIVER=dummy` makes dosbox-x hang"*. Re-tested
+on DOSBox-X 2026.05.02 (SDL2), the dummy driver works fine — it runs to completion and writes
+`OUT.TXT`. The claim was probably true of an older build, or of **dosbox-staging** (which does
+abort on `dummy`), and it had quietly cost the project its **only** oracle askable without a
+human at the keyboard: PCem needs the WindowServer too, so with dosbox-x excluded there was no
+second voice available from an agent shell at all.
+
+⚠ It is still **an emulator's opinion**, not silicon. It is a third voice on *chip* behaviour;
+it is not a substitute for PCem on *what a real BIOS leaves*.
+
+## Settled by the third voice
+
+| Row | msdos622 | dosbox-x | Decision |
+|---|---|---|---|
+| `vga.dacmask.wr3C` | `0x0000` | **`0x003C`** | **QEMU is the outlier.** 3C6 is a read/write register that returns what was written, and the DAC mask defaults to `0xFF` — spec **and** dosbox-x agree with **us**. Our `0x3C` was never wrong. |
+| `vga.mode*` byte 3 (DAC mask) | `00` | **`FF`** | Same row, same conclusion: our `0xFF` default matches dosbox-x and the datasheet. |
+| `pit.bcd.valid` | `0` | **`1`** | **QEMU does not model PIT BCD; dosbox-x does**, and agrees with the datasheet. BCD is no longer blocked — implement it. |
+| VGA **modes 04 / 06** | — | — | ⛔ **NEVER ACTUALLY OPEN. My mistake, not the oracle's** — see below. |
+
+### ⛔ Modes 04/06 were a bug in the checking script, not in the data
+
+They were recorded as blocked on PCem because the derivation produced 100 rows for a 200-line
+mode. `docs/ref/vga.md` §5.1 states the rule correctly — **`CR09.7` and Max Scan Line are
+alternatives, not cumulative** — and the ad-hoc script I verified with divided by **both**, in
+the same commit that wrote the rule down.
+
+Re-derived from the **same 6.22 bytes** with the stated rule: **all six modes correct**,
+including 04 and 06 at `CR09 = 0xC1`. dosbox-x agrees, with the same `CR09`.
+
+⇒ **A derivation is only as good as the code that checks it.** The document was right and the
+checker was wrong, and because the checker was throwaway it got no review at all.
+
+## Newly disputed — genuinely open, and these DO need silicon
+
+| Row | msdos622 | dosbox-x | Why it matters |
+|---|---|---|---|
+| `pit.rdback.st0` | `0x34` (mode **2**) | `0x36` (mode **3**) | **Two BIOSes, two answers** — which confirms the mode is a BIOS choice, not a chip fact, and that the original memory-written "mode 3" was right *for some machines*. We currently match QEMU's. Harmless either way for the tick; a guest that reads it back gets one of two truths. |
+| `pit.mode6.readback` | `0x0C` (**un**-normalised) | `0x04` (**normalised** to 2) | ⚠ **This one was called "confirmed against a real kernel" on the strength of ONE oracle.** We built `mode_raw` to report the bits as programmed because QEMU does. dosbox-x normalises. **A one-host run is not a pass**, and this is that rule catching a claim of mine from earlier the same day. |
+| `vga.*` byte 2 (InpStat0) | `0x00` | `0x60` / `0x70` | Previously recorded as "confirmed `0x00`" — again on one oracle. Bits 5:6 are undefined/reserved, so neither is obviously wrong. |

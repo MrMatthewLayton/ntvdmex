@@ -263,10 +263,21 @@ class DosBoxX(Host):
         return True, ""
 
     def run(self, com):
-        # DOSBox-X insists on a real window: SDL_VIDEODRIVER=dummy makes
-        # dosbox-x hang and makes dosbox-staging abort outright ("Could not
-        # initialize video: OpenGL ... driver (dummy)").  So this adapter opens
-        # a window briefly, and cannot run headless or over plain ssh.
+        # ── IT DOES RUN HEADLESS. THE NOTE THAT SAID OTHERWISE WAS WRONG. ──
+        #   This adapter used to open a real window and the comment here claimed
+        #   SDL_VIDEODRIVER=dummy "makes dosbox-x hang".  Re-tested 2026-09-23 on
+        #   DOSBox-X 2026.05.02 (SDL2): with the dummy driver it runs to
+        #   completion and writes OUT.TXT normally.  The claim was probably true
+        #   of an older build or of dosbox-staging (which does abort on dummy),
+        #   and it had quietly cost this project its only oracle that can be
+        #   asked without a human at the keyboard -- PCem needs the WindowServer
+        #   too, so with dosbox-x excluded there was NO second voice available
+        #   from an agent shell at all.
+        #   ⚠ It remains AN EMULATOR'S OPINION, not silicon.  It is a third
+        #     voice for CHIP behaviour the 6.22 oracle cannot model; it is NOT a
+        #     substitute for PCem on questions about what a real BIOS leaves.
+        env = dict(os.environ)
+        env.setdefault("SDL_VIDEODRIVER", "dummy")
         work = os.path.join(ROOT, "build", "dosdiff")
         if os.path.exists(work):
             shutil.rmtree(work)
@@ -279,11 +290,12 @@ class DosBoxX(Host):
             ["dosbox-x", "-nolog", "-fastlaunch",
              "-c", "mount c %s" % work, "-c", "c:",
              "-c", "%s > OUT.TXT" % name, "-c", "exit"],
-            capture_output=True, timeout=120)
+            capture_output=True, timeout=120, env=env)
         out = os.path.join(work, "OUT.TXT")
         if not os.path.exists(out):
-            raise RuntimeError("dosbox-x produced no output (needs a window "
-                               "server -- it cannot run headless)")
+            raise RuntimeError("dosbox-x produced no OUT.TXT -- check the probe "
+                               "runs, and that SDL_VIDEODRIVER=dummy still works "
+                               "on this build")
         with open(out, "rb") as f:
             return f.read().decode("cp437", "replace")
 
