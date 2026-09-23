@@ -125,9 +125,13 @@ which moves the text cursor by one scan line (`0x0607` → the card's own `0x0D0
    **8259A** (2 fixes) and the **8042 keyboard controller** — `ref/kbc.md`, inventory
    marked from the code, and the status register, the command set, the output port,
    port `92h` and **a single converged A20 bit** all implemented.
-   **8237A DMA** — `ref/dma.md`, inventory marked from the code, the nine spare page
-   latches fixed. ▶ **Next candidates in the contract:** the MC146818 RTC/CMOS, the
-   16550 UART, the 82077AA floppy controller. Pick by the contract, not by a guest.
+   **8237A DMA** (spare page latches), and the **MC146818 RTC/CMOS** — which did not
+   exist at all: ports `70h`/`71h` were claimed by nothing, so Status A's UIP bit read
+   as set for ever and **the canonical "poll UIP, then read the time" loop never
+   exited**. New `vdd_cmos.{c,h}`.
+   ▶ **Next candidates in the contract:** the RTC's **IRQ8** (periodic/alarm/update — a
+   steady tick independent of the 8254, which is why extenders use it), the 16550 UART,
+   the 82077AA floppy controller. Pick by the contract, not by a guest.
    ⛔ **Recorded and deliberately unfixed:** the PIC's ICW1 read-select reset and the
    8042 output port's undefined bits are both **blocked on a second oracle** (only PCem
    can see either); we implement Special Fully Nested Mode unconditionally while never

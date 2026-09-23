@@ -335,11 +335,51 @@ disabling the floppy, and the machine then cannot write the file that would have
 happened. *A probe whose failure mode is "no output at all" is indistinguishable from a
 harness fault.*
 
+---
+
+## 9. The MC146818 — the chip did not exist, and the failure was a hang (`96f7a37`)
+
+Ports `70h`/`71h` were claimed by **nothing**. The BIOS *service* on top of the chip did
+exist — INT 1Ah `AH=02h`/`04h`, answered out of the host's clock over in the **PIT** VDD
+— so firmware was present and the hardware underneath it absent. The 8042 split again.
+
+> ⛔⛔ **This one hung rather than lying.** An unclaimed ISA port reads `0xFF` here,
+> deliberately. Status Register A is `0Ah` and **its bit 7 is UIP**. The canonical read
+> is *"poll `0Ah` until UIP is clear, then read the time"* — so `0xFF` meant that loop
+> **never exited**.
+
+⚠ **I first read this as a silent wrong answer rather than a hang**, from `iio_in`, which
+leaves `0` for unclaimed ports. That's the *interpreter-side* path; the V86 trap the guest
+actually takes returns `0xFF`. **Measuring settled which path mattered** — `rtc.statusb`
+came back `0x8F`, which is `0xFF & 0x8F` and could not have come from a zero.
+
+| case | QEMU | dosbox-x | PCem | ours |
+|---|---|---|---|---|
+| `rtc.agree.hours` | `0101` | `0101` | `0101` | `0000` → **`0101`** ✅ |
+| `rtc.statusb` | `0002` | `0003` | `0002` | `008F` → **`0002`** ✅ |
+| `rtc.statusd.vrt` | `0080` | `0080` | `0080` | `0080` → `0080` ⚠ |
+| `rtc.equip.low` | `0006` | `0007` | `000D` | `000F` → `0005` — not adjudicable |
+| `rtc.statusc.clear` | `1000` | `0000` | `5000` | `FFFF` → `0000` ⛔ open |
+
+**✅ One clock, two doors.** `rtc.agree.hours` emits not a *time* — not comparable across
+hosts — but **whether INT 1Ah and the chip's hours register agree**. All three oracles:
+yes. Us: no. Both now take the same `rtc_now` hook, so agreement is **structural**.
+
+**⚠ `statusd.vrt` was right by accident** — it agreed with all three *before the device
+existed*, because `0xFF` happens to have bit 7 set. A row that agrees for the wrong reason
+is worth naming: it would have kept agreeing through any change that didn't preserve it.
+
+**⛔ `statusc.clear` is a missing *source*, not a missing register** — clear-on-read is
+implemented and pinned off-VM with a seeded flag byte; we simply raise no IRQ8. Same shape
+as `dma.status.idle`. And the **day of week is fixed at Sunday, wrong six days in seven**:
+the host's clock reading carries no weekday, and deriving one means a calendar rule in a
+device model. Recorded rather than quietly computed.
+
 ## State at session end
 
-- `offvm` **1499/0** (+55: 14 BCD, 3 external registers, 9 mode-set, 10 PIC, 15 8042, 4 DMA).
+- `offvm` **1520/0** (+76 across six surfaces; `cmos_test.c` is a new battery).
 - **VGA register parity 99.9%** (689/690 of the two-oracle agreement). *Re-run, never quote.*
-- `bin\` = `71635b7a`. Stable zip `dist\ntvdmex-20260917-4847355.zip` **untouched**;
+- `bin\` = `07242fab`. Stable zip `dist\ntvdmex-20260917-4847355.zip` **untouched**;
   checkpoint `59fac7d`.
 - **User confirmed by hand:** Doom and Skyroads, after the Input Status 0 change.
 - **Owed from a human:** a by-hand look after the mode-set fix — the one-scan-line cursor
