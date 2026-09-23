@@ -88,6 +88,16 @@ rd_crtc:                                ; AL = index -> AL = value
         in      al, dx
         ret
 
+wr_seq_ax:                              ; AL = index, AH = value
+        push    dx
+        mov     dx, 03C4h
+        out     dx, al
+        inc     dx
+        mov     al, ah
+        out     dx, al
+        pop     dx
+        ret
+
 wr_crtc:                                ; AL = index, AH = value
         mov     dx, [crtc_idx]
         out     dx, al
@@ -216,6 +226,80 @@ start:
         mov     al, 13h
         call    do_mode
         EMIT_BUF "vga.mode13", regbuf, 64
+
+        ; ---- THE MODES STEP 3 HAS NO ROWS FOR.
+        ;      Step 3 derives the geometry from MiscOut + CRTC + SR1 instead of
+        ;      from a mode number, and it can only be checked against modes whose
+        ;      real register values are known. The five above cover 200- and
+        ;      350-line timings and nothing else; these five add 480-line, the
+        ;      CGA-compatible odd/even modes, and the 720-pixel dot clock.
+        mov     al, 04h                 ; CGA 320x200 4-colour: odd/even + chain
+        call    do_mode
+        EMIT_BUF "vga.mode04", regbuf, 64
+
+        mov     al, 06h                 ; CGA 640x200 2-colour
+        call    do_mode
+        EMIT_BUF "vga.mode06", regbuf, 64
+
+        mov     al, 0Eh                 ; 640x200 16-colour planar
+        call    do_mode
+        EMIT_BUF "vga.mode0E", regbuf, 64
+
+        mov     al, 10h                 ; 640x350 16-colour -- 350-line sync
+        call    do_mode
+        EMIT_BUF "vga.mode10", regbuf, 64
+
+        mov     al, 11h                 ; 640x480 2-colour  -- 480-line sync
+        call    do_mode
+        EMIT_BUF "vga.mode11", regbuf, 64
+
+        ; ---- MODE Y AND MODE X ARE NOT BIOS MODES. A program makes them, and
+        ;      this is the sequence Doom and every Mode-X engine uses. Capturing
+        ;      the file AFTER the unchain is the only way to know what the
+        ;      hardware actually holds on the path our renderer has to reproduce
+        ;      -- docs/ref/vga.md 5.2.
+        ;
+        ;      Y first: mode 13h, chain-4 off, dword off, byte mode on. Nothing
+        ;      touches the CRTC's protected registers, so no CR11 dance.
+        mov     al, 13h
+        call    do_mode
+        mov     ax, 00604h              ; SR4 = 06: chain-4 OFF, odd/even off
+        call    wr_seq_ax
+        mov     ax, 00014h              ; CR14 = 00: dword mode off
+        call    wr_crtc
+        mov     ax, 0E317h              ; CR17 = E3: byte mode on
+        call    wr_crtc
+        call    dump_all
+        EMIT_BUF "vga.modeY.unchained", regbuf, 64
+
+        ;      X adds the 480-line CRTC table and MiscOut E3, which is what makes
+        ;      it 320x240. CR11 bit 7 write-protects CR00-CR07, so it is cleared
+        ;      before CR06/CR07 and the table restores it at CR11 -- exactly as
+        ;      the canonical listing does, which is also a live test of our
+        ;      write-protect implementation.
+        mov     dx, 03C2h
+        mov     al, 0E3h                ; MiscOut: 25.175 MHz, both syncs -ve
+        out     dx, al
+        mov     ax, 00011h              ; CR11 = 00: protect OFF first
+        call    wr_crtc
+        mov     ax, 00D06h              ; CR06 vertical total
+        call    wr_crtc
+        mov     ax, 03E07h              ; CR07 overflow
+        call    wr_crtc
+        mov     ax, 04109h              ; CR09 max scan line = 1 -> rows are 2 lines
+        call    wr_crtc
+        mov     ax, 0EA10h              ; CR10 v retrace start
+        call    wr_crtc
+        mov     ax, 0AC11h              ; CR11 v retrace end + protect back ON
+        call    wr_crtc
+        mov     ax, 0DF12h              ; CR12 vertical display end
+        call    wr_crtc
+        mov     ax, 0E715h              ; CR15 v blank start
+        call    wr_crtc
+        mov     ax, 00616h              ; CR16 v blank end
+        call    wr_crtc
+        call    dump_all
+        EMIT_BUF "vga.modeX.320x240", regbuf, 64
 
         ; ---- mode 7 is MONOCHROME: CRTC at 3B4, Input Status 1 at 3BA.
         ;      NTVDMEX claimed neither until step 1, so before it this line was

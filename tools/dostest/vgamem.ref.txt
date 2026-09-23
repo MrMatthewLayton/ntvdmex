@@ -1,0 +1,54 @@
+# p_vgamem reference -- the VGA's CPU-side memory path
+#
+# Source: tools/dostest/p_vgamem.asm run on genuine MS-DOS 6.22 (the msdos622
+# oracle) on 2026-09-23.
+#
+# ⚠ PROVISIONAL AGAINST A REIMPLEMENTATION. The oracle's VGA is QEMU's model,
+#   not silicon, so these are "verified against the oracle we have". The cases
+#   here are core documented behaviour that every VGA model implements the same
+#   way, so the risk is low -- but re-ask on PCem before treating any single row
+#   as ground truth. The p_vgareg rows for modes 04 and 06 already show what a
+#   reimplementation can get wrong.
+#
+# ★ EVERY VALUE BELOW WAS PREDICTED FROM docs/ref/vga.md BEFORE THE RUN, and all
+#   thirteen matched. That is the spec-first loop working in the intended
+#   direction: the document said what the hardware would do, and it did.
+#
+# Layout: four bytes = the byte at the test offset in plane 0, 1, 2, 3, read
+# back with read mode 0 and GR4 stepped 0..3.
+
+== vgamem.chain4.abcd        11223344
+   Chain-4 maps address bits 1:0 to the plane (ref/vga.md §8). Four consecutive
+   CPU bytes land in four different planes at the same offset.
+
+== vgamem.mask03.aa          AAAA0000
+== vgamem.mask0c.55          00005555
+== vgamem.mask0f.5a          5A5A5A5A
+== vgamem.mask02.c3          00C30000
+   ★ THE MAP MASK WRITES EVERY SELECTED PLANE IN ONE STORE (§8). 0x03 and 0x0c
+   are the two masks Doom's low-detail drawer uses ~143,000 times each, and they
+   are the reason the mode-Y fan-out approximation is load-bearing. A host that
+   maps the A0000 window to one plane at a time cannot produce these four lines.
+
+== vgamem.bitmask0f          F0F0F0F0
+   GR8 selects per bit between new data and the latch: latches FF, mask 0x0F,
+   write 0x00 -> low nibble new (0), high nibble latched (F).
+
+== vgamem.wmode1.copy        11224488
+   Write mode 1 copies all four latches and ignores the CPU byte -- the second
+   half of every planar blit.
+
+== vgamem.wmode2.col5        FF00FF00
+   Write mode 2 treats the CPU byte as a colour. Colour 5 = planes 0 and 2.
+
+== vgamem.wmode3.f0          F0F0F0F0
+   Write mode 3 ANDs the CPU byte with the bit mask; the colour is Set/Reset.
+
+== vgamem.alu.xor            F0F0F0F0
+== vgamem.alu.and            0F0F0F0F
+   GR3 bits 4:3 combine CPU data with the latches (latches FF, data 0x0F).
+
+== vgamem.rmode1.cmp5        AX=0x00F0
+== vgamem.rmode1.cmp0        AX=0x000F
+   Read mode 1 is a colour compare returning a match bitmask, not a plane read.
+   ⚠ This is the class Doom's I_ReadScreen is in.

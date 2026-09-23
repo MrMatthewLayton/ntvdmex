@@ -326,3 +326,66 @@ This file's numbers are a measurement of the code on 2026-09-22 and will go stal
 moment the code moves. Re-derive them, do not quote them:
 `grep -n "case 0x" src/vdd/vdd_video.c` over the four `*_set_data` handlers and
 `vdd_claim_ports` at `vdd_video.c:3036`.
+
+---
+
+## Step 3 measurement — the geometry derives from the registers (2026-09-23)
+
+`tools/dostest/p_vgareg.asm` now covers **eleven** register-file captures, not five:
+modes 03, 04, 06, 0D, 0E, 10, 11, 12, 13, 07-mono, plus two that are **not BIOS modes** —
+`vga.modeY.unchained` and `vga.modeX.320x240`, made the way a program makes them.
+
+Running the derivation in [`../ref/vga.md`](../ref/vga.md) §5.1 over the captured bytes:
+
+| mode | derived | truth | |
+|---|---|---|---|
+| 03 | 720×25 rows (400 scanlines) | 720×400 text | ✅ |
+| 0E | 640×200 | 640×200 | ✅ |
+| 10 | 640×350 | 640×350 | ✅ |
+| 11 | 640×480 | 640×480 | ✅ |
+| 12 | 640×480 | 640×480 | ✅ |
+| **13** | **320×200** | 320×200 | ✅ |
+| **Y** | **320×200** | 320×200 | ✅ |
+| **X** | **320×240** | 320×240 | ✅ |
+| 0D | 320×200 | 320×200 | ✅ *(after correction 1)* |
+| 04 | 320×100 | 320×200 | ⛔ **open** |
+| 06 | 640×100 | 640×200 | ⛔ **open** |
+
+**The derivation works, and it works on the two modes that matter most.** Mode X's
+320×240 falls out of MiscOut `0xE3` + `CR12`/`CR07` + `CR09 = 0x41` + `GR5.6` with **no
+mode number involved** — which is the whole thesis of the programme, now measured rather
+than asserted.
+
+Three corrections the measurement forced, all folded back into the reference: `SR1.3` does
+not halve the pixel *count*; the 256-colour halving lives in `GR5.6`; and `CR09.7` and Max
+Scan Line are alternatives, not cumulative.
+
+⛔ **Modes 04 and 06 are open and blocked on PCem.** Against SeaBIOS both report
+`CR09 = 0xC1` — doubling bit set *and* MSL = 2 — which derives 100 rows for a 200-line
+mode. Either a real BIOS writes something else or the mechanisms interact in a way the
+model misses. **Do not implement around this until the real-ROM oracle answers**, and that
+run is the user's to launch.
+
+## Step 4 measurement — the CPU memory path now has a probe (2026-09-23)
+
+`tools/dostest/p_vgamem.asm` is new, and it is the deterministic test the mode-Y
+approximation has never had: thirteen cases, each a CPU write followed by a per-plane
+read-back, so the answer is four bytes that either match or do not. No picture to eyeball,
+no frame to capture.
+
+**All thirteen values were written from [`../ref/vga.md`](../ref/vga.md) §§6, 8 *before*
+the run, and all thirteen matched the hardware** — see `tools/dostest/vgamem.ref.txt`.
+
+The four cases that bear directly on the open defect:
+
+| case | hardware | what it proves |
+|---|---|---|
+| `mask03.aa` | `AA AA 00 00` | one store, **two planes** |
+| `mask0c.55` | `00 00 55 55` | the other Doom mask |
+| `mask0f.5a` | `5A 5A 5A 5A` | all four |
+| `mask02.c3` | `00 C3 00 00` | one plane, for contrast |
+
+⚠ **NTVDMEX has not been asked these yet** — that needs the rig. Several are expected to
+fail, and that is the point: the checks were written from the document and seen to pass on
+real hardware first, so a failure on our side is a defect in us, not an argument about the
+expectation.

@@ -241,22 +241,45 @@ which some do deliberately, trusting the protection — corrupts our geometry.
 **Deriving the visible geometry** (this is what step 3 of the inventory plan needs):
 
 ```
-dot_clock  = MiscOut[3:2] == 0 ? 25.175 MHz : 28.322 MHz
+# ---- width -----------------------------------------------------------------
 dots_per_char = SR1.0 ? 8 : 9
-if (SR1.3) dot_clock /= 2                      # 320-wide modes
+width_px      = (CR01 + 1) * dots_per_char
+if (GR5.6) width_px /= 2          # 256-colour: two 4-bit shifts make one pixel
 
-width_px   = (CR01 + 1) * dots_per_char
+# ---- height ----------------------------------------------------------------
+vde       = CR12 | (CR07.1 << 8) | (CR07.6 << 9)
+scanlines = vde + 1                            # SCANLINES, not rows
 
-vde        = CR12 | (CR07.1 << 8) | (CR07.6 << 9)
-height_px  = vde + 1
-if (CR09.7)  height_px /= 2                    # scan doubling: 400→200, 480→240
-if (CR17.2)  height_px /= 2                    # vertical total double
-char_height = (CR09[4:0]) + 1                  # text rows = height_px / char_height
+rows      = scanlines / (CR09.7 ? 2 : (CR09[4:0] + 1))
+if (CR17.2) rows /= 2                          # Vertical Total Double
 ```
 
-⇒ **320×240 Mode X falls straight out of this**: MiscOut `0xE3` selects 480-line sync,
-`CR12`+overflow give 479, `CR09.7` halves it to 240, `SR1.3` halves the dot clock to give
-320. Every value the mode needs is in the register file. None of it needs a mode number.
+**Verified against a real BIOS on 11 modes** (`tools/dostest/vgareg.ref.txt`): mode 03
+720×400 text (25 rows), 0E 640×200, 10 640×350, 11 and 12 640×480, 13 320×200,
+Mode Y 320×200, **Mode X 320×240**. Three corrections that measurement forced, each of
+which an implementation would otherwise get wrong:
+
+1. ⚠ **`SR1.3` (Dot Clock ÷2) does NOT halve the pixel count.** It halves the *clock*;
+   `CR01` is already expressed in that clock's character units. Mode 0D has `SR1 = 0x09`
+   and `CR01 = 0x27` → 40 × 8 = **320**, full stop. Applying the divide as well yields 160
+   and a half-width picture.
+2. ⚠ **The 256-colour halving is in `GR5.6`, not the sequencer.** Mode 13h runs a 640-dot
+   line (`CR01 = 0x4F`) with `SR1.3 clear`; the 320 comes from Shift-256 combining two
+   4-bit shifts into one 8-bit pixel.
+3. ⚠ **`CR09.7` and Max Scan Line are alternative mechanisms, not cumulative.** Mode 13h
+   gets 200 from `CR09 = 0x41` (MSL = 2, doubling bit clear); mode 0D gets 200 from
+   `CR09 = 0xC0` (doubling bit set, MSL = 1). Dividing by both gives 100.
+
+⇒ **320×240 Mode X falls straight out of this** with no mode number anywhere: MiscOut
+`0xE3` → 480-line sync, `CR12` + overflow → 480 scanlines, `CR09 = 0x41` → 240 rows,
+`GR5.6` → 320 across. The canonical Mode X listing writes exactly these values, and
+`tools/dostest/p_vgareg.asm` case `vga.modeX.320x240` captures them from the hardware.
+
+⛔ **OPEN — modes 04 and 06 need the real-BIOS oracle.** Against SeaBIOS both come back
+with `CR09 = 0xC1`: doubling bit set *and* MSL = 2, which under any consistent reading of
+rule 3 gives 100 rows where the mode is 200. Either a real BIOS writes something else, or
+the two mechanisms interact in a way this model does not capture. **Do not implement
+around this until PCem has answered it** — and PCem runs only from the user's terminal.
 
 ### 5.2 The display address generator
 
