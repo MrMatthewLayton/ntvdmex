@@ -189,11 +189,60 @@ check.
 
 ---
 
+---
+
+## 6. The 8259A — a reference, a marking from the code, and two fixes (`d5fc5f3`)
+
+The inventory read *"10 fields, all AGREE"* — in the retired PARITY vocabulary, with a
+note that re-marking against the code was owed. **That is exactly the state the 8254 was
+in before it turned out to have seven gaps.**
+
+> **An all-AGREE probe is not a verified surface. It is a verified list of questions.**
+
+Marking it from the code predicted five gaps, and **none of them was among the ten
+questions the probe asked.** `docs/ref/pic.md` is new — the three registers and the one
+rule, ICW1's six side effects, the OCW2/OCW3 encodings, poll, SMM, SFNM, the cascade trap.
+
+Three new probe cases, and the *evidence* behind the two fixes differs in a way worth
+keeping:
+
+| case | 6.22/QEMU | dosbox-x | PCem | ours |
+|---|---|---|---|---|
+| `pic.ocw2.rot.speoi` | `0000` | `0000` | `0000` | `0001` → **`0000`** ✅ |
+| `pic.ocw3.poll` | **`0000`** | `0001` | `0001` | `0001` → **`0000`** ✅ |
+| `pic.icw1.readsel` | `0000` | `0000` | `0001` | `0000` ⛔ open |
+
+**1. `E0h` is still an EOI — unanimous, so no judgement was needed.** We had it under
+*"other rotate/priority forms: nop"* and did neither half. The rotation half stays
+missing, and that is the right half to be missing: an ISR bit that is never cleared does
+not cost one interrupt, it kills that priority level and everything below it.
+
+**2. Poll — implemented on a 1-vs-2 split.** Only QEMU models it. The other two drop the
+P bit, so their `0x01` is *the absence of a measurement* — the BCD shape again, but
+**better evidenced than BCD**, because there the sole implementer had no corroboration
+and here it agrees with the datasheet. It was worth doing on a split because of the
+failure *shape*: a poll read and a status read are the same `IN` on the same port, so
+dropping P fails silently and plausibly.
+
+**3. ICW1's read-select reset — found, measured, and deliberately not fixed.** All three
+answer `AH = 0x00`, but only PCem discriminates; the other two clear the IRR on ICW1, so
+both registers are zero and the read cannot say which it returned. **One oracle is not a
+pass.**
+
+⚠ **The first cut of that case was measuring the wrong thing**, and it is worth keeping:
+it restored the real IMR straight after the ICW sequence, unmasking IRQ0, so the latched
+request was *delivered* before the read. It was measuring interrupt latency. PCem's
+answer survived the fix, so the split is real.
+
+⚠ `pic_test.c` **could not reach the port side at all** — the handlers are static and its
+bus stub threw them away, so every question it could ask was about the host-side API,
+which is the half that already worked. 6 of the new checks failed against the old code.
+
 ## State at session end
 
-- `offvm` **1470/0** (+26: 14 BCD, 3 external registers, 9 mode-set).
+- `offvm` **1480/0** (+36: 14 BCD, 3 external registers, 9 mode-set, 10 PIC).
 - **VGA register parity 99.9%** (689/690 of the two-oracle agreement). *Re-run, never quote.*
-- `bin\` = `b6c7063e`. Stable zip `dist\ntvdmex-20260917-4847355.zip` **untouched**;
+- `bin\` = `5b51036d`. Stable zip `dist\ntvdmex-20260917-4847355.zip` **untouched**;
   checkpoint `59fac7d`.
 - **User confirmed by hand:** Doom and Skyroads, after the Input Status 0 change.
 - **Owed from a human:** a by-hand look after the mode-set fix — the one-scan-line cursor

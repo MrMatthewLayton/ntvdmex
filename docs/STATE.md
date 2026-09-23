@@ -120,9 +120,15 @@ quote**, and not comparable to the void 89.7%. Doom and Skyroads confirmed by ha
 the Input Status 0 change. ▶ **Owed from a human: a by-hand look after the mode-set fix**,
 which moves the text cursor by one scan line (`0x0607` → the card's own `0x0D0E`).
 
-1. **The next surface from [`ref/SOURCES.md`](ref/SOURCES.md).** The 8254 is clean against
-   oracle consensus (5 fixes, BCD included) and the VGA's external registers are settled;
-   pick the next device from the hardware contract, not from a guest.
+1. **The next surface from [`ref/SOURCES.md`](ref/SOURCES.md).** Done so far: the **8254**
+   (5 fixes, clean against oracle consensus), the **VGA register file** (99.9%), and the
+   **8259A** — `ref/pic.md` written, inventory marked from the code, 2 fixes (`E0h` is
+   still an EOI; the Poll command). ▶ **Next candidates in the contract:** the 8237A DMA,
+   the 8042 keyboard controller (**A20** lives there), the MC146818 RTC/CMOS, the 16550
+   UART. Pick by the contract, not by a guest.
+   ⛔ **Two PIC gaps are recorded and deliberately unfixed:** ICW1's read-select reset is
+   **blocked on a second oracle** (only PCem can see it), and we implement Special Fully
+   Nested Mode unconditionally while never reading the ICW4 bit that requests it.
 2. ✅ ~~**Populate the VGA mode tables.**~~ **DONE** — and it was **one** defect, not five:
    the table was right, but six registers are read back from a *live shadow* rather than
    from the register file, and the mode set never seeded them. **92.0% → 99.9%.**
