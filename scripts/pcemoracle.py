@@ -104,7 +104,17 @@ def launch(floppy=None):
     nodev = os.path.join(ROOT, "tools", "pcem", "libnodev.dylib")
     if os.path.exists(nodev):
         env["DYLD_INSERT_LIBRARIES"] = nodev
-    return subprocess.Popen(cmd, cwd=APP, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    # ⛔ THIS USED TO BE stdout=DEVNULL, stderr=DEVNULL, AND IT COST A SESSION.
+    #    PCem needs the WindowServer; launched without one it dies instantly with a
+    #    Swift crash out of XPC `hiservices` (rc=132). With both streams discarded
+    #    that is indistinguishable from "booted fine, guest produced no output", so
+    #    the harness reported a timeout and the blame went to the probe. Keep the
+    #    output: a run that fails must be able to say why.
+    log_path = os.path.join(ROOT, "runs", "pcem-last-launch.log")
+    os.makedirs(os.path.dirname(log_path), exist_ok=True)
+    log = open(log_path, "wb")
+    print(f"   PCem output -> {log_path}")
+    return subprocess.Popen(cmd, cwd=APP, env=env, stdout=log, stderr=subprocess.STDOUT)
 
 
 def stop(proc):
