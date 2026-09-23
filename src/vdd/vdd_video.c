@@ -1194,6 +1194,11 @@ static void int10(void *self, ntvdd_regs *r)
         st->vesa_text_mode = 0;                       /* ...including a VESA text mode */
         st->vesa_dacwidth = 6;                        /* §4.11: any mode set -> 6 bits */
         st->cur_row = st->cur_col = 0; st->page = 0;
+        /* These three are the FALLBACK for a mode VGA_MODEDEFS does not cover:
+           vga_load_modedef below overrides all of them from the measured table for
+           every mode it knows, which is where 0x0D0E rather than this 8-line
+           0x0607 comes from. A mode nobody measured still gets a sane cursor and
+           blink enabled rather than zeros. */
         st->cur_shape = 0x0607;                       /* the BIOS resets the shape too */
         st->blink = 1;                                /* ...and re-enables blink (AR10 bit 3) */
         st->attr_mode = (uint8_t)(st->attr_mode | 0x08u);   /* the register agrees    */
@@ -2063,6 +2068,36 @@ static void vga_load_modedef(video_state *st, uint8_t mode)
         for (i = 0; i < 25; ++i) st->crtc_reg[i] = d->crtc[i];
         for (i = 0; i < 9;  ++i) st->gc_reg[i]   = d->gc[i];
         for (i = 0; i < 21; ++i) st->attr_reg[i] = d->attr[i];
+        /* ── ★★★★ AND THE LIVE SHADOWS, OR THE FILE AND THE AUTHORITY DISAGREE. ─────
+             Loading the register FILE above is only half a mode set. Six of these
+             registers are not read back from `*_reg[]` at all -- the read paths
+             answer from a live shadow, because that shadow is what the rendering
+             engine actually uses -- so the table set the file and the guest still
+             saw the old value. MEASURED, on the rig and reproduced off-VM: after
+             INT 10h mode 3 we answered SR2=0F (want 03), CR0A/0B=06/07 (want
+             0D/0E), GR5=00 (want 10), AR10=00 (want 0C). Five registers, 55 of the
+             VGA parity gap's 55 bytes, ONE defect.
+           ⚠ ORDER MATTERS AND IT IS DELIBERATE. This runs BEFORE the per-kind arms
+             below, so a mode that really does need its own value -- LINEAR8 and
+             PLANAR both force map_mask 0x0F and drive ymap_select -- still wins.
+             What changes is only the modes those arms say nothing about.
+           ⚠ GR7 IS THE ONE THE ORACLES SPLIT ON, and the table already carries the
+             answer: both say 0x0F in the graphics modes, and in the text/CGA modes
+             QEMU says 0x0F where PCem's real IBM VGA says 0x00. Taking the table
+             rather than a constant is what keeps that distinction. */
+        st->map_mask     = (uint8_t)(d->seq[2] & 0x0F);
+        st->y_mask       = st->map_mask;
+        /* CR0A/CR0B ARE the cursor shape; `cur_shape` is that pair, not a copy of
+           it. The BIOS leaves 0x0D0E for an 8x16 cell, and the 0x0607 set above is
+           the 8-line CGA shape -- which vdd_cursor_lines then RESCALES to lines
+           14-15. So this moves the drawn cursor by one scan line, and stops
+           AH=03h reporting a shape the card does not hold. */
+        st->cur_shape    = (uint16_t)(((uint16_t)d->crtc[0x0A] << 8) | d->crtc[0x0B]);
+        st->write_mode   = (uint8_t)(d->gc[5] & 3);
+        st->read_mode    = (uint8_t)((d->gc[5] >> 3) & 1);
+        st->col_dontcare = (uint8_t)(d->gc[7] & 0x0F);
+        st->attr_mode    = d->attr[0x10];
+        st->blink        = (uint8_t)((d->attr[0x10] >> 3) & 1);
         return;
     }
 }
@@ -2414,7 +2449,14 @@ static void gc_in(void *self, uint16_t port, uint8_t w, uint32_t *v)
     case 0: *v = st->set_reset; break;  case 1: *v = st->enable_sr; break;
     case 2: *v = st->col_compare; break; case 7: *v = st->col_dontcare; break;
     case 3: *v = st->func_rotate; break; case 4: *v = st->read_map; break;
-    case 5: *v = (uint8_t)(st->write_mode | (st->read_mode << 3)); break;
+    /* ⚠ GR5 IS NOT ONLY THE TWO MODE FIELDS. Bits 0:1 are the write mode and bit 3
+         the read mode, and those are shadowed because the engine uses them -- but
+         bit 2 (test), bit 4 (odd/even), bit 5 (shift register) and bit 6 (256-colour
+         shift) are not modelled, and returning only the shadows reported 0x00 where
+         a real BIOS leaves 0x10 in mode 3 and 0x40 in 13h. Merge: the shadows for
+         what we model, the stored byte for what we do not. */
+    case 5: *v = (uint8_t)((st->gc_reg[5] & 0x74)
+                           | st->write_mode | (st->read_mode << 3)); break;
     case 8: *v = st->bit_mask; break;
     default: *v = st->gc_reg[st->gc_index & 15]; break;   /* GR6 and the rest read back */
     }

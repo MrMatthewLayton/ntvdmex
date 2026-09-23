@@ -604,8 +604,8 @@ Then `p_vgareg`, scored the new way — **re-run, never quote**:
 ⚠ **92.0% is not "89.7% improved".** Different denominator, different reference, different
 probe. The two numbers are not comparable and the old one is simply void.
 
-**The 55 remaining bytes are not scattered — they are five registers**, which is a far more
-useful answer than a percentage:
+**The 55 remaining bytes were not scattered — they were five registers**, which is a far
+more useful answer than a percentage:
 
 | register | modes wrong | hardware leaves | we leave |
 |---|---|---|---|
@@ -615,14 +615,65 @@ useful answer than a percentage:
 | **GR05** — Graphics Mode | 6 | `10` | `00` |
 | **SR02** — Map Mask | 4 | `03` | `0F` |
 
-Every one is the same shape: **our INT 10h mode set does not write a register a real BIOS
-writes**, so a guest that reads back what the BIOS left sees our reset value. That is
-exactly what step 1 predicted and could not quantify. AR10 is the interesting one — bit 3
-is the blink enable this project has already been bitten by once (QBasic's labels).
+### ✅ FIXED — and it was ONE defect, not five: the shadows were never seeded
 
-The 8 "match neither" bytes are almost all `mode07mono`, where the two oracles are
-answering about different machine states anyway (see `vgareg.pcem.txt`), plus `GR07` in
-mode 11.
+`VGA_MODEDEFS` already held the right values. `vga_load_modedef` loaded them into
+`seq_reg[] / crtc_reg[] / gc_reg[] / attr_reg[]` — and **six of those registers are not
+read back from the file at all.** The port read answers from a *live shadow*, because the
+shadow is what the rendering engine uses:
 
-▶ **Next on this surface:** populate the mode tables so a BIOS mode set writes those five
-registers. It is a measured list, not a survey.
+| register | the shadow the read consults |
+|---|---|
+| SR2 | `map_mask` |
+| CR0A / CR0B | `cur_shape` (the pair **is** the shape, not a copy of it) |
+| GR5 | `write_mode`, `read_mode` |
+| GR7 | `col_dontcare` |
+| AR10 | `attr_mode` (and `blink`, its bit 3) |
+
+So the mode set wrote the file, the file was right, and the guest still saw the old value.
+`vga_load_modedef` now seeds all six, **before** the per-kind arms — which still win where
+they must (LINEAR8 and PLANAR force `map_mask = 0x0F` and drive `ymap_select`).
+
+⚠ **GR5 needed a second fix.** Bits 0:1 and 3 are shadowed; bits 2, 4, 5 and 6 (odd/even,
+shift register, 256-colour shift) are not modelled at all, and the read returned only the
+shadows — `0x00` where a real BIOS leaves `0x10` in mode 3 and `0x40` in 13h. It now merges
+the stored byte for the bits we do not model.
+
+⚠ **One observable change came with it.** `cur_shape` was hard-coded to `0x0607`, the
+8-line CGA shape; the table says `0x0D0E` for an 8×16 cell. `vdd_cursor_lines` already
+rescales an 8-line shape, so the drawn cursor moves by **one scan line** (14–15 → 13–14) —
+but `INT 10h AH=03h` now reports the shape the card actually holds.
+
+**Re-measured on the rig: `689/690` — PARITY 99.9%**, from 92.0%. `offvm` carries nine new
+checks whose expectations come from `VGA_MODEDEFS`, i.e. from two oracles rather than from
+this project's idea of a VGA.
+
+### ⛔ The one byte left, and why it is not fixed in the same commit
+
+`modeX.320x240` `CR0F` — hardware `0x00`, ours `0xA0`. **Same defect class**: `crtc_in`
+returns `crtc_cursor_of(st)`, *derived* from `crtc_start + cur_row * cols + cur_col`,
+where on hardware `CR0E`/`CR0F` are plain storage. The probe prints a line between the
+13h capture and the Mode X one, so the cursor has moved and the derivation leaks into a
+graphics mode's register.
+
+The honest fix is to make `CR0E`/`CR0F` the single source and have the BIOS cursor calls
+*write* them, as a real BIOS does. That touches every path that moves the cursor — text
+output, scroll, teletype — which is a far larger blast radius than one byte of 690
+justifies riding along with a change that already needs a by-hand check. **Recorded, not
+bundled.**
+
+### And the tie-break rule needed an exception on its first outing
+
+`gen-vgamodedefs.py` now reads **both** references: agreement is emitted, and a
+disagreement resolves to **PCem** with every such byte listed by name in the generated
+header. Fourteen bytes were tie-broken that way.
+
+⛔⛔ **But "PCem wins" cannot be applied blind, and mode 7 proves it.** `INT 10h AX=0007`
+leaves MiscOut `0x66` on QEMU — bit 0 clear, the CRTC genuinely at `3B4`, a real
+MDA-compatible 80-column mode — and `0x67` with a **40-column CRTC** on PCem, whose BIOS
+does not enter mode 7 on that machine at all. PCem is not a better answer about mode 7; it
+is an answer about a different mode. Taking it would have programmed a 40-column colour
+text setup every time a guest asked for mode 7, from **30 tie-broken bytes, every one of
+them "measured"**. Mode 7 is now excluded from the tie-break by name (`PCEM_BLIND`).
+
+> **An oracle is only authoritative about the question it actually answered.**

@@ -113,20 +113,22 @@ The full surface list, with the primary source named for each, is in
 
 ## Next actions, in order
 
-▶ **Rig status:** the watcher is live and both probes have been run through it. `p_vgaext`
-came back `1010` — byte for byte with PCem — and VGA parity is **92.0%** of the bytes the
-two oracles agree on (`tools/vgaparity.py`; re-run, never quote, and **not** comparable to
-the void 89.7%). **Still owed from a human: a by-hand Doom/Skyroads look** after the Input
-Status 0 change — the headless rig cannot see a wrong picture.
+▶ **Rig status:** the watcher is live and everything below has been run through it.
+`p_vgaext` came back `1010`, byte for byte with PCem. VGA register parity is **99.9%**
+(`689/690` of the bytes the two oracles agree on) — `tools/vgaparity.py`, **re-run, never
+quote**, and not comparable to the void 89.7%. Doom and Skyroads confirmed by hand after
+the Input Status 0 change. ▶ **Owed from a human: a by-hand look after the mode-set fix**,
+which moves the text cursor by one scan line (`0x0607` → the card's own `0x0D0E`).
 
 1. **The next surface from [`ref/SOURCES.md`](ref/SOURCES.md).** The 8254 is clean against
    oracle consensus (5 fixes, BCD included) and the VGA's external registers are settled;
    pick the next device from the hardware contract, not from a guest.
-2. **Populate the VGA mode tables.** Parity re-measured at **92.0%**, and the 55 remaining
-   bytes are **five registers**, not noise: `CR0A`/`CR0B` (cursor start/end, wrong in all 12
-   modes), `AR10` (attribute mode control, 11), `GR07`, `GR05`, `SR02`. All the same shape —
-   our INT 10h mode set does not write a register a real BIOS writes. A measured list, not a
-   survey; see [`inventory/vga.md`](inventory/vga.md).
+2. ✅ ~~**Populate the VGA mode tables.**~~ **DONE** — and it was **one** defect, not five:
+   the table was right, but six registers are read back from a *live shadow* rather than
+   from the register file, and the mode set never seeded them. **92.0% → 99.9%.**
+   ▶ **One byte left**, recorded rather than bundled: `modeX` `CR0F`, where `crtc_in`
+   *derives* the cursor address instead of storing it. Fixing it properly means the BIOS
+   cursor calls must write `CR0E`/`CR0F`, which touches every path that moves the cursor.
 3. **Deterministic Win16 tests** — owed since the spec-first directive. The Win3.1 SDK, Wine
    and ReactOS are real sources; only the WOW32 thunk ABI needs the stock-VDM oracle.
 4. **VGA step 4 — one address generator** from CR17/CR14/GR5/GR6/SR4. ⛔ **PARKED**: the

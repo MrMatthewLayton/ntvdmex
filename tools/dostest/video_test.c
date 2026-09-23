@@ -1408,6 +1408,66 @@ int main(void)
         v = 0x00; vdd_bus_io(&bus, 0x3DA, 1, 0, &v);
     }
 
+    /* A MODE SET MUST LEAVE THE SHADOWS AND THE REGISTER FILE SAYING THE SAME THING.
+       docs/inventory/vga.md step 5. vga_load_modedef filled `*_reg[]` from the
+       measured table, but six registers are not read back from there at all -- the
+       port answers from a live shadow, because the shadow is what the engine uses.
+       So the file was right and the guest still saw the old value. Measured on the
+       rig and reproduced here: mode 3 answered SR2=0F, CR0A/0B=06/07, GR5=00,
+       AR10=00. Five registers; 55 of the 55 bytes of the VGA parity gap.
+       ⚠ THESE EXPECTATIONS COME FROM VGA_MODEDEFS, i.e. from two oracles, not from
+         a datasheet or from this file's own idea of a VGA. */
+    {
+        uint32_t v; ntvdd_regs rr;
+        struct { const char *n; uint16_t ip, dp; uint8_t idx, want; } t3[] = {
+            { "SR02", 0x3C4, 0x3C5, 0x02, 0x03 },
+            { "CR0A", 0x3D4, 0x3D5, 0x0A, 0x0D },
+            { "CR0B", 0x3D4, 0x3D5, 0x0B, 0x0E },
+            { "GR05", 0x3CE, 0x3CF, 0x05, 0x10 },
+        };
+        unsigned k;
+        memset(&rr, 0, sizeof rr); s_ah(&rr, 0x00); s_al(&rr, 0x03);
+        vdd_bus_deliver_int(&bus, 0x10, &rr);
+        for (k = 0; k < sizeof t3 / sizeof t3[0]; ++k) {
+            char msg[80];
+            v = t3[k].idx; vdd_bus_io(&bus, t3[k].ip, 1, 0, &v);
+            v = 0;         vdd_bus_io(&bus, t3[k].dp, 1, 1, &v);
+            sprintf(msg, "modedef: mode 3 leaves %s = 0x%02X, as a real BIOS does",
+                    t3[k].n, t3[k].want);
+            CHECK(v == t3[k].want, msg);
+        }
+        vdd_bus_io(&bus, 0x3DA, 1, 1, &v);                   /* reset the AC flip-flop */
+        v = 0x10; vdd_bus_io(&bus, 0x3C0, 1, 0, &v);
+        v = 0;    vdd_bus_io(&bus, 0x3C1, 1, 1, &v);
+        CHECK(v == 0x0C, "modedef: mode 3 leaves AR10 = 0x0C (line graphics + blink)");
+        CHECK(vid.cur_shape == 0x0D0E,
+              "modedef: the cursor shape is CR0A/CR0B, 0x0D0E for an 8x16 cell");
+
+        /* ⚠ GR7 IS THE BYTE THE TWO ORACLES SPLIT ON, and the split is not noise:
+             both say 0x0F in the GRAPHICS modes, and in the text and CGA modes QEMU
+             says 0x0F where PCem's real IBM VGA ROM says 0x00. Taking the table
+             rather than a constant is the whole point -- generating this from QEMU
+             alone would have written 0x0F into the text modes AGAINST the real card
+             and it would have LOOKED like a fix, because parity would have moved. */
+        v = 0x07; vdd_bus_io(&bus, 0x3CE, 1, 0, &v);
+        v = 0;    vdd_bus_io(&bus, 0x3CF, 1, 1, &v);
+        CHECK(v == 0x00, "modedef: mode 3 GR7 = 0x00 -- PCem's answer, not QEMU's 0x0F");
+
+        memset(&rr, 0, sizeof rr); s_ah(&rr, 0x00); s_al(&rr, 0x12);
+        vdd_bus_deliver_int(&bus, 0x10, &rr);
+        v = 0x07; vdd_bus_io(&bus, 0x3CE, 1, 0, &v);
+        v = 0;    vdd_bus_io(&bus, 0x3CF, 1, 1, &v);
+        CHECK(v == 0x0F, "modedef: mode 12h GR7 = 0x0F -- both oracles agree there");
+        /* ...and the per-kind arm still wins where it has to: planar forces the
+           map mask to all four planes after the table has been loaded. */
+        v = 0x02; vdd_bus_io(&bus, 0x3C4, 1, 0, &v);
+        v = 0;    vdd_bus_io(&bus, 0x3C5, 1, 1, &v);
+        CHECK(v == 0x0F, "modedef: mode 12h keeps map_mask 0x0F -- the planar arm wins");
+
+        memset(&rr, 0, sizeof rr); s_ah(&rr, 0x00); s_al(&rr, 0x03);
+        vdd_bus_deliver_int(&bus, 0x10, &rr);
+    }
+
     printf("\n%d checks, %d failed\n", total, fails);
     return fails ? 1 : 0;
 }
