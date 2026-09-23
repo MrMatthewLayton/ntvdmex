@@ -29,6 +29,39 @@ probes=()
 if [ $# -gt 0 ]; then for p in "$@"; do probes+=("$p"); done
 else for f in "$D"/p_*.asm; do probes+=("$(basename "$f" .asm)"); done; fi
 
+# ── COMPANIONS DECLARED BY ANOTHER PROBE ARE NOT PROBES. ─────────────────────
+#   A `<probe>.deps` sidecar names the files dosdiff stages alongside it, and a
+#   file that is somebody's companion is BY CONSTRUCTION not a standalone probe.
+#   p_child is the case: p_exec.deps names it, and its own header says its cases
+#   are "a RELATION between the child and its parent".
+#   ⛔ Run alone it still emits a perfectly valid dump -- so unlike p_tsrc it
+#     slips past the probe.inc test below -- and it reported 2 MISMATCH on every
+#     sweep. BOTH were artefacts of having no parent, and both were misleading in
+#     a way that invited a wrong fix:
+#       child.env.copy     asks "did your parent hand you a COPY of its
+#                          environment?" -- but our top-level PSP is its own
+#                          parent (main.c: dos_psp_save_vectors(NULL,
+#                          DOS_PSP_SEG, DOS_PSP_SEG)), so the probe compares our
+#                          env segment with ITSELF and reads "shared". It looks
+#                          exactly like the Heaven7 env-sharing bug, which is
+#                          fixed and stayed fixed.
+#       child.env.namekind asks whether the appended program name is
+#                          drive-qualified -- a property of THE LAUNCHER, not of
+#                          DOS. 6.22's COMMAND.COM says A:\P_CHILD.COM; ours says
+#                          P_CHILD.COM.
+#   ⇒ MEASURED through the real EXEC path, p_exec (which launches p_child via
+#     INT 21h/4Bh) is CLEAN on all four of the child's cases, including
+#     child.env.copy=0101 on both hosts. The contract is honoured; only the
+#     standalone launch was ever in question, and it is not a question DOS has an
+#     answer to.
+companions=""
+for d in "$D"/*.deps; do
+    [ -f "$d" ] || continue
+    while read -r dep; do
+        [ -n "$dep" ] && companions="$companions $(basename "$dep")"
+    done < "$d"
+done
+
 tot_rows=0; tot_bad=0; tot_abs=0; clean=0; dirty=0; failed=0
 declare -a DIRTY=() FAILED=()
 
@@ -45,6 +78,12 @@ for p in "${probes[@]}"; do
         printf '  %-10s skipped -- not a probe (no probe.inc; a helper or a payload)\n' "$p"
         continue
     fi
+    # ...and one that IS somebody's declared companion is graded in ITS run, not here.
+    case " $companions " in
+        *" $(basename "$p.com") "*)
+            printf '  %-10s skipped -- a companion (declared in a .deps; graded by its parent probe)\n' "$p"
+            continue;;
+    esac
     # Assemble FROM the probe directory -- probe.inc is resolved relative to it.
     if ! ( cd "$D" && nasm -f bin "$p.asm" -o "$p.com" ) 2>/dev/null; then
         FAILED+=("$p (assembly)"); failed=$((failed+1))

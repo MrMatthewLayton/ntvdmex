@@ -137,7 +137,32 @@ interpretation of the one row where we differ. PCem further confirms `0x94`/`0x1
 LOCK/UNLOCK (bit 7 of the opcode), which is how we decode it.
 
 ⚠ **Corroboration, not proof.** PCem is a reimplementation; agreement with it raises
-confidence in a reading of the datasheet, it does not replace one.
+confidence in a reading of the datasheet, it does not replace one. So the order was then
+**asked of the machines** — `build/probes/p_fdcreg.asm`, a read-only probe that emits all
+ten bytes:
+
+| | PCN0 | PCN1 | PCN2 | PCN3 | SRT/HUT | HLT/ND | EOT | LOCK\|PERP | CONFIG | PRETRK |
+|---|---|---|---|---|---|---|---|---|---|---|
+| **6.22/QEMU** | `01` | `00` | `00` | `00` | `0A` | `03` | **`12`** | `00` | `60` | `00` |
+| **PCem** | `00` | `00` | `00` | `00` | `BF` | `02` | `24` | `0C` | `08` | `00` |
+| **ours** | `00` | `00` | `00` | `00` | `00` | `00` | `00` | `00` | `00` | `00` |
+
+★ **`12h` = 18 is the sectors-per-track of a 1.44M floppy**, which pins byte 7 as EOT
+beyond argument; the PCN block and PRETRK agree at zero on both machines. **The order is
+confirmed.** Count = `000A` and MSR = `0080` agree on all three.
+
+### ⚠ But our ten bytes are all zero, and that is a gap this probe found
+
+Nothing has ever issued SPECIFY or CONFIGURE to us, and DUMPREG hands back what arrived
+rather than inventing defaults — so a guest that reads it learns nothing. On a real
+machine POST has already programmed the chip. This is the same question the CMOS Status
+A/B bytes and the 8042's status register both had to answer, and it splits three ways:
+
+| Byte | Verdict |
+|---|---|
+| **EOT** (byte 7) | ✅ **Correctly zero.** It is the sector count of the **last data command**, not configuration — PCem's own `res[7] = eot[drive]` is set by read/write. We have no data commands yet, so there is no residue. It will populate itself when the data path lands |
+| **SRT/HUT, HLT/ND, CONFIG, LOCK\|PERP** | ⚠ **Not adjudicable.** The two oracles disagree on *every one* (`0A`/`BF`, `03`/`02`, `60`/`08`, `00`/`0C`) because they are a **BIOS's** choices, not the chip's — cause 1 in [`oracle-disagreements.md`](../research/oracle-disagreements.md). There is no value to copy, and a guest that cares issues SPECIFY itself. **Zero is recorded as a choice, not a measurement** |
+| **PCN** (bytes 1–4) | ⚠ Truthful — our head has never moved. See the coherence row below |
 
 ### ⛔ …and PCem does **not** implement `09h`/`0Ch`. Do not "fix" toward it
 
