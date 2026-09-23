@@ -116,6 +116,54 @@ stronger one here because MSR *is* the protocol.
 | `0Ah` READ ID | **PART** | answers from the present cylinder without touching the medium |
 | `06h` READ · `05h` WRITE · `02h` READ TRACK · `0Ch` READ DELETED · `0Dh` FORMAT | ⛔ **PART** | **see below** |
 
+### ✅ The DUMPREG byte order was written from memory — and it is right
+
+`vdd_fdc.c`'s ten result bytes came out of my recollection of the datasheet's table and
+went straight into the code and into [`ref/fdc.md`](../ref/fdc.md) without anything
+checking them. **That is the exact shape this project keeps getting wrong**: a register
+that is implemented, plausible, and never compared — a wrong order does not *fail*, it
+hands a driver ten believable numbers in the wrong slots.
+
+PCem's own source is vendored in this tree (`pcem/src/pcem-dev/src/floppy/fdc.c:961`), and
+it is the implementation that produced the measured `0A01`. Its order is:
+
+```
+track[0] track[1] 0 0  specify[0] specify[1] eot  (perp&0x7f)|lock  config pretrk
+```
+
+**Byte for byte ours.** It also confirms the reading of the measured first byte: `01` is
+the **present cylinder of drive 0**, so *"where the head is"* was the right
+interpretation of the one row where we differ. PCem further confirms `0x94`/`0x14` as
+LOCK/UNLOCK (bit 7 of the opcode), which is how we decode it.
+
+⚠ **Corroboration, not proof.** PCem is a reimplementation; agreement with it raises
+confidence in a reading of the datasheet, it does not replace one.
+
+### ⛔ …and PCem does **not** implement `09h`/`0Ch`. Do not "fix" toward it
+
+PCem's command dispatch accepts `03 04 05 06 07 08 0a 0d 0e 0f 10 12 13 14/94` (and `42`)
+— and **not `09h` WRITE DELETED DATA, `0Ch` READ DELETED DATA, `11h` or `18h`.**
+
+That splits the two framing decisions made this session, and they must not be lumped:
+
+| Opcode | Our call | PCem | Verdict |
+|---|---|---|---|
+| `11h` SCAN EQUAL, `18h` part ID | **invalid** | invalid | ✅ agreed — µPD765/PC8477 commands an 82077AA does not have |
+| `09h`, `0Ch` **deleted-data** | 9-byte data commands | **not implemented** | ⚠ **The spec outranks the oracle here** |
+
+The deleted-data commands *are* in the 82077AA command set. PCem omits them because no
+guest it runs has ever issued one — *"device models that stop where their workloads stop"*,
+the pattern already written up in
+[`oracle-disagreements.md`](../research/oracle-disagreements.md). **A `0` from a host
+without the feature is the absence of a measurement, not a measurement of absence** —
+exactly the reasoning that let PIT BCD be implemented against two silent oracles.
+
+⛔ **Consequence for the probe:** `p_fdc` must never gain a case that asks PCem about `09h`
+or `0Ch`, because PCem would answer "invalid", the row would read as OUR mismatch, and the
+repair would be to *delete a command the part has*. Recorded as **implemented from the
+spec, unconfirmed by any machine** — which is the honest state, and a smaller claim than
+the rest of this page.
+
 ⛔ **The data commands are PART, deliberately, and loudly.** They are recognised, consume
 their parameters, and terminate with the documented **abnormal termination** — ST0
 interrupt code `01`, ST1 bit 2 (*no data*), the full seven result bytes and the interrupt

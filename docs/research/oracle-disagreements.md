@@ -402,3 +402,32 @@ there at all, scored `000F` against PCem's `000F` and the row read as a **MATCH*
 > already carries — *a property check passes by luck; pin exact values* — has a second
 > half: **check what the absent-device value becomes after your mask.** `FFh` survives
 > almost any narrowing as something that looks like data.
+
+## A postscript: reading the oracle's *source*, and where that stops being allowed
+
+PCem's own source is vendored in this tree (`pcem/src/pcem-dev/src/floppy/fdc.c`). Two
+uses of it came up on the FDC round, and only one of them is legitimate.
+
+**✅ Legitimate — interpreting a measurement.** `fdc.dumpreg` measured `0A01` on both
+oracles: ten result bytes, the first of them `01`. *Which* register that first byte is, is
+not in the measurement. PCem's DUMPREG arm emits
+`track[0] track[1] 0 0 specify[0] specify[1] eot (perp|lock) config pretrk`, which says
+the `01` is **the present cylinder of drive 0** — and confirms, independently of my
+memory, the byte order that had gone into `vdd_fdc.c` unchecked. *Reading the machine's
+implementation to learn what its answer meant is not the same as taking its answer as
+truth.*
+
+**⛔ Not legitimate — treating its command set as the part's.** PCem accepts
+`03 04 05 06 07 08 0a 0d 0e 0f 10 12 13 14/94` and rejects **`09h` WRITE DELETED DATA and
+`0Ch` READ DELETED DATA**, which are in the 82077AA command set. That is cause 2 from the
+table above — *device models that stop where their workloads stop* — and no guest PCem
+runs has ever issued a deleted-data command.
+
+> **The asymmetry is the whole point.** An oracle's *presence* is evidence; its *absence*
+> is usually just silence. PCem answering `90h` to VERSION is a fact about 82077AA parts.
+> PCem answering `80h` to `09h` is a fact about PCem.
+
+⛔ **Recorded so nobody probes it later:** a `p_fdc` case asking PCem about `09h`/`0Ch`
+would read as **our** mismatch, and the obvious repair would be to delete a command the
+part actually has. Those two opcodes are implemented **from the spec and confirmed by no
+machine**, and that is stated on the inventory page rather than glossed.

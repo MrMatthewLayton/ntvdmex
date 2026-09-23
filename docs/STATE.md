@@ -127,7 +127,10 @@ The full surface list, with the primary source named for each, is in
 (`689/690` of the bytes the two oracles agree on) — `tools/vgaparity.py`, **re-run, never
 quote**, and not comparable to the void 89.7%. Doom and Skyroads confirmed by hand after
 the Input Status 0 change. ▶ **Owed from a human: a by-hand look after the mode-set fix**,
-which moves the text cursor by one scan line (`0x0607` → the card's own `0x0D0E`).
+which moves the text cursor by one scan line (`0x0607` → the card's own `0x0D0E`),
+**and after the floppy controller** (`ea485e7`, host `bbea3134`) — a device that did not
+exist before, so the risk to existing guests is low and Doom + Skyroads measure it low,
+but it is an observable change and the rule is one at a time with a human in between.
 
 1. **The next surface from [`ref/SOURCES.md`](ref/SOURCES.md).** Done so far: the **8254**
    (5 fixes, clean against oracle consensus), the **VGA register file** (99.9%), and the
@@ -201,7 +204,7 @@ Doom check this project has ever run was high detail.
 | Instrument | What it is good for | Command |
 |---|---|---|
 | **The off-VM battery** | ~30 native unit tests over the DOS kernel and the device models. No VM, no rig. **Run it after touching any shared header.** | `./scripts/offvm.sh` |
-| **The parity sweep** | 36 DOS probes asked of NTVDMEX and of genuine MS-DOS 6.22, diffed | `./scripts/paritysweep.sh` |
+| **The parity sweep** | Every DOS probe asked of NTVDMEX and of genuine MS-DOS 6.22, diffed. ⛔ **Its score excluded TEN device probes for three sessions** — a trailing comment on a probe's `ORACLE-ALSO:` line built a nonsense command line, the probe reported `NO ROWS`, and an unusable probe leaves *both halves* of the fraction, so the number could only rise when something broke (`e618011`) | `./scripts/paritysweep.sh` |
 | **The bare-metal rig** | A real XP box. The only thing that can see a wrong picture. | [`wiki/The-bare-metal-rig`](wiki/The-bare-metal-rig.md) |
 | **PCem + a genuine IBM VGA / Tseng ET4000 ROM** | The VGA/VESA/BIOS oracle — the only period-correct firmware we have | ✅ **runs unattended**, ~60 s: `scripts/pcemoracle.py run <x.com>` ⚠ **outside the command sandbox** |
 | **Stock `ntvdm` on the rig** | The oracle for everything with no public spec — the WOW32 thunk ABI above all | [`research/stock-vdm-dump-oracle`](research/) |
