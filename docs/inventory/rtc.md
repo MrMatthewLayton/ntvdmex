@@ -60,9 +60,18 @@ through any change that did not happen to preserve that bit.
 
 QEMU answers `1000h` and PCem `5000h`: flags latched (update-ended, and periodic on PCem)
 and then **cleared by the read**, which is how IRQ8 is acknowledged at the chip. We answer
-`0000h` — **not** because clear-on-read is missing (it is implemented, and `cmos_test.c`
-pins it with a seeded flag byte) but because **we raise no IRQ8 at all**. Same shape as
-`dma.status.idle`.
+`0000h`, and the reason has *changed* since this row was first written:
+
+- **Then:** clear-on-read was implemented but we raised no IRQ8 at all, so nothing ever
+  set a flag.
+- **Now (§4):** the periodic interrupt works and does set PF and IRQF — but **the probe
+  never enables it.** `p_rtc` reads Status C without setting PIE, so on our host there is
+  genuinely nothing pending. The oracles' flags come from *their* firmware having enabled
+  the update-ended interrupt.
+
+⇒ **The row is still `0000h` and is still not a defect, but for a different reason**, and
+a row whose *explanation* changes while its *value* does not is exactly the kind that goes
+quietly wrong. What is owed is a probe case that enables PIE and counts — not a fix.
 
 ---
 
@@ -81,7 +90,7 @@ pins it with a seeded flag byte) but because **we raise no IRQ8 at all**. Same s
 | `00h`–`09h`, `32h` derived from the host clock, in **BCD** | ✅ **IMPL** | `cmos_clock_reg` |
 | Status A — UIP **clear**, divider `010` | ✅ **IMPL** | `0x26`; see below |
 | Status B — BCD, 24-hour | ✅ **IMPL** | `0x02`, measured on QEMU **and** PCem |
-| Status C — **cleared by reading** | ✅ **IMPL** | nothing sets the flags yet |
+| Status C — **cleared by reading** | ✅ **IMPL** | PF and IRQF are set by the periodic tick (§4) |
 | Status D — VRT set | ✅ **IMPL** | |
 | **Day of week (`06h`)** | ⛔ **STORE** | fixed at 1 (Sunday) — the host's clock reading carries no weekday, and deriving one means a calendar rule in a device model. **Wrong six days in seven**; recorded rather than quietly computed |
 | Writing the clock (`00h`–`0Dh`) | ⚠ **REFUSED** | we cannot move the host's clock, and accepting the write while changing nothing is the *"runs but lies"* shape. Same reasoning as INT 1Ah `AH=03h`/`05h` |
