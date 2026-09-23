@@ -121,7 +121,7 @@ Each surface gets two documents, doing two different jobs:
 
 | Surface | Primary sources | Inventory | Ref |
 |---|---|---|---|
-| **VGA / CRTC / sequencer / graphics / attribute / DAC** | IBM VGA TechRef; FreeVGA | [vga.md](vga.md) — **71 enumerated, measured** | — |
+| **VGA / CRTC / sequencer / graphics / attribute / DAC** | IBM VGA TechRef; FreeVGA | [vga.md](vga.md) — **71 enumerated, measured** | ✅ [`ref/vga.md`](../ref/vga.md) |
 | **VESA VBE 2.0 / 3.0** | `docs/ref/vbe20.pdf`, `docs/ref/vbe30.pdf` | — | [PDFs held](../ref/) |
 | 8254 PIT | Intel 8254 datasheet | — | — |
 | 8259A PIC | Intel 8259A datasheet | [pic.md](pic.md) | — |

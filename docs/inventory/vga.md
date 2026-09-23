@@ -2,6 +2,8 @@
 
 **Spec:** IBM *Personal System/2 Display Adapter* and *VGA* technical references; the
 standard VGA register set as documented in FreeVGA / the Bochs & PCem models.
+**▶ The hardware reference is [`docs/ref/vga.md`](../ref/vga.md)** — what the VGA *does*,
+in our own words. This file is the companion: what **we** do about it.
 **Oracle:** PCem with a real Tseng ET4000/W32p ROM.
 **Our implementation:** `src/vdd/vdd_video.c` (3051 lines), `src/vdd/vdd_video.h`.
 **Measured:** 2026-09-22, from the code, with citations. Re-measure after any change.
