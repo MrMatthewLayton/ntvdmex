@@ -59,8 +59,9 @@ typedef struct dma_state {
          leave them out, and 80h doubles as the POST diagnostic port.
        ★ MEASURED (p_dma.asm dma.page.spare80, 2026-09-23): dosbox-x AND PCem, on
          a real AMI BIOS, both read back a written 0x5A. Only 6.22-under-QEMU
-         answers 0xFF -- and QEMU is the host that has been the outlier on every
-         external-register row this project has checked.
+         answers 0xFF. ⚠ That is NOT "QEMU is the outlier" as a general rule --
+         counted over a session it is not even true; see
+         docs/research/oracle-disagreements.md.
        ⚠ We answered 0xFF, which describes an EMPTY BUS rather than a machine.
          Indexed by the low nibble of the port; the mapped ports never reach it. */
     uint8_t  page_spare[16];

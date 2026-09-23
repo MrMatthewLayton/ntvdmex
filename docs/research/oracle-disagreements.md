@@ -298,3 +298,60 @@ several sessions. All of it was mine: the crash was **the command sandbox**, and
 directory is **`~/PCem/`**, not the `~/Library/Application Support/PCem/` our own notes gave
 — so the ROMs were installed where PCem never looks. It now runs start to finish unattended
 in about 60 seconds. *A path in a note is a claim; `ls` what the program actually creates.*
+
+---
+
+# ⛔⛔⛔ "QEMU is the outlier" does not survive a count
+
+I wrote that phrase into three places — a rule in `oracle-rules.json`, a header comment in
+`vdd_dma.h`, and the DMA inventory — as though it were a property of the host. It is not.
+All three are corrected; this is why.
+
+## The count, over session 77's seventeen three-host rows
+
+| host alone against the other two | rows |
+|---|---|
+| **PCem** | **6** |
+| dosbox-x | 4 |
+| QEMU | 3–4 |
+
+**PCem is the most frequent sole outlier**, and almost always because it is *the only host
+that implements something*: the 8042 self test, the output port, the A20 read-back, the
+ICW1 IRR question. QEMU's `pic.ocw3.poll` is the same shape in reverse — it is alone, and
+it is the one that is **right**.
+
+> ⇒ **"Sole outlier" does not measure wrongness.** It correlates with implementing
+> something the others skipped, in *either* direction. Counting hosts was never the
+> method and this is the sharpest demonstration of why.
+
+## Why QEMU differs where it does — three causes, not one
+
+**1. Different firmware, not different silicon — and this is the big one.** The PIT's
+counter-0 power-on mode is a *BIOS choice*. So is most of the 78/768-byte VGA register
+disagreement: those bytes are what a **VGA BIOS** writes. The 6.22 oracle runs
+`qemu-system-i386 -M pc` (i440FX + PIIX) under QEMU 10.2, with **SeaBIOS** and a
+Bochs-derived VGA BIOS — reimplementations written decades after the fact. PCem runs a
+real AMI 486 BIOS and a genuine IBM VGA ROM. **Same chip, different program's choices.**
+These rows say nothing about QEMU's device models at all.
+
+**2. Device models that stop where their workloads stop.** Port `80h` reading `0xFF`,
+Input Status 0's Switch Sense bit, the 8042 command set — QEMU's guests are Linux and
+NT-family Windows, which never touch any of it. *(That these are deliberate
+simplifications is inference; what is measured is only that they are absent.)*
+
+**3. Machine generation — real, but rare, and it points the other way.** Port `92h` is the
+clear case, and there it is **PCem** that lacks the feature.
+
+## The framing that actually predicts
+
+The three exist for different reasons, and fidelity follows purpose:
+
+| Oracle | Built to | So it is strong on | And weak on |
+|---|---|---|---|
+| **QEMU + 6.22** | run modern OSes fast | a genuine Microsoft DOS kernel; whatever SeaBIOS/Linux exercise | period firmware; registers no modern OS reads |
+| **dosbox-x** | run DOS games | the surfaces games touch | being any particular machine |
+| **PCem** | *be* a specific period machine | chip-level period detail, real ROMs | anything post-dating the machine it is configured as |
+
+⇒ **This is why the abstention rationales ask *why* a host answered, never *how many*
+agreed.** A majority vote would have got BCD, the 8259's poll and the whole 8042 wrong —
+three surfaces in one session.

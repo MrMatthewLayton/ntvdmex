@@ -77,8 +77,9 @@ because it is in the period-correct hardware contract; "no guest has asked" is t
 reasoning this programme exists to stop.
 
 **Measured** (`p_dma.asm dma.page.spare80`): dosbox-x and **PCem, on a real AMI 486
-BIOS**, both read back a written `0x5A`; only 6.22-under-QEMU answers `0xFF` — and QEMU
-has been the outlier on *every* external-register row this project has checked. Fixed;
+BIOS**, both read back a written `0x5A`; only 6.22-under-QEMU answers `0xFF`. ⚠ **That is
+not a general rule about QEMU** — see [the oracle-profile
+note](../research/oracle-disagreements.md). Fixed;
 `page_spare[]` in `vdd_dma.h`, and `dma_test.c` pins that the spare latches are **not the
 same storage** as a channel's page.
 
