@@ -8,12 +8,21 @@
 
 - **Updated:** 2026-09-23 (session 77)
 - **Branch:** `m9/completeness`
-- **Checkpoint commit:** **`59fac7d`** — the rollback point. `git diff a5dd042..HEAD -- src/`
-  is empty, so every `src/` byte matches the tree that built `2565bffe`, the last host the
-  user confirmed by hand. *No git tags yet: the first will be `0.0.1` at the first beta.*
+- **Checkpoint commit:** **`ff0d956`** — the rollback point, and the first one moved since
+  `59fac7d`. `git diff ff0d956..HEAD -- src/` is empty, so every `src/` byte matches the
+  tree that built **`71ef4737`**, which the user confirmed by hand on 2026-09-23:
+  **typing, a Win16 app, and the text cursor**, on top of Doom and Skyroads run headlessly.
+  *No git tags yet: the first will be `0.0.1` at the first beta.*
+  ⚠ **That is a three-item confirmation, not a shelf sweep** — the stable zip below stays
+  the anchor until someone runs the whole shelf.
 - **Stable package:** `dist\ntvdmex-20260917-4847355.zip`, host `9448cf27`
-  (tag `release-20260917b`). **Immutable until a new build is confirmed by hand.**
-  `bin\` on the rig is free to churn.
+  (tag `release-20260917b`). **Immutable until a new build is confirmed across the whole
+  shelf**, which 2026-09-23's three-item pass is not. `bin\` on the rig is free to churn.
+- **Rollback host:** `debug\prev\ntvdmhost_prev.exe` = **`71ef4737`**.
+  ⛔ **It did not exist until 2026-09-23.** The file is documented as *"the last build a
+  HUMAN confirmed"* and every `bmstage --host` run printed
+  `ntvdmhost_prev.exe = , the confirmed one, untouched` — **with an empty md5** — and
+  nobody read it. The rollback story had no rollback in it for as long as anyone can tell.
 - **Tracker:** [issues](https://github.com/MrMatthewLayton/ntvdmex/issues) ·
   **Knowledge base:** [wiki](https://github.com/MrMatthewLayton/ntvdmex/wiki) ·
   **History:** [`log/sessions/`](log/sessions/)
