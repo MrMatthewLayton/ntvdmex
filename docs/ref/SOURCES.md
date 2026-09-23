@@ -43,7 +43,7 @@ need in the order *we* need it.
 | **Gravis Ultrasound** | Gravis GUS SDK / Programmer's Guide | GF1 voices, DRAM, the DMA/IRQ contract | |
 | **MPU-401 + General MIDI** | Roland MPU-401 Technical Reference; the GM spec | UART and intelligent modes, the GM sound set | |
 | **16550 UART · LPT** | National 16550 datasheet; IBM TechRef | FIFO, modem/line status, the parallel strobe | |
-| **Floppy controller** | Intel 82077AA datasheet | Command phases, result bytes, the drive table | |
+| **Floppy controller** | Intel 82077AA datasheet | Command phases, result bytes, the drive table | ⚠ The *three-phase handshake* is the chip; a register-by-register reading misses it entirely — see [`fdc.md`](fdc.md) |
 | **IDE / ATA + ATAPI** | ATA-x and ATAPI standards | Command set, identify, packet commands | |
 | **CPU, 386 → Pentium** | Intel SDM; 386/486 Programmer's Reference | V86 mode, descriptors, VME/VIF, exceptions | We run on the **real CPU** — this describes the contract, not a model to write |
 

@@ -105,6 +105,7 @@ static const char *ntvdmex_path(const char *sub, const char *name);
 #include "vdd_bus.h"
 #include "vdd_pit.h"
 #include "vdd_cmos.h"
+#include "vdd_fdc.h"
 #include "vdd_pic.h"
 #include "vdd_video.h"
 #include "vdd_input.h"
@@ -712,6 +713,7 @@ static dos_machine_t *g_mach = NULL;
 static vdd_bus      g_bus;
 static pit_state    g_pit;       static ntvdd g_pit_dev;
 static cmos_state   g_cmos;      static ntvdd g_cmos_dev;
+static fdc_state    g_fdc;       static ntvdd g_fdc_dev;
 static pic_state    g_pic;       static ntvdd g_pic_dev;
 static video_state  g_vid;       static ntvdd g_vid_dev;
 static input_state  g_in;        static ntvdd g_in_dev;
@@ -23484,6 +23486,17 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     g_cmos.rtc_ctx = NULL;
     g_cmos_dev = vdd_cmos_device(&g_cmos);
     vdd_bus_add(&g_bus, &g_cmos_dev);           /* MC146818: ports 0x70/0x71    */
+    /* ── THE FLOPPY CONTROLLER, WHOSE ABSENCE WAS A HANG. ────────────────────
+         3F0h-3F7h were claimed by nothing, so the Main Status Register read FFh
+         -- RQM=1 with DIO=1 -- and the datasheet's own command-write loop
+         (`and al,0C0h / cmp al,80h / jne`) never matched and never exited.
+         MEASURED on the rig before this existed: fdc.cmdwait = 01C0 here against
+         0080 on 6.22/QEMU and on PCem's real AMI BIOS alike. Same shape as the
+         MC146818's UIP bit two devices above. IRQ6 stays dormant unless a guest
+         both gates it through DOR bit 3 and unmasks it at the PIC, which starts
+         at 0xFC. See src/vdd/vdd_fdc.h. */
+    g_fdc_dev = vdd_fdc_device(&g_fdc);
+    vdd_bus_add(&g_bus, &g_fdc_dev);            /* 82077AA: 3F2h-3F5h, 3F7h     */
     g_vid.vmem = (uint8_t *)VID_APERTURE_BASE;  /* the mapped A0000 aperture (RAM) */
     /* (per-plane backing is taken later, once the preamble is on disk -- every
        log_write() before that point TRUNCATES the file and would eat its report.) */

@@ -95,6 +95,7 @@ add_executable(ntvdmhost
     src/vdd/vdd_bus.c
     src/vdd/vdd_pit.c
     src/vdd/vdd_cmos.c
+    src/vdd/vdd_fdc.c
     src/vdd/vdd_pic.c
     src/vdd/vdd_dma.c
     src/vdd/vdd_opl.c

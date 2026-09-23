@@ -137,8 +137,8 @@ Each surface gets two documents, doing two different jobs:
 | Gravis Ultrasound | Gravis GUS SDK / Programmer's Guide | — | — |
 | MPU-401 + General MIDI | Roland MPU-401 TechRef; GM spec | — | — |
 | 16550 UART + LPT | National 16550 datasheet; IBM TechRef | — | — |
-| Floppy controller (765/82077) | Intel 82077AA datasheet | — | — |
-| IDE / ATA + ATAPI | ATA-x, ATAPI specs | — | — |
+| **Floppy controller (765/82077)** | Intel 82077AA datasheet | [fdc.md](fdc.md) — **the chip existed nowhere; MSR read `FFh` and the datasheet's own command loop never exited** | ✅ [`ref/fdc.md`](../ref/fdc.md) |
+| IDE / ATA + ATAPI | ATA-x, ATAPI specs | — ⚠ `3F6h` (alternate status) answers `FFh`; both oracles say `50h`. Found by the FDC probe, filed here | — |
 | **CPU: 386 → Pentium** | Intel SDM; 386/486 Programmer's Reference | — | real CPU; V86 contract only |
 
 ### Firmware

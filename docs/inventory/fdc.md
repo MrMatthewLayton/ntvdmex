@@ -1,0 +1,160 @@
+# Inventory — 82077AA floppy disk controller
+
+**Spec:** Intel 82077AA datasheet; NEC µPD765A; IBM PC/AT TechRef.
+**▶ The hardware reference is [`../ref/fdc.md`](../ref/fdc.md)** — what the chip *does*.
+**Our implementation:** `src/vdd/vdd_fdc.c`, `src/vdd/vdd_fdc.h`.
+**Oracles:** MS-DOS 6.22 (QEMU), PCem (real AMI 486 BIOS), dosbox-x.
+DOS probe: `tools/dostest/p_fdc.asm` · off-VM battery: `tools/dostest/fdc_test.c` (32 checks).
+**Marked:** 2026-09-23, **from the code**, then re-marked against the rig.
+
+---
+
+## Headline — the third "firmware present, chip absent" hole, and it was a hang
+
+The BIOS layer was already complete and correct: INT 13h reads and writes sectors out of a
+real image file (`src/host/main.c:24736`, `disk_io` at `main.c:3986`), the geometry is
+measured against 6.22 rather than assumed (`src/dos/dos_disk.h`), and both firmware
+advertisements agreed a drive was fitted — CMOS byte `10h` = `40h` (`vdd_cmos.c:274`) and
+INT 11h's equipment word bit 0 (`main.c:2074`).
+
+**The chip underneath all of that did not exist.** Nothing claimed `3F0h`–`3F7h`, so every
+port fell through to the unclaimed default of **`FFh`** (`main.c:10918`). `3F4h` is the
+Main Status Register and `FFh` there is `RQM=1, DIO=1` — *"ready, and I am the one
+talking"* — so the command-write loop out of the datasheet, which is the loop in every
+BIOS and every driver,
+
+```asm
+wait:   in al,3F4h / and al,0C0h / cmp al,80h / jne wait
+```
+
+**spun for ever**, with no fault, no timeout and nothing in any log. This is the
+MC146818's UIP bit one surface later. `00h` would hang too (RQM clear is also *wait*), so
+no default saves it — only the chip.
+
+⚠ **Why nothing had noticed.** Our guests reach the drive through INT 13h, which never
+touches the ports. The programs that go direct were never on the shelf: disk utilities,
+copy-protection loaders, `FORMAT`'s low-level path, Windows 3.x enhanced mode's own floppy
+virtualisation. Per the scope rule that is not a reason to defer — it is the reason this
+went unmeasured for 77 sessions.
+
+---
+
+## Measured — before, and after
+
+`p_fdc.asm` asks the questions a **detection routine** asks, on the bare-metal rig and on
+two oracles that agree with each other.
+
+| case | 6.22/QEMU | PCem | NTVDMEX **before** | NTVDMEX **after** |
+|---|---|---|---|---|
+| `fdc.msr.idle` — the byte the protocol turns on | `0080` | `0080` | `00FF` | **`0080`** ✅ |
+| `fdc.cmdwait` — *does the datasheet's own loop exit?* | `0080` | `0080` | **`01C0`** ⛔ | **`0080`** ✅ |
+| `fdc.dor.gate` — /RESET and DMAGATE | `000C` | `000C` | `000C` ⚠ | **`000C`** ✅ |
+| `fdc.dir.dskchg` — the disk-change line | `0000` | `0000` | `0080` ⛔ | **`0000`** ✅ |
+| `fdc.version` — count + ID byte | `0190` | `0190` | `FFFF` | **`0190`** ✅ |
+| `fdc.dumpreg` — count + first byte | `0A01` | `0A01` | `FFFF` | `0A00` ⚠ |
+| `fdc.alt.3f6` — *not ours* | `0050` | `0050` | `00FF` | `00FF` ⛔ |
+| `fdc.desync` — what we left behind | `0000` | `0000` | `0000` | `0000` ✅ |
+| `fdc.dor.raw` | `001C` | `00FF` | `00FF` | `000C` — *disputed* |
+| `fdc.dir.raw` | `0000` | `0001` | `00FF` | `0000` — *disputed* |
+| `fdc.sra.srb` | `FFC1` | `FF51` | `FFFF` | `FFFF` — *disputed* |
+
+★★★ **`fdc.cmdwait` is not a register value — it is the loop, bounded to 65536 turns and
+asked whether it terminated.** `AH=01` means it did not. That row is the whole reason this
+surface was urgent, and it is the row that moved.
+
+⛔⛔ **`fdc.dor.low` was a manufactured agreement and it is gone.** The case originally
+masked DOR to bits 3:0 — and `FFh & 0Fh` is `0Fh`, a perfectly plausible DOR (out of
+reset, gated, drive 3). NTVDMEX scored `000F` against PCem's `000F` and **read as a MATCH
+from a port that did not exist.** The coincidence belonged to the mask, not to the
+machine. The case now emits the raw byte, where `FFh` cannot hide, and narrows the
+adjudicable question to the two bits that are a property of the *chip* rather than of the
+driver. *A property check passes by luck; pin exact values.*
+
+---
+
+## 1. The register file
+
+| Offset | Register | Status | Evidence |
+|---|---|---|---|
+| `3F0h` | SRA (PS/2 only) | **N/A** — not claimed | both oracles read `FFh` here; we present a PC/AT part, which does not drive it |
+| `3F1h` | SRB (PS/2 only) | **N/A** — not claimed | both oracles *do* drive it and **disagree** (`C1h` vs `51h`); nothing to copy |
+| `3F2h` | **DOR** — motors, DRIVE SEL, /RESET, DMAGATE | ✅ **IMPL** | `vdd_fdc_out`; reset edge, gate and drive select all honoured |
+| `3F3h` | TDR tape drive | **STORE** | round-trips; nothing consumes it, and neither does any oracle |
+| `3F4h` read | **MSR** | ✅ **IMPL** | `vdd_fdc_msr` — **derived, never stored** |
+| `3F4h` write | DSR — data rate, s/w reset, power down | ✅ **IMPL** | bit 7 resets and self-clears; the rate survives it |
+| `3F5h` | **FIFO** — command and result bytes | ✅ **IMPL** | `fdc_fifo_read`/`fdc_fifo_write` |
+| `3F6h` | *(ATA alternate status — not ours)* | **N/A** | deliberately not claimed; see the open row below |
+| `3F7h` read | **DIR** — DSKCHG | ✅ **IMPL** | bit 7 = 0; bits 6:0 recorded as a choice, not measured |
+| `3F7h` write | CCR — data rate | **STORE** | there is no wire to run at the wrong speed |
+
+★ **MSR is derived from state that lives elsewhere, never latched.** A stored copy is a
+second opinion waiting to drift — the same rule the 8254's OUT pin arrived at, and a
+stronger one here because MSR *is* the protocol.
+
+## 2. The protocol
+
+| Item | Status | Evidence |
+|---|---|---|
+| Command / execution / result phases | ✅ **IMPL** | `fdc_execute`, `fdc_result` |
+| RQM/DIO handshake per byte | ✅ **IMPL** | measured: `fdc.cmdwait` `0080` on the rig |
+| `CMD BSY` set on the first command byte, cleared on the **last** result byte | ✅ **IMPL** | `fdc_test.c` checks both edges — it is what lets a driver drain a result of unknown length |
+| Invalid command → one byte, `ST0 = 80h`, **and stays in frame** | ✅ **IMPL** | the framing matters more than the value: an unknown opcode that guessed a parameter count would eat the next real command |
+| Non-DMA execution (MSR bit 5) | ⛔ **MISS** | there is no execution phase to be in yet |
+| RQM dropping between bytes | ⚠ **N/A-by-design** | we have no latency to model; observable only by timing, and in the direction that cannot hang anyone |
+
+## 3. The commands
+
+| Command | Status | Notes |
+|---|---|---|
+| `10h` **VERSION** → `90h` | ✅ **IMPL** | measured `0190` on the rig and both oracles |
+| `08h` **SENSE INTERRUPT STATUS** | ✅ **IMPL** | pending → ST0+PCN · reset polling → `C0h\|drive` · otherwise `80h` |
+| `0Eh` **DUMPREG** — ten bytes | ✅ **IMPL** | count measured at 10 on all three |
+| `03h` SPECIFY · `13h` CONFIGURE · `12h` PERPENDICULAR | ✅ **IMPL** | stored, and handed back by DUMPREG |
+| `14h` LOCK | ✅ **IMPL** | and it really keeps CONFIGURE across a software reset |
+| `04h` SENSE DRIVE STATUS (ST3) | ✅ **IMPL** | READY, TRACK0, TWO SIDE, head, drive |
+| `07h` RECALIBRATE · `0Fh` SEEK | ✅ **IMPL** | no result phase; the interrupt is the report |
+| `0Ah` READ ID | **PART** | answers from the present cylinder without touching the medium |
+| `06h` READ · `05h` WRITE · `02h` READ TRACK · `0Ch` READ DELETED · `0Dh` FORMAT | ⛔ **PART** | **see below** |
+
+⛔ **The data commands are PART, deliberately, and loudly.** They are recognised, consume
+their parameters, and terminate with the documented **abnormal termination** — ST0
+interrupt code `01`, ST1 bit 2 (*no data*), the full seven result bytes and the interrupt
+a real part raises. They do **not** answer *"invalid command"*: that would be a chip
+contradicting the `90h` it just gave for VERSION, and a driver can act on a media error
+where it cannot act on a controller that contradicts itself. `fdc_test.c` §14 asserts this
+known gap **so that closing it cannot be silent.**
+
+## 4. The wiring
+
+| Item | Status | Notes |
+|---|---|---|
+| **IRQ6** | ✅ **IMPL** | raised only in response to a command the guest issued, and gated on DOR bit 3 |
+| **DMAGATE** as a real gate | ✅ **IMPL** | ⛔ ignoring it is a *silent* kill: transfers complete, the interrupt never reaches the PIC, and nothing reports a wrong value anywhere |
+| Dormant by default | ✅ | the master IMR starts `0xFC` (IRQ0+IRQ1). A guest that does not ask sees no change — the property that made the RTC's IRQ8 safe to add |
+| **DMA channel 2** | ⛔ **MISS** | the 8237A model exists and channel 2 is idle. ⚠ It is also the channel a real transfer uses, which is why `p_dma.asm` refuses to touch it |
+| Motor-off timing | ⛔ **MISS** | the motor bits round-trip; nothing spins down |
+
+## 5. Still open
+
+| Row | Verdict |
+|---|---|
+| **`fdc.alt.3f6`** — we read `FFh`, both oracles `50h` | ⛔ **A REAL GAP THAT IS NOT THIS SURFACE'S.** `3F6h` is the ATA alternate status register (`50h` = DRDY\|DSC). Claiming the whole eight-port block would have turned the row green by taking a register that belongs to somebody else. **Filed against the IDE/ATA surface.** |
+| **`fdc.dumpreg`** — `0A00` against `0A01` | ⚠ The count agrees; the first byte is **PCN of drive 0**, i.e. where the head is. Both oracles read 1 because their BIOS seeked there to load the program; ours reads 0 because **INT 13h does not drive the chip**. Truthful, and it is exactly the "two state machines over one chip" problem in [`ref/fdc.md` §10](../ref/fdc.md). See the next step below. |
+| `fdc.dor.raw`, `fdc.dir.raw`, `fdc.sra.srb` | **Not adjudicable** — the oracles disagree among themselves. PCem reads DOR as `FFh` (a genuinely write-only AT part); QEMU's `1Ch` has a motor still spinning. On SRA both oracles say `FFh` and **we now match**. |
+| BDA `0040:003E`–`0048` | ⛔ **MISS** — INT 13h writes none of the BIOS's documented floppy state. Consistent today, and it stops being consistent the moment either door starts moving the other's state |
+
+---
+
+## What to fix, in order
+
+1. ★★ **READ DATA / WRITE DATA over DMA channel 2**, against the same image handle INT 13h
+   already holds. The largest remaining piece and the only one that needs the 8237A. The
+   host hook goes in the way `rtc_now` did, so the chip stays pure C.
+2. ★★ **One medium, two doors, one answer** — INT 13h should move the modelled head, so
+   DUMPREG and SENSE DRIVE STATUS report where the drive actually is. This is the same
+   rule the A20 gate and the RTC both arrived at, and `fdc.dumpreg`'s `0A00` is it showing
+   up as a number.
+3. ★ **The BDA floppy fields**, for the same reason.
+4. **Motor-off timing**, and non-DMA execution (MSR bit 5) — both only matter once there
+   is data to move.
+5. **FORMAT TRACK**, last, as the only destructive command.

@@ -355,3 +355,50 @@ The three exist for different reasons, and fidelity follows purpose:
 ⇒ **This is why the abstention rationales ask *why* a host answered, never *how many*
 agreed.** A majority vote would have got BCD, the 8259's poll and the whole 8042 wrong —
 three surfaces in one session.
+
+---
+
+# 2026-09-23, later still — the 82077AA, where the two oracles finally agreed
+
+The floppy controller is the first surface where **`msdos622` and PCem gave the same
+answer to every question that has an answer** — and the disputes that remain are all of
+one kind.
+
+## Settled, unanimously, and they are the load-bearing ones
+
+| Row | 6.22/QEMU | PCem | Decision |
+|---|---|---|---|
+| `fdc.msr.idle` | `0080` | `0080` | **80h is the idle Main Status Register**, exactly as the datasheet writes it. Implemented. |
+| `fdc.cmdwait` | `0080` | `0080` | The datasheet's own command-write loop **terminates** on both. Implemented. |
+| `fdc.dir.dskchg` | `0000` | `0000` | DSKCHG clear. Implemented. |
+| `fdc.version` | `0190` | `0190` | **One result byte, `90h`** — an enhanced 82077AA. Implemented. |
+| `fdc.dumpreg` | `0A01` | `0A01` | **Ten result bytes.** Implemented. |
+| `fdc.dor.gate` | `000C` | `000C` | /RESET released and DMAGATE through. Implemented. |
+| `fdc.alt.3f6` | `0050` | `0050` | `50h` = ATA DRDY\|DSC. **Not the FDC's register** — filed against the IDE/ATA surface rather than "fixed" here. |
+
+## Disputed — and every one of them is *configuration*, not silicon
+
+| Row | 6.22/QEMU | PCem | Why there is nothing to copy |
+|---|---|---|---|
+| `fdc.dor.raw` | `001C` | `00FF` | **PCem's DOR is write-only**, which is what a genuine PC/AT part does; the 82077AA made it readable. QEMU's `1Ch` is `0Ch` plus **a motor still spinning** from the read that loaded the probe. Two different facts, neither about the chip's answer. The adjudicable bits (3:2) agree. |
+| `fdc.dir.raw` | `0000` | `0001` | Bits 6:0 are **not driven** by an AT-mode part. Both hosts drive them anyway and disagree. Ours reads `00h`, recorded as a choice rather than measured. |
+| `fdc.sra.srb` | `FFC1` | `FF51` | **SRA agrees at `FFh` on both** — not driven in PC/AT mode, and we match by leaving `3F0h` unclaimed. SRB they both drive, and disagree. Left unclaimed. |
+| `fdc.dumpreg` first byte | `01` | `01` | Both say 1 and **we say 0** — it is the present cylinder, i.e. *where the head is*. Their BIOS seeked to cylinder 1 to load the program; our head has never moved because INT 13h does not drive the chip. A real gap, but a **coherence** gap between our two doors onto one drive, not a disagreement about the register. |
+
+> ⇒ **The pattern worth keeping.** Every remaining dispute on this surface is a question
+> about *the machine's state at the moment of asking* — which motor is spinning, which
+> drive is selected, where the head sits — dressed up as a question about a register.
+> The probe's job was to separate those, and the two cases where it failed to
+> (`fdc.dor.low` masking `FFh` into a plausible `0Fh`; `fdc.dir.raw` asking about
+> undriven bits) were **caught by the oracles disagreeing with each other**, not by us.
+
+## ⛔ And one manufactured agreement, from our own probe
+
+`fdc.dor.low` originally masked DOR to bits 3:0. `FFh & 0Fh` is `0Fh` — out of reset,
+gated, drive 3 — which is a **perfectly plausible DOR**. So NTVDMEX, which had no register
+there at all, scored `000F` against PCem's `000F` and the row read as a **MATCH**.
+
+> **A mask can manufacture an agreement out of an absent device.** The rule the inventory
+> already carries — *a property check passes by luck; pin exact values* — has a second
+> half: **check what the absent-device value becomes after your mask.** `FFh` survives
+> almost any narrowing as something that looks like data.

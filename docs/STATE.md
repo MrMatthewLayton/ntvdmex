@@ -145,9 +145,30 @@ which moves the text cursor by one scan line (`0x0607` → the card's own `0x0D0
    and the DLAB bank switch. ⚠ *My prediction that the UART and the FDC would both show
    the "firmware present, chip absent" split was half right* — the FDC is absent, the
    UART was there and in good shape.
-   ▶ **Next candidates in the contract:** the **82077AA floppy controller** (nothing
-   claims `3F0h`–`3F7h` — confirmed absent), the RTC's alarm and update-ended
-   interrupts, the UART's OUT2 interrupt gate. Pick by the contract, not by a guest.
+   The **82077AA floppy controller** followed, and it was the **third**
+   "firmware present, chip absent" hole in a row — and the worst-shaped. Nothing
+   claimed `3F0h`–`3F7h`, so `3F4h` (the Main Status Register) read `FFh`, which
+   is `RQM=1, DIO=1`: *"ready, and I am the one talking"*. The command-write loop
+   out of the datasheet — the loop in every BIOS and every driver —
+   `and al,0C0h / cmp al,80h / jne` — **never matched and never exited.** Not a
+   plausible wrong value: a machine that stops, with nothing in any log.
+   ⛔ **`00h` would hang too** (RQM clear is also *wait*), so no bus default could
+   have saved it — only the chip. New `vdd_fdc.{c,h}`: the register file, the
+   three-phase command protocol, and every command that does not move sector data.
+   **MEASURED on the rig, `fdc.cmdwait`: `01C0` → `0080`**, where `AH` is *"the
+   loop never terminated"*. Two oracles agree on every load-bearing row
+   (`fdc.version` = `0190`, `fdc.dumpreg` = ten result bytes).
+   ⛔⛔ **And one row was a manufactured agreement.** `fdc.dor.low` masked DOR to
+   bits 3:0 — and `FFh & 0Fh` is `0Fh`, a plausible DOR — so a port that did not
+   exist scored a **MATCH** against PCem. *A mask can manufacture an agreement out
+   of an absent device; check what `FFh` becomes after your mask.*
+   ▶ **Next candidates in the contract:** the FDC's **data path** (READ/WRITE over
+   DMA channel 2, against the image handle INT 13h already holds — marked **PART**
+   with an off-VM check asserting the gap so closing it cannot be silent), the
+   **IDE/ATA** surface (`3F6h` answers `FFh` where both oracles say `50h` — found
+   by the FDC probe, filed against ATA rather than "fixed" by claiming a register
+   that is somebody else's), the UART's OUT2 interrupt gate.
+   Pick by the contract, not by a guest.
    ⚠ **Owed:** a `p_rtc` case that sets PIE and counts periodic interrupts. The existing
    `statusc.clear` row reads `0000h` because the probe never enables the interrupt, not
    because nothing can raise one.
