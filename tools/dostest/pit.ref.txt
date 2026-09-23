@@ -1,9 +1,16 @@
 # p_pit reference -- the 8254 as software can observe it
 #
 # Source: tools/dostest/p_pit.asm on genuine MS-DOS 6.22 (the msdos622 oracle),
-# 2026-09-23. Every case is deterministic by construction: none emits a counter
-# VALUE (which depends on when you look), only structure that is the same on any
-# machine on any day.
+# 2026-09-23. Every case is deterministic ON A HOST THAT IMPLEMENTS THE SURFACE:
+# none emits a counter VALUE, only structure that is the same on any machine on
+# any day.
+#
+# ⚠ THAT GUARANTEE IS CONDITIONAL AND I FIRST WROTE IT AS ABSOLUTE. The three
+#   read-back cases are deterministic only BECAUSE a status byte is stable. On a
+#   host that ignores the Read-Back Command the following IN returns a live
+#   COUNT, so the value varies run to run -- which is what our rdback.st0 does.
+#   The verdict (MISMATCH) is stable; the mismatching VALUE is not, and recording
+#   one run's figure as though it were fixed would have been a stale artefact.
 #
 # ⚠ PROVISIONAL AGAINST SeaBIOS for the one BIOS-dependent row (st0). The chip
 #   rows are chip behaviour and should hold anywhere; re-ask on PCem.
@@ -27,7 +34,11 @@
 # ── NTVDMEX, host 77b9b0bd, same day: 7 of 7 MISMATCH ────────────────────────
 #   ch1.counting      0x0000   port 41h returns 0xFF -> two identical reads
 #   ch2.counting      0x0000   port 42h returns 0xFF -> likewise
-#   rdback.st0        0x0021   read-back swallowed; the 40h read returned a COUNT
+#   rdback.st0      ⚠VARIES   read-back swallowed; the 40h read returned a LIVE
+#                              COUNT, not a status byte -- 0x21 on one run, 0x30
+#                              on the next. The VARIANCE IS ITSELF THE DIAGNOSIS:
+#                              a status byte cannot change between two identical
+#                              runs, a counter must.
 #   rdback.st2        0x003F   0xFF masked to bits 5:0
 #   mode6.readback    0x000E   0xFF masked to the mode field
 #   bcd.valid         0x0000   the BCD control bit is dropped, counts stay binary

@@ -10,11 +10,18 @@
 ; Those are claims about OUR code. This asks the same questions of a real
 ; machine, so that each one becomes a number two hosts either agree on or do not.
 ;
-; ── EVERY CASE IS DETERMINISTIC, WHICH TOOK SOME CARE ────────────────────────
+; ── EVERY CASE IS DETERMINISTIC *ON A HOST THAT IMPLEMENTS THE SURFACE* ──────
 ; A counter's VALUE depends on when you look, so no case emits one. They emit
 ; STRUCTURE instead: did two reads differ (is it counting at all), are the digits
 ; BCD-valid, what do the read-back status bits say. Those are the same on any
 ; machine and on any day, which is what makes a mismatch mean something.
+;
+; ⚠ THE GUARANTEE IS CONDITIONAL, AND THIS COMMENT FIRST CLAIMED IT WAS ABSOLUTE.
+;   The three read-back cases are stable only because a STATUS BYTE is stable. A
+;   host that ignores the Read-Back Command leaves 43h undecoded, so the following
+;   IN hands back a LIVE COUNT and the case varies run to run. The VERDICT stays
+;   MISMATCH either way; the mismatching VALUE does not, so do not record one
+;   run's figure as though it were fixed.
 ;
 ; ⚠ NOTHING HERE REPROGRAMS COUNTER 0. It is the system tick: leave it in a
 ;   different mode and DOS loses time for the rest of the session, and on the rig

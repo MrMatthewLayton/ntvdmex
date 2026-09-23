@@ -147,3 +147,23 @@ off-VM battery written against our own model, so it encodes our behaviour, not t
 datasheet's — the audit the inventory README calls for applies here. **A DOS probe
 (`p_pit.asm`) asking the six questions above of both NTVDMEX and 6.22 does not exist and
 is the next thing to write**, before any of the fixes.
+
+---
+
+## Re-verified on a quiet rig (2026-09-23)
+
+The first `p_pit` run happened while the user was on the rig taking screenshots, so it was
+**not a controlled run** — the same category of evidence as the `db4c059` verdict this
+project has already been burned by. Re-run with the machine idle, host `77b9b0bd`:
+
+**7 of 7 still MISMATCH.** Every gap above stands.
+
+⚠ **But one value moved: `rdback.st0` was `0x21`, now `0x30`.** That is not noise — **it is
+the diagnosis.** A status byte cannot change between two identical runs; a counter must. The
+variance confirms directly that the Read-Back Command is being discarded and the following
+`IN` is handing back a **live count**.
+
+⇒ The probe header's claim that *"every case is deterministic by construction"* was too
+strong and is corrected: the three read-back cases are deterministic **only on a host that
+implements read-back**. The *verdict* is stable; the mismatching *value* is not, so
+`pit.ref.txt` no longer records one run's figure as though it were fixed.
