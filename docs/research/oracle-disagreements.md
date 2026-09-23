@@ -208,3 +208,55 @@ checker was wrong, and because the checker was throwaway it got no review at all
 | `pit.rdback.st0` | `0x34` (mode **2**) | `0x36` (mode **3**) | **Two BIOSes, two answers** — which confirms the mode is a BIOS choice, not a chip fact, and that the original memory-written "mode 3" was right *for some machines*. We currently match QEMU's. Harmless either way for the tick; a guest that reads it back gets one of two truths. |
 | `pit.mode6.readback` | `0x0C` (**un**-normalised) | `0x04` (**normalised** to 2) | ⚠ **This one was called "confirmed against a real kernel" on the strength of ONE oracle.** We built `mode_raw` to report the bits as programmed because QEMU does. dosbox-x normalises. **A one-host run is not a pass**, and this is that rule catching a claim of mine from earlier the same day. |
 | `vga.*` byte 2 (InpStat0) | `0x00` | `0x60` / `0x70` | Previously recorded as "confirmed `0x00`" — again on one oracle. Bits 5:6 are undefined/reserved, so neither is obviously wrong. |
+
+---
+
+# 2026-09-23, later — PCem ran, and it settled every open row
+
+The blocker was never the program. **PCem's data directory is `~/PCem/`**, which it had
+created itself with `configs/ nvr/ screenshots/` and **no `roms/`** — so it could not find a
+single romset. The note in `scripts/pcemoracle.py` (and the memory notes repeating it) said
+`~/Library/Application Support/PCem/`; symlinking there changed nothing, because nothing
+looks there. ⚠ **A path in a note is a claim — `ls` the directory the program actually
+creates.**
+
+Separately: the XPC/Swift crash on launch, which I had twice told the user proved "PCem
+cannot run from an agent shell", was **the command sandbox** blocking its connection to the
+window service. Not the desktop session.
+
+## Every previously-disputed row, settled against a real AMI 486 BIOS + IBM VGA ROM
+
+| Row | 6.22 (QEMU) | dosbox-x | **PCem** | ours | Outcome |
+|---|---|---|---|---|---|
+| `pit.rdback.st0` | `0x34` (mode 2) | `0x36` (mode 3) | **`0x36`** | `0x36` | ✅ **Real BIOS leaves counter 0 in MODE 3.** QEMU is the outlier; we now match. |
+| `pit.mode6.readback` | `0x0C` | `0x04` | **`0x0C`** | `0x0C` | ✅ **Un-normalised confirmed on silicon.** `mode_raw` was right; dosbox-x is the outlier. |
+| `vga.dacmask.wr3C` | `0x0000` | `0x003C` | **`0x003C`** | `0x3C` | ✅ **Ours confirmed.** QEMU is the outlier. |
+| `vga.*` DAC mask byte | `00` | `FF` | **`FF`** | `FF` | ✅ Ours confirmed. |
+| VGA **modes 04/06** | — | — | **9 of 9 derive** | — | ✅ Never open; the checker was wrong. |
+
+⛔⛔ **AND THE MODE-3 ROW IS A CORRECTION TO A CORRECTION.** `docs/ref/pit.md` said "counter 0
+is programmed mode 3", written from memory. I measured QEMU, got mode 2, and "corrected" the
+document — twice, in two files, with a note about never writing expectations from memory.
+**The original claim was right.** A single-oracle measurement is not more trustworthy than a
+remembered fact merely because it is a measurement: it is *one machine's* answer, and that
+machine was the unrepresentative one.
+
+## Still open
+
+| Row | Status |
+|---|---|
+| `pit.bcd.valid` | 6.22 `0`, **PCem `0`**, dosbox-x `1`. Two of three — including the real-BIOS machine — do not model BCD, so **no oracle can verify it**. The datasheet is unambiguous that BCD exists, so implement from the spec and record it as *spec-implemented, unverifiable*, with an abstention rule so the sweep does not read it as a regression. |
+
+## New gaps this run found — the external registers
+
+PCem is the first oracle here with a genuine BIOS, and two registers we answer with `0x00`
+are not `0x00` on it:
+
+| Register | ours | 6.22 | dosbox-x | **PCem** |
+|---|---|---|---|---|
+| **Input Status 0** (`3C2` read) | `0x00` | `0x00` | `0x60`/`0x70` | **`0x10`** |
+| **Feature Control** (`3CA` read) | `0x00` | `0x00` | `0x70` | **`0xFF`** |
+
+`0x10` is **bit 4, Switch Sense** — the monitor-ID sense line, which a real card drives and
+we do not. All four oracles disagree, so this needs its own probe rather than a guess, but
+`0x00` is now known to be wrong for a period-correct machine.

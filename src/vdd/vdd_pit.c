@@ -512,11 +512,17 @@ void vdd_pit_reset(void *self)
          p_pit.asm pit.rdback.st0 = 0x34 vs our 0x30), and the bare-count load
          rule took the one-shot path -- reloading immediately instead of at the
          end of the period.
-       ⚠ THE MODE IS A BIOS CHOICE, NOT A CHIP FACT. 2 is what the 6.22 oracle's
-         BIOS leaves; a period-correct AMI ROM may differ, and PCem is what would
-         settle it. Matching the oracle we HAVE beats leaving a value nothing
-         chose. docs/ref/pit.md 6. */
-    st->mode = 2; st->mode_raw = 2;
+       ⚠⚠ THE MODE IS A BIOS CHOICE, AND PCem HAS NOW SETTLED IT: **MODE 3**.
+         Three answers, and the majority was wrong: SeaBIOS/QEMU leaves mode 2,
+         dosbox-x mode 3, and a REAL AMI 486 BIOS with a genuine IBM VGA ROM
+         leaves mode 3 (p_pit pit.rdback.st0 = 0x36). This project targets a
+         period-correct PC, so 3 is the answer that matters.
+       ⛔ AND docs/ref/pit.md SAID MODE 3 FIRST, FROM MEMORY, AND I "CORRECTED" IT
+         TO 2 ON THE STRENGTH OF ONE ORACLE. The original claim was right. A
+         single-oracle measurement is not more trustworthy than a remembered fact
+         just because it is a measurement -- it is one machine's answer, and this
+         one happened to be the unrepresentative machine. */
+    st->mode = 3; st->mode_raw = 3;
     st->frame_us = fus ? fus : PIT_DEFAULT_FRAME_US;
     st->guard = guard; st->guard_ctx = gctx;        /* the lock survives a reset */
     /* ── COUNTER 1 IS FREE-RUNNING BEFORE ANYONE PROGRAMS IT. ────────────────
@@ -544,7 +550,7 @@ int vdd_pit_init(vdd_bus *b, void *self)
          running host never gets. Putting mode 2 in reset alone left Read-Back
          still reporting mode 0 on the rig -- the change measured as having done
          nothing, which is how a fix that is not wired up looks. */
-    if (!st->mode && !st->mode_raw) { st->mode = 2; st->mode_raw = 2; }
+    if (!st->mode && !st->mode_raw) { st->mode = 3; st->mode_raw = 3; }
     if (!st->c1.reload) {                       /* counter 1: free-running refresh */
         st->c1.reload = 18; st->c1.access = 3; st->c1.mode = 2; st->c1.mode_raw = 2;
     }
