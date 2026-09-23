@@ -147,7 +147,17 @@ static void pit_out_locked(pit_state *st, uint16_t port, uint8_t val)
                then follow is the same CE a handful of clocks on, and Lemmings reads
                it right here -- keeping the latch is the same number without the
                mode-3 by-two arithmetic being applied to a mode-0 count. */
-            st->access = acc; st->mode = (uint8_t)((val >> 1) & 7); st->wr_flip = 0;
+            /* ── MODES 6 AND 7 ARE NOT MODES. ─────────────────────────────────
+                 The field is three bits wide but only six modes exist: 110 IS mode 2
+                 and 111 IS mode 3 (docs/ref/pit.md 3). Storing the raw bits let every
+                 later test -- `mode == 2` for the periodic bare-count load rule,
+                 `mode == 3` for the decrement-by-two count law -- silently exclude a
+                 guest that programmed the alias. Normalise for BEHAVIOUR here and
+                 keep the raw bits for the read-back status byte, which a real 8254
+                 reports UN-normalised (measured: pit.mode6.readback = 0x0C). */
+            st->mode_raw = (uint8_t)((val >> 1) & 7);
+            st->mode = (st->mode_raw >= 6) ? (uint8_t)(st->mode_raw - 4) : st->mode_raw;
+            st->access = acc; st->wr_flip = 0;
             st->cw_armed = 1; st->next_pending = 0;
         }
     } else if (port == 0x40) {               /* channel-0 reload write          */

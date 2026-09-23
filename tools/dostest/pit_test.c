@@ -16,6 +16,18 @@ static int total = 0, fails = 0;
         else      { printf("  FAIL  %s\n", (msg)); fails++; }  \
     } while (0)
 
+/* Read counter 0 the way a guest does: Counter Latch Command, then two INs.
+   Deliberately NOT a peek at pit_current_count -- that is static, and the port
+   path is the contract a guest actually depends on. */
+static unsigned pit_latched_count(vdd_bus *bus)
+{
+    uint32_t lo = 0, hi = 0, cw = 0x00;      /* ch0, access 00 = latch */
+    vdd_bus_io(bus, 0x43, 1, 0, &cw);
+    vdd_bus_io(bus, 0x40, 1, 1, &lo);
+    vdd_bus_io(bus, 0x40, 1, 1, &hi);
+    return (unsigned)((lo & 0xFF) | ((hi & 0xFF) << 8));
+}
+
 static int g_irq = 0;
 static void irq_sink(void *ctx, uint8_t irq) { (void)ctx; if (irq == 0) g_irq++; }
 
@@ -293,6 +305,69 @@ int main(void)
         ps->rtc_now = fake_rtc;
     }
 
+
+    /* T9: MODES 6 AND 7 ARE ALIASES FOR 2 AND 3. -----------------------------
+       docs/ref/pit.md 3: the Control Word's mode field is three bits, but only
+       six modes exist -- 110 IS mode 2 and 111 IS mode 3 on real silicon. Our
+       model stores the raw three bits, so anything that tests `mode == 2` or
+       `mode == 3` silently excludes a guest that programmed the alias.
+
+       ⚠ THE FAILURE IS NARROWER THAN THE INVENTORY FIRST CLAIMED, and the
+         difference matters. `periodic` does NOT gate IRQ0 -- vdd_pit_add_clocks
+         raises it from the accumulator regardless of mode -- so an aliased guest
+         still gets its interrupt. What it loses is:
+           * the BARE-COUNT LOAD RULE (a count written with no Control Word must
+             wait for the end of the current period in modes 2/3, not restart);
+           * mode 3's DECREMENT-BY-TWO count law on read-back.
+         Both are timing/read-back defects, not a dead timer. Measuring before
+         asserting is the whole point. */
+    {
+        uint32_t w;
+        /* Mode 2, the reference behaviour: Control Word + count loads at once... */
+        w = 0x34; vdd_bus_io(&bus, 0x43, 1, 0, &w);      /* ch0 lo/hi mode 2   */
+        w = 0x00; vdd_bus_io(&bus, 0x40, 1, 0, &w);
+        w = 0x10; vdd_bus_io(&bus, 0x40, 1, 0, &w);      /* -> 0x1000          */
+        CHECK(pit.reload == 0x1000 && !pit.next_pending,
+              "mode2: control word + count loads immediately");
+        /* ...and a BARE count parks until the end of the period. */
+        w = 0x00; vdd_bus_io(&bus, 0x40, 1, 0, &w);
+        w = 0x20; vdd_bus_io(&bus, 0x40, 1, 0, &w);      /* -> 0x2000, bare    */
+        CHECK(pit.reload == 0x1000 && pit.next_pending,
+              "mode2: a BARE count parks until the period ends");
+
+        /* Mode 6 must do exactly the same. */
+        w = 0x3C; vdd_bus_io(&bus, 0x43, 1, 0, &w);      /* ch0 lo/hi mode 6   */
+        w = 0x00; vdd_bus_io(&bus, 0x40, 1, 0, &w);
+        w = 0x10; vdd_bus_io(&bus, 0x40, 1, 0, &w);
+        CHECK(pit.reload == 0x1000 && !pit.next_pending,
+              "mode6: control word + count loads immediately");
+        w = 0x00; vdd_bus_io(&bus, 0x40, 1, 0, &w);
+        w = 0x20; vdd_bus_io(&bus, 0x40, 1, 0, &w);
+        CHECK(pit.reload == 0x1000 && pit.next_pending,
+              "mode6 == mode2: a BARE count parks until the period ends");
+
+        /* Mode 3 counts DOWN BY TWO; mode 7 must read back the same way.
+           Read it the way a guest does -- latch, then two INs -- rather than by
+           reaching into the model: the port path is the contract. */
+        w = 0x36; vdd_bus_io(&bus, 0x43, 1, 0, &w);      /* ch0 lo/hi mode 3   */
+        w = 0x00; vdd_bus_io(&bus, 0x40, 1, 0, &w);
+        w = 0x10; vdd_bus_io(&bus, 0x40, 1, 0, &w);      /* -> 0x1000          */
+        pit.total_clocks = pit.load_clocks + 4;
+        CHECK(pit_latched_count(&bus) == 0x1000 - 8,
+              "mode3: the count decrements by two per clock");
+
+        w = 0x3E; vdd_bus_io(&bus, 0x43, 1, 0, &w);      /* ch0 lo/hi mode 7   */
+        w = 0x00; vdd_bus_io(&bus, 0x40, 1, 0, &w);
+        w = 0x10; vdd_bus_io(&bus, 0x40, 1, 0, &w);
+        pit.total_clocks = pit.load_clocks + 4;
+        CHECK(pit_latched_count(&bus) == 0x1000 - 8,
+              "mode7 == mode3: the count decrements by two per clock");
+
+        /* Leave counter 0 as the BIOS would: periodic, 65536. */
+        w = 0x34; vdd_bus_io(&bus, 0x43, 1, 0, &w);
+        w = 0x00; vdd_bus_io(&bus, 0x40, 1, 0, &w);
+        w = 0x00; vdd_bus_io(&bus, 0x40, 1, 0, &w);
+    }
 
     printf("\n%d checks, %d failed\n", total, fails);
     return fails ? 1 : 0;

@@ -27,7 +27,14 @@ typedef struct pit_state {
     vdd_bus *bus;
     uint16_t reload;        /* channel-0 reload latch (0 => 65536 effective)    */
     uint8_t  access;        /* access mode: 1=lo, 2=hi, 3=lo/hi                  */
-    uint8_t  mode;          /* operating mode 0-5 (shapes the count read-back)  */
+    uint8_t  mode;          /* EFFECTIVE mode 0-5 (shapes the count read-back)   */
+    uint8_t  mode_raw;      /* the three bits AS PROGRAMMED. Modes 6 and 7 do not
+                               exist -- 110 IS mode 2 and 111 IS mode 3 -- so `mode`
+                               is normalised for BEHAVIOUR. But MEASURED on a real
+                               8254 (tools/dostest/p_pit.asm, pit.mode6.readback =
+                               0x0C): the Read-Back status byte reports the bits the
+                               guest WROTE, un-normalised. Keeping both is what lets
+                               the behaviour be right and the read-back be honest. */
     uint8_t  wr_flip;       /* lo/hi write phase (0 => lo next)                 */
     uint8_t  wr_lo;         /* the LSB written so far in lo/hi mode -- see pit_out */
     uint8_t  rd_flip;       /* lo/hi read phase                                 */

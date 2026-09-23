@@ -66,10 +66,26 @@ which is the *"runs but lies"* shape this project treats as the most expensive k
 count means 65536 where it asked for 10000. Nothing reads back the flag either, because
 read-back does not exist.
 
-⛔ **Modes 6 and 7 are not aliased to 2 and 3.** `vdd_pit.c:90` tests
-`periodic = (st->mode == 2 || st->mode == 3)`, so a guest that programs `110` — legal, and
-identical to mode 2 on hardware — **gets no periodic interrupt at all**. This is a
-one-line fix with a real failure behind it.
+✅ **Modes 6 and 7 are now aliased to 2 and 3.** *(FIXED 2026-09-23.)*
+
+⚠ **And the claim this row first made was too strong — corrected here rather than quietly
+edited.** It said a guest programming `110` *"gets no periodic interrupt at all"*. It does
+get one: `vdd_pit_add_clocks` raises IRQ0 from the accumulator **regardless of mode**, and
+`periodic` only ever gated the **bare-count load rule**. The real defect was narrower:
+
+- a bare count in mode 6 **restarted immediately** instead of waiting for the end of the
+  current period (a jitter/rate defect, not a dead timer);
+- mode 7 read back a count stepping **by one** where mode 3 steps **by two**.
+
+Both are now pinned by `tools/dostest/pit_test.c` T9, which **failed on the old code and
+passes on the new** — and whose mode-2/mode-3 reference cases passed throughout, which is
+what proves the tests measure the alias rather than something incidental.
+
+⇒ **The fix keeps BOTH values.** `mode` is normalised for behaviour; new `mode_raw` holds
+the bits as programmed, because a real 8254 reports them **un-normalised** in the Read-Back
+status byte (measured: `pit.mode6.readback` = `0x0C`, not `0x04`). Normalising in one place
+and reporting from the other is what lets the behaviour be right *and* the read-back honest
+once §3 is implemented.
 
 ## 3. The Read-Back Command — **entirely absent**
 
@@ -133,8 +149,8 @@ or never.
 
 ## What to fix, in order
 
-1. **Alias modes 6 and 7 to 2 and 3** (`vdd_pit.c:90`, `:150`). One line; today a legal
-   programming makes IRQ0 stop.
+1. ✅ ~~Alias modes 6 and 7 to 2 and 3.~~ **DONE 2026-09-23.** Skyroads re-run as the
+   timing canary after it: `n8=0 max_ms=6`, the documented guard, unchanged.
 2. **Make `41h`/`42h` readable** as real counters. Removes a whole class of "no time is
    passing" answers.
 3. **Implement the Read-Back Command and the status byte**, including the OUT pin and the
