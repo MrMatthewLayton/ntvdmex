@@ -129,9 +129,15 @@ which moves the text cursor by one scan line (`0x0607` → the card's own `0x0D0
    exist at all: ports `70h`/`71h` were claimed by nothing, so Status A's UIP bit read
    as set for ever and **the canonical "poll UIP, then read the time" loop never
    exited**. New `vdd_cmos.{c,h}`.
-   ▶ **Next candidates in the contract:** the RTC's **IRQ8** (periodic/alarm/update — a
-   steady tick independent of the 8254, which is why extenders use it), the 16550 UART,
-   the 82077AA floppy controller. Pick by the contract, not by a guest.
+   The RTC's **periodic IRQ8** followed — on the PIT's own pacer, dormant unless a guest
+   programs it, timing canary re-run (`n8=0 max_ms=7`).
+   ▶ **Next candidates in the contract:** the 16550 UART and the 82077AA floppy
+   controller — **both likely the same "firmware present, chip absent" split** the RTC,
+   the 8042 and the FDC all turned out to have; the RTC's alarm and update-ended
+   interrupts. Pick by the contract, not by a guest.
+   ⚠ **Owed:** a `p_rtc` case that sets PIE and counts periodic interrupts. The existing
+   `statusc.clear` row reads `0000h` because the probe never enables the interrupt, not
+   because nothing can raise one.
    ⛔ **Recorded and deliberately unfixed:** the PIC's ICW1 read-select reset and the
    8042 output port's undefined bits are both **blocked on a second oracle** (only PCem
    can see either); we implement Special Fully Nested Mode unconditionally while never

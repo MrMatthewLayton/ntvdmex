@@ -375,12 +375,69 @@ as `dma.status.idle`. And the **day of week is fixed at Sunday, wrong six days i
 the host's clock reading carries no weekday, and deriving one means a calendar rule in a
 device model. Recorded rather than quietly computed.
 
+---
+
+## 10. IRQ8 — the tick the 8254 cannot disturb (`ff0d956`)
+
+The gap I had just named as the biggest on the RTC surface, so leaving it named-but-undone
+would have been the appended-to-doc failure mode. The periodic interrupt is a fast, steady
+tick **independent of the 8254** — which is why Windows and DOS extenders use it: *a guest
+that has reprogrammed the PIT has not touched this one.*
+
+**It rides the host's existing PIT pacer**, off the same `QueryPerformanceCounter` delta
+and inside the same lock, rather than a second thread. **One pacer, one lock, one opinion
+about how much time has passed** — s61 measured what a second clock does to this project.
+
+⚠ **Dormant unless asked, and that is what made it safe to add.** PIE *and* a non-zero
+rate select *and* IRQ8 unmasked on the slave PIC *and* IRQ2 on the master — all off at
+reset. `cmos_test.c` pins the negative case: a whole second of clocks with PIE clear
+raises **not one** interrupt.
+
+### Two lies came out with it
+
+Status B had to become writable for PIE to be reachable, and once it was, two bits that
+had been *ignored* became bits a guest can actually set:
+
+- **DM (bit 2)** — a model that ignores it hands a binary-mode guest a BCD byte, and
+  `0x59` seconds reads as **eighty-nine**.
+- **24/12 (bit 1)** — 12-hour mode is **not "subtract twelve"**: bit 7 of the hours
+  register is PM, midnight is 12 AM and noon is 12 PM. Ignoring it tells a 12-hour guest
+  that 14:00 is **2 AM**.
+
+### ⛔ Two of my own off-VM checks asserted what this deliberately changed
+
+The *"status B is read-only"* check wrote `0xFF`, which left DM and the 12-hour bit set —
+and the NMI-mask check **twenty lines later** then read the hour in binary 12-hour format
+and failed for a reason that had nothing to do with what it tested.
+
+> **A test that leaves state behind misattributes the next failure.**
+
+Corrected, with the reasoning kept: the *clock* registers stay refused because we cannot
+move the host's clock; a **control** register is a different thing, and collapsing the two
+into *"everything below `0x0E` is read-only"* was the error.
+
+⚠ **The first deploy of this build failed to copy**, and `bmstage`'s md5 check caught it.
+A silent failure there would have meant measuring the old binary.
+
+**Timing canary**, because this adds a call to the PIT pacer — the most shared path in the
+project: Skyroads **`n8=0 max_ms=7`** against the guard of `n8=0 max_ms≈6`, with
+`pacer_prio=0 joy_thread=0 pit_split=1` unchanged, and no IRQ8 in the run.
+
+### And a row whose *explanation* changed while its *value* did not
+
+`rtc.statusc.clear` still reads `0000h`. When first recorded that was because we raised no
+IRQ8 at all; now it is because **the probe never enables PIE**. Still not a defect — but a
+row whose reasoning moves while its number stays put is exactly the kind that goes quietly
+wrong, so both the inventory and the recorded rationale now say which reason applies.
+**Owed: a probe case that sets PIE and counts.**
+
 ## State at session end
 
-- `offvm` **1520/0** (+76 across six surfaces; `cmos_test.c` is a new battery).
+- `offvm` **1542/0** (+98 across six surfaces; `cmos_test.c` is a new battery).
 - **VGA register parity 99.9%** (689/690 of the two-oracle agreement). *Re-run, never quote.*
-- `bin\` = `07242fab`. Stable zip `dist\ntvdmex-20260917-4847355.zip` **untouched**;
+- `bin\` = `71ef4737`. Stable zip `dist\ntvdmex-20260917-4847355.zip` **untouched**;
   checkpoint `59fac7d`.
 - **User confirmed by hand:** Doom and Skyroads, after the Input Status 0 change.
+- **Timing canary after the IRQ8 work:** Skyroads `n8=0 max_ms=7`, guard values unchanged.
 - **Owed from a human:** a by-hand look after the mode-set fix — the one-scan-line cursor
   move is the only visible part of it.
