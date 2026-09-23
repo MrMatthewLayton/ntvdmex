@@ -27,7 +27,19 @@
                                     reports the bits AS PROGRAMMED (6), it does
                                     NOT normalise to 2. Read-back fidelity only --
                                     it does not prove the aliasing BEHAVIOUR.
-== pit.bcd.valid           0x0001   all four nibbles of a BCD count are <= 9
+== pit.bcd.valid           0x0000   ⛔ BLOCKED ON PCem -- NOT a verified row.
+                                    The first version of this case took ONE
+                                    sample, and a BINARY counter passes that
+                                    whenever its four nibbles happen to be <= 9
+                                    (~1 value in 6). It duly reported 0x0001 on
+                                    both hosts while NEITHER implements BCD.
+                                    Strengthened to 16 spread samples, the ORACLE
+                                    fails it too: QEMU's PIT does not model BCD
+                                    either. So both hosts now answer 0x0000 and
+                                    dosdiff calls it AGREE -- which is AGREEMENT
+                                    ON ABSENCE, not verification.
+                                    ⇒ Needs a real chip model. Same queue as the
+                                    VGA modes 04/06 row and the DAC pixel mask.
 == pit.61h.bit5.toggles    0x0001   counter 2's OUT pin, read at port 61h bit 5,
                                     changes state within a bounded poll
 
@@ -41,7 +53,9 @@
 #                              runs, a counter must.
 #   rdback.st2        0x003F   0xFF masked to bits 5:0
 #   mode6.readback    0x000E   0xFF masked to the mode field
-#   bcd.valid         0x0000   the BCD control bit is dropped, counts stay binary
+#   bcd.valid         0x0000   the BCD control bit is stored and never consumed
+#                              (vdd_pit.c:99) -- but see above: the ORACLE cannot
+#                              currently prove what the right answer is.
 #   61h.bit5.toggles  0x0000   bit 5 echoes what was written, never the OUT pin
 #
 # ★ Every one of these was predicted from the CODE in docs/inventory/pit.md

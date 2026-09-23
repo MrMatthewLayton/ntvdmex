@@ -23,19 +23,82 @@
      blank screen was never the count -- it was IRQ0 re-entering the game's timer ISR
      (the host auto-EOI'd IRQ0; see irq0_ack in the host) once the tick was correct.
      Both halves are now fixed; see docs/STATE.md session 70. */
-static uint16_t pit_current_count(const pit_state *st)
+/* The count law, by mode. Split out of pit_current_count so counters 1 and 2 can
+   use the same arithmetic instead of a second copy that drifts from it. */
+static uint16_t pit_count_law(uint8_t mode, uint32_t R, uint64_t elapsed)
 {
-    uint32_t R = pit_eff_reload(st);
-    uint64_t elapsed = (st->total_clocks >= st->load_clocks)
-                     ? st->total_clocks - st->load_clocks : 0;
-    if (st->mode == 0)
+    if (mode == 0)
         return (uint16_t)(R - elapsed);      /* wraps through 0xFFFF past zero   */
-    if (st->mode == 3) {
+    if (mode == 3) {
         uint32_t half  = (R + 1) / 2;
         uint32_t phase = (uint32_t)(elapsed % half);
         return (uint16_t)(R - 2 * phase);    /* R when phase==0 (65536 -> 0)     */
     }
     return (uint16_t)(R - (uint32_t)(elapsed % R));
+}
+
+static uint16_t pit_current_count(const pit_state *st)
+{
+    uint64_t elapsed = (st->total_clocks >= st->load_clocks)
+                     ? st->total_clocks - st->load_clocks : 0;
+    return pit_count_law(st->mode, pit_eff_reload(st), elapsed);
+}
+
+/* Counters 1 and 2. They have no IRQ engine and no accumulator: a read is simply
+   "how far has the counting element got since it was loaded". */
+static uint16_t chan_count(const pit_state *st, const pit_chan *c)
+{
+    uint32_t R = c->reload ? (uint32_t)c->reload : 0x10000u;
+    uint64_t elapsed = (st->total_clocks >= c->load_clocks)
+                     ? st->total_clocks - c->load_clocks : 0;
+    return pit_count_law(c->mode, R, elapsed);
+}
+
+/* A count write, lo/hi buffered exactly as counter 0 does it: a HALF-WRITTEN
+   COUNT IS NOT A COUNT (see the note on port 0x40 below -- the same defect would
+   otherwise be reintroduced here). */
+static void chan_write_count(pit_state *st, pit_chan *c, uint8_t val)
+{
+    uint16_t v;
+    if (c->access == 1)      v = val;                        /* lo only         */
+    else if (c->access == 2) v = (uint16_t)(val << 8);       /* hi only         */
+    else {                                                   /* lo then hi      */
+        if (!c->wr_flip) { c->wr_lo = val; c->wr_flip = 1; return; }
+        v = (uint16_t)((val << 8) | c->wr_lo);
+        c->wr_flip = 0;
+    }
+    c->reload = v;
+    c->load_clocks = st->total_clocks;
+}
+
+/* A read, honouring the latch and the access mode -- the same contract as 0x40. */
+static void chan_read_count(pit_state *st, pit_chan *c, uint32_t *val)
+{
+    uint16_t v = c->latched ? c->latch : chan_count(st, c);
+    uint8_t acc = c->access ? c->access : 3;
+    if (acc == 1)      { *val = v & 0xFF;        c->latched = 0; }
+    else if (acc == 2) { *val = (v >> 8) & 0xFF; c->latched = 0; }
+    else {
+        if (!c->rd_flip) { *val = v & 0xFF; c->rd_flip = 1; }
+        else { *val = (v >> 8) & 0xFF; c->rd_flip = 0; c->latched = 0; }
+    }
+}
+
+/* One control word, applied to counter 1 or 2. */
+static void chan_control(pit_state *st, pit_chan *c, uint8_t val)
+{
+    uint8_t acc = (uint8_t)((val >> 4) & 3);
+    if (acc == 0) {                              /* Counter Latch Command       */
+        c->latch = chan_count(st, c);
+        c->latched = 1; c->rd_flip = 0;
+        return;
+    }
+    c->access   = acc;
+    c->mode_raw = (uint8_t)((val >> 1) & 7);
+    c->mode     = (c->mode_raw >= 6) ? (uint8_t)(c->mode_raw - 4) : c->mode_raw;
+    c->bcd      = (uint8_t)(val & 1);
+    c->wr_flip  = 0;
+    c->load_clocks = st->total_clocks;
 }
 
 /* --- the time engine: clocks -> IRQ0 pulses ------------------------------- */
@@ -126,11 +189,13 @@ static void pit_out_locked(pit_state *st, uint16_t port, uint8_t val)
     if (port == 0x43) {                      /* mode/command register           */
         uint8_t ch = (uint8_t)(val >> 6);
         uint8_t acc = (uint8_t)((val >> 4) & 3);
-        if (ch == 2) {                       /* channel 2 = PC-speaker tone     */
+        if (ch == 2) {                       /* channel 2: speaker tone AND a counter */
             if (acc != 0) { st->ch2_access = acc; st->ch2_wr_flip = 0; }
-            return;                          /* (ch2 latch-count not modelled)  */
+            chan_control(st, &st->c2, val);  /* latch command included          */
+            return;
         }
-        if (ch != 0) return;                 /* channels 1 (refresh) ignored    */
+        if (ch == 1) { chan_control(st, &st->c1, val); return; }
+        if (ch != 0) return;                 /* ch == 3 is Read-Back -- not yet */
         if (acc == 0) {                      /* latch count command             */
             st->latch = pit_current_count(st);
             st->latched = 1; st->rd_flip = 0;
@@ -208,8 +273,14 @@ static void pit_out_locked(pit_state *st, uint16_t port, uint8_t val)
             if (!st->ch2_wr_flip) { st->ch2_reload = (uint16_t)((st->ch2_reload & 0xFF00) | val); st->ch2_wr_flip = 1; }
             else { st->ch2_reload = (uint16_t)((st->ch2_reload & 0x00FF) | ((uint16_t)val << 8)); st->ch2_wr_flip = 0; }
         }
+        /* ...and the same byte, into the COUNTER view. The speaker only ever
+           wanted a divisor; a guest that programs counter 2 to MEASURE something
+           needs the load moment recorded too. */
+        st->c2.access = acc;
+        chan_write_count(st, &st->c2, val);
+    } else if (port == 0x41) {               /* counter 1 -- DRAM refresh       */
+        chan_write_count(st, &st->c1, val);
     }
-    /* port 0x41 (DRAM refresh) not modelled */
 }
 
 static void pit_out(void *self, uint16_t port, uint8_t w, uint32_t v)
@@ -224,6 +295,10 @@ static void pit_out(void *self, uint16_t port, uint8_t w, uint32_t v)
 static void pit_in_locked(pit_state *st, uint16_t port, uint32_t *val)
 {
     uint16_t v; uint8_t acc;
+    if (port == 0x41) { chan_read_count(st, &st->c1, val); return; }
+    if (port == 0x42) { chan_read_count(st, &st->c2, val); return; }
+    /* 0x43 is write-only on the part; a read is undefined. Answer consistently
+       rather than plausibly -- see docs/inventory/pit.md 1. */
     if (port != 0x40) { *val = 0xFF; return; }
     v = st->latched ? st->latch : pit_current_count(st);
     acc = st->access ? st->access : 3;
@@ -340,6 +415,17 @@ void vdd_pit_reset(void *self)
     st->access = 3;
     st->frame_us = fus ? fus : PIT_DEFAULT_FRAME_US;
     st->guard = guard; st->guard_ctx = gctx;        /* the lock survives a reset */
+    /* ── COUNTER 1 IS FREE-RUNNING BEFORE ANYONE PROGRAMS IT. ────────────────
+         On a PC the BIOS sets it to mode 2, divisor 18 for DRAM refresh and then
+         leaves it alone forever; its gate is tied high. A guest that simply READS
+         it -- which is the whole reason timing loops use counter 1, nothing else
+         touches it -- must see a counter in motion. Left at reset's zeros it
+         would read a constant, which is the "no time is passing" answer this
+         surface was measured to be giving. */
+    st->c1.reload = 18; st->c1.access = 3; st->c1.mode = 2; st->c1.mode_raw = 2;
+    /* Counter 2 is NOT free-running: its gate is port 61h bit 0 and software
+       decides. Left at reset defaults until a guest programs it. */
+    st->c2.access = 3;
 }
 
 int vdd_pit_init(vdd_bus *b, void *self)

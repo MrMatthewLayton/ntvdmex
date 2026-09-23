@@ -23,6 +23,30 @@
 /* A wall-clock reading, in ordinary binary -- INT 1Ah converts to BCD at the edge. */
 struct vdd_rtc { unsigned cent, year, month, day, hour, min, sec; };
 
+/* ── COUNTERS 1 AND 2, AS COUNTERS. ──────────────────────────────────────────
+   Counter 0 keeps its own flat fields below and is DELIBERATELY not folded in
+   here. It carries the IRQ0 engine, the accumulator and the pacer's guard, it is
+   the hottest path in the device, and s61 measured what happens when its timing
+   is disturbed. A refactor that moved it would be a second change riding along
+   with this one; the duplication is the cheaper risk.
+
+   What these two need is only what a guest can OBSERVE: a reload, an access mode
+   and its read/write phases, a latch, and the moment the count was loaded --
+   because a count read is computed from elapsed clocks, not stored. */
+typedef struct {
+    uint16_t reload;        /* 0 => 65536 effective                             */
+    uint8_t  access;        /* 1=lo, 2=hi, 3=lo/hi                              */
+    uint8_t  mode;          /* EFFECTIVE mode 0-5 (6/7 normalised)              */
+    uint8_t  mode_raw;      /* as programmed -- for the Read-Back status byte    */
+    uint8_t  bcd;           /* control word bit 0                               */
+    uint8_t  wr_flip;       /* lo/hi write phase                                */
+    uint8_t  wr_lo;         /* LSB buffered in lo/hi mode                       */
+    uint8_t  rd_flip;       /* lo/hi read phase                                 */
+    uint8_t  latched;       /* a snapshot is frozen for reading                 */
+    uint16_t latch;         /* ...that snapshot                                 */
+    uint64_t load_clocks;   /* total_clocks when the count was last loaded      */
+} pit_chan;
+
 typedef struct pit_state {
     vdd_bus *bus;
     uint16_t reload;        /* channel-0 reload latch (0 => 65536 effective)    */
@@ -56,6 +80,12 @@ typedef struct pit_state {
     uint16_t ch2_reload;    /* channel-2 reload (the PC-speaker tone divisor)   */
     uint8_t  ch2_access;    /* channel-2 access mode (1=lo, 2=hi, 3=lo/hi)      */
     uint8_t  ch2_wr_flip;   /* channel-2 lo/hi write phase                      */
+    /* ⚠ ch2_reload/ch2_access/ch2_wr_flip above are the SPEAKER's view and stay
+         authoritative for pit_ch2_hz(); c2 below mirrors them and adds what a
+         COUNTER needs. Two views of one counter is not lovely, but rewiring the
+         audio path is a separate change from making the port readable. */
+    pit_chan c1;            /* counter 1 -- DRAM refresh, free-running          */
+    pit_chan c2;            /* counter 2 -- the PC speaker, as a counter        */
     /* ── HOST SERIALIZATION HOOK (may be NULL, e.g. in the off-VM tests). ─────────
        A real 8254 counts on its own crystal, in parallel with the CPU; this model
        only counts when a thread runs its code, and s61 measured what happens when

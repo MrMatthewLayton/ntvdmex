@@ -50,6 +50,9 @@
         jmp     start
 %include "probe.inc"
 
+; ---------------------------------------------------------------- state
+bcdok   db      1                       ; cleared by any non-BCD nibble, any sample
+
 ; ---------------------------------------------------------------- helpers
 
 out43:                                  ; AL -> control port
@@ -214,30 +217,42 @@ start:
 ;    counter walks straight through 0xA.. and fails this.
 ;    Emits 1 if all four nibbles are BCD-valid.
 ; ════════════════════════════════════════════════════════════════════════════
+;    ⚠ SIXTEEN SAMPLES, NOT ONE, AND THE REASON IS A FALSE PASS THIS CASE
+;      ACTUALLY PRODUCED. With a single sample a BINARY counter passes whenever
+;      its four nibbles happen to be <= 9 -- about one value in six -- and on the
+;      first run after counters 1 and 2 became readable it did exactly that:
+;      NTVDMEX reported "BCD valid" while not implementing BCD at all. Sixteen
+;      spread samples make that essentially impossible (~0.15^16).
+;      ⛔ An all-AGREE probe is not a verified surface.
         mov     al, 0B1h                ; 10 11 000 1: ch2, lo/hi, mode 0, BCD
         call    out43
         mov     al, 099h
         out     042h, al
         mov     al, 099h
         out     042h, al
-        mov     cx, 100h
+        mov     byte [bcdok], 1
+        mov     bp, 16
+.bcdsamp:
+        mov     cx, 40h
 .w3:    loop    .w3
         mov     cl, 2
-        call    latch_read              ; AX = the BCD count
+        call    latch_read              ; AX = the count as read back
         mov     bx, ax
-        mov     dx, 1                   ; assume valid
         mov     cx, 4
 .digit: mov     ax, bx
         and     al, 00Fh
         cmp     al, 9
         jbe     .ok
-        xor     dx, dx                  ; a nibble > 9: not BCD
+        mov     byte [bcdok], 0         ; a nibble > 9 in ANY sample: not BCD
 .ok:    shr     bx, 1
         shr     bx, 1
         shr     bx, 1
         shr     bx, 1
         loop    .digit
-        mov     ax, dx
+        dec     bp
+        jnz     .bcdsamp
+        xor     ax, ax
+        mov     al, [bcdok]
         POISON
         call    probe_capture
         EMIT    "pit.bcd.valid", "AX"   ; expect 1

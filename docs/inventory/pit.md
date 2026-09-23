@@ -62,9 +62,18 @@ which is the *"runs but lies"* shape this project treats as the most expensive k
 | Mode | 3:1 | **PART** | `vdd_pit.c:150` — stored as the raw 3 bits |
 | **BCD** | 0 | **MISS** | `vdd_pit.c:150` — `(val >> 1) & 7` **drops bit 0 entirely** |
 
-⛔ **BCD is dropped.** A guest that programs BCD counts gets binary ones, and its maximum
-count means 65536 where it asked for 10000. Nothing reads back the flag either, because
-read-back does not exist.
+⛔ **BCD is dropped** — the flag is now *stored* (`vdd_pit.c:99`) and still never consumed,
+so counts stay binary and a maximum count means 65536 where the guest asked for 10000.
+
+⛔⛔ **AND IT IS BLOCKED ON PCem, WHICH ONLY BECAME VISIBLE AFTER A FALSE PASS.** The probe's
+first BCD case took **one** sample, and a binary counter passes that whenever its four
+nibbles happen to be ≤ 9 — about one value in six. It reported a clean pass on both hosts
+while **neither implements BCD**. Strengthened to 16 spread samples, the **oracle fails it
+too**: QEMU's PIT does not model BCD. Both hosts now answer `0`, which `dosdiff` scores
+AGREE — **agreement on absence, not verification**.
+
+⇒ **Do not implement BCD against this oracle.** It joins the VGA modes 04/06 row and the DAC
+pixel mask in the queue of things only a real chip model can settle.
 
 ✅ **Modes 6 and 7 are now aliased to 2 and 3.** *(FIXED 2026-09-23.)*
 
@@ -151,13 +160,16 @@ or never.
 
 1. ✅ ~~Alias modes 6 and 7 to 2 and 3.~~ **DONE 2026-09-23.** Skyroads re-run as the
    timing canary after it: `n8=0 max_ms=6`, the documented guard, unchanged.
-2. **Make `41h`/`42h` readable** as real counters. Removes a whole class of "no time is
-   passing" answers.
+2. ✅ ~~Make `41h`/`42h` readable as real counters.~~ **DONE 2026-09-23.** `p_pit`
+   `ch1.counting` and `ch2.counting` both moved MISMATCH → AGREE. Skyroads re-run:
+   `n8=0 max_ms=6`, unchanged.
 3. **Implement the Read-Back Command and the status byte**, including the OUT pin and the
    null-count flag. The largest gap, and self-contained.
 4. **Consume counter 2's GATE from `61h` bit 0, and report its OUT at `61h` bit 5.**
    Together with (2) and (3) this completes the polling idiom.
-5. **Honour the BCD bit.**
+5. ⛔ ~~Honour the BCD bit.~~ **BLOCKED ON PCem** — the oracle cannot say what correct is
+   (see §2). Implementing from the datasheet alone would be writing an expectation from
+   memory, which is the one thing this programme exists to stop.
 6. **Model the OUT pin as state for all six modes**, which is what (3) and (4) both need.
 
 ⚠ **None of this is verified against an oracle yet.** `tools/dostest/pit_test.c` is an
