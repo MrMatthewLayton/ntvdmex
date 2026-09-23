@@ -10695,6 +10695,19 @@ static void host_pit_generate(void)
           }
           if (clocks > PIT_INPUT_HZ) clocks = PIT_INPUT_HZ;   /* cap a long stall at 1 s */
           vdd_pit_add_clocks(&g_pit, (uint32_t)clocks);
+          /* ── THE RTC'S PERIODIC INTERRUPT RIDES THE SAME DELTA. ─────────────
+               IRQ8 at the rate in CMOS Status A -- a steady tick INDEPENDENT of
+               the 8254, which is why Windows and DOS extenders use it: a guest
+               that has reprogrammed the PIT has not touched this one. Driven
+               here rather than from a second thread so there is one pacer, one
+               lock and ONE OPINION ABOUT HOW MUCH TIME HAS PASSED; s61 measured
+               what a second clock does to this project.
+             ⚠ DORMANT UNLESS THE GUEST ASKED. add_clocks returns immediately
+               unless PIE is set in Status B with a non-zero rate select, and
+               even then nothing reaches the guest until IRQ8 is unmasked on the
+               slave PIC and IRQ2 on the master. All of that is off at reset, so
+               a guest that does not program it sees no change at all. */
+          vdd_cmos_add_clocks(&g_cmos, (uint32_t)clocks);
       } }
     LeaveCriticalSection(&g_pit_cs);
 }

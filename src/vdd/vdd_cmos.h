@@ -64,12 +64,34 @@ typedef struct cmos_state {
     uint8_t  nmi_disabled;
     uint32_t nmi_mask_writes;
     uint8_t  ram[128];      /* the CMOS proper; 0x00-0x0D are overlaid by the clock */
+    uint8_t  status_a;      /* divider + periodic rate select                    */
+    uint8_t  status_b;      /* SET/PIE/AIE/UIE/SQWE/DM/24-12/DSE                 */
     uint8_t  status_c;      /* the interrupt flags -- CLEARED BY READING (0x0C)  */
+    /* ── THE PERIODIC INTERRUPT. (docs/ref/rtc.md 4) ─────────────────────────
+         IRQ8 at the rate in Status A bits 3:0 -- a fast, steady tick that is
+         INDEPENDENT OF THE 8254, which is exactly why Windows and DOS extenders
+         use it: a guest that has reprogrammed the PIT has not touched this one.
+       ⚠ DORMANT BY DEFAULT, AND THAT IS WHAT MAKES IT SAFE TO ADD. Nothing is
+         raised unless the guest has BOTH set PIE in Status B and a non-zero rate
+         select, AND unmasked IRQ8 on the slave PIC and IRQ2 on the master. All
+         four are off at reset, so a guest that does not ask sees no change.
+       ► Driven from the host's existing PIT pacer, in the same lock and off the
+         same QueryPerformanceCounter delta -- no second thread, and no second
+         opinion about how much time has passed. */
+    uint64_t pf_accum;      /* PIT-rate clocks not yet turned into periodic ticks */
+    uint32_t pf_raised;     /* periodic interrupts raised (a run should say)      */
     /* The clock. NULL means the registers read as whatever `ram` holds, which is
        what the off-VM battery uses to pin exact values. */
     void   (*rtc_now)(void *ctx, struct vdd_rtc *out);
     void    *rtc_ctx;
 } cmos_state;
+
+/* Advance the periodic divider by `clocks` PIT-input-rate clocks and raise IRQ8
+   as often as the programmed rate says. A no-op unless the guest enabled it. */
+void vdd_cmos_add_clocks(cmos_state *st, uint32_t clocks);
+
+/* The programmed periodic rate in Hz, or 0 if none. docs/ref/rtc.md 2. */
+uint32_t vdd_cmos_periodic_hz(const cmos_state *st);
 
 int  vdd_cmos_init(vdd_bus *b, void *self);
 void vdd_cmos_reset(void *self);

@@ -31,6 +31,8 @@ static void fake_rtc(void *ctx, struct vdd_rtc *out)
 }
 
 static uint8_t g_flat[0x1000];
+static int g_irq8;
+static void irq_sink(void *ctx, uint8_t irq) { (void)ctx; if (irq == 8) g_irq8++; }
 
 static uint8_t rd(vdd_bus *bus, uint8_t reg)
 {
@@ -55,7 +57,7 @@ int main(void)
     cm.rtc_now = fake_rtc;
     dev = vdd_cmos_device(&cm);
     vdd_bus_init(&bus, g_flat);
-    vdd_bus_set_sinks(&bus, 0, 0, 0, 0);
+    vdd_bus_set_sinks(&bus, irq_sink, 0, 0, 0);
 
     printf("-- MC146818 RTC + CMOS --\n");
     CHECK(vdd_bus_add(&bus, &dev) == 0, "add: cmos init ok");
@@ -97,8 +99,23 @@ int main(void)
        Same reasoning as INT 1Ah AH=03h/05h, deliberately not answered. */
     wr(&bus, CMOS_HOUR, 0x09);
     CHECK(rd(&bus, CMOS_HOUR) == 0x14, "clock: a write to the hours register is refused");
-    wr(&bus, CMOS_STATUS_B, 0xFF);
-    CHECK(rd(&bus, CMOS_STATUS_B) == 0x02, "status B: read-only here");
+
+    /* ⚠ THIS CHECK USED TO READ "status B: read-only here" AND IT WAS WRONG THE
+         MOMENT THE PERIODIC INTERRUPT LANDED. Status B carries PIE, AIE, UIE,
+         the data mode and the 12/24 bit -- all of them the GUEST's to set -- and
+         refusing the write is exactly what made the periodic interrupt
+         unreachable. The clock registers stay refused because we cannot move the
+         host's clock; a control register is a different thing, and collapsing
+         the two into "everything below 0x0E is read-only" was the error.
+       ⛔ It also LEAKED: writing 0xFF here left DM and the 12-hour bit set, and
+         the next check -- the NMI-mask one, twenty lines down -- then read the
+         hour in binary 12-hour format and failed for a reason that had nothing
+         to do with what it was testing. A test that leaves state behind
+         misattributes the next failure. */
+    wr(&bus, CMOS_STATUS_B, 0x42);
+    CHECK(rd(&bus, CMOS_STATUS_B) == 0x42, "status B: PIE and the mode bits are writable");
+    wr(&bus, CMOS_STATUS_B, 0x02);                 /* ...and put it back */
+    CHECK(rd(&bus, CMOS_STATUS_B) == 0x02, "status B: back to the BIOS default");
 
     /* ⛔ BIT 7 OF PORT 0x70 IS THE NMI MASK, NOT PART OF THE REGISTER NUMBER.
        Software sets it constantly -- masking NMI across a CMOS access is
@@ -123,6 +140,81 @@ int main(void)
     CHECK(rd(&bus, CMOS_EQUIP) != 0x00, "post: the equipment byte is not zero");
     CHECK(rd(&bus, 0x15) == 0x80 && rd(&bus, 0x16) == 0x02,
           "post: base memory reads 640 KB");
+
+    /* ── THE PERIODIC INTERRUPT. docs/ref/rtc.md 4. ───────────────────────────
+       IRQ8 at the rate in Status A bits 3:0 -- a fast, steady tick INDEPENDENT
+       of the 8254, which is why Windows and DOS extenders use it.
+       ⚠ DORMANT BY DEFAULT, AND THAT IS WHAT MAKES IT SAFE TO ADD: nothing is
+         raised unless the guest sets PIE *and* a non-zero rate, and even then
+         nothing reaches it until IRQ8 is unmasked on the PIC. */
+    {
+        g_irq8 = 0;
+        vdd_cmos_reset(&cm);
+        cm.rtc_now = fake_rtc;
+
+        /* The rate table. 1 and 2 are special cases; from 3 up it is
+           32768 >> (RS-1), so RS=6 is the 1024 Hz a PC BIOS leaves. */
+        cm.status_a = 0x20; CHECK(vdd_cmos_periodic_hz(&cm) == 0, "periodic: RS=0 is no rate");
+        cm.status_a = 0x21; CHECK(vdd_cmos_periodic_hz(&cm) == 256,  "periodic: RS=1 is 256 Hz");
+        cm.status_a = 0x22; CHECK(vdd_cmos_periodic_hz(&cm) == 128,  "periodic: RS=2 is 128 Hz");
+        cm.status_a = 0x23; CHECK(vdd_cmos_periodic_hz(&cm) == 8192, "periodic: RS=3 is 8192 Hz");
+        cm.status_a = 0x26; CHECK(vdd_cmos_periodic_hz(&cm) == 1024, "periodic: RS=6 is 1024 Hz");
+        cm.status_a = 0x2F; CHECK(vdd_cmos_periodic_hz(&cm) == 2,    "periodic: RS=15 is 2 Hz");
+
+        /* ⛔ DORMANT UNTIL ASKED. A second of clocks with PIE clear must raise
+           nothing at all -- this is the check that says adding the device cannot
+           disturb a guest that never programs it. */
+        cm.status_a = 0x26;
+        vdd_cmos_add_clocks(&cm, PIT_INPUT_HZ);
+        CHECK(g_irq8 == 0, "periodic: PIE clear -> not one interrupt in a whole second");
+        CHECK(cm.status_c == 0, "periodic: ...and no flag set either");
+
+        /* Now enable it: 1024 Hz for one second is 1024 interrupts. */
+        wr(&bus, CMOS_STATUS_B, 0x42);          /* PIE | 24-hour */
+        CHECK((rd(&bus, CMOS_STATUS_B) & 0x40) != 0, "periodic: PIE is writable");
+        g_irq8 = 0;
+        vdd_cmos_add_clocks(&cm, PIT_INPUT_HZ);
+        CHECK(g_irq8 == 1024, "periodic: 1024 Hz for one second is 1024 interrupts");
+        CHECK(cm.pf_raised == 1024, "periodic: ...and the run can say so");
+
+        /* The flags a handler sees, and the acknowledge that clears them. */
+        CHECK((rd(&bus, CMOS_STATUS_C) & 0xC0) == 0xC0, "periodic: PF and IRQF are set");
+        CHECK(rd(&bus, CMOS_STATUS_C) == 0x00, "periodic: ...and the read cleared them");
+
+        /* Turning PIE off drops the part-accumulated tick, so turning it back on
+           starts from now instead of firing immediately off a stale remainder. */
+        wr(&bus, CMOS_STATUS_B, 0x02);
+        vdd_cmos_add_clocks(&cm, 1000);
+        CHECK(cm.pf_accum == 0, "periodic: disabling PIE drops the partial tick");
+        g_irq8 = 0;
+        wr(&bus, CMOS_STATUS_B, 0x42);
+        vdd_cmos_add_clocks(&cm, 1);
+        CHECK(g_irq8 == 0, "periodic: re-enabling starts from now, not from a backlog");
+
+        /* UIP is READ-ONLY: it is the chip telling software when it may read,
+           never software telling the chip anything. */
+        wr(&bus, CMOS_STATUS_A, 0xFF);
+        CHECK((rd(&bus, CMOS_STATUS_A) & 0x80) == 0, "status A: UIP cannot be written");
+        CHECK(vdd_cmos_periodic_hz(&cm) == 2, "status A: ...but the rate select can");
+    }
+
+    /* ── DATA MODE AND 12-HOUR MODE ARE HONOURED, NOT IGNORED. ───────────────
+       A PC BIOS leaves BCD/24-hour and nothing on the shelf changes it -- but a
+       model that ignores the bits hands a guest that DID set binary mode a BCD
+       byte, and tells a 12-hour guest that 14:00 is 2 AM. */
+    {
+        vdd_cmos_reset(&cm);
+        cm.rtc_now = fake_rtc;                   /* 14:07:42 */
+        wr(&bus, CMOS_STATUS_B, 0x06);           /* DM=1 (binary), 24-hour */
+        CHECK(rd(&bus, CMOS_SEC) == 42, "data mode: binary seconds are 42, not 0x42");
+        CHECK(rd(&bus, CMOS_HOUR) == 14, "data mode: binary hours are 14");
+
+        wr(&bus, CMOS_STATUS_B, 0x00);           /* BCD, 12-hour */
+        CHECK(rd(&bus, CMOS_HOUR) == 0x82,
+              "12-hour: 14:00 is 2 PM -- 0x02 with bit 7 set, not 0x02 alone");
+        cm.status_b = 0x00;
+        CHECK(rd(&bus, CMOS_MIN) == 0x07, "12-hour: the other fields are unaffected");
+    }
 
     printf("\n%d checks, %d failed\n", total, fails);
     return fails ? 1 : 0;

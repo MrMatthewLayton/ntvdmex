@@ -104,26 +104,56 @@ three oracles gave three answers (`6`, `7`, `0Dh`). What matters is that it is p
 at all; before this device, a guest read `0xFF` from it: *"no floppies, no video, no
 coprocessor"*, with every bit set.
 
-## 4. IRQ8 — entirely absent
+## 4. IRQ8
 
 | Source | Enable | Flag | Status |
 |---|---|---|---|
-| Periodic | `0Bh` bit 6 | `0Ch` bit 6 | ⛔ **MISS** |
+| **Periodic** | `0Bh` bit 6 | `0Ch` bit 6 | ✅ **IMPL** *(2026-09-23)* |
 | Alarm | `0Bh` bit 5 | `0Ch` bit 5 | ⛔ **MISS** |
 | Update ended | `0Bh` bit 4 | `0Ch` bit 4 | ⛔ **MISS** |
 
-⇒ **This is the biggest remaining gap on the surface**, and it is worth more than it
-looks: the periodic interrupt is a **fast, steady tick independent of the 8254**, which is
-exactly why Windows and DOS extenders use it — *a guest that has reprogrammed the PIT has
-not touched this one.*
+✅ **The periodic interrupt works**, at the rate in Status A bits 3:0 — a fast, steady
+tick **independent of the 8254**, which is exactly why Windows and DOS extenders use it:
+*a guest that has reprogrammed the PIT has not touched this one.*
+
+**It rides the host's existing PIT pacer**, off the same `QueryPerformanceCounter` delta
+and inside the same lock, rather than a second thread. One pacer, one lock, **one opinion
+about how much time has passed** — s61 measured what a second clock does to this project.
+
+⚠ **Dormant unless asked, and that is what made it safe to add.** Nothing is raised
+unless the guest sets **PIE** *and* a non-zero rate select, and even then nothing reaches
+it until **IRQ8 is unmasked on the slave PIC and IRQ2 on the master**. All of that is off
+at reset. `cmos_test.c` pins the negative case explicitly: a whole second of clocks with
+PIE clear raises **not one** interrupt.
+
+⚠ **Disabling PIE drops the part-accumulated tick**, so re-enabling starts from *now*
+rather than firing immediately off a stale remainder — and that is pinned too.
+
+**Timing canary re-run on the rig after this landed:** Skyroads `n8=0 max_ms=7` against
+the documented guard of `n8=0 max_ms≈6`, with `pacer_prio=0 joy_thread=0 pit_split=1`
+unchanged. The extra call in the pacer costs nothing measurable, and no IRQ8 appeared in
+the run — the tick stayed dormant, as designed.
+
+### And two lies removed while the control registers became writable
+
+Status B had to become writable for PIE to be reachable at all, and once it was, two
+bits that had been *ignored* became bits a guest could actually set:
+
+- **DM (bit 2) — binary vs BCD.** A model that ignores it hands a guest that set binary
+  mode a BCD byte, and `0x59` seconds reads as **eighty-nine**.
+- **24/12 (bit 1).** 12-hour mode is **not "subtract twelve"**: bit 7 of the hours
+  register is PM, midnight is 12 AM and noon is 12 PM, neither of which is hour 0. A
+  model that ignores it tells a 12-hour guest that 14:00 is **2 AM**.
+
+Both are two lines and both are now honoured. ⚠ **UIP stays read-only** — it is the chip
+telling software when it may read, never software telling the chip anything.
 
 ---
 
 ## What to fix, in order
 
-1. **The periodic interrupt on IRQ8**, with the rate from Status A bits 3:0 and the flags
-   in Status C. It needs the same pacer the PIT uses and the same care about who owns the
-   lock; `docs/inventory/pit.md` records what that cost last time.
+1. ✅ ~~The periodic interrupt on IRQ8.~~ **DONE 2026-09-23** — on the PIT's own pacer,
+   dormant unless the guest programs it, timing canary re-run.
 2. **The extended-memory CMOS bytes** should follow the host's configured XMS size, not
    sit at zero — one more instance of *"two doors onto one fact"*.
 3. **The CMOS checksum** at `2Eh`/`2Fh`.
