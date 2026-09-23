@@ -16,6 +16,7 @@ static void pic_chip_reset(pic_chip *c, uint8_t base)
     c->irr = c->isr = 0;
     c->base = base;
     c->icw_step = 0; c->icw4_needed = 0; c->read_isr = 0; c->auto_eoi = 0;
+    c->poll_armed = 0;
 }
 
 /* ── IN-SERVICE UPDATES ARE ATOMIC. ───────────────────────────────────────────────
@@ -47,6 +48,22 @@ static void pic_cmd_write(pic_chip *c, uint8_t v)
     }
     if (v & 0x08) {                         /* OCW3                              */
         if (v & 0x02) c->read_isr = (uint8_t)(v & 0x01);   /* 0=IRR, 1=ISR       */
+        /* ── ★★★ THE POLL COMMAND, AND WHY DROPPING IT WAS THE "RUNS BUT LIES"
+             SHAPE. A poll read and a status read are THE SAME `IN` ON THE SAME
+             PORT; the only thing that tells them apart is which OCW3 was written
+             last. So a guest that polls never got an error -- it got whatever
+             register the read select happened to name, and read it as
+             "bit 7 = an interrupt is pending, bits 2:0 = its level". An IRR of
+             0x01 (IRQ0 requested) reads as NO INTERRUPT because bit 7 is clear;
+             an IRR of 0x80 (IRQ7) reads as "pending, level 0". Plausible, wrong,
+             silent.
+           ⚠ ORACLES: MS-DOS 6.22 under QEMU implements it (p_pic pic.ocw3.poll =
+             0x00); dosbox-x and PCem both drop the P bit and answer 0x01, the
+             selected ISR. Two of three do not model the feature, so their answer
+             is the absence of a measurement rather than a measurement of absence
+             -- the same footing as the 8254's BCD bit, except that here the one
+             host which DOES implement it agrees with the datasheet. */
+        if (v & 0x04) c->poll_armed = 1;
         return;
     }
     /* OCW2: the EOI family. */
@@ -62,8 +79,23 @@ static void pic_cmd_write(pic_chip *c, uint8_t v)
         int top = pic_top(c->isr);
         if (top >= 0) ISR_CLR(c, 1u << top);
         break; }
+    /* ── ROTATE ON SPECIFIC EOI. IT IS STILL AN EOI, AND THIS USED TO BE A NOP. ──
+         E0h+L2:L0 rotates the priorities AND ends the interrupt; we had it under
+         "other rotate/priority forms" and did neither. The rotation half is rare
+         and is still not modelled (there is no priority state to rotate -- see
+         pic_top and docs/inventory/pic.md 4). THE EOI HALF IS NOT OPTIONAL: an
+         in-service bit that is never cleared does not cost one interrupt, it
+         kills that priority level and everything below it for the rest of the run.
+       ★ ALL THREE ORACLES AGREE the bit goes (p_pic pic.ocw2.rot.speoi = 0 on
+         6.22, dosbox-x and PCem alike). Unanimous, so no judgement was needed. */
+    case 0xE0:                              /* rotate on SPECIFIC EOI            */
+        ISR_CLR(c, 1u << (v & 7));
+        break;
     default:
-        break;                              /* other rotate/priority forms: nop  */
+        /* C0h (set priority) and 80h/00h (rotate in auto-EOI) are NOT EOIs and
+           must not clear anything -- treating the whole 0xE0 field as "some kind
+           of EOI" would break the re-entrancy guard in the other direction. */
+        break;
     }
 }
 
@@ -92,13 +124,38 @@ static void pic_out(void *self, uint16_t port, uint8_t w, uint32_t v)
     }
 }
 
+/* A poll read: report the highest-priority PENDING line and acknowledge it.
+   ⚠ PENDING, NOT IN SERVICE. Bit 7 answers "is there an interrupt to take", and a
+     line already in service is not one -- which is what makes the idle-with-IRQ0-
+     in-service case (p_pic) discriminating at all. Requests that are masked, or
+     outranked by something already in service, are not available either: the poll
+     goes through the same resolver a delivery would. */
+static uint8_t pic_poll_read(pic_chip *c)
+{
+    uint8_t ready = (uint8_t)(c->irr & ~c->imr);
+    int top;
+    for (top = 0; top < 8; ++top) {
+        uint8_t bit = (uint8_t)(1u << top);
+        if (!(ready & bit)) continue;
+        if (c->isr & ((bit << 1) - 1)) break;   /* outranked: nothing takeable */
+        IRR_CLR(c, bit);
+        if (!c->auto_eoi) ISR_SET(c, bit);
+        return (uint8_t)(0x80 | top);
+    }
+    return 0x00;                                 /* bit 7 clear: none pending   */
+}
+
 static void pic_in(void *self, uint16_t port, uint8_t w, uint32_t *val)
 {
     pic_state *st = (pic_state *)self;
     pic_chip *c = (port < 0xA0) ? &st->m : &st->s;
     (void)w;
-    if (port == 0x21 || port == 0xA1) *val = c->imr;
-    else                              *val = c->read_isr ? c->isr : c->irr;
+    if (port == 0x21 || port == 0xA1) { *val = c->imr; return; }
+    /* A POLL IS A ONE-SHOT: OCW3's P bit arms the NEXT read only, and this read
+       consumes it. Leaving it armed would mean a guest that polls once never sees
+       a status byte again. */
+    if (c->poll_armed) { c->poll_armed = 0; *val = pic_poll_read(c); return; }
+    *val = c->read_isr ? c->isr : c->irr;
 }
 
 /* --- host side ------------------------------------------------------------- */

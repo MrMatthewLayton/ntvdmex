@@ -36,6 +36,10 @@ typedef struct pic_chip {
     uint8_t icw4_needed;    /* from ICW1 bit 0                                    */
     uint8_t read_isr;       /* OCW3: next read of the base port returns ISR       */
     uint8_t auto_eoi;       /* ICW4 bit 1: clear ISR at delivery time             */
+    uint8_t poll_armed;     /* OCW3 bit 2: the NEXT base-port read is a POLL, and
+                               a poll read is an ACKNOWLEDGE -- it sets ISR and
+                               clears IRR exactly as a delivery would. One-shot:
+                               the read consumes it. See docs/ref/pic.md 5.      */
 } pic_chip;
 
 typedef struct pic_state {

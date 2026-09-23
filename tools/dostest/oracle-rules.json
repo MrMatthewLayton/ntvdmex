@@ -1399,5 +1399,24 @@
   ],
   "recorded": "2026-09-23",
   "why": "NO ORACLE IMPLEMENTS FEATURE CONTROL, so none of them is evidence about it. The case writes 00, 0F and 08 to 3DA and reads 3CA after each: 6.22 and dosbox-x return 0x00 every time -- they accept the write and discard it -- and PCem returns 0xFF every time, which is an ISA bus floating high on an undecoded port. Three hosts, three ways of not having the register. The IBM VGA documents it as read/write storage readable at 3CA, so NTVDMEX implements it and is the only host here that does: SPEC-IMPLEMENTED, UNVERIFIABLE, the same footing as the 8254's BCD bit. ABSTAINED is the honest verdict -- a recorded decision, not missing evidence."
+ },
+ {
+  "probe": "pic",
+  "case": "pic.ocw3.poll",
+  "field": "AX",
+  "abstain": [
+   "dosbox-x",
+   "pcem"
+  ],
+  "recorded": "2026-09-23",
+  "why": "NEITHER HOST DECODES OCW3's P BIT, so their 0x0001 is the absence of the feature rather than a measurement of it: the case deliberately selects the ISR before polling, so a host that drops P hands back the ISR (IRQ0 in service = 0x01) and one that honours P answers 0x00. MS-DOS 6.22 under QEMU answers 0x00 and is therefore the only host here that implements the command -- AND IT AGREES WITH THE DATASHEET, which makes this better evidenced than the 8254's BCD bit, where the sole implementer had no corroboration. Intel 8259A datasheet, OCW3: with P=1 the next read of the command port returns bit 7 = 'an interrupt is pending' with its level in bits 2:0, and the read ACTS AS AN ACKNOWLEDGE. Bit 7 reports PENDING, not IN-SERVICE, which is why a line already in service gives 0x00. \u26d4 THE REASON THIS MATTERED ENOUGH TO IMPLEMENT ON A SPLIT: a poll read and a status read are THE SAME `IN` ON THE SAME PORT, distinguished only by which OCW3 was written last. A host that drops P therefore fails SILENTLY and PLAUSIBLY -- an IRR of 0x01 reads as 'no interrupt pending' because bit 7 is clear, an IRR of 0x80 reads as 'pending, level 0'. Our evidence is tools/dostest/pic_test.c, which pins the acknowledge side too (the poll read sets ISR and clears IRR) and the one-shot rule (the read after a poll is a normal status read). 6 of its checks failed against the previous code."
+ },
+ {
+  "probe": "pic",
+  "case": "pic.icw1.readsel",
+  "field": "AX",
+  "abstain": [],
+  "recorded": "2026-09-23",
+  "why": "OPEN, AND DELIBERATELY NOT ACTED ON. AH is a base-port read taken straight after an ICW1..ICW4 sequence with the ISR selected beforehand; AL is the IRR, explicitly selected. The datasheet lists SIX side effects for ICW1, two of which are guest-visible here: it clears the IMR (we do that) and it SETS THE STATUS READ BACK TO IRR (we do not). All three hosts answer AH=0x00, but that only discriminates on PCem -- QEMU and dosbox-x report AL=0x00 as well, i.e. their ICW1 clears the IRR, so both registers are zero and the read cannot say which one it returned. Only PCem keeps the pending bit (AL=0x01), and its AH=0x00 says the select was NOT reset. ONE ORACLE IS NOT A PASS -- that is this session's own lesson three times over -- so the read-select gap stays recorded in docs/inventory/pic.md and unfixed until a second machine can see it. The IRR half is a genuine 2-1 split about whether ICW1's edge-sense reset clears a latched request; we follow the majority by accident rather than by decision, which is also recorded."
  }
 ]
