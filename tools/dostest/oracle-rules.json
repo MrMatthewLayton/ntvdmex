@@ -1499,5 +1499,29 @@
   "abstain": [],
   "recorded": "2026-09-23",
   "why": "OPEN, AND THE SAME SHAPE AS dma.status.idle: A MISSING SOURCE, NOT A MISSING REGISTER. AH is the first read of Status Register C and AL the second. 6.22-under-QEMU answers 0x1000 and PCem 0x5000 -- flags latched (UF, and PF on PCem) and then CLEARED BY THE READ, which is how IRQ8 is acknowledged at the chip and is the datasheet's contract caught in the act. dosbox-x and NTVDMEX both answer 0x0000. For us that is NOT because clear-on-read is missing -- vdd_cmos.c implements it and cmos_test.c pins it with a seeded flag byte -- but because THE PROBE NEVER ENABLES THE INTERRUPT: p_rtc reads Status C without setting PIE, so on our host there is genuinely nothing pending, while the oracles' flags come from THEIR firmware having enabled the update-ended interrupt. \u26a0 THIS RATIONALE CHANGED WITHOUT THE VALUE CHANGING. When it was first recorded we raised no IRQ8 at all; the periodic interrupt landed later the same day (see docs/inventory/rtc.md 4) and the row still reads 0000h for a DIFFERENT reason. A row whose explanation moves while its number does not is exactly the kind that goes quietly wrong. What is owed here is a probe case that sets PIE and counts -- not a fix."
+ },
+ {
+  "probe": "uart",
+  "case": "uart.idle.lsr.iir",
+  "field": "AX",
+  "abstain": [
+   "msdos622",
+   "dosbox-x",
+   "pcem"
+  ],
+  "recorded": "2026-09-23",
+  "why": "A SERIAL MOUSE, NOT A CHIP DIFFERENCE -- AND THE PROBE CAUSED IT. PCem alone reports LSR bit 0 (Data Ready) set at idle, 61h against 60h on the other two hosts and on NTVDMEX. A companion case (uart.idle.pending) drains the byte and names it: 4Dh, which is 'M' -- the byte a MICROSOFT SERIAL MOUSE sends to identify itself when DTR and RTS are asserted. PCem's config is the only one of the three with a mouse_type set. Three independent things agree: the byte is the Microsoft mouse ID, it arrived on COM1 immediately after a DTR/RTS transition, and only on the host configured with a mouse. \u26a0 THE PROBE BROKE ITS OWN STATED RULE TO PRODUCE THIS. Its header says 'no case reads a byte that the outside world would have to supply' -- the whole reason every test is built on loopback, which disconnects the pins. But THE EXIT FROM LOOPBACK RE-APPLIES MCR TO THE REAL PINS, and that transition is itself a stimulus. A probe can isolate the chip while it is INSIDE loopback; it cannot isolate it on the way out. \u21d2 Both rows measure what is plugged into COM1, which is a property of the MACHINE and not of the UART -- the same shape as the CMOS equipment byte. Abstained with the mechanism recorded rather than the value. The other four cases in this probe agree on all four hosts."
+ },
+ {
+  "probe": "uart",
+  "case": "uart.idle.pending",
+  "field": "AX",
+  "abstain": [
+   "msdos622",
+   "dosbox-x",
+   "pcem"
+  ],
+  "recorded": "2026-09-23",
+  "why": "A SERIAL MOUSE, NOT A CHIP DIFFERENCE -- AND THE PROBE CAUSED IT. PCem alone reports LSR bit 0 (Data Ready) set at idle, 61h against 60h on the other two hosts and on NTVDMEX. A companion case (uart.idle.pending) drains the byte and names it: 4Dh, which is 'M' -- the byte a MICROSOFT SERIAL MOUSE sends to identify itself when DTR and RTS are asserted. PCem's config is the only one of the three with a mouse_type set. Three independent things agree: the byte is the Microsoft mouse ID, it arrived on COM1 immediately after a DTR/RTS transition, and only on the host configured with a mouse. \u26a0 THE PROBE BROKE ITS OWN STATED RULE TO PRODUCE THIS. Its header says 'no case reads a byte that the outside world would have to supply' -- the whole reason every test is built on loopback, which disconnects the pins. But THE EXIT FROM LOOPBACK RE-APPLIES MCR TO THE REAL PINS, and that transition is itself a stimulus. A probe can isolate the chip while it is INSIDE loopback; it cannot isolate it on the way out. \u21d2 Both rows measure what is plugged into COM1, which is a property of the MACHINE and not of the UART -- the same shape as the CMOS equipment byte. Abstained with the mechanism recorded rather than the value. The other four cases in this probe agree on all four hosts."
  }
 ]
