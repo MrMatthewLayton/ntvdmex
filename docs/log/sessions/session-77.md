@@ -144,10 +144,57 @@ it. Both references re-captured as whole buffers.
 
 ---
 
+---
+
+## 5. The rig answered, and the gap was one defect wearing five hats (`104c4ed`, `730e31d`)
+
+The watcher's heartbeat was live, so both probes went through it rather than waiting on a
+human. `p_vgaext` came back **`1010`** — byte for byte with PCem. Parity came back **92.0%**
+(635 of the 690 agreed bytes), and **the 55 misses were five registers, not scatter**:
+`CR0A`/`CR0B` in all twelve modes, `AR10` in eleven, `GR07`, `GR05`, `SR02`.
+
+**`VGA_MODEDEFS` already held the right values, and `vga_load_modedef` already loaded
+them.** The gap was that six of those registers are **not read back from the file at all** —
+the port read answers from a *live shadow*, because the shadow is what the rendering engine
+uses. The mode set wrote the file, the file was right, and the guest saw the old value.
+Reproduced off-VM first, matching the rig byte for byte, so the whole fix loop ran without
+the rig. ⇒ **689/690, 99.9%.**
+
+⚠ One observable change rides with it: `cur_shape` was the hard-coded 8-line CGA `0x0607`
+where the table says `0x0D0E`. `vdd_cursor_lines` already rescales an 8-line shape, so the
+drawn cursor moves by **one scan line**.
+
+### The tie-break rule needed an exception on its first outing
+
+`gen-vgamodedefs.py` now merges both references — agreement emitted, disagreement resolved
+to PCem and **listed by name** in the generated header. It earned its keep immediately:
+`GR7` agrees at `0x0F` in the graphics modes but splits in text/CGA, QEMU `0x0F` against
+PCem's real IBM VGA `0x00`. Regenerating from QEMU alone would have written `0x0F` into the
+text modes **against the real card — and it would have looked like a fix, because parity
+would have moved.**
+
+⛔⛔ **But "PCem wins" cannot be applied blind.** `INT 10h AX=0007` gives MiscOut `0x66` on
+QEMU — a genuine MDA-compatible mode 7 — and `0x67` with a **40-column CRTC** on PCem, whose
+BIOS does not enter mode 7 on that machine. Taking PCem there would have programmed a
+40-column colour text setup for every mode-7 request, from **30 tie-broken bytes, every one
+of them "measured"**. Mode 7 is now excluded by name.
+
+> **An oracle is only authoritative about the question it actually answered.**
+
+⛔ **One byte left, recorded rather than bundled:** `modeX` `CR0F`. Same defect class —
+`crtc_in` *derives* the cursor address where the hardware register is storage. The honest
+fix makes the BIOS cursor calls write `CR0E`/`CR0F`, touching every path that moves the
+cursor: too large a blast radius to ride along with a change that already needs a by-hand
+check.
+
+---
+
 ## State at session end
 
-- `offvm` **1461/0** (+17: 14 BCD, 3 external registers).
-- Stable zip `dist\ntvdmex-20260917-4847355.zip` **untouched**; checkpoint `59fac7d`.
-- **Owed on the rig:** a `p_vgareg` run under NTVDMEX with the fixed probe — the old 89.7%
-  is void and must not be quoted — a `p_vgaext` run, and a by-hand Doom/Skyroads check after
-  the Input Status 0 change.
+- `offvm` **1470/0** (+26: 14 BCD, 3 external registers, 9 mode-set).
+- **VGA register parity 99.9%** (689/690 of the two-oracle agreement). *Re-run, never quote.*
+- `bin\` = `b6c7063e`. Stable zip `dist\ntvdmex-20260917-4847355.zip` **untouched**;
+  checkpoint `59fac7d`.
+- **User confirmed by hand:** Doom and Skyroads, after the Input Status 0 change.
+- **Owed from a human:** a by-hand look after the mode-set fix — the one-scan-line cursor
+  move is the only visible part of it.
