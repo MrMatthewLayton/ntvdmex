@@ -1,0 +1,132 @@
+# Inventory — MC146818 RTC and CMOS RAM
+
+**Spec:** Motorola MC146818 datasheet; IBM PC/AT TechRef for the CMOS map.
+**▶ The hardware reference is [`../ref/rtc.md`](../ref/rtc.md)** — what the chip *does*.
+**Our implementation:** `src/vdd/vdd_cmos.c`, `src/vdd/vdd_cmos.h` *(new 2026-09-23)*.
+**Oracles:** MS-DOS 6.22 (QEMU), dosbox-x, PCem. Off-VM: `tools/dostest/cmos_test.c`.
+DOS probe: `tools/dostest/p_rtc.asm`.
+**Marked:** 2026-09-23, **from the code**.
+
+---
+
+## Headline — the chip did not exist, and the failure was a hang
+
+**Nothing claimed ports `70h`/`71h`.** The BIOS *service* built on top of the chip did
+exist — INT 1Ah `AH=02h`/`04h` is answered out of the host's clock, over in the **PIT**
+VDD — so firmware was present and the hardware underneath it was absent. The same split
+the 8042 turned out to have.
+
+> ⛔⛔ **And this one hung rather than lying.** An unclaimed ISA port reads **`0xFF`** on
+> this host — deliberately, so device detection cannot mistake an absent card for a
+> present one (`main.c`, the V86 I/O trap). Status Register A is `0Ah`, and **its bit 7
+> is UIP**. The canonical way to read this chip, in every BIOS and every program that
+> does it by hand, is *"poll `0Ah` until UIP is clear, then read the time"*. With `0xFF`
+> coming back, **UIP was set for ever and that loop never exited.**
+
+⚠ I first read this as a *silent wrong answer* rather than a hang, from `iio_in` — which
+leaves `0` for unclaimed ports. That is the **interpreter-side** path; the V86 trap the
+guest actually goes through returns `0xFF`, with a comment saying why. **Measuring it
+settled which path mattered**: `p_rtc`'s `rtc.statusb` came back `0x8F`, which is
+`0xFF & 0x8F` and could not have come from a zero.
+
+---
+
+## Measured, 2026-09-23 — `p_rtc.asm` against three oracles and the rig
+
+| case | 6.22/QEMU | dosbox-x | PCem | ours (was → now) |
+|---|---|---|---|---|
+| `rtc.agree.hours` | `0101` | `0101` | `0101` | `0000` → **`0101`** ✅ |
+| `rtc.statusb` | `0002` | `0003` | `0002` | `008F` → **`0002`** ✅ |
+| `rtc.statusd.vrt` | `0080` | `0080` | `0080` | `0080` → `0080` ⚠ |
+| `rtc.equip.low` | `0006` | `0007` | `000D` | `000F` → `0005` — **not adjudicable** |
+| `rtc.statusc.clear` | `1000` | `0000` | `5000` | `FFFF` → `0000` ⛔ open |
+
+### ✅ One clock, two doors
+
+`rtc.agree.hours` does not emit a *time* — a time is not comparable across hosts — it
+emits **whether INT 1Ah and the chip's hours register say the same thing**. All three
+oracles: yes. Us, before: **no**. The two doors are now given the same `rtc_now` hook by
+the host, so their agreement is *structural* rather than something to keep in step by
+hand — the same principle as A20's three doors.
+
+### ⚠ `statusd.vrt` was right by accident
+
+VRT is bit 7 of Status D and means *"the battery held; this CMOS is valid"*. We agreed
+with all three oracles **before the device existed**, because `0xFF` happens to have bit 7
+set. A row that agrees for the wrong reason is worth naming: it would have kept agreeing
+through any change that did not happen to preserve that bit.
+
+### ⛔ `statusc.clear` is open — a missing *source*, not a missing register
+
+QEMU answers `1000h` and PCem `5000h`: flags latched (update-ended, and periodic on PCem)
+and then **cleared by the read**, which is how IRQ8 is acknowledged at the chip. We answer
+`0000h` — **not** because clear-on-read is missing (it is implemented, and `cmos_test.c`
+pins it with a seeded flag byte) but because **we raise no IRQ8 at all**. Same shape as
+`dma.status.idle`.
+
+---
+
+## 1. Ports
+
+| Port | Access | Register | Status | Evidence |
+|---|---|---|---|---|
+| `70h` | W | index + **NMI mask (bit 7)** | ✅ **IMPL** | `cmos_out` — the mask is kept out of the index and **counted, not acted on** |
+| `70h` | R | *(write-only on the part)* | **N/A** | answers `0xFF` consistently |
+| `71h` | R/W | data | ✅ **IMPL** | `cmos_in`/`cmos_out` |
+
+## 2. The clock registers
+
+| Item | Status | Evidence |
+|---|---|---|
+| `00h`–`09h`, `32h` derived from the host clock, in **BCD** | ✅ **IMPL** | `cmos_clock_reg` |
+| Status A — UIP **clear**, divider `010` | ✅ **IMPL** | `0x26`; see below |
+| Status B — BCD, 24-hour | ✅ **IMPL** | `0x02`, measured on QEMU **and** PCem |
+| Status C — **cleared by reading** | ✅ **IMPL** | nothing sets the flags yet |
+| Status D — VRT set | ✅ **IMPL** | |
+| **Day of week (`06h`)** | ⛔ **STORE** | fixed at 1 (Sunday) — the host's clock reading carries no weekday, and deriving one means a calendar rule in a device model. **Wrong six days in seven**; recorded rather than quietly computed |
+| Writing the clock (`00h`–`0Dh`) | ⚠ **REFUSED** | we cannot move the host's clock, and accepting the write while changing nothing is the *"runs but lies"* shape. Same reasoning as INT 1Ah `AH=03h`/`05h` |
+
+⚠ **UIP reads clear because that is TRUE of this model, not because it is convenient.**
+The real chip sets it for ~2 ms once a second while it updates its own registers; ours are
+derived from the host clock at the instant of the read, so they are never mid-update.
+
+## 3. CMOS RAM and the POST defaults
+
+| Item | Status | Evidence |
+|---|---|---|
+| `0Eh`–`7Fh` read/write storage | ✅ **IMPL** | |
+| POST defaults: diagnostic, floppy types, equipment, base memory | ✅ **IMPL** | `vdd_cmos_reset` |
+| The checksum at `2Eh`/`2Fh` | ⛔ **MISS** | not computed; a guest that verifies it will not like the answer |
+| Extended-memory bytes `17h`/`18h`, `30h`/`31h` | ⛔ **MISS** | left zero — should follow the host's own XMS size |
+
+⚠ **The equipment byte's low nibble is not adjudicable** — it describes the *machine*, and
+three oracles gave three answers (`6`, `7`, `0Dh`). What matters is that it is populated
+at all; before this device, a guest read `0xFF` from it: *"no floppies, no video, no
+coprocessor"*, with every bit set.
+
+## 4. IRQ8 — entirely absent
+
+| Source | Enable | Flag | Status |
+|---|---|---|---|
+| Periodic | `0Bh` bit 6 | `0Ch` bit 6 | ⛔ **MISS** |
+| Alarm | `0Bh` bit 5 | `0Ch` bit 5 | ⛔ **MISS** |
+| Update ended | `0Bh` bit 4 | `0Ch` bit 4 | ⛔ **MISS** |
+
+⇒ **This is the biggest remaining gap on the surface**, and it is worth more than it
+looks: the periodic interrupt is a **fast, steady tick independent of the 8254**, which is
+exactly why Windows and DOS extenders use it — *a guest that has reprogrammed the PIT has
+not touched this one.*
+
+---
+
+## What to fix, in order
+
+1. **The periodic interrupt on IRQ8**, with the rate from Status A bits 3:0 and the flags
+   in Status C. It needs the same pacer the PIT uses and the same care about who owns the
+   lock; `docs/inventory/pit.md` records what that cost last time.
+2. **The extended-memory CMOS bytes** should follow the host's configured XMS size, not
+   sit at zero — one more instance of *"two doors onto one fact"*.
+3. **The CMOS checksum** at `2Eh`/`2Fh`.
+4. **Alarm and update-ended interrupts** — after (1), which builds the machinery.
+5. **The day of week.** Either the host's clock reading grows a weekday field, or this
+   stays honestly wrong and documented. It should not be computed here.

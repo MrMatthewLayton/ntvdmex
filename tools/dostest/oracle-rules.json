@@ -1479,5 +1479,25 @@
   "abstain": [],
   "recorded": "2026-09-23",
   "why": "OPEN, AND NOT A REGISTER-FILE DEFECT. AH is the first read of the status register, AL the second. 6.22-under-QEMU and PCem both answer 0400h: bit 2 of the first read is CHANNEL 2's TERMINAL COUNT, latched by the floppy transfer that loaded this very probe, and the second read is 0x00 because READING STATUS CLEARS THE TC BITS. That is the datasheet's latching behaviour caught in the act, and it is a nice confirmation that the case works. dosbox-x and NTVDMEX both answer 0000h -- NOT because the TC latch is missing (vdd_dma.c implements it, and dma_test.c pins it) but because NEITHER MODELS A FLOPPY ON A DMA CHANNEL, so nothing ever sets channel 2's TC. The difference is a missing DEVICE, not a missing register, and implementing it would mean putting the floppy on the DMA controller -- a far larger change than this row justifies. Recorded in docs/inventory/dma.md."
+ },
+ {
+  "probe": "rtc",
+  "case": "rtc.equip.low",
+  "field": "AX",
+  "abstain": [
+   "msdos622",
+   "dosbox-x",
+   "pcem"
+  ],
+  "recorded": "2026-09-23",
+  "why": "NOT ADJUDICABLE: THIS BYTE DESCRIBES THE MACHINE, NOT THE CHIP. CMOS 14h is the equipment byte -- floppies fitted, video type, coprocessor present -- and the case emits its low nibble (video type and the FPU bit) after masking the floppy count. Three oracles gave three answers: 0x06 on 6.22-under-QEMU, 0x07 on dosbox-x, 0x0D on PCem. None is wrong; they are three differently configured machines, which is exactly what this register is for. NTVDMEX answers 0x05 (colour 80x25, coprocessor present) from its POST defaults. ABSTAINED is the honest verdict -- a recorded decision, not missing evidence. What the case DOES establish, and what cmos_test.c pins instead, is that the byte is POPULATED at all: before this device existed we answered 0xFF from an unclaimed port, and a guest reading it got 'no floppies, no video, no coprocessor' with every bit set."
+ },
+ {
+  "probe": "rtc",
+  "case": "rtc.statusc.clear",
+  "field": "AX",
+  "abstain": [],
+  "recorded": "2026-09-23",
+  "why": "OPEN, AND THE SAME SHAPE AS dma.status.idle: A MISSING SOURCE, NOT A MISSING REGISTER. AH is the first read of Status Register C and AL the second. 6.22-under-QEMU answers 0x1000 and PCem 0x5000 -- flags latched (UF, and PF on PCem) and then CLEARED BY THE READ, which is how IRQ8 is acknowledged at the chip and is the datasheet's contract caught in the act. dosbox-x and NTVDMEX both answer 0x0000. For us that is NOT because clear-on-read is missing -- vdd_cmos.c implements it and cmos_test.c pins it with a seeded flag byte -- but because WE RAISE NO IRQ8: there is no periodic, alarm or update-ended interrupt to set a flag in the first place. Implementing the register without the interrupt is the right half to have first, because a driver's LOGIC is built on the clear-on-read contract; the periodic interrupt is a separate piece of work and is priced in docs/inventory/rtc.md."
  }
 ]

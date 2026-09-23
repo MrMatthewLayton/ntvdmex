@@ -104,6 +104,7 @@ static const char *ntvdmex_path(const char *sub, const char *name);
 #include "dos_ems.h"
 #include "vdd_bus.h"
 #include "vdd_pit.h"
+#include "vdd_cmos.h"
 #include "vdd_pic.h"
 #include "vdd_video.h"
 #include "vdd_input.h"
@@ -710,6 +711,7 @@ static dos_machine_t *g_mach = NULL;
 /* The device bus + its VDDs + the presentation layer live for the host's life. */
 static vdd_bus      g_bus;
 static pit_state    g_pit;       static ntvdd g_pit_dev;
+static cmos_state   g_cmos;      static ntvdd g_cmos_dev;
 static pic_state    g_pic;       static ntvdd g_pic_dev;
 static video_state  g_vid;       static ntvdd g_vid_dev;
 static input_state  g_in;        static ntvdd g_in_dev;
@@ -23458,6 +23460,17 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     vdd_bus_add(&g_bus, &g_pic_dev);
     g_pit_dev = vdd_pit_device(&g_pit);
     vdd_bus_add(&g_bus, &g_pit_dev);
+    /* ── THE RTC/CMOS TAKES THE SAME CLOCK INT 1Ah DOES. ─────────────────────
+         Registers 00h-09h and INT 1Ah AH=02h/04h are two doors onto ONE clock,
+         and a guest may use either -- so they are given the same hook and their
+         agreement is structural rather than something to keep in step by hand.
+         The same principle as A20's three doors; p_rtc.asm's rtc.agree.hours is
+         the case that checks it, and it read 0000 against 0101 on all three
+         oracles before this device existed. */
+    g_cmos.rtc_now = host_rtc_now;
+    g_cmos.rtc_ctx = NULL;
+    g_cmos_dev = vdd_cmos_device(&g_cmos);
+    vdd_bus_add(&g_bus, &g_cmos_dev);           /* MC146818: ports 0x70/0x71    */
     g_vid.vmem = (uint8_t *)VID_APERTURE_BASE;  /* the mapped A0000 aperture (RAM) */
     /* (per-plane backing is taken later, once the preamble is on disk -- every
        log_write() before that point TRUNCATES the file and would eat its report.) */
