@@ -448,3 +448,55 @@ time, and reads served through `GR4`.
 ⚠ **Doom's path runs straight through this.** It sets mode 13h *chained*, writes, then
 unchains. Everything written while chained is already de-interleaved wrongly before the
 mode-Y code is reached.
+
+---
+
+## ⛔ STEP 4 AS STATED IS NOT IMPLEMENTABLE — THE APERTURE IS MAPPED RAM
+
+Correcting this document and `eaa3250`. "Route a store through the map mask to every
+selected plane **at write time**" assumes the host sees the store. It does not:
+
+```c
+g_vid.vmem = (uint8_t *)VID_APERTURE_BASE;   /* src/host/main.c:23444 */
+```
+
+`A0000` is **the guest's real mapped memory**. There is no write hook and no read hook.
+A guest `mov [A000:xxxx], al` never reaches us, which is also why `GR4` cannot be honoured
+on a CPU read — that is **architectural, not an oversight**, and my earlier note implying
+it was a fixable omission was wrong.
+
+`vdd_video.c:1907` says so, and says why: *"the page trap is deliberately not armed,
+because arming it makes the interpreter the CPU and collapses the run."* The
+diff-against-a-shadow fan-out is a **consequence** of that decision, not laziness.
+
+And the dead end is already documented and measured — six rules tried, each trading
+resolution against stale streaks, the tuning constant exported to `modey.txt` because
+*"there is no good point on this curve."* The root cause stands exactly as found
+(`chain4.abcd` = `11111111`), but the **remedy** does not follow from it.
+
+**Why no diff can be exact:** the aperture holds **one byte per CPU offset** where the
+hardware holds **four, one per plane**. A byte rewritten with the value it already held is
+a write the shadow cannot see. In Doom's low detail this is not a corner case: offset `o`
+is written under mask `0x03` for the column pair `(4o, 4o+1)` and under `0x0c` for
+`(4o+2, 4o+3)`, and wall textures are full of equal neighbours, so the second write
+routinely vanishes. **The information is destroyed before we could act on it.**
+
+## ★★★★★ AND NOW THERE IS AN OBJECTIVE INSTRUMENT FOR IT — `tools/doomdetail.py`
+
+⚠ **Every earlier attempt to grade low detail was reading Doom's own drawing as our
+defect.** Even-column match was calibrated on the **3D view at high detail** (0.08 = a real
+320-wide picture, 1.000 = half resolution). **At low detail Doom doubles pixels on
+purpose**, so a high reading there is *correct* and measures nothing.
+
+**The status bar is the control.** Doom draws it at full resolution *regardless of detail
+level*, so if its reading moves when `detaillevel` moves, the movement is ours.
+
+Measured, host `77b9b0bd`, E1M1, `screenblocks 10`:
+
+| region | high detail | low detail | |
+|---|---|---|---|
+| 3D view | 0.68 – 0.72 | 0.99 – 1.00 | expected: Doom's own doubling |
+| **status bar** | **0.28 – 0.29** | **0.75 – 0.77** | ⛔ **2.6× — the defect** |
+
+⇒ **Step 4's acceptance test is now a number, not an opinion: the status bar must read
+~0.28 at BOTH detail levels.** That is the first time this defect has had a target.
