@@ -304,10 +304,43 @@ start:
         ; ---- mode 7 is MONOCHROME: CRTC at 3B4, Input Status 1 at 3BA.
         ;      NTVDMEX claimed neither until step 1, so before it this line was
         ;      all-0xFF from the bus's absent-device default.
+        ;
+        ; ⛔⛔⛔ AND THIS CASE FOLLOWS TWO HAND-PROGRAMMED ONES, WHICH CONTAMINATED
+        ;   IT IN BOTH DIRECTIONS FOR FOUR SESSIONS. Mode X above ends with
+        ;   CR11 = 0xAC -- bit 7 SET, i.e. CR00-CR07 WRITE-PROTECTED -- so the
+        ;   BIOS mode set below could not write the registers it needed to. Two
+        ;   captures of this row, taken a day apart, disagree: the recorded 6.22
+        ;   reference has the BIOS's 400-line timings but Mode X's CR09, and a
+        ;   fresh run of the SAME probe binary has Mode X's CR06/07/09/10/11/12/
+        ;   14/15/16/17 and none of the BIOS's. A row that does not reproduce is
+        ;   not evidence, and this one was being diffed across hosts as though it
+        ;   were. So: drop the protect and take a clean BIOS mode set from a known
+        ;   base before asking anything about mode 7.
+        mov     ax, 00011h                      ; CR11 = 00: write protect OFF
+        call    wr_crtc
+        mov     al, 003h
+        call    do_mode                         ; a full BIOS mode set, unprotected
+        ; ⛔⛔ AND THE PORT IS NOT CHOSEN BY THE MODE NUMBER -- IT IS CHOSEN BY
+        ;   MISCELLANEOUS OUTPUT BIT 0, and this probe got that wrong for four
+        ;   sessions. Hard-coding 3B4 "because mode 7 is mono" made the whole row
+        ;   read 0xFF on PCem, whose BIOS leaves MiscOut = 0x67 -- bit 0 SET, i.e.
+        ;   the CRTC still at 3D4 -- for mode 7 on a colour setup. 51 of the 64
+        ;   bytes then "disagreed" with the 6.22 reference and none of it meant
+        ;   anything. ref/vga.md's whole thesis is that a mode is the register
+        ;   values and not a number; a probe that violates it manufactures data.
         mov     ax, 0007h
         int     10h
+        mov     dx, 03CCh                       ; Miscellaneous Output, read alias
+        in      al, dx
+        test    al, 001h                        ; bit 0: 1 = colour I/O at 3Dx
+        jnz     .m7colour
         mov     word [crtc_idx], 03B4h
         mov     word [stat1], 03BAh
+        jmp     .m7dump
+.m7colour:
+        mov     word [crtc_idx], 03D4h
+        mov     word [stat1], 03DAh
+.m7dump:
         call    dump_all
         EMIT_BUF "vga.mode07mono", regbuf, 64
 

@@ -113,18 +113,23 @@ The full surface list, with the primary source named for each, is in
 
 ## Next actions, in order
 
-1. **VGA step 3 — derive geometry from MiscOut + CRTC + SR.** Measurement first: extend
-   `tools/dostest/p_vgareg.asm` to the address-generator registers for the modes that have no
-   reference rows yet. ⛔ **PCem runs only from the user's own terminal** — it needs the
-   WindowServer.
-2. **Re-test `db4c059`.** It is reverted on an **unproven** regression: the by-hand report that
-   condemned it (*"columns too wide, flickery, status bar"*) is two-thirds the low-detail
-   signature, and that install was at `detaillevel 1`. Un-revert on a branch and re-A/B with
-   `detaillevel 0` **pinned** and the odd-column measurement. "Flickery" is the one symptom
-   detail level does not explain, so this is a re-test, not an assumption the other way.
-3. **VGA step 4 — one address generator** from CR17/CR14/GR5/GR6/SR4, replacing `chain4` + the
-   mode-Y snapshot + `mkind`. This is where Doom's low detail is fixed.
-4. **Write `ref/vga.md`** — the derived hardware reference, the template for the other surfaces.
+▶ **On the rig, when there is a chance** — nothing below needs it, but three things are owed:
+a **`p_vgareg` run under NTVDMEX** with the fixed probe (the old 89.7% parity figure is void;
+see below), a **`p_vgaext` run**, and a by-hand look at Doom/Skyroads after the Input Status 0
+change.
+
+1. **The next surface from [`ref/SOURCES.md`](ref/SOURCES.md).** The 8254 is clean against
+   oracle consensus (5 fixes, BCD included) and the VGA's external registers are settled;
+   pick the next device from the hardware contract, not from a guest.
+2. **Re-measure VGA parity.** `tools/vgaparity.py` now scores only the bytes the **two**
+   oracles agree on — 6.22/QEMU and PCem's real AMI BIOS + IBM VGA ROM, which disagree with
+   each other on **78 of 768 bytes**. The old single-oracle 89.7% could not tell "we are
+   wrong" from "the modern emulator is wrong". Needs one rig run to produce a number.
+3. **Deterministic Win16 tests** — owed since the spec-first directive. The Win3.1 SDK, Wine
+   and ReactOS are real sources; only the WOW32 thunk ABI needs the stock-VDM oracle.
+4. **VGA step 4 — one address generator** from CR17/CR14/GR5/GR6/SR4. ⛔ **PARKED**: the
+   A0000 aperture is mapped RAM with no write hook, so mode-Y exactness needs an
+   architecture change, not a patch. Instrument in place (`tools/doomdetail.py`).
 5. **Then outward**, per [`inventory/README.md`](inventory/README.md).
 
 ⚠ **One observable change at a time, with a by-hand check between.** Read-back fidelity is a
@@ -140,7 +145,7 @@ Doom check this project has ever run was high detail.
 | **The off-VM battery** | ~30 native unit tests over the DOS kernel and the device models. No VM, no rig. **Run it after touching any shared header.** | `./scripts/offvm.sh` |
 | **The parity sweep** | 36 DOS probes asked of NTVDMEX and of genuine MS-DOS 6.22, diffed | `./scripts/paritysweep.sh` |
 | **The bare-metal rig** | A real XP box. The only thing that can see a wrong picture. | [`wiki/The-bare-metal-rig`](wiki/The-bare-metal-rig.md) |
-| **PCem + a real Tseng ET4000/W32p ROM** | The VGA/VESA/BIOS oracle | ⛔ **user's terminal only** |
+| **PCem + a genuine IBM VGA / Tseng ET4000 ROM** | The VGA/VESA/BIOS oracle — the only period-correct firmware we have | ✅ **runs unattended**, ~60 s: `scripts/pcemoracle.py run <x.com>` ⚠ **outside the command sandbox** |
 | **Stock `ntvdm` on the rig** | The oracle for everything with no public spec — the WOW32 thunk ABI above all | [`research/stock-vdm-dump-oracle`](research/) |
 | **The score** | A model, not a measurement | `./tools/score/score.py` |
 

@@ -2508,13 +2508,29 @@ static void ext_in(void *self, uint16_t port, uint8_t w, uint32_t *v)
 {
     video_state *st = (video_state *)self; (void)w;
     switch (port) {
-    /* ⚠ INPUT STATUS 0, and its value is UNVERIFIED. Bit 7 is "vertical retrace
-         interrupt pending" (we raise none, so 0) and bit 4 is the DAC switch-sense
-         comparator, whose real value depends on the DAC contents and the monitor.
-         0x00 is returned deliberately rather than guessed at: it is safe (no phantom
-         interrupt) and it is flagged here and in the dump so the PCem ET4000 probe in
-         step 2 settles it rather than a memory of a datasheet. */
-    case 0x3C2: *v = 0x00; break;
+    /* ── ★★★ INPUT STATUS 0 = 0x10. MEASURED, after three sessions of 0x00. ────
+         Bit 4 is Switch Sense, the DAC comparator a real card drives; bit 7 is
+         "vertical retrace interrupt pending", which we never raise. This used to
+         answer 0x00 and say so -- flagged UNVERIFIED here and in the STAGE2 dump,
+         deliberately not guessed at, pending an oracle with a real video BIOS.
+       ★ PCem WITH A GENUINE IBM VGA ROM SAYS 0x10, IN ALL TWELVE MODES p_vgareg
+         sets -- text, planar, 13h, Mode X and mono alike. dosbox-x also drives bit
+         4 (0x70 in mode 3, 0x60 in 13h, so it varies there); only QEMU answers
+         0x00, and QEMU is the host that has been wrong on every external-register
+         row this project has checked. Two of three set bit 4, and the one that
+         matters is the one running period-correct firmware.
+       ⚠ A CONSTANT IS THE RIGHT SHAPE FOR US even though the real bit is a
+         comparator: the sense line reports the monitor, and ours is fixed. What
+         was wrong was the value, not the constancy.
+       ⛔ BIT 7 STAYS 0, AND THAT IS A RECORDED GAP, NOT AN OVERSIGHT. p_vgaext's
+         is0.vsync case enables the vertical-retrace interrupt in CR11 and looks:
+         dosbox-x sets bit 7 and clears it through CR11 bit 4; PCem's IBM VGA never
+         sets it at all. So the oracles split 1-2 AGAINST the feature, the IBM VGA
+         spec is for it, and no DOS guest this project has met uses it -- the VGA
+         vertical interrupt is famously unreliable and IBM's own documentation
+         steers software away from it. Implementing it would be a guest-visible
+         change with no guest to check it against. See docs/inventory/vga.md. */
+    case 0x3C2: *v = 0x10; break;
     case 0x3C3: *v = st->vga_enable; break;
     case 0x3C6: *v = st->dac_mask;   break;
     case 0x3CA: *v = st->feat_ctrl;  break;   /* Feature Control read  */
@@ -3173,8 +3189,9 @@ int vdd_video_regs_dump(const video_state *st, char *out, int cap)
     /* Say so in the artefact, not only in the source: an unwritten external register
        is OUR spec-derived default and has never been checked against a real card. */
     p = rd_str(p, ") cr11wp_refused=");            p = rd_dec(p, st->crtc_wp_refused);
-    p = rd_str(p, "  [unwritten externals are spec defaults, UNVERIFIED vs a card;"
-                  " InputStatus0 reads 0x00 pending the oracle]\r\n");
+    p = rd_str(p, "  [unwritten externals are spec defaults;"
+                  " InputStatus0 reads 0x10 -- MEASURED on PCem's IBM VGA ROM,"
+                  " all 12 modes]\r\n");
     p = rd_group(p, "SEQ ", st->seq_reg,  st->seq_w,   8);
     p = rd_group(p, "CRTC", st->crtc_reg, st->crtc_w, 32);
     p = rd_group(p, "GC  ", st->gc_reg,   st->gc_w,   16);

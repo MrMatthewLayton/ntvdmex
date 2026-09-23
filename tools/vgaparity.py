@@ -9,16 +9,30 @@ real hardware and ~5 here" was true when it was written and is the reason db4c05
 exists; it stopped being true the moment that commit landed, and a reader had no way
 to tell. Same rule as the other scores in this project: RE-RUN, NEVER QUOTE.
 
-INPUT. The reference is tools/dostest/vgareg.ref.txt, which holds two forms -- an
-early per-group block with `6.22=` lines, and the compact whole-buffer form later
-captures were recorded in. Both are read. Ours is the raw `BUF=vga.*` lines from a
-p_vgareg run under NTVDMEX; by default they are taken from the rig's own
+⛔⛔⛔ AND THE SCORE USED TO BE AGAINST ONE ORACLE, WHICH IS THE MISTAKE THIS
+PROJECT KEEPS MAKING. The reference was 6.22 under QEMU, whose video BIOS is the
+Bochs VGABIOS -- not period-correct firmware. PCem, with a real AMI 486 BIOS and a
+genuine IBM VGA ROM, disagrees with it on scores of bytes: a disagreement of the
+same ORDER as the error the score was reporting. So "89.7% parity" could not tell
+you whether a byte we failed was us being wrong or QEMU being anachronistic.
+
+    ⇒ SCORE ONLY WHAT THE TWO ORACLES AGREE ON. A byte both hosts answer the same
+      way is a fact about VGAs; a byte they answer differently is a fact about
+      emulators, and counting it either way manufactures a number. Disputed bytes
+      are reported separately, with how we answer each -- which is the interesting
+      column, because matching PCem where QEMU differs is a WIN the old score
+      recorded as a loss.
+
+INPUT. Two references: tools/dostest/vgareg.ref.txt (6.22 under QEMU) and
+tools/dostest/vgareg.pcem.txt (PCem, real BIOS). Ours is the raw `BUF=vga.*` lines
+from a p_vgareg run under NTVDMEX; by default they are taken from the rig's own
 result_Probe.log, which is where scripts/dosdiff.py leaves them.
 
-⚠ THE DAC PIXEL MASK IS COUNTED BUT FLAGGED. The oracle says 0x00 and we say 0xFF,
-  which is the documented reset value; that disagreement is OPEN and needs PCem, so
-  it is reported separately rather than quietly counted as a defect or quietly
-  excluded as a known-good.
+⚠ THE OLD DAC-PIXEL-MASK CARVE-OUT IS GONE. It was a hand-maintained exception for
+  exactly this situation -- one oracle said 0x00, we said 0xFF, and it needed PCem.
+  PCem says 0xFF. The byte is now disputed by the general rule and the special case
+  is not needed; a rule beats a list of exceptions that someone has to remember to
+  prune.
 """
 import argparse
 import os
@@ -27,6 +41,7 @@ import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 REF = os.path.join(ROOT, "tools", "dostest", "vgareg.ref.txt")
+REF2 = os.path.join(ROOT, "tools", "dostest", "vgareg.pcem.txt")
 RIG = "/private/tmp/xpshare/debug/out/result_Probe.log"
 
 GROUPS = [("MiscOut", 0, 1), ("FeatCtl", 1, 2), ("InpStat0", 2, 3), ("DACmask", 3, 4),
@@ -80,35 +95,58 @@ def load_ours(path):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--ours", default=RIG, help="a p_vgareg run under NTVDMEX")
-    ap.add_argument("--ref", default=REF)
+    ap.add_argument("--ref", default=REF, help="6.22 under QEMU")
+    ap.add_argument("--ref2", default=REF2, help="PCem, real AMI BIOS + IBM VGA ROM")
     a = ap.parse_args()
-    for p in (a.ref, a.ours):
+    for p in (a.ref, a.ref2, a.ours):
         if not os.path.exists(p):
             sys.exit("missing: %s" % p)
 
-    ref, ours = load_reference(a.ref), load_ours(a.ours)
-    common = sorted(set(ref) & set(ours))
+    qemu, pcem, ours = (load_reference(a.ref), load_reference(a.ref2),
+                        load_ours(a.ours))
+    common = sorted(set(qemu) & set(pcem) & set(ours))
     if not common:
         sys.exit("no cases in common -- is %s a p_vgareg run?" % a.ours)
 
-    print("  VGA REGISTER PARITY -- NTVDMEX vs the MS-DOS 6.22 oracle")
-    print("  %-22s %5s  %s" % ("mode", "bad", "groups still differing"))
-    total = bad = dac = 0
+    print("  VGA REGISTER PARITY -- NTVDMEX vs the bytes TWO oracles agree on")
+    print("  (6.22/QEMU and PCem's real AMI BIOS + IBM VGA ROM)")
+    print("\n  %-22s %5s %5s  %s" % ("mode", "bad", "disp", "groups still differing"))
+    scored = bad = disputed = 0
+    win = lose = 0                      # on DISPUTED bytes: whom do we match?
+    per_group = {}
     for case in common:
-        r, o = ref[case], ours[case]
-        diff = [i for i in range(64) if r[i] != o[i]]
-        dac += 1 if 3 in diff else 0
-        total += 64
+        q, p2, o = qemu[case], pcem[case], ours[case]
+        agree = [i for i in range(64) if q[i] == p2[i]]
+        split = [i for i in range(64) if q[i] != p2[i]]
+        diff = [i for i in agree if q[i] != o[i]]
+        for i in split:
+            if o[i] == p2[i]:  win += 1
+            elif o[i] == q[i]: lose += 1
+        scored += len(agree)
         bad += len(diff)
+        disputed += len(split)
+        for g, lo, hi in GROUPS:
+            n = len([i for i in diff if lo <= i < hi])
+            if n:
+                per_group[g] = per_group.get(g, 0) + n
         groups = sorted({g for g, lo, hi in GROUPS for i in diff if lo <= i < hi})
-        print("  %-22s %5d  %s" % (case, len(diff), ", ".join(groups) or "— identical —"))
-    print("\n  %d modes, %d of %d bytes agree -> PARITY %.1f%%"
-          % (len(common), total - bad, total, 100.0 * (total - bad) / total))
-    if dac:
-        print("  ⚠ %d of those modes include the DAC pixel mask byte, which is an OPEN\n"
-              "    disagreement (oracle 0x00, ours 0xFF = the documented reset) and needs\n"
-              "    PCem to settle. Excluding it: PARITY %.1f%%"
-              % (dac, 100.0 * (total - bad + dac) / total))
+        print("  %-22s %5d %5d  %s"
+              % (case, len(diff), len(split), ", ".join(groups) or "- identical -"))
+
+    print("\n  %d modes. Of the %d bytes BOTH oracles agree on, %d match"
+          " -> PARITY %.1f%%"
+          % (len(common), scored, scored - bad, 100.0 * (scored - bad) / scored))
+    if per_group:
+        print("  still differing, by group: %s"
+              % ", ".join("%s x%d" % (g, n) for g, n in sorted(per_group.items())))
+
+    # ── THE DISPUTED BYTES ARE NOT A FOOTNOTE. They are where "we are wrong" and
+    #    "the modern emulator is wrong" used to be indistinguishable, and the old
+    #    single-oracle score silently resolved every one of them against us.
+    print("\n  %d bytes DISPUTED between the oracles -- excluded from the score."
+          % disputed)
+    print("    of those, we match PCem (period-correct) on %d and QEMU on %d;"
+          " %d match neither." % (win, lose, disputed - win - lose))
     return 0
 
 

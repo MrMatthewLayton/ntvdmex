@@ -1383,6 +1383,31 @@ int main(void)
         vid.bda = 0;
     }
 
+    /* THE TWO EXTERNAL READ-ONLY REGISTERS. docs/ref/vga.md 3.
+       ⛔ INPUT STATUS 0 WAS 0x00 FOR THREE SESSIONS AND WAS TWICE RECORDED AS
+         "confirmed" on the strength of a single oracle. It is 0x10 -- bit 4,
+         Switch Sense -- measured on PCem's genuine IBM VGA ROM in all twelve
+         modes p_vgareg sets, and dosbox-x drives bit 4 too. Pinned here so the
+         value has a check of its own rather than living only in a switch arm.
+       ⛔ BIT 7, the CRT interrupt, IS DELIBERATELY 0 and that is a recorded gap:
+         p_vgaext's is0.vsync case enables the vertical-retrace interrupt and
+         looks, and PCem's IBM VGA never sets the bit at all. See vdd_video.c. */
+    {
+        uint32_t v;
+        vdd_bus_io(&bus, 0x3C2, 1, 1, &v);
+        CHECK(v == 0x10, "ext: Input Status 0 reads 0x10 -- bit 4 Switch Sense");
+        CHECK((v & 0x80) == 0, "ext: ...and bit 7, the CRT interrupt, stays low");
+
+        /* Feature Control is storage: write at 3DA, read back at 3CA. NO ORACLE
+           CAN ADJUDICATE THIS -- 6.22 and dosbox-x both read 0x00 whatever is
+           written, and PCem reads 0xFF, which is an undecoded port rather than a
+           measurement. The IBM VGA spec says it reads back, so it reads back. */
+        v = 0x0F; vdd_bus_io(&bus, 0x3DA, 1, 0, &v);
+        vdd_bus_io(&bus, 0x3CA, 1, 1, &v);
+        CHECK(v == 0x0F, "ext: Feature Control written at 3DA reads back at 3CA");
+        v = 0x00; vdd_bus_io(&bus, 0x3DA, 1, 0, &v);
+    }
+
     printf("\n%d checks, %d failed\n", total, fails);
     return fails ? 1 : 0;
 }

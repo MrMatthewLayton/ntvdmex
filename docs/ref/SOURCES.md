@@ -80,7 +80,7 @@ A specification says what the hardware should do. These say what a machine *did*
 | Oracle | Good for | Not good for |
 |---|---|---|
 | **MS-DOS 6.22 under QEMU** (`scripts/oracle.sh`) | INT 21h — a genuine Microsoft kernel — and any driver run on it (`MOUSE.COM`) | The BIOS: QEMU's SeaBIOS is a reimplementation |
-| **PCem + a genuine Tseng ET4000/W32p or IBM/AMI ROM** | INT 10h/16h, the BDA, the VGA register file, chip timing | ⛔ **Cannot run from an agent shell** — it needs the WindowServer, so the user launches oracle runs from their own terminal |
+| **PCem + a genuine Tseng ET4000/W32p or IBM/AMI ROM** | INT 10h/16h, the BDA, the VGA register file, chip timing | ✅ **Runs unattended**, boot + run in ~60 s. ⚠ Must run **outside the command sandbox** — the XPC/Swift crash blamed on the WindowServer for several sessions was the sandbox, and the "it needs ROMs" was its data directory being `~/PCem/` and not the path our own notes gave |
 | **Stock `ntvdm` on the rig** | What we are replacing: the DOS API, and the WOW32 thunk ABI | Devices, sound, VESA |
 | **Nuked-OPL3** | Bit-exact FM output, as a **black box** | Reading its source — the synth here is clean-room MIT |
 | **The bare-metal rig** | The only instrument that can see a wrong picture | Input lag; it is headless |

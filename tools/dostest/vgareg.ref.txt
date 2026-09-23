@@ -1,122 +1,43 @@
-# p_vgareg reference -- the VGA register file after a BIOS mode set
+# p_vgareg reference -- the VGA register file after a BIOS mode set, on 6.22/QEMU
 #
-# Source: tools/dostest/p_vgareg.asm run on genuine MS-DOS 6.22 (the msdos622
-# oracle) on 2026-09-22. PCem was UNAVAILABLE that day -- it exits early even for
-# p_vesa, which has run there before, so the fault is the oracle's, not the
-# probe's; the two rows marked OPEN below need it before anything is changed.
+# Source: tools/dostest/p_vgareg.asm on genuine MS-DOS 6.22 under QEMU (the
+# msdos622 oracle). RE-CAPTURED 2026-09-23 (session 77) -- see below.
+#
+# ⛔⛔ THIS IS NOT GROUND TRUTH, AND THE FILE USED TO READ AS THOUGH IT WERE.
+#   QEMU's video BIOS is the Bochs VGABIOS: modern, not period-correct firmware.
+#   The companion vgareg.pcem.txt is the same probe under PCem with a REAL AMI
+#   486 BIOS and a genuine IBM VGA ROM, and the two disagree on scores of bytes.
+#   tools/vgaparity.py therefore scores only the bytes both oracles AGREE on and
+#   reports the rest as DISPUTED -- because a byte where we "failed" against this
+#   file alone may have been us matching real hardware.
+#
+# ⛔⛔ AND IT WAS RE-CAPTURED BECAUSE THE OLD CONTENT DID NOT REPRODUCE. The
+#   mode07mono row was contaminated by the two hand-programmed cases that precede
+#   it: Mode X leaves CR11 bit 7 set, write-protecting CR00-CR07, so the BIOS
+#   mode set that followed could not do its job. The old row carried Mode X's
+#   CR09; a fresh run of the same binary carried nine more of Mode X's registers.
+#   p_vgareg now drops the protect and takes a clean mode-3 set first. A row that
+#   does not reproduce is not evidence, and that one was being diffed across
+#   hosts as though it were.
+#
+# ⚠ THE OLD PER-GROUP FORM IS GONE, and it was quietly lossy: its loader filled
+#   only offsets 0 and 4-63, so Feature Control, Input Status 0 and the DAC Pixel
+#   Mask were read as ZERO no matter what the file said. They happened to be 0x00
+#   on this host, so nothing ever caught it. Everything is the whole 64-byte
+#   buffer now.
 #
 # Layout: off 0 MiscOut, 1 FeatCtl, 2 InpStat0, 3 DACMask, 4..8 SR0-4,
 #         9..33 CR00-CR18, 34..42 GR0-GR8, 43..63 AR00-AR14.
 
-== vga.mode03
-   Misc Output (3CC)        6.22=67
-                            ours=67
-   Feature Control (3CA)    6.22=00
-                            ours=00
-   Input Status 0 (3C2)     6.22=00
-                            ours=00
- ! DAC Pixel Mask (3C6)     6.22=00
-                            ours=FF
- ! SEQ SR0-SR4              6.22=0300030002
-                            ours=00000F0000
- ! CRTC CR00-CR18           6.22=5F4F50825581BF1F004F0D0E000000009C8E8F281F96B9A3FF
-                            ours=00000000000000000000060700000000000000280000000000
- ! GC GR0-GR8               6.22=0000000000100E0FFF
-                            ours=0000000000000000FF
- ! AC AR00-AR14             6.22=000102030405140738393A3B3C3D3E3F0C000F0800
-                            ours=000102030405140738393A3B3C3D3E3F0000000000
-
-== vga.mode0D
- ! Misc Output (3CC)        6.22=63
-                            ours=67
-   Feature Control (3CA)    6.22=00
-                            ours=00
-   Input Status 0 (3C2)     6.22=00
-                            ours=00
- ! DAC Pixel Mask (3C6)     6.22=00
-                            ours=FF
- ! SEQ SR0-SR4              6.22=03090F0006
-                            ours=00000F0000
- ! CRTC CR00-CR18           6.22=2D2728902B80BF1F00C00000000000009C8E8F140096B9E3FF
-                            ours=00000000000000000000060700000000000000140000000000
- ! GC GR0-GR8               6.22=000000000000050FFF
-                            ours=0000000000000000FF
- ! AC AR00-AR14             6.22=0001020304050607101112131415161701000F0000
-                            ours=000102030405060710111213141516170000000000
-
-== vga.mode12
- ! Misc Output (3CC)        6.22=E3
-                            ours=67
-   Feature Control (3CA)    6.22=00
-                            ours=00
-   Input Status 0 (3C2)     6.22=00
-                            ours=00
- ! DAC Pixel Mask (3C6)     6.22=00
-                            ours=FF
- ! SEQ SR0-SR4              6.22=03010F0006
-                            ours=00000F0000
- ! CRTC CR00-CR18           6.22=5F4F508254800B3E0040000000000000EA8CDF2800E704E3FF
-                            ours=00000000000000000000060700000000000000280000000000
- ! GC GR0-GR8               6.22=000000000000050FFF
-                            ours=0000000000000000FF
- ! AC AR00-AR14             6.22=000102030405140738393A3B3C3D3E3F01000F0000
-                            ours=000102030405140738393A3B3C3D3E3F0000000000
-
-== vga.mode13
- ! Misc Output (3CC)        6.22=63
-                            ours=67
-   Feature Control (3CA)    6.22=00
-                            ours=00
-   Input Status 0 (3C2)     6.22=00
-                            ours=00
- ! DAC Pixel Mask (3C6)     6.22=00
-                            ours=FF
- ! SEQ SR0-SR4              6.22=03010F000E
-                            ours=00000F0000
- ! CRTC CR00-CR18           6.22=5F4F50825480BF1F00410000000000009C8E8F284096B9A3FF
-                            ours=00000000000000000000060700000000000000280000000000
- ! GC GR0-GR8               6.22=000000000040050FFF
-                            ours=0000000000000000FF
- ! AC AR00-AR14             6.22=000102030405060708090A0B0C0D0E0F41000F0000
-                            ours=000102030405060708090A0B0C0D0E0F0000000000
-
-== vga.mode07mono
- ! Misc Output (3CC)        6.22=66
-                            ours=67
-   Feature Control (3CA)    6.22=00
-                            ours=00
-   Input Status 0 (3C2)     6.22=00
-                            ours=00
- ! DAC Pixel Mask (3C6)     6.22=00
-                            ours=FF
- ! SEQ SR0-SR4              6.22=0300030002
-                            ours=00000F0000
- ! CRTC CR00-CR18           6.22=5F4F50825480BF1F00410000000000009C8E8F284096B9A3FF
-                            ours=00000000000000000000060700000000000000280000000000
- ! GC GR0-GR8               6.22=0000000000100A0FFF
-                            ours=0000000000000000FF
- ! AC AR00-AR14             6.22=200808080808080810181818181818180E000F0800
-                            ours=20010803080508071009180B180D180F0000000000
-
-== vga.cr11wp.protected.cr00  6.22=0x005F  ours=0x0055  MISMATCH
-== vga.cr11wp.open.cr00  6.22=0x0055  ours=0x0055  AGREE
-== vga.dacmask.wr3C  6.22=0x0000  ours=0x003C  MISMATCH
-== vga.sr2.readback05  6.22=0x0005  ours=0x0005  AGREE
-
-# ── ADDED 2026-09-23: the modes step 3 had no rows for, plus the two that are
-#    NOT BIOS modes (a program makes them). Captured on genuine MS-DOS 6.22.
-#    Layout: off 0 MiscOut, 1 FeatCtl, 2 InpStat0, 3 DACMask, 4..8 SR0-4,
-#            9..33 CR00-CR18, 34..42 GR0-GR8, 43..63 AR00-AR14.
-
-== vga.mode04   6300000003090300022D2728902B80BF1F00C10000000000009C8E8F140096B9A2FF0000000000300F0FFF001315170204060710111213141516170100030000
-== vga.mode06   6300000003010100065F4F50825480BF1F00C10000000000009C8E8F280096B9C2FF0000000000000D0FFF001717171717171717171717171717170100010000
-== vga.mode0E   6300000003010F00065F4F50825480BF1F00C00000000000009C8E8F280096B9E3FF000000000000050FFF0001020304050607101112131415161701000F0000
-== vga.mode10   A300000003010F00065F4F50825480BF1F004000000000000083855D280F63BAE3FF000000000000050FFF000102030405140738393A3B3C3D3E3F01000F0000
-== vga.mode11   E300000003010F00065F4F508254800B3E0040000000000000EA8CDF2800E704E3FF000000000000050FFF003F003F003F003F003F003F003F003F01000F0000
-== vga.modeY.unchained  6300000003010F00065F4F50825480BF1F00410000000000009C8E8F280096B9E3FF000000000040050FFF000102030405060708090A0B0C0D0E0F41000F0000
-== vga.modeX.320x240    E300000003010F00065F4F508254800D3E0041000000000000EAACDF2800E706E3FF000000000040050FFF000102030405060708090A0B0C0D0E0F41000F0000
-
-# ⛔ OPEN, blocked on PCem: modes 04 and 06 both report CR09 = 0xC1 here -- the
-#    scan-doubling bit set AND max scan line = 2 -- which derives 100 rows for a
-#    200-line mode. SeaBIOS is a reimplementation; a real ROM may write something
-#    else. See docs/ref/vga.md §5.1.
+== vga.mode03             6700000003000300025F4F50825581BF1F004F0D0E000000009C8E8F281F96B9A3FF0000000000100E0FFF000102030405140738393A3B3C3D3E3F0C000F0800
+== vga.mode0D             6300000003090F00062D2728902B80BF1F00C00000000000009C8E8F140096B9E3FF000000000000050FFF0001020304050607101112131415161701000F0000
+== vga.mode12             E300000003010F00065F4F508254800B3E0040000000000000EA8CDF2800E704E3FF000000000000050FFF000102030405140738393A3B3C3D3E3F01000F0000
+== vga.mode13             6300000003010F000E5F4F50825480BF1F00410000000000009C8E8F284096B9A3FF000000000040050FFF000102030405060708090A0B0C0D0E0F41000F0000
+== vga.mode04             6300000003090300022D2728902B80BF1F00C10000000000009C8E8F140096B9A2FF0000000000300F0FFF001315170204060710111213141516170100030000
+== vga.mode06             6300000003010100065F4F50825480BF1F00C10000000000009C8E8F280096B9C2FF0000000000000D0FFF001717171717171717171717171717170100010000
+== vga.mode0E             6300000003010F00065F4F50825480BF1F00C00000000000009C8E8F280096B9E3FF000000000000050FFF0001020304050607101112131415161701000F0000
+== vga.mode10             A300000003010F00065F4F50825480BF1F004000000000000083855D280F63BAE3FF000000000000050FFF000102030405140738393A3B3C3D3E3F01000F0000
+== vga.mode11             E300000003010F00065F4F508254800B3E0040000000000000EA8CDF2800E704E3FF000000000000050FFF003F003F003F003F003F003F003F003F01000F0000
+== vga.modeY.unchained    6300000003010F00065F4F50825480BF1F00410000000000009C8E8F280096B9E3FF000000000040050FFF000102030405060708090A0B0C0D0E0F41000F0000
+== vga.modeX.320x240      E300000003010F00065F4F508254800D3E0041000000000000EAACDF2800E706E3FF000000000040050FFF000102030405060708090A0B0C0D0E0F41000F0000
+== vga.mode07mono         6600000003000300025F4F50825581BF1F004F0D0E000000009C8E8F281F96B9A3FF0000000000100A0FFF200808080808080810181818181818180E000F0800

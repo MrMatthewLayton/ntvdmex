@@ -214,13 +214,25 @@ pair before committing a flip would never commit one for Doom. Ours commits on `
 DACMask, SR0–4, CR00–18, GR0–8, AR00–14) after each BIOS mode set, plus three
 behavioural cases. Full data: `tools/dostest/vgareg.ref.txt`.
 
-⚠ **PCem was unavailable.** It exits early even for `p_vesa`, which has run 128/128
-there — so the fault is the oracle's, not the probe's, and the rows marked OPEN below
-must not be acted on until it answers. (Likely its documented GUI/desktop-session
-dependency; the runs above were driven from a non-interactive session.)
+⚠ **PCem was unavailable that day.** It exits early even for `p_vesa`, which has run
+128/128 there — so the fault was the oracle's, not the probe's, and the rows marked OPEN
+below must not be acted on until it answers.
 
-**CONFIRMED — our guess was right.** Input Status 0 (`3C2` read) = `0x00` on 6.22, which
-is what step 1 chose and flagged as unverified. One down.
+⛔⛔⛔ **AND "PCem WAS UNAVAILABLE" TURNED OUT TO BE TWO MISTAKES OF MINE, NOT A PROPERTY
+OF PCem.** The crash was my *command sandbox*, not a GUI dependency; and its data
+directory is `~/PCem/`, not `~/Library/Application Support/PCem/` as our own notes said,
+so the ROMs I had "installed" were in a directory PCem never reads. **It now runs fully
+unattended**, `scripts/pcemoracle.py run <x.com>` start to finish in ~60 s, and everything
+this section filed as *blocked* was answerable all along. *A path in a note is a claim:
+`ls` what the program actually creates.*
+
+⛔⛔ **"CONFIRMED — our guess was right" WAS WRONG, AND IT IS THE SECOND TIME THIS EXACT
+ROW WAS OVER-CLAIMED.** It read: *Input Status 0 (`3C2` read) = `0x00` on 6.22, which is
+what step 1 chose and flagged as unverified. One down.* One oracle is not a confirmation,
+and that oracle was QEMU. **A real card reads `0x10`** — bit 4, Switch Sense — on PCem's
+genuine IBM VGA ROM, in *all twelve* modes; dosbox-x drives bit 4 as well. Fixed
+2026-09-23; `vdd_video.c` `ext_in` and `video_test.c` now pin it. See §"Input Status 0 and
+Feature Control" below.
 
 **CONFIRMED DEFECT — CRTC write protect is not honoured.** `vga.cr11wp.protected.cr00`:
 with CR11 bit 7 set, a write of `0x55` to CR00 is **refused** by hardware (reads back
@@ -301,8 +313,10 @@ order — each step is independently shippable and testable:
    `STAGE2: VGAREG` dump, printed on **both** exit paths — the forced-exit path prints
    no STAGE2 block, and Doom and ZAR both leave that way.
    ⚠ Reads of the five newly-claimed ports changed from the bus's absent-device `0xFF`
-   to hardware values. Input Status 0 (`3C2` read) returns `0x00` and is marked
-   UNVERIFIED in the dump itself, pending step 2's oracle — it is not guessed at.
+   to hardware values. Input Status 0 (`3C2` read) returned `0x00`, marked UNVERIFIED in
+   the dump itself pending step 2's oracle — **and it was wrong: it is `0x10`, fixed
+   2026-09-23.** Refusing to guess was right; what failed was accepting the first oracle
+   that answered.
 2. **A probe + the oracle.** `tools/dostest/p_vgareg.com`: write and read back every
    register, dump the file after each BIOS mode set, run against PCem's ET4000. The
    expectations come from the spec **first**, as the VESA work did — see them fail, then
@@ -503,3 +517,76 @@ Measured, host `77b9b0bd`, E1M1, `screenblocks 10`:
 
 ⇒ **Step 4's acceptance test is now a number, not an opinion: the status bar must read
 ~0.28 at BOTH detail levels.** That is the first time this defect has had a target.
+
+---
+
+## Step 5 — the two external read-only registers, and the reference that scored them (2026-09-23)
+
+`tools/dostest/p_vgaext.asm`. The story of this surface is that **`p_vgareg` asked the
+wrong shape of question**: it reads each port once and prints the byte. A byte is a value;
+what was in dispute was a *mechanism*, and four hosts gave four values with no way to
+choose between them. So this probe asks about the mechanism instead, and every expectation
+was written into its header **before** the first run.
+
+| case | asks | 6.22/QEMU | dosbox-x | **PCem (real AMI + IBM VGA)** | predicted |
+|---|---|---|---|---|---|
+| `is0.live` | AND and OR of 65536 reads of `3C2` — which bits are *live*? | `0000` | `7070` | **`1010`** | **`1010`** ✅ |
+| `is0.vsync` | enable the vertical-retrace interrupt in CR11, wait for a retrace, read bit 7; then clear via CR11 bit 4 | `0000` | `0001` | `0000` | `0001` ❌ |
+| `fc.store` | write `00`/`0F`/`08` to `3DA`, read `3CA` after each | `00`/`00`/`00` | `00`/`00`/`00` | `FF`/`FF`/`FF` | — |
+
+**✅ Input Status 0 is `0x10`, and the prediction was exact.** Bit 4 is Switch Sense.
+Every host answers a *constant* — so the shape was never wrong, only the value — and PCem
+answers `0x10` in all twelve modes `p_vgareg` sets. Ours was `0x00`. Fixed; pinned by
+`video_test.c` as well as by the port handler.
+
+**❌ Bit 7, the CRT interrupt, is a recorded gap and stays one.** The prediction failed:
+PCem's IBM VGA never raises it. Two of three hosts do not implement the bit, the IBM VGA
+spec does describe it, and no DOS guest this project has met uses the VGA vertical
+interrupt. Implementing it would be a guest-visible change with no guest to check it
+against — so it is written down rather than built.
+
+**Feature Control cannot be adjudicated by any oracle we have.** Two hosts accept the write
+and return `0x00` regardless; PCem returns `0xFF` to every read, which is an undecoded port
+floating high, not a measurement. We are the only host that implements the read-back the
+spec describes — *spec-implemented, unverifiable*, the same footing as the 8254's BCD bit.
+
+### ⛔⛔⛔ And the bigger finding: the parity score was against the wrong oracle
+
+`tools/vgaparity.py` reported *"689/768 bytes, 89.7%"* against `vgareg.ref.txt` — **6.22
+under QEMU, whose video BIOS is the Bochs VGABIOS, not period-correct firmware.** Now that
+PCem runs unattended, the same probe under a real AMI BIOS and a genuine IBM VGA ROM gives
+a second reference, and **the two oracles disagree with each other on 78 of 768 bytes.**
+
+> That disagreement is the same order as the error the score was reporting. A byte we
+> "failed" may have been us matching real hardware; a byte we "passed" may have been us
+> matching an anachronism. **The number could not distinguish the two, and it was quoted as
+> though it could.**
+
+⇒ `vgaparity.py` now scores only the bytes **both** oracles agree on, and reports the
+disputed ones separately with how we answer each — because matching PCem where QEMU differs
+is a win the old score recorded as a loss. The hand-maintained DAC-pixel-mask carve-out is
+gone: PCem says `0xFF`, which is what we say, and the general rule now covers it.
+
+### Two defects in `p_vgareg` itself, both of which manufactured data
+
+1. **The mono row picked its port from the mode number, not from Miscellaneous Output
+   bit 0.** `ref/vga.md`'s whole thesis is that a mode *is* the register values; the probe
+   violated it, and on PCem — whose BIOS leaves MiscOut `0x67` for mode 7, bit 0 **set** —
+   the probe read `3B4`, found nothing, and reported 51 of 64 bytes as disagreeing. None of
+   it meant anything.
+2. **The mono row was contaminated by the two hand-programmed cases before it.** Mode X
+   ends with `CR11 = 0xAC` — bit 7 set, `CR00`–`CR07` **write-protected** — so the BIOS mode
+   set that followed could not do its job. Two captures a day apart disagree: the old
+   reference carried Mode X's `CR09`, a fresh run of the *same binary* carried nine more of
+   Mode X's registers. **A row that does not reproduce is not evidence**, and this one was
+   being diffed across hosts as though it were. The probe now clears the protect and takes a
+   clean mode-3 set first, and both references were re-captured.
+
+⚠ The old reference's per-group form was also quietly lossy — its loader filled only
+offsets 0 and 4–63, so Feature Control, Input Status 0 and the DAC Pixel Mask were read as
+**zero whatever the file said**. They happened to be `0x00` on that host, so nothing caught
+it. Both references are now whole 64-byte buffers.
+
+▶ **Owed: a p_vgareg run under NTVDMEX on the rig**, with the fixed probe, to put a real
+number back on the board. The old 89.7% must not be quoted — it was measured against a
+reference that has since been re-captured, by a probe that has since been fixed.

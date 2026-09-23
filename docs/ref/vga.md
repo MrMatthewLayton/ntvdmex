@@ -137,12 +137,24 @@ A host that never sees `3C2` **cannot distinguish 320×240 from 320×200**.
 | 6 | — | CRT interrupt (feature-dependent) |
 | 7 | CRT Interrupt | `1` while a vertical retrace interrupt is pending |
 
-⛔ **DISPUTED, and this paragraph previously overstated it twice.** It read: *"Measured
-against MS-DOS 6.22 on real hardware this reads `0x00`. Our guess agreed; it is confirmed,
-not assumed."* Two errors: the 6.22 oracle runs under **QEMU**, which is not real hardware,
-and one oracle agreeing is not confirmation. **dosbox-x answers `0x60`/`0x70`.** Bits 5:6
-are undefined/reserved here, so neither is obviously wrong — this genuinely needs silicon.
-See [`../research/oracle-disagreements.md`](../research/oracle-disagreements.md).
+✅ **SETTLED 2026-09-23: a real card reads `0x10` — bit 4, Switch Sense.** PCem with a
+genuine AMI 486 BIOS and an **IBM VGA ROM** answers `0x10` in **all twelve** modes
+`p_vgareg` sets, text through Mode X; dosbox-x also drives bit 4 (`0x70` in mode 3, `0x60`
+in 13h, so it varies there); only 6.22-under-QEMU answers `0x00`.
+
+⛔ **This paragraph previously overstated the opposite conclusion twice.** It read:
+*"Measured against MS-DOS 6.22 on real hardware this reads `0x00`. Our guess agreed; it is
+confirmed, not assumed."* Two errors in one sentence — the 6.22 oracle runs under **QEMU**,
+which is not real hardware, and one oracle agreeing is not confirmation. Both of those
+errors pointed the same way, and the value stood wrong for three sessions.
+
+⚠ **Bit 7, the CRT interrupt, is a different question and it is still open.**
+`tools/dostest/p_vgaext.asm` enables the vertical-retrace interrupt in CR11 and looks:
+**dosbox-x** sets bit 7 after a retrace and clears it through CR11 bit 4; **PCem's IBM VGA
+never sets it at all**, and QEMU does not either. The IBM VGA spec describes the bit, two of
+three hosts do not implement it, and no DOS guest this project has met uses the VGA vertical
+interrupt — it is famously unreliable and IBM's own documentation steers software away from
+it. See [`../research/oracle-disagreements.md`](../research/oracle-disagreements.md).
 
 ### Input Status 1 — read `3DA` / `3BA`
 
@@ -163,8 +175,16 @@ the wrong speed.
 ### Feature Control — write `3DA`/`3BA`, read `3CA`
 
 Two feature-connector control bits. No standard VGA function depends on them; they are
-read/write storage from software's point of view. **[VERIFY]** whether any guest reads
-them back expecting what it wrote.
+read/write storage from software's point of view.
+
+⛔ **NO ORACLE CAN ADJUDICATE THE READ-BACK, and the three answers say why.**
+`p_vgaext`'s `fc.store` case writes `00`, `0F` and `08` to `3DA` and reads `3CA` after each:
+**6.22/QEMU and dosbox-x both return `0x00` every time** — they accept the write and
+discard it — and **PCem returns `0xFF` every time**, which is an ISA bus floating high,
+i.e. the port is not decoded there at all. None of the three implements the register, so
+none of them is evidence about one. The spec says it reads back, so it reads back; that is
+what NTVDMEX does, and it is the only host here that does. *Spec-implemented, unverifiable
+— the same footing as the 8254's BCD bit.*
 
 ### VGA Enable — `3C3`
 

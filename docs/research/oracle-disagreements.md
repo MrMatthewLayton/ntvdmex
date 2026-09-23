@@ -245,18 +245,56 @@ machine was the unrepresentative one.
 
 | Row | Status |
 |---|---|
-| `pit.bcd.valid` | 6.22 `0`, **PCem `0`**, dosbox-x `1`. Two of three — including the real-BIOS machine — do not model BCD, so **no oracle can verify it**. The datasheet is unambiguous that BCD exists, so implement from the spec and record it as *spec-implemented, unverifiable*, with an abstention rule so the sweep does not read it as a regression. |
+| **VGA Input Status 0 bit 7** (CRT interrupt) | dosbox-x sets it after a retrace and clears it through CR11 bit 4; **PCem's IBM VGA never sets it**, nor does QEMU. The IBM VGA spec describes the bit. 2 of 3 hosts against, no guest known to use it ⇒ **recorded as a gap, not built.** `p_vgaext` case `is0.vsync`. |
+| **VGA Feature Control** (`3CA` read-back) | 6.22 and dosbox-x both return `0x00` whatever is written to `3DA`; **PCem returns `0xFF` to every read**, which is an undecoded port floating high. **No oracle implements the register, so none is evidence about one.** The spec says it reads back; we are the only host that does. *Spec-implemented, unverifiable.* |
 
-## New gaps this run found — the external registers
+## Closed since
 
-PCem is the first oracle here with a genuine BIOS, and two registers we answer with `0x00`
-are not `0x00` on it:
+### `pit.bcd.valid` — closed 2026-09-23, and the reasoning is the template
 
-| Register | ours | 6.22 | dosbox-x | **PCem** |
-|---|---|---|---|---|
-| **Input Status 0** (`3C2` read) | `0x00` | `0x00` | `0x60`/`0x70` | **`0x10`** |
-| **Feature Control** (`3CA` read) | `0x00` | `0x00` | `0x70` | **`0xFF`** |
+6.22 `0`, **PCem `0`**, dosbox-x `1`: two of three, including the real-BIOS machine, do not
+model BCD at all. **A `0` from a host that does not implement a feature is the absence of a
+measurement, not a measurement of absence** — so the majority here was a majority of
+omissions. The inventory had this parked as *"blocked on PCem; implementing from the
+datasheet would be writing an expectation from memory"*, which conflated two things: the
+rule is never write an expectation from **memory**, and Intel 231164-005 is a **cited
+source**. Implemented from the datasheet, marked *spec-implemented / unverifiable*, evidence
+in `tools/dostest/pit_test.c` T12 (8 of 14 checks failed against the old code), abstention
+recorded in `oracle-rules.json` so the rationale prints on every run.
 
-`0x10` is **bit 4, Switch Sense** — the monitor-ID sense line, which a real card drives and
-we do not. All four oracles disagree, so this needs its own probe rather than a guess, but
-`0x00` is now known to be wrong for a period-correct machine.
+### VGA Input Status 0 — closed 2026-09-23, at `0x10`
+
+| Register | ours (was) | 6.22/QEMU | dosbox-x | **PCem (real AMI + IBM VGA)** | ours (now) |
+|---|---|---|---|---|---|
+| **Input Status 0** (`3C2` read) | `0x00` | `0x00` | `0x70` mode 3, `0x60` mode 13h | **`0x10`, all 12 modes** | **`0x10`** |
+
+`0x10` is **bit 4, Switch Sense**. `p_vgaext`'s `is0.live` case settles the *shape* as well
+as the value: it ANDs and ORs 65536 reads across several frames, and every host answers a
+constant, so a constant was always the right shape for us — only the value was wrong. Two of
+three hosts drive bit 4, and the one that matters runs period-correct firmware.
+
+⛔ **This row had been recorded as "confirmed `0x00`" TWICE, on one oracle each time.**
+
+## ⛔⛔⛔ The reference that scored the VGA was itself a single oracle
+
+`tools/vgaparity.py` reported *"689/768 bytes, 89.7%"* against `vgareg.ref.txt` — 6.22
+**under QEMU**, i.e. the Bochs VGABIOS. With PCem now running unattended, the same probe
+under a real AMI BIOS and a genuine IBM VGA ROM gives a second reference, and **the two
+oracles disagree with each other on 78 of 768 bytes** — the same order as the error the
+score was reporting.
+
+> So a byte we "failed" may have been us matching real hardware, and a byte we "passed" may
+> have been us matching an anachronism. The number could not tell the two apart, and it was
+> quoted as though it could.
+
+`vgaparity.py` now scores only the bytes both oracles agree on and reports the disputed ones
+separately, with how we answer each. Details, including two defects in `p_vgareg` that were
+manufacturing data, are in [`../inventory/vga.md`](../inventory/vga.md) step 5.
+
+## And PCem was never the blocker
+
+Rows here were parked on *"PCem is unavailable / needs the WindowServer / needs ROMs"* for
+several sessions. All of it was mine: the crash was **the command sandbox**, and PCem's data
+directory is **`~/PCem/`**, not the `~/Library/Application Support/PCem/` our own notes gave
+— so the ROMs were installed where PCem never looks. It now runs start to finish unattended
+in about 60 seconds. *A path in a note is a claim; `ls` what the program actually creates.*
