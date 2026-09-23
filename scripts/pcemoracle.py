@@ -97,9 +97,16 @@ def launch(floppy=None):
     #  - it enumerates host optical drives while building its menu and blocks in
     #    open() on a device node (Full Disk Access); tools/pcem/libnodev.dylib
     #    interposes opendev() to fail instantly -- the emulated machine has no CD;
-    #  - pcem_path is ~/Library/Application Support/PCem/, NOT the bundle, so roms/
-    #    configs/ nvr/ must exist THERE (symlinked to the bundle's copies). "No ROMs
-    #    present!" with a full roms/ in the bundle means exactly this.
+    #  - ⛔ THE DATA DIRECTORY IS ~/PCem/ -- NOT ~/Library/Application Support/PCem/,
+    #    which is what this comment used to say and what the memory notes repeated.
+    #    MEASURED 2026-09-23: PCem itself created ~/PCem/ with configs/ nvr/
+    #    screenshots/ and NO roms/, which is exactly the "No ROMs present!" the user
+    #    had been seeing. Acting on the wrong path, I symlinked into Application
+    #    Support, saw no change, and nearly concluded the ROMs were not the issue.
+    #    roms/ configs/ nvr/ screenshots/ are now symlinked from ~/PCem/ to the
+    #    bundle's copies.
+    #    ⚠ A PATH IN A NOTE IS A CLAIM. `ls` the directory the program actually
+    #      creates before trusting one.
     env = dict(os.environ)
     nodev = os.path.join(ROOT, "tools", "pcem", "libnodev.dylib")
     if os.path.exists(nodev):
