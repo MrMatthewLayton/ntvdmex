@@ -216,6 +216,78 @@ int main(void)
         CHECK(rd(&bus, CMOS_MIN) == 0x07, "12-hour: the other fields are unaffected");
     }
 
+    /* ── THE ALARM AND UPDATE-ENDED INTERRUPTS. docs/ref/rtc.md 4. ────────────
+       ⛔ THE ALARM REGISTERS WERE BEING REFUSED, and that was a defect I put in
+         myself: "everything below 0x0E is read-only" swept up 01h, 03h and 05h
+         -- the seconds/minutes/hours ALARM -- which is the only way to set an
+         alarm at all. The rule is not "low registers are read-only"; it is WE
+         CANNOT MOVE THE HOST'S CLOCK, which applies to 00/02/04 and the date,
+         not to a comparison value the guest owns. Exactly the same shape as
+         refusing Status B and making the periodic interrupt unreachable. */
+    {
+        vdd_cmos_reset(&cm);
+        cm.rtc_now = fake_rtc;                     /* 14:07:42 */
+        g_irq8 = 0;
+
+        wr(&bus, 0x01, 0x42);
+        CHECK(rd(&bus, 0x01) == 0x42, "alarm: the seconds alarm register is writable");
+        wr(&bus, 0x03, 0x07);
+        wr(&bus, 0x05, 0x14);
+        CHECK(rd(&bus, 0x05) == 0x14, "alarm: ...and the hours alarm too");
+
+        /* UPDATE ENDED: once a second, if UIE is set. */
+        wr(&bus, CMOS_STATUS_B, 0x12);             /* UIE | 24-hour */
+        vdd_cmos_add_clocks(&cm, PIT_INPUT_HZ);
+        CHECK(cm.uf_raised == 1, "update: one second is one update-ended flag");
+        CHECK(g_irq8 == 1, "update: ...and one IRQ8");
+        CHECK((rd(&bus, CMOS_STATUS_C) & 0x90) == 0x90, "update: UF and IRQF are set");
+
+        /* THE ALARM FIRES WHEN THE CLOCK MATCHES -- 14:07:42, which is what the
+           three registers above were set to. */
+        vdd_cmos_reset(&cm); cm.rtc_now = fake_rtc; g_irq8 = 0;
+        wr(&bus, 0x01, 0x42); wr(&bus, 0x03, 0x07); wr(&bus, 0x05, 0x14);
+        wr(&bus, CMOS_STATUS_B, 0x22);             /* AIE | 24-hour */
+        vdd_cmos_add_clocks(&cm, PIT_INPUT_HZ);
+        CHECK(cm.af_raised == 1, "alarm: it fires when the clock matches");
+        CHECK((rd(&bus, CMOS_STATUS_C) & 0x20) != 0, "alarm: AF is set");
+
+        /* ...and NOT when it does not. */
+        vdd_cmos_reset(&cm); cm.rtc_now = fake_rtc; g_irq8 = 0;
+        wr(&bus, 0x01, 0x11); wr(&bus, 0x03, 0x22); wr(&bus, 0x05, 0x09);
+        wr(&bus, CMOS_STATUS_B, 0x22);
+        vdd_cmos_add_clocks(&cm, PIT_INPUT_HZ);
+        CHECK(cm.af_raised == 0, "alarm: a different time does not fire it");
+        CHECK(g_irq8 == 0, "alarm: ...and raises no interrupt");
+
+        /* ⚠ THE MATCH RULE IS NOT "EQUAL". An alarm byte with its top two bits
+           set is a DON'T CARE -- that is how "every minute at 42 seconds" is
+           programmed, and a model that only compares for equality cannot
+           express it at all. */
+        vdd_cmos_reset(&cm); cm.rtc_now = fake_rtc; g_irq8 = 0;
+        wr(&bus, 0x01, 0x42); wr(&bus, 0x03, 0xFF); wr(&bus, 0x05, 0xFF);
+        wr(&bus, CMOS_STATUS_B, 0x22);
+        vdd_cmos_add_clocks(&cm, PIT_INPUT_HZ);
+        CHECK(cm.af_raised == 1, "alarm: don't-care fields (>= 0xC0) match anything");
+
+        /* Both disabled: the second accumulator is dropped, so enabling later
+           starts from now rather than firing off a stale remainder. */
+        vdd_cmos_reset(&cm); cm.rtc_now = fake_rtc; g_irq8 = 0;
+        vdd_cmos_add_clocks(&cm, PIT_INPUT_HZ * 3);
+        CHECK(g_irq8 == 0 && cm.sec_accum == 0,
+              "update/alarm: dormant with UIE and AIE clear");
+    }
+
+    /* THE CHECKSUM OVER 10h-2Dh, which a BIOS verifies at boot. Leaving it zero
+       tells anything that checks that our CMOS is corrupt -- the same wrong
+       answer Status D's VRT bit used to give. */
+    {
+        unsigned i, sum = 0;
+        vdd_cmos_reset(&cm);
+        for (i = 0x10; i <= 0x2D; ++i) sum += rd(&bus, (uint8_t)i);
+        CHECK(rd(&bus, 0x2E) == ((sum >> 8) & 0xFF) && rd(&bus, 0x2F) == (sum & 0xFF),
+              "cmos: the checksum at 2Eh/2Fh covers 10h-2Dh");
+    }
+
     printf("\n%d checks, %d failed\n", total, fails);
     return fails ? 1 : 0;
 }

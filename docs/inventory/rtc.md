@@ -105,7 +105,7 @@ derived from the host clock at the instant of the read, so they are never mid-up
 |---|---|---|
 | `0Eh`–`7Fh` read/write storage | ✅ **IMPL** | |
 | POST defaults: diagnostic, floppy types, equipment, base memory | ✅ **IMPL** | `vdd_cmos_reset` |
-| The checksum at `2Eh`/`2Fh` | ⛔ **MISS** | not computed; a guest that verifies it will not like the answer |
+| The checksum at `2Eh`/`2Fh` | ✅ **IMPL** | computed at reset over `10h`–`2Dh`; a guest that writes into the range invalidates it, exactly as on a real machine |
 | Extended-memory bytes `17h`/`18h`, `30h`/`31h` | ⛔ **MISS** | left zero — should follow the host's own XMS size |
 
 ⚠ **The equipment byte's low nibble is not adjudicable** — it describes the *machine*, and
@@ -118,8 +118,8 @@ coprocessor"*, with every bit set.
 | Source | Enable | Flag | Status |
 |---|---|---|---|
 | **Periodic** | `0Bh` bit 6 | `0Ch` bit 6 | ✅ **IMPL** *(2026-09-23)* |
-| Alarm | `0Bh` bit 5 | `0Ch` bit 5 | ⛔ **MISS** |
-| Update ended | `0Bh` bit 4 | `0Ch` bit 4 | ⛔ **MISS** |
+| **Alarm** | `0Bh` bit 5 | `0Ch` bit 5 | ✅ **IMPL** *(2026-09-23)* |
+| **Update ended** | `0Bh` bit 4 | `0Ch` bit 4 | ✅ **IMPL** *(2026-09-23)* |
 
 ✅ **The periodic interrupt works**, at the rate in Status A bits 3:0 — a fast, steady
 tick **independent of the 8254**, which is exactly why Windows and DOS extenders use it:
@@ -143,6 +143,22 @@ the documented guard of `n8=0 max_ms≈6`, with `pacer_prio=0 joy_thread=0 pit_s
 unchanged. The extra call in the pacer costs nothing measurable, and no IRQ8 appeared in
 the run — the tick stayed dormant, as designed.
 
+### ⛔ And the alarm registers were being refused — a defect I introduced myself
+
+Making Status B writable un-blocked the *periodic* interrupt. The **alarm** stayed
+unreachable, because `"everything below 0x0E is read-only"` swept up `01h`, `03h` and
+`05h` — the seconds/minutes/hours **alarm** — which is the only way to set an alarm at all.
+
+> **The rule is not "low registers are read-only". It is *we cannot move the host's
+> clock*** — which applies to `00`/`02`/`04` and the date, and not to a comparison value
+> the guest owns.
+
+Exactly the same shape as refusing Status B, made twice in one file within hours.
+
+⚠ **And the match rule is not equality.** An alarm byte with its top two bits set is a
+**don't care**, which is how *"every minute at 42 seconds"* is expressed — a model that
+only compares for equality cannot represent it at all.
+
 ### And two lies removed while the control registers became writable
 
 Status B had to become writable for PIE to be reachable at all, and once it was, two
@@ -165,7 +181,7 @@ telling software when it may read, never software telling the chip anything.
    dormant unless the guest programs it, timing canary re-run.
 2. **The extended-memory CMOS bytes** should follow the host's configured XMS size, not
    sit at zero — one more instance of *"two doors onto one fact"*.
-3. **The CMOS checksum** at `2Eh`/`2Fh`.
-4. **Alarm and update-ended interrupts** — after (1), which builds the machinery.
+3. ✅ ~~The CMOS checksum at `2Eh`/`2Fh`.~~ **DONE 2026-09-23.**
+4. ✅ ~~Alarm and update-ended interrupts.~~ **DONE 2026-09-23.**
 5. **The day of week.** Either the host's clock reading grows a weekday field, or this
    stays honestly wrong and documented. It should not be computed here.

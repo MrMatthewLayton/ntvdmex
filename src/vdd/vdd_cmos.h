@@ -80,6 +80,11 @@ typedef struct cmos_state {
          opinion about how much time has passed. */
     uint64_t pf_accum;      /* PIT-rate clocks not yet turned into periodic ticks */
     uint32_t pf_raised;     /* periodic interrupts raised (a run should say)      */
+    /* The once-a-second edge, for the UPDATE-ENDED and ALARM flags. Accumulated
+       from the same clocks rather than polled off the host clock, so the pacer
+       calls rtc_now once a SECOND instead of once a tick. */
+    uint64_t sec_accum;
+    uint32_t uf_raised, af_raised;
     /* The clock. NULL means the registers read as whatever `ram` holds, which is
        what the off-VM battery uses to pin exact values. */
     void   (*rtc_now)(void *ctx, struct vdd_rtc *out);

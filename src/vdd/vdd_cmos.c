@@ -25,10 +25,58 @@ uint32_t vdd_cmos_periodic_hz(const cmos_state *st)
     return 32768u >> (rs - 1);
 }
 
+static int cmos_clock_reg(cmos_state *st, uint8_t reg, uint8_t *out);
+
+/* ── THE ALARM MATCH RULE, WHICH IS NOT "EQUAL". ─────────────────────────────
+     An alarm register whose top two bits are both set (>= 0xC0) is a DON'T CARE
+     and matches anything -- that is how "every minute at 30 seconds" is
+     programmed, and a model that only compares for equality can never express
+     it. (MC146818 datasheet, the alarm registers.) */
+static int alarm_field_matches(uint8_t alarm, uint8_t now)
+{ return (alarm & 0xC0) == 0xC0 || alarm == now; }
+
+/* One second has passed: raise the update-ended flag, and the alarm flag if the
+   clock has reached the programmed time. Returns non-zero if either was set. */
+static int cmos_second_edge(cmos_state *st)
+{
+    int fired = 0;
+    if (st->status_b & 0x10) {                  /* UIE: update ended           */
+        st->status_c |= 0x10; st->uf_raised++; fired = 1;
+    }
+    if (st->status_b & 0x20) {                  /* AIE: alarm                  */
+        uint8_t h, m, sec;
+        if (cmos_clock_reg(st, CMOS_SEC, &sec) &&
+            cmos_clock_reg(st, CMOS_MIN, &m) &&
+            cmos_clock_reg(st, CMOS_HOUR, &h) &&
+            alarm_field_matches(st->ram[0x01], sec) &&
+            alarm_field_matches(st->ram[0x03], m) &&
+            alarm_field_matches(st->ram[0x05], h)) {
+            st->status_c |= 0x20; st->af_raised++; fired = 1;
+        }
+    }
+    return fired;
+}
+
 void vdd_cmos_add_clocks(cmos_state *st, uint32_t clocks)
 {
     uint32_t hz, period;
     int guard = 0;
+    /* ── THE ONCE-A-SECOND EDGE, for UF and AF. Accumulated from the same clocks
+         the periodic divider uses rather than polled off the host clock, so
+         rtc_now is called once a SECOND instead of once a pacer tick. */
+    if (st->status_b & 0x30) {                  /* UIE or AIE enabled          */
+        st->sec_accum += clocks;
+        while (st->sec_accum >= PIT_INPUT_HZ && guard++ < 1000) {
+            st->sec_accum -= PIT_INPUT_HZ;
+            if (cmos_second_edge(st)) {
+                st->status_c |= 0x80;           /* IRQF: something is pending  */
+                if (st->bus) vdd_raise_irq(st->bus, 8);
+            }
+        }
+    } else {
+        st->sec_accum = 0;
+    }
+    guard = 0;
     /* Dormant unless the guest asked for it -- see the note in the header. Doing
        nothing at all (rather than accumulating) means enabling PIE later starts
        from now rather than replaying a backlog of ticks nobody was listening for. */
@@ -77,6 +125,9 @@ static int cmos_clock_reg(cmos_state *st, uint8_t reg, uint8_t *out)
         }
         *out = (uint8_t)(clkval(st, h) | pm);
         return 1; }
+    /* ⚠ 01h, 03h and 05h -- the ALARM registers -- are deliberately NOT claimed
+         here. They are storage the guest owns, not a view of the host clock, so
+         they fall through to ram[] on both the read and the write paths. */
     case CMOS_DOM:     *out = clkval(st, n.day);   return 1;
     case CMOS_MONTH:   *out = clkval(st, n.month); return 1;
     case CMOS_YEAR:    *out = clkval(st, n.year);  return 1;
@@ -167,6 +218,18 @@ static void cmos_out(void *self, uint16_t port, uint8_t w, uint32_t v)
         if (!(b & 0x40)) st->pf_accum = 0;
         return;
     }
+    /* ⛔ THE ALARM REGISTERS ARE NOT THE CLOCK, AND BLANKET-REFUSING THEM WAS A
+         DEFECT I INTRODUCED. 01h, 03h and 05h are the seconds/minutes/hours
+         ALARM, and writing them is the only way to set an alarm at all -- so
+         "everything below 0x0E is read-only" made the alarm interrupt
+         unreachable in the same way refusing Status B made the periodic one
+         unreachable. The rule is not "low registers are read-only"; it is
+         "WE CANNOT MOVE THE HOST'S CLOCK", and that applies to 00/02/04 and to
+         the date, not to a comparison value the guest owns. */
+    if (st->index == 0x01 || st->index == 0x03 || st->index == 0x05) {
+        st->ram[st->index] = b;
+        return;
+    }
     if (st->index <= CMOS_STATUS_D) return;     /* clock + Status C/D: read-only */
     st->ram[st->index & 0x7F] = b;
 }
@@ -211,6 +274,17 @@ void vdd_cmos_reset(void *self)
     st->ram[0x10]       = 0x40;              /* one 1.44M floppy               */
     st->ram[CMOS_EQUIP] = 0x25;              /* 1 floppy, colour 80x25, FPU    */
     st->ram[0x15]       = 0x80; st->ram[0x16] = 0x02;   /* 640 KB base memory  */
+    /* ── THE CHECKSUM OVER 10h-2Dh, WHICH A BIOS VERIFIES AT BOOT. ───────────
+         A setup program that writes a configuration byte and does not fix this
+         makes the BIOS declare the CMOS invalid next time. We are not that
+         BIOS -- but leaving it zero means anything that DOES verify it decides
+         our CMOS is corrupt, which is the same wrong answer Status D's VRT bit
+         used to give. ⚠ Computed at reset only: a guest that writes into the
+         range invalidates it, exactly as on a real machine. */
+    { unsigned i, sum = 0;
+      for (i = 0x10; i <= 0x2D; ++i) sum += st->ram[i];
+      st->ram[0x2E] = (uint8_t)(sum >> 8);
+      st->ram[0x2F] = (uint8_t)(sum & 0xFF); }
 }
 
 int vdd_cmos_init(vdd_bus *b, void *self)
