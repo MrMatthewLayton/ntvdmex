@@ -329,6 +329,81 @@ int main(void)
         vdd_input_reset(&in);
     }
 
+    /* ── THE 8042 AS A CONTROLLER. docs/ref/kbc.md; docs/inventory/kbc.md. ─────
+       Everything above is the keyboard's byte stream. These are the chip it
+       passes through -- and two of the things it controls have nothing to do
+       with typing. Marked from the code first, so every one was predicted to
+       fail; p_kbc.asm asks the same questions of three real machines. */
+    {
+        uint32_t v;
+        vdd_input_reset(&in);
+
+        /* THE STATUS REGISTER. ★ ALL THREE ORACLES ANSWER 0x1C with OBF and AUXB
+           masked off (p_kbc kbc.status.idle) -- 6.22, dosbox-x and PCem alike.
+           Unanimous, so no judgement was needed; we answered 0x00. Bit 2 is SYS,
+           which POST sets on any machine DOS runs on. */
+        vdd_bus_io(&bus, 0x64, 1, 1, &v);
+        /* ⚠ 0x1C, NOT 0x14. This check was written as 0x14 -- SYS and INH -- and
+             the probe then measured 0x1C on ALL THREE oracles. The extra bit is
+             A2 (bit 3): "the last write went to 64h", which on a machine DOS is
+             running on was POST's own last command. Writing the expectation from
+             the datasheet's bit list got the bits right and their POST STATE
+             wrong, which is exactly what an oracle is for. */
+        CHECK((v & 0xDE) == 0x1C, "8042: idle status has SYS, INH and A2 set");
+        CHECK((v & 0x01) == 0, "8042: ...and OBF clear with nothing buffered");
+
+        /* A COMMAND IS ANSWERED. PCem, on a real AMI BIOS, replies 0x55 to the
+           self test; QEMU and dosbox-x do not answer it at all. */
+        v = 0xAA; vdd_bus_io(&bus, 0x64, 1, 0, &v);
+        vdd_bus_io(&bus, 0x64, 1, 1, &v);
+        CHECK((v & 0x01) != 0, "8042: AAh self test presents a reply (OBF set)");
+        vdd_bus_io(&bus, 0x60, 1, 1, &v);
+        CHECK(v == 0x55, "8042: ...and the reply is 0x55");
+        vdd_bus_io(&bus, 0x64, 1, 1, &v);
+        CHECK((v & 0x01) == 0, "8042: ...consumed by the read, so OBF clears");
+
+        /* A CONTROLLER REPLY MUST NOT BE A SCANCODE. This is the whole reason
+           the reply lives in its own byte: with a key queued AND a command
+           pending, the command's answer comes first. Getting this wrong hands a
+           driver a KEYSTROKE where it asked for the output port, and it reads
+           bit 1 of it as the state of the A20 gate. */
+        vdd_input_reset(&in);
+        vdd_input_push_scancode(&in, 0x1E);          /* 'a' waiting             */
+        v = 0xD0; vdd_bus_io(&bus, 0x64, 1, 0, &v);  /* read output port        */
+        vdd_bus_io(&bus, 0x60, 1, 1, &v);
+        CHECK(v != 0x1E, "8042: a command reply is not the queued scancode");
+        CHECK((v & 0x01) != 0, "8042: the output port has the reset line HIGH");
+        CHECK((v & 0x02) != 0, "8042: ...and A20 open, as every BIOS leaves it");
+
+        /* A20 THROUGH ALL THREE DOORS -- ONE WIRE. */
+        vdd_input_reset(&in);
+        CHECK(vdd_input_a20_get(&in) == 1, "a20: open after POST, as on a real machine");
+
+        v = 0xD1; vdd_bus_io(&bus, 0x64, 1, 0, &v);  /* write output port       */
+        v = 0xDD; vdd_bus_io(&bus, 0x60, 1, 0, &v);  /* A20 OFF, reset line high */
+        CHECK(vdd_input_a20_get(&in) == 0, "a20: the 8042 output port closes it");
+        vdd_bus_io(&bus, 0x92, 1, 1, &v);
+        CHECK((v & 0x02) == 0, "a20: ...and port 92h agrees it is shut");
+
+        v = 0x02; vdd_bus_io(&bus, 0x92, 1, 0, &v);  /* fast A20 opens it       */
+        CHECK(vdd_input_a20_get(&in) == 1, "a20: port 92h opens it");
+        v = 0xD0; vdd_bus_io(&bus, 0x64, 1, 0, &v);
+        vdd_bus_io(&bus, 0x60, 1, 1, &v);
+        CHECK((v & 0x02) != 0, "a20: ...and the 8042 output port agrees it is open");
+
+        /* ⛔ A RESET REQUEST IS COUNTED, NOT OBEYED. A VDD cannot reboot the
+           machine it is a guest on, and pretending to would be worse than the
+           count -- but dropping it silently is worse still. */
+        {
+            uint32_t before = in.kbc_reset_asked;
+            v = 0xFE; vdd_bus_io(&bus, 0x64, 1, 0, &v);
+            CHECK(in.kbc_reset_asked == before + 1, "8042: FEh pulse-reset is counted");
+            v = 0x01; vdd_bus_io(&bus, 0x92, 1, 0, &v);
+            CHECK(in.kbc_reset_asked == before + 2, "a20: port 92h fast reset is counted too");
+        }
+        vdd_input_reset(&in);
+    }
+
     printf("\n%d checks, %d failed\n", total, fails);
     return fails ? 1 : 0;
 }

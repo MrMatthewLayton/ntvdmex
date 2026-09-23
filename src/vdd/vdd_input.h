@@ -84,6 +84,28 @@ typedef struct input_state {
          This flag is that byte's pending translation: set by a port read, cleared
          when the BIOS arm consumes it or a newer byte arrives. */
     uint8_t  sc_bios_owed;
+    /* ── ★★★ THE 8042 IS A CONTROLLER, NOT A SCANCODE FIFO. (docs/ref/kbc.md) ──────
+         Everything above models the keyboard's byte stream. These model the chip
+         that stream passes through -- and two of the things it controls have
+         nothing to do with typing: THE A20 GATE and THE CPU RESET LINE.
+       ★ MEASURED (p_kbc.asm, 2026-09-23): PCem, with a real AMI 486 BIOS, answers
+         the self test with 0x55, returns a real output port (0xCF) for command
+         D0h, and reads a status of 0x1C when idle. 6.22-under-QEMU and dosbox-x
+         answer NONE of the commands -- so here it is the period-correct machine
+         that has the feature and the software emulators that cut the corner, which
+         is the reverse of the usual split and about as strong as evidence gets.
+       ⚠ `kbc_reply` IS NOT `sc_last`. A controller reply and a scancode share one
+         output buffer on the real part, but keeping them apart here is what stops
+         a discarded command handing the guest a KEYSTROKE where it expected the
+         output port -- which is what we did, and what a driver reads bit 1 of as
+         the state of A20. */
+    uint8_t  kbc_cmd;          /* an 8042 command awaiting its parameter byte     */
+    uint8_t  kbc_reply;        /* a controller reply presented at port 60h        */
+    uint8_t  kbc_reply_rdy;    /* ...and whether one is presented                 */
+    uint8_t  kbc_cmdbyte;      /* the command byte (20h reads, 60h writes)        */
+    uint8_t  kbc_outport;      /* the output port: bit 0 reset, bit 1 A20         */
+    uint8_t  kbc_last_was_cmd; /* status bit 3 (A2): the last write went to 64h   */
+    uint32_t kbc_reset_asked;  /* FEh, or an output-port write with bit 0 clear   */
     uint32_t sc_owed_served;   /* BIOS arm keys served from the guest-read byte   */
     /* ── ★ THE KEYBOARD TAKES ~1 ms TO SEND THE NEXT BYTE, AND CODE RELIES ON IT. ──────
          An AT keyboard cannot send while the 8042's output buffer is full; once the
@@ -129,6 +151,17 @@ void vdd_input_bios_consume(input_state *st);
 
 int  vdd_input_init(vdd_bus *b, void *self);          /* claims INT 16h          */
 void vdd_input_reset(void *self);
+
+/* ── A20, AND WHY IT IS EXPOSED. (docs/ref/kbc.md 4) ─────────────────────────
+     The 8042's output port bit 1, System Control Port A bit 1 (port 92h) and the
+     XMS driver's AH=03h..07h are three doors onto ONE wire. The controller owns
+     the bit; the host's XMS arm reads and writes it through these so the three
+     answers cannot drift apart -- a guest that opened the gate the hardware way
+     and then asked XMS used to be told it was shut.
+   ⚠ THIS IS THE FLAG, NOT THE ADDRESS WRAP. Not modelling the wrap is a separate
+     decision, recorded in dos_xms.h and main.c, and it still stands. */
+void vdd_input_a20_set(input_state *st, int on);
+int  vdd_input_a20_get(const input_state *st);
 static inline ntvdd vdd_input_device(input_state *st)
 { ntvdd d; d.name = "input"; d.init = vdd_input_init; d.reset = vdd_input_reset;
   d.shutdown = 0; d.self = st; return d; }

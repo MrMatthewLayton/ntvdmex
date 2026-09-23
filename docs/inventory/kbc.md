@@ -1,0 +1,199 @@
+# Inventory — 8042 keyboard controller
+
+**Spec:** IBM AT TechRef; Intel 8042 UPI datasheet; PS/2 TechRef for port `92h`.
+**▶ The hardware reference is [`../ref/kbc.md`](../ref/kbc.md)** — what the chip *does*.
+This file is the companion: what **we** do about it.
+**Our implementation:** `src/vdd/vdd_input.c` (`kbd_hw_in`/`kbd_hw_out`); the A20 flag
+in `src/host/main.c` (XMS).
+**Oracles:** MS-DOS 6.22 (QEMU), dosbox-x, PCem. Off-VM: `tools/dostest/input_test.c`.
+**Marked:** 2026-09-23, **from the code**, with citations.
+
+⚠ **This surface has never been inventoried.** `keyboard.md` covers INT 16h and the BDA
+— the *firmware* — and lists *"port 60h/64h re-read semantics, 8042 status bits"* under
+**"Not yet inventoried"**. This is that.
+
+---
+
+## Headline
+
+**We model the keyboard's FIFO and nothing else about the controller.** `60h` pops a
+scancode and `64h` answers a one-bit status; every 8042 *command* is counted and
+discarded, and the output port — **which is where A20 and the CPU reset line live** —
+does not exist.
+
+> ⛔ **A20 is modelled as three separate flags, two of which are missing.** XMS keeps
+> `g_xms.a20` (`main.c:5988`) and it is the only one; the 8042 gate is not implemented
+> and port `92h` **is not claimed by anything**, so a write vanishes and a read returns
+> the bus's absent-device `0xFF`. **They are one wire.** A guest that enables A20 the
+> hardware way and then asks XMS `AH=07h` is told it is off.
+
+| Group | Marked from the code |
+|---|---|
+| `60h` data — scancode FIFO | **IMPL** — and carefully; the transfer-hold is modelled |
+| `64h` status register | ⛔ **PART** — 1 bit of 8 |
+| 8042 commands (`64h` writes) | ⛔ **MISS** — logged, never acted on |
+| Output port / **A20** / reset | ⛔ **MISS** |
+| Port `92h` (fast A20) | ⛔ **UNCLAIMED** |
+| Keyboard commands (`60h` writes) | ⛔ **PART** — `F3h`'s parameter is captured; **nothing is ever ACKed** |
+
+---
+
+## 1. Ports
+
+| Port | Access | Register | Status | Evidence |
+|---|---|---|---|---|
+| `60h` | R | output buffer | **IMPL** | `kbd_hw_in`, `vdd_input.c:383` — pops, re-asserts the line, models the re-read hold |
+| `60h` | W | keyboard command / 8042 parameter | ⛔ **PART** | `kbd_hw_out`, `vdd_input.c:403` — logged; only `F3h`'s rate byte is kept |
+| `64h` | R | status register | ⛔ **PART** | `vdd_input.c:379` — `sc_avail ? 0x01 : 0x00`; **7 bits are always 0** |
+| `64h` | W | 8042 command | ⛔ **MISS** | `kbd_hw_out` counts it into `kbd_out_log` and returns |
+| `92h` | R/W | System Control Port A | ⛔ **UNCLAIMED** | no `vdd_claim_ports` for it anywhere |
+
+## 2. The status register (`64h` read)
+
+| Bit | Name | Status | Evidence |
+|---|---|---|---|
+| 0 | OBF | **IMPL** | `vdd_input.c:380` |
+| 1 | IBF | **N/A-by-luck** | always 0 — which *happens* to mean "ready", so the write path never blocks |
+| 2 | **SYS** | ⛔ **MISS** | always 0; a machine that has POSTed reads **1** |
+| 3 | A2 | ⛔ **MISS** | we do not track which port was last written |
+| 4 | INH | ⛔ **MISS** | |
+| 5 | AUXB | ⛔ **MISS** | no PS/2 aux path |
+| 6:7 | TIMEOUT / PARITY | **N/A** | error conditions a model has no way to produce |
+
+⚠ **IBF reading 0 is the lucky direction and worth recording as such.** The canonical
+driver loop is *"wait until IBF is clear, then write"*, so a constant 0 lets every write
+through immediately. Had the polarity been the other way, every 8042 driver on earth
+would hang on us. It is not a decision; it is an accident that happens to be safe.
+
+## 3. 8042 commands — `64h` writes
+
+**Every one is MISS.** `kbd_hw_out` (`vdd_input.c:403`) increments `kbd_out_writes`,
+appends to a 16-entry log, and returns. The log was added deliberately — *"no longer
+SILENTLY"* — so a run can say what guests actually ask for, but nothing acts on it.
+
+| Cmd | Status | What a guest loses |
+|---|---|---|
+| `AAh` self test | **MISS** | polls OBF for `55h` for ever |
+| `ABh` interface test | **MISS** | same |
+| `20h`/`60h` read/write command byte | **MISS** | cannot turn IRQ1 or translation on or off |
+| `ADh`/`AEh` disable/enable keyboard | **MISS** | the "quiet the keyboard" pair is a no-op — harmless here only because our FIFO is host-driven |
+| `D0h` **read output port** | **MISS** | the read returns a stale scancode, not the port |
+| `D1h` **write output port** | **MISS** | ⛔ **this is the A20 gate** |
+| `FEh` pulse reset | **MISS** | the classic DOS reboot does nothing |
+
+⛔ **`D0h` is worse than "missing".** The command is discarded, so the guest's next read
+of `60h` returns `sc_last` — **the last scancode**, or `0x00`. A driver reading the
+output port to check A20 gets a plausible byte whose bit 1 is whatever the last key
+happened to set. That is the *"runs but lies"* shape again.
+
+## 4. A20 — one wire, three doors, two of them bricked
+
+| Door | Status | Evidence |
+|---|---|---|
+| XMS `AH=03h`–`07h` | **IMPL** (flag only) | `main.c:5988-5990` — sets/reads `g_xms.a20` |
+| 8042 output port bit 1 | ⛔ **MISS** | §3 |
+| Port `92h` bit 1 | ⛔ **UNCLAIMED** | §1 |
+| **The address wrap itself** | ⛔ **DELIBERATELY NOT MODELLED** | recorded at `main.c:23410` — *"no A20 aliasing … we model the A20 FLAG but not the address wrap"*, because remapping the view on every toggle is expensive |
+
+⚠ **The recorded decision not to model the wrap is separate from this gap and still
+stands.** What is wrong is not that the wire has no effect; it is that **the three ways
+of asking about it do not agree with each other.** A guest that opens A20 through the
+8042 and then queries XMS is told `0`, and concludes the machine cannot do XMS at all —
+which is a much worse failure than "A20 does not actually wrap".
+
+⇒ **The fix that is worth making is to converge the flag**, not to implement aliasing:
+one A20 bit, written by the 8042's output port, by port `92h` and by XMS alike, and read
+back by all three.
+
+## 5. Keyboard commands — `60h` writes
+
+| Item | Status | Evidence |
+|---|---|---|
+| `F3h` typematic — the rate byte is captured | **IMPL** (as instrumentation) | `vdd_input.c:419` |
+| **Any `FAh` ACK, ever** | ⛔ **MISS** | `kbd_hw_out` never enqueues a reply |
+| `EEh` echo, `F2h` ID, `FFh` reset | **MISS** | |
+| LED state | **MISS** | also missing from the BDA — `keyboard.md` |
+
+⛔ **Nothing is ever acknowledged.** Every keyboard command is answered by the keyboard
+with `FAh`, and a driver that writes `EDh` and waits for it waits for ever. The comment
+at `vdd_input.c:398` is explicit that accept-and-ignore is a *deliberate* holding
+position — *"changing what the keyboard does on the strength of an untested guess is how
+the last two attempts at this went"* — which is the right instinct and is exactly what a
+probe against three oracles is for.
+
+---
+
+## Measured, 2026-09-23 — `p_kbc.asm` against three oracles and the rig
+
+| case | 6.22/QEMU | dosbox-x | PCem | ours (was → now) |
+|---|---|---|---|---|
+| `kbc.status.idle` | `001C` | `001C` | `001C` | `0000` → **`001C`** ✅ |
+| `kbc.selftest.55` | `0000` | `0000` | **`0155`** | `0000` → **`0155`** ✅ |
+| `kbc.outport.d0` | `00FF` | `00FF` | **`01CF`** | `00FF` → **`0103`** ⚠ |
+| `kbc.port92.read` | `0002` | `0002` | `00FF` | `00FF` → **`0002`** ✅ |
+| `kbc.a20.readback` | `0001` | `0001` | **`0101`** | `0001` → **`0101`** ✅ |
+
+### ★ The split runs the other way here, and that is the finding
+
+On the 8254's BCD bit and the 8259's poll, the real-BIOS machine was one of the hosts
+*without* the feature. **Here PCem answers every 8042 command and the two software
+emulators answer none of them.** It is the period-correct machine that has the chip and
+the emulators that cut the corner — about as strong as evidence gets.
+
+⚠ **And it cuts the other way one row down.** PCem answers `00FF` for port `92h` — an
+undecoded port floating high — because its machine is an AT-class 486 and System Control
+Port A is a PS/2-era addition. It is *period-correct absent* there. That does not make
+PCem the worse oracle any more than the rows above make it the better one: **it makes it
+a different machine**, and the question each time is which machine the contract is
+written against. NTVDMEX targets XP-era hardware, where `92h` exists.
+
+### ✅ Fixed
+
+- **The status register**, from 1 bit of 8 to the real thing. Unanimous across all three
+  oracles, so no judgement was needed.
+  ⚠ **And the probe caught an error in my own expectation.** The off-VM check was written
+  from the datasheet's bit list as `0x14` — SYS + INH — and all three machines said
+  `0x1C`. The extra bit is **A2**: *"the last write went to `64h`"*, which on a machine
+  DOS is running on was POST's own last command. **Writing the bits from the spec got
+  them right and their POST state wrong**, which is exactly what an oracle is for.
+- **The 8042 command set** — `AAh`, `ABh`, `20h`/`60h`, `ADh`/`AEh`, `A7h`/`A8h`,
+  `D0h`/`D1h`. Replies live in their own byte, so **a controller reply can never be a
+  scancode** — which is what the old code handed back, and what a driver reads bit 1 of
+  as the A20 gate.
+- **Port `92h` is claimed**, and its bit 1 is the same bit as the output port's.
+- **A20 converged.** The 8042 output port, port `92h` and XMS `AH=03h`–`07h` are now
+  three views of **one bit** (`vdd_input_a20_get/set`). Before, XMS owned the only flag,
+  so a guest that opened the gate the hardware way and asked XMS was told it was shut —
+  whose honest reading is *"this machine cannot do XMS"*.
+  ⚠ **Still no address wrap**, and that decision is unchanged and separate. What was
+  wrong was that the three ways of *asking* disagreed.
+- **Reset requests are counted, not obeyed** — `FEh` and `92h` bit 0. A VDD cannot reboot
+  the machine it is a guest on; pretending to would be worse than the count, and dropping
+  it silently worse still.
+
+### ⚠ Not agreement yet: the output port's other bits
+
+PCem answers `0xCF`, we answer `0x03`. **Bit 0 (reset line high) and bit 1 (A20 open)
+match** — the two bits with a defined meaning to software. PCem also sets bits 2, 3, 6
+and 7 (the keyboard clock and data lines, and two undefined bits). **One oracle is not a
+pass**, so those are left alone and recorded here rather than copied.
+
+---
+
+## What to fix, in order
+
+1. ✅ ~~The status register.~~ **DONE** — unanimous.
+2. ✅ ~~`D0h`/`D1h` and the output port, with A20 on the same flag XMS uses.~~ **DONE.**
+3. ✅ ~~Claim port `92h`.~~ **DONE**, on the same bit.
+4. **ACK keyboard commands with `FAh`**, and answer `EEh` / `F2h` / `FFh`. Still MISS.
+   The reply byte added for the controller is the mechanism it needs — a keyboard ACK is
+   the same one-deep buffer — but the ACK *sequences* are multi-byte (`EDh` → `FAh` →
+   parameter → `FAh`), so it wants a small queue rather than a byte, and **no oracle
+   disagreement is driving it yet**: the probe does not ask, because a keyboard command
+   on a machine with a real keyboard attached has effects a headless run cannot undo.
+5. **The output port's undefined bits** — blocked on a second oracle, as above.
+6. **`ADh`/`AEh` should actually stop and start the scancode flow.** They set and clear
+   the command byte's clock-disable bits now, and nothing reads them: our FIFO is
+   host-driven, so "disable the keyboard" quiets nothing. Harmless today because the
+   guests that send it send `AEh` a few instructions later, which is a statement about
+   guests rather than about the chip.

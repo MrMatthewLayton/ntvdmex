@@ -369,6 +369,48 @@ int vdd_input_sc_pending(const input_state *st)
     return sc_avail(st);
 }
 
+/* Present a controller reply at port 60h. One byte deep, which is what the part
+   is: a second command before the first is read simply overwrites it. */
+static void kbc_reply(input_state *st, uint8_t v)
+{ st->kbc_reply = v; st->kbc_reply_rdy = 1; }
+
+/* ── A20: ONE WIRE, AND EVERY DOOR READS THE SAME BIT. ───────────────────────
+     The 8042's output port (bit 1), System Control Port A (port 92h bit 1) and
+     the XMS driver's AH=03h..07h are three interfaces to ONE line, and software
+     picks whichever it likes. We used to keep a flag per door and only XMS had
+     one, so a guest that opened the gate the hardware way and then asked XMS was
+     told it was shut -- and concluded the machine could not do XMS.
+   ⚠ THIS IS THE FLAG, NOT THE ADDRESS WRAP. Not modelling the wrap is a separate
+     decision recorded in dos_xms.h and in main.c, and it still stands; what was
+     wrong was that the three ways of ASKING disagreed with each other. */
+void vdd_input_a20_set(input_state *st, int on)
+{ if (on) st->kbc_outport |= 0x02; else st->kbc_outport &= (uint8_t)~0x02; }
+int  vdd_input_a20_get(const input_state *st)
+{ return (st->kbc_outport & 0x02) ? 1 : 0; }
+
+/* ── SYSTEM CONTROL PORT A (92h) -- THE FAST A20 GATE. ───────────────────────
+     Bit 1 is A20, the same wire as the output port's bit 1, and bit 0 is the
+     PS/2 FAST RESET. Nothing claimed this port at all, so a write vanished and a
+     read returned the bus's absent-device 0xFF -- whose bit 1 is SET, so a guest
+     checking the gate here was told "A20 is on" by an empty bus. Right answer,
+     no mechanism, and wrong the moment anything turned it off.
+   ⚠ 6.22-under-QEMU and dosbox-x both decode 92h (p_kbc kbc.port92.read = 0x02);
+     PCem's AT-class config answers 0xFF, which is period-correct for a machine
+     that predates it. We target XP-era hardware, where the port exists.
+   ⛔ BIT 0 IS A RESET AND IS COUNTED, NOT OBEYED -- same reasoning as the 8042's
+     FEh: a VDD cannot reboot the machine it is a guest on. */
+static void syscon_in(void *self, uint16_t port, uint8_t w, uint32_t *val)
+{
+    input_state *st = (input_state *)self; (void)port; (void)w;
+    *val = (uint8_t)(vdd_input_a20_get(st) ? 0x02 : 0x00);
+}
+static void syscon_out(void *self, uint16_t port, uint8_t w, uint32_t v)
+{
+    input_state *st = (input_state *)self; (void)port; (void)w;
+    if (v & 0x01) st->kbc_reset_asked++;
+    vdd_input_a20_set(st, (v & 0x02) ? 1 : 0);
+}
+
 /* IN 0x60 = keyboard data (pop one scancode; re-reads see the last byte).
    IN 0x64 = 8042 status: bit0 (OBF) set while a scancode waits. Writes to
    either (LED/8042 commands) are accepted and ignored. */
@@ -377,10 +419,36 @@ static void kbd_hw_in(void *self, uint16_t port, uint8_t w, uint32_t *val)
     input_state *st = (input_state *)self;
     (void)w;
     if (port == 0x64) {                       /* status register                    */
-        *val = sc_avail(st) ? 0x01 : 0x00;    /* OBF: a byte is presented           */
+        /* ── ★★★ SEVEN OF THE EIGHT STATUS BITS USED TO BE ZERO. ──────────────
+             We answered OBF and nothing else. The one that matters is bit 2, SYS,
+             which POST sets on any machine DOS is running on; bit 3 (A2) says the
+             last write went to 64h rather than 60h, and bit 4 (INH) says the
+             keyboard is not inhibited.
+           ★ ALL THREE ORACLES ANSWER 0x1C for the idle status with OBF and AUXB
+             masked out (p_kbc kbc.status.idle) -- 6.22 under QEMU, dosbox-x AND
+             PCem. Unanimous, so no judgement was required; we answered 0x00.
+           ⚠ IBF (bit 1) STAYS 0 ON PURPOSE. The canonical driver loop is "wait
+             until IBF is clear, then write", so a constant 0 means every write is
+             accepted at once. We have no transfer delay to model and inventing
+             one would only make drivers wait. Recorded in inventory/kbc.md as
+             N/A-by-luck rather than left to be rediscovered. */
+        uint8_t status = 0x14;                /* SYS (POST done) + INH (not held) */
+        if (st->kbc_reply_rdy || sc_avail(st)) status |= 0x01;   /* OBF           */
+        if (st->kbc_last_was_cmd)              status |= 0x08;   /* A2            */
+        *val = status;
         return;
     }
-    /* port 0x60: data register */
+    /* port 0x60: data register.
+       ⛔ A CONTROLLER REPLY COMES OUT BEFORE ANY SCANCODE, and it is kept in its
+          own byte rather than in sc_last. On the real part they share one output
+          buffer; keeping them apart here is what stops a discarded command handing
+          the guest a KEYSTROKE where it asked for the output port -- which is
+          exactly what we used to do, and what a driver reads bit 1 of as A20. */
+    if (st->kbc_reply_rdy) {
+        st->kbc_reply_rdy = 0;
+        *val = st->kbc_reply;
+        return;
+    }
     st->p60_reads++;
     if (sc_avail(st)) {
         (void)sc_pop(st);
@@ -405,20 +473,62 @@ static void kbd_hw_out(void *self, uint16_t port, uint8_t w, uint32_t v)
     input_state *st = (input_state *)self;
     uint8_t b = (uint8_t)v;
     (void)w;
-    if (st) {
-        st->kbd_out_writes++;
-        if (st->kbd_out_n < 16) {
-            st->kbd_out_log[st->kbd_out_n][0] = (uint8_t)(port & 0xFF);
-            st->kbd_out_log[st->kbd_out_n][1] = b;
-            st->kbd_out_n++;
+    if (!st) return;
+    st->kbd_out_writes++;
+    if (st->kbd_out_n < 16) {
+        st->kbd_out_log[st->kbd_out_n][0] = (uint8_t)(port & 0xFF);
+        st->kbd_out_log[st->kbd_out_n][1] = b;
+        st->kbd_out_n++;
+    }
+    st->kbc_last_was_cmd = (uint8_t)(port == 0x64);      /* status bit 3 (A2)      */
+
+    if (port == 0x64) {
+        /* ── 8042 COMMANDS. They used to be counted and dropped. ───────────────
+             ★ PCem, on a real AMI BIOS, answers all of these; 6.22-under-QEMU and
+               dosbox-x answer none of them (p_kbc kbc.selftest.55, kbc.outport.d0).
+               The period-correct machine is the one with the feature here. */
+        st->kbc_cmd = 0;
+        switch (b) {
+        case 0xAA: kbc_reply(st, 0x55); break;      /* self test passed           */
+        case 0xAB: kbc_reply(st, 0x00); break;      /* interface test: no error   */
+        case 0x20: kbc_reply(st, st->kbc_cmdbyte); break;
+        case 0xD0: kbc_reply(st, st->kbc_outport); break;
+        case 0x60: case 0xD1:                        /* a parameter byte follows   */
+            st->kbc_cmd = b; break;
+        case 0xAD: st->kbc_cmdbyte |= 0x10; break;   /* disable keyboard clock     */
+        case 0xAE: st->kbc_cmdbyte &= (uint8_t)~0x10; break;
+        case 0xA7: st->kbc_cmdbyte |= 0x20; break;   /* disable aux clock          */
+        case 0xA8: st->kbc_cmdbyte &= (uint8_t)~0x20; break;
+        /* ⛔ FEh PULSES THE CPU RESET LINE, and we do not have one to pulse. It is
+             COUNTED rather than obeyed: a VDD cannot reboot the machine it is a
+             guest on, and pretending otherwise would be worse than the count. The
+             guest sees no reset and the run says it was asked for. */
+        case 0xFE: st->kbc_reset_asked++; break;
+        default: break;
         }
-        if (st->kbd_expect_rate) {          /* the byte after 0xF3 is the rate     */
-            st->kbd_typematic_byte = b;
-            st->kbd_typematic_set  = 1;
-            st->kbd_expect_rate    = 0;
-        } else if (port == 0x60 && b == 0xF3) {
-            st->kbd_expect_rate = 1;
-        }
+        return;
+    }
+
+    /* port 0x60: either the parameter of an 8042 command, or a KEYBOARD command. */
+    if (st->kbc_cmd == 0x60) { st->kbc_cmdbyte = b; st->kbc_cmd = 0; return; }
+    if (st->kbc_cmd == 0xD1) {
+        /* ── ★★★ THE OUTPUT PORT, WHICH IS WHERE A20 LIVES. ───────────────────
+             Bit 1 is the A20 gate and bit 0 is CPU reset, active low. A20 is
+             written straight through to the one flag the whole host shares --
+             see vdd_input_a20 -- because THE THREE DOORS ARE ONE WIRE: a guest
+             that opens the gate here and then asks XMS "is A20 on" has to be
+             told yes, or it concludes the machine cannot do XMS at all. */
+        st->kbc_cmd = 0;
+        if (!(b & 0x01)) st->kbc_reset_asked++;      /* bit 0 low = reset request  */
+        st->kbc_outport = (uint8_t)(b | 0x01);       /* we never actually reset    */
+        return;
+    }
+    if (st->kbd_expect_rate) {              /* the byte after 0xF3 is the rate     */
+        st->kbd_typematic_byte = b;
+        st->kbd_typematic_set  = 1;
+        st->kbd_expect_rate    = 0;
+    } else if (b == 0xF3) {
+        st->kbd_expect_rate = 1;
     }
 }
 
@@ -492,6 +602,23 @@ void vdd_input_reset(void *self)
     st->sc_bios_owed = 0;
     st->sc_hold_until = 0; st->sc_irq_up = 0;
     st->ext_pending = 0;
+    /* ── THE CONTROLLER'S POST STATE. ────────────────────────────────────────
+         A machine DOS is running on has been through POST, so: the keyboard
+         interrupt and translation are enabled in the command byte, and the
+         output port has the reset line HIGH (bit 0 -- it would be resetting
+         otherwise) and **A20 ALREADY OPEN**, which is what every BIOS since the
+         AT leaves behind. Coming up with A20 shut would make our own reset a
+         guest-visible event that no real machine has. */
+    st->kbc_cmd = 0; st->kbc_reply = 0; st->kbc_reply_rdy = 0;
+    /* ⚠ A2 (status bit 3) STARTS SET, and it took the probe to notice. It says
+         "the last write went to 64h rather than 60h", and on a machine DOS is
+         running on that write was POST's own last command to the controller --
+         all three oracles read 0x1C at probe start, we read 0x14, and the single
+         missing bit was this one. A reset that leaves it clear is claiming the
+         last thing anyone wrote was keyboard data, which has never been true. */
+    st->kbc_last_was_cmd = 1;
+    st->kbc_cmdbyte = 0x45;                 /* IRQ1 on, translation on, SYS set   */
+    st->kbc_outport = 0x03;                 /* reset line high, A20 enabled       */
     if (st->bda) {                          /* an empty ring is head==tail at its start */
         bda_w16(st, BDA_KB_HEAD, BDA_KB_START);
         bda_w16(st, BDA_KB_TAIL, BDA_KB_START);
@@ -513,5 +640,6 @@ int vdd_input_init(vdd_bus *b, void *self)
     if (vdd_claim_int(b, 0x16, int16, st)) return -1;
     if (vdd_claim_ports(b, 0x60, 0x60, kbd_hw_in, kbd_hw_out, st)) return -1;  /* data   */
     if (vdd_claim_ports(b, 0x64, 0x64, kbd_hw_in, kbd_hw_out, st)) return -1;  /* status */
+    if (vdd_claim_ports(b, 0x92, 0x92, syscon_in, syscon_out, st)) return -1;  /* A20    */
     return 0;
 }

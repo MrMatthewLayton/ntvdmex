@@ -1418,5 +1418,48 @@
   "abstain": [],
   "recorded": "2026-09-23",
   "why": "OPEN, AND DELIBERATELY NOT ACTED ON. AH is a base-port read taken straight after an ICW1..ICW4 sequence with the ISR selected beforehand; AL is the IRR, explicitly selected. The datasheet lists SIX side effects for ICW1, two of which are guest-visible here: it clears the IMR (we do that) and it SETS THE STATUS READ BACK TO IRR (we do not). All three hosts answer AH=0x00, but that only discriminates on PCem -- QEMU and dosbox-x report AL=0x00 as well, i.e. their ICW1 clears the IRR, so both registers are zero and the read cannot say which one it returned. Only PCem keeps the pending bit (AL=0x01), and its AH=0x00 says the select was NOT reset. ONE ORACLE IS NOT A PASS -- that is this session's own lesson three times over -- so the read-select gap stays recorded in docs/inventory/pic.md and unfixed until a second machine can see it. The IRR half is a genuine 2-1 split about whether ICW1's edge-sense reset clears a latched request; we follow the majority by accident rather than by decision, which is also recorded."
+ },
+ {
+  "probe": "kbc",
+  "case": "kbc.selftest.55",
+  "field": "AX",
+  "abstain": [
+   "msdos622",
+   "dosbox-x"
+  ],
+  "recorded": "2026-09-23",
+  "why": "MS-DOS 6.22 under QEMU and dosbox-x DO NOT ANSWER 8042 COMMANDS AT ALL, so their value is the absence of the feature rather than a measurement of it. PCem, with a real AMI 486 BIOS, answers every one of them -- which makes this the REVERSE of the usual split: here it is the period-correct machine that has the feature and the software emulators that cut the corner, and that is about as strong as evidence gets for implementing it. AH is 'a byte arrived', AL is what it was: PCem answers 0155h -- the datasheet's 55h for a passed self test -- while the other two time out at 0000h. NTVDMEX now answers 0155h. \u26a0 The case emits BOTH halves deliberately: an earlier cut emitted a single 0/1 verdict, where 0 meant both 'the controller never replied' and 'it replied with the wrong byte' -- two different defects collapsed into one number."
+ },
+ {
+  "probe": "kbc",
+  "case": "kbc.outport.d0",
+  "field": "AX",
+  "abstain": [
+   "msdos622",
+   "dosbox-x"
+  ],
+  "recorded": "2026-09-23",
+  "why": "MS-DOS 6.22 under QEMU and dosbox-x DO NOT ANSWER 8042 COMMANDS AT ALL, so their value is the absence of the feature rather than a measurement of it. PCem, with a real AMI 486 BIOS, answers every one of them -- which makes this the REVERSE of the usual split: here it is the period-correct machine that has the feature and the software emulators that cut the corner, and that is about as strong as evidence gets for implementing it. D0h puts the 8042's OUTPUT PORT in the output buffer, and bit 1 of it is the A20 gate. The two abstaining hosts discard the command, so the following read returns whatever was in the buffer -- on a real machine a SCANCODE -- and a driver reads bit 1 of that as the state of A20: the 'runs but lies' shape. \u26a0 PCem answers 01CFh and we answer 0103h, and THAT IS NOT YET AGREEMENT: bit 0 (reset line high) and bit 1 (A20 open) match, which are the two bits with a defined meaning to software, but PCem also sets bits 2, 3, 6 and 7 -- the keyboard clock and data lines and two undefined bits. ONE ORACLE IS NOT A PASS, so those are left alone and recorded in docs/inventory/kbc.md rather than copied."
+ },
+ {
+  "probe": "kbc",
+  "case": "kbc.port92.read",
+  "field": "AX",
+  "abstain": [
+   "pcem"
+  ],
+  "recorded": "2026-09-23",
+  "why": "PCem's 00FFh IS AN UNDECODED PORT FLOATING HIGH, not a reading: its machine is an AT-class 486 and System Control Port A is a PS/2-era addition, so the port is period-correct ABSENT there. 6.22-under-QEMU and dosbox-x both decode it and answer 0002h -- bit 1, the fast A20 gate, open. NTVDMEX targets XP-era hardware, where the port exists, and now answers 0002h from the same A20 bit the 8042's output port uses. \u26a0 Worth noting which way this cuts: on the two 8042-command cases PCem is the only host WITH the feature, and here it is the only host WITHOUT it. Neither makes it the better oracle in general -- it makes it a DIFFERENT MACHINE, and the question is which machine the contract is written against."
+ },
+ {
+  "probe": "kbc",
+  "case": "kbc.a20.readback",
+  "field": "AX",
+  "abstain": [
+   "msdos622",
+   "dosbox-x"
+  ],
+  "recorded": "2026-09-23",
+  "why": "MS-DOS 6.22 under QEMU and dosbox-x DO NOT ANSWER 8042 COMMANDS AT ALL, so their value is the absence of the feature rather than a measurement of it. PCem, with a real AMI 486 BIOS, answers every one of them -- which makes this the REVERSE of the usual split: here it is the period-correct machine that has the feature and the software emulators that cut the corner, and that is about as strong as evidence gets for implementing it. AH is A20 as the 8042's output port reads it BACK after a D1h/DFh write; AL is the XMS driver's answer to AH=07h. They are ONE WIRE and must agree. PCem answers 0101h -- the controller reports what was written to it, and XMS concurs. The two abstaining hosts answer 0001h: no read-back (the command was dropped), XMS says on. NTVDMEX answered 0001h and now answers 0101h, because the 8042 output port, port 92h and XMS AH=03h-07h are now three views of one bit; previously XMS owned the only flag and a guest that opened the gate the HARDWARE way was told by XMS that it was shut. \u26d4 THE CASE ONLY EVER ENABLES A20, NEVER DISABLES IT. The obvious stronger test -- toggle to the opposite state and see whether XMS follows -- would call the XMS entry point with A20 OFF, and with DOS=HIGH both HIMEM and much of DOS live in the HMA, reachable only because A20 is on. That call is a jump into wrapped memory: a hang, on a bare-metal rig, for one bit of data."
  }
 ]

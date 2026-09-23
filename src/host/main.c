@@ -5985,9 +5985,26 @@ static void host_xms(volatile BYTE *tib)
         else if (!g_xms.hma_used) X_FAIL(XMSERR_HMA_NOTALL);
         else { g_xms.hma_used = 0; X_SETAX(1); X_SETBL(0); }
         break;
-    case 0x03: case 0x05: g_xms.a20 = 1; X_SETAX(1); break;  /* enable A20 (global/local) */
-    case 0x04: case 0x06: g_xms.a20 = 0; X_SETAX(1); break;  /* disable A20 */
-    case 0x07: X_SETAX(g_xms.a20 ? 1 : 0); X_SETBL(0); break;/* query A20 */
+    /* ── ★★★ A20 IS ONE WIRE AND XMS IS ONLY ONE OF ITS THREE DOORS. ──────────
+         `g_xms.a20` used to be the ONLY A20 state in the host: the 8042's output
+         port was not implemented and port 92h was claimed by nothing, so a guest
+         that opened the gate the hardware way -- which is what HIMEM, every DOS
+         extender and most loaders actually do -- and then asked XMS AH=07h was
+         told it was SHUT. The honest reading of that answer is "this machine
+         cannot do XMS".
+       ► The controller owns the bit now (vdd_input_a20_get/set, and the same bit
+         backs port 92h), and these three cases are a view onto it. `g_xms.a20` is
+         kept in step so nothing else that reads it goes stale.
+       ⚠ STILL NO ADDRESS WRAP. That decision is separate, recorded at the top of
+         this file and in dos_xms.h, and it still stands -- what was wrong was that
+         the three ways of ASKING disagreed with each other. */
+    case 0x03: case 0x05:                                   /* enable A20 (global/local) */
+        vdd_input_a20_set(&g_in, 1); g_xms.a20 = 1; X_SETAX(1); break;
+    case 0x04: case 0x06:                                   /* disable A20 */
+        vdd_input_a20_set(&g_in, 0); g_xms.a20 = 0; X_SETAX(1); break;
+    case 0x07:                                              /* query A20 */
+        g_xms.a20 = vdd_input_a20_get(&g_in);
+        X_SETAX(g_xms.a20 ? 1 : 0); X_SETBL(0); break;
     case 0x08:                                  /* query free extended memory */
         xms_query_free(&g_xms, &largest, &totfree);
         X_SETAX(largest > 0xFFFF ? 0xFFFF : largest);
