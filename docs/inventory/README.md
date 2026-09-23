@@ -62,17 +62,78 @@ A mark of IMPL is a claim about our code, not about hardware. Two things raise i
   contract, the WOW32 thunk tables, DOS's undocumented internals — the oracle *is* the
   spec, and that is stated per surface rather than glossed.
 
+⚠ **"No public spec" is a much smaller set than it first looks, and claiming it too
+early is how a surface escapes the inventory.** Win16 is the example: the *API
+semantics* are fully specified by the Windows 3.1 SDK Programmer's Reference, and
+implemented in the open by **Wine** (`krnl386.exe16`, `user.exe16`, `gdi.exe16`) and
+**ReactOS** (NTVDM + WOW32); the NE format is documented; *Undocumented Windows*
+(Schulman et al.) covers much of the remainder. What is genuinely unspecified is
+narrow — the WOW32 thunk ABI and krnl386's private structures — and even those have
+stock XP's own WOW as a live oracle. Before writing "no spec" against a surface,
+name what was searched.
+
 ⛔ An all-AGREE probe is **not** a verified surface: check the probe can fail, and
 poison every output register first. See `parity-by-inventory`.
 
 ## The surfaces
 
-| Surface | File | State |
-|---|---|---|
-| VGA / CRT | [vga.md](vga.md) | **first pass done** — 71 registers enumerated, coverage measured |
-| 8254 PIT, 8259 PIC, 8042, RTC/CMOS, 8237 DMA, 8250, LPT, speaker | — | not started |
-| SB16 DSP + mixer, OPL3, MPU-401, gameport | — | not started |
-| BIOS INT 10h–1Ah, the BDA, EBDA | — | not started |
-| VBE 2.0/3.0 | — | partially covered by s74b's spec-first work (31 checks) |
-| DOS INT 21h/2Fh/25h/26h/28h/29h/2Eh/33h, XMS, EMS, DPMI, VCPI, MSCDEX | — | partially covered by `parity-by-inventory` sweeps |
-| Win16 KERNEL/USER/GDI export tables | `docs/research/wow-user-surface.md` | USER mapped (441 ids, 385 named) |
+**Scope rule (user, 2026-09-23):** a device is in the inventory because it is part of
+the **period-correct hardware contract we are emulating**, not because a guest has
+asked for it. *"We don't not implement it because only one app asked for it. We do
+implement it because it's part of the period correct hardware contract."* Counting
+how many shelf guests touch a surface is app-driven reasoning wearing a spec-first
+hat, and it is not a reason to defer.
+
+Each surface gets two documents, doing two different jobs:
+
+- `docs/ref/<surface>.md` — **what the hardware does.** A coherent technical reference
+  in our own words, derived from the source documents and cited per section, suitable
+  for the project wiki and for a collaborator who has never seen the part.
+- `docs/inventory/<surface>.md` — **what we do.** Every unit enumerated and marked
+  IMPL / PART / STORE / MISS / N/A from the code, with a `file:line` citation.
+
+### Hardware
+
+| Surface | Primary sources | Inventory | Ref |
+|---|---|---|---|
+| **VGA / CRTC / sequencer / graphics / attribute / DAC** | IBM VGA TechRef; FreeVGA | [vga.md](vga.md) — **71 enumerated, measured** | — |
+| **VESA VBE 2.0 / 3.0** | `docs/ref/vbe20.pdf`, `docs/ref/vbe30.pdf` | — | have PDFs |
+| 8254 PIT | Intel 8254 datasheet | — | — |
+| 8259A PIC | Intel 8259A datasheet | — | — |
+| 8237A DMA controller | Intel 8237A datasheet | — | — |
+| 8042 keyboard controller | IBM AT TechRef | — | — |
+| Keyboard (scan code sets 1–3) | IBM AT TechRef | — | — |
+| PS/2 + serial mouse | Microsoft/Logitech protocol notes | — | — |
+| Gameport / joystick | IBM Game Control Adapter | — | — |
+| MC146818 RTC + CMOS map | Motorola MC146818 datasheet | — | — |
+| PC speaker (PIT ch.2 + port 61h) | IBM TechRef | — | — |
+| Sound Blaster Pro / 16 / AWE32 | Creative SB Programmer's Reference | — | — |
+| OPL2 (YM3812) / OPL3 (YMF262) | Yamaha datasheets; Nuked-OPL3 as oracle | — | — |
+| Gravis Ultrasound | Gravis GUS SDK / Programmer's Guide | — | — |
+| MPU-401 + General MIDI | Roland MPU-401 TechRef; GM spec | — | — |
+| 16550 UART + LPT | National 16550 datasheet; IBM TechRef | — | — |
+| Floppy controller (765/82077) | Intel 82077AA datasheet | — | — |
+| IDE / ATA + ATAPI | ATA-x, ATAPI specs | — | — |
+| **CPU: 386 → Pentium** | Intel SDM; 386/486 Programmer's Reference | — | real CPU; V86 contract only |
+
+### Firmware
+
+| Surface | Primary sources | Inventory | Ref |
+|---|---|---|---|
+| PC BIOS INT 10h–1Ah | IBM TechRef; Ralf Brown's Interrupt List | — | — |
+| VGA BIOS (INT 10h) — *distinct from the VGA* | IBM VGA TechRef | — | — |
+| BIOS Data Area (0040:) + EBDA | IBM TechRef | — | — |
+
+### Software
+
+| Surface | Primary sources | Inventory | Ref |
+|---|---|---|---|
+| MS-DOS INT 21h/2Fh/25h/26h/28h/29h/2Eh | RBIL; *Undocumented DOS* | partial (`parity-by-inventory`) | — |
+| INT 33h mouse driver | Microsoft Mouse Programmer's Reference | partial | — |
+| XMS 3.0 / LIM EMS 4.0 / VCPI | XMS + LIM specs | partial | — |
+| **DPMI 1.0** | DPMI 1.0 spec | partial — live frontier | — |
+| DOS extenders: DOS/4GW, DOS16M | Tenberry/Rational docs | partial | — |
+| MSCDEX | MSCDEX spec | — | — |
+| Executable formats: MZ, LE, NE, PE | MS format specs | partial (`ne_test`) | — |
+| Win16 KERNEL / USER / GDI | Win3.1 SDK; Wine; ReactOS | `docs/research/wow-user-surface.md` (441 ids, 385 named) | — |
+| WOW32 thunk ABI | *no spec* — ReactOS prior art + stock WOW oracle | `docs/research/wow32-call-surface.md` | — |
