@@ -131,10 +131,14 @@ which moves the text cursor by one scan line (`0x0607` → the card's own `0x0D0
    exited**. New `vdd_cmos.{c,h}`.
    The RTC's **periodic IRQ8** followed — on the PIT's own pacer, dormant unless a guest
    programs it, timing canary re-run (`n8=0 max_ms=7`).
-   ▶ **Next candidates in the contract:** the 16550 UART and the 82077AA floppy
-   controller — **both likely the same "firmware present, chip absent" split** the RTC,
-   the 8042 and the FDC all turned out to have; the RTC's alarm and update-ended
-   interrupts. Pick by the contract, not by a guest.
+   The **16550 UART** followed and is the first surface that needed **no fix**: four of
+   five probe cases agree on all four hosts, including the loopback modem-line pairing
+   and the DLAB bank switch. ⚠ *My prediction that the UART and the FDC would both show
+   the "firmware present, chip absent" split was half right* — the FDC is absent, the
+   UART was there and in good shape.
+   ▶ **Next candidates in the contract:** the **82077AA floppy controller** (nothing
+   claims `3F0h`–`3F7h` — confirmed absent), the RTC's alarm and update-ended
+   interrupts, the UART's OUT2 interrupt gate. Pick by the contract, not by a guest.
    ⚠ **Owed:** a `p_rtc` case that sets PIE and counts periodic interrupts. The existing
    `statusc.clear` row reads `0000h` because the probe never enables the interrupt, not
    because nothing can raise one.

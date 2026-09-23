@@ -431,6 +431,49 @@ row whose reasoning moves while its number stays put is exactly the kind that go
 wrong, so both the inventory and the recorded rationale now say which reason applies.
 **Owed: a probe case that sets PIE and counts.**
 
+---
+
+## 11. The 16550 — the first surface that needed no fix (`3720972`)
+
+`vdd_comm.c` is 402 lines of careful work and nothing had ever asked a machine whether it
+was right — the 8259's position exactly. So `p_uart.asm` asks what a **driver** asks.
+
+**Four of five cases agree across all four hosts**, and they are not soft:
+
+- **the loopback echo** — *"is there a UART here"* for every driver ever written;
+- **the four modem lines**, the one that matters most: a port that echoes bytes but maps
+  DTR to CTS instead of DSR passes the echo test and fails every real detection routine.
+  *Success that looks like success.*
+- **the scratch register** — how the part is identified (an 8250 has none, reads `FFh`);
+- **DLAB really switching the bank** — a model that merely stores it writes the baud
+  divisor into the receive buffer and the interrupt enables, silently.
+
+### ⛔⛔ The one disagreement was a serial mouse, and my probe caused it
+
+PCem alone reported `LSR = 61h`, Data Ready set. A *value* says the hosts differ; it does
+not say why — so a second case drained the byte and named it:
+
+> **`4Dh` = `'M'`** — the byte a **Microsoft serial mouse** sends to identify itself when
+> DTR and RTS are asserted. PCem's config is the only one of the three with a
+> `mouse_type` set.
+
+⚠ **And the probe broke its own stated rule to produce it.** Its header says *"no case
+reads a byte that the outside world would have to supply"* — the whole reason every test
+is built on loopback, which disconnects the pins. But **the exit from loopback re-applies
+MCR to the real pins**, and that transition is itself a stimulus.
+
+> **A probe can isolate the chip while it is *inside* loopback. It cannot isolate it on
+> the way out.**
+
+Both rows measure what is plugged into COM1 — the CMOS equipment byte's shape. Abstained,
+with the *mechanism* recorded rather than the value.
+
+⚠ **My prediction was half right.** I expected the UART and the FDC both to show the
+"firmware present, chip absent" split. The FDC is absent as predicted; the UART was there
+and in good shape. Gaps here came from **marking the code**, not from the probe — OUT2 as
+the PC's interrupt gate is ignored, FCR has no real FIFO behind it, COM3/COM4 do not
+exist — and all are priced rather than fixed.
+
 ## State at session end
 
 - `offvm` **1542/0** (+98 across six surfaces; `cmos_test.c` is a new battery).
