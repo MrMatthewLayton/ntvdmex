@@ -124,6 +124,7 @@ static void dma_out(void *self, uint16_t port, uint8_t w, uint32_t v)
     if (port >= 0x80 && port <= 0x8F) {                  /* page registers        */
         int c = dma_page_chan(port);
         if (c >= 0) st->ch[c].page = val;
+        else        st->page_spare[port & 0x0F] = val;   /* a latch all the same  */
         return;
     }
     ctrl = (port >= 0xC0) ? 1 : 0;
@@ -175,7 +176,10 @@ static void dma_in(void *self, uint16_t port, uint8_t w, uint32_t *val)
 
     if (port >= 0x80 && port <= 0x8F) {
         int c = dma_page_chan(port);
-        *val = (c >= 0) ? st->ch[c].page : 0xFF;
+        /* ⚠ "Unused" was true of the CHANNEL MAPPING and false of the hardware:
+             these ports are latches whether or not a channel reads them, and
+             0xFF was us describing an empty bus. See page_spare in the header. */
+        *val = (c >= 0) ? st->ch[c].page : st->page_spare[port & 0x0F];
         return;
     }
     ctrl = (port >= 0xC0) ? 1 : 0;

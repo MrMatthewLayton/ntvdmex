@@ -1461,5 +1461,23 @@
   ],
   "recorded": "2026-09-23",
   "why": "MS-DOS 6.22 under QEMU and dosbox-x DO NOT ANSWER 8042 COMMANDS AT ALL, so their value is the absence of the feature rather than a measurement of it. PCem, with a real AMI 486 BIOS, answers every one of them -- which makes this the REVERSE of the usual split: here it is the period-correct machine that has the feature and the software emulators that cut the corner, and that is about as strong as evidence gets for implementing it. AH is A20 as the 8042's output port reads it BACK after a D1h/DFh write; AL is the XMS driver's answer to AH=07h. They are ONE WIRE and must agree. PCem answers 0101h -- the controller reports what was written to it, and XMS concurs. The two abstaining hosts answer 0001h: no read-back (the command was dropped), XMS says on. NTVDMEX answered 0001h and now answers 0101h, because the 8042 output port, port 92h and XMS AH=03h-07h are now three views of one bit; previously XMS owned the only flag and a guest that opened the gate the HARDWARE way was told by XMS that it was shut. \u26d4 THE CASE ONLY EVER ENABLES A20, NEVER DISABLES IT. The obvious stronger test -- toggle to the opposite state and see whether XMS follows -- would call the XMS entry point with A20 OFF, and with DOS=HIGH both HIMEM and much of DOS live in the HMA, reachable only because A20 is on. That call is a jump into wrapped memory: a hang, on a bare-metal rig, for one bit of data."
+ },
+ {
+  "probe": "dma",
+  "case": "dma.page.spare80",
+  "field": "AX",
+  "abstain": [
+   "msdos622"
+  ],
+  "recorded": "2026-09-23",
+  "why": "PORT 80h IS A REAL READ/WRITE LATCH ON A PC and QEMU is the outlier in not modelling it. Seven of the sixteen ports at 80h-8Fh carry a DMA channel's high address bits; the other nine are storage anyway, because the address decoder does not bother to leave them out, and 80h doubles as the POST diagnostic port -- which is also why writing it is harmless. dosbox-x AND PCem, on a real AMI 486 BIOS, both read back the written 0x5A; only 6.22-under-QEMU answers 0xFF, and QEMU has been the outlier on every external-register row this project has checked (Input Status 0, the DAC pixel mask, the VGA mode tables). NTVDMEX answered 0xFF too -- because dma_page_chan built the port list from the CHANNEL TABLE, and 'unused' was true of the mapping and false of the hardware. It now latches. \u26a0 Whether any guest cares is not the question: the scope rule is that a device is in because it is in the period-correct hardware contract, and 'no guest has asked' is the reasoning this programme exists to replace."
+ },
+ {
+  "probe": "dma",
+  "case": "dma.status.idle",
+  "field": "AX",
+  "abstain": [],
+  "recorded": "2026-09-23",
+  "why": "OPEN, AND NOT A REGISTER-FILE DEFECT. AH is the first read of the status register, AL the second. 6.22-under-QEMU and PCem both answer 0400h: bit 2 of the first read is CHANNEL 2's TERMINAL COUNT, latched by the floppy transfer that loaded this very probe, and the second read is 0x00 because READING STATUS CLEARS THE TC BITS. That is the datasheet's latching behaviour caught in the act, and it is a nice confirmation that the case works. dosbox-x and NTVDMEX both answer 0000h -- NOT because the TC latch is missing (vdd_dma.c implements it, and dma_test.c pins it) but because NEITHER MODELS A FLOPPY ON A DMA CHANNEL, so nothing ever sets channel 2's TC. The difference is a missing DEVICE, not a missing register, and implementing it would mean putting the floppy on the DMA controller -- a far larger change than this row justifies. Recorded in docs/inventory/dma.md."
  }
 ]

@@ -161,6 +161,31 @@ int main(void)
     v = 0x00; vdd_bus_io(&bus, 0x0E, 1, 0, &v);          /* clear mask register */
     CHECK(!dma.ch[0].masked && !dma.ch[3].masked, "clear-mask unmasks every channel");
 
+    /* ── THE PAGE PORTS THAT MAP TO NO CHANNEL. docs/ref/dma.md 3. ────────────
+       Seven of the sixteen ports at 80h-8Fh carry a channel's high address bits;
+       the other nine are read/write latches on a PC anyway, because the address
+       decoder does not bother to leave them out.
+       ★ MEASURED: dosbox-x and PCem (real AMI BIOS) both read back a written
+         0x5A at port 80h; only 6.22-under-QEMU answers 0xFF. We answered 0xFF --
+         an empty bus rather than a machine. */
+    {
+        uint32_t v;
+        v = 0x5A; vdd_bus_io(&bus, 0x80, 1, 0, &v);
+        v = 0;    vdd_bus_io(&bus, 0x80, 1, 1, &v);
+        CHECK(v == 0x5A, "page: port 80h is a latch, not an empty bus");
+
+        v = 0xA5; vdd_bus_io(&bus, 0x8C, 1, 0, &v);
+        v = 0;    vdd_bus_io(&bus, 0x8C, 1, 1, &v);
+        CHECK(v == 0xA5, "page: so is 8Ch");
+
+        /* ...and the mapped ones are unaffected: the spare latches must not be
+           the same storage, or writing scratch would move a channel's page. */
+        v = 0x33; vdd_bus_io(&bus, 0x83, 1, 0, &v);      /* channel 1's page    */
+        CHECK(dma.ch[1].page == 0x33, "page: 83h still reaches channel 1");
+        v = 0;    vdd_bus_io(&bus, 0x80, 1, 1, &v);
+        CHECK(v == 0x5A, "page: ...and did not disturb the spare at 80h");
+    }
+
     printf("-- %d checks, %d failures --\n", total, fails);
     return fails ? 1 : 0;
 }

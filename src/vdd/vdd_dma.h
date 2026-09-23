@@ -52,6 +52,18 @@ typedef struct dma_state {
     vdd_bus *bus;
     dma_chan ch[8];
     uint8_t  ff[2];                 /* per-controller lo/hi byte-pointer flip-flop */
+    /* ── THE NINE PAGE PORTS THAT MAP TO NO CHANNEL ARE STILL REAL LATCHES. ──────
+         Seven of the sixteen ports at 80h-8Fh carry a DMA channel's high address
+         bits. The other nine -- 80h, 84h-86h, 88h, 8Ch-8Fh -- are read/write
+         storage on a PC anyway, because the address decoder does not bother to
+         leave them out, and 80h doubles as the POST diagnostic port.
+       ★ MEASURED (p_dma.asm dma.page.spare80, 2026-09-23): dosbox-x AND PCem, on
+         a real AMI BIOS, both read back a written 0x5A. Only 6.22-under-QEMU
+         answers 0xFF -- and QEMU is the host that has been the outlier on every
+         external-register row this project has checked.
+       ⚠ We answered 0xFF, which describes an EMPTY BUS rather than a machine.
+         Indexed by the low nibble of the port; the mapped ports never reach it. */
+    uint8_t  page_spare[16];
     uint8_t  cmd[2];                /* per-controller command register             */
     /* ── DOES THE GUEST ASK US WHERE THE PLAY HEAD IS? ───────────────────────────
          A double-buffering sound driver has two ways to decide which half of the
