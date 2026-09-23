@@ -13,9 +13,10 @@ dosoracle/build.py) calls A:\\RUN.BAT if present; the program's output goes to
 A:\\OUT.TXT, terminated by an [END] marker. PCem cannot be told to quit from the
 guest, so the host polls the floppy image for the marker and then kills PCem.
 
-PCem is a GUI program (SDL + wxWidgets): it needs the desktop session, which this
-script has when run from a terminal on the Mac. It is launched with --config and
---load_drive_a so no clicking is ever needed. The config file names vm/dos622.img
+PCem is a GUI program (SDL + wxWidgets). ⚠ Run it OUTSIDE the command sandbox: the
+sandbox blocks its XPC connection to the window service and it dies instantly with a
+Swift fatal error, which is easy to misread as "it cannot run headless at all".
+It is launched with --config so no clicking is ever needed. The config file names vm/dos622.img
 (1024/16/63, raw) as the IDE hard disk -- the SAME image the QEMU oracle boots.
 """
 import argparse
@@ -112,11 +113,15 @@ def launch(floppy=None):
     if os.path.exists(nodev):
         env["DYLD_INSERT_LIBRARIES"] = nodev
     # ⛔ THIS USED TO BE stdout=DEVNULL, stderr=DEVNULL, AND IT COST A SESSION.
-    #    PCem needs the WindowServer; launched without one it dies instantly with a
-    #    Swift crash out of XPC `hiservices` (rc=132). With both streams discarded
-    #    that is indistinguishable from "booted fine, guest produced no output", so
-    #    the harness reported a timeout and the blame went to the probe. Keep the
-    #    output: a run that fails must be able to say why.
+    #    With both streams discarded, "died on launch" and "booted fine, guest
+    #    produced no output" are indistinguishable: the harness reported a timeout
+    #    and the blame went to the probe. Keep the output -- a run that fails must
+    #    be able to say why. Everything below was found by reading this log.
+    # ⚠ AND THE FAILURE IT REVEALED WAS MISREAD, TWICE. The XPC `hiservices` crash
+    #   (Swift fatal, rc=-4) was blamed on "PCem needs the WindowServer, so it can
+    #   never run from an agent shell", and that was repeated to the user as fact.
+    #   It is THE SANDBOX blocking the XPC connection: run with the sandbox off and
+    #   PCem starts normally. A remembered cause is not a measured one.
     log_path = os.path.join(ROOT, "runs", "pcem-last-launch.log")
     os.makedirs(os.path.dirname(log_path), exist_ok=True)
     log = open(log_path, "wb")
