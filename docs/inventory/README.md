@@ -123,7 +123,7 @@ Each surface gets two documents, doing two different jobs:
 |---|---|---|---|
 | **VGA / CRTC / sequencer / graphics / attribute / DAC** | IBM VGA TechRef; FreeVGA | [vga.md](vga.md) — **71 enumerated, measured** | ✅ [`ref/vga.md`](../ref/vga.md) |
 | **VESA VBE 2.0 / 3.0** | `docs/ref/vbe20.pdf`, `docs/ref/vbe30.pdf` | — | [PDFs held](../ref/) |
-| 8254 PIT | Intel 8254 datasheet | — | — |
+| **8254 PIT** | Intel 8254 datasheet | [pit.md](pit.md) | ✅ [`ref/pit.md`](../ref/pit.md) |
 | 8259A PIC | Intel 8259A datasheet | [pic.md](pic.md) | — |
 | 8237A DMA controller | Intel 8237A datasheet | — | — |
 | 8042 keyboard controller | IBM AT TechRef | [keyboard.md](keyboard.md) | — |
@@ -131,7 +131,7 @@ Each surface gets two documents, doing two different jobs:
 | PS/2 + serial mouse | Microsoft/Logitech protocol notes | [mouse.md](mouse.md) | — |
 | Gameport / joystick | IBM Game Control Adapter | — | — |
 | MC146818 RTC + CMOS map | Motorola MC146818 datasheet | — | — |
-| PC speaker (PIT ch.2 + port 61h) | IBM TechRef | — | — |
+| PC speaker (PIT ch.2 + port 61h) | IBM TechRef | [pit.md](pit.md) §6 | [`ref/pit.md`](../ref/pit.md) §2 |
 | Sound Blaster Pro / 16 / AWE32 | Creative SB Programmer's Reference | — | — |
 | OPL2 (YM3812) / OPL3 (YMF262) | Yamaha datasheets; Nuked-OPL3 as oracle | — | — |
 | Gravis Ultrasound | Gravis GUS SDK / Programmer's Guide | — | — |

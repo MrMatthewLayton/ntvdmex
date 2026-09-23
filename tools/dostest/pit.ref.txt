@@ -1,0 +1,37 @@
+# p_pit reference -- the 8254 as software can observe it
+#
+# Source: tools/dostest/p_pit.asm on genuine MS-DOS 6.22 (the msdos622 oracle),
+# 2026-09-23. Every case is deterministic by construction: none emits a counter
+# VALUE (which depends on when you look), only structure that is the same on any
+# machine on any day.
+#
+# ⚠ PROVISIONAL AGAINST SeaBIOS for the one BIOS-dependent row (st0). The chip
+#   rows are chip behaviour and should hold anywhere; re-ask on PCem.
+
+== pit.ch1.counting        0x0001   two latched reads of counter 1 differ: it is running
+== pit.ch2.counting        0x0001   same for counter 2, gated on via port 61h bit 0
+== pit.rdback.st0          0x0034   Read-Back status of counter 0, bits 5:0
+                                    = lo/hi access, MODE 2, binary
+                                    ⚠ NOT mode 3 -- see docs/ref/pit.md §6. The
+                                    mode is a BIOS choice; this is SeaBIOS's.
+== pit.rdback.st2          0x0030   counter 2 as this probe programmed it:
+                                    lo/hi, mode 0, binary
+== pit.mode6.readback      0x000C   mode field after programming 110: hardware
+                                    reports the bits AS PROGRAMMED (6), it does
+                                    NOT normalise to 2. Read-back fidelity only --
+                                    it does not prove the aliasing BEHAVIOUR.
+== pit.bcd.valid           0x0001   all four nibbles of a BCD count are <= 9
+== pit.61h.bit5.toggles    0x0001   counter 2's OUT pin, read at port 61h bit 5,
+                                    changes state within a bounded poll
+
+# ── NTVDMEX, host 77b9b0bd, same day: 7 of 7 MISMATCH ────────────────────────
+#   ch1.counting      0x0000   port 41h returns 0xFF -> two identical reads
+#   ch2.counting      0x0000   port 42h returns 0xFF -> likewise
+#   rdback.st0        0x0021   read-back swallowed; the 40h read returned a COUNT
+#   rdback.st2        0x003F   0xFF masked to bits 5:0
+#   mode6.readback    0x000E   0xFF masked to the mode field
+#   bcd.valid         0x0000   the BCD control bit is dropped, counts stay binary
+#   61h.bit5.toggles  0x0000   bit 5 echoes what was written, never the OUT pin
+#
+# ★ Every one of these was predicted from the CODE in docs/inventory/pit.md
+#   before the probe existed, and the probe confirmed all seven independently.
