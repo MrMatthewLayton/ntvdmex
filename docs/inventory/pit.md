@@ -18,23 +18,27 @@ sections below record what was found and what each fix cost. The original headli
 *"Counter 0 is modelled well. Counters 1 and 2 barely exist, and the 8254's defining feature
 — the Read-Back Command — is not implemented at all."*
 
-> Everything we have is shaped around *"the thing that raises IRQ0 at 18.2 Hz"* — counter 0
-> in a periodic mode (**measured: mode 2, not the mode 3 this file first said**; see
-> [`../ref/pit.md`](../ref/pit.md) §6, and note that both give the same rate, which is why
-> the error was invisible). That is the counter a guest needs to boot. It is not the one a
-> guest uses to **measure** anything — for that it reads counter 0's count, polls counter 2's
-> OUT pin at port `61h` bit 5, or issues a Read-Back. Two of those three we do not answer,
-> and the third we answer without ever consulting the counter.
+> **The diagnosis that drove all of it:** everything we had was shaped around *"the thing
+> that raises IRQ0 at 18.2 Hz"* — counter 0 in a periodic mode. That is the counter a guest
+> needs to **boot**. It is not the one a guest uses to **measure** anything: for that it reads
+> counter 0's count, polls counter 2's OUT pin at `61h` bit 5, or issues a Read-Back. Two of
+> those three we did not answer, and the third we answered without consulting the counter.
+>
+> ⚠ **Counter 0's mode is a BIOS choice and it took three oracles to settle.** This file and
+> `ref/pit.md` said mode 3 from memory; QEMU measured mode 2 and I "corrected" both; dosbox-x
+> and then **PCem, on a real AMI BIOS, said mode 3** — the original was right. Both give the
+> same interrupt rate, which is exactly why the error was invisible to the only check anyone
+> runs.
 
-| Group | IMPL | PART | STORE | MISS |
-|---|---|---|---|---|
-| Counter 0 | 5 | 3 | 0 | 2 |
-| Counter 1 | 0 | 0 | 0 | 4 |
-| Counter 2 | 0 | 2 | 2 | 4 |
-| Control Word fields | 2 | 1 | 0 | 1 |
-| Read-Back Command | 0 | 0 | 0 | 6 |
-| Modes | 2 | 3 | 0 | 1 |
-| Port 61h | 1 | 1 | 1 | 1 |
+| Group | before | after |
+|---|---|---|
+| Counter 0 | 5 IMPL · 3 PART · 2 MISS | unchanged, plus POST defaults and a BCD flag |
+| Counter 1 | **4 MISS** | **IMPL** — a real, free-running counter |
+| Counter 2 | 2 PART · 2 STORE · 4 MISS | **IMPL** — count, gate and OUT pin |
+| Control Word fields | 2 IMPL · 1 PART · 1 MISS | 3 IMPL · **BCD stored, not consumed** |
+| Read-Back Command | **6 MISS** | **6 IMPL** |
+| Modes | 2 IMPL · 3 PART · 1 MISS | 2 IMPL · 3 PART · 1 MISS *(6/7 now alias correctly)* |
+| Port 61h | 1 IMPL · 1 PART · 1 STORE · 1 MISS | 3 IMPL · 1 PART *(bit 4 by design)* |
 
 ---
 
@@ -44,38 +48,47 @@ sections below record what was found and what each fix cost. The original headli
 |---|---|---|---|---|
 | `40h` | W | Counter 0 count write | **IMPL** | `vdd_pit.c:153` — and it is careful: a half-written count is not applied |
 | `40h` | R | Counter 0 count read | **IMPL** | `vdd_pit.c:214` — latch, access mode and the lo/hi toggle all honoured |
-| `41h` | W | Counter 1 count write | **MISS** | `vdd_pit.c:202` — *"port 0x41 (DRAM refresh) not modelled"* |
-| `41h` | R | Counter 1 count read | **MISS** | `vdd_pit.c:217` — returns `0xFF` |
-| `42h` | W | Counter 2 count write | **PART** | `vdd_pit.c:193` — stored as a speaker *tone divisor*, not as a counter |
-| `42h` | R | Counter 2 count read | **MISS** | `vdd_pit.c:217` — returns `0xFF` |
-| `43h` | W | Control Word | **PART** | `vdd_pit.c:126` — see §2 |
+| `41h` | W | Counter 1 count write | **IMPL** | `chan_write_count(&st->c1)` |
+| `41h` | R | Counter 1 count read | **IMPL** | `chan_read_count` — free-running from reset |
+| `42h` | W | Counter 2 count write | **IMPL** | speaker tone divisor **and** the counter view |
+| `42h` | R | Counter 2 count read | **IMPL** | `chan_read_count(&st->c2)` |
+| `43h` | W | Control Word / Read-Back | **IMPL** | all four counter selects, incl. `11` = Read-Back |
 | `43h` | R | *(undefined on hardware)* | **N/A** | returns `0xFF`; consistent, and recorded here so it is a decision rather than an accident |
 
-⛔ **`41h` and `42h` both read `0xFF`.** On hardware they return a count. A timing loop that
-latches counter 2 and reads it back gets `0xFFFF` every time — i.e. "no time is passing",
-which is the *"runs but lies"* shape this project treats as the most expensive kind.
+✅ **`41h` and `42h` are real counters** *(FIXED 2026-09-23)*. They used to return `0xFF`, so a
+timing loop that latched either and read it back got `0xFFFF` forever — "no time is passing",
+the *"runs but lies"* shape this project treats as the most expensive kind. `p_pit`
+`ch1.counting` and `ch2.counting` both moved MISMATCH → AGREE.
 
 ## 2. The Control Word (`43h`)
 
 | Field | Bits | Status | Evidence |
 |---|---|---|---|
-| Select Counter | 7:6 | **PART** | `vdd_pit.c:127` — `00` handled, `10` partly (tone only), `01` and `11` fall through `if (ch != 0) return;` |
-| Access / Latch | 5:4 | **IMPL** | `vdd_pit.c:129,133` — latch command and all three access modes |
-| Mode | 3:1 | **PART** | `vdd_pit.c:150` — stored as the raw 3 bits |
-| **BCD** | 0 | **MISS** | `vdd_pit.c:150` — `(val >> 1) & 7` **drops bit 0 entirely** |
+| Select Counter | 7:6 | **IMPL** | all four: `00`/`01`/`10` counters, `11` Read-Back |
+| Access / Latch | 5:4 | **IMPL** | latch command and all three access modes |
+| Mode | 3:1 | **IMPL** | normalised into `mode`, kept raw in `mode_raw` for Read-Back |
+| **BCD** | 0 | **STORE** | latched into `bcd`/`c->bcd`, reported by Read-Back, **never used to count** |
 
 ⛔ **BCD is dropped** — the flag is now *stored* (`vdd_pit.c:99`) and still never consumed,
 so counts stay binary and a maximum count means 65536 where the guest asked for 10000.
 
-⛔⛔ **AND IT IS BLOCKED ON PCem, WHICH ONLY BECAME VISIBLE AFTER A FALSE PASS.** The probe's
-first BCD case took **one** sample, and a binary counter passes that whenever its four
-nibbles happen to be ≤ 9 — about one value in six. It reported a clean pass on both hosts
-while **neither implements BCD**. Strengthened to 16 spread samples, the **oracle fails it
-too**: QEMU's PIT does not model BCD. Both hosts now answer `0`, which `dosdiff` scores
-AGREE — **agreement on absence, not verification**.
+⛔⛔ **NO ORACLE CAN VERIFY IT — and that only became visible after a FALSE PASS.** The probe's
+first BCD case took **one** sample, and a binary counter passes that whenever its four nibbles
+happen to be ≤ 9, about one value in six. It reported a clean pass while **nothing implements
+BCD**. Strengthened to 16 spread samples:
 
-⇒ **Do not implement BCD against this oracle.** It joins the VGA modes 04/06 row and the DAC
-pixel mask in the queue of things only a real chip model can settle.
+| | 6.22 (QEMU) | dosbox-x | PCem (real BIOS) | ours |
+|---|---|---|---|---|
+| `pit.bcd.valid` | `0` | **`1`** | `0` | `0` |
+
+**Two of three — including the real-BIOS machine — do not model BCD at all.** So the majority
+answer is about emulator coverage, not about hardware, and an AGREE here is *agreement on
+absence*.
+
+⇒ **Implement it from the datasheet, which is unambiguous, and mark it
+spec-implemented/unverifiable** with an abstention rule in `oracle-rules.json` so the sweep
+does not read our correct answer as a regression. This is the one place on this surface where
+the spec has to outrank the oracles.
 
 ✅ **Modes 6 and 7 are now aliased to 2 and 3.** *(FIXED 2026-09-23.)*
 
