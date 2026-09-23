@@ -7,19 +7,22 @@
 DOS probe: `tools/dostest/p_dma.asm`.
 **Marked:** 2026-09-23, **from the code**, with citations.
 
-⚠ **This surface has never been inventoried and has never been asked of an oracle.**
-`dma_test.c` is an off-VM battery written against our own model, so — exactly as the
-inventory README warns — it encodes our behaviour rather than the datasheet's.
+⚠ **This surface had never been inventoried and had never been asked of an oracle.**
+`dma_test.c` was an off-VM battery written against our own model, so — exactly as the
+inventory README warns — it encoded our behaviour rather than the datasheet's. Both are
+now fixed: `p_dma.asm` asks three machines, and `dma_test.c` has checks whose
+expectations came from them.
 
 ---
 
 ## Headline
 
-**The transfer engine is good and the register file is a subset.** Everything Sound
+**The transfer engine is good and the register file was a subset.** Everything Sound
 Blaster playback needs — the address arithmetic for both widths, auto-initialise,
 terminal count, the mask bit — is implemented and is load-bearing for Doom's audio.
-What is missing is the parts of the chip *no guest we happen to run has asked for*,
-which is precisely the reasoning the spec-first directive exists to replace.
+What was missing is the parts of the chip *no guest we happen to run has asked for*,
+which is precisely the reasoning the spec-first directive exists to replace. One of them
+is now fixed (§2); the rest are priced below.
 
 | Group | Marked from the code |
 |---|---|
@@ -58,16 +61,16 @@ which is precisely the reasoning the spec-first directive exists to replace.
 ## 2. ✅ The spare page latches — FIXED 2026-09-23
 
 `dma_page_chan` (`vdd_dma.c`) returns `-1` for `80h`, `84h`–`86h`, `88h`, `8Ch`–`8Fh`,
-and both the read and write paths then do nothing:
+and both the read and write paths **used to** do nothing — the comment on that arm read:
 
 ```c
 default:   return -1;            /* 0x80 / 0x84-0x86 / 0x88 / 0x8C-0x8F: unused */
 ```
 
-⛔ **"Unused" is true of the CHANNEL MAPPING and false of the HARDWARE.** Those ports
+⛔ **"Unused" was true of the CHANNEL MAPPING and false of the HARDWARE.** Those ports
 are real read/write latches on a PC — the address decoder does not bother to leave them
-out — and `80h` is also the POST diagnostic port. We answer `FFh`, which describes an
-empty bus.
+out — and `80h` is also the POST diagnostic port. We answered `FFh`, which describes an
+empty bus rather than a machine. They now latch in `page_spare[]`.
 
 ⚠ **Whether any guest cares is not the question.** The scope rule is that a device is in
 because it is in the period-correct hardware contract; "no guest has asked" is the

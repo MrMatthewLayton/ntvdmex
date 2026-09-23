@@ -125,8 +125,9 @@ which moves the text cursor by one scan line (`0x0607` → the card's own `0x0D0
    **8259A** (2 fixes) and the **8042 keyboard controller** — `ref/kbc.md`, inventory
    marked from the code, and the status register, the command set, the output port,
    port `92h` and **a single converged A20 bit** all implemented.
-   ▶ **Next candidates in the contract:** the 8237A DMA, the MC146818 RTC/CMOS, the
-   16550 UART. Pick by the contract, not by a guest.
+   **8237A DMA** — `ref/dma.md`, inventory marked from the code, the nine spare page
+   latches fixed. ▶ **Next candidates in the contract:** the MC146818 RTC/CMOS, the
+   16550 UART, the 82077AA floppy controller. Pick by the contract, not by a guest.
    ⛔ **Recorded and deliberately unfixed:** the PIC's ICW1 read-select reset and the
    8042 output port's undefined bits are both **blocked on a second oracle** (only PCem
    can see either); we implement Special Fully Nested Mode unconditionally while never

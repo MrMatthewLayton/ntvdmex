@@ -295,11 +295,51 @@ entry point with A20 off**, and with `DOS=HIGH` both HIMEM and much of DOS live 
 HMA, reachable only because A20 is on. A jump into wrapped memory: a hang, on a bare-metal
 rig, for one bit of data.
 
+---
+
+## 8. The 8237A — a reference, a marking, and the ports that "did not exist" (`8350f8b`)
+
+Never inventoried, never asked of an oracle; `dma_test.c` was an off-VM battery written
+against our own model, so it encoded our behaviour rather than the datasheet's.
+
+**The transfer engine is good** — both address widths, auto-initialise, terminal count,
+the mask bit — and it is why Doom has audio. **The register file was a subset**, and the
+missing parts are exactly *the ones no guest we happen to run has asked for*.
+
+✅ **Fixed: the nine page ports that map to no DMA channel.** `dma_page_chan` built the
+port list from the **channel table** and returned `-1` for `80h`, `84h`–`86h`, `88h`,
+`8Ch`–`8Fh`, so reads answered `0xFF` and writes vanished.
+
+> **"Unused" was true of the mapping and false of the hardware.** Those ports are
+> read/write latches on a PC because the address decoder does not bother to leave them
+> out, and `80h` doubles as the POST diagnostic port.
+
+dosbox-x and PCem both read back a written `0x5A`; only QEMU answers `0xFF` — and QEMU
+has been the outlier on *every* external-register row this project has checked.
+
+✅ **The flip-flop is right, in its strong form.** The count case deliberately does *not*
+clear the byte pointer between it and the address case, so it only lines up if the model
+shares **one flip-flop per controller** between the two registers. All four hosts agree.
+
+⛔ **And one row is open but is not a defect.** `dma.status.idle`: QEMU and PCem answer
+`0400h` — bit 2 of the *first* read is **channel 2's terminal count, latched by the
+floppy transfer that loaded the probe itself**, and the second read is `0x00` because
+reading status clears the TC bits. The datasheet's latching behaviour caught in the act.
+We and dosbox-x answer `0000h`, **not** because the latch is missing but because neither
+of us models a floppy on a DMA channel. A missing *device*, not a missing register.
+
+⚠ **This probe had a safety constraint the others did not.** The run writes `OUT.TXT` to
+the floppy and **the floppy is DMA channel 2**. No case touches channel 2, its page
+register or the mask, and there is **no master clear** — master clear sets every mask bit,
+disabling the floppy, and the machine then cannot write the file that would have said what
+happened. *A probe whose failure mode is "no output at all" is indistinguishable from a
+harness fault.*
+
 ## State at session end
 
-- `offvm` **1495/0** (+51: 14 BCD, 3 external registers, 9 mode-set, 10 PIC, 15 8042).
+- `offvm` **1499/0** (+55: 14 BCD, 3 external registers, 9 mode-set, 10 PIC, 15 8042, 4 DMA).
 - **VGA register parity 99.9%** (689/690 of the two-oracle agreement). *Re-run, never quote.*
-- `bin\` = `a0a6c15b`. Stable zip `dist\ntvdmex-20260917-4847355.zip` **untouched**;
+- `bin\` = `71635b7a`. Stable zip `dist\ntvdmex-20260917-4847355.zip` **untouched**;
   checkpoint `59fac7d`.
 - **User confirmed by hand:** Doom and Skyroads, after the Input Status 0 change.
 - **Owed from a human:** a by-hand look after the mode-set fix — the one-scan-line cursor
