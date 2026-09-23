@@ -1,0 +1,153 @@
+# Session 77 — the 8254 closes with BCD; PCem was never the blocker; a parity score scored against one oracle
+
+> 2026-09-23. Branch `m9/completeness`. Commits `3b98752`, `8dee588`, `7570528`.
+
+The session's theme is one mistake in three dresses: **treating one host's answer as the
+answer**. It closed the PIT, settled a VGA register that had been "confirmed" wrong twice,
+and invalidated a number this project had been quoting.
+
+---
+
+## 1. The 8254 is done — BCD, fix 5 (`3b98752`)
+
+Control Word bit 0 was *stored and never consumed*: a counter programmed for four-decade
+BCD went on counting in binary, and a written count of `0000` meant 65536 where the guest
+had asked for 10000.
+
+Implemented as a **boundary format, not a second arithmetic**. Everything inside the device
+stays binary — `reload`, the latch, the count laws, the IRQ0 divisor — and a count is
+decoded where it arrives through `40h`–`42h` and encoded where it leaves. The counting
+element is then literally the same code in both bases, which is the point: a second
+arithmetic path is a second thing to get wrong and only one of the two would ever be
+exercised. Three behaviours fall out of `pit_wrap()` instead of being special-cased — the
+`0000` maximum, mode 0 wrapping back to 9999 rather than through `0xFFFF`, and the
+speaker's divisor. The binary path is bit-identical.
+
+### Why this one was allowed to ignore the oracles
+
+`pit.bcd.valid`: 6.22 `0`, **PCem `0`**, dosbox-x `1`. Two of three — *including the
+real-BIOS machine* — do not implement the bit at all.
+
+> **A `0` from a host that does not implement a feature is the absence of a measurement,
+> not a measurement of absence.** The majority here was a majority of omissions.
+
+The inventory had it parked as *"blocked on PCem; implementing from the datasheet would be
+writing an expectation from memory"*, and that **conflated two different things**: the rule
+is never write an expectation from **memory**, and Intel 231164-005 is a **cited source**.
+So: implemented from the datasheet, marked *spec-implemented / unverifiable*, with an
+abstention rule in `oracle-rules.json` that prints its rationale on every run.
+
+### The evidence had to move off the probe
+
+`pit.bcd.valid` asks a **property** — are all four nibbles decimal — which is exactly the
+question a binary counter answers correctly one time in six, and did, on this project,
+once. `pit_test.c` **T12** pins exact counts instead: `0x9989` ten clocks after `0x9999`
+(the units decade *borrows*, it does not step to `0x8F`), `0x0000` at 9999, the wrap at
+10000, IRQ0 on the ten-thousandth clock of a `0000` count, and **the same counter in binary
+failing the nibble test** — the negative control, without which the positive one proves
+nothing. **8 of the 14 failed against the previous code; the 6 that passed were the
+coincidences.**
+
+⇒ **Five fixes, zero mismatches against oracle consensus. The surface is closed.**
+
+---
+
+## 2. PCem runs unattended, and always could have
+
+Rows had been parked on *"PCem needs the WindowServer / needs ROMs / user's terminal
+only"* for several sessions, and **all of it was mine**: the XPC/Swift crash was the
+command sandbox, and its data directory is `~/PCem/`, not the Application Support path our
+own notes gave — so the ROMs were installed where it never looks. The last piece was a
+standing rule, *"I PREPARE, THE USER CLICKS, I READ"*, generalised from **one** failed
+launch. Two `⛔ user's terminal only` claims were sitting in `STATE.md` and `SOURCES.md` on
+the strength of it.
+
+```
+PCEM_CFG=NTVDMEX-DOS622.cfg python3 scripts/pcemoracle.py run build/probes/X.com
+```
+~60 s, boot to `#END`, outside the command sandbox. It ran `p_vgaext` and a full
+twelve-mode `p_vgareg` back to back this session.
+
+⚠ `build/dosdiff` is the **dosbox-x host's scratch mount and is wiped every run** — a probe
+built there survives a PCem-only sweep and vanishes the moment dosbox-x joins it. Build
+into `build/probes`.
+
+---
+
+## 3. Input Status 0 is `0x10` (`8dee588`, `7570528`)
+
+`p_vgareg` asks the wrong **shape** of question about these two registers: it reads each
+port once and prints the byte. A byte is a value; what was in dispute was a *mechanism*, and
+four hosts gave four values with nothing to choose between them. `p_vgaext` asks about the
+mechanism, with every expectation written into its header **before** the first run.
+
+| case | 6.22/QEMU | dosbox-x | **PCem (real AMI + IBM VGA)** | predicted |
+|---|---|---|---|---|
+| `is0.live` — AND and OR of 65536 reads | `0000` | `7070` | **`1010`** | **`1010`** ✅ |
+| `is0.vsync` — CR11 enable, retrace, bit 7 | `0000` | `0001` | `0000` | `0001` ❌ |
+| `fc.store` — write `00`/`0F`/`08`, read `3CA` | `00`×3 | `00`×3 | `FF`×3 | — |
+
+**✅ `0x10`, bit 4 Switch Sense, and the prediction was exact.** Every host answers a
+*constant*, so the shape was never wrong — only the value. PCem says `0x10` in all twelve
+modes. ⛔ **This row had been recorded as "confirmed `0x00`" twice, on one oracle each
+time.**
+
+**❌ Bit 7, the CRT interrupt: prediction falsified.** PCem's IBM VGA never raises it.
+Recorded as a gap rather than built — two of three hosts against, and no DOS guest this
+project has met uses the VGA vertical interrupt.
+
+**Feature Control cannot be adjudicated by anything we have.** Two hosts accept the write
+and discard it; PCem's `0xFF` is an undecoded port floating high. Three ways of not having
+the register. We keep the spec's read-back: *spec-implemented, unverifiable* — the same
+footing as BCD.
+
+⚠ And the four-host table that motivated the probe **was itself wrong**: dosbox-x's Feature
+Control is `0x00`, not the `0x70` recorded — that is its Input Status 0 value copied into
+the row below, the two bytes being adjacent in the buffer they were read off by eye.
+*A hand-transcribed table is a claim.*
+
+---
+
+## 4. ⛔⛔⛔ The parity score was scored against one oracle
+
+`tools/vgaparity.py` reported **"689/768 bytes, 89.7%"** against `vgareg.ref.txt` — 6.22
+**under QEMU**, i.e. the Bochs VGABIOS, not period-correct firmware. With PCem available,
+the same probe under a real AMI BIOS and a genuine IBM VGA ROM gives a second reference, and
+
+> **the two oracles disagree with each other on 78 of 768 bytes** — the same order as the
+> error the score was reporting.
+
+So a byte we "failed" may have been us matching real hardware, and a byte we "passed" may
+have been us matching an anachronism. **The number could not tell the two apart, and it was
+quoted as though it could.** `vgaparity.py` now scores only the bytes both oracles agree on
+and reports the disputed ones with how we answer each. The hand-maintained DAC-pixel-mask
+carve-out is deleted — the general rule covers it, and PCem says `0xFF`, which is what we
+say.
+
+### Two defects in `p_vgareg`, both of which manufactured data
+
+1. **The mono row picked its port from the mode number, not Miscellaneous Output bit 0** —
+   violating `ref/vga.md`'s own thesis that a mode *is* the register values. On PCem, whose
+   BIOS leaves MiscOut `0x67` for mode 7, it read `3B4`, found nothing, and reported 51 of
+   64 bytes as disagreeing. None of it meant anything.
+2. **The mono row was contaminated by the hand-programmed cases before it.** Mode X ends
+   with `CR11 = 0xAC` — write protect on, `CR00`–`CR07` refused — so the following BIOS mode
+   set could not do its job. Two captures a day apart disagree: the recorded reference
+   carried Mode X's `CR09`, a fresh run of the **same binary** carried nine more of Mode X's
+   registers. **A row that does not reproduce is not evidence**, and it was being diffed
+   across hosts as though it were.
+
+⚠ The old reference's per-group form was quietly lossy as well: its loader filled only
+offsets 0 and 4–63, so Feature Control, Input Status 0 and the DAC Pixel Mask were read as
+**zero whatever the file said**. They happened to be `0x00` on that host, so nothing caught
+it. Both references re-captured as whole buffers.
+
+---
+
+## State at session end
+
+- `offvm` **1461/0** (+17: 14 BCD, 3 external registers).
+- Stable zip `dist\ntvdmex-20260917-4847355.zip` **untouched**; checkpoint `59fac7d`.
+- **Owed on the rig:** a `p_vgareg` run under NTVDMEX with the fixed probe — the old 89.7%
+  is void and must not be quoted — a `p_vgaext` run, and a by-hand Doom/Skyroads check after
+  the Input Status 0 change.

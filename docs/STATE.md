@@ -6,7 +6,7 @@
 > session. When this file starts growing session blocks again, split them out; it has
 > happened twice now (`return-ntvdm.md` in August, this file in September).
 
-- **Updated:** 2026-09-23 (session 76)
+- **Updated:** 2026-09-23 (session 77)
 - **Branch:** `m9/completeness`
 - **Checkpoint commit:** **`59fac7d`** — the rollback point. `git diff a5dd042..HEAD -- src/`
   is empty, so every `src/` byte matches the tree that built `2565bffe`, the last host the

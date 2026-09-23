@@ -32,6 +32,7 @@ below were split back out by `tools/docs/split_state.py`.
 
 | Session | Date | Headline |
 |---|---|---|
+| [77](session-77.md) | 2026-09-23 | The 8254 closes with BCD; PCem was never the blocker; a parity score scored against one oracle |
 | [75](session-75.md) | 2026-09-22 | Doom's low detail is genuinely broken; `detaillevel 1` cost a day; the zip in the field |
 | [74](session-74.md) | 2026-09-17 | Duke3D runs, ZAR's VESA modes render, heaven7 renders, Heretic runs |
 | [73](session-73.md) | 2026-09-16 | The share is laid out for release; Win16 comes back; Hexen and Doom run |
