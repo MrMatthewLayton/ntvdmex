@@ -15,6 +15,6 @@ is part of the engineering discipline.
 | [ntvdm-architecture.md](ntvdm-architecture.md) | How real NTVDM is structured on XP-32 |
 | [ntvdmcontrol-and-v86.md](ntvdmcontrol-and-v86.md) | The V86 / `NtVdmControl` execution contract |
 | [signing-and-wfp.md](signing-and-wfp.md) | Why signing isn't the blocker; WFP is; how to avoid it |
-| [reference-projects.md](reference-projects.md) | ReactOS, dosemu, DOSBox, etc. — what each is good for |
+| [../reference-projects.md](../reference-projects.md) | ReactOS, Wine, dosemu, DOSBox, PCem — what each is good for, **and what we may not read** |
 | [build-toolchain.md](build-toolchain.md) | mingw-w64 cross-build, no-CRT link, and the XP-compatibility traps |
 | [xp-test-vm.md](xp-test-vm.md) | The XP-on-QEMU test bench: period-correct hardware choices and rationale |

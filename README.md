@@ -74,8 +74,8 @@ that is the project's first spike. Full reasoning in
 The original aim of accessing VGA/VESA "bare metal over emulation" is constrained by the fact
 that the XP GUI owns the display. The realistic path — like windowed NTVDM — is to
 **virtualize video and blit into a themed window**; true bare-metal full-screen is a later,
-cooperative path, not direct hardware access. Tracked as risk **R2** in
-[`docs/risks.md`](docs/risks.md).
+cooperative path, not direct hardware access. *(This was risk R2; it is closed — windowed GDI
+and exclusive-fullscreen DirectDraw both ship.)*
 
 ## Scope & platform
 
@@ -122,10 +122,11 @@ visual result. Full toolchain notes and the XP-compatibility traps:
 with **[`docs/STATE.md`](docs/STATE.md)** to see where things stand, then:
 
 - [`docs/ROADMAP.md`](docs/ROADMAP.md) — milestones M0–M8
+- [`docs/ref/`](docs/ref/) — the hardware/firmware/software **specifications** we build from
+- [`docs/inventory/`](docs/inventory/) — what we implement of each surface, marked from the code
 - [`docs/decisions/`](docs/decisions/) — Architecture Decision Records (the *why*)
 - [`docs/research/`](docs/research/) — findings, tagged by confidence
 - [`docs/spikes/`](docs/spikes/) — time-boxed experiments (Spike-001 is the keystone test)
-- [`docs/risks.md`](docs/risks.md) — risk register
 - [`docs/GLOSSARY.md`](docs/GLOSSARY.md) — NTVDM/V86/WOW terminology
 
 ## References
@@ -133,7 +134,7 @@ with **[`docs/STATE.md`](docs/STATE.md)** to see where things stand, then:
 ReactOS (DOS/VDD/WOW logic), Linux `dosemu` (the closest V86-via-kernel analog), DOSBox /
 86Box (device behaviour), and disassembly of the shipping XP binaries (the only ground truth
 for the `NtVdmControl` contract). See
-[`docs/research/reference-projects.md`](docs/research/reference-projects.md).
+[`docs/reference-projects.md`](docs/reference-projects.md).
 
 ## License
 

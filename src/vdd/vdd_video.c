@@ -407,7 +407,7 @@ void vdd_video_bda_sync(video_state *st)
              where we said 0x2000 either way. A program that pages by adding this to
              its offset lands inside the previous page. 06h/12h/13h are the
              oracle-verified rows (p_video.asm); the rest are the standard VGA BIOS
-             table and are marked unverified in docs/PARITY.md. */
+             table and are marked unverified in docs/inventory/video-bios.md. */
         switch (st->mode) {
         case 0x04: case 0x05: case 0x06: psize = 0x4000u; break;  /* 06h verified   */
         case 0x0D:                       psize = 0x2000u; break;

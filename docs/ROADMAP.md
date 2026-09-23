@@ -38,7 +38,7 @@ Every milestone/step moves through five stages:
 
 - **Research** — recover the contract: disassemble XP `ntvdm` / `basesrv` / `ntoskrnl`, read
   ReactOS for logic & structures; findings land in [`research/`](research/).
-- **Spike** — a minimal, throwaway proof in the experiment harness ([`tools/vdmhost/`](../tools/vdmhost/)):
+- **Spike** — a minimal, throwaway proof in the experiment harness (`tools/vdmhost/` — retired at M3 kickoff; see the note below):
   does it work *at all*? Driven and logged from the XP VM.
 - **Impl** — the real, clean implementation promoted into the host (`src/`).
 - **Test** — verified on the XP SP3 VM (the canonical bench, `scripts/xp-vm.sh`).
@@ -283,7 +283,7 @@ sessions 39–53.
   a duration up front.
 - [x] **Video/input** — text, mode 13h, mode 12h planar, VESA banked; keyboard and mouse.
 - [ ] Networking (#8), serial/parallel (#9)
-- [ ] Bare-metal vs virtualized device strategy per [risks.md](risks.md) (#10)
+- [ ] Bare-metal vs virtualized device strategy (#10)
 
 ## M8 — Polish & SDK 🟡 IN PROGRESS
 - [x] Host UI shell — menu bar, status strip, six-tab Settings dialog backed by the registry,

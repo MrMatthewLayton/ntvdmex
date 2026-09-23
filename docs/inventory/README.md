@@ -47,8 +47,23 @@ shaped like the program that demanded it.
 
 ⚠ **PART is the state to hunt.** A register that is half-modelled returns a *plausible
 wrong answer*, and a guest that gets one runs on and fails somewhere else entirely —
-[[patcher-vote-passes-random-bytes]] and the Lemmings colour-compare defect are both
-this shape.
+the INT-site patcher's vote and the Lemmings colour-compare defect are both this shape.
+
+**Coverage and verification are two axes, not one.** The mark above says what our code
+does; it says nothing about whether anyone checked. `docs/PARITY.md`, which this
+directory absorbed on 2026-09-23, used a single four-state column
+(`missing`/`guessed`/`implemented`/`verified`) that conflated them — and so could not
+express PART at all. Both are now recorded:
+
+| Verification | Meaning |
+|---|---|
+| **oracle** | A probe asked this of NTVDMEX **and** of a reference, and they agree |
+| **provisional** | Compared, but against a reimplementation (SeaBIOS, QEMU) rather than real hardware — re-ask on PCem |
+| **untested** | Implemented and perhaps exercised by a guest, never compared |
+
+⚠ The surfaces carried over from PARITY.md still carry the **old four-state column**.
+Re-marking them on both axes, with a `file:line` per row, is owed — and is the point:
+a row that reads `implemented` may well be **PART**.
 
 ## Verification
 
@@ -72,8 +87,18 @@ narrow — the WOW32 thunk ABI and krnl386's private structures — and even tho
 stock XP's own WOW as a live oracle. Before writing "no spec" against a surface,
 name what was searched.
 
-⛔ An all-AGREE probe is **not** a verified surface: check the probe can fail, and
-poison every output register first. See `parity-by-inventory`.
+⛔ **An all-AGREE probe is not a verified surface.** Check the probe can fail, and
+**poison every output register** before asking — `16.09.support` and `i33.26.maxvirt`
+both read as clean matches until the probe stamped `B1`/`C1C1` in first. Only ever omit
+the poison where the register is an *input*.
+
+⛔ **Guard every blocking call.** An unguarded `INT 16h AH=00h` on a host whose ring
+never fills blocks forever and the probe dies as a harness timeout — an absence that
+reads as a hang instead of as data.
+
+The whole-sweep results and their triage (what is a real gap, what was a false positive,
+what is blocked on an oracle) are in **[sweep.md](sweep.md)**. Where each specification
+and each oracle lives is **[`../ref/SOURCES.md`](../ref/SOURCES.md)**.
 
 ## The surfaces
 
@@ -97,13 +122,13 @@ Each surface gets two documents, doing two different jobs:
 | Surface | Primary sources | Inventory | Ref |
 |---|---|---|---|
 | **VGA / CRTC / sequencer / graphics / attribute / DAC** | IBM VGA TechRef; FreeVGA | [vga.md](vga.md) — **71 enumerated, measured** | — |
-| **VESA VBE 2.0 / 3.0** | `docs/ref/vbe20.pdf`, `docs/ref/vbe30.pdf` | — | have PDFs |
+| **VESA VBE 2.0 / 3.0** | `docs/ref/vbe20.pdf`, `docs/ref/vbe30.pdf` | — | [PDFs held](../ref/) |
 | 8254 PIT | Intel 8254 datasheet | — | — |
-| 8259A PIC | Intel 8259A datasheet | — | — |
+| 8259A PIC | Intel 8259A datasheet | [pic.md](pic.md) | — |
 | 8237A DMA controller | Intel 8237A datasheet | — | — |
-| 8042 keyboard controller | IBM AT TechRef | — | — |
-| Keyboard (scan code sets 1–3) | IBM AT TechRef | — | — |
-| PS/2 + serial mouse | Microsoft/Logitech protocol notes | — | — |
+| 8042 keyboard controller | IBM AT TechRef | [keyboard.md](keyboard.md) | — |
+| Keyboard (scan code sets 1–3) | IBM AT TechRef | [keyboard.md](keyboard.md) | — |
+| PS/2 + serial mouse | Microsoft/Logitech protocol notes | [mouse.md](mouse.md) | — |
 | Gameport / joystick | IBM Game Control Adapter | — | — |
 | MC146818 RTC + CMOS map | Motorola MC146818 datasheet | — | — |
 | PC speaker (PIT ch.2 + port 61h) | IBM TechRef | — | — |
@@ -120,16 +145,16 @@ Each surface gets two documents, doing two different jobs:
 
 | Surface | Primary sources | Inventory | Ref |
 |---|---|---|---|
-| PC BIOS INT 10h–1Ah | IBM TechRef; Ralf Brown's Interrupt List | — | — |
-| VGA BIOS (INT 10h) — *distinct from the VGA* | IBM VGA TechRef | — | — |
+| PC BIOS INT 10h–1Ah | IBM TechRef; Ralf Brown's Interrupt List | [bios-misc.md](bios-misc.md) | — |
+| VGA BIOS (INT 10h) — *distinct from the VGA* | IBM VGA TechRef | [video-bios.md](video-bios.md) | — |
 | BIOS Data Area (0040:) + EBDA | IBM TechRef | — | — |
 
 ### Software
 
 | Surface | Primary sources | Inventory | Ref |
 |---|---|---|---|
-| MS-DOS INT 21h/2Fh/25h/26h/28h/29h/2Eh | RBIL; *Undocumented DOS* | partial (`parity-by-inventory`) | — |
-| INT 33h mouse driver | Microsoft Mouse Programmer's Reference | partial | — |
+| MS-DOS INT 21h/2Fh/25h/26h/28h/29h/2Eh | RBIL; *Undocumented DOS* | [dos-services.md](dos-services.md) | — |
+| INT 33h mouse driver | Microsoft Mouse Programmer's Reference | [mouse.md](mouse.md) | — |
 | XMS 3.0 / LIM EMS 4.0 / VCPI | XMS + LIM specs | partial | — |
 | **DPMI 1.0** | DPMI 1.0 spec | partial — live frontier | — |
 | DOS extenders: DOS/4GW, DOS16M | Tenberry/Rational docs | partial | — |

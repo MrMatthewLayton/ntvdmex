@@ -1,44 +1,101 @@
 # Session archive
 
-Every working session's notes, split out of `return-ntvdm.md` — the single rolling
-handoff file this project used until 2026-08-26. It had grown to 4,000 lines of
-reverse-chronological narrative, which is a fine scratchpad and an impossible thing to
-hand to anyone.
+Every working session's notes. This is the project's **history**; it is not where you find
+out where things stand — that is [`docs/STATE.md`](../../STATE.md).
 
 **The content is verbatim. Nothing has been edited or corrected**, including conclusions
-that a later session refuted. That is deliberate: on this project the refutations have
-been worth more than the conclusions, and a note that says *"session 22's cause for each
-was wrong"* is only useful if session 22 is still there to be wrong.
+that a later session refuted. That is deliberate: on this project the refutations have been
+worth more than the conclusions, and a note that says *"session 22's cause for each was
+wrong"* is only useful if session 22 is still there to be wrong.
 
-- Looking for **where the project is now**? → [`docs/STATE.md`](../../STATE.md)
-- Looking for **how something works, or why**? → the [wiki](https://github.com/MrMatthewLayton/ntvdmex/wiki)
-- Looking for **what happened on a given day**? → below.
+## ⚠ Why this directory exists, twice over
+
+This archive was created on 2026-08-26 by splitting `return-ntvdm.md`, a single rolling
+handoff file that had grown to 4,000 lines of reverse-chronological narrative — *"a fine
+scratchpad and an impossible thing to hand to anyone."*
+
+**It then happened again.** By 2026-09-23 `STATE.md` had itself grown to **5,155 lines**, of
+which ~240 were state and ~4,500 were session blocks for s54–s75 nested *inside a list item*
+— 156 headings indented three spaces, invisible to every heading-level tool. Sessions 54–75
+below were split back out by `tools/docs/split_state.py`.
+
+> **So: when STATE.md starts accumulating session blocks, split them out.** The pull toward
+> one rolling file is strong, it has won twice, and the cost is paid by whoever reads next.
+
+| Where to look | For |
+|---|---|
+| [`docs/STATE.md`](../../STATE.md) | Where the project is **now**, and what to do next |
+| [the wiki](https://github.com/MrMatthewLayton/ntvdmex/wiki) | How something works, and why |
+| below | What happened on a given day |
+
+## The archive
 
 | Session | Date | Headline |
 |---|---|---|
-| [35](session-35.md) | 2026-08-28 | **★★ A stepped-over call is not inert — it answers, at random.** The harness logged unimplemented WOW32 calls as *"registers untouched"*, which is true of registers and false of the result: the thunk's `sub sp,4` hole is never written, so krnl386 pops **stack litter** and branches on it. Printing that value settled two questions in one run — `0xc6` read `0x01b7` (non-zero → its caller's `or ax,ax / jne` took the **failure** path) and `0x2d` read `0x2714` (`>= 0x21` → `LoadModule` took the **success** path into `les si,[bp+6]` with a NULL parameter block, which *is* the terminal `#GP`). ⇒ **session 34's "next: implement `0x2d`" is premature**: `WowLoadModule` is reached only because `LoadModule` already failed with `AX=0x17`, and we are causing that. Also: the enclosing function **names itself** `LoadModule` through its own `LoadStart/LoadSuccess/LoadFail` strings (with a **narration switch** at `ds:[0x12b0]` still to be turned on), and two lies were fixed in `nedis.py` — capstone stopping dead at the first bad byte (a *silent* empty window), and `--wowfunc` scanning seg1 only, which reported **`0 caller(s)`** for the very call the run stops on. Sessions 33–34 were also found uncommitted and are now committed. |
-| [34](session-34.md) | 2026-08-28 | **DPMI exceptions are delivered, and a raw `INT nn` in protected mode stops being fatal.** NT builds the DPMI 0.9 exception frame *itself* and leaves only the return `CS:IP` — measured against krnl386's deliberate `UD0`, whose every field was known in advance. **★ The fault table is indexed by the x86 EXCEPTION VECTOR, not an NT class** (#UD→6, #GP→0x0d): session 19 refuted, and the 8-entry table could never reach index 13. Eleven walls behind it, all ours — `AH=52h` had no PM thunk; a zero SFT chain head sent krnl386 round the IVT forever (117 MB); 64 file handles is a number it *refuses*; the host pool silently starved the PM handler table; WOW32 `0x98` is the file **seek**; `wowdecline.py` was under-reporting; **declining is a property of the CALL SITE, not the ID**; **a reserved LDT index is not a read-only one**; and **no commit-time scan can patch a region the guest fills after declaring it** — so a `#GP` with the IDT bit set is serviced as the interrupt it is. PM step `0x63` → **`0xd9`**, SYSTEM.DRV loads, and the frontier is now `WowLoadModule` — the 16→32 boundary itself. |
-| [33](session-33.md) | 2026-08-28 | **The stock oracle answers.** `vdmdump.exe` reads a *live* stock ntvdm from outside (regions, low 1MB, needles, and its LDT via `ProcessLdtInformation`). Stock keeps krnl386's **whole file image resident** (`0x16440` bytes at `0x899f0`); **★★ the `LoadSegment(2)` wall is DOWN** — segments 2 and 3 load, at the same heap offsets stock uses, and `ExitKernelThunk` is gone from the run. Cause: session 32 zeroed the arena *gap* to stop a crash, and that gap is the mechanism that walks the staged image, so every segment was copied from the NE header. Then an "unimplemented BOP" turned out to be a **swallowed `INT 21h`** — our patch map is keyed by address and krnl386 copies its code — recovered from the module's file image. **krnl386 is now ALIVE at the end of the run**, waiting on a DPMI exception it triggers on purpose. Two refutations kept (staging truncation; widening the segment table). |
-| [32](session-32.md) | 2026-08-27 | **krnl386 relocates itself** — a chained NE fixup can only be applied once, and krnl386's own pass is the one that converts paragraphs into selectors, so our loader must not pre-relocate it. `ExitKernelThunk(1)` cleared; the wall moves to `LoadSegment(2)`. |
-| [31](session-31.md) | 2026-08-27 | **The WOW32 interface pinned to the byte**: args at `bp+16`, return value in a stack hole at `bp-16`, 29 of 82 ids self-named, and declining (`0xFFFF`) chains to real DOS. |
-| [30](session-30.md) | 2026-08-26 | **Repo made public** (history purged of DOOM1.WAD first), wiki published, tracker reconciled 58→140 issues, docs consolidated. Then **#129 Win16 passthrough proved IMPOSSIBLE** (Windows validates the VDM image identity) and **#128 WOW started**: NE loader works, krnl386 loads and relocates on the rig. |
-| [29](session-29.md) | 2026-08-26 | Host UI: a constant caption, a status strip reporting program/width/CPU mode, five menus folded into a tabbed Settings dialog. `rigshot` — the rig can see its own window at last. |
-| [28](session-28.md) | 2026-08-26 | **MS-DOS 6.22's own COMMAND.COM runs.** Five defects in an afternoon, four in code every guest uses — biggest: INT 21h AH=0Ah blocked the exec thread, which deadlocks a shell absolutely. Settings move into the registry. |
-| [27](session-27.md) | 2026-08-26 | **★ Doom's mouse fixed and user-confirmed.** A 32-bit EDI masked to 16 bits. Both previously filed explanations were wrong, and so was the headline "Doom never asks". |
-| [26](session-26.md) | 2026-08-25 | Four fixes confirmed — and **three instrument errors in one session**. The headless rig cannot see input lag: every latency counter measured a path no key travels. |
-| [25](session-25.md) | 2026-08-25 | **★★ Doom is playable with sound — the project's stated bar is MET.** Status bar fixed by *disassembling DOOM.EXE* (`I_ReadScreen` reads the write plane); PCM to 99.999% by pacing the PIT. |
-| [24](session-24.md) | 2026-08-24 | **The timer is NOT starved** — session 23's central chain refuted at its first link. A counter's *layout* is a claim. |
-| [23](session-23.md) | 2026-08-24 | Both remaining defects re-diagnosed. ⚠️ Its audio/timer chain is refuted by session 24; the status-bar half stands. |
-| [22](session-22.md) | 2026-08-24 | **Doom is playable** — menu, a whole level, intermission, PCM + MIDI. |
-| [21](session-21.md) | 2026-08-24 | **★ The five-session `R_ExecuteSetViewSize` death was OURS**: our own INT-site patcher rewrote a `jle`'s displacement. Doom plays its demo with sound. |
-| [20](session-20.md) | 2026-08-24 | ⚠️ **Central conclusion REFUTED by session 21.** Kept for the landmarks and rig notes, which stand. |
-| [19](session-19.md) | 2026-08-23/24 | Doom completes its entire startup matching stock ntvdm line for line and renders its title screen. Not playable yet. |
-| [standing reference](standing-reference.md) | (sessions ~15–17) | Rig operations, instruments, landmarks and older traps, pruned of narrative. Includes the OPL timbre fix. |
-| [13](session-13.md) | 2026-08-20 | M9 API complete; mode 12h is the wall. |
-| [12](session-12.md) | 2026-08-19 | Checkpoint. |
-| [11](session-11.md) | 2026-08-19 | Checkpoint. VME/VIF interrupt gating. (Notes that sessions 6, 8, 9, 10 were pruned as stale restart snapshots.) |
-| [7](session-07.md) | 2026-08-18 | Checkpoint. |
+| [75](session-75.md) | 2026-09-22 | Doom's low detail is genuinely broken; `detaillevel 1` cost a day; the zip in the field |
+| [74](session-74.md) | 2026-09-17 | Duke3D runs, ZAR's VESA modes render, heaven7 renders, Heretic runs |
+| [73](session-73.md) | 2026-09-16 | The share is laid out for release; Win16 comes back; Hexen and Doom run |
+| [72](session-72.md) | 2026-09-15 | The by-hand pass; Doom's E1M1 crash is ours; QBasic's drive list |
+| [71](session-71.md) | 2026-09-14 | The text-mode application class -- QBasic's three symptoms were six host defects |
+| [70](session-70.md) | 2026-09-13 | Lemmings closed for real: the timer restarts per the datasheet, IRQ0 held in service |
+| [69](session-69.md) | 2026-09-13 | Lemmings: music fix reverted (it blanked the screen); capture refined |
+| [68](session-68.md) | 2026-09-12/13 | The rig was silently stock; Lemmings reaches gameplay by hand |
+| [61](session-61.md) | 2026-09-10 | Skyroads perfect: the crystal was on the wrong lock |
+| [60](session-60.md) | 2026-09-09 | CPU speed, honestly -- then the Skyroads wobble, root-caused |
+| [59](session-59.md) | — | ZAR renders: its attract demo is on screen, in colour |
+| [58](session-58.md) | — | 86.9% unchanged, and four real defects were fixed anyway |
+| [57](session-57.md) | — | TASKMAN puts up its task list, and Cancel closes it |
+| [56](session-56.md) | — | Calc calculates; we never let the CPU fault for us; the trace was the problem |
+| [55](session-55.md) | — | Win16 dialogs -- the unlock of the day (USER thunk 0xEF) |
+| [54](session-54.md) | — | The clock: a stepped-over call, for the fifth time |
+| [50](session-50.md) | — | the third and fourth guests, and a scoreboard that computes itself |
+| [49](session-49.md) | — | MS Paint saves a file |
+| [48](session-48.md) | — | two allocators, one LDT |
+| [47](session-47.md) | — | the enumerator was lying, and it was hiding 40 services |
+| [46](session-46.md) | — | MS Paint is a working paint program |
+| [45](session-45.md) | — | MS Paint runs, has its menu, and paints |
+| [44](session-44.md) | — | Notepad is a usable text editor, and the method changed |
+| [43](session-43.md) | — | Notepad from Windows 3.11, with its menu and its icon |
+| [42](session-42.md) | — | SYSEDIT.EXE on the Windows XP desktop |
+| [41](session-41.md) | — | the message loop turns, on a real keystroke |
+| [40](session-40.md) | — | the host CALLS 16-bit code, and SYSEDIT builds its whole MDI window |
+| [39](session-39.md) | — | WOWEXEC opens two windows, and krnl386 opens a real Win16 application |
+| [38](session-38.md) | — | the `0001:229C` wall is down: WOWEXEC registers a window class |
+| [37](session-37.md) | — | GDI.EXE was never rejected; we could not open it |
+| [36](session-36.md) | — | seven system modules load, and the wall was our own BIOS data area |
+| [35](session-35.md) | 2026-08-28 | the stepped-over call is answering, and `LoadModule` names itself |
+| [34](session-34.md) | 2026-08-28 | 2026-08-28 — DPMI exceptions are delivered, and krnl386 tells us what is wrong |
+| [33](session-33.md) | 2026-08-28 | 2026-08-28 — the stock oracle answers, and krnl386 loads segments 2 and 3 |
+| [32](session-32.md) | 2026-08-27 | 2026-08-27 — krnl386 relocates itself, and we were destroying the chains |
+| [31](session-31.md) | 2026-08-27 | 2026-08-27 — the WOW32 interface is pinned, and krnl386 opens a file |
+| [30](session-30.md) | 2026-08-26 | 2026-08-26 |
+| [29](session-29.md) | 2026-08-26 | 2026-08-26 |
+| [28](session-28.md) | 2026-08-26 | 2026-08-26 |
+| [27](session-27.md) | 2026-08-26 | 2026-08-26 |
+| [26](session-26.md) | 2026-08-25 | 2026-08-25 |
+| [25](session-25.md) | 2026-08-25 | 2026-08-25 |
+| [24](session-24.md) | 2026-08-24 | 2026-08-24 |
+| [23](session-23.md) | 2026-08-24 | 2026-08-24 |
+| [22](session-22.md) | 2026-08-24 | 2026-08-24 |
+| [21](session-21.md) | 2026-08-24 | 2026-08-24 |
+| [20](session-20.md) | 2026-08-24 | 2026-08-24 |
+| [19](session-19.md) | 2026-08-23/24 | 2026-08-23/24 |
+| [13](session-13.md) | 2026-08-20 | 2026-08-20 |
+| [12](session-12.md) | 2026-08-19 | 2026-08-19 |
+| [11](session-11.md) | 2026-08-19 | 2026-08-19 |
+| [7](session-07.md) | 2026-08-18 | 2026-08-18 |
+| [~15–17](standing-reference.md) | — | Standing reference |
+| [≤53](session-53-and-older.md) | — | Session 53 and older -- handoff pointers and the WOW/krnl386 reference blocks |
+| [2026-06-09](2026-06-09.md) | 2026-06-09 | 2026-06-09 — mode-12h tiered interpreter, the per-pixel wall, INKEY$/XCHG fixes |
+| [2026-06-08](2026-06-08.md) | 2026-06-08 | daily log entry |
+| [2026-06-07](2026-06-07.md) | 2026-06-07 | daily log entry |
+| [2026-06-06](2026-06-06.md) | 2026-06-06 | **Committed the M2.4 spike (`4aa6f44`).** The +252-line uncommitted diff in |
+| [2026-06-05](2026-06-05.md) | 2026-06-05 | daily log entry |
+| [2026-06-02](2026-06-02.md) | 2026-06-02 | Chose and wired the build toolchain: **CMake + mingw-w64 `i686-w64-mingw32`** cross-compiler, |
+| [2026-06-01](2026-06-01.md) | 2026-06-01 | Answered the gating question "is this even possible / is NTVDM replaceable?" → yes |
 
-> Sessions 1–6, 8–10 and 14–18 have no surviving block: some were pruned as stale restart
-> snapshots at the time, and the earliest work predates this file. Their record is the
-> commit history and `docs/research/`.
+> **Gaps are real, and dates are only asserted where a source states them.** Sessions 1–6,
+> 8–10, 14–18, 51–52 and 62–67 have no surviving block: some were pruned as stale restart
+> snapshots at the time, some were folded into a neighbouring session, and the earliest work
+> predates this archive. Their record is the commit history, `docs/research/`, and the June
+> daily entries above.

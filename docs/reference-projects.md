@@ -6,7 +6,34 @@ black-box oracle; the repository's *history* was rewritten to remove `DOOM1.WAD`
 going public). This page exists so that a future session evaluating some newly-discovered
 NTVDM project does not have to re-derive the rule under time pressure.
 
-Tracked by **R8** in [`risks.md`](risks.md).
+> **This is the project's standing legal and provenance policy**, and the last surviving
+> row of the old `risks.md` risk register, which was retired on 2026-09-23 once R1–R7 had
+> all been closed by shipped work. Re-rated Low→Med on 2026-08-27, and the reason is
+> below: `leecher1337/ntvdmx64` is a near-exact match for our problem *and* its
+> `ntvdmpatch/` is patches against the leaked NT4 source — so the trap is attractive,
+> discoverable, and specific to the subsystem we are building.
+
+---
+
+## What each project is actually good for
+
+**No existing open project does what we do** (real V86 on NT via `NtVdmControl`). Each
+reference is useful for a *different* layer. Be precise about which.
+
+| Project | CPU approach | Good reference for | NOT a reference for |
+|---------|-------------|--------------------|---------------------|
+| **ReactOS NTVDM** | Software emulation (**Fast486**) | DOS kernel logic, VDD interface shape, WOW structures, the *intent* of NTVDM behaviour | V86 / `NtVdmControl` execution — it doesn't use them |
+| **Wine (Win16 side)** | n/a (API reimplementation) | Win16 API semantics, thunking concepts, NE loader behaviour — `krnl386.exe16`, `user.exe16`, `gdi.exe16` | Its execution model differs from NT/WOW |
+| **Linux dosemu / dosemu2** | **V86** via `vm86()` (then KVM) | The architectural *shape* we want: usermode host + kernel V86 + trap-and-reflect loop; real-mode memory image setup; fault/signal discipline | NT-specific structures (`VDM_TIB`, `NtVdmControl`) — wrong OS |
+| **DOSBox / DOSBox-X** | Software emulation | DOS API behaviour, device (VGA/SB/timer) semantics, DPMI/XMS/EMS reference, compatibility quirks | Anything about executing on the real CPU |
+| **PCem / 86Box** | Full machine emulation | Accurate hardware device behaviour (VGA/VESA, sound, timers) to mirror in our VDDs | Execution model; far heavier than we need |
+| **Shipping XP `ntvdm.exe` / `ntoskrnl` (disassembly)** | **V86** (the real thing) | The *only* ground truth for the `NtVdmControl` contract, `VDM_TIB` layout, low-memory setup | — (this IS the spec we must recover) |
+
+**Practical posture:** lean on **ReactOS** and **Wine** for DOS/VDD/WOW *logic and
+semantics*, but never assume either validates our V86 path; treat **dosemu** as the
+conceptual blueprint for the V86 host loop; recover the `NtVdmControl` / `VDM_TIB`
+contract from XP disassembly; use **DOSBox / PCem / 86Box** as oracles for device
+behaviour when building VDDs.
 
 ---
 

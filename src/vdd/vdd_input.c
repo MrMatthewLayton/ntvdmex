@@ -474,7 +474,7 @@ static void int16(void *self, ntvdd_regs *r)
         break;
     case 0x09:                              /* which INT 16h functions exist -> AL  */
         /* 0x30 is MEASURED on the 6.22 oracle, not derived from the bit definitions
-           (which disagree between references). See docs/PARITY.md. */
+           (which disagree between references). See docs/inventory/keyboard.md. */
         s_al(r, 0x30);
         r->cf = 0; r->zf = 0;
         break;

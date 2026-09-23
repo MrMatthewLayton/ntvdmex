@@ -857,7 +857,7 @@
    "msdos622"
   ],
   "recorded": "2026-09-15",
-  "why": "The XMS DRIVER's internal revision (HIMEM.SYS 3.10 on the oracle, ours 3.00) -- a version number for a different program. \u26a0 NOT abstained beside it: xms.00.version/DX, which reports whether an HMA EXISTS and is a real gap -- see docs/PARITY.md."
+  "why": "The XMS DRIVER's internal revision (HIMEM.SYS 3.10 on the oracle, ours 3.00) -- a version number for a different program. \u26a0 NOT abstained beside it: xms.00.version/DX, which reports whether an HMA EXISTS and is a real gap -- see docs/inventory/dos-services.md."
  },
  {
   "probe": "sysvar",

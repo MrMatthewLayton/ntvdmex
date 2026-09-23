@@ -3,7 +3,6 @@
 
     tools/score/score.py                 # the table
     tools/score/score.py --brief         # one line
-    tools/score/score.py --append        # ...and add today's row to docs/PROGRESS.md
     tools/score/score.py --json
 
 ── WHY THIS IS A SCRIPT AND NOT A JUDGEMENT ────────────────────────────────
@@ -14,7 +13,7 @@ against the *games* bar and Win16 against the *completeness* bar -- two bars, on
 number, and the number went up for free.
 
 So the model lives in `model.json`, in the open, and the score is computed from
-it. When the number moves, `--append` records WHICH ITEM moved, which makes the
+it. When the number moves, the run names WHICH ITEM moved, which makes the
 daily delta auditable instead of atmospheric.
 
 ⚠ THE SCORE IS ONLY AS HONEST AS THE ATTESTED VALUES. Two items are measured
@@ -32,7 +31,6 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.abspath(os.path.join(HERE, "..", ".."))
 MODEL = os.path.join(HERE, "model.json")
 CACHE = os.path.join(HERE, "probe-cache.json")
-PROGRESS = os.path.join(ROOT, "docs", "PROGRESS.md")
 SHELF = os.path.join(ROOT, "guest", "win16")
 
 
@@ -169,29 +167,11 @@ def main():
         print("  !! STALE PROBES (guest shelf missing): %s" % ", ".join(stale))
 
     if "--append" in sys.argv:
-        append_progress(overall, sections)
+        print("\n  --append is retired. docs/PROGRESS.md held one row per day and went two\n"
+              "  weeks stale while the score moved; a table of numbers nobody re-ran is\n"
+              "  worse than no table. Run this script when you want the number.")
+        return 2
     return 0
-
-
-def append_progress(overall, sections):
-    today = datetime.date.today().isoformat()
-    row = "| %s | **%.1f** | %.1f | %.1f | %.1f | %s |\n" % (
-        today, overall, sections["dos"]["score"], sections["wow16"]["score"],
-        sections["product"]["score"], os.environ.get("NOTE", ""))
-    with open(PROGRESS) as fh:
-        text = fh.read()
-    marker = "<!-- SCORES -->\n"
-    if marker not in text:
-        raise SystemExit("docs/PROGRESS.md has no <!-- SCORES --> marker")
-    head, tail = text.split(marker, 1)
-    # ⚠ ONE ROW PER DAY. Re-running on the same day REPLACES that day's row
-    # rather than appending a second -- otherwise a day you happened to score
-    # three times reads as three days of work.
-    kept = [ln for ln in tail.splitlines(keepends=True)
-            if not ln.startswith("| " + today + " |")]
-    with open(PROGRESS, "w") as fh:
-        fh.write(head + marker + row + "".join(kept))
-    print("  recorded in docs/PROGRESS.md")
 
 
 if __name__ == "__main__":

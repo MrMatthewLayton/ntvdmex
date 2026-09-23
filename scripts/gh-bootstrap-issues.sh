@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Bootstrap the GitHub issue tracker from the local docs (ROADMAP.md / STATE.md /
-# risks.md). Epics are modelled as GitHub **milestones** (M4-M8); bugs and
+# the risk register, since retired). Epics are modelled as GitHub **milestones**; bugs and
 # follow-ups get labels but no milestone. Safe to re-run: milestones, labels, and
 # issues are each created only if a same-named one does not already exist.
 #
