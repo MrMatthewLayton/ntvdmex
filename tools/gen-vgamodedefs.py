@@ -27,10 +27,31 @@ OUT = os.path.join(ROOT, "src", "vdd", "vga_modedefs.h")
 GROUPS = ["Misc Output", "SEQ SR0-SR4", "CRTC CR00-CR18", "GC GR0-GR8", "AC AR00-AR14"]
 
 
+# The 64-byte BUF layout p_vgareg emits, and the offsets each group lives at.
+SPAN = {"Misc Output": (0, 1), "SEQ SR0-SR4": (4, 9),
+        "CRTC CR00-CR18": (9, 34), "GC GR0-GR8": (34, 43), "AC AR00-AR14": (43, 64)}
+
+
+def split_buf(raw):
+    """A whole 64-byte capture -> the same {group: bytes} shape the block form gives."""
+    return {g: raw[lo:hi] for g, (lo, hi) in SPAN.items()}
+
+
 def parse(path):
-    """-> {mode_label: {group: bytes}} for the ORACLE column only."""
+    """-> {mode_label: {group: bytes}} for the ORACLE column only.
+
+    Two forms are accepted, because the reference grew one. The original is a
+    block per mode with a `6.22=` line per group; the compact one is the whole
+    64-byte capture on the `==` line itself, which is what a raw probe run gives
+    and what the later modes were recorded as. Silently supporting only the first
+    is how five modes stayed in a table that had eleven available to it."""
     modes, cur, grp = {}, None, None
     for line in open(path):
+        m = re.match(r"^== (vga\.\S+?)(?:\.(?:com|COM))?\s+([0-9A-Fa-f]{128})\s*$", line)
+        if m:                                   # compact: name + the whole buffer
+            modes[m.group(1)] = split_buf(bytes.fromhex(m.group(2)))
+            cur = None
+            continue
         m = re.match(r"^== (vga\.mode\S+)", line)
         if m:
             cur = m.group(1)
@@ -59,8 +80,15 @@ def main():
     if not os.path.exists(REF):
         sys.exit("missing %s -- run ./scripts/paritysweep.sh p_vgareg first" % REF)
     modes = parse(REF)
-    want = [("vga.mode03", 0x03), ("vga.mode0D", 0x0D), ("vga.mode12", 0x12),
-            ("vga.mode13", 0x13), ("vga.mode07mono", 0x07)]
+    # ⚠ modeY and modeX are deliberately NOT here. They are not BIOS modes -- a
+    #   program makes them out of 13h -- so a table keyed by an INT 10h mode number
+    #   cannot apply them, and pretending otherwise would program them on a plain
+    #   mode 13h set. They stay in the reference as documentation of the unchained
+    #   path; docs/ref/vga.md 5.2 is where that path is specified.
+    want = [("vga.mode03", 0x03), ("vga.mode04", 0x04), ("vga.mode06", 0x06),
+            ("vga.mode0D", 0x0D), ("vga.mode0E", 0x0E), ("vga.mode10", 0x10),
+            ("vga.mode11", 0x11), ("vga.mode12", 0x12), ("vga.mode13", 0x13),
+            ("vga.mode07mono", 0x07)]
     rows = []
     for label, num in want:
         d = modes.get(label)
