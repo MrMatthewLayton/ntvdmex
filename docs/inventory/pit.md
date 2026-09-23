@@ -16,9 +16,11 @@ timing. Off-VM: `tools/dostest/pit_test.c`.
 **Counter 0 is modelled well. Counters 1 and 2 barely exist, and the 8254's defining
 feature — the Read-Back Command — is not implemented at all.**
 
-> Everything we have is shaped around *"the thing that raises IRQ0 at 18.2 Hz"*, which is
-> counter 0 in mode 3. That is the one a guest needs to boot. It is not the one a guest
-> uses to **measure** anything — for that it reads counter 0's count, polls counter 2's
+> Everything we have is shaped around *"the thing that raises IRQ0 at 18.2 Hz"* — counter 0
+> in a periodic mode (**measured: mode 2, not the mode 3 this file first said**; see
+> [`../ref/pit.md`](../ref/pit.md) §6, and note that both give the same rate, which is why
+> the error was invisible). That is the counter a guest needs to boot. It is not the one a
+> guest uses to **measure** anything — for that it reads counter 0's count, polls counter 2's
 > OUT pin at port `61h` bit 5, or issues a Read-Back. Two of those three we do not answer,
 > and the third we answer without ever consulting the counter.
 
