@@ -13,8 +13,10 @@ timing. Off-VM: `tools/dostest/pit_test.c`.
 
 ## Headline
 
-**Counter 0 is modelled well. Counters 1 and 2 barely exist, and the 8254's defining
-feature — the Read-Back Command — is not implemented at all.**
+**⇒ As of 2026-09-23 this surface has ZERO mismatches against oracle consensus** — the
+sections below record what was found and what each fix cost. The original headline was:
+*"Counter 0 is modelled well. Counters 1 and 2 barely exist, and the 8254's defining feature
+— the Read-Back Command — is not implemented at all."*
 
 > Everything we have is shaped around *"the thing that raises IRQ0 at 18.2 Hz"* — counter 0
 > in a periodic mode (**measured: mode 2, not the mode 3 this file first said**; see
@@ -149,11 +151,12 @@ is what lets Lemmings' calibration exit keep ticking.
 |---|---|---|---|
 | 0 | tied high on the PC | **N/A** | correct by construction — nothing to model |
 | 1 | tied high | **N/A** | |
-| 2 | **port `61h` bit 0** | **MISS** | `vdd_speaker.c:9` stores port 61h; the PIT never reads it |
+| 2 | **port `61h` bit 0** | **IMPL** | `vdd_pit_ch2_gate`, pushed from `vdd_speaker.c` |
 
-⛔ **Counter 2 counts regardless of its gate.** Clearing `61h` bit 0 must stop it; we keep
-going. Combined with the missing OUT pin this makes the whole gate-and-poll idiom
-unavailable.
+✅ **Counter 2's gate works** *(FIXED 2026-09-23)*. A high-to-low edge freezes the elapsed
+count; low-to-high **resumes** from there rather than restarting — the difference between a
+paused stopwatch and a reset one. The setter is idempotent because a guest polling `61h`
+rewrites the whole byte constantly.
 
 ## 6. Port `61h` (PPI port B) — the PIT's other face
 
@@ -162,11 +165,17 @@ unavailable.
 | 0 | Timer-2 GATE | **STORE** | `vdd_speaker.c:9` — written value kept, never consumed |
 | 1 | Speaker data enable | **IMPL** | consumed by `vdd_audio.c:135` |
 | 4 | DRAM refresh toggle | **PART** | `vdd_speaker.c:13` — **toggled on every read**, not derived from a 15 µs clock. Deliberate: it makes delay loops terminate. A guest *calibrating* against it gets a number with no relation to time. |
-| **5** | **Timer-2 OUT** | **MISS** | `vdd_speaker.c:14` returns `(port61 & ~0x10) \| refresh` — bit 5 is **echoed from what was written**, never from counter 2 |
+| **5** | **Timer-2 OUT** | **IMPL** | `vdd_pit_ch2_out`, derived from mode + elapsed |
 
-⛔ **Bit 5 is the classic "measure time without interrupts" surface**: program counter 2,
-poll bit 5, count the loops. We return a constant, so such a loop either exits instantly
-or never.
+✅ **Bit 5 reports counter 2's OUT pin** *(FIXED 2026-09-23)*. It used to echo whatever bit 5
+had been *written*, so the classic "measure elapsed time without interrupts" loop — program a
+count, poll bit 5, count the iterations — saw a constant and either fell straight through or
+span forever. All three oracles agreed it must move; now `p_pit pit.61h.bit5.toggles` AGREES
+with all of them.
+
+⚠ **Bit 4 is still synthesised on purpose** — the DRAM-refresh toggle, flipped on every read so
+refresh-poll delay loops terminate. A guest that *calibrates* against it gets a number with no
+relation to time. A recorded approximation, not an oversight.
 
 ---
 
@@ -179,8 +188,8 @@ or never.
    `n8=0 max_ms=6`, unchanged.
 3. ✅ ~~Implement the Read-Back Command and the status byte.~~ **DONE 2026-09-23** —
    `p_pit` 4 mismatches → 1.
-4. **Consume counter 2's GATE from `61h` bit 0, and report its OUT at `61h` bit 5.**
-   Together with (2) and (3) this completes the polling idiom.
+4. ✅ ~~Consume counter 2's GATE from `61h` bit 0, and report its OUT at `61h` bit 5.~~
+   **DONE 2026-09-23** — `p_pit` now has **zero mismatches against oracle consensus**.
 5. ⛔ ~~Honour the BCD bit.~~ **BLOCKED ON PCem** — the oracle cannot say what correct is
    (see §2). Implementing from the datasheet alone would be writing an expectation from
    memory, which is the one thing this programme exists to stop.

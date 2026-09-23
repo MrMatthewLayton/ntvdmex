@@ -28,6 +28,16 @@ static unsigned pit_latched_count(vdd_bus *bus)
     return (unsigned)((lo & 0xFF) | ((hi & 0xFF) << 8));
 }
 
+/* Counter 2 through its ports, the way a guest reads it. */
+static unsigned pit_latched_ch2(vdd_bus *bus)
+{
+    uint32_t lo = 0, hi = 0, cw = 0x80;      /* ch2, access 00 = latch */
+    vdd_bus_io(bus, 0x43, 1, 0, &cw);
+    vdd_bus_io(bus, 0x42, 1, 1, &lo);
+    vdd_bus_io(bus, 0x42, 1, 1, &hi);
+    return (unsigned)((lo & 0xFF) | ((hi & 0xFF) << 8));
+}
+
 static int g_irq = 0;
 static void irq_sink(void *ctx, uint8_t irq) { (void)ctx; if (irq == 0) g_irq++; }
 
@@ -441,6 +451,41 @@ int main(void)
         w = 0x34; vdd_bus_io(&bus, 0x43, 1, 0, &w);
         w = 0x00; vdd_bus_io(&bus, 0x40, 1, 0, &w);
         w = 0x00; vdd_bus_io(&bus, 0x40, 1, 0, &w);
+    }
+
+    /* T11: COUNTER 2'S OUT PIN, AND ITS GATE. --------------------------------
+       docs/ref/pit.md 2 and 5. Counter 2 is the only counter whose OUT a PC
+       exposes directly -- port 61h bit 5 -- and the only one whose GATE software
+       controls, at port 61h bit 0. Together they are the classic "measure time
+       without interrupts" idiom: program a count, poll bit 5, count the loops.
+       All three oracles agree the bit must move (p_pit pit.61h.bit5.toggles = 1
+       on 6.22, dosbox-x AND PCem); we alone return a constant. */
+    {
+        uint32_t w; unsigned a, b2;
+        vdd_pit_ch2_gate(&pit, 1);                      /* gate high: counting  */
+        w = 0xB6; vdd_bus_io(&bus, 0x43, 1, 0, &w);     /* ch2 lo/hi mode 3     */
+        w = 0x40; vdd_bus_io(&bus, 0x42, 1, 0, &w);
+        w = 0x00; vdd_bus_io(&bus, 0x42, 1, 0, &w);     /* reload 0x0040        */
+
+        /* Mode 3 is a square wave: OUT high for the first half of the period,
+           low for the second. R = 64, so the half is 32. */
+        pit.total_clocks = pit.c2.load_clocks;
+        CHECK(vdd_pit_ch2_out(&pit) == 1, "ch2 OUT is high at the start of the period");
+        pit.total_clocks = pit.c2.load_clocks + 0x30;   /* 48 of 64: past half  */
+        CHECK(vdd_pit_ch2_out(&pit) == 0, "ch2 OUT is low in the second half");
+        pit.total_clocks = pit.c2.load_clocks + 0x40;   /* a full period on     */
+        CHECK(vdd_pit_ch2_out(&pit) == 1, "ch2 OUT is high again a period later");
+
+        /* THE GATE STOPS THE COUNTER. Clearing 61h bit 0 must freeze it; setting
+           the bit must resume from where it stopped, not restart. */
+        a = pit_latched_ch2(&bus);
+        vdd_pit_ch2_gate(&pit, 0);
+        pit.total_clocks += 1000;
+        b2 = pit_latched_ch2(&bus);
+        CHECK(a == b2, "gate LOW freezes counter 2");
+        vdd_pit_ch2_gate(&pit, 1);
+        pit.total_clocks += 8;
+        CHECK(pit_latched_ch2(&bus) != b2, "gate HIGH resumes counter 2");
     }
 
     printf("\n%d checks, %d failed\n", total, fails);

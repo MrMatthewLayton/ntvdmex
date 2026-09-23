@@ -23,6 +23,8 @@
      blank screen was never the count -- it was IRQ0 re-entering the game's timer ISR
      (the host auto-EOI'd IRQ0; see irq0_ack in the host) once the tick was correct.
      Both halves are now fixed; see docs/STATE.md session 70. */
+static int pit_out_pin(uint8_t mode, uint32_t R, uint64_t elapsed);
+
 /* The count law, by mode. Split out of pit_current_count so counters 1 and 2 can
    use the same arithmetic instead of a second copy that drifts from it. */
 static uint16_t pit_count_law(uint8_t mode, uint32_t R, uint64_t elapsed)
@@ -46,12 +48,39 @@ static uint16_t pit_current_count(const pit_state *st)
 
 /* Counters 1 and 2. They have no IRQ engine and no accumulator: a read is simply
    "how far has the counting element got since it was loaded". */
+/* Clocks this counter has actually counted. ⚠ NOT simply total - load: while the
+   GATE is low the counting element is stopped, so the elapsed count freezes at
+   whatever it had reached. */
+static uint64_t chan_elapsed(const pit_state *st, const pit_chan *c)
+{
+    if (!c->gate) return c->gate_elapsed;
+    return (st->total_clocks >= c->load_clocks) ? st->total_clocks - c->load_clocks : 0;
+}
+
 static uint16_t chan_count(const pit_state *st, const pit_chan *c)
 {
     uint32_t R = c->reload ? (uint32_t)c->reload : 0x10000u;
-    uint64_t elapsed = (st->total_clocks >= c->load_clocks)
-                     ? st->total_clocks - c->load_clocks : 0;
-    return pit_count_law(c->mode, R, elapsed);
+    return pit_count_law(c->mode, R, chan_elapsed(st, c));
+}
+
+/* Port 61h bit 0 -> counter 2's GATE. A high-to-low edge freezes the elapsed
+   count; a low-to-high edge slides load_clocks forward so counting RESUMES from
+   there. Idempotent: writing the same level twice must not nudge the count,
+   because a guest polling port 61h rewrites the whole byte constantly. */
+void vdd_pit_ch2_gate(pit_state *st, int on)
+{
+    pit_chan *c = &st->c2;
+    if (!!on == !!c->gate) return;
+    if (on) { c->load_clocks = st->total_clocks - c->gate_elapsed; c->gate = 1; }
+    else    { c->gate_elapsed = chan_elapsed(st, c);               c->gate = 0; }
+}
+
+/* Counter 2's OUT pin, as port 61h bit 5 reports it. */
+int vdd_pit_ch2_out(const pit_state *st)
+{
+    const pit_chan *c = &st->c2;
+    uint32_t R = c->reload ? (uint32_t)c->reload : 0x10000u;
+    return pit_out_pin(c->mode, R, chan_elapsed(st, c));
 }
 
 /* A count write, lo/hi buffered exactly as counter 0 does it: a HALF-WRITTEN
@@ -533,6 +562,7 @@ void vdd_pit_reset(void *self)
          would read a constant, which is the "no time is passing" answer this
          surface was measured to be giving. */
     st->c1.reload = 18; st->c1.access = 3; st->c1.mode = 2; st->c1.mode_raw = 2;
+    st->c1.gate = 1;                        /* tied high on the board */
     /* Counter 2 is NOT free-running: its gate is port 61h bit 0 and software
        decides. Left at reset defaults until a guest programs it. */
     st->c2.access = 3;
@@ -553,6 +583,7 @@ int vdd_pit_init(vdd_bus *b, void *self)
     if (!st->mode && !st->mode_raw) { st->mode = 3; st->mode_raw = 3; }
     if (!st->c1.reload) {                       /* counter 1: free-running refresh */
         st->c1.reload = 18; st->c1.access = 3; st->c1.mode = 2; st->c1.mode_raw = 2;
+        st->c1.gate = 1;                    /* tied high on the board */
     }
     if (!st->c2.access) st->c2.access = 3;
     if (vdd_claim_ports(b, 0x40, 0x43, pit_in, pit_out, st)) return -1;

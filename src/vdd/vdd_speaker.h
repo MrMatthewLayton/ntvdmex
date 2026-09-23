@@ -17,7 +17,7 @@
 
 typedef struct speaker_state {
     vdd_bus         *bus;
-    const pit_state *pit;       /* channel 2 supplies the tone frequency        */
+    pit_state       *pit;       /* channel 2: the tone, and the GATE/OUT pair    */
     uint8_t          port61;    /* last value written to port 0x61              */
     uint8_t          refresh;   /* toggling bit 4 so refresh-poll delay loops run */
 } speaker_state;

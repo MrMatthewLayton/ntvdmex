@@ -46,6 +46,13 @@ typedef struct {
     uint16_t latch;         /* ...that snapshot                                 */
     uint64_t load_clocks;   /* total_clocks when the count was last loaded      */
     uint8_t  null_cnt;      /* a count is written but not yet in the counting element */
+    uint8_t  gate;          /* GATE input: 1 = counting. Counter 2's comes from
+                               port 61h bit 0; counters 0 and 1 are tied high on a
+                               PC and never use this.                            */
+    uint64_t gate_elapsed;  /* clocks counted when the gate last went LOW, so a
+                               gate that comes back high RESUMES rather than
+                               restarts -- which is the difference between a
+                               paused stopwatch and a reset one.                 */
 } pit_chan;
 
 typedef struct pit_state {
@@ -127,5 +134,12 @@ static inline ntvdd vdd_pit_device(pit_state *st)
 /* Advance time by `clocks` PIT input clocks, emitting IRQ0 per elapsed reload.
    Exposed (not just driven by the frame tick) so tests can feed exact counts. */
 void vdd_pit_add_clocks(pit_state *st, uint32_t clocks);
+
+/* ── COUNTER 2'S GATE AND OUT PIN -- the PC's only software-visible pair. ─────
+   The speaker VDD owns port 61h, so it pushes bit 0 in here and reads bit 5 back
+   out. Keeping the PIT ignorant of the speaker (rather than having it reach for
+   port 61h itself) is what lets the off-VM battery drive the gate directly. */
+void vdd_pit_ch2_gate(pit_state *st, int on);
+int  vdd_pit_ch2_out(const pit_state *st);
 
 #endif /* NTVDMEX_VDD_PIT_H */
