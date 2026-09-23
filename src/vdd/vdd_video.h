@@ -601,6 +601,10 @@ typedef struct video_state {
     uint8_t  vga_enable;                /* 3C3                                         */
     uint8_t  dac_mask;                  /* 3C6 -- ANDed with every pixel; fades use it  */
     uint32_t misc_w, feat_w, vgaen_w, dacmask_w;
+    /* CR00-CR07 writes refused because CR11 bit 7 (write protect) was set --
+       real hardware refuses them and we used to accept them. Counted rather than
+       silent: an absence in a report means nothing. */
+    uint32_t crtc_wp_refused;
 } video_state;
 
 #define VID_UNIMPL_SET(bm, n)  ((bm)[((n) & 0xFF) >> 3] |= (uint8_t)(1u << ((n) & 7)))
