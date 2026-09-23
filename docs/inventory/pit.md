@@ -96,21 +96,35 @@ status byte (measured: `pit.mode6.readback` = `0x0C`, not `0x04`). Normalising i
 and reporting from the other is what lets the behaviour be right *and* the read-back honest
 once §3 is implemented.
 
-## 3. The Read-Back Command — **entirely absent**
+## 3. The Read-Back Command — ✅ **IMPLEMENTED 2026-09-23**
 
 | Unit | Status | Evidence |
 |---|---|---|
-| Read-Back command decode (`43h` bits 7:6 = `11`) | **MISS** | `vdd_pit.c:131` — `if (ch != 0) return;` swallows it |
-| Latch-count for multiple counters | **MISS** | — |
-| Latch-status | **MISS** | — |
-| Status bit 7 — **OUT pin** | **MISS** | no OUT state exists for any counter |
-| Status bit 6 — **Null Count** | **MISS** | `cw_armed`/`next_pending` track something adjacent (`vdd_pit.h:42,43`) but nothing is exposed |
-| Status bits 5:0 — programmed access / mode / BCD | **MISS** | the values are held (`vdd_pit.h:29,30`); nothing reports them |
+| Read-Back command decode (`43h` bits 7:6 = `11`) | **IMPL** | `pit_readback`; both latch bits honoured **active-low** |
+| Latch-count for multiple counters in one command | **IMPL** | `pit_readback` loops the three select bits |
+| Latch-status | **IMPL** | `st_latch[]` / `st_latched[]`, first latch wins |
+| Status bit 7 — **OUT pin** | **IMPL** | `pit_out_pin` — **derived** from mode + elapsed, not stored, so it cannot go stale |
+| Status bit 6 — **Null Count** | **IMPL** | counter 0 from `cw_armed`/`next_pending`; channels from `null_cnt` |
+| Status bits 5:0 — access / mode / BCD | **IMPL** | `pit_status_of`; **`mode_raw`, not the normalised mode** |
+| Status read before count when both latched | **IMPL** | served ahead of everything in `pit_in_locked` |
 
-⇒ **This is the largest single gap on the surface.** It is the 8254's whole addition over
-the 8253, it is the only way to read a counter's OUT pin or how it was programmed, and a
-guest that issues one gets its command silently discarded and then reads `0xFF` from a
-port that should be handing back a status byte.
+**Measured:** `p_pit` went **4 mismatches → 1**. `rdback.st0`, `rdback.st2` and
+`mode6.readback` all moved to AGREE — and `mode6.readback` agreeing at `0x0C` is the
+`mode_raw` decision from fix 1 confirmed against a real kernel: hardware reports the mode
+**as programmed**, not normalised.
+
+⚠ **And it exposed a second defect that had nothing to do with read-back.** Our counter 0
+came out of startup in **mode 0** — a one-shot — where a real machine leaves it periodic.
+Nothing had noticed because the IRQ0 engine raises from the accumulator *regardless of
+mode*; what it got wrong was everything a guest can **ask**, plus the bare-count load rule,
+which took the one-shot path. Fixed by giving counter 0 and counter 1 their POST defaults.
+
+⛔ **The first attempt at that fix was inert, and the canary "passed" on it.** The defaults
+went into `vdd_pit_reset` only — but the host builds `g_pit` as a zeroed global and calls
+`vdd_pit_init`, never `reset`, on the startup path. Read-Back still reported mode 0 on the
+rig. **A Skyroads run that certifies a change which is not wired up certifies nothing**, so
+the canary was re-run once the defaults were live: `n8=0 max_ms=7`, within the documented
+guard.
 
 ## 4. The six modes
 
@@ -163,8 +177,8 @@ or never.
 2. ✅ ~~Make `41h`/`42h` readable as real counters.~~ **DONE 2026-09-23.** `p_pit`
    `ch1.counting` and `ch2.counting` both moved MISMATCH → AGREE. Skyroads re-run:
    `n8=0 max_ms=6`, unchanged.
-3. **Implement the Read-Back Command and the status byte**, including the OUT pin and the
-   null-count flag. The largest gap, and self-contained.
+3. ✅ ~~Implement the Read-Back Command and the status byte.~~ **DONE 2026-09-23** —
+   `p_pit` 4 mismatches → 1.
 4. **Consume counter 2's GATE from `61h` bit 0, and report its OUT at `61h` bit 5.**
    Together with (2) and (3) this completes the polling idiom.
 5. ⛔ ~~Honour the BCD bit.~~ **BLOCKED ON PCem** — the oracle cannot say what correct is

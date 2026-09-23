@@ -45,6 +45,7 @@ typedef struct {
     uint8_t  latched;       /* a snapshot is frozen for reading                 */
     uint16_t latch;         /* ...that snapshot                                 */
     uint64_t load_clocks;   /* total_clocks when the count was last loaded      */
+    uint8_t  null_cnt;      /* a count is written but not yet in the counting element */
 } pit_chan;
 
 typedef struct pit_state {
@@ -84,6 +85,9 @@ typedef struct pit_state {
          authoritative for pit_ch2_hz(); c2 below mirrors them and adds what a
          COUNTER needs. Two views of one counter is not lovely, but rewiring the
          audio path is a separate change from making the port readable. */
+    uint8_t  bcd;           /* counter 0's control-word BCD bit (read-back)     */
+    uint8_t  st_latched[3]; /* a Read-Back status byte is latched for this counter */
+    uint8_t  st_latch[3];   /* ...that byte                                     */
     pit_chan c1;            /* counter 1 -- DRAM refresh, free-running          */
     pit_chan c2;            /* counter 2 -- the PC speaker, as a counter        */
     /* ── HOST SERIALIZATION HOOK (may be NULL, e.g. in the off-VM tests). ─────────

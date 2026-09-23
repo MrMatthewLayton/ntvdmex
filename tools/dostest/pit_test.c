@@ -369,6 +369,80 @@ int main(void)
         w = 0x00; vdd_bus_io(&bus, 0x40, 1, 0, &w);
     }
 
+    /* T10: THE READ-BACK COMMAND AND ITS STATUS BYTE. ------------------------
+       docs/ref/pit.md 4. Control word 11xxxxxx, and ⚠ THE TWO LATCH BITS ARE
+       ACTIVE LOW: bit 5 = 0 latches the count, bit 4 = 0 latches the status.
+       Bits 3/2/1 select counters 2/1/0.
+
+       Status byte: b7 = OUT pin, b6 = null count, b5:4 = access, b3:1 = mode,
+       b0 = BCD.
+
+       ⚠ b3:1 CARRIES THE MODE AS PROGRAMMED, NOT NORMALISED. Measured on a real
+         8254 (p_pit.asm pit.mode6.readback = 0x0C): programming 110 reads back
+         110, even though the counter BEHAVES as mode 2. That is why the T9 fix
+         keeps mode_raw alongside mode, and this case is what would catch a
+         regression that collapsed them. */
+    {
+        uint32_t w, r1, r2;
+        /* Counter 0: lo/hi, mode 2, binary -> status bits 5:0 = 0x34. */
+        w = 0x34; vdd_bus_io(&bus, 0x43, 1, 0, &w);
+        w = 0x00; vdd_bus_io(&bus, 0x40, 1, 0, &w);
+        w = 0x10; vdd_bus_io(&bus, 0x40, 1, 0, &w);
+
+        w = 0xE2; vdd_bus_io(&bus, 0x43, 1, 0, &w);   /* rb: status only, ch0  */
+        r1 = 0; vdd_bus_io(&bus, 0x40, 1, 1, &r1);
+        CHECK((r1 & 0x3F) == 0x34,
+              "readback: status reports lo/hi + mode 2 + binary");
+
+        /* WITH BOTH LATCH BITS CLEAR, THE STATUS COMES OUT FIRST AND THE COUNT
+           AFTER IT (ref/pit.md 4). That order is the property worth asserting --
+           an earlier draft of this case tested `... || 1`, which is a check that
+           cannot fail, i.e. exactly the thing flagged this morning as worse than
+           no case at all. */
+        w = 0xC2; vdd_bus_io(&bus, 0x43, 1, 0, &w);   /* rb: status AND count  */
+        r1 = 0; vdd_bus_io(&bus, 0x40, 1, 1, &r1);    /* -> status             */
+        CHECK((r1 & 0x3F) == 0x34, "readback: status is read FIRST when both are latched");
+        r1 = 0; vdd_bus_io(&bus, 0x40, 1, 1, &r1);    /* -> count lo           */
+        r2 = 0; vdd_bus_io(&bus, 0x40, 1, 1, &r2);    /* -> count hi           */
+        CHECK(((r2 << 8) | r1) <= 0x1000,
+              "readback: ...and the latched COUNT follows it");
+
+        /* Mode 6 must read back as 110, un-normalised. */
+        w = 0x3C; vdd_bus_io(&bus, 0x43, 1, 0, &w);   /* ch0 lo/hi mode 6      */
+        w = 0x00; vdd_bus_io(&bus, 0x40, 1, 0, &w);
+        w = 0x10; vdd_bus_io(&bus, 0x40, 1, 0, &w);
+        w = 0xE2; vdd_bus_io(&bus, 0x43, 1, 0, &w);
+        r1 = 0; vdd_bus_io(&bus, 0x40, 1, 1, &r1);
+        CHECK((r1 & 0x0E) == 0x0C,
+              "readback: mode 6 reads back as 110, NOT normalised to 010");
+
+        /* NULL COUNT: set once a control word is written, cleared when the
+           count reaches the counting element. */
+        w = 0x34; vdd_bus_io(&bus, 0x43, 1, 0, &w);   /* CW, no count yet      */
+        w = 0xE2; vdd_bus_io(&bus, 0x43, 1, 0, &w);
+        r1 = 0; vdd_bus_io(&bus, 0x40, 1, 1, &r1);
+        CHECK((r1 & 0x40) != 0, "readback: null count SET after a control word");
+        w = 0x00; vdd_bus_io(&bus, 0x40, 1, 0, &w);
+        w = 0x10; vdd_bus_io(&bus, 0x40, 1, 0, &w);   /* now it loads          */
+        w = 0xE2; vdd_bus_io(&bus, 0x43, 1, 0, &w);
+        r1 = 0; vdd_bus_io(&bus, 0x40, 1, 1, &r1);
+        CHECK((r1 & 0x40) == 0, "readback: null count CLEARED once the count loads");
+
+        /* Counter 2 through the same command, selected by bit 3. */
+        w = 0xB0; vdd_bus_io(&bus, 0x43, 1, 0, &w);   /* ch2 lo/hi mode 0      */
+        w = 0x00; vdd_bus_io(&bus, 0x42, 1, 0, &w);
+        w = 0x80; vdd_bus_io(&bus, 0x42, 1, 0, &w);
+        w = 0xE8; vdd_bus_io(&bus, 0x43, 1, 0, &w);   /* rb: status only, ch2  */
+        r1 = 0; vdd_bus_io(&bus, 0x42, 1, 1, &r1);
+        CHECK((r1 & 0x3F) == 0x30,
+              "readback: counter 2 status reports lo/hi + mode 0 + binary");
+
+        /* Leave counter 0 as the BIOS would. */
+        w = 0x34; vdd_bus_io(&bus, 0x43, 1, 0, &w);
+        w = 0x00; vdd_bus_io(&bus, 0x40, 1, 0, &w);
+        w = 0x00; vdd_bus_io(&bus, 0x40, 1, 0, &w);
+    }
+
     printf("\n%d checks, %d failed\n", total, fails);
     return fails ? 1 : 0;
 }

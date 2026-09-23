@@ -68,6 +68,7 @@ static void chan_write_count(pit_state *st, pit_chan *c, uint8_t val)
         c->wr_flip = 0;
     }
     c->reload = v;
+    c->null_cnt = 0;                 /* the count has reached the CE        */
     c->load_clocks = st->total_clocks;
 }
 
@@ -98,6 +99,7 @@ static void chan_control(pit_state *st, pit_chan *c, uint8_t val)
     c->mode     = (c->mode_raw >= 6) ? (uint8_t)(c->mode_raw - 4) : c->mode_raw;
     c->bcd      = (uint8_t)(val & 1);
     c->wr_flip  = 0;
+    c->null_cnt = 1;                 /* CR written-to-be, CE not yet loaded */
     c->load_clocks = st->total_clocks;
 }
 
@@ -183,6 +185,88 @@ static void pit_frame(void *self)
 }
 
 
+/* ── THE OUT PIN, DERIVED RATHER THAN STORED. ────────────────────────────────
+   OUT is a function of the mode and how far the count has got, so there is no
+   state to keep in step -- and keeping it derived means it cannot go stale the
+   way a cached flag would. docs/ref/pit.md 5 is the table this implements. */
+static int pit_out_pin(uint8_t mode, uint32_t R, uint64_t elapsed)
+{
+    uint32_t phase;
+    switch (mode) {
+    case 0:                                  /* low while counting, high at TC  */
+    case 1:
+        return elapsed >= R;
+    case 2:                                  /* high, low for ONE clock at 1    */
+        phase = (uint32_t)(elapsed % R);
+        return phase != (R - 1);
+    case 3: {                                /* square wave: high half, low half */
+        uint32_t half = (R + 1) / 2;
+        phase = (uint32_t)(elapsed % R);
+        return phase < half;
+    }
+    case 4:                                  /* high, one-clock strobe at TC    */
+    case 5:
+        return elapsed != R;
+    default:
+        return 1;
+    }
+}
+
+/* Status byte: b7 OUT, b6 null count, b5:4 access, b3:1 mode, b0 BCD.
+   ⚠ b3:1 IS mode_raw, NOT the normalised mode. Measured on a real 8254
+     (p_pit.asm pit.mode6.readback = 0x0C): programming 110 reads back 110 even
+     though the counter behaves as mode 2. */
+static uint8_t pit_status_of(const pit_state *st, int n)
+{
+    uint8_t acc, mode_raw, bcd, null_cnt;
+    uint32_t R; uint64_t elapsed; int out;
+    if (n == 0) {
+        acc = st->access ? st->access : 3; mode_raw = st->mode_raw; bcd = st->bcd;
+        null_cnt = (uint8_t)(st->cw_armed || st->next_pending);
+        R = pit_eff_reload(st);
+        elapsed = (st->total_clocks >= st->load_clocks)
+                ? st->total_clocks - st->load_clocks : 0;
+        out = pit_out_pin(st->mode, R, elapsed);
+    } else {
+        const pit_chan *c = (n == 1) ? &st->c1 : &st->c2;
+        acc = c->access ? c->access : 3; mode_raw = c->mode_raw; bcd = c->bcd;
+        null_cnt = c->null_cnt;
+        R = c->reload ? (uint32_t)c->reload : 0x10000u;
+        elapsed = (st->total_clocks >= c->load_clocks)
+                ? st->total_clocks - c->load_clocks : 0;
+        out = pit_out_pin(c->mode, R, elapsed);
+    }
+    return (uint8_t)((out ? 0x80 : 0) | (null_cnt ? 0x40 : 0)
+                     | ((acc & 3) << 4) | ((mode_raw & 7) << 1) | (bcd & 1));
+}
+
+/* ── THE READ-BACK COMMAND. ──────────────────────────────────────────────────
+   ⚠ BOTH LATCH BITS ARE ACTIVE LOW: bit 5 = 0 latches the count, bit 4 = 0
+     latches the status. Writing 1s asks for nothing, which is the natural-looking
+     mistake. Bits 3/2/1 select counters 2/1/0, and one command may address
+     several -- that is the whole point of having it. */
+static void pit_readback(pit_state *st, uint8_t val)
+{
+    int n;
+    for (n = 0; n < 3; ++n) {
+        if (!(val & (1u << (n + 1)))) continue;          /* not selected        */
+        if (!(val & 0x10)) {                             /* latch STATUS        */
+            if (!st->st_latched[n]) {                    /* first latch wins    */
+                st->st_latch[n] = pit_status_of(st, n);
+                st->st_latched[n] = 1;
+            }
+        }
+        if (!(val & 0x20)) {                             /* latch COUNT         */
+            if (n == 0) {
+                if (!st->latched) { st->latch = pit_current_count(st); st->latched = 1; st->rd_flip = 0; }
+            } else {
+                pit_chan *c = (n == 1) ? &st->c1 : &st->c2;
+                if (!c->latched) { c->latch = chan_count(st, c); c->latched = 1; c->rd_flip = 0; }
+            }
+        }
+    }
+}
+
 /* --- 8254 ports 0x40-0x43 ------------------------------------------------- */
 static void pit_out_locked(pit_state *st, uint16_t port, uint8_t val)
 {
@@ -195,7 +279,7 @@ static void pit_out_locked(pit_state *st, uint16_t port, uint8_t val)
             return;
         }
         if (ch == 1) { chan_control(st, &st->c1, val); return; }
-        if (ch != 0) return;                 /* ch == 3 is Read-Back -- not yet */
+        if (ch == 3) { pit_readback(st, val); return; }
         if (acc == 0) {                      /* latch count command             */
             st->latch = pit_current_count(st);
             st->latched = 1; st->rd_flip = 0;
@@ -222,7 +306,7 @@ static void pit_out_locked(pit_state *st, uint16_t port, uint8_t val)
                  reports UN-normalised (measured: pit.mode6.readback = 0x0C). */
             st->mode_raw = (uint8_t)((val >> 1) & 7);
             st->mode = (st->mode_raw >= 6) ? (uint8_t)(st->mode_raw - 4) : st->mode_raw;
-            st->access = acc; st->wr_flip = 0;
+            st->access = acc; st->bcd = (uint8_t)(val & 1); st->wr_flip = 0;
             st->cw_armed = 1; st->next_pending = 0;
         }
     } else if (port == 0x40) {               /* channel-0 reload write          */
@@ -295,6 +379,13 @@ static void pit_out(void *self, uint16_t port, uint8_t w, uint32_t v)
 static void pit_in_locked(pit_state *st, uint16_t port, uint32_t *val)
 {
     uint16_t v; uint8_t acc;
+    int n = (port == 0x40) ? 0 : (port == 0x41) ? 1 : (port == 0x42) ? 2 : -1;
+    /* A LATCHED STATUS IS READ BEFORE ANYTHING ELSE, and consumed by that read.
+       When read-back latched both, the status comes out first and the count
+       after it (docs/ref/pit.md 4). */
+    if (n >= 0 && st->st_latched[n]) {
+        *val = st->st_latch[n]; st->st_latched[n] = 0; return;
+    }
     if (port == 0x41) { chan_read_count(st, &st->c1, val); return; }
     if (port == 0x42) { chan_read_count(st, &st->c2, val); return; }
     /* 0x43 is write-only on the part; a read is undefined. Answer consistently
@@ -413,6 +504,19 @@ void vdd_pit_reset(void *self)
     for (i = 0; i < sizeof(*st); ++i) p[i] = 0;     /* zero, then restore links */
     st->bus = bus;
     st->access = 3;
+    /* ── COUNTER 0 COMES OUT OF POST IN A PERIODIC MODE, NOT MODE 0. ─────────
+         Reset zeroes everything, which left mode = 0 -- a one-shot. Nothing had
+         noticed, because the IRQ0 engine raises from the accumulator regardless
+         of mode; what it got wrong was everything a guest can ASK. Read-Back
+         reported mode 0 where a real machine says mode 2 (measured:
+         p_pit.asm pit.rdback.st0 = 0x34 vs our 0x30), and the bare-count load
+         rule took the one-shot path -- reloading immediately instead of at the
+         end of the period.
+       ⚠ THE MODE IS A BIOS CHOICE, NOT A CHIP FACT. 2 is what the 6.22 oracle's
+         BIOS leaves; a period-correct AMI ROM may differ, and PCem is what would
+         settle it. Matching the oracle we HAVE beats leaving a value nothing
+         chose. docs/ref/pit.md 6. */
+    st->mode = 2; st->mode_raw = 2;
     st->frame_us = fus ? fus : PIT_DEFAULT_FRAME_US;
     st->guard = guard; st->guard_ctx = gctx;        /* the lock survives a reset */
     /* ── COUNTER 1 IS FREE-RUNNING BEFORE ANYONE PROGRAMS IT. ────────────────
@@ -434,6 +538,17 @@ int vdd_pit_init(vdd_bus *b, void *self)
     st->bus = b;
     if (!st->frame_us) st->frame_us = PIT_DEFAULT_FRAME_US;
     if (!st->access)   st->access = 3;
+    /* ⚠ THE POST DEFAULTS BELONG HERE TOO, NOT ONLY IN vdd_pit_reset. The host
+         builds g_pit as a zeroed global and calls init; it does NOT call reset on
+         the startup path, so a default written only into reset is a default the
+         running host never gets. Putting mode 2 in reset alone left Read-Back
+         still reporting mode 0 on the rig -- the change measured as having done
+         nothing, which is how a fix that is not wired up looks. */
+    if (!st->mode && !st->mode_raw) { st->mode = 2; st->mode_raw = 2; }
+    if (!st->c1.reload) {                       /* counter 1: free-running refresh */
+        st->c1.reload = 18; st->c1.access = 3; st->c1.mode = 2; st->c1.mode_raw = 2;
+    }
+    if (!st->c2.access) st->c2.access = 3;
     if (vdd_claim_ports(b, 0x40, 0x43, pit_in, pit_out, st)) return -1;
     if (vdd_claim_int(b, 0x08, pit_int08, st)) return -1;
     if (vdd_claim_int(b, 0x1A, pit_int1a, st)) return -1;
