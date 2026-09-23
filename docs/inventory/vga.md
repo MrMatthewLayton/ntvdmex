@@ -587,6 +587,42 @@ offsets 0 and 4–63, so Feature Control, Input Status 0 and the DAC Pixel Mask 
 **zero whatever the file said**. They happened to be `0x00` on that host, so nothing caught
 it. Both references are now whole 64-byte buffers.
 
-▶ **Owed: a p_vgareg run under NTVDMEX on the rig**, with the fixed probe, to put a real
-number back on the board. The old 89.7% must not be quoted — it was measured against a
-reference that has since been re-captured, by a probe that has since been fixed.
+### The number, re-measured on the rig (2026-09-23)
+
+`p_vgaext` first, and it came back exactly as the fix predicted: **`is0.live` = `1010`,
+byte for byte with PCem**; `is0.vsync` = `0000`, the recorded gap; `fc.store` = `00`/`0F`/
+`08`, us alone implementing the spec's read-back.
+
+Then `p_vgareg`, scored the new way — **re-run, never quote**:
+
+```
+12 modes. Of the 690 bytes BOTH oracles agree on, 635 match -> PARITY 92.0%
+78 bytes DISPUTED between the oracles -- excluded.
+  of those, we match PCem on 32 and QEMU on 38; 8 match neither.
+```
+
+⚠ **92.0% is not "89.7% improved".** Different denominator, different reference, different
+probe. The two numbers are not comparable and the old one is simply void.
+
+**The 55 remaining bytes are not scattered — they are five registers**, which is a far more
+useful answer than a percentage:
+
+| register | modes wrong | hardware leaves | we leave |
+|---|---|---|---|
+| **CR0A / CR0B** — Cursor Start / End | **12 / 12** each | `0D` / `0E` | `06` / `07` |
+| **AR10** — Attribute Mode Control | **11** | `0C` in mode 3 | `00` |
+| **GR07** — Color Don't Care | 7 | `0F` | `00` |
+| **GR05** — Graphics Mode | 6 | `10` | `00` |
+| **SR02** — Map Mask | 4 | `03` | `0F` |
+
+Every one is the same shape: **our INT 10h mode set does not write a register a real BIOS
+writes**, so a guest that reads back what the BIOS left sees our reset value. That is
+exactly what step 1 predicted and could not quantify. AR10 is the interesting one — bit 3
+is the blink enable this project has already been bitten by once (QBasic's labels).
+
+The 8 "match neither" bytes are almost all `mode07mono`, where the two oracles are
+answering about different machine states anyway (see `vgareg.pcem.txt`), plus `GR07` in
+mode 11.
+
+▶ **Next on this surface:** populate the mode tables so a BIOS mode set writes those five
+registers. It is a measured list, not a survey.

@@ -113,18 +113,20 @@ The full surface list, with the primary source named for each, is in
 
 ## Next actions, in order
 
-▶ **On the rig, when there is a chance** — nothing below needs it, but three things are owed:
-a **`p_vgareg` run under NTVDMEX** with the fixed probe (the old 89.7% parity figure is void;
-see below), a **`p_vgaext` run**, and a by-hand look at Doom/Skyroads after the Input Status 0
-change.
+▶ **Rig status:** the watcher is live and both probes have been run through it. `p_vgaext`
+came back `1010` — byte for byte with PCem — and VGA parity is **92.0%** of the bytes the
+two oracles agree on (`tools/vgaparity.py`; re-run, never quote, and **not** comparable to
+the void 89.7%). **Still owed from a human: a by-hand Doom/Skyroads look** after the Input
+Status 0 change — the headless rig cannot see a wrong picture.
 
 1. **The next surface from [`ref/SOURCES.md`](ref/SOURCES.md).** The 8254 is clean against
    oracle consensus (5 fixes, BCD included) and the VGA's external registers are settled;
    pick the next device from the hardware contract, not from a guest.
-2. **Re-measure VGA parity.** `tools/vgaparity.py` now scores only the bytes the **two**
-   oracles agree on — 6.22/QEMU and PCem's real AMI BIOS + IBM VGA ROM, which disagree with
-   each other on **78 of 768 bytes**. The old single-oracle 89.7% could not tell "we are
-   wrong" from "the modern emulator is wrong". Needs one rig run to produce a number.
+2. **Populate the VGA mode tables.** Parity re-measured at **92.0%**, and the 55 remaining
+   bytes are **five registers**, not noise: `CR0A`/`CR0B` (cursor start/end, wrong in all 12
+   modes), `AR10` (attribute mode control, 11), `GR07`, `GR05`, `SR02`. All the same shape —
+   our INT 10h mode set does not write a register a real BIOS writes. A measured list, not a
+   survey; see [`inventory/vga.md`](inventory/vga.md).
 3. **Deterministic Win16 tests** — owed since the spec-first directive. The Win3.1 SDK, Wine
    and ReactOS are real sources; only the WOW32 thunk ABI needs the stock-VDM oracle.
 4. **VGA step 4 — one address generator** from CR17/CR14/GR5/GR6/SR4. ⛔ **PARKED**: the
