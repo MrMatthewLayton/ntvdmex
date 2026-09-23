@@ -7,7 +7,13 @@
 ;
 ;                          ours   6.22(QEMU)  dosbox-x   PCem (real AMI+IBM VGA)
 ;   Input Status 0  (3C2)  0x00     0x00      0x60/0x70       0x10
-;   Feature Control (3CA)  0x00     0x00      0x70            0xFF
+;   Feature Control (3CA)  0x00     0x00      0x00            0xFF
+;
+; ⚠ THAT TABLE WAS ITSELF WRONG WHERE IT WAS RECORDED, and this probe is what
+;   caught it: docs/research/oracle-disagreements.md had dosbox-x's Feature
+;   Control as 0x70, which is its INPUT STATUS 0 value copied into the row below.
+;   The two bytes are adjacent in p_vgareg's buffer (off 1 and off 2) and were
+;   read off it by eye. A hand-transcribed table is a claim.
 ;
 ; A row like that cannot be settled by taking a majority, and it was twice
 ; recorded as "confirmed 0x00" on the strength of ONE oracle.  The reason it
@@ -278,23 +284,13 @@ start:
         call    probe_capture
         EMIT    "vgaext.fc.store", "AX,BX"
 
-; ════════════════════════════════════════════════════════════════════════════
-; D. THE POWER-ON VALUES, SIDE BY SIDE.   ref/vga.md 3
-;
-;    p_vgareg already carries these two bytes, and they are repeated here ON
-;    PURPOSE: this probe is where the dispute is recorded, and a reader
-;    comparing the mechanism cases against the raw bytes should not have to
-;    correlate two dumps to do it.  AH = 3C2, AL = 3CA, as the BIOS left them.
-;    ⚠ Case C restored Feature Control above, so this reads the same byte the
-;      BIOS left -- not the 08h case C last wrote.
-; ════════════════════════════════════════════════════════════════════════════
-        mov     dx, 03C2h
-        in      al, dx
-        mov     ah, al
-        mov     dx, 03CAh
-        in      al, dx
-        POISON
-        call    probe_capture
-        EMIT    "vgaext.poweron", "AX"
+; ⛔ THERE WAS A CASE D HERE -- "the power-on values, side by side", AH = 3C2 and
+;    AL = 3CA in one field -- AND IT WAS REMOVED THE DAY IT WAS WRITTEN. It packed a
+;    register the oracles have now SETTLED (3C2 = 0x10) together with one they cannot
+;    adjudicate at all (3CA), so the field could never be anything but DISPUTED and the
+;    dispute would have meant two different things at once. It also duplicated bytes
+;    p_vgareg already carries. That is the very shape of question -- read a port, print
+;    a byte -- this probe exists to replace; writing it again at the bottom of the file
+;    that argues against it is worth recording rather than quietly deleting.
 
         PROBE_END

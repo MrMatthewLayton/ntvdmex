@@ -278,6 +278,11 @@ class DosBoxX(Host):
         #     substitute for PCem on questions about what a real BIOS leaves.
         env = dict(os.environ)
         env.setdefault("SDL_VIDEODRIVER", "dummy")
+        # ⚠⚠ build/dosdiff IS THIS HOST'S SCRATCH MOUNT AND IT IS WIPED EVERY RUN.
+        #   Do not assemble probes into it: a .com built there survives a
+        #   PCem-only or 6.22-only run and then vanishes the moment dosbox-x is
+        #   added to the same sweep, which reads as "run failed: No such file"
+        #   from two hosts at once. Build probes somewhere else -- build/probes.
         work = os.path.join(ROOT, "build", "dosdiff")
         if os.path.exists(work):
             shutil.rmtree(work)
