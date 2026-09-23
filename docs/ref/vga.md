@@ -137,8 +137,12 @@ A host that never sees `3C2` **cannot distinguish 320×240 from 320×200**.
 | 6 | — | CRT interrupt (feature-dependent) |
 | 7 | CRT Interrupt | `1` while a vertical retrace interrupt is pending |
 
-⚠ **Measured against MS-DOS 6.22 on real hardware this reads `0x00`.** Our guess agreed;
-it is confirmed, not assumed.
+⛔ **DISPUTED, and this paragraph previously overstated it twice.** It read: *"Measured
+against MS-DOS 6.22 on real hardware this reads `0x00`. Our guess agreed; it is confirmed,
+not assumed."* Two errors: the 6.22 oracle runs under **QEMU**, which is not real hardware,
+and one oracle agreeing is not confirmation. **dosbox-x answers `0x60`/`0x70`.** Bits 5:6
+are undefined/reserved here, so neither is obviously wrong — this genuinely needs silicon.
+See [`../research/oracle-disagreements.md`](../research/oracle-disagreements.md).
 
 ### Input Status 1 — read `3DA` / `3BA`
 
@@ -503,8 +507,11 @@ for 256 colours with four times the memory and free page flipping.
 **256 entries × 18 bits.** Two traps:
 
 - **`3C6` is not always `0xFF`.** Programs use it for fades and for split-palette effects.
-  A famous copy-protection idiom writes `0x00` here to blank the screen. ⚠ Our value and a
-  real card's disagreed in the s75 probe and the question is still open — it needs PCem.
+  A famous copy-protection idiom writes `0x00` here to blank the screen.
+  ✅ **The apparent disagreement here was QEMU's, not ours.** `3C6` is a read/write register
+  that returns what was written, and the reset value is `0xFF`; **dosbox-x and the datasheet
+  both agree with us**, while the 6.22/QEMU oracle answers `0x00` to everything. Recorded in
+  `docs/research/oracle-disagreements.md`.
 - **The 6-bit truncation is observable.** A program that writes `0x3F` and reads back `0xFF`
   knows it is not talking to a VGA.
 

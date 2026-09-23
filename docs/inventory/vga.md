@@ -348,8 +348,8 @@ Running the derivation in [`../ref/vga.md`](../ref/vga.md) §5.1 over the captur
 | **Y** | **320×200** | 320×200 | ✅ |
 | **X** | **320×240** | 320×240 | ✅ |
 | 0D | 320×200 | 320×200 | ✅ *(after correction 1)* |
-| 04 | 320×100 | 320×200 | ⛔ **open** |
-| 06 | 640×100 | 640×200 | ⛔ **open** |
+| 04 | 320×200 | 320×200 | ✅ *(was mis-derived — see below)* |
+| 06 | 640×200 | 640×200 | ✅ *(was mis-derived — see below)* |
 
 **The derivation works, and it works on the two modes that matter most.** Mode X's
 320×240 falls out of MiscOut `0xE3` + `CR12`/`CR07` + `CR09 = 0x41` + `GR5.6` with **no
@@ -360,11 +360,14 @@ Three corrections the measurement forced, all folded back into the reference: `S
 not halve the pixel *count*; the 256-colour halving lives in `GR5.6`; and `CR09.7` and Max
 Scan Line are alternatives, not cumulative.
 
-⛔ **Modes 04 and 06 are open and blocked on PCem.** Against SeaBIOS both report
-`CR09 = 0xC1` — doubling bit set *and* MSL = 2 — which derives 100 rows for a 200-line
-mode. Either a real BIOS writes something else or the mechanisms interact in a way the
-model misses. **Do not implement around this until the real-ROM oracle answers**, and that
-run is the user's to launch.
+✅ **Modes 04 and 06 were never open, and the fault was in my checker.** They were filed as
+blocked on PCem because the derivation gave 100 rows for a 200-line mode. The rule in
+[`../ref/vga.md`](../ref/vga.md) §5.1 — **`CR09.7` and Max Scan Line are alternatives, not
+cumulative** — is right; the throwaway script I verified with divided by both, in the same
+commit that wrote the rule down. Re-derived from the **same bytes** with the stated rule,
+all eleven modes are correct, and **dosbox-x agrees with the same `CR09= 0xC1`**.
+⇒ **A derivation is only as good as the code that checks it.** See
+[`../research/oracle-disagreements.md`](../research/oracle-disagreements.md).
 
 ## Step 4 measurement — the CPU memory path now has a probe (2026-09-23)
 
