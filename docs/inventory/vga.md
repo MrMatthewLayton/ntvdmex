@@ -389,3 +389,62 @@ The four cases that bear directly on the open defect:
 fail, and that is the point: the checks were written from the document and seen to pass on
 real hardware first, so a failure on our side is a defect in us, not an argument about the
 expectation.
+
+---
+
+## ★★★★★ THE PROBE RAN AGAINST NTVDMEX, AND THE ANSWER WAS NOT THE ONE EXPECTED
+
+Rig host `a7920404`, 2026-09-23. **12 of 13 AGREE. One MISMATCH.** Deterministic across
+two runs.
+
+| case | 6.22 | NTVDMEX | |
+|---|---|---|---|
+| `chain4.abcd` | `11223344` | **`11111111`** | ⛔ **MISMATCH** |
+| `mask03.aa` | `AAAA0000` | `AAAA0000` | ✅ |
+| `mask0c.55` | `00005555` | `00005555` | ✅ |
+| `mask0f.5a` | `5A5A5A5A` | `5A5A5A5A` | ✅ |
+| `mask02.c3` | `00C30000` | `00C30000` | ✅ |
+| `bitmask0f`, `wmode1/2/3`, `alu.xor/and`, `rmode1.cmp5/cmp0` | | | ✅ all |
+
+### The expectation was wrong, and that is the finding
+
+The standing theory was *"our mode-Y maps A0000 to one plane at a time, so multi-plane
+map masks are approximated"* — which predicts the **map-mask rows** failing. They passed,
+all four, including both of Doom's two-plane masks.
+
+**Because there are two video engines and the probe caught the boundary between them.**
+Those cases ran in **mode 12h**, which has a real planar engine that maintains planes and
+honours the map mask. The failing case is the only one in **mode 13h → unchained**, which
+is `VID_KIND_LINEAR8` — a different path entirely.
+
+### What `11111111` actually means
+
+`src/vdd/vdd_video.c:1991` is the **only** write to `st->yplane[]`:
+
+```c
+uint8_t b = st->vmem[i];
+for (k = 0; k < nsel; ++k) st->yplane[sel[k]][i] = b;   /* modey_copy */
+```
+
+Two defects, both visible in that one line:
+
+1. **The chain-4 address transform is never applied.** `st->vmem` is indexed by raw CPU
+   offset, so plane *p* at offset *o* is filled from `vmem[o]` when the hardware says it
+   must come from **`vmem[o*4 + p]`** (§8). The fan-out replicates one byte across planes
+   instead of de-interleaving four.
+2. **`GR4` (Read Map Select) is not honoured on a CPU read in this path at all.** `yplane[]`
+   is read only by the presenter (`:2982`); a guest read of `A000:0` returns `vmem[0]`
+   whatever GR4 says. Hence four identical bytes.
+
+⇒ **This is the low-detail defect's root, stated precisely.** It is not that the fan-out
+heuristic is badly tuned — it is that **the LINEAR8 path implements no address generator
+at all**, and a diff-and-replicate stands in for one. That is also why no seed policy
+could ever fix it: a seed cannot recover information the address transform never encoded.
+
+⇒ **And it says what step 4 has to do**: give the LINEAR8 path the same real addressing the
+12h path already has, per §8 — plane and offset computed from `SR4`/`GR5`/`GR6` at write
+time, and reads served through `GR4`.
+
+⚠ **Doom's path runs straight through this.** It sets mode 13h *chained*, writes, then
+unchains. Everything written while chained is already de-interleaved wrongly before the
+mode-Y code is reached.
