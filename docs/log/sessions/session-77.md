@@ -238,11 +238,68 @@ answer survived the fix, so the split is real.
 bus stub threw them away, so every question it could ask was about the host-side API,
 which is the half that already worked. 6 of the new checks failed against the old code.
 
+---
+
+## 7. The 8042 — a controller, not a scancode FIFO (`ac9703f`)
+
+`keyboard.md` covers INT 16h and the BDA — the *firmware* — and has listed *"port
+60h/64h re-read semantics, 8042 status bits"* under **"Not yet inventoried"** for two
+sessions. `ref/kbc.md` and `inventory/kbc.md` are that, and they predicted four gaps.
+
+**What we had:** `60h` popped a scancode, `64h` answered one bit of eight, and every 8042
+*command* was counted into a log and discarded. **Two of the things this chip controls
+have nothing to do with typing** — the A20 gate and the CPU reset line — and neither
+existed.
+
+⛔ **A20 was three flags, two of them missing.** XMS kept the only one; the 8042's output
+port was not implemented and port `92h` was claimed by **nothing**, so a read returned the
+bus's `0xFF` — whose bit 1 is set, so **an empty bus was telling guests A20 was on**. A
+guest that opened the gate the hardware way (HIMEM, every DOS extender, most loaders) and
+then asked XMS was told it was shut, whose honest reading is *"this machine cannot do
+XMS"*.
+
+### ★ The oracle split runs the other way here
+
+| case | 6.22/QEMU | dosbox-x | PCem | ours |
+|---|---|---|---|---|
+| `kbc.status.idle` | `001C` | `001C` | `001C` | `0000` → **`001C`** ✅ |
+| `kbc.selftest.55` | `0000` | `0000` | **`0155`** | → **`0155`** ✅ |
+| `kbc.outport.d0` | `00FF` | `00FF` | **`01CF`** | → **`0103`** ⚠ |
+| `kbc.port92.read` | `0002` | `0002` | `00FF` | → **`0002`** ✅ |
+| `kbc.a20.readback` | `0001` | `0001` | **`0101`** | → **`0101`** ✅ |
+
+On BCD and on the PIC's poll, the real-BIOS machine was one of the hosts *without* the
+feature. **Here PCem answers every 8042 command and the two software emulators answer
+none.** ⚠ And it cuts the other way one row down: PCem answers `0xFF` for port `92h`
+because its AT-class 486 predates System Control Port A.
+
+> That does not make PCem the better oracle above or the worse one here. **It makes it a
+> different machine**, and the question each time is which machine the contract is
+> written against.
+
+⚠ **The probe caught an error in my own expectation.** The off-VM status check was written
+from the datasheet's bit list as `0x14`; all three machines said `0x1C`. The extra bit is
+**A2** — *"the last write went to `64h`"* — which on a machine DOS is running on was
+POST's own last command. **Writing the bits from the spec got them right and their POST
+state wrong.**
+
+⚠ **Not agreement yet:** PCem's output port is `0xCF` against our `0x03`. The two bits
+with a defined meaning match; bits 2/3/6/7 are one-oracle and are recorded, not copied.
+
+⛔ **The probe needed two revisions, both recorded in it.** Its command cases first emitted
+a single `0/1` verdict, where `0` meant both *"never replied"* and *"replied with the wrong
+byte"*. And its A20 case first enabled A20 and asked XMS whether A20 was on — with HIMEM
+loaded the answer is yes *before* the write too, so agreement and "it was already on" gave
+the same number. The obvious repair — toggle to the opposite state — **would call the XMS
+entry point with A20 off**, and with `DOS=HIGH` both HIMEM and much of DOS live in the
+HMA, reachable only because A20 is on. A jump into wrapped memory: a hang, on a bare-metal
+rig, for one bit of data.
+
 ## State at session end
 
-- `offvm` **1480/0** (+36: 14 BCD, 3 external registers, 9 mode-set, 10 PIC).
+- `offvm` **1495/0** (+51: 14 BCD, 3 external registers, 9 mode-set, 10 PIC, 15 8042).
 - **VGA register parity 99.9%** (689/690 of the two-oracle agreement). *Re-run, never quote.*
-- `bin\` = `5b51036d`. Stable zip `dist\ntvdmex-20260917-4847355.zip` **untouched**;
+- `bin\` = `a0a6c15b`. Stable zip `dist\ntvdmex-20260917-4847355.zip` **untouched**;
   checkpoint `59fac7d`.
 - **User confirmed by hand:** Doom and Skyroads, after the Input Status 0 change.
 - **Owed from a human:** a by-hand look after the mode-set fix — the one-scan-line cursor

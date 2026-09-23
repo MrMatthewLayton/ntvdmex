@@ -122,13 +122,16 @@ which moves the text cursor by one scan line (`0x0607` → the card's own `0x0D0
 
 1. **The next surface from [`ref/SOURCES.md`](ref/SOURCES.md).** Done so far: the **8254**
    (5 fixes, clean against oracle consensus), the **VGA register file** (99.9%), and the
-   **8259A** — `ref/pic.md` written, inventory marked from the code, 2 fixes (`E0h` is
-   still an EOI; the Poll command). ▶ **Next candidates in the contract:** the 8237A DMA,
-   the 8042 keyboard controller (**A20** lives there), the MC146818 RTC/CMOS, the 16550
-   UART. Pick by the contract, not by a guest.
-   ⛔ **Two PIC gaps are recorded and deliberately unfixed:** ICW1's read-select reset is
-   **blocked on a second oracle** (only PCem can see it), and we implement Special Fully
-   Nested Mode unconditionally while never reading the ICW4 bit that requests it.
+   **8259A** (2 fixes) and the **8042 keyboard controller** — `ref/kbc.md`, inventory
+   marked from the code, and the status register, the command set, the output port,
+   port `92h` and **a single converged A20 bit** all implemented.
+   ▶ **Next candidates in the contract:** the 8237A DMA, the MC146818 RTC/CMOS, the
+   16550 UART. Pick by the contract, not by a guest.
+   ⛔ **Recorded and deliberately unfixed:** the PIC's ICW1 read-select reset and the
+   8042 output port's undefined bits are both **blocked on a second oracle** (only PCem
+   can see either); we implement Special Fully Nested Mode unconditionally while never
+   reading the ICW4 bit that requests it; and keyboard-side commands are still never
+   ACKed with `FAh`.
 2. ✅ ~~**Populate the VGA mode tables.**~~ **DONE** — and it was **one** defect, not five:
    the table was right, but six registers are read back from a *live shadow* rather than
    from the register file, and the mode set never seeded them. **92.0% → 99.9%.**
