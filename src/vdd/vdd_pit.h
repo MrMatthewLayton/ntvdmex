@@ -23,6 +23,37 @@
 /* A wall-clock reading, in ordinary binary -- INT 1Ah converts to BCD at the edge. */
 struct vdd_rtc { unsigned cent, year, month, day, hour, min, sec; };
 
+/* ── ★★★ BCD IS A BOUNDARY FORMAT, NOT A SECOND SET OF ARITHMETIC. ───────────────
+     Control Word bit 0 selects four-decade BCD counting: the counter runs
+     9999 -> 0000 and a written count of 0000 means 10000, not 65536 (Intel 8254,
+     231164-005, "Control Word Format" and "Write Operations"). The naive shape is
+     to teach every count law to step in decimal; the cheap and exactly equivalent
+     one is to keep ALL internal state binary -- reload, latch, the count laws,
+     the IRQ0 divisor -- and convert only where a guest's bytes cross the port:
+     DECODE on a count write, ENCODE on a count read. The counting element is then
+     the same code in both modes, which is the point: a second arithmetic path is a
+     second thing to get wrong, and only one of the two would ever be exercised.
+   ⚠ INVALID DIGITS ARE NOT DEFINED BY THE DATASHEET. A guest may write 0x1A into a
+     decade that only has states 0-9. We decode each nibble AT ITS DECADE WEIGHT
+     (0x1A -> 20), because that reproduces what four decade down-counters actually
+     do next -- 0x1A, 0x19, 0x18 ... -- rather than inventing a clamp. The value
+     re-enters the legal range within ten clocks and stays there.
+   ⚠ docs/ref/pit.md 3 is the paragraph this implements; docs/inventory/pit.md 2
+     records that NO oracle we have models BCD, so this is spec-implemented and
+     UNVERIFIABLE against a machine. It is the one surface here where the
+     datasheet outranks the emulators. */
+static inline uint32_t pit_from_bcd(uint16_t v)
+{ return (uint32_t)((v & 0xF) + ((v >> 4) & 0xF) * 10u
+                  + ((v >> 8) & 0xF) * 100u + ((v >> 12) & 0xF) * 1000u); }
+
+static inline uint16_t pit_to_bcd(uint32_t v)
+{ v %= 10000u;                      /* 10000 (the BCD maximum) reads back as 0000 */
+  return (uint16_t)((((v / 1000u) % 10u) << 12) | (((v / 100u) % 10u) << 8)
+                  | (((v / 10u) % 10u) << 4) | (v % 10u)); }
+
+/* The wrap of the counting element: where a count that runs past zero comes back. */
+static inline uint32_t pit_wrap(uint8_t bcd) { return bcd ? 10000u : 0x10000u; }
+
 /* ── COUNTERS 1 AND 2, AS COUNTERS. ──────────────────────────────────────────
    Counter 0 keeps its own flat fields below and is DELIBERATELY not folded in
    here. It carries the IRQ0 engine, the accumulator and the pacer's guard, it is
@@ -34,11 +65,11 @@ struct vdd_rtc { unsigned cent, year, month, day, hour, min, sec; };
    and its read/write phases, a latch, and the moment the count was loaded --
    because a count read is computed from elapsed clocks, not stored. */
 typedef struct {
-    uint16_t reload;        /* 0 => 65536 effective                             */
+    uint16_t reload;        /* BINARY, decoded at the write; 0 => the maximum   */
     uint8_t  access;        /* 1=lo, 2=hi, 3=lo/hi                              */
     uint8_t  mode;          /* EFFECTIVE mode 0-5 (6/7 normalised)              */
     uint8_t  mode_raw;      /* as programmed -- for the Read-Back status byte    */
-    uint8_t  bcd;           /* control word bit 0                               */
+    uint8_t  bcd;           /* control word bit 0: counts in four-decade BCD    */
     uint8_t  wr_flip;       /* lo/hi write phase                                */
     uint8_t  wr_lo;         /* LSB buffered in lo/hi mode                       */
     uint8_t  rd_flip;       /* lo/hi read phase                                 */
@@ -57,7 +88,7 @@ typedef struct {
 
 typedef struct pit_state {
     vdd_bus *bus;
-    uint16_t reload;        /* channel-0 reload latch (0 => 65536 effective)    */
+    uint16_t reload;        /* channel-0 reload latch, BINARY (0 => the maximum) */
     uint8_t  access;        /* access mode: 1=lo, 2=hi, 3=lo/hi                  */
     uint8_t  mode;          /* EFFECTIVE mode 0-5 (shapes the count read-back)   */
     uint8_t  mode_raw;      /* the three bits AS PROGRAMMED. Modes 6 and 7 do not
@@ -85,14 +116,15 @@ typedef struct pit_state {
     uint32_t restarts;      /* loads that RESTARTED the period (CW+count / one-shot
                                modes); the host watches it -- see host_pit_resync_check */
     uint32_t frame_us;      /* microseconds per bus frame tick                  */
-    uint16_t ch2_reload;    /* channel-2 reload (the PC-speaker tone divisor)   */
+    uint16_t ch2_reload;    /* channel-2 reload, the PC-speaker tone divisor -- the
+                               RAW bytes as written, so pit_ch2_hz decodes BCD     */
     uint8_t  ch2_access;    /* channel-2 access mode (1=lo, 2=hi, 3=lo/hi)      */
     uint8_t  ch2_wr_flip;   /* channel-2 lo/hi write phase                      */
     /* ⚠ ch2_reload/ch2_access/ch2_wr_flip above are the SPEAKER's view and stay
          authoritative for pit_ch2_hz(); c2 below mirrors them and adds what a
          COUNTER needs. Two views of one counter is not lovely, but rewiring the
          audio path is a separate change from making the port readable. */
-    uint8_t  bcd;           /* counter 0's control-word BCD bit (read-back)     */
+    uint8_t  bcd;           /* counter 0's control-word BCD bit: counts in BCD  */
     uint8_t  st_latched[3]; /* a Read-Back status byte is latched for this counter */
     uint8_t  st_latch[3];   /* ...that byte                                     */
     pit_chan c1;            /* counter 1 -- DRAM refresh, free-running          */
@@ -116,13 +148,23 @@ typedef struct pit_state {
     void    *rtc_ctx;
 } pit_state;
 
-/* effective reload (0 means 65536 on the 8254). */
+/* Effective reload. `reload` is always BINARY (decoded at the write); 0 means the
+   maximum, which is 65536 in binary counting and 10000 in BCD. */
 static inline uint32_t pit_eff_reload(const pit_state *st)
-{ return st->reload ? st->reload : 0x10000u; }
+{ return st->reload ? st->reload : pit_wrap(st->bcd); }
 
-/* Channel-2 output frequency in Hz (the PC-speaker tone); 0 if not programmed. */
+/* The same rule for counters 1 and 2. */
+static inline uint32_t pit_chan_eff_reload(const pit_chan *c)
+{ return c->reload ? (uint32_t)c->reload : pit_wrap(c->bcd); }
+
+/* Channel-2 output frequency in Hz (the PC-speaker tone); 0 if not programmed.
+   ⚠ ch2_reload is the SPEAKER's view and holds the RAW bytes the guest wrote
+     (see the note in pit_state), so a BCD guest's divisor has to be decoded here
+     -- otherwise programming 0x1000 BCD sounds a tone 4096/1000 too low. */
 static inline uint32_t pit_ch2_hz(const pit_state *st)
-{ uint32_t r = st->ch2_reload ? st->ch2_reload : 0x10000u; return PIT_INPUT_HZ / r; }
+{ uint32_t r = st->c2.bcd ? pit_from_bcd(st->ch2_reload) : st->ch2_reload;
+  if (!r) r = pit_wrap(st->c2.bcd);
+  return PIT_INPUT_HZ / r; }
 
 /* Build the device descriptor to hand to vdd_bus_add(). */
 int  vdd_pit_init(vdd_bus *b, void *self);

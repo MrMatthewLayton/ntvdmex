@@ -26,25 +26,43 @@
 static int pit_out_pin(uint8_t mode, uint32_t R, uint64_t elapsed);
 
 /* The count law, by mode. Split out of pit_current_count so counters 1 and 2 can
-   use the same arithmetic instead of a second copy that drifts from it. */
-static uint16_t pit_count_law(uint8_t mode, uint32_t R, uint64_t elapsed)
+   use the same arithmetic instead of a second copy that drifts from it.
+   Returns the counting element in BINARY; `wrap` is where it comes back round
+   (65536, or 10000 in BCD -- see pit_wrap). */
+static uint32_t pit_count_law(uint8_t mode, uint32_t R, uint64_t elapsed, uint32_t wrap)
 {
-    if (mode == 0)
-        return (uint16_t)(R - elapsed);      /* wraps through 0xFFFF past zero   */
+    if (mode == 0) {
+        /* One-shot: counting does not stop at terminal count, it runs on through
+           the wrap. In binary that was `(uint16_t)(R - elapsed)`, i.e. mod 65536
+           by truncation; BCD wraps at 10000 instead, so do the modulus openly. */
+        uint32_t rem = (uint32_t)(elapsed % wrap);
+        uint32_t c   = (R >= rem) ? (R - rem) : (R + wrap - rem);
+        return c % wrap;                     /* the maximum count reads as zero  */
+    }
     if (mode == 3) {
         uint32_t half  = (R + 1) / 2;
         uint32_t phase = (uint32_t)(elapsed % half);
-        return (uint16_t)(R - 2 * phase);    /* R when phase==0 (65536 -> 0)     */
+        return (R - 2 * phase) % wrap;       /* R when phase==0 (the max -> 0)   */
     }
-    return (uint16_t)(R - (uint32_t)(elapsed % R));
+    return (R - (uint32_t)(elapsed % R)) % wrap;
 }
 
-static uint16_t pit_current_count(const pit_state *st)
+/* The counting element, as a number. BINARY -- pit_read_count converts. */
+static uint32_t pit_current_count(const pit_state *st)
 {
     uint64_t elapsed = (st->total_clocks >= st->load_clocks)
                      ? st->total_clocks - st->load_clocks : 0;
-    return pit_count_law(st->mode, pit_eff_reload(st), elapsed);
+    return pit_count_law(st->mode, pit_eff_reload(st), elapsed, pit_wrap(st->bcd));
 }
+
+/* ── THE ONLY TWO PLACES BCD EXISTS: THE PORT BOUNDARY. ──────────────────────
+     Everything inside the device counts in binary (see the note in vdd_pit.h);
+     a count crosses `43h`/`40h-42h` in whatever base the Control Word selected. */
+static uint16_t pit_count_bytes(uint8_t bcd, uint32_t count)
+{ return bcd ? pit_to_bcd(count) : (uint16_t)count; }
+
+static uint16_t pit_count_value(uint8_t bcd, uint16_t written)
+{ return bcd ? (uint16_t)pit_from_bcd(written) : written; }
 
 /* Counters 1 and 2. They have no IRQ engine and no accumulator: a read is simply
    "how far has the counting element got since it was loaded". */
@@ -57,10 +75,10 @@ static uint64_t chan_elapsed(const pit_state *st, const pit_chan *c)
     return (st->total_clocks >= c->load_clocks) ? st->total_clocks - c->load_clocks : 0;
 }
 
-static uint16_t chan_count(const pit_state *st, const pit_chan *c)
+static uint32_t chan_count(const pit_state *st, const pit_chan *c)
 {
-    uint32_t R = c->reload ? (uint32_t)c->reload : 0x10000u;
-    return pit_count_law(c->mode, R, chan_elapsed(st, c));
+    return pit_count_law(c->mode, pit_chan_eff_reload(c), chan_elapsed(st, c),
+                         pit_wrap(c->bcd));
 }
 
 /* Port 61h bit 0 -> counter 2's GATE. A high-to-low edge freezes the elapsed
@@ -79,8 +97,7 @@ void vdd_pit_ch2_gate(pit_state *st, int on)
 int vdd_pit_ch2_out(const pit_state *st)
 {
     const pit_chan *c = &st->c2;
-    uint32_t R = c->reload ? (uint32_t)c->reload : 0x10000u;
-    return pit_out_pin(c->mode, R, chan_elapsed(st, c));
+    return pit_out_pin(c->mode, pit_chan_eff_reload(c), chan_elapsed(st, c));
 }
 
 /* A count write, lo/hi buffered exactly as counter 0 does it: a HALF-WRITTEN
@@ -96,7 +113,7 @@ static void chan_write_count(pit_state *st, pit_chan *c, uint8_t val)
         v = (uint16_t)((val << 8) | c->wr_lo);
         c->wr_flip = 0;
     }
-    c->reload = v;
+    c->reload = pit_count_value(c->bcd, v);   /* BCD in, binary stored */
     c->null_cnt = 0;                 /* the count has reached the CE        */
     c->load_clocks = st->total_clocks;
 }
@@ -104,7 +121,7 @@ static void chan_write_count(pit_state *st, pit_chan *c, uint8_t val)
 /* A read, honouring the latch and the access mode -- the same contract as 0x40. */
 static void chan_read_count(pit_state *st, pit_chan *c, uint32_t *val)
 {
-    uint16_t v = c->latched ? c->latch : chan_count(st, c);
+    uint16_t v = pit_count_bytes(c->bcd, c->latched ? c->latch : chan_count(st, c));
     uint8_t acc = c->access ? c->access : 3;
     if (acc == 1)      { *val = v & 0xFF;        c->latched = 0; }
     else if (acc == 2) { *val = (v >> 8) & 0xFF; c->latched = 0; }
@@ -119,7 +136,7 @@ static void chan_control(pit_state *st, pit_chan *c, uint8_t val)
 {
     uint8_t acc = (uint8_t)((val >> 4) & 3);
     if (acc == 0) {                              /* Counter Latch Command       */
-        c->latch = chan_count(st, c);
+        c->latch = (uint16_t)chan_count(st, c);
         c->latched = 1; c->rd_flip = 0;
         return;
     }
@@ -179,8 +196,9 @@ void vdd_pit_add_clocks(pit_state *st, uint32_t clocks)
      arms; `next_pending` parks a bare mode-2/3 count until vdd_pit_add_clocks reaches
      the end of the period. `load_clocks` moves only when the counting element really
      (re)starts, because that is what pit_current_count measures the read-back from. */
-static void pit_load(pit_state *st, uint16_t count)
+static void pit_load(pit_state *st, uint16_t written)
 {
+    uint16_t count = pit_count_value(st->bcd, written);  /* BCD in, binary stored */
     int periodic = (st->mode == 2 || st->mode == 3);
     if (periodic && !st->cw_armed) {         /* bare write: takes over at period end */
         st->next_reload  = count;
@@ -260,7 +278,7 @@ static uint8_t pit_status_of(const pit_state *st, int n)
         const pit_chan *c = (n == 1) ? &st->c1 : &st->c2;
         acc = c->access ? c->access : 3; mode_raw = c->mode_raw; bcd = c->bcd;
         null_cnt = c->null_cnt;
-        R = c->reload ? (uint32_t)c->reload : 0x10000u;
+        R = pit_chan_eff_reload(c);
         elapsed = (st->total_clocks >= c->load_clocks)
                 ? st->total_clocks - c->load_clocks : 0;
         out = pit_out_pin(c->mode, R, elapsed);
@@ -287,10 +305,10 @@ static void pit_readback(pit_state *st, uint8_t val)
         }
         if (!(val & 0x20)) {                             /* latch COUNT         */
             if (n == 0) {
-                if (!st->latched) { st->latch = pit_current_count(st); st->latched = 1; st->rd_flip = 0; }
+                if (!st->latched) { st->latch = (uint16_t)pit_current_count(st); st->latched = 1; st->rd_flip = 0; }
             } else {
                 pit_chan *c = (n == 1) ? &st->c1 : &st->c2;
-                if (!c->latched) { c->latch = chan_count(st, c); c->latched = 1; c->rd_flip = 0; }
+                if (!c->latched) { c->latch = (uint16_t)chan_count(st, c); c->latched = 1; c->rd_flip = 0; }
             }
         }
     }
@@ -310,7 +328,7 @@ static void pit_out_locked(pit_state *st, uint16_t port, uint8_t val)
         if (ch == 1) { chan_control(st, &st->c1, val); return; }
         if (ch == 3) { pit_readback(st, val); return; }
         if (acc == 0) {                      /* latch count command             */
-            st->latch = pit_current_count(st);
+            st->latch = (uint16_t)pit_current_count(st);
             st->latched = 1; st->rd_flip = 0;
         } else {
             /* A Control Word arms the next count write to load and restart (see
@@ -420,7 +438,7 @@ static void pit_in_locked(pit_state *st, uint16_t port, uint32_t *val)
     /* 0x43 is write-only on the part; a read is undefined. Answer consistently
        rather than plausibly -- see docs/inventory/pit.md 1. */
     if (port != 0x40) { *val = 0xFF; return; }
-    v = st->latched ? st->latch : pit_current_count(st);
+    v = pit_count_bytes(st->bcd, st->latched ? st->latch : pit_current_count(st));
     acc = st->access ? st->access : 3;
     if (acc == 1) { *val = v & 0xFF; st->latched = 0; }
     else if (acc == 2) { *val = (v >> 8) & 0xFF; st->latched = 0; }

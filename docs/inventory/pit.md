@@ -3,7 +3,7 @@
 **Spec:** Intel 8253/8254 datasheets; IBM TechRef for the board wiring.
 **▶ The hardware reference is [`../ref/pit.md`](../ref/pit.md)** — what the chip *does*.
 This file is the companion: what **we** do about it.
-**Our implementation:** `src/vdd/vdd_pit.c` (346 lines), `src/vdd/vdd_pit.h`;
+**Our implementation:** `src/vdd/vdd_pit.c` (612 lines), `src/vdd/vdd_pit.h`;
 port `61h` in `src/vdd/vdd_speaker.c`.
 **Oracle:** MS-DOS 6.22 (`scripts/oracle.sh`) for BIOS-level behaviour; PCem for chip
 timing. Off-VM: `tools/dostest/pit_test.c`.
@@ -32,10 +32,10 @@ sections below record what was found and what each fix cost. The original headli
 
 | Group | before | after |
 |---|---|---|
-| Counter 0 | 5 IMPL · 3 PART · 2 MISS | unchanged, plus POST defaults and a BCD flag |
+| Counter 0 | 5 IMPL · 3 PART · 2 MISS | unchanged, plus POST defaults and BCD counting |
 | Counter 1 | **4 MISS** | **IMPL** — a real, free-running counter |
 | Counter 2 | 2 PART · 2 STORE · 4 MISS | **IMPL** — count, gate and OUT pin |
-| Control Word fields | 2 IMPL · 1 PART · 1 MISS | 3 IMPL · **BCD stored, not consumed** |
+| Control Word fields | 2 IMPL · 1 PART · 1 MISS | **4 IMPL** — BCD counts as of 2026-09-23 |
 | Read-Back Command | **6 MISS** | **6 IMPL** |
 | Modes | 2 IMPL · 3 PART · 1 MISS | 2 IMPL · 3 PART · 1 MISS *(6/7 now alias correctly)* |
 | Port 61h | 1 IMPL · 1 PART · 1 STORE · 1 MISS | 3 IMPL · 1 PART *(bit 4 by design)* |
@@ -46,8 +46,8 @@ sections below record what was found and what each fix cost. The original headli
 
 | Port | Access | Register | Status | Evidence |
 |---|---|---|---|---|
-| `40h` | W | Counter 0 count write | **IMPL** | `vdd_pit.c:153` — and it is careful: a half-written count is not applied |
-| `40h` | R | Counter 0 count read | **IMPL** | `vdd_pit.c:214` — latch, access mode and the lo/hi toggle all honoured |
+| `40h` | W | Counter 0 count write | **IMPL** | `vdd_pit.c:359` — and it is careful: a half-written count is not applied |
+| `40h` | R | Counter 0 count read | **IMPL** | `vdd_pit.c:426` — latch, access mode and the lo/hi toggle all honoured |
 | `41h` | W | Counter 1 count write | **IMPL** | `chan_write_count(&st->c1)` |
 | `41h` | R | Counter 1 count read | **IMPL** | `chan_read_count` — free-running from reset |
 | `42h` | W | Counter 2 count write | **IMPL** | speaker tone divisor **and** the counter view |
@@ -67,10 +67,25 @@ the *"runs but lies"* shape this project treats as the most expensive kind. `p_p
 | Select Counter | 7:6 | **IMPL** | all four: `00`/`01`/`10` counters, `11` Read-Back |
 | Access / Latch | 5:4 | **IMPL** | latch command and all three access modes |
 | Mode | 3:1 | **IMPL** | normalised into `mode`, kept raw in `mode_raw` for Read-Back |
-| **BCD** | 0 | **STORE** | latched into `bcd`/`c->bcd`, reported by Read-Back, **never used to count** |
+| **BCD** | 0 | **IMPL** | decoded on every count write, encoded on every count read; the divisor, the wrap and the maximum count all follow it |
 
-⛔ **BCD is dropped** — the flag is now *stored* (`vdd_pit.c:99`) and still never consumed,
-so counts stay binary and a maximum count means 65536 where the guest asked for 10000.
+✅ **BCD counts** *(FIXED 2026-09-23)*. The flag used to be *stored and never consumed*, so a
+counter programmed for four-decade BCD went on counting in binary and a maximum count meant
+65536 where the guest had asked for 10000.
+
+**It is implemented as a boundary format, not a second arithmetic.** Everything inside the
+device — `reload`, the latch, the count laws, the IRQ0 divisor — stays binary; a count is
+**decoded** where it arrives through `40h`–`42h` (`vdd_pit.c:65`) and **encoded** where it
+leaves (`vdd_pit.c:62`). The counting element is then literally the same code in both bases,
+which is the point: a second arithmetic path is a second thing to get wrong, and only one of
+the two would ever be exercised. Three things fall out of `pit_wrap()` rather than being
+special-cased — a written `0000` means 10000, mode 0 runs past terminal count back to 9999
+instead of through `0xFFFF`, and `pit_ch2_hz` decodes the speaker's divisor so a BCD tone is
+not 4.096× wrong.
+
+⚠ **Invalid digits are undefined by the datasheet**, and we decode each nibble at its decade
+weight (`0x1A` → 20) because that is the sequence four decade down-counters actually produce
+next — `0x1A`, `0x19`, `0x18` — rather than a clamp we would have invented.
 
 ⛔⛔ **NO ORACLE CAN VERIFY IT — and that only became visible after a FALSE PASS.** The probe's
 first BCD case took **one** sample, and a binary counter passes that whenever its four nibbles
@@ -79,16 +94,28 @@ BCD**. Strengthened to 16 spread samples:
 
 | | 6.22 (QEMU) | dosbox-x | PCem (real BIOS) | ours |
 |---|---|---|---|---|
-| `pit.bcd.valid` | `0` | **`1`** | `0` | `0` |
+| `pit.bcd.valid` | `0` | **`1`** | `0` | ~~`0`~~ → **`1`** |
 
 **Two of three — including the real-BIOS machine — do not model BCD at all.** So the majority
 answer is about emulator coverage, not about hardware, and an AGREE here is *agreement on
 absence*.
 
-⇒ **Implement it from the datasheet, which is unambiguous, and mark it
-spec-implemented/unverifiable** with an abstention rule in `oracle-rules.json` so the sweep
-does not read our correct answer as a regression. This is the one place on this surface where
-the spec has to outrank the oracles.
+⇒ **Implemented from the datasheet and marked spec-implemented / unverifiable.** The
+abstention rule is recorded in `oracle-rules.json` (probe `pit`, case `pit.bcd.valid`), so
+`msdos622` and `pcem` abstain, the rationale prints on every run, and our correct answer stops
+reporting itself as a regression. **This is the one place on this surface where the spec
+outranks the oracles** — a `0` from a host that does not implement the feature is the absence
+of a measurement, not a measurement of absence.
+
+⚠ **And "no oracle" is why the evidence had to move off the probe.** `pit.bcd.valid` asks a
+*property* — are all four nibbles decimal — which is exactly the question a binary counter
+answers correctly one time in six, and did. The real evidence is `tools/dostest/pit_test.c`
+**T12**, which pins **exact counts** instead: `0x9989` ten clocks after `0x9999` (the units
+decade *borrows*, it does not step to `0x8F`), `0x0000` at 9999 clocks, the wrap back to
+`0x9999` at 10000, a `0000` count raising IRQ0 on the ten-thousandth clock, and the same
+counter in **binary** failing the nibble test — the negative control, without which the
+positive one proves nothing. **8 of the 14 checks failed against the previous code**; the 6
+that passed were the coincidences.
 
 ✅ **Modes 6 and 7 are now aliased to 2 and 3.** *(FIXED 2026-09-23.)*
 
@@ -203,9 +230,13 @@ relation to time. A recorded approximation, not an oversight.
    `p_pit` 4 mismatches → 1.
 4. ✅ ~~Consume counter 2's GATE from `61h` bit 0, and report its OUT at `61h` bit 5.~~
    **DONE 2026-09-23** — `p_pit` now has **zero mismatches against oracle consensus**.
-5. ⛔ ~~Honour the BCD bit.~~ **BLOCKED ON PCem** — the oracle cannot say what correct is
-   (see §2). Implementing from the datasheet alone would be writing an expectation from
-   memory, which is the one thing this programme exists to stop.
+5. ✅ ~~Honour the BCD bit.~~ **DONE 2026-09-23, FROM THE DATASHEET** — and the "blocked on
+   PCem" that stood here was a conflation worth naming. The rule this programme runs on is
+   *never write an expectation from **memory***; Intel 231164-005 is a **cited source**, not
+   a memory, and a `0` from two emulators that do not implement the feature is the absence of
+   a measurement rather than a measurement of absence. So: implemented, marked
+   spec-implemented / unverifiable, evidence in `pit_test.c` T12 (8 of 14 checks failed on
+   the old code), abstention recorded in `oracle-rules.json`. See §2.
 6. **Model the OUT pin as state for all six modes**, which is what (3) and (4) both need.
 
 ⚠ **None of this is verified against an oracle yet.** `tools/dostest/pit_test.c` is an

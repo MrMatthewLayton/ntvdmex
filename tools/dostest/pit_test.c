@@ -488,6 +488,105 @@ int main(void)
         CHECK(pit_latched_ch2(&bus) != b2, "gate HIGH resumes counter 2");
     }
 
+    /* T12: BCD COUNTING -- CONTROL WORD BIT 0. -------------------------------
+       docs/ref/pit.md 3. Four decade counters: the sequence is 9999 -> 0000 and
+       a written count of 0000 means 10000, not 65536.
+
+       ⛔⛔ THIS IS THE ONE SURFACE HERE WHERE THE DATASHEET OUTRANKS THE ORACLES.
+         p_pit's pit.bcd.valid says 6.22-under-QEMU = 0, PCem (real AMI BIOS) = 0,
+         dosbox-x = 1: two of the three emulators, including the one with genuine
+         firmware, do not model BCD AT ALL. There is nothing to diff against, so
+         these checks are written from Intel 231164-005 and are the only evidence
+         this behaviour has. They are deliberately EXACT VALUES, not properties:
+         a property test ("all nibbles <= 9") is what the DOS probe already asks,
+         and it is exactly the test a binary counter passes by luck one time in
+         six -- which it did, on this project, in this file's sibling.
+       ⚠ SO: if one of these ever fails, the datasheet is the referee. Do not
+         "correct" it towards an emulator that answers 0 to the question of
+         whether it implements the feature at all. */
+    {
+        uint32_t w; unsigned v; int i, allbcd;
+
+        /* -- a read is BCD, digit by digit, including the decade borrow. ----- */
+        vdd_pit_ch2_gate(&pit, 1);
+        w = 0xB1; vdd_bus_io(&bus, 0x43, 1, 0, &w);   /* ch2 lo/hi mode 0 BCD  */
+        w = 0x99; vdd_bus_io(&bus, 0x42, 1, 0, &w);
+        w = 0x99; vdd_bus_io(&bus, 0x42, 1, 0, &w);   /* count 9999            */
+        CHECK(pit.c2.reload == 9999,
+              "bcd: the written 0x9999 is DECODED to 9999, not stored as 39321");
+        pit.total_clocks = pit.c2.load_clocks;
+        CHECK(pit_latched_ch2(&bus) == 0x9999, "bcd: reads back 0x9999 at load");
+        pit.total_clocks = pit.c2.load_clocks + 1;
+        CHECK(pit_latched_ch2(&bus) == 0x9998, "bcd: one clock -> 0x9998");
+        pit.total_clocks = pit.c2.load_clocks + 10;
+        CHECK(pit_latched_ch2(&bus) == 0x9989,
+              "bcd: ten clocks -> 0x9989 (the units decade borrows, it does not go to 0x8F)");
+        pit.total_clocks = pit.c2.load_clocks + 9999;
+        CHECK(pit_latched_ch2(&bus) == 0x0000, "bcd: 9999 clocks -> 0x0000");
+        pit.total_clocks = pit.c2.load_clocks + 10000;
+        CHECK(pit_latched_ch2(&bus) == 0x9999,
+              "bcd mode 0: past terminal count it wraps to 9999, NOT through 0xFFFF");
+
+        /* The DOS probe's own question, asked here where it is cheap to spread:
+           no sample of a BCD count may contain a nibble above 9. */
+        allbcd = 1;
+        for (i = 0; i < 400; ++i) {
+            pit.total_clocks = pit.c2.load_clocks + (uint64_t)i * 37u;
+            v = pit_latched_ch2(&bus);
+            if ((v & 0xF) > 9 || ((v >> 4) & 0xF) > 9
+             || ((v >> 8) & 0xF) > 9 || ((v >> 12) & 0xF) > 9) allbcd = 0;
+        }
+        CHECK(allbcd, "bcd: 400 spread samples, every nibble a decimal digit");
+
+        /* -- and the NEGATIVE control, without which the above proves nothing.
+              The same counter in BINARY must fail that test, or "all nibbles are
+              digits" is being satisfied by something other than BCD. */
+        w = 0xB0; vdd_bus_io(&bus, 0x43, 1, 0, &w);   /* ch2 lo/hi mode 0 BIN  */
+        w = 0x99; vdd_bus_io(&bus, 0x42, 1, 0, &w);
+        w = 0x99; vdd_bus_io(&bus, 0x42, 1, 0, &w);
+        allbcd = 1;
+        for (i = 0; i < 400; ++i) {
+            pit.total_clocks = pit.c2.load_clocks + (uint64_t)i * 37u;
+            v = pit_latched_ch2(&bus);
+            if ((v & 0xF) > 9 || ((v >> 4) & 0xF) > 9
+             || ((v >> 8) & 0xF) > 9 || ((v >> 12) & 0xF) > 9) allbcd = 0;
+        }
+        CHECK(!allbcd, "bcd: the SAME counter in binary walks through non-decimal nibbles");
+
+        /* -- a count of zero is 10000 in BCD, and it is the IRQ0 divisor. ---- */
+        w = 0x35; vdd_bus_io(&bus, 0x43, 1, 0, &w);   /* ch0 lo/hi mode 2 BCD  */
+        w = 0x00; vdd_bus_io(&bus, 0x40, 1, 0, &w);
+        w = 0x00; vdd_bus_io(&bus, 0x40, 1, 0, &w);   /* count 0000 = 10000    */
+        CHECK(pit_eff_reload(&pit) == 10000,
+              "bcd: a written count of 0000 is 10000, not 65536");
+        g_irq = 0;
+        vdd_pit_add_clocks(&pit, 9999);
+        CHECK(g_irq == 0, "bcd: 9999 clocks is one short of the period");
+        vdd_pit_add_clocks(&pit, 1);
+        CHECK(g_irq == 1, "bcd: the 10000th clock raises IRQ0");
+
+        /* -- the status byte reports the base it was programmed with. -------- */
+        w = 0xE2; vdd_bus_io(&bus, 0x43, 1, 0, &w);   /* read-back, status, ch0 */
+        v = 0; vdd_bus_io(&bus, 0x40, 1, 1, &v);
+        CHECK((v & 0x3F) == 0x35, "bcd: read-back status reports lo/hi + mode 2 + BCD");
+
+        /* -- and the speaker's divisor is decoded too, or the tone is wrong. -- */
+        w = 0xB6; vdd_bus_io(&bus, 0x43, 1, 0, &w);   /* ch2 lo/hi mode 3 BIN  */
+        w = 0x00; vdd_bus_io(&bus, 0x42, 1, 0, &w);
+        w = 0x10; vdd_bus_io(&bus, 0x42, 1, 0, &w);   /* 0x1000 binary = 4096  */
+        CHECK(pit_ch2_hz(&pit) == PIT_INPUT_HZ / 4096u, "bcd: binary tone divisor is 4096");
+        w = 0xB7; vdd_bus_io(&bus, 0x43, 1, 0, &w);   /* ch2 lo/hi mode 3 BCD  */
+        w = 0x00; vdd_bus_io(&bus, 0x42, 1, 0, &w);
+        w = 0x10; vdd_bus_io(&bus, 0x42, 1, 0, &w);   /* 0x1000 BCD = 1000     */
+        CHECK(pit_ch2_hz(&pit) == PIT_INPUT_HZ / 1000u,
+              "bcd: the SAME bytes in BCD are a divisor of 1000, so the tone differs");
+
+        /* Leave counter 0 as the BIOS would, binary, for anything after this. */
+        w = 0x34; vdd_bus_io(&bus, 0x43, 1, 0, &w);
+        w = 0x00; vdd_bus_io(&bus, 0x40, 1, 0, &w);
+        w = 0x00; vdd_bus_io(&bus, 0x40, 1, 0, &w);
+    }
+
     printf("\n%d checks, %d failed\n", total, fails);
     return fails ? 1 : 0;
 }

@@ -1344,5 +1344,16 @@
   ],
   "recorded": "2026-09-17",
   "why": "'VESA' + the version word: 1.2 on the Tseng ROM, 3.0 on Bochs, 2.0 here. The version identifies the implementation; the signature is the contract."
+ },
+ {
+  "probe": "pit",
+  "case": "pit.bcd.valid",
+  "field": "AX",
+  "abstain": [
+   "msdos622",
+   "pcem"
+  ],
+  "recorded": "2026-09-23",
+  "why": "NEITHER HOST MODELS THE BCD CONTROL BIT AT ALL, so their 0 is the absence of a feature rather than a measurement of one -- and 'this emulator did not implement it' is not evidence about an 8254. Counter 2 is programmed with control bit 0 set and a count of 0x9999; the case emits 1 only if every nibble of sixteen spread samples is a decimal digit, which is what four decade counters guarantee and a binary counter cannot do. MS-DOS 6.22 under QEMU answers 0 and PCem -- WITH A GENUINE AMI 486 BIOS AND IBM VGA ROM, the machine that settled counter 0's power-on mode -- also answers 0; dosbox-x, which does implement BCD, answers 1. So the majority here is a majority of omissions. Intel 8254 datasheet 231164-005 is unambiguous: bit 0 of the Control Word selects four-decade BCD, the counter runs 9999 -> 0000, and a written count of 0000 means 10000 rather than 65536. THIS IS THE ONE ROW IN THIS FILE WHERE THE SPEC OUTRANKS THE ORACLES, and it is recorded here so a correct answer stops reporting itself as a regression. Our evidence is tools/dostest/pit_test.c T12, which pins exact counts (0x9989 ten clocks after 0x9999, the wrap to 0x9999 past terminal count) rather than the all-nibbles-are-digits property -- that property is the one a binary counter passes by luck one time in six, and it did exactly that here once."
  }
 ]
