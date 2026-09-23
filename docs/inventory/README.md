@@ -160,5 +160,5 @@ Each surface gets two documents, doing two different jobs:
 | DOS extenders: DOS/4GW, DOS16M | Tenberry/Rational docs | partial | — |
 | MSCDEX | MSCDEX spec | — | — |
 | Executable formats: MZ, LE, NE, PE | MS format specs | partial (`ne_test`) | — |
-| Win16 KERNEL / USER / GDI | Win3.1 SDK; Wine; ReactOS | `docs/research/wow-user-surface.md` (441 ids, 385 named) | — |
+| **Win16 KERNEL / USER / GDI** | Win3.1 SDK; Wine; ReactOS | [win16.md](win16.md) — **deterministic tests now exist**; `docs/research/wow-user-surface.md` (441 ids, 385 named) | — |
 | WOW32 thunk ABI | *no spec* — ReactOS prior art + stock WOW oracle | `docs/research/wow32-call-surface.md` | — |

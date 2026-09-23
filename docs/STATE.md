@@ -186,8 +186,16 @@ but it is an observable change and the rule is one at a time with a human in bet
    ▶ **One byte left**, recorded rather than bundled: `modeX` `CR0F`, where `crtc_in`
    *derives* the cursor address instead of storing it. Fixing it properly means the BIOS
    cursor calls must write `CR0E`/`CR0F`, which touches every path that moves the cursor.
-3. **Deterministic Win16 tests** — owed since the spec-first directive. The Win3.1 SDK, Wine
-   and ReactOS are real sources; only the WOW32 thunk ABI needs the stock-VDM oracle.
+3. ✅ ~~**Deterministic Win16 tests**~~ — **the harness exists** (`ea485e7`.. `tools/ne/mkne.py`
+   + `tools/wintest/`). The blocker was never the tests: **nothing here could BUILD a Win16
+   binary** — no OpenWatcom on the machine, none in Homebrew, none in the tree. nasm now
+   writes the 16-bit code and `mkne.py` writes the NE around it, every field read off
+   `TASKMAN.EXE` with our own `nedump.py`/`nedis.py`. First run on the rig:
+   `InitTask`/`WaitEvent`/`InitApp` all succeed, `kernel.getversion` = `5F03`,
+   `kernel.getwinflags` = `4C25`.
+   ▶ **Owed: those two values are OURS and unverified.** Run the same `.EXE` under stock
+   `ntvdm` on the same rig and diff — until then they are measurements, not passes.
+   See [`inventory/win16.md`](inventory/win16.md).
 4. **VGA step 4 — one address generator** from CR17/CR14/GR5/GR6/SR4. ⛔ **PARKED**: the
    A0000 aperture is mapped RAM with no write hook, so mode-Y exactness needs an
    architecture change, not a patch. Instrument in place (`tools/doomdetail.py`).
