@@ -220,7 +220,74 @@ implemented** (`dos_int21.c:1204`, `BX=DX=437`). AX simply is not one of its out
 That is the **fourth** time the "AX unchanged ⇒ unserviced" heuristic would have
 invented a gap; the file's own `dos622_defines` comment warns about exactly this.
 
-Next: guest `0x5664`, the call it does not return from.
+### ✅ Guest `0x5664` was the command-line PARSER, and it had nothing to parse
+
+```
+guest 0x31F4  mov si,0x93AC
+       loop:  lodsb / cmp al,0x22 (quote) / cmp al,0x0D / jnz loop
+```
+
+**With no CR in the buffer, SI walks the whole 64K segment and never leaves** — exactly
+the "spinning in V86 with no traps" the headless deadline kept killing.
+
+Dumping the request block *before* writing it named the buffer:
+
+```
+blk in = 26 02 | 00 01 | 02 00 | 00 00 | 42 93 | 27 93 | 80 00 ...
+           +00     +02     +04     +06     +08     +0A     +0C
+```
+
+⇒ **`+0x08:+0x0A` = `0x9342:0x9327`**, and `0x9327` is exactly the address COMMAND.COM's
+own copy loop reads (`cl=[0x9327]; cx+=3; movsb` to `0x93AA`, parse from `0x93AC`). Two
+independent sources, the same address. Layout: `[0]` length, `[1]` unused, `[2..]` text,
+then **CR**. We now write the empty tail `00 00 0D` there.
+
+★ And the dump settled the design as well as the address: the guest already supplies
+`+0x04 = 02` (C:). **It was never ours to fill in.** So sub 01 now writes only the flags
+word and the command tail, and leaves every field it cannot name alone — *a named wrong
+value is worse than an unchanged right one.*
+
+### ⛔ Where it is now: a LOOP, not a hang
+
+With a CR to find, COMMAND.COM stops scanning and runs its init — and then runs it
+again, forever:
+
+```
+21:19/0d  21:5d/09  21:5d/08  21:53/02  21:19/00  21:66/01  21:0e/80   ×N
+```
+
+It asks `sub 01` again each time, is told "no command", and restarts. That is progress —
+it is executing rather than scanning memory — but `flags = 0` evidently does not mean
+"go interactive". COMMAND.COM branches on `test [blk+0x10],7` then `test …,1`; **the
+flag bits are the next thing to earn.**
+
+### ⛔⛔⛔ FOUR INSTRUMENTS IN ONE SESSION NEEDED A CAP
+
+The loop turned every per-call log line into a file. In order:
+
+| instrument | what it wrote | fix |
+|---|---|---|
+| NTVDM BOP logger | 268,435,180 bytes | 16 in full, then on register change |
+| …the same, again | 268,435,219 bytes | **a novelty filter is not a cap** — a loop differs every pass. Hard ceiling of 64 |
+| INT 21h trace (`dostrace.flag`) | 2,166,824 lines | `DOS_TRACE_MAX` 4000, shared with the `->` result half |
+| `BOP2F` INT 2Fh logger | 211 MB on its own | 512 lines |
+| `AH=53h` unimplemented note | 2,713 lines per 200 KB | said once per run |
+
+Result: **268 MB → 442 KB.**
+
+⚠ `LOG_MAX_BYTES` (256 MB) already stopped the *disk* filling. It did not make a log
+readable, and a 268 MB file over SMB is its own outage. **A cap on the sink is not a cap
+on the instrument.**
+
+⛔ And the first BOP rate-limit had a worse bug than its size: it `continue`d out of the
+arm, **skipping the sub 01 and sub 0E handlers** — so past the 17th call the guest was
+told something different from what the first sixteen were told, silently. *A quiet
+instrument that also changes behaviour is not an instrument.* It now gates the log only.
+
+### ▶ Next
+
+The `+0x10` flag bits. `test …,7` and `test …,1` are the two tests COMMAND.COM makes;
+`0x0F00A966`'s write sites for `+0x10` are where their meanings are.
 
 ---
 

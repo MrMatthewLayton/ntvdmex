@@ -15,6 +15,11 @@
 #include "dos_layout.h"   /* DOS_MAX_FILES -- the capacity fh[] must match */
 
 
+/* A trace is opt-in via cfg\dostrace.flag, which says who PAYS for it and nothing
+   about how big it gets. XP's COMMAND.COM in a command loop wrote 2,166,824 lines
+   and 268 MB before this existed. Opt-in is not the same as bounded. */
+#define DOS_TRACE_MAX 4000
+
 /* DOS-machine state the INT 21h surface owns. */
 typedef struct {
     volatile BYTE *tib;        /* guest CONTEXT (registers via VDM_REG)            */
@@ -86,6 +91,7 @@ typedef struct {
     uint16_t line_seg, line_off;
     int      line_n, line_active;
     int      trace_all;        /* log EVERY INT 21h call -- see the trace at entry */
+    DWORD    trace_n;          /* how many have been printed; capped at DOS_TRACE_MAX */
     /* THE CURRENT DRIVE WHEN WIN32 CANNOT STAND ON IT. -1 = the current drive is the
        process current directory's, as it always was. DOS selects a drive (AH=0Eh)
        from the CDS without touching the media -- oracle: `0Eh B:` on a one-floppy

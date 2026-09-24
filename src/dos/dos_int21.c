@@ -305,6 +305,7 @@ void dos_int21_init(dos_machine_t *m, uint16_t first_mcb)
     m->dta_off = 0x0080;
     m->out_len = 0; m->out_trunc = 0;
     m->line_active = 0; m->line_n = 0; m->line_seg = 0; m->line_off = 0;
+    m->trace_n = 0;
     m->std_open = 0x1F;                     /* stdin/stdout/stderr/aux/prn all open */
     { int _i; for (_i = 0; _i < 32; ++_i) { m->unimpl21[_i] = 0; m->noop21[_i] = 0; } }
     m->exit_code = 0;
@@ -453,7 +454,20 @@ int dos_int21(dos_machine_t *m)
        ⚠ AH=0Ah is excluded: it now polls via `retry`, so tracing it would bury the
          log in thousands of identical lines -- it prints its completed line instead.
          Gated by a flag file so no other run pays for this. */
-    if (m->trace_all && ah != 0x0A) {
+    /* ── ⛔⛔⛔ A CAP, AND IT IS THE THIRD INSTRUMENT IN ONE SESSION TO NEED ONE.
+         The BOP logger ran away twice (268 MB each) before it got a hard ceiling; this
+         one has none at all, and the moment XP's COMMAND.COM reached a command LOOP it
+         wrote 2,166,824 trace lines and the same quarter-gigabyte. The flag file makes
+         it opt-in, which is not the same as bounded -- opt-in only says who pays.
+       ⇒ 4000 lines, then one line saying it stopped and how many it has seen. A trace
+         whose size depends on the guest's loop rate cannot be read either way, and the
+         first 4000 calls are where the answer is. */
+    if (m->trace_all && ah != 0x0A && m->trace_n <= DOS_TRACE_MAX) {
+        if (++m->trace_n > DOS_TRACE_MAX) {
+            tp = zput(tp, "  21: ... TRACE CAPPED at ");
+            tp = zhex(tp, DOS_TRACE_MAX);
+            tp = zput(tp, " calls -- the guest is looping; totals are in the summary\r\n");
+        } else {
         tp = zput(tp, "  21:"); tp = zhexb(tp, (unsigned)ah);
         tp = zput(tp, "/");     tp = zhexb(tp, (unsigned)(R_AX & 0xFF));
         tp = zput(tp, " bx="); tp = zhexb(tp, (unsigned)((R_BX >> 8) & 0xFF));
@@ -466,6 +480,7 @@ int dos_int21(dos_machine_t *m)
         if (cl_ok) { tp = zput(tp, " @"); tp = zhex(tp, cl_seg);
                      tp = zput(tp, ":"); tp = zhex(tp, cl_off); }
         tp = zput(tp, "\r\n");
+        }
     }
 
     if (ah == 0x4C) {                           /* terminate */
@@ -1257,8 +1272,14 @@ int dos_int21(dos_machine_t *m)
              DOS error-message table addresses (DL=00/02/04/06/08) -- see the widened
              BOP2F log. That is the next thing to chase, and "died after" is still not
              "died because": prove it before implementing it. */
-        tp = zput(tp, "  INT21 AH=53 BPB->DPB UNIMPLEMENTED (no installable "
-                      "block drivers)\r\n");
+        /* ⛔ ONE LINE PER CALL, AND A LOOPING GUEST TURNS THAT INTO A FILE. XP's
+             COMMAND.COM re-runs its init forever while `sub 01` answers "no command",
+             and this note alone was 2,713 lines in the last 200 KB of a 42 MB log.
+             Say it once; `unimpl21[]` already carries the fact for the summary. */
+        { static int said53 = 0;
+          if (!said53) { said53 = 1;
+              tp = zput(tp, "  INT21 AH=53 BPB->DPB UNIMPLEMENTED (no installable "
+                            "block drivers) -- said once per run\r\n"); } }
         m->unimpl21[0x53 >> 3] |= (uint8_t)(1u << (0x53 & 7));
         SETAX(1); ERRCF();
     } else if (ah == 0x5E) {                    /* network machine name / printer */
@@ -2044,9 +2065,11 @@ int dos_int21(dos_machine_t *m)
          half a differential instrument: XP's COMMAND.COM makes 31 calls and then
          terminates, and "which one came back an error" is the whole question --
          unanswerable from the inbound line alone.
-       ⚠ Same flag, same AH=0Ah exclusion, so the pairing stays one-to-one and a
-         reader can line `21:xx/yy` up with the `->` under it. */
-    if (m->trace_all && ah != 0x0A) {
+       ⚠ Same flag, same AH=0Ah exclusion AND THE SAME CAP, so the pairing stays
+         one-to-one and a reader can line `21:xx/yy` up with the `->` under it. The cap
+         has to be shared: capping only the inbound half would leave a file of orphaned
+         results, which is worse than either. */
+    if (m->trace_all && ah != 0x0A && m->trace_n <= DOS_TRACE_MAX) {
         tp = zput(tp, "     -> ax="); tp = zhexb(tp, (unsigned)((R_AX >> 8) & 0xFF));
         tp = zhexb(tp, (unsigned)(R_AX & 0xFF));
         tp = zput(tp, " cf="); tp = zhexb(tp, (unsigned)(*pfl & 1));

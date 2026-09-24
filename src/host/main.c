@@ -24990,6 +24990,20 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                  cannot show it. XP's COMMAND.COM asks 122Eh five times and 5501h
                  once, then terminates without printing, so those registers are the
                  evidence. Print them. */
+            /* ── ⛔ CAPPED. The FOURTH instrument in one session to need this, and the
+                 last one standing after the BOP logger (268 MB, twice) and the INT 21h
+                 trace (2,166,824 lines). XP's COMMAND.COM loops through its whole
+                 init -- INT 2Fh included -- so an uncapped per-call line here wrote
+                 211 MB on its own. LOG_MAX_BYTES stops the DISK filling; it does not
+                 make a log readable, and a 211 MB file over SMB is its own outage.
+               ⇒ 512 lines, then one line saying so. The first 512 are where any
+                 INT 2Fh answer worth reading is. */
+            { static DWORD n2f = 0;
+              if (++n2f == 513) {
+                  p = zput(p, "STAGE2: BOP2F ... CAPPED at 512 lines (guest is looping)\r\n");
+                  log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+              }
+              if (n2f > 512) goto bop2f_serviced; }
             p = zput(p, "STAGE2: BOP2F ax=0x"); p = zhex(p, ax);
             p = zput(p, " bx=0x");  p = zhex(p, VDM_REG(tib, VTIB_EBX) & 0xFFFF);
             p = zput(p, " cx=0x");  p = zhex(p, VDM_REG(tib, VTIB_ECX) & 0xFFFF);
@@ -25002,6 +25016,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             p = zput(p, ":0x");     p = zhex(p, VDM_REG(tib, VTIB_EIP) & 0xFFFF);
             p = zput(p, "\r\n");
             log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+        bop2f_serviced:
             /* ── "NO XMS" MEANS NOT ANSWERING, NOT ANSWERING BADLY. ────────────
                  A machine with no HIMEM.SYS does not reply to 4300 at all, so AL
                  keeps whatever the caller put there and the caller reads "not
@@ -27098,6 +27113,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             const volatile BYTE *bq = (const volatile BYTE *)(ULONG_PTR)((cs_ << 4) + ip_);
             DWORD sub = bq[3];
             static int  cf_pol = -1;                 /* -1 = not yet read */
+            int quiet = 0;                           /* rate-limit the LOG, never the answer */
             if (cf_pol < 0) {
                 char c[16]; DWORD rd = 0;
                 HANDLE h = CreateFileA(BOP54_PATH, GENERIC_READ, FILE_SHARE_READ,
@@ -27131,13 +27147,22 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                 int novel = (sig != last_sig);
                 last_sig = sig;
                 ++g_ntvdm_bop_n;
-                if (g_ntvdm_bop_n > 16 && !novel) {
-                    if (cf_pol) VDM_REG(tib, VTIB_EFLAGS) |=  1u;
-                    else        VDM_REG(tib, VTIB_EFLAGS) &= ~1u;
-                    VDM_REG(tib, VTIB_EIP) += 4;
-                    continue;
-                }
+                /* ── ⛔⛔ A NOVELTY FILTER IS NOT A CAP, AND IT COST A SECOND 256 MB.
+                     The first rate-limit logged 16 in full and then only when the
+                     register signature CHANGED. That is the right shape for a spin on
+                     identical values -- and no defence at all against a LOOP, where
+                     every pass differs slightly: once COMMAND.COM reached its command
+                     loop the log hit 268,435,219 bytes again, 285,698 BOPs.
+                   ⇒ A hard ceiling as well as a novelty test. Past it, count only. */
+                /* ⛔⛔ AND IT MUST GATE THE LOG ONLY, NEVER THE HANDLING. The first cut
+                     `continue`d out of the rate-limit arm, which SKIPPED the sub 01 and
+                     sub 0E handlers below and answered with the generic CF instead --
+                     so past the 17th call the guest was being told something different
+                     from what the first sixteen were told, silently. A quiet instrument
+                     that also changes behaviour is not an instrument. */
+                quiet = (g_ntvdm_bop_n > 64) || (g_ntvdm_bop_n > 16 && !novel);
             }
+            if (quiet) goto ntvdm_bop_dispatch;
             p = zput(p, "STAGE2: NTVDM BOP from guest: bop=0x"); p = zhexb(p, bn);
             p = zput(p, " sub=0x"); p = zhexb(p, sub);
             p = zput(p, " at 0x"); p = zhex(p, cs_); p = zput(p, ":0x"); p = zhex(p, ip_);
@@ -27158,6 +27183,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             p = zput(p, "         next="); p = zdump(p, (const void *)(bq + 4), 12);
             p = zput(p, "\r\n");
             log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+        ntvdm_bop_dispatch:
             /* ── ★ sub 01 = "WHAT SHOULD I RUN NEXT?" -- ANSWER "NOTHING". ───────────
                  XP's handler (ntvdm.exe 0x0F00A966) builds a VDM_COMMAND_INFO with two
                  MAX_PATH buffers and asks CSRSS via GetNextVDMCommand. It reads the
@@ -27185,27 +27211,63 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                           + (VDM_REG(tib, VTIB_EDX) & 0xFFFF);
                 volatile BYTE *b = (volatile BYTE *)(ULONG_PTR)blk;
                 #define BW(o, v) (*(volatile WORD *)(b + (o)) = (WORD)(v))
-                /* ── ⛔ +0x04 IS THE DEFAULT DRIVE, AND ZEROING IT SENT THE SHELL TO A:.
-                     Found by running it: COMMAND.COM reads `[blk+0x04]` into DL two
-                     instructions after this call returns and issues `AH=0Eh` with it
-                     (guest 0x6B8..0x6C2). A zero there means drive 0 = A:, and our own
-                     handler said so -- "drive A: exists but is not ready ... selected
-                     as the DOS current drive anyway" -- while the shell went quiet.
-                   ★ This is what "a defined answer is falsifiable" buys: the wrong
-                     value was visible in one run and named its own field. An
-                     uninitialised block would have given a different wrong drive each
-                     time and looked like flakiness. */
-                BW(0x02, 0); BW(0x04, dos_int21_cur_drive(&m)); BW(0x06, 0);
-                BW(0x10, 0);                       /* flags: nothing to run */
-                BW(0x16, 0); BW(0x1A, 0); BW(0x20, 0);
-                BW(0x22, 0);                       /* status */
-                #undef BW
-                /* +0x12/+0x14 deliberately untouched -- the cookie round-trips. */
-                VDM_REG(tib, VTIB_EAX) &= 0xFFFF0000u;   /* AX = 0 */
-                p = zput(p, "         sub 01 answered: no command (flags=0, cookie at "
-                            "+0x12 preserved), blk=0x"); p = zhex(p, blk);
+                /* ⚠ DUMPED BEFORE WE WRITE ANYTHING. Logging it after the BW()s below
+                     would show our own zeros back and read as the guest's input --
+                     which is the whole class of mistake this file keeps catching. */
+                if (quiet) goto blk_written;
+                p = zput(p, "         blk in="); p = zdump(p, (const void *)b, 0x28);
+                p = zput(p, "\r\n         +1C:1E=0x");
+                p = zhex(p, *(volatile WORD *)(b + 0x1C)); p = zput(p, ":0x");
+                p = zhex(p, *(volatile WORD *)(b + 0x1E));
+                p = zput(p, " +20=0x"); p = zhex(p, *(volatile WORD *)(b + 0x20));
                 p = zput(p, "\r\n");
-                log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                blk_written: ;
+                /* ── ★★ TOUCH AS LITTLE AS POSSIBLE. ────────────────────────────────
+                     The first cut zeroed every field that XP's handler writes. One of
+                     them, `+0x04`, is the DEFAULT DRIVE -- COMMAND.COM reads it into DL
+                     two instructions after the call and issues `AH=0Eh` with it (guest
+                     0x6B8..0x6C2) -- so a zero meant drive 0 = A:, and our own handler
+                     said so in the same log ("drive A: exists but is not ready ...
+                     selected as the DOS current drive anyway") while the shell went
+                     quiet.
+                   ★ Dumping the block BEFORE writing it settled the design: the guest
+                     already supplies `+0x04 = 02` (C:). It was never ours to fill in.
+                     Measured, one run:
+                       blk in = 26 02 | 00 01 | 02 00 | 00 00 | 42 93 | 27 93 | 80 00 ...
+                     ⇒ `+0x08:+0x0A = 0x9342:0x9327` -- and `0x9327` is EXACTLY the
+                       address COMMAND.COM's command-line parser reads (guest 0x2B36
+                       loads it, copies len+3 bytes to 0x93AA, and scans from 0x93AC).
+                       Two independent sources, same address.
+                   ⇒ So we now write only what a "no command" answer really is: the
+                     empty command tail, and the flags word. Everything else is left as
+                     the guest set it, because a field we cannot name is not ours. */
+                {   DWORD cb = ((DWORD)(*(volatile WORD *)(b + 0x08)) << 4)
+                             + *(volatile WORD *)(b + 0x0A);
+                    volatile BYTE *c = (volatile BYTE *)(ULONG_PTR)cb;
+                    /* ── AN EMPTY DOS COMMAND TAIL, AND THE CR IS THE POINT. ────────
+                         The parser at guest 0x31F4 is `lodsb / cmp al,0x22 / cmp al,0x0D
+                         / jnz back`. With no CR in the buffer SI walks the WHOLE 64K
+                         segment and never leaves -- which is precisely the "spinning in
+                         V86 with no traps" the headless deadline was killing.
+                         Layout, from the guest's own copy loop (`cl=[buf]; cx+=3`):
+                           [0] = length, [1] = ?, [2..] = text, then CR. */
+                    c[0] = 0; c[1] = 0; c[2] = 0x0D;
+                    if (!quiet) { p = zput(p, "         cmdline buf 0x"); p = zhex(p, cb);
+                                  p = zput(p, " <- empty tail (len=0, CR)\r\n"); }
+                }
+                BW(0x10, 0);                       /* flags: nothing to run */
+                #undef BW
+                /* +0x12/+0x14 deliberately untouched -- the cookie round-trips.
+                   +0x02 +0x04 +0x06 +0x16 +0x1A +0x20 +0x22 likewise: XP writes them,
+                   but we cannot yet say WHAT, and a named wrong value is worse than an
+                   unchanged right one. Revisit each as its meaning is earned. */
+                VDM_REG(tib, VTIB_EAX) &= 0xFFFF0000u;   /* AX = 0 */
+                if (!quiet) {
+                    p = zput(p, "         sub 01 answered: no command (flags=0, cookie and "
+                                "the guest's own fields left alone), blk=0x"); p = zhex(p, blk);
+                    p = zput(p, "\r\n");
+                    log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                }
                 VDM_REG(tib, VTIB_EFLAGS) &= ~1u;  /* success */
                 VDM_REG(tib, VTIB_EIP) += 4;
                 continue;
@@ -27232,8 +27294,10 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                  and getting 0 because that is what happened to be in it. */
             if (bn == NTVDM_BOP_CMD && sub == 0x0E) {
                 VDM_REG(tib, VTIB_EDX) &= 0xFFFF0000u;   /* DX = 0: no KEYB to run */
-                p = zput(p, "         sub 0E answered: no keyboard driver (DX=0)\r\n");
-                log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                if (!quiet) {
+                    p = zput(p, "         sub 0E answered: no keyboard driver (DX=0)\r\n");
+                    log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                }
                 VDM_REG(tib, VTIB_EFLAGS) &= ~1u;
                 VDM_REG(tib, VTIB_EIP) += 4;
                 continue;
