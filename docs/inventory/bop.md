@@ -69,11 +69,79 @@ rate-limited** — 16 in full, then only when the register signature changes. *A
 instrument that scales with a guest's spin rate is a denial-of-service on the thing you
 are trying to read.*
 
-### ▶ Next
+### ✅✅ THE DISPATCH TABLE ITSELF, OUT OF XP's `ntvdm.exe`
 
-Disassemble the `0x50`/`0x54` sites in `ntdos.sys` and `ntio.sys`. They are 16-bit, they
-are small, and unlike COMMAND.COM they are the **kernel** side — the same call with known
-DOS semantics either side of it, which is what makes a sub-function's meaning readable.
+`ntvdm.exe` (420,864 bytes, XP SP3, image base `0x0F000000`) carries a **256-entry BOP
+dispatch table at RVA `0x064980`**. 195 of the entries share one stub (`0x0F05E04F`) —
+that is "unimplemented", and having it named makes the rest exact: **61 BOPs are real.**
+
+```
+00 02 06 09 0E 10 11 12 13 14 15 16 17 18 19 1A 1D 21 40 42
+50 51 52 53 54 55 56 57 58 59 5A 5B 5C 5D 5E 5F 60 66 67 68
+70 71 72 73 74 75 76 77  B8 B9 BA BB BC BD BE BF  C8 C9  FD FE FF
+```
+
+⛔⛔ **Our DPMI numbering collides with far more than the two we knew about.** `0x50`,
+`0x54`, `0x55`, `0x56`, `0x57`, `0x58`, `0x59`, `0x5A` are *all* real NTVDM BOPs, and we
+use every one of them. The origin test covers this — but it is the reason the origin test
+had to be the fix rather than renumbering.
+
+### ✅ `BOP 0x54` — the handler, and its sub-function table
+
+`0x0F0085AE`, disassembled:
+
+```
+push 0 ; call getIP        ; fetch the byte AFTER the BOP ...
+... ; movzx esi,byte [eax]  ; ESI = the SUB-FUNCTION
+call getIP ; inc eax ; call setIP    ; ... and STEP OVER IT
+push esi ; call 0x0F008606
+                 └─> mov eax,[ebp+8] ; call dword [eax*4 + 0x0F065040]
+```
+
+★ **The 4-byte encoding is now read off NTVDM's own dispatcher**, not inferred: it takes
+`IP`, adds **1**, and stores it back — `C4 C4 54` is three bytes and the sub-function is
+the fourth. That retires the inference from `jnc` decoding in §3.
+
+**The sub-function table at VA `0x0F065040` has exactly 17 live entries** — `0x00`–`0x10`,
+after which every slot repeats one address. That is precisely the range used across
+COMMAND.COM (`00 01 02 06 08 09 0A 0B 0D 0E 0F 10`), `ntdos.sys` (`04 05 07`) and
+`ntio.sys` (`09 0C`). Three binaries and the table agree.
+
+| sub | handler VA | notes |
+|---|---|---|
+| `00` | `0F04EDE7` | **= exported `VDDTerminateVDM`** |
+| `01` | `0F00A966` | **see below — the one that blocks us** |
+| `02` | `0F015D63` | |
+| `03` | `0F05E04F` | **= the unimplemented stub. XP does not implement it either.** |
+| `04` | `0F008621` | used by `ntdos.sys` |
+| `05` | `0F00B848` | used by `ntdos.sys` |
+| `06` | `0F04DB4A` | `cmd`-module range (cf. `cmdCheckTemp` at `0F04CB2F`) |
+| `07` | `0F0198AE` | used by `ntdos.sys` |
+| `08` | `0F04EBBB` | `cmd`-module range |
+| `09` | `0F00D187` | used by `ntio.sys` |
+| `0A` | `0F04EB43` | `cmd`-module range |
+| `0B` | `0F04ECF2` | `cmd`-module range |
+| `0C` | `0F00C342` | used by `ntio.sys` |
+| `0D` | `0F012C94` | |
+| `0E` | `0F0156EC` | **the second one COMMAND.COM reaches** |
+| `0F` | `0F00BEF6` | |
+| `10` | `0F04C829` | `cmd`-module range |
+
+### ▶ `sub 0x01` = get the next command
+
+`0x0F00A966` allocates a `0x338` stack frame and fills a structure at `0x0F09BE48…BEDC`
+with: a `0x104`-byte (MAX_PATH) buffer at `[ebp-0x248]`, a second at `[ebp-0x28C]`, and a
+word `0x0105`. That is a **`VDM_COMMAND_INFO`**, and `GetNextVDMCommand` is in the
+import strings. ⇒ **sub 01 asks CSRSS what to run next** — exactly what a shell does at
+startup, and exactly the call our own STAGE1 already makes (`STAGE1: command fetch …`).
+
+It reads its request block from `DS:DX` — `(getDS()<<4) + getDX()`, then fields at
+`+0x0E`, `+0x1C`, `+0x1E`, `+0x20`. COMMAND.COM sets `DX=0x95D7` before the call, which
+is that block.
+
+⚠ **Not yet verified**: the block's field meanings, and what the guest expects back. The
+next step is to finish `0x0F00A966` and pin the layout, then answer it from the
+`VDM_COMMAND_INFO` our STAGE1 already receives.
 
 ---
 
