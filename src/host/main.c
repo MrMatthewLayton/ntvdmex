@@ -26927,6 +26927,37 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             VDM_REG(tib, VTIB_EIP) += 3;            /* -> the RETF, returns real mode     */
             continue;
         }
+        /* ── ★★ THIS IS THE FALL-THROUGH, AND IT ANSWERS FOR EVERY BOP IT WAS NEVER
+               GIVEN. (s78) ──────────────────────────────────────────────────────
+             ev is already known to be VDM_EVENT_BOP here, and every arm above matches
+             an EXACT code -- INT 21h's own stub is `C4 C4 20` (see the bop[] table at
+             the install). So anything that reaches this line is a BOP we do not
+             implement, and we hand it to the DOS INT 21h handler anyway, where the
+             guest's AH decides what it "asked" for.
+           ★ XP's COMMAND.COM is the guest that made this visible. It is NTVDM-AWARE:
+             its image contains sixteen `C4 C4` sites -- fifteen of them BOP 0x54 with
+             a sub-function byte after it, one BOP 0x50. Our 0x54 is DPMI_RMRET_BOP and
+             our 0x50 is the DPMI entry, so the NUMBERS COLLIDE with the ones a real
+             NTVDM guest uses. The one at 0x9342:0x03ce arrives with AX=0x0002, falls
+             through here, is read as INT 21h AH=00, and terminates the guest -- which
+             we then report as a CLEAN EXIT, CODE 0. Four sessions read that as
+             "COMMAND.COM gives up"; it never called DOS at all.
+           ⚠ BEHAVIOUR DELIBERATELY UNCHANGED FOR NOW. The obvious gate (`info == 0x20`
+             or refuse) is probably right, but "probably" is not the standard here: the
+             arms above are long and some may fall through on purpose. This line
+             ENUMERATES what actually reaches the fall-through across the guest battery
+             first. Measure, then gate. */
+        if ((VDM_REG(tib, VTIB_EVENT_INFO) & 0xFF) != 0x20) {
+            DWORD cs_ = VDM_REG(tib, VTIB_CS) & 0xFFFF, ip_ = VDM_REG(tib, VTIB_EIP) & 0xFFFF;
+            const volatile BYTE *bq = (const volatile BYTE *)(ULONG_PTR)((cs_ << 4) + ip_);
+            p = zput(p, "STAGE2: BOP FALL-THROUGH -> INT21: bop=0x");
+            p = zhexb(p, VDM_REG(tib, VTIB_EVENT_INFO) & 0xFF);
+            p = zput(p, " next=0x"); p = zhexb(p, bq[3]);   /* the sub-function byte */
+            p = zput(p, " at 0x");  p = zhex(p, cs_); p = zput(p, ":0x"); p = zhex(p, ip_);
+            p = zput(p, " ax=0x");  p = zhex(p, VDM_REG(tib, VTIB_EAX) & 0xFFFF);
+            p = zput(p, "\r\n");
+            log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+        }
         m.tp = p;
         m.retry = 0;
         if (!dos_int21(&m)) {                       /* AH=4Ch -> terminate */

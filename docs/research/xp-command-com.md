@@ -7,6 +7,78 @@ do the same"* — and the right shape for that is not a shell we write, it is
 
 ---
 
+## ✅ ANSWERED (s78): it never called DOS. It issued a BOP we do not implement.
+
+**Read this before anything below it.** Several sections further down reason about
+*why COMMAND.COM terminates*. It does not terminate. Everything in this file that
+treats the exit as a DOS decision is superseded here.
+
+The instrument was one line: **take the caller off the guest stack, not out of the
+handler's registers.** A real-mode `INT` pushes IP, CS, FLAGS, so the call site is at
+`SS:SP` — the same frame this code already trusts to return CF. With `cfg\dosver.txt`
+= `5.0` and `cfg\dostrace.flag` set, the trace ends:
+
+```
+  21:19/00 bx=0001 dx=0001 @00009342:0000038b      <- a real call: sane caller
+  21:00/02 bx=0001 dx=95d7 @00000024:00000000      <- the "terminate": caller is GARBAGE
+  ==> DOS terminate (AH=00h) ... site=0x0000 bytes@0x0000=58 00 50 00 58 00 ...
+```
+
+Every genuine call has a coherent caller (`0100:xxxx` in the resident part, then
+`9342:xxxx` in the transient). The terminate reports `0024:0000`, pointing at data.
+**There is no pushed interrupt frame, so it did not arrive by `INT`.**
+
+What is at `9342:03ce` is COMMAND.COM's own `C4 C4 54` — a **BOP**. XP's COMMAND.COM
+is NTVDM-*aware*: its 50,620-byte image contains **sixteen `C4 C4` sites — fifteen
+`BOP 0x54` each followed by a sub-function byte (15 distinct ones), and one
+`BOP 0x50`**. Our own numbering collides with both:
+
+| BOP | real NTVDM guest use | ours (`main.c:448`, map at `main.c:499`) |
+|---|---|---|
+| `0x50` | COMMAND.COM uses it (1 site) | DPMI real→PM entry |
+| `0x54` | COMMAND.COM uses it (15 sites, sub-function byte) | `DPMI_RMRET_BOP` |
+
+And the exec loop's last arm hands **any BOP no arm matched** to `dos_int21()`
+(`main.c` ~26932). INT 21h's own stub is `C4 C4 20`, so that fall-through was never
+required — it just answers for everything. `BOP 0x54 / sub 0x01` arrives with
+`AX=0x0002`, is read as INT 21h `AH=00`, and terminates the guest, which we then
+report as a **clean exit, code 0**. A guard that returns success is a lie the whole
+stack repeats — this is that, one level down.
+
+Confirmed end-to-end by a diagnostic on the fall-through itself:
+
+```
+STAGE2: BOP FALL-THROUGH -> INT21: bop=0x54 next=0x01 at 0x00009342:0x000003ce ax=0x00000002
+```
+
+⚠ **Behaviour is deliberately unchanged.** Gating the fall-through on `0x20` is
+probably right, but the arms above it are long and some may fall through on purpose.
+The diagnostic enumerates what actually reaches it across the guest battery first.
+
+### What this retires
+
+- ⛔ *"COMMAND.COM exits at the same point whatever we service"* — true, and it was
+  never about what we serviced. `AH=53h`, `AX=122Eh`, the INT-site patcher: all three
+  were investigated as causes of an event that is not a DOS call. (`122Eh` is still a
+  real gap that is now closed; `53h` returning CF=1 is still worth fixing.)
+- ⛔ The byte dump at `VTIB_CS:EIP` on the terminate path. It was reading the address
+  the *handler* held. Replaced with `dos_int21_callsite()`, which dumps around the
+  guest's pushed return address — and prints `from=<PM: no pushed frame>` rather than
+  inventing one in protected mode.
+- ★ **An address a handler happens to be holding is not evidence about who called it.**
+  Three sessions of readings came off that mistake, and the fix was one 32-bit load
+  from a frame the surrounding code already depended on.
+
+### Next
+
+1. Enumerate BOP fall-throughs across the guest battery, then gate it.
+2. Find out what NTVDM's `BOP 0x54` sub-functions *are* — **measured, not remembered**.
+   The 15 sub-function bytes and their call sites are in the image; stock ntvdm on the
+   same box is the oracle.
+3. Only then: the DOS 5.0 auto-report, the no-guest default, PIF.
+
+---
+
 ## It is not "we need a shell" — it loads and runs today
 
 `C:\WINDOWS\SYSTEM32\COMMAND.COM` (50,620 bytes) **loads and runs** under NTVDMEX

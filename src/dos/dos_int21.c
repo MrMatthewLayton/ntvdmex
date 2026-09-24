@@ -329,6 +329,33 @@ void dos_int21_set_version(dos_machine_t *m, uint8_t major, uint8_t minor)
     m->ver_major = major; m->ver_minor = minor;
 }
 
+/* ── THE CALL SITE, AND THE CODE AROUND IT. ──────────────────────────────────────
+     Used on the terminate paths, where "an address says WHERE a guest gave up, never
+     WHY" -- the standing SILENT VDM DEATH -> GET THE BYTES rule -- and the bytes only
+     answer that if they are the GUEST's, at the address the guest actually called
+     from. `seg:off` here is the pushed return address, so the `CD 21` that got us
+     here begins two bytes earlier; that is the site, and the branch that chose it is
+     upstream of it.
+   ⚠ 24 bytes before the site and 8 after. Disassemble with `ndisasm -b 16 -o <addr>`.
+   ⚠ Clamped at the segment base: a low return offset must not read below zero. */
+static char *dos_int21_callsite(char *tp, int ok, DWORD seg, DWORD off)
+{
+    DWORD base, site, lo, n, i;
+    const volatile BYTE *q;
+    if (!ok) return zput(tp, " from=<PM: no pushed frame>");
+    tp = zput(tp, " from=0x"); tp = zhex(tp, seg);
+    tp = zput(tp, ":0x");      tp = zhex(tp, off);
+    site = (off >= 2) ? off - 2 : 0;            /* the CD 21 itself */
+    tp = zput(tp, " site=0x");  tp = zhex(tp, site);
+    base = (seg & 0xFFFF) << 4;
+    lo   = (site >= 24) ? site - 24 : 0;
+    q    = (const volatile BYTE *)(ULONG_PTR)(base + lo);
+    n    = (site - lo) + 10;
+    tp = zput(tp, " bytes@0x"); tp = zhex(tp, lo); tp = zput(tp, "=");
+    for (i = 0; i < n && i < 48; ++i) { tp = zhexb(tp, q[i]); tp = zput(tp, " "); }
+    return tp;
+}
+
 int dos_int21(dos_machine_t *m)
 {
     volatile BYTE *tib = m->tib;
@@ -336,6 +363,8 @@ int dos_int21(dos_machine_t *m)
     volatile WORD *pfl;
     DWORD ah;
     int cont = 1;
+    DWORD cl_seg = 0, cl_off = 0;               /* the guest's own call site -- below */
+    int   cl_ok  = 0;
 
     #define R_AX VDM_REG(tib, VTIB_EAX)
     #define R_BX VDM_REG(tib, VTIB_EBX)
@@ -387,6 +416,28 @@ int dos_int21(dos_machine_t *m)
                             + (((VDM_REG(tib, VTIB_ESP) & 0xFFFF) + 4) & 0xFFFF));
     ah = (R_AX >> 8) & 0xFF;
 
+    /* ── ★★ WHO CALLED, OFF THE GUEST STACK. ───────────────────────────────────
+         VTIB_CS:EIP is where the HANDLER is, not where the guest is. Last session
+         read a terminate site out of it, found `C4 C4 54` there, and built two
+         readings on top of a byte dump of the wrong address -- both since
+         retracted. A real-mode INT pushes IP, CS, FLAGS, so the true call site is
+         at SS:SP: offset first, then segment. The same three words are already
+         trusted four lines up, where CF is returned via SS:SP+4 -- so this reads
+         the frame the code is ALREADY relying on, and costs one 32-bit load.
+         The technique is not new here either; the XMS entry logger's note says
+         "LOG WHO CALLED, NOT JUST WHAT THEY ASKED".
+       ⚠ REAL MODE ONLY. In PM the dispatcher advances EIP past the BOP -- there is
+         no pushed frame, and SS is a selector, so SS<<4 is not the stack at all
+         (the same trap the pfl note above exists to warn about). */
+    if (!g_dos_int21_pm) {
+        DWORD sb = (VDM_REG(tib, VTIB_SS) & 0xFFFF) << 4;
+        DWORD sp = VDM_REG(tib, VTIB_ESP) & 0xFFFF;
+        const volatile BYTE *fr = (const volatile BYTE *)(ULONG_PTR)(sb + sp);
+        cl_off = (DWORD)fr[0] | ((DWORD)fr[1] << 8);
+        cl_seg = (DWORD)fr[2] | ((DWORD)fr[3] << 8);
+        cl_ok  = 1;
+    }
+
     /* ── EVERY CALL, WHEN ASKED. ────────────────────────────────────────────────
          Most handlers here trace only what they think is interesting, which is fine
          until the question is "what does the guest do BETWEEN two calls we can see".
@@ -405,13 +456,20 @@ int dos_int21(dos_machine_t *m)
         tp = zhexb(tp, (unsigned)(R_BX & 0xFF));
         tp = zput(tp, " dx="); tp = zhexb(tp, (unsigned)((R_DX >> 8) & 0xFF));
         tp = zhexb(tp, (unsigned)(R_DX & 0xFF));
+        /* The call site, so a trace of 31 calls says WHERE the guest is, not only
+           what it wanted. Two calls from the same offset are a loop; a run of
+           rising offsets is start-up walking forward. */
+        if (cl_ok) { tp = zput(tp, " @"); tp = zhex(tp, cl_seg);
+                     tp = zput(tp, ":"); tp = zhex(tp, cl_off); }
         tp = zput(tp, "\r\n");
     }
 
     if (ah == 0x4C) {                           /* terminate */
         m->exit_code = (int)(R_AX & 0xFF);      /* DOS errorlevel */
         tp = zput(tp, "  ==> DOS terminate (AH=4Ch), exit code AL=0x");
-        tp = zhex(tp, R_AX & 0xFF); tp = zput(tp, "\r\n");
+        tp = zhex(tp, R_AX & 0xFF);
+        tp = dos_int21_callsite(tp, cl_ok, cl_seg, cl_off);
+        tp = zput(tp, "\r\n");
         cont = 0;
     } else if (ah == 0x00) {                    /* terminate (CP/M style, = INT 20h) */
         /* Skyroads exits through this one, so "unhandled" was both wrong and misleading:
@@ -432,24 +490,14 @@ int dos_int21(dos_machine_t *m)
           tp = zhex(tp, s8); tp = zput(tp, ":0x"); tp = zhex(tp, o8);
           tp = zput(tp, " ivt1C=0x"); tp = zhex(tp, sc);
           tp = zput(tp, ":0x"); tp = zhex(tp, oc); }
-        /* ── AND THE BYTES THAT LED HERE. ────────────────────────────────────
-             "SILENT VDM DEATH -> GET THE BYTES" is a standing rule in this
-             project and the call site alone does not obey it: an address says
-             WHERE a guest gave up, never WHY. XP's COMMAND.COM terminates from
-             the same offset (0x03ce in its relocated transient segment) whether
-             or not INT 2Fh AX=122Eh is answered, so the branch that chose this
-             path is the question, and it is in the preceding instructions.
-           ⚠ 32 bytes BEFORE and 8 after, because the decision is upstream of the
-             exit, not at it. Disassemble with `ndisasm -b 16`.
-           ⚠ Clamped at the segment base so a low CS cannot make us read below
-             zero, and only on the terminate path, so it costs nothing per run. */
-        { DWORD cs0 = (VDM_REG(tib, VTIB_CS) & 0xFFFF) << 4;
-          DWORD ip0 = VDM_REG(tib, VTIB_EIP) & 0xFFFF;
-          DWORD lo  = (ip0 >= 32) ? ip0 - 32 : 0;
-          const volatile BYTE *q = (const volatile BYTE *)(ULONG_PTR)(cs0 + lo);
-          unsigned n = (unsigned)(ip0 - lo) + 8, i;
-          tp = zput(tp, " bytes@0x"); tp = zhex(tp, lo); tp = zput(tp, "=");
-          for (i = 0; i < n && i < 48; ++i) { tp = zhexb(tp, q[i]); tp = zput(tp, " "); } }
+        /* ── AND THE BYTES THAT LED HERE -- AT THE GUEST'S ADDRESS, NOT OURS.
+             "SILENT VDM DEATH -> GET THE BYTES" is a standing rule here, and the
+             first cut of this obeyed the letter of it while dumping from
+             VTIB_CS:EIP -- the HANDLER's address. That produced `C4 C4 54`, read
+             as a BOP marker, and two conclusions that were both retracted a
+             session later. The guest's own call site is the pushed return address
+             on its stack; dos_int21_callsite() dumps around that. */
+        tp = dos_int21_callsite(tp, cl_ok, cl_seg, cl_off);
         tp = zput(tp, "\r\n");
         cont = 0;
     } else if (ah == 0x02) {                    /* print char DL */
