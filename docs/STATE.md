@@ -6,7 +6,7 @@
 > session. When this file starts growing session blocks again, split them out; it has
 > happened twice now (`return-ntvdm.md` in August, this file in September).
 
-- **Updated:** 2026-09-23 (session 77)
+- **Updated:** 2026-09-24 (session 78)
 - **Branch:** `m9/completeness`
 - **Checkpoint commit:** **`ff0d956`** — the rollback point, and the first one moved since
   `59fac7d`. It built **`71ef4737`**, which the user confirmed by hand on 2026-09-23:
@@ -22,8 +22,10 @@
   |---|---|
   | `8858c52` | RTC **alarm + update-ended** interrupts — landed *after* this checkpoint |
   | `ea485e7` | the **82077AA floppy controller** |
-  Both are dormant unless a guest asks, so the by-hand pass is mostly *"did anything
-  break"* rather than *"does the new thing work"*. If either is suspected, roll back to
+  | `d21cc7e5` | INT 2Fh `AX=122Eh` message tables |
+  | `92e2136` | INT 21h caller-from-stack + the BOP fall-through diagnostic |
+  All are dormant unless a guest asks (the last two are log-only), so the by-hand pass is
+  mostly *"did anything break"* rather than *"does the new thing work"*. If either is suspected, roll back to
   `debug\prev\ntvdmhost_prev.exe` (**`71ef4737`**) FIRST and re-test, then bisect.
 - **Stable package:** `dist\ntvdmex-20260917-4847355.zip`, host `9448cf27`
   (tag `release-20260917b`). **Immutable until a new build is confirmed across the whole
@@ -131,6 +133,21 @@ The full surface list, with the primary source named for each, is in
 ---
 
 ## Next actions, in order
+
+▶ **★ THE DOS PROMPT IS NOT A DOS PROBLEM (2026-09-24).** XP's `COMMAND.COM` does not
+fail a DOS call and give up — **it never reaches one.** It is NTVDM-*aware*: its image
+issues `C4 C4 54` fifteen times (plus one `C4 C4 50`), and the exec loop's last arm
+hands **any BOP no arm matched** to `dos_int21()`, where the guest's `AH` picks a DOS
+function. `BOP 0x54 / sub 01` arrives with `AX=0x0002`, reads as `AH=00` = *terminate*,
+and we report a **clean exit, code 0**. Our `0x50` and `0x54` are DPMI's; the number
+space is NTVDM's. Full surface: **[`inventory/bop.md`](inventory/bop.md)**; the
+investigation, including three readings it retires: [`research/xp-command-com.md`](research/xp-command-com.md).
+The instrument that settled it was one 32-bit load — **the caller is on the guest stack
+at `SS:SP`, not in `VTIB_CS:EIP`, which is where the handler is**. Order of work:
+(1) gate the fall-through once the battery says what reaches it, (2) un-double-book
+`0x57`, (3) measure what `BOP 0x54`'s sub-functions mean against stock ntvdm,
+(4) auto-report DOS **5.00** for `command.com` — the guest does `cmp ax,5` on the whole
+word, so 5.00 exactly — then the no-guest default, then PIF.
 
 ▶ **Rig status:** the watcher is live and everything below has been run through it.
 `p_vgaext` came back `1010`, byte for byte with PCem. VGA register parity is **99.9%**
