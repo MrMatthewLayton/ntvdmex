@@ -146,16 +146,16 @@ DOS; it is about scaffolding. Output now goes through `INT 21h`.
 | | |
 |---|---|
 | **A relative path does not land in the launch directory** | The probe's `INT 21h AH=3Ch` on `W16OUT.TXT` **succeeds** (`-> AX=5 CF=0`) but the file is not in the folder the app was launched from. The WOW command fetch reports `cur=[…\demo\win16\w16kern]`, while the DOS kernel resolves the relative name against its **own** current directory. ⚠ Unresolved: should the DOS CDS follow the `cur=` the WOW fetch hands us? The probe names its file absolutely rather than depend on the answer |
-| `kernel.getversion` = `5F03`, `kernel.getwinflags` = `4C25` | **Unverified.** Needs the stock-ntvdm comparison |
+| `kernel.getwinflags` `4C25` vs stock `4C29` | ⛔ **A real defect**, reproduced twice. Bits `0x04` vs `0x08`. Cause unknown — see the note above on why the `WF_CPU386`/`WF_CPU486` reading is not yet a finding |
 | `WowFailedExec` is **not** a failure signal | It appears once in a **successful** Notepad run too. I briefly took it as proof the module had been rejected. It is not |
 
 ## Next
 
-1. ★★★ **Run the same `.EXE` under stock `ntvdm`** and diff. That turns every value here
-   from a measurement into a verdict, and it is the whole point of having a deterministic
-   test.
-2. **Widen the cases** — KERNEL's memory API (GlobalAlloc/Size/Free round-trips),
+1. ✅ ~~**Run the same `.EXE` under stock `ntvdm`**~~ — done, `tools/wintest/stock.sh`.
+2. ★★★ **Find out where `GetWinFlags`'s value comes from**, by reading KERNEL.132 out of
+   `krnl386.exe` rather than theorising about it.
+3. **Widen the cases** — KERNEL's memory API (GlobalAlloc/Size/Free round-trips),
    `lstrlen`/`lstrcmp`, the file API, then USER and GDI. The harness makes each of these
    a handful of lines.
-3. **Fold the output into `dosdiff.py`'s parser**, which already understands
+5. **Fold the output into `dosdiff.py`'s parser**, which already understands
    `#PROBE`/`CASE=`/`#END`, so Win16 rows join the same diff table as everything else.
