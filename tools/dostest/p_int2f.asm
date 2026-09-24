@@ -44,6 +44,11 @@ seg0    dw      0
 off0    dw      0
 tbl     times 32 db 0
 seen    dw      0
+p0      dd      0
+p2      dd      0
+p4      dd      0
+p6      dd      0
+p8      dd      0
 
 ; Ask AX=122Eh for the table selected by DL (in AL on entry here).
 ; Returns ES:DI exactly as the service left it.
@@ -70,26 +75,67 @@ start:
 ;    ⇒ 0000:0000 from every one of them is our current answer, and is what kills
 ;      COMMAND.COM.
 ; ════════════════════════════════════════════════════════════════════════════
-%macro TABLE_CASE 3
+; ⛔⛔ THE RAW POINTERS ARE NOT EMITTED, AND THAT IS THE WHOLE POINT OF THIS
+;   SECTION. They are ADDRESSES: there is no reason ours should equal another
+;   machine's, and the two oracles do not agree with each other either (DL=8 is
+;   03E7 on 6.22 and 03EA on PCem -- same offset, different segment, because the
+;   tables sit wherever that build put them). Emitting them produced SEVEN rows
+;   that read MISMATCH for ever and could never be anything else -- which is
+;   precisely the "score excludes what stopped asking" damage in reverse: seven
+;   permanent false failures parked in the parity number.
+;   ⇒ What IS machine-independent is the RELATIONSHIPS, so those are the cases:
+;       * which selectors answer with a NON-NULL pointer (a bitmask)
+;       * whether DL=0 and DL=4 hand back the SAME pointer
+;     Both are facts about the service. Neither depends on where DOS was loaded.
+;   The addresses are still visible when they are wanted -- the host logs them
+;   (STAGE2: 2F/122E) and `seen` below proves each one dereferenced.
+
+%macro ASK_PTR 2
         mov     al, %1
         call    ask
-        mov     [seg0], es
-        mov     [off0], di
-        mov     ax, [seg0]
-        POISON
-        call    probe_capture
-        EMIT    %2, "AX"
-        mov     ax, [off0]
-        POISON
-        call    probe_capture
-        EMIT    %3, "AX"
+        mov     [%2], es
+        mov     [%2+2], di
 %endmacro
 
-        TABLE_CASE 0, "int2f.122e.dl0.seg", "int2f.122e.dl0.off"
-        TABLE_CASE 2, "int2f.122e.dl2.seg", "int2f.122e.dl2.off"
-        TABLE_CASE 4, "int2f.122e.dl4.seg", "int2f.122e.dl4.off"
-        TABLE_CASE 6, "int2f.122e.dl6.seg", "int2f.122e.dl6.off"
-        TABLE_CASE 8, "int2f.122e.dl8.seg", "int2f.122e.dl8.off"
+        ASK_PTR 0, p0
+        ASK_PTR 2, p2
+        ASK_PTR 4, p4
+        ASK_PTR 6, p6
+        ASK_PTR 8, p8
+
+; ── bitmask of "answered with a non-null pointer": bit0=DL0 .. bit4=DL8.
+;    Real DOS: 0x17 (DL0, DL2, DL4, DL8 set; DL6 clear).
+        xor     bx, bx
+%macro NONNULL_BIT 2
+        mov     ax, [%1]
+        or      ax, [%1+2]
+        jz      %%skip
+        or      bx, %2
+%%skip:
+%endmacro
+        NONNULL_BIT p0, 1
+        NONNULL_BIT p2, 2
+        NONNULL_BIT p4, 4
+        NONNULL_BIT p6, 8
+        NONNULL_BIT p8, 16
+        mov     ax, bx
+        POISON
+        call    probe_capture
+        EMIT    "int2f.122e.nonnull", "AX"
+
+; ── DL=0 and DL=4 return the SAME pointer on both real kernels. 1 = same.
+        mov     ax, 0
+        mov     bx, [p0]
+        cmp     bx, [p4]
+        jne     .ne04
+        mov     bx, [p0+2]
+        cmp     bx, [p4+2]
+        jne     .ne04
+        mov     ax, 1
+.ne04:
+        POISON
+        call    probe_capture
+        EMIT    "int2f.122e.dl0eq4", "AX"
 
 ; ════════════════════════════════════════════════════════════════════════════
 ; F. ★★ WHAT IS ACTUALLY IN THE TABLES.

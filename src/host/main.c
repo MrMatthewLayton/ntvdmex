@@ -23230,7 +23230,14 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
       for (k = 0; k < sizeof(dos_tab_fnupper); ++k) ct[DOS_CTAB_FNUPPER + k] = dos_tab_fnupper[k];
       for (k = 0; k < sizeof(dos_tab_fnterm);  ++k) ct[DOS_CTAB_FNTERM  + k] = dos_tab_fnterm[k];
       for (k = 0; k < sizeof(dos_tab_collate); ++k) ct[DOS_CTAB_COLLATE + k] = dos_tab_collate[k];
-      for (k = 0; k < sizeof(dos_tab_dbcs);    ++k) ct[DOS_CTAB_DBCS    + k] = dos_tab_dbcs[k]; }
+      for (k = 0; k < sizeof(dos_tab_dbcs);    ++k) ct[DOS_CTAB_DBCS    + k] = dos_tab_dbcs[k];
+      /* ── THE INT 2Fh AX=122Eh TABLES, ZEROED EXPLICITLY. ──────────────────
+           The block is MCB-reserved and in practice arrives zeroed, but a guest
+           that reads a table we never wrote is reading whatever the last run
+           left there -- and this is exactly the region where a stale pointer had
+           krnl386 writing into our own handler code. Cheap to be certain.
+         ⚠ 192 bytes covers all three tables (A, B, C at 0x4E0/0x520/0x560). */
+      for (k = 0; k < 192; ++k) ct[DOS_INT2F_TBL_A + k] = 0; }
     /* GH #35: plant SysVars for INT 21h AH=52h. Most fields are deliberately
        left zero -- see the handler for why a null stub beats a plausible-looking
        one. Only fields with a caller that demonstrably reads them are filled:
@@ -24905,6 +24912,45 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                 VDM_SET16(tib, VTIB_EDI, DPMI_ENTRY_OFF);
                 p = zput(p, "STAGE2: DPMI 1687 -> AX=0 ES:DI=0x"); p = zhex(p, DOS_HDLR_SEG);
                 p = zput(p, ":0x"); p = zhex(p, DPMI_ENTRY_OFF); p = zput(p, " (guest must far-call this)\r\n");
+                log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+            } else if (ax == 0x122E) {
+                /* ── THE TABLES XP's COMMAND.COM ASKS FOR BEFORE IT PRINTS. ────
+                     DL selects; ES:DI comes back as a far pointer. It zeroes
+                     ES:DI, calls five times (DL = 0,2,4,6,8) and STORES each
+                     answer -- so passing the call through, which is what we did,
+                     handed it back the 0000:0000 it supplied and left it holding
+                     five null pointers.
+                   ★ MEASURED against two real Microsoft kernels before a line of
+                     this was written (tools/dostest/p_int2f.asm):
+                         DL=0 0001:0D8F   DL=2 0001:0B3B   DL=4 0001:0D8F
+                         DL=6 0000:0000   DL=8 03E7:0188
+                     DL=0 and DL=4 return the SAME pointer on both, so they share
+                     one table here. DL=6 is legitimately NULL on both, so null
+                     is the right answer and not a gap.
+                   ⚠ THE CONTENTS ARE BUILD-SPECIFIC (6.22 and PCem disagree on
+                     DL=0/2/4), so there is nothing canonical to copy and these
+                     are zero-filled -- grounded in PCem, where COMMAND.COM runs
+                     perfectly, returning a DL=0 table whose first 32 bytes are
+                     all zero. Thirty-two bytes is all that was measured.
+                   ⚠ AX IS LEFT ALONE. Real DOS does not report anything in it
+                     here, and inventing a success code would be a claim we have
+                     not measured. */
+                DWORD dl2e = VDM_REG(tib, VTIB_EDX) & 0xFF;
+                WORD  toff = 0;
+                if (dl2e == 0x00 || dl2e == 0x04) toff = DOS_INT2F_TBL_A;
+                else if (dl2e == 0x02)            toff = DOS_INT2F_TBL_B;
+                else if (dl2e == 0x08)            toff = DOS_INT2F_TBL_C;
+                if (toff) {
+                    VDM_SET16(tib, VTIB_ES,  DOS_CTAB_SEG);
+                    VDM_SET16(tib, VTIB_EDI, toff);
+                } else {
+                    VDM_SET16(tib, VTIB_ES,  0);      /* DL=6, and anything else */
+                    VDM_SET16(tib, VTIB_EDI, 0);
+                }
+                p = zput(p, "STAGE2: 2F/122E dl="); p = zhexb(p, (unsigned)dl2e);
+                p = zput(p, " -> ES:DI=0x"); p = zhex(p, VDM_REG(tib, VTIB_ES) & 0xFFFF);
+                p = zput(p, ":0x"); p = zhex(p, VDM_REG(tib, VTIB_EDI) & 0xFFFF);
+                p = zput(p, "\r\n");
                 log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
             } else if (ax == 0x1684) {                          /* get device API entry point */
                 /* ES:DI = 0:0 means "no API for that device ID", and we have none.

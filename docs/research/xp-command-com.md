@@ -127,7 +127,57 @@ came back **AGREE**. Fixed with a `seen` flag per table, so "did not look" and "
 and it was zeros" are different values. **Same shape as the floppy `DOR` mask, twice in
 one day.**
 
-## ⏸ NOT IMPLEMENTED — the placement needs care this session could not give it
+## ✅ IMPLEMENTED — and it was NOT the blocker
+
+`INT 2Fh AX=122Eh` is served (`main.c`, the BOP2F arm). The tables live at
+`DOS_INT2F_TBL_A/B/C` in `DOS_CTAB_SEG`, in space reclaimed from **`DOS_CDS_OFF`, a dead
+reservation**: its comment still claimed `0x4E0..0x697` for the CDS array, but s71 moved
+that array into its own block and left the define behind, referenced by nothing. *A stale
+reservation is worse than no reservation — it reads as "occupied" for ever.*
+
+Verified against both real kernels, on the facts that are machine-independent:
+
+| case | 6.22 | PCem | ours |
+|---|---|---|---|
+| `int2f.122e.nonnull` (bitmask) | `0017` | `0017` | **`0017`** ✅ |
+| `int2f.122e.dl0eq4` | `0001` | `0001` | **`0001`** ✅ |
+| `dl0/2/4/8.seen` (dereferenced) | 1 | 1 | **1** ✅ |
+
+⛔⛔ **The probe's first cut compared the POINTERS, and that was seven permanent false
+mismatches.** They are addresses — there is no reason ours should equal another machine's,
+and the two oracles do not agree with each other either (`DL=8` is `03E7` on 6.22 and
+`03EA` on PCem). Left alone they would have parked seven rows that read MISMATCH for ever
+in the parity score this session had just spent the morning making honest. Replaced with
+**relationships**: which selectors answer non-null, and whether `DL=0` and `DL=4` hand back
+the same pointer. Both are facts about the service; neither depends on where DOS loaded.
+
+### ⚠ And COMMAND.COM still exits at exactly the same point
+
+```
+STAGE2: 2F/122E dl=00 -> ES:DI=0x0090:0x04e0
+STAGE2: 2F/122E dl=02 -> ES:DI=0x0090:0x0520
+STAGE2: 2F/122E dl=04 -> ES:DI=0x0090:0x04e0
+STAGE2: 2F/122E dl=06 -> ES:DI=0x0000:0x0000
+STAGE2: 2F/122E dl=08 -> ES:DI=0x0090:0x0560
+STAGE2: task done
+```
+
+All five answered correctly, and it terminates anyway. **This was predicted here before it
+was implemented** — *"the five `122Eh` calls are only the last INT 2Fh calls we LOG, and
+COMMAND.COM has more initialisation after them"* — and it is the useful kind of negative
+result: a real gap is closed and the search has moved on.
+
+Disassembling past the fifth call, the next thing it does is more variable init, another
+getter, and then **`INT 21h AH=63h`** (get DBCS lead-byte table) at `0x7EC4`.
+
+⛔ **The limiting factor is now visibility, not any one missing call.** The host logs
+**zero INT 21h lines for this guest**, so what happens after the tables is invisible.
+Guessing the next blocker from the disassembly alone is exactly the "read the evidence
+backwards" mistake this page already records once.
+
+▶ **Next: an INT 21h trace for DOS guests**, then re-run and read what it actually asks.
+
+## ⏸ The placement, and why it took care
 
 The four tables need a home in low memory. `dos_layout.h`'s own high-water mark is
 `DOS_CDS_OFF` at `0x04E0` in a block ending near `0x06F0`, and that file is a catalogue of

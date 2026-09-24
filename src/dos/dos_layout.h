@@ -236,13 +236,39 @@
    Oracle, MS-DOS 6.22: all three match (SI=1) and INT 24h lives at 03E7:0155,
    inside COMMAND.COM. */
 #define DOS_CRIT_STUBS    0x04D0   /* 3 stubs x 4 bytes: INT 22h, 23h, 24h */
-/* ── GH #48: THE CDS ARRAY, one entry per drive letter DOS admits to. ──────────
-   88 bytes each (measured: 6.22's second entry, "B:\", begins exactly 88 bytes
-   after the first), LASTDRIVE of them, indexed by drive. It has to be the FULL
-   length whatever we populate -- a walker reads LASTDRIVE entries regardless, so
-   a short array is worse than none, which is why this waited for LASTDRIVE to
-   become truthful. 5 x 88 = 440 bytes, ending at 0x697, inside the block. */
-#define DOS_CDS_OFF       0x04E0
+/* ── ⛔ DOS_CDS_OFF IS DEAD, AND THE SPACE IT DESCRIBED IS RECLAIMED BELOW. ────
+   It read: "the CDS array, 88 bytes each, LASTDRIVE of them ... 5 x 88 = 440
+   bytes, ending at 0x697, inside the block."  That stopped being true in s71,
+   when LASTDRIVE went back to 26 and THE CDS ARRAY MOVED INTO ITS OWN RESERVED
+   BLOCK (`g_cds_seg`, main.c: dos_mcb_reserve_top).  The define was left behind
+   and is referenced by nothing -- checked, zero call sites -- while its comment
+   went on claiming 0x4E0..0x697 for a table that is no longer there.
+ ⚠ A STALE RESERVATION IS WORSE THAN NO RESERVATION: it reads as "occupied" to
+   anyone looking for room, so the space stays unusable for ever, and it reads as
+   "this is the CDS" to anyone debugging a pointer into it.  Deleted rather than
+   left as a comment, because a comment is what it already was.
+
+   ── INT 2Fh AX=122Eh: the tables XP's COMMAND.COM asks for at startup. ───────
+   Five selectors (DL = 0,2,4,6,8); it zeroes ES:DI, calls, and stores whatever
+   comes back.  MEASURED on two real Microsoft kernels (tools/dostest/p_int2f.asm,
+   docs/research/xp-command-com.md):
+
+       DL=0  0001:0D8F      DL=2  0001:0B3B      DL=4  0001:0D8F   (== DL=0)
+       DL=6  0000:0000      DL=8  03E7:0188
+
+ ★ DL=0 AND DL=4 RETURN THE SAME POINTER on both machines, so they share a table
+   here rather than getting two that happen to hold the same thing.
+ ★ DL=6 IS LEGITIMATELY NULL on both, so we answer null and claim no space.
+ ⚠ THE CONTENTS ARE BUILD-SPECIFIC -- 6.22 and PCem disagree on DL=0/2/4 -- so
+   there is nothing canonical to copy, and these are zero-filled.  That is not a
+   guess for its own sake: PCem, a machine where COMMAND.COM runs perfectly,
+   returns a DL=0 table whose first 32 bytes are all zero.  ⚠ Thirty-two bytes is
+   all that was measured; it is evidence, not proof. */
+#define DOS_INT2F_TBL_A   0x04E0   /* 64 bytes: DL=0 and DL=4 share this     */
+#define DOS_INT2F_TBL_B   0x0520   /* 64 bytes: DL=2                         */
+#define DOS_INT2F_TBL_C   0x0560   /* 64 bytes: DL=8                         */
+/* ...ending at 0x5A0, well inside the block, which runs to 0x6F0 (linear 0xFF0,
+   the next MCB header). */
 /* Which entries of the table krnl386 actually reads, and what each becomes.
    Only these six are consulted; the rest are present so the table has stock's
    shape rather than a shorter one that happens to be enough today. */
