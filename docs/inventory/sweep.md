@@ -39,13 +39,22 @@ Before this session **8 of 36** probes had ever been diffed. All 36 have now bee
 run. This table is the map; it is not a claim that a clean probe means a verified
 surface (see the warning under the cluster above).
 
-| clean | `p_file` `p_alloc` `p_exec` `p_ovl` `p_ctab` `p_ctry` `p_defs` `p_misc` `p_redir` `p_umb` `p_unimp` ~~`p_ver`~~ `p_dir`* `p_rest`* |
+| clean | `p_file` `p_alloc` `p_exec` `p_ovl` `p_ctab` `p_ctry` `p_defs` `p_misc` `p_redir` `p_umb` `p_unimp` `p_ver`† `p_dir`* `p_rest`* |
 |---|---|
 | **abstained (environment)** | `p_curdir` `p_psp` `p_mcb` — 12 rows, rationales recorded |
 | **fixed this session** | `p_err` (AH=3Dh error mapping, `b580c4d`) |
-| **still disagreeing** | `p_disk` 13 · `p_xms` 7 · `p_sysvar` 6 · `p_lpt` 5 · `p_ioctl` 3 · `p_tsr` 3 · `p_plan12` 1 · **`p_ver` 2 (see below)** |
+| **still disagreeing** | `p_disk` 13 · `p_xms` 7 · `p_sysvar` 6 · `p_lpt` 5 · `p_ioctl` 3 · `p_tsr` 3 · `p_plan12` 1 |
 
-## ⛔ `p_ver` is no longer clean, and no code changed (2026-09-24)
+† `p_ver` is clean **only while the rig's persisted DOS version is 6.22** — it went dirty for an unknown period with no code change. See the section below; read the run's own `DOS version reported =` line before trusting this row.
+
+## ⛔ `p_ver` went dirty with no code change, and is clean again (2026-09-24)
+
+**Resolved the same day:** the rig's persisted version is back to **6.22**
+(`DosVersionMajor=6`, `DosVersionMinor=22`), `p_ver` is AGREE on all six fields, and
+every run now prints `STAGE2: DOS version reported = 6.22 (source: …)`. The account
+below is kept because the *mechanism* is the lesson, not the value.
+
+### What happened
 
 Re-run today, `./scripts/dosdiff.py build/probes/P_VER.COM --host msdos622 --host ntvdmex`:
 
