@@ -449,6 +449,17 @@ static void dsprobe_load(void)
    past the mode-switch entry (0x50..0x53). */
 #define DPMI_RMRET_OFF 0x0054
 #define DPMI_RMRET_BOP 0x54
+/* Set per BOP in the exec loop: did this `C4 C4 nn` execute in GUEST code rather than at
+   one of the addresses we plant ours at? See the note where it is assigned. */
+static int g_bop_from_guest = 0;
+static DWORD g_ntvdm_bop_n = 0;   /* how many guest-issued NTVDM BOPs this run serviced */
+/* NTVDM's own BOPs, as issued by Microsoft's 16-bit components. These are the GUEST's
+   numbers -- ours above happen to overlap and are told apart by origin, not by value. */
+#define NTVDM_BOP_CMD  0x54   /* XP's COMMAND.COM: 15 sites, each + a sub-function byte */
+#define NTVDM_BOP_DOS  0x50   /* XP's COMMAND.COM: 1 site, in its version-refusal path  */
+/* How to answer an NTVDM BOP we have not implemented yet: contents of cfg\bop54.txt.
+   A knob because the right answer is UNKNOWN and is being measured -- see the handler. */
+#define BOP54_PATH     CFG_("bop54.txt")
 /* DPMI 0303 (allocate real-mode callback): planted real-mode BOP entries (one per
    callback slot) that a client's real-mode code far-calls; the host switches V86->PM
    and runs the client's PM handler. DPMI_PMRET is the PM-side return catcher the
@@ -24580,6 +24591,23 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             break;
         }
         { static int s_bud_bop = 6; vdmstate_sample("bop", tib, &s_bud_bop); }
+        /* ── ★★★ WHOSE BOP IS THIS? THE NUMBER DOES NOT SAY. (s78) ──────────────────
+             `C4 C4 nn` is NTVDM's call-out instruction and the number space is NTVDM's,
+             not ours. Ours were assigned freely and two of them are already taken by a
+             guest that ships with the OS: XP's COMMAND.COM issues `BOP 0x54` fifteen
+             times and `BOP 0x50` once, while ours are DPMI_RMRET and the DPMI entry.
+           ★ THE DISCRIMINATOR IS THE ADDRESS, NOT THE NUMBER. Every BOP we plant, we
+             plant at an address we own -- DOS_HDLR_SEG for the INT stubs, the DPMI
+             entry/return catchers and the callback slots, DOS_CTAB_SEG for the BIOS
+             stubs. A BOP executing anywhere else is the GUEST's own code calling
+             NTVDM, and must not be answered as if it were one of ours.
+           ⚠ This is cheaper AND safer than renumbering ours out of the way: the numbers
+             we would move to are equally NTVDM's, so renumbering only relocates the
+             collision, while the origin check is exact. See docs/inventory/bop.md. */
+        {
+            DWORD bcs = VDM_REG(tib, VTIB_CS) & 0xFFFF;
+            g_bop_from_guest = (bcs != DOS_HDLR_SEG && bcs != DOS_CTAB_SEG);
+        }
         /* Route the BOP by its number: 0x10 -> INT 10h, 0x16 -> INT 16h (both via
            the bus), else INT 21h. */
         if ((VDM_REG(tib, VTIB_EVENT_INFO) & 0xFF) == 0x10) {
@@ -25111,7 +25139,11 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             VDM_REG(tib, VTIB_EIP) += 3;                        /* -> the IRET      */
             continue;
         }
-        if ((VDM_REG(tib, VTIB_EVENT_INFO) & 0xFF) == DPMI_BOP) {  /* DPMI real->PM switch */
+        /* ⚠ `!g_bop_from_guest`: XP's COMMAND.COM issues a `BOP 0x50` of its own (one
+             site, in its "Incorrect DOS version" path). Without the origin test that
+             would be serviced as a DPMI real-to-protected mode switch. */
+        if (!g_bop_from_guest
+            && (VDM_REG(tib, VTIB_EVENT_INFO) & 0xFF) == DPMI_BOP) {  /* DPMI real->PM switch */
             DWORD csv = VDM_REG(tib, VTIB_CS) & 0xFFFF, ipv = VDM_REG(tib, VTIB_EIP) & 0xFFFF;
             LONG reg_st = 0, set_st = 0; int sw;
             /* AX bit0 = the client's declared width (0=16-bit, 1=32-bit e.g. DOS/4GW).
@@ -27043,6 +27075,94 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
              that byte to execute as an instruction. A refusal we cannot encode is
              better reported than faked -- see the standing note that an unimplemented
              call which still ANSWERS is worse than one that does not. */
+        /* ── ★★★ AN NTVDM BOP FROM THE GUEST'S OWN CODE. (s78) ──────────────────────
+             XP's COMMAND.COM is NTVDM-aware and this is how it talks to the 32-bit side.
+             Both of its numbers carry a SUB-FUNCTION BYTE after the BOP, so the
+             instruction is FOUR bytes, not three -- read off the guest, not assumed:
+               0x283E  C4 C4 54 01 / 73 62        `jnc` decodes at +4; at +3 it is junk
+               0x1583  C4 C4 50 3D / CD 20        `int 20h` decodes at +4; at +3 it is not
+             ⚠ That is a claim about THESE TWO numbers, from sixteen sites in one binary.
+               It is not a general rule about BOP encoding, and must be re-derived for
+               any other number that turns up here.
+           ▶ WHAT TO ANSWER IS NOT KNOWN YET, so it is a knob rather than a guess:
+             cfg\bop54.txt = "cf1" (default) or "cf0". The sub-01 site branches on carry
+             (`jnc` straight after), so the two settings take COMMAND.COM down different
+             paths and the difference is the measurement. Every call is logged with full
+             registers so the two runs can be diffed.
+           ⛔ A BOP IS NOT AN INT: nothing was pushed, so CF goes in the live EFLAGS. */
+        if (g_bop_from_guest
+            && ((VDM_REG(tib, VTIB_EVENT_INFO) & 0xFF) == NTVDM_BOP_CMD
+                || (VDM_REG(tib, VTIB_EVENT_INFO) & 0xFF) == NTVDM_BOP_DOS)) {
+            DWORD bn  = VDM_REG(tib, VTIB_EVENT_INFO) & 0xFF;
+            DWORD cs_ = VDM_REG(tib, VTIB_CS) & 0xFFFF, ip_ = VDM_REG(tib, VTIB_EIP) & 0xFFFF;
+            const volatile BYTE *bq = (const volatile BYTE *)(ULONG_PTR)((cs_ << 4) + ip_);
+            DWORD sub = bq[3];
+            static int  cf_pol = -1;                 /* -1 = not yet read */
+            if (cf_pol < 0) {
+                char c[16]; DWORD rd = 0;
+                HANDLE h = CreateFileA(BOP54_PATH, GENERIC_READ, FILE_SHARE_READ,
+                                       NULL, OPEN_EXISTING, 0, NULL);
+                /* DEFAULT CF=0, and that is measured rather than chosen: with CF=1 the
+                   sub-01 site's `jnc` falls into a retry and COMMAND.COM POLLS the call
+                   forever (first run: 268,435,180 bytes of log, one line per spin). With
+                   CF=0 it proceeds to a second, different call -- sub 0x0E at 0x5E6.
+                   Neither is known to be RIGHT; one is known to be a dead end. */
+                cf_pol = 0;
+                if (h != INVALID_HANDLE_VALUE) {
+                    ReadFile(h, c, sizeof c - 1, &rd, NULL); CloseHandle(h);
+                    if (rd >= 3 && c[0] == 'c' && c[1] == 'f' && c[2] == '1') cf_pol = 1;
+                }
+            }
+            /* ── ⛔ RATE-LIMITED, AND IT COST 256 MB TO LEARN. ───────────────────────
+                 The first run of this instrument answered CF=1, COMMAND.COM POLLED the
+                 call, and the unlimited log reached 268,435,180 bytes -- one line per
+                 iteration of a loop that never ended. An instrument that scales with a
+                 guest's spin rate is a denial-of-service on the thing you are trying to
+                 read. 16 in full, then count only; the total goes in the summary.
+               ⚠ The 17th call is not less interesting than the 16th -- if the values
+                 ever CHANGE after the cap this will not show it. It logs a resumed line
+                 when the register signature differs from the last one printed, so a
+                 state change still surfaces while a spin does not. */
+            {   DWORD sig = (VDM_REG(tib, VTIB_EAX) & 0xFFFF)
+                          ^ ((VDM_REG(tib, VTIB_EBX) & 0xFFFF) << 4)
+                          ^ ((VDM_REG(tib, VTIB_ECX) & 0xFFFF) << 8)
+                          ^ ((VDM_REG(tib, VTIB_EDX) & 0xFFFF) << 12) ^ (sub << 20);
+                static DWORD last_sig = 0xFFFFFFFFu;
+                int novel = (sig != last_sig);
+                last_sig = sig;
+                ++g_ntvdm_bop_n;
+                if (g_ntvdm_bop_n > 16 && !novel) {
+                    if (cf_pol) VDM_REG(tib, VTIB_EFLAGS) |=  1u;
+                    else        VDM_REG(tib, VTIB_EFLAGS) &= ~1u;
+                    VDM_REG(tib, VTIB_EIP) += 4;
+                    continue;
+                }
+            }
+            p = zput(p, "STAGE2: NTVDM BOP from guest: bop=0x"); p = zhexb(p, bn);
+            p = zput(p, " sub=0x"); p = zhexb(p, sub);
+            p = zput(p, " at 0x"); p = zhex(p, cs_); p = zput(p, ":0x"); p = zhex(p, ip_);
+            p = zput(p, " ax=0x"); p = zhex(p, VDM_REG(tib, VTIB_EAX) & 0xFFFF);
+            p = zput(p, " bx=0x"); p = zhex(p, VDM_REG(tib, VTIB_EBX) & 0xFFFF);
+            p = zput(p, " cx=0x"); p = zhex(p, VDM_REG(tib, VTIB_ECX) & 0xFFFF);
+            p = zput(p, " dx=0x"); p = zhex(p, VDM_REG(tib, VTIB_EDX) & 0xFFFF);
+            p = zput(p, " si=0x"); p = zhex(p, VDM_REG(tib, VTIB_ESI) & 0xFFFF);
+            p = zput(p, " di=0x"); p = zhex(p, VDM_REG(tib, VTIB_EDI) & 0xFFFF);
+            p = zput(p, " ds=0x"); p = zhex(p, VDM_REG(tib, VTIB_DS) & 0xFFFF);
+            p = zput(p, " es=0x"); p = zhex(p, VDM_REG(tib, VTIB_ES) & 0xFFFF);
+            p = zput(p, " ss:sp=0x"); p = zhex(p, VDM_REG(tib, VTIB_SS) & 0xFFFF);
+            p = zput(p, ":0x"); p = zhex(p, VDM_REG(tib, VTIB_ESP) & 0xFFFF);
+            p = zput(p, " -> UNIMPLEMENTED, answering CF="); p = zdec(p, (unsigned)cf_pol);
+            p = zput(p, "\r\n");
+            /* And the bytes it is about to run either way -- the branch is right there,
+               and which way it goes is the whole question. */
+            p = zput(p, "         next="); p = zdump(p, (const void *)(bq + 4), 12);
+            p = zput(p, "\r\n");
+            log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+            if (cf_pol) VDM_REG(tib, VTIB_EFLAGS) |=  1u;
+            else        VDM_REG(tib, VTIB_EFLAGS) &= ~1u;
+            VDM_REG(tib, VTIB_EIP) += 4;             /* C4 C4 <bop> <sub> -- see above */
+            continue;
+        }
         if ((VDM_REG(tib, VTIB_EVENT_INFO) & 0xFF) != 0x20) {
             DWORD cs_ = VDM_REG(tib, VTIB_CS) & 0xFFFF, ip_ = VDM_REG(tib, VTIB_EIP) & 0xFFFF;
             const volatile BYTE *bq = (const volatile BYTE *)(ULONG_PTR)((cs_ << 4) + ip_);
@@ -27232,6 +27352,12 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     }
     /* Exec-loop accounting: how much of the run went on port-I/O round trips, how
        much the burst fast path absorbed, and whether timer IRQs actually landed. */
+    /* The count the rate-limit above hides. An absence here means no guest issued one;
+       a large number means a guest is POLLING a call we have not implemented. */
+    if (g_ntvdm_bop_n) {
+        p = zput(p, "STAGE2: NTVDM BOPs from guest = "); p = zdec(p, g_ntvdm_bop_n);
+        p = zput(p, " (see docs/inventory/bop.md)\r\n");
+    }
     { int i; p = zput(p, "STAGE2: hot ports:");
       for (i = 0; i < g_io_hot_n; ++i) {
           p = zput(p, " 0x"); p = zhex(p, g_io_hot[i].port);

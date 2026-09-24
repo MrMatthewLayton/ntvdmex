@@ -16,6 +16,67 @@ measurement are both single opinions.
 
 ---
 
+## 0. ▶ THE DIRECTIVE, AND WHAT IS NOW KNOWN (2026-09-24)
+
+> **User:** *"We need to support command.com that ships with Windows XP. Running the
+> host with no guest should use /System32/command.com as the guest."*
+
+Both halves are in. A no-guest launch loads `C:\WINDOWS\SYSTEM32\COMMAND.COM`
+(`cfg\shell.txt` overrides it for testing); the remaining work is this surface.
+
+### The collision is resolved by ORIGIN, not by renumbering
+
+Every BOP **we** plant, we plant at an address we own — `DOS_HDLR_SEG` for the INT
+stubs, DPMI entry/return catchers and callback slots, `DOS_CTAB_SEG` for the BIOS stubs.
+A BOP executing anywhere else is the guest calling NTVDM. `g_bop_from_guest` is set from
+`CS` before any arm runs, and the DPMI arm is gated on it.
+
+⚠ **Renumbering ours would have been worse**: the numbers we'd move to are equally
+NTVDM's, so it relocates the collision instead of removing it. The origin test is exact.
+
+### ✅ The encoding, confirmed across THREE binaries
+
+`C4 C4 <bop> <sub>` — **four bytes**, for `0x50` and `0x54`. First inferred from
+COMMAND.COM alone (at `0x283E`, `jnc` decodes at +4 and is junk at +3), then corroborated
+by scanning XP's own 16-bit VDM components, pulled off the rig:
+
+| binary | size | `BOP 0x50` | `BOP 0x54` | other |
+|---|---|---|---|---|
+| `ntdos.sys` | 27,866 | **73 sites**, subs `00–4A` (74 distinct) | 4 sites, subs `04 05 07` | `0x5A` ×1 |
+| `ntio.sys` | 33,840 | 7 sites, subs `0D 11 3B 3D 3E 45` | 2 sites, subs `09 0C` | `0xFE` ×17, and ~20 more |
+| `COMMAND.COM` | 50,620 | 1 site, sub `3D` | **15 sites**, subs `00 01 02 06 08 09 0A 0B 0D 0E 0F 10` | — |
+| `ntvdm.exe` | 420,864 | — | — | **none** (it is the 32-bit side) |
+
+⇒ **`0x50` is the DOS service BOP** — a dense, contiguously numbered table, which is what
+a DOS kernel's call-out interface looks like. **`0x54` is a second, smaller table**
+(`00–10`) shared by the DOS kernel, the I/O layer *and* the shell. Ours is not a special
+case: COMMAND.COM uses the same interface NTVDM's own DOS does.
+
+⚠ NTVDMEX supplies its **own** DOS, so `ntdos.sys`/`ntio.sys` never load here —
+COMMAND.COM's `0x54` calls arrive at us directly. They are an oracle, not a dependency.
+
+### What answering it does — measured, both ways
+
+`cfg\bop54.txt` = `cf0` (default) / `cf1`. The sub-01 site branches on carry immediately.
+
+| answer | what COMMAND.COM does |
+|---|---|
+| `CF=1` | **polls the call forever** — one log line per spin, 268,435,180 bytes before it was rate-limited |
+| `CF=0` | proceeds to a **second, different** call: `sub 0x0E` at `0x5E6`, then spins in V86 with no traps |
+
+Neither is known to be right; `CF=1` is known to be a dead end. ⛔ **The instrument is now
+rate-limited** — 16 in full, then only when the register signature changes. *An
+instrument that scales with a guest's spin rate is a denial-of-service on the thing you
+are trying to read.*
+
+### ▶ Next
+
+Disassemble the `0x50`/`0x54` sites in `ntdos.sys` and `ntio.sys`. They are 16-bit, they
+are small, and unlike COMMAND.COM they are the **kernel** side — the same call with known
+DOS semantics either side of it, which is what makes a sub-function's meaning readable.
+
+---
+
 ## 1. The problem this file exists to record
 
 **The number space is NTVDM's, and we have been allocating out of it as if it were
