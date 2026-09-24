@@ -275,9 +275,40 @@ whole reading is wrong. ⚠ This project has a standing note that **the INT-site
 broken guests five times** (Doom's jump table four, heaven7 once) and ships a
 `cfg\nopmpatch.flag` specifically to A/B it.
 
-▶ **Next, and cheap:** re-run with `nopmpatch.flag` present. If COMMAND.COM behaves
-differently, the patcher is implicated and there is an A/B to point at. If nothing
-changes, the bytes are something else and the `CS:IP` reading needs checking instead.
+## ✅ A/B run — the patcher is exonerated, and my reading was wrong twice
+
+Same build, `cfg\nopmpatch.flag` present: **byte-for-byte identical.** Same `CS:IP`, same
+`c4 c4 54 01 73 62`. And the run's log contains **no patch activity and no DPMI at all** —
+the patcher never ran, so it could not have been implicated.
+
+Two of my readings collapse with it:
+
+1. ⛔ **"BOP number `0x54`" was nonsense.** `dpmi_repatch` replaces `CD nn` with a
+   **two-byte** `C4 C4` *by design* — the vector comes from the recorded site map
+   (`g_pmap_vec`), not from a third byte. So the `54` was never a BOP number; it is simply
+   the next instruction.
+2. ⛔ **Those bytes are COMMAND.COM's own.** Nothing of ours is at that address.
+
+### ⚠ Which means the logged CS:IP is probably NOT the call site — and that undoes an
+### earlier claim of mine on this page
+
+If no patch happened, there is no `C4 C4` BOP at `0x03ce`, and `CD 21` is not there either
+(`mov dx,0x95d7` occupies `0x3CB`–`0x3CD`, so `0x3CE` is where the bytes are, and they are
+`C4 C4`). **So the INT 21h did not come from `0x9342:0x03ce`.**
+
+⛔ Earlier this page said: *"the previous session recorded `0x95eb:0x03ce` … the same
+offset, the same instruction. It dies in exactly the same place."* **That inference is now
+weaker than stated.** The offset reproducing across runs is real and worth something — it
+is deterministic — but calling it "the same instruction" assumed the address was the call
+site, and the bytes there say it is not. The byte-dump instrument answered a question
+about the wrong address.
+
+▶ **Next: get the caller from the guest stack, not from `CS:IP`.** A real-mode INT pushes
+`IP`, `CS`, `FLAGS`, so the true call site is at `SS:SP` — and this codebase already uses
+exactly that technique elsewhere (*"LOG WHO CALLED, NOT JUST WHAT THEY ASKED … the return
+address is sitting on the guest stack at SS:SP"*, the XMS entry logger). That is the
+instrument to add, and it should have been the first one: **an address a handler happens
+to be holding is not evidence about who called it.**
 **That is one run, and it decides between the readings without arguing about them.**
 
 ## ⏸ The placement, and why it took care
