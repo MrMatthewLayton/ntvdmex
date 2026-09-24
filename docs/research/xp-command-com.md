@@ -7,7 +7,64 @@ do the same"* — and the right shape for that is not a shell we write, it is
 
 ---
 
-## ✅ ANSWERED (s78): it never called DOS. It issued a BOP we do not implement.
+## ✅✅✅ THERE IS A WORKING DOS PROMPT (s78) — with **6.22's** COMMAND.COM
+
+Everything below this heading is about **XP's** `COMMAND.COM`, which is NTVDM-aware and
+still blocked. It turned out not to be on the critical path. **MS-DOS 6.22's
+`COMMAND.COM` already works here.** Measured on the rig, keystrokes scripted through
+`cfg\keys.txt` with `qimode=0x20`:
+
+```
+Microsoft(R) MS-DOS(R) Version 6.22
+             (C)Copyright Microsoft Corp 1981-1994.
+
+C:\DOCUME~1\ALLUSE~1\DOCUME~1\ntvdmex\debug\tests\dos>ver
+
+MS-DOS Version 6.22
+
+C:\DOCUME~1\ALLUSE~1\DOCUME~1\ntvdmex\debug\tests\dos>dir
+
+ Volume in drive C has no label
+ Volume Serial Number is 0C09-23F0
+ Directory of C:\DOCUME~1\ALLUSE~1\DOCUME~1\ntvdmex\debug\tests\dos
+.            <DIR>         09-16-26   1:22p
+..           <DIR>         09-16-26   1:22p
+        2 file(s)              0 bytes
+                     268,431,360 bytes free
+```
+
+141 INT 21h calls: banner, `AH=3Eh` ×15 closing inherited handles, the transient
+relocating to `0x925D`, `AH=47h` for the prompt, `AH=40h` to write it, then the read
+loop. **It is a shell, and it works.**
+
+⛔ **I had this backwards for most of a session.** An earlier tally scored this same run
+as *"loaded, ran, ZERO INT 21h calls"* — because the check grepped for `INT21`, which is
+a handler-specific log prefix, while the trace lines begin `  21:`. A pattern that
+cannot match is not a measurement, and it made a working shell look dead. Same mistake
+shape as the `STAGE2: loaded` check in [`../inventory/bop.md`](../inventory/bop.md), in
+the same session.
+
+### And a no-guest launch now runs one
+
+`main.c` STAGE2, in the last-resort branch **strictly below** CSRSS's AppName,
+`target.txt`, an absolute title and a relative title — so the headless harness is
+untouched (verified: with `cfg\shell.txt` present, a queued `P_VER.COM` still loads from
+`target.txt`):
+
+1. `cfg\shell.txt` — a path the user chooses. A 6.22 `COMMAND.COM` goes here.
+2. `C:\WINDOWS\SYSTEM32\COMMAND.COM` — on every XP box, and still blocked on the BOP.
+
+⛔ COMSPEC is deliberately not consulted: under a Windows session it names `cmd.exe`, a
+32-bit PE that must never be loaded as a DOS guest.
+
+▶ **Open question for the product, not for the code:** 6.22's `COMMAND.COM` is
+Microsoft's and cannot ship in a public repo (`guest/` is `.gitignore`d for exactly this
+reason). So a stock XP box still gets (2) and still stops at the BOP. **Either the BOP
+work happens, or the shell is something the user supplies.**
+
+---
+
+## ✅ ANSWERED (s78): XP's COMMAND.COM never called DOS. It issued a BOP we do not implement.
 
 **Read this before anything below it.** Several sections further down reason about
 *why COMMAND.COM terminates*. It does not terminate. Everything in this file that

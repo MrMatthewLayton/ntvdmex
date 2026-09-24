@@ -175,6 +175,9 @@ static BOOL oscompat_attach_console(DWORD pid)
 /* LOG_PATH now lives in log.h -- see the note there. */
 /* Both are written by the runner and READ by us, so they are cfg, not out. */
 #define TARGET_PATH CFG_("target.txt")
+/* A DOS shell to run when NOTHING named a program. NOT a target: target.txt names THE
+   test and is consulted first; this is the last resort. See the STAGE2 block. */
+#define SHELL_PATH  CFG_("shell.txt")
 #define AUTOEXIT_PATH CFG_("autoexit")   /* marker: headless test mode -> exit when the guest exits */
 /* Opt-in screenshot flag. Lives on the SMB SHARE folder so the remote driver can
    toggle it (create it before a GRAPHICAL test, remove it otherwise). Non-graphical
@@ -22818,11 +22821,71 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         if (targs) { p = zput(p, " args=["); p = zput(p, targs); p = zput(p, "]"); }
         p = zput(p, "\r\n");
     }
+    /* ── ★★★★★ NOTHING NAMED A PROGRAM ⇒ RUN A SHELL. (s78) ──────────────────────
+         The user's question was *"do you actually need to build a shell, or simply load
+         Windows NT's COMMAND.COM when ntvdmex is loaded with no guest EXE?"* -- and the
+         answer is the second one. `COMMAND.COM` IS the shell; it becomes the guest like
+         any other DOS program, and MS-DOS 6.22's copy already works here: banner,
+         prompt, `ver`, and a real `dir` listing with volume serial and free space
+         (measured on the rig, s78).
+       ⚠ STRICTLY BELOW EVERYTHING ELSE, and that placement is the whole design. CSRSS's
+         AppName, `target.txt`, an absolute title and a relative title have all been
+         tried above and all failed. Put this any higher and the headless harness -- which
+         names its program in `target.txt` -- silently runs a shell instead of the test.
+       ▸ WHICH shell is a configuration question, not a guess:
+           1. `cfg\shell.txt`  -- a path the user chooses. A 6.22 COMMAND.COM goes here.
+           2. `C:\WINDOWS\SYSTEM32\COMMAND.COM` -- present on every XP box.
+         ⚠ (2) is XP's own, which is NTVDM-aware and stops at `BOP 0x54` -- see
+           docs/inventory/bop.md. That is not a reason to leave it out: it fails with a
+           log line naming exactly what is missing, where the old fallback was a 4-byte
+           `mov ah,4Ch / int 21h` that exited cleanly and said nothing at all.
+         ⛔ COMSPEC is deliberately NOT consulted: under a Windows session it names
+           `cmd.exe`, a 32-bit PE that must never be loaded as a DOS guest. */
+    if (!nread) {
+        char shell[512]; int sn = 0; HANDLE hs = INVALID_HANDLE_VALUE;
+        const char *why = 0;
+        { HANDLE hc = CreateFileA(SHELL_PATH, GENERIC_READ, FILE_SHARE_READ,
+                                  NULL, OPEN_EXISTING, 0, NULL);
+          if (hc != INVALID_HANDLE_VALUE) {
+              DWORD cn = 0;
+              ReadFile(hc, shell, sizeof(shell) - 1, &cn, NULL); CloseHandle(hc);
+              shell[cn < sizeof(shell) ? cn : sizeof(shell) - 1] = 0;
+              /* Trim the newline the file almost certainly ends with, and any spaces --
+                 the same trap target.txt's reader already documents. */
+              for (sn = 0; shell[sn]; ++sn) ;
+              while (sn > 0 && (shell[sn-1] == '\r' || shell[sn-1] == '\n'
+                                || shell[sn-1] == ' ' || shell[sn-1] == '\t')) shell[--sn] = 0;
+              if (sn) {
+                  hs = CreateFileA(shell, GENERIC_READ, FILE_SHARE_READ, NULL,
+                                   OPEN_EXISTING, 0, NULL);
+                  why = (hs != INVALID_HANDLE_VALUE) ? "cfg\\shell.txt"
+                                                     : "cfg\\shell.txt NAMES A FILE THAT WILL NOT OPEN";
+              }
+          } }
+        if (hs == INVALID_HANDLE_VALUE) {
+            zput(shell, "C:\\WINDOWS\\SYSTEM32\\COMMAND.COM");
+            hs = CreateFileA(shell, GENERIC_READ, FILE_SHARE_READ, NULL,
+                             OPEN_EXISTING, 0, NULL);
+            if (hs != INVALID_HANDLE_VALUE && !why) why = "the system's own COMMAND.COM";
+        }
+        if (hs != INVALID_HANDLE_VALUE) {
+            ReadFile(hs, filebuf, sizeof(filebuf), &nread, NULL); CloseHandle(hs);
+            zput(progpath, shell);
+            p = zput(p, "STAGE2: no program was named -> loading a SHELL, 0x");
+            p = zhex(p, nread); p = zput(p, " from "); p = zput(p, shell);
+            p = zput(p, " ("); p = zput(p, why ? why : "default"); p = zput(p, ")\r\n");
+        }
+    }
     if (!nread) {
         static const BYTE stub[] = { 0xB4, 0x4C, 0xCD, 0x21 };   /* mov ah,4Ch; int 21h */
         for (i = 0; i < sizeof(stub); ++i) filebuf[i] = stub[i];
         nread = sizeof(stub);
-        p = zput(p, "STAGE2: embedded fallback\r\n");
+        /* ⚠ SAY WHY, not just that. This printed "embedded fallback" and nothing else,
+             and it is reached when a path was wrong as well as when nothing was named --
+             GH #131 spent a session on a run that looked clean and wrote nothing. */
+        p = zput(p, "STAGE2: embedded fallback -- nothing named a program AND no shell "
+                    "could be opened (cfg\\shell.txt, C:\\WINDOWS\\SYSTEM32\\COMMAND.COM)"
+                    "\r\n");
     }
 
     /* status-bar program name = basename of progpath (if any) */

@@ -134,7 +134,19 @@ The full surface list, with the primary source named for each, is in
 
 ## Next actions, in order
 
-▶ **★ THE DOS PROMPT IS NOT A DOS PROBLEM (2026-09-24).** XP's `COMMAND.COM` does not
+▶ **✅✅✅ THERE IS A WORKING DOS PROMPT (2026-09-24).** **MS-DOS 6.22's `COMMAND.COM`
+runs under NTVDMEX**: banner, prompt, `ver`, and a real `dir` with volume serial and
+free space — 141 INT 21h calls, keystrokes scripted through `cfg\keys.txt`. And a launch
+that names **no** program now loads a shell, from `cfg\shell.txt` first and
+`C:\WINDOWS\SYSTEM32\COMMAND.COM` second, in the last-resort branch strictly below
+CSRSS/`target.txt`/title — verified not to disturb the harness. ⛔ I scored this same run
+as *"zero INT 21h calls"* earlier the same day: the check grepped `INT21`, the trace
+prints `  21:`. **A pattern that cannot match is not a measurement.**
+▶ **The product question, not a code question:** 6.22's shell is Microsoft's and cannot
+ship in a public repo, so a stock XP box still falls to XP's own `COMMAND.COM` and still
+stops at the BOP below. Either the BOP work happens or the shell is user-supplied.
+
+▶ **★ XP's COMMAND.COM IS NOT A DOS PROBLEM (2026-09-24).** XP's `COMMAND.COM` does not
 fail a DOS call and give up — **it never reaches one.** It is NTVDM-*aware*: its image
 issues `C4 C4 54` fifteen times (plus one `C4 C4 50`), and the exec loop's last arm
 hands **any BOP no arm matched** to `dos_int21()`, where the guest's `AH` picks a DOS
