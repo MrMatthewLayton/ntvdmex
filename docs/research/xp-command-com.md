@@ -7,7 +7,7 @@ do the same"* — and the right shape for that is not a shell we write, it is
 
 ---
 
-## It is not "we need a shell", and it is not the DOS version
+## It is not "we need a shell" — it loads and runs today
 
 `C:\WINDOWS\SYSTEM32\COMMAND.COM` (50,620 bytes) **loads and runs** under NTVDMEX
 today. Launched with `scripts/bm/dosrun.bat - C:\WINDOWS\SYSTEM32\COMMAND.COM`:
