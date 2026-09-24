@@ -284,10 +284,61 @@ arm, **skipping the sub 01 and sub 0E handlers** — so past the 17th call the g
 told something different from what the first sixteen were told, silently. *A quiet
 instrument that also changes behaviour is not an instrument.* It now gates the log only.
 
-### ▶ Next
+### ✅✅✅ XP's OWN COMMAND.COM EXECUTES COMMANDS (2026-09-25)
 
-The `+0x10` flag bits. `test …,7` and `test …,1` are the two tests COMMAND.COM makes;
-`0x0F00A966`'s write sites for `+0x10` are where their meanings are.
+`cfg\bopcmd.txt` hands the shell one command line through `sub 01`, once, and empties
+every reply after (a guest that asks again must not be given the same command again —
+that is the difference between testing a mechanism and building a fork bomb):
+
+```
+cfg\bopcmd.txt = "ver"        cfg\bopcmd.txt = "dir"
+  MS-DOS Version 5.00.500        Volume in drive C has no label
+                                 Volume Serial Number is 0C09-23F0
+                                 Directory of C:\...\debug\tests\cmdcom
+                                 .            <DIR>     09-24-26   5:18p
+                                 ..           <DIR>     09-24-26   5:18p
+                                         2 file(s)          0 bytes
+                                                   268431360 bytes free
+```
+
+**The whole path works end to end** — `sub 01` → command line in the guest's buffer →
+COMMAND.COM's parser → execution → console output. Two different commands, one a builtin
+and one that walks the filesystem.
+
+### ✅ `+0x10` decoded: three bits, one per redirected handle
+
+`0x0F00A966` does not write `+0x10` directly; it passes `&blk[0x10]` to `0x0F04D568`,
+which builds it from the `VDM_COMMAND_INFO`:
+
+```
+flags = 0
+if [info+0x10] != 0: flags  = 1        ; StdIn
+if [info+0x14] != 0: flags |= 2        ; StdOut
+if [info+0x18] != 0: flags |= 4        ; StdError
+if flags == 0: early out
+```
+
+⇒ COMMAND.COM's `test [blk+0x10],7` is *"was anything redirected?"* and `test …,1` is
+*"was stdin?"*. **Zero is correct for an interactive shell**, so our answer was right
+here — worth stating, because it was a guess until this read.
+
+Also pinned from the same tail: `+0x16` is the **code page** (COMMAND.COM compares it
+against `AH=66h/01`'s `BX` and issues `AH=66h/02` if they differ, guarded by the
+`INT 2Fh AX=1400h` NLSFUNC check), `+0x04` ← `[0x0F09BEDA]`, `+0x06` ← `[0x0F077338]`,
+`+0x1A` ← the byte at `[0x0F09BEDC]`.
+
+### ⛔ What is still missing: "you are interactive"
+
+With an empty answer COMMAND.COM asks again immediately — **1,255,260 `sub 01` calls in a
+30-second run**. That is its *command loop*: get a command, run it, repeat. It never
+prints a prompt or reads the keyboard, so nothing yet tells it that no more commands are
+coming and it should go interactive.
+
+▶ Candidates, none verified: the `+0x22` status word (XP writes **4**, **8** or **9** —
+three distinct outcomes for a call that can only "succeed" one way), `+0x00`/`+0x02`, or
+the `CF`/`AX` pair (`AX` is compared against `0x8000` on the failure path). **`+0x22` is
+the one to read next**: three values for one call is a status enumeration, and one of
+them is very likely "no more commands".
 
 ---
 

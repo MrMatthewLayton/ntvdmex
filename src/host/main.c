@@ -460,6 +460,9 @@ static DWORD g_ntvdm_bop_n = 0;   /* how many guest-issued NTVDM BOPs this run s
 /* How to answer an NTVDM BOP we have not implemented yet: contents of cfg\bop54.txt.
    A knob because the right answer is UNKNOWN and is being measured -- see the handler. */
 #define BOP54_PATH     CFG_("bop54.txt")
+/* A command line to hand the shell ONCE through BOP 0x54 sub 01, so the path can be
+   tested end-to-end rather than only 'it accepted an empty answer'. */
+#define BOPCMD_PATH    CFG_("bopcmd.txt")
 /* DPMI 0303 (allocate real-mode callback): planted real-mode BOP entries (one per
    callback slot) that a client's real-mode code far-calls; the host switches V86->PM
    and runs the client's PM handler. DPMI_PMRET is the PM-side return catcher the
@@ -27251,9 +27254,42 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                          V86 with no traps" the headless deadline was killing.
                          Layout, from the guest's own copy loop (`cl=[buf]; cx+=3`):
                            [0] = length, [1] = ?, [2..] = text, then CR. */
-                    c[0] = 0; c[1] = 0; c[2] = 0x0D;
+                    /* ── ONE COMMAND, ONCE, FROM cfg\bopcmd.txt. ──────────────────
+                         An empty answer proves only that the guest accepted one. This
+                         hands it a REAL command line exactly once and empties every
+                         reply after -- so the log shows whether the whole path works
+                         (does it execute and PRINT?) without the command repeating for
+                         ever in a loop that already runs 1.25M times a run.
+                       ⚠ One-shot on purpose: a guest that asks again must not be given
+                         the same command again. That is the difference between testing
+                         the mechanism and building a fork bomb. */
+                    static int cmd_done = 0;
+                    char cmdbuf[128]; DWORD cn = 0;
+                    if (!cmd_done) {
+                        HANDLE hcc = CreateFileA(BOPCMD_PATH, GENERIC_READ, FILE_SHARE_READ,
+                                                 NULL, OPEN_EXISTING, 0, NULL);
+                        cmd_done = 1;
+                        if (hcc != INVALID_HANDLE_VALUE) {
+                            ReadFile(hcc, cmdbuf, sizeof(cmdbuf) - 1, &cn, NULL);
+                            CloseHandle(hcc);
+                            while (cn && (cmdbuf[cn-1] == '\r' || cmdbuf[cn-1] == '\n')) --cn;
+                        }
+                    }
+                    if (cn) {
+                        DWORD k;
+                        c[0] = (BYTE)cn; c[1] = 0;
+                        for (k = 0; k < cn; ++k) c[2 + k] = (BYTE)cmdbuf[k];
+                        c[2 + cn] = 0x0D;
+                    } else {
+                        c[0] = 0; c[1] = 0; c[2] = 0x0D;
+                    }
                     if (!quiet) { p = zput(p, "         cmdline buf 0x"); p = zhex(p, cb);
-                                  p = zput(p, " <- empty tail (len=0, CR)\r\n"); }
+                                  if (cn) { p = zput(p, " <- ["); 
+                                            { DWORD k; for (k = 0; k < cn; ++k)
+                                                  { char t[2]; t[0]=cmdbuf[k]; t[1]=0; p = zput(p, t); } }
+                                            p = zput(p, "] ONE SHOT"); }
+                                  else      p = zput(p, " <- empty tail (len=0, CR)");
+                                  p = zput(p, "\r\n"); }
                 }
                 BW(0x10, 0);                       /* flags: nothing to run */
                 #undef BW
