@@ -23200,6 +23200,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
        guest's next version check with no restart. */
     g_dosm = &m;
     dos_int21_set_version(&m, (uint8_t)g_set.v[SET_DOSMAJ], (uint8_t)g_set.v[SET_DOSMIN]);
+    /* Two sources, and the second one silently wins -- see the note below the file read. */
+    const char *dosver_src = "HKCU\\Software\\NTVDMEX (Settings dialog)";
     /* ── THE REPORTED DOS VERSION IS A KNOB, BECAUSE IT IS A LIE THE GUEST CHOOSES.
          Real DOS ships SETVER for precisely this, and the number is not a fact about
          us: it is what a particular guest will accept. We default to 6.22 to match the
@@ -23220,10 +23222,24 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
           }
           if (mj && mj < 256 && mn < 256) {
               dos_int21_set_version(&m, (uint8_t)mj, (uint8_t)mn);
-              p = zput(p, "STAGE2: dosver override -> "); p = zhex(p, mj);
-              p = zput(p, "."); p = zhex(p, mn); p = zput(p, "\r\n");
+              dosver_src = "cfg\\dosver.txt";
           }
       } }
+    /* ── ★ SAY WHICH VERSION IS IN FORCE, AND WHERE IT CAME FROM. EVERY RUN. ──────
+         This printed a line ONLY when `dosver.txt` overrode, so the persistent source
+         -- HKCU\Software\NTVDMEX\DosVersionMajor/Minor, written by the Settings dialog
+         -- was completely silent. The rig was found reporting **5.00 to every DOS
+         guest** from that registry value, with no `dosver.txt` anywhere, on a project
+         whose entire parity method diffs against a 6.22 oracle (`p_ver.com`:
+         `int21.30 AX=0005`). Deleting the file, which is what every note about this
+         knob says to do afterwards, does NOT restore the default -- and nothing
+         anywhere reported the discrepancy.
+       ⚠ The standing rule this breaks is "a status line nobody reads is not a check";
+         this was worse, because there was no line at all. Unconditional now, and it
+         names the SOURCE, because the number alone would not have caught it either. */
+    p = zput(p, "STAGE2: DOS version reported = ");
+    p = zhexb(p, m.ver_major); p = zput(p, "."); p = zhexb(p, m.ver_minor);
+    p = zput(p, " (source: "); p = zput(p, dosver_src); p = zput(p, ")\r\n");
     /* GH #38: plant the AH=65h character tables in the DOS-resident block. */
     { volatile BYTE *ct = (volatile BYTE *)(DOS_CTAB_SEG << 4); unsigned k;
       for (k = 0; k < sizeof(dos_tab_upper);   ++k) ct[DOS_CTAB_UPPER   + k] = dos_tab_upper[k];

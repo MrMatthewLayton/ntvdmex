@@ -267,6 +267,7 @@ Doom check this project has ever run was high detail.
 8. ⛔ **NTVDMEX can jam the whole machine.** The rig is one folder, nothing on `C:`. A dead rig means checking the IFEO key points at an existing binary.
 9. ⛔ **Launch a Win16 guest after any shared-path change** — it was dead for five sessions and nobody noticed.
 10. ⛔ **Copy the user's log to `runs/` before running anything** — the host truncates `out\ntvdmhost.log`.
+11. ⛔⛔ **A KNOB WITH TWO SOURCES: DELETING THE FILE DOES NOT RESTORE THE DEFAULT.** The reported DOS version comes from `cfg\dosver.txt` *or*, persistently, from `HKCU\Software\NTVDMEX\DosVersionMajor/Minor` — written by the Settings dialog and surviving every reboot, wipe and rebuild. The rig was found on 2026-09-24 reporting **5.00 to every DOS guest** from the registry, with no `dosver.txt` anywhere, on a project whose whole parity method diffs against a **6.22** oracle (`p_ver.com` → `int21.30 AX=0005`). Nothing reported it: the host logged a line only when the *file* overrode. Now unconditional and it names the source — `STAGE2: DOS version reported = 05.00 (source: …)`. ⚠ **Before quoting any DOS-side comparison, read that line**, and ask the same question of every other setting the dialog persists.
 
 The full list, with the story behind each, is the wiki's
 [Traps and lessons](https://github.com/MrMatthewLayton/ntvdmex/wiki/Traps-and-lessons).
