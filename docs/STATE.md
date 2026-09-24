@@ -9,12 +9,22 @@
 - **Updated:** 2026-09-23 (session 77)
 - **Branch:** `m9/completeness`
 - **Checkpoint commit:** **`ff0d956`** — the rollback point, and the first one moved since
-  `59fac7d`. `git diff ff0d956..HEAD -- src/` is empty, so every `src/` byte matches the
-  tree that built **`71ef4737`**, which the user confirmed by hand on 2026-09-23:
+  `59fac7d`. It built **`71ef4737`**, which the user confirmed by hand on 2026-09-23:
   **typing, a Win16 app, and the text cursor**, on top of Doom and Skyroads run headlessly.
   *No git tags yet: the first will be `0.0.1` at the first beta.*
   ⚠ **That is a three-item confirmation, not a shelf sweep** — the stable zip below stays
   the anchor until someone runs the whole shelf.
+  ⛔⛔ **AND `git diff ff0d956..HEAD -- src/` IS NO LONGER EMPTY.** This bullet claimed it
+  was, which was true when written and stopped being true one commit later. **TWO
+  unconfirmed `src/` changes are now stacked on the rig**, which breaks the standing rule
+  of one observable change per by-hand test:
+  | commit | change |
+  |---|---|
+  | `8858c52` | RTC **alarm + update-ended** interrupts — landed *after* this checkpoint |
+  | `ea485e7` | the **82077AA floppy controller** |
+  Both are dormant unless a guest asks, so the by-hand pass is mostly *"did anything
+  break"* rather than *"does the new thing work"*. If either is suspected, roll back to
+  `debug\prev\ntvdmhost_prev.exe` (**`71ef4737`**) FIRST and re-test, then bisect.
 - **Stable package:** `dist\ntvdmex-20260917-4847355.zip`, host `9448cf27`
   (tag `release-20260917b`). **Immutable until a new build is confirmed across the whole
   shelf**, which 2026-09-23's three-item pass is not. `bin\` on the rig is free to churn.
