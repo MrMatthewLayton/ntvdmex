@@ -225,10 +225,60 @@ reading:
 nearly reported a list of false gaps off that heuristic — a property check passing by
 luck, the same shape as the DOR mask and the table-bytes dump.
 
-⇒ **Ask a real kernel.** A probe issuing `63/00`, `5d/08`, `5d/09` and diffing against
-6.22 and PCem turns three suspects into measured facts. That is the same loop that closed
-`122Eh` honestly, and it is the only way to tell a gap from a call that legitimately
-returns nothing.
+## ✅ All three suspects were already implemented — the heuristic was false
+
+Grepping the handlers first (the lesson from one section up) settled all three in minutes,
+with no probe needed:
+
+| call | verdict |
+|---|---|
+| `AH=63h` | **implemented** — returns `DS:SI` = a real DBCS table and clears AL. `6300 & 0xFF00` *is* `6300`, so "AX unchanged" was pure coincidence |
+| `AH=5Dh AL=08/09` | **implemented** — accept-and-ignore, with a note explaining that is what DOS does with no redirector, and that refusing "would make the shell think something failed" |
+| `AH=53h` | **implemented as an explicit error**, and already refuted as the cause |
+
+⇒ **Every INT 21h call XP's COMMAND.COM makes during startup is serviced.** The exit is
+not a missing DOS call. And the "AX unchanged ⇒ not serviced" heuristic produced **three
+false gaps out of three** — I would have chased all of them.
+
+## ⚠ The bytes at the exit — an anomaly, recorded, NOT explained
+
+Following the standing rule (*silent death → get the bytes*), the `AH=00h` terminate log
+now dumps the instruction stream around the call site. Run with the trace on:
+
+```
+==> DOS terminate (AH=00h) from CS:IP=0x9342:0x03ce
+    bytes@0x03ae= ... 26 8b 16 2d 03  89 16 eb 95  07  ba d7 95  c4 c4 54 01 73 62 ...
+```
+
+Disassembled, the run-up is ordinary and the last instruction before the site is
+`mov dx,0x95d7` — which matches the trace exactly (`21:00/02 … dx=95d7`). Then at
+`0x03ce`, where CS:IP points:
+
+```
+000003CB  BA D7 95     mov dx,0x95d7
+000003CE  C4 C4 54 ...
+```
+
+⚠⚠ **`C4 C4 nn` is our own BOP encoding, and this does not add up:**
+
+- The BOP number reads **`0x54`**, but INT 21h is serviced as **BOP `0x20`**.
+- The only thing that writes `C4 C4` into a *guest's* code is the **INT-site patcher**,
+  and that is explicitly a **protected-mode** device — *"a raw `CD nn` in PM is the one
+  fault XP will not reflect"*. COMMAND.COM is a real-mode DOS program.
+- A real-mode INT 21h should reach us through the IVT stub in `DOS_HDLR_SEG`, in which
+  case the live `CS` at the BOP would be `0x0050`, not the guest's `0x9342`.
+
+⛔ **Three readings are possible and I am not choosing between them without evidence:**
+the site really was patched (and the patcher is reaching a guest it should not); the
+logged `CS:IP` is not the INT site; or those bytes are COMMAND.COM's own data and the
+whole reading is wrong. ⚠ This project has a standing note that **the INT-site patcher has
+broken guests five times** (Doom's jump table four, heaven7 once) and ships a
+`cfg\nopmpatch.flag` specifically to A/B it.
+
+▶ **Next, and cheap:** re-run with `nopmpatch.flag` present. If COMMAND.COM behaves
+differently, the patcher is implicated and there is an A/B to point at. If nothing
+changes, the bytes are something else and the `CS:IP` reading needs checking instead.
+**That is one run, and it decides between the readings without arguing about them.**
 
 ## ⏸ The placement, and why it took care
 

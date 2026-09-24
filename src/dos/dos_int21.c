@@ -432,6 +432,24 @@ int dos_int21(dos_machine_t *m)
           tp = zhex(tp, s8); tp = zput(tp, ":0x"); tp = zhex(tp, o8);
           tp = zput(tp, " ivt1C=0x"); tp = zhex(tp, sc);
           tp = zput(tp, ":0x"); tp = zhex(tp, oc); }
+        /* ── AND THE BYTES THAT LED HERE. ────────────────────────────────────
+             "SILENT VDM DEATH -> GET THE BYTES" is a standing rule in this
+             project and the call site alone does not obey it: an address says
+             WHERE a guest gave up, never WHY. XP's COMMAND.COM terminates from
+             the same offset (0x03ce in its relocated transient segment) whether
+             or not INT 2Fh AX=122Eh is answered, so the branch that chose this
+             path is the question, and it is in the preceding instructions.
+           ⚠ 32 bytes BEFORE and 8 after, because the decision is upstream of the
+             exit, not at it. Disassemble with `ndisasm -b 16`.
+           ⚠ Clamped at the segment base so a low CS cannot make us read below
+             zero, and only on the terminate path, so it costs nothing per run. */
+        { DWORD cs0 = (VDM_REG(tib, VTIB_CS) & 0xFFFF) << 4;
+          DWORD ip0 = VDM_REG(tib, VTIB_EIP) & 0xFFFF;
+          DWORD lo  = (ip0 >= 32) ? ip0 - 32 : 0;
+          const volatile BYTE *q = (const volatile BYTE *)(ULONG_PTR)(cs0 + lo);
+          unsigned n = (unsigned)(ip0 - lo) + 8, i;
+          tp = zput(tp, " bytes@0x"); tp = zhex(tp, lo); tp = zput(tp, "=");
+          for (i = 0; i < n && i < 48; ++i) { tp = zhexb(tp, q[i]); tp = zput(tp, " "); } }
         tp = zput(tp, "\r\n");
         cont = 0;
     } else if (ah == 0x02) {                    /* print char DL */
