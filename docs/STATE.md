@@ -193,8 +193,14 @@ but it is an observable change and the rule is one at a time with a human in bet
    `TASKMAN.EXE` with our own `nedump.py`/`nedis.py`. First run on the rig:
    `InitTask`/`WaitEvent`/`InitApp` all succeed, `kernel.getversion` = `5F03`,
    `kernel.getwinflags` = `4C25`.
-   ▶ **Owed: those two values are OURS and unverified.** Run the same `.EXE` under stock
-   `ntvdm` on the same rig and diff — until then they are measurements, not passes.
+   ✅ **And compared against stock `ntvdm`** (`tools/wintest/stock.sh`, which drops the
+   IFEO key and restores it, refusing to exit quietly unless it proves the key came back):
+   `kernel.getversion` **AGREES** — the first Win16 row this project can call *verified* —
+   and `kernel.getwinflags` **MISMATCHES**, `4C25` against stock's `4C29`, reproduced
+   twice. ⚠ Neither value is ours: both runs load the same `KRNL386.EXE`, so the
+   difference is what our VDM presents to it. ⚠ The `WF_CPU386`-vs-`WF_CPU486` reading of
+   those bits is an **interpretation from memory, not confirmed**.
+   ▶ **Next: read `GetWinFlags` (KERNEL.132) out of `krnl386.exe` with `nedis.py`.**
    See [`inventory/win16.md`](inventory/win16.md).
 4. **VGA step 4 — one address generator** from CR17/CR14/GR5/GR6/SR4. ⛔ **PARKED**: the
    A0000 aperture is mapped RAM with no write hook, so mode-Y exactness needs an

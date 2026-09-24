@@ -69,10 +69,36 @@ CASE=kernel.getwinflags SIG=AX AX=4C25
 ✅ **The chain works end to end**: NE linker → relocations → import table → the startup
 handshake → a file written out of a running Win16 task, on real hardware.
 
-⚠ **The two values are NOT verified.** They are *ours*, and nothing has asked another
-machine. **A number this probe produces is a measurement, not a pass**, until it is
-compared with stock `ntvdm` on the same rig — which is the documented authority for
-everything WOW. That comparison is the next step and it is owed.
+## ✅ …and compared against stock `ntvdm` — which immediately found a defect
+
+`./tools/wintest/stock.sh w_kernel` runs the **same `.EXE`** twice on the same box: once
+through the IFEO hook (us) and once with the key dropped (stock). **Reproduced twice,
+identical both times:**
+
+| case | ours | stock | |
+|---|---|---|---|
+| `kernel.getversion` | `5F03` | `5F03` | ✅ **AGREE — verified** |
+| `kernel.getwinflags` | `4C25` | **`4C29`** | ⛔ **MISMATCH** |
+
+★ **That is the first Win16 row this project has ever been able to call *verified* rather
+than *looks right on screen*.** And the second row is a genuine defect, found by the first
+deterministic test that ran.
+
+⚠ **Neither value is produced by our code.** Both runs load the same
+`C:\WINDOWS\SYSTEM32\KRNL386.EXE`, so the difference is in what our VDM *presents* to
+it, not in a value we return.
+
+**The differing bits are `0x04` (ours) against `0x08` (stock).**
+
+⚠⚠ **The obvious reading — `WF_CPU386` vs `WF_CPU486` — is an INTERPRETATION, not a
+measurement, and it is recorded as one.** Those constants are from memory; the Win3.1 SDK
+is not in this tree and nothing here has confirmed them. A plausible mechanism (krnl386
+separating 386 from 486 by whether the `AC` flag can be toggled, and our V86 environment
+not permitting it) is likewise a **hypothesis with no evidence behind it yet**. Writing
+either down as fact is exactly the mistake this project keeps paying for.
+
+▶ **Next:** read `GetWinFlags` (KERNEL.132) out of `krnl386.exe` with `tools/ne/nedis.py`
+and find where the value actually comes from. The answer is in the binary.
 
 ---
 
