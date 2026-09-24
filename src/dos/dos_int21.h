@@ -121,6 +121,11 @@ void dos_int21_set_pm(int on);  /* CF/ZF -> live VTIB_EFLAGS, not a V86 FLAGS fr
    because NT's DOS has always reported 5.00 and its shell is built to match.
    Call before dos_int21_init's defaults are wanted, or any time after. */
 void dos_int21_set_version(dos_machine_t *m, uint8_t major, uint8_t minor);
+/* The current drive, 0 = A:. Published because the NTVDM `BOP 0x54 sub 01` answer has
+   to carry it (COMMAND.COM reads it out of the reply block and immediately issues
+   AH=0Eh with it) -- and the host must not re-derive the same policy separately, which
+   is how `vdrive` would have been silently dropped. */
+uint8_t dos_int21_cur_drive(const dos_machine_t *m);
 int dos_int21(dos_machine_t *m);
 
 #endif /* DOS_INT21_H */

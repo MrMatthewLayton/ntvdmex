@@ -27185,7 +27185,17 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                           + (VDM_REG(tib, VTIB_EDX) & 0xFFFF);
                 volatile BYTE *b = (volatile BYTE *)(ULONG_PTR)blk;
                 #define BW(o, v) (*(volatile WORD *)(b + (o)) = (WORD)(v))
-                BW(0x02, 0); BW(0x04, 0); BW(0x06, 0);
+                /* ── ⛔ +0x04 IS THE DEFAULT DRIVE, AND ZEROING IT SENT THE SHELL TO A:.
+                     Found by running it: COMMAND.COM reads `[blk+0x04]` into DL two
+                     instructions after this call returns and issues `AH=0Eh` with it
+                     (guest 0x6B8..0x6C2). A zero there means drive 0 = A:, and our own
+                     handler said so -- "drive A: exists but is not ready ... selected
+                     as the DOS current drive anyway" -- while the shell went quiet.
+                   ★ This is what "a defined answer is falsifiable" buys: the wrong
+                     value was visible in one run and named its own field. An
+                     uninitialised block would have given a different wrong drive each
+                     time and looked like flakiness. */
+                BW(0x02, 0); BW(0x04, dos_int21_cur_drive(&m)); BW(0x06, 0);
                 BW(0x10, 0);                       /* flags: nothing to run */
                 BW(0x16, 0); BW(0x1A, 0); BW(0x20, 0);
                 BW(0x22, 0);                       /* status */
@@ -27197,6 +27207,34 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                 p = zput(p, "\r\n");
                 log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
                 VDM_REG(tib, VTIB_EFLAGS) &= ~1u;  /* success */
+                VDM_REG(tib, VTIB_EIP) += 4;
+                continue;
+            }
+            /* ── ★ sub 0E = THE KEYBOARD / CODE-PAGE CONFIGURATION. ─────────────────
+                 XP's handler (0x0F0156EC) is, in order: GetSystemDefaultLangID (vs
+                 0x411 = LANG_JAPANESE), GetKeyboardType or GetConsoleKeyboardLayoutNameA,
+                 two RegQueryValueExA under the keyboard-layout key, GetConsoleCP, then
+                 GetSystemDirectoryA + GetFileAttributesA to find KEYBOARD.SYS -- and
+                 finally getDS/getSI/getCX for the guest's buffer and **setDX on BOTH
+                 exit paths**. Its data strings include
+                 `%s=%3.3u,%3.3u,%s\system32\%s.sys%s` and ` /id:`: it builds a KEYB
+                 command line.
+               ⇒ DS:SI is a buffer of CX bytes; DX is the ANSWER, and COMMAND.COM's very
+                 next instruction is `or dx,dx / jnz` -- non-zero = "there is a keyboard
+                 driver to set up", zero = skip it.
+               ⛔ I HAD THIS WRONG ONCE. Reading only the guest side, DX looked like a
+                 leftover from the `INT 2Fh AX=AD80h` KEYB check two instructions earlier,
+                 and I wrote that the BOP "probably does not touch DX". The handler calls
+                 setDX explicitly on both paths. **A register set by the callee is not
+                 distinguishable from a leftover by looking at the caller alone.**
+               ▸ We answer 0 = no keyboard driver, which is TRUE of us: we do not load
+                 KB16.COM or KEYBOARD.SYS. Explicitly, rather than by leaving DX alone
+                 and getting 0 because that is what happened to be in it. */
+            if (bn == NTVDM_BOP_CMD && sub == 0x0E) {
+                VDM_REG(tib, VTIB_EDX) &= 0xFFFF0000u;   /* DX = 0: no KEYB to run */
+                p = zput(p, "         sub 0E answered: no keyboard driver (DX=0)\r\n");
+                log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                VDM_REG(tib, VTIB_EFLAGS) &= ~1u;
                 VDM_REG(tib, VTIB_EIP) += 4;
                 continue;
             }

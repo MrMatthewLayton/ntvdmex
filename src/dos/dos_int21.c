@@ -251,6 +251,10 @@ static uint8_t dos_cur_drive(const dos_machine_t *m)
     return (n >= 2 && cw[1] == ':') ? (uint8_t)((cw[0] | 0x20) - 'a') : DOS_CURRENT_DRIVE;
 }
 
+/* See the header: the host needs this for the NTVDM BOP 0x54 sub 01 reply, and must
+   not re-derive it -- a second copy of the rule would drop `vdrive`. */
+uint8_t dos_int21_cur_drive(const dos_machine_t *m) { return dos_cur_drive(m); }
+
 /* Keep Win32's per-drive current directory in step. GetFullPathNameA("X:") and
    SetCurrentDirectoryA("X:") read the hidden `=X:` environment variable, which
    cmd.exe and the CRT maintain and SetCurrentDirectoryA itself does NOT -- so

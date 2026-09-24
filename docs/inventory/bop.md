@@ -183,15 +183,44 @@ installed-check, then passes `DS:SI` = a buffer with `CX = 0x539` (1337 bytes).
 
 ⇒ **sub 0E asks the host for the console's keyboard layout and code page.**
 
+### ⛔ `+0x04` IS THE DEFAULT DRIVE, and zeroing it sent the shell to A:
+
+Found by running it. COMMAND.COM, two instructions after `sub 01` returns:
+
+```
+guest 0x6B8   mov dx,[0x95DB]      ; = blk+0x04
+guest 0x6BC   mov [0x9612],dl
+guest 0x6C0   mov ah,0x0E ; int 21h ; SELECT DEFAULT DRIVE
+```
+
+A zero there is drive 0 = **A:**, and our own handler said so in the same log —
+*"drive A: exists but is not ready … selected as the DOS current drive anyway"* — while
+the shell went quiet. Now filled from `dos_int21_cur_drive()`, and the trace reads
+`21:0e/80 … dx=0002` = **C:**.
+
+★ **This is what "a defined answer is falsifiable" buys.** The wrong value showed up in
+one run and named its own field. An uninitialised block would have produced a different
+wrong drive each run and read as flakiness.
+
+⚠ And `dos_cur_drive()` was `static`: it is now published as `dos_int21_cur_drive()`
+rather than re-derived in the host, because a second copy of the rule would have
+silently dropped the `vdrive` case.
+
 ### ▶ Where it stands
 
-With sub 01 answered, XP's COMMAND.COM reaches **sub 0E** and then idles — `frozen at
-CS:IP=0x0050:0x0037`, which is our own INT 08h stub's `CD 1C` chain, with `irq0_inj=4`
-and `raised_any=0x25B`. **It is taking interrupts, not wedged**; it prints nothing, so it
-is waiting on something rather than sitting at a prompt.
+With both sub-functions answered, XP's COMMAND.COM makes **32 INT 21h calls** (was 9 at
+the version gate), gets through code-page setup — `AH=66h/01`, `INT 2Fh AX=1400h`
+(NLSFUNC check) — and selects **C:** as its default drive. It then copies a counted
+string from `0x9327` to `0x93AA`, calls guest `0x5664`, and idles without further DOS
+calls: `frozen at CS:IP=0x0050:0x0037`, our own INT 08h stub's `CD 1C` chain, with
+`irq0_inj=4` and `raised_any=0x25B`. **It is taking interrupts, not wedged.**
 
-Next: decide what a truthful `sub 0E` answer is — we have the same three Win32 calls
-available — and find what the 1337-byte block is meant to contain.
+⚠ `AH=66h` looked like the gap — it returned `AX` unchanged — and **it is fully
+implemented** (`dos_int21.c:1204`, `BX=DX=437`). AX simply is not one of its outputs.
+That is the **fourth** time the "AX unchanged ⇒ unserviced" heuristic would have
+invented a gap; the file's own `dos622_defines` comment warns about exactly this.
+
+Next: guest `0x5664`, the call it does not return from.
 
 ---
 
