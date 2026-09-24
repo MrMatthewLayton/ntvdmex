@@ -24,10 +24,24 @@ STAGE2: BOP2F ax=0x122e   ×5      <- then it terminates, cleanly, printing noth
 STAGE2: complete
 ```
 
-⚠ **The DOS version is a red herring on this path.** `main.c` (~23206) records that
-XP's COMMAND.COM refuses 6.22 outright — *"Incorrect DOS version"* — and there is a
-`cfg\dosver.txt` knob. **Forcing 5.0 changed nothing**: the same five calls, the same
-clean exit. So the version check is real but is *not* what we are hitting.
+## ⛔ The DOS version IS necessary — I said it was a red herring and it is not
+
+`main.c` (~23206) records that XP's COMMAND.COM refuses 6.22 outright — *"Incorrect DOS
+version"* — and there is a `cfg\dosver.txt` knob. I wrote here that **"forcing 5.0
+changed nothing: the same five calls, the same clean exit."** That was wrong. I compared
+the two runs' SUMMARY lines instead of their calls. Counted properly:
+
+| reported version | INT 2Fh calls COMMAND.COM makes |
+|---|---|
+| **6.22** (our default) | **zero** — it refuses at the version check and exits |
+| **5.0** | **nine** — `b700 4300 4310 5501 b707` then `122e` ×5 |
+
+⇒ **The version override is the difference between "refuses immediately" and "gets to
+the last step before printing".** It is step one, not a distraction.
+
+⚠ The user found this, not me: they opened `System32\COMMAND.COM` by hand with the
+override removed and got *"Incorrect DOS version"* on screen — the failure I had just
+told them did not matter.
 
 ⚠ **And one of my own readings was wrong on the way here.** I reported *"zero INT 21h
 calls — the classic tell that the guest did nothing"*. The guest was running the whole
