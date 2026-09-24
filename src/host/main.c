@@ -23236,9 +23236,16 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
          anywhere reported the discrepancy.
        ⚠ The standing rule this breaks is "a status line nobody reads is not a check";
          this was worse, because there was no line at all. Unconditional now, and it
-         names the SOURCE, because the number alone would not have caught it either. */
+         names the SOURCE, because the number alone would not have caught it either.
+       ⚠ DECIMAL, and it took a wrong reading to notice. The first cut used zhexb and
+         printed "6.22" as **06.16**, which a human reads as version 6.16 -- a number in
+         the wrong units is not a measurement, and this line exists precisely so nobody
+         has to decode it. Minor is zero-padded to two digits: "6.2" and "6.20" are
+         different DOS versions. */
     p = zput(p, "STAGE2: DOS version reported = ");
-    p = zhexb(p, m.ver_major); p = zput(p, "."); p = zhexb(p, m.ver_minor);
+    p = zdec(p, m.ver_major); p = zput(p, ".");
+    if (m.ver_minor < 10) p = zput(p, "0");
+    p = zdec(p, m.ver_minor);
     p = zput(p, " (source: "); p = zput(p, dosver_src); p = zput(p, ")\r\n");
     /* GH #38: plant the AH=65h character tables in the DOS-resident block. */
     { volatile BYTE *ct = (volatile BYTE *)(DOS_CTAB_SEG << 4); unsigned k;

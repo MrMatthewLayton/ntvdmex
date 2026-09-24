@@ -88,6 +88,23 @@ if [ "$MODE" = host ]; then
   [ -f "$HOST" ] || { echo "build/ntvdmhost.exe missing" >&2; exit 1; }
   size=$(stat -f '%z' "$HOST")
   [ "$size" -gt 1000000 ] || { echo "build/ntvdmhost.exe is $size bytes: that is the LAUNCHER, not the host" >&2; exit 1; }
+  # ── ⛔ IS THIS EXE THE SOURCE IT CLAIMS TO BE? (s78) ─────────────────────────────
+  #   A FAILED build leaves the PREVIOUS ntvdmhost.exe sitting in build/, and this
+  #   script happily deployed it -- then a probe ran against the old binary and gave a
+  #   perfectly plausible answer. Measured in-session: a stray character broke the
+  #   compile, `make` stopped, bmstage printed "host -> bin/ staged:", and the run that
+  #   followed reported the OLD behaviour. The md5 line does not help, because nobody
+  #   holds the hash of a build that never finished.
+  #   So compare the exe against the newest file it is built from. This is a warning
+  #   with a refusal, not a hint: STALE_OK=1 overrides it deliberately.
+  newest=$(find "$ROOT/src" -type f \( -name '*.c' -o -name '*.h' -o -name '*.S' \) -newer "$HOST" -print -quit 2>/dev/null)
+  if [ -n "$newest" ]; then
+    echo "⛔ build/ntvdmhost.exe is OLDER than $(basename "$newest") -- the build did not finish." >&2
+    echo "   Deploying it would test the PREVIOUS binary and the result would look normal." >&2
+    echo "   Re-run ./scripts/build.sh, or STALE_OK=1 to deploy anyway." >&2
+    [ "${STALE_OK:-0}" = 1 ] || exit 1
+    echo "   STALE_OK=1 -- deploying a stale host on purpose." >&2
+  fi
   mkdir -p "$SH/bin"
   # The displaced exe is kept BY HASH. debug/prev/ntvdmhost_prev.exe is the last build a
   # HUMAN confirmed and only a human promotes to it -- this script cannot know whether
