@@ -34,7 +34,42 @@ And a collision *inside* our own allocations, worth fixing on sight:
 |---|---|---|
 | `0x57` | `DPMI_FAULT_BOP` (`main.c:527`) | `WOWCALL_BOP_CODE` (`wow/wowcall.h:89`) |
 
-### ⛔ The fall-through is what made a collision fatal rather than noisy
+### ✅ The fall-through is gated (2026-09-24)
+
+An unmatched BOP is now **refused and logged**, not handed to `dos_int21()`:
+
+```
+STAGE2: UNIMPLEMENTED BOP -- refusing (NOT an INT 21h call): bop=0x54 next=0x01
+        at 0x9342:0x03ce ax=0x0002 bx=0x0001 dx=0x95d7
+STAGE2: task done -> reporting exit code 0x000000bd to CSRSS
+```
+
+**We stop; we do not skip.** Skipping needs the BOP's encoded *length*, which is
+per-call — `0x54` carries a sub-function byte, so `EIP += 3` would leave that byte to be
+executed as an instruction. And the exit code is a distinct non-zero `0xBD`: the defect
+being closed was a guest killed by an unimplemented call and reported as a **clean exit
+0**, so reusing 0 would have left the lie in place with better logging on top of it.
+
+**The gate is measured, not reasoned.** The diagnostic shipped first (`92e2136`) and the
+battery was run with it — necessary, because the BIOS arm deliberately sets
+`handled = 0` and falls through, so the control flow alone does not settle who depends
+on this:
+
+| battery | guests | all confirmed loaded | fall-throughs |
+|---|---|---|---|
+| DOS | Doom · Hexen · Duke3D · Heretic · heaven7 · Skyroads · Wolf3D · Mario · Lemmings · Chasm · Gothica · Radiance · Fusion · Skyxmas · vesacube · MEM · 6.22 `COMMAND.COM` | 17/17 | **0** |
+| Win16 | Notepad · Paint · WinMine | 3/3 | **0** |
+| — | **XP's `COMMAND.COM`** | 1/1 | **1** |
+
+⛔ **Lemmings' first row was a lie and nearly went into that table.** The harness said
+`NO SUCH TARGET` (wrong entry name) and the count of fall-throughs was, truthfully,
+zero — from a guest that never started. Every row above is gated on
+`STAGE2: target.txt loaded`, not on the absence of a hit. ⚠ And the *first* version of
+that check looked for `STAGE2: loaded`, which is not what the host prints — it scored
+**every** guest as "never ran", including the one with a 4.9 MB log. An absence proves
+nothing, and a presence-check that never matches proves nothing either.
+
+### ⛔ What the fall-through did before the gate
 
 The real-mode exec loop matches each BOP code with an exact `==`, and **its last arm
 hands anything unmatched to `dos_int21()`** (`main.c` ~26932). INT 21h's own stub is
@@ -79,7 +114,8 @@ Read off the code, `file:line` each. Status is about *our* implementation.
 | `0x59` | `DPMI_RAW2RM_BOP` | DPMI 0306 PM→real | IMPL | `main.c:472` |
 | `0x5A` | `DPMI_FLTRET_BOP` | fault-handler return | IMPL | `main.c:542` |
 | `0x67` | — | INT 67h EMM | IMPL | `main.c:21978` |
-| *else* | — | **falls through to INT 21h** | ⛔ **defect** | `main.c` ~26932 |
+| `0x11`–`0x17`, `0x25`–`0x30` | — | BIOS services (equipment, memory, disk, …) | IMPL/PART | `main.c:21988`, arm at `~24575` |
+| *else* | — | refused + logged, exit `0xBD` | ✅ gated | `main.c` ~26950 |
 
 ---
 
@@ -146,13 +182,35 @@ does not. That matches the measured 0-calls-vs-9-calls result in
 
 ---
 
+## 3a. Who else issues one — a measured negative
+
+Byte-scanned every `.exe`/`.com` under `demo/msdos/` and every `.exe`/`.dll`/`.drv`
+under `demo/win16/` on the rig. `C4 C4` pairs turn up in nineteen DOS binaries and
+three Win16 ones, and **every one of them is noise**: runs of `C4` inside compressed or
+resource data (`ZAR/SOUND/SETSOUND.EXE` alone has 362, 344 of them `C4 C4 C4`), with no
+third byte matching a plausible call number and none of them at a code site.
+
+⚠ A byte pattern is not an executed instruction, so this is weak evidence on its own —
+but it agrees with the sweep (below) and with the shape of the mechanism: **BOPs are how
+*NT's own* 16-bit components talk to the 32-bit side.** Ordinary period software has no
+reason to know the instruction exists. That bounds the collision risk to
+Microsoft-shipped guests — which is a small set, and `COMMAND.COM` is the one that
+matters.
+
+---
+
 ## 4. Owed
 
-1. **Gate the fall-through.** Enumerate what reaches it across the guest battery first —
-   the diagnostic from `92e2136` does that — then require `0x20` and refuse the rest
-   *loudly*. A refusal a guest can see beats a silent wrong answer.
-2. **Resolve the `0x57` double-booking.**
+1. ~~Gate the fall-through.~~ ✅ done, measured — see §1.
+2. **Resolve the `0x57` double-booking** between `DPMI_FAULT_BOP` and
+   `WOWCALL_BOP_CODE`. They are probably never live in the same guest, but "probably" is
+   how the `0x54` collision survived too.
 3. **Re-number ours out of the range real NTVDM guests use**, or dispatch on more than
    the code byte. A collision is only invisible until an NTVDM-aware guest turns up.
 4. **Measure `BOP 0x54`'s sub-functions against stock ntvdm** — `tools/wintest/stock.sh`
-   is the pattern for dropping the IFEO key (⛔ read its warnings first).
+   is the pattern for dropping the IFEO key (⛔ read its warnings first). The refusal log
+   line now prints `AX`, `BX`, `DX` and the sub-function byte, so a side-by-side against
+   stock has something to compare.
+5. **6.22's own `COMMAND.COM` loads, runs, and makes ZERO INT 21h calls** (this battery,
+   `result_dos.log`). It issues no BOPs either, so it is a different question entirely
+   and has not been looked at.

@@ -26942,21 +26942,38 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
              through here, is read as INT 21h AH=00, and terminates the guest -- which
              we then report as a CLEAN EXIT, CODE 0. Four sessions read that as
              "COMMAND.COM gives up"; it never called DOS at all.
-           ⚠ BEHAVIOUR DELIBERATELY UNCHANGED FOR NOW. The obvious gate (`info == 0x20`
-             or refuse) is probably right, but "probably" is not the standard here: the
-             arms above are long and some may fall through on purpose. This line
-             ENUMERATES what actually reaches the fall-through across the guest battery
-             first. Measure, then gate. */
+           ⚠ THE GATE IS MEASURED, NOT ASSUMED. The arms above are long and one of them
+             -- the BIOS block -- deliberately sets `handled = 0` and falls through, so
+             "require 0x20" needed evidence rather than a reading of the control flow.
+             The diagnostic below shipped first (92e2136) and the battery was run with
+             it: 17 DOS guests (Doom, Hexen, Duke3D, Heretic, heaven7, Skyroads, Wolf3D,
+             Mario, Lemmings, Chasm, Gothica, Radiance, Fusion, Skyxmas, vesacube, MEM,
+             6.22's COMMAND.COM) and 3 Win16 apps (Notepad, Paint, WinMine) -- ALL of
+             them confirmed loaded, **zero** fall-throughs. Only XP's COMMAND.COM
+             reaches here. (⚠ Lemmings' first row was a NO SUCH TARGET and its zero was
+             not evidence; re-run under its real entry, `lemvga.com`.)
+           ⚠ WE STOP, we do not skip. Skipping needs the BOP's encoded LENGTH, and that
+             is per-call: `0x54` carries a sub-function byte, so `EIP += 3` would leave
+             that byte to execute as an instruction. A refusal we cannot encode is
+             better reported than faked -- see the standing note that an unimplemented
+             call which still ANSWERS is worse than one that does not. */
         if ((VDM_REG(tib, VTIB_EVENT_INFO) & 0xFF) != 0x20) {
             DWORD cs_ = VDM_REG(tib, VTIB_CS) & 0xFFFF, ip_ = VDM_REG(tib, VTIB_EIP) & 0xFFFF;
             const volatile BYTE *bq = (const volatile BYTE *)(ULONG_PTR)((cs_ << 4) + ip_);
-            p = zput(p, "STAGE2: BOP FALL-THROUGH -> INT21: bop=0x");
+            p = zput(p, "STAGE2: UNIMPLEMENTED BOP -- refusing (NOT an INT 21h call): bop=0x");
             p = zhexb(p, VDM_REG(tib, VTIB_EVENT_INFO) & 0xFF);
             p = zput(p, " next=0x"); p = zhexb(p, bq[3]);   /* the sub-function byte */
             p = zput(p, " at 0x");  p = zhex(p, cs_); p = zput(p, ":0x"); p = zhex(p, ip_);
             p = zput(p, " ax=0x");  p = zhex(p, VDM_REG(tib, VTIB_EAX) & 0xFFFF);
-            p = zput(p, "\r\n");
+            p = zput(p, " bx=0x");  p = zhex(p, VDM_REG(tib, VTIB_EBX) & 0xFFFF);
+            p = zput(p, " dx=0x");  p = zhex(p, VDM_REG(tib, VTIB_EDX) & 0xFFFF);
+            p = zput(p, "\r\n         see docs/inventory/bop.md -- the C4 C4 number space is NTVDM's\r\n");
             log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+            /* A DISTINCT, NON-ZERO exit code. The whole defect this closes was a guest
+               killed by an unimplemented call and reported as a clean exit 0; reusing 0
+               here would leave the lie in place with better logging on top of it. */
+            m.exit_code = 0xBD;
+            break;
         }
         m.tp = p;
         m.retry = 0;
