@@ -139,9 +139,59 @@ It reads its request block from `DS:DX` — `(getDS()<<4) + getDX()`, then field
 `+0x0E`, `+0x1C`, `+0x1E`, `+0x20`. COMMAND.COM sets `DX=0x95D7` before the call, which
 is that block.
 
-⚠ **Not yet verified**: the block's field meanings, and what the guest expects back. The
-next step is to finish `0x0F00A966` and pin the layout, then answer it from the
-`VDM_COMMAND_INFO` our STAGE1 already receives.
+#### The request block at `DS:DX`, read off BOTH sides
+
+Field accesses in `0x0F00A966` (`ebx = (DS<<4)+DX`), cross-checked against what
+COMMAND.COM stores and reloads around its call site at guest `0x3CE`:
+
+| off | size | dir | evidence |
+|---|---|---|---|
+| `+0x00` | word | in | `movzx eax,word [ebx]` |
+| `+0x02` | word | in/out | read, then `mov [ebx+2],ax` |
+| `+0x04` | byte in, word out | in/out | `mov al,[ebx+4]` / `mov [ebx+4],ax` |
+| `+0x06` | word | out | |
+| `+0x08`, `+0x0A` | word | in | |
+| `+0x0E` | word | in | copied into the `VDM_COMMAND_INFO` |
+| `+0x10` | word | **out** | flags. COMMAND.COM: `test [blk+0x10],7` then `,1` |
+| `+0x12` | dword | **in+out** | a **cookie**: COMMAND.COM loads it from its own `[es:0x32B]/[es:0x32D]` *before* the call and stores it straight back *after* — it must round-trip |
+| `+0x16` | word | out | |
+| `+0x18` | word | in | compared against 0 |
+| `+0x1A` | word | out | COMMAND.COM keeps the low byte at `[es:0x32F]` |
+| `+0x1C`:`+0x1E` | seg:off | in | combined as `(seg<<4)+off` |
+| `+0x20` | word | in/out | |
+| `+0x22` | word | out | status — XP writes `4`, `8` or `9` |
+
+**Implemented as a defined "no command"**: zeros into the OUT fields, `AX=0`, `CF=0`,
+and `+0x12` **deliberately preserved**. ⚠ That the zeros *mean* "nothing to run" is a
+claim, not a decode — but the alternative is not neutral: leaving the block alone hands
+COMMAND.COM whatever was already in its memory. **A defined answer is falsifiable; an
+uninitialised one is not.** Measured: it now proceeds past sub 01 every time.
+
+### ✅ `sub 0x0E` = the keyboard / code-page configuration
+
+`0x0F0156EC`, and the imports name it outright:
+
+```
+call [GetSystemDefaultLangID] ; cmp si,0x411        <- LANG_JAPANESE
+  ├─ yes: call [GetKeyboardType] (USER32) ; lengths 0x1B5 / 0x3A4 ; writes "JP"
+  └─ no : lea eax,[ebp-0x18] ; call [GetConsoleKeyboardLayoutNameA]
+```
+
+`0x1B5` = **437**, the US OEM code page. `0x3A4` = **932**, Japanese Shift-JIS. And the
+call site fits: immediately before it COMMAND.COM issues `INT 2Fh AX=AD80h`, the KEYB
+installed-check, then passes `DS:SI` = a buffer with `CX = 0x539` (1337 bytes).
+
+⇒ **sub 0E asks the host for the console's keyboard layout and code page.**
+
+### ▶ Where it stands
+
+With sub 01 answered, XP's COMMAND.COM reaches **sub 0E** and then idles — `frozen at
+CS:IP=0x0050:0x0037`, which is our own INT 08h stub's `CD 1C` chain, with `irq0_inj=4`
+and `raised_any=0x25B`. **It is taking interrupts, not wedged**; it prints nothing, so it
+is waiting on something rather than sitting at a prompt.
+
+Next: decide what a truthful `sub 0E` answer is — we have the same three Win32 calls
+available — and find what the 1337-byte block is meant to contain.
 
 ---
 

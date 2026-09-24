@@ -27158,6 +27158,48 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             p = zput(p, "         next="); p = zdump(p, (const void *)(bq + 4), 12);
             p = zput(p, "\r\n");
             log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+            /* ── ★ sub 01 = "WHAT SHOULD I RUN NEXT?" -- ANSWER "NOTHING". ───────────
+                 XP's handler (ntvdm.exe 0x0F00A966) builds a VDM_COMMAND_INFO with two
+                 MAX_PATH buffers and asks CSRSS via GetNextVDMCommand. It reads the
+                 guest's request block from DS:DX -- (DS<<4)+DX, exactly as we compute
+                 it here -- and writes its answer back into the same block.
+               ▸ The fields are read off BOTH sides (see docs/inventory/bop.md):
+                   +0x10 w   OUT  flags. COMMAND.COM does `test [blk+0x10],7` then
+                                  `test ...,1`; zero takes the "nothing to do" branch.
+                   +0x12 dw  IN+OUT a cookie. COMMAND.COM loads it from its own
+                                  [es:0x32B]/[es:0x32D] before the call and stores it
+                                  straight back afterwards -- so it must ROUND-TRIP.
+                   +0x1A w   OUT  COMMAND.COM keeps the low byte at [es:0x32F].
+                   +0x02 +0x04 +0x06 +0x16 +0x20   OUT
+                   +0x22 w   OUT  status; XP writes 4, 8 or 9 here.
+               ⚠ WHAT WE WRITE IS A DEFINED "NO COMMAND", NOT A DECODED ONE. That is a
+                 real claim and it may be wrong -- but the alternative is not neutral:
+                 leaving the block ALONE hands COMMAND.COM whatever was in its own
+                 memory, which is how it got a garbage answer and spun. A defined answer
+                 is falsifiable; an uninitialised one is not.
+               ⛔ The cookie is preserved rather than zeroed, because the guest reloads
+                 it into its own state unconditionally -- zeroing it would destroy
+                 something we were only asked to carry. */
+            if (bn == NTVDM_BOP_CMD && sub == 0x01) {
+                DWORD blk = ((VDM_REG(tib, VTIB_DS) & 0xFFFF) << 4)
+                          + (VDM_REG(tib, VTIB_EDX) & 0xFFFF);
+                volatile BYTE *b = (volatile BYTE *)(ULONG_PTR)blk;
+                #define BW(o, v) (*(volatile WORD *)(b + (o)) = (WORD)(v))
+                BW(0x02, 0); BW(0x04, 0); BW(0x06, 0);
+                BW(0x10, 0);                       /* flags: nothing to run */
+                BW(0x16, 0); BW(0x1A, 0); BW(0x20, 0);
+                BW(0x22, 0);                       /* status */
+                #undef BW
+                /* +0x12/+0x14 deliberately untouched -- the cookie round-trips. */
+                VDM_REG(tib, VTIB_EAX) &= 0xFFFF0000u;   /* AX = 0 */
+                p = zput(p, "         sub 01 answered: no command (flags=0, cookie at "
+                            "+0x12 preserved), blk=0x"); p = zhex(p, blk);
+                p = zput(p, "\r\n");
+                log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                VDM_REG(tib, VTIB_EFLAGS) &= ~1u;  /* success */
+                VDM_REG(tib, VTIB_EIP) += 4;
+                continue;
+            }
             if (cf_pol) VDM_REG(tib, VTIB_EFLAGS) |=  1u;
             else        VDM_REG(tib, VTIB_EFLAGS) &= ~1u;
             VDM_REG(tib, VTIB_EIP) += 4;             /* C4 C4 <bop> <sub> -- see above */
