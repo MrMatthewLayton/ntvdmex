@@ -175,7 +175,60 @@ getter, and then **`INT 21h AH=63h`** (get DBCS lead-byte table) at `0x7EC4`.
 Guessing the next blocker from the disassembly alone is exactly the "read the evidence
 backwards" mistake this page already records once.
 
-▶ **Next: an INT 21h trace for DOS guests**, then re-run and read what it actually asks.
+## ⛔⛔⛔ The repo had already warned me, in the exact words
+
+There was no need to build a trace: `m.trace_all` has existed all along, gated by
+`cfg\dostrace.flag` and described as *"a differential instrument, not a default"*. It only
+printed the call, not the answer, so a **result line was added** (`dos_int21.c`) — that
+half was genuinely missing, and "which call came back an error" is unanswerable without it.
+
+With it on, XP's COMMAND.COM makes **31 INT 21h calls and never prints anything**, ending
+at `AH=00h` (terminate) from:
+
+```
+==> DOS terminate (AH=00h) from CS:IP=0x9342:0x03ce
+```
+
+⚠ **The previous session recorded `0x95eb:0x03ce`.** Different segment — COMMAND.COM
+relocates its transient portion, and where depends on the memory map — but **the same
+offset, the same instruction.** It dies in exactly the same place with `122Eh` now fully
+answered.
+
+And `dos_int21.c`'s own `AH=53h` handler already said so, before I started:
+
+> *"TESTED AS THE CAUSE OF THE COMMAND.COM EXIT, AND REFUTED… Answering SUCCESS with a
+> zeroed DPB was tried: the shell still exits, at the SAME CS:IP, after the same 32 ms…
+> What COMMAND.COM asks for and does not get is INT 2Fh AX=122Eh… **That is the next thing
+> to chase, and "died after" is still not "died because": prove it before implementing
+> it.**"*
+
+⇒ A previous session had **already identified `122Eh` as the suspect, already refuted
+`53h`, and already written down the warning against implementing on "died after"
+reasoning**. I rediscovered the suspect from scratch, implemented it, and got precisely
+the outcome that note predicts. **The work was not wasted — `122Eh` was a real gap and is
+now correct against two kernels — but the method was: I should have grepped the handler
+for the thing I was about to chase.**
+
+## ▶ What is actually next
+
+The trace's results narrow it, and the narrowing must be done by comparison, not by
+reading:
+
+| call | our answer | status |
+|---|---|---|
+| `AH=53h` | `AX=0001 CF=1` (explicit error) | **refuted as the cause**, twice now |
+| `AH=63h` | `AX` unchanged | get DBCS lead-byte table — suspect |
+| `AH=5Dh AL=08/09` | `AX` unchanged | suspect |
+
+⚠ **"AX unchanged" is NOT a reliable test for "not serviced."** `AH=25h` (set vector),
+`33h` and `50h` return nothing in AX and look identical on a perfectly working DOS. I
+nearly reported a list of false gaps off that heuristic — a property check passing by
+luck, the same shape as the DOR mask and the table-bytes dump.
+
+⇒ **Ask a real kernel.** A probe issuing `63/00`, `5d/08`, `5d/09` and diffing against
+6.22 and PCem turns three suspects into measured facts. That is the same loop that closed
+`122Eh` honestly, and it is the only way to tell a gap from a call that legitimately
+returns nothing.
 
 ## ⏸ The placement, and why it took care
 

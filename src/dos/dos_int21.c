@@ -1968,6 +1968,21 @@ int dos_int21(dos_machine_t *m)
        does not overwrite it. */
     if (ah != 0x59 && (*pfl & 1)) m->last_err = (uint16_t)(R_AX & 0xFFFF);
 
+    /* ── AND WHAT WE ANSWERED, WHICH IS THE HALF THAT WAS MISSING. ──────────────
+         The entry trace above prints the call; it did not print the RESULT, so a
+         run said what the guest asked and never what it was told. That is only
+         half a differential instrument: XP's COMMAND.COM makes 31 calls and then
+         terminates, and "which one came back an error" is the whole question --
+         unanswerable from the inbound line alone.
+       ⚠ Same flag, same AH=0Ah exclusion, so the pairing stays one-to-one and a
+         reader can line `21:xx/yy` up with the `->` under it. */
+    if (m->trace_all && ah != 0x0A) {
+        tp = zput(tp, "     -> ax="); tp = zhexb(tp, (unsigned)((R_AX >> 8) & 0xFF));
+        tp = zhexb(tp, (unsigned)(R_AX & 0xFF));
+        tp = zput(tp, " cf="); tp = zhexb(tp, (unsigned)(*pfl & 1));
+        tp = zput(tp, "\r\n");
+    }
+
     m->tp = tp;
     #undef R_AX
     #undef R_BX
