@@ -39,11 +39,45 @@ Before this session **8 of 36** probes had ever been diffed. All 36 have now bee
 run. This table is the map; it is not a claim that a clean probe means a verified
 surface (see the warning under the cluster above).
 
-| clean | `p_file` `p_alloc` `p_exec` `p_ovl` `p_ctab` `p_ctry` `p_defs` `p_misc` `p_redir` `p_umb` `p_unimp` `p_ver` `p_dir`* `p_rest`* |
+| clean | `p_file` `p_alloc` `p_exec` `p_ovl` `p_ctab` `p_ctry` `p_defs` `p_misc` `p_redir` `p_umb` `p_unimp` ~~`p_ver`~~ `p_dir`* `p_rest`* |
 |---|---|
 | **abstained (environment)** | `p_curdir` `p_psp` `p_mcb` — 12 rows, rationales recorded |
 | **fixed this session** | `p_err` (AH=3Dh error mapping, `b580c4d`) |
-| **still disagreeing** | `p_disk` 13 · `p_xms` 7 · `p_sysvar` 6 · `p_lpt` 5 · `p_ioctl` 3 · `p_tsr` 3 · `p_plan12` 1 |
+| **still disagreeing** | `p_disk` 13 · `p_xms` 7 · `p_sysvar` 6 · `p_lpt` 5 · `p_ioctl` 3 · `p_tsr` 3 · `p_plan12` 1 · **`p_ver` 2 (see below)** |
+
+## ⛔ `p_ver` is no longer clean, and no code changed (2026-09-24)
+
+Re-run today, `./scripts/dosdiff.py build/probes/P_VER.COM --host msdos622 --host ntvdmex`:
+
+```
+int21.30    AX   1606   0005   MISMATCH
+int21.3306  BX   1606   0005   MISMATCH
+```
+
+**The rig is reporting DOS 5.00**, from `HKCU\Software\NTVDMEX\DosVersionMajor/Minor` —
+the Settings dialog's persistent store, which survives reboots and wipes, and which no
+`cfg\dosver.txt` was overriding. Nothing announced it; the host printed a version line
+only when the *file* overrode. See standing hazard 11 in [`STATE.md`](../STATE.md);
+fixed in `0e342c2`, which now prints the version **and its source** on every run.
+
+⚠ **This is what "scores — re-run, never quote" is for.** The recorded figure
+(670/677 = 99.0%) was true when measured and is stale now, and the thing that moved it
+was **a machine setting, not a commit**. How long the rig has been on 5.00 is unknown,
+so the date of this table's `p_ver: clean` is the earliest it can be trusted from.
+
+### ▶ And the row itself is badly modelled — this is owed
+
+`dosdiff.py` already abstains for **dosbox-x** on exactly these two fields, with the
+right reason written out: *"DOSBox-X's reported DOS version is a CONFIGURABLE EMULATOR
+SETTING … not an observation about MS-DOS … **our own value is selectable too, which is
+exactly why DOSBox's cannot be truth**."* The note names our own knob and then compares
+it to 6.22 anyway.
+
+So the row as written tests **the setting**, not the implementation, and can be made
+green or red by a dialog. The useful check is the falsifiable one: **does `AH=30h`
+report what the configuration says it should?** — which would catch a real bug (the knob
+ignored) that the present row cannot. Not implemented; recorded rather than bodged,
+because making it abstain would hide the signal instead of fixing it.
 
 \* `p_dir` and `p_rest` were **probe bugs, not host bugs** — see below.
 
