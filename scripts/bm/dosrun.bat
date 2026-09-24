@@ -20,11 +20,14 @@ set BIN=%SH%\bin
 set OUT=%SH%\debug\out
 set D=%SH%\demo\msdos
 set IFEO=HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\ntvdm.exe
+rem  A folder of "-" means %2 is an ABSOLUTE path, for launching something that
+rem  does not live under demo\msdos -- e.g. XP's own C:\WINDOWS\SYSTEM32\COMMAND.COM.
 set T=%1
 set F=%2
 set TAG=%3
 if "%TAG%"=="" set TAG=%T%
 set R=%OUT%\result_dos_%TAG%.log
+if "%T%"=="-" goto :abs
 
 if not exist "%OUT%" md "%OUT%"
 > "%R%" echo == dosrun %T% %F%  %DATE% %TIME%
@@ -39,6 +42,14 @@ reg add "%IFEO%" /v Debugger /t REG_SZ /d "\"%BIN%\ntvdmhost.exe\"" /f >nul
 cd /d "%D%\%T%"
 >> "%R%" echo launching %D%\%T%\%F% at %TIME%
 start "" "%D%\%T%\%F%"
+goto :ran
+
+:abs
+cd /d "%OUT%"
+>> "%R%" echo launching ABSOLUTE %F% at %TIME%
+start "" "%F%"
+
+:ran
 ping -n 13 127.0.0.1 >nul
 
 >> "%R%" echo --- processes:
