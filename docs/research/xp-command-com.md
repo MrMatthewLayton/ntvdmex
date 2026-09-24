@@ -94,7 +94,61 @@ observed facts are the selector values and that a far pointer is expected back.
 
 ---
 
-## The cheap way to learn the table format — ground truth exists
+## ✅ MEASURED: what a working DOS actually returns
+
+`tools/dostest/p_int2f.asm` asks exactly what COMMAND.COM asks — same `AX`, same `DL`
+values, `ES:DI` zeroed first. Two real Microsoft kernels (6.22 under QEMU, and PCem):
+
+| call | 6.22 | PCem | ours |
+|---|---|---|---|
+| `DL=0` | `0001:0D8F` | `0001:0D8F` | `0000:0000` ⛔ |
+| `DL=2` | `0001:0B3B` | `0001:0B3B` | `0000:0000` ⛔ |
+| `DL=4` | `0001:0D8F` | `0001:0D8F` | `0000:0000` ⛔ |
+| `DL=6` | `0000:0000` | `0000:0000` | `0000:0000` ✅ |
+| `DL=8` | `03E7:0188` | `03EA:0188` | `0000:0000` ⛔ |
+| `AX=5501h` | unchanged | unchanged | unchanged ✅ |
+
+**7 mismatches.** Three things fall out, none of them guessed:
+
+1. ★ **`DL=6` is legitimately null on real DOS too.** A null is not automatically fatal —
+   which kills the tidy story that COMMAND.COM "dies the moment it needs one".
+2. ★ **`AX=5501h` is not a gap.** All three leave it unchanged; only a resident
+   COMMAND.COM answers it. One less thing to build.
+3. ★ **The contents are build-specific, so there is nothing canonical to copy.** With the
+   pointers dereferenced (32 bytes each), `DL=8`'s table is byte-identical on both
+   machines (`CD024102…`) but `DL=0/2/4` differ — they point into low kernel memory
+   (`0001:0D8F` ≈ linear `0xD9F`). ⇒ **The requirement is four dereferenceable pointers
+   and a null, not specific bytes.**
+
+⛔⛔ **And the first cut of that dump manufactured an agreement.** It emitted only the
+bytes, with a guard leaving the buffer zeroed on a null pointer — so *our* null emitted
+sixteen zeros, the real machines emitted sixteen zeros they had actually read, and the row
+came back **AGREE**. Fixed with a `seen` flag per table, so "did not look" and "looked,
+and it was zeros" are different values. **Same shape as the floppy `DOR` mask, twice in
+one day.**
+
+## ⏸ NOT IMPLEMENTED — the placement needs care this session could not give it
+
+The four tables need a home in low memory. `dos_layout.h`'s own high-water mark is
+`DOS_CDS_OFF` at `0x04E0` in a block ending near `0x06F0`, and that file is a catalogue of
+what goes wrong there: a placement on linear `0x714` "breaks EVERY guest, selftest
+included"; a zeroed table at SysVars+0x6A had **krnl386 writing through it into our own
+handler code**. Choosing a spare ~200 bytes against a drive table whose length is
+unverified is not a thing to do quickly.
+
+**What is left to do, in order:**
+
+1. Verify the free extent of the `DOS_CTAB_SEG` block (what `DOS_CDS_OFF` actually spans).
+2. Place four small tables there; return them for `DL=0/2/4/8`, null for `DL=6`.
+3. Report DOS **5.0** when the guest is `command.com` — measured above as the difference
+   between "refuses at the version check" and "reaches the table calls".
+4. Re-run `dosrun.bat - C:\WINDOWS\SYSTEM32\COMMAND.COM` and see how much further it
+   gets. ⚠ **It may not be the last blocker** — the five `122Eh` calls are only the last
+   INT 2Fh calls we log, and there is more initialisation after them.
+5. Only then: default to `COMMAND.COM` when nothing is named, strictly **below**
+   `target.txt`.
+
+## The older plan, kept because the machinery exists
 
 XP's COMMAND.COM **works under stock ntvdm on this same box**, so stock implements
 `122Eh` and the correct answers are sitting in memory a few feet away. The machinery to
