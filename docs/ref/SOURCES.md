@@ -40,7 +40,7 @@ need in the order *we* need it.
 | **PC speaker** | IBM TechRef (PIT channel 2 + port 61h) | Gate/data bits | |
 | **Sound Blaster Pro / 16 / AWE32** | Creative Sound Blaster Programmer's Reference | DSP commands, mixer, DMA modes, IRQ | |
 | **OPL2 (YM3812) / OPL3 (YMF262)** | Yamaha datasheets | Register map, operators, envelopes | Exact analogue timbre — use Nuked-OPL3 as a **black-box oracle** only |
-| **Gravis Ultrasound** | Gravis GUS SDK / Programmer's Guide | GF1 voices, DRAM, the DMA/IRQ contract | |
+| **Gravis Ultrasound** | *UltraSound SDK v2.22* (Gravis/FORTE, 1994) — manual Ch. 2 + the SDK's driver source; archived at [github.com/RobertSundling/GUSDK222](https://github.com/RobertSundling/GUSDK222), **not mirrored** (user decision, 2026-09-25) | GF1 voices, DRAM, the DMA/IRQ contract, how software detects the card | The ICS-2101 mixer and CS4231 codec — later options, not the GF1. Derived reference: [`gus.md`](gus.md) |
 | **MPU-401 + General MIDI** | Roland MPU-401 Technical Reference; the GM spec | UART and intelligent modes, the GM sound set | |
 | **16550 UART · LPT** | National 16550 datasheet; IBM TechRef | FIFO, modem/line status, the parallel strobe | |
 | **Floppy controller** | Intel 82077AA datasheet | Command phases, result bytes, the drive table | ⚠ The *three-phase handshake* is the chip; a register-by-register reading misses it entirely — see [`fdc.md`](fdc.md) |

@@ -134,7 +134,7 @@ Each surface gets two documents, doing two different jobs:
 | PC speaker (PIT ch.2 + port 61h) | IBM TechRef | [pit.md](pit.md) §6 | [`ref/pit.md`](../ref/pit.md) §2 |
 | Sound Blaster Pro / 16 / AWE32 | Creative SB Programmer's Reference | — | — |
 | OPL2 (YM3812) / OPL3 (YMF262) | Yamaha datasheets; Nuked-OPL3 as oracle | — | — |
-| Gravis Ultrasound | Gravis GUS SDK / Programmer's Guide | — | — |
+| Gravis Ultrasound | Gravis GUS SDK v2.22 (archived) | [`ref/gus.md`](../ref/gus.md) | [`gus.md`](gus.md) — all MISS |
 | MPU-401 + General MIDI | Roland MPU-401 TechRef; GM spec | — | — |
 | 16550 UART + LPT | National 16550 datasheet; IBM TechRef | — | — |
 | **Floppy controller (765/82077)** | Intel 82077AA datasheet | [fdc.md](fdc.md) — **the chip existed nowhere; MSR read `FFh` and the datasheet's own command loop never exited** | ✅ [`ref/fdc.md`](../ref/fdc.md) |
