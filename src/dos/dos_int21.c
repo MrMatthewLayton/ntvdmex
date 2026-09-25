@@ -1281,23 +1281,46 @@ int dos_int21(dos_machine_t *m)
               tp = zput(tp, "  INT21 AH=53 BPB->DPB UNIMPLEMENTED (no installable "
                             "block drivers) -- said once per run\r\n"); } }
         m->unimpl21[0x53 >> 3] |= (uint8_t)(1u << (0x53 & 7));
-        /* ── ⚠⚠ PROVISIONAL, AND THE REASON IS WORTH MORE THAN THE VALUE. ──────────
+        /* ── ★★★ MEASURED AGAINST STOCK NTVDM, 2026-09-25. ───────────────────
              Documented AH=53h is BPB->DPB and takes DS:SI / ES:BP with NO AL
              sub-function. XP's COMMAND.COM uses it as a PRIVATE QUERY with AL as a
-             selector -- guest 0x1692 in its resident part:
+             selector and reads the answer out of AL -- its resident part, guest 0x1692:
                  mov al,5 ; mov ah,53h ; int 21h ; mov [0x327],al
                  mov al,7 ; mov ah,53h ; int 21h ; mov [0x328],al
-             (and AL=2 elsewhere). It reads the ANSWER OUT OF AL. Returning AX=1 put a
-             1 in [0x327], and three separate gates read `cmp byte [0x327],1 / jz` as
-             "do not be the interactive shell" -- so our "unimplemented" was not inert,
-             it was an ANSWER, and the wrong one.
-           ★ THE PRIVATE NT CONTRACT IS NOT ONLY BOPs. It reaches into INT 21h as
-             sub-functions of a documented call. See docs/inventory/bop.md.
-           ⛔ 0 IS NOT MEASURED. It is "not 1", chosen to test whether [0x327] is the
-             gate -- the right values must come from NTDOS.SYS via a stock ntvdm run,
-             which is the only oracle for a private call. Do not promote this to a
-             fact without that run. */
-        SETAX(0); OKCF();
+             (AL=2 elsewhere). NTDOS.SYS is the only implementation, so stock ntvdm on
+             the rig is the only oracle -- `debug\rig\dosstock.bat P_INT53.COM`, which
+             drops the IFEO key and PROVES it back. Real MS-DOS cannot be asked: the
+             documented form BUILDS a DPB from a caller-supplied BPB, and a fabricated
+             pointer HANGS 6.22 (measured twice).
+
+               AL=00 -> AX=0005 CF=0     AL=04 -> AX=5300 CF=0
+               AL=01 -> AX=0001 CF=1     AL=05 -> AX=5301 CF=0
+               AL=02 -> AX=5300 CF=0     AL=06 -> AX=5300 CF=0
+               AL=03 -> AX=0001 CF=1     AL=07 -> AX=5301 CF=0
+
+             ⇒ AH is preserved and AL carries a 0/1 answer for 02/04/05/06/07; 01 and
+               03 are genuinely unsupported (AX=1, CF=1 -- DOS's "invalid function").
+
+           ⛔⛔ AND THE ORIGINAL "UNIMPLEMENTED" WAS ACCIDENTALLY RIGHT. It returned
+             AX=1, i.e. AL=1 -- exactly what stock returns for AL=5 and AL=7, the two
+             COMMAND.COM stores. I then "fixed" it to AX=0 on the theory that [0x327]=1
+             was blocking the interactive path, and made it WRONG. The theory was wrong
+             too: stock sets [0x327]=1 and IS interactive, so that gate does not mean
+             what I read it to mean.
+             ⇒ It was marked provisional, and that is the only reason this is a
+               correction rather than a fact. **Guessing a value for a private call is
+               not cheaper than measuring it; it is the same work done twice.**
+
+           ⚠ AL=00's row was measured with SI=0 and BP=0, as COMMAND.COM issues it. It
+             is NOT a claim about the documented BPB->DPB call given a real BPB, which we
+             still do not implement. */
+        { uint8_t al53 = (uint8_t)(R_AX & 0xFF);
+          switch (al53) {
+          case 0x00:                       SETAX(0x0005); OKCF();  break;
+          case 0x02: case 0x04: case 0x06: SETAX(0x5300); OKCF();  break;
+          case 0x05: case 0x07:            SETAX(0x5301); OKCF();  break;
+          default:                         SETAX(0x0001); ERRCF(); break;
+          } }
     } else if (ah == 0x5E) {                    /* network machine name / printer */
         uint8_t al5e = (uint8_t)(R_AX & 0xFF);
         if (al5e == 0x00) {                     /* oracle: AX=0, CF=0 */

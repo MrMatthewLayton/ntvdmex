@@ -510,7 +510,55 @@ from `NTDOS.SYS`: a stock ntvdm run is the only oracle for a private call. **Do 
 promote it to a fact without that run.** (6.22's `COMMAND.COM` re-tested after the change:
 unaffected -- prompt, `ver`, `dir` all still correct.)
 
-### ⛔ The oracle for `AH=53h` is stock ntvdm, and ONLY stock ntvdm
+### ✅✅ `AH=53h` MEASURED AGAINST STOCK NTVDM -- 8/8 AGREE
+
+`debug\rig\dosstock.bat P_INT53.COM` drops the IFEO key, runs the probe under stock,
+restores the key **unconditionally** and proves it back (before/after both read the same
+path, and the target is checked to exist). The bracket is modelled on `w16stock.bat`;
+`stockdump.bat` could not be reused -- it restores a hardcoded `C:\ntvdmex\` path that is
+not where this rig's host lives.
+
+| `AX` in | stock | ours | | `AX` in | stock | ours |
+|---|---|---|---|---|---|---|
+| `5300` | `AX=0005 CF=0` | ✅ | | `5304` | `AX=5300 CF=0` | ✅ |
+| `5301` | `AX=0001 CF=1` | ✅ | | `5305` | `AX=5301 CF=0` | ✅ |
+| `5302` | `AX=5300 CF=0` | ✅ | | `5306` | `AX=5300 CF=0` | ✅ |
+| `5303` | `AX=0001 CF=1` | ✅ | | `5307` | `AX=5301 CF=0` | ✅ |
+
+⇒ `AH` is preserved and `AL` carries a 0/1 answer for `02 04 05 06 07`; `01` and `03`
+are genuinely unsupported (`AX=1`, `CF=1` -- DOS's "invalid function").
+
+### ⛔⛔ AND THE MEASUREMENT OVERTURNED BOTH OF MY READINGS
+
+**1. The original "unimplemented" was accidentally RIGHT.** It returned `AX=1`, i.e.
+`AL=1` -- exactly what stock returns for `AL=5` and `AL=7`, the two COMMAND.COM stores.
+I "fixed" it to `AX=0` on a theory and made it **wrong**.
+
+**2. The theory was wrong too.** I read `cmp byte [0x327],1 / jz` as *"do not be the
+interactive shell"*. **Stock sets `[0x327]=1` and IS interactive**, so the jump target is
+the normal path and my polarity reading was backwards. Every conclusion that leaned on it
+is withdrawn.
+
+★ The value was marked **provisional** when it was guessed, and that is the only reason
+this is a correction rather than a fact quietly embedded in the code. **Guessing a value
+for a private call is not cheaper than measuring it -- it is the same work done twice, and
+the guess has to be found and removed.**
+
+⚠ `AL=00`'s row was measured with `SI=0`/`BP=0`, as COMMAND.COM issues it. It is **not**
+a claim about the documented BPB->DPB call given a real BPB, which we still do not
+implement.
+
+### ⛔ Real MS-DOS cannot be asked at all
+
+`tools/dostest/p_int53.asm` **hangs MS-DOS 6.22.** Measured twice -- once with a broken
+probe and once with a correct one -- so the hang is the **call**: `--host msdos622` never
+reaches `QUIT.COM`. The documented form does not *report*, it **builds** a DPB from a
+caller-supplied BPB; a fabricated pointer is a mutation, not a question. PCem and
+dosbox-x are assumed the same and have not been tried. The probe says so at the top.
+
+⚠ The probe's first cut built its eight case names with a `%1` NASM did not expand, so
+all eight emitted under ONE name -- eight questions collapsed into one answer. Longhand
+now. *It only announced itself by producing two rows for eight cases.*
 
 `tools/dostest/p_int53.asm` sweeps `AX=5300h`–5307h -- the documented form, the three
 XP's COMMAND.COM issues (`02 05 07`), and the gaps, so that a handler answering only the
