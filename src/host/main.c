@@ -2411,7 +2411,13 @@ static int mem_readable(ULONG_PTR addr, SIZE_T len)
     return (addr + len) <= ((ULONG_PTR)mb.BaseAddress + mb.RegionSize);
 }
 
-static HMENU        g_savedmenu;            /* stashed menu while hidden           */
+/* The menu bar while FULLSCREEN has it detached. There used to be a second
+   detacher -- a "Show Menu Bar" toggle -- and it was a ONE-WAY DOOR: unticking it
+   removed the only control that could put it back. Removed (user report, s79);
+   fullscreen is now the only thing that takes the bar away, and Alt+Enter always
+   brings it back. Declared here rather than beside the fullscreen code because the
+   menu_* helpers above that point have to compensate for a detached bar. */
+static HMENU        g_fs_menu;
 
 /* Device IRQs 2-7 (the Sound Blaster's block-completion IRQ 5 above all). IRQ 0
    and 1 keep their existing dedicated paths; everything else latches here and is
@@ -7163,7 +7169,7 @@ static void overlay_cursor(uint8_t *px, int W, int H, int stride, int mx, int my
 enum {                                       /* wired command IDs                */
     IDM_STUB = 1,                            /* every not-yet-wired item          */
     IDM_FILE_EXIT, IDM_FILE_CLOSEPROG,
-    IDM_DISP_FULLSCREEN, IDM_DISP_SHOWMENU,
+    IDM_DISP_FULLSCREEN,
     IDM_INPUT_CAPTURE,          /* (IDM_INPUT_CURSOR retired -- see g_cursor_show) */
     IDM_FILE_SETTINGS,
     IDM_CAP_SHOT,
@@ -7809,7 +7815,7 @@ static int wow_refuse(const char *cmd)
      that was configuration now lives on a tab of the Settings dialog, which is one
      place to look instead of five menus deep in submenus, and one store instead of a
      tick per item.
-   ► What stayed behind is what was never a setting: Fullscreen, Show Menu Bar, input
+   ► What stayed behind is what was never a setting: Fullscreen, input
      capture, the mount commands. Those are ACTIONS -- things you do once, now, and
      usually by keystroke. A command you reach for mid-game does not belong behind an
      OK button, so View and Machine keep them.
@@ -7874,7 +7880,6 @@ static HMENU build_menu(void)
     mi(m,"Wait for VSync",IDM_VIEW_VSYNC);
     mi(m,"Blink Text Cursor",IDM_VIEW_BLINK);
     msep(m);
-    mi(m,"Show Menu Bar",IDM_DISP_SHOWMENU);
     /* ⚠ "Show Host Cursor" AND ITS Ctrl+F8 HOTKEY WERE REMOVED HERE, DELIBERATELY.
          The desktop pointer's visibility is not a knob of its own -- it is what
          exclusive mode looks like, and Win+F10 is the control for that. See the
@@ -8207,13 +8212,13 @@ static void make_status(HWND parent, HINSTANCE hi)
     if (sr.bottom > sr.top) g_pd.status_h = sr.bottom - sr.top;
 }
 
-/* Tick/untick a menu item BY COMMAND, through whichever menu is live: "Show Menu
-   Bar" DETACHES the bar into g_savedmenu, and a toggle pressed by hotkey while it
-   is detached must still be recorded there or the tick is stale when it returns. */
+/* Tick/untick a menu item BY COMMAND, through whichever menu is live: FULLSCREEN
+   detaches the bar into g_fs_menu, and a toggle pressed by hotkey while it is
+   detached must still be recorded there or the tick is stale when it returns. */
 static void menu_check(HWND h, UINT id, int on)
 {
     HMENU m = GetMenu(h);
-    if (!m) m = g_savedmenu;
+    if (!m) m = g_fs_menu;
     if (m) CheckMenuItem(m, id, MF_BYCOMMAND | (UINT)(on ? MF_CHECKED : MF_UNCHECKED));
 }
 
@@ -8236,7 +8241,7 @@ static void menu_sync_modal(HWND h)
     HMENU m = GetMenu(h);
     UINT  flag;
     unsigned i;
-    if (!m) m = g_savedmenu;
+    if (!m) m = g_fs_menu;
     if (!m) return;
     flag = (g_vid.mkind == VID_KIND_TEXT) ? MF_ENABLED : (MF_GRAYED | MF_DISABLED);
     for (i = 0; i < sizeof TEXT_ONLY / sizeof TEXT_ONLY[0]; ++i)
@@ -8563,7 +8568,6 @@ static void host_cursor_set(HWND h, int hide)
 static WINDOWPLACEMENT g_fs_place;      /* geometry to come back to                  */
 static LONG            g_fs_style;      /* the style we took off                     */
 static LONG            g_fs_exstyle;
-static HMENU           g_fs_menu;       /* the menu bar we detached                  */
 static int             g_fs_saved;
 
 /* Undo everything the fullscreen entry changed. Separate because BOTH the normal exit
@@ -9001,7 +9005,7 @@ static void host_video_base(int *w, int *h)
 }
 
 /* What the frame adds around the video: borders, caption, menu bar, status strip.
- ⚠ Asked of the window rather than assumed, because "Show Menu Bar" detaches the
+ ⚠ Asked of the window rather than assumed, because fullscreen detaches the
    menu and AdjustWindowRect's answer changes when it does. */
 static void host_frame_extra(HWND h, int *ex, int *ey)
 {
@@ -9037,7 +9041,7 @@ static void menu_view_sync(HWND h)
 {
     HMENU m = GetMenu(h);
     int i;
-    if (!m) m = g_savedmenu;
+    if (!m) m = g_fs_menu;
     if (!m) return;
     for (i = 0; i < MENU_COMBO_N; ++i) {
         UINT base = MENU_COMBOS[i].base;
@@ -9095,7 +9099,7 @@ static int win_scale_clamped(DWORD idx)
    CreateWindow, so changing it in the dialog stored a number and did nothing you
    could see until the next launch -- reported as "I tried display size and it
    didn't resize", which is exactly what it did.
- ⚠ THE MENU MAY BE DETACHED. "Show Menu Bar" moves it into g_savedmenu, and
+ ⚠ THE MENU MAY BE DETACHED. Fullscreen moves it into g_fs_menu, and
    AdjustWindowRect's last argument decides whether a menu bar's height is added --
    so it has to ask the window what it has RIGHT NOW, not assume.
  ⚠ AND A MAXIMIZED WINDOW MUST BE RESTORED FIRST, or SetWindowPos resizes it while
@@ -9996,10 +10000,6 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
         switch (LOWORD(wp)) {
         case IDM_FILE_EXIT: DestroyWindow(h); return 0;
         case IDM_DISP_FULLSCREEN: host_fullscreen_toggle(h); return 0;
-        case IDM_DISP_SHOWMENU: {
-            HMENU cur = GetMenu(h);
-            if (cur) { g_savedmenu = cur; SetMenu(h, NULL); } else SetMenu(h, g_savedmenu);
-            return 0; }
         /* ⚠ CONFIRM FIRST. Both of these change how EVERY DOS and Win16 program on
              the machine starts, and both outlive this process -- an accidental
              click on a menu is not consent for that. */

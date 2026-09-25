@@ -6,7 +6,7 @@
 > session. When this file starts growing session blocks again, split them out; it has
 > happened twice now (`return-ntvdm.md` in August, this file in September).
 
-- **Updated:** 2026-09-24 (session 78)
+- **Updated:** 2026-09-25 (session 79)
 - **Branch:** `m9/completeness`
 - **Checkpoint commit:** **`ff0d956`** — the rollback point, and the first one moved since
   `59fac7d`. It built **`71ef4737`**, which the user confirmed by hand on 2026-09-23:
@@ -30,7 +30,11 @@
 - **Stable package:** `dist\ntvdmex-20260917-4847355.zip`, host `9448cf27`
   (tag `release-20260917b`). **Immutable until a new build is confirmed across the whole
   shelf**, which 2026-09-23's three-item pass is not. `bin\` on the rig is free to churn.
-- **Rollback host:** `debug\prev\ntvdmhost_prev.exe` = **`71ef4737`**.
+- **Rollback host:** `debug\prev\ntvdmhost_prev.exe` = **`297e2172`** — promoted
+  2026-09-25 after the user confirmed by hand: **MS-DOS 6.22's `COMMAND.COM` as an
+  interactive prompt**, plus Doom, Skyroads and the rest of the shelf *"still working
+  as they did before"*. That retires `71ef4737`, which had been the target while eight
+  changes stacked on top of it.
   ⛔ **It did not exist until 2026-09-23.** The file is documented as *"the last build a
   HUMAN confirmed"* and every `bmstage --host` run printed
   `ntvdmhost_prev.exe = , the confirmed one, untouched` — **with an empty md5** — and
