@@ -548,6 +548,49 @@ the guess has to be found and removed.**
 a claim about the documented BPB->DPB call given a real BPB, which we still do not
 implement.
 
+### ✅ THE CONTROL I SHOULD HAVE RUN FIRST: what does STOCK do with the SAME launch?
+
+Same binary, same `/p`, same harness, IFEO key dropped so stock services it:
+
+```
+Microsoft(R) Windows DOS
+(C)Copyright Microsoft Corp 1990-2001.
+The Vdm Redirector is already loaded
+
+C:\DOCUME~1\ALLUSE~1\DOCUME~1\NTVDMEX\DEBUG\TESTS\DOS>
+```
+
+**Stock prints a banner and a prompt and then sits there too.** Launched this way -- as a
+*program*, with stdout redirected -- stock is no more interactive than we are. So the
+remaining difference is much smaller than "it works there and not here":
+
+| | stock | ours |
+|---|---|---|
+| banner | ✅ `Microsoft(R) Windows DOS` + copyright | ❌ none |
+| redirector notice | ✅ `The Vdm Redirector is already loaded` | ❌ none |
+| prompt | ✅ | ✅ |
+| interactive under redirected stdout | ❌ | ❌ |
+
+★ **One host is not a pass, and one host is not a FAILURE either.** I had been treating
+"not interactive" as our defect for two sessions without ever asking what the reference
+does in the same position. It does the same thing. The real difference is the banner --
+i.e. something earlier in start-up that we skip -- and the *launch path*: stock's own
+COMMAND.COM is started by `ntio.sys` during DOS boot, not run as a program.
+
+### ⛔⛔⛔ AND THE CONTROL LEFT THE RIG ROUTING TO STOCK
+
+`dosstock.bat`'s first cut ran the guest **inline and waited for it**. Fine for a probe,
+which exits. `COMMAND.COM /p` does not exit -- it sits at its prompt -- so the batch
+never reached its restore, and the box was left with **no IFEO key**: every DOS and Win16
+launch silently going to stock, with logs that would look entirely plausible.
+
+Caught within a minute because the state file had no `---- IFEO after ----` section, and
+repaired by hand (`reg add`, then a probe run confirming our host answered again).
+
+⚠ `w16stock.bat` had this right -- `start` plus a timed kill -- and I did not copy it.
+**A bracket whose restore can be skipped by the thing it brackets is not a bracket.**
+Fixed, and re-run to prove the restore now happens.
+
 ### ⛔ Real MS-DOS cannot be asked at all
 
 `tools/dostest/p_int53.asm` **hangs MS-DOS 6.22.** Measured twice -- once with a broken
