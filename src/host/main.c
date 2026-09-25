@@ -178,6 +178,36 @@ static BOOL oscompat_attach_console(DWORD pid)
 /* A DOS shell to run when NOTHING named a program. NOT a target: target.txt names THE
    test and is consulted first; this is the last resort. See the STAGE2 block. */
 #define SHELL_PATH  CFG_("shell.txt")
+/* ── ★ HOW "JUST OPEN NTVDMEX" WORKS, AND WHY IT NEEDS A FOUR-BYTE DOS PROGRAM. ──────
+     Run with no arguments -- double-clicked, or from a shortcut -- this process CANNOT
+     become a VDM. Measured on the rig, 2026-09-25:
+
+         STAGE0: cmdline=["...\bin\ntvdmhost.exe" ]
+         STAGE1: v86_init NTSTATUS=0xc0000022        <- STATUS_ACCESS_DENIED
+         STAGE1: GetNextVDMCommand FALSE err=0x57
+
+     ...and then it exits, silently, with no window. VDM privilege is not something a
+     process can ask for: NT grants it to a process CSRSS created for a 16-bit image.
+   ⇒ So the launcher does not try. It writes a four-byte DOS program -- `mov ah,4Ch;
+     int 21h`, the same stub the harness has used for years -- and CreateProcess's it.
+     Windows sees a DOS image, CSRSS builds a real VDM, the IFEO Debugger key routes
+     `ntvdm.exe` to US, and THAT instance has the privilege. The stub itself never
+     runs: we recognise its name and load a shell instead.
+   ⚠ The name is the whole signal, so it must be one nothing else uses, and it must
+     differ from `dosstub.com` -- the harness stub means "target.txt names the
+     program", this one means "the user asked for a shell, ignore target.txt". A
+     stale target.txt on someone's machine must not hijack a double-click.
+   ⛔⛔ AND IT MUST BE 8.3, WHICH THE FIRST CUT WAS NOT. `ntvdmex-shell.com` came back
+     from CSRSS as **`NTVDME~1.COM`**:
+
+         STAGE1: program C:\DOCUME~1\Matthew\LOCALS~1\Temp\NTVDME~1.COM
+
+     so the basename never matched, the branch never fired, and the launch fell through
+     to running the four-byte stub for real -- a VDM that came up correctly and exited
+     immediately, with nothing on screen. **The DOS side of this system sees 8.3 names
+     and only 8.3 names**; the same rule already caught `p_dpmiins.com` in the probe
+     harness and krnl386 in the Win16 one. Seven characters, no hyphen, no mangling. */
+#define LAUNCH_STUB_NAME "ntvdmex.com"
 #define AUTOEXIT_PATH CFG_("autoexit")   /* marker: headless test mode -> exit when the guest exits */
 /* Opt-in screenshot flag. Lives on the SMB SHARE folder so the remote driver can
    toggle it (create it before a GRAPHICAL test, remove it otherwise). Non-graphical
@@ -491,6 +521,12 @@ static void dsprobe_load(void)
    one of the addresses we plant ours at? See the note where it is assigned. */
 static int g_bop_from_guest = 0;
 static DWORD g_ntvdm_bop_n = 0;   /* how many guest-issued NTVDM BOPs this run serviced */
+/* s79: set at load time, from the IMAGE, not the path -- see the scan in STAGE2.
+   g_guest_ntaware means "we loaded this as a shell AND it talks to NTVDM", which is
+   what earns it DOS 5.00 and the private AH=53h answers. */
+static DWORD g_guest_ntvdm_bops = 0;
+static int   g_guest_ntaware    = 0;
+
 /* NTVDM's own BOPs, as issued by Microsoft's 16-bit components. These are the GUEST's
    numbers -- ours above happen to overlap and are told apart by origin, not by value. */
 #define NTVDM_BOP_CMD  0x54   /* XP's COMMAND.COM: 15 sites, each + a sub-function byte */
@@ -3943,7 +3979,96 @@ static int install_verb(const char *cmd)
     return -1;
 }
 
+/* Does this command line carry NOTHING after argv[0]? That is the double-click / Start
+   menu shape, and it is safe to test for: Windows hands an IFEO-substituted VDM the
+   ORIGINAL command line, whose first argument is always the path to ntvdm.exe, so a
+   real VDM launch always has arguments. Same reasoning install_verb() already relies on. */
+static int cmdline_bare(const char *cmd)
+{
+    if (!cmd) return 0;
+    if (*cmd == '"') { ++cmd; while (*cmd && *cmd != '"') ++cmd; if (*cmd) ++cmd; }
+    else             { while (*cmd && *cmd != ' ' && *cmd != '\t') ++cmd; }
+    while (*cmd == ' ' || *cmd == '\t') ++cmd;
+    return *cmd == 0;
+}
+
 /* stdout if we have one, a message box if we do not. */
+static void install_report(const char *msg, int ok);
+
+/* ── ★★★ "I WANT TO OPEN NTVDMEX AND SEE IT." ────────────────────────────────────────
+     Write the four-byte DOS stub and run it, so CSRSS builds a VDM that the IFEO key
+     hands back to us WITH the privilege this process cannot have. See LAUNCH_STUB_NAME
+     for why it cannot be done directly -- measured, `NtVdmControl` -> 0xC0000022.
+
+   ⚠ REFUSE LOUDLY IF WE ARE NOT INSTALLED. Without the IFEO key the stub runs under
+     STOCK ntvdm and the user gets *a* DOS box -- someone else's -- which is the most
+     confusing possible outcome: it looks like it worked. Checking first costs one
+     registry read. `install_status_text` is the same check `/status` reports.
+   ⚠ %TEMP%, not the install directory: a per-user path we can always write, on a
+     product that may be installed read-only under Program Files. Rewritten every time,
+     so a truncated or tampered stub cannot persist.
+   Returns a process exit code. */
+static int launch_shell_vdm(void)
+{
+    char stub[MAX_PATH + 32], msg[1024];
+    DWORD n, w = 0;
+    HANDLE h;
+    STARTUPINFOA si; PROCESS_INFORMATION pi;
+
+    {   install_state st = install_status_text(msg, sizeof msg);
+        if (st != INSTALL_OURS) {
+            /* The status text says WHICH of the two it is; add what to do about it. */
+            zput(msg + lstrlenA(msg),
+                 "\r\n\r\nNTVDMEX has to be the machine's VDM before it can open a "
+                 "DOS session of its own.\r\n\r\nRun:    ntvdmhost.exe /install\r\n"
+                 "(as an administrator), then try again.");
+            install_report(msg, 0);
+            return 1;
+        } }
+
+    n = GetTempPathA(MAX_PATH, stub);
+    if (!n || n > MAX_PATH) { zput(stub, "C:\\"); n = 3; }
+    if (stub[n - 1] != '\\') { stub[n++] = '\\'; stub[n] = 0; }
+    zput(stub + n, LAUNCH_STUB_NAME);
+
+    h = CreateFileA(stub, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS,
+                    FILE_ATTRIBUTE_NORMAL, NULL);
+    if (h == INVALID_HANDLE_VALUE) {
+        zput(msg, "NTVDMEX could not write its launch stub to:\r\n\r\n");
+        zput(msg + lstrlenA(msg), stub);
+        install_report(msg, 0);
+        return 1;
+    }
+    {   static const BYTE s4[] = { 0xB4, 0x4C, 0xCD, 0x21 };   /* mov ah,4Ch; int 21h */
+        BOOL wok = WriteFile(h, s4, sizeof s4, &w, NULL);
+        CloseHandle(h);
+        /* ⚠ A SHORT WRITE IS NOT A SUCCESS. A truncated stub is not a DOS image and
+             CreateProcess would report something unrelated to the real cause. */
+        if (!wok || w != sizeof s4) {
+            zput(msg, "NTVDMEX wrote an incomplete launch stub to:\r\n\r\n");
+            zput(msg + lstrlenA(msg), stub);
+            install_report(msg, 0);
+            return 1;
+        } }
+
+    { int i; for (i = 0; i < (int)sizeof si; ++i) ((char *)&si)[i] = 0; }
+    si.cb = sizeof si;
+    if (!CreateProcessA(stub, NULL, NULL, NULL, FALSE, 0, NULL, NULL, &si, &pi)) {
+        zput(msg, "NTVDMEX could not start a DOS session.\r\n\r\nCreateProcess on:\r\n");
+        zput(msg + lstrlenA(msg), stub);
+        zput(msg + lstrlenA(msg), "\r\nfailed with error 0x");
+        { char *e = msg + lstrlenA(msg); e = zhex(e, GetLastError()); *e = 0; }
+        install_report(msg, 0);
+        return 1;
+    }
+    CloseHandle(pi.hThread);
+    CloseHandle(pi.hProcess);
+    /* ⚠ We exit immediately and deliberately. The VDM is a SEPARATE process and owns
+         the window; waiting here would leave a pointless second process alive for the
+         whole session and make the launcher look like the thing that hung. */
+    return 0;
+}
+
 static void install_report(const char *msg, int ok)
 {
     HANDLE h = GetStdHandle(STD_OUTPUT_HANDLE);
@@ -21893,6 +22018,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
 {
     char report[8192]; char *p = report; char *base;
     int wow_cmd_from_csrss = 0;         /* s73: the Win16 program came from CSRSS, not target.txt */
+    int want_shell = 0;                 /* s79: our own launcher stub asked for a SHELL (see LAUNCH_STUB_NAME) */
+    int was_shell  = 0;                 /* s79: we actually loaded a shell, not a named program */
     volatile BYTE *tib, *hdlr;
     DWORD nread = 0, err = 0, ev; LONG st;
     dos_image_t img;
@@ -21957,6 +22084,14 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             install_report(vmsg, ok);
             return ok ? 0 : 1;
         } }
+
+    /* ── ★★★★★ NOTHING ON THE COMMAND LINE = THE USER OPENED NTVDMEX. (s79) ──────────
+         Sits here for the same reason the verbs do: above every launch guard, and safe
+         because a real VDM launch always has arguments. Before this, a double-click
+         reached STAGE1, was refused VDM privilege (`NtVdmControl` -> 0xC0000022) and
+         vanished without a window or a message -- the worst possible answer to "open it
+         and see". */
+    if (cmdline_bare(GetCommandLineA())) return launch_shell_vdm();
 
     /* ── ⛔⛔ ONE HOST AT A TIME. ─────────────────────────────────────────────────
          Nothing stopped a second instance, and two of them fight over things that
@@ -22728,10 +22863,18 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         int is_stub = 0;
         {   const char *bn = g_app2, *q;
             for (q = g_app2; *q; ++q) if (*q == '\\' || *q == '/') bn = q + 1;
-            is_stub = (lstrcmpiA(bn, "dosstub.com") == 0); }
+            is_stub   = (lstrcmpiA(bn, "dosstub.com") == 0);
+            /* ★ OUR OWN LAUNCHER'S STUB -- see LAUNCH_STUB_NAME. Same mechanism, a
+                 DIFFERENT meaning: the harness stub says "target.txt names the
+                 program", this one says "the user opened NTVDMEX, give them a shell".
+                 Keeping them apart is what stops a stale target.txt from hijacking a
+                 double-click on someone's machine. */
+            if (lstrcmpiA(bn, LAUNCH_STUB_NAME) == 0) { is_stub = 1; want_shell = 1; } }
         if (is_stub) {
             if (hf != INVALID_HANDLE_VALUE) CloseHandle(hf);
-            p = zput(p, "STAGE2: CSRSS queued dosstub.com -- the harness stub; target.txt names the program\r\n");
+            p = zput(p, want_shell
+                     ? "STAGE2: launched with no program -- the user opened NTVDMEX; going straight to a SHELL\r\n"
+                     : "STAGE2: CSRSS queued dosstub.com -- the harness stub; target.txt names the program\r\n");
             g_title[0] = 0;                              /* and the title must not either */
         } else if (hf != INVALID_HANDLE_VALUE) {
             ReadFile(hf, filebuf, sizeof(filebuf), &nread, NULL); CloseHandle(hf);
@@ -22751,7 +22894,10 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     }
     {
         int csrss_named = (g_cur[0] && g_title[0]) || (nread != 0) || wow_cmd_from_csrss;
-        HANDLE ht = csrss_named ? INVALID_HANDLE_VALUE
+        /* ⚠ `want_shell` skips target.txt ENTIRELY. A user who opened NTVDMEX asked for
+             a shell, not for whatever the last test run happened to leave in cfg\. */
+        HANDLE ht = (csrss_named || want_shell)
+                  ? INVALID_HANDLE_VALUE
                   : CreateFileA(TARGET_PATH, GENERIC_READ, FILE_SHARE_READ, NULL,
                                 OPEN_EXISTING, 0, NULL);
         if (csrss_named && !nread) {
@@ -22926,6 +23072,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         if (hs != INVALID_HANDLE_VALUE) {
             ReadFile(hs, filebuf, sizeof(filebuf), &nread, NULL); CloseHandle(hs);
             zput(progpath, shell);
+            was_shell = 1;
             p = zput(p, "STAGE2: no program was named -> loading a SHELL, 0x");
             p = zhex(p, nread); p = zput(p, " from "); p = zput(p, shell);
             p = zput(p, " ("); p = zput(p, why ? why : "default"); p = zput(p, ")\r\n");
@@ -22942,6 +23089,40 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                     "could be opened (cfg\\shell.txt, C:\\WINDOWS\\SYSTEM32\\COMMAND.COM)"
                     "\r\n");
     }
+
+    /* ── ★★★ IS THIS GUEST NTVDM-AWARE? ASK THE IMAGE, NOT THE PATH. (s79) ───────────
+         XP's own COMMAND.COM needs two things no ordinary DOS guest does: it refuses
+         any DOS version but 5.00, and it reads `INT 21h AH=53h`'s private AL
+         sub-functions to decide whether it is an interactive shell at all. Both were
+         `cfg\` knobs, which is the right shape for an experiment and the wrong one for
+         a product -- "double-click NTVDMEX and get a prompt" cannot require two files.
+
+       ⇒ The discriminator is a MEASURED PROPERTY OF THE IMAGE, not a filename: an
+         NTVDM-aware guest talks to the 32-bit side through `C4 C4 54 <sub>` BOPs. XP's
+         COMMAND.COM has FIFTEEN of them. A path check would be a guess (a user may put
+         XP's shell in `cfg\shell.txt`, or ours somewhere else); the BOPs are what
+         actually make it NT-aware.
+       ⚠ THE THRESHOLD IS THE GUARD. `C4 C4` is a legal, if odd, instruction pair, so
+         one or two sites prove nothing -- a false positive would silently change the
+         DOS version reported to an innocent guest. Requiring EIGHT distinct sites is
+         far beyond coincidence and still well under XP's fifteen, so a future build of
+         the shell with a few fewer would still be recognised. The count is logged, so
+         a guest that lands near the line says so instead of being decided silently.
+       ⚠ It is only consulted for a program we loaded as THE SHELL. A DOS game that
+         somehow tripped the count must not be told it is running on DOS 5. */
+    g_guest_ntvdm_bops = 0;
+    if (nread > 4) {
+        DWORD k;
+        for (k = 0; k + 3 < nread; ++k)
+            if (filebuf[k] == 0xC4 && filebuf[k+1] == 0xC4 && filebuf[k+2] == 0x54)
+                ++g_guest_ntvdm_bops;
+    }
+    g_guest_ntaware = (was_shell && g_guest_ntvdm_bops >= 8);
+    p = zput(p, "STAGE2: guest NTVDM BOP sites (C4 C4 54) = ");
+    p = zdec(p, g_guest_ntvdm_bops);
+    p = zput(p, g_guest_ntaware
+             ? " -> NTVDM-AWARE SHELL: DOS 5.00 and the private AH=53h answers apply\r\n"
+             : (was_shell ? " -> an ordinary DOS shell\r\n" : " (not loaded as a shell)\r\n"));
 
     /* status-bar program name = basename of progpath (if any) */
     { const char *bn = progpath, *q; int k = 0;
@@ -23327,6 +23508,17 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
          version", INT 21h AH=00h, terminated before it printed a prompt. NT's DOS has
          always reported 5.00 and its shell is built to match.
          `dosver.txt` on the share: "5.0", "6.22", "3.31" -- major.minor decimal. */
+    /* ── ★ AN NTVDM-AWARE SHELL GETS 5.00 WITHOUT ANYONE HAVING TO ASK. (s79) ────────
+         XP's COMMAND.COM does `cmp ax,5` on the WHOLE WORD and prints "Incorrect DOS
+         version" otherwise, so on the default 6.22 a double-click would die before it
+         printed anything. This is not a global policy change: it applies only to a
+         guest we loaded AS THE SHELL that carries NTVDM's own BOPs (see the scan), and
+         `cfg\dosver.txt` below still overrides it. 6.22's COMMAND.COM has no BOPs and
+         is untouched -- it keeps 6.22, which is the version it expects. */
+    if (g_guest_ntaware) {
+        dos_int21_set_version(&m, 5, 0);
+        dosver_src = "the guest is NTVDM-aware (it BOPs) -- it requires 5.00";
+    }
     { HANDLE h = CreateFileA(DOSVER_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
                              NULL, OPEN_EXISTING, 0, NULL);
       if (h != INVALID_HANDLE_VALUE) {
@@ -23379,8 +23571,29 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
          sources and logged a line only when one of them won, which is how the rig
          reported DOS 5.00 to every guest for an unknown number of sessions. */
     { const char *i53_src = "built-in (measured vs stock ntvdm, 2026-09-25)";
-      HANDLE h = CreateFileA(INT53_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
-                             NULL, OPEN_EXISTING, 0, NULL);
+      HANDLE h;
+      /* ── ★★ THE CONTEXT-DEPENDENCE, MODELLED RATHER THAN OVERRIDDEN. (s79) ─────────
+           The measured stock answers (AL=2 -> CF=0, AL=5 -> AL=1) do not let XP's
+           COMMAND.COM read a key. Its own image proves why: the read-a-line routine's
+           only two keyboard-reading callers both sit behind `cmp byte [0x327],1 / jz`,
+           and [0x327] is exactly AL=5's answer. Stock IS interactive, so stock answers
+           differently WHEN THE SHELL ASKS -- the call is context-dependent, and the
+           context we measured in was a standalone probe with its stdout redirected.
+         ⇒ So model the context instead of claiming a new universal value: an
+           NTVDM-AWARE SHELL gets the answers that make it a shell; every other guest,
+           and every probe, still gets the measured ones. That is narrower than the
+           `cfg\int53.txt` knob it replaces, and it cannot affect anything else.
+         ⚠ STILL PROVISIONAL. `tools/dostest/p_int53f.com` asks the same eight questions
+           with nothing redirected; run it against stock and this branch either becomes
+           a measurement or gets corrected. It is marked here so it cannot quietly
+           become folklore. */
+      if (g_guest_ntaware) {
+          g_dos_int53[0x02].ax = 0x5300; g_dos_int53[0x02].cf = 1;   /* top of its main loop */
+          g_dos_int53[0x05].ax = 0x5300; g_dos_int53[0x05].cf = 0;   /* -> [0x327] = 0       */
+          i53_src = "NTVDM-aware shell (PROVISIONAL -- see p_int53f)";
+      }
+      h = CreateFileA(INT53_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                      NULL, OPEN_EXISTING, 0, NULL);
       if (h != INVALID_HANDLE_VALUE) {
           char c[512]; DWORD rd = 0, i = 0;
           ReadFile(h, c, sizeof c - 1, &rd, NULL); CloseHandle(h);
