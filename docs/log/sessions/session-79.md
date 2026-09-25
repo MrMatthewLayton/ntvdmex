@@ -137,6 +137,69 @@ defaults and delete the knob's reason for existing.
 
 ---
 
+---
+
+## Second result: the Win16 `GetWinFlags` mismatch was a DPMI bug in a Win16 costume
+
+The first deterministic Win16 test this project ever ran found one defect:
+`kernel.getwinflags` = **`4C25` from us, `4C29` from stock**, reproduced twice. It sat
+open with the note that the `WF_CPU386`/`WF_CPU486` reading was *"an interpretation from
+memory, not confirmed"*, and a plausible mechanism attached (krnl386 toggling the `AC`
+flag to tell a 486 from a 386).
+
+Reading the binary took about ten minutes and refuted the mechanism outright.
+
+`GetWinFlags` is KERNEL.132 → segment 3, offset `0x4B`, and it is essentially one
+instruction: `mov ax,[0x464]`. That word is built in one place, segment 1 `0xD68A`:
+
+```
+mov ax,0x1687 ; int 2Fh      ; the DPMI installation check
+or  ax,ax  ; jne -> bail
+cmp cl,3   ; jb  -> bail
+mov bl,4   ; CL == 3
+je  +2
+mov bl,8   ; CL >  3
+mov [0x464],bx
+```
+
+**`CL` is the whole difference, and we hardcoded `3`** — at two sites, with a comment
+reading "CL=3 (386)" written long before anyone knew what consumed it. `DPMI_CPU_CLASS`
+is now `4`, and the row reads **`4C29`**.
+
+⚠ Note what the fix does and does not rest on. "4 means 80486" is still from memory and
+there is no DPMI document in this repo. What it rests on is that **stock returns `CL>3`**
+(proved by its measured `4C29`) and **4 is the smallest such value** — so we match the
+oracle without claiming more than the measurement supports. `tools/dostest/p_dpmins.com`
+records why no cheap oracle exists: **MS-DOS 6.22 and DOSBox-X both leave every register
+untouched** — neither has a DPMI host at all.
+
+### The A/B, because CL is observable to every DPMI guest
+
+`runs/s79_cl_ab/`, interleaved, one change:
+
+| guest | evidence |
+|---|---|
+| heaven7 | `DPMI:` 704 = 704; mode sets, VESA, planar, video summaries identical |
+| duke3d | `DPMI:` 1056 = 1056; `sb replay blocks_checked=4CB REPLAYED=1F1` identical |
+| doom | `sb_dspwr/sb_blocks/sb_mode/sb_rate`, `pit_reload/pit_mode`, all three `VGAREG written-by-guest` lines identical |
+| skyroads | `n8=0 max_ms=7` |
+| zar | identical freeze at `CS:IP=0347:1327`; INT 31h 2277 = 2277 |
+
+★ **ZAR's baseline was taken by rolling the host back, not assumed.** The *after* run went
+first and looked like a regression — no mode set, frozen early — until the *before* run
+showed the identical freeze. **A single run of a guest you have no baseline for is not
+evidence in either direction**, and the temptation to read one as a regression is strong
+precisely when you have just changed something.
+
+### Lesson
+
+★ **A mismatch in one layer can be a defect in another.** This was filed under WOW/Win16
+for a session because that is where the symptom was measured. The cause was in the DPMI
+installation check, three layers down, in a value chosen as a placeholder years earlier.
+**Follow the value, not the subsystem.**
+
+---
+
 ## Verification run this session
 
 * **Off-VM battery:** 1591 checks, 0 failed — BATTERY GREEN.
@@ -150,4 +213,4 @@ defaults and delete the knob's reason for existing.
 
 ## Commits
 
-`fb8a501` · `9effc64` · `5fa4286`
+`fb8a501` · `9effc64` · `5fa4286` · `bbcc0f6` · `f882732` · `096c313`

@@ -78,7 +78,7 @@ identical both times:**
 | case | ours | stock | |
 |---|---|---|---|
 | `kernel.getversion` | `5F03` | `5F03` | ✅ **AGREE — verified** |
-| `kernel.getwinflags` | `4C25` | **`4C29`** | ⛔ **MISMATCH** |
+| `kernel.getwinflags` | ~~`4C25`~~ → **`4C29`** | **`4C29`** | ✅ **CLOSED 2026-09-25** — see below |
 
 ★ **That is the first Win16 row this project has ever been able to call *verified* rather
 than *looks right on screen*.** And the second row is a genuine defect, found by the first
@@ -97,8 +97,61 @@ separating 386 from 486 by whether the `AC` flag can be toggled, and our V86 env
 not permitting it) is likewise a **hypothesis with no evidence behind it yet**. Writing
 either down as fact is exactly the mistake this project keeps paying for.
 
-▶ **Next:** read `GetWinFlags` (KERNEL.132) out of `krnl386.exe` with `tools/ne/nedis.py`
-and find where the value actually comes from. The answer is in the binary.
+▶ ~~**Next:** read `GetWinFlags` (KERNEL.132) out of `krnl386.exe` with `tools/ne/nedis.py`
+and find where the value actually comes from.~~ **✅ DONE 2026-09-25 — and the answer was
+in the binary, exactly as predicted.**
+
+### ✅✅ CLOSED: it was a **DPMI** answer, not a WOW one
+
+`GetWinFlags` is KERNEL.132 → segment 3, offset `0x4B`, and it is four instructions:
+
+```
+004b: push ds ; call <set DS>
+004f: xor ax,ax ; push ax ; lcall <helper>
+0057: test ax,0x400
+005a: mov ax,[0x464]          ; ** the whole WINFLAGS word lives here **
+005d: je +3 ; and ah,0xBF     ; clears bit 0x4000 when the helper says so
+0062: xor dx,dx ; pop ds ; retf
+```
+
+`[0x464]` is written in **one** place that matters — segment 1, `0xD68A`
+(`tools/ne/nedis.py guest/ne/krnl386.exe 1 0xd650 0x70`):
+
+```
+mov ax,0x1687 ; int 2Fh      ; ** the DPMI installation check **
+or  ax,ax  ; jne -> bail
+xor bh,bh
+cmp cl,3   ; jb  -> bail
+mov bl,4   ; CL == 3  -> 0x0004
+je  +2
+mov bl,8   ; CL >  3  -> 0x0008
+mov [0x464],bx
+```
+
+⇒ **The differing bit is `CL` from `INT 2Fh AX=1687h`, and we hardcoded `3`** (two sites
+in `main.c`, with a comment reading "CL=3 (386)" written long before anyone knew what
+consumed it). The `WF_CPU386`/`WF_CPU486` names are still from memory and still not
+confirmed — but they are no longer load-bearing: what the fix rests on is that **stock
+returns `CL>3`** (proved by its measured `4C29`) and that **`4` is the smallest such
+value**.
+
+⛔ The `AC`-flag hypothesis is **refuted**: nothing in this path tests a flag. It was a
+plausible mechanism with no evidence, and it was wrong.
+
+✅ **`DPMI_CPU_CLASS = 0x04`, and the row now reads `4C29`:**
+
+```
+CASE=kernel.getversion  SIG=AX AX=5F03
+CASE=kernel.getwinflags SIG=AX AX=4C29
+```
+
+⚠ **That is "we now produce the value stock was measured to produce", not a fresh
+side-by-side.** Stock's `4C29` is the reading from two earlier bracketed runs; re-running
+`tools/wintest/stock.sh` would make it a same-day comparison, and that needs a human
+because the bracket drops the IFEO key.
+
+⚠ `tools/dostest/p_dpmins.com` records why no cheap oracle exists here: **MS-DOS 6.22 and
+DOSBox-X both leave every register untouched** — neither has a DPMI host at all.
 
 ---
 
@@ -146,13 +199,13 @@ DOS; it is about scaffolding. Output now goes through `INT 21h`.
 | | |
 |---|---|
 | **A relative path does not land in the launch directory** | The probe's `INT 21h AH=3Ch` on `W16OUT.TXT` **succeeds** (`-> AX=5 CF=0`) but the file is not in the folder the app was launched from. The WOW command fetch reports `cur=[…\demo\win16\w16kern]`, while the DOS kernel resolves the relative name against its **own** current directory. ⚠ Unresolved: should the DOS CDS follow the `cur=` the WOW fetch hands us? The probe names its file absolutely rather than depend on the answer |
-| `kernel.getwinflags` `4C25` vs stock `4C29` | ⛔ **A real defect**, reproduced twice. Bits `0x04` vs `0x08`. Cause unknown — see the note above on why the `WF_CPU386`/`WF_CPU486` reading is not yet a finding |
+| ~~`kernel.getwinflags` `4C25` vs stock `4C29`~~ | ✅ **CLOSED 2026-09-25.** It was `INT 2Fh AX=1687h`'s **CL**, which we hardcoded to 3; krnl386 turns `CL>3` into the other bit. **A Win16 mismatch whose cause was in the DPMI layer.** |
 | `WowFailedExec` is **not** a failure signal | It appears once in a **successful** Notepad run too. I briefly took it as proof the module had been rejected. It is not |
 
 ## Next
 
 1. ✅ ~~**Run the same `.EXE` under stock `ntvdm`**~~ — done, `tools/wintest/stock.sh`.
-2. ★★★ **Find out where `GetWinFlags`'s value comes from**, by reading KERNEL.132 out of
+2. ✅ ~~★★★ **Find out where `GetWinFlags`'s value comes from**~~ — **DONE**, by reading KERNEL.132 out of
    `krnl386.exe` rather than theorising about it.
 3. **Widen the cases** — KERNEL's memory API (GlobalAlloc/Size/Free round-trips),
    `lstrlen`/`lstrcmp`, the file API, then USER and GDI. The harness makes each of these

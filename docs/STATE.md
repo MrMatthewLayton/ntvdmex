@@ -277,7 +277,13 @@ but it is an observable change and the rule is one at a time with a human in bet
    twice. ⚠ Neither value is ours: both runs load the same `KRNL386.EXE`, so the
    difference is what our VDM presents to it. ⚠ The `WF_CPU386`-vs-`WF_CPU486` reading of
    those bits is an **interpretation from memory, not confirmed**.
-   ▶ **Next: read `GetWinFlags` (KERNEL.132) out of `krnl386.exe` with `nedis.py`.**
+   ✅ **CLOSED 2026-09-25, and it was a DPMI bug wearing a Win16 costume.** `GetWinFlags`
+   is KERNEL.132 = seg 3:`0x4B` and it is just `mov ax,[0x464]`; `[0x464]` is built at
+   seg 1:`0xD68A` out of **`INT 2Fh AX=1687h`'s `CL`** (`cmp cl,3 / je bl=4 / else bl=8`).
+   **We hardcoded `CL=3`** at two sites. `DPMI_CPU_CLASS = 4` and the row now reads
+   **`4C29`**, the value stock was measured to produce. ⛔ The `AC`-flag hypothesis is
+   refuted — nothing on that path tests a flag. ⚠ Not a same-day side-by-side; re-running
+   `stock.sh` needs a human (it drops the IFEO key). A/B on the rig in `runs/s79_cl_ab/`.
    See [`inventory/win16.md`](inventory/win16.md).
 4. **VGA step 4 — one address generator** from CR17/CR14/GR5/GR6/SR4. ⛔ **PARKED**: the
    A0000 aperture is mapped RAM with no write hook, so mode-Y exactness needs an
