@@ -151,3 +151,26 @@ what named defect 4, and a leak is invisible in any other single line.
 
 ⚠ **Still unmeasured:** SETUP → "save and launch" (same path, by hand); Heretic, Hexen and
 Duke3D setups (the user's other reports); a real-mode TSR loaded before a DPMI client.
+
+---
+
+## Part 3 — north star 1 (after the user confirmed #3 by hand)
+
+✅ **User, 2026-09-25:** *"Opening executables from shell, works. Setup > Game works for Doom,
+Hexen, Duke3D."* `debug\prev\ntvdmhost_prev.exe` promoted to `b6a8a95b`.
+
+1. **Measured** (`7178849`) — `STAGE2: MODEYTL`, written up in
+   [`research/modey-cost-measurement.md`](../../research/modey-cost-measurement.md). The
+   fan-out approximation was not the cheap option: Doom low ~93% host CPU and half the frame
+   rate. Trap-per-store infeasible; interpret-while-multi-plane projected ~5–20%.
+2. **User chose design C, Wolf3D/Mario first.** Built (`ed0a578`). Wolf3D's status bar now
+   draws; Mario clean; both 70 fps. Three defects found on the way — 16-bit register
+   write-back in `host_interp` (Wolf3D's `cdq/idiv` → INT 0 → `0000:0078`), VIF not kept in
+   step with an interpreted `cli`, and declined `cdq`/`imul imm` under multi-plane masks.
+   Plus a pre-existing stack overflow in the forced-exit report (512-byte buffer, 48 hot ports).
+3. ⚠ **Cost:** Wolf3D is interpreted almost continuously (~70–82% host CPU, was ~38%).
+   Lemmings (mode 12h) −1.5% interpreted throughput vs the confirmed build after confining
+   every new check to mode Y — measured by interleaved A/B, not assumed.
+
+▶ **Next:** user's hand test of Wolf3D/Mario on `0473d95d`; then Doom (32-bit interpreter) and
+the chain-4 de-interleave. ⚠ Interpreter speed (~155 cycles/instruction) is now the lever.
